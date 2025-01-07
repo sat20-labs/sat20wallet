@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Go WebAssembly Example</title>
+</head>
+
+<body>
+    <h1>Go WebAssembly Example</h1>
+    <button id="helloButton">hello</button>
+    <button id="batchDbTest">batchDbTest</button>
+    <button id="init">init</button>
+    <button id="release">release</button>
+    <button id="createWallet">createWallet</button>
+    <button id="importWallet">importWallet</button>
+    <button id="unlockWallet">unlockWallet</button>
+    <div id="result"></div>
+
+    <!-- Ensure wasm_exec.js is loaded before using Go object -->
+    <script src="wasm_exec.js"></script>
+    
+    <script>
+        let wasmLoaded = false;
+        // Function to load and instantiate the WebAssembly module
+        async function loadWasmModule(url) {
+            if (!wasmLoaded) {
+                const go = new Go();
+                const response = await fetch(url);
+                const bytes = await response.arrayBuffer();
+                const result = await WebAssembly.instantiate(bytes, go.importObject);
+                go.run(result.instance);
+                wasmLoaded = true;
+            }
+        }
+
+        function displayResult(result) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = JSON.stringify(result, null, 2);
+        }
+
+        async function executeWasmFunction(func, ...args) {
+            try {
+                let result = await satsnetStp[func](...args);
+                console.log(`${func} result:`, result);
+                displayResult(result);
+            } catch (err) {
+                console.error(`Failed to execute ${func}:`, err);
+                displayResult({ error: err.message });
+            }
+        }
+
+        document.getElementById('helloButton').addEventListener('click', async () => {  
+            await loadWasmModule('https://static.sat20.org/sat20wallet.wasm');
+            executeWasmFunction('hello', 1, "12344563", true, ["1", "2"]);
+        });
+
+        document.getElementById('batchDbTest').addEventListener('click', async () => {  
+            await loadWasmModule('wasm/sat20wallet.wasm');
+            executeWasmFunction('batchDbTest', 1, "12344563", true, ["1", "2"]);
+        });
+
+        document.getElementById('init').addEventListener('click', async () => {
+            await loadWasmModule('wasm/sat20wallet.wasm');
+            const cfg = {
+                Chain: "testnet4",
+                Btcd: {
+                    Host: "192.168.10.102:28332",
+                    User: "jacky",
+                    Password: "123456",
+                    Zmqpubrawblock: "tcp://192.168.10.102:58332",
+                    Zmqpubrawtx: "tcp://192.168.10.102:58333"
+                },
+                IndexerL1: {
+                    Host: "192.168.10.104:8009"
+                },
+                IndexerL2: {
+                    Host: "192.168.10.104:8019"
+                },
+                Log: "debug"
+            };
+            logLevel = 5; //0: Panic, 1: Fatal, 2: Error, 3: Warn, 4: Info, 5: Debug, 6: Trace
+            executeWasmFunction('init', cfg, logLevel); 
+        });
+    
+        document.getElementById('release').addEventListener('click', async () => {
+            executeWasmFunction('release');
+        });
+
+        document.getElementById('createWallet').addEventListener('click', async () => {
+            executeWasmFunction('createWallet', "123456");
+        });
+
+        document.getElementById('importWallet').addEventListener('click', async () => {
+            const mnemonic = "enlist public wine home rather produce dash same claw tiger ethics eternal";
+            const password = "123456";
+            if (mnemonic && password) {
+                executeWasmFunction('importWallet', mnemonic, password);
+            }
+        });
+
+        document.getElementById('unlockWallet').addEventListener('click', async () => {
+            const password = "123456";
+            executeWasmFunction('unlockWallet', password);
+        });
+
+    </script>
+</body>
+
+</html>
