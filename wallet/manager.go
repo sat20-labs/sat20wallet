@@ -8,15 +8,18 @@ import (
 	"github.com/sat20-labs/sat20wallet/common"
 )
 
+// 密码只有一个，助记词可以有多组，对应不同的wallet
 type Manager struct {
 	mutex sync.RWMutex
 
 	bInited bool
 	bStop   bool
 	cfg     *Config
+	password string
 	status  *Status
 	quit    chan struct{}
-	wallet  common.Wallet
+	walletInfoMap map[int64]*WalletInDB
+	wallet  *InteralWallet
 	msgCallback        interface{}
 
 	db              common.KVDB
@@ -36,12 +39,17 @@ func (p *Manager) init() error {
 		return nil
 	}
 
+	err := p.initDB() 
+	if err != nil {
+		Log.Errorf("initDB failed. %v", err)
+		return err
+	}
+
 	p.http = NewHTTPClient()
 	p.l1IndexerClient = NewIndexerClient(p.cfg.IndexerL1.Scheme, p.cfg.IndexerL1.Host, p.http)
 	p.l2IndexerClient = NewIndexerClient(p.cfg.IndexerL2.Scheme, p.cfg.IndexerL2.Host, p.http)
 
 
-	p.saveStatus()
 	p.bInited = true
 
 	return nil

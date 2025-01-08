@@ -1,10 +1,13 @@
 package wallet
 
 import (
+	"bytes"
+	"encoding/hex"
 	"fmt"
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/sat20-labs/sat20wallet/wallet/indexer"
@@ -13,6 +16,7 @@ import (
 	sbtcutil "github.com/sat20-labs/satsnet_btcd/btcutil"
 	stxscript "github.com/sat20-labs/satsnet_btcd/txscript"
 	swire "github.com/sat20-labs/satsnet_btcd/wire"
+	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
 )
 
 func NewManager(cfg *Config, quit chan struct{}) *Manager {
@@ -22,6 +26,7 @@ func NewManager(cfg *Config, quit chan struct{}) *Manager {
 
 	mgr := &Manager{
 		cfg:                cfg,
+		walletInfoMap:      nil,
 		bInited:            false,
 		bStop:              false,
 		quit:               quit,
@@ -54,50 +59,52 @@ func (p *Manager) Init() error {
 
 // 使用内部钱包
 func (p *Manager) CreateWallet(password string) (string, error) {
-	if p.wallet != nil {
-		return "", fmt.Errorf("wallet has been created, please unlock it first")
-	}
+	// if p.wallet != nil {
+	// 	return "", fmt.Errorf("wallet has been created, please unlock it first")
+	// }
 
-	if p.IsWalletExist() {
-		return "", fmt.Errorf("wallet has been created, please unlock it first")
-	}
+	// if p.IsWalletExist() {
+	// 	return "", fmt.Errorf("wallet has been created, please unlock it first")
+	// }
 
 	wallet, mnemonic, err := NewInteralWallet(GetChainParam())
 	if err != nil {
 		return "", err
 	}
 
-	err = p.saveMnemonic(mnemonic, password)
+	_, err = p.saveMnemonic(mnemonic, password)
 	if err != nil {
 		return "", err
 	}
 
 	p.wallet = wallet
+	p.password = password
 
 	return mnemonic, nil
 }
 
 func (p *Manager) ImportWallet(mnemonic string, password string) error {
-	Log.Infof("ImportWallet %s %s", mnemonic, password)
-	if p.wallet != nil {
-		return fmt.Errorf("wallet exists, not allow to import new wallet")
-	}
+	// Log.Infof("ImportWallet %s %s", mnemonic, password)
+	// if p.wallet != nil {
+	// 	return fmt.Errorf("wallet exists, not allow to import new wallet")
+	// }
 
-	if p.IsWalletExist() {
-		return fmt.Errorf("wallet exists, not allow to import new wallet")
-	}
+	// if p.IsWalletExist() {
+	// 	return fmt.Errorf("wallet exists, not allow to import new wallet")
+	// }
 
 	wallet := NewInternalWalletWithMnemonic(mnemonic, "", GetChainParam())
 	if wallet == nil {
 		return fmt.Errorf("NewWalletWithMnemonic failed")
 	}
 
-	err := p.saveMnemonic(mnemonic, password)
+	_, err := p.saveMnemonic(mnemonic, password)
 	if err != nil {
 		return err
 	}
 
 	p.wallet = wallet
+	p.password = password
 
 	return nil
 }
@@ -108,7 +115,7 @@ func (p *Manager) UnlockWallet(password string) error {
 		return fmt.Errorf("wallet has been unlocked")
 	}
 
-	mnemonic, err := p.loadMnemonic(password)
+	mnemonic, err := p.loadMnemonic(p.status.CurrentWallet, password)
 	if err != nil {
 		return err
 	}
@@ -119,12 +126,13 @@ func (p *Manager) UnlockWallet(password string) error {
 	}
 
 	p.wallet = wallet
+	p.password = password
 
 	return nil
 }
 
 func (p *Manager) GetMnemonic(password string) string {
-	mnemonic, err := p.loadMnemonic(password)
+	mnemonic, err := p.loadMnemonic(p.status.CurrentWallet, password)
 	if err != nil {
 		return ""
 	}
@@ -132,6 +140,117 @@ func (p *Manager) GetMnemonic(password string) string {
 	return mnemonic
 }
 
+
+func (p *Manager) SwitchWallet(id int64) {
+	if p.status.CurrentWallet == id {
+		return
+	}
+		
+	p.status.CurrentWallet = id
+	err := p.UnlockWallet(p.password)
+	if err == nil {
+		p.saveStatus()
+	}
+}
+
+func (p *Manager) SwitchChain(chain string) {
+	if _chain == chain {
+		return
+	}
+	if chain == "mainnet" || chain == "testnet" {
+		_chain = chain
+		p.status.CurrentChain = chain
+		err := p.UnlockWallet(p.password)
+		if err == nil {
+			p.saveStatus()
+		}
+	}
+}
+
+func (p *Manager) GetChain() string {
+	return _chain
+}
+
+func (p *Manager) GetPublicKey() string {
+	if p.wallet == nil {
+		return ""
+	}
+
+	pubkey := p.wallet.GetPaymentPubKey()
+	if pubkey == nil {
+		return ""
+	}
+
+	return hex.EncodeToString(pubkey.SerializeCompressed())
+}
+
+func (p *Manager) SignMessage(msg string) ([]byte, error) {
+	if p.wallet == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+
+	sig, err := p.wallet.SignMessage([]byte(msg))
+	if err != nil {
+		return nil, err
+	}
+	return sig.Serialize(), nil
+}
+
+func (p *Manager) SignPsbt(psbtHex string) (string, error) {
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+
+	hexBytes, _ := hex.DecodeString(psbtHex)
+    packet, err := psbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+    if err != nil {
+        Log.Errorf("NewFromRawBytes failed, %v", err)
+		return "", err
+    }
+
+	err = p.wallet.SignPsbt(packet)
+	if err != nil {
+        Log.Errorf("SignPsbt failed, %v", err)
+		return "", err
+    }
+
+	var buf bytes.Buffer
+	err = packet.Serialize(&buf)
+	if err != nil {
+		Log.Errorf("Serialize failed, %v", err)
+		return "", err
+	}
+
+	return hex.EncodeToString(buf.Bytes()), nil
+}
+
+func (p *Manager) SignPsbt_SatsNet(psbtHex string) (string, error) {
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+
+	hexBytes, _ := hex.DecodeString(psbtHex)
+    packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+    if err != nil {
+        Log.Errorf("NewFromRawBytes failed, %v", err)
+		return "", err
+    }
+
+	err = p.wallet.SignPsbt_SatsNet(packet)
+	if err != nil {
+        Log.Errorf("SignPsbt_SatsNet failed, %v", err)
+		return "", err
+    }
+
+	var buf bytes.Buffer
+	err = packet.Serialize(&buf)
+	if err != nil {
+		Log.Errorf("Serialize failed, %v", err)
+		return "", err
+	}
+
+	return hex.EncodeToString(buf.Bytes()), nil
+}
 
 // 仅用于测试使用，以后不提供这样的接口
 func (p *Manager) SendUtxos_SatsNet(destAddr string, utxos, fees []string) (string, error) {

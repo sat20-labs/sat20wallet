@@ -3,11 +3,13 @@ package common
 import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 
 	"github.com/sat20-labs/satsnet_btcd/btcec"
 	"github.com/sat20-labs/satsnet_btcd/btcec/ecdsa"
-
+	
+	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
 	stxscript "github.com/sat20-labs/satsnet_btcd/txscript"
 	swire "github.com/sat20-labs/satsnet_btcd/wire"
 )
@@ -38,4 +40,6 @@ type Wallet interface {
 	PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
 		witnessScript []byte, pos int) ([][]byte, error)
 	SignMessage(msg []byte) (*ecdsa.Signature, error)
+	SignPsbt(packet *psbt.Packet) (error)
+	SignPsbt_SatsNet(packet *spsbt.Packet) (error)
 }

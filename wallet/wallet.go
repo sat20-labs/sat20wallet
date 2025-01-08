@@ -115,7 +115,6 @@ const DEFAULT_PURPOSE = 86
 
 type InteralWallet struct {
 	masterkey             *hdkeychain.ExtendedKey
-	netParamsL1           *chaincfg.Params // L1
 	paymentPrivKey        *secp256k1.PrivateKey
 	revocationBasePrivKey *secp256k1.PrivateKey
 	purposes              map[uint32]*hdkeychain.ExtendedKey // key: purpose
@@ -151,7 +150,6 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 	}
 	return &InteralWallet{
 		masterkey:   masterkey,
-		netParamsL1: param,
 		purposes:    make(map[uint32]*hdkeychain.ExtendedKey),
 		accounts:    make(map[uint64]*hdkeychain.ExtendedKey),
 		addresses:   make(map[string]btcutil.Address),
@@ -189,7 +187,7 @@ func (p *InteralWallet) getAddress(addressType string) (btcutil.Address, error) 
 		return nil, err
 	}
 
-	address, err = getAddressFromPubKey(pubkey, addressType, p.netParamsL1)
+	address, err = getAddressFromPubKey(pubkey, addressType, GetChainParam())
 	if err != nil {
 		return nil, err
 	}
@@ -818,7 +816,7 @@ func (p *InteralWallet) SignPsbt(packet *psbt.Packet) (error) {
 }
 
 
-func (p *InteralWallet) SignPsbt_satsnet(packet *spsbt.Packet) error {
+func (p *InteralWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 	err := spsbt.InputsReadyToSign(packet)
 	if err != nil {
 		return err
