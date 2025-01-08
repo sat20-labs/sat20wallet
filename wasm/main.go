@@ -141,59 +141,6 @@ func parseConfigFromJS(jsConfig js.Value) (*wallet.Config, error) {
 	return cfg, nil
 }
 
-func hello(this js.Value, p []js.Value) any {
-	if len(p) < 4 {
-		errMsg := "Expected 4 parameters: int, string, bool, and string array"
-		wallet.Log.Error(errMsg)
-		return createJsRet(nil, 1, errMsg)
-	}
-
-	if p[0].Type() != js.TypeNumber {
-		wallet.Log.Error("First parameter should be a number")
-		return "Error: First parameter should be a number"
-	}
-	intValue := p[0].Int()
-
-	if p[1].Type() != js.TypeString {
-		wallet.Log.Errorf("Second parameter should be a string")
-		return "Error: Second parameter should be a string"
-	}
-	stringValue := p[1].String()
-
-	if p[2].Type() != js.TypeBoolean {
-		wallet.Log.Errorf("Third parameter should be a boolean")
-		return "Error: Third parameter should be a boolean"
-	}
-	boolValue := p[2].Bool()
-
-	if p[3].Type() != js.TypeObject || !p[3].InstanceOf(js.Global().Get("Array")) {
-		errMsg := "Fourth parameter should be an array"
-		wallet.Log.Error(errMsg)
-		return createJsRet(nil, 5, errMsg)
-	}
-	arrayValue := p[3]
-	arrayLength := arrayValue.Length()
-
-	stringArray := make([]string, arrayLength)
-	for i := 0; i < arrayLength; i++ {
-		item := arrayValue.Index(i)
-		if item.Type() != js.TypeString {
-			errMsg := fmt.Sprintf("Array item at index %d is not a string", i)
-			wallet.Log.Error(errMsg)
-			return createJsRet(nil, 6, errMsg)
-		}
-		stringArray[i] = item.String()
-	}
-
-	wallet.Log.Debugf("Int parameter: %v", intValue)
-	wallet.Log.Debugf("String parameter: %v", stringValue)
-	wallet.Log.Debugf("Bool parameter: %v", boolValue)
-	wallet.Log.Debugf("String array parameter: %v", stringArray)
-
-	code := 0
-	msg := "ok"
-	return createJsRet(nil, code, msg)
-}
 
 func batchDbTest(this js.Value, p []js.Value) any {
 	if len(p) < 4 {
@@ -717,8 +664,7 @@ func getStringVector(p js.Value) ([]string, error) {
 
 func main() {
 	obj := js.Global().Get("Object").New()
-	obj.Set("hello", js.FuncOf(hello))
-	obj.Set("batchDbTest", js.FuncOf(batchDbTest))
+	//obj.Set("batchDbTest", js.FuncOf(batchDbTest))
 	obj.Set("init", js.FuncOf(initManager))
 	obj.Set("release", js.FuncOf(releaseManager))
 	obj.Set("isWalletExist", js.FuncOf(isWalletExist))
@@ -744,14 +690,6 @@ func main() {
 // 	ret := &wallet.Config{
 // 		Chain: chain,
 // 		Mode:  "client",
-// 		Peers: []string{
-// 			"b@03258dd933765d50bc88630c6584726f739129d209bfeb21053c37a3b62e7a4ab1@192.168.10.102:9080",
-// 			"s@033d7411f3023987d2c537e6a14bfc99368f8928627b5c845d5bcdafd14965525b@192.168.10.104:9080",
-// 		},
-// 		RPC: wallet.RPCService{
-// 			Host:  "0.0.0.0:9080",
-// 			Proxy: chain,
-// 		},
 // 		Btcd: wallet.Bitcoin{
 // 			Host:           "192.168.10.102:28332",
 // 			User:           "jacky",

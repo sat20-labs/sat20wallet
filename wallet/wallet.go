@@ -22,8 +22,7 @@ import (
 	swire "github.com/sat20-labs/satsnet_btcd/wire"
 	"github.com/sat20-labs/sat20wallet/wallet/utils"
 	"github.com/tyler-smith/go-bip39"
-	// spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
-	// swire "github.com/sat20-labs/satsnet_btcd/wire"
+	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
 )
 
 var (
@@ -773,7 +772,99 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Sig
 	return signature.Verify(msgDigest, pubKey)
 }
 
-// func (p *Wallet) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
+// 只考虑签名p2tr的单签，用于市场挂单交易
+func (p *InteralWallet) SignPsbt(packet *psbt.Packet) (error) {
+	err := psbt.InputsReadyToSign(packet)
+	if err != nil {
+		return err
+	}
+
+	privKey := p.getPaymentPrivKey()
+	pubkey := privKey.PubKey()
+	p2trPkScript, err := GetP2TRpkScript(pubkey)
+	if err != nil {
+		Log.Errorf("CreatePkScriptForP2TR failed. %v", err)
+		return err
+	}
+
+	tx := packet.UnsignedTx
+	prevOutputFetcher := PsbtPrevOutputFetcher(packet)
+	sigHashes := txscript.NewTxSigHashes(tx, prevOutputFetcher)
+	for i := range tx.TxIn {
+		in := &packet.Inputs[i]
+		if in.WitnessUtxo == nil {
+			continue
+		}
+
+		// Skip this input if it's got final witness data attached.
+		if len(in.FinalScriptWitness) > 0 {
+			continue
+		}
+
+		if !bytes.Equal(in.WitnessUtxo.PkScript, p2trPkScript) {
+			continue
+		}
+
+		sig, err := txscript.RawTxInWitnessSignature(tx, sigHashes, i, in.WitnessUtxo.Value, in.RedeemScript, txscript.SigHashAll, privKey)
+		if err != nil {
+			return err
+		}
+		packet.Inputs[i].PartialSigs = append(packet.Inputs[i].PartialSigs, &psbt.PartialSig{
+			PubKey:    privKey.PubKey().SerializeCompressed(),
+			Signature: sig,
+		})
+	}
+	return nil
+}
+
+
+func (p *InteralWallet) SignPsbt_satsnet(packet *spsbt.Packet) error {
+	err := spsbt.InputsReadyToSign(packet)
+	if err != nil {
+		return err
+	}
+
+	privKey := p.getPaymentPrivKey()
+	pubkey := privKey.PubKey()
+	p2trPkScript, err := GetP2TRpkScript(pubkey)
+	if err != nil {
+		Log.Errorf("CreatePkScriptForP2TR failed. %v", err)
+		return err
+	}
+
+	tx := packet.UnsignedTx
+	prevOutputFetcher := PsbtPrevOutputFetcher_SatsNet(packet)
+	sigHashes := stxscript.NewTxSigHashes(tx, prevOutputFetcher)
+	for i := range tx.TxIn {
+		in := &packet.Inputs[i]
+		if in.WitnessUtxo == nil {
+			continue
+		}
+
+		// Skip this input if it's got final witness data attached.
+		if len(in.FinalScriptWitness) > 0 {
+			continue
+		}
+
+		if !bytes.Equal(in.WitnessUtxo.PkScript, p2trPkScript) {
+			continue
+		}
+
+		sig, err := stxscript.RawTxInWitnessSignature(tx, sigHashes, i, in.WitnessUtxo.Value, in.WitnessUtxo.Assets,
+			in.RedeemScript, stxscript.SigHashAll, privKey)
+		if err != nil {
+			return err
+		}
+		packet.Inputs[i].PartialSigs = append(packet.Inputs[i].PartialSigs, &spsbt.PartialSig{
+			PubKey:    privKey.PubKey().SerializeCompressed(),
+			Signature: sig,
+		})
+	}
+	return nil
+}
+
+
+// func (p *InteralWallet) SignPsbt_deprecated(packet *psbt.Packet) ([]uint32, error) {
 // 	// In signedInputs we return the indices of psbt inputs that were signed
 // 	// by our wallet. This way the caller can check if any inputs were signed.
 // 	var signedInputs []uint32
@@ -898,7 +989,7 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Sig
 // 	return signedInputs, nil
 // }
 
-// func (p *Wallet) SignOutputRaw(tx *wire.MsgTx, signDesc *utils.SignDescriptor) (utils.Signature, error) {
+// func (p *InteralWallet) SignOutputRaw(tx *wire.MsgTx, signDesc *utils.SignDescriptor) (utils.Signature, error) {
 // 	witnessScript := signDesc.WitnessScript
 
 // 	// First attempt to fetch the private key which corresponds to the
@@ -989,82 +1080,74 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Sig
 // 	return ecdsa.ParseDERSignature(sig[:len(sig)-1])
 // }
 
-// func (p *Wallet) SignPsbt_satsnet(packet *spsbt.Packet) error {
-// 	return fmt.Errorf("not implemented")
-// }
-
-// func (p *Wallet) SignOutputRaw_satsnet(tx *swire.MsgTx, signDesc *utils.SignDescriptor) (utils.Signature, error) {
-// 	return nil, fmt.Errorf("not implemented")
-// }
-
-// func (p *Wallet) fetchPrivKey(family, index uint32) (*secp256k1.PrivateKey, error) {
+// func (p *InteralWallet) fetchPrivKey(family, index uint32) (*secp256k1.PrivateKey, error) {
 // 	return p.deriveKeyByLocator(family, index)
 // }
 
-// // deriveKeyByBIP32Path derives a key described by a BIP32 path. We expect the
-// // first three elements of the path to be hardened according to BIP44, so they
-// // must be a number >= 2^31.
-// func (p *Wallet) deriveKeyByBIP32Path(path []uint32) (*btcec.PrivateKey,
-// 	error) {
+// deriveKeyByBIP32Path derives a key described by a BIP32 path. We expect the
+// first three elements of the path to be hardened according to BIP44, so they
+// must be a number >= 2^31.
+func (p *InteralWallet) deriveKeyByBIP32Path(path []uint32) (*btcec.PrivateKey,
+	error) {
 
-// 	// Make sure we get a full path with exactly 5 elements. A path is
-// 	// either custom purpose one with 4 dynamic and one static elements:
-// 	//    m/1017'/coinType'/keyFamily'/0/index
-// 	// Or a default BIP49/89 one with 5 elements:
-// 	//    m/purpose'/coinType'/account'/change/index
-// 	const expectedDerivationPathDepth = 5
-// 	if len(path) != expectedDerivationPathDepth {
-// 		return nil, fmt.Errorf("invalid BIP32 derivation path, "+
-// 			"expected path length %d, instead was %d",
-// 			expectedDerivationPathDepth, len(path))
-// 	}
+	// Make sure we get a full path with exactly 5 elements. A path is
+	// either custom purpose one with 4 dynamic and one static elements:
+	//    m/1017'/coinType'/keyFamily'/0/index
+	// Or a default BIP49/89 one with 5 elements:
+	//    m/purpose'/coinType'/account'/change/index
+	const expectedDerivationPathDepth = 5
+	if len(path) != expectedDerivationPathDepth {
+		return nil, fmt.Errorf("invalid BIP32 derivation path, "+
+			"expected path length %d, instead was %d",
+			expectedDerivationPathDepth, len(path))
+	}
 
-// 	// Assert that the first three parts of the path are actually hardened
-// 	// to avoid under-flowing the uint32 type.
-// 	if err := assertHardened(path[0], path[1], path[2]); err != nil {
-// 		return nil, fmt.Errorf("invalid BIP32 derivation path, "+
-// 			"expected first three elements to be hardened: %w", err)
-// 	}
+	// Assert that the first three parts of the path are actually hardened
+	// to avoid under-flowing the uint32 type.
+	if err := assertHardened(path[0], path[1], path[2]); err != nil {
+		return nil, fmt.Errorf("invalid BIP32 derivation path, "+
+			"expected first three elements to be hardened: %w", err)
+	}
 
-// 	// purpose := path[0] - hdkeychain.HardenedKeyStart
-// 	// coinType := path[1] - hdkeychain.HardenedKeyStart
-// 	// account := path[2] - hdkeychain.HardenedKeyStart
-// 	// change, index := path[3], path[4]
+	// purpose := path[0] - hdkeychain.HardenedKeyStart
+	// coinType := path[1] - hdkeychain.HardenedKeyStart
+	// account := path[2] - hdkeychain.HardenedKeyStart
+	// change, index := path[3], path[4]
 
-// 	key, err := p.masterkey.Derive(path[0])
-// 	if err != nil {
-// 		Log.Errorf("Failed to generate purpose chain: %v", err)
-// 		return nil, err
-// 	}
-// 	key, err = key.Derive(path[1])
-// 	if err != nil {
-// 		Log.Errorf("Failed to generate coin chain: %v", err)
-// 		return nil, err
-// 	}
-// 	key, err = key.Derive(path[2])
-// 	if err != nil {
-// 		Log.Errorf("Failed to generate account chain: %v", err)
-// 		return nil, err
-// 	}
-// 	key, err = key.Derive(path[3])
-// 	if err != nil {
-// 		Log.Errorf("Failed to generate change chain: %v", err)
-// 		return nil, err
-// 	}
-// 	key, err = key.Derive(path[4])
-// 	if err != nil {
-// 		Log.Errorf("Failed to generate index chain: %v", err)
-// 		return nil, err
-// 	}
+	key, err := p.masterkey.Derive(path[0])
+	if err != nil {
+		Log.Errorf("Failed to generate purpose chain: %v", err)
+		return nil, err
+	}
+	key, err = key.Derive(path[1])
+	if err != nil {
+		Log.Errorf("Failed to generate coin chain: %v", err)
+		return nil, err
+	}
+	key, err = key.Derive(path[2])
+	if err != nil {
+		Log.Errorf("Failed to generate account chain: %v", err)
+		return nil, err
+	}
+	key, err = key.Derive(path[3])
+	if err != nil {
+		Log.Errorf("Failed to generate change chain: %v", err)
+		return nil, err
+	}
+	key, err = key.Derive(path[4])
+	if err != nil {
+		Log.Errorf("Failed to generate index chain: %v", err)
+		return nil, err
+	}
 
-// 	privateKey, err := key.ECPrivKey()
-// 	if err != nil {
-// 		Log.Errorf("ECPrivKey failed: %v", err)
-// 		return nil, err
-// 	}
+	privateKey, err := key.ECPrivKey()
+	if err != nil {
+		Log.Errorf("ECPrivKey failed: %v", err)
+		return nil, err
+	}
 
-// 	return privateKey, nil
-// }
+	return privateKey, nil
+}
 
 func (p *InteralWallet) deriveKeyByLocator(family, index uint32) (*secp256k1.PrivateKey, error) {
 	account := getAccountFromFamilyKey(family)
@@ -1401,6 +1484,40 @@ func maybeTweakPrivKeyPsbt(unknowns []*psbt.Unknown,
 // information in a PSBT packet.
 func PsbtPrevOutputFetcher(packet *psbt.Packet) *txscript.MultiPrevOutFetcher {
 	fetcher := txscript.NewMultiPrevOutFetcher(nil)
+	for idx, txIn := range packet.UnsignedTx.TxIn {
+		in := packet.Inputs[idx]
+
+		// Skip any input that has no UTXO.
+		if in.WitnessUtxo == nil && in.NonWitnessUtxo == nil {
+			continue
+		}
+
+		if in.NonWitnessUtxo != nil {
+			prevIndex := txIn.PreviousOutPoint.Index
+			fetcher.AddPrevOut(
+				txIn.PreviousOutPoint,
+				in.NonWitnessUtxo.TxOut[prevIndex],
+			)
+
+			continue
+		}
+
+		// Fall back to witness UTXO only for older wallets.
+		if in.WitnessUtxo != nil {
+			fetcher.AddPrevOut(
+				txIn.PreviousOutPoint, in.WitnessUtxo,
+			)
+		}
+	}
+
+	return fetcher
+}
+
+
+// PsbtPrevOutputFetcher returns a txscript.PrevOutFetcher built from the UTXO
+// information in a PSBT packet.
+func PsbtPrevOutputFetcher_SatsNet(packet *spsbt.Packet) *stxscript.MultiPrevOutFetcher {
+	fetcher := stxscript.NewMultiPrevOutFetcher(nil)
 	for idx, txIn := range packet.UnsignedTx.TxIn {
 		in := packet.Inputs[idx]
 
