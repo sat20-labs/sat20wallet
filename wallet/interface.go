@@ -131,8 +131,17 @@ func (p *Manager) UnlockWallet(password string) error {
 	return nil
 }
 
-func (p *Manager) GetMnemonic(password string) string {
-	mnemonic, err := p.loadMnemonic(p.status.CurrentWallet, password)
+func (p *Manager) GetAllWallets() []int64 {
+	result := make([]int64, 0)
+	for k, _ := range p.walletInfoMap {
+		result = append(result, k)
+	}
+	return result
+}
+
+
+func (p *Manager) GetMnemonic(id int64, password string) string {
+	mnemonic, err := p.loadMnemonic(id, password)
 	if err != nil {
 		return ""
 	}
@@ -184,12 +193,12 @@ func (p *Manager) GetPublicKey() string {
 	return hex.EncodeToString(pubkey.SerializeCompressed())
 }
 
-func (p *Manager) SignMessage(msg string) ([]byte, error) {
+func (p *Manager) SignMessage(msg []byte) ([]byte, error) {
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
 
-	sig, err := p.wallet.SignMessage([]byte(msg))
+	sig, err := p.wallet.SignMessage(msg)
 	if err != nil {
 		return nil, err
 	}

@@ -223,7 +223,7 @@ func initManager(this js.Value, p []js.Value) any {
 	msg := "ok"
 	if _mgr != nil {
 		code = -1
-		msg = "STPManager is initialized"
+		msg = "Manager is initialized"
 		return createJsRet(nil, code, msg)
 	}
 
@@ -281,7 +281,7 @@ func releaseManager(this js.Value, p []js.Value) any {
 	msg := "ok"
 	if _mgr == nil {
 		code = -1
-		msg = "STPManager not initialized"
+		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
 	_mgr.Close()
@@ -294,7 +294,7 @@ func createWallet(this js.Value, p []js.Value) any {
 	msg := "ok"
 	if _mgr == nil {
 		code = -1
-		msg = "STPManager not initialized"
+		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
 	if len(p) < 1 {
@@ -329,7 +329,7 @@ func isWalletExist(this js.Value, p []js.Value) any {
 	msg := "ok"
 	if _mgr == nil {
 		code = -1
-		msg = "STPManager not initialized"
+		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
 	exist := _mgr.IsWalletExist()
@@ -341,7 +341,7 @@ func importWallet(this js.Value, p []js.Value) any {
 	msg := "ok"
 	if _mgr == nil {
 		code = -1
-		msg = "STPManager not initialized"
+		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
 	if len(p) < 2 {
@@ -382,7 +382,7 @@ func unlockWallet(this js.Value, p []js.Value) any {
 	msg := "ok"
 	if _mgr == nil {
 		code = -1
-		msg = "STPManager not initialized"
+		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
 	if len(p) < 1 {
@@ -408,12 +408,55 @@ func unlockWallet(this js.Value, p []js.Value) any {
 	return createJsRet(nil, code, msg)
 }
 
-func getMnemonic(this js.Value, p []js.Value) any {
+
+func getAllWallets(this js.Value, p []js.Value) any {
 	code := 0
 	msg := "ok"
 	if _mgr == nil {
 		code = -1
-		msg = "STPManager not initialized"
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+
+	ids := _mgr.GetAllWallets()
+	return createJsRet(ids, code, msg)
+}
+
+
+func switchWallet(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+	if len(p) < 1 {
+		code = -1
+		msg = "Expected 1 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	if p[0].Type() != js.TypeNumber {
+		code = -1
+		msg = "Id parameter should be a number"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	id := p[0].Int()
+
+	_mgr.SwitchWallet(int64(id))
+
+	return createJsRet(nil, code, msg)
+}
+
+
+func switchChain(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
 	if len(p) < 1 {
@@ -424,12 +467,48 @@ func getMnemonic(this js.Value, p []js.Value) any {
 	}
 	if p[0].Type() != js.TypeString {
 		code = -1
+		msg = "chain parameter should be a string"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	chain := p[0].String()
+
+	_mgr.SwitchChain(chain)
+
+	return createJsRet(nil, code, msg)
+}
+
+func getMnemonic(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+	if len(p) < 2 {
+		code = -1
+		msg = "Expected 2 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	if p[0].Type() != js.TypeNumber {
+		code = -1
+		msg = "Id parameter should be a number"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	id := p[0].Int()
+
+	if p[1].Type() != js.TypeString {
+		code = -1
 		msg = "password parameter should be a string"
 		wallet.Log.Error(msg)
 		return createJsRet(nil, code, msg)
 	}
-	password := p[0].String()
-	mnemonic := _mgr.GetMnemonic(password)
+	password := p[1].String()
+
+	mnemonic := _mgr.GetMnemonic(int64(id), password)
 
 	return createJsRet(mnemonic, code, msg)
 }
@@ -439,7 +518,7 @@ func getWallet(this js.Value, p []js.Value) any {
 	msg := "ok"
 	if _mgr == nil {
 		code = -1
-		msg = "STPManager not initialized"
+		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
 	_wallet := _mgr.GetWallet()
@@ -450,18 +529,140 @@ func getWallet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, code, msg)
 	}
 	data := map[string]any{
-		"paymentAddress": _wallet.GetP2TRAddress(),
+		"Address": _wallet.GetP2TRAddress(),
 	}
 	return createJsRet(data, code, msg)
 }
 
 
-func sendUtxosL1(this js.Value, p []js.Value) any {
+func getWalletPubkey(this js.Value, p []js.Value) any {
 	code := 0
 	msg := "ok"
 	if _mgr == nil {
 		code = -1
-		msg = "STPManager not initialized"
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+	pubkey := _mgr.GetPublicKey()
+	
+	return createJsRet(pubkey, code, msg)
+}
+
+
+func signMessage(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+
+	if len(p) < 1 {
+		code = -1
+		msg = "Expected 1 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+
+	jsBytes := p[0]
+
+	// 创建一个Go的字节切片，长度为jsBytes的长度
+	goBytes := make([]byte, jsBytes.Length())
+
+	// 将JavaScript字节数组复制到Go字节数组中
+	js.CopyBytesToGo(goBytes, jsBytes)
+
+
+	result, err := _mgr.SignMessage(goBytes)
+	if err != nil {
+		code = -1
+		msg = "SignMessage failed"
+		return createJsRet(nil, code, msg)
+	}
+
+	jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	js.CopyBytesToJS(jsBytes, result)
+	
+	return createJsRet(jsBytes, code, msg)
+}
+
+func signPsbt(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+
+	if len(p) < 1 {
+		code = -1
+		msg = "Expected 1 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+
+	if p[0].Type() != js.TypeString {
+		code = -1
+		msg = "psbt parameter should be a hex string"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	psbtHex := p[0].String()
+
+	result, err := _mgr.SignPsbt(psbtHex)
+	if err != nil {
+		code = -1
+		msg = "SignPsbt failed"
+		return createJsRet(nil, code, msg)
+	}
+	
+	return createJsRet(result, code, msg)
+}
+
+
+func signPsbt_SatsNet(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+
+	if len(p) < 1 {
+		code = -1
+		msg = "Expected 1 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+
+	if p[0].Type() != js.TypeString {
+		code = -1
+		msg = "psbt parameter should be a hex string"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	psbtHex := p[0].String()
+
+	result, err := _mgr.SignPsbt_SatsNet(psbtHex)
+	if err != nil {
+		code = -1
+		msg = "SignPsbt failed"
+		return createJsRet(nil, code, msg)
+	}
+	
+	return createJsRet(result, code, msg)
+}
+
+
+func sendUtxos(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
 
@@ -511,12 +712,12 @@ func sendUtxosL1(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-func sendUtxos(this js.Value, p []js.Value) any {
+func sendUtxos_SatsNet(this js.Value, p []js.Value) any {
 	code := 0
 	msg := "ok"
 	if _mgr == nil {
 		code = -1
-		msg = "STPManager not initialized"
+		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
 
@@ -564,12 +765,12 @@ func sendUtxos(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-func sendAssets(this js.Value, p []js.Value) any {
+func sendAssets_SatsNet(this js.Value, p []js.Value) any {
 	code := 0
 	msg := "ok"
 	if _mgr == nil {
 		code = -1
-		msg = "STPManager not initialized"
+		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
 
@@ -636,7 +837,7 @@ func registerCallbacks(this js.Value, args []js.Value) interface{} {
 	}
 	if _mgr == nil {
 		code = -1
-		msg = "STPManager not initialized"
+		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
 	callback := args[0]
@@ -671,12 +872,20 @@ func main() {
 	obj.Set("createWallet", js.FuncOf(createWallet))
 	obj.Set("importWallet", js.FuncOf(importWallet))
 	obj.Set("unlockWallet", js.FuncOf(unlockWallet))
+	obj.Set("getAllWallets", js.FuncOf(getAllWallets))
+	obj.Set("switchWallet", js.FuncOf(switchWallet))
+	obj.Set("switchChain", js.FuncOf(switchChain))
+	obj.Set("getPubkey", js.FuncOf(getWalletPubkey))
 	obj.Set("getMnemonice", js.FuncOf(getMnemonic))
 	obj.Set("getWallet", js.FuncOf(getWallet))
+
+	obj.Set("signMessage", js.FuncOf(signMessage))
 	
-	obj.Set("sendUtxosL1", js.FuncOf(sendUtxosL1))
+	obj.Set("signPsbt", js.FuncOf(signPsbt))
+	obj.Set("signPsbt_SatsNet", js.FuncOf(signPsbt_SatsNet))
 	obj.Set("sendUtxos", js.FuncOf(sendUtxos))
-	obj.Set("sendAssets", js.FuncOf(sendAssets))
+	obj.Set("sendUtxos_SatsNet", js.FuncOf(sendUtxos_SatsNet))
+	obj.Set("sendAssets_SatsNet", js.FuncOf(sendAssets_SatsNet))
 	obj.Set("getVersion", js.FuncOf(getVersion))
 	obj.Set("registerCallback", js.FuncOf(registerCallbacks))
 	
