@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/txscript"
@@ -14,9 +15,9 @@ import (
 	"github.com/sat20-labs/sat20wallet/wallet/sindexer"
 	"github.com/sat20-labs/sat20wallet/wallet/utils"
 	sbtcutil "github.com/sat20-labs/satsnet_btcd/btcutil"
+	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
 	stxscript "github.com/sat20-labs/satsnet_btcd/txscript"
 	swire "github.com/sat20-labs/satsnet_btcd/wire"
-	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
 )
 
 func NewManager(cfg *Config, quit chan struct{}) *Manager {
@@ -139,17 +140,6 @@ func (p *Manager) GetAllWallets() []int64 {
 	return result
 }
 
-
-func (p *Manager) GetMnemonic(id int64, password string) string {
-	mnemonic, err := p.loadMnemonic(id, password)
-	if err != nil {
-		return ""
-	}
-
-	return mnemonic
-}
-
-
 func (p *Manager) SwitchWallet(id int64) {
 	if p.status.CurrentWallet == id {
 		return
@@ -178,6 +168,62 @@ func (p *Manager) SwitchChain(chain string) {
 
 func (p *Manager) GetChain() string {
 	return _chain
+}
+
+
+func (p *Manager) GetMnemonic(id int64, password string) string {
+	mnemonic, err := p.loadMnemonic(id, password)
+	if err != nil {
+		return ""
+	}
+
+	return mnemonic
+}
+
+// private key
+func (p *Manager) GetCommitRootKey(peer []byte) []byte {
+	if p.wallet == nil {
+		return nil
+	}
+	privkey, _ := p.wallet.GetCommitRootKey(peer)
+	return privkey.Serialize()
+}
+
+// private key
+func (p *Manager) GetCommitSecret(peer []byte, index int) []byte {
+	if p.wallet == nil {
+		return nil
+	}
+	privkey := p.wallet.GetCommitSecret(peer, index)
+	return privkey.Serialize()
+}
+
+// private key
+func (p *Manager) DeriveRevocationPrivKey(commitsecret []byte) []byte {
+	if p.wallet == nil {
+		return nil
+	}
+	privSecret, _ := btcec.PrivKeyFromBytes(commitsecret)
+	privkey := p.wallet.DeriveRevocationPrivKey(privSecret)
+	return privkey.Serialize()
+}
+
+// pub key
+func (p *Manager) GetRevocationBaseKey() []byte {
+	if p.wallet == nil {
+		return nil
+	}
+	pubKey := p.wallet.GetRevocationBaseKey()
+	return pubKey.SerializeCompressed()
+}
+
+// pub key
+func (p *Manager) GetNodePubKey() []byte {
+	if p.wallet == nil {
+		return nil
+	}
+	pubKey := p.wallet.GetNodePubKey()
+	return pubKey.SerializeCompressed()
 }
 
 func (p *Manager) GetPublicKey() string {

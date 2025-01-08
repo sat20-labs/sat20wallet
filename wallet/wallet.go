@@ -770,7 +770,7 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Sig
 	return signature.Verify(msgDigest, pubKey)
 }
 
-// 只考虑签名p2tr的单签，用于市场挂单交易
+// 支持上面所有几种不同的签名方式
 func (p *InteralWallet) SignPsbt(packet *psbt.Packet) (error) {
 	err := psbt.InputsReadyToSign(packet)
 	if err != nil {
@@ -795,22 +795,50 @@ func (p *InteralWallet) SignPsbt(packet *psbt.Packet) (error) {
 		}
 
 		// Skip this input if it's got final witness data attached.
-		if len(in.FinalScriptWitness) > 0 {
+		if len(in.FinalScriptWitness) > 0 || len(in.FinalScriptSig) > 0 || len(in.TaprootKeySpendSig) > 0{
 			continue
 		}
 
-		if !bytes.Equal(in.WitnessUtxo.PkScript, p2trPkScript) {
+		if bytes.Equal(in.WitnessUtxo.PkScript, p2trPkScript) {
+			// 单签，目前只支持p2tr
+			witness, err := txscript.TaprootWitnessSignature(tx, sigHashes, i,
+				in.WitnessUtxo.Value, in.WitnessUtxo.PkScript,
+				txscript.SigHashDefault, privKey)
+			if err != nil {
+				Log.Errorf("TaprootWitnessSignature failed. %v", err)
+				return err
+			}
+			in.TaprootKeySpendSig = witness[0]
+			continue
+		} 
+
+		// 看看是否是指定的脚本
+		var script []byte 
+		if in.WitnessScript != nil {
+			script = in.WitnessScript
+		} else if in.RedeemScript != nil {
+			script = in.RedeemScript
+		} else {
 			continue
 		}
-
-		sig, err := txscript.RawTxInWitnessSignature(tx, sigHashes, i, in.WitnessUtxo.Value, in.RedeemScript, txscript.SigHashAll, privKey)
+		
+		mulpkScript, err := utils.WitnessScriptHash(script)
 		if err != nil {
 			return err
 		}
-		packet.Inputs[i].PartialSigs = append(packet.Inputs[i].PartialSigs, &psbt.PartialSig{
-			PubKey:    privKey.PubKey().SerializeCompressed(),
-			Signature: sig,
-		})
+		if bytes.Equal(in.WitnessUtxo.PkScript, mulpkScript) {
+			// 如何区分是多签脚本和单签脚本？
+
+			sig, err := txscript.RawTxInWitnessSignature(tx, sigHashes, i, in.WitnessUtxo.Value, 
+				script, txscript.SigHashAll, privKey)
+			if err != nil {
+				return err
+			}
+			in.PartialSigs = append(in.PartialSigs, &psbt.PartialSig{
+				PubKey:    privKey.PubKey().SerializeCompressed(),
+				Signature: sig,
+			})
+		}
 	}
 	return nil
 }
