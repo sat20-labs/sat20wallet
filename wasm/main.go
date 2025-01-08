@@ -4,7 +4,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -315,17 +314,9 @@ func initManager(this js.Value, p []js.Value) any {
 	}
 	wallet.Log.SetLevel(logLevel)
 
-	lc := wallet.NewLightningCore()
-	if lc == nil {
-		code = -1
-		msg = "NewLightningCore failed."
-		wallet.Log.Info("NewLightningCore failed.")
-		createJsRet(nil, code, msg)
-	}
-
-	_mgr = wallet.NewManager(cfg, lc.GetQuit())
+	_mgr = wallet.NewManager(cfg, make(chan struct{}))
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		err := wallet.Init()
+		err := _mgr.Init()
 		if err != nil {
 			wallet.Log.Errorf("init error: %v", err)
 			return nil, -1, err.Error()
@@ -504,15 +495,15 @@ func getWallet(this js.Value, p []js.Value) any {
 		msg = "STPManager not initialized"
 		return createJsRet(nil, code, msg)
 	}
-	wallet := _mgr.GetWallet()
-	if wallet == nil {
+	_wallet := _mgr.GetWallet()
+	if _wallet == nil {
 		code = -1
 		msg = "wallet is nil"
 		wallet.Log.Error(msg)
 		return createJsRet(nil, code, msg)
 	}
 	data := map[string]any{
-		"paymentAddress": wallet.GetP2TRAddress(),
+		"paymentAddress": _wallet.GetP2TRAddress(),
 	}
 	return createJsRet(data, code, msg)
 }

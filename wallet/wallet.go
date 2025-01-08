@@ -1640,3 +1640,12 @@ func prepareScriptsV0(in *psbt.PInput) []byte {
 		return in.WitnessUtxo.PkScript
 	}
 }
+
+
+func GetPkScriptType(prevOutScript []byte) txscript.ScriptClass {
+	ty, _, _, err := txscript.ExtractPkScriptAddrs(prevOutScript, GetChainParam())
+	if err != nil {
+		return txscript.WitnessUnknownTy
+	}
+	return ty
+}

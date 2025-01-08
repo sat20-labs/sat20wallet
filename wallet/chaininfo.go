@@ -3,6 +3,7 @@ package wallet
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -261,3 +262,46 @@ func PrintHexTx(tx *wire.MsgTx) {
 	}
 	Log.Infof("TX: %s", hexTx)
 }
+
+
+func ConvertMsgTx(tx *wire.MsgTx) *MsgTx {
+	if tx == nil {
+		return nil
+	}
+
+	msg := &MsgTx{
+		Version: tx.Version,
+		LockTime: tx.LockTime,
+	}
+	msg.TxIn = make([]*TxIn, 0)
+	for _, in := range tx.TxIn {
+		txin := &TxIn{
+			PreviousOutPoint: OutPoint{Hash: in.PreviousOutPoint.Hash.String(), Index: in.PreviousOutPoint.Index},
+			SignatureScript: hex.EncodeToString(in.SignatureScript),
+			Sequence: in.Sequence,
+		}
+		txin.Witness = make([]string, 0)
+		for _, w := range in.Witness {
+			txin.Witness = append(txin.Witness, hex.EncodeToString(w))
+		}
+
+		msg.TxIn = append(msg.TxIn, txin)
+	}
+	msg.TxOut = make([]*TxOut, 0)
+	for _, out := range tx.TxOut {
+		txout := &TxOut{
+			Value: out.Value,
+			PkScript: hex.EncodeToString(out.PkScript),
+		}
+		msg.TxOut = append(msg.TxOut, txout)
+	}
+
+   return msg
+}
+
+func PrintJsonTx(tx *wire.MsgTx, name string) {
+	jsonTx := ConvertMsgTx(tx)
+	b, _ := json.Marshal(jsonTx)
+	Log.Infof("L1 %s TX: %s", name, string(b))
+}
+
