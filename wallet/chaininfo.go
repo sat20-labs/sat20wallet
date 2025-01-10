@@ -305,3 +305,10 @@ func PrintJsonTx(tx *wire.MsgTx, name string) {
 	Log.Infof("L1 %s TX: %s", name, string(b))
 }
 
+func GetPkScriptType(prevOutScript []byte) txscript.ScriptClass {
+	ty, _, _, err := txscript.ExtractPkScriptAddrs(prevOutScript, GetChainParam())
+	if err != nil {
+		return txscript.WitnessUnknownTy
+	}
+	return ty
+}

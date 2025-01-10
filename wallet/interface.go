@@ -134,7 +134,7 @@ func (p *Manager) UnlockWallet(password string) error {
 
 func (p *Manager) GetAllWallets() []int64 {
 	result := make([]int64, 0)
-	for k, _ := range p.walletInfoMap {
+	for k := range p.walletInfoMap {
 		result = append(result, k)
 	}
 	return result

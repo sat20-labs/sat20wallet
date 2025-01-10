@@ -13,6 +13,8 @@ import (
 const (
 	DB_KEY_STATUS         = "status"
 	DB_KEY_WALLET         = "w-" 
+	DB_KEY_ASSET_L1       = "asset-l1-"  //  Id - subId - chain
+	DB_KEY_ASSET_L2       = "asset-l2-" 
 )
 
 type Status struct {
@@ -21,16 +23,27 @@ type Status struct {
 	TotalWallet  int
 	CurrentWallet int64  // wallet ID
 	CurrentChain string
+	SyncHeight   int
+	SyncHeightL2 int
 }
 
 type WalletInDB struct {
 	Id int64
 	Mnemonic []byte  // 加密后的数据
 	Salt     []byte
+	Accounts int
 }
 
 func getWalletDBKey(id int64) string {
 	return fmt.Sprintf("%s%d", DB_KEY_WALLET, id)
+}
+
+func getAssetDBKey(id int64, subId int, chain string) string {
+	return fmt.Sprintf("%s%d-%d-%s", DB_KEY_ASSET_L1, id, subId, chain)
+}
+
+func getAssetDBKey_SatsNet(id int64, subId int, chain string) string {
+	return fmt.Sprintf("%s%d-%d-%s", DB_KEY_ASSET_L2, id, subId, chain)
 }
 
 func EncodeToBytes(data interface{}) ([]byte, error) {
