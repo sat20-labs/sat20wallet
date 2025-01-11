@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall/js"
@@ -141,7 +142,6 @@ func parseConfigFromJS(jsConfig js.Value) (*wallet.Config, error) {
 	return cfg, nil
 }
 
-
 func batchDbTest(this js.Value, p []js.Value) any {
 	if len(p) < 4 {
 		const errMsg = "Expected 4 parameters: int, string, bool, and string array"
@@ -270,7 +270,7 @@ func initManager(this js.Value, p []js.Value) any {
 		}
 		return nil, 0, "ok"
 	})
-	
+
 	wallet.Log.Info("STP manager initialized")
 	return js.Global().Get("Promise").New(jsHandler)
 }
@@ -422,12 +422,23 @@ func getAllWallets(this js.Value, p []js.Value) any {
 	}
 
 	ids := _mgr.GetAllWallets()
+
+	type WalletIdAndAccounts struct {
+		Id int64
+		Accounts int
+	}
+	result := make([]*WalletIdAndAccounts, 0)
+	for k, v := range ids {
+		result = append(result, &WalletIdAndAccounts{Id: k, Accounts: v})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Id < result[j].Id
+	})
 	data := map[string]any{
-		"walletIds": ids,
+		"walletIds": result,
 	}
 	return createJsRet(data, code, msg)
 }
-
 
 func switchWallet(this js.Value, p []js.Value) any {
 	code := 0
@@ -452,6 +463,33 @@ func switchWallet(this js.Value, p []js.Value) any {
 	id := p[0].Int()
 
 	_mgr.SwitchWallet(int64(id))
+
+	return createJsRet(nil, code, msg)
+}
+
+func switchAccount(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+	if len(p) < 1 {
+		code = -1
+		msg = "Expected 1 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	if p[0].Type() != js.TypeNumber {
+		code = -1
+		msg = "Id parameter should be a number"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	id := p[0].Int()
+
+	_mgr.SwitchAccount(uint32(id))
 
 	return createJsRet(nil, code, msg)
 }
@@ -528,6 +566,19 @@ func getWalletAddress(this js.Value, p []js.Value) any {
 		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
+	if len(p) < 1 {
+		code = -1
+		msg = "Expected 1 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	if p[0].Type() != js.TypeNumber {
+		code = -1
+		msg = "Id parameter should be a number"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	id := p[0].Int()
 	_wallet := _mgr.GetWallet()
 	if _wallet == nil {
 		code = -1
@@ -536,11 +587,10 @@ func getWalletAddress(this js.Value, p []js.Value) any {
 		return createJsRet(nil, code, msg)
 	}
 	data := map[string]any{
-		"address": _wallet.GetP2TRAddress(),
+		"address": _wallet.GetAddress(uint32(id)),
 	}
 	return createJsRet(data, code, msg)
 }
-
 
 func getWalletPubkey(this js.Value, p []js.Value) any {
 	code := 0
@@ -550,13 +600,25 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 		msg = "Manager not initialized"
 		return createJsRet(nil, code, msg)
 	}
-	pubkey := _mgr.GetPublicKey()
+	if len(p) < 1 {
+		code = -1
+		msg = "Expected 1 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	if p[0].Type() != js.TypeNumber {
+		code = -1
+		msg = "Id parameter should be a number"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	id := p[0].Int()
+	pubkey := _mgr.GetPublicKey(uint32(id))
 	data := map[string]any{
 		"pubkey": pubkey,
 	}
 	return createJsRet(data, code, msg)
 }
-
 
 func getCommitRootKey(this js.Value, p []js.Value) any {
 	code := 0
@@ -625,7 +687,6 @@ func getCommitSecret(this js.Value, p []js.Value) any {
 	}
 	return createJsRet(data, code, msg)
 }
-
 
 func deriveRevocationPrivKey(this js.Value, p []js.Value) any {
 	code := 0
@@ -771,7 +832,6 @@ func signPsbt(this js.Value, p []js.Value) any {
 	return createJsRet(data, code, msg)
 }
 
-
 func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 	code := 0
 	msg := "ok"
@@ -802,7 +862,7 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 		msg = "SignPsbt failed"
 		return createJsRet(nil, code, msg)
 	}
-	
+
 	data := map[string]any{
 		"psbt": result,
 	}
@@ -902,7 +962,6 @@ func sendUtxos_SatsNet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, msg)
 	}
 
-
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		txid, err := _mgr.SendUtxos_SatsNet(destAddress, utxoList, feeList)
 		if err != nil {
@@ -973,7 +1032,6 @@ func sendAssets_SatsNet(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-
 func getVersion(this js.Value, p []js.Value) any {
 	code := 0
 	msg := "ok"
@@ -997,7 +1055,7 @@ func registerCallbacks(this js.Value, args []js.Value) interface{} {
 	callback := args[0]
 	_mgr.RegisterCallback(callback)
 	return createJsRet(nil, code, msg)
-    
+
 }
 
 func getStringVector(p js.Value) ([]string, error) {
@@ -1016,7 +1074,6 @@ func getStringVector(p js.Value) ([]string, error) {
 	return strs, nil
 }
 
-
 func main() {
 	obj := js.Global().Get("Object").New()
 	//obj.Set("batchDbTest", js.FuncOf(batchDbTest))
@@ -1032,18 +1089,20 @@ func main() {
 	obj.Set("importWallet", js.FuncOf(importWallet))
 	// input: password; return: current walletId
 	obj.Set("unlockWallet", js.FuncOf(unlockWallet))
-	// input: none; return: wallet id list
+	// input: none; return: list of wallet id and account number
 	obj.Set("getAllWallets", js.FuncOf(getAllWallets))
 	// input: wallet id; return: ok
 	obj.Set("switchWallet", js.FuncOf(switchWallet))
+	// input: account id; return: ok
+	obj.Set("switchAccount", js.FuncOf(switchAccount))
 	// input: mainnet or testnet
 	obj.Set("switchChain", js.FuncOf(switchChain))
 	// input: walletid, password; return: mnemonic
 	obj.Set("getMnemonice", js.FuncOf(getMnemonic))
-	// input: none; return: current wallet p2tr address
+	// input: account id; return: current wallet p2tr address
 	obj.Set("getWalletAddress", js.FuncOf(getWalletAddress))
-	// input: none; return: current wallet public key
-	obj.Set("getPubkey", js.FuncOf(getWalletPubkey))
+	// input: account id; return: current wallet public key
+	obj.Set("getWalletPubkey", js.FuncOf(getWalletPubkey))
 	// input: node pubkey(Uint8Array); return: commit root key (Uint8Array)
 	obj.Set("getCommitRootKey", js.FuncOf(getCommitRootKey))
 	// input: node pubkey(Uint8Array), index; return: commit secrect (Uint8Array)
@@ -1060,13 +1119,13 @@ func main() {
 	obj.Set("signPsbt", js.FuncOf(signPsbt))
 	// input: psbt(hexString); return: signed psbt (hexString)
 	obj.Set("signPsbt_SatsNet", js.FuncOf(signPsbt_SatsNet))
-	
+
 	obj.Set("sendUtxos", js.FuncOf(sendUtxos))
 	obj.Set("sendUtxos_SatsNet", js.FuncOf(sendUtxos_SatsNet))
 	obj.Set("sendAssets_SatsNet", js.FuncOf(sendAssets_SatsNet))
 	obj.Set("getVersion", js.FuncOf(getVersion))
 	obj.Set("registerCallback", js.FuncOf(registerCallbacks))
-	
+
 	js.Global().Set(module, obj)
 	wallet.Log.SetLevel(logrus.DebugLevel)
 	<-make(chan bool)

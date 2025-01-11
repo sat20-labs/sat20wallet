@@ -18,13 +18,14 @@ const (
 )
 
 type Status struct {
-	SoftwareVer  string
-	DBver        string
-	TotalWallet  int
-	CurrentWallet int64  // wallet ID
-	CurrentChain string
-	SyncHeight   int
-	SyncHeightL2 int
+	SoftwareVer   	string
+	DBver        	string
+	TotalWallet  	int
+	CurrentWallet 	int64   // wallet ID
+	CurrentAccount 	uint32  // account ID (index)
+	CurrentChain 	string
+	SyncHeight   	int
+	SyncHeightL2 	int
 }
 
 type WalletInDB struct {

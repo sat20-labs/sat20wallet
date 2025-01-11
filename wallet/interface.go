@@ -26,11 +26,11 @@ func NewManager(cfg *Config, quit chan struct{}) *Manager {
 	//////////
 
 	mgr := &Manager{
-		cfg:                cfg,
-		walletInfoMap:      nil,
-		bInited:            false,
-		bStop:              false,
-		quit:               quit,
+		cfg:           cfg,
+		walletInfoMap: nil,
+		bInited:       false,
+		bStop:         false,
+		quit:          quit,
 	}
 
 	_chain = cfg.Chain
@@ -136,10 +136,10 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 	return p.status.CurrentWallet, nil
 }
 
-func (p *Manager) GetAllWallets() []int64 {
-	result := make([]int64, 0)
-	for k := range p.walletInfoMap {
-		result = append(result, k)
+func (p *Manager) GetAllWallets() map[int64]int {
+	result := make(map[int64]int, 0)
+	for k, v := range p.walletInfoMap {
+		result[k] = v.Accounts
 	}
 	return result
 }
@@ -148,12 +148,21 @@ func (p *Manager) SwitchWallet(id int64) {
 	if p.status.CurrentWallet == id {
 		return
 	}
-		
+
 	p.status.CurrentWallet = id
 	_, err := p.UnlockWallet(p.password)
 	if err == nil {
 		p.saveStatus()
 	}
+}
+
+func (p *Manager) SwitchAccount(id uint32) {
+	if p.status.CurrentAccount == id {
+		return
+	}
+
+	p.status.CurrentAccount = id
+	p.saveStatus()
 }
 
 func (p *Manager) SwitchChain(chain string) {
@@ -173,7 +182,6 @@ func (p *Manager) SwitchChain(chain string) {
 func (p *Manager) GetChain() string {
 	return _chain
 }
-
 
 func (p *Manager) GetMnemonic(id int64, password string) string {
 	mnemonic, err := p.loadMnemonic(id, password)
@@ -230,7 +238,20 @@ func (p *Manager) GetNodePubKey() []byte {
 	return pubKey.SerializeCompressed()
 }
 
-func (p *Manager) GetPublicKey() string {
+func (p *Manager) GetPublicKey(id uint32) string {
+	if p.wallet == nil {
+		return ""
+	}
+
+	pubkey := p.wallet.GetPubKey(id)
+	if pubkey == nil {
+		return ""
+	}
+
+	return hex.EncodeToString(pubkey.SerializeCompressed())
+}
+
+func (p *Manager) GetPaymentPubKey() string {
 	if p.wallet == nil {
 		return ""
 	}
@@ -261,17 +282,17 @@ func (p *Manager) SignPsbt(psbtHex string) (string, error) {
 	}
 
 	hexBytes, _ := hex.DecodeString(psbtHex)
-    packet, err := psbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
-    if err != nil {
-        Log.Errorf("NewFromRawBytes failed, %v", err)
+	packet, err := psbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	if err != nil {
+		Log.Errorf("NewFromRawBytes failed, %v", err)
 		return "", err
-    }
+	}
 
 	err = p.wallet.SignPsbt(packet)
 	if err != nil {
-        Log.Errorf("SignPsbt failed, %v", err)
+		Log.Errorf("SignPsbt failed, %v", err)
 		return "", err
-    }
+	}
 
 	var buf bytes.Buffer
 	err = packet.Serialize(&buf)
@@ -289,17 +310,17 @@ func (p *Manager) SignPsbt_SatsNet(psbtHex string) (string, error) {
 	}
 
 	hexBytes, _ := hex.DecodeString(psbtHex)
-    packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
-    if err != nil {
-        Log.Errorf("NewFromRawBytes failed, %v", err)
+	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	if err != nil {
+		Log.Errorf("NewFromRawBytes failed, %v", err)
 		return "", err
-    }
+	}
 
 	err = p.wallet.SignPsbt_SatsNet(packet)
 	if err != nil {
-        Log.Errorf("SignPsbt_SatsNet failed, %v", err)
+		Log.Errorf("SignPsbt_SatsNet failed, %v", err)
 		return "", err
-    }
+	}
 
 	var buf bytes.Buffer
 	err = packet.Serialize(&buf)
@@ -445,7 +466,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 		return "", fmt.Errorf("invalid amount %d", amt)
 	}
 
-	address := p.wallet.GetP2TRAddress()
+	address := p.wallet.GetAddress(uint32(p.status.CurrentAccount))
 	outputs := p.l2IndexerClient.GetUtxoListWithTicker(address, name)
 	if len(outputs) == 0 {
 		Log.Errorf("no asset %s", assetName)

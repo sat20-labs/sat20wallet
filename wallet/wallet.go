@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
@@ -15,14 +14,14 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/sat20-labs/sat20wallet/wallet/utils"
 	"github.com/sat20-labs/satsnet_btcd/btcec"
 	"github.com/sat20-labs/satsnet_btcd/btcec/ecdsa"
 	"github.com/sat20-labs/satsnet_btcd/btcec/schnorr"
+	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
 	stxscript "github.com/sat20-labs/satsnet_btcd/txscript"
 	swire "github.com/sat20-labs/satsnet_btcd/wire"
-	"github.com/sat20-labs/sat20wallet/wallet/utils"
 	"github.com/tyler-smith/go-bip39"
-	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
 )
 
 var (
@@ -113,6 +112,9 @@ const (
 
 const DEFAULT_PURPOSE = 86
 
+// m/purpose'/coinType'/account'/change/index
+
+// 可以支持其他类型，但为了方便，默认只支持p2tr地址类型。
 type InteralWallet struct {
 	masterkey             *hdkeychain.ExtendedKey
 	netParamsL1           *chaincfg.Params // L1
@@ -120,7 +122,7 @@ type InteralWallet struct {
 	revocationBasePrivKey *secp256k1.PrivateKey
 	purposes              map[uint32]*hdkeychain.ExtendedKey // key: purpose
 	accounts              map[uint64]*hdkeychain.ExtendedKey // key: purpose<<32+account
-	addresses             map[string]btcutil.Address         // key: address type
+	addresses             map[uint32]btcutil.Address         // key: index
 }
 
 func NewInteralWallet(param *chaincfg.Params) (*InteralWallet, string, error) {
@@ -154,7 +156,7 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 		netParamsL1: param,
 		purposes:    make(map[uint32]*hdkeychain.ExtendedKey),
 		accounts:    make(map[uint64]*hdkeychain.ExtendedKey),
-		addresses:   make(map[string]btcutil.Address),
+		addresses:   make(map[uint32]btcutil.Address),
 	}
 }
 
@@ -171,9 +173,9 @@ func (p *InteralWallet) getPurposeKey(purpose uint32) (*hdkeychain.ExtendedKey, 
 	return acckey, nil
 }
 
-func (p *InteralWallet) getAddress(addressType string) (btcutil.Address, error) {
-	addressType = strings.ToUpper(addressType)
-	address, ok := p.addresses[addressType]
+func (p *InteralWallet) getBtcUtilAddress(index uint32) (btcutil.Address, error) {
+	addressType := "P2TR"
+	address, ok := p.addresses[index]
 	if ok {
 		return address, nil
 	}
@@ -184,7 +186,7 @@ func (p *InteralWallet) getAddress(addressType string) (btcutil.Address, error) 
 		return nil, err
 	}
 
-	_, pubkey, err := generateKeyFromPurposeKey(purposeKey, 0, 0)
+	_, pubkey, err := generateKeyFromPurposeKey(purposeKey, 0, index)
 	if err != nil {
 		return nil, err
 	}
@@ -193,12 +195,21 @@ func (p *InteralWallet) getAddress(addressType string) (btcutil.Address, error) 
 	if err != nil {
 		return nil, err
 	}
-	p.addresses[addressType] = address
+	p.addresses[index] = address
 	return address, nil
 }
 
-func (p *InteralWallet) GetP2TRAddress() string {
-	addr, err := p.getAddress("P2TR")
+func (p *InteralWallet) GetPubKey(index uint32) *secp256k1.PublicKey {
+	_, pubKey, err := p.getKey("P2TR", index)
+	if err != nil {
+		Log.Errorf("GetPubKey failed. %v", err)
+		return nil
+	}
+	return pubKey
+}
+
+func (p *InteralWallet) GetAddress(index uint32) string {
+	addr, err := p.getBtcUtilAddress(index)
 	if err != nil {
 		return ""
 	}
@@ -317,7 +328,7 @@ func (p *InteralWallet) getPaymentPrivKey() *secp256k1.PrivateKey {
 	if p.paymentPrivKey != nil {
 		return p.paymentPrivKey
 	}
-	key, _, err := p.getKey("P2TR")
+	key, _, err := p.getKey("P2TR", 0)
 	if err != nil {
 		Log.Errorf("GetPubKey P2TR failed. %v", err)
 		return nil
@@ -326,13 +337,13 @@ func (p *InteralWallet) getPaymentPrivKey() *secp256k1.PrivateKey {
 	return key
 }
 
-func (p *InteralWallet) getKey(addressType string) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
+func (p *InteralWallet) getKey(addressType string, index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
 	purpose := getPurposeFromAddrType(addressType)
 	purposekey, err := p.getPurposeKey(purpose)
 	if err != nil {
 		return nil, nil, err
 	}
-	return generateKeyFromPurposeKey(purposekey, 0, 0)
+	return generateKeyFromPurposeKey(purposekey, 0, index)
 }
 
 func (p *InteralWallet) SignTxInput(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
