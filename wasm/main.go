@@ -228,7 +228,7 @@ func initManager(this js.Value, p []js.Value) any {
 	}
 
 	if len(p) < 2 {
-		errMsg := "Expected 1 parameters"
+		errMsg := "Expected 2 parameters"
 		wallet.Log.Error(errMsg)
 		return createJsRet(nil, 1, errMsg)
 	}
@@ -275,7 +275,6 @@ func initManager(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-
 func releaseManager(this js.Value, p []js.Value) any {
 	code := 0
 	msg := "ok"
@@ -311,18 +310,18 @@ func createWallet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, code, msg)
 	}
 	password := p[0].String()
-	mnemonic, err := _mgr.CreateWallet(password)
+	id, mnemonic, err := _mgr.CreateWallet(password)
 	if err != nil {
 		code = -1
 		msg = err.Error()
 		return createJsRet(nil, code, msg)
 	}
 	data := map[string]any{
+		"walletId": id,
 		"mnemonic": mnemonic,
 	}
 	return createJsRet(data, code, msg)
 }
-
 
 func isWalletExist(this js.Value, p []js.Value) any {
 	code := 0
@@ -368,13 +367,16 @@ func importWallet(this js.Value, p []js.Value) any {
 	password := p[1].String()
 
 	wallet.Log.Infof("ImportWallet %s %s", mnemonic, password)
-	err := _mgr.ImportWallet(mnemonic, password)
+	id, err := _mgr.ImportWallet(mnemonic, password)
 	if err != nil {
 		code = -1
 		msg = err.Error()
 		return createJsRet(nil, code, msg)
 	}
-	return createJsRet(nil, code, msg)
+	data := map[string]any{
+		"walletId": id,
+	}
+	return createJsRet(data, code, msg)
 }
 
 func unlockWallet(this js.Value, p []js.Value) any {
@@ -398,16 +400,17 @@ func unlockWallet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, code, msg)
 	}
 	password := p[0].String()
-	err := _mgr.UnlockWallet(password)
-
+	id, err := _mgr.UnlockWallet(password)
 	if err != nil {
 		code = -1
 		msg = err.Error()
 		return createJsRet(nil, code, msg)
 	}
-	return createJsRet(nil, code, msg)
+	data := map[string]any{
+		"walletId": id,
+	}
+	return createJsRet(data, code, msg)
 }
-
 
 func getAllWallets(this js.Value, p []js.Value) any {
 	code := 0
@@ -419,7 +422,10 @@ func getAllWallets(this js.Value, p []js.Value) any {
 	}
 
 	ids := _mgr.GetAllWallets()
-	return createJsRet(ids, code, msg)
+	data := map[string]any{
+		"walletIds": ids,
+	}
+	return createJsRet(data, code, msg)
 }
 
 
@@ -449,7 +455,6 @@ func switchWallet(this js.Value, p []js.Value) any {
 
 	return createJsRet(nil, code, msg)
 }
-
 
 func switchChain(this js.Value, p []js.Value) any {
 	code := 0
@@ -509,11 +514,13 @@ func getMnemonic(this js.Value, p []js.Value) any {
 	password := p[1].String()
 
 	mnemonic := _mgr.GetMnemonic(int64(id), password)
-
-	return createJsRet(mnemonic, code, msg)
+	data := map[string]any{
+		"mnemonic": mnemonic,
+	}
+	return createJsRet(data, code, msg)
 }
 
-func getWallet(this js.Value, p []js.Value) any {
+func getWalletAddress(this js.Value, p []js.Value) any {
 	code := 0
 	msg := "ok"
 	if _mgr == nil {
@@ -529,7 +536,7 @@ func getWallet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, code, msg)
 	}
 	data := map[string]any{
-		"Address": _wallet.GetP2TRAddress(),
+		"address": _wallet.GetP2TRAddress(),
 	}
 	return createJsRet(data, code, msg)
 }
@@ -544,10 +551,149 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 		return createJsRet(nil, code, msg)
 	}
 	pubkey := _mgr.GetPublicKey()
-	
-	return createJsRet(pubkey, code, msg)
+	data := map[string]any{
+		"pubkey": pubkey,
+	}
+	return createJsRet(data, code, msg)
 }
 
+
+func getCommitRootKey(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+
+	if len(p) < 1 {
+		code = -1
+		msg = "Expected 1 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+
+	jsBytes := p[0]
+	goBytes := make([]byte, jsBytes.Length())
+	js.CopyBytesToGo(goBytes, jsBytes)
+
+	result := _mgr.GetCommitRootKey(goBytes)
+
+	jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	js.CopyBytesToJS(jsBytes, result)
+	data := map[string]any{
+		"commitRootKey": jsBytes,
+	}
+	return createJsRet(data, code, msg)
+}
+
+func getCommitSecret(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+
+	if len(p) < 2 {
+		code = -1
+		msg = "Expected 2 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+
+	jsBytes := p[0]
+	goBytes := make([]byte, jsBytes.Length())
+	js.CopyBytesToGo(goBytes, jsBytes)
+
+	if p[1].Type() != js.TypeNumber {
+		code = -1
+		msg = "Id parameter should be a number"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	index := p[1].Int()
+
+	result := _mgr.GetCommitSecret(goBytes, index)
+
+	jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	js.CopyBytesToJS(jsBytes, result)
+	data := map[string]any{
+		"commitSecret": jsBytes,
+	}
+	return createJsRet(data, code, msg)
+}
+
+
+func deriveRevocationPrivKey(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+
+	if len(p) < 1 {
+		code = -1
+		msg = "Expected 2 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+
+	jsBytes := p[0]
+	goBytes := make([]byte, jsBytes.Length())
+	js.CopyBytesToGo(goBytes, jsBytes)
+
+	result := _mgr.DeriveRevocationPrivKey(goBytes)
+
+	jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	js.CopyBytesToJS(jsBytes, result)
+	data := map[string]any{
+		"revocationPrivKey": jsBytes,
+	}
+	return createJsRet(data, code, msg)
+}
+
+func getRevocationBaseKey(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+
+	result := _mgr.GetRevocationBaseKey()
+
+	jsBytes := js.Global().Get("Uint8Array").New(len(result))
+	js.CopyBytesToJS(jsBytes, result)
+	data := map[string]any{
+		"revocationBaseKey": jsBytes,
+	}
+	return createJsRet(data, code, msg)
+}
+
+func getNodePubKey(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "Manager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+
+	result := _mgr.GetNodePubKey()
+
+	jsBytes := js.Global().Get("Uint8Array").New(len(result))
+	js.CopyBytesToJS(jsBytes, result)
+	data := map[string]any{
+		"nodePubKey": jsBytes,
+	}
+	return createJsRet(data, code, msg)
+}
 
 func signMessage(this js.Value, p []js.Value) any {
 	code := 0
@@ -573,7 +719,6 @@ func signMessage(this js.Value, p []js.Value) any {
 	// 将JavaScript字节数组复制到Go字节数组中
 	js.CopyBytesToGo(goBytes, jsBytes)
 
-
 	result, err := _mgr.SignMessage(goBytes)
 	if err != nil {
 		code = -1
@@ -583,8 +728,10 @@ func signMessage(this js.Value, p []js.Value) any {
 
 	jsBytes = js.Global().Get("Uint8Array").New(len(result))
 	js.CopyBytesToJS(jsBytes, result)
-	
-	return createJsRet(jsBytes, code, msg)
+	data := map[string]any{
+		"signature": jsBytes,
+	}
+	return createJsRet(data, code, msg)
 }
 
 func signPsbt(this js.Value, p []js.Value) any {
@@ -617,8 +764,11 @@ func signPsbt(this js.Value, p []js.Value) any {
 		msg = "SignPsbt failed"
 		return createJsRet(nil, code, msg)
 	}
-	
-	return createJsRet(result, code, msg)
+
+	data := map[string]any{
+		"psbt": result,
+	}
+	return createJsRet(data, code, msg)
 }
 
 
@@ -653,9 +803,11 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, code, msg)
 	}
 	
-	return createJsRet(result, code, msg)
+	data := map[string]any{
+		"psbt": result,
+	}
+	return createJsRet(data, code, msg)
 }
-
 
 func sendUtxos(this js.Value, p []js.Value) any {
 	code := 0
@@ -825,9 +977,11 @@ func sendAssets_SatsNet(this js.Value, p []js.Value) any {
 func getVersion(this js.Value, p []js.Value) any {
 	code := 0
 	msg := "ok"
-	return createJsRet(wallet.SOFTWARE_VERSION, code, msg)
+	data := map[string]any{
+		"version": wallet.SOFTWARE_VERSION,
+	}
+	return createJsRet(data, code, msg)
 }
-
 
 func registerCallbacks(this js.Value, args []js.Value) interface{} {
 	code := 0
@@ -866,23 +1020,47 @@ func getStringVector(p js.Value) ([]string, error) {
 func main() {
 	obj := js.Global().Get("Object").New()
 	//obj.Set("batchDbTest", js.FuncOf(batchDbTest))
+	// input: cfg, loglevel; return: ok
 	obj.Set("init", js.FuncOf(initManager))
+	// input: none
 	obj.Set("release", js.FuncOf(releaseManager))
+	// input: none; return: true or false
 	obj.Set("isWalletExist", js.FuncOf(isWalletExist))
+	// input: password;  return: walletId, mnemonic
 	obj.Set("createWallet", js.FuncOf(createWallet))
+	// input: mnemonic, password; return: walletId
 	obj.Set("importWallet", js.FuncOf(importWallet))
+	// input: password; return: current walletId
 	obj.Set("unlockWallet", js.FuncOf(unlockWallet))
+	// input: none; return: wallet id list
 	obj.Set("getAllWallets", js.FuncOf(getAllWallets))
+	// input: wallet id; return: ok
 	obj.Set("switchWallet", js.FuncOf(switchWallet))
+	// input: mainnet or testnet
 	obj.Set("switchChain", js.FuncOf(switchChain))
-	obj.Set("getPubkey", js.FuncOf(getWalletPubkey))
+	// input: walletid, password; return: mnemonic
 	obj.Set("getMnemonice", js.FuncOf(getMnemonic))
-	obj.Set("getWallet", js.FuncOf(getWallet))
-
+	// input: none; return: current wallet p2tr address
+	obj.Set("getWalletAddress", js.FuncOf(getWalletAddress))
+	// input: none; return: current wallet public key
+	obj.Set("getPubkey", js.FuncOf(getWalletPubkey))
+	// input: node pubkey(Uint8Array); return: commit root key (Uint8Array)
+	obj.Set("getCommitRootKey", js.FuncOf(getCommitRootKey))
+	// input: node pubkey(Uint8Array), index; return: commit secrect (Uint8Array)
+	obj.Set("getCommitSecret", js.FuncOf(getCommitSecret))
+	// input: commit secrect(Uint8Array), index; return: revocation priv key (Uint8Array)
+	obj.Set("deriveRevocationPrivKey", js.FuncOf(deriveRevocationPrivKey))
+	// input: none, index; return: revocation base key (Uint8Array)
+	obj.Set("getRevocationBaseKey", js.FuncOf(getRevocationBaseKey))
+	// input: none, index; return: node pubkey (Uint8Array)
+	obj.Set("getNodePubKey", js.FuncOf(getNodePubKey))
+	// input: message (Uint8Array) return: signature (Uint8Array)
 	obj.Set("signMessage", js.FuncOf(signMessage))
-	
+	// input: psbt(hexString); return: signed psbt (hexString)
 	obj.Set("signPsbt", js.FuncOf(signPsbt))
+	// input: psbt(hexString); return: signed psbt (hexString)
 	obj.Set("signPsbt_SatsNet", js.FuncOf(signPsbt_SatsNet))
+	
 	obj.Set("sendUtxos", js.FuncOf(sendUtxos))
 	obj.Set("sendUtxos_SatsNet", js.FuncOf(sendUtxos_SatsNet))
 	obj.Set("sendAssets_SatsNet", js.FuncOf(sendAssets_SatsNet))

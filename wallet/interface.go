@@ -59,7 +59,7 @@ func (p *Manager) Init() error {
 }
 
 // 使用内部钱包
-func (p *Manager) CreateWallet(password string) (string, error) {
+func (p *Manager) CreateWallet(password string) (int64, string, error) {
 	// if p.wallet != nil {
 	// 	return "", fmt.Errorf("wallet has been created, please unlock it first")
 	// }
@@ -70,21 +70,23 @@ func (p *Manager) CreateWallet(password string) (string, error) {
 
 	wallet, mnemonic, err := NewInteralWallet(GetChainParam())
 	if err != nil {
-		return "", err
+		return -1, "", err
 	}
 
-	_, err = p.saveMnemonic(mnemonic, password)
+	id, err := p.saveMnemonic(mnemonic, password)
 	if err != nil {
-		return "", err
+		return -1, "", err
 	}
 
 	p.wallet = wallet
 	p.password = password
+	p.status.CurrentWallet = id
+	p.saveStatus()
 
-	return mnemonic, nil
+	return id, mnemonic, nil
 }
 
-func (p *Manager) ImportWallet(mnemonic string, password string) error {
+func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) {
 	// Log.Infof("ImportWallet %s %s", mnemonic, password)
 	// if p.wallet != nil {
 	// 	return fmt.Errorf("wallet exists, not allow to import new wallet")
@@ -96,40 +98,42 @@ func (p *Manager) ImportWallet(mnemonic string, password string) error {
 
 	wallet := NewInternalWalletWithMnemonic(mnemonic, "", GetChainParam())
 	if wallet == nil {
-		return fmt.Errorf("NewWalletWithMnemonic failed")
+		return -1, fmt.Errorf("NewWalletWithMnemonic failed")
 	}
 
-	_, err := p.saveMnemonic(mnemonic, password)
+	id, err := p.saveMnemonic(mnemonic, password)
 	if err != nil {
-		return err
+		return -1, err
 	}
 
 	p.wallet = wallet
 	p.password = password
+	p.status.CurrentWallet = id
+	p.saveStatus()
 
-	return nil
+	return id, nil
 }
 
-func (p *Manager) UnlockWallet(password string) error {
+func (p *Manager) UnlockWallet(password string) (int64, error) {
 
 	if p.wallet != nil {
-		return fmt.Errorf("wallet has been unlocked")
+		return -1, fmt.Errorf("wallet has been unlocked")
 	}
 
 	mnemonic, err := p.loadMnemonic(p.status.CurrentWallet, password)
 	if err != nil {
-		return err
+		return -1, err
 	}
 
 	wallet := NewInternalWalletWithMnemonic(string(mnemonic), "", GetChainParam())
 	if wallet == nil {
-		return fmt.Errorf("NewWalletWithMnemonic failed")
+		return -1, fmt.Errorf("NewWalletWithMnemonic failed")
 	}
 
 	p.wallet = wallet
 	p.password = password
 
-	return nil
+	return p.status.CurrentWallet, nil
 }
 
 func (p *Manager) GetAllWallets() []int64 {
@@ -146,7 +150,7 @@ func (p *Manager) SwitchWallet(id int64) {
 	}
 		
 	p.status.CurrentWallet = id
-	err := p.UnlockWallet(p.password)
+	_, err := p.UnlockWallet(p.password)
 	if err == nil {
 		p.saveStatus()
 	}
@@ -159,7 +163,7 @@ func (p *Manager) SwitchChain(chain string) {
 	if chain == "mainnet" || chain == "testnet" {
 		_chain = chain
 		p.status.CurrentChain = chain
-		err := p.UnlockWallet(p.password)
+		_, err := p.UnlockWallet(p.password)
 		if err == nil {
 			p.saveStatus()
 		}

@@ -31,11 +31,11 @@ func main() {
 	if wallet.IsTestNet() {
 		// TODO 为了测试方便，默认生成钱包，
 		pw := "12345678"
-		err := mgr.UnlockWallet(pw)
+		_, err := mgr.UnlockWallet(pw)
 		if err != nil {
 			// if mgr.IsBootstrapNode() {
 				mnemonic := "acquire pet news congress unveil erode paddle crumble blue fish match eye"
-				err := mgr.ImportWallet(mnemonic, pw)
+				_, err := mgr.ImportWallet(mnemonic, pw)
 				if err != nil {
 					wallet.Log.Errorf("ImportWallet failed. %v", err)
 					return
