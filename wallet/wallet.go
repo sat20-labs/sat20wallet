@@ -400,32 +400,68 @@ func (p *InteralWallet) SignTxInput_SatsNet(tx *swire.MsgTx, prevFetcher stxscri
 }
 
 func (p *InteralWallet) SignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
-	privKey := p.getPaymentPrivKey()
-	sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
-	for i, in := range tx.TxIn {
-		preOut := prevFetcher.FetchPrevOutput(in.PreviousOutPoint)
-		if preOut == nil {
-			Log.Errorf("can't find outpoint %s", in.PreviousOutPoint)
-			return fmt.Errorf("can't find outpoint %s", in.PreviousOutPoint)
-		}
 
-		scriptType := GetPkScriptType(preOut.PkScript)
-		switch scriptType {
-		case txscript.WitnessV1TaprootTy: // p2tr
-			witness, err := txscript.TaprootWitnessSignature(tx, sigHashes, i,
-				preOut.Value, preOut.PkScript,
-				txscript.SigHashDefault, privKey)
-			if err != nil {
-				Log.Errorf("TaprootWitnessSignature failed. %v", err)
-				return err
-			}
-			tx.TxIn[i].Witness = witness
-
-		default:
-			Log.Errorf("not support type %d", scriptType)
-			return fmt.Errorf("not support type %d", scriptType)
-		}
+	packet, err := CreatePsbt(tx, prevFetcher, nil)
+	if err != nil {
+		Log.Errorf("CreatePsbt failed, %v", err)
+		return err
 	}
+	err = p.SignPsbt(packet)
+	if err != nil {
+		Log.Errorf("SignPsbt failed, %v", err)
+		return err
+	}
+
+	err = psbt.MaybeFinalizeAll(packet)
+	if err != nil {
+		Log.Errorf("MaybeFinalizeAll failed, %v", err)
+		return err
+	}
+	
+	// finalTx, err := psbt.Extract(packet)
+	// if err != nil {
+	// 	Log.Errorf("Extract failed, %v", err)
+	// 	return err
+	// }
+	for i, txIn := range tx.TxIn {
+		txIn.Witness = wire.TxWitness{packet.Inputs[i].TaprootKeySpendSig}
+	}
+
+
+	// privKey := p.getPaymentPrivKey()
+	// sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
+	// for i, in := range tx.TxIn {
+	// 	preOut := prevFetcher.FetchPrevOutput(in.PreviousOutPoint)
+	// 	if preOut == nil {
+	// 		Log.Errorf("can't find outpoint %s", in.PreviousOutPoint)
+	// 		return fmt.Errorf("can't find outpoint %s", in.PreviousOutPoint)
+	// 	}
+
+	// 	scriptType := GetPkScriptType(preOut.PkScript)
+	// 	switch scriptType {
+	// 	case txscript.WitnessV1TaprootTy: // p2tr
+	// 		witness, err := txscript.TaprootWitnessSignature(tx, sigHashes, i,
+	// 			preOut.Value, preOut.PkScript,
+	// 			txscript.SigHashDefault, privKey)
+	// 		if err != nil {
+	// 			Log.Errorf("TaprootWitnessSignature failed. %v", err)
+	// 			return err
+	// 		}
+	// 		tx.TxIn[i].Witness = witness
+
+	// 		/////////////////
+	// 		if !bytes.Equal(packet.Inputs[i].TaprootKeySpendSig, witness[0]) {
+	// 			Log.Panic("")
+	// 		}
+	// 		/////////////////
+
+	// 	default:
+	// 		Log.Errorf("not support type %d", scriptType)
+	// 		return fmt.Errorf("not support type %d", scriptType)
+	// 	}
+	// }
+
+	
 
 	return nil
 }
@@ -1044,6 +1080,105 @@ func (p *InteralWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 // 		signedInputs = append(signedInputs, uint32(idx))
 // 	}
 // 	return signedInputs, nil
+// }
+
+// func (p *Wallet) SignOutputRaw(tx *wire.MsgTx, signDesc *utils.SignDescriptor) (utils.Signature, error) {
+// 	witnessScript := signDesc.WitnessScript
+
+// 	// First attempt to fetch the private key which corresponds to the
+// 	// specified public key.
+// 	privKey, err := p.fetchPrivKey(uint32(signDesc.KeyDesc.KeyLocator.Family), signDesc.KeyDesc.Index)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	// If a tweak (single or double) is specified, then we'll need to use
+// 	// this tweak to derive the final private key to be used for signing
+// 	// this output.
+// 	privKey, err = maybeTweakPrivKey(signDesc, privKey)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	// In case of a taproot output any signature is always a Schnorr
+// 	// signature, based on the new tapscript sighash algorithm.
+// 	if txscript.IsPayToTaproot(signDesc.Output.PkScript) {
+// 		sigHashes := txscript.NewTxSigHashes(
+// 			tx, signDesc.PrevOutputFetcher,
+// 		)
+
+// 		// Are we spending a script path or the key path? The API is
+// 		// slightly different, so we need to account for that to get the
+// 		// raw signature.
+// 		var rawSig []byte
+// 		switch signDesc.SignMethod {
+// 		case utils.TaprootKeySpendBIP0086SignMethod,
+// 			utils.TaprootKeySpendSignMethod:
+
+// 			// This function tweaks the private key using the tap
+// 			// root key supplied as the tweak.
+// 			rawSig, err = txscript.RawTxInTaprootSignature(
+// 				tx, sigHashes, signDesc.InputIndex,
+// 				signDesc.Output.Value, signDesc.Output.PkScript,
+// 				signDesc.TapTweak, signDesc.HashType,
+// 				privKey,
+// 			)
+// 			if err != nil {
+// 				return nil, err
+// 			}
+
+// 		case utils.TaprootScriptSpendSignMethod:
+// 			leaf := txscript.TapLeaf{
+// 				LeafVersion: txscript.BaseLeafVersion,
+// 				Script:      witnessScript,
+// 			}
+// 			rawSig, err = txscript.RawTxInTapscriptSignature(
+// 				tx, sigHashes, signDesc.InputIndex,
+// 				signDesc.Output.Value, signDesc.Output.PkScript,
+// 				leaf, signDesc.HashType, privKey,
+// 			)
+// 			if err != nil {
+// 				return nil, err
+// 			}
+
+// 		default:
+// 			return nil, fmt.Errorf("unknown sign method: %v",
+// 				signDesc.SignMethod)
+// 		}
+
+// 		// The signature returned above might have a sighash flag
+// 		// attached if a non-default type was used. We'll slice this
+// 		// off if it exists to ensure we can properly parse the raw
+// 		// signature.
+// 		sig, err := schnorr.ParseSignature(
+// 			rawSig[:schnorr.SignatureSize],
+// 		)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+
+// 		return sig, nil
+// 	}
+
+// 	amt := signDesc.Output.Value
+// 	sig, err := txscript.RawTxInWitnessSignature(
+// 		tx, signDesc.SigHashes, signDesc.InputIndex, amt,
+// 		witnessScript, signDesc.HashType, privKey,
+// 	)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	// Chop off the sighash flag at the end of the signature.
+// 	return ecdsa.ParseDERSignature(sig[:len(sig)-1])
+// }
+
+// func (p *Wallet) SignPsbt_satsnet(packet *spsbt.Packet) error {
+// 	return fmt.Errorf("not implemented")
+// }
+
+// func (p *Wallet) SignOutputRaw_satsnet(tx *swire.MsgTx, signDesc *utils.SignDescriptor) (utils.Signature, error) {
+// 	return nil, fmt.Errorf("not implemented")
 // }
 
 // func (p *Wallet) fetchPrivKey(family, index uint32) (*secp256k1.PrivateKey, error) {
