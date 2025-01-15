@@ -115,7 +115,7 @@ const DEFAULT_PURPOSE = 86
 // m/purpose'/coinType'/account'/change/index
 
 // 可以支持其他类型，但为了方便，默认只支持p2tr地址类型。
-type InteralWallet struct {
+type InternalWallet struct {
 	masterkey             *hdkeychain.ExtendedKey
 	netParamsL1           *chaincfg.Params // L1
 	paymentPrivKey        *secp256k1.PrivateKey
@@ -125,7 +125,7 @@ type InteralWallet struct {
 	addresses             map[uint32]btcutil.Address         // key: index
 }
 
-func NewInteralWallet(param *chaincfg.Params) (*InteralWallet, string, error) {
+func NewInteralWallet(param *chaincfg.Params) (*InternalWallet, string, error) {
 	entropy, err := bip39.NewEntropy(128)
 	if err != nil {
 		return nil, "", err
@@ -139,7 +139,7 @@ func NewInteralWallet(param *chaincfg.Params) (*InteralWallet, string, error) {
 	return NewInternalWalletWithMnemonic(mnemonic, "", param), mnemonic, nil
 }
 
-func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chaincfg.Params) *InteralWallet {
+func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chaincfg.Params) *InternalWallet {
 
 	if !bip39.IsMnemonicValid(mnemonic) {
 		Log.Errorf("Mnomonic is invalid")
@@ -151,7 +151,7 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 	if masterkey == nil {
 		return nil
 	}
-	return &InteralWallet{
+	return &InternalWallet{
 		masterkey:   masterkey,
 		netParamsL1: param,
 		purposes:    make(map[uint32]*hdkeychain.ExtendedKey),
@@ -160,7 +160,7 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 	}
 }
 
-func (p *InteralWallet) getPurposeKey(purpose uint32) (*hdkeychain.ExtendedKey, error) {
+func (p *InternalWallet) getPurposeKey(purpose uint32) (*hdkeychain.ExtendedKey, error) {
 	acckey, ok := p.purposes[purpose]
 	if !ok {
 		var err error
@@ -173,7 +173,7 @@ func (p *InteralWallet) getPurposeKey(purpose uint32) (*hdkeychain.ExtendedKey, 
 	return acckey, nil
 }
 
-func (p *InteralWallet) getBtcUtilAddress(index uint32) (btcutil.Address, error) {
+func (p *InternalWallet) getBtcUtilAddress(index uint32) (btcutil.Address, error) {
 	addressType := "P2TR"
 	address, ok := p.addresses[index]
 	if ok {
@@ -199,7 +199,7 @@ func (p *InteralWallet) getBtcUtilAddress(index uint32) (btcutil.Address, error)
 	return address, nil
 }
 
-func (p *InteralWallet) GetPubKey(index uint32) *secp256k1.PublicKey {
+func (p *InternalWallet) GetPubKey(index uint32) *secp256k1.PublicKey {
 	_, pubKey, err := p.getKey("P2TR", index)
 	if err != nil {
 		Log.Errorf("GetPubKey failed. %v", err)
@@ -208,7 +208,7 @@ func (p *InteralWallet) GetPubKey(index uint32) *secp256k1.PublicKey {
 	return pubKey
 }
 
-func (p *InteralWallet) GetAddress(index uint32) string {
+func (p *InternalWallet) GetAddress(index uint32) string {
 	addr, err := p.getBtcUtilAddress(index)
 	if err != nil {
 		return ""
@@ -217,7 +217,7 @@ func (p *InteralWallet) GetAddress(index uint32) string {
 }
 
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
-func (p *InteralWallet) GetCommitRootKey(peer []byte) (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
+func (p *InternalWallet) GetCommitRootKey(peer []byte) (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
 	privkey := p.GetCommitSecret(peer, 0)
 	if privkey == nil {
 		return nil, nil
@@ -227,7 +227,7 @@ func (p *InteralWallet) GetCommitRootKey(peer []byte) (*secp256k1.PrivateKey, *s
 
 // 返回secret，用于生成commitsecrect和commitpoint
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
-func (p *InteralWallet) GetCommitSecret(peer []byte, index int) *secp256k1.PrivateKey {
+func (p *InternalWallet) GetCommitSecret(peer []byte, index int) *secp256k1.PrivateKey {
 	purpose := getPurposeFromAddrType("LND")
 	account := getAccountFromFamilyKey(KeyFamilyRevocationRoot)
 	key := uint64(purpose)<<32 + uint64(account)
@@ -257,17 +257,17 @@ func (p *InteralWallet) GetCommitSecret(peer []byte, index int) *secp256k1.Priva
 }
 
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
-func (p *InteralWallet) DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey {
+func (p *InternalWallet) DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey {
 	revBasePrivKey, _ := p.getRevocationBaseKey()
 	return utils.DeriveRevocationPrivKey(revBasePrivKey, commitsecret)
 }
 
-func (p *InteralWallet) GetRevocationBaseKey() *secp256k1.PublicKey {
+func (p *InternalWallet) GetRevocationBaseKey() *secp256k1.PublicKey {
 	_, pubk := p.getRevocationBaseKey()
 	return pubk
 }
 
-func (p *InteralWallet) getRevocationBaseKey() (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
+func (p *InternalWallet) getRevocationBaseKey() (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
 
 	if p.revocationBasePrivKey != nil {
 		return p.revocationBasePrivKey, p.revocationBasePrivKey.PubKey()
@@ -292,7 +292,7 @@ func (p *InteralWallet) getRevocationBaseKey() (*secp256k1.PrivateKey, *secp256k
 	return privk, pubk
 }
 
-func (p *InteralWallet) GetNodePubKey() *secp256k1.PublicKey {
+func (p *InternalWallet) GetNodePubKey() *secp256k1.PublicKey {
 	purpose := getPurposeFromAddrType("LND")
 	account := getAccountFromFamilyKey(KeyFamilyNodeKey)
 	key := uint64(purpose)<<32 + uint64(account)
@@ -315,7 +315,7 @@ func (p *InteralWallet) GetNodePubKey() *secp256k1.PublicKey {
 	return pubkey
 }
 
-func (p *InteralWallet) GetPaymentPubKey() *secp256k1.PublicKey {
+func (p *InternalWallet) GetPaymentPubKey() *secp256k1.PublicKey {
 	key := p.getPaymentPrivKey()
 	if key == nil {
 		Log.Errorf("GetPaymentPrivKey failed.")
@@ -324,7 +324,7 @@ func (p *InteralWallet) GetPaymentPubKey() *secp256k1.PublicKey {
 	return key.PubKey()
 }
 
-func (p *InteralWallet) getPaymentPrivKey() *secp256k1.PrivateKey {
+func (p *InternalWallet) getPaymentPrivKey() *secp256k1.PrivateKey {
 	if p.paymentPrivKey != nil {
 		return p.paymentPrivKey
 	}
@@ -337,7 +337,7 @@ func (p *InteralWallet) getPaymentPrivKey() *secp256k1.PrivateKey {
 	return key
 }
 
-func (p *InteralWallet) getKey(addressType string, index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
+func (p *InternalWallet) getKey(addressType string, index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
 	purpose := getPurposeFromAddrType(addressType)
 	purposekey, err := p.getPurposeKey(purpose)
 	if err != nil {
@@ -346,7 +346,7 @@ func (p *InteralWallet) getKey(addressType string, index uint32) (*secp256k1.Pri
 	return generateKeyFromPurposeKey(purposekey, 0, index)
 }
 
-func (p *InteralWallet) SignTxInput(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
+func (p *InternalWallet) SignTxInput(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	sigHashes *txscript.TxSigHashes,
 	index int, witnessScript []byte) ([]byte, error) {
 	privKey := p.getPaymentPrivKey()
@@ -378,7 +378,7 @@ func (p *InteralWallet) SignTxInput(tx *wire.MsgTx, prevFetcher txscript.PrevOut
 	return result, nil
 }
 
-func (p *InteralWallet) SignTxInput_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
+func (p *InternalWallet) SignTxInput_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
 	sigHashes *stxscript.TxSigHashes,
 	index int, witnessScript []byte) ([]byte, error) {
 	privKey := p.getPaymentPrivKey()
@@ -410,7 +410,7 @@ func (p *InteralWallet) SignTxInput_SatsNet(tx *swire.MsgTx, prevFetcher stxscri
 	return result, nil
 }
 
-func (p *InteralWallet) SignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
+func (p *InternalWallet) SignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
 
 	privKey := p.getPaymentPrivKey()
 	sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
@@ -427,10 +427,10 @@ func (p *InteralWallet) SignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFe
 			witness, err := txscript.TaprootWitnessSignature(tx, sigHashes, i,
 				preOut.Value, preOut.PkScript,
 				txscript.SigHashDefault, privKey)
-	if err != nil {
+			if err != nil {
 				Log.Errorf("TaprootWitnessSignature failed. %v", err)
-		return err
-	}
+				return err
+			}
 			tx.TxIn[i].Witness = witness
 
 		default:
@@ -442,7 +442,7 @@ func (p *InteralWallet) SignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFe
 	return nil
 }
 
-func (p *InteralWallet) SignTx_SatsNet(tx *swire.MsgTx,
+func (p *InternalWallet) SignTx_SatsNet(tx *swire.MsgTx,
 	prevFetcher stxscript.PrevOutputFetcher) error {
 
 	privKey := p.getPaymentPrivKey()
@@ -475,7 +475,7 @@ func (p *InteralWallet) SignTx_SatsNet(tx *swire.MsgTx,
 	return nil
 }
 
-func (p *InteralWallet) SignTxWithPeer(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
+func (p *InternalWallet) SignTxWithPeer(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	witnessScript []byte, peerPubKey []byte, peerSig [][]byte) ([][]byte, error) {
 
 	myPubKey := p.GetPaymentPubKey().SerializeCompressed()
@@ -551,7 +551,7 @@ func (p *InteralWallet) SignTxWithPeer(tx *wire.MsgTx, prevFetcher txscript.Prev
 	return result, nil
 }
 
-func (p *InteralWallet) SignTxWithPeer_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
+func (p *InternalWallet) SignTxWithPeer_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
 	witnessScript []byte, peerPubKey []byte, peerSig [][]byte) ([][]byte, error) {
 
 	myPubKey := p.GetPaymentPubKey().SerializeCompressed()
@@ -627,7 +627,7 @@ func (p *InteralWallet) SignTxWithPeer_SatsNet(tx *swire.MsgTx, prevFetcher stxs
 	return result, nil
 }
 
-func (p *InteralWallet) PartialSignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
+func (p *InternalWallet) PartialSignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	witnessScript []byte, pos int) ([][]byte, error) {
 
 	mulpkScript, err := utils.WitnessScriptHash(witnessScript)
@@ -691,7 +691,7 @@ func (p *InteralWallet) PartialSignTx(tx *wire.MsgTx, prevFetcher txscript.PrevO
 	return result, nil
 }
 
-func (p *InteralWallet) PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
+func (p *InternalWallet) PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
 	witnessScript []byte, pos int) ([][]byte, error) {
 
 	mulpkScript, err := utils.WitnessScriptHash(witnessScript)
@@ -754,7 +754,7 @@ func (p *InteralWallet) PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxsc
 	return result, nil
 }
 
-func (p *InteralWallet) SignMessage(msg []byte) (*ecdsa.Signature, error) {
+func (p *InternalWallet) SignMessage(msg []byte) (*ecdsa.Signature, error) {
 	privKey, err := p.deriveKeyByLocator(KeyFamilyBaseEncryption, 0)
 	if err != nil {
 		return nil, err
@@ -785,9 +785,8 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Sig
 	return signature.Verify(msgDigest, pubKey)
 }
 
-
 // 支持上面所有几种不同的签名方式
-func (p *InteralWallet) SignPsbt(packet *psbt.Packet) (error) {
+func (p *InternalWallet) SignPsbt(packet *psbt.Packet) error {
 	err := psbt.InputsReadyToSign(packet)
 	if err != nil {
 		return err
@@ -811,7 +810,7 @@ func (p *InteralWallet) SignPsbt(packet *psbt.Packet) (error) {
 		}
 
 		// Skip this input if it's got final witness data attached.
-		if len(in.FinalScriptWitness) > 0 || len(in.FinalScriptSig) > 0 || len(in.TaprootKeySpendSig) > 0{
+		if len(in.FinalScriptWitness) > 0 || len(in.FinalScriptSig) > 0 || len(in.TaprootKeySpendSig) > 0 {
 			continue
 		}
 
@@ -826,10 +825,10 @@ func (p *InteralWallet) SignPsbt(packet *psbt.Packet) (error) {
 			}
 			in.TaprootKeySpendSig = witness[0]
 			continue
-		} 
+		}
 
 		// 看看是否是指定的脚本
-		var script []byte 
+		var script []byte
 		if in.WitnessScript != nil {
 			script = in.WitnessScript
 		} else if in.RedeemScript != nil {
@@ -837,7 +836,7 @@ func (p *InteralWallet) SignPsbt(packet *psbt.Packet) (error) {
 		} else {
 			continue
 		}
-		
+
 		mulpkScript, err := utils.WitnessScriptHash(script)
 		if err != nil {
 			return err
@@ -845,7 +844,7 @@ func (p *InteralWallet) SignPsbt(packet *psbt.Packet) (error) {
 		if bytes.Equal(in.WitnessUtxo.PkScript, mulpkScript) {
 			// 如何区分是多签脚本和单签脚本？
 
-			sig, err := txscript.RawTxInWitnessSignature(tx, sigHashes, i, in.WitnessUtxo.Value, 
+			sig, err := txscript.RawTxInWitnessSignature(tx, sigHashes, i, in.WitnessUtxo.Value,
 				script, txscript.SigHashAll, privKey)
 			if err != nil {
 				return err
@@ -859,8 +858,7 @@ func (p *InteralWallet) SignPsbt(packet *psbt.Packet) (error) {
 	return nil
 }
 
-
-func (p *InteralWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
+func (p *InternalWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 	err := spsbt.InputsReadyToSign(packet)
 	if err != nil {
 		return err
@@ -884,7 +882,7 @@ func (p *InteralWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 		}
 
 		// Skip this input if it's got final witness data attached.
-		if len(in.FinalScriptWitness) > 0 || len(in.FinalScriptSig) > 0 || len(in.TaprootKeySpendSig) > 0{
+		if len(in.FinalScriptWitness) > 0 || len(in.FinalScriptSig) > 0 || len(in.TaprootKeySpendSig) > 0 {
 			continue
 		}
 
@@ -899,10 +897,10 @@ func (p *InteralWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 			}
 			in.TaprootKeySpendSig = witness[0]
 			continue
-		} 
+		}
 
 		// 看看是否是指定的脚本
-		var script []byte 
+		var script []byte
 		if in.WitnessScript != nil {
 			script = in.WitnessScript
 		} else if in.RedeemScript != nil {
@@ -910,7 +908,7 @@ func (p *InteralWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 		} else {
 			continue
 		}
-		
+
 		mulpkScript, err := utils.WitnessScriptHash(script)
 		if err != nil {
 			return err
@@ -931,7 +929,6 @@ func (p *InteralWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 	}
 	return nil
 }
-
 
 // func (p *Wallet) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 // 	// In signedInputs we return the indices of psbt inputs that were signed
@@ -1226,7 +1223,7 @@ func (p *InteralWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 // 	return privateKey, nil
 // }
 
-func (p *InteralWallet) deriveKeyByLocator(family, index uint32) (*secp256k1.PrivateKey, error) {
+func (p *InternalWallet) deriveKeyByLocator(family, index uint32) (*secp256k1.PrivateKey, error) {
 	account := getAccountFromFamilyKey(family)
 
 	acckey, err := p.getPurposeKey(account)
@@ -1590,7 +1587,6 @@ func PsbtPrevOutputFetcher(packet *psbt.Packet) *txscript.MultiPrevOutFetcher {
 	return fetcher
 }
 
-
 // PsbtPrevOutputFetcher returns a txscript.PrevOutFetcher built from the UTXO
 // information in a PSBT packet.
 func PsbtPrevOutputFetcher_SatsNet(packet *spsbt.Packet) *stxscript.MultiPrevOutFetcher {
@@ -1849,7 +1845,7 @@ func CreatePsbt(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 			return nil, err
 		}
 	}
-	
+
 	for i, txIn := range tx.TxIn {
 		preOut := prevFetcher.FetchPrevOutput(txIn.PreviousOutPoint)
 		if preOut == nil {
@@ -1880,7 +1876,7 @@ func CreatePsbt_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher
 			return nil, err
 		}
 	}
-	
+
 	for i, txIn := range tx.TxIn {
 		preOut := prevFetcher.FetchPrevOutput(txIn.PreviousOutPoint)
 		if preOut == nil {
@@ -1896,7 +1892,6 @@ func CreatePsbt_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher
 
 	return packet, nil
 }
-
 
 func CreatePsbtWithPeer(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	witnessScript []byte, peerPubKey []byte, peerSigs [][]byte) (*psbt.Packet, error) {
@@ -1921,7 +1916,7 @@ func CreatePsbtWithPeer(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for i, txIn := range tx.TxIn {
 		preOut := prevFetcher.FetchPrevOutput(txIn.PreviousOutPoint)
 		if preOut == nil {
@@ -1976,7 +1971,7 @@ func CreatePsbtWithPeer_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutpu
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for i, txIn := range tx.TxIn {
 		preOut := prevFetcher.FetchPrevOutput(txIn.PreviousOutPoint)
 		if preOut == nil {
@@ -2006,7 +2001,7 @@ func CreatePsbtWithPeer_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutpu
 	return packet, nil
 }
 
-func RemoveSignatures(signedTx *wire.MsgTx) (*wire.MsgTx) {
+func RemoveSignatures(signedTx *wire.MsgTx) *wire.MsgTx {
 	// 创建一个新的交易对象，保持与原交易相同
 	unsingedTx := wire.NewMsgTx(signedTx.Version)
 	unsingedTx.LockTime = signedTx.LockTime
@@ -2026,8 +2021,7 @@ func RemoveSignatures(signedTx *wire.MsgTx) (*wire.MsgTx) {
 	return unsingedTx
 }
 
-
-func RemoveSignatures_SatsNet(signedTx *swire.MsgTx) (*swire.MsgTx) {
+func RemoveSignatures_SatsNet(signedTx *swire.MsgTx) *swire.MsgTx {
 	// 创建一个新的交易对象，保持与原交易相同
 	unsingedTx := swire.NewMsgTx(signedTx.Version)
 	unsingedTx.LockTime = signedTx.LockTime
@@ -2046,4 +2040,3 @@ func RemoveSignatures_SatsNet(signedTx *swire.MsgTx) (*swire.MsgTx) {
 
 	return unsingedTx
 }
-

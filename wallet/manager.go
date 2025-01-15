@@ -12,15 +12,15 @@ import (
 type Manager struct {
 	mutex sync.RWMutex
 
-	bInited bool
-	bStop   bool
-	cfg     *Config
-	password string
-	status  *Status
-	quit    chan struct{}
+	bInited       bool
+	bStop         bool
+	cfg           *Config
+	password      string
+	status        *Status
+	quit          chan struct{}
 	walletInfoMap map[int64]*WalletInDB
-	wallet  *InteralWallet
-	msgCallback        interface{}
+	wallet        *InternalWallet
+	msgCallback   interface{}
 
 	db              common.KVDB
 	http            common.HttpClient
@@ -31,7 +31,6 @@ type Manager struct {
 	refreshTimeL1 int64
 }
 
-
 var _chain string
 
 func (p *Manager) init() error {
@@ -39,7 +38,7 @@ func (p *Manager) init() error {
 		return nil
 	}
 
-	err := p.initDB() 
+	err := p.initDB()
 	if err != nil {
 		Log.Errorf("initDB failed. %v", err)
 		return err
@@ -48,7 +47,6 @@ func (p *Manager) init() error {
 	p.http = NewHTTPClient()
 	p.l1IndexerClient = NewIndexerClient(p.cfg.IndexerL1.Scheme, p.cfg.IndexerL1.Host, p.http)
 	p.l2IndexerClient = NewIndexerClient(p.cfg.IndexerL2.Scheme, p.cfg.IndexerL2.Host, p.http)
-
 
 	p.bInited = true
 
@@ -69,7 +67,6 @@ func (p *Manager) dbStatistic() bool {
 	return false
 }
 
-
 func (p *Manager) GetWallet() common.Wallet {
 	return p.wallet
 }
@@ -78,11 +75,9 @@ func (p *Manager) GetConfig() *Config {
 	return p.cfg
 }
 
-
 func IsTestNet() bool {
 	return _chain != "mainnet"
 }
-
 
 func (p *Manager) GetFeeRate() int64 {
 	now := time.Now().Unix()
@@ -97,7 +92,6 @@ func (p *Manager) GetFeeRate() int64 {
 	}
 	return p.feeRateL1
 }
-
 
 // TODO tx的数据有可能很大，最好由indexer做进一步的处理，直接给出txOut的数据；或者不需要获取，而是根据地址和数量自行构造
 func (p *Manager) getTxOutFromIndexer(utxo string) *wire.TxOut {
