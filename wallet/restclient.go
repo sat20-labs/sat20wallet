@@ -15,10 +15,10 @@ import (
 )
 
 type RESTClient struct {
-	scheme string
-	host   string
-	proxy  string
-	http   common.HttpClient
+	Scheme string
+	Host   string
+	Proxy  string
+	Http   common.HttpClient
 }
 
 func NewRESTClient(scheme, host string, http common.HttpClient) *RESTClient {
@@ -32,18 +32,18 @@ func NewRESTClient(scheme, host string, http common.HttpClient) *RESTClient {
 	}
 
 	return &RESTClient{
-		scheme: scheme,
-		host:   host,
-		proxy:  net,
-		http:   http,
+		Scheme: scheme,
+		Host:   host,
+		Proxy:  net,
+		Http:   http,
 	}
 }
 
-func (p *RESTClient) getUrl(path string) *common.URL {
+func (p *RESTClient) GetUrl(path string) *common.URL {
 	return &common.URL{
-		Scheme: p.scheme,
-		Host:   p.host,
-		Path:   p.proxy + path,
+		Scheme: p.Scheme,
+		Host:   p.Host,
+		Path:   p.Proxy + path,
 	}
 }
 
@@ -81,8 +81,8 @@ func NewIndexerClient(scheme, host string, http common.HttpClient) *IndexerClien
 }
 
 func (p *IndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
-	url := p.getUrl("/v2/utxo/info/" + utxo)
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/v2/utxo/info/" + utxo)
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil, err
@@ -120,8 +120,8 @@ func (p *IndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 }
 
 func (p *IndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, error) {
-	url := p.getUrl("/v2/ascend/" + utxo)
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/v2/ascend/" + utxo)
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil, err
@@ -147,8 +147,8 @@ func (p *IndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, error)
 
 // 只有未花费的能拿到id
 func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
-	url := p.getUrl("/utxo/range/" + utxo)
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/utxo/range/" + utxo)
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return INVALID_ID, err
@@ -177,8 +177,8 @@ func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
 
 // btcutil.Tx
 func (p *IndexerClient) GetRawTx(tx string) (string, error) {
-	url := p.getUrl("/btc/rawtx/" + tx)
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/btc/rawtx/" + tx)
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return "", err
@@ -203,8 +203,8 @@ func (p *IndexerClient) GetRawTx(tx string) (string, error) {
 
 // btcutil.Tx
 func (p *IndexerClient) GetTxInfo(tx string) (*indexer.TxSimpleInfo, error) {
-	url := p.getUrl("/btc/tx/simpleinfo/" + tx)
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/btc/tx/simpleinfo/" + tx)
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil, err
@@ -246,8 +246,8 @@ func (p *IndexerClient) IsTxConfirmed(tx string) bool {
 }
 
 func (p *IndexerClient) GetSyncHeight() int {
-	url := p.getUrl("/bestheight")
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/bestheight")
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return -1
@@ -272,8 +272,8 @@ func (p *IndexerClient) GetSyncHeight() int {
 
 // 通过indexer访问btc节点，效率比较低。最好改用上面的接口。
 func (p *IndexerClient) GetBestHeight() int64 {
-	url := p.getUrl("/btc/block/bestblockheight")
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/btc/block/bestblockheight")
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return -1
@@ -297,8 +297,8 @@ func (p *IndexerClient) GetBestHeight() int64 {
 }
 
 func (p *IndexerClient) GetBlockHash(height int) (string, error) {
-	url := p.getUrl("/btc/block/blockhash/" + strconv.Itoa(height))
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/btc/block/blockhash/" + strconv.Itoa(height))
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return "", err
@@ -322,8 +322,8 @@ func (p *IndexerClient) GetBlockHash(height int) (string, error) {
 }
 
 func (p *IndexerClient) GetBlock(blockHash string) (string, error) {
-	url := p.getUrl("/btc/block/" + blockHash)
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/btc/block/" + blockHash)
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return "", err
@@ -347,8 +347,8 @@ func (p *IndexerClient) GetBlock(blockHash string) (string, error) {
 }
 
 func (p *IndexerClient) GetAssetSummaryWithAddress(address string) *indexer.AssetSummary {
-	url := p.getUrl("/v2/address/summary/" + address)
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/v2/address/summary/" + address)
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil
@@ -372,8 +372,8 @@ func (p *IndexerClient) GetAssetSummaryWithAddress(address string) *indexer.Asse
 }
 
 func (p *IndexerClient) GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexer.TxOutputInfo {
-	url := p.getUrl("/v2/address/asset/" + address + "/" + ticker.String())
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/v2/address/asset/" + address + "/" + ticker.String())
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil
@@ -397,8 +397,8 @@ func (p *IndexerClient) GetUtxoListWithTicker(address string, ticker *swire.Asse
 }
 
 func (p *IndexerClient) GetBlankUtxoList(address string) []*indexer.PlainUtxo {
-	url := p.getUrl("/utxo/address/" + address + "/0")
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/utxo/address/" + address + "/0")
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil
@@ -443,8 +443,8 @@ func (p *IndexerClient) GetUtxosWithAddress(address string) (map[string]*wire.Tx
 }
 
 func (p *IndexerClient) GetAllUtxosWithAddress(address string) ([]*indexer.PlainUtxo, []*indexer.PlainUtxo, error) {
-	url := p.getUrl("/allutxos/address/" + address)
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/allutxos/address/" + address)
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil, nil, err
@@ -469,8 +469,8 @@ func (p *IndexerClient) GetAllUtxosWithAddress(address string) ([]*indexer.Plain
 
 // sat/vb
 func (p *IndexerClient) GetFeeRate() int64 {
-	url := p.getUrl("/extension/default/fee-summary")
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/extension/default/fee-summary")
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return 0
@@ -512,8 +512,8 @@ func (p *IndexerClient) GetExistingUtxos(utxos []string) ([]string, error) {
 		return nil, err
 	}
 
-	url := p.getUrl("/v2/utxos/existing")
-	rsp, err := p.http.SendPostRequest(url, buff)
+	url := p.GetUrl("/v2/utxos/existing")
+	rsp, err := p.Http.SendPostRequest(url, buff)
 	if err != nil {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
 		return nil, err
@@ -574,8 +574,8 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 		return err
 	}
 
-	url := p.getUrl("/btc/tx")
-	rsp, err := p.http.SendPostRequest(url, buff)
+	url := p.GetUrl("/btc/tx")
+	rsp, err := p.Http.SendPostRequest(url, buff)
 	if err != nil {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
 		return err
@@ -607,8 +607,8 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 }
 
 func (p *IndexerClient) GetTickInfo(assetName *AssetName) *indexer.TickerInfo {
-	url := p.getUrl("/v2/tick/info/"+assetName.String())
-	rsp, err := p.http.SendGetRequest(url)
+	url := p.GetUrl("/v2/tick/info/"+assetName.String())
+	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil

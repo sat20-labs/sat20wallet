@@ -10,20 +10,19 @@ import (
 	"github.com/sat20-labs/sat20wallet/common"
 )
 
-type netClient struct {
-	client *http.Client
+type NetClient struct {
+	Client *http.Client
 }
 
-
-func (p* netClient) SendGetRequest(u *common.URL) ([]byte, error) {
+func (p *NetClient) SendGetRequest(u *common.URL) ([]byte, error) {
 
 	url := url.URL{
 		Scheme: u.Scheme,
-		Host: u.Host,
-		Path: u.Path,
+		Host:   u.Host,
+		Path:   u.Path,
 	}
 
-	httpResponse, err := p.client.Get(url.String())
+	httpResponse, err := p.Client.Get(url.String())
 	if err != nil {
 		return nil, err
 	}
@@ -62,16 +61,15 @@ func (p* netClient) SendGetRequest(u *common.URL) ([]byte, error) {
 	return respBytes, nil
 }
 
-
 // sendPostRequest sends the marshalled JSON command using HTTP-POST mode
 // to the server described in the passed config struct.  It also attempts to
 // unmarshal the response as a JSON response and returns either the result
 // field or the error field depending on whether or not there is an error.
-func (p* netClient) SendPostRequest(u *common.URL, marshalledJSON []byte) ([]byte, error) {
+func (p *NetClient) SendPostRequest(u *common.URL, marshalledJSON []byte) ([]byte, error) {
 	url := url.URL{
 		Scheme: u.Scheme,
-		Host: u.Host,
-		Path: u.Path,
+		Host:   u.Host,
+		Path:   u.Path,
 	}
 
 	bodyReader := bytes.NewReader(marshalledJSON)
@@ -81,8 +79,8 @@ func (p* netClient) SendPostRequest(u *common.URL, marshalledJSON []byte) ([]byt
 	}
 	httpRequest.Close = true
 	httpRequest.Header.Set("Content-Type", "application/json")
-	
-	httpResponse, err := p.client.Do(httpRequest)
+
+	httpResponse, err := p.Client.Do(httpRequest)
 	if err != nil {
 		return nil, err
 	}

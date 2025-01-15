@@ -39,9 +39,8 @@ func NewHTTPClient() common.HttpClient {
 		Transport: netTransport,
 	}
 
-	return &netClient{client: httpClient}
+	return &NetClient{Client: httpClient}
 }
-
 
 // 注册回调函数
 func (p *Manager) RegisterCallback(callback interface{}) {
