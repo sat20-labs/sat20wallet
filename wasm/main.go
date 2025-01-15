@@ -615,7 +615,7 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 	id := p[0].Int()
 	pubkey := _mgr.GetPublicKey(uint32(id))
 	data := map[string]any{
-		"pubkey": hex.EncodeToString(pubkey),
+		"pubKey": hex.EncodeToString(pubkey),
 	}
 	return createJsRet(data, code, msg)
 }
