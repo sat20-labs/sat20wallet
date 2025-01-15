@@ -3,14 +3,17 @@ package wallet
 import (
 	"encoding/hex"
 	"fmt"
+	"sync"
 
 	"github.com/btcsuite/btcd/wire"
 	swire "github.com/sat20-labs/satsnet_btcd/wire"
-	
+
 
 	"github.com/sat20-labs/sat20wallet/wallet/indexer"
 	"github.com/sat20-labs/sat20wallet/wallet/sindexer"
 )
+
+var _mutex sync.RWMutex
 
 var _utxos = []string{
 	// open
@@ -52,6 +55,10 @@ var _utxos = []string{
 	// other
 }
 
+var _txmap = map[string]bool {
+	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7": true,
+}
+
 var _utxoIndex = map[string]int{
 	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:0": 0,
 	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:1": 1,
@@ -78,13 +85,6 @@ var _utxoIndex = map[string]int{
 	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:22": 22,
 	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:23": 23,
 
-	// generated in testing
-	"cdaa5a64c73376597d41fad2351d6bc654a5ca17744807bfb5ea9a4f6a0b02db:1": 24, // funding output
-	"529aeeefd19f4f801cd45669977f9996879e7a193de504380ca7616bc62069ab:1": 25, // unlock output
-	"ba85c53813a44d8e7f6a40e5ca88f3402b10d738bf60824a735ae7be312788ef:1": 26, // asset unlock output
-	"887d1ca27eb5cb201e8113d76ace825f4e255254cc11f4548f3d45bfa38fd0b4:1": 27, 
-	"ec25d958a885d6f10a06389b06681ed60fb56b5226141dff645f8a30af8a8a6c:1": 28, // asset unlock output
-	"b3690139e1ba00b93f5fcb6835fdbddc9547a6191edcc1e5527841d67a4dfb3a:1": 29, 
 }
 
 var _utxoValue = []int64{
@@ -94,9 +94,6 @@ var _utxoValue = []int64{
 	330, 546, 600, 1000, 
 	330, 546, 10000, 10000,
 	10000, 10000, 10000, 10000,
-
-	11660, 600, 600, 0, 
-	0,0,
 }
 
 var _utxoAssets = []indexer.TxAssets{
@@ -155,22 +152,6 @@ var _utxoAssets = []indexer.TxAssets{
 	},
 
 	nil,nil, nil, nil,
-
-	// 24
-	nil,
-	nil,
-	{
-		{Name: swire.AssetName{Protocol: "ordx", Type: "f", Ticker: "pizza"}, Amount: 600, BindingSat: 1},
-	},
-	{
-		{Name: swire.AssetName{Protocol: "ordx", Type: "f", Ticker: "pizza"}, Amount: 600, BindingSat: 1},
-	},
-	{
-		{Name: swire.AssetName{Protocol: "runes", Type: "f", Ticker: "840000_1"}, Amount: 600, BindingSat: 0},
-	},
-	{
-		{Name: swire.AssetName{Protocol: "runes", Type: "f", Ticker: "840000_2"}, Amount: 60, BindingSat: 0},
-	},
 }
 
 
@@ -191,45 +172,60 @@ var _offsets = []indexer.AssetOffsets{
 	{{Start: 0, End: 1000,},{Start: 3000, End: 4000,},{Start: 5000, End: 9000,}},
 
 	nil, nil, nil, nil,
-
-
-	nil,nil,nil,nil,
-	nil,nil,
 }
 
 
 var _tickerInfo = map[string]*indexer.TickerInfo{
-	"runes:f:840000:1": {
-		Protocol: indexer.PROTOCOL_NAME_RUNES,
-		Ticker: "840000:1",
+	"runes:f:840000_1": {
+		AssetName: swire.AssetName{
+			Protocol: indexer.PROTOCOL_NAME_RUNES,
+			Ticker: "840000:1",
+		},
 		Divisibility:   0,
-		TotalMinted:    "100,000,000",
-		MaxSupply: 		"100,000,000",
+		TotalMinted:    "100000000",
+		MaxSupply: 		"100000000",
 	},
-	"runes:f:840000:2": {
-		Protocol: indexer.PROTOCOL_NAME_RUNES,
-		Ticker: "840000:2",
-		Divisibility:   0,
-		TotalMinted:    "21,000,000",
-		MaxSupply: 		"100,000,000",
+	"runes:f:840000_2": {
+		AssetName: swire.AssetName{
+			Protocol: indexer.PROTOCOL_NAME_RUNES,
+			Ticker: "840000_2",
+		},
+		Divisibility:   2,
+		TotalMinted:    "21000000",
+		MaxSupply: 		"100000000",
+	},
+	"runes:f:39241_1": {
+		AssetName: swire.AssetName{
+			Protocol: indexer.PROTOCOL_NAME_RUNES,
+			Ticker: "39241_1",
+		},
+		Divisibility:   1,
+		TotalMinted:    "21000000",
+		MaxSupply: 		"100000000000000100000000000000",
 	},
 	"brc20:f:ordi": {
-		Protocol: indexer.PROTOCOL_NAME_BRC20,
-		Ticker: "ordi",
+		AssetName: swire.AssetName{
+			Protocol: indexer.PROTOCOL_NAME_BRC20,
+			Ticker: "ordi",
+		},
 		Divisibility:   18,
 		TotalMinted:    "21000000000000000000000000", // 21,000,000
 		MaxSupply: 		"21000000000000000000000000",
 	},
 	"ordx:f:pizza": {
-		Protocol: indexer.PROTOCOL_NAME_ORDX,
-		Ticker: "pizza",
+		AssetName: swire.AssetName{
+			Protocol: indexer.PROTOCOL_NAME_ORDX,
+			Ticker: "pizza",
+		},
 		Divisibility:   0,
 		TotalMinted:    "100000000",
 		MaxSupply: 		"100000000",
 	},
 	"ordx:f:pearl": {
-		Protocol: indexer.PROTOCOL_NAME_ORDX,
-		Ticker: "pearl",
+		AssetName: swire.AssetName{
+			Protocol: indexer.PROTOCOL_NAME_ORDX,
+			Ticker: "pearl",
+		},
 		Divisibility:   0,
 		TotalMinted:    "200000000",
 		MaxSupply: 		"200000000",
@@ -242,9 +238,9 @@ var _pkScripts = []string{
 	"512017abefbc099ae2053a210b6b4e69fe18a197a3a7a7cac6497891c17c7653c821", // server
 	"5120d2912b91d0802aa584f4c8ff364f9bb2d5af103368fef4c61584b34f1f081f8b", // bootstrap
 	"00205b7208d774f8958d776869e090950c4ce5d55b656d52f0f7fa98ee37ae541948", // a-s channel
+
 	"0020c98fce9212d1f0c286fed2e9f8355ac507bfcb5eb50d285df21645e1032765ab", // s-dao channel
 }
-
 
 var _utxoOwner = []int{
 	1,1,0,0,
@@ -253,8 +249,6 @@ var _utxoOwner = []int{
 	0,0,0,0,
 	0,0,0,0,
 	0,0,0,0,
-	4,0,0,0,
-	0,0,
 }
 
 type TestIndexerClient struct {
@@ -269,6 +263,8 @@ func NewTestIndexerClient() *TestIndexerClient {
 }
 
 func (p *TestIndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
+	_mutex.RLock()
+	defer _mutex.RUnlock()
 
 	index, ok := _utxoIndex[utxo]
 	if !ok {
@@ -299,8 +295,11 @@ func (p *TestIndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, er
 
 // 只有未花费的能拿到id
 func (p *TestIndexerClient) GetUtxoId(utxo string) (uint64, error) {
+	_mutex.RLock()
+	defer _mutex.RUnlock()
+
 	index, ok := _utxoIndex[utxo]
-	if ok {
+	if !ok {
 		return INVALID_ID, fmt.Errorf("can't find utxo %s", utxo)
 	}
 	return uint64(index), nil
@@ -346,7 +345,29 @@ func (p *TestIndexerClient) GetAssetSummaryWithAddress(address string) *indexer.
 }
 
 func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexer.TxOutputInfo {
-	return nil
+	_mutex.RLock()
+	defer _mutex.RUnlock()
+
+	outputs := make([]*indexer.TxOutputInfo, 0)
+	for i, utxo := range _utxos {
+		assets := _utxoAssets[i]
+		var assetInfo *swire.AssetInfo 
+		for _, asset := range assets {
+			if asset.Name == *ticker {
+				assetInfo = &asset
+				break
+			}
+		}
+		if assetInfo != nil {
+			pkScript, _ := hex.DecodeString(_pkScripts[_utxoOwner[i]])
+			outputs = append(outputs, &indexer.TxOutputInfo{
+				OutPoint: utxo,
+				OutValue: wire.TxOut{Value: _utxoValue[i], PkScript: pkScript},
+				AssetInfo: []*indexer.AssetInfo{&indexer.AssetInfo{Asset: *assetInfo}},
+			})
+		}
+	}
+	return outputs
 }
 
 func (p *TestIndexerClient) GetBlankUtxoList(address string) []*indexer.PlainUtxo {
@@ -370,12 +391,44 @@ func (p *TestIndexerClient) GetExistingUtxos(utxos []string) ([]string, error) {
 	return utxos, nil
 }
 
+func insertPkScript(pkScript []byte) int {
+	str := hex.EncodeToString(pkScript)
+	for i, b := range _pkScripts {
+		if b == str {
+			return i
+		}
+	}
+	_pkScripts = append(_pkScripts, str)
+	return len(_pkScripts) - 1
+}
+
 func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	str, err := EncodeMsgTx(tx)
 	if err != nil {
 		return "", err
 	}
 	Log.Infof("TX: %s\n%s", tx.TxID(), str)
+
+	_mutex.Lock()
+	defer _mutex.Unlock()
+
+	_, ok := _txmap[tx.TxID()]
+	if ok {
+		return tx.TxID(), nil
+	}
+	_txmap[tx.TxID()] = true
+
+	for i, txOut := range tx.TxOut {
+		utxo := fmt.Sprintf("%s:%d", tx.TxID(), i)
+		_utxos = append(_utxos, utxo)
+		index := len(_utxos) - 1
+		_utxoIndex[utxo] = index
+		_utxoValue = append(_utxoValue, txOut.Value)
+		_utxoAssets = append(_utxoAssets, nil) // 先占位
+		_offsets = append(_offsets, nil)
+		j := insertPkScript(txOut.PkScript)
+		_utxoOwner = append(_utxoOwner, j)
+	}
 
 	return tx.TxID(), nil
 }
@@ -388,6 +441,26 @@ func (p *TestIndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
 
 	Log.Infof("TX: %s\n%s", tx.TxID(), str)
 
+	_mutex.Lock()
+	defer _mutex.Unlock()
+
+	_, ok := _txmap[tx.TxID()]
+	if ok {
+		return tx.TxID(), nil
+	}
+	_txmap[tx.TxID()] = true
+
+	for i, txOut := range tx.TxOut {
+		utxo := fmt.Sprintf("%s:%d", tx.TxID(), i)
+		_utxos = append(_utxos, utxo)
+		index := len(_utxos) - 1
+		_utxoIndex[utxo] = index
+		_utxoValue = append(_utxoValue, txOut.Value)
+		_utxoAssets = append(_utxoAssets, txOut.Assets)
+		_offsets = append(_offsets, nil)
+		j := insertPkScript(txOut.PkScript)
+		_utxoOwner = append(_utxoOwner, j)
+	}
 
 	return tx.TxID(), nil
 }

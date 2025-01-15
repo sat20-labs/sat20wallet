@@ -412,67 +412,32 @@ func (p *InteralWallet) SignTxInput_SatsNet(tx *swire.MsgTx, prevFetcher stxscri
 
 func (p *InteralWallet) SignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
 
-	packet, err := CreatePsbt(tx, prevFetcher, nil)
+	privKey := p.getPaymentPrivKey()
+	sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
+	for i, in := range tx.TxIn {
+		preOut := prevFetcher.FetchPrevOutput(in.PreviousOutPoint)
+		if preOut == nil {
+			Log.Errorf("can't find outpoint %s", in.PreviousOutPoint)
+			return fmt.Errorf("can't find outpoint %s", in.PreviousOutPoint)
+		}
+
+		scriptType := GetPkScriptType(preOut.PkScript)
+		switch scriptType {
+		case txscript.WitnessV1TaprootTy: // p2tr
+			witness, err := txscript.TaprootWitnessSignature(tx, sigHashes, i,
+				preOut.Value, preOut.PkScript,
+				txscript.SigHashDefault, privKey)
 	if err != nil {
-		Log.Errorf("CreatePsbt failed, %v", err)
+				Log.Errorf("TaprootWitnessSignature failed. %v", err)
 		return err
 	}
-	err = p.SignPsbt(packet)
-	if err != nil {
-		Log.Errorf("SignPsbt failed, %v", err)
-		return err
+			tx.TxIn[i].Witness = witness
+
+		default:
+			Log.Errorf("not support type %d", scriptType)
+			return fmt.Errorf("not support type %d", scriptType)
+		}
 	}
-
-	err = psbt.MaybeFinalizeAll(packet)
-	if err != nil {
-		Log.Errorf("MaybeFinalizeAll failed, %v", err)
-		return err
-	}
-	
-	// finalTx, err := psbt.Extract(packet)
-	// if err != nil {
-	// 	Log.Errorf("Extract failed, %v", err)
-	// 	return err
-	// }
-	for i, txIn := range tx.TxIn {
-		txIn.Witness = wire.TxWitness{packet.Inputs[i].TaprootKeySpendSig}
-	}
-
-
-	// privKey := p.getPaymentPrivKey()
-	// sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
-	// for i, in := range tx.TxIn {
-	// 	preOut := prevFetcher.FetchPrevOutput(in.PreviousOutPoint)
-	// 	if preOut == nil {
-	// 		Log.Errorf("can't find outpoint %s", in.PreviousOutPoint)
-	// 		return fmt.Errorf("can't find outpoint %s", in.PreviousOutPoint)
-	// 	}
-
-	// 	scriptType := GetPkScriptType(preOut.PkScript)
-	// 	switch scriptType {
-	// 	case txscript.WitnessV1TaprootTy: // p2tr
-	// 		witness, err := txscript.TaprootWitnessSignature(tx, sigHashes, i,
-	// 			preOut.Value, preOut.PkScript,
-	// 			txscript.SigHashDefault, privKey)
-	// 		if err != nil {
-	// 			Log.Errorf("TaprootWitnessSignature failed. %v", err)
-	// 			return err
-	// 		}
-	// 		tx.TxIn[i].Witness = witness
-
-	// 		/////////////////
-	// 		if !bytes.Equal(packet.Inputs[i].TaprootKeySpendSig, witness[0]) {
-	// 			Log.Panic("")
-	// 		}
-	// 		/////////////////
-
-	// 	default:
-	// 		Log.Errorf("not support type %d", scriptType)
-	// 		return fmt.Errorf("not support type %d", scriptType)
-	// 	}
-	// }
-
-	
 
 	return nil
 }

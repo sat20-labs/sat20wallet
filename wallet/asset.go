@@ -141,13 +141,19 @@ func GetPlainOffset(output *TxOutput, name *AssetName) (int64, int64, error) {
 	return prefixOffset, suffixOffset, nil
 }
 
-func GenTxOutput(inputs []*indexer.TxOutput, assetName *AssetName, amt int64) (*TxOutput, *TxOutput, error) {
+func CloneOutput(outputs []*indexer.TxOutput) []*indexer.TxOutput {
+	result := make([]*indexer.TxOutput, len(outputs))
+	copy(result, outputs)
+	return result
+}
+
+func GenTxOutput(inputs []*indexer.TxOutput, assetName *AssetName, value, amt int64) (*TxOutput, *TxOutput, error) {
 	combined := indexer.NewTxOutput(0)
 	for _, u := range inputs {
 		combined.Append(u)
 	}
 
-	return combined.Split(assetName, amt)
+	return combined.Split(assetName, value, amt)
 }
 
 func ToTxAssets(assets []*indexer.AssetInfo) swire.TxAssets {
@@ -185,4 +191,16 @@ func OutputInfoToOutput_SatsNet(output *indexer.TxOutputInfo) *TxOutput_SatsNet 
 	}
 
 	return result
+}
+
+func IsRunes(protocol string) bool {
+	return protocol == indexer.PROTOCOL_NAME_RUNES
+}
+
+func IsBindingSat(assetName *AssetName) bool {
+	return indexer.IsBindingSat(assetName) > 0
+}
+
+func IsPlainAsset(assetName *AssetName) bool {
+	return indexer.IsPlainAsset(assetName)
 }

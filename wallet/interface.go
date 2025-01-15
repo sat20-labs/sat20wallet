@@ -433,7 +433,7 @@ func (p *Manager) SendUtxos_SatsNet(destAddr string, utxos, fees []string) (stri
 	}
 
 	// sign
-	err = p.SignTx_SatsNet(tx, prevFetcher)
+	err = p.wallet.SignTx_SatsNet(tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx_SatsNet failed. %v", err)
 		return "", err
@@ -466,7 +466,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 		return "", fmt.Errorf("invalid amount %d", amt)
 	}
 
-	address := p.wallet.GetAddress(uint32(p.status.CurrentAccount))
+	address := p.wallet.GetAddress(0)
 	outputs := p.l2IndexerClient.GetUtxoListWithTicker(address, name)
 	if len(outputs) == 0 {
 		Log.Errorf("no asset %s", assetName)
@@ -552,7 +552,11 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 		Amount:     amt,
 		BindingSat: indexer.IsBindingSat(name),
 	}
-	txOut := swire.NewTxOut(amt, GenTxAssetsFromAssetInfo(&sendAsset), pkScript)
+	outValue := int64(0)
+	if IsBindingSat(name) {
+		outValue = amt
+	}
+	txOut := swire.NewTxOut(outValue, GenTxAssetsFromAssetInfo(&sendAsset), pkScript)
 	tx.AddTxOut(txOut)
 
 	err = input.SubAsset(&sendAsset)
@@ -579,7 +583,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 	}
 
 	// sign
-	err = p.SignTx_SatsNet(tx, prevFetcher)
+	err = p.wallet.SignTx_SatsNet(tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx_SatsNet failed. %v", err)
 		return "", err
@@ -606,13 +610,20 @@ func (p *Manager) SendUtxos(destAddr string, utxos []string,
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
 
-	start := time.Now()
-	Log.Infof("SendUtxos %d", amt)
-	tx := wire.NewMsgTx(wire.TxVersion)
-
 	if amt != 0 && amt < 330 {
 		return "", fmt.Errorf("too small amount")
 	}
+	// if len(utxos) == 0 {
+	// 	utxomap, err := p.l1IndexerClient.GetUtxosWithAddress(p.wallet.GetAddress(0))
+	// 	if err != nil {
+	// 		Log.Errorf("GetUtxosWithAddress %s failed. %v", p.wallet.GetAddress(0), err)
+	// 		return "", err
+	// 	}
+	// }
+
+	start := time.Now()
+	Log.Infof("SendUtxos %d", amt)
+	tx := wire.NewMsgTx(wire.TxVersion)
 
 	addr, err := btcutil.DecodeAddress(destAddr, GetChainParam())
 	if err != nil {
@@ -633,15 +644,15 @@ func (p *Manager) SendUtxos(destAddr string, utxos []string,
 			return "", err
 		}
 
-		txOut := p.getTxOutFromIndexer(utxo)
+		txOut, err := p.l1IndexerClient.GetTxOutput(utxo)
 		if txOut == nil {
 			return "", fmt.Errorf("getTxOutFromIndexer %s failed", utxo)
 		}
 
-		value += txOut.Value
+		value += txOut.OutValue.Value
 		txIn := wire.NewTxIn(outpoint, nil, nil)
 		tx.AddTxIn(txIn)
-		prevFetcher.AddPrevOut(*outpoint, txOut)
+		prevFetcher.AddPrevOut(*outpoint, &txOut.OutValue)
 		weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
 	}
 
@@ -676,7 +687,7 @@ func (p *Manager) SendUtxos(destAddr string, utxos []string,
 	}
 
 	// sign
-	err = p.SignTx(tx, prevFetcher)
+	err = p.wallet.SignTx(tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx failed. %v", err)
 		return "", err

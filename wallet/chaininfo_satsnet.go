@@ -90,6 +90,72 @@ func GetChainParam_SatsNet() *chaincfg.Params {
 	}
 }
 
+func VerifySignedTx_SatsNet(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
+
+	// TODO 做资产验证
+	inValue := int64(0)
+	var inAssets wire.TxAssets
+	sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
+	for i, txIn := range tx.TxIn {
+		txOut := prevFetcher.FetchPrevOutput(txIn.PreviousOutPoint)
+		vm, err := txscript.NewEngine(txOut.PkScript, tx, i, txscript.StandardVerifyFlags,
+			nil, sigHashes, txOut.Value, txOut.Assets, prevFetcher)
+		if err != nil {
+			Log.Errorf("Failed to create script engine for input %d: %v", i, err)
+			return err
+		}
+		if err := vm.Execute(); err != nil {
+			Log.Errorf("Failed to execute script for input %d: %v", i, err)
+			return err
+		}
+		inValue += txOut.Value
+		if inAssets == nil {
+			if txOut.Assets != nil {
+				inAssets = txOut.Assets.Clone()
+			}
+		} else {
+			err := inAssets.Merge(&txOut.Assets)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	outValue := int64(0)
+	var outAssets wire.TxAssets
+	for _, txOut := range tx.TxOut {
+		outValue += txOut.Value
+		if outAssets == nil {
+			if txOut.Assets != nil {
+				outAssets = txOut.Assets.Clone()
+			}
+		} else {
+			err := outAssets.Merge(&txOut.Assets)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	if outValue > inValue {
+		return fmt.Errorf("outvalue %d bigger than invalue %d", outValue, inValue)
+	}
+
+	if inAssets != nil {
+		err := inAssets.Split(&outAssets)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func CalcFee_SatsNet() int64 {
+	// TODO 暂时用10聪作为每一个交易的费用
+	return DEFAULT_FEE_SATSNET
+}
+
 
 func StandardAnchorScript(fundingUtxo string, witnessScript []byte, value int64, assets wire.TxAssets) ([]byte, error) {
 	assetsBuf, err := assets.Serialize()
@@ -299,6 +365,7 @@ func SignTxIn_P2TR(tx *wire.MsgTx, index int, privKey *btcec.PrivateKey,
 	return nil
 }
 
+// 本地pubkey放前面
 func GetCurrSignPosition2(aPub, bPub []byte) int {
 	if bytes.Compare(aPub, bPub) == 1 {
 		return 1
@@ -579,15 +646,6 @@ func UtxoToWireOutpoint_SatsNet(utxo string) (*wire.OutPoint, error) {
 	return wire.NewOutPointFromString(utxo)
 }
 
-func PrintHexTx_SatsNet(tx *wire.MsgTx) {
-	hexTx, err := EncodeMsgTx_SatsNet(tx)
-	if err != nil {
-		Log.Warnf("EncodeMsgTx_SatsNet failed. %v", err)
-	}
-	Log.Infof("TX: %s", hexTx)
-}
-
-
 func ConvertMsgTx_SatsNet(tx *wire.MsgTx) *MsgTx {
 	if tx == nil {
 		return nil
@@ -622,6 +680,14 @@ func ConvertMsgTx_SatsNet(tx *wire.MsgTx) *MsgTx {
 	}
 
 	return msg
+}
+
+func PrintHexTx_SatsNet(tx *wire.MsgTx) {
+	hexTx, err := EncodeMsgTx_SatsNet(tx)
+	if err != nil {
+		Log.Warnf("EncodeMsgTx_SatsNet failed. %v", err)
+	}
+	Log.Infof("TX: %s", hexTx)
 }
 
 func PrintJsonTx_SatsNet(tx *wire.MsgTx, name string) {

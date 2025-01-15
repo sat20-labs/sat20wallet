@@ -238,20 +238,18 @@ func (p *TxOutput) Append(another *TxOutput) error {
 }
 
 // 非绑定资产，第一个输出的value为0，所有聪放在第二个返回值
-func (p *TxOutput) Split(name *swire.AssetName, amt int64) (*TxOutput, *TxOutput, error) {
+func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *TxOutput, error) {
 
-	if p.Value() < 660 {
+	if p.Value() < value {
 		return nil, nil, fmt.Errorf("output value too small")
 	}
 	
-	bIsBindingSat := IsBindingSat(name) > 0
 	var value1, value2 int64
-	if bIsBindingSat {
-		value1 = amt
-	}
+	value1 = value
 	value2 = p.Value() - value1
 	part1 := NewTxOutput(value1)
 	part2 := NewTxOutput(value2)
+
 	if name == nil || *name == ASSET_PLAIN_SAT {
 		if p.Value() < amt {
 			return nil, nil, fmt.Errorf("amount too large")

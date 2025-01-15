@@ -255,15 +255,6 @@ func IsNullDataScript(script []byte) bool {
 		len(tokenizer.Data()) <= txscript.MaxDataCarrierSize
 }
 
-func PrintHexTx(tx *wire.MsgTx) {
-	hexTx, err := EncodeMsgTx(tx)
-	if err != nil {
-		Log.Warnf("EncodeMsgTx failed. %v", err)
-	}
-	Log.Infof("TX: %s", hexTx)
-}
-
-
 func ConvertMsgTx(tx *wire.MsgTx) *MsgTx {
 	if tx == nil {
 		return nil
@@ -299,11 +290,20 @@ func ConvertMsgTx(tx *wire.MsgTx) *MsgTx {
    return msg
 }
 
+func PrintHexTx(tx *wire.MsgTx) {
+	hexTx, err := EncodeMsgTx(tx)
+	if err != nil {
+		Log.Warnf("EncodeMsgTx failed. %v", err)
+	}
+	Log.Infof("TX: %s", hexTx)
+}
+
 func PrintJsonTx(tx *wire.MsgTx, name string) {
 	jsonTx := ConvertMsgTx(tx)
 	b, _ := json.Marshal(jsonTx)
 	Log.Infof("L1 %s TX: %s", name, string(b))
 }
+
 
 func GetPkScriptType(prevOutScript []byte) txscript.ScriptClass {
 	ty, _, _, err := txscript.ExtractPkScriptAddrs(prevOutScript, GetChainParam())
