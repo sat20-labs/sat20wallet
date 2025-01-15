@@ -229,30 +229,30 @@ func (p *Manager) GetNodePubKey() []byte {
 	return pubKey.SerializeCompressed()
 }
 
-func (p *Manager) GetPublicKey(id uint32) string {
+func (p *Manager) GetPublicKey(id uint32) []byte {
 	if p.wallet == nil {
-		return ""
+		return nil
 	}
 
 	pubkey := p.wallet.GetPubKey(id)
 	if pubkey == nil {
-		return ""
+		return nil
 	}
 
-	return hex.EncodeToString(pubkey.SerializeCompressed())
+	return pubkey.SerializeCompressed()
 }
 
-func (p *Manager) GetPaymentPubKey() string {
+func (p *Manager) GetPaymentPubKey() []byte {
 	if p.wallet == nil {
-		return ""
+		return nil
 	}
 
 	pubkey := p.wallet.GetPaymentPubKey()
 	if pubkey == nil {
-		return ""
+		return nil
 	}
 
-	return hex.EncodeToString(pubkey.SerializeCompressed())
+	return pubkey.SerializeCompressed()
 }
 
 func (p *Manager) SignMessage(msg []byte) ([]byte, error) {

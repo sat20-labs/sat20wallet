@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strconv"
@@ -614,7 +615,7 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 	id := p[0].Int()
 	pubkey := _mgr.GetPublicKey(uint32(id))
 	data := map[string]any{
-		"pubkey": pubkey,
+		"pubkey": hex.EncodeToString(pubkey),
 	}
 	return createJsRet(data, code, msg)
 }
@@ -635,16 +636,26 @@ func getCommitRootKey(this js.Value, p []js.Value) any {
 		return createJsRet(nil, code, msg)
 	}
 
-	jsBytes := p[0]
-	goBytes := make([]byte, jsBytes.Length())
-	js.CopyBytesToGo(goBytes, jsBytes)
+	// jsBytes := p[0]
+	// goBytes := make([]byte, jsBytes.Length())
+	// js.CopyBytesToGo(goBytes, jsBytes)
+	if p[0].Type() != js.TypeString {
+		code = -1
+		msg = "nodeId parameter should be a string"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	id, err := hex.DecodeString(p[0].String())
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
 
-	result := _mgr.GetCommitRootKey(goBytes)
+	result := _mgr.GetCommitRootKey(id)
 
-	jsBytes = js.Global().Get("Uint8Array").New(len(result))
-	js.CopyBytesToJS(jsBytes, result)
+	// jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	// js.CopyBytesToJS(jsBytes, result)
 	data := map[string]any{
-		"commitRootKey": jsBytes,
+		"commitRootKey": hex.EncodeToString(result),
 	}
 	return createJsRet(data, code, msg)
 }
@@ -665,9 +676,20 @@ func getCommitSecret(this js.Value, p []js.Value) any {
 		return createJsRet(nil, code, msg)
 	}
 
-	jsBytes := p[0]
-	goBytes := make([]byte, jsBytes.Length())
-	js.CopyBytesToGo(goBytes, jsBytes)
+	// jsBytes := p[0]
+	// goBytes := make([]byte, jsBytes.Length())
+	// js.CopyBytesToGo(goBytes, jsBytes)
+
+	if p[0].Type() != js.TypeString {
+		code = -1
+		msg = "nodeId parameter should be a string"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	id, err := hex.DecodeString(p[0].String())
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
 
 	if p[1].Type() != js.TypeNumber {
 		code = -1
@@ -677,12 +699,12 @@ func getCommitSecret(this js.Value, p []js.Value) any {
 	}
 	index := p[1].Int()
 
-	result := _mgr.GetCommitSecret(goBytes, index)
+	result := _mgr.GetCommitSecret(id, index)
 
-	jsBytes = js.Global().Get("Uint8Array").New(len(result))
-	js.CopyBytesToJS(jsBytes, result)
+	// jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	// js.CopyBytesToJS(jsBytes, result)
 	data := map[string]any{
-		"commitSecret": jsBytes,
+		"commitSecret": hex.EncodeToString(result),
 	}
 	return createJsRet(data, code, msg)
 }
@@ -703,16 +725,26 @@ func deriveRevocationPrivKey(this js.Value, p []js.Value) any {
 		return createJsRet(nil, code, msg)
 	}
 
-	jsBytes := p[0]
-	goBytes := make([]byte, jsBytes.Length())
-	js.CopyBytesToGo(goBytes, jsBytes)
+	// jsBytes := p[0]
+	// goBytes := make([]byte, jsBytes.Length())
+	// js.CopyBytesToGo(goBytes, jsBytes)
+	if p[0].Type() != js.TypeString {
+		code = -1
+		msg = "nodeId parameter should be a string"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	secrect, err := hex.DecodeString(p[0].String())
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
 
-	result := _mgr.DeriveRevocationPrivKey(goBytes)
+	result := _mgr.DeriveRevocationPrivKey(secrect)
 
-	jsBytes = js.Global().Get("Uint8Array").New(len(result))
-	js.CopyBytesToJS(jsBytes, result)
+	// jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	// js.CopyBytesToJS(jsBytes, result)
 	data := map[string]any{
-		"revocationPrivKey": jsBytes,
+		"revocationPrivKey": hex.EncodeToString(result),
 	}
 	return createJsRet(data, code, msg)
 }
@@ -728,10 +760,10 @@ func getRevocationBaseKey(this js.Value, p []js.Value) any {
 
 	result := _mgr.GetRevocationBaseKey()
 
-	jsBytes := js.Global().Get("Uint8Array").New(len(result))
-	js.CopyBytesToJS(jsBytes, result)
+	// jsBytes := js.Global().Get("Uint8Array").New(len(result))
+	// js.CopyBytesToJS(jsBytes, result)
 	data := map[string]any{
-		"revocationBaseKey": jsBytes,
+		"revocationBaseKey": hex.EncodeToString(result),
 	}
 	return createJsRet(data, code, msg)
 }
@@ -747,10 +779,10 @@ func getNodePubKey(this js.Value, p []js.Value) any {
 
 	result := _mgr.GetNodePubKey()
 
-	jsBytes := js.Global().Get("Uint8Array").New(len(result))
-	js.CopyBytesToJS(jsBytes, result)
+	// jsBytes := js.Global().Get("Uint8Array").New(len(result))
+	// js.CopyBytesToJS(jsBytes, result)
 	data := map[string]any{
-		"nodePubKey": jsBytes,
+		"nodePubKey": hex.EncodeToString(result),
 	}
 	return createJsRet(data, code, msg)
 }
@@ -771,25 +803,31 @@ func signMessage(this js.Value, p []js.Value) any {
 		return createJsRet(nil, code, msg)
 	}
 
-	jsBytes := p[0]
+	// jsBytes := p[0]
+	// goBytes := make([]byte, jsBytes.Length())
+	// js.CopyBytesToGo(goBytes, jsBytes)
+	if p[0].Type() != js.TypeString {
+		code = -1
+		msg = "nodeId parameter should be a string"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	msgBytes, err := hex.DecodeString(p[0].String())
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
 
-	// 创建一个Go的字节切片，长度为jsBytes的长度
-	goBytes := make([]byte, jsBytes.Length())
-
-	// 将JavaScript字节数组复制到Go字节数组中
-	js.CopyBytesToGo(goBytes, jsBytes)
-
-	result, err := _mgr.SignMessage(goBytes)
+	result, err := _mgr.SignMessage(msgBytes)
 	if err != nil {
 		code = -1
 		msg = "SignMessage failed"
 		return createJsRet(nil, code, msg)
 	}
 
-	jsBytes = js.Global().Get("Uint8Array").New(len(result))
-	js.CopyBytesToJS(jsBytes, result)
+	// jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	// js.CopyBytesToJS(jsBytes, result)
 	data := map[string]any{
-		"signature": jsBytes,
+		"signature": hex.EncodeToString(result),
 	}
 	return createJsRet(data, code, msg)
 }
@@ -1054,7 +1092,6 @@ func registerCallbacks(this js.Value, args []js.Value) interface{} {
 	callback := args[0]
 	_mgr.RegisterCallback(callback)
 	return createJsRet(nil, code, msg)
-
 }
 
 func getStringVector(p js.Value) ([]string, error) {

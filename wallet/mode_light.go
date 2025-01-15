@@ -24,7 +24,7 @@ func NewHTTPClient() common.HttpClient {
 	httpClient = &http.Client{
 	}
 	
-	return &netClient{client: httpClient}
+	return &NetClient{Client: httpClient}
 }
 
 
