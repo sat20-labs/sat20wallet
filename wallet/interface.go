@@ -40,23 +40,14 @@ func NewManager(cfg *Config, quit chan struct{}) *Manager {
 		Log.Errorf("NewKVDB failed")
 		return nil
 	}
+	err := mgr.init()
+	if err != nil {
+		return nil
+	}
 
 	return mgr
 }
 
-func (p *Manager) Init() error {
-
-	if p.wallet == nil {
-		return fmt.Errorf("wallet is not created/unlocked/connected")
-	}
-
-	err := p.init()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
 
 // 使用内部钱包
 func (p *Manager) CreateWallet(password string) (int64, string, error) {

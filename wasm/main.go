@@ -261,17 +261,16 @@ func initManager(this js.Value, p []js.Value) any {
 	}
 	wallet.Log.SetLevel(logLevel)
 
-	_mgr = wallet.NewManager(cfg, make(chan struct{}))
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		err := _mgr.Init()
-		if err != nil {
-			wallet.Log.Errorf("init error: %v", err)
+		_mgr = wallet.NewManager(cfg, make(chan struct{}))
+		if _mgr == nil {
+			wallet.Log.Errorf("NewManager failed: %v", err)
 			return nil, -1, err.Error()
 		}
 		return nil, 0, "ok"
 	})
 
-	wallet.Log.Info("STP manager initialized")
+	wallet.Log.Info("Manager created")
 	return js.Global().Get("Promise").New(jsHandler)
 }
 

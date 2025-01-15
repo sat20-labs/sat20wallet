@@ -27,6 +27,7 @@ func main() {
 		wallet.Log.Info("NewSTPManager failed.")
 		return
 	}
+	defer mgr.Close()
 
 	if wallet.IsTestNet() {
 		// TODO 为了测试方便，默认生成钱包，
@@ -53,13 +54,6 @@ func main() {
 		wallet.Log.Infof("wallet address: %s", mgr.GetWallet().GetAddress(0))
 	}
 	// 生产环境，需要手动创建钱包，并且解锁
-
-	err = mgr.Init()
-	if err != nil {
-		wallet.Log.Infof("init failed. %v", err)
-		return
-	}
-	defer mgr.Close()
 
 	<-interceptor.ShutdownChannel()
 

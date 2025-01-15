@@ -70,10 +70,6 @@ func createNode(t *testing.T, mode, dbPath string, quit chan struct{}) *Manager 
 	fmt.Printf("pkscript: %s\n", hex.EncodeToString(pkScript))
 	fmt.Printf("nodeId: %s\n", hex.EncodeToString(manager.GetWallet().GetNodePubKey().SerializeCompressed()))
 
-	err := manager.Init()
-	if err != nil {
-		t.Fatalf("init failed. %v", err)
-	}
 
 	indexerClient := NewTestIndexerClient()
 	manager.l1IndexerClient = indexerClient
