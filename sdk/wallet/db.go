@@ -7,30 +7,30 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcwallet/snacl"
-	"github.com/sat20-labs/sat20wallet/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
 const (
-	DB_KEY_STATUS         = "status"
-	DB_KEY_WALLET         = "w-" 
-	DB_KEY_ASSET_L1       = "asset-l1-"  //  Id - subId - chain
-	DB_KEY_ASSET_L2       = "asset-l2-" 
+	DB_KEY_STATUS   = "status"
+	DB_KEY_WALLET   = "w-"
+	DB_KEY_ASSET_L1 = "asset-l1-" //  Id - subId - chain
+	DB_KEY_ASSET_L2 = "asset-l2-"
 )
 
 type Status struct {
-	SoftwareVer   	string
-	DBver        	string
-	TotalWallet  	int
-	CurrentWallet 	int64   // wallet ID
-	CurrentAccount 	uint32  // account ID (index)
-	CurrentChain 	string
-	SyncHeight   	int
-	SyncHeightL2 	int
+	SoftwareVer    string
+	DBver          string
+	TotalWallet    int
+	CurrentWallet  int64  // wallet ID
+	CurrentAccount uint32 // account ID (index)
+	CurrentChain   string
+	SyncHeight     int
+	SyncHeightL2   int
 }
 
 type WalletInDB struct {
-	Id int64
-	Mnemonic []byte  // 加密后的数据
+	Id       int64
+	Mnemonic []byte // 加密后的数据
 	Salt     []byte
 	Accounts int
 }
@@ -73,13 +73,12 @@ func GetItemsFromDB(prefix []byte, db common.KVDB) (map[string][]byte, error) {
 	return result, err
 }
 
-
 func (p *Manager) initDB() error {
 
 	status := p.loadStatus()
 	if status.DBver != DB_VERSION {
 		// try to update db
-	
+
 		p.status.DBver = DB_VERSION
 	}
 
@@ -93,7 +92,6 @@ func (p *Manager) initDB() error {
 
 	return nil
 }
-
 
 func (p *Manager) repair() bool {
 
@@ -122,9 +120,8 @@ func loadAllWalletFromDB(db common.KVDB) (map[int64]*WalletInDB, error) {
 	return result, err
 }
 
-
 func saveWallet(db common.KVDB, wallet *WalletInDB) error {
-	
+
 	buf, err := EncodeToBytes(wallet)
 	if err != nil {
 		return err
@@ -136,7 +133,7 @@ func saveWallet(db common.KVDB, wallet *WalletInDB) error {
 		return err
 	}
 	Log.Infof("saveWallet succ")
-	
+
 	return nil
 }
 
@@ -157,7 +154,6 @@ func loadWallet(db common.KVDB, id int64) (*WalletInDB, error) {
 	return &result, nil
 }
 
-
 func (p *Manager) loadStatus() *Status {
 
 	result := &Status{
@@ -177,7 +173,6 @@ func (p *Manager) loadStatus() *Status {
 		Log.Errorf("DecodeFromBytes failed. %v", err)
 		return result
 	}
-
 
 	return result
 }
@@ -216,9 +211,9 @@ func (p *Manager) saveMnemonic(mn, password string) (int64, error) {
 	salt := key.Marshal()
 
 	wallet := WalletInDB{
-		Id: 		time.Now().UnixMicro(),
-		Mnemonic: 	en,
-		Salt: 		salt,
+		Id:       time.Now().UnixMicro(),
+		Mnemonic: en,
+		Salt:     salt,
 	}
 
 	err = saveWallet(p.db, &wallet)
@@ -261,10 +256,9 @@ func (p *Manager) reGenerateSnaclKey(salt []byte, password string) (*snacl.Secre
 			return &sk, nil
 		}
 	}
-	
+
 	return nil, err
 }
-
 
 func (p *Manager) newSnaclKey(password string) (*snacl.SecretKey, error) {
 	pw := []byte(password)

@@ -11,9 +11,9 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/sat20-labs/sat20wallet/wallet/indexer"
-	"github.com/sat20-labs/sat20wallet/wallet/sindexer"
-	"github.com/sat20-labs/sat20wallet/wallet/utils"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/sindexer"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	sbtcutil "github.com/sat20-labs/satsnet_btcd/btcutil"
 	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
 	stxscript "github.com/sat20-labs/satsnet_btcd/txscript"
@@ -47,7 +47,6 @@ func NewManager(cfg *Config, quit chan struct{}) *Manager {
 
 	return mgr
 }
-
 
 // 使用内部钱包
 func (p *Manager) CreateWallet(password string) (int64, string, error) {

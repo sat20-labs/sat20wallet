@@ -1,7 +1,7 @@
 package sindexer
 
 import (
-	indexerwire "github.com/sat20-labs/sat20wallet/wallet/indexer"
+	indexerwire "github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
 )
 
 

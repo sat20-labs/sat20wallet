@@ -8,9 +8,8 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	swire "github.com/sat20-labs/satsnet_btcd/wire"
 
-
-	"github.com/sat20-labs/sat20wallet/wallet/indexer"
-	"github.com/sat20-labs/sat20wallet/wallet/sindexer"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/sindexer"
 )
 
 var _mutex sync.RWMutex
@@ -55,21 +54,21 @@ var _utxos = []string{
 	// other
 }
 
-var _txmap = map[string]bool {
+var _txmap = map[string]bool{
 	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7": true,
 }
 
 var _utxoIndex = map[string]int{
-	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:0": 0,
-	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:1": 1,
-	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:2": 2,
-	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:3": 3,
-	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:4": 4,
-	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:5": 5,
-	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:6": 6,
-	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:7": 7,
-	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:8": 8,
-	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:9": 9,
+	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:0":  0,
+	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:1":  1,
+	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:2":  2,
+	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:3":  3,
+	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:4":  4,
+	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:5":  5,
+	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:6":  6,
+	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:7":  7,
+	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:8":  8,
+	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:9":  9,
 	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:10": 10,
 	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:11": 11,
 	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:12": 12,
@@ -84,14 +83,13 @@ var _utxoIndex = map[string]int{
 	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:21": 21,
 	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:22": 22,
 	"4dab4d1ad653f9da1f923ac65a12277e427c5d4b3e1a98ffbc510d87df46eef7:23": 23,
-
 }
 
 var _utxoValue = []int64{
 	20000, 20000, 20000, 20000,
 	10000, 10000, 10000, 10000,
 	10000, 10000, 10000, 10000,
-	330, 546, 600, 1000, 
+	330, 546, 600, 1000,
 	330, 546, 10000, 10000,
 	10000, 10000, 10000, 10000,
 }
@@ -151,87 +149,84 @@ var _utxoAssets = []indexer.TxAssets{
 		{Name: swire.AssetName{Protocol: "ordx", Type: "e", Ticker: "vintage"}, Amount: 6000, BindingSat: 1},
 	},
 
-	nil,nil, nil, nil,
+	nil, nil, nil, nil,
 }
-
 
 var _offsets = []indexer.AssetOffsets{
 	nil, nil, nil, nil,
 
-	{{Start: 0, End: 10000,}},
-	{{Start: 0, End: 9000,}},
-	{{Start: 1000, End: 9000,}},
-	{{Start: 0, End: 1000,},{Start: 3000, End: 4000,},{Start: 5000, End: 9000,}},
+	{{Start: 0, End: 10000}},
+	{{Start: 0, End: 9000}},
+	{{Start: 1000, End: 9000}},
+	{{Start: 0, End: 1000}, {Start: 3000, End: 4000}, {Start: 5000, End: 9000}},
 
 	nil, nil, nil, nil,
 	nil, nil, nil, nil,
 
-	{{Start: 0, End: 10000,}},
-	{{Start: 0, End: 9000,}},
-	{{Start: 1000, End: 9000,}},
-	{{Start: 0, End: 1000,},{Start: 3000, End: 4000,},{Start: 5000, End: 9000,}},
+	{{Start: 0, End: 10000}},
+	{{Start: 0, End: 9000}},
+	{{Start: 1000, End: 9000}},
+	{{Start: 0, End: 1000}, {Start: 3000, End: 4000}, {Start: 5000, End: 9000}},
 
 	nil, nil, nil, nil,
 }
-
 
 var _tickerInfo = map[string]*indexer.TickerInfo{
 	"runes:f:840000_1": {
 		AssetName: swire.AssetName{
 			Protocol: indexer.PROTOCOL_NAME_RUNES,
-			Ticker: "840000:1",
+			Ticker:   "840000:1",
 		},
-		Divisibility:   0,
-		TotalMinted:    "100000000",
-		MaxSupply: 		"100000000",
+		Divisibility: 0,
+		TotalMinted:  "100000000",
+		MaxSupply:    "100000000",
 	},
 	"runes:f:840000_2": {
 		AssetName: swire.AssetName{
 			Protocol: indexer.PROTOCOL_NAME_RUNES,
-			Ticker: "840000_2",
+			Ticker:   "840000_2",
 		},
-		Divisibility:   2,
-		TotalMinted:    "21000000",
-		MaxSupply: 		"100000000",
+		Divisibility: 2,
+		TotalMinted:  "21000000",
+		MaxSupply:    "100000000",
 	},
 	"runes:f:39241_1": {
 		AssetName: swire.AssetName{
 			Protocol: indexer.PROTOCOL_NAME_RUNES,
-			Ticker: "39241_1",
+			Ticker:   "39241_1",
 		},
-		Divisibility:   1,
-		TotalMinted:    "21000000",
-		MaxSupply: 		"100000000000000100000000000000",
+		Divisibility: 1,
+		TotalMinted:  "21000000",
+		MaxSupply:    "100000000000000100000000000000",
 	},
 	"brc20:f:ordi": {
 		AssetName: swire.AssetName{
 			Protocol: indexer.PROTOCOL_NAME_BRC20,
-			Ticker: "ordi",
+			Ticker:   "ordi",
 		},
-		Divisibility:   18,
-		TotalMinted:    "21000000000000000000000000", // 21,000,000
-		MaxSupply: 		"21000000000000000000000000",
+		Divisibility: 18,
+		TotalMinted:  "21000000000000000000000000", // 21,000,000
+		MaxSupply:    "21000000000000000000000000",
 	},
 	"ordx:f:pizza": {
 		AssetName: swire.AssetName{
 			Protocol: indexer.PROTOCOL_NAME_ORDX,
-			Ticker: "pizza",
+			Ticker:   "pizza",
 		},
-		Divisibility:   0,
-		TotalMinted:    "100000000",
-		MaxSupply: 		"100000000",
+		Divisibility: 0,
+		TotalMinted:  "100000000",
+		MaxSupply:    "100000000",
 	},
 	"ordx:f:pearl": {
 		AssetName: swire.AssetName{
 			Protocol: indexer.PROTOCOL_NAME_ORDX,
-			Ticker: "pearl",
+			Ticker:   "pearl",
 		},
-		Divisibility:   0,
-		TotalMinted:    "200000000",
-		MaxSupply: 		"200000000",
+		Divisibility: 0,
+		TotalMinted:  "200000000",
+		MaxSupply:    "200000000",
 	},
 }
-
 
 var _pkScripts = []string{
 	"51208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba", // client
@@ -243,12 +238,12 @@ var _pkScripts = []string{
 }
 
 var _utxoOwner = []int{
-	1,1,0,0,
-	0,0,0,0,
-	0,0,0,0,
-	0,0,0,0,
-	0,0,0,0,
-	0,0,0,0,
+	1, 1, 0, 0,
+	0, 0, 0, 0,
+	0, 0, 0, 0,
+	0, 0, 0, 0,
+	0, 0, 0, 0,
+	0, 0, 0, 0,
 }
 
 type TestIndexerClient struct {
@@ -351,7 +346,7 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 	outputs := make([]*indexer.TxOutputInfo, 0)
 	for i, utxo := range _utxos {
 		assets := _utxoAssets[i]
-		var assetInfo *swire.AssetInfo 
+		var assetInfo *swire.AssetInfo
 		for _, asset := range assets {
 			if asset.Name == *ticker {
 				assetInfo = &asset
@@ -361,8 +356,8 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 		if assetInfo != nil {
 			pkScript, _ := hex.DecodeString(_pkScripts[_utxoOwner[i]])
 			outputs = append(outputs, &indexer.TxOutputInfo{
-				OutPoint: utxo,
-				OutValue: wire.TxOut{Value: _utxoValue[i], PkScript: pkScript},
+				OutPoint:  utxo,
+				OutValue:  wire.TxOut{Value: _utxoValue[i], PkScript: pkScript},
 				AssetInfo: []*indexer.AssetInfo{&indexer.AssetInfo{Asset: *assetInfo}},
 			})
 		}

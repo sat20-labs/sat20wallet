@@ -7,11 +7,11 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/wire"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	swire "github.com/sat20-labs/satsnet_btcd/wire"
-	"github.com/sat20-labs/sat20wallet/common"
 
-	"github.com/sat20-labs/sat20wallet/wallet/indexer"
-	"github.com/sat20-labs/sat20wallet/wallet/sindexer"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/sindexer"
 )
 
 type RESTClient struct {
@@ -51,16 +51,16 @@ type IndexerRPCClient interface {
 	GetTxOutput(utxo string) (*TxOutput, error)
 	GetAscendData(utxo string) (*sindexer.AscendData, error)
 	GetUtxoId(utxo string) (uint64, error)
-	GetRawTx(tx string) (string, error) 
+	GetRawTx(tx string) (string, error)
 	GetTxInfo(tx string) (*indexer.TxSimpleInfo, error)
 	GetTxHeight(tx string) (int, error)
 	IsTxConfirmed(tx string) bool
 	GetSyncHeight() int
-	GetBestHeight() int64 
+	GetBestHeight() int64
 	GetBlockHash(height int) (string, error)
 	GetBlock(blockHash string) (string, error)
 	GetAssetSummaryWithAddress(address string) *indexer.AssetSummary
-	GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexer.TxOutputInfo 
+	GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexer.TxOutputInfo
 	GetBlankUtxoList(address string) []*indexer.PlainUtxo
 	GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error)
 	GetAllUtxosWithAddress(address string) ([]*indexer.PlainUtxo, []*indexer.PlainUtxo, error)
@@ -143,7 +143,6 @@ func (p *IndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, error)
 
 	return result.Data, nil
 }
-
 
 // 只有未花费的能拿到id
 func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
@@ -607,7 +606,7 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 }
 
 func (p *IndexerClient) GetTickInfo(assetName *AssetName) *indexer.TickerInfo {
-	url := p.GetUrl("/v2/tick/info/"+assetName.String())
+	url := p.GetUrl("/v2/tick/info/" + assetName.String())
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)

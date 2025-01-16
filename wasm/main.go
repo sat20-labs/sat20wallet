@@ -11,7 +11,7 @@ import (
 	"strings"
 	"syscall/js"
 
-	"github.com/sat20-labs/sat20wallet/wallet"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sirupsen/logrus"
 )
 

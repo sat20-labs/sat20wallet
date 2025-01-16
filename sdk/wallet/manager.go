@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/wire"
-	"github.com/sat20-labs/sat20wallet/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet

@@ -7,10 +7,9 @@ import (
 
 	"gopkg.in/yaml.v2"
 
-	"github.com/sat20-labs/sat20wallet/wallet"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sirupsen/logrus"
 )
-
 
 func GetBaseDir() string {
 	execPath, err := os.Executable()
@@ -25,7 +24,7 @@ func GetBaseDir() string {
 }
 
 func InitConfig() *wallet.Config {
-	cfgFile := GetBaseDir()+"/conf.yaml"
+	cfgFile := GetBaseDir() + "/conf.yaml"
 	cfg, err := LoadYamlConf(cfgFile)
 	if err != nil {
 		cfg = NewDefaultYamlConf()
@@ -55,17 +54,17 @@ func LoadYamlConf(cfgPath string) (*wallet.Config, error) {
 	return cfg, nil
 }
 
-func NewDefaultYamlConf() (*wallet.Config) {
+func NewDefaultYamlConf() *wallet.Config {
 	chain := "testnet4"
 	ret := &wallet.Config{
 		Chain: chain,
-		Mode: "client",
+		Mode:  "client",
 		Btcd: wallet.Bitcoin{
-			Host: "192.168.10.102:28332",
-			User: "jacky",
-			Password: "123456",
+			Host:           "192.168.10.102:28332",
+			User:           "jacky",
+			Password:       "123456",
 			Zmqpubrawblock: "tcp://192.168.10.102:58332",
-			Zmqpubrawtx: "tcp://192.168.10.102:58333",
+			Zmqpubrawtx:    "tcp://192.168.10.102:58333",
 		},
 		IndexerL1: wallet.Indexer{
 			Host: "192.168.10.104:8009",

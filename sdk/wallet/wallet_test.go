@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/sat20-labs/sat20wallet/wallet/utils"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
 
 func TestRevocationKeyDerivation(t *testing.T) {

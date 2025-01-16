@@ -14,7 +14,7 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	"github.com/sat20-labs/sat20wallet/wallet/utils"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	"github.com/sat20-labs/satsnet_btcd/btcec"
 	"github.com/sat20-labs/satsnet_btcd/btcec/ecdsa"
 	"github.com/sat20-labs/satsnet_btcd/btcec/schnorr"

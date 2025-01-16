@@ -7,7 +7,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/sat20-labs/sat20wallet/wallet/utils"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	"lukechampine.com/uint128"
 )
 
@@ -337,7 +337,7 @@ func (d *Decimal) ToInt64WithMax(max *Decimal) int64 {
 	return d.Div(precisionFactor[scaleIndex]).Value.Int64()
 }
 
-func NewDecimalFromInt64WithMax(value int64, max *Decimal) (*Decimal) {
+func NewDecimalFromInt64WithMax(value int64, max *Decimal) *Decimal {
 
 	if !max.IsOverflowInt64() {
 		return NewDecimal(value, max.Precition)
@@ -372,7 +372,7 @@ func decimalDigits(n uint64) int {
 func Uint128ToInt64(supply, amt uint128.Uint128) int64 {
 	if supply.Hi == 0 {
 		return amt.Big().Int64()
-	} 
+	}
 
 	q, _ := supply.QuoRem64(math.MaxInt64)
 	scaleIndex := decimalDigits(q.Lo)
@@ -383,7 +383,7 @@ func Uint128ToInt64(supply, amt uint128.Uint128) int64 {
 func Int64ToUint128(supply uint128.Uint128, amt int64) uint128.Uint128 {
 	if supply.Hi == 0 {
 		return uint128.From64(uint64(amt))
-	} 
+	}
 
 	q, _ := supply.QuoRem64(math.MaxInt64)
 	scaleIndex := decimalDigits(q.Lo)

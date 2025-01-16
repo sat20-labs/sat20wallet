@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/sat20-labs/sat20wallet/wallet/utils"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	"github.com/sat20-labs/satsnet_btcd/btcec"
 	"github.com/sat20-labs/satsnet_btcd/btcec/schnorr"
 	"github.com/sat20-labs/satsnet_btcd/btcutil"
@@ -18,15 +18,14 @@ import (
 )
 
 const (
-	STP_MAGIC_NUMBER = txscript.OP_16
-	CONTENT_TYPE_ASCENDING 		= txscript.OP_1
-	CONTENT_TYPE_DESCENDING 	= txscript.OP_2
-	CONTENT_TYPE_PAYMENT 		= txscript.OP_3
-	CONTENT_TYPE_CHANNELID 		= txscript.OP_10
+	STP_MAGIC_NUMBER        = txscript.OP_16
+	CONTENT_TYPE_ASCENDING  = txscript.OP_1
+	CONTENT_TYPE_DESCENDING = txscript.OP_2
+	CONTENT_TYPE_PAYMENT    = txscript.OP_3
+	CONTENT_TYPE_CHANNELID  = txscript.OP_10
 
-	MAX_PAYLOAD_LEN 			= txscript.MaxDataCarrierSize - 2
+	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 2
 )
-
 
 func NullDataScript(ctype uint8, data []byte) ([]byte, error) {
 	if len(data) > MAX_PAYLOAD_LEN {
@@ -35,10 +34,10 @@ func NullDataScript(ctype uint8, data []byte) ([]byte, error) {
 	}
 
 	return txscript.NewScriptBuilder().
-	AddOp(txscript.OP_RETURN).
-	AddOp(STP_MAGIC_NUMBER).
-	AddOp(ctype).
-	AddData(data).Script()
+		AddOp(txscript.OP_RETURN).
+		AddOp(STP_MAGIC_NUMBER).
+		AddOp(ctype).
+		AddData(data).Script()
 }
 
 func IsSTPNullDataScript(script []byte) bool {
@@ -55,7 +54,7 @@ func IsSTPNullDataScript(script []byte) bool {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return false
 	}
-	
+
 	return tokenizer.Next() && tokenizer.Done() &&
 		(txscript.IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= txscript.OP_PUSHDATA4) &&
 		len(tokenizer.Data()) <= MAX_PAYLOAD_LEN
@@ -75,12 +74,11 @@ func IsNullDataScript_Payment(script []byte) bool {
 	if !tokenizer.Next() || tokenizer.Err() != nil || tokenizer.Opcode() != CONTENT_TYPE_PAYMENT {
 		return false
 	}
-	
+
 	return tokenizer.Next() && tokenizer.Done() &&
 		(txscript.IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= txscript.OP_PUSHDATA4) &&
 		len(tokenizer.Data()) <= MAX_PAYLOAD_LEN
 }
-
 
 func GetChainParam_SatsNet() *chaincfg.Params {
 	if IsTestNet() {
@@ -156,7 +154,6 @@ func CalcFee_SatsNet() int64 {
 	return DEFAULT_FEE_SATSNET
 }
 
-
 func StandardAnchorScript(fundingUtxo string, witnessScript []byte, value int64, assets wire.TxAssets) ([]byte, error) {
 	assetsBuf, err := assets.Serialize()
 	if err != nil {
@@ -170,7 +167,7 @@ func StandardAnchorScript(fundingUtxo string, witnessScript []byte, value int64,
 		AddData(assetsBuf).Script()
 }
 
-func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte, 
+func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 	value int64, assets wire.TxAssets, err error) {
 	tokenizer := txscript.MakeScriptTokenizer(0, script)
 
@@ -198,12 +195,11 @@ func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 	}
 	assetsBuf := tokenizer.Data()
 	if assetsBuf != nil {
-		err = assets.Deserialize(assetsBuf) 
+		err = assets.Deserialize(assetsBuf)
 		if err != nil {
 			return "", nil, 0, nil, err
 		}
 	}
-	
 
 	return utxo, pkScript, value, assets, nil
 }

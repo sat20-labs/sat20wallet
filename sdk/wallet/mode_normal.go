@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/sat20-labs/sat20wallet/common"
-	"github.com/sat20-labs/sat20wallet/wallet/supernode"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/supernode"
 )
 
 func NewKVDB(dbPath string) common.KVDB {

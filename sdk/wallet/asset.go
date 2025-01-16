@@ -3,9 +3,9 @@ package wallet
 import (
 	"fmt"
 
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/sindexer"
 	swire "github.com/sat20-labs/satsnet_btcd/wire"
-	"github.com/sat20-labs/sat20wallet/wallet/indexer"
-	"github.com/sat20-labs/sat20wallet/wallet/sindexer"
 )
 
 type AssetName = swire.AssetName

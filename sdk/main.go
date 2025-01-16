@@ -7,8 +7,8 @@ import (
 	"time"
 
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
-	"github.com/sat20-labs/sat20wallet/wallet"
-	"github.com/sat20-labs/sat20wallet/wallet/utils"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	"github.com/sirupsen/logrus"
 )
 

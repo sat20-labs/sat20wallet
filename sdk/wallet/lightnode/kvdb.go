@@ -8,7 +8,7 @@ import (
 	"strings"
 	"syscall/js"
 
-	"github.com/sat20-labs/sat20wallet/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
 type jsBatchWrite struct {

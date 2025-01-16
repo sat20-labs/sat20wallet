@@ -4,7 +4,7 @@ package supernode
 
 import (
 	"github.com/dgraph-io/badger/v4"
-	"github.com/sat20-labs/sat20wallet/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
 type kvDB struct {
