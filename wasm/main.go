@@ -693,7 +693,7 @@ func getCommitSecret(this js.Value, p []js.Value) any {
 
 	if p[1].Type() != js.TypeNumber {
 		code = -1
-		msg = "Id parameter should be a number"
+		msg = "index parameter should be a number"
 		wallet.Log.Error(msg)
 		return createJsRet(nil, code, msg)
 	}
@@ -720,7 +720,7 @@ func deriveRevocationPrivKey(this js.Value, p []js.Value) any {
 
 	if len(p) < 1 {
 		code = -1
-		msg = "Expected 2 parameters"
+		msg = "Expected 1 parameters"
 		wallet.Log.Error(msg)
 		return createJsRet(nil, code, msg)
 	}
@@ -730,7 +730,7 @@ func deriveRevocationPrivKey(this js.Value, p []js.Value) any {
 	// js.CopyBytesToGo(goBytes, jsBytes)
 	if p[0].Type() != js.TypeString {
 		code = -1
-		msg = "nodeId parameter should be a string"
+		msg = "secret parameter should be a string"
 		wallet.Log.Error(msg)
 		return createJsRet(nil, code, msg)
 	}
@@ -808,7 +808,7 @@ func signMessage(this js.Value, p []js.Value) any {
 	// js.CopyBytesToGo(goBytes, jsBytes)
 	if p[0].Type() != js.TypeString {
 		code = -1
-		msg = "nodeId parameter should be a string"
+		msg = "message parameter should be a string"
 		wallet.Log.Error(msg)
 		return createJsRet(nil, code, msg)
 	}
