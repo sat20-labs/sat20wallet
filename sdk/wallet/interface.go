@@ -635,8 +635,8 @@ func (p *Manager) SendUtxos(destAddr string, utxos []string,
 		}
 
 		txOut, err := p.l1IndexerClient.GetTxOutput(utxo)
-		if txOut == nil {
-			return "", fmt.Errorf("getTxOutFromIndexer %s failed", utxo)
+		if err != nil {
+			return "", fmt.Errorf("GetTxOutput %s failed, %v", utxo, err)
 		}
 
 		value += txOut.OutValue.Value

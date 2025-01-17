@@ -358,7 +358,7 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 			outputs = append(outputs, &indexer.TxOutputInfo{
 				OutPoint:  utxo,
 				OutValue:  wire.TxOut{Value: _utxoValue[i], PkScript: pkScript},
-				AssetInfo: []*indexer.AssetInfo{&indexer.AssetInfo{Asset: *assetInfo}},
+				AssetInfo: []*indexer.AssetInfo{{Asset: *assetInfo}},
 			})
 		}
 	}
