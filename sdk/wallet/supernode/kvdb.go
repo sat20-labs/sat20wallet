@@ -51,7 +51,7 @@ func NewKVDB(path string) common.KVDB {
 
 func initDB(path string) (*badger.DB, error) {
 	opts := badger.DefaultOptions("").WithBlockCacheSize(300 << 20)
-	return openDB(path+"/stp", opts)
+	return openDB(path+"/wallet", opts)
 }
 
 func (p *kvDB) get(key []byte) ([]byte, error) {
