@@ -19,7 +19,7 @@ func NewChannelWallet(wallet *InternalWallet, peerId []byte, id uint32) *channel
 	return &channelWallet{
 		wallet: wallet,
 		peerId: peerId,
-		id: id,
+		id: id, // 对支付签名而言，是index；对通道签名而言，是change
 	}
 }
 
@@ -28,11 +28,15 @@ func (p *channelWallet) GetId() uint32 {
 }
 
 func (p *channelWallet) GetCommitRootKey() (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
-	return p.wallet.GetCommitRootKey(p.peerId)
+	privkey := p.wallet.getCommitSecret(p.peerId, p.id, 0)
+	if privkey == nil {
+		return nil, nil
+	}
+	return privkey, privkey.PubKey()
 }
 
-func (p *channelWallet) GetCommitSecret(index int) *secp256k1.PrivateKey {
-	return p.wallet.GetCommitSecret(p.peerId, index)
+func (p *channelWallet) GetCommitSecret(index uint32) *secp256k1.PrivateKey {
+	return p.wallet.getCommitSecret(p.peerId, p.id, index)
 }
 
 func (p *channelWallet) DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey {
@@ -46,7 +50,7 @@ func (p *channelWallet) GetRevocationBaseKey() *secp256k1.PublicKey {
 }
 
 func (p *channelWallet) GetPaymentPubKey() *secp256k1.PublicKey {
-	key := p.wallet.getPaymentPrivKeyWithChange(p.id)
+	key := p.wallet.getPaymentPrivKeyWithIndex(p.id)
 	if key == nil {
 		Log.Errorf("GetPaymentPrivKey failed.")
 		return nil
@@ -63,11 +67,21 @@ func (p *channelWallet) SignMessage(msg []byte) (*ecdsa.Signature, error) {
 }
 
 func (p *channelWallet) SignPsbt(packet *psbt.Packet) (error) {
-	privKey := p.wallet.getPaymentPrivKeyWithChange(p.id)
+	privKey := p.wallet.getPaymentPrivKeyWithIndex(p.id)
 	return p.wallet.signPsbt(privKey, packet)
 }
 
 func (p *channelWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
-	privKey := p.wallet.getPaymentPrivKeyWithChange(p.id)
+	privKey := p.wallet.getPaymentPrivKeyWithIndex(p.id)
 	return p.wallet.signPsbt_SatsNet(privKey, packet)
+}
+
+func (p *channelWallet) SignPsbts(packet []*psbt.Packet) (error) {
+	privKey := p.wallet.getPaymentPrivKeyWithIndex(p.id)
+	return p.wallet.signPsbts(privKey, packet)
+}
+
+func (p *channelWallet) SignPsbts_SatsNet(packet []*spsbt.Packet) error {
+	privKey := p.wallet.getPaymentPrivKeyWithIndex(p.id)
+	return p.wallet.signPsbts_SatsNet(privKey, packet)
 }

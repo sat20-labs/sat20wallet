@@ -196,7 +196,7 @@ func (p *Manager) GetCommitSecret(peer []byte, index int) []byte {
 	if p.wallet == nil {
 		return nil
 	}
-	privkey := p.wallet.GetCommitSecret(peer, index)
+	privkey := p.wallet.GetCommitSecret(peer, uint32(index))
 	return privkey.Serialize()
 }
 

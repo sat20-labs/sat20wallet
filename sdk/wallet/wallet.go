@@ -114,7 +114,9 @@ const (
 const DEFAULT_PURPOSE = 86
 
 // m/purpose'/coinType'/account'/change/index
-// change -> channel number. 一个钱包可以建立多个通道，通道序号从0开始。
+// 钱包的p2tr地址:  	m/86'   /0'/0'/0     /index1 
+// 对应的通道钱包的地址:  m/1017' /0'/0'/index1/commitHeight
+// 这样一个钱包下的每一个子账户都可以跟节点建立通道
 
 // 可以支持其他类型，但为了方便，默认只支持p2tr地址类型。
 type InternalWallet struct {
@@ -158,7 +160,7 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 	return &InternalWallet{
 		masterkey:   masterkey,
 		netParamsL1: param,
-		paymentPrivKeys: make(map[uint32]*secp256k1.PrivateKey), // key: change
+		paymentPrivKeys: make(map[uint32]*secp256k1.PrivateKey), // key: index
 		revocationBasePrivKeys: make(map[uint32]*secp256k1.PrivateKey), // key: change
 		purposes:    make(map[uint32]*hdkeychain.ExtendedKey),
 		accounts:    make(map[uint64]*hdkeychain.ExtendedKey),
@@ -244,7 +246,11 @@ func (p *InternalWallet) GetCommitRootKey(peer []byte) (*secp256k1.PrivateKey, *
 
 // 返回secret，用于生成commitsecrect和commitpoint
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
-func (p *InternalWallet) GetCommitSecret(peer []byte, index int) *secp256k1.PrivateKey {
+func (p *InternalWallet) GetCommitSecret(peer []byte, index uint32) *secp256k1.PrivateKey {
+	return p.getCommitSecret(peer, 0, index)
+}
+
+func (p *InternalWallet) getCommitSecret(peer []byte, change, index uint32) *secp256k1.PrivateKey {
 	purpose := getPurposeFromAddrType("LND")
 	account := getAccountFromFamilyKey(KeyFamilyRevocationRoot)
 	key := uint64(purpose)<<32 + uint64(account)
@@ -258,7 +264,7 @@ func (p *InternalWallet) GetCommitSecret(peer []byte, index int) *secp256k1.Priv
 		p.accounts[key] = acckey
 	}
 
-	privkey, _, err := generateKeyFromAccountKey(acckey, 0, uint32(index))
+	privkey, _, err := generateKeyFromAccountKey(acckey, uint32(change), uint32(index))
 	if err != nil {
 		Log.Errorf("generateKeyFromAccountKey failed. %v", err)
 		return nil
@@ -343,20 +349,20 @@ func (p *InternalWallet) GetPaymentPubKey() *secp256k1.PublicKey {
 }
 
 func (p *InternalWallet) getPaymentPrivKey() *secp256k1.PrivateKey {
-	return p.getPaymentPrivKeyWithChange(0)
+	return p.getPaymentPrivKeyWithIndex(0)
 }
 
-func (p *InternalWallet) getPaymentPrivKeyWithChange(change uint32) *secp256k1.PrivateKey {
-	key, ok := p.paymentPrivKeys[change]
+func (p *InternalWallet) getPaymentPrivKeyWithIndex(index uint32) *secp256k1.PrivateKey {
+	key, ok := p.paymentPrivKeys[index]
 	if ok {
 		return key
 	}
-	key, _, err := p.getKey("P2TR", change, 0)
+	key, _, err := p.getKey("P2TR", 0, index)
 	if err != nil {
 		Log.Errorf("GetPubKey P2TR failed. %v", err)
 		return nil
 	}
-	p.paymentPrivKeys[change] = key
+	p.paymentPrivKeys[index] = key
 	return key
 }
 
@@ -889,6 +895,22 @@ func (p *InternalWallet) signPsbt(privKey *secp256k1.PrivateKey, packet *psbt.Pa
 	return nil
 }
 
+func (p *InternalWallet) SignPsbts(packet []*psbt.Packet) error {
+	privKey := p.getPaymentPrivKey()
+	return p.signPsbts(privKey, packet)
+}
+
+func (p *InternalWallet) signPsbts(privKey *secp256k1.PrivateKey, packets []*psbt.Packet) error {
+	for i, packet := range packets {
+		err := p.signPsbt(privKey, packet)
+		if err != nil {
+			Log.Errorf("signPsbt %d failed, %v", i, err)
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *InternalWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 	privKey := p.getPaymentPrivKey()
 	return p.signPsbt_SatsNet(privKey, packet)
@@ -960,6 +982,23 @@ func (p *InternalWallet) signPsbt_SatsNet(privKey *secp256k1.PrivateKey, packet 
 				PubKey:    pubkey.SerializeCompressed(),
 				Signature: sig,
 			})
+		}
+	}
+	return nil
+}
+
+
+func (p *InternalWallet) SignPsbts_SatsNet(packet []*spsbt.Packet) error {
+	privKey := p.getPaymentPrivKey()
+	return p.signPsbts_SatsNet(privKey, packet)
+}
+
+func (p *InternalWallet) signPsbts_SatsNet(privKey *secp256k1.PrivateKey, packets []*spsbt.Packet) error {
+	for i, packet := range packets {
+		err := p.signPsbt_SatsNet(privKey, packet)
+		if err != nil {
+			Log.Errorf("signPsbt %d failed, %v", i, err)
+			return err
 		}
 	}
 	return nil
