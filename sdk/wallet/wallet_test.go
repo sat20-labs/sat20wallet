@@ -59,7 +59,7 @@ func TestTweakKeyDerivation(t *testing.T) {
 
 	// With the commitment secrets generated, we'll now create the base
 	// keys we'll use to derive the revocation key from.
-	basePriv, basePub := wallet1.getRevocationBaseKey()
+	basePriv, basePub := wallet1.getRevocationBaseKey(0)
 
 	// With the base key create, we'll now create a commitment point, and
 	// from that derive the bytes we'll used to tweak the base public key.

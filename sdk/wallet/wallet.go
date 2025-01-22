@@ -14,6 +14,7 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	"github.com/sat20-labs/satsnet_btcd/btcec"
 	"github.com/sat20-labs/satsnet_btcd/btcec/ecdsa"
@@ -119,11 +120,13 @@ const DEFAULT_PURPOSE = 86
 type InternalWallet struct {
 	masterkey             *hdkeychain.ExtendedKey
 	netParamsL1           *chaincfg.Params // L1
-	paymentPrivKey        *secp256k1.PrivateKey
-	revocationBasePrivKey *secp256k1.PrivateKey
+	paymentPrivKeys        map[uint32]*secp256k1.PrivateKey
+	revocationBasePrivKeys map[uint32]*secp256k1.PrivateKey
 	purposes              map[uint32]*hdkeychain.ExtendedKey // key: purpose
 	accounts              map[uint64]*hdkeychain.ExtendedKey // key: purpose<<32+account
 	addresses             map[uint32]btcutil.Address         // key: index
+
+	subWallets            map[uint32]*channelWallet
 }
 
 func NewInteralWallet(param *chaincfg.Params) (*InternalWallet, string, error) {
@@ -155,10 +158,23 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 	return &InternalWallet{
 		masterkey:   masterkey,
 		netParamsL1: param,
+		paymentPrivKeys: make(map[uint32]*secp256k1.PrivateKey), // key: change
+		revocationBasePrivKeys: make(map[uint32]*secp256k1.PrivateKey), // key: change
 		purposes:    make(map[uint32]*hdkeychain.ExtendedKey),
 		accounts:    make(map[uint64]*hdkeychain.ExtendedKey),
 		addresses:   make(map[uint32]btcutil.Address),
+		subWallets:  make(map[uint32]*channelWallet),
 	}
+}
+
+func (p *InternalWallet) CreateChannelWallet(peer []byte, id uint32) common.ChannelWallet {
+	subWallet := NewChannelWallet(p, peer, uint32(id))
+	p.subWallets[id] = subWallet
+	return subWallet
+}
+
+func (p *InternalWallet) GetChannelWallet(id uint32) common.ChannelWallet {
+	return p.subWallets[id]
 }
 
 func (p *InternalWallet) getPurposeKey(purpose uint32) (*hdkeychain.ExtendedKey, error) {
@@ -187,7 +203,7 @@ func (p *InternalWallet) getBtcUtilAddress(index uint32) (btcutil.Address, error
 		return nil, err
 	}
 
-	_, pubkey, err := generateKeyFromPurposeKey(purposeKey, 0, index)
+	_, pubkey, err := generateKeyFromPurposeKey(purposeKey, 0, 0, index)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +217,7 @@ func (p *InternalWallet) getBtcUtilAddress(index uint32) (btcutil.Address, error
 }
 
 func (p *InternalWallet) GetPubKey(index uint32) *secp256k1.PublicKey {
-	_, pubKey, err := p.getKey("P2TR", index)
+	_, pubKey, err := p.getKey("P2TR", 0, index)
 	if err != nil {
 		Log.Errorf("GetPubKey failed. %v", err)
 		return nil
@@ -242,7 +258,7 @@ func (p *InternalWallet) GetCommitSecret(peer []byte, index int) *secp256k1.Priv
 		p.accounts[key] = acckey
 	}
 
-	privkey, _, err := generateKeyFromAccountKey(acckey, uint32(index))
+	privkey, _, err := generateKeyFromAccountKey(acckey, 0, uint32(index))
 	if err != nil {
 		Log.Errorf("generateKeyFromAccountKey failed. %v", err)
 		return nil
@@ -259,19 +275,20 @@ func (p *InternalWallet) GetCommitSecret(peer []byte, index int) *secp256k1.Priv
 
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
 func (p *InternalWallet) DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey {
-	revBasePrivKey, _ := p.getRevocationBaseKey()
+	revBasePrivKey, _ := p.getRevocationBaseKey(0)
 	return utils.DeriveRevocationPrivKey(revBasePrivKey, commitsecret)
 }
 
 func (p *InternalWallet) GetRevocationBaseKey() *secp256k1.PublicKey {
-	_, pubk := p.getRevocationBaseKey()
+	_, pubk := p.getRevocationBaseKey(0)
 	return pubk
 }
 
-func (p *InternalWallet) getRevocationBaseKey() (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
+func (p *InternalWallet) getRevocationBaseKey(change uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
 
-	if p.revocationBasePrivKey != nil {
-		return p.revocationBasePrivKey, p.revocationBasePrivKey.PubKey()
+	key, ok := p.revocationBasePrivKeys[change]
+	if ok {
+		return key, key.PubKey()
 	}
 
 	purpose := getPurposeFromAddrType("LND")
@@ -281,14 +298,14 @@ func (p *InternalWallet) getRevocationBaseKey() (*secp256k1.PrivateKey, *secp256
 		return nil, nil
 	}
 	privk, pubk, err := generateKeyFromPurposeKey(purposekey,
-		getAccountFromFamilyKey(KeyFamilyRevocationBase), 0,
+		getAccountFromFamilyKey(KeyFamilyRevocationBase), change, 0,
 	)
 
 	if err != nil {
 		Log.Errorf("generateKeyFromPurposeKey failed. %v", err)
 		return nil, nil
 	}
-	p.revocationBasePrivKey = privk
+	p.revocationBasePrivKeys[change] = privk
 
 	return privk, pubk
 }
@@ -307,7 +324,7 @@ func (p *InternalWallet) GetNodePubKey() *secp256k1.PublicKey {
 		p.accounts[key] = acckey
 	}
 
-	_, pubkey, err := generateKeyFromAccountKey(acckey, 0)
+	_, pubkey, err := generateKeyFromAccountKey(acckey, 0, 0)
 	if err != nil {
 		Log.Errorf("generateKeyFromAccountKey failed. %v", err)
 		return nil
@@ -326,25 +343,30 @@ func (p *InternalWallet) GetPaymentPubKey() *secp256k1.PublicKey {
 }
 
 func (p *InternalWallet) getPaymentPrivKey() *secp256k1.PrivateKey {
-	if p.paymentPrivKey != nil {
-		return p.paymentPrivKey
+	return p.getPaymentPrivKeyWithChange(0)
+}
+
+func (p *InternalWallet) getPaymentPrivKeyWithChange(change uint32) *secp256k1.PrivateKey {
+	key, ok := p.paymentPrivKeys[change]
+	if ok {
+		return key
 	}
-	key, _, err := p.getKey("P2TR", 0)
+	key, _, err := p.getKey("P2TR", change, 0)
 	if err != nil {
 		Log.Errorf("GetPubKey P2TR failed. %v", err)
 		return nil
 	}
-	p.paymentPrivKey = key
+	p.paymentPrivKeys[change] = key
 	return key
 }
 
-func (p *InternalWallet) getKey(addressType string, index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
+func (p *InternalWallet) getKey(addressType string, change, index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
 	purpose := getPurposeFromAddrType(addressType)
 	purposekey, err := p.getPurposeKey(purpose)
 	if err != nil {
 		return nil, nil, err
 	}
-	return generateKeyFromPurposeKey(purposekey, 0, index)
+	return generateKeyFromPurposeKey(purposekey, 0, change, index)
 }
 
 func (p *InternalWallet) SignTxInput(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
@@ -756,11 +778,15 @@ func (p *InternalWallet) PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxs
 }
 
 func (p *InternalWallet) SignMessage(msg []byte) (*ecdsa.Signature, error) {
-	privKey, err := p.deriveKeyByLocator(KeyFamilyBaseEncryption, 0)
+	privKey, err := p.deriveKeyByLocator(KeyFamilyBaseEncryption, 0, 0)
 	if err != nil {
 		return nil, err
 	}
+	return p.signMessage(privKey, msg)
+}
 
+
+func (p *InternalWallet) signMessage(privKey *secp256k1.PrivateKey, msg []byte) (*ecdsa.Signature, error) {
 	// Double hash and sign the data.
 	var msgDigest []byte
 	doubleHash := false
@@ -788,12 +814,16 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Sig
 
 // 支持上面所有几种不同的签名方式
 func (p *InternalWallet) SignPsbt(packet *psbt.Packet) error {
+	privKey := p.getPaymentPrivKey()
+	return p.signPsbt(privKey, packet)
+}
+
+func (p *InternalWallet) signPsbt(privKey *secp256k1.PrivateKey, packet *psbt.Packet) error {
 	err := psbt.InputsReadyToSign(packet)
 	if err != nil {
 		return err
 	}
 
-	privKey := p.getPaymentPrivKey()
 	pubkey := privKey.PubKey()
 	p2trPkScript, err := GetP2TRpkScript(pubkey)
 	if err != nil {
@@ -860,12 +890,16 @@ func (p *InternalWallet) SignPsbt(packet *psbt.Packet) error {
 }
 
 func (p *InternalWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
+	privKey := p.getPaymentPrivKey()
+	return p.signPsbt_SatsNet(privKey, packet)
+}
+
+func (p *InternalWallet) signPsbt_SatsNet(privKey *secp256k1.PrivateKey, packet *spsbt.Packet) error {
 	err := spsbt.InputsReadyToSign(packet)
 	if err != nil {
 		return err
 	}
 
-	privKey := p.getPaymentPrivKey()
 	pubkey := privKey.PubKey()
 	p2trPkScript, err := GetP2TRpkScript(pubkey)
 	if err != nil {
@@ -1224,14 +1258,14 @@ func (p *InternalWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 // 	return privateKey, nil
 // }
 
-func (p *InternalWallet) deriveKeyByLocator(family, index uint32) (*secp256k1.PrivateKey, error) {
+func (p *InternalWallet) deriveKeyByLocator(family, change, index uint32) (*secp256k1.PrivateKey, error) {
 	account := getAccountFromFamilyKey(family)
 
 	acckey, err := p.getPurposeKey(account)
 	if err != nil {
 		return nil, err
 	}
-	privkey, _, err := generateKeyFromAccountKey(acckey, index)
+	privkey, _, err := generateKeyFromAccountKey(acckey, change, index)
 	if err != nil {
 		return nil, err
 	}
@@ -1308,14 +1342,14 @@ func GenerateAccountKey(masterKey *hdkeychain.ExtendedKey, purpose, account uint
 }
 
 func generateKeyFromPurposeKey(purposeKey *hdkeychain.ExtendedKey,
-	account, index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
+	account, change, index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
 	// 生成外部链或内部链
 	accountKey, err := generateAccountKey2(purposeKey, account)
 	if err != nil {
 		Log.Errorf("Failed to generate account chain: %v", err)
 		return nil, nil, err
 	}
-	changeKey, err := accountKey.Derive(0)
+	changeKey, err := accountKey.Derive(change)
 	if err != nil {
 		Log.Errorf("Failed to generate change chain: %v", err)
 		return nil, nil, err
@@ -1342,9 +1376,9 @@ func generateKeyFromPurposeKey(purposeKey *hdkeychain.ExtendedKey,
 }
 
 func generateKeyFromAccountKey(accountKey *hdkeychain.ExtendedKey,
-	index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
+	change, index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
 	// 生成外部链或内部链
-	changeKey, err := accountKey.Derive(0)
+	changeKey, err := accountKey.Derive(change)
 	if err != nil {
 		Log.Errorf("Failed to generate change chain: %v", err)
 		return nil, nil, err
