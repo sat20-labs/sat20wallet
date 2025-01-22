@@ -113,6 +113,7 @@ const (
 const DEFAULT_PURPOSE = 86
 
 // m/purpose'/coinType'/account'/change/index
+// change -> channel number. 一个钱包可以建立多个通道，通道序号从0开始。
 
 // 可以支持其他类型，但为了方便，默认只支持p2tr地址类型。
 type InternalWallet struct {
