@@ -784,10 +784,11 @@ func (p *InternalWallet) PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxs
 }
 
 func (p *InternalWallet) SignMessage(msg []byte) (*ecdsa.Signature, error) {
-	privKey, err := p.deriveKeyByLocator(KeyFamilyBaseEncryption, 0, 0)
-	if err != nil {
-		return nil, err
-	}
+	//privKey, err := p.deriveKeyByLocator(KeyFamilyBaseEncryption, 0, 0)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	privKey := p.getPaymentPrivKey()
 	return p.signMessage(privKey, msg)
 }
 
