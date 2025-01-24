@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
 	"github.com/sat20-labs/satsnet_btcd/wire"
 )
 
@@ -118,7 +119,7 @@ func (p *TxOutput) Merge(another *TxOutput) error {
 	return p.OutValue.Assets.Merge(&another.OutValue.Assets)
 }
 
-func (p *TxOutput) Split(another *TxOutput) error {
+func (p *TxOutput) Subtract(another *TxOutput) error {
 	if another == nil {
 		return nil
 	}
@@ -141,6 +142,53 @@ func (p *TxOutput) Split(another *TxOutput) error {
 	p.OutValue.Assets = tmpAssets
 
 	return nil
+}
+
+func (p *TxOutput) Split(name *wire.AssetName, value, amt int64) (*TxOutput, *TxOutput, error) {
+
+	if p.Value() < value {
+		return nil, nil, fmt.Errorf("output value too small")
+	}
+	
+	var value1, value2 int64
+	value1 = value
+	value2 = p.Value() - value1
+	part1 := NewTxOutput(value1)
+	part2 := NewTxOutput(value2)
+
+	if name == nil || *name == ASSET_PLAIN_SAT {
+		if p.Value() < amt {
+			return nil, nil, fmt.Errorf("amount too large")
+		}
+		return part1, part2, nil
+	}
+
+	asset, err := p.OutValue.Assets.Find(name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if asset.Amount < amt {
+		return nil, nil, fmt.Errorf("amount too large")
+	}
+	asset1 := asset.Clone()
+	asset1.Amount = amt
+	asset2 := asset.Clone()
+	asset2.Amount = asset.Amount - amt
+
+	part1.OutValue.Assets = wire.TxAssets{*asset1}
+	part2.OutValue.Assets = wire.TxAssets{*asset2}
+
+	if indexer.IsBindingSat(name) == 0 {
+		// runes：no offsets
+		return part1, part2, nil
+	}
+
+	if asset.Amount == amt {
+		return part1, nil, nil
+	}
+
+	return part1, part2, nil
 }
 
 func (p *TxOutput) GetAsset(assetName *wire.AssetName) int64 {

@@ -108,11 +108,10 @@ func AlignAsset(output *TxOutput, name *AssetName) (error) {
 		output.Assets = swire.TxAssets{*asset}
 
 		offsets, ok := output.Offsets[*name]
-		if !ok {
-			return fmt.Errorf("can't find offsets for %s", name.String())
+		if ok {
+			output.Offsets = make(map[swire.AssetName]indexer.AssetOffsets)
+			output.Offsets[*name] = offsets
 		}
-		output.Offsets = make(map[swire.AssetName]indexer.AssetOffsets)
-		output.Offsets[*name] = offsets
 	}
 
 	return nil
