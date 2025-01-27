@@ -61,7 +61,7 @@ type IndexerRPCClient interface {
 	GetBlock(blockHash string) (string, error)
 	GetAssetSummaryWithAddress(address string) *indexer.AssetSummary
 	GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexer.TxOutputInfo
-	GetBlankUtxoList(address string) []*indexer.PlainUtxo
+	GetPlainUtxoList(address string) []*indexer.PlainUtxo
 	GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error)
 	GetAllUtxosWithAddress(address string) ([]*indexer.PlainUtxo, []*indexer.PlainUtxo, error)
 	GetFeeRate() int64
@@ -395,7 +395,7 @@ func (p *IndexerClient) GetUtxoListWithTicker(address string, ticker *swire.Asse
 	return result.Data
 }
 
-func (p *IndexerClient) GetBlankUtxoList(address string) []*indexer.PlainUtxo {
+func (p *IndexerClient) GetPlainUtxoList(address string) []*indexer.PlainUtxo {
 	url := p.GetUrl("/utxo/address/" + address + "/0")
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
@@ -413,7 +413,7 @@ func (p *IndexerClient) GetBlankUtxoList(address string) []*indexer.PlainUtxo {
 	}
 
 	if result.Code != 0 {
-		Log.Errorf("GetBlankUtxoList response message %s", result.Msg)
+		Log.Errorf("GetPlainUtxoList response message %s", result.Msg)
 		return nil
 	}
 

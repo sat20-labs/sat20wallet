@@ -365,7 +365,7 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 	return outputs
 }
 
-func (p *TestIndexerClient) GetBlankUtxoList(address string) []*indexer.PlainUtxo {
+func (p *TestIndexerClient) GetPlainUtxoList(address string) []*indexer.PlainUtxo {
 	return nil
 }
 
