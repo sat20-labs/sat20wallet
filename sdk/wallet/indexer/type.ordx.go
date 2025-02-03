@@ -23,6 +23,7 @@ type TickerStatus struct {
 	EndBlock        int    `json:"endBlock" example:"200"`
 	TotalMinted     int64  `json:"totalMinted" example:"546"`
 	Limit           int64  `json:"limit" example:"100"`
+	N               int    `json:"n" example:"100"`
 	SelfMint        int    `json:"selfmint" example:"100"`
 	Max             int64  `json:"max" example:"10000"`
 	DeployHeight    int    `json:"deployHeight" example:"100"`

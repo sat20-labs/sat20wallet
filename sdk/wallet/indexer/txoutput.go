@@ -398,3 +398,11 @@ func IsFungibleToken(name *swire.AssetName) bool {
 	
 	return name.Type == ASSET_TYPE_FT
 }
+
+func IsOrdx(name *swire.AssetName) bool {
+	if name == nil {
+		return false
+	}
+	
+	return name.Protocol == PROTOCOL_NAME_ORDX && name.Type == ASSET_TYPE_FT
+}
