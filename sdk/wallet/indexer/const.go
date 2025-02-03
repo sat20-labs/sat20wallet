@@ -1,5 +1,7 @@
 package indexer
 
+import "math"
+
 
 const (
 
@@ -17,3 +19,5 @@ const (
 	PROTOCOL_NAME_BRC20 = "brc20"
 	PROTOCOL_NAME_RUNES = "runes"
 )
+
+const INVALID_ID = math.MaxUint64

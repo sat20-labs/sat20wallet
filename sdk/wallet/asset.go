@@ -49,6 +49,7 @@ func GetSizeOfTxOutputs(outputs map[string]*TxOutput_SatsNet) int64 {
 func OutputToSatsNet(output *TxOutput) *TxOutput_SatsNet {
 
 	n := TxOutput_SatsNet{
+		UtxoId:      output.UtxoId,
 		OutPointStr: output.OutPointStr,
 		OutValue: swire.TxOut{
 			Value:    output.Value(),
@@ -165,6 +166,7 @@ func ToTxAssets(assets []*indexer.AssetInfo) swire.TxAssets {
 
 func OutputInfoToOutput(output *indexer.TxOutputInfo) *TxOutput {
 	result := &TxOutput{
+		UtxoId:      output.UtxoId,
 		OutPointStr: output.OutPoint,
 		OutValue:    output.OutValue,
 		Offsets:    make(map[swire.AssetName]indexer.AssetOffsets),
@@ -181,6 +183,7 @@ func OutputInfoToOutput(output *indexer.TxOutputInfo) *TxOutput {
 
 func OutputInfoToOutput_SatsNet(output *indexer.TxOutputInfo) *TxOutput_SatsNet {
 	result := &TxOutput_SatsNet{
+		UtxoId:      output.UtxoId,
 		OutPointStr: output.OutPoint,
 		OutValue:  swire.TxOut{
 			Value:   output.OutValue.Value,

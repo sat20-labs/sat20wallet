@@ -15,6 +15,7 @@ var ASSET_PLAIN_SAT wire.AssetName = wire.AssetName{}
 
 
 type TxOutput struct {
+	UtxoId      uint64
 	OutPointStr string
 	OutValue    wire.TxOut
 	// 注意BindingSat属性，TxOutput.OutValue.Value必须大于等于
@@ -23,6 +24,7 @@ type TxOutput struct {
 
 func NewTxOutput(value int64) *TxOutput {
 	return  &TxOutput{
+		UtxoId:      indexer.INVALID_ID,
 		OutPointStr: "",
 		OutValue:    wire.TxOut{Value:value},
 	}
@@ -41,9 +43,18 @@ func CloneTxOut(a *wire.TxOut) *wire.TxOut {
 
 func (p *TxOutput) Clone() *TxOutput {
 	return &TxOutput{
+		UtxoId:      p.UtxoId,
 		OutPointStr: p.OutPointStr,
 		OutValue: *CloneTxOut(&p.OutValue),
 	}
+}
+
+func (p *TxOutput) Height() int {
+	if p.UtxoId == indexer.INVALID_ID {
+		return -1
+	}
+	h, _, _ := indexer.FromUtxoId(p.UtxoId)
+	return h
 }
 
 func (p *TxOutput) Value() int64 {
@@ -116,7 +127,13 @@ func (p *TxOutput) Merge(another *TxOutput) error {
 		return fmt.Errorf("out of bounds")
 	}
 	p.OutValue.Value += another.OutValue.Value
-	return p.OutValue.Assets.Merge(&another.OutValue.Assets)
+	err := p.OutValue.Assets.Merge(&another.OutValue.Assets)
+	if err != nil {
+		return err
+	}
+	p.OutPointStr = ""
+	p.UtxoId = indexer.INVALID_ID
+	return nil
 }
 
 func (p *TxOutput) Subtract(another *TxOutput) error {
@@ -140,6 +157,9 @@ func (p *TxOutput) Subtract(another *TxOutput) error {
 	
 	p.OutValue.Value -= another.OutValue.Value
 	p.OutValue.Assets = tmpAssets
+
+	p.OutPointStr = ""
+	p.UtxoId = indexer.INVALID_ID
 
 	return nil
 }
@@ -230,6 +250,9 @@ func (p *TxOutput) AddAsset(asset *AssetInfo) error {
 		p.OutValue.Value += asset.Amount
 	}
 
+	p.OutPointStr = ""
+	p.UtxoId = indexer.INVALID_ID
+
 	return nil
 }
 
@@ -246,6 +269,8 @@ func (p *TxOutput) SubAsset(asset *AssetInfo) error {
 			return fmt.Errorf("no enough sats")
 		}
 		p.OutValue.Value -= asset.Amount
+		p.OutPointStr = ""
+		p.UtxoId = indexer.INVALID_ID
 		return nil
 	}
 
@@ -262,6 +287,8 @@ func (p *TxOutput) SubAsset(asset *AssetInfo) error {
 
 		p.OutValue.Value -= asset.Amount
 		p.OutValue.Assets = tmpAssets
+		p.OutPointStr = ""
+		p.UtxoId = indexer.INVALID_ID
 		return nil
 	}
 
@@ -270,11 +297,15 @@ func (p *TxOutput) SubAsset(asset *AssetInfo) error {
 		return err
 	}
 
+	p.OutPointStr = ""
+	p.UtxoId = indexer.INVALID_ID
+
 	return nil
 }
 
 func GenerateTxOutput(tx *wire.MsgTx, index int) *TxOutput {
 	return &TxOutput{
+		UtxoId:      indexer.INVALID_ID,
 		OutPointStr: tx.TxHash().String() + ":" + strconv.Itoa(index),
 		OutValue:    *tx.TxOut[index],
 	}

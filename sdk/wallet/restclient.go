@@ -110,6 +110,7 @@ func (p *IndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 	}
 
 	output := TxOutput{
+		UtxoId:      result.Data.UtxoId,
 		OutPointStr: result.Data.OutPoint,
 		OutValue:    result.Data.OutValue,
 		Assets:      Assets,

@@ -345,6 +345,7 @@ type AssetInfo struct {
 }
 
 type TxOutputInfo struct {
+	UtxoId    uint64       `json:"utxoid"`
 	OutPoint  string       `json:"outpoint"`
 	OutValue  wire.TxOut   `json:"outvalue"`
 	AssetInfo []*AssetInfo `json:"assets"`

@@ -82,6 +82,7 @@ func (p *AssetOffsets) Append(another AssetOffsets) {
 type TxAssets = swire.TxAssets
 
 type TxOutput struct {
+	UtxoId      uint64
 	OutPointStr string
 	OutValue    wire.TxOut
 	//Sats        TxRanges  废弃。需要时重新获取
@@ -93,6 +94,7 @@ type TxOutput struct {
 
 func NewTxOutput(value int64) *TxOutput {
 	return &TxOutput{
+		UtxoId:      INVALID_ID,
 		OutPointStr: "",
 		OutValue:    wire.TxOut{Value: value},
 		Assets:      nil,
@@ -102,6 +104,7 @@ func NewTxOutput(value int64) *TxOutput {
 
 func (p *TxOutput) Clone() *TxOutput {
 	n := &TxOutput{
+		UtxoId:      p.UtxoId,
 		OutPointStr: p.OutPointStr,
 		OutValue:    p.OutValue,
 		Assets:      p.Assets.Clone(),
@@ -112,6 +115,14 @@ func (p *TxOutput) Clone() *TxOutput {
 		n.Offsets[i] = u.Clone()
 	}
 	return n
+}
+
+func (p *TxOutput) Height() int {
+	if p.UtxoId == INVALID_ID {
+		return -1
+	}
+	h, _, _ := FromUtxoId(p.UtxoId)
+	return h
 }
 
 func (p *TxOutput) Value() int64 {
@@ -234,6 +245,9 @@ func (p *TxOutput) Append(another *TxOutput) error {
 	}
 	p.OutValue.Value += another.OutValue.Value
 
+	p.UtxoId = INVALID_ID
+	p.OutPointStr = ""
+
 	return nil
 }
 
@@ -346,6 +360,7 @@ func (p *TxOutput) GetAsset(assetName *swire.AssetName) int64 {
 // should fill out Assets parameters.
 func GenerateTxOutput(tx *wire.MsgTx, index int) *TxOutput {
 	return &TxOutput{
+		UtxoId:      INVALID_ID,
 		OutPointStr: tx.TxHash().String() + ":" + strconv.Itoa(index),
 		OutValue:    *tx.TxOut[index],
 		Offsets:     make(map[swire.AssetName]AssetOffsets),

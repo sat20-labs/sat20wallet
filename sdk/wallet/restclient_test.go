@@ -275,6 +275,7 @@ func (p *TestIndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 	pkScript, _ := hex.DecodeString(_pkScripts[_utxoOwner[index]])
 
 	output := TxOutput{
+		UtxoId:      indexer.ToUtxoId(0,0,index),
 		OutPointStr: utxo,
 		OutValue:    wire.TxOut{Value: _utxoValue[index], PkScript: pkScript},
 		Assets:      _utxoAssets[index],
