@@ -203,7 +203,7 @@ func (p *TxOutput) SizeOfBindingSats() int64 {
 	for _, asset := range p.Assets {
 		amount := int64(0)
 		if asset.BindingSat != 0 {
-			amount = (asset.Amount / int64(asset.BindingSat))
+			amount = GetBindingSatNum(asset.Amount, asset.BindingSat)
 		}
 
 		if amount > (bindingSats) {
@@ -409,4 +409,9 @@ func IsOrdx(name *swire.AssetName) bool {
 	}
 	
 	return name.Protocol == PROTOCOL_NAME_ORDX && name.Type == ASSET_TYPE_FT
+}
+
+// amt的资产需要多少聪
+func GetBindingSatNum(amt int64, n uint16) int64 {
+	return (amt + int64(n) - 1)/int64(n)
 }

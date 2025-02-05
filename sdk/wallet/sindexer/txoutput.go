@@ -107,7 +107,7 @@ func (p *TxOutput) SizeOfBindingSats() int64 {
 	for _, asset := range p.OutValue.Assets {
 		amount := int64(0)
 		if asset.BindingSat != 0 {
-			amount = (asset.Amount / int64(asset.BindingSat))
+			amount = indexer.GetBindingSatNum(asset.Amount, asset.BindingSat)
 		}
 
 		if amount > (bindingSats) {
@@ -240,7 +240,7 @@ func (p *TxOutput) AddAsset(asset *AssetInfo) error {
 	}
 
 	if asset.BindingSat > 0 {
-		if p.OutValue.Value + asset.Amount < 0 {
+		if p.OutValue.Value + indexer.GetBindingSatNum(asset.Amount, asset.BindingSat) < 0 {
 			return fmt.Errorf("out of bounds")
 		}
 	}
@@ -251,7 +251,7 @@ func (p *TxOutput) AddAsset(asset *AssetInfo) error {
 	}
 
 	if asset.BindingSat > 0 {
-		p.OutValue.Value += asset.Amount
+		p.OutValue.Value += indexer.GetBindingSatNum(asset.Amount, asset.BindingSat)
 	}
 
 	p.OutPointStr = ""
@@ -285,11 +285,12 @@ func (p *TxOutput) SubAsset(asset *AssetInfo) error {
 			return err
 		}
 		bindingSat := tmpAssets.GetBindingSatAmout()
-		if p.OutValue.Value - asset.Amount < bindingSat {
+		satsNum := indexer.GetBindingSatNum(asset.Amount, asset.BindingSat)
+		if p.OutValue.Value - satsNum < bindingSat {
 			return fmt.Errorf("no enough sats")
 		}
 
-		p.OutValue.Value -= asset.Amount
+		p.OutValue.Value -= satsNum
 		p.OutValue.Assets = tmpAssets
 		p.OutPointStr = ""
 		p.UtxoId = indexer.INVALID_ID
