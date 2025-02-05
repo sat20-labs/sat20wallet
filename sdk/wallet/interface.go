@@ -28,6 +28,7 @@ func NewManager(cfg *Config, quit chan struct{}) *Manager {
 	mgr := &Manager{
 		cfg:           cfg,
 		walletInfoMap: nil,
+		tickerInfoMap: make(map[string]*indexer.TickerInfo),
 		bInited:       false,
 		bStop:         false,
 		quit:          quit,
@@ -540,7 +541,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 	sendAsset := swire.AssetInfo{
 		Name:       *name,
 		Amount:     amt,
-		BindingSat: indexer.IsBindingSat(name),
+		BindingSat: uint16(p.getBindingSat(name)),
 	}
 	outValue := int64(0)
 	if IsBindingSat(name) {

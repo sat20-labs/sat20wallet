@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/btcsuite/btcwallet/snacl"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
 )
 
 const (
@@ -15,6 +17,7 @@ const (
 	DB_KEY_WALLET   = "w-"
 	DB_KEY_ASSET_L1 = "asset-l1-" //  Id - subId - chain
 	DB_KEY_ASSET_L2 = "asset-l2-"
+	DB_KEY_TICKER_INFO    = "t-"
 )
 
 type Status struct {
@@ -273,4 +276,88 @@ func (p *Manager) newSnaclKey(password string) (*snacl.SecretKey, error) {
 
 func (p *Manager) IsWalletExist() bool {
 	return len(p.walletInfoMap) != 0
+}
+
+
+func GetTickerInfoKey(name string) string {
+	return fmt.Sprintf("%s%s", DB_KEY_TICKER_INFO, name)
+}
+
+func ParseTickerInfoKey(key string) (string, error) {
+	parts := strings.Split(key, "-")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid key %s", key)
+	}
+	return parts[1], nil
+}
+
+func saveTickerInfo(db common.KVDB, ticker *indexer.TickerInfo) error {
+	buf, err := EncodeToBytes(ticker)
+	if err != nil {
+		return err
+	}
+
+	err = db.Write([]byte(GetTickerInfoKey(ticker.AssetName.String())), buf)
+	if err != nil {
+		Log.Infof("saveRuneInfo failed. %v", err)
+		return err
+	}
+	Log.Infof("saveTickerInfo succ. %s", ticker.AssetName.String())
+	return nil
+}
+
+func loadTickerInfo(db common.KVDB, name *AssetName) (*indexer.TickerInfo, error) {
+	key := GetTickerInfoKey(name.String())
+
+	buf, err := db.Read([]byte(key))
+	if err != nil {
+		Log.Errorf("Read %s failed. %v", key, err)
+		return nil, err
+	}
+	var value indexer.TickerInfo
+	err = DecodeFromBytes(buf, &value)
+	if err != nil {
+		Log.Errorf("DecodeFromBytes failed. %v", err)
+		return nil, err
+	}
+
+	return &value, nil
+}
+
+// for test
+func deleteAllTickerInfoFromDB(db common.KVDB) error {
+	prefix := []byte(DB_KEY_TICKER_INFO)
+
+	result := make(map[string]bool, 0)
+	err := db.BatchRead(prefix, func(k, v []byte) error {
+
+		tickerName, err := ParseTickerInfoKey(string(k))
+		if err != nil {
+			Log.Errorf("ParseTickerInfoKey failed. %v", err)
+			return err
+		}
+
+		result[tickerName] = true
+		return nil
+	})
+
+	if err != nil {
+		return nil
+	}
+
+	batch := db.NewBatchWrite()
+	if batch == nil {
+		Log.Errorf("NewBatchWrite failed")
+		return fmt.Errorf("NewBatchWrite failed")
+	}
+	defer batch.Close()
+
+	for k := range result {
+		key := GetTickerInfoKey(k)
+		err := batch.Remove([]byte(key))
+		if err != nil {
+			Log.Errorf("db.Remove %s failed. %v", key, err)
+		}
+	}
+	return batch.Flush()
 }

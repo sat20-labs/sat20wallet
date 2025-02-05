@@ -107,7 +107,7 @@ func (p *TxOutput) SizeOfBindingSats() int64 {
 	for _, asset := range p.OutValue.Assets {
 		amount := int64(0)
 		if asset.BindingSat != 0 {
-			amount = (asset.Amount)
+			amount = (asset.Amount / int64(asset.BindingSat))
 		}
 
 		if amount > (bindingSats) {
@@ -187,6 +187,10 @@ func (p *TxOutput) Split(name *wire.AssetName, value, amt int64) (*TxOutput, *Tx
 	if err != nil {
 		return nil, nil, err
 	}
+	// n := asset.BindingSat
+	// if amt%int64(n) != 0 {
+	// 	return nil, nil, fmt.Errorf("amt must be times of %d", n)
+	// }
 
 	if asset.Amount < amt {
 		return nil, nil, fmt.Errorf("amount too large")
@@ -199,7 +203,7 @@ func (p *TxOutput) Split(name *wire.AssetName, value, amt int64) (*TxOutput, *Tx
 	part1.OutValue.Assets = wire.TxAssets{*asset1}
 	part2.OutValue.Assets = wire.TxAssets{*asset2}
 
-	if indexer.IsBindingSat(name) == 0 {
+	if !indexer.IsBindingSat(name) {
 		// runes：no offsets
 		return part1, part2, nil
 	}

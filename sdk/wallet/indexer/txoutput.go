@@ -203,7 +203,7 @@ func (p *TxOutput) SizeOfBindingSats() int64 {
 	for _, asset := range p.Assets {
 		amount := int64(0)
 		if asset.BindingSat != 0 {
-			amount = (asset.Amount)
+			amount = (asset.Amount / int64(asset.BindingSat))
 		}
 
 		if amount > (bindingSats) {
@@ -275,6 +275,10 @@ func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *T
 	if err != nil {
 		return nil, nil, err
 	}
+	n := asset.BindingSat
+	if amt%int64(n) != 0 {
+		return nil, nil, fmt.Errorf("amt must be times of %d", n)
+	}
 
 	if asset.Amount < amt {
 		return nil, nil, fmt.Errorf("amount too large")
@@ -287,7 +291,7 @@ func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *T
 	part1.Assets = swire.TxAssets{*asset1}
 	part2.Assets = swire.TxAssets{*asset2}
 
-	if IsBindingSat(name) == 0 {
+	if !IsBindingSat(name) {
 		// runes：no offsets
 		return part1, part2, nil
 	}
@@ -309,7 +313,7 @@ func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *T
 
 func (p *TxOutput) GetAssetOffset(name *swire.AssetName, amt int64) (int64, error) {
 
-	if IsBindingSat(name) == 0 {
+	if !IsBindingSat(name) {
 		return 330, nil
 	}
 
@@ -378,16 +382,16 @@ func IsPlainAsset(assetName *swire.AssetName) bool {
 	return ASSET_PLAIN_SAT == *assetName
 }
 
-func IsBindingSat(name *swire.AssetName) uint16 {
+func IsBindingSat(name *swire.AssetName) bool {
 	if name == nil {
-		return 1 // ordx asset
+		return true // ordx asset
 	}
 	if name.Protocol == PROTOCOL_NAME_ORD ||
 		name.Protocol == PROTOCOL_NAME_ORDX ||
 		name.Protocol == "" {
-		return 1
+		return true
 	}
-	return 0
+	return false
 }
 
 

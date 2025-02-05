@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
 )
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet
@@ -20,6 +21,7 @@ type Manager struct {
 	walletInfoMap map[int64]*WalletInDB
 	wallet        *InternalWallet
 	msgCallback   interface{}
+	tickerInfoMap map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
 
 	db              common.KVDB
 	http            common.HttpClient
@@ -90,4 +92,41 @@ func (p *Manager) GetFeeRate() int64 {
 		p.feeRateL1 = fr
 	}
 	return p.feeRateL1
+}
+
+
+func (p *Manager) getTickerInfo(name *AssetName) *indexer.TickerInfo {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	info, ok := p.tickerInfoMap[name.String()]
+	if ok {
+		return info
+	}
+
+	info, err := loadTickerInfo(p.db, name)
+	if err == nil {
+		return info
+	}
+
+	tickerInfo := p.l1IndexerClient.GetTickInfo(name)
+	if tickerInfo == nil {
+		Log.Errorf("GetTickInfo %s failed", name)
+		return &indexer.TickerInfo{
+			AssetName:    *name,
+			MaxSupply:    "21000000000000000", //  sats
+			Divisibility: 0,
+		}
+	}
+
+	p.tickerInfoMap[name.String()] = tickerInfo
+	saveTickerInfo(p.db, tickerInfo)
+	return tickerInfo
+}
+
+func (p *Manager) getBindingSat(name *AssetName) int {
+	info := p.getTickerInfo(name)
+	if info == nil {
+		return 0
+	}
+	return info.N
 }

@@ -16,28 +16,6 @@ var ASSET_PLAIN_SAT = indexer.ASSET_PLAIN_SAT
 type TxOutput = indexer.TxOutput
 type TxOutput_SatsNet = sindexer.TxOutput
 
-// 只支持一种资产，不处理offset
-func GetTxOutputAssets(assetName *AssetName, outputs []*TxOutput) *swire.AssetInfo {
-
-	result := swire.AssetInfo{
-		Name:       *assetName,
-		BindingSat: indexer.IsBindingSat(assetName),
-	}
-	for _, o := range outputs {
-		if indexer.IsPlainAsset(assetName) {
-			result.Amount += o.Value()
-		} else {
-			for _, u := range o.Assets {
-				if u.Name == *assetName {
-					result.Add(&u)
-				}
-			}
-		}
-	}
-
-	return &result
-}
-
 func GetSizeOfTxOutputs(outputs map[string]*TxOutput_SatsNet) int64 {
 	value := int64(0)
 	for _, o := range outputs {
@@ -66,14 +44,6 @@ func ParseAssetString(assetName string) *AssetName {
 	}
 
 	return swire.NewAssetNameFromString(assetName)
-}
-
-func NewAssetInfo(name *AssetName, amt int64) *swire.AssetInfo {
-	return &swire.AssetInfo{
-		Name:       *name,
-		Amount:     amt,
-		BindingSat: indexer.IsBindingSat(name),
-	}
 }
 
 func GenTxAssetsFromAssetInfo(asset *swire.AssetInfo) swire.TxAssets {
@@ -200,7 +170,7 @@ func IsRunes(protocol string) bool {
 }
 
 func IsBindingSat(assetName *AssetName) bool {
-	return indexer.IsBindingSat(assetName) > 0
+	return indexer.IsBindingSat(assetName)
 }
 
 func IsPlainAsset(assetName *AssetName) bool {

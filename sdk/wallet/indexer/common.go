@@ -22,6 +22,7 @@ type TickerInfo struct {
 	DeployBlocktime int64  `json:"deployBlockTime"`
 	DeployTx        string `json:"deployTx"`
 	Limit           string `json:"limit"`
+	N               int    `json:"n"`
 	TotalMinted     string `json:"totalMinted"`
 	MintTimes       int64  `json:"mintTimes"`
 	MaxSupply       string `json:"maxSupply,omitempty"`
@@ -57,7 +58,7 @@ type MintHistory struct {
 type DisplayAsset struct {
 	swire.AssetName        `json:"name"`
 	Amount  string         `json:"amount"`
-	BindingSat bool        `json:"bindingsat"`
+	BindingSat int        `json:"bindingsat"`
 	Offsets []*OffsetRange `json:"offsets"`
 }
 
