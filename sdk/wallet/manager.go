@@ -115,6 +115,7 @@ func (p *Manager) getTickerInfo(name *AssetName) *indexer.TickerInfo {
 			AssetName:    *name,
 			MaxSupply:    "21000000000000000", //  sats
 			Divisibility: 0,
+			N:            1,
 		}
 	}
 
