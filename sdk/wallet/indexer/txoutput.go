@@ -265,13 +265,16 @@ func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *T
 		return nil, nil, err
 	}
 	n := asset.BindingSat
-	if n != 0 && amt%int64(n) != 0 {
-		return nil, nil, fmt.Errorf("amt must be times of %d", n)
+	if n != 0 {
+		if amt%int64(n) != 0 {
+			return nil, nil, fmt.Errorf("amt must be times of %d", n)
+		}
+		requiredValue := GetBindingSatNum(amt, asset.BindingSat)
+		if requiredValue > value {
+			return nil, nil, fmt.Errorf("value too small")
+		}
 	}
-	requiredValue := GetBindingSatNum(amt, asset.BindingSat)
-	if requiredValue > value {
-		return nil, nil, fmt.Errorf("value too small")
-	}
+	
 
 	if asset.Amount < amt {
 		return nil, nil, fmt.Errorf("amount too large")
