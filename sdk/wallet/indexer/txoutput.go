@@ -199,18 +199,7 @@ func (p *TxOutput) TxIn_SatsNet() *swire.TxIn {
 }
 
 func (p *TxOutput) SizeOfBindingSats() int64 {
-	bindingSats := int64(0)
-	for _, asset := range p.Assets {
-		amount := int64(0)
-		if asset.BindingSat != 0 {
-			amount = GetBindingSatNum(asset.Amount, asset.BindingSat)
-		}
-
-		if amount > (bindingSats) {
-			bindingSats = amount
-		}
-	}
-	return bindingSats
+	return p.Assets.GetBindingSatAmout()
 }
 
 func (p *TxOutput) Append(another *TxOutput) error {
@@ -279,6 +268,10 @@ func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *T
 	if n != 0 && amt%int64(n) != 0 {
 		return nil, nil, fmt.Errorf("amt must be times of %d", n)
 	}
+	requiredValue := GetBindingSatNum(amt, asset.BindingSat)
+	if requiredValue > value {
+		return nil, nil, fmt.Errorf("value too small")
+	}
 
 	if asset.Amount < amt {
 		return nil, nil, fmt.Errorf("amount too large")
@@ -304,7 +297,7 @@ func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *T
 		part1.Offsets[*name] = offsets.Clone()
 		return part1, nil, nil
 	}
-	offset1, offset2 := offsets.Split(amt)
+	offset1, offset2 := offsets.Split(GetBindingSatNum(amt, n))
 	part1.Offsets[*name] = offset1
 	part2.Offsets[*name] = offset2
 
@@ -332,7 +325,13 @@ func (p *TxOutput) GetAssetOffset(name *swire.AssetName, amt int64) (int64, erro
 		return 0, fmt.Errorf("no asset in %s", p.OutPointStr)
 	}
 
-	total := p.GetAsset(name)
+	asset, err := p.Assets.Find(name)
+	if err != nil {
+		return 0, err
+	}
+	n := asset.BindingSat
+	amt = GetBindingSatNum(amt, n)
+	total := asset.Amount
 	if amt > total {
 		return 0, fmt.Errorf("amt too large")
 	} else if amt == total {

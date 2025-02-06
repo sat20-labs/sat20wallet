@@ -103,20 +103,8 @@ func (p *TxOutput) TxIn() *wire.TxIn {
 }
 
 func (p *TxOutput) SizeOfBindingSats() int64 {
-	bindingSats := int64(0)
-	for _, asset := range p.OutValue.Assets {
-		amount := int64(0)
-		if asset.BindingSat != 0 {
-			amount = indexer.GetBindingSatNum(asset.Amount, asset.BindingSat)
-		}
-
-		if amount > (bindingSats) {
-			bindingSats = amount
-		}
-	}
-	return bindingSats
+	return p.OutValue.Assets.GetBindingSatAmout()
 }
-
 
 func (p *TxOutput) Merge(another *TxOutput) error {
 	if another == nil {
@@ -191,6 +179,10 @@ func (p *TxOutput) Split(name *wire.AssetName, value, amt int64) (*TxOutput, *Tx
 	// if n != 0 && amt%int64(n) != 0 {
 	// 	return nil, nil, fmt.Errorf("amt must be times of %d", n)
 	// }
+	requiredValue := indexer.GetBindingSatNum(amt, asset.BindingSat)
+	if requiredValue > value {
+		return nil, nil, fmt.Errorf("value too small")
+	}
 
 	if asset.Amount < amt {
 		return nil, nil, fmt.Errorf("amount too large")
