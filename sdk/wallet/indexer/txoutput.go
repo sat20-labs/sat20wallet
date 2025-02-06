@@ -332,8 +332,7 @@ func (p *TxOutput) GetAssetOffset(name *swire.AssetName, amt int64) (int64, erro
 	if err != nil {
 		return 0, err
 	}
-	n := asset.BindingSat
-	amt = GetBindingSatNum(amt, n)
+	
 	total := asset.Amount
 	if amt > total {
 		return 0, fmt.Errorf("amt too large")
@@ -341,6 +340,7 @@ func (p *TxOutput) GetAssetOffset(name *swire.AssetName, amt int64) (int64, erro
 		return offsets[len(offsets)-1].End, nil
 	}
 
+	amt = GetBindingSatNum(amt, asset.BindingSat)
 	for _, off := range offsets {
 		if amt >= off.End-off.Start {
 			amt -= off.End - off.Start
@@ -415,5 +415,8 @@ func IsOrdx(name *swire.AssetName) bool {
 
 // amt的资产需要多少聪
 func GetBindingSatNum(amt int64, n uint16) int64 {
+	if n == 0 {
+		return amt
+	}
 	return (amt + int64(n) - 1)/int64(n)
 }
