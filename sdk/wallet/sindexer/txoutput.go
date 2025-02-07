@@ -195,15 +195,17 @@ func (p *TxOutput) Split(name *wire.AssetName, value, amt int64) (*TxOutput, *Tx
 	asset2.Amount = asset.Amount - amt
 
 	part1.OutValue.Assets = wire.TxAssets{*asset1}
-	part2.OutValue.Assets = wire.TxAssets{*asset2}
+	if asset2.Amount != 0 {
+		part2.OutValue.Assets = wire.TxAssets{*asset2}
+	}
 
 	if !indexer.IsBindingSat(name) {
 		// runes：no offsets
 		return part1, part2, nil
 	}
 
-	if asset.Amount == amt {
-		return part1, nil, nil
+	if part2.Zero() {
+		part2 = nil
 	}
 
 	return part1, part2, nil

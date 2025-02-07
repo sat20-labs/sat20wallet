@@ -240,7 +240,6 @@ func (p *TxOutput) Append(another *TxOutput) error {
 	return nil
 }
 
-// 非绑定资产，第一个输出的value为0，所有聪放在第二个返回值
 func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *TxOutput, error) {
 
 	if p.Value() < value {
@@ -285,7 +284,9 @@ func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *T
 	asset2.Amount = asset.Amount - amt
 
 	part1.Assets = swire.TxAssets{*asset1}
-	part2.Assets = swire.TxAssets{*asset2}
+	if asset2.Amount != 0 {
+		part2.Assets = swire.TxAssets{*asset2}
+	}
 
 	if !IsBindingSat(name) {
 		// runes：no offsets
@@ -298,7 +299,10 @@ func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *T
 	}
 	if asset.Amount == amt {
 		part1.Offsets[*name] = offsets.Clone()
-		return part1, nil, nil
+		if part2.Value() == 0 {
+			part2 = nil
+		}
+		return part1, part2, nil
 	}
 	offset1, offset2 := offsets.Split(GetBindingSatNum(amt, n))
 	part1.Offsets[*name] = offset1
