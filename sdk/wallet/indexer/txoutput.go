@@ -34,23 +34,28 @@ func (p *AssetOffsets) Clone() AssetOffsets {
 	return result
 }
 
-func (p *AssetOffsets) Split(offset int64) (AssetOffsets, AssetOffsets) {
+func (p *AssetOffsets) Split(amt int64) (AssetOffsets, AssetOffsets) {
 	var left, right []*OffsetRange
 
+	remaining := amt
+	offset := int64(0)
 	for _, r := range *p {
-		if r.End <= offset {
-			// 完全在左边
-			left = append(left, r)
-		} else if r.Start >= offset {
-			// 完全在右边
+		if remaining > 0 {
+			if r.End - r.Start <= remaining {
+				// 完全在左边
+				left = append(left, r)
+			} else {
+				// 跨越 offset，需要拆分
+				left = append(left, &OffsetRange{Start: r.Start, End: r.Start+remaining})
+				offset = r.Start+remaining
+				right = append(right, &OffsetRange{Start: 0, End: r.End - offset})
+			}
+			remaining -= r.End - r.Start
+		} else {
 			n := r.Clone()
 			n.Start -= offset
 			n.End -= offset
 			right = append(right, n)
-		} else {
-			// 跨越 offset，需要拆分
-			left = append(left, &OffsetRange{Start: r.Start, End: offset})
-			right = append(right, &OffsetRange{Start: 0, End: r.End-offset})
 		}
 	}
 
