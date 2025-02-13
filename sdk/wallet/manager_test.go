@@ -71,10 +71,6 @@ func createNode(t *testing.T, mode, dbPath string, quit chan struct{}) *Manager 
 	fmt.Printf("nodeId: %s\n", hex.EncodeToString(manager.GetWallet().GetNodePubKey().SerializeCompressed()))
 
 
-	indexerClient := NewTestIndexerClient()
-	manager.l1IndexerClient = indexerClient
-	manager.l2IndexerClient = indexerClient
-
 	return manager
 }
 
@@ -88,37 +84,4 @@ func prepare(t *testing.T) {
 	}
 
 	_client = createNode(t, "client", "../db/clientDB", lc)
-}
-
-
-func TestSend(t *testing.T) {
-	prepare(t)
-
-	
-	txId, err := _client.SendAssets_SatsNet(
-		"tb1pz747l0qfnt3q2w3ppd45u607rzse0ga85l9vvjtcj8qhcajneqsszqg7z9", 
-		"runes:f:840000_1", 10,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("SendAssets_SatsNet TxId %s\n", txId)
-
-	txId, err = _client.SendUtxos_SatsNet(
-		"tb1pz747l0qfnt3q2w3ppd45u607rzse0ga85l9vvjtcj8qhcajneqsszqg7z9", 
-		[]string{_utxos[2], _utxos[3],}, []string{_utxos[20],},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("SendUtxos_SatsNet TxId %s\n", txId)
-
-	txId, err = _client.SendUtxos(
-		"tb1pz747l0qfnt3q2w3ppd45u607rzse0ga85l9vvjtcj8qhcajneqsszqg7z9", 
-		[]string{_utxos[2], _utxos[3],}, 330,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("SendUtxos TxId %s\n", txId)
 }
