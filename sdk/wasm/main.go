@@ -22,6 +22,28 @@ const (
 var _mgr *wallet.Manager
 var _callback interface{}
 
+
+type AsyncTaskFunc func() (interface{}, int, string)
+
+func createAsyncJsHandler(task AsyncTaskFunc) js.Func {
+	return js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		resolve := args[0]
+		// reject := args[1]
+
+		go func() {
+			data, code, msg := task()
+			result := createJsRet(data, code, msg)
+			jsResult := js.Global().Get("Object").New()
+			for key, value := range result {
+				jsResult.Set(key, value)
+			}
+			resolve.Invoke(jsResult)
+		}()
+
+		return nil
+	})
+}
+
 var createJsRet = func(data any, code int, msg string) map[string]any {
 	return map[string]any{
 		"data": data,
@@ -164,13 +186,23 @@ func initManager(this js.Value, p []js.Value) any {
 	wallet.Log.SetLevel(logLevel)
 
 
-	_mgr = wallet.NewManager(cfg, make(chan struct{}))
-	if _mgr == nil {
-		return createJsRet(nil, -1, "NewManager failed")
-	}
-		
-	wallet.Log.Info("Manager created")
-	return createJsRet(nil, 0, "ok")
+	// _mgr = wallet.NewManager(cfg, make(chan struct{}))
+	// if _mgr == nil {
+	// 	return createJsRet(nil, -1, "NewManager failed")
+	// }
+	// wallet.Log.Info("Manager created")
+	// return createJsRet(nil, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		_mgr = wallet.NewManager(cfg, make(chan struct{}))
+		if _mgr == nil {
+			return nil, -1, "NewManager failed"
+		}
+		wallet.Log.Info("Manager created")
+		return nil, 0, "ok"
+	})
+
+	return js.Global().Get("Promise").New(handler)
 }
 
 func releaseManager(this js.Value, p []js.Value) any {
@@ -194,23 +226,46 @@ func createWallet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "password parameter should be a string")
 	}
 	password := p[0].String()
-	id, mnemonic, err := _mgr.CreateWallet(password)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data := map[string]any{
-		"walletId": id,
-		"mnemonic": mnemonic,
-	}
-	return createJsRet(data, 0, "ok")
+	
+	// id, mnemonic, err := _mgr.CreateWallet(password)
+	// if err != nil {
+	// 	return createJsRet(nil, -1, err.Error())
+	// }
+	// data := map[string]any{
+	// 	"walletId": id,
+	// 	"mnemonic": mnemonic,
+	// }
+	// return createJsRet(data, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		id, mnemonic, err := _mgr.CreateWallet(password)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		wallet.Log.Info("wallet created")
+		return map[string]interface{}{
+			"walletId": id,
+			"mnemonic": mnemonic,
+		}, 0, "ok"
+	})
+
+	return js.Global().Get("Promise").New(handler)
 }
 
 func isWalletExist(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	exist := _mgr.IsWalletExist()
-	return createJsRet(exist, 0, "ok")
+	// exist := _mgr.IsWalletExist()
+	// return createJsRet(exist, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		exist := _mgr.IsWalletExist()
+		return map[string]interface{}{
+			"exists": exist,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func importWallet(this js.Value, p []js.Value) any {
@@ -232,14 +287,27 @@ func importWallet(this js.Value, p []js.Value) any {
 	password := p[1].String()
 
 	wallet.Log.Infof("ImportWallet %s %s", mnemonic, password)
-	id, err := _mgr.ImportWallet(mnemonic, password)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data := map[string]any{
-		"walletId": id,
-	}
-	return createJsRet(data, 0, "ok")
+	
+	// id, err := _mgr.ImportWallet(mnemonic, password)
+	// if err != nil {
+	// 	return createJsRet(nil, -1, err.Error())
+	// }
+	// data := map[string]any{
+	// 	"walletId": id,
+	// }
+	// return createJsRet(data, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		id, err := _mgr.ImportWallet(mnemonic, password)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{
+			"walletId": id,
+		}, 0, "ok"
+	})
+
+	return js.Global().Get("Promise").New(handler)
 }
 
 func unlockWallet(this js.Value, p []js.Value) any {
@@ -253,14 +321,26 @@ func unlockWallet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "password parameter should be a string")
 	}
 	password := p[0].String()
-	id, err := _mgr.UnlockWallet(password)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data := map[string]any{
-		"walletId": id,
-	}
-	return createJsRet(data, 0, "ok")
+	
+	// id, err := _mgr.UnlockWallet(password)
+	// if err != nil {
+	// 	return createJsRet(nil, -1, err.Error())
+	// }
+	// data := map[string]any{
+	// 	"walletId": id,
+	// }
+	// return createJsRet(data, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		id, err := _mgr.UnlockWallet(password)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{
+			"walletId": id,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getAllWallets(this js.Value, p []js.Value) any {
@@ -268,23 +348,43 @@ func getAllWallets(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 
-	ids := _mgr.GetAllWallets()
+	// ids := _mgr.GetAllWallets()
 
-	type WalletIdAndAccounts struct {
-		Id int64
-		Accounts int
-	}
-	result := make([]*WalletIdAndAccounts, 0)
-	for k, v := range ids {
-		result = append(result, &WalletIdAndAccounts{Id: k, Accounts: v})
-	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Id < result[j].Id
+	// type WalletIdAndAccounts struct {
+	// 	Id int64
+	// 	Accounts int
+	// }
+	// result := make([]*WalletIdAndAccounts, 0)
+	// for k, v := range ids {
+	// 	result = append(result, &WalletIdAndAccounts{Id: k, Accounts: v})
+	// }
+	// sort.Slice(result, func(i, j int) bool {
+	// 	return result[i].Id < result[j].Id
+	// })
+	// data := map[string]any{
+	// 	"walletIds": result,
+	// }
+	// return createJsRet(data, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		ids := _mgr.GetAllWallets()
+
+		type WalletIdAndAccounts struct {
+			Id int64
+			Accounts int
+		}
+		result := make([]*WalletIdAndAccounts, 0)
+		for k, v := range ids {
+			result = append(result, &WalletIdAndAccounts{Id: k, Accounts: v})
+		}
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].Id < result[j].Id
+		})
+		return map[string]interface{}{
+			"walletIds": result,
+		}, 0, "ok"
 	})
-	data := map[string]any{
-		"walletIds": result,
-	}
-	return createJsRet(data, 0, "ok")
+	return js.Global().Get("Promise").New(handler)
 }
 
 func switchWallet(this js.Value, p []js.Value) any {
@@ -299,9 +399,14 @@ func switchWallet(this js.Value, p []js.Value) any {
 	}
 	id := p[0].Int()
 
-	_mgr.SwitchWallet(int64(id))
+	// _mgr.SwitchWallet(int64(id))
+	// return createJsRet(nil, 0, "ok")
 
-	return createJsRet(nil, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		_mgr.SwitchWallet(int64(id))
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func switchAccount(this js.Value, p []js.Value) any {
@@ -316,9 +421,14 @@ func switchAccount(this js.Value, p []js.Value) any {
 	}
 	id := p[0].Int()
 
-	_mgr.SwitchAccount(uint32(id))
+	// _mgr.SwitchAccount(uint32(id))
+	// return createJsRet(nil, 0, "ok")
 
-	return createJsRet(nil, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		_mgr.SwitchAccount(uint32(id))
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func switchChain(this js.Value, p []js.Value) any {
@@ -333,9 +443,14 @@ func switchChain(this js.Value, p []js.Value) any {
 	}
 	chain := p[0].String()
 
-	_mgr.SwitchChain(chain)
+	// _mgr.SwitchChain(chain)
+	// return createJsRet(nil, 0, "ok")
 
-	return createJsRet(nil, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		_mgr.SwitchChain(chain)
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getMnemonic(this js.Value, p []js.Value) any {
@@ -355,11 +470,19 @@ func getMnemonic(this js.Value, p []js.Value) any {
 	}
 	password := p[1].String()
 
-	mnemonic := _mgr.GetMnemonic(int64(id), password)
-	data := map[string]any{
-		"mnemonic": mnemonic,
-	}
-	return createJsRet(data, 0, "ok")
+	// mnemonic := _mgr.GetMnemonic(int64(id), password)
+	// data := map[string]any{
+	// 	"mnemonic": mnemonic,
+	// }
+	// return createJsRet(data, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		mnemonic := _mgr.GetMnemonic(int64(id), password)
+		return map[string]interface{}{
+			"mnemonic": mnemonic,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getWalletAddress(this js.Value, p []js.Value) any {
@@ -373,14 +496,26 @@ func getWalletAddress(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Id parameter should be a number")
 	}
 	id := p[0].Int()
-	_wallet := _mgr.GetWallet()
-	if _wallet == nil {
-		return createJsRet(nil, -1, "wallet is nil")
-	}
-	data := map[string]any{
-		"address": _wallet.GetAddress(uint32(id)),
-	}
-	return createJsRet(data, 0, "ok")
+	
+	// wallet := _mgr.GetWallet()
+	// if wallet == nil {
+	// 	return createJsRet(nil, -1, "wallet is nil")
+	// }
+	// data := map[string]any{
+	// 	"address": wallet.GetAddress(uint32(id)),
+	// }
+	// return createJsRet(data, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		wallet := _mgr.GetWallet()
+		if wallet == nil {
+			return nil, -1, "wallet is nil"
+		}
+		return map[string]interface{}{
+			"address": wallet.GetAddress(uint32(id)),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getWalletPubkey(this js.Value, p []js.Value) any {
@@ -394,11 +529,20 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Id parameter should be a number")
 	}
 	id := p[0].Int()
-	pubkey := _mgr.GetPublicKey(uint32(id))
-	data := map[string]any{
-		"pubKey": hex.EncodeToString(pubkey),
-	}
-	return createJsRet(data, 0, "ok")
+	
+	// pubkey := _mgr.GetPublicKey(uint32(id))
+	// data := map[string]any{
+	// 	"pubKey": hex.EncodeToString(pubkey),
+	// }
+	// return createJsRet(data, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		pubkey := _mgr.GetPublicKey(uint32(id))
+		return map[string]interface{}{
+			"pubKey": hex.EncodeToString(pubkey),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getCommitRootKey(this js.Value, p []js.Value) any {
@@ -410,9 +554,6 @@ func getCommitRootKey(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Expected 1 parameters")
 	}
 
-	// jsBytes := p[0]
-	// goBytes := make([]byte, jsBytes.Length())
-	// js.CopyBytesToGo(goBytes, jsBytes)
 	if p[0].Type() != js.TypeString {
 		return createJsRet(nil, -1, "nodeId parameter should be a string")
 	}
@@ -421,14 +562,19 @@ func getCommitRootKey(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 
-	result := _mgr.GetCommitRootKey(id)
+	// result := _mgr.GetCommitRootKey(id)
+	// data := map[string]any{
+	// 	"commitRootKey": hex.EncodeToString(result),
+	// }
+	// return createJsRet(data, 0, "ok")
 
-	// jsBytes = js.Global().Get("Uint8Array").New(len(result))
-	// js.CopyBytesToJS(jsBytes, result)
-	data := map[string]any{
-		"commitRootKey": hex.EncodeToString(result),
-	}
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result := _mgr.GetCommitRootKey(id)
+		return map[string]interface{}{
+			"commitRootKey": hex.EncodeToString(result),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getCommitSecret(this js.Value, p []js.Value) any {
@@ -457,14 +603,21 @@ func getCommitSecret(this js.Value, p []js.Value) any {
 	}
 	index := p[1].Int()
 
-	result := _mgr.GetCommitSecret(id, index)
+	// result := _mgr.GetCommitSecret(id, index)
+	// // jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	// // js.CopyBytesToJS(jsBytes, result)
+	// data := map[string]any{
+	// 	"commitSecret": hex.EncodeToString(result),
+	// }
+	// return createJsRet(data, 0, "ok")
 
-	// jsBytes = js.Global().Get("Uint8Array").New(len(result))
-	// js.CopyBytesToJS(jsBytes, result)
-	data := map[string]any{
-		"commitSecret": hex.EncodeToString(result),
-	}
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result := _mgr.GetCommitSecret(id, index)
+		return map[string]interface{}{
+			"commitSecret": hex.EncodeToString(result),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func deriveRevocationPrivKey(this js.Value, p []js.Value) any {
@@ -487,14 +640,21 @@ func deriveRevocationPrivKey(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 
-	result := _mgr.DeriveRevocationPrivKey(secrect)
+	// result := _mgr.DeriveRevocationPrivKey(secrect)
+	// // jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	// // js.CopyBytesToJS(jsBytes, result)
+	// data := map[string]any{
+	// 	"revocationPrivKey": hex.EncodeToString(result),
+	// }
+	// return createJsRet(data, 0, "ok")
 
-	// jsBytes = js.Global().Get("Uint8Array").New(len(result))
-	// js.CopyBytesToJS(jsBytes, result)
-	data := map[string]any{
-		"revocationPrivKey": hex.EncodeToString(result),
-	}
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result := _mgr.DeriveRevocationPrivKey(secrect)
+		return map[string]interface{}{
+			"revocationPrivKey": hex.EncodeToString(result),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getRevocationBaseKey(this js.Value, p []js.Value) any {
@@ -502,14 +662,21 @@ func getRevocationBaseKey(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 
-	result := _mgr.GetRevocationBaseKey()
+	// result := _mgr.GetRevocationBaseKey()
+	// // jsBytes := js.Global().Get("Uint8Array").New(len(result))
+	// // js.CopyBytesToJS(jsBytes, result)
+	// data := map[string]any{
+	// 	"revocationBaseKey": hex.EncodeToString(result),
+	// }
+	// return createJsRet(data, 0, "ok")
 
-	// jsBytes := js.Global().Get("Uint8Array").New(len(result))
-	// js.CopyBytesToJS(jsBytes, result)
-	data := map[string]any{
-		"revocationBaseKey": hex.EncodeToString(result),
-	}
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result := _mgr.GetRevocationBaseKey()
+		return map[string]interface{}{
+			"revocationBaseKey": hex.EncodeToString(result),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getNodePubKey(this js.Value, p []js.Value) any {
@@ -517,14 +684,21 @@ func getNodePubKey(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 
-	result := _mgr.GetNodePubKey()
+	// result := _mgr.GetNodePubKey()
+	// // jsBytes := js.Global().Get("Uint8Array").New(len(result))
+	// // js.CopyBytesToJS(jsBytes, result)
+	// data := map[string]any{
+	// 	"nodePubKey": hex.EncodeToString(result),
+	// }
+	// return createJsRet(data, 0, "ok")
 
-	// jsBytes := js.Global().Get("Uint8Array").New(len(result))
-	// js.CopyBytesToJS(jsBytes, result)
-	data := map[string]any{
-		"nodePubKey": hex.EncodeToString(result),
-	}
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result := _mgr.GetNodePubKey()
+		return map[string]interface{}{
+			"nodePubKey": hex.EncodeToString(result),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func signMessage(this js.Value, p []js.Value) any {
@@ -547,17 +721,28 @@ func signMessage(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 
-	result, err := _mgr.SignMessage(msgBytes)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
+	// result, err := _mgr.SignMessage(msgBytes)
+	// if err != nil {
+	// 	return createJsRet(nil, -1, err.Error())
+	// }
 
-	// jsBytes = js.Global().Get("Uint8Array").New(len(result))
-	// js.CopyBytesToJS(jsBytes, result)
-	data := map[string]any{
-		"signature": hex.EncodeToString(result),
-	}
-	return createJsRet(data, 0, "ok")
+	// // jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	// // js.CopyBytesToJS(jsBytes, result)
+	// data := map[string]any{
+	// 	"signature": hex.EncodeToString(result),
+	// }
+	// return createJsRet(data, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.SignMessage(msgBytes)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{
+			"signature": hex.EncodeToString(result),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func signPsbt(this js.Value, p []js.Value) any {
@@ -574,15 +759,25 @@ func signPsbt(this js.Value, p []js.Value) any {
 	}
 	psbtHex := p[0].String()
 
-	result, err := _mgr.SignPsbt(psbtHex)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
+	// result, err := _mgr.SignPsbt(psbtHex)
+	// if err != nil {
+	// 	return createJsRet(nil, -1, err.Error())
+	// }
+	// data := map[string]any{
+	// 	"psbt": result,
+	// }
+	// return createJsRet(data, 0, "ok")
 
-	data := map[string]any{
-		"psbt": result,
-	}
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.SignPsbt(psbtHex)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{
+			"psbt": result,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func signPsbt_SatsNet(this js.Value, p []js.Value) any {
@@ -599,15 +794,25 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 	}
 	psbtHex := p[0].String()
 
-	result, err := _mgr.SignPsbt_SatsNet(psbtHex)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
+	// result, err := _mgr.SignPsbt_SatsNet(psbtHex)
+	// if err != nil {
+	// 	return createJsRet(nil, -1, err.Error())
+	// }
+	// data := map[string]any{
+	// 	"psbt": result,
+	// }
+	// return createJsRet(data, 0, "ok")
 
-	data := map[string]any{
-		"psbt": result,
-	}
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.SignPsbt_SatsNet(psbtHex)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{
+			"psbt": result,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getVersion(this js.Value, p []js.Value) any {
