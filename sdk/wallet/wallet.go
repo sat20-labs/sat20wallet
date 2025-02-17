@@ -317,6 +317,11 @@ func (p *InternalWallet) getRevocationBaseKey(change uint32) (*secp256k1.Private
 }
 
 func (p *InternalWallet) GetNodePubKey() *secp256k1.PublicKey {
+
+	// 修改为跟支付钱包是同一个key
+	return p.GetPaymentPubKey()
+
+	/* 
 	purpose := getPurposeFromAddrType("LND")
 	account := getAccountFromFamilyKey(KeyFamilyNodeKey)
 	key := uint64(purpose)<<32 + uint64(account)
@@ -337,6 +342,7 @@ func (p *InternalWallet) GetNodePubKey() *secp256k1.PublicKey {
 	}
 
 	return pubkey
+	*/
 }
 
 func (p *InternalWallet) GetPaymentPubKey() *secp256k1.PublicKey {
