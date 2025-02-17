@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
+	common "github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
 	"github.com/sat20-labs/satsnet_btcd/wire"
 )
 
@@ -24,7 +24,7 @@ type TxOutput struct {
 
 func NewTxOutput(value int64) *TxOutput {
 	return  &TxOutput{
-		UtxoId:      indexer.INVALID_ID,
+		UtxoId:      common.INVALID_ID,
 		OutPointStr: "",
 		OutValue:    wire.TxOut{Value:value},
 	}
@@ -50,10 +50,10 @@ func (p *TxOutput) Clone() *TxOutput {
 }
 
 func (p *TxOutput) Height() int {
-	if p.UtxoId == indexer.INVALID_ID {
+	if p.UtxoId == common.INVALID_ID {
 		return -1
 	}
-	h, _, _ := indexer.FromUtxoId(p.UtxoId)
+	h, _, _ := common.FromUtxoId(p.UtxoId)
 	return h
 }
 
@@ -106,6 +106,7 @@ func (p *TxOutput) SizeOfBindingSats() int64 {
 	return p.OutValue.Assets.GetBindingSatAmout()
 }
 
+
 func (p *TxOutput) Merge(another *TxOutput) error {
 	if another == nil {
 		return nil
@@ -120,7 +121,7 @@ func (p *TxOutput) Merge(another *TxOutput) error {
 		return err
 	}
 	p.OutPointStr = ""
-	p.UtxoId = indexer.INVALID_ID
+	p.UtxoId = common.INVALID_ID
 	return nil
 }
 
@@ -147,7 +148,7 @@ func (p *TxOutput) Subtract(another *TxOutput) error {
 	p.OutValue.Assets = tmpAssets
 
 	p.OutPointStr = ""
-	p.UtxoId = indexer.INVALID_ID
+	p.UtxoId = common.INVALID_ID
 
 	return nil
 }
@@ -180,7 +181,7 @@ func (p *TxOutput) Split(name *wire.AssetName, value, amt int64) (*TxOutput, *Tx
 		// if amt%int64(n) != 0 {
 		// 	return nil, nil, fmt.Errorf("amt must be times of %d", n)
 		// }
-		requiredValue := indexer.GetBindingSatNum(amt, asset.BindingSat)
+		requiredValue := common.GetBindingSatNum(amt, asset.BindingSat)
 		if requiredValue > value {
 			return nil, nil, fmt.Errorf("value too small")
 		}
@@ -199,7 +200,7 @@ func (p *TxOutput) Split(name *wire.AssetName, value, amt int64) (*TxOutput, *Tx
 		part2.OutValue.Assets = wire.TxAssets{*asset2}
 	}
 
-	if !indexer.IsBindingSat(name) {
+	if !common.IsBindingSat(name) {
 		// runes：no offsets
 		return part1, part2, nil
 	}
@@ -236,7 +237,7 @@ func (p *TxOutput) AddAsset(asset *AssetInfo) error {
 	}
 
 	if asset.BindingSat > 0 {
-		if p.OutValue.Value + indexer.GetBindingSatNum(asset.Amount, asset.BindingSat) < 0 {
+		if p.OutValue.Value + common.GetBindingSatNum(asset.Amount, asset.BindingSat) < 0 {
 			return fmt.Errorf("out of bounds")
 		}
 	}
@@ -247,11 +248,11 @@ func (p *TxOutput) AddAsset(asset *AssetInfo) error {
 	}
 
 	if asset.BindingSat > 0 {
-		p.OutValue.Value += indexer.GetBindingSatNum(asset.Amount, asset.BindingSat)
+		p.OutValue.Value += common.GetBindingSatNum(asset.Amount, asset.BindingSat)
 	}
 
 	p.OutPointStr = ""
-	p.UtxoId = indexer.INVALID_ID
+	p.UtxoId = common.INVALID_ID
 
 	return nil
 }
@@ -270,7 +271,7 @@ func (p *TxOutput) SubAsset(asset *AssetInfo) error {
 		}
 		p.OutValue.Value -= asset.Amount
 		p.OutPointStr = ""
-		p.UtxoId = indexer.INVALID_ID
+		p.UtxoId = common.INVALID_ID
 		return nil
 	}
 
@@ -281,7 +282,7 @@ func (p *TxOutput) SubAsset(asset *AssetInfo) error {
 			return err
 		}
 		bindingSat := tmpAssets.GetBindingSatAmout()
-		satsNum := indexer.GetBindingSatNum(asset.Amount, asset.BindingSat)
+		satsNum := common.GetBindingSatNum(asset.Amount, asset.BindingSat)
 		if p.OutValue.Value - satsNum < bindingSat {
 			return fmt.Errorf("no enough sats")
 		}
@@ -289,7 +290,7 @@ func (p *TxOutput) SubAsset(asset *AssetInfo) error {
 		p.OutValue.Value -= satsNum
 		p.OutValue.Assets = tmpAssets
 		p.OutPointStr = ""
-		p.UtxoId = indexer.INVALID_ID
+		p.UtxoId = common.INVALID_ID
 		return nil
 	}
 
@@ -299,14 +300,14 @@ func (p *TxOutput) SubAsset(asset *AssetInfo) error {
 	}
 
 	p.OutPointStr = ""
-	p.UtxoId = indexer.INVALID_ID
+	p.UtxoId = common.INVALID_ID
 
 	return nil
 }
 
 func GenerateTxOutput(tx *wire.MsgTx, index int) *TxOutput {
 	return &TxOutput{
-		UtxoId:      indexer.INVALID_ID,
+		UtxoId:      common.INVALID_ID,
 		OutPointStr: tx.TxHash().String() + ":" + strconv.Itoa(index),
 		OutValue:    *tx.TxOut[index],
 	}
