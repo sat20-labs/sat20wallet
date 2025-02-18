@@ -443,7 +443,7 @@ func IsOrdx(name *swire.AssetName) bool {
 }
 
 // amt的资产需要多少聪
-func GetBindingSatNum(amt int64, n uint16) int64 {
+func GetBindingSatNum(amt int64, n uint32) int64 {
 	if n == 0 {
 		return 0
 	}
