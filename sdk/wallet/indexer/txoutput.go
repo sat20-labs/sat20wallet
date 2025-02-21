@@ -82,6 +82,31 @@ func (p *AssetOffsets) Cat(r2 *OffsetRange) {
 	}
 }
 
+// Insert 将一个新的 OffsetRange 插入到 AssetOffsets 中，保持排序，并合并相邻的区间
+func (p *AssetOffsets) Insert(r2 *OffsetRange) {
+    // 找到插入的位置
+    i := 0
+    for i < len(*p) && (*p)[i].End <= r2.Start {
+        i++
+    }
+
+    // 将新范围插入到合适的位置
+    *p = append(*p, nil) // 扩展切片
+    copy((*p)[i+1:], (*p)[i:]) // 将插入位置后的元素向后移动
+    (*p)[i] = r2 // 插入新元素
+
+    // 合并相邻的区间
+    if i > 0 && (*p)[i-1].End >= (*p)[i].Start { // 如果与前一个区间相邻，合并
+        (*p)[i-1].End = max((*p)[i-1].End, (*p)[i].End)
+        *p = append((*p)[:i], (*p)[i+1:]...) // 移除合并后的区间
+        i-- // 退回到合并后的区间
+    }
+    if i < len(*p)-1 && (*p)[i].End >= (*p)[i+1].Start { // 如果与后一个区间相邻，合并
+        (*p)[i].End = max((*p)[i].End, (*p)[i+1].End)
+        *p = append((*p)[:i+1], (*p)[i+2:]...) // 移除合并后的区间
+    }
+}
+
 // another 已经调整过偏移值
 func (p *AssetOffsets) Append(another AssetOffsets) {
 	var r1, r2 *OffsetRange
