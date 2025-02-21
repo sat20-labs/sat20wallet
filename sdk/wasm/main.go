@@ -716,25 +716,22 @@ func signMessage(this js.Value, p []js.Value) any {
 	if p[0].Type() != js.TypeString {
 		return createJsRet(nil, -1, "message parameter should be a string")
 	}
-	msgBytes, err := hex.DecodeString(p[0].String())
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
+	msgBytes := p[0].String()
 
 	// result, err := _mgr.SignMessage(msgBytes)
 	// if err != nil {
 	// 	return createJsRet(nil, -1, err.Error())
 	// }
 
-	// // jsBytes = js.Global().Get("Uint8Array").New(len(result))
-	// // js.CopyBytesToJS(jsBytes, result)
+	// jsBytes = js.Global().Get("Uint8Array").New(len(result))
+	// js.CopyBytesToJS(jsBytes, result)
 	// data := map[string]any{
 	// 	"signature": hex.EncodeToString(result),
 	// }
 	// return createJsRet(data, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.SignMessage(msgBytes)
+		result, err := _mgr.SignMessage([]byte(msgBytes))
 		if err != nil {
 			return nil, -1, err.Error()
 		}
