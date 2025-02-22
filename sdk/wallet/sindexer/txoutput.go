@@ -153,6 +153,7 @@ func (p *TxOutput) Subtract(another *TxOutput) error {
 	return nil
 }
 
+// 聪网utxo允许有多种资产，但没有offset属性
 func (p *TxOutput) Split(name *wire.AssetName, value, amt int64) (*TxOutput, *TxOutput, error) {
 
 	if p.Value() < value {
@@ -169,6 +170,7 @@ func (p *TxOutput) Split(name *wire.AssetName, value, amt int64) (*TxOutput, *Tx
 		if p.Value() < amt {
 			return nil, nil, fmt.Errorf("amount too large")
 		}
+		part2.OutValue.Assets = p.OutValue.Assets
 		return part1, part2, nil
 	}
 
@@ -192,16 +194,13 @@ func (p *TxOutput) Split(name *wire.AssetName, value, amt int64) (*TxOutput, *Tx
 	}
 	asset1 := asset.Clone()
 	asset1.Amount = amt
-	asset2 := asset.Clone()
-	asset2.Amount = asset.Amount - amt
+	assets2 := p.OutValue.Assets.Clone()
+	assets2.Subtract(asset1)
 
 	part1.OutValue.Assets = wire.TxAssets{*asset1}
-	if asset2.Amount != 0 {
-		part2.OutValue.Assets = wire.TxAssets{*asset2}
-	}
+	part2.OutValue.Assets = assets2
 
 	if !common.IsBindingSat(name) {
-		// runes：no offsets
 		return part1, part2, nil
 	}
 

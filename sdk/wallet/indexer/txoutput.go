@@ -291,10 +291,14 @@ func (p *TxOutput) Append(another *TxOutput) error {
 	return nil
 }
 
+// 主网utxo，在处理过程中只允许处理一种资产，所以这里最多只有一种资产
 func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *TxOutput, error) {
 
 	if p.Value() < value {
 		return nil, nil, fmt.Errorf("output value too small")
+	}
+	if len(p.Assets) > 1 {
+		return nil, nil, fmt.Errorf("only one asset can be processed in mainnet utxo")
 	}
 	
 	var value1, value2 int64
@@ -307,6 +311,8 @@ func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *T
 		if p.Value() < amt {
 			return nil, nil, fmt.Errorf("amount too large")
 		}
+		part2.Assets = p.Assets
+		part2.Offsets = p.Offsets
 		return part1, part2, nil
 	}
 
@@ -330,16 +336,15 @@ func (p *TxOutput) Split(name *swire.AssetName, value, amt int64) (*TxOutput, *T
 	}
 	asset1 := asset.Clone()
 	asset1.Amount = amt
-	asset2 := asset.Clone()
-	asset2.Amount = asset.Amount - amt
+	assets2 := p.Assets.Clone()
+	assets2.Subtract(asset1)
 
 	part1.Assets = swire.TxAssets{*asset1}
-	if asset2.Amount != 0 {
-		part2.Assets = swire.TxAssets{*asset2}
-	}
+	part2.Assets = assets2
 
 	if !IsBindingSat(name) {
 		// runes：no offsets
+		part2.Offsets = p.Offsets
 		return part1, part2, nil
 	}
 
