@@ -79,6 +79,47 @@ func parseConfigFromJS(jsConfig js.Value) (*wallet.Config, error) {
 	return cfg, nil
 }
 
+
+func dbTest(this js.Value, p []js.Value) any {
+	if len(p) < 2 {
+		const errMsg = "Expected 2 parameters: key, value"
+		wallet.Log.Error(errMsg)
+		return createJsRet(nil, 1, errMsg)
+	}
+
+	if p[0].Type() != js.TypeString {
+		wallet.Log.Error("Second parameter should be a string")
+		return "Error: Second parameter should be a string"
+	}
+	key := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		wallet.Log.Error("Second parameter should be a string")
+		return "Error: Second parameter should be a string"
+	}
+	value := p[1].String()
+
+
+	db := wallet.NewKVDB("")
+	err := db.Write([]byte(key), []byte(value))
+	if err != nil {
+		wallet.Log.Errorf("db.Write failed, %v", err)
+		return err
+	}
+
+	value2, err := db.Read([]byte(key))
+	if err != nil {
+		wallet.Log.Errorf("db.Read failed, %v", err)
+		return err
+	}
+	msg := "ok"
+	if value != string(value2) {
+		msg = fmt.Sprintf("input %s, but output %s", value, string(value2))
+	}
+	
+	return createJsRet(nil, 0, msg)
+}
+
 func batchDbTest(this js.Value, p []js.Value) any {
 	if len(p) < 4 {
 		const errMsg = "Expected 4 parameters: int, string, bool, and string array"
@@ -304,6 +345,7 @@ func importWallet(this js.Value, p []js.Value) any {
 		}
 		return map[string]interface{}{
 			"walletId": id,
+			"address": _mgr.GetWallet().GetAddress(0),
 		}, 0, "ok"
 	})
 
@@ -858,7 +900,8 @@ func getStringVector(p js.Value) ([]string, error) {
 
 func main() {
 	obj := js.Global().Get("Object").New()
-	//obj.Set("batchDbTest", js.FuncOf(batchDbTest))
+	obj.Set("batchDbTest", js.FuncOf(batchDbTest))
+	obj.Set("dbTest", js.FuncOf(dbTest))
 	// input: cfg, loglevel; return: ok
 	obj.Set("init", js.FuncOf(initManager))
 	// input: none
