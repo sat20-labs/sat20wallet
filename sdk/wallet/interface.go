@@ -127,16 +127,21 @@ func (p *Manager) GetAllWallets() map[int64]int {
 	return result
 }
 
-func (p *Manager) SwitchWallet(id int64) {
+func (p *Manager) SwitchWallet(id int64) error {
 	if p.status.CurrentWallet == id {
-		return
+		return nil
 	}
 
 	p.status.CurrentWallet = id
+	oldWallet := p.wallet
+	p.wallet = nil
 	_, err := p.UnlockWallet(p.password)
 	if err == nil {
 		p.saveStatus()
+	} else {
+		p.wallet = oldWallet
 	}
+	return err
 }
 
 func (p *Manager) SwitchAccount(id uint32) {
@@ -148,18 +153,24 @@ func (p *Manager) SwitchAccount(id uint32) {
 	p.saveStatus()
 }
 
-func (p *Manager) SwitchChain(chain string) {
+func (p *Manager) SwitchChain(chain string) error {
 	if _chain == chain {
-		return
+		return nil
 	}
 	if chain == "mainnet" || chain == "testnet" {
 		_chain = chain
 		p.status.CurrentChain = chain
+		oldWallet := p.wallet
+		p.wallet = nil
 		_, err := p.UnlockWallet(p.password)
 		if err == nil {
 			p.saveStatus()
+		} else {
+			p.wallet = oldWallet
 		}
+		return err
 	}
+	return fmt.Errorf("invalid chain %s", chain)
 }
 
 func (p *Manager) GetChain() string {

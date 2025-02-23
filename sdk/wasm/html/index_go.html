@@ -15,6 +15,7 @@
     <button id="createWallet">createWallet</button>
     <button id="importWallet">importWallet</button>
     <button id="unlockWallet">unlockWallet</button>
+    <button id="switchChain">switchChain</button>
     <div id="result"></div>
 
     <!-- Ensure wasm_exec.js is loaded before using Go object -->
@@ -97,6 +98,11 @@
         document.getElementById('unlockWallet').addEventListener('click', async () => {
             const password = "123456";
             executeWasmFunction('unlockWallet', password);
+        });
+
+        document.getElementById('switchChain').addEventListener('click', async () => {
+            const chain = "mainnet";
+            executeWasmFunction('switchChain', chain);
         });
 
     </script>

@@ -445,7 +445,10 @@ func switchWallet(this js.Value, p []js.Value) any {
 	// return createJsRet(nil, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		_mgr.SwitchWallet(int64(id))
+		err := _mgr.SwitchWallet(int64(id))
+		if err != nil {
+			return nil, -1, err.Error()
+		}
 		return nil, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
@@ -485,11 +488,11 @@ func switchChain(this js.Value, p []js.Value) any {
 	}
 	chain := p[0].String()
 
-	// _mgr.SwitchChain(chain)
-	// return createJsRet(nil, 0, "ok")
-
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		_mgr.SwitchChain(chain)
+		err := _mgr.SwitchChain(chain)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
 		return nil, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
