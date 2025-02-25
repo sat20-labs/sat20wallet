@@ -9,7 +9,8 @@ import (
 
 	"github.com/btcsuite/btcwallet/snacl"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
-	"github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
+	
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 const (

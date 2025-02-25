@@ -4,7 +4,9 @@ import (
 	"sync"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
-	"github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
+	
+
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 type NotifyCB func (string, interface{})

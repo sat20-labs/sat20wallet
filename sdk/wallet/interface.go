@@ -8,8 +8,9 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	
-	"github.com/sat20-labs/sat20wallet/sdk/wallet/indexer"
 	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
+
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 func NewManager(cfg *Config, quit chan struct{}) *Manager {
