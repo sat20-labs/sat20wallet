@@ -58,7 +58,7 @@ func GenTxAssetsFromAssets(assets swire.TxAssets) swire.TxAssets {
 }
 
 
-func ToTxAssets(assets []*indexerwire.AssetInfo) swire.TxAssets {
+func ToTxAssets(assets []*indexerwire.UtxoAssetInfo) swire.TxAssets {
 	var result swire.TxAssets
 	for _, asset := range assets {
 		result = append(result, *asset.Asset.Clone())
