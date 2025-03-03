@@ -9,8 +9,5 @@ import (
 )
 
 func NewKVDB(dbPath string) common.KVDB {
-	if dbPath == "" {
-		dbPath = "./db"
-	}
 	return supernode.NewKVDB(dbPath)
 }
