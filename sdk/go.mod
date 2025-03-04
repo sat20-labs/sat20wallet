@@ -67,7 +67,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/lightningnetwork/lnd/tlv v1.0.2 // indirect
-	github.com/sat20-labs/satsnet_btcd v0.0.0-20250218020706-22be756fc8dd
+	github.com/sat20-labs/satsnet_btcd v0.0.0-20250303105234-bed25fe24627
 	github.com/sirupsen/logrus v1.9.3
 	gopkg.in/yaml.v2 v2.4.0
 )

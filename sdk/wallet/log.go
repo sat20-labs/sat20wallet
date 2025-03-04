@@ -1,5 +1,5 @@
 package wallet
 
-import "github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
+import "github.com/sat20-labs/indexer/common"
 
-var Log = utils.Log
+var Log = common.Log

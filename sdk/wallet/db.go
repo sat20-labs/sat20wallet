@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	DB_KEY_STATUS   = "status"
-	DB_KEY_WALLET   = "w-"
-	DB_KEY_ASSET_L1 = "asset-l1-" //  Id - subId - chain
-	DB_KEY_ASSET_L2 = "asset-l2-"
+	DB_KEY_STATUS   = "wallet-status"
+	DB_KEY_WALLET   = "wallet-id-"
+	DB_KEY_ASSET_L1 = "wallet-asset-l1-" //  Id - subId - chain
+	DB_KEY_ASSET_L2 = "wallet-asset-l2-"
 	DB_KEY_TICKER_INFO    = "t-"
 )
 

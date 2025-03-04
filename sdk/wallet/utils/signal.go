@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/coreos/go-systemd/daemon"
+	"github.com/sat20-labs/indexer/common"
 )
 
 var (
@@ -31,7 +32,7 @@ func systemdNotifyReady() error {
 		err := fmt.Errorf("failed to notify systemd %v (if you aren't "+
 			"running systemd clear the environment variable "+
 			"NOTIFY_SOCKET)", err)
-		Log.Error(err)
+		common.Log.Error(err)
 
 		// The SdNotify doc says it's common to ignore the
 		// error. We don't want to ignore it because if someone
@@ -40,9 +41,9 @@ func systemdNotifyReady() error {
 		return err
 	}
 	if notified {
-		Log.Info("Systemd was notified about our readiness")
+		common.Log.Info("Systemd was notified about our readiness")
 	} else {
-		Log.Info("We're not running within systemd or the service " +
+		common.Log.Info("We're not running within systemd or the service " +
 			"type is not 'notify'")
 	}
 	return nil
@@ -54,12 +55,12 @@ func systemdNotifyReady() error {
 func systemdNotifyStop() {
 	notified, err := daemon.SdNotify(false, daemon.SdNotifyStopping)
 
-	// Just Log - we're stopping anyway.
+	// Just common.Log - we're stopping anyway.
 	if err != nil {
-		Log.Errorf("Failed to notify systemd: %v", err)
+		common.Log.Errorf("Failed to notify systemd: %v", err)
 	}
 	if notified {
-		Log.Infof("Systemd was notified about stopping")
+		common.Log.Infof("Systemd was notified about stopping")
 	}
 }
 
@@ -159,11 +160,11 @@ func (c *Interceptor) mainInterruptHandler() {
 	shutdown := func() {
 		// Ignore more than one shutdown signal.
 		if isShutdown {
-			Log.Infof("Already shutting down...")
+			common.Log.Infof("Already shutting down...")
 			return
 		}
 		isShutdown = true
-		Log.Infof("Shutting down...")
+		common.Log.Infof("Shutting down...")
 		c.Notifier.notifyStop()
 
 		// Signal the main interrupt handler to exit, and stop accept
@@ -174,15 +175,15 @@ func (c *Interceptor) mainInterruptHandler() {
 	for {
 		select {
 		case signal := <-c.interruptChannel:
-			Log.Infof("Received %v", signal)
+			common.Log.Infof("Received %v", signal)
 			shutdown()
 
 		case <-c.shutdownRequestChannel:
-			Log.Infof("Received shutdown request.")
+			common.Log.Infof("Received shutdown request.")
 			shutdown()
 
 		case <-c.quit:
-			Log.Infof("Gracefully shutting down.")
+			common.Log.Infof("Gracefully shutting down.")
 			close(c.shutdownChannel)
 			signal.Stop(c.interruptChannel)
 			return

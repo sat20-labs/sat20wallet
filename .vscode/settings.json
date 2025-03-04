@@ -1,0 +1,16 @@
+{
+  "editor.tabSize": 4,
+  "editor.rulers": [
+      80
+  ],
+  // "go.buildTags": "js,wasm,node_super",
+  // "go.testTags": "js,wasm,node_super",
+  "go.toolsEnvVars": {
+    "GO111MODULE": "on",
+    // "GOOS": "js",
+    // "GOARCH": "wasm",
+},
+// "go.buildFlags": ["-tags=js,wasm"],
+// "go.testFlags": ["-tags=js,wasm"],
+// "liveServer.settings.port": 3000
+}

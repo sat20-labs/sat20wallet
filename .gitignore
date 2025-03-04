@@ -2,3 +2,4 @@
 sdk/db
 sdk/log
 sdk/wasm/html/wasm/sat20wallet.wasm
+sdk/data
