@@ -41,12 +41,12 @@ func TestAssets(t *testing.T) {
 	aa := []swire.TxAssets{assets0, assets1, assets2}
 
 	for _, assets := range aa {
-		buf0, err := assets.Serialize()
+		buf0, err := swire.SerializeTxAssets(&assets)
 		if err != nil {
 			t.Fail()
 		}
 		var assets00 swire.TxAssets
-		err = assets00.Deserialize(buf0)
+		err = swire.DeserializeTxAssets(&assets00, buf0)
 		if err != nil {
 			t.Fail()
 		}

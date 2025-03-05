@@ -13,8 +13,6 @@ replace github.com/sat20-labs/satsnet_btcd => ../../satsnet_btcd
 
 replace github.com/sat20-labs/indexer => ../../indexer
 
-replace github.com/sat20-labs/indexer_satsnet => ../../indexer_satsnet
-
 require (
 	github.com/btcsuite/btcd v0.24.2
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4
@@ -25,8 +23,7 @@ require (
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
-	github.com/sat20-labs/indexer v0.0.0
-	github.com/sat20-labs/indexer_satsnet v0.0.0-00010101000000-000000000000
+	github.com/sat20-labs/indexer v0.3.0-20240926
 	github.com/tyler-smith/go-bip39 v1.1.0
 	golang.org/x/crypto v0.31.0
 

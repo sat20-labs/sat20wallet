@@ -155,7 +155,7 @@ func CalcFee_SatsNet() int64 {
 }
 
 func StandardAnchorScript(fundingUtxo string, witnessScript []byte, value int64, assets wire.TxAssets) ([]byte, error) {
-	assetsBuf, err := assets.Serialize()
+	assetsBuf, err := wire.SerializeTxAssets(&assets)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +195,7 @@ func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 	}
 	assetsBuf := tokenizer.Data()
 	if assetsBuf != nil {
-		err = assets.Deserialize(assetsBuf)
+		err = wire.DeserializeTxAssets(&assets, assetsBuf)
 		if err != nil {
 			return "", nil, 0, nil, err
 		}

@@ -2,9 +2,9 @@ package wallet
 
 import (
 	indexer "github.com/sat20-labs/indexer/common"
-	sindexer "github.com/sat20-labs/indexer_satsnet/common"
-	swire "github.com/sat20-labs/satsnet_btcd/wire"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	sindexer "github.com/sat20-labs/satsnet_btcd/indexer/common"
+	swire "github.com/sat20-labs/satsnet_btcd/wire"
 )
 
 type AssetName = swire.AssetName
@@ -14,7 +14,6 @@ var ASSET_PLAIN_SAT = indexer.ASSET_PLAIN_SAT
 
 type TxOutput = indexer.TxOutput
 type TxOutput_SatsNet = sindexer.TxOutput
-
 
 func OutputToSatsNet(output *TxOutput) *TxOutput_SatsNet {
 
@@ -57,7 +56,6 @@ func GenTxAssetsFromAssets(assets swire.TxAssets) swire.TxAssets {
 	return result
 }
 
-
 func ToTxAssets(assets []*indexerwire.UtxoAssetInfo) swire.TxAssets {
 	var result swire.TxAssets
 	for _, asset := range assets {
@@ -71,7 +69,7 @@ func OutputInfoToOutput(output *indexerwire.TxOutputInfo) *TxOutput {
 		UtxoId:      output.UtxoId,
 		OutPointStr: output.OutPoint,
 		OutValue:    output.OutValue,
-		Offsets:    make(map[swire.AssetName]indexer.AssetOffsets),
+		Offsets:     make(map[swire.AssetName]indexer.AssetOffsets),
 	}
 
 	for _, asset := range output.AssetInfo {
@@ -82,15 +80,14 @@ func OutputInfoToOutput(output *indexerwire.TxOutputInfo) *TxOutput {
 	return result
 }
 
-
 func OutputInfoToOutput_SatsNet(output *indexerwire.TxOutputInfo) *TxOutput_SatsNet {
 	result := &TxOutput_SatsNet{
 		UtxoId:      output.UtxoId,
 		OutPointStr: output.OutPoint,
-		OutValue:  swire.TxOut{
-			Value:   output.OutValue.Value,
+		OutValue: swire.TxOut{
+			Value:    output.OutValue.Value,
 			PkScript: output.OutValue.PkScript,
-			Assets:  ToTxAssets(output.AssetInfo),
+			Assets:   ToTxAssets(output.AssetInfo),
 		},
 	}
 
