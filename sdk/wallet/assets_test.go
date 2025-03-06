@@ -8,6 +8,7 @@ import (
 
 	"github.com/btcsuite/btcd/wire"
 	swire "github.com/sat20-labs/satsnet_btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 
@@ -23,7 +24,7 @@ func TestAssets(t *testing.T) {
 				Type: "f",
 				Ticker: "pearl",
 			},
-			Amount: 10000,
+			Amount: *indexer.NewDefaultDecimal(10000),
 			BindingSat: 1,
 		},
 
@@ -33,7 +34,7 @@ func TestAssets(t *testing.T) {
 				Type: "f",
 				Ticker: "pizza",
 			},
-			Amount: 5000,
+			Amount: *indexer.NewDefaultDecimal(5000),
 			BindingSat: 1,
 		},
 	}
@@ -62,7 +63,7 @@ func TestAnchorScript(t *testing.T) {
 				Type: "f",
 				Ticker: "pearl",
 			},
-			Amount: 10000,
+			Amount: *indexer.NewDefaultDecimal(10000),
 			BindingSat: 1,
 		},
 	}

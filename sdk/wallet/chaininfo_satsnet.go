@@ -17,68 +17,6 @@ import (
 	"github.com/sat20-labs/satsnet_btcd/wire"
 )
 
-const (
-	STP_MAGIC_NUMBER        = txscript.OP_16
-	CONTENT_TYPE_ASCENDING  = txscript.OP_1
-	CONTENT_TYPE_DESCENDING = txscript.OP_2
-	CONTENT_TYPE_PAYMENT    = txscript.OP_3
-	CONTENT_TYPE_CHANNELID  = txscript.OP_10
-
-	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 2
-)
-
-func NullDataScript(ctype uint8, data []byte) ([]byte, error) {
-	if len(data) > MAX_PAYLOAD_LEN {
-		return nil, fmt.Errorf("data size %d is larger than max "+
-			"allowed size %d", len(data), MAX_PAYLOAD_LEN)
-	}
-
-	return txscript.NewScriptBuilder().
-		AddOp(txscript.OP_RETURN).
-		AddOp(STP_MAGIC_NUMBER).
-		AddOp(ctype).
-		AddData(data).Script()
-}
-
-func IsSTPNullDataScript(script []byte) bool {
-	tokenizer := txscript.MakeScriptTokenizer(0, script)
-	if !tokenizer.Next() || tokenizer.Err() != nil || tokenizer.Opcode() != txscript.OP_RETURN {
-		// Check for OP_RETURN
-		return false
-	}
-
-	if !tokenizer.Next() || tokenizer.Err() != nil || tokenizer.Opcode() != STP_MAGIC_NUMBER {
-		return false
-	}
-
-	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return false
-	}
-
-	return tokenizer.Next() && tokenizer.Done() &&
-		(txscript.IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= txscript.OP_PUSHDATA4) &&
-		len(tokenizer.Data()) <= MAX_PAYLOAD_LEN
-}
-
-func IsNullDataScript_Payment(script []byte) bool {
-	tokenizer := txscript.MakeScriptTokenizer(0, script)
-	if !tokenizer.Next() || tokenizer.Err() != nil || tokenizer.Opcode() != txscript.OP_RETURN {
-		// Check for OP_RETURN
-		return false
-	}
-
-	if !tokenizer.Next() || tokenizer.Err() != nil || tokenizer.Opcode() != STP_MAGIC_NUMBER {
-		return false
-	}
-
-	if !tokenizer.Next() || tokenizer.Err() != nil || tokenizer.Opcode() != CONTENT_TYPE_PAYMENT {
-		return false
-	}
-
-	return tokenizer.Next() && tokenizer.Done() &&
-		(txscript.IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= txscript.OP_PUSHDATA4) &&
-		len(tokenizer.Data()) <= MAX_PAYLOAD_LEN
-}
 
 func GetChainParam_SatsNet() *chaincfg.Params {
 	if IsTestNet() {
@@ -202,33 +140,6 @@ func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 	}
 
 	return utxo, pkScript, value, assets, nil
-}
-
-func CreatePaymentOPReturns(data []byte) ([]*wire.TxOut, error) {
-	if data == nil {
-		return nil, nil
-	}
-
-	allData := data
-	dataLen := len(allData)
-	n := (dataLen + MAX_PAYLOAD_LEN - 1) / MAX_PAYLOAD_LEN
-	var txOutVect []*wire.TxOut
-	start := 0
-	for i := 0; i < n; i++ {
-		end := start + MAX_PAYLOAD_LEN
-		if end > (dataLen) {
-			end = dataLen
-		}
-		data := allData[start:end]
-		start = end
-		nullDataScript, err := NullDataScript(CONTENT_TYPE_PAYMENT, data)
-		if err != nil {
-			return nil, fmt.Errorf("NullDataScript failed. %v", err)
-		}
-		txOut := wire.NewTxOut(0, nil, nullDataScript)
-		txOutVect = append(txOutVect, txOut)
-	}
-	return txOutVect, nil
 }
 
 // 从比特币脚本中提取int64值
