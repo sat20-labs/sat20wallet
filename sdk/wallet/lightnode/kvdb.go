@@ -9,11 +9,11 @@ import (
 
 	"strings"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
-	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
 
-var Log = utils.Log
+var Log = indexer.Log
 
 type jsBatchWrite struct {
 	db        *jsDB
