@@ -5,7 +5,6 @@ import (
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	"github.com/sat20-labs/satsnet_btcd/btcec"
-	"github.com/sat20-labs/satsnet_btcd/btcec/ecdsa"
 	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
 )
 
@@ -58,7 +57,7 @@ func (p *channelWallet) GetPaymentPubKey() *secp256k1.PublicKey {
 	return key.PubKey()
 }
 
-func (p *channelWallet) SignMessage(msg []byte) (*ecdsa.Signature, error) {
+func (p *channelWallet) SignMessage(msg []byte) ([]byte, error) {
 	privKey, err := p.wallet.deriveKeyByLocator(KeyFamilyBaseEncryption, p.id, 0)
 	if err != nil {
 		return nil, err

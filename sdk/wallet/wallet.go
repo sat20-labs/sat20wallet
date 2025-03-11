@@ -789,7 +789,7 @@ func (p *InternalWallet) PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxs
 	return result, nil
 }
 
-func (p *InternalWallet) SignMessage(msg []byte) (*ecdsa.Signature, error) {
+func (p *InternalWallet) SignMessage(msg []byte) ([]byte, error) {
 	//privKey, err := p.deriveKeyByLocator(KeyFamilyBaseEncryption, 0, 0)
 	// if err != nil {
 	// 	return nil, err
@@ -798,31 +798,47 @@ func (p *InternalWallet) SignMessage(msg []byte) (*ecdsa.Signature, error) {
 	return p.signMessage(privKey, msg)
 }
 
-
-func (p *InternalWallet) signMessage(privKey *secp256k1.PrivateKey, msg []byte) (*ecdsa.Signature, error) {
+func (p *InternalWallet) signMessage(privKey *secp256k1.PrivateKey, msg []byte) ([]byte, error) {
 	// Double hash and sign the data.
-	var msgDigest []byte
-	doubleHash := false
-	if doubleHash {
-		msgDigest = chainhash.DoubleHashB(msg)
-	} else {
-		msgDigest = chainhash.HashB(msg)
-	}
-	return ecdsa.Sign(privKey, msgDigest), nil
+	// var msgDigest []byte
+	// doubleHash := false
+	// if doubleHash {
+	// 	msgDigest = chainhash.DoubleHashB(msg)
+	// } else {
+	// 	msgDigest = chainhash.HashB(msg)
+	// }
+	// return ecdsa.Sign(privKey, msgDigest), nil
+
+	return ecdsa.SignCompact(privKey, magicMsgHash(msg), true), nil
 }
 
-func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Signature) bool {
+func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, sig []byte) bool {
 	// Compute the hash of the message.
-	var msgDigest []byte
-	doubleHash := false
-	if doubleHash {
-		msgDigest = chainhash.DoubleHashB(msg)
-	} else {
-		msgDigest = chainhash.HashB(msg)
-	}
+	// var msgDigest []byte
+	// doubleHash := false
+	// if doubleHash {
+	// 	msgDigest = chainhash.DoubleHashB(msg)
+	// } else {
+	// 	msgDigest = chainhash.HashB(msg)
+	// }
 
-	// Verify the signature using the public key.
-	return signature.Verify(msgDigest, pubKey)
+	// // Verify the signature using the public key.
+	// return signature.Verify(msgDigest, pubKey)
+	
+	recoveredPK, _, err := ecdsa.RecoverCompact(sig, magicMsgHash(msg))
+	if err != nil {
+		return false
+	}
+	return pubKey.IsEqual(recoveredPK)
+}
+
+// okx，unisat等钱包消息签名方式
+func magicMsgHash(msg []byte) []byte {
+	buf := bytes.NewBuffer(nil)
+	wire.WriteVarString(buf, 0, "Bitcoin Signed Message:\n") //nolint:errcheck
+	wire.WriteVarString(buf, 0, string(msg)) //nolint:errcheck
+	bytes := buf.Bytes()
+	return chainhash.DoubleHashB(bytes)
 }
 
 // 支持上面所有几种不同的签名方式

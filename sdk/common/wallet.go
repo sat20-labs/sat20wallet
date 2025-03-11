@@ -5,7 +5,6 @@ import (
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 
 	"github.com/sat20-labs/satsnet_btcd/btcec"
-	"github.com/sat20-labs/satsnet_btcd/btcec/ecdsa"
 
 	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
 )
@@ -18,7 +17,7 @@ type ChannelWallet interface {
 	GetRevocationBaseKey() *secp256k1.PublicKey
 	GetPaymentPubKey() *secp256k1.PublicKey
 
-	SignMessage(msg []byte) (*ecdsa.Signature, error)
+	SignMessage(msg []byte) ([]byte, error)
 	SignPsbt(packet *psbt.Packet) (error)
 	SignPsbt_SatsNet(packet *spsbt.Packet) error
 	SignPsbts(packet []*psbt.Packet) (error)
@@ -37,7 +36,7 @@ type Wallet interface {
 	GetRevocationBaseKey() *secp256k1.PublicKey
 	GetPaymentPubKey() *secp256k1.PublicKey
 
-	SignMessage(msg []byte) (*ecdsa.Signature, error)
+	SignMessage(msg []byte) ([]byte, error)
 	SignPsbt(packet *psbt.Packet) (error)
 	SignPsbt_SatsNet(packet *spsbt.Packet) error
 	SignPsbts(packet []*psbt.Packet) (error)

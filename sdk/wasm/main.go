@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/hex"
+	"encoding/base64"
 	"fmt"
 	"sort"
 	"strconv"
@@ -781,7 +782,7 @@ func signMessage(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]interface{}{
-			"signature": hex.EncodeToString(result),
+			"signature": base64.StdEncoding.EncodeToString(result),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)

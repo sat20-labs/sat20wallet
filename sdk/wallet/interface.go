@@ -268,7 +268,7 @@ func (p *Manager) SignMessage(msg []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sig.Serialize(), nil
+	return sig, nil
 }
 
 func (p *Manager) SignPsbt(psbtHex string) (string, error) {
