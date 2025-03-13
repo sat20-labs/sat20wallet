@@ -62,7 +62,7 @@ func (p *channelWallet) SignMessage(msg []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return p.wallet.signMessage(privKey, msg)
+	return p.wallet.signMessage(privKey, msg).Serialize(), nil
 }
 
 func (p *channelWallet) SignPsbt(packet *psbt.Packet) (error) {

@@ -11,7 +11,6 @@ import (
 
 type ChannelWallet interface {
 	GetId() uint32
-	GetCommitRootKey() (*secp256k1.PrivateKey, *secp256k1.PublicKey)
 	GetCommitSecret(index uint32) *secp256k1.PrivateKey
 	DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey
 	GetRevocationBaseKey() *secp256k1.PublicKey
@@ -30,13 +29,13 @@ type Wallet interface {
 	GetNodePubKey() *secp256k1.PublicKey
 
 	// default channel wallet, CWId = 0
-	GetCommitRootKey(peer []byte) (*secp256k1.PrivateKey, *secp256k1.PublicKey)
 	GetCommitSecret(peer []byte, index uint32) *secp256k1.PrivateKey
 	DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey
 	GetRevocationBaseKey() *secp256k1.PublicKey
 	GetPaymentPubKey() *secp256k1.PublicKey
 
 	SignMessage(msg []byte) ([]byte, error)
+	SignWalletMessage(msg string) ([]byte, error)
 	SignPsbt(packet *psbt.Packet) (error)
 	SignPsbt_SatsNet(packet *spsbt.Packet) error
 	SignPsbts(packet []*psbt.Packet) (error)

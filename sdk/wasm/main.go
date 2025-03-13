@@ -591,38 +591,6 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
-func getCommitRootKey(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-
-	if len(p) < 1 {
-		return createJsRet(nil, -1, "Expected 1 parameters")
-	}
-
-	if p[0].Type() != js.TypeString {
-		return createJsRet(nil, -1, "nodeId parameter should be a string")
-	}
-	id, err := hex.DecodeString(p[0].String())
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-
-	// result := _mgr.GetCommitRootKey(id)
-	// data := map[string]any{
-	// 	"commitRootKey": hex.EncodeToString(result),
-	// }
-	// return createJsRet(data, 0, "ok")
-
-	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result := _mgr.GetCommitRootKey(id)
-		return map[string]interface{}{
-			"commitRootKey": hex.EncodeToString(result),
-		}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(handler)
-}
-
 func getCommitSecret(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -762,7 +730,7 @@ func signMessage(this js.Value, p []js.Value) any {
 	if p[0].Type() != js.TypeString {
 		return createJsRet(nil, -1, "message parameter should be a string")
 	}
-	msgBytes := p[0].String()
+	msg := p[0].String()
 
 	// result, err := _mgr.SignMessage(msgBytes)
 	// if err != nil {
@@ -777,7 +745,7 @@ func signMessage(this js.Value, p []js.Value) any {
 	// return createJsRet(data, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.SignMessage([]byte(msgBytes))
+		result, err := _mgr.SignWalletMessage(msg)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -932,8 +900,6 @@ func main() {
 	obj.Set("getWalletAddress", js.FuncOf(getWalletAddress))
 	// input: account id; return: current wallet public key
 	obj.Set("getWalletPubkey", js.FuncOf(getWalletPubkey))
-	// input: node pubkey(hex string); return: commit root key (hex string)
-	obj.Set("getCommitRootKey", js.FuncOf(getCommitRootKey))
 	// input: node pubkey(hex string), index; return: commit secrect (hex string)
 	obj.Set("getCommitSecret", js.FuncOf(getCommitSecret))
 	// input: commit secrect(hex string), index; return: revocation priv key (hex string)

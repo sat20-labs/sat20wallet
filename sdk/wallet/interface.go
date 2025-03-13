@@ -264,12 +264,18 @@ func (p *Manager) SignMessage(msg []byte) ([]byte, error) {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
 
-	sig, err := p.wallet.SignMessage(msg)
-	if err != nil {
-		return nil, err
-	}
-	return sig, nil
+	return p.wallet.SignMessage(msg)
 }
+
+
+func (p *Manager) SignWalletMessage(msg string) ([]byte, error) {
+	if p.wallet == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+
+	return p.wallet.SignWalletMessage(msg)
+}
+
 
 func (p *Manager) SignPsbt(psbtHex string) (string, error) {
 	if p.wallet == nil {
