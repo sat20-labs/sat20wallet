@@ -1,10 +1,13 @@
 package wallet
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"testing"
+
+	"github.com/btcsuite/btcd/btcutil/psbt"
 )
 
 var _client *Manager
@@ -54,7 +57,8 @@ func createNode(t *testing.T, mode, dbPath string, quit chan struct{}) *Manager 
 	} else {
 		mnemonic := ""
 		
-		mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
+		//mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
+		mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
 		_, err := manager.ImportWallet(mnemonic, "123456")
 		if err != nil {
 			t.Fatalf("ImportWallet failed. %v", err)
@@ -84,4 +88,62 @@ func prepare(t *testing.T) {
 	}
 
 	_client = createNode(t, "client", "../db/clientDB", lc)
+}
+
+
+func TestPsbt(t *testing.T) {
+	prepare(t)
+
+	psbtStr := "70736274ff0100890200000001d71f33336e92a9e2a794c8a77ffd3b846c335bfc6ac2a0eb026e96d61a04b7220100000000fdffffff025a0b0000000000002251202fad5b1f0dfa1111ca54fb636e030846bd731dca4f2b7af48d8e5b9672d90b25ff630000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b000000000001012b94790000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b011720d210be04396837b11f65eb42527de3f6a1c1c1d51de38ee907fc355c56ee5115000000"
+	signed, err := _client.SignPsbt(psbtStr, false)
+	if err != nil {
+		t.Fatal()
+	}
+	fmt.Printf("%s\n", signed)
+
+	packet, err := toPsbt(signed)
+	if err != nil {
+		t.Fatal()
+	}
+
+	err = psbt.MaybeFinalizeAll(packet)
+	if err != nil {
+		Log.Errorf("MaybeFinalizeAll failed, %v", err)
+		t.Fatal()
+	}
+
+	finalTx, err := psbt.Extract(packet)
+	if err != nil {
+		Log.Errorf("Extract failed, %v", err)
+		t.Fatal()
+	}
+
+	PrintJsonTx(finalTx, "")
+}
+
+func toPsbt(psbtHex string) (*psbt.Packet, error)  {
+	hexBytes, _ := hex.DecodeString(psbtHex)
+	return psbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+}
+
+func TestVerifyPsbtString(t *testing.T) {
+	psbtStr := "70736274ff0100890200000001d71f33336e92a9e2a794c8a77ffd3b846c335bfc6ac2a0eb026e96d61a04b7220100000000fdffffff025a0b0000000000002251202fad5b1f0dfa1111ca54fb636e030846bd731dca4f2b7af48d8e5b9672d90b25ff630000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b000000000001012b94790000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b0113407da5f3313247877d7820cc5ef80de3895ff93fa40924744ed9fe834f71efd79aa99894be089ad1c7c14589828542271862413f4e6e12fa387a9b9d4b5fed4cf4011720d210be04396837b11f65eb42527de3f6a1c1c1d51de38ee907fc355c56ee5115000000"
+	packet, err := toPsbt(psbtStr)
+	if err != nil {
+		t.Fatal()
+	}
+
+	err = psbt.MaybeFinalizeAll(packet)
+	if err != nil {
+		Log.Errorf("MaybeFinalizeAll failed, %v", err)
+		t.Fatal()
+	}
+
+	finalTx, err := psbt.Extract(packet)
+	if err != nil {
+		Log.Errorf("Extract failed, %v", err)
+		t.Fatal()
+	}
+
+	PrintJsonTx(finalTx, "")
 }

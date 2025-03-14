@@ -770,6 +770,11 @@ func signPsbt(this js.Value, p []js.Value) any {
 	}
 	psbtHex := p[0].String()
 
+	if p[1].Type() != js.TypeBoolean {
+		return createJsRet(nil, -1, "extract parameter should be a bool")
+	}
+	extract := p[1].Bool()
+
 	// result, err := _mgr.SignPsbt(psbtHex)
 	// if err != nil {
 	// 	return createJsRet(nil, -1, err.Error())
@@ -780,10 +785,11 @@ func signPsbt(this js.Value, p []js.Value) any {
 	// return createJsRet(data, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.SignPsbt(psbtHex)
+		result, err := _mgr.SignPsbt(psbtHex, extract)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
+
 		return map[string]interface{}{
 			"psbt": result,
 		}, 0, "ok"
@@ -805,6 +811,11 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 	}
 	psbtHex := p[0].String()
 
+	if p[1].Type() != js.TypeBoolean {
+		return createJsRet(nil, -1, "extract parameter should be a bool")
+	}
+	extract := p[1].Bool()
+
 	// result, err := _mgr.SignPsbt_SatsNet(psbtHex)
 	// if err != nil {
 	// 	return createJsRet(nil, -1, err.Error())
@@ -815,7 +826,7 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 	// return createJsRet(data, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result, err := _mgr.SignPsbt_SatsNet(psbtHex)
+		result, err := _mgr.SignPsbt_SatsNet(psbtHex, extract)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -824,6 +835,60 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
+}
+
+
+func extractTxFromPsbt(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "psbt parameter should be a hex string")
+	}
+	psbtHex := p[0].String()
+
+	result, err := wallet.ExtractTxFromPsbt(psbtHex)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	
+	data := map[string]interface{}{
+		"tx": result,
+	}
+	
+	return createJsRet(data, 0, "ok")
+}
+
+
+func extractTxFromPsbt_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "psbt parameter should be a hex string")
+	}
+	psbtHex := p[0].String()
+
+	result, err := wallet.ExtractTxFromPsbt_SatsNet(psbtHex)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	
+	data := map[string]interface{}{
+		"tx": result,
+	}
+	
+	return createJsRet(data, 0, "ok")
 }
 
 func getVersion(this js.Value, p []js.Value) any {
@@ -917,6 +982,8 @@ func main() {
 
 	obj.Set("getVersion", js.FuncOf(getVersion))
 	obj.Set("registerCallback", js.FuncOf(registerCallbacks))
+	obj.Set("extractTxFromPsbt", js.FuncOf(extractTxFromPsbt))
+	obj.Set("extractTxFromPsbt_SatsNet", js.FuncOf(extractTxFromPsbt_SatsNet))
 
 	js.Global().Set(module, obj)
 	wallet.Log.SetLevel(logrus.DebugLevel)

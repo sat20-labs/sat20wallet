@@ -277,12 +277,15 @@ func (p *Manager) SignWalletMessage(msg string) ([]byte, error) {
 }
 
 
-func (p *Manager) SignPsbt(psbtHex string) (string, error) {
+func (p *Manager) SignPsbt(psbtHex string, bExtract bool) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
 
-	hexBytes, _ := hex.DecodeString(psbtHex)
+	hexBytes, err := hex.DecodeString(psbtHex)
+	if err != nil {
+		return "", err
+	}
 	packet, err := psbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
 	if err != nil {
 		Log.Errorf("NewFromRawBytes failed, %v", err)
@@ -295,6 +298,22 @@ func (p *Manager) SignPsbt(psbtHex string) (string, error) {
 		return "", err
 	}
 
+	if bExtract {
+		err = psbt.MaybeFinalizeAll(packet)
+		if err != nil {
+			Log.Errorf("MaybeFinalizeAll failed, %v", err)
+			return "", err
+		}
+
+		finalTx, err := psbt.Extract(packet)
+		if err != nil {
+			Log.Errorf("Extract failed, %v", err)
+			return "", err
+		}
+
+		return EncodeMsgTx(finalTx)
+	}
+
 	var buf bytes.Buffer
 	err = packet.Serialize(&buf)
 	if err != nil {
@@ -305,12 +324,15 @@ func (p *Manager) SignPsbt(psbtHex string) (string, error) {
 	return hex.EncodeToString(buf.Bytes()), nil
 }
 
-func (p *Manager) SignPsbt_SatsNet(psbtHex string) (string, error) {
+func (p *Manager) SignPsbt_SatsNet(psbtHex string, bExtract bool) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
 
-	hexBytes, _ := hex.DecodeString(psbtHex)
+	hexBytes, err := hex.DecodeString(psbtHex)
+	if err != nil {
+		return "", err
+	}
 	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
 	if err != nil {
 		Log.Errorf("NewFromRawBytes failed, %v", err)
@@ -321,6 +343,22 @@ func (p *Manager) SignPsbt_SatsNet(psbtHex string) (string, error) {
 	if err != nil {
 		Log.Errorf("SignPsbt_SatsNet failed, %v", err)
 		return "", err
+	}
+
+	if bExtract {
+		err = spsbt.MaybeFinalizeAll(packet)
+		if err != nil {
+			Log.Errorf("MaybeFinalizeAll failed, %v", err)
+			return "", err
+		}
+
+		finalTx, err := spsbt.Extract(packet)
+		if err != nil {
+			Log.Errorf("Extract failed, %v", err)
+			return "", err
+		}
+
+		return EncodeMsgTx_SatsNet(finalTx)
 	}
 
 	var buf bytes.Buffer
@@ -347,3 +385,52 @@ func (p *Manager) SendMessageToUpper(eventName string, data interface{}) {
 	}
 }
 
+func ExtractTxFromPsbt(psbtStr string) (string, error) {
+	hexBytes, err := hex.DecodeString(psbtStr)
+	if err != nil {
+		return "", err
+	}
+	packet, err := psbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	if err != nil {
+		return "", err
+	}
+
+	err = psbt.MaybeFinalizeAll(packet)
+	if err != nil {
+		Log.Errorf("MaybeFinalizeAll failed, %v", err)
+		return "", err
+	}
+
+	finalTx, err := psbt.Extract(packet)
+	if err != nil {
+		Log.Errorf("Extract failed, %v", err)
+		return "", err
+	}
+
+	return EncodeMsgTx(finalTx)
+}
+
+func ExtractTxFromPsbt_SatsNet(psbtStr string) (string, error) {
+	hexBytes, err := hex.DecodeString(psbtStr)
+	if err != nil {
+		return "", err
+	}
+	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	if err != nil {
+		return "", err
+	}
+
+	err = spsbt.MaybeFinalizeAll(packet)
+	if err != nil {
+		Log.Errorf("MaybeFinalizeAll failed, %v", err)
+		return "", err
+	}
+
+	finalTx, err := spsbt.Extract(packet)
+	if err != nil {
+		Log.Errorf("Extract failed, %v", err)
+		return "", err
+	}
+
+	return EncodeMsgTx_SatsNet(finalTx)
+}
