@@ -340,36 +340,23 @@ func publicKeyToTaprootAddress(pubKey *btcec.PublicKey) (*btcutil.AddressTaproot
 	return btcutil.NewAddressTaproot(schnorr.SerializePubKey(taprootPubKey), GetChainParam_SatsNet())
 }
 
-func IsOpReturn(txOut *wire.TxOut) bool {
+func IsOpReturn(pkScript []byte) bool {
 	// 解析输出脚本
-	pkScript := txOut.PkScript
-	scriptClass, _, _, err := txscript.ExtractPkScriptAddrs(pkScript, nil)
+	scriptClass, _, _, err := txscript.ExtractPkScriptAddrs(pkScript, GetChainParam_SatsNet())
 	if err != nil {
 		return false
 	}
-
-	return scriptClass == txscript.NullDataTy
-}
-
-func GetOpReturnOutput(txOut *wire.TxOut) (bool, []byte) {
-	// 解析输出脚本
-	pkScript := txOut.PkScript
-	scriptClass, _, _, err := txscript.ExtractPkScriptAddrs(pkScript, nil)
-	if err != nil {
-		return false, nil
-	}
-
-	// 检查脚本类型是否为 OP_RETURN
 	if scriptClass == txscript.NullDataTy {
-		// 提取 OP_RETURN 数据
-		data, err := txscript.PushedData(pkScript)
-		if err != nil || len(data) == 0 {
-			return true, nil
-		}
-		return true, data[0]
+		return true
 	}
 
-	return false, nil
+	if scriptClass == txscript.NonStandardTy {
+		if pkScript[0] == txscript.OP_RETURN {
+			return true
+		}
+	}
+
+	return false
 }
 
 func IsZeroPoint(point *wire.OutPoint) bool {
