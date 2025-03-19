@@ -87,6 +87,10 @@ func (p *kvDB) remove(key []byte) error {
 	return err
 }
 
+func (p *kvDB) close() error {
+	return p.db.Close()
+}
+
 func (p *kvDB) commit() error {
 	return nil
 }
@@ -109,6 +113,10 @@ func (p *kvDB) Delete(key []byte) error {
 		return err
 	}
 	return p.commit()
+}
+
+func (p *kvDB) Close() error {
+	return p.close()
 }
 
 func (p *kvDB) BatchRead(prefix []byte, r func(k, v []byte) error) error {

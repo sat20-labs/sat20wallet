@@ -254,6 +254,10 @@ func (p *jsDB) Delete(key []byte) error {
 	return p.commit()
 }
 
+func (p *jsDB) Close() error {
+	return nil
+}
+
 func (p *jsDB) NewBatchWrite() common.WriteBatch {
 	return &jsBatchWrite{
 		db:        p,
