@@ -3,7 +3,6 @@
     <div class="max-w-md w-full space-y-8">
       <div class="text-center">
         <div class="flex items-center justify-center gap-2 mb-4">
-          <LockClosedIcon class="h-8 w-8 text-primary" />
           <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
             Unlock Wallet
           </h1>
@@ -23,9 +22,6 @@
                   placeholder="Enter password..."
                   v-bind="componentField"
                 >
-                  <template #prefix>
-                    <KeyIcon class="h-4 w-4 text-gray-400" />
-                  </template>
                 </Input>
               </FormControl>
               <FormMessage />
@@ -34,8 +30,18 @@
 
           <div class="grid grid-cols-1 gap-2">
             <Button type="submit" :disabled="loading">
-              <LockOpenIcon v-if="!loading" class="mr-2 h-4 w-4" />
-              <Loader2Icon v-else class="mr-2 h-4 w-4 animate-spin" />
+              <Icon
+                v-if="!loading"
+                :inline="true"
+                class="mr-2 h-4 w-4"
+                icon="mdi:lock-open"
+              />
+              <Icon
+                v-else
+                :inline="true"
+                class="mr-2 h-4 w-4 animate-spin"
+                icon="mdi:loading"
+              />
               Unlock
             </Button>
           </div>
@@ -52,6 +58,7 @@ import { useToast } from '@/components/ui/toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useForm } from 'vee-validate'
+import { Icon } from '@iconify/vue'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
 import {
@@ -61,47 +68,56 @@ import {
   FormControl,
   FormMessage,
 } from '@/components/ui/form'
-// import { LockClosedIcon, KeyIcon, LockOpenIcon, Loader2Icon } from 'lucide-vue-next'
-import { useGlobalStore, useWalletStore } from '@/store'
-import walletManager from '@/utils/sat20'
 
-const formSchema = toTypedSchema(
-  z.object({
-    password: z.string().min(1, 'Password is required'),
-  })
-)
+import { useChannelStore, useWalletStore } from '@/store'
+import walletManager from '@/utils/sat20'
+import { unlockPasswordSchema } from '@/utils/validation'
+import satsnetStp from '@/utils/stp'
+import { hashPassword } from '@/utils/crypto'
+
+const formSchema = toTypedSchema(unlockPasswordSchema)
 
 const form = useForm({
   validationSchema: formSchema,
 })
 
 const walletStore = useWalletStore()
-const { accountIndex } = storeToRefs(walletStore)
+const channelStore = useChannelStore()
 const router = useRouter()
 const route = useRoute()
 const { toast } = useToast()
 const loading = ref(false)
 
-const showToast = (variant: 'default' | 'destructive', title: string, description: string | Error) => {
+const showToast = (
+  variant: 'default' | 'destructive',
+  title: string,
+  description: string | Error
+) => {
   toast({
     variant,
     title,
-    description: typeof description === 'string' ? description : description.message
+    description:
+      typeof description === 'string' ? description : description.message,
   })
 }
 
 const onSubmit = form.handleSubmit(async (values) => {
   loading.value = true
-  const [err, result] = await walletManager.unlockWallet(values.password)
+
+  // Hash the password using the imported function
+  const hashedPassword = await hashPassword(values.password)
+
+  const [err, result] = await walletStore.unlockWallet(hashedPassword)
 
   if (!err && result) {
-    const { walletId } = result
-    walletStore.setWalletId(walletId)
-    await walletStore.getWalletInfo()
     const redirectPath = route.query.redirect as string
     router.push(redirectPath || '/wallet')
   } else if (err) {
-    showToast('destructive', 'Error', err instanceof Error ? err.message : err)
+    showToast(
+      'destructive',
+      'Error',
+      err instanceof Error ? err.message : JSON.stringify(err)
+    )
     loading.value = false
   } else {
     showToast('destructive', 'Error', 'Failed to unlock wallet')

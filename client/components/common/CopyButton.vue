@@ -11,7 +11,7 @@ import { useClipboard } from '@vueuse/core';
 import { Icon, } from '@iconify/vue';
 
 interface Props {
-  text: string;
+  text?: string | null;
 }
 
 const props = defineProps<Props>();

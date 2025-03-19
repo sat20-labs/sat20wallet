@@ -5,4 +5,9 @@ export enum Network {
   // TESTNET4 = 'testnet4',
 }
 
+export enum Chain {
+  BTC = 'btc',
+  SATNET = 'satnet',
+}
+
 export type Balance = { confirmed: number; unconfirmed: number; total: number };

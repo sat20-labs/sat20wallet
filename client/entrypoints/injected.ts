@@ -36,7 +36,7 @@ export default defineUnlistedScript(() => {
     send<T>({ data, type, action }: SendData): Promise<T> {
       return new Promise((resolve, reject) => {
         const channel = new BroadcastChannel(Message.Channel.INJECT_CONTENT)
-        const _messageId = 'msg_' + Date.now()
+        const _messageId = `msg_${type}_${action}_${Date.now()}`
         const listener = (event: MessageEvent) => {
           console.log('Content Script response:', event.data);
           const { type, data, error, metadata = {} } = event.data || {}
@@ -185,19 +185,19 @@ export default defineUnlistedScript(() => {
       })
     }
 
-    async pushTx(rawtx: string): Promise<string> {
+    async pushTx(rawtx: string, options?: any): Promise<string> {
       return this.send<string>({
         type: Message.MessageType.REQUEST,
         action: Message.MessageAction.PUSH_TX,
-        data: { rawtx },
+        data: { rawtx, options },
       })
     }
 
-    async pushPsbt(psbtHex: string): Promise<string> {
+    async pushPsbt(psbtHex: string, options?: any): Promise<string> {
       return this.send<string>({
         type: Message.MessageType.REQUEST,
         action: Message.MessageAction.PUSH_PSBT,
-        data: { psbtHex },
+        data: { psbtHex, options },
       })
     }
   }

@@ -7,12 +7,15 @@ import router from '@/entrypoints/popup/router'
 import { walletStorage } from '@/lib/walletStorage'
 import { VueQueryPlugin } from '@tanstack/vue-query'
 import { Icon } from '@iconify/vue'
+import { loadWasm } from '@/utils/wasm'
 
-walletStorage.initializeState().then(() => {
-  createApp(App)
-    .component('Icon', Icon)
-    .use(VueQueryPlugin)
-    .use(createPinia())
-    .use(router)
-    .mount('#app')
+loadWasm().then(() => {
+  walletStorage.initializeState().then(() => {
+    createApp(App)
+      .component('Icon', Icon)
+      .use(VueQueryPlugin)
+      .use(createPinia())
+      .use(router)
+      .mount('#app')
+  })
 })

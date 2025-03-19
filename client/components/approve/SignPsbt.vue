@@ -8,8 +8,9 @@
       </p>
       <p class="text-center text-base">You are signing:</p>
       <Alert>
-        <AlertTitle class="text-center text-base break-all">{{ 
-          props.data.psbtHex }}</AlertTitle>
+        <AlertTitle class="text-center text-base break-all">{{
+          props.data.psbtHex
+        }}</AlertTitle>
       </Alert>
     </div>
   </LayoutApprove>
@@ -20,7 +21,8 @@ import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
 import walletManager from '@/utils/sat20'
 import { useWalletStore } from '@/store'
-import service from '@/lib/service'
+import { psbt2tx } from '@/utils/btc'
+import { useToast } from '@/components/ui/toast'
 
 interface Props {
   data: any
@@ -28,16 +30,29 @@ interface Props {
 
 const props = defineProps<Props>()
 const emit = defineEmits(['confirm', 'cancel'])
+console.log(props)
 
 const walletStore = useWalletStore()
-const { network } = storeToRefs(walletStore)
-
+const toast = useToast()
 const confirm = async () => {
-  // await walletStore.setNetwork(props.data.network)
-  // const [err, res] = await walletManager.signMessage(props.data.message)
-  // console.log(err, res);
-  
-  emit('confirm', props.data.network)
+  const { options = {}, psbtHex } = props.data
+
+  let result
+  if (options.chain === 'btc') {
+    result = await walletManager.signPsbt(psbtHex, false)
+  } else {
+    result = await walletManager.signPsbt_SatsNet(psbtHex, false)
+  }
+  const [err, res] = result
+  if (res?.psbt) {
+    await psbt2tx(res.psbt)
+    emit('confirm', res.psbt)
+  } else {
+    toast.toast({
+      title: 'Sign PSBT failed',
+      description: err?.message || 'Sign PSBT failed',
+    })
+  }
 }
 const cancel = () => {
   emit('cancel')

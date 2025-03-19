@@ -3,11 +3,12 @@ import { useWalletStore } from '@/store'
 import Index from '@/entrypoints/popup/pages/Index.vue'
 import ImportWallet from '@/entrypoints/popup/pages/Import.vue'
 import CreateWallet from '@/entrypoints/popup/pages/Create.vue'
-import WalletHome from '@/entrypoints/popup/pages/wallet/Home.vue'
-import WalletSend from '@/entrypoints/popup/pages/wallet/Send.vue'
+import WalletIndex from '@/entrypoints/popup/pages/wallet/index.vue'
+import WalletAsset from '@/entrypoints/popup/pages/wallet/asset.vue'
 import WalletSetting from '@/entrypoints/popup/pages/wallet/Setting.vue'
 import WalletReceive from '@/entrypoints/popup/pages/wallet/Receive.vue'
-import WalletSettingPhrase from '@/entrypoints/popup/pages/wallet/settings/showPhrase.vue'
+import WalletSettingPhrase from '@/entrypoints/popup/pages/wallet/settings/phrase.vue'
+import WalletL2Send from '@/entrypoints/popup/pages/wallet/l2/send.vue'
 import Unlock from '@/entrypoints/popup/pages/Unlock.vue'
 import Approve from '@/entrypoints/popup/pages/wallet/Approve.vue'
 import { walletStorage } from '@/lib/walletStorage'
@@ -21,7 +22,7 @@ const routes = [
   {
     path: '/wallet',
     children: [
-      { path: '', component: WalletHome },
+      { path: '', component: WalletIndex },
       {
         path: 'setting',
         children: [
@@ -35,7 +36,16 @@ const routes = [
           },
         ],
       },
-      { path: 'send', component: WalletSend },
+      {
+        path: 'l2',
+        children: [
+          {
+            path: 'send',
+            component: WalletL2Send,
+          },
+        ],
+      },
+      { path: 'asset', component: WalletAsset },
       { path: 'receive', component: WalletReceive },
       { path: 'approve', component: Approve },
     ],
@@ -46,21 +56,30 @@ const router = createRouter({
   history: createWebHashHistory(),
   routes,
 })
+const checkPassword = async () => {
+  const password = walletStorage.password
+  console.log('password', password)
+
+  if (password) {
+    const passwordTime = walletStorage.passwordTime
+    console.log('passwordTime', passwordTime)
+    if (passwordTime) {
+      const now = new Date().getTime()
+      if (now - passwordTime > 5 * 60 * 1000) {
+        walletStorage.password = null
+      }
+    }
+  }
+}
 router.beforeEach(async (to, from) => {
   const walletStore = useWalletStore()
-  console.log('walletStore:', walletStore)
 
   const hasWallet = walletStorage.hasWallet
   const locked = walletStorage.locked
-  console.log('walletStorage', walletStorage)
-  console.log('walletStorage', walletStorage)
-  console.log('walletStorage', walletStorage.hasWallet)
-
-  console.log('hasWallet:', hasWallet)
-  console.log('locked:', locked)
-  const wallet = await storage.getItem('local:wallet_hasWallet')
-  console.log('wallet:', wallet)
-
+  await checkPassword()
+  if (walletStorage.password && walletStore.locked) {
+    await walletStore.unlockWallet(walletStorage.password)
+  }
   if (to.path.startsWith('/wallet')) {
     if (hasWallet) {
       if (walletStore.locked) {

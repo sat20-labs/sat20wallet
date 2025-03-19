@@ -17,7 +17,6 @@
   </nav>
 </template>
 <script setup lang="ts">
-import { ref } from 'vue'
 import { Button } from '@/components/ui/button'
 
 interface NavItem {

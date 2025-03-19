@@ -3,8 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Default Popup Title</title>
+    <title>Sat20 Wallet</title>
     <script src="/wasm/wasm_exec.js"></script>
+    <script type="module">
+      import { Buffer } from 'buffer'
+      console.log(123);
+      
+      window.Buffer = Buffer;
+    </script>
     <meta name="manifest.type" content="browser_action" />
   </head>
   <body>

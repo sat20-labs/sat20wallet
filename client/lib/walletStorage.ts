@@ -1,5 +1,5 @@
 import { storage } from 'wxt/storage'
-import { Network, Balance } from '@/types'
+import { Network, Balance, Chain } from '@/types'
 
 interface WalletState {
   hasWallet: boolean
@@ -8,7 +8,10 @@ interface WalletState {
   accountIndex: number
   address: string | null
   isConnected: boolean
+  password: string | null
   network: Network
+  chain: Chain
+  passwordTime: number | null
   balance: Balance
   pubkey: string | null
 }
@@ -17,11 +20,14 @@ const defaultState: WalletState = {
   hasWallet: false,
   address: null,
   isConnected: false,
+  password: null,
   network: Network.LIVENET,
+  chain: Chain.BTC,
   walletId: 0,
   accountIndex: 0,
   balance: { confirmed: 0, unconfirmed: 0, total: 0 },
   pubkey: null,
+  passwordTime: null,
 }
 
 class WalletStorage {
@@ -70,6 +76,9 @@ class WalletStorage {
   get address() {
     return this.state.address
   }
+  get password() {
+    return this.state.password
+  }
   get locked() {
     return this.state.locked
   }
@@ -80,6 +89,12 @@ class WalletStorage {
 
   get network() {
     return this.state.network
+  }
+  get passwordTime() {
+    return this.state.passwordTime
+  }
+  get chain() {
+    return this.state.chain
   }
 
   get walletId() {
@@ -109,7 +124,15 @@ class WalletStorage {
     this.state.locked = value
     this.persistState('locked', value)
   }
-
+  set password(value: string | null) {
+    this.state.password = value
+    if (value) {
+      this.persistState('passwordTime', new Date().getTime())
+    } else {
+      this.persistState('passwordTime', null)
+    }
+    this.persistState('password', value)
+  }
   set isConnected(value: boolean) {
     this.state.isConnected = value
     this.persistState('isConnected', value)
@@ -121,6 +144,11 @@ class WalletStorage {
   set network(value: Network) {
     this.state.network = value
     this.persistState('network', value)
+  }
+
+  set chain(value: Chain) {
+    this.state.chain = value
+    this.persistState('chain', value)
   }
 
   set walletId(value: number) {

@@ -1,3 +1,5 @@
 export * from './global'
 export * from './wallet'
-export * from './assets'
+export * from './l1'
+export * from './l2'
+export * from './channel'

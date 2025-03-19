@@ -1,12 +1,13 @@
 <template>
-  <div class="text-center mb-8">
-    <div class="flex items-center justify-center gap-2 text-gray-400 mb-2">
+  <div class="text-center mb-2">
+    <div class="flex items-center justify-center gap-2 text-gray-400">
       <h3>TOTAL BALANCE</h3>
       <Button
         variant="ghost"
         size="icon"
         class="h-6 w-6"
         @click="toggleBalance"
+        :disabled="loading"
       >
         <Icon
           :icon="isHidden ? 'lucide:eye' : 'lucide:eye-off'"
@@ -14,15 +15,21 @@
         />
       </Button>
     </div>
-    <div class="text-4xl font-mono mb-2">
-      {{ isHidden ? '******' : formattedBalance }}
+    <div class="text-4xl font-mono">
+      <template v-if="loading">
+        <div class="flex justify-center items-center">
+          <Icon icon="lucide:loader-2" class="h-6 w-6 animate-spin" />
+        </div>
+      </template>
+      <template v-else>
+        {{ isHidden ? '******' : formattedBalance }}
+      </template>
     </div>
     <div class="text-base">{{ currency }}</div>
   </div>
 </template>
 
-<script setup>
-// import { Eye, EyeOff } from 'lucide-vue-next'
+<script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
 
@@ -34,6 +41,10 @@ const props = defineProps({
   currency: {
     type: String,
     default: 'BTC',
+  },
+  loading: {
+    type: Boolean,
+    default: false,
   },
 })
 

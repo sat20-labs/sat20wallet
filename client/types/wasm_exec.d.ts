@@ -115,7 +115,10 @@ declare interface WalletManager {
   getChain(): Promise<SatsnetResponse<string>>
 
   // Returns the mnemonic for the wallet with the specified ID, using the provided password.
-  getMnemonice(id: number, password: string): Promise<SatsnetResponse<{ mnemonic: string }>>
+  getMnemonice(
+    id: number,
+    password: string
+  ): Promise<SatsnetResponse<{ mnemonic: string }>>
 
   // Returns the commit root key for the specified peer.
   getCommitRootKey(peer: Uint8Array): Promise<SatsnetResponse<Uint8Array>>
@@ -147,10 +150,16 @@ declare interface WalletManager {
   signMessage(msg: string): Promise<SatsnetResponse<{ signature: string }>>
 
   // Signs a PSBT (Partially Signed Bitcoin Transaction) and returns the signed PSBT in hex format.
-  signPsbt(psbtHex: string): Promise<SatsnetResponse<string>>
+  signPsbt(psbtHex: string, bool: boolean): Promise<SatsnetResponse<{ psbt: string }>>
 
   // Signs a PSBT for the SatsNet network and returns the signed PSBT in hex format.
-  signPsbt_SatsNet(psbtHex: string): Promise<SatsnetResponse<string>>
+  signPsbt_SatsNet(psbtHex: string, bool: boolean): Promise<SatsnetResponse<{ psbt: string }>>
+  
+  extractTxFromPsbt(psbtHex: string): Promise<SatsnetResponse<{ psbt: string }>>
+
+  extractTxFromPsbt_SatsNet(
+    psbtHex: string
+  ): Promise<SatsnetResponse<{ psbt: string }>>
 
   // Sends UTXOs to the specified address on the SatsNet network.
   sendUtxos_SatsNet(
@@ -173,7 +182,85 @@ declare interface WalletManager {
     amt: number
   ): Promise<SatsnetResponse<string>>
 }
+interface SatsnetStp {
+  closeChannel(
+    chanPoint: string,
+    feeRate: number,
+    force: boolean
+  ): SatsnetResponse
+  createWallet(password: string): SatsnetResponse
+  hello(): SatsnetResponse
+  start(): SatsnetResponse
+  getVersion(): SatsnetResponse
+  registerCallback(callback: any): SatsnetResponse
+  isWalletExisting(): SatsnetResponse
+  importWallet(mnemonic: string, passwork: string): SatsnetResponse
+  init(cfg: any, logLevel: number): SatsnetResponse
+  getTickerInfo(asset: string): SatsnetResponse
+  runesAmtV2ToV3(asset, runesAmt: string | number): SatsnetResponse
+  runesAmtV3ToV2(asset, runesAmt: string | number): SatsnetResponse
 
+  lockUtxo(
+    chanPoint: string,
+    assetName: string,
+    amt: number,
+    utxos: string[],
+    feeUtxoList?: any[]
+  ): SatsnetResponse
+  openChannel(
+    feeRate: number,
+    amt: number,
+    utxoList: string[],
+    memo: string
+  ): SatsnetResponse
+  splicingIn(
+    chanPoint: string,
+    assetName: string,
+    utxos: string[],
+    fees: string[],
+    feeRate: number,
+    amt: number
+  ): SatsnetResponse
+  splicingOut(
+    chanPoint: string,
+    toAddress: string,
+    assetName: string,
+    fees: string[],
+    feeRate: number,
+    amt: number
+  ): SatsnetResponse
+  release(): SatsnetResponse
+  getWallet(): SatsnetResponse
+  getAllChannels(): SatsnetResponse
+  getChannel(id: string): SatsnetResponse
+  getChannelStatus(id: string): SatsnetResponse
+  sendUtxos_SatsNet(
+    address: string,
+    utxos: string[],
+    amt: number
+  ): SatsnetResponse
+  sendAssets(address: string, assetName: string, amt: number): SatsnetResponse
+  sendAssets_SatsNet(
+    address: string,
+    assetName: string,
+    amt: number
+  ): SatsnetResponse
+  sendUtxos(address: string, utxos: string[], amt: number): SatsnetResponse
+  unlockUtxo(
+    channelUtxo: string,
+    assetName: string,
+    amt: number,
+    feeUtxoList?: any[]
+  ): SatsnetResponse
+  unlockWallet(password: string): SatsnetResponse
+  getMnemonice(password: string): SatsnetResponse
+}
 declare interface Window {
   sat20wallet_wasm: WalletManager
+  stp_wasm: SatsnetStp
+  sat20: Sat20
+}
+declare interface GlobalThis {
+  sat20wallet_wasm: WalletManager
+  stp_wasm: SatsnetStp
 }

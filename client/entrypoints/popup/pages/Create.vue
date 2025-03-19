@@ -123,6 +123,8 @@ import { useClipboard } from '@vueuse/core'
 import { Eye, EyeOff, Copy, AlertTriangle, Loader2Icon } from 'lucide-vue-next'
 import walletManager from '@/utils/sat20'
 import { useWalletStore } from '@/store'
+import { createPasswordSchema } from '@/utils/validation'
+import { hashPassword } from '@/utils/crypto'
 
 const { toast } = useToast()
 const loading = ref(false)
@@ -132,21 +134,7 @@ const mnemonic = ref('')
 const showMnemonic = ref(false)
 const { copy, isSupported } = useClipboard()
 
-const formSchema = toTypedSchema(
-  z
-    .object({
-      password: z
-        .string()
-        .min(8, 'Password must be at least 8 characters')
-        .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
-        .regex(/[0-9]/, 'Password must contain at least one number'),
-      confirmPassword: z.string().min(1, 'Please confirm your password'),
-    })
-    .refine((data) => data.password === data.confirmPassword, {
-      message: "Passwords don't match",
-      path: ['confirmPassword'],
-    })
-)
+const formSchema = toTypedSchema(createPasswordSchema)
 
 const form = useForm({
   validationSchema: formSchema,
@@ -156,7 +144,8 @@ const onSubmit = form.handleSubmit(async (values) => {
   if (loading.value) return
 
   loading.value = true
-  const [err, result] = await walletStore.createWallet(values.password)
+  const hashedPassword = await hashPassword(values.password)
+  const [err, result] = await walletStore.createWallet(hashedPassword)
   loading.value = false
 
   if (!err && result) {

@@ -28,15 +28,13 @@
 </template>
 
 <script setup lang="ts">
-import { defineModel } from 'vue'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-const modelAddress = defineModel<string>('address', {
+const modelAddress = defineModel<string | number>('address', {
   default: '',
 })
-const modelAmount = defineModel<number>('amount', {
+const modelAmount = defineModel<string | number>('amount', {
   default: undefined,
 })
 </script>

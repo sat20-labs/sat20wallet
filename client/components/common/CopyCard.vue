@@ -17,7 +17,7 @@ import { Card } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import CopyButton from '@/components/common/CopyButton.vue'
 interface Props {
-  text: string
+  text?: string | null
 }
 defineProps<Props>()
 </script>

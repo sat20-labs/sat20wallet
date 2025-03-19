@@ -1,14 +1,20 @@
 import { defineStore } from 'pinia'
 import { walletStorage } from '@/lib/walletStorage'
-import { Network } from '@/types'
+import { Network, Chain } from '@/types'
 import walletManager from '@/utils/sat20'
+import satsnetStp from '@/utils/stp'
+import { useChannelStore } from './channel'
+
 export const useWalletStore = defineStore('wallet', () => {
+  const channelStore = useChannelStore()
   const address = ref(walletStorage.address)
   const publicKey = ref(walletStorage.pubkey)
   const walletId = ref(walletStorage.walletId)
   const accountIndex = ref(walletStorage.accountIndex)
   const feeRate = ref(0)
+  const password = ref(walletStorage.password)
   const network = ref(walletStorage.network)
+  const chain = ref(walletStorage.chain)
   const locked = ref(walletStorage.locked)
   const hasWallet = ref(walletStorage.hasWallet)
 
@@ -30,6 +36,10 @@ export const useWalletStore = defineStore('wallet', () => {
     walletStorage.pubkey = value
     publicKey.value = value
   }
+  const setPassword = (value: string) => {
+    walletStorage.password = value
+    password.value = value
+  }
   const setNetwork = async (value: Network) => {
     const n = value === Network.LIVENET ? 'mainnet' : 'testnet'
 
@@ -47,6 +57,12 @@ export const useWalletStore = defineStore('wallet', () => {
       }
     }
   }
+
+  const setChain = async (value: Chain) => {
+    walletStorage.chain = value
+    chain.value = value
+  }
+
   const setLocked = (value: boolean) => {
     // walletStorage.locked = value
     locked.value = value
@@ -73,7 +89,12 @@ export const useWalletStore = defineStore('wallet', () => {
     await setHasWallet(true)
     await setLocked(false)
     await setNetwork(Network.TESTNET)
+    await setChain(Chain.BTC)
     await getWalletInfo()
+    await satsnetStp.importWallet(_mnemonic, password)
+    await setPassword(password)
+    await satsnetStp.start()
+    await channelStore.getAllChannels()
     return [undefined, _mnemonic]
   }
   const importWallet = async (mnemonic: string, password: string) => {
@@ -88,7 +109,12 @@ export const useWalletStore = defineStore('wallet', () => {
     await setHasWallet(true)
     await setLocked(false)
     await setNetwork(Network.TESTNET)
+    await setChain(Chain.BTC)
     await getWalletInfo()
+    await setPassword(password)
+    await satsnetStp.importWallet(mnemonic, password)
+    await satsnetStp.start()
+    await channelStore.getAllChannels()
     return [undefined, mnemonic]
   }
   const getWalletInfo = async () => {
@@ -100,12 +126,33 @@ export const useWalletStore = defineStore('wallet', () => {
     )
     // const [_c, chainRes] = await walletManager.getChain()
     // console.log(chainRes);
-    
+
     if (addressRes && pubkeyRes) {
       const { address } = addressRes
       await setAddress(address)
       await setPublickey(pubkeyRes.pubKey)
     }
+  }
+  const unlockWallet = async (password: string) => {
+    const [err, result] = await walletManager.unlockWallet(password)
+    if (!err && result) {
+      const { walletId } = result
+      setWalletId(walletId)
+      await getWalletInfo()
+      await satsnetStp.unlockWallet(password)
+      await satsnetStp.start()
+      await channelStore.getAllChannels()
+      await setLocked(false)
+      await setPassword(password)
+    }
+    return [err, result]
+  }
+  const deleteWallet = () => {
+    walletStorage.clear()
+    hasWallet.value = false
+    address.value = ''
+    publicKey.value = ''
+    walletId.value = 0
   }
   return {
     address,
@@ -114,6 +161,8 @@ export const useWalletStore = defineStore('wallet', () => {
     setWalletId,
     network,
     setNetwork,
+    chain,
+    setChain,
     locked,
     setLocked,
     hasWallet,
@@ -127,5 +176,9 @@ export const useWalletStore = defineStore('wallet', () => {
     createWallet,
     importWallet,
     getWalletInfo,
+    deleteWallet,
+    password,
+    setPassword,
+    unlockWallet,
   }
 })

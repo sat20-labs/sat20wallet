@@ -8,7 +8,7 @@ export default defineContentScript({
     await injectScript('/injected.js', {
       keepInDom: true,
     })
-    const port = chrome.runtime.connect({ name: Message.Port.CONTENT_BG })
+    const port = browser.runtime.connect({ name: Message.Port.CONTENT_BG })
     const channel = new BroadcastChannel(Message.Channel.INJECT_CONTENT)
     const sendToBackground = async (data: any) => {
       console.log('Content 发送 BACKGROUND 消息:', data);

@@ -4,11 +4,11 @@ class WalletManager {
     methodName: string,
     ...args: any[]
   ): Promise<[Error | undefined, any | undefined]> {
-    console.log('method', methodName)
-    console.log('arg', args)
+    console.log('wallet method', methodName)
+    console.log('wallet arg', args)
     const method = window.sat20wallet_wasm[methodName as keyof WalletManager]
     const [err, result] = await tryit(method as any)(...args)
-    console.log('result', result);
+    console.log('wallet result', result);
     
     if (err) {
       console.error(`${methodName} error: ${err.message}`)
@@ -89,14 +89,27 @@ class WalletManager {
   }
 
   async signPsbt(
+    psbtHex: string,
+    bool: boolean
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return this._handleRequest('signPsbt', psbtHex, bool)
+  }
+  async extractTxFromPsbt(
     psbtHex: string
-  ): Promise<[Error | undefined, string | undefined]> {
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
     return this._handleRequest('signPsbt', psbtHex)
   }
 
   async signPsbt_SatsNet(
+    psbtHex: string,
+    bool: boolean
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return this._handleRequest('signPsbt_SatsNet', psbtHex, bool)
+  }
+  
+  async extractTxFromPsbt_SatsNet(
     psbtHex: string
-  ): Promise<[Error | undefined, string | undefined]> {
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
     return this._handleRequest('signPsbt_SatsNet', psbtHex)
   }
 

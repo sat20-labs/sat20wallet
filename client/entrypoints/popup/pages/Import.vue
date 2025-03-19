@@ -128,14 +128,15 @@ import {
   FormDescription,
   FormMessage,
 } from '@/components/ui/form'
-import walletManager from '@/utils/sat20'
 import { useWalletStore } from '@/store'
-// import { KeyRound, Loader2Icon } from 'lucide-vue-next'
+import { passwordSchema, mnemonicSchema, privateKeySchema } from '@/utils/validation'
+import { hashPassword } from '@/utils/crypto'
+import {KeyRound, Loader2Icon} from 'lucide-vue-next'
 
 const { toast } = useToast()
 const router = useRouter()
 const walletStore = useWalletStore()
-const tab = ref('mnemonic')
+const tab = ref<any>('mnemonic')
 const loading = ref(false)
 
 const showToast = (variant: 'default' | 'destructive', title: string, description: string | Error) => {
@@ -149,13 +150,13 @@ const showToast = (variant: 'default' | 'destructive', title: string, descriptio
 const formSchema = toTypedSchema(
   z
     .object({
-      mnemonic: z.string().min(1, 'Recovery phrase is required').optional(),
-      privateKey: z.string().min(1, 'Private key is required').optional(),
-      password: z.string().min(8, 'Password must be at least 8 characters'),
+      mnemonic: mnemonicSchema.optional(),
+      privateKey: privateKeySchema.optional(),
+      password: passwordSchema,
       confirmPassword: z.string().min(1, 'Please confirm your password'),
     })
     .refine((data) => data.password === data.confirmPassword, {
-      message: "Passwords don't match",
+      message: "Passwords do not match",
       path: ['confirmPassword'],
     })
     .refine(
@@ -178,11 +179,14 @@ const onSubmit = form.handleSubmit(async (values) => {
   console.log('Form values:', values)
 
   loading.value = true
+
+  const hashedPassword = await hashPassword(values.password)
+
   if (tab.value === 'mnemonic') {
     if (values.mnemonic) {
       const [err, result] = await walletStore.importWallet(
         values.mnemonic,
-        values.password
+        hashedPassword
       )
       if (err) {
         showToast('destructive', 'Error', err)
@@ -191,7 +195,7 @@ const onSubmit = form.handleSubmit(async (values) => {
       }
 
       showToast('default', 'Success', 'Wallet imported successfully')
-      loading.value = false
+      router.push('/wallet')
     }
   }
 

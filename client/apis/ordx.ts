@@ -2,7 +2,7 @@ class OrdxApi {
   generatePath(path: string, network: string) {
     const BASE_URL = import.meta.env.WXT_ORDX_URL
     return `${BASE_URL}${
-      network === 'testnet' ? '/testnet' : '/mainnet'
+      network === 'testnet' ? '/btc/testnet' : '/btc/mainnet'
     }/${path}`
   }
 
@@ -36,7 +36,7 @@ class OrdxApi {
 
   async getRecommendedFees({ network }: any): Promise<any> {
     const url = `https://apiprd.ordx.market/${
-      network === 'livenet' ? '' : 'testnet/'
+      network === 'livenet' ? 'btc' : 'testnet/'
     }ordx/GetRecommendedFees`
     const response = await fetch(url)
     return response.json()
@@ -66,7 +66,14 @@ class OrdxApi {
     )
     return response.json()
   }
-
+  async pushTx({ hex, network }: any) {
+    const response = await fetch(this.generatePath(`btc/tx`, network), {
+      method: 'POST',
+      body: JSON.stringify({ SignedTxHex: hex }),
+    })
+    console.log('response', response)
+    return response.json()
+  }
   async getOrdxAddressHolders({
     address,
     ticker,

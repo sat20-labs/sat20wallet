@@ -2,6 +2,7 @@
   <component
     :is="componentName"
     :data="data"
+    :metadata="metadata"
     @cancel="cancel"
     @confirm="confirm"
   ></component>
@@ -24,15 +25,12 @@ const approveComponentMap: any = {
   [Message.MessageAction.SIGN_PSBT]: SignPsbt,
   [Message.MessageAction.SEND_BITCOIN]: Send,
 }
-console.log(approveData)
-watch(
-  () => approveData,
-  (action) => {
-    console.log(action)
-  }
-)
+
 const data = computed(() => {
   return approveData.value?.data ?? {}
+})
+const metadata = computed(() => {
+  return approveData.value?.metadata ?? {}
 })
 const componentName = computed(() => {
   if (!approveData.value?.action) {

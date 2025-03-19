@@ -85,3 +85,8 @@ export function btcToSats(btc: string | number): number {
 
   return sats;
 }
+
+export function validateBTCAddress(address: string): boolean {
+  const regex = /^[13][a-km-zA-HJ-NP-Z1-9]{26,33}$/;
+  return regex.test(address);
+}

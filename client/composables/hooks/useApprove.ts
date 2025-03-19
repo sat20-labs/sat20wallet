@@ -4,7 +4,7 @@ export const useApprove = () => {
   const approveData = ref<any>(null)
   const portRef = shallowRef<any>(null)
   const approve = async (res: any) => {
-    const currWin = await chrome.windows.getCurrent()
+    const currWin = await browser.windows.getCurrent()
     console.log(approveData.value)
 
     await portRef.value.postMessage({
@@ -20,7 +20,7 @@ export const useApprove = () => {
     })
   }
   const reject = async () => {
-    const currWin = await chrome.windows.getCurrent()
+    const currWin = await browser.windows.getCurrent()
     await portRef.value.postMessage({
       type: Message.MessageType.APPROVE,
       action: Message.MessageAction.REJECT_RESPONSE,
@@ -37,7 +37,7 @@ export const useApprove = () => {
   })
   onMounted(async () => {
     if (!portRef.value) return
-    const currWin = await chrome.windows.getCurrent()
+    const currWin = await browser.windows.getCurrent()
     const connectionReady = new Promise((resolve) => {
       portRef.value.onMessage.addListener(function connectionListener(
         msg: any

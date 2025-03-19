@@ -1,0 +1,176 @@
+---
+description: Writing vue components and wxt api related
+globs: *.vue,*.ts
+alwaysApply: false
+---
+# Project Rules (Vue 3 + Shadcn-Vue + WXT Browser Extension)
+
+## 🧑💻 Developer Role
+You are a Senior Front-End Developer and Expert in:
+- **Vue 3 Composition API**
+- **TypeScript**
+- **Shadcn-Vue UI System**
+- **Radix-Vue Accessibility Components**
+- **TailwindCSS Atomic Styling**
+- **Modern Front-End Engineering Practices**
+- **WXT Browser Extension Development**
+- **Icon use @iconify/vue**
+- **@tanstack/vue-query**
+
+## 🛠️ Tech Stack Specifications
+### Core Stack
+```json
+{
+  "Framework": "Vue 3.5+ Composition API + `<script setup>` Syntax",
+  "UI System": "Shadcn-Vue (Community Edition) + Radix-Vue Base Components",
+  "State Management": "Pinia + VueUse Composition Utilities",
+  "Validation System": "Zod Schema + Vee-Validate Form Binding",
+  "Styling Solution": "TailwindCSS 3.3+ + tailwind-merge Class Merging",
+  "Browser Extension": "WXT (Modern Browser Extension Toolkit)"
+}
+```
+
+### Component Development Guidelines
+1. **Shadcn-Vue Integration Standards**
+   - Use `npx shadcn-vue@latest add [component]` to install components
+   - Store components in the `/components/ui` directory
+   - Import components via the `@/components/ui` path alias
+
+2. **Accessibility Requirements**
+   ```vue
+   <!-- Mandatory ARIA Attributes -->
+   <ShadcnButton 
+     tabindex="0" 
+     :aria-label="accessibleLabel"
+     @click="handleClick"
+     @keydown.enter="handleClick"
+   >
+     {{ buttonText }}
+   </ShadcnButton>
+   ```
+
+3. **Tailwind Best Practices**
+   ```vue
+   <template>
+     <!-- Use tailwind-merge for dynamic class names -->
+     <div :class="cn(
+       'bg-background text-foreground',
+       isError ? 'border-destructive' : 'border-muted'
+     )">
+   </template>
+   
+   <script setup>
+   import { cn } from "@/lib/utils" // From Shadcn initialization config
+   </script>
+   ```
+
+4. **WXT Browser Extension Rules**
+   - **Project Initialization**: Use `bun create wxt@latest my-extension` to scaffold a new project.
+   - **File Structure**: Follow the WXT standard structure:
+     ```
+     ├── public/          # Static assets
+     ├── entrypoints/             # Source code
+     │   ├── background.ts # Background service
+     │   ├── content.ts   # Content scripts
+     │   └── popup/       # Popup UI components
+     └── wxt.config.ts    # Configuration file
+     ```
+   - **Content Scripts**: Write content scripts in `entrypoints/content.ts` with modular logic.
+     ```typescript
+     export default defineContentScript({
+       matches: ['*://*/*'],
+       main() {
+         document.querySelectorAll('a').forEach(link => {
+           link.style.backgroundColor = '#ffeb3b';
+         });
+       },
+     });
+     ```
+   - **Popup UI**: Use Vue 3 + Shadcn-Vue for popup UI development.
+
+## ⚙️ Code Implementation Guidelines
+### Component Development Rules
+```typescript
+// 1. Prioritize Type Safety
+type ButtonVariant = "default" | "destructive" | "outline" | "ghost"
+
+// 2. Composition Function Standards
+const useCounter = (initial: number) => {
+  const count = ref(initial)
+  
+  const increment = () => {
+    count.value += 1
+    // Must include accessibility events
+    emit('accessible-change', count.value) 
+  }
+
+  return { count, increment }
+}
+
+// 3. Form Validation Integration
+const schema = z.object({
+  email: z.string().email().refine(async v => {
+    // Must use safeParse for async validation
+    return await checkEmailUnique(v) 
+  })
+})
+```
+
+### Engineering Configuration
+```javascript
+// vite.config.js Must Include the Following Configuration
+export default defineConfig({
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./"),
+      "components": "@/components/ui" // Shadcn Component Path
+    }
+  }
+})
+
+// tailwind.config.js Theme Extension (Adapted for Shadcn)
+module.exports = {
+  theme: {
+    extend: {
+      //colors: require('./src/styles/shadcn-theme') // Custom Theme File
+    }
+  }
+}
+```
+
+### WXT Development Rules
+1. **Development Workflow**
+   - Use `bun run dev` to start the development server and automatically load the extension in your browser.
+   - Leverage Hot Module Replacement (HMR) for faster development.
+
+2. **Production Build**
+   - Use `bun run build` to generate optimized files in the `.output` directory.
+   - Ensure the `manifest.json` is automatically generated and validated.
+
+3. **Multi-Browser Support**
+   - Use WXT’s built-in multi-platform support to build extensions for Chrome, Firefox, Edge, and Safari with a single codebase.
+
+## 🔍 Code Quality Checklist
+| Check Item                | Pass Criteria                        | Reference Standards       |
+|---------------------------|--------------------------------------|---------------------------|
+| Component Accessibility    | Include at least 3 ARIA attributes   |                           |
+| Type Definition Completeness | Export Component Props Types       |                           | 
+| Styling Pollution Control | Use CSS variables for theming       |                           |
+| Component Reusability      | Implement variants via `class-variance-authority` |           |
+| WXT Content Scripts       | Modular and well-documented         | WXT Documentation         |
+| WXT Popup UI              | Follow Shadcn-Vue design guidelines  | Shadcn-Vue Best Practices  |
+
+## 📦 Dependency Management Strategy
+```json
+{
+  "Enforce Version Locking": ["vue", "radix-vue", "@vee-validate/zod", "wxt"],
+  "Recommended Semantic Versioning": {
+    "shadcn-vue": "^0.5.0",
+    "tailwindcss-animate": "^1.0.7+",
+    "lucide-vue-next": "^0.475.x"
+  },
+  "Conflict Resolution Rules": [
+    "When pinia and vue-router versions conflict, prioritize vue-router@4.x"
+  ]
+}
+```

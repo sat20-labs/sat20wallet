@@ -2,9 +2,14 @@
   <LayoutHome>
     <!-- <SecuritySetting />
     <NetworkSetting /> -->
-    <Button as-child>
-      <RouterLink to="/wallet/setting/phrase" class="w-full mt-2"> show phrase </RouterLink>
-    </Button>
+    <div class="space-y-4">
+      <Button as-child>
+        <RouterLink to="/wallet/setting/phrase" class="w-full mt-2">
+          Show Phrase
+        </RouterLink>
+      </Button>
+      <DeleteWallet />
+    </div>
     <!-- <AppearanceSetting /> -->
   </LayoutHome>
 </template>
@@ -13,6 +18,7 @@
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import SecuritySetting from '@/components/setting/SecuritySetting.vue'
+import DeleteWallet from '@/components/setting/DeleteWallet.vue'
 import NetworkSetting from '@/components/setting/NetworkSetting.vue'
 import AppearanceSetting from '@/components/setting/AppearanceSetting.vue'
 import { Button } from '@/components/ui/button'

@@ -1,12 +1,33 @@
-import wasmConfig from '@/config/wasm'
 import { walletError } from '@/types/error'
 import service from '@/lib/service'
+import { storage } from 'wxt/storage'
 import { walletStorage } from '@/lib/walletStorage'
 import { createPopup } from '@/utils/popup'
 import { Message } from '@/types/message'
+import { Buffer as Buffer3 } from 'buffer'
+import { isOriginAuthorized } from '@/lib/authorized-origins'
+globalThis.Buffer = Buffer3
+const Buffer = Buffer3
+import wasmConfig from '@/config/wasm'
 
 export default defineBackground(async () => {
-  console.log('Hello background!', { id: browser.runtime.id })
+  const loadWalletWasm = async () => {
+    importScripts('/wasm/wasm_exec.js')
+    const go = new Go()
+    const wasmPath = browser.runtime.getURL('/wasm/sat20wallet.wasm')
+    const response = await fetch(wasmPath)
+    const wasmBinary = await response.arrayBuffer()
+    const wasmModule = await WebAssembly.instantiate(
+      wasmBinary,
+      go.importObject
+    )
+    go.run(wasmModule.instance)
+    await (globalThis as any).sat20wallet_wasm.init(
+      wasmConfig.config,
+      wasmConfig.logLevel
+    )
+  }
+  await loadWalletWasm()
   const approveMap = new Map<
     string,
     { windowId: number | undefined; eventData: any }
@@ -15,6 +36,7 @@ export default defineBackground(async () => {
   const portMap: any = {}
   const popupListener = async (message: any) => {
     const eventData = message
+
     const { action, data, metadata = {} } = eventData
     const { windowId, from, messageId } = metadata
     console.log('Background 收到 popup 消息:', eventData)
@@ -36,12 +58,13 @@ export default defineBackground(async () => {
         }
       } else if (action === Message.MessageAction.APPROVE_RESPONSE) {
         console.log('Background 收到 Approve Response:', eventData)
+
         eventData.metadata.from = Message.MessageFrom.BACKGROUND
         eventData.metadata.to = Message.MessageTo.INJECTED
         await portMap.content.postMessage(eventData)
-        // portMap.popup.disconnect()
-        // approveMap.delete(windowId.toString())
-        // browser.windows.remove(windowId)
+        portMap.popup.disconnect()
+        approveMap.delete(windowId.toString())
+        browser.windows.remove(windowId)
       } else if (action === Message.MessageAction.REJECT_RESPONSE) {
         console.log('Background 收到 Reject Response:', eventData)
         eventData.metadata.from = Message.MessageFrom.BACKGROUND
@@ -65,7 +88,7 @@ export default defineBackground(async () => {
       port.postMessage({
         type: 'CONNECTION_READY',
       })
-      const currWin = await chrome.windows.getCurrent()
+      const currWin = await browser.windows.getCurrent()
       if (currWin?.id) {
         const approveData = approveMap.get(currWin.id.toString())
         if (approveData) {
@@ -88,8 +111,28 @@ export default defineBackground(async () => {
         await walletStorage.initializeState()
         const eventData = event
         const { action, type } = eventData
+        const { origin } = eventData.metadata
+
         eventData.metadata.from = Message.MessageFrom.BACKGROUND
         eventData.metadata.to = Message.MessageTo.INJECTED
+
+        // 定义需要验证 origin 的方法列表
+        const METHODS_REQUIRING_AUTHORIZATION = [
+          Message.MessageAction.GET_ACCOUNTS,
+          Message.MessageAction.GET_PUBLIC_KEY,
+          Message.MessageAction.GET_BALANCE,
+          Message.MessageAction.GET_NETWORK,
+          Message.MessageAction.SEND_BITCOIN,
+          Message.MessageAction.SIGN_MESSAGE,
+          Message.MessageAction.SIGN_PSBT,
+          Message.MessageAction.SIGN_PSBTS,
+          Message.MessageAction.PUSH_TX,
+          Message.MessageAction.PUSH_PSBT,
+          Message.MessageAction.GET_INSCRIPTIONS,
+          Message.MessageAction.SEND_INSCRIPTION,
+          Message.MessageAction.SWITCH_NETWORK,
+        ]
+
         const checkWallet = async () => {
           const hasWallet = await service.getHasWallet()
           console.log(await storage.getItem('local:wallet_hasWallet'))
@@ -102,7 +145,25 @@ export default defineBackground(async () => {
           }
           return hasWallet
         }
-        let resData
+        let resData = null
+        let errData = null
+        // 验证 origin 是否已授权（除了 REQUEST_ACCOUNTS 外的所有请求）
+
+        if (METHODS_REQUIRING_AUTHORIZATION.includes(action)) {
+          const authorized = await isOriginAuthorized(origin)
+          if (!authorized) {
+            console.log(`未授权的来源: ${origin}`)
+            portMap.content.postMessage({
+              ...eventData,
+              data: null,
+              error: {
+                code: -32603,
+                message: '未授权的来源，请先调用 REQUEST_ACCOUNTS 方法',
+              },
+            })
+            return
+          }
+        }
         if (type === Message.MessageType.REQUEST) {
           const hasWallet = await checkWallet()
           if (hasWallet) {
@@ -116,23 +177,34 @@ export default defineBackground(async () => {
               case Message.MessageAction.GET_NETWORK:
                 resData = await service.getNetwork()
                 break
-              case Message.MessageAction.GET_PUBLIC_KEY:
-                resData = await service.getPublicKey()
-                break
               case Message.MessageAction.GET_BALANCE:
                 resData = await service.getBalance()
                 break
               case Message.MessageAction.PUSH_TX:
-                resData = await service.pushTx(eventData.data)
+                resData = await service.pushTx(eventData.data.rawtx)
                 break
               case Message.MessageAction.PUSH_PSBT:
-                resData = await service.pushPsbt(eventData.data)
+                const [err, res] = await service.pushPsbt(
+                  eventData.data.psbtHex
+                )
+                if (err) {
+                  errData = {
+                    code: -22,
+                    message: err.message,
+                  }
+                } else {
+                  resData = res
+                }
                 break
             }
-            portMap.content.postMessage({
+            const responseData = {
               ...eventData,
               data: resData,
-            })
+            }
+            if (errData) {
+              responseData.error = errData
+            }
+            portMap.content.postMessage(responseData)
           }
         } else if (type === Message.MessageType.APPROVE) {
           const hasWallet = await checkWallet()
