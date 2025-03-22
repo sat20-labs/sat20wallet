@@ -8,7 +8,7 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	
-	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 
 	indexer "github.com/sat20-labs/indexer/common"
 )

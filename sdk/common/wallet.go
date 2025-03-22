@@ -4,9 +4,9 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 
-	"github.com/sat20-labs/satsnet_btcd/btcec"
+	"github.com/sat20-labs/satoshinet/btcec"
 
-	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
 
 type ChannelWallet interface {

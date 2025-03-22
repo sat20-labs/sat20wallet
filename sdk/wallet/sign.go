@@ -4,8 +4,8 @@ import (
 	
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	stxscript "github.com/sat20-labs/satsnet_btcd/txscript"
-	swire "github.com/sat20-labs/satsnet_btcd/wire"
+	stxscript "github.com/sat20-labs/satoshinet/txscript"
+	swire "github.com/sat20-labs/satoshinet/wire"
 
 )
 

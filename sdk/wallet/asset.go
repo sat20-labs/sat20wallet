@@ -3,8 +3,8 @@ package wallet
 import (
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
-	sindexer "github.com/sat20-labs/satsnet_btcd/indexer/common"
-	swire "github.com/sat20-labs/satsnet_btcd/wire"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 type AssetName = swire.AssetName

@@ -16,12 +16,12 @@ import (
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
-	"github.com/sat20-labs/satsnet_btcd/btcec"
-	"github.com/sat20-labs/satsnet_btcd/btcec/ecdsa"
-	"github.com/sat20-labs/satsnet_btcd/btcec/schnorr"
-	spsbt "github.com/sat20-labs/satsnet_btcd/btcutil/psbt"
-	stxscript "github.com/sat20-labs/satsnet_btcd/txscript"
-	swire "github.com/sat20-labs/satsnet_btcd/wire"
+	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/btcec/schnorr"
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
+	stxscript "github.com/sat20-labs/satoshinet/txscript"
+	swire "github.com/sat20-labs/satoshinet/wire"
 	"github.com/tyler-smith/go-bip39"
 )
 
