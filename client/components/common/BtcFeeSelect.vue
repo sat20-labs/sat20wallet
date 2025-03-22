@@ -4,15 +4,16 @@
       @click="isModalOpen = true"
       variant="outline"
       size="xs"
-      class="rounded-full"
+      class="rounded-md text-gray-300 text-xs font-normal ml-2"
     >
-      {{ displayedRate }} sat/vB
+     <Icon icon="lucide:fuel" class="w-1 h-1 mr-[0.5px] text-gray-500" /><span class="mr-2">{{ displayedRate }}</span>
+
     </Button>
 
     <Dialog v-model:open="isModalOpen">
       <DialogContent class="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>选择费率 / Select Fee Rate</DialogTitle>
+          <DialogTitle>Select Fee Rate</DialogTitle>
         </DialogHeader>
         <div class="grid grid-cols-4 gap-2">
           <Button
@@ -29,7 +30,7 @@
         </div>
         <div v-if="selectedRate === 'custom'" class="mt-4 space-y-2">
           <Label for="customRate" class="text-sm font-medium">
-            自定义费率 / Custom Fee Rate (sat/vB)
+             Custom Fee Rate (sat/vB)
           </Label>
           <div class="flex items-center gap-2">
             <Input
@@ -46,7 +47,7 @@
         </div>
         <DialogFooter>
           <Button @click="isModalOpen = false" class="w-full">
-            确认 / Confirm
+             Confirm
           </Button>
         </DialogFooter>
       </DialogContent>

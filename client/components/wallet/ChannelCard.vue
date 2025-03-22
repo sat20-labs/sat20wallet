@@ -27,6 +27,7 @@
       <p>{{ channelStatusText }}</p>
     </div>
     <ChannelAssetsTabs />
+    <Progress :value="progressValue" class="w-full" />
   </div>
   <div>
     <Button @click="openHandler" v-if="!channel" class="w-full"> Open </Button>
@@ -105,37 +106,65 @@
 <script lang="ts" setup>
 import { ref, computed, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { sleep } from 'radash'
 import { Button } from '@/components/ui/button'
-import ChannelAssetsTabs from '@/components/asset/ChannelAssetsTabs.vue'
 import { Input } from '@/components/ui/input'
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
+import Progress from '@/components/ui/progress/index.vue'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Icon } from '@iconify/vue'
+import { useChannelStore } from '@/store'
+import satsnetStp from '@/utils/stp'
+import { useToast } from '@/components/ui/toast'
 import { hideAddress } from '~/utils'
 import { getChannelStatusText } from '~/composables'
 import { useL1Store } from '~/store'
-import { useChannelStore } from '~/store'
-import { useToast } from '@/components/ui/toast'
-import satsnetStp from '@/utils/stp'
 import CopyCard from '@/components/common/CopyCard.vue'
+import ChannelAssetsTabs from '@/components/asset/ChannelAssetsTabs.vue'
+import { sleep } from 'radash'
 
-const l1Store = useL1Store()
 const channelStore = useChannelStore()
+const { channel } = storeToRefs(channelStore)
 const { toast } = useToast()
 
-const channelAmt = ref()
-const showAmt = ref(false)
-const amtType = ref<'open' | 'unlock'>('open')
-const { plainUtxos, balance: l1PlainBalance } = storeToRefs(l1Store)
-console.log('plainUtxos', plainUtxos)
-
 const loading = ref(false)
+const showAmt = ref(false)
+const channelAmt = ref('')
 
-const { channel } = storeToRefs(channelStore)
+// 通道资产列表
+const channelAssets = computed(() => {
+  if (!channel.value || channel.value.status !== 16) return []
+  return [
+    {
+      ticker: 'BTC',
+      label: 'Bitcoin',
+      amount: channel.value.localbalance_L1?.reduce((acc, val) => acc + val, 0) || 0
+    },
+    // 可以添加其他资产类型
+  ]
+})
+
+// 通道状态进度
+const progressValue = computed(() => {
+  if (!channel.value) return 0
+  const status = channel.value.status
+  // 根据状态返回进度值
+  switch (status) {
+    case 1: return 20  // 初始化
+    case 2: return 40  // 等待确认
+    case 3: return 60  // 确认中
+    case 4: return 80  // 即将完成
+    case 16: return 100 // 已完成
+    default: return 0
+  }
+})
+
+defineProps<{
+  selectedType: string // 改为 selectedType 以匹配 v-model 的默认行为
+}>()
+
+defineEmits(['lock', 'unlock', 'update:selectedType'])
+
+const l1Store = useL1Store()
+const { plainUtxos, balance: l1PlainBalance } = storeToRefs(l1Store)
 
 const channelBalance = computed(() => {
   return channel.value?.localbalance_L1?.reduce(
@@ -145,7 +174,6 @@ const channelBalance = computed(() => {
 })
 
 const openHandler = () => {
-  amtType.value = 'open'
   showAmt.value = !showAmt.value
 }
 
@@ -154,29 +182,6 @@ const clear = () => {
   channelAmt.value = ''
 }
 const amtConfirm = async () => {
-  if (amtType.value === 'open') {
-    openChannel()
-  } else {
-  }
-}
-
-const channelStatusText = computed(() => {
-  if (!channel.value) return ''
-  const status = channel.value?.status
-  if (status > 0 && status < 5) {
-    return 'Channel is opening'
-  } else if (status > 7 && status < 15) {
-    return 'Channel is closing'
-  } else if (status === 33) {
-    return 'Splicing in'
-  } else if (status === 51) {
-    return 'Splicing out'
-  } else {
-    return getChannelStatusText(status)
-  }
-})
-
-const openChannel = async (): Promise<void> => {
   const feeRate = 1
   const amt = parseInt(channelAmt.value, 10)
 
@@ -188,6 +193,18 @@ const openChannel = async (): Promise<void> => {
     })
     return
   }
+
+  const [err11, result11] = await satsnetStp.getChannelStatus(channelAmt.value);
+  if (err11) {
+    toast({
+      title: 'Error',
+      description: err11.message,
+      variant: 'destructive',
+    })
+    return
+  }
+  
+
   loading.value = true
   const utxoList = plainUtxos.value.map((utxo: any) => utxo)
 
@@ -208,6 +225,23 @@ const openChannel = async (): Promise<void> => {
   clear()
   loading.value = false
 }
+
+const channelStatusText = computed(() => {
+  if (!channel.value) return ''
+  const status = channel.value?.status
+  if (status > 0 && status < 5) {
+    return 'Channel is opening'
+  } else if (status > 7 && status < 15) {
+    return 'Channel is closing'
+  } else if (status === 33) {
+    return 'Splicing in'
+  } else if (status === 51) {
+    return 'Splicing out'
+  } else {
+    return getChannelStatusText(status)
+  }
+})
+
 const checkChannel = async (force: boolean) => {
   const chanid = channel.value!.chanid
 

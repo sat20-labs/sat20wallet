@@ -99,39 +99,61 @@ export const useChannelStore = defineStore('channel', () => {
   const channel = computed(() => channels.value?.[0])
   const getAllChannels = async () => {
     const [_, result] = await satsnetStp.getAllChannels()
-    if (result) {
+    if (result?.channels) {
       try {
         console.log('result', result)
         const c = JSON.parse(result.channels)
         console.log('channels', c)
-        let values = Object.values(c)
-        values = values.filter(
-          (v: any) =>
-            (v.status > 15 && v.status < 257) || (v.status > 0 && v.status < 5)
-        )
-        channels.value = values as Channel[]
+        if (c && typeof c === 'object') {
+          let values = Object.values(c)         
+          values = values.filter(
+            (v: any) =>
+              (v.status > 15 && v.status < 257) || (v.status > 0 && v.status < 5)
+          )          
+          channels.value = values as Channel[]
+          // 添加这行，确保在通道数据更新后解析资产
+          await parseChannel()
+        } else {
+          channels.value = []
+        }
       } catch (error) {
         console.log(error)
+        channels.value = []
       }
+    } else {
+      channels.value = []
     }
   }
 
   const parseChannel = async () => {
+    console.log('开始解析通道资产...')
+    console.log('当前channel:', channel.value)
+    
     allAssetList.value = []
     const { localbalance_L1 } = channel.value || {}
+    console.log('localbalance_L1:', localbalance_L1)
+    
     if (localbalance_L1?.length) {
+      console.log('开始处理资产列表，长度:', localbalance_L1.length)
       for (let i = 0; i < localbalance_L1.length; i++) {
         const item = localbalance_L1[i]
+        console.log('处理资产项:', item)
+        
         const protocol = item.Name.Protocol
         const key = protocol
           ? `${protocol}:${item.Name.Type}:${item.Name.Ticker}`
           : '::'
+        console.log('资产key:', key)
+        
         let amt = item.Amount
         if (protocol === 'runes') {
+          console.log('处理runes金额转换, 原始金额:', amt)
           const [_, amtRes] = await satsnetStp.runesAmtV2ToV3(key, amt)
           amt = amtRes?.runeAmtInV3 || amt
+          console.log('转换后金额:', amt)
         }
-        allAssetList.value.push({
+
+        const assetItem = {
           id: key,
           key,
           protocol: protocol,
@@ -143,8 +165,12 @@ export const useChannelStore = defineStore('channel', () => {
               : item.Name.Ticker,
           utxos: [],
           amount: amt,
-        })
+        }
+        console.log('添加资产项:', assetItem)
+        allAssetList.value.push(assetItem)
+        
         const getAssetInfo = async (key: string) => {
+          console.log('获取资产信息:', key)
           const [err, res] = await satsnetStp.getTickerInfo(key)
           if (res?.ticker) {
             const { ticker } = res
@@ -152,17 +178,25 @@ export const useChannelStore = defineStore('channel', () => {
             const findItem = allAssetList.value?.find((a: any) => a.key === key)
             if (findItem) {
               findItem.label = result?.displayname || findItem.label
+              console.log('更新资产标签:', findItem)
             }
           }
         }
+        
         const tickers = allAssetList.value.map((a) => a.key)
-        parallel(3, tickers.filter((r) => r !== '::') || [], async (ticker) => {
+        console.log('待处理的ticker列表:', tickers)
+        await parallel(3, tickers.filter((r) => r !== '::') || [], async (ticker) => {
           return await getAssetInfo(ticker)
         })
       }
+    } else {
+      console.log('没有找到localbalance_L1或为空')
     }
+    
+    console.log('解析完成，最终资产列表:', allAssetList.value)
   }
   const plainList = computed(() => {
+    console.log('调试信息plainList:', allAssetList.value)
     return allAssetList.value.filter((item) => item?.protocol === '')
   })
   const sat20List = computed(() => {

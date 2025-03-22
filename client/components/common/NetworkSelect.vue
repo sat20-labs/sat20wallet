@@ -1,14 +1,15 @@
 <template>
   <div>
-    <Button size="xs" variant="outline" @click="isOpen = true">
-      <span>{{ showNetwork?.name }}</span>
+    <Button size="xs" variant="outline" @click="isOpen = true" class="rounded-full">
+      <!-- <span><{{ showNetwork?.name }}</span> -->
+      <Icon :icon="showNetwork?.icon" :class="showNetwork?.iconColor" />{{ showNetwork?.name }}
       <ChevronDown class="h-4 w-4" />
     </Button>
 
     <Dialog v-model:open="isOpen">
       <DialogContent class="">
         <DialogHeader>
-          <DialogTitle>Select Network</DialogTitle>
+          <DialogTitle class="text-gray-300 text-xl font-semibold">Select Network</DialogTitle>
         </DialogHeader>
         <div class="space-y-2 py-4">
           <Button
@@ -19,6 +20,7 @@
             class="w-full justify-start"
           >
             <div class="flex items-center gap-3">
+              <Icon :icon="n.icon" :class="n.iconColor" />
               <span>{{ n.name }}</span>
             </div>
           </Button>
@@ -43,17 +45,23 @@ import { useWalletStore } from '@/store'
 
 interface NetworkItem {
   name: string
+  icon: string
+  iconColor: string
   value: Network
 }
 const walletStore = useWalletStore()
 const { network } = storeToRefs(walletStore)
 const networks: NetworkItem[] = [
   {
-    name: 'Mainnet',
+    name: 'Bitcoin',
+    icon: 'lucide:bitcoin',
+    iconColor: 'text-orange-500',
     value: Network.LIVENET,
   },
   {
     name: 'Testnet',
+    icon: 'lucide:bitcoin',    
+    iconColor: 'text-green-500',
     value: Network.TESTNET,
   },
 ]

@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full flex flex-col w-full">
+  <div class="layout-container h-full flex flex-col w-full">
     <div class="flex-1 w-full overflow-hidden">
       <ScrollArea class="h-full p-4">
         <slot />

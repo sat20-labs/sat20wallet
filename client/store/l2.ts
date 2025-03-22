@@ -30,6 +30,8 @@ export const useL2Store = defineStore('l2-assets', () => {
     ordList.value = []
   }
 
+  
+
   return {
     assetList,
     uniqueAssetList,
