@@ -79,7 +79,7 @@
           </TabsContent>
 
           <TabsContent value="lightning" class="mt-4" :key="`${selectedNetwork}-lightning`">
-            <!-- Lightning Channel Card -->
+            <!-- Lightning Channel Assetlist -->
             <ChannelCard 
               :selectedType="selectedAssetType"
               @update:selectedType="selectedAssetType = $event"
