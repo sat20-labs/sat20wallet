@@ -1,6 +1,6 @@
 package wallet
 
-import swire "github.com/sat20-labs/satsnet_btcd/wire"
+import swire "github.com/sat20-labs/satoshinet/wire"
 
 // print the TX
 type TxWitness []string

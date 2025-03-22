@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/wire"
-	swire "github.com/sat20-labs/satsnet_btcd/wire"
+	swire "github.com/sat20-labs/satoshinet/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 )
 

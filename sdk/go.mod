@@ -9,7 +9,7 @@ replace github.com/btcsuite/btcwallet => github.com/sat20-labs/btcwallet v0.16.1
 
 replace github.com/btcsuite/btcd/btcutil => github.com/sat20-labs/btcd/btcutil v1.1.7
 
-replace github.com/sat20-labs/satsnet_btcd => ../../satsnet_btcd
+replace github.com/sat20-labs/satoshinet => ../../satoshinet
 
 replace github.com/sat20-labs/indexer => ../../indexer
 
@@ -57,7 +57,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/lightningnetwork/lnd/tlv v1.0.2 // indirect
-	github.com/sat20-labs/satsnet_btcd v0.0.0-20250303105234-bed25fe24627
+	github.com/sat20-labs/satoshinet v0.0.0-20250303105234-bed25fe24627
 	github.com/sirupsen/logrus v1.9.3
 	gopkg.in/yaml.v2 v2.4.0
 )
