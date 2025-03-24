@@ -3,11 +3,13 @@ package wallet
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
+	"github.com/sat20-labs/indexer/common"
 )
 
 var _client *Manager
@@ -146,4 +148,40 @@ func TestVerifyPsbtString(t *testing.T) {
 	}
 
 	PrintJsonTx(finalTx, "")
+}
+
+func TestBuildOrder(m *testing.T) {
+
+	assset := common.DisplayAsset{
+		AssetName: AssetName{
+			Protocol: "ordx",
+			Type: "f",
+			Ticker: "rarepizza",
+		},
+		Amount: "400",
+		Precision: 0,
+		BindingSat: 1,
+		Offsets: nil,	
+	}
+
+	info := SellUtxoInfo{
+		AssetsInUtxo: common.AssetsInUtxo{
+			UtxoId: 1030792413185,
+			OutPoint: "ee7f3526663e7ebdfd4fb577941cdeab12729d2d220d651798369bfe106c4b2a:1",
+			Value: 400,
+			PkScript: []byte("USBmGjbRHN3OJU7Y44vUbF7Oh71vqRPudPlNcHWRyBfLOA=="),
+			Assets: []*common.DisplayAsset{&assset},
+			},
+		Price: 800,
+		AssetInfo: nil,
+	}
+
+	utxo, _ := json.Marshal(info)
+	fmt.Printf("%s\n", string(utxo))
+
+	// utxo := `
+    //     "{\"AssetsInUtxo\":{\"UtxoId\":1030792413185,\"Outpoint\":\"ee7f3526663e7ebdfd4fb577941cdeab12729d2d220d651798369bfe106c4b2a:1\",\"Value\":400,\"PkScript\":\"USBmGjbRHN3OJU7Y44vUbF7Oh71vqRPudPlNcHWRyBfLOA==\",\"Assets\":[{\"Name\":{\"Protocol\":\"ordx\",\"Type\":\"f\",\"Ticker\":\"rarepizza\"},\"Amount\":\"400\",\"Precision\":0,\"BindingSat\":1,\"Offsets\":null}]},\"Price\":800}"
+    // `
+
+	BuildBatchSellOrder([]string{string(utxo)}, "tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv", "testnet")
 }
