@@ -4,7 +4,6 @@ package wallet
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -32,7 +31,7 @@ type SellUtxoInfo struct {
 func parseUtxo(utxo string) (string, uint32, error) {
 	parts := strings.Split(utxo, ":")
 	if len(parts) != 2 {
-		return "", 0, errors.New("invalid utxo format")
+		return "", 0, fmt.Errorf("invalid utxo format")
 	}
 	txid := parts[0]
 	vout, err := strconv.ParseUint(parts[1], 10, 32)
@@ -102,7 +101,7 @@ func buildBatchSellOrder(utxos []*SellUtxoInfo, address, network string) (string
 	// 对每个输入，设置 witness utxo 与 sighash 类型
 	// psbt.Packet.Inputs 的顺序与 unsignedTx.TxIn 顺序一致
 	if len(packet.Inputs) != len(utxos) {
-		return "", errors.New("mismatch between psbt inputs and provided meta")
+		return "", fmt.Errorf("mismatch between psbt inputs and provided meta")
 	}
 	for i, utxoData := range utxos {
 		// 注意：WitnessUtxo 字段为 *wire.TxOut
@@ -138,7 +137,7 @@ func splitBatchSignedPsbt(signedHex string, network string) ([]string, error) {
 	// 获取输入数量，同时确保输入和输出数量一致（批量 PSBT 中每个输入对应一个输出）
 	inputCount := len(packet.UnsignedTx.TxIn)
 	if inputCount != len(packet.UnsignedTx.TxOut) {
-		return nil, errors.New("input and output count mismatch in batch psbt")
+		return nil, fmt.Errorf("input and output count mismatch in batch psbt")
 	}
 
 	newPsbts := make([]string, 0, inputCount)
@@ -156,7 +155,7 @@ func splitBatchSignedPsbt(signedHex string, network string) ([]string, error) {
 
 		// 从原 PSBT 中复制对应输入的 witnessUtxo 与 finalScriptWitness 数据到新 PSBT 的第 0 个输入
 		if i >= len(packet.Inputs) {
-			return nil, errors.New("psbt inputs length mismatch")
+			return nil, fmt.Errorf("psbt inputs length mismatch")
 		}
 		newPacket.Inputs[0].WitnessUtxo = packet.Inputs[i].WitnessUtxo
 		newPacket.Inputs[0].FinalScriptWitness = packet.Inputs[i].FinalScriptWitness
