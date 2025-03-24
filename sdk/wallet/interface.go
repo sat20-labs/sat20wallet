@@ -3,11 +3,12 @@ package wallet
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil/psbt"
-	
+
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -433,4 +434,22 @@ func ExtractTxFromPsbt_SatsNet(psbtStr string) (string, error) {
 	}
 
 	return EncodeMsgTx_SatsNet(finalTx)
+}
+
+func BuildBatchSellOrder(utxos []string, address, network string) (string, error) {
+	utxosInfo := make([]*SellUtxoInfo, 0, len(utxos))
+	for _, utxo := range utxos {
+		var info SellUtxoInfo
+		err := json.Unmarshal([]byte(utxo), &info)
+		if err != nil {
+			return "", err
+		}
+		utxosInfo = append(utxosInfo, &info)
+	}
+
+	return buildBatchSellOrder(utxosInfo, address, network)
+}
+
+func SplitBatchSignedPsbt(signedHex string, network string) ([]string, error) {
+	return splitBatchSignedPsbt(signedHex, network)
 }

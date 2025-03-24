@@ -3,11 +3,13 @@ package wallet
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
+	"github.com/sat20-labs/indexer/common"
 )
 
 var _client *Manager
@@ -146,4 +148,47 @@ func TestVerifyPsbtString(t *testing.T) {
 	}
 
 	PrintJsonTx(finalTx, "")
+}
+
+func TestBuildOrder(m *testing.T) {
+
+	assset := common.DisplayAsset{
+		AssetName: AssetName{
+			Protocol: "ordx",
+			Type: "f",
+			Ticker: "rarepizza",
+		},
+		Amount: "400",
+		Precision: 0,
+		BindingSat: 1,
+		Offsets: nil,	
+	}
+
+	info := SellUtxoInfo{
+		AssetsInUtxo: common.AssetsInUtxo{
+			UtxoId: 1030792413185,
+			OutPoint: "ee7f3526663e7ebdfd4fb577941cdeab12729d2d220d651798369bfe106c4b2a:1",
+			Value: 400,
+			PkScript: []byte("USBmGjbRHN3OJU7Y44vUbF7Oh71vqRPudPlNcHWRyBfLOA=="),
+			Assets: []*common.DisplayAsset{&assset},
+			},
+		Price: 800,
+		AssetInfo: nil,
+	}
+
+	utxo, _ := json.Marshal(info)
+	fmt.Printf("%s\n", string(utxo))
+
+	BuildBatchSellOrder([]string{string(utxo)}, "tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv", "testnet")
+}
+
+func TestSplitBatchSignedPsbt(t *testing.T) {
+	psbt := "70736274ff01007701000000012a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0100000000ffffffff01200300000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380000000000010144900100000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380103048300000001134062387e222f742ea1d6685adc9b9ee2d03c06167b4cfe4802c4eee0ac7013729c775604897d30ddd97b48156a7a07619e13eccd241572b54309cae7dbca09384c0000"
+	result, err := SplitBatchSignedPsbt(psbt, "testnet")
+	if err != nil {
+		t.Fatal()
+	}
+	for _, psbt := range result {
+		fmt.Printf("%s\n", psbt)
+	}
 }
