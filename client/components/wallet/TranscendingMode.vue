@@ -37,53 +37,22 @@
               <Icon icon="lucide:zap" class="w-4 h-4 mr-1 justify-self-center" />
               <span class="text-xs font-normal">LIGHTNING</span>
             </TabsTrigger>
-            <TabsTrigger value="satoshiNet" class="h-full hover:text-primary/80">
+            <TabsTrigger value="satoshinet" class="h-full hover:text-primary/80">
               <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
               <span class="text-xs font-normal">SATOSHINET</span>
             </TabsTrigger>
-          </TabsList>
+          </TabsList> 
 
-          <TabsContent
-            value="bitcoin"
-            class="pt-5"
-            :key="`${selectedNetwork}-bitcoin`"
-          >
-            <!-- Asset Type Tabs -->
-            <div class="border-b border-border/50 mb-4">
-              <nav class="flex -mb-px gap-4">
-                <button
-                  v-for="(type, index) in assetTypes"
-                  :key="index"
-                  @click="selectedAssetType = type"
-                  class="pb-2 px-1 font-mono font-semibold text-sm relative"
-                  :class="{
-                    'text-foreground/90': selectedAssetType === type,
-                    'text-muted-foreground': selectedAssetType !== type,
-                  }"
-                >
-                  {{ type }}
-                  <div
-                    class="absolute bottom-0 left-0 right-0 h-0.5 transition-all"
-                    :class="{
-                      'bg-gradient-to-r from-primary to-primary/50 scale-x-100':
-                        selectedAssetType === type,
-                      'scale-x-0': selectedAssetType !== type,
-                    }"
-                  />
-                </button>
-              </nav>
-            </div>
-            <!-- Asset List -->
-            <L1Card
+          <TabsContent value="bitcoin" class="mt-4" :key="`${selectedNetwork}-bitcoin`">
+            <!-- L1 Card -->
+            <L1Card 
               :selectedType="selectedAssetType"
               :assets="filteredAssets"
+              @update:selectedType="selectedAssetType = $event"
               @splicing_in="handleSplicingIn"
               @send="handleSend"
-              @update:selectedType="selectedAssetType = $event"
-              @deposit="openDepositDialog"
-              @withdraw="openWithdrawDialog"
             />
-          </TabsContent>
+          </TabsContent> 
 
           <TabsContent value="lightning" class="mt-4" :key="`${selectedNetwork}-lightning`">
             <!-- Lightning Channel Card -->
@@ -93,39 +62,14 @@
             />
           </TabsContent>
 
-          <TabsContent
-            value="satoshinet"
-            class="mt-4"
-            :key="`${selectedNetwork}-satoshinet`"
-          >
-            <!-- Asset Type Tabs -->
-            <div class="border-b border-border/50 mb-4">
-              <nav class="flex -mb-px gap-4">
-                <button
-                  v-for="(type, index) in assetTypes"
-                  :key="index"
-                  class="pb-3 text-xs font-medium"
-                  :class="{
-                    'text-foreground border-b-2 border-foreground':
-                      selectedAssetType === type,
-                    'text-muted-foreground': selectedAssetType !== type,
-                  }"
-                  @click="selectedAssetType = type"
-                >
-                  {{ type }}
-                </button>
-              </nav>
-            </div>
-            <!-- SatoshiNet Assets -->
-            <L2Card
+          <TabsContent value="satoshinet" class="mt-4" :key="`${selectedNetwork}-satoshinet`">
+            <!-- L2 Card -->
+            <L2Card 
               :selectedType="selectedAssetType"
-              :address="address || ''"
               :assets="filteredAssets"
               @update:selectedType="selectedAssetType = $event"
-              @deposit="openDepositDialog"
-              @withdraw="openWithdrawDialog"
             />
-          </TabsContent>
+          </TabsContent>          
         </Tabs>
       </div>
 
@@ -276,13 +220,13 @@ const filteredAssets = computed(() => {
     const store = isMainnet ? l1Store : l2Store
     switch (selectedAssetType.value) {
       case 'BTC':
-        return store.plainList || []
+        return (store.plainList || []).map(asset => ({ ...asset, type: 'BTC' }))
       case 'SAT20':
-        return store.sat20List || []
+        return (store.sat20List || []).map(asset => ({ ...asset, type: 'SAT20' }))
       case 'Runes':
-        return store.runesList || []
+        return (store.runesList || []).map(asset => ({ ...asset, type: 'Runes' }))
       case 'BRC20':
-        return store.brc20List || []
+        return (store.brc20List || []).map(asset => ({ ...asset, type: 'BRC20' }))
       default:
         return []
     }
