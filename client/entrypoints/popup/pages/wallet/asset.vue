@@ -11,7 +11,7 @@ import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { sleep } from 'radash'
 import InputSection from '@/components/asset/InputSection.vue'
 import { useToast } from '@/components/ui/toast'
-import { useChannelStore, useL1Store, useL2Store } from '@/store'
+import { useChannelStore, useL1Store, useL2Store, useWalletStore } from '@/store'
 import satsnetStp from '@/utils/stp'
 
 const route = useRoute()
@@ -21,10 +21,12 @@ const type = route.query!.type as string
 const l1Store = useL1Store()
 const l2Store = useL2Store()
 const channelStore = useChannelStore()
+const walletStore = useWalletStore()
 
 const loading = ref(false)
 const { plainList } = storeToRefs(l1Store)
 const { channel } = storeToRefs(channelStore)
+const { address, feeRate } = storeToRefs(walletStore)
 
 const handleError = (message: string) => {
   toast({
@@ -234,7 +236,7 @@ const submit = async ({ utxos, amt, assets, feeUtxos, toAddress }: any) => {
         utxos,
         amt,
         feeUtxos,
-        feeRate: 1,
+        feeRate: feeRate.value,
         asset_name: assets[0].key,
       })
     } else if (type === 'unlock') {
@@ -258,7 +260,7 @@ const submit = async ({ utxos, amt, assets, feeUtxos, toAddress }: any) => {
         toAddress: toAddress,
         amt,
         feeUtxos: [],
-        feeRate: 1,
+        feeRate: feeRate.value,
         asset_name: assets[0].key,
       })
     } else if (type === 'l2_send') {

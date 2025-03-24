@@ -229,7 +229,44 @@ class SatsnetStp {
       String(amt)
     )
   }
-
+  async deposit(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    utxos: string[],
+    fees: string[],
+    feeRate: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest(
+      window.stp_wasm.deposit,
+      'deposit',
+      destAddr,
+      assetName,
+      amt,
+      utxos,
+      fees,
+      String(feeRate)
+    )
+  }
+  async withdraw(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    utxos: string[],
+    fees: string[],
+    feeRate: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest(
+      window.stp_wasm.withdraw,
+      'withdraw',
+      destAddr,
+      assetName,
+      amt,
+      utxos,
+      fees,
+      String(feeRate)
+    )
+  } 
   async unlockUtxo(
     channelUtxo: string,
     assetName: string,

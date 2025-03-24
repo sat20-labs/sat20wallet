@@ -254,6 +254,23 @@ interface SatsnetStp {
   ): SatsnetResponse
   unlockWallet(password: string): SatsnetResponse
   getMnemonice(password: string): SatsnetResponse
+  deposit(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    utxos: string[],
+    fees: string[],
+    feeRate: number
+  ): SatsnetResponse<{ txId: string; value: number }>
+
+  withdraw(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    utxos: string[],
+    fees: string[],
+    feeRate: number
+  ): SatsnetResponse<{ txId: string; value: number }>
 }
 declare interface Window {
   sat20wallet_wasm: WalletManager

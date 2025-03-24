@@ -204,57 +204,57 @@ export const useChannelStore = defineStore('channel', () => {
     }
 
     // 处理L2 UTXOs
-    if (Array.isArray(localutxoL2)) {
-      for (const utxo of localutxoL2) {
-        try {
-          const assets = utxo.OutValue?.Assets
-          if (Array.isArray(assets)) {
-            for (const asset of assets) {
-              const protocol = asset.Name?.Protocol || ''
-              const key = protocol
-                ? `${protocol}:${asset.Name.Type}:${asset.Name.Ticker}`
-                : '::'
+    // if (Array.isArray(localutxoL2)) {
+    //   for (const utxo of localutxoL2) {
+    //     try {
+    //       const assets = utxo.OutValue?.Assets
+    //       if (Array.isArray(assets)) {
+    //         for (const asset of assets) {
+    //           const protocol = asset.Name?.Protocol || ''
+    //           const key = protocol
+    //             ? `${protocol}:${asset.Name.Type}:${asset.Name.Ticker}`
+    //             : '::'
               
-              let amt = asset.Amount?.Value || 0
-              console.log(`处理L2 UTXO资产 ${key}, 金额: ${amt}`)
+    //           let amt = asset.Amount?.Value || 0
+    //           console.log(`处理L2 UTXO资产 ${key}, 金额: ${amt}`)
 
-              // 查找或创建资产项
-              let assetItem = allAssetList.value.find(a => a.key === key)
-              if (!assetItem) {
-                assetItem = {
-                  id: key,
-                  key,
-                  protocol,
-                  type: asset.Name.Type,
-                  ticker: asset.Name.Ticker,
-                  label: asset.Name.Type === 'e'
-                    ? `${asset.Name.Ticker}（raresats）`
-                    : asset.Name.Ticker,
-                  utxos: [],
-                  amount: 0,
-                  bindingSat: 0
-                }
-                allAssetList.value.push(assetItem)
-              }
+    //           // 查找或创建资产项
+    //           let assetItem = allAssetList.value.find(a => a.key === key)
+    //           if (!assetItem) {
+    //             assetItem = {
+    //               id: key,
+    //               key,
+    //               protocol,
+    //               type: asset.Name.Type,
+    //               ticker: asset.Name.Ticker,
+    //               label: asset.Name.Type === 'e'
+    //                 ? `${asset.Name.Ticker}（raresats）`
+    //                 : asset.Name.Ticker,
+    //               utxos: [],
+    //               amount: 0,
+    //               bindingSat: 0
+    //             }
+    //             allAssetList.value.push(assetItem)
+    //           }
 
-              // 更新UTXO信息
-              assetItem.utxos.push({
-                id: utxo.UtxoId,
-                outpoint: utxo.OutPointStr,
-                value: amt
-              })
-              assetItem.amount += amt
+    //           // 更新UTXO信息
+    //           assetItem.utxos.push({
+    //             id: utxo.UtxoId,
+    //             outpoint: utxo.OutPointStr,
+    //             value: amt
+    //           })
+    //           assetItem.amount += amt
 
-              if (key !== '::') {
-                await updateAssetInfo(key)
-              }
-            }
-          }
-        } catch (error) {
-          console.error('处理L2 UTXO时出错:', error)
-        }
-      }
-    }
+    //           if (key !== '::') {
+    //             await updateAssetInfo(key)
+    //           }
+    //         }
+    //       }
+    //     } catch (error) {
+    //       console.error('处理L2 UTXO时出错:', error)
+    //     }
+    //   }
+    // }
 
     console.log('资产解析完成，列表:', allAssetList.value)
   }

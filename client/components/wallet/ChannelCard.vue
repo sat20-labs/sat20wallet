@@ -441,10 +441,10 @@ const amtConfirm = async () => {
 // 关闭通道
 const closeChannel = async (closeHandler: any, force: boolean = false) => {
   if (!channel.value) return
-
+  const chainid = channel.value?.channelId
   loading.value = true
   try {
-    const [err, result] = await satsnetStp.closeChannel(channel.value.chanid, 0, force)
+    const [err, result] = await satsnetStp.closeChannel(chainid, 0, force)
     if (err) {
       toast({
         title: 'Error',

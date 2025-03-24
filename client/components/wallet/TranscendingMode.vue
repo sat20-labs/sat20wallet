@@ -94,9 +94,13 @@
             />
           </TabsContent>
 
-          <TabsContent value="lightning" class="mt-4" :key="`${selectedNetwork}-lightning`">
+          <TabsContent
+            value="lightning"
+            class="mt-4"
+            :key="`${selectedNetwork}-lightning`"
+          >
             <!-- Lightning Channel Assetlist -->
-            <ChannelCard 
+            <ChannelCard
               :selectedType="selectedAssetType"
               @update:selectedType="selectedAssetType = $event"
             />
@@ -259,6 +263,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Icon } from '@iconify/vue'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
+import satsnetStp from '@/utils/stp'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
 import { useL1Store, useL2Store, useWalletStore } from '@/store'
@@ -270,7 +275,7 @@ const l2Store = useL2Store()
 const walletStore = useWalletStore()
 const channelStore = useChannelStore()
 
-const { address } = storeToRefs(walletStore)
+const { address, feeRate } = storeToRefs(walletStore)
 const selectedNetwork = ref('poolswap')
 const selectedChain = ref('bitcoin')
 const selectedAssetType = ref('BTC')
@@ -281,7 +286,6 @@ const showOperationDialog = ref(false)
 const operationType = ref<'deposit' | 'withdraw'>('deposit')
 const operationAmount = ref('')
 const selectedAsset = ref<any>(null)
-
 // 资产列表
 const filteredAssets = computed(() => {
   let assets: any[] = []
@@ -337,15 +341,41 @@ const openWithdrawDialog = (asset: any) => {
 // 处理操作确认
 const handleOperationConfirm = (type: string, asset: any, amount: string) => {
   if (type === 'deposit') {
-    console.log('Deposit:', {
-      asset,
-      amount,
-    })
+    handleDeposit(asset, amount)
   } else {
-    console.log('Withdraw:', {
-      asset,
-      amount,
-    })
+    handleWithdraw(asset, amount)
+  }
+}
+const handleDeposit = async (asset: any, amount: string) => {
+  console.log('Deposit:', asset, amount)
+  const [err, res] = await satsnetStp.deposit(
+    address.value as string,
+    asset.key,
+    amount,
+    [],
+    [],
+    feeRate.value
+  )
+  if (err) {
+    console.error('Deposit error:', err)
+  } else {
+    console.log('Deposit success:', res)
+  }
+}
+const handleWithdraw = async (asset: any, amount: string) => {
+  console.log('Withdraw:', asset, amount)
+  const [err, res] = await satsnetStp.withdraw(
+    address.value as string,
+    asset.key,
+    amount,
+    [],
+    [],
+    feeRate.value
+  )
+  if (err) {
+    console.error('Withdraw error:', err)
+  } else {
+    console.log('Withdraw success:', res)
   }
 }
 const handleSplicingIn = (asset: any) => {
@@ -357,10 +387,11 @@ const handleSplicingIn = (asset: any) => {
 const handleSend = (asset: any) => {
   console.log('Send:', asset)
   router.push(
-    `/wallet/asset?type=${selectedChain.value === 'bitcoin' ? 'l1_send' : 'l2_send'}&p=${asset.protocol || 'btc'}&t=${asset.type}&a=${asset.id}`
+    `/wallet/asset?type=${
+      selectedChain.value === 'bitcoin' ? 'l1_send' : 'l2_send'
+    }&p=${asset.protocol || 'btc'}&t=${asset.type}&a=${asset.id}`
   )
 }
-
 
 const formatAmount = (asset: any, selectedAssetType: any) => {
   if (selectedAssetType === 'BTC') {
