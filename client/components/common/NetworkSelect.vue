@@ -1,7 +1,6 @@
 <template>
   <div>
     <Button size="xs" variant="outline" @click="isOpen = true" class="rounded-full">
-      <!-- <span><{{ showNetwork?.name }}</span> -->
       <Icon :icon="showNetwork?.icon" :class="showNetwork?.iconColor" />{{ showNetwork?.name }}
       <ChevronDown class="h-4 w-4" />
     </Button>
@@ -17,7 +16,7 @@
             :key="n.value"
             @click="selectNetwork(n)"
             :variant="n.value === network ? 'secondary' : 'outline'"
-            class="w-full justify-start"
+            class="w-full justify-start h-12"
           >
             <div class="flex items-center gap-3">
               <Icon :icon="n.icon" :class="n.iconColor" />

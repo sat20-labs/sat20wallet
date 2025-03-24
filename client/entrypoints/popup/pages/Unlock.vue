@@ -19,7 +19,7 @@
                 <FormControl>
                   <Input
                     :type="showPassword ? 'text' : 'password'"
-                    size="lg"
+                    class="h-14"
                     placeholder="Password"
                     v-bind="componentField"
                   >
@@ -45,7 +45,7 @@
                   />
                 </button>
               </div>
-              <FormMessage />
+              <FormMessage class="text-red-500"/>
             </FormItem>
           </FormField>
 

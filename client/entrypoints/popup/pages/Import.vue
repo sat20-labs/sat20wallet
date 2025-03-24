@@ -2,8 +2,8 @@
   <LayoutScroll>
     <div class="p-1">
       <div class="flex flex-col items-center justify-center gap-2 mb-4">
-        <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-14 h-14 mb-2" />
-        <h1 class="text-2xl font-semibold">SAT20 Wallet</h1>
+        <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-12 h-12 mb-2" />
+        <h1 class="text-xl font-semibold">SAT20 Wallet</h1>
       </div>
       <p class="text-muted-foreground mb-4 text-center">
         Import your existing wallet using recovery phrase or private key
@@ -13,7 +13,7 @@
         <Tabs v-model="tab" class="space-y-4">
           <TabsList class="grid w-full grid-cols-2">
             <TabsTrigger value="mnemonic">Recovery Phrase</TabsTrigger>
-            <!-- <TabsTrigger value="private-key">Private Key</TabsTrigger> -->
+            <TabsTrigger value="private-key">Private Key</TabsTrigger>
           </TabsList>
 
           <TabsContent value="mnemonic">
@@ -95,11 +95,11 @@
           </div>
         </Tabs>
 
-        <div class="flex justify-between mt-4">
-          <Button variant="outline" type="button">
+        <div class="flex justify-between mt-8 gap-2">
+          <Button variant="outline" type="button" class="w-full h-11">
             <RouterLink to="/"> Cancel </RouterLink>
           </Button>
-          <Button type="submit" :disabled="loading">
+          <Button type="submit" :disabled="loading" class="w-full h-11">
             <Loader2Icon v-if="loading" class="mr-2 h-4 w-4 animate-spin" />
             Import Wallet
           </Button>

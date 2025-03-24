@@ -5,16 +5,16 @@
       <Label class="text-sm text-foreground/50 shrink-0">Trans Mode:</Label>
       <div class="flex gap-2">
         <Button
-          :variant="selectedNetwork === 'poolswap' ? 'default' : 'secondary'"
-          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-2xl"
+          :variant="selectedNetwork === 'poolswap' ? 'secondary' : 'outline'"
+          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
           @click="selectedNetwork = 'poolswap'"
         >
           <Icon icon="lucide:repeat" class="w-5 h-5 shrink-0" />
           <span class="text-xs mb-1">Poolswap</span>
         </Button>
         <Button
-          :variant="selectedNetwork === 'lightning' ? 'default' : 'secondary'"
-          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-2xl"
+          :variant="selectedNetwork === 'lightning' ? 'secondary' : 'outline'"
+          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
           @click="selectedNetwork = 'lightning'"
         >
           <Icon icon="lucide:zap" class="w-5 h-5 shrink-0" />
@@ -29,17 +29,17 @@
       <div v-if="selectedNetwork === 'lightning'">
         <Tabs v-model="selectedChain" class="w-full mb-4 py-2">
           <TabsList class="grid w-full grid-cols-3 h-15">
-            <TabsTrigger value="bitcoin" class="h-full">
-              <Icon icon="lucide:bitcoin" class="w-5 h-5 mr-1 justify-self-center" />
-              <span class="text-sm">Bitcoin</span>
+            <TabsTrigger value="bitcoin" class="h-full hover:text-primary/80">
+              <Icon icon="lucide:bitcoin" class="w-4 h-4 mr-1 justify-self-center" />
+              <span class="text-xs font-normal">BITCOIN</span>
             </TabsTrigger>
-            <TabsTrigger value="lightning" class="h-full">
-              <Icon icon="lucide:zap" class="w-5 h-5 mr-1 justify-self-center" />
-              <span class="text-sm">Lightning</span>
+            <TabsTrigger value="lightning" class="h-full hover:text-primary/80">
+              <Icon icon="lucide:zap" class="w-4 h-4 mr-1 justify-self-center" />
+              <span class="text-xs font-normal">LIGHTNING</span>
             </TabsTrigger>
-            <TabsTrigger value="satoshiNet" class="h-full">
-              <Icon icon="lucide:globe-lock" class="w-5 h-5 mr-1 justify-self-center" />
-              <span class="text-sm">SatoshiNet</span>
+            <TabsTrigger value="satoshiNet" class="h-full hover:text-primary/80">
+              <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
+              <span class="text-xs font-normal">SATOSHINET</span>
             </TabsTrigger>
           </TabsList>
 
@@ -79,7 +79,7 @@
           </TabsContent>
 
           <TabsContent value="lightning" class="mt-4" :key="`${selectedNetwork}-lightning`">
-            <!-- Lightning Channel Assetlist -->
+            <!-- Lightning Channel Card -->
             <ChannelCard 
               :selectedType="selectedAssetType"
               @update:selectedType="selectedAssetType = $event"
@@ -124,13 +124,13 @@
       <div v-else>
         <Tabs v-model="selectedChain" class="w-full mb-4 py-2">
           <TabsList class="grid w-full grid-cols-2">
-            <TabsTrigger value="bitcoin" class="text-[13px] h-full">
-              <Icon icon="lucide:bitcoin" class="w-5 h-5 mr-1 justify-self-center" />
-              Bitcoin
+            <TabsTrigger value="bitcoin" class="text-xs h-full hover:text-primary/80">
+              <Icon icon="lucide:bitcoin" class="w-4 h-4 mr-1 justify-self-center" />
+              BITCOIN
             </TabsTrigger>
-            <TabsTrigger value="satoshinet" class="text-[13px] h-full">
-              <Icon icon="lucide:globe-lock" class="w-5 h-5 mr-1 justify-self-center" />
-              SatoshiNet
+            <TabsTrigger value="satoshinet" class="text-xs h-full hover:text-primary/80">
+              <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
+              SATOSHINET
             </TabsTrigger>
           </TabsList>
         </Tabs>
@@ -165,7 +165,7 @@
           <div
             v-for="asset in filteredAssets"
             :key="asset.id"
-            class="flex items-center justify-between p-3 rounded-lg bg-muted/25 hover:bg-muted/50 transition-all"
+            class="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-all"
           >
             <div>
               <div class="font-medium">{{ (asset.ticker || asset.label).toUpperCase() }}</div>

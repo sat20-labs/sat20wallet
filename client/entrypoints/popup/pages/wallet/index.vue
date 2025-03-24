@@ -3,64 +3,51 @@
     <WalletHeader />
 
     <!-- 钱包地址 -->
-    <CopyCard :text="address" class="w-full mb-4 bg-black/15">
-      <Button asChild variant="link">
-        <a
-          :href="`https://mempool.space/zh/testnet4/address/${address}`"
-          target="_blank"
-        >
+    <div class="flex items-center justify-between p-2 rounded-lg bg-muted/80 hover:bg-muted transition-all">
+      <!-- 圆形背景 + 居中 Icon -->
+      <span
+        class="w-9 h-9 flex items-center justify-center bg-gradient-to-tr from-[#6600cc] to-[#a0076d] text-foreground rounded-full">
+        <Icon icon="lucide:user-round" class="w-5 h-5 text-white/80 flex-shrink-0" />
+      </span>
+
+      <!-- 账户地址 -->
+      <Button asChild variant="link" class="flex-1 text-center">
+        <a :href="`https://mempool.space/zh/testnet4/address/${address}`" target="_blank">
           {{ hideAddress(address) }}
         </a>
       </Button>
-    </CopyCard>
 
-    <!-- 池子充值、提取模式 -->
-    <TranscendingMode class="mb-4">
+      <!-- 竖线分隔符 -->
+      <Separator orientation="vertical" class="h-full mx-2" />
+
+      <!-- 复制按钮 -->
+      <CopyButton :text="address" class="text-foreground/50" />
+
+      <!-- 下拉选择 -->
+      <SubWalletSelector @wallet-changed="handleSubWalletChange" @wallet-created="handleSubWalletCreated" />
+    </div>
+
+
+    <!--资产传输模式选择-->
+    <TranscendingMode class="mt-4">
       <template #poolswap-content>
-        <Tabs
-          defaultValue="l1"
-          v-model:model-value="selectTab"
-          @update:model-value="tabChange"
-          class="w-full"
-        >
+        <Tabs defaultValue="l1" v-model:model-value="selectTab" @update:model-value="tabChange" class="w-full">
           <TabsList class="grid w-full grid-cols-3">
-            <TabsTrigger
-              v-for="item in items"
-              :key="item.value"
-              :value="item.value"
-              class="text-xs"
-            >
+            <TabsTrigger v-for="item in items" :key="item.value" :value="item.value" class="text-xs">
               {{ item.label }}
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent
-            v-for="item in items"
-            :key="item.value"
-            :value="item.value"
-            class="mt-2"
-          >
+          <TabsContent v-for="item in items" :key="item.value" :value="item.value" class="mt-2">
             <div v-if="item.value === 'l1'">
-              <L1Card 
-                v-model:selectedType="selectedType"
-                @deposit="handleDeposit"
-                @withdraw="handleWithdraw"
-              />
+              <L1Card v-model:selectedType="selectedType" @deposit="handleDeposit" @withdraw="handleWithdraw" />
             </div>
             <div v-else-if="item.value === 'channel'">
-              <ChannelCard 
-                v-model:selectedType="selectedType"
-                @lock="handleLock"
-                @unlock="handleUnlock"
-              />
+              <ChannelCard v-model:selectedType="selectedType" @lock="handleLock" @unlock="handleUnlock" />
             </div>
             <div v-else-if="item.value === 'l2'">
-              <L2Card 
-                v-model:selectedType="selectedType"
-                :address="address || undefined"
-                @deposit="handleDeposit"
-                @withdraw="handleWithdraw"
-              />
+              <L2Card v-model:selectedType="selectedType" :address="address || undefined" @deposit="handleDeposit"
+                @withdraw="handleWithdraw" />
             </div>
           </TabsContent>
         </Tabs>
@@ -76,20 +63,36 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import WalletHeader from '@/components/wallet/HomeHeader.vue'
-import AccountCard from '@/components/wallet/AccountCard.vue'
-import ActionButtons from '@/components/wallet/ActionButtons.vue'
-import ChainSwitcher from '@/components/wallet/ChainSwitcher.vue'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import TranscendingMode from '@/components/wallet/TranscendingMode.vue'
-import CopyCard from '@/components/common/CopyCard.vue'
 import { useWalletStore, useChannelStore } from '@/store'
 import { useRouter, useRoute } from 'vue-router'
 import satsnetStp from '@/utils/stp'
 import { useL1Assets, useL2Assets } from '@/composables'
 import { generateMempoolUrl, satsToBtc, hideAddress } from '@/utils'
 import { useToast } from '@/components/ui/toast'
+import SubWalletSelector from '@/components/wallet/SubWalletSelector.vue'
+import CopyButton from '@/components/common/CopyButton.vue'
+
+interface Props {
+  text?: string | null
+}
+defineProps<Props>()
+
+
+// 处理钱包切换
+const handleSubWalletChange = (wallet: any) => {
+  console.log('SubWallet changed:', wallet)
+  // TODO: 实现钱包切换逻辑
+}
+
+// 处理新钱包创建
+const handleSubWalletCreated = (wallet: any) => {
+  console.log('New SubWallet created:', wallet)
+  // TODO: 实现新钱包创建后的逻辑
+}
 
 // 钱包数据
 const walletStore = useWalletStore()

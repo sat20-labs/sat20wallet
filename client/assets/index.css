@@ -1,11 +1,11 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
- 
+
 @layer base {
   :root {
     /* 修改为深色主题的默认值 */
-    --background: 0 0% 4.3%;  /* 纯黑背景 */
+    --background: 0 0% 5%;  /* 纯黑背景 */
     --foreground: 0 0% 99%;  /* 近白色文字 */
     --card: 0 0% 8%;
     --card-foreground: 0 0% 98%;
@@ -13,20 +13,20 @@
     --popover-foreground: 0 0% 98%;
     --primary: 300 100% 60%;
     --primary-foreground: 320 100% 60%;
-    --secondary: 0 0% 14.9%;
+    --secondary: 0 0% 12.9%;
     --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
+    --muted: 0 0% 13.9%;
     --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
+    --accent: 0 0% 18%;
     --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
+    --destructive: 0 0% 30%;
     --destructive-foreground: 0 0% 98%;
     --border: 0 0% 14.9%;
     --input: 0 0% 14.9%;
     --ring: 0 72.2% 50.6%;
     --radius: 0.75rem;
   }
- 
+
   .dark {
     /* 深色主题配置保持不变 */
     --background: 0 0% 40%;
@@ -37,13 +37,13 @@
     --popover-foreground: 0 0% 98%;
     --primary: 270 100% 80%;
     --primary-foreground: 320 100% 60%;
-    --secondary: 0 0% 14.9%;
+    --secondary: 0 0% 12.9%;
     --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
+    --muted: 0 0% 13.9%;
     --muted-foreground: 0 0% 63.9%;
     --accent: 0 0% 14.9%;
     --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
+    --destructive: 0 0% 30%;
     --destructive-foreground: 0 0% 98%;
     --border: 0 0% 14.9%;
     --input: 0 0% 14.9%;
@@ -51,14 +51,12 @@
   }
 }
 
-@layer base {
+@layer components {
   * {
     @apply border-border;
   }
   body {
     @apply bg-background text-foreground;
-    background: #000; /* 确保背景为纯黑 */
-    color: #f8f8f8; /* 确保文字为浅色 */
   }
 }
 
@@ -98,7 +96,7 @@
 
 /* 基础样式确保背景色正确 */
 body {
-  background: #000;
+  background: transparent;
   margin: 0;
   padding: 0;
   min-height: 100vh;
@@ -153,13 +151,13 @@ input:focus {
 
 .layout-container {
   min-height: 100vh;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  /* border: 1px solid rgba(255, 255, 255, 0.1); */
   border-radius: 12px;
   background: linear-gradient(
     to bottom,
     rgb(5, 5, 5),
-    rgba(131, 131, 131, 0.4),
-    rgb(15, 15, 15)
+    rgb(30, 30, 30),
+    rgb(5, 5, 5)
   );
   position: relative;
   z-index: 1;
@@ -181,4 +179,62 @@ input:focus {
   );
   z-index: -1;
   pointer-events: none;
+}
+
+/* Dialog styles */
+.DialogContent {
+  @apply bg-muted/30 backdrop-blur-sm border-accent/20 p-6 rounded-2xl;
+}
+
+.DialogOverlay {
+  @apply bg-background/95;
+}
+
+.DialogHeader {
+  @apply flex flex-col space-y-2 text-center sm:text-left mb-4;
+}
+
+.DialogFooter {
+  @apply flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 mt-6;
+}
+
+.DialogTitle {
+  @apply text-lg font-semibold leading-none tracking-tight text-white/90;
+}
+
+.DialogDescription {
+  @apply text-sm text-muted-foreground/80;
+}
+
+.DialogClose {
+  @apply absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none;
+}
+
+/* Dialog animations */
+.DialogOverlay {
+  animation: overlayShow 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.DialogContent {
+  animation: contentShow 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes overlayShow {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes contentShow {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
 }
