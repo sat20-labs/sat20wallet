@@ -14,7 +14,7 @@ interface Asset {
 const props = defineProps({
   selectedType: {
     type: String,
-    required: true
+    required: true,
   },
   // selectedAssetType: {
   //   type: String,
@@ -23,19 +23,25 @@ const props = defineProps({
   assets: {
     type: Array as PropType<Asset[]>,
     required: true,
-    default: () => []
-  }
+    default: () => [],
+  },
 })
 
 // 事件定义
-const emit = defineEmits(['Splicing in', 'Send', 'update:selectedType'])
+const emit = defineEmits([
+  'splicing_in',
+  'deposit',
+  'withdraw',
+  'send',
+  'update:selectedType',
+])
 
 // 格式化金额显示
-const formatAmount = (asset: any,selectedAssetType: any) => {
+const formatAmount = (asset: any, selectedAssetType: any) => {
   if (selectedAssetType === 'BTC') {
     return `${asset.amount} sats`
   }
-  console.log("selectedAssetType:",selectedAssetType)
+  console.log('selectedAssetType:', selectedAssetType)
   return `${asset.amount} $${asset.ticker || asset.label}`
 }
 
@@ -43,7 +49,7 @@ const formatAmount = (asset: any,selectedAssetType: any) => {
 onMounted(() => {
   console.log('L1Card initialized with:', {
     assets: props.assets,
-    selectedType: props.selectedType
+    selectedType: props.selectedType,
     // selectedAssetType: props.selectedAssetType
   })
 })
@@ -57,22 +63,29 @@ onMounted(() => {
       class="flex items-center justify-between p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors"
     >
       <div>
-        <div class="font-medium">{{ (asset.ticker || asset.label).toUpperCase() }}</div>
+        <div class="font-medium">
+          {{ (asset.ticker || asset.label).toUpperCase() }}
+        </div>
         <div class="text-sm text-muted-foreground">
           {{ formatAmount(asset, selectedType) }}
         </div>
       </div>
-      
+
       <div class="flex gap-0.5">
-        <Button v-if="selectedType === 'BTC'" size="sm" variant="outline" @click="$emit('Send', asset)">
-          <Icon icon="lucide:arrow-big-right" class="w-4 h-4" />Send
-       </Button>
-        <Button 
+        <Button
+          v-if="selectedType === 'BTC'"
           size="sm"
           variant="outline"
-          @click="$emit('Splicing in', asset)"
+          @click="$emit('send', asset)"
         >
-        <Icon icon="lucide:corner-down-right" class="w-4 h-4" /> Splicing in
+          <Icon icon="lucide:arrow-big-right" class="w-4 h-4" />Send
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          @click="$emit('splicing_in', asset)"
+        >
+          <Icon icon="lucide:corner-down-right" class="w-4 h-4" /> Splicing in
         </Button>
       </div>
       <!-- <div v-else class="flex gap-2">

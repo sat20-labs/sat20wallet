@@ -98,7 +98,7 @@ const splicingOut = async ({
   goBack()
 }
 const checkChannel = async () => {
-  const chanid = channel.value!.chanid
+  const chanid = channel.value!.channelId
 
   const [err, result] = await satsnetStp.getChannelStatus(chanid)
   console.log(result)

@@ -10,7 +10,7 @@
           @click="selectedNetwork = 'poolswap'"
         >
           <Icon icon="lucide:repeat" class="w-5 h-5 shrink-0" />
-          <span class="text-xs mb-1">Poolswap</span>
+          <span class="text-xs">Poolswap</span>
         </Button>
         <Button
           :variant="selectedNetwork === 'lightning' ? 'secondary' : 'outline'"
@@ -18,7 +18,7 @@
           @click="selectedNetwork = 'lightning'"
         >
           <Icon icon="lucide:zap" class="w-5 h-5 shrink-0" />
-          <span class="text-xs mb-1">Lightning</span>
+          <span class="text-xs">Lightning</span>
         </Button>
       </div>
     </div>
@@ -43,7 +43,11 @@
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="bitcoin" class="pt-5" :key="`${selectedNetwork}-bitcoin`">
+          <TabsContent
+            value="bitcoin"
+            class="pt-5"
+            :key="`${selectedNetwork}-bitcoin`"
+          >
             <!-- Asset Type Tabs -->
             <div class="border-b border-border/50 mb-4">
               <nav class="flex -mb-px gap-4">
@@ -54,27 +58,30 @@
                   class="pb-2 px-1 font-mono font-semibold text-sm relative"
                   :class="{
                     'text-foreground/90': selectedAssetType === type,
-                    'text-muted-foreground': selectedAssetType !== type
+                    'text-muted-foreground': selectedAssetType !== type,
                   }"
                 >
                   {{ type }}
                   <div
                     class="absolute bottom-0 left-0 right-0 h-0.5 transition-all"
                     :class="{
-                      'bg-gradient-to-r from-primary to-primary/50 scale-x-100': selectedAssetType === type,
-                      'scale-x-0': selectedAssetType !== type
+                      'bg-gradient-to-r from-primary to-primary/50 scale-x-100':
+                        selectedAssetType === type,
+                      'scale-x-0': selectedAssetType !== type,
                     }"
                   />
                 </button>
               </nav>
             </div>
             <!-- Asset List -->
-            <L1Card 
-              :selectedType="selectedAssetType" 
+            <L1Card
+              :selectedType="selectedAssetType"
               :assets="filteredAssets"
+              @splicing_in="handleSplicingIn"
+              @send="handleSend"
               @update:selectedType="selectedAssetType = $event"
-              @deposit="openDepositDialog" 
-              @withdraw="openWithdrawDialog" 
+              @deposit="openDepositDialog"
+              @withdraw="openWithdrawDialog"
             />
           </TabsContent>
 
@@ -83,12 +90,14 @@
             <ChannelCard 
               :selectedType="selectedAssetType"
               @update:selectedType="selectedAssetType = $event"
-              @lock="handleLock"
-              @unlock="handleUnlock"
             />
           </TabsContent>
 
-          <TabsContent value="satoshinet" class="mt-4" :key="`${selectedNetwork}-satoshinet`">
+          <TabsContent
+            value="satoshinet"
+            class="mt-4"
+            :key="`${selectedNetwork}-satoshinet`"
+          >
             <!-- Asset Type Tabs -->
             <div class="border-b border-border/50 mb-4">
               <nav class="flex -mb-px gap-4">
@@ -108,13 +117,13 @@
               </nav>
             </div>
             <!-- SatoshiNet Assets -->
-            <L2Card 
+            <L2Card
               :selectedType="selectedAssetType"
               :address="address || ''"
               :assets="filteredAssets"
               @update:selectedType="selectedAssetType = $event"
-              @deposit="openDepositDialog" 
-              @withdraw="openWithdrawDialog" 
+              @deposit="openDepositDialog"
+              @withdraw="openWithdrawDialog"
             />
           </TabsContent>
         </Tabs>
@@ -145,15 +154,16 @@
               class="pb-2 px-1 font-mono font-semibold text-sm relative"
               :class="{
                 'text-foreground/90': selectedAssetType === type,
-                'text-muted-foreground': selectedAssetType !== type
+                'text-muted-foreground': selectedAssetType !== type,
               }"
             >
               {{ type }}
               <div
                 class="absolute bottom-0 left-0 right-0 h-0.5 transition-all"
                 :class="{
-                  'bg-gradient-to-r from-primary to-primary/50 scale-x-100': selectedAssetType === type,
-                  'scale-x-0': selectedAssetType !== type
+                  'bg-gradient-to-r from-primary to-primary/50 scale-x-100':
+                    selectedAssetType === type,
+                  'scale-x-0': selectedAssetType !== type,
                 }"
               />
             </button>
@@ -168,102 +178,59 @@
             class="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-all"
           >
             <div>
-              <div class="font-medium">{{ (asset.ticker || asset.label).toUpperCase() }}</div>
+              <div class="font-medium">
+                {{ (asset.ticker || asset.label).toUpperCase() }}
+              </div>
               <div class="text-sm text-muted-foreground">
                 {{ formatAmount(asset, selectedAssetType) }}
               </div>
             </div>
-            <Button v-if="selectedAssetType === 'BTC'" size="sm" variant="outline" @click="$emit('Send', asset)">
-              <Icon icon="lucide:arrow-big-right" class="w-4 h-4" /><span class="mr-2 mb-[0.5px]">Send</span>
+            <Button
+              v-if="selectedAssetType === 'BTC'"
+              size="sm"
+              variant="outline"
+              @click="handleSend(asset)"
+            >
+              <Icon icon="lucide:arrow-big-right" class="w-4 h-4" /><span
+                class="mr-2 mb-[0.5px]"
+                >Send</span
+              >
             </Button>
-            <Button v-if="selectedChain === 'SatoshiNet'" size="sm" variant="outline" @click="openWithdrawDialog(asset)">
-              <Icon icon="lucide:arrow-up-right" class="w-4 h-4" /><span class="mr-2 mb-[0.5px]">Withdraw</span>
+            <Button
+              v-if="selectedChain === 'SatoshiNet'"
+              size="sm"
+              variant="outline"
+              @click="openWithdrawDialog(asset)"
+            >
+              <Icon icon="lucide:arrow-up-right" class="w-4 h-4" /><span
+                class="mr-2 mb-[0.5px]"
+                >Withdraw</span
+              >
             </Button>
-            <Button v-else size="sm" variant="outline" @click="openDepositDialog(asset)">
-              <Icon icon="lucide:arrow-down-right" class="w-4 h-4" /><span class="mr-2 mb-[0.5px]">Deposit</span>
-            </Button>            
+            <Button
+              v-else
+              size="sm"
+              variant="outline"
+              @click="openDepositDialog(asset)"
+            >
+              <Icon icon="lucide:arrow-down-right" class="w-4 h-4" /><span
+                class="mr-2 mb-[0.5px]"
+                >Deposit</span
+              >
+            </Button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Deposit Dialog -->
-    <Dialog v-model:open="showDepositDialog">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Deposit {{ selectedAsset?.ticker || selectedAsset?.label }}</DialogTitle>
-          <DialogDescription>
-            Review pool information before depositing
-          </DialogDescription>
-        </DialogHeader>
-        <div class="space-y-4">
-          <div class="space-y-2">
-            <Label>Assets Information</Label>
-            <div class="rounded-lg border p-3">
-              <div class="text-sm">
-                <div>Asset: {{ selectedAsset?.ticker || selectedAsset?.label }}</div>
-                <div>Balance: {{ selectedAsset?.amount }}</div>
-              </div>
-            </div>
-          </div>
-          <div class="space-y-2">
-            <Label>Amount</Label>
-            <div class="flex items-center gap-2">
-              <Input
-                v-model="depositAmount"
-                type="number"
-                placeholder="Enter amount"
-              />
-              <span class="text-sm text-muted-foreground">
-                {{ selectedAsset?.ticker || selectedAsset?.label }}
-              </span>
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button @click="handleDeposit" class="w-full">Deposit</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    <!-- Withdraw Dialog -->
-    <Dialog v-model:open="showWithdrawDialog">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Withdraw {{ selectedAsset?.ticker || selectedAsset?.label }}</DialogTitle>
-          <DialogDescription>
-            Review pool information before withdrawing
-          </DialogDescription>
-        </DialogHeader>
-        <div class="space-y-4">
-          <div class="space-y-2">
-            <Label>Assets Information</Label>
-            <div class="rounded-lg border p-3">
-              <div class="text-sm">
-                <div>Asset: {{ selectedAsset?.ticker || selectedAsset?.label }}</div>
-                <div>Balance: {{ selectedAsset?.amount }}</div>
-              </div>
-            </div>
-          </div>
-          <div class="space-y-2">
-            <Label>Amount</Label>
-            <div class="flex items-center gap-2">
-              <Input
-                v-model="withdrawAmount"
-                type="number"
-                placeholder="Enter amount"
-              />
-              <span class="text-sm text-muted-foreground">
-                {{ selectedAsset?.ticker || selectedAsset?.label }}
-              </span>
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button @click="handleWithdraw" class="w-full">Withdraw</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <!-- Asset Operation Dialog -->
+    <AssetOperationDialog
+      v-model:open="showOperationDialog"
+      v-model:amount="operationAmount"
+      :type="operationType"
+      :asset="selectedAsset"
+      @confirm="handleOperationConfirm"
+    />
   </div>
 </template>
 
@@ -273,15 +240,16 @@ import { storeToRefs } from 'pinia'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Icon } from '@iconify/vue'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
+import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
 import { useL1Store, useL2Store, useWalletStore } from '@/store'
 import { useChannelStore } from '@/store/channel'
 
+const router = useRouter()
 const l1Store = useL1Store()
 const l2Store = useL2Store()
 const walletStore = useWalletStore()
@@ -293,17 +261,16 @@ const selectedChain = ref('bitcoin')
 const selectedAssetType = ref('BTC')
 const assetTypes = ['BTC', 'SAT20', 'Runes', 'BRC20']
 
-// 弹窗控制
-const showDepositDialog = ref(false)
-const showWithdrawDialog = ref(false)
+// 统一的操作弹窗控制
+const showOperationDialog = ref(false)
+const operationType = ref<'deposit' | 'withdraw'>('deposit')
+const operationAmount = ref('')
 const selectedAsset = ref<any>(null)
-const depositAmount = ref('')
-const withdrawAmount = ref('')
 
 // 资产列表
 const filteredAssets = computed(() => {
   let assets: any[] = []
-  
+
   // 获取当前链的资产列表
   const getChainAssets = (isMainnet: boolean) => {
     const store = isMainnet ? l1Store : l2Store
@@ -320,7 +287,7 @@ const filteredAssets = computed(() => {
         return []
     }
   }
-  
+
   if (selectedNetwork.value === 'lightning') {
     if (selectedChain.value === 'bitcoin') {
       assets = getChainAssets(true) // L1 资产
@@ -332,59 +299,59 @@ const filteredAssets = computed(() => {
     const isMainnet = selectedChain.value === 'bitcoin'
     assets = getChainAssets(isMainnet)
   }
-  
+
   return assets
 })
 
 // 打开存款对话框
 const openDepositDialog = (asset: any) => {
   selectedAsset.value = asset
-  showDepositDialog.value = true
+  operationType.value = 'deposit'
+  operationAmount.value = ''
+  showOperationDialog.value = true
 }
 
 // 打开提款对话框
 const openWithdrawDialog = (asset: any) => {
   selectedAsset.value = asset
-  showWithdrawDialog.value = true
+  operationType.value = 'withdraw'
+  operationAmount.value = ''
+  showOperationDialog.value = true
 }
 
-// 处理存款
-const handleDeposit = () => {
-  if (!selectedAsset.value) return
-  
-  console.log('Deposit:', {
-    asset: selectedAsset.value,
-    amount: depositAmount.value
-  })
-  showDepositDialog.value = false
+// 处理操作确认
+const handleOperationConfirm = (type: string, asset: any, amount: string) => {
+  if (type === 'deposit') {
+    console.log('Deposit:', {
+      asset,
+      amount,
+    })
+  } else {
+    console.log('Withdraw:', {
+      asset,
+      amount,
+    })
+  }
+}
+const handleSplicingIn = (asset: any) => {
+  console.log('Splicing in:', asset)
+  router.push(
+    `/wallet/asset?type=splicing_in&p=${asset.protocol}&t=${asset.type}&a=${asset.id}`
+  )
+}
+const handleSend = (asset: any) => {
+  console.log('Send:', asset)
+  router.push(
+    `/wallet/asset?type=${selectedChain.value === 'bitcoin' ? 'l1_send' : 'l2_send'}&p=${asset.protocol || 'btc'}&t=${asset.type}&a=${asset.id}`
+  )
 }
 
-// 处理提款
-const handleWithdraw = () => {
-  if (!selectedAsset.value) return
-  
-  console.log('Withdraw:', {
-    asset: selectedAsset.value,
-    amount: withdrawAmount.value
-  })
-  showWithdrawDialog.value = false
-}
 
-// 处理锁定
-const handleLock = (asset: any) => {
-  console.log('Lock asset:', asset)
-}
-
-// 处理解锁
-const handleUnlock = (asset: any) => {
-  console.log('Unlock asset:', asset)
-}
-
-const formatAmount = (asset: any,selectedAssetType: any) => {
+const formatAmount = (asset: any, selectedAssetType: any) => {
   if (selectedAssetType === 'BTC') {
     return `Available: ${asset.amount} sats`
   }
-  console.log("selectedAssetType:",selectedAssetType)
+  console.log('selectedAssetType:', selectedAssetType)
   return `${asset.amount} $${asset.ticker || asset.label}`
 }
 
@@ -392,7 +359,7 @@ const formatAmount = (asset: any,selectedAssetType: any) => {
 watch(selectedNetwork, async (newVal) => {
   selectedChain.value = 'bitcoin'
   selectedAssetType.value = 'BTC'
-  
+
   try {
     if (newVal === 'lightning') {
       await nextTick()

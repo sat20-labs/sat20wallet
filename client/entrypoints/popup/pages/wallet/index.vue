@@ -40,7 +40,13 @@
 
           <TabsContent v-for="item in items" :key="item.value" :value="item.value" class="mt-2">
             <div v-if="item.value === 'l1'">
-              <L1Card v-model:selectedType="selectedType" @deposit="handleDeposit" @withdraw="handleWithdraw" />
+              <L1Card 
+                v-model:selectedType="selectedType"
+                @splicing_in="handleSplicingIn"
+                @send="handleSend"
+                @deposit="handleDeposit"
+                @withdraw="handleWithdraw"
+              />
             </div>
             <div v-else-if="item.value === 'channel'">
               <ChannelCard v-model:selectedType="selectedType" @lock="handleLock" @unlock="handleUnlock" />
@@ -125,24 +131,40 @@ const items = [
   },
 ]
 
+// 处理splicing in
+const handleSplicingIn = (asset: any) => {
+  console.log('Splicing in:', asset)
+  router.push(`/wallet/asset?type=splicing_in&p=l1&t=${asset.type}&a=${asset.id}`)
+}
+
+// 处理send
+const handleSend = (asset: any) => {
+  console.log('Send:', asset)
+  router.push(`/wallet/asset?type=send&p=l1&t=${asset.type}&a=${asset.id}`)
+}
+
 // 处理存款
 const handleDeposit = (asset: any) => {
   console.log('Deposit:', asset)
+  router.push(`/wallet/asset?type=deposit&p=l1&t=${asset.type}&a=${asset.id}`)
 }
 
 // 处理提款
 const handleWithdraw = (asset: any) => {
   console.log('Withdraw:', asset)
+  router.push(`/wallet/asset?type=withdraw&p=l1&t=${asset.type}&a=${asset.id}`)
 }
 
 // 处理锁定
 const handleLock = (asset: any) => {
   console.log('Lock:', asset)
+  router.push(`/wallet/asset?type=lock&p=l1&t=${asset.type}&a=${asset.id}`)
 }
 
 // 处理解锁
 const handleUnlock = (asset: any) => {
   console.log('Unlock:', asset)
+  router.push(`/wallet/asset?type=unlock&p=l1&t=${asset.type}&a=${asset.id}`)
 }
 
 const channelCallback = async (e: any) => {
