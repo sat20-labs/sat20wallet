@@ -1,9 +1,9 @@
 <template>
   <header class="flex justify-between items-center mb-6 gap-4">
-    <div></div>
-    <!-- <Button variant="outline" class="">
-      {{ walletName }}
-    </Button> -->
+    <div class="flex items-center gap-2">
+      <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-6 h-6" />
+      <span class="text-lg font-bold">SAT20</span>
+    </div>
     <div class="flex gap-2">
       <BtcFeeSelect @change="walletStore.setFeeRate" />
       <NetworkSelect />

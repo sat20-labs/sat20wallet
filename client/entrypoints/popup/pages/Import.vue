@@ -1,8 +1,11 @@
 <template>
   <LayoutScroll>
     <div class="p-1">
-      <h1 class="text-2xl font-bold mb-2">Import Wallet</h1>
-      <p class="text-muted-foreground mb-4">
+      <div class="flex flex-col items-center justify-center gap-2 mb-4">
+        <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-14 h-14 mb-2" />
+        <h1 class="text-2xl font-semibold">SAT20 Wallet</h1>
+      </div>
+      <p class="text-muted-foreground mb-4 text-center">
         Import your existing wallet using recovery phrase or private key
       </p>
 
@@ -30,9 +33,9 @@
                     rows="3"
                   />
                 </FormControl>
-                <FormDescription>
+                <!-- <FormDescription>
                   Usually 12 or 24 words long, separated by single spaces
-                </FormDescription>
+                </FormDescription> -->
                 <FormMessage />
               </FormItem>
             </FormField>

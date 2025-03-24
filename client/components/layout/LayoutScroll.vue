@@ -1,5 +1,5 @@
 <template>
-  <ScrollArea class="p-4 w-full h-full">
+  <ScrollArea class="layout-container p-4 w-full h-full">
     <slot />
   </ScrollArea>
 </template>

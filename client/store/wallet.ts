@@ -4,9 +4,12 @@ import { Network, Chain } from '@/types'
 import walletManager from '@/utils/sat20'
 import satsnetStp from '@/utils/stp'
 import { useChannelStore } from './channel'
+import { useL1Store } from './l1'
 
 export const useWalletStore = defineStore('wallet', () => {
   const channelStore = useChannelStore()
+  const l1Store = useL1Store()
+  
   const address = ref(walletStorage.address)
   const publicKey = ref(walletStorage.pubkey)
   const walletId = ref(walletStorage.walletId)
@@ -17,6 +20,8 @@ export const useWalletStore = defineStore('wallet', () => {
   const chain = ref(walletStorage.chain)
   const locked = ref(walletStorage.locked)
   const hasWallet = ref(walletStorage.hasWallet)
+
+
 
   const setAddress = (value: string) => {
     walletStorage.address = value as any
@@ -138,12 +143,13 @@ export const useWalletStore = defineStore('wallet', () => {
     if (!err && result) {
       const { walletId } = result
       setWalletId(walletId)
-      await getWalletInfo()
-      await satsnetStp.unlockWallet(password)
-      await satsnetStp.start()
-      await channelStore.getAllChannels()
+      await getWalletInfo() // This sets the public key
       await setLocked(false)
       await setPassword(password)
+      await satsnetStp.unlockWallet(password)
+      // Start STP after wallet info and public key are set
+      await satsnetStp.start()
+      await channelStore.getAllChannels()
     }
     return [err, result]
   }

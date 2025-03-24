@@ -1,35 +1,56 @@
 <template>
-  <div class="min-h-screen flex items-center justify-center p-4">
+  <div class="layout-container min-h-screen flex items-center justify-center p-4 pb-36">
     <div class="max-w-md w-full space-y-8">
       <div class="text-center">
-        <div class="flex items-center justify-center gap-2 mb-4">
-          <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
-            Unlock Wallet
-          </h1>
+        <div class="flex flex-col items-center justify-center gap-2 mb-6">
+          <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-14 h-14 mb-2" />
+          <h1 class="text-2xl font-semibold mb-2 text-center">SAT20 Wallet</h1>
         </div>
-        <p class="text-gray-600 dark:text-gray-400 mb-8">
+        <!-- <p class="text-gray-600 dark:text-gray-400 mb-4">
           Please enter your wallet password to continue
-        </p>
+        </p> -->
       </div>
       <div>
-        <form @submit="onSubmit" class="space-y-6 mb-2">
+        <form @submit="onSubmit" class="space-y-6 mb-2 p-2">
           <FormField v-slot="{ componentField }" name="password">
             <FormItem>
-              <FormLabel>Password</FormLabel>
-              <FormControl>
-                <Input
-                  type="password"
-                  placeholder="Enter password..."
-                  v-bind="componentField"
+              <FormLabel class="text-gray-300 dark:text-gray-200">Enter Your Password</FormLabel>
+              <div class="relative">
+                <FormControl>
+                  <Input
+                    :type="showPassword ? 'text' : 'password'"
+                    size="lg"
+                    placeholder="Password"
+                    v-bind="componentField"
+                  >
+                  </Input>
+                </FormControl>
+                <button
+                  type="button"
+                  @click="showPassword = !showPassword"
+                  size="sm"
+                  class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
-                </Input>
-              </FormControl>
+                  <Icon
+                    v-if="showPassword"
+                    :inline="true"
+                    icon="mdi:eye"
+                    class="h-4 w-4 opacity-50"
+                  />
+                  <Icon
+                    v-else
+                    :inline="true"
+                    icon="mdi:eye-off"
+                    class="h-4 w-4 opacity-50"
+                  />
+                </button>
+              </div>
               <FormMessage />
             </FormItem>
           </FormField>
 
           <div class="grid grid-cols-1 gap-2">
-            <Button type="submit" :disabled="loading">
+            <Button type="submit" :disabled="loading" size="lg">
               <Icon
                 v-if="!loading"
                 :inline="true"
@@ -87,6 +108,8 @@ const router = useRouter()
 const route = useRoute()
 const { toast } = useToast()
 const loading = ref(false)
+
+const showPassword = ref(false)
 
 const showToast = (
   variant: 'default' | 'destructive',
