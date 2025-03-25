@@ -181,6 +181,19 @@ declare interface WalletManager {
     utxos: string[],
     amt: number
   ): Promise<SatsnetResponse<string>>
+
+  // Build a batch sell order
+  buildBatchSellOrder(
+    utxos: string[],
+    address: string,
+    network: string
+  ): Promise<SatsnetResponse<{ orderId: string }>>
+
+  // Split a batch signed PSBT
+  splitBatchSignedPsbt(
+    signedHex: string,
+    network: string
+  ): Promise<SatsnetResponse<{ psbts: string[] }>>
 }
 interface SatsnetStp {
   closeChannel(

@@ -38,7 +38,7 @@ export default defineUnlistedScript(() => {
         const channel = new BroadcastChannel(Message.Channel.INJECT_CONTENT)
         const _messageId = `msg_${type}_${action}_${Date.now()}`
         const listener = (event: MessageEvent) => {
-          console.log('Content Script response:', event.data);
+          console.log('Content Script response:', event.data)
           const { type, data, error, metadata = {} } = event.data || {}
           const { messageId, to } = metadata
           if (
@@ -51,8 +51,6 @@ export default defineUnlistedScript(() => {
             return
 
           if (messageId === _messageId) {
-            
-            
             if (data) {
               resolve(data)
             }
@@ -139,6 +137,28 @@ export default defineUnlistedScript(() => {
       })
     }
 
+    async buildBatchSellOrder(
+      utxos: string[],
+      address: string,
+      network: string
+    ): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.BUILD_BATCH_SELL_ORDER,
+        data: { utxos, address, network },
+      })
+    }
+
+    async splitBatchSignedPsbt(
+      signedHex: string,
+      network: string
+    ): Promise<string[]> {
+      return this.send<string[]>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.SPLIT_BATCH_SIGNED_PSBT,
+        data: { signedHex, network },
+      })
+    }
     async getBalance(): Promise<Balance> {
       return this.send<Balance>({
         type: Message.MessageType.REQUEST,

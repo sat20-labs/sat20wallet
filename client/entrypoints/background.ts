@@ -122,6 +122,8 @@ export default defineBackground(async () => {
           Message.MessageAction.GET_PUBLIC_KEY,
           Message.MessageAction.GET_BALANCE,
           Message.MessageAction.GET_NETWORK,
+          Message.MessageAction.BUILD_BATCH_SELL_ORDER,
+          Message.MessageAction.SPLIT_BATCH_SIGNED_PSBT,
           Message.MessageAction.SEND_BITCOIN,
           Message.MessageAction.SIGN_MESSAGE,
           Message.MessageAction.SIGN_PSBT,
@@ -168,6 +170,20 @@ export default defineBackground(async () => {
           const hasWallet = await checkWallet()
           if (hasWallet) {
             switch (action) {
+              case Message.MessageAction.BUILD_BATCH_SELL_ORDER:
+                resData = await service.buildBatchSellOrder(
+                  eventData.data.utxos,
+                  eventData.data.address,
+                  eventData.data.network
+                )
+                break
+              case Message.MessageAction.SPLIT_BATCH_SIGNED_PSBT:
+                resData = await service.splitBatchSignedPsbt(
+                  eventData.data.signedHex,
+                  eventData.data.network
+                )
+                break
+                  
               case Message.MessageAction.GET_ACCOUNTS:
                 resData = await service.getAccounts()
                 break

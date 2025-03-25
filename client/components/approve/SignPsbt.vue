@@ -38,11 +38,17 @@ const confirm = async () => {
   const { options = {}, psbtHex } = props.data
 
   let result
+  console.log('psbtHex', psbtHex)
+  console.log('options', options)
   if (options.chain === 'btc') {
     result = await walletManager.signPsbt(psbtHex, false)
   } else {
     result = await walletManager.signPsbt_SatsNet(psbtHex, false)
   }
+  console.log('chain', options.chain)
+
+  console.log('signPsbt result', result)
+
   const [err, res] = result
   if (res?.psbt) {
     await psbt2tx(res.psbt)

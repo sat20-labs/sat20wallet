@@ -31,7 +31,7 @@ export default defineConfig({
     permissions: ['tabs', 'storage', 'activeTab'],
   },
   runner: {
-    startUrls: ['http://localhost:3002/market'],
+    startUrls: ['http://localhost:3002/account'],
   },
   imports: {
     presets: ['pinia', 'vue-router', 'date-fns'],

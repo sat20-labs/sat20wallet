@@ -30,10 +30,13 @@ class Service {
     return walletStorage.balance
   }
 
-  async pushTx(rawtx: string): Promise<string> {
+  async pushTx(rawtx: string): Promise<[Error | undefined, string | undefined]> {
     const res = await ordxApi.pushTx({ hex: rawtx, network: walletStorage.network })
-    console.log('res', res)
-    return res
+    if (res.code === 0) {
+      return [undefined, res.data]
+    } else {
+      return [new Error(res.msg), undefined]
+    }
   }
   async pushPsbt(psbtHex: string): Promise<[Error | undefined, string | undefined]> {
     console.log('pushPsbt', psbtHex)
@@ -48,6 +51,21 @@ class Service {
     } else {
       return [new Error(res.msg), undefined]
     }
+  }
+
+  async buildBatchSellOrder(utxos: string[], address: string, network: string): Promise<string> {
+    console.log('buildBatchSellOrder', utxos, address, network)
+    
+    const res = await (globalThis as any).sat20wallet_wasm.buildBatchSellOrder(utxos, address, network)
+    console.log('res', res)
+    return res
+  }
+
+  async splitBatchSignedPsbt(signedHex: string, network: string): Promise<string[]> {
+    console.log('splitBatchSignedPsbt', signedHex, network)
+    const res = (globalThis as any).sat20wallet_wasm.splitBatchSignedPsbt(signedHex, network)
+    console.log('splitBatchSignedPsbt res', res)
+    return res
   }
 }
 
