@@ -936,13 +936,20 @@ func splitBatchSignedPsbt(this js.Value, p []js.Value) any {
 	}
 	network := p[1].String()
 
+	wallet.Log.Infof("splitBatchSignedPsbt %s %s", psbt, network)
 	result, err := wallet.SplitBatchSignedPsbt(psbt, network)
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
+	wallet.Log.Infof("splitBatchSignedPsbt result %v", result)
+
+	var str []interface{}
+	for _, r := range result {
+		str = append(str, r)
+	}
 	
-	data := map[string]interface{}{
-		"psbts": result,
+	data := map[string]any {
+		"psbts": str,
 	}
 	
 	return createJsRet(data, 0, "ok")

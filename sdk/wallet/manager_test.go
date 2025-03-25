@@ -152,28 +152,36 @@ func TestVerifyPsbtString(t *testing.T) {
 
 func TestBuildOrder(m *testing.T) {
 
-	assset := common.DisplayAsset{
-		AssetName: AssetName{
-			Protocol: "ordx",
-			Type: "f",
-			Ticker: "rarepizza",
-		},
-		Amount: "400",
-		Precision: 0,
-		BindingSat: 1,
-		Offsets: nil,	
-	}
+	// assset := common.DisplayAsset{
+	// 	AssetName: AssetName{
+	// 		Protocol: "ordx",
+	// 		Type: "f",
+	// 		Ticker: "rarepizza",
+	// 	},
+	// 	Amount: "400",
+	// 	Precision: 0,
+	// 	BindingSat: 1,
+	// 	Offsets: nil,	
+	// }
 
 	info := SellUtxoInfo{
 		AssetsInUtxo: common.AssetsInUtxo{
 			UtxoId: 1030792413185,
 			OutPoint: "ee7f3526663e7ebdfd4fb577941cdeab12729d2d220d651798369bfe106c4b2a:1",
-			Value: 400,
+			Value: 10000,
 			PkScript: []byte("USBmGjbRHN3OJU7Y44vUbF7Oh71vqRPudPlNcHWRyBfLOA=="),
-			Assets: []*common.DisplayAsset{&assset},
+			Assets: nil,
 			},
 		Price: 800,
-		AssetInfo: nil,
+		AssetInfo: &common.AssetInfo{
+			Name: common.AssetName{
+				Protocol: "ordx",
+				Type: "f",	
+				Ticker: "rarepizza",
+			},
+			Amount: *common.NewDecimal(100, 0),
+			BindingSat: 1,
+		},
 	}
 
 	utxo, _ := json.Marshal(info)
