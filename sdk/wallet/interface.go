@@ -11,6 +11,7 @@ import (
 
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 
+	"github.com/sat20-labs/indexer/common"
 	indexer "github.com/sat20-labs/indexer/common"
 )
 
@@ -268,7 +269,6 @@ func (p *Manager) SignMessage(msg []byte) ([]byte, error) {
 	return p.wallet.SignMessage(msg)
 }
 
-
 func (p *Manager) SignWalletMessage(msg string) ([]byte, error) {
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
@@ -276,7 +276,6 @@ func (p *Manager) SignWalletMessage(msg string) ([]byte, error) {
 
 	return p.wallet.SignWalletMessage(msg)
 }
-
 
 func (p *Manager) SignPsbt(psbtHex string, bExtract bool) (string, error) {
 	if p.wallet == nil {
@@ -372,7 +371,6 @@ func (p *Manager) SignPsbt_SatsNet(psbtHex string, bExtract bool) (string, error
 	return hex.EncodeToString(buf.Bytes()), nil
 }
 
-
 // 注册回调函数
 func (p *Manager) RegisterCallback(callback NotifyCB) {
 	p.msgCallback = callback
@@ -437,9 +435,9 @@ func ExtractTxFromPsbt_SatsNet(psbtStr string) (string, error) {
 }
 
 func BuildBatchSellOrder(utxos []string, address, network string) (string, error) {
-	utxosInfo := make([]*SellUtxoInfo, 0, len(utxos))
+	utxosInfo := make([]*UtxoInfo, 0, len(utxos))
 	for _, utxo := range utxos {
-		var info SellUtxoInfo
+		var info UtxoInfo
 		err := json.Unmarshal([]byte(utxo), &info)
 		if err != nil {
 			return "", err
@@ -452,4 +450,76 @@ func BuildBatchSellOrder(utxos []string, address, network string) (string, error
 
 func SplitBatchSignedPsbt(signedHex string, network string) ([]string, error) {
 	return splitBatchSignedPsbt(signedHex, network)
+}
+
+func FinalizeSellOrder(psbtHex string, utxos []string, buyerAddress, serverAddress, network string,
+	serviceFee, networkFee int64) (string, error) {
+	utxosInfo := make([]*UtxoInfo, 0, len(utxos))
+	for _, utxo := range utxos {
+		var info UtxoInfo
+		err := json.Unmarshal([]byte(utxo), &info)
+		if err != nil {
+			return "", err
+		}
+		utxosInfo = append(utxosInfo, &info)
+	}
+
+	hexBytes, err := hex.DecodeString(psbtHex)
+	if err != nil {
+		return "", err
+	}
+	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	if err != nil {
+		Log.Errorf("NewFromRawBytes failed, %v", err)
+		return "", err
+	}
+
+	return finalizeSellOrder(packet, utxosInfo, buyerAddress, 
+		serverAddress, network, serviceFee, networkFee)
+}
+
+func AddInputsToPsbt(psbtHex string, utxos []string) (string, error) {
+	utxosInfo := make([]*common.AssetsInUtxo, 0, len(utxos))
+	for _, utxo := range utxos {
+		var info common.AssetsInUtxo
+		err := json.Unmarshal([]byte(utxo), &info)
+		if err != nil {
+			return "", err
+		}
+		utxosInfo = append(utxosInfo, &info)
+	}
+
+	hexBytes, err := hex.DecodeString(psbtHex)
+	if err != nil {
+		return "", err
+	}
+	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	if err != nil {
+		Log.Errorf("NewFromRawBytes failed, %v", err)
+		return "", err
+	}
+	return addInputsToPsbt(packet, utxosInfo)
+}
+
+func AddOutputsToPsbt(psbtHex string, utxos []string) (string, error) {
+	utxosInfo := make([]*common.AssetsInUtxo, 0, len(utxos))
+	for _, utxo := range utxos {
+		var info common.AssetsInUtxo
+		err := json.Unmarshal([]byte(utxo), &info)
+		if err != nil {
+			return "", err
+		}
+		utxosInfo = append(utxosInfo, &info)
+	}
+
+	hexBytes, err := hex.DecodeString(psbtHex)
+	if err != nil {
+		return "", err
+	}
+	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	if err != nil {
+		Log.Errorf("NewFromRawBytes failed, %v", err)
+		return "", err
+	}
+	return addOutputsToPsbt(packet, utxosInfo)
 }

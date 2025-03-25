@@ -58,7 +58,7 @@ func createNode(t *testing.T, mode, dbPath string, quit chan struct{}) *Manager 
 		}
 	} else {
 		mnemonic := ""
-		
+
 		//mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
 		mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
 		_, err := manager.ImportWallet(mnemonic, "123456")
@@ -66,7 +66,7 @@ func createNode(t *testing.T, mode, dbPath string, quit chan struct{}) *Manager 
 			t.Fatalf("ImportWallet failed. %v", err)
 		}
 	}
-	
+
 	// tb1p62gjhywssq42tp85erlnvnumkt267ypndrl0f3s4sje578cgr79sekhsua
 	// nodeId: 03258dd933765d50bc88630c6584726f739129d209bfeb21053c37a3b62e7a4ab1
 	// pkscript: 5120d2912b91d0802aa584f4c8ff364f9bb2d5af103368fef4c61584b34f1f081f8b
@@ -76,10 +76,8 @@ func createNode(t *testing.T, mode, dbPath string, quit chan struct{}) *Manager 
 	fmt.Printf("pkscript: %s\n", hex.EncodeToString(pkScript))
 	fmt.Printf("nodeId: %s\n", hex.EncodeToString(manager.GetWallet().GetNodePubKey().SerializeCompressed()))
 
-
 	return manager
 }
-
 
 func prepare(t *testing.T) {
 
@@ -91,7 +89,6 @@ func prepare(t *testing.T) {
 
 	_client = createNode(t, "client", "../db/clientDB", lc)
 }
-
 
 func TestPsbt(t *testing.T) {
 	prepare(t)
@@ -123,7 +120,7 @@ func TestPsbt(t *testing.T) {
 	PrintJsonTx(finalTx, "")
 }
 
-func toPsbt(psbtHex string) (*psbt.Packet, error)  {
+func toPsbt(psbtHex string) (*psbt.Packet, error) {
 	hexBytes, _ := hex.DecodeString(psbtHex)
 	return psbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
 }
@@ -152,28 +149,36 @@ func TestVerifyPsbtString(t *testing.T) {
 
 func TestBuildOrder(m *testing.T) {
 
-	assset := common.DisplayAsset{
-		AssetName: AssetName{
-			Protocol: "ordx",
-			Type: "f",
-			Ticker: "rarepizza",
-		},
-		Amount: "400",
-		Precision: 0,
-		BindingSat: 1,
-		Offsets: nil,	
-	}
+	// assset := common.DisplayAsset{
+	// 	AssetName: AssetName{
+	// 		Protocol: "ordx",
+	// 		Type: "f",
+	// 		Ticker: "rarepizza",
+	// 	},
+	// 	Amount: "400",
+	// 	Precision: 0,
+	// 	BindingSat: 1,
+	// 	Offsets: nil,
+	// }
 
-	info := SellUtxoInfo{
+	info := UtxoInfo{
 		AssetsInUtxo: common.AssetsInUtxo{
-			UtxoId: 1030792413185,
+			UtxoId:   1030792413185,
 			OutPoint: "ee7f3526663e7ebdfd4fb577941cdeab12729d2d220d651798369bfe106c4b2a:1",
-			Value: 400,
+			Value:    10000,
 			PkScript: []byte("USBmGjbRHN3OJU7Y44vUbF7Oh71vqRPudPlNcHWRyBfLOA=="),
-			Assets: []*common.DisplayAsset{&assset},
-			},
+			Assets:   nil,
+		},
 		Price: 800,
-		AssetInfo: nil,
+		AssetInfo: &common.AssetInfo{
+			Name: common.AssetName{
+				Protocol: "ordx",
+				Type:     "f",
+				Ticker:   "rarepizza",
+			},
+			Amount:     *common.NewDecimal(100, 0),
+			BindingSat: 1,
+		},
 	}
 
 	utxo, _ := json.Marshal(info)
