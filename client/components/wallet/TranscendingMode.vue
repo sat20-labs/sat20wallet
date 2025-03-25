@@ -20,10 +20,14 @@
     <!-- Poolswap Mode -->
     <div v-if="selectedTranscendingMode === 'poolswap'">
       <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
-        <TabsList class="grid w-full grid-cols-2">
+        <TabsList class="grid w-full grid-cols-3">
           <TabsTrigger value="bitcoin">
             <Icon icon="cryptocurrency:btc" class="w-4 h-4 mr-1 justify-self-center" />
             Bitcoin
+          </TabsTrigger>
+          <TabsTrigger value="pool">
+            <Icon icon="lucide:waves" class="w-4 h-4 mr-1 justify-self-center" />
+            Pool
           </TabsTrigger>
           <TabsTrigger value="satoshinet">
             <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
@@ -34,6 +38,10 @@
         <TabsContent value="bitcoin">
           <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode" 
             @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
+        </TabsContent>
+
+        <TabsContent value="pool">
+          <PoolManager />
         </TabsContent>
 
         <TabsContent value="satoshinet">
@@ -101,6 +109,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
+import PoolManager from '@/components/wallet/PoolManager.vue'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
 import { useL1Store, useL2Store } from '@/store'
 import { useChannelStore } from '@/store/channel'

@@ -19,7 +19,7 @@
                 <FormControl>
                   <Input
                     :type="showPassword ? 'text' : 'password'"
-                    class="h-14"
+                    class="h-12"
                     placeholder="Password"
                     v-bind="componentField"
                   >
