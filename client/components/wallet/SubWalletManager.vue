@@ -21,10 +21,10 @@
           <!-- Sub-wallet List -->
           <div class="space-y-2">
             <div
-              v-for="wallet in subWallets"
-              :key="wallet.id"
+              v-for="account in accounts"
+              :key="account.id"
               class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
-              :class="{ 'border-primary/50': Number(wallet.id) === currentSubWalletIndex }"
+              :class="{ 'border-primary/50': Number(account.id) === currentAccountIndex }"
             >
               <div class="flex items-center gap-3">
                 <div class="w-10 h-10 rounded-full overflow-hidden bg-muted">
@@ -34,26 +34,26 @@
                 </div>
                 <div>
                   <div class="font-medium flex items-center gap-2 text-white/60">
-                    {{ wallet.name }}
+                    {{ account.name }}
                     <Button
-                      v-if="Number(wallet.id) === currentSubWalletIndex"
+                      v-if="Number(account.id) === currentAccountIndex"
                       variant="ghost"
                       size="icon"
                       class="h-2 w-2"
-                      @click="showEditNameDialog(wallet)"
+                      @click="showEditNameDialog(account)"
                     >
                       <Icon icon="lucide:pencil" class="w-2 h-2" />
                     </Button>
                   </div>
-                  <div class="text-sm text-muted-foreground">{{ wallet.address }}</div>
+                  <div class="text-sm text-muted-foreground">{{ account.address }}</div>
                 </div>
               </div>
               <div class="flex items-center gap-2">
                 <Button
-                  v-if="Number(wallet.id) !== currentSubWalletIndex"
+                  v-if="Number(account.id) !== currentAccountIndex"
                   variant="outline"
                   size="sm"
-                  @click="selectWallet(wallet)"
+                  @click="selectAccount(account)"
                 >
                   Switch
                 </Button>
@@ -66,11 +66,11 @@
                   Current
                 </Button>
                 <Button
-                  v-if="Number(wallet.id) !== currentSubWalletIndex"
+                  v-if="Number(account.id) !== currentAccountIndex"
                   variant="ghost"
                   size="icon"
                   class="text-destructive hover:text-destructive"
-                  @click="confirmDeleteWallet(wallet)"
+                  @click="confirmDeleteAccount(account)"
                 >
                   <Icon icon="lucide:trash-2" class="w-4 h-4" />
                 </Button>
@@ -88,7 +88,7 @@
           <Button
             class="flex-1 gap-2 h-12 flex items-center w-full"
             variant="default"
-            @click="showCreateWalletDialog"
+            @click="showCreateAccountDialog"
           >
             <Icon icon="lucide:plus-circle" class="w-6 h-6 flex-shrink-0" />
             Create New Account
@@ -103,21 +103,22 @@
         <DialogHeader>
           <DialogTitle>EDIT ACCOUNT NAME</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Change the name of your account
           </DialogDescription>
         </DialogHeader>
         <div class="space-y-4">
           <div class="space-y-2">
-            <Label for="walletName">Account Name</Label>
+            <Label for="AccountName">Account Name</Label>
             <Input
-              id="walletName"
+              id="AccountName"
               v-model="editingName"
               placeholder="Enter account name"
             />
           </div>
         </div>
         <DialogFooter>
-          <Button @click="saveWalletName" :disabled="isSaving" class="h-12">
+          <Button @click="saveAccountName" :disabled="isSaving" class="h-12">
             Save changes
           </Button>
         </DialogFooter>
@@ -125,40 +126,23 @@
     </Dialog>
 
     <!-- Create Dialog -->
-    <Dialog :open="isCreateWalletDialogOpen" @update:open="isCreateWalletDialogOpen = $event">
+    <Dialog :open="isCreateAccountDialogOpen" @update:open="isCreateAccountDialogOpen = $event">
       <DialogContent class="sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle>CREATE NEW ACCOUNT</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Set up your new account information.
           </DialogDescription>
         </DialogHeader>
-        <form @submit.prevent="createSubWallet" class="space-y-4">
+        <form @submit.prevent="createAccount" class="space-y-4">
           <div class="space-y-4">
             <div class="space-y-2">
-              <Label for="walletName">Name</Label>
+              <Label for="AccountName">Name</Label>
               <Input
-                id="walletName"
-                v-model="newWalletName"
+                id="AccountName"
+                v-model="newAccountName"
                 placeholder="Enter account name"
-              />
-            </div>
-            <div class="space-y-2">
-              <Label for="password">Password</Label>
-              <Input
-                id="password"
-                v-model="createPassword"
-                type="password"
-                placeholder="Enter account password"
-              />
-            </div>
-            <div class="space-y-2">
-              <Label for="confirmPassword">Confirm Password</Label>
-              <Input
-                id="confirmPassword"
-                v-model="confirmPassword"
-                type="password"
-                placeholder="Confirm account password"
               />
             </div>
           </div>
@@ -178,6 +162,7 @@
         <DialogHeader>
           <DialogTitle>DELETE ACCOUNT</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Are you sure you want to delete this account? This action cannot be undone.
           </DialogDescription>
         </DialogHeader>
@@ -195,7 +180,7 @@
           </Button>
           <Button 
             variant="default" 
-            @click="deleteSubWallet"
+            @click="deleteAccount"
             :disabled="isDeleting"
             class="h-12 mb-4"
           >
@@ -234,74 +219,74 @@ const walletStore = useWalletStore()
 // State
 
 const isEditNameDialogOpen = ref(false)
-const isCreateWalletDialogOpen = ref(false)
+const isCreateAccountDialogOpen = ref(false)
 const isDeleteDialogOpen = ref(false)
 const editingName = ref('')
 const createPassword = ref('')
 const confirmPassword = ref('')
-const newWalletName = ref('')
+const newAccountName = ref('')
 const isCreating = ref(false)
 const isDeleting = ref(false)
 const isSaving = ref(false)
-const walletToEdit = ref<any>(null)
-const walletToDelete = ref<any>(null)
+const accountToEdit = ref<any>(null)
+const accountToDelete = ref<any>(null)
 
 // 模拟数据
-const currentSubWalletIndex = ref(0)
-const subWallets = ref([
+const currentAccountIndex = ref(0)
+const accounts = ref([
   { id: '0', name: 'Account 1', address: 'tb1qyp...x0x7' },
   { id: '1', name: 'Account 2', address: 'tb1qzp...x0x8' },
 ])
 
 // Methods
-function showCreateWalletDialog() {
-  isCreateWalletDialogOpen.value = true
+function showCreateAccountDialog() {
+  isCreateAccountDialogOpen.value = true
   createPassword.value = ''
   confirmPassword.value = ''
-  newWalletName.value = ''
+  newAccountName.value = ''
 }
 
-function showEditNameDialog(wallet: any) {
-  walletToEdit.value = wallet
-  editingName.value = wallet.name
+function showEditNameDialog(account: any) {
+  accountToEdit.value = account
+  editingName.value = account.name
   isEditNameDialogOpen.value = true
 }
 
-async function saveWalletName() {
-  if (!editingName.value || !walletToEdit.value) return
+async function saveAccountName() {
+  if (!editingName.value || !accountToEdit.value) return
 
   try {
     isSaving.value = true
     // TODO: 实现保存名称的逻辑
     await new Promise(resolve => setTimeout(resolve, 1000))
     
-    const wallet = subWallets.value.find(w => w.id === walletToEdit.value.id)
-    if (wallet) {
-      wallet.name = editingName.value
+    const account = accounts.value.find(w => w.id === accountToEdit.value.id)
+    if (account) {
+      account.name = editingName.value
     }
 
     toast({
       title: 'Success',
-      description: 'Wallet name updated successfully',
+      description: 'Account name updated successfully',
     })
     isEditNameDialogOpen.value = false
   } catch (error) {
     toast({
       title: 'Error',
-      description: 'Failed to update wallet name',
+      description: 'Failed to update Account name',
       variant: 'destructive',
     })
   } finally {
     isSaving.value = false
-    walletToEdit.value = null
+    accountToEdit.value = null
   }
 }
 
-async function createSubWallet() {
-  if (!newWalletName.value || !createPassword.value || createPassword.value !== confirmPassword.value) {
+async function createAccount() {
+  if (!newAccountName.value) {
     toast({
       title: 'Error',
-      description: createPassword.value !== confirmPassword.value ? 'Passwords do not match' : 'Please fill in all fields',
+      description: 'Please fill in Account name',
       variant: 'destructive',
     })
     return
@@ -312,21 +297,21 @@ async function createSubWallet() {
     // TODO: 实现创建子钱包的逻辑
     await new Promise(resolve => setTimeout(resolve, 1000))
     
-    subWallets.value.push({
-      id: String(subWallets.value.length),
-      name: newWalletName.value,
+    accounts.value.push({
+      id: String(accounts.value.length),
+      name: newAccountName.value,
       address: `tb1q${Math.random().toString(36).substring(2, 8)}...${Math.random().toString(36).substring(2, 6)}`,
     })
 
     toast({
       title: 'Success',
-      description: 'Sub-wallet created successfully',
+      description: 'Account created successfully',
     })
-    isCreateWalletDialogOpen.value = false
+    isCreateAccountDialogOpen.value = false
   } catch (error) {
     toast({
       title: 'Error',
-      description: 'Failed to create sub-wallet',
+      description: 'Failed to create new account',
       variant: 'destructive',
     })
   } finally {
@@ -334,46 +319,46 @@ async function createSubWallet() {
   }
 }
 
-function confirmDeleteWallet(wallet: any) {
-  walletToDelete.value = wallet
+function confirmDeleteAccount(account: any) {
+  accountToDelete.value = account
   isDeleteDialogOpen.value = true
 }
 
-async function deleteSubWallet() {
-  if (!walletToDelete.value) return
+async function deleteAccount() {
+  if (!accountToDelete.value) return
 
   try {
     isDeleting.value = true
     // TODO: 实现删除子钱包的逻辑
     await new Promise(resolve => setTimeout(resolve, 1000))
     
-    const index = subWallets.value.findIndex(w => w.id === walletToDelete.value.id)
+    const index = accounts.value.findIndex(w => w.id === accountToDelete.value.id)
     if (index > -1) {
-      subWallets.value.splice(index, 1)
+      accounts.value.splice(index, 1)
     }
 
     toast({
       title: 'Success',
-      description: 'Sub-wallet deleted successfully',
+      description: 'Account deleted successfully',
     })
     isDeleteDialogOpen.value = false
   } catch (error) {
     toast({
       title: 'Error',
-      description: 'Failed to delete sub-wallet',
+      description: 'Failed to delete account',
       variant: 'destructive',
     })
   } finally {
     isDeleting.value = false
-    walletToDelete.value = null
+    accountToDelete.value = null
   }
 }
 
-function selectWallet(wallet: any) {
-  currentSubWalletIndex.value = Number(wallet.id)
+function selectAccount(account: any) {
+  currentAccountIndex.value = Number(account.id)
   toast({
     title: 'Success',
-    description: 'Sub-wallet switched successfully',
+    description: 'Account switched successfully',
   })
 }
 </script>

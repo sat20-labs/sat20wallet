@@ -20,7 +20,7 @@
     <!-- Asset Lists -->
     <div class="space-y-2">
       <div v-for="asset in filteredAssets" :key="asset.id"
-        class="flex items-center justify-between p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors">
+        class="flex items-center justify-between p-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors">
         <div>
           <div class="font-medium">{{ (asset.ticker || asset.label).toUpperCase() }}</div>
           <div class="text-sm text-muted-foreground">
@@ -86,7 +86,7 @@ const emit = defineEmits<{
 }>()
 
 // 资产类型
-const assetTypes = ['BTC', 'SAT20', 'BRC20', 'Runes']
+const assetTypes = ['BTC', 'SAT20', 'Runes', 'BRC20']
 const selectedType = ref(props.modelValue || assetTypes[0])
 
 // 过滤资产

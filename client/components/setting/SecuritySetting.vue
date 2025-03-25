@@ -1,7 +1,8 @@
 <template>
   <div>
-    <h2 class="text-2xl font-bold">Security Settings</h2>
+    <h2 class="text-2xl font-bold text-primary/60">Security Settings</h2>    
     <p class="text-muted-foreground">Manage your wallet security preferences</p>
+    <hr class="mb-4 mt-2 border-t-1 border-accent">
     <div class="space-y-6 mt-4">
       <div class="flex items-center justify-between">
         <div class="space-y-0.5">
@@ -22,7 +23,7 @@
           </SelectContent>
         </Select>
       </div>
-
+      <hr class="mb-2 mt-2 border-t-1 border-accent">
       <div class="flex items-center justify-between">
         <div class="space-y-0.5">
           <Label>Hide Balance</Label>
@@ -32,6 +33,7 @@
         </div>
         <Switch v-model="hideBalance" />
       </div>
+      
     </div>
   </div>
 </template>

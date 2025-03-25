@@ -70,37 +70,6 @@
         </Tabs>
       </template>
     </TranscendingMode>
-
-    <!-- <div class="mt-4 space-y-2">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <Icon icon="lucide:wallet" class="w-4 h-4" />
-          <span class="text-sm font-medium">Wallet</span>
-        </div>
-        <SubWalletSelector @wallet-changed="handleSubWalletChange" @wallet-created="handleSubWalletCreated" />
-      </div>
-
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <Icon icon="lucide:network" class="w-4 h-4" />
-          <span class="text-sm font-medium">Network</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="text-sm text-muted-foreground">{{ network }}</span>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <Icon icon="lucide:fingerprint" class="w-4 h-4" />
-          <span class="text-sm font-medium">Address</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="text-sm text-muted-foreground">{{ address }}</span>
-          <CopyButton :text="address" />
-        </div>
-      </div>
-    </div> -->
   </LayoutHome>
 </template>
 

@@ -123,7 +123,7 @@
             @click="showCreateWalletDialog"
           >
             <Icon icon="lucide:plus-circle" class="w-6 h-6 flex-shrink-0" />
-            Create Account
+            Create Wallet
           </Button>
           <Button
             class="flex-1 gap-2 h-11"
@@ -131,7 +131,7 @@
             @click="showImportWalletDialog"
           >
             <Icon icon="lucide:import" class="w-6 h-6 flex-shrink-0" />
-            Import Account
+            Import Wallet
           </Button>
         </div>
       </div>
@@ -143,6 +143,7 @@
         <DialogHeader>
           <DialogTitle>EDIT WALLET NAME</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Change the name of your wallet
           </DialogDescription>
         </DialogHeader>
@@ -162,7 +163,7 @@
           </Button>
           <Button 
             :disabled="isEditingName"
-            @click="saveAccountName"
+            @click="saveWalletName"
             class="h-11 mt-2"
           >
             <Icon v-if="isEditingName" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
@@ -178,6 +179,7 @@
         <DialogHeader>
           <DialogTitle>Change Avatar</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Choose from your NFTs or BTC domains
           </DialogDescription>
         </DialogHeader>
@@ -243,6 +245,7 @@
         <DialogHeader>
           <DialogTitle>CREATE NEW WALLET</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Set up your new wallet password.
           </DialogDescription>
         </DialogHeader>
@@ -289,6 +292,7 @@
         <DialogHeader>
           <DialogTitle>IMPORT WALLET</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Import your existing wallet using recovery phrase
           </DialogDescription>
         </DialogHeader>
@@ -344,6 +348,7 @@
         <DialogHeader>
           <DialogTitle>SAVE YOUR RECOVERY PHRASE</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Never share your recovery phrase. Store it securely offline.
           </DialogDescription>
         </DialogHeader>
@@ -394,6 +399,7 @@
         <DialogHeader>
           <DialogTitle>DELETE WALLET</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Are you sure you want to delete this wallet? This action cannot be undone.
           </DialogDescription>
         </DialogHeader>
@@ -484,8 +490,8 @@ const currentWalletIndex = computed(() => walletStore.accountIndex || 0)
 
 // 模拟钱包列表
 const wallets = computed(() => {
-  const totalAccounts = 8 // 这里可以根据实际情况调整
-  return Array.from({ length: totalAccounts }, (_, index) => ({
+  const totalWallets = 8 // 这里可以根据实际情况调整
+  return Array.from({ length: totalWallets }, (_, index) => ({
     id: index.toString(),
     name: `Wallet ${index + 1}`,
     balance: index === currentWalletIndex.value ? 854.54 : 0, // 模拟余额
@@ -530,7 +536,7 @@ const deleteWallet = async () => {
 
     toast({
       title: 'Success',
-      description: 'Account deleted successfully'
+      description: 'Wallet deleted successfully'
     })
     isDeleteDialogOpen.value = false
     walletToDelete.value = null
@@ -539,7 +545,7 @@ const deleteWallet = async () => {
     toast({
       variant: 'destructive',
       title: 'Error',
-      description: error.message || 'Failed to delete account'
+      description: error.message || 'Failed to delete Wallet'
     })
   } finally {
     isDeleting.value = false
@@ -664,7 +670,7 @@ const showEditNameDialog = (wallet: any) => {
   isEditNameDialogOpen.value = true
 }
 
-const saveAccountName = async () => {
+const saveWalletName = async () => {
   if (!editingWallet.value || !editingName.value || isEditingName.value) return
 
   try {
@@ -674,14 +680,14 @@ const saveAccountName = async () => {
     
     toast({
       title: 'Success',
-      description: 'Account name updated successfully'
+      description: 'Wallet name updated successfully'
     })
     isEditNameDialogOpen.value = false
   } catch (error: any) {
     toast({
       variant: 'destructive',
       title: 'Error',
-      description: error.message || 'Failed to update account name'
+      description: error.message || 'Failed to update Wallet name'
     })
   } finally {
     isEditingName.value = false

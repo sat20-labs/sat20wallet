@@ -20,7 +20,7 @@
     <!-- Poolswap Mode -->
     <div v-if="selectedTranscendingMode === 'poolswap'">
       <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
-        <TabsList class="grid w-full grid-cols-3">
+        <TabsList class="grid w-full grid-cols-3 mb-4 bg-black/15">
           <TabsTrigger value="bitcoin">
             <Icon icon="cryptocurrency:btc" class="w-4 h-4 mr-1 justify-self-center" />
             Bitcoin
@@ -54,7 +54,7 @@
     <!-- Lightning Mode -->
     <div v-else>
       <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
-        <TabsList class="grid w-full grid-cols-3">
+        <TabsList class="grid w-full grid-cols-3 mb-4 bg-black/15">
           <TabsTrigger value="bitcoin">
             <Icon icon="cryptocurrency:btc" class="w-4 h-4 mr-1 justify-self-center" />
             Bitcoin

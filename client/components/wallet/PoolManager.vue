@@ -3,7 +3,7 @@
     <!-- Current Pools -->
     <div v-if="currentPool.length > 0" class="space-y-4">
       <h3 class="text-sm font-semibold">Current Pools</h3>
-      <div v-for="pool in currentPool" :key="pool.id" class="rounded-lg border bg-card p-4 space-y-3">
+      <div v-for="pool in currentPool" :key="pool.id" class="rounded-lg border hover:border-primary/30 bg-muted p-4 space-y-3">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
             <div class="w-7 h-7 flex items-center justify-center">
@@ -19,7 +19,7 @@
               <span class="text-sm text-muted-foreground">{{ pool.asset.type }}</span>
             </div>
           </div>
-          <Button variant="destructive" size="sm" @click="handleExitPool(pool)">
+          <Button variant="outline" size="sm" @click="handleExitPool(pool)">
             <Icon icon="lucide:log-out" class="w-4 h-4 mr-1" />
             Exit Pool
           </Button>
@@ -52,7 +52,7 @@
       
       <div class="grid gap-4">
         <div v-for="pool in filteredAvailablePools" :key="pool.id" 
-          class="rounded-lg border bg-card p-4 space-y-3">
+          class="rounded-lg border bg-muted p-4 space-y-3 hover:border-primary/40 transition-colors">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
               <div class="w-7 h-7 flex items-center justify-center">
@@ -68,7 +68,7 @@
                 <span class="text-sm text-muted-foreground">{{ pool.asset.type }}</span>
               </div>
             </div>
-            <Button variant="secondary" size="sm" @click="handleJoinPool(pool)">
+            <Button variant="outline" size="sm" @click="handleJoinPool(pool)">
               <Icon icon="lucide:log-in" class="w-4 h-4 mr-1" />
               Join Pool
             </Button>
@@ -83,10 +83,10 @@
               <div class="text-muted-foreground">Value</div>
               <div>{{ pool.totalValue }} {{ pool.unit }}</div>
             </div>           
-            <div>
+            <!-- <div>
               <div class="text-muted-foreground">Users</div>
               <div>{{ pool.userCount }}</div>
-            </div>
+            </div> -->
             <div>
               <div class="text-muted-foreground">Min Deposit</div>
               <div>{{ pool.minDeposit }} {{ pool.unit }}</div>
@@ -102,6 +102,7 @@
         <DialogHeader>
           <DialogTitle>Join Pool</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Enter the amount you want to deposit into the pool
           </DialogDescription>
         </DialogHeader>
@@ -143,6 +144,7 @@
         <DialogHeader>
           <DialogTitle>Create New Pool</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Set up parameters for your new pool
           </DialogDescription>
         </DialogHeader>
@@ -197,6 +199,7 @@
         <DialogHeader>
           <DialogTitle>Exit Pool</DialogTitle>
           <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
             Are you sure you want to exit this pool? Your funds will be returned to your L1 account.
           </DialogDescription>
         </DialogHeader>

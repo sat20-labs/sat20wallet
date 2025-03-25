@@ -2,11 +2,13 @@
   <Dialog :open="isOpen" @update:open="isOpen = $event">
     <DialogContent class="sm:max-w-md">
       <DialogHeader>
-        <DialogTitle>{{ title }}</DialogTitle>
+        <DialogTitle>{{ title }}</DialogTitle>        
         <DialogDescription>
+          <hr class="mb-6 mt-1 border-t-1 border-accent">
           {{ description }}
         </DialogDescription>
       </DialogHeader>
+      
       <div class="space-y-4">
         <div class="space-y-2">
           <Label>Amount</Label>
