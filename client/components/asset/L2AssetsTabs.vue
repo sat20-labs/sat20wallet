@@ -27,147 +27,112 @@
 
     <!-- Asset Lists -->
     <div class="space-y-2">
-      <template v-if="selectedType === 'BTC'">
-        <div
-          v-for="asset in plainList"
-          :key="asset.id"
-          class="flex items-center justify-between p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors"
-        >
-          <div>
-            <div class="font-medium">BTC</div>
-            <div class="text-sm text-muted-foreground">
-              {{ asset.amount }} sats
-            </div>
-          </div>
-          <div class="flex gap-2">
-            <Button size="sm" variant="outline" asChild>
-              <RouterLink :to="`/wallet/asset?type=l2_send&p=btc&t=${asset.type}&a=${asset.id}`">
-                <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
-                Send
-              </RouterLink>
-            </Button>
-            <Button v-if="channel && channel.status === 16" size="sm" variant="outline" asChild>
-              <RouterLink :to="`/wallet/asset?type=lock&p=btc&t=${asset.type}&a=${asset.id}`">
-                <Icon icon="lucide:lock" class="w-4 h-4 mr-1" />
-                Lock
-              </RouterLink>
-            </Button>
+      <div
+        v-for="asset in filteredAssets"
+        :key="asset.id"
+        class="flex items-center justify-between p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors"
+      >
+        <div>
+          <div class="font-medium">{{ (asset.ticker || asset.label).toUpperCase() }}</div>
+          <div class="text-sm text-muted-foreground">
+            {{ formatAmount(asset) }}
           </div>
         </div>
-      </template>
 
-      <template v-if="selectedType === 'SAT20'">
-        <div
-          v-for="asset in sat20List"
-          :key="asset.id"
-          class="flex items-center justify-between p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors"
-        >
-          <div>
-            <div class="font-medium">{{ asset.label.toUpperCase() }}</div>
-            <div class="text-sm text-muted-foreground">
-              {{ asset.amount }} {{ asset.ticker }}
-            </div>
-          </div>
-          <div class="flex gap-2">
-            <Button size="sm" variant="outline" asChild>
-              <RouterLink :to="`/wallet/asset?type=l2_send&p=ordx&t=${asset.type}&a=${asset.id}&l=l2`">
-                <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
-                Send
-              </RouterLink>
+        <div class="flex gap-2">
+          <!-- Lightning 模式按钮 -->
+          <template v-if="mode === 'lightning'">
+            <Button
+              v-if="selectedType === 'BTC'"
+              size="sm"
+              variant="outline"
+              @click="$emit('send', asset)"
+            >
+              <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
+              Send
             </Button>
-            <Button v-if="channel && channel.status === 16" size="sm" variant="outline" asChild>
-              <RouterLink :to="`/wallet/asset?type=lock&p=ordx&t=${asset.type}&a=${asset.id}`">
-                <Icon icon="lucide:lock" class="w-4 h-4 mr-1" />
-                Lock
-              </RouterLink>
+            <Button
+              size="sm"
+              variant="outline"
+              @click="$emit('lock', asset)"
+            >
+              <Icon icon="lucide:corner-up-right" class="w-4 h-4 mr-1" />
+              Lock
             </Button>
-          </div>
-        </div>
-      </template>
+          </template>
 
-      <template v-if="selectedType === 'BRC20'">
-        <div
-          v-for="asset in brc20List"
-          :key="asset.id"
-          class="flex items-center justify-between p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors"
-        >
-          <div>
-            <div class="font-medium">{{ asset.label.toUpperCase() }}</div>
-            <div class="text-sm text-muted-foreground">
-              {{ asset.amount }} {{ asset.ticker }}
-            </div>
-          </div>
-          <div class="flex gap-2">
-            <Button size="sm" variant="outline" asChild>
-              <RouterLink :to="`/wallet/asset?type=l2_send&p=brc20&t=${asset.type}&a=${asset.id}&l=l2`">
-                <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
-                Send
-              </RouterLink>
+          <!-- Poolswap 模式按钮 -->
+          <template v-else>
+            <Button
+              v-if="selectedType === 'BTC'"
+              size="sm"
+              variant="outline"
+              @click="$emit('send', asset)"
+            >
+              <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
+              Send
             </Button>
-            <Button v-if="channel && channel.status === 16" size="sm" variant="outline" asChild>
-              <RouterLink :to="`/wallet/asset?type=lock&p=brc20&t=${asset.type}&a=${asset.id}`">
-                <Icon icon="lucide:lock" class="w-4 h-4 mr-1" />
-                Lock
-              </RouterLink>
+            <Button
+              size="sm"
+              variant="outline"
+              @click="$emit('withdraw', asset)"
+            >
+              <Icon icon="lucide:arrow-up-right" class="w-4 h-4 mr-1" />
+              Withdraw
             </Button>
-          </div>
+          </template>
         </div>
-      </template>
-
-      <template v-if="selectedType === 'Runes'">
-        <div
-          v-for="asset in runesList"
-          :key="asset.id"
-          class="flex items-center justify-between p-3 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors"
-        >
-          <div>
-            <div class="font-medium">{{ asset.label.toUpperCase() }}</div>
-            <div class="text-sm text-muted-foreground">
-              {{ asset.amount }} {{ asset.ticker }}
-            </div>
-          </div>
-          <div class="flex gap-2">
-            <Button size="sm" variant="outline" asChild>
-              <RouterLink :to="`/wallet/asset?type=l2_send&p=runes&t=${asset.type}&a=${asset.id}&l=l2`">
-                <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
-                Send
-              </RouterLink>
-            </Button>
-            <Button v-if="channel && channel.status === 16" size="sm" variant="outline" asChild>
-              <RouterLink :to="`/wallet/asset?type=lock&p=runes&t=${asset.type}&a=${asset.id}`">
-                <Icon icon="lucide:lock" class="w-4 h-4 mr-1" />
-                Lock
-              </RouterLink>
-            </Button>
-          </div>
-        </div>
-      </template>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { storeToRefs } from 'pinia'
+import { ref, computed, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
-import { RouterLink } from 'vue-router'
-import { useL2Store, useChannelStore } from '@/store'
 
+// 类型定义
+interface Asset {
+  id: string
+  ticker: string
+  label: string
+  amount: number
+  type?: string
+}
+
+// Props定义
 const props = defineProps<{
-  modelValue?: string
+  modelValue?: string,
+  assets: Asset[],
+  mode: 'poolswap' | 'lightning'
 }>()
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'lock', 'send',  'withdraw'])
 
-const l2Store = useL2Store()
-const channelStore = useChannelStore()
-const { channel } = storeToRefs(channelStore)
-const { runesList, plainList, sat20List, brc20List } = storeToRefs(l2Store)
-
+// 资产类型
 const assetTypes = ['BTC', 'SAT20', 'BRC20', 'Runes']
 const selectedType = ref(props.modelValue || assetTypes[0])
 
+// 过滤资产
+const filteredAssets = computed(() => {
+  return props.assets.filter(asset => {
+    if (!asset) return false
+    if (selectedType.value === 'BTC' && !asset.type) return true
+    const assetType = asset.type?.toUpperCase()
+    return selectedType.value === assetType
+  })
+})
+
+// 格式化金额显示
+const formatAmount = (asset: Asset) => {
+  if (selectedType.value === 'BTC') {
+    return `${asset.amount} sats`
+  }
+  return `${asset.amount} ${asset.ticker}`
+}
+
+// 监听资产类型变化
 watch(selectedType, (newType) => {
   emit('update:modelValue', newType)
 })

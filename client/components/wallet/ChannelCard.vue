@@ -26,7 +26,7 @@
     >
       <p>{{ channelStatusText }}</p>
     </div>
-    <ChannelAssetsTabs />
+    <ChannelAssetsTabs :assets="channelAssets" />
     <Progress :value="progressValue" class="w-full" />
   </div>
   <div>
@@ -122,13 +122,12 @@ import ChannelAssetsTabs from '@/components/asset/ChannelAssetsTabs.vue'
 import { sleep } from 'radash'
 
 const channelStore = useChannelStore()
-const { channel } = storeToRefs(channelStore)
+const { channel, plainList, sat20List, brc20List, runesList } = storeToRefs(channelStore)
 const { toast } = useToast()
 
 const loading = ref(false)
 const showAmt = ref(false)
 const channelAmt = ref('')
-
 
 // 通道状态进度
 const progressValue = computed(() => {
@@ -145,11 +144,26 @@ const progressValue = computed(() => {
   }
 })
 
-defineProps<{
+const channelAssets = computed(() => {
+  switch (props.selectedType) {
+    case 'BTC':
+      return (plainList.value || []).map(asset => ({ ...asset, type: 'BTC' }))
+    case 'SAT20':
+      return (sat20List.value || []).map(asset => ({ ...asset, type: 'SAT20' }))
+    case 'Runes':
+      return (runesList.value || []).map(asset => ({ ...asset, type: 'Runes' }))
+    case 'BRC20':
+      return (brc20List.value || []).map(asset => ({ ...asset, type: 'BRC20' }))
+    default:
+      return []
+  }
+})
+
+const props = defineProps<{
   selectedType: string // 改为 selectedType 以匹配 v-model 的默认行为
 }>()
 
-defineEmits(['lock', 'unlock', 'update:selectedType'])
+const emit = defineEmits(['splicing_out', 'unlock', 'update:selectedType'])
 
 const l1Store = useL1Store()
 const { plainUtxos, balance: l1PlainBalance } = storeToRefs(l1Store)

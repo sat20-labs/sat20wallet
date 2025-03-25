@@ -1,215 +1,126 @@
 <template>
-  <div class="w-full">
+  <div class="space-y-4 w-full">
     <!-- Mode Selection -->
     <div class="mb-4 flex items-center gap-4">
       <Label class="text-sm text-foreground/50 shrink-0">Trans Mode:</Label>
       <div class="flex gap-2">
-        <Button
-          :variant="selectedNetwork === 'poolswap' ? 'secondary' : 'outline'"
-          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
-          @click="selectedNetwork = 'poolswap'"
-        >
+        <Button :variant="selectedTranscendingMode === 'poolswap' ? 'secondary' : 'outline'" 
+          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md" @click="selectedTranscendingMode = 'poolswap'">
           <Icon icon="lucide:repeat" class="w-5 h-5 shrink-0" />
           <span class="text-xs">Poolswap</span>
         </Button>
-        <Button
-          :variant="selectedNetwork === 'lightning' ? 'secondary' : 'outline'"
-          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
-          @click="selectedNetwork = 'lightning'"
-        >
+        <Button :variant="selectedTranscendingMode === 'lightning' ? 'secondary' : 'outline'" 
+          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md" @click="selectedTranscendingMode = 'lightning'">
           <Icon icon="lucide:zap" class="w-5 h-5 shrink-0" />
           <span class="text-xs">Lightning</span>
         </Button>
       </div>
     </div>
 
-    <!-- Content -->
-    <div class="mt-4">
-      <!-- Lightning Mode Content -->
-      <div v-if="selectedNetwork === 'lightning'">
-        <Tabs v-model="selectedChain" class="w-full mb-4 py-2">
-          <TabsList class="grid w-full grid-cols-3 h-15">
-            <TabsTrigger value="bitcoin" class="h-full hover:text-primary/80">
-              <Icon icon="lucide:bitcoin" class="w-4 h-4 mr-1 justify-self-center" />
-              <span class="text-xs font-normal">BITCOIN</span>
-            </TabsTrigger>
-            <TabsTrigger value="lightning" class="h-full hover:text-primary/80">
-              <Icon icon="lucide:zap" class="w-4 h-4 mr-1 justify-self-center" />
-              <span class="text-xs font-normal">LIGHTNING</span>
-            </TabsTrigger>
-            <TabsTrigger value="satoshinet" class="h-full hover:text-primary/80">
-              <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
-              <span class="text-xs font-normal">SATOSHINET</span>
-            </TabsTrigger>
-          </TabsList> 
+    <!-- Poolswap Mode -->
+    <div v-if="selectedTranscendingMode === 'poolswap'">
+      <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
+        <TabsList class="grid w-full grid-cols-2">
+          <TabsTrigger value="bitcoin">
+            <Icon icon="cryptocurrency:btc" class="w-4 h-4 mr-1 justify-self-center" />
+            Bitcoin
+          </TabsTrigger>
+          <TabsTrigger value="satoshinet">
+            <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
+            SatoshiNet
+          </TabsTrigger>
+        </TabsList>
 
-          <TabsContent value="bitcoin" class="mt-4" :key="`${selectedNetwork}-bitcoin`">
-            <!-- L1 Card -->
-            <L1Card 
-              :selectedType="selectedAssetType"
-              :assets="filteredAssets"
-              @update:selectedType="selectedAssetType = $event"
-              @splicing_in="handleSplicingIn"
-              @send="handleSend"
-            />
-          </TabsContent> 
+        <TabsContent value="bitcoin">
+          <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode" 
+            @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
+        </TabsContent>
 
-          <TabsContent value="lightning" class="mt-4" :key="`${selectedNetwork}-lightning`">
-            <!-- Lightning Channel Card -->
-            <ChannelCard 
-              :selectedType="selectedAssetType"
-              @update:selectedType="selectedAssetType = $event"
-            />
-          </TabsContent>
+        <TabsContent value="satoshinet">
+          <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode" 
+            @lock="handleLock" @send="handleSend" @withdraw="handleWithdraw" />
+        </TabsContent>
+      </Tabs>
+    </div>
 
-          <TabsContent value="satoshinet" class="mt-4" :key="`${selectedNetwork}-satoshinet`">
-            <!-- L2 Card -->
-            <L2Card 
-              :selectedType="selectedAssetType"
-              :assets="filteredAssets"
-              @update:selectedType="selectedAssetType = $event"
-            />
-          </TabsContent>          
-        </Tabs>
-      </div>
+    <!-- Lightning Mode -->
+    <div v-else>
+      <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
+        <TabsList class="grid w-full grid-cols-3">
+          <TabsTrigger value="bitcoin">
+            <Icon icon="cryptocurrency:btc" class="w-4 h-4 mr-1 justify-self-center" />
+            Bitcoin
+          </TabsTrigger>
+          <TabsTrigger value="channel">
+            <Icon icon="lucide:zap" class="w-4 h-4 mr-1 justify-self-center" />
+            Channel
+          </TabsTrigger>
+          <TabsTrigger value="satoshinet">
+            <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
+            SatoshiNet
+          </TabsTrigger>
+        </TabsList>
 
-      <!-- Poolswap Mode Content -->
-      <div v-else>
-        <Tabs v-model="selectedChain" class="w-full mb-4 py-2">
-          <TabsList class="grid w-full grid-cols-2">
-            <TabsTrigger value="bitcoin" class="text-xs h-full hover:text-primary/80">
-              <Icon icon="lucide:bitcoin" class="w-4 h-4 mr-1 justify-self-center" />
-              BITCOIN
-            </TabsTrigger>
-            <TabsTrigger value="satoshinet" class="text-xs h-full hover:text-primary/80">
-              <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
-              SATOSHINET
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <TabsContent value="bitcoin">
+          <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode" 
+            @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
+        </TabsContent>
 
-        <!-- Asset Type Tabs -->
-        <div class="border-b border-border/50 mb-4">
-          <nav class="flex -mb-px gap-4">
-            <button
-              v-for="(type, index) in assetTypes"
-              :key="index"
-              @click="selectedAssetType = type"
-              class="pb-2 px-1 font-mono font-semibold text-sm relative"
-              :class="{
-                'text-foreground/90': selectedAssetType === type,
-                'text-muted-foreground': selectedAssetType !== type,
-              }"
-            >
-              {{ type }}
-              <div
-                class="absolute bottom-0 left-0 right-0 h-0.5 transition-all"
-                :class="{
-                  'bg-gradient-to-r from-primary to-primary/50 scale-x-100':
-                    selectedAssetType === type,
-                  'scale-x-0': selectedAssetType !== type,
-                }"
-              />
-            </button>
-          </nav>
-        </div>
+        <TabsContent value="channel">
+          <ChannelCard v-model:selectedType="selectedAssetType" @splicing_out="handleSplicingOut" @unlock="handleUnlock" />
+        </TabsContent>
 
-        <!-- Asset List -->
-        <div class="space-y-2">
-          <div
-            v-for="asset in filteredAssets"
-            :key="asset.id"
-            class="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-all"
-          >
-            <div>
-              <div class="font-medium">
-                {{ (asset.ticker || asset.label).toUpperCase() }}
-              </div>
-              <div class="text-sm text-muted-foreground">
-                {{ formatAmount(asset, selectedAssetType) }}
-              </div>
-            </div>
-            <Button
-              v-if="selectedAssetType === 'BTC'"
-              size="sm"
-              variant="outline"
-              @click="handleSend(asset)"
-            >
-              <Icon icon="lucide:arrow-big-right" class="w-4 h-4" /><span
-                class="mr-2 mb-[0.5px]"
-                >Send</span
-              >
-            </Button>
-            <Button
-              v-if="selectedChain === 'SatoshiNet'"
-              size="sm"
-              variant="outline"
-              @click="openWithdrawDialog(asset)"
-            >
-              <Icon icon="lucide:arrow-up-right" class="w-4 h-4" /><span
-                class="mr-2 mb-[0.5px]"
-                >Withdraw</span
-              >
-            </Button>
-            <Button
-              v-else
-              size="sm"
-              variant="outline"
-              @click="openDepositDialog(asset)"
-            >
-              <Icon icon="lucide:arrow-down-right" class="w-4 h-4" /><span
-                class="mr-2 mb-[0.5px]"
-                >Deposit</span
-              >
-            </Button>
-          </div>
-        </div>
-      </div>
+        <TabsContent value="satoshinet">
+          <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode" 
+            @lock="handleLock" @send="handleSend" @withdraw="handleWithdraw" />
+        </TabsContent>
+      </Tabs>
     </div>
 
     <!-- Asset Operation Dialog -->
-    <AssetOperationDialog
-      v-model:open="showOperationDialog"
-      v-model:amount="operationAmount"
-      :type="operationType"
-      :asset="selectedAsset"
-      @confirm="handleOperationConfirm"
+    <AssetOperationDialog 
+      v-model:open="showDialog" 
+      :title="operationTitle" 
+      :description="operationDescription" 
+      :amount="operationAmount"
+      :asset-type="selectedAsset?.type"
+      :asset-ticker="selectedAsset?.ticker"
+      @update:amount="operationAmount = $event" 
+      @confirm="handleOperationConfirm" 
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
-import { storeToRefs } from 'pinia'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ref, computed, watch, nextTick, defineEmits } from 'vue'
+import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
+import { Label } from '@/components/ui/label'
+import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
-import { useL1Store, useL2Store, useWalletStore } from '@/store'
+import { useL1Store, useL2Store } from '@/store'
 import { useChannelStore } from '@/store/channel'
+import { useToast } from '@/components/ui/toast/use-toast'
 
 const router = useRouter()
+const channelStore = useChannelStore()
+const { toast } = useToast()
+
+// 状态管理
+type TranscendingMode = 'poolswap' | 'lightning'
+type ChainType = 'bitcoin' | 'satoshinet'
+
+const selectedTranscendingMode = ref<TranscendingMode>('poolswap')
+const selectedChain = ref<ChainType>('bitcoin')
+const selectedAssetType = ref('BTC')
+
+// Store
 const l1Store = useL1Store()
 const l2Store = useL2Store()
-const walletStore = useWalletStore()
-const channelStore = useChannelStore()
-
-const { address } = storeToRefs(walletStore)
-const selectedNetwork = ref('poolswap')
-const selectedChain = ref('bitcoin')
-const selectedAssetType = ref('BTC')
-const assetTypes = ['BTC', 'SAT20', 'Runes', 'BRC20']
-
-// 统一的操作弹窗控制
-const showOperationDialog = ref(false)
-const operationType = ref<'deposit' | 'withdraw'>('deposit')
-const operationAmount = ref('')
-const selectedAsset = ref<any>(null)
 
 // 资产列表
 const filteredAssets = computed(() => {
@@ -232,7 +143,7 @@ const filteredAssets = computed(() => {
     }
   }
 
-  if (selectedNetwork.value === 'lightning') {
+  if (selectedTranscendingMode.value === 'lightning') {
     if (selectedChain.value === 'bitcoin') {
       assets = getChainAssets(true) // L1 资产
     } else if (selectedChain.value === 'satoshinet') {
@@ -244,63 +155,171 @@ const filteredAssets = computed(() => {
     assets = getChainAssets(isMainnet)
   }
 
+  console.log('Filtered Assets:', assets)
   return assets
 })
 
-// 打开存款对话框
-const openDepositDialog = (asset: any) => {
+// Dialog State
+const showDialog = ref(false)
+const operationAmount = ref('')
+const operationType = ref('')
+const selectedAsset = ref<any>(null)
+const operationTitle = computed(() => {
+  switch (operationType.value) {
+    case 'send':
+      return 'Send Asset'
+    case 'deposit':
+      return 'Deposit Asset'
+    case 'withdraw':
+      return 'Withdraw Asset'
+    case 'lock':
+      return 'Lock Asset'
+    case 'unlock':
+      return 'Unlock Asset'
+    case 'splicing_in':
+      return 'Splicing In'
+    case 'splicing_out':
+      return 'Splicing Out'
+    default:
+      return 'Asset Operation'
+  }
+})
+
+const operationDescription = computed(() => {
+  if (!selectedAsset.value) return ''
+  const asset = selectedAsset.value
+  const type = asset.type || 'BTC'
+  const amount = asset.amount || 0
+  return `${type}: ${amount} ${asset.ticker || 'sats'}`
+})
+
+// 事件处理
+const emit = defineEmits<{
+  (e: 'splicing_in', asset: any): void
+  (e: 'send', asset: any): void
+  (e: 'deposit', asset: any): void
+  (e: 'withdraw', asset: any): void
+  (e: 'lock', asset: any): void
+  (e: 'unlock', asset: any): void
+  (e: 'splicing_out', asset: any): void
+}>()
+
+const handleSplicingIn = (asset: any) => {
+  console.log('TranscendingMode - Splicing In:', asset)
+  operationType.value = 'splicing_in'
   selectedAsset.value = asset
-  operationType.value = 'deposit'
   operationAmount.value = ''
-  showOperationDialog.value = true
+  showDialog.value = true
 }
 
-// 打开提款对话框
-const openWithdrawDialog = (asset: any) => {
+const handleSend = (asset: any) => {
+  console.log('TranscendingMode - Send:', asset)
+  operationType.value = 'send'
   selectedAsset.value = asset
-  operationType.value = 'withdraw'
   operationAmount.value = ''
-  showOperationDialog.value = true
+  showDialog.value = true
+}
+
+const handleDeposit = (asset: any) => {
+  console.log('TranscendingMode - Deposit:', asset)
+  operationType.value = 'deposit'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+const handleWithdraw = (asset: any) => {
+  console.log('TranscendingMode - Withdraw:', asset)
+  operationType.value = 'withdraw'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+const handleLock = (asset: any) => {
+  console.log('TranscendingMode - Lock:', asset)
+  operationType.value = 'lock'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+const handleUnlock = (asset: any) => {
+  console.log('TranscendingMode - Unlock:', asset)
+  operationType.value = 'unlock'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+const handleSplicingOut = (asset: any) => {
+  console.log('TranscendingMode - Splicing Out:', asset)
+  operationType.value = 'splicing_out'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
 }
 
 // 处理操作确认
-const handleOperationConfirm = (type: string, asset: any, amount: string) => {
-  if (type === 'deposit') {
-    console.log('Deposit:', {
-      asset,
-      amount,
-    })
-  } else {
-    console.log('Withdraw:', {
-      asset,
-      amount,
-    })
+const handleOperationConfirm = () => {
+  if (!selectedAsset.value || !operationAmount.value) return
+
+  const asset = selectedAsset.value
+  const protocol = selectedChain.value === 'bitcoin' ? 'btc' : 'brc20'
+  const amount = operationAmount.value
+
+  let route = '/wallet/asset?'
+  const params = new URLSearchParams()
+
+  switch (operationType.value) {
+    case 'send':
+      params.set('type', selectedChain.value === 'bitcoin' ? 'l1_send' : 'l2_send')
+      break
+    case 'deposit':
+      params.set('type', 'deposit')
+      break
+    case 'withdraw':
+      params.set('type', 'withdraw')
+      break
+    case 'lock':
+      params.set('type', 'lock')
+      break
+    case 'unlock':
+      params.set('type', 'unlock')
+      if (asset.chanId) {
+        params.set('chanId', asset.chanId)
+      }
+      break
+    case 'splicing_in':
+      params.set('type', 'splicing_in')
+      break
+    case 'splicing_out':
+      params.set('type', 'splicing_out')
+      if (asset.chanId) {
+        params.set('chanId', asset.chanId)
+      }
+      break
   }
-}
-const handleSplicingIn = (asset: any) => {
-  console.log('Splicing in:', asset)
-  router.push(
-    `/wallet/asset?type=splicing_in&p=${asset.protocol}&t=${asset.type}&a=${asset.id}`
-  )
-}
-const handleSend = (asset: any) => {
-  console.log('Send:', asset)
-  router.push(
-    `/wallet/asset?type=${selectedChain.value === 'bitcoin' ? 'l1_send' : 'l2_send'}&p=${asset.protocol || 'btc'}&t=${asset.type}&a=${asset.id}`
-  )
-}
 
+  params.set('p', protocol)
+  params.set('t', asset.type)
+  params.set('a', asset.id)
+  params.set('amount', amount)
 
-const formatAmount = (asset: any, selectedAssetType: any) => {
-  if (selectedAssetType === 'BTC') {
-    return `Available: ${asset.amount} sats`
-  }
-  console.log('selectedAssetType:', selectedAssetType)
-  return `${asset.amount} $${asset.ticker || asset.label}`
-}
+  // 重置状态
+  selectedAsset.value = null
+  operationType.value = ''
+  operationAmount.value = ''
+  showDialog.value = false
 
+  // 导航到资产操作页面
+  console.log('submit routerUrl',`${route}${params.toString()}`)
 // 添加网络切换监听
-watch(selectedNetwork, async (newVal) => {
+  router.push(`${route}${params.toString()}`)
+}
+
+
+watch(selectedTranscendingMode, async (newVal) => {
   selectedChain.value = 'bitcoin'
   selectedAssetType.value = 'BTC'
 
