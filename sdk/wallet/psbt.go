@@ -178,7 +178,7 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 				Assets: assets,
 				PkScript: utxo.PkScript,
 			},
-			SighashType: txscript.SigHashAll,
+			SighashType: txscript.SigHashDefault,
 		}
 		packet.Inputs = append(packet.Inputs, input)
 	}

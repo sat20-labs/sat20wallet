@@ -61,7 +61,8 @@ func createNode(t *testing.T, mode, dbPath string, quit chan struct{}) *Manager 
 		mnemonic := ""
 
 		//mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
-		mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
+		// mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
+		mnemonic = "remind effort case concert skull live spoil obvious finish top bargain age"
 		_, err := manager.ImportWallet(mnemonic, "123456")
 		if err != nil {
 			t.Fatalf("ImportWallet failed. %v", err)
@@ -120,6 +121,46 @@ func TestPsbt(t *testing.T) {
 
 	PrintJsonTx(finalTx, "")
 }
+
+
+func TestPsbt_SatsNet(t *testing.T) {
+	prepare(t)
+
+	psbtStr := "70736274ff0100fd1e0101000000042a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0100000000ffffffff9400974c50a5bb30f389e25696279f388ccf17a3d29a0506f8d8cb86895dcf150100000000ffffffff3f32941e8c34679cae707e31efa5ee8b39a0f4f10b748f70f48eb49c403148ca0100000000ffffffff2a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0200000000ffffffff02200300000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380c0300000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380000000000010144900100000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380001012ce80300000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380001012c640000000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380001012c5a0000000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb38000000"
+	signed, err := _client.SignPsbt_SatsNet(psbtStr, false)
+	if err != nil {
+		t.Fatal()
+	}
+	fmt.Printf("%s\n", signed)
+
+	hexBytes, _ := hex.DecodeString(signed)
+	packet, err :=  spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	if err != nil {
+		t.Fatal()
+	}
+
+	err = spsbt.MaybeFinalizeAll(packet)
+	if err != nil {
+		Log.Errorf("MaybeFinalizeAll failed, %v", err)
+		t.Fatal()
+	}
+
+	finalTx, err := spsbt.Extract(packet)
+	if err != nil {
+		Log.Errorf("Extract failed, %v", err)
+		t.Fatal()
+	}
+	PrintJsonTx_SatsNet(finalTx, "")
+
+	prevFectcher := PsbtPrevOutputFetcher_SatsNet(packet)
+	err = VerifySignedTx_SatsNet(finalTx, prevFectcher)
+	if err != nil {
+		Log.Errorf("VerifySignedTx_SatsNet failed, %v", err)
+		t.Fatal()
+	}
+
+}
+
 
 func toPsbt(psbtHex string) (*psbt.Packet, error) {
 	hexBytes, _ := hex.DecodeString(psbtHex)
@@ -244,8 +285,9 @@ func TestFinalizeOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Printf("final psbt: %s", finalPsbt)
+	fmt.Printf("final psbt: %s\n", finalPsbt)
 }
+
 
 func TestSplitBatchSignedPsbt(t *testing.T) {
 	psbt := "70736274ff01007701000000012a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0100000000ffffffff01200300000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380000000000010144900100000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380103048300000001134062387e222f742ea1d6685adc9b9ee2d03c06167b4cfe4802c4eee0ac7013729c775604897d30ddd97b48156a7a07619e13eccd241572b54309cae7dbca09384c0000"
