@@ -23,7 +23,7 @@ const SIGHASH_SINGLE_ANYONECANPAY = txscript.SigHashSingle | txscript.SigHashAny
 type UtxoInfo struct {
 	common.AssetsInUtxo
 	Price     int64           `json:"Price"`       // 价格
-	AssetInfo *wire.AssetInfo `json:"TargetAsset"` // 不指定时，直接使用输入的Asset的资产信息
+	AssetInfo *wire.AssetInfo `json:"TargetAsset"` // 非nil时，指要卖入的资产
 }
  
 
@@ -83,8 +83,6 @@ func buildBatchSellOrder(utxos []*UtxoInfo, address, network string) (string, er
 		var assets []wire.AssetInfo
 		if utxoData.AssetInfo != nil {
 			assets = []wire.AssetInfo{*utxoData.AssetInfo}
-		} else {
-			assets = utxoData.ToTxAssets()
 		}
 
 		txOut := wire.NewTxOut(utxoData.Price, assets, pkScript)
@@ -200,15 +198,19 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 	changeAsset := buyAssets.Clone()
 	changeAsset.Split(&priceAssets)
 	changeAsset.Merge(&sellAssets)
-
+	if changeAsset.IsZero() {
+		changeAsset = nil
+	}
+	
 	txOut := wire.NewTxOut(changeValue, changeAsset, buyerPkScript)
 	packet.UnsignedTx.AddTxOut(txOut)
 	packet.Outputs = append(packet.Outputs, psbt.POutput{})
 
-	txOut2 := wire.NewTxOut(serviceFee, nil, serverPkScript)
-	packet.UnsignedTx.AddTxOut(txOut2)
-	packet.Outputs = append(packet.Outputs, psbt.POutput{})
-
+	if serviceFee != 0 {
+		txOut2 := wire.NewTxOut(serviceFee, nil, serverPkScript)
+		packet.UnsignedTx.AddTxOut(txOut2)
+		packet.Outputs = append(packet.Outputs, psbt.POutput{})
+	}
 
 	var buf bytes.Buffer
 	if err := packet.Serialize(&buf); err != nil {

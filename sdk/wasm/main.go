@@ -1162,6 +1162,7 @@ func main() {
 	obj.Set("extractTxFromPsbt_SatsNet", js.FuncOf(extractTxFromPsbt_SatsNet))
 	obj.Set("buildBatchSellOrder", js.FuncOf(buildBatchSellOrder))
 	obj.Set("finalizeSellOrder", js.FuncOf(finalizeSellOrder))
+	obj.Set("splitBatchSignedPsbt", js.FuncOf(splitBatchSignedPsbt))
 	obj.Set("addInputsToPsbt", js.FuncOf(addInputsToPsbt))
 	obj.Set("addOutputsToPsbt", js.FuncOf(addOutputsToPsbt))
 
