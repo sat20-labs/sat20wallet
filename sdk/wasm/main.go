@@ -919,7 +919,6 @@ func buildBatchSellOrder(this js.Value, p []js.Value) any {
 	return createJsRet(data, 0, "ok")
 }
 
-
 func splitBatchSignedPsbt(this js.Value, p []js.Value) any {
 
 	if len(p) < 2 {
@@ -936,17 +935,137 @@ func splitBatchSignedPsbt(this js.Value, p []js.Value) any {
 	}
 	network := p[1].String()
 
+	wallet.Log.Infof("splitBatchSignedPsbt %s %s", psbt, network)
 	result, err := wallet.SplitBatchSignedPsbt(psbt, network)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	wallet.Log.Infof("splitBatchSignedPsbt result %v", result)
+
+	var str []interface{}
+	for _, r := range result {
+		str = append(str, r)
+	}
+	
+	data := map[string]any {
+		"psbts": str,
+	}
+	
+	return createJsRet(data, 0, "ok")
+}
+
+
+func finalizeSellOrder(this js.Value, p []js.Value) any {
+
+	if len(p) < 7 {
+		return createJsRet(nil, -1, "Expected 7 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "psbt parameter should be a string")
+	}
+	psbt := p[0].String()
+
+	utxoList, err := getStringVector(p[1])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "buyer address parameter should be a string")
+	}
+	address1 := p[2].String()
+
+	if p[3].Type() != js.TypeString {
+		return createJsRet(nil, -1, "server address parameter should be a string")
+	}
+	address2 := p[3].String()
+
+	if p[4].Type() != js.TypeString {
+		return createJsRet(nil, -1, "network parameter should be a string")
+	}
+	network := p[4].String()
+
+	if p[5].Type() != js.TypeNumber {
+		return createJsRet(nil, -1, "serviceFee parameter should be a number")
+	}
+	serviceFee := p[5].Int()
+
+	if p[6].Type() != js.TypeNumber {
+		return createJsRet(nil, -1, "networkFee parameter should be a number")
+	}
+	networkFee := p[6].Int()
+
+	result, err := wallet.FinalizeSellOrder(psbt, utxoList, address1, address2, network, int64(serviceFee), int64(networkFee))
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	
 	data := map[string]interface{}{
-		"psbts": result,
+		"psbt": result,
 	}
 	
 	return createJsRet(data, 0, "ok")
 }
+
+
+func addInputsToPsbt(this js.Value, p []js.Value) any {
+
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "psbt parameter should be a string")
+	}
+	psbt := p[0].String()
+
+	utxoList, err := getStringVector(p[1])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	result, err := wallet.AddInputsToPsbt(psbt, utxoList)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	
+	data := map[string]interface{}{
+		"psbt": result,
+	}
+	
+	return createJsRet(data, 0, "ok")
+}
+
+
+func addOutputsToPsbt(this js.Value, p []js.Value) any {
+
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "psbt parameter should be a string")
+	}
+	psbt := p[0].String()
+
+	utxoList, err := getStringVector(p[1])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	result, err := wallet.AddOutputsToPsbt(psbt, utxoList)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	
+	data := map[string]interface{}{
+		"psbt": result,
+	}
+	
+	return createJsRet(data, 0, "ok")
+}
+
 
 func getVersion(this js.Value, p []js.Value) any {
 	data := map[string]any{
@@ -1042,7 +1161,10 @@ func main() {
 	obj.Set("extractTxFromPsbt", js.FuncOf(extractTxFromPsbt))
 	obj.Set("extractTxFromPsbt_SatsNet", js.FuncOf(extractTxFromPsbt_SatsNet))
 	obj.Set("buildBatchSellOrder", js.FuncOf(buildBatchSellOrder))
+	obj.Set("finalizeSellOrder", js.FuncOf(finalizeSellOrder))
 	obj.Set("splitBatchSignedPsbt", js.FuncOf(splitBatchSignedPsbt))
+	obj.Set("addInputsToPsbt", js.FuncOf(addInputsToPsbt))
+	obj.Set("addOutputsToPsbt", js.FuncOf(addOutputsToPsbt))
 
 	js.Global().Set(module, obj)
 	wallet.Log.SetLevel(logrus.DebugLevel)

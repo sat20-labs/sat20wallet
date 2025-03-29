@@ -42,6 +42,7 @@
             @unlock="handleUnlock"
           />
         </div>
+        <div v-if="item.value === 'pool'"><PoolManager /></div>
         <div v-else-if="item.value === 'l2'">
           <L2Card 
             :selectedType="selectedType"

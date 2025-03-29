@@ -1,5 +1,5 @@
 <template>
-  <Button variant="destructive" @click="deleteWallet" class="w-full">Delete Wallet</Button>
+  <Button variant="destructive" @click="deleteWallet" class="w-full h-12">Delete Wallet</Button>
 </template>
 
 <script lang="ts" setup>

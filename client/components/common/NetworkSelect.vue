@@ -52,14 +52,14 @@ const walletStore = useWalletStore()
 const { network } = storeToRefs(walletStore)
 const networks: NetworkItem[] = [
   {
-    name: 'Bitcoin',
-    icon: 'lucide:bitcoin',
+    name: 'Mainnet',
+    icon: 'cryptocurrency:btc',
     iconColor: 'text-orange-500',
     value: Network.LIVENET,
   },
   {
     name: 'Testnet',
-    icon: 'lucide:bitcoin',    
+    icon: 'cryptocurrency:btc',    
     iconColor: 'text-green-500',
     value: Network.TESTNET,
   },

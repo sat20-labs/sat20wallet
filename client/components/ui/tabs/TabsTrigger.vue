@@ -20,9 +20,9 @@ const forwardedProps = useForwardProps(delegatedProps)
     :class="cn(
       'inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-all',
       'text-zinc-400 hover:text-zinc-300',
-      'focus-visible:outline-none focus-visible:ring-2 focus-visible:bg-muted focus-visible:ring-offset-2',
+      'focus-visible:outline-none focus-visible:ring-2 focus-visible:bg-accent/50 focus-visible:ring-offset-2',
       'disabled:pointer-events-none disabled:opacity-50',
-      'data-[state=active]:bg-muted data-[state=active]:text-primary/80',
+      'data-[state=active]:bg-accent/55 data-[state=active]:text-primary/80',
       props.class,
     )"
   >

@@ -10,7 +10,7 @@
         @click="setActiveItem(item)"
       >
         <RouterLink :to="item.to">
-          <Icon :icon="item.icon" class="text-lg" />
+          <Icon :icon="item.icon" class="text-lg text-muted-foreground" />
         </RouterLink>
       </Button>
     </div>
@@ -26,8 +26,9 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { icon: 'solar:home-2-line-duotone', label: 'Home', to: '/wallet' },
-  { icon: 'solar:settings-bold', label: 'Setting', to: '/wallet/setting' },
+  { icon: 'lucide:house', label: 'Home', to: '/wallet' },
+  { icon: 'lucide:arrow-right-left', label: 'Trade', to: '/trade' },
+  { icon: 'lucide:settings', label: 'Setting', to: '/wallet/setting' },
 ]
 
 const activeItem = ref(navItems[0])

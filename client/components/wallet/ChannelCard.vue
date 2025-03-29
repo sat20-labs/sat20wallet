@@ -51,7 +51,7 @@
       </div>
     </div>
   </div>
-  <div v-if="channel && channel.status > 15">
+  <div v-if="channel && channel.status > 15" class="mt-8">
     <div class="flex gap-4 w-full">
       <Popover v-if="channel" class="flex-1">
         <PopoverTrigger asChild>

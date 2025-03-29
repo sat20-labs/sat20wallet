@@ -40,6 +40,73 @@ func TestRevocationKeyDerivation(t *testing.T) {
 	}
 }
 
+
+func TestRevocationKeyDerivationV2(t *testing.T) {
+	wallet11, _, err := NewInteralWallet(GetChainParam())
+	if err != nil {
+		t.Fatalf("NewWallet failed %v", err)
+	}
+	wallet12, _, err := NewInteralWallet(GetChainParam())
+	if err != nil {
+		t.Fatalf("NewWallet failed %v", err)
+	}
+
+	wallet21, _, err := NewInteralWallet(GetChainParam())
+	if err != nil {
+		t.Fatalf("NewWallet failed %v", err)
+	}
+	wallet22, _, err := NewInteralWallet(GetChainParam())
+	if err != nil {
+		t.Fatalf("NewWallet failed %v", err)
+	}
+
+	{
+		// First, we'll generate a commitment point, and a commitment secret.
+		// These will be used to derive the ultimate revocation keys.
+		commitSecret, commitPoint := wallet12.GetCommitRootKey(wallet21.GetNodePubKey().SerializeCompressed())
+
+		// With the commitment secrets generated, we'll now create the base
+		// keys we'll use to derive the revocation key from.
+		// basePriv, basePub := wallet1.GetRevocationBaseKey()
+		basePub := wallet12.GetRevocationBaseKey()
+
+		// With the point and key obtained, we can now derive the revocation
+		// key itself.
+		revocationPub := utils.DeriveRevocationPubkey(basePub, commitPoint)
+
+		// The revocation public key derived from the original public key, and
+		// the one derived from the private key should be identical.
+		// revocationPriv := utils.DeriveRevocationPrivKey(basePriv, commitSecret)
+		revocationPriv := wallet12.DeriveRevocationPrivKey(commitSecret)
+		if !revocationPub.IsEqual(revocationPriv.PubKey()) {
+			t.Fatalf("derived public keys don't match!")
+		}
+	}
+
+	{
+		// First, we'll generate a commitment point, and a commitment secret.
+		// These will be used to derive the ultimate revocation keys.
+		commitSecret, commitPoint := wallet22.GetCommitRootKey(wallet11.GetNodePubKey().SerializeCompressed())
+
+		// With the commitment secrets generated, we'll now create the base
+		// keys we'll use to derive the revocation key from.
+		// basePriv, basePub := wallet1.GetRevocationBaseKey()
+		basePub := wallet22.GetRevocationBaseKey()
+
+		// With the point and key obtained, we can now derive the revocation
+		// key itself.
+		revocationPub := utils.DeriveRevocationPubkey(basePub, commitPoint)
+
+		// The revocation public key derived from the original public key, and
+		// the one derived from the private key should be identical.
+		// revocationPriv := utils.DeriveRevocationPrivKey(basePriv, commitSecret)
+		revocationPriv := wallet22.DeriveRevocationPrivKey(commitSecret)
+		if !revocationPub.IsEqual(revocationPriv.PubKey()) {
+			t.Fatalf("derived public keys don't match!")
+		}
+	}
+}
+
 func TestTweakKeyDerivation(t *testing.T) {
 	t.Parallel()
 
