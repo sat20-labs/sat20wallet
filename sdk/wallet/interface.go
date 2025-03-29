@@ -21,7 +21,6 @@ func NewManager(cfg *Config, quit chan struct{}) *Manager {
 	//////////
 
 	mgr := &Manager{
-		cfg:           cfg,
 		walletInfoMap: nil,
 		tickerInfoMap: make(map[string]*indexer.TickerInfo),
 		bInited:       false,

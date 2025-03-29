@@ -17,7 +17,6 @@ type Manager struct {
 
 	bInited       bool
 	bStop         bool
-	cfg           *Config
 	password      string
 	status        *Status
 	quit          chan struct{}
@@ -65,9 +64,6 @@ func (p *Manager) GetWallet() common.Wallet {
 	return p.wallet
 }
 
-func (p *Manager) GetConfig() *Config {
-	return p.cfg
-}
 
 func IsTestNet() bool {
 	return _chain != "mainnet"
