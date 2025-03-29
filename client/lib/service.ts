@@ -52,7 +52,19 @@ class Service {
       return [new Error(res.msg), undefined]
     }
   }
-
+  async extractTxFromPsbt(psbtHex: string, { chain }: { chain: string }): Promise<[Error | undefined, { tx: string } | undefined]> {
+    let res = null
+    if (chain === 'btc') {
+      res = await (globalThis as any).sat20wallet_wasm.extractTxFromPsbt(psbtHex)
+    } else {
+      res = await (globalThis as any).sat20wallet_wasm.extractTxFromPsbt_SatsNet(psbtHex)
+    }
+    if (res.code === 0) {
+      return [undefined, res.data]
+    } else {
+      return [new Error(res.msg), undefined]
+    }
+  }
   async buildBatchSellOrder(utxos: string[], address: string, network: string): Promise<string> {
     console.log('buildBatchSellOrder', utxos, address, network)
     
@@ -67,6 +79,57 @@ class Service {
     console.log('splitBatchSignedPsbt res', res)
     return res
   }
+
+  async finalizeSellOrder(
+    psbtHex: string,
+    utxos: string[],
+    buyerAddress: string,
+    serverAddress: string,
+    network: string,
+    serviceFee: number,
+    networkFee: number
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    console.log('finalizeSellOrder', { psbtHex, utxos, buyerAddress, serverAddress, network, serviceFee, networkFee })
+    const result = await (globalThis as any).sat20wallet_wasm.finalizeSellOrder(
+      psbtHex,
+      utxos,
+      buyerAddress,
+      serverAddress,
+      network,
+      serviceFee,
+      networkFee
+    )
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
+  }
+
+  async addInputsToPsbt(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    console.log('addInputsToPsbt', { psbtHex, utxos })
+    const [err, res] = await (globalThis as any).sat20wallet_wasm.addInputsToPsbt(psbtHex, utxos)
+    if (err) {
+      return [err, undefined]
+    }
+    return [undefined, res]
+  }
+
+  async addOutputsToPsbt(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    console.log('addOutputsToPsbt', { psbtHex, utxos })
+    const [err, res] = await (globalThis as any).sat20wallet_wasm.addOutputsToPsbt(psbtHex, utxos)
+    if (err) {
+      return [err, undefined]
+    }
+    return [undefined, res]
+  }
+
 }
 
 export default new Service()

@@ -153,12 +153,18 @@ export const useWalletStore = defineStore('wallet', () => {
     }
     return [err, result]
   }
-  const deleteWallet = () => {
-    walletStorage.clear()
-    hasWallet.value = false
-    address.value = ''
-    publicKey.value = ''
-    walletId.value = 0
+  const deleteWallet = async () => {
+    try {
+      walletStorage.clear()
+      hasWallet.value = false
+      address.value = ''
+      publicKey.value = ''
+      walletId.value = 0
+      return [undefined, true]
+    } catch (error) {
+      console.error('Failed to delete wallet:', error)
+      return [error, undefined]
+    }
   }
   return {
     address,

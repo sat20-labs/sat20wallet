@@ -1,66 +1,68 @@
 <template>
   <LayoutHome class="">
     <WalletHeader />
-
     <!-- 钱包地址 -->
-    <CopyCard :text="address" class="w-full mb-4 bg-black/15">
-      <Button asChild variant="link">
-        <a
-          :href="`https://mempool.space/zh/testnet4/address/${address}`"
-          target="_blank"
-        >
+    <div class="flex items-center justify-between p-2 rounded-lg bg-muted/80 hover:bg-muted transition-all">
+      <!-- 圆形背景 + 居中 Icon -->
+      <span
+        class="w-9 h-9 flex items-center justify-center bg-gradient-to-tr from-[#6600cc] to-[#a0076d] text-foreground rounded-full">
+        <Icon icon="lucide:user-round" class="w-5 h-5 text-white/80 flex-shrink-0" />
+      </span>
+
+      <!-- 账户地址 -->
+      <Button asChild variant="link" class="flex-1 text-center">
+        <a :href="`https://mempool.space/zh/testnet4/address/${address}`" target="_blank">
           {{ hideAddress(address) }}
         </a>
       </Button>
-    </CopyCard>
-    <div class="mb-4">12312312</div>
-    <!-- 池子充值、提取模式 -->
-    <TranscendingMode class="mb-4">
+
+      <!-- 竖线分隔符 -->
+      <Separator orientation="vertical" class="h-full mx-2" />
+
+      <!-- 复制按钮 -->
+      <CopyButton :text="address" class="text-foreground/50" />
+
+      <!-- 下拉选择 -->
+      <SubWalletSelector @wallet-changed="handleSubWalletChange" @wallet-created="handleSubWalletCreated" />
+    </div>
+
+    <!--资产传输模式选择-->
+    <TranscendingMode class="mt-4">
       <template #poolswap-content>
-        <Tabs
-          defaultValue="l1"
-          v-model:model-value="selectTab"
-          @update:model-value="tabChange"
-          class="w-full"
-        >
+        <!-- <Tabs defaultValue="l1" v-model="selectTab" class="w-full"> -->
+        <Tabs defaultValue="l1" v-model:model-value="selectTab" @update:model-value="tabChange" class="w-full">
           <TabsList class="grid w-full grid-cols-3">
-            <TabsTrigger
-              v-for="item in items"
-              :key="item.value"
-              :value="item.value"
-              class="text-xs"
-            >
+            <TabsTrigger v-for="item in items" :key="item.value" :value="item.value">
               {{ item.label }}
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent
-            v-for="item in items"
-            :key="item.value"
-            :value="item.value"
-            class="mt-2"
-          >
+          <TabsContent v-for="item in items" :key="item.value" :value="item.value">
             <div v-if="item.value === 'l1'">
               <L1Card 
                 v-model:selectedType="selectedType"
+                :assets="l1Assets"
+                mode="poolswap"
                 @splicing_in="handleSplicingIn"
                 @send="handleSend"
                 @deposit="handleDeposit"
-                @withdraw="handleWithdraw"
               />
             </div>
+
             <div v-else-if="item.value === 'channel'">
               <ChannelCard 
                 v-model:selectedType="selectedType"
-                @lock="handleLock"
+                @splicing_out="handleSplicingOut"
                 @unlock="handleUnlock"
               />
             </div>
+
             <div v-else-if="item.value === 'l2'">
               <L2Card 
                 v-model:selectedType="selectedType"
-                :address="address || undefined"
-                @deposit="handleDeposit"
+                :mode="'poolswap'"
+                @lock="handleLock"
+                @send="handleSend"
                 @withdraw="handleWithdraw"
               />
             </div>
@@ -68,54 +70,99 @@
         </Tabs>
       </template>
     </TranscendingMode>
+
+    <!-- <div class="mt-4 space-y-2">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <Icon icon="lucide:wallet" class="w-4 h-4" />
+          <span class="text-sm font-medium">Wallet</span>
+        </div>
+        <SubWalletSelector @wallet-changed="handleSubWalletChange" @wallet-created="handleSubWalletCreated" />
+      </div>
+
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <Icon icon="lucide:network" class="w-4 h-4" />
+          <span class="text-sm font-medium">Network</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-muted-foreground">{{ network }}</span>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <Icon icon="lucide:fingerprint" class="w-4 h-4" />
+          <span class="text-sm font-medium">Address</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-muted-foreground">{{ address }}</span>
+          <CopyButton :text="address" />
+        </div>
+      </div>
+    </div> -->
   </LayoutHome>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
+import { Icon } from '@iconify/vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import WalletHeader from '@/components/wallet/HomeHeader.vue'
-import AccountCard from '@/components/wallet/AccountCard.vue'
-import ActionButtons from '@/components/wallet/ActionButtons.vue'
-import ChainSwitcher from '@/components/wallet/ChainSwitcher.vue'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import TranscendingMode from '@/components/wallet/TranscendingMode.vue'
-import CopyCard from '@/components/common/CopyCard.vue'
-import { useWalletStore, useChannelStore } from '@/store'
-import { useRouter, useRoute } from 'vue-router'
-import satsnetStp from '@/utils/stp'
+import SubWalletSelector from '@/components/wallet/SubWalletSelector.vue'
+import CopyButton from '@/components/common/CopyButton.vue'
+import { useWalletStore, useL1Store, useChannelStore } from '@/store'
 import { useL1Assets, useL2Assets } from '@/composables'
-import { generateMempoolUrl, satsToBtc, hideAddress } from '@/utils'
+import { useAssetOperations } from '@/composables/useAssetOperations'
+import { useRouter, useRoute } from 'vue-router'
 import { useToast } from '@/components/ui/toast'
+import satsnetStp from '@/utils/stp'
 
 // 钱包数据
 const walletStore = useWalletStore()
-const { address } = storeToRefs(walletStore)
+const l1Store = useL1Store()
 
 const { refreshL1Assets } = useL1Assets()
 const { refreshL2Assets } = useL2Assets()
-
-const router = useRouter()
-const route = useRoute()
-const { toast } = useToast()
 const channelStore = useChannelStore()
-const { network } = storeToRefs(walletStore)
+const { address, network } = storeToRefs(walletStore)
+const { plainList, sat20List, brc20List, runesList } = storeToRefs(l1Store)
 
-const selectTab = ref<any>('l1')
-const selectedType = ref('BTC') // 添加 selectedType
+// 状态管理
+const selectTab = ref('l1')
+const selectedType = ref('BTC')
 
+// L1 资产列表
+const l1Assets = computed(() => {
+  switch (selectedType.value) {
+    case 'BTC':
+      return plainList.value || []
+    case 'SAT20':
+      return sat20List.value || []
+    case 'Runes':
+      return runesList.value || []
+    case 'BRC20':
+      return brc20List.value || []
+    default:
+      return []
+  }
+})
+
+// 导航项
 const items = [
   {
-    label: 'BTC',
+    label: 'Bitcoin',
     value: 'l1',
   },
   {
-    label: 'Lightning',
+    label: 'Channel',
     value: 'channel',
   },
   {
@@ -124,88 +171,90 @@ const items = [
   },
 ]
 
-// 处理splicing in
-const handleSplicingIn = (asset: any) => {
-  console.log('Splicing in:', asset)
-  router.push(`/wallet/asset?type=splicing_in&p=l1&t=${asset.type}&a=${asset.id}`)
+// 路由和工具
+const router = useRouter()
+const route = useRoute()
+const { toast } = useToast()
+
+// 资产操作
+const {
+  handleSend,
+  handleDeposit,
+  handleWithdraw,
+  handleLock,
+  handleUnlock,
+  handleSplicingIn,
+  handleSplicingOut
+} = useAssetOperations()
+
+// 处理钱包切换
+const handleSubWalletChange = async (wallet: any) => {
+  console.log('SubWallet changed:', wallet)
+  // 重新加载资产列表
+  await refreshL1Assets()
+  await refreshL2Assets()
 }
 
-// 处理send
-const handleSend = (asset: any) => {
-  console.log('Send:', asset)
-  router.push(`/wallet/asset?type=send&p=l1&t=${asset.type}&a=${asset.id}`)
+// 处理新钱包创建
+const handleSubWalletCreated = async (wallet: any) => {
+  console.log('New SubWallet created:', wallet)
+  // 重新加载资产列表
+  await refreshL1Assets()
+  await refreshL2Assets()
 }
 
-// 处理存款
-const handleDeposit = (asset: any) => {
-  console.log('Deposit:', asset)
-  router.push(`/wallet/asset?type=deposit&p=l1&t=${asset.type}&a=${asset.id}`)
-}
-
-// 处理提款
-const handleWithdraw = (asset: any) => {
-  console.log('Withdraw:', asset)
-  router.push(`/wallet/asset?type=withdraw&p=l1&t=${asset.type}&a=${asset.id}`)
-}
-
-// 处理锁定
-const handleLock = (asset: any) => {
-  console.log('Lock:', asset)
-  router.push(`/wallet/asset?type=lock&p=l1&t=${asset.type}&a=${asset.id}`)
-}
-
-// 处理解锁
-const handleUnlock = (asset: any) => {
-  console.log('Unlock:', asset)
-  router.push(`/wallet/asset?type=unlock&p=l1&t=${asset.type}&a=${asset.id}`)
-}
-
-const channelCallback = async (e: any) => {
-  console.log('channel callback')
+// 处理通道回调
+const handleChannelCallback = async (e: any) => {
+  console.log('Channel callback:', e)
   let msg = ''
-  const channelHandler = async () => {
-    await channelStore.getAllChannels()
-  }
-  switch (e) {
-    case 'splicingin':
-      msg = 'splicing in success'
-      await channelHandler()
-      refreshL1Assets()
-      break
-    case 'expanded"':
-      msg = 'splicing in success'
-      await channelHandler()
-      refreshL1Assets()
-      break
+  try {
+    if (e.type === 'splicing_out') {
+      const [err, result] = await satsnetStp.splicingOut(
+        e.chanId,      // chanPoint
+        e.address,     // toAddress
+        e.assetId,     // assetName
+        [],           // fees
+        1,            // feeRate
+        e.amount      // amt
+      )
+      if (err) throw err
+      msg = 'Splicing out successful'
+      await refreshL1Assets()
+    } else if (e.type === 'unlock') {
+      const [err, result] = await satsnetStp.unlockUtxo(
+        e.chanId,      // channelUtxo
+        e.assetId,     // assetName
+        e.amount,      // amt
+        []            // feeUtxoList
+      )
+      if (err) throw err
+      msg = 'Unlock successful'
+      await refreshL2Assets()
+    }
 
-    case 'splicingout':
-      msg = 'splicing out success'
-      await channelHandler()
-      refreshL1Assets()
-      break
-    case 'channelopened':
-      msg = 'channel opened'
-      await channelHandler()
-      refreshL1Assets()
-      break
-    case 'channelclosed':
-      msg = 'channel closed'
-      await channelHandler()
-      refreshL1Assets()
-      break
-    case 'utxounlockedorlocked':
-      msg = 'utxo change'
-      await channelHandler()
-      refreshL2Assets()
-      break
-    default:
-      break
-  }
-  if (msg) {
+    if (msg) {
+      toast({
+        title: 'Success',
+        description: msg,
+      })
+    }
+
+    // 更新通道列表
+    await channelStore.getAllChannels()
+  } catch (error: any) {
+    console.error('Channel callback error:', error)
     toast({
-      title: 'Success',
-      description: msg,
+      title: 'Error',
+      description: error.message,
+      variant: 'destructive',
     })
+  }
+}
+
+// 监听路由变化
+const handleRouteChange = () => {
+  if (route.query?.tab) {
+    selectTab.value = route.query.tab as string
   }
 }
 
@@ -218,10 +267,16 @@ const tabChange = (i: any) => {
     },
   })
 }
-onMounted(() => {
-  if (route.query?.tab) {
-    selectTab.value = route.query!.tab as any
-  }
-  satsnetStp.registerCallback(channelCallback)
+
+// 生命周期钩子
+onMounted(async () => {
+  handleRouteChange()
+  // 注册通道回调
+  satsnetStp.registerCallback(handleChannelCallback)
+  // 加载资产列表
+  await Promise.all([
+    refreshL1Assets(),
+    refreshL2Assets()
+  ])
 })
 </script>

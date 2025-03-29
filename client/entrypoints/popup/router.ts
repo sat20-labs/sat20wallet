@@ -9,6 +9,8 @@ import WalletSetting from '@/entrypoints/popup/pages/wallet/Setting.vue'
 import WalletReceive from '@/entrypoints/popup/pages/wallet/Receive.vue'
 import WalletSettingPhrase from '@/entrypoints/popup/pages/wallet/settings/phrase.vue'
 import WalletL2Send from '@/entrypoints/popup/pages/wallet/l2/send.vue'
+import WalletManager from '@/components/wallet/WalletManager.vue'
+import SubWalletManager from '@/components/wallet/SubWalletManager.vue'
 import Unlock from '@/entrypoints/popup/pages/Unlock.vue'
 import Approve from '@/entrypoints/popup/pages/wallet/Approve.vue'
 import { walletStorage } from '@/lib/walletStorage'
@@ -48,6 +50,8 @@ const routes = [
       { path: 'asset', component: WalletAsset },
       { path: 'receive', component: WalletReceive },
       { path: 'approve', component: Approve },
+      { path: 'manager', component: WalletManager },
+      { path: 'sub-wallet-manager', component: SubWalletManager },
     ],
   },
 ]

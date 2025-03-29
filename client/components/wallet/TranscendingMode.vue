@@ -1,21 +1,25 @@
 <template>
-  <div class="w-full">
+  <div class="space-y-4 w-full">
     <!-- Mode Selection -->
     <div class="mb-4 flex items-center gap-4">
       <Label class="text-sm text-foreground/50 shrink-0">Trans Mode:</Label>
       <div class="flex gap-2">
         <Button
-          :variant="selectedNetwork === 'poolswap' ? 'default' : 'secondary'"
-          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-2xl"
-          @click="selectedNetwork = 'poolswap'"
+          :variant="
+            selectedTranscendingMode === 'poolswap' ? 'secondary' : 'outline'
+          "
+          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
+          @click="selectedTranscendingMode = 'poolswap'"
         >
           <Icon icon="lucide:repeat" class="w-5 h-5 shrink-0" />
           <span class="text-xs">Poolswap</span>
         </Button>
         <Button
-          :variant="selectedNetwork === 'lightning' ? 'default' : 'secondary'"
-          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-2xl"
-          @click="selectedNetwork = 'lightning'"
+          :variant="
+            selectedTranscendingMode === 'lightning' ? 'secondary' : 'outline'
+          "
+          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
+          @click="selectedTranscendingMode = 'lightning'"
         >
           <Icon icon="lucide:zap" class="w-5 h-5 shrink-0" />
           <span class="text-xs">Lightning</span>
@@ -23,269 +27,163 @@
       </div>
     </div>
 
-    <!-- Content -->
-    <div class="mt-4">
-      <!-- Lightning Mode Content -->
-      <div v-if="selectedNetwork === 'lightning'">
-        <Tabs v-model="selectedChain" class="w-full mb-4 py-2">
-          <TabsList class="grid w-full grid-cols-3 h-15">
-            <TabsTrigger value="bitcoin" class="h-full">
-              <Icon
-                icon="lucide:bitcoin"
-                class="w-5 h-5 mr-1 justify-self-center"
-              />
-              <span class="text-sm">Bitcoin</span>
-            </TabsTrigger>
-            <TabsTrigger value="lightning" class="h-full">
-              <Icon
-                icon="lucide:zap"
-                class="w-5 h-5 mr-1 justify-self-center"
-              />
-              <span class="text-sm">Lightning</span>
-            </TabsTrigger>
-            <TabsTrigger value="satoshiNet" class="h-full">
-              <Icon
-                icon="lucide:globe-lock"
-                class="w-5 h-5 mr-1 justify-self-center"
-              />
-              <span class="text-sm">SatoshiNet</span>
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent
-            value="bitcoin"
-            class="pt-5"
-            :key="`${selectedNetwork}-bitcoin`"
-          >
-            <!-- Asset Type Tabs -->
-            <div class="border-b border-border/50 mb-4">
-              <nav class="flex -mb-px gap-4">
-                <button
-                  v-for="(type, index) in assetTypes"
-                  :key="index"
-                  @click="selectedAssetType = type"
-                  class="pb-2 px-1 font-mono font-semibold text-sm relative"
-                  :class="{
-                    'text-foreground/90': selectedAssetType === type,
-                    'text-muted-foreground': selectedAssetType !== type,
-                  }"
-                >
-                  {{ type }}
-                  <div
-                    class="absolute bottom-0 left-0 right-0 h-0.5 transition-all"
-                    :class="{
-                      'bg-gradient-to-r from-primary to-primary/50 scale-x-100':
-                        selectedAssetType === type,
-                      'scale-x-0': selectedAssetType !== type,
-                    }"
-                  />
-                </button>
-              </nav>
-            </div>
-            <!-- Asset List -->
-            <L1Card
-              :selectedType="selectedAssetType"
-              :assets="filteredAssets"
-              @splicing_in="handleSplicingIn"
-              @send="handleSend"
-              @update:selectedType="selectedAssetType = $event"
-              @deposit="openDepositDialog"
-              @withdraw="openWithdrawDialog"
+    <!-- Poolswap Mode -->
+    <div v-if="selectedTranscendingMode === 'poolswap'">
+      <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
+        <TabsList class="grid w-full grid-cols-2">
+          <TabsTrigger value="bitcoin">
+            <Icon
+              icon="cryptocurrency:btc"
+              class="w-4 h-4 mr-1 justify-self-center"
             />
-          </TabsContent>
-
-          <TabsContent
-            value="lightning"
-            class="mt-4"
-            :key="`${selectedNetwork}-lightning`"
-          >
-            <!-- Lightning Channel Assetlist -->
-            <ChannelCard
-              :selectedType="selectedAssetType"
-              @update:selectedType="selectedAssetType = $event"
+            Bitcoin
+          </TabsTrigger>
+          <TabsTrigger value="satoshinet">
+            <Icon
+              icon="lucide:globe-lock"
+              class="w-4 h-4 mr-1 justify-self-center"
             />
-          </TabsContent>
+            SatoshiNet
+          </TabsTrigger>
+        </TabsList>
 
-          <TabsContent
-            value="satoshinet"
-            class="mt-4"
-            :key="`${selectedNetwork}-satoshinet`"
-          >
-            <!-- Asset Type Tabs -->
-            <div class="border-b border-border/50 mb-4">
-              <nav class="flex -mb-px gap-4">
-                <button
-                  v-for="(type, index) in assetTypes"
-                  :key="index"
-                  class="pb-3 text-xs font-medium"
-                  :class="{
-                    'text-foreground border-b-2 border-foreground':
-                      selectedAssetType === type,
-                    'text-muted-foreground': selectedAssetType !== type,
-                  }"
-                  @click="selectedAssetType = type"
-                >
-                  {{ type }}
-                </button>
-              </nav>
-            </div>
-            <!-- SatoshiNet Assets -->
-            <L2Card
-              :selectedType="selectedAssetType"
-              :address="address || ''"
-              :assets="filteredAssets"
-              @update:selectedType="selectedAssetType = $event"
-              @deposit="openDepositDialog"
-              @withdraw="openWithdrawDialog"
+        <TabsContent value="bitcoin">
+          <L1Card
+            v-model:selectedType="selectedAssetType"
+            :assets="filteredAssets"
+            :mode="selectedTranscendingMode"
+            @splicing_in="handleSplicingIn"
+            @send="handleSend"
+            @deposit="handleDeposit"
+          />
+        </TabsContent>
+
+        <TabsContent value="satoshinet">
+          <L2Card
+            v-model:selectedType="selectedAssetType"
+            :assets="filteredAssets"
+            :mode="selectedTranscendingMode"
+            @lock="handleLock"
+            @send="handleSend"
+            @withdraw="handleWithdraw"
+          />
+        </TabsContent>
+      </Tabs>
+    </div>
+
+    <!-- Lightning Mode -->
+    <div v-else>
+      <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
+        <TabsList class="grid w-full grid-cols-3">
+          <TabsTrigger value="bitcoin">
+            <Icon
+              icon="cryptocurrency:btc"
+              class="w-4 h-4 mr-1 justify-self-center"
             />
-          </TabsContent>
-        </Tabs>
-      </div>
+            Bitcoin
+          </TabsTrigger>
+          <TabsTrigger value="channel">
+            <Icon icon="lucide:zap" class="w-4 h-4 mr-1 justify-self-center" />
+            Channel
+          </TabsTrigger>
+          <TabsTrigger value="satoshinet">
+            <Icon
+              icon="lucide:globe-lock"
+              class="w-4 h-4 mr-1 justify-self-center"
+            />
+            SatoshiNet
+          </TabsTrigger>
+        </TabsList>
 
-      <!-- Poolswap Mode Content -->
-      <div v-else>
-        <Tabs v-model="selectedChain" class="w-full mb-4 py-2">
-          <TabsList class="grid w-full grid-cols-2">
-            <TabsTrigger value="bitcoin" class="text-[13px] h-full">
-              <Icon
-                icon="lucide:bitcoin"
-                class="w-5 h-5 mr-1 justify-self-center"
-              />
-              Bitcoin
-            </TabsTrigger>
-            <TabsTrigger value="satoshinet" class="text-[13px] h-full">
-              <Icon
-                icon="lucide:globe-lock"
-                class="w-5 h-5 mr-1 justify-self-center"
-              />
-              SatoshiNet
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <TabsContent value="bitcoin">
+          <L1Card
+            v-model:selectedType="selectedAssetType"
+            :assets="filteredAssets"
+            :mode="selectedTranscendingMode"
+            @splicing_in="handleSplicingIn"
+            @send="handleSend"
+            @deposit="handleDeposit"
+          />
+        </TabsContent>
 
-        <!-- Asset Type Tabs -->
-        <div class="border-b border-border/50 mb-4">
-          <nav class="flex -mb-px gap-4">
-            <button
-              v-for="(type, index) in assetTypes"
-              :key="index"
-              @click="selectedAssetType = type"
-              class="pb-2 px-1 font-mono font-semibold text-sm relative"
-              :class="{
-                'text-foreground/90': selectedAssetType === type,
-                'text-muted-foreground': selectedAssetType !== type,
-              }"
-            >
-              {{ type }}
-              <div
-                class="absolute bottom-0 left-0 right-0 h-0.5 transition-all"
-                :class="{
-                  'bg-gradient-to-r from-primary to-primary/50 scale-x-100':
-                    selectedAssetType === type,
-                  'scale-x-0': selectedAssetType !== type,
-                }"
-              />
-            </button>
-          </nav>
-        </div>
+        <TabsContent value="channel">
+          <ChannelCard
+            v-model:selectedType="selectedAssetType"
+            @splicing_out="handleSplicingOut"
+            @unlock="handleUnlock"
+          />
+        </TabsContent>
 
-        <!-- Asset List -->
-        <div class="space-y-2">
-          <div
-            v-for="asset in filteredAssets"
-            :key="asset.id"
-            class="flex items-center justify-between p-3 rounded-lg bg-muted/25 hover:bg-muted/50 transition-all"
-          >
-            <div>
-              <div class="font-medium">
-                {{ (asset.ticker || asset.label).toUpperCase() }}
-              </div>
-              <div class="text-sm text-muted-foreground">
-                {{ formatAmount(asset, selectedAssetType) }}
-              </div>
-            </div>
-            <Button
-              v-if="selectedAssetType === 'BTC'"
-              size="sm"
-              variant="outline"
-              @click="handleSend(asset)"
-            >
-              <Icon icon="lucide:arrow-big-right" class="w-4 h-4" /><span
-                class="mr-2 mb-[0.5px]"
-                >Send</span
-              >
-            </Button>
-            <Button
-              v-if="selectedChain === 'SatoshiNet'"
-              size="sm"
-              variant="outline"
-              @click="openWithdrawDialog(asset)"
-            >
-              <Icon icon="lucide:arrow-up-right" class="w-4 h-4" /><span
-                class="mr-2 mb-[0.5px]"
-                >Withdraw</span
-              >
-            </Button>
-            <Button
-              v-else
-              size="sm"
-              variant="outline"
-              @click="openDepositDialog(asset)"
-            >
-              <Icon icon="lucide:arrow-down-right" class="w-4 h-4" /><span
-                class="mr-2 mb-[0.5px]"
-                >Deposit</span
-              >
-            </Button>
-          </div>
-        </div>
-      </div>
+        <TabsContent value="satoshinet">
+          <L2Card
+            v-model:selectedType="selectedAssetType"
+            :assets="filteredAssets"
+            :mode="selectedTranscendingMode"
+            @lock="handleLock"
+            @send="handleSend"
+            @withdraw="handleWithdraw"
+          />
+        </TabsContent>
+      </Tabs>
     </div>
 
     <!-- Asset Operation Dialog -->
     <AssetOperationDialog
-      v-model:open="showOperationDialog"
-      v-model:amount="operationAmount"
-      :type="operationType"
-      :asset="selectedAsset"
+      v-model:open="showDialog"
+      :title="operationTitle"
+      :description="operationDescription"
+      :amount="operationAmount"
+      :address="operationAddress"
+      :operation-type="operationType"
+      :asset-type="selectedAsset?.type"
+      :asset-ticker="selectedAsset?.ticker"
+      @update:amount="operationAmount = $event"
+      @update:address="operationAddress = $event"
       @confirm="handleOperationConfirm"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
-import { storeToRefs } from 'pinia'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
+import { Label } from '@/components/ui/label'
+import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
 import satsnetStp from '@/utils/stp'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
-import { useL1Store, useL2Store, useWalletStore } from '@/store'
+import { useL1Store, useL2Store } from '@/store'
 import { useChannelStore } from '@/store/channel'
+import { useToast } from '@/components/ui/toast/use-toast'
+import { useWalletStore } from '@/store'
+import { sleep } from 'radash'
+import { storeToRefs } from 'pinia'
 
 const router = useRouter()
+const channelStore = useChannelStore()
+const walletStore = useWalletStore()
+const { toast } = useToast()
+
+type OperationType = 'send' | 'deposit' | 'withdraw' | 'lock' | 'unlock' | 'splicing_in' | 'splicing_out'
+
+const loading = ref(false)
+const { address, feeRate } = storeToRefs(walletStore)
+const { channel } = storeToRefs(channelStore)
+
+// 状态管理
+type TranscendingMode = 'poolswap' | 'lightning'
+type ChainType = 'bitcoin' | 'satoshinet'
+
+const selectedTranscendingMode = ref<TranscendingMode>('poolswap')
+const selectedChain = ref<ChainType>('bitcoin')
+const selectedAssetType = ref('BTC')
+
+// Store
 const l1Store = useL1Store()
 const l2Store = useL2Store()
-const walletStore = useWalletStore()
-const channelStore = useChannelStore()
-
-const { address, feeRate } = storeToRefs(walletStore)
-const selectedNetwork = ref('poolswap')
-const selectedChain = ref('bitcoin')
-const selectedAssetType = ref('BTC')
-const assetTypes = ['BTC', 'SAT20', 'Runes', 'BRC20']
-
-// 统一的操作弹窗控制
-const showOperationDialog = ref(false)
-const operationType = ref<'deposit' | 'withdraw'>('deposit')
-const operationAmount = ref('')
-const selectedAsset = ref<any>(null)
 // 资产列表
 const filteredAssets = computed(() => {
   let assets: any[] = []
@@ -295,19 +193,31 @@ const filteredAssets = computed(() => {
     const store = isMainnet ? l1Store : l2Store
     switch (selectedAssetType.value) {
       case 'BTC':
-        return store.plainList || []
+        return (store.plainList || []).map((asset) => ({
+          ...asset,
+          type: 'BTC',
+        }))
       case 'SAT20':
-        return store.sat20List || []
+        return (store.sat20List || []).map((asset) => ({
+          ...asset,
+          type: 'SAT20',
+        }))
       case 'Runes':
-        return store.runesList || []
+        return (store.runesList || []).map((asset) => ({
+          ...asset,
+          type: 'Runes',
+        }))
       case 'BRC20':
-        return store.brc20List || []
+        return (store.brc20List || []).map((asset) => ({
+          ...asset,
+          type: 'BRC20',
+        }))
       default:
         return []
     }
   }
 
-  if (selectedNetwork.value === 'lightning') {
+  if (selectedTranscendingMode.value === 'lightning') {
     if (selectedChain.value === 'bitcoin') {
       assets = getChainAssets(true) // L1 资产
     } else if (selectedChain.value === 'satoshinet') {
@@ -319,90 +229,467 @@ const filteredAssets = computed(() => {
     assets = getChainAssets(isMainnet)
   }
 
+  console.log('Filtered Assets:', assets)
   return assets
 })
 
-// 打开存款对话框
-const openDepositDialog = (asset: any) => {
-  selectedAsset.value = asset
-  operationType.value = 'deposit'
-  operationAmount.value = ''
-  showOperationDialog.value = true
-}
+// Dialog State
+const showDialog = ref(false)
+const operationAmount = ref('')
+const operationAddress = ref('')
+const operationType = ref<OperationType | undefined>()
+const selectedAsset = ref<any>(null)
+const showAddressInput = computed(() => {
+  return ['send', 'deposit', 'withdraw'].includes(operationType.value)
+})
+const operationTitle = computed(() => {
+  switch (operationType.value) {
+    case 'send':
+      return 'Send Asset'
+    case 'deposit':
+      return 'Deposit Asset'
+    case 'withdraw':
+      return 'Withdraw Asset'
+    case 'lock':
+      return 'Lock Asset'
+    case 'unlock':
+      return 'Unlock Asset'
+    case 'splicing_in':
+      return 'Splicing In'
+    case 'splicing_out':
+      return 'Splicing Out'
+    default:
+      return 'Asset Operation'
+  }
+})
 
-// 打开提款对话框
-const openWithdrawDialog = (asset: any) => {
-  selectedAsset.value = asset
-  operationType.value = 'withdraw'
-  operationAmount.value = ''
-  showOperationDialog.value = true
-}
+const operationDescription = computed(() => {
+  if (!selectedAsset.value) return ''
+  const asset = selectedAsset.value
+  const type = asset.type || 'BTC'
+  const amount = asset.amount || 0
+  return `${type}: ${amount} ${asset.ticker || 'sats'}`
+})
 
-// 处理操作确认
-const handleOperationConfirm = (type: string, asset: any, amount: string) => {
-  if (type === 'deposit') {
-    handleDeposit(asset, amount)
-  } else {
-    handleWithdraw(asset, amount)
-  }
-}
-const handleDeposit = async (asset: any, amount: string) => {
-  console.log('Deposit:', asset, amount)
-  const [err, res] = await satsnetStp.deposit(
-    address.value as string,
-    asset.key,
-    amount,
-    [],
-    [],
-    feeRate.value
-  )
-  if (err) {
-    console.error('Deposit error:', err)
-  } else {
-    console.log('Deposit success:', res)
-  }
-}
-const handleWithdraw = async (asset: any, amount: string) => {
-  console.log('Withdraw:', asset, amount)
-  const [err, res] = await satsnetStp.withdraw(
-    address.value as string,
-    asset.key,
-    amount,
-    [],
-    [],
-    feeRate.value
-  )
-  if (err) {
-    console.error('Withdraw error:', err)
-  } else {
-    console.log('Withdraw success:', res)
-  }
-}
+// 事件处理
+const emit = defineEmits<{
+  (e: 'splicing_in', asset: any): void
+  (e: 'send', asset: any): void
+  (e: 'deposit', asset: any): void
+  (e: 'withdraw', asset: any): void
+  (e: 'lock', asset: any): void
+  (e: 'unlock', asset: any): void
+  (e: 'splicing_out', asset: any): void
+}>()
+
 const handleSplicingIn = (asset: any) => {
-  console.log('Splicing in:', asset)
-  router.push(
-    `/wallet/asset?type=splicing_in&p=${asset.protocol}&t=${asset.type}&a=${asset.id}`
-  )
+  console.log('TranscendingMode - Splicing In:', asset)
+  operationType.value = 'splicing_in'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
 }
+
 const handleSend = (asset: any) => {
-  console.log('Send:', asset)
-  router.push(
-    `/wallet/asset?type=${
-      selectedChain.value === 'bitcoin' ? 'l1_send' : 'l2_send'
-    }&p=${asset.protocol || 'btc'}&t=${asset.type}&a=${asset.id}`
-  )
+  console.log('TranscendingMode - Send:', asset)
+  operationType.value = 'send'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
 }
 
-const formatAmount = (asset: any, selectedAssetType: any) => {
-  if (selectedAssetType === 'BTC') {
-    return `Available: ${asset.amount} sats`
+const handleDeposit = (asset: any) => {
+  console.log('TranscendingMode - Deposit:', asset)
+  operationType.value = 'deposit'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+const handleWithdraw = (asset: any) => {
+  console.log('TranscendingMode - Withdraw:', asset)
+  operationType.value = 'withdraw'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+const handleLock = (asset: any) => {
+  console.log('TranscendingMode - Lock:', asset)
+  operationType.value = 'lock'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+const handleUnlock = (asset: any) => {
+  console.log('TranscendingMode - Unlock:', asset)
+  operationType.value = 'unlock'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+const handleSplicingOut = (asset: any) => {
+  console.log('TranscendingMode - Splicing Out:', asset)
+  operationType.value = 'splicing_out'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+// 错误处理函数
+const handleError = (message: string) => {
+  toast({
+    title: 'Error',
+    description: message,
+  })
+}
+
+// 检查通道状态
+const checkChannel = async (chanid: string) => {
+  const [err, result] = await satsnetStp.getChannelStatus(chanid)
+  console.log(result)
+
+  if (err || result !== 16) {
+    return false
   }
-  console.log('selectedAssetType:', selectedAssetType)
-  return `${asset.amount} $${asset.ticker || asset.label}`
+
+  return true
 }
 
-// 添加网络切换监听
-watch(selectedNetwork, async (newVal) => {
+// Splicing In 操作
+const splicingIn = async ({
+  chanid,
+  utxos,
+  amt,
+  feeUtxos = [],
+  feeRate,
+  asset_name,
+}: any): Promise<void> => {
+  loading.value = true
+
+  const [err, result] = await satsnetStp.splicingIn(
+    chanid,
+    asset_name,
+    utxos,
+    feeUtxos,
+    feeRate,
+    amt
+  )
+
+  if (err) {
+    loading.value = false
+    handleError(err.message)
+    return
+  }
+
+  await sleep(2000)
+  await channelStore.getAllChannels()
+  loading.value = false
+}
+
+// Splicing Out 操作
+const splicingOut = async ({
+  chanid,
+  toAddress,
+  amt,
+  feeRate,
+  asset_name,
+}: any): Promise<void> => {
+  loading.value = true
+  const feeUtxos = l1Store.plainList?.[0]?.utxos || []
+  const [err, result] = await satsnetStp.splicingOut(
+    chanid,
+    toAddress,
+    asset_name,
+    feeUtxos,
+    feeRate,
+    amt
+  )
+
+  if (err) {
+    loading.value = false
+    handleError(err.message)
+    return
+  }
+
+  await sleep(2000)
+  await channelStore.getAllChannels()
+  loading.value = false
+}
+
+// Unlock UTXO 操作
+const unlockUtxo = async ({ chanid, amt, feeUtxos = [], asset_name }: any) => {
+  console.log('Unlock UTXO:', chanid, amt, feeUtxos, asset_name)
+  loading.value = true
+  const status = await checkChannel(chanid)
+  if (!status) {
+    toast({
+      title: 'error',
+      description: 'channel tx has not been confirmed',
+    })
+    loading.value = false
+    return
+  }
+
+  const [err, result] = await satsnetStp.unlockUtxo(chanid, asset_name, amt, [])
+  if (err) {
+    toast({
+      title: 'error',
+      description: err.message,
+    })
+    loading.value = false
+    return
+  }
+  await sleep(1000)
+  await channelStore.getAllChannels()
+  loading.value = false
+
+  toast({
+    title: 'success',
+    description: 'unlock success',
+  })
+}
+
+// Lock UTXO 操作
+const lockUtxo = async ({
+  utxos,
+  chanid,
+  amt,
+  feeUtxos = [],
+  asset_name,
+}: any) => {
+  loading.value = true
+  const [err, result] = await satsnetStp.lockUtxo(
+    chanid,
+    asset_name,
+    amt,
+    utxos,
+    feeUtxos
+  )
+  if (err) {
+    toast({
+      title: 'error',
+      description: err.message,
+    })
+    loading.value = false
+    return
+  }
+  await sleep(2000)
+  await channelStore.getAllChannels()
+  loading.value = false
+
+  toast({
+    title: 'success',
+    description: 'lock success',
+  })
+}
+
+// L1 发送操作
+const l1Send = async ({ toAddress, utxos, amt }: any) => {
+  loading.value = true
+  const [err, result] = await satsnetStp.sendUtxos(toAddress, utxos, amt)
+  if (err) {
+    toast({
+      title: 'error',
+      description: err.message,
+    })
+    loading.value = false
+    return
+  }
+  await sleep(2000)
+  loading.value = false
+
+  toast({
+    title: 'success',
+    description: 'send success',
+  })
+}
+
+// L2 发送操作
+const l2Send = async ({ toAddress, asset_name, amt }: any) => {
+  loading.value = true
+  const [err, result] = await satsnetStp.sendAssetsSatsNet(
+    toAddress,
+    asset_name,
+    amt
+  )
+  if (err) {
+    toast({
+      title: 'error',
+      description: err.message,
+    })
+    loading.value = false
+    return
+  }
+  await sleep(2000)
+  loading.value = false
+
+  toast({
+    title: 'success',
+    description: 'send success',
+  })
+}
+
+// Deposit 操作
+const deposit = async ({ toAddress, asset_name, amt, utxos = [], fees = [] }: any) => {
+  loading.value = true
+  const [err, result] = await satsnetStp.deposit(
+    toAddress,
+    asset_name,
+    amt,
+    utxos,
+    fees,
+    feeRate.value
+  )
+  if (err) {
+    toast({
+      title: 'error',
+      description: err.message,
+    })
+    loading.value = false
+    return
+  }
+  await sleep(2000)
+  loading.value = false
+
+  toast({
+    title: 'success',
+    description: 'deposit success',
+  })
+}
+
+// Withdraw 操作
+const withdraw = async ({ toAddress, asset_name, amt, utxos = [], fees = [] }: any) => {
+  loading.value = true
+  const [err, result] = await satsnetStp.withdraw(
+    toAddress,
+    asset_name,
+    amt,
+    utxos,
+    fees,
+    feeRate.value
+  )
+  if (err) {
+    toast({
+      title: 'error',
+      description: err.message,
+    })
+    loading.value = false
+    return
+  }
+  await sleep(2000)
+  loading.value = false
+
+  toast({
+    title: 'success',
+    description: 'withdraw success',
+  })
+}
+
+// 更新 handleOperationConfirm 函数
+const handleOperationConfirm = async () => {
+  if (!selectedAsset.value || !operationAmount.value) return
+  if (operationType.value === 'send' && !operationAddress.value) {
+    toast({
+      title: 'error',
+      description: 'Please enter address',
+    })
+    return
+  }
+
+  const asset = selectedAsset.value
+  const chainid = channel.value?.channelId
+  const amount = operationAmount.value
+  const toAddress = operationType.value === 'send' ? operationAddress.value : address.value
+
+  try {
+    switch (operationType.value) {
+      case 'send':
+        if (selectedChain.value === 'bitcoin') {
+          await l1Send({
+            toAddress,
+            utxos: asset.utxos,
+            amt: amount,
+          })
+        } else {
+          await l2Send({
+            toAddress,
+            asset_name: asset.key,
+            amt: amount,
+          })
+        }
+        break
+      case 'deposit':
+        await deposit({
+          toAddress: address.value,
+          asset_name: asset.key,
+          amt: amount,
+          utxos: asset.utxos,
+          fees: l1Store.plainList?.[0]?.utxos || [],
+        })
+        break
+      case 'withdraw':
+        await withdraw({
+          toAddress,
+          asset_name: asset.key,
+          amt: amount,
+          utxos: asset.utxos,
+          fees: l1Store.plainList?.[0]?.utxos || [],
+        })
+        break
+      case 'lock':
+        await lockUtxo({
+          chanid: chainid,
+          utxos: asset.utxos,
+          amt: amount,
+          feeUtxos: [],
+          asset_name: asset.key,
+        })
+        break
+      case 'unlock':
+        await unlockUtxo({
+          chanid: chainid,
+          amt: amount,
+          feeUtxos: [],
+          asset_name: asset.key,
+        })
+        break
+      case 'splicing_in':
+        await splicingIn({
+          chanid: chainid,
+          utxos: asset.utxos,
+          amt: amount,
+          feeUtxos: [],
+          feeRate: feeRate.value,
+          asset_name: asset.key,
+        })
+        break
+      case 'splicing_out':
+        await splicingOut({
+          chanid: chainid,
+          toAddress: address.value,
+          amt: amount,
+          feeRate: feeRate.value,
+          asset_name: asset.key,
+        })
+        break
+    }
+
+    // 重置状态
+    selectedAsset.value = null
+    operationType.value = undefined
+    operationAmount.value = ''
+    operationAddress.value = ''
+    showDialog.value = false
+  } catch (error) {
+    console.error('Operation error:', error)
+    handleError('Operation failed')
+  }
+}
+
+watch(selectedTranscendingMode, async (newVal) => {
   selectedChain.value = 'bitcoin'
   selectedAssetType.value = 'BTC'
 

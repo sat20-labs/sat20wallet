@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full flex flex-col items-center justify-center p-4">
+  <div class="layout-container h-full flex flex-col items-center justify-center p-4">
     <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-16 h-16 mb-2" />
     <h1 class="text-3xl font-semibold mb-2 text-center">SAT20 Wallet</h1>
     <p class="text-muted-foreground/80 mb-4 text-center">
@@ -9,7 +9,7 @@
       <Button size="lg" as-child class="w-full">
         <RouterLink to="/create"> Create New Wallet </RouterLink>
       </Button>
-      <Button size="lg" variant="outline" class="w-full" as-child>
+      <Button size="lg" variant="secondary" class="w-full" as-child>
         <RouterLink to="/import"> Import Existing Wallet </RouterLink>
       </Button>
     </div>

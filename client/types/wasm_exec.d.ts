@@ -150,11 +150,17 @@ declare interface WalletManager {
   signMessage(msg: string): Promise<SatsnetResponse<{ signature: string }>>
 
   // Signs a PSBT (Partially Signed Bitcoin Transaction) and returns the signed PSBT in hex format.
-  signPsbt(psbtHex: string, bool: boolean): Promise<SatsnetResponse<{ psbt: string }>>
+  signPsbt(
+    psbtHex: string,
+    bool: boolean
+  ): Promise<SatsnetResponse<{ psbt: string }>>
 
   // Signs a PSBT for the SatsNet network and returns the signed PSBT in hex format.
-  signPsbt_SatsNet(psbtHex: string, bool: boolean): Promise<SatsnetResponse<{ psbt: string }>>
-  
+  signPsbt_SatsNet(
+    psbtHex: string,
+    bool: boolean
+  ): Promise<SatsnetResponse<{ psbt: string }>>
+
   extractTxFromPsbt(psbtHex: string): Promise<SatsnetResponse<{ psbt: string }>>
 
   extractTxFromPsbt_SatsNet(
@@ -194,6 +200,27 @@ declare interface WalletManager {
     signedHex: string,
     network: string
   ): Promise<SatsnetResponse<{ psbts: string[] }>>
+
+  // 添加新的方法定义
+  finalizeSellOrder(
+    psbtHex: string,
+    utxos: string[],
+    buyerAddress: string,
+    serverAddress: string,
+    network: string,
+    serviceFee: number,
+    networkFee: number
+  ): Promise<SatsnetResponse<{ psbt: string }>>
+
+  addInputsToPsbt(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<SatsnetResponse<{ psbt: string }>>
+
+  addOutputsToPsbt(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<SatsnetResponse<{ psbt: string }>>
 }
 interface SatsnetStp {
   closeChannel(

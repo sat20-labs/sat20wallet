@@ -2,21 +2,12 @@
   <Dialog :open="isOpen" @update:open="isOpen = $event">
     <DialogContent class="sm:max-w-md">
       <DialogHeader>
-        <DialogTitle>{{ type === 'deposit' ? 'Deposit' : 'Withdraw' }} {{ asset?.ticker || asset?.label }}</DialogTitle>
+        <DialogTitle>{{ title }}</DialogTitle>
         <DialogDescription>
-          Review pool information before {{ type === 'deposit' ? 'depositing' : 'withdrawing' }}
+          {{ description }}
         </DialogDescription>
       </DialogHeader>
       <div class="space-y-4">
-        <div class="space-y-2">
-          <Label>Assets Information</Label>
-          <div class="rounded-lg border p-3">
-            <div class="text-sm">
-              <div>Asset: {{ asset?.ticker || asset?.label }}</div>
-              <div>Balance: {{ asset?.amount }}</div>
-            </div>
-          </div>
-        </div>
         <div class="space-y-2">
           <Label>Amount</Label>
           <div class="flex items-center gap-2">
@@ -27,44 +18,87 @@
               @update:modelValue="handleAmountUpdate"
             />
             <span class="text-sm text-muted-foreground">
-              {{ asset?.ticker || asset?.label }}
+              {{ assetUnit }}
             </span>
           </div>
         </div>
+        <div v-if="needsAddress" class="space-y-2">
+          <Label>Address</Label>
+          <Input
+            :model-value="address"
+            type="text"
+            placeholder="Enter address"
+            @update:modelValue="handleAddressUpdate"
+          />
+        </div>
       </div>
       <DialogFooter>
-        <Button @click="handleOperation" class="w-full">{{ type === 'deposit' ? 'Deposit' : 'Withdraw' }}</Button>
+        <Button 
+          @click="handleOperation" 
+          class="w-full"
+          :disabled="needsAddress && !address"
+        >
+          Confirm
+        </Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 interface Props {
-  type: 'deposit' | 'withdraw'
-  asset: any
+  title: string
+  description: string
   amount: string
+  address: string
+  assetType?: string
+  assetTicker?: string
+  operationType?: 'send' | 'deposit' | 'withdraw' | 'lock' | 'unlock' | 'splicing_in' | 'splicing_out'
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  address: '',
+  operationType: undefined
+})
+
 const isOpen = defineModel('open', { type: Boolean })
+
+const assetUnit = computed(() => {
+  if (props.assetType === 'BTC') {
+    return 'sats'
+  }
+  return props.assetTicker || 'sats'
+})
+
+const needsAddress = computed(() => {
+  return props.operationType === 'send'
+})
 
 const emit = defineEmits<{
   'update:amount': [value: string]
-  'confirm': [type: string, asset: any, amount: string]
+  'update:address': [value: string]
+  'confirm': []
 }>()
 
 const handleAmountUpdate = (value: string | number) => {
   emit('update:amount', value.toString())
 }
 
+const handleAddressUpdate = (value: string | number) => {
+  emit('update:address', value.toString())
+}
+
 const handleOperation = () => {
-  emit('confirm', props.type, props.asset, props.amount)
+  if (needsAddress.value && !props.address) {
+    return
+  }
+  emit('confirm')
   isOpen.value = false
 }
-</script> 
+</script>

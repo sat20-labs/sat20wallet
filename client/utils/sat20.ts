@@ -216,6 +216,56 @@ class WalletManager {
   async getNodePubKey(): Promise<[Error | undefined, Uint8Array | undefined]> {
     return this._handleRequest('getNodePubKey')
   }
+
+  async buildBatchSellOrder(
+    utxos: string[],
+    address: string,
+    network: string
+  ): Promise<[Error | undefined, { orderId: string } | undefined]> {
+    return this._handleRequest('buildBatchSellOrder', utxos, address, network)
+  }
+
+  async splitBatchSignedPsbt(
+    signedHex: string,
+    network: string
+  ): Promise<[Error | undefined, { psbts: string[] } | undefined]> {
+    return this._handleRequest('splitBatchSignedPsbt', signedHex, network)
+  }
+
+  async finalizeSellOrder(
+    psbtHex: string,
+    utxos: string[],
+    buyerAddress: string,
+    serverAddress: string,
+    network: string,
+    serviceFee: number,
+    networkFee: number
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return this._handleRequest(
+      'finalizeSellOrder',
+      psbtHex,
+      utxos,
+      buyerAddress,
+      serverAddress,
+      network,
+      serviceFee,
+      networkFee
+    )
+  }
+
+  async addInputsToPsbt(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return this._handleRequest('addInputsToPsbt', psbtHex, utxos)
+  }
+
+  async addOutputsToPsbt(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return this._handleRequest('addOutputsToPsbt', psbtHex, utxos)
+  }
 }
 
 export default new WalletManager()

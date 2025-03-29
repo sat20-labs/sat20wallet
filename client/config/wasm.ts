@@ -36,12 +36,12 @@ const prodCfg =  {
     IndexerL1: {
         Scheme: "https",
         Host: "apidev.sat20.org",
-        Proxy: "btc"
+        Proxy: "btc/testnet"
     },
     IndexerL2: {
         Scheme: "https",
         Host: "apidev.sat20.org",
-        Proxy: "satsnet"
+        Proxy: "satsnet/testnet"
     },
     Log: "debug"
 };

@@ -74,7 +74,7 @@ export const useApprove = () => {
   })
 
   onBeforeUnmount(() => {
-    portRef.value?.disconnect()
+    // portRef.value?.disconnect()
     portRef.value = null
   })
   return { approveData, approve, reject }

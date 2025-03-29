@@ -74,14 +74,14 @@ interface Channel {
   peer: string
   capacity: number
   localbalanceL1: any[]
-  remotebalanceL1: any[]
+  remotebalance_L1: any[]
   commitheight: number
   lastpaymentid: string
   totalsent: number
   totalrecv: number
-  localutxoL2: any
+  localutxo_L2: any
   localunhandledutxos_L2: any[]
-  remoteutxoL2: any
+  remoteutxo_L2: any
   remoteunhandledutxos_L2: any[]
   localcommitment: Commitment
   remotecommitment: Commitment
@@ -97,187 +97,109 @@ export const useChannelStore = defineStore('channel', () => {
 
   const channel = computed(() => channels.value?.[0])
   const getAllChannels = async () => {
-    try {
-      const [err, result] = await satsnetStp.getAllChannels()
-      // console.log('获取通道结果:', { err, result })
-
-      if (err) {
-        console.error('获取通道失败:', err)
-        channels.value = []
-        return
-      }
-
-      if (result?.channels) {
-        const channelsData = JSON.parse(result.channels)
-        // console.log('解析后的通道数据:', channelsData)
-
-        if (channelsData && typeof channelsData === 'object') {
-          const values = Object.values(channelsData)
-            .filter((v: any) => {
-              const status = v.status
-              return (status > 15 && status < 257) || (status > 0 && status < 5)
-            })
-
+    const [_, result] = await satsnetStp.getAllChannels()
+    if (result?.channels) {
+      try {
+        console.log('result', result)
+        const c = JSON.parse(result.channels)
+        console.log('channels', c)
+        if (c && typeof c === 'object') {
+          let values = Object.values(c)
+          values = values.filter(
+            (v: any) =>
+              (v.status > 15 && v.status < 257) ||
+              (v.status > 0 && v.status < 5)
+          )
           channels.value = values as Channel[]
-          // console.log('过滤后的通道列表:', channels.value)
-
-          // 立即解析资产
+          // 添加这行，确保在通道数据更新后解析资产
           await parseChannel()
+        } else {
+          channels.value = []
         }
-      } else {
+      } catch (error) {
+        console.log(error)
         channels.value = []
       }
-    } catch (error) {
-      console.error('处理通道数据时出错:', error)
+    } else {
       channels.value = []
     }
   }
 
   const parseChannel = async () => {
-    // console.log('开始解析通道资产...')
+    console.log('开始解析通道资产...')
+    console.log('当前channel:', channel.value)
+
     allAssetList.value = []
+    const { localbalanceL1 } = channel.value || {}
+    console.log('localbalanceL1:', localbalanceL1)
 
-    // 1. 确保有通道数据
-    if (!channel.value) {
-      // console.log('没有可用的通道')
-      return
-    }
+    if (localbalanceL1?.length) {
+      console.log('开始处理资产列表，长度:', localbalanceL1.length)
+      for (let i = 0; i < localbalanceL1.length; i++) {
+        const item = localbalanceL1[i]
+        console.log('处理资产项:', item)
 
-    // 2. 解析本地余额
-    const { localbalanceL1, remotebalanceL1, localutxoL2, remoteutxoL2 } = channel.value
+        const protocol = item.Name.Protocol
+        const key = protocol
+          ? `${protocol}:${item.Name.Type}:${item.Name.Ticker}`
+          : '::'
+        console.log('资产key:', key)
 
-    // console.log('解析本地L1余额:', localbalanceL1)
-    // console.log('解析远程L1余额:', remotebalanceL1)
-    // console.log('本地L2 UTXOs:', localutxoL2)
-    // console.log('远程L2 UTXOs:', remoteutxoL2)
+        let amt = item.Amount.Value
+        if (protocol === 'runes') {
+          console.log('处理runes金额转换, 原始金额:', amt)
+          const [_, amtRes] = await satsnetStp.runesAmtV2ToV3(key, amt)
+          amt = amtRes?.runeAmtInV3 || amt
+          console.log('转换后金额:', amt)
+        }
 
-    // 处理L1余额
-    if (Array.isArray(localbalanceL1)) {
-      for (const item of localbalanceL1) {
-        try {
-          if (!item?.Name) {
-            // console.log('跳过无效资产项:', item)
-            continue
-          }
-
-          const protocol = item.Name.Protocol
-          const key = protocol
-            ? `${protocol}:${item.Name.Type}:${item.Name.Ticker}`
-            : '::'
-          
-          let amt = item.Amount?.Value || 0
-          console.log(`处理资产 ${key}, 金额: ${amt}`)
-
-          if (protocol === 'runes') {
-            const [runeErr, amtRes] = await satsnetStp.runesAmtV2ToV3(key, amt)
-            if (!runeErr && amtRes) {
-              amt = amtRes.runeAmtInV3
-              console.log('Runes 转换后金额:', amt)
-            }
-          }
-
-          const assetItem = {
-            id: key,
-            key,
-            protocol,
-            type: item.Name.Type,
-            ticker: item.Name.Ticker,
-            label: item.Name.Type === 'e'
+        const assetItem = {
+          id: key,
+          key,
+          protocol: protocol,
+          type: item.Name.Type,
+          ticker: item.Name.Ticker,
+          label:
+            item.Name.Type === 'e'
               ? `${item.Name.Ticker}（raresats）`
               : item.Name.Ticker,
-            utxos: [],
-            amount: amt,
-            bindingSat: item.BindingSat || 0
-          }
-
-          // console.log('添加资产项:', assetItem)
-          allAssetList.value.push(assetItem)
-
-          // 获取资产详情
-          if (key !== '::') {
-            await updateAssetInfo(key)
-          }
-        } catch (error) {
-          console.error('处理资产项时出错:', error)
+          utxos: [],
+          amount: amt,
         }
+        console.log('添加资产项:', assetItem)
+        console.log('allAssetList', allAssetList.value)
+        console.log('l1', localbalanceL1)
+        allAssetList.value.push(assetItem)
       }
-    }
-
-    // 处理L2 UTXOs
-    // if (Array.isArray(localutxoL2)) {
-    //   for (const utxo of localutxoL2) {
-    //     try {
-    //       const assets = utxo.OutValue?.Assets
-    //       if (Array.isArray(assets)) {
-    //         for (const asset of assets) {
-    //           const protocol = asset.Name?.Protocol || ''
-    //           const key = protocol
-    //             ? `${protocol}:${asset.Name.Type}:${asset.Name.Ticker}`
-    //             : '::'
-              
-    //           let amt = asset.Amount?.Value || 0
-    //           console.log(`处理L2 UTXO资产 ${key}, 金额: ${amt}`)
-
-    //           // 查找或创建资产项
-    //           let assetItem = allAssetList.value.find(a => a.key === key)
-    //           if (!assetItem) {
-    //             assetItem = {
-    //               id: key,
-    //               key,
-    //               protocol,
-    //               type: asset.Name.Type,
-    //               ticker: asset.Name.Ticker,
-    //               label: asset.Name.Type === 'e'
-    //                 ? `${asset.Name.Ticker}（raresats）`
-    //                 : asset.Name.Ticker,
-    //               utxos: [],
-    //               amount: 0,
-    //               bindingSat: 0
-    //             }
-    //             allAssetList.value.push(assetItem)
-    //           }
-
-    //           // 更新UTXO信息
-    //           assetItem.utxos.push({
-    //             id: utxo.UtxoId,
-    //             outpoint: utxo.OutPointStr,
-    //             value: amt
-    //           })
-    //           assetItem.amount += amt
-
-    //           if (key !== '::') {
-    //             await updateAssetInfo(key)
-    //           }
-    //         }
-    //       }
-    //     } catch (error) {
-    //       console.error('处理L2 UTXO时出错:', error)
-    //     }
-    //   }
-    // }
-
-    console.log('资产解析完成，列表:', allAssetList.value)
-  }
-
-  // 提取资产信息更新逻辑
-  const updateAssetInfo = async (key: string) => {
-    try {
-      const [infoErr, infoRes] = await satsnetStp.getTickerInfo(key)
-      if (!infoErr && infoRes?.ticker) {
-        const tickerInfo = JSON.parse(infoRes.ticker)
-        if (tickerInfo?.displayname) {
-          const asset = allAssetList.value.find(a => a.key === key)
-          if (asset) {
-            asset.label = tickerInfo.displayname
-            console.log(`更新资产 ${key} 标签为: ${asset.label}`)
+      const getAssetInfo = async (key: string) => {
+        console.log('获取资产信息:', key)
+        const [err, res] = await satsnetStp.getTickerInfo(key)
+        if (res?.ticker) {
+          const { ticker } = res
+          const result = JSON.parse(ticker)
+          const findItem = allAssetList.value?.find((a: any) => a.key === key)
+          if (findItem) {
+            findItem.label = result?.displayname || findItem.label
+            console.log('更新资产标签:', findItem)
           }
         }
       }
-    } catch (e) {
-      console.error(`获取资产 ${key} 信息失败:`, e)
-    }
-  }
 
+      const tickers = allAssetList.value.map((a) => a.key)
+      console.log('待处理的ticker列表:', tickers)
+      await parallel(
+        3,
+        tickers.filter((r) => r !== '::') || [],
+        async (ticker) => {
+          return await getAssetInfo(ticker)
+        }
+      )
+    } else {
+      console.log('没有找到localbalanceL1或为空')
+    }
+
+    console.log('解析完成，最终资产列表:', allAssetList.value)
+  }
   const plainList = computed(() => {
     console.log('调试信息plainList:', allAssetList.value)
     return allAssetList.value.filter((item) => item?.protocol === '')

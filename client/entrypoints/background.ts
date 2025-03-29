@@ -11,6 +11,7 @@ const Buffer = Buffer3
 import wasmConfig from '@/config/wasm'
 
 export default defineBackground(async () => {
+  console.log('Background 启动')
   const loadWalletWasm = async () => {
     importScripts('/wasm/wasm_exec.js')
     const go = new Go()
@@ -62,7 +63,7 @@ export default defineBackground(async () => {
         eventData.metadata.from = Message.MessageFrom.BACKGROUND
         eventData.metadata.to = Message.MessageTo.INJECTED
         await portMap.content.postMessage(eventData)
-        portMap.popup.disconnect()
+        // portMap.popup.disconnect()
         approveMap.delete(windowId.toString())
         browser.windows.remove(windowId)
       } else if (action === Message.MessageAction.REJECT_RESPONSE) {
@@ -75,7 +76,7 @@ export default defineBackground(async () => {
           error: walletError.userReject,
         })
         approveMap.delete(windowId.toString())
-        portMap.popup.disconnect()
+        // portMap.popup.disconnect()
         browser.windows.remove(windowId)
       }
     }
@@ -133,6 +134,10 @@ export default defineBackground(async () => {
           Message.MessageAction.GET_INSCRIPTIONS,
           Message.MessageAction.SEND_INSCRIPTION,
           Message.MessageAction.SWITCH_NETWORK,
+          Message.MessageAction.FINALIZE_SELL_ORDER,
+          Message.MessageAction.ADD_INPUTS_TO_PSBT,
+          Message.MessageAction.ADD_OUTPUTS_TO_PSBT,
+          Message.MessageAction.EXTRACT_TX_FROM_PSBT,
         ]
 
         const checkWallet = async () => {
@@ -183,7 +188,21 @@ export default defineBackground(async () => {
                   eventData.data.network
                 )
                 break
-                  
+              case Message.MessageAction.EXTRACT_TX_FROM_PSBT:
+                const [extractErr, extractRes] =
+                  await service.extractTxFromPsbt(
+                    eventData.data.psbtHex,
+                    eventData.data.chain
+                  )
+                if (extractErr || !extractRes) {
+                  errData = {
+                    code: -22,
+                    message: extractErr?.message || '提取交易失败',
+                  }
+                } else {
+                  resData = extractRes.tx
+                }
+                break
               case Message.MessageAction.GET_ACCOUNTS:
                 resData = await service.getAccounts()
                 break
@@ -210,6 +229,56 @@ export default defineBackground(async () => {
                   }
                 } else {
                   resData = res
+                }
+                break
+              case Message.MessageAction.FINALIZE_SELL_ORDER:
+                const [finalizeErr, finalizeRes] =
+                  await service.finalizeSellOrder(
+                    eventData.data.psbtHex,
+                    eventData.data.utxos,
+                    eventData.data.buyerAddress,
+                    eventData.data.serverAddress,
+                    eventData.data.network,
+                    eventData.data.serviceFee,
+                    eventData.data.networkFee
+                  )
+                if (finalizeErr) {
+                  errData = {
+                    code: -22,
+                    message: finalizeErr.message,
+                  }
+                } else {
+                  resData = finalizeRes
+                }
+                break
+
+              case Message.MessageAction.ADD_INPUTS_TO_PSBT:
+                const [inputsErr, inputsRes] = await service.addInputsToPsbt(
+                  eventData.data.psbtHex,
+                  eventData.data.utxos
+                )
+                if (inputsErr) {
+                  errData = {
+                    code: -22,
+                    message: inputsErr.message,
+                  }
+                } else {
+                  resData = inputsRes
+                }
+                break
+
+              case Message.MessageAction.ADD_OUTPUTS_TO_PSBT:
+                const [outputsErr, outputsRes] = await service.addOutputsToPsbt(
+                  eventData.data.psbtHex,
+                  eventData.data.utxos
+                )
+                if (outputsErr) {
+                  errData = {
+                    code: -22,
+                    message: outputsErr.message,
+                  }
+                } else {
+                  resData = outputsRes
                 }
                 break
             }

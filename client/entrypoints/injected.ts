@@ -159,6 +159,53 @@ export default defineUnlistedScript(() => {
         data: { signedHex, network },
       })
     }
+
+    async finalizeSellOrder(
+      psbtHex: string,
+      utxos: string[],
+      buyerAddress: string,
+      serverAddress: string,
+      network: string,
+      serviceFee: number,
+      networkFee: number
+    ): Promise<{ psbt: string }> {
+      return this.send<{ psbt: string }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.FINALIZE_SELL_ORDER,
+        data: {
+          psbtHex,
+          utxos,
+          buyerAddress,
+          serverAddress,
+          network,
+          serviceFee,
+          networkFee,
+        },
+      })
+    }
+
+    async addInputsToPsbt(
+      psbtHex: string,
+      utxos: string[]
+    ): Promise<{ psbt: string }> {
+      return this.send<{ psbt: string }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.ADD_INPUTS_TO_PSBT,
+        data: { psbtHex, utxos },
+      })
+    }
+
+    async addOutputsToPsbt(
+      psbtHex: string,
+      utxos: string[]
+    ): Promise<{ psbt: string }> {
+      return this.send<{ psbt: string }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.ADD_OUTPUTS_TO_PSBT,
+        data: { psbtHex, utxos },
+      })
+    }
+
     async getBalance(): Promise<Balance> {
       return this.send<Balance>({
         type: Message.MessageType.REQUEST,
@@ -218,6 +265,14 @@ export default defineUnlistedScript(() => {
         type: Message.MessageType.REQUEST,
         action: Message.MessageAction.PUSH_PSBT,
         data: { psbtHex, options },
+      })
+    }
+
+    async extractTxFromPsbt(psbtHex: string, chain: string): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.EXTRACT_TX_FROM_PSBT,
+        data: { psbtHex, chain },
       })
     }
   }

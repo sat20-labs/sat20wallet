@@ -1,6 +1,10 @@
 <template>
-  <div class="pt-20 p-4">
-    <div class="mb-4">
+  <div class="pt-10 p-4">
+    <div class="mb-4 text-center">
+      <div class="flex flex-col items-center justify-center gap-2 mb-4">
+        <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-14 h-14 mb-2" />
+        <!-- <h1 class="text-2xl font-semibold">SAT20 Wallet</h1> -->
+      </div>
       <h1 class="text-2xl font-bold">
         {{ step === 1 ? 'Create New Wallet' : 'Save your recovery phrase' }}
       </h1>
@@ -84,11 +88,11 @@
         </div>
       </div>
 
-      <div class="flex justify-between mt-4">
-        <Button variant="outline" type="button">
+      <div class="flex justify-between mt-16 gap-2">
+        <Button variant="outline" type="button" class="w-full h-12">
           <RouterLink to="/"> Cancel </RouterLink>
         </Button>
-        <Button v-if="step === 1" type="submit">
+        <Button v-if="step === 1" type="submit" class="w-full h-12">
           <Loader2Icon v-if="loading" class="mr-2 h-4 w-4 animate-spin" />
           {{ loading ? 'Creating...' : 'Continue' }}
         </Button>
