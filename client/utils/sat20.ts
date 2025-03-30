@@ -60,9 +60,9 @@ class WalletManager {
   }
 
   async switchAccount(
-    id: number
+    accountIndex: number
   ): Promise<[Error | undefined, void | undefined]> {
-    return this._handleRequest('switchAccount', id)
+    return this._handleRequest('switchAccount', accountIndex)
   }
 
   async switchChain(

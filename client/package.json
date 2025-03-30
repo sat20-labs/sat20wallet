@@ -2,15 +2,16 @@
   "name": "wxt-vue-starter",
   "description": "manifest.json description",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
-    "build": "wxt build",
-    "build:firefox": "wxt build -b firefox",
-    "zip": "wxt zip",
-    "zip:firefox": "wxt zip -b firefox",
+    "bump-version": "node scripts/version-bump.js",
+    "build": "npm run bump-version && wxt build",
+    "build:firefox": "npm run bump-version && wxt build -b firefox",
+    "zip": "npm run bump-version && wxt zip",
+    "zip:firefox": "npm run bump-version && wxt zip -b firefox",
     "compile": "vue-tsc --noEmit"
   },
   "dependencies": {

@@ -5,52 +5,53 @@ import walletManager from '@/utils/sat20'
 import satsnetStp from '@/utils/stp'
 import { useChannelStore } from './channel'
 import { useL1Store } from './l1'
+import { ref } from 'vue'
 
 export const useWalletStore = defineStore('wallet', () => {
   const channelStore = useChannelStore()
-  const l1Store = useL1Store()
   
-  const address = ref(walletStorage.address)
-  const publicKey = ref(walletStorage.pubkey)
-  const walletId = ref(walletStorage.walletId)
-  const accountIndex = ref(walletStorage.accountIndex)
+  const address = ref(walletStorage.getValue('address'))
+  const publicKey = ref(walletStorage.getValue('pubkey'))
+  const walletId = ref(walletStorage.getValue('walletId'))
+  const accountIndex = ref(walletStorage.getValue('accountIndex'))
   const feeRate = ref(0)
-  const password = ref(walletStorage.password)
-  const network = ref(walletStorage.network)
-  const chain = ref(walletStorage.chain)
-  const locked = ref(walletStorage.locked)
-  const hasWallet = ref(walletStorage.hasWallet)
+  const password = ref(walletStorage.getValue('password'))
+  const network = ref(walletStorage.getValue('network'))
+  const chain = ref(walletStorage.getValue('chain'))
+  const locked = ref(true)
+  const hasWallet = ref(walletStorage.getValue('hasWallet'))
 
-
-
-  const setAddress = (value: string) => {
-    walletStorage.address = value as any
+  const setAddress = async (value: string) => {
+    await walletStorage.setValue('address', value)
     address.value = value
   }
 
-  const setWalletId = (value: number) => {
-    walletStorage.walletId = value
+  const setWalletId = async (value: number) => {
+    await walletStorage.setValue('walletId', value)
     walletId.value = value
   }
 
-  const setAccountIndex = (value: number) => {
-    walletStorage.accountIndex = value
-    accountIndex.value
+  const setAccountIndex = async (value: number) => {
+    await walletStorage.setValue('accountIndex', value)
+    accountIndex.value = value
   }
-  const setPublickey = (value: string) => {
-    walletStorage.pubkey = value
+
+  const setPublickey = async (value: string) => {
+    await walletStorage.setValue('pubkey', value)
     publicKey.value = value
   }
-  const setPassword = (value: string) => {
-    walletStorage.password = value
+
+  const setPassword = async (value: string) => {
+    await walletStorage.updatePassword(value)
     password.value = value
   }
+
   const setNetwork = async (value: Network) => {
     const n = value === Network.LIVENET ? 'mainnet' : 'testnet'
 
     const [err] = await walletManager.switchChain(n)
     if (!err) {
-      walletStorage.network = value
+      await walletStorage.setValue('network', value)
       network.value = value
       const [_, addressRes] = await walletManager.getWalletAddress(0)
       const [__, pubkeyRes] = await walletManager.getWalletPubkey(0)
@@ -64,18 +65,18 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const setChain = async (value: Chain) => {
-    walletStorage.chain = value
+    await walletStorage.setValue('chain', value)
     chain.value = value
   }
 
-  const setLocked = (value: boolean) => {
-    // walletStorage.locked = value
+  const setLocked = async (value: boolean) => {
+    await walletStorage.setValue('locked', value)
     locked.value = value
   }
 
-  const setHasWallet = (value: boolean) => {
+  const setHasWallet = async (value: boolean) => {
+    await walletStorage.setValue('hasWallet', value)
     hasWallet.value = value
-    walletStorage.hasWallet = value
   }
 
   const setFeeRate = (value: number) => {
@@ -102,6 +103,7 @@ export const useWalletStore = defineStore('wallet', () => {
     await channelStore.getAllChannels()
     return [undefined, _mnemonic]
   }
+
   const importWallet = async (mnemonic: string, password: string) => {
     const [err, res] = await walletManager.importWallet(mnemonic, password)
     if (err || !res) {
@@ -122,6 +124,7 @@ export const useWalletStore = defineStore('wallet', () => {
     await channelStore.getAllChannels()
     return [undefined, mnemonic]
   }
+
   const getWalletInfo = async () => {
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
@@ -129,8 +132,6 @@ export const useWalletStore = defineStore('wallet', () => {
     const [_j, pubkeyRes] = await walletManager.getWalletPubkey(
       accountIndex.value
     )
-    // const [_c, chainRes] = await walletManager.getChain()
-    // console.log(chainRes);
 
     if (addressRes && pubkeyRes) {
       const { address } = addressRes
@@ -138,11 +139,13 @@ export const useWalletStore = defineStore('wallet', () => {
       await setPublickey(pubkeyRes.pubKey)
     }
   }
+
   const unlockWallet = async (password: string) => {
     const [err, result] = await walletManager.unlockWallet(password)
+    console.log('unlockWallet', err, result)
     if (!err && result) {
       const { walletId } = result
-      setWalletId(walletId)
+      await setWalletId(walletId)
       await getWalletInfo() // This sets the public key
       await setLocked(false)
       await setPassword(password)
@@ -153,9 +156,10 @@ export const useWalletStore = defineStore('wallet', () => {
     }
     return [err, result]
   }
+
   const deleteWallet = async () => {
     try {
-      walletStorage.clear()
+      await walletStorage.clear()
       hasWallet.value = false
       address.value = ''
       publicKey.value = ''
@@ -166,6 +170,7 @@ export const useWalletStore = defineStore('wallet', () => {
       return [error, undefined]
     }
   }
+
   return {
     address,
     setAddress,

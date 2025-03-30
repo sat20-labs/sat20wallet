@@ -60,30 +60,35 @@ const router = createRouter({
   history: createWebHashHistory(),
   routes,
 })
+
 const checkPassword = async () => {
-  const password = walletStorage.password
+  const password = walletStorage.getValue('password')
   console.log('password', password)
 
   if (password) {
-    const passwordTime = walletStorage.passwordTime
+    const passwordTime = walletStorage.getValue('passwordTime')
     console.log('passwordTime', passwordTime)
     if (passwordTime) {
       const now = new Date().getTime()
       if (now - passwordTime > 5 * 60 * 1000) {
-        walletStorage.password = null
+        await walletStorage.setValue('password', null)
       }
     }
   }
 }
+
 router.beforeEach(async (to, from) => {
   const walletStore = useWalletStore()
 
-  const hasWallet = walletStorage.hasWallet
-  const locked = walletStorage.locked
+  const hasWallet = walletStorage.getValue('hasWallet')
   await checkPassword()
-  if (walletStorage.password && walletStore.locked) {
-    await walletStore.unlockWallet(walletStorage.password)
+  const password = walletStorage.getValue('password')
+
+  if (password) {
+    await walletStore.unlockWallet(password)
+    await walletStore.setLocked(false)
   }
+
   if (to.path.startsWith('/wallet')) {
     if (hasWallet) {
       if (walletStore.locked) {

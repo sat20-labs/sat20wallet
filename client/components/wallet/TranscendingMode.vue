@@ -39,7 +39,10 @@
             Bitcoin
           </TabsTrigger>
           <TabsTrigger value="pool">
-            <Icon icon="lucide:waves" class="w-4 h-4 mr-1 justify-self-center" />
+            <Icon
+              icon="lucide:waves"
+              class="w-4 h-4 mr-1 justify-self-center"
+            />
             Pool
           </TabsTrigger>
           <TabsTrigger value="satoshinet">
@@ -176,7 +179,14 @@ const channelStore = useChannelStore()
 const walletStore = useWalletStore()
 const { toast } = useToast()
 
-type OperationType = 'send' | 'deposit' | 'withdraw' | 'lock' | 'unlock' | 'splicing_in' | 'splicing_out'
+type OperationType =
+  | 'send'
+  | 'deposit'
+  | 'withdraw'
+  | 'lock'
+  | 'unlock'
+  | 'splicing_in'
+  | 'splicing_out'
 
 const loading = ref(false)
 const { address, feeRate } = storeToRefs(walletStore)
@@ -391,7 +401,6 @@ const splicingIn = async ({
     return
   }
 
-  await sleep(2000)
   await channelStore.getAllChannels()
   loading.value = false
 }
@@ -421,7 +430,6 @@ const splicingOut = async ({
     return
   }
 
-  await sleep(2000)
   await channelStore.getAllChannels()
   loading.value = false
 }
@@ -483,7 +491,7 @@ const lockUtxo = async ({
     loading.value = false
     return
   }
-  await sleep(2000)
+
   await channelStore.getAllChannels()
   loading.value = false
 
@@ -505,7 +513,7 @@ const l1Send = async ({ toAddress, utxos, amt }: any) => {
     loading.value = false
     return
   }
-  await sleep(2000)
+
   loading.value = false
 
   toast({
@@ -530,7 +538,7 @@ const l2Send = async ({ toAddress, asset_name, amt }: any) => {
     loading.value = false
     return
   }
-  await sleep(2000)
+
   loading.value = false
 
   toast({
@@ -540,7 +548,13 @@ const l2Send = async ({ toAddress, asset_name, amt }: any) => {
 }
 
 // Deposit 操作
-const deposit = async ({ toAddress, asset_name, amt, utxos = [], fees = [] }: any) => {
+const deposit = async ({
+  toAddress,
+  asset_name,
+  amt,
+  utxos = [],
+  fees = [],
+}: any) => {
   loading.value = true
   const [err, result] = await satsnetStp.deposit(
     toAddress,
@@ -558,7 +572,6 @@ const deposit = async ({ toAddress, asset_name, amt, utxos = [], fees = [] }: an
     loading.value = false
     return
   }
-  await sleep(2000)
   loading.value = false
 
   toast({
@@ -568,7 +581,13 @@ const deposit = async ({ toAddress, asset_name, amt, utxos = [], fees = [] }: an
 }
 
 // Withdraw 操作
-const withdraw = async ({ toAddress, asset_name, amt, utxos = [], fees = [] }: any) => {
+const withdraw = async ({
+  toAddress,
+  asset_name,
+  amt,
+  utxos = [],
+  fees = [],
+}: any) => {
   loading.value = true
   const [err, result] = await satsnetStp.withdraw(
     toAddress,
@@ -586,7 +605,7 @@ const withdraw = async ({ toAddress, asset_name, amt, utxos = [], fees = [] }: a
     loading.value = false
     return
   }
-  await sleep(2000)
+
   loading.value = false
 
   toast({
@@ -609,7 +628,8 @@ const handleOperationConfirm = async () => {
   const asset = selectedAsset.value
   const chainid = channel.value?.channelId
   const amount = operationAmount.value
-  const toAddress = operationType.value === 'send' ? operationAddress.value : address.value
+  const toAddress =
+    operationType.value === 'send' ? operationAddress.value : address.value
 
   try {
     switch (operationType.value) {
@@ -634,16 +654,16 @@ const handleOperationConfirm = async () => {
           asset_name: asset.key,
           amt: amount,
           utxos: asset.utxos,
-          fees: l1Store.plainList?.[0]?.utxos || [],
+          fees: [],
         })
         break
       case 'withdraw':
         await withdraw({
-          toAddress,
+          toAddress: address.value,
           asset_name: asset.key,
           amt: amount,
           utxos: asset.utxos,
-          fees: l1Store.plainList?.[0]?.utxos || [],
+          fees: [],
         })
         break
       case 'lock':

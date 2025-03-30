@@ -6,15 +6,10 @@
 </template>
 
 <script lang="ts" setup>
-import { loadWasm } from '@/utils/wasm'
 import walletManager from '@/utils/sat20'
-import { useRouter } from 'vue-router'
 import Toaster from '@/components/ui/toast/Toaster.vue'
-import { useGlobalStore, useWalletStore } from '@/store'
-import { walletStorage } from '@/lib/walletStorage'
-const router = useRouter()
+import { useWalletStore } from '@/store'
 const loading = ref(false)
-const globalStore = useGlobalStore()
 const walletStore = useWalletStore()
 
 const getWalletStatus = async () => {
@@ -23,19 +18,15 @@ const getWalletStatus = async () => {
     console.error(err)
     return
   }
-  console.log(res)
 
   if (res?.exists) {
-    walletStore.setHasWallet(true)
-    // router.push('/unlock')
+    await walletStore.setHasWallet(true)
   }
 }
 
 onBeforeMount(async () => {
-  // walletStorage.locked = true
   loading.value = true
   await getWalletStatus()
   loading.value = false
 })
 </script>
-

@@ -20,7 +20,6 @@
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
 import walletManager from '@/utils/sat20'
-import { useWalletStore } from '@/store'
 import { psbt2tx } from '@/utils/btc'
 import { useToast } from '@/components/ui/toast'
 
@@ -32,7 +31,6 @@ const props = defineProps<Props>()
 const emit = defineEmits(['confirm', 'cancel'])
 console.log(props)
 
-const walletStore = useWalletStore()
 const toast = useToast()
 const confirm = async () => {
   const { options = {}, psbtHex } = props.data

@@ -15,6 +15,11 @@ interface WalletState {
   balance: Balance
   pubkey: string | null
 }
+
+type StateKey = keyof WalletState
+type StateChangeCallback = (key: StateKey, newValue: any, oldValue: any) => void
+type BatchUpdateData = Partial<WalletState>
+
 const defaultState: WalletState = {
   locked: true,
   hasWallet: false,
@@ -34,6 +39,8 @@ class WalletStorage {
   private static instance: WalletStorage | null = null
   private state: WalletState
   private storageType: 'local' | 'session'
+  private listeners: Set<StateChangeCallback>
+  private updatePromises: Map<StateKey, Promise<void>>
 
   private constructor({
     storageType = 'local',
@@ -42,6 +49,8 @@ class WalletStorage {
   }) {
     this.storageType = storageType
     this.state = JSON.parse(JSON.stringify(defaultState))
+    this.listeners = new Set()
+    this.updatePromises = new Map()
   }
 
   public static getInstance(
@@ -55,130 +64,177 @@ class WalletStorage {
 
   private getStorageKey(
     key: string
-  ): `local:wallet_${string}` | `session:wallet_${string}` {
+  ): `${typeof this.storageType}:wallet_${string}` {
     return `${this.storageType}:wallet_${key}`
   }
 
-  public async initializeState() {
-    for (const key of Object.keys(this.state) as Array<keyof WalletState>) {
-      const value: any = await storage.getItem(this.getStorageKey(key))
-
+  // 初始化状态
+  public async initializeState(): Promise<void> {
+    const loadPromises = Object.keys(defaultState).map(async (key) => {
+      const storageKey = key as keyof WalletState
+      const value = await storage.getItem(this.getStorageKey(storageKey))
+      console.log('storageKey', storageKey)
+      console.log('value', value)
       if (value !== null) {
-        ;(this.state[key] as any) = value
+        ;(this.state[storageKey] as any) =
+          value as WalletState[typeof storageKey]
       }
+    })
+
+    await Promise.all(loadPromises)
+  }
+
+  // 获取状态
+  public getState(): Readonly<WalletState> {
+    return { ...this.state }
+  }
+
+  // 获取单个状态值
+  public getValue<K extends StateKey>(key: K): WalletState[K] {
+    return this.state[key]
+  }
+
+  // 更新单个状态
+  public async setValue<K extends StateKey>(
+    key: K,
+    value: WalletState[K]
+  ): Promise<void> {
+    const oldValue = this.state[key]
+
+    // 如果值没有变化，直接返回
+    if (oldValue === value) {
+      return
+    }
+
+    try {
+      // 存储到本地
+      await storage.setItem(this.getStorageKey(key), value)
+
+      // 更新内存中的状态
+      this.state[key] = value
+
+      // 通知监听器
+      this.notifyListeners(key, value, oldValue)
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error'
+      console.error(`Failed to update ${key}:`, error)
+      throw new Error(`Failed to update ${key}: ${errorMessage}`)
     }
   }
 
-  private async persistState(key: keyof WalletState, value: any) {
-    await storage.setItem(this.getStorageKey(key), value)
-  }
+  // 批量更新状态
+  public async batchUpdate(updates: BatchUpdateData): Promise<void> {
+    const oldState = { ...this.state }
+    const updatePromises: Promise<void>[] = []
 
-  get address() {
-    return this.state.address
-  }
-  get password() {
-    return this.state.password
-  }
-  get locked() {
-    return this.state.locked
-  }
+    try {
+      // 创建所有更新的Promise
+      for (const [key, value] of Object.entries(updates)) {
+        const typedKey = key as StateKey
+        if (this.state[typedKey] !== value) {
+          const typedValue = value as WalletState[typeof typedKey]
+          updatePromises.push(
+            storage.setItem(this.getStorageKey(key), typedValue).then(() => {
+              ;(this.state[typedKey] as any) = typedValue
+              this.notifyListeners(typedKey, typedValue, oldState[typedKey])
+            })
+          )
+        }
+      }
 
-  get isConnected() {
-    return this.state.isConnected
-  }
-
-  get network() {
-    return this.state.network
-  }
-  get passwordTime() {
-    return this.state.passwordTime
-  }
-  get chain() {
-    return this.state.chain
-  }
-
-  get walletId() {
-    return this.state.walletId
-  }
-  get accountIndex() {
-    return this.state.accountIndex
-  }
-  get hasWallet() {
-    return this.state.hasWallet
-  }
-
-  get balance() {
-    return this.state.balance
-  }
-
-  get pubkey() {
-    return this.state.pubkey
-  }
-
-  // Setters
-  set address(value: string | null) {
-    this.state.address = value
-    this.persistState('address', value)
-  }
-  set locked(value: boolean) {
-    this.state.locked = value
-    this.persistState('locked', value)
-  }
-  set password(value: string | null) {
-    this.state.password = value
-    if (value) {
-      this.persistState('passwordTime', new Date().getTime())
-    } else {
-      this.persistState('passwordTime', null)
+      // 等待所有更新完成
+      await Promise.all(updatePromises)
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error'
+      console.error('Batch update failed:', error)
+      // 回滚状态
+      this.state = oldState
+      throw new Error(`Batch update failed: ${errorMessage}`)
     }
-    this.persistState('password', value)
-  }
-  set isConnected(value: boolean) {
-    this.state.isConnected = value
-    this.persistState('isConnected', value)
-  }
-  set hasWallet(value: boolean) {
-    this.state.hasWallet = value
-    this.persistState('hasWallet', value)
-  }
-  set network(value: Network) {
-    this.state.network = value
-    this.persistState('network', value)
   }
 
-  set chain(value: Chain) {
-    this.state.chain = value
-    this.persistState('chain', value)
+  // 特殊的更新方法，用于处理密码相关的状态
+  public async updatePassword(password: string | null): Promise<void> {
+    const updates: BatchUpdateData = {
+      password,
+      passwordTime: password ? new Date().getTime() : null,
+    }
+    await this.batchUpdate(updates)
   }
 
-  set walletId(value: number) {
-    this.state.walletId = value
-    this.persistState('walletId', value)
-  }
-  set accountIndex(value: number) {
-    this.state.accountIndex = value
-    this.persistState('accountIndex', value)
-  }
-
-  set balance(value: Balance) {
-    this.state.balance = value
-    this.persistState('balance', value)
+  // 订阅状态变化
+  public subscribe(callback: StateChangeCallback): () => void {
+    this.listeners.add(callback)
+    return () => {
+      this.listeners.delete(callback)
+    }
   }
 
-  set pubkey(value: string | null) {
-    this.state.pubkey = value
-    this.persistState('pubkey', value)
+  // 通知所有监听器
+  private notifyListeners<K extends StateKey>(
+    key: K,
+    newValue: WalletState[K],
+    oldValue: WalletState[K]
+  ): void {
+    this.listeners.forEach((listener) => {
+      try {
+        listener(key, newValue, oldValue)
+      } catch (error: unknown) {
+        const errorMessage =
+          error instanceof Error ? error.message : 'Unknown error'
+        console.error('Error in state change listener:', errorMessage)
+      }
+    })
   }
 
-  // Helper methods
-  async clear() {
-    const keys = (Object.keys(this.state) as Array<keyof WalletState>).map(
-      (key) => this.getStorageKey(key)
-    )
-    await storage.removeItems(keys)
-    this.state = JSON.parse(JSON.stringify(defaultState))
+  // 清除所有状态
+  public async clear(): Promise<void> {
+    try {
+      const keys = Object.keys(this.state).map((key) => this.getStorageKey(key))
+      await storage.removeItems(keys)
+
+      const oldState = { ...this.state }
+      this.state = JSON.parse(JSON.stringify(defaultState))
+
+      // 通知所有状态的变化
+      Object.keys(oldState).forEach((key) => {
+        const typedKey = key as StateKey
+        this.notifyListeners(typedKey, this.state[typedKey], oldState[typedKey])
+      })
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error'
+      console.error('Failed to clear storage:', error)
+      throw new Error(`Failed to clear storage: ${errorMessage}`)
+    }
   }
 }
 
-// Export singleton instance getter
+// 导出单例实例获取器
 export const walletStorage = WalletStorage.getInstance()
+
+// 使用示例：
+/*
+// 获取状态
+const state = walletStorage.getState()
+const address = walletStorage.getValue('address')
+
+// 更新单个状态
+await walletStorage.setValue('address', '0x123...')
+
+// 批量更新状态
+await walletStorage.batchUpdate({
+  address: '0x123...',
+  isConnected: true
+})
+
+// 订阅状态变化
+const unsubscribe = walletStorage.subscribe((key, newValue, oldValue) => {
+  console.log(`${key} changed from ${oldValue} to ${newValue}`)
+})
+
+// 取消订阅
+unsubscribe()
+*/

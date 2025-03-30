@@ -1,5 +1,4 @@
 import { defineStore } from 'pinia'
-import { walletStorage } from '@/lib/walletStorage'
 
 export const useGlobalStore = defineStore('global', () => {
   
