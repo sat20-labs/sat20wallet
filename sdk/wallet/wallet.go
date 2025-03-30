@@ -113,10 +113,10 @@ const (
 
 const DEFAULT_PURPOSE = 86
 
-// m/purpose'/coinType'/account'/change/index
-// 钱包的p2tr地址:  	m/86'   /0'/0'/0     /index1 
-// 对应的通道钱包的地址:  m/1017' /0'/0'/index1/commitHeight
-// 这样一个钱包下的每一个子账户都可以跟节点建立通道
+//                     m/purpose'/coinType'/account'/change/index
+// 钱包的p2tr地址:  	m/86'     /0'       /0'      /0     /index 
+// 对应的通道钱包的地址: m/1017'   /0'       /0'      /index /commitHeight
+// 这样一个钱包下的每一个子账户(index)都可以跟节点建立通道
 
 // 可以支持其他类型，但为了方便，默认只支持p2tr地址类型。
 type InternalWallet struct {
@@ -127,6 +127,7 @@ type InternalWallet struct {
 	purposes              map[uint32]*hdkeychain.ExtendedKey // key: purpose
 	accounts              map[uint64]*hdkeychain.ExtendedKey // key: purpose<<32+account
 	addresses             map[uint32]btcutil.Address         // key: index
+	currentIndex          uint32                             // 当前子账户
 
 	subWallets            map[uint32]*channelWallet
 }
@@ -177,6 +178,14 @@ func (p *InternalWallet) CreateChannelWallet(peer []byte, id uint32) common.Chan
 
 func (p *InternalWallet) GetChannelWallet(id uint32) common.ChannelWallet {
 	return p.subWallets[id]
+}
+
+func (p *InternalWallet) SetSubAccount(id uint32) {
+	p.currentIndex = id
+}
+
+func (p *InternalWallet) GetSubAccount() uint32 {
+	return p.currentIndex
 }
 
 func (p *InternalWallet) getPurposeKey(purpose uint32) (*hdkeychain.ExtendedKey, error) {
@@ -237,7 +246,7 @@ func (p *InternalWallet) GetAddress(index uint32) string {
 
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
 func (p *InternalWallet) GetCommitRootKey(peer []byte) (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
-	privkey := p.GetCommitSecret(peer, 0)
+	privkey := p.GetCommitSecret(peer, p.currentIndex)
 	if privkey == nil {
 		return nil, nil
 	}
@@ -247,7 +256,7 @@ func (p *InternalWallet) GetCommitRootKey(peer []byte) (*secp256k1.PrivateKey, *
 // 返回secret，用于生成commitsecrect和commitpoint
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
 func (p *InternalWallet) GetCommitSecret(peer []byte, index uint32) *secp256k1.PrivateKey {
-	return p.getCommitSecret(peer, 0, index)
+	return p.getCommitSecret(peer, p.currentIndex, index)
 }
 
 func (p *InternalWallet) getCommitSecret(peer []byte, change, index uint32) *secp256k1.PrivateKey {
@@ -281,12 +290,12 @@ func (p *InternalWallet) getCommitSecret(peer []byte, change, index uint32) *sec
 
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
 func (p *InternalWallet) DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey {
-	revBasePrivKey, _ := p.getRevocationBaseKey(0)
+	revBasePrivKey, _ := p.getRevocationBaseKey(p.currentIndex)
 	return utils.DeriveRevocationPrivKey(revBasePrivKey, commitsecret)
 }
 
 func (p *InternalWallet) GetRevocationBaseKey() *secp256k1.PublicKey {
-	_, pubk := p.getRevocationBaseKey(0)
+	_, pubk := p.getRevocationBaseKey(p.currentIndex)
 	return pubk
 }
 
@@ -355,7 +364,7 @@ func (p *InternalWallet) GetPaymentPubKey() *secp256k1.PublicKey {
 }
 
 func (p *InternalWallet) getPaymentPrivKey() *secp256k1.PrivateKey {
-	return p.getPaymentPrivKeyWithIndex(0)
+	return p.getPaymentPrivKeyWithIndex(p.currentIndex)
 }
 
 func (p *InternalWallet) getPaymentPrivKeyWithIndex(index uint32) *secp256k1.PrivateKey {

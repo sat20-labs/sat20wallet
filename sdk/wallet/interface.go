@@ -117,6 +117,7 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 
 	p.wallet = wallet
 	p.password = password
+	p.status.CurrentAccount = 0
 
 	return p.status.CurrentWallet, nil
 }
@@ -134,6 +135,8 @@ func (p *Manager) SwitchWallet(id int64) error {
 		return nil
 	}
 
+	oldWalletId := p.status.CurrentWallet
+	oldAccount := p.status.CurrentAccount
 	p.status.CurrentWallet = id
 	oldWallet := p.wallet
 	p.wallet = nil
@@ -141,6 +144,8 @@ func (p *Manager) SwitchWallet(id int64) error {
 	if err == nil {
 		p.saveStatus()
 	} else {
+		p.status.CurrentWallet = oldWalletId
+		p.status.CurrentAccount = oldAccount
 		p.wallet = oldWallet
 	}
 	return err
@@ -151,6 +156,7 @@ func (p *Manager) SwitchAccount(id uint32) {
 		return
 	}
 
+	p.wallet.SetSubAccount(id)
 	p.status.CurrentAccount = id
 	p.saveStatus()
 }
