@@ -156,6 +156,15 @@ func (p *Manager) SwitchAccount(id uint32) {
 		return
 	}
 
+	walletInfo, ok := p.walletInfoMap[p.status.CurrentWallet]
+	if ok {
+		// 必须有
+		if walletInfo.Accounts < int(id) {
+			walletInfo.Accounts = int(id)
+			saveWallet(p.db, walletInfo)
+		}
+	}
+
 	p.wallet.SetSubAccount(id)
 	p.status.CurrentAccount = id
 	p.saveStatus()
