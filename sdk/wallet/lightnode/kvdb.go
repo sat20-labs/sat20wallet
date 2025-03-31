@@ -67,8 +67,10 @@ type jsDB struct {
 // 页面模式下使用 localStorage ，插件模式下使用 chrome.storage.local
 func NewKVDB() common.KVDB {
 	isExtension := false
-	db := js.Global().Get("localStorage")
-	if db.IsUndefined() {
+	var db js.Value
+	// 页面加载只支持localStorage，以后要支持页面加载的话，需要加配置项来支持
+	// db := js.Global().Get("localStorage")
+	// if db.IsUndefined() {
 		chrome := js.Global().Get("chrome")
 		if chrome.IsUndefined() {
 			Log.Errorf("chrome API is not available")
@@ -81,7 +83,7 @@ func NewKVDB() common.KVDB {
 			return nil
 		}
 		isExtension = true
-	}
+	//}
 
 	kvdb := jsDB{
 		db: db,
