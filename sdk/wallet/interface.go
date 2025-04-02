@@ -291,6 +291,20 @@ func (p *Manager) SignWalletMessage(msg string) ([]byte, error) {
 	return p.wallet.SignWalletMessage(msg)
 }
 
+
+func (p *Manager) SignPsbts(psbtsHex []string, bExtract bool) ([]string, error) {
+	result := make([]string, 0, len(psbtsHex))
+	for i, psbt := range psbtsHex {
+		signed, err := p.SignPsbt(psbt, bExtract)
+		if err != nil {
+			Log.Errorf("SignPsbt %d failed, %v", i, err)
+			return nil, err
+		}
+		result = append(result, signed)
+	}
+	return result, nil
+}
+
 func (p *Manager) SignPsbt(psbtHex string, bExtract bool) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -336,6 +350,19 @@ func (p *Manager) SignPsbt(psbtHex string, bExtract bool) (string, error) {
 	}
 
 	return hex.EncodeToString(buf.Bytes()), nil
+}
+
+func (p *Manager) SignPsbts_SatsNet(psbtsHex []string, bExtract bool) ([]string, error) {
+	result := make([]string, 0, len(psbtsHex))
+	for i, psbt := range psbtsHex {
+		signed, err := p.SignPsbt_SatsNet(psbt, bExtract)
+		if err != nil {
+			Log.Errorf("SignPsbt_SatsNet %d failed, %v", i, err)
+			return nil, err
+		}
+		result = append(result, signed)
+	}
+	return result, nil
 }
 
 func (p *Manager) SignPsbt_SatsNet(psbtHex string, bExtract bool) (string, error) {
