@@ -18,6 +18,7 @@ import (
 
 // SIGHASH_SINGLE_ANYONECANPAY 为 SIGHASH_SINGLE | SIGHASH_ANYONECANPAY
 const SIGHASH_SINGLE_ANYONECANPAY = txscript.SigHashSingle | txscript.SigHashAnyOneCanPay
+const SIGHASH_ALL = txscript.SigHashAll // txscript.SigHashDefault //  //
 
 // UtxoInfo 定义单个挂单的 utxo 数据
 type UtxoInfo struct {
@@ -174,7 +175,7 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 				Assets: assets,
 				PkScript: utxo.PkScript,
 			},
-			SighashType: txscript.SigHashDefault,
+			SighashType: SIGHASH_ALL,
 		}
 		packet.Inputs = append(packet.Inputs, input)
 	}
@@ -299,7 +300,7 @@ func addInputsToPsbt(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string,
 				Assets: assets,
 				PkScript: utxo.PkScript,
 			},
-			SighashType: txscript.SigHashDefault,
+			SighashType: SIGHASH_ALL,
 		}
 		packet.Inputs = append(packet.Inputs, input)
 	}
