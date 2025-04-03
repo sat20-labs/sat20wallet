@@ -192,11 +192,12 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 		return "", fmt.Errorf("not enough sats to pay fee %d", changeValue)
 	}
 	changeAsset := buyAssets.Clone()
+	changeAsset.Merge(&sellAssets)
 	err = changeAsset.Split(&priceAssets)
 	if err != nil {
 		return "", fmt.Errorf("not enough asset, %v", err)
 	}
-	changeAsset.Merge(&sellAssets)
+	
 	if changeAsset.IsZero() {
 		changeAsset = nil
 	}
@@ -298,7 +299,7 @@ func addInputsToPsbt(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string,
 				Assets: assets,
 				PkScript: utxo.PkScript,
 			},
-			SighashType: txscript.SigHashAll,
+			SighashType: txscript.SigHashDefault,
 		}
 		packet.Inputs = append(packet.Inputs, input)
 	}

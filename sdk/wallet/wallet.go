@@ -902,7 +902,7 @@ func (p *InternalWallet) signPsbt(privKey *secp256k1.PrivateKey, packet *psbt.Pa
 			// 单签，目前只支持p2tr
 			witness, err := txscript.TaprootWitnessSignature(tx, sigHashes, i,
 				in.WitnessUtxo.Value, in.WitnessUtxo.PkScript,
-				txscript.SigHashDefault, privKey)
+				in.SighashType, privKey)
 			if err != nil {
 				Log.Errorf("TaprootWitnessSignature failed. %v", err)
 				return err
@@ -929,7 +929,7 @@ func (p *InternalWallet) signPsbt(privKey *secp256k1.PrivateKey, packet *psbt.Pa
 			// 如何区分是多签脚本和单签脚本？
 
 			sig, err := txscript.RawTxInWitnessSignature(tx, sigHashes, i, in.WitnessUtxo.Value,
-				script, txscript.SigHashAll, privKey)
+				script, in.SighashType, privKey)
 			if err != nil {
 				return err
 			}
@@ -994,7 +994,7 @@ func (p *InternalWallet) signPsbt_SatsNet(privKey *secp256k1.PrivateKey, packet 
 			// 单签，目前只支持p2tr
 			witness, err := stxscript.TaprootWitnessSignature(tx, sigHashes, i,
 				in.WitnessUtxo.Value, in.WitnessUtxo.Assets, in.WitnessUtxo.PkScript,
-				stxscript.SigHashDefault, privKey)
+				in.SighashType, privKey)
 			if err != nil {
 				Log.Errorf("TaprootWitnessSignature failed. %v", err)
 				return err
@@ -1021,7 +1021,7 @@ func (p *InternalWallet) signPsbt_SatsNet(privKey *secp256k1.PrivateKey, packet 
 			// 如何区分是多签脚本和单签脚本？
 
 			sig, err := stxscript.RawTxInWitnessSignature(tx, sigHashes, i, in.WitnessUtxo.Value, in.WitnessUtxo.Assets,
-				script, stxscript.SigHashAll, privKey)
+				script, in.SighashType, privKey)
 			if err != nil {
 				return err
 			}
