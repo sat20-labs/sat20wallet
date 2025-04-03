@@ -447,6 +447,14 @@ func ExtractTxFromPsbt(psbtStr string) (string, error) {
 		return "", err
 	}
 
+	// 验证下tx是否正确签名
+	prevOutputFetcher := PsbtPrevOutputFetcher(packet)
+	err = VerifySignedTx(finalTx, prevOutputFetcher)
+	if err != nil {
+		return "", err
+	}
+
+
 	return EncodeMsgTx(finalTx)
 }
 
@@ -469,6 +477,13 @@ func ExtractTxFromPsbt_SatsNet(psbtStr string) (string, error) {
 	finalTx, err := spsbt.Extract(packet)
 	if err != nil {
 		Log.Errorf("Extract failed, %v", err)
+		return "", err
+	}
+
+	// 验证下tx是否正确签名
+	prevOutputFetcher := PsbtPrevOutputFetcher_SatsNet(packet)
+	err = VerifySignedTx_SatsNet(finalTx, prevOutputFetcher)
+	if err != nil {
 		return "", err
 	}
 

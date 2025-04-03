@@ -139,10 +139,6 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 	if err != nil {
 		return "", err
 	}
-	serverPkScript, err := txscript.PayToAddrScript(addr)
-	if err != nil {
-		return "", err
-	}
 
 	// 卖出的资产
 	var sellAssets wire.TxAssets
@@ -196,7 +192,10 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 		return "", fmt.Errorf("not enough sats to pay fee %d", changeValue)
 	}
 	changeAsset := buyAssets.Clone()
-	changeAsset.Split(&priceAssets)
+	err = changeAsset.Split(&priceAssets)
+	if err != nil {
+		return "", fmt.Errorf("not enough asset, %v", err)
+	}
 	changeAsset.Merge(&sellAssets)
 	if changeAsset.IsZero() {
 		changeAsset = nil
@@ -207,6 +206,10 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 	packet.Outputs = append(packet.Outputs, psbt.POutput{})
 
 	if serviceFee != 0 {
+		serverPkScript, err := txscript.PayToAddrScript(addr)
+		if err != nil {
+			return "", err
+		}
 		txOut2 := wire.NewTxOut(serviceFee, nil, serverPkScript)
 		packet.UnsignedTx.AddTxOut(txOut2)
 		packet.Outputs = append(packet.Outputs, psbt.POutput{})
@@ -260,8 +263,7 @@ func splitBatchSignedPsbt(signedHex string, network string) ([]string, error) {
 		if i >= len(packet.Inputs) {
 			return nil, fmt.Errorf("psbt inputs length mismatch")
 		}
-		newPacket.Inputs[0].WitnessUtxo = packet.Inputs[i].WitnessUtxo
-		newPacket.Inputs[0].FinalScriptWitness = packet.Inputs[i].FinalScriptWitness
+		newPacket.Inputs[0] = packet.Inputs[i]
 
 		// 将新 PSBT 序列化为二进制后转为 hex 字符串
 		var buf bytes.Buffer
@@ -325,4 +327,9 @@ func addOutputsToPsbt(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string
 	finalPsbtHex := hex.EncodeToString(buf.Bytes())
 
 	return finalPsbtHex, nil
+}
+
+func VerifySignedPsbt_SatsNet(packet *psbt.Packet, tx *wire.MsgTx) error {
+	prevOutputFetcher := PsbtPrevOutputFetcher_SatsNet(packet)
+	return VerifySignedTx_SatsNet(tx, prevOutputFetcher)
 }

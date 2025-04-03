@@ -849,7 +849,7 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 
-	if len(p) < 1 {
+	if len(p) < 2 {
 		return createJsRet(nil, -1, "Expected 1 parameters")
 	}
 
@@ -872,12 +872,13 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 	// }
 	// return createJsRet(data, 0, "ok")
 
+	wallet.Log.Infof("SignPsbt_SatsNet  input: %s", psbtHex)
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		result, err := _mgr.SignPsbt_SatsNet(psbtHex, extract)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		wallet.Log.Infof("SignPsbt_SatsNet: %s", result)
+		wallet.Log.Infof("SignPsbt_SatsNet output: %s", result)
 		return map[string]any {
 			"psbt": result,
 		}, 0, "ok"
@@ -1250,8 +1251,10 @@ func main() {
 	obj.Set("signMessage", js.FuncOf(signMessage))
 	// input: psbt(hexString); return: signed psbt (hexString)
 	obj.Set("signPsbt", js.FuncOf(signPsbt))
+	obj.Set("signPsbts", js.FuncOf(signPsbts))
 	// input: psbt(hexString); return: signed psbt (hexString)
 	obj.Set("signPsbt_SatsNet", js.FuncOf(signPsbt_SatsNet))
+	obj.Set("signPsbts_SatsNet", js.FuncOf(signPsbts_SatsNet))
 
 	obj.Set("getVersion", js.FuncOf(getVersion))
 	obj.Set("registerCallback", js.FuncOf(registerCallbacks))
@@ -1267,27 +1270,3 @@ func main() {
 	wallet.Log.SetLevel(logrus.DebugLevel)
 	<-make(chan bool)
 }
-
-// func NewDefaultYamlConf() *wallet.Config {
-// 	chain := "testnet4"
-// 	ret := &wallet.Config{
-// 		Chain: chain,
-// 		Mode:  "client",
-// 		Btcd: wallet.Bitcoin{
-// 			Host:           "192.168.10.102:28332",
-// 			User:           "jacky",
-// 			Password:       "123456",
-// 			Zmqpubrawblock: "tcp://192.168.10.102:58332",
-// 			Zmqpubrawtx:    "tcp://192.168.10.102:58333",
-// 		},
-// 		IndexerL1: wallet.Indexer{
-// 			Host: "192.168.10.104:8009",
-// 		},
-// 		IndexerL2: wallet.Indexer{
-// 			Host: "192.168.10.104:8019",
-// 		},
-// 		Log: "debug",
-// 	}
-
-// 	return ret
-// }
