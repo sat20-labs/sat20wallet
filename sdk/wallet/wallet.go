@@ -1977,6 +1977,7 @@ func CreatePsbt(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 		input.WitnessUtxo = preOut
 		if bytes.Equal(preOut.PkScript, pkScript) {
 			input.WitnessScript = witnessScript
+			input.SighashType = txscript.SigHashAll
 		}
 	}
 
@@ -2008,6 +2009,7 @@ func CreatePsbt_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher
 		input.WitnessUtxo = preOut
 		if bytes.Equal(preOut.PkScript, pkScript) {
 			input.WitnessScript = witnessScript
+			input.SighashType = stxscript.SigHashAll
 		}
 	}
 
@@ -2048,6 +2050,7 @@ func CreatePsbtWithPeer(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 		input.WitnessUtxo = preOut
 		if bytes.Equal(preOut.PkScript, pkScript) {
 			input.WitnessScript = witnessScript
+			input.SighashType = txscript.SigHashAll
 			if len(peerSigs[i]) > 0 {
 				input.PartialSigs = append(input.PartialSigs, &psbt.PartialSig{
 					PubKey:    peerPubKey,
@@ -2103,6 +2106,7 @@ func CreatePsbtWithPeer_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutpu
 		input.WitnessUtxo = preOut
 		if bytes.Equal(preOut.PkScript, pkScript) {
 			input.WitnessScript = witnessScript
+			input.SighashType = stxscript.SigHashAll
 			if len(peerSigs[i]) > 0 {
 				input.PartialSigs = append(input.PartialSigs, &spsbt.PartialSig{
 					PubKey:    peerPubKey,
