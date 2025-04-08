@@ -47,9 +47,9 @@ func buildBatchSellOrder(utxos []*UtxoInfo, address, network string) (string, er
 
 	var params *chaincfg.Params
 	if strings.ToLower(network) == "testnet" {
-		params = &chaincfg.SatsTestNetParams
+		params = &chaincfg.TestNetParams
 	} else {
-		params = &chaincfg.SatsMainNetParams
+		params = &chaincfg.MainNetParams
 	}
 
 	// 构造一个空的 unsigned transaction
@@ -122,9 +122,9 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 ) (string, error) {
 	var params *chaincfg.Params
 	if strings.ToLower(network) == "testnet" {
-		params = &chaincfg.SatsTestNetParams
+		params = &chaincfg.TestNetParams
 	} else {
-		params = &chaincfg.SatsMainNetParams
+		params = &chaincfg.MainNetParams
 	}
 
 	addr, err := btcutil.DecodeAddress(buyerAddress, params)
