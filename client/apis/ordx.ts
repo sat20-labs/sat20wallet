@@ -1,6 +1,9 @@
+import { useGlobalStore } from '@/store/global'
 class OrdxApi {
   generatePath(path: string, network: string) {
-    const BASE_URL = import.meta.env.WXT_ORDX_URL
+    const globalStore = useGlobalStore()
+    const config = globalStore.config
+    const BASE_URL = config.ordxBaseUrl
     return `${BASE_URL}${
       network === 'testnet' ? '/btc/testnet' : '/btc/mainnet'
     }/${path}`

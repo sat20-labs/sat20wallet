@@ -27,7 +27,7 @@
       <p>{{ channelStatusText }}</p>
     </div>
     <ChannelAssetsTabs :assets="channelAssets" @splicing_out="$emit('splicing_out', $event)" @unlock="$emit('unlock', $event)" />
-    <Progress :value="progressValue" class="w-full" />
+    <!-- <Progress :value="progressValue" class="w-full" /> -->
   </div>
   <div>
     <Button @click="openHandler" v-if="!channel" class="w-full"> Open </Button>

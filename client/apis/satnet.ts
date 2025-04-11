@@ -1,6 +1,9 @@
+import { useGlobalStore } from '@/store/global'
 class SatnetApi {
   generatePath(path: string, network: string) {
-    const BASE_URL = import.meta.env.WXT_SAT20_URL
+    const globalStore = useGlobalStore()
+    const config = globalStore.config
+    const BASE_URL = config.satnetBaseUrl
     return `${BASE_URL}/satsnet${
       network === 'testnet' ? '/testnet' : '/mainnet'
     }/${path}`
