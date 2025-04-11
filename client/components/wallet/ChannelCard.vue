@@ -26,7 +26,7 @@
     >
       <p>{{ channelStatusText }}</p>
     </div>
-    <ChannelAssetsTabs :assets="channelAssets" @splicing_out="$emit('splicing_out', $event)" @unlock="$emit('unlock', $event)" />
+    <ChannelAssetsTabs @update:model-value="updateSelectedType" v-model="selectedType" :assets="channelAssets" @splicing_out="$emit('splicing_out', $event)" @unlock="$emit('unlock', $event)" />
     <!-- <Progress :value="progressValue" class="w-full" /> -->
   </div>
   <div>
@@ -186,6 +186,11 @@ console.log(channelAssets.value);
 
 const openHandler = () => {
   showAmt.value = !showAmt.value
+}
+
+const updateSelectedType = (value: string) => {
+  console.log('updateSelectedType', value)
+  emit('update:selectedType', value)
 }
 
 const clear = () => {
