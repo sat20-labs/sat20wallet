@@ -135,6 +135,7 @@ export const useL1Assets = () => {
     () => summaryQuery.data.value,
     async (newData) => {
       if (newData) {
+        allAssetList.value = []
         console.log('newData', newData.data)
 
         await parseAssetSummary()
@@ -143,6 +144,9 @@ export const useL1Assets = () => {
         processAllUtxos(allAssetList.value.map((item) => item.key))
         assetsStore.setAssetList(newData?.data || [])
       }
+    },
+    {
+      deep: true,
     }
   )
 
@@ -196,9 +200,6 @@ export const useL1Assets = () => {
     }
 
     // 重置状态
-    if (resetState) {
-      allAssetList.value = []
-    }
 
     // 创建一个 Promise 数组来收集所有需要等待的请求
     const refreshPromises = []
@@ -212,16 +213,6 @@ export const useL1Assets = () => {
     if (refreshSummary) {
       const summaryPromise = summaryQuery.refetch()
       refreshPromises.push(summaryPromise)
-
-      // 如果需要刷新 UTXO，等待摘要数据加载完成后处理
-      if (refreshUtxos) {
-        summaryPromise.then(async (result) => {
-          if (result.data) {
-            await parseAssetSummary()
-            await processAllUtxos(allAssetList.value.map((item) => item.key))
-          }
-        })
-      }
     }
 
     // 等待所有刷新操作完成

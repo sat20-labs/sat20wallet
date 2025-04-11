@@ -160,6 +160,7 @@ export const useWalletStore = defineStore('wallet', () => {
   const deleteWallet = async () => {
     try {
       await walletStorage.clear()
+      console.log('walletStorage', walletStorage);
       hasWallet.value = false
       address.value = ''
       publicKey.value = ''

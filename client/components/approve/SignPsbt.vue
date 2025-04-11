@@ -38,10 +38,10 @@ const confirm = async () => {
   let result
   console.log('psbtHex', psbtHex)
   console.log('options', options)
-  if (options.chain === 'btc') {
-    result = await walletManager.signPsbt(psbtHex, false)
-  } else {
+  if (options.chain === 'sat20') {
     result = await walletManager.signPsbt_SatsNet(psbtHex, false)
+  } else {
+    result = await walletManager.signPsbt(psbtHex, false)
   }
   console.log('chain', options.chain)
 
@@ -49,7 +49,6 @@ const confirm = async () => {
 
   const [err, res] = result
   if (res?.psbt) {
-    await psbt2tx(res.psbt)
     emit('confirm', res.psbt)
   } else {
     toast.toast({

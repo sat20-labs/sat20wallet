@@ -89,10 +89,10 @@
       </div>
 
       <div class="flex justify-between mt-16 gap-2">
-        <Button variant="outline" type="button" class="w-full h-12">
+        <Button variant="outline" type="button" class="w-full">
           <RouterLink to="/"> Cancel </RouterLink>
         </Button>
-        <Button v-if="step === 1" type="submit" class="w-full h-12">
+        <Button v-if="step === 1" type="submit" class="w-full">
           <Loader2Icon v-if="loading" class="mr-2 h-4 w-4 animate-spin" />
           {{ loading ? 'Creating...' : 'Continue' }}
         </Button>
@@ -145,6 +145,7 @@ const form = useForm({
 })
 
 const onSubmit = form.handleSubmit(async (values) => {
+  console.log('onSubmit', values)
   if (loading.value) return
 
   loading.value = true

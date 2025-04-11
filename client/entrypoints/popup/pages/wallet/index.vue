@@ -2,16 +2,25 @@
   <LayoutHome class="">
     <WalletHeader />
     <!-- 钱包地址 -->
-    <div class="flex items-center justify-between p-2 rounded-lg bg-muted/80 hover:bg-muted transition-all">
+    <div
+      class="flex items-center justify-between p-2 rounded-lg bg-muted/80 hover:bg-muted transition-all"
+    >
       <!-- 圆形背景 + 居中 Icon -->
       <span
-        class="w-9 h-9 flex items-center justify-center bg-gradient-to-tr from-[#6600cc] to-[#a0076d] text-foreground rounded-full">
-        <Icon icon="lucide:user-round" class="w-5 h-5 text-white/80 flex-shrink-0" />
+        class="w-9 h-9 flex items-center justify-center bg-gradient-to-tr from-[#6600cc] to-[#a0076d] text-foreground rounded-full"
+      >
+        <Icon
+          icon="lucide:user-round"
+          class="w-5 h-5 text-white/80 flex-shrink-0"
+        />
       </span>
 
       <!-- 账户地址 -->
       <Button asChild variant="link" class="flex-1 text-center">
-        <a :href="`https://mempool.space/zh/testnet4/address/${address}`" target="_blank">
+        <a
+          :href="`https://mempool.space/zh/testnet4/address/${address}`"
+          target="_blank"
+        >
           {{ hideAddress(address) }}
         </a>
       </Button>
@@ -23,23 +32,39 @@
       <CopyButton :text="address" class="text-foreground/50" />
 
       <!-- 下拉选择 -->
-      <SubWalletSelector @wallet-changed="handleSubWalletChange" @wallet-created="handleSubWalletCreated" />
+      <SubWalletSelector
+        @wallet-changed="handleSubWalletChange"
+        @wallet-created="handleSubWalletCreated"
+      />
     </div>
 
     <!--资产传输模式选择-->
     <TranscendingMode class="mt-4">
       <template #poolswap-content>
         <!-- <Tabs defaultValue="l1" v-model="selectTab" class="w-full"> -->
-        <Tabs defaultValue="l1" v-model:model-value="selectTab" @update:model-value="tabChange" class="w-full">
+        <Tabs
+          defaultValue="l1"
+          v-model:model-value="selectTab"
+          @update:model-value="tabChange"
+          class="w-full"
+        >
           <TabsList class="grid w-full grid-cols-3">
-            <TabsTrigger v-for="item in items" :key="item.value" :value="item.value">
+            <TabsTrigger
+              v-for="item in items"
+              :key="item.value"
+              :value="item.value"
+            >
               {{ item.label }}
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent v-for="item in items" :key="item.value" :value="item.value">
+          <TabsContent
+            v-for="item in items"
+            :key="item.value"
+            :value="item.value"
+          >
             <div v-if="item.value === 'l1'">
-              <L1Card 
+              <L1Card
                 v-model:selectedType="selectedType"
                 :assets="l1Assets"
                 mode="poolswap"
@@ -50,7 +75,7 @@
             </div>
 
             <div v-else-if="item.value === 'channel'">
-              <ChannelCard 
+              <ChannelCard
                 v-model:selectedType="selectedType"
                 @splicing_out="handleSplicingOut"
                 @unlock="handleUnlock"
@@ -58,7 +83,7 @@
             </div>
 
             <div v-else-if="item.value === 'l2'">
-              <L2Card 
+              <L2Card
                 v-model:selectedType="selectedType"
                 :mode="'poolswap'"
                 @lock="handleLock"
@@ -154,7 +179,7 @@ const {
   handleLock,
   handleUnlock,
   handleSplicingIn,
-  handleSplicingOut
+  handleSplicingOut,
 } = useAssetOperations()
 
 // 处理钱包切换
@@ -174,49 +199,54 @@ const handleSubWalletCreated = async (wallet: any) => {
 }
 
 // 处理通道回调
-const handleChannelCallback = async (e: any) => {
-  console.log('Channel callback:', e)
+const channelCallback = async (e: any) => {
+  console.log('channel callback')
   let msg = ''
-  try {
-    if (e.type === 'splicing_out') {
-      const [err, result] = await satsnetStp.splicingOut(
-        e.chanId,      // chanPoint
-        e.address,     // toAddress
-        e.assetId,     // assetName
-        [],           // fees
-        1,            // feeRate
-        e.amount      // amt
-      )
-      if (err) throw err
-      msg = 'Splicing out successful'
-      await refreshL1Assets()
-    } else if (e.type === 'unlock') {
-      const [err, result] = await satsnetStp.unlockUtxo(
-        e.chanId,      // channelUtxo
-        e.assetId,     // assetName
-        e.amount,      // amt
-        []            // feeUtxoList
-      )
-      if (err) throw err
-      msg = 'Unlock successful'
-      await refreshL2Assets()
-    }
-
-    if (msg) {
-      toast({
-        title: 'Success',
-        description: msg,
-      })
-    }
-
-    // 更新通道列表
+  const channelHandler = async () => {
     await channelStore.getAllChannels()
-  } catch (error: any) {
-    console.error('Channel callback error:', error)
+  }
+  switch (e) {
+    case 'splicingin':
+      msg = 'splicing in success'
+      await channelHandler()
+      await refreshL1Assets()
+      break
+    case 'expanded"':
+      msg = 'splicing in success'
+      await channelHandler()
+      await refreshL1Assets()
+      break
+
+    case 'splicingout':
+      msg = 'splicing out success'
+      await channelHandler()
+      await refreshL1Assets()
+      break
+    case 'channelopened':
+      msg = 'channel opened'
+      await channelHandler()
+      await refreshL1Assets()
+      break
+    case 'channelclosed':
+      msg = 'channel closed'
+      await channelHandler()
+      await refreshL1Assets()
+      break
+    case 'utxounlockedorlocked':
+      msg = 'utxo change'
+      await channelHandler()
+      await refreshL2Assets()
+      break
+    default:
+      refreshL1Assets()
+      refreshL2Assets()
+      channelHandler()
+      break
+  }
+  if (msg) {
     toast({
-      title: 'Error',
-      description: error.message,
-      variant: 'destructive',
+      title: 'success',
+      description: msg,
     })
   }
 }
@@ -241,12 +271,6 @@ const tabChange = (i: any) => {
 // 生命周期钩子
 onMounted(async () => {
   handleRouteChange()
-  // 注册通道回调
-  satsnetStp.registerCallback(handleChannelCallback)
-  // 加载资产列表
-  await Promise.all([
-    refreshL1Assets(),
-    refreshL2Assets()
-  ])
+  satsnetStp.registerCallback(channelCallback)
 })
 </script>

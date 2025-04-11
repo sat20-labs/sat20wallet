@@ -38,43 +38,39 @@ export const useApprove = () => {
   onMounted(async () => {
     if (!portRef.value) return
     const currWin = await browser.windows.getCurrent()
-    const connectionReady = new Promise((resolve) => {
-      portRef.value.onMessage.addListener(function connectionListener(
-        msg: any
-      ) {
-        if (msg.type === 'CONNECTION_READY') {
-          portRef.value.onMessage.removeListener(connectionListener)
-          resolve(true)
-        }
-      })
-    })
+
     console.log('当前 Popup 窗口:', currWin)
 
-    await connectionReady
-    portRef.value.onMessage.addListener(async (message: any) => {
-      const { action, data, metadata } = message
-      const { from } = metadata
-      console.log('Popup 收到 Background 消息:', message)
+    // portRef.value.onMessage.addListener(async (message: any) => {
+    //   const { action, data, metadata } = message
+    //   const { from } = metadata
+    //   console.log('Popup 收到 Background Port 消息:', message)
+    // })
 
-      if (from === Message.MessageFrom.BACKGROUND) {
-        if (action === Message.MessageAction.GET_APPROVE_DATA_RESPONSE) {
-          approveData.value = data
-        }
+    try {
+      console.log('发送 GET_APPROVE_DATA 消息')
+      const response = await browser.runtime.sendMessage({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_APPROVE_DATA,
+        metadata: {
+          from: Message.MessageFrom.POPUP,
+          to: Message.MessageTo.BACKGROUND,
+          windowId: currWin.id,
+        },
+      })
+      console.log('Popup 收到 Background sendMessage 响应:', response)
+      if (response && response.action === Message.MessageAction.GET_APPROVE_DATA_RESPONSE) {
+        approveData.value = response.data
+      } else {
+        console.error('获取批准数据失败或响应格式不正确:', response)
       }
-    })
-    portRef.value.postMessage({
-      type: Message.MessageType.REQUEST,
-      action: Message.MessageAction.GET_APPROVE_DATA,
-      metadata: {
-        from: Message.MessageFrom.POPUP,
-        to: Message.MessageTo.BACKGROUND,
-        windowId: currWin.id,
-      },
-    })
+    } catch (error) {
+      console.error('发送 GET_APPROVE_DATA 消息时出错:', error)
+    }
   })
 
   onBeforeUnmount(() => {
-    // portRef.value?.disconnect()
+    portRef.value?.disconnect()
     portRef.value = null
   })
   return { approveData, approve, reject }

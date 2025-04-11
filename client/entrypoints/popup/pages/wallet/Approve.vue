@@ -32,12 +32,15 @@ const data = computed(() => {
 const metadata = computed(() => {
   return approveData.value?.metadata ?? {}
 })
+console.log(approveData)
+
 const componentName = computed(() => {
   if (!approveData.value?.action) {
     return null
   }
   return approveComponentMap[approveData.value.action]
 })
+console.log(componentName)
 
 const confirm = (data: any) => {
   approve(data)
@@ -45,5 +48,4 @@ const confirm = (data: any) => {
 const cancel = () => {
   reject()
 }
-console.log(componentName)
 </script>

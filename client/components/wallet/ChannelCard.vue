@@ -21,7 +21,7 @@
   </div>
   <div class="relative" v-if="channel">
     <div
-      class="absolute w-full h-full z-10 flex justify-center items-center bg-gray-100 dark:bg-gray-900 bg-opacity-95 left-0 top-0"
+      class="absolute w-full h-full z-10 flex justify-center items-center bg-gray-900 bg-opacity-95 left-0 top-0"
       v-if="channel.status !== 16"
     >
       <p>{{ channelStatusText }}</p>
@@ -121,6 +121,17 @@ import CopyCard from '@/components/common/CopyCard.vue'
 import ChannelAssetsTabs from '@/components/asset/ChannelAssetsTabs.vue'
 import { sleep } from 'radash'
 
+const props = defineProps<{
+  selectedType: string // 改为 selectedType 以匹配 v-model 的默认行为
+}>()
+
+const { selectedType } = toRefs(props)
+const emit = defineEmits(['splicing_out', 'unlock', 'update:selectedType'])
+
+const l1Store = useL1Store()
+const { plainUtxos, balance: l1PlainBalance } = storeToRefs(l1Store)
+
+
 const channelStore = useChannelStore()
 const { channel, plainList, sat20List, brc20List, runesList } = storeToRefs(channelStore)
 const { toast } = useToast()
@@ -145,28 +156,32 @@ const progressValue = computed(() => {
 })
 
 const channelAssets = computed(() => {
-  switch (props.selectedType) {
+  console.log('channelAssets');
+  console.log(selectedType.value);
+  console.log(plainList.value);
+  console.log(sat20List.value);
+  console.log(runesList.value);
+  console.log(brc20List.value);
+  
+  switch (selectedType.value) {
     case 'BTC':
-      return (plainList.value || []).map(asset => ({ ...asset, type: 'BTC' }))
+      return (plainList.value).map(asset => ({ ...asset, type: 'BTC' }))
     case 'SAT20':
-      return (sat20List.value || []).map(asset => ({ ...asset, type: 'SAT20' }))
+      console.log('SAT20');
+      console.log(sat20List.value);
+      
+      return (sat20List.value).map(asset => ({ ...asset, type: 'SAT20' }))
     case 'Runes':
-      return (runesList.value || []).map(asset => ({ ...asset, type: 'Runes' }))
+      return (runesList.value).map(asset => ({ ...asset, type: 'Runes' }))
     case 'BRC20':
-      return (brc20List.value || []).map(asset => ({ ...asset, type: 'BRC20' }))
+      return (brc20List.value).map(asset => ({ ...asset, type: 'BRC20' }))
     default:
       return []
   }
 })
 
-const props = defineProps<{
-  selectedType: string // 改为 selectedType 以匹配 v-model 的默认行为
-}>()
-
-const emit = defineEmits(['splicing_out', 'unlock', 'update:selectedType'])
-
-const l1Store = useL1Store()
-const { plainUtxos, balance: l1PlainBalance } = storeToRefs(l1Store)
+console.log('channelAssets');
+console.log(channelAssets.value);
 
 
 const openHandler = () => {

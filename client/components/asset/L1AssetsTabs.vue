@@ -31,7 +31,7 @@
         <div class="flex gap-2">
           <!-- Lightning 模式按钮 -->
           <template v-if="mode === 'lightning'">
-            <Button v-if="selectedType === 'BTC'" size="sm" variant="outline" @click="handleSend(asset)">
+            <Button size="sm" variant="outline" @click="handleSend(asset)">
               <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
               Send
             </Button>
@@ -39,10 +39,11 @@
               <Icon icon="lucide:corner-down-right" class="w-4 h-4 mr-1" />
               Splicing in
             </Button>
+             
           </template>
           <!-- Poolswap 模式按钮 -->
           <template v-else>
-            <Button v-if="selectedType === 'BTC'" size="sm" variant="outline" @click="handleSend(asset)">
+            <Button size="sm" variant="outline" @click="handleSend(asset)">
               <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
               Send
             </Button>

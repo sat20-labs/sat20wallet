@@ -193,6 +193,8 @@ class WalletStorage {
   public async clear(): Promise<void> {
     try {
       const keys = Object.keys(this.state).map((key) => this.getStorageKey(key))
+      console.log('keys', keys);
+      
       await storage.removeItems(keys)
 
       const oldState = { ...this.state }

@@ -43,7 +43,6 @@
           <!-- Lightning 模式按钮 -->
           <template v-if="mode === 'lightning'">
             <Button
-              v-if="selectedType === 'BTC'"
               size="sm"
               variant="outline"
               @click="$emit('send', asset)"
@@ -64,7 +63,6 @@
           <!-- Poolswap 模式按钮 -->
           <template v-else>
             <Button
-              v-if="selectedType === 'BTC'"
               size="sm"
               variant="outline"
               @click="$emit('send', asset)"

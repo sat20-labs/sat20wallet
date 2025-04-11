@@ -174,7 +174,8 @@ import { useWalletStore } from '@/store'
 import { sleep } from 'radash'
 import { storeToRefs } from 'pinia'
 
-const router = useRouter()
+const { refreshL1Assets } = useL1Assets()
+const { refreshL2Assets } = useL2Assets()
 const channelStore = useChannelStore()
 const walletStore = useWalletStore()
 const { toast } = useToast()
@@ -235,6 +236,13 @@ const filteredAssets = computed(() => {
         return []
     }
   }
+  console.log('selectedTranscendingMode.value')
+  console.log(selectedTranscendingMode.value)
+  console.log('selectedChain.value')
+  console.log(selectedChain.value)
+  console.log('selectedAssetType.value')
+  console.log(selectedAssetType.value)
+
 
   if (selectedTranscendingMode.value === 'lightning') {
     if (selectedChain.value === 'bitcoin') {
@@ -400,7 +408,7 @@ const splicingIn = async ({
     handleError(err.message)
     return
   }
-
+  refreshL1Assets()
   await channelStore.getAllChannels()
   loading.value = false
 }
@@ -429,7 +437,7 @@ const splicingOut = async ({
     handleError(err.message)
     return
   }
-
+  refreshL1Assets()
   await channelStore.getAllChannels()
   loading.value = false
 }
@@ -460,7 +468,8 @@ const unlockUtxo = async ({ chanid, amt, feeUtxos = [], asset_name }: any) => {
   await sleep(1000)
   await channelStore.getAllChannels()
   loading.value = false
-
+  refreshL2Assets()
+  await channelStore.getAllChannels()
   toast({
     title: 'success',
     description: 'unlock success',
@@ -494,7 +503,8 @@ const lockUtxo = async ({
 
   await channelStore.getAllChannels()
   loading.value = false
-
+  refreshL2Assets()
+  await channelStore.getAllChannels()
   toast({
     title: 'success',
     description: 'lock success',
@@ -515,7 +525,7 @@ const l1Send = async ({ toAddress, utxos, amt }: any) => {
   }
 
   loading.value = false
-
+  refreshL1Assets()
   toast({
     title: 'success',
     description: 'send success',
@@ -540,7 +550,7 @@ const l2Send = async ({ toAddress, asset_name, amt }: any) => {
   }
 
   loading.value = false
-
+  refreshL2Assets()
   toast({
     title: 'success',
     description: 'send success',
@@ -573,7 +583,8 @@ const deposit = async ({
     return
   }
   loading.value = false
-
+  refreshL1Assets()
+  await channelStore.getAllChannels()
   toast({
     title: 'success',
     description: 'deposit success',
@@ -607,7 +618,8 @@ const withdraw = async ({
   }
 
   loading.value = false
-
+  refreshL2Assets()
+  await channelStore.getAllChannels()
   toast({
     title: 'success',
     description: 'withdraw success',
@@ -637,7 +649,7 @@ const handleOperationConfirm = async () => {
         if (selectedChain.value === 'bitcoin') {
           await l1Send({
             toAddress,
-            utxos: asset.utxos,
+            utxos: [],
             amt: amount,
           })
         } else {
@@ -653,7 +665,7 @@ const handleOperationConfirm = async () => {
           toAddress: address.value,
           asset_name: asset.key,
           amt: amount,
-          utxos: asset.utxos,
+          utxos: [],
           fees: [],
         })
         break
@@ -662,14 +674,14 @@ const handleOperationConfirm = async () => {
           toAddress: address.value,
           asset_name: asset.key,
           amt: amount,
-          utxos: asset.utxos,
+          utxos: [],
           fees: [],
         })
         break
       case 'lock':
         await lockUtxo({
           chanid: chainid,
-          utxos: asset.utxos,
+          utxos: [],
           amt: amount,
           feeUtxos: [],
           asset_name: asset.key,
@@ -686,7 +698,7 @@ const handleOperationConfirm = async () => {
       case 'splicing_in':
         await splicingIn({
           chanid: chainid,
-          utxos: asset.utxos,
+          utxos: [],
           amt: amount,
           feeUtxos: [],
           feeRate: feeRate.value,
@@ -716,6 +728,9 @@ const handleOperationConfirm = async () => {
   }
 }
 
+watch(selectedChain, async (newVal) => {
+  selectedAssetType.value = 'BTC'
+})
 watch(selectedTranscendingMode, async (newVal) => {
   selectedChain.value = 'bitcoin'
   selectedAssetType.value = 'BTC'

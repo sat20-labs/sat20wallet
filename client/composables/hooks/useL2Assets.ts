@@ -24,14 +24,9 @@ interface RefreshOptions {
 }
 
 export const useL2Assets = () => {
-  console.log(123132);
-  
   const assetsStore = useL2Store()
   const walletStore = useWalletStore()
   const { address, network, chain } = storeToRefs(walletStore)
-  console.log('address', address.value)
-  console.log('network', network.value)
-  console.log('chain', chain.value)
 
   const queryClient = useQueryClient()
 
@@ -131,14 +126,18 @@ export const useL2Assets = () => {
     () => summaryQuery.data.value,
     async (newData) => {
       if (newData) {
+        allAssetList.value = []
         console.log('newData', newData.data)
 
-        await parseAssetSummary()
         console.log('allAssetList.value', allAssetList.value)
+        await parseAssetSummary()
 
         processAllUtxos(allAssetList.value.map((item) => item.key))
         assetsStore.setAssetList(newData?.data || [])
       }
+    },
+    {
+      deep: true,
     }
   )
 
@@ -171,6 +170,11 @@ export const useL2Assets = () => {
       refreshUtxos = true,
       clearCache = true,
     } = options
+    console.log('refreshL2Assets', options)
+    console.log('resetState', resetState)
+    console.log('refreshSummary', refreshSummary)
+    console.log('refreshUtxos', refreshUtxos)
+    console.log('clearCache', clearCache)
 
     // 清除缓存
     if (clearCache) {
@@ -182,16 +186,18 @@ export const useL2Assets = () => {
       }
 
       // 可选：清除与当前地址相关的所有缓存
-      // queryClient.invalidateQueries({ predicate: (query) => {
-      //   const queryKey = query.queryKey as string[]
-      //   return queryKey.includes(address.value)
-      // }})
+      queryClient.invalidateQueries({
+        predicate: (query) => {
+          const queryKey = query.queryKey as string[]
+          return queryKey.includes(address.value || '')
+        },
+      })
     }
 
     // 重置状态
-    if (resetState) {
-      allAssetList.value = []
-    }
+    // if (resetState) {
+    //   allAssetList.value = []
+    // }
 
     // 创建一个 Promise 数组来收集所有需要等待的请求
     const refreshPromises = []
@@ -202,14 +208,14 @@ export const useL2Assets = () => {
       refreshPromises.push(summaryPromise)
 
       // 如果需要刷新 UTXO，等待摘要数据加载完成后处理
-      if (refreshUtxos) {
-        summaryPromise.then(async (result) => {
-          if (result.data) {
-            await parseAssetSummary()
-            await processAllUtxos(allAssetList.value.map((item) => item.key))
-          }
-        })
-      }
+      // if (refreshUtxos) {
+      //   summaryPromise.then(async (result) => {
+      //     if (result.data) {
+      //       await parseAssetSummary()
+      //       await processAllUtxos(allAssetList.value.map((item) => item.key))
+      //     }
+      //   })
+      // }
     }
 
     // 等待所有刷新操作完成

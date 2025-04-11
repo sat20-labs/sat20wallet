@@ -5,6 +5,7 @@
 <script lang="ts" setup>
 import { Button } from '@/components/ui/button'
 import { useWalletStore, useL1Store, useL2Store } from '@/store'
+import { storage, StorageArea } from 'wxt/storage'
 import { useRouter } from 'vue-router'
 
 const walletStore = useWalletStore()
@@ -16,6 +17,8 @@ const deleteWallet = async () => {
   await walletStore.deleteWallet()
   l1Store.reset()
   l2Store.reset()
-  router.push('/')
+  await storage.clear('local')
+  await storage.clear('session')
+  window.location.reload()
 }
 </script>
