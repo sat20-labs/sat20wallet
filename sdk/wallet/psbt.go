@@ -18,6 +18,7 @@ import (
 
 // SIGHASH_SINGLE_ANYONECANPAY 为 SIGHASH_SINGLE | SIGHASH_ANYONECANPAY
 const SIGHASH_SINGLE_ANYONECANPAY = txscript.SigHashSingle | txscript.SigHashAnyOneCanPay
+const SIGHASH_ALL = txscript.SigHashAll // txscript.SigHashDefault //  //
 
 // UtxoInfo 定义单个挂单的 utxo 数据
 type UtxoInfo struct {
@@ -46,9 +47,9 @@ func buildBatchSellOrder(utxos []*UtxoInfo, address, network string) (string, er
 
 	var params *chaincfg.Params
 	if strings.ToLower(network) == "testnet" {
-		params = &chaincfg.SatsTestNetParams
+		params = &chaincfg.TestNetParams
 	} else {
-		params = &chaincfg.SatsMainNetParams
+		params = &chaincfg.MainNetParams
 	}
 
 	// 构造一个空的 unsigned transaction
@@ -121,9 +122,9 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 ) (string, error) {
 	var params *chaincfg.Params
 	if strings.ToLower(network) == "testnet" {
-		params = &chaincfg.SatsTestNetParams
+		params = &chaincfg.TestNetParams
 	} else {
-		params = &chaincfg.SatsMainNetParams
+		params = &chaincfg.MainNetParams
 	}
 
 	addr, err := btcutil.DecodeAddress(buyerAddress, params)
@@ -136,10 +137,6 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 	}
 
 	addr, err = btcutil.DecodeAddress(serverAddress, params)
-	if err != nil {
-		return "", err
-	}
-	serverPkScript, err := txscript.PayToAddrScript(addr)
 	if err != nil {
 		return "", err
 	}
@@ -178,7 +175,7 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 				Assets: assets,
 				PkScript: utxo.PkScript,
 			},
-			SighashType: txscript.SigHashDefault,
+			SighashType: SIGHASH_ALL,
 		}
 		packet.Inputs = append(packet.Inputs, input)
 	}
@@ -196,8 +193,12 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 		return "", fmt.Errorf("not enough sats to pay fee %d", changeValue)
 	}
 	changeAsset := buyAssets.Clone()
-	changeAsset.Split(&priceAssets)
 	changeAsset.Merge(&sellAssets)
+	err = changeAsset.Split(&priceAssets)
+	if err != nil {
+		return "", fmt.Errorf("not enough asset, %v", err)
+	}
+	
 	if changeAsset.IsZero() {
 		changeAsset = nil
 	}
@@ -207,6 +208,10 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 	packet.Outputs = append(packet.Outputs, psbt.POutput{})
 
 	if serviceFee != 0 {
+		serverPkScript, err := txscript.PayToAddrScript(addr)
+		if err != nil {
+			return "", err
+		}
 		txOut2 := wire.NewTxOut(serviceFee, nil, serverPkScript)
 		packet.UnsignedTx.AddTxOut(txOut2)
 		packet.Outputs = append(packet.Outputs, psbt.POutput{})
@@ -260,8 +265,7 @@ func splitBatchSignedPsbt(signedHex string, network string) ([]string, error) {
 		if i >= len(packet.Inputs) {
 			return nil, fmt.Errorf("psbt inputs length mismatch")
 		}
-		newPacket.Inputs[0].WitnessUtxo = packet.Inputs[i].WitnessUtxo
-		newPacket.Inputs[0].FinalScriptWitness = packet.Inputs[i].FinalScriptWitness
+		newPacket.Inputs[0] = packet.Inputs[i]
 
 		// 将新 PSBT 序列化为二进制后转为 hex 字符串
 		var buf bytes.Buffer
@@ -296,7 +300,7 @@ func addInputsToPsbt(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string,
 				Assets: assets,
 				PkScript: utxo.PkScript,
 			},
-			SighashType: txscript.SigHashAll,
+			SighashType: SIGHASH_ALL,
 		}
 		packet.Inputs = append(packet.Inputs, input)
 	}
@@ -325,4 +329,9 @@ func addOutputsToPsbt(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string
 	finalPsbtHex := hex.EncodeToString(buf.Bytes())
 
 	return finalPsbtHex, nil
+}
+
+func VerifySignedPsbt_SatsNet(packet *psbt.Packet, tx *wire.MsgTx) error {
+	prevOutputFetcher := PsbtPrevOutputFetcher_SatsNet(packet)
+	return VerifySignedTx_SatsNet(tx, prevOutputFetcher)
 }

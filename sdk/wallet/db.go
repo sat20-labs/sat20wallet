@@ -33,10 +33,10 @@ type Status struct {
 }
 
 type WalletInDB struct {
-	Id       int64
+	Id       int64  // 钱包id，也是创建时间
 	Mnemonic []byte // 加密后的数据
 	Salt     []byte
-	Accounts int
+	Accounts int    // 用户启用的子账户数量
 }
 
 func getWalletDBKey(id int64) string {
@@ -218,6 +218,7 @@ func (p *Manager) saveMnemonic(mn, password string) (int64, error) {
 		Id:       time.Now().UnixMicro(),
 		Mnemonic: en,
 		Salt:     salt,
+		Accounts: 1,
 	}
 
 	err = saveWallet(p.db, &wallet)

@@ -285,7 +285,7 @@ func createWallet(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		wallet.Log.Info("wallet created")
-		return map[string]interface{}{
+		return map[string]any{
 			"walletId": id,
 			"mnemonic": mnemonic,
 		}, 0, "ok"
@@ -303,7 +303,7 @@ func isWalletExist(this js.Value, p []js.Value) any {
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		exist := _mgr.IsWalletExist()
-		return map[string]interface{}{
+		return map[string]any{
 			"exists": exist,
 		}, 0, "ok"
 	})
@@ -344,7 +344,7 @@ func importWallet(this js.Value, p []js.Value) any {
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		return map[string]interface{}{
+		return map[string]any{
 			"walletId": id,
 			"address": _mgr.GetWallet().GetAddress(0),
 		}, 0, "ok"
@@ -379,7 +379,7 @@ func unlockWallet(this js.Value, p []js.Value) any {
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		return map[string]interface{}{
+		return map[string]any{
 			"walletId": id,
 		}, 0, "ok"
 	})
@@ -423,7 +423,7 @@ func getAllWallets(this js.Value, p []js.Value) any {
 		sort.Slice(result, func(i, j int) bool {
 			return result[i].Id < result[j].Id
 		})
-		return map[string]interface{}{
+		return map[string]any{
 			"walletIds": result,
 		}, 0, "ok"
 	})
@@ -524,7 +524,7 @@ func getMnemonic(this js.Value, p []js.Value) any {
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		mnemonic := _mgr.GetMnemonic(int64(id), password)
-		return map[string]interface{}{
+		return map[string]any{
 			"mnemonic": mnemonic,
 		}, 0, "ok"
 	})
@@ -557,7 +557,7 @@ func getWalletAddress(this js.Value, p []js.Value) any {
 		if wallet == nil {
 			return nil, -1, "wallet is nil"
 		}
-		return map[string]interface{}{
+		return map[string]any{
 			"address": wallet.GetAddress(uint32(id)),
 		}, 0, "ok"
 	})
@@ -584,7 +584,7 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		pubkey := _mgr.GetPublicKey(uint32(id))
-		return map[string]interface{}{
+		return map[string]any{
 			"pubKey": hex.EncodeToString(pubkey),
 		}, 0, "ok"
 	})
@@ -627,7 +627,7 @@ func getCommitSecret(this js.Value, p []js.Value) any {
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		result := _mgr.GetCommitSecret(id, index)
-		return map[string]interface{}{
+		return map[string]any{
 			"commitSecret": hex.EncodeToString(result),
 		}, 0, "ok"
 	})
@@ -664,7 +664,7 @@ func deriveRevocationPrivKey(this js.Value, p []js.Value) any {
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		result := _mgr.DeriveRevocationPrivKey(secrect)
-		return map[string]interface{}{
+		return map[string]any{
 			"revocationPrivKey": hex.EncodeToString(result),
 		}, 0, "ok"
 	})
@@ -686,7 +686,7 @@ func getRevocationBaseKey(this js.Value, p []js.Value) any {
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		result := _mgr.GetRevocationBaseKey()
-		return map[string]interface{}{
+		return map[string]any{
 			"revocationBaseKey": hex.EncodeToString(result),
 		}, 0, "ok"
 	})
@@ -708,7 +708,7 @@ func getNodePubKey(this js.Value, p []js.Value) any {
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		result := _mgr.GetNodePubKey()
-		return map[string]interface{}{
+		return map[string]any{
 			"nodePubKey": hex.EncodeToString(result),
 		}, 0, "ok"
 	})
@@ -749,7 +749,7 @@ func signMessage(this js.Value, p []js.Value) any {
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		return map[string]interface{}{
+		return map[string]any{
 			"signature": base64.StdEncoding.EncodeToString(result),
 		}, 0, "ok"
 	})
@@ -761,8 +761,8 @@ func signPsbt(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 
-	if len(p) < 1 {
-		return createJsRet(nil, -1, "Expected 1 parameters")
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
 	}
 
 	if p[0].Type() != js.TypeString {
@@ -790,8 +790,55 @@ func signPsbt(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 
-		return map[string]interface{}{
+		return map[string]any{
 			"psbt": result,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+
+func signPsbts(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	psbtsHex, err := getStringVector(p[0])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	if p[1].Type() != js.TypeBoolean {
+		return createJsRet(nil, -1, "extract parameter should be a bool")
+	}
+	extract := p[1].Bool()
+
+	// result, err := _mgr.SignPsbt(psbtHex)
+	// if err != nil {
+	// 	return createJsRet(nil, -1, err.Error())
+	// }
+	// data := map[string]any{
+	// 	"psbt": result,
+	// }
+	// return createJsRet(data, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.SignPsbts(psbtsHex, extract)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		r := make([]interface{}, 0, len(result))
+		for _, psbt := range result {
+			r = append(r, psbt)
+		}
+
+		return map[string]any{
+			"psbts": r,
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
@@ -802,7 +849,7 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 
-	if len(p) < 1 {
+	if len(p) < 2 {
 		return createJsRet(nil, -1, "Expected 1 parameters")
 	}
 
@@ -825,13 +872,62 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 	// }
 	// return createJsRet(data, 0, "ok")
 
+	wallet.Log.Infof("SignPsbt_SatsNet  input: %s", psbtHex)
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		result, err := _mgr.SignPsbt_SatsNet(psbtHex, extract)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		return map[string]interface{}{
+		wallet.Log.Infof("SignPsbt_SatsNet output: %s", result)
+		return map[string]any {
 			"psbt": result,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+
+func signPsbts_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	psbtsHex, err := getStringVector(p[0])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	if p[1].Type() != js.TypeBoolean {
+		return createJsRet(nil, -1, "extract parameter should be a bool")
+	}
+	extract := p[1].Bool()
+
+	// result, err := _mgr.SignPsbt(psbtHex)
+	// if err != nil {
+	// 	return createJsRet(nil, -1, err.Error())
+	// }
+	// data := map[string]any{
+	// 	"psbt": result,
+	// }
+	// return createJsRet(data, 0, "ok")
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.SignPsbts_SatsNet(psbtsHex, extract)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		r := make([]interface{}, 0, len(result))
+		for _, psbt := range result {
+			r = append(r, psbt)
+		}
+
+		return map[string]any{
+			"psbts": r,
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
@@ -854,7 +950,7 @@ func extractTxFromPsbt(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	
-	data := map[string]interface{}{
+	data := map[string]any{
 		"tx": result,
 	}
 	
@@ -878,7 +974,7 @@ func extractTxFromPsbt_SatsNet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	
-	data := map[string]interface{}{
+	data := map[string]any{
 		"tx": result,
 	}
 	
@@ -911,8 +1007,9 @@ func buildBatchSellOrder(this js.Value, p []js.Value) any {
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
+	wallet.Log.Infof("BuildBatchSellOrder: %s", result)
 	
-	data := map[string]interface{}{
+	data := map[string]any{
 		"psbt": result,
 	}
 	
@@ -940,7 +1037,7 @@ func splitBatchSignedPsbt(this js.Value, p []js.Value) any {
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	wallet.Log.Infof("splitBatchSignedPsbt result %v", result)
+	wallet.Log.Infof("splitBatchSignedPsbt: %s", result)
 
 	var str []interface{}
 	for _, r := range result {
@@ -1000,8 +1097,9 @@ func finalizeSellOrder(this js.Value, p []js.Value) any {
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
+	wallet.Log.Infof("FinalizeSellOrder: %s", result)
 	
-	data := map[string]interface{}{
+	data := map[string]any{
 		"psbt": result,
 	}
 	
@@ -1030,7 +1128,7 @@ func addInputsToPsbt(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	
-	data := map[string]interface{}{
+	data := map[string]any{
 		"psbt": result,
 	}
 	
@@ -1059,7 +1157,7 @@ func addOutputsToPsbt(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	
-	data := map[string]interface{}{
+	data := map[string]any{
 		"psbt": result,
 	}
 	
@@ -1153,8 +1251,10 @@ func main() {
 	obj.Set("signMessage", js.FuncOf(signMessage))
 	// input: psbt(hexString); return: signed psbt (hexString)
 	obj.Set("signPsbt", js.FuncOf(signPsbt))
+	obj.Set("signPsbts", js.FuncOf(signPsbts))
 	// input: psbt(hexString); return: signed psbt (hexString)
 	obj.Set("signPsbt_SatsNet", js.FuncOf(signPsbt_SatsNet))
+	obj.Set("signPsbts_SatsNet", js.FuncOf(signPsbts_SatsNet))
 
 	obj.Set("getVersion", js.FuncOf(getVersion))
 	obj.Set("registerCallback", js.FuncOf(registerCallbacks))
@@ -1170,27 +1270,3 @@ func main() {
 	wallet.Log.SetLevel(logrus.DebugLevel)
 	<-make(chan bool)
 }
-
-// func NewDefaultYamlConf() *wallet.Config {
-// 	chain := "testnet4"
-// 	ret := &wallet.Config{
-// 		Chain: chain,
-// 		Mode:  "client",
-// 		Btcd: wallet.Bitcoin{
-// 			Host:           "192.168.10.102:28332",
-// 			User:           "jacky",
-// 			Password:       "123456",
-// 			Zmqpubrawblock: "tcp://192.168.10.102:58332",
-// 			Zmqpubrawtx:    "tcp://192.168.10.102:58333",
-// 		},
-// 		IndexerL1: wallet.Indexer{
-// 			Host: "192.168.10.104:8009",
-// 		},
-// 		IndexerL2: wallet.Indexer{
-// 			Host: "192.168.10.104:8019",
-// 		},
-// 		Log: "debug",
-// 	}
-
-// 	return ret
-// }

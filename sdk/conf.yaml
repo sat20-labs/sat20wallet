@@ -1,16 +1,6 @@
 # configuration
 
-chain: testnet4
+chain: testnet
 
-btcd:
-  host: satstestnet-peer-p1.sat20.org:28332
-  user: jacky
-  password: 123456
-  zmqpubrawblock: tcp://satstestnet-btcd-zb.sat20.org
-  zmqpubrawtx: tcp://satstestnet-btcd-zt.sat20.org
-indexer_layer1:
-  host: indexer-testnet.sat20.org
-indexer_layer2:
-  host: indexer-satstestnet.sat20.org
 
 log: debug

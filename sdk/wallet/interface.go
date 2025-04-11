@@ -117,6 +117,7 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 
 	p.wallet = wallet
 	p.password = password
+	p.status.CurrentAccount = 0
 
 	return p.status.CurrentWallet, nil
 }
@@ -134,6 +135,8 @@ func (p *Manager) SwitchWallet(id int64) error {
 		return nil
 	}
 
+	oldWalletId := p.status.CurrentWallet
+	oldAccount := p.status.CurrentAccount
 	p.status.CurrentWallet = id
 	oldWallet := p.wallet
 	p.wallet = nil
@@ -141,6 +144,8 @@ func (p *Manager) SwitchWallet(id int64) error {
 	if err == nil {
 		p.saveStatus()
 	} else {
+		p.status.CurrentWallet = oldWalletId
+		p.status.CurrentAccount = oldAccount
 		p.wallet = oldWallet
 	}
 	return err
@@ -151,6 +156,16 @@ func (p *Manager) SwitchAccount(id uint32) {
 		return
 	}
 
+	walletInfo, ok := p.walletInfoMap[p.status.CurrentWallet]
+	if ok {
+		// 必须有
+		if walletInfo.Accounts < int(id) {
+			walletInfo.Accounts = int(id)
+			saveWallet(p.db, walletInfo)
+		}
+	}
+
+	p.wallet.SetSubAccount(id)
 	p.status.CurrentAccount = id
 	p.saveStatus()
 }
@@ -276,6 +291,20 @@ func (p *Manager) SignWalletMessage(msg string) ([]byte, error) {
 	return p.wallet.SignWalletMessage(msg)
 }
 
+
+func (p *Manager) SignPsbts(psbtsHex []string, bExtract bool) ([]string, error) {
+	result := make([]string, 0, len(psbtsHex))
+	for i, psbt := range psbtsHex {
+		signed, err := p.SignPsbt(psbt, bExtract)
+		if err != nil {
+			Log.Errorf("SignPsbt %d failed, %v", i, err)
+			return nil, err
+		}
+		result = append(result, signed)
+	}
+	return result, nil
+}
+
 func (p *Manager) SignPsbt(psbtHex string, bExtract bool) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -321,6 +350,19 @@ func (p *Manager) SignPsbt(psbtHex string, bExtract bool) (string, error) {
 	}
 
 	return hex.EncodeToString(buf.Bytes()), nil
+}
+
+func (p *Manager) SignPsbts_SatsNet(psbtsHex []string, bExtract bool) ([]string, error) {
+	result := make([]string, 0, len(psbtsHex))
+	for i, psbt := range psbtsHex {
+		signed, err := p.SignPsbt_SatsNet(psbt, bExtract)
+		if err != nil {
+			Log.Errorf("SignPsbt_SatsNet %d failed, %v", i, err)
+			return nil, err
+		}
+		result = append(result, signed)
+	}
+	return result, nil
 }
 
 func (p *Manager) SignPsbt_SatsNet(psbtHex string, bExtract bool) (string, error) {
@@ -405,6 +447,14 @@ func ExtractTxFromPsbt(psbtStr string) (string, error) {
 		return "", err
 	}
 
+	// 验证下tx是否正确签名
+	prevOutputFetcher := PsbtPrevOutputFetcher(packet)
+	err = VerifySignedTx(finalTx, prevOutputFetcher)
+	if err != nil {
+		return "", err
+	}
+
+
 	return EncodeMsgTx(finalTx)
 }
 
@@ -427,6 +477,13 @@ func ExtractTxFromPsbt_SatsNet(psbtStr string) (string, error) {
 	finalTx, err := spsbt.Extract(packet)
 	if err != nil {
 		Log.Errorf("Extract failed, %v", err)
+		return "", err
+	}
+
+	// 验证下tx是否正确签名
+	prevOutputFetcher := PsbtPrevOutputFetcher_SatsNet(packet)
+	err = VerifySignedTx_SatsNet(finalTx, prevOutputFetcher)
+	if err != nil {
 		return "", err
 	}
 

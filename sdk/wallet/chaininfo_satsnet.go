@@ -20,9 +20,9 @@ import (
 
 func GetChainParam_SatsNet() *chaincfg.Params {
 	if IsTestNet() {
-		return &chaincfg.SatsTestNetParams
+		return &chaincfg.TestNetParams
 	} else {
-		return &chaincfg.SatsMainNetParams
+		return &chaincfg.MainNetParams
 	}
 }
 

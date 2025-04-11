@@ -14,6 +14,7 @@ import (
 )
 
 var _client *Manager
+var _client2 *Manager
 
 func newTestConf(mode, dbPath string) *Config {
 	chain := "testnet4"
@@ -58,14 +59,26 @@ func createNode(t *testing.T, mode, dbPath string, quit chan struct{}) *Manager 
 			t.Fatalf("UnlockWallet failed. %v", err)
 		}
 	} else {
-		mnemonic := ""
-
-		//mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
-		// mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
-		mnemonic = "remind effort case concert skull live spoil obvious finish top bargain age"
-		_, err := manager.ImportWallet(mnemonic, "123456")
-		if err != nil {
-			t.Fatalf("ImportWallet failed. %v", err)
+		if mode == "client" {
+			mnemonic := ""
+			//mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
+			// mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
+			// mnemonic = "remind effort case concert skull live spoil obvious finish top bargain age"
+			mnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
+			_, err := manager.ImportWallet(mnemonic, "123456")
+			if err != nil {
+				t.Fatalf("ImportWallet failed. %v", err)
+			}
+		} else {
+			mnemonic := "comfort very add tuition senior run eight snap burst appear exile dutch"
+			//mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
+			// mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
+			// mnemonic = "remind effort case concert skull live spoil obvious finish top bargain age"
+			// mnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
+			_, err := manager.ImportWallet(mnemonic, "123456")
+			if err != nil {
+				t.Fatalf("ImportWallet failed. %v", err)
+			}
 		}
 	}
 
@@ -90,6 +103,7 @@ func prepare(t *testing.T) {
 	}
 
 	_client = createNode(t, "client", "../db/clientDB", lc)
+	_client2 = createNode(t, "client2", "../db/client2DB", lc)
 }
 
 func TestPsbt(t *testing.T) {
@@ -156,8 +170,14 @@ func TestPsbt_SatsNet(t *testing.T) {
 	err = VerifySignedTx_SatsNet(finalTx, prevFectcher)
 	if err != nil {
 		Log.Errorf("VerifySignedTx_SatsNet failed, %v", err)
-		t.Fatal()
+		t.Fatal(err)
 	}
+
+	txHex, err := EncodeMsgTx_SatsNet(finalTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("TX: %s\n", txHex)
 
 }
 
@@ -167,7 +187,7 @@ func toPsbt(psbtHex string) (*psbt.Packet, error) {
 	return psbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
 }
 
-func TestVerifyPsbtString(t *testing.T) {
+func TestVerifySignedPsbtString(t *testing.T) {
 	psbtStr := "70736274ff0100890200000001d71f33336e92a9e2a794c8a77ffd3b846c335bfc6ac2a0eb026e96d61a04b7220100000000fdffffff025a0b0000000000002251202fad5b1f0dfa1111ca54fb636e030846bd731dca4f2b7af48d8e5b9672d90b25ff630000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b000000000001012b94790000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b0113407da5f3313247877d7820cc5ef80de3895ff93fa40924744ed9fe834f71efd79aa99894be089ad1c7c14589828542271862413f4e6e12fa387a9b9d4b5fed4cf4011720d210be04396837b11f65eb42527de3f6a1c1c1d51de38ee907fc355c56ee5115000000"
 	packet, err := toPsbt(psbtStr)
 	if err != nil {
@@ -187,11 +207,17 @@ func TestVerifyPsbtString(t *testing.T) {
 	}
 
 	PrintJsonTx(finalTx, "")
+	prevFectcher := PsbtPrevOutputFetcher(packet)
+	err = VerifySignedTx(finalTx, prevFectcher)
+	if err != nil {
+		Log.Errorf("VerifySignedTx failed, %v", err)
+		t.Fatal()
+	}
 }
 
 
-func TestVerifyPsbtString_satsnet(t *testing.T) {
-	psbtStr := "70736274ff0100fd4a0101000000042a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0100000000ffffffff9400974c50a5bb30f389e25696279f388ccf17a3d29a0506f8d8cb86895dcf150100000000ffffffff3f32941e8c34679cae707e31efa5ee8b39a0f4f10b748f70f48eb49c403148ca0100000000ffffffff2a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0200000000ffffffff03200300000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380c0300000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380000000000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b0000000000010144900100000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb38011340f5ee347b642ba06a2c45ca667bace0cd6cda1f94679faa634ecc60e0f476430873f66b7819cbabc9cc14269182bfb984a3dfca01d77aa3f81bf4b56be2bf5a410001012ce80300000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb3801030401000000011340cb9b9f356b3edb80489702e7a5d63301936d5872ed7084c047b692e7e3760c68e3e5d7923d00c8ea5c02e9e2624392918c2170fed3da76de937f2ec2c7b0d5450001012c640000000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380103040100000001134024791b634549dc25d8ee4b3604604aaf64354784f0ce5c09020948f8668d56a9b8d17e0b04bf4177f481a313254039092bb52eb5ad38f6487b3aefad0db0be3c0001012c5a0000000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb3801030401000000011340710b30193db2ed4bd92a9bebf5063bd80fcda3b9e29942d8f12a42a6ebfb64ca07d5d43cd1d63fa42149c96a87042ea9ed83c93a8a58ded003d77d642ad9873c00000000"
+func TestVerifySignedPsbtString_satsnet(t *testing.T) {
+	psbtStr := "70736274ff0100f801000000021eb0a1d7e09e630bb58199ac5045bd73687b2b3a906d6f018229e23bb45c09610100000000ffffffff2c484352d8b86b3f00f7d78b587ae0f6b6dff6cb129a61fa2f73e99b9ad4b9840100000000ffffffff03200300000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb38de2600000000000001046f7264780166097261726570697a7a61053430303a30002251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba0a00000000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b0000000000010144020300000000000001046f7264780166097261726570697a7a61053430303a3000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb3801030483000000011341436f5765bdbd7b793c3a0f56438d5abc72a9d03bd3829ead52c2b40fcd82511e565ac6e0a14e458be0f4dae7cc17595f2f749cb51bf517d2bee530056f1a136b830001012c1027000000000000002251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba0113406a3e45e58ae465cb668cd8a2b992cf79caf052e05316c3df16992a370a43388c660fe70fdd0f2154e10730e549e195306951f2aec57c09466ef0c83b987ae22500000000"
 	hexBytes, _ := hex.DecodeString(psbtStr)
 	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
 	if err != nil {
@@ -210,6 +236,12 @@ func TestVerifyPsbtString_satsnet(t *testing.T) {
 	}
 
 	PrintJsonTx_SatsNet(finalTx, "")
+	prevFectcher := PsbtPrevOutputFetcher_SatsNet(packet)
+	err = VerifySignedTx_SatsNet(finalTx, prevFectcher)
+	if err != nil {
+		Log.Errorf("VerifySignedTx_SatsNet failed, %v", err)
+		t.Fatal()
+	}
 }
 
 func TestBuildOrder(m *testing.T) {
@@ -279,7 +311,7 @@ func TestFinalizeOrder(t *testing.T) {
 		"tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv", 
 		"tb1pttjr9292tea2nr28ca9zswgdhz0dasnz6n3v58mtg9cyf9wqr49sv8zjep",
 		"testnet",
-		0,
+		10,
 		10,
 	)
 	if err != nil {
@@ -293,9 +325,153 @@ func TestSplitBatchSignedPsbt(t *testing.T) {
 	psbt := "70736274ff01007701000000012a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0100000000ffffffff01200300000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380000000000010144900100000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380103048300000001134062387e222f742ea1d6685adc9b9ee2d03c06167b4cfe4802c4eee0ac7013729c775604897d30ddd97b48156a7a07619e13eccd241572b54309cae7dbca09384c0000"
 	result, err := SplitBatchSignedPsbt(psbt, "testnet")
 	if err != nil {
-		t.Fatal()
+		t.Fatal(err)
 	}
 	for _, psbt := range result {
 		fmt.Printf("%s\n", psbt)
 	}
+}
+
+func TestVerifySignedTx_SatsNet(t *testing.T) {
+	txHex := "010000000001021eb0a1d7e09e630bb58199ac5045bd73687b2b3a906d6f018229e23bb45c09610100000000ffffffff2c484352d8b86b3f00f7d78b587ae0f6b6dff6cb129a61fa2f73e99b9ad4b9840100000000ffffffff03200300000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb38de2600000000000001046f7264780166097261726570697a7a61053430303a30002251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba0a00000000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b0141436f5765bdbd7b793c3a0f56438d5abc72a9d03bd3829ead52c2b40fcd82511e565ac6e0a14e458be0f4dae7cc17595f2f749cb51bf517d2bee530056f1a136b8301406a3e45e58ae465cb668cd8a2b992cf79caf052e05316c3df16992a370a43388c660fe70fdd0f2154e10730e549e195306951f2aec57c09466ef0c83b987ae22500000000"
+	tx, err := DecodeMsgTx_SatsNet(txHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	PrintJsonTx_SatsNet(tx, "")
+	//VerifySignedTx_SatsNet()
+}
+
+func TestPsbtFullFlow(t *testing.T) {
+	prepare(t)
+
+	pkScript, _ := GetP2TRpkScript(_client.GetWallet().GetPaymentPubKey())
+	assset := common.DisplayAsset{
+		AssetName: AssetName{
+			Protocol: "ordx",
+			Type: "f",
+			Ticker: "rarepizza",
+		},
+		Amount: "100",
+		Precision: 0,
+		BindingSat: 1,
+		Offsets: nil,
+	}
+	info := UtxoInfo{
+		AssetsInUtxo: common.AssetsInUtxo{
+			UtxoId:   1030792413185,
+			OutPoint: "ee7f3526663e7ebdfd4fb577941cdeab12729d2d220d651798369bfe106c4b2a:1",
+			Value:    100,
+			PkScript: pkScript,
+			Assets:   []*common.DisplayAsset{&assset},
+		},
+		Price: 6000,
+		// AssetInfo: &common.AssetInfo{
+		// 	Name: common.AssetName{
+		// 		Protocol: "ordx",
+		// 		Type:     "f",
+		// 		Ticker:   "rarepizza",
+		// 	},
+		// 	Amount:     *common.NewDecimal(100, 0),
+		// 	BindingSat: 1,
+		// },
+	}
+
+	utxo, _ := json.Marshal(info)
+	fmt.Printf("%s\n", string(utxo))
+
+	sellerAddr := _client.wallet.GetAddress(0)
+
+	psbt, err := BuildBatchSellOrder([]string{string(utxo)}, 
+		sellerAddr, "testnet",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("BuildBatchSellOrder: %s", psbt)
+
+	psbts, err := SplitBatchSignedPsbt(psbt, "testnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, psbt := range psbts {
+		fmt.Printf("SplitBatchSignedPsbt %d: %s\n", i, psbt)
+	}
+
+	sellPsbt := psbts[0]
+
+	signedSellPsbt, err := _client.SignPsbt_SatsNet(sellPsbt, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("SignPsbt_SatsNet: %s", signedSellPsbt)
+
+	// buyer
+	buyerAddr := _client2.wallet.GetAddress(0)
+	pkScript2, _ := GetP2TRpkScript(_client2.GetWallet().GetPaymentPubKey())
+	info2 := UtxoInfo{
+		AssetsInUtxo: common.AssetsInUtxo{
+			UtxoId:   3985729912833,
+			OutPoint: "84b9d49a9be9732ffa619a12cbf6dfb6f6e07a588bd7f7003f6bb8d85243482c:1",
+			Value:    10000,
+			PkScript: pkScript2,
+			Assets:   nil,
+		},
+		Price: 0,
+		AssetInfo: nil,
+	}
+	utxo2, _ := json.Marshal(info2)
+	fmt.Printf("%s\n", string(utxo2))
+
+
+	utxos := []string{
+		string(utxo2),
+	}
+
+	finalPsbt, err := FinalizeSellOrder(signedSellPsbt, utxos, 
+		buyerAddr, 
+		"tb1pttjr9292tea2nr28ca9zswgdhz0dasnz6n3v58mtg9cyf9wqr49sv8zjep",
+		"testnet",
+		10,
+		10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("FinalizeSellOrder: %s\n", finalPsbt)
+
+
+	signedFinalPsbt, err := _client2.SignPsbt_SatsNet(finalPsbt, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("SignPsbt_SatsNet: %s", signedFinalPsbt)
+
+	hexBytes, _ := hex.DecodeString(signedFinalPsbt)
+	finalPacket, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	if err != nil {
+		t.Fatal()
+	}
+
+	err = spsbt.MaybeFinalizeAll(finalPacket)
+	if err != nil {
+		Log.Errorf("MaybeFinalizeAll failed, %v", err)
+		t.Fatal()
+	}
+
+	finalTx, err := spsbt.Extract(finalPacket)
+	if err != nil {
+		Log.Errorf("Extract failed, %v", err)
+		t.Fatal()
+	}
+	PrintJsonTx_SatsNet(finalTx, "")
+
+	prevFectcher := PsbtPrevOutputFetcher_SatsNet(finalPacket)
+	err = VerifySignedTx_SatsNet(finalTx, prevFectcher)
+	if err != nil {
+		Log.Errorf("VerifySignedTx_SatsNet failed, %v", err)
+		t.Fatal()
+	}
+
+
 }

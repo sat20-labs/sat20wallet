@@ -9,6 +9,7 @@ import (
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
 
+// 方便对通道的操作进行签名和验证，id是子账户id，从0开始
 type ChannelWallet interface {
 	GetId() uint32
 	GetCommitSecret(index uint32) *secp256k1.PrivateKey
