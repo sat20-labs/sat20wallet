@@ -19,7 +19,6 @@ type Manager struct {
 	bStop         bool
 	password      string
 	status        *Status
-	quit          chan struct{}
 	walletInfoMap map[int64]*WalletInDB
 	wallet        *InternalWallet
 	msgCallback   NotifyCB

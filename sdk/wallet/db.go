@@ -149,6 +149,7 @@ func (p *Manager) loadStatus() *Status {
 	result := &Status{
 		SoftwareVer: SOFTWARE_VERSION,
 		DBver:       DB_VERSION,
+		CurrentChain: _chain,
 	}
 	p.status = result
 

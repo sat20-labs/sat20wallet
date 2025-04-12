@@ -25,8 +25,13 @@ type ChannelWallet interface {
 }
 
 type Wallet interface {
-	GetPubKey(uint32) *secp256k1.PublicKey
-	GetAddress(uint32) string
+	SetSubAccount(id uint32)
+	GetSubAccount() uint32
+	
+	GetPubKey() *secp256k1.PublicKey
+	GetAddress() string
+	GetPubKeyByIndex(uint32) *secp256k1.PublicKey
+	GetAddressByIndex(uint32) string
 	GetNodePubKey() *secp256k1.PublicKey
 
 	// default channel wallet, CWId = 0

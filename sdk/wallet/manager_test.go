@@ -20,22 +20,6 @@ func newTestConf(mode, dbPath string) *Config {
 	chain := "testnet4"
 	ret := &Config{
 		Chain: chain,
-		Mode:  mode,
-		Btcd: Bitcoin{
-			Host:           "192.168.10.102:28332",
-			User:           "jacky",
-			Password:       "123456",
-			Zmqpubrawblock: "tcp://192.168.10.102:58332",
-			Zmqpubrawtx:    "tcp://192.168.10.102:58333",
-		},
-		IndexerL1: Indexer{
-			Scheme: "http",
-			Host:   "127.0.0.1:8009",
-		},
-		IndexerL2: Indexer{
-			Scheme: "http",
-			Host:   "127.0.0.1:8019",
-		},
 		Log: "debug",
 		DB:  dbPath,
 	}
@@ -43,9 +27,9 @@ func newTestConf(mode, dbPath string) *Config {
 	return ret
 }
 
-func createNode(t *testing.T, mode, dbPath string, quit chan struct{}) *Manager {
+func createNode(t *testing.T, mode, dbPath string) *Manager {
 	cfg := newTestConf(mode, dbPath)
-	manager := NewManager(cfg, quit)
+	manager := NewManager(cfg)
 
 	// mnemonice, err := manager.CreateWallet("123456")
 	// if err != nil {
@@ -86,7 +70,7 @@ func createNode(t *testing.T, mode, dbPath string, quit chan struct{}) *Manager 
 	// nodeId: 03258dd933765d50bc88630c6584726f739129d209bfeb21053c37a3b62e7a4ab1
 	// pkscript: 5120d2912b91d0802aa584f4c8ff364f9bb2d5af103368fef4c61584b34f1f081f8b
 
-	fmt.Printf("address: %s\n", manager.GetWallet().GetAddress(0))
+	fmt.Printf("address: %s\n", manager.GetWallet().GetAddress())
 	pkScript, _ := GetP2TRpkScript(manager.GetWallet().GetPaymentPubKey())
 	fmt.Printf("pkscript: %s\n", hex.EncodeToString(pkScript))
 	fmt.Printf("nodeId: %s\n", hex.EncodeToString(manager.GetWallet().GetNodePubKey().SerializeCompressed()))
@@ -95,15 +79,13 @@ func createNode(t *testing.T, mode, dbPath string, quit chan struct{}) *Manager 
 }
 
 func prepare(t *testing.T) {
-
-	lc := make(chan struct{})
 	err := os.RemoveAll("../db")
 	if err != nil {
 		t.Fatalf("RemoveAll failed: %v\n", err)
 	}
 
-	_client = createNode(t, "client", "../db/clientDB", lc)
-	_client2 = createNode(t, "client2", "../db/client2DB", lc)
+	_client = createNode(t, "client", "../db/clientDB")
+	_client2 = createNode(t, "client2", "../db/client2DB")
 }
 
 func TestPsbt(t *testing.T) {
@@ -380,7 +362,7 @@ func TestPsbtFullFlow(t *testing.T) {
 	utxo, _ := json.Marshal(info)
 	fmt.Printf("%s\n", string(utxo))
 
-	sellerAddr := _client.wallet.GetAddress(0)
+	sellerAddr := _client.wallet.GetAddress()
 
 	psbt, err := BuildBatchSellOrder([]string{string(utxo)}, 
 		sellerAddr, "testnet",
@@ -407,7 +389,7 @@ func TestPsbtFullFlow(t *testing.T) {
 	fmt.Printf("SignPsbt_SatsNet: %s", signedSellPsbt)
 
 	// buyer
-	buyerAddr := _client2.wallet.GetAddress(0)
+	buyerAddr := _client2.wallet.GetAddress()
 	pkScript2, _ := GetP2TRpkScript(_client2.GetWallet().GetPaymentPubKey())
 	info2 := UtxoInfo{
 		AssetsInUtxo: common.AssetsInUtxo{

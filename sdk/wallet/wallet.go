@@ -227,7 +227,16 @@ func (p *InternalWallet) getBtcUtilAddress(index uint32) (btcutil.Address, error
 	return address, nil
 }
 
-func (p *InternalWallet) GetPubKey(index uint32) *secp256k1.PublicKey {
+func (p *InternalWallet) GetPubKey() *secp256k1.PublicKey {
+	_, pubKey, err := p.getKey("P2TR", 0, p.currentIndex)
+	if err != nil {
+		Log.Errorf("GetPubKey failed. %v", err)
+		return nil
+	}
+	return pubKey
+}
+
+func (p *InternalWallet) GetPubKeyByIndex(index uint32) *secp256k1.PublicKey {
 	_, pubKey, err := p.getKey("P2TR", 0, index)
 	if err != nil {
 		Log.Errorf("GetPubKey failed. %v", err)
@@ -236,7 +245,15 @@ func (p *InternalWallet) GetPubKey(index uint32) *secp256k1.PublicKey {
 	return pubKey
 }
 
-func (p *InternalWallet) GetAddress(index uint32) string {
+func (p *InternalWallet) GetAddress() string {
+	addr, err := p.getBtcUtilAddress(p.currentIndex)
+	if err != nil {
+		return ""
+	}
+	return addr.EncodeAddress()
+}
+
+func (p *InternalWallet) GetAddressByIndex(index uint32) string {
 	addr, err := p.getBtcUtilAddress(index)
 	if err != nil {
 		return ""

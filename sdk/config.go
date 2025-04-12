@@ -58,20 +58,6 @@ func NewDefaultYamlConf() *wallet.Config {
 	chain := "testnet4"
 	ret := &wallet.Config{
 		Chain: chain,
-		Mode:  "client",
-		Btcd: wallet.Bitcoin{
-			Host:           "192.168.10.102:28332",
-			User:           "jacky",
-			Password:       "123456",
-			Zmqpubrawblock: "tcp://192.168.10.102:58332",
-			Zmqpubrawtx:    "tcp://192.168.10.102:58333",
-		},
-		IndexerL1: wallet.Indexer{
-			Host: "192.168.10.104:8009",
-		},
-		IndexerL2: wallet.Indexer{
-			Host: "192.168.10.104:8019",
-		},
 		Log: "error",
 	}
 

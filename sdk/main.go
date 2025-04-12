@@ -22,7 +22,7 @@ func main() {
 	cfg := InitConfig()
 	InitLog(cfg)
 
-	mgr := wallet.NewManager(cfg, interceptor.GetQuit())
+	mgr := wallet.NewManager(cfg)
 	if mgr == nil {
 		wallet.Log.Info("NewSTPManager failed.")
 		return
@@ -51,7 +51,7 @@ func main() {
 			// }
 		}
 
-		wallet.Log.Infof("wallet address: %s", mgr.GetWallet().GetAddress(0))
+		wallet.Log.Infof("wallet address: %s", mgr.GetWallet().GetAddress())
 	}
 	// 生产环境，需要手动创建钱包，并且解锁
 
