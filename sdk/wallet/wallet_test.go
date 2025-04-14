@@ -153,5 +153,5 @@ func TestImportWallet(t *testing.T) {
 		t.Fail()
 	}
 
-	fmt.Printf("%s\n", wallet.GetAddress(0))
+	fmt.Printf("%s\n", wallet.GetAddress())
 }

@@ -15,7 +15,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 )
 
-func NewManager(cfg *Config, quit chan struct{}) *Manager {
+func NewManager(cfg *Config) *Manager {
 	Log.Infof("sat20wallet_ver:%s, DB_ver:%s", SOFTWARE_VERSION, DB_VERSION)
 
 	//////////
@@ -25,7 +25,6 @@ func NewManager(cfg *Config, quit chan struct{}) *Manager {
 		tickerInfoMap: make(map[string]*indexer.TickerInfo),
 		bInited:       false,
 		bStop:         false,
-		quit:          quit,
 	}
 
 	_chain = cfg.Chain
@@ -254,7 +253,7 @@ func (p *Manager) GetPublicKey(id uint32) []byte {
 		return nil
 	}
 
-	pubkey := p.wallet.GetPubKey(id)
+	pubkey := p.wallet.GetPubKeyByIndex(id)
 	if pubkey == nil {
 		return nil
 	}

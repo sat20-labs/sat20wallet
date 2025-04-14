@@ -60,21 +60,14 @@ func parseConfigFromJS(jsConfig js.Value) (*wallet.Config, error) {
 	if chain := jsConfig.Get("Chain"); chain.Type() == js.TypeString {
 		cfg.Chain = chain.String()
 	} else {
-		return nil, fmt.Errorf("Chain must be a string")
-	}
-
-	// Mode
-	if mode := jsConfig.Get("Mode"); mode.Type() == js.TypeString {
-		cfg.Mode = mode.String()
-	} else {
-		return nil, fmt.Errorf("Mode must be a string")
+		cfg.Chain = "testnet"
 	}
 
 	// Log
 	if log := jsConfig.Get("Log"); log.Type() == js.TypeString {
 		cfg.Log = log.String()
 	} else {
-		return nil, fmt.Errorf("Log must be a string")
+		cfg.Log = "info"
 	}
 
 	return cfg, nil
@@ -236,7 +229,7 @@ func initManager(this js.Value, p []js.Value) any {
 	// return createJsRet(nil, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		_mgr = wallet.NewManager(cfg, make(chan struct{}))
+		_mgr = wallet.NewManager(cfg)
 		if _mgr == nil {
 			return nil, -1, "NewManager failed"
 		}
@@ -346,7 +339,7 @@ func importWallet(this js.Value, p []js.Value) any {
 		}
 		return map[string]any{
 			"walletId": id,
-			"address": _mgr.GetWallet().GetAddress(0),
+			"address": _mgr.GetWallet().GetAddress(),
 		}, 0, "ok"
 	})
 
@@ -558,7 +551,7 @@ func getWalletAddress(this js.Value, p []js.Value) any {
 			return nil, -1, "wallet is nil"
 		}
 		return map[string]any{
-			"address": wallet.GetAddress(uint32(id)),
+			"address": wallet.GetAddressByIndex(uint32(id)),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)

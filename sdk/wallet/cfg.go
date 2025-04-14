@@ -11,27 +11,8 @@ import (
 
 type Config struct {
 	Chain        string     `yaml:"chain"`
-	Mode         string     `yaml:"mode"`
-	Btcd         Bitcoin    `yaml:"btcd"`
-	IndexerL1    Indexer    `yaml:"indexer_layer1"`
-	IndexerL2    Indexer    `yaml:"indexer_layer2"`
 	Log          string     `yaml:"log"`
 	DB           string     `yaml:"db"`
-}
-
-type Bitcoin struct {
-	Host           string `yaml:"host"`
-	User           string `yaml:"user"`
-	Password       string `yaml:"password"`
-	Zmqpubrawblock string `yaml:"zmqpubrawblock"`
-	Zmqpubrawtx    string `yaml:"zmqpubrawtx"`
-}
-
-type Indexer struct {
-	Scheme string `yaml:"scheme"`
-	Host     string `yaml:"host"`
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
 }
 
 
