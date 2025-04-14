@@ -184,6 +184,7 @@ export default defineBackground(() => {
             Message.MessageAction.ADD_INPUTS_TO_PSBT,
             Message.MessageAction.ADD_OUTPUTS_TO_PSBT,
             Message.MessageAction.EXTRACT_TX_FROM_PSBT,
+            Message.MessageAction.SPLIT_ASSET,
           ]
 
           const checkWallet = async () => {

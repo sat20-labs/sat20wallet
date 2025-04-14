@@ -13,9 +13,9 @@ import RequestAccounts from '@/components/approve/RequestAccounts.vue'
 import SwitchNetwork from '@/components/approve/SwitchNetwork.vue'
 import SignMessage from '@/components/approve/SignMessage.vue'
 import SignPsbt from '@/components/approve/SignPsbt.vue'
-import Send from '@/components/approve/Send.vue'
-import service from '@/lib/service'
+import SplitAsset from '@/components/approve/SplitAsset.vue'
 import { Message } from '@/types/message'
+
 const { approveData, approve, reject } = useApprove()
 
 const approveComponentMap: any = {
@@ -23,7 +23,7 @@ const approveComponentMap: any = {
   [Message.MessageAction.SWITCH_NETWORK]: SwitchNetwork,
   [Message.MessageAction.SIGN_MESSAGE]: SignMessage,
   [Message.MessageAction.SIGN_PSBT]: SignPsbt,
-  [Message.MessageAction.SEND_BITCOIN]: Send,
+  [Message.MessageAction.SPLIT_ASSET]: SplitAsset,
 }
 
 const data = computed(() => {

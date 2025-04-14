@@ -206,6 +206,14 @@ export default defineUnlistedScript(() => {
       })
     }
 
+    async splitAsset(assetKey: string, amount: number): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.SPLIT_ASSET,
+        data: { asset_key: assetKey, amount },
+      })
+    }
+
     async getBalance(): Promise<Balance> {
       return this.send<Balance>({
         type: Message.MessageType.REQUEST,

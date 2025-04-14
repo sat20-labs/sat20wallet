@@ -128,7 +128,6 @@ export const useL2Assets = () => {
       if (newData) {
         allAssetList.value = []
         console.log('newData', newData.data)
-
         console.log('allAssetList.value', allAssetList.value)
         await parseAssetSummary()
 
