@@ -30,7 +30,11 @@ func newTestConf(mode, dbPath string) *Config {
 
 func createNode(t *testing.T, mode, dbPath string) *Manager {
 	cfg := newTestConf(mode, dbPath)
-	manager := NewManager(cfg)
+	db := NewKVDB(cfg.DB)
+	if db == nil {
+		t.Fatalf("NewKVDB failed")
+	}
+	manager := NewManager(cfg.Chain, db)
 
 	// mnemonice, err := manager.CreateWallet("123456")
 	// if err != nil {

@@ -229,7 +229,12 @@ func initManager(this js.Value, p []js.Value) any {
 	// return createJsRet(nil, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		_mgr = wallet.NewManager(cfg)
+		db := wallet.NewKVDB(cfg.DB)
+		if db == nil {
+			wallet.Log.Errorf("NewKVDB failed")
+			return nil, -1, "NewKVDB failed"
+		}
+		_mgr = wallet.NewManager(cfg.Chain, db)
 		if _mgr == nil {
 			return nil, -1, "NewManager failed"
 		}

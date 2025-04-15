@@ -11,11 +11,11 @@ import (
 
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 
-	"github.com/sat20-labs/indexer/common"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
-func NewManager(cfg *Config) *Manager {
+func NewManager(chain string, db common.KVDB) *Manager {
 	Log.Infof("sat20wallet_ver:%s, DB_ver:%s", SOFTWARE_VERSION, DB_VERSION)
 
 	//////////
@@ -27,9 +27,9 @@ func NewManager(cfg *Config) *Manager {
 		bStop:         false,
 	}
 
-	_chain = cfg.Chain
+	_chain = chain
 
-	mgr.db = NewKVDB(cfg.DB)
+	mgr.db = db
 	if mgr.db == nil {
 		Log.Errorf("NewKVDB failed")
 		return nil
@@ -534,9 +534,9 @@ func FinalizeSellOrder(psbtHex string, utxos []string, buyerAddress, serverAddre
 }
 
 func AddInputsToPsbt(psbtHex string, utxos []string) (string, error) {
-	utxosInfo := make([]*common.AssetsInUtxo, 0, len(utxos))
+	utxosInfo := make([]*indexer.AssetsInUtxo, 0, len(utxos))
 	for _, utxo := range utxos {
-		var info common.AssetsInUtxo
+		var info indexer.AssetsInUtxo
 		err := json.Unmarshal([]byte(utxo), &info)
 		if err != nil {
 			return "", err
@@ -557,9 +557,9 @@ func AddInputsToPsbt(psbtHex string, utxos []string) (string, error) {
 }
 
 func AddOutputsToPsbt(psbtHex string, utxos []string) (string, error) {
-	utxosInfo := make([]*common.AssetsInUtxo, 0, len(utxos))
+	utxosInfo := make([]*indexer.AssetsInUtxo, 0, len(utxos))
 	for _, utxo := range utxos {
-		var info common.AssetsInUtxo
+		var info indexer.AssetsInUtxo
 		err := json.Unmarshal([]byte(utxo), &info)
 		if err != nil {
 			return "", err

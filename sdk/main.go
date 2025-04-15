@@ -22,7 +22,12 @@ func main() {
 	cfg := InitConfig()
 	InitLog(cfg)
 
-	mgr := wallet.NewManager(cfg)
+	db := wallet.NewKVDB(cfg.DB)
+	if db == nil {
+		wallet.Log.Errorf("NewKVDB failed")
+		return
+	}
+	mgr := wallet.NewManager(cfg.Chain, db)
 	if mgr == nil {
 		wallet.Log.Info("NewSTPManager failed.")
 		return
