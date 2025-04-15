@@ -11,6 +11,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/sat20-labs/indexer/common"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 var _client *Manager
@@ -161,6 +162,27 @@ func TestPsbt_SatsNet(t *testing.T) {
 	}
 	fmt.Printf("TX: %s\n", txHex)
 
+}
+
+// 验证挂单的psbt的签名有效
+func TestVerifyPsbtString_satsnet(t *testing.T) {
+	psbtStr := "70736274ff01005f0100000001c2705e468dab059f54430bba8948f73099b3106b8f882d8e1799bdaa3786ea060000000000ffffffff010500000000000000002251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba0000000000010144640000000000000001046f72647801660970697a7a6174657374053130303a30012251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba01030483000000011341de619f109eec4ad8c9d7f59d6233281f077f8c40944837ebabd1363974f45281099bf5ac0abfaa64014e7649b41ca8982c5f8a3801d12176c10265dd10129226830000"
+	hexBytes, _ := hex.DecodeString(psbtStr)
+	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	partSignedTx := packet.UnsignedTx
+	partSignedTx.TxIn[0].Witness = swire.TxWitness{packet.Inputs[0].TaprootKeySpendSig}
+
+	PrintJsonTx_SatsNet(partSignedTx, "")
+	prevFectcher := PsbtPrevOutputFetcher_SatsNet(packet)
+	err = VerifySignedTx_SatsNet(partSignedTx, prevFectcher)
+	if err != nil {
+		Log.Errorf("VerifySignedTx_SatsNet failed, %v", err)
+		t.Fatal()
+	}
 }
 
 
