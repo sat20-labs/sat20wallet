@@ -26,7 +26,6 @@ type UtxoInfo struct {
 	Price     int64           `json:"Price"`       // 价格
 	AssetInfo *wire.AssetInfo `json:"TargetAsset"` // 非nil时，指要卖入的资产
 }
- 
 
 // parseUtxo 解析 "txid:vout" 字符串，返回 txid 与 vout
 func parseUtxo(utxo string) (string, uint32, error) {
@@ -42,8 +41,8 @@ func parseUtxo(utxo string) (string, uint32, error) {
 	return txid, uint32(vout), nil
 }
 
-// buildBatchSellOrder 使用 btcd 的 psbt 构造批量挂单交易
-func buildBatchSellOrder(utxos []*UtxoInfo, address, network string) (string, error) {
+// buildBatchSellOrder_SatsNet 使用 btcd 的 psbt 构造批量挂单交易
+func buildBatchSellOrder_SatsNet(utxos []*UtxoInfo, address, network string) (string, error) {
 
 	var params *chaincfg.Params
 	if strings.ToLower(network) == "testnet" {
@@ -117,7 +116,7 @@ func buildBatchSellOrder(utxos []*UtxoInfo, address, network string) (string, er
 	return psbtHex, nil
 }
 
-func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
+func finalizeSellOrder_SatsNet(packet *psbt.Packet, utxos []*UtxoInfo,
 	buyerAddress, serverAddress, network string, serviceFee, networkFee int64,
 ) (string, error) {
 	var params *chaincfg.Params
@@ -171,8 +170,8 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 		packet.UnsignedTx.AddTxIn(txIn)
 		input := psbt.PInput{
 			WitnessUtxo: &wire.TxOut{
-				Value: utxo.Value,
-				Assets: assets,
+				Value:    utxo.Value,
+				Assets:   assets,
 				PkScript: utxo.PkScript,
 			},
 			SighashType: SIGHASH_ALL,
@@ -180,7 +179,7 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 		packet.Inputs = append(packet.Inputs, input)
 	}
 
-	var priceValue int64 
+	var priceValue int64
 	var priceAssets wire.TxAssets
 	for _, output := range packet.UnsignedTx.TxOut {
 		priceValue += output.Value
@@ -198,11 +197,11 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 	if err != nil {
 		return "", fmt.Errorf("not enough asset, %v", err)
 	}
-	
+
 	if changeAsset.IsZero() {
 		changeAsset = nil
 	}
-	
+
 	txOut := wire.NewTxOut(changeValue, changeAsset, buyerPkScript)
 	packet.UnsignedTx.AddTxOut(txOut)
 	packet.Outputs = append(packet.Outputs, psbt.POutput{})
@@ -226,10 +225,9 @@ func finalizeSellOrder(packet *psbt.Packet, utxos []*UtxoInfo,
 	return finalPsbtHex, nil
 }
 
-
-// splitBatchSignedPsbt 将一个批量签名后的 PSBT 分割成单个 PSBT。
+// splitBatchSignedPsbt_SatsNet 将一个批量签名后的 PSBT 分割成单个 PSBT。
 // 参数 signedHex 为签名后的 PSBT 的 hex 字符串，network 可传 "testnet" 或 "mainnet"
-func splitBatchSignedPsbt(signedHex string, network string) ([]string, error) {
+func splitBatchSignedPsbt_SatsNet(signedHex string, network string) ([]string, error) {
 	// 将 hex 字符串解码为字节
 	rawBytes, err := hex.DecodeString(signedHex)
 	if err != nil {
@@ -278,10 +276,9 @@ func splitBatchSignedPsbt(signedHex string, network string) ([]string, error) {
 	return newPsbts, nil
 }
 
-
-// mergeBatchSignedPsbt 将多个 PSBT 合并成单个 PSBT
+// mergeBatchSignedPsbt_SatsNet 将多个 PSBT 合并成单个 PSBT
 // 参数 signedHex 为签名后的 PSBT 的 hex 字符串，network 可传 "testnet" 或 "mainnet"
-func mergeBatchSignedPsbt(signedHex []string, network string) (string, error) {
+func mergeBatchSignedPsbt_SatsNet(signedHex []string, network string) (string, error) {
 	// 将 hex 字符串解码为字节
 	newPacket, err := psbt.NewFromUnsignedTx(wire.NewMsgTx(wire.TxVersion))
 	if err != nil {
@@ -293,7 +290,7 @@ func mergeBatchSignedPsbt(signedHex []string, network string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to decode signedHex: %v", err)
 		}
-	
+
 		// 反序列化 PSBT 数据包
 		packet, err := psbt.NewFromRawBytes(bytes.NewReader(rawBytes), false)
 		if err != nil {
@@ -310,7 +307,7 @@ func mergeBatchSignedPsbt(signedHex []string, network string) (string, error) {
 			newPacket.UnsignedTx.AddTxIn(packet.UnsignedTx.TxIn[i])
 			newPacket.UnsignedTx.AddTxOut(packet.UnsignedTx.TxOut[i])
 		}
-		
+
 		for i := 0; i < len(packet.Inputs); i++ {
 			// 从原 PSBT 中复制对应输入的 witnessUtxo 与 finalScriptWitness 数据到新 PSBT 的第 0 个输入
 			newPacket.Inputs = append(newPacket.Inputs, packet.Inputs[i])
@@ -320,7 +317,7 @@ func mergeBatchSignedPsbt(signedHex []string, network string) (string, error) {
 			newPacket.Outputs = append(newPacket.Outputs, packet.Outputs[i])
 		}
 	}
-	
+
 	// 将新 PSBT 序列化为二进制后转为 hex 字符串
 	var buf bytes.Buffer
 	if err := newPacket.Serialize(&buf); err != nil {
@@ -330,7 +327,7 @@ func mergeBatchSignedPsbt(signedHex []string, network string) (string, error) {
 	return newPsbtHex, nil
 }
 
-func addInputsToPsbt(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string, error) {
+func addInputsToPsbt_SatsNet(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string, error) {
 	for _, utxo := range utxos {
 		assets := utxo.ToTxAssets()
 		txidStr, vout, err := parseUtxo(utxo.OutPoint)
@@ -348,8 +345,8 @@ func addInputsToPsbt(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string,
 		packet.UnsignedTx.AddTxIn(txIn)
 		input := psbt.PInput{
 			WitnessUtxo: &wire.TxOut{
-				Value: utxo.Value,
-				Assets: assets,
+				Value:    utxo.Value,
+				Assets:   assets,
 				PkScript: utxo.PkScript,
 			},
 			SighashType: SIGHASH_ALL,
@@ -365,15 +362,14 @@ func addInputsToPsbt(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string,
 	return psbtHex, nil
 }
 
-
-func addOutputsToPsbt(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string, error) {
+func addOutputsToPsbt_SatsNet(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string, error) {
 
 	for _, utxo := range utxos {
 		txOut := wire.NewTxOut(utxo.Value, utxo.ToTxAssets(), utxo.PkScript)
 		packet.UnsignedTx.AddTxOut(txOut)
 		packet.Outputs = append(packet.Outputs, psbt.POutput{})
 	}
-	
+
 	var buf bytes.Buffer
 	if err := packet.Serialize(&buf); err != nil {
 		return "", fmt.Errorf("failed to serialize psbt: %v", err)

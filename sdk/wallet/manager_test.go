@@ -21,8 +21,8 @@ func newTestConf(mode, dbPath string) *Config {
 	chain := "testnet4"
 	ret := &Config{
 		Chain: chain,
-		Log: "debug",
-		DB:  dbPath,
+		Log:   "debug",
+		DB:    dbPath,
 	}
 
 	return ret
@@ -123,7 +123,6 @@ func TestPsbt(t *testing.T) {
 	PrintJsonTx(finalTx, "")
 }
 
-
 func TestPsbt_SatsNet(t *testing.T) {
 	prepare(t)
 
@@ -135,7 +134,7 @@ func TestPsbt_SatsNet(t *testing.T) {
 	fmt.Printf("%s\n", signed)
 
 	hexBytes, _ := hex.DecodeString(signed)
-	packet, err :=  spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
 	if err != nil {
 		t.Fatal()
 	}
@@ -189,7 +188,6 @@ func TestVerifyPsbtString_satsnet(t *testing.T) {
 	}
 }
 
-
 func toPsbt(psbtHex string) (*psbt.Packet, error) {
 	hexBytes, _ := hex.DecodeString(psbtHex)
 	return psbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
@@ -222,7 +220,6 @@ func TestVerifySignedPsbtString(t *testing.T) {
 		t.Fatal()
 	}
 }
-
 
 func TestVerifySignedPsbtString_satsnet(t *testing.T) {
 	psbtStr := "70736274ff0100f801000000021eb0a1d7e09e630bb58199ac5045bd73687b2b3a906d6f018229e23bb45c09610100000000ffffffff2c484352d8b86b3f00f7d78b587ae0f6b6dff6cb129a61fa2f73e99b9ad4b9840100000000ffffffff03200300000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb38de2600000000000001046f7264780166097261726570697a7a61053430303a30002251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba0a00000000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b0000000000010144020300000000000001046f7264780166097261726570697a7a61053430303a3000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb3801030483000000011341436f5765bdbd7b793c3a0f56438d5abc72a9d03bd3829ead52c2b40fcd82511e565ac6e0a14e458be0f4dae7cc17595f2f749cb51bf517d2bee530056f1a136b830001012c1027000000000000002251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba0113406a3e45e58ae465cb668cd8a2b992cf79caf052e05316c3df16992a370a43388c660fe70fdd0f2154e10730e549e195306951f2aec57c09466ef0c83b987ae22500000000"
@@ -289,9 +286,8 @@ func TestBuildOrder(m *testing.T) {
 	utxo, _ := json.Marshal(info)
 	fmt.Printf("%s\n", string(utxo))
 
-	BuildBatchSellOrder([]string{string(utxo)}, "tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv", "testnet")
+	BuildBatchSellOrder_SatsNet([]string{string(utxo)}, "tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv", "testnet")
 }
-
 
 func TestFinalizeOrder(t *testing.T) {
 
@@ -312,11 +308,10 @@ func TestFinalizeOrder(t *testing.T) {
 		"{\"UtxoId\":1580548227073,\"Outpoint\":\"15cf5d8986cbd8f806059ad2a317cf8c389f279656e289f330bba5504c970094:1\",\"Value\":1000,\"PkScript\":\"USBmGjbRHN3OJU7Y44vUbF7Oh71vqRPudPlNcHWRyBfLOA==\",\"Assets\":null}",
 		"{\"UtxoId\":1065152151553,\"Outpoint\":\"ca4831409cb48ef4708f740bf1f4a0398beea5ef317e70ae9c67348c1e94323f:1\",\"Value\":100,\"PkScript\":\"USBmGjbRHN3OJU7Y44vUbF7Oh71vqRPudPlNcHWRyBfLOA==\",\"Assets\":null}",
 		"{\"UtxoId\":1030792413186,\"Outpoint\":\"ee7f3526663e7ebdfd4fb577941cdeab12729d2d220d651798369bfe106c4b2a:2\",\"Value\":90,\"PkScript\":\"USBmGjbRHN3OJU7Y44vUbF7Oh71vqRPudPlNcHWRyBfLOA==\",\"Assets\":null}",
-
 	}
 
-	finalPsbt, err := FinalizeSellOrder(psbt, utxos, 
-		"tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv", 
+	finalPsbt, err := FinalizeSellOrder_SatsNet(psbt, utxos,
+		"tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv",
 		"tb1pttjr9292tea2nr28ca9zswgdhz0dasnz6n3v58mtg9cyf9wqr49sv8zjep",
 		"testnet",
 		10,
@@ -328,10 +323,9 @@ func TestFinalizeOrder(t *testing.T) {
 	fmt.Printf("final psbt: %s\n", finalPsbt)
 }
 
-
 func TestSplitBatchSignedPsbt(t *testing.T) {
 	psbt := "70736274ff01007701000000012a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0100000000ffffffff01200300000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380000000000010144900100000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380103048300000001134062387e222f742ea1d6685adc9b9ee2d03c06167b4cfe4802c4eee0ac7013729c775604897d30ddd97b48156a7a07619e13eccd241572b54309cae7dbca09384c0000"
-	result, err := SplitBatchSignedPsbt(psbt, "testnet")
+	result, err := SplitBatchSignedPsbt_SatsNet(psbt, "testnet")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,13 +351,13 @@ func TestPsbtFullFlow(t *testing.T) {
 	assset := common.DisplayAsset{
 		AssetName: AssetName{
 			Protocol: "ordx",
-			Type: "f",
-			Ticker: "rarepizza",
+			Type:     "f",
+			Ticker:   "rarepizza",
 		},
-		Amount: "100",
-		Precision: 0,
+		Amount:     "100",
+		Precision:  0,
 		BindingSat: 1,
-		Offsets: nil,
+		Offsets:    nil,
 	}
 	info := UtxoInfo{
 		AssetsInUtxo: common.AssetsInUtxo{
@@ -390,7 +384,7 @@ func TestPsbtFullFlow(t *testing.T) {
 
 	sellerAddr := _client.wallet.GetAddress()
 
-	psbt, err := BuildBatchSellOrder([]string{string(utxo)}, 
+	psbt, err := BuildBatchSellOrder_SatsNet([]string{string(utxo)},
 		sellerAddr, "testnet",
 	)
 	if err != nil {
@@ -398,7 +392,7 @@ func TestPsbtFullFlow(t *testing.T) {
 	}
 	fmt.Printf("BuildBatchSellOrder: %s", psbt)
 
-	psbts, err := SplitBatchSignedPsbt(psbt, "testnet")
+	psbts, err := SplitBatchSignedPsbt_SatsNet(psbt, "testnet")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,19 +419,18 @@ func TestPsbtFullFlow(t *testing.T) {
 			PkScript: pkScript2,
 			Assets:   nil,
 		},
-		Price: 0,
+		Price:     0,
 		AssetInfo: nil,
 	}
 	utxo2, _ := json.Marshal(info2)
 	fmt.Printf("%s\n", string(utxo2))
 
-
 	utxos := []string{
 		string(utxo2),
 	}
 
-	finalPsbt, err := FinalizeSellOrder(signedSellPsbt, utxos, 
-		buyerAddr, 
+	finalPsbt, err := FinalizeSellOrder_SatsNet(signedSellPsbt, utxos,
+		buyerAddr,
 		"tb1pttjr9292tea2nr28ca9zswgdhz0dasnz6n3v58mtg9cyf9wqr49sv8zjep",
 		"testnet",
 		10,
@@ -447,7 +440,6 @@ func TestPsbtFullFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Printf("FinalizeSellOrder: %s\n", finalPsbt)
-
 
 	signedFinalPsbt, err := _client2.SignPsbt_SatsNet(finalPsbt, false)
 	if err != nil {
@@ -480,6 +472,5 @@ func TestPsbtFullFlow(t *testing.T) {
 		Log.Errorf("VerifySignedTx_SatsNet failed, %v", err)
 		t.Fatal()
 	}
-
 
 }

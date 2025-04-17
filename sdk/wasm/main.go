@@ -4,8 +4,8 @@
 package main
 
 import (
-	"encoding/hex"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strconv"
@@ -22,7 +22,6 @@ const (
 
 var _mgr *wallet.Manager
 var _callback interface{}
-
 
 type AsyncTaskFunc func() (interface{}, int, string)
 
@@ -73,7 +72,6 @@ func parseConfigFromJS(jsConfig js.Value) (*wallet.Config, error) {
 	return cfg, nil
 }
 
-
 func dbTest(this js.Value, p []js.Value) any {
 	if len(p) < 2 {
 		const errMsg = "Expected 2 parameters: key, value"
@@ -93,7 +91,6 @@ func dbTest(this js.Value, p []js.Value) any {
 	}
 	value := p[1].String()
 
-
 	db := wallet.NewKVDB("")
 	err := db.Write([]byte(key), []byte(value))
 	if err != nil {
@@ -110,7 +107,7 @@ func dbTest(this js.Value, p []js.Value) any {
 	if value != string(value2) {
 		msg = fmt.Sprintf("input %s, but output %s", value, string(value2))
 	}
-	
+
 	return createJsRet(nil, 0, msg)
 }
 
@@ -220,7 +217,6 @@ func initManager(this js.Value, p []js.Value) any {
 	}
 	wallet.Log.SetLevel(logLevel)
 
-
 	// _mgr = wallet.NewManager(cfg, make(chan struct{}))
 	// if _mgr == nil {
 	// 	return createJsRet(nil, -1, "NewManager failed")
@@ -266,7 +262,7 @@ func createWallet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "password parameter should be a string")
 	}
 	password := p[0].String()
-	
+
 	// id, mnemonic, err := _mgr.CreateWallet(password)
 	// if err != nil {
 	// 	return createJsRet(nil, -1, err.Error())
@@ -327,7 +323,7 @@ func importWallet(this js.Value, p []js.Value) any {
 	password := p[1].String()
 
 	wallet.Log.Infof("ImportWallet %s %s", mnemonic, password)
-	
+
 	// id, err := _mgr.ImportWallet(mnemonic, password)
 	// if err != nil {
 	// 	return createJsRet(nil, -1, err.Error())
@@ -344,7 +340,7 @@ func importWallet(this js.Value, p []js.Value) any {
 		}
 		return map[string]any{
 			"walletId": id,
-			"address": _mgr.GetWallet().GetAddress(),
+			"address":  _mgr.GetWallet().GetAddress(),
 		}, 0, "ok"
 	})
 
@@ -362,7 +358,7 @@ func unlockWallet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "password parameter should be a string")
 	}
 	password := p[0].String()
-	
+
 	// id, err := _mgr.UnlockWallet(password)
 	// if err != nil {
 	// 	return createJsRet(nil, -1, err.Error())
@@ -411,7 +407,7 @@ func getAllWallets(this js.Value, p []js.Value) any {
 		ids := _mgr.GetAllWallets()
 
 		type WalletIdAndAccounts struct {
-			Id int64
+			Id       int64
 			Accounts int
 		}
 		result := make([]*WalletIdAndAccounts, 0)
@@ -540,7 +536,7 @@ func getWalletAddress(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Id parameter should be a number")
 	}
 	id := p[0].Int()
-	
+
 	// wallet := _mgr.GetWallet()
 	// if wallet == nil {
 	// 	return createJsRet(nil, -1, "wallet is nil")
@@ -573,7 +569,7 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Id parameter should be a number")
 	}
 	id := p[0].Int()
-	
+
 	// pubkey := _mgr.GetPublicKey(uint32(id))
 	// data := map[string]any{
 	// 	"pubKey": hex.EncodeToString(pubkey),
@@ -795,7 +791,6 @@ func signPsbt(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
-
 func signPsbts(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -877,13 +872,12 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		wallet.Log.Infof("SignPsbt_SatsNet output: %s", result)
-		return map[string]any {
+		return map[string]any{
 			"psbt": result,
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
 }
-
 
 func signPsbts_SatsNet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -931,7 +925,6 @@ func signPsbts_SatsNet(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
-
 func extractTxFromPsbt(this js.Value, p []js.Value) any {
 
 	if len(p) < 1 {
@@ -947,14 +940,13 @@ func extractTxFromPsbt(this js.Value, p []js.Value) any {
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	
+
 	data := map[string]any{
 		"tx": result,
 	}
-	
+
 	return createJsRet(data, 0, "ok")
 }
-
 
 func extractTxFromPsbt_SatsNet(this js.Value, p []js.Value) any {
 
@@ -971,16 +963,15 @@ func extractTxFromPsbt_SatsNet(this js.Value, p []js.Value) any {
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	
+
 	data := map[string]any{
 		"tx": result,
 	}
-	
+
 	return createJsRet(data, 0, "ok")
 }
 
-
-func buildBatchSellOrder(this js.Value, p []js.Value) any {
+func buildBatchSellOrder_SatsNet(this js.Value, p []js.Value) any {
 
 	if len(p) < 3 {
 		return createJsRet(nil, -1, "Expected 3 parameters")
@@ -1001,20 +992,20 @@ func buildBatchSellOrder(this js.Value, p []js.Value) any {
 	}
 	network := p[2].String()
 
-	result, err := wallet.BuildBatchSellOrder(utxoList, address, network)
+	result, err := wallet.BuildBatchSellOrder_SatsNet(utxoList, address, network)
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	wallet.Log.Infof("BuildBatchSellOrder: %s", result)
-	
+
 	data := map[string]any{
 		"psbt": result,
 	}
-	
+
 	return createJsRet(data, 0, "ok")
 }
 
-func splitBatchSignedPsbt(this js.Value, p []js.Value) any {
+func splitBatchSignedPsbt_SatsNet(this js.Value, p []js.Value) any {
 
 	if len(p) < 2 {
 		return createJsRet(nil, -1, "Expected 2 parameters")
@@ -1030,26 +1021,26 @@ func splitBatchSignedPsbt(this js.Value, p []js.Value) any {
 	}
 	network := p[1].String()
 
-	wallet.Log.Infof("splitBatchSignedPsbt %s %s", psbt, network)
-	result, err := wallet.SplitBatchSignedPsbt(psbt, network)
+	wallet.Log.Infof("SplitBatchSignedPsbt_SatsNet %s %s", psbt, network)
+	result, err := wallet.SplitBatchSignedPsbt_SatsNet(psbt, network)
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	wallet.Log.Infof("splitBatchSignedPsbt: %s", result)
+	wallet.Log.Infof("SplitBatchSignedPsbt_SatsNet: %s", result)
 
 	var str []interface{}
 	for _, r := range result {
 		str = append(str, r)
 	}
-	
-	data := map[string]any {
+
+	data := map[string]any{
 		"psbts": str,
 	}
-	
+
 	return createJsRet(data, 0, "ok")
 }
 
-func mergeBatchSignedPsbt(this js.Value, p []js.Value) any {
+func mergeBatchSignedPsbt_SatsNet(this js.Value, p []js.Value) any {
 
 	if len(p) < 2 {
 		return createJsRet(nil, -1, "Expected 2 parameters")
@@ -1066,21 +1057,20 @@ func mergeBatchSignedPsbt(this js.Value, p []js.Value) any {
 	network := p[1].String()
 
 	wallet.Log.Infof("MergeBatchSignedPsbt %s %s", psbtsHex, network)
-	result, err := wallet.MergeBatchSignedPsbt(psbtsHex, network)
+	result, err := wallet.MergeBatchSignedPsbt_SatsNet(psbtsHex, network)
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	wallet.Log.Infof("MergeBatchSignedPsbt: %s", result)
-	
-	data := map[string]any {
+
+	data := map[string]any{
 		"psbt": result,
 	}
-	
+
 	return createJsRet(data, 0, "ok")
 }
 
-
-func finalizeSellOrder(this js.Value, p []js.Value) any {
+func finalizeSellOrder_SatsNet(this js.Value, p []js.Value) any {
 
 	if len(p) < 7 {
 		return createJsRet(nil, -1, "Expected 7 parameters")
@@ -1121,21 +1111,20 @@ func finalizeSellOrder(this js.Value, p []js.Value) any {
 	}
 	networkFee := p[6].Int()
 
-	result, err := wallet.FinalizeSellOrder(psbt, utxoList, address1, address2, network, int64(serviceFee), int64(networkFee))
+	result, err := wallet.FinalizeSellOrder_SatsNet(psbt, utxoList, address1, address2, network, int64(serviceFee), int64(networkFee))
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 	wallet.Log.Infof("FinalizeSellOrder: %s", result)
-	
+
 	data := map[string]any{
 		"psbt": result,
 	}
-	
+
 	return createJsRet(data, 0, "ok")
 }
 
-
-func addInputsToPsbt(this js.Value, p []js.Value) any {
+func addInputsToPsbt_SatsNet(this js.Value, p []js.Value) any {
 
 	if len(p) < 2 {
 		return createJsRet(nil, -1, "Expected 2 parameters")
@@ -1151,20 +1140,19 @@ func addInputsToPsbt(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 
-	result, err := wallet.AddInputsToPsbt(psbt, utxoList)
+	result, err := wallet.AddInputsToPsbt_SatsNet(psbt, utxoList)
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	
+
 	data := map[string]any{
 		"psbt": result,
 	}
-	
+
 	return createJsRet(data, 0, "ok")
 }
 
-
-func addOutputsToPsbt(this js.Value, p []js.Value) any {
+func addOutputsToPsbt_SatsNet(this js.Value, p []js.Value) any {
 
 	if len(p) < 2 {
 		return createJsRet(nil, -1, "Expected 2 parameters")
@@ -1180,18 +1168,17 @@ func addOutputsToPsbt(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 
-	result, err := wallet.AddOutputsToPsbt(psbt, utxoList)
+	result, err := wallet.AddOutputsToPsbt_SatsNet(psbt, utxoList)
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	
+
 	data := map[string]any{
 		"psbt": result,
 	}
-	
+
 	return createJsRet(data, 0, "ok")
 }
-
 
 func getVersion(this js.Value, p []js.Value) any {
 	data := map[string]any{
@@ -1286,14 +1273,15 @@ func main() {
 
 	obj.Set("getVersion", js.FuncOf(getVersion))
 	obj.Set("registerCallback", js.FuncOf(registerCallbacks))
+
 	obj.Set("extractTxFromPsbt", js.FuncOf(extractTxFromPsbt))
 	obj.Set("extractTxFromPsbt_SatsNet", js.FuncOf(extractTxFromPsbt_SatsNet))
-	obj.Set("buildBatchSellOrder", js.FuncOf(buildBatchSellOrder))
-	obj.Set("finalizeSellOrder", js.FuncOf(finalizeSellOrder))
-	obj.Set("splitBatchSignedPsbt", js.FuncOf(splitBatchSignedPsbt))
-	obj.Set("mergeBatchSignedPsbt", js.FuncOf(mergeBatchSignedPsbt))
-	obj.Set("addInputsToPsbt", js.FuncOf(addInputsToPsbt))
-	obj.Set("addOutputsToPsbt", js.FuncOf(addOutputsToPsbt))
+	obj.Set("buildBatchSellOrder_SatsNet", js.FuncOf(buildBatchSellOrder_SatsNet))
+	obj.Set("finalizeSellOrder_SatsNet", js.FuncOf(finalizeSellOrder_SatsNet))
+	obj.Set("splitBatchSignedPsbt_SatsNet", js.FuncOf(splitBatchSignedPsbt_SatsNet))
+	obj.Set("mergeBatchSignedPsbt_SatsNet", js.FuncOf(mergeBatchSignedPsbt_SatsNet))
+	obj.Set("addInputsToPsbt_SatsNet", js.FuncOf(addInputsToPsbt_SatsNet))
+	obj.Set("addOutputsToPsbt_SatsNet", js.FuncOf(addOutputsToPsbt_SatsNet))
 
 	js.Global().Set(module, obj)
 	wallet.Log.SetLevel(logrus.DebugLevel)
