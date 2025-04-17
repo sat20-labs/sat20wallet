@@ -239,8 +239,7 @@ interface SatsnetStp {
   getTickerInfo(asset: string): SatsnetResponse
   runesAmtV2ToV3(asset, runesAmt: string | number): SatsnetResponse
   runesAmtV3ToV2(asset, runesAmt: string | number): SatsnetResponse
-
-  lockUtxo(
+  lockToChannel(
     chanPoint: string,
     assetName: string,
     amt: number,
@@ -286,7 +285,7 @@ interface SatsnetStp {
     amt: number
   ): SatsnetResponse
   sendUtxos(address: string, utxos: string[], amt: number): SatsnetResponse
-  unlockUtxo(
+  unlockFromChannel(
     channelUtxo: string,
     assetName: string,
     amt: number,
@@ -311,6 +310,32 @@ interface SatsnetStp {
     fees: string[],
     feeRate: number
   ): SatsnetResponse<{ txId: string; value: number }>
+
+  getAllLockedUtxo(): Promise<SatsnetResponse<any>>
+  getAllLockedUtxo_SatsNet(): Promise<SatsnetResponse<any>>
+  lockUtxo(address: string, utxo: any, reason?: string): Promise<SatsnetResponse<any>>
+  lockUtxo_SatsNet(address: string, utxo: any, reason?: string): Promise<SatsnetResponse<any>>
+  unlockUtxo(address: string, utxo: any): Promise<SatsnetResponse<any>>
+  unlockUtxo_SatsNet(address: string, utxo: any): Promise<SatsnetResponse<any>>
+
+  // --- Added UTXO Getter Methods ---
+  getUtxos(): Promise<SatsnetResponse<any>> // Replace 'any' with specific return type if known
+  getUtxos_SatsNet(): Promise<SatsnetResponse<any>> // Replace 'any' with specific return type if known
+  getUtxosWithAsset(address: string, amt: number, assetName: string,): Promise<SatsnetResponse<any>> // Add params, replace 'any'
+  getUtxosWithAsset_SatsNet(address: string, amt: number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
+  getUtxosWithAssetV2(address: string, amt: number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
+  getUtxosWithAssetV2_SatsNet(address: string, amt: number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
+
+  // 新增方法定义
+  getAssetAmount(
+    address: string,
+    assetName: string
+  ): Promise<SatsnetResponse<{ amount: number; value: number }>>;
+
+  getAssetAmount_SatsNet(
+    address: string,
+    assetName: string
+  ): Promise<SatsnetResponse<{ amount: number; value: number }>>;
 }
 declare interface Window {
   sat20wallet_wasm: WalletManager
@@ -320,4 +345,6 @@ declare interface Window {
 declare interface GlobalThis {
   sat20wallet_wasm: WalletManager
   stp_wasm: SatsnetStp
+  sat20: Sat20
 }
+

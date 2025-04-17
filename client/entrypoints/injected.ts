@@ -283,6 +283,129 @@ export default defineUnlistedScript(() => {
         data: { psbtHex, chain },
       })
     }
+
+    async lockUtxo(address: string, utxo: any, reason?: string): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.LOCK_UTXO,
+        data: { address, utxo, reason },
+      })
+    }
+
+    async lockUtxo_SatsNet(address: string, utxo: any, reason?: string): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.LOCK_UTXO_SATSNET,
+        data: { address, utxo, reason },
+      })
+    }
+
+    async unlockUtxo(address: string, utxo: any): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.UNLOCK_UTXO,
+        data: { address, utxo },
+      })
+    }
+
+    async unlockUtxo_SatsNet(address: string, utxo: any): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.UNLOCK_UTXO_SATSNET,
+        data: { address, utxo },
+      })
+    }
+
+    async getAllLockedUtxo(): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_ALL_LOCKED_UTXO,
+      })
+    }
+
+    async getAllLockedUtxo_SatsNet(): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_ALL_LOCKED_UTXO_SATSNET,
+      })
+    }
+
+    async unlockFromChannel(
+      channelUtxo: string,
+      assetName: string,
+      amt: number,
+      feeUtxoList?: any[]
+    ): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.UNLOCK_FROM_CHANNEL,
+        data: { channelUtxo, assetName, amt, feeUtxoList },
+      })
+    }
+
+    async getUtxos(): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_UTXOS,
+      })
+    }
+
+    async getUtxos_SatsNet(): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_UTXOS_SATSNET,
+      })
+    }
+
+    async getUtxosWithAsset(address: string, assetName: string, amt: number): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_UTXOS_WITH_ASSET,
+        data: { address, assetName, amt },
+      })
+    }
+
+    async getUtxosWithAsset_SatsNet(address: string, assetName: string, amt: number): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_UTXOS_WITH_ASSET_SATSNET,
+        data: { address, assetName, amt },
+      })
+    }
+
+    async getUtxosWithAssetV2(address: string, assetName: string, amt: number): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_UTXOS_WITH_ASSET_V2,
+        data: { address, assetName, amt },
+      })
+    }
+
+    async getUtxosWithAssetV2_SatsNet(address: string, assetName: string, amt: number): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_UTXOS_WITH_ASSET_V2_SATSNET,
+        data: { address, assetName, amt },
+      })
+    }
+
+    async getAssetAmount(address: string, assetName: string): Promise<{ amount: string; value: string }> {
+      return this.send<{ amount: string; value: string }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_ASSET_AMOUNT,
+        data: { address, assetName },
+      });
+    }
+
+    async getAssetAmount_SatsNet(address: string, assetName: string): Promise<{ amount: string; value: string }> {
+      console.log(Message.MessageAction);
+      
+      return this.send<{ amount: string; value: string }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_ASSET_AMOUNT_SATSNET,
+        data: { address, assetName },
+      });
+    }
   }
 
   const sat20 = new Sat20()

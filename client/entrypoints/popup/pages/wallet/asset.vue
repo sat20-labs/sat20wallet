@@ -127,7 +127,7 @@ const unlockUtxo = async ({ chanid, amt, feeUtxos = [], asset_name }: any) => {
 
   loading.value = true
 
-  const [err, result] = await satsnetStp.unlockUtxo(chanid, asset_name, amt, [])
+  const [err, result] = await satsnetStp.unlockFromChannel(chanid, asset_name, amt, [])
   if (err) {
     toast({
       title: 'error',
@@ -156,7 +156,7 @@ const lockUtxo = async ({
   console.log('lock')
 
   loading.value = true
-  const [err, result] = await satsnetStp.lockUtxo(
+  const [err, result] = await satsnetStp.lockToChannel(
     chanid,
     asset_name,
     amt,

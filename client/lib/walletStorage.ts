@@ -75,8 +75,6 @@ class WalletStorage {
     const loadPromises = Object.keys(defaultState).map(async (key) => {
       const storageKey = key as keyof WalletState
       const value = await storage.getItem(this.getStorageKey(storageKey))
-      console.log('storageKey', storageKey)
-      console.log('value', value)
       if (value !== null) {
         ;(this.state[storageKey] as any) =
           value as WalletState[typeof storageKey]

@@ -2,6 +2,7 @@ import { walletStorage } from '@/lib/walletStorage'
 import { Network, Balance } from '@/types'
 import { ordxApi } from '@/apis'
 import { psbt2tx } from '@/utils/btc'
+import stp from '@/utils/stp'
 
 class Service {
   async getHasWallet(): Promise<boolean> {
@@ -162,6 +163,81 @@ class Service {
       return [err, undefined]
     }
     return [undefined, res]
+  }
+
+  async lockUtxo(address: string, utxo: any, reason?: string): Promise<[Error | undefined, any | undefined]> {
+    return stp.lockUtxo(address, utxo, reason)
+  }
+
+  async lockUtxo_SatsNet(address: string, utxo: any, reason?: string): Promise<[Error | undefined, any | undefined]> {
+    return stp.lockUtxo_SatsNet(address, utxo, reason)
+  }
+
+  async unlockUtxo(address: string, utxo: any): Promise<[Error | undefined, any | undefined]> {
+    return stp.unlockUtxo(address, utxo)
+  }
+
+  async unlockUtxo_SatsNet(address: string, utxo: any): Promise<[Error | undefined, any | undefined]> {
+    return stp.unlockUtxo_SatsNet(address, utxo)
+  }
+
+  async getAllLockedUtxo(): Promise<[Error | undefined, any | undefined]> {
+    return stp.getAllLockedUtxo()
+  }
+
+  async getAllLockedUtxo_SatsNet(): Promise<[Error | undefined, any | undefined]> {
+    return stp.getAllLockedUtxo_SatsNet()
+  }
+
+  async lockToChannel(
+    chanPoint: string,
+    assetName: string,
+    amt: number,
+    utxos: string[],
+    feeUtxoList?: any[]
+  ): Promise<[Error | undefined, any | undefined]> {
+    return stp.lockToChannel(chanPoint, assetName, amt, utxos, feeUtxoList)
+  }
+
+  async unlockFromChannel(
+    channelUtxo: string,
+    assetName: string,
+    amt: number,
+    feeUtxoList?: any[]
+  ): Promise<[Error | undefined, any | undefined]> {
+    return stp.unlockFromChannel(channelUtxo, assetName, amt, feeUtxoList)
+  }
+
+  async getUtxos(): Promise<[Error | undefined, any | undefined]> {
+    return stp.getUtxos()
+  }
+
+  async getUtxos_SatsNet(): Promise<[Error | undefined, any | undefined]> {
+    return stp.getUtxos_SatsNet()
+  }
+
+  async getUtxosWithAsset(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
+    return stp.getUtxosWithAsset(address, amt, assetName)
+  }
+
+  async getUtxosWithAsset_SatsNet(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
+    return stp.getUtxosWithAsset_SatsNet(address, amt, assetName)
+  }
+
+  async getUtxosWithAssetV2(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
+    return stp.getUtxosWithAssetV2(address, amt, assetName)
+  }
+
+  async getUtxosWithAssetV2_SatsNet(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
+    return stp.getUtxosWithAssetV2_SatsNet(address, amt, assetName)
+  }
+
+  async getAssetAmount(address: string, assetName: string): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
+    return stp.getAssetAmount(address, assetName);
+  }
+
+  async getAssetAmount_SatsNet(address: string, assetName: string): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
+    return stp.getAssetAmount_SatsNet(address, assetName);
   }
 }
 

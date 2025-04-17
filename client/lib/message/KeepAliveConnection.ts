@@ -1,7 +1,7 @@
 import Port, { IPort } from './Port'
 
 export default class KeepAliveConnection {
-  private static KEEP_ALIVE_INTERVAL = 3000
+  private static KEEP_ALIVE_INTERVAL = 1000
   #port: IPort | null = null
   #timer: any = null
   #origin: string = 'UNKNOWN'
