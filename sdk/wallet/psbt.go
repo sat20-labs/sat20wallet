@@ -278,6 +278,58 @@ func splitBatchSignedPsbt(signedHex string, network string) ([]string, error) {
 	return newPsbts, nil
 }
 
+
+// mergeBatchSignedPsbt 将多个 PSBT 合并成单个 PSBT
+// 参数 signedHex 为签名后的 PSBT 的 hex 字符串，network 可传 "testnet" 或 "mainnet"
+func mergeBatchSignedPsbt(signedHex []string, network string) (string, error) {
+	// 将 hex 字符串解码为字节
+	newPacket, err := psbt.NewFromUnsignedTx(wire.NewMsgTx(wire.TxVersion))
+	if err != nil {
+		return "", fmt.Errorf("failed to create new psbt: %v", err)
+	}
+
+	for _, u := range signedHex {
+		rawBytes, err := hex.DecodeString(u)
+		if err != nil {
+			return "", fmt.Errorf("failed to decode signedHex: %v", err)
+		}
+	
+		// 反序列化 PSBT 数据包
+		packet, err := psbt.NewFromRawBytes(bytes.NewReader(rawBytes), false)
+		if err != nil {
+			return "", fmt.Errorf("failed to deserialize psbt: %v", err)
+		}
+
+		// 获取输入数量，同时确保输入和输出数量一致（批量 PSBT 中每个输入对应一个输出）
+		inputCount := len(packet.UnsignedTx.TxIn)
+		if inputCount != len(packet.UnsignedTx.TxOut) {
+			return "", fmt.Errorf("input and output count mismatch in batch psbt")
+		}
+
+		for i := 0; i < inputCount; i++ {
+			newPacket.UnsignedTx.AddTxIn(packet.UnsignedTx.TxIn[i])
+			newPacket.UnsignedTx.AddTxOut(packet.UnsignedTx.TxOut[i])
+		}
+		
+		for i := 0; i < len(packet.Inputs); i++ {
+			// 从原 PSBT 中复制对应输入的 witnessUtxo 与 finalScriptWitness 数据到新 PSBT 的第 0 个输入
+			newPacket.Inputs = append(newPacket.Inputs, packet.Inputs[i])
+		}
+		for i := 0; i < len(packet.Outputs); i++ {
+			// 从原 PSBT 中复制对应输入的 witnessUtxo 与 finalScriptWitness 数据到新 PSBT 的第 0 个输入
+			newPacket.Outputs = append(newPacket.Outputs, packet.Outputs[i])
+		}
+	}
+	
+	// 将新 PSBT 序列化为二进制后转为 hex 字符串
+	var buf bytes.Buffer
+	if err := newPacket.Serialize(&buf); err != nil {
+		return "", fmt.Errorf("failed to serialize new psbt: %v", err)
+	}
+	newPsbtHex := hex.EncodeToString(buf.Bytes())
+	return newPsbtHex, nil
+}
+
 func addInputsToPsbt(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string, error) {
 	for _, utxo := range utxos {
 		assets := utxo.ToTxAssets()

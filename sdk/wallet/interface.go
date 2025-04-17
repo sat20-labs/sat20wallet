@@ -507,6 +507,10 @@ func SplitBatchSignedPsbt(signedHex string, network string) ([]string, error) {
 	return splitBatchSignedPsbt(signedHex, network)
 }
 
+func MergeBatchSignedPsbt(signedHex []string, network string) (string, error) {
+	return mergeBatchSignedPsbt(signedHex, network)
+}
+
 func FinalizeSellOrder(psbtHex string, utxos []string, buyerAddress, serverAddress, network string,
 	serviceFee, networkFee int64) (string, error) {
 	utxosInfo := make([]*UtxoInfo, 0, len(utxos))

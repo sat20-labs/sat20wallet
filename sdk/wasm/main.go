@@ -1049,6 +1049,36 @@ func splitBatchSignedPsbt(this js.Value, p []js.Value) any {
 	return createJsRet(data, 0, "ok")
 }
 
+func mergeBatchSignedPsbt(this js.Value, p []js.Value) any {
+
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	psbtsHex, err := getStringVector(p[0])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "network parameter should be a string")
+	}
+	network := p[1].String()
+
+	wallet.Log.Infof("MergeBatchSignedPsbt %s %s", psbtsHex, network)
+	result, err := wallet.MergeBatchSignedPsbt(psbtsHex, network)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	wallet.Log.Infof("MergeBatchSignedPsbt: %s", result)
+	
+	data := map[string]any {
+		"psbt": result,
+	}
+	
+	return createJsRet(data, 0, "ok")
+}
+
 
 func finalizeSellOrder(this js.Value, p []js.Value) any {
 
@@ -1261,6 +1291,7 @@ func main() {
 	obj.Set("buildBatchSellOrder", js.FuncOf(buildBatchSellOrder))
 	obj.Set("finalizeSellOrder", js.FuncOf(finalizeSellOrder))
 	obj.Set("splitBatchSignedPsbt", js.FuncOf(splitBatchSignedPsbt))
+	obj.Set("mergeBatchSignedPsbt", js.FuncOf(mergeBatchSignedPsbt))
 	obj.Set("addInputsToPsbt", js.FuncOf(addInputsToPsbt))
 	obj.Set("addOutputsToPsbt", js.FuncOf(addOutputsToPsbt))
 
