@@ -21,7 +21,7 @@ This template should help get you started developing with Vue 3 in WXT.
 3. Click "This Firefox"
 4. Click "Load Temporary Add-on"
 5. Select the zip file or the manifest.json file from the extracted folder
-
+https://satstestnet-mempool.sat20.org/address/${address}
 ## Basic Usage
 
 1. After installation, click the extension icon in your browser toolbar

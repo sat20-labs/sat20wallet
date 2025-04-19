@@ -36,7 +36,7 @@
 
     <div v-else class="text-center">
       <div
-        class="grid grid-cols-3 gap-3 my-5 p-4 bg-gray-100 dark:bg-gray-700 rounded-lg"
+        class="grid grid-cols-3 gap-3 my-5 p-4 rounded-lg"
       >
         <div
           v-for="(word, index) in mnemonicWords"
@@ -64,7 +64,7 @@ import { Input } from '@/components/ui/input'
 import walletManager from '@/utils/sat20'
 import { useWalletStore } from '@/store'
 import { useClipboard } from '@vueuse/core'
-
+import { hashPassword } from '@/utils/crypto'
 const walletStore = useWalletStore()
 const { walletId } = storeToRefs(walletStore)
 const password = ref<string | number>('')
@@ -92,9 +92,10 @@ const verifyPassword = async () => {
   console.log(password.value)
 
   loading.value = true
+  const hashedPassword = await hashPassword(password.value as string)
   const [err, result] = await walletManager.getMnemonice(
     walletId.value,
-    password.value as string
+    hashedPassword
   )
   loading.value = false
   console.log('verify password result')

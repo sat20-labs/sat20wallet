@@ -76,13 +76,13 @@ class Service {
     }
   }
 
-  async buildBatchSellOrder(
+  async buildBatchSellOrder_SatsNet(
     utxos: string[],
     address: string,
     network: string
   ): Promise<string> {
-    console.log('buildBatchSellOrder', utxos, address, network)
-    const res = await (globalThis as any).sat20wallet_wasm.buildBatchSellOrder(
+    console.log('buildBatchSellOrder_SatsNet', utxos, address, network)
+    const res = await (globalThis as any).sat20wallet_wasm.buildBatchSellOrder_SatsNet(
       utxos,
       address,
       network
@@ -100,8 +100,15 @@ class Service {
     console.log('splitBatchSignedPsbt res', res)
     return res
   }
+  async splitBatchSignedPsbt_SatsNet(signedHex: string, network: string): Promise<string[]> {
+    const res = (globalThis as any).sat20wallet_wasm.splitBatchSignedPsbt_SatsNet(
+      signedHex,
+      network
+    )
+    return res
+  }
 
-  async finalizeSellOrder(
+  async finalizeSellOrder_SatsNet(
     psbtHex: string,
     utxos: string[],
     buyerAddress: string,
@@ -110,7 +117,7 @@ class Service {
     serviceFee: number,
     networkFee: number
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
-    console.log('finalizeSellOrder', {
+    console.log('finalizeSellOrder_SatsNet', {
       psbtHex,
       utxos,
       buyerAddress,
@@ -119,7 +126,7 @@ class Service {
       serviceFee,
       networkFee,
     })
-    const result = await (globalThis as any).sat20wallet_wasm.finalizeSellOrder(
+    const result = await (globalThis as any).sat20wallet_wasm.finalizeSellOrder_SatsNet(
       psbtHex,
       utxos,
       buyerAddress,
@@ -181,12 +188,12 @@ class Service {
     return stp.unlockUtxo_SatsNet(address, utxo)
   }
 
-  async getAllLockedUtxo(): Promise<[Error | undefined, any | undefined]> {
-    return stp.getAllLockedUtxo()
+  async getAllLockedUtxo(address: string): Promise<[Error | undefined, any | undefined]> {
+    return stp.getAllLockedUtxo(address)
   }
 
-  async getAllLockedUtxo_SatsNet(): Promise<[Error | undefined, any | undefined]> {
-    return stp.getAllLockedUtxo_SatsNet()
+  async getAllLockedUtxo_SatsNet(address: string): Promise<[Error | undefined, any | undefined]> {
+    return stp.getAllLockedUtxo_SatsNet(address)
   }
 
   async lockToChannel(

@@ -217,12 +217,12 @@ class WalletManager {
     return this._handleRequest('getNodePubKey')
   }
 
-  async buildBatchSellOrder(
+  async buildBatchSellOrder_SatsNet(
     utxos: string[],
     address: string,
     network: string
   ): Promise<[Error | undefined, { orderId: string } | undefined]> {
-    return this._handleRequest('buildBatchSellOrder', utxos, address, network)
+    return this._handleRequest('buildBatchSellOrder_SatsNet', utxos, address, network)
   }
 
   async splitBatchSignedPsbt(
@@ -232,7 +232,7 @@ class WalletManager {
     return this._handleRequest('splitBatchSignedPsbt', signedHex, network)
   }
 
-  async finalizeSellOrder(
+  async finalizeSellOrder_SatsNet(
     psbtHex: string,
     utxos: string[],
     buyerAddress: string,
@@ -242,7 +242,7 @@ class WalletManager {
     networkFee: number
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
     return this._handleRequest(
-      'finalizeSellOrder',
+      'finalizeSellOrder_SatsNet',
       psbtHex,
       utxos,
       buyerAddress,

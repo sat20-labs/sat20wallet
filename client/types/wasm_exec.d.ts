@@ -189,7 +189,7 @@ declare interface WalletManager {
   ): Promise<SatsnetResponse<string>>
 
   // Build a batch sell order
-  buildBatchSellOrder(
+  buildBatchSellOrder_SatsNet(
     utxos: string[],
     address: string,
     network: string
@@ -201,8 +201,14 @@ declare interface WalletManager {
     network: string
   ): Promise<SatsnetResponse<{ psbts: string[] }>>
 
+  // Split a batch signed PSBT for SatsNet
+  splitBatchSignedPsbt_SatsNet(
+    signedHex: string,
+    network: string
+  ): Promise<SatsnetResponse<{ psbts: string[] }>>
+
   // 添加新的方法定义
-  finalizeSellOrder(
+  finalizeSellOrder_SatsNet(
     psbtHex: string,
     utxos: string[],
     buyerAddress: string,
@@ -311,8 +317,8 @@ interface SatsnetStp {
     feeRate: number
   ): SatsnetResponse<{ txId: string; value: number }>
 
-  getAllLockedUtxo(): Promise<SatsnetResponse<any>>
-  getAllLockedUtxo_SatsNet(): Promise<SatsnetResponse<any>>
+  getAllLockedUtxo(address: string): Promise<SatsnetResponse<any>>
+  getAllLockedUtxo_SatsNet(address: string): Promise<SatsnetResponse<any>>
   lockUtxo(address: string, utxo: any, reason?: string): Promise<SatsnetResponse<any>>
   lockUtxo_SatsNet(address: string, utxo: any, reason?: string): Promise<SatsnetResponse<any>>
   unlockUtxo(address: string, utxo: any): Promise<SatsnetResponse<any>>
@@ -336,6 +342,9 @@ interface SatsnetStp {
     address: string,
     assetName: string
   ): Promise<SatsnetResponse<{ amount: number; value: number }>>;
+
+  batchSendAssets_SatsNet(destAddr: string,
+    assetName: string, amt: string, n: number): Promise<SatsnetResponse<any>>;
 }
 declare interface Window {
   sat20wallet_wasm: WalletManager

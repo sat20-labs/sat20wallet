@@ -57,6 +57,8 @@ interface StpWasmModule {
   // --- Added Asset Amount Getters ---
   getAssetAmount: (...args: any[]) => Promise<WasmResponse<{ amount: string; value: string }>>;
   getAssetAmount_SatsNet: (...args: any[]) => Promise<WasmResponse<{ amount: string; value: string }>>;
+  batchSendAssets_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
+
 }
 
 
@@ -77,9 +79,9 @@ class SatsnetStp {
       : undefined;
 
     if (!stpModuleTyped || typeof stpModuleTyped[methodName] !== 'function') {
-        const errorMsg = `stp_wasm or method "${methodName}" not found on globalThis.`
-        console.error(errorMsg)
-        return [new Error(errorMsg), undefined]
+      const errorMsg = `stp_wasm or method "${methodName}" not found on globalThis.`
+      console.error(errorMsg)
+      return [new Error(errorMsg), undefined]
     }
     const method = stpModuleTyped[methodName] as (...args: any[]) => Promise<WasmResponse<T>>; // Use the correctly typed module
 
@@ -92,10 +94,10 @@ class SatsnetStp {
 
     // Check if result is defined and has 'code' property before accessing
     if (result && typeof result.code === 'number' && result.code !== 0) {
-        // Use optional chaining for msg, provide default message
-        const errorMsg = result.msg || `stp ${methodName} failed with code ${result.code}`;
-        console.error(errorMsg);
-        return [new Error(errorMsg), undefined];
+      // Use optional chaining for msg, provide default message
+      const errorMsg = result.msg || `stp ${methodName} failed with code ${result.code}`;
+      console.error(errorMsg);
+      return [new Error(errorMsg), undefined];
     }
 
     // Return data using optional chaining
@@ -203,13 +205,17 @@ class SatsnetStp {
     )
   }
 
-  async getAllLockedUtxo(): Promise<[Error | undefined, any[] | undefined]> { // Refined return type
-    return this._handleRequest<any[]>('getAllLockedUtxo')
+  async getAllLockedUtxo(address: string): Promise<[Error | undefined, any[] | undefined]> { // Refined return type
+    return this._handleRequest<any[]>(
+      'getAllLockedUtxo',
+      address
+    )
   }
 
-  async getAllLockedUtxo_SatsNet(): Promise<[Error | undefined, any[] | undefined]> { // Refined return type
+  async getAllLockedUtxo_SatsNet(address: string): Promise<[Error | undefined, any[] | undefined]> { // Refined return type
     return this._handleRequest<any[]>(
-      'getAllLockedUtxo_SatsNet'
+      'getAllLockedUtxo_SatsNet',
+      address
     )
   }
 
@@ -363,7 +369,7 @@ class SatsnetStp {
       fees,
       String(feeRate)
     )
-  } 
+  }
   async unlockWallet(
     password: string
   ): Promise<[Error | undefined, any | undefined]> {
@@ -484,6 +490,11 @@ class SatsnetStp {
   async getAssetAmount_SatsNet(address: string, assetName: string): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
     return this._handleRequest<{ amount: string; value: string }>('getAssetAmount_SatsNet', address, assetName);
   }
+  async batchSendAssets_SatsNet(destAddr: string,
+    assetName: string, amt: string, n: number): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
+    return this._handleRequest<any>('batchSendAssets_SatsNet', destAddr, assetName, amt, n);
+  }
+
   // --- End Added Asset Amount Getter Methods ---
 }
 

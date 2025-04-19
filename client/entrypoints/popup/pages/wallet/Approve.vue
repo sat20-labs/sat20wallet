@@ -23,7 +23,7 @@ const approveComponentMap: any = {
   [Message.MessageAction.SWITCH_NETWORK]: SwitchNetwork,
   [Message.MessageAction.SIGN_MESSAGE]: SignMessage,
   [Message.MessageAction.SIGN_PSBT]: SignPsbt,
-  [Message.MessageAction.SPLIT_ASSET]: SplitAsset,
+  [Message.MessageAction.BATCH_SEND_ASSETS_SATSNET]: SplitAsset,
 }
 
 const data = computed(() => {

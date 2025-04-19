@@ -1,17 +1,17 @@
 <template>
   <LayoutApprove @confirm="confirm" @cancel="cancel" :loading="loading">
     <div class="p-6 space-y-4">
-      <div v-if="props.data?.asset_key && props.data?.amount !== undefined" class="space-y-2">
+      <div v-if="isValidData" class="space-y-2">
         <h3 class="text-lg font-semibold">Confirm Asset Split</h3>
         <p class="text-sm text-muted-foreground">
           You are about to split the following asset:
         </p>
         <div class="rounded-md border p-4 space-y-1 bg-muted/50">
            <p class="text-sm font-medium">
-             Asset Key: <strong>{{ props.data.asset_key }}</strong>
+             Asset Key: <strong>{{ props.data.assetName }}</strong>
            </p>
            <p class="text-sm font-medium">
-             Amount to Split: <strong>{{ props.data.amount }}</strong>
+             Amount to Split: <strong>{{ props.data.amt }}</strong>
            </p>
         </div>
         <p class="text-sm text-muted-foreground pt-2">
@@ -27,18 +27,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { storeToRefs } from 'pinia'
+import { z } from 'zod'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { useWalletStore } from '@/store'
 import { useToast } from '@/components/ui/toast/use-toast'
 import satsnetStp from '@/utils/stp'
 
+// Define Zod schema for validation
+const splitAssetSchema = z.object({
+  assetName: z.string().min(1, 'Asset name is required'),
+  amt: z.number().positive('Amount must be positive'),
+  n: z.number()
+})
+
+// Infer TypeScript type from Zod schema
+type SplitAssetData = z.infer<typeof splitAssetSchema>
+
 interface Props {
-  data: {
-    asset_key: string
-    amount: number
-  }
+  data: SplitAssetData
 }
 
 const props = defineProps<Props>()
@@ -52,45 +60,78 @@ const { toast } = useToast()
 const loading = ref(false)
 const errorMessage = ref<string | null>(null)
 
+// Computed property to check data validity
+const isValidData = computed(() => {
+  const result = splitAssetSchema.safeParse(props.data)
+  return result.success
+})
+
+const validateData = (): boolean => {
+  const result = splitAssetSchema.safeParse(props.data)
+  
+  if (!result.success) {
+    const errors = result.error.errors.map(err => err.message).join(', ')
+    errorMessage.value = `Validation failed: ${errors}`
+    toast({ 
+      title: 'Error', 
+      description: errorMessage.value, 
+      variant: 'destructive' 
+    })
+    return false
+  }
+
+ 
+
+  return true
+}
+
 const confirm = async () => {
   errorMessage.value = null
 
   if (l2Loading.value) {
-     toast({ title: 'Info', description: 'L2 assets are currently refreshing, please wait.', variant: 'default' });
-     return;
-  }
-  if (!props.data?.asset_key || props.data.amount === undefined || props.data.amount <= 0 || !address.value) {
-    const missing = []
-    if (!props.data?.asset_key) missing.push('Asset Key')
-    if (props.data?.amount === undefined || props.data.amount <= 0) missing.push('Valid Amount')
-    if (!address.value) missing.push('Wallet Address')
-    errorMessage.value = `Missing required information: ${missing.join(', ')}.`
-    toast({ title: 'Error', description: errorMessage.value, variant: 'destructive' });
-    return
+     toast({ 
+       title: 'Info', 
+       description: 'L2 assets are currently refreshing, please wait.', 
+       variant: 'default' 
+     })
+     return
   }
 
+  if (!validateData()) {
+    return
+  }
+  if (!address.value) {
+    errorMessage.value = 'Wallet address is required'
+    toast({ 
+      title: 'Error', 
+      description: errorMessage.value, 
+      variant: 'destructive' 
+    })
+    return
+  }
   loading.value = true
 
   try {
-    const [err, result] = await satsnetStp.sendAssetsSatsNet(
+    const [err, result] = await satsnetStp.batchSendAssets_SatsNet(
       address.value,
-      props.data.asset_key,
-      Number(props.data.amount)
+      props.data.assetName,
+      props.data.amt.toString(),
+      props.data.n
     )
 
     if (err) {
       let detail = 'Failed to send asset on L2.'
       if (err.message) {
-          detail = err.message;
+          detail = err.message
       } else if (typeof err === 'string') {
-          detail = err;
+          detail = err
       }
       throw new Error(detail)
     }
 
     toast({
       title: 'Success',
-      description: `Successfully initiated split for ${props.data.amount} units of asset ${props.data.asset_key}.`,
+      description: `Successfully initiated split for ${props.data.amt} units of asset ${props.data.assetName}.`,
     })
 
     await refreshL2Assets()

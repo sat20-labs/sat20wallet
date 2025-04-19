@@ -137,7 +137,7 @@ export default defineUnlistedScript(() => {
       })
     }
 
-    async buildBatchSellOrder(
+    async buildBatchSellOrder_SatsNet(
       utxos: string[],
       address: string,
       network: string
@@ -149,18 +149,18 @@ export default defineUnlistedScript(() => {
       })
     }
 
-    async splitBatchSignedPsbt(
+    async splitBatchSignedPsbt_SatsNet(
       signedHex: string,
       network: string
     ): Promise<string[]> {
       return this.send<string[]>({
         type: Message.MessageType.REQUEST,
-        action: Message.MessageAction.SPLIT_BATCH_SIGNED_PSBT,
+        action: Message.MessageAction.SPLIT_BATCH_SIGNED_PSBT_SATSNET,
         data: { signedHex, network },
       })
     }
 
-    async finalizeSellOrder(
+    async finalizeSellOrder_SatsNet(
       psbtHex: string,
       utxos: string[],
       buyerAddress: string,
@@ -213,7 +213,13 @@ export default defineUnlistedScript(() => {
         data: { asset_key: assetKey, amount },
       })
     }
-
+    async batchSendAssets_SatsNet(assetName: string, amt: string, n: number): Promise<any> {
+      return this.send<any>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.BATCH_SEND_ASSETS_SATSNET,
+        data: { assetName, amt, n },
+      })
+    }
     async getBalance(): Promise<Balance> {
       return this.send<Balance>({
         type: Message.MessageType.REQUEST,
@@ -284,9 +290,17 @@ export default defineUnlistedScript(() => {
       })
     }
 
+    async extractTxFromPsbt_SatsNet(psbtHex: string): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.EXTRACT_TX_FROM_PSBT_SATSNET,
+        data: { psbtHex },
+      })
+    }
+
     async lockUtxo(address: string, utxo: any, reason?: string): Promise<any> {
       return this.send<any>({
-        type: Message.MessageType.APPROVE,
+        type: Message.MessageType.REQUEST,
         action: Message.MessageAction.LOCK_UTXO,
         data: { address, utxo, reason },
       })
@@ -294,7 +308,7 @@ export default defineUnlistedScript(() => {
 
     async lockUtxo_SatsNet(address: string, utxo: any, reason?: string): Promise<any> {
       return this.send<any>({
-        type: Message.MessageType.APPROVE,
+        type: Message.MessageType.REQUEST,
         action: Message.MessageAction.LOCK_UTXO_SATSNET,
         data: { address, utxo, reason },
       })
@@ -302,7 +316,7 @@ export default defineUnlistedScript(() => {
 
     async unlockUtxo(address: string, utxo: any): Promise<any> {
       return this.send<any>({
-        type: Message.MessageType.APPROVE,
+        type: Message.MessageType.REQUEST,
         action: Message.MessageAction.UNLOCK_UTXO,
         data: { address, utxo },
       })
@@ -310,38 +324,29 @@ export default defineUnlistedScript(() => {
 
     async unlockUtxo_SatsNet(address: string, utxo: any): Promise<any> {
       return this.send<any>({
-        type: Message.MessageType.APPROVE,
+        type: Message.MessageType.REQUEST,
         action: Message.MessageAction.UNLOCK_UTXO_SATSNET,
         data: { address, utxo },
       })
     }
 
-    async getAllLockedUtxo(): Promise<any> {
+    async getAllLockedUtxo(address: string): Promise<any> {
       return this.send<any>({
         type: Message.MessageType.REQUEST,
         action: Message.MessageAction.GET_ALL_LOCKED_UTXO,
+        data: { address },
       })
     }
 
-    async getAllLockedUtxo_SatsNet(): Promise<any> {
+    async getAllLockedUtxo_SatsNet(address: string): Promise<any> {
       return this.send<any>({
         type: Message.MessageType.REQUEST,
         action: Message.MessageAction.GET_ALL_LOCKED_UTXO_SATSNET,
+        data: { address },
       })
     }
 
-    async unlockFromChannel(
-      channelUtxo: string,
-      assetName: string,
-      amt: number,
-      feeUtxoList?: any[]
-    ): Promise<any> {
-      return this.send<any>({
-        type: Message.MessageType.APPROVE,
-        action: Message.MessageAction.UNLOCK_FROM_CHANNEL,
-        data: { channelUtxo, assetName, amt, feeUtxoList },
-      })
-    }
+
 
     async getUtxos(): Promise<any> {
       return this.send<any>({
