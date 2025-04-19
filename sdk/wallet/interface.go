@@ -290,7 +290,6 @@ func (p *Manager) SignWalletMessage(msg string) ([]byte, error) {
 	return p.wallet.SignWalletMessage(msg)
 }
 
-
 func (p *Manager) SignPsbts(psbtsHex []string, bExtract bool) ([]string, error) {
 	result := make([]string, 0, len(psbtsHex))
 	for i, psbt := range psbtsHex {
@@ -453,7 +452,6 @@ func ExtractTxFromPsbt(psbtStr string) (string, error) {
 		return "", err
 	}
 
-
 	return EncodeMsgTx(finalTx)
 }
 
@@ -489,7 +487,7 @@ func ExtractTxFromPsbt_SatsNet(psbtStr string) (string, error) {
 	return EncodeMsgTx_SatsNet(finalTx)
 }
 
-func BuildBatchSellOrder(utxos []string, address, network string) (string, error) {
+func BuildBatchSellOrder_SatsNet(utxos []string, address, network string) (string, error) {
 	utxosInfo := make([]*UtxoInfo, 0, len(utxos))
 	for _, utxo := range utxos {
 		var info UtxoInfo
@@ -500,14 +498,18 @@ func BuildBatchSellOrder(utxos []string, address, network string) (string, error
 		utxosInfo = append(utxosInfo, &info)
 	}
 
-	return buildBatchSellOrder(utxosInfo, address, network)
+	return buildBatchSellOrder_SatsNet(utxosInfo, address, network)
 }
 
-func SplitBatchSignedPsbt(signedHex string, network string) ([]string, error) {
-	return splitBatchSignedPsbt(signedHex, network)
+func SplitBatchSignedPsbt_SatsNet(signedHex string, network string) ([]string, error) {
+	return splitBatchSignedPsbt_SatsNet(signedHex, network)
 }
 
-func FinalizeSellOrder(psbtHex string, utxos []string, buyerAddress, serverAddress, network string,
+func MergeBatchSignedPsbt_SatsNet(signedHex []string, network string) (string, error) {
+	return mergeBatchSignedPsbt_SatsNet(signedHex, network)
+}
+
+func FinalizeSellOrder_SatsNet(psbtHex string, utxos []string, buyerAddress, serverAddress, network string,
 	serviceFee, networkFee int64) (string, error) {
 	utxosInfo := make([]*UtxoInfo, 0, len(utxos))
 	for _, utxo := range utxos {
@@ -529,11 +531,11 @@ func FinalizeSellOrder(psbtHex string, utxos []string, buyerAddress, serverAddre
 		return "", err
 	}
 
-	return finalizeSellOrder(packet, utxosInfo, buyerAddress, 
+	return finalizeSellOrder_SatsNet(packet, utxosInfo, buyerAddress,
 		serverAddress, network, serviceFee, networkFee)
 }
 
-func AddInputsToPsbt(psbtHex string, utxos []string) (string, error) {
+func AddInputsToPsbt_SatsNet(psbtHex string, utxos []string) (string, error) {
 	utxosInfo := make([]*indexer.AssetsInUtxo, 0, len(utxos))
 	for _, utxo := range utxos {
 		var info indexer.AssetsInUtxo
@@ -553,10 +555,10 @@ func AddInputsToPsbt(psbtHex string, utxos []string) (string, error) {
 		Log.Errorf("NewFromRawBytes failed, %v", err)
 		return "", err
 	}
-	return addInputsToPsbt(packet, utxosInfo)
+	return addInputsToPsbt_SatsNet(packet, utxosInfo)
 }
 
-func AddOutputsToPsbt(psbtHex string, utxos []string) (string, error) {
+func AddOutputsToPsbt_SatsNet(psbtHex string, utxos []string) (string, error) {
 	utxosInfo := make([]*indexer.AssetsInUtxo, 0, len(utxos))
 	for _, utxo := range utxos {
 		var info indexer.AssetsInUtxo
@@ -576,5 +578,5 @@ func AddOutputsToPsbt(psbtHex string, utxos []string) (string, error) {
 		Log.Errorf("NewFromRawBytes failed, %v", err)
 		return "", err
 	}
-	return addOutputsToPsbt(packet, utxosInfo)
+	return addOutputsToPsbt_SatsNet(packet, utxosInfo)
 }
