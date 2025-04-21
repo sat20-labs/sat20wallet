@@ -1,6 +1,9 @@
 package wallet
 
-import swire "github.com/sat20-labs/satoshinet/wire"
+import (
+	indexer "github.com/sat20-labs/indexer/common"
+	swire "github.com/sat20-labs/satoshinet/wire"
+)
 
 // print the TX
 type TxWitness []string
@@ -29,3 +32,11 @@ type MsgTx struct {
 	TxOut    []*TxOut `json:"TxOut"`
 	LockTime uint32   `json:"LockTime"`
 }
+
+type TxAssetInfo struct {
+	TxId         string
+	TxHex        string
+	InputAssets  []*indexer.AssetsInUtxo // 与输入索引一一对应
+	OutputAssets []*indexer.AssetsInUtxo // 与输出索引一一对应
+}
+

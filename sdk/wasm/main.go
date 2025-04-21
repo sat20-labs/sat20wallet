@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -1227,6 +1228,43 @@ func addOutputsToPsbt_SatsNet(this js.Value, p []js.Value) any {
 	return createJsRet(data, 0, "ok")
 }
 
+func getTxAssetInfoFromPsbt_SatsNet(this js.Value, p []js.Value) any {
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "psbt parameter should be a string")
+	}
+	psbt := p[0].String()
+
+
+	info, err := wallet.GetTxAssetInfoFromPsbt_SatsNet(psbt)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	inputs, err := json.Marshal(info.InputAssets)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	outputs, err := json.Marshal(info.OutputAssets)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	data := map[string]any{
+		"txId": info.TxId,
+		"txHex": info.TxHex,
+		"inputs": inputs,
+		"outputs": outputs,
+	}
+
+	return createJsRet(data, 0, "ok")
+}
+
+
 func getVersion(this js.Value, p []js.Value) any {
 	data := map[string]any{
 		"version": wallet.SOFTWARE_VERSION,
@@ -1331,6 +1369,7 @@ func main() {
 	obj.Set("mergeBatchSignedPsbt_SatsNet", js.FuncOf(mergeBatchSignedPsbt_SatsNet))
 	obj.Set("addInputsToPsbt_SatsNet", js.FuncOf(addInputsToPsbt_SatsNet))
 	obj.Set("addOutputsToPsbt_SatsNet", js.FuncOf(addOutputsToPsbt_SatsNet))
+	obj.Set("getTxAssetInfoFromPsbt_SatsNet", js.FuncOf(getTxAssetInfoFromPsbt_SatsNet))
 
 	js.Global().Set(module, obj)
 	wallet.Log.SetLevel(logrus.DebugLevel)

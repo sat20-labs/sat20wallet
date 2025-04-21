@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	indexer "github.com/sat20-labs/indexer/common"
@@ -195,4 +196,66 @@ func AddOutputsToPsbt_SatsNet(psbtHex string, utxos []string) (string, error) {
 		return "", err
 	}
 	return addOutputsToPsbt_SatsNet(packet, utxosInfo)
+}
+
+func GetTxAssetInfoFromPsbt_SatsNet(psbtStr string) (*TxAssetInfo, error) {
+	hexBytes, err := hex.DecodeString(psbtStr)
+	if err != nil {
+		return nil, err
+	}
+	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
+	if err != nil {
+		return nil, err
+	}
+	txHex, err := EncodeMsgTx_SatsNet(packet.UnsignedTx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := TxAssetInfo{
+		TxId: packet.UnsignedTx.TxID(),
+		TxHex: txHex,
+	}
+
+	prevOutputFetcher := PsbtPrevOutputFetcher_SatsNet(packet)
+	for _, txIn := range packet.UnsignedTx.TxIn {
+		utxoInfo := indexer.AssetsInUtxo{
+			OutPoint: txIn.PreviousOutPoint.String(),
+		}
+		output := prevOutputFetcher.FetchPrevOutput(txIn.PreviousOutPoint)
+		if output != nil {
+			utxoInfo.PkScript = output.PkScript
+			utxoInfo.Value = output.Value
+			for _, asset := range output.Assets {
+				utxoInfo.Assets = append(utxoInfo.Assets, &indexer.DisplayAsset{
+					AssetName:  asset.Name,
+					Amount:     asset.Amount.String(),
+					BindingSat: int(asset.BindingSat),
+				})
+			}
+		} else {
+			return nil, fmt.Errorf("can't find output info for utxo %s", utxoInfo.OutPoint)
+		}
+		result.InputAssets = append(result.InputAssets, &utxoInfo)
+	}
+
+	for i, txOut := range packet.UnsignedTx.TxOut {
+		utxoInfo := indexer.AssetsInUtxo{
+			OutPoint: fmt.Sprintf("%s:%d", packet.UnsignedTx.TxID(), i),
+		}
+		
+		utxoInfo.PkScript = txOut.PkScript
+		utxoInfo.Value = txOut.Value
+		for _, asset := range txOut.Assets {
+			utxoInfo.Assets = append(utxoInfo.Assets, &indexer.DisplayAsset{
+				AssetName:  asset.Name,
+				Amount:     asset.Amount.String(),
+				BindingSat: int(asset.BindingSat),
+			})
+		}
+		
+		result.OutputAssets = append(result.OutputAssets, &utxoInfo)
+	}
+
+	return &result, nil
 }
