@@ -469,7 +469,7 @@ class SatsnetStp {
     return this._handleRequest<any[]>('getUtxosWithAsset', address, amt, assetName) // Pass address
   }
 
-  async getUtxosWithAsset_SatsNet(address: string, amt: number, assetName: string): Promise<[Error | undefined, any[] | undefined]> { // Refined return type, Added address parameter
+  async getUtxosWithAsset_SatsNet(address: string, amt: string, assetName: string): Promise<[Error | undefined, any[] | undefined]> { // Refined return type, Added address parameter
     return this._handleRequest<any[]>('getUtxosWithAsset_SatsNet', address, amt, assetName) // Pass address
   }
 

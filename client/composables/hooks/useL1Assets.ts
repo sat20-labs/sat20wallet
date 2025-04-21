@@ -134,6 +134,8 @@ export const useL1Assets = () => {
   watch(
     () => summaryQuery.data.value,
     async (newData) => {
+      console.log('newData', newData)
+
       if (newData) {
         allAssetList.value = []
         console.log('newData', newData.data)
@@ -147,17 +149,11 @@ export const useL1Assets = () => {
     },
     {
       deep: true,
+      immediate: true,
     }
   )
 
-  watch(allAssetList, updateStoreAssets, { deep: true })
-
-  watch([address, network, chain], () => {
-    if (address.value && network.value && chain.value) {
-      summaryQuery.refetch()
-      nsQuery.refetch()
-    }
-  })
+  watch(allAssetList, updateStoreAssets, { deep: true, immediate: true })
 
   /**
    * 刷新所有资产数据

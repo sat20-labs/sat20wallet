@@ -228,7 +228,7 @@ class Service {
   }
 
   async getUtxosWithAsset_SatsNet(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.getUtxosWithAsset_SatsNet(address, amt, assetName)
+    return stp.getUtxosWithAsset_SatsNet(address, amt.toString(), assetName)
   }
 
   async getUtxosWithAssetV2(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {

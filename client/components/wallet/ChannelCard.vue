@@ -222,7 +222,6 @@ const amtConfirm = async () => {
   
 
   loading.value = true
-  const utxoList = plainUtxos.value.map((utxo: any) => utxo)
 
   const memo = '::open'
   const [err, result] = await satsnetStp.openChannel(feeRate, amt, [], memo)

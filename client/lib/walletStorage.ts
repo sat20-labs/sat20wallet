@@ -1,5 +1,5 @@
 import { storage } from 'wxt/storage'
-import { Network, Balance, Chain } from '@/types'
+import { Network, Balance, Chain, WalletAccount, WalletData } from '@/types'
 
 interface WalletState {
   env: 'dev' | 'test' | 'prod'
@@ -15,6 +15,7 @@ interface WalletState {
   passwordTime: number | null
   balance: Balance
   pubkey: string | null
+  wallets: WalletData[]
 }
 
 type StateKey = keyof WalletState
@@ -35,6 +36,7 @@ const defaultState: WalletState = {
   balance: { confirmed: 0, unconfirmed: 0, total: 0 },
   pubkey: null,
   passwordTime: null,
+  wallets: [],
 }
 
 class WalletStorage {
@@ -75,6 +77,9 @@ class WalletStorage {
     const loadPromises = Object.keys(defaultState).map(async (key) => {
       const storageKey = key as keyof WalletState
       const value = await storage.getItem(this.getStorageKey(storageKey))
+      console.log('initializeState')
+      console.log(storageKey, value);
+      
       if (value !== null) {
         ;(this.state[storageKey] as any) =
           value as WalletState[typeof storageKey]
@@ -99,8 +104,11 @@ class WalletStorage {
     key: K,
     value: WalletState[K]
   ): Promise<void> {
+    console.log('setValue', key, value);
+    
     const oldValue = this.state[key]
-
+    console.log('oldValue', oldValue);
+    
     // 如果值没有变化，直接返回
     if (oldValue === value) {
       return
@@ -109,7 +117,9 @@ class WalletStorage {
     try {
       // 存储到本地
       await storage.setItem(this.getStorageKey(key), value)
-
+      console.log('setValue', this.getStorageKey(key), value);
+      console.log('storage', await storage.getItem(this.getStorageKey(key)));
+      
       // 更新内存中的状态
       this.state[key] = value
 
@@ -236,7 +246,7 @@ await walletStorage.batchUpdate({
 const unsubscribe = walletStorage.subscribe((key, newValue, oldValue) => {
   console.log(`${key} changed from ${oldValue} to ${newValue}`)
 })
-
 // 取消订阅
 unsubscribe()
 */
+

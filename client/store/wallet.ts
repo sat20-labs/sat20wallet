@@ -1,15 +1,15 @@
 import { defineStore } from 'pinia'
 import { walletStorage } from '@/lib/walletStorage'
-import { Network, Chain } from '@/types'
+import { Network, Chain, WalletData, WalletAccount } from '@/types'
 import walletManager from '@/utils/sat20'
 import satsnetStp from '@/utils/stp'
 import { useChannelStore } from './channel'
-import { useL1Store } from './l1'
-import { ref } from 'vue'
+import { ref, computed, toRaw } from 'vue'
+
 
 export const useWalletStore = defineStore('wallet', () => {
   const channelStore = useChannelStore()
-  
+
   const address = ref(walletStorage.getValue('address'))
   const publicKey = ref(walletStorage.getValue('pubkey'))
   const walletId = ref(walletStorage.getValue('walletId'))
@@ -19,8 +19,14 @@ export const useWalletStore = defineStore('wallet', () => {
   const network = ref(walletStorage.getValue('network'))
   const chain = ref(walletStorage.getValue('chain'))
   const locked = ref(true)
-  const hasWallet = ref(walletStorage.getValue('hasWallet'))
+  const hasWallet = ref(!!walletStorage.getValue('hasWallet'))
+  console.log('wallets', typeof walletStorage.getValue('wallets'));
+  const localWallets = walletStorage.getValue('wallets');
+  const wallets = ref<WalletData[]>(localWallets ? JSON.parse(JSON.stringify(localWallets)) : [])
 
+  const wallet = computed(() => wallets.value.find(w => w.id === walletId.value))
+  const accounts = computed(() => wallet.value?.accounts)
+  const account = computed(() => wallet.value?.accounts.find(a => a.index === accountIndex.value))
   const setAddress = async (value: string) => {
     await walletStorage.setValue('address', value)
     address.value = value
@@ -82,7 +88,13 @@ export const useWalletStore = defineStore('wallet', () => {
   const setFeeRate = (value: number) => {
     feeRate.value = value
   }
-
+  const switchWallet = async (walletId: number) => {
+    await walletManager.switchWallet(walletId)
+    const currentAccount = wallets.value.find(w => w.id === walletId)?.accounts[0];
+    await setWalletId(walletId);
+    await switchToAccount(currentAccount?.index || 0);
+    await getWalletInfo()
+  }
   const createWallet = async (password: string) => {
     const [err, res] = await walletManager.createWallet(password)
     if (err || !res) {
@@ -96,11 +108,38 @@ export const useWalletStore = defineStore('wallet', () => {
     await setLocked(false)
     await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
-    await getWalletInfo()
+    // await getWalletInfo()
     await satsnetStp.importWallet(_mnemonic, password)
     await setPassword(password)
     await satsnetStp.start()
     await channelStore.getAllChannels()
+    const [_e, addressRes] = await walletManager.getWalletAddress(
+      accountIndex.value
+    )
+    const [_j, pubkeyRes] = await walletManager.getWalletPubkey(
+      accountIndex.value
+    )
+
+    if (addressRes && pubkeyRes) {
+      const { address } = addressRes
+      await setAddress(address)
+      await setPublickey(pubkeyRes.pubKey)
+
+      const walletLen = wallets.value.length
+      wallets.value.push({
+        id: walletId,
+        name: `Wallet ${walletLen + 1}`,
+        accounts: [{
+          index: 0,
+          name: `Account ${0 + 1}`,
+          address: address,
+          pubKey: pubkeyRes.pubKey
+        }]
+      })
+    }
+    await walletStorage.setValue('wallets', toRaw(wallets.value))
+    console.log('createWallet', await storage.getItem('local:wallet_wallets'));
+
     return [undefined, _mnemonic]
   }
 
@@ -117,11 +156,34 @@ export const useWalletStore = defineStore('wallet', () => {
     await setLocked(false)
     await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
-    await getWalletInfo()
     await setPassword(password)
     await satsnetStp.importWallet(mnemonic, password)
     await satsnetStp.start()
     await channelStore.getAllChannels()
+    const [_e, addressRes] = await walletManager.getWalletAddress(
+      accountIndex.value
+    )
+    const [_j, pubkeyRes] = await walletManager.getWalletPubkey(
+      accountIndex.value
+    )
+
+    if (addressRes && pubkeyRes) {
+      const { address } = addressRes
+      await setAddress(address)
+      await setPublickey(pubkeyRes.pubKey)
+      const walletLen = wallets.value.length
+      wallets.value.push({
+        id: walletId,
+        name: `Wallet ${walletLen + 1}`,
+        accounts: [{
+          index: 0,
+          name: `Account ${0 + 1}`,
+          address: address,
+          pubKey: pubkeyRes.pubKey
+        }]
+      })
+    }
+    await walletStorage.setValue('wallets', toRaw(wallets.value))
     return [undefined, mnemonic]
   }
 
@@ -144,31 +206,121 @@ export const useWalletStore = defineStore('wallet', () => {
     const [err, result] = await walletManager.unlockWallet(password)
     console.log('unlockWallet', err, result)
     if (!err && result) {
-      const { walletId } = result
-      await setWalletId(walletId)
-      await getWalletInfo() // This sets the public key
+      const { walletId: unlockedWalletId } = result
+      await setWalletId(unlockedWalletId)
+      await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
       await satsnetStp.unlockWallet(password)
-      // Start STP after wallet info and public key are set
       await satsnetStp.start()
       await channelStore.getAllChannels()
     }
     return [err, result]
   }
 
-  const deleteWallet = async () => {
+  const deleteWallet = async (walletIdToDelete: number) => {
     try {
-      await walletStorage.clear()
-      console.log('walletStorage', walletStorage);
-      hasWallet.value = false
-      address.value = ''
-      publicKey.value = ''
-      walletId.value = 0
-      return [undefined, true]
-    } catch (error) {
-      console.error('Failed to delete wallet:', error)
-      return [error, undefined]
+      const walletIndexToDelete = wallets.value.findIndex(w => w.id === walletIdToDelete);
+
+      if (walletIndexToDelete === -1) {
+        const errMsg = `Wallet with ID ${walletIdToDelete} not found.`
+        console.error(errMsg);
+        return [new Error(errMsg), undefined];
+      }
+
+      const isDeletingActiveWallet = walletIdToDelete === walletId.value;
+
+      wallets.value.splice(walletIndexToDelete, 1);
+
+      if (wallets.value.length === 0) {
+        await walletStorage.clear();
+        await setHasWallet(false);
+        await setAddress('');
+        await setPublickey('');
+        await setWalletId(0);
+        await setAccountIndex(0);
+        await setPassword('');
+        await setNetwork(Network.TESTNET);
+        await setChain(Chain.BTC);
+        await setLocked(true);
+      } else {
+        await walletStorage.setValue('wallets', toRaw(wallets.value));
+
+        if (isDeletingActiveWallet) {
+          const nextWalletIndex = walletIndexToDelete > 0 ? walletIndexToDelete - 1 : 0;
+          const nextWallet = wallets.value[nextWalletIndex];
+
+          if (nextWallet && nextWallet.accounts.length > 0) {
+            const nextAccount = nextWallet.accounts[0];
+            await setWalletId(nextWallet.id);
+            await switchToAccount(nextAccount.index);
+          } else {
+            const errMsg = "Failed to switch wallet: Next wallet or its accounts not found after deletion."
+            console.error(errMsg);
+            return [new Error(errMsg), undefined];
+          }
+        }
+      }
+
+      return [undefined, true];
+    } catch (error: any) {
+      console.error('Failed to delete wallet:', error);
+      return [error, undefined];
+    }
+  }
+
+  const addAccount = async (name: string, accountId: number) => {
+    await walletManager.switchAccount(accountId)
+    const [_, addressRes] = await walletManager.getWalletAddress(accountId)
+    const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
+
+    if (addressRes && pubkeyRes) {
+      const newAccount: WalletAccount = {
+        index: accountId,
+        name,
+        address: addressRes.address,
+        pubKey: pubkeyRes.pubKey
+      }
+      wallet.value?.accounts.push(newAccount)
+      await walletStorage.setValue('wallets', toRaw(wallets.value))
+      await setAccountIndex(accountId)
+      await setAddress(addressRes.address)
+      await setPublickey(pubkeyRes.pubKey)
+    }
+  }
+
+  const switchToAccount = async (accountId: number) => {
+    await walletManager.switchAccount(accountId)
+    const [_, addressRes] = await walletManager.getWalletAddress(accountId)
+    const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
+
+    if (addressRes && pubkeyRes) {
+      await setAccountIndex(accountId)
+      await setAddress(addressRes.address)
+      await setPublickey(pubkeyRes.pubKey)
+    }
+  }
+
+  const updateAccountName = async (accountId: number, newName: string) => {
+    if (account) {
+      const wallet = wallets.value.find(w => w.id === walletId.value)
+      const account = wallet?.accounts.find(a => a.index === accountId)
+      if (account) {
+        account.name = newName
+      }
+      await walletStorage.setValue('wallets', toRaw(wallets.value))
+    }
+  }
+
+  const deleteAccount = async (accountId: number) => {
+    const index = wallet.value?.accounts.findIndex(a => a.index === accountId)
+    if (index && index > -1) {
+      wallet.value?.accounts.splice(index, 1)
+      await walletStorage.setValue('wallets', toRaw(wallets.value))
+      const prevAccount = wallet.value?.accounts[index - 1]
+      if (prevAccount) {
+        await setAccountIndex(prevAccount.index)
+      }
     }
   }
 
@@ -198,5 +350,13 @@ export const useWalletStore = defineStore('wallet', () => {
     password,
     setPassword,
     unlockWallet,
+    wallets,
+    wallet,
+    addAccount,
+    switchToAccount,
+    updateAccountName,
+    deleteAccount,
+    accounts,
+    switchWallet,
   }
 })

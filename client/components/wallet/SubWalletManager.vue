@@ -22,9 +22,9 @@
           <div class="space-y-2">
             <div
               v-for="account in accounts"
-              :key="account.id"
+              :key="account.index"
               class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
-              :class="{ 'border-primary/50': Number(account.id) === currentAccountIndex }"
+              :class="{ 'border-primary/50': account.index === accountIndex }"
             >
               <div class="flex items-center gap-3">
                 <div class="w-10 h-10 rounded-full overflow-hidden bg-muted">
@@ -36,7 +36,7 @@
                   <div class="font-medium flex items-center gap-2 text-white/60">
                     {{ account.name }}
                     <Button
-                      v-if="Number(account.id) === currentAccountIndex"
+                      v-if="account.index === accountIndex"
                       variant="ghost"
                       size="icon"
                       class="h-2 w-2"
@@ -45,12 +45,12 @@
                       <Icon icon="lucide:pencil" class="w-2 h-2" />
                     </Button>
                   </div>
-                  <div class="text-sm text-muted-foreground">{{ account.address }}</div>
+                  <div class="text-sm text-muted-foreground">{{ hideAddress(account.address) }}</div>
                 </div>
               </div>
               <div class="flex items-center gap-2">
                 <Button
-                  v-if="Number(account.id) !== currentAccountIndex"
+                  v-if="account.index !== accountIndex"
                   variant="outline"
                   size="sm"
                   @click="selectAccount(account)"
@@ -66,7 +66,7 @@
                   Current
                 </Button>
                 <Button
-                  v-if="Number(account.id) !== currentAccountIndex"
+                  v-if="account.index !== accountIndex"
                   variant="ghost"
                   size="icon"
                   class="text-destructive hover:text-destructive"
@@ -198,7 +198,6 @@ import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -211,42 +210,34 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/toast/use-toast'
 import { useWalletStore } from '@/store/wallet'
+import type { WalletAccount } from '@/types'
+import { hideAddress } from '@/utils'
 
 const router = useRouter()
 const { toast } = useToast()
 const walletStore = useWalletStore()
 
 // State
-
 const isEditNameDialogOpen = ref(false)
 const isCreateAccountDialogOpen = ref(false)
 const isDeleteDialogOpen = ref(false)
 const editingName = ref('')
-const createPassword = ref('')
-const confirmPassword = ref('')
 const newAccountName = ref('')
 const isCreating = ref(false)
 const isDeleting = ref(false)
 const isSaving = ref(false)
-const accountToEdit = ref<any>(null)
-const accountToDelete = ref<any>(null)
+const accountToEdit = ref<WalletAccount | null>(null)
+const accountToDelete = ref<WalletAccount | null>(null)
 
-// 模拟数据
-const currentAccountIndex = ref(0)
-const accounts = ref([
-  { id: '0', name: 'Account 1', address: 'tb1qyp...x0x7' },
-  { id: '1', name: 'Account 2', address: 'tb1qzp...x0x8' },
-])
-
+// Computed
+const { accountIndex, accounts } = storeToRefs(walletStore)
 // Methods
 function showCreateAccountDialog() {
   isCreateAccountDialogOpen.value = true
-  createPassword.value = ''
-  confirmPassword.value = ''
   newAccountName.value = ''
 }
 
-function showEditNameDialog(account: any) {
+function showEditNameDialog(account: WalletAccount) {
   accountToEdit.value = account
   editingName.value = account.name
   isEditNameDialogOpen.value = true
@@ -257,14 +248,8 @@ async function saveAccountName() {
 
   try {
     isSaving.value = true
-    // TODO: 实现保存名称的逻辑
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await walletStore.updateAccountName(accountToEdit.value.index, editingName.value)
     
-    const account = accounts.value.find(w => w.id === accountToEdit.value.id)
-    if (account) {
-      account.name = editingName.value
-    }
-
     toast({
       title: 'Success',
       description: 'Account name updated successfully',
@@ -294,15 +279,10 @@ async function createAccount() {
 
   try {
     isCreating.value = true
-    // TODO: 实现创建子钱包的逻辑
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    const newAccountId = accounts.value?.length || 0
+    const accountName = newAccountName.value.trim() || `Account ${newAccountId + 1}`
+    await walletStore.addAccount(accountName, newAccountId)
     
-    accounts.value.push({
-      id: String(accounts.value.length),
-      name: newAccountName.value,
-      address: `tb1q${Math.random().toString(36).substring(2, 8)}...${Math.random().toString(36).substring(2, 6)}`,
-    })
-
     toast({
       title: 'Success',
       description: 'Account created successfully',
@@ -319,7 +299,7 @@ async function createAccount() {
   }
 }
 
-function confirmDeleteAccount(account: any) {
+function confirmDeleteAccount(account: WalletAccount) {
   accountToDelete.value = account
   isDeleteDialogOpen.value = true
 }
@@ -329,14 +309,8 @@ async function deleteAccount() {
 
   try {
     isDeleting.value = true
-    // TODO: 实现删除子钱包的逻辑
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await walletStore.deleteAccount(accountToDelete.value.index)
     
-    const index = accounts.value.findIndex(w => w.id === accountToDelete.value.id)
-    if (index > -1) {
-      accounts.value.splice(index, 1)
-    }
-
     toast({
       title: 'Success',
       description: 'Account deleted successfully',
@@ -354,11 +328,19 @@ async function deleteAccount() {
   }
 }
 
-function selectAccount(account: any) {
-  currentAccountIndex.value = Number(account.id)
-  toast({
-    title: 'Success',
-    description: 'Account switched successfully',
-  })
+async function selectAccount(account: WalletAccount) {
+  try {
+    await walletStore.switchToAccount(account.index)
+    toast({
+      title: 'Success',
+      description: 'Account switched successfully',
+    })
+  } catch (error) {
+    toast({
+      title: 'Error',
+      description: 'Failed to switch account',
+      variant: 'destructive',
+    })
+  }
 }
 </script>
