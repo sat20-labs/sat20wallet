@@ -971,6 +971,53 @@ func extractTxFromPsbt_SatsNet(this js.Value, p []js.Value) any {
 	return createJsRet(data, 0, "ok")
 }
 
+
+func extractUnsignedTxFromPsbt(this js.Value, p []js.Value) any {
+
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "psbt parameter should be a hex string")
+	}
+	psbtHex := p[0].String()
+
+	result, err := wallet.ExtractUnsignedTxFromPsbt(psbtHex)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	data := map[string]any{
+		"tx": result,
+	}
+
+	return createJsRet(data, 0, "ok")
+}
+
+func extractUnsignedTxFromPsbt_SatsNet(this js.Value, p []js.Value) any {
+
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "psbt parameter should be a hex string")
+	}
+	psbtHex := p[0].String()
+
+	result, err := wallet.ExtractUnsignedTxFromPsbt_SatsNet(psbtHex)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	data := map[string]any{
+		"tx": result,
+	}
+
+	return createJsRet(data, 0, "ok")
+}
+
 func buildBatchSellOrder_SatsNet(this js.Value, p []js.Value) any {
 
 	if len(p) < 3 {
@@ -1276,6 +1323,8 @@ func main() {
 
 	obj.Set("extractTxFromPsbt", js.FuncOf(extractTxFromPsbt))
 	obj.Set("extractTxFromPsbt_SatsNet", js.FuncOf(extractTxFromPsbt_SatsNet))
+	obj.Set("extractUnsignedTxFromPsbt", js.FuncOf(extractUnsignedTxFromPsbt))
+	obj.Set("extractUnsignedTxFromPsbt_SatsNet", js.FuncOf(extractUnsignedTxFromPsbt_SatsNet))
 	obj.Set("buildBatchSellOrder_SatsNet", js.FuncOf(buildBatchSellOrder_SatsNet))
 	obj.Set("finalizeSellOrder_SatsNet", js.FuncOf(finalizeSellOrder_SatsNet))
 	obj.Set("splitBatchSignedPsbt_SatsNet", js.FuncOf(splitBatchSignedPsbt_SatsNet))
