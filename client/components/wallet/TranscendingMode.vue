@@ -30,7 +30,7 @@
     <!-- Poolswap Mode -->
     <div v-if="selectedTranscendingMode === 'poolswap'">
       <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
-        <TabsList class="grid w-full grid-cols-3 mb-4 bg-black/15">
+        <TabsList class="grid w-full grid-cols-2 mb-4 bg-black/15">
           <TabsTrigger value="bitcoin">
             <Icon
               icon="cryptocurrency:btc"
@@ -38,13 +38,13 @@
             />
             Bitcoin
           </TabsTrigger>
-          <TabsTrigger value="pool">
+          <!-- <TabsTrigger value="pool">
             <Icon
               icon="lucide:waves"
               class="w-4 h-4 mr-1 justify-self-center"
             />
             Pool
-          </TabsTrigger>
+          </TabsTrigger> -->
           <TabsTrigger value="satoshinet">
             <Icon
               icon="lucide:globe-lock"

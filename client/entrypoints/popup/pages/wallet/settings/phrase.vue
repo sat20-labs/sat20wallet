@@ -7,7 +7,7 @@
       <div class="text-center mb-6">
         <h3 class="text-lg font-semibold text-red-600 mb-2">⚠️ Warning</h3>
         <ul
-          class="text-sm text-left space-y-2 bg-red-50 dark:bg-red-900/20 p-4 rounded-lg"
+          class="text-sm text-left space-y-2 bg-zinc-800 dark:bg-red-900/20 p-4 rounded-lg"
         >
           <li>• Never share your recovery phrase with anyone</li>
           <li>• Never input these words on any website</li>
