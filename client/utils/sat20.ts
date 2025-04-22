@@ -94,6 +94,14 @@ class WalletManager {
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
     return this._handleRequest('signPsbt', psbtHex, bool)
   }
+
+  async getTxAssetInfoFromPsbt_SatsNet(
+    psbtHex: string,
+    network: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getTxAssetInfoFromPsbt_SatsNet', psbtHex, network)
+  }
+
   async extractTxFromPsbt(
     psbtHex: string
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
@@ -138,7 +146,7 @@ class WalletManager {
   }
 
   async init(
-    config: Config,
+    config: any,
     logLevel: number
   ): Promise<[Error | undefined, void | undefined]> {
     return this._handleRequest('init', config, logLevel)
@@ -252,7 +260,12 @@ class WalletManager {
       networkFee
     )
   }
-
+  async mergeBatchSignedPsbt_SatsNet(
+    psbts: string[],
+    network: string
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return this._handleRequest('mergeBatchSignedPsbt_SatsNet', psbts, network)
+  }
   async addInputsToPsbt(
     psbtHex: string,
     utxos: string[]

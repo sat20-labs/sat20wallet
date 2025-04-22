@@ -2,7 +2,7 @@
   "name": "wxt-vue-starter",
   "description": "manifest.json description",
   "private": true,
-  "version": "0.0.50",
+  "version": "0.0.53",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -32,7 +32,7 @@
     "qrcode.vue": "^3.6.0",
     "radash": "^12.1.0",
     "radix-vue": "^1.9.13",
-    "reka-ui": "^2.0.2",
+    "reka-ui": "^2.2.0",
     "tailwind-merge": "^3.0.2",
     "tailwindcss-animate": "^1.0.7",
     "vee-validate": "^4.15.0",

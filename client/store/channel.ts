@@ -97,11 +97,11 @@ export const useChannelStore = defineStore('channel', () => {
 
   const channel = computed(() => channels.value?.[0])
   const getAllChannels = async () => {
-    const [_, result] = await satsnetStp.getAllChannels()
-    if (result?.channels) {
+    const [_, resull] = await satsnetStp.getAllChannels()
+    if (resull?.channels) {
       try {
-        console.log('result', result)
-        const c = JSON.parse(result.channels)
+        console.log('result', resull)
+        const c = JSON.parse(resull.channels)
         console.log('channels', c)
         if (c && typeof c === 'object') {
           let values = Object.values(c)
@@ -149,7 +149,7 @@ export const useChannelStore = defineStore('channel', () => {
         if (protocol === 'runes') {
           console.log('处理runes金额转换, 原始金额:', amt)
           const [_, amtRes] = await satsnetStp.runesAmtV2ToV3(key, amt)
-          amt = amtRes?.runeAmtInV3 || amt
+          // amt = amtRes?.runeAmtInV3 || amt
           console.log('转换后金额:', amt)
         }
 

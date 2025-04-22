@@ -9,8 +9,8 @@ import { VueQueryPlugin } from '@tanstack/vue-query'
 import { Icon } from '@iconify/vue'
 import { loadWasm } from '@/utils/wasm'
 
-loadWasm().then(() => {
-  walletStorage.initializeState().then(() => {
+walletStorage.initializeState().then(() => {
+  loadWasm().then(() => {
     createApp(App)
       .component('Icon', Icon)
       .use(VueQueryPlugin)
