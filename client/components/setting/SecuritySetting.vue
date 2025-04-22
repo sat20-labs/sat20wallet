@@ -1,10 +1,18 @@
 <template>
-  <div>
-    <h2 class="text-2xl font-bold text-primary/60">Security Settings</h2>    
-    <p class="text-muted-foreground">Manage your wallet security preferences</p>
-    <hr class="mb-4 mt-2 border-t-1 border-accent">
-    <div class="space-y-6 mt-4">
-      <div class="flex items-center justify-between">
+  <div class="w-full px-2  bg-zinc-700/40 rounded-lg">
+    <button @click="isExpanded = !isExpanded"
+      class="flex items-center justify-between w-full p-2 text-left text-primary font-medium rounded-lg">
+      <div>
+        <h2 class="text-lg font-bold text-zinc-200">Security Options</h2>
+        <p class="text-muted-foreground">Manage your wallet security preferences</p>
+      </div>
+      <div class="mr-2">
+          <Icon v-if="isExpanded" icon="lucide:chevrons-up" class="mr-2 h-4 w-4" />
+          <Icon v-else icon="lucide:chevrons-down" class="mr-2 h-4 w-4" />
+      </div>
+    </button>
+    <div v-if="isExpanded" class="space-y-6 px-2 mt-4">
+      <div class="flex items-center justify-between border-t border-zinc-900/30 pt-4">
         <div class="space-y-0.5">
           <Label>Auto-lock Timer</Label>
           <div class="text-sm text-muted-foreground">
@@ -12,7 +20,7 @@
           </div>
         </div>
         <Select v-model="autoLockTime" default-value="5">
-          <SelectTrigger class="w-[180px]">
+          <SelectTrigger class="w-[180px] bg-gray-900/30">
             <SelectValue placeholder="Select time" />
           </SelectTrigger>
           <SelectContent>
@@ -23,9 +31,9 @@
           </SelectContent>
         </Select>
       </div>
-      <hr class="mb-2 mt-2 border-t-1 border-accent">
-      <div class="flex items-center justify-between">
-        <div class="space-y-0.5">
+      
+      <div class="flex items-center justify-between border-t border-zinc-900/30 pt-4">
+        <div class="space-y-0.5 mb-4">
           <Label>Hide Balance</Label>
           <div class="text-sm text-muted-foreground">
             Automatically blur balance on launch
@@ -33,7 +41,7 @@
         </div>
         <Switch v-model="hideBalance" />
       </div>
-      
+
     </div>
   </div>
 </template>
@@ -50,6 +58,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
+const isExpanded = ref(false)
 const autoLockTime = ref('5')
 const hideBalance = ref(false)
 </script>

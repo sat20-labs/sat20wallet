@@ -1,20 +1,26 @@
 <template>
   <LayoutHome>
     <WalletHeader />
-
-    <div class="space-y-6 py-4 px-1">
+    <h2 class="px-4 text-2xl font-medium text-zinc-700/90">System Settings</h2>
+    <div class="space-y-2 py-4 px-0">
+      <EscapeHatch />
+      <Separator />
       <SecuritySetting />
       <Separator />
-      <EnvSetting />
+      <NetworkSetting />
+      <Separator />  
+      <WalletSetting />
+      
       <Separator />
-      <div class="space-y-4">
+      <OtherSetting />
+      <!-- <div class="space-y-4">
         <Button as-child class="h-12 w-full">
           <RouterLink to="/wallet/setting/phrase" class="w-full">
             <Icon icon="bi:file-earmark" class="mr-2 h-4 w-4" /> Show Phrase
           </RouterLink>
         </Button>
         <DeleteWallet />
-      </div>
+      </div> -->
       <Separator />
     </div>
 
@@ -44,9 +50,10 @@
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import WalletHeader from '@/components/wallet/HomeHeader.vue'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
-import EnvSetting from '@/components/setting/EnvSetting.vue'
+import OtherSetting from '@/components/setting/OtherSetting.vue'
 import SecuritySetting from '@/components/setting/SecuritySetting.vue'
-import DeleteWallet from '@/components/setting/DeleteWallet.vue'
+import EscapeHatch from '@/components/setting/EscapeHatch.vue'
+import WalletSetting from '@/components/setting/WalletSetting.vue'
 import NetworkSetting from '@/components/setting/NetworkSetting.vue'
 import AppearanceSetting from '@/components/setting/AppearanceSetting.vue'
 import { Button } from '@/components/ui/button'
