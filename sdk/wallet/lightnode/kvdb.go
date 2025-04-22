@@ -378,12 +378,17 @@ func (p *jsDB) putBatch_Chrome(entries map[string]string) error {
 }
 
 func (p *jsDB) removeBatch_Chrome(entries []string) error {
+
+	data := make([]interface{}, 0)
+    for _, value := range entries {
+        data = append(data, value)
+    }
    
     setPromise := js.Global().Get("Promise").New(js.FuncOf(func(this js.Value, args []js.Value) interface{} {
         resolve := args[0]
         reject := args[1]
         
-        p.db.Call("remove", entries, js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+        p.db.Call("remove", data, js.FuncOf(func(this js.Value, args []js.Value) interface{} {
             if err := js.Global().Get("chrome").Get("runtime").Get("lastError"); !err.IsUndefined() {
                 reject.Invoke(err.Get("message").String())
                 return nil
