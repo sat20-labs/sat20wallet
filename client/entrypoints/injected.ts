@@ -184,6 +184,17 @@ export default defineUnlistedScript(() => {
       })
     }
 
+    async mergeBatchSignedPsbt_SatsNet(
+      psbts: string[],
+      network: string
+    ): Promise<{ psbt: string }> {
+      return this.send<{ psbt: string }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.MERGE_BATCH_SIGNED_PSBT,
+        data: { psbts, network },
+      })
+    }
+
     async addInputsToPsbt(
       psbtHex: string,
       utxos: string[]

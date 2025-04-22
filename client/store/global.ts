@@ -22,9 +22,9 @@ export const useGlobalStore = defineStore('global', () => {
   const setLoading = (value: boolean) => {
     loading.value = value
   }
-  const setEnv = (value: Env) => {
+  const setEnv = async (value: Env) => {
     env.value = value
-    walletStorage.setValue('env', value)
+    await walletStorage.setValue('env', value)
   }
   return {
     loading,

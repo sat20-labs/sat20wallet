@@ -11,7 +11,7 @@ import { browser } from 'wxt/browser'
 import type { Runtime } from 'wxt/browser';
 
 globalThis.Buffer = Buffer3
-import wasmConfig from '@/config/wasm'
+import { getConfig, logLevel } from '@/config/wasm'
 
 // Keeps the service worker alive in Manifest V3.
 function listenToKeepAliveChannel() {
@@ -103,6 +103,7 @@ export default defineBackground(() => {
         Message.MessageAction.GET_UTXOS_WITH_ASSET_V2_SATSNET,
         Message.MessageAction.GET_ASSET_AMOUNT,
         Message.MessageAction.GET_ASSET_AMOUNT_SATSNET,
+        Message.MessageAction.MERGE_BATCH_SIGNED_PSBT,
       ]
 
       // Verify origin authorization for specific methods.
@@ -207,7 +208,12 @@ export default defineBackground(() => {
               resData = finalizeRes
             }
             break
-
+          case Message.MessageAction.MERGE_BATCH_SIGNED_PSBT:
+            resData = await service.mergeBatchSignedPsbt_SatsNet(
+              data.psbts,
+              data.network
+            )
+            break
           case Message.MessageAction.ADD_INPUTS_TO_PSBT:
             const [inputsErr, inputsRes] = await service.addInputsToPsbt(
               data.psbtHex,
@@ -397,6 +403,7 @@ export default defineBackground(() => {
   const loadStpWasm = async () => {
     const go = new Go()
     const wasmPath = browser.runtime.getURL('/wasm/stpd.wasm')
+    const env = walletStorage.getValue('env') || 'test'
     const response = await fetch(wasmPath)
     const wasmBinary = await response.arrayBuffer()
     const wasmModule = await WebAssembly.instantiate(
@@ -405,14 +412,15 @@ export default defineBackground(() => {
     )
     go.run(wasmModule.instance)
     await (globalThis as any).stp_wasm.init(
-      wasmConfig.config,
-      wasmConfig.logLevel
+      getConfig(env),
+      logLevel
     )
   }
   const loadWalletWasm = async () => {
     try {
       importScripts('/wasm/wasm_exec.js')
       const go = new Go()
+      const env = walletStorage.getValue('env') || 'test'
       const wasmPath = browser.runtime.getURL('/wasm/sat20wallet.wasm')
       const response = await fetch(wasmPath)
       const wasmBinary = await response.arrayBuffer()
@@ -422,8 +430,8 @@ export default defineBackground(() => {
       )
       go.run(wasmModule.instance)
       await (globalThis as any).sat20wallet_wasm.init(
-        wasmConfig.config,
-        wasmConfig.logLevel
+        getConfig(env),
+        logLevel
       )
       await loadStpWasm()
 
@@ -508,17 +516,15 @@ export default defineBackground(() => {
 
   // Handles messages sent via browser.runtime.sendMessage, specifically for popups retrieving approval data.
   browser.runtime.onMessage.addListener(
-    (message: any, sender, sendResponse) => {
+    async (message: any, sender, sendResponse) => {
       const { type, action, metadata } = message
-
-      // Respond to requests from the popup to get the data needed for an approval prompt.
       if (
         type === Message.MessageType.REQUEST &&
         action === Message.MessageAction.GET_APPROVE_DATA &&
         metadata?.windowId
       ) {
-        const { windowId } = metadata // windowId here is likely number
-        const approveData = approveMap.get(windowId.toString()) // Use string key for map lookup
+        const { windowId } = metadata
+        const approveData = approveMap.get(windowId.toString())
 
         if (approveData) {
           sendResponse({
@@ -526,14 +532,17 @@ export default defineBackground(() => {
             data: approveData.eventData,
           })
         } else {
-          // Added else case for clarity
           console.warn(`GET_APPROVE_DATA requested for unknown windowId: ${windowId}`);
-          sendResponse(undefined); // Explicitly send undefined or an error
+          sendResponse(undefined);
         }
-        // Return true to indicate asynchronous response.
         return true
+      } else if (type === Message.MessageType.REQUEST && action === Message.MessageAction.ENV_CHANGED) {
+        console.log('ENV_CHANGED', message);
+        await (globalThis as any).stp_wasm.release()
+        await (globalThis as any).stp_wasm.init(getConfig(message.data.env), logLevel)
+        await (globalThis as any).sat20wallet_wasm.release()
+        await (globalThis as any).sat20wallet_wasm.init(getConfig(message.data.env), logLevel)
       }
-      // Added default return false for non-async handlers
       return undefined;
     }
   )

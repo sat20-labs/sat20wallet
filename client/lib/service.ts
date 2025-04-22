@@ -108,6 +108,13 @@ class Service {
     return res
   }
 
+  async mergeBatchSignedPsbt_SatsNet(psbts: string[], network: string): Promise<string> {
+    const res = (globalThis as any).sat20wallet_wasm.mergeBatchSignedPsbt_SatsNet(
+      psbts,
+      network
+    )
+    return res
+  }
   async finalizeSellOrder_SatsNet(
     psbtHex: string,
     utxos: string[],

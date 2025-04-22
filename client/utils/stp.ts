@@ -270,7 +270,7 @@ class SatsnetStp {
     )
   }
 
-  async getAllChannels(): Promise<[Error | undefined, any[] | undefined]> { // Refined return type
+  async getAllChannels(): Promise<[Error | undefined, any | undefined]> { // Refined return type
     return this._handleRequest<any[]>('getAllChannels')
   }
 

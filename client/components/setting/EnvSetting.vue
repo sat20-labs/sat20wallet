@@ -34,13 +34,28 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useGlobalStore, type Env } from '@/store/global'
+import { browser } from 'wxt/browser'
+import { Message } from '@/types/message'
 
 const globalStore = useGlobalStore()
 
 const computedEnv = computed<Env>({
   get: () => globalStore.env,
-  set: (newValue) => {
-    globalStore.setEnv(newValue)
+  set: async (newValue) => {
+    await globalStore.setEnv(newValue)
+
+    try {
+      console.log(`Sending ENV_CHANGED message with payload: ${newValue}`)
+      await browser.runtime.sendMessage({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.ENV_CHANGED,
+        data: { env: newValue },
+        metadata: { from: 'SETTINGS_PAGE' }
+      })
+    } catch (error) {
+      console.error('Failed to send ENV_CHANGED message to background:', error)
+    }
+
     window.location.reload()
   }
 })

@@ -162,7 +162,10 @@ declare interface WalletManager {
   ): Promise<SatsnetResponse<{ psbt: string }>>
 
   extractTxFromPsbt(psbtHex: string): Promise<SatsnetResponse<{ psbt: string }>>
-
+  getTxAssetInfoFromPsbt_SatsNet(
+    psbtHex: string,
+    network: string
+  ): Promise<SatsnetResponse<any>>
   extractTxFromPsbt_SatsNet(
     psbtHex: string
   ): Promise<SatsnetResponse<{ psbt: string }>>
@@ -217,7 +220,10 @@ declare interface WalletManager {
     serviceFee: number,
     networkFee: number
   ): Promise<SatsnetResponse<{ psbt: string }>>
-
+  mergeBatchSignedPsbt_SatsNet(
+    psbts: string[],
+    network: string
+  ): Promise<SatsnetResponse<{ psbt: string }>>
   addInputsToPsbt(
     psbtHex: string,
     utxos: string[]
