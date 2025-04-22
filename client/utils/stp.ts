@@ -58,7 +58,8 @@ interface StpWasmModule {
   getAssetAmount: (...args: any[]) => Promise<WasmResponse<{ amount: string; value: string }>>;
   getAssetAmount_SatsNet: (...args: any[]) => Promise<WasmResponse<{ amount: string; value: string }>>;
   batchSendAssets_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
-
+  getTxAssetInfoFromPsbt: (...args: any[]) => Promise<WasmResponse<any>>;
+  getTxAssetInfoFromPsbt_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
 }
 
 
@@ -494,7 +495,18 @@ class SatsnetStp {
     assetName: string, amt: string, n: number): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
     return this._handleRequest<any>('batchSendAssets_SatsNet', destAddr, assetName, amt, n);
   }
-
+  async getTxAssetInfoFromPsbt(
+    psbtHex: string,
+    network: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getTxAssetInfoFromPsbt', psbtHex, network)
+  }
+  async getTxAssetInfoFromPsbt_SatsNet(
+    psbtHex: string,
+    network: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getTxAssetInfoFromPsbt_SatsNet', psbtHex, network)
+  }
   // --- End Added Asset Amount Getter Methods ---
 }
 

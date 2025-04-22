@@ -95,12 +95,7 @@ class WalletManager {
     return this._handleRequest('signPsbt', psbtHex, bool)
   }
 
-  async getTxAssetInfoFromPsbt_SatsNet(
-    psbtHex: string,
-    network: string
-  ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('getTxAssetInfoFromPsbt_SatsNet', psbtHex, network)
-  }
+  
 
   async extractTxFromPsbt(
     psbtHex: string

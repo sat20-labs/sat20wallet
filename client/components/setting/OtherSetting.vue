@@ -33,7 +33,6 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -42,14 +41,30 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useGlobalStore, type Env } from '@/store/global'
-
+import { Message } from '@/types/message'
+import stp from '@/utils/stp'
+import walletManager from '@/utils/sat20'
 const isExpanded = ref(false)
 const globalStore = useGlobalStore()
 
 const computedEnv = computed<Env>({
   get: () => globalStore.env,
-  set: (newValue) => {
-    globalStore.setEnv(newValue)
+  set: async (newValue) => {
+    await globalStore.setEnv(newValue)
+
+    try {
+      console.log(`Sending ENV_CHANGED message with payload: ${newValue}`)
+      await browser.runtime.sendMessage({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.ENV_CHANGED,
+        data: { env: newValue },
+        metadata: { from: 'SETTINGS_PAGE' }
+      })
+    } catch (error) {
+      console.error('Failed to send ENV_CHANGED message to background:', error)
+    }
+    await stp.release()
+    await walletManager.release()
     window.location.reload()
   }
 })

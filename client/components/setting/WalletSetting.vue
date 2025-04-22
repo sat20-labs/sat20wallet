@@ -19,47 +19,15 @@
                     </RouterLink>
                 </Button>
 
-                <Button variant="secondary" @click="deleteWallet" class="w-full h-12">
-                    <Icon icon="lucide:trash-2" class="mr-2 h-4 w-4" /> Delete Wallet
-                </Button>               
             </div>
         </div> 
     </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
-import { useWalletStore, useL1Store, useL2Store } from '@/store'
-import { storage, StorageArea } from 'wxt/storage'
-import { useRouter } from 'vue-router'
-
-
-import { useGlobalStore, type Env } from '@/store/global'
 
 const isExpanded = ref(false)
-const globalStore = useGlobalStore()
 
-const walletStore = useWalletStore()
-const l1Store = useL1Store()
-const l2Store = useL2Store()
-const router = useRouter()
-
-const deleteWallet = async () => {
-  await walletStore.deleteWallet()
-  l1Store.reset()
-  l2Store.reset()
-  await storage.clear('local')
-  await storage.clear('session')
-  window.location.reload()
-}
-
-const computedEnv = computed<Env>({
-    get: () => globalStore.env,
-    set: (newValue) => {
-        globalStore.setEnv(newValue)
-        window.location.reload()
-    }
-})
 </script>
