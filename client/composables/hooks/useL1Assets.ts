@@ -105,7 +105,6 @@ export const useL1Assets = () => {
             label = result?.displayname || label
           }
         }
-        console.log('label', label)
         allAssetList.value.push({
           id: key,
           key,
@@ -116,31 +115,7 @@ export const useL1Assets = () => {
           utxos: [],
           amount: item.Amount,
         })
-        console.log('allAssetList.value', allAssetList.value)
       }
-      // const getAssetInfo = async (key: string) => {
-      //   console.log('获取资产信息:', key)
-      //   const [err, res] = await satsnetStp.getTickerInfo(key)
-      //   if (res?.ticker) {
-      //     const { ticker } = res
-      //     const result = JSON.parse(ticker)
-      //     const findItem = allAssetList.value?.find((a: any) => a.key === key)
-      //     if (findItem) {
-      //       findItem.label = result?.displayname || findItem.label
-      //       console.log('更新资产标签:', findItem)
-      //     }
-      //   }
-      // }
-
-      // const tickers = allAssetList.value.map((a) => a.key)
-      // console.log('待处理的ticker列表:', tickers)
-      // await parallel(
-      //   3,
-      //   tickers.filter((r) => r !== '::') || [],
-      //   async (ticker) => {
-      //     return await getAssetInfo(ticker)
-      //   }
-      // )
     }
   }
 

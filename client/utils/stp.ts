@@ -60,6 +60,7 @@ interface StpWasmModule {
   batchSendAssets_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
   getTxAssetInfoFromPsbt: (...args: any[]) => Promise<WasmResponse<any>>;
   getTxAssetInfoFromPsbt_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
+  getCommitTxAssetInfo: (...args: any[]) => Promise<WasmResponse<any>>;
 }
 
 
@@ -501,11 +502,17 @@ class SatsnetStp {
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('getTxAssetInfoFromPsbt', psbtHex, network)
   }
+
   async getTxAssetInfoFromPsbt_SatsNet(
     psbtHex: string,
     network: string
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('getTxAssetInfoFromPsbt_SatsNet', psbtHex, network)
+  }
+  async getCommitTxAssetInfo(
+    channelId: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getCommitTxAssetInfo', channelId)
   }
   // --- End Added Asset Amount Getter Methods ---
 }

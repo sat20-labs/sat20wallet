@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { ordxApi, satnetApi } from '@/apis'
 import { parallel } from 'radash'
 import { useL2Store, useWalletStore } from '@/store'
-import { Chain } from '@/types'
+import satsnetStp from '@/utils/stp'
 interface AssetItem {
   id: string
   key: string
@@ -75,27 +75,38 @@ export const useL2Assets = () => {
     console.log('summaryQuery.data.value', summaryQuery.data.value)
 
     const assets = summaryQuery.data.value?.data || []
-    assets.forEach((item: any) => {
+    for await (const item of assets) {
       const key = item.Name.Protocol
         ? `${item.Name.Protocol}:${item.Name.Type}:${item.Name.Ticker}`
         : '::'
 
       if (!allAssetList.value.find((v) => v?.key === key)) {
+        let label = item.Name.Type === 'e'
+        ? `${item.Name.Ticker}（raresats）`
+        : item.Name.Ticker;
+        if (key !== '::') {
+          const [err, res] = await satsnetStp.getTickerInfo(key)
+          console.log('ticker res', res)
+          if (res?.ticker) {
+            const { ticker } = res
+            const result = JSON.parse(ticker)
+            console.log('ticker result', result)
+
+            label = result?.displayname || label
+          }
+        }
         allAssetList.value.push({
           id: key,
           key,
           protocol: item.Name.Protocol,
           type: item.Name.Type,
-          label:
-            item.Name.Type === 'e'
-              ? `${item.Name.Ticker}（raresats）`
-              : item.Name.Ticker,
+          label: label,
           ticker: item.Name.Ticker,
           utxos: [],
           amount: item.Amount,
         })
       }
-    })
+    }
   }
 
   // Store Updates

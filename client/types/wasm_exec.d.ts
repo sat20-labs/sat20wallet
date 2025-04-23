@@ -337,7 +337,9 @@ interface SatsnetStp {
   getUtxosWithAsset_SatsNet(address: string, amt: number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
   getUtxosWithAssetV2(address: string, amt: number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
   getUtxosWithAssetV2_SatsNet(address: string, amt: number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
-
+  getCommitTxAssetInfo(
+    channelId: string
+  ): Promise<SatsnetResponse<any>>
   // 新增方法定义
   getAssetAmount(
     address: string,
