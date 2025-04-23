@@ -12,92 +12,105 @@
       </div>
     </button>
     <div v-if="isExpanded" class="space-y-6 py-2 px-2 mb-4">
-      <!-- Channel Summary -->
-      <div class="border-t border-zinc-900/30">
-        <h3 class="text-md font-bold text-zinc-200 mt-2">Channel Summary</h3>
-        <div class="text-sm text-muted-foreground">
-          <div class="flex justify-between">
-            <span>Status</span>
-            <span class="text-green-500 rounded-lg px-2">Active</span>
+      <div class="w-full px-4 py-4 bg-zinc-700/40 rounded-lg">
+    <h2 class="text-lg font-bold text-zinc-200">Asset Safety</h2>
+    <p class="text-sm text-muted-foreground mt-2">
+      Your assets are safe. They are secured by your commitment transaction. By broadcasting the commitment transaction, you can reclaim your funds at any time without third-party permission.
+    </p>
+
+    <!-- Broadcast Button -->
+    <div class="mt-6">
+      <Button class="w-full bg-purple-600 text-white">BROADCAST TX</Button>
+    </div>
+
+    <!-- Current Commitment Transaction -->
+    <div class="mt-6">
+      <h3 class="text-md font-bold text-zinc-200">Current Commitment Transaction</h3>
+
+       <!-- Your Assets Section -->
+       <div class="mt-6">
+        <h4 class="text-sm font-bold text-zinc-200">Your Assets in This Channel</h4>
+        <div class="overflow-x-auto custom-scrollbar">
+          <div class="min-w-max grid grid-cols-4 gap-4 text-sm text-muted-foreground mt-2 whitespace-nowrap">
+
+          <div class="flex flex-col">
+            <span class="font-medium">Asset</span>
+            <span>RarePizza</span>
+            <span>SAT20-ABC</span>
           </div>
-          <div class="flex justify-between">
-            <span>Capacity</span>
-            <span class="bg-zinc-900 rounded-xl px-2 py-[2px]">abcd...wxyz1234</span>
+          <div class="flex flex-col">
+            <span class="font-medium">Amount</span>
+            <span>100</span>
+            <span>1</span>
           </div>
-          <div class="flex justify-between">
-            <span>Balance</span>
-            <span>650,000 sats</span>
-          </div>
-          <div class="flex justify-between">
-            <span>Estimated total</span>
-            <span>70,000 sats</span>
           </div>
         </div>
       </div>
 
-      <!-- Asset Breakdown -->
-      <div class="border-t border-zinc-900/30">
-        <h3 class="text-md font-bold text-zinc-200 mt-2">Asset Breakdown</h3>
-        <div class="text-sm text-muted-foreground">
-          <div class="flex justify-between">
-            <span>Withdrawable amount</span>
-            <span>650,000 sats</span>
+      <!-- Inputs Section -->
+      <div class="mt-4">
+        <h4 class="text-sm font-bold text-zinc-200">Inputs</h4>
+        <div class="overflow-x-auto custom-scrollbar">
+          <div class="min-w-max grid grid-cols-4 gap-4 text-sm text-muted-foreground mt-2 whitespace-nowrap">
+
+          <div class="flex flex-col">
+            <span class="font-medium">UTXO</span>
+            <span>utxo0</span>
+            <span>utxo1</span>
           </div>
-          <div class="flex justify-between">
-            <span>In Channel</span>
-            <span>50,000 sats</span>
+          <div class="flex flex-col">
+            <span class="font-medium">Value</span>
+            <span>0.015 BTC</span>
+            <span>0.02 BTC</span>
           </div>
-          <div class="flex justify-between">
-            <span>Estimated total</span>
-            <span>700,000 sats</span>
+          <div class="flex flex-col">
+            <span class="font-medium">Assets</span>
+            <span>RarePizza × 100</span>
+            <span>-</span>
+          </div>
+          <div class="flex flex-col">
+            <span class="font-medium">Address</span>
+            <span>bc1q...</span>
+            <span>bc1q...</span>
+          </div>
+        </div>
+        </div>
+      </div>
+
+      <!-- Outputs Section -->
+      <div class="mt-6">
+        <h4 class="text-sm font-bold text-zinc-200">Outputs</h4>
+        <div class="overflow-x-auto custom-scrollbar">
+          <div class="min-w-max grid grid-cols-4 gap-4 text-sm text-muted-foreground mt-2 whitespace-nowrap">
+
+          <div class="flex flex-col border-b border-zinc-600/30">
+            <span class="font-medium">UTXO</span>
+            <span>utxo0</span>
+            <span>utxo1</span>
+          </div>
+          <div class="flex flex-col border-b border-zinc-600/30">
+            <span class="font-medium">Value</span>
+            <span>0.003 BTC</span>
+            <span>0.02 BTC</span>
+          </div>
+          <div class="flex flex-col border-b border-zinc-600/30">
+            <span class="font-medium">Assets</span>
+            <span>SAT20-ABC × 1</span>
+            <span>-</span>
+          </div>
+          <div class="flex flex-col border-b border-zinc-600/30">
+            <span class="font-medium">Address</span>
+            <span>Your address</span>
+            <span>bc1q...</span>
+          </div>
           </div>
         </div>
       </div>
 
-      <!-- Escape Options -->
-      <div class="border-t border-zinc-900/30">
-        <h3 class="text-md font-bold text-zinc-200 mt-2">Escape Options</h3>
-        <div class="space-y-2 mt-2">
-          <Button variant="secondary" @click="showCommitmentDetails = true" class="w-full text-white">View Commitment
-            TX</Button>
-          <!-- Commitment Details Modal -->
-          <div v-if="showCommitmentDetails"
-            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div class="bg-zinc-800 rounded-lg w-[95%] max-w-lg max-h-[90vh] overflow-y-auto custom-scrollbar p-4">
-              <CommitmentDetails @close="showCommitmentDetails = false" />
-            </div>
-          </div>
+     
 
-          <div class="flex space-x-2">
-            <div class="flex gap-4 w-full">
-              <Popover v-if="channel" class="flex-1">
-                <PopoverTrigger asChild>
-                  <Button class="w-full bg-green-600" :disabled="channel.status !== 16">
-                    <Icon icon="material-symbols:flash-off" class="mr-2 h-4 w-4" />
-                    Close
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent>
-                  <div class="p-4 space-y-4">
-                    <p>Are you sure you want to close this channel?</p>
-                    <div class="flex justify-end gap-2">
-                      <Button variant="ghost" @click="() => { }"> Cancel </Button>
-                      <Button :class="{ 'opacity-50 pointer-events-none': loading }" variant="destructive"
-                        @click="closeChannel">
-                        Confirm
-                      </Button>
-                    </div>
-                  </div>
-                </PopoverContent>
-              </Popover>
-            </div>
-          </div>
-        </div>
-        <p class="text-xs text-muted-foreground my-4">
-          <Icon icon="mdi:information-outline" class="inline-block mr-1" />
-          Funds can always be safely reclaimed.
-        </p>
-      </div>
+    </div>
+  </div>
     </div>
   </div>
 </template>
@@ -123,8 +136,21 @@ import { useGlobalStore, type Env } from '@/store/global'
 import CommitmentDetails from './CommitmentDetails.vue'
 
 const loading = ref(false)
+const showSafetyTips = ref(false)
 const isExpanded = ref(false)
 const showCommitmentDetails = ref(false)
+
+const showInputDetails = ref(false)
+const showOutputDetails = ref(false)
+
+const toggleInputDetails = () => {
+  showInputDetails.value = !showInputDetails.value
+}
+
+const toggleOutputDetails = () => {
+  showOutputDetails.value = !showOutputDetails.value
+}
+
 const globalStore = useGlobalStore()
 
 const computedEnv = computed<Env>({
@@ -207,15 +233,17 @@ onMounted(() => {
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.2);
+  background-color: rgba(255, 255, 255, 0.03);
+  height: 4px;
   border-radius: 4px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(255, 255, 255, 0.4);
+  background-color: rgba(255, 255, 255, 0.219);
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
+  height: 4px;
   background-color: transparent;
 }
 </style>

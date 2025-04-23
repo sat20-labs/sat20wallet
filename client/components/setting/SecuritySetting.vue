@@ -11,7 +11,7 @@
         <Icon v-else icon="lucide:chevrons-down" class="mr-2 h-4 w-4" />
       </div>
     </button>
-    <div v-if="isExpanded" class="space-y-6 px-2 mt-4">
+    <div v-if="isExpanded" class="space-y-6 px-2 py-4">
       <div class="flex items-center justify-between border-t border-zinc-900/30 pt-4">
         <div class="space-y-0.5">
           <Label>Auto-lock Timer</Label>
