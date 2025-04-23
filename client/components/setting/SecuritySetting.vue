@@ -7,8 +7,8 @@
         <p class="text-muted-foreground">Manage your wallet security preferences</p>
       </div>
       <div class="mr-2">
-          <Icon v-if="isExpanded" icon="lucide:chevrons-up" class="mr-2 h-4 w-4" />
-          <Icon v-else icon="lucide:chevrons-down" class="mr-2 h-4 w-4" />
+        <Icon v-if="isExpanded" icon="lucide:chevrons-up" class="mr-2 h-4 w-4" />
+        <Icon v-else icon="lucide:chevrons-down" class="mr-2 h-4 w-4" />
       </div>
     </button>
     <div v-if="isExpanded" class="space-y-6 px-2 mt-4">
@@ -31,7 +31,7 @@
           </SelectContent>
         </Select>
       </div>
-      
+
       <div class="flex items-center justify-between border-t border-zinc-900/30 pt-4">
         <div class="space-y-0.5 mb-4">
           <Label>Hide Balance</Label>
@@ -41,7 +41,11 @@
         </div>
         <Switch v-model="hideBalance" />
       </div>
-
+      <Button as-child class="h-12 w-full">
+        <RouterLink to="/wallet/setting/phrase" class="w-full">
+          <Icon icon="lucide:eye-off" class="mr-2 h-4 w-4" /> Show Phrase
+        </RouterLink>
+      </Button>
     </div>
   </div>
 </template>
@@ -50,6 +54,7 @@
 import { ref } from 'vue'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { Button } from '@/components/ui/button'
 import {
   Select,
   SelectContent,

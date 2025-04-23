@@ -109,10 +109,6 @@ class WalletStorage {
     const oldValue = this.state[key]
     console.log('oldValue', oldValue);
     
-    // 如果值没有变化，直接返回
-    if (oldValue === value) {
-      return
-    }
 
     try {
       // 存储到本地

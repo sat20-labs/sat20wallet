@@ -7,8 +7,8 @@
         <p class="text-muted-foreground">Channel Info & Secure Exit from Channel</p>
       </div>
       <div class="mr-2">
-          <Icon v-if="isExpanded" icon="lucide:chevrons-up" class="mr-2 h-4 w-4" />
-          <Icon v-else icon="lucide:chevrons-down" class="mr-2 h-4 w-4" />
+        <Icon v-if="isExpanded" icon="lucide:chevrons-up" class="mr-2 h-4 w-4" />
+        <Icon v-else icon="lucide:chevrons-down" class="mr-2 h-4 w-4" />
       </div>
     </button>
     <div v-if="isExpanded" class="space-y-6 py-2 px-2 mb-4">
@@ -57,18 +57,17 @@
       <!-- Escape Options -->
       <div class="border-t border-zinc-900/30">
         <h3 class="text-md font-bold text-zinc-200 mt-2">Escape Options</h3>
-        <div class="space-y-2 mt-2">          
-          <Button variant="secondary" @click="showCommitmentDetails = true" class="w-full text-white">View Commitment TX</Button>
+        <div class="space-y-2 mt-2">
+          <Button variant="secondary" @click="showCommitmentDetails = true" class="w-full text-white">View Commitment
+            TX</Button>
           <!-- Commitment Details Modal -->
-          <div
-            v-if="showCommitmentDetails"
-            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
-          >
-          <div class="bg-zinc-800 rounded-lg w-[95%] max-w-lg max-h-[90vh] overflow-y-auto custom-scrollbar p-4">
+          <div v-if="showCommitmentDetails"
+            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-zinc-800 rounded-lg w-[95%] max-w-lg max-h-[90vh] overflow-y-auto custom-scrollbar p-4">
               <CommitmentDetails @close="showCommitmentDetails = false" />
             </div>
           </div>
-          
+
           <div class="flex space-x-2">
             <div class="flex gap-4 w-full">
               <Popover v-if="channel" class="flex-1">
@@ -82,35 +81,9 @@
                   <div class="p-4 space-y-4">
                     <p>Are you sure you want to close this channel?</p>
                     <div class="flex justify-end gap-2">
-                      <Button variant="ghost" @click="() => {}"> Cancel </Button>
-                      <Button
-                        :class="{ 'opacity-50 pointer-events-none': loading }"
-                        variant="destructive"
-                        @click="(e) => closeChannel(() => {}, false)"
-                      >
-                        Confirm
-                      </Button>
-                    </div>
-                  </div>
-                </PopoverContent>
-              </Popover>
-              <Popover class="flex-1">
-                <PopoverTrigger asChild>
-                  <Button class="w-full" variant="default">
-                    <Icon icon="material-symbols:flash-off" class="mr-2 h-4 w-4" />
-                    Force Close
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent>
-                  <div class="p-4 space-y-4">
-                    <p>Are you sure you want to force close this channel?</p>
-                    <div class="flex justify-end gap-2">
-                      <Button variant="ghost" @click="() => {}"> Cancel </Button>
-                      <Button
-                        :class="{ 'opacity-50 pointer-events-none': loading }"
-                        variant="secondary"
-                        @click="(e) => closeChannel(() => {}, true)"
-                      >
+                      <Button variant="ghost" @click="() => { }"> Cancel </Button>
+                      <Button :class="{ 'opacity-50 pointer-events-none': loading }" variant="destructive"
+                        @click="closeChannel">
                         Confirm
                       </Button>
                     </div>
@@ -166,7 +139,7 @@ const channelStore = useChannelStore()
 const { channel, plainList, sat20List, brc20List, runesList } = storeToRefs(channelStore)
 const { toast } = useToast()
 
-const checkChannel = async (force: boolean) => {
+const checkChannel = async () => {
   const chanid = channel.value!.chanid
 
   const [err, result] = await satsnetStp.getChannelStatus(chanid)
@@ -174,7 +147,7 @@ const checkChannel = async (force: boolean) => {
   if (err) {
     return false
   }
-  if (force && result >= 16) {
+  if (result >= 16) {
     return true
   }
   if (result !== 16) {
@@ -183,12 +156,12 @@ const checkChannel = async (force: boolean) => {
   return true
 }
 
-const closeChannel = async (closeHanlder: any, force: boolean = false) => {
+const closeChannel = async (closeHanlder: any) => {
   loading.value = true
   console.log('close')
 
   const chanid = channel.value!.chanid
-  const status = await checkChannel(force)
+  const status = await checkChannel()
   if (!status) {
     toast({
       title: 'Error',
@@ -198,14 +171,18 @@ const closeChannel = async (closeHanlder: any, force: boolean = false) => {
     loading.value = false
     return
   }
-  const [err, result] = await satsnetStp.closeChannel(chanid, 0, force)
+  const [err] = await satsnetStp.closeChannel(chanid, 0, false)
   closeHanlder()
   if (err) {
-    toast({
-      title: 'Error',
-      description: err.message,
-      variant: 'destructive',
-    })
+    const [errForce] = await satsnetStp.closeChannel(chanid, 0, true)
+    closeHanlder()
+    if (errForce) {
+      toast({
+        title: 'Error',
+        description: 'Force close failed',
+        variant: 'destructive',
+      })
+    }
     loading.value = false
     return
   } else {
@@ -215,9 +192,7 @@ const closeChannel = async (closeHanlder: any, force: boolean = false) => {
     })
   }
   loading.value = false
-  // await store.setChannels([])
   await channelStore.getAllChannels()
-  // btcStore.retry()
 }
 onMounted(() => {
   channelStore.getAllChannels()

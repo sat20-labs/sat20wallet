@@ -9,18 +9,7 @@
       <Separator />
       <NetworkSetting />
       <Separator />  
-      <WalletSetting />
-      
       <Separator />
-      <OtherSetting />
-      <!-- <div class="space-y-4">
-        <Button as-child class="h-12 w-full">
-          <RouterLink to="/wallet/setting/phrase" class="w-full">
-            <Icon icon="bi:file-earmark" class="mr-2 h-4 w-4" /> Show Phrase
-          </RouterLink>
-        </Button>
-        <DeleteWallet />
-      </div> -->
       <Separator />
     </div>
 
@@ -28,9 +17,6 @@
 
     <div class="flex flex-col items-center gap-4 pb-4">
       <div class="flex items-center gap-4">
-        <!-- <a href="https://discord.gg/" target="_blank" class="text-muted-foreground hover:text-primary">
-          <Icon icon="bi:discord" class="w-6 h-6" />
-        </a> -->
         <a href="https://twitter.com/sat20labs" target="_blank" class="text-muted-foreground hover:text-primary">
           <Icon icon="bi:twitter-x" class="w-4 h-4" />
         </a>

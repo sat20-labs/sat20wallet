@@ -234,7 +234,7 @@ const { accountIndex, accounts } = storeToRefs(walletStore)
 // Methods
 function showCreateAccountDialog() {
   isCreateAccountDialogOpen.value = true
-  newAccountName.value = ''
+  newAccountName.value = `Account ${(accounts.value?.length || 0) + 1}`
 }
 
 function showEditNameDialog(account: WalletAccount) {

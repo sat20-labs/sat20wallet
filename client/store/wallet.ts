@@ -20,7 +20,6 @@ export const useWalletStore = defineStore('wallet', () => {
   const chain = ref(walletStorage.getValue('chain'))
   const locked = ref(true)
   const hasWallet = ref(!!walletStorage.getValue('hasWallet'))
-  console.log('wallets', typeof walletStorage.getValue('wallets'));
   const localWallets = walletStorage.getValue('wallets');
   const wallets = ref<WalletData[]>(localWallets ? JSON.parse(JSON.stringify(localWallets)) : [])
 

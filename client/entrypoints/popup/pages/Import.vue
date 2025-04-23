@@ -19,7 +19,7 @@
           <TabsContent value="mnemonic">
             <Alert>
               <AlertDescription>
-                Enter your 12 or 24-word recovery phrase in the correct order
+                Enter your 12 recovery phrase in the correct order
               </AlertDescription>
             </Alert>
 
