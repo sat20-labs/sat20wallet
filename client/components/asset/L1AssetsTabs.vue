@@ -22,7 +22,7 @@
       <div v-for="asset in filteredAssets" :key="asset.id"
         class="flex items-center justify-between p-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors">
         <div>
-          <div class="font-medium">{{ (asset.ticker || asset.label).toUpperCase() }}</div>
+          <div class="font-medium">{{ asset.label }}</div>
           <div class="text-sm text-muted-foreground">
             {{ formatAmount(asset) }}
           </div>
@@ -97,13 +97,14 @@ const filteredAssets = computed(() => {
   
   return props.assets.filter(asset => {
     if (!asset) return false
-    if (selectedType.value === 'BTC' && !asset.type) {
-      console.log('L1AssetsTabs - Found BTC asset:', asset)
-      return true
-    }
-    const assetType = asset.type?.toUpperCase()
-    console.log('L1AssetsTabs - Asset:', asset, 'Type:', assetType, 'Selected:', selectedType.value)
-    return selectedType.value === assetType
+    return true
+    // if (selectedType.value === 'BTC' && !asset.type) {
+    //   console.log('L1AssetsTabs - Found BTC asset:', asset)
+    //   return true
+    // }
+    // const assetType = asset.type?.toUpperCase()
+    // console.log('L1AssetsTabs - Asset:', asset, 'Type:', assetType, 'Selected:', selectedType.value)
+    // return selectedType.value === assetType
   })
 })
 
@@ -134,7 +135,7 @@ const formatAmount = (asset: Asset) => {
   if (selectedType.value === 'BTC') {
     return `${asset.amount} sats`
   }
-  return `${asset.amount} ${asset.ticker}`
+  return `${asset.amount}`
 }
 </script>
 

@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { ordxApi, satnetApi } from '@/apis'
 import { parallel } from 'radash'
+import satsnetStp from '@/utils/stp'
 import { useL1Store, useWalletStore } from '@/store'
 import { Chain } from '@/types'
 interface AssetItem {
@@ -84,27 +85,63 @@ export const useL1Assets = () => {
     console.log('summaryQuery.data.value', summaryQuery.data.value)
 
     const assets = summaryQuery.data.value?.data || []
-    assets.forEach((item: any) => {
+    for await (const item of assets) {
       const key = item.Name.Protocol
         ? `${item.Name.Protocol}:${item.Name.Type}:${item.Name.Ticker}`
         : '::'
 
       if (!allAssetList.value.find((v) => v?.key === key)) {
+        let label = item.Name.Type === 'e'
+        ? `${item.Name.Ticker}（raresats）`
+        : item.Name.Ticker;
+        if (key !== '::') {
+          const [err, res] = await satsnetStp.getTickerInfo(key)
+          console.log('ticker res', res)
+          if (res?.ticker) {
+            const { ticker } = res
+            const result = JSON.parse(ticker)
+            console.log('ticker result', result)
+
+            label = result?.displayname || label
+          }
+        }
+        console.log('label', label)
         allAssetList.value.push({
           id: key,
           key,
           protocol: item.Name.Protocol,
           type: item.Name.Type,
-          label:
-            item.Name.Type === 'e'
-              ? `${item.Name.Ticker}（raresats）`
-              : item.Name.Ticker,
+          label: label,
           ticker: item.Name.Ticker,
           utxos: [],
           amount: item.Amount,
         })
+        console.log('allAssetList.value', allAssetList.value)
       }
-    })
+      // const getAssetInfo = async (key: string) => {
+      //   console.log('获取资产信息:', key)
+      //   const [err, res] = await satsnetStp.getTickerInfo(key)
+      //   if (res?.ticker) {
+      //     const { ticker } = res
+      //     const result = JSON.parse(ticker)
+      //     const findItem = allAssetList.value?.find((a: any) => a.key === key)
+      //     if (findItem) {
+      //       findItem.label = result?.displayname || findItem.label
+      //       console.log('更新资产标签:', findItem)
+      //     }
+      //   }
+      // }
+
+      // const tickers = allAssetList.value.map((a) => a.key)
+      // console.log('待处理的ticker列表:', tickers)
+      // await parallel(
+      //   3,
+      //   tickers.filter((r) => r !== '::') || [],
+      //   async (ticker) => {
+      //     return await getAssetInfo(ticker)
+      //   }
+      // )
+    }
   }
 
   // Store Updates
