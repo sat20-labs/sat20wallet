@@ -100,8 +100,8 @@ const l1Assets = computed(() => {
   switch (selectedType.value) {
     case 'BTC':
       return (l1Store.plainList || []).map(asset => ({ ...asset, type: 'BTC' }))
-    case 'SAT20':
-      return (l1Store.sat20List || []).map(asset => ({ ...asset, type: 'SAT20' }))
+    case 'ORDX':
+      return (l1Store.sat20List || []).map(asset => ({ ...asset, type: 'ORDX' }))
     case 'Runes':
       return (l1Store.runesList || []).map(asset => ({ ...asset, type: 'Runes' }))
     case 'BRC20':
@@ -115,8 +115,8 @@ const l2Assets = computed(() => {
   switch (selectedType.value) {
     case 'BTC':
       return (l2Store.plainList || []).map(asset => ({ ...asset, type: 'BTC' }))
-    case 'SAT20':
-      return (l2Store.sat20List || []).map(asset => ({ ...asset, type: 'SAT20' }))
+    case 'ORDX':
+      return (l2Store.sat20List || []).map(asset => ({ ...asset, type: 'ORDX' }))
     case 'Runes':
       return (l2Store.runesList || []).map(asset => ({ ...asset, type: 'Runes' }))
     case 'BRC20':

@@ -216,7 +216,7 @@ export const useChannelStore = defineStore('channel', () => {
     }
     if (sat20List.value?.length) {
       _assetTypes.push({
-        label: 'SAT20',
+        label: 'ORDX',
         value: 'ordx',
       })
     }

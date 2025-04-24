@@ -133,7 +133,7 @@ export const useL1Assets = () => {
     const uniqueTypes = [
       ...(plain?.length ? [{ label: 'Btc', value: 'btc' }] : []),
       ...(list.some((item) => item?.protocol === 'ordx')
-        ? [{ label: 'SAT20', value: 'ordx' }]
+        ? [{ label: 'ORDX', value: 'ordx' }]
         : []),
       ...(list.some((item) => item?.protocol === 'runes')
         ? [{ label: 'Runes', value: 'runes' }]

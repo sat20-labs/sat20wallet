@@ -190,7 +190,7 @@ type OperationType =
   | 'splicing_out'
 
 const loading = ref(false)
-const { address, feeRate } = storeToRefs(walletStore)
+const { address, feeRate, btcFeeRate } = storeToRefs(walletStore)
 const { channel } = storeToRefs(channelStore)
 
 // 状态管理
@@ -222,10 +222,10 @@ const filteredAssets = computed(() => {
           ...asset,
           type: 'BTC',
         }))
-      case 'SAT20':
+      case 'ORDX':
         return (store.sat20List || []).map((asset) => ({
           ...asset,
-          type: 'SAT20',
+          type: 'ORDX',
         }))
       case 'Runes':
         return (store.runesList || []).map((asset) => ({
@@ -577,7 +577,7 @@ const deposit = async ({
     amt,
     utxos,
     fees,
-    feeRate.value
+    btcFeeRate.value
   )
   if (err) {
     toast({
@@ -611,7 +611,7 @@ const withdraw = async ({
     amt,
     utxos,
     fees,
-    feeRate.value
+    btcFeeRate.value
   )
   if (err) {
     toast({
@@ -706,7 +706,7 @@ const handleOperationConfirm = async () => {
           utxos: [],
           amt: amount,
           feeUtxos: [],
-          feeRate: feeRate.value,
+          feeRate: btcFeeRate.value,
           asset_name: asset.key,
         })
         break
@@ -715,7 +715,7 @@ const handleOperationConfirm = async () => {
           chanid: chainid,
           toAddress: address.value,
           amt: amount,
-          feeRate: feeRate.value,
+          feeRate: btcFeeRate.value,
           asset_name: asset.key,
         })
         break

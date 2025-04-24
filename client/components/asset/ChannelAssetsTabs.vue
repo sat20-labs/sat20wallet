@@ -33,7 +33,7 @@
         class="flex items-center justify-between p-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors"
       >
         <div>
-          <div class="font-medium">{{ (asset.ticker || asset.label).toUpperCase() }}</div>
+          <div class="font-medium">{{ (asset.label).toUpperCase() }}</div>
           <div class="text-sm text-muted-foreground">
             {{ formatAmount(asset) }}
           </div>
@@ -81,7 +81,6 @@ interface Asset {
   amount: number
   type?: string
 }
-
 // Props定义
 const props = defineProps<{
   modelValue?: string,
@@ -91,16 +90,14 @@ const props = defineProps<{
 const emit = defineEmits(['update:modelValue', 'splicing_out', 'unlock'])
 
 // 资产类型
-const assetTypes = ['BTC', 'SAT20', 'Runes', 'BRC20']
+const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
 const selectedType = ref(props.modelValue || assetTypes[0])
 
 // 过滤资产
 const filteredAssets = computed(() => {
   return props.assets.filter(asset => {
     if (!asset) return false
-    if (selectedType.value === 'BTC' && !asset.type) return true
-    const assetType = asset.type?.toUpperCase()
-    return selectedType.value === assetType
+    return true
   })
 })
 
@@ -109,7 +106,7 @@ const formatAmount = (asset: Asset) => {
   if (selectedType.value === 'BTC') {
     return `${asset.amount} sats`
   }
-  return `${asset.amount} ${asset.ticker}`
+  return `${asset.amount}`
 }
 
 // 监听资产类型变化

@@ -17,7 +17,7 @@
           Environment Switch:
         </div>
         <Select v-model="computedEnv">
-          <SelectTrigger class="w-[180px] bg-gray-900/30 mb-4">
+          <SelectTrigger class="max-w-[160px] bg-gray-900/30 mb-4">
             <SelectValue placeholder="Select environment" />
           </SelectTrigger>
           <SelectContent>
@@ -32,7 +32,7 @@
           Network Switch:
         </div>
         <Select v-model="network" @update:model-value="(value: any) => walletStore.setNetwork(value)">
-          <SelectTrigger class="w-[180px] bg-gray-900/30 mb-4">
+          <SelectTrigger class="max-w-[160px] bg-gray-900/30 mb-4">
             <SelectValue placeholder="Select network" />
           </SelectTrigger>
           <SelectContent>

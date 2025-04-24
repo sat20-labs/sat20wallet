@@ -15,6 +15,7 @@ export const useWalletStore = defineStore('wallet', () => {
   const walletId = ref(walletStorage.getValue('walletId'))
   const accountIndex = ref(walletStorage.getValue('accountIndex'))
   const feeRate = ref(0)
+  const btcFeeRate = ref(0)
   const password = ref(walletStorage.getValue('password'))
   const network = ref(walletStorage.getValue('network'))
   const chain = ref(walletStorage.getValue('chain'))
@@ -45,7 +46,9 @@ export const useWalletStore = defineStore('wallet', () => {
     await walletStorage.setValue('pubkey', value)
     publicKey.value = value
   }
-
+  const setBtcFeeRate = async (value: number) => {
+    btcFeeRate.value = value
+  }
   const setPassword = async (value: string) => {
     await walletStorage.updatePassword(value)
     password.value = value
@@ -357,5 +360,7 @@ export const useWalletStore = defineStore('wallet', () => {
     deleteAccount,
     accounts,
     switchWallet,
+    btcFeeRate,
+    setBtcFeeRate
   }
 })

@@ -87,7 +87,7 @@ const emit = defineEmits<{
 }>()
 
 // 资产类型
-const assetTypes = ['BTC', 'SAT20', 'Runes', 'BRC20']
+const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
 const selectedType = ref(props.modelValue || assetTypes[0])
 
 // 过滤资产

@@ -139,7 +139,7 @@ const l1Assets = computed(() => {
   switch (selectedType.value) {
     case 'BTC':
       return plainList.value || []
-    case 'SAT20':
+    case 'ORDX':
       return sat20List.value || []
     case 'Runes':
       return runesList.value || []

@@ -264,7 +264,7 @@ const newPoolMinDeposit = ref('')
 
 // Mock available assets
 const mockAssets = {
-  SAT20: [
+  ORDX: [
     { ticker: 'ORDI', name: 'Ordinals' },
     { ticker: 'SATS', name: 'Sats Token' },
   ],
@@ -291,7 +291,7 @@ const filteredAvailablePools = computed(() => {
 
 const availableAssetTypes = computed(() => {
   const currentTypes = new Set(currentPool.value.map(p => p.asset.type))
-  return ['BTC', 'SAT20', 'BRC20', 'Runes'].filter(type => {
+  return ['BTC', 'ORDX', 'BRC20', 'Runes'].filter(type => {
     if (type === 'BTC') {
       return !currentTypes.has(type)
     }
@@ -314,7 +314,7 @@ const getAssetIcon = (type: string) => {
   switch (type) {
     case 'BTC':
       return 'cryptocurrency:btc'
-    case 'SAT20':
+    case 'ORDX':
       return 'lucide:coins'
     case 'BRC20':
       return 'lucide:bitcoin'

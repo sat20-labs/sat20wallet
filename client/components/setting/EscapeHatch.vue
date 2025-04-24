@@ -12,7 +12,7 @@
       </div>
     </button>
     <div v-if="isExpanded" class="space-y-6 py-2 px-2 mb-4">
-      <div class="w-full px-4 py-4 bg-zinc-700/40 rounded-lg">
+      <div class="w-full" v-if="channel">
         <h2 class="text-lg font-bold text-zinc-200">Asset Safety</h2>
         <p class="text-sm text-muted-foreground mt-2">
           Your assets are safe. They are secured by your commitment transaction. By broadcasting the commitment transaction, you can reclaim your funds at any time without third-party permission.
@@ -122,6 +122,12 @@
             </div>
           </div>
         </div>
+      </div>
+      <div v-else>
+        <h2 class="text-lg font-bold text-zinc-200">No Channel</h2>
+        <p class="text-sm text-muted-foreground mt-2">
+          You have no channel. Please create a channel first.
+        </p>
       </div>
     </div>
   </div>
