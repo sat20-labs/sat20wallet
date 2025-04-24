@@ -1099,8 +1099,7 @@ func CalcFee_CommitTx(in, out int, feeRate int64) int64 {
 		weightEstimate.AddP2TROutput()
 	}
 
-	vSize := weightEstimate.VSize()
-	return SatPerVByte(feeRate).FeePerKVByte().FeeForVSize(vSize)
+	return weightEstimate.Fee(feeRate)
 }
 
 
@@ -1115,6 +1114,5 @@ func CalcFee_SplicingOutTx(in, out int, feeRate int64) int64 {
 		weightEstimate.AddP2TROutput()
 	}
 
-	vSize := weightEstimate.VSize()
-	return SatPerVByte(feeRate).FeePerKVByte().FeeForVSize(vSize)
+	return weightEstimate.Fee(feeRate)
 }
