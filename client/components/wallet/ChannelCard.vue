@@ -121,11 +121,12 @@ import CopyCard from '@/components/common/CopyCard.vue'
 import ChannelAssetsTabs from '@/components/asset/ChannelAssetsTabs.vue'
 import { sleep } from 'radash'
 
-const props = defineProps<{
-  selectedType: string // 改为 selectedType 以匹配 v-model 的默认行为
-}>()
+// const props = defineProps<{
+//   selectedType: string // 改为 selectedType 以匹配 v-model 的默认行为
+// }>()
 
-const { selectedType } = toRefs(props)
+// const { selectedType } = toRefs(props)
+const selectedType = defineModel<string>('selectedType')
 const emit = defineEmits(['splicing_out', 'unlock', 'update:selectedType'])
 
 const l1Store = useL1Store()

@@ -134,25 +134,15 @@ export const useChannelStore = defineStore('channel', () => {
     console.log('localbalanceL1:', localbalanceL1)
 
     if (localbalanceL1?.length) {
-      console.log('开始处理资产列表，长度:', localbalanceL1.length)
       for (let i = 0; i < localbalanceL1.length; i++) {
         const item = localbalanceL1[i]
-        console.log('处理资产项:', item)
 
         const protocol = item.Name.Protocol
         const key = protocol
           ? `${protocol}:${item.Name.Type}:${item.Name.Ticker}`
           : '::'
-        console.log('资产key:', key)
 
-        let amt = item.Amount.Value
-        if (protocol === 'runes') {
-          console.log('处理runes金额转换, 原始金额:', amt)
-          const [_, amtRes] = await satsnetStp.runesAmtV2ToV3(key, amt)
-          // amt = amtRes?.runeAmtInV3 || amt
-          console.log('转换后金额:', amt)
-        }
-
+        const amt = item.Amount.Value
         const assetItem = {
           id: key,
           key,

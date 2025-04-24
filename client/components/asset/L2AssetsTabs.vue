@@ -116,9 +116,10 @@ const selectedType = ref(props.modelValue || assetTypes[0])
 const filteredAssets = computed(() => {
   return props.assets.filter(asset => {
     if (!asset) return false
-    if (selectedType.value === 'BTC' && !asset.type) return true
-    const assetType = asset.type?.toUpperCase()
-    return selectedType.value === assetType
+    return true
+    // if (selectedType.value === 'BTC' && !asset.type) return true
+    // const assetType = asset.type?.toUpperCase()
+    // return selectedType.value === assetType
   })
 })
 

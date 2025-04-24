@@ -210,7 +210,12 @@ const filteredAssets = computed(() => {
 
   // 获取当前链的资产列表
   const getChainAssets = (isMainnet: boolean) => {
+    console.log('getChainAssets', isMainnet)
+
     const store = isMainnet ? l1Store : l2Store
+    console.log('selectedAssetType.value', selectedAssetType.value)
+    console.log(store);
+    
     switch (selectedAssetType.value) {
       case 'BTC':
         return (store.plainList || []).map((asset) => ({
