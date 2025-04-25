@@ -218,7 +218,14 @@ const closeChannel = async () => {
         title: 'Success',
         description: 'Channel closed successfully.',
       });
+      channelStore.getAllChannels()
     }
+  } else {
+    toast({
+      title: 'Success',
+      description: 'Channel closed successfully.',
+    });
+    channelStore.getAllChannels()
   }
 };
 
