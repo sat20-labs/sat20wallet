@@ -9,7 +9,7 @@
       @send="$emit('send', $event)"
       @deposit="$emit('deposit', $event)"
     />
-  </div>
+  </div>  
 </template>
 
 <script setup lang="ts">

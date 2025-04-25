@@ -1,7 +1,7 @@
 <template>
   <div class="space-y-4">
     <!-- Asset Type Tabs -->
-    <div class="border-b border-border/50 mb-4">
+    <div class="flex justify-between border-b border-zinc-700  mb-4">
       <nav class="flex -mb-px gap-4">
         <button
           v-for="(type, index) in assetTypes"
@@ -23,6 +23,14 @@
           />
         </button>
       </nav>
+      <span variant="link" class="flex justify-center p-1 h-7 mb-2 mr-2 border border-zinc-600 hover:bg-zinc-700 rounded-sm">   
+        <a
+          :href="`https://mempool.dev.sat20.org/zh/testnet4/address/${address}`"
+          target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History"
+        >
+        <Icon icon="quill:link" class="w-5 h-5 text-zinc-400 hover:text-primary/90" />
+        </a>
+      </span>
     </div>
 
     <!-- Asset Lists -->
@@ -89,6 +97,7 @@
 import { ref, computed, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
+import { useWalletStore } from '@/store'
 
 // 类型定义
 interface Asset {
@@ -107,6 +116,9 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits(['update:modelValue', 'lock', 'send',  'withdraw'])
+
+const walletStore = useWalletStore()
+const { address } = storeToRefs(walletStore)
 
 // 资产类型
 const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']

@@ -23,6 +23,26 @@
           />
         </button>
       </nav>
+
+
+      <div class="flex items-center p-1 mb-1 gap-2">
+        <span variant="link" class="flex justify-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">        
+          <a
+            :href="`https://mempool.space/zh/testnet4/address/${channel.address}`"
+            target="_blank" class="mb-[1px]] hover:text-primary" title="View Trade History"
+          >
+           <Icon icon="quill:link" class="w-4 h-4 text-zinc-400 hover:text-primary/90" />
+          </a>
+        </span>
+        <span variant="link" class="flex justify-center items-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">
+          <a
+            :href="`https://satstestnet-mempool.sat20.org/address/${channel.address}`"
+            target="_blank" class="mb-[1px] hover:text-primary" title="View L2 History"
+          >
+          <span class="text-xs  p-[1px] text-zinc-400 hover:text-primary"> L2 </span> 
+          </a>        
+        </span>         
+      </div>
     </div>
 
     <!-- Asset Lists -->

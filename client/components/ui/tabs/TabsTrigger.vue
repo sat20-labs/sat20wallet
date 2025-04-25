@@ -22,7 +22,7 @@ const forwardedProps = useForwardProps(delegatedProps)
       'text-zinc-400 hover:text-zinc-300',
       'focus-visible:outline-none focus-visible:ring-2 focus-visible:bg-accent/50 focus-visible:ring-offset-2',
       'disabled:pointer-events-none disabled:opacity-50',
-      'data-[state=active]:bg-accent/55 data-[state=active]:text-primary/80',
+      'data-[state=active]:bg-accent data-[state=active]:text-primary/80',
       props.class,
     )"
   >

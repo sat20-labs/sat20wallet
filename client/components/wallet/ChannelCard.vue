@@ -1,5 +1,5 @@
 <template>
-  <div class="flex  items-center flex-wrap gap-2 mb-2" v-if="channel">
+  <!-- <div class="flex  items-center flex-wrap gap-2 mb-2" v-if="channel">
     <CopyCard :text="channel.address" class="flex-1">
       <Button asChild size="sm" variant="link">
         <a
@@ -18,8 +18,9 @@
         Open L2
       </a>
     </Button>
-  </div>
+  </div> -->
   <div class="relative" v-if="channel">
+    <!-- <div class="relative" v-if="channel"></div> -->
     <div
       class="absolute w-full h-full z-10 flex justify-center items-center bg-gray-900 bg-opacity-95 left-0 top-0"
       v-if="channel.status !== 16"
