@@ -1,7 +1,7 @@
 <template>
   <div class="space-y-4">
     <!-- Asset Type Tabs -->
-    <div class="border-b border-border/50 mb-4">
+    <div class="flex justify-between border-b border-zinc-700 mb-4">
       <nav class="flex -mb-px gap-4">
         <button
           v-for="(type, index) in assetTypes"
@@ -24,7 +24,6 @@
         </button>
       </nav>
 
-
       <div class="flex items-center p-1 mb-1 gap-2">
         <span variant="link" class="flex justify-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">        
           <a
@@ -36,7 +35,7 @@
         </span>
         <span variant="link" class="flex justify-center items-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">
           <a
-            :href="`https://satstestnet-mempool.sat20.org/address/${channel.address}`"
+            :href="`https://mempool.dev.sat20.org/address/${channel.address}`"
             target="_blank" class="mb-[1px] hover:text-primary" title="View L2 History"
           >
           <span class="text-xs  p-[1px] text-zinc-400 hover:text-primary"> L2 </span> 
