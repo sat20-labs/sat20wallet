@@ -13,9 +13,10 @@
     </button>
     <div v-if="isExpanded" class="space-y-6 py-2 px-2 mb-4">
       <div class="w-full" v-if="channel">
-        <h2 class="text-lg font-bold text-zinc-200">Asset Safety</h2>
+        <h2 class="text-md font-bold text-zinc-200">Asset Safety</h2>
         <p class="text-sm text-muted-foreground mt-2">
-          Your assets are safe. They are secured by your commitment transaction. By broadcasting the commitment transaction, you can reclaim your funds at any time without third-party permission.
+          Your assets are safe. They are secured by your commitment transaction. By broadcasting the commitment
+          transaction, you can reclaim your funds at any time without third-party permission.
         </p>
 
         <!-- Broadcast Button -->
@@ -25,36 +26,9 @@
 
         <!-- Current Commitment Transaction -->
         <div class="mt-6">
-          <h3 class="text-md font-bold text-zinc-200">Current Commitment Transaction</h3>
+          <h3 class="text-base font-bold text-zinc-200">Current Commitment Transaction</h3>
 
           <!-- Your Assets Section -->
-          <!-- <div class="mt-6">
-            <h4 class="text-sm font-bold text-zinc-200">Your Assets in This Channel</h4>
-            <div class="overflow-x-auto custom-scrollbar">
-              <div class="min-w-max grid grid-cols-2 gap-4 text-sm text-muted-foreground mt-2 whitespace-nowrap">
-                <div class="flex flex-col">
-                  <span class="font-medium">Asset</span>
-                  <template v-for="(input, index) in parsedInputs" :key="`input-${index}`">
-                    <template v-if="input.Assets && input.Assets.length">
-                      <div v-for="(asset, assetIndex) in input.Assets" :key="`input-asset-${assetIndex}`">
-                        {{ asset.Name.Ticker }}
-                      </div>
-                    </template>
-                  </template>
-                </div>
-                <div class="flex flex-col">
-                  <span class="font-medium">Amount</span>
-                  <template v-for="(input, index) in parsedInputs" :key="`input-${index}`">
-                    <template v-if="input.Assets && input.Assets.length">
-                      <div v-for="(asset, assetIndex) in input.Assets" :key="`input-asset-${assetIndex}`">
-                        {{ asset.Amount }}
-                      </div>
-                    </template>
-                  </template>
-                </div>
-              </div>
-            </div>
-          </div> -->
 
           <div class="mt-6">
             <h4 class="text-sm font-bold text-zinc-200">Your Assets in This Channel</h4>
@@ -79,48 +53,18 @@
               </table>
             </div>
           </div>
-          
+
 
           <!-- Inputs Section -->
-          <!-- <div class="mt-4">
-            <h4 class="text-sm font-bold text-zinc-200">Inputs</h4>
-            <div class="overflow-x-auto custom-scrollbar">
-              <div v-if="!commitTxData">Loading commitment data...</div>
-              <div v-else-if="parsedInputs.length === 0">No input data available.</div>
-              <div v-else class="min-w-max grid grid-cols-4 gap-4 text-sm text-muted-foreground mt-2 whitespace-nowrap">
-                <div class="font-medium">Outpoint</div>
-                <div class="font-medium">Value (Sats)</div>
-                <div class="font-medium">Assets</div>
-                <div class="font-medium">PkScript</div>
 
-                <template v-for="(input, index) in parsedInputs" :key="`input-${index}`">
-                  <div class="truncate">
-                    <a :href="generateMempoolUrl({ network: 'testnet', path: input.Outpoint })" target="_blank">
-                      {{ hideAddress(input.Outpoint) }}
-                    </a>
-                  </div>
-                  <div class="truncate">{{ input.Value }}</div>
-                  <div class="truncate">
-                    <template v-if="input.Assets && input.Assets.length">
-                      <div v-for="(asset, assetIndex) in input.Assets" :key="`input-asset-${assetIndex}`">
-                        {{ asset.Name.Ticker }}: {{ asset.Amount }}
-                      </div>
-                    </template>
-                    <template v-else>-</template>
-                  </div>
-                  <div class="truncate">{{ input.PkScript }}</div>
-                </template>
-              </div>
-            </div>
-          </div> -->
-                    <div class="mt-4">
+          <div class="mt-4">
             <h4 class="text-sm font-bold text-zinc-200">Inputs</h4>
             <div class="overflow-x-auto custom-scrollbar">
               <table class="w-full table-auto text-sm text-muted-foreground mt-2 *:whitespace-nowrap">
                 <thead>
                   <tr>
                     <th class="text-left font-medium border-b border-zinc-600/30">Outpoint</th>
-                    <th class="text-left font-medium border-b border-zinc-600/30 white-space: nowrap">Value (Sats)</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">Value (Sats)</th>
                     <th class="text-left font-medium border-b border-zinc-600/30">Assets</th>
                     <th class="text-left font-medium border-b border-zinc-600/30">PkScript</th>
                   </tr>
@@ -151,73 +95,43 @@
           </div>
 
           <!-- Outputs Section -->
-          <!-- <div class="mt-6">
+
+          <div class="mt-6">
             <h4 class="text-sm font-bold text-zinc-200">Outputs</h4>
             <div class="overflow-x-auto custom-scrollbar">
-              <div v-if="!commitTxData">Loading commitment data...</div>
-              <div v-else-if="parsedOutputs.length === 0">No output data available.</div>
-              <div v-else class="min-w-max grid grid-cols-4 gap-4 text-sm text-muted-foreground mt-2 whitespace-nowrap">
-                <div class="font-medium border-b border-zinc-600/30">Outpoint</div>
-                <div class="font-medium border-b border-zinc-600/30">Value (Sats)</div>
-                <div class="font-medium border-b border-zinc-600/30">Assets</div>
-                <div class="font-medium border-b border-zinc-600/30">Address/PkScript</div>
-
-                <template v-for="(output) in parsedOutputs" :key="`output-${output.index}`">
-                  <div class="truncate">
-                    <a :href="generateMempoolUrl({ network: 'testnet', path: output.Outpoint })" target="_blank">
-                      {{ hideAddress(commitTxData.txId + ':' + output.index) }}
-                    </a>
-                  </div>
-                  <div class="truncate border-b border-zinc-600/30">{{ output.Value }}</div>
-                  <div class="truncate border-b border-zinc-600/30">
-                    <template v-if="output.Assets && output.Assets.length">
-                      <div v-for="(asset, assetIndex) in output.Assets" :key="`output-asset-${assetIndex}`">
-                        {{ asset.Name.Ticker }}: {{ asset.Amount }}
-                      </div>
-                    </template>
-                    <template v-else>-</template>
-                  </div>
-                  <div class="truncate border-b border-zinc-600/30">{{ output.PkScript }}</div>
-                </template>
-              </div>
+              <table class="w-full table-auto text-sm text-muted-foreground mt-2 *:whitespace-nowrap">
+                <thead>
+                  <tr>
+                    <th class="text-left font-medium border-b border-zinc-600/30">Outpoint</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">Value (Sats)</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">Assets</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">Address/PkScript</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template v-for="(output) in parsedOutputs" :key="`output-${output.index}`">
+                    <tr>
+                      <td class="truncate">
+                        <a :href="generateMempoolUrl({ network: 'testnet', path: output.Outpoint })" target="_blank">
+                          {{ hideAddress(commitTxData.txId + ':' + output.index) }}
+                        </a>
+                      </td>
+                      <td class="truncate">{{ output.Value }}</td>
+                      <td class="truncate">
+                        <template v-if="output.Assets && output.Assets.length">
+                          <div v-for="(asset, assetIndex) in output.Assets" :key="`output-asset-${assetIndex}`">
+                            {{ asset.Name.Ticker }}: {{ asset.Amount }}
+                          </div>
+                        </template>
+                        <template v-else>-</template>
+                      </td>
+                      <td class="truncate">{{ output.PkScript }}</td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
             </div>
-          </div> -->
-<div class="mt-6">
-  <h4 class="text-sm font-bold text-zinc-200">Outputs</h4>
-  <div class="overflow-x-auto custom-scrollbar">
-    <table class="w-full table-auto text-sm text-muted-foreground mt-2 *:whitespace-nowrap">
-      <thead>
-        <tr>
-          <th class="text-left font-medium border-b border-zinc-600/30">Outpoint</th>
-          <th class="text-left font-medium border-b border-zinc-600/30">Value (Sats)</th>
-          <th class="text-left font-medium border-b border-zinc-600/30">Assets</th>
-          <th class="text-left font-medium border-b border-zinc-600/30">Address/PkScript</th>
-        </tr>
-      </thead>
-      <tbody>
-        <template v-for="(output) in parsedOutputs" :key="`output-${output.index}`">
-          <tr>
-            <td class="truncate">
-              <a :href="generateMempoolUrl({ network: 'testnet', path: output.Outpoint })" target="_blank">
-                {{ hideAddress(commitTxData.txId + ':' + output.index) }}
-              </a>
-            </td>
-            <td class="truncate">{{ output.Value }}</td>
-            <td class="truncate">
-              <template v-if="output.Assets && output.Assets.length">
-                <div v-for="(asset, assetIndex) in output.Assets" :key="`output-asset-${assetIndex}`">
-                  {{ asset.Name.Ticker }}: {{ asset.Amount }}
-                </div>
-              </template>
-              <template v-else>-</template>
-            </td>
-            <td class="truncate">{{ output.PkScript }}</td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
-  </div>
-</div>
+          </div>
         </div>
       </div>
       <div v-else>
@@ -342,36 +256,45 @@ onMounted(() => {
 
 <style scoped>
 table {
-  table-layout: auto; /* 自动调整列宽 */
+  table-layout: auto;
+  /* 自动调整列宽 */
   border-collapse: collapse;
   width: 100%;
-  border: 1px solid rgba(108, 122, 137, 0.425); /* 添加边框 */
-  border-bottom: 2px solid rgba(108, 122, 137, 0.3); /* 加粗下边框 */
+  border: 1px solid rgba(108, 122, 137, 0.425);
+  /* 添加边框 */
+  border-bottom: 2px solid rgba(108, 122, 137, 0.3);
+  /* 加粗下边框 */
 }
 
-th{
+th {
   background-color: bg-zinc-500/40;
 }
 
-th, td {
-  padding: 0.5rem 0.5rem; /* 上下 0.5rem，左右 1rem */
+th,
+td {
+  padding: 0.5rem 0.5rem;
+  /* 上下 0.5rem，左右 1rem */
   text-align: left;
   vertical-align: middle;
-  white-space: nowrap; /* 禁止换行 */
+  white-space: nowrap;
+  /* 禁止换行 */
 }
 
 th {
   font-weight: bold;
-  border-bottom: 1px solid rgba(108, 122, 137, 0.3); /* 添加底部边框 */
+  border-bottom: 1px solid rgba(108, 122, 137, 0.3);
+  /* 添加底部边框 */
 }
 
 td {
-  border-bottom: 1px solid rgba(108, 122, 137, 0.1); /* 添加底部边框 */
+  border-bottom: 1px solid rgba(108, 122, 137, 0.1);
+  /* 添加底部边框 */
 }
 
 /* 滚动容器样式 */
 .overflow-x-auto {
-  padding-bottom: 8px; /* 为滚动条和表格内容留出空间 */
+  padding-bottom: 8px;
+  /* 为滚动条和表格内容留出空间 */
 }
 
 /* 自定义滚动条样式 */
