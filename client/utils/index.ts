@@ -1,3 +1,4 @@
+import { Chain, type Env } from '@/types/index';
 export const hideAddress = (
   str?: string | null,
   num: number = 6,
@@ -16,18 +17,33 @@ export const generateMempoolUrl = ({
   network,
   path,
   locale,
+  chain,
+  env,
 }: {
   network: string;
   path?: string;
   locale?: string;
+  chain?: Chain;
+  env?: Env;
 }) => {
-  const base = 'https://mempool.space';
+  const satMempoolUrl: Record<Env, string> = {
+    dev: 'https://mempool.dev.sat20.org',
+    test: 'https://mempool.test.sat20.org',
+    prod: 'https://mempool.sat20.org',
+  }
+  const btcMempoolUrl = 'https://mempool.space'
+  let base = btcMempoolUrl;
+  if (chain && chain === Chain.SATNET && env) {
+    base = satMempoolUrl[env];
+  }
   let url = base;
-  if (locale) {
+  if (chain !== Chain.SATNET &&locale) {
     url += `/${locale}`;
   }
-  if (network === 'testnet') {
+  if (chain !== Chain.SATNET && network === 'testnet') {
     url += '/testnet4';
+  } else {
+    url += `/${network}`;
   }
   if (path) {
     url += `/${path}`;

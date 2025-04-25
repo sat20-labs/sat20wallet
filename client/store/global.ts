@@ -7,7 +7,7 @@ export const useGlobalStore = defineStore('global', () => {
   
   const loading = ref(false)
   const version = ref(0)
-  const env = ref<Env>(walletStorage.getValue('env') || 'dev')
+  const env = ref<Env>(walletStorage.getValue('env') || 'test')
   const stpVersion = ref('0.0.0')
 
   const config = computed(() => {

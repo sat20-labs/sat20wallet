@@ -4,7 +4,7 @@ export enum Network {
   // REGTEST = 'regtest',
   // TESTNET4 = 'testnet4',
 }
-
+export type Env = 'dev' | 'test' | 'prod';
 export enum Chain {
   BTC = 'btc',
   SATNET = 'satnet',

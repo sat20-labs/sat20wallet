@@ -25,7 +25,7 @@
       </nav>
       <span variant="link" class="flex justify-center p-1 h-7 mb-2 mr-2 border border-zinc-600 hover:bg-zinc-700 rounded-sm">   
         <a
-          :href="`https://mempool.dev.sat20.org/zh/testnet4/address/${address}`"
+          :href="mempoolUrl"
           target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History"
         >
         <Icon icon="quill:link" class="w-5 h-5 text-zinc-400 hover:text-primary/90" />
@@ -98,6 +98,9 @@ import { ref, computed, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { useWalletStore } from '@/store'
+import { Chain } from '@/types/index'
+import { generateMempoolUrl } from '@/utils'
+import { useGlobalStore } from '@/store/global'
 
 // 类型定义
 interface Asset {
@@ -118,8 +121,17 @@ const props = defineProps<{
 const emit = defineEmits(['update:modelValue', 'lock', 'send',  'withdraw'])
 
 const walletStore = useWalletStore()
+const globalStore = useGlobalStore()
 const { address } = storeToRefs(walletStore)
-
+const { env } = storeToRefs(globalStore)
+const mempoolUrl = computed(() => {
+  return generateMempoolUrl({
+    network: 'testnet',
+    path: `address/${address.value}`,
+    chain: Chain.SATNET,
+    env: env.value
+  })
+})
 // 资产类型
 const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
 const selectedType = ref(props.modelValue || assetTypes[0])

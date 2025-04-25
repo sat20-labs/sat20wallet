@@ -4,8 +4,8 @@ const devConfig = {
     Chain: "testnet",
     Mode: "client",
     Peers: [
-        "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@satstestnet-peer-p1.sat20.org",
-        "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@satstestnet-peer-p0.sat20.org"
+        "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@https://satstestnet-peer-p1.sat20.org",
+        "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@https://satstestnet-peer-p0.sat20.org"
     ],
     IndexerL1: {
         Scheme: "https",
