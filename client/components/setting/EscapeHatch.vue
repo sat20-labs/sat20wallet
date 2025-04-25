@@ -28,7 +28,7 @@
           <h3 class="text-md font-bold text-zinc-200">Current Commitment Transaction</h3>
 
           <!-- Your Assets Section -->
-          <div class="mt-6">
+          <!-- <div class="mt-6">
             <h4 class="text-sm font-bold text-zinc-200">Your Assets in This Channel</h4>
             <div class="overflow-x-auto custom-scrollbar">
               <div class="min-w-max grid grid-cols-2 gap-4 text-sm text-muted-foreground mt-2 whitespace-nowrap">
@@ -54,10 +54,35 @@
                 </div>
               </div>
             </div>
+          </div> -->
+
+          <div class="mt-6">
+            <h4 class="text-sm font-bold text-zinc-200">Your Assets in This Channel</h4>
+            <div class="overflow-x-auto custom-scrollbar">
+              <table class="w-full table-auto text-sm text-muted-foreground mt-2">
+                <thead>
+                  <tr>
+                    <th class="text-left font-medium border-b border-zinc-600/30">Asset</th>
+                    <th class="text-right font-medium border-b border-zinc-600/30">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template v-for="(input, index) in parsedInputs" :key="`input-${index}`">
+                    <template v-if="input.Assets && input.Assets.length">
+                      <tr v-for="(asset, assetIndex) in input.Assets" :key="`input-asset-${assetIndex}`">
+                        <td class="truncate">{{ asset.Name.Ticker }}</td>
+                        <td class="text-right truncate">{{ asset.Amount }}</td>
+                      </tr>
+                    </template>
+                  </template>
+                </tbody>
+              </table>
+            </div>
           </div>
+          
 
           <!-- Inputs Section -->
-          <div class="mt-4">
+          <!-- <div class="mt-4">
             <h4 class="text-sm font-bold text-zinc-200">Inputs</h4>
             <div class="overflow-x-auto custom-scrollbar">
               <div v-if="!commitTxData">Loading commitment data...</div>
@@ -87,10 +112,46 @@
                 </template>
               </div>
             </div>
+          </div> -->
+                    <div class="mt-4">
+            <h4 class="text-sm font-bold text-zinc-200">Inputs</h4>
+            <div class="overflow-x-auto custom-scrollbar">
+              <table class="w-full table-auto text-sm text-muted-foreground mt-2 *:whitespace-nowrap">
+                <thead>
+                  <tr>
+                    <th class="text-left font-medium border-b border-zinc-600/30">Outpoint</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30 white-space: nowrap">Value (Sats)</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">Assets</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">PkScript</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template v-for="(input, index) in parsedInputs" :key="`input-${index}`">
+                    <tr>
+                      <td class="truncate">
+                        <a :href="generateMempoolUrl({ network: 'testnet', path: input.Outpoint })" target="_blank">
+                          {{ hideAddress(input.Outpoint) }}
+                        </a>
+                      </td>
+                      <td class="truncate">{{ input.Value }}</td>
+                      <td class="truncate">
+                        <template v-if="input.Assets && input.Assets.length">
+                          <div v-for="(asset, assetIndex) in input.Assets" :key="`input-asset-${assetIndex}`">
+                            {{ asset.Name.Ticker }}: {{ asset.Amount }}
+                          </div>
+                        </template>
+                        <template v-else>-</template>
+                      </td>
+                      <td class="truncate">{{ input.PkScript }}</td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <!-- Outputs Section -->
-          <div class="mt-6">
+          <!-- <div class="mt-6">
             <h4 class="text-sm font-bold text-zinc-200">Outputs</h4>
             <div class="overflow-x-auto custom-scrollbar">
               <div v-if="!commitTxData">Loading commitment data...</div>
@@ -120,7 +181,43 @@
                 </template>
               </div>
             </div>
-          </div>
+          </div> -->
+<div class="mt-6">
+  <h4 class="text-sm font-bold text-zinc-200">Outputs</h4>
+  <div class="overflow-x-auto custom-scrollbar">
+    <table class="w-full table-auto text-sm text-muted-foreground mt-2 *:whitespace-nowrap">
+      <thead>
+        <tr>
+          <th class="text-left font-medium border-b border-zinc-600/30">Outpoint</th>
+          <th class="text-left font-medium border-b border-zinc-600/30">Value (Sats)</th>
+          <th class="text-left font-medium border-b border-zinc-600/30">Assets</th>
+          <th class="text-left font-medium border-b border-zinc-600/30">Address/PkScript</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template v-for="(output) in parsedOutputs" :key="`output-${output.index}`">
+          <tr>
+            <td class="truncate">
+              <a :href="generateMempoolUrl({ network: 'testnet', path: output.Outpoint })" target="_blank">
+                {{ hideAddress(commitTxData.txId + ':' + output.index) }}
+              </a>
+            </td>
+            <td class="truncate">{{ output.Value }}</td>
+            <td class="truncate">
+              <template v-if="output.Assets && output.Assets.length">
+                <div v-for="(asset, assetIndex) in output.Assets" :key="`output-asset-${assetIndex}`">
+                  {{ asset.Name.Ticker }}: {{ asset.Amount }}
+                </div>
+              </template>
+              <template v-else>-</template>
+            </td>
+            <td class="truncate">{{ output.PkScript }}</td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</div>
         </div>
       </div>
       <div v-else>
@@ -244,6 +341,39 @@ onMounted(() => {
 </script>
 
 <style scoped>
+table {
+  table-layout: auto; /* 自动调整列宽 */
+  border-collapse: collapse;
+  width: 100%;
+  border: 1px solid rgba(108, 122, 137, 0.425); /* 添加边框 */
+  border-bottom: 2px solid rgba(108, 122, 137, 0.3); /* 加粗下边框 */
+}
+
+th{
+  background-color: bg-zinc-500/40;
+}
+
+th, td {
+  padding: 0.5rem 0.5rem; /* 上下 0.5rem，左右 1rem */
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap; /* 禁止换行 */
+}
+
+th {
+  font-weight: bold;
+  border-bottom: 1px solid rgba(108, 122, 137, 0.3); /* 添加底部边框 */
+}
+
+td {
+  border-bottom: 1px solid rgba(108, 122, 137, 0.1); /* 添加底部边框 */
+}
+
+/* 滚动容器样式 */
+.overflow-x-auto {
+  padding-bottom: 8px; /* 为滚动条和表格内容留出空间 */
+}
+
 /* 自定义滚动条样式 */
 .custom-scrollbar::-webkit-scrollbar {
   width: 8px;
