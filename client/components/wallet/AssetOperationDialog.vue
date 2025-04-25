@@ -19,9 +19,9 @@
               placeholder="Enter amount"
               @update:modelValue="handleAmountUpdate"
             />
-            <span class="text-sm text-muted-foreground">
+            <!-- <span class="text-sm text-muted-foreground">
               {{ assetUnit }}
-            </span>
+            </span> -->
           </div>
         </div>
         <div v-if="needsAddress" class="space-y-2">

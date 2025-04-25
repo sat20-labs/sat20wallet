@@ -41,7 +41,7 @@
         class="flex items-center justify-between p-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors"
       >
         <div>
-          <div class="font-medium">{{ (asset.ticker || asset.label).toUpperCase() }}</div>
+          <div class="font-medium">{{ (asset.label).toUpperCase() }}</div>
           <div class="text-sm text-muted-foreground">
             {{ formatAmount(asset) }}
           </div>
@@ -152,7 +152,7 @@ const formatAmount = (asset: Asset) => {
   if (selectedType.value === 'BTC') {
     return `${asset.amount} sats`
   }
-  return `${asset.amount} ${asset.ticker}`
+  return `${asset.amount}`
 }
 
 // 监听资产类型变化

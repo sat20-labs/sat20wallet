@@ -148,7 +148,7 @@
       :address="operationAddress"
       :operation-type="operationType"
       :asset-type="selectedAsset?.type"
-      :asset-ticker="selectedAsset?.ticker"
+      :asset-ticker="selectedAsset?.label"
       @update:amount="operationAmount = $event"
       @update:address="operationAddress = $event"
       @confirm="handleOperationConfirm"
@@ -299,7 +299,7 @@ const operationDescription = computed(() => {
   const asset = selectedAsset.value
   const type = asset.type || 'BTC'
   const amount = asset.amount || 0
-  return `${type}: ${amount} ${asset.ticker || 'sats'}`
+  return `${type}: ${amount} ${asset.label || 'sats'}`
 })
 
 // 事件处理
