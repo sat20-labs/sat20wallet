@@ -78,12 +78,6 @@ declare interface WalletManager {
     amount: number
   ): Promise<SatsnetResponse<{ txId: string }>>
 
-  // Send UTXOs
-  sendUtxos(
-    destAddr: string,
-    utxos: string[],
-    amount: number
-  ): Promise<SatsnetResponse<{ txId: string }>>
 
   // Creates a new wallet with a password and returns the wallet ID and mnemonic.
   createWallet(
@@ -181,13 +175,6 @@ declare interface WalletManager {
   sendAssets_SatsNet(
     destAddr: string,
     assetName: string,
-    amt: number
-  ): Promise<SatsnetResponse<string>>
-
-  // Sends UTXOs to the specified address.
-  sendUtxos(
-    destAddr: string,
-    utxos: string[],
     amt: number
   ): Promise<SatsnetResponse<string>>
 
@@ -290,13 +277,12 @@ interface SatsnetStp {
     utxos: string[],
     amt: number
   ): SatsnetResponse
-  sendAssets(address: string, assetName: string, amt: number): SatsnetResponse
+  sendAssets(address: string, assetName: string, amt: number, feeRate: string): SatsnetResponse
   sendAssets_SatsNet(
     address: string,
     assetName: string,
     amt: number
   ): SatsnetResponse
-  sendUtxos(address: string, utxos: string[], amt: number): SatsnetResponse
   unlockFromChannel(
     channelUtxo: string,
     assetName: string,

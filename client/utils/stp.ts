@@ -36,8 +36,6 @@ interface StpWasmModule {
   getAllChannels: (...args: any[]) => Promise<WasmResponse<any[]>>; // Assuming array
   getChannel: (...args: any[]) => Promise<WasmResponse>; // Specify channel type if known
   getChannelStatus: (...args: any[]) => Promise<WasmResponse>; // Specify status type if known
-  sendUtxos: (...args: any[]) => Promise<WasmResponse>;
-  sendUtxos_SatsNet: (...args: any[]) => Promise<WasmResponse>;
   sendAssets_SatsNet: (...args: any[]) => Promise<WasmResponse>;
   sendAssets: (...args: any[]) => Promise<WasmResponse>;
   deposit: (...args: any[]) => Promise<WasmResponse>;
@@ -287,31 +285,6 @@ class SatsnetStp {
       id
     )
   }
-
-  async sendUtxos(
-    address: string,
-    utxos: string[],
-    amt: number
-  ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest(
-      'sendUtxos',
-      address,
-      utxos,
-      String(amt)
-    )
-  }
-  async sendUtxos_SatsNet(
-    address: string,
-    utxos: string[],
-    amt: number
-  ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest(
-      'sendUtxos_SatsNet',
-      address,
-      utxos,
-      amt // Keep original type
-    )
-  }
   async sendAssets_SatsNet(
     address: string,
     assetName: string,
@@ -327,13 +300,15 @@ class SatsnetStp {
   async sendAssets(
     address: string,
     assetName: string,
-    amt: number
+    amt: number,
+    feeRate: number
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'sendAssets',
       address,
       assetName,
-      String(amt)
+      String(amt),
+      String(feeRate)
     )
   }
   async deposit(
