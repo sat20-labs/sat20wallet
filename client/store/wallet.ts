@@ -23,7 +23,8 @@ export const useWalletStore = defineStore('wallet', () => {
   const hasWallet = ref(!!walletStorage.getValue('hasWallet'))
   const localWallets = walletStorage.getValue('wallets');
   const wallets = ref<WalletData[]>(localWallets ? JSON.parse(JSON.stringify(localWallets)) : [])
-
+  console.log(wallets);
+  console.log(walletId);
   const wallet = computed(() => wallets.value.find(w => w.id === walletId.value))
   const accounts = computed(() => wallet.value?.accounts)
   const account = computed(() => wallet.value?.accounts.find(a => a.index === accountIndex.value))
