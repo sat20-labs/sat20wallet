@@ -43,7 +43,7 @@
 
           <!-- Your Assets Section -->
 
-          <div class="mt-6" v-if="parsedInputs.length > 0">
+          <div class="mt-6" v-if="parsedInputs.some((input: any) => input.Assets && input.Assets.length)">
             <h4 class="text-sm font-bold text-zinc-200">Your Assets in This Channel</h4>
             <div class="overflow-x-auto custom-scrollbar">
               <table class="w-full table-auto text-sm text-muted-foreground mt-2">
@@ -57,7 +57,7 @@
                   <template v-for="(input, index) in parsedInputs" :key="`input-${index}`">
                     <template v-if="input.Assets && input.Assets.length">
                       <tr v-for="(asset, assetIndex) in input.Assets" :key="`input-asset-${assetIndex}`">
-                        <td class="truncate">{{ asset.Name.Ticker }}</td>
+                        <td class="truncate">{{ asset.label }}</td>
                         <td class="text-right truncate">{{ asset.Amount }}</td>
                       </tr>
                     </template>
@@ -94,7 +94,7 @@
                       <td class="truncate">
                         <template v-if="input.Assets && input.Assets.length">
                           <div v-for="(asset, assetIndex) in input.Assets" :key="`input-asset-${assetIndex}`">
-                            {{ asset.Name.Ticker }}: {{ asset.Amount }}
+                            {{ asset.label }}: {{ asset.Amount }}
                           </div>
                         </template>
                         <template v-else>-</template>
@@ -133,7 +133,7 @@
                       <td class="truncate">
                         <template v-if="output.Assets && output.Assets.length">
                           <div v-for="(asset, assetIndex) in output.Assets" :key="`output-asset-${assetIndex}`">
-                            {{ asset.Name.Ticker }}: {{ asset.Amount }}
+                            {{ asset.label }}: {{ asset.Amount }}
                           </div>
                         </template>
                         <template v-else>-</template>
@@ -173,51 +173,79 @@ import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogTitle, 
 const loading = ref(false)
 const isExpanded = ref(false)
 const commitTxData = ref<any>(null)
+const parsedInputs = ref<any[]>([])
+const parsedOutputs = ref<any[]>([])
 
 const channelStore = useChannelStore()
 const { channel } = storeToRefs(channelStore)
 const { toast } = useToast()
 
-const parsedInputs = computed(() => {
-  if (!commitTxData.value?.inputs) return [];
-  try {
-    const inputsArray = JSON.parse(commitTxData.value.inputs);
-    return inputsArray.map((input: any) => {
-      // 对每个输入项进行反序列化
-      return {
-        ...input,
-        // 这里可以添加其他需要的字段处理
-      };
-    });
-  } catch (error) {
-    console.error("Failed to parse inputs:", error);
-    return [];
-  }
-});
+function getAssetKey(asset: any) {
+  return `${asset.Name.Protocol}:${asset.Name.Type}:${asset.Name.Ticker}`
+}
 
-const parsedOutputs = computed(() => {
-  if (!commitTxData.value?.outputs) return [];
-  try {
-    const outputsArray = JSON.parse(commitTxData.value.outputs);
-    return outputsArray.map((output: any) => {
-      // 对每个输出项进行反序列化
-      return {
-        ...output,
-        // 这里可以添加其他需要的字段处理
-      };
-    });
-  } catch (error) {
-    console.error("Failed to parse outputs:", error);
-    return [];
+watch(commitTxData, async (val) => {
+  console.log('val', val);
+  
+  if (!val?.inputs) {
+    parsedInputs.value = []
+    return
   }
-});
-
-// 添加 formatAssets 函数
-const formatAssets = (assets: any): string => {
-  if (!assets) return '-';
-  // 假设 assets 是一个数组，格式化为字符串
-  return assets.map((asset: any) => asset.name || 'Unknown').join(', ');
-};
+  try {
+    const inputsArray = JSON.parse(val.inputs)
+    for (const input of inputsArray) {
+      if (input.Assets && input.Assets.length) {
+        for (const asset of input.Assets) {
+          const key = getAssetKey(asset)
+          let label = asset.Name.Ticker
+          try {
+            const [err, res] = await satsnetStp.getTickerInfo(key)
+            if (!err && res?.ticker) {
+              const result = JSON.parse(res.ticker)
+              label = result?.displayname || label
+            }
+          } catch {}
+          asset.label = label
+        }
+      }
+    }
+    parsedInputs.value = inputsArray
+  } catch (e) {
+    parsedInputs.value = []
+  }
+  
+  // outputs处理逻辑
+  if (!val?.outputs) {
+    parsedOutputs.value = []
+  } else {
+    try {
+      const outputsArray = JSON.parse(val.outputs)
+      console.log('outputsArray', outputsArray);
+      
+      for (const output of outputsArray) {
+        if (output.Assets && output.Assets.length) {
+          for (const asset of output.Assets) {
+            console.log('output asset', asset);
+            
+            const key = getAssetKey(asset)
+            let label = asset.Name.Ticker
+            try {
+              const [err, res] = await satsnetStp.getTickerInfo(key)
+              if (!err && res?.ticker) {
+                const result = JSON.parse(res.ticker)
+                label = result?.displayname || label
+              }
+            } catch {}
+            asset.label = label
+          }
+        }
+      }
+      parsedOutputs.value = outputsArray
+    } catch (e) {
+      parsedOutputs.value = []
+    }
+  }
+}, { immediate: true })
 
 const channelId = computed(() => {
   return channel.value?.channelId
