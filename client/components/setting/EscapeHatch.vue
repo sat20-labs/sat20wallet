@@ -22,12 +22,13 @@
         <!-- Broadcast Button -->
         <div class="mt-6">
           <AlertDialog>
-            <AlertDialogTrigger class="w-full">
-              <Button class="w-full bg-purple-600 text-white">BROADCAST TX</Button>
+            <AlertDialogTrigger class="w-full" :disabled="channel.status < 16">
+              <Button class="w-full bg-purple-600 text-white" :disabled="channel.status < 16">BROADCAST TX</Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogTitle>Confirm Action</AlertDialogTitle>
-              <AlertDialogDescription>Are you sure you want to broadcast the current channel's commitment transaction?</AlertDialogDescription>
+              <AlertDialogDescription>Are you sure you want to broadcast the current channel's commitment transaction?
+              </AlertDialogDescription>
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                 <AlertDialogAction @click="closeChannel">Confirm</AlertDialogAction>
@@ -255,12 +256,8 @@ const closeChannel = async () => {
 
 
 watch(channelId, async () => {
-  console.log('channelId', channelId.value)
-
   if (!channelId.value) return
   const [err, result] = await satsnetStp.getCommitTxAssetInfo(channelId.value)
-  console.log('result', result)
-  console.log('err', err)
   if (err) {
     return false
   }
