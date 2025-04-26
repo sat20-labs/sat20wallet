@@ -30,7 +30,7 @@
 
           <!-- Your Assets Section -->
 
-          <div class="mt-6">
+          <div class="mt-6" v-if="parsedInputs.length > 0">
             <h4 class="text-sm font-bold text-zinc-200">Your Assets in This Channel</h4>
             <div class="overflow-x-auto custom-scrollbar">
               <table class="w-full table-auto text-sm text-muted-foreground mt-2">
