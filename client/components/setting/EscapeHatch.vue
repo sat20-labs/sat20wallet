@@ -21,7 +21,19 @@
 
         <!-- Broadcast Button -->
         <div class="mt-6">
-          <Button class="w-full bg-purple-600 text-white" @click="closeChannel">BROADCAST TX</Button>
+          <AlertDialog>
+            <AlertDialogTrigger class="w-full">
+              <Button class="w-full bg-purple-600 text-white">BROADCAST TX</Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogTitle>Confirm Action</AlertDialogTitle>
+              <AlertDialogDescription>Are you sure you want to broadcast the current channel's commitment transaction?</AlertDialogDescription>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction @click="closeChannel">Confirm</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
 
         <!-- Current Commitment Transaction -->
@@ -155,6 +167,7 @@ import { useToast } from '@/components/ui/toast'
 import { hideAddress } from '~/utils'
 import { getChannelStatusText } from '~/composables'
 import { useGlobalStore, type Env } from '@/store/global'
+import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from '@/components/ui/alert-dialog'
 
 const loading = ref(false)
 const isExpanded = ref(false)

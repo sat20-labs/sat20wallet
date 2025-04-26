@@ -15,16 +15,18 @@
           }" />
         </button>
       </nav>
-      
-        <span variant="link" class="flex justify-center p-1 h-7 mb-2 mr-2 border border-zinc-600 hover:bg-zinc-700 rounded-sm">        
-          <a
-            :href="mempoolUrl"
-            target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History"
-          >
-           <Icon icon="quill:link" class="w-5 h-5 text-zinc-400 hover:text-primary/90" />
+      <div class="flex items-center">
+        <Button size="icon" variant="ghost" @click="handlerRefresh">
+          <Icon icon="lucide:refresh-cw" />
+        </Button>
+        <Button size="icon" variant="ghost" as-child>
+          <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History">
+            <Icon icon="quill:link" class="w-5 h-5 text-zinc-400 hover:text-primary/90" />
           </a>
-        </span>   
-      
+        </Button>
+      </div>
+
+
     </div>
 
     <!-- Asset Lists -->
@@ -49,7 +51,7 @@
               <Icon icon="lucide:corner-down-right" class="w-4 h-4 mr-1" />
               Splicing in
             </Button>
-             
+
           </template>
           <!-- Poolswap 模式按钮 -->
           <template v-else>
@@ -97,6 +99,7 @@ const emit = defineEmits<{
   (e: 'splicing_in', asset: any): void
   (e: 'send', asset: any): void
   (e: 'deposit', asset: any): void
+  (e: 'refresh'): void
 }>()
 
 const walletStore = useWalletStore()
@@ -119,7 +122,7 @@ const selectedType = ref(props.modelValue || assetTypes[0])
 const filteredAssets = computed(() => {
   console.log('L1AssetsTabs - Received Assets:', props.assets)
   console.log('L1AssetsTabs - Selected Type:', selectedType.value)
-  
+
   return props.assets.filter(asset => {
     if (!asset) return false
     return true
@@ -161,6 +164,11 @@ const formatAmount = (asset: Asset) => {
     return `${asset.amount} sats`
   }
   return `${asset.amount}`
+}
+
+const handlerRefresh = () => {
+  console.log('L1AssetsTabs - Refresh')
+  emit('refresh')
 }
 </script>
 

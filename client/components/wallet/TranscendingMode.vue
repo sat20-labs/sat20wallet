@@ -43,7 +43,7 @@
 
         <TabsContent value="bitcoin">
           <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
-            @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
+            @splicing_in="handleSplicingIn" @refresh="refreshL1Assets" @send="handleSend" @deposit="handleDeposit" />
         </TabsContent>
 
         <TabsContent value="pool">
@@ -52,7 +52,7 @@
 
         <TabsContent value="satoshinet">
           <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
-            @lock="handleLock" @send="handleSend" @withdraw="handleWithdraw" />
+            @lock="handleLock" @refresh="refreshL2Assets" @send="handleSend" @withdraw="handleWithdraw" />
         </TabsContent>
       </Tabs>
     </div>
@@ -77,7 +77,7 @@
 
         <TabsContent value="bitcoin">
           <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
-            @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
+            @splicing_in="handleSplicingIn" @refresh="refreshL1Assets" @send="handleSend" @deposit="handleDeposit" />
         </TabsContent>
 
         <TabsContent value="channel">
@@ -87,7 +87,7 @@
 
         <TabsContent value="satoshinet">
           <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
-            @lock="handleLock" @send="handleSend" @withdraw="handleWithdraw" />
+            @lock="handleLock" @refresh="refreshL2Assets" @send="handleSend" @withdraw="handleWithdraw" />
         </TabsContent>
       </Tabs>
     </div>

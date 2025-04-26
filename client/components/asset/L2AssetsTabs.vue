@@ -23,14 +23,16 @@
           />
         </button>
       </nav>
-      <span variant="link" class="flex justify-center p-1 h-7 mb-2 mr-2 border border-zinc-600 hover:bg-zinc-700 rounded-sm">   
-        <a
-          :href="mempoolUrl"
-          target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History"
-        >
-        <Icon icon="quill:link" class="w-5 h-5 text-zinc-400 hover:text-primary/90" />
-        </a>
-      </span>
+      <div class="flex items-center">
+        <Button size="icon" variant="ghost" @click="handlerRefresh">
+          <Icon icon="lucide:refresh-cw" />
+        </Button>
+        <Button size="icon" variant="ghost" as-child>
+          <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History">
+            <Icon icon="quill:link" class="w-5 h-5 text-zinc-400 hover:text-primary/90" />
+          </a>
+        </Button>
+      </div>
     </div>
 
     <!-- Asset Lists -->
@@ -118,7 +120,7 @@ const props = defineProps<{
   mode: 'poolswap' | 'lightning'
 }>()
 
-const emit = defineEmits(['update:modelValue', 'lock', 'send',  'withdraw'])
+const emit = defineEmits(['update:modelValue', 'lock', 'send', 'withdraw', 'refresh'])
 
 const walletStore = useWalletStore()
 const globalStore = useGlobalStore()
@@ -159,6 +161,11 @@ const formatAmount = (asset: Asset) => {
 watch(selectedType, (newType) => {
   emit('update:modelValue', newType)
 })
+
+const handlerRefresh = () => {
+  console.log('L2AssetsTabs - Refresh')
+  emit('refresh')
+}
 </script>
 
 <style scoped>
