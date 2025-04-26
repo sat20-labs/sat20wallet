@@ -300,7 +300,7 @@ class SatsnetStp {
       String(amt)
     )
   }
-  async sendUtxosSatsNet(
+  async sendUtxos_SatsNet(
     address: string,
     utxos: string[],
     amt: number
@@ -312,7 +312,7 @@ class SatsnetStp {
       amt // Keep original type
     )
   }
-  async sendAssetsSatsNet(
+  async sendAssets_SatsNet(
     address: string,
     assetName: string,
     amt: number

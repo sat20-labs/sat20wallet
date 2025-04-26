@@ -4,23 +4,15 @@
     <div class="mb-4 flex items-center gap-4">
       <Label class="text-sm text-foreground/50 shrink-0">Trans Mode:</Label>
       <div class="flex gap-2">
-        <Button
-          :variant="
-            selectedTranscendingMode === 'poolswap' ? 'secondary' : 'outline'
-          "
-          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
-          @click="selectedTranscendingMode = 'poolswap'"
-        >
+        <Button :variant="selectedTranscendingMode === 'poolswap' ? 'secondary' : 'outline'
+          " class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
+          @click="selectedTranscendingMode = 'poolswap'">
           <Icon icon="lucide:repeat" class="w-5 h-5 shrink-0" />
           <span class="text-xs">Poolswap</span>
         </Button>
-        <Button
-          :variant="
-            selectedTranscendingMode === 'lightning' ? 'secondary' : 'outline'
-          "
-          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
-          @click="selectedTranscendingMode = 'lightning'"
-        >
+        <Button :variant="selectedTranscendingMode === 'lightning' ? 'secondary' : 'outline'
+          " class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
+          @click="selectedTranscendingMode = 'lightning'">
           <Icon icon="lucide:zap" class="w-5 h-5 shrink-0" />
           <span class="text-xs">Lightning</span>
         </Button>
@@ -31,12 +23,9 @@
     <div v-if="selectedTranscendingMode === 'poolswap'">
       <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
         <!-- <TabsList class="grid w-full grid-cols-2 mb-4 bg-black/15"> -->
-          <TabsList class="grid w-full grid-cols-2 mb-4 bg-zinc-700/90">
+        <TabsList class="grid w-full grid-cols-2 mb-4 bg-zinc-700/90">
           <TabsTrigger value="bitcoin">
-            <Icon
-              icon="cryptocurrency:btc"
-              class="w-4 h-4 mr-1 justify-self-center"
-            />
+            <Icon icon="cryptocurrency:btc" class="w-4 h-4 mr-1 justify-self-center" />
             Bitcoin
           </TabsTrigger>
           <!-- <TabsTrigger value="pool">
@@ -47,23 +36,14 @@
             Pool
           </TabsTrigger> -->
           <TabsTrigger value="satoshinet">
-            <Icon
-              icon="lucide:globe-lock"
-              class="w-4 h-4 mr-1 justify-self-center"
-            />
+            <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
             SatoshiNet
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="bitcoin">
-          <L1Card
-            v-model:selectedType="selectedAssetType"
-            :assets="filteredAssets"
-            :mode="selectedTranscendingMode"
-            @splicing_in="handleSplicingIn"
-            @send="handleSend"
-            @deposit="handleDeposit"
-          />
+          <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
+            @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
         </TabsContent>
 
         <TabsContent value="pool">
@@ -71,14 +51,8 @@
         </TabsContent>
 
         <TabsContent value="satoshinet">
-          <L2Card
-            v-model:selectedType="selectedAssetType"
-            :assets="filteredAssets"
-            :mode="selectedTranscendingMode"
-            @lock="handleLock"
-            @send="handleSend"
-            @withdraw="handleWithdraw"
-          />
+          <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
+            @lock="handleLock" @send="handleSend" @withdraw="handleWithdraw" />
         </TabsContent>
       </Tabs>
     </div>
@@ -88,10 +62,7 @@
       <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
         <TabsList class="grid w-full grid-cols-3 mb-4  bg-zinc-700/90">
           <TabsTrigger value="bitcoin">
-            <Icon
-              icon="cryptocurrency:btc"
-              class="w-4 h-4 mr-1 justify-self-center"
-            />
+            <Icon icon="cryptocurrency:btc" class="w-4 h-4 mr-1 justify-self-center" />
             Bitcoin
           </TabsTrigger>
           <TabsTrigger value="channel">
@@ -99,60 +70,33 @@
             Channel
           </TabsTrigger>
           <TabsTrigger value="satoshinet">
-            <Icon
-              icon="lucide:globe-lock"
-              class="w-4 h-4 mr-1 justify-self-center"
-            />
+            <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
             SatoshiNet
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="bitcoin">          
-          <L1Card
-            v-model:selectedType="selectedAssetType"
-            :assets="filteredAssets"
-            :mode="selectedTranscendingMode"
-            @splicing_in="handleSplicingIn"
-            @send="handleSend"
-            @deposit="handleDeposit"
-          />
+        <TabsContent value="bitcoin">
+          <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
+            @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
         </TabsContent>
 
         <TabsContent value="channel">
-          <ChannelCard
-            v-model:selectedType="selectedAssetType"
-            @splicing_out="handleSplicingOut"
-            @unlock="handleUnlock"
-          />
+          <ChannelCard v-model:selectedType="selectedAssetType" @splicing_out="handleSplicingOut"
+            @unlock="handleUnlock" />
         </TabsContent>
 
         <TabsContent value="satoshinet">
-          <L2Card
-            v-model:selectedType="selectedAssetType"
-            :assets="filteredAssets"
-            :mode="selectedTranscendingMode"
-            @lock="handleLock"
-            @send="handleSend"
-            @withdraw="handleWithdraw"
-          />
+          <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
+            @lock="handleLock" @send="handleSend" @withdraw="handleWithdraw" />
         </TabsContent>
       </Tabs>
     </div>
 
     <!-- Asset Operation Dialog -->
-    <AssetOperationDialog
-      v-model:open="showDialog"
-      :title="operationTitle"
-      :description="operationDescription"
-      :amount="operationAmount"
-      :address="operationAddress"
-      :operation-type="operationType"
-      :asset-type="selectedAsset?.type"
-      :asset-ticker="selectedAsset?.label"
-      @update:amount="operationAmount = $event"
-      @update:address="operationAddress = $event"
-      @confirm="handleOperationConfirm"
-    />
+    <AssetOperationDialog v-model:open="showDialog" :title="operationTitle" :description="operationDescription"
+      :amount="operationAmount" :address="operationAddress" :operation-type="operationType"
+      :asset-type="selectedAsset?.type" :asset-ticker="selectedAsset?.label" @update:amount="operationAmount = $event"
+      @update:address="operationAddress = $event" @confirm="handleOperationConfirm" />
   </div>
 </template>
 
@@ -165,6 +109,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
 import satsnetStp from '@/utils/stp'
+import sat20 from '@/utils/sat20'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import PoolManager from '@/components/wallet/PoolManager.vue'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
@@ -216,7 +161,7 @@ const filteredAssets = computed(() => {
     const store = isMainnet ? l1Store : l2Store
     console.log('selectedAssetType.value', selectedAssetType.value)
     console.log(store);
-    
+
     switch (selectedAssetType.value) {
       case 'BTC':
         return (store.plainList || []).map((asset) => ({
@@ -518,9 +463,9 @@ const lockUtxo = async ({
 }
 
 // L1 发送操作
-const l1Send = async ({ toAddress, utxos, amt }: any) => {
+const l1Send = async ({ toAddress, asset_name, amt }: any) => {
   loading.value = true
-  const [err, result] = await satsnetStp.sendUtxos(toAddress, utxos, amt)
+  const [err, result] = await satsnetStp.sendAssets(toAddress, asset_name, amt)
   if (err) {
     toast({
       title: 'error',
@@ -541,7 +486,7 @@ const l1Send = async ({ toAddress, utxos, amt }: any) => {
 // L2 发送操作
 const l2Send = async ({ toAddress, asset_name, amt }: any) => {
   loading.value = true
-  const [err, result] = await satsnetStp.sendAssetsSatsNet(
+  const [err, result] = await satsnetStp.sendAssets_SatsNet(
     toAddress,
     asset_name,
     amt
@@ -655,7 +600,7 @@ const handleOperationConfirm = async () => {
         if (selectedChain.value === 'bitcoin') {
           await l1Send({
             toAddress,
-            utxos: [],
+            asset_name: asset.key,
             amt: amount,
           })
         } else {
