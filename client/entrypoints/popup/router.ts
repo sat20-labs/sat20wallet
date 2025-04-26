@@ -4,17 +4,14 @@ import Index from '@/entrypoints/popup/pages/Index.vue'
 import ImportWallet from '@/entrypoints/popup/pages/Import.vue'
 import CreateWallet from '@/entrypoints/popup/pages/Create.vue'
 import WalletIndex from '@/entrypoints/popup/pages/wallet/index.vue'
-import WalletAsset from '@/entrypoints/popup/pages/wallet/asset.vue'
 import WalletSetting from '@/entrypoints/popup/pages/wallet/Setting.vue'
 import WalletReceive from '@/entrypoints/popup/pages/wallet/Receive.vue'
 import WalletSettingPhrase from '@/entrypoints/popup/pages/wallet/settings/phrase.vue'
-import WalletL2Send from '@/entrypoints/popup/pages/wallet/l2/send.vue'
 import WalletManager from '@/components/wallet/WalletManager.vue'
 import SubWalletManager from '@/components/wallet/SubWalletManager.vue'
 import Unlock from '@/entrypoints/popup/pages/Unlock.vue'
 import Approve from '@/entrypoints/popup/pages/wallet/Approve.vue'
 import { walletStorage } from '@/lib/walletStorage'
-import { storage } from 'wxt/storage'
 
 const routes = [
   { path: '/', component: Index },
@@ -38,16 +35,6 @@ const routes = [
           },
         ],
       },
-      {
-        path: 'l2',
-        children: [
-          {
-            path: 'send',
-            component: WalletL2Send,
-          },
-        ],
-      },
-      { path: 'asset', component: WalletAsset },
       { path: 'receive', component: WalletReceive },
       { path: 'approve', component: Approve },
       { path: 'manager', component: WalletManager },

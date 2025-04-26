@@ -83,7 +83,7 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const setHasWallet = async (value: boolean) => {
-    await walletStorage.setValue('hasWallet', value)
+  await walletStorage.setValue('hasWallet', value)
     hasWallet.value = value
   }
 
@@ -92,6 +92,7 @@ export const useWalletStore = defineStore('wallet', () => {
   }
   const switchWallet = async (walletId: number) => {
     await walletManager.switchWallet(walletId)
+    await satsnetStp.switchWallet(walletId)
     const currentAccount = wallets.value.find(w => w.id === walletId)?.accounts[0];
     await setWalletId(walletId);
     await switchToAccount(currentAccount?.index || 0);
@@ -273,6 +274,7 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const addAccount = async (name: string, accountId: number) => {
     await walletManager.switchAccount(accountId)
+    await satsnetStp.switchAccount(accountId)
     const [_, addressRes] = await walletManager.getWalletAddress(accountId)
     const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
 
@@ -293,6 +295,7 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const switchToAccount = async (accountId: number) => {
     await walletManager.switchAccount(accountId)
+    await satsnetStp.switchAccount(accountId)
     const [_, addressRes] = await walletManager.getWalletAddress(accountId)
     const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
 

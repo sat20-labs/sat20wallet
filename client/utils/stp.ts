@@ -18,6 +18,8 @@ interface StpWasmModule {
   hello: (...args: any[]) => Promise<WasmResponse<string>>;
   start: (...args: any[]) => Promise<WasmResponse>;
   importWallet: (...args: any[]) => Promise<WasmResponse>;
+  switchWallet: (...args: any[]) => Promise<WasmResponse>;
+  switchAccount: (...args: any[]) => Promise<WasmResponse>;
   init: (...args: any[]) => Promise<WasmResponse>;
   getVersion: (...args: any[]) => Promise<WasmResponse<string>>;
   registerCallback: (...args: any[]) => Promise<WasmResponse>;
@@ -128,7 +130,17 @@ class SatsnetStp {
       password.toString()
     )
   }
-
+  async switchWallet(
+    id: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('switchWallet', id)
+  }
+  async switchAccount(
+    id: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('switchAccount', id)
+  }
+  
   async hello(): Promise<[Error | undefined, string | undefined]> { // Refined return type
     return this._handleRequest<string>('hello')
   }

@@ -269,6 +269,14 @@ interface SatsnetStp {
   ): SatsnetResponse
   release(): SatsnetResponse
   getWallet(): SatsnetResponse
+  // Switches to the wallet with the specified ID.
+  switchWallet(id: number): Promise<SatsnetResponse<void>>
+
+  // Switches to the account with the specified ID.
+  switchAccount(id: number): Promise<SatsnetResponse<void>>
+
+  // Switches to the specified chain (e.g., "mainnet" or "testnet").
+  switchChain(chain: string): Promise<SatsnetResponse<void>>
   getAllChannels(): SatsnetResponse
   getChannel(id: string): SatsnetResponse
   getChannelStatus(id: string): SatsnetResponse
