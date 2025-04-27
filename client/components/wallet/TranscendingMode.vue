@@ -43,7 +43,7 @@
 
         <TabsContent value="bitcoin">
           <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
-            @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
+            @splicing_in="handleSplicingIn" @refresh="refreshL1Assets" @send="handleSend" @deposit="handleDeposit" />
         </TabsContent>
 
         <TabsContent value="pool">
@@ -52,7 +52,7 @@
 
         <TabsContent value="satoshinet">
           <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
-            @lock="handleLock" @send="handleSend" @withdraw="handleWithdraw" />
+            @lock="handleLock" @refresh="refreshL2Assets" @send="handleSend" @withdraw="handleWithdraw" />
         </TabsContent>
       </Tabs>
     </div>
@@ -77,7 +77,7 @@
 
         <TabsContent value="bitcoin">
           <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
-            @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
+            @splicing_in="handleSplicingIn" @refresh="refreshL1Assets" @send="handleSend" @deposit="handleDeposit" />
         </TabsContent>
 
         <TabsContent value="channel">
@@ -87,7 +87,7 @@
 
         <TabsContent value="satoshinet">
           <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
-            @lock="handleLock" @send="handleSend" @withdraw="handleWithdraw" />
+            @lock="handleLock" @refresh="refreshL2Assets" @send="handleSend" @withdraw="handleWithdraw" />
         </TabsContent>
       </Tabs>
     </div>
@@ -156,11 +156,8 @@ const filteredAssets = computed(() => {
 
   // 获取当前链的资产列表
   const getChainAssets = (isMainnet: boolean) => {
-    console.log('getChainAssets', isMainnet)
 
     const store = isMainnet ? l1Store : l2Store
-    console.log('selectedAssetType.value', selectedAssetType.value)
-    console.log(store);
 
     switch (selectedAssetType.value) {
       case 'BTC':
@@ -187,13 +184,6 @@ const filteredAssets = computed(() => {
         return []
     }
   }
-  console.log('selectedTranscendingMode.value')
-  console.log(selectedTranscendingMode.value)
-  console.log('selectedChain.value')
-  console.log(selectedChain.value)
-  console.log('selectedAssetType.value')
-  console.log(selectedAssetType.value)
-
 
   if (selectedTranscendingMode.value === 'lightning') {
     if (selectedChain.value === 'bitcoin') {
@@ -207,7 +197,6 @@ const filteredAssets = computed(() => {
     assets = getChainAssets(isMainnet)
   }
 
-  console.log('Filtered Assets:', assets)
   return assets
 })
 
@@ -314,267 +303,155 @@ const handleSplicingOut = (asset: any) => {
   showDialog.value = true
 }
 
-// 错误处理函数
-const handleError = (message: string) => {
-  toast({
-    title: 'Error',
-    description: message,
-  })
+// 通用高阶函数，统一处理 loading、toast、错误
+const withLoadingToast = async (
+  fn: () => Promise<[any, any]>,
+  { success, error }: { success: string; error: string }
+) => {
+  loading.value = true
+  try {
+    const [err, result] = await fn()
+    if (err) {
+      toast({ title: 'Error', description: err.message || error })
+      return false
+    }
+    toast({ title: 'Success', description: success })
+    return result
+  } catch (e) {
+    toast({ title: 'Error', description: error })
+    return false
+  } finally {
+    loading.value = false
+  }
 }
 
 // 检查通道状态
 const checkChannel = async (chanid: string) => {
   const [err, result] = await satsnetStp.getChannelStatus(chanid)
-  console.log(result)
-
-  if (err || result !== 16) {
-    return false
-  }
-
-  return true
+  return !err && result === 16
 }
 
 // Splicing In 操作
-const splicingIn = async ({
-  chanid,
-  utxos,
-  amt,
-  feeUtxos = [],
-  feeRate,
-  asset_name,
-}: any): Promise<void> => {
-  loading.value = true
-
-  const [err, result] = await satsnetStp.splicingIn(
-    chanid,
-    asset_name,
-    utxos,
-    feeUtxos,
-    feeRate,
-    amt
+const splicingIn = async (params: any): Promise<void> => {
+  await withLoadingToast(
+    () => satsnetStp.splicingIn(
+      params.chanid,
+      params.asset_name,
+      params.utxos,
+      params.feeUtxos,
+      params.feeRate,
+      params.amt
+    ),
+    { success: 'Splicing in successful.', error: 'Splicing in failed.' }
   )
-
-  if (err) {
-    loading.value = false
-    handleError(err.message)
-    return
-  }
   refreshL1Assets()
   await channelStore.getAllChannels()
-  loading.value = false
 }
 
 // Splicing Out 操作
-const splicingOut = async ({
-  chanid,
-  toAddress,
-  amt,
-  feeRate,
-  asset_name,
-}: any): Promise<void> => {
-  loading.value = true
+const splicingOut = async (params: any): Promise<void> => {
   const feeUtxos = l1Store.plainList?.[0]?.utxos || []
-  const [err, result] = await satsnetStp.splicingOut(
-    chanid,
-    toAddress,
-    asset_name,
-    feeUtxos,
-    feeRate,
-    amt
+  await withLoadingToast(
+    () => satsnetStp.splicingOut(
+      params.chanid,
+      params.toAddress,
+      params.asset_name,
+      feeUtxos,
+      params.feeRate,
+      params.amt
+    ),
+    { success: 'Splicing out successful.', error: 'Splicing out failed.' }
   )
-
-  if (err) {
-    loading.value = false
-    handleError(err.message)
-    return
-  }
   refreshL1Assets()
   await channelStore.getAllChannels()
-  loading.value = false
 }
 
 // Unlock UTXO 操作
-const unlockUtxo = async ({ chanid, amt, feeUtxos = [], asset_name }: any) => {
-  console.log('Unlock UTXO:', chanid, amt, feeUtxos, asset_name)
-  loading.value = true
-  const status = await checkChannel(chanid)
-  if (!status) {
+const unlockUtxo = async (params: any) => {
+  if (!(await checkChannel(params.chanid))) {
     toast({
-      title: 'error',
-      description: 'channel tx has not been confirmed',
+      title: 'Error',
+      description: 'Channel transaction has not been confirmed.',
     })
-    loading.value = false
     return
   }
-
-  const [err, result] = await satsnetStp.unlockFromChannel(chanid, asset_name, amt, [])
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
+  await withLoadingToast(
+    () => satsnetStp.unlockFromChannel(params.chanid, params.asset_name, params.amt, []),
+    { success: 'Unlock successful.', error: 'Unlock failed.' }
+  )
   await sleep(1000)
   await channelStore.getAllChannels()
-  loading.value = false
   refreshL2Assets()
   await channelStore.getAllChannels()
-  toast({
-    title: 'success',
-    description: 'unlock success',
-  })
 }
 
 // Lock UTXO 操作
-const lockUtxo = async ({
-  utxos,
-  chanid,
-  amt,
-  feeUtxos = [],
-  asset_name,
-}: any) => {
-  loading.value = true
-  const [err, result] = await satsnetStp.lockToChannel(
-    chanid,
-    asset_name,
-    amt,
-    utxos,
-    feeUtxos
+const lockUtxo = async (params: any) => {
+  await withLoadingToast(
+    () => satsnetStp.lockToChannel(
+      params.chanid,
+      params.asset_name,
+      params.amt,
+      params.utxos,
+      params.feeUtxos
+    ),
+    { success: 'Lock successful.', error: 'Lock failed.' }
   )
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
-
   await channelStore.getAllChannels()
-  loading.value = false
   refreshL2Assets()
   await channelStore.getAllChannels()
-  toast({
-    title: 'success',
-    description: 'lock success',
-  })
 }
 
 // L1 发送操作
-const l1Send = async ({ toAddress, asset_name, amt }: any) => {
-  loading.value = true
-  const [err, result] = await satsnetStp.sendAssets(toAddress, asset_name, amt, 0)
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
-
-  loading.value = false
+const l1Send = async (params: any) => {
+  await withLoadingToast(
+    () => satsnetStp.sendAssets(params.toAddress, params.asset_name, params.amt, 0),
+    { success: 'Send successful.', error: 'Send failed.' }
+  )
   refreshL1Assets()
-  toast({
-    title: 'success',
-    description: 'send success',
-  })
 }
 
 // L2 发送操作
-const l2Send = async ({ toAddress, asset_name, amt }: any) => {
-  loading.value = true
-  const [err, result] = await satsnetStp.sendAssets_SatsNet(
-    toAddress,
-    asset_name,
-    amt
+const l2Send = async (params: any) => {
+  await withLoadingToast(
+    () => satsnetStp.sendAssets_SatsNet(params.toAddress, params.asset_name, params.amt),
+    { success: 'Send successful.', error: 'Send failed.' }
   )
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
-
-  loading.value = false
   refreshL2Assets()
-  toast({
-    title: 'success',
-    description: 'send success',
-  })
 }
 
 // Deposit 操作
-const deposit = async ({
-  toAddress,
-  asset_name,
-  amt,
-  utxos = [],
-  fees = [],
-}: any) => {
-  loading.value = true
-  const [err, result] = await satsnetStp.deposit(
-    toAddress,
-    asset_name,
-    amt,
-    utxos,
-    fees,
-    btcFeeRate.value
+const deposit = async (params: any) => {
+  await withLoadingToast(
+    () => satsnetStp.deposit(
+      params.toAddress,
+      params.asset_name,
+      params.amt,
+      params.utxos,
+      params.fees,
+      btcFeeRate.value
+    ),
+    { success: 'Deposit successful.', error: 'Deposit failed.' }
   )
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
-  loading.value = false
   refreshL1Assets()
   await channelStore.getAllChannels()
-  toast({
-    title: 'success',
-    description: 'deposit success',
-  })
 }
 
 // Withdraw 操作
-const withdraw = async ({
-  toAddress,
-  asset_name,
-  amt,
-  utxos = [],
-  fees = [],
-}: any) => {
-  loading.value = true
-  const [err, result] = await satsnetStp.withdraw(
-    toAddress,
-    asset_name,
-    amt,
-    utxos,
-    fees,
-    btcFeeRate.value
+const withdraw = async (params: any) => {
+  await withLoadingToast(
+    () => satsnetStp.withdraw(
+      params.toAddress,
+      params.asset_name,
+      params.amt,
+      params.utxos,
+      params.fees,
+      btcFeeRate.value
+    ),
+    { success: 'Withdraw successful.', error: 'Withdraw failed.' }
   )
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
-
-  loading.value = false
   refreshL2Assets()
   await channelStore.getAllChannels()
-  toast({
-    title: 'success',
-    description: 'withdraw success',
-  })
 }
 
 // 更新 handleOperationConfirm 函数
@@ -582,8 +459,8 @@ const handleOperationConfirm = async () => {
   if (!selectedAsset.value || !operationAmount.value) return
   if (operationType.value === 'send' && !operationAddress.value) {
     toast({
-      title: 'error',
-      description: 'Please enter address',
+      title: 'Error',
+      description: 'Please enter the address.',
     })
     return
   }
@@ -675,7 +552,7 @@ const handleOperationConfirm = async () => {
     showDialog.value = false
   } catch (error) {
     console.error('Operation error:', error)
-    handleError('Operation failed')
+    toast({ title: 'Error', description: 'Operation failed.' })
   }
 }
 

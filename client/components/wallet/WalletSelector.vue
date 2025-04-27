@@ -23,6 +23,7 @@ import { useWalletStore } from '@/store'
 const router = useRouter()
 const walletStore = useWalletStore()
 const { wallet } = storeToRefs(walletStore)
+console.log(wallet);
 
 // Methods
 const navigateToWalletManager = () => {

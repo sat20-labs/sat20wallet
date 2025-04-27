@@ -7,6 +7,7 @@
       @update:model-value="$emit('update:selectedType', $event)"
       @lock="$emit('lock', $event)"
       @send="$emit('send', $event)"
+      @refresh="$emit('refresh')"
       @withdraw="$emit('withdraw', $event)"
     />
   </div>
@@ -47,5 +48,5 @@ const props = defineProps({
   }
 })
 
-defineEmits(['update:selectedType', 'lock', 'send', 'withdraw'])
+defineEmits(['update:selectedType', 'lock', 'send', 'withdraw', 'refresh'])
 </script>
