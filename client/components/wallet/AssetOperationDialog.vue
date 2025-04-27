@@ -105,7 +105,9 @@ const confirmOperation = () => {
 const handleConfirm = () => {
   emit('confirm')
   showAlertDialog.value = false
-  isOpen.value = false
+  setTimeout(() => {
+    isOpen.value = false
+  }, 300)
 }
 
 </script>
