@@ -253,6 +253,10 @@ class Service {
   async getAssetAmount_SatsNet(address: string, assetName: string): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
     return stp.getAssetAmount_SatsNet(address, assetName);
   }
+
+  async getTickerInfo(asset: string): Promise<[Error | undefined, any | undefined]> {
+    return stp.getTickerInfo(asset);
+  }
 }
 
 export default new Service()

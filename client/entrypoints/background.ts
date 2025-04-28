@@ -300,6 +300,14 @@ export default defineBackground(() => {
             [reqErr, reqRes] = await service.lockUtxo_SatsNet(data.address, data.utxo, data.reason);
             if (reqErr) { errData = { code: -48, message: reqErr.message }; } else { resData = { success: true }; }
             break;
+          case Message.MessageAction.GET_TICKER_INFO:
+            [reqErr, reqRes] = await service.getTickerInfo(data.asset);
+            if (reqErr) {
+              errData = { code: -50, message: reqErr.message };
+            } else {
+              resData = reqRes;
+            }
+            break;
           default:
             console.warn(`Unhandled REQUEST action: ${action}`);
             errData = { code: -32601, message: 'Method not found' }; // Method not found error
