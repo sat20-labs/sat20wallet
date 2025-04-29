@@ -7,9 +7,10 @@
       @update:model-value="$emit('update:selectedType', $event)"
       @splicing_in="$emit('splicing_in', $event)"
       @send="$emit('send', $event)"
+      @refresh="$emit('refresh')"
       @deposit="$emit('deposit', $event)"
     />
-  </div>
+  </div>  
 </template>
 
 <script setup lang="ts">
@@ -52,5 +53,5 @@ watch(() => props.selectedType, (newType) => {
   console.log('L1Card - Selected type changed:', newType)
 })
 
-defineEmits(['update:selectedType', 'splicing_in', 'send', 'deposit'])
+defineEmits(['update:selectedType', 'splicing_in', 'send', 'deposit', 'refresh'])
 </script>

@@ -2,8 +2,8 @@
   <div class="pt-10 p-4">
     <div class="mb-4 text-center">
       <div class="flex flex-col items-center justify-center gap-2 mb-4">
-        <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-14 h-14 mb-2" />
-        <!-- <h1 class="text-2xl font-semibold">SAT20 Wallet</h1> -->
+        <img src="@/assets/sat20-logo.svg" alt="ORDX" class="w-14 h-14 mb-2" />
+        <!-- <h1 class="text-2xl font-semibold">ORDX Wallet</h1> -->
       </div>
       <h1 class="text-2xl font-bold">
         {{ step === 1 ? 'Create New Wallet' : 'Save your recovery phrase' }}

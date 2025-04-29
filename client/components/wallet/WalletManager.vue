@@ -354,10 +354,11 @@ const createWallet = async () => {
       throw new Error('No password set')
     }
     const [err, result] = await walletStore.createWallet(localPassword)
+
     if (err || !result) {
       throw err || new Error('Failed to create wallet')
     }
-
+    await walletStore.switchWallet(walletStore.walletId)
     toast({
       title: 'Success',
       description: 'Wallet created successfully'
@@ -388,10 +389,10 @@ const importWallet = async () => {
     }
 
     const [err] = await walletStore.importWallet(importMnemonic.value, localPassword)
-
     if (err) {
       throw err
     }
+    await walletStore.switchWallet(walletStore.walletId)
 
     isImportWalletDialogOpen.value = false
     toast({

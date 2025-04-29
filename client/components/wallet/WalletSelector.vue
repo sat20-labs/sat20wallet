@@ -6,7 +6,7 @@
       size="xs"
       class="rounded-md text-gray-300 text-xs font-normal ml-2"
     >
-      <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-4 h-4 shrink-0" />
+      <img src="@/assets/sat20-logo.svg" alt="ORDX" class="w-4 h-4 shrink-0" />
       <span class="text-xs font-medium text-muted-foreground/80">{{ wallet?.name }}</span>
       <Icon icon="lucide:chevron-down" class="w-4 h-4 text-foreground/60" />
     </Button>
@@ -23,6 +23,7 @@ import { useWalletStore } from '@/store'
 const router = useRouter()
 const walletStore = useWalletStore()
 const { wallet } = storeToRefs(walletStore)
+console.log(wallet);
 
 // Methods
 const navigateToWalletManager = () => {

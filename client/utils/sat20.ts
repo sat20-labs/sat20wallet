@@ -9,7 +9,7 @@ class WalletManager {
     const method = window.sat20wallet_wasm[methodName as keyof WalletManager]
     const [err, result] = await tryit(method as any)(...args)
     console.log('wallet result', result);
-    
+
     if (err) {
       console.error(`${methodName} error: ${err.message}`)
       return [err, undefined]
@@ -95,7 +95,7 @@ class WalletManager {
     return this._handleRequest('signPsbt', psbtHex, bool)
   }
 
-  
+
 
   async extractTxFromPsbt(
     psbtHex: string
@@ -109,7 +109,7 @@ class WalletManager {
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
     return this._handleRequest('signPsbt_SatsNet', psbtHex, bool)
   }
-  
+
   async extractTxFromPsbt_SatsNet(
     psbtHex: string
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
@@ -130,14 +130,6 @@ class WalletManager {
     amt: number
   ): Promise<[Error | undefined, string | undefined]> {
     return this._handleRequest('sendAssets_SatsNet', destAddr, assetName, amt)
-  }
-
-  async sendUtxos(
-    destAddr: string,
-    utxos: string[],
-    amt: number
-  ): Promise<[Error | undefined, string | undefined]> {
-    return this._handleRequest('sendUtxos', destAddr, utxos, amt)
   }
 
   async init(

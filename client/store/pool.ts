@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
 interface Asset {
-  type: string      // BTC, SAT20, Runes, BRC20
+  type: string      // BTC, ORDX, Runes, BRC20
   ticker?: string   // 具体资产的 ticker，如 Pearl, SATS 等
   name?: string     // 资产名称
   icon?: string     // 资产图标
@@ -47,7 +47,7 @@ export const usePoolStore = defineStore('pool', () => {
         {
           id: '1',
           asset: {
-            type: 'SAT20',
+            type: 'ORDX',
             ticker: 'RarePizza',
             name: 'RarePizza',
             icon: 'lucide:pizza'
@@ -111,7 +111,7 @@ export const usePoolStore = defineStore('pool', () => {
       {
         id: '2',
         asset: {
-          type: 'SAT20',
+          type: 'ORDX',
           ticker: 'Pearl',
           name: 'Pearl',
           icon: 'lucide:gem'

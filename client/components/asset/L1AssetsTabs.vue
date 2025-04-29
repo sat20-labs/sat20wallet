@@ -1,7 +1,7 @@
 <template>
   <div class="space-y-4">
     <!-- Asset Type Tabs -->
-    <div class="border-b border-border/50 mb-4">
+    <div class="flex justify-between border-b border-zinc-700 mb-4">
       <nav class="flex -mb-px gap-4">
         <button v-for="(type, index) in assetTypes" :key="index" @click="selectedType = type"
           class="pb-2 px-1 font-mono font-semibold text-sm relative" :class="{
@@ -15,6 +15,18 @@
           }" />
         </button>
       </nav>
+      <div class="flex items-center">
+        <Button size="icon" variant="ghost" @click="handlerRefresh">
+          <Icon icon="lucide:refresh-cw" />
+        </Button>
+        <Button size="icon" variant="ghost" as-child>
+          <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History">
+            <Icon icon="quill:link" class="w-5 h-5 text-zinc-400 hover:text-primary/90" />
+          </a>
+        </Button>
+      </div>
+
+
     </div>
 
     <!-- Asset Lists -->
@@ -39,7 +51,7 @@
               <Icon icon="lucide:corner-down-right" class="w-4 h-4 mr-1" />
               Splicing in
             </Button>
-             
+
           </template>
           <!-- Poolswap 模式按钮 -->
           <template v-else>
@@ -62,7 +74,10 @@
 import { ref, computed, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
-
+import { useWalletStore } from '@/store'
+import { Chain } from '@/types/index'
+import { generateMempoolUrl } from '@/utils'
+import { useGlobalStore } from '@/store/global'
 // 类型定义
 interface Asset {
   id: string
@@ -84,17 +99,30 @@ const emit = defineEmits<{
   (e: 'splicing_in', asset: any): void
   (e: 'send', asset: any): void
   (e: 'deposit', asset: any): void
+  (e: 'refresh'): void
 }>()
 
+const walletStore = useWalletStore()
+const globalStore = useGlobalStore()
+const { address } = storeToRefs(walletStore)
+const { env } = storeToRefs(globalStore)
+
+const mempoolUrl = computed(() => {
+  return generateMempoolUrl({
+    network: 'testnet',
+    path: `address/${address.value}`,
+  })
+})
+
 // 资产类型
-const assetTypes = ['BTC', 'SAT20', 'Runes', 'BRC20']
+const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
 const selectedType = ref(props.modelValue || assetTypes[0])
 
 // 过滤资产
 const filteredAssets = computed(() => {
   console.log('L1AssetsTabs - Received Assets:', props.assets)
   console.log('L1AssetsTabs - Selected Type:', selectedType.value)
-  
+
   return props.assets.filter(asset => {
     if (!asset) return false
     return true
@@ -136,6 +164,11 @@ const formatAmount = (asset: Asset) => {
     return `${asset.amount} sats`
   }
   return `${asset.amount}`
+}
+
+const handlerRefresh = () => {
+  console.log('L1AssetsTabs - Refresh')
+  emit('refresh')
 }
 </script>
 

@@ -18,6 +18,8 @@ interface StpWasmModule {
   hello: (...args: any[]) => Promise<WasmResponse<string>>;
   start: (...args: any[]) => Promise<WasmResponse>;
   importWallet: (...args: any[]) => Promise<WasmResponse>;
+  switchWallet: (...args: any[]) => Promise<WasmResponse>;
+  switchAccount: (...args: any[]) => Promise<WasmResponse>;
   init: (...args: any[]) => Promise<WasmResponse>;
   getVersion: (...args: any[]) => Promise<WasmResponse<string>>;
   registerCallback: (...args: any[]) => Promise<WasmResponse>;
@@ -36,8 +38,6 @@ interface StpWasmModule {
   getAllChannels: (...args: any[]) => Promise<WasmResponse<any[]>>; // Assuming array
   getChannel: (...args: any[]) => Promise<WasmResponse>; // Specify channel type if known
   getChannelStatus: (...args: any[]) => Promise<WasmResponse>; // Specify status type if known
-  sendUtxos: (...args: any[]) => Promise<WasmResponse>;
-  sendUtxos_SatsNet: (...args: any[]) => Promise<WasmResponse>;
   sendAssets_SatsNet: (...args: any[]) => Promise<WasmResponse>;
   sendAssets: (...args: any[]) => Promise<WasmResponse>;
   deposit: (...args: any[]) => Promise<WasmResponse>;
@@ -130,7 +130,17 @@ class SatsnetStp {
       password.toString()
     )
   }
-
+  async switchWallet(
+    id: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('switchWallet', id)
+  }
+  async switchAccount(
+    id: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('switchAccount', id)
+  }
+  
   async hello(): Promise<[Error | undefined, string | undefined]> { // Refined return type
     return this._handleRequest<string>('hello')
   }
@@ -287,32 +297,7 @@ class SatsnetStp {
       id
     )
   }
-
-  async sendUtxos(
-    address: string,
-    utxos: string[],
-    amt: number
-  ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest(
-      'sendUtxos',
-      address,
-      utxos,
-      String(amt)
-    )
-  }
-  async sendUtxosSatsNet(
-    address: string,
-    utxos: string[],
-    amt: number
-  ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest(
-      'sendUtxos_SatsNet',
-      address,
-      utxos,
-      amt // Keep original type
-    )
-  }
-  async sendAssetsSatsNet(
+  async sendAssets_SatsNet(
     address: string,
     assetName: string,
     amt: number
@@ -327,13 +312,15 @@ class SatsnetStp {
   async sendAssets(
     address: string,
     assetName: string,
-    amt: number
+    amt: number,
+    feeRate: number
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'sendAssets',
       address,
       assetName,
-      String(amt)
+      String(amt),
+      String(feeRate)
     )
   }
   async deposit(

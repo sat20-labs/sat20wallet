@@ -4,23 +4,15 @@
     <div class="mb-4 flex items-center gap-4">
       <Label class="text-sm text-foreground/50 shrink-0">Trans Mode:</Label>
       <div class="flex gap-2">
-        <Button
-          :variant="
-            selectedTranscendingMode === 'poolswap' ? 'secondary' : 'outline'
-          "
-          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
-          @click="selectedTranscendingMode = 'poolswap'"
-        >
+        <Button :variant="selectedTranscendingMode === 'poolswap' ? 'secondary' : 'outline'
+          " class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
+          @click="selectedTranscendingMode = 'poolswap'">
           <Icon icon="lucide:repeat" class="w-5 h-5 shrink-0" />
           <span class="text-xs">Poolswap</span>
         </Button>
-        <Button
-          :variant="
-            selectedTranscendingMode === 'lightning' ? 'secondary' : 'outline'
-          "
-          class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
-          @click="selectedTranscendingMode = 'lightning'"
-        >
+        <Button :variant="selectedTranscendingMode === 'lightning' ? 'secondary' : 'outline'
+          " class="h-8 w-[100px] flex items-center justify-start px-3 rounded-md"
+          @click="selectedTranscendingMode = 'lightning'">
           <Icon icon="lucide:zap" class="w-5 h-5 shrink-0" />
           <span class="text-xs">Lightning</span>
         </Button>
@@ -30,12 +22,10 @@
     <!-- Poolswap Mode -->
     <div v-if="selectedTranscendingMode === 'poolswap'">
       <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
-        <TabsList class="grid w-full grid-cols-2 mb-4 bg-black/15">
+        <!-- <TabsList class="grid w-full grid-cols-2 mb-4 bg-black/15"> -->
+        <TabsList class="grid w-full grid-cols-2 mb-4 bg-zinc-700/90">
           <TabsTrigger value="bitcoin">
-            <Icon
-              icon="cryptocurrency:btc"
-              class="w-4 h-4 mr-1 justify-self-center"
-            />
+            <Icon icon="cryptocurrency:btc" class="w-4 h-4 mr-1 justify-self-center" />
             Bitcoin
           </TabsTrigger>
           <!-- <TabsTrigger value="pool">
@@ -46,23 +36,14 @@
             Pool
           </TabsTrigger> -->
           <TabsTrigger value="satoshinet">
-            <Icon
-              icon="lucide:globe-lock"
-              class="w-4 h-4 mr-1 justify-self-center"
-            />
+            <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
             SatoshiNet
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="bitcoin">
-          <L1Card
-            v-model:selectedType="selectedAssetType"
-            :assets="filteredAssets"
-            :mode="selectedTranscendingMode"
-            @splicing_in="handleSplicingIn"
-            @send="handleSend"
-            @deposit="handleDeposit"
-          />
+          <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
+            @splicing_in="handleSplicingIn" @refresh="refreshL1Assets" @send="handleSend" @deposit="handleDeposit" />
         </TabsContent>
 
         <TabsContent value="pool">
@@ -70,14 +51,8 @@
         </TabsContent>
 
         <TabsContent value="satoshinet">
-          <L2Card
-            v-model:selectedType="selectedAssetType"
-            :assets="filteredAssets"
-            :mode="selectedTranscendingMode"
-            @lock="handleLock"
-            @send="handleSend"
-            @withdraw="handleWithdraw"
-          />
+          <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
+            @lock="handleLock" @refresh="refreshL2Assets" @send="handleSend" @withdraw="handleWithdraw" />
         </TabsContent>
       </Tabs>
     </div>
@@ -85,12 +60,9 @@
     <!-- Lightning Mode -->
     <div v-else>
       <Tabs defaultValue="bitcoin" v-model="selectedChain" class="w-full">
-        <TabsList class="grid w-full grid-cols-3 mb-4 bg-black/15">
+        <TabsList class="grid w-full grid-cols-3 mb-4  bg-zinc-700/90">
           <TabsTrigger value="bitcoin">
-            <Icon
-              icon="cryptocurrency:btc"
-              class="w-4 h-4 mr-1 justify-self-center"
-            />
+            <Icon icon="cryptocurrency:btc" class="w-4 h-4 mr-1 justify-self-center" />
             Bitcoin
           </TabsTrigger>
           <TabsTrigger value="channel">
@@ -98,60 +70,33 @@
             Channel
           </TabsTrigger>
           <TabsTrigger value="satoshinet">
-            <Icon
-              icon="lucide:globe-lock"
-              class="w-4 h-4 mr-1 justify-self-center"
-            />
+            <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
             SatoshiNet
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="bitcoin">
-          <L1Card
-            v-model:selectedType="selectedAssetType"
-            :assets="filteredAssets"
-            :mode="selectedTranscendingMode"
-            @splicing_in="handleSplicingIn"
-            @send="handleSend"
-            @deposit="handleDeposit"
-          />
+          <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
+            @splicing_in="handleSplicingIn" @refresh="refreshL1Assets" @send="handleSend" @deposit="handleDeposit" />
         </TabsContent>
 
         <TabsContent value="channel">
-          <ChannelCard
-            v-model:selectedType="selectedAssetType"
-            @splicing_out="handleSplicingOut"
-            @unlock="handleUnlock"
-          />
+          <ChannelCard v-model:selectedType="selectedAssetType" @splicing_out="handleSplicingOut"
+            @unlock="handleUnlock" />
         </TabsContent>
 
         <TabsContent value="satoshinet">
-          <L2Card
-            v-model:selectedType="selectedAssetType"
-            :assets="filteredAssets"
-            :mode="selectedTranscendingMode"
-            @lock="handleLock"
-            @send="handleSend"
-            @withdraw="handleWithdraw"
-          />
+          <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets" :mode="selectedTranscendingMode"
+            @lock="handleLock" @refresh="refreshL2Assets" @send="handleSend" @withdraw="handleWithdraw" />
         </TabsContent>
       </Tabs>
     </div>
 
     <!-- Asset Operation Dialog -->
-    <AssetOperationDialog
-      v-model:open="showDialog"
-      :title="operationTitle"
-      :description="operationDescription"
-      :amount="operationAmount"
-      :address="operationAddress"
-      :operation-type="operationType"
-      :asset-type="selectedAsset?.type"
-      :asset-ticker="selectedAsset?.ticker"
-      @update:amount="operationAmount = $event"
-      @update:address="operationAddress = $event"
-      @confirm="handleOperationConfirm"
-    />
+    <AssetOperationDialog v-model:open="showDialog" :title="operationTitle" :description="operationDescription"
+      :amount="operationAmount" :address="operationAddress" :operation-type="operationType"
+      :asset-type="selectedAsset?.type" :asset-ticker="selectedAsset?.label" @update:amount="operationAmount = $event"
+      @update:address="operationAddress = $event" @confirm="handleOperationConfirm" />
   </div>
 </template>
 
@@ -164,6 +109,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
 import satsnetStp from '@/utils/stp'
+import sat20 from '@/utils/sat20'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import PoolManager from '@/components/wallet/PoolManager.vue'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
@@ -190,7 +136,7 @@ type OperationType =
   | 'splicing_out'
 
 const loading = ref(false)
-const { address, feeRate } = storeToRefs(walletStore)
+const { address, feeRate, btcFeeRate } = storeToRefs(walletStore)
 const { channel } = storeToRefs(channelStore)
 
 // 状态管理
@@ -210,22 +156,19 @@ const filteredAssets = computed(() => {
 
   // 获取当前链的资产列表
   const getChainAssets = (isMainnet: boolean) => {
-    console.log('getChainAssets', isMainnet)
 
     const store = isMainnet ? l1Store : l2Store
-    console.log('selectedAssetType.value', selectedAssetType.value)
-    console.log(store);
-    
+
     switch (selectedAssetType.value) {
       case 'BTC':
         return (store.plainList || []).map((asset) => ({
           ...asset,
           type: 'BTC',
         }))
-      case 'SAT20':
+      case 'ORDX':
         return (store.sat20List || []).map((asset) => ({
           ...asset,
-          type: 'SAT20',
+          type: 'ORDX',
         }))
       case 'Runes':
         return (store.runesList || []).map((asset) => ({
@@ -241,13 +184,6 @@ const filteredAssets = computed(() => {
         return []
     }
   }
-  console.log('selectedTranscendingMode.value')
-  console.log(selectedTranscendingMode.value)
-  console.log('selectedChain.value')
-  console.log(selectedChain.value)
-  console.log('selectedAssetType.value')
-  console.log(selectedAssetType.value)
-
 
   if (selectedTranscendingMode.value === 'lightning') {
     if (selectedChain.value === 'bitcoin') {
@@ -261,7 +197,6 @@ const filteredAssets = computed(() => {
     assets = getChainAssets(isMainnet)
   }
 
-  console.log('Filtered Assets:', assets)
   return assets
 })
 
@@ -298,7 +233,7 @@ const operationDescription = computed(() => {
   const asset = selectedAsset.value
   const type = asset.type || 'BTC'
   const amount = asset.amount || 0
-  return `${type}: ${amount} ${asset.ticker || 'sats'}`
+  return `${type}: ${amount} ${asset.label || 'sats'}`
 })
 
 // 事件处理
@@ -368,267 +303,155 @@ const handleSplicingOut = (asset: any) => {
   showDialog.value = true
 }
 
-// 错误处理函数
-const handleError = (message: string) => {
-  toast({
-    title: 'Error',
-    description: message,
-  })
+// 通用高阶函数，统一处理 loading、toast、错误
+const withLoadingToast = async (
+  fn: () => Promise<[any, any]>,
+  { success, error }: { success: string; error: string }
+) => {
+  loading.value = true
+  try {
+    const [err, result] = await fn()
+    if (err) {
+      toast({ title: 'Error', description: err.message || error })
+      return false
+    }
+    toast({ title: 'Success', description: success })
+    return result
+  } catch (e) {
+    toast({ title: 'Error', description: error })
+    return false
+  } finally {
+    loading.value = false
+  }
 }
 
 // 检查通道状态
 const checkChannel = async (chanid: string) => {
   const [err, result] = await satsnetStp.getChannelStatus(chanid)
-  console.log(result)
-
-  if (err || result !== 16) {
-    return false
-  }
-
-  return true
+  return !err && result === 16
 }
 
 // Splicing In 操作
-const splicingIn = async ({
-  chanid,
-  utxos,
-  amt,
-  feeUtxos = [],
-  feeRate,
-  asset_name,
-}: any): Promise<void> => {
-  loading.value = true
-
-  const [err, result] = await satsnetStp.splicingIn(
-    chanid,
-    asset_name,
-    utxos,
-    feeUtxos,
-    feeRate,
-    amt
+const splicingIn = async (params: any): Promise<void> => {
+  await withLoadingToast(
+    () => satsnetStp.splicingIn(
+      params.chanid,
+      params.asset_name,
+      params.utxos,
+      params.feeUtxos,
+      params.feeRate,
+      params.amt
+    ),
+    { success: 'Splicing in successful.', error: 'Splicing in failed.' }
   )
-
-  if (err) {
-    loading.value = false
-    handleError(err.message)
-    return
-  }
   refreshL1Assets()
   await channelStore.getAllChannels()
-  loading.value = false
 }
 
 // Splicing Out 操作
-const splicingOut = async ({
-  chanid,
-  toAddress,
-  amt,
-  feeRate,
-  asset_name,
-}: any): Promise<void> => {
-  loading.value = true
+const splicingOut = async (params: any): Promise<void> => {
   const feeUtxos = l1Store.plainList?.[0]?.utxos || []
-  const [err, result] = await satsnetStp.splicingOut(
-    chanid,
-    toAddress,
-    asset_name,
-    feeUtxos,
-    feeRate,
-    amt
+  await withLoadingToast(
+    () => satsnetStp.splicingOut(
+      params.chanid,
+      params.toAddress,
+      params.asset_name,
+      feeUtxos,
+      params.feeRate,
+      params.amt
+    ),
+    { success: 'Splicing out successful.', error: 'Splicing out failed.' }
   )
-
-  if (err) {
-    loading.value = false
-    handleError(err.message)
-    return
-  }
   refreshL1Assets()
   await channelStore.getAllChannels()
-  loading.value = false
 }
 
 // Unlock UTXO 操作
-const unlockUtxo = async ({ chanid, amt, feeUtxos = [], asset_name }: any) => {
-  console.log('Unlock UTXO:', chanid, amt, feeUtxos, asset_name)
-  loading.value = true
-  const status = await checkChannel(chanid)
-  if (!status) {
+const unlockUtxo = async (params: any) => {
+  if (!(await checkChannel(params.chanid))) {
     toast({
-      title: 'error',
-      description: 'channel tx has not been confirmed',
+      title: 'Error',
+      description: 'Channel transaction has not been confirmed.',
     })
-    loading.value = false
     return
   }
-
-  const [err, result] = await satsnetStp.unlockFromChannel(chanid, asset_name, amt, [])
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
+  await withLoadingToast(
+    () => satsnetStp.unlockFromChannel(params.chanid, params.asset_name, params.amt, []),
+    { success: 'Unlock successful.', error: 'Unlock failed.' }
+  )
   await sleep(1000)
   await channelStore.getAllChannels()
-  loading.value = false
   refreshL2Assets()
   await channelStore.getAllChannels()
-  toast({
-    title: 'success',
-    description: 'unlock success',
-  })
 }
 
 // Lock UTXO 操作
-const lockUtxo = async ({
-  utxos,
-  chanid,
-  amt,
-  feeUtxos = [],
-  asset_name,
-}: any) => {
-  loading.value = true
-  const [err, result] = await satsnetStp.lockToChannel(
-    chanid,
-    asset_name,
-    amt,
-    utxos,
-    feeUtxos
+const lockUtxo = async (params: any) => {
+  await withLoadingToast(
+    () => satsnetStp.lockToChannel(
+      params.chanid,
+      params.asset_name,
+      params.amt,
+      params.utxos,
+      params.feeUtxos
+    ),
+    { success: 'Lock successful.', error: 'Lock failed.' }
   )
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
-
   await channelStore.getAllChannels()
-  loading.value = false
   refreshL2Assets()
   await channelStore.getAllChannels()
-  toast({
-    title: 'success',
-    description: 'lock success',
-  })
 }
 
 // L1 发送操作
-const l1Send = async ({ toAddress, utxos, amt }: any) => {
-  loading.value = true
-  const [err, result] = await satsnetStp.sendUtxos(toAddress, utxos, amt)
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
-
-  loading.value = false
+const l1Send = async (params: any) => {
+  await withLoadingToast(
+    () => satsnetStp.sendAssets(params.toAddress, params.asset_name, params.amt, 0),
+    { success: 'Send successful.', error: 'Send failed.' }
+  )
   refreshL1Assets()
-  toast({
-    title: 'success',
-    description: 'send success',
-  })
 }
 
 // L2 发送操作
-const l2Send = async ({ toAddress, asset_name, amt }: any) => {
-  loading.value = true
-  const [err, result] = await satsnetStp.sendAssetsSatsNet(
-    toAddress,
-    asset_name,
-    amt
+const l2Send = async (params: any) => {
+  await withLoadingToast(
+    () => satsnetStp.sendAssets_SatsNet(params.toAddress, params.asset_name, params.amt),
+    { success: 'Send successful.', error: 'Send failed.' }
   )
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
-
-  loading.value = false
   refreshL2Assets()
-  toast({
-    title: 'success',
-    description: 'send success',
-  })
 }
 
 // Deposit 操作
-const deposit = async ({
-  toAddress,
-  asset_name,
-  amt,
-  utxos = [],
-  fees = [],
-}: any) => {
-  loading.value = true
-  const [err, result] = await satsnetStp.deposit(
-    toAddress,
-    asset_name,
-    amt,
-    utxos,
-    fees,
-    feeRate.value
+const deposit = async (params: any) => {
+  await withLoadingToast(
+    () => satsnetStp.deposit(
+      params.toAddress,
+      params.asset_name,
+      params.amt,
+      params.utxos,
+      params.fees,
+      btcFeeRate.value
+    ),
+    { success: 'Deposit successful.', error: 'Deposit failed.' }
   )
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
-  loading.value = false
   refreshL1Assets()
   await channelStore.getAllChannels()
-  toast({
-    title: 'success',
-    description: 'deposit success',
-  })
 }
 
 // Withdraw 操作
-const withdraw = async ({
-  toAddress,
-  asset_name,
-  amt,
-  utxos = [],
-  fees = [],
-}: any) => {
-  loading.value = true
-  const [err, result] = await satsnetStp.withdraw(
-    toAddress,
-    asset_name,
-    amt,
-    utxos,
-    fees,
-    feeRate.value
+const withdraw = async (params: any) => {
+  await withLoadingToast(
+    () => satsnetStp.withdraw(
+      params.toAddress,
+      params.asset_name,
+      params.amt,
+      params.utxos,
+      params.fees,
+      btcFeeRate.value
+    ),
+    { success: 'Withdraw successful.', error: 'Withdraw failed.' }
   )
-  if (err) {
-    toast({
-      title: 'error',
-      description: err.message,
-    })
-    loading.value = false
-    return
-  }
-
-  loading.value = false
   refreshL2Assets()
   await channelStore.getAllChannels()
-  toast({
-    title: 'success',
-    description: 'withdraw success',
-  })
 }
 
 // 更新 handleOperationConfirm 函数
@@ -636,8 +459,8 @@ const handleOperationConfirm = async () => {
   if (!selectedAsset.value || !operationAmount.value) return
   if (operationType.value === 'send' && !operationAddress.value) {
     toast({
-      title: 'error',
-      description: 'Please enter address',
+      title: 'Error',
+      description: 'Please enter the address.',
     })
     return
   }
@@ -654,7 +477,7 @@ const handleOperationConfirm = async () => {
         if (selectedChain.value === 'bitcoin') {
           await l1Send({
             toAddress,
-            utxos: [],
+            asset_name: asset.key,
             amt: amount,
           })
         } else {
@@ -706,7 +529,7 @@ const handleOperationConfirm = async () => {
           utxos: [],
           amt: amount,
           feeUtxos: [],
-          feeRate: feeRate.value,
+          feeRate: btcFeeRate.value,
           asset_name: asset.key,
         })
         break
@@ -715,7 +538,7 @@ const handleOperationConfirm = async () => {
           chanid: chainid,
           toAddress: address.value,
           amt: amount,
-          feeRate: feeRate.value,
+          feeRate: btcFeeRate.value,
           asset_name: asset.key,
         })
         break
@@ -729,7 +552,7 @@ const handleOperationConfirm = async () => {
     showDialog.value = false
   } catch (error) {
     console.error('Operation error:', error)
-    handleError('Operation failed')
+    toast({ title: 'Error', description: 'Operation failed.' })
   }
 }
 

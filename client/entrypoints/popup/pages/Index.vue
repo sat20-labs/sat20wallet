@@ -1,7 +1,7 @@
 <template>
   <div class="layout-container h-full flex flex-col items-center justify-center p-4">
-    <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-16 h-16 mb-2" />
-    <h1 class="text-3xl font-semibold mb-2 text-center">SAT20 Wallet</h1>
+    <img src="@/assets/sat20-logo.svg" alt="ORDX" class="w-16 h-16 mb-2" />
+    <h1 class="text-3xl font-semibold mb-2 text-center">ORDX Wallet</h1>
     <p class="text-muted-foreground/80 mb-4 text-center">
       Secure, simple, and powerful Bitcoin wallet
     </p>

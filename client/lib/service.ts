@@ -46,7 +46,6 @@ class Service {
   async pushPsbt(psbtHex: string): Promise<[Error | undefined, string | undefined]> {
     console.log('pushPsbt', psbtHex)
     const txHexRes = await (globalThis as any).sat20wallet_wasm.extractTxFromPsbt(psbtHex)
-    console.log('txHexRes', txHexRes)
     const txHex = txHexRes.data.tx
 
     const network = walletStorage.getValue('network')
@@ -252,6 +251,10 @@ class Service {
 
   async getAssetAmount_SatsNet(address: string, assetName: string): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
     return stp.getAssetAmount_SatsNet(address, assetName);
+  }
+
+  async getTickerInfo(asset: string): Promise<[Error | undefined, any | undefined]> {
+    return stp.getTickerInfo(asset);
   }
 }
 

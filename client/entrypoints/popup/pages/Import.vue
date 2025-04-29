@@ -2,8 +2,8 @@
   <LayoutScroll>
     <div class="p-1">
       <div class="flex flex-col items-center justify-center gap-2 mb-4">
-        <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-12 h-12 mb-2" />
-        <h1 class="text-xl font-semibold">SAT20 Wallet</h1>
+        <img src="@/assets/sat20-logo.svg" alt="ORDX" class="w-12 h-12 mb-2" />
+        <h1 class="text-xl font-semibold">ORDX Wallet</h1>
       </div>
       <p class="text-muted-foreground mb-4 text-center">
         Import your existing wallet using recovery phrase or private key

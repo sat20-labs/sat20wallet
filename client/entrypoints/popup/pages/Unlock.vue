@@ -3,8 +3,8 @@
     <div class="max-w-md w-full space-y-8">
       <div class="text-center">
         <div class="flex flex-col items-center justify-center gap-2 mb-6">
-          <img src="@/assets/sat20-logo.svg" alt="SAT20" class="w-14 h-14 mb-2" />
-          <h1 class="text-2xl font-semibold mb-2 text-center">SAT20 Wallet</h1>
+          <img src="@/assets/sat20-logo.svg" alt="ORDX" class="w-14 h-14 mb-2" />
+          <h1 class="text-2xl font-semibold mb-2 text-center">ORDX Wallet</h1>
         </div>
         <!-- <p class="text-gray-600 dark:text-gray-400 mb-4">
           Please enter your wallet password to continue

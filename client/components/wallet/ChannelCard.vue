@@ -1,5 +1,5 @@
 <template>
-  <div class="flex  items-center flex-wrap gap-2 mb-2" v-if="channel">
+  <!-- <div class="flex  items-center flex-wrap gap-2 mb-2" v-if="channel">
     <CopyCard :text="channel.address" class="flex-1">
       <Button asChild size="sm" variant="link">
         <a
@@ -18,8 +18,9 @@
         Open L2
       </a>
     </Button>
-  </div>
+  </div> -->
   <div class="relative" v-if="channel">
+    <!-- <div class="relative" v-if="channel"></div> -->
     <div
       class="absolute w-full h-full z-10 flex justify-center items-center bg-gray-900 bg-opacity-95 left-0 top-0"
       v-if="channel.status !== 16"
@@ -51,7 +52,7 @@
       </div>
     </div>
   </div>
-  <div v-if="channel && channel.status > 15" class="mt-8">
+  <!-- <div v-if="channel && channel.status > 15" class="mt-8">
     <div class="flex gap-4 w-full">
       <Popover v-if="channel" class="flex-1">
         <PopoverTrigger asChild>
@@ -100,7 +101,7 @@
         </PopoverContent>
       </Popover>
     </div>
-  </div>
+  </div> -->
 </template>
 
 <script lang="ts" setup>
@@ -167,13 +168,15 @@ const channelAssets = computed(() => {
   switch (selectedType.value) {
     case 'BTC':
       return (plainList.value).map(asset => ({ ...asset, type: 'BTC' }))
-    case 'SAT20':
-      console.log('SAT20');
-      console.log(sat20List.value);
-      
-      return (sat20List.value).map(asset => ({ ...asset, type: 'SAT20' }))
+    case 'ORDX':
+      return (sat20List.value).map(asset => ({ ...asset, type: 'ORDX' }))
     case 'Runes':
-      return (runesList.value).map(asset => ({ ...asset, type: 'Runes' }))
+      console.log('Runes');
+      console.log(runesList.value);
+      const list = (runesList.value).map(asset => ({ ...asset, type: 'Runes' }))
+      console.log('list');
+      console.log(list);
+      return list
     case 'BRC20':
       return (brc20List.value).map(asset => ({ ...asset, type: 'BRC20' }))
     default:
@@ -181,8 +184,8 @@ const channelAssets = computed(() => {
   }
 })
 
-console.log('channelAssets');
-console.log(channelAssets.value);
+console.log('channelAssets 11');
+console.log(channelAssets);
 
 
 const openHandler = () => {

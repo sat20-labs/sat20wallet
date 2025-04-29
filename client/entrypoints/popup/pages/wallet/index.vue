@@ -19,7 +19,7 @@
       <Button asChild variant="link" class="flex-1 text-center">
         <a
           :href="`https://mempool.space/zh/testnet4/address/${address}`"
-          target="_blank"
+          target="_blank" title="View Trade History"
         >
           {{ hideAddress(address) }}
         </a>
@@ -139,7 +139,7 @@ const l1Assets = computed(() => {
   switch (selectedType.value) {
     case 'BTC':
       return plainList.value || []
-    case 'SAT20':
+    case 'ORDX':
       return sat20List.value || []
     case 'Runes':
       return runesList.value || []

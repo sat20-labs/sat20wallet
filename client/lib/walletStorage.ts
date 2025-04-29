@@ -23,7 +23,7 @@ type StateChangeCallback = (key: StateKey, newValue: any, oldValue: any) => void
 type BatchUpdateData = Partial<WalletState>
 
 const defaultState: WalletState = {
-  env: 'dev',
+  env: 'test',
   locked: true,
   hasWallet: false,
   address: null,

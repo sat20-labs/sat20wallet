@@ -16,6 +16,7 @@ interface SendData {
 export default defineUnlistedScript(() => {
   class Sat20 {
     private eventListeners: { [key: string]: Function[] } = {}
+    private tickerCache: Record<string, any> = {}
 
     constructor() {
       window.addEventListener('message', (event) => {
@@ -421,6 +422,19 @@ export default defineUnlistedScript(() => {
         action: Message.MessageAction.GET_ASSET_AMOUNT_SATSNET,
         data: { address, assetName },
       });
+    }
+
+    async getTickerInfo(asset: string): Promise<any> {
+      if (this.tickerCache[asset]) {
+        return Promise.resolve(this.tickerCache[asset]);
+      }
+      const result = await this.send<any>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_TICKER_INFO,
+        data: { asset },
+      });
+      this.tickerCache[asset] = result;
+      return result;
     }
   }
 

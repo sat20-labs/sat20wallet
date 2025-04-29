@@ -1,7 +1,7 @@
 <template>
   <div class="space-y-4">
     <!-- Asset Type Tabs -->
-    <div class="border-b border-border/50 mb-4">
+    <div class="flex justify-between border-b border-zinc-700  mb-4">
       <nav class="flex -mb-px gap-4">
         <button
           v-for="(type, index) in assetTypes"
@@ -23,6 +23,16 @@
           />
         </button>
       </nav>
+      <div class="flex items-center">
+        <Button size="icon" variant="ghost" @click="handlerRefresh">
+          <Icon icon="lucide:refresh-cw" />
+        </Button>
+        <Button size="icon" variant="ghost" as-child>
+          <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History">
+            <Icon icon="quill:link" class="w-5 h-5 text-zinc-400 hover:text-primary/90" />
+          </a>
+        </Button>
+      </div>
     </div>
 
     <!-- Asset Lists -->
@@ -33,7 +43,7 @@
         class="flex items-center justify-between p-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors"
       >
         <div>
-          <div class="font-medium">{{ (asset.ticker || asset.label).toUpperCase() }}</div>
+          <div class="font-medium">{{ (asset.label).toUpperCase() }}</div>
           <div class="text-sm text-muted-foreground">
             {{ formatAmount(asset) }}
           </div>
@@ -89,6 +99,10 @@
 import { ref, computed, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
+import { useWalletStore } from '@/store'
+import { Chain } from '@/types/index'
+import { generateMempoolUrl } from '@/utils'
+import { useGlobalStore } from '@/store/global'
 
 // 类型定义
 interface Asset {
@@ -106,10 +120,22 @@ const props = defineProps<{
   mode: 'poolswap' | 'lightning'
 }>()
 
-const emit = defineEmits(['update:modelValue', 'lock', 'send',  'withdraw'])
+const emit = defineEmits(['update:modelValue', 'lock', 'send', 'withdraw', 'refresh'])
 
+const walletStore = useWalletStore()
+const globalStore = useGlobalStore()
+const { address } = storeToRefs(walletStore)
+const { env } = storeToRefs(globalStore)
+const mempoolUrl = computed(() => {
+  return generateMempoolUrl({
+    network: 'testnet',
+    path: `address/${address.value}`,
+    chain: Chain.SATNET,
+    env: env.value
+  })
+})
 // 资产类型
-const assetTypes = ['BTC', 'SAT20', 'Runes', 'BRC20']
+const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
 const selectedType = ref(props.modelValue || assetTypes[0])
 
 // 过滤资产
@@ -128,13 +154,18 @@ const formatAmount = (asset: Asset) => {
   if (selectedType.value === 'BTC') {
     return `${asset.amount} sats`
   }
-  return `${asset.amount} ${asset.ticker}`
+  return `${asset.amount}`
 }
 
 // 监听资产类型变化
 watch(selectedType, (newType) => {
   emit('update:modelValue', newType)
 })
+
+const handlerRefresh = () => {
+  console.log('L2AssetsTabs - Refresh')
+  emit('refresh')
+}
 </script>
 
 <style scoped>

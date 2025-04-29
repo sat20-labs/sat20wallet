@@ -1,7 +1,7 @@
 <template>
   <div class="space-y-4">
     <!-- Asset Type Tabs -->
-    <div class="border-b border-border/50 mb-4">
+    <div class="flex justify-between border-b border-zinc-700 mb-4">
       <nav class="flex -mb-px gap-4">
         <button
           v-for="(type, index) in assetTypes"
@@ -23,6 +23,25 @@
           />
         </button>
       </nav>
+
+      <div class="flex items-center p-1 mb-1 gap-2">
+        <span variant="link" class="flex justify-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">        
+          <a
+            :href="`https://mempool.space/zh/testnet4/address/${channel.address}`"
+            target="_blank" class="mb-[1px]] hover:text-primary" title="View Trade History"
+          >
+           <Icon icon="quill:link" class="w-4 h-4 text-zinc-400 hover:text-primary/90" />
+          </a>
+        </span>
+        <span variant="link" class="flex justify-center items-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">
+          <a
+            :href="`https://mempool.dev.sat20.org/address/${channel.address}`"
+            target="_blank" class="mb-[1px] hover:text-primary" title="View L2 History"
+          >
+          <span class="text-xs  p-[1px] text-zinc-400 hover:text-primary"> L2 </span> 
+          </a>        
+        </span>         
+      </div>
     </div>
 
     <!-- Asset Lists -->
@@ -33,7 +52,7 @@
         class="flex items-center justify-between p-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors"
       >
         <div>
-          <div class="font-medium">{{ (asset.ticker || asset.label).toUpperCase() }}</div>
+          <div class="font-medium">{{ (asset.label).toUpperCase() }}</div>
           <div class="text-sm text-muted-foreground">
             {{ formatAmount(asset) }}
           </div>
@@ -81,7 +100,6 @@ interface Asset {
   amount: number
   type?: string
 }
-
 // Props定义
 const props = defineProps<{
   modelValue?: string,
@@ -91,16 +109,14 @@ const props = defineProps<{
 const emit = defineEmits(['update:modelValue', 'splicing_out', 'unlock'])
 
 // 资产类型
-const assetTypes = ['BTC', 'SAT20', 'Runes', 'BRC20']
+const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
 const selectedType = ref(props.modelValue || assetTypes[0])
 
 // 过滤资产
 const filteredAssets = computed(() => {
   return props.assets.filter(asset => {
     if (!asset) return false
-    if (selectedType.value === 'BTC' && !asset.type) return true
-    const assetType = asset.type?.toUpperCase()
-    return selectedType.value === assetType
+    return true
   })
 })
 
@@ -109,7 +125,7 @@ const formatAmount = (asset: Asset) => {
   if (selectedType.value === 'BTC') {
     return `${asset.amount} sats`
   }
-  return `${asset.amount} ${asset.ticker}`
+  return `${asset.amount}`
 }
 
 // 监听资产类型变化
