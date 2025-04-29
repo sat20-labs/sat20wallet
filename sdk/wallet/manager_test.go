@@ -169,7 +169,7 @@ func TestPsbt_SatsNet(t *testing.T) {
 
 // 验证挂单的psbt的签名有效
 func TestVerifyPsbtString_satsnet(t *testing.T) {
-	psbtStr := "70736274ff01005f0100000001c2705e468dab059f54430bba8948f73099b3106b8f882d8e1799bdaa3786ea060000000000ffffffff010500000000000000002251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba0000000000010144640000000000000001046f72647801660970697a7a6174657374053130303a30012251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba01030483000000011341de619f109eec4ad8c9d7f59d6233281f077f8c40944837ebabd1363974f45281099bf5ac0abfaa64014e7649b41ca8982c5f8a3801d12176c10265dd10129226830000"
+	psbtStr := "70736274ff0100740100000001cba01af0880b39487cc6cc6a0d196fbde4eecfd4963a94af784df3cd92669f950000000000ffffffff010000000000000000010572756e657301660736353130335f3103313a3000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb38000000000001012c0a0000000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb38010304830000000000"
 	hexBytes, _ := hex.DecodeString(psbtStr)
 	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(hexBytes), false)
 	if err != nil {
@@ -249,7 +249,7 @@ func TestVerifySignedPsbtString_satsnet(t *testing.T) {
 	}
 }
 
-func TestBuildOrder(m *testing.T) {
+func TestBuildOrder(t *testing.T) {
 
 	// assset := common.DisplayAsset{
 	// 	AssetName: AssetName{
@@ -271,22 +271,27 @@ func TestBuildOrder(m *testing.T) {
 			PkScript: []byte("USBmGjbRHN3OJU7Y44vUbF7Oh71vqRPudPlNcHWRyBfLOA=="),
 			Assets:   nil,
 		},
-		Price: 800,
-		AssetInfo: &common.AssetInfo{
-			Name: common.AssetName{
+		Price: 10000,
+		AssetInfo: &BuyAssetInfo{
+			AssetName: common.AssetName{
 				Protocol: "ordx",
 				Type:     "f",
 				Ticker:   "rarepizza",
 			},
-			Amount:     *common.NewDecimal(100, 0),
+			Amount:     "100",
 			BindingSat: 1,
+			Precision: 0,
 		},
 	}
 
 	utxo, _ := json.Marshal(info)
 	fmt.Printf("%s\n", string(utxo))
 
-	BuildBatchSellOrder_SatsNet([]string{string(utxo)}, "tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv", "testnet")
+	psbt, err := BuildBatchSellOrder_SatsNet([]string{string(utxo)}, "tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv", "testnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("psbt: %s", psbt)
 }
 
 func TestFinalizeOrder(t *testing.T) {

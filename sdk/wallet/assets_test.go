@@ -94,7 +94,7 @@ func TestAnchorScript(t *testing.T) {
 	if value != txOutput.Value() {
 		t.Fatalf("")
 	}
-	if !assets.Equal(&txOutput.Assets) {
+	if !assets.Equal(txOutput.Assets) {
 		t.Fatalf("")
 	}
 }
