@@ -60,3 +60,17 @@ npm run build
 # Create distribution package
 npm run zip
 ```
+
+# 发布包管理
+
+每次构建后，.output目录下会生成如 sat20wallet-0.0.95-chrome.zip 的文件。你可以使用如下命令自动将最新的构建包拷贝到 release 目录，并去除版本号：
+
+```bash
+npm run copy-latest-zip
+# 或者
+bun run copy-latest-zip
+```
+
+执行后，release 目录下会生成 sat20wallet-chrome.zip 文件，便于分发和上传。
+
+每次执行 `npm run build` 或 `npm run zip` 前，都会自动清空 .output 目录，确保不会有旧文件干扰打包结果。

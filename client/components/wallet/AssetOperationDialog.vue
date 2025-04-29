@@ -107,7 +107,9 @@ const handleConfirm = () => {
   showAlertDialog.value = false
   setTimeout(() => {
     isOpen.value = false
+    document.body.removeAttribute('style')
   }, 300)
+
 }
 
 </script>
