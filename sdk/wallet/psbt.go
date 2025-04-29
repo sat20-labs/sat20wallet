@@ -20,11 +20,18 @@ import (
 const SIGHASH_SINGLE_ANYONECANPAY = txscript.SigHashSingle | txscript.SigHashAnyOneCanPay
 const SIGHASH_ALL = txscript.SigHashAll // txscript.SigHashDefault //  //
 
+type BuyAssetInfo struct {
+	AssetName             `json:"Name"`
+	Amount  string        `json:"Amount"`
+	Precision  int        `json:"Precision"`
+	BindingSat int        `json:"BindingSat"`
+}
+
 // UtxoInfo 定义单个挂单的 utxo 数据
 type UtxoInfo struct {
 	common.AssetsInUtxo
 	Price     int64           `json:"Price"`       // 价格
-	AssetInfo *wire.AssetInfo `json:"TargetAsset"` // 非nil时，指要卖入的资产
+	AssetInfo *BuyAssetInfo `json:"TargetAsset"` // 非nil时，指要卖入的资产
 }
 
 // parseUtxo 解析 "txid:vout" 字符串，返回 txid 与 vout
@@ -80,12 +87,28 @@ func buildBatchSellOrder_SatsNet(utxos []*UtxoInfo, address, network string) (st
 			return "", err
 		}
 
-		var assets []wire.AssetInfo
+		outValue := utxoData.Price
+		var assets []common.AssetInfo
 		if utxoData.AssetInfo != nil {
-			assets = []wire.AssetInfo{*utxoData.AssetInfo}
+			if utxoData.Price != utxoData.Value {
+				return "", fmt.Errorf("price must be equal with utxo value")
+			}
+
+			amt, err := common.NewDecimalFromString(utxoData.AssetInfo.Amount, utxoData.AssetInfo.Precision)
+			if err != nil {
+				return "", err
+			}
+			assets = []common.AssetInfo{
+				{
+					Name: utxoData.AssetInfo.AssetName,
+					Amount: *amt,
+					BindingSat: uint32(utxoData.AssetInfo.BindingSat),
+				},
+			}
+			outValue = common.GetBindingSatNum(&assets[0].Amount, assets[0].BindingSat)
 		}
 
-		txOut := wire.NewTxOut(utxoData.Price, assets, pkScript)
+		txOut := wire.NewTxOut(outValue, assets, pkScript)
 		unsignedTx.AddTxOut(txOut)
 	}
 

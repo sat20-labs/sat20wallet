@@ -249,7 +249,7 @@ func TestVerifySignedPsbtString_satsnet(t *testing.T) {
 	}
 }
 
-func TestBuildOrder(m *testing.T) {
+func TestBuildOrder(t *testing.T) {
 
 	// assset := common.DisplayAsset{
 	// 	AssetName: AssetName{
@@ -271,22 +271,27 @@ func TestBuildOrder(m *testing.T) {
 			PkScript: []byte("USBmGjbRHN3OJU7Y44vUbF7Oh71vqRPudPlNcHWRyBfLOA=="),
 			Assets:   nil,
 		},
-		Price: 800,
-		AssetInfo: &common.AssetInfo{
-			Name: common.AssetName{
+		Price: 10000,
+		AssetInfo: &BuyAssetInfo{
+			AssetName: common.AssetName{
 				Protocol: "ordx",
 				Type:     "f",
 				Ticker:   "rarepizza",
 			},
-			Amount:     *common.NewDecimal(100, 0),
+			Amount:     "100",
 			BindingSat: 1,
+			Precision: 0,
 		},
 	}
 
 	utxo, _ := json.Marshal(info)
 	fmt.Printf("%s\n", string(utxo))
 
-	BuildBatchSellOrder_SatsNet([]string{string(utxo)}, "tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv", "testnet")
+	psbt, err := BuildBatchSellOrder_SatsNet([]string{string(utxo)}, "tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv", "testnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("psbt: %s", psbt)
 }
 
 func TestFinalizeOrder(t *testing.T) {
