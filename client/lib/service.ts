@@ -46,7 +46,6 @@ class Service {
   async pushPsbt(psbtHex: string): Promise<[Error | undefined, string | undefined]> {
     console.log('pushPsbt', psbtHex)
     const txHexRes = await (globalThis as any).sat20wallet_wasm.extractTxFromPsbt(psbtHex)
-    console.log('txHexRes', txHexRes)
     const txHex = txHexRes.data.tx
 
     const network = walletStorage.getValue('network')

@@ -1,8 +1,9 @@
-import { useGlobalStore } from '@/store/global'
+import { config as configMap } from '@/config'
+import { walletStorage } from '@/lib/walletStorage'
 class OrdxApi {
   generatePath(path: string, network: string) {
-    const globalStore = useGlobalStore()
-    const config = globalStore.config
+    const env = walletStorage.getValue('env')
+    const config = configMap[env]
     const BASE_URL = config.ordxBaseUrl
     return `${BASE_URL}${
       network === 'testnet' ? '/btc/testnet' : '/btc/mainnet'
