@@ -168,7 +168,7 @@ func finalizeSellOrder_SatsNet(packet *psbt.Packet, utxos []*UtxoInfo,
 	var sellValue int64
 	for _, input := range packet.Inputs {
 		sellValue += input.WitnessUtxo.Value
-		sellAssets.Merge(&input.WitnessUtxo.Assets)
+		sellAssets.Merge(input.WitnessUtxo.Assets)
 	}
 
 	var buyAssets wire.TxAssets
@@ -176,7 +176,7 @@ func finalizeSellOrder_SatsNet(packet *psbt.Packet, utxos []*UtxoInfo,
 	for _, utxo := range utxos {
 		buyValue += utxo.Value
 		assets := utxo.ToTxAssets()
-		buyAssets.Merge(&assets)
+		buyAssets.Merge(assets)
 
 		txidStr, vout, err := parseUtxo(utxo.OutPoint)
 		if err != nil {
@@ -206,7 +206,7 @@ func finalizeSellOrder_SatsNet(packet *psbt.Packet, utxos []*UtxoInfo,
 	var priceAssets wire.TxAssets
 	for _, output := range packet.UnsignedTx.TxOut {
 		priceValue += output.Value
-		priceAssets.Merge(&output.Assets)
+		priceAssets.Merge(output.Assets)
 	}
 	// 买家支付服务费和gas
 	totalValue := sellValue + buyValue
@@ -215,8 +215,8 @@ func finalizeSellOrder_SatsNet(packet *psbt.Packet, utxos []*UtxoInfo,
 		return "", fmt.Errorf("not enough sats to pay fee %d", changeValue)
 	}
 	changeAsset := buyAssets.Clone()
-	changeAsset.Merge(&sellAssets)
-	err = changeAsset.Split(&priceAssets)
+	changeAsset.Merge(sellAssets)
+	err = changeAsset.Split(priceAssets)
 	if err != nil {
 		return "", fmt.Errorf("not enough asset, %v", err)
 	}

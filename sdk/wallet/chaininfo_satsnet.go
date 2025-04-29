@@ -50,7 +50,7 @@ func VerifySignedTx_SatsNet(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetch
 				inAssets = txOut.Assets.Clone()
 			}
 		} else {
-			err := inAssets.Merge(&txOut.Assets)
+			err := inAssets.Merge(txOut.Assets)
 			if err != nil {
 				return err
 			}
@@ -66,7 +66,7 @@ func VerifySignedTx_SatsNet(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetch
 				outAssets = txOut.Assets.Clone()
 			}
 		} else {
-			err := outAssets.Merge(&txOut.Assets)
+			err := outAssets.Merge(txOut.Assets)
 			if err != nil {
 				return err
 			}
@@ -78,7 +78,7 @@ func VerifySignedTx_SatsNet(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetch
 	}
 
 	if inAssets != nil {
-		err := inAssets.Split(&outAssets)
+		err := inAssets.Split(outAssets)
 		if err != nil {
 			return err
 		}
@@ -487,7 +487,7 @@ func IsSameTxExceptSigs_SatsNet(tx1, tx2 *wire.MsgTx) bool {
 			if out2.Assets == nil {
 				return false
 			}
-			if !out1.Assets.Equal(&out2.Assets) {
+			if !out1.Assets.Equal(out2.Assets) {
 				return false
 			}
 		}
