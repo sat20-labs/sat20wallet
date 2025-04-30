@@ -220,7 +220,15 @@ func (p *Manager) saveMnemonic(mn, password string) (int64, error) {
 func (p *Manager) loadMnemonic(id int64, password string) (string, error) {
 	wallet, ok := p.walletInfoMap[id]
 	if !ok {
-		return "", fmt.Errorf("can't find wallet %d", id)
+		// 现在有两个钱包对象在两个模块之中，需要做一些数据同步工作
+		err := p.initDB()
+		if err != nil {
+			return "", fmt.Errorf("can't find wallet %d", id)
+		}
+		wallet, ok = p.walletInfoMap[id]
+		if !ok {
+			return "", fmt.Errorf("can't find wallet %d", id)
+		}
 	}
 
 	key, err := p.restoreSnaclKey(wallet.Salt, password)
