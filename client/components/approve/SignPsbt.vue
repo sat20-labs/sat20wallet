@@ -173,6 +173,7 @@ const getParsedPsbt = async () => {
            console.log("Parsed Outputs:", parsedOutputs.value);
         } else if (Array.isArray(res.outputs)) {
            parsedOutputs.value = res.outputs;
+           console.log("Parsed Outputs:", parsedOutputs.value);
         } else {
            console.warn("Outputs data is missing, not a string, or not an array:", res.outputs)
            // Optionally consider this a partial success or handle as needed

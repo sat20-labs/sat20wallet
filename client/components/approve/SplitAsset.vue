@@ -8,7 +8,7 @@
         </p>
         <div class="rounded-md border p-4 space-y-1 bg-muted/50">
            <p class="text-sm font-medium">
-             Asset Key: <strong>{{ props.data.assetName }}</strong>
+             Asset Key: <strong>{{ label }}</strong>
            </p>
            <p class="text-sm font-medium">
              Amount to Split: <strong>{{ props.data.amt }}</strong>
@@ -59,7 +59,17 @@ const { toast } = useToast()
 
 const loading = ref(false)
 const errorMessage = ref<string | null>(null)
+const label = ref<string | null>(null)
 
+watch(props.data, async (newData) => {
+  const { assetName } = newData
+  const [err, res] = await satsnetStp.getTickerInfo(assetName)
+  if (res?.ticker) {
+    const { ticker } = res
+    const result = JSON.parse(ticker)
+    label.value = result?.displayname || assetName
+  }
+}, { immediate: true })
 // Computed property to check data validity
 const isValidData = computed(() => {
   const result = splitAssetSchema.safeParse(props.data)
