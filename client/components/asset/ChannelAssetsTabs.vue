@@ -109,7 +109,8 @@ const props = defineProps<{
 const emit = defineEmits(['update:modelValue', 'splicing_out', 'unlock'])
 
 // 资产类型
-const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
+//const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
+const assetTypes = ['ORDX', 'Runes', 'BRC20']
 const selectedType = ref(props.modelValue || assetTypes[0])
 
 // 过滤资产

@@ -25,7 +25,7 @@
       </nav>
       <div class="flex items-center">
         <Button size="icon" variant="ghost" @click="handlerRefresh">
-          <Icon icon="lucide:refresh-cw" />
+          <Icon icon="lucide:refresh-cw" class="text-zinc-400"/>
         </Button>
         <Button size="icon" variant="ghost" as-child>
           <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History">
@@ -134,8 +134,10 @@ const mempoolUrl = computed(() => {
     env: env.value
   })
 })
+
 // 资产类型
-const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
+//const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
+const assetTypes = ['ORDX', 'Runes', 'BRC20']
 const selectedType = ref(props.modelValue || assetTypes[0])
 
 // 过滤资产
