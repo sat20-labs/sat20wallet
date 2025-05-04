@@ -120,7 +120,7 @@ const showAddress = computed(() => {
   if (selectedChainLabel.value === 'bitcoin') {
     return address.value
   } else if (selectedChainLabel.value === 'channel') {
-    return channel.value.channelId // 显示通道ID(address)
+    return channel.value?.channelId || address.value // 显示通道ID(address)
   } else if (selectedChainLabel.value === 'satoshinet') {
     return address.value
   }
@@ -136,7 +136,7 @@ const mempoolUrl = computed(() => {
   } else if (selectedChainLabel.value === 'channel') {    
     return generateMempoolUrl({
       network: 'testnet',
-      path: `address/${channel.value.channelId}`,
+      path: `address/${channel.value?.channelId || address.value}`,
       chain: Chain.SATNET,
       env: env.value,
     })
