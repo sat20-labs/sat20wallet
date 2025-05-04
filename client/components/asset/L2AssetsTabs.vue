@@ -29,7 +29,7 @@
         </Button>
         <Button size="icon" variant="ghost" as-child>
           <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History">
-            <Icon icon="quill:link" class="w-5 h-5 text-zinc-400 hover:text-primary/90" />
+            <Icon icon="quill:link" class="text-zinc-400 hover:text-primary/90" />
           </a>
         </Button>
       </div>
@@ -165,7 +165,7 @@ watch(selectedType, (newType) => {
 })
 
 const handlerRefresh = () => {
-  console.log('L2AssetsTabs - Refresh')
+  //console.log('L2AssetsTabs - Refresh')
   emit('refresh')
 }
 </script>

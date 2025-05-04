@@ -21,7 +21,7 @@
         </Button>
         <Button size="icon" variant="ghost" as-child>
           <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History">
-            <Icon icon="quill:link" class="w-5 h-5 text-zinc-400 hover:text-primary/90" />
+            <Icon icon="quill:link" class="text-zinc-400 hover:text-primary/90" />
           </a>
         </Button>
       </div>
@@ -60,7 +60,7 @@
               Send
             </Button>
             <Button size="sm" variant="outline" @click="handleDeposit(asset)">
-              <Icon icon="lucide:arrow-up-right" class="w-4 h-4 mr-1" />
+              <Icon icon="lucide:arrow-down-right" class="w-4 h-4 mr-1" />
               Deposit
             </Button>
           </template>
@@ -121,8 +121,8 @@ const selectedType = ref(props.modelValue || assetTypes[0])
 
 // 过滤资产
 const filteredAssets = computed(() => {
-  console.log('L1AssetsTabs - Received Assets:', props.assets)
-  console.log('L1AssetsTabs - Selected Type:', selectedType.value)
+  // console.log('L1AssetsTabs - Received Assets:', props.assets)
+  // console.log('L1AssetsTabs - Selected Type:', selectedType.value)
 
   return props.assets.filter(asset => {
     if (!asset) return false
@@ -139,23 +139,23 @@ const filteredAssets = computed(() => {
 
 // 事件处理函数
 const handleSend = (asset: any) => {
-  console.log('L1AssetsTabs - Send:', asset)
+  // console.log('L1AssetsTabs - Send:', asset)
   emit('send', asset)
 }
 
 const handleSplicingIn = (asset: any) => {
-  console.log('L1AssetsTabs - Splicing In:', asset)
+  // console.log('L1AssetsTabs - Splicing In:', asset)
   emit('splicing_in', asset)
 }
 
 const handleDeposit = (asset: any) => {
-  console.log('L1AssetsTabs - Deposit:', asset)
+  // console.log('L1AssetsTabs - Deposit:', asset)
   emit('deposit', asset)
 }
 
 // 监听资产类型变化
 watch(selectedType, (newType) => {
-  console.log('L1AssetsTabs - Selected Type Changed:', newType)
+  // console.log('L1AssetsTabs - Selected Type Changed:', newType)
   emit('update:modelValue', newType)
 })
 

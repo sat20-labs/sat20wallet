@@ -12,7 +12,7 @@
       <!-- 账户地址 -->
       <Button asChild variant="link" class="flex-1 text-center">
         <a :href="mempoolUrl" target="_blank" title="View Trade History">
-          {{ hideAddress(address) }}
+          {{ hideAddress(showAddress) }}
         </a>
       </Button>
 
@@ -27,7 +27,7 @@
     </div>
 
     <!-- 资产余额 -->
-    <BalanceSummary :key="selectedChainLabel" :assets="assetsSample"
+    <BalanceSummary :key="selectedChainLabel" 
       :selectedTranscendingMode="transcendingModeStore.selectedTranscendingMode || 'poolswap'"
       :selectedChain="selectedChainLabel" :mempool-url="mempoolUrl"/>
 
@@ -101,8 +101,11 @@ const transcendingModeStore = useTranscendingModeStore()
 
 const { refreshL1Assets } = useL1Assets()
 const { refreshL2Assets } = useL2Assets()
+
+let { address, network } = storeToRefs(walletStore)
+
 const channelStore = useChannelStore()
-const { address, network } = storeToRefs(walletStore)
+const { channel} = storeToRefs(channelStore)
 const { plainList, sat20List, brc20List, runesList } = storeToRefs(l1Store)
 
 // 状态管理
@@ -110,17 +113,19 @@ const selectTab = ref('l1')
 //const selectedType = ref('BTC')
 const selectedType = ref('ORDX')
 
-const assetsSample = [
-  { id: '1', amount: 0.01, price: 30, status: 'available' },
-  { id: '2', amount: 0.005, price: 30, status: 'unavailable' },
-  { id: '3', amount: 0.008, price: 10000, status: 'available' },
-]
-
-console.log('父组件 assetsSample:', assetsSample)
-
 const globalStore = useGlobalStore()
 const { env } = storeToRefs(globalStore)
-const { channel } = storeToRefs(channelStore)
+
+const showAddress = computed(() => {
+  if (selectedChainLabel.value === 'bitcoin') {
+    return address.value
+  } else if (selectedChainLabel.value === 'channel') {
+    return channel.value.channelId // 显示通道ID(address)
+  } else if (selectedChainLabel.value === 'satoshinet') {
+    return address.value
+  }
+  return '' // 默认返回空字符串
+})
 
 const mempoolUrl = computed(() => {
   if (selectedChainLabel.value === 'bitcoin') {
@@ -128,10 +133,10 @@ const mempoolUrl = computed(() => {
       network: 'testnet',
       path: `address/${address.value}`,
     })
-  } else if (selectedChainLabel.value === 'channel') {
+  } else if (selectedChainLabel.value === 'channel') {    
     return generateMempoolUrl({
       network: 'testnet',
-      path: `address/${address.value}`,
+      path: `address/${channel.value.channelId}`,
       chain: Chain.SATNET,
       env: env.value,
     })

@@ -256,17 +256,17 @@
 }
 
 const handleTabChange = (value: string | number) => {
-  console.log('子组件 Tab changed:', value);
+  // console.log('子组件 Tab changed:', value);
   changeTab(String(value)); // 调用 changeTab 函数来发出事件
   selectedAssetType.value = 'ORDX' // 重置为初始值
 }
 watch(selectedChain, (newVal) => {
-  console.log('Chain changed to:', newVal)
+  // console.log('Chain changed to:', newVal)
   selectedAssetType.value = 'ORDX' // 重置为初始值
 })
   
   const handleSplicingIn = (asset: any) => {
-    console.log('TranscendingMode - Splicing In:', asset)
+    // console.log('TranscendingMode - Splicing In:', asset)
     operationType.value = 'splicing_in'
     selectedAsset.value = asset
     operationAmount.value = ''
@@ -274,7 +274,7 @@ watch(selectedChain, (newVal) => {
   }
   
   const handleSend = (asset: any) => {
-    console.log('TranscendingMode - Send:', asset)
+    // console.log('TranscendingMode - Send:', asset)
     operationType.value = 'send'
     selectedAsset.value = asset
     operationAmount.value = ''
@@ -282,7 +282,7 @@ watch(selectedChain, (newVal) => {
   }
   
   const handleDeposit = (asset: any) => {
-    console.log('TranscendingMode - Deposit:', asset)
+    // console.log('TranscendingMode - Deposit:', asset)
     operationType.value = 'deposit'
     selectedAsset.value = asset
     operationAmount.value = ''
@@ -290,7 +290,7 @@ watch(selectedChain, (newVal) => {
   }
   
   const handleWithdraw = (asset: any) => {
-    console.log('TranscendingMode - Withdraw:', asset)
+    // console.log('TranscendingMode - Withdraw:', asset)
     operationType.value = 'withdraw'
     selectedAsset.value = asset
     operationAmount.value = ''
@@ -298,7 +298,7 @@ watch(selectedChain, (newVal) => {
   }
   
   const handleLock = (asset: any) => {
-    console.log('TranscendingMode - Lock:', asset)
+    // console.log('TranscendingMode - Lock:', asset)
     operationType.value = 'lock'
     selectedAsset.value = asset
     operationAmount.value = ''
@@ -306,7 +306,7 @@ watch(selectedChain, (newVal) => {
   }
   
   const handleUnlock = (asset: any) => {
-    console.log('TranscendingMode - Unlock:', asset)
+    // console.log('TranscendingMode - Unlock:', asset)
     operationType.value = 'unlock'
     selectedAsset.value = asset
     operationAmount.value = ''
@@ -314,7 +314,7 @@ watch(selectedChain, (newVal) => {
   }
   
   const handleSplicingOut = (asset: any) => {
-    console.log('TranscendingMode - Splicing Out:', asset)
+    // console.log('TranscendingMode - Splicing Out:', asset)
     operationType.value = 'splicing_out'
     selectedAsset.value = asset
     operationAmount.value = ''
@@ -409,6 +409,7 @@ watch(selectedChain, (newVal) => {
       toast({
         title: 'error',
         description: 'channel tx has not been confirmed',
+        duration:1500,
       })
       loading.value = false
       return
@@ -419,6 +420,7 @@ watch(selectedChain, (newVal) => {
       toast({
         title: 'error',
         description: err.message,
+        duration:1500,
       })
       loading.value = false
       return
@@ -431,6 +433,7 @@ watch(selectedChain, (newVal) => {
     toast({
       title: 'success',
       description: 'unlock success',
+      duration:1500,
     })
   }
   
@@ -454,6 +457,7 @@ watch(selectedChain, (newVal) => {
       toast({
         title: 'error',
         description: err.message,
+        duration:1500,
       })
       loading.value = false
       return
@@ -466,6 +470,7 @@ watch(selectedChain, (newVal) => {
     toast({
       title: 'success',
       description: 'lock success',
+      duration:1500,
     })
   }
   
@@ -477,6 +482,7 @@ watch(selectedChain, (newVal) => {
       toast({
         title: 'error',
         description: err.message,
+        duration:1500,
       })
       loading.value = false
       return
@@ -487,6 +493,7 @@ watch(selectedChain, (newVal) => {
     toast({
       title: 'success',
       description: 'send success',
+      duration:1500,
     })
   }
   
@@ -502,6 +509,7 @@ watch(selectedChain, (newVal) => {
       toast({
         title: 'error',
         description: err.message,
+        duration:1500,
       })
       loading.value = false
       return
@@ -512,6 +520,7 @@ watch(selectedChain, (newVal) => {
     toast({
       title: 'success',
       description: 'send success',
+      duration:1500,
     })
   }
   
@@ -536,6 +545,7 @@ watch(selectedChain, (newVal) => {
       toast({
         title: 'error',
         description: err.message,
+        duration:1500,
       })
       loading.value = false
       return
@@ -546,6 +556,7 @@ watch(selectedChain, (newVal) => {
     toast({
       title: 'success',
       description: 'deposit success',
+      duration:1500,
     })
   }
   
@@ -570,6 +581,7 @@ watch(selectedChain, (newVal) => {
       toast({
         title: 'error',
         description: err.message,
+        duration:1500,
       })
       loading.value = false
       return
@@ -581,6 +593,7 @@ watch(selectedChain, (newVal) => {
     toast({
       title: 'success',
       description: 'withdraw success',
+      duration:1500,
     })
   }
   

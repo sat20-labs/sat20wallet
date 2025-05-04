@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-4 relative">
+  <div class="space-y-4 relative mt-2">
     <!-- Total Balance -->
     <div class="text-center relative group">
       <p class="text-base font-bold text-zinc-500">TOTAL BALANCE</p>
@@ -17,7 +17,8 @@
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">Unavailable:</span>
-          <span class="text-sm text-zinc-400">{{ formatBalance(btcBalance.total, props.selectedChain) }}</span>
+          <span class="text-sm text-zinc-400">{{ formatBalance(0, props.selectedChain) }}</span>
+         
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">Total:</span>
@@ -77,9 +78,9 @@ const showReceiveDialog = ref(false)
 const receiveAddress = ref('') // QRCode address
 // Props
 const props = defineProps<{
-  assets: Array<{ id: string; amount: number; price: number; status: string }>
-  selectedTranscendingMode: string
-  selectedChain: string
+  // assets: Array<{ id: string; amount: number; price: number; status: string }>
+  selectedTranscendingMode: string 
+  selectedChain: string | 'bitcoin' | 'channel' | 'satoshinet'
   mempoolUrl: string
 }>()
 
@@ -161,7 +162,7 @@ const operationDescription = computed(() => {
   const asset = selectedAsset.value
   const type = asset.type || 'BTC'
   const amount = asset.amount || 0
-  return `${type} Balance: ${amount} ${asset.label || 'sats'}`
+  return `${type}  Balance: ${amount} ${asset.label || 'sats'}`
 })
 
 // Handle Action
@@ -198,12 +199,12 @@ const handleAction = (action: string) => {
 // Handle Operation Confirm
 const handleOperationConfirm = async () => {
   if (!selectedAsset.value || !operationAmount.value) {
-    toast({ title: 'Error', description: 'Please enter a valid amount' })
+    toast({ title: 'Error', description: 'Please enter a valid amount', duration: 600 })
     return
   }
 
   if (operationType.value === 'send' && !operationAddress.value) {
-    toast({ title: 'Error', description: 'Please enter a valid address' })
+    toast({ title: 'Error', description: 'Please enter a valid address', duration: 600 })
     return
   }
 
@@ -277,29 +278,29 @@ const totalBalance = ref(0)
 
 // 控制详细信息的显示
 const showDetails = ref(false)
-watch(
-  () => props.assets,
-  (newAssets) => {
-    console.log('New assets:', newAssets)
+// watch(
+//   () => props.assets,
+//   (newAssets) => {
+//     console.log('New assets:', newAssets)
 
-    const available = newAssets
-      .filter(asset => asset.status === 'available')
-      .reduce((sum, asset) => sum + asset.amount, 0)
+//     const available = newAssets
+//       .filter(asset => asset.status === 'available')
+//       .reduce((sum, asset) => sum + asset.amount, 0)
 
-    const unavailable = newAssets
-      .filter(asset => asset.status === 'unavailable')
-      .reduce((sum, asset) => sum + asset.amount, 0)
+//     const unavailable = newAssets
+//       .filter(asset => asset.status === 'unavailable')
+//       .reduce((sum, asset) => sum + asset.amount, 0)
 
-    availableBalance.value = available
-    unavailableBalance.value = unavailable
-    totalBalance.value = available + unavailable
+//     availableBalance.value = available
+//     unavailableBalance.value = unavailable
+//     totalBalance.value = available + unavailable
 
-    // console.log('Available Balance:', availableBalance.value)
-    // console.log('Unavailable Balance:', unavailableBalance.value)
-    // console.log('Total Balance:', totalBalance.value)
-  },
-  { immediate: true }
-)
+//     console.log('Available Balance:', availableBalance.value)
+//     console.log('Unavailable Balance:', unavailableBalance.value)
+//     console.log('Total Balance:', totalBalance.value)
+//   },
+//   { immediate: true }
+// )
 
 const globalStore = useGlobalStore()
 

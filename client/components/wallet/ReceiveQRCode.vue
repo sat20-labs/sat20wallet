@@ -86,15 +86,15 @@ const generateQRCode = async () => {
 }
 
 const currentIcon = computed(() => {
-  const icons: Record<string, { icon: string; iconColor: string; imagePath: string }> = {
+  const icons: Record<string, { imagePath: string }> = {
     bitcoin: {
-      icon: 'cryptocurrency:btc',
-      iconColor: 'text-orange-500',
+      // icon: 'cryptocurrency:btc',
+      // iconColor: 'text-orange-500',
       imagePath: '/icon/testnet.svg', // Replace with actual image path
     },
     satoshinet: {
-      icon: 'cryptocurrency:btc',
-      iconColor: 'text-green-500',
+      // icon: 'cryptocurrency:btc',
+      // iconColor: 'text-green-500',
       imagePath: '/icon/satoshinet.svg', // Replace with actual image path
     },
   }

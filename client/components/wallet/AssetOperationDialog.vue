@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="isOpen" @update:open="isOpen = $event">
-    <DialogContent class="sm:max-w-md">
+    <DialogContent class="w-[330px] rounded-lg bg-zinc-950">
       <DialogHeader>
         <DialogTitle>{{ title }}</DialogTitle>
         <DialogDescription>
@@ -40,10 +40,13 @@
   </Dialog>
 
   <AlertDialog v-model:open="showAlertDialog">
-    <AlertDialogContent>
-      <AlertDialogTitle>Please Confirm</AlertDialogTitle>
-      <AlertDialogDesc>Are you sure you want to proceed with this operation?</AlertDialogDesc>
-      <AlertDialogFoot>
+    <AlertDialogContent class="w-[330px] rounded-lg bg-zinc-900">
+      <AlertDialogTitle class="gap-2 flex flex-col items-center">
+        <span class="text-lg font-semibold">Please Confirm</span>
+        <span class="mt-2 w-full"><Separator /></span>
+      </AlertDialogTitle>
+      <AlertDialogDesc class="flex justify-center"><Icon icon="prime:check-circle"  class="w-12 h-12 mr-2 text-green-600"/>Are you sure you want to proceed with this operation?</AlertDialogDesc>
+      <AlertDialogFoot class="my-4 gap-2">
         <AlertDialogCancel @click="showAlertDialog = false">Cancel</AlertDialogCancel>
         <AlertDialogAction @click="handleConfirm">Confirm</AlertDialogAction>
       </AlertDialogFoot>
@@ -53,6 +56,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'

@@ -57,8 +57,7 @@ export function useAssetActions() {
     }
     refreshL1Assets()
     await channelStore.getAllChannels()
-    loading.value = false
-    //handleAssetOperation('splicing_in', { id: chanid, type: 'channel', protocol: 'btc' })
+    loading.value = false   
   }
 
   // Splicing Out 操作
@@ -71,7 +70,7 @@ export function useAssetActions() {
   }: any): Promise<void> => {
     loading.value = true
     const feeUtxos = l1Store.plainList?.[0]?.utxos || []
-    console.log('UseAssetAction splicingOut:', chanid, toAddress, amt, feeUtxos, feeRate, asset_name)
+    //console.log('UseAssetAction splicingOut:', chanid, toAddress, amt, feeUtxos, feeRate, asset_name)
     const [err] = await satsnetStp.splicingOut(chanid, toAddress, asset_name, feeUtxos, feeRate, amt)
     if (err) {
       loading.value = false
@@ -80,8 +79,7 @@ export function useAssetActions() {
     }
     refreshL1Assets()
     await channelStore.getAllChannels()
-    loading.value = false
-    //handleAssetOperation('splicing_out', { id: chanid, type: 'channel', protocol: 'btc' })
+    loading.value = false   
   }
 
   // Deposit 操作
@@ -93,7 +91,7 @@ export function useAssetActions() {
     fees = [],
   }: any) => {
     loading.value = true
-    console.log('UseAssetAction deposit:', toAddress, asset_name, amt, utxos, fees)
+    //console.log('UseAssetAction deposit:', toAddress, asset_name, amt, utxos, fees)
     const [err, result] = await satsnetStp.deposit(
       toAddress,
       asset_name,
@@ -106,6 +104,7 @@ export function useAssetActions() {
       toast({
         title: 'error',
         description: err.message,
+        duration:1500,
       })
       loading.value = false
       return
@@ -116,6 +115,7 @@ export function useAssetActions() {
     toast({
       title: 'success',
       description: 'deposit success',
+      duration:1500,
     })
   }
   
@@ -127,8 +127,7 @@ export function useAssetActions() {
     utxos = [],
     fees = [],
   }: any) => {
-    loading.value = true
-    console.log('UseAssetAction withdraw:', toAddress, asset_name, amt, utxos, fees)
+    loading.value = true    
     const [err, result] = await satsnetStp.withdraw(
       toAddress,
       asset_name,
@@ -141,6 +140,7 @@ export function useAssetActions() {
       toast({
         title: 'error',
         description: err.message,
+        duration:1500,
       })
       loading.value = false
       return
@@ -152,6 +152,7 @@ export function useAssetActions() {
     toast({
       title: 'success',
       description: 'withdraw success',
+      duration:1500,
     })
   }
 
@@ -176,9 +177,9 @@ export function useAssetActions() {
     toast({
       title: 'Success',
       description: 'Unlock successful',
+      duration:1500,
     })
-    loading.value = false
-    //handleAssetOperation('unlock', { id: chanid, type: 'channel', protocol: 'btc' })
+    loading.value = false    
   }
 
   // Lock UTXO 操作
@@ -195,9 +196,9 @@ export function useAssetActions() {
     toast({
       title: 'Success',
       description: 'Lock successful',
+      duration:1500,
     })
-    loading.value = false
-    //handleAssetOperation('lock', { id: chanid, type: 'channel', protocol: 'btc' })
+    loading.value = false    
   }
 
   // L1 发送操作
@@ -214,9 +215,9 @@ export function useAssetActions() {
     toast({
       title: 'Success',
       description: 'Send successful',
+      duration:1500,
     })
-    loading.value = false
-    //handleAssetOperation('l1_send', { id: asset_name, type: 'l1', protocol: 'btc' })
+    loading.value = false    
   }
 
   // L2 发送操作
@@ -233,9 +234,9 @@ export function useAssetActions() {
     toast({
       title: 'Success',
       description: 'Send successful',
+      duration:1500,
     })
-    loading.value = false
-    //handleAssetOperation('l2_send', { id: asset_name, type: 'l2', protocol: 'btc' })
+    loading.value = false    
   }
 
   return {

@@ -3,8 +3,8 @@
     <button @click="isExpanded = !isExpanded"
       class="flex items-center justify-between w-full p-2 text-left text-primary font-medium rounded-lg">
       <div>
-        <h2 class="text-lg font-bold text-zinc-200">Escape Hatch Options</h2>
-        <p class="text-muted-foreground">Channel Info & Secure Exit from Channel</p>
+        <h2 class="text-lg font-bold text-zinc-200">Unilateral Withdrawal</h2>
+        <p class="text-muted-foreground">Channel Info & Unilateral Channel Close</p>
       </div>
       <div class="mr-2">
         <Icon v-if="isExpanded" icon="lucide:chevrons-up" class="mr-2 h-4 w-4" />

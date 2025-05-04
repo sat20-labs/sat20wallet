@@ -3,14 +3,15 @@
     <WalletHeader />
     <h2 class="px-4 text-2xl font-medium text-zinc-700/90">System Settings</h2>
     <div class="space-y-2 py-4 px-0">
-      <EscapeHatch />
+      <!-- Conditionally render EscapeHatch -->
+      <EscapeHatch v-if="transcendingModeStore.selectedTranscendingMode !== 'poolswap'" />
       <Separator />
       <SecuritySetting />
       <Separator />
       <NetworkSetting />
-      <Separator />  
+      <!-- <Separator />  
       <Separator />
-      <Separator />
+      <Separator /> -->
     </div>
 
     <!-- <AppearanceSetting /> -->
@@ -46,6 +47,12 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { version } from '@/package.json'
 import { ref } from "vue";
+import { useTranscendingModeStore } from '@/store'
+
+type TranscendingMode = 'poolswap' | 'lightning'
+const selectedTranscendingMode = ref<TranscendingMode>('poolswap')
+
+const transcendingModeStore = useTranscendingModeStore()
 
 const isOpen = ref(false);
 </script>
