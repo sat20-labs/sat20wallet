@@ -13,7 +13,7 @@
             'text-muted-foreground': selectedType !== type
           }"
         >
-          {{ type }}
+          {{ $t(`channelAssetsTabs.assetType.${type}`) }}
           <div
             class="absolute bottom-0 left-0 right-0 h-0.5 transition-all"
             :class="{
@@ -28,7 +28,7 @@
         <span variant="link" class="flex justify-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">        
           <a
             :href="`https://mempool.space/zh/testnet4/address/${channel.address}`"
-            target="_blank" class="mb-[1px]] hover:text-primary" title="View Trade History"
+            target="_blank" class="mb-[1px]] hover:text-primary" :title="$t('channelAssetsTabs.viewTradeHistory')"
           >
            <Icon icon="quill:link" class="w-4 h-4 text-zinc-400 hover:text-primary/90" />
           </a>
@@ -36,7 +36,7 @@
         <span variant="link" class="flex justify-center items-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">
           <a
             :href="`https://mempool.dev.sat20.org/address/${channel.address}`"
-            target="_blank" class="mb-[1px] hover:text-primary" title="View L2 History"
+            target="_blank" class="mb-[1px] hover:text-primary" :title="$t('channelAssetsTabs.viewL2History')"
           >
           <span class="text-xs  p-[1px] text-zinc-400 hover:text-primary"> L2 </span> 
           </a>        
@@ -59,14 +59,13 @@
         </div>
 
         <div class="flex gap-2">
-          <Button
-            v-if="selectedType === 'BTC'"
+          <Button           
             size="sm"
             variant="outline"
             @click="$emit('splicing_out', asset)"
           >
             <Icon icon="lucide:corner-up-right" class="w-4 h-4 mr-1" />
-            Splicing out
+            {{ $t('channelAssetsTabs.splicingOut') }}
           </Button>
           <Button
             size="sm"
@@ -74,7 +73,7 @@
             @click="$emit('unlock', asset)"
           >
             <Icon icon="lucide:unlock" class="w-4 h-4 mr-1" />
-            Unlock
+            {{ $t('channelAssetsTabs.unlock') }}
           </Button>
         </div>
       </div>

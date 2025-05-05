@@ -1,18 +1,18 @@
 <template>
-  <LayoutSecond title="Recovery Phrase">
+  <LayoutSecond :title="$t('phrase.title')">
     <div
       v-if="!mnemonicWords.length"
       class="flex flex-col items-center justify-center pt-8"
     >
       <div class="text-center mb-6">
-        <h3 class="text-lg font-semibold text-red-600 mb-2">⚠️ Warning</h3>
+        <h3 class="text-lg font-semibold text-red-600 mb-2">⚠️ {{ $t('phrase.warningTitle') }}</h3>
         <ul
           class="text-sm text-left space-y-2 bg-zinc-800 dark:bg-red-900/20 p-4 rounded-lg"
         >
-          <li>• Never share your recovery phrase with anyone</li>
-          <li>• Never input these words on any website</li>
-          <li>• Store them in a secure location</li>
-          <li>• Loss of recovery phrase means loss of funds</li>
+          <li>• {{ $t('phrase.warning1') }}</li>
+          <li>• {{ $t('phrase.warning2') }}</li>
+          <li>• {{ $t('phrase.warning3') }}</li>
+          <li>• {{ $t('phrase.warning4') }}</li>
         </ul>
       </div>
       <div class="space-y-4 w-full">
@@ -20,7 +20,7 @@
           type="password"
           class="w-full"
           v-model="password"
-          placeholder="Enter password to verify"
+          :placeholder="$t('phrase.passwordPlaceholder')"
           @keyup.enter="verifyPassword"
         />
         <Button
@@ -29,7 +29,7 @@
           @click="verifyPassword"
           variant="default"
         >
-          {{ loading ? 'Verifying...' : 'Verify' }}
+          {{ loading ? $t('phrase.verifying') : $t('phrase.verify') }}
         </Button>
       </div>
     </div>
@@ -51,7 +51,7 @@
         </div>
       </div>
       <Button variant="default" @click="copyMnemonic" class="mt-4">
-        Copy Mnemonic
+        {{ $t('phrase.copyMnemonic') }}
       </Button>
     </div>
   </LayoutSecond>

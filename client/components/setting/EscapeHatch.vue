@@ -3,8 +3,8 @@
     <button @click="isExpanded = !isExpanded"
       class="flex items-center justify-between w-full p-2 text-left text-primary font-medium rounded-lg">
       <div>
-        <h2 class="text-lg font-bold text-zinc-200">Unilateral Withdrawal</h2>
-        <p class="text-muted-foreground">Channel Info & Unilateral Channel Close</p>
+        <h2 class="text-lg font-bold text-zinc-200">{{ $t('escapeHatch.title') }}</h2>
+        <p class="text-muted-foreground">{{ $t('escapeHatch.subtitle') }}</p>
       </div>
       <div class="mr-2">
         <Icon v-if="isExpanded" icon="lucide:chevrons-up" class="mr-2 h-4 w-4" />
@@ -13,31 +13,30 @@
     </button>
     <div v-if="isExpanded" class="space-y-6 py-2 px-2 mb-4">
       <div class="w-full" v-if="channel">
-        <h2 class="text-md font-bold text-zinc-200">Asset Safety</h2>
+        <h2 class="text-md font-bold text-zinc-200">{{ $t('escapeHatch.assetSafetyTitle') }}</h2>
         <p class="text-sm text-muted-foreground mt-2">
-          Your assets are safe. They are secured by your commitment transaction. By broadcasting the commitment
-          transaction, you can reclaim your funds at any time without third-party permission.
+          {{ $t('escapeHatch.assetSafetyDescription') }}
         </p>
 
         <!-- Broadcast Button -->
         <div class="mt-6">
-          <Button class="w-full bg-purple-600 text-white" @click="closeChannel">BROADCAST TX</Button>
+          <Button class="w-full bg-purple-600 text-white" @click="closeChannel">{{ $t('escapeHatch.broadcastTx') }}</Button>
         </div>
 
         <!-- Current Commitment Transaction -->
         <div class="mt-6">
-          <h3 class="text-base font-bold text-zinc-200">Current Commitment Transaction</h3>
+          <h3 class="text-base font-bold text-zinc-200">{{ $t('escapeHatch.currentCommitmentTx') }}</h3>
 
           <!-- Your Assets Section -->
 
           <div class="mt-6">
-            <h4 class="text-sm font-bold text-zinc-200">M Assets in This Channel</h4>
+            <h4 class="text-sm font-bold text-zinc-200">{{ $t('escapeHatch.assetsInChannel') }}</h4>
             <div class="overflow-x-auto custom-scrollbar">
               <table class="w-full table-auto text-sm text-muted-foreground mt-2">
                 <thead>
                   <tr>
-                    <th class="text-left font-medium border-b border-zinc-600/30">Asset</th>
-                    <th class="text-right font-medium border-b border-zinc-600/30">Amount</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">{{ $t('escapeHatch.asset') }}</th>
+                    <th class="text-right font-medium border-b border-zinc-600/30">{{ $t('escapeHatch.amount') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -58,15 +57,15 @@
           <!-- Inputs Section -->
 
           <div class="mt-4">
-            <h4 class="text-sm font-bold text-zinc-200">Inputs</h4>
+            <h4 class="text-sm font-bold text-zinc-200">{{ $t('escapeHatch.inputs') }}</h4>
             <div class="overflow-x-auto custom-scrollbar">
               <table class="w-full table-auto text-sm text-muted-foreground mt-2 *:whitespace-nowrap">
                 <thead>
                   <tr>
-                    <th class="text-left font-medium border-b border-zinc-600/30">Outpoint</th>
-                    <th class="text-left font-medium border-b border-zinc-600/30">Value (Sats)</th>
-                    <th class="text-left font-medium border-b border-zinc-600/30">Assets</th>
-                    <th class="text-left font-medium border-b border-zinc-600/30">PkScript</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">{{ $t('escapeHatch.outpoint') }}</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">{{ $t('escapeHatch.value') }}</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">{{ $t('escapeHatch.assets') }}</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">{{ $t('escapeHatch.pkScript') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -97,15 +96,15 @@
           <!-- Outputs Section -->
 
           <div class="mt-6">
-            <h4 class="text-sm font-bold text-zinc-200">Outputs</h4>
+            <h4 class="text-sm font-bold text-zinc-200">{{ $t('escapeHatch.outputs') }}</h4>
             <div class="overflow-x-auto custom-scrollbar">
               <table class="w-full table-auto text-sm text-muted-foreground mt-2 *:whitespace-nowrap">
                 <thead>
                   <tr>
-                    <th class="text-left font-medium border-b border-zinc-600/30">Outpoint</th>
-                    <th class="text-left font-medium border-b border-zinc-600/30">Value (Sats)</th>
-                    <th class="text-left font-medium border-b border-zinc-600/30">Assets</th>
-                    <th class="text-left font-medium border-b border-zinc-600/30">Address/PkScript</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">{{ $t('escapeHatch.outpoint') }}</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">{{ $t('escapeHatch.value') }}</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">{{ $t('escapeHatch.assets') }}</th>
+                    <th class="text-left font-medium border-b border-zinc-600/30">{{ $t('escapeHatch.addressOrPkScript') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -135,9 +134,9 @@
         </div>
       </div>
       <div v-else>
-        <h2 class="text-lg font-bold text-zinc-200">No Channel</h2>
+        <h2 class="text-lg font-bold text-zinc-200">{{ $t('escapeHatch.noChannelTitle') }}</h2>
         <p class="text-sm text-muted-foreground mt-2">
-          You have no channel. Please create a channel first.
+          {{ $t('escapeHatch.noChannelDescription') }}
         </p>
       </div>
     </div>

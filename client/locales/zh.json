@@ -1,0 +1,319 @@
+{
+  "index": {
+    "title": "SAT20 Wallet",
+    "subtitle": "安全、简单且强大的比特币钱包",
+    "createWallet": "创建新钱包",
+    "importWallet": "导入现有钱包",
+    "agreement": "继续即表示您同意我们的服务条款和隐私政策"
+  },
+  "unlock": {
+    "title": "SAT20 Wallet",
+    "subtitle": "请输入您的钱包密码以继续",
+    "enterPassword": "输入您的密码",
+    "passwordPlaceholder": "密码",
+    "unlockButton": "解锁"
+  },
+  "import": {
+    "title": "ORDX 钱包",
+    "subtitle": "通过恢复助记词或私钥导入现有钱包",
+    "recoveryPhraseTab": "恢复助记词",
+    "privateKeyTab": "私钥",
+    "recoveryPhraseAlert": "按正确顺序输入您的 12 个恢复助记词单词",
+    "recoveryPhraseLabel": "恢复助记词短语",
+    "recoveryPhrasePlaceholder": "输入您的恢复助记词，单词之间用空格分隔",
+    "privateKeyAlert": "输入您的钱包私钥（WIF 或十六进制格式）",
+    "privateKeyLabel": "私钥",
+    "privateKeyPlaceholder": "输入您的私钥",
+    "newPasswordLabel": "新钱包密码",
+    "newPasswordPlaceholder": "输入密码",
+    "confirmPasswordLabel": "确认密码",
+    "confirmPasswordPlaceholder": "确认密码",
+    "cancelButton": "取消",
+    "importButton": "导入钱包"
+  },
+  "create": {
+    "step1Title": "创建新钱包",
+    "step2Title": "保存您的恢复助记词",
+    "step1Subtitle": "设置您的钱包密码",
+    "step2Subtitle": "保存您的恢复助记词",
+    "passwordLabel": "密码",
+    "passwordPlaceholder": "输入密码",
+    "passwordDescription": "密码必须至少包含 8 个字符，包括大写字母和数字",
+    "confirmPasswordLabel": "确认密码",
+    "confirmPasswordPlaceholder": "确认密码",
+    "recoveryPhraseWarning": "切勿与任何人分享您的恢复助记词。请将其安全地离线存储。",
+    "copyButton": "复制到剪贴板",
+    "cancelButton": "取消",
+    "creatingButton": "创建中...",
+    "continueButton": "继续",
+    "savedButton": "我已保存恢复助记词"
+  },
+  "setting": {
+    "title": "System Settings",
+    "version": "版本"
+  },
+  "wallet": {
+    "viewTradeHistory": "查看交易历史",
+    "l1": "Bitcoin",
+    "channel": "Channel",
+    "l2": "SatoshiNet"
+  },
+  "phrase": {
+    "title": "恢复助记词",
+    "warningTitle": "警告",
+    "warning1": "切勿与任何人分享您的恢复短语",
+    "warning2": "切勿在任何网站上输入这些助记词",
+    "warning3": "将其存储在安全的位置",
+    "warning4": "丢失恢复短语意味着丢失资金",
+    "passwordPlaceholder": "输入密码以验证",
+    "verifying": "验证中...",
+    "verify": "验证",
+    "copyMnemonic": "复制恢复助记词"
+  },
+  "signMessage": {
+    "title": "签名请求",
+    "warning": "仅在您完全理解内容并信任请求网站时签署此消息。",
+    "signing": "您正在签署："
+  },
+  "signPsbt": {
+    "title": "签署 PSBT",
+    "warning": "仅在您信任该网站并理解以下交易详情时签署。",
+    "inputs": "输入",
+    "outputs": "输出",
+    "noInputs": "无可用输入详情或解析失败。",
+    "noOutputs": "无可用输出详情或解析失败。",
+    "viewRawPsbt": "查看原始 PSBT 十六进制",
+    "noPsbtHex": "未提供 PSBT 十六进制",
+    "loading": "加载交易详情中...",
+    "error": "加载交易详情时出错。请检查控制台。"
+  },
+  "splitAsset": {
+    "confirmTitle": "确认资产拆分",
+    "description": "您即将拆分以下资产：",
+    "assetKey": "资产键",
+    "amountToSplit": "拆分金额",
+    "utxoDescription": "指定金额将作为单独的 UTXO 返回到您的地址。",
+    "missingData": "缺少必要的资产键或金额。"
+  },
+  "switchNetwork": {
+    "title": "允许此网站切换网络？"
+  },
+  "txDetail": {
+    "outpoint": "输出点",
+    "value": "金额",
+    "assets": "资产",
+    "noAssets": "当前无资产。"
+  },
+  "balanceSummary": {
+    "totalBalance": "总余额",
+    "available": "可用",
+    "unavailable": "不可用",
+    "total": "总计",
+    "Receive": "接收",
+    "Send": "发送",
+    "Deposit": "存入",
+    "Withdraw": "提取",
+    "Splicing in": "通道注资",
+    "Splicing out": "通道抽资",
+    "Lock": "锁定",
+    "Unlock": "解锁",
+    "History": "历史记录"
+  },
+  "channelAssetsTabs": {
+    "assetType": {
+      "ORDX": "ORDX",
+      "Runes": "Runes",
+      "BRC20": "BRC20"
+    },
+    "viewTradeHistory": "交易历史",
+    "viewL2History": "查看 L2 历史",
+    "splicingOut": "通道抽资",
+    "unlock": "解锁"
+  },
+  "l1AssetsTabs": {
+    "assetType": {
+      "ORDX": "ORDX",
+      "Runes": "Runes",
+      "BRC20": "BRC20"
+    },
+    "viewTradeHistory": "交易历史",
+    "send": "发送",
+    "splicingIn": "通道注资",
+    "deposit": "存入"
+  },
+  "l2AssetsTabs": {
+    "assetType": {
+      "ORDX": "ORDX",
+      "Runes": "Runes",
+      "BRC20": "BRC20"
+    },
+    "viewTradeHistory": "交易历史",
+    "send": "发送",
+    "lock": "锁定",
+    "withdraw": "提取"
+  },
+  "btcFeeSelect": {
+    "selectFeeRate": "选择Gas费率",
+    "slow": "慢",
+    "average": "平均",
+    "fast": "快",
+    "custom": "自定义",
+    "customFeeRate": "自定义Gas费率（sats）",
+    "enterRate": "输入费率",
+    "confirm": "确认"
+  },
+  "networkSelect": {
+    "selectNetwork": "选择网络",
+    "Mainnet": "Mainnet",
+    "Testnet": "Testnet"
+  },
+  "appearanceSetting": {
+    "title": "外观",
+    "description": "自定义您的钱包外观",
+    "themeLabel": "主题",
+    "themeDescription": "在浅色和深色模式之间切换"
+  },
+  "escapeHatch": {
+    "title": "单边提款",
+    "subtitle": "通道信息与单边通道关闭",
+    "assetSafetyTitle": "资产安全",
+    "assetSafetyDescription": "您的资产是安全的。它们由您的承诺交易保护。通过广播承诺交易，您可以随时在无需第三方许可的情况下取回您的资金。",
+    "broadcastTx": "广播交易",
+    "currentCommitmentTx": "当前承诺交易",
+    "assetsInChannel": "此通道中的资产",
+    "asset": "资产",
+    "amount": "金额",
+    "inputs": "输入",
+    "outpoint": "输出点",
+    "value": "金额（sats）",
+    "assets": "资产",
+    "pkScript": "公钥脚本",
+    "outputs": "输出",
+    "addressOrPkScript": "地址/公钥脚本",
+    "noChannelTitle": "无通道",
+    "noChannelDescription": "您没有通道。请先创建一个通道。"
+  },
+  "networkSetting": {
+    "title": "环境选项",
+    "subtitle": "在主网和测试网之间切换",
+    "environmentSwitch": "环境切换：",
+    "selectEnvironment": "选择环境",
+    "development": "开发",
+    "test": "测试",
+    "production": "正式",
+    "networkSwitch": "网络切换：",
+    "selectNetwork": "选择网络",
+    "mainnet": "Mainnet",
+    "testnet": "Testnet",
+    "languageSwitch": "语言切换：",
+    "selectLanguage": "选择语言"
+  },
+  "otherSetting": {
+    "title": "其他选项",
+    "subtitle": "其他偏好",
+    "environmentSwitch": "环境切换：",
+    "selectEnvironment": "选择环境",
+    "development": "开发",
+    "test": "测试",
+    "production": "正式"
+  },
+  "securitySetting": {
+    "title": "安全选项",
+    "subtitle": "管理您的钱包安全偏好",
+    "autoLockTimer": "自动锁定计时器",
+    "autoLockDescription": "在不活动后自动锁定钱包",
+    "selectTime": "选择时间",
+    "oneMinute": "1 分钟",
+    "fiveMinutes": "5 分钟",
+    "fifteenMinutes": "15 分钟",
+    "thirtyMinutes": "30 分钟",
+    "hideBalance": "隐藏余额",
+    "hideBalanceDescription": "启动时自动隐藏余额",
+    "showPhrase": "显示助记词"
+  },
+  "walletSetting": {
+    "title": "钱包选项",
+    "subtitle": "助记词与删除钱包",
+    "showPhrase": "显示助记词"
+  },
+  "assetOperationDialog": {
+    "amount": "金额",
+    "enterAmount": "输入金额",
+    "max": "最大",
+    "address": "地址",
+    "enterAddress": "输入地址",
+    "confirm": "确认",
+    "pleaseConfirm": "请确认",
+    "confirmOperation": "您确定要继续此操作吗？",
+    "cancel": "取消",
+    "sendAsset": "发送资产",
+    "depositAsset": "存入聪网",
+    "withdrawAsset": "提取到主网",
+    "lockAsset": "锁定资产至通道",
+    "unlockAsset": "解锁资产至聪网",
+    "splicingIn": "向通道注资",
+    "splicingOut": "从通道抽资",
+    "assetOperation": "资产操作"
+  },
+  "receiveQRcode": {
+    "title": "接收地址",
+    "account": "账户 1",
+    "copyAddress": "复制地址"
+  },
+  "subWalletManager": {
+    "title": "账户管理",
+    "currentAccount": "当前账户",
+    "switch": "切换",
+    "current": "当前",
+    "createNewAccount": "创建新账户",
+    "editAccountName": "编辑账户名称",
+    "changeAccountName": "更改账户名称",
+    "accountName": "账户名称",
+    "enterAccountName": "输入账户名称",
+    "saveChanges": "保存更改",
+    "setupNewAccount": "设置您的新账户信息。",
+    "name": "名称",
+    "createAccount": "创建账户",
+    "deleteAccount": "删除账户",
+    "confirmDeleteAccount": "您确定要删除此账户吗？此操作无法撤销。",
+    "backupRecoveryPhrase": "在删除此账户之前，请确保您已备份恢复助记词。",
+    "cancel": "取消",
+    "delete": "删除"
+  },
+  "transcendingMode": {
+    "title": "穿越模式",
+    "fastMode": "快速模式：",
+    "advancedMode": "高级模式：",
+    "poolswap": "Poolswap",
+    "lightning": "Lightning"
+  },
+  "walletManager": {
+    "title": "钱包管理",
+    "switch": "切换",
+    "current": "当前",
+    "createWallet": "创建钱包",
+    "importWallet": "导入钱包",
+    "editWalletName": "编辑钱包名称",
+    "changeWalletName": "更改钱包名称",
+    "walletName": "钱包名称",
+    "enterWalletName": "输入钱包名称",
+    "cancel": "取消",
+    "save": "保存",
+    "saving": "保存中...",
+    "changeAvatar": "更改头像",
+    "chooseAvatar": "从您的NFT或BTC域名中选择",
+    "nfts": "NFTs",
+    "btcDomains": "BTC域名",
+    "importWalletDescription": "使用恢复助记词导入现有钱包",
+    "recoveryPhrase": "恢复助记词",
+    "enterRecoveryPhrase": "输入您的恢复助记词，单词之间用空格分隔",
+    "recoveryPhraseHint": "按正确顺序输入您的12个恢复助记词单词",
+    "importing": "导入中...",
+    "import": "导入",
+    "deleteWallet": "删除钱包",
+    "confirmDeleteWallet": "您确定要删除此钱包吗？此操作无法撤销。",
+    "backupRecoveryPhrase": "在删除此钱包之前，请确保您已备份恢复助记词。",
+    "deleting": "删除中...",
+    "delete": "删除"
+  }
+}

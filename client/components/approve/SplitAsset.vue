@@ -2,24 +2,24 @@
   <LayoutApprove @confirm="confirm" @cancel="cancel" :loading="loading">
     <div class="p-6 space-y-4">
       <div v-if="isValidData" class="space-y-2">
-        <h3 class="text-lg font-semibold">Confirm Asset Split</h3>
+        <h3 class="text-lg font-semibold">{{ $t('splitAsset.confirmTitle') }}</h3>
         <p class="text-sm text-muted-foreground">
-          You are about to split the following asset:
+          {{ $t('splitAsset.description') }}
         </p>
         <div class="rounded-md border p-4 space-y-1 bg-muted/50">
            <p class="text-sm font-medium">
-             Asset Key: <strong>{{ label }}</strong>
+             {{ $t('splitAsset.assetKey') }}: <strong>{{ label }}</strong>
            </p>
            <p class="text-sm font-medium">
-             Amount to Split: <strong>{{ props.data.amt }}</strong>
+             {{ $t('splitAsset.amountToSplit') }}: <strong>{{ props.data.amt }}</strong>
            </p>
         </div>
         <p class="text-sm text-muted-foreground pt-2">
-            The specified amount will be sent back to your own address as a separate UTXO.
-         </p>
+          {{ $t('splitAsset.utxoDescription') }}
+        </p>
       </div>
       <div v-else class="text-destructive">
-        Required asset key or amount is missing.
+        {{ $t('splitAsset.missingData') }}
       </div>
       <p v-if="errorMessage" class="text-sm text-destructive">{{ errorMessage }}</p>
     </div>

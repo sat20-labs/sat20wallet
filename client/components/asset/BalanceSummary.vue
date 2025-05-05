@@ -2,7 +2,7 @@
   <div class="space-y-4 relative mt-2">
     <!-- Total Balance -->
     <div class="text-center relative group">
-      <p class="text-base font-bold text-zinc-500">TOTAL BALANCE</p>
+      <p class="text-base font-bold text-zinc-500">{{ $t('balanceSummary.totalBalance') }}</p>
       <h2 class="text-3xl font-semibold text-zinc-300" @mouseenter="showDetails = true"
         @mouseleave="showDetails = false">
         {{ formatBalance(btcBalance.total, props.selectedChain) }}
@@ -12,16 +12,16 @@
       <div v-if="showDetails"
         class="absolute left-1/2 transform -translate-x-1/2 w-60 mt-2 p-4 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg space-y-2 z-10">
         <div class="flex justify-between">
-          <span class="text-sm text-muted-foreground">Available:</span>
+          <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.available') }}</span>
           <span class="text-sm text-zinc-400">{{ formatBalance(btcBalance.total, props.selectedChain) }}</span>
         </div>
         <div class="flex justify-between">
-          <span class="text-sm text-muted-foreground">Unavailable:</span>
+          <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.unavailable') }}</span>
           <span class="text-sm text-zinc-400">{{ formatBalance(0, props.selectedChain) }}</span>
          
         </div>
         <div class="flex justify-between">
-          <span class="text-sm text-muted-foreground">Total:</span>
+          <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.total') }}</span>
           <span class="text-sm text-zinc-400">{{ formatBalance(btcBalance.total, props.selectedChain) }}</span>
         </div>
 
@@ -33,12 +33,12 @@
           class="flex flex-col h-16 items-center py-2 bg-zinc-700 border border-zinc-700 rounded-lg"
           :disabled="button.disabled" @click="handleAction(button.action)">
           <Icon :icon="button.icon" class="w-5 h-5 mb-1" />
-          <span class="text-xs text-zinc-300">{{ button.label }}</span>
+          <span class="text-xs text-zinc-300">{{ $t(`balanceSummary.${button.label}`) }}</span>
         </Button>
       </div>
 
       <!-- Asset Operation Dialog -->
-      <AssetOperationDialog v-model:open="showDialog" :title="operationTitle" :description="operationDescription"
+      <AssetOperationDialog v-model:open="showDialog" :title="translatedOperationTitle" :description="operationDescription"
         :amount="operationAmount" :address="operationAddress"
         :max-amount="selectedAsset ? (selectedAsset.amount).toString() : '0'" :operation-type="operationType"
         :asset-type="selectedAsset?.type" :asset-ticker="selectedAsset?.label" @update:amount="operationAmount = $event"
@@ -64,6 +64,7 @@ import ReceiveQRcode from '@/components/wallet/ReceiveQRCode.vue'
 import { useToast } from '@/components/ui/toast/use-toast'
 import { Chain } from '@/types/index'
 import { useGlobalStore } from '@/store/global'
+import { useI18n } from 'vue-i18n'
 
 
 const { toast } = useToast()
@@ -134,26 +135,27 @@ const filteredButtons = computed(() => {
   )
 })
 
+const { t } = useI18n()
 
 // Computed Properties
-const operationTitle = computed(() => {
+const translatedOperationTitle = computed(() => {
   switch (operationType.value) {
     case 'send':
-      return 'Send Asset'
+      return t('assetOperationDialog.sendAsset')
     case 'deposit':
-      return 'Deposit Asset'
+      return t('assetOperationDialog.depositAsset')
     case 'withdraw':
-      return 'Withdraw Asset'
+      return t('assetOperationDialog.withdrawAsset')
     case 'lock':
-      return 'Lock Asset'
+      return t('assetOperationDialog.lockAsset')
     case 'unlock':
-      return 'Unlock Asset'
+      return t('assetOperationDialog.unlockAsset')
     case 'splicing_in':
-      return 'Splicing In Asset'
+      return t('assetOperationDialog.splicingIn')
     case 'splicing_out':
-      return 'Splicing Out Asset'
+      return t('assetOperationDialog.splicingOut')
     default:
-      return 'Asset Operation'
+      return t('assetOperationDialog.assetOperation')
   }
 })
 

@@ -8,7 +8,7 @@
     <Dialog v-model:open="isOpen">
       <DialogContent class="">
         <DialogHeader>
-          <DialogTitle class="text-gray-300 text-xl font-semibold">Select Network</DialogTitle>
+          <DialogTitle class="text-gray-300 text-xl font-semibold">{{ $t('networkSelect.selectNetwork') }}</DialogTitle>
         </DialogHeader>
         <div class="space-y-2 py-4">
           <Button
@@ -20,7 +20,7 @@
           >
             <div class="flex items-center gap-3">
               <Icon :icon="n.icon" :class="n.iconColor" />
-              <span>{{ n.name }}</span>
+              <span>{{ $t(`networkSelect.${n.name}`) }}</span>
             </div>
           </Button>
         </div>

@@ -1,53 +1,53 @@
 <template>
   <LayoutApprove @confirm="confirm" @cancel="cancel">
     <div class="p-4 space-y-4">
-      <h2 class="text-2xl font-semibold text-center">Sign PSBT</h2>
+      <h2 class="text-2xl font-semibold text-center">{{ $t('signPsbt.title') }}</h2>
       <p class="text-xs text-gray-400 text-center mb-4">
-        Only sign if you trust the site and understand the transaction details below.
+        {{ $t('signPsbt.warning') }}
       </p>
 
       <!-- Use the new component for Inputs -->
       <TxDetailSection
         v-if="parsedInputs.length > 0"
-        title="Inputs"
+        :title="$t('signPsbt.inputs')"
         :items="parsedInputs"
         border-color-class="border-primary"
       />
       <div v-else-if="!isLoading && !parseError" class="text-center text-muted-foreground">
-        No input details available or failed to parse.
+        {{ $t('signPsbt.noInputs') }}
       </div>
 
       <!-- Use the new component for Outputs -->
       <TxDetailSection
         v-if="parsedOutputs.length > 0"
-        title="Outputs"
+        :title="$t('signPsbt.outputs')"
         :items="parsedOutputs"
         border-color-class="border-accent"
       />
-       <div v-else-if="!isLoading && !parseError" class="text-center text-muted-foreground">
-        No output details available or failed to parse.
+      <div v-else-if="!isLoading && !parseError" class="text-center text-muted-foreground">
+        {{ $t('signPsbt.noOutputs') }}
       </div>
 
-       <!-- Raw PSBT Hex -->
-       <Accordion type="single" collapsible class="w-full">
-         <AccordionItem value="item-1">
-           <AccordionTrigger class="text-sm">View Raw PSBT Hex</AccordionTrigger>
-           <AccordionContent>
-              <Alert class="mt-2">
-                <AlertTitle class="text-xs font-normal break-all">{{
-                  props.data?.psbtHex || 'No PSBT Hex provided'
-                  }}</AlertTitle>
-              </Alert>
-           </AccordionContent>
-         </AccordionItem>
-       </Accordion>
+      <!-- Raw PSBT Hex -->
+      <Accordion type="single" collapsible class="w-full">
+        <AccordionItem value="item-1">
+          <AccordionTrigger class="text-sm">{{ $t('signPsbt.viewRawPsbt') }}</AccordionTrigger>
+          <AccordionContent>
+            <Alert class="mt-2">
+              <AlertTitle class="text-xs font-normal break-all">{{
+                props.data?.psbtHex || $t('signPsbt.noPsbtHex')
+              }}</AlertTitle>
+            </Alert>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
 
-       <div v-if="isLoading" class="text-center text-muted-foreground">
-         <span class="animate-spin inline-block mr-2">⏳</span> Loading transaction details...
-       </div>
-       <div v-if="parseError && !isLoading" class="text-center text-destructive">
-          Error loading transaction details. Please check the console.
-       </div>
+      <div v-if="isLoading" class="text-center text-muted-foreground">
+        <span class="animate-spin inline-block mr-2">⏳</span> {{ $t('signPsbt.loading') }}
+      </div>
+      <div v-if="parseError && !isLoading" class="text-center text-destructive">
+        {{ $t('signPsbt.error') }}
+      </div>
     </div>
   </LayoutApprove>
 </template>

@@ -2,7 +2,7 @@
   <LayoutApprove @confirm="confirm" @cancel="cancel">
     <div class="p-6 space-y-6">
       <h2 class="text-2xl font-semibold text-center">
-        Allow this site to switch the network?
+        {{ $t('switchNetwork.title') }}
       </h2>
 
       <div class="flex items-center justify-center gap-4 sm:gap-6">

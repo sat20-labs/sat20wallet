@@ -6,7 +6,7 @@
         <Button variant="ghost" size="icon" @click="router.back()">
           <Icon icon="lucide:arrow-left" class="w-5 h-5" />
         </Button>
-        <h1 class="text-lg font-semibold">Wallet Manager</h1>
+        <h1 class="text-lg font-semibold">{{ $t('walletManager.title') }}</h1>
       </div>
     </header>
 
@@ -44,16 +44,15 @@
                       <Icon icon="lucide:pencil" class="w-2 h-2" />
                     </Button>
                   </div>
-                  <!-- <div class="text-sm text-muted-foreground">{{ formatBalance(wallet.balance) }}</div> -->
                 </div>
               </div>
               <div class="flex items-center gap-2">
                 <Button v-if="Number(wallet.id) !== currentWalletId" variant="outline" size="sm"
                   @click="selectWallet(wallet)">
-                  Switch
+                  {{ $t('walletManager.switch') }}
                 </Button>
                 <Button v-else variant="outline" size="sm" disabled>
-                  Current
+                  {{ $t('walletManager.current') }}
                 </Button>
                 <Button v-if="Number(wallet.id) !== currentWalletId" variant="ghost" size="icon"
                   class="text-destructive hover:text-destructive" @click="confirmDeleteWallet(wallet)">
@@ -72,11 +71,11 @@
         <div class="flex gap-2">
           <Button class="flex-1 gap-2 h-11 flex items-center" variant="default" @click="createWallet">
             <Icon icon="lucide:plus-circle" class="w-6 h-6 flex-shrink-0" />
-            Create Wallet
+            {{ $t('walletManager.createWallet') }}
           </Button>
           <Button class="flex-1 gap-2 h-11" variant="secondary" @click="showImportWalletDialog">
             <Icon icon="lucide:import" class="w-6 h-6 flex-shrink-0" />
-            Import Wallet
+            {{ $t('walletManager.importWallet') }}
           </Button>
         </div>
       </div>
@@ -86,25 +85,25 @@
     <Dialog :open="isEditNameDialogOpen" @update:open="isEditNameDialogOpen = $event">
       <DialogContent class="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>EDIT WALLET NAME</DialogTitle>
+          <DialogTitle>{{ $t('walletManager.editWalletName') }}</DialogTitle>
           <DialogDescription>
             <hr class="mb-6 mt-1 border-t-1 border-accent">
-            Change the name of your wallet
+            {{ $t('walletManager.changeWalletName') }}
           </DialogDescription>
         </DialogHeader>
         <div class="space-y-4">
           <div class="space-y-2">
-            <Label for="walletName">Wallet Name</Label>
-            <Input id="walletName" v-model="editingName" placeholder="Enter wallet name" />
+            <Label for="walletName">{{ $t('walletManager.walletName') }}</Label>
+            <Input id="walletName" v-model="editingName" :placeholder="$t('walletManager.enterWalletName')" />
           </div>
         </div>
         <DialogFooter>
           <Button variant="secondary" @click="isEditNameDialogOpen = false" class="h-11 mt-2">
-            Cancel
+            {{ $t('walletManager.cancel') }}
           </Button>
           <Button :disabled="isEditingName" @click="saveWalletName" class="h-11 mt-2">
             <Icon v-if="isEditingName" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
-            {{ isEditingName ? 'Saving...' : 'Save' }}
+            {{ isEditingName ? $t('walletManager.saving') : $t('walletManager.save') }}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -114,17 +113,17 @@
     <Dialog :open="isAvatarDialogOpen" @update:open="isAvatarDialogOpen = $event">
       <DialogContent class="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>Change Avatar</DialogTitle>
+          <DialogTitle>{{ $t('walletManager.changeAvatar') }}</DialogTitle>
           <DialogDescription>
             <hr class="mb-6 mt-1 border-t-1 border-accent">
-            Choose from your NFTs or BTC domains
+            {{ $t('walletManager.chooseAvatar') }}
           </DialogDescription>
         </DialogHeader>
         <div class="space-y-4">
           <Tabs defaultValue="nfts" class="w-full">
             <TabsList class="grid w-full grid-cols-2">
-              <TabsTrigger value="nfts">NFTs</TabsTrigger>
-              <TabsTrigger value="domains">BTC Domains</TabsTrigger>
+              <TabsTrigger value="nfts">{{ $t('walletManager.nfts') }}</TabsTrigger>
+              <TabsTrigger value="domains">{{ $t('walletManager.btcDomains') }}</TabsTrigger>
             </TabsList>
             <TabsContent value="nfts">
               <div class="grid grid-cols-3 gap-2">
@@ -154,7 +153,7 @@
         </div>
         <DialogFooter>
           <Button variant="secondary" @click="isAvatarDialogOpen = false" class="h-11 mt-2">
-            Cancel
+            {{ $t('walletManager.cancel') }}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -164,30 +163,29 @@
     <Dialog :open="isImportWalletDialogOpen" @update:open="isImportWalletDialogOpen = $event">
       <DialogContent class="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>IMPORT WALLET</DialogTitle>
+          <DialogTitle>{{ $t('walletManager.importWallet') }}</DialogTitle>
           <DialogDescription>
             <hr class="mb-6 mt-1 border-t-1 border-accent">
-            Import your existing wallet using recovery phrase
+            {{ $t('walletManager.importWalletDescription') }}
           </DialogDescription>
         </DialogHeader>
         <form @submit.prevent="importWallet" class="space-y-4">
           <div class="space-y-4">
             <div class="space-y-2">
-              <Label for="mnemonic">RECOVERY PHRASE</Label>
-              <Textarea id="mnemonic" v-model="importMnemonic"
-                placeholder="Enter your recovery phrase, words separated by spaces" rows="3" />
+              <Label for="mnemonic">{{ $t('walletManager.recoveryPhrase') }}</Label>
+              <Textarea id="mnemonic" v-model="importMnemonic" :placeholder="$t('walletManager.enterRecoveryPhrase')" rows="3" />
               <p class="text-xs text-muted-foreground">
-                Enter your 12 recovery phrase in the correct order
+                {{ $t('walletManager.recoveryPhraseHint') }}
               </p>
             </div>
           </div>
           <DialogFooter>
             <Button variant="secondary" type="button" @click="isImportWalletDialogOpen = false" class="h-11 mt-2">
-              Cancel
+              {{ $t('walletManager.cancel') }}
             </Button>
             <Button type="submit" :disabled="isImporting" class="h-11 mt-2">
               <Icon v-if="isImporting" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
-              {{ isImporting ? 'Importing...' : 'Import' }}
+              {{ isImporting ? $t('walletManager.importing') : $t('walletManager.import') }}
             </Button>
           </DialogFooter>
         </form>
@@ -199,27 +197,27 @@
     <Dialog :open="isDeleteDialogOpen" @update:open="isDeleteDialogOpen = $event">
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>DELETE WALLET</DialogTitle>
+          <DialogTitle>{{ $t('walletManager.deleteWallet') }}</DialogTitle>
           <DialogDescription>
             <hr class="mb-6 mt-1 border-t-1 border-accent">
-            Are you sure you want to delete this wallet? This action cannot be undone.
+            {{ $t('walletManager.confirmDeleteWallet') }}
           </DialogDescription>
         </DialogHeader>
         <div class="space-y-4">
           <Alert variant="destructive">
             <Icon icon="lucide:alert-triangle" class="w-4 h-4" />
             <AlertDescription>
-              Make sure you have backed up your recovery phrase before deleting this wallet.
+              {{ $t('walletManager.backupRecoveryPhrase') }}
             </AlertDescription>
           </Alert>
         </div>
         <DialogFooter>
           <Button variant="secondary" @click="isDeleteDialogOpen = false" class="h-11 mt-2">
-            Cancel
+            {{ $t('walletManager.cancel') }}
           </Button>
           <Button variant="default" :disabled="isDeleting" @click="deleteWallet" class="h-11 mt-2">
             <Icon v-if="isDeleting" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
-            {{ isDeleting ? 'Deleting...' : 'Delete' }}
+            {{ isDeleting ? $t('walletManager.deleting') : $t('walletManager.delete') }}
           </Button>
         </DialogFooter>
       </DialogContent>

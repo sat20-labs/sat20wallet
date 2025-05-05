@@ -8,7 +8,7 @@
             'text-foreground/90': selectedType === type,
             'text-muted-foreground': selectedType !== type
           }">
-          {{ type }}
+          {{ $t(`l1AssetsTabs.assetType.${type}`) }}
           <div class="absolute bottom-0 left-0 right-0 h-0.5 transition-all" :class="{
             'bg-gradient-to-r from-primary to-primary/50 scale-x-100': selectedType === type,
             'scale-x-0': selectedType !== type
@@ -20,13 +20,11 @@
           <Icon icon="lucide:refresh-cw" class="text-zinc-400" />
         </Button>
         <Button size="icon" variant="ghost" as-child>
-          <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" title="View Trade History">
+          <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" :title="$t('l1AssetsTabs.viewTradeHistory')">
             <Icon icon="quill:link" class="text-zinc-400 hover:text-primary/90" />
           </a>
         </Button>
       </div>
-
-
     </div>
 
     <!-- Asset Lists -->
@@ -45,23 +43,22 @@
           <template v-if="mode === 'lightning'">
             <Button size="sm" variant="outline" @click="handleSend(asset)">
               <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
-              Send
+              {{ $t('l1AssetsTabs.send') }}
             </Button>
             <Button size="sm" variant="outline" @click="handleSplicingIn(asset)">
               <Icon icon="lucide:corner-down-right" class="w-4 h-4 mr-1" />
-              Splicing in
+              {{ $t('l1AssetsTabs.splicingIn') }}
             </Button>
-
           </template>
           <!-- Poolswap 模式按钮 -->
           <template v-else>
             <Button size="sm" variant="outline" @click="handleSend(asset)">
               <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
-              Send
+              {{ $t('l1AssetsTabs.send') }}
             </Button>
             <Button size="sm" variant="outline" @click="handleDeposit(asset)">
               <Icon icon="lucide:arrow-down-right" class="w-4 h-4 mr-1" />
-              Deposit
+              {{ $t('l1AssetsTabs.deposit') }}
             </Button>
           </template>
         </div>

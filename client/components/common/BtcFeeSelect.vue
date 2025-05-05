@@ -6,14 +6,14 @@
       size="xs"
       class="rounded-md text-gray-300 text-xs font-normal ml-2"
     >
-     <Icon icon="lucide:fuel" class="w-1 h-1 mr-[0.5px] text-gray-500" /><span class="mr-2">{{ displayedRate }}</span>
-
+      <Icon icon="lucide:fuel" class="w-1 h-1 mr-[0.5px] text-gray-500" />
+      <span class="mr-2">{{ displayedRate }}</span>
     </Button>
 
     <Dialog v-model:open="isModalOpen">
       <DialogContent class="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>Select Fee Rate</DialogTitle>
+          <DialogTitle>{{ $t('btcFeeSelect.selectFeeRate') }}</DialogTitle>
         </DialogHeader>
         <div class="grid grid-cols-4 gap-2">
           <Button
@@ -24,13 +24,13 @@
             class="h-auto flex flex-col items-center justify-center p-2 text-xs"
           >
             <span class="text-lg mb-1">{{ option.icon }}</span>
-            <span>{{ option.label }}</span>
+            <span>{{ $t(`btcFeeSelect.${option.label}`) }}</span>
             <span class="text-[10px]">{{ option.value }} sats</span>
           </Button>
         </div>
         <div v-if="selectedRate === 'custom'" class="mt-4 space-y-2">
           <Label for="customRate" class="text-sm font-medium">
-             Custom Fee Rate (sats)
+            {{ $t('btcFeeSelect.customFeeRate') }}
           </Label>
           <div class="flex items-center gap-2">
             <Input
@@ -40,14 +40,14 @@
               class="w-24"
               :min="1"
               :max="1000"
-              placeholder="Enter rate"
+              :placeholder="$t('btcFeeSelect.enterRate')"
             />
             <!-- <Slider v-model="customRate" :min="1" :max="1000" class="flex-1" /> -->
           </div>
         </div>
         <DialogFooter>
           <Button @click="isModalOpen = false" class="w-full">
-             Confirm
+            {{ $t('btcFeeSelect.confirm') }}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -97,25 +97,25 @@ const options = computed(() => [
     icon: '🐢',
     key: 'slow',
     value: feeData.value?.hourFee || 0,
-    label: 'Slow',
+    label: 'slow',
   },
   {
     icon: '🚗',
     key: 'average',
     value: feeData.value?.halfHourFee || 0,
-    label: 'Average',
+    label: 'average',
   },
   {
     icon: '🚀',
     key: 'fast',
     value: feeData.value?.fastestFee || 0,
-    label: 'Fast',
+    label: 'fast',
   },
   {
     icon: '⚙️',
     key: 'custom',
     value: feeData.value?.fastestFee || 0,
-    label: 'Custom',
+    label: 'custom',
   },
 ])
 

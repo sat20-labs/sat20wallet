@@ -6,13 +6,13 @@
         <!-- <h1 class="text-2xl font-semibold">ORDX Wallet</h1> -->
       </div>
       <h1 class="text-2xl font-bold">
-        {{ step === 1 ? 'Create New Wallet' : 'Save your recovery phrase' }}
+        {{ step === 1 ? $t('create.step1Title') : $t('create.step2Title') }}
       </h1>
       <p class="text-muted-foreground">
         {{
           step === 1
-            ? 'Set up your wallet password'
-            : 'Save your recovery phrase'
+            ? $t('create.step1Subtitle')
+            : $t('create.step2Subtitle')
         }}
       </p>
     </div>
@@ -20,16 +20,16 @@
       <div v-if="step === 1" class="space-y-4">
         <FormField v-slot="{ componentField }" name="password">
           <FormItem>
-            <FormLabel>Password</FormLabel>
+            <FormLabel>{{ $t('create.passwordLabel') }}</FormLabel>
             <FormControl>
               <Input
                 type="password"
                 v-bind="componentField"
-                placeholder="Enter password"
+                :placeholder="$t('create.passwordPlaceholder')"
               />
             </FormControl>
             <FormDescription>
-              Password must be at least 8 characters with uppercase and number
+              {{ $t('create.passwordDescription') }}
             </FormDescription>
             <FormMessage />
           </FormItem>
@@ -37,12 +37,12 @@
 
         <FormField v-slot="{ componentField }" name="confirmPassword">
           <FormItem>
-            <FormLabel>Confirm Password</FormLabel>
+            <FormLabel>{{ $t('create.confirmPasswordLabel') }}</FormLabel>
             <FormControl>
               <Input
                 type="password"
                 v-bind="componentField"
-                placeholder="Confirm password"
+                :placeholder="$t('create.confirmPasswordPlaceholder')"
               />
             </FormControl>
             <FormMessage />
@@ -54,7 +54,7 @@
         <Alert variant="destructive">
           <AlertTriangle class="h-4 w-4" />
           <AlertDescription>
-            Never share your recovery phrase. Store it securely offline.
+            {{ $t('create.recoveryPhraseWarning') }}
           </AlertDescription>
         </Alert>
         <div class="relative">
@@ -83,21 +83,21 @@
         <div class="flex justify-center">
           <Button variant="outline" @click="handleCopyMnemonic" class="w-full">
             <Copy class="mr-2 h-4 w-4" />
-            Copy to clipboard
+            {{ $t('create.copyButton') }}
           </Button>
         </div>
       </div>
 
       <div class="flex justify-between mt-16 gap-2">
         <Button variant="outline" type="button" class="w-full">
-          <RouterLink to="/"> Cancel </RouterLink>
+          <RouterLink to="/">{{ $t('create.cancelButton') }}</RouterLink>
         </Button>
         <Button v-if="step === 1" type="submit" class="w-full">
           <Loader2Icon v-if="loading" class="mr-2 h-4 w-4 animate-spin" />
-          {{ loading ? 'Creating...' : 'Continue' }}
+          {{ loading ? $t('create.creatingButton') : $t('create.continueButton') }}
         </Button>
         <Button v-else as-child>
-          <RouterLink to="/wallet"> I've saved my recovery phrase </RouterLink>
+          <RouterLink to="/wallet">{{ $t('create.savedButton') }}</RouterLink>
         </Button>
       </div>
     </form>

@@ -1,7 +1,7 @@
 <template>
   <LayoutHome>
     <WalletHeader />
-    <h2 class="px-4 text-2xl font-medium text-zinc-700/90">System Settings</h2>
+    <h2 class="px-4 text-2xl font-medium text-zinc-700/90">{{ $t('setting.title') }}</h2>
     <div class="space-y-2 py-4 px-0">
       <!-- Conditionally render EscapeHatch -->
       <EscapeHatch v-if="transcendingModeStore.selectedTranscendingMode !== 'poolswap'" />
@@ -28,7 +28,7 @@
           <Icon icon="bi:telegram" class="w-4 h-4" />
         </a>
       </div>
-      <div class="text-sm text-muted-foreground">Version: {{ version }}</div>
+      <div class="text-sm text-muted-foreground">{{ $t('setting.version') }}: {{ version }}</div>
     </div>
   </LayoutHome>
 </template>

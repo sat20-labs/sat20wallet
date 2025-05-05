@@ -3,8 +3,8 @@
     <button @click="isExpanded = !isExpanded"
       class="flex items-center justify-between w-full p-2 text-left text-primary font-medium rounded-lg">
       <div>
-        <h2 class="text-lg font-bold text-zinc-200">Security Options</h2>
-        <p class="text-muted-foreground">Manage your wallet security preferences</p>
+        <h2 class="text-lg font-bold text-zinc-200">{{ $t('securitySetting.title') }}</h2>
+        <p class="text-muted-foreground">{{ $t('securitySetting.subtitle') }}</p>
       </div>
       <div class="mr-2">
         <Icon v-if="isExpanded" icon="lucide:chevrons-up" class="mr-2 h-4 w-4" />
@@ -14,36 +14,36 @@
     <div v-if="isExpanded" class="space-y-6 px-2 py-4">
       <div class="flex items-center justify-between border-t border-zinc-900/30 pt-4">
         <div class="space-y-0.5">
-          <Label>Auto-lock Timer</Label>
+          <Label>{{ $t('securitySetting.autoLockTimer') }}</Label>
           <div class="text-sm text-muted-foreground">
-            Automatically lock wallet after inactivity
+            {{ $t('securitySetting.autoLockDescription') }}
           </div>
         </div>
         <Select v-model="autoLockTime" default-value="5">
           <SelectTrigger class="w-[180px] bg-gray-900/30">
-            <SelectValue placeholder="Select time" />
+            <SelectValue :placeholder="$t('securitySetting.selectTime')" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="1">1 minute</SelectItem>
-            <SelectItem value="5">5 minutes</SelectItem>
-            <SelectItem value="15">15 minutes</SelectItem>
-            <SelectItem value="30">30 minutes</SelectItem>
+            <SelectItem value="1">{{ $t('securitySetting.oneMinute') }}</SelectItem>
+            <SelectItem value="5">{{ $t('securitySetting.fiveMinutes') }}</SelectItem>
+            <SelectItem value="15">{{ $t('securitySetting.fifteenMinutes') }}</SelectItem>
+            <SelectItem value="30">{{ $t('securitySetting.thirtyMinutes') }}</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       <div class="flex items-center justify-between border-t border-zinc-900/30 pt-4">
         <div class="space-y-0.5 mb-4">
-          <Label>Hide Balance</Label>
+          <Label>{{ $t('securitySetting.hideBalance') }}</Label>
           <div class="text-sm text-muted-foreground">
-            Automatically blur balance on launch
+            {{ $t('securitySetting.hideBalanceDescription') }}
           </div>
         </div>
         <Switch v-model="hideBalance" />
       </div>
       <Button as-child class="h-12 w-full">
         <RouterLink to="/wallet/setting/phrase" class="w-full">
-          <Icon icon="lucide:eye-off" class="mr-2 h-4 w-4" /> Show Phrase
+          <Icon icon="lucide:eye-off" class="mr-2 h-4 w-4" /> {{ $t('securitySetting.showPhrase') }}
         </RouterLink>
       </Button>
     </div>

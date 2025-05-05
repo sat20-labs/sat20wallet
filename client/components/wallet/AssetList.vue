@@ -75,7 +75,7 @@
     </div>
 
     <!-- Asset Operation Dialog -->
-    <AssetOperationDialog v-model:open="showDialog" :title="operationTitle" :description="operationDescription"
+    <AssetOperationDialog v-model:open="showDialog" :title="translatedOperationTitle" :description="operationDescription"
       :amount="operationAmount" :address="operationAddress" :operation-type="operationType"
       :max-amount="selectedAsset?.amount" :asset-type="selectedAsset?.type" :asset-ticker="selectedAsset?.label"
       @update:amount="operationAmount = $event" @update:address="operationAddress = $event"
@@ -103,6 +103,7 @@
   import { sleep } from 'radash'
   import { storeToRefs } from 'pinia'
   import { useTranscendingModeStore } from '@/store'
+  import { useI18n } from 'vue-i18n'
   
   const { refreshL1Assets } = useL1Assets()
   const { refreshL2Assets } = useL2Assets()
@@ -210,27 +211,29 @@
   const operationType = ref<OperationType | undefined>()
   const selectedAsset = ref<any>(null)
   
-  const operationTitle = computed(() => {
+  const { t } = useI18n()
+
+  const translatedOperationTitle = computed(() => {
     switch (operationType.value) {
       case 'send':
-        return 'Send Asset'
+        return t('assetOperationDialog.sendAsset')
       case 'deposit':
-        return 'Deposit Asset'
+        return t('assetOperationDialog.depositAsset')
       case 'withdraw':
-        return 'Withdraw Asset'
+        return t('assetOperationDialog.withdrawAsset')
       case 'lock':
-        return 'Lock Asset'
+        return t('assetOperationDialog.lockAsset')
       case 'unlock':
-        return 'Unlock Asset'
+        return t('assetOperationDialog.unlockAsset')
       case 'splicing_in':
-        return 'Splicing In'
+        return t('assetOperationDialog.splicingIn')
       case 'splicing_out':
-        return 'Splicing Out'
+        return t('assetOperationDialog.splicingOut')
       default:
-        return 'Asset Operation'
+        return t('assetOperationDialog.assetOperation')
     }
   })
-  
+
   const operationDescription = computed(() => {
     if (!selectedAsset.value) return ''
     const asset = selectedAsset.value
@@ -718,4 +721,3 @@ watch(selectedChain, (newVal) => {
     }
   })
   </script>
-  

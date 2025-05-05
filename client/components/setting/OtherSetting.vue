@@ -3,8 +3,8 @@
     <button @click="isExpanded = !isExpanded"
       class="flex items-center justify-between w-full p-2 text-left text-primary font-medium rounded-lg">
       <div>
-        <h2 class="text-lg font-bold text-zinc-200">Other Options</h2>
-        <p class="text-muted-foreground">Other preferences</p>
+        <h2 class="text-lg font-bold text-zinc-200">{{ $t('otherSetting.title') }}</h2>
+        <p class="text-muted-foreground">{{ $t('otherSetting.subtitle') }}</p>
       </div>
       <div class="mr-2">
           <Icon v-if="isExpanded" icon="lucide:chevrons-up" class="mr-2 h-4 w-4" />
@@ -14,16 +14,16 @@
     <div v-if="isExpanded" class="space-y-6 px-2 py-4">
       <div class="flex items-center justify-between border-t border-zinc-900/30 pt-4">        
         <div class="text-sm text-muted-foreground">
-          Environment Switch:
+          {{ $t('otherSetting.environmentSwitch') }}
         </div>        
         <Select v-model="computedEnv">
           <SelectTrigger class="w-[180px] bg-gray-900/30 mb-4">
-            <SelectValue placeholder="Select environment" />
+            <SelectValue :placeholder="$t('otherSetting.selectEnvironment')" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="dev">Development</SelectItem>
-            <SelectItem value="test">Test</SelectItem>
-            <SelectItem value="prod">Production</SelectItem>
+            <SelectItem value="dev">{{ $t('otherSetting.development') }}</SelectItem>
+            <SelectItem value="test">{{ $t('otherSetting.test') }}</SelectItem>
+            <SelectItem value="prod">{{ $t('otherSetting.production') }}</SelectItem>
           </SelectContent>
         </Select>
       </div>

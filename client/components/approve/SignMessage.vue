@@ -1,12 +1,11 @@
 <template>
   <LayoutApprove @confirm="confirm" @cancel="cancel">
     <div class="p-4">
-      <h2 class="text-2xl font-semibold text-center mb-4">Signature request</h2>
+      <h2 class="text-2xl font-semibold text-center mb-4">{{ $t('signMessage.title') }}</h2>
       <p class="text-xs text-gray-400 text-center mb-2">
-        Only sign this message if you fully understand the content and trust the
-        requesting site.
+        {{ $t('signMessage.warning') }}
       </p>
-      <p class="text-center text-base mb-2">You are signing:</p>
+      <p class="text-center text-base mb-2">{{ $t('signMessage.signing') }}</p>
       <Alert>
         <AlertTitle class="text-center text-base break-all">{{ props.data.message }}</AlertTitle>
       </Alert>

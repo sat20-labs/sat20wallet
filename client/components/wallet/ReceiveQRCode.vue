@@ -10,21 +10,24 @@
       </button>
       <!-- Dialog Header -->
       <div class="text-center">
-        <h2 class="text-lg font-semibold text-white">Receive Address</h2>
+        <h2 class="text-lg font-semibold text-white">{{ $t('receiveQRcode.title') }}</h2>
       </div>
       <!-- QR Code and Address -->
       <div class="flex flex-col items-center space-y-4 py-4">
         <canvas ref="qrCanvas" class="w-64 h-64 bg-white rounded-lg shadow-md"></canvas>
         <div class="text-center">
-          <p class="flex justify-center text-sm text-zinc-400 mb-2"><Icon icon="lucide:user-round" class="w-5 h-5 text-purple-600 flex-shrink-0" />Account 1</p>
-          <p class="text-sm text-zinc-300 font-mono">{{ hideAddress(address,8) }}</p>
+          <p class="flex justify-center text-sm text-zinc-400 mb-2">
+            <Icon icon="lucide:user-round" class="w-5 h-5 text-purple-600 flex-shrink-0" />
+            {{ $t('receiveQRcode.account') }}
+          </p>
+          <p class="text-sm text-zinc-300 font-mono">{{ hideAddress(address, 8) }}</p>
         </div>
         <button
           class="flex justify-center w-full text-zinc-400 border border-zinc-600 hover:bg-zinc-700 py-2 rounded-lg"
           @click="copyAddress"
         >
-          <Icon  icon="solar:copy-linear" class="text-zinc-400 w-4 h-4  ml-2"/>
-          Copy Address
+          <Icon icon="solar:copy-linear" class="text-zinc-400 w-4 h-4 ml-2" />
+          {{ $t('receiveQRcode.copyAddress') }}
         </button>
       </div>
     </div>

@@ -7,13 +7,13 @@
       <div v-for="(item, index) in parsedAssetsInuts" :key="`${title}-item-${index}`"
         class="border p-3 rounded-md bg-muted/50">
         <p class="text-sm font-medium break-all mb-1">
-          <span class="font-semibold">Outpoint:</span> {{ item.Outpoint }}
+          <span class="font-semibold">{{ $t('txDetail.outpoint') }}:</span> {{ item.Outpoint }}
         </p>
         <p class="text-sm font-medium break-all mb-1">
-          <span class="font-semibold">Value:</span> {{ item.Value }}
+          <span class="font-semibold">{{ $t('txDetail.value') }}:</span> {{ item.Value }}
         </p>
         <div v-if="item.Assets && item.Assets.length > 0" :class="cn('mt-2 pl-2 border-l-2', borderColorClass)">
-          <p class="text-xs font-semibold text-foreground/80 mb-1">Assets:</p>
+          <p class="text-xs font-semibold text-foreground/80 mb-1">{{ $t('txDetail.assets') }}:</p>
           <div v-for="(asset, assetIndex) in item.Assets" :key="`${title}-asset-${index}-${assetIndex}`"
             class="text-xs space-y-0.5">
             <p><span class="font-medium"> {{ asset.label }} ({{
@@ -21,7 +21,7 @@
           </div>
         </div>
         <div v-else class="mt-1 pl-2 text-xs text-muted-foreground italic">
-          No assets in this {{ title.toLowerCase().slice(0, -1) }}.
+          {{ $t('txDetail.noAssets', { title: title.toLowerCase().slice(0, -1) }) }}
         </div>
       </div>
     </CardContent>

@@ -1,0 +1,319 @@
+{
+  "index": {
+    "title": "ORDX Wallet",
+    "subtitle": "Secure, simple, and powerful Bitcoin wallet",
+    "createWallet": "Create New Wallet",
+    "importWallet": "Import Existing Wallet",
+    "agreement": "By continuing, you agree to our Terms of Service and Privacy Policy"
+  },
+  "unlock": {
+    "title": "ORDX Wallet",
+    "subtitle": "Please enter your wallet password to continue",
+    "enterPassword": "Enter Your Password",
+    "passwordPlaceholder": "Password",
+    "unlockButton": "Unlock"
+  },
+  "import": {
+    "title": "ORDX Wallet",
+    "subtitle": "Import your existing wallet using recovery phrase or private key",
+    "recoveryPhraseTab": "Recovery Phrase",
+    "privateKeyTab": "Private Key",
+    "recoveryPhraseAlert": "Enter your 12 recovery phrase in the correct order",
+    "recoveryPhraseLabel": "Recovery Phrase",
+    "recoveryPhrasePlaceholder": "Enter your recovery phrase, words separated by spaces",
+    "privateKeyAlert": "Enter your wallet's private key in WIF or hexadecimal format",
+    "privateKeyLabel": "Private Key",
+    "privateKeyPlaceholder": "Enter your private key",
+    "newPasswordLabel": "New Wallet Password",
+    "newPasswordPlaceholder": "Enter password",
+    "confirmPasswordLabel": "Confirm Password",
+    "confirmPasswordPlaceholder": "Confirm password",
+    "cancelButton": "Cancel",
+    "importButton": "Import Wallet"
+  },
+  "create": {
+    "step1Title": "Create New Wallet",
+    "step2Title": "Save your recovery phrase",
+    "step1Subtitle": "Set up your wallet password",
+    "step2Subtitle": "Save your recovery phrase",
+    "passwordLabel": "Password",
+    "passwordPlaceholder": "Enter password",
+    "passwordDescription": "Password must be at least 8 characters with uppercase and number",
+    "confirmPasswordLabel": "Confirm Password",
+    "confirmPasswordPlaceholder": "Confirm password",
+    "recoveryPhraseWarning": "Never share your recovery phrase. Store it securely offline.",
+    "copyButton": "Copy to clipboard",
+    "cancelButton": "Cancel",
+    "creatingButton": "Creating...",
+    "continueButton": "Continue",
+    "savedButton": "I've saved my recovery phrase"
+  },
+  "setting": {
+    "title": "System Settings",
+    "version": "Version"
+  },
+  "wallet": {
+    "viewTradeHistory": "View Trade History",
+    "l1": "Bitcoin",
+    "channel": "Channel",
+    "l2": "SatoshiNet"
+  },
+  "phrase": {
+    "title": "Recovery Phrase",
+    "warningTitle": "Warning",
+    "warning1": "Never share your recovery phrase with anyone",
+    "warning2": "Never input these words on any website",
+    "warning3": "Store them in a secure location",
+    "warning4": "Loss of recovery phrase means loss of funds",
+    "passwordPlaceholder": "Enter password to verify",
+    "verifying": "Verifying...",
+    "verify": "Verify",
+    "copyMnemonic": "Copy Mnemonic"
+  },
+  "signMessage": {
+    "title": "Signature request",
+    "warning": "Only sign this message if you fully understand the content and trust the requesting site.",
+    "signing": "You are signing:"
+  },
+  "signPsbt": {
+    "title": "Sign PSBT",
+    "warning": "Only sign if you trust the site and understand the transaction details below.",
+    "inputs": "Inputs",
+    "outputs": "Outputs",
+    "noInputs": "No input details available or failed to parse.",
+    "noOutputs": "No output details available or failed to parse.",
+    "viewRawPsbt": "View Raw PSBT Hex",
+    "noPsbtHex": "No PSBT Hex provided",
+    "loading": "Loading transaction details...",
+    "error": "Error loading transaction details. Please check the console."
+  },
+  "splitAsset": {
+    "confirmTitle": "Confirm Asset Split",
+    "description": "You are about to split the following asset:",
+    "assetKey": "Asset Key",
+    "amountToSplit": "Amount to Split",
+    "utxoDescription": "The specified amount will be sent back to your own address as a separate UTXO.",
+    "missingData": "Required asset key or amount is missing."
+  },
+  "switchNetwork": {
+    "title": "Allow this site to switch the network?"
+  },
+  "txDetail": {
+    "outpoint": "Outpoint",
+    "value": "Value",
+    "assets": "Assets",
+    "noAssets": "No assets in this {title}."
+  },
+  "balanceSummary": {
+    "totalBalance": "TOTAL BALANCE",
+    "available": "Available",
+    "unavailable": "Unavailable",
+    "total": "Total",
+    "Receive": "Receive",
+    "Send": "Send",
+    "Deposit": "Deposit",
+    "Withdraw": "Withdraw",
+    "Splicing in": "Splicing in",
+    "Splicing out": "Splicing out",
+    "Lock": "Lock",
+    "Unlock": "Unlock",
+    "History": "History"
+  },
+  "channelAssetsTabs": {
+    "assetType": {
+      "ORDX": "ORDX",
+      "Runes": "Runes",
+      "BRC20": "BRC20"
+    },
+    "viewTradeHistory": "View Trade History",
+    "viewL2History": "View L2 History",
+    "splicingOut": "Splicing out",
+    "unlock": "Unlock"
+  },
+  "l1AssetsTabs": {
+    "assetType": {
+      "ORDX": "ORDX",
+      "Runes": "Runes",
+      "BRC20": "BRC20"
+    },
+    "viewTradeHistory": "View Trade History",
+    "send": "Send",
+    "splicingIn": "Splicing in",
+    "deposit": "Deposit"
+  },
+  "l2AssetsTabs": {
+    "assetType": {
+      "ORDX": "ORDX",
+      "Runes": "Runes",
+      "BRC20": "BRC20"
+    },
+    "viewTradeHistory": "View Trade History",
+    "send": "Send",
+    "lock": "Lock",
+    "withdraw": "Withdraw"
+  },
+  "btcFeeSelect": {
+    "selectFeeRate": "Select Fee Rate",
+    "slow": "Slow",
+    "average": "Average",
+    "fast": "Fast",
+    "custom": "Custom",
+    "customFeeRate": "Custom Fee Rate (sats)",
+    "enterRate": "Enter rate",
+    "confirm": "Confirm"
+  },
+  "networkSelect": {
+    "selectNetwork": "Select Network",
+    "Mainnet": "Mainnet",
+    "Testnet": "Testnet"
+  },
+  "appearanceSetting": {
+    "title": "Appearance",
+    "description": "Customize your wallet appearance",
+    "themeLabel": "Theme",
+    "themeDescription": "Switch between light and dark mode"
+  },
+  "escapeHatch": {
+    "title": "Unilateral Withdrawal",
+    "subtitle": "Channel Info & Unilateral Channel Close",
+    "assetSafetyTitle": "Asset Safety",
+    "assetSafetyDescription": "Your assets are safe. They are secured by your commitment transaction. By broadcasting the commitment transaction, you can reclaim your funds at any time without third-party permission.",
+    "broadcastTx": "BROADCAST TX",
+    "currentCommitmentTx": "Current Commitment Transaction",
+    "assetsInChannel": "M Assets in This Channel",
+    "asset": "Asset",
+    "amount": "Amount",
+    "inputs": "Inputs",
+    "outpoint": "Outpoint",
+    "value": "Value (Sats)",
+    "assets": "Assets",
+    "pkScript": "PkScript",
+    "outputs": "Outputs",
+    "addressOrPkScript": "Address/PkScript",
+    "noChannelTitle": "No Channel",
+    "noChannelDescription": "You have no channel. Please create a channel first."
+  },
+  "networkSetting": {
+    "title": "Environment Options",
+    "subtitle": "Switch between mainnet and testnet",
+    "environmentSwitch": "Environment Switch:",
+    "selectEnvironment": "Select environment",
+    "development": "Development",
+    "test": "Test",
+    "production": "Production",
+    "networkSwitch": "Network Switch:",
+    "selectNetwork": "Select network",
+    "mainnet": "Mainnet",
+    "testnet": "Testnet",
+    "languageSwitch": "Language Switch:",
+    "selectLanguage": "Select language"
+  },
+  "otherSetting": {
+    "title": "Other Options",
+    "subtitle": "Other preferences",
+    "environmentSwitch": "Environment Switch:",
+    "selectEnvironment": "Select environment",
+    "development": "Development",
+    "test": "Test",
+    "production": "Production"
+  },
+  "securitySetting": {
+    "title": "Security Options",
+    "subtitle": "Manage your wallet security preferences",
+    "autoLockTimer": "Auto-lock Timer",
+    "autoLockDescription": "Automatically lock wallet after inactivity",
+    "selectTime": "Select time",
+    "oneMinute": "1 minute",
+    "fiveMinutes": "5 minutes",
+    "fifteenMinutes": "15 minutes",
+    "thirtyMinutes": "30 minutes",
+    "hideBalance": "Hide Balance",
+    "hideBalanceDescription": "Automatically blur balance on launch",
+    "showPhrase": "Show Phrase"
+  },
+  "walletSetting": {
+    "title": "Wallet Options",
+    "subtitle": "Phrase and Delete wallet",
+    "showPhrase": "Show Phrase"
+  },
+  "assetOperationDialog": {
+    "amount": "Amount",
+    "enterAmount": "Enter amount",
+    "max": "Max",
+    "address": "Address",
+    "enterAddress": "Enter address",
+    "confirm": "Confirm",
+    "pleaseConfirm": "Please Confirm",
+    "confirmOperation": "Are you sure you want to proceed with this operation?",
+    "cancel": "Cancel",
+    "sendAsset": "Send Asset",
+    "depositAsset": "Deposit Asset",
+    "withdrawAsset": "Withdraw Asset",
+    "lockAsset": "Lock Asset",
+    "unlockAsset": "Unlock Asset",
+    "splicingIn": "Splicing In",
+    "splicingOut": "Splicing Out",
+    "assetOperation": "Asset Operation"
+  },
+  "receiveQRcode": {
+    "title": "Receive Address",
+    "account": "Account 1",
+    "copyAddress": "Copy Address"
+  },
+  "subWalletManager": {
+    "title": "Account Manager",
+    "currentAccount": "Current Account",
+    "switch": "Switch",
+    "current": "Current",
+    "createNewAccount": "Create New Account",
+    "editAccountName": "EDIT ACCOUNT NAME",
+    "changeAccountName": "Change the name of your account",
+    "accountName": "Account Name",
+    "enterAccountName": "Enter account name",
+    "saveChanges": "Save changes",
+    "setupNewAccount": "Set up your new account information.",
+    "name": "Name",
+    "createAccount": "Create Account",
+    "deleteAccount": "DELETE ACCOUNT",
+    "confirmDeleteAccount": "Are you sure you want to delete this account? This action cannot be undone.",
+    "backupRecoveryPhrase": "Make sure you have backed up your recovery phrase before deleting this account.",
+    "cancel": "Cancel",
+    "delete": "Delete"
+  },
+  "transcendingMode": {
+    "title": "Transcending Mode",
+    "fastMode": "Fast Mode:",
+    "advancedMode": "Advanced Mode:",
+    "poolswap": "Poolswap",
+    "lightning": "Lightning"
+  },
+  "walletManager": {
+    "title": "Wallet Manager",
+    "switch": "Switch",
+    "current": "Current",
+    "createWallet": "Create Wallet",
+    "importWallet": "Import Wallet",
+    "editWalletName": "EDIT WALLET NAME",
+    "changeWalletName": "Change the name of your wallet",
+    "walletName": "Wallet Name",
+    "enterWalletName": "Enter wallet name",
+    "cancel": "Cancel",
+    "save": "Save",
+    "saving": "Saving...",
+    "changeAvatar": "Change Avatar",
+    "chooseAvatar": "Choose from your NFTs or BTC domains",
+    "nfts": "NFTs",
+    "btcDomains": "BTC Domains",
+    "importWalletDescription": "Import your existing wallet using recovery phrase",
+    "recoveryPhrase": "RECOVERY PHRASE",
+    "enterRecoveryPhrase": "Enter your recovery phrase, words separated by spaces",
+    "recoveryPhraseHint": "Enter your 12 recovery phrase in the correct order",
+    "importing": "Importing...",
+    "import": "Import",
+    "deleteWallet": "DELETE WALLET",
+    "confirmDeleteWallet": "Are you sure you want to delete this wallet? This action cannot be undone.",
+    "backupRecoveryPhrase": "Make sure you have backed up your recovery phrase before deleting this wallet.",
+    "deleting": "Deleting...",
+    "delete": "Delete"
+  }
+}

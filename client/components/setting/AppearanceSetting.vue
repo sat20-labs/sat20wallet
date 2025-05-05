@@ -1,13 +1,13 @@
 <template>
   <div>
-    <h2 class="text-2xl font-bold">Appearance</h2>
-    <p class="text-muted-foreground">Customize your wallet appearance</p>
+    <h2 class="text-2xl font-bold">{{ $t('appearanceSetting.title') }}</h2>
+    <p class="text-muted-foreground">{{ $t('appearanceSetting.description') }}</p>
     <div class="grid gap-6 mt-4">
       <div class="flex items-center justify-between">
         <div class="space-y-0.5">
-          <Label>Theme</Label>
+          <Label>{{ $t('appearanceSetting.themeLabel') }}</Label>
           <div class="text-sm text-muted-foreground">
-            Switch between light and dark mode
+            {{ $t('appearanceSetting.themeDescription') }}
           </div>
         </div>
         <div class="flex space-x-2">

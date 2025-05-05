@@ -4,23 +4,23 @@
       <div class="text-center">
         <div class="flex flex-col items-center justify-center gap-2 mb-6">
           <img src="@/assets/sat20-logo.svg" alt="ORDX" class="w-14 h-14 mb-2" />
-          <h1 class="text-2xl font-semibold mb-2 text-center">ORDX Wallet</h1>
+          <h1 class="text-2xl font-semibold mb-2 text-center">{{ $t('unlock.title') }}</h1>
         </div>
         <!-- <p class="text-gray-600 dark:text-gray-400 mb-4">
-          Please enter your wallet password to continue
+          {{ $t('unlock.subtitle') }}
         </p> -->
       </div>
       <div>
         <form @submit="onSubmit" class="space-y-6 mb-2 p-2">
           <FormField v-slot="{ componentField }" name="password">
             <FormItem>
-              <FormLabel class="text-gray-300 dark:text-gray-200">Enter Your Password</FormLabel>
+              <FormLabel class="text-gray-300 dark:text-gray-200">{{ $t('unlock.enterPassword') }}</FormLabel>
               <div class="relative">
                 <FormControl>
                   <Input
                     :type="showPassword ? 'text' : 'password'"
                     class="h-12"
-                    placeholder="Password"
+                    :placeholder="$t('unlock.passwordPlaceholder')"
                     v-bind="componentField"
                   >
                   </Input>
@@ -63,7 +63,7 @@
                 class="mr-2 h-4 w-4 animate-spin"
                 icon="mdi:loading"
               />
-              Unlock
+              {{ $t('unlock.unlockButton') }}
             </Button>
           </div>
         </form>

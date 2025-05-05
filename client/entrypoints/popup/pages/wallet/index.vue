@@ -11,7 +11,7 @@
 
       <!-- 账户地址 -->
       <Button asChild variant="link" class="flex-1 text-center">
-        <a :href="mempoolUrl" target="_blank" title="View Trade History">
+        <a :href="mempoolUrl" target="_blank" :title="$t('wallet.viewTradeHistory')">
           {{ hideAddress(showAddress) }}
         </a>
       </Button>
@@ -37,7 +37,7 @@
         <Tabs defaultValue="l1" class="w-full">
           <TabsList class="grid w-full grid-cols-3">
             <TabsTrigger v-for="item in items" :key="item.value" :value="item.value">
-              {{ item.label }}
+              {{ $t(`wallet.${item.value}`) }}
             </TabsTrigger>
           </TabsList>
 

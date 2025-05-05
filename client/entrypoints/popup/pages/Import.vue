@@ -3,39 +3,36 @@
     <div class="p-1">
       <div class="flex flex-col items-center justify-center gap-2 mb-4">
         <img src="@/assets/sat20-logo.svg" alt="ORDX" class="w-12 h-12 mb-2" />
-        <h1 class="text-xl font-semibold">ORDX Wallet</h1>
+        <h1 class="text-xl font-semibold">{{ $t('import.title') }}</h1>
       </div>
       <p class="text-muted-foreground mb-4 text-center">
-        Import your existing wallet using recovery phrase or private key
+        {{ $t('import.subtitle') }}
       </p>
 
       <form @submit="onSubmit">
         <Tabs v-model="tab" class="space-y-4">
           <TabsList class="grid w-full grid-cols-2">
-            <TabsTrigger value="mnemonic">Recovery Phrase</TabsTrigger>
-            <TabsTrigger value="private-key">Private Key</TabsTrigger>
+            <TabsTrigger value="mnemonic">{{ $t('import.recoveryPhraseTab') }}</TabsTrigger>
+            <TabsTrigger value="private-key">{{ $t('import.privateKeyTab') }}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="mnemonic">
             <Alert>
               <AlertDescription>
-                Enter your 12 recovery phrase in the correct order
+                {{ $t('import.recoveryPhraseAlert') }}
               </AlertDescription>
             </Alert>
 
             <FormField v-slot="{ componentField }" name="mnemonic">
               <FormItem>
-                <FormLabel>Recovery Phrase</FormLabel>
+                <FormLabel>{{ $t('import.recoveryPhraseLabel') }}</FormLabel>
                 <FormControl>
                   <Textarea
                     v-bind="componentField"
-                    placeholder="Enter your recovery phrase, words separated by spaces"
+                    :placeholder="$t('import.recoveryPhrasePlaceholder')"
                     rows="3"
                   />
                 </FormControl>
-                <!-- <FormDescription>
-                  Usually 12 or 24 words long, separated by single spaces
-                </FormDescription> -->
                 <FormMessage />
               </FormItem>
             </FormField>
@@ -45,18 +42,18 @@
             <Alert>
               <KeyRound class="h-4 w-4" />
               <AlertDescription>
-                Enter your wallet's private key in WIF or hexadecimal format
+                {{ $t('import.privateKeyAlert') }}
               </AlertDescription>
             </Alert>
 
             <FormField v-slot="{ componentField }" name="privateKey">
               <FormItem>
-                <FormLabel>Private Key</FormLabel>
+                <FormLabel>{{ $t('import.privateKeyLabel') }}</FormLabel>
                 <FormControl>
                   <Input
                     type="password"
                     v-bind="componentField"
-                    placeholder="Enter your private key"
+                    :placeholder="$t('import.privateKeyPlaceholder')"
                   />
                 </FormControl>
                 <FormMessage />
@@ -67,12 +64,12 @@
           <div class="space-y-4 pt-4 border-t">
             <FormField v-slot="{ componentField }" name="password">
               <FormItem>
-                <FormLabel>New Wallet Password</FormLabel>
+                <FormLabel>{{ $t('import.newPasswordLabel') }}</FormLabel>
                 <FormControl>
                   <Input
                     type="password"
                     v-bind="componentField"
-                    placeholder="Enter password"
+                    :placeholder="$t('import.newPasswordPlaceholder')"
                   />
                 </FormControl>
                 <FormMessage />
@@ -81,12 +78,12 @@
 
             <FormField v-slot="{ componentField }" name="confirmPassword">
               <FormItem>
-                <FormLabel>Confirm Password</FormLabel>
+                <FormLabel>{{ $t('import.confirmPasswordLabel') }}</FormLabel>
                 <FormControl>
                   <Input
                     type="password"
                     v-bind="componentField"
-                    placeholder="Confirm password"
+                    :placeholder="$t('import.confirmPasswordPlaceholder')"
                   />
                 </FormControl>
                 <FormMessage />
@@ -97,11 +94,11 @@
 
         <div class="flex justify-between mt-8 gap-2">
           <Button variant="outline" type="button" class="w-full h-11">
-            <RouterLink to="/"> Cancel </RouterLink>
+            <RouterLink to="/">{{ $t('import.cancelButton') }}</RouterLink>
           </Button>
           <Button type="submit" :disabled="loading" class="w-full h-11">
             <Loader2Icon v-if="loading" class="mr-2 h-4 w-4 animate-spin" />
-            Import Wallet
+            {{ $t('import.importButton') }}
           </Button>
         </div>
       </form>

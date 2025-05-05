@@ -6,7 +6,7 @@
         <Button variant="ghost" size="icon" @click="router.back()">
           <Icon icon="lucide:arrow-left" class="w-5 h-5" />
         </Button>
-        <h1 class="text-lg font-semibold">Account Manager</h1>
+        <h1 class="text-lg font-semibold">{{ $t('subWalletManager.title') }}</h1>
       </div>
     </header>
 
@@ -15,7 +15,7 @@
       <div class="container max-w-2xl mx-auto p-4 space-y-6">
         <div class="space-y-4">
           <div class="text-sm font-medium text-muted-foreground">
-            Current Account
+            {{ $t('subWalletManager.currentAccount') }}
           </div>
           
           <!-- Sub-wallet List -->
@@ -55,7 +55,7 @@
                   size="sm"
                   @click="selectAccount(account)"
                 >
-                  Switch
+                  {{ $t('subWalletManager.switch') }}
                 </Button>
                 <Button
                   v-else
@@ -63,7 +63,7 @@
                   size="sm"
                   disabled
                 >
-                  Current
+                  {{ $t('subWalletManager.current') }}
                 </Button>
                 <Button
                   v-if="account.index !== accountIndex"
@@ -91,7 +91,7 @@
             @click="showCreateAccountDialog"
           >
             <Icon icon="lucide:plus-circle" class="w-6 h-6 flex-shrink-0" />
-            Create New Account
+            {{ $t('subWalletManager.createNewAccount') }}
           </Button>
         </div>
       </div>
@@ -101,25 +101,25 @@
     <Dialog :open="isEditNameDialogOpen" @update:open="isEditNameDialogOpen = $event">
       <DialogContent class="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>EDIT ACCOUNT NAME</DialogTitle>
+          <DialogTitle>{{ $t('subWalletManager.editAccountName') }}</DialogTitle>
           <DialogDescription>
             <hr class="mb-6 mt-1 border-t-1 border-accent">
-            Change the name of your account
+            {{ $t('subWalletManager.changeAccountName') }}
           </DialogDescription>
         </DialogHeader>
         <div class="space-y-4">
           <div class="space-y-2">
-            <Label for="AccountName">Account Name</Label>
+            <Label for="AccountName">{{ $t('subWalletManager.accountName') }}</Label>
             <Input
               id="AccountName"
               v-model="editingName"
-              placeholder="Enter account name"
+              :placeholder="$t('subWalletManager.enterAccountName')"
             />
           </div>
         </div>
         <DialogFooter>
           <Button @click="saveAccountName" :disabled="isSaving" class="h-12">
-            Save changes
+            {{ $t('subWalletManager.saveChanges') }}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -129,26 +129,26 @@
     <Dialog :open="isCreateAccountDialogOpen" @update:open="isCreateAccountDialogOpen = $event">
       <DialogContent class="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>CREATE NEW ACCOUNT</DialogTitle>
+          <DialogTitle>{{ $t('subWalletManager.createNewAccount') }}</DialogTitle>
           <DialogDescription>
             <hr class="mb-6 mt-1 border-t-1 border-accent">
-            Set up your new account information.
+            {{ $t('subWalletManager.setupNewAccount') }}
           </DialogDescription>
         </DialogHeader>
         <form @submit.prevent="createAccount" class="space-y-4">
           <div class="space-y-4">
             <div class="space-y-2">
-              <Label for="AccountName">Name</Label>
+              <Label for="AccountName">{{ $t('subWalletManager.name') }}</Label>
               <Input
                 id="AccountName"
                 v-model="newAccountName"
-                placeholder="Enter account name"
+                :placeholder="$t('subWalletManager.enterAccountName')"
               />
             </div>
           </div>
           <DialogFooter>
             <Button type="submit" :disabled="isCreating" class="h-12">
-              Create Account
+              {{ $t('subWalletManager.createAccount') }}
             </Button>
           </DialogFooter>
         </form>
@@ -160,23 +160,23 @@
     <Dialog :open="isDeleteDialogOpen" @update:open="isDeleteDialogOpen = $event">
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>DELETE ACCOUNT</DialogTitle>
+          <DialogTitle>{{ $t('subWalletManager.deleteAccount') }}</DialogTitle>
           <DialogDescription>
             <hr class="mb-6 mt-1 border-t-1 border-accent">
-            Are you sure you want to delete this account? This action cannot be undone.
+            {{ $t('subWalletManager.confirmDeleteAccount') }}
           </DialogDescription>
         </DialogHeader>
         <div class="space-y-4">
           <Alert variant="destructive">
             <Icon icon="lucide:alert-triangle" class="w-4 h-4" />
             <AlertDescription>
-              Make sure you have backed up your recovery phrase before deleting this account.
+              {{ $t('subWalletManager.backupRecoveryPhrase') }}
             </AlertDescription>
           </Alert>
         </div>
         <DialogFooter>
           <Button variant="secondary" @click="isDeleteDialogOpen = false" class="h-12 mb-4">
-            Cancel
+            {{ $t('subWalletManager.cancel') }}
           </Button>
           <Button 
             variant="default" 
@@ -184,7 +184,7 @@
             :disabled="isDeleting"
             class="h-12 mb-4"
           >
-            Delete
+            {{ $t('subWalletManager.delete') }}
           </Button>
         </DialogFooter>
       </DialogContent>

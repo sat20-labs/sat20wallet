@@ -2,7 +2,7 @@
   <Dialog :open="isOpen" @update:open="isOpen = $event">
     <DialogContent class="w-[330px] rounded-lg bg-zinc-950">
       <DialogHeader>
-        <DialogTitle>{{ title }}</DialogTitle>
+        <DialogTitle>{{ $t(title) }}</DialogTitle>
         <DialogDescription>
           <hr class="mb-6 mt-2 border-t-1 border-zinc-900">
           {{ description }}          
@@ -11,30 +11,29 @@
 
       <div class="space-y-4">
         <div class="space-y-2">
-          <Label>Amount</Label>
+          <Label>{{ $t('assetOperationDialog.amount') }}</Label>
           <div class="flex items-center gap-2">
-            <Input :model-value="amount" type="number" placeholder="Enter amount" class="h-12 bg-zinc-800"
+            <Input :model-value="amount" type="number" :placeholder="$t('assetOperationDialog.enterAmount')" class="h-12 bg-zinc-800"
               @update:modelValue="handleAmountUpdate" />
-              <Button
+            <Button
               variant="outline"
               class="h-12 px-4 text-sm border border-zinc-600 hover:bg-zinc-700"
               @click="setMaxAmount"
             >
-              Max
+              {{ $t('assetOperationDialog.max') }}
             </Button>
-            <!-- <span class="text-sm text-muted-foreground">
-              {{ assetUnit }}
-            </span> -->
           </div>
         </div>
         <div v-if="needsAddress" class="space-y-2">
-          <Label>Address</Label>
-          <Input :model-value="address" type="text" placeholder="Enter address" class="h-12 bg-zinc-800"
+          <Label>{{ $t('assetOperationDialog.address') }}</Label>
+          <Input :model-value="address" type="text" :placeholder="$t('assetOperationDialog.enterAddress')" class="h-12 bg-zinc-800"
             @update:modelValue="handleAddressUpdate" />
         </div>
       </div>
       <DialogFooter>
-        <Button class="w-full h-11 mb-2" :disabled="needsAddress && !address" @click="confirmOperation">Confirm</Button>
+        <Button class="w-full h-11 mb-2" :disabled="needsAddress && !address" @click="confirmOperation">
+          {{ $t('assetOperationDialog.confirm') }}
+        </Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>
@@ -42,13 +41,16 @@
   <AlertDialog v-model:open="showAlertDialog">
     <AlertDialogContent class="w-[330px] rounded-lg bg-zinc-900">
       <AlertDialogTitle class="gap-2 flex flex-col items-center">
-        <span class="text-lg font-semibold">Please Confirm</span>
+        <span class="text-lg font-semibold">{{ $t('assetOperationDialog.pleaseConfirm') }}</span>
         <span class="mt-2 w-full"><Separator /></span>
       </AlertDialogTitle>
-      <AlertDialogDesc class="flex justify-center"><Icon icon="prime:check-circle"  class="w-12 h-12 mr-2 text-green-600"/>Are you sure you want to proceed with this operation?</AlertDialogDesc>
+      <AlertDialogDesc class="flex justify-center">
+        <Icon icon="prime:check-circle" class="w-12 h-12 mr-2 text-green-600" />
+        {{ $t('assetOperationDialog.confirmOperation') }}
+      </AlertDialogDesc>
       <AlertDialogFoot class="my-4 gap-2">
-        <AlertDialogCancel @click="showAlertDialog = false">Cancel</AlertDialogCancel>
-        <AlertDialogAction @click="handleConfirm">Confirm</AlertDialogAction>
+        <AlertDialogCancel @click="showAlertDialog = false">{{ $t('assetOperationDialog.cancel') }}</AlertDialogCancel>
+        <AlertDialogAction @click="handleConfirm">{{ $t('assetOperationDialog.confirm') }}</AlertDialogAction>
       </AlertDialogFoot>
     </AlertDialogContent>
   </AlertDialog>

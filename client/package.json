@@ -2,7 +2,7 @@
   "name": "wxt-vue-starter",
   "description": "manifest.json description",
   "private": true,
-  "version": "0.0.109",
+  "version": "0.0.111",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -39,6 +39,7 @@
     "tailwindcss-animate": "^1.0.7",
     "vee-validate": "^4.15.0",
     "vue": "^3.5.12",
+    "vue-i18n": "^11.1.3",
     "vue-router": "4",
     "vue-use": "^0.2.0",
     "zod": "^3.24.2"
