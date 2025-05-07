@@ -35,7 +35,7 @@
         </span>
         <span variant="link" class="flex justify-center items-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">
           <a
-            :href="`https://mempool.dev.sat20.org/address/${channel.address}`"
+            :href="mempoolUrl"
             target="_blank" class="mb-[1px] hover:text-primary" :title="$t('channelAssetsTabs.viewL2History')"
           >
           <span class="text-xs  p-[1px] text-zinc-400 hover:text-primary"> L2 </span> 
@@ -87,6 +87,8 @@ import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { storeToRefs } from 'pinia'
 import { useChannelStore } from '~/store'
+import { Chain } from '@/types/index'
+import { useGlobalStore } from '@/store/global'
 
 const channelStore = useChannelStore()
 const { channel, plainList, sat20List, brc20List, runesList } = storeToRefs(channelStore)
@@ -106,6 +108,21 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits(['update:modelValue', 'splicing_out', 'unlock'])
+
+const globalStore = useGlobalStore()
+const { env } = storeToRefs(globalStore)
+
+const mempoolUrl = computed(() => {
+
+    return generateMempoolUrl({
+      network: 'testnet',
+      path: `address/${channel.value?.channelId || ''}`,
+      chain: Chain.SATNET,
+      env: env.value,
+    })
+  
+  return '' // 默认返回空字符串，防止未匹配的情况
+})
 
 // 资产类型
 //const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
