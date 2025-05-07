@@ -277,7 +277,9 @@ interface SatsnetStp {
 
   // Switches to the specified chain (e.g., "mainnet" or "testnet").
   switchChain(chain: string): Promise<SatsnetResponse<void>>
+
   getAllChannels(): SatsnetResponse
+  getCurrentChannel(): SatsnetResponse
   getChannel(id: string): SatsnetResponse
   getChannelStatus(id: string): SatsnetResponse
   sendUtxos_SatsNet(

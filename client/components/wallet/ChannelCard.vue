@@ -112,7 +112,7 @@ import { Input } from '@/components/ui/input'
 import Progress from '@/components/ui/progress/index.vue'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Icon } from '@iconify/vue'
-import { useChannelStore } from '@/store'
+import { useChannelStore, useWalletStore } from '@/store'
 import satsnetStp from '@/utils/stp'
 import { useToast } from '@/components/ui/toast'
 import { hideAddress } from '~/utils'
@@ -130,11 +130,15 @@ import { sleep } from 'radash'
 const selectedType = defineModel<string>('selectedType')
 const emit = defineEmits(['splicing_out', 'unlock', 'update:selectedType'])
 
+const walletStore = useWalletStore()
+const { walletId, accountIndex } = storeToRefs(walletStore)
+
 const l1Store = useL1Store()
 const { plainUtxos, balance: l1PlainBalance } = storeToRefs(l1Store)
 
 
 const channelStore = useChannelStore()
+
 const { channel, plainList, sat20List, brc20List, runesList } = storeToRefs(channelStore)
 const { toast } = useToast()
 
@@ -317,6 +321,12 @@ const closeChannel = async (closeHanlder: any, force: boolean = false) => {
 onMounted(() => {
   channelStore.getAllChannels()
 })
+
+watch([walletId, accountIndex], async () => {
+  await channelStore.getAllChannels()
+})
+
+
 </script>
 
 <style></style>
