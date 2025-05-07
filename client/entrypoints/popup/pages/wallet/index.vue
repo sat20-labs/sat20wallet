@@ -90,6 +90,7 @@ import BalanceSummary from '@/components/asset/BalanceSummary.vue'
 import { useTranscendingModeStore } from '@/store'
 import { Chain } from '@/types/index'
 import { useGlobalStore } from '@/store/global'
+import { Separator } from '@/components/ui/separator'
 
 
 console.log('Debug: This is index.vue')

@@ -93,6 +93,7 @@ const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
 
 const { address, feeRate, btcFeeRate } = storeToRefs(walletStore)
+const { channel } = storeToRefs(channelStore)
 
 type OperationType =
   | 'send'
@@ -213,6 +214,7 @@ const handleOperationConfirm = async () => {
   const asset = selectedAsset.value
   const amount = operationAmount.value
   const toAddress = operationType.value === 'send' ? operationAddress.value : address.value
+  const chainid = channel.value?.channelId
 
   try {
     switch (operationType.value) {
@@ -230,16 +232,16 @@ const handleOperationConfirm = async () => {
         await withdraw({ toAddress, asset_name: asset.id, amt: amount, utxos: [], fees: [] })
         break
       case 'splicing_in':
-        await splicingIn({ chanid: 'channel_id', utxos: [], amt: amount, asset_name: asset.id })
+        await splicingIn({ chanid: chainid, amt: amount, asset_name: asset.id })
         break
       case 'splicing_out':
-        await splicingOut({ chanid: 'channel_id', toAddress, amt: amount, asset_name: asset.id })
+        await splicingOut({ chanid: chainid, toAddress, amt: amount, asset_name: asset.id })
         break
       case 'lock':
-        await lockUtxo({ chanid: 'channel_id', utxos: [], amt: amount, asset_name: asset.id })
+        await lockUtxo({ chanid: chainid, amt: amount, asset_name: asset.id })
         break
       case 'unlock':
-        await unlockUtxo({ chanid: 'channel_id', amt: amount, asset_name: asset.id })
+        await unlockUtxo({ chanid: chainid, amt: amount, asset_name: asset.id })
         break
       default:
         handleError('Unsupported operation')
