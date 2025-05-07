@@ -99,16 +99,19 @@ export const useChannelStore = defineStore('channel', () => {
     const [_, resull] = await satsnetStp.getAllChannels()
     const [, currentChannel] = await satsnetStp.getCurrentChannel()
     console.log('currentChannel', currentChannel)
+
     if (currentChannel?.json) {
       try {
-        console.log('result', resull)
         const c = JSON.parse(currentChannel.json)
-        channel.value = c;
+        if (c.localbalanceL1) {
+          channel.value = c
+        } else {
+          console.log('数据不完整，localbalanceL1 不存在:', c)
+          channel.value = null
+        }
       } catch (error) {
-        console.log(error)
+        console.log('解析 JSON 出错:', error)
       }
-    } else {
-      channel.value = null
     }
   }
 
@@ -116,20 +119,27 @@ export const useChannelStore = defineStore('channel', () => {
     console.log('开始解析通道资产...')
     console.log('当前channel:', channel.value)
 
+    if (!channel.value) {
+      //console.log('channel.value 尚未加载，退出解析')
+      return
+    }
+
     allAssetList.value = []
     const { localbalanceL1 } = channel.value || {}
-    console.log('localbalanceL1:', localbalanceL1)
+    console.log('channel. localbalanceL1:', localbalanceL1)
+    //console.log('channel. localbalanceL1?.length:', localbalanceL1?.length)
 
     if (localbalanceL1?.length) {
+      //console.log('localbalanceL1 内容:', localbalanceL1)
       for (let i = 0; i < localbalanceL1.length; i++) {
         const item = localbalanceL1[i]
 
         const protocol = item.Name.Protocol
         const key = protocol
           ? `${protocol}:${item.Name.Type}:${item.Name.Ticker}`
-          : '::'
+          : '::'         
 
-        const amt = item.Amount.Value
+        const amt = Number(item.Amount) || 0
         const assetItem = {
           id: key,
           key,
@@ -143,13 +153,13 @@ export const useChannelStore = defineStore('channel', () => {
           utxos: [],
           amount: amt,
         }
-        console.log('添加资产项:', assetItem)
-        console.log('allAssetList', allAssetList.value)
-        console.log('l1', localbalanceL1)
+        //console.log('添加资产项:', assetItem)
+        //console.log('allAssetList', allAssetList.value)
+        //console.log('l1', localbalanceL1)
         allAssetList.value.push(assetItem)
       }
       const getAssetInfo = async (key: string) => {
-        console.log('获取资产信息:', key)
+        //console.log('获取资产信息:', key)
         const [err, res] = await satsnetStp.getTickerInfo(key)
         if (res?.ticker) {
           const { ticker } = res
@@ -163,7 +173,7 @@ export const useChannelStore = defineStore('channel', () => {
       }
 
       const tickers = allAssetList.value.map((a) => a.key)
-      console.log('待处理的ticker列表:', tickers)
+      //console.log('待处理的ticker列表:', tickers)
       await parallel(
         3,
         tickers.filter((r) => r !== '::') || [],
@@ -178,7 +188,7 @@ export const useChannelStore = defineStore('channel', () => {
     console.log('解析完成，最终资产列表:', allAssetList.value)
   }
   const plainList = computed(() => {
-    console.log('调试信息plainList:', allAssetList.value)
+    //console.log('调试信息plainList:', allAssetList.value)
     return allAssetList.value.filter((item) => item?.protocol === '')
   })
   const sat20List = computed(() => {
@@ -216,15 +226,27 @@ export const useChannelStore = defineStore('channel', () => {
     return _assetTypes
   })
 
+  // watch(
+  //   channel,
+  //   () => {
+  //     parseChannel()
+  //   },
+  //   {
+  //     immediate: true,
+  //     deep: true,
+  //   }
+  // )
+
   watch(
     channel,
-    () => {
-      parseChannel()
+    async (newValue) => {
+      if (newValue) {
+        console.log('channel 更新，等待数据稳定...')
+        await nextTick() // 等待 DOM 和响应式数据更新
+        parseChannel()
+      }
     },
-    {
-      immediate: true,
-      deep: true,
-    }
+    { immediate: true, deep: true }
   )
 
   return {

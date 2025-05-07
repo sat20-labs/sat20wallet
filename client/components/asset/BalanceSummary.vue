@@ -30,7 +30,7 @@
       <!-- Action Buttons -->
       <div class="grid grid-cols-4 gap-2 mt-4">
         <Button v-for="button in filteredButtons" :key="button.label" variant="outline"
-          class="flex flex-col h-16 items-center py-2 bg-zinc-700 border border-zinc-700 rounded-lg"
+          class="flex flex-col h-16 items-center py-2 bg-zinc-700/40 hover:bg-zinc-700 border border-zinc-700 rounded-lg"
           :disabled="button.disabled" @click="handleAction(button.action)">
           <Icon :icon="button.icon" class="w-5 h-5 mb-1" />
           <span class="text-xs text-zinc-300">{{ $t(`balanceSummary.${button.label}`) }}</span>
@@ -110,13 +110,18 @@ const buttons = [
   { label: 'Send', icon: 'lucide:send', action: 'send', modes: ['poolswap', 'lightning'], chains: ['Bitcoin', 'Channel', 'SatoshiNet'] },
   { label: 'Deposit', icon: 'lucide:arrow-down-right', action: 'deposit', modes: ['poolswap'], chains: ['Bitcoin'] },
   { label: 'Withdraw', icon: 'lucide:arrow-up-right', action: 'withdraw', modes: ['poolswap'], chains: ['SatoshiNet'] },
-  { label: 'Splicing in', icon: 'lucide:corner-down-right', action: 'splicing_in', modes: ['lightning'], chains: ['Bitcoin'] },
-  { label: 'Splicing out', icon: 'lucide:corner-up-right', action: 'splicing_out', modes: ['lightning'], chains: ['Channel'] },
+  { label: 'Splicing in', icon: 'lets-icons:sign-in-squre', action: 'splicing_in', modes: ['lightning'], chains: ['Bitcoin'] },
+  { label: 'Splicing out', icon: 'lets-icons:sign-out-squre', action: 'splicing_out', modes: ['lightning'], chains: ['Channel'] },
   { label: 'Lock', icon: 'lucide:lock', action: 'lock', modes: ['lightning'], chains: ['SatoshiNet'] },
   { label: 'Unlock', icon: 'lucide:unlock', action: 'unlock', modes: ['lightning'], chains: ['Channel'] },
   { label: 'History', icon: 'lucide:clock', action: 'history', modes: ['poolswap', 'lightning'], chains: ['Bitcoin', 'SatoshiNet', 'Channel'] },
 ]
 
+const selectedTranscendingMode = (props.selectedTranscendingMode || 'poolswap').toLowerCase()
+const selectedChain = (props.selectedChain || 'bitcoin').toLowerCase()
+if (!props.selectedTranscendingMode || !props.selectedChain) {
+  console.warn('Props missing: selectedTranscendingMode or selectedChain is undefined. Using default values.')
+}
 // 过滤按钮
 const filteredButtons = computed(() => {
   return buttons.map(button => {
@@ -131,8 +136,8 @@ const filteredButtons = computed(() => {
     }
   }).filter(
     button =>
-      button.modes.includes(props.selectedTranscendingMode) &&
-      button.chains.map(chain => chain.toLowerCase()).includes(props.selectedChain.toLowerCase())
+      button.modes.includes(selectedTranscendingMode) &&
+      button.chains.map(chain => chain.toLowerCase()).includes(selectedChain)
   )
 })
 

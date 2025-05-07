@@ -17,7 +17,7 @@
       </nav>
       <div class="flex items-center">
         <Button size="icon" variant="ghost" @click="handlerRefresh">
-          <Icon icon="lucide:refresh-cw" class="text-zinc-400" />
+          <Icon icon="lets-icons:refresh-2-light" class="text-zinc-300 mb-[1px]"/>
         </Button>
         <Button size="icon" variant="ghost" as-child>
           <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" :title="$t('l1AssetsTabs.viewTradeHistory')">
@@ -32,7 +32,7 @@
       <div v-for="asset in filteredAssets" :key="asset.id"
         class="flex items-center justify-between p-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors">
         <div>
-          <div class="font-medium">{{ asset.label }}</div>
+          <div class="font-medium rune-name">{{ asset.label }}</div>
           <div class="text-sm text-muted-foreground">
             {{ formatAmount(asset) }}
           </div>
@@ -41,22 +41,22 @@
         <div class="flex gap-2">
           <!-- Lightning 模式按钮 -->
           <template v-if="mode === 'lightning'">
-            <Button size="sm" variant="outline" @click="handleSend(asset)">
-              <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
+            <Button size="sm" variant="outline" @click="handleSend(asset)" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
+              <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
               {{ $t('l1AssetsTabs.send') }}
             </Button>
-            <Button size="sm" variant="outline" @click="handleSplicingIn(asset)">
-              <Icon icon="lucide:corner-down-right" class="w-4 h-4 mr-1" />
+            <Button size="sm" variant="outline" @click="handleSplicingIn(asset)" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
+              <Icon icon="lets-icons:sign-in-squre" class="w-4 h-4 mr-1" />
               {{ $t('l1AssetsTabs.splicingIn') }}
             </Button>
           </template>
           <!-- Poolswap 模式按钮 -->
           <template v-else>
-            <Button size="sm" variant="outline" @click="handleSend(asset)">
-              <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
+            <Button size="sm" variant="outline" @click="handleSend(asset)" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
+              <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
               {{ $t('l1AssetsTabs.send') }}
             </Button>
-            <Button size="sm" variant="outline" @click="handleDeposit(asset)">
+            <Button size="sm" variant="outline" @click="handleDeposit(asset)" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"> 
               <Icon icon="lucide:arrow-down-right" class="w-4 h-4 mr-1" />
               {{ $t('l1AssetsTabs.deposit') }}
             </Button>

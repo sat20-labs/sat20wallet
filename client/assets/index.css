@@ -239,3 +239,10 @@ input:focus {
     transform: translate(-50%, -50%) scale(1);
   }
 }
+
+.rune-name {
+  max-width: 100px; /* 设置最大宽度，可根据需求调整 */
+  word-wrap: break-word; /* 启用单词换行 */
+  overflow-wrap: break-word; /* 兼容性更好的换行方式 */
+  white-space: normal; /* 确保文字可以换行 */
+}

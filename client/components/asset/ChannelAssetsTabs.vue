@@ -27,7 +27,7 @@
       <div class="flex items-center p-1 mb-1 gap-2">
         <span variant="link" class="flex justify-center p-1 h-6 mb-1 border border-zinc-600 hover:bg-zinc-700 rounded-sm">        
           <a
-            :href="`https://mempool.space/zh/testnet4/address/${channel.address}`"
+            :href="`https://mempool.space/testnet4/address/${channel?.address || ''}`"
             target="_blank" class="mb-[1px]] hover:text-primary" :title="$t('channelAssetsTabs.viewTradeHistory')"
           >
            <Icon icon="quill:link" class="w-4 h-4 text-zinc-400 hover:text-primary/90" />
@@ -52,7 +52,7 @@
         class="flex items-center justify-between p-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors"
       >
         <div>
-          <div class="font-medium">{{ (asset.label).toUpperCase() }}</div>
+          <div class="font-medium rune-name">{{ (asset.label).toUpperCase() }}</div>
           <div class="text-sm text-muted-foreground">
             {{ formatAmount(asset) }}
           </div>
@@ -62,14 +62,16 @@
           <Button           
             size="sm"
             variant="outline"
+            class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
             @click="$emit('splicing_out', asset)"
           >
-            <Icon icon="lucide:corner-up-right" class="w-4 h-4 mr-1" />
+            <Icon icon="lets-icons:sign-out-squre" class="w-4 h-4 mr-1" />
             {{ $t('channelAssetsTabs.splicingOut') }}
           </Button>
           <Button
             size="sm"
             variant="outline"
+            class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
             @click="$emit('unlock', asset)"
           >
             <Icon icon="lucide:unlock" class="w-4 h-4 mr-1" />

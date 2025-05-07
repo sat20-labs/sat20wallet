@@ -25,7 +25,7 @@
       </nav>
       <div class="flex items-center">
         <Button size="icon" variant="ghost" @click="handlerRefresh">
-          <Icon icon="lucide:refresh-cw" class="text-zinc-400"/>
+          <Icon icon="lets-icons:refresh-2-light" class="text-zinc-300 mb-[1px]"/>
         </Button>
         <Button size="icon" variant="ghost" as-child>
           <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" :title="$t('l2AssetsTabs.viewTradeHistory')">
@@ -43,7 +43,7 @@
         class="flex items-center justify-between p-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors"
       >
         <div>
-          <div class="font-medium">{{ (asset.label).toUpperCase() }}</div>
+          <div class="font-medium rune-name">{{ (asset.label).toUpperCase() }}</div>
           <div class="text-sm text-muted-foreground">
             {{ formatAmount(asset) }}
           </div>
@@ -55,17 +55,19 @@
             <Button
               size="sm"
               variant="outline"
+              class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
               @click="$emit('send', asset)"
             >
-              <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
+              <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
               {{ $t('l2AssetsTabs.send') }}
             </Button>
             <Button
               size="sm"
               variant="outline"
+              class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
               @click="$emit('lock', asset)"
             >
-              <Icon icon="lucide:corner-up-right" class="w-4 h-4 mr-1" />
+              <Icon icon="lucide:lock" class="w-4 h-4 mr-1" />
               {{ $t('l2AssetsTabs.lock') }}
             </Button>
           </template>
@@ -75,14 +77,16 @@
             <Button
               size="sm"
               variant="outline"
+              class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
               @click="$emit('send', asset)"
             >
-              <Icon icon="lucide:arrow-right" class="w-4 h-4 mr-1" />
+              <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
               {{ $t('l2AssetsTabs.send') }}
             </Button>
             <Button
               size="sm"
               variant="outline"
+              class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
               @click="$emit('withdraw', asset)"
             >
               <Icon icon="lucide:arrow-up-right" class="w-4 h-4 mr-1" />
