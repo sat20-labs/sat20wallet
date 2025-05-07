@@ -5,6 +5,9 @@
     <div class="space-y-2 py-4 px-0">
       <!-- Conditionally render EscapeHatch -->
       <EscapeHatch v-if="transcendingModeStore.selectedTranscendingMode !== 'poolswap'" />
+      <Button class="w-full mt-2" @click="$router.push({ path: '/wallet/setting/utxo' })">
+        {{$t('utxoManager.title')}}
+      </Button>
       <Separator />
       <SecuritySetting />
       <Separator />

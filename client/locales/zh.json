@@ -315,5 +315,17 @@
     "backupRecoveryPhrase": "在删除此钱包之前，请确保您已备份恢复助记词。",
     "deleting": "删除中...",
     "delete": "删除"
+  },
+  "utxoManager": {
+    "title": "UTXO 管理",
+    "inputPlaceholder": "请输入 UTXO（如 txid:vout）",
+    "lockBtn": "锁定 UTXO",
+    "unlockBtn": "解锁 UTXO",
+    "lockedList": "已锁定 UTXO 列表",
+    "loading": "加载中...",
+    "empty": "暂无已锁定 UTXO",
+    "action": "操作",
+    "reason": "原因",
+    "lockedTime": "锁定时间"
   }
 }
