@@ -41,14 +41,14 @@ export function useAssetActions() {
   // Splicing In 操作
   const splicingIn = async ({
     chanid,
-    utxos,
+    utxos = [],
     amt,
     feeUtxos = [],
-    feeRate,
+    feeRate = btcFeeRate.value,//se feeRate from store if not explicitly passed
     asset_name,
   }: any): Promise<void> => {
     loading.value = true
-    console.log('UseAssetAction splicingIn:', chanid, utxos, amt, feeUtxos, feeRate, asset_name)
+    //console.log('UseAssetAction splicingIn:', chanid, asset_name, utxos, feeUtxos, feeRate, amt)
     const [err] = await satsnetStp.splicingIn(chanid, asset_name, utxos, feeUtxos, feeRate, amt)
     if (err) {
       loading.value = false
@@ -65,7 +65,7 @@ export function useAssetActions() {
     chanid,
     toAddress,
     amt,
-    feeRate,
+    feeRate= btcFeeRate.value,//se feeRate from store if not explicitly passed
     asset_name,
   }: any): Promise<void> => {
     loading.value = true

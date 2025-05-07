@@ -2,7 +2,7 @@
   <Dialog :open="isOpen" @update:open="isOpen = $event">
     <DialogContent class="w-[330px] rounded-lg bg-zinc-950">
       <DialogHeader>
-        <DialogTitle>{{ $t(title) }}</DialogTitle>
+        <DialogTitle>{{ title }}</DialogTitle>
         <DialogDescription>
           <hr class="mb-6 mt-2 border-t-1 border-zinc-900">
           {{ description }}          
@@ -117,13 +117,13 @@ const confirmOperation = () => {
 }
 
 const handleConfirm = () => {
+  console.log('handleConfirm called'); // 调试日志
   emit('confirm')
   showAlertDialog.value = false
   setTimeout(() => {
     isOpen.value = false
     document.body.removeAttribute('style')
   }, 300)
-
 }
 
 // 设置最大值
