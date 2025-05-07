@@ -36,6 +36,7 @@ interface StpWasmModule {
   runesAmtV2ToV3: (...args: any[]) => Promise<WasmResponse<string>>; // Assuming string result
   runesAmtV3ToV2: (...args: any[]) => Promise<WasmResponse<string>>; // Assuming string result
   getAllChannels: (...args: any[]) => Promise<WasmResponse<any[]>>; // Assuming array
+  getCurrentChannel: (...args: any[]) => Promise<WasmResponse>; // Specify channel type if known
   getChannel: (...args: any[]) => Promise<WasmResponse>; // Specify channel type if known
   getChannelStatus: (...args: any[]) => Promise<WasmResponse>; // Specify status type if known
   sendAssets_SatsNet: (...args: any[]) => Promise<WasmResponse>;
@@ -288,6 +289,9 @@ class SatsnetStp {
 
   async getChannel(id: string): Promise<[Error | undefined, any | undefined]> { // TODO: Specify channel type
     return this._handleRequest('getChannel', id)
+  }
+  async getCurrentChannel(): Promise<[Error | undefined, any | undefined]> { // TODO: Specify channel type
+    return this._handleRequest('getCurrentChannel')
   }
   async getChannelStatus(
     id: string

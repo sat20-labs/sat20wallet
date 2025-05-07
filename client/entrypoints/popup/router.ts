@@ -11,6 +11,7 @@ import WalletManager from '@/components/wallet/WalletManager.vue'
 import SubWalletManager from '@/components/wallet/SubWalletManager.vue'
 import Unlock from '@/entrypoints/popup/pages/Unlock.vue'
 import Approve from '@/entrypoints/popup/pages/wallet/Approve.vue'
+import UtxoManager from '@/entrypoints/popup/pages/wallet/settings/UtxoManager.vue'
 import { walletStorage } from '@/lib/walletStorage'
 
 const routes = [
@@ -32,6 +33,10 @@ const routes = [
           {
             path: 'phrase',
             component: WalletSettingPhrase,
+          },
+          {
+            path: 'utxo',
+            component: UtxoManager,
           },
         ],
       },
@@ -71,7 +76,7 @@ router.beforeEach(async (to, from) => {
   await checkPassword()
   const password = walletStorage.getValue('password')
 
-  if (password) {
+  if (password && walletStore.locked) {
     await walletStore.unlockWallet(password)
     await walletStore.setLocked(false)
   }

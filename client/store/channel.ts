@@ -1,4 +1,5 @@
 import satsnetStp from '@/utils/stp'
+import { useWalletStore } from '@/store'
 import { parallel } from 'radash'
 interface OutPoint {
   hash: string
@@ -89,39 +90,25 @@ interface Channel {
   remoteDeAnchorTx: CommitTx
 }
 export const useChannelStore = defineStore('channel', () => {
-  const channels = ref<Channel[]>([])
-  // const sat20List = ref<any[]>([])
-  // const plainList = ref<any[]>([])
+
+  const channel = ref<Channel | null>(null)
   const allAssetList = ref<any[]>([])
   const plainBalance = ref(0)
 
-  const channel = computed(() => channels.value?.[0])
   const getAllChannels = async () => {
     const [_, resull] = await satsnetStp.getAllChannels()
-    if (resull?.channels) {
+    const [, currentChannel] = await satsnetStp.getCurrentChannel()
+    console.log('currentChannel', currentChannel)
+    if (currentChannel?.json) {
       try {
         console.log('result', resull)
-        const c = JSON.parse(resull.channels)
-        console.log('channels', c)
-        if (c && typeof c === 'object') {
-          let values = Object.values(c)
-          values = values.filter(
-            (v: any) =>
-              (v.status > 15 && v.status < 257) ||
-              (v.status > 0 && v.status < 5)
-          )
-          channels.value = values as Channel[]
-          // 添加这行，确保在通道数据更新后解析资产
-          await parseChannel()
-        } else {
-          channels.value = []
-        }
+        const c = JSON.parse(currentChannel.json)
+        channel.value = c;
       } catch (error) {
         console.log(error)
-        channels.value = []
       }
     } else {
-      channels.value = []
+      channel.value = null
     }
   }
 
@@ -248,7 +235,6 @@ export const useChannelStore = defineStore('channel', () => {
     ordList,
     plainList,
     plainBalance,
-    channels,
     channel,
     getAllChannels,
   }

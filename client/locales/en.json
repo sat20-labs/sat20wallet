@@ -315,5 +315,17 @@
     "backupRecoveryPhrase": "Make sure you have backed up your recovery phrase before deleting this wallet.",
     "deleting": "Deleting...",
     "delete": "Delete"
+  },
+  "utxoManager": {
+    "title": "UTXO Manager",
+    "inputPlaceholder": "Enter UTXO (e.g. txid:vout)",
+    "lockBtn": "Lock UTXO",
+    "unlockBtn": "Unlock UTXO",
+    "lockedList": "Locked UTXO List",
+    "loading": "Loading...",
+    "empty": "No locked UTXOs",
+    "action": "Action",
+    "reason": "Reason",
+    "lockedTime": "Locked Time"
   }
 }

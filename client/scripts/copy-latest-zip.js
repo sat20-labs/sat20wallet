@@ -8,7 +8,7 @@ const __dirname = path.dirname(__filename)
 
 // 获取.output目录路径
 const outputDir = path.resolve(__dirname, '../.output')
-const releaseDir = path.resolve(__dirname, '../release')
+const releaseDir = path.resolve(__dirname, '../.output')
 
 // 匹配sat20wallet-*-chrome.zip文件
 const zipPattern = /^sat20wallet-(\d+\.\d+\.\d+)-chrome\.zip$/

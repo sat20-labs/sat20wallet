@@ -68,7 +68,7 @@
                     <th class="text-left font-medium border-b border-zinc-600/30">{{ $t('escapeHatch.pkScript') }}</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody>xi
                   <template v-for="(input, index) in parsedInputs" :key="`input-${index}`">
                     <tr>
                       <td class="truncate">
