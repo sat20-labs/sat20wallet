@@ -349,6 +349,8 @@ interface SatsnetStp {
 
   batchSendAssets_SatsNet(destAddr: string,
     assetName: string, amt: string, n: number): Promise<SatsnetResponse<any>>;
+  batchSendAssets(destAddr: string,
+    assetName: string, amt: string, n: number, feeRate: number): Promise<SatsnetResponse<any>>;
 }
 declare interface Window {
   sat20wallet_wasm: WalletManager

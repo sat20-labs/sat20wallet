@@ -1,12 +1,19 @@
 <template>
   <Dialog :open="isOpen" @update:open="isOpen = $event">
     <DialogContent class="w-[330px] rounded-lg bg-zinc-950">
-      <DialogHeader>
-        <DialogTitle>{{ title }}</DialogTitle>
-        <DialogDescription>
-          <hr class="mb-6 mt-2 border-t-1 border-zinc-900">
-          {{ description }}          
-        </DialogDescription>
+      <DialogHeader class="flex flex-row items-center justify-between">
+        <div>
+          <DialogTitle>{{ title }}</DialogTitle>
+          <DialogDescription>
+            <hr class="mb-6 mt-2 border-t-1 border-zinc-900">
+            {{ description }}          
+          </DialogDescription>
+        </div>
+        <template v-if="props.operationType === 'send' && props.chain === 'bitcoin'">
+          <Button variant="ghost" size="icon" class="ml-2" @click="goSplitAsset" aria-label="Split Asset">
+            <Icon icon="mdi:content-cut" class="w-6 h-6 text-primary" />
+          </Button>
+        </template>
       </DialogHeader>
 
       <div class="space-y-4">
@@ -73,6 +80,8 @@ import {
   AlertDialogCancel,
   AlertDialogTrigger
 } from '@/components/ui/alert-dialog'
+import { useRouter } from 'vue-router'
+import { Icon } from '@iconify/vue'
 
 interface Props {
   title: string
@@ -82,13 +91,18 @@ interface Props {
   maxAmount?: string // 新增的 prop
   assetType?: string
   assetTicker?: string
+  assetKey?: string
+  chain?: string
   operationType?: 'send' | 'deposit' | 'withdraw' | 'lock' | 'unlock' | 'splicing_in' | 'splicing_out'
 }
 
 const props = withDefaults(defineProps<Props>(), {
   address: '',
-  operationType: undefined
+  operationType: undefined,
+  chain: 'bitcoin'
 })
+
+console.log('props', props);
 
 const isOpen = defineModel('open', { type: Boolean })
 
@@ -131,6 +145,12 @@ const setMaxAmount = () => {
   if (props.maxAmount) {
     emit('update:amount', props.maxAmount) // 将最大值传递给父组件
   }
+}
+
+const router = useRouter()
+
+const goSplitAsset = () => {
+  router.push(`/wallet/split-asset?assetName=${props.assetKey}`)
 }
 
 </script>

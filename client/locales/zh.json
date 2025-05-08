@@ -93,7 +93,10 @@
     "assetKey": "资产键",
     "amountToSplit": "拆分金额",
     "utxoDescription": "指定金额将作为单独的 UTXO 返回到您的地址。",
-    "missingData": "缺少必要的资产键或金额。"
+    "missingData": "缺少必要的资产键或金额。",
+    "repeat": "分割批次（Repeat）",
+    "repeatPlaceholder": "请输入分割批次",
+    "balance": "当前余额"
   },
   "switchNetwork": {
     "title": "允许此网站切换网络？"

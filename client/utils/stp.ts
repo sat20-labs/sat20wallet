@@ -59,6 +59,7 @@ interface StpWasmModule {
   getAssetAmount: (...args: any[]) => Promise<WasmResponse<{ amount: string; value: string }>>;
   getAssetAmount_SatsNet: (...args: any[]) => Promise<WasmResponse<{ amount: string; value: string }>>;
   batchSendAssets_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
+  batchSendAssets: (...args: any[]) => Promise<WasmResponse<any>>;
   getTxAssetInfoFromPsbt: (...args: any[]) => Promise<WasmResponse<any>>;
   getTxAssetInfoFromPsbt_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
   getCommitTxAssetInfo: (...args: any[]) => Promise<WasmResponse<any>>;
@@ -476,16 +477,32 @@ class SatsnetStp {
   // --- End Added UTXO Getter Methods ---
 
   // --- Added Asset Amount Getter Methods ---
-  async getAssetAmount(address: string, assetName: string): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
-    return this._handleRequest<{ amount: string; value: string }>('getAssetAmount', address, assetName);
+  async getAssetAmount(address: string, assetName: string): Promise<[Error | undefined, {
+    availableAmt: number,
+    lockedAmt: number
+  } | undefined]> {
+    return this._handleRequest<{
+      availableAmt: number,
+      lockedAmt: number
+    }>('getAssetAmount', address, assetName);
   }
 
-  async getAssetAmount_SatsNet(address: string, assetName: string): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
-    return this._handleRequest<{ amount: string; value: string }>('getAssetAmount_SatsNet', address, assetName);
+  async getAssetAmount_SatsNet(address: string, assetName: string): Promise<[Error | undefined, {
+    availableAmt: number,
+    lockedAmt: number
+  } | undefined]> {
+    return this._handleRequest<{
+      availableAmt: number,
+      lockedAmt: number
+    }>('getAssetAmount_SatsNet', address, assetName);
   }
   async batchSendAssets_SatsNet(destAddr: string,
     assetName: string, amt: string, n: number): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
     return this._handleRequest<any>('batchSendAssets_SatsNet', destAddr, assetName, amt, n);
+  }
+  async batchSendAssets(destAddr: string,
+    assetName: string, amt: string, n: number, feeRate: number): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
+    return this._handleRequest<any>('batchSendAssets', destAddr, assetName, amt, n, feeRate.toString());
   }
   async getTxAssetInfoFromPsbt(
     psbtHex: string,
