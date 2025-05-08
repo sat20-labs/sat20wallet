@@ -136,7 +136,8 @@
   type TranscendingMode = 'poolswap' | 'lightning'
   type ChainType = 'bitcoin' | 'satoshinet'
   
-  const selectedTranscendingMode = ref<TranscendingMode>('poolswap')
+  //const selectedTranscendingMode = ref<TranscendingMode>('poolswap')
+  const selectedTranscendingMode = computed(() => transcendingModeStore.selectedTranscendingMode)
   const selectedChain = ref<ChainType>('bitcoin')
   const selectedAssetType = ref('ORDX')
   

@@ -13,7 +13,7 @@
       {{ $t('transcendingMode.advancedMode') }}
       <Button 
         :variant="transcendingModeStore.selectedTranscendingMode === 'lightning' ? 'secondary' : 'outline'" 
-        @click="transcendingModeStore.setMode('lightning')" 
+        @click="() => { console.log('Button clicked'); transcendingModeStore.setMode('lightning') }" 
         class="w-full h-12 justify-start gap-2 text-base bg-zinc-800 hover:bg-zinc-700/50 "
       >
         <Icon icon="material-icon-theme:supabase" class="w-6 h-6 shrink-0" />{{ $t('transcendingMode.lightning') }}
@@ -30,4 +30,8 @@ import { Button } from '@/components/ui/button'
 import { useTranscendingModeStore } from '@/store'
 
 const transcendingModeStore = useTranscendingModeStore()
+
+onMounted(() => {
+  console.log('当前模式:', transcendingModeStore.selectedTranscendingMode)
+})
 </script>
