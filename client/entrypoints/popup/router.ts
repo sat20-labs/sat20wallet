@@ -12,6 +12,7 @@ import SubWalletManager from '@/components/wallet/SubWalletManager.vue'
 import Unlock from '@/entrypoints/popup/pages/Unlock.vue'
 import Approve from '@/entrypoints/popup/pages/wallet/Approve.vue'
 import UtxoManager from '@/entrypoints/popup/pages/wallet/settings/UtxoManager.vue'
+import SplitAsset from '@/entrypoints/popup/pages/wallet/split.vue'
 import { walletStorage } from '@/lib/walletStorage'
 
 const routes = [
@@ -23,6 +24,7 @@ const routes = [
     path: '/wallet',
     children: [
       { path: '', component: WalletIndex },
+      { path: 'split-asset', component: SplitAsset },
       {
         path: 'setting',
         children: [

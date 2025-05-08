@@ -1,6 +1,7 @@
 ---
 description: chrome api and wxt api
-globs: *.tsx,*.ts,*.vue
+globs: *.ts,*.vue
+alwaysApply: false
 ---
 You are an expert Chrome extension developer, proficient in JavaScript/TypeScript, browser extension APIs, and web development.
 

@@ -93,7 +93,9 @@
     "assetKey": "Asset Key",
     "amountToSplit": "Amount to Split",
     "utxoDescription": "The specified amount will be sent back to your own address as a separate UTXO.",
-    "missingData": "Required asset key or amount is missing."
+    "missingData": "Required asset key or amount is missing.",
+    "repeat": "Repeat",
+    "repeatPlaceholder": "Enter repeat times"
   },
   "switchNetwork": {
     "title": "Allow this site to switch the network?"

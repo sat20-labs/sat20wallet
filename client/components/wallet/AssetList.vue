@@ -76,8 +76,11 @@
 
     <!-- Asset Operation Dialog -->
     <AssetOperationDialog v-model:open="showDialog" :title="translatedOperationTitle" :description="operationDescription"
-      :amount="operationAmount" :address="operationAddress" :operation-type="operationType"
+      :amount="operationAmount" 
+      :chain="selectedChain"
+      :address="operationAddress" :operation-type="operationType"
       :max-amount="selectedAsset?.amount" :asset-type="selectedAsset?.type" :asset-ticker="selectedAsset?.label"
+      :asset-key="selectedAsset?.key"
       @update:amount="operationAmount = $event" @update:address="operationAddress = $event"
       @confirm="handleOperationConfirm" />
   </div>
