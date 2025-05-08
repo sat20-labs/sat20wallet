@@ -276,7 +276,8 @@ const btcBalance = computed(() => {
 const formatBalance = (balance: number | string, chain: string) => {
   const numericBalance = typeof balance === 'string' ? parseFloat(balance) : balance
   const formattedBalance = (numericBalance / 1e8).toFixed(8)
-  const unit = chain.toLowerCase() === 'bitcoin' ? 'tBTC' : chain.toLowerCase() === 'channel' ? 'cBTC' : 'sBTC'
+  //const unit = chain.toLowerCase() === 'bitcoin' ? 'tBTC' : chain.toLowerCase() === 'channel' ? 'cBTC' : 'sBTC'
+  const unit = 'tBTC'
   return `${formattedBalance} ${unit}`
 }
 
