@@ -88,14 +88,15 @@
     "error": "加载交易详情时出错。请检查控制台。"
   },
   "splitAsset": {
+    "back": "返回",
     "confirmTitle": "确认资产拆分",
-    "description": "您即将拆分以下资产：",
+    "description": "将您的资产拆分为更小的部分。",
     "assetKey": "资产键",
     "amountToSplit": "拆分金额",
     "utxoDescription": "指定金额将作为单独的 UTXO 返回到您的地址。",
     "missingData": "缺少必要的资产键或金额。",
-    "repeat": "分割批次（Repeat）",
-    "repeatPlaceholder": "请输入分割批次",
+    "repeat": "拆分数量",
+    "repeatPlaceholder": "请输入数量",
     "balance": "当前余额"
   },
   "switchNetwork": {
@@ -240,6 +241,8 @@
     "showPhrase": "显示助记词"
   },
   "assetOperationDialog": {
+    "normalSend": "普通",
+    "advancedSend": "高级",
     "amount": "金额",
     "enterAmount": "输入金额",
     "max": "最大",
@@ -322,8 +325,8 @@
   "utxoManager": {
     "title": "UTXO 管理",
     "inputPlaceholder": "请输入 UTXO（如 txid:vout）",
-    "lockBtn": "锁定 UTXO",
-    "unlockBtn": "解锁 UTXO",
+    "lockBtn": "锁定",
+    "unlockBtn": "解锁",
     "lockedList": "已锁定 UTXO 列表",
     "loading": "加载中...",
     "empty": "暂无已锁定 UTXO",

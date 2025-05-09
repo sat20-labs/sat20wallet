@@ -88,13 +88,14 @@
     "error": "Error loading transaction details. Please check the console."
   },
   "splitAsset": {
+    "back": "Back",
     "confirmTitle": "Confirm Asset Split",
-    "description": "You are about to split the following asset:",
+    "description": "Split your assets into smaller parts.",
     "assetKey": "Asset Key",
     "amountToSplit": "Amount to Split",
     "utxoDescription": "The specified amount will be sent back to your own address as a separate UTXO.",
     "missingData": "Required asset key or amount is missing.",
-    "repeat": "Repeat",
+    "repeat": "Batch Split Nums",
     "repeatPlaceholder": "Enter repeat times"
   },
   "switchNetwork": {
@@ -239,6 +240,8 @@
     "showPhrase": "Show Phrase"
   },
   "assetOperationDialog": {
+    "normalSend": "Normal",
+    "advancedSend": "Advanced",
     "amount": "Amount",
     "enterAmount": "Enter amount",
     "max": "Max",
@@ -321,8 +324,8 @@
   "utxoManager": {
     "title": "UTXO Manager",
     "inputPlaceholder": "Enter UTXO (e.g. txid:vout)",
-    "lockBtn": "Lock UTXO",
-    "unlockBtn": "Unlock UTXO",
+    "lockBtn": "Lock",
+    "unlockBtn": "Unlock",
     "lockedList": "Locked UTXO List",
     "loading": "Loading...",
     "empty": "No locked UTXOs",

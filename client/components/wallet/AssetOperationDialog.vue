@@ -1,44 +1,85 @@
 <template>
   <Dialog :open="isOpen" @update:open="isOpen = $event">
-    <DialogContent class="w-[330px] rounded-lg bg-zinc-950">
+    <DialogContent class="w-[330px] rounded-lg bg-black">
       <DialogHeader class="flex flex-row items-center justify-between">
         <div>
           <DialogTitle>{{ title }}</DialogTitle>
           <DialogDescription>
-            <hr class="mb-6 mt-2 border-t-1 border-zinc-900">
-            {{ description }}          
+            <hr class="mb-4 mt-2 border-t-1 border-zinc-900">
+            {{ description }}
           </DialogDescription>
         </div>
-        <template v-if="props.operationType === 'send' && props.chain === 'bitcoin'">
-          <Button variant="ghost" size="icon" class="ml-2" @click="goSplitAsset" aria-label="Split Asset">
-            <Icon icon="mdi:content-cut" class="w-6 h-6 text-primary" />
-          </Button>
-        </template>
       </DialogHeader>
 
-      <div class="space-y-4">
-        <div class="space-y-2">
-          <Label>{{ $t('assetOperationDialog.amount') }}</Label>
-          <div class="flex items-center gap-2">
-            <Input :model-value="amount" type="number" :placeholder="$t('assetOperationDialog.enterAmount')" class="h-12 bg-zinc-800"
-              @update:modelValue="handleAmountUpdate" />
-            <Button
-              variant="outline"
-              class="h-12 px-4 text-sm border border-zinc-600 hover:bg-zinc-700"
-              @click="setMaxAmount"
-            >
-              {{ $t('assetOperationDialog.max') }}
-            </Button>
-          </div>
-        </div>
-        <div v-if="needsAddress" class="space-y-2">
-          <Label>{{ $t('assetOperationDialog.address') }}</Label>
-          <Input :model-value="address" type="text" :placeholder="$t('assetOperationDialog.enterAddress')" class="h-12 bg-zinc-800"
-            @update:modelValue="handleAddressUpdate" />
+      <!-- Tabs -->
+      <div v-if="props.operationType === 'send'" >
+        <div class="tabs gap-1 border-b-2 border-zinc-700/50">
+          <button
+            :class="[ 
+              'w-full py-2 px-1 font-sans font-semibold text-base border border-b-transparent hover:text-primary relative rounded-t-lg',
+              selectedTab === 'normal'
+                ? 'bg-zinc-700/30 text-primary/60 border-zinc-600'
+                : 'bg-transparent text-muted-foreground  border-zinc-700/50 hover:bg-zinc-700/50'
+            ]"
+            @click="selectedTab = 'normal'"
+          >
+            {{ $t('assetOperationDialog.normalSend') }}
+          </button>
+          <button
+            :class="[ 
+              'w-full py-2 px-1 font-sans font-semibold text-base border border-b-transparent hover:text-primary relative rounded-t-lg',
+              selectedTab === 'advanced'
+                ? 'bg-zinc-700/30 text-primary/50 border-zinc-600'
+                : 'bg-transparent text-muted-foreground  border-zinc-700/50 hover:bg-zinc-700/50'
+            ]"
+            @click="selectedTab = 'advanced'"
+          >
+            {{ $t('assetOperationDialog.advancedSend') }}
+          </button>
         </div>
       </div>
-      <DialogFooter>
-        <Button class="w-full h-11 mb-2" :disabled="needsAddress && !address" @click="confirmOperation">
+
+      <!-- Tab Content -->
+      <div class="tab-content">
+        <div v-if="selectedTab === 'normal'">
+          <!-- 普通发送内容 -->
+          <div class="space-y-4">
+            <div class="space-y-2">
+              <Label>{{ $t('assetOperationDialog.amount') }}</Label>
+              <div class="flex items-center gap-2">
+                <Input :model-value="amount" type="number" :placeholder="$t('assetOperationDialog.enterAmount')" class="h-12 bg-zinc-800"
+                  @update:modelValue="handleAmountUpdate" />
+                <Button
+                  variant="outline"
+                  class="h-12 px-4 text-sm border border-zinc-600 hover:bg-zinc-700"
+                  @click="setMaxAmount"
+                >
+                  {{ $t('assetOperationDialog.max') }}
+                </Button>
+              </div>
+            </div>
+            <div v-if="needsAddress" class="space-y-2">
+              <Label>{{ $t('assetOperationDialog.address') }}</Label>
+              <Input :model-value="address" type="text" :placeholder="$t('assetOperationDialog.enterAddress')" class="h-12 bg-zinc-800"
+                @update:modelValue="handleAddressUpdate" />
+            </div>
+          </div>
+        </div>
+        <div v-else-if="selectedTab === 'advanced'">
+        <!-- 高级发送内容 -->
+          <SplitSend
+            :assetName="props.assetKey || ''"           
+            @close="selectedTab = 'normal'"
+          />
+        </div> 
+      </div>
+
+      <DialogFooter v-if="selectedTab === 'normal'">
+        <Button
+          class="w-full h-11 mb-2"
+          :disabled="needsAddress && !address"
+          @click="confirmOperation"
+        >
           {{ $t('assetOperationDialog.confirm') }}
         </Button>
       </DialogFooter>
@@ -82,6 +123,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
+import SplitSend from '@/entrypoints/popup/pages/wallet/split.vue'
 
 interface Props {
   title: string
@@ -103,6 +145,8 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 console.log('props', props);
+
+const selectedTab = ref('normal') // 默认选中普通发送
 
 const isOpen = defineModel('open', { type: Boolean })
 
@@ -154,3 +198,47 @@ const goSplitAsset = () => {
 }
 
 </script>
+<style scoped>
+.tabs-container {
+  position: relative;
+  border-bottom: 1px solid var(--border-muted);
+  margin-bottom: 1rem;
+}
+
+.tabs {
+  display: flex;
+  justify-content: space-around;
+  position: relative;
+}
+
+.tab-button {
+  flex: 1;
+  text-align: center;
+  padding: 0.5rem 0;
+  font-weight: bold;
+  font-size: larger;
+  color: var(--text-muted); /* 非选中状态的文字颜色 */
+  background: none;
+  border: 1px solid #444; /* 默认透明边框 */
+  border-bottom: 2px solid #333; /* 非选中状态的底部边框颜色 */
+  cursor: pointer;
+  transition: color 0.3s ease, border-color 0.3s ease; /* 添加颜色过渡效果 */
+  border-radius: 4px 4px 0 0; /* 添加顶部圆角 */
+}
+
+.tab-button.active {
+  color: var(--text-primary); /* 选中状态的文字颜色 */
+  border-bottom: 2px solid #556677; /* 选中状态的底部边框颜色 */
+  border-radius: 4px 4px 0 0; /* 添加顶部圆角 */
+}
+
+.tab-indicator {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 50%; /* 每个 Tab 占一半宽度 */
+  height: 2px;
+  background-color: var(--text-primary);
+  transition: left 0.3s ease;
+}
+</style>

@@ -43,7 +43,7 @@
               <TableCell class="truncate">{{ utxo.reason || '-' }}</TableCell>
               <TableCell class="truncate">{{ utxo.lockedTime ? new Date(utxo.lockedTime * 1000).toLocaleString() : '-' }}</TableCell>
               <TableCell>
-                <Button size="sm" variant="destructive" :loading="unlockingIdx === idx" @click="unlockUtxo(idx, utxo)">
+                <Button size="sm" variant="default" :loading="unlockingIdx === idx" @click="unlockUtxo(idx, utxo)">
                   {{ $t('utxoManager.unlockBtn') }}
                 </Button>
               </TableCell>
