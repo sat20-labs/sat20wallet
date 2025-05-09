@@ -37,6 +37,7 @@
           @splicing_in="handleSplicingIn"
           @send="handleSend"
           @deposit="handleDeposit"
+          @close="showTranscendingMode = false"
         />
       </div>
     </div>
