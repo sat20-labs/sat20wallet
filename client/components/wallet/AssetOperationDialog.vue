@@ -18,20 +18,21 @@
             :class="[ 
               'w-full py-2 px-1 font-sans font-semibold text-base border border-b-transparent hover:text-primary relative rounded-t-lg',
               selectedTab === 'normal'
-                ? 'bg-zinc-700/30 text-primary/60 border-zinc-600'
+                ? 'bg-zinc-700/30 text-primary/80 border-zinc-600'
                 : 'bg-transparent text-muted-foreground  border-zinc-700/50 hover:bg-zinc-700/50'
             ]"
             @click="selectedTab = 'normal'"
           >
             {{ $t('assetOperationDialog.normalSend') }}
           </button>
-          <button
+          <button                
             :class="[ 
               'w-full py-2 px-1 font-sans font-semibold text-base border border-b-transparent hover:text-primary relative rounded-t-lg',
               selectedTab === 'advanced'
-                ? 'bg-zinc-700/30 text-primary/50 border-zinc-600'
+                ? 'bg-zinc-700/30 text-primary/80 border-zinc-600'
                 : 'bg-transparent text-muted-foreground  border-zinc-700/50 hover:bg-zinc-700/50'
             ]"
+            :disabled="props.chain !== 'bitcoin' || props.assetKey?.includes('runes')"
             @click="selectedTab = 'advanced'"
           >
             {{ $t('assetOperationDialog.advancedSend') }}
@@ -69,7 +70,7 @@
         <!-- 高级发送内容 -->
           <SplitSend
             :assetName="props.assetKey || ''"           
-            @close="selectedTab = 'normal'"
+           
           />
         </div> 
       </div>
@@ -122,6 +123,7 @@ import {
   AlertDialogTrigger
 } from '@/components/ui/alert-dialog'
 import { useRouter } from 'vue-router'
+import { Chain } from '@/types/index'
 import { Icon } from '@iconify/vue'
 import SplitSend from '@/entrypoints/popup/pages/wallet/split.vue'
 
@@ -144,6 +146,7 @@ const props = withDefaults(defineProps<Props>(), {
   chain: 'bitcoin'
 })
 
+console.log('assetType: ', props.assetType)
 console.log('props', props);
 
 const selectedTab = ref('normal') // 默认选中普通发送
@@ -193,9 +196,18 @@ const setMaxAmount = () => {
 
 const router = useRouter()
 
-const goSplitAsset = () => {
-  router.push(`/wallet/split-asset?assetName=${props.assetKey}`)
-}
+// const goSplitAsset = () => {
+//   router.push(`/wallet/split-asset?assetName=${props.assetKey}`)
+// }
+
+watch(
+  () => isOpen.value,
+  (newVal) => {
+    if (newVal) {
+      selectedTab.value = 'normal'; // 重置为默认选项
+    }
+  }
+);
 
 </script>
 <style scoped>
@@ -240,5 +252,16 @@ const goSplitAsset = () => {
   height: 2px;
   background-color: var(--text-primary);
   transition: left 0.3s ease;
+}
+
+button:disabled {
+  cursor: not-allowed; /* 禁用状态的鼠标样式 */
+  opacity: 0.5; /* 调低透明度 */
+}
+
+button:disabled:hover {
+  background: none; /* 禁用状态下移除背景变化 */
+  color: inherit; /* 保持文字颜色不变 */
+  border-color: inherit; /* 保持边框颜色不变 */
 }
 </style>
