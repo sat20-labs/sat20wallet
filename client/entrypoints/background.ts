@@ -296,9 +296,22 @@ export default defineBackground(() => {
             [reqErr, reqRes] = await service.getAssetAmount_SatsNet(data.address, data.assetName);
             if (reqErr) { errData = { code: -47, message: reqErr.message }; } else { resData = reqRes; } // Handle potential error/result
             break;
+          case Message.MessageAction.LOCK_UTXO:
+            [reqErr, reqRes] = await service.lockUtxo(data.address, data.utxo, data.reason);
+            if (reqErr) { errData = { code: -48, message: reqErr.message }; } else { resData = { success: true }; }
+            break;
+
+          case Message.MessageAction.UNLOCK_UTXO:
+            [reqErr, reqRes] = await service.unlockUtxo(data.address, data.utxo);
+            if (reqErr) { errData = { code: -49, message: reqErr.message }; } else { resData = { success: true }; }
+            break;
           case Message.MessageAction.LOCK_UTXO_SATSNET:
             [reqErr, reqRes] = await service.lockUtxo_SatsNet(data.address, data.utxo, data.reason);
             if (reqErr) { errData = { code: -48, message: reqErr.message }; } else { resData = { success: true }; }
+            break;
+          case Message.MessageAction.UNLOCK_UTXO_SATSNET:
+            [reqErr, reqRes] = await service.unlockUtxo_SatsNet(data.address, data.utxo);
+            if (reqErr) { errData = { code: -49, message: reqErr.message }; } else { resData = { success: true }; }
             break;
           case Message.MessageAction.GET_TICKER_INFO:
             [reqErr, reqRes] = await service.getTickerInfo(data.asset);

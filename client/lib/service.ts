@@ -245,11 +245,11 @@ class Service {
     return stp.getUtxosWithAssetV2_SatsNet(address, amt, assetName)
   }
 
-  async getAssetAmount(address: string, assetName: string): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
+  async getAssetAmount(address: string, assetName: string): Promise<[Error | undefined, any | undefined]> {
     return stp.getAssetAmount(address, assetName);
   }
 
-  async getAssetAmount_SatsNet(address: string, assetName: string): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
+  async getAssetAmount_SatsNet(address: string, assetName: string): Promise<[Error | undefined, any | undefined]> {
     return stp.getAssetAmount_SatsNet(address, assetName);
   }
 
