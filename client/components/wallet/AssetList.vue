@@ -243,7 +243,7 @@
     const asset = selectedAsset.value
     const type = asset.type || 'BTC'
     const amount = asset.amount || 0
-    return `${type}: ${amount} ${asset.label || 'sats'}`
+    return `${type}: ${Number(amount).toLocaleString()} ${asset.label || 'sats'}`
   })
   
   // 事件处理

@@ -34,7 +34,7 @@
         class="flex justify-left pl-1 pr-3 py-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors">
         <!-- 圆形背景 + 居中 Icon -->
         <div
-          class="w-12 h-10 mt-3 flex items-center justify-center rounded-full bg-zinc-700 text-white font-bold text-lg">
+          class="w-12 h-10 mt-3 flex items-center justify-center rounded-full bg-zinc-700 text-zinc-300 font-medium text-lg">
           <!-- <img v-if="asset.logo" :src="asset.logo" alt="logo" class="w-full h-full object-cover rounded-full" /> -->
           <span class="flex justify-center items-center w-10 h-10">{{ asset.label.charAt(0).toUpperCase() }}</span>
         </div>
@@ -43,7 +43,7 @@
           <!-- 第一行：资产名称和数量 -->
           <div class="flex justify-between items-center">
             <div class="font-medium text-zinc-400">{{ asset.label.toLocaleUpperCase() }}</div>
-            <div class="text-sm font-mono font-semibold text-muted-foreground">
+            <div class="text-xs font-medium text-zinc-200">
               {{ formatAmount(asset) }}
             </div>
           </div>

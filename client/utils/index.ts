@@ -112,15 +112,14 @@ export const formatLargeNumber = (num: number): string => {
     // 对整数部分进行千位分隔，对小数部分保留最多两位小数
     return value % 1 === 0
       ? value.toLocaleString() // 整数部分千位分隔
-      : value.toFixed(2).replace(/\.?0+$/, '').toLocaleString(); // 小数部分最多两位小数
+      : Number(value.toFixed(2)).toLocaleString(); // 小数部分最多两位小数
   };
 
   if (num >= 1_000_000_000) {
     return `${format(num / 1_000_000_000)} B`; // 转换为十亿单位
   } else if (num >= 1_000_000) {
     return `${format(num / 1_000_000)} M`; // 转换为百万单位
-  
-  } else if (num >= 100_000) {
+  } else if (num >= 10_000) {
     return `${format(num / 1_000)} K`; // 转换为千单位
   }
   return num.toLocaleString(); // 小于 1000 的数字直接返回
