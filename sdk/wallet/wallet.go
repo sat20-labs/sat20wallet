@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
@@ -130,6 +131,8 @@ type InternalWallet struct {
 	currentIndex          uint32                             // 当前子账户
 
 	subWallets            map[uint32]*channelWallet
+
+	mutex 				  sync.RWMutex
 }
 
 func NewInteralWallet(param *chaincfg.Params) (*InternalWallet, string, error) {
@@ -171,20 +174,28 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 }
 
 func (p *InternalWallet) CreateChannelWallet(peer []byte, id uint32) common.ChannelWallet {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	subWallet := NewChannelWallet(p, peer, uint32(id))
 	p.subWallets[id] = subWallet
 	return subWallet
 }
 
 func (p *InternalWallet) GetChannelWallet(id uint32) common.ChannelWallet {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 	return p.subWallets[id]
 }
 
 func (p *InternalWallet) SetSubAccount(id uint32) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	p.currentIndex = id
 }
 
 func (p *InternalWallet) GetSubAccount() uint32 {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 	return p.currentIndex
 }
 
@@ -228,6 +239,8 @@ func (p *InternalWallet) getBtcUtilAddress(index uint32) (btcutil.Address, error
 }
 
 func (p *InternalWallet) GetPubKey() *secp256k1.PublicKey {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	_, pubKey, err := p.getKey("P2TR", 0, p.currentIndex)
 	if err != nil {
 		Log.Errorf("GetPubKey failed. %v", err)
@@ -237,6 +250,8 @@ func (p *InternalWallet) GetPubKey() *secp256k1.PublicKey {
 }
 
 func (p *InternalWallet) GetPubKeyByIndex(index uint32) *secp256k1.PublicKey {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	_, pubKey, err := p.getKey("P2TR", 0, index)
 	if err != nil {
 		Log.Errorf("GetPubKey failed. %v", err)
@@ -246,6 +261,8 @@ func (p *InternalWallet) GetPubKeyByIndex(index uint32) *secp256k1.PublicKey {
 }
 
 func (p *InternalWallet) GetAddress() string {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	addr, err := p.getBtcUtilAddress(p.currentIndex)
 	if err != nil {
 		return ""
@@ -254,6 +271,8 @@ func (p *InternalWallet) GetAddress() string {
 }
 
 func (p *InternalWallet) GetAddressByIndex(index uint32) string {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	addr, err := p.getBtcUtilAddress(index)
 	if err != nil {
 		return ""
@@ -273,6 +292,8 @@ func (p *InternalWallet) GetCommitRootKey(peer []byte) (*secp256k1.PrivateKey, *
 // 返回secret，用于生成commitsecrect和commitpoint
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
 func (p *InternalWallet) GetCommitSecret(peer []byte, index uint32) *secp256k1.PrivateKey {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	return p.getCommitSecret(peer, p.currentIndex, index)
 }
 
@@ -307,11 +328,15 @@ func (p *InternalWallet) getCommitSecret(peer []byte, change, index uint32) *sec
 
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
 func (p *InternalWallet) DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	revBasePrivKey, _ := p.getRevocationBaseKey(p.currentIndex)
 	return utils.DeriveRevocationPrivKey(revBasePrivKey, commitsecret)
 }
 
 func (p *InternalWallet) GetRevocationBaseKey() *secp256k1.PublicKey {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	_, pubk := p.getRevocationBaseKey(p.currentIndex)
 	return pubk
 }
@@ -372,6 +397,8 @@ func (p *InternalWallet) GetNodePubKey() *secp256k1.PublicKey {
 }
 
 func (p *InternalWallet) GetPaymentPubKey() *secp256k1.PublicKey {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	key := p.getPaymentPrivKey()
 	if key == nil {
 		Log.Errorf("GetPaymentPrivKey failed.")
@@ -410,7 +437,9 @@ func (p *InternalWallet) getKey(addressType string, change, index uint32) (*secp
 func (p *InternalWallet) SignTxInput(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	sigHashes *txscript.TxSigHashes,
 	index int, witnessScript []byte) ([]byte, error) {
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 
 	var result []byte
 	preOut := prevFetcher.FetchPrevOutput(tx.TxIn[index].PreviousOutPoint)
@@ -442,7 +471,9 @@ func (p *InternalWallet) SignTxInput(tx *wire.MsgTx, prevFetcher txscript.PrevOu
 func (p *InternalWallet) SignTxInput_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
 	sigHashes *stxscript.TxSigHashes,
 	index int, witnessScript []byte) ([]byte, error) {
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 
 	var result []byte
 	preOut := prevFetcher.FetchPrevOutput(tx.TxIn[index].PreviousOutPoint)
@@ -472,8 +503,9 @@ func (p *InternalWallet) SignTxInput_SatsNet(tx *swire.MsgTx, prevFetcher stxscr
 }
 
 func (p *InternalWallet) SignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
-
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
 	for i, in := range tx.TxIn {
 		preOut := prevFetcher.FetchPrevOutput(in.PreviousOutPoint)
@@ -506,7 +538,9 @@ func (p *InternalWallet) SignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputF
 func (p *InternalWallet) SignTx_SatsNet(tx *swire.MsgTx,
 	prevFetcher stxscript.PrevOutputFetcher) error {
 
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	sigHashes := stxscript.NewTxSigHashes(tx, prevFetcher)
 	for i, in := range tx.TxIn {
 		preOut := prevFetcher.FetchPrevOutput(in.PreviousOutPoint)
@@ -546,7 +580,9 @@ func (p *InternalWallet) SignTxWithPeer(tx *wire.MsgTx, prevFetcher txscript.Pre
 	}
 	pos := GetCurrSignPosition2(myPubKey, peerPubKey)
 
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	pubkey := privKey.PubKey()
 	p2trPkScript, err := GetP2TRpkScript(pubkey)
 	if err != nil {
@@ -622,7 +658,9 @@ func (p *InternalWallet) SignTxWithPeer_SatsNet(tx *swire.MsgTx, prevFetcher stx
 	}
 	pos := GetCurrSignPosition2(myPubKey, peerPubKey)
 
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	pubkey := privKey.PubKey()
 	p2trPkScript, err := GetP2TRpkScript(pubkey)
 	if err != nil {
@@ -696,7 +734,9 @@ func (p *InternalWallet) PartialSignTx(tx *wire.MsgTx, prevFetcher txscript.Prev
 		return nil, err
 	}
 
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	pubkey := privKey.PubKey()
 	p2trPkScript, err := GetP2TRpkScript(pubkey)
 	if err != nil {
@@ -760,7 +800,9 @@ func (p *InternalWallet) PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxs
 		return nil, err
 	}
 
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	pubkey := privKey.PubKey()
 	p2trPkScript, err := GetP2TRpkScript(pubkey)
 	if err != nil {
@@ -817,7 +859,9 @@ func (p *InternalWallet) PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxs
 
 
 func (p *InternalWallet) SignMessage(msg []byte) ([]byte, error) {
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	return p.signMessage(privKey, msg).Serialize(), nil
 }
 
@@ -856,7 +900,9 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, sig []byte) bool {
 
 
 func (p *InternalWallet) SignWalletMessage(msg string) ([]byte, error) {
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	return p.signWalletMessage(privKey, msg), nil
 }
 
@@ -884,7 +930,9 @@ func magicMsgHash(msg string) []byte {
 
 // 支持上面所有几种不同的签名方式
 func (p *InternalWallet) SignPsbt(packet *psbt.Packet) error {
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	return p.signPsbt(privKey, packet)
 }
 
@@ -960,7 +1008,9 @@ func (p *InternalWallet) signPsbt(privKey *secp256k1.PrivateKey, packet *psbt.Pa
 }
 
 func (p *InternalWallet) SignPsbts(packet []*psbt.Packet) error {
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	return p.signPsbts(privKey, packet)
 }
 
@@ -976,7 +1026,9 @@ func (p *InternalWallet) signPsbts(privKey *secp256k1.PrivateKey, packets []*psb
 }
 
 func (p *InternalWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	return p.signPsbt_SatsNet(privKey, packet)
 }
 
@@ -1053,7 +1105,9 @@ func (p *InternalWallet) signPsbt_SatsNet(privKey *secp256k1.PrivateKey, packet 
 
 
 func (p *InternalWallet) SignPsbts_SatsNet(packet []*spsbt.Packet) error {
+	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
 	return p.signPsbts_SatsNet(privKey, packet)
 }
 
