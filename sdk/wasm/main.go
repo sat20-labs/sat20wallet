@@ -280,7 +280,7 @@ func createWallet(this js.Value, p []js.Value) any {
 		}
 		wallet.Log.Info("wallet created")
 		return map[string]any{
-			"walletId": id,
+			"walletId": fmt.Sprintf("%d", id),
 			"mnemonic": mnemonic,
 		}, 0, "ok"
 	})
@@ -339,7 +339,7 @@ func importWallet(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{
-			"walletId": id,
+			"walletId": fmt.Sprintf("%d", id),
 			"address":  _mgr.GetWallet().GetAddress(),
 		}, 0, "ok"
 	})
@@ -374,7 +374,7 @@ func unlockWallet(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{
-			"walletId": id,
+			"walletId": fmt.Sprintf("%d", id),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
@@ -385,34 +385,16 @@ func getAllWallets(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 
-	// ids := _mgr.GetAllWallets()
-
-	// type WalletIdAndAccounts struct {
-	// 	Id int64
-	// 	Accounts int
-	// }
-	// result := make([]*WalletIdAndAccounts, 0)
-	// for k, v := range ids {
-	// 	result = append(result, &WalletIdAndAccounts{Id: k, Accounts: v})
-	// }
-	// sort.Slice(result, func(i, j int) bool {
-	// 	return result[i].Id < result[j].Id
-	// })
-	// data := map[string]any{
-	// 	"walletIds": result,
-	// }
-	// return createJsRet(data, 0, "ok")
-
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		ids := _mgr.GetAllWallets()
 
 		type WalletIdAndAccounts struct {
-			Id       int64
+			Id       string
 			Accounts int
 		}
 		result := make([]*WalletIdAndAccounts, 0)
 		for k, v := range ids {
-			result = append(result, &WalletIdAndAccounts{Id: k, Accounts: v})
+			result = append(result, &WalletIdAndAccounts{Id: fmt.Sprintf("%d", k), Accounts: v})
 		}
 		sort.Slice(result, func(i, j int) bool {
 			return result[i].Id < result[j].Id
@@ -431,16 +413,17 @@ func switchWallet(this js.Value, p []js.Value) any {
 	if len(p) < 1 {
 		return createJsRet(nil, -1, "Expected 1 parameters")
 	}
-	if p[0].Type() != js.TypeNumber {
-		return createJsRet(nil, -1, "Id parameter should be a number")
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "Id parameter should be string")
 	}
-	id := p[0].Int()
-
-	// _mgr.SwitchWallet(int64(id))
-	// return createJsRet(nil, 0, "ok")
+	id := p[0].String()
+	i, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		err := _mgr.SwitchWallet(int64(id))
+		err := _mgr.SwitchWallet(i)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -500,24 +483,22 @@ func getMnemonic(this js.Value, p []js.Value) any {
 	if len(p) < 2 {
 		return createJsRet(nil, -1, "Expected 2 parameters")
 	}
-	if p[0].Type() != js.TypeNumber {
-		return createJsRet(nil, -1, "Id parameter should be a number")
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "Id parameter should be a string")
 	}
-	id := p[0].Int()
+	id := p[0].String()
+	i, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
 
 	if p[1].Type() != js.TypeString {
 		return createJsRet(nil, -1, "password should be a string")
 	}
 	password := p[1].String()
 
-	// mnemonic := _mgr.GetMnemonic(int64(id), password)
-	// data := map[string]any{
-	// 	"mnemonic": mnemonic,
-	// }
-	// return createJsRet(data, 0, "ok")
-
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		mnemonic := _mgr.GetMnemonic(int64(id), password)
+		mnemonic := _mgr.GetMnemonic(i, password)
 		return map[string]any{
 			"mnemonic": mnemonic,
 		}, 0, "ok"
