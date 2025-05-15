@@ -43,14 +43,14 @@
           <!-- 第一行：资产名称和数量 -->
           <div class="flex justify-between items-center">
             <div class="font-medium text-zinc-400">{{ asset.label.toLocaleUpperCase() }}</div>
-            <div class="text-xs font-medium text-zinc-200">
+            <div class="text-sm font-semibold text-zinc-300">
               {{ formatAmount(asset) }}
             </div>
           </div>
 
           <!-- 第二行：操作按钮 -->
           <div class="flex justify-end gap-2 mt-2">
-            <!-- Lightning 模式按钮 -->
+            <!-- Lightning 模式按钮 -->n
             <template v-if="mode === 'lightning'">
               <Button size="sm" variant="outline" @click="handleSend(asset)"
                 class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">

@@ -3,32 +3,25 @@
     <!-- Asset Type Tabs -->
     <div class="flex justify-between border-b border-zinc-700  mb-4">
       <nav class="flex -mb-px gap-4">
-        <button
-          v-for="(type, index) in assetTypes"
-          :key="index"
-          @click="selectedType = type"
-          class="pb-2 px-1 font-mono font-semibold text-sm relative"
-          :class="{
+        <button v-for="(type, index) in assetTypes" :key="index" @click="selectedType = type"
+          class="pb-2 px-1 font-mono font-semibold text-sm relative" :class="{
             'text-foreground/90': selectedType === type,
             'text-muted-foreground': selectedType !== type
-          }"
-        >
+          }">
           {{ $t(`l2AssetsTabs.assetType.${type}`) }}
-          <div
-            class="absolute bottom-0 left-0 right-0 h-0.5 transition-all"
-            :class="{
-              'bg-gradient-to-r from-primary to-primary/50 scale-x-100': selectedType === type,
-              'scale-x-0': selectedType !== type
-            }"
-          />
+          <div class="absolute bottom-0 left-0 right-0 h-0.5 transition-all" :class="{
+            'bg-gradient-to-r from-primary to-primary/50 scale-x-100': selectedType === type,
+            'scale-x-0': selectedType !== type
+          }" />
         </button>
       </nav>
       <div class="flex items-center">
         <Button size="icon" variant="ghost" @click="handlerRefresh">
-          <Icon icon="lets-icons:refresh-2-light" class="text-zinc-300 mb-[1px]"/>
+          <Icon icon="lets-icons:refresh-2-light" class="text-zinc-300 mb-[1px]" />
         </Button>
         <Button size="icon" variant="ghost" as-child>
-          <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary" :title="$t('l2AssetsTabs.viewTradeHistory')">
+          <a :href="mempoolUrl" target="_blank" class="mb-[1px] hover:text-primary"
+            :title="$t('l2AssetsTabs.viewTradeHistory')">
             <Icon icon="quill:link" class="text-zinc-400 hover:text-primary/90" />
           </a>
         </Button>
@@ -38,7 +31,7 @@
     <!-- Asset Lists -->
     <div class="space-y-2">
       <div v-for="asset in filteredAssets" :key="asset.id"
-        class="flex justify-left p-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors">
+        class="flex justify-left pl-1 pr-3 py-3 rounded-lg bg-muted border hover:border-primary/40 transition-colors">
         <!-- 圆形背景 + 居中 Icon -->
         <div
           class="w-12 h-10 mt-3 flex items-center justify-center rounded-full bg-zinc-700 text-zinc-200 font-bold text-lg">
@@ -50,60 +43,44 @@
           <!-- 第一行：资产名称和数量 -->
           <div class="flex justify-between items-center">
             <div class="font-medium text-zinc-400">{{ asset.label.toLocaleUpperCase() }}</div>
-            <div class="text-xs font-medium text-zinc-200">
+            <div class="text-sm font-semibold text-zinc-300">
               {{ formatAmount(asset) }}
             </div>
           </div>
 
           <div class="flex justify-end gap-2 mt-2">
-          <!-- Lightning 模式按钮 -->
-          <template v-if="mode === 'lightning'">
-            <Button
-              size="sm"
-              variant="outline"
-              class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
-              @click="$emit('send', asset)"
-            >
-              <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
-              {{ $t('l2AssetsTabs.send') }}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
-              @click="$emit('lock', asset)"
-            >
-              <Icon icon="lucide:lock" class="w-4 h-4 mr-1" />
-              {{ $t('l2AssetsTabs.lock') }}
-            </Button>
-          </template>
+            <!-- Lightning 模式按钮 -->
+            <template v-if="mode === 'lightning'">
+              <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+                @click="$emit('send', asset)">
+                <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
+                {{ $t('l2AssetsTabs.send') }}
+              </Button>
+              <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+                @click="$emit('lock', asset)">
+                <Icon icon="lucide:lock" class="w-4 h-4 mr-1" />
+                {{ $t('l2AssetsTabs.lock') }}
+              </Button>
+            </template>
 
-          <!-- Poolswap 模式按钮 -->
-          <template v-else>
-            <Button
-              size="sm"
-              variant="outline"
-              class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
-              @click="$emit('send', asset)"
-            >
-              <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
-              {{ $t('l2AssetsTabs.send') }}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
-              @click="$emit('withdraw', asset)"
-            >
-              <Icon icon="lucide:arrow-up-right" class="w-4 h-4 mr-1" />
-              {{ $t('l2AssetsTabs.withdraw') }}
-            </Button>
-          </template>
+            <!-- Poolswap 模式按钮 -->
+            <template v-else>
+              <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+                @click="$emit('send', asset)">
+                <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
+                {{ $t('l2AssetsTabs.send') }}
+              </Button>
+              <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+                @click="$emit('withdraw', asset)">
+                <Icon icon="lucide:arrow-up-right" class="w-4 h-4 mr-1" />
+                {{ $t('l2AssetsTabs.withdraw') }}
+              </Button>
+            </template>
+          </div>
         </div>
       </div>
-      </div>
-      </div>
     </div>
+  </div>
 
 </template>
 
