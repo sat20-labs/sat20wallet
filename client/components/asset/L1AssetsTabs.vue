@@ -50,7 +50,7 @@
 
           <!-- 第二行：操作按钮 -->
           <div class="flex justify-end gap-2 mt-2">
-            <!-- Lightning 模式按钮 -->n
+            <!-- Lightning 模式按钮 -->
             <template v-if="mode === 'lightning'">
               <Button size="sm" variant="outline" @click="handleSend(asset)"
                 class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
