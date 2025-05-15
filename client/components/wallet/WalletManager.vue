@@ -19,10 +19,10 @@
           <div class="space-y-2">
             <div v-for="wallet in wallets" :key="wallet.id"
               class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
-              :class="{ 'border-primary/50': Number(wallet.id) === currentWalletId }">
+              :class="{ 'border-primary/50': wallet.id === currentWalletId }">
               <div class="flex items-center gap-3">
                 <Button variant="ghost" size="icon" class="w-10 h-10 p-0 rounded-full overflow-hidden"
-                  @click="showAvatarDialog(wallet)" v-if="Number(wallet.id) === currentWalletId">
+                  @click="showAvatarDialog(wallet)" v-if="wallet.id === currentWalletId">
                   <img v-if="wallet.avatar" :src="wallet.avatar" :alt="wallet.name"
                     class="w-full h-full object-cover" />
                   <div v-else class="w-full h-full flex items-center justify-center bg-muted/80">
@@ -39,7 +39,7 @@
                 <div>
                   <div class="font-medium flex items-center gap-2 text-white/60">
                     {{ wallet.name }}
-                    <Button v-if="Number(wallet.id) === currentWalletId" variant="ghost" size="icon" class="h-2 w-2"
+                    <Button v-if="wallet.id === currentWalletId" variant="ghost" size="icon" class="h-2 w-2"
                       @click="showEditNameDialog(wallet)">
                       <Icon icon="lucide:pencil" class="w-2 h-2" />
                     </Button>
@@ -47,14 +47,14 @@
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <Button v-if="Number(wallet.id) !== currentWalletId" variant="outline" size="sm"
+                <Button v-if="wallet.id !== currentWalletId" variant="outline" size="sm"
                   @click="selectWallet(wallet)">
                   {{ $t('walletManager.switch') }}
                 </Button>
                 <Button v-else variant="outline" size="sm" disabled>
                   {{ $t('walletManager.current') }}
                 </Button>
-                <Button v-if="Number(wallet.id) !== currentWalletId" variant="ghost" size="icon"
+                <Button v-if="wallet.id !== currentWalletId" variant="ghost" size="icon"
                   class="text-destructive hover:text-destructive" @click="confirmDeleteWallet(wallet)">
                   <Icon icon="lucide:trash-2" class="w-4 h-4" />
                 </Button>
@@ -239,6 +239,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/toast/use-toast'
 import { useWalletStore } from '@/store'
 import { WalletData } from '@/types'
+import { Message } from '@/types/message'
+import { sendAccountsChangedEvent } from '@/lib/utils'
 
 
 const router = useRouter()
@@ -324,6 +326,8 @@ const deleteWallet = async () => {
     })
     isDeleteDialogOpen.value = false
     walletToDelete.value = null
+    // 发送 accountsChanged 事件（封装函数）
+    await sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
     toast({
       variant: 'destructive',
@@ -361,6 +365,8 @@ const createWallet = async () => {
       title: 'Success',
       description: 'Wallet created successfully'
     })
+    // 发送 accountsChanged 事件（封装函数）
+    await sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
     toast({
       variant: 'destructive',
@@ -397,6 +403,8 @@ const importWallet = async () => {
       title: 'Success',
       description: 'Wallet imported successfully'
     })
+    // 发送 accountsChanged 事件（封装函数）
+    await sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
     toast({
       variant: 'destructive',

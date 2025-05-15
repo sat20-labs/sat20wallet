@@ -5,7 +5,7 @@ interface WalletState {
   env: 'dev' | 'test' | 'prod'
   hasWallet: boolean
   locked: boolean
-  walletId: number
+  walletId: string
   accountIndex: number
   address: string | null
   isConnected: boolean
@@ -31,7 +31,7 @@ const defaultState: WalletState = {
   password: null,
   network: Network.LIVENET,
   chain: Chain.BTC,
-  walletId: 0,
+  walletId: '',
   accountIndex: 0,
   balance: { confirmed: 0, unconfirmed: 0, total: 0 },
   pubkey: null,

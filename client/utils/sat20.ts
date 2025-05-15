@@ -29,7 +29,7 @@ class WalletManager {
   async createWallet(
     password: string
   ): Promise<
-    [Error | undefined, { walletId: number; mnemonic: string } | undefined]
+    [Error | undefined, { walletId: string; mnemonic: string } | undefined]
   > {
     return this._handleRequest('createWallet', password.toString())
   }
@@ -37,7 +37,7 @@ class WalletManager {
   async importWallet(
     mnemonic: string,
     password: string
-  ): Promise<[Error | undefined, { walletId: number } | undefined]> {
+  ): Promise<[Error | undefined, { walletId: string } | undefined]> {
     return this._handleRequest('importWallet', mnemonic, password.toString())
   }
 
@@ -54,7 +54,7 @@ class WalletManager {
   }
 
   async switchWallet(
-    id: number
+    id: string
   ): Promise<[Error | undefined, void | undefined]> {
     return this._handleRequest('switchWallet', id)
   }

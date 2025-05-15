@@ -20,7 +20,7 @@ export interface WalletAccount {
 }
 
 export interface WalletData {
-  id: number
+  id: string
   name: string
   avatar?: string
   accounts: WalletAccount[]

@@ -133,7 +133,7 @@ class SatsnetStp {
     )
   }
   async switchWallet(
-    id: number
+    id: string
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('switchWallet', id)
   }

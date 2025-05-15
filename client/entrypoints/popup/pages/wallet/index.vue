@@ -65,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
 import { hideAddress } from '~/utils'
@@ -125,7 +125,7 @@ const showAddress = computed(() => {
   } else if (selectedChainLabel.value === 'satoshinet') {
     return address.value
   }
-  return '' // 默认返回空字符串
+  return address.value // 默认返回空字符串
 })
 
 const mempoolUrl = computed(() => {
@@ -149,10 +149,14 @@ const mempoolUrl = computed(() => {
       env: env.value,
     })
   }
-  return '' // 默认返回空字符串，防止未匹配的情况
+return '' // 默认返回空字符串，防止未匹配的情况
 })
 
-
+watch(() => address.value, (newVal, oldVal) => {
+  console.log('new_addresschange', newVal, oldVal)
+}, {
+  immediate: true,
+})
 const l1Assets = computed(() => {
   switch (selectedType.value) {
     case 'BTC':
@@ -190,6 +194,7 @@ const selectedChainLabel = computed(() => {
   //console.log('父组件 selectedItem:', selectedItem)
   return selectedItem ? selectedItem.label.toLowerCase() : 'unknown' // 默认值为 'unknown'
 })
+
 
 // 路由和工具
 const router = useRouter()

@@ -539,6 +539,12 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener(
     async (message: any, sender, sendResponse) => {
       const { type, action, metadata } = message
+      if (type === Message.MessageType.EVENT) {
+        if (portMap.content) {
+          portMap.content.postMessage(message)
+        }
+        return true
+      }
       if (
         type === Message.MessageType.REQUEST &&
         action === Message.MessageAction.GET_APPROVE_DATA &&

@@ -27,6 +27,9 @@ export const useL2Assets = () => {
   const assetsStore = useL2Store()
   const walletStore = useWalletStore()
   const { address, network, chain } = storeToRefs(walletStore)
+  console.log('address.value', address.value)
+  console.log('network.value', network.value)
+  console.log('chain.value', chain.value)
 
   const queryClient = useQueryClient()
 
@@ -136,6 +139,10 @@ export const useL2Assets = () => {
   watch(
     () => summaryQuery.data.value,
     async (newData) => {
+      console.log('newData address', address.value)
+      console.log('newData network', network.value)
+      console.log('newData chain', chain.value)
+      console.log('newData', newData)
       if (newData) {
         allAssetList.value = []
         console.log('newData', newData.data)
@@ -148,19 +155,11 @@ export const useL2Assets = () => {
     },
     {
       deep: true,
+      immediate: true,
     }
   )
 
-  watch(allAssetList, updateStoreAssets, { deep: true })
-
-  watch([address, network, chain], () => {
-    console.log('address.value', address.value)
-    console.log('network.value', network.value)
-    console.log('chain.value', chain.value)
-    if (address.value && network.value && chain.value) {
-      summaryQuery.refetch()
-    }
-  })
+  watch(allAssetList, updateStoreAssets, { deep: true, immediate: true })
 
   /**
    * 刷新所有资产数据
@@ -180,11 +179,6 @@ export const useL2Assets = () => {
       refreshUtxos = true,
       clearCache = true,
     } = options
-    console.log('refreshL2Assets', options)
-    console.log('resetState', resetState)
-    console.log('refreshSummary', refreshSummary)
-    console.log('refreshUtxos', refreshUtxos)
-    console.log('clearCache', clearCache)
 
     // 清除缓存
     if (clearCache) {
@@ -203,29 +197,12 @@ export const useL2Assets = () => {
         },
       })
     }
-
-    // 重置状态
-    // if (resetState) {
-    //   allAssetList.value = []
-    // }
-
-    // 创建一个 Promise 数组来收集所有需要等待的请求
     const refreshPromises = []
 
     // 刷新摘要数据
     if (refreshSummary) {
       const summaryPromise = summaryQuery.refetch()
       refreshPromises.push(summaryPromise)
-
-      // 如果需要刷新 UTXO，等待摘要数据加载完成后处理
-      // if (refreshUtxos) {
-      //   summaryPromise.then(async (result) => {
-      //     if (result.data) {
-      //       await parseAssetSummary()
-      //       await processAllUtxos(allAssetList.value.map((item) => item.key))
-      //     }
-      //   })
-      // }
     }
 
     // 等待所有刷新操作完成
