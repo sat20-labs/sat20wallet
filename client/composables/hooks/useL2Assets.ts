@@ -27,6 +27,9 @@ export const useL2Assets = () => {
   const assetsStore = useL2Store()
   const walletStore = useWalletStore()
   const { address, network, chain } = storeToRefs(walletStore)
+  console.log('address.value', address.value)
+  console.log('network.value', network.value)
+  console.log('chain.value', chain.value)
 
   const queryClient = useQueryClient()
 
@@ -154,12 +157,11 @@ export const useL2Assets = () => {
   watch(allAssetList, updateStoreAssets, { deep: true })
 
   watch([address, network, chain], () => {
-    console.log('address.value', address.value)
-    console.log('network.value', network.value)
-    console.log('chain.value', chain.value)
     if (address.value && network.value && chain.value) {
       summaryQuery.refetch()
     }
+  }, {
+    immediate: true,
   })
 
   /**

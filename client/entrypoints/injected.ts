@@ -20,6 +20,8 @@ export default defineUnlistedScript(() => {
 
     constructor() {
       window.addEventListener('message', (event) => {
+        console.log('injected message', event.data);
+        
         const { type, data, event: eventName, metadata = {} } = event.data || {}
         const { to } = metadata
         if (to !== Message.MessageTo.INJECTED) return
@@ -27,6 +29,8 @@ export default defineUnlistedScript(() => {
         // Handle events
         if (type === Message.MessageType.EVENT && eventName) {
           const listeners = this.eventListeners[eventName]
+          console.log('listeners', listeners);
+          
           if (listeners) {
             listeners.forEach((handler) => handler(data))
           }

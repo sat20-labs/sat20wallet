@@ -29,8 +29,11 @@ export const useWalletStore = defineStore('wallet', () => {
   const accounts = computed(() => wallet.value?.accounts)
   const account = computed(() => wallet.value?.accounts.find(a => a.index === accountIndex.value))
   const setAddress = async (value: string) => {
-    await walletStorage.setValue('address', value)
+    console.log('old address', address.value);
+
     address.value = value
+    console.log('setAddress', value)
+    await walletStorage.setValue('address', value)
   }
 
   const setWalletId = async (value: number) => {
@@ -84,7 +87,7 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const setHasWallet = async (value: boolean) => {
-  await walletStorage.setValue('hasWallet', value)
+    await walletStorage.setValue('hasWallet', value)
     hasWallet.value = value
   }
 
@@ -128,9 +131,9 @@ export const useWalletStore = defineStore('wallet', () => {
       const { address } = addressRes
       await setAddress(address)
       await setPublickey(pubkeyRes.pubKey)
-
-      const walletLen = wallets.value.length
-      wallets.value.push({
+      const _wallets = JSON.parse(JSON.stringify(walletStorage.getValue('wallets')))
+      const walletLen = _wallets.length
+      _wallets.push({
         id: walletId,
         name: `Wallet ${walletLen + 1}`,
         accounts: [{
@@ -140,10 +143,9 @@ export const useWalletStore = defineStore('wallet', () => {
           pubKey: pubkeyRes.pubKey
         }]
       })
+      wallets.value = _wallets
+      await walletStorage.setValue('wallets', _wallets)
     }
-    await walletStorage.setValue('wallets', toRaw(wallets.value))
-    console.log('createWallet', await storage.getItem('local:wallet_wallets'));
-
     return [undefined, _mnemonic]
   }
 
@@ -170,13 +172,13 @@ export const useWalletStore = defineStore('wallet', () => {
     const [_j, pubkeyRes] = await walletManager.getWalletPubkey(
       accountIndex.value
     )
-
+    const _wallets = JSON.parse(JSON.stringify(walletStorage.getValue('wallets')))
     if (addressRes && pubkeyRes) {
       const { address } = addressRes
       await setAddress(address)
       await setPublickey(pubkeyRes.pubKey)
-      const walletLen = wallets.value.length
-      wallets.value.push({
+      const walletLen = _wallets.length
+      _wallets.push({
         id: walletId,
         name: `Wallet ${walletLen + 1}`,
         accounts: [{
@@ -187,7 +189,11 @@ export const useWalletStore = defineStore('wallet', () => {
         }]
       })
     }
-    await walletStorage.setValue('wallets', toRaw(wallets.value))
+    wallets.value = _wallets
+    await walletStorage.setValue('wallets', _wallets)
+    console.log('importWallet', _wallets);
+    console.log('wallet id', walletId);
+
     return [undefined, mnemonic]
   }
 
@@ -211,7 +217,7 @@ export const useWalletStore = defineStore('wallet', () => {
     console.log('unlockWallet', err, result)
     if (!err && result) {
       const { walletId: unlockedWalletId } = result
-      await setWalletId(unlockedWalletId)
+      // await setWalletId(unlockedWalletId)
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
@@ -278,7 +284,6 @@ export const useWalletStore = defineStore('wallet', () => {
     await satsnetStp.switchAccount(accountId)
     const [_, addressRes] = await walletManager.getWalletAddress(accountId)
     const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
-
     if (addressRes && pubkeyRes) {
       const newAccount: WalletAccount = {
         index: accountId,
@@ -286,10 +291,19 @@ export const useWalletStore = defineStore('wallet', () => {
         address: addressRes.address,
         pubKey: pubkeyRes.pubKey
       }
-      wallet.value?.accounts.push(newAccount)
-      await walletStorage.setValue('wallets', toRaw(wallets.value))
+      const _wallets = JSON.parse(JSON.stringify(walletStorage.getValue('wallets')))
+      const _wallet = _wallets.find((w: any) => w.id === walletId.value)
+      _wallet.accounts.push(newAccount)
+      wallets.value = _wallets
+      await walletStorage.setValue('wallets', _wallets)
       await setAccountIndex(accountId)
+      console.log(addressRes.address);
+
       await setAddress(addressRes.address)
+      console.log('importWallet', _wallets);
+      console.log('wallet id', walletId);
+      console.log('wallet id', await walletStorage.getValue('walletId'));
+      
       await setPublickey(pubkeyRes.pubKey)
     }
   }
@@ -325,10 +339,16 @@ export const useWalletStore = defineStore('wallet', () => {
       await walletStorage.setValue('wallets', toRaw(wallets.value))
       const prevAccount = wallet.value?.accounts[index - 1]
       if (prevAccount) {
-        await setAccountIndex(prevAccount.index)
+        await switchToAccount(prevAccount.index)
       }
     }
   }
+  console.log('wallets', wallets);
+  console.log('wallet', wallet);
+  console.log('accounts', accounts);
+  console.log('account', account);
+  console.log('walletid', walletId);
+
 
   return {
     address,

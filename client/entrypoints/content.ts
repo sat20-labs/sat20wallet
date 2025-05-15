@@ -84,9 +84,13 @@ export default defineContentScript({
             }
 
             console.log('Content 收到 BACKGROUND 消息:', event)
-            const { metadata = {} } = event
+            const { metadata = {}, type } = event
             const { to, from } = metadata
-            
+            if (type === Message.MessageType.EVENT) {
+              window.postMessage({ ...event, metadata: { ...metadata } }, '*')
+              return
+            }
+            // 2. 兼容原有：from BACKGROUND 且 to INJECTED
             if (from === Message.MessageFrom.BACKGROUND && to === Message.MessageTo.INJECTED) {
               channel?.postMessage(event)
             }

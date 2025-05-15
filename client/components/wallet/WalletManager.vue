@@ -239,6 +239,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/toast/use-toast'
 import { useWalletStore } from '@/store'
 import { WalletData } from '@/types'
+import { Message } from '@/types/message'
+import { sendAccountsChangedEvent } from '@/lib/utils'
 
 
 const router = useRouter()
@@ -324,6 +326,8 @@ const deleteWallet = async () => {
     })
     isDeleteDialogOpen.value = false
     walletToDelete.value = null
+    // 发送 accountsChanged 事件（封装函数）
+    await sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
     toast({
       variant: 'destructive',
@@ -361,6 +365,8 @@ const createWallet = async () => {
       title: 'Success',
       description: 'Wallet created successfully'
     })
+    // 发送 accountsChanged 事件（封装函数）
+    await sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
     toast({
       variant: 'destructive',
@@ -397,6 +403,8 @@ const importWallet = async () => {
       title: 'Success',
       description: 'Wallet imported successfully'
     })
+    // 发送 accountsChanged 事件（封装函数）
+    await sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
     toast({
       variant: 'destructive',

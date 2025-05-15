@@ -1,31 +1,18 @@
 <template>
-  <div class="layout-container min-h-screen flex flex-col">
-    <!-- Header -->
-    <header class="flex-none z-40 flex items-center justify-between p-4 border-b bg-transparent">
-      <div class="flex items-center gap-2">
-        <Button variant="ghost" size="icon" @click="router.back()">
-          <Icon icon="lucide:arrow-left" class="w-5 h-5" />
-        </Button>
-        <h1 class="text-lg font-semibold">{{ $t('subWalletManager.title') }}</h1>
-      </div>
-    </header>
+  <LayoutSecond :title="$t('subWalletManager.title')" :back="true">
 
-    <!-- Scrollable Content -->
     <main class="flex-1 overflow-y-auto">
       <div class="container max-w-2xl mx-auto p-4 space-y-6">
         <div class="space-y-4">
           <div class="text-sm font-medium text-muted-foreground">
             {{ $t('subWalletManager.currentAccount') }}
           </div>
-          
+
           <!-- Sub-wallet List -->
           <div class="space-y-2">
-            <div
-              v-for="account in accounts"
-              :key="account.index"
+            <div v-for="account in accounts" :key="account.index"
               class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
-              :class="{ 'border-primary/50': account.index === accountIndex }"
-            >
+              :class="{ 'border-primary/50': account.index === accountIndex }">
               <div class="flex items-center gap-3">
                 <div class="w-10 h-10 rounded-full overflow-hidden bg-muted">
                   <div class="w-full h-full flex items-center justify-center">
@@ -35,13 +22,8 @@
                 <div>
                   <div class="font-medium flex items-center gap-2 text-white/60">
                     {{ account.name }}
-                    <Button
-                      v-if="account.index === accountIndex"
-                      variant="ghost"
-                      size="icon"
-                      class="h-2 w-2"
-                      @click="showEditNameDialog(account)"
-                    >
+                    <Button v-if="account.index === accountIndex" variant="ghost" size="icon" class="h-2 w-2"
+                      @click="showEditNameDialog(account)">
                       <Icon icon="lucide:pencil" class="w-2 h-2" />
                     </Button>
                   </div>
@@ -49,29 +31,15 @@
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <Button
-                  v-if="account.index !== accountIndex"
-                  variant="outline"
-                  size="sm"
-                  @click="selectAccount(account)"
-                >
+                <Button v-if="account.index !== accountIndex" variant="outline" size="sm"
+                  @click="selectAccount(account)">
                   {{ $t('subWalletManager.switch') }}
                 </Button>
-                <Button
-                  v-else
-                  variant="outline"
-                  size="sm"
-                  disabled
-                >
+                <Button v-else variant="outline" size="sm" disabled>
                   {{ $t('subWalletManager.current') }}
                 </Button>
-                <Button
-                  v-if="account.index !== accountIndex"
-                  variant="ghost"
-                  size="icon"
-                  class="text-destructive hover:text-destructive"
-                  @click="confirmDeleteAccount(account)"
-                >
+                <Button v-if="account.index !== accountIndex" variant="ghost" size="icon"
+                  class="text-destructive hover:text-destructive" @click="confirmDeleteAccount(account)">
                   <Icon icon="lucide:trash-2" class="w-4 h-4" />
                 </Button>
               </div>
@@ -85,11 +53,7 @@
     <footer class="flex-none z-40 border-t">
       <div class="container max-w-2xl mx-auto p-4">
         <div class="flex gap-2">
-          <Button
-            class="flex-1 gap-2 h-12 flex items-center w-full"
-            variant="default"
-            @click="showCreateAccountDialog"
-          >
+          <Button class="flex-1 gap-2 h-12 flex items-center w-full" variant="default" @click="showCreateAccountDialog">
             <Icon icon="lucide:plus-circle" class="w-6 h-6 flex-shrink-0" />
             {{ $t('subWalletManager.createNewAccount') }}
           </Button>
@@ -110,11 +74,7 @@
         <div class="space-y-4">
           <div class="space-y-2">
             <Label for="AccountName">{{ $t('subWalletManager.accountName') }}</Label>
-            <Input
-              id="AccountName"
-              v-model="editingName"
-              :placeholder="$t('subWalletManager.enterAccountName')"
-            />
+            <Input id="AccountName" v-model="editingName" :placeholder="$t('subWalletManager.enterAccountName')" />
           </div>
         </div>
         <DialogFooter>
@@ -139,11 +99,7 @@
           <div class="space-y-4">
             <div class="space-y-2">
               <Label for="AccountName">{{ $t('subWalletManager.name') }}</Label>
-              <Input
-                id="AccountName"
-                v-model="newAccountName"
-                :placeholder="$t('subWalletManager.enterAccountName')"
-              />
+              <Input id="AccountName" v-model="newAccountName" :placeholder="$t('subWalletManager.enterAccountName')" />
             </div>
           </div>
           <DialogFooter>
@@ -178,18 +134,13 @@
           <Button variant="secondary" @click="isDeleteDialogOpen = false" class="h-12 mb-4">
             {{ $t('subWalletManager.cancel') }}
           </Button>
-          <Button 
-            variant="default" 
-            @click="deleteAccount"
-            :disabled="isDeleting"
-            class="h-12 mb-4"
-          >
+          <Button variant="default" @click="deleteAccount" :disabled="isDeleting" class="h-12 mb-4">
             {{ $t('subWalletManager.delete') }}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  </div>
+  </LayoutSecond>
 </template>
 
 <script setup lang="ts">
@@ -212,7 +163,9 @@ import { useToast } from '@/components/ui/toast/use-toast'
 import { useWalletStore } from '@/store/wallet'
 import type { WalletAccount } from '@/types'
 import { hideAddress } from '@/utils'
-
+import LayoutSecond from '@/components/layout/LayoutSecond.vue'
+import { Message } from '@/types/message'
+import { sendAccountsChangedEvent } from '@/lib/utils'
 const router = useRouter()
 const { toast } = useToast()
 const walletStore = useWalletStore()
@@ -249,12 +202,13 @@ async function saveAccountName() {
   try {
     isSaving.value = true
     await walletStore.updateAccountName(accountToEdit.value.index, editingName.value)
-    
+
     toast({
       title: 'Success',
       description: 'Account name updated successfully',
     })
     isEditNameDialogOpen.value = false
+    // ... existing code ...
   } catch (error) {
     toast({
       title: 'Error',
@@ -282,12 +236,14 @@ async function createAccount() {
     const newAccountId = accounts.value?.length || 0
     const accountName = newAccountName.value.trim() || `Account ${newAccountId + 1}`
     await walletStore.addAccount(accountName, newAccountId)
-    
+
     toast({
       title: 'Success',
       description: 'Account created successfully',
     })
     isCreateAccountDialogOpen.value = false
+    // 发送 accountsChanged 事件（封装函数）
+    await sendAccountsChangedEvent(accounts.value)
   } catch (error) {
     toast({
       title: 'Error',
@@ -310,12 +266,14 @@ async function deleteAccount() {
   try {
     isDeleting.value = true
     await walletStore.deleteAccount(accountToDelete.value.index)
-    
+
     toast({
       title: 'Success',
       description: 'Account deleted successfully',
     })
     isDeleteDialogOpen.value = false
+    // 发送 accountsChanged 事件（封装函数）
+    await sendAccountsChangedEvent(accounts.value)
   } catch (error) {
     toast({
       title: 'Error',
@@ -335,6 +293,8 @@ async function selectAccount(account: WalletAccount) {
       title: 'Success',
       description: 'Account switched successfully',
     })
+    // 发送 accountsChanged 事件（封装函数）
+    await sendAccountsChangedEvent(accounts.value)
   } catch (error) {
     toast({
       title: 'Error',
