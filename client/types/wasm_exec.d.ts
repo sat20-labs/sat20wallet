@@ -62,7 +62,7 @@ declare interface WalletManager {
 
   // Get wallet mnemonic
   getMnemonicee(
-    walletId: number,
+    walletId: string,
     password: string
   ): SatsnetResponse<{ mnemonic: string }>
 
@@ -82,16 +82,16 @@ declare interface WalletManager {
   // Creates a new wallet with a password and returns the wallet ID and mnemonic.
   createWallet(
     password: string
-  ): Promise<SatsnetResponse<{ walletId: number; mnemonic: string }>>
+  ): Promise<SatsnetResponse<{ walletId: string; mnemonic: string }>>
 
   // Imports an existing wallet using a mnemonic and password, and returns the wallet ID.
   importWallet(
     mnemonic: string,
     password: string
-  ): Promise<SatsnetResponse<{ walletId: number }>>
+  ): Promise<SatsnetResponse<{ walletId: string }>>
 
   // Unlocks an existing wallet using a password and returns the wallet ID.
-  unlockWallet(password: string): Promise<SatsnetResponse<{ walletId: number }>>
+  unlockWallet(password: string): Promise<SatsnetResponse<{ walletId: string }>>
 
   // Returns a map of all wallet IDs to the number of accounts they contain.
   getAllWallets(): Promise<SatsnetResponse<Map<number, number>>>

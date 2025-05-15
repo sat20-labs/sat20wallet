@@ -36,7 +36,7 @@ export const useWalletStore = defineStore('wallet', () => {
     await walletStorage.setValue('address', value)
   }
 
-  const setWalletId = async (value: number) => {
+  const setWalletId = async (value: string) => {
     await walletStorage.setValue('walletId', value)
     walletId.value = value
   }
@@ -94,7 +94,7 @@ export const useWalletStore = defineStore('wallet', () => {
   const setFeeRate = (value: number) => {
     feeRate.value = value
   }
-  const switchWallet = async (walletId: number) => {
+  const switchWallet = async (walletId: string) => {
     await walletManager.switchWallet(walletId)
     await satsnetStp.switchWallet(walletId)
     const currentAccount = wallets.value.find(w => w.id === walletId)?.accounts[0];
@@ -228,7 +228,7 @@ export const useWalletStore = defineStore('wallet', () => {
     return [err, result]
   }
 
-  const deleteWallet = async (walletIdToDelete: number) => {
+  const deleteWallet = async (walletIdToDelete: string) => {
     try {
       const walletIndexToDelete = wallets.value.findIndex(w => w.id === walletIdToDelete);
 
@@ -247,7 +247,7 @@ export const useWalletStore = defineStore('wallet', () => {
         await setHasWallet(false);
         await setAddress('');
         await setPublickey('');
-        await setWalletId(0);
+        await setWalletId('');
         await setAccountIndex(0);
         await setPassword('');
         await setNetwork(Network.TESTNET);
