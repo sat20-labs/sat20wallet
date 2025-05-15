@@ -10,7 +10,7 @@
 
       <!-- TranscendingMode 图标按钮 -->
       <Button size="xs" variant="ghost" @click="showTranscendingMode = true" 
-      class="flex justify-center items-center *:w-7 h-7  text-foreground/80 bg-zinc-800 border border-zinc-800 rounded-lg">
+      class="flex justify-center items-center *:w-7 h-7  text-foreground/80 bg-zinc-800 border border-zinc-800 rounded-md">
         <Icon :icon="currentIcon" class="w-4 h-4" />
         <ChevronDown class="h-4 w-4" />
       </Button>

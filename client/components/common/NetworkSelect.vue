@@ -1,12 +1,13 @@
 <template>
   <div>
-    <Button size="xs" variant="outline" @click="isOpen = true" class="rounded-full">
-      <Icon :icon="showNetwork?.icon" :class="showNetwork?.iconColor" />{{ showNetwork?.name }}
+    <Button size="xs" variant="outline" @click="isOpen = true" class="px-2 rounded-md">
+      <!-- <Icon :icon="showNetwork?.icon" :class="showNetwork?.iconColor" />{{ showNetwork?.name }} -->
+      <Icon :icon="showNetwork?.icon" :class="showNetwork?.iconColor" class="w-5 h-5" />
       <ChevronDown class="h-4 w-4" />
     </Button>
 
     <Dialog v-model:open="isOpen">
-      <DialogContent class="">
+      <DialogContent class="w-[330px]">
         <DialogHeader>
           <DialogTitle class="text-gray-300 text-xl font-semibold">{{ $t('networkSelect.selectNetwork') }}</DialogTitle>
         </DialogHeader>
