@@ -321,6 +321,31 @@ export default defineBackground(() => {
               resData = reqRes;
             }
             break;
+          // --- 合约相关方法 ---
+          case Message.MessageAction.GET_SUPPORTED_CONTRACTS:
+            [reqErr, reqRes] = await service.getSupportedContracts();
+            if (reqErr) { errData = { code: -60, message: reqErr.message }; } else { resData = reqRes; }
+            break;
+          case Message.MessageAction.GET_DEPLOYED_CONTRACTS_IN_SERVER:
+            [reqErr, reqRes] = await service.getDeployedContractsInServer();
+            if (reqErr) { errData = { code: -61, message: reqErr.message }; } else { resData = reqRes; }
+            break;
+          case Message.MessageAction.GET_DEPLOYED_CONTRACT_STATUS:
+            [reqErr, reqRes] = await service.getDeployedContractStatus(data.url);
+            if (reqErr) { errData = { code: -62, message: reqErr.message }; } else { resData = reqRes; }
+            break;
+          case Message.MessageAction.GET_FEE_FOR_DEPLOY_CONTRACT:
+            [reqErr, reqRes] = await service.getFeeForDeployContract(data.templateName, data.content, data.feeRate);
+            if (reqErr) { errData = { code: -63, message: reqErr.message }; } else { resData = reqRes; }
+            break;
+          case Message.MessageAction.GET_PARAM_FOR_INVOKE_CONTRACT:
+            [reqErr, reqRes] = await service.getParamForInvokeContract(data.templateName);
+            if (reqErr) { errData = { code: -64, message: reqErr.message }; } else { resData = reqRes; }
+            break;
+          case Message.MessageAction.GET_FEE_FOR_INVOKE_CONTRACT:
+            [reqErr, reqRes] = await service.getFeeForInvokeContract(data.url, data.invoke);
+            if (reqErr) { errData = { code: -65, message: reqErr.message }; } else { resData = reqRes; }
+            break;
           default:
             console.warn(`Unhandled REQUEST action: ${action}`);
             errData = { code: -32601, message: 'Method not found' }; // Method not found error
@@ -355,6 +380,9 @@ export default defineBackground(() => {
           Message.MessageAction.LOCK_TO_CHANNEL,
           Message.MessageAction.UNLOCK_FROM_CHANNEL,
           Message.MessageAction.BATCH_SEND_ASSETS_SATSNET,
+          // --- 合约相关 ---
+          Message.MessageAction.DEPLOY_CONTRACT_REMOTE,
+          Message.MessageAction.INVOKE_CONTRACT_SATSNET,
         ];
 
         if (REQUIRES_APPROVAL.includes(action)) {

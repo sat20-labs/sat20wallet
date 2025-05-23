@@ -256,6 +256,29 @@ class Service {
   async getTickerInfo(asset: string): Promise<[Error | undefined, any | undefined]> {
     return stp.getTickerInfo(asset);
   }
+
+  // --- 合约相关方法 ---
+  async getSupportedContracts(): Promise<[Error | undefined, { contractContents: any[] } | undefined]> {
+    return stp.getSupportedContracts();
+  }
+  async getDeployedContractsInServer(): Promise<[Error | undefined, { contractURLs: any[] } | undefined]> {
+    return stp.getDeployedContractsInServer();
+  }
+  async getDeployedContractStatus(url: string): Promise<[Error | undefined, { contractStatus: any } | undefined]> {
+    return stp.getDeployedContractStatus(url);
+  }
+  async getFeeForDeployContract(templateName: string, content: string, feeRate: string): Promise<[Error | undefined, { fee: any } | undefined]> {
+    return stp.getFeeForDeployContract(templateName, content, feeRate);
+  }
+  async getParamForInvokeContract(templateName: string): Promise<[Error | undefined, { parameter: any } | undefined]> {
+    return stp.getParamForInvokeContract(templateName);
+  }
+  async getFeeForInvokeContract(url: string, invoke: string): Promise<[Error | undefined, { fee: any } | undefined]> {
+    return stp.getFeeForInvokeContract(url, invoke);
+  }
+  async invokeContract_SatsNet(url: string, invoke: string, feeRate: string): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return stp.invokeContract_SatsNet(url, invoke, feeRate);
+  }
 }
 
 export default new Service()

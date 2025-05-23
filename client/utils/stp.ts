@@ -63,6 +63,16 @@ interface StpWasmModule {
   getTxAssetInfoFromPsbt: (...args: any[]) => Promise<WasmResponse<any>>;
   getTxAssetInfoFromPsbt_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
   getCommitTxAssetInfo: (...args: any[]) => Promise<WasmResponse<any>>;
+  // --- 合约相关方法 ---
+  getSupportedContracts: () => Promise<WasmResponse<{ contractContents: any[] }>>;
+  getDeployedContractsInServer: () => Promise<WasmResponse<{ contractURLs: any[] }>>;
+  getDeployedContractStatus: (url: string) => Promise<WasmResponse<{ contractStatus: any }>>;
+  getFeeForDeployContract: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ fee: any }>>;
+  deployContract_Remote: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
+  deployContract_Local: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
+  getParamForInvokeContract: (templateName: string) => Promise<WasmResponse<{ parameter: any }>>;
+  getFeeForInvokeContract: (url: string, invoke: string) => Promise<WasmResponse<{ fee: any }>>;
+  invokeContract_SatsNet: (url: string, invoke: string, feeRate: string) => Promise<WasmResponse<{ txId: string }>>;
 }
 
 
@@ -523,6 +533,100 @@ class SatsnetStp {
     return this._handleRequest('getCommitTxAssetInfo', channelId)
   }
   // --- End Added Asset Amount Getter Methods ---
+
+  // --- 合约相关方法 ---
+  /** 获取支持的合约模板 */
+  async getSupportedContracts(): Promise<[
+    Error | undefined,
+    { contractContents: any[] } | undefined
+  ]> {
+    return this._handleRequest<{ contractContents: any[] }>('getSupportedContracts')
+  }
+
+  /** 获取服务器已部署的合约 */
+  async getDeployedContractsInServer(): Promise<[
+    Error | undefined,
+    { contractURLs: any[] } | undefined
+  ]> {
+    return this._handleRequest<{ contractURLs: any[] }>('getDeployedContractsInServer')
+  }
+
+  /** 获取已部署合约的状态 */
+  async getDeployedContractStatus(url: string): Promise<[
+    Error | undefined,
+    { contractStatus: any } | undefined
+  ]> {
+    return this._handleRequest<{ contractStatus: any }>('getDeployedContractStatus', url)
+  }
+
+  /** 查询部署合约所需费用 */
+  async getFeeForDeployContract(
+    templateName: string,
+    content: string,
+    feeRate: string
+  ): Promise<[
+    Error | undefined,
+    { fee: any } | undefined
+  ]> {
+    return this._handleRequest<{ fee: any }>('getFeeForDeployContract', templateName, content, feeRate)
+  }
+
+  /** 远程部署合约 */
+  async deployContract_Remote(
+    templateName: string,
+    content: string,
+    feeRate: string
+  ): Promise<[
+    Error | undefined,
+    { txId: string; resvId: string } | undefined
+  ]> {
+    return this._handleRequest<{ txId: string; resvId: string }>('deployContract_Remote', templateName, content, feeRate)
+  }
+
+  /** 本地部署合约 */
+  async deployContract_Local(
+    templateName: string,
+    content: string,
+    feeRate: string
+  ): Promise<[
+    Error | undefined,
+    { txId: string; resvId: string } | undefined
+  ]> {
+    return this._handleRequest<{ txId: string; resvId: string }>('deployContract_Local', templateName, content, feeRate)
+  }
+
+  /** 查询合约调用参数 */
+  async getParamForInvokeContract(
+    templateName: string
+  ): Promise<[
+    Error | undefined,
+    { parameter: any } | undefined
+  ]> {
+    return this._handleRequest<{ parameter: any }>('getParamForInvokeContract', templateName)
+  }
+
+  /** 查询调用合约所需费用 */
+  async getFeeForInvokeContract(
+    url: string,
+    invoke: string
+  ): Promise<[
+    Error | undefined,
+    { fee: any } | undefined
+  ]> {
+    return this._handleRequest<{ fee: any }>('getFeeForInvokeContract', url, invoke)
+  }
+
+  /** 调用合约 */
+  async invokeContract_SatsNet(
+    url: string,
+    invoke: string,
+    feeRate: string
+  ): Promise<[
+    Error | undefined,
+    { txId: string } | undefined
+  ]> {
+    return this._handleRequest<{ txId: string }>('invokeContract_SatsNet', url, invoke, feeRate)
+  }
 }
 
 export default new SatsnetStp()

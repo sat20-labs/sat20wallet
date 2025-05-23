@@ -362,8 +362,6 @@ export default defineUnlistedScript(() => {
       })
     }
 
-
-
     async getUtxos(): Promise<any> {
       return this.send<any>({
         type: Message.MessageType.REQUEST,
@@ -439,6 +437,64 @@ export default defineUnlistedScript(() => {
       });
       this.tickerCache[asset] = result;
       return result;
+    }
+
+    // --- 合约相关方法 ---
+    async getSupportedContracts(): Promise<{ contractContents: any[] }> {
+      return this.send<{ contractContents: any[] }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_SUPPORTED_CONTRACTS,
+      })
+    }
+    async getDeployedContractsInServer(): Promise<{ contractURLs: any[] }> {
+      return this.send<{ contractURLs: any[] }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_DEPLOYED_CONTRACTS_IN_SERVER,
+      })
+    }
+    async getDeployedContractStatus(url: string): Promise<{ contractStatus: any }> {
+      return this.send<{ contractStatus: any }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_DEPLOYED_CONTRACT_STATUS,
+        data: { url },
+      })
+    }
+    async getFeeForDeployContract(templateName: string, content: string, feeRate: string): Promise<{ fee: any }> {
+      return this.send<{ fee: any }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_FEE_FOR_DEPLOY_CONTRACT,
+        data: { templateName, content, feeRate },
+      })
+    }
+    async getParamForInvokeContract(templateName: string): Promise<{ parameter: any }> {
+      return this.send<{ parameter: any }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_PARAM_FOR_INVOKE_CONTRACT,
+        data: { templateName },
+      })
+    }
+    async getFeeForInvokeContract(url: string, invoke: string): Promise<{ fee: any }> {
+      return this.send<{ fee: any }>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_FEE_FOR_INVOKE_CONTRACT,
+        data: { url, invoke },
+      })
+    }
+    // 新增：合约远程部署
+    async deployContract_Remote(templateName: string, content: string, feeRate: string): Promise<{ txId: string; resvId: string }> {
+      return this.send<{ txId: string; resvId: string }>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.DEPLOY_CONTRACT_REMOTE,
+        data: { templateName, content, feeRate },
+      })
+    }
+    // 新增：合约调用（SatsNet）
+    async invokeContract_SatsNet(url: string, invoke: string, feeRate: string): Promise<{ txId: string }> {
+      return this.send<{ txId: string }>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.INVOKE_CONTRACT_SATSNET,
+        data: { url, invoke, feeRate },
+      })
     }
   }
 

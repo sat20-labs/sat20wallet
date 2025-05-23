@@ -351,6 +351,54 @@ interface SatsnetStp {
     assetName: string, amt: string, n: number): Promise<SatsnetResponse<any>>;
   batchSendAssets(destAddr: string,
     assetName: string, amt: string, n: number, feeRate: number): Promise<SatsnetResponse<any>>;
+
+  /** 获取支持的合约模板 */
+  getSupportedContracts(): Promise<SatsnetResponse<{ contractContents: any[] }>>;
+
+  /** 获取服务器已部署的合约 */
+  getDeployedContractsInServer(): Promise<SatsnetResponse<{ contractURLs: any[] }>>;
+
+  /** 获取已部署合约的状态 */
+  getDeployedContractStatus(url: string): Promise<SatsnetResponse<{ contractStatus: any }>>;
+
+  /** 查询部署合约所需费用 */
+  getFeeForDeployContract(
+    templateName: string,
+    content: string, // json string
+    feeRate: string
+  ): Promise<SatsnetResponse<{ fee: any }>>;
+
+  /** 远程部署合约 */
+  deployContract_Remote(
+    templateName: string,
+    content: string, // json string
+    feeRate: string
+  ): Promise<SatsnetResponse<{ txId: string; resvId: string }>>;
+
+  /** 本地部署合约 */
+  deployContract_Local(
+    templateName: string,
+    content: string, // json string
+    feeRate: string
+  ): Promise<SatsnetResponse<{ txId: string; resvId: string }>>;
+
+  /** 查询合约调用参数 */
+  getParamForInvokeContract(
+    templateName: string
+  ): Promise<SatsnetResponse<{ parameter: any }>>;
+
+  /** 查询调用合约所需费用 */
+  getFeeForInvokeContract(
+    url: string,
+    invoke: string // json string
+  ): Promise<SatsnetResponse<{ fee: any }>>;
+
+  /** 调用合约 */
+  invokeContract_SatsNet(
+    url: string,
+    invoke: string, // json string
+    feeRate: string
+  ): Promise<SatsnetResponse<{ txId: string }>>;
 }
 declare interface Window {
   sat20wallet_wasm: WalletManager
