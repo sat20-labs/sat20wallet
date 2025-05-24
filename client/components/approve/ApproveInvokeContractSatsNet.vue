@@ -98,6 +98,7 @@ const getFee = async () => {
       props.data.url,
       props.data.invoke
     )
+    console.log('getFeeForInvokeContract', err, res)
     if (err) {
       feeError.value = true
       estimatedFee.value = '-'

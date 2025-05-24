@@ -94,8 +94,9 @@ const getFee = async () => {
     const [err, res] = await stp.getFeeForDeployContract(
       props.data.templateName,
       props.data.content,
-      props.data.feeRate
+      props.data.feeRate.toString()
     )
+    console.log('getFeeForDeployContract', err, res)
     if (err) {
       feeError.value = true
       estimatedFee.value = '-'
