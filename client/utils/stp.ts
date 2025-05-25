@@ -68,16 +68,17 @@ interface StpWasmModule {
   getDeployedContractsInServer: () => Promise<WasmResponse<{ contractURLs: any[] }>>;
   getDeployedContractStatus: (url: string) => Promise<WasmResponse<{ contractStatus: any }>>;
   getFeeForDeployContract: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ fee: any }>>;
-  deployContract_Remote: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
+  deployContract_Remote: (templateName: string, content: string, feeRate: string, bol: boolean) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
   deployContract_Local: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
   getParamForInvokeContract: (templateName: string) => Promise<WasmResponse<{ parameter: any }>>;
   getFeeForInvokeContract: (url: string, invoke: string) => Promise<WasmResponse<{ fee: any }>>;
   invokeContract_SatsNet: (url: string, invoke: string, feeRate: string) => Promise<WasmResponse<{ txId: string }>>;
+  getAddressStatusInContract: (url: string, address: string) => Promise<WasmResponse<string>>;
+  getAllAddressInContract: (url: string) => Promise<WasmResponse<string>>;
 }
 
 
 class SatsnetStp {
-  // Use WasmResponse for the result type
   private async _handleRequest<T>(
     methodName: keyof StpWasmModule, // Use keyof for type safety
     ...args: any[]
@@ -575,12 +576,13 @@ class SatsnetStp {
   async deployContract_Remote(
     templateName: string,
     content: string,
-    feeRate: string
+    feeRate: string,
+    bol: boolean
   ): Promise<[
     Error | undefined,
     { txId: string; resvId: string } | undefined
   ]> {
-    return this._handleRequest<{ txId: string; resvId: string }>('deployContract_Remote', templateName, content, feeRate)
+    return this._handleRequest<{ txId: string; resvId: string }>('deployContract_Remote', templateName, content, feeRate, bol)
   }
 
   /** 本地部署合约 */
@@ -626,6 +628,22 @@ class SatsnetStp {
     { txId: string } | undefined
   ]> {
     return this._handleRequest<{ txId: string }>('invokeContract_SatsNet', url, invoke, feeRate)
+  }
+
+  /** 根据地址获取合约状态 */
+  async getAddressStatusInContract(url: string, address: string): Promise<[
+    Error | undefined,
+    string | undefined
+  ]> {
+    return this._handleRequest<string>('getAddressStatusInContract', url, address)
+  }
+
+  /** 获取合约所有地址 */
+  async getAllAddressInContract(url: string): Promise<[
+    Error | undefined,
+    string | undefined
+  ]> {
+    return this._handleRequest<string>('getAllAddressInContract', url)
   }
 }
 

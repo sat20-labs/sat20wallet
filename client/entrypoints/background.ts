@@ -104,6 +104,7 @@ export default defineBackground(() => {
         Message.MessageAction.GET_ASSET_AMOUNT,
         Message.MessageAction.GET_ASSET_AMOUNT_SATSNET,
         Message.MessageAction.MERGE_BATCH_SIGNED_PSBT,
+
       ]
 
       // Verify origin authorization for specific methods.
@@ -346,6 +347,14 @@ export default defineBackground(() => {
             [reqErr, reqRes] = await service.getFeeForInvokeContract(data.url, data.invoke);
             if (reqErr) { errData = { code: -65, message: reqErr.message }; } else { resData = reqRes; }
             break;
+          case Message.MessageAction.GET_CONTRACT_STATUS_BY_ADDRESS:
+            [reqErr, reqRes] = await service.getAddressStatusInContract(data.url, data.address)
+            if (reqErr) { errData = { code: -70, message: reqErr.message } } else { resData = reqRes }
+            break
+          case Message.MessageAction.GET_CONTRACT_ALL_ADDRESSES:
+            [reqErr, reqRes] = await service.getAllAddressInContract(data.url)
+            if (reqErr) { errData = { code: -71, message: reqErr.message } } else { resData = reqRes }
+            break
           default:
             console.warn(`Unhandled REQUEST action: ${action}`);
             errData = { code: -32601, message: 'Method not found' }; // Method not found error

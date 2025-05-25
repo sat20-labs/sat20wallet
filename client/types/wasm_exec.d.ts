@@ -372,7 +372,8 @@ interface SatsnetStp {
   deployContract_Remote(
     templateName: string,
     content: string, // json string
-    feeRate: string
+    feeRate: string,
+    bol: boolean
   ): Promise<SatsnetResponse<{ txId: string; resvId: string }>>;
 
   /** 本地部署合约 */
@@ -399,6 +400,11 @@ interface SatsnetStp {
     invoke: string, // json string
     feeRate: string
   ): Promise<SatsnetResponse<{ txId: string }>>;
+
+  /** 根据地址获取合约状态 */
+  getAddressStatusInContract(url: string, address: string): Promise<SatsnetResponse<string>>;
+  /** 获取合约所有地址 */
+  getContractAllAddresses(url: string): Promise<SatsnetResponse<string>>;
 }
 declare interface Window {
   sat20wallet_wasm: WalletManager

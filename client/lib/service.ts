@@ -279,6 +279,12 @@ class Service {
   async invokeContract_SatsNet(url: string, invoke: string, feeRate: string): Promise<[Error | undefined, { txId: string } | undefined]> {
     return stp.invokeContract_SatsNet(url, invoke, feeRate);
   }
+  async getAddressStatusInContract(url: string, address: string): Promise<[Error | undefined, string | undefined]> {
+    return stp.getAddressStatusInContract(url, address)
+  }
+  async getAllAddressInContract(url: string): Promise<[Error | undefined, string | undefined]> {
+    return stp.getAllAddressInContract(url)
+  }
 }
 
 export default new Service()

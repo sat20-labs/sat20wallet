@@ -481,11 +481,11 @@ export default defineUnlistedScript(() => {
       })
     }
     // 新增：合约远程部署
-    async deployContract_Remote(templateName: string, content: string, feeRate: string): Promise<{ txId: string; resvId: string }> {
+    async deployContract_Remote(templateName: string, content: string, feeRate: string, bol: boolean): Promise<{ txId: string; resvId: string }> {
       return this.send<{ txId: string; resvId: string }>({
         type: Message.MessageType.APPROVE,
         action: Message.MessageAction.DEPLOY_CONTRACT_REMOTE,
-        data: { templateName, content, feeRate },
+        data: { templateName, content, feeRate, bol },
       })
     }
     // 新增：合约调用（SatsNet）
@@ -494,6 +494,20 @@ export default defineUnlistedScript(() => {
         type: Message.MessageType.APPROVE,
         action: Message.MessageAction.INVOKE_CONTRACT_SATSNET,
         data: { url, invoke, feeRate },
+      })
+    }
+    async getAddressStatusInContract(url: string, address: string): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_CONTRACT_STATUS_BY_ADDRESS,
+        data: { url, address },
+      })
+    }
+    async getAllAddressInContract(url: string): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_CONTRACT_ALL_ADDRESSES,
+        data: { url },
       })
     }
   }

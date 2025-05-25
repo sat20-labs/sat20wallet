@@ -128,7 +128,8 @@ const confirm = async () => {
     const [err, res] = await stp.deployContract_Remote(
       props.data.templateName,
       props.data.content,
-      props.data.feeRate.toString()
+      props.data.feeRate.toString(),
+      props.data.bol
     )
     if (err) {
       deployError.value = err.message || '合约部署失败'
