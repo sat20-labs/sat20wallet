@@ -89,13 +89,12 @@ export const useL2Assets = () => {
         : item.Name.Ticker;
         if (key !== '::') {
           const [err, res] = await satsnetStp.getTickerInfo(key)
-          console.log('ticker res', res)
+          
           if (res?.ticker) {
             const { ticker } = res
             const result = JSON.parse(ticker)
-            console.log('ticker result', result)
-
-            label = result?.displayname || label
+            console.log('l2 ticker result', result)
+            label = result?.name.Ticker || label
           }
         }
         allAssetList.value.push({

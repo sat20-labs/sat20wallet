@@ -75,13 +75,7 @@ watch(props.items, async (newItems = []) => {
       for (const asset of Assets) {
         const { Name } = asset
         const key = `${Name.Protocol}:${Name.Type}:${Name.Ticker}`
-        const [err, res] = await satsnetStp.getTickerInfo(key)
-        console.log('ticker res', res)
-        if (res?.ticker) {
-          const { ticker } = res
-          const result = JSON.parse(ticker)
-          asset.label = result?.displayname || key
-        }
+        asset.label = Name.Ticker
       }
     }
     parsedAssetsInuts.value.push(item)

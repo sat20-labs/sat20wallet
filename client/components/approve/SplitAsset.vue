@@ -67,7 +67,7 @@ watch(props.data, async (newData) => {
   if (res?.ticker) {
     const { ticker } = res
     const result = JSON.parse(ticker)
-    label.value = result?.displayname || assetName
+    label.value = result.name.Ticker || assetName
   }
 }, { immediate: true })
 // Computed property to check data validity

@@ -223,6 +223,7 @@ export const useWalletStore = defineStore('wallet', () => {
       await setPassword(password)
       await satsnetStp.unlockWallet(password)
       await satsnetStp.start()
+      await switchToAccount(accountIndex.value)
       await channelStore.getAllChannels()
     }
     return [err, result]
@@ -313,7 +314,7 @@ export const useWalletStore = defineStore('wallet', () => {
     await satsnetStp.switchAccount(accountId)
     const [_, addressRes] = await walletManager.getWalletAddress(accountId)
     const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
-
+    console.log('switchToAccount', await satsnetStp.getWallet());
     if (addressRes && pubkeyRes) {
       await setAccountIndex(accountId)
       await setAddress(addressRes.address)

@@ -166,7 +166,7 @@ export const useChannelStore = defineStore('channel', () => {
           const result = JSON.parse(ticker)
           const findItem = allAssetList.value?.find((a: any) => a.key === key)
           if (findItem) {
-            findItem.label = result?.displayname || findItem.label
+            findItem.label = result?.name.Ticker || findItem.label
             console.log('更新资产标签:', findItem)
           }
         }
