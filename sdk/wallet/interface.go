@@ -233,7 +233,7 @@ func (p *Manager) GetCommitRootKey(peer []byte) []byte {
 	if p.wallet == nil {
 		return nil
 	}
-	privkey, _ := p.wallet.GetCommitRootKey(peer)
+	privkey, _ := p.wallet.GetCommitRootKey(peer, 0)
 	return privkey.Serialize()
 }
 
@@ -242,7 +242,7 @@ func (p *Manager) GetCommitSecret(peer []byte, index int) []byte {
 	if p.wallet == nil {
 		return nil
 	}
-	privkey := p.wallet.GetCommitSecret(peer, uint32(index))
+	privkey := p.wallet.GetCommitSecret(peer, 0, uint32(index))
 	return privkey.Serialize()
 }
 
@@ -252,7 +252,7 @@ func (p *Manager) DeriveRevocationPrivKey(commitsecret []byte) []byte {
 		return nil
 	}
 	privSecret, _ := btcec.PrivKeyFromBytes(commitsecret)
-	privkey := p.wallet.DeriveRevocationPrivKey(privSecret)
+	privkey := p.wallet.DeriveRevocationPrivKey(privSecret, 0)
 	return privkey.Serialize()
 }
 
@@ -261,7 +261,7 @@ func (p *Manager) GetRevocationBaseKey() []byte {
 	if p.wallet == nil {
 		return nil
 	}
-	pubKey := p.wallet.GetRevocationBaseKey()
+	pubKey := p.wallet.GetRevocationBaseKey(0)
 	return pubKey.SerializeCompressed()
 }
 

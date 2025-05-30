@@ -10,11 +10,12 @@ import (
 )
 
 // 方便对通道的操作进行签名和验证，id是子账户id，从0开始
+// subId 是子通道Id，从0开始
 type ChannelWallet interface {
 	GetId() uint32
-	GetCommitSecret(index uint32) *secp256k1.PrivateKey
-	DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey
-	GetRevocationBaseKey() *secp256k1.PublicKey
+	GetCommitSecret(subId, index uint32) *secp256k1.PrivateKey
+	DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey, subId uint32) *btcec.PrivateKey
+	GetRevocationBaseKey(subId uint32) *secp256k1.PublicKey
 	GetPaymentPubKey() *secp256k1.PublicKey
 
 	SignMessage(msg []byte) ([]byte, error)
@@ -35,9 +36,9 @@ type Wallet interface {
 	GetNodePubKey() *secp256k1.PublicKey
 
 	// default channel wallet, CWId = 0
-	GetCommitSecret(peer []byte, index uint32) *secp256k1.PrivateKey
-	DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey
-	GetRevocationBaseKey() *secp256k1.PublicKey
+	GetCommitSecret(peer []byte, subId, index uint32) *secp256k1.PrivateKey
+	DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey, subId uint32) *btcec.PrivateKey
+	GetRevocationBaseKey(subId uint32) *secp256k1.PublicKey
 	GetPaymentPubKey() *secp256k1.PublicKey
 
 	SignMessage(msg []byte) ([]byte, error)

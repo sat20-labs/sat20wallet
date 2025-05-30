@@ -107,11 +107,11 @@ v2: （还没实现）
 type InternalWallet struct {
 	masterkey             *hdkeychain.ExtendedKey
 	netParamsL1           *chaincfg.Params // L1
-	paymentPrivKeys        map[uint32]*secp256k1.PrivateKey
-	revocationBasePrivKeys map[uint32]*secp256k1.PrivateKey
+	paymentPrivKeys        map[uint32]*secp256k1.PrivateKey // key: index
+	revocationBasePrivKeys map[uint64]*secp256k1.PrivateKey // key: accout<<32+change
 	purposes              map[uint32]*hdkeychain.ExtendedKey // key: purpose
-	accounts              map[uint64]*hdkeychain.ExtendedKey // key: purpose<<32+account
-	addresses             map[uint32]btcutil.Address         // key: index
+	accounts              map[uint64]*hdkeychain.ExtendedKey // key: purpose<<48+family<<32+account
+	addresses             map[uint32]string                  // key: index
 	currentIndex          uint32                             // 当前子账户
 
 	subWallets            map[uint32]*channelWallet
@@ -148,11 +148,11 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 	return &InternalWallet{
 		masterkey:   masterkey,
 		netParamsL1: param,
-		paymentPrivKeys: make(map[uint32]*secp256k1.PrivateKey), // key: index
-		revocationBasePrivKeys: make(map[uint32]*secp256k1.PrivateKey), // key: change
+		paymentPrivKeys: make(map[uint32]*secp256k1.PrivateKey),
+		revocationBasePrivKeys: make(map[uint64]*secp256k1.PrivateKey),
 		purposes:    make(map[uint32]*hdkeychain.ExtendedKey),
 		accounts:    make(map[uint64]*hdkeychain.ExtendedKey),
-		addresses:   make(map[uint32]btcutil.Address),
+		addresses:   make(map[uint32]string),
 		subWallets:  make(map[uint32]*channelWallet),
 	}
 }
@@ -184,64 +184,50 @@ func (p *InternalWallet) GetSubAccount() uint32 {
 }
 
 func (p *InternalWallet) getPurposeKey(purpose uint32) (*hdkeychain.ExtendedKey, error) {
-	acckey, ok := p.purposes[purpose]
+	purposekey, ok := p.purposes[purpose]
 	if !ok {
 		var err error
-		acckey, err = GeneratePurposeKey(p.masterkey, purpose)
+		purposekey, err = GeneratePurposeKey(p.masterkey, purpose)
 		if err != nil {
 			return nil, err
 		}
-		p.purposes[purpose] = acckey
+		p.purposes[purpose] = purposekey
 	}
-	return acckey, nil
+	return purposekey, nil
 }
 
-func (p *InternalWallet) getBtcUtilAddress(index uint32) (btcutil.Address, error) {
+func (p *InternalWallet) getBtcUtilAddress(index uint32) (string, error) {
 	addressType := "P2TR"
 	address, ok := p.addresses[index]
 	if ok {
 		return address, nil
 	}
 
-	purpose := getPurposeFromAddrType(addressType)
-	purposeKey, err := p.getPurposeKey(purpose)
-	if err != nil {
-		return nil, err
+	priv := p.getPaymentPrivKeyWithIndex(index)
+	if priv == nil {
+		return "", fmt.Errorf("can't get addres in index %d", index)
 	}
 
-	_, pubkey, err := generateKeyFromPurposeKey(purposeKey, 0, 0, index)
+	addr, err := getAddressFromPubKey(priv.PubKey(), addressType, p.netParamsL1)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-
-	address, err = getAddressFromPubKey(pubkey, addressType, p.netParamsL1)
-	if err != nil {
-		return nil, err
-	}
-	p.addresses[index] = address
+	p.addresses[index] = addr.EncodeAddress()
 	return address, nil
 }
 
 func (p *InternalWallet) GetPubKey() *secp256k1.PublicKey {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-	_, pubKey, err := p.getKey("P2TR", 0, p.currentIndex)
-	if err != nil {
-		Log.Errorf("GetPubKey failed. %v", err)
-		return nil
-	}
-	return pubKey
+	return p.GetPaymentPubKey()
 }
 
 func (p *InternalWallet) GetPubKeyByIndex(index uint32) *secp256k1.PublicKey {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	_, pubKey, err := p.getKey("P2TR", 0, index)
-	if err != nil {
-		Log.Errorf("GetPubKey failed. %v", err)
+	priv := p.getPaymentPrivKeyWithIndex(index)
+	if priv == nil {
 		return nil
 	}
-	return pubKey
+	return priv.PubKey()
 }
 
 func (p *InternalWallet) GetAddress() string {
@@ -251,7 +237,7 @@ func (p *InternalWallet) GetAddress() string {
 	if err != nil {
 		return ""
 	}
-	return addr.EncodeAddress()
+	return addr
 }
 
 func (p *InternalWallet) GetAddressByIndex(index uint32) string {
@@ -261,12 +247,12 @@ func (p *InternalWallet) GetAddressByIndex(index uint32) string {
 	if err != nil {
 		return ""
 	}
-	return addr.EncodeAddress()
+	return addr
 }
 
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
-func (p *InternalWallet) GetCommitRootKey(peer []byte) (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
-	privkey := p.GetCommitSecret(peer, 0)
+func (p *InternalWallet) GetCommitRootKey(peer []byte, subId uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
+	privkey := p.GetCommitSecret(peer, subId, 0)
 	if privkey == nil {
 		return nil, nil
 	}
@@ -275,27 +261,27 @@ func (p *InternalWallet) GetCommitRootKey(peer []byte) (*secp256k1.PrivateKey, *
 
 // 返回secret，用于生成commitsecrect和commitpoint
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
-func (p *InternalWallet) GetCommitSecret(peer []byte, index uint32) *secp256k1.PrivateKey {
+func (p *InternalWallet) GetCommitSecret(peer []byte, subId, index uint32) *secp256k1.PrivateKey {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	return p.getCommitSecret(peer, p.currentIndex, index)
+	return p.getCommitSecret(peer, p.currentIndex, subId, index)
 }
 
-func (p *InternalWallet) getCommitSecret(peer []byte, change, index uint32) *secp256k1.PrivateKey {
+func (p *InternalWallet) getCommitSecret(peer []byte, account, change, index uint32) *secp256k1.PrivateKey {
 	purpose := getPurposeFromAddrType("LND")
-	account := getAccountFromFamilyKey(KeyFamilyRevocationRoot)
-	key := uint64(purpose)<<32 + uint64(account)
-	acckey, ok := p.accounts[key]
+	coinType := getCoinTypeFromFamilyKey(KeyFamilyRevocationRoot)
+	key := uint64(purpose)<<48 + uint64(coinType)<<32 + uint64(account)
+	accountKey, ok := p.accounts[key]
 	if !ok {
 		var err error
-		acckey, err = GenerateAccountKey(p.masterkey, purpose, account)
+		accountKey, err = GenerateAccountKey(p.masterkey, purpose, coinType, account)
 		if err != nil {
 			return nil
 		}
-		p.accounts[key] = acckey
+		p.accounts[key] = accountKey
 	}
 
-	privkey, _, err := generateKeyFromAccountKey(acckey, uint32(change), uint32(index))
+	privkey, _, err := generateKeyFromAccountKey(accountKey, uint32(change), uint32(index))
 	if err != nil {
 		Log.Errorf("generateKeyFromAccountKey failed. %v", err)
 		return nil
@@ -311,23 +297,24 @@ func (p *InternalWallet) getCommitSecret(peer []byte, change, index uint32) *sec
 }
 
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
-func (p *InternalWallet) DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey {
+func (p *InternalWallet) DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey, subId uint32) *btcec.PrivateKey {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	revBasePrivKey, _ := p.getRevocationBaseKey(p.currentIndex)
+	revBasePrivKey, _ := p.getRevocationBaseKey(p.currentIndex, subId)
 	return utils.DeriveRevocationPrivKey(revBasePrivKey, commitsecret)
 }
 
-func (p *InternalWallet) GetRevocationBaseKey() *secp256k1.PublicKey {
+func (p *InternalWallet) GetRevocationBaseKey(subId uint32) *secp256k1.PublicKey {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	_, pubk := p.getRevocationBaseKey(p.currentIndex)
+	_, pubk := p.getRevocationBaseKey(p.currentIndex, subId)
 	return pubk
 }
 
-func (p *InternalWallet) getRevocationBaseKey(change uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
+func (p *InternalWallet) getRevocationBaseKey(account, change uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
 
-	key, ok := p.revocationBasePrivKeys[change]
+	i := uint64(account)<<32 + uint64(change)
+	key, ok := p.revocationBasePrivKeys[i]
 	if ok {
 		return key, key.PubKey()
 	}
@@ -339,45 +326,21 @@ func (p *InternalWallet) getRevocationBaseKey(change uint32) (*secp256k1.Private
 		return nil, nil
 	}
 	privk, pubk, err := generateKeyFromPurposeKey(purposekey,
-		getAccountFromFamilyKey(KeyFamilyRevocationBase), change, 0,
+		getCoinTypeFromFamilyKey(KeyFamilyRevocationBase), account, change, 0,
 	)
 
 	if err != nil {
 		Log.Errorf("generateKeyFromPurposeKey failed. %v", err)
 		return nil, nil
 	}
-	p.revocationBasePrivKeys[change] = privk
+	p.revocationBasePrivKeys[i] = privk
 
 	return privk, pubk
 }
 
 func (p *InternalWallet) GetNodePubKey() *secp256k1.PublicKey {
-
-	// 修改为跟支付钱包是同一个key
+	// 跟支付钱包是同一个key
 	return p.GetPaymentPubKey()
-
-	/* 
-	purpose := getPurposeFromAddrType("LND")
-	account := getAccountFromFamilyKey(KeyFamilyNodeKey)
-	key := uint64(purpose)<<32 + uint64(account)
-	acckey, ok := p.accounts[key]
-	if !ok {
-		var err error
-		acckey, err = GenerateAccountKey(p.masterkey, purpose, account)
-		if err != nil {
-			return nil
-		}
-		p.accounts[key] = acckey
-	}
-
-	_, pubkey, err := generateKeyFromAccountKey(acckey, 0, 0)
-	if err != nil {
-		Log.Errorf("generateKeyFromAccountKey failed. %v", err)
-		return nil
-	}
-
-	return pubkey
-	*/
 }
 
 func (p *InternalWallet) GetPaymentPubKey() *secp256k1.PublicKey {
@@ -415,7 +378,7 @@ func (p *InternalWallet) getKey(addressType string, change, index uint32) (*secp
 	if err != nil {
 		return nil, nil, err
 	}
-	return generateKeyFromPurposeKey(purposekey, 0, change, index)
+	return generateKeyFromPurposeKey(purposekey, 0, 0, change, index)
 }
 
 func (p *InternalWallet) SignTxInput(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
@@ -1399,14 +1362,15 @@ func (p *InternalWallet) signPsbts_SatsNet(privKey *secp256k1.PrivateKey, packet
 // 	return privateKey, nil
 // }
 
-func (p *InternalWallet) deriveKeyByLocator(family, change, index uint32) (*secp256k1.PrivateKey, error) {
-	account := getAccountFromFamilyKey(family)
+func (p *InternalWallet) deriveKeyByLocator(family, account, change, index uint32) (*secp256k1.PrivateKey, error) {
+	coinType := getCoinTypeFromFamilyKey(family)
 
-	acckey, err := p.getPurposeKey(account)
+	purpose := getPurposeFromAddrType("LND")
+	purposekey, err := p.getPurposeKey(purpose)
 	if err != nil {
 		return nil, err
 	}
-	privkey, _, err := generateKeyFromAccountKey(acckey, change, index)
+	privkey, _, err := generateKeyFromPurposeKey(purposekey, coinType, account, change, index)
 	if err != nil {
 		return nil, err
 	}
@@ -1446,11 +1410,14 @@ func GeneratePurposeKey(masterKey *hdkeychain.ExtendedKey, purpose uint32) (*hdk
 	return purposeKey, err
 }
 
-// 生成account key
-func generateAccountKey2(purposeKey *hdkeychain.ExtendedKey, account uint32) (*hdkeychain.ExtendedKey, error) {
+func GenerateAccountKey(masterKey *hdkeychain.ExtendedKey, purpose, coin, account uint32) (*hdkeychain.ExtendedKey, error) {
 	// 生成目的链 hdkeychain.HardenedKeyStart+
-	coinType := uint32(0)
-	coinKey, err := purposeKey.Derive(hdkeychain.HardenedKeyStart + coinType)
+	purposeKey, err := masterKey.Derive(hdkeychain.HardenedKeyStart + purpose)
+	if err != nil {
+		Log.Errorf("Failed to generate purpose chain: %v", err)
+		return nil, err
+	}
+	coinKey, err := purposeKey.Derive(hdkeychain.HardenedKeyStart + coin)
 	if err != nil {
 		Log.Errorf("Failed to generate coin chain: %v", err)
 		return nil, err
@@ -1463,30 +1430,15 @@ func generateAccountKey2(purposeKey *hdkeychain.ExtendedKey, account uint32) (*h
 	return accountKey, err
 }
 
-func GenerateAccountKey(masterKey *hdkeychain.ExtendedKey, purpose, account uint32) (*hdkeychain.ExtendedKey, error) {
-	// 生成目的链 hdkeychain.HardenedKeyStart+
-	accountKey, err := masterKey.Derive(hdkeychain.HardenedKeyStart + purpose)
-	if err != nil {
-		Log.Errorf("Failed to generate purpose chain: %v", err)
-		return nil, err
-	}
-	accountKey, err = accountKey.Derive(hdkeychain.HardenedKeyStart)
+func generateKeyFromPurposeKey(purposeKey *hdkeychain.ExtendedKey,
+	coin, account, change, index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
+	// 生成外部链或内部链
+	coinKey, err := purposeKey.Derive(hdkeychain.HardenedKeyStart + coin)
 	if err != nil {
 		Log.Errorf("Failed to generate coin chain: %v", err)
-		return nil, err
+		return nil, nil, err
 	}
-	accountKey, err = accountKey.Derive(hdkeychain.HardenedKeyStart + account)
-	if err != nil {
-		Log.Errorf("Failed to generate account chain: %v", err)
-		return nil, err
-	}
-	return accountKey, err
-}
-
-func generateKeyFromPurposeKey(purposeKey *hdkeychain.ExtendedKey,
-	account, change, index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
-	// 生成外部链或内部链
-	accountKey, err := generateAccountKey2(purposeKey, account)
+	accountKey, err := coinKey.Derive(hdkeychain.HardenedKeyStart + account)
 	if err != nil {
 		Log.Errorf("Failed to generate account chain: %v", err)
 		return nil, nil, err
@@ -1547,9 +1499,9 @@ func generateKeyFromAccountKey(accountKey *hdkeychain.ExtendedKey,
 }
 
 // 生成密钥
-func GenerateKey(masterKey *hdkeychain.ExtendedKey, purpose, account,
+func GenerateKey(masterKey *hdkeychain.ExtendedKey, purpose, coin, account,
 	index uint32) (*secp256k1.PrivateKey, *secp256k1.PublicKey, error) {
-	accountKey, err := GenerateAccountKey(masterKey, purpose, account)
+	accountKey, err := GenerateAccountKey(masterKey, purpose, coin, account)
 	if err != nil {
 		Log.Errorf("Failed to generate account chain: %v", err)
 		return nil, nil, err
@@ -1581,8 +1533,8 @@ func GenerateKey(masterKey *hdkeychain.ExtendedKey, purpose, account,
 	return privateKey, publicKey, nil
 }
 
-func GenerateExtendedKey(masterKey *hdkeychain.ExtendedKey, purpose, account, index uint32) (*hdkeychain.ExtendedKey, error) {
-	accountKey, err := GenerateAccountKey(masterKey, purpose, account)
+func GenerateExtendedKey(masterKey *hdkeychain.ExtendedKey, purpose, coin, account, index uint32) (*hdkeychain.ExtendedKey, error) {
+	accountKey, err := GenerateAccountKey(masterKey, purpose, coin, account)
 	if err != nil {
 		Log.Errorf("Failed to generate account chain: %v", err)
 		return nil, err
@@ -1616,19 +1568,19 @@ func getPurposeFromAddrType(addrType string) uint32 {
 	return purpose
 }
 
-func getAccountFromFamilyKey(family uint32) uint32 {
-	account := uint32(0)
+func getCoinTypeFromFamilyKey(family uint32) uint32 {
+	coinType := uint32(0)
 	switch family {
 	case KeyFamilyBaseEncryption:
-		account = 0
+		coinType = 0
 	case KeyFamilyRevocationBase:
-		account = 1
+		coinType = 1
 	case KeyFamilyRevocationRoot:
-		account = 2
+		coinType = 2
 	case KeyFamilyTowerID:
-		account = 3
+		coinType = 3
 	}
-	return account
+	return coinType
 }
 
 func getAddressFromPubKey(pubKey *secp256k1.PublicKey, addrType string,
