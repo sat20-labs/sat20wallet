@@ -17,18 +17,18 @@
         </div>
         <div>
           <span class="font-semibold">{{$t('invokeContractSatsNet.feeRate', '费率')}}：</span>
-          <span>{{ props.data?.feeRate || '-' }}</span>
+          <span>{{ props.data?.feeRate || '-' }} sats</span>
         </div>
         <div>
           <span class="font-semibold">{{$t('invokeContractSatsNet.estimatedFee', '预估费用')}}：</span>
           <span v-if="feeLoading">{{$t('invokeContractSatsNet.loading', '查询中...')}}</span>
           <span v-else-if="feeError" class="text-destructive">{{$t('invokeContractSatsNet.feeError', '查询失败')}}</span>
-          <span v-else>{{ estimatedFee || '-' }}</span>
+          <span v-else>{{ estimatedFee || '-' }} sats</span>
         </div>
       </div>
 
       <!-- 合约参数美化展示 -->
-      <Accordion type="single" collapsible class="w-full mt-2">
+      <Accordion type="single" :collapsible="false" class="w-full mt-2">
         <AccordionItem value="item-1">
           <AccordionTrigger class="text-sm">{{$t('invokeContractSatsNet.viewRawContent', '查看原始调用参数')}}</AccordionTrigger>
           <AccordionContent>

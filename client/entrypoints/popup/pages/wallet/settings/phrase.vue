@@ -65,10 +65,12 @@ import walletManager from '@/utils/sat20'
 import { useWalletStore } from '@/store'
 import { useClipboard } from '@vueuse/core'
 import { hashPassword } from '@/utils/crypto'
+import { useToast } from '@/components/ui/toast'
 const walletStore = useWalletStore()
 const { walletId } = storeToRefs(walletStore)
 const password = ref<string | number>('')
 const loading = ref(false)
+const { toast } = useToast()
 const isVerified = ref(false)
 const mnemonicPhrase = ref('')
 
@@ -81,11 +83,10 @@ const { copy, copied, isSupported } = useClipboard()
 const copyHandler = () => {}
 const verifyPassword = async () => {
   if (!password.value) {
-    // toast.add({
-    //   title: 'Error',
-    //   description: 'Please enter password',
-    //   color: 'red',
-    // })
+    toast({
+      title: 'Error',
+      description: 'Please enter password',
+    })
     return
   }
   console.log('verify password')
@@ -94,19 +95,17 @@ const verifyPassword = async () => {
   loading.value = true
   const hashedPassword = await hashPassword(password.value as string)
   const [err, result] = await walletManager.getMnemonice(
-    walletId.value,
+    walletId.value as any,
     hashedPassword
   )
   loading.value = false
-  console.log('verify password result')
-  console.log(result)
+  console.log('verify password result', err, result)
 
   if (err || !result?.mnemonic) {
-    // toast.add({
-    //   title: 'Error',
-    //   description: 'Verification failed',
-    //   color: 'red',
-    // })
+    toast({
+      title: 'Error',
+      description: 'Verification failed',
+    })
     return
   }
   mnemonicPhrase.value = result.mnemonic

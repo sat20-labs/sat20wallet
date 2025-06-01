@@ -13,13 +13,13 @@
         </div>
         <div>
           <span class="font-semibold">{{$t('deployContractRemote.feeRate', '费率')}}：</span>
-          <span>{{ props.data?.feeRate || '-' }}</span>
+          <span>{{ props.data?.feeRate || '-' }} sats</span>
         </div>
         <div>
           <span class="font-semibold">{{$t('deployContractRemote.estimatedFee', '预估费用')}}：</span>
           <span v-if="feeLoading">{{$t('deployContractRemote.loading', '查询中...')}}</span>
           <span v-else-if="feeError" class="text-destructive">{{$t('deployContractRemote.feeError', '查询失败')}}</span>
-          <span v-else>{{ estimatedFee || '-' }}</span>
+          <span v-else>{{ estimatedFee || '-' }} sats</span>
         </div>
       </div>
 
