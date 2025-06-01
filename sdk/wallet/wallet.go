@@ -56,9 +56,12 @@ var (
 	ErrUnsupportedScript = errors.New("unsupported or unknown pk script")
 )
 
+// map to coinType
 const (
-	// KeyFamilyMultiSig are keys to be used within multi-sig scripts.
-	KeyFamilyMultiSig uint32 = 0
+	// KeyFamilyBaseEncryption is the family of keys that will be used to
+	// derive keys that we use to encrypt and decrypt any general blob data
+	// like static channel backups. Often used when encrypting files on disk.
+	KeyFamilyBaseEncryption uint32 = 0
 
 	// KeyFamilyRevocationBase are keys that are used within channels to
 	// create revocation basepoints that the remote party will use to
@@ -69,55 +72,36 @@ const (
 	// derive the root of a revocation tree for a particular channel.
 	KeyFamilyRevocationRoot uint32 = 2
 
-	// KeyFamilyHtlcBase are keys used within channels that will be
-	// combined with per-state randomness to produce public keys that will
-	// be used in HTLC scripts.
-	//KeyFamilyHtlcBase uint32 = 3
-
-	// KeyFamilyPaymentBase are keys used within channels that will be
-	// combined with per-state randomness to produce public keys that will
-	// be used in scripts that pay directly to us without any delay.
-	//KeyFamilyPaymentBase uint32 = 4
-
-	// KeyFamilyDelayBase are keys used within channels that will be
-	// combined with per-state randomness to produce public keys that will
-	// be used in scripts that pay to us, but require a CSV delay before we
-	// can sweep the funds.
-	//KeyFamilyDelayBase uint32 = KeyFamilyPaymentBase
-
-	// KeyFamilyNodeKey is a family of keys that will be used to derive
-	// keys that will be advertised on the network to represent our current
-	// "identity" within the network. Peers will need our latest node key
-	// in order to establish a transport session with us on the Lightning
-	// p2p level (BOLT-0008).
-	KeyFamilyNodeKey uint32 = 6
-
-	// KeyFamilyBaseEncryption is the family of keys that will be used to
-	// derive keys that we use to encrypt and decrypt any general blob data
-	// like static channel backups and the TLS private key. Often used when
-	// encrypting files on disk.
-	KeyFamilyBaseEncryption uint32 = 7
-
-	// KeyFamilyTowerSession is the family of keys that will be used to
-	// derive session keys when negotiating sessions with watchtowers. The
-	// session keys are limited to the lifetime of the session and are used
-	// to increase privacy in the watchtower protocol.
-	// KeyFamilyTowerSession uint32 = 8
-
 	// KeyFamilyTowerID is the family of keys used to derive the public key
 	// of a watchtower. This made distinct from the node key to offer a form
 	// of rudimentary whitelisting, i.e. via knowledge of the pubkey,
 	// preventing others from having full access to the tower just as a
 	// result of knowing the node key.
-	// KeyFamilyTowerID uint32 = 9
+	KeyFamilyTowerID uint32 = 3
 )
 
 const DEFAULT_PURPOSE = 86
 
-//                     m/purpose'/coinType'/account'/change/index
-// 钱包的p2tr地址:  	m/86'     /0'       /0'      /0     /index 
-// 对应的通道钱包的地址: m/1017'   /0'       /0'      /index /commitHeight
-// 这样一个钱包下的每一个子账户(index)都可以跟节点建立通道
+/*
+v1:
+                    m/purpose'/coinType'/account'/change/index
+钱包的p2tr地址: 	  m/86'     /0'       /0'      /0     /index 
+对应的通道钱包的地址:   m/1017'   /0'      /family'  /index/commitHeight 
+		revBase		m/1017'   /0'       /1'       /index/commitHeight
+        revRoot     m/1017'   /0'       /2'       /index/commitHeight
+钱包下的每一个子账户(index)都可以跟节点建立通道。
+
+
+v2: （还没实现）
+                    m/purpose'/coinType'/account'/change/index
+钱包的p2tr地址: 	  m/86'     /0'       /0'      /0     /index 
+对应的通道钱包的地址:  m/1017'    /family'  /index'  /subId/commitHeight 
+		revBase		m/1017'   /1'       /index   /subId /commitHeight
+        revRoot     m/1017'   /2'       /index   /subId /commitHeight
+
+每个通道根据用途划分子通道(subId)，默认情况下subId为0
+这样一个钱包下的每一个子账户(index)都可以跟节点建立通道，每个通道可以根据需要建立子通道。
+*/
 
 // 可以支持其他类型，但为了方便，默认只支持p2tr地址类型。
 type InternalWallet struct {
@@ -282,7 +266,7 @@ func (p *InternalWallet) GetAddressByIndex(index uint32) string {
 
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
 func (p *InternalWallet) GetCommitRootKey(peer []byte) (*secp256k1.PrivateKey, *secp256k1.PublicKey) {
-	privkey := p.GetCommitSecret(peer, p.currentIndex)
+	privkey := p.GetCommitSecret(peer, 0)
 	if privkey == nil {
 		return nil, nil
 	}
@@ -1465,12 +1449,13 @@ func GeneratePurposeKey(masterKey *hdkeychain.ExtendedKey, purpose uint32) (*hdk
 // 生成account key
 func generateAccountKey2(purposeKey *hdkeychain.ExtendedKey, account uint32) (*hdkeychain.ExtendedKey, error) {
 	// 生成目的链 hdkeychain.HardenedKeyStart+
-	accountKey, err := purposeKey.Derive(hdkeychain.HardenedKeyStart)
+	coinType := uint32(0)
+	coinKey, err := purposeKey.Derive(hdkeychain.HardenedKeyStart + coinType)
 	if err != nil {
 		Log.Errorf("Failed to generate coin chain: %v", err)
 		return nil, err
 	}
-	accountKey, err = accountKey.Derive(hdkeychain.HardenedKeyStart + account)
+	accountKey, err := coinKey.Derive(hdkeychain.HardenedKeyStart + account)
 	if err != nil {
 		Log.Errorf("Failed to generate account chain: %v", err)
 		return nil, err
@@ -1634,13 +1619,13 @@ func getPurposeFromAddrType(addrType string) uint32 {
 func getAccountFromFamilyKey(family uint32) uint32 {
 	account := uint32(0)
 	switch family {
-	case KeyFamilyMultiSig:
+	case KeyFamilyBaseEncryption:
 		account = 0
 	case KeyFamilyRevocationBase:
 		account = 1
 	case KeyFamilyRevocationRoot:
 		account = 2
-	case KeyFamilyNodeKey:
+	case KeyFamilyTowerID:
 		account = 3
 	}
 	return account

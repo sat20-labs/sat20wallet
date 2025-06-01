@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -125,7 +124,7 @@ func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 	if !tokenizer.Next() {
 		return "", nil, 0, nil, fmt.Errorf("script too short: missing value")
 	}
-	value = extractScriptInt64(tokenizer.Data())
+	value = tokenizer.ExtractInt64()
 
 	// 读取assets
 	if !tokenizer.Next() {
@@ -142,29 +141,6 @@ func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 	return utxo, pkScript, value, assets, nil
 }
 
-// 从比特币脚本中提取int64值
-func extractScriptInt64(data []byte) int64 {
-	if len(data) == 0 {
-		return 0
-	}
-
-	// 比特币脚本中的整数是最小化编码的
-	isNegative := (data[len(data)-1] & 0x80) != 0
-
-	buf := make([]byte, 8)
-	copy(buf, data)
-
-	if isNegative {
-		buf[len(data)-1] &= 0x7f
-	}
-
-	val := int64(binary.LittleEndian.Uint64(buf))
-	if isNegative {
-		val = -val
-	}
-
-	return val
-}
 
 func DecodeSatsMsgTx(txHex string) (*wire.MsgTx, error) {
 	// 1. 将十六进制字符串解码为字节切片
