@@ -14,6 +14,8 @@ import SwitchNetwork from '@/components/approve/SwitchNetwork.vue'
 import SignMessage from '@/components/approve/SignMessage.vue'
 import SignPsbt from '@/components/approve/SignPsbt.vue'
 import SplitAsset from '@/components/approve/SplitAsset.vue'
+import ApproveDeployContractRemote from '@/components/approve/ApproveDeployContractRemote.vue'
+import ApproveInvokeContractSatsNet from '@/components/approve/ApproveInvokeContractSatsNet.vue'
 import { Message } from '@/types/message'
 
 const { approveData, approve, reject } = useApprove()
@@ -24,6 +26,8 @@ const approveComponentMap: any = {
   [Message.MessageAction.SIGN_MESSAGE]: SignMessage,
   [Message.MessageAction.SIGN_PSBT]: SignPsbt,
   [Message.MessageAction.BATCH_SEND_ASSETS_SATSNET]: SplitAsset,
+  [Message.MessageAction.DEPLOY_CONTRACT_REMOTE]: ApproveDeployContractRemote,
+  [Message.MessageAction.INVOKE_CONTRACT_SATSNET]: ApproveInvokeContractSatsNet,
 }
 
 const data = computed(() => {
