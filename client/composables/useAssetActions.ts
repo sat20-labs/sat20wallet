@@ -185,7 +185,7 @@ export function useAssetActions() {
   // Lock UTXO 操作
   const lockUtxo = async ({ utxos, chanid, amt, feeUtxos = [], asset_name }: any) => {
     loading.value = true
-    const [err] = await satsnetStp.lockToChannel(chanid, asset_name, amt, utxos, feeUtxos)
+    const [err] = await satsnetStp.lockToChannel(chanid, asset_name, amt, [], [])
     if (err) {
       handleError(err.message)
       loading.value = false

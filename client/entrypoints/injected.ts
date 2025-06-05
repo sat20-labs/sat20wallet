@@ -489,11 +489,11 @@ export default defineUnlistedScript(() => {
       })
     }
     // 新增：合约调用（SatsNet）
-    async invokeContract_SatsNet(url: string, invoke: string, feeRate: string): Promise<{ txId: string }> {
+    async invokeContract_SatsNet(url: string, invoke: string, assetName: string, feeRate: string): Promise<{ txId: string }> {
       return this.send<{ txId: string }>({
         type: Message.MessageType.APPROVE,
         action: Message.MessageAction.INVOKE_CONTRACT_SATSNET,
-        data: { url, invoke, feeRate },
+        data: { url, invoke, assetName, feeRate },
       })
     }
     async getAddressStatusInContract(url: string, address: string): Promise<string> {
@@ -503,11 +503,11 @@ export default defineUnlistedScript(() => {
         data: { url, address },
       })
     }
-    async getAllAddressInContract(url: string): Promise<string> {
+    async getAllAddressInContract(url: string, start: number = 0, limit: number = 20): Promise<string> {
       return this.send<string>({
         type: Message.MessageType.REQUEST,
         action: Message.MessageAction.GET_CONTRACT_ALL_ADDRESSES,
-        data: { url },
+        data: { url, start, limit },
       })
     }
   }

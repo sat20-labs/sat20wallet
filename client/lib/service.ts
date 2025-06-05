@@ -276,14 +276,14 @@ class Service {
   async getFeeForInvokeContract(url: string, invoke: string): Promise<[Error | undefined, { fee: any } | undefined]> {
     return stp.getFeeForInvokeContract(url, invoke);
   }
-  async invokeContract_SatsNet(url: string, invoke: string, feeRate: string): Promise<[Error | undefined, { txId: string } | undefined]> {
-    return stp.invokeContract_SatsNet(url, invoke, feeRate);
+  async invokeContract_SatsNet(url: string, invoke: string, assetName: string, feeRate: string): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return stp.invokeContract_SatsNet(url, invoke, assetName, feeRate);
   }
   async getAddressStatusInContract(url: string, address: string): Promise<[Error | undefined, string | undefined]> {
     return stp.getAddressStatusInContract(url, address)
   }
-  async getAllAddressInContract(url: string): Promise<[Error | undefined, string | undefined]> {
-    return stp.getAllAddressInContract(url)
+  async getAllAddressInContract(url: string, start: number, limit: number): Promise<[Error | undefined, string | undefined]> {
+    return stp.getAllAddressInContract(url, start, limit)
   }
 }
 

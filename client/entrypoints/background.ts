@@ -352,7 +352,7 @@ export default defineBackground(() => {
             if (reqErr) { errData = { code: -70, message: reqErr.message } } else { resData = reqRes }
             break
           case Message.MessageAction.GET_CONTRACT_ALL_ADDRESSES:
-            [reqErr, reqRes] = await service.getAllAddressInContract(data.url)
+            [reqErr, reqRes] = await service.getAllAddressInContract(data.url, data.start, data.limit)
             if (reqErr) { errData = { code: -71, message: reqErr.message } } else { resData = reqRes }
             break
           default:

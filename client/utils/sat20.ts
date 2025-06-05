@@ -79,7 +79,7 @@ class WalletManager {
     id: number,
     password: string
   ): Promise<[Error | undefined, { mnemonic: string } | undefined]> {
-    return this._handleRequest('getMnemonice', id, password)
+    return this._handleRequest('getMnemonice', id.toString(), password)
   }
 
   async signMessage(

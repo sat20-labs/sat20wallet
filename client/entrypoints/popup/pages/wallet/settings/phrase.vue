@@ -89,9 +89,6 @@ const verifyPassword = async () => {
     })
     return
   }
-  console.log('verify password')
-  console.log(password.value)
-
   loading.value = true
   const hashedPassword = await hashPassword(password.value as string)
   const [err, result] = await walletManager.getMnemonice(

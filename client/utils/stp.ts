@@ -72,9 +72,9 @@ interface StpWasmModule {
   deployContract_Local: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
   getParamForInvokeContract: (templateName: string) => Promise<WasmResponse<{ parameter: any }>>;
   getFeeForInvokeContract: (url: string, invoke: string) => Promise<WasmResponse<{ fee: any }>>;
-  invokeContract_SatsNet: (url: string, invoke: string, feeRate: string) => Promise<WasmResponse<{ txId: string }>>;
+  invokeContract_SatsNet: (url: string, invoke: string, assetName: string, feeRate: string) => Promise<WasmResponse<{ txId: string }>>;
   getAddressStatusInContract: (url: string, address: string) => Promise<WasmResponse<string>>;
-  getAllAddressInContract: (url: string) => Promise<WasmResponse<string>>;
+  getAllAddressInContract: (url: string, start: number, limit: number) => Promise<WasmResponse<string>>;
 }
 
 
@@ -101,7 +101,8 @@ class SatsnetStp {
     const method = stpModuleTyped[methodName] as (...args: any[]) => Promise<WasmResponse<T>>; // Use the correctly typed module
 
     const [err, result] = await tryit(method)(...args)
-
+    console.log('stp result', result);
+    
     if (err) {
       console.error(`stp ${methodName} error: ${err.message}`)
       return [err, undefined]
@@ -622,12 +623,13 @@ class SatsnetStp {
   async invokeContract_SatsNet(
     url: string,
     invoke: string,
+    assetName: string,
     feeRate: string
   ): Promise<[
     Error | undefined,
     { txId: string } | undefined
   ]> {
-    return this._handleRequest<{ txId: string }>('invokeContract_SatsNet', url, invoke, feeRate)
+    return this._handleRequest<{ txId: string }>('invokeContract_SatsNet', url, invoke, assetName, feeRate)
   }
 
   /** 根据地址获取合约状态 */
@@ -639,7 +641,7 @@ class SatsnetStp {
   }
 
   /** 获取合约所有地址 */
-  async getAllAddressInContract(url: string): Promise<[
+  async getAllAddressInContract(url: string, start: number, limit: number): Promise<[
     Error | undefined,
     string | undefined
   ]> {

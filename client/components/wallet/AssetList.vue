@@ -457,7 +457,7 @@ watch(selectedChain, (newVal) => {
       chanid,
       asset_name,
       amt,
-      utxos,
+      [],
       feeUtxos
     )
     if (err) {
