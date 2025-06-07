@@ -134,8 +134,16 @@ func (p *kvDB) BatchRead(prefix []byte, r func(k, v []byte) error) error {
 		it := txn.NewIterator(opts)
 		defer it.Close()
 
+		if p.reverse {
+			// 重点：倒序时从 prefix 区间的“末尾”起始
+			it.Seek(append(prefix, 0xFF))
+		} else {
+			// 正序：从 prefix 开始
+			it.Seek(prefix)
+		}
+
 		var err error
-		for it.Seek([]byte(prefix)); it.ValidForPrefix([]byte(prefix)); it.Next() {
+		for ; it.ValidForPrefix([]byte(prefix)); it.Next() {
 			item := it.Item()
 
 			if item.IsDeletedOrExpired() {
