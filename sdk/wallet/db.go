@@ -55,7 +55,7 @@ func DecodeFromBytes(data []byte, target interface{}) error {
 
 func GetItemsFromDB(prefix []byte, db common.KVDB) (map[string][]byte, error) {
 	result := make(map[string][]byte, 0)
-	err := db.BatchRead(prefix, func(k, v []byte) error {
+	err := db.BatchRead(prefix, false, func(k, v []byte) error {
 		result[string(k)] = v
 		return nil
 	})
@@ -92,7 +92,7 @@ func loadAllWalletFromDB(db common.KVDB) (map[int64]*WalletInDB, error) {
 	prefix := []byte(DB_KEY_WALLET)
 
 	result := make(map[int64]*WalletInDB, 0)
-	err := db.BatchRead(prefix, func(k, v []byte) error {
+	err := db.BatchRead(prefix, false, func(k, v []byte) error {
 
 		var walletInfo WalletInDB
 		err := DecodeFromBytes(v, &walletInfo)

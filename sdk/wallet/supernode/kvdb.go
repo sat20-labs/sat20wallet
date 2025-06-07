@@ -9,7 +9,6 @@ import (
 
 type kvDB struct {
 	path string
-	reverse bool
 	db   *badger.DB
 }
 
@@ -120,21 +119,17 @@ func (p *kvDB) Close() error {
 	return p.close()
 }
 
-func (p *kvDB) SetReverse(r bool) {
-	p.reverse = r
-}
-
-func (p *kvDB) BatchRead(prefix []byte, r func(k, v []byte) error) error {
+func (p *kvDB) BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error) error {
 	// 从数据库中读出所有key带有prefix前缀的value，调用r会调处理
 	// 默认从小到大排序 
 	
 	err := p.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
-		opts.Reverse = p.reverse
+		opts.Reverse = reverse
 		it := txn.NewIterator(opts)
 		defer it.Close()
 
-		if p.reverse {
+		if reverse {
 			// 重点：倒序时从 prefix 区间的“末尾”起始
 			it.Seek(append(prefix, 0xFF))
 		} else {

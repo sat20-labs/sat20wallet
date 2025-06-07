@@ -15,7 +15,6 @@ type KVDB interface {
 	Close() error
 
 	NewBatchWrite() WriteBatch
-	BatchRead(prefix []byte, r func(k, v []byte) error) error
-	SetReverse(bool)
+	BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error) error
 }
 
