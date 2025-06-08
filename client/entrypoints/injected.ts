@@ -21,7 +21,7 @@ export default defineUnlistedScript(() => {
     constructor() {
       window.addEventListener('message', (event) => {
         console.log('injected message', event.data);
-        
+
         const { type, data, event: eventName, metadata = {} } = event.data || {}
         const { to } = metadata
         if (to !== Message.MessageTo.INJECTED) return
@@ -30,7 +30,7 @@ export default defineUnlistedScript(() => {
         if (type === Message.MessageType.EVENT && eventName) {
           const listeners = this.eventListeners[eventName]
           console.log('listeners', listeners);
-          
+
           if (listeners) {
             listeners.forEach((handler) => handler(data))
           }
@@ -418,7 +418,7 @@ export default defineUnlistedScript(() => {
 
     async getAssetAmount_SatsNet(address: string, assetName: string): Promise<{ amount: string; value: string }> {
       console.log(Message.MessageAction);
-      
+
       return this.send<{ amount: string; value: string }>({
         type: Message.MessageType.REQUEST,
         action: Message.MessageAction.GET_ASSET_AMOUNT_SATSNET,
@@ -489,11 +489,18 @@ export default defineUnlistedScript(() => {
       })
     }
     // 新增：合约调用（SatsNet）
-    async invokeContract_SatsNet(url: string, invoke: string, assetName: string, feeRate: string): Promise<{ txId: string }> {
+    async invokeContract_SatsNet(url: string, invoke: string, feeRate: string): Promise<{ txId: string }> {
       return this.send<{ txId: string }>({
         type: Message.MessageType.APPROVE,
         action: Message.MessageAction.INVOKE_CONTRACT_SATSNET,
-        data: { url, invoke, assetName, feeRate },
+        data: { url, invoke, feeRate },
+      })
+    }
+    async invokeContractV2_SatsNet(url: string, invoke: string, assetName: string, amt: string, unitPrice: number, quantityNum: number, serviceFee: number, feeRate: string): Promise<{ txId: string }> {
+      return this.send<{ txId: string }>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET,
+        data: { url, invoke, assetName, amt, unitPrice, quantityNum, serviceFee, feeRate },
       })
     }
     async getAddressStatusInContract(url: string, address: string): Promise<string> {
@@ -507,6 +514,13 @@ export default defineUnlistedScript(() => {
       return this.send<string>({
         type: Message.MessageType.REQUEST,
         action: Message.MessageAction.GET_CONTRACT_ALL_ADDRESSES,
+        data: { url, start, limit },
+      })
+    }
+    async getContractInvokeHistoryInServer(url: string, start: number = 0, limit: number = 20): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_CONTRACT_INVOKE_HISTORY_IN_SERVER,
         data: { url, start, limit },
       })
     }

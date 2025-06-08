@@ -398,7 +398,6 @@ interface SatsnetStp {
   invokeContract_SatsNet(
     url: string,
     invoke: string, // json string
-    assetName: string,
     feeRate: string
   ): Promise<SatsnetResponse<{ txId: string }>>;
 

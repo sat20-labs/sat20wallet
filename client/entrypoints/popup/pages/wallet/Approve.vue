@@ -16,6 +16,7 @@ import SignPsbt from '@/components/approve/SignPsbt.vue'
 import SplitAsset from '@/components/approve/SplitAsset.vue'
 import ApproveDeployContractRemote from '@/components/approve/ApproveDeployContractRemote.vue'
 import ApproveInvokeContractSatsNet from '@/components/approve/ApproveInvokeContractSatsNet.vue'
+import ApproveInvokeContractV2SatsNet from '@/components/approve/ApproveInvokeContractV2SatsNet.vue'
 import { Message } from '@/types/message'
 
 const { approveData, approve, reject } = useApprove()
@@ -28,6 +29,7 @@ const approveComponentMap: any = {
   [Message.MessageAction.BATCH_SEND_ASSETS_SATSNET]: SplitAsset,
   [Message.MessageAction.DEPLOY_CONTRACT_REMOTE]: ApproveDeployContractRemote,
   [Message.MessageAction.INVOKE_CONTRACT_SATSNET]: ApproveInvokeContractSatsNet,
+  [Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET]: ApproveInvokeContractV2SatsNet,
 }
 
 const data = computed(() => {
@@ -37,7 +39,7 @@ const metadata = computed(() => {
   return approveData.value?.metadata ?? {}
 })
 console.log(approveData)
-
+console.log(approveComponentMap)
 const componentName = computed(() => {
   if (!approveData.value?.action) {
     return null

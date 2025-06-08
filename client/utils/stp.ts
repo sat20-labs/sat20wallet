@@ -73,8 +73,10 @@ interface StpWasmModule {
   getParamForInvokeContract: (templateName: string) => Promise<WasmResponse<{ parameter: any }>>;
   getFeeForInvokeContract: (url: string, invoke: string) => Promise<WasmResponse<{ fee: any }>>;
   invokeContract_SatsNet: (url: string, invoke: string, assetName: string, feeRate: string) => Promise<WasmResponse<{ txId: string }>>;
+  invokeContractV2_SatsNet: (url: string, invoke: string, assetName: string, amt: string, unitPrice: number, serviceFee: number, feeRate: string) => Promise<WasmResponse<{ txId: string }>>;
   getAddressStatusInContract: (url: string, address: string) => Promise<WasmResponse<string>>;
   getAllAddressInContract: (url: string, start: number, limit: number) => Promise<WasmResponse<string>>;
+  getContractInvokeHistoryInServer: (url: string, start: number, limit: number) => Promise<WasmResponse<string>>;
 }
 
 
@@ -102,7 +104,7 @@ class SatsnetStp {
 
     const [err, result] = await tryit(method)(...args)
     console.log('stp result', result);
-    
+
     if (err) {
       console.error(`stp ${methodName} error: ${err.message}`)
       return [err, undefined]
@@ -154,7 +156,7 @@ class SatsnetStp {
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('switchAccount', id)
   }
-  
+
   async hello(): Promise<[Error | undefined, string | undefined]> { // Refined return type
     return this._handleRequest<string>('hello')
   }
@@ -623,13 +625,18 @@ class SatsnetStp {
   async invokeContract_SatsNet(
     url: string,
     invoke: string,
-    assetName: string,
     feeRate: string
   ): Promise<[
     Error | undefined,
     { txId: string } | undefined
   ]> {
-    return this._handleRequest<{ txId: string }>('invokeContract_SatsNet', url, invoke, assetName, feeRate)
+    return this._handleRequest<{ txId: string }>('invokeContract_SatsNet', url, invoke, feeRate)
+  }
+  async invokeContractV2_SatsNet(url: string, invoke: string, assetName: string, amt: string, feeRate: string): Promise<[
+    Error | undefined,
+    { txId: string } | undefined
+  ]> {
+    return this._handleRequest<{ txId: string }>('invokeContractV2_SatsNet', url, invoke, assetName, amt, feeRate)
   }
 
   /** 根据地址获取合约状态 */
@@ -645,7 +652,13 @@ class SatsnetStp {
     Error | undefined,
     string | undefined
   ]> {
-    return this._handleRequest<string>('getAllAddressInContract', url)
+    return this._handleRequest<string>('getAllAddressInContract', url, start, limit)
+  }
+  async getContractInvokeHistoryInServer(url: string, start: number, limit: number): Promise<[
+    Error | undefined,
+    string | undefined
+  ]> {
+    return this._handleRequest<string>('getContractInvokeHistoryInServer', url, start, limit)
   }
 }
 

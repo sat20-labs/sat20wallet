@@ -95,14 +95,6 @@ export default defineBackground(() => {
         Message.MessageAction.LOCK_TO_CHANNEL,
         Message.MessageAction.UNLOCK_FROM_CHANNEL,
         // --- Added UTXO Getter Actions ---
-        Message.MessageAction.GET_UTXOS,
-        Message.MessageAction.GET_UTXOS_SATSNET,
-        Message.MessageAction.GET_UTXOS_WITH_ASSET,
-        Message.MessageAction.GET_UTXOS_WITH_ASSET_SATSNET,
-        Message.MessageAction.GET_UTXOS_WITH_ASSET_V2,
-        Message.MessageAction.GET_UTXOS_WITH_ASSET_V2_SATSNET,
-        Message.MessageAction.GET_ASSET_AMOUNT,
-        Message.MessageAction.GET_ASSET_AMOUNT_SATSNET,
         Message.MessageAction.MERGE_BATCH_SIGNED_PSBT,
 
       ]
@@ -355,6 +347,10 @@ export default defineBackground(() => {
             [reqErr, reqRes] = await service.getAllAddressInContract(data.url, data.start, data.limit)
             if (reqErr) { errData = { code: -71, message: reqErr.message } } else { resData = reqRes }
             break
+          case Message.MessageAction.GET_CONTRACT_INVOKE_HISTORY_IN_SERVER:
+            [reqErr, reqRes] = await service.getContractInvokeHistoryInServer(data.url, data.start, data.limit)
+            if (reqErr) { errData = { code: -71, message: reqErr.message } } else { resData = reqRes }
+            break
           default:
             console.warn(`Unhandled REQUEST action: ${action}`);
             errData = { code: -32601, message: 'Method not found' }; // Method not found error
@@ -392,6 +388,7 @@ export default defineBackground(() => {
           // --- 合约相关 ---
           Message.MessageAction.DEPLOY_CONTRACT_REMOTE,
           Message.MessageAction.INVOKE_CONTRACT_SATSNET,
+          Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET,
         ];
 
         if (REQUIRES_APPROVAL.includes(action)) {
