@@ -268,7 +268,10 @@ func (p *jsDB) NewBatchWrite() common.WriteBatch {
 	}
 }
 
-func (p *jsDB) BatchRead(prefix []byte, r func(k, v []byte) error) error {
+func (p *jsDB) SetReverse(bool) {
+}
+
+func (p *jsDB) BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error) error {
     prefixStr := string(prefix)
 	if p.isExtension {
 		// 创建 Promise 处理异步调用

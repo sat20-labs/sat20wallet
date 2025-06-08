@@ -168,7 +168,7 @@ func batchDbTest(this js.Value, p []js.Value) any {
 		return err
 	}
 
-	err = db.BatchRead([]byte("intValue"), func(k, v []byte) error {
+	err = db.BatchRead([]byte("intValue"), false, func(k, v []byte) error {
 		wallet.Log.Debugf("BatchRead intValue: key: %v, value: %v", string(k), string(v))
 		return nil
 	})
