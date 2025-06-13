@@ -352,6 +352,10 @@ func (p *jsDB) BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error)
     return nil
 }
 
+func (p *jsDB) BatchReadV2(prefix, seekKey []byte, reverse bool, r func(k, v []byte) error) error {
+	return fmt.Errorf("not implementd")
+}
+
 
 // 可选：添加批量操作方法
 func (p *jsDB) putBatch_Chrome(entries map[string]string) error {
