@@ -379,7 +379,7 @@ func TestPsbtFullFlow(t *testing.T) {
 		// 		Type:     "f",
 		// 		Ticker:   "rarepizza",
 		// 	},
-		// 	Amount:     *common.NewDecimal(100, 0),
+		// 	Amount:     *common.NewDefaultDecimal(100),
 		// 	BindingSat: 1,
 		// },
 	}
