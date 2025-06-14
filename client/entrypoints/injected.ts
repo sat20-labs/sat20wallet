@@ -496,11 +496,11 @@ export default defineUnlistedScript(() => {
         data: { url, invoke, feeRate },
       })
     }
-    async invokeContractV2_SatsNet(url: string, invoke: string, assetName: string, amt: string, unitPrice: number, quantityNum: number, serviceFee: number, feeRate: string): Promise<{ txId: string }> {
+    async invokeContractV2_SatsNet(url: string, invoke: string, assetName: string, amt: string, feeRate: string, metadata: any): Promise<{ txId: string }> {
       return this.send<{ txId: string }>({
         type: Message.MessageType.APPROVE,
         action: Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET,
-        data: { url, invoke, assetName, amt, unitPrice, quantityNum, serviceFee, feeRate },
+        data: { url, invoke, assetName, amt, feeRate, metadata },
       })
     }
     async getAddressStatusInContract(url: string, address: string): Promise<string> {
@@ -522,6 +522,13 @@ export default defineUnlistedScript(() => {
         type: Message.MessageType.REQUEST,
         action: Message.MessageAction.GET_CONTRACT_INVOKE_HISTORY_IN_SERVER,
         data: { url, start, limit },
+      })
+    }
+    async getContractInvokeHistoryByAddressInServer(url: string, address: string, start: number = 0, limit: number = 20): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_CONTRACT_INVOKE_HISTORY_BY_ADDRESS_IN_SERVER,
+        data: { url, address, start, limit },
       })
     }
   }

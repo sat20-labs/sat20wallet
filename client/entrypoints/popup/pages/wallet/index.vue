@@ -25,10 +25,8 @@
       <!-- 下拉选择 -->
       <SubWalletSelector @wallet-changed="handleSubWalletChange" @wallet-created="handleSubWalletCreated" />
     </div>
-
     <!-- 资产余额 -->
     <BalanceSummary :key="selectedChainLabel" 
-      :selectedTranscendingMode="transcendingModeStore.selectedTranscendingMode || 'poolswap'"
       :selectedChain="selectedChainLabel" :mempool-url="mempoolUrl"/>
 
     <!-- 资产列表 -->
@@ -100,6 +98,7 @@ const walletStore = useWalletStore()
 const l1Store = useL1Store()
 const transcendingModeStore = useTranscendingModeStore()
 
+const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
 const { refreshL1Assets } = useL1Assets()
 const { refreshL2Assets } = useL2Assets()
 

@@ -61,6 +61,7 @@ import { useWalletStore } from '@/store'
 const walletStore = useWalletStore()
 const showTranscendingMode = ref(false) // 控制弹出窗口显示状态
 const transcendingModeStore = useTranscendingModeStore()
+const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
 const selectedType = ref('ORDX') // 示例：当前选择的资产类型
 const l1Assets = computed(() => {
   // 示例：L1 资产数据
@@ -70,7 +71,7 @@ const l1Assets = computed(() => {
 // 动态图标
 const currentIcon = computed(() => {
   //console.log('Header Selected Transcending Mode:', transcendingModeStore.selectedTranscendingMode) // Uncommenting the console log
-  return transcendingModeStore.selectedTranscendingMode === 'poolswap' ? 'material-icon-theme:hurl' : 'material-icon-theme:supabase'
+  return selectedTranscendingMode.value === 'poolswap' ? 'material-icon-theme:hurl' : 'material-icon-theme:supabase'
 })
 
 // 示例事件处理

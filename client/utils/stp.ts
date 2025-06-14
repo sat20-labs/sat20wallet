@@ -77,6 +77,7 @@ interface StpWasmModule {
   getAddressStatusInContract: (url: string, address: string) => Promise<WasmResponse<string>>;
   getAllAddressInContract: (url: string, start: number, limit: number) => Promise<WasmResponse<string>>;
   getContractInvokeHistoryInServer: (url: string, start: number, limit: number) => Promise<WasmResponse<string>>;
+  getContractInvokeHistoryByAddressInServer: (url: string, address: string, start: number, limit: number) => Promise<WasmResponse<string>>;
 }
 
 
@@ -659,6 +660,12 @@ class SatsnetStp {
     string | undefined
   ]> {
     return this._handleRequest<string>('getContractInvokeHistoryInServer', url, start, limit)
+  }
+  async getContractInvokeHistoryByAddressInServer(url: string, address: string, start: number, limit: number): Promise<[
+    Error | undefined,
+    string | undefined
+  ]> {
+    return this._handleRequest<string>('getContractInvokeHistoryByAddressInServer', url, address, start, limit)
   }
 }
 

@@ -56,6 +56,7 @@
 </template>
 
 <script setup lang="ts">
+import { useTranscendingModeStore } from '@/store'
 import { ref, computed, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { useL1Store, useL2Store, useWalletStore } from '@/store'
@@ -81,8 +82,6 @@ const showReceiveDialog = ref(false)
 const receiveAddress = ref('') // QRCode address
 // Props
 const props = defineProps<{
-  // assets: Array<{ id: string; amount: number; price: number; status: string }>
-  selectedTranscendingMode: string 
   selectedChain: string | 'bitcoin' | 'channel' | 'satoshinet'
   mempoolUrl: string
 }>()
@@ -91,9 +90,10 @@ const props = defineProps<{
 const showDialog = ref(false)
 const operationAmount = ref('')
 const operationAddress = ref('')
+const transcendingModeStore = useTranscendingModeStore()
 const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
-
+const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
 const { address, feeRate, btcFeeRate } = storeToRefs(walletStore)
 const { channel } = storeToRefs(channelStore)
 
@@ -119,9 +119,8 @@ const buttons = [
   { label: 'History', icon: 'lucide:clock', action: 'history', modes: ['poolswap', 'lightning'], chains: ['Bitcoin', 'SatoshiNet', 'Channel'] },
 ]
 
-const selectedTranscendingMode = (props.selectedTranscendingMode || 'poolswap').toLowerCase()
 const selectedChain = (props.selectedChain || 'bitcoin').toLowerCase()
-if (!props.selectedTranscendingMode || !props.selectedChain) {
+if (!selectedTranscendingMode.value || !props.selectedChain) {
   console.warn('Props missing: selectedTranscendingMode or selectedChain is undefined. Using default values.')
 }
 // 过滤按钮
@@ -129,7 +128,7 @@ const filteredButtons = computed(() => {
   return buttons.map(button => {
     const isDisabled =
       button.action.toLowerCase() === 'send' &&
-      props.selectedTranscendingMode === 'lightning' &&
+      selectedTranscendingMode.value === 'lightning' &&
       props.selectedChain.toLowerCase() === 'channel'
 
     return {
@@ -138,7 +137,7 @@ const filteredButtons = computed(() => {
     }
   }).filter(
     button =>
-      button.modes.includes(selectedTranscendingMode) &&
+      button.modes.includes(selectedTranscendingMode.value) &&
       button.chains.map(chain => chain.toLowerCase()).includes(selectedChain)
   )
 })

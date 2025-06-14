@@ -285,6 +285,9 @@ class Service {
   async getContractInvokeHistoryInServer(url: string, start: number, limit: number): Promise<[Error | undefined, string | undefined]> {
     return stp.getContractInvokeHistoryInServer(url, start, limit)
   }
+  async getContractInvokeHistoryByAddressInServer(url: string, address: string, start: number, limit: number): Promise<[Error | undefined, string | undefined]> {
+    return stp.getContractInvokeHistoryByAddressInServer(url, address, start, limit)
+  }
 }
 
 export default new Service()

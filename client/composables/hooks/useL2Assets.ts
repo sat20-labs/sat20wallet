@@ -87,16 +87,16 @@ export const useL2Assets = () => {
         let label = item.Name.Type === 'e'
         ? `${item.Name.Ticker}（raresats）`
         : item.Name.Ticker;
-        if (key !== '::') {
-          const [err, res] = await satsnetStp.getTickerInfo(key)
+        // if (key !== '::') {
+        //   const [err, res] = await satsnetStp.getTickerInfo(key)
           
-          if (res?.ticker) {
-            const { ticker } = res
-            const result = JSON.parse(ticker)
-            console.log('l2 ticker result', result)
-            label = result?.name.Ticker || label
-          }
-        }
+        //   if (res?.ticker) {
+        //     const { ticker } = res
+        //     const result = JSON.parse(ticker)
+        //     console.log('l2 ticker result', result)
+        //     label = result?.name.Ticker || label
+        //   }
+        // }
         allAssetList.value.push({
           id: key,
           key,

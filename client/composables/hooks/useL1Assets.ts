@@ -94,17 +94,17 @@ export const useL1Assets = () => {
         let label = item.Name.Type === 'e'
         ? `${item.Name.Ticker}（raresats）`
         : item.Name.Ticker;
-        if (key !== '::') {
-          const [err, res] = await satsnetStp.getTickerInfo(key)
-          // console.log('ticker res', res)
-          if (res?.ticker) {
-            const { ticker } = res
-            const result = JSON.parse(ticker)
-            console.log('ticker result', result)
+        // if (key !== '::') {
+        //   const [err, res] = await satsnetStp.getTickerInfo(key)
+        //   // console.log('ticker res', res)
+        //   if (res?.ticker) {
+        //     const { ticker } = res
+        //     const result = JSON.parse(ticker)
+        //     console.log('ticker result', result)
 
-            label = result?.name.Ticker || label
-          }
-        }
+        //     label = result?.name.Ticker || label
+        //   }
+        // }
         allAssetList.value.push({
           id: key,
           key,

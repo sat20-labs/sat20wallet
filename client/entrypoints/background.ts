@@ -351,6 +351,10 @@ export default defineBackground(() => {
             [reqErr, reqRes] = await service.getContractInvokeHistoryInServer(data.url, data.start, data.limit)
             if (reqErr) { errData = { code: -71, message: reqErr.message } } else { resData = reqRes }
             break
+          case Message.MessageAction.GET_CONTRACT_INVOKE_HISTORY_BY_ADDRESS_IN_SERVER:
+            [reqErr, reqRes] = await service.getContractInvokeHistoryByAddressInServer(data.url, data.address, data.start, data.limit)
+            if (reqErr) { errData = { code: -72, message: reqErr.message } } else { resData = reqRes }
+            break
           default:
             console.warn(`Unhandled REQUEST action: ${action}`);
             errData = { code: -32601, message: 'Method not found' }; // Method not found error
