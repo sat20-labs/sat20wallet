@@ -125,6 +125,7 @@ func (p *kvDB) BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error)
 	
 	err := p.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = true
 		opts.Reverse = reverse
 		it := txn.NewIterator(opts)
 		defer it.Close()
@@ -136,6 +137,55 @@ func (p *kvDB) BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error)
 			// 正序：从 prefix 开始
 			it.Seek(prefix)
 		}
+
+		var err error
+		for ; it.ValidForPrefix([]byte(prefix)); it.Next() {
+			item := it.Item()
+
+			if item.IsDeletedOrExpired() {
+				continue
+			}
+			
+			err = item.Value(func(data []byte) error {
+				return r(item.Key(), data)
+			})
+			if err != nil {
+				break
+			}
+		}
+		return err
+	})
+
+	return err
+}
+
+
+func (p *kvDB) BatchReadV2(prefix, seekKey []byte, reverse bool, r func(k, v []byte) error) error {
+	// 从数据库中读出所有key带有prefix前缀的value，调用r会调处理
+	// 默认从小到大排序 
+	
+	err := p.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = true
+		opts.Reverse = reverse
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		if reverse {
+            // 倒序：从 seekKey 开始向前遍历
+            if len(seekKey) > 0 {
+                it.Seek(seekKey)
+            } else {
+                it.Seek(append(prefix, 0xFF))
+            }
+        } else {
+            // 正序：从 seekKey 或 prefix 开始
+            if len(seekKey) > 0 {
+                it.Seek(seekKey)
+            } else {
+                it.Seek(prefix)
+            }
+        }
 
 		var err error
 		for ; it.ValidForPrefix([]byte(prefix)); it.Next() {

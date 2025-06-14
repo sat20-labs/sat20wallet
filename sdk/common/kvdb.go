@@ -16,5 +16,6 @@ type KVDB interface {
 
 	NewBatchWrite() WriteBatch
 	BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error) error
+	BatchReadV2(prefix, seekKey []byte, reverse bool, r func(k, v []byte) error) error  // 只用于非客户端模式下
 }
 

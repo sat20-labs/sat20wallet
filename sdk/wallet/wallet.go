@@ -2074,6 +2074,11 @@ func CreatePsbt_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher
 
 func CreatePsbtWithPeer(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	witnessScript []byte, peerPubKey []byte, peerSigs [][]byte) (*psbt.Packet, error) {
+
+	if len(peerSigs) != len(tx.TxIn) {
+		return nil, fmt.Errorf("length of sigs is different from inputs of tx, %d %d", len(peerSigs), len(tx.TxIn))
+	}
+	
 	packet, err := psbt.NewFromUnsignedTx(RemoveSignatures(tx))
 	if err != nil {
 		return nil, err
@@ -2130,6 +2135,10 @@ func CreatePsbtWithPeer_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutpu
 	witnessScript []byte, peerPubKey []byte, peerSigs [][]byte) (*spsbt.Packet, error) {
 	// tx 必须是unsigned
 
+	if len(peerSigs) != len(tx.TxIn) {
+		return nil, fmt.Errorf("length of sigs is different from inputs of tx, %d %d", len(peerSigs), len(tx.TxIn))
+	}
+	
 	packet, err := spsbt.NewFromUnsignedTx(RemoveSignatures_SatsNet(tx))
 	if err != nil {
 		return nil, err
