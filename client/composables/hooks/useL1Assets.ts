@@ -43,6 +43,7 @@ export const useL1Assets = () => {
         address: address.value,
         network: network.value,
       }),
+    refetchInterval: 3000,
     enabled: computed(() => !!address.value && !!network.value),
   })
 

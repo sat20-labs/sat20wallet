@@ -11,8 +11,9 @@
           <!-- Sub-wallet List -->
           <div class="space-y-2">
             <div v-for="account in accounts" :key="account.index"
-              class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
-              :class="{ 'border-primary/50': account.index === accountIndex }">
+              class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors cursor-pointer"
+              :class="{ 'border-primary/50': account.index === accountIndex }"
+              @click="account.index !== accountIndex && selectAccount(account)">
               <div class="flex items-center gap-3">
                 <div class="w-10 h-10 rounded-full overflow-hidden bg-muted">
                   <div class="w-full h-full flex items-center justify-center">
@@ -24,23 +25,25 @@
                     {{ account.name }}
                     <Button v-if="account.index === accountIndex" variant="ghost" size="icon" class="h-2 w-2"
                       @click="showEditNameDialog(account)">
-                      <Icon icon="lucide:pencil" class="w-2 h-2" />
+                      <Icon icon="lucide:pencil" class="w-3 h-3" />
                     </Button>
                   </div>
                   <div class="text-sm text-muted-foreground">{{ hideAddress(account.address) }}</div>
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <Button v-if="account.index !== accountIndex" variant="outline" size="sm"
-                  @click="selectAccount(account)">
-                  {{ $t('subWalletManager.switch') }}
-                </Button>
-                <Button v-else variant="outline" size="sm" disabled>
-                  {{ $t('subWalletManager.current') }}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  :aria-label="$t('subWalletManager.copyAddress')"
+                  @click="copyAddress(account.address)"
+                  class="hover:text-primary"
+                >
+                  <Icon icon="lucide:copy" class="w-3 h-3" />
                 </Button>
                 <Button v-if="account.index !== accountIndex" variant="ghost" size="icon"
                   class="text-destructive hover:text-destructive" @click="confirmDeleteAccount(account)">
-                  <Icon icon="lucide:trash-2" class="w-4 h-4" />
+                  <Icon icon="lucide:trash-2" class="w-3 h-3" />
                 </Button>
               </div>
             </div>
@@ -166,6 +169,7 @@ import { hideAddress } from '@/utils'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Message } from '@/types/message'
 import { sendAccountsChangedEvent } from '@/lib/utils'
+
 const router = useRouter()
 const { toast } = useToast()
 const walletStore = useWalletStore()
@@ -204,15 +208,15 @@ async function saveAccountName() {
     await walletStore.updateAccountName(accountToEdit.value.index, editingName.value)
 
     toast({
-      title: 'Success',
-      description: 'Account name updated successfully',
+      title: '成功',
+      description: '账户名称修改成功',
     })
     isEditNameDialogOpen.value = false
     // ... existing code ...
   } catch (error) {
     toast({
-      title: 'Error',
-      description: 'Failed to update Account name',
+      title: '错误',
+      description: '账户名称修改失败',
       variant: 'destructive',
     })
   } finally {
@@ -224,8 +228,8 @@ async function saveAccountName() {
 async function createAccount() {
   if (!newAccountName.value) {
     toast({
-      title: 'Error',
-      description: 'Please fill in Account name',
+      title: '错误',
+      description: '请输入账户名称',
       variant: 'destructive',
     })
     return
@@ -238,16 +242,19 @@ async function createAccount() {
     await walletStore.addAccount(accountName, newAccountId)
 
     toast({
-      title: 'Success',
-      description: 'Account created successfully',
+      title: '成功',
+      description: '账户创建成功',
     })
     isCreateAccountDialogOpen.value = false
     // 发送 accountsChanged 事件（封装函数）
     await sendAccountsChangedEvent(accounts.value)
+    setTimeout(() => {
+      router.back()
+    }, 300)
   } catch (error) {
     toast({
-      title: 'Error',
-      description: 'Failed to create new account',
+      title: '错误',
+      description: '账户创建失败',
       variant: 'destructive',
     })
   } finally {
@@ -268,16 +275,19 @@ async function deleteAccount() {
     await walletStore.deleteAccount(accountToDelete.value.index)
 
     toast({
-      title: 'Success',
-      description: 'Account deleted successfully',
+      title: '成功',
+      description: '账户删除成功',
     })
     isDeleteDialogOpen.value = false
     // 发送 accountsChanged 事件（封装函数）
     await sendAccountsChangedEvent(accounts.value)
+    setTimeout(() => {
+      router.back()
+    }, 300)
   } catch (error) {
     toast({
-      title: 'Error',
-      description: 'Failed to delete account',
+      title: '错误',
+      description: '账户删除失败',
       variant: 'destructive',
     })
   } finally {
@@ -290,15 +300,34 @@ async function selectAccount(account: WalletAccount) {
   try {
     await walletStore.switchToAccount(account.index)
     toast({
-      title: 'Success',
-      description: 'Account switched successfully',
+      title: '成功',
+      description: '切换账户成功',
     })
     // 发送 accountsChanged 事件（封装函数）
     await sendAccountsChangedEvent(accounts.value)
+    setTimeout(() => {
+      router.back()
+    }, 300)
   } catch (error) {
     toast({
-      title: 'Error',
-      description: 'Failed to switch account',
+      title: '错误',
+      description: '切换账户失败',
+      variant: 'destructive',
+    })
+  }
+}
+
+async function copyAddress(address: string) {
+  try {
+    await navigator.clipboard.writeText(address)
+    toast({
+      title: '成功',
+      description: '地址已复制',
+    })
+  } catch (error) {
+    toast({
+      title: '错误',
+      description: '复制失败',
       variant: 'destructive',
     })
   }

@@ -367,6 +367,9 @@ const createWallet = async () => {
     })
     // 发送 accountsChanged 事件（封装函数）
     await sendAccountsChangedEvent(wallets.value)
+    setTimeout(() => {
+      router.back()
+    }, 300)
   } catch (error: any) {
     toast({
       variant: 'destructive',
@@ -405,6 +408,9 @@ const importWallet = async () => {
     })
     // 发送 accountsChanged 事件（封装函数）
     await sendAccountsChangedEvent(wallets.value)
+    setTimeout(() => {
+      router.back()
+    }, 300)
   } catch (error: any) {
     toast({
       variant: 'destructive',

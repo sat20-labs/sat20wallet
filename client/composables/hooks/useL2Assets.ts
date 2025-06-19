@@ -46,6 +46,7 @@ export const useL2Assets = () => {
         address: address.value,
         network: network.value,
       }),
+    refetchInterval: 3000,
     enabled: computed(() => !!address.value && !!network.value),
   })
 

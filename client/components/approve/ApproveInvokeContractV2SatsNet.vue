@@ -58,7 +58,7 @@
             <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.estimatedFee', '预估费用')}}</span>
             <span v-if="feeLoading" class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.loading',
               '查询中...')}}</span>
-            <span v-else-if="feeError" class="text-sm text-destructive">{{ $t('invokeContractSatsNet.feeError',
+            <span v-else-if="feeError" class="text-sm text-destructive">{{ feeErrorMessage || $t('invokeContractSatsNet.feeError',
               '查询失败')}}</span>
             <span v-else class="font-medium">{{ estimatedFee || '-' }} sats</span>
           </div>
@@ -122,6 +122,7 @@ const isLoading = ref(false)
 const invokeError = ref('')
 const feeLoading = ref(false)
 const feeError = ref(false)
+const feeErrorMessage = ref('')
 const estimatedFee = ref<string>('10')
 
 const formattedInvoke = computed(() => {
@@ -139,10 +140,13 @@ const num = computed(() => {
 const getFee = async () => {
   if (!props.data?.url || !props.data?.invoke) {
     estimatedFee.value = '10'
+    feeError.value = false
+    feeErrorMessage.value = ''
     return
   }
   feeLoading.value = true
   feeError.value = false
+  feeErrorMessage.value = ''
   try {
     const [err, res] = await stp.getFeeForInvokeContract(
       props.data.url,
@@ -151,12 +155,14 @@ const getFee = async () => {
     console.log('getFeeForInvokeContract', err, res)
     if (err) {
       feeError.value = true
+      feeErrorMessage.value = err?.message || err?.toString?.() || '查询失败'
       estimatedFee.value = '10'
     } else {
       estimatedFee.value = res?.fee ? res.fee.toString() : '10'
     }
   } catch (e: any) {
     feeError.value = true
+    feeErrorMessage.value = e?.message || e?.toString?.() || '查询失败'
     estimatedFee.value = '10'
   } finally {
     feeLoading.value = false

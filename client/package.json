@@ -2,7 +2,7 @@
   "name": "wxt-vue-starter",
   "description": "manifest.json description",
   "private": true,
-  "version": "0.0.179",
+  "version": "0.0.185",
   "type": "module",
   "scripts": {
     "dev": "wxt",

@@ -72,6 +72,7 @@ const checkPassword = async () => {
 }
 
 router.beforeEach(async (to, from) => {
+  console.time('router.beforeEach')
   const walletStore = useWalletStore()
 
   const hasWallet = walletStorage.getValue('hasWallet')
@@ -86,21 +87,26 @@ router.beforeEach(async (to, from) => {
   if (to.path.startsWith('/wallet')) {
     if (hasWallet) {
       if (walletStore.locked) {
+        console.timeEnd('router.beforeEach')
         return '/unlock?redirect=' + to.path
       }
     } else {
+      console.timeEnd('router.beforeEach')
       return '/'
     }
   } else if (to.path === '/unlock') {
   } else {
     if (hasWallet) {
       if (walletStore.locked) {
+        console.timeEnd('router.beforeEach')
         return '/unlock?redirect=' + to.path
       } else {
+        console.timeEnd('router.beforeEach')
         return '/wallet'
       }
     }
   }
+  console.timeEnd('router.beforeEach')
 })
 
 export default router
