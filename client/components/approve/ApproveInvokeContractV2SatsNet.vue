@@ -18,7 +18,7 @@
             <span class="font-medium">{{ props.data?.metadata?.assetName || props.data?.assetName || '-' }}</span>
           </div> -->
           <div class="flex items-center justify-between">
-            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.url', '合约URL')}}</span>
+            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.url', '合约URL') }}</span>
             <span class="font-medium break-all text-right">{{ props.data?.url || '-' }}</span>
           </div>
         </div>
@@ -26,7 +26,7 @@
         <!-- Transaction Details Section -->
         <div class="bg-muted/50 rounded-lg p-4 space-y-3">
           <h3 class="text-sm font-medium text-muted-foreground mb-2">{{ $t('invokeContractSatsNet.transactionDetails',
-            '交易详情')}}</h3>
+            '交易详情') }}</h3>
 
           <!-- Swap Specific Details -->
           <template v-if="props.data?.metadata?.action === 'swap'">
@@ -51,14 +51,15 @@
               sats</span>
           </div>
           <div class="flex items-center justify-between">
-            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.feeRate', '费率')}}</span>
+            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.feeRate', '费率') }}</span>
             <span class="font-medium">{{ props.data?.feeRate || '-' }} sats</span>
           </div>
           <div class="flex items-center justify-between">
-            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.estimatedFee', '预估费用')}}</span>
+            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.estimatedFee', '预估费用') }}</span>
             <span v-if="feeLoading" class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.loading',
-              '查询中...')}}</span>
-            <span v-else-if="feeError" class="text-sm text-destructive">{{ feeErrorMessage || $t('invokeContractSatsNet.feeError',
+              '查询中...') }}</span>
+            <span v-else-if="feeError" class="text-sm text-destructive">{{ feeErrorMessage ||
+              $t('invokeContractSatsNet.feeError',
               '查询失败')}}</span>
             <span v-else class="font-medium">{{ estimatedFee || '-' }} sats</span>
           </div>
@@ -71,7 +72,7 @@
         <!-- Contract Parameters Section -->
         <Accordion type="single" :collapsible="false" class="w-full">
           <AccordionItem value="item-1">
-            <AccordionTrigger class="text-sm">{{ $t('invokeContractSatsNet.viewRawContent', '查看原始调用参数')}}
+            <AccordionTrigger class="text-sm">{{ $t('invokeContractSatsNet.viewRawContent', '查看原始调用参数') }}
             </AccordionTrigger>
             <AccordionContent>
               <Alert class="mt-2">
@@ -85,7 +86,7 @@
       </div>
 
       <div v-if="isLoading" class="text-center text-muted-foreground mt-4">
-        <span class="animate-spin inline-block mr-2">⏳</span> {{ $t('invokeContractSatsNet.invoking', '正在调用合约...')}}
+        <span class="animate-spin inline-block mr-2">⏳</span> {{ $t('invokeContractSatsNet.invoking', '正在调用合约...') }}
       </div>
       <div v-if="invokeError && !isLoading" class="text-center text-destructive mt-4">
         {{ invokeError }}
@@ -187,7 +188,7 @@ const confirm = async () => {
       props.data.url,
       props.data.invoke,
       props.data.assetName,
-      (Number(props.data.amt) + Number(props.data.metadata?.serviceFee || 0)).toString(),
+      props.data.amt.toString(),
       props.data.feeRate.toString()
     )
     if (err) {

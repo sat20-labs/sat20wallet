@@ -540,7 +540,7 @@ export default defineBackground(() => {
         if (windowId) {
           approveMap.delete(windowId.toString())
           try {
-            // await browser.windows.remove(windowId)
+            await browser.windows.remove(windowId)
           } catch (e) {
             console.warn(`Window ${windowId} might already be closed:`, e)
           }
@@ -564,7 +564,7 @@ export default defineBackground(() => {
         if (windowId) {
           approveMap.delete(windowId.toString())
           try {
-            // await browser.windows.remove(windowId)
+            await browser.windows.remove(windowId)
           } catch (e) {
             console.warn(`Window ${windowId} might already be closed:`, e)
           }
