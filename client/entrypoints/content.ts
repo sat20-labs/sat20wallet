@@ -165,6 +165,16 @@ export default defineContentScript({
     // 初始化连接
     await initializeConnection()
 
+    // 监听来自后台脚本的一次性消息
+    browser.runtime.onMessage.addListener((message: any) => {
+      if (message.type === 'RECONNECT_FROM_BACKGROUND') {
+        console.log('调试: 收到来自后台的重连指令, 开始执行...')
+        cleanup()
+        initializeConnection()
+      }
+      return true // 表示可能会有异步响应
+    })
+
     // 监听扩展上下文变化
     if (browser.runtime.onMessage) {
       browser.runtime.onMessage.addListener((message, sender, sendResponse) => {

@@ -1,60 +1,126 @@
 import { browser } from 'wxt/browser'
+import type { Runtime } from 'wxt/browser'
+import { createPopup } from '@/utils/popup'
+import { walletError } from '@/types/error'
+import { Message } from '@/types/message'
 
-interface ApprovalData {
-  windowId: number
-  eventData: any
-}
+export class ApprovalManager {
+  // 储存待处理的审批请求，用窗口ID作为键
+  private approveMap = new Map<
+    string,
+    { windowId: number; eventData: any }
+  >()
 
-let currentApproval: ApprovalData | null = null
+  // 持有内容脚本的端口引用，以便发回响应
+  private contentPort: Runtime.Port | undefined
 
-/**
- * 打开审批窗口（如有旧窗口则先关闭）
- */
-export async function openApprovalWindow(eventData: any): Promise<number | null> {
-  if (currentApproval) {
-    console.log('[ApprovalManager] 关闭旧审批窗口', currentApproval.windowId)
-    await closeApprovalWindow()
+  constructor() {
+    console.log('调试: ApprovalManager 初始化')
+    this.handleWindowRemoved = this.handleWindowRemoved.bind(this)
   }
-  const url = browser.runtime.getURL('/popup.html#/wallet/approve')
-  const newWindow = await browser.windows.create({ url, type: 'popup', width: 400, height: 600 })
-  if (newWindow?.id != null) {
-    currentApproval = { windowId: newWindow.id, eventData }
-    console.log('[ApprovalManager] 新审批窗口已创建', newWindow.id)
-    return newWindow.id
-  } else {
-    console.error('[ApprovalManager] 审批窗口创建失败')
-    return null
-  }
-}
 
-/**
- * 关闭当前审批窗口
- */
-export async function closeApprovalWindow(): Promise<void> {
-  if (currentApproval) {
-    try {
-      await browser.windows.remove(currentApproval.windowId)
-      console.log('[ApprovalManager] 审批窗口已关闭', currentApproval.windowId)
-    } catch (e) {
-      console.warn('[ApprovalManager] 关闭窗口失败，可能已被关闭', e)
+  public setContentPort(port: Runtime.Port | undefined) {
+    this.contentPort = port
+    console.log(`调试: ApprovalManager 设置 contentPort: ${port ? '可用' : '不可用'}`)
+  }
+
+  public async requestApproval(eventData: any) {
+    console.log('调试: ApprovalManager 收到审批请求', eventData.action)
+    const { origin } = eventData.metadata
+
+    // 在创建新窗口前，先关闭来自同一来源（origin）的旧审批窗口
+    const windowsToRemove: number[] = []
+    for (const data of this.approveMap.values()) {
+      if (data.eventData.metadata.origin === origin) {
+        windowsToRemove.push(data.windowId)
+      }
     }
-    currentApproval = null
-  }
-}
 
-/**
- * 获取当前审批数据
- */
-export function getApprovalData(): ApprovalData | null {
-  return currentApproval
-}
+    for (const winId of windowsToRemove) {
+      console.log(`调试: 关闭之前的审批窗口 ${winId} (来源: ${origin})`)
+      try {
+        await browser.windows.remove(winId)
+      } catch (error) {
+         // 这里我们只记录警告，因为窗口可能已经被用户手动关闭了
+        console.warn(`调试: 移除旧窗口 ${winId} 失败, 可能已被关闭:`, error)
+      }
+      // 无论成功与否都从map中删除
+      this.approveMap.delete(winId.toString())
+    }
 
-/**
- * 清除审批数据（不关闭窗口）
- */
-export function clearApproval(): void {
-  if (currentApproval) {
-    console.log('[ApprovalManager] 清除审批数据', currentApproval.windowId)
+    const newWindow = await createPopup(
+      browser.runtime.getURL('/popup.html#/wallet/approve'),
+    )
+
+    if (newWindow?.id) {
+      console.log(`调试: 创建新的审批窗口 ${newWindow.id} (动作: ${eventData.action})`)
+      this.approveMap.set(newWindow.id.toString(), {
+        windowId: newWindow.id,
+        eventData: eventData,
+      })
+    } else {
+      console.error('调试: 创建审批窗口失败')
+      throw new Error('创建审批弹窗失败')
+    }
   }
-  currentApproval = null
+
+  public handleResponse(approved: boolean, windowId: number, data: any) {
+    const windowIdStr = windowId.toString()
+    const request = this.approveMap.get(windowIdStr)
+    if (!request) {
+      console.warn(`调试: 收到未知窗口 ${windowId} 的响应，忽略。`)
+      return
+    }
+
+    if (this.contentPort) {
+      const responseEvent = {
+        ...request.eventData,
+        metadata: {
+          ...request.eventData.metadata,
+          from: Message.MessageFrom.BACKGROUND,
+          to: Message.MessageTo.INJECTED,
+        },
+        data: approved ? data : null,
+        error: approved ? null : walletError.userReject,
+      }
+      console.log(`调试: 发送审批结果到内容脚本 (窗口ID: ${windowId}, 结果: ${approved})`, responseEvent)
+      this.contentPort.postMessage(responseEvent)
+    } else {
+      console.error('调试: 无法发送审批响应, 内容脚本端口不可用')
+    }
+
+    this.cleanup(windowId)
+  }
+
+  public handleWindowRemoved(closedWindowId: number) {
+    const windowIdStr = closedWindowId.toString()
+    if (this.approveMap.has(windowIdStr)) {
+      console.log(`调试: 审批窗口 ${closedWindowId} 被用户关闭, 视为拒绝。`)
+      this.handleResponse(false, closedWindowId, null)
+    }
+  }
+
+  public getApprovalData(windowId: number) {
+    const approveData = this.approveMap.get(windowId.toString())
+    if (approveData) {
+      console.log(`调试: 为弹窗 ${windowId} 提供审批数据`)
+      return {
+        action: Message.MessageAction.GET_APPROVE_DATA_RESPONSE,
+        data: approveData.eventData,
+      }
+    }
+    console.warn(`调试: 弹窗 ${windowId} 请求数据, 但未找到待审批项`)
+    return undefined
+  }
+
+  private cleanup(windowId: number) {
+    const windowIdStr = windowId.toString()
+    this.approveMap.delete(windowIdStr)
+    try {
+      browser.windows.remove(windowId)
+      console.log(`调试: 清理并关闭窗口 ${windowId}`)
+    } catch (e) {
+      // 窗口可能已经关闭，这是正常现象
+    }
+  }
 } 

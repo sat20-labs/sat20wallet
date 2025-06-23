@@ -77,8 +77,6 @@ class WalletStorage {
     const loadPromises = Object.keys(defaultState).map(async (key) => {
       const storageKey = key as keyof WalletState
       const value = await storage.getItem(this.getStorageKey(storageKey))
-      console.log('initializeState')
-      console.log(storageKey, value);
       
       if (value !== null) {
         ;(this.state[storageKey] as any) =
@@ -104,17 +102,13 @@ class WalletStorage {
     key: K,
     value: WalletState[K]
   ): Promise<void> {
-    console.log('setValue', key, value);
     
     const oldValue = this.state[key]
-    console.log('oldValue', oldValue);
     
 
     try {
       // 存储到本地
       await storage.setItem(this.getStorageKey(key), value)
-      console.log('setValue', this.getStorageKey(key), value);
-      console.log('storage', await storage.getItem(this.getStorageKey(key)));
       
       // 更新内存中的状态
       this.state[key] = value
@@ -199,7 +193,6 @@ class WalletStorage {
   public async clear(): Promise<void> {
     try {
       const keys = Object.keys(this.state).map((key) => this.getStorageKey(key))
-      console.log('keys', keys);
       
       await storage.removeItems(keys)
 
@@ -240,7 +233,6 @@ await walletStorage.batchUpdate({
 
 // 订阅状态变化
 const unsubscribe = walletStorage.subscribe((key, newValue, oldValue) => {
-  console.log(`${key} changed from ${oldValue} to ${newValue}`)
 })
 // 取消订阅
 unsubscribe()

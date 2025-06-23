@@ -84,7 +84,7 @@ export default defineUnlistedScript(() => {
           channel.removeEventListener('message', listener)
           channel.close()
           reject(new Error('Content Script response timeout'))
-        }, 5000000)
+        }, 1000 * 60)
       })
     }
 
@@ -466,11 +466,11 @@ export default defineUnlistedScript(() => {
         data: { templateName, content, feeRate },
       })
     }
-    async getParamForInvokeContract(templateName: string): Promise<{ parameter: any }> {
+    async getParamForInvokeContract(templateName: string, action: string): Promise<{ parameter: any }> {
       return this.send<{ parameter: any }>({
         type: Message.MessageType.REQUEST,
-        action: Message.MessageAction.GET_PARAM_FOR_INVOKE_CONTRACT,
-        data: { templateName },
+        action: Message.MessageAction.QUERY_PARAM_FOR_INVOKE_CONTRACT,
+        data: { templateName, action },
       })
     }
     async getFeeForInvokeContract(url: string, invoke: string): Promise<{ fee: any }> {
@@ -500,6 +500,13 @@ export default defineUnlistedScript(() => {
       return this.send<{ txId: string }>({
         type: Message.MessageType.APPROVE,
         action: Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET,
+        data: { url, invoke, assetName, amt, feeRate, metadata },
+      })
+    }
+    async invokeContractV2(url: string, invoke: string, assetName: string, amt: string, feeRate: string, metadata: any): Promise<{ txId: string }> {
+      return this.send<{ txId: string }>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.INVOKE_CONTRACT_V2,
         data: { url, invoke, assetName, amt, feeRate, metadata },
       })
     }

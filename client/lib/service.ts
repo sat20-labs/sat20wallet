@@ -270,8 +270,8 @@ class Service {
   async getFeeForDeployContract(templateName: string, content: string, feeRate: string): Promise<[Error | undefined, { fee: any } | undefined]> {
     return stp.getFeeForDeployContract(templateName, content, feeRate);
   }
-  async getParamForInvokeContract(templateName: string): Promise<[Error | undefined, { parameter: any } | undefined]> {
-    return stp.getParamForInvokeContract(templateName);
+  async getParamForInvokeContract(templateName: string, action: string): Promise<[Error | undefined, { parameter: any } | undefined]> {
+    return stp.getParamForInvokeContract(templateName, action);
   }
   async getFeeForInvokeContract(url: string, invoke: string): Promise<[Error | undefined, { fee: any } | undefined]> {
     return stp.getFeeForInvokeContract(url, invoke);

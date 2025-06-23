@@ -24,7 +24,7 @@
                   <div class="font-medium flex items-center gap-2 text-white/60">
                     {{ account.name }}
                     <Button v-if="account.index === accountIndex" variant="ghost" size="icon" class="h-2 w-2"
-                      @click="showEditNameDialog(account)">
+                      @click.stop="showEditNameDialog(account)">
                       <Icon icon="lucide:pencil" class="w-3 h-3" />
                     </Button>
                   </div>
@@ -36,13 +36,13 @@
                   variant="ghost"
                   size="icon"
                   :aria-label="$t('subWalletManager.copyAddress')"
-                  @click="copyAddress(account.address)"
+                  @click.stop="copyAddress(account.address)"
                   class="hover:text-primary"
                 >
                   <Icon icon="lucide:copy" class="w-3 h-3" />
                 </Button>
                 <Button v-if="account.index !== accountIndex" variant="ghost" size="icon"
-                  class="text-destructive hover:text-destructive" @click="confirmDeleteAccount(account)">
+                  class="text-destructive hover:text-destructive" @click.stop="confirmDeleteAccount(account)">
                   <Icon icon="lucide:trash-2" class="w-3 h-3" />
                 </Button>
               </div>
@@ -304,10 +304,13 @@ async function selectAccount(account: WalletAccount) {
       description: '切换账户成功',
     })
     // 发送 accountsChanged 事件（封装函数）
-    await sendAccountsChangedEvent(accounts.value)
+   
+    console.log(router.currentRoute.value.path);
+
     setTimeout(() => {
-      router.back()
+      router.go(-1)
     }, 300)
+    await sendAccountsChangedEvent(accounts.value)
   } catch (error) {
     toast({
       title: '错误',

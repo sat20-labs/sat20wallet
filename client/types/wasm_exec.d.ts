@@ -385,7 +385,8 @@ interface SatsnetStp {
 
   /** 查询合约调用参数 */
   getParamForInvokeContract(
-    templateName: string
+    templateName: string,
+    action: string
   ): Promise<SatsnetResponse<{ parameter: any }>>;
 
   /** 查询调用合约所需费用 */

@@ -48,7 +48,7 @@ async function testDeployContractORDXRemote() {
     console.log("use RemoteDeployContract to deploy a contract on core channel in server node");
 
     // 5. 查询调用参数
-    const invokeParam = await _client.queryParamForInvokeContract(TEMPLATE_CONTRACT_LAUNCHPOOL);
+    const invokeParam = await _client.getParamForInvokeContract(TEMPLATE_CONTRACT_LAUNCHPOOL);
     console.log(`use ${invokeParam} as template to invoke contract ${TEMPLATE_CONTRACT_LAUNCHPOOL}`);
 
     // 6. 构造调用参数

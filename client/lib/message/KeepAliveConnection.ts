@@ -62,7 +62,8 @@ export default class KeepAliveConnection {
 
     // 检查是否超过最大重试次数
     if (this.#reconnectAttempts >= KeepAliveConnection.MAX_RECONNECT_ATTEMPTS) {
-      console.log(`Max reconnection attempts (${KeepAliveConnection.MAX_RECONNECT_ATTEMPTS}) reached, stopping reconnection`)
+      console.log(`最大重连次数 (${KeepAliveConnection.MAX_RECONNECT_ATTEMPTS}) 已达, 启动 sendMessage 后备计划。`)
+      this.#fallbackConnect()
       return
     }
 
@@ -84,6 +85,28 @@ export default class KeepAliveConnection {
       this.#reconnectAttempts++
       this.connect()
     }, this.#currentReconnectDelay)
+  }
+
+  /**
+   * 最后的后备连接方案: 使用 sendMessage 尝试唤醒 background
+   */
+  async #fallbackConnect() {
+    try {
+      await browser.runtime.sendMessage({
+        type: 'KEEP_ALIVE_FALLBACK',
+        origin: this.#origin,
+      })
+      // 如果 sendMessage 成功，说明 background 可能已被唤醒
+      console.log('后备计划 sendMessage 成功, 重新启动主连接程序。')
+      // 重置所有重连状态，从头再来
+      this.#reconnectAttempts = 0
+      this.#currentReconnectDelay = KeepAliveConnection.INITIAL_RECONNECT_DELAY
+      this.connect()
+    } catch (error) {
+      // 如果连 sendMessage 都失败了，那说明 background 彻底失联了
+      console.error('后备计划 sendMessage 失败, 连接彻底中断:', error)
+      // 在这里可以触发一个最终的"断开连接"事件，如果上层需要的话
+    }
   }
 
   /**

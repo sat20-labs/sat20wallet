@@ -47,8 +47,7 @@
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <Button v-if="wallet.id !== currentWalletId" variant="outline" size="sm"
-                  @click="selectWallet(wallet)">
+                <Button v-if="wallet.id !== currentWalletId" variant="outline" size="sm" @click="selectWallet(wallet)">
                   {{ $t('walletManager.switch') }}
                 </Button>
                 <Button v-else variant="outline" size="sm" disabled>
@@ -173,7 +172,8 @@
           <div class="space-y-4">
             <div class="space-y-2">
               <Label for="mnemonic">{{ $t('walletManager.recoveryPhrase') }}</Label>
-              <Textarea id="mnemonic" v-model="importMnemonic" :placeholder="$t('walletManager.enterRecoveryPhrase')" rows="3" />
+              <Textarea id="mnemonic" v-model="importMnemonic" :placeholder="$t('walletManager.enterRecoveryPhrase')"
+                rows="3" />
               <p class="text-xs text-muted-foreground">
                 {{ $t('walletManager.recoveryPhraseHint') }}
               </p>
@@ -293,7 +293,11 @@ const selectWallet = async (wallet: WalletData) => {
       title: 'Success',
       description: 'Wallet switched successfully'
     })
-    router.back()
+    setTimeout(async () => {
+      await sendAccountsChangedEvent(wallets.value)
+      router.back()
+    }, 300)
+
   } catch (error: any) {
     console.error('Failed to switch wallet:', error)
     toast({

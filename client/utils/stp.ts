@@ -70,10 +70,11 @@ interface StpWasmModule {
   getFeeForDeployContract: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ fee: any }>>;
   deployContract_Remote: (templateName: string, content: string, feeRate: string, bol: boolean) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
   deployContract_Local: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
-  getParamForInvokeContract: (templateName: string) => Promise<WasmResponse<{ parameter: any }>>;
+  getParamForInvokeContract: (templateName: string, action: string) => Promise<WasmResponse<{ parameter: any }>>;
   getFeeForInvokeContract: (url: string, invoke: string) => Promise<WasmResponse<{ fee: any }>>;
   invokeContract_SatsNet: (url: string, invoke: string, assetName: string, feeRate: string) => Promise<WasmResponse<{ txId: string }>>;
   invokeContractV2_SatsNet: (url: string, invoke: string, assetName: string, amt: string, unitPrice: number, serviceFee: number, feeRate: string) => Promise<WasmResponse<{ txId: string }>>;
+  invokeContractV2: (url: string, invoke: string, assetName: string, amt: string, unitPrice: number, serviceFee: number, feeRate: string) => Promise<WasmResponse<{ txId: string }>>;
   getAddressStatusInContract: (url: string, address: string) => Promise<WasmResponse<string>>;
   getAllAddressInContract: (url: string, start: number, limit: number) => Promise<WasmResponse<string>>;
   getContractInvokeHistoryInServer: (url: string, start: number, limit: number) => Promise<WasmResponse<string>>;
@@ -603,12 +604,13 @@ class SatsnetStp {
 
   /** 查询合约调用参数 */
   async getParamForInvokeContract(
-    templateName: string
+    templateName: string,
+    action: string
   ): Promise<[
     Error | undefined,
     { parameter: any } | undefined
   ]> {
-    return this._handleRequest<{ parameter: any }>('getParamForInvokeContract', templateName)
+    return this._handleRequest<{ parameter: any }>('getParamForInvokeContract', templateName, action)
   }
 
   /** 查询调用合约所需费用 */
@@ -638,6 +640,12 @@ class SatsnetStp {
     { txId: string } | undefined
   ]> {
     return this._handleRequest<{ txId: string }>('invokeContractV2_SatsNet', url, invoke, assetName, amt, feeRate)
+  }
+  async invokeContractV2(url: string, invoke: string, assetName: string, amt: string, feeRate: string): Promise<[
+    Error | undefined,
+    { txId: string } | undefined
+  ]> {
+    return this._handleRequest<{ txId: string }>('invokeContractV2', url, invoke, assetName, amt, feeRate)
   }
 
   /** 根据地址获取合约状态 */
