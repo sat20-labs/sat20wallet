@@ -63,6 +63,12 @@
               '查询失败')}}</span>
             <span v-else class="font-medium">{{ estimatedFee || '-' }} sats</span>
           </div>
+          
+          <!-- Total Cost -->
+          <div class="flex items-center justify-between border-t border-border pt-3 mt-3">
+            <span class="text-sm font-medium">{{ $t('invokeContractSatsNet.totalCost', '总花费') }}</span>
+            <span class="font-medium text-primary">{{ totalCost }}</span>
+          </div>
           <!-- <div class="flex items-center justify-between">
             <span class="text-sm text-muted-foreground">{{$t('invokeContractSatsNet.netFee', '网络费用')}}</span>
             <span class="font-medium">{{ props.data?.metadata?.netFeeSats || '-' }} sats</span>
@@ -132,6 +138,23 @@ const formattedInvoke = computed(() => {
   } catch {
     return props.data?.invoke || '-'
   }
+})
+
+const totalCost = computed(() => {
+  if (!props.data?.metadata?.action || !estimatedFee.value) return '-'
+    const orderType = props.data.metadata.orderType
+    if (orderType === 6) { // 卖出
+      return `${Math.ceil(Number(estimatedFee.value))} sats` // 只有网络费，向上取整
+    } else { // 买入
+      const quantity = Number(props.data.metadata.quantity || 0)
+      const unitPrice = Number(props.data.metadata.unitPrice || 0)
+      const serviceFee = Number(props.data.metadata.serviceFee || props.data.serviceFee || 0)
+      const networkFee = Number(estimatedFee.value || 0)
+      
+      const total = Math.ceil((quantity * unitPrice) + serviceFee + networkFee)
+      return `${total.toLocaleString()} sats`
+  }
+  return '-'
 })
 
 const num = computed(() => {

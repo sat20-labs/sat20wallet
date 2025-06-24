@@ -63,6 +63,12 @@
               '查询失败')}}</span>
             <span v-else class="font-medium">{{ estimatedFee || '-' }} sats</span>
           </div>
+          
+          <!-- Total Cost -->
+          <div class="flex items-center justify-between border-t border-border pt-3 mt-3">
+            <span class="text-sm font-medium">{{ $t('invokeContractSatsNet.totalCost', '总花费') }}</span>
+            <span class="font-medium text-primary">{{ totalCost }}</span>
+          </div>
           <!-- <div class="flex items-center justify-between">
             <span class="text-sm text-muted-foreground">{{$t('invokeContractSatsNet.netFee', '网络费用')}}</span>
             <span class="font-medium">{{ props.data?.metadata?.netFeeSats || '-' }} sats</span>
@@ -134,6 +140,26 @@ const formattedInvoke = computed(() => {
   }
 })
 
+const totalCost = computed(() => {
+  if (!props.data?.metadata?.action || !estimatedFee.value) return '-'
+  
+  // if (props.data.metadata.action === 'swap') {
+  
+    const { orderType, quantity, unitPrice, serviceFee, networkFee } = props.data.metadata
+    if (orderType === 1) { // 卖出
+      return `${Math.ceil(Number(estimatedFee.value))} sats` // 只有网络费，向上取整
+    } else if  (orderType === 7) {
+      let total = Number(serviceFee) + Number(estimatedFee.value)
+      console.log('total', total)
+      return `${Math.ceil(total)} sats`
+    } else { // 买入
+      const total = Math.ceil((Number(quantity || 0) * Number(unitPrice || 0)) + Number(serviceFee || props.data.serviceFee || 0))
+      return `${total.toLocaleString()} sats`
+    }
+  // }
+  return '-'
+})
+
 const num = computed(() => {
   return props.data?.assetName === '::' ? Math.ceil(Number(props.data?.amt) / props.data?.unitPrice) : props.data?.amt
 })
@@ -176,7 +202,7 @@ const confirm = async () => {
   if (!props.data?.url || !props.data?.invoke || !props.data?.assetName || !props.data?.amt || !props.data?.feeRate) {
     toast.toast({
       title: '参数缺失',
-      description: '合约URL、调用参数、资产名称、数量或费率64缺失',
+      description: '合约URL、调用参数、资产名称、数量或费率缺失',
       variant: 'destructive',
     })
     return
