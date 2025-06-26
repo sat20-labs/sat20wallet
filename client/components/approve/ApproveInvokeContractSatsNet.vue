@@ -17,7 +17,7 @@
         </div>
         <div>
           <span class="font-semibold">{{$t('invokeContractSatsNet.feeRate', '费率')}}：</span>
-          <span>{{ props.data?.feeRate || '-' }} sats</span>
+          <span>{{ props.data?.feeRate || '-' }} sats/TX</span>
         </div>
         <div>
           <span class="font-semibold">{{$t('invokeContractSatsNet.estimatedFee', '预估费用')}}：</span>
