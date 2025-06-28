@@ -439,26 +439,6 @@ export default defineUnlistedScript(() => {
       return result;
     }
 
-    // --- 合约相关方法 ---
-    async getSupportedContracts(): Promise<{ contractContents: any[] }> {
-      return this.send<{ contractContents: any[] }>({
-        type: Message.MessageType.REQUEST,
-        action: Message.MessageAction.GET_SUPPORTED_CONTRACTS,
-      })
-    }
-    async getDeployedContractsInServer(): Promise<{ contractURLs: any[] }> {
-      return this.send<{ contractURLs: any[] }>({
-        type: Message.MessageType.REQUEST,
-        action: Message.MessageAction.GET_DEPLOYED_CONTRACTS_IN_SERVER,
-      })
-    }
-    async getDeployedContractStatus(url: string): Promise<{ contractStatus: any }> {
-      return this.send<{ contractStatus: any }>({
-        type: Message.MessageType.REQUEST,
-        action: Message.MessageAction.GET_DEPLOYED_CONTRACT_STATUS,
-        data: { url },
-      })
-    }
     async getFeeForDeployContract(templateName: string, content: string, feeRate: string): Promise<{ fee: any }> {
       return this.send<{ fee: any }>({
         type: Message.MessageType.REQUEST,
@@ -510,34 +490,7 @@ export default defineUnlistedScript(() => {
         data: { url, invoke, assetName, amt, feeRate, metadata },
       })
     }
-    async getAddressStatusInContract(url: string, address: string): Promise<string> {
-      return this.send<string>({
-        type: Message.MessageType.REQUEST,
-        action: Message.MessageAction.GET_CONTRACT_STATUS_BY_ADDRESS,
-        data: { url, address },
-      })
-    }
-    async getAllAddressInContract(url: string, start: number = 0, limit: number = 20): Promise<string> {
-      return this.send<string>({
-        type: Message.MessageType.REQUEST,
-        action: Message.MessageAction.GET_CONTRACT_ALL_ADDRESSES,
-        data: { url, start, limit },
-      })
-    }
-    async getContractInvokeHistoryInServer(url: string, start: number = 0, limit: number = 20): Promise<string> {
-      return this.send<string>({
-        type: Message.MessageType.REQUEST,
-        action: Message.MessageAction.GET_CONTRACT_INVOKE_HISTORY_IN_SERVER,
-        data: { url, start, limit },
-      })
-    }
-    async getContractInvokeHistoryByAddressInServer(url: string, address: string, start: number = 0, limit: number = 20): Promise<string> {
-      return this.send<string>({
-        type: Message.MessageType.REQUEST,
-        action: Message.MessageAction.GET_CONTRACT_INVOKE_HISTORY_BY_ADDRESS_IN_SERVER,
-        data: { url, address, start, limit },
-      })
-    }
+
   }
 
   const sat20 = new Sat20()

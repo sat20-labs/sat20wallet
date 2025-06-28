@@ -256,37 +256,14 @@ class Service {
   async getTickerInfo(asset: string): Promise<[Error | undefined, any | undefined]> {
     return stp.getTickerInfo(asset);
   }
-
-  // --- 合约相关方法 ---
-  async getSupportedContracts(): Promise<[Error | undefined, { contractContents: any[] } | undefined]> {
-    return stp.getSupportedContracts();
-  }
-  async getDeployedContractsInServer(): Promise<[Error | undefined, { contractURLs: any[] } | undefined]> {
-    return stp.getDeployedContractsInServer();
-  }
-  async getDeployedContractStatus(url: string): Promise<[Error | undefined, { contractStatus: any } | undefined]> {
-    return stp.getDeployedContractStatus(url);
-  }
   async getFeeForDeployContract(templateName: string, content: string, feeRate: string): Promise<[Error | undefined, { fee: any } | undefined]> {
     return stp.getFeeForDeployContract(templateName, content, feeRate);
-  }
-  async getParamForInvokeContract(templateName: string, action: string): Promise<[Error | undefined, { parameter: any } | undefined]> {
-    return stp.getParamForInvokeContract(templateName, action);
   }
   async getFeeForInvokeContract(url: string, invoke: string): Promise<[Error | undefined, { fee: any } | undefined]> {
     return stp.getFeeForInvokeContract(url, invoke);
   }
-  async getAddressStatusInContract(url: string, address: string): Promise<[Error | undefined, string | undefined]> {
-    return stp.getAddressStatusInContract(url, address)
-  }
-  async getAllAddressInContract(url: string, start: number, limit: number): Promise<[Error | undefined, string | undefined]> {
-    return stp.getAllAddressInContract(url, start, limit)
-  }
-  async getContractInvokeHistoryInServer(url: string, start: number, limit: number): Promise<[Error | undefined, string | undefined]> {
-    return stp.getContractInvokeHistoryInServer(url, start, limit)
-  }
-  async getContractInvokeHistoryByAddressInServer(url: string, address: string, start: number, limit: number): Promise<[Error | undefined, string | undefined]> {
-    return stp.getContractInvokeHistoryByAddressInServer(url, address, start, limit)
+  async getParamForInvokeContract(templateName: string, action: string): Promise<[Error | undefined, { parameter: any } | undefined]> {
+    return stp.getParamForInvokeContract(templateName, action);
   }
 }
 

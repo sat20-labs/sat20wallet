@@ -369,30 +369,6 @@ export async function handleMessage(
           }
           break
         // --- 合约相关方法 ---
-        case Message.MessageAction.GET_SUPPORTED_CONTRACTS:
-          ;[reqErr, reqRes] = await service.getSupportedContracts()
-          if (reqErr) {
-            errData = { code: -60, message: reqErr.message }
-          } else {
-            resData = reqRes
-          }
-          break
-        case Message.MessageAction.GET_DEPLOYED_CONTRACTS_IN_SERVER:
-          ;[reqErr, reqRes] = await service.getDeployedContractsInServer()
-          if (reqErr) {
-            errData = { code: -61, message: reqErr.message }
-          } else {
-            resData = reqRes
-          }
-          break
-        case Message.MessageAction.GET_DEPLOYED_CONTRACT_STATUS:
-          ;[reqErr, reqRes] = await service.getDeployedContractStatus(data.url)
-          if (reqErr) {
-            errData = { code: -62, message: reqErr.message }
-          } else {
-            resData = reqRes
-          }
-          break
         case Message.MessageAction.GET_FEE_FOR_DEPLOY_CONTRACT:
           ;[reqErr, reqRes] = await service.getFeeForDeployContract(
             data.templateName,
@@ -423,55 +399,6 @@ export async function handleMessage(
           )
           if (reqErr) {
             errData = { code: -65, message: reqErr.message }
-          } else {
-            resData = reqRes
-          }
-          break
-        case Message.MessageAction.GET_CONTRACT_STATUS_BY_ADDRESS:
-          ;[reqErr, reqRes] = await service.getAddressStatusInContract(
-            data.url,
-            data.address,
-          )
-          if (reqErr) {
-            errData = { code: -70, message: reqErr.message }
-          } else {
-            resData = reqRes
-          }
-          break
-        case Message.MessageAction.GET_CONTRACT_ALL_ADDRESSES:
-          ;[reqErr, reqRes] = await service.getAllAddressInContract(
-            data.url,
-            data.start,
-            data.limit,
-          )
-          if (reqErr) {
-            errData = { code: -71, message: reqErr.message }
-          } else {
-            resData = reqRes
-          }
-          break
-        case Message.MessageAction.GET_CONTRACT_INVOKE_HISTORY_IN_SERVER:
-          ;[reqErr, reqRes] = await service.getContractInvokeHistoryInServer(
-            data.url,
-            data.start,
-            data.limit,
-          )
-          if (reqErr) {
-            errData = { code: -71, message: reqErr.message }
-          } else {
-            resData = reqRes
-          }
-          break
-        case Message.MessageAction.GET_CONTRACT_INVOKE_HISTORY_BY_ADDRESS_IN_SERVER:
-          ;[reqErr, reqRes] =
-            await service.getContractInvokeHistoryByAddressInServer(
-              data.url,
-              data.address,
-              data.start,
-              data.limit,
-            )
-          if (reqErr) {
-            errData = { code: -72, message: reqErr.message }
           } else {
             resData = reqRes
           }
