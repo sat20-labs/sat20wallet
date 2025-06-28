@@ -20,7 +20,7 @@
           <span>{{ props.data?.feeRate || '-' }} sats/TX</span>
         </div>
         <div>
-          <span class="font-semibold">{{$t('invokeContractSatsNet.estimatedFee', '服务费')}}：</span>
+          <span class="font-semibold">{{$t('invokeContractSatsNet.estimatedFee', '铸造费用')}}：</span>
           <span v-if="feeLoading">{{$t('invokeContractSatsNet.loading', '查询中...')}}</span>
           <span v-else-if="feeError" class="text-destructive">{{$t('invokeContractSatsNet.feeError', '查询失败')}}</span>
           <span v-else>{{ estimatedFee || '-' }} sats</span>

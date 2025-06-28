@@ -89,7 +89,7 @@ import { useTranscendingModeStore } from '@/store'
 import { Chain } from '@/types/index'
 import { useGlobalStore } from '@/store/global'
 import { Separator } from '@/components/ui/separator'
-
+import { generateMempoolUrl } from '@/utils'
 
 console.log('Debug: This is index.vue')
 

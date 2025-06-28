@@ -51,10 +51,6 @@
               sats</span>
           </div>
           <div class="flex items-center justify-between">
-            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.feeRate', '费率') }}</span>
-            <span class="font-medium">10 sats/TX</span>
-          </div>
-          <div class="flex items-center justify-between">
             <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.estimatedFee', '服务费') }}</span>
             <span v-if="feeLoading" class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.loading',
               '查询中...') }}</span>
@@ -128,7 +124,6 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits(['confirm', 'cancel'])
 const toast = useToast()
-console.log('props', props.data)
 
 const isLoading = ref(false)
 const invokeError = ref('')
@@ -149,10 +144,6 @@ const totalCost = computed(() => {
   if (!props.data?.metadata?.action || !estimatedFee.value) return '-'
   const { orderType, quantity, unitPrice, networkFee = 10, sats } = props.data.metadata
   let total = 0;
-  console.log('totalCost', orderType)
-  console.log('totalCost', sats)
-  console.log('totalCost', networkFee)
-  console.log('totalCost', estimatedFee.value)
   if (orderType === 2) {
     total = Math.ceil(Number(sats) + Number(networkFee) + Number(estimatedFee.value))
   } else  {

@@ -46,13 +46,9 @@
           </template>
 
           <div class="flex items-center justify-between">
-            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.serviceFee', '服务费') }}</span>
+            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.serviceFee', '网络费') }}</span>
             <span class="font-medium">{{ props.data?.metadata?.networkFee || '-' }}
               sats</span>
-          </div>
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.feeRate', '费率') }}</span>
-            <span class="font-medium">10 sats/TX</span>
           </div>
           <div class="flex items-center justify-between">
             <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.estimatedFee', '服务费') }}</span>
