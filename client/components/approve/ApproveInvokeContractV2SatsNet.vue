@@ -46,16 +46,16 @@
           </template>
 
           <div class="flex items-center justify-between">
-            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.serviceFee', '服务费') }}</span>
-            <span class="font-medium">{{ props.data?.metadata?.serviceFee || props.data?.serviceFee || '-' }}
+            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.serviceFee', '网络费') }}</span>
+            <span class="font-medium">{{ props.data?.metadata?.networkFee || '-' }}
               sats</span>
           </div>
           <div class="flex items-center justify-between">
             <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.feeRate', '费率') }}</span>
-            <span class="font-medium">{{ props.data?.feeRate || '-' }} sats/TX</span>
+            <span class="font-medium">10 sats/TX</span>
           </div>
           <div class="flex items-center justify-between">
-            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.estimatedFee', '预估费用') }}</span>
+            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.estimatedFee', '服务费') }}</span>
             <span v-if="feeLoading" class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.loading',
               '查询中...') }}</span>
             <span v-else-if="feeError" class="text-sm text-destructive">{{ feeErrorMessage ||
@@ -65,13 +65,13 @@
           </div>
 
           <!-- Total Cost -->
-          <div v-if="props.data?.metadata?.orderType !== 1" class="flex items-center justify-between border-t border-border pt-3 mt-3">
+          <div class="flex items-center justify-between border-t border-border pt-3 mt-3">
             <span class="text-sm font-medium">{{ $t('invokeContractSatsNet.totalCost', '总花费') }}</span>
             <span class="font-medium text-primary">{{ totalCost }}</span>
           </div>
           <div v-if="props.data?.metadata?.orderType === 1" class="flex items-center justify-between border-t border-border pt-3 mt-3">
             <span class="text-sm font-medium">{{ $t('invokeContractSatsNet.totalCost', '预估收入') }}</span>
-            <span class="font-medium text-primary">{{ props.data?.metadata?.amt }}</span>
+            <span class="font-medium text-primary">{{ props.data?.metadata?.sats }}</span>
           </div>
           <!-- <div class="flex items-center justify-between">
             <span class="text-sm text-muted-foreground">{{$t('invokeContractSatsNet.netFee', '网络费用')}}</span>
@@ -128,6 +128,7 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits(['confirm', 'cancel'])
 const toast = useToast()
+console.log('props', props.data)
 
 const isLoading = ref(false)
 const invokeError = ref('')
@@ -146,17 +147,18 @@ const formattedInvoke = computed(() => {
 
 const totalCost = computed(() => {
   if (!props.data?.metadata?.action || !estimatedFee.value) return '-'
-  const { orderType, quantity, unitPrice, serviceFee, sats } = props.data.metadata
-  if (orderType === 1) { // 卖出
-    return `${Math.ceil(Number(estimatedFee.value))} sats` // 只有网络费，向上取整
-  } else if (orderType === 7) {
-    let total = Number(10) + Number(estimatedFee.value)
-    console.log('total', total)
-    return `${Math.ceil(total)} sats`
-  } else { // 买入
-    const total = Math.ceil(Number(sats) + Number(serviceFee || props.data.serviceFee || 0) + Number(estimatedFee.value))
-    return `${total.toLocaleString()} sats`
+  const { orderType, quantity, unitPrice, networkFee = 10, sats } = props.data.metadata
+  let total = 0;
+  console.log('totalCost', orderType)
+  console.log('totalCost', sats)
+  console.log('totalCost', networkFee)
+  console.log('totalCost', estimatedFee.value)
+  if (orderType === 2) {
+    total = Math.ceil(Number(sats) + Number(networkFee) + Number(estimatedFee.value))
+  } else  {
+    total = Math.ceil(Number(estimatedFee.value) + Number(networkFee))
   }
+  return `${total} sats`
 })
 
 const num = computed(() => {

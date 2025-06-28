@@ -47,15 +47,15 @@
 
           <div class="flex items-center justify-between">
             <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.serviceFee', '服务费') }}</span>
-            <span class="font-medium">{{ props.data?.metadata?.serviceFee || props.data?.serviceFee || '-' }}
+            <span class="font-medium">{{ props.data?.metadata?.networkFee || '-' }}
               sats</span>
           </div>
           <div class="flex items-center justify-between">
             <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.feeRate', '费率') }}</span>
-            <span class="font-medium">{{ props.data?.feeRate || '-' }} sats</span>
+            <span class="font-medium">10 sats/TX</span>
           </div>
           <div class="flex items-center justify-between">
-            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.estimatedFee', '预估费用') }}</span>
+            <span class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.estimatedFee', '服务费') }}</span>
             <span v-if="feeLoading" class="text-sm text-muted-foreground">{{ $t('invokeContractSatsNet.loading',
               '查询中...') }}</span>
             <span v-else-if="feeError" class="text-sm text-destructive">{{ feeErrorMessage ||
