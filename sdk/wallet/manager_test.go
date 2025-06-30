@@ -10,6 +10,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/sat20-labs/indexer/common"
+	indexer "github.com/sat20-labs/indexer/common"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -34,7 +35,7 @@ func createNode(t *testing.T, mode, dbPath string) *Manager {
 	if db == nil {
 		t.Fatalf("NewKVDB failed")
 	}
-	manager := NewManager(cfg.Chain, db)
+	manager := NewManager(cfg, db)
 
 	// mnemonice, err := manager.CreateWallet("123456")
 	// if err != nil {
@@ -354,7 +355,7 @@ func TestPsbtFullFlow(t *testing.T) {
 
 	pkScript, _ := GetP2TRpkScript(_client.GetWallet().GetPaymentPubKey())
 	assset := common.DisplayAsset{
-		AssetName: AssetName{
+		AssetName: indexer.AssetName{
 			Protocol: "ordx",
 			Type:     "f",
 			Ticker:   "rarepizza",

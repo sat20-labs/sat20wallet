@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -52,8 +53,45 @@ var createJsRet = func(data any, code int, msg string) map[string]any {
 	}
 }
 
+func parseIndexerConfig(indexer js.Value) (*wallet.Indexer, error) {
+	// IndexerL1
+	if indexer.Type() == js.TypeObject {
+		var cfg wallet.Indexer
+		if scheme := indexer.Get("Scheme"); scheme.Type() == js.TypeString {
+			cfg.Scheme = scheme.String()
+		} else {
+			cfg.Scheme = "http"
+		}
+		if host := indexer.Get("Host"); host.Type() == js.TypeString {
+			cfg.Host = host.String()
+		} else {
+			return nil, fmt.Errorf("Indexer.Host must be a string")
+		}
+		if proxy := indexer.Get("Proxy"); proxy.Type() == js.TypeString {
+			cfg.Proxy = proxy.String()
+		} else {
+			cfg.Proxy = ""
+		}
+		return &cfg, nil
+	} 
+	return nil, fmt.Errorf("Indexer must be an object")
+}
+
 func parseConfigFromJS(jsConfig js.Value) (*wallet.Config, error) {
 	cfg := &wallet.Config{}
+	// Log
+	if log := jsConfig.Get("Log"); log.Type() == js.TypeString {
+		cfg.Log = log.String()
+	} else {
+		cfg.Log = "info"
+	}
+
+	// Env
+	if chain := jsConfig.Get("Env"); chain.Type() == js.TypeString {
+		cfg.Env = chain.String()
+	} else {
+		cfg.Env = "dev"
+	}
 
 	// Chain
 	if chain := jsConfig.Get("Chain"); chain.Type() == js.TypeString {
@@ -62,12 +100,37 @@ func parseConfigFromJS(jsConfig js.Value) (*wallet.Config, error) {
 		cfg.Chain = "testnet"
 	}
 
-	// Log
-	if log := jsConfig.Get("Log"); log.Type() == js.TypeString {
-		cfg.Log = log.String()
+	// Peers
+	if peers := jsConfig.Get("Peers"); peers.Type() == js.TypeObject && peers.InstanceOf(js.Global().Get("Array")) {
+		length := peers.Length()
+		cfg.Peers = make([]string, length)
+		for i := 0; i < length; i++ {
+			if peers.Index(i).Type() != js.TypeString {
+				return nil, fmt.Errorf("Peer at index %d must be a string", i)
+			}
+			cfg.Peers[i] = peers.Index(i).String()
+		}
 	} else {
-		cfg.Log = "info"
+		return nil, fmt.Errorf("Peers must be an array of strings")
 	}
+
+	var err error
+	indexerL1 := jsConfig.Get("indexer_layer1")
+	cfg.IndexerL1, err = parseIndexerConfig(indexerL1)
+	if err != nil {
+		return nil, fmt.Errorf("L1 indexer config should be set, %v", err)
+	}
+	slaveIndexerL1 := jsConfig.Get("slave_indexer_layer1")
+	cfg.SlaveIndexerL1, _ = parseIndexerConfig(slaveIndexerL1)
+	
+
+	indexerL2 := jsConfig.Get("indexer_layer2")
+	cfg.IndexerL2, err = parseIndexerConfig(indexerL2)
+	if err != nil {
+		return nil, fmt.Errorf("L2 indexer config should be set, %v", err)
+	}
+	slaveIndexerL2 := jsConfig.Get("slave_indexer_layer2")
+	cfg.SlaveIndexerL2, _ = parseIndexerConfig(slaveIndexerL2)
 
 	return cfg, nil
 }
@@ -230,7 +293,7 @@ func initManager(this js.Value, p []js.Value) any {
 			wallet.Log.Errorf("NewKVDB failed")
 			return nil, -1, "NewKVDB failed"
 		}
-		_mgr = wallet.NewManager(cfg.Chain, db)
+		_mgr = wallet.NewManager(cfg, db)
 		if _mgr == nil {
 			return nil, -1, "NewManager failed"
 		}
@@ -1252,6 +1315,832 @@ func getStringVector(p js.Value) ([]string, error) {
 	return strs, nil
 }
 
+
+func sendAssets(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 4 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "destAddr parameter should be a string")
+	}
+	destAddress := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "asset name parameter should be a string")
+	}
+	assetName := p[1].String()
+
+	// amount
+	p2 := p[2]
+	if p2.Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	amt := p2.String()
+
+	if p[3].Type() != js.TypeString {
+		return createJsRet(nil, -1, "feeRate parameter should be a string")
+	}
+	feeRate := p[3].String()
+	feeRate64, err := strconv.ParseInt(feeRate, 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txid, err := _mgr.SendAssets(destAddress, assetName, amt, feeRate64, nil)
+		if err != nil {
+			wallet.Log.Errorf("SendAssets error: %v", err)
+			return nil, -1, err.Error()
+		}
+
+		return map[string]interface{}{
+			"txId": txid,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func sendAssets_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 3 {
+		return createJsRet(nil, -1,  "Expected 3 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "destAddr parameter should be a string")
+	}
+	destAddress := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "asset name parameter should be a string")
+	}
+	assetName := p[1].String()
+
+	// amount
+	p2 := p[2]
+	if p2.Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a int")
+	}
+	amt := p2.String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txid, err := _mgr.SendAssets_SatsNet(destAddress, assetName, amt, nil)
+		if err != nil {
+			wallet.Log.Errorf("SendUtxos_SatsNet error: %v", err)
+			return nil, -1, err.Error()
+		}
+
+		return map[string]interface{}{
+			"txId": txid,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+
+func batchSendAssets_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 4 {
+		return createJsRet(nil, -1, "Expected 4 parameters")
+	}
+
+	pn := p[0]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "destAddr parameter should be a string")
+	}
+	destAddress := pn.String()
+
+	pn = p[1]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "asset name parameter should be a string")
+	}
+	assetName := pn.String()
+
+	// amount
+	pn = p[2]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	amt := pn.String()
+
+	pn = p[3]
+	if pn.Type() != js.TypeNumber {
+		return createJsRet(nil, -1, "n parameter should be a int")
+	}
+	n := pn.Int()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txid, err := _mgr.BatchSendAssets_SatsNet(destAddress, assetName, amt, n)
+		if err != nil {
+			wallet.Log.Errorf("BatchSendAssets_SatsNet error: %v", err)
+			return nil, -1, err.Error()
+		}
+
+		return map[string]interface{}{
+			"txId": txid,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func batchSendAssets(this js.Value, p []js.Value) any {
+	
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 5 {
+		return createJsRet(nil, -1, "Expected 5 parameters")
+	}
+
+	pn := p[0]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "destAddr parameter should be a string")
+	}
+	destAddress := pn.String()
+
+	pn = p[1]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "asset name parameter should be a string")
+	}
+	assetName := pn.String()
+
+	// amount
+	pn = p[2]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	amt := pn.String()
+
+	pn = p[3]
+	if pn.Type() != js.TypeNumber {
+		return createJsRet(nil, -1, "n parameter should be a int")
+	}
+	n := pn.Int()
+
+	pn = p[4]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "feeRate parameter should be a string")
+	}
+	feeRate := pn.String()
+	feeRate64, err := strconv.ParseInt(feeRate, 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txid, fee, err := _mgr.BatchSendAssets(destAddress, assetName, amt, n, feeRate64, nil)
+		if err != nil {
+			wallet.Log.Errorf("BatchSendAssets error: %v", err)
+			return nil, -1, err.Error()
+		}
+
+		return map[string]interface{}{
+			"txId": txid,
+			"fee": fee,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+
+
+func getTxAssetInfoFromPsbt(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "psbt parameter should be a string")
+	}
+	psbt := p[0].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		info, err := _mgr.GetTxAssetInfoFromPsbt(psbt)
+		if err != nil {
+			wallet.Log.Errorf("GetTxAssetInfoFromPsbt error: %v", err)
+			return nil, -1, err.Error()
+		}
+
+		inputs, err := json.Marshal(info.InputAssets)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		outputs, err := json.Marshal(info.OutputAssets)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		return map[string]any{
+			"txId":  info.TxId,
+			"txHex": info.TxHex,
+			"inputs": string(inputs),
+			"outputs": string(outputs),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+
+func getTxAssetInfoFromPsbt_SatsNet(this js.Value, p []js.Value) any {
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "psbt parameter should be a string")
+	}
+	psbt := p[0].String()
+
+	info, err := wallet.GetTxAssetInfoFromPsbt_SatsNet(psbt)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	inputs, err := json.Marshal(info.InputAssets)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	outputs, err := json.Marshal(info.OutputAssets)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	data := map[string]any{
+		"txId": info.TxId,
+		"txHex": info.TxHex,
+		"inputs": string(inputs),
+		"outputs": string(outputs),
+	}
+
+	return createJsRet(data, 0, "ok")
+}
+
+func getTickerInfo(this js.Value, p []js.Value) any {
+	code := 0
+	msg := "ok"
+	if _mgr == nil {
+		code = -1
+		msg = "STPManager not initialized"
+		return createJsRet(nil, code, msg)
+	}
+	if len(p) < 1 {
+		code = -1
+		msg = "Expected 1 parameters"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+
+	if p[0].Type() != js.TypeString {
+		code = -1
+		msg = "asset name parameter should be a string"
+		wallet.Log.Error(msg)
+		return createJsRet(nil, code, msg)
+	}
+	assetName := p[0].String()
+	
+	// tickerInfo := _mgr.GetTickerInfo(assetName)
+	// if tickerInfo == nil {
+	// 	code = -1
+	// 	msg = fmt.Sprintf("can't get ticker %s", assetName)
+	// 	wallet.Log.Error(msg)
+	// 	return createJsRet(nil, code, msg)
+	// }
+	
+	// data := map[string]any{
+	// 	"ticker":        tickerInfo,
+	// }
+	// return createJsRet(data, code, msg)
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		tickerInfo := _mgr.GetTickerInfo(assetName)
+		if tickerInfo == nil {
+			wallet.Log.Errorf("GetTickerInfo error ")
+			return nil, -1, "GetTickerInfo error"
+		}
+
+		jsonStr, err := json.Marshal(tickerInfo)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		return map[string]interface{}{
+			"ticker": string(jsonStr),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func lockUtxo(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "utxo parameter should be a string")
+	}
+	utxo := p[1].String()
+
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "reason  parameter should be a string")
+	}
+	reason := p[2].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		err := _mgr.LockUtxo(address, utxo, reason)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func unlockUtxo(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "utxo parameter should be a string")
+	}
+	utxo := p[1].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		err := _mgr.UnlockUtxo(address, utxo)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func isUtxoLocked(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "utxo parameter should be a string")
+	}
+	utxo := p[1].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		r := _mgr.IsLocked(address, utxo)
+		return r, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func getAllLockedUtxo(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		utxoMap, err := _mgr.GetLockedUtxoList(address)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		result := make(map[string]any) 
+		for k,v := range utxoMap {
+			buf, err := json.Marshal(v)
+			if err != nil {
+				continue
+			}
+			result[k] = string(buf)
+		}
+		return result, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+
+func lockUtxo_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "utxo parameter should be a string")
+	}
+	utxo := p[1].String()
+
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "reason  parameter should be a string")
+	}
+	reason := p[2].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		err := _mgr.LockUtxo_SatsNet(address, utxo, reason)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func unlockUtxo_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "utxo parameter should be a string")
+	}
+	utxo := p[1].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		err := _mgr.UnlockUtxo_SatsNet(address, utxo)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func isUtxoLocked_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "utxo parameter should be a string")
+	}
+	utxo := p[1].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		r := _mgr.IsLocked_SatsNet(address, utxo)
+		return r, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func getAllLockedUtxo_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		utxoMap, err := _mgr.GetLockedUtxoList_SatsNet(address)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		result := make(map[string]any) 
+		for k,v := range utxoMap {
+			buf, err := json.Marshal(v)
+			if err != nil {
+				continue
+			}
+			result[k] = string(buf)
+		}
+		return result, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func getUtxosWithAsset(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amt parameter should be a string")
+	}
+	amt := p[1].String()
+
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "asset name parameter should be a string")
+	}
+	assetName := p[2].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		utxos, err := _mgr.GetUtxosWithAsset(address, amt, assetName)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		result := make([]interface{}, 0) 
+		for _, v := range utxos {
+			result = append(result, v)
+		}
+		return map[string]interface{}{
+			"utxos": result,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+
+func getUtxosWithAsset_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amt parameter should be a string")
+	}
+	amt := p[1].String()
+
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "asset name parameter should be a string")
+	}
+	assetName := p[2].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		utxos, err := _mgr.GetUtxosWithAsset_SatsNet(address, amt, assetName)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		result := make([]interface{}, 0) 
+		for _, v := range utxos {
+			result = append(result, v)
+		}
+		return map[string]interface{}{
+			"utxos": result,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+
+func getUtxosWithAssetV2(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+
+	if len(p) < 4 {
+		return createJsRet(nil, -1, "Expected 4 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeNumber {
+		return createJsRet(nil, -1, "value parameter should be a number")
+	}
+	value := p[1].Int()
+
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amt parameter should be a string")
+	}
+	amt := p[2].String()
+
+	if p[3].Type() != js.TypeString {
+		return createJsRet(nil, -1, "asset name parameter should be a string")
+	}
+	assetName := p[3].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		utxos, fees, err := _mgr.GetUtxosWithAssetV2(address, int64(value), amt, assetName)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		result := make([]interface{}, 0) 
+		for _, v := range utxos {
+			result = append(result, v)
+		}
+		result2 := make([]interface{}, 0) 
+		for _, v := range fees {
+			result2 = append(result2, v)
+		}
+		return map[string]interface{}{
+			"utxos": result,
+			"fees": result2,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+
+func getUtxosWithAssetV2_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+
+	if len(p) < 4 {
+		return createJsRet(nil, -1, "Expected 4 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeNumber {
+		return createJsRet(nil, -1, "value parameter should be a number")
+	}
+	value := p[1].Int()
+
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amt parameter should be a string")
+	}
+	amt := p[2].String()
+
+	if p[3].Type() != js.TypeString {
+		return createJsRet(nil, -1, "asset name parameter should be a string")
+	}
+	assetName := p[3].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		utxos, fees, err := _mgr.GetUtxosWithAssetV2_SatsNet(address, int64(value), amt, assetName)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		result := make([]interface{}, 0) 
+		for _, v := range utxos {
+			result = append(result, v)
+		}
+		result2 := make([]interface{}, 0) 
+		for _, v := range fees {
+			result2 = append(result2, v)
+		}
+		return map[string]interface{}{
+			"utxos": result,
+			"fees": result2,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+
+func getAssetAmount(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "asset name parameter should be a string")
+	}
+	assetName := p[1].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		available, locked, err := _mgr.GetAssetAmount(address, assetName)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		return map[string]any{
+			"availableAmt": available.String(),
+			"lockedAmt": locked.String(),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+
+func getAssetAmount_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "STPManager not initialized")
+	}
+
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "asset name parameter should be a string")
+	}
+	assetName := p[1].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		available, locked, err := _mgr.GetAssetAmount_SatsNet(address, assetName)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		return map[string]any{
+			"availableAmt": available.String(),
+			"lockedAmt": locked.String(),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
 func main() {
 	obj := js.Global().Get("Object").New()
 	obj.Set("batchDbTest", js.FuncOf(batchDbTest))
@@ -1298,6 +2187,8 @@ func main() {
 	// input: psbt(hexString); return: signed psbt (hexString)
 	obj.Set("signPsbt_SatsNet", js.FuncOf(signPsbt_SatsNet))
 	obj.Set("signPsbts_SatsNet", js.FuncOf(signPsbts_SatsNet))
+	obj.Set("getTxAssetInfoFromPsbt", js.FuncOf(getTxAssetInfoFromPsbt))
+	obj.Set("getTxAssetInfoFromPsbt_SatsNet", js.FuncOf(getTxAssetInfoFromPsbt_SatsNet))
 
 	obj.Set("getVersion", js.FuncOf(getVersion))
 	obj.Set("registerCallback", js.FuncOf(registerCallbacks))
@@ -1312,6 +2203,30 @@ func main() {
 	obj.Set("mergeBatchSignedPsbt_SatsNet", js.FuncOf(mergeBatchSignedPsbt_SatsNet))
 	obj.Set("addInputsToPsbt_SatsNet", js.FuncOf(addInputsToPsbt_SatsNet))
 	obj.Set("addOutputsToPsbt_SatsNet", js.FuncOf(addOutputsToPsbt_SatsNet))
+
+
+	obj.Set("sendAssets", js.FuncOf(sendAssets))
+	obj.Set("sendAssets_SatsNet", js.FuncOf(sendAssets_SatsNet))
+	obj.Set("batchSendAssets_SatsNet", js.FuncOf(batchSendAssets_SatsNet))
+	obj.Set("batchSendAssets", js.FuncOf(batchSendAssets))
+
+	obj.Set("getTickerInfo", js.FuncOf(getTickerInfo))
+	obj.Set("lockUtxo", js.FuncOf(lockUtxo))
+	obj.Set("unlockUtxo", js.FuncOf(unlockUtxo))
+	obj.Set("isUtxoLocked", js.FuncOf(isUtxoLocked))
+	obj.Set("getAllLockedUtxo", js.FuncOf(getAllLockedUtxo))
+	obj.Set("lockUtxo_SatsNet", js.FuncOf(lockUtxo_SatsNet))
+	obj.Set("unlockUtxo_SatsNet", js.FuncOf(unlockUtxo_SatsNet))
+	obj.Set("isUtxoLocked_SatsNet", js.FuncOf(isUtxoLocked_SatsNet))
+	obj.Set("getAllLockedUtxo_SatsNet", js.FuncOf(getAllLockedUtxo_SatsNet))
+
+	obj.Set("getUtxosWithAsset", js.FuncOf(getUtxosWithAsset))
+	obj.Set("getUtxosWithAsset_SatsNet", js.FuncOf(getUtxosWithAsset_SatsNet))
+	obj.Set("getUtxosWithAssetV2", js.FuncOf(getUtxosWithAssetV2))
+	obj.Set("getUtxosWithAssetV2_SatsNet", js.FuncOf(getUtxosWithAssetV2_SatsNet))
+	obj.Set("getAssetAmount", js.FuncOf(getAssetAmount))
+	obj.Set("getAssetAmount_SatsNet", js.FuncOf(getAssetAmount_SatsNet))
+
 
 	js.Global().Set(module, obj)
 	wallet.Log.SetLevel(logrus.DebugLevel)

@@ -19,7 +19,7 @@ func TestAssets(t *testing.T) {
 
 	assets2 := swire.TxAssets{
 		{
-			Name: AssetName{
+			Name: indexer.AssetName{
 				Protocol: "ordx",
 				Type: "f",
 				Ticker: "pearl",
@@ -29,7 +29,7 @@ func TestAssets(t *testing.T) {
 		},
 
 		{
-			Name: AssetName{
+			Name: indexer.AssetName{
 				Protocol: "ordx",
 				Type: "f",
 				Ticker: "pizza",
@@ -58,7 +58,7 @@ func TestAssets(t *testing.T) {
 func TestAnchorScript(t *testing.T) {
 	assets := swire.TxAssets{
 		{
-			Name: AssetName{
+			Name: indexer.AssetName{
 				Protocol: "ordx",
 				Type: "f",
 				Ticker: "pearl",

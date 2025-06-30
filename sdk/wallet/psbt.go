@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sat20-labs/indexer/common"
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/btcutil/psbt"
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -21,7 +21,7 @@ const SIGHASH_SINGLE_ANYONECANPAY = txscript.SigHashSingle | txscript.SigHashAny
 const SIGHASH_ALL = txscript.SigHashAll // txscript.SigHashDefault //  //
 
 type BuyAssetInfo struct {
-	AssetName             `json:"Name"`
+	indexer.AssetName     `json:"Name"`
 	Amount  string        `json:"Amount"`
 	Precision  int        `json:"Precision"`
 	BindingSat int        `json:"BindingSat"`
@@ -29,7 +29,7 @@ type BuyAssetInfo struct {
 
 // UtxoInfo 定义单个挂单的 utxo 数据
 type UtxoInfo struct {
-	common.AssetsInUtxo
+	indexer.AssetsInUtxo
 	Price     int64           `json:"Price"`       // 价格
 	AssetInfo *BuyAssetInfo `json:"TargetAsset"` // 非nil时，指要卖入的资产
 }
@@ -88,24 +88,24 @@ func buildBatchSellOrder_SatsNet(utxos []*UtxoInfo, address, network string) (st
 		}
 
 		outValue := utxoData.Price
-		var assets []common.AssetInfo
+		var assets []indexer.AssetInfo
 		if utxoData.AssetInfo != nil {
 			if utxoData.Price != utxoData.Value {
 				return "", fmt.Errorf("price must be equal with utxo value")
 			}
 
-			amt, err := common.NewDecimalFromString(utxoData.AssetInfo.Amount, utxoData.AssetInfo.Precision)
+			amt, err := indexer.NewDecimalFromString(utxoData.AssetInfo.Amount, utxoData.AssetInfo.Precision)
 			if err != nil {
 				return "", err
 			}
-			assets = []common.AssetInfo{
+			assets = []indexer.AssetInfo{
 				{
 					Name: utxoData.AssetInfo.AssetName,
 					Amount: *amt,
 					BindingSat: uint32(utxoData.AssetInfo.BindingSat),
 				},
 			}
-			outValue = common.GetBindingSatNum(&assets[0].Amount, assets[0].BindingSat)
+			outValue = indexer.GetBindingSatNum(&assets[0].Amount, assets[0].BindingSat)
 		}
 
 		txOut := wire.NewTxOut(outValue, assets, pkScript)
@@ -350,7 +350,7 @@ func mergeBatchSignedPsbt_SatsNet(signedHex []string, network string) (string, e
 	return newPsbtHex, nil
 }
 
-func addInputsToPsbt_SatsNet(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string, error) {
+func addInputsToPsbt_SatsNet(packet *psbt.Packet, utxos []*indexer.AssetsInUtxo) (string, error) {
 	for _, utxo := range utxos {
 		assets := utxo.ToTxAssets()
 		txidStr, vout, err := parseUtxo(utxo.OutPoint)
@@ -385,7 +385,7 @@ func addInputsToPsbt_SatsNet(packet *psbt.Packet, utxos []*common.AssetsInUtxo) 
 	return psbtHex, nil
 }
 
-func addOutputsToPsbt_SatsNet(packet *psbt.Packet, utxos []*common.AssetsInUtxo) (string, error) {
+func addOutputsToPsbt_SatsNet(packet *psbt.Packet, utxos []*indexer.AssetsInUtxo) (string, error) {
 
 	for _, utxo := range utxos {
 		txOut := wire.NewTxOut(utxo.Value, utxo.ToTxAssets(), utxo.PkScript)

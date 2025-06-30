@@ -4,16 +4,30 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/btcsuite/btcwallet/snacl"
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
 	DB_KEY_STATUS   = "wallet-status"
 	DB_KEY_WALLET   = "wallet-id-"
+
+	DB_KEY_RESV        = "resv-"
+	DB_KEY_TICKER_INFO = "t-"
+
+	DB_KEY_LOCKEDUTXO    = "l-"  // l-network-address-utxo
+	DB_KEY_LOCK_LASTTIME = "lt-" // lt-network-address
 )
+
+var _chain string // mainnet, testnet
+var _env string   // dev, test, prd
+var _enable_testing bool = false
 
 type Status struct {
 	SoftwareVer    string
@@ -273,4 +287,377 @@ func (p *Manager) newSnaclKey(password string) (*snacl.SecretKey, error) {
 
 func (p *Manager) IsWalletExist() bool {
 	return len(p.walletInfoMap) != 0
+}
+
+
+func GetDBKeyPrefix() string {
+	return _env + "-" + _chain + "-"
+}
+
+// 暂时不考虑地址
+func GetLockedUtxoKey(network, utxo string) string {
+	return GetDBKeyPrefix() + DB_KEY_LOCKEDUTXO + network + "-" + utxo
+}
+
+func ParseLockedUtxoKey(key string) (string, string, error) {
+	prefix := GetDBKeyPrefix() + DB_KEY_LOCKEDUTXO
+	if !strings.HasPrefix(key, prefix) {
+		return "", "", fmt.Errorf("not a locked utxo key: %s", key)
+	}
+	key = strings.TrimPrefix(key, prefix)
+	parts := strings.Split(key, "-")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid format: %s", key)
+	}
+	return parts[0], parts[1], nil
+}
+
+func saveLockedUtxo(db common.KVDB, network, utxo string, value *LockedUtxo) error {
+	buf, err := EncodeToBytes(value)
+	if err != nil {
+		Log.Errorf("saveLockedUtxo EncodeToBytes failed. %v", err)
+		return err
+	}
+
+	err = db.Write([]byte(GetLockedUtxoKey(network, utxo)), buf)
+	if err != nil {
+		Log.Errorf("saveLockedUtxo failed. %v", err)
+		return err
+	}
+	Log.Infof("saveLockedUtxo succ. %s", utxo)
+	return nil
+}
+
+func deleteLockedUtxo(db common.KVDB, network, utxo string) error {
+	return db.Delete([]byte(GetLockedUtxoKey(network, utxo)))
+}
+
+func deleteAllLockedUtxo(db common.KVDB, network string) error {
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_LOCKEDUTXO + network)
+	_, err := deleteAllKeysWithPrefix(db, prefix)
+	if err != nil {
+		return err
+	}
+	return deleteAllLastLockTime(db, network)
+}
+
+// 暂时不考虑地址
+func loadAllLockedUtxoFromDB(db common.KVDB, network string) map[string]*LockedUtxo {
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_LOCKEDUTXO + network)
+
+	result := make(map[string]*LockedUtxo, 0)
+	db.BatchRead(prefix, false, func(k, v []byte) error {
+		_, utxo, err := ParseLockedUtxoKey(string(k))
+		if err != nil {
+			Log.Errorf("ParseLockedUtxoKey failed. %v", err)
+			return err
+		}
+
+		var value LockedUtxo
+		err = DecodeFromBytes(v, &value)
+		if err != nil {
+			Log.Errorf("DecodeFromBytes %s failed. %v", string(k), err)
+			return err
+		}
+
+		result[utxo] = &value
+		return nil
+	})
+
+	return result
+}
+
+// 暂时不考虑地址
+func GeLastLockTimeKey(network string) string {
+	//return GetDBKeyPrefix() + DB_KEY_LOCK_LASTTIME + network + "-" + address
+	return GetDBKeyPrefix() + DB_KEY_LOCK_LASTTIME + network
+}
+
+func ParseLastLockTimeKey(key string) (string, error) {
+	prefix := GetDBKeyPrefix() + DB_KEY_LOCK_LASTTIME
+	if !strings.HasPrefix(key, prefix) {
+		return "", fmt.Errorf("not a key of lasttime of lock: %s", key)
+	}
+	key = strings.TrimPrefix(key, prefix)
+	parts := strings.Split(key, "-")
+	if len(parts) != 1 {
+		return "", fmt.Errorf("invalid format: %s", key)
+	}
+	return parts[0], nil
+}
+
+func saveLastLockTime(db common.KVDB, network string, t int64) error {
+	buf, err := EncodeToBytes(t)
+	if err != nil {
+		Log.Errorf("saveLastLockTime EncodeToBytes failed. %v", err)
+		return err
+	}
+
+	err = db.Write([]byte(GeLastLockTimeKey(network)), buf)
+	if err != nil {
+		Log.Errorf("saveLastLockTime failed. %v", err)
+		return err
+	}
+	Log.Infof("saveLastLockTime succ. %d", t)
+	return nil
+}
+
+func loadLastLockTime(db common.KVDB, network string) (int64, error) {
+	key := GeLastLockTimeKey(network)
+
+	buf, err := db.Read([]byte(key))
+	if err != nil {
+		//Log.Errorf("Read %s failed. %v", key, err)
+		return 0, err
+	}
+	var value int64
+	err = DecodeFromBytes(buf, &value)
+	if err != nil {
+		Log.Errorf("DecodeFromBytes %s failed. %v", key, err)
+		return 0, err
+	}
+
+	return value, nil
+}
+
+func deleteAllLastLockTime(db common.KVDB, network string) error {
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_LOCK_LASTTIME + network)
+	_, err := deleteAllKeysWithPrefix(db, prefix)
+	return err
+}
+
+func deleteAllKeysWithPrefix(db common.KVDB, prefix []byte) ([]string, error) {
+	keys := make([]string, 0)
+	err := db.BatchRead(prefix, false, func(k, v []byte) error {
+		keys = append(keys, string(k))
+		return nil
+	})
+
+	if err != nil {
+		return nil, nil
+	}
+
+	batch := db.NewBatchWrite()
+	if batch == nil {
+		Log.Errorf("NewBatchWrite failed")
+		return nil, fmt.Errorf("NewBatchWrite failed")
+	}
+	defer batch.Close()
+
+	for _, key := range keys {
+		err := batch.Remove([]byte(key))
+		if err != nil {
+			Log.Errorf("db.Remove %s failed. %v", key, err)
+		}
+	}
+	err = batch.Flush()
+	if err != nil {
+		return nil, err
+	}
+	Log.Infof("deleted %d keys", len(keys))
+	return keys, nil
+}
+
+
+func GetTickerInfoKey(name string) string {
+	return fmt.Sprintf("%s%s%s", GetDBKeyPrefix(), DB_KEY_TICKER_INFO, name)
+}
+
+func ParseTickerInfoKey(key string) (string, error) {
+	prefix := GetDBKeyPrefix() + DB_KEY_TICKER_INFO
+	if !strings.HasPrefix(key, prefix) {
+		return "", fmt.Errorf("not a ticker info key: %s", key)
+	}
+	return strings.TrimPrefix(key, prefix), nil
+}
+
+func saveTickerInfo(db common.KVDB, ticker *indexer.TickerInfo) error {
+	buf, err := EncodeToBytes(ticker)
+	if err != nil {
+		Log.Errorf("saveTickerInfo EncodeToBytes failed. %v", err)
+		return err
+	}
+
+	err = db.Write([]byte(GetTickerInfoKey(ticker.AssetName.String())), buf)
+	if err != nil {
+		Log.Errorf("saveRuneInfo failed. %v", err)
+		return err
+	}
+	Log.Infof("saveTickerInfo succ. %s", ticker.AssetName.String())
+	return nil
+}
+
+func loadTickerInfo(db common.KVDB, name *swire.AssetName) (*indexer.TickerInfo, error) {
+	key := GetTickerInfoKey(name.String())
+
+	buf, err := db.Read([]byte(key))
+	if err != nil {
+		Log.Warningf("Read %s failed. %v", key, err)
+		return nil, err
+	}
+	var value indexer.TickerInfo
+	err = DecodeFromBytes(buf, &value)
+	if err != nil {
+		Log.Errorf("DecodeFromBytes %s failed. %v", key, err)
+		return nil, err
+	}
+
+	return &value, nil
+}
+
+func deleteAllTickerInfoFromDB(db common.KVDB) error {
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TICKER_INFO)
+	_, err := deleteAllKeysWithPrefix(db, prefix)
+	return err
+}
+
+
+
+func GetResvKey(ctype string, id int64) string {
+	return fmt.Sprintf("%s%s%s-%d", GetDBKeyPrefix(), DB_KEY_RESV, ctype, id)
+}
+
+func ParseResvKey(key string) (string, int64, error) {
+	prefix := GetDBKeyPrefix() + DB_KEY_RESV
+	if !strings.HasPrefix(key, prefix) {
+		return "", -1, fmt.Errorf("not a reservation: %s", key)
+	}
+	key = strings.TrimPrefix(key, prefix)
+	parts := strings.Split(key, "-")
+	if len(parts) != 2 {
+		return "", -1, fmt.Errorf("invalid reservation key: %s", key)
+	}
+
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return "", -1, err
+	}
+
+	return parts[0], id, nil
+}
+
+func loadAllResvFromDB(db common.KVDB) map[int64]Reservation {
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_RESV)
+
+	result := make(map[int64]Reservation, 0)
+	invalidKeys := make([]string, 0)
+	db.BatchRead(prefix, false, func(k, v []byte) error {
+
+		ch, id, err := ParseResvKey(string(k))
+		if err != nil {
+			Log.Errorf("ParseResvKey failed. %v", err)
+			return nil
+		}
+
+		value := NewResvFromType(ch)
+		if value == nil {
+			invalidKeys = append(invalidKeys, string(k))
+			Log.Errorf("NewResvFromType %s failed.", ch)
+			return nil
+		}
+		err = DecodeFromBytes(v, value)
+		if err != nil {
+			invalidKeys = append(invalidKeys, string(k))
+			Log.Errorf("DecodeFromBytes %s failed. %v", string(k), err)
+			return nil
+		}
+
+		if value.GetStatus() <= RS_CLOSED {
+			return nil
+		}
+
+		result[id] = value
+		Log.Infof("loadAllResvFromDB loaded. %d %s", value.GetId(), value.GetType())
+		return nil
+	})
+
+	deleteInvalidKey := false
+	if deleteInvalidKey && len(invalidKeys) > 0 {
+		wb := db.NewBatchWrite()
+		for _, k := range invalidKeys {
+			wb.Remove([]byte(k))
+		}
+		wb.Flush()
+	}
+
+	return result
+}
+
+
+func saveReservationWithLock(db common.KVDB, resv Reservation) error {
+
+	base := resv.GetBase()
+	base.mutex.Lock()
+	defer base.mutex.Unlock()
+
+	return saveReservation(db, resv)
+}
+
+func saveReservation(db common.KVDB, resv Reservation) error {
+
+	buf, err := EncodeToBytes(resv)
+	if err != nil {
+		Log.Errorf("saveReservation EncodeToBytes failed. %v", err)
+		return err
+	}
+	ctype := resv.GetType()
+	key := GetResvKey(ctype, resv.GetId())
+
+	err = db.Write([]byte(key), buf)
+	if err != nil {
+		Log.Errorf("saveReservation failed. %v", err)
+		return err
+	}
+	Log.Infof("saveReservation %d succ. %s %x", resv.GetId(), ctype, resv.GetStatus())
+
+	if _enable_testing {
+		newResv, err := loadReservation(db, resv.GetType(), resv.GetId())
+		if err != nil {
+			Log.Panicf("saveReservation loadReservation failed, %v", err)
+		}
+
+		buf2, err := EncodeToBytes(newResv)
+		if err != nil {
+			Log.Panicf("saveReservation EncodeToBytes failed. %v", err)
+		}
+
+		if !bytes.Equal(buf, buf2) {
+			Log.Panic("buf not equal")
+		}
+		Log.Infof("resv %s checked", resv.GetType())
+	}
+
+	return nil
+}
+
+func loadReservation(db common.KVDB, typ string, id int64) (Reservation, error) {
+	key := GetResvKey(typ, id)
+	value := NewResvFromType(typ)
+	if value == nil {
+		Log.Errorf("NewResvFromType %s failed.", typ)
+		return nil, fmt.Errorf("NewResvFromType %s failed", typ)
+	}
+	buf, err := db.Read([]byte(key))
+	if err != nil {
+		//Log.Errorf("Read %s failed. %v", key, err)
+		return nil, err
+	}
+
+	err = DecodeFromBytes(buf, value)
+	if err != nil {
+		Log.Errorf("DecodeFromBytes %s failed. %v", key, err)
+		return nil, err
+	}
+
+	return value, nil
+}
+
+func deleteReservation(db common.KVDB, ctype string, id int64) error {
+	var key string
+	if len(ctype) > MAX_RESV_NAME {
+		key = GetResvKey(ctype, 0)
+	} else {
+		key = GetResvKey(ctype, id)
+	}
+	return db.Delete([]byte(key))
 }

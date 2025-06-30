@@ -14,19 +14,30 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
-func NewManager(chain string, db common.KVDB) *Manager {
+func NewManager(cfg *Config, db common.KVDB) *Manager {
 	Log.Infof("sat20wallet_ver:%s, DB_ver:%s", SOFTWARE_VERSION, DB_VERSION)
 
 	//////////
 
+	http := NewHTTPClient()
+	l1 := NewIndexerClient(cfg.IndexerL1.Scheme, cfg.IndexerL1.Host, cfg.IndexerL1.Proxy, http)
+	l2 := NewIndexerClient(cfg.IndexerL2.Scheme, cfg.IndexerL2.Host, cfg.IndexerL2.Proxy, http)
+
+
 	mgr := &Manager{
 		walletInfoMap: nil,
 		tickerInfoMap: make(map[string]*indexer.TickerInfo),
+		utxoLockerL1:              NewUtxoLocker(db, l1, L1_NETWORK_BITCOIN),
+		utxoLockerL2:              NewUtxoLocker(db, l2, L2_NETWORK_SATOSHI),
+		http:                      http,
+		l1IndexerClient:           l1,
+		l2IndexerClient:           l2,
 		bInited:       false,
 		bStop:         false,
 	}
 
-	_chain = chain
+	_env = cfg.Env
+	_chain = cfg.Chain
 
 	mgr.db = db
 	if mgr.db == nil {
