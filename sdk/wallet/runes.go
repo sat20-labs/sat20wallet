@@ -11,11 +11,9 @@ import (
 	"lukechampine.com/uint128"
 )
 
-type TransferEdict = runestone.Edict
-
 // 预估
 func GetRunesEstimatePayload(_ *AssetName, vout int) ([]byte, error) {
-	edict := TransferEdict{
+	edict := runestone.Edict{
 		ID:     runestone.RuneId{
 			Block: 840000,
 			Tx: 100,
@@ -24,10 +22,10 @@ func GetRunesEstimatePayload(_ *AssetName, vout int) ([]byte, error) {
 		Output: uint32(vout),
 	}
 
-	return EncipherRunePayload([]TransferEdict{edict})
+	return EncipherRunePayload([]runestone.Edict{edict})
 }
 
-func EncipherRunePayload(edicts []TransferEdict) ([]byte, error) {
+func EncipherRunePayload(edicts []runestone.Edict) ([]byte, error) {
 	stone := runestone.Runestone{
 		Edicts: edicts,
 	}
@@ -56,7 +54,7 @@ func EncipherRunePayload(edicts []TransferEdict) ([]byte, error) {
 	return result, nil
 }
 
-func DecipherRunePayload(pkScript []byte) ([]TransferEdict, error) {
+func DecipherRunePayload(pkScript []byte) ([]runestone.Edict, error) {
 	stone := runestone.Runestone{}
 
 	result, err := stone.DecipherFromPkScript(pkScript)
