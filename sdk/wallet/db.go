@@ -15,14 +15,16 @@ import (
 )
 
 const (
-	DB_KEY_STATUS   = "wallet-status"
-	DB_KEY_WALLET   = "wallet-id-"
+	DB_KEY_STATUS = "wallet-status"
+	DB_KEY_WALLET = "wallet-id-"
 
 	DB_KEY_RESV        = "resv-"
 	DB_KEY_TICKER_INFO = "t-"
 
 	DB_KEY_LOCKEDUTXO    = "l-"  // l-network-address-utxo
 	DB_KEY_LOCK_LASTTIME = "lt-" // lt-network-address
+
+	RESV_TYPE_INSCRIBING = "inscribe"
 )
 
 var _chain string // mainnet, testnet
@@ -44,7 +46,7 @@ type WalletInDB struct {
 	Id       int64  // 钱包id，也是创建时间
 	Mnemonic []byte // 加密后的数据
 	Salt     []byte
-	Accounts int    // 用户启用的子账户数量
+	Accounts int // 用户启用的子账户数量
 }
 
 func getWalletDBKey(id int64) string {
@@ -161,8 +163,8 @@ func loadWallet(db common.KVDB, id int64) (*WalletInDB, error) {
 func (p *Manager) loadStatus() *Status {
 
 	result := &Status{
-		SoftwareVer: SOFTWARE_VERSION,
-		DBver:       DB_VERSION,
+		SoftwareVer:  SOFTWARE_VERSION,
+		DBver:        DB_VERSION,
 		CurrentChain: _chain,
 	}
 	p.status = result
@@ -288,7 +290,6 @@ func (p *Manager) newSnaclKey(password string) (*snacl.SecretKey, error) {
 func (p *Manager) IsWalletExist() bool {
 	return len(p.walletInfoMap) != 0
 }
-
 
 func GetDBKeyPrefix() string {
 	return _env + "-" + _chain + "-"
@@ -458,7 +459,6 @@ func deleteAllKeysWithPrefix(db common.KVDB, prefix []byte) ([]string, error) {
 	return keys, nil
 }
 
-
 func GetTickerInfoKey(name string) string {
 	return fmt.Sprintf("%s%s%s", GetDBKeyPrefix(), DB_KEY_TICKER_INFO, name)
 }
@@ -511,13 +511,11 @@ func deleteAllTickerInfoFromDB(db common.KVDB) error {
 	return err
 }
 
-
-
-func GetResvKey(ctype string, id int64) string {
-	return fmt.Sprintf("%s%s%s-%d", GetDBKeyPrefix(), DB_KEY_RESV, ctype, id)
+func GetInscribeResvKey(id int64) string {
+	return fmt.Sprintf("%s%s%s-%d", GetDBKeyPrefix(), DB_KEY_RESV, RESV_TYPE_INSCRIBING, id)
 }
 
-func ParseResvKey(key string) (string, int64, error) {
+func ParseInscribeResvKey(key string) (string, int64, error) {
 	prefix := GetDBKeyPrefix() + DB_KEY_RESV
 	if !strings.HasPrefix(key, prefix) {
 		return "", -1, fmt.Errorf("not a reservation: %s", key)
@@ -536,38 +534,33 @@ func ParseResvKey(key string) (string, int64, error) {
 	return parts[0], id, nil
 }
 
-func loadAllResvFromDB(db common.KVDB) map[int64]Reservation {
-	prefix := []byte(GetDBKeyPrefix() + DB_KEY_RESV)
+func loadAllInscribeResvFromDB(db common.KVDB) map[int64]*InscribeResv {
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_RESV + RESV_TYPE_INSCRIBING)
 
-	result := make(map[int64]Reservation, 0)
+	result := make(map[int64]*InscribeResv, 0)
 	invalidKeys := make([]string, 0)
 	db.BatchRead(prefix, false, func(k, v []byte) error {
 
-		ch, id, err := ParseResvKey(string(k))
+		_, id, err := ParseInscribeResvKey(string(k))
 		if err != nil {
 			Log.Errorf("ParseResvKey failed. %v", err)
 			return nil
 		}
 
-		value := NewResvFromType(ch)
-		if value == nil {
-			invalidKeys = append(invalidKeys, string(k))
-			Log.Errorf("NewResvFromType %s failed.", ch)
-			return nil
-		}
-		err = DecodeFromBytes(v, value)
+		var value InscribeResv
+		err = DecodeFromBytes(v, &value)
 		if err != nil {
 			invalidKeys = append(invalidKeys, string(k))
 			Log.Errorf("DecodeFromBytes %s failed. %v", string(k), err)
 			return nil
 		}
 
-		if value.GetStatus() <= RS_CLOSED {
+		if value.Status <= RS_CLOSED {
 			return nil
 		}
 
-		result[id] = value
-		Log.Infof("loadAllResvFromDB loaded. %d %s", value.GetId(), value.GetType())
+		result[id] = &value
+		Log.Infof("loadAllResvFromDB loaded. %d", value.Id)
 		return nil
 	})
 
@@ -583,35 +576,24 @@ func loadAllResvFromDB(db common.KVDB) map[int64]Reservation {
 	return result
 }
 
-
-func saveReservationWithLock(db common.KVDB, resv Reservation) error {
-
-	base := resv.GetBase()
-	base.mutex.Lock()
-	defer base.mutex.Unlock()
-
-	return saveReservation(db, resv)
-}
-
-func saveReservation(db common.KVDB, resv Reservation) error {
+func saveInscribeResv(db common.KVDB, resv *InscribeResv) error {
 
 	buf, err := EncodeToBytes(resv)
 	if err != nil {
 		Log.Errorf("saveReservation EncodeToBytes failed. %v", err)
 		return err
 	}
-	ctype := resv.GetType()
-	key := GetResvKey(ctype, resv.GetId())
+	key := GetInscribeResvKey(resv.Id)
 
 	err = db.Write([]byte(key), buf)
 	if err != nil {
 		Log.Errorf("saveReservation failed. %v", err)
 		return err
 	}
-	Log.Infof("saveReservation %d succ. %s %x", resv.GetId(), ctype, resv.GetStatus())
+	Log.Infof("saveReservation %d succ. %x", resv.Id, resv.Status)
 
 	if _enable_testing {
-		newResv, err := loadReservation(db, resv.GetType(), resv.GetId())
+		newResv, err := loadInscribeResv(db, resv.Id)
 		if err != nil {
 			Log.Panicf("saveReservation loadReservation failed, %v", err)
 		}
@@ -624,40 +606,31 @@ func saveReservation(db common.KVDB, resv Reservation) error {
 		if !bytes.Equal(buf, buf2) {
 			Log.Panic("buf not equal")
 		}
-		Log.Infof("resv %s checked", resv.GetType())
+		Log.Infof("resv %d checked", resv.Id)
 	}
 
 	return nil
 }
 
-func loadReservation(db common.KVDB, typ string, id int64) (Reservation, error) {
-	key := GetResvKey(typ, id)
-	value := NewResvFromType(typ)
-	if value == nil {
-		Log.Errorf("NewResvFromType %s failed.", typ)
-		return nil, fmt.Errorf("NewResvFromType %s failed", typ)
-	}
+func loadInscribeResv(db common.KVDB, id int64) (*InscribeResv, error) {
+	key := GetInscribeResvKey(id)
+	var value InscribeResv
 	buf, err := db.Read([]byte(key))
 	if err != nil {
 		//Log.Errorf("Read %s failed. %v", key, err)
 		return nil, err
 	}
 
-	err = DecodeFromBytes(buf, value)
+	err = DecodeFromBytes(buf, &value)
 	if err != nil {
 		Log.Errorf("DecodeFromBytes %s failed. %v", key, err)
 		return nil, err
 	}
 
-	return value, nil
+	return &value, nil
 }
 
-func deleteReservation(db common.KVDB, ctype string, id int64) error {
-	var key string
-	if len(ctype) > MAX_RESV_NAME {
-		key = GetResvKey(ctype, 0)
-	} else {
-		key = GetResvKey(ctype, id)
-	}
+func deleteInscribeResv(db common.KVDB, id int64) error {
+	key := GetInscribeResvKey(id)
 	return db.Delete([]byte(key))
 }

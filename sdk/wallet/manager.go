@@ -64,7 +64,6 @@ type Manager struct {
 	refreshTimeL2 int64
 
 	inscibeMap             map[int64]*InscribeResv                   // key: timestamp
-	resvMap                map[int64]Reservation                     // key: timestamp
 }
 
 func (p *Manager) init() error {
@@ -213,7 +212,6 @@ func (p *Manager) initResvMap() {
 	defer p.mutex.Unlock()
 	
 	p.inscibeMap = make(map[int64]*InscribeResv)
-	p.resvMap = make(map[int64]Reservation)
 }
 
 
@@ -222,7 +220,7 @@ func (p *Manager) GenerateNewResvId() int64 {
 	defer p.mutex.Unlock()
 	id := time.Now().UnixMicro()
 	for {
-		_, ok := p.resvMap[id]
+		_, ok := p.inscibeMap[id]
 		if ok {
 			id++
 			continue

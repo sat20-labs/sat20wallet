@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"github.com/sat20-labs/indexer/common"
-	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 type AssetLockContract struct {
@@ -26,18 +25,6 @@ func (p *AssetLockContract) GetContractName() string {
 
 func (p *AssetLockContract) CalcDeployFee() int64 {
 	return 0
-}
-
-func (p *AssetLockContract) AllowDeploy(stp *Manager, resv Reservation) error {
-	return nil
-}
-
-func (p *AssetLockContract) AllowInvoke(stp *Manager, resv Reservation) error {
-	return nil
-}
-
-func (p *AssetLockContract) Invoke(*Manager, Reservation, *swire.MsgTx) error {
-	return nil
 }
 
 func (p *AssetLockContract) Content() string {

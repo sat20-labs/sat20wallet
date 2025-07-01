@@ -101,7 +101,7 @@ type ContractRuntime interface {
 
 	// 合约调用的支持接口
 	CheckInvokeParam(string) (int64, error)    // 调用合约的参数检查(json)，调用合约前调用
-	AllowInvoke(*Manager, Reservation) error
+	AllowInvoke(*Manager) error
 	
 }
 
@@ -449,7 +449,7 @@ func (p *ContractRuntimeBase) CheckInvokeParam(string) (int64, error) {
 	return 0, nil
 }
 
-func (p *ContractRuntimeBase) AllowInvoke(stp *Manager, r Reservation) error {
+func (p *ContractRuntimeBase) AllowInvoke(stp *Manager) error {
 
 	// resv, ok := r.(*ContractDeployReservation)
 	// if !ok {
