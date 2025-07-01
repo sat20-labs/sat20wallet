@@ -22,9 +22,13 @@ func NewManager(cfg *common.Config, db common.KVDB) *Manager {
 	http := NewHTTPClient()
 	l1 := NewIndexerClient(cfg.IndexerL1.Scheme, cfg.IndexerL1.Host, cfg.IndexerL1.Proxy, http)
 	l2 := NewIndexerClient(cfg.IndexerL2.Scheme, cfg.IndexerL2.Host, cfg.IndexerL2.Proxy, http)
-	l12 := NewIndexerClient(cfg.SlaveIndexerL1.Scheme, cfg.SlaveIndexerL1.Host, cfg.SlaveIndexerL1.Proxy, http)
-	l22 := NewIndexerClient(cfg.SlaveIndexerL2.Scheme, cfg.SlaveIndexerL2.Host, cfg.SlaveIndexerL2.Proxy, http)
-
+	var l12, l22*IndexerClient
+	if cfg.SlaveIndexerL1 != nil {
+		l12 = NewIndexerClient(cfg.SlaveIndexerL1.Scheme, cfg.SlaveIndexerL1.Host, cfg.SlaveIndexerL1.Proxy, http)
+	}
+	if cfg.SlaveIndexerL2 != nil {
+		l22 = NewIndexerClient(cfg.SlaveIndexerL2.Scheme, cfg.SlaveIndexerL2.Host, cfg.SlaveIndexerL2.Proxy, http)
+	}
 
 	mgr := &Manager{
 		cfg: cfg,

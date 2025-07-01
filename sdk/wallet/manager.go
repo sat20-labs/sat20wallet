@@ -90,6 +90,17 @@ func (p *Manager) init() error {
 	return nil
 }
 
+func (p *Manager) SetIndexerHttpClient(client IndexerRPCClient) {
+	p.l1IndexerClient = client
+}
+
+func (p *Manager) SetIndexerHttpClient_SatsNet(client IndexerRPCClient) {
+	p.l2IndexerClient = client
+}
+
+func (p *Manager) SetServerNodeHttpClient(client NodeRPCClient) {
+	p.serverNode.client = client
+}
 
 func GetBootstrapPubKey() *secp256k1.PublicKey {
 	keyBytes, err := hex.DecodeString(indexer.GetBootstrapPubKey())
