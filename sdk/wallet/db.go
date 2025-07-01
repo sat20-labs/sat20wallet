@@ -331,13 +331,13 @@ func saveLockedUtxo(db common.KVDB, network, utxo string, value *LockedUtxo) err
 	return nil
 }
 
-func deleteLockedUtxo(db common.KVDB, network, utxo string) error {
+func DeleteLockedUtxo(db common.KVDB, network, utxo string) error {
 	return db.Delete([]byte(GetLockedUtxoKey(network, utxo)))
 }
 
-func deleteAllLockedUtxo(db common.KVDB, network string) error {
+func DeleteAllLockedUtxo(db common.KVDB, network string) error {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_LOCKEDUTXO + network)
-	_, err := deleteAllKeysWithPrefix(db, prefix)
+	_, err := DeleteAllKeysWithPrefix(db, prefix)
 	if err != nil {
 		return err
 	}
@@ -425,11 +425,11 @@ func loadLastLockTime(db common.KVDB, network string) (int64, error) {
 
 func deleteAllLastLockTime(db common.KVDB, network string) error {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_LOCK_LASTTIME + network)
-	_, err := deleteAllKeysWithPrefix(db, prefix)
+	_, err := DeleteAllKeysWithPrefix(db, prefix)
 	return err
 }
 
-func deleteAllKeysWithPrefix(db common.KVDB, prefix []byte) ([]string, error) {
+func DeleteAllKeysWithPrefix(db common.KVDB, prefix []byte) ([]string, error) {
 	keys := make([]string, 0)
 	err := db.BatchRead(prefix, false, func(k, v []byte) error {
 		keys = append(keys, string(k))
@@ -509,7 +509,7 @@ func loadTickerInfo(db common.KVDB, name *swire.AssetName) (*indexer.TickerInfo,
 
 func deleteAllTickerInfoFromDB(db common.KVDB) error {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TICKER_INFO)
-	_, err := deleteAllKeysWithPrefix(db, prefix)
+	_, err := DeleteAllKeysWithPrefix(db, prefix)
 	return err
 }
 

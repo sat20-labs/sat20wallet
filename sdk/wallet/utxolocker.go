@@ -15,30 +15,30 @@ import (
 // 只需要在发起方对utxo做锁定，因为remote端不需要检查，所有的utxo由发起方选好
 
 type LockedUtxo struct {
-	LockedTime int64 	`json:"lockedTime"`
-	Reason string		`json:"reason"`
-	Value  int64        `json:"value"`
-	Assets swire.TxAssets `json:"assets"`
+	LockedTime int64          `json:"lockedTime"`
+	Reason     string         `json:"reason"`
+	Value      int64          `json:"value"`
+	Assets     swire.TxAssets `json:"assets"`
 }
 
 // 前端钱包在background和worker两个不同线程存在两个不同的stp模块，需要考虑这种情况下的数据同步
 type UtxoLocker struct {
-	mutex sync.RWMutex
-	network string
-	address string  // 暂时不区分地址，降低复杂性
-	lockmap map[string]*LockedUtxo  // utxo -> lock time
-	refreshTime int64 
+	mutex       sync.RWMutex
+	network     string
+	address     string                 // 暂时不区分地址，降低复杂性
+	lockmap     map[string]*LockedUtxo // utxo -> lock time
+	refreshTime int64
 
-	db common.KVDB
+	db        common.KVDB
 	rpcClient IndexerRPCClient
 }
 
 func NewUtxoLocker(db common.KVDB, rpc IndexerRPCClient, network string) *UtxoLocker {
 	locker := &UtxoLocker{
-		lockmap: 	make(map[string]*LockedUtxo),
-		db: 		db,
-		rpcClient:  rpc,
-		network:    network,
+		lockmap:   make(map[string]*LockedUtxo),
+		db:        db,
+		rpcClient: rpc,
+		network:   network,
 	}
 	return locker
 }
@@ -50,7 +50,7 @@ func (p *UtxoLocker) Init(address string) {
 func (p *UtxoLocker) Reload(address string) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
+
 	p.reload()
 }
 
@@ -168,7 +168,7 @@ func (p *UtxoLocker) lockUtxo(utxo, reason string) error {
 
 	lockedUtxo := LockedUtxo{
 		LockedTime: time.Now().Unix(),
-		Reason: reason,
+		Reason:     reason,
 	}
 	err := saveLockedUtxo(p.db, p.network, utxo, &lockedUtxo)
 	if err != nil {
@@ -180,7 +180,6 @@ func (p *UtxoLocker) lockUtxo(utxo, reason string) error {
 	p.lockmap[utxo] = &lockedUtxo
 	return nil
 }
-
 
 func (p *UtxoLocker) FillAsset(utxo string, lock *LockedUtxo) error {
 	p.mutex.Lock()
@@ -221,7 +220,7 @@ func (p *UtxoLocker) unlockUtxo(utxo string) error {
 	if !ok {
 		return nil
 	}
-	deleteLockedUtxo(p.db, p.network, utxo)
+	DeleteLockedUtxo(p.db, p.network, utxo)
 	delete(p.lockmap, utxo)
 
 	return nil
@@ -239,7 +238,7 @@ func (p *UtxoLocker) IsLocked(utxo string) bool {
 func (p *UtxoLocker) GetLockedUtxoList() map[string]*LockedUtxo {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	
+
 	p.reload()
 	result := make(map[string]*LockedUtxo)
 	for k, v := range p.lockmap {
@@ -249,13 +248,12 @@ func (p *UtxoLocker) GetLockedUtxoList() map[string]*LockedUtxo {
 	return result
 }
 
-
 // func (p *UtxoLocker) GetLockedAssetAmount(asset *swire.AssetName) *Decimal {
 // 	p.mutex.RLock()
 // 	defer p.mutex.RUnlock()
 
 // 	p.reload()
-	
+
 // 	var assetAmt *Decimal
 // 	var totalValue int64
 // 	for k, v := range p.lockmap {
@@ -287,11 +285,10 @@ func (p *UtxoLocker) GetLockedUtxoList() map[string]*LockedUtxo {
 // 	return assetAmt
 // }
 
-
 func (p *UtxoLocker) GetLockedUtxoListV2() map[string]bool {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	
+
 	p.reload()
 	result := make(map[string]bool)
 	for k := range p.lockmap {
@@ -301,8 +298,7 @@ func (p *UtxoLocker) GetLockedUtxoListV2() map[string]bool {
 	return result
 }
 
-
-func (p *UtxoLocker) CheckBlock(transactions []*btcutil.Tx)  {
+func (p *UtxoLocker) CheckBlock(transactions []*btcutil.Tx) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -314,7 +310,7 @@ func (p *UtxoLocker) CheckBlock(transactions []*btcutil.Tx)  {
 			utxo := txIn.PreviousOutPoint.String()
 			_, ok := p.lockmap[utxo]
 			if ok {
-				deleteLockedUtxo(p.db, p.network, utxo)
+				DeleteLockedUtxo(p.db, p.network, utxo)
 				delete(p.lockmap, utxo)
 				bUpdated = true
 			}
@@ -327,7 +323,7 @@ func (p *UtxoLocker) CheckBlock(transactions []*btcutil.Tx)  {
 	}
 }
 
-func (p *UtxoLocker) CheckBlock_SatsNet(transactions []*sbtcutil.Tx)  {
+func (p *UtxoLocker) CheckBlock_SatsNet(transactions []*sbtcutil.Tx) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -339,7 +335,7 @@ func (p *UtxoLocker) CheckBlock_SatsNet(transactions []*sbtcutil.Tx)  {
 			utxo := txIn.PreviousOutPoint.String()
 			_, ok := p.lockmap[utxo]
 			if ok {
-				deleteLockedUtxo(p.db, p.network, utxo)
+				DeleteLockedUtxo(p.db, p.network, utxo)
 				delete(p.lockmap, utxo)
 				bUpdated = true
 			}
@@ -352,8 +348,7 @@ func (p *UtxoLocker) CheckBlock_SatsNet(transactions []*sbtcutil.Tx)  {
 	}
 }
 
-
-func (p *UtxoLocker) CheckExisting()  {
+func (p *UtxoLocker) CheckExisting() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -375,12 +370,12 @@ func (p *UtxoLocker) CheckExisting()  {
 		for _, u := range existingUtxos {
 			existingUtxoMap[u] = true
 		}
-		for k := range p.lockmap{
+		for k := range p.lockmap {
 			_, ok := existingUtxoMap[k]
 			if ok {
 				continue
 			}
-			
+
 			p.unlockUtxo(k)
 		}
 		p.refreshTime = time.Now().UnixMilli()
@@ -388,8 +383,7 @@ func (p *UtxoLocker) CheckExisting()  {
 	}
 }
 
-
-func (p *UtxoLocker) CheckUtxos(utxos []string) string  {
+func (p *UtxoLocker) CheckUtxos(utxos []string) string {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
@@ -399,8 +393,7 @@ func (p *UtxoLocker) CheckUtxos(utxos []string) string  {
 		if ok {
 			return utxo
 		}
-		
+
 	}
 	return ""
 }
-

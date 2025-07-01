@@ -51,6 +51,7 @@ type Manager struct {
 	l1IndexerClient      IndexerRPCClient
 	slaveL1IndexerClient IndexerRPCClient
 	l2IndexerClient      IndexerRPCClient
+	slaveL2IndexerClient IndexerRPCClient
 
 	bootstrapNode        []*Node // 引导节点，全网目前唯一，以后由基金会提供至少3个，通过MPC管理密钥
 	serverNode           *Node   // 服务节点，由引导节点更新维护，一般情况下，用户只跟一个服务节点打交道
@@ -923,4 +924,12 @@ func (p *Manager) BroadcastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 	}
 	p.utxoLockerL2.LockUtxosWithTx_SatsNet(tx)
 	return txId, nil
+}
+
+func (p *Manager) GetUtxoLocker() *UtxoLocker {
+	return p.utxoLockerL1
+}
+
+func (p *Manager) GetUtxoLocker_SatsNet() *UtxoLocker {
+	return p.utxoLockerL2
 }
