@@ -230,6 +230,16 @@ func (p *Manager) GenerateNewResvId() int64 {
 	return id
 }
 
+func (p *Manager) GetInscribeResv(id int64) *InscribeResv {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	r, ok := p.inscibeMap[id]
+	if ok {
+		return r
+	}
+	return nil
+}
+
 func (p *Manager) GetFeeRate() int64 {
 	if IsTestNet() {
 		return 2

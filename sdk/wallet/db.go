@@ -94,6 +94,8 @@ func (p *Manager) initDB() error {
 	}
 	p.walletInfoMap = wallets
 
+	p.inscibeMap = loadAllInscribeResvFromDB(p.db)
+
 	p.repair()
 
 	return nil
@@ -543,7 +545,7 @@ func loadAllInscribeResvFromDB(db common.KVDB) map[int64]*InscribeResv {
 
 		_, id, err := ParseInscribeResvKey(string(k))
 		if err != nil {
-			Log.Errorf("ParseResvKey failed. %v", err)
+			Log.Errorf("ParseInscribeResvKey failed. %v", err)
 			return nil
 		}
 
@@ -560,7 +562,7 @@ func loadAllInscribeResvFromDB(db common.KVDB) map[int64]*InscribeResv {
 		}
 
 		result[id] = &value
-		Log.Infof("loadAllResvFromDB loaded. %d", value.Id)
+		Log.Infof("loadAllInscribeResvFromDB loaded. %d", value.Id)
 		return nil
 	})
 
@@ -580,27 +582,27 @@ func saveInscribeResv(db common.KVDB, resv *InscribeResv) error {
 
 	buf, err := EncodeToBytes(resv)
 	if err != nil {
-		Log.Errorf("saveReservation EncodeToBytes failed. %v", err)
+		Log.Errorf("saveInscribeResv EncodeToBytes failed. %v", err)
 		return err
 	}
 	key := GetInscribeResvKey(resv.Id)
 
 	err = db.Write([]byte(key), buf)
 	if err != nil {
-		Log.Errorf("saveReservation failed. %v", err)
+		Log.Errorf("saveInscribeResv failed. %v", err)
 		return err
 	}
-	Log.Infof("saveReservation %d succ. %x", resv.Id, resv.Status)
+	Log.Infof("saveInscribeResv %d succ. %x", resv.Id, resv.Status)
 
 	if _enable_testing {
 		newResv, err := loadInscribeResv(db, resv.Id)
 		if err != nil {
-			Log.Panicf("saveReservation loadReservation failed, %v", err)
+			Log.Panicf("saveInscribeResv loadReservation failed, %v", err)
 		}
 
 		buf2, err := EncodeToBytes(newResv)
 		if err != nil {
-			Log.Panicf("saveReservation EncodeToBytes failed. %v", err)
+			Log.Panicf("saveInscribeResv EncodeToBytes failed. %v", err)
 		}
 
 		if !bytes.Equal(buf, buf2) {
