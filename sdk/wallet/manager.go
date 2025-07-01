@@ -92,10 +92,12 @@ func (p *Manager) init() error {
 
 func (p *Manager) SetIndexerHttpClient(client IndexerRPCClient) {
 	p.l1IndexerClient = client
+	p.utxoLockerL1.rpcClient = client
 }
 
 func (p *Manager) SetIndexerHttpClient_SatsNet(client IndexerRPCClient) {
 	p.l2IndexerClient = client
+	p.utxoLockerL2.rpcClient = client
 }
 
 func (p *Manager) SetServerNodeHttpClient(client NodeRPCClient) {
