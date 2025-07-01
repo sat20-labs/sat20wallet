@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
-	"github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	indexer "github.com/sat20-labs/indexer/common"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -18,9 +18,9 @@ import (
 var _client *Manager
 var _client2 *Manager
 
-func newTestConf(mode, dbPath string) *Config {
+func newTestConf(mode, dbPath string) *common.Config {
 	chain := "testnet4"
-	ret := &Config{
+	ret := &common.Config{
 		Chain: chain,
 		Log:   "debug",
 		DB:    dbPath,
@@ -252,7 +252,7 @@ func TestVerifySignedPsbtString_satsnet(t *testing.T) {
 
 func TestBuildOrder(t *testing.T) {
 
-	// assset := common.DisplayAsset{
+	// assset := indexer.DisplayAsset{
 	// 	AssetName: AssetName{
 	// 		Protocol: "ordx",
 	// 		Type: "f",
@@ -265,7 +265,7 @@ func TestBuildOrder(t *testing.T) {
 	// }
 
 	info := UtxoInfo{
-		AssetsInUtxo: common.AssetsInUtxo{
+		AssetsInUtxo: indexer.AssetsInUtxo{
 			UtxoId:   1030792413185,
 			OutPoint: "ee7f3526663e7ebdfd4fb577941cdeab12729d2d220d651798369bfe106c4b2a:1",
 			Value:    10000,
@@ -274,7 +274,7 @@ func TestBuildOrder(t *testing.T) {
 		},
 		Price: 10000,
 		AssetInfo: &BuyAssetInfo{
-			AssetName: common.AssetName{
+			AssetName: indexer.AssetName{
 				Protocol: "ordx",
 				Type:     "f",
 				Ticker:   "rarepizza",
@@ -297,7 +297,7 @@ func TestBuildOrder(t *testing.T) {
 
 func TestFinalizeOrder(t *testing.T) {
 
-	// assset := common.DisplayAsset{
+	// assset := indexer.DisplayAsset{
 	// 	AssetName: AssetName{
 	// 		Protocol: "ordx",
 	// 		Type: "f",
@@ -354,7 +354,7 @@ func TestPsbtFullFlow(t *testing.T) {
 	prepare(t)
 
 	pkScript, _ := GetP2TRpkScript(_client.GetWallet().GetPaymentPubKey())
-	assset := common.DisplayAsset{
+	assset := indexer.DisplayAsset{
 		AssetName: indexer.AssetName{
 			Protocol: "ordx",
 			Type:     "f",
@@ -366,21 +366,21 @@ func TestPsbtFullFlow(t *testing.T) {
 		Offsets:    nil,
 	}
 	info := UtxoInfo{
-		AssetsInUtxo: common.AssetsInUtxo{
+		AssetsInUtxo: indexer.AssetsInUtxo{
 			UtxoId:   1030792413185,
 			OutPoint: "ee7f3526663e7ebdfd4fb577941cdeab12729d2d220d651798369bfe106c4b2a:1",
 			Value:    100,
 			PkScript: pkScript,
-			Assets:   []*common.DisplayAsset{&assset},
+			Assets:   []*indexer.DisplayAsset{&assset},
 		},
 		Price: 6000,
-		// AssetInfo: &common.AssetInfo{
-		// 	Name: common.AssetName{
+		// AssetInfo: &indexer.AssetInfo{
+		// 	Name: indexer.AssetName{
 		// 		Protocol: "ordx",
 		// 		Type:     "f",
 		// 		Ticker:   "rarepizza",
 		// 	},
-		// 	Amount:     *common.NewDefaultDecimal(100),
+		// 	Amount:     *indexer.NewDefaultDecimal(100),
 		// 	BindingSat: 1,
 		// },
 	}
@@ -418,7 +418,7 @@ func TestPsbtFullFlow(t *testing.T) {
 	buyerAddr := _client2.wallet.GetAddress()
 	pkScript2, _ := GetP2TRpkScript(_client2.GetWallet().GetPaymentPubKey())
 	info2 := UtxoInfo{
-		AssetsInUtxo: common.AssetsInUtxo{
+		AssetsInUtxo: indexer.AssetsInUtxo{
 			UtxoId:   3985729912833,
 			OutPoint: "84b9d49a9be9732ffa619a12cbf6dfb6f6e07a588bd7f7003f6bb8d85243482c:1",
 			Value:    10000,

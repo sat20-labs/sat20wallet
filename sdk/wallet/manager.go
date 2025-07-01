@@ -36,7 +36,7 @@ type NotifyCB func (string, interface{})
 type Manager struct {
 	mutex sync.RWMutex
 
-	cfg           *Config
+	cfg           *common.Config
 	bInited       bool
 	bStop         bool
 	password      string
@@ -114,7 +114,7 @@ func (p *Manager) initNode() error {
 			Log.Errorf("invalid peers config item: %s", n)
 			continue
 		}
-		parsedPubkey, err := ParsePubkey(parts[1])
+		parsedPubkey, err := utils.ParsePubkey(parts[1])
 		if err != nil {
 			return fmt.Errorf("invalid AddPeers config item: %s", n)
 		}

@@ -14,7 +14,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
-func NewManager(cfg *Config, db common.KVDB) *Manager {
+func NewManager(cfg *common.Config, db common.KVDB) *Manager {
 	Log.Infof("sat20wallet_ver:%s, DB_ver:%s", SOFTWARE_VERSION, DB_VERSION)
 
 	//////////

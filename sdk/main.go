@@ -7,6 +7,7 @@ import (
 	"time"
 
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	"github.com/sirupsen/logrus"
@@ -65,7 +66,7 @@ func main() {
 	wallet.Log.Info("main exit.")
 }
 
-func InitLog(cfg *wallet.Config) error {
+func InitLog(cfg *common.Config) error {
 	var writers []io.Writer
 	logPath := "./log/" + cfg.Chain
 

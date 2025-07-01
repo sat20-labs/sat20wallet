@@ -14,6 +14,7 @@ import (
 	"syscall/js"
 
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sirupsen/logrus"
 )
 
@@ -53,10 +54,10 @@ var createJsRet = func(data any, code int, msg string) map[string]any {
 	}
 }
 
-func parseIndexerConfig(indexer js.Value) (*wallet.Indexer, error) {
+func parseIndexerConfig(indexer js.Value) (*common.Indexer, error) {
 	// IndexerL1
 	if indexer.Type() == js.TypeObject {
-		var cfg wallet.Indexer
+		var cfg common.Indexer
 		if scheme := indexer.Get("Scheme"); scheme.Type() == js.TypeString {
 			cfg.Scheme = scheme.String()
 		} else {
@@ -77,8 +78,8 @@ func parseIndexerConfig(indexer js.Value) (*wallet.Indexer, error) {
 	return nil, fmt.Errorf("Indexer must be an object")
 }
 
-func parseConfigFromJS(jsConfig js.Value) (*wallet.Config, error) {
-	cfg := &wallet.Config{}
+func parseConfigFromJS(jsConfig js.Value) (*common.Config, error) {
+	cfg := &common.Config{}
 	// Log
 	if log := jsConfig.Get("Log"); log.Type() == js.TypeString {
 		cfg.Log = log.String()
@@ -262,7 +263,7 @@ func initManager(this js.Value, p []js.Value) any {
 	if p[0].Type() != js.TypeObject {
 		return createJsRet(nil, -1, "config parameter should be a string")
 	}
-	var cfg *wallet.Config
+	var cfg *common.Config
 	cfg, err := parseConfigFromJS(p[0])
 	if err != nil {
 		return createJsRet(nil, -1, fmt.Sprintf("Failed to parse config: %v", err))
