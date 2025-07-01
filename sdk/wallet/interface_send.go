@@ -60,7 +60,7 @@ func (p *Manager) BatchSendAssetsV2_SatsNet(destAddr []string,
 		return "", err
 	}
 
-	tx, prevFetcher, err := p.buildBatchSendTx_SatsNet(destAddr, name, destAmt, utxos, fees, memo)
+	tx, prevFetcher, err := p.BuildBatchSendTx_SatsNet(destAddr, name, destAmt, utxos, fees, memo)
 	if err != nil {
 		return "", err
 	}
@@ -84,7 +84,7 @@ func (p *Manager) BatchSendAssetsV2_SatsNet(destAddr []string,
 }
 
 // 构建tx，发送给多个地址不同数量的资产，只发送资产（可以是白聪）
-func (p *Manager) buildBatchSendTx_SatsNet(destAddr []string,
+func (p *Manager) BuildBatchSendTx_SatsNet(destAddr []string,
 	assetName *swire.AssetName, destAmt []*Decimal, utxos, fees []string, memo []byte) (*swire.MsgTx, *stxscript.MultiPrevOutFetcher, error) {
 
 	if p.wallet == nil {
@@ -1257,7 +1257,7 @@ func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 	return txid, nil
 }
 
-func (p *Manager) batchSendPlainSats(destAddr string, value int64, n int,
+func (p *Manager) BatchSendPlainSats(destAddr string, value int64, n int,
 	feeRate int64, memo []byte) (string, int64, error) {
 	//
 	return p.BatchSendAssets(destAddr, indexer.ASSET_PLAIN_SAT.String(),
@@ -1298,10 +1298,10 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 	var fee int64
 
 	if indexer.IsPlainAsset(name) {
-		tx, prevFetcher, fee, err = p.buildBatchSendTx_PlainSats(destAddr, dAmt.Int64(), n, feeRate, memo)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTx_PlainSats(destAddr, dAmt.Int64(), n, feeRate, memo)
 	} else if name.Protocol == indexer.PROTOCOL_NAME_ORDX {
 		newName := GetAssetName(tickerInfo)
-		tx, prevFetcher, fee, err = p.buildBatchSendTx_Ordx(destAddr, newName, dAmt, n, feeRate, memo)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTx_Ordx(destAddr, newName, dAmt, n, feeRate, memo)
 	} else {
 		return "", 0, fmt.Errorf("unsupport batch send for asset name %s", assetName)
 	}
@@ -1327,7 +1327,7 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 }
 
 // 白聪
-func (p *Manager) buildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
+func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 	feeRate int64, memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
 	address := p.wallet.GetAddress()
@@ -1491,7 +1491,7 @@ func adjustInputsForSplicingIn(inputs []*TxOutput, name *AssetName) ([]*TxOutput
 
 
 // 给同一个地址发送n等分资产
-func (p *Manager) buildBatchSendTx_Ordx(destAddr string,
+func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 	name *AssetName, amt *Decimal, n int, feeRate int64,
 	memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
@@ -1720,20 +1720,20 @@ func (p *Manager) SendAssets(destAddr string, assetName string,
 	}
 
 	if indexer.IsPlainAsset(name) {
-		return p.sendPlainSats(destAddr, dAmt.Int64(), feeRate, memo)
+		return p.SendPlainSats(destAddr, dAmt.Int64(), feeRate, memo)
 	} else if name.Protocol == indexer.PROTOCOL_NAME_ORDX {
 		newName := GetAssetName(tickerInfo)
-		return p.sendOrdxs(destAddr, newName, dAmt, feeRate, memo)
+		return p.SendOrdxs(destAddr, newName, dAmt, feeRate, memo)
 	} else if name.Protocol == indexer.PROTOCOL_NAME_RUNES {
-		return p.sendRunes(destAddr, name, dAmt, feeRate, memo)
+		return p.SendRunes(destAddr, name, dAmt, feeRate, memo)
 	}
 
 	return "", fmt.Errorf("invalid asset name %s", assetName)
 }
 
 // 白聪
-func (p *Manager) sendPlainSats(destAddr string, amt int64, feeRate int64, memo []byte) (string, error) {
-	tx, prevFetcher, _, err := p.buildBatchSendTx_PlainSats(destAddr, amt, 1, feeRate, memo)
+func (p *Manager) SendPlainSats(destAddr string, amt int64, feeRate int64, memo []byte) (string, error) {
+	tx, prevFetcher, _, err := p.BuildBatchSendTx_PlainSats(destAddr, amt, 1, feeRate, memo)
 	if err != nil {
 		return "", err
 	}
@@ -1753,7 +1753,7 @@ func (p *Manager) sendPlainSats(destAddr string, amt int64, feeRate int64, memo 
 	return txid, nil
 }
 
-func (p *Manager) sendOrdxs(destAddr string,
+func (p *Manager) SendOrdxs(destAddr string,
 	name *AssetName, amt *Decimal, feeRate int64, memo []byte) (string, error) {
 	txid, _, err := p.BatchSendAssets(destAddr, name.String(), amt.String(), 1, feeRate, memo)
 	if err != nil {
@@ -1763,7 +1763,7 @@ func (p *Manager) sendOrdxs(destAddr string,
 	return txid, nil
 }
 
-func (p *Manager) sendRunes(destAddr string,
+func (p *Manager) SendRunes(destAddr string,
 	name *indexer.AssetName, amt *Decimal, feeRate int64, memo []byte) (string, error) {
 
 	address := p.wallet.GetAddress()
@@ -1950,7 +1950,7 @@ func (p *Manager) sendRunes(destAddr string,
 }
 
 // 给多个地址发送不同数量的白聪
-func (p *Manager) buildBatchSendTxV2_PlainSats(dest []*SendAssetInfo, utxos, fees []string,
+func (p *Manager) BuildBatchSendTxV2_PlainSats(dest []*SendAssetInfo, utxos, fees []string,
 	feeRate int64, memo []byte, bInChannel bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 	if p.wallet == nil {
 		return nil, nil, 0, fmt.Errorf("wallet is not created/unlocked")
@@ -2063,7 +2063,7 @@ func (p *Manager) buildBatchSendTxV2_PlainSats(dest []*SendAssetInfo, utxos, fee
 }
 
 // 给不同地址发送不同数量的资产，只支持ordx协议
-func (p *Manager) buildBatchSendTxV2_ordx(dest []*SendAssetInfo,
+func (p *Manager) BuildBatchSendTxV2_ordx(dest []*SendAssetInfo,
 	assetName *AssetName, utxos, fees []string,
 	feeRate int64, memo []byte, bInChannel bool) (
 	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
@@ -2268,7 +2268,7 @@ func (p *Manager) buildBatchSendTxV2_ordx(dest []*SendAssetInfo,
 }
 
 // 给不同地址发送不同数量的资产，只支持runes协议, 目标地址不能太多，会超出op_return的限制
-func (p *Manager) buildBatchSendTxV2_runes(dest []*SendAssetInfo,
+func (p *Manager) BuildBatchSendTxV2_runes(dest []*SendAssetInfo,
 	assetName *AssetName, utxos, fees []string,
 	feeRate int64, bInChannel bool) (
 	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
@@ -2485,16 +2485,16 @@ func (p *Manager) BatchSendAssetsV2(dest []*SendAssetInfo,
 	var prevFetcher *txscript.MultiPrevOutFetcher
 	var fee int64
 	if indexer.IsPlainAsset(name) {
-		tx, prevFetcher, fee, err = p.buildBatchSendTxV2_PlainSats(dest,
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV2_PlainSats(dest,
 			utxos, fees, feeRate, memo, bInChannel)
 	} else if name.Protocol == indexer.PROTOCOL_NAME_ORDX {
-		tx, prevFetcher, fee, err = p.buildBatchSendTxV2_ordx(dest, assetName,
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV2_ordx(dest, assetName,
 			utxos, fees, feeRate, memo, bInChannel)
 	} else if name.Protocol == indexer.PROTOCOL_NAME_RUNES {
 		if len(memo) != 0 {
 			return "", fmt.Errorf("do not attach memo when send runes asset")
 		}
-		tx, prevFetcher, fee, err = p.buildBatchSendTxV2_runes(dest, assetName,
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV2_runes(dest, assetName,
 			utxos, fees, feeRate, bInChannel)
 	}
 	if err != nil {
@@ -2580,7 +2580,7 @@ func CalcFee_SendTx(inputLen, outputLen, feeLen int, assetName *AssetName,
 }
 
 // 该Tx还没有广播或者广播了还没有确认，才有可能重建
-func (p *Manager) rebuildTxOutput(tx *wire.MsgTx) ([]*TxOutput, []*TxOutput, error) {
+func (p *Manager) RebuildTxOutput(tx *wire.MsgTx) ([]*TxOutput, []*TxOutput, error) {
 	// 尝试为tx的输出分配资产
 	// 按ordx协议的规则
 	// 按runes协议的规则

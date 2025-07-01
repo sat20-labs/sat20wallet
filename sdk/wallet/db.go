@@ -94,7 +94,7 @@ func (p *Manager) initDB() error {
 	}
 	p.walletInfoMap = wallets
 
-	p.inscibeMap = loadAllInscribeResvFromDB(p.db)
+	p.inscibeMap = LoadAllInscribeResvFromDB(p.db)
 
 	p.repair()
 
@@ -536,7 +536,7 @@ func ParseInscribeResvKey(key string) (string, int64, error) {
 	return parts[0], id, nil
 }
 
-func loadAllInscribeResvFromDB(db common.KVDB) map[int64]*InscribeResv {
+func LoadAllInscribeResvFromDB(db common.KVDB) map[int64]*InscribeResv {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_RESV + RESV_TYPE_INSCRIBING)
 
 	result := make(map[int64]*InscribeResv, 0)
@@ -578,7 +578,7 @@ func loadAllInscribeResvFromDB(db common.KVDB) map[int64]*InscribeResv {
 	return result
 }
 
-func saveInscribeResv(db common.KVDB, resv *InscribeResv) error {
+func SaveInscribeResv(db common.KVDB, resv *InscribeResv) error {
 
 	buf, err := EncodeToBytes(resv)
 	if err != nil {
@@ -595,7 +595,7 @@ func saveInscribeResv(db common.KVDB, resv *InscribeResv) error {
 	Log.Infof("saveInscribeResv %d succ. %x", resv.Id, resv.Status)
 
 	if _enable_testing {
-		newResv, err := loadInscribeResv(db, resv.Id)
+		newResv, err := LoadInscribeResv(db, resv.Id)
 		if err != nil {
 			Log.Panicf("saveInscribeResv loadReservation failed, %v", err)
 		}
@@ -614,7 +614,7 @@ func saveInscribeResv(db common.KVDB, resv *InscribeResv) error {
 	return nil
 }
 
-func loadInscribeResv(db common.KVDB, id int64) (*InscribeResv, error) {
+func LoadInscribeResv(db common.KVDB, id int64) (*InscribeResv, error) {
 	key := GetInscribeResvKey(id)
 	var value InscribeResv
 	buf, err := db.Read([]byte(key))
@@ -632,7 +632,7 @@ func loadInscribeResv(db common.KVDB, id int64) (*InscribeResv, error) {
 	return &value, nil
 }
 
-func deleteInscribeResv(db common.KVDB, id int64) error {
+func DeleteInscribeResv(db common.KVDB, id int64) error {
 	key := GetInscribeResvKey(id)
 	return db.Delete([]byte(key))
 }

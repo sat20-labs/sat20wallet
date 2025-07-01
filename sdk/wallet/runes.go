@@ -140,7 +140,7 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 
 	// 缓存
 	txs.Status = RS_INSCRIBING_COMMIT_BROADCASTED
-	saveInscribeResv(p.db, txs)
+	SaveInscribeResv(p.db, txs)
 
 	// 等待6个确认后才能发送etching指令
 	return txs, nil

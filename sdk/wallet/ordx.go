@@ -69,13 +69,13 @@ func (p *Manager) inscribe(address string, body string, revealOutValue int64,
 	if err != nil {
 		// 缓存数据，确保可以取回资金
 		txs.Status = RS_INSCRIBING_COMMIT_BROADCASTED
-		saveInscribeResv(p.db, txs)
+		SaveInscribeResv(p.db, txs)
 		return txs, err
 	}
 	Log.Infof("reveal txid: %s", revealTxId)
 
 	txs.Status = RS_INSCRIBING_REVEAL_BROADCASTED
-	saveInscribeResv(p.db, txs)
+	SaveInscribeResv(p.db, txs)
 
 	return txs, nil
 }
@@ -90,7 +90,7 @@ func EstimatedDeployFee(inputLen int, feeRate int64) int64 {
 	return (340+int64(inputLen-1)*60)*feeRate + 330
 }
 
-func (p *Manager) deployOrdxTicker(ticker string, max, lim int64, n int) (*InscribeResv, error) {
+func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int) (*InscribeResv, error) {
 	if n <= 0 || n > 65535 {
 		return nil, fmt.Errorf("n too big (>65535)")
 	}
@@ -177,7 +177,7 @@ func EstimatedMintFee(inputLen int, feeRate, revealOutValue int64) int64 {
 }
 
 // 需要调用方确保amt<=limit
-func (p *Manager) mintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
+func (p *Manager) MintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
 	amt int64, preUtxo string) (*InscribeResv, error) {
 
 	limit, err := strconv.ParseInt(tickInfo.Limit, 10, 64)
