@@ -384,7 +384,7 @@ func (p *Manager) BatchSendAssets_SatsNet(destAddr string,
 		return "", fmt.Errorf("invalid amt")
 	}
 	totalAmt := dAmt.Clone()
-	totalAmt = totalAmt.Mul(big.NewInt(int64(n)))
+	totalAmt = totalAmt.MulBigInt(big.NewInt(int64(n)))
 
 	address := p.wallet.GetAddress()
 	outputs := p.l2IndexerClient.GetUtxoListWithTicker(address, name)
@@ -1521,7 +1521,7 @@ func (p *Manager) buildBatchSendTx_Ordx(destAddr string,
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
 	total := int64(0)
 	var totalAsset *Decimal
-	requiredAmt := amt.Clone().Mul(big.NewInt(int64(n)))
+	requiredAmt := amt.Clone().MulBigInt(big.NewInt(int64(n)))
 	inputVect := make([]*TxOutput, 0)
 	p.utxoLockerL1.Reload(address)
 	for _, out := range outputs {
