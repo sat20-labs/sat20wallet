@@ -235,6 +235,8 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam strin
 
 	case INVOKE_API_MINT:
 
+	case INVOKE_API_REFUND:
+
 
 	default:
 		return "", fmt.Errorf("unsupport action %s", wrapperParam.Action)
