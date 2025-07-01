@@ -226,7 +226,7 @@ func (p *Manager) BatchSendAssetsV3_SatsNet(dest []*SendAssetInfo,
 		return "", err
 	}
 
-	tx, prevFetcher, err := p.buildBatchSendTxV2_SatsNet(dest, name, utxos, fees, memo)
+	tx, prevFetcher, err := p.BuildBatchSendTxV2_SatsNet(dest, name, utxos, fees, memo)
 	if err != nil {
 		Log.Errorf("buildBatchSendTxV2_SatsNet failed. %v", err)
 		return "", err
@@ -250,7 +250,7 @@ func (p *Manager) BatchSendAssetsV3_SatsNet(dest []*SendAssetInfo,
 }
 
 // 构建tx，从本地地址或者通道地址，发送资产到指定的地址列表，包括白聪和资产。资产只能一种。
-func (p *Manager) buildBatchSendTxV2_SatsNet(dest []*SendAssetInfo,
+func (p *Manager) BuildBatchSendTxV2_SatsNet(dest []*SendAssetInfo,
 	assetName *swire.AssetName, utxos, fees []string, memo []byte) (*swire.MsgTx, *stxscript.MultiPrevOutFetcher, error) {
 
 	if p.wallet == nil {
