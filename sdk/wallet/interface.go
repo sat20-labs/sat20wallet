@@ -25,6 +25,7 @@ func NewManager(cfg *common.Config, db common.KVDB) *Manager {
 
 
 	mgr := &Manager{
+		cfg: cfg,
 		walletInfoMap: nil,
 		tickerInfoMap: make(map[string]*indexer.TickerInfo),
 		utxoLockerL1:              NewUtxoLocker(db, l1, L1_NETWORK_BITCOIN),
