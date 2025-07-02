@@ -78,10 +78,14 @@ router.beforeEach(async (to, from) => {
   const hasWallet = walletStorage.getValue('hasWallet')
   await checkPassword()
   const password = walletStorage.getValue('password')
+  const network = walletStorage.getValue('network')
 
   if (password && walletStore.locked) {
     await walletStore.unlockWallet(password)
     await walletStore.setLocked(false)
+    if (network) {
+      await walletStore.setNetwork(network)
+    }
   }
 
   if (to.path.startsWith('/wallet')) {
