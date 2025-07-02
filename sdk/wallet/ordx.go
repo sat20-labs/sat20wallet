@@ -30,7 +30,7 @@ const CONTENT_MINT_ABBR_BODY string = `{"p":"ordx","op":"mint","tick":"%s"}`
 
 // 同步修改 GetLPTAssetName
 
-func (p *Manager) inscribe(address string, body string, revealOutValue int64, 
+func (p *Manager) inscribe(address string, body string, revealOutValue int64,
 	feeRate int64, commitTxPrevOutputList []*PrevOutput) (*InscribeResv, error) {
 	wallet := p.wallet
 	changeAddr := wallet.GetAddress()
@@ -69,28 +69,28 @@ func (p *Manager) inscribe(address string, body string, revealOutValue int64,
 	if err != nil {
 		// 缓存数据，确保可以取回资金
 		txs.Status = RS_INSCRIBING_COMMIT_BROADCASTED
-		saveReservation(p.db, txs)
+		SaveInscribeResv(p.db, txs)
 		return txs, err
 	}
 	Log.Infof("reveal txid: %s", revealTxId)
 
 	txs.Status = RS_INSCRIBING_REVEAL_BROADCASTED
-	saveReservation(p.db, txs)
+	SaveInscribeResv(p.db, txs)
 
 	return txs, nil
 }
 
 func EstimatedDeployFee(inputLen int, feeRate int64) int64 {
 	/*
-	经验数据，调整 CONTENT_DEPLOY_BODY 后需要调整
-	estimatedInputValue1 := 340*feeRate + 330
-	estimatedInputValue2 := 400*feeRate + 330
-	estimatedInputValue3 := 460*feeRate + 330
+		经验数据，调整 CONTENT_DEPLOY_BODY 后需要调整
+		estimatedInputValue1 := 340*feeRate + 330
+		estimatedInputValue2 := 400*feeRate + 330
+		estimatedInputValue3 := 460*feeRate + 330
 	*/
-	return (340+int64(inputLen-1)*60) * feeRate + 330
+	return (340+int64(inputLen-1)*60)*feeRate + 330
 }
 
-func (p *Manager) deployOrdxTicker(ticker string, max, lim int64, n int) (*InscribeResv, error) {
+func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int) (*InscribeResv, error) {
 	if n <= 0 || n > 65535 {
 		return nil, fmt.Errorf("n too big (>65535)")
 	}
@@ -168,17 +168,16 @@ func (p *Manager) deployOrdxTicker(ticker string, max, lim int64, n int) (*Inscr
 
 func EstimatedMintFee(inputLen int, feeRate, revealOutValue int64) int64 {
 	/*
-	// 经验数据，调整 CONTENT_MINT_BODY 后需要调整
-	estimatedInputValue1 := 310*feeRate + revealOutValue
-	estimatedInputValue2 := 370*feeRate + revealOutValue
-	estimatedInputValue3 := 430*feeRate + revealOutValue
+		// 经验数据，调整 CONTENT_MINT_BODY 后需要调整
+		estimatedInputValue1 := 310*feeRate + revealOutValue
+		estimatedInputValue2 := 370*feeRate + revealOutValue
+		estimatedInputValue3 := 430*feeRate + revealOutValue
 	*/
-	return (310+int64(inputLen-1)*60) * feeRate + revealOutValue
+	return (310+int64(inputLen-1)*60)*feeRate + revealOutValue
 }
 
-
 // 需要调用方确保amt<=limit
-func (p *Manager) mintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo, 
+func (p *Manager) MintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
 	amt int64, preUtxo string) (*InscribeResv, error) {
 
 	limit, err := strconv.ParseInt(tickInfo.Limit, 10, 64)
@@ -219,7 +218,6 @@ func (p *Manager) mintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
 		return utxos[i].Value > utxos[j].Value
 	})
 
-
 	commitTxPrevOutputList := make([]*PrevOutput, 0)
 	total := int64(0)
 	included := make(map[string]bool)
@@ -239,20 +237,19 @@ func (p *Manager) mintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
 		if err != nil {
 			return nil, err
 		}
-		
+
 		total += txOut.OutValue.Value
 		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-			TxId: parts[0],
-			VOut: uint32(vout),
-			Amount: txOut.OutValue.Value,
+			TxId:     parts[0],
+			VOut:     uint32(vout),
+			Amount:   txOut.OutValue.Value,
 			PkScript: txOut.OutValue.PkScript,
 		})
 		included[preUtxo] = true
 	}
-	
 
 	p.utxoLockerL1.Reload(address)
-	
+
 	estimatedFee := int64(0)
 	for _, u := range utxos {
 		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
@@ -264,7 +261,7 @@ func (p *Manager) mintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
 			continue
 		}
 		included[preUtxo] = true
-		
+
 		total += u.Value
 		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
 			TxId:     u.Txid,

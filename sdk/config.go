@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/yaml.v2"
 
-	"github.com/sat20-labs/sat20wallet/sdk/wallet"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sirupsen/logrus"
 )
 
@@ -23,7 +23,7 @@ func GetBaseDir() string {
 	return execPath
 }
 
-func InitConfig() *wallet.Config {
+func InitConfig() *common.Config {
 	cfgFile := GetBaseDir() + "/conf.yaml"
 	cfg, err := LoadYamlConf(cfgFile)
 	if err != nil {
@@ -32,14 +32,14 @@ func InitConfig() *wallet.Config {
 	return cfg
 }
 
-func LoadYamlConf(cfgPath string) (*wallet.Config, error) {
+func LoadYamlConf(cfgPath string) (*common.Config, error) {
 	confFile, err := os.Open(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open cfg: %s, error: %s", cfgPath, err)
 	}
 	defer confFile.Close()
 
-	cfg := &wallet.Config{}
+	cfg := &common.Config{}
 	decoder := yaml.NewDecoder(confFile)
 	err = decoder.Decode(cfg)
 	if err != nil {
@@ -54,9 +54,9 @@ func LoadYamlConf(cfgPath string) (*wallet.Config, error) {
 	return cfg, nil
 }
 
-func NewDefaultYamlConf() *wallet.Config {
+func NewDefaultYamlConf() *common.Config {
 	chain := "testnet4"
-	ret := &wallet.Config{
+	ret := &common.Config{
 		Chain: chain,
 		Log: "error",
 	}
@@ -64,7 +64,7 @@ func NewDefaultYamlConf() *wallet.Config {
 	return ret
 }
 
-func SaveYamlConf(conf *wallet.Config, filePath string) error {
+func SaveYamlConf(conf *common.Config, filePath string) error {
 	data, err := yaml.Marshal(conf)
 	if err != nil {
 		return err

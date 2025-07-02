@@ -95,8 +95,21 @@ type InscriptionBuilder struct {
 	MustRevealTxFee           int64
 }
 
+// 跟ResvStatus保持一致
+const (
+	RS_FAILED        int = -1
+	RS_CLOSED        int = 0
+
+	RS_INIT      int = 0x99
+	RS_CONFIRMED int = 0x10000
+
+	RS_INSCRIBING_COMMIT_BROADCASTED int = 0x3000
+	RS_INSCRIBING_REVEAL_BROADCASTED int = 0x3001
+	RS_INSCRIBING_CONFIRMED          int = RS_CONFIRMED
+)
 type InscribeResv struct {
-	ReservationBase
+	Id               int64
+	Status           int
 
 	CommitTx         *wire.MsgTx `json:"commitTx"`
 	RevealTx         *wire.MsgTx `json:"revealTx"`
@@ -106,9 +119,6 @@ type InscribeResv struct {
 	RevealPrivateKey []byte      `json:"revealPrivateKey"`
 }
 
-func (p *InscribeResv) GetType() string {
-	return RESV_TYPE_INSCRIBING
-}
 
 const (
 	DefaultTxVersion      = 2
@@ -487,9 +497,8 @@ func Inscribe(network *chaincfg.Params, request *InscriptionRequest, resvId int6
 
 	commitTxFee, revealTxFees := tool.CalculateFee()
 	return &InscribeResv{
-		ReservationBase: ReservationBase{
-			Id: resvId,
-		},
+		Id: resvId,
+		Status: RS_INIT,
 
 		CommitTx:         tool.CommitTx,
 		RevealTx:         tool.RevealTx,

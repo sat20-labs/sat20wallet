@@ -1,6 +1,8 @@
 package wallet
 
 import (
+	"bytes"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -8,7 +10,9 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/wire"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	swire "github.com/sat20-labs/satoshinet/wire"
 	"lukechampine.com/uint128"
 
@@ -16,15 +20,25 @@ import (
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 )
 
+
+type Node struct {
+	client   NodeRPCClient
+	Host     string // ip:port
+	NodeType string
+	NodeId   *secp256k1.PublicKey // same as Pubkey
+	Pubkey   *secp256k1.PublicKey
+}
+
+
 type NotifyCB func (string, interface{})
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet
 type Manager struct {
 	mutex sync.RWMutex
 
+	cfg           *common.Config
 	bInited       bool
 	bStop         bool
-	password      string
 	status        *Status
 	walletInfoMap map[int64]*WalletInDB
 	wallet        *InternalWallet
@@ -36,6 +50,11 @@ type Manager struct {
 	l1IndexerClient      IndexerRPCClient
 	slaveL1IndexerClient IndexerRPCClient
 	l2IndexerClient      IndexerRPCClient
+	slaveL2IndexerClient IndexerRPCClient
+
+	bootstrapNode        []*Node // 引导节点，全网目前唯一，以后由基金会提供至少3个，通过MPC管理密钥
+	serverNode           *Node   // 服务节点，由引导节点更新维护，一般情况下，用户只跟一个服务节点打交道
+
 	utxoLockerL1 *UtxoLocker
 	utxoLockerL2 *UtxoLocker
 
@@ -45,7 +64,6 @@ type Manager struct {
 	refreshTimeL2 int64
 
 	inscibeMap             map[int64]*InscribeResv                   // key: timestamp
-	resvMap                map[int64]Reservation                     // key: timestamp
 }
 
 func (p *Manager) init() error {
@@ -54,14 +72,126 @@ func (p *Manager) init() error {
 	}
 
 	p.initResvMap()
+	err := p.initNode()
+	if err != nil {
+		Log.Errorf("initNode failed. %v", err)
+		return err
+	}
 
-	err := p.initDB()
+	err = p.initDB()
 	if err != nil {
 		Log.Errorf("initDB failed. %v", err)
 		return err
 	}
 
 	p.bInited = true
+
+	return nil
+}
+
+func (p *Manager) SetIndexerHttpClient(client IndexerRPCClient) {
+	p.l1IndexerClient = client
+	p.utxoLockerL1.rpcClient = client
+}
+
+func (p *Manager) SetIndexerHttpClient_SatsNet(client IndexerRPCClient) {
+	p.l2IndexerClient = client
+	p.utxoLockerL2.rpcClient = client
+}
+
+func (p *Manager) SetServerNodeHttpClient(client NodeRPCClient) {
+	p.serverNode.client = client
+}
+
+func GetBootstrapPubKey() *secp256k1.PublicKey {
+	keyBytes, err := hex.DecodeString(indexer.GetBootstrapPubKey())
+	if err != nil {
+		Log.Panic("GetBootstrapPubKey failed")
+	}
+	r, err := utils.BytesToPublicKey(keyBytes)
+	if err != nil {
+		Log.Panic("BytesToPublicKey failed")
+	}
+	return r
+}
+
+// 初始化服务节点
+func (p *Manager) initNode() error {
+	// 第一个node，是bootstrap，第二个是服务节点。如果有两个，nodeId不能相同
+	nodes := p.cfg.Peers
+	bootstrappubkey := GetBootstrapPubKey()
+	for _, n := range nodes {
+		parts := strings.Split(n, "@")
+		if len(parts) != 3 {
+			Log.Errorf("invalid peers config item: %s", n)
+			continue
+		}
+		parsedPubkey, err := utils.ParsePubkey(parts[1])
+		if err != nil {
+			return fmt.Errorf("invalid AddPeers config item: %s", n)
+		}
+
+		var scheme, host string
+		// http://host:port
+		if strings.HasPrefix(parts[2], "http://") {
+			scheme = "http"
+			host = strings.TrimPrefix(parts[2], "http://")
+		} else if strings.HasPrefix(parts[2], "https://") {
+			scheme = "https"
+			host = strings.TrimPrefix(parts[2], "https://")
+		} else {
+			scheme = "http"
+			host = parts[2]
+		}
+
+		switch parts[0] {
+		case "b":
+			if bytes.Equal(parsedPubkey.SerializeCompressed(), bootstrappubkey.SerializeCompressed()) {
+				node := &Node{
+					client:   NewNodeClient(scheme, host, "", p.http),
+					NodeId:   bootstrappubkey,
+					Host:     parts[2],
+					NodeType: BOOTSTRAP_NODE,
+					Pubkey:   bootstrappubkey,
+				}
+				p.bootstrapNode = append(p.bootstrapNode, node)
+			} else {
+				return fmt.Errorf("invalid bootstrap pubkey")
+			}
+
+		case "s":
+			if p.serverNode != nil {
+				return fmt.Errorf("too many server node setting")
+			}
+			p.serverNode = &Node{
+				client:   NewNodeClient(scheme, host, "", p.http),
+				NodeId:   parsedPubkey,
+				Host:     parts[2],
+				NodeType: SERVER_NODE,
+				Pubkey:   parsedPubkey,
+			}
+		default:
+			Log.Errorf("not support type %s", n)
+		}
+	}
+
+	if len(p.bootstrapNode) == 0 {
+		Log.Warnf("no bootstrap node setting, use default setting")
+		host := "seed.sat20.org:" + REST_SERVER_PORT
+		p.bootstrapNode = []*Node{{
+			client:   NewNodeClient("http", host, "", p.http),
+			NodeId:   bootstrappubkey,
+			Host:     host,
+			NodeType: BOOTSTRAP_NODE,
+			Pubkey:   bootstrappubkey,
+		}}
+	}
+
+	if p.serverNode == nil {
+		p.serverNode = p.bootstrapNode[0]
+	}
+
+	Log.Infof("server node id: %s", hex.EncodeToString(p.serverNode.NodeId.SerializeCompressed()))
 
 	return nil
 }
@@ -95,7 +225,6 @@ func (p *Manager) initResvMap() {
 	defer p.mutex.Unlock()
 	
 	p.inscibeMap = make(map[int64]*InscribeResv)
-	p.resvMap = make(map[int64]Reservation)
 }
 
 
@@ -104,7 +233,7 @@ func (p *Manager) GenerateNewResvId() int64 {
 	defer p.mutex.Unlock()
 	id := time.Now().UnixMicro()
 	for {
-		_, ok := p.resvMap[id]
+		_, ok := p.inscibeMap[id]
 		if ok {
 			id++
 			continue
@@ -112,6 +241,16 @@ func (p *Manager) GenerateNewResvId() int64 {
 		break
 	}
 	return id
+}
+
+func (p *Manager) GetInscribeResv(id int64) *InscribeResv {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	r, ok := p.inscibeMap[id]
+	if ok {
+		return r
+	}
+	return nil
 }
 
 func (p *Manager) GetFeeRate() int64 {
@@ -707,7 +846,7 @@ func (p *Manager) getAssetAmount_SatsNet(address string, name *swire.AssetName) 
 	for _, u := range outputs {
 		if p.utxoLockerL2.IsLocked(u.OutPoint) {
 			if bPlainAsset {
-				lockedSats += u.Value
+				lockedSats += u.GetPlainSat()
 			} else {
 				assets := u.ToTxAssets()
 				asset, _ := assets.Find(name)
@@ -721,7 +860,7 @@ func (p *Manager) getAssetAmount_SatsNet(address string, name *swire.AssetName) 
 			}
 		} else {
 			if bPlainAsset {
-				availableSats += u.Value
+				availableSats += u.GetPlainSat()
 			} else {
 				assets := u.ToTxAssets()
 				asset, _ := assets.Find(name)
@@ -797,4 +936,12 @@ func (p *Manager) BroadcastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 	}
 	p.utxoLockerL2.LockUtxosWithTx_SatsNet(tx)
 	return txId, nil
+}
+
+func (p *Manager) GetUtxoLocker() *UtxoLocker {
+	return p.utxoLockerL1
+}
+
+func (p *Manager) GetUtxoLocker_SatsNet() *UtxoLocker {
+	return p.utxoLockerL2
 }

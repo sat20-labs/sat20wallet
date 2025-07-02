@@ -9,21 +9,38 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
-	"github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	indexer "github.com/sat20-labs/indexer/common"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
+var _test_env = "test"
 var _client *Manager
 var _client2 *Manager
 
-func newTestConf(mode, dbPath string) *Config {
-	chain := "testnet4"
-	ret := &Config{
+func newTestConf(mode, dbPath string) *common.Config {
+	chain := "testnet"
+	ret := &common.Config{
+		Env:  _test_env,
 		Chain: chain,
 		Log:   "debug",
 		DB:    dbPath,
+		Peers: []string{
+			"b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@seed.sat20.org:19529",
+			//"s@02b8b9edca5c0c4b7fb2c2ee6ca7cc7a6e899ba36b182586724282d1d949a90397@127.0.0.1:9080",
+			"s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@39.108.96.46:19529",
+		},
+		IndexerL1: &common.Indexer{
+			Scheme: "http",
+			Host:   "192.168.10.103:8009",
+			Proxy:  "btc/testnet",
+		},
+		IndexerL2: &common.Indexer{
+			Scheme: "http",
+			Host:   "192.168.10.101:19528",
+			Proxy:  "testnet",
+		},
 	}
 
 	return ret
@@ -89,6 +106,8 @@ func prepare(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoveAll failed: %v\n", err)
 	}
+
+	indexer.ENV = _test_env
 
 	_client = createNode(t, "client", "../db/clientDB")
 	_client2 = createNode(t, "client2", "../db/client2DB")
@@ -252,7 +271,7 @@ func TestVerifySignedPsbtString_satsnet(t *testing.T) {
 
 func TestBuildOrder(t *testing.T) {
 
-	// assset := common.DisplayAsset{
+	// assset := indexer.DisplayAsset{
 	// 	AssetName: AssetName{
 	// 		Protocol: "ordx",
 	// 		Type: "f",
@@ -265,7 +284,7 @@ func TestBuildOrder(t *testing.T) {
 	// }
 
 	info := UtxoInfo{
-		AssetsInUtxo: common.AssetsInUtxo{
+		AssetsInUtxo: indexer.AssetsInUtxo{
 			UtxoId:   1030792413185,
 			OutPoint: "ee7f3526663e7ebdfd4fb577941cdeab12729d2d220d651798369bfe106c4b2a:1",
 			Value:    10000,
@@ -274,7 +293,7 @@ func TestBuildOrder(t *testing.T) {
 		},
 		Price: 10000,
 		AssetInfo: &BuyAssetInfo{
-			AssetName: common.AssetName{
+			AssetName: indexer.AssetName{
 				Protocol: "ordx",
 				Type:     "f",
 				Ticker:   "rarepizza",
@@ -297,7 +316,7 @@ func TestBuildOrder(t *testing.T) {
 
 func TestFinalizeOrder(t *testing.T) {
 
-	// assset := common.DisplayAsset{
+	// assset := indexer.DisplayAsset{
 	// 	AssetName: AssetName{
 	// 		Protocol: "ordx",
 	// 		Type: "f",
@@ -354,7 +373,7 @@ func TestPsbtFullFlow(t *testing.T) {
 	prepare(t)
 
 	pkScript, _ := GetP2TRpkScript(_client.GetWallet().GetPaymentPubKey())
-	assset := common.DisplayAsset{
+	assset := indexer.DisplayAsset{
 		AssetName: indexer.AssetName{
 			Protocol: "ordx",
 			Type:     "f",
@@ -366,21 +385,21 @@ func TestPsbtFullFlow(t *testing.T) {
 		Offsets:    nil,
 	}
 	info := UtxoInfo{
-		AssetsInUtxo: common.AssetsInUtxo{
+		AssetsInUtxo: indexer.AssetsInUtxo{
 			UtxoId:   1030792413185,
 			OutPoint: "ee7f3526663e7ebdfd4fb577941cdeab12729d2d220d651798369bfe106c4b2a:1",
 			Value:    100,
 			PkScript: pkScript,
-			Assets:   []*common.DisplayAsset{&assset},
+			Assets:   []*indexer.DisplayAsset{&assset},
 		},
 		Price: 6000,
-		// AssetInfo: &common.AssetInfo{
-		// 	Name: common.AssetName{
+		// AssetInfo: &indexer.AssetInfo{
+		// 	Name: indexer.AssetName{
 		// 		Protocol: "ordx",
 		// 		Type:     "f",
 		// 		Ticker:   "rarepizza",
 		// 	},
-		// 	Amount:     *common.NewDefaultDecimal(100),
+		// 	Amount:     *indexer.NewDefaultDecimal(100),
 		// 	BindingSat: 1,
 		// },
 	}
@@ -418,7 +437,7 @@ func TestPsbtFullFlow(t *testing.T) {
 	buyerAddr := _client2.wallet.GetAddress()
 	pkScript2, _ := GetP2TRpkScript(_client2.GetWallet().GetPaymentPubKey())
 	info2 := UtxoInfo{
-		AssetsInUtxo: common.AssetsInUtxo{
+		AssetsInUtxo: indexer.AssetsInUtxo{
 			UtxoId:   3985729912833,
 			OutPoint: "84b9d49a9be9732ffa619a12cbf6dfb6f6e07a588bd7f7003f6bb8d85243482c:1",
 			Value:    10000,
@@ -479,4 +498,20 @@ func TestPsbtFullFlow(t *testing.T) {
 		t.Fatal()
 	}
 
+}
+
+
+func TestChangePassword(t *testing.T) {
+	prepare(t)
+
+	oldPS := "123456"
+	newPS := "abcdefgh"
+
+	id := _client.status.CurrentWallet
+	err := _client.ChangePassword(id, oldPS, newPS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("%s\n", _client.GetMnemonic(id, oldPS))
+	fmt.Printf("%s\n", _client.GetMnemonic(id, newPS))
 }

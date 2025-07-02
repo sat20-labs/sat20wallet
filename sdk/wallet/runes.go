@@ -11,23 +11,21 @@ import (
 	"lukechampine.com/uint128"
 )
 
-type TransferEdict = runestone.Edict
-
 // 预估
 func GetRunesEstimatePayload(_ *AssetName, vout int) ([]byte, error) {
-	edict := TransferEdict{
-		ID:     runestone.RuneId{
+	edict := runestone.Edict{
+		ID: runestone.RuneId{
 			Block: 840000,
-			Tx: 100,
+			Tx:    100,
 		},
 		Amount: uint128.Uint128{Lo: math.MaxInt64, Hi: math.MaxInt64},
 		Output: uint32(vout),
 	}
 
-	return EncipherRunePayload([]TransferEdict{edict})
+	return EncipherRunePayload([]runestone.Edict{edict})
 }
 
-func EncipherRunePayload(edicts []TransferEdict) ([]byte, error) {
+func EncipherRunePayload(edicts []runestone.Edict) ([]byte, error) {
 	stone := runestone.Runestone{
 		Edicts: edicts,
 	}
@@ -56,7 +54,7 @@ func EncipherRunePayload(edicts []TransferEdict) ([]byte, error) {
 	return result, nil
 }
 
-func DecipherRunePayload(pkScript []byte) ([]TransferEdict, error) {
+func DecipherRunePayload(pkScript []byte) ([]runestone.Edict, error) {
 	stone := runestone.Runestone{}
 
 	result, err := stone.DecipherFromPkScript(pkScript)
@@ -78,33 +76,32 @@ func GenEtching(displayName string, symbol int32, maxSupply int64) (*runestone.E
 
 	return &runestone.Etching{
 		Divisibility: nil,
-		Premine: &premine,
-		Rune: &spacerRune.Rune,
-		Spacers: &spacerRune.Spacers,
-		Symbol: &symbol,
-		Terms: nil,
-		Turbo: false,
+		Premine:      &premine,
+		Rune:         &spacerRune.Rune,
+		Spacers:      &spacerRune.Spacers,
+		Symbol:       &symbol,
+		Terms:        nil,
+		Turbo:        false,
 	}, nil
 }
 
 func EstimatedDeployRunesNameFee(inputLen int, feeRate int64) int64 {
 	/*
-	经验数据，跟etching的数据相关，这里只是一个估算
-	estimatedInputValue1 := 340*feeRate + 330
-	estimatedInputValue2 := 400*feeRate + 330
-	estimatedInputValue3 := 460*feeRate + 330
+		经验数据，跟etching的数据相关，这里只是一个估算
+		estimatedInputValue1 := 340*feeRate + 330
+		estimatedInputValue2 := 400*feeRate + 330
+		estimatedInputValue3 := 460*feeRate + 330
 
-		txIn   commit fee | reveal fee
-		1       154        172          = 326
-		2       212        172          = 384
-		3       269        172          = 441
-		4       327        172          = 499
+			txIn   commit fee | reveal fee
+			1       154        172          = 326
+			2       212        172          = 384
+			3       269        172          = 441
+			4       327        172          = 499
 	*/
-	return (340+int64(inputLen-1)*60) * feeRate + 660
+	return (340+int64(inputLen-1)*60)*feeRate + 660
 }
 
-
-func (p *Manager) inscribeRunes(address string, runeName, nullData []byte, 
+func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 	feeRate int64, commitTxPrevOutputList []*PrevOutput) (*InscribeResv, error) {
 	wallet := p.wallet
 	changeAddr := wallet.GetAddress()
@@ -118,9 +115,9 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 		RevealFeeRate:          feeRate,
 		RevealOutValue:         660,
 		InscriptionData: InscriptionData{
-			ContentType: "",
-			Body:        nil,
-			RuneName:    runeName,
+			ContentType:      "",
+			Body:             nil,
+			RuneName:         runeName,
 			RevealTxNullData: nullData,
 		},
 		DestAddress:   address,
@@ -143,7 +140,7 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 
 	// 缓存
 	txs.Status = RS_INSCRIBING_COMMIT_BROADCASTED
-	saveReservation(p.db, txs)
+	SaveInscribeResv(p.db, txs)
 
 	// 等待6个确认后才能发送etching指令
 	return txs, nil
@@ -161,8 +158,8 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 	// return txs, nil
 }
 
-func (p *Manager) deployRunesTicker(destAddr string, ticker string, symbol int32, max int64) (*InscribeResv, error) {
-	
+func (p *Manager) DeployRunesTicker(destAddr string, ticker string, symbol int32, max int64) (*InscribeResv, error) {
+
 	wallet := p.wallet
 
 	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
@@ -217,14 +214,12 @@ func (p *Manager) deployRunesTicker(destAddr string, ticker string, symbol int32
 	if total < estimatedFee {
 		return nil, fmt.Errorf("no enough utxos for fee")
 	}
-	
+
 	return p.inscribeRunes(destAddr, etching.Rune.Commitment(), nullData, feeRate, commitTxPrevOutputList)
 }
 
-
 // 需要调用方确保amt<=limit
 func (p *Manager) mintRunesAsset(destAddr string, tickInfo *indexer.TickerInfo) (string, error) {
-
 
 	//wallet := p.wallet
 
