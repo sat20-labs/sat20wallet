@@ -3,7 +3,7 @@ package wallet
 import "math"
 
 const (
-	SOFTWARE_VERSION = "0.0.3"
+	SOFTWARE_VERSION = "0.0.3.2"
 	DB_VERSION       = "0.0.1"
 )
 

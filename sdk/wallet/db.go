@@ -235,6 +235,38 @@ func (p *Manager) saveMnemonic(mn, password string) (int64, error) {
 	return wallet.Id, nil
 }
 
+
+func (p *Manager) saveMnemonicWithId(mn, password string, old *WalletInDB) (error) {
+	key, err := p.newSnaclKey(password)
+	if err != nil {
+		Log.Errorf("NewSecretKey failed. %v", err)
+		return err
+	}
+
+	en, err := key.Encrypt([]byte(mn))
+	if err != nil {
+		Log.Errorf("Encrypt failed. %v", err)
+		return err
+	}
+
+	salt := key.Marshal()
+
+	wallet := WalletInDB{
+		Id:       old.Id,
+		Mnemonic: en,
+		Salt:     salt,
+		Accounts: old.Accounts,
+	}
+
+	err = saveWallet(p.db, &wallet)
+	if err != nil {
+		return err
+	}
+
+	p.walletInfoMap[wallet.Id] = &wallet
+	return nil
+}
+
 func (p *Manager) loadMnemonic(id int64, password string) (string, error) {
 	wallet, ok := p.walletInfoMap[id]
 	if !ok {

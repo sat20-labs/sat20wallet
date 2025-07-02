@@ -39,7 +39,6 @@ type Manager struct {
 	cfg           *common.Config
 	bInited       bool
 	bStop         bool
-	password      string
 	status        *Status
 	walletInfoMap map[int64]*WalletInDB
 	wallet        *InternalWallet

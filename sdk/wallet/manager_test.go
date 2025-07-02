@@ -15,15 +15,32 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
+var _test_env = "test"
 var _client *Manager
 var _client2 *Manager
 
 func newTestConf(mode, dbPath string) *common.Config {
-	chain := "testnet4"
+	chain := "testnet"
 	ret := &common.Config{
+		Env:  _test_env,
 		Chain: chain,
 		Log:   "debug",
 		DB:    dbPath,
+		Peers: []string{
+			"b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@seed.sat20.org:19529",
+			//"s@02b8b9edca5c0c4b7fb2c2ee6ca7cc7a6e899ba36b182586724282d1d949a90397@127.0.0.1:9080",
+			"s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@39.108.96.46:19529",
+		},
+		IndexerL1: &common.Indexer{
+			Scheme: "http",
+			Host:   "192.168.10.103:8009",
+			Proxy:  "btc/testnet",
+		},
+		IndexerL2: &common.Indexer{
+			Scheme: "http",
+			Host:   "192.168.10.101:19528",
+			Proxy:  "testnet",
+		},
 	}
 
 	return ret
@@ -89,6 +106,8 @@ func prepare(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoveAll failed: %v\n", err)
 	}
+
+	indexer.ENV = _test_env
 
 	_client = createNode(t, "client", "../db/clientDB")
 	_client2 = createNode(t, "client2", "../db/client2DB")
@@ -479,4 +498,20 @@ func TestPsbtFullFlow(t *testing.T) {
 		t.Fatal()
 	}
 
+}
+
+
+func TestChangePassword(t *testing.T) {
+	prepare(t)
+
+	oldPS := "123456"
+	newPS := "abcdefgh"
+
+	id := _client.status.CurrentWallet
+	err := _client.ChangePassword(id, oldPS, newPS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("%s\n", _client.GetMnemonic(id, oldPS))
+	fmt.Printf("%s\n", _client.GetMnemonic(id, newPS))
 }

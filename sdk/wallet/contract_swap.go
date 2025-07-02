@@ -639,12 +639,11 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 	return SWAP_INVOKE_FEE, nil
 }
 
-
-// 不包括调用费用 （向上取整）
-func calcSwapServiceFee(value int64) int64 {
-	return (value*SWAP_SERVICE_FEE_RATIO + 999) / 1000 // 交易服务费
-}
-
 func calcSwapFee(value int64) int64 {
 	return SWAP_INVOKE_FEE + calcSwapServiceFee(value)
+}
+
+// 不包括调用费用 （向下取整）
+func calcSwapServiceFee(value int64) int64 {
+	return (value*SWAP_SERVICE_FEE_RATIO) / 1000 // 交易服务费
 }

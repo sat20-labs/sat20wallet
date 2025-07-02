@@ -84,7 +84,6 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 	}
 
 	p.wallet = wallet
-	p.password = password
 	p.status.CurrentWallet = id
 	p.saveStatus()
 
@@ -115,11 +114,26 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	}
 
 	p.wallet = wallet
-	p.password = password
 	p.status.CurrentWallet = id
 	p.saveStatus()
 
 	return id, nil
+}
+
+func (p *Manager) ChangePassword(id int64, oldPS, newPS string) (error) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	mnemonic, err := p.loadMnemonic(id, oldPS)
+	if err != nil {
+		return err
+	}
+	
+	err = p.saveMnemonicWithId(mnemonic, newPS, p.walletInfoMap[id])
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (p *Manager) UnlockWallet(password string) (int64, error) {
@@ -146,7 +160,6 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 	}
 
 	p.wallet = wallet
-	p.password = password
 	p.status.CurrentAccount = 0
 
 	return p.status.CurrentWallet, nil
@@ -163,7 +176,7 @@ func (p *Manager) GetAllWallets() map[int64]int {
 	return result
 }
 
-func (p *Manager) SwitchWallet(id int64) error {
+func (p *Manager) SwitchWallet(id int64, password string) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -176,7 +189,7 @@ func (p *Manager) SwitchWallet(id int64) error {
 	p.status.CurrentWallet = id
 	oldWallet := p.wallet
 	p.wallet = nil
-	_, err := p.unlockWallet(p.password)
+	_, err := p.unlockWallet(password)
 	if err == nil {
 		p.saveStatus()
 	} else {
@@ -209,7 +222,7 @@ func (p *Manager) SwitchAccount(id uint32) {
 	p.saveStatus()
 }
 
-func (p *Manager) SwitchChain(chain string) error {
+func (p *Manager) SwitchChain(chain, password string) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -221,7 +234,7 @@ func (p *Manager) SwitchChain(chain string) error {
 		p.status.CurrentChain = chain
 		oldWallet := p.wallet
 		p.wallet = nil
-		_, err := p.unlockWallet(p.password)
+		_, err := p.unlockWallet(password)
 		if err == nil {
 			p.saveStatus()
 		} else {

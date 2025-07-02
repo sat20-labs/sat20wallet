@@ -474,8 +474,8 @@ func switchWallet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	if len(p) < 1 {
-		return createJsRet(nil, -1, "Expected 1 parameters")
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
 	}
 	if p[0].Type() != js.TypeString {
 		return createJsRet(nil, -1, "Id parameter should be string")
@@ -486,8 +486,49 @@ func switchWallet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "password parameter should be a string")
+	}
+	password := p[1].String()
+
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		err := _mgr.SwitchWallet(i)
+		err := _mgr.SwitchWallet(i, password)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func changePassword(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "Id parameter should be string")
+	}
+	id := p[0].String()
+	i, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "password parameter should be a string")
+	}
+	oldps := p[1].String()
+
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "password parameter should be a string")
+	}
+	newps := p[2].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		err := _mgr.ChangePassword(i, oldps, newps)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -522,16 +563,21 @@ func switchChain(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	if len(p) < 1 {
-		return createJsRet(nil, -1, "Expected 1 parameters")
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
 	}
 	if p[0].Type() != js.TypeString {
 		return createJsRet(nil, -1, "chain parameter should be a string")
 	}
 	chain := p[0].String()
 
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "password parameter should be a string")
+	}
+	password := p[1].String()
+
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		err := _mgr.SwitchChain(chain)
+		err := _mgr.SwitchChain(chain, password)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -2678,6 +2724,7 @@ func main() {
 	obj.Set("getAllWallets", js.FuncOf(getAllWallets))
 	// input: wallet id; return: ok
 	obj.Set("switchWallet", js.FuncOf(switchWallet))
+	obj.Set("changePassword", js.FuncOf(changePassword))
 	// input: account id; return: ok
 	obj.Set("switchAccount", js.FuncOf(switchAccount))
 	// input: mainnet or testnet
