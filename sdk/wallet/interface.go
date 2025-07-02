@@ -18,6 +18,7 @@ func NewManager(cfg *common.Config, db common.KVDB) *Manager {
 	Log.Infof("sat20wallet_ver:%s, DB_ver:%s", SOFTWARE_VERSION, DB_VERSION)
 
 	//////////
+	indexer.ENV = cfg.Env
 
 	http := NewHTTPClient()
 	l1 := NewIndexerClient(cfg.IndexerL1.Scheme, cfg.IndexerL1.Host, cfg.IndexerL1.Proxy, http)
