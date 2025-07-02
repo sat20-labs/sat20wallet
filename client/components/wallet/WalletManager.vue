@@ -17,7 +17,7 @@
 
           <!-- Wallet List -->
           <div class="space-y-2">
-            <div v-for="wallet in wallets" :key="wallet.id"
+            <div v-for="wallet in walletsWithAddress" :key="wallet.id"
               class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
               :class="{ 'border-primary/50': wallet.id === currentWalletId }">
               <div class="flex items-center gap-3">
@@ -226,7 +226,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
@@ -241,6 +241,8 @@ import { useWalletStore } from '@/store'
 import { WalletData } from '@/types'
 import { Message } from '@/types/message'
 import { sendAccountsChangedEvent } from '@/lib/utils'
+import walletManager from '@/utils/sat20'
+import { hideAddress } from '@/utils'
 
 
 const router = useRouter()
@@ -281,10 +283,34 @@ const btcDomains = ref([
 // 计算属性
 const currentWalletId = computed(() => walletStore.walletId)
 
-// Methods
-const formatBalance = (balance: number) => {
-  return `$${balance.toFixed(2)}`
-}
+const walletsWithAddress = ref<any[]>([])
+const isLoadingWallets = ref(false)
+
+watch(wallets, async (newWallets) => {
+  if (!newWallets) {
+    walletsWithAddress.value = []
+    return
+  }
+  isLoadingWallets.value = true
+  try {
+    const results = await Promise.all(
+      newWallets.map(async (wallet) => {
+        let address = ''
+        try {
+          const [_, addressRes] = await walletManager.getWalletAddress(0)
+          address = addressRes?.address || ''
+        } catch {}
+        return {
+          ...wallet,
+          address,
+        }
+      })
+    )
+    walletsWithAddress.value = results
+  } finally {
+    isLoadingWallets.value = false
+  }
+}, { immediate: true })
 
 const selectWallet = async (wallet: WalletData) => {
   try {

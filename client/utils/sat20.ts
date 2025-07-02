@@ -40,7 +40,13 @@ class WalletManager {
   ): Promise<[Error | undefined, { walletId: string } | undefined]> {
     return this._handleRequest('importWallet', mnemonic, password.toString())
   }
-
+  async changePassword(
+    id: number,
+    oldPassword: string,
+    newPassword: string
+  ): Promise<[Error | undefined, void | undefined]> {
+    return this._handleRequest('changePassword', id, oldPassword, newPassword)
+  }
   async unlockWallet(
     password: string
   ): Promise<[Error | undefined, { walletId: number } | undefined]> {
@@ -54,9 +60,10 @@ class WalletManager {
   }
 
   async switchWallet(
-    id: string
+    id: string,
+    password: string
   ): Promise<[Error | undefined, void | undefined]> {
-    return this._handleRequest('switchWallet', id)
+    return this._handleRequest('switchWallet', id, password)
   }
 
   async switchAccount(
@@ -66,9 +73,10 @@ class WalletManager {
   }
 
   async switchChain(
-    chain: string
+    chain: string,
+    password: string
   ): Promise<[Error | undefined, void | undefined]> {
-    return this._handleRequest('switchChain', chain)
+    return this._handleRequest('switchChain', chain, password)
   }
 
   async getChain(): Promise<[Error | undefined, string | undefined]> {

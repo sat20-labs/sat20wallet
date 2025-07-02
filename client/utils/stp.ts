@@ -19,6 +19,7 @@ interface StpWasmModule {
   start: (...args: any[]) => Promise<WasmResponse>;
   importWallet: (...args: any[]) => Promise<WasmResponse>;
   switchWallet: (...args: any[]) => Promise<WasmResponse>;
+  changePassword: (...args: any[]) => Promise<WasmResponse>;
   switchAccount: (...args: any[]) => Promise<WasmResponse>;
   init: (...args: any[]) => Promise<WasmResponse>;
   getVersion: (...args: any[]) => Promise<WasmResponse<string>>;
@@ -148,10 +149,18 @@ class SatsnetStp {
       password.toString()
     )
   }
+  async changePassword(
+    id: number,
+    oldPassword: string,
+    newPassword: string
+  ): Promise<[Error | undefined, void | undefined]> {
+    return this._handleRequest('changePassword', id, oldPassword, newPassword)
+  }
   async switchWallet(
-    id: string
+    id: string,
+    password: string
   ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('switchWallet', id)
+    return this._handleRequest('switchWallet', id, password)
   }
   async switchAccount(
     id: number

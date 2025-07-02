@@ -10,7 +10,7 @@
 
           <!-- Sub-wallet List -->
           <div class="space-y-2">
-            <div v-for="account in accounts" :key="account.index"
+            <div v-for="account in accountsWithAddress" :key="account.index"
               class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors cursor-pointer"
               :class="{ 'border-primary/50': account.index === accountIndex }"
               @click="account.index !== accountIndex && selectAccount(account)">
@@ -32,13 +32,8 @@
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  :aria-label="$t('subWalletManager.copyAddress')"
-                  @click.stop="copyAddress(account.address)"
-                  class="hover:text-primary"
-                >
+                <Button variant="ghost" size="icon" :aria-label="$t('subWalletManager.copyAddress')"
+                  @click.stop="copyAddress(account.address)" class="hover:text-primary">
                   <Icon icon="lucide:copy" class="w-3 h-3" />
                 </Button>
                 <Button v-if="account.index !== accountIndex" variant="ghost" size="icon"
@@ -147,7 +142,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
@@ -167,7 +162,7 @@ import { useWalletStore } from '@/store/wallet'
 import type { WalletAccount } from '@/types'
 import { hideAddress } from '@/utils'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
-import { Message } from '@/types/message'
+import walletManager from '@/utils/sat20'
 import { sendAccountsChangedEvent } from '@/lib/utils'
 
 const router = useRouter()
@@ -185,10 +180,39 @@ const isDeleting = ref(false)
 const isSaving = ref(false)
 const accountToEdit = ref<WalletAccount | null>(null)
 const accountToDelete = ref<WalletAccount | null>(null)
+const accountsWithAddress = ref<WalletAccount[]>([])
+const isLoadingAccounts = ref(false)
 
 // Computed
 const { accountIndex, accounts } = storeToRefs(walletStore)
+
+watch(accounts, async (newAccounts) => {
+  if (!newAccounts) {
+    accountsWithAddress.value = []
+    return
+  }
+  isLoadingAccounts.value = true
+  try {
+    const results = await Promise.all(
+      newAccounts.map(async (item) => {
+        const [_, addressRes] = await walletManager.getWalletAddress(item.index)
+        if (addressRes) {
+          return {
+            ...item,
+            address: addressRes.address,
+          }
+        }
+        return item
+      })
+    )
+    accountsWithAddress.value = results
+  } finally {
+    isLoadingAccounts.value = false
+  }
+}, { immediate: true })
+
 // Methods
+
 function showCreateAccountDialog() {
   isCreateAccountDialogOpen.value = true
   newAccountName.value = `Account ${(accounts.value?.length || 0) + 1}`
@@ -304,7 +328,7 @@ async function selectAccount(account: WalletAccount) {
       description: '切换账户成功',
     })
     // 发送 accountsChanged 事件（封装函数）
-   
+
     console.log(router.currentRoute.value.path);
 
     setTimeout(() => {
