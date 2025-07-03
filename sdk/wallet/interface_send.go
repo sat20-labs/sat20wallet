@@ -1428,7 +1428,6 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 	return tx, prevFetcher, feeValue - change, nil
 }
 
-
 func adjustInputsForSplicingIn(inputs []*TxOutput, name *AssetName) ([]*TxOutput, int64, int64) {
 	hasPrefix := -1
 	prefixOffset := int64(0)
@@ -1488,7 +1487,6 @@ func adjustInputsForSplicingIn(inputs []*TxOutput, name *AssetName) ([]*TxOutput
 
 	return result, prefixOffset, suffixOffset
 }
-
 
 // 给同一个地址发送n等分资产
 func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
@@ -2651,7 +2649,7 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx) ([]*TxOutput, []*TxOutput, err
 			return nil, nil, fmt.Errorf("invalid edict %v", edict)
 		}
 
-		tickerInfo := p.getTickerInfoFromRuneId(edict.ID.String())
+		tickerInfo := p.GetTickerInfoFromRuneId(edict.ID.String())
 		if tickerInfo == nil {
 			return nil, nil, fmt.Errorf("can't find tick %s", edict.ID.String())
 		}

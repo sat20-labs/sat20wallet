@@ -20,7 +20,6 @@ import (
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 )
 
-
 type Node struct {
 	client   NodeRPCClient
 	Host     string // ip:port
@@ -29,8 +28,7 @@ type Node struct {
 	Pubkey   *secp256k1.PublicKey
 }
 
-
-type NotifyCB func (string, interface{})
+type NotifyCB func(string, interface{})
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet
 type Manager struct {
@@ -45,15 +43,15 @@ type Manager struct {
 	msgCallback   NotifyCB
 	tickerInfoMap map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
 
-	db              common.KVDB
+	db                   common.KVDB
 	http                 HttpClient
 	l1IndexerClient      IndexerRPCClient
 	slaveL1IndexerClient IndexerRPCClient
 	l2IndexerClient      IndexerRPCClient
 	slaveL2IndexerClient IndexerRPCClient
 
-	bootstrapNode        []*Node // 引导节点，全网目前唯一，以后由基金会提供至少3个，通过MPC管理密钥
-	serverNode           *Node   // 服务节点，由引导节点更新维护，一般情况下，用户只跟一个服务节点打交道
+	bootstrapNode []*Node // 引导节点，全网目前唯一，以后由基金会提供至少3个，通过MPC管理密钥
+	serverNode    *Node   // 服务节点，由引导节点更新维护，一般情况下，用户只跟一个服务节点打交道
 
 	utxoLockerL1 *UtxoLocker
 	utxoLockerL2 *UtxoLocker
@@ -63,7 +61,7 @@ type Manager struct {
 	feeRateL2     int64 // sat/vkb
 	refreshTimeL2 int64
 
-	inscibeMap             map[int64]*InscribeResv                   // key: timestamp
+	inscibeMap map[int64]*InscribeResv // key: timestamp
 }
 
 func (p *Manager) init() error {
@@ -214,19 +212,16 @@ func (p *Manager) GetWallet() common.Wallet {
 	return p.wallet
 }
 
-
 func IsTestNet() bool {
 	return _chain != "mainnet"
 }
 
-
 func (p *Manager) initResvMap() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
+
 	p.inscibeMap = make(map[int64]*InscribeResv)
 }
-
 
 func (p *Manager) GenerateNewResvId() int64 {
 	p.mutex.Lock()
@@ -340,7 +335,7 @@ func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 	return info
 }
 
-func (p *Manager) getTickerInfoFromRuneId(runeId string) *indexer.TickerInfo {
+func (p *Manager) GetTickerInfoFromRuneId(runeId string) *indexer.TickerInfo {
 	p.mutex.RLock()
 	info, ok := p.tickerInfoMap[runeId]
 	p.mutex.RUnlock()
@@ -350,12 +345,12 @@ func (p *Manager) getTickerInfoFromRuneId(runeId string) *indexer.TickerInfo {
 
 	return p.getTickerInfo(&indexer.AssetName{
 		Protocol: indexer.PROTOCOL_NAME_RUNES,
-		Type: indexer.ASSET_TYPE_FT,
-		Ticker: runeId,
+		Type:     indexer.ASSET_TYPE_FT,
+		Ticker:   runeId,
 	})
 }
 
-func (p *Manager) removeAllTickerInfo() {
+func (p *Manager) RemoveAllTickerInfo() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -420,8 +415,8 @@ func (p *Manager) GetTxOutFromRawTx(utxo string) (*TxOutput, error) {
 	}
 	return &TxOutput{
 		OutPointStr: utxo,
-		OutValue:    wire.TxOut{
-			Value: tx.TxOut[vout].Value,
+		OutValue: wire.TxOut{
+			Value:    tx.TxOut[vout].Value,
 			PkScript: tx.TxOut[vout].PkScript,
 		},
 	}, nil
@@ -463,7 +458,6 @@ func (p *Manager) GetUtxosForFee(address string, value int64) ([]string, error) 
 	return result, nil
 }
 
-
 func (p *Manager) GetUtxosForFeeV2(address string, value int64, needStub bool) ([]string, error) {
 	if address == "" {
 		address = p.wallet.GetAddress()
@@ -482,7 +476,7 @@ func (p *Manager) GetUtxosForFeeV2(address string, value int64, needStub bool) (
 	// 有序的utxo列表，直接放最后一个
 	result := make([]string, 0)
 	i := len(utxos) - 1
-	if needStub {	
+	if needStub {
 		for i >= 0 {
 			u := utxos[i]
 			i--
@@ -520,7 +514,6 @@ func (p *Manager) GetUtxosForFeeV2(address string, value int64, needStub bool) (
 	return result, nil
 }
 
-
 func (p *Manager) GetUtxosForStubs(address string, n int) ([]string, error) {
 	if address == "" {
 		address = p.wallet.GetAddress()
@@ -536,7 +529,7 @@ func (p *Manager) GetUtxosForStubs(address string, n int) ([]string, error) {
 	// 有序的utxo列表，直接放最后一个
 	result := make([]string, 0)
 	i := len(utxos) - 1
-	
+
 	for i >= 0 {
 		u := utxos[i]
 		i--
@@ -915,7 +908,6 @@ func (p *Manager) GetAssetBalance_SatsNet(address string, name *swire.AssetName)
 
 	return nil
 }
-
 
 func (p *Manager) BroadcastTx(tx *wire.MsgTx) (string, error) {
 	txId, err := p.l1IndexerClient.BroadCastTx(tx)

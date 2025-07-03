@@ -48,6 +48,7 @@ func NewManager(cfg *common.Config, db common.KVDB) *Manager {
 
 	_env = cfg.Env
 	_chain = cfg.Chain
+	_mode = cfg.Mode
 
 	mgr.db = db
 	if mgr.db == nil {

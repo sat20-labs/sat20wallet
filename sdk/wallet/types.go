@@ -10,8 +10,8 @@ import (
 const (
 	BOOTSTRAP_NODE string = "bootstrap"
 	SERVER_NODE    string = "server"
-	CLIENT_NODE    string = "client"
-	LIGHT_NODE     string = "light"
+	CLIENT_NODE    string = "client"    // 
+	LIGHT_NODE     string = "light"		// browser plugin
 
 	L1_NETWORK_BITCOIN 		string = "bitcoinnet"
 	L2_NETWORK_SATOSHI   	string = "satoshinet"

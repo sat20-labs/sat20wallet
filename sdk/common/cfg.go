@@ -3,6 +3,7 @@ package common
 type Config struct {
 	Env          string     `yaml:"env"`
 	Chain        string     `yaml:"chain"`
+	Mode         string     `yaml:"mode"`
 	Log          string     `yaml:"log"`
 	DB           string     `yaml:"db"`
 

@@ -79,7 +79,7 @@ func parseIndexerConfig(indexer js.Value) (*common.Indexer, error) {
 }
 
 func parseConfigFromJS(jsConfig js.Value) (*common.Config, error) {
-	cfg := &common.Config{}
+	cfg := &common.Config{Mode: wallet.LIGHT_NODE}
 	// Log
 	if log := jsConfig.Get("Log"); log.Type() == js.TypeString {
 		cfg.Log = log.String()
