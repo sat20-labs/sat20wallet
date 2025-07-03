@@ -325,7 +325,7 @@ func (p *Manager) IsWalletExist() bool {
 }
 
 func GetDBKeyPrefix() string {
-	if _mode == LIGHT_NODE || _env == "testnet" { // TODO 以后删除_env的判断
+	if _mode == LIGHT_NODE || _env == "test" { // TODO 以后删除_env的判断
 		return _env + "-" + _chain + "-"
 	}
 	return ""
