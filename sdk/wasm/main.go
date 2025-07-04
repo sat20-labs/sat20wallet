@@ -676,6 +676,32 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
+func getChannelAddrByPeerPubkey(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "pubkey parameter should be a string")
+	}
+	pubkey := p[0].String()
+
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		channelAddr, peerAddr, err := _mgr.GetChannelAddrByPeerPubkey(pubkey)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{
+			"channelAddr": channelAddr,
+			"peerAddr": peerAddr,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
 func getCommitSecret(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -2735,6 +2761,7 @@ func main() {
 	obj.Set("getWalletAddress", js.FuncOf(getWalletAddress))
 	// input: account id; return: current wallet public key
 	obj.Set("getWalletPubkey", js.FuncOf(getWalletPubkey))
+	obj.Set("getChannelAddrByPeerPubkey", js.FuncOf(getChannelAddrByPeerPubkey))
 	// input: node pubkey(hex string), index; return: commit secrect (hex string)
 	obj.Set("getCommitSecret", js.FuncOf(getCommitSecret))
 	// input: commit secrect(hex string), index; return: revocation priv key (hex string)

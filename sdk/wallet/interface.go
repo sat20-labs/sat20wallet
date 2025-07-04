@@ -12,6 +12,7 @@ import (
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
 
 func NewManager(cfg *common.Config, db common.KVDB) *Manager {
@@ -482,4 +483,23 @@ func (p *Manager) SendMessageToUpper(eventName string, data interface{}) {
 	if p.msgCallback != nil {
 		p.msgCallback(eventName, data)
 	}
+}
+
+func (p *Manager) GetChannelAddrByPeerPubkey(pubkeyHex string) (string, string, error) {
+	if p.wallet == nil {
+		return "", "", fmt.Errorf("wallet is not created/unlocked")
+	}
+
+	pubkey, err := utils.ParsePubkey(pubkeyHex)
+	if err != nil {
+		return "", "", err
+	}
+	p2trAddr := PublicKeyToP2TRAddress(pubkey)
+
+	channelAddr, err := GetP2WSHaddress(p.wallet.GetPubKey().SerializeCompressed(), 
+		pubkey.SerializeCompressed())
+	if err != nil {
+		return "", "", err
+	}
+	return channelAddr, p2trAddr, nil
 }
