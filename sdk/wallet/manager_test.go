@@ -15,15 +15,14 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-var _test_env = "test"
+var _test_chain = "testnet"
 var _client *Manager
 var _client2 *Manager
 
 func newTestConf(mode, dbPath string) *common.Config {
-	chain := "testnet"
 	ret := &common.Config{
-		Env:  _test_env,
-		Chain: chain,
+		Env:   "test",
+		Chain: _test_chain,
 		Log:   "debug",
 		DB:    dbPath,
 		Peers: []string{
@@ -107,7 +106,7 @@ func prepare(t *testing.T) {
 		t.Fatalf("RemoveAll failed: %v\n", err)
 	}
 
-	indexer.ENV = _test_env
+	indexer.CHAIN = _test_chain
 
 	_client = createNode(t, "client", "../db/clientDB")
 	_client2 = createNode(t, "client2", "../db/client2DB")
