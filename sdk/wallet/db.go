@@ -235,7 +235,7 @@ func (p *Manager) saveMnemonic(mn, password string) (int64, error) {
 }
 
 
-func (p *Manager) saveMnemonicWithId(mn, password string, old *WalletInDB) (error) {
+func (p *Manager) saveMnemonicWithPassword(mn, password string, wallet *WalletInDB) (error) {
 	key, err := p.newSnaclKey(password)
 	if err != nil {
 		Log.Errorf("NewSecretKey failed. %v", err)
@@ -250,19 +250,14 @@ func (p *Manager) saveMnemonicWithId(mn, password string, old *WalletInDB) (erro
 
 	salt := key.Marshal()
 
-	wallet := WalletInDB{
-		Id:       old.Id,
-		Mnemonic: en,
-		Salt:     salt,
-		Accounts: old.Accounts,
-	}
+	wallet.Mnemonic = en
+	wallet.Salt = salt
 
-	err = saveWallet(p.db, &wallet)
+	err = saveWallet(p.db, wallet)
 	if err != nil {
 		return err
 	}
 
-	p.walletInfoMap[wallet.Id] = &wallet
 	return nil
 }
 

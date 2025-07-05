@@ -505,30 +505,22 @@ func changePassword(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	if len(p) < 3 {
-		return createJsRet(nil, -1, "Expected 3 parameters")
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
 	}
+
 	if p[0].Type() != js.TypeString {
-		return createJsRet(nil, -1, "Id parameter should be string")
+		return createJsRet(nil, -1, "password parameter should be a string")
 	}
-	id := p[0].String()
-	i, err := strconv.ParseInt(id, 10, 64)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
+	oldps := p[0].String()
 
 	if p[1].Type() != js.TypeString {
 		return createJsRet(nil, -1, "password parameter should be a string")
 	}
-	oldps := p[1].String()
-
-	if p[2].Type() != js.TypeString {
-		return createJsRet(nil, -1, "password parameter should be a string")
-	}
-	newps := p[2].String()
+	newps := p[1].String()
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		err := _mgr.ChangePassword(i, oldps, newps)
+		err := _mgr.ChangePassword(oldps, newps)
 		if err != nil {
 			return nil, -1, err.Error()
 		}

@@ -508,7 +508,7 @@ func TestChangePassword(t *testing.T) {
 	newPS := "abcdefgh"
 
 	id := _client.status.CurrentWallet
-	err := _client.ChangePassword(id, oldPS, newPS)
+	err := _client.ChangePassword(oldPS, newPS)
 	if err != nil {
 		t.Fatal(err)
 	}

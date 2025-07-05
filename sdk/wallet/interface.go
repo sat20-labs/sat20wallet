@@ -123,19 +123,24 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	return id, nil
 }
 
-func (p *Manager) ChangePassword(id int64, oldPS, newPS string) (error) {
+func (p *Manager) ChangePassword(oldPS, newPS string) (error) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	mnemonic, err := p.loadMnemonic(id, oldPS)
-	if err != nil {
-		return err
+	for id, v := range p.walletInfoMap {
+		mnemonic, err := p.loadMnemonic(id, oldPS)
+		if err != nil {
+			Log.Errorf("loadMnemonic %d failed, %v", id, err)
+			return err
+		}
+		
+		err = p.saveMnemonicWithPassword(mnemonic, newPS, v)
+		if err != nil {
+			Log.Errorf("saveMnemonicWithPassword %d failed, %v", id, err)
+			return err
+		}
 	}
 	
-	err = p.saveMnemonicWithId(mnemonic, newPS, p.walletInfoMap[id])
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
