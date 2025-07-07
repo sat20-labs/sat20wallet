@@ -1947,6 +1947,48 @@ func (p *Manager) SendRunes(destAddr string,
 	return txid, nil
 }
 
+
+// 同时发送资产和聪 (未完成，未测试)
+func (p *Manager) SendAssetsV3(destAddr string, assetName string,
+	amt string, value int64, feeRate int64, memo []byte) (string, error) {
+
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+	name := ParseAssetString(assetName)
+	if name == nil {
+		return "", fmt.Errorf("invalid asset name %s", assetName)
+	}
+	tickerInfo := p.getTickerInfo(name)
+	if tickerInfo == nil {
+		return "", fmt.Errorf("can't get ticker %s info", assetName)
+	}
+	dAmt, err := indexer.NewDecimalFromString(amt, tickerInfo.Divisibility)
+	if err != nil {
+		return "", err
+	}
+	if dAmt.Sign() <= 0 {
+		return "", fmt.Errorf("invalid amt")
+	}
+	if !IsValidNullData(memo) {
+		return "", fmt.Errorf("invalid length of null data %d", len(memo))
+	}
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
+
+	if indexer.IsPlainAsset(name) {
+		return p.SendPlainSats(destAddr, dAmt.Int64(), feeRate, memo)
+	} else if name.Protocol == indexer.PROTOCOL_NAME_ORDX {
+		newName := GetAssetName(tickerInfo)
+		return p.SendOrdxs(destAddr, newName, dAmt, feeRate, memo)
+	} else if name.Protocol == indexer.PROTOCOL_NAME_RUNES {
+		return p.SendRunes(destAddr, name, dAmt, feeRate, memo)
+	}
+
+	return "", fmt.Errorf("invalid asset name %s", assetName)
+}
+
 // 给多个地址发送不同数量的白聪
 func (p *Manager) BuildBatchSendTxV2_PlainSats(dest []*SendAssetInfo, utxos, fees []string,
 	feeRate int64, memo []byte, bInChannel bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
