@@ -168,7 +168,7 @@ func (p *IndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, error)
 }
 
 func (p *IndexerClient) IsCoreNode(pubkey []byte) (bool, error) {
-	url := p.GetUrl("v3/corenode/check/" + hex.EncodeToString(pubkey))
+	url := p.GetUrl("/v3/corenode/check/" + hex.EncodeToString(pubkey))
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
