@@ -78,6 +78,7 @@ declare interface WalletManager {
     amount: number
   ): Promise<SatsnetResponse<{ txId: string }>>
 
+  getChannelAddrByPeerPubkey(peerPubkey: string): Promise<SatsnetResponse<{ channelAddr: string, peerAddr }>>
 
   // Creates a new wallet with a password and returns the wallet ID and mnemonic.
   createWallet(
@@ -98,7 +99,7 @@ declare interface WalletManager {
 
   // Switches to the wallet with the specified ID.
   switchWallet(id: number, password: string): Promise<SatsnetResponse<void>>
-  changePassword(id: number, oldPassword: string, newPassword: string): Promise<SatsnetResponse<void>>
+  changePassword(oldPassword: string, newPassword: string): Promise<SatsnetResponse<void>>
   // Switches to the account with the specified ID.
   switchAccount(id: number): Promise<SatsnetResponse<void>>
 
@@ -271,7 +272,7 @@ interface SatsnetStp {
   getWallet(): SatsnetResponse
   // Switches to the wallet with the specified ID.
   switchWallet(id: number, password: string): Promise<SatsnetResponse<void>>
-  changePassword(id: number, oldPassword: string, newPassword: string): Promise<SatsnetResponse<void>>
+  changePassword(oldPassword: string, newPassword: string): Promise<SatsnetResponse<void>>
   // Switches to the account with the specified ID.
   switchAccount(id: number): Promise<SatsnetResponse<void>>
 

@@ -195,7 +195,6 @@ export const useWalletStore = defineStore('wallet', () => {
 
     return [undefined, mnemonic]
   }
-
   const getWalletInfo = async () => {
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
@@ -385,6 +384,6 @@ export const useWalletStore = defineStore('wallet', () => {
     accounts,
     switchWallet,
     btcFeeRate,
-    setBtcFeeRate
+    setBtcFeeRate,
   }
 })

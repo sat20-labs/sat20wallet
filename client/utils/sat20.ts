@@ -4,11 +4,8 @@ class WalletManager {
     methodName: string,
     ...args: any[]
   ): Promise<[Error | undefined, any | undefined]> {
-    console.log('wallet method', methodName)
-    console.log('wallet arg', args)
     const method = window.sat20wallet_wasm[methodName as keyof WalletManager]
     const [err, result] = await tryit(method as any)(...args)
-    console.log('wallet result', result);
 
     if (err) {
       console.error(`${methodName} error: ${err.message}`)
@@ -41,16 +38,19 @@ class WalletManager {
     return this._handleRequest('importWallet', mnemonic, password.toString())
   }
   async changePassword(
-    id: number,
     oldPassword: string,
     newPassword: string
   ): Promise<[Error | undefined, void | undefined]> {
-    return this._handleRequest('changePassword', id, oldPassword, newPassword)
+    return this._handleRequest('changePassword', oldPassword, newPassword)
   }
   async unlockWallet(
     password: string
   ): Promise<[Error | undefined, { walletId: number } | undefined]> {
     return this._handleRequest('unlockWallet', password.toString())
+  }
+
+  async getChannelAddrByPeerPubkey(peerPubkey: string): Promise<[Error | undefined, { channelAddr: string, peerAddr: string } | undefined]> {
+    return this._handleRequest('getChannelAddrByPeerPubkey', peerPubkey)
   }
 
   async getAllWallets(): Promise<

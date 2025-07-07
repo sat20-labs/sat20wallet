@@ -187,6 +187,9 @@ export const useChannelStore = defineStore('channel', () => {
 
     console.log('解析完成，最终资产列表:', allAssetList.value)
   }
+  const totalSats = computed(() => {
+    return allAssetList.value.reduce((acc, item) => acc + Number(item.amount), 0)
+  })
   const plainList = computed(() => {
     //console.log('调试信息plainList:', allAssetList.value)
     return allAssetList.value.filter((item) => item?.protocol === '')
@@ -258,6 +261,7 @@ export const useChannelStore = defineStore('channel', () => {
     plainList,
     plainBalance,
     channel,
+    totalSats,
     getAllChannels,
   }
 })

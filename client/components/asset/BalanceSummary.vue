@@ -3,7 +3,7 @@
     <!-- Total Balance -->
     <div class="text-center relative group">
       <p class="text-base font-bold text-zinc-500">{{ $t('balanceSummary.totalBalance') }}</p>
-      <h2 class="text-3xl font-semibold text-zinc-300" @mouseenter="showDetails = true"
+      <h2 class="text-3xl font-semibold text-zinc-300" @mouseenter="balanceMouseEnter"
         @mouseleave="showDetails = false">
         {{ formatBalance(btcBalance.total, props.selectedChain) }}
       </h2>
@@ -13,7 +13,7 @@
         class="absolute left-1/2 transform -translate-x-1/2 w-60 mt-2 p-4 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg space-y-2 z-10">
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.available') }}</span>
-          <span class="text-sm text-zinc-400">{{ formatBalance(btcBalance.total, props.selectedChain) }}</span>
+          <span class="text-sm text-zinc-400">{{ formatBalance(abailableSats.availableAmt, props.selectedChain) }}</span>
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.unavailable') }}</span>
@@ -68,7 +68,7 @@ import { useToast } from '@/components/ui/toast/use-toast'
 import { Chain } from '@/types/index'
 import { useGlobalStore } from '@/store/global'
 import { useI18n } from 'vue-i18n'
-
+import stp from '@/utils/stp'
 
 const { toast } = useToast()
 const l1Store = useL1Store()
@@ -95,6 +95,13 @@ const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
 const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
 const { address, feeRate, btcFeeRate } = storeToRefs(walletStore)
+const abailableSats = ref<{
+  availableAmt: number,
+  lockedAmt: number
+}>({
+  availableAmt: 0,
+  lockedAmt: 0
+})
 const { channel } = storeToRefs(channelStore)
 
 type OperationType =
@@ -118,7 +125,31 @@ const buttons = [
   { label: 'Unlock', icon: 'lucide:unlock', action: 'unlock', modes: ['lightning'], chains: ['Channel'] },
   { label: 'History', icon: 'lucide:clock', action: 'history', modes: ['poolswap', 'lightning'], chains: ['Bitcoin', 'SatoshiNet', 'Channel'] },
 ]
-
+const balanceMouseEnter = async () => {
+  await nextTick()
+  abailableSats.value = {
+    availableAmt: 0,
+    lockedAmt: 0
+  }
+  showDetails.value = true;
+  if (props.selectedChain.toLowerCase() === 'channel') {
+    return;
+  }
+  const handler = props.selectedChain.toLowerCase() === 'bitcoin' ? stp.getAssetAmount : stp.getAssetAmount_SatsNet
+  if (!address.value) {
+    return;
+  }
+  const [err, res] = await handler.bind(stp)(address.value, '::')
+  if (err || !res) {
+    console.error('Error getting asset amount:', err)
+    return;
+  }
+  console.log('res', res)
+  abailableSats.value = {
+    availableAmt: res.availableAmt,
+    lockedAmt: res.lockedAmt
+  }
+}
 const selectedChain = (props.selectedChain || 'bitcoin').toLowerCase()
 if (!selectedTranscendingMode.value || !props.selectedChain) {
   console.warn('Props missing: selectedTranscendingMode or selectedChain is undefined. Using default values.')
@@ -271,8 +302,7 @@ const handleOperationConfirm = async () => {
 const btcBalance = computed(() => {
   const store = props.selectedChain.toLowerCase() === 'bitcoin' ? l1Store : props.selectedChain.toLowerCase() === 'channel' ? channelStore : l2Store
   const btcAssets = store.plainList || []
-  const totalBtc = btcAssets.reduce((sum, asset) => sum + asset.amount, 0)
-  return { total: totalBtc, assets: btcAssets }
+  return { total: store.totalSats, assets: btcAssets }
 })
 
 // Format Balance
@@ -284,10 +314,6 @@ const formatBalance = (balance: number | string, chain: string) => {
   return `${formattedBalance} ${unit}`
 }
 
-// 示例资产数据
-const availableBalance = ref(0)
-const unavailableBalance = ref(0)
-const totalBalance = ref(0)
 
 // 控制详细信息的显示
 const showDetails = ref(false)

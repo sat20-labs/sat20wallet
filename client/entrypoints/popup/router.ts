@@ -7,6 +7,8 @@ import WalletIndex from '@/entrypoints/popup/pages/wallet/index.vue'
 import WalletSetting from '@/entrypoints/popup/pages/wallet/Setting.vue'
 import WalletReceive from '@/entrypoints/popup/pages/wallet/Receive.vue'
 import WalletSettingPhrase from '@/entrypoints/popup/pages/wallet/settings/phrase.vue'
+import WalletSettingPublicKey from '@/entrypoints/popup/pages/wallet/settings/publickey.vue'
+import WalletSettingPassword from '@/entrypoints/popup/pages/wallet/settings/password.vue'
 import WalletManager from '@/components/wallet/WalletManager.vue'
 import SubWalletManager from '@/components/wallet/SubWalletManager.vue'
 import Unlock from '@/entrypoints/popup/pages/Unlock.vue'
@@ -37,6 +39,14 @@ const routes = [
             component: WalletSettingPhrase,
           },
           {
+            path: 'publickey',
+            component: WalletSettingPublicKey,
+          },
+          {
+            path: 'password',
+            component: WalletSettingPassword,
+          },
+          {
             path: 'utxo',
             component: UtxoManager,
           },
@@ -57,11 +67,8 @@ const router = createRouter({
 
 const checkPassword = async () => {
   const password = walletStorage.getValue('password')
-  console.log('password', password)
-
   if (password) {
     const passwordTime = walletStorage.getValue('passwordTime')
-    console.log('passwordTime', passwordTime)
     if (passwordTime) {
       const now = new Date().getTime()
       if (now - passwordTime > 5 * 60 * 1000) {
@@ -84,6 +91,7 @@ router.beforeEach(async (to, from) => {
     await walletStore.unlockWallet(password)
     await walletStore.setLocked(false)
     if (network) {
+      console.log('network', network)
       await walletStore.setNetwork(network)
     }
   }

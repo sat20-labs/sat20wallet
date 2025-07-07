@@ -114,6 +114,8 @@ export const useL2Assets = () => {
 
   // Store Updates
   const updateStoreAssets = (list: AssetItem[]) => {
+    const totalSats = list.reduce((acc, item) => acc + Number(item.amount), 0)
+    assetsStore.setTotalSats(totalSats)
     assetsStore.setSat20List(list.filter((item) => item?.protocol === 'ordx'))
     assetsStore.setRunesList(list.filter((item) => item?.protocol === 'runes'))
     assetsStore.setBrc20List(list.filter((item) => item?.protocol === 'brc20'))

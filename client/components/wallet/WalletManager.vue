@@ -17,7 +17,7 @@
 
           <!-- Wallet List -->
           <div class="space-y-2">
-            <div v-for="wallet in walletsWithAddress" :key="wallet.id"
+            <div v-for="wallet in wallets" :key="wallet.id"
               class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
               :class="{ 'border-primary/50': wallet.id === currentWalletId }">
               <div class="flex items-center gap-3">
@@ -299,7 +299,7 @@ watch(wallets, async (newWallets) => {
         try {
           const [_, addressRes] = await walletManager.getWalletAddress(0)
           address = addressRes?.address || ''
-        } catch {}
+        } catch { }
         return {
           ...wallet,
           address,
@@ -319,10 +319,10 @@ const selectWallet = async (wallet: WalletData) => {
       title: 'Success',
       description: 'Wallet switched successfully'
     })
-    setTimeout(async () => {
-      await sendAccountsChangedEvent(wallets.value)
-      router.back()
+    setTimeout(() => {
+      router.go(-1)
     }, 300)
+    sendAccountsChangedEvent(wallets.value)
 
   } catch (error: any) {
     console.error('Failed to switch wallet:', error)
@@ -395,11 +395,10 @@ const createWallet = async () => {
       title: 'Success',
       description: 'Wallet created successfully'
     })
-    // 发送 accountsChanged 事件（封装函数）
-    await sendAccountsChangedEvent(wallets.value)
     setTimeout(() => {
-      router.back()
+      router.go(-1)
     }, 300)
+    sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
     toast({
       variant: 'destructive',
@@ -436,11 +435,10 @@ const importWallet = async () => {
       title: 'Success',
       description: 'Wallet imported successfully'
     })
-    // 发送 accountsChanged 事件（封装函数）
-    await sendAccountsChangedEvent(wallets.value)
     setTimeout(() => {
-      router.back()
+      router.go(-1)
     }, 300)
+    sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
     toast({
       variant: 'destructive',
