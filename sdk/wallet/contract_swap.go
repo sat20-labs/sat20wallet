@@ -130,6 +130,7 @@ type SwapHistoryItem struct {
 	UtxoId         uint64 // 其实是utxoId
 	OrderTime      int64
 	AssetName      string
+	ServiceFee	   int64
 	UnitPrice      *Decimal // X per Y
 	ExpectedAmt    *Decimal // 期望的数量
 	Address        string   // 所有人

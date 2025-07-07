@@ -56,6 +56,7 @@ func (p *RESTClient) GetUrl(path string) *URL {
 type IndexerRPCClient interface {
 	GetTxOutput(utxo string) (*TxOutput, error)  // 索引器接口，被花费后就找不到数据
 	GetAscendData(utxo string) (*sindexer.AscendData, error)
+	IsCoreNode(pubkey []byte) (bool, error)
 	GetUtxoId(utxo string) (uint64, error)
 	GetRawTx(tx string) (string, error)
 	GetTxInfo(tx string) (*indexerwire.TxSimpleInfo, error)
@@ -151,8 +152,6 @@ func (p *IndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, error)
 		return nil, err
 	}
 
-	
-
 	// Unmarshal the response.
 	var result sindexerwire.AscendResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -163,6 +162,29 @@ func (p *IndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, error)
 	if result.Code != 0 {
 		Log.Errorf("%v response message %s", url, result.Msg)
 		return nil, fmt.Errorf("%s", result.Msg)
+	}
+
+	return result.Data, nil
+}
+
+func (p *IndexerClient) IsCoreNode(pubkey []byte) (bool, error) {
+	url := p.GetUrl("v3/corenode/check/" + hex.EncodeToString(pubkey))
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return false, err
+	}
+
+	// Unmarshal the response.
+	var result sindexerwire.CheckCoreNodeResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return false, err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return false, fmt.Errorf("%s", result.Msg)
 	}
 
 	return result.Data, nil

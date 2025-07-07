@@ -12,13 +12,14 @@ import (
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
 
 func NewManager(cfg *common.Config, db common.KVDB) *Manager {
 	Log.Infof("sat20wallet_ver:%s, DB_ver:%s", SOFTWARE_VERSION, DB_VERSION)
 
 	//////////
-	indexer.ENV = cfg.Env
+	indexer.CHAIN = cfg.Chain
 
 	http := NewHTTPClient()
 	l1 := NewIndexerClient(cfg.IndexerL1.Scheme, cfg.IndexerL1.Host, cfg.IndexerL1.Proxy, http)
@@ -48,6 +49,7 @@ func NewManager(cfg *common.Config, db common.KVDB) *Manager {
 
 	_env = cfg.Env
 	_chain = cfg.Chain
+	_mode = cfg.Mode
 
 	mgr.db = db
 	if mgr.db == nil {
@@ -121,19 +123,24 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	return id, nil
 }
 
-func (p *Manager) ChangePassword(id int64, oldPS, newPS string) (error) {
+func (p *Manager) ChangePassword(oldPS, newPS string) (error) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	mnemonic, err := p.loadMnemonic(id, oldPS)
-	if err != nil {
-		return err
+	for id, v := range p.walletInfoMap {
+		mnemonic, err := p.loadMnemonic(id, oldPS)
+		if err != nil {
+			Log.Errorf("loadMnemonic %d failed, %v", id, err)
+			return err
+		}
+		
+		err = p.saveMnemonicWithPassword(mnemonic, newPS, v)
+		if err != nil {
+			Log.Errorf("saveMnemonicWithPassword %d failed, %v", id, err)
+			return err
+		}
 	}
 	
-	err = p.saveMnemonicWithId(mnemonic, newPS, p.walletInfoMap[id])
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -481,4 +488,23 @@ func (p *Manager) SendMessageToUpper(eventName string, data interface{}) {
 	if p.msgCallback != nil {
 		p.msgCallback(eventName, data)
 	}
+}
+
+func (p *Manager) GetChannelAddrByPeerPubkey(pubkeyHex string) (string, string, error) {
+	if p.wallet == nil {
+		return "", "", fmt.Errorf("wallet is not created/unlocked")
+	}
+
+	pubkey, err := utils.ParsePubkey(pubkeyHex)
+	if err != nil {
+		return "", "", err
+	}
+	p2trAddr := PublicKeyToP2TRAddress(pubkey)
+
+	channelAddr, err := GetP2WSHaddress(p.wallet.GetPubKey().SerializeCompressed(), 
+		pubkey.SerializeCompressed())
+	if err != nil {
+		return "", "", err
+	}
+	return channelAddr, p2trAddr, nil
 }
