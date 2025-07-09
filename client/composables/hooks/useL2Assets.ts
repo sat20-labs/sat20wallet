@@ -83,14 +83,18 @@ export const useL2Assets = () => {
       const key = item.Name.Protocol
         ? `${item.Name.Protocol}:${item.Name.Type}:${item.Name.Ticker}`
         : '::'
-
+      if (item.Name.Type === '*') {
+        const totalSats = item.Amount
+        assetsStore.setTotalSats(totalSats)
+        continue;
+      }
       if (!allAssetList.value.find((v) => v?.key === key)) {
         let label = item.Name.Type === 'e'
-        ? `${item.Name.Ticker}（raresats）`
-        : item.Name.Ticker;
+          ? `${item.Name.Ticker}（raresats）`
+          : item.Name.Ticker;
         // if (key !== '::') {
         //   const [err, res] = await satsnetStp.getTickerInfo(key)
-          
+
         //   if (res?.ticker) {
         //     const { ticker } = res
         //     const result = JSON.parse(ticker)
@@ -114,8 +118,6 @@ export const useL2Assets = () => {
 
   // Store Updates
   const updateStoreAssets = (list: AssetItem[]) => {
-    const totalSats = list.reduce((acc, item) => acc + Number(item.amount), 0)
-    assetsStore.setTotalSats(totalSats)
     assetsStore.setSat20List(list.filter((item) => item?.protocol === 'ordx'))
     assetsStore.setRunesList(list.filter((item) => item?.protocol === 'runes'))
     assetsStore.setBrc20List(list.filter((item) => item?.protocol === 'brc20'))
