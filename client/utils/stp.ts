@@ -79,6 +79,7 @@ interface StpWasmModule {
   getAddressStatusInContract: (url: string, address: string) => Promise<WasmResponse<string>>;
   getAllAddressInContract: (url: string, start: number, limit: number) => Promise<WasmResponse<string>>;
   getContractInvokeHistoryInServer: (url: string, start: number, limit: number) => Promise<WasmResponse<string>>;
+  stakeToBeMinner: (bCoreNode: boolean, btcFeeRate: number) => Promise<WasmResponse<void>>;
   getContractInvokeHistoryByAddressInServer: (url: string, address: string, start: number, limit: number) => Promise<WasmResponse<string>>;
 }
 
@@ -99,7 +100,7 @@ class SatsnetStp {
       console.error(errorMsg)
       return [new Error(errorMsg), undefined]
     }
-    const method = stpModuleTyped[methodName] as (...args: any[]) => Promise<WasmResponse<T>>; 
+    const method = stpModuleTyped[methodName] as (...args: any[]) => Promise<WasmResponse<T>>;
 
     const [err, result] = await tryit(method)(...args)
 
@@ -675,6 +676,12 @@ class SatsnetStp {
     string | undefined
   ]> {
     return this._handleRequest<string>('getContractInvokeHistoryByAddressInServer', url, address, start, limit)
+  }
+  async stakeToBeMinner(bCoreNode: boolean, btcFeeRate: number): Promise<[
+    Error | undefined,
+    string | undefined
+  ]> {
+    return this._handleRequest<string>('stakeToBeMinner', bCoreNode, btcFeeRate)
   }
 }
 

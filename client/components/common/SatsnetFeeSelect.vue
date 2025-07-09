@@ -25,7 +25,7 @@
           >
             <span class="text-lg mb-1">{{ option.icon }}</span>
             <span>{{ $t(`btcFeeSelect.${option.label}`) }}</span>
-            <span class="text-[10px]">{{ option.value }} sats/vB</span>
+            <span class="text-[10px]">{{ option.value }} sats/Tx</span>
           </Button>
         </div>
         <div v-if="selectedRate === 'custom'" class="mt-4 space-y-2">
@@ -67,54 +67,42 @@ import {
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { watchOnce } from '@vueuse/core'
-// import { getBtcFee } from '~layer/apis';
-import { Network } from '@/types'
-import { ordxApi } from '@/apis'
-import { useQuery } from '@tanstack/vue-query'
 import { useWalletStore } from '@/store'
 
 const walletStore = useWalletStore()
-const { network } = storeToRefs(walletStore)
 const emit = defineEmits(['change'])
 
-const defaultData = {
-  fastestFee: 1,
-  halfHourFee: 1,
-  hourFee: 1,
+const feeData = {
+  fastestFee: 20,
+  halfHourFee: 10,
+  hourFee: 10,
 }
-const {
-  data: res,
-} = useQuery({
-  queryKey: ['btcFee', network],
-  queryFn: ({ queryKey }) => ordxApi.getRecommendedFees({ network: queryKey[1] }),
-  refetchInterval: 1000 * 60 * 3,
-})
 
-const feeData = computed(() => res.value?.data || defaultData)
+
 
 const options = computed(() => [
   {
     icon: '🐢',
     key: 'slow',
-    value: feeData.value?.hourFee || 0,
+    value: feeData?.hourFee || 0,
     label: 'slow',
   },
   {
     icon: '🚗',
     key: 'average',
-    value: feeData.value?.halfHourFee || 0,
+    value: feeData?.halfHourFee || 0,
     label: 'average',
   },
   {
     icon: '🚀',
     key: 'fast',
-    value: feeData.value?.fastestFee || 0,
+    value: feeData?.fastestFee || 0,
     label: 'fast',
   },
   {
     icon: '⚙️',
     key: 'custom',
-    value: feeData.value?.fastestFee || 0,
+    value: feeData?.fastestFee || 0,
     label: 'custom',
   },
 ])

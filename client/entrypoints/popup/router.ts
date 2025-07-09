@@ -9,6 +9,7 @@ import WalletReceive from '@/entrypoints/popup/pages/wallet/Receive.vue'
 import WalletSettingPhrase from '@/entrypoints/popup/pages/wallet/settings/phrase.vue'
 import WalletSettingPublicKey from '@/entrypoints/popup/pages/wallet/settings/publickey.vue'
 import WalletSettingPassword from '@/entrypoints/popup/pages/wallet/settings/password.vue'
+import WalletSettingNode from '@/entrypoints/popup/pages/wallet/settings/node.vue'
 import WalletManager from '@/components/wallet/WalletManager.vue'
 import SubWalletManager from '@/components/wallet/SubWalletManager.vue'
 import Unlock from '@/entrypoints/popup/pages/Unlock.vue'
@@ -49,6 +50,10 @@ const routes = [
           {
             path: 'utxo',
             component: UtxoManager,
+          },
+          {
+            path: 'node',
+            component: WalletSettingNode,
           },
         ],
       },

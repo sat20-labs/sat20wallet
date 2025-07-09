@@ -1,11 +1,12 @@
 <template>
-  <header class="flex justify-between items-center mb-6 gap-4">
+  <header class="flex justify-between items-center mb-6 gap-2">
     <!-- 左侧钱包选择 -->
     <WalletSelector @wallet-changed="handleWalletChange" @wallet-created="handleWalletCreated" />
 
     <!-- 右侧功能按钮 -->
-    <div class="flex gap-2 items-center">
+    <div class="flex items-center">
       <BtcFeeSelect @change="walletStore.setFeeRate" />
+      <SatsnetFeeSelect @change="walletStore.setSatsnetFeeRate" />
       <NetworkSelect />
 
       <!-- TranscendingMode 图标按钮 -->
@@ -48,6 +49,7 @@
 import { ref, computed } from 'vue'
 import { Icon } from '@iconify/vue'
 import BtcFeeSelect from '@/components/common/BtcFeeSelect.vue'
+import SatsnetFeeSelect from '@/components/common/SatsnetFeeSelect.vue'
 import NetworkSelect from '@/components/common/NetworkSelect.vue'
 import WalletSelector from './WalletSelector.vue'
 import { ChevronDown } from 'lucide-vue-next'

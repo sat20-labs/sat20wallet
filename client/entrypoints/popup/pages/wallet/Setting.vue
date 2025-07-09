@@ -12,6 +12,8 @@
       <SecuritySetting />
       <Separator />
       <NetworkSetting />
+      <Separator />
+      <NodeSetting />
       <!-- <Separator />  
       <Separator />
       <Separator /> -->
@@ -39,13 +41,11 @@
 <script setup lang="ts">
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import WalletHeader from '@/components/wallet/HomeHeader.vue'
-import LayoutSecond from '@/components/layout/LayoutSecond.vue'
-import OtherSetting from '@/components/setting/OtherSetting.vue'
 import SecuritySetting from '@/components/setting/SecuritySetting.vue'
 import EscapeHatch from '@/components/setting/EscapeHatch.vue'
-import WalletSetting from '@/components/setting/WalletSetting.vue'
 import NetworkSetting from '@/components/setting/NetworkSetting.vue'
-import AppearanceSetting from '@/components/setting/AppearanceSetting.vue'
+import NodeSetting from '@/components/setting/NodeSetting.vue'
+
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { version } from '@/package.json'
