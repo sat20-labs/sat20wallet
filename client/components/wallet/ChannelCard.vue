@@ -131,7 +131,7 @@ const selectedType = defineModel<string>('selectedType')
 const emit = defineEmits(['splicing_out', 'unlock', 'update:selectedType'])
 
 const walletStore = useWalletStore()
-const { walletId, accountIndex } = storeToRefs(walletStore)
+const { walletId, accountIndex, btcFeeRate } = storeToRefs(walletStore)
 
 const l1Store = useL1Store()
 const { plainUtxos, balance: l1PlainBalance } = storeToRefs(l1Store)
@@ -206,7 +206,6 @@ const clear = () => {
   channelAmt.value = ''
 }
 const amtConfirm = async () => {
-  const feeRate = 1
   const amt = parseInt(channelAmt.value, 10)
 
   if (amt > l1PlainBalance.value) {
@@ -232,7 +231,7 @@ const amtConfirm = async () => {
   loading.value = true
 
   const memo = '::open'
-  const [err, result] = await satsnetStp.openChannel(feeRate, amt, [], memo)
+  const [err, result] = await satsnetStp.openChannel(btcFeeRate.value, amt, [], memo)
 
   if (err) {
     toast({

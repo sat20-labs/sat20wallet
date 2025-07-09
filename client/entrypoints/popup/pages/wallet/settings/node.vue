@@ -66,6 +66,7 @@ import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { useWalletStore } from '@/store/wallet'
 
 const guideText = `聪网节点系统揭秘：BTC 生态的真正算力革命，正在悄悄开始
 
@@ -148,6 +149,8 @@ BRC20 / ORDX / Runes / Ordinals 等资产的极速撮合交易；
 
 聪网节点系统，就是 BTC 下一代基础设施的雏形。`
 
+const walletStore = useWalletStore()
+const { btcFeeRate } = storeToRefs(walletStore)
 const isLoading = ref(false)
 const isCore = ref(false)
 const showConfirm = ref(false)
@@ -166,7 +169,7 @@ async function confirmStake() {
   resultMsg.value = ''
   showConfirm.value = false
   try {
-    const [err, res] = await stp.stakeToBeMinner(pendingCore, 1) // 1为feeRate示例
+    const [err, res] = await stp.stakeToBeMinner(pendingCore, btcFeeRate.value)
     if (err) {
       resultMsg.value = err.message || '操作失败'
       resultSuccess.value = false
