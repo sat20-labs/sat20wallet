@@ -1,13 +1,15 @@
 import { Message } from '@/types/message'
+import Port from '@/lib/message/Port'
 
 export const useApprove = () => {
   const approveData = ref<any>(null)
-  const portRef = shallowRef<any>(null)
+  const portRef = shallowRef<InstanceType<typeof Port> | null>(null)
+
   const approve = async (res: any) => {
     const currWin = await browser.windows.getCurrent()
     console.log(approveData.value)
 
-    await portRef.value.postMessage({
+    await portRef.value?.postMessage({
       type: Message.MessageType.APPROVE,
       action: Message.MessageAction.APPROVE_RESPONSE,
       metadata: {
@@ -19,9 +21,10 @@ export const useApprove = () => {
       data: res,
     })
   }
+
   const reject = async () => {
     const currWin = await browser.windows.getCurrent()
-    await portRef.value.postMessage({
+    await portRef.value?.postMessage({
       type: Message.MessageType.APPROVE,
       action: Message.MessageAction.REJECT_RESPONSE,
       metadata: {
@@ -32,9 +35,11 @@ export const useApprove = () => {
       },
     })
   }
+
   onBeforeMount(() => {
-    portRef.value = browser.runtime.connect({ name: Message.Port.BG_POPUP })
+    portRef.value = new Port({ name: Message.Port.BG_POPUP })
   })
+
   onMounted(async () => {
     if (!portRef.value) return
     const currWin = await browser.windows.getCurrent()
@@ -73,5 +78,6 @@ export const useApprove = () => {
     portRef.value?.disconnect()
     portRef.value = null
   })
+
   return { approveData, approve, reject }
 }

@@ -360,14 +360,7 @@ export async function handleMessage(
             resData = { success: true }
           }
           break
-        case Message.MessageAction.GET_TICKER_INFO:
-          ;[reqErr, reqRes] = await service.getTickerInfo(data.asset)
-          if (reqErr) {
-            errData = { code: -50, message: reqErr.message }
-          } else {
-            resData = reqRes
-          }
-          break
+
         // --- 合约相关方法 ---
         case Message.MessageAction.GET_FEE_FOR_DEPLOY_CONTRACT:
           ;[reqErr, reqRes] = await service.getFeeForDeployContract(

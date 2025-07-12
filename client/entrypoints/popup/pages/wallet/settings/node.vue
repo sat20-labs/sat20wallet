@@ -32,6 +32,7 @@
             <AlertTitle>{{ resultSuccess ? '操作成功' : '操作失败' }}</AlertTitle>
             <AlertDescription>{{ resultMsg }}</AlertDescription>
           </Alert>
+          <div v-if="txId" class="mt-2 text-xs text-gray-500">交易ID：{{ hideAddress(txId) }}</div>
         </CardFooter>
       </Card>
       <Dialog v-model:open="showConfirm">
@@ -67,6 +68,7 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store/wallet'
+import { hideAddress } from '@/utils'
 
 const guideText = `聪网节点系统揭秘：BTC 生态的真正算力革命，正在悄悄开始
 
@@ -156,6 +158,7 @@ const isCore = ref(false)
 const showConfirm = ref(false)
 const resultMsg = ref('')
 const resultSuccess = ref(false)
+const txId = ref('')
 let pendingCore = false
 
 function onStake(core: boolean) {
@@ -169,17 +172,20 @@ async function confirmStake() {
   resultMsg.value = ''
   showConfirm.value = false
   try {
-    const [err, res] = await stp.stakeToBeMinner(pendingCore, btcFeeRate.value)
+    const [err, res] = await stp.stakeToBeMiner(pendingCore, btcFeeRate.value.toString())
     if (err) {
       resultMsg.value = err.message || '操作失败'
       resultSuccess.value = false
+      txId.value = ''
     } else {
       resultMsg.value = '操作成功，节点质押已提交！'
       resultSuccess.value = true
+      txId.value = res && res.txId ? res.txId : ''
     }
   } catch (e: any) {
     resultMsg.value = e.message || '未知错误'
     resultSuccess.value = false
+    txId.value = ''
   } finally {
     isLoading.value = false
   }
