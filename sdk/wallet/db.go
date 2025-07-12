@@ -95,6 +95,9 @@ func (p *Manager) initDB() error {
 
 	p.inscibeMap = LoadAllInscribeResvFromDB(p.db)
 
+	p.utxoLockerL1.Init()
+	p.utxoLockerL2.Init()
+
 	p.repair()
 
 	return nil
