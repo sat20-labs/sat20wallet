@@ -711,7 +711,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 	return txid, nil
 }
 
-// 发送资产到一个地址上
+// 发送一个op_return，只支付网络费
 func (p *Manager) SendNullData_SatsNet(memo []byte) (string, error) {
 
 	if p.wallet == nil {
