@@ -518,7 +518,7 @@ func (p *Manager) SetKeyValueToName(name string, key, value string) (string, err
 
 
 // 绑定推荐人地址
-func (p *Manager) BindReferrer(referrerName string) (string, error) {
+func (p *Manager) BindReferrer(referrerName, key string, serverPubkey []byte) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -530,7 +530,26 @@ func (p *Manager) BindReferrer(referrerName string) (string, error) {
 	}
 	// TODO 检查是否有正确的签名key-value
 	Log.Infof("%v", info)
-
+	var sig string
+	for _, kv := range info.KVItemList {
+		if kv.Key == key {
+			sig = kv.Value
+		}
+	}
+	if sig == "" {
+		return "", fmt.Errorf("can't find the value of %s", key)
+	}
+	sigBytes, err := hex.DecodeString(sig)
+	if err != nil {
+		return "", err
+	}
+	pubkey, err := utils.BytesToPublicKey(serverPubkey)
+	if err != nil {
+		return "", err
+	}
+	if !VerifyMessage(pubkey, []byte(referrerName), sigBytes) {
+		return "", fmt.Errorf("referrer %s has no correct signatrue", referrerName)
+	}
 
 	nullDataScript, err := sindexer.NullDataScript(sindexer.CONTENT_TYPE_BINDREFERRER, []byte(referrerName))
 	if err != nil {
