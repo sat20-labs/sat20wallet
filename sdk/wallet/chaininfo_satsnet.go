@@ -27,7 +27,6 @@ func GetChainParam_SatsNet() *chaincfg.Params {
 
 func VerifySignedTx_SatsNet(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
 
-	// TODO 做资产验证
 	inValue := int64(0)
 	var inAssets wire.TxAssets
 	sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
