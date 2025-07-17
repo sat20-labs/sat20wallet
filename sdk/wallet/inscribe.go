@@ -516,12 +516,23 @@ func Inscribe(network *chaincfg.Params, request *InscriptionRequest, resvId int6
 // size including any witness data.
 func GetTransactionWeight(tx *btcutil.Tx) int64 {
 	msgTx := tx.MsgTx()
+	return GetTransactionWeight2(msgTx)
+}
 
-	baseSize := msgTx.SerializeSizeStripped()
-	totalSize := msgTx.SerializeSize()
+func GetTransactionWeight2(tx *wire.MsgTx) int64 {
+	baseSize := tx.SerializeSizeStripped()
+	totalSize := tx.SerializeSize()
 
 	// (baseSize * 3) + totalSize
 	return int64((baseSize * (WitnessScaleFactor - 1)) + totalSize)
+}
+
+func GetTxVirtualSize2(tx *wire.MsgTx) int64 {
+	// vSize := (weight(tx) + 3) / 4
+	//       := (((baseSize * 3) + totalSize) + 3) / 4
+	// We add 3 here as a way to compute the ceiling of the prior arithmetic
+	// to 4. The division by 4 creates a discount for wit witness data.
+	return (GetTransactionWeight2(tx) + (WitnessScaleFactor - 1)) / WitnessScaleFactor
 }
 
 // GetTxVirtualSize computes the virtual size of a given transaction. A
@@ -564,6 +575,7 @@ func getTxVirtualSize(tx *btcutil.Tx) int64 {
 	// to 4. The division by 4 creates a discount for wit witness data.
 	return (GetTransactionWeight(tx) + (WitnessScaleFactor - 1)) / WitnessScaleFactor
 }
+
 
 // RuleError identifies a rule violation.  It is used to indicate that
 // processing of a block or transaction failed due to one of the many validation

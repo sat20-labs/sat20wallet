@@ -41,27 +41,27 @@ func TestInscribe(t *testing.T) {
 		PkScript:   pkScript,
 	})
 
-	inscriptionDataList := make([]InscriptionData, 0)
-	inscriptionDataList = append(inscriptionDataList, InscriptionData{
-		ContentType: "text/plain;charset=utf-8",
-		Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"100"}`),
+	// inscriptionDataList := make([]InscriptionData, 0)
+	// inscriptionDataList = append(inscriptionDataList, InscriptionData{
+	// 	ContentType: "text/plain;charset=utf-8",
+	// 	Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"100"}`),
 		
-	})
-	inscriptionDataList = append(inscriptionDataList, InscriptionData{
-		ContentType: "text/plain;charset=utf-8",
-		Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"10"}`),
+	// })
+	// inscriptionDataList = append(inscriptionDataList, InscriptionData{
+	// 	ContentType: "text/plain;charset=utf-8",
+	// 	Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"10"}`),
 		
-	})
-	inscriptionDataList = append(inscriptionDataList, InscriptionData{
-		ContentType: "text/plain;charset=utf-8",
-		Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"10000"}`),
+	// })
+	// inscriptionDataList = append(inscriptionDataList, InscriptionData{
+	// 	ContentType: "text/plain;charset=utf-8",
+	// 	Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"10000"}`),
 		
-	})
-	inscriptionDataList = append(inscriptionDataList, InscriptionData{
-		ContentType: "text/plain;charset=utf-8",
-		Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"1"}`),
+	// })
+	// inscriptionDataList = append(inscriptionDataList, InscriptionData{
+	// 	ContentType: "text/plain;charset=utf-8",
+	// 	Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"1"}`),
 		
-	})
+	// })
 
 	request := &InscriptionRequest{
 		CommitTxPrevOutputList: commitTxPrevOutputList,
@@ -83,6 +83,11 @@ func TestInscribe(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Printf("%v\n", txs)
+
+	fmt.Printf("commit Fee: %d\n", txs.CommitTxFee)
+	fmt.Printf("reveal Fee: %d\n", txs.RevealTxFee)
+	fmt.Printf("fee: %d\n", EstimatedInscribeFee(len(commitTxPrevOutputList), 
+		len(request.InscriptionData.Body), 2, 0))
 }
 
 func TestInscribeTransfer(t *testing.T) {
@@ -136,6 +141,13 @@ func TestInscribeTransfer(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Printf("reveal Tx: %s\n", rawTx2)
+
+
+	fmt.Printf("commit vsize: %d\n", GetTxVirtualSize2(txs.CommitTx))
+	fmt.Printf("reveal vsize: %d\n", GetTxVirtualSize2(txs.RevealTx))
+	fmt.Printf("length of body: %d\n", len(request.InscriptionData.Body))
+
+	fmt.Printf("fee: %d\n", EstimatedInscribeFee(1, len(request.InscriptionData.Body), 1, 0))
 }
 
 
@@ -166,6 +178,9 @@ func TestCalcFeeOfInscribe(t *testing.T) {
 	}
 	fmt.Printf("fee: %d\n", weightEstimate.Fee(1))
 
+	vsize := GetTxVirtualSize2(tx)
+	fmt.Printf("weight:%d \n", vsize)
+
 	//revealFee := 152
 	revealTx := "020000000001016ec542b95d32b1e145cf22bca04fcc11c1005751cb45367a11a6caf8a7933e800000000000fdffffff014a010000000000002251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba0340848c4917c935543378b9d0f102894d9898d02b4df562fa78890e7282dd10da04283a80d0c7841014034fc9a6597603f6191b91ace8529c07f345c5408c46c9f67e2018ade4f7d34cfe73eba54fb94d07b95e6540e825d9e74afc45b7ff2cc41e93eeac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d3800387b2270223a226272632d3230222c226f70223a227472616e73666572222c227469636b223a226f726469222c22616d74223a22313030227d6821c018ade4f7d34cfe73eba54fb94d07b95e6540e825d9e74afc45b7ff2cc41e93ee00000000"
 
@@ -174,15 +189,17 @@ func TestCalcFeeOfInscribe(t *testing.T) {
 		t.Fatal(err)
 	}
 	var weightEstimate2 utils.TxWeightEstimator
-	for i, txIn := range tx2.TxIn {
+	for _, txIn := range tx2.TxIn {
+		// var size int64
+		// size = 1
+		// for _, w := range txIn.Witness {
+		// 	size += int64(len(w))
+		// }
+		// size += int64(len(txIn.Witness))
+		// fmt.Printf("input:%d %d %d\n", i, txIn.Witness.SerializeSize(), size)
 		
-		var size int64
-		for _, w := range txIn.Witness {
-			size += int64(len(w))
-		}
-		fmt.Printf("input:%d %d %d\n", i, txIn.SerializeSize(), size)
-		size += int64(len(txIn.Witness))
-		weightEstimate2.AddWitnessInput(size)
+		//size := txIn.Witness.SerializeSize()
+		weightEstimate2.AddWitnessInput(int64(txIn.Witness.SerializeSize()))
 	}
 	for i, txOut := range tx2.TxOut {
 		fmt.Printf("output:%d %d\n", i, len(txOut.PkScript))
@@ -190,6 +207,8 @@ func TestCalcFeeOfInscribe(t *testing.T) {
 	}
 	fmt.Printf("fee: %d\n", weightEstimate2.Fee(1))
 
+	vsize2 := GetTxVirtualSize2(tx2)
+	fmt.Printf("weight:%d \n", vsize2)
 }
 
 
