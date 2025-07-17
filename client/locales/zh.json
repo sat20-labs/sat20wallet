@@ -14,7 +14,7 @@
     "unlockButton": "解锁"
   },
   "import": {
-    "title": "ORDX 钱包",
+    "title": "SAT20 Wallet",
     "subtitle": "通过恢复助记词或私钥导入现有钱包",
     "recoveryPhraseTab": "恢复助记词",
     "privateKeyTab": "私钥",

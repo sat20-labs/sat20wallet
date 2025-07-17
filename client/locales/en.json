@@ -1,20 +1,20 @@
 {
   "index": {
-    "title": "ORDX Wallet",
+    "title": "SAT20 Wallet",
     "subtitle": "Secure, simple, and powerful Bitcoin wallet",
     "createWallet": "Create New Wallet",
     "importWallet": "Import Existing Wallet",
     "agreement": "By continuing, you agree to our Terms of Service and Privacy Policy"
   },
   "unlock": {
-    "title": "ORDX Wallet",
+    "title": "SAT20 Wallet",
     "subtitle": "Please enter your wallet password to continue",
     "enterPassword": "Enter Your Password",
     "passwordPlaceholder": "Password",
     "unlockButton": "Unlock"
   },
   "import": {
-    "title": "ORDX Wallet",
+    "title": "SAT20 Wallet",
     "subtitle": "Import your existing wallet using recovery phrase or private key",
     "recoveryPhraseTab": "Recovery Phrase",
     "privateKeyTab": "Private Key",
