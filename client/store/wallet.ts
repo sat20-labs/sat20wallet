@@ -153,7 +153,7 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const importWallet = async (mnemonic: string, password: string) => {
-    const [err, res] = await walletManager.importWallet(mnemonic, password)
+    const [err, res] = await walletManager.importWallet(mnemonic?.trim(), password)
     if (err || !res) {
       console.error(err)
       return [err, undefined]

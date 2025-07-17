@@ -276,7 +276,10 @@ interface SatsnetStp {
   // Switches to the account with the specified ID.
   switchAccount(id: number): Promise<SatsnetResponse<void>>
   stakeToBeMiner(bCoreNode: boolean, btcFeeRate: string): Promise<SatsnetResponse<{
-    txId: string
+    txId: string,
+    resvId: string
+    assetName: string
+    amt: string
   }>>
   // Switches to the specified chain (e.g., "mainnet" or "testnet").
   switchChain(chain: string, password: string): Promise<SatsnetResponse<void>>

@@ -32,7 +32,12 @@
             <AlertTitle>{{ resultSuccess ? '操作成功' : '操作失败' }}</AlertTitle>
             <AlertDescription>{{ resultMsg }}</AlertDescription>
           </Alert>
-          <div v-if="txId" class="mt-2 text-xs text-gray-500">交易ID：{{ hideAddress(txId) }}</div>
+          <template v-if="resultSuccess">
+            <div v-if="txId" class="mt-2 text-xs text-gray-500">交易ID：{{ hideAddress(txId) }}</div>
+            <div v-if="resvId" class="mt-2 text-xs text-gray-500">预定ID：{{ hideAddress(resvId) }}</div>
+            <div v-if="assetName" class="mt-2 text-xs text-gray-500">资产名称：{{ assetName }}</div>
+            <div v-if="amt" class="mt-2 text-xs text-gray-500">质押数量：{{ amt }}</div>
+          </template>
         </CardFooter>
       </Card>
       <Dialog v-model:open="showConfirm">
@@ -159,6 +164,9 @@ const showConfirm = ref(false)
 const resultMsg = ref('')
 const resultSuccess = ref(false)
 const txId = ref('')
+const resvId = ref('')
+const assetName = ref('')
+const amt = ref('')
 let pendingCore = false
 
 function onStake(core: boolean) {
@@ -177,15 +185,24 @@ async function confirmStake() {
       resultMsg.value = err.message || '操作失败'
       resultSuccess.value = false
       txId.value = ''
+      resvId.value = ''
+      assetName.value = ''
+      amt.value = ''
     } else {
       resultMsg.value = '操作成功，节点质押已提交！'
       resultSuccess.value = true
       txId.value = res && res.txId ? res.txId : ''
+      resvId.value = res && res.resvId ? res.resvId : ''
+      assetName.value = res && res.assetName ? res.assetName : ''
+      amt.value = res && res.amt ? res.amt : ''
     }
   } catch (e: any) {
     resultMsg.value = e.message || '未知错误'
     resultSuccess.value = false
     txId.value = ''
+    resvId.value = ''
+    assetName.value = ''
+    amt.value = ''
   } finally {
     isLoading.value = false
   }

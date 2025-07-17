@@ -20,7 +20,7 @@
       <Separator orientation="vertical" class="h-full mx-2" />
 
       <!-- 复制按钮 -->
-      <CopyButton :text="address" class="text-foreground/50" />
+      <CopyButton :text="showAddress" class="text-foreground/50" />
 
       <!-- 下拉选择 -->
       <SubWalletSelector @wallet-changed="handleSubWalletChange" @wallet-created="handleSubWalletCreated" />
@@ -115,6 +115,7 @@ const selectedType = ref('ORDX')
 
 const globalStore = useGlobalStore()
 const { env } = storeToRefs(globalStore)
+
 
 const showAddress = computed(() => {
   if (selectedChainLabel.value === 'bitcoin') {

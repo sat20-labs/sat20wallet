@@ -356,15 +356,21 @@ const deleteWallet = async () => {
     })
     isDeleteDialogOpen.value = false
     walletToDelete.value = null
+    setTimeout(() => {
+      sendAccountsChangedEvent(wallets.value)
+    }, 200);
     // 发送 accountsChanged 事件（封装函数）
-    await sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
+    console.log(error);
+    
     toast({
       variant: 'destructive',
       title: 'Error',
       description: error.message || 'Failed to delete Wallet'
     })
   } finally {
+    console.log('finished ');
+    
     isDeleting.value = false
   }
 }
