@@ -28,7 +28,7 @@ export default defineConfig({
       extension_pages:
         "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
     },
-    permissions: ['tabs', 'storage', 'activeTab'],
+    permissions: ['tabs', 'storage', 'activeTab', 'scripting', 'commands'],
   },
   runner: {
     startUrls: ['http://localhost:3002/account'],

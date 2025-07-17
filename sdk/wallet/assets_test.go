@@ -81,20 +81,20 @@ func TestAnchorScript(t *testing.T) {
 		t.Fatalf("")
 	}
 
-	utxo, witnessScript2, value, assets, err := ParseStandardAnchorScript(anchorPkScript)
+	data, err := ParseStandardAnchorScript(anchorPkScript)
 	if err != nil {
 		t.Fatalf("")
 	}
-	if utxo != chanpoint {
+	if data.Utxo != chanpoint {
 		t.Fatalf("")
 	}
-	if !bytes.Equal(witnessScript2, witnessScript[:]) {
+	if !bytes.Equal(data.WitnessScript, witnessScript[:]) {
 		t.Fatalf("")
 	}
-	if value != txOutput.Value() {
+	if data.Value != txOutput.Value() {
 		t.Fatalf("")
 	}
-	if !assets.Equal(txOutput.Assets) {
+	if !data.Assets.Equal(txOutput.Assets) {
 		t.Fatalf("")
 	}
 }
@@ -104,10 +104,10 @@ func TestParseAnchorScript(t *testing.T) {
 	
 	anchorPkScript := "42363564623638323264653835656135646630366366323331386565656239623933326633633265353466653264376662353432336561373838646661636564663a304752210367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e2103e1b100115fb667b374734510b76ddcc937fbdf7e8b238258be79c00f08b6401e52ae02942000"
 	by, _ := hex.DecodeString(anchorPkScript)
-	utxo, witnessScript2, value, assets, err := ParseStandardAnchorScript(by)
+	data, err := ParseStandardAnchorScript(by)
 	if err != nil {
 		t.Fatalf("")
 	}
-	fmt.Printf("%s, %v, %d, %v", utxo, witnessScript2, value, assets)
+	fmt.Printf("%v", data)
 
 }

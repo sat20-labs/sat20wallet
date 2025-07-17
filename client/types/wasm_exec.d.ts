@@ -78,6 +78,7 @@ declare interface WalletManager {
     amount: number
   ): Promise<SatsnetResponse<{ txId: string }>>
 
+  getChannelAddrByPeerPubkey(peerPubkey: string): Promise<SatsnetResponse<{ channelAddr: string, peerAddr }>>
 
   // Creates a new wallet with a password and returns the wallet ID and mnemonic.
   createWallet(
@@ -97,13 +98,13 @@ declare interface WalletManager {
   getAllWallets(): Promise<SatsnetResponse<Map<number, number>>>
 
   // Switches to the wallet with the specified ID.
-  switchWallet(id: number): Promise<SatsnetResponse<void>>
-
+  switchWallet(id: number, password: string): Promise<SatsnetResponse<void>>
+  changePassword(oldPassword: string, newPassword: string): Promise<SatsnetResponse<void>>
   // Switches to the account with the specified ID.
   switchAccount(id: number): Promise<SatsnetResponse<void>>
 
   // Switches to the specified chain (e.g., "mainnet" or "testnet").
-  switchChain(chain: string): Promise<SatsnetResponse<void>>
+  switchChain(chain: string, password: string): Promise<SatsnetResponse<void>>
 
   // Returns the current chain.
   getChain(): Promise<SatsnetResponse<string>>
@@ -270,13 +271,18 @@ interface SatsnetStp {
   release(): SatsnetResponse
   getWallet(): SatsnetResponse
   // Switches to the wallet with the specified ID.
-  switchWallet(id: number): Promise<SatsnetResponse<void>>
-
+  switchWallet(id: number, password: string): Promise<SatsnetResponse<void>>
+  changePassword(oldPassword: string, newPassword: string): Promise<SatsnetResponse<void>>
   // Switches to the account with the specified ID.
   switchAccount(id: number): Promise<SatsnetResponse<void>>
-
+  stakeToBeMiner(bCoreNode: boolean, btcFeeRate: string): Promise<SatsnetResponse<{
+    txId: string,
+    resvId: string
+    assetName: string
+    amt: string
+  }>>
   // Switches to the specified chain (e.g., "mainnet" or "testnet").
-  switchChain(chain: string): Promise<SatsnetResponse<void>>
+  switchChain(chain: string, password: string): Promise<SatsnetResponse<void>>
 
   getAllChannels(): SatsnetResponse
   getCurrentChannel(): SatsnetResponse

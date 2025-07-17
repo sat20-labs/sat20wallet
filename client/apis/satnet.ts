@@ -98,6 +98,12 @@ class SatnetApi {
     )
     return response.json()
   }
+  async getTickerHolders({ ticker, start, limit, network }: any): Promise<any> {
+    const response = await fetch(
+      this.generatePath(`v3/tick/holders/${ticker}?start=${start}&limit=${limit}`, network)
+    )
+    return response.json()
+  }
 }
 
 export default new SatnetApi()

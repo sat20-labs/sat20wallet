@@ -426,19 +426,6 @@ export default defineUnlistedScript(() => {
       });
     }
 
-    async getTickerInfo(asset: string): Promise<any> {
-      if (this.tickerCache[asset]) {
-        return Promise.resolve(this.tickerCache[asset]);
-      }
-      const result = await this.send<any>({
-        type: Message.MessageType.REQUEST,
-        action: Message.MessageAction.GET_TICKER_INFO,
-        data: { asset },
-      });
-      this.tickerCache[asset] = result;
-      return result;
-    }
-
     async getFeeForDeployContract(templateName: string, content: string, feeRate: string): Promise<{ fee: any }> {
       return this.send<{ fee: any }>({
         type: Message.MessageType.REQUEST,

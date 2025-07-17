@@ -25,7 +25,7 @@
           >
             <span class="text-lg mb-1">{{ option.icon }}</span>
             <span>{{ $t(`btcFeeSelect.${option.label}`) }}</span>
-            <span class="text-[10px]">{{ option.value }} sats</span>
+            <span class="text-[10px]">{{ option.value }} sats/vB</span>
           </Button>
         </div>
         <div v-if="selectedRate === 'custom'" class="mt-4 space-y-2">
@@ -78,16 +78,16 @@ const { network } = storeToRefs(walletStore)
 const emit = defineEmits(['change'])
 
 const defaultData = {
-  fastestFee: 20,
-  halfHourFee: 10,
-  hourFee: 10,
+  fastestFee: 1,
+  halfHourFee: 1,
+  hourFee: 1,
 }
 const {
   data: res,
 } = useQuery({
   queryKey: ['btcFee', network],
   queryFn: ({ queryKey }) => ordxApi.getRecommendedFees({ network: queryKey[1] }),
-  enabled: false,
+  refetchInterval: 1000 * 60 * 3,
 })
 
 const feeData = computed(() => res.value?.data || defaultData)

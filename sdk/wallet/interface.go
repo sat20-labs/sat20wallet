@@ -9,15 +9,18 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
 
 func NewManager(cfg *common.Config, db common.KVDB) *Manager {
 	Log.Infof("sat20wallet_ver:%s, DB_ver:%s", SOFTWARE_VERSION, DB_VERSION)
 
 	//////////
+	indexer.CHAIN = cfg.Chain
 
 	http := NewHTTPClient()
 	l1 := NewIndexerClient(cfg.IndexerL1.Scheme, cfg.IndexerL1.Host, cfg.IndexerL1.Proxy, http)
@@ -47,6 +50,7 @@ func NewManager(cfg *common.Config, db common.KVDB) *Manager {
 
 	_env = cfg.Env
 	_chain = cfg.Chain
+	_mode = cfg.Mode
 
 	mgr.db = db
 	if mgr.db == nil {
@@ -84,7 +88,6 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 	}
 
 	p.wallet = wallet
-	p.password = password
 	p.status.CurrentWallet = id
 	p.saveStatus()
 
@@ -115,11 +118,31 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	}
 
 	p.wallet = wallet
-	p.password = password
 	p.status.CurrentWallet = id
 	p.saveStatus()
 
 	return id, nil
+}
+
+func (p *Manager) ChangePassword(oldPS, newPS string) (error) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	for id, v := range p.walletInfoMap {
+		mnemonic, err := p.loadMnemonic(id, oldPS)
+		if err != nil {
+			Log.Errorf("loadMnemonic %d failed, %v", id, err)
+			return err
+		}
+		
+		err = p.saveMnemonicWithPassword(mnemonic, newPS, v)
+		if err != nil {
+			Log.Errorf("saveMnemonicWithPassword %d failed, %v", id, err)
+			return err
+		}
+	}
+	
+	return nil
 }
 
 func (p *Manager) UnlockWallet(password string) (int64, error) {
@@ -146,7 +169,6 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 	}
 
 	p.wallet = wallet
-	p.password = password
 	p.status.CurrentAccount = 0
 
 	return p.status.CurrentWallet, nil
@@ -163,7 +185,7 @@ func (p *Manager) GetAllWallets() map[int64]int {
 	return result
 }
 
-func (p *Manager) SwitchWallet(id int64) error {
+func (p *Manager) SwitchWallet(id int64, password string) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -176,7 +198,7 @@ func (p *Manager) SwitchWallet(id int64) error {
 	p.status.CurrentWallet = id
 	oldWallet := p.wallet
 	p.wallet = nil
-	_, err := p.unlockWallet(p.password)
+	_, err := p.unlockWallet(password)
 	if err == nil {
 		p.saveStatus()
 	} else {
@@ -209,7 +231,7 @@ func (p *Manager) SwitchAccount(id uint32) {
 	p.saveStatus()
 }
 
-func (p *Manager) SwitchChain(chain string) error {
+func (p *Manager) SwitchChain(chain, password string) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -221,7 +243,7 @@ func (p *Manager) SwitchChain(chain string) error {
 		p.status.CurrentChain = chain
 		oldWallet := p.wallet
 		p.wallet = nil
-		_, err := p.unlockWallet(p.password)
+		_, err := p.unlockWallet(password)
 		if err == nil {
 			p.saveStatus()
 		} else {
@@ -468,3 +490,78 @@ func (p *Manager) SendMessageToUpper(eventName string, data interface{}) {
 		p.msgCallback(eventName, data)
 	}
 }
+
+func (p *Manager) GetChannelAddrByPeerPubkey(pubkeyHex string) (string, string, error) {
+	if p.wallet == nil {
+		return "", "", fmt.Errorf("wallet is not created/unlocked")
+	}
+
+	pubkey, err := utils.ParsePubkey(pubkeyHex)
+	if err != nil {
+		return "", "", err
+	}
+	p2trAddr := PublicKeyToP2TRAddress(pubkey)
+
+	channelAddr, err := GetP2WSHaddress(p.wallet.GetPubKey().SerializeCompressed(), 
+		pubkey.SerializeCompressed())
+	if err != nil {
+		return "", "", err
+	}
+	return channelAddr, p2trAddr, nil
+}
+
+
+// 对某个btc的名字设置属性
+func (p *Manager) SetKeyValueToName(name string, key, value string) (string, error) {
+	return "", nil
+}
+
+
+// 绑定推荐人地址
+func (p *Manager) BindReferrer(referrerName, key string, serverPubkey []byte) (string, error) {
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+
+	// 检查该名字是否是有效的推荐人名字
+	info, err := p.l1IndexerClient.GetNameInfo(referrerName)
+	if err != nil {
+		return "", err
+	}
+	// TODO 检查是否有正确的签名key-value
+	Log.Infof("%v", info)
+	var sig string
+	for _, kv := range info.KVItemList {
+		if kv.Key == key {
+			sig = kv.Value
+		}
+	}
+	if sig == "" {
+		return "", fmt.Errorf("can't find the value of %s", key)
+	}
+	sigBytes, err := hex.DecodeString(sig)
+	if err != nil {
+		return "", err
+	}
+	pubkey, err := utils.BytesToPublicKey(serverPubkey)
+	if err != nil {
+		return "", err
+	}
+	if !VerifyMessage(pubkey, []byte(referrerName), sigBytes) {
+		return "", fmt.Errorf("referrer %s has no correct signatrue", referrerName)
+	}
+
+	nullDataScript, err := sindexer.NullDataScript(sindexer.CONTENT_TYPE_BINDREFERRER, []byte(referrerName))
+	if err != nil {
+		return "", err
+	}
+
+	txId, err := p.SendNullData_SatsNet(nullDataScript)
+	if err != nil {
+		Log.Errorf("SendNullData_SatsNet %s failed", referrerName)
+		return "", err
+	}
+	Log.Infof("bind referrer %s with txId %s", referrerName, txId)
+	return txId, nil
+}
+

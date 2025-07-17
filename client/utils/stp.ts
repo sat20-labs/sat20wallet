@@ -19,6 +19,7 @@ interface StpWasmModule {
   start: (...args: any[]) => Promise<WasmResponse>;
   importWallet: (...args: any[]) => Promise<WasmResponse>;
   switchWallet: (...args: any[]) => Promise<WasmResponse>;
+  changePassword: (...args: any[]) => Promise<WasmResponse>;
   switchAccount: (...args: any[]) => Promise<WasmResponse>;
   init: (...args: any[]) => Promise<WasmResponse>;
   getVersion: (...args: any[]) => Promise<WasmResponse<string>>;
@@ -78,6 +79,12 @@ interface StpWasmModule {
   getAddressStatusInContract: (url: string, address: string) => Promise<WasmResponse<string>>;
   getAllAddressInContract: (url: string, start: number, limit: number) => Promise<WasmResponse<string>>;
   getContractInvokeHistoryInServer: (url: string, start: number, limit: number) => Promise<WasmResponse<string>>;
+  stakeToBeMiner: (bCoreNode: boolean, btcFeeRate: string) => Promise<WasmResponse<{
+    txId: string,
+    resvId: string
+    assetName: string
+    amt: string
+  }>>;
   getContractInvokeHistoryByAddressInServer: (url: string, address: string, start: number, limit: number) => Promise<WasmResponse<string>>;
 }
 
@@ -87,12 +94,8 @@ class SatsnetStp {
     methodName: keyof StpWasmModule, // Use keyof for type safety
     ...args: any[]
   ): Promise<[Error | undefined, T | undefined]> {
-    console.log('stp method', methodName)
-    console.log('stp arg', args)
-    // Check if running in a browser-like environment with 'window' and 'window.stp_wasm'
     const globalStp = (globalThis as any).stp_wasm;
 
-    // Use double assertion (as unknown as StpWasmModule) to bypass strict overlap checks
     const stpModuleTyped = globalStp
       ? (globalStp as unknown as StpWasmModule)
       : undefined;
@@ -102,19 +105,16 @@ class SatsnetStp {
       console.error(errorMsg)
       return [new Error(errorMsg), undefined]
     }
-    const method = stpModuleTyped[methodName] as (...args: any[]) => Promise<WasmResponse<T>>; // Use the correctly typed module
+    const method = stpModuleTyped[methodName] as (...args: any[]) => Promise<WasmResponse<T>>;
 
     const [err, result] = await tryit(method)(...args)
-    console.log('stp result', result);
 
     if (err) {
       console.error(`stp ${methodName} error: ${err.message}`)
       return [err, undefined]
     }
 
-    // Check if result is defined and has 'code' property before accessing
     if (result && typeof result.code === 'number' && result.code !== 0) {
-      // Use optional chaining for msg, provide default message
       const errorMsg = result.msg || `stp ${methodName} failed with code ${result.code}`;
       console.error(errorMsg);
       return [new Error(errorMsg), undefined];
@@ -148,10 +148,17 @@ class SatsnetStp {
       password.toString()
     )
   }
+  async changePassword(
+    oldPassword: string,
+    newPassword: string
+  ): Promise<[Error | undefined, void | undefined]> {
+    return this._handleRequest('changePassword', oldPassword, newPassword)
+  }
   async switchWallet(
-    id: string
+    id: string,
+    password: string
   ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('switchWallet', id)
+    return this._handleRequest('switchWallet', id, password)
   }
   async switchAccount(
     id: number
@@ -674,6 +681,22 @@ class SatsnetStp {
     string | undefined
   ]> {
     return this._handleRequest<string>('getContractInvokeHistoryByAddressInServer', url, address, start, limit)
+  }
+  async stakeToBeMiner(bCoreNode: boolean, btcFeeRate: string): Promise<[
+    Error | undefined,
+    {
+      txId: string,
+      resvId: string,
+      assetName: string,
+      amt: string
+    } | undefined
+  ]> {
+    return this._handleRequest<{
+      txId: string,
+      resvId: string,
+      assetName: string,
+      amt: string
+    }>('stakeToBeMiner', bCoreNode, btcFeeRate)
   }
 }
 

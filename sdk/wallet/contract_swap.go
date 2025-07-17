@@ -130,6 +130,7 @@ type SwapHistoryItem struct {
 	UtxoId         uint64 // 其实是utxoId
 	OrderTime      int64
 	AssetName      string
+	ServiceFee	   int64
 	UnitPrice      *Decimal // X per Y
 	ExpectedAmt    *Decimal // 期望的数量
 	Address        string   // 所有人
@@ -639,12 +640,11 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 	return SWAP_INVOKE_FEE, nil
 }
 
-
-// 不包括调用费用 （向上取整）
-func calcSwapServiceFee(value int64) int64 {
-	return (value*SWAP_SERVICE_FEE_RATIO + 999) / 1000 // 交易服务费
-}
-
 func calcSwapFee(value int64) int64 {
 	return SWAP_INVOKE_FEE + calcSwapServiceFee(value)
+}
+
+// 不包括调用费用 （向下取整）
+func calcSwapServiceFee(value int64) int64 {
+	return (value*SWAP_SERVICE_FEE_RATIO) / 1000 // 交易服务费
 }

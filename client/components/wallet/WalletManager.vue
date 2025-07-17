@@ -226,7 +226,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
@@ -241,6 +241,8 @@ import { useWalletStore } from '@/store'
 import { WalletData } from '@/types'
 import { Message } from '@/types/message'
 import { sendAccountsChangedEvent } from '@/lib/utils'
+import walletManager from '@/utils/sat20'
+import { hideAddress } from '@/utils'
 
 
 const router = useRouter()
@@ -281,10 +283,34 @@ const btcDomains = ref([
 // 计算属性
 const currentWalletId = computed(() => walletStore.walletId)
 
-// Methods
-const formatBalance = (balance: number) => {
-  return `$${balance.toFixed(2)}`
-}
+const walletsWithAddress = ref<any[]>([])
+const isLoadingWallets = ref(false)
+
+watch(wallets, async (newWallets) => {
+  if (!newWallets) {
+    walletsWithAddress.value = []
+    return
+  }
+  isLoadingWallets.value = true
+  try {
+    const results = await Promise.all(
+      newWallets.map(async (wallet) => {
+        let address = ''
+        try {
+          const [_, addressRes] = await walletManager.getWalletAddress(0)
+          address = addressRes?.address || ''
+        } catch { }
+        return {
+          ...wallet,
+          address,
+        }
+      })
+    )
+    walletsWithAddress.value = results
+  } finally {
+    isLoadingWallets.value = false
+  }
+}, { immediate: true })
 
 const selectWallet = async (wallet: WalletData) => {
   try {
@@ -293,10 +319,10 @@ const selectWallet = async (wallet: WalletData) => {
       title: 'Success',
       description: 'Wallet switched successfully'
     })
-    setTimeout(async () => {
-      await sendAccountsChangedEvent(wallets.value)
-      router.back()
+    setTimeout(() => {
+      router.go(-1)
     }, 300)
+    sendAccountsChangedEvent(wallets.value)
 
   } catch (error: any) {
     console.error('Failed to switch wallet:', error)
@@ -330,15 +356,21 @@ const deleteWallet = async () => {
     })
     isDeleteDialogOpen.value = false
     walletToDelete.value = null
+    setTimeout(() => {
+      sendAccountsChangedEvent(wallets.value)
+    }, 200);
     // 发送 accountsChanged 事件（封装函数）
-    await sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
+    console.log(error);
+    
     toast({
       variant: 'destructive',
       title: 'Error',
       description: error.message || 'Failed to delete Wallet'
     })
   } finally {
+    console.log('finished ');
+    
     isDeleting.value = false
   }
 }
@@ -369,11 +401,10 @@ const createWallet = async () => {
       title: 'Success',
       description: 'Wallet created successfully'
     })
-    // 发送 accountsChanged 事件（封装函数）
-    await sendAccountsChangedEvent(wallets.value)
     setTimeout(() => {
-      router.back()
+      router.go(-1)
     }, 300)
+    sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
     toast({
       variant: 'destructive',
@@ -410,11 +441,10 @@ const importWallet = async () => {
       title: 'Success',
       description: 'Wallet imported successfully'
     })
-    // 发送 accountsChanged 事件（封装函数）
-    await sendAccountsChangedEvent(wallets.value)
     setTimeout(() => {
-      router.back()
+      router.go(-1)
     }, 300)
+    sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
     toast({
       variant: 'destructive',

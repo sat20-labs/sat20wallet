@@ -36,8 +36,8 @@
             <SelectValue :placeholder="$t('networkSetting.selectNetwork')" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="mainnet">{{ $t('networkSetting.mainnet') }}</SelectItem>
-            <SelectItem value="testnet">{{ $t('networkSetting.testnet') }}</SelectItem>
+            <SelectItem :value="Network.LIVENET">{{ $t('networkSetting.mainnet') }}</SelectItem>
+            <SelectItem :value="Network.TESTNET">{{ $t('networkSetting.testnet') }}</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -63,6 +63,7 @@
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setLanguage } from '@/entrypoints/popup/main'
+import { Network } from '@/types'
 import { Label } from '@/components/ui/label'
 import {
   Select,

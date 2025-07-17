@@ -176,8 +176,6 @@ const form = useForm({
 })
 
 const onSubmit = form.handleSubmit(async (values) => {
-  console.log('Form values:', values)
-
   loading.value = true
 
   const hashedPassword = await hashPassword(values.password)

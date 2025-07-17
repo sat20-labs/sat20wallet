@@ -152,8 +152,10 @@ import { useChannelStore } from '@/store'
 import satsnetStp from '@/utils/stp'
 import { useToast } from '@/components/ui/toast'
 import { hideAddress } from '~/utils'
-import { getChannelStatusText } from '~/composables'
-import { useGlobalStore, type Env } from '@/store/global'
+import { useWalletStore } from '@/store/wallet'
+
+const walletStore = useWalletStore()
+const { btcFeeRate } = storeToRefs(walletStore)
 
 const loading = ref(false)
 const isExpanded = ref(false)
@@ -212,11 +214,11 @@ const closeChannel = async () => {
   loading.value = true;
   if (!channelId.value) return
   // 这里可以添加关闭通道的逻辑
-  const [err] = await satsnetStp.closeChannel(channelId.value, 1, false);
+  const [err] = await satsnetStp.closeChannel(channelId.value, btcFeeRate.value, false);
   loading.value = false;
 
   if (err) {
-    const [forceErr] = await satsnetStp.closeChannel(channelId.value, 1, true);
+    const [forceErr] = await satsnetStp.closeChannel(channelId.value, btcFeeRate.value, true);
     if (forceErr) {
       toast({
         title: 'Error',

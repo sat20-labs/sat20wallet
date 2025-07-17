@@ -94,6 +94,7 @@ export const useChannelStore = defineStore('channel', () => {
   const channel = ref<Channel | null>(null)
   const allAssetList = ref<any[]>([])
   const plainBalance = ref(0)
+  const totalSats = ref(0)
 
   const getAllChannels = async () => {
     const [_, resull] = await satsnetStp.getAllChannels()
@@ -133,11 +134,14 @@ export const useChannelStore = defineStore('channel', () => {
       //console.log('localbalanceL1 内容:', localbalanceL1)
       for (let i = 0; i < localbalanceL1.length; i++) {
         const item = localbalanceL1[i]
-
+        if (item.Name.Type === '*') {
+          totalSats.value = item.Amount
+          continue;
+        }
         const protocol = item.Name.Protocol
         const key = protocol
           ? `${protocol}:${item.Name.Type}:${item.Name.Ticker}`
-          : '::'         
+          : '::'
 
         const amt = Number(item.Amount) || 0
         const assetItem = {
@@ -258,6 +262,7 @@ export const useChannelStore = defineStore('channel', () => {
     plainList,
     plainBalance,
     channel,
+    totalSats,
     getAllChannels,
   }
 })

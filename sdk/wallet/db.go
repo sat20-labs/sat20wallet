@@ -18,15 +18,14 @@ const (
 	DB_KEY_STATUS = "wallet-status"
 	DB_KEY_WALLET = "wallet-id-"
 
-	DB_KEY_RESV        = "resv-"
+	DB_KEY_INSC        = "insc-"
 	DB_KEY_TICKER_INFO = "t-"
 
 	DB_KEY_LOCKEDUTXO    = "l-"  // l-network-address-utxo
 	DB_KEY_LOCK_LASTTIME = "lt-" // lt-network-address
-
-	RESV_TYPE_INSCRIBING = "inscribe"
 )
 
+var _mode string  // 
 var _chain string // mainnet, testnet
 var _env string   // dev, test, prd
 var _enable_testing bool = false
@@ -95,6 +94,9 @@ func (p *Manager) initDB() error {
 	p.walletInfoMap = wallets
 
 	p.inscibeMap = LoadAllInscribeResvFromDB(p.db)
+
+	p.utxoLockerL1.Init()
+	p.utxoLockerL2.Init()
 
 	p.repair()
 
@@ -235,6 +237,33 @@ func (p *Manager) saveMnemonic(mn, password string) (int64, error) {
 	return wallet.Id, nil
 }
 
+
+func (p *Manager) saveMnemonicWithPassword(mn, password string, wallet *WalletInDB) (error) {
+	key, err := p.newSnaclKey(password)
+	if err != nil {
+		Log.Errorf("NewSecretKey failed. %v", err)
+		return err
+	}
+
+	en, err := key.Encrypt([]byte(mn))
+	if err != nil {
+		Log.Errorf("Encrypt failed. %v", err)
+		return err
+	}
+
+	salt := key.Marshal()
+
+	wallet.Mnemonic = en
+	wallet.Salt = salt
+
+	err = saveWallet(p.db, wallet)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (p *Manager) loadMnemonic(id int64, password string) (string, error) {
 	wallet, ok := p.walletInfoMap[id]
 	if !ok {
@@ -294,8 +323,12 @@ func (p *Manager) IsWalletExist() bool {
 }
 
 func GetDBKeyPrefix() string {
-	return _env + "-" + _chain + "-"
+	if _mode == LIGHT_NODE {
+		return _env + "-" + _chain + "-"
+	}
+	return ""
 }
+
 
 // 暂时不考虑地址
 func GetLockedUtxoKey(network, utxo string) string {
@@ -514,36 +547,32 @@ func deleteAllTickerInfoFromDB(db common.KVDB) error {
 }
 
 func GetInscribeResvKey(id int64) string {
-	return fmt.Sprintf("%s%s%s-%d", GetDBKeyPrefix(), DB_KEY_RESV, RESV_TYPE_INSCRIBING, id)
+	return fmt.Sprintf("%s%s%d", GetDBKeyPrefix(), DB_KEY_INSC, id)
 }
 
-func ParseInscribeResvKey(key string) (string, int64, error) {
-	prefix := GetDBKeyPrefix() + DB_KEY_RESV
+func ParseInscribeResvKey(key string) (int64, error) {
+	prefix := GetDBKeyPrefix() + DB_KEY_INSC
 	if !strings.HasPrefix(key, prefix) {
-		return "", -1, fmt.Errorf("not a reservation: %s", key)
+		return -1, fmt.Errorf("not a reservation: %s", key)
 	}
 	key = strings.TrimPrefix(key, prefix)
-	parts := strings.Split(key, "-")
-	if len(parts) != 2 {
-		return "", -1, fmt.Errorf("invalid reservation key: %s", key)
-	}
 
-	id, err := strconv.ParseInt(parts[1], 10, 64)
+	id, err := strconv.ParseInt(key, 10, 64)
 	if err != nil {
-		return "", -1, err
+		return -1, err
 	}
 
-	return parts[0], id, nil
+	return id, nil
 }
 
 func LoadAllInscribeResvFromDB(db common.KVDB) map[int64]*InscribeResv {
-	prefix := []byte(GetDBKeyPrefix() + DB_KEY_RESV + RESV_TYPE_INSCRIBING)
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_INSC)
 
 	result := make(map[int64]*InscribeResv, 0)
 	invalidKeys := make([]string, 0)
 	db.BatchRead(prefix, false, func(k, v []byte) error {
 
-		_, id, err := ParseInscribeResvKey(string(k))
+		id, err := ParseInscribeResvKey(string(k))
 		if err != nil {
 			Log.Errorf("ParseInscribeResvKey failed. %v", err)
 			return nil

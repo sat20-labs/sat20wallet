@@ -7,6 +7,9 @@ import WalletIndex from '@/entrypoints/popup/pages/wallet/index.vue'
 import WalletSetting from '@/entrypoints/popup/pages/wallet/Setting.vue'
 import WalletReceive from '@/entrypoints/popup/pages/wallet/Receive.vue'
 import WalletSettingPhrase from '@/entrypoints/popup/pages/wallet/settings/phrase.vue'
+import WalletSettingPublicKey from '@/entrypoints/popup/pages/wallet/settings/publickey.vue'
+import WalletSettingPassword from '@/entrypoints/popup/pages/wallet/settings/password.vue'
+import WalletSettingNode from '@/entrypoints/popup/pages/wallet/settings/node.vue'
 import WalletManager from '@/components/wallet/WalletManager.vue'
 import SubWalletManager from '@/components/wallet/SubWalletManager.vue'
 import Unlock from '@/entrypoints/popup/pages/Unlock.vue'
@@ -37,8 +40,20 @@ const routes = [
             component: WalletSettingPhrase,
           },
           {
+            path: 'publickey',
+            component: WalletSettingPublicKey,
+          },
+          {
+            path: 'password',
+            component: WalletSettingPassword,
+          },
+          {
             path: 'utxo',
             component: UtxoManager,
+          },
+          {
+            path: 'node',
+            component: WalletSettingNode,
           },
         ],
       },
@@ -57,11 +72,8 @@ const router = createRouter({
 
 const checkPassword = async () => {
   const password = walletStorage.getValue('password')
-  console.log('password', password)
-
   if (password) {
     const passwordTime = walletStorage.getValue('passwordTime')
-    console.log('passwordTime', passwordTime)
     if (passwordTime) {
       const now = new Date().getTime()
       if (now - passwordTime > 5 * 60 * 1000) {
@@ -78,10 +90,15 @@ router.beforeEach(async (to, from) => {
   const hasWallet = walletStorage.getValue('hasWallet')
   await checkPassword()
   const password = walletStorage.getValue('password')
+  const network = walletStorage.getValue('network')
 
   if (password && walletStore.locked) {
     await walletStore.unlockWallet(password)
     await walletStore.setLocked(false)
+    if (network) {
+      console.log('network', network)
+      await walletStore.setNetwork(network)
+    }
   }
 
   if (to.path.startsWith('/wallet')) {

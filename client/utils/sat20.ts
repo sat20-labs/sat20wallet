@@ -4,11 +4,8 @@ class WalletManager {
     methodName: string,
     ...args: any[]
   ): Promise<[Error | undefined, any | undefined]> {
-    console.log('wallet method', methodName)
-    console.log('wallet arg', args)
     const method = window.sat20wallet_wasm[methodName as keyof WalletManager]
     const [err, result] = await tryit(method as any)(...args)
-    console.log('wallet result', result);
 
     if (err) {
       console.error(`${methodName} error: ${err.message}`)
@@ -40,11 +37,20 @@ class WalletManager {
   ): Promise<[Error | undefined, { walletId: string } | undefined]> {
     return this._handleRequest('importWallet', mnemonic, password.toString())
   }
-
+  async changePassword(
+    oldPassword: string,
+    newPassword: string
+  ): Promise<[Error | undefined, void | undefined]> {
+    return this._handleRequest('changePassword', oldPassword, newPassword)
+  }
   async unlockWallet(
     password: string
   ): Promise<[Error | undefined, { walletId: number } | undefined]> {
     return this._handleRequest('unlockWallet', password.toString())
+  }
+
+  async getChannelAddrByPeerPubkey(peerPubkey: string): Promise<[Error | undefined, { channelAddr: string, peerAddr: string } | undefined]> {
+    return this._handleRequest('getChannelAddrByPeerPubkey', peerPubkey)
   }
 
   async getAllWallets(): Promise<
@@ -54,9 +60,10 @@ class WalletManager {
   }
 
   async switchWallet(
-    id: string
+    id: string,
+    password: string
   ): Promise<[Error | undefined, void | undefined]> {
-    return this._handleRequest('switchWallet', id)
+    return this._handleRequest('switchWallet', id, password)
   }
 
   async switchAccount(
@@ -66,9 +73,10 @@ class WalletManager {
   }
 
   async switchChain(
-    chain: string
+    chain: string,
+    password: string
   ): Promise<[Error | undefined, void | undefined]> {
-    return this._handleRequest('switchChain', chain)
+    return this._handleRequest('switchChain', chain, password)
   }
 
   async getChain(): Promise<[Error | undefined, string | undefined]> {

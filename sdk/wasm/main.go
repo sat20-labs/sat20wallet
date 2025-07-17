@@ -79,7 +79,7 @@ func parseIndexerConfig(indexer js.Value) (*common.Indexer, error) {
 }
 
 func parseConfigFromJS(jsConfig js.Value) (*common.Config, error) {
-	cfg := &common.Config{}
+	cfg := &common.Config{Mode: wallet.LIGHT_NODE}
 	// Log
 	if log := jsConfig.Get("Log"); log.Type() == js.TypeString {
 		cfg.Log = log.String()
@@ -474,8 +474,8 @@ func switchWallet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	if len(p) < 1 {
-		return createJsRet(nil, -1, "Expected 1 parameters")
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
 	}
 	if p[0].Type() != js.TypeString {
 		return createJsRet(nil, -1, "Id parameter should be string")
@@ -486,8 +486,41 @@ func switchWallet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "password parameter should be a string")
+	}
+	password := p[1].String()
+
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		err := _mgr.SwitchWallet(i)
+		err := _mgr.SwitchWallet(i, password)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func changePassword(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "password parameter should be a string")
+	}
+	oldps := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "password parameter should be a string")
+	}
+	newps := p[1].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		err := _mgr.ChangePassword(oldps, newps)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -522,16 +555,21 @@ func switchChain(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	if len(p) < 1 {
-		return createJsRet(nil, -1, "Expected 1 parameters")
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
 	}
 	if p[0].Type() != js.TypeString {
 		return createJsRet(nil, -1, "chain parameter should be a string")
 	}
 	chain := p[0].String()
 
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "password parameter should be a string")
+	}
+	password := p[1].String()
+
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		err := _mgr.SwitchChain(chain)
+		err := _mgr.SwitchChain(chain, password)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -625,6 +663,32 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 		pubkey := _mgr.GetPublicKey(uint32(id))
 		return map[string]any{
 			"pubKey": hex.EncodeToString(pubkey),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func getChannelAddrByPeerPubkey(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "pubkey parameter should be a string")
+	}
+	pubkey := p[0].String()
+
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		channelAddr, peerAddr, err := _mgr.GetChannelAddrByPeerPubkey(pubkey)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{
+			"channelAddr": channelAddr,
+			"peerAddr": peerAddr,
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
@@ -2678,6 +2742,7 @@ func main() {
 	obj.Set("getAllWallets", js.FuncOf(getAllWallets))
 	// input: wallet id; return: ok
 	obj.Set("switchWallet", js.FuncOf(switchWallet))
+	obj.Set("changePassword", js.FuncOf(changePassword))
 	// input: account id; return: ok
 	obj.Set("switchAccount", js.FuncOf(switchAccount))
 	// input: mainnet or testnet
@@ -2688,6 +2753,7 @@ func main() {
 	obj.Set("getWalletAddress", js.FuncOf(getWalletAddress))
 	// input: account id; return: current wallet public key
 	obj.Set("getWalletPubkey", js.FuncOf(getWalletPubkey))
+	obj.Set("getChannelAddrByPeerPubkey", js.FuncOf(getChannelAddrByPeerPubkey))
 	// input: node pubkey(hex string), index; return: commit secrect (hex string)
 	obj.Set("getCommitSecret", js.FuncOf(getCommitSecret))
 	// input: commit secrect(hex string), index; return: revocation priv key (hex string)

@@ -42,7 +42,7 @@ export const initializeWasm = async (): Promise<void> => {
     )
     console.log('调试: sat20wallet.wasm 加载并初始化完成')
 
-    await loadStpWasm()
+    // await loadStpWasm()
     console.log('调试: 所有 WASM 模块加载成功')
   } catch (error) {
     console.error('调试: WASM 模块加载失败:', error)
@@ -53,8 +53,8 @@ export const initializeWasm = async (): Promise<void> => {
 export const reInitializeWasm = async (): Promise<void> => {
   const env = walletStorage.getValue('env') || 'test'
   console.log(`调试: 重新初始化WASM, 环境: ${env}`);
-  await (globalThis as any).stp_wasm.release()
-  await (globalThis as any).stp_wasm.init(getConfig(env), logLevel)
+  // await (globalThis as any).stp_wasm.release()
+  // await (globalThis as any).stp_wasm.init(getConfig(env), logLevel)
   await (globalThis as any).sat20wallet_wasm.release()
   await (globalThis as any).sat20wallet_wasm.init(getConfig(env), logLevel)
   console.log('调试: WASM 重新初始化完成');

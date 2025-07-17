@@ -108,7 +108,6 @@ import { Alert, AlertTitle } from '@/components/ui/alert'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { useToast } from '@/components/ui/toast'
 import stp from '@/utils/stp'
-
 interface Props {
   data: {
     url: string;

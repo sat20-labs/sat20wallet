@@ -90,7 +90,11 @@ export const useL1Assets = () => {
       const key = item.Name.Protocol
         ? `${item.Name.Protocol}:${item.Name.Type}:${item.Name.Ticker}`
         : '::'
-
+      if (item.Name.Type === '*') {
+        const totalSats = item.Amount
+        assetsStore.setTotalSats(totalSats)
+        continue;
+      }
       if (!allAssetList.value.find((v) => v?.key === key)) {
         let label = item.Name.Type === 'e'
         ? `${item.Name.Ticker}（raresats）`
@@ -119,7 +123,6 @@ export const useL1Assets = () => {
       }
     }
   }
-
   // Store Updates
   const updateStoreAssets = (list: AssetItem[]) => {
     assetsStore.setSat20List(list.filter((item) => item?.protocol === 'ordx'))
@@ -147,15 +150,9 @@ export const useL1Assets = () => {
   watch(
     () => summaryQuery.data.value,
     async (newData) => {
-      console.log('newData', newData)
-
+      allAssetList.value = []
       if (newData) {
-        allAssetList.value = []
-        console.log('newData', newData.data)
-
         await parseAssetSummary()
-        console.log('allAssetList.value', allAssetList.value)
-
         processAllUtxos(allAssetList.value.map((item) => item.key))
         assetsStore.setAssetList(newData?.data || [])
       }

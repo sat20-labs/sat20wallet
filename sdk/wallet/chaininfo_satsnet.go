@@ -27,7 +27,6 @@ func GetChainParam_SatsNet() *chaincfg.Params {
 
 func VerifySignedTx_SatsNet(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
 
-	// TODO 做资产验证
 	inValue := int64(0)
 	var inAssets wire.TxAssets
 	sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
@@ -104,41 +103,56 @@ func StandardAnchorScript(fundingUtxo string, witnessScript []byte, value int64,
 		AddData(assetsBuf).Script()
 }
 
-func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
-	value int64, assets wire.TxAssets, err error) {
+
+type AnchorData struct {
+	Utxo		  string
+	WitnessScript []byte
+	Value		  int64
+	Assets		  wire.TxAssets
+	Sig			  []byte
+}
+
+func ParseStandardAnchorScript(script []byte) (*AnchorData, error) {
+	data := AnchorData{}
 	tokenizer := txscript.MakeScriptTokenizer(0, script)
 
 	// 读取utxo
 	if !tokenizer.Next() {
-		return "", nil, 0, nil, fmt.Errorf("script too short: missing txid")
+		return nil, fmt.Errorf("script too short: missing txid")
 	}
-	utxo = string(tokenizer.Data())
+	data.Utxo = string(tokenizer.Data())
 
 	// 读取pkScript
 	if !tokenizer.Next() {
-		return "", nil, 0, nil, fmt.Errorf("script too short: missing pkScript")
+		return nil, fmt.Errorf("script too short: missing pkScript")
 	}
-	pkScript = tokenizer.Data()
+	data.WitnessScript = tokenizer.Data()
 
 	// 读取value
 	if !tokenizer.Next() {
-		return "", nil, 0, nil, fmt.Errorf("script too short: missing value")
+		return nil, fmt.Errorf("script too short: missing value")
 	}
-	value = tokenizer.ExtractInt64()
+	data.Value = tokenizer.ExtractInt64()
 
 	// 读取assets
 	if !tokenizer.Next() {
-		return "", nil, 0, nil, fmt.Errorf("script too short: missing assets")
+		return nil, fmt.Errorf("script too short: missing assets")
 	}
 	assetsBuf := tokenizer.Data()
 	if assetsBuf != nil {
-		err = wire.DeserializeTxAssets(&assets, assetsBuf)
+		err := wire.DeserializeTxAssets(&data.Assets, assetsBuf)
 		if err != nil {
-			return "", nil, 0, nil, err
+			return nil, err
 		}
 	}
 
-	return utxo, pkScript, value, assets, nil
+	// 读取sig
+	if !tokenizer.Next() {
+		return nil, fmt.Errorf("script too short: missing signature")
+	}
+	data.Sig = tokenizer.Data()
+
+	return &data, nil
 }
 
 

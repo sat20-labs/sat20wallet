@@ -711,7 +711,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 	return txid, nil
 }
 
-// 发送资产到一个地址上
+// 发送一个op_return，只支付网络费
 func (p *Manager) SendNullData_SatsNet(memo []byte) (string, error) {
 
 	if p.wallet == nil {
@@ -1428,7 +1428,6 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 	return tx, prevFetcher, feeValue - change, nil
 }
 
-
 func adjustInputsForSplicingIn(inputs []*TxOutput, name *AssetName) ([]*TxOutput, int64, int64) {
 	hasPrefix := -1
 	prefixOffset := int64(0)
@@ -1488,7 +1487,6 @@ func adjustInputsForSplicingIn(inputs []*TxOutput, name *AssetName) ([]*TxOutput
 
 	return result, prefixOffset, suffixOffset
 }
-
 
 // 给同一个地址发送n等分资产
 func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
@@ -1947,6 +1945,48 @@ func (p *Manager) SendRunes(destAddr string,
 	}
 
 	return txid, nil
+}
+
+
+// 同时发送资产和聪 (未完成，未测试)
+func (p *Manager) SendAssetsV3(destAddr string, assetName string,
+	amt string, value int64, feeRate int64, memo []byte) (string, error) {
+
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+	name := ParseAssetString(assetName)
+	if name == nil {
+		return "", fmt.Errorf("invalid asset name %s", assetName)
+	}
+	tickerInfo := p.getTickerInfo(name)
+	if tickerInfo == nil {
+		return "", fmt.Errorf("can't get ticker %s info", assetName)
+	}
+	dAmt, err := indexer.NewDecimalFromString(amt, tickerInfo.Divisibility)
+	if err != nil {
+		return "", err
+	}
+	if dAmt.Sign() <= 0 {
+		return "", fmt.Errorf("invalid amt")
+	}
+	if !IsValidNullData(memo) {
+		return "", fmt.Errorf("invalid length of null data %d", len(memo))
+	}
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
+
+	if indexer.IsPlainAsset(name) {
+		return p.SendPlainSats(destAddr, dAmt.Int64(), feeRate, memo)
+	} else if name.Protocol == indexer.PROTOCOL_NAME_ORDX {
+		newName := GetAssetName(tickerInfo)
+		return p.SendOrdxs(destAddr, newName, dAmt, feeRate, memo)
+	} else if name.Protocol == indexer.PROTOCOL_NAME_RUNES {
+		return p.SendRunes(destAddr, name, dAmt, feeRate, memo)
+	}
+
+	return "", fmt.Errorf("invalid asset name %s", assetName)
 }
 
 // 给多个地址发送不同数量的白聪
@@ -2651,7 +2691,7 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx) ([]*TxOutput, []*TxOutput, err
 			return nil, nil, fmt.Errorf("invalid edict %v", edict)
 		}
 
-		tickerInfo := p.getTickerInfoFromRuneId(edict.ID.String())
+		tickerInfo := p.GetTickerInfoFromRuneId(edict.ID.String())
 		if tickerInfo == nil {
 			return nil, nil, fmt.Errorf("can't find tick %s", edict.ID.String())
 		}

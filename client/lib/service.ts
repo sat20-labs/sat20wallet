@@ -179,91 +179,69 @@ class Service {
   }
 
   async lockUtxo(address: string, utxo: any, reason?: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.lockUtxo(address, utxo, reason)
+    return (globalThis as any).sat20wallet_wasm.lockUtxo(address, utxo, reason)
   }
 
   async lockUtxo_SatsNet(address: string, utxo: any, reason?: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.lockUtxo_SatsNet(address, utxo, reason)
+    return (globalThis as any).sat20wallet_wasm.lockUtxo_SatsNet(address, utxo, reason)
   }
 
   async unlockUtxo(address: string, utxo: any): Promise<[Error | undefined, any | undefined]> {
-    return stp.unlockUtxo(address, utxo)
+    return (globalThis as any).sat20wallet_wasm.unlockUtxo(address, utxo)
   }
 
   async unlockUtxo_SatsNet(address: string, utxo: any): Promise<[Error | undefined, any | undefined]> {
-    return stp.unlockUtxo_SatsNet(address, utxo)
+    return (globalThis as any).sat20wallet_wasm.unlockUtxo_SatsNet(address, utxo)
   }
 
   async getAllLockedUtxo(address: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.getAllLockedUtxo(address)
+    return (globalThis as any).sat20wallet_wasm.getAllLockedUtxo(address)
   }
 
   async getAllLockedUtxo_SatsNet(address: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.getAllLockedUtxo_SatsNet(address)
-  }
-
-  async lockToChannel(
-    chanPoint: string,
-    assetName: string,
-    amt: number,
-    utxos: string[],
-    feeUtxoList?: any[]
-  ): Promise<[Error | undefined, any | undefined]> {
-    return stp.lockToChannel(chanPoint, assetName, amt, utxos, feeUtxoList)
-  }
-
-  async unlockFromChannel(
-    channelUtxo: string,
-    assetName: string,
-    amt: number,
-    feeUtxoList?: any[]
-  ): Promise<[Error | undefined, any | undefined]> {
-    return stp.unlockFromChannel(channelUtxo, assetName, amt, feeUtxoList)
+    return (globalThis as any).sat20wallet_wasm.getAllLockedUtxo_SatsNet(address)
   }
 
   async getUtxos(): Promise<[Error | undefined, any | undefined]> {
-    return stp.getUtxos()
+    return (globalThis as any).sat20wallet_wasm.getUtxos()
   }
 
   async getUtxos_SatsNet(): Promise<[Error | undefined, any | undefined]> {
-    return stp.getUtxos_SatsNet()
+    return (globalThis as any).sat20wallet_wasm.getUtxos_SatsNet()
   }
 
   async getUtxosWithAsset(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.getUtxosWithAsset(address, amt, assetName)
+    return (globalThis as any).sat20wallet_wasm.getUtxosWithAsset(address, amt, assetName)
   }
 
   async getUtxosWithAsset_SatsNet(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.getUtxosWithAsset_SatsNet(address, amt.toString(), assetName)
+    return (globalThis as any).sat20wallet_wasm.getUtxosWithAsset_SatsNet(address, amt.toString(), assetName)
   }
 
   async getUtxosWithAssetV2(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.getUtxosWithAssetV2(address, amt, assetName)
+    return (globalThis as any).sat20wallet_wasm.getUtxosWithAssetV2(address, amt, assetName)
   }
 
   async getUtxosWithAssetV2_SatsNet(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.getUtxosWithAssetV2_SatsNet(address, amt, assetName)
+    return (globalThis as any).sat20wallet_wasm.getUtxosWithAssetV2_SatsNet(address, amt, assetName)
   }
 
   async getAssetAmount(address: string, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.getAssetAmount(address, assetName);
+    return (globalThis as any).sat20wallet_wasm.getAssetAmount(address, assetName);
   }
 
   async getAssetAmount_SatsNet(address: string, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.getAssetAmount_SatsNet(address, assetName);
+    return (globalThis as any).sat20wallet_wasm.getAssetAmount_SatsNet(address, assetName);
   }
-
-  async getTickerInfo(asset: string): Promise<[Error | undefined, any | undefined]> {
-    return stp.getTickerInfo(asset);
-  }
+  
   async getFeeForDeployContract(templateName: string, content: string, feeRate: string): Promise<[Error | undefined, { fee: any } | undefined]> {
-    return stp.getFeeForDeployContract(templateName, content, feeRate);
+    return (globalThis as any).sat20wallet_wasm.getFeeForDeployContract(templateName, content, feeRate);
   }
   async getFeeForInvokeContract(url: string, invoke: string): Promise<[Error | undefined, { fee: any } | undefined]> {
-    return stp.getFeeForInvokeContract(url, invoke);
+    return (globalThis as any).sat20wallet_wasm.getFeeForInvokeContract(url, invoke);
   }
   async getParamForInvokeContract(templateName: string, action: string): Promise<[Error | undefined, { parameter: any } | undefined]> {
-    return stp.getParamForInvokeContract(templateName, action);
+    return (globalThis as any).sat20wallet_wasm.getParamForInvokeContract(templateName, action);
   }
 }
 

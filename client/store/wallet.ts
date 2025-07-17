@@ -15,7 +15,8 @@ export const useWalletStore = defineStore('wallet', () => {
   const walletId = ref(walletStorage.getValue('walletId'))
   const accountIndex = ref(walletStorage.getValue('accountIndex'))
   const feeRate = ref(0)
-  const btcFeeRate = ref(0)
+  const btcFeeRate = ref(1)
+  const satsnetFeeRate = ref(10)
   const password = ref(walletStorage.getValue('password'))
   const network = ref(walletStorage.getValue('network'))
   const chain = ref(walletStorage.getValue('chain'))
@@ -53,6 +54,9 @@ export const useWalletStore = defineStore('wallet', () => {
   const setBtcFeeRate = async (value: number) => {
     btcFeeRate.value = value
   }
+  const setSatsnetFeeRate = async (value: number) => {
+    satsnetFeeRate.value = value
+  }
   const setPassword = async (value: string) => {
     await walletStorage.updatePassword(value)
     password.value = value
@@ -61,13 +65,12 @@ export const useWalletStore = defineStore('wallet', () => {
   const setNetwork = async (value: Network) => {
     const n = value === Network.LIVENET ? 'mainnet' : 'testnet'
 
-    const [err] = await walletManager.switchChain(n)
+    const [err] = await walletManager.switchChain(n, password.value as string)
     if (!err) {
       await walletStorage.setValue('network', value)
       network.value = value
-      const [_, addressRes] = await walletManager.getWalletAddress(0)
-      const [__, pubkeyRes] = await walletManager.getWalletPubkey(0)
-
+      const [_, addressRes] = await walletManager.getWalletAddress(accountIndex.value)
+      const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountIndex.value)
       if (addressRes && pubkeyRes) {
         const { address } = addressRes
         await setAddress(address)
@@ -95,8 +98,8 @@ export const useWalletStore = defineStore('wallet', () => {
     feeRate.value = value
   }
   const switchWallet = async (walletId: string) => {
-    await walletManager.switchWallet(walletId)
-    await satsnetStp.switchWallet(walletId)
+    await walletManager.switchWallet(walletId, password.value as string)
+    await satsnetStp.switchWallet(walletId, password.value as string)
     const currentAccount = wallets.value.find(w => w.id === walletId)?.accounts[0];
     await setWalletId(walletId);
     await switchToAccount(currentAccount?.index || 0);
@@ -150,7 +153,7 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const importWallet = async (mnemonic: string, password: string) => {
-    const [err, res] = await walletManager.importWallet(mnemonic, password)
+    const [err, res] = await walletManager.importWallet(mnemonic?.trim(), password)
     if (err || !res) {
       console.error(err)
       return [err, undefined]
@@ -196,7 +199,6 @@ export const useWalletStore = defineStore('wallet', () => {
 
     return [undefined, mnemonic]
   }
-
   const getWalletInfo = async () => {
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
@@ -304,7 +306,7 @@ export const useWalletStore = defineStore('wallet', () => {
       console.log('importWallet', _wallets);
       console.log('wallet id', walletId);
       console.log('wallet id', await walletStorage.getValue('walletId'));
-      
+
       await setPublickey(pubkeyRes.pubKey)
     }
   }
@@ -386,6 +388,8 @@ export const useWalletStore = defineStore('wallet', () => {
     accounts,
     switchWallet,
     btcFeeRate,
-    setBtcFeeRate
+    setBtcFeeRate,
+    satsnetFeeRate,
+    setSatsnetFeeRate,
   }
 })

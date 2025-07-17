@@ -2,7 +2,7 @@
   "name": "sat2-wallet",
   "description": "manifest.json description",
   "private": true,
-  "version": "0.0.211",
+  "version": "0.0.244",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@bitcoin-js/tiny-secp256k1-asmjs": "^2.2.3",
+    "@google/gemini-cli": "^0.1.7",
     "@iconify/vue": "^4.3.0",
     "@radix-icons/vue": "^1.0.0",
     "@tanstack/vue-query": "^5.66.4",

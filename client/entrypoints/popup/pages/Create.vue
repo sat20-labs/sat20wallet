@@ -145,7 +145,6 @@ const form = useForm({
 })
 
 const onSubmit = form.handleSubmit(async (values) => {
-  console.log('onSubmit', values)
   if (loading.value) return
 
   loading.value = true
