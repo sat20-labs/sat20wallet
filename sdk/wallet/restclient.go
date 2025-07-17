@@ -85,6 +85,9 @@ type IndexerRPCClient interface {
 	PutKVs(req *indexerwire.PutKValueReq) (error)
 	DelKVs(req *indexerwire.DelKValueReq) (error)
 	GetKV(pubkey []byte, key string) (*indexerwire.KeyValue, error)
+
+	// for names
+	GetNameInfo(string) (*indexerwire.OrdinalsName, error)
 }
 
 
@@ -871,7 +874,7 @@ func (p *IndexerClient) DelKVs(req *indexerwire.DelKValueReq) (error) {
 	return nil
 }
 
-
+// 绑定在公钥的kv，只有一些支付费用的节点才能上传kv到indexer
 func (p *IndexerClient) GetKV(pubkey []byte, key string) (*indexerwire.KeyValue, error) {
 
 	path := fmt.Sprintf("/kv/get/%s/%s", hex.EncodeToString(pubkey), key)
@@ -895,4 +898,56 @@ func (p *IndexerClient) GetKV(pubkey []byte, key string) (*indexerwire.KeyValue,
 	}
 
 	return result.Value, nil
+}
+
+// 绑定在name的kv，在主网无许可自主绑定任何kv
+func (p *IndexerClient) GetKVInName(name, key string) (*indexerwire.OrdinalsName, error) {
+
+	path := fmt.Sprintf("/ns/name/%s?key=%s", name, key)
+	url := p.GetUrl(path)
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	// 只传回该keyvalue的值，其他过滤掉
+	var result indexerwire.NamePropertiesResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+
+	return result.Data, nil
+}
+
+// 传回该name绑定的所有kv
+func (p *IndexerClient) GetNameInfo(name string) (*indexerwire.OrdinalsName, error) {
+
+	path := fmt.Sprintf("/ns/name/%s", name)
+	url := p.GetUrl(path)
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	
+	var result indexerwire.NamePropertiesResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+
+	return result.Data, nil
 }

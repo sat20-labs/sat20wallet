@@ -43,8 +43,11 @@ func NewUtxoLocker(db common.KVDB, rpc IndexerRPCClient, network string) *UtxoLo
 	return locker
 }
 
-func (p *UtxoLocker) Init(address string) {
-	p.Reload(address)
+func (p *UtxoLocker) Init() {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	p.reload()
 }
 
 func (p *UtxoLocker) Reload(address string) {

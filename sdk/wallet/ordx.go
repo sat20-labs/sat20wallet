@@ -27,6 +27,9 @@ const CONTENT_TYPE string = "text/plain;charset=utf-8"
 const CONTENT_DEPLOY_BODY string = `{"p":"ordx","op":"deploy","tick":"%s","max":"%d","lim":"%d","n":"%d","self":"100","des":"%s"}`
 const CONTENT_MINT_BODY string = `{"p":"ordx","op":"mint","tick":"%s","amt":"%d"}`
 const CONTENT_MINT_ABBR_BODY string = `{"p":"ordx","op":"mint","tick":"%s"}`
+const CONTENT_SETKV1_BODY string = `{"p":"sns","op":"update","name":"%s","%s":"%s"}`
+const CONTENT_SETKV_N_BODY string = `{"p":"sns","op":"update","name":"%s","%s"}`
+
 
 // 同步修改 GetLPTAssetName
 
@@ -368,4 +371,116 @@ func (p *Manager) GetOrgAssetName(lpt *AssetName) *AssetName {
 		AssetName: *org,
 		N:         tickerInfo.N,
 	}
+}
+
+
+func (p *Manager) InscribeKeyValueInName(name string, key string, value string) (*InscribeResv, error) {
+
+	wallet := p.wallet
+
+	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
+	address := wallet.GetAddress()
+
+	feeRate := p.GetFeeRate()
+	// 经验数据，调整 CONTENT_DEPLOY_BODY 后需要调整
+	// estimatedInputValue1 := 340*feeRate + 330
+	// estimatedInputValue2 := 400*feeRate + 330
+	// estimatedInputValue3 := 460*feeRate + 330
+
+	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
+	if err != nil {
+		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
+		return nil, err
+	}
+	if len(utxos) == 0 {
+		return nil, fmt.Errorf("no utxos for fee")
+	}
+	sort.Slice(utxos, func(i, j int) bool {
+		return utxos[i].Value > utxos[j].Value
+	})
+
+	p.utxoLockerL1.Reload(address)
+	commitTxPrevOutputList := make([]*PrevOutput, 0)
+	total := int64(0)
+	estimatedFee := int64(0)
+	for _, u := range utxos {
+		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
+		if p.utxoLockerL1.IsLocked(utxo) {
+			continue
+		}
+		total += u.Value
+		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
+			TxId:     u.Txid,
+			VOut:     uint32(u.Vout),
+			Amount:   u.Value,
+			PkScript: pkScript,
+		})
+		estimatedFee = EstimatedDeployFee(len(commitTxPrevOutputList), feeRate)
+		if total >= estimatedFee {
+			break
+		}
+	}
+	if total < estimatedFee {
+		return nil, fmt.Errorf("no enough utxos for fee")
+	}
+
+	body := fmt.Sprintf(CONTENT_SETKV1_BODY, name, key, value)
+	return p.inscribe("", body, 330, feeRate, commitTxPrevOutputList)
+}
+
+
+func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string) (*InscribeResv, error) {
+
+	wallet := p.wallet
+
+	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
+	address := wallet.GetAddress()
+
+	feeRate := p.GetFeeRate()
+	// 经验数据，调整 CONTENT_DEPLOY_BODY 后需要调整
+	// estimatedInputValue1 := 340*feeRate + 330
+	// estimatedInputValue2 := 400*feeRate + 330
+	// estimatedInputValue3 := 460*feeRate + 330
+
+	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
+	if err != nil {
+		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
+		return nil, err
+	}
+	if len(utxos) == 0 {
+		return nil, fmt.Errorf("no utxos for fee")
+	}
+	sort.Slice(utxos, func(i, j int) bool {
+		return utxos[i].Value > utxos[j].Value
+	})
+
+	p.utxoLockerL1.Reload(address)
+	commitTxPrevOutputList := make([]*PrevOutput, 0)
+	total := int64(0)
+	estimatedFee := int64(0)
+	for _, u := range utxos {
+		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
+		if p.utxoLockerL1.IsLocked(utxo) {
+			continue
+		}
+		total += u.Value
+		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
+			TxId:     u.Txid,
+			VOut:     uint32(u.Vout),
+			Amount:   u.Value,
+			PkScript: pkScript,
+		})
+		estimatedFee = EstimatedDeployFee(len(commitTxPrevOutputList), feeRate)
+		if total >= estimatedFee {
+			break
+		}
+	}
+	if total < estimatedFee {
+		return nil, fmt.Errorf("no enough utxos for fee")
+	}
+
+	var kvs string
+
+	body := fmt.Sprintf(CONTENT_SETKV_N_BODY, name, kvs)
+	return p.inscribe("", body, 330, feeRate, commitTxPrevOutputList)
 }

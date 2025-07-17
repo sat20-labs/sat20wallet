@@ -9,6 +9,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
@@ -508,3 +509,59 @@ func (p *Manager) GetChannelAddrByPeerPubkey(pubkeyHex string) (string, string, 
 	}
 	return channelAddr, p2trAddr, nil
 }
+
+
+// 对某个btc的名字设置属性
+func (p *Manager) SetKeyValueToName(name string, key, value string) (string, error) {
+	return "", nil
+}
+
+
+// 绑定推荐人地址
+func (p *Manager) BindReferrer(referrerName, key string, serverPubkey []byte) (string, error) {
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+
+	// 检查该名字是否是有效的推荐人名字
+	info, err := p.l1IndexerClient.GetNameInfo(referrerName)
+	if err != nil {
+		return "", err
+	}
+	// TODO 检查是否有正确的签名key-value
+	Log.Infof("%v", info)
+	var sig string
+	for _, kv := range info.KVItemList {
+		if kv.Key == key {
+			sig = kv.Value
+		}
+	}
+	if sig == "" {
+		return "", fmt.Errorf("can't find the value of %s", key)
+	}
+	sigBytes, err := hex.DecodeString(sig)
+	if err != nil {
+		return "", err
+	}
+	pubkey, err := utils.BytesToPublicKey(serverPubkey)
+	if err != nil {
+		return "", err
+	}
+	if !VerifyMessage(pubkey, []byte(referrerName), sigBytes) {
+		return "", fmt.Errorf("referrer %s has no correct signatrue", referrerName)
+	}
+
+	nullDataScript, err := sindexer.NullDataScript(sindexer.CONTENT_TYPE_BINDREFERRER, []byte(referrerName))
+	if err != nil {
+		return "", err
+	}
+
+	txId, err := p.SendNullData_SatsNet(nullDataScript)
+	if err != nil {
+		Log.Errorf("SendNullData_SatsNet %s failed", referrerName)
+		return "", err
+	}
+	Log.Infof("bind referrer %s with txId %s", referrerName, txId)
+	return txId, nil
+}
+

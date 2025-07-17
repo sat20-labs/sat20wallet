@@ -95,6 +95,9 @@ func (p *Manager) initDB() error {
 
 	p.inscibeMap = LoadAllInscribeResvFromDB(p.db)
 
+	p.utxoLockerL1.Init()
+	p.utxoLockerL2.Init()
+
 	p.repair()
 
 	return nil
@@ -320,7 +323,7 @@ func (p *Manager) IsWalletExist() bool {
 }
 
 func GetDBKeyPrefix() string {
-	if _mode == LIGHT_NODE || _env == "test" { // TODO 以后删除_env的判断
+	if _mode == LIGHT_NODE {
 		return _env + "-" + _chain + "-"
 	}
 	return ""

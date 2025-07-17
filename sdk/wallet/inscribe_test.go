@@ -2,12 +2,12 @@ package wallet
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"testing"
 
 	"github.com/btcsuite/btcd/chaincfg"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
 
 func TestInscribe(t *testing.T) {
@@ -85,7 +85,6 @@ func TestInscribe(t *testing.T) {
 	fmt.Printf("%v\n", txs)
 }
 
-
 func TestInscribeTransfer(t *testing.T) {
 	network := &chaincfg.TestNet3Params
 	mnemonic := "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
@@ -107,8 +106,8 @@ func TestInscribeTransfer(t *testing.T) {
 
 	request := &InscriptionRequest{
 		CommitTxPrevOutputList: commitTxPrevOutputList,
-		CommitFeeRate:          2,
-		RevealFeeRate:          2,
+		CommitFeeRate:          1,
+		RevealFeeRate:          1,
 		RevealOutValue:         330,
 		InscriptionData:    InscriptionData{
 			ContentType: "text/plain;charset=utf-8",
@@ -124,12 +123,73 @@ func TestInscribeTransfer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Printf("%v\n", txs)
-	txsBytes, err := json.Marshal(txs)
+	fmt.Printf("commit Fee: %d\n", txs.CommitTxFee)
+	rawTx, err := EncodeMsgTx(txs.CommitTx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Printf("%s\n", string(txsBytes))
+	fmt.Printf("commit Tx: %s\n", rawTx)
+
+	fmt.Printf("reveal Fee: %d\n", txs.RevealTxFee)
+	rawTx2, err := EncodeMsgTx(txs.RevealTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("reveal Tx: %s\n", rawTx2)
+}
+
+
+func TestCalcFeeOfInscribe(t *testing.T) {
+	// InscriptionData:    InscriptionData{
+	// 	ContentType: "text/plain;charset=utf-8",
+	// 	Body:        []byte(`{"p":"brc-20","op":"transfer","tick":"ordi","amt":"100"}`),
+	// },
+	//commitFee := 154
+	commitTx := "0200000000010126bd8a346a51065b121a33830fbe2c7f2d3f8ddbc34318deb7e2a0dd48fa09aa0400000000fdffffff02e201000000000000225120a52e2c7d31a14534152abc37bf381e47159ff1745d33c2011b9048d4826ee5bc386b1100000000002251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba0140764b082f8fe4dca317c4acd43cec9d21979fd42ec2fc86e41b152afda7f28d7fef6648cdd659a65c4dd27e42714145aca2692e26f1f8e20d2844fd903998fae700000000"
+	tx, err := DecodeMsgTx(commitTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var weightEstimate utils.TxWeightEstimator
+	for i, txIn := range tx.TxIn {
+		var size int64
+		for _, w := range txIn.Witness {
+			size += int64(len(w))
+		}
+		size += int64(len(txIn.Witness))
+		fmt.Printf("input:%d %d %d\n", i, txIn.SerializeSize(), size)
+		weightEstimate.AddWitnessInput(size)
+	}
+	for i, txOut := range tx.TxOut {
+		fmt.Printf("output:%d %d\n", i, len(txOut.PkScript))
+		weightEstimate.AddOutput(txOut.PkScript)
+	}
+	fmt.Printf("fee: %d\n", weightEstimate.Fee(1))
+
+	//revealFee := 152
+	revealTx := "020000000001016ec542b95d32b1e145cf22bca04fcc11c1005751cb45367a11a6caf8a7933e800000000000fdffffff014a010000000000002251208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba0340848c4917c935543378b9d0f102894d9898d02b4df562fa78890e7282dd10da04283a80d0c7841014034fc9a6597603f6191b91ace8529c07f345c5408c46c9f67e2018ade4f7d34cfe73eba54fb94d07b95e6540e825d9e74afc45b7ff2cc41e93eeac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d3800387b2270223a226272632d3230222c226f70223a227472616e73666572222c227469636b223a226f726469222c22616d74223a22313030227d6821c018ade4f7d34cfe73eba54fb94d07b95e6540e825d9e74afc45b7ff2cc41e93ee00000000"
+
+	tx2, err := DecodeMsgTx(revealTx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var weightEstimate2 utils.TxWeightEstimator
+	for i, txIn := range tx2.TxIn {
+		
+		var size int64
+		for _, w := range txIn.Witness {
+			size += int64(len(w))
+		}
+		fmt.Printf("input:%d %d %d\n", i, txIn.SerializeSize(), size)
+		size += int64(len(txIn.Witness))
+		weightEstimate2.AddWitnessInput(size)
+	}
+	for i, txOut := range tx2.TxOut {
+		fmt.Printf("output:%d %d\n", i, len(txOut.PkScript))
+		weightEstimate2.AddOutput(txOut.PkScript)
+	}
+	fmt.Printf("fee: %d\n", weightEstimate2.Fee(1))
+
 }
 
 
