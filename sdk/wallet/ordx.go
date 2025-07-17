@@ -382,14 +382,13 @@ func (p *Manager) GetOrgAssetName(lpt *AssetName) *AssetName {
 }
 
 
-func (p *Manager) InscribeKeyValueInName(name string, key string, value string) (*InscribeResv, error) {
+func (p *Manager) InscribeKeyValueInName(name string, key string, value string, feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
 
 	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	address := wallet.GetAddress()
 
-	feeRate := p.GetFeeRate()
 
 	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
 	if err != nil {

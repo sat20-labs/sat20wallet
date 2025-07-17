@@ -512,12 +512,12 @@ func (p *Manager) GetChannelAddrByPeerPubkey(pubkeyHex string) (string, string, 
 
 
 // 对某个btc的名字设置属性
-func (p *Manager) SetKeyValueToName(name string, key, value string) (string, error) {
+func (p *Manager) SetKeyValueToName(name string, key, value string, feeRate int64) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
 
-	insc, err := p.InscribeKeyValueInName(name, key, value)
+	insc, err := p.InscribeKeyValueInName(name, key, value, feeRate)
 	if err != nil {
 		if insc != nil && insc.CommitTx != nil {
 			return insc.CommitTx.TxID(), fmt.Errorf("broadcast reveal tx failed, %v", err)
