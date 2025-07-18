@@ -15,6 +15,7 @@ interface Props {
 }
 
 const props = defineProps<Props>();
+console.log(' props.text', props.text);
 
 const { copy, copied, isSupported } = useClipboard();
 

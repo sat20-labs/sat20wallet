@@ -39,8 +39,8 @@ class OrdxApi {
   }
 
   async getRecommendedFees({ network }: any): Promise<any> {
-    const url = `https://apidev.ordx.market/${
-      network === 'livenet' ? 'btc' : 'testnet/'
+    const url = `https://apiprd.ordx.market/${
+      network === 'livenet' ? '' : 'testnet/'
     }ordx/GetRecommendedFees`
     const response = await fetch(url)
     return response.json()

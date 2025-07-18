@@ -134,7 +134,7 @@ export const useChannelStore = defineStore('channel', () => {
       //console.log('localbalanceL1 内容:', localbalanceL1)
       for (let i = 0; i < localbalanceL1.length; i++) {
         const item = localbalanceL1[i]
-        if (item.Name.Type === '*') {
+        if (item.Name.Type === '') {
           totalSats.value = item.Amount
           continue;
         }
