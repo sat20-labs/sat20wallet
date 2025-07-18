@@ -28,8 +28,14 @@ const CONTENT_DEPLOY_BODY string = `{"p":"ordx","op":"deploy","tick":"%s","max":
 const CONTENT_MINT_BODY string = `{"p":"ordx","op":"mint","tick":"%s","amt":"%d"}`
 const CONTENT_MINT_ABBR_BODY string = `{"p":"ordx","op":"mint","tick":"%s"}`
 const CONTENT_SETKV1_BODY string = `{"p":"sns","op":"update","name":"%s","%s":"%s"}`
-const CONTENT_SETKV_N_BODY string = `{"p":"sns","op":"update","name":"%s","%s"}`
+const CONTENT_SETKV_N_BODY string = `{"p":"sns","op":"update","name":"%s""%s"}`
 
+// 不精确，因为 60 这个数稍微大一些，但足够用
+func EstimatedInscribeFee(inputLen, bodyLen int, feeRate int64, revealOutValue int64) int64 {
+	commitFee := int64(154 + (inputLen - 1) * 60)
+	revealFee := int64(bodyLen / 4 + 138)
+	return (commitFee + revealFee) * feeRate + revealOutValue
+}
 
 // 同步修改 GetLPTAssetName
 
@@ -83,6 +89,7 @@ func (p *Manager) inscribe(address string, body string, revealOutValue int64,
 	return txs, nil
 }
 
+// 只适合 CONTENT_DEPLOY_BODY
 func EstimatedDeployFee(inputLen int, feeRate int64) int64 {
 	/*
 		经验数据，调整 CONTENT_DEPLOY_BODY 后需要调整
@@ -169,6 +176,7 @@ func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int) (*Inscr
 	return p.inscribe("", body, 330, feeRate, commitTxPrevOutputList)
 }
 
+// 只适合 CONTENT_MINT_BODY ，可以估算 CONTENT_MINT_ABBR_BODY
 func EstimatedMintFee(inputLen int, feeRate, revealOutValue int64) int64 {
 	/*
 		// 经验数据，调整 CONTENT_MINT_BODY 后需要调整
@@ -374,18 +382,13 @@ func (p *Manager) GetOrgAssetName(lpt *AssetName) *AssetName {
 }
 
 
-func (p *Manager) InscribeKeyValueInName(name string, key string, value string) (*InscribeResv, error) {
+func (p *Manager) InscribeKeyValueInName(name string, key string, value string, feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
 
 	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	address := wallet.GetAddress()
 
-	feeRate := p.GetFeeRate()
-	// 经验数据，调整 CONTENT_DEPLOY_BODY 后需要调整
-	// estimatedInputValue1 := 340*feeRate + 330
-	// estimatedInputValue2 := 400*feeRate + 330
-	// estimatedInputValue3 := 460*feeRate + 330
 
 	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
 	if err != nil {
@@ -399,6 +402,8 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string) 
 		return utxos[i].Value > utxos[j].Value
 	})
 
+	body := fmt.Sprintf(CONTENT_SETKV1_BODY, name, key, value)
+	lenBody := len(body)
 	p.utxoLockerL1.Reload(address)
 	commitTxPrevOutputList := make([]*PrevOutput, 0)
 	total := int64(0)
@@ -415,7 +420,7 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string) 
 			Amount:   u.Value,
 			PkScript: pkScript,
 		})
-		estimatedFee = EstimatedDeployFee(len(commitTxPrevOutputList), feeRate)
+		estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), lenBody, feeRate, 330)
 		if total >= estimatedFee {
 			break
 		}
@@ -424,7 +429,6 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string) 
 		return nil, fmt.Errorf("no enough utxos for fee")
 	}
 
-	body := fmt.Sprintf(CONTENT_SETKV1_BODY, name, key, value)
 	return p.inscribe("", body, 330, feeRate, commitTxPrevOutputList)
 }
 
@@ -437,11 +441,6 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string)
 	address := wallet.GetAddress()
 
 	feeRate := p.GetFeeRate()
-	// 经验数据，调整 CONTENT_DEPLOY_BODY 后需要调整
-	// estimatedInputValue1 := 340*feeRate + 330
-	// estimatedInputValue2 := 400*feeRate + 330
-	// estimatedInputValue3 := 460*feeRate + 330
-
 	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
 	if err != nil {
 		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
@@ -453,6 +452,13 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string)
 	sort.Slice(utxos, func(i, j int) bool {
 		return utxos[i].Value > utxos[j].Value
 	})
+
+	var kvs string
+	for k, v := range kv {
+		kvs += fmt.Sprintf(",\"%s\":\"%s\"", k, v)
+	}
+	body := fmt.Sprintf(CONTENT_SETKV_N_BODY, name, kvs)
+	lenBody := len(body)
 
 	p.utxoLockerL1.Reload(address)
 	commitTxPrevOutputList := make([]*PrevOutput, 0)
@@ -470,7 +476,7 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string)
 			Amount:   u.Value,
 			PkScript: pkScript,
 		})
-		estimatedFee = EstimatedDeployFee(len(commitTxPrevOutputList), feeRate)
+		estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), lenBody, feeRate, 330)
 		if total >= estimatedFee {
 			break
 		}
@@ -479,8 +485,5 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string)
 		return nil, fmt.Errorf("no enough utxos for fee")
 	}
 
-	var kvs string
-
-	body := fmt.Sprintf(CONTENT_SETKV_N_BODY, name, kvs)
 	return p.inscribe("", body, 330, feeRate, commitTxPrevOutputList)
 }

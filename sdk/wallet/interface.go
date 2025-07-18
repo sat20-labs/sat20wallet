@@ -512,10 +512,21 @@ func (p *Manager) GetChannelAddrByPeerPubkey(pubkeyHex string) (string, string, 
 
 
 // 对某个btc的名字设置属性
-func (p *Manager) SetKeyValueToName(name string, key, value string) (string, error) {
-	return "", nil
-}
+func (p *Manager) SetKeyValueToName(name string, key, value string, feeRate int64) (string, error) {
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
 
+	insc, err := p.InscribeKeyValueInName(name, key, value, feeRate)
+	if err != nil {
+		if insc != nil && insc.CommitTx != nil {
+			return insc.CommitTx.TxID(), fmt.Errorf("broadcast reveal tx failed, %v", err)
+		}
+		return "", fmt.Errorf("InscribeKeyValueInName failed, %v", err)
+	}
+
+	return insc.RevealTx.TxID(), nil
+}
 
 // 绑定推荐人地址
 func (p *Manager) BindReferrer(referrerName, key string, serverPubkey []byte) (string, error) {
@@ -528,7 +539,7 @@ func (p *Manager) BindReferrer(referrerName, key string, serverPubkey []byte) (s
 	if err != nil {
 		return "", err
 	}
-	// TODO 检查是否有正确的签名key-value
+	// 检查是否有正确的签名key-value
 	Log.Infof("%v", info)
 	var sig string
 	for _, kv := range info.KVItemList {
