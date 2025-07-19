@@ -286,6 +286,8 @@ const currentWalletId = computed(() => walletStore.walletId)
 const walletsWithAddress = ref<any[]>([])
 const isLoadingWallets = ref(false)
 
+console.log('wallets', wallets.value);
+
 watch(wallets, async (newWallets) => {
   if (!newWallets) {
     walletsWithAddress.value = []

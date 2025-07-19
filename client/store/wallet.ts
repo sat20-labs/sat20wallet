@@ -89,9 +89,9 @@ export const useWalletStore = defineStore('wallet', () => {
         metadata: { from: Message.MessageFrom.POPUP }
       })
       // Send network changed event to injected script
-      // setTimeout(() => {
-      //   sendNetworkChangedEvent(value)
-      // }, 300);
+      setTimeout(() => {
+        sendNetworkChangedEvent(value)
+      }, 300);
     } catch (error) {
       console.error('Failed to send NETWORK_CHANGED message to background:', error)
     }
@@ -137,7 +137,7 @@ export const useWalletStore = defineStore('wallet', () => {
     await setAccountIndex(0)
     await setHasWallet(true)
     await setLocked(false)
-    await setNetwork(Network.TESTNET)
+    // await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
     // await getWalletInfo()
     await satsnetStp.importWallet(_mnemonic, password)
@@ -168,6 +168,8 @@ export const useWalletStore = defineStore('wallet', () => {
         }]
       })
       wallets.value = _wallets
+      console.log('createWallet', _wallets);
+
       await walletStorage.setValue('wallets', _wallets)
     }
     return [undefined, _mnemonic]
