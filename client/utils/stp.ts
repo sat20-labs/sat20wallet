@@ -86,6 +86,9 @@ interface StpWasmModule {
     amt: string
   }>>;
   getContractInvokeHistoryByAddressInServer: (url: string, address: string, start: number, limit: number) => Promise<WasmResponse<string>>;
+  // Add new methods
+  registerAsReferrer: (name: string, feeRate: number) => Promise<WasmResponse<string>>;
+  bindReferrerForServer: (referrerName: string, serverPubKey: string) => Promise<WasmResponse<string>>;
 }
 
 
@@ -697,6 +700,15 @@ class SatsnetStp {
       assetName: string,
       amt: string
     }>('stakeToBeMiner', bCoreNode, btcFeeRate)
+  }
+
+  // Add new methods
+  async registerAsReferrer(name: string, feeRate: number): Promise<[Error | undefined, string | undefined]> {
+    return this._handleRequest<string>('registerAsReferrer', name, feeRate.toString())
+  }
+
+  async bindReferrerForServer(referrerName: string, serverPubKey: string): Promise<[Error | undefined, string | undefined]> {
+    return this._handleRequest<string>('bindReferrerForServer', referrerName, serverPubKey)
   }
 }
 

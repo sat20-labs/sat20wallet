@@ -21,3 +21,19 @@ export async function sendAccountsChangedEvent(data: any, from = Message.Message
     })
   }
 }
+
+export async function sendNetworkChangedEvent(network: string, from = Message.MessageFrom.POPUP, to = Message.MessageTo.INJECTED) {
+  if (typeof browser !== 'undefined' && browser.runtime?.sendMessage) {
+    const currWin = await browser.windows.getCurrent()
+    await browser.runtime.sendMessage({
+      type: Message.MessageType.EVENT,
+      event: 'networkChanged',
+      data: network,
+      metadata: {
+        from,
+        to,
+        windowId: currWin.id,
+      },
+    })
+  }
+}

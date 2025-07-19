@@ -6,7 +6,8 @@ class WalletManager {
   ): Promise<[Error | undefined, any | undefined]> {
     const method = window.sat20wallet_wasm[methodName as keyof WalletManager]
     const [err, result] = await tryit(method as any)(...args)
-
+    console.log(`${methodName} args: `, args)
+    console.log(`${methodName} result: `, result)
     if (err) {
       console.error(`${methodName} error: ${err.message}`)
       return [err, undefined]

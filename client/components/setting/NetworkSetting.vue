@@ -23,13 +23,13 @@
           <SelectContent>
             <SelectItem value="dev">{{ $t('networkSetting.development') }}</SelectItem>
             <SelectItem value="test">{{ $t('networkSetting.test') }}</SelectItem>
-            <SelectItem value="prod">{{ $t('networkSetting.production') }}</SelectItem>
+            <SelectItem value="prd">{{ $t('networkSetting.production') }}</SelectItem>
           </SelectContent>
         </Select>
       </div>
       <div class="flex items-center justify-between">
         <div class="text-sm text-muted-foreground mb-4">
-          {{ $t('networkSetting.networkSwitch') }}
+          {{ $t('networkSetting.networkSwitch') }} 123
         </div>
         <Select v-model="network" @update:model-value="(value: any) => walletStore.setNetwork(value)">
           <SelectTrigger class="max-w-[160px] bg-gray-900/30 mb-4">

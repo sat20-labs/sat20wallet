@@ -422,7 +422,6 @@ export async function handleMessage(
         Message.MessageAction.SPLIT_ASSET,
         // --- Added Actions Requiring Approval ---
         Message.MessageAction.LOCK_UTXO,
-
         Message.MessageAction.UNLOCK_UTXO,
         Message.MessageAction.UNLOCK_UTXO_SATSNET,
         // --- Added Channel Actions ---
@@ -434,6 +433,9 @@ export async function handleMessage(
         Message.MessageAction.INVOKE_CONTRACT_SATSNET,
         Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET,
         Message.MessageAction.INVOKE_CONTRACT_V2,
+        // --- 推荐人相关 ---
+        Message.MessageAction.REGISTER_AS_REFERRER,
+        Message.MessageAction.BIND_REFERRER_FOR_SERVER,
       ]
 
       if (REQUIRES_APPROVAL.includes(action)) {

@@ -2,12 +2,12 @@ import { defineStore } from 'pinia'
 import { config as configMap } from '@/config'
 import { walletStorage } from '@/lib/walletStorage'
 
-export type Env = 'dev' | 'test' | 'prod'
+export type Env = 'dev' | 'test' | 'prd'
 export const useGlobalStore = defineStore('global', () => {
   
   const loading = ref(false)
   const version = ref(0)
-  const env = ref<Env>(walletStorage.getValue('env') || 'test')
+  const env = ref<Env>(walletStorage.getValue('env') || 'prd')
   const stpVersion = ref('0.0.0')
 
   const config = computed(() => {

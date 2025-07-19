@@ -2,7 +2,7 @@ import { storage } from 'wxt/storage'
 import { Network, Balance, Chain, WalletAccount, WalletData } from '@/types'
 
 interface WalletState {
-  env: 'dev' | 'test' | 'prod'
+  env: 'dev' | 'test' | 'prd'
   hasWallet: boolean
   locked: boolean
   walletId: string
@@ -23,7 +23,7 @@ type StateChangeCallback = (key: StateKey, newValue: any, oldValue: any) => void
 type BatchUpdateData = Partial<WalletState>
 
 const defaultState: WalletState = {
-  env: 'test',
+  env: 'prd',
   locked: true,
   hasWallet: false,
   address: null,

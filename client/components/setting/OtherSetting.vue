@@ -23,7 +23,7 @@
           <SelectContent>
             <SelectItem value="dev">{{ $t('otherSetting.development') }}</SelectItem>
             <SelectItem value="test">{{ $t('otherSetting.test') }}</SelectItem>
-            <SelectItem value="prod">{{ $t('otherSetting.production') }}</SelectItem>
+            <SelectItem value="prd">{{ $t('otherSetting.production') }}</SelectItem>
           </SelectContent>
         </Select>
       </div>

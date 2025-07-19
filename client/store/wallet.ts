@@ -1,10 +1,13 @@
 import { defineStore } from 'pinia'
 import { walletStorage } from '@/lib/walletStorage'
 import { Network, Chain, WalletData, WalletAccount } from '@/types'
+import { Message } from '@/types/message'
 import walletManager from '@/utils/sat20'
+import stp from '@/utils/stp'
 import satsnetStp from '@/utils/stp'
 import { useChannelStore } from './channel'
 import { ref, computed, toRaw } from 'vue'
+import { sendNetworkChangedEvent } from '@/lib/utils'
 
 
 export const useWalletStore = defineStore('wallet', () => {
@@ -64,19 +67,37 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const setNetwork = async (value: Network) => {
     const n = value === Network.LIVENET ? 'mainnet' : 'testnet'
+    // const [err] = await walletManager.switchChain(n, password.value as string)
+    // console.log(err);
 
-    const [err] = await walletManager.switchChain(n, password.value as string)
-    if (!err) {
-      await walletStorage.setValue('network', value)
-      network.value = value
-      const [_, addressRes] = await walletManager.getWalletAddress(accountIndex.value)
-      const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountIndex.value)
-      if (addressRes && pubkeyRes) {
-        const { address } = addressRes
-        await setAddress(address)
-        await setPublickey(pubkeyRes.pubKey)
-      }
+    await walletStorage.setValue('network', value)
+    network.value = value
+    const [_, addressRes] = await walletManager.getWalletAddress(accountIndex.value)
+    const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountIndex.value)
+    if (addressRes && pubkeyRes) {
+      const { address } = addressRes
+      await setAddress(address)
+      await setPublickey(pubkeyRes.pubKey)
     }
+
+    try {
+      console.log(`Sending NETWORK_CHANGED message with payload: ${value}`)
+      await browser.runtime.sendMessage({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.NETWORK_CHANGED,
+        data: { network: value },
+        metadata: { from: Message.MessageFrom.POPUP }
+      })
+      // Send network changed event to injected script
+      // setTimeout(() => {
+      //   sendNetworkChangedEvent(value)
+      // }, 300);
+    } catch (error) {
+      console.error('Failed to send NETWORK_CHANGED message to background:', error)
+    }
+    await stp.release()
+    await walletManager.release()
+    window.location.reload()
   }
 
   const setChain = async (value: Chain) => {
@@ -253,7 +274,6 @@ export const useWalletStore = defineStore('wallet', () => {
         await setWalletId('');
         await setAccountIndex(0);
         await setPassword('');
-        await setNetwork(Network.TESTNET);
         await setChain(Chain.BTC);
         await setLocked(true);
       } else {

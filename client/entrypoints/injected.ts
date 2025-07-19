@@ -478,6 +478,23 @@ export default defineUnlistedScript(() => {
       })
     }
 
+    // 新增：注册为推荐人
+    async registerAsReferrer(name: string, feeRate: number): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.REGISTER_AS_REFERRER,
+        data: { name, feeRate },
+      })
+    }
+
+    // 新增：为服务器绑定推荐人
+    async bindReferrerForServer(referrerName: string, serverPubKey: string): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.BIND_REFERRER_FOR_SERVER,
+        data: { referrerName, serverPubKey },
+      })
+    }
   }
 
   const sat20 = new Sat20()

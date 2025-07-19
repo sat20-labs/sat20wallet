@@ -9,6 +9,9 @@ import WalletReceive from '@/entrypoints/popup/pages/wallet/Receive.vue'
 import WalletSettingPhrase from '@/entrypoints/popup/pages/wallet/settings/phrase.vue'
 import WalletSettingPublicKey from '@/entrypoints/popup/pages/wallet/settings/publickey.vue'
 import WalletSettingPassword from '@/entrypoints/popup/pages/wallet/settings/password.vue'
+import WalletSettingReferrer from '@/entrypoints/popup/pages/wallet/settings/referrer/index.vue'
+import WalletSettingReferrerBind from '@/entrypoints/popup/pages/wallet/settings/referrer/bind.vue'
+
 import WalletSettingNode from '@/entrypoints/popup/pages/wallet/settings/node.vue'
 import WalletManager from '@/components/wallet/WalletManager.vue'
 import SubWalletManager from '@/components/wallet/SubWalletManager.vue'
@@ -55,6 +58,14 @@ const routes = [
             path: 'node',
             component: WalletSettingNode,
           },
+          {
+            path: 'referrer/register',
+            component: WalletSettingReferrer,
+          },
+          {
+            path: 'referrer/bind',
+            component: WalletSettingReferrerBind,
+          },
         ],
       },
       { path: 'receive', component: WalletReceive },
@@ -95,10 +106,10 @@ router.beforeEach(async (to, from) => {
   if (password && walletStore.locked) {
     await walletStore.unlockWallet(password)
     await walletStore.setLocked(false)
-    if (network) {
-      console.log('network', network)
-      await walletStore.setNetwork(network)
-    }
+    // if (network) {
+    //   console.log('network', network)
+    //   await walletStore.setNetwork(network)
+    // }
   }
 
   if (to.path.startsWith('/wallet')) {

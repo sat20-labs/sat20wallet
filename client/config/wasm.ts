@@ -1,71 +1,171 @@
-// 测试环境，
-const devConfig = {
-    Env: "dev",
-    Chain: "testnet",
-    Mode: "client",
-    Peers: [
+import { Network } from '@/types'
+interface NetworkConfig {
+  Env: string
+  Chain: string
+  Mode: string
+  Peers: string[]
+  IndexerL1: {
+    Scheme: string
+    Host: string
+    Proxy: string
+  }
+  IndexerL2: {
+    Scheme: string
+    Host: string
+    Proxy: string
+  }
+  Log: string
+}
+
+interface EnvConfig {
+  [Network.LIVENET]: NetworkConfig
+  [Network.TESTNET]: NetworkConfig
+}
+
+interface Config {
+  dev: EnvConfig
+  test: EnvConfig
+  prd: EnvConfig
+}
+
+const config: Config = {
+  dev: {
+    [Network.LIVENET]: {
+      Env: "dev",
+      Chain: "mainnet",
+      Mode: "client",
+      Peers: [
         "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@https://satstestnet-peer-p1.sat20.org",
         "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@https://satstestnet-peer-p0.sat20.org"
-    ],
-    IndexerL1: {
+      ],
+      IndexerL1: {
         Scheme: "https",
         Host: "apidev.sat20.org",
         Proxy: "btc/testnet"
-    },
-    IndexerL2: {
+      },
+      IndexerL2: {
         Scheme: "https",
         Host: "apidev.sat20.org",
         Proxy: "satsnet/testnet"
+      },
+      Log: "debug"
     },
-    Log: "debug"
-};
-// 测试环境，
-const testConfig = {
-    Env: "test",
-    Chain: "testnet",
-    Mode: "client",
-    Peers: [
+    [Network.TESTNET]: {
+      Env: "dev",
+      Chain: "testnet",
+      Mode: "client",
+      Peers: [
+        "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@https://satstestnet-peer-p1.sat20.org",
+        "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@https://satstestnet-peer-p0.sat20.org"
+      ],
+      IndexerL1: {
+        Scheme: "https",
+        Host: "apidev.sat20.org",
+        Proxy: "btc/testnet"
+      },
+      IndexerL2: {
+        Scheme: "https",
+        Host: "apidev.sat20.org",
+        Proxy: "satsnet/testnet"
+      },
+      Log: "debug"
+    }
+  },
+  test: {
+    [Network.LIVENET]: {
+      Env: "test",
+      Chain: "mainnet",
+      Mode: "client",
+      Peers: [
         "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@seed.sat20.org:19529",
         "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@39.108.96.46:19529"
-    ],
-    IndexerL1: {
+      ],
+      IndexerL1: {
         Scheme: "https",
         Host: "apitest.sat20.org",
         Proxy: "btc/testnet"
-    },
-    IndexerL2: {
+      },
+      IndexerL2: {
         Scheme: "https",
         Host: "apitest.sat20.org",
         Proxy: "satsnet/testnet"
+      },
+      Log: "debug"
     },
-    Log: "debug"
-}
-const prodConfig = {
-    Env: "prod",
-    Chain: "mainnet",
-    Mode: "client",
-    Peers: [
+    [Network.TESTNET]: {
+      Env: "test",
+      Chain: "testnet",
+      Mode: "client",
+      Peers: [
         "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@seed.sat20.org:19529",
         "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@39.108.96.46:19529"
-    ],
-    IndexerL1: {
+      ],
+      IndexerL1: {
+        Scheme: "https",
+        Host: "apitest.sat20.org",
+        Proxy: "btc/testnet"
+      },
+      IndexerL2: {
+        Scheme: "https",
+        Host: "apitest.sat20.org",
+        Proxy: "satsnet/testnet"
+      },
+      Log: "debug"
+    }
+  },
+  prd: {
+    [Network.LIVENET]: {
+      Env: "prd",
+      Chain: "mainnet",
+      Mode: "client",
+      Peers: [
+        "b@03ab606f4dffd65965b4a9db957361800f8b03ed16acac11d5a4672801554596d0@seed.sat20.org:9529",
+        "s@022ab2945f61304f117f55d469c341d606ceb729de436c80c0e6ad7819cdd53ce7@39.108.96.46:9529"
+      ],
+      IndexerL1: {
+        Scheme: "https",
+        Host: "apiprd.sat20.org",
+        Proxy: "btc/mainnet"
+      },
+      IndexerL2: {
+        Scheme: "https",
+        Host: "apiprd.sat20.org",
+        Proxy: "satsnet/mainnet"
+      },
+      Log: "debug"
+    },
+    [Network.TESTNET]: {
+      Env: "prd",
+      Chain: "testnet",
+      Mode: "client",
+      Peers: [
+        "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@seed.sat20.org:19529",
+        "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@39.108.96.46:19529"
+      ],
+      IndexerL1: {
         Scheme: "https",
         Host: "apiprd.sat20.org",
         Proxy: "btc/testnet"
-    },
-    IndexerL2: {
+      },
+      IndexerL2: {
         Scheme: "https",
         Host: "apiprd.sat20.org",
         Proxy: "satsnet/testnet"
-    },
-    Log: "debug"
+      },
+      Log: "debug"
+    }
+  }
 }
-export const logLevel = 5 //0: Panic, 1: Fatal, 2: Error, 3: Warn, 4: Info, 5: Debug, 6: Trace
-export const config = {
-    dev: devConfig,
-    test: testConfig,
-    prod: prodConfig,
-}
-export const getConfig = (env: string) => {
-    return config[env as keyof typeof config]
+
+export const logLevel = 5 //0: Panic, 1: Fatal, 2: Error, 3: 
+export const getConfig = (env: string, network: Network): NetworkConfig => {
+  const envConfig = config[env as keyof Config]
+  if (!envConfig) {
+    throw new Error(`Invalid env: ${env}`)
+  }
+  const networkConfig = envConfig[network]
+  if (!networkConfig) {
+    throw new Error(`Invalid network: ${network}`)
+  }
+  return networkConfig
 }

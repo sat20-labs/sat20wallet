@@ -29,7 +29,7 @@ export const generateMempoolUrl = ({
   const satMempoolUrl: Record<Env, string> = {
     dev: 'https://mempool.dev.sat20.org',
     test: 'https://mempool.test.sat20.org',
-    prod: 'https://mempool.sat20.org',
+    prd: 'https://mempool.sat20.org',
   }
   const btcMempoolUrl = 'https://mempool.space'
   let base = btcMempoolUrl;

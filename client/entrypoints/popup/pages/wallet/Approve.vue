@@ -18,6 +18,7 @@ import ApproveDeployContractRemote from '@/components/approve/ApproveDeployContr
 import ApproveInvokeContractSatsNet from '@/components/approve/ApproveInvokeContractSatsNet.vue'
 import ApproveInvokeContractV2SatsNet from '@/components/approve/ApproveInvokeContractV2SatsNet.vue'
 import ApproveInvokeContractV2 from '@/components/approve/ApproveInvokeContractV2.vue'
+import ApproveRegisterAsReferrer from '@/components/approve/ApproveRegisterAsReferrer.vue'
 import { Message } from '@/types/message'
 
 const { approveData, approve, reject } = useApprove()
@@ -32,6 +33,7 @@ const approveComponentMap: any = {
   [Message.MessageAction.INVOKE_CONTRACT_SATSNET]: ApproveInvokeContractSatsNet,
   [Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET]: ApproveInvokeContractV2SatsNet,
   [Message.MessageAction.INVOKE_CONTRACT_V2]: ApproveInvokeContractV2,
+  [Message.MessageAction.REGISTER_AS_REFERRER]: ApproveRegisterAsReferrer,
 }
 
 const data = computed(() => {

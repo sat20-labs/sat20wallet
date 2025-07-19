@@ -4,7 +4,7 @@ import { browser } from 'wxt/browser'
 import { initializeWasm, reInitializeWasm } from '@/lib/background/WasmManager'
 import { ApprovalManager } from '@/lib/background/ApprovalManager'
 import { handleMessage } from '@/lib/background/MessageRouter'
-// Import Port type from the polyfill
+import { walletStorage } from '@/lib/walletStorage'
 import type { Runtime } from 'wxt/browser';
 
 globalThis.Buffer = Buffer3
@@ -54,30 +54,32 @@ class BackgroundService {
   }
 
   private onMessageHandler = (message: any, sender: Runtime.MessageSender, sendResponse: (response?: any) => void) => {
-      const { type, action, metadata } = message
-      if (type === Message.MessageType.EVENT) {
-        if (this.portMap.content) {
-          this.portMap.content.postMessage(message)
-        }
-        return true
+    const { type, action, metadata } = message
+    if (type === Message.MessageType.EVENT) {
+      if (this.portMap.content) {
+        this.portMap.content.postMessage(message)
       }
-      if (
-        type === Message.MessageType.REQUEST &&
-        action === Message.MessageAction.GET_APPROVE_DATA &&
-        metadata?.windowId
-      ) {
-        const response = this.approvalManager.getApprovalData(metadata.windowId)
-        sendResponse(response)
-        return true
-      } else if (type === Message.MessageType.REQUEST && action === Message.MessageAction.ENV_CHANGED) {
-        console.log('调试: 收到环境变更消息', message);
+      return true
+    }
+    if (
+      type === Message.MessageType.REQUEST &&
+      action === Message.MessageAction.GET_APPROVE_DATA &&
+      metadata?.windowId
+    ) {
+      const response = this.approvalManager.getApprovalData(metadata.windowId)
+      sendResponse(response)
+      return true
+    } else if (type === Message.MessageType.REQUEST && (action === Message.MessageAction.ENV_CHANGED || action === Message.MessageAction.NETWORK_CHANGED)) {
+      console.log('调试: 收到环境变更消息', message);
+      walletStorage.initializeState().then(() => {
         reInitializeWasm()
-      } else if (message.type === 'KEEP_ALIVE_FALLBACK') {
-        // 这是为了响应 content.ts 的后备计划
-        // 收到这个消息本身就意味着 background 被成功唤醒了
-        console.log(`调试: 收到来自 ${message.origin} 的后备激活消息，连接即将恢复。`)
-      }
-      return undefined; // 返回 false 或 undefined 表示是同步响应
+      })
+    } else if (message.type === 'KEEP_ALIVE_FALLBACK') {
+      // 这是为了响应 content.ts 的后备计划
+      // 收到这个消息本身就意味着 background 被成功唤醒了
+      console.log(`调试: 收到来自 ${message.origin} 的后备激活消息，连接即将恢复。`)
+    }
+    return undefined; // 返回 false 或 undefined 表示是同步响应
   }
 
   private handleContentScriptConnection(port: Runtime.Port) {
@@ -101,30 +103,30 @@ class BackgroundService {
   }
 
   private handlePopupConnection(port: Runtime.Port) {
-      this.portMap.popup = port
-      port.onMessage.addListener((message: any) => {
-        const { action, data, metadata = {} } = message
-        if (!metadata.windowId) {
-          return
-        }
-        if (action === Message.MessageAction.APPROVE_RESPONSE) {
-          this.approvalManager.handleResponse(true, metadata.windowId, data)
-        } else if (action === Message.MessageAction.REJECT_RESPONSE) {
-          this.approvalManager.handleResponse(false, metadata.windowId, null)
-        }
-      })
+    this.portMap.popup = port
+    port.onMessage.addListener((message: any) => {
+      const { action, data, metadata = {} } = message
+      if (!metadata.windowId) {
+        return
+      }
+      if (action === Message.MessageAction.APPROVE_RESPONSE) {
+        this.approvalManager.handleResponse(true, metadata.windowId, data)
+      } else if (action === Message.MessageAction.REJECT_RESPONSE) {
+        this.approvalManager.handleResponse(false, metadata.windowId, null)
+      }
+    })
   }
-  
+
   private handleKeepAliveConnection(port: Runtime.Port) {
-      console.log('调试: 保持激活端口已连接')
-      port.onMessage.addListener((msg: unknown) => {
-        if (typeof msg === 'object' && msg !== null && 'type' in msg && (msg as any).type === 'KEEP_ALIVE') {
-          port.postMessage({ type: 'KEEP_ALIVE', payload: 'PONG' })
-        }
-      })
-      port.onDisconnect.addListener(() => {
-        console.log('调试: 保持激活端口已断开')
-      })
+    console.log('调试: 保持激活端口已连接')
+    port.onMessage.addListener((msg: unknown) => {
+      if (typeof msg === 'object' && msg !== null && 'type' in msg && (msg as any).type === 'KEEP_ALIVE') {
+        port.postMessage({ type: 'KEEP_ALIVE', payload: 'PONG' })
+      }
+    })
+    port.onDisconnect.addListener(() => {
+      console.log('调试: 保持激活端口已断开')
+    })
   }
 
   private initialize() {

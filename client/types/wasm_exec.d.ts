@@ -412,6 +412,18 @@ interface SatsnetStp {
   getAddressStatusInContract(url: string, address: string): Promise<SatsnetResponse<string>>;
   /** 获取合约所有地址 */
   getContractAllAddresses(url: string): Promise<SatsnetResponse<string>>;
+  
+  /** 注册为推荐人 */
+  registerAsReferrer(
+    name: string,
+    feeRate: number
+  ): Promise<SatsnetResponse<string>>;
+
+  /** 为服务器绑定推荐人 */
+  bindReferrerForServer(
+    referrerName: string,
+    serverPubKey: string
+  ): Promise<SatsnetResponse<string>>;
 }
 declare interface Window {
   sat20wallet_wasm: WalletManager

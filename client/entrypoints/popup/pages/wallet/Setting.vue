@@ -14,9 +14,8 @@
       <NetworkSetting />
       <Separator />
       <NodeSetting />
-      <!-- <Separator />  
       <Separator />
-      <Separator /> -->
+      <ReferrerSetting />
     </div>
 
     <!-- <AppearanceSetting /> -->
@@ -45,6 +44,7 @@ import SecuritySetting from '@/components/setting/SecuritySetting.vue'
 import EscapeHatch from '@/components/setting/EscapeHatch.vue'
 import NetworkSetting from '@/components/setting/NetworkSetting.vue'
 import NodeSetting from '@/components/setting/NodeSetting.vue'
+import ReferrerSetting from '@/components/setting/ReferrerSetting.vue'
 
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'

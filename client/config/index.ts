@@ -17,5 +17,5 @@ const prodConfig = {
 export const config: Record<string, any> = {
   dev: devConfig,
   test: testConfig,
-  prod: prodConfig,
+  prd: prodConfig,
 }
