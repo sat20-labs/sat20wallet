@@ -1,35 +1,30 @@
 <template>
   <LayoutSecond title="绑定推荐人">
     <div class="max-w-xl mx-auto my-8">
-      <Card>
-        <CardHeader>
-          <CardTitle>绑定推荐人</CardTitle>
-          <CardDescription>
-            为服务器绑定推荐人
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div class="flex flex-col gap-4">
-            <div class="grid w-full items-center gap-1.5">
-              <Label for="referrerName">推荐人名称</Label>
-              <Input id="referrerName" v-model="referrerName" placeholder="请输入推荐人名称" />
-            </div>
-            <div class="grid w-full items-center gap-1.5">
-              <Label for="serverPubKey">服务器公钥</Label>
-              <Input id="serverPubKey" v-model="serverPubKey" placeholder="请输入服务器公钥" />
-            </div>
-            <Button aria-label="绑定推荐人" @click="onBind" :loading="isLoading">
-              绑定推荐人
-            </Button>
-          </div>
-        </CardContent>
-        <CardFooter v-if="resultMsg">
-          <Alert :variant="resultSuccess ? 'default' : 'destructive'">
-            <AlertTitle>{{ resultSuccess ? '操作成功' : '操作失败' }}</AlertTitle>
-            <AlertDescription>{{ resultMsg }}</AlertDescription>
-          </Alert>
-        </CardFooter>
-      </Card>
+      <div class="mb-4">
+        <p class="text-sm text-muted-foreground">
+          为服务器绑定推荐人
+        </p>
+      </div>
+      <div class="flex flex-col gap-4">
+        <div class="grid w-full items-center gap-1.5">
+          <Label for="referrerName">推荐人名称</Label>
+          <Input id="referrerName" v-model="referrerName" placeholder="请输入推荐人名称" />
+        </div>
+        <div class="grid w-full items-center gap-1.5">
+          <Label for="serverPubKey">服务器公钥</Label>
+          <Input id="serverPubKey" v-model="serverPubKey" placeholder="请输入服务器公钥" />
+        </div>
+        <Button aria-label="绑定推荐人" @click="onBind" :loading="isLoading">
+          绑定推荐人
+        </Button>
+      </div>
+      <div v-if="resultMsg" class="mt-4">
+        <Alert :variant="resultSuccess ? 'default' : 'destructive'">
+          <AlertTitle>{{ resultSuccess ? '操作成功' : '操作失败' }}</AlertTitle>
+          <AlertDescription>{{ resultMsg }}</AlertDescription>
+        </Alert>
+      </div>
       <Dialog v-model:open="showConfirm">
         <DialogContent>
           <DialogHeader>
@@ -54,7 +49,6 @@
 import { ref } from 'vue'
 import stp from '@/utils/stp'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
