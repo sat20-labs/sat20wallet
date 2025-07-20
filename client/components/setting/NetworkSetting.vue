@@ -13,7 +13,7 @@
     </button>
     <div v-if="isExpanded" class="space-y-6 px-2 mt-4">
       <div class="flex items-center justify-between border-t border-zinc-900/30 pt-4">
-        <div class="text-sm text-muted-foreground">
+        <div class="text-sm text-muted-foreground mb-4">
           {{ $t('networkSetting.environmentSwitch') }}
         </div>
         <Select v-model="computedEnv">
@@ -29,7 +29,7 @@
       </div>
       <div class="flex items-center justify-between">
         <div class="text-sm text-muted-foreground mb-4">
-          {{ $t('networkSetting.networkSwitch') }} 123
+          {{ $t('networkSetting.networkSwitch') }} 
         </div>
         <Select v-model="network" @update:model-value="(value: any) => walletStore.setNetwork(value)">
           <SelectTrigger class="max-w-[160px] bg-gray-900/30 mb-4">

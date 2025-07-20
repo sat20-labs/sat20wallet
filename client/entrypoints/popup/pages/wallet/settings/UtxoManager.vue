@@ -2,11 +2,12 @@
   <LayoutSecond :title="$t('utxoManager.title')">
     <div class="w-full max-w-2xl mx-auto bg-zinc-700/40 rounded-lg p-4">
       <Tabs v-model="tab" class="mb-4">
-        <TabsList>
-          <TabsTrigger value="btc">BTC</TabsTrigger>
-          <TabsTrigger value="satsnet">SatsNet</TabsTrigger>
+        <TabsList class="border border-zinc-700 rounded-lg">
+          <TabsTrigger value="btc" class="bg-zinc-800 data-[state=active]:bg-purple-700 data-[state=active]:text-zinc-200">BTC</TabsTrigger>
+          <TabsTrigger value="satsnet" class="bg-zinc-800 data-[state=active]:bg-purple-700 data-[state=active]:text-zinc-200">SatoshiNet</TabsTrigger>
         </TabsList>
       </Tabs>
+      <hr class="my-4 border-zinc-900" />
       <div class="mb-4 flex gap-2">
         <Input v-model="utxoInput" :placeholder="$t('utxoManager.inputPlaceholder')" class="flex-1" />
         <Button :loading="lockLoading" @click="lockUtxo" variant="default">{{ $t('utxoManager.lockBtn') }}</Button>
