@@ -78,7 +78,8 @@ type IndexerRPCClient interface {
 	BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
 	GetTickInfo(assetName *swire.AssetName) *indexer.TickerInfo
 	AllowDeployTick(assetName *swire.AssetName) error
-	GetUtxoSpentTx(utxo string) (string, error) // TODO 索引器需要支持这个api
+	GetUtxoSpentTx(utxo string) (string, error) // TODO L1索引器需要支持这个api
+	GetServiceIncoming(addr string) (int, int64, error)
 
 	// for dkvs
 	GetNonce(pubKey []byte) ([]byte, error)
@@ -783,6 +784,29 @@ func (p *IndexerClient) AllowDeployTick(assetName *swire.AssetName) error {
 func (p *IndexerClient) GetUtxoSpentTx(utxo string) (string, error) {
 	// for test
 	return "", fmt.Errorf("not implemented")
+}
+
+func (p *IndexerClient) GetServiceIncoming(addr string) (int, int64, error) {
+	url := p.GetUrl(fmt.Sprintf("/incoming/%s", addr))
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return 0, 0, err
+	}
+
+	// Unmarshal the response.
+	var result indexerwire.BaseResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return 0, 0, err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return 0, 0, fmt.Errorf(result.Msg)
+	}
+
+	return 0, 0, nil
 }
 
 func (p *IndexerClient) GetNonce(pubKey []byte) ([]byte, error) {
