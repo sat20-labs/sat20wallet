@@ -521,7 +521,7 @@ func (p *IndexerClient) GetAllUtxosWithAddress(address string) ([]*indexerwire.P
 
 	if result.Code != 0 {
 		Log.Errorf("GetAllUtxosWithAddress response message %s", result.Msg)
-		return nil, nil, fmt.Errorf("server failed")
+		return nil, nil, fmt.Errorf("%s", result.Msg)
 	}
 
 	return result.PlainUtxos, result.OtherUtxos, nil
