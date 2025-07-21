@@ -1,21 +1,23 @@
 <template>
   <LayoutHome>
     <WalletHeader />
-    <h2 class="px-4 text-2xl font-medium text-zinc-700/90">{{ $t('setting.title') }}</h2>
+    <h2 class="px-4 text-2xl font-medium text-zinc-600/90">{{ $t('setting.title') }}</h2>
     <div class="space-y-2 py-4 px-0">
       <!-- Conditionally render EscapeHatch -->
-      <EscapeHatch v-if="transcendingModeStore.selectedTranscendingMode !== 'poolswap'" />
-      <Button class="w-full mt-2" @click="$router.push({ path: '/wallet/setting/utxo' })">
-        {{$t('utxoManager.title')}}
+      <Button variant="secondary" class="w-full h-10 mt-2 border-gray-600/50 bg-zinc-700/40" @click="$router.push({ path: '/wallet/setting/utxo' })">
+        <Icon icon="lucide:lock-keyhole-open" class="w-10 h-10 mr-1 text-green-500 font-bold"/> {{$t('utxoManager.title')}}
       </Button>
       <Separator />
-      <SecuritySetting />
+      <EscapeHatch v-if="transcendingModeStore.selectedTranscendingMode !== 'poolswap'" />     
       <Separator />
-      <NetworkSetting />
+      <SecuritySetting />
       <Separator />
       <NodeSetting />
       <Separator />
       <ReferrerSetting />
+      <Separator />
+      <NetworkSetting />
+      
     </div>
 
     <!-- <AppearanceSetting /> -->

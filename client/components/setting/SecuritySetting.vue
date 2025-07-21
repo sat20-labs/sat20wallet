@@ -41,17 +41,17 @@
         </div>
         <Switch v-model="hideBalance" />
       </div>
-      <Button as-child class="h-12 w-full">
+      <Button as-child class="h-10 w-full">
         <RouterLink to="/wallet/setting/phrase" class="w-full">
           <Icon icon="lucide:eye-off" class="mr-2 h-4 w-4" /> {{ $t('securitySetting.showPhrase') }}
         </RouterLink>
       </Button>
-      <Button as-child class="h-12 w-full">
+      <Button as-child class="h-10 w-full">
         <RouterLink to="/wallet/setting/publickey" class="w-full">
           Show Public Key
         </RouterLink>
       </Button>
-      <Button as-child class="h-12 w-full">
+      <Button as-child class="h-10 w-full">
         <RouterLink to="/wallet/setting/password" class="w-full">
           Password
         </RouterLink>

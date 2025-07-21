@@ -1,44 +1,55 @@
 <template>
-  <LayoutSecond title="绑定推荐人">
-    <div class="max-w-xl mx-auto my-8">
-      <div class="mb-4">
-        <p class="text-sm text-muted-foreground">
-          为服务器绑定推荐人
-        </p>
+  <LayoutSecond :title="$t('referrerManagement.bindReferrer')">
+    <div class="max-w-xl mx-auto my-4">
+      <div class="mb-6">
+        <p class="flex justify-start items-center text-sm text-muted-foreground"><Icon icon="lucide:badge-info" class="w-10 h-10 mr-2 text-green-600"/>
+          {{ $t('referrerManagement.bindReferrerDescription') }}</p>
       </div>
       <div class="flex flex-col gap-4">
         <div class="grid w-full items-center gap-1.5">
-          <Label for="referrerName">推荐人名称</Label>
-          <Input id="referrerName" v-model="referrerName" placeholder="请输入推荐人名称" />
+          <Label for="referrerName">{{ $t('referrerManagement.referrerName') }}</Label>
+          <Input id="referrerName" v-model="referrerName" :placeholder="$t('referrerManagement.referrerNamePlaceholder')" />
         </div>
         <div class="grid w-full items-center gap-1.5">
-          <Label for="serverPubKey">服务器公钥</Label>
-          <Input id="serverPubKey" v-model="serverPubKey" placeholder="请输入服务器公钥" />
+          <Label for="serverPubKey">{{ $t('referrerManagement.serverPubKey') }}</Label>
+          <Input id="serverPubKey" v-model="serverPubKey" :placeholder="$t('referrerManagement.serverPubKeyPlaceholder')" />
         </div>
-        <Button aria-label="绑定推荐人" @click="onBind" :loading="isLoading">
-          绑定推荐人
+        <Button aria-label="Bind Referrer" @click="onBind" :loading="isLoading">
+          {{ $t('referrerManagement.bindReferrer') }}
         </Button>
       </div>
       <div v-if="resultMsg" class="mt-4">
         <Alert :variant="resultSuccess ? 'default' : 'destructive'">
-          <AlertTitle>{{ resultSuccess ? '操作成功' : '操作失败' }}</AlertTitle>
+          <AlertTitle>{{ resultSuccess ? $t('referrerManagement.BindSuccess') :
+            $t('referrerManagement.BindFailure') }}</AlertTitle>
           <AlertDescription>{{ resultMsg }}</AlertDescription>
         </Alert>
       </div>
       <Dialog v-model:open="showConfirm">
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>确认操作</DialogTitle>
-            <DialogDescription>
-              确认要绑定推荐人吗？<br>
-              推荐人名称：{{ referrerName }}<br>
-              服务器公钥：{{ serverPubKey }}
+            <DialogTitle><span class="flex justify-start items-center text-zinc-300 text-lg"><Icon icon="lucide:message-circle-question-mark" class="w-12 h-12 mr-1 text-red-600"/>{{ $t('referrerManagement.confirmBindDescription') }}</span><br></DialogTitle>
+            <hr class="my-2 border-zinc-950" />           
+            <DialogDescription class="text-zinc-300">              
+              <p class="py-1 mt-4">
+                <span class="text-zinc-500 mr-4">{{ $t('referrerManagement.referrerName') }} :</span>  <span
+                  class="text-zinc-300">{{ referrerName }}</span>
+              </p>
+              <p class="py-1">
+                <span class="text-zinc-500 mr-4">{{ $t('referrerManagement.serverPubKey') }} :</span> <span
+                  class="text-zinc-300 mr-2">{{ serverPubKey }} </span> 
+              </p>
+             
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
-            <Button @click="confirmBind" :loading="isLoading">确认</Button>
-            <Button variant="outline" @click="showConfirm = false">取消</Button>
+         
+          <DialogFooter>           
+            <div class="flex justify-end gap-3">
+              <Button @click="confirmBind" :loading="isLoading" class="w-36">{{ $t('referrerManagement.confirm') }}</Button>
+              <Button variant="secondary" @click="showConfirm = false" class="w-36">{{ $t('referrerManagement.cancel') }}</Button>                
+            </div>   
           </DialogFooter>
+
         </DialogContent>
       </Dialog>
     </div>
@@ -58,6 +69,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useGlobalStore } from '@/store/global'
 import { useWalletStore } from '@/store/wallet'
 import { getConfig } from '@/config/wasm'
+
 
 const isLoading = ref(false)
 const showConfirm = ref(false)

@@ -88,8 +88,8 @@ func parseConfigFromJS(jsConfig js.Value) (*common.Config, error) {
 	}
 
 	// Env
-	if chain := jsConfig.Get("Env"); chain.Type() == js.TypeString {
-		cfg.Env = chain.String()
+	if env := jsConfig.Get("Env"); env.Type() == js.TypeString {
+		cfg.Env = env.String()
 	} else {
 		cfg.Env = "dev"
 	}
@@ -261,7 +261,7 @@ func initManager(this js.Value, p []js.Value) any {
 	}
 
 	if p[0].Type() != js.TypeObject {
-		return createJsRet(nil, -1, "config parameter should be a string")
+		return createJsRet(nil, -1, "config parameter should be a object")
 	}
 	var cfg *common.Config
 	cfg, err := parseConfigFromJS(p[0])
