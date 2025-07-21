@@ -200,6 +200,10 @@ const translatedOperationTitle = computed(() => {
 const operationDescription = computed(() => {
   if (!selectedAsset.value) return ''
   const asset = selectedAsset.value
+  console.log(asset);
+  if (asset.type === '*') {
+    return `BTC: ${Number(abailableSats.value?.availableAmt).toLocaleString()} ${asset.label || 'sats'}`
+  }
   const type = asset.type || 'BTC'
   const amount = asset.amount || 0
   return `${type}: ${Number(amount).toLocaleString()} ${asset.label || 'sats'}`
