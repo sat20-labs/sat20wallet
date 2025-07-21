@@ -4,9 +4,8 @@ class SatnetApi {
     const globalStore = useGlobalStore()
     const config = globalStore.config
     const BASE_URL = config.satnetBaseUrl
-    return `${BASE_URL}/satsnet${
-      network === 'testnet' ? '/testnet' : '/mainnet'
-    }/${path}`
+    return `${BASE_URL}/satsnet${network === 'testnet' ? '/testnet' : '/mainnet'
+      }/${path}`
   }
 
   async getUtxos({ address, network }: any): Promise<any> {
@@ -101,6 +100,12 @@ class SatnetApi {
   async getTickerHolders({ ticker, start, limit, network }: any): Promise<any> {
     const response = await fetch(
       this.generatePath(`v3/tick/holders/${ticker}?start=${start}&limit=${limit}`, network)
+    )
+    return response.json()
+  }
+  async getMinerInfo({ address, network }: any): Promise<any> {
+    const response = await fetch(
+      this.generatePath(`v3/miner/info/${address}`, network)
     )
     return response.json()
   }

@@ -35,6 +35,9 @@ import { ref } from 'vue'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { useToast } from '@/components/ui/toast'
 import stp from '@/utils/stp'
+import { useWalletStore } from '@/store/wallet'
+import { storeToRefs } from 'pinia'
+import { storage } from 'wxt/storage'
 
 interface Props {
   data: {
@@ -49,6 +52,9 @@ const toast = useToast()
 
 const isLoading = ref(false)
 const registerError = ref('')
+
+const walletStore = useWalletStore()
+const { address } = storeToRefs(walletStore)
 
 const confirm = async () => {
   if (!props.data?.name || typeof props.data?.feeRate !== 'number') {
@@ -74,6 +80,16 @@ const confirm = async () => {
         variant: 'destructive',
       })
     } else {
+      // 保存注册的name到storage
+      if (address.value) {
+        const key = `local:referrer_names_${address.value}` as const
+        let names = await storage.getItem<string[]>(key)
+        if (!names) names = []
+        if (!names.includes(props.data.name)) {
+          names.push(props.data.name)
+          await storage.setItem(key, names)
+        }
+      }
       emit('confirm', { txId: res })
     }
   } catch (e: any) {

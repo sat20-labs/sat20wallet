@@ -3,18 +3,22 @@
     <div class="max-w-xl mx-auto my-8">
       <div class="flex flex-col gap-4">
         <div class="mb-4">
-          <p class="flex justify-start items-center text-sm text-muted-foreground"><Icon icon="lucide:badge-info" class="w-12 h-12 mr-2 text-green-600"/>{{$t('referrerManagement.referrerRegistrationDescription')}}</p>
+          <p class="flex justify-start items-center text-sm text-muted-foreground">
+            <Icon icon="lucide:badge-info" class="w-12 h-12 mr-2 text-green-600" />
+            {{ $t('referrerManagement.referrerRegistrationDescription') }}
+          </p>
         </div>
         <div class="grid w-full items-center gap-1.5">
-          <Label for="name">{{$t('referrerManagement.referrerName')}}</Label>
+          <Label for="name">{{ $t('referrerManagement.referrerName') }}</Label>
           <Input id="name" v-model="name" :placeholder="$t('referrerManagement.referrerNamePlaceholder')" />
         </div>
         <div class="grid w-full items-center gap-1.5">
-          <Label for="feeRate">{{$t('referrerManagement.gasFeeRate')}}</Label>
-          <Input id="feeRate" v-model="btcFeeRate" type="number" min="0" max="100" :placeholder="$t('referrerManagement.gasFeeRatePlaceHolder')" />
+          <Label for="feeRate">{{ $t('referrerManagement.gasFeeRate') }}</Label>
+          <Input id="feeRate" v-model="btcFeeRate" type="number" min="0" max="100"
+            :placeholder="$t('referrerManagement.gasFeeRatePlaceHolder')" />
         </div>
         <Button aria-label="{{$t('referrerManagement.registerAsReferrer')}}" @click="onRegister" :loading="isLoading">
-          {{$t('referrerManagement.registerAsReferrer')}}
+          {{ $t('referrerManagement.registerAsReferrer') }}
         </Button>
         <Alert v-if="resultMsg" :variant="resultSuccess ? 'default' : 'destructive'">
           <AlertTitle>{{ resultSuccess ? $t('referrerManagement.RegistrationSuccess') :
@@ -25,24 +29,29 @@
       <Dialog v-model:open="showConfirm">
         <DialogContent>
           <DialogHeader>
-            <DialogTitle><span class="flex justify-center items-center text-zinc-300 text-lg"><Icon icon="lucide:message-circle-question-mark" class="w-12 h-12 mr-1 text-red-500"/>{{ $t('referrerManagement.confirmRegisterDescription') }}</span><br></DialogTitle>
+            <DialogTitle><span class="flex justify-center items-center text-zinc-300 text-lg">
+                <Icon icon="lucide:message-circle-question-mark" class="w-12 h-12 mr-1 text-red-500 break-all" />{{
+                  $t('referrerManagement.confirmRegisterDescription') }}
+              </span></DialogTitle>
             <hr class="my-2 border-zinc-950" />
-            <DialogDescription class="text-zinc-300">             
+            <DialogDescription class="text-zinc-300">
               <p class="py-1 mt-4">
-                <span class="text-zinc-500 mr-4">{{ $t('referrerManagement.referrerName') }} :</span>  <span
-                  class="text-zinc-300">{{ name }}</span>
+                <span class="text-zinc-500 mr-4">{{ $t('referrerManagement.referrerName') }} :</span> <span
+                  class="text-zinc-300 break-all">{{ name }}</span>
               </p>
               <p class="py-1">
                 <span class="text-zinc-500 mr-4">{{ $t('referrerManagement.gasFeeRate') }} :</span> <span
-                  class="text-zinc-300 mr-2">{{ btcFeeRate }} </span> sats/Vb
+                  class="text-zinc-300 mr-2 break-all">{{ btcFeeRate }} </span> sats/Vb
               </p>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <div class="flex justify-end gap-3">
-              <Button @click="confirmRegister" :loading="isLoading" class="w-36">{{ $t('referrerManagement.confirm') }}</Button>
-              <Button variant="secondary" @click="showConfirm = false" class="w-36">{{ $t('referrerManagement.cancel') }}</Button>                
-            </div>            
+              <Button @click="confirmRegister" :loading="isLoading" class="w-36">{{ $t('referrerManagement.confirm')
+                }}</Button>
+              <Button variant="secondary" @click="showConfirm = false" class="w-36">{{ $t('referrerManagement.cancel')
+                }}</Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -62,6 +71,7 @@ import { Icon } from '@iconify/vue'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store/wallet'
+import { storage } from 'wxt/storage'
 
 const walletStore = useWalletStore()
 const isLoading = ref(false)
@@ -70,7 +80,7 @@ const resultMsg = ref('')
 const resultSuccess = ref(false)
 const name = ref('')
 
-const { btcFeeRate } = storeToRefs(walletStore)
+const { btcFeeRate, address } = storeToRefs(walletStore)
 function onRegister() {
   if (!name.value) {
     resultMsg.value = '请填写完整信息'
@@ -92,6 +102,16 @@ async function confirmRegister() {
     } else {
       resultMsg.value = '注册成功！'
       resultSuccess.value = true
+      // 保存注册的name到storage
+      if (address.value) {
+        const key: any = `local:referrer_names_${address.value}`
+        let names = await storage.getItem<string[]>(key)
+        if (!names) names = []
+        if (!names.includes(name.value)) {
+          names.push(name.value)
+          await storage.setItem(key, names)
+        }
+      }
       // 清空输入
       name.value = ''
     }

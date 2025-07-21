@@ -28,15 +28,15 @@
       <Dialog v-model:open="showConfirm">
         <DialogContent>
           <DialogHeader>
-            <DialogTitle><span class="flex justify-start items-center text-zinc-300 text-lg"><Icon icon="lucide:message-circle-question-mark" class="w-12 h-12 mr-1 text-red-600"/>{{ $t('referrerManagement.confirmBindDescription') }}</span><br></DialogTitle>
+            <DialogTitle><span class="flex justify-start items-center text-zinc-300 text-lg break-all"><Icon icon="lucide:message-circle-question-mark" class="w-12 h-12 mr-1 text-red-600"/>{{ $t('referrerManagement.confirmBindDescription') }}</span></DialogTitle>
             <hr class="my-2 border-zinc-950" />           
             <DialogDescription class="text-zinc-300">              
               <p class="py-1 mt-4">
                 <span class="text-zinc-500 mr-4">{{ $t('referrerManagement.referrerName') }} :</span>  <span
-                  class="text-zinc-300">{{ referrerName }}</span>
+                  class="text-zinc-300 break-all">{{ referrerName }}</span>
               </p>
-              <p class="py-1">
-                <span class="text-zinc-500 mr-4">{{ $t('referrerManagement.serverPubKey') }} :</span> <span
+              <p class="py-1 break-all">
+                <span class="text-zinc-500 mr- break-all">{{ $t('referrerManagement.serverPubKey') }} :</span> <span
                   class="text-zinc-300 mr-2">{{ serverPubKey }} </span> 
               </p>
              
@@ -80,7 +80,7 @@ const serverPubKey = ref('')
 const globalStore = useGlobalStore()
 const walletStore = useWalletStore()
 const { env } = storeToRefs(globalStore)
-const { network } = storeToRefs(walletStore)
+const { network, address } = storeToRefs(walletStore)
 
 // 获取配置中的第一个Peer的公钥
 const config = getConfig(env.value, network.value)

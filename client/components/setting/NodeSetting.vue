@@ -12,25 +12,37 @@
       </div>
     </button>
     <div v-if="isExpanded" class="space-y-6 px-2 py-4">
-      <Button as-child  variant="secondary" class="h-10 w-full">
+      <div v-if="isLoading" class="text-xs text-muted-foreground">{{ $t('loading', '加载中...') }}</div>
+      <div v-if="isError" class="text-xs text-destructive">{{ error?.message || '加载失败' }}</div>
+      <div v-if="!isLoading && !isError" class="bg-zinc-800/60 rounded p-3 text-xs text-zinc-200 whitespace-pre-wrap">
+        <template v-if="minerInfo && minerInfo.code === 0">
+          {{ $t('nodeSetting.bound', '已绑定') }}
+        </template>
+        <template v-else-if="minerInfo && Object.keys(minerInfo).length">
+          {{ JSON.stringify(minerInfo, null, 2) }}
+        </template>
+        <template v-else>
+          {{ $t('nodeSetting.noNodeInfo', '暂无已绑定节点信息') }}
+        </template>
+      </div>
+      <Button as-child variant="secondary" class="h-10 w-full">
         <RouterLink to="/wallet/setting/node" class="w-full">
           {{ $t('nodeSetting.selectNodeType') }}
         </RouterLink>
       </Button>
-      <!-- <Button as-child class="h-10 w-full">
-        <RouterLink to="/wallet/setting/join" class="w-full">
-          {{ $t('nodeSetting.joinNode') }}
-        </RouterLink>
-      </Button> -->
+
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useQuery } from '@tanstack/vue-query'
+import { useWalletStore } from '@/store'
+import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { Button } from '@/components/ui/button'
 import {
   Select,
   SelectContent,
@@ -38,8 +50,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { satnetApi } from '@/apis'
 
 const isExpanded = ref(false)
 const autoLockTime = ref('5')
 const hideBalance = ref(false)
+
+const walletStore = useWalletStore()
+const { address, network } = storeToRefs(walletStore)
+
+// useQuery to fetch miner info (node info)
+const { data: minerInfo, isLoading, isError, error, refetch } = useQuery({
+  queryKey: ['minerInfo', address, network],
+  queryFn: () => {
+    if (!address.value || !network.value) return Promise.resolve({})
+    return satnetApi.getMinerInfo({ address: address.value, network: network.value })
+  },
+  enabled: () => !!address.value && !!network.value,
+  initialData: {},
+})
+
 </script>

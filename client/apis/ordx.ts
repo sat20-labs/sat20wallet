@@ -111,6 +111,12 @@ class OrdxApi {
     )
     return response.json()
   }
+  async getMinerInfo({ address, network }: any): Promise<any> {
+    const response = await fetch(
+      this.generatePath(`v3/miner/info/${address}`, network)
+    )
+    return response.json()
+  }
 }
 
 export default new OrdxApi()

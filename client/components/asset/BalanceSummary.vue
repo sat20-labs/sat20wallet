@@ -13,12 +13,13 @@
         class="absolute left-1/2 transform -translate-x-1/2 w-60 mt-2 p-4 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg space-y-2 z-10">
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.available') }}</span>
-          <span class="text-sm text-zinc-400">{{ formatBalance(abailableSats.availableAmt, props.selectedChain) }}</span>
+          <span class="text-sm text-zinc-400">{{ formatBalance(abailableSats.availableAmt, props.selectedChain)
+          }}</span>
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.unavailable') }}</span>
           <span class="text-sm text-zinc-400">{{ formatBalance(abailableSats.lockedAmt, props.selectedChain) }}</span>
-         
+
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.total') }}</span>
@@ -38,12 +39,10 @@
       </div>
 
       <!-- Asset Operation Dialog -->
-      <AssetOperationDialog v-model:open="showDialog" :title="translatedOperationTitle" :description="operationDescription"
-        :amount="operationAmount" :address="operationAddress" :chain="selectedChain"
-        :max-amount="selectedAsset ? (selectedAsset.amount).toString() : '0'" :operation-type="operationType"
-        :asset-type="selectedAsset?.type" :asset-ticker="selectedAsset?.label" 
-        :asset-key="selectedAsset?.key"
-        @update:amount="operationAmount = $event"
+      <AssetOperationDialog v-model:open="showDialog" :title="translatedOperationTitle"
+        :description="operationDescription" :amount="operationAmount" :address="operationAddress" :chain="selectedChain"
+        :max-amount="maxAmount" :operation-type="operationType" :asset-type="selectedAsset?.type"
+        :asset-ticker="selectedAsset?.label" :asset-key="selectedAsset?.key" @update:amount="operationAmount = $event"
         @update:address="operationAddress = $event" @confirm="handleOperationConfirm" />
     </div>
 
@@ -69,6 +68,7 @@ import { Chain } from '@/types/index'
 import { useGlobalStore } from '@/store/global'
 import { useI18n } from 'vue-i18n'
 import stp from '@/utils/stp'
+import { useQuery } from '@tanstack/vue-query'
 
 const { toast } = useToast()
 const l1Store = useL1Store()
@@ -125,31 +125,47 @@ const buttons = [
   { label: 'Unlock', icon: 'lucide:unlock', action: 'unlock', modes: ['lightning'], chains: ['Channel'] },
   { label: 'History', icon: 'lucide:clock', action: 'history', modes: ['poolswap', 'lightning'], chains: ['Bitcoin', 'SatoshiNet', 'Channel'] },
 ]
-const balanceMouseEnter = async () => {
-  await nextTick()
-  abailableSats.value = {
-    availableAmt: 0,
-    lockedAmt: 0
-  }
-  showDetails.value = true;
-  if (props.selectedChain.toLowerCase() === 'channel') {
-    return;
+
+// 查询方法
+const fetchAbailableSats = async () => {
+  if (!address.value || props.selectedChain.toLowerCase() === 'channel') {
+    return { availableAmt: 0, lockedAmt: 0 }
   }
   const handler = props.selectedChain.toLowerCase() === 'bitcoin' ? stp.getAssetAmount : stp.getAssetAmount_SatsNet
-  if (!address.value) {
-    return;
-  }
   const [err, res] = await handler.bind(stp)(address.value, '::')
   if (err || !res) {
-    console.error('Error getting asset amount:', err)
-    return;
+    return { availableAmt: 0, lockedAmt: 0 }
   }
-  console.log('res', res)
-  abailableSats.value = {
+  return {
     availableAmt: res.availableAmt,
     lockedAmt: res.lockedAmt
   }
 }
+
+// useQuery 定时获取
+const { data: abailableSatsQuery, refetch: refetchAbailableSats } = useQuery({
+  queryKey: [
+    'abailableSats',
+    address,
+    computed(() => props.selectedChain)
+  ],
+  queryFn: fetchAbailableSats,
+  refetchInterval: 5000,
+  enabled: computed(() => !!address.value && props.selectedChain.toLowerCase() !== 'channel'),
+  initialData: { availableAmt: 0, lockedAmt: 0 },
+})
+
+watch(abailableSatsQuery, (val) => {
+  if (val) abailableSats.value = val
+}, { immediate: true })
+
+// balanceMouseEnter 立即刷新
+const balanceMouseEnter = async () => {
+  await nextTick()
+  showDetails.value = true;
+  refetchAbailableSats()
+}
+
 const selectedChain = (props.selectedChain || 'bitcoin').toLowerCase()
 if (!selectedTranscendingMode.value || !props.selectedChain) {
   console.warn('Props missing: selectedTranscendingMode or selectedChain is undefined. Using default values.')
@@ -197,16 +213,25 @@ const translatedOperationTitle = computed(() => {
   }
 })
 
+const maxAmount = computed(() => {
+  if (!selectedAsset.value) return ''
+  const asset = selectedAsset.value
+  if (asset.type === '*') {
+    return Number(abailableSats.value?.availableAmt).toString()
+  }
+  return Number(asset.amount).toString()
+})
+console.log('maxAmount', selectedAsset, maxAmount, abailableSats);
+
 const operationDescription = computed(() => {
   if (!selectedAsset.value) return ''
   const asset = selectedAsset.value
-  console.log(asset);
   if (asset.type === '*') {
-    return `BTC: ${Number(abailableSats.value?.availableAmt).toLocaleString()} ${asset.label || 'sats'}`
+    return `BTC: ${Number(abailableSats.value?.availableAmt).toString()} ${asset.label || 'sats'}`
   }
   const type = asset.type || 'BTC'
   const amount = asset.amount || 0
-  return `${type}: ${Number(amount).toLocaleString()} ${asset.label || 'sats'}`
+  return `${type}: ${Number(amount).toString()} ${asset.label || 'sats'}`
 })
 
 // Handle Action
@@ -233,7 +258,7 @@ const handleAction = (action: string) => {
   }
   console.log('action', action);
   console.log('action', asset);
-  
+
   selectedAsset.value = asset
   operationType.value = action as OperationType
 
