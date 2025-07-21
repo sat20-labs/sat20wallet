@@ -47,6 +47,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import stp from '@/utils/stp'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Button } from '@/components/ui/button'
@@ -54,6 +55,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { useGlobalStore } from '@/store/global'
+import { useWalletStore } from '@/store/wallet'
+import { getConfig } from '@/config/wasm'
 
 const isLoading = ref(false)
 const showConfirm = ref(false)
@@ -61,6 +65,21 @@ const resultMsg = ref('')
 const resultSuccess = ref(false)
 const referrerName = ref('')
 const serverPubKey = ref('')
+const globalStore = useGlobalStore()
+const walletStore = useWalletStore()
+const { env } = storeToRefs(globalStore)
+const { network } = storeToRefs(walletStore)
+
+// 获取配置中的第一个Peer的公钥
+const config = getConfig(env.value, network.value)
+const firstPeer = config.Peers[1]
+if (firstPeer) {
+  // Peer格式为 "b@<pubkey>@<url>"，我们需要提取pubkey部分
+  const parts = firstPeer.split('@')
+  if (parts.length >= 2) {
+    serverPubKey.value = parts[1]
+  }
+}
 
 function onBind() {
   if (!referrerName.value || !serverPubKey.value) {
