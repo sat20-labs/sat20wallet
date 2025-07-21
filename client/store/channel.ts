@@ -136,7 +136,6 @@ export const useChannelStore = defineStore('channel', () => {
         const item = localbalanceL1[i]
         if (item.Name.Type === '') {
           totalSats.value = item.Amount
-          continue;
         }
         const protocol = item.Name.Protocol
         const key = protocol

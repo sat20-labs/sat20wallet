@@ -2,7 +2,7 @@
   "name": "sat2-wallet",
   "description": "manifest.json description",
   "private": true,
-  "version": "0.0.259",
+  "version": "0.0.261",
   "type": "module",
   "scripts": {
     "dev": "wxt",

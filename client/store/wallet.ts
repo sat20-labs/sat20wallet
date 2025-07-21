@@ -186,7 +186,7 @@ export const useWalletStore = defineStore('wallet', () => {
     await setAccountIndex(0)
     await setHasWallet(true)
     await setLocked(false)
-    await setNetwork(Network.TESTNET)
+    // await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
     await setPassword(password)
     await satsnetStp.importWallet(mnemonic, password)

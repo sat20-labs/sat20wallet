@@ -86,7 +86,6 @@ export const useL2Assets = () => {
       if (item.Name.Type === '*') {
         const totalSats = item.Amount
         assetsStore.setTotalSats(totalSats)
-        continue;
       }
       if (!allAssetList.value.find((v) => v?.key === key)) {
         let label = item.Name.Type === 'e'
