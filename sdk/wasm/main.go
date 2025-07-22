@@ -1386,7 +1386,7 @@ func sendAssets(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 
-	if len(p) < 3 {
+	if len(p) < 4 {
 		return createJsRet(nil, -1, "Expected 4 parameters")
 	}
 
