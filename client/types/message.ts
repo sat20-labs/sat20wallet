@@ -89,5 +89,7 @@ export namespace Message {
     // --- 推荐人相关 ---
     REGISTER_AS_REFERRER = 'REGISTER_AS_REFERRER',
     BIND_REFERRER_FOR_SERVER = 'BIND_REFERRER_FOR_SERVER',
+    // --- 名字管理相关 ---
+    GET_CURRENT_NAME = 'GET_CURRENT_NAME',
   }
 }

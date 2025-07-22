@@ -243,6 +243,22 @@ class Service {
   async getParamForInvokeContract(templateName: string, action: string): Promise<[Error | undefined, { parameter: any } | undefined]> {
     return (globalThis as any).sat20wallet_wasm.getParamForInvokeContract(templateName, action);
   }
+
+  // 获取名字存储的 key
+  private getNameStorageKey(address: string): string {
+    return `user_name_${address}`
+  }
+
+  // 获取当前地址保存的名字
+  async getCurrentName(address: string): Promise<string> {
+    try {
+      const savedName = localStorage.getItem(this.getNameStorageKey(address))
+      return savedName || ''
+    } catch (error) {
+      console.error('Failed to get current name:', error)
+      return ''
+    }
+  }
 }
 
 export default new Service()

@@ -497,6 +497,15 @@ export default defineUnlistedScript(() => {
         data: { referrerName, serverPubKey },
       })
     }
+
+    // 新增：获取当前地址保存的名字
+    async getCurrentName(address: string): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.REQUEST,
+        action: Message.MessageAction.GET_CURRENT_NAME,
+        data: { address },
+      })
+    }
   }
 
   const sat20 = new Sat20()

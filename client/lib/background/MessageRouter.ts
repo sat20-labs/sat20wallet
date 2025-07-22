@@ -66,6 +66,8 @@ export async function handleMessage(
       Message.MessageAction.UNLOCK_FROM_CHANNEL,
       // --- Added UTXO Getter Actions ---
       Message.MessageAction.MERGE_BATCH_SIGNED_PSBT,
+      // --- 名字管理相关 ---
+      Message.MessageAction.GET_CURRENT_NAME,
     ]
 
     // Verify origin authorization for specific methods.
@@ -395,6 +397,9 @@ export async function handleMessage(
           } else {
             resData = reqRes
           }
+          break
+        case Message.MessageAction.GET_CURRENT_NAME:
+          resData = await service.getCurrentName(data.address)
           break
         default:
           console.warn(`Unhandled REQUEST action: ${action}`)

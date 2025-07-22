@@ -1,26 +1,22 @@
 <template>
   <LayoutHome class="">
     <WalletHeader />
-    
+
     <!-- 没有名字时的提醒区域 -->
-    <div v-if="!currentUserName" class="flex items-center justify-between p-3 rounded-lg bg-muted/50 border border-muted mb-3">
+    <div v-if="!currentUserName"
+      class="flex items-center justify-between p-3 rounded-lg bg-muted/50 border border-muted mb-3">
       <div class="flex items-center space-x-2">
         <Icon icon="lucide:user-plus" class="w-4 h-4 text-muted-foreground" />
         <span class="text-sm text-muted-foreground">{{ $t('wallet.noNameSet') }}</span>
       </div>
-      <Button 
-        variant="outline" 
-        size="sm"
-        @click="editUserName"
-        class="text-primary hover:text-primary"
-      >
+      <Button variant="outline" size="sm" @click="editUserName" class="text-primary hover:text-primary">
         <Icon icon="lucide:plus" class="w-4 h-4" />
         <span class="ml-1 text-xs">{{ $t('wallet.setName') }}</span>
       </Button>
     </div>
-    
+
     <!-- 钱包地址 -->
-    <div class="flex items-center justify-between p-2 rounded-lg bg-muted/80 hover:bg-muted transition-all">
+    <div class="flex items-center justify-between p-2 rounded-lg bg-muted/80 hover:bg-muted transition-all gap-2">
       <!-- 圆形背景 + 居中 Icon -->
       <span
         class="w-9 h-9 flex items-center justify-center bg-gradient-to-tr from-[#6600cc] to-[#a0076d] text-foreground rounded-full">
@@ -28,26 +24,21 @@
       </span>
 
       <!-- 账户信息区域 -->
-      <div class="flex-1 flex flex-col items-center">
+      <div class="flex-1 flex flex-col">
         <!-- 用户名（如果有） -->
         <div v-if="currentUserName" class="flex items-center space-x-2 mb-1">
-          <span class="text-sm font-medium text-foreground">{{ currentUserName }}</span>
-          <Button 
-            variant="ghost" 
-            size="sm"
-            @click="editUserName"
-            class="h-auto p-0 text-muted-foreground hover:text-foreground"
-          >
+          <span class="text-sm font-medium text-foreground truncate max-w-[120px]">{{ currentUserName }}</span>
+          <Button variant="ghost" size="sm" @click="editUserName"
+            class="h-auto p-0 text-muted-foreground hover:text-foreground flex-shrink-0">
             <Icon icon="lucide:edit-3" class="w-3 h-3" />
           </Button>
         </div>
 
         <!-- 账户地址 -->
-        <Button asChild variant="link" class="text-center p-0 h-auto">
-          <a :href="mempoolUrl" target="_blank" :title="$t('wallet.viewTradeHistory')" :class="currentUserName ? 'text-xs' : ''">
-            {{ hideAddress(showAddress) }}
-          </a>
-        </Button>
+        <a :href="mempoolUrl" target="_blank" :title="$t('wallet.viewTradeHistory')"
+          :class="currentUserName ? 'text-xs' : ''" class="hover:underline text-muted-foreground">
+          {{ hideAddress(showAddress) }}
+        </a>
       </div>
 
       <!-- 竖线分隔符 -->
@@ -60,8 +51,7 @@
       <SubWalletSelector @wallet-changed="handleSubWalletChange" @wallet-created="handleSubWalletCreated" />
     </div>
     <!-- 资产余额 -->
-    <BalanceSummary :key="selectedChainLabel" 
-      :selectedChain="selectedChainLabel" :mempool-url="mempoolUrl"/>
+    <BalanceSummary :key="selectedChainLabel" :selectedChain="selectedChainLabel" :mempool-url="mempoolUrl" />
 
     <!-- 资产列表 -->
     <AssetList class="mt-4" v-model:model-value="selectTab" @update:model-value="tabChange">
@@ -147,7 +137,7 @@ const { refreshL2Assets } = useL2Assets()
 let { address, network } = storeToRefs(walletStore)
 
 const channelStore = useChannelStore()
-const { channel} = storeToRefs(channelStore)
+const { channel } = storeToRefs(channelStore)
 const { plainList, sat20List, brc20List, runesList } = storeToRefs(l1Store)
 
 // 状态管理
@@ -183,7 +173,7 @@ const mempoolUrl = computed(() => {
       network: 'testnet',
       path: `address/${address.value}`,
     })
-  } else if (selectedChainLabel.value === 'channel') {    
+  } else if (selectedChainLabel.value === 'channel') {
     return generateMempoolUrl({
       network: 'testnet',
       path: `address/${channel.value?.channelId || address.value}`,
@@ -198,7 +188,7 @@ const mempoolUrl = computed(() => {
       env: env.value,
     })
   }
-return '' // 默认返回空字符串，防止未匹配的情况
+  return '' // 默认返回空字符串，防止未匹配的情况
 })
 
 watch(() => address.value, (newVal, oldVal) => {
@@ -369,7 +359,7 @@ const tabChange = (i: string) => {
 onMounted(async () => {
   handleRouteChange()
   satsnetStp.registerCallback(channelCallback)
-  
+
   // 设置当前地址并校验名字
   if (address.value) {
     await setCurrentAddress(address.value)
