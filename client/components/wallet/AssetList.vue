@@ -484,7 +484,8 @@ watch(selectedChain, (newVal) => {
   // L1 发送操作
   const l1Send = async ({ toAddress, asset_name, amt }: any) => {
     loading.value = true
-    const [err, result] = await satsnetStp.sendAssets(toAddress, asset_name, amt, 0)
+    
+    const [err, result] = await satsnetStp.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
     if (err) {
       toast({
         title: 'error',

@@ -5,7 +5,7 @@
 
     <!-- 右侧功能按钮 -->
     <div class="flex items-center">
-      <BtcFeeSelect @change="walletStore.setFeeRate" />
+      <BtcFeeSelect @change="walletStore.setBtcFeeRate" />
       <SatsnetFeeSelect @change="walletStore.setSatsnetFeeRate" />
       <NetworkSelect />
 
