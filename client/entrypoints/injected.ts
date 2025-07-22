@@ -28,6 +28,8 @@ export default defineUnlistedScript(() => {
 
         // Handle events
         if (type === Message.MessageType.EVENT && eventName) {
+          console.log('eventName', eventName);
+          
           const listeners = this.eventListeners[eventName]
           console.log('listeners', listeners);
 

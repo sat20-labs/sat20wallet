@@ -56,7 +56,10 @@
     "viewTradeHistory": "查看交易历史",
     "l1": "Bitcoin",
     "channel": "Channel",
-    "l2": "SatoshiNet"
+    "l2": "SatoshiNet",
+    "editName": "编辑",
+    "noNameSet": "此地址未设置名字",
+    "setName": "设置名字"
   },
   "phrase": {
     "title": "恢复助记词",
@@ -377,5 +380,23 @@
     "action": "操作",
     "reason": "原因",
     "lockedTime": "锁定时间"
+  },
+  "nameSelect": {
+    "title": "选择名字",
+    "subtitle": "为您的钱包地址选择一个名字",
+    "currentAddress": "当前地址",
+    "selectName": "选择名字",
+    "description": "从您可用的名字中选择一个来与此地址一起显示",
+    "loading": "加载名字中...",
+    "errorTitle": "错误",
+    "errorDescription": "加载名字失败，请重试。",
+    "chooseName": "选择一个名字",
+    "placeholder": "选择一个名字...",
+    "noNames": "此地址没有可用的名字",
+    "currentName": "当前名字",
+    "clear": "清除",
+    "cancel": "取消",
+    "save": "保存",
+    "saving": "保存中..."
   }
 }

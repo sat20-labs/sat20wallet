@@ -11,6 +11,7 @@ import WalletSettingPublicKey from '@/entrypoints/popup/pages/wallet/settings/pu
 import WalletSettingPassword from '@/entrypoints/popup/pages/wallet/settings/password.vue'
 import WalletSettingReferrer from '@/entrypoints/popup/pages/wallet/settings/referrer/index.vue'
 import WalletSettingReferrerBind from '@/entrypoints/popup/pages/wallet/settings/referrer/bind.vue'
+import NameSelect from '@/entrypoints/popup/pages/wallet/NameSelect.vue'
 
 import WalletSettingNode from '@/entrypoints/popup/pages/wallet/settings/node.vue'
 import WalletManager from '@/components/wallet/WalletManager.vue'
@@ -26,10 +27,12 @@ const routes = [
   { path: '/import', component: ImportWallet },
   { path: '/create', component: CreateWallet },
   { path: '/unlock', component: Unlock },
+  
   {
     path: '/wallet',
     children: [
       { path: '', component: WalletIndex },
+      { path: 'name-select', component: NameSelect },
       { path: 'split-asset', component: SplitAsset },
       {
         path: 'setting',

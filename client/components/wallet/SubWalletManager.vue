@@ -22,7 +22,7 @@
                 </div>
                 <div>
                   <div class="font-medium flex items-center gap-2 text-white/60">
-                    {{ account.name }}
+                    {{ account.displayName }}
                     <Button v-if="account.index === accountIndex" variant="ghost" size="icon" class="h-2 w-2"
                       @click.stop="showEditNameDialog(account)">
                       <Icon icon="lucide:pencil" class="w-3 h-3" />
@@ -58,30 +58,6 @@
         </div>
       </div>
     </footer>
-
-    <!-- Edit Name Dialog -->
-    <Dialog :open="isEditNameDialogOpen" @update:open="isEditNameDialogOpen = $event">
-      <DialogContent class="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle>{{ $t('subWalletManager.editAccountName') }}</DialogTitle>
-          <DialogDescription>
-            <hr class="mb-6 mt-1 border-t-1 border-accent">
-            {{ $t('subWalletManager.changeAccountName') }}
-          </DialogDescription>
-        </DialogHeader>
-        <div class="space-y-4">
-          <div class="space-y-2">
-            <Label for="AccountName">{{ $t('subWalletManager.accountName') }}</Label>
-            <Input id="AccountName" v-model="editingName" :placeholder="$t('subWalletManager.enterAccountName')" />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button @click="saveAccountName" :disabled="isSaving" class="h-12">
-            {{ $t('subWalletManager.saveChanges') }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
 
     <!-- Create Dialog -->
     <Dialog :open="isCreateAccountDialogOpen" @update:open="isCreateAccountDialogOpen = $event">
@@ -164,23 +140,29 @@ import { hideAddress } from '@/utils'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import walletManager from '@/utils/sat20'
 import { sendAccountsChangedEvent } from '@/lib/utils'
+import { useNameManager } from '@/composables/useNameManager'
 
 const router = useRouter()
 const { toast } = useToast()
 const walletStore = useWalletStore()
 
+// 名字管理
+const { getCurrentName } = useNameManager()
+
 // State
-const isEditNameDialogOpen = ref(false)
 const isCreateAccountDialogOpen = ref(false)
 const isDeleteDialogOpen = ref(false)
-const editingName = ref('')
 const newAccountName = ref('')
 const isCreating = ref(false)
 const isDeleting = ref(false)
-const isSaving = ref(false)
-const accountToEdit = ref<WalletAccount | null>(null)
-const accountToDelete = ref<WalletAccount | null>(null)
-const accountsWithAddress = ref<WalletAccount[]>([])
+// 扩展 WalletAccount 类型以包含 displayName
+interface WalletAccountWithDisplay extends WalletAccount {
+  address: string
+  displayName: string
+}
+
+const accountToDelete = ref<WalletAccountWithDisplay | null>(null)
+const accountsWithAddress = ref<WalletAccountWithDisplay[]>([])
 const isLoadingAccounts = ref(false)
 
 // Computed
@@ -197,12 +179,19 @@ watch(accounts, async (newAccounts) => {
       newAccounts.map(async (item) => {
         const [_, addressRes] = await walletManager.getWalletAddress(item.index)
         if (addressRes) {
+          // 获取该地址设置的名字
+          const savedName = await getCurrentName(addressRes.address)
           return {
             ...item,
             address: addressRes.address,
+            displayName: savedName || item.name, // 如果有保存的名字就显示，否则显示 account.name
           }
         }
-        return item
+        return {
+          ...item,
+          address: '',
+          displayName: item.name, // 如果没有地址，使用默认的 account.name
+        }
       })
     )
     accountsWithAddress.value = results
@@ -218,35 +207,9 @@ function showCreateAccountDialog() {
   newAccountName.value = `Account ${(accounts.value?.length || 0) + 1}`
 }
 
-function showEditNameDialog(account: WalletAccount) {
-  accountToEdit.value = account
-  editingName.value = account.name
-  isEditNameDialogOpen.value = true
-}
-
-async function saveAccountName() {
-  if (!editingName.value || !accountToEdit.value) return
-
-  try {
-    isSaving.value = true
-    await walletStore.updateAccountName(accountToEdit.value.index, editingName.value)
-
-    toast({
-      title: '成功',
-      description: '账户名称修改成功',
-    })
-    isEditNameDialogOpen.value = false
-    // ... existing code ...
-  } catch (error) {
-    toast({
-      title: '错误',
-      description: '账户名称修改失败',
-      variant: 'destructive',
-    })
-  } finally {
-    isSaving.value = false
-    accountToEdit.value = null
-  }
+function showEditNameDialog(account: WalletAccountWithDisplay) {
+  // 跳转到名字选择页面
+  router.push('/wallet/name-select')
 }
 
 async function createAccount() {
@@ -286,7 +249,7 @@ async function createAccount() {
   }
 }
 
-function confirmDeleteAccount(account: WalletAccount) {
+function confirmDeleteAccount(account: WalletAccountWithDisplay) {
   accountToDelete.value = account
   isDeleteDialogOpen.value = true
 }
@@ -320,7 +283,7 @@ async function deleteAccount() {
   }
 }
 
-async function selectAccount(account: WalletAccount) {
+async function selectAccount(account: WalletAccountWithDisplay) {
   try {
     await walletStore.switchToAccount(account.index)
     toast({
@@ -360,3 +323,4 @@ async function copyAddress(address: string) {
   }
 }
 </script>
+

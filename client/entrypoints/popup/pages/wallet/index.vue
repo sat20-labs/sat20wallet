@@ -1,6 +1,24 @@
 <template>
   <LayoutHome class="">
     <WalletHeader />
+    
+    <!-- 没有名字时的提醒区域 -->
+    <div v-if="!currentUserName" class="flex items-center justify-between p-3 rounded-lg bg-muted/50 border border-muted mb-3">
+      <div class="flex items-center space-x-2">
+        <Icon icon="lucide:user-plus" class="w-4 h-4 text-muted-foreground" />
+        <span class="text-sm text-muted-foreground">{{ $t('wallet.noNameSet') }}</span>
+      </div>
+      <Button 
+        variant="outline" 
+        size="sm"
+        @click="editUserName"
+        class="text-primary hover:text-primary"
+      >
+        <Icon icon="lucide:plus" class="w-4 h-4" />
+        <span class="ml-1 text-xs">{{ $t('wallet.setName') }}</span>
+      </Button>
+    </div>
+    
     <!-- 钱包地址 -->
     <div class="flex items-center justify-between p-2 rounded-lg bg-muted/80 hover:bg-muted transition-all">
       <!-- 圆形背景 + 居中 Icon -->
@@ -9,12 +27,28 @@
         <Icon icon="lucide:user-round" class="w-5 h-5 text-white/80 flex-shrink-0" />
       </span>
 
-      <!-- 账户地址 -->
-      <Button asChild variant="link" class="flex-1 text-center">
-        <a :href="mempoolUrl" target="_blank" :title="$t('wallet.viewTradeHistory')">
-          {{ hideAddress(showAddress) }}
-        </a>
-      </Button>
+      <!-- 账户信息区域 -->
+      <div class="flex-1 flex flex-col items-center">
+        <!-- 用户名（如果有） -->
+        <div v-if="currentUserName" class="flex items-center space-x-2 mb-1">
+          <span class="text-sm font-medium text-foreground">{{ currentUserName }}</span>
+          <Button 
+            variant="ghost" 
+            size="sm"
+            @click="editUserName"
+            class="h-auto p-0 text-muted-foreground hover:text-foreground"
+          >
+            <Icon icon="lucide:edit-3" class="w-3 h-3" />
+          </Button>
+        </div>
+
+        <!-- 账户地址 -->
+        <Button asChild variant="link" class="text-center p-0 h-auto">
+          <a :href="mempoolUrl" target="_blank" :title="$t('wallet.viewTradeHistory')" :class="currentUserName ? 'text-xs' : ''">
+            {{ hideAddress(showAddress) }}
+          </a>
+        </Button>
+      </div>
 
       <!-- 竖线分隔符 -->
       <Separator orientation="vertical" class="h-full mx-2" />
@@ -90,6 +124,7 @@ import { Chain } from '@/types/index'
 import { useGlobalStore } from '@/store/global'
 import { Separator } from '@/components/ui/separator'
 import { generateMempoolUrl } from '@/utils'
+import { useNameManager } from '@/composables/useNameManager'
 
 console.log('Debug: This is index.vue')
 
@@ -97,6 +132,13 @@ console.log('Debug: This is index.vue')
 const walletStore = useWalletStore()
 const l1Store = useL1Store()
 const transcendingModeStore = useTranscendingModeStore()
+
+// 名字管理
+const {
+  currentName,
+  setCurrentAddress,
+  validateAndCleanName,
+} = useNameManager()
 
 const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
 const { refreshL1Assets } = useL1Assets()
@@ -116,6 +158,13 @@ const selectedType = ref('ORDX')
 const globalStore = useGlobalStore()
 const { env } = storeToRefs(globalStore)
 
+// 当前用户名
+const currentUserName = computed(() => currentName.value)
+
+// 编辑用户名
+const editUserName = () => {
+  router.push('/wallet/name-select')
+}
 
 const showAddress = computed(() => {
   if (selectedChainLabel.value === 'bitcoin') {
@@ -320,5 +369,11 @@ const tabChange = (i: string) => {
 onMounted(async () => {
   handleRouteChange()
   satsnetStp.registerCallback(channelCallback)
+  
+  // 设置当前地址并校验名字
+  if (address.value) {
+    await setCurrentAddress(address.value)
+    await validateAndCleanName(address.value)
+  }
 })
 </script>

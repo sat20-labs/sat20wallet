@@ -82,16 +82,7 @@ export const useWalletStore = defineStore('wallet', () => {
 
     try {
       console.log(`Sending NETWORK_CHANGED message with payload: ${value}`)
-      await browser.runtime.sendMessage({
-        type: Message.MessageType.REQUEST,
-        action: Message.MessageAction.NETWORK_CHANGED,
-        data: { network: value },
-        metadata: { from: Message.MessageFrom.POPUP }
-      })
-      // Send network changed event to injected script
-      setTimeout(() => {
-        sendNetworkChangedEvent(value)
-      }, 300);
+      sendNetworkChangedEvent(value)
     } catch (error) {
       console.error('Failed to send NETWORK_CHANGED message to background:', error)
     }

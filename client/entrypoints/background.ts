@@ -57,6 +57,11 @@ class BackgroundService {
     const { type, action, metadata } = message
     if (type === Message.MessageType.EVENT) {
       if (this.portMap.content) {
+        console.log('type', type);
+        console.log('action', action);
+        console.log('metadata', metadata);
+        console.log('message', message);
+        console.log('this.portMap.content', this.portMap.content);
         this.portMap.content.postMessage(message)
       }
       return true

@@ -56,7 +56,10 @@
     "viewTradeHistory": "View Trade History",
     "l1": "Bitcoin",
     "channel": "Channel",
-    "l2": "SatoshiNet"
+    "l2": "SatoshiNet",
+    "editName": "Edit",
+    "noNameSet": "No name set for this address",
+    "setName": "Set Name"
   },
   "phrase": {
     "title": "Recovery Phrase",
@@ -378,5 +381,23 @@
     "action": "Action",
     "reason": "Reason",
     "lockedTime": "Locked Time"
+  },
+  "nameSelect": {
+    "title": "Select Name",
+    "subtitle": "Choose a name for your wallet address",
+    "currentAddress": "Current Address",
+    "selectName": "Select Name",
+    "description": "Choose a name from your available names to display with this address",
+    "loading": "Loading names...",
+    "errorTitle": "Error",
+    "errorDescription": "Failed to load names. Please try again.",
+    "chooseName": "Choose a name",
+    "placeholder": "Select a name...",
+    "noNames": "No names available for this address",
+    "currentName": "Current Name",
+    "clear": "Clear",
+    "cancel": "Cancel",
+    "save": "Save",
+    "saving": "Saving..."
   }
 }
