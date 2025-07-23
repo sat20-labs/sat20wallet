@@ -30,11 +30,11 @@ const (
 type LaunchPoolContract struct {
 	ContractBase
 	AssetSymbol   int32 `json:"assetSymbol,omitempty"`
-	BindingSat    int   `json:"bindingSat"`      // 每一聪绑定的资产数量，每一聪携带的该资产数量，用于在一层铸造ordx资产时使用
-	MintAmtPerSat int   `json:"mintAmtPerSat"`   // 在二层分发时，每一聪换多少资产数量，一般MintAmtPerSat比BindingSat小10-1000倍
-	Limit         int64 `json:"limit"`        // 每个地址最大铸造量，0 不限制
-	MaxSupply     int64 `json:"maxSupply"`    // 最大资产供应量，
-	LaunchRatio   int   `json:"launchRation"` // 铸造量达到总量的多少比例后，自动发射，向之前所有铸造者自动转token；
+	BindingSat    int   `json:"bindingSat"`    // 每一聪绑定的资产数量，每一聪携带的该资产数量，用于在一层铸造ordx资产时使用
+	MintAmtPerSat int   `json:"mintAmtPerSat"` // 在二层分发时，每一聪换多少资产数量，一般MintAmtPerSat比BindingSat小10-1000倍
+	Limit         int64 `json:"limit"`         // 每个地址最大铸造量，0 不限制
+	MaxSupply     int64 `json:"maxSupply"`     // 最大资产供应量，
+	LaunchRatio   int   `json:"launchRation"`  // 铸造量达到总量的多少比例后，自动发射，向之前所有铸造者自动转token；
 	// 剩下的比例，留存在池子中当作流动性池子
 	// 比例必须在LAUNCH_POOL_MIN_RATION 和 LAUNCH_POOL_MAX_RATION 之间
 }
@@ -65,18 +65,18 @@ func (p *LaunchPoolContract) GetAssetName() *swire.AssetName {
 }
 
 // 发射水位：asset num
-func (p *LaunchPoolContract) TotalAssetToMint() int64 {
-	return p.MaxSupply * int64(p.LaunchRatio) / 100
+func (p *LaunchPoolContract) TotalAssetToMint() *Decimal {
+	return indexer.NewDefaultDecimal(p.MaxSupply * int64(p.LaunchRatio) / 100)
 }
 
 // 铸造的总额度: asset num
-func (p *LaunchPoolContract) MaxAssetToMint() int64 {
-	return p.MaxSupply * int64(LAUNCH_POOL_MAX_RATION) / 100
+func (p *LaunchPoolContract) MaxAssetToMint() *Decimal {
+	return indexer.NewDefaultDecimal(p.MaxSupply * int64(LAUNCH_POOL_MAX_RATION) / 100)
 }
 
 // sat num
 func (p *LaunchPoolContract) TotalSatsToMint() int64 {
-	return p.TotalAssetToMint() / int64(p.MintAmtPerSat)
+	return p.TotalAssetToMint().Int64() / int64(p.MintAmtPerSat)
 }
 
 func (p *LaunchPoolContract) CheckContent() error {
@@ -312,13 +312,13 @@ type LaunchPoolInstallData struct {
 }
 
 type LaunchPoolRunningData struct {
-	TotalMinted       int64 // asset num
+	TotalMinted       *Decimal // asset num
 	TotalInvalid      int64 // sats num
-	AssetAmtInPool    int64 // 池子中资产的数量
+	AssetAmtInPool    *Decimal // 池子中资产的数量
 	SatsValueInPool   int64 // 池子中聪的数量
-	TotalInputAssets  int64 // 所有进入池子的资产数量，指资产铸造总量
+	TotalInputAssets  *Decimal // 所有进入池子的资产数量，指资产铸造总量
 	TotalInputSats    int64 // 所有进入池子的聪数量，指聪网上每个地址参与铸造的每个TX的输入聪总量
-	TotalOutputAssets int64 // 所有退出池子的资产数量，发射时发射出去的资产总量
+	TotalOutputAssets *Decimal // 所有退出池子的资产数量，发射时发射出去的资产总量
 	TotalOutputSats   int64 // 所有退出池子的聪数量，铸造失败退回的聪
 	IsLaunching       bool
 	LaunchTxIDs       []string // 发射
@@ -329,28 +329,14 @@ type LaunchPoolRunningData struct {
 }
 
 type MinterStatus struct {
-	TotalMint   int64 // 有效铸造的资产数量，或者退款的聪数量
+	TotalMint   *Decimal // 有效铸造的资产数量，或者退款的聪数量
 	HasLaunched bool  // 已经发射，或者已经退款
 	MintHistory []*MintHistoryItem
 }
 
 type LaunchPoolInvokeParam = InvokeParam
 
-type MintHistoryItem_old = MintHistoryItem
-
-type MintHistoryItem struct {
-	InvokeHistoryItemBase
-	Utxo        string
-	Address     string
-	Value       int64 // 参与铸造的白聪数量（如果输入含有其他资产，忽略其他资产，连通其绑定的聪）
-	AssetName   string
-	Amt         string // 参与铸造得到的资产数量
-	RefundValue int64  // 需要退回的聪数量
-}
-
-func (p *MintHistoryItem) ToNewVersion() InvokeHistoryItem {
-	return p
-}
+type MintHistoryItem = InvokeItem
 
 type LaunchPoolContractRunTimeInDB struct {
 	LaunchPoolContract
@@ -417,9 +403,9 @@ type LaunchPoolContractRunTime struct {
 	deployTickerResv *InscribeResv
 	isSending        bool
 
-	refreshTime_launchPool   int64
-	responseCache_launchPool []*responseItem_launchPool
-	responseHistory          []*MintHistoryItem // 按时间排序
+	refreshTime   	int64
+	responseCache 	[]*responseItem_launchPool
+	responseHistory []*MintHistoryItem // 按时间排序
 
 	mutex sync.RWMutex
 }
@@ -494,9 +480,9 @@ func (p *LaunchPoolContractRunTime) RuntimeStatus() string {
 }
 
 type responseItem_launchPool struct {
-	Address string `json:"address"`
-	Valid   int64  `json:"valid"`
-	Invalid int64  `json:"invalid"`
+	Address string  `json:"address"`
+	Valid   string  `json:"valid"`
+	Invalid string  `json:"invalid"`
 }
 
 
@@ -544,10 +530,10 @@ func (p *LaunchPoolContractRunTime) CheckInvokeParam(param string) (int64, error
 
 
 // 当前能铸造的额度: asset num
-func (p *LaunchPoolContractRunTime) LimitToMint() int64 {
-	return p.MaxAssetToMint() - p.TotalMinted
+func (p *LaunchPoolContractRunTime) LimitToMint() *Decimal {
+	return indexer.DecimalSub(p.MaxAssetToMint(), p.TotalMinted)
 }
 
-func (p *LaunchPoolContractRunTime) LeftToMint() int64 {
-	return p.TotalAssetToMint() - p.TotalMinted
+func (p *LaunchPoolContractRunTime) LeftToMint() *Decimal {
+	return indexer.DecimalSub(p.TotalAssetToMint(),  p.TotalMinted)
 }

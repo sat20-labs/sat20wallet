@@ -1,10 +1,10 @@
 package wallet
 
 import (
-	
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sat20-labs/satoshinet/txscript"
 
@@ -20,8 +20,10 @@ const (
 
 	TEMPLATE_CONTRACT_SWAP        string = "swap.tc"
 	TEMPLATE_CONTRACT_AMM         string = "amm.tc"
-	TEMPLATE_CONTRACT_ASSETLOCKER string = "assetlocker.tc"
+	TEMPLATE_CONTRACT_VAULT 	  string = "vault.tc"
 	TEMPLATE_CONTRACT_LAUNCHPOOL  string = "launchpool.tc"
+	TEMPLATE_CONTRACT_STAKE       string = "stake.tc"
+	TEMPLATE_CONTRACT_MINER_STAKE string = "minerstake.tc"
 
 	CONTRACT_STATUS_EXPIRED int = -2
 	CONTRACT_STATUS_CLOSED  int = -1
@@ -32,30 +34,35 @@ const (
 	CONTRACT_STATUS_CLOSING int = 200 // 进入最后的关闭阶段
 	// ...   closing status, at last change to CONTRACT_STATUS_CLOSED or CONTRACT_STATUS_EXPIRED
 
-	INVOKE_API_ENABLE		string = "enable"	// 每个合约的第一个调用，用来激活合约
+	INVOKE_API_ENABLE string = "enable" // 每个合约的第一个调用，用来激活合约
 
-	INVOKE_RESULT_OK     	string = "ok"
-	INVOKE_RESULT_REFUND 	string = "refund"
-	INVOKE_RESULT_DEAL   	string = "deal"
-	INVOKE_RESULT_DEPOSIT   string = "deposit"
-	INVOKE_RESULT_WITHDRAW  string = "withdraw"
-	INVOKE_RESULT_DEANCHOR  string = "deanchor"
-	INVOKE_RESULT_ANCHOR    string = "anchor"
+	INVOKE_RESULT_OK       string = "ok"
+	INVOKE_RESULT_REFUND   string = "refund"
+	INVOKE_RESULT_DEAL     string = "deal"
+	INVOKE_RESULT_DEPOSIT  string = "deposit"
+	INVOKE_RESULT_WITHDRAW string = "withdraw"
+	INVOKE_RESULT_DEANCHOR string = "deanchor"
+	INVOKE_RESULT_ANCHOR   string = "anchor"
 )
 
 const (
-	INVOKE_REASON_NORMAL 			string = ""
-	INVOKE_REASON_REFUND            string = "refund"
-	INVOKE_REASON_INVALID 			string = "invalid"  // 参数错误
-	INVOKE_REASON_INNER_ERROR 	 	string = "inner error"  // 内部错误
-	INVOKE_REASON_NO_ENOUGH_ASSET 	string = "no enough asset"
-	INVOKE_REASON_SLIPPAGE_PROTECT 	string = "slippage protection"
+	INVOKE_REASON_NORMAL           string = ""
+	INVOKE_REASON_REFUND           string = "refund"
+	INVOKE_REASON_INVALID          string = "invalid"     // 参数错误
+	INVOKE_REASON_INNER_ERROR      string = "inner error" // 内部错误
+	INVOKE_REASON_NO_ENOUGH_ASSET  string = "no enough asset"
+	INVOKE_REASON_SLIPPAGE_PROTECT string = "slippage protection"
 )
-
 
 // 用在开发过程修改数据库，设置为true，然后数据库自动升级，然后马上要设置为false，并且将所有oldversion的数据结果，等同于最新结构
 const ContractRuntimeBaseUpgrade = false
 
+type ActionFunc func(*any, any, any) (any, error)
+
+type ContractDeployAction struct {
+	Action ActionFunc
+	Name   string
+}
 
 type Contract interface {
 	GetTemplateName() string          // 合约模版名称
@@ -145,6 +152,96 @@ func GetKeyFromId(id int64) string {
 	return fmt.Sprintf("%012d", id)
 }
 
+func NewInvokeHistoryItem(cn string) InvokeHistoryItem {
+	switch cn {
+	case TEMPLATE_CONTRACT_SWAP:
+		return &SwapHistoryItem{}
+	case TEMPLATE_CONTRACT_LAUNCHPOOL:
+		return &MintHistoryItem{}
+	case TEMPLATE_CONTRACT_AMM:
+		return &SwapHistoryItem{}
+	}
+	return nil
+}
+
+func NewInvokeHistoryItem_old(cn string) InvokeHistoryItem {
+	// switch cn {
+	// case TEMPLATE_CONTRACT_SWAP:
+	// 	return &SwapHistoryItem_old{}
+	// case TEMPLATE_CONTRACT_LAUNCHPOOL:
+	// 	return &MintHistoryItem_old{}
+	// }
+	return &InvokeItem_old{}
+}
+
+
+type InvokeItem_old = InvokeItem
+
+// type InvokeItem_old struct {
+// 	Version        int
+// 	Id             int64
+// 	OrderType      int    //
+// 	UtxoId         uint64 // 其实是utxoId
+// 	OrderTime      int64
+// 	AssetName      string
+// 	UnitPrice      *Decimal // X per Y
+// 	ExpectedAmt    *Decimal // 期望的数量
+// 	Address        string   // 所有人
+// 	FromL1         bool     // 是否主网的调用，默认是false
+// 	InUtxo         string   // sell or buy 的utxo
+// 	InValue        int64    // 白聪，不包括资产聪, 去掉手续费
+// 	InAmt          *Decimal
+// 	RemainingAmt   *Decimal // 要买或者卖的资产的剩余数量
+// 	RemainingValue int64    // 用来买资产的聪的剩余数量
+// 	OutTxId        string   // 回款的TxId，可能是成交后汇款，也可能是撤销后的回款
+// 	OutAmt         *Decimal // 买到的资产，或者
+// 	OutValue       int64    // 卖出得到的聪
+// 	Valid          bool
+// 	Done           int // 0 交易中；1，交易完成，2，退款
+// }
+
+// func (p *InvokeItem_old) ToNewVersion() InvokeHistoryItem {
+// 	return &InvokeItem{}
+// }
+
+type InvokeItem struct {
+	InvokeHistoryItemBase
+
+	OrderType      int    //
+	UtxoId         uint64 // 其实是utxoId
+	OrderTime      int64
+	AssetName      string
+	ServiceFee	   int64
+	UnitPrice      *Decimal // X per Y
+	ExpectedAmt    *Decimal // 期望的数量
+	Address        string   // 所有人
+	FromL1         bool     // 是否主网的调用，默认是false
+	InUtxo         string   // sell or buy 的utxo
+	InValue        int64    // 白聪，不包括资产聪
+	InAmt          *Decimal
+	RemainingAmt   *Decimal // 要买或者卖的资产的剩余数量
+	RemainingValue int64    // 用来买资产的聪的剩余数量
+	ToL1           bool     // 是否主网的调用，默认是false
+	OutTxId        string   // 回款的TxId，可能是成交后汇款，也可能是撤销后的回款
+	OutAmt         *Decimal // 买到的资产
+	OutValue       int64    // 卖出得到的聪，扣除服务费
+}
+
+func (p *InvokeItem) ToNewVersion() InvokeHistoryItem {
+	return p
+}
+
+func (p *InvokeItem) Clone() *InvokeItem {
+	n := *p
+	n.UnitPrice = p.UnitPrice.Clone()
+	n.ExpectedAmt = p.ExpectedAmt.Clone()
+	n.InAmt = p.InAmt.Clone()
+	n.RemainingAmt = p.RemainingAmt.Clone()
+	n.OutAmt = p.OutAmt.Clone()
+	return &n
+}
+
+
 type InvokeParam struct {
 	Action string `json:"action"`
 	Param  string `json:"param,omitempty"` // 外部使用时是json，内部使用时是编码过的string
@@ -171,8 +268,8 @@ func (p *InvokeParam) Decode(data []byte) error {
 }
 
 type EnableInvokeParam struct {
-	HeightL1  int 	 `json:"heightL1"`  
-	HeightL2  int 	 `json:"heightL2"` 
+	HeightL1 int `json:"heightL1"`
+	HeightL2 int `json:"heightL2"`
 }
 
 func (p *EnableInvokeParam) Encode() ([]byte, error) {
@@ -197,6 +294,64 @@ func (p *EnableInvokeParam) Decode(data []byte) error {
 	return nil
 }
 
+type InvokerStatus interface {
+	GetVersion() int
+	GetKey() string
+}
+
+type InvokerStatusBase struct {
+	Version         int
+	Address         string
+	InvokeCount  	int
+	DepositAmt   	*Decimal	// 存款总额
+	DepositValue    int64
+	WithdrawAmt  	*Decimal	// 取款总额
+	WithdrawValue   int64
+	RefundAmt    	*Decimal	// 无效退回，不计入存款总额
+	RefundValue     int64
+
+	DepositUtxoMap  map[string]bool // 
+	WithdrawUtxoMap map[string]bool // utxo map
+	RefundUtxoMap   map[string]bool // utxo map 要退款的记录，包括指令utxo和要退款的utxo
+	History         map[int][]int64 // 用户的invoke历史记录，每100个为一桶，用InvokeCount计算 TODO 目前统一一块存储，数据量大了后要分桶保存，用到才加载
+	UpdateTime      int64
+}
+
+func NewInvokerStatusBase(address string, divisibility int) *InvokerStatusBase {
+	return &InvokerStatusBase{
+		Address: 	 address,
+		RefundAmt:   indexer.NewDecimal(0, divisibility),
+		DepositAmt:  indexer.NewDecimal(0, divisibility),
+		WithdrawAmt: indexer.NewDecimal(0, divisibility),
+
+		RefundUtxoMap:   make(map[string]bool),
+		DepositUtxoMap:  make(map[string]bool),
+		WithdrawUtxoMap: make(map[string]bool),
+		History:         make(map[int][]int64),
+		UpdateTime:  	 time.Now().Unix(),
+	}
+}
+
+func (p *InvokerStatusBase) GetVersion() int {
+	return p.Version
+}
+
+func (p *InvokerStatusBase) GetKey() string {
+	return p.Address
+}
+
+
+func NewInvokerStatus(cn string) InvokerStatus {
+	switch cn {
+	case TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_AMM:
+		return &TraderStatus{}
+	case TEMPLATE_CONTRACT_LAUNCHPOOL:
+		return nil
+	case TEMPLATE_CONTRACT_VAULT:
+		return &VaultInvokerStatus{}
+	}
+	return nil
+}
 
 // 合约内容基础结构
 type ContractBase struct {
@@ -313,25 +468,25 @@ func (p *ContractBase) InvokeParam(string) string {
 
 // 合约运行时基础结构，合约区块以聪网为主，主网区块辅助使用
 type ContractRuntimeBase struct {
-	DeployTime   int64  `json:"deployTime"` // s
-	Status       int    `json:"status"`
-	EnableBlock  int    `json:"enableBlock"`  // 合约在哪个区块进入ready状态
-	CurrBlock    int    `json:"currentBlock"` // 合约区块不能跳，必须从EnableBlock开始，一块一块执行
-	EnableBlockL1  int  `json:"enableBlockL1"`  // 合约在哪个区块进入ready状态
-	CurrBlockL1    int  `json:"currentBlockL1"` // 合约区块不能跳，必须从EnableBlock开始，一块一块执行
-	EnableTxId	 string `json:"enableTxId"`		// 只设置，暂时没有用起来
-	Deployer     string `json:"deployer"`
-	ResvId       int64  `json:"resvId"`
-	ChannelId    string `json:"channelId"`
-	InvokeCount  int64  `json:"invokeCount"`
-	Divisibility int    `json:"divisibility"`
-	N            int    `json:"n"`
+	DeployTime    int64  `json:"deployTime"` // s
+	Status        int    `json:"status"`
+	EnableBlock   int    `json:"enableBlock"`    // 合约在哪个区块进入ready状态
+	CurrBlock     int    `json:"currentBlock"`   // 合约区块不能跳，必须从EnableBlock开始，一块一块执行
+	EnableBlockL1 int    `json:"enableBlockL1"`  // 合约在哪个区块进入ready状态
+	CurrBlockL1   int    `json:"currentBlockL1"` // 合约区块不能跳，必须从EnableBlock开始，一块一块执行
+	EnableTxId    string `json:"enableTxId"`     // 只设置，暂时没有用起来
+	Deployer      string `json:"deployer"`
+	ResvId        int64  `json:"resvId"`
+	ChannelId     string `json:"channelId"`
+	InvokeCount   int64  `json:"invokeCount"`
+	Divisibility  int    `json:"divisibility"`
+	N             int    `json:"n"`
 	
-	CheckPoint	int  // 上个检查高度
-	CheckPointL1 int	 // 
-	StaticMerkleRoot []byte	// 合约静态数据
-	AssetMerkleRoot  []byte	// 上个检查的资产状态数据
-	CurrAssetMerkleRoot  []byte	// 当前高度下的资产状态数据
+	CheckPoint          int    // 上个检查高度
+	CheckPointL1        int    //
+	StaticMerkleRoot    []byte // 合约静态数据
+	AssetMerkleRoot     []byte // 上个检查的资产状态数据
+	CurrAssetMerkleRoot []byte // 当前高度下的资产状态数据
 
 	stp      *Manager
 	contract Contract
@@ -344,7 +499,7 @@ func (p *ContractRuntimeBase) ToNewVersion() *ContractRuntimeBase {
 func (p *ContractRuntimeBase) GetAssetNameV2() *AssetName {
 	return &AssetName{
 		AssetName: *p.contract.GetAssetName(),
-		N: p.N,
+		N:         p.N,
 	}
 }
 
@@ -525,8 +680,8 @@ func NewContract(cname string) Contract {
 	case TEMPLATE_CONTRACT_AMM:
 		return NewAmmContract()
 
-	case TEMPLATE_CONTRACT_ASSETLOCKER:
-		return NewAssetLockContract()
+	case TEMPLATE_CONTRACT_VAULT:
+		return NewVaultContract()
 
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		return NewLaunchPoolContract()
@@ -561,8 +716,8 @@ func NewContractRuntime(stp *Manager, cname string) ContractRuntime {
 	case TEMPLATE_CONTRACT_AMM:
 		return NewAmmContractRuntime(stp)
 
-	case TEMPLATE_CONTRACT_ASSETLOCKER:
-		//return NewMintServerContract()
+	case TEMPLATE_CONTRACT_VAULT:
+		return NewVaultContractRuntime(stp)
 
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		r = NewLaunchPoolContractRuntime(stp)
