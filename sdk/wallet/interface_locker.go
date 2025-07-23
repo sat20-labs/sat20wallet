@@ -192,7 +192,6 @@ func (p *Manager) GetAssetAmount_SatsNet(address, assetName string) (*Decimal, *
 	return available, locked, nil
 }
 
-
 func (p *Manager) GetTxAssetInfoFromPsbt(psbtStr string) (*TxAssetInfo, error) {
 	hexBytes, err := hex.DecodeString(psbtStr)
 	if err != nil {
@@ -211,87 +210,102 @@ func (p *Manager) GetTxAssetInfoFromPsbt(psbtStr string) (*TxAssetInfo, error) {
 	result := &TxAssetInfo{
 		TxId: packet.UnsignedTx.TxID(),
 		TxHex: txHex,
-		InputAssets:  make([]*indexer.AssetsInUtxo, 0, len(tx.TxIn)),
-		OutputAssets: make([]*indexer.AssetsInUtxo, 0, len(tx.TxOut)),
+		InputAssets:  make([]*indexer.AssetsInUtxo, len(tx.TxIn)),
+		OutputAssets: make([]*indexer.AssetsInUtxo, len(tx.TxOut)),
 	}
 
 	// 所有输入资产信息
 	var input *TxOutput
-
-	for _, txIn := range tx.TxIn {
+	for i, txIn := range tx.TxIn {
 		utxoInfo := indexer.AssetsInUtxo{
 			OutPoint: txIn.PreviousOutPoint.String(),
 		}
 		info, err := p.l1IndexerClient.GetTxOutput(utxoInfo.OutPoint)
 		if err != nil {
+			Log.Errorf("can't find output info for utxo %s", utxoInfo.OutPoint)
 			return nil, err
 		}
-		if info != nil {
-			utxoInfo.UtxoId = info.UtxoId
-			utxoInfo.PkScript = info.OutValue.PkScript
-			utxoInfo.Value = info.OutValue.Value
-			for _, asset := range info.Assets {
-				precision := 0
-				tickInfo := p.getTickerInfo(&asset.Name)
-				if tickInfo != nil {
-					precision = tickInfo.Divisibility
-				}
-				utxoInfo.Assets = append(utxoInfo.Assets, &indexer.DisplayAsset{
-					AssetName:  asset.Name,
-					Amount:     asset.Amount.String(),
-					Precision:  precision,
-					BindingSat: int(asset.BindingSat),
-					Offsets:    info.Offsets[asset.Name],
-				})
+		
+		utxoInfo.UtxoId = info.UtxoId
+		utxoInfo.PkScript = info.OutValue.PkScript
+		utxoInfo.Value = info.OutValue.Value
+		for _, asset := range info.Assets {
+			precision := 0
+			tickInfo := p.getTickerInfo(&asset.Name)
+			if tickInfo != nil {
+				precision = tickInfo.Divisibility
+			}
+			utxoInfo.Assets = append(utxoInfo.Assets, &indexer.DisplayAsset{
+				AssetName:  asset.Name,
+				Amount:     asset.Amount.String(),
+				Precision:  precision,
+				BindingSat: int(asset.BindingSat),
+				Offsets:    info.Offsets[asset.Name],
+			})
+		}
+
+		if input == nil {
+			input = info
+		} else {
+			input.Append(info)
+		}
+
+		result.InputAssets[i] = &utxoInfo
+	}
+
+	// 如果是完整的psbt，按协议规则分配资产；否则直接
+
+	if packet.IsComplete() {
+		// 按协议规则分配资产
+		for i, txOut := range tx.TxOut {
+			utxo := fmt.Sprintf("%s:%d", tx.TxID(), i)
+			utxoInfo := indexer.AssetsInUtxo{
+				OutPoint: utxo,
+				Value:    txOut.Value,
+				PkScript: txOut.PkScript,
 			}
 
-			if input == nil {
-				input = info
+			var err error
+			var curr *indexer.TxOutput
+			curr, input, err = input.Cut(txOut.Value)
+			if err != nil {
+				return nil, err
+			}
+
+			if curr != nil {
+				for _, asset := range curr.Assets {
+					precision := 0
+					tickInfo := p.getTickerInfo(&asset.Name)
+					if tickInfo != nil {
+						precision = tickInfo.Divisibility
+					}
+					utxoInfo.Assets = append(utxoInfo.Assets, &indexer.DisplayAsset{
+						AssetName:  asset.Name,
+						Amount:     asset.Amount.String(),
+						Precision:  precision,
+						BindingSat: int(asset.BindingSat),
+						Offsets:    curr.Offsets[asset.Name],
+					})
+				}
 			} else {
-				input.Append(info)
+				return nil, fmt.Errorf("inputs have no enough asset for output %d", i)
 			}
-		} else {
-			return nil, fmt.Errorf("can't find output info for utxo %s", utxoInfo.OutPoint)
+			result.OutputAssets[i] = &utxoInfo
 		}
-		result.InputAssets = append(result.InputAssets, &utxoInfo)
+	} else {
+		for i, txOut := range tx.TxOut {
+			utxo := fmt.Sprintf("%s:%d", tx.TxID(), i)
+			utxoInfo := indexer.AssetsInUtxo{
+				OutPoint: utxo,
+				Value:    txOut.Value,
+				PkScript: txOut.PkScript,
+			}
+				
+			result.OutputAssets[i] = &utxoInfo
+		}
 	}
 
-	// 按协议规则分配资产
-	for i, txOut := range tx.TxOut {
-		utxo := fmt.Sprintf("%s:%d", tx.TxID(), i)
-		utxoInfo := indexer.AssetsInUtxo{
-			OutPoint: utxo,
-			Value:    txOut.Value,
-			PkScript: txOut.PkScript,
-		}
-
-		var err error
-		var curr *indexer.TxOutput
-		curr, input, err = input.Cut(txOut.Value)
-		if err != nil {
-			return nil, err
-		}
-
-		if curr != nil {
-			for _, asset := range curr.Assets {
-				precision := 0
-				tickInfo := p.getTickerInfo(&asset.Name)
-				if tickInfo != nil {
-					precision = tickInfo.Divisibility
-				}
-				utxoInfo.Assets = append(utxoInfo.Assets, &indexer.DisplayAsset{
-					AssetName:  asset.Name,
-					Amount:     asset.Amount.String(),
-					Precision:  precision,
-					BindingSat: int(asset.BindingSat),
-					Offsets:    curr.Offsets[asset.Name],
-				})
-			}
-		} else {
-			return nil, fmt.Errorf("inputs have no enough asset for output %d", i)
-		}
-		result.OutputAssets = append(result.OutputAssets, &utxoInfo)
-	}
+	
 
 	return result, nil
 }

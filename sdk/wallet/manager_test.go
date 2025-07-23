@@ -514,3 +514,19 @@ func TestChangePassword(t *testing.T) {
 	fmt.Printf("%s\n", _client.GetMnemonic(id, oldPS))
 	fmt.Printf("%s\n", _client.GetMnemonic(id, newPS))
 }
+
+func TestGetTxAssetInfoFromPsbt(t *testing.T) {
+	prepare(t)
+
+	// 部分签名的psbt
+	psbtStr := "70736274ff01005e0200000001f18974422078033fbd084167f518ca0bae7d82eac3f492a84117eb94684e9abd0000000000ffffffff017602000000000000225120237771c78df654746be0f191b48c4acc782331cf1756c7b4fde5dd3eac43075d000000000001012bb701000000000000225120237771c78df654746be0f191b48c4acc782331cf1756c7b4fde5dd3eac43075d010304830000000000"
+
+	// 完整的psbt
+	// psbtStr := ""
+
+	info, err := _client.GetTxAssetInfoFromPsbt(psbtStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("%v\n", info)
+}
