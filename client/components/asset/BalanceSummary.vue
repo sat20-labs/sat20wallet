@@ -216,7 +216,16 @@ const translatedOperationTitle = computed(() => {
       return t('assetOperationDialog.assetOperation')
   }
 })
-
+const showAddress = computed(() => {
+  if (selectedChain === 'bitcoin') {
+    return address.value
+  } else if (selectedChain === 'channel') {
+    return channel.value?.channelId || address.value // 显示通道ID(address)
+  } else if (selectedChain === 'satoshinet') {
+    return address.value
+  }
+  return address.value // 默认返回空字符串
+})
 const maxAmount = computed(() => {
   if (!selectedAsset.value) return ''
   const asset = selectedAsset.value
@@ -241,10 +250,7 @@ const operationDescription = computed(() => {
 // Handle Action
 const handleAction = (action: string) => {
   const asset = btcBalance.value.assets[0] // Assume the first asset is selected
-  if (!asset) {
-    handleError('No asset selected')
-    return
-  }
+  
 
   if (action === 'receive') {
     receiveAddress.value = address.value ?? '' // Use the address from the store or fallback to an empty string
@@ -258,6 +264,10 @@ const handleAction = (action: string) => {
     } else {
       handleError('Mempool URL is not available')
     }
+    return
+  }
+  if (action === 'send' && !asset) {
+    handleError('No asset selected')
     return
   }
   console.log('action', action);
@@ -382,19 +392,19 @@ const mempoolUrl = computed(() => {
   if (props.selectedChain === 'bitcoin') {
     return generateMempoolUrl({
       network: network.value,
-      path: `address/${address.value}`,
+      path: `address/${showAddress.value}`,
     })
   } else if (props.selectedChain === 'channel') {
     return generateMempoolUrl({
       network: network.value,
-      path: `address/${address.value}`,
+      path: `address/${showAddress.value}`,
       chain: Chain.SATNET,
       env: env.value,
     })
   } else if (props.selectedChain === 'satoshinet') {
     return generateMempoolUrl({
       network: network.value,
-      path: `address/${address.value}`,
+      path: `address/${showAddress.value}`,
       chain: Chain.SATNET,
       env: env.value,
     })

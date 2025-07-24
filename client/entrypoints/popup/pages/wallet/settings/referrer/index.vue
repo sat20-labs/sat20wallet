@@ -10,8 +10,27 @@
         </div>
         <div class="grid w-full items-center gap-1.5">
           <Label for="name">{{ $t('referrerManagement.referrerName') }}</Label>
-          <Input id="name" v-model="name" :placeholder="$t('referrerManagement.referrerNamePlaceholder')" />
+          <Select v-model="name" :disabled="isLoadingNames">
+            <SelectTrigger>
+              <SelectValue :placeholder="$t('referrerManagement.referrerNamePlaceholder')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-if="nameList && nameList.length > 0" v-for="nameItem in nameList" :key="nameItem.id" :value="nameItem.name">
+                {{ nameItem.name }}
+              </SelectItem>
+              <SelectItem v-else value="" disabled>
+                {{ isLoadingNames ? '加载中...' : '暂无可用名字' }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </div>
+        <!-- 当nameList为空且不在加载状态时显示提示 -->
+        <Alert v-if="!isLoadingNames && (!nameList || nameList.length === 0)" variant="default">
+          <AlertTitle>提示</AlertTitle>
+          <AlertDescription>
+            当前地址没有可用的名字，请先注册名字后再进行推荐人注册。
+          </AlertDescription>
+        </Alert>
         <div class="grid w-full items-center gap-1.5">
           <Label for="feeRate">{{ $t('referrerManagement.gasFeeRate') }}</Label>
           <Input id="feeRate" v-model="btcFeeRate" type="number" min="0" max="100"
@@ -67,13 +86,16 @@ import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Icon } from '@iconify/vue'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store/wallet'
+import { useNameManager } from '@/composables/useNameManager'
 import { storage } from 'wxt/storage'
 
 const walletStore = useWalletStore()
+const { nameList, isLoadingNames } = useNameManager()
 const isLoading = ref(false)
 const showConfirm = ref(false)
 const resultMsg = ref('')

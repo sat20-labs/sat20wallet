@@ -48,10 +48,13 @@
           </div>
         </template>
       </div>
-      <Button as-child variant="secondary" class="h-10 w-full">
-        <RouterLink to="/wallet/setting/node" class="w-full">
-          {{ $t('nodeSetting.selectNodeType') }}
-        </RouterLink>
+      <Button 
+        variant="secondary" 
+        class="h-10 w-full"
+        :disabled="!minerInfo.ServerNode"
+        @click="router.push('/wallet/setting/node')"
+      >
+        {{ $t('nodeSetting.selectNodeType') }}
       </Button>
 
     </div>
@@ -60,12 +63,14 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useQuery } from '@tanstack/vue-query'
 import { useWalletStore } from '@/store'
 import { Button } from '@/components/ui/button'
 import { satnetApi } from '@/apis'
 
+const router = useRouter()
 const isExpanded = ref(false)
 
 const walletStore = useWalletStore()
