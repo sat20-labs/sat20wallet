@@ -94,7 +94,7 @@ const transcendingModeStore = useTranscendingModeStore()
 const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
 const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
-const { address, feeRate, btcFeeRate } = storeToRefs(walletStore)
+const { address, feeRate, btcFeeRate, network } = storeToRefs(walletStore)
 const abailableSats = ref<{
   availableAmt: number,
   lockedAmt: number
@@ -128,8 +128,12 @@ const buttons = [
 
 // 查询方法
 const fetchAbailableSats = async () => {
-  if (!address.value || props.selectedChain.toLowerCase() === 'channel') {
+  if (!address.value) {
     return { availableAmt: 0, lockedAmt: 0 }
+  }
+  if (props.selectedChain.toLowerCase() === 'channel') {
+    // 通道模式下，availableAmt 为 totalSats，lockedAmt 为 0
+    return { availableAmt: channelStore.totalSats, lockedAmt: 0 }
   }
   const handler = props.selectedChain.toLowerCase() === 'bitcoin' ? stp.getAssetAmount : stp.getAssetAmount_SatsNet
   const [err, res] = await handler.bind(stp)(address.value, '::')
@@ -377,19 +381,19 @@ const { env } = storeToRefs(globalStore)
 const mempoolUrl = computed(() => {
   if (props.selectedChain === 'bitcoin') {
     return generateMempoolUrl({
-      network: 'testnet',
+      network: network.value,
       path: `address/${address.value}`,
     })
   } else if (props.selectedChain === 'channel') {
     return generateMempoolUrl({
-      network: 'testnet',
+      network: network.value,
       path: `address/${address.value}`,
       chain: Chain.SATNET,
       env: env.value,
     })
   } else if (props.selectedChain === 'satoshinet') {
     return generateMempoolUrl({
-      network: 'testnet',
+      network: network.value,
       path: `address/${address.value}`,
       chain: Chain.SATNET,
       env: env.value,

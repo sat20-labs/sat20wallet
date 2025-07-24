@@ -132,6 +132,8 @@ const getParsedPsbt = async () => {
     if (props.data.options?.chain === 'sat20') {
       result = await stp.getTxAssetInfoFromPsbt_SatsNet(props.data.psbtHex, network.value)
     } else {
+      console.log('getTxAssetInfoFromPsbt', props.data.psbtHex, network.value);
+      
       result = await stp.getTxAssetInfoFromPsbt(props.data.psbtHex, network.value)
     }
     const [err, res] = result

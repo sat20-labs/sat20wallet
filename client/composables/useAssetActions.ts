@@ -57,7 +57,12 @@ export function useAssetActions() {
     }
     refreshL1Assets()
     await channelStore.getAllChannels()
-    loading.value = false   
+    toast({
+      title: 'Success',
+      description: 'Splicing In successful',
+      duration: 1500,
+    })
+    loading.value = false
   }
 
   // Splicing Out 操作
@@ -79,6 +84,11 @@ export function useAssetActions() {
     }
     refreshL1Assets()
     await channelStore.getAllChannels()
+    toast({
+      title: 'Success',
+      description: 'Splicing Out successful',
+      duration: 1500,
+    })
     loading.value = false   
   }
 
@@ -113,8 +123,8 @@ export function useAssetActions() {
     refreshL1Assets()
     await channelStore.getAllChannels()
     toast({
-      title: 'success',
-      description: 'deposit success',
+      title: 'Success',
+      description: 'Deposit successful',
       duration:1500,
     })
   }
@@ -150,8 +160,8 @@ export function useAssetActions() {
     refreshL2Assets()
     await channelStore.getAllChannels()
     toast({
-      title: 'success',
-      description: 'withdraw success',
+      title: 'Success',
+      description: 'Withdraw successful',
       duration:1500,
     })
   }
@@ -176,7 +186,7 @@ export function useAssetActions() {
     refreshL2Assets()
     toast({
       title: 'Success',
-      description: 'Unlock successful',
+      description: 'Unlock UTXO successful',
       duration:1500,
     })
     loading.value = false    
@@ -195,7 +205,7 @@ export function useAssetActions() {
     refreshL2Assets()
     toast({
       title: 'Success',
-      description: 'Lock successful',
+      description: 'Lock UTXO successful',
       duration:1500,
     })
     loading.value = false    
@@ -215,7 +225,7 @@ export function useAssetActions() {
     refreshL1Assets()
     toast({
       title: 'Success',
-      description: 'Send successful',
+      description: 'L1 Send successful',
       duration:1500,
     })
     loading.value = false    
@@ -234,7 +244,7 @@ export function useAssetActions() {
     refreshL2Assets()
     toast({
       title: 'Success',
-      description: 'Send successful',
+      description: 'L2 Send successful',
       duration:1500,
     })
     loading.value = false    

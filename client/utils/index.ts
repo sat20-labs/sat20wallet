@@ -1,11 +1,10 @@
 import { Chain, type Env } from '@/types/index';
+import { Network } from '@/types/index';
 export const hideAddress = (
   str?: string | null,
   num: number = 6,
   placeholder = '*****',
 ) => {
-  console.log('hideAddress', typeof str === 'string', str);
-
   if (typeof str === 'string' && str) {
     const regex = new RegExp(`^(.{${num}}).+(.{${num}})$`);
     return str.replace(regex, `$1${placeholder}$2`);
@@ -31,17 +30,25 @@ export const generateMempoolUrl = ({
     test: 'https://mempool.test.sat20.org',
     prd: 'https://mempool.sat20.org',
   }
+  let _network = network;
+  if (network === Network.TESTNET) {
+    _network = 'testnet';
+  } else if (network === Network.LIVENET) {
+    _network = 'mainnet';
+  }
   const btcMempoolUrl = 'https://mempool.space'
   let base = btcMempoolUrl;
   if (chain && chain === Chain.SATNET && env) {
     base = satMempoolUrl[env];
   }
   let url = base;
-  if (chain !== Chain.SATNET &&locale) {
+  if (chain !== Chain.SATNET && locale) {
     url += `/${locale}`;
   }
-  if (chain !== Chain.SATNET && network === 'testnet') {
-    url += '/testnet4';
+  if (chain !== Chain.SATNET) {
+    if (network === 'testnet') {
+      url += '/testnet4';
+    }
   } else {
     url += `/${network}`;
   }

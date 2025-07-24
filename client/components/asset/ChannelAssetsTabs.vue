@@ -78,12 +78,14 @@ import { ref, computed, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { storeToRefs } from 'pinia'
-import { useChannelStore } from '~/store'
+import { useChannelStore, useWalletStore } from '~/store'
 import { Chain } from '@/types/index'
 import { useGlobalStore } from '@/store/global'
 import { formatLargeNumber } from '@/utils'
 
 const channelStore = useChannelStore()
+const walletStore = useWalletStore()
+const { network } = storeToRefs(walletStore)
 const { channel, plainList, sat20List, brc20List, runesList } = storeToRefs(channelStore)
 
 // 类型定义
@@ -108,7 +110,7 @@ const { env } = storeToRefs(globalStore)
 const mempoolUrl = computed(() => {
 
   return generateMempoolUrl({
-    network: 'testnet',
+    network: network.value,
     path: `address/${channel.value?.channelId || ''}`,
     chain: Chain.SATNET,
     env: env.value,

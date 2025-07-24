@@ -111,9 +111,26 @@ class OrdxApi {
     )
     return response.json()
   }
-  async getMinerInfo({ address, network }: any): Promise<any> {
+  async getMinerInfo({ pubkey, network }: any): Promise<any> {
     const response = await fetch(
-      this.generatePath(`v3/miner/info/${address}`, network)
+      this.generatePath(`v3/miner/info/${pubkey}`, network)
+    )
+    return response.json()
+  }
+
+  async getReferrerByAddress({ address, network }: any): Promise<any> {
+    const response = await fetch(
+      this.generatePath(`v3/referrer/${address}`, network)
+    )
+    return response.json()
+  }
+
+  async getReferreeByName({ name, network, start, limit }: any): Promise<any> {
+    const response = await fetch(
+      this.generatePath(
+        `v3/referree/${name}?start=${start}&limit=${limit}`,
+        network
+      )
     )
     return response.json()
   }

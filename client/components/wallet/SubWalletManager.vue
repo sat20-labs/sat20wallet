@@ -227,18 +227,22 @@ async function createAccount() {
     const newAccountId = accounts.value?.length || 0
     const accountName = newAccountName.value.trim() || `Account ${newAccountId + 1}`
     await walletStore.addAccount(accountName, newAccountId)
-
+    try {
+      await sendAccountsChangedEvent(newAccountId)
+    } catch (error) {
+      console.error('sendAccountsChangedEvent error', error);
+    }
     toast({
       title: '成功',
       description: '账户创建成功',
     })
     isCreateAccountDialogOpen.value = false
-    // 发送 accountsChanged 事件（封装函数）
-    await sendAccountsChangedEvent(accounts.value)
-    setTimeout(() => {
-      router.back()
-    }, 300)
+    console.log('router.go(-1)');
+    router.go(-1)
   } catch (error) {
+    console.log('error', error);
+    
+    isCreating.value = false
     toast({
       title: '错误',
       description: '账户创建失败',
@@ -323,4 +327,3 @@ async function copyAddress(address: string) {
   }
 }
 </script>
-

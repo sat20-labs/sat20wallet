@@ -14,15 +14,38 @@
     <div v-if="isExpanded" class="space-y-6 px-2 py-4">
       <div v-if="isLoading" class="text-xs text-muted-foreground">{{ $t('loading', '加载中...') }}</div>
       <div v-if="isError" class="text-xs text-destructive">{{ error?.message || '加载失败' }}</div>
-      <div v-if="!isLoading && !isError" class="bg-zinc-800/60 rounded p-3 text-xs text-zinc-200 whitespace-pre-wrap">
-        <template v-if="minerInfo && minerInfo.code === 0">
-          {{ $t('nodeSetting.bound', '已绑定') }}
-        </template>
-        <template v-else-if="minerInfo && Object.keys(minerInfo).length">
-          {{ JSON.stringify(minerInfo, null, 2) }}
+      <div v-if="!isLoading && !isError" class="bg-zinc-800/60 rounded p-3 text-xs text-zinc-200 space-y-2">
+        <template v-if="minerInfo.ServerNode">
+          <div class="flex justify-between items-center">
+            <span class="text-muted-foreground break-keep">连接的节点：</span>
+            <span class="font-mono text-xs break-all">{{ minerInfo.ServerNode }}</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted-foreground break-keep">本地节点：</span>
+            <span class="font-mono text-xs break-all">{{ publicKey }}</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted-foreground break-keep">通道地址：</span>
+            <a :href="generateMempoolUrl({
+              network: network,
+              path: `address/${minerInfo.ChannelAddr}`,
+            })" target="_blank" class="font-mono text-xs text-blue-400 hover:text-blue-300 underline break-all">
+              {{ minerInfo.ChannelAddr }}
+            </a>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted-foreground">质押资产：</span>
+            <span class="font-mono text-xs">{{ minerInfo.AssetName }}</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted-foreground">资产数量：</span>
+            <span class="font-mono text-xs">{{ minerInfo.AssetAmt }}</span>
+          </div>
         </template>
         <template v-else>
-          {{ $t('nodeSetting.noNodeInfo', '暂无已绑定节点信息') }}
+          <div class="text-center text-muted-foreground">
+            {{ $t('nodeSetting.noNodeInfo', '暂无已绑定节点信息') }}
+          </div>
         </template>
       </div>
       <Button as-child variant="secondary" class="h-10 w-full">
@@ -41,33 +64,21 @@ import { storeToRefs } from 'pinia'
 import { useQuery } from '@tanstack/vue-query'
 import { useWalletStore } from '@/store'
 import { Button } from '@/components/ui/button'
-import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { satnetApi } from '@/apis'
 
 const isExpanded = ref(false)
-const autoLockTime = ref('5')
-const hideBalance = ref(false)
 
 const walletStore = useWalletStore()
-const { address, network } = storeToRefs(walletStore)
+const { network, publicKey } = storeToRefs(walletStore)
 
-// useQuery to fetch miner info (node info)
-const { data: minerInfo, isLoading, isError, error, refetch } = useQuery({
-  queryKey: ['minerInfo', address, network],
+const { data: res, isLoading, isError, error, refetch } = useQuery({
+  queryKey: ['minerInfo', publicKey, network],
   queryFn: () => {
-    if (!address.value || !network.value) return Promise.resolve({})
-    return satnetApi.getMinerInfo({ address: address.value, network: network.value })
+    if (!publicKey.value || !network.value) return Promise.resolve({})
+    return satnetApi.getMinerInfo({ pubkey: publicKey.value, network: network.value })
   },
-  enabled: () => !!address.value && !!network.value,
+  enabled: () => !!publicKey.value && !!network.value,
   initialData: {},
 })
-
+const minerInfo = computed(() => res.value?.data || {})
 </script>

@@ -1,7 +1,7 @@
 <template>
   <main class="w-full h-full overflow-hidden" v-if="!loading">
     <RouterView />
-    <Toaster :duration="1500" />
+    <Toaster :duration="3000" />
   </main>
 </template>
 

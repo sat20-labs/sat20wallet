@@ -10,7 +10,9 @@
                 <AccordionTrigger>
                   <p class="flex justify-start items-center text-sm text-muted-foreground">
                     <!-- <Icon icon="lucide:message-circle-warning" class="w-6 h-6 mr-1 text-green-500" /> -->
-                    <span class="text-green-500 mr-1"><Icon icon="lucide:link" class="w-5 h-5 mr-1 text-green-500" /></span>
+                    <span class="text-green-500 mr-1">
+                      <Icon icon="lucide:link" class="w-5 h-5 mr-1 text-green-500" />
+                    </span>
                     <a :href="guideUrl" target="_blank" class="text-sky-500">{{ $t('nodeSetting.guideTitle') }} -></a>
                   </p>
                 </AccordionTrigger>
@@ -38,15 +40,19 @@
             <!-- <AlertTitle>{{ resultSuccess ? 'Operate Successfull' : 'Operation Fail' }}</AlertTitle> -->
             <AlertDescription>{{ resultMsg }}</AlertDescription>
             <div v-if="resultSuccess" class="mt-2 text-xs text-gray-500">Node Type: <span class="text-zinc-400 ml-1">{{
-                isCore ? 'Core Node': 'Mining Node' }}</span></div>
-            <div v-if="txId" class="mt-2 text-xs text-gray-500">Transaction ID:<span class="text-zinc-400 ml-1"> {{
-                hideAddress(txId) }}</span></div>
+              isCore ? 'Core Node' : 'Mining Node' }}</span></div>
+            <div v-if="txId" class="mt-2 text-xs text-gray-500">Transaction ID:<span class="text-zinc-400 ml-1">
+                <a :href="generateMempoolUrl({ network: network, path: `tx/${txId}` })" target="_blank"
+                  class="text-sky-500 hover:text-sky-400 underline cursor-pointer">
+                  {{ hideAddress(txId) }}
+                </a>
+              </span></div>
             <div v-if="resvId" class="mt-2 text-xs text-gray-500">Reservation ID: <span class="text-zinc-400 ml-1">{{
-                hideAddress(resvId) }}</span></div>
+              hideAddress(resvId) }}</span></div>
             <div v-if="assetName" class="mt-2 text-xs text-gray-500">Asset Name: <span class="text-zinc-400 ml-1">{{
-                assetName }}</span></div>
+              assetName }}</span></div>
             <div v-if="amt" class="mt-2 text-xs text-gray-500">Staked Amount: <span class="text-zinc-400 ml-1">{{ amt
-                }}</span></div>
+            }}</span></div>
           </Alert>
           <!-- <template v-if="resultSuccess">
             <div v-if="txId" class="mt-2 text-xs text-gray-500">交易ID：{{ hideAddress(txId) }}</div>
@@ -61,7 +67,7 @@
           <DialogHeader>
             <DialogTitle><span class="flex justify-center items-center text-zinc-300 text-lg">
                 <Icon icon="lucide:message-circle-question-mark" class="w-8 h-8 mr-1 text-green-500" /> {{ isCore ?
-                $t('nodeSetting.confirmCoreDescription') : $t('nodeSetting.confirmMinerDescription') }}<br>
+                  $t('nodeSetting.confirmCoreDescription') : $t('nodeSetting.confirmMinerDescription') }}<br>
               </span></DialogTitle>
             <hr class="my-2 border-zinc-950" />
             <DialogDescription>
@@ -74,7 +80,7 @@
             <div class="flex justify-end gap-3">
               <Button @click="confirmStake" :loading="isLoading" class="w-36">{{ $t('nodeSetting.confirm') }}</Button>
               <Button variant="secondary" @click="showConfirm = false" class="w-36">{{ $t('nodeSetting.cancel')
-                }}</Button>
+              }}</Button>
             </div>
           </DialogFooter>
         </DialogContent>
@@ -97,7 +103,7 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store/wallet'
-import { hideAddress } from '@/utils'
+import { hideAddress, generateMempoolUrl } from '@/utils'
 
 // const guideText = `
 // <span class="text-zinc-200 text-md font-bold mb-2">🔸 普通挖矿节点：轻量接入，人人可参与</span>
@@ -117,7 +123,7 @@ import { hideAddress } from '@/utils'
 // 🔹 硬件建议：16 核 CPU/64G RAM/2T SSD/高速网络`
 
 const walletStore = useWalletStore()
-const { btcFeeRate } = storeToRefs(walletStore)
+const { btcFeeRate, network } = storeToRefs(walletStore)
 const isLoading = ref(false)
 const isCore = ref(false)
 const showConfirm = ref(false)
@@ -143,6 +149,8 @@ async function confirmStake() {
   showConfirm.value = false
   try {
     const [err, res] = await stp.stakeToBeMiner(pendingCore, btcFeeRate.value.toString())
+    console.log('res', res);
+
     if (err) {
       resultMsg.value = err.message || '操作失败'
       resultSuccess.value = false
@@ -171,5 +179,4 @@ async function confirmStake() {
 }
 </script>
 
-<style scoped lang="scss">
-</style>
+<style scoped lang="scss"></style>

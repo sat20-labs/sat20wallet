@@ -170,19 +170,21 @@ const showAddress = computed(() => {
 const mempoolUrl = computed(() => {
   if (selectedChainLabel.value === 'bitcoin') {
     return generateMempoolUrl({
-      network: 'testnet',
+      network: network.value,
+      chain: Chain.BTC,
       path: `address/${address.value}`,
     })
   } else if (selectedChainLabel.value === 'channel') {
     return generateMempoolUrl({
-      network: 'testnet',
+      network: network.value,
+
       path: `address/${channel.value?.channelId || address.value}`,
-      chain: Chain.SATNET,
+      chain: Chain.BTC,
       env: env.value,
     })
   } else if (selectedChainLabel.value === 'satoshinet') {
     return generateMempoolUrl({
-      network: 'testnet',
+      network: network.value,
       path: `address/${address.value}`,
       chain: Chain.SATNET,
       env: env.value,

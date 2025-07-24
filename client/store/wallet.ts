@@ -67,8 +67,7 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const setNetwork = async (value: Network) => {
     const n = value === Network.LIVENET ? 'mainnet' : 'testnet'
-    // const [err] = await walletManager.switchChain(n, password.value as string)
-    // console.log(err);
+    const [err] = await walletManager.switchChain(n, password.value as string)
 
     await walletStorage.setValue('network', value)
     network.value = value

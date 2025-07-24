@@ -117,12 +117,12 @@ const emit = defineEmits<{
 
 const walletStore = useWalletStore()
 const globalStore = useGlobalStore()
-const { address } = storeToRefs(walletStore)
+const { address, network } = storeToRefs(walletStore)
 const { env } = storeToRefs(globalStore)
 
 const mempoolUrl = computed(() => {
   return generateMempoolUrl({
-    network: 'testnet',
+    network: network.value,
     path: `address/${address.value}`,
   })
 })

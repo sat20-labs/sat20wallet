@@ -30,7 +30,7 @@
               <TableCell class="truncate">
                 <a
                   :href="generateMempoolUrl({
-                    network: 'testnet',
+                    network: network,
                     path: `tx/${utxo.txid}`,
                     chain: tab === 'btc' ? Chain.BTC : Chain.SATNET,
                     env: env
@@ -73,7 +73,7 @@ import { useGlobalStore } from '@/store/global'
 
 const walletStore = useWalletStore()
 const globalStore = useGlobalStore()
-const { address } = walletStore
+const { address, network } = walletStore
 const { toast } = useToast()
 
 const tab = ref<'btc' | 'satsnet'>('btc')

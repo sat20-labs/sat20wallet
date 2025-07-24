@@ -103,9 +103,9 @@ class SatnetApi {
     )
     return response.json()
   }
-  async getMinerInfo({ address, network }: any): Promise<any> {
+  async getMinerInfo({ pubkey, network }: any): Promise<any> {
     const response = await fetch(
-      this.generatePath(`v3/miner/info/${address}`, network)
+      this.generatePath(`v3/miner/info/${pubkey}`, network)
     )
     return response.json()
   }

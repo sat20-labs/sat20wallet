@@ -72,7 +72,7 @@
                   <template v-for="(input, index) in parsedInputs" :key="`input-${index}`">
                     <tr>
                       <td class="truncate">
-                        <a :href="generateMempoolUrl({ network: 'testnet', path: input.Outpoint })" target="_blank">
+                        <a :href="generateMempoolUrl({ network: network, path: input.Outpoint })" target="_blank">
                           {{ hideAddress(input.Outpoint) }}
                         </a>
                       </td>
@@ -111,7 +111,7 @@
                   <template v-for="(output) in parsedOutputs" :key="`output-${output.index}`">
                     <tr>
                       <td class="truncate">
-                        <a :href="generateMempoolUrl({ network: 'testnet', path: output.Outpoint })" target="_blank">
+                        <a :href="generateMempoolUrl({ network: network, path: output.Outpoint })" target="_blank">
                           {{ hideAddress(commitTxData.txId + ':' + output.index) }}
                         </a>
                       </td>
@@ -155,7 +155,7 @@ import { hideAddress } from '~/utils'
 import { useWalletStore } from '@/store/wallet'
 
 const walletStore = useWalletStore()
-const { btcFeeRate } = storeToRefs(walletStore)
+const { btcFeeRate, network } = storeToRefs(walletStore)
 
 const loading = ref(false)
 const isExpanded = ref(false)

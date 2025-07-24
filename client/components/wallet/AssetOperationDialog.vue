@@ -83,6 +83,15 @@
         <Icon icon="prime:check-circle" class="w-12 h-12 mr-2 text-green-600" />
         {{ $t('assetOperationDialog.confirmOperation') }}
       </AlertDialogDesc>
+      
+      <!-- 显示 btcFeeRate 信息 -->
+      <div v-if="needsBtcFeeRate" class="mt-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
+        <div class="flex items-center justify-between text-sm">
+          <span class="text-zinc-300">BTC Fee Rate:</span>
+          <span class="text-primary font-semibold">{{ btcFeeRate }} sats/vB</span>
+        </div>
+      </div>
+      
       <AlertDialogFoot class="my-4 gap-2">
         <AlertDialogCancel @click="showAlertDialog = false">{{ $t('assetOperationDialog.cancel') }}</AlertDialogCancel>
         <AlertDialogAction @click="handleConfirm">{{ $t('assetOperationDialog.confirm') }}</AlertDialogAction>
@@ -112,6 +121,7 @@ import { useRouter } from 'vue-router'
 import { Chain } from '@/types/index'
 import { Icon } from '@iconify/vue'
 import SplitSend from '@/entrypoints/popup/pages/wallet/split.vue'
+import { useWalletStore } from '@/store'
 
 interface Props {
   title: string
@@ -141,8 +151,18 @@ const isOpen = defineModel('open', { type: Boolean })
 
 const showAlertDialog = ref(false)
 
+// 获取钱包 store 中的 btcFeeRate
+const walletStore = useWalletStore()
+const { btcFeeRate } = storeToRefs(walletStore)
+
 const needsAddress = computed(() => {
   return props.operationType === 'send'
+})
+
+// 判断哪些操作需要显示 btcFeeRate
+const needsBtcFeeRate = computed(() => {
+  const operationsNeedingBtcFeeRate = ['send', 'deposit', 'withdraw', 'splicing_in', 'splicing_out']
+  return operationsNeedingBtcFeeRate.includes(props.operationType || '')
 })
 
 const emit = defineEmits<{
