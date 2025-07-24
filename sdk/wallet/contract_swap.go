@@ -20,6 +20,7 @@ import (
 1. 挂限价的卖单和买单
 2. 每个区块进行交易撮合
 3. 一个单完全被吃点后，在该区块处理完成后自动回款
+4. 如何计算swap交易的利润：
 */
 
 func init() {
@@ -40,13 +41,16 @@ const (
 	ORDERTYPE_PROFIT   = 5
 	ORDERTYPE_DEPOSIT  = 6
 	ORDERTYPE_WITHDRAW = 7
-	ORDERTYPE_UNUSED   = 8
+	ORDERTYPE_MINT     = 8
+	ORDERTYPE_UNUSED   = 9
 
+	INVOKE_FEE     		int64 = 10
 	SWAP_INVOKE_FEE     int64 = 10
 	DEPOSIT_INVOKE_FEE  int64 = DEFAULT_SERVICE_FEE_DEPOSIT
 	WITHDRAW_INVOKE_FEE int64 = DEFAULT_SERVICE_FEE_WITHDRAW
 
 	MAX_PRICE_DIVISIBILITY = 10
+	MAX_ASSET_DIVISIBILITY = 10
 
 	MAX_BLOCK_BUFFER = 100
 	BUCK_SIZE        = 100
@@ -61,6 +65,8 @@ const (
 	DONE_REFUNDED        = 2
 	DONE_CLOSED_DIRECTLY = 3
 )
+
+const ADDR_OPRETURN string = "op_return"
 
 
 type SwapContract struct {
@@ -123,36 +129,17 @@ func (p *SwapContract) InvokeParam(action string) string {
 
 }
 
-type SwapHistoryItem struct {
-	InvokeHistoryItemBase
 
-	OrderType      int    //
-	UtxoId         uint64 // 其实是utxoId
-	OrderTime      int64
-	AssetName      string
-	ServiceFee	   int64
-	UnitPrice      *Decimal // X per Y
-	ExpectedAmt    *Decimal // 期望的数量
-	Address        string   // 所有人
-	FromL1         bool     // 是否主网的调用，默认是false
-	InUtxo         string   // sell or buy 的utxo
-	InValue        int64    // 白聪，不包括资产聪
-	InAmt          *Decimal
-	RemainingAmt   *Decimal // 要买或者卖的资产的剩余数量
-	RemainingValue int64    // 用来买资产的聪的剩余数量
-	ToL1           bool     // 是否主网的调用，默认是false
-	OutTxId        string   // 回款的TxId，可能是成交后汇款，也可能是撤销后的回款
-	OutAmt         *Decimal // 买到的资产
-	OutValue       int64    // 卖出得到的聪，扣除服务费
-}
+type SwapHistoryItem = InvokeItem
 
-func (p *SwapHistoryItem) ToNewVersion() InvokeHistoryItem {
-	return p
-}
-
-// 买单用来购买的聪数量
+// 买单用来购买的聪数量，只适合swap合约，amm合约需要通过InValue来计算参与交易的聪数量
 func (p *SwapHistoryItem) GetTradingValue() int64 {
 	return indexer.DecimalMul(p.UnitPrice, p.ExpectedAmt).Ceil()
+}
+
+// 买单用来购买的聪数量，只适合amm
+func (p *SwapHistoryItem) GetTradingValueForAmm() int64 {
+	return ((p.InValue - SWAP_INVOKE_FEE) * 1000 + 1000 + SWAP_SERVICE_FEE_RATIO - 1) / (1000 + SWAP_SERVICE_FEE_RATIO)
 }
 
 // InvokeParam
@@ -252,56 +239,62 @@ type SwapContractRuntimeInDB struct {
 }
 
 type TraderStatistic struct {
+	InvokeCount  int
+
 	OnSaleAmt    *Decimal
 	OnBuyValue   int64
-	InvokeCount  int
 	DealAmt      *Decimal // 只累加卖单中成交的资产数量
 	DealValue    int64    // 只累加买单中成交的聪数量
 	RefundAmt    *Decimal
 	RefundValue  int64
-	FundingAmt   *Decimal
-	FundingValue int64
 	DepositAmt   *Decimal
+	DepositValue int64
 	WithdrawAmt  *Decimal
+	WithdrawValue int64
 	ProfitAmt    *Decimal
 	ProfitValue  int64
 }
 
 type TraderStatus struct {
+	InvokerStatusBase
 	Address         string
-	Statistic       TraderStatistic
-	Refund          bool            // 是否准备退款
-	Profit          bool            // 是否准备提取利润
+	OnSaleAmt    *Decimal
+	OnBuyValue   int64
+	DealAmt      *Decimal // 只累加卖单中成交的资产数量
+	DealValue    int64    // 只累加买单中成交的聪数量
+	ProfitAmt    *Decimal
+	ProfitValue  int64
+
 	SwapUtxoMap     map[string]bool // utxo map 交易中的记录
-	RefundUtxoMap   map[string]bool // utxo map 要退款的记录，包括指令utxo和要退款的utxo
 	ProfitUtxoMap   map[string]bool // utxo map
-	DepositUtxoMap  map[string]bool // utxo map
-	WithdrawUtxoMap map[string]bool // utxo map
-	FundingUtxoMap  map[string]bool // utxo map
-	InvalidUtxoMap  map[string]bool // (废弃不用，合并到RefundUtxoMap)
-	History         map[int][]int64 // 用户的invoke历史记录，每100个为一桶，用InvokeCount计算 TODO 目前统一一块存储，数据量大了后要分桶保存，用到才加载
-	UpdateTime      int64
+}
+
+func (p* TraderStatus) Statistic() *TraderStatistic {
+	return &TraderStatistic{
+		InvokeCount: p.InvokeCount,
+		OnSaleAmt: p.OnSaleAmt,
+		OnBuyValue: p.OnBuyValue,
+		DealAmt: p.DealAmt,
+		DealValue: p.DealValue,
+		RefundAmt: p.RefundAmt,
+		RefundValue: p.RefundValue,
+		DepositAmt: p.DepositAmt,
+		DepositValue: p.DepositValue,
+		WithdrawAmt: p.WithdrawAmt,
+		WithdrawValue: p.WithdrawValue,
+		ProfitAmt: p.ProfitAmt,
+		ProfitValue: p.ProfitValue,
+	}
 }
 
 func NewTraderStatus(address string, divisibility int) *TraderStatus {
 	return &TraderStatus{
-		Address: address,
-		Statistic: TraderStatistic{
+		InvokerStatusBase: *NewInvokerStatusBase(address, divisibility),
 			OnSaleAmt:   indexer.NewDecimal(0, divisibility),
 			DealAmt:     indexer.NewDecimal(0, divisibility),
-			RefundAmt:   indexer.NewDecimal(0, divisibility),
-			DepositAmt:  indexer.NewDecimal(0, divisibility),
-			WithdrawAmt: indexer.NewDecimal(0, divisibility),
 			ProfitAmt:   indexer.NewDecimal(0, divisibility),
-		},
 		SwapUtxoMap:     make(map[string]bool),
-		RefundUtxoMap:   make(map[string]bool),
 		ProfitUtxoMap:   make(map[string]bool),
-		DepositUtxoMap:  make(map[string]bool),
-		WithdrawUtxoMap: make(map[string]bool),
-		FundingUtxoMap:  make(map[string]bool),
-		InvalidUtxoMap:  make(map[string]bool),
-		History:         make(map[int][]int64),
 	}
 }
 

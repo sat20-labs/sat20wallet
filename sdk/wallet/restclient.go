@@ -89,6 +89,7 @@ type IndexerRPCClient interface {
 
 	// for names
 	GetNameInfo(string) (*indexerwire.OrdinalsName, error)
+	GetNamesWithKey(string, string) ([]*indexerwire.OrdinalsName, error)
 }
 
 
@@ -974,4 +975,28 @@ func (p *IndexerClient) GetNameInfo(name string) (*indexerwire.OrdinalsName, err
 	}
 
 	return result.Data, nil
+}
+
+func (p *IndexerClient) GetNamesWithKey(address, key string) ([]*indexerwire.OrdinalsName, error) {
+
+	path := fmt.Sprintf("/ns/address/%s?key=%s", address, key)
+	url := p.GetUrl(path)
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	var result indexerwire.NamesWithAddressResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+
+	return result.Data.Names, nil
 }
