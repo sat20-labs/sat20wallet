@@ -386,19 +386,30 @@ func (p *Manager) SignPsbt(psbtHex string, bExtract bool) (string, error) {
 		return "", err
 	}
 
+	// for _, input := range packet.Inputs {
+	// 	ty, addr, i, err := txscript.ExtractPkScriptAddrs(input.WitnessUtxo.PkScript, GetChainParam())
+	// 	if err != nil {
+	// 		continue
+	// 	}
+	// 	fmt.Printf("%d %s %d\n", ty, addr[0], i)
+	// 	fmt.Printf("sig flag: %x\n", input.SighashType)
+	// }
+	
+
+
 	err = p.wallet.SignPsbt(packet)
 	if err != nil {
 		Log.Errorf("SignPsbt failed, %v", err)
 		return "", err
 	}
 
-	if bExtract {
-		err = psbt.MaybeFinalizeAll(packet)
-		if err != nil {
-			Log.Errorf("MaybeFinalizeAll failed, %v", err)
-			return "", err
-		}
+	err = psbt.MaybeFinalizeAll(packet)
+	if err != nil {
+		Log.Errorf("MaybeFinalizeAll failed, %v", err)
+		return "", err
+	}
 
+	if bExtract {
 		finalTx, err := psbt.Extract(packet)
 		if err != nil {
 			Log.Errorf("Extract failed, %v", err)
@@ -452,13 +463,13 @@ func (p *Manager) SignPsbt_SatsNet(psbtHex string, bExtract bool) (string, error
 		return "", err
 	}
 
-	if bExtract {
-		err = spsbt.MaybeFinalizeAll(packet)
-		if err != nil {
-			Log.Errorf("MaybeFinalizeAll failed, %v", err)
-			return "", err
-		}
+	err = spsbt.MaybeFinalizeAll(packet)
+	if err != nil {
+		Log.Errorf("MaybeFinalizeAll failed, %v", err)
+		return "", err
+	}
 
+	if bExtract {
 		finalTx, err := spsbt.Extract(packet)
 		if err != nil {
 			Log.Errorf("Extract failed, %v", err)
