@@ -3,6 +3,7 @@ import { Network, Balance } from '@/types'
 import { ordxApi } from '@/apis'
 import { psbt2tx } from '@/utils/btc'
 import stp from '@/utils/stp'
+import sat20Wallet from '@/utils/sat20'
 
 class Service {
   async getHasWallet(): Promise<boolean> {
@@ -45,9 +46,11 @@ class Service {
 
   async pushPsbt(psbtHex: string): Promise<[Error | undefined, string | undefined]> {
     console.log('pushPsbt', psbtHex)
-    const txHexRes = await (globalThis as any).sat20wallet_wasm.extractTxFromPsbt(psbtHex)
-    const txHex = txHexRes.data.tx
-
+    const [extractErr, extractRes] = await sat20Wallet.extractTxFromPsbt(psbtHex)
+    if (extractErr || !extractRes) {
+      return [extractErr || new Error('提取交易失败'), undefined]
+    }
+    const txHex = extractRes.psbt
     const network = walletStorage.getValue('network')
     const res = await ordxApi.pushTx({ hex: txHex, network })
     console.log('res', res)
@@ -62,58 +65,37 @@ class Service {
     psbtHex: string,
     { chain }: { chain: string }
   ): Promise<[Error | undefined, { tx: string } | undefined]> {
-    let res = null
+    let extractErr, extractRes
     if (chain === 'btc') {
-      res = await (globalThis as any).sat20wallet_wasm.extractTxFromPsbt(psbtHex)
+      [extractErr, extractRes] = await sat20Wallet.extractTxFromPsbt(psbtHex)
     } else {
-      res = await (globalThis as any).sat20wallet_wasm.extractTxFromPsbt_SatsNet(psbtHex)
+      [extractErr, extractRes] = await sat20Wallet.extractTxFromPsbt_SatsNet(psbtHex)
     }
-    if (res.code === 0) {
-      return [undefined, res.data]
-    } else {
-      return [new Error(res.msg), undefined]
+    if (extractErr || !extractRes) {
+      return [extractErr || new Error('提取交易失败'), undefined]
     }
+    return [undefined, { tx: extractRes.psbt }]
   }
 
   async buildBatchSellOrder_SatsNet(
     utxos: string[],
     address: string,
     network: string
-  ): Promise<string> {
-    console.log('buildBatchSellOrder_SatsNet', utxos, address, network)
-    const res = await (globalThis as any).sat20wallet_wasm.buildBatchSellOrder_SatsNet(
-      utxos,
-      address,
-      network
-    )
-    console.log('res', res)
-    return res
+  ): Promise<[Error | undefined, { orderId: string } | undefined]> {
+    return sat20Wallet.buildBatchSellOrder_SatsNet(utxos, address, network)
   }
 
-  async splitBatchSignedPsbt(signedHex: string, network: string): Promise<string[]> {
-    console.log('splitBatchSignedPsbt', signedHex, network)
-    const res = (globalThis as any).sat20wallet_wasm.splitBatchSignedPsbt(
-      signedHex,
-      network
-    )
-    console.log('splitBatchSignedPsbt res', res)
-    return res
+  async splitBatchSignedPsbt(signedHex: string, network: string): Promise<[Error | undefined, { psbts: string[] } | undefined]> {
+    return sat20Wallet.splitBatchSignedPsbt(signedHex, network)
   }
-  async splitBatchSignedPsbt_SatsNet(signedHex: string, network: string): Promise<string[]> {
-    const res = (globalThis as any).sat20wallet_wasm.splitBatchSignedPsbt_SatsNet(
-      signedHex,
-      network
-    )
-    return res
+  async splitBatchSignedPsbt_SatsNet(signedHex: string, network: string): Promise<[Error | undefined, { psbts: string[] } | undefined]> {
+    return sat20Wallet.splitBatchSignedPsbt(signedHex, network) // 假设 SatsNet 也用同名方法
   }
 
-  async mergeBatchSignedPsbt_SatsNet(psbts: string[], network: string): Promise<string> {
-    const res = (globalThis as any).sat20wallet_wasm.mergeBatchSignedPsbt_SatsNet(
-      psbts,
-      network
-    )
-    return res
+  async mergeBatchSignedPsbt_SatsNet(psbts: string[], network: string): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return sat20Wallet.mergeBatchSignedPsbt_SatsNet(psbts, network)
   }
+
   async finalizeSellOrder_SatsNet(
     psbtHex: string,
     utxos: string[],
@@ -123,16 +105,7 @@ class Service {
     serviceFee: number,
     networkFee: number
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
-    console.log('finalizeSellOrder_SatsNet', {
-      psbtHex,
-      utxos,
-      buyerAddress,
-      serverAddress,
-      network,
-      serviceFee,
-      networkFee,
-    })
-    const result = await (globalThis as any).sat20wallet_wasm.finalizeSellOrder_SatsNet(
+    return sat20Wallet.finalizeSellOrder_SatsNet(
       psbtHex,
       utxos,
       buyerAddress,
@@ -141,6 +114,24 @@ class Service {
       serviceFee,
       networkFee
     )
+  }
+
+  async addInputsToPsbt(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return sat20Wallet.addInputsToPsbt(psbtHex, utxos)
+  }
+
+  async addOutputsToPsbt(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return sat20Wallet.addOutputsToPsbt(psbtHex, utxos)
+  }
+
+  async lockUtxo(address: string, utxo: any, reason?: string): Promise<[Error | undefined, any | undefined]> {
+    const result = await (globalThis as any).sat20wallet_wasm.lockUtxo(address, utxo, reason)
     if (result.code === 0) {
       return [undefined, result.data]
     } else {
@@ -148,94 +139,132 @@ class Service {
     }
   }
 
-  async addInputsToPsbt(
-    psbtHex: string,
-    utxos: string[]
-  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
-    console.log('addInputsToPsbt', { psbtHex, utxos })
-    const [err, res] = await (globalThis as any).sat20wallet_wasm.addInputsToPsbt(
-      psbtHex,
-      utxos
-    )
-    if (err) {
-      return [err, undefined]
-    }
-    return [undefined, res]
-  }
-
-  async addOutputsToPsbt(
-    psbtHex: string,
-    utxos: string[]
-  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
-    console.log('addOutputsToPsbt', { psbtHex, utxos })
-    const [err, res] = await (globalThis as any).sat20wallet_wasm.addOutputsToPsbt(
-      psbtHex,
-      utxos
-    )
-    if (err) {
-      return [err, undefined]
-    }
-    return [undefined, res]
-  }
-
-  async lockUtxo(address: string, utxo: any, reason?: string): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.lockUtxo(address, utxo, reason)
-  }
-
   async lockUtxo_SatsNet(address: string, utxo: any, reason?: string): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.lockUtxo_SatsNet(address, utxo, reason)
+    const result = await (globalThis as any).sat20wallet_wasm.lockUtxo_SatsNet(address, utxo, reason)
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
   }
 
   async unlockUtxo(address: string, utxo: any): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.unlockUtxo(address, utxo)
+    const result = await (globalThis as any).sat20wallet_wasm.unlockUtxo(address, utxo)
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
   }
 
   async unlockUtxo_SatsNet(address: string, utxo: any): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.unlockUtxo_SatsNet(address, utxo)
+    const result = await (globalThis as any).sat20wallet_wasm.unlockUtxo_SatsNet(address, utxo)
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
   }
 
   async getAllLockedUtxo(address: string): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.getAllLockedUtxo(address)
+    const result = await (globalThis as any).sat20wallet_wasm.getAllLockedUtxo(address)
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
   }
 
   async getAllLockedUtxo_SatsNet(address: string): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.getAllLockedUtxo_SatsNet(address)
+    const result = await (globalThis as any).sat20wallet_wasm.getAllLockedUtxo_SatsNet(address)
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
   }
 
   async getUtxos(): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.getUtxos()
+    const result = await (globalThis as any).sat20wallet_wasm.getUtxos()
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
   }
 
   async getUtxos_SatsNet(): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.getUtxos_SatsNet()
+    const result = await (globalThis as any).sat20wallet_wasm.getUtxos_SatsNet()
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
   }
 
   async getUtxosWithAsset(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.getUtxosWithAsset(address, amt, assetName)
+    const result = await (globalThis as any).sat20wallet_wasm.getUtxosWithAsset(address, amt, assetName)
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
   }
 
   async getUtxosWithAsset_SatsNet(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.getUtxosWithAsset_SatsNet(address, amt.toString(), assetName)
+    const result = await (globalThis as any).sat20wallet_wasm.getUtxosWithAsset_SatsNet(address, amt.toString(), assetName)
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
   }
 
   async getUtxosWithAssetV2(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.getUtxosWithAssetV2(address, amt, assetName)
+    const result = await (globalThis as any).sat20wallet_wasm.getUtxosWithAssetV2(address, amt, assetName)
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
   }
 
   async getUtxosWithAssetV2_SatsNet(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.getUtxosWithAssetV2_SatsNet(address, amt, assetName)
+    const result = await (globalThis as any).sat20wallet_wasm.getUtxosWithAssetV2_SatsNet(address, amt, assetName)
+    if (result.code === 0) {
+      return [undefined, result.data]
+    } else {
+      return [new Error(result.msg), undefined]
+    }
   }
 
   async getAssetAmount(address: string, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.getAssetAmount(address, assetName);
+    const result = await (globalThis as any).sat20wallet_wasm.getAssetAmount(address, assetName);
+    if (result.code === 0) {
+      return [undefined, result.data];
+    } else {
+      return [new Error(result.msg), undefined];
+    }
   }
 
   async getAssetAmount_SatsNet(address: string, assetName: string): Promise<[Error | undefined, any | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.getAssetAmount_SatsNet(address, assetName);
+    const result = await (globalThis as any).sat20wallet_wasm.getAssetAmount_SatsNet(address, assetName);
+    console.log(result);
+
+    if (result.code === 0) {
+      return [undefined, result.data];
+    } else {
+      return [new Error(result.msg), undefined];
+    }
   }
-  
+
   async getFeeForDeployContract(templateName: string, content: string, feeRate: string): Promise<[Error | undefined, { fee: any } | undefined]> {
-    return (globalThis as any).sat20wallet_wasm.getFeeForDeployContract(templateName, content, feeRate);
+    const result = await (globalThis as any).sat20wallet_wasm.getFeeForDeployContract(templateName, content, feeRate);
+    if (result.code === 0) {
+      return [undefined, result.data];
+    } else {
+      return [new Error(result.msg), undefined];
+    }
   }
   async getFeeForInvokeContract(url: string, invoke: string): Promise<[Error | undefined, { fee: any } | undefined]> {
     return (globalThis as any).sat20wallet_wasm.getFeeForInvokeContract(url, invoke);

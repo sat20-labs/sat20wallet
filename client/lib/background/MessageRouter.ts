@@ -312,6 +312,7 @@ export async function handleMessage(
             data.address,
             data.assetName,
           )
+          console.log('reqErr', reqErr);
           if (reqErr) {
             errData = { code: -47, message: reqErr.message }
           } else {

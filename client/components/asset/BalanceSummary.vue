@@ -94,7 +94,7 @@ const transcendingModeStore = useTranscendingModeStore()
 const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
 const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
-const { address, feeRate, btcFeeRate, network } = storeToRefs(walletStore)
+const { address, network } = storeToRefs(walletStore)
 const abailableSats = ref<{
   availableAmt: number,
   lockedAmt: number

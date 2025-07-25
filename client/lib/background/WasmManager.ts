@@ -7,22 +7,6 @@ import { Network } from '@/types'
 // after importScripts('/wasm/wasm_exec.js') is called.
 declare const Go: any
 
-const loadStpWasm = async () => {
-  console.log('调试: 开始加载 stpd.wasm')
-  const go = new Go()
-  const wasmPath = browser.runtime.getURL('/wasm/stpd.wasm')
-  const env = walletStorage.getValue('env') || 'test'
-  const network = walletStorage.getValue('network') as Network
-  const response = await fetch(wasmPath)
-  const wasmBinary = await response.arrayBuffer()
-  const wasmModule = await WebAssembly.instantiate(
-    wasmBinary,
-    go.importObject,
-  )
-  go.run(wasmModule.instance)
-  await (globalThis as any).stp_wasm.init(getConfig(env, network), logLevel)
-  console.log('调试: stpd.wasm 加载并初始化完成')
-}
 
 export const initializeWasm = async (): Promise<void> => {
   try {

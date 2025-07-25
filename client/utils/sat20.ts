@@ -4,7 +4,7 @@ class WalletManager {
     methodName: string,
     ...args: any[]
   ): Promise<[Error | undefined, any | undefined]> {
-    const method = window.sat20wallet_wasm[methodName as keyof WalletManager]
+    const method = (globalThis as any).sat20wallet_wasm[methodName as keyof WalletManager]
     const [err, result] = await tryit(method as any)(...args)
     console.log(`${methodName} args: `, args)
     console.log(`${methodName} result: `, result)

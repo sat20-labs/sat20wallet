@@ -424,6 +424,9 @@ interface SatsnetStp {
     referrerName: string,
     serverPubKey: string
   ): Promise<SatsnetResponse<string>>;
+
+  /** 获取所有已注册的推荐人名称 */
+  getAllRegisteredReferrerName(pubkey: string): SatsnetResponse<{ names: string[] }>
 }
 declare interface Window {
   sat20wallet_wasm: WalletManager

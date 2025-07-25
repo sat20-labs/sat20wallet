@@ -89,6 +89,7 @@ interface StpWasmModule {
   // Add new methods
   registerAsReferrer: (name: string, feeRate: number) => Promise<WasmResponse<string>>;
   bindReferrerForServer: (referrerName: string, serverPubKey: string) => Promise<WasmResponse<string>>;
+  getAllRegisteredReferrerName: (pubkey: string) => Promise<WasmResponse<string[]>>;
 }
 
 
@@ -111,6 +112,7 @@ class SatsnetStp {
     const method = stpModuleTyped[methodName] as (...args: any[]) => Promise<WasmResponse<T>>;
 
     const [err, result] = await tryit(method)(...args)
+    console.log('stp method', methodName, args, result);
 
     if (err) {
       console.error(`stp ${methodName} error: ${err.message}`)
@@ -709,6 +711,11 @@ class SatsnetStp {
 
   async bindReferrerForServer(referrerName: string, serverPubKey: string): Promise<[Error | undefined, string | undefined]> {
     return this._handleRequest<string>('bindReferrerForServer', referrerName, serverPubKey)
+  }
+
+  /** 获取所有已注册的推荐人名称 */
+  async getAllRegisteredReferrerName(pubkey: string): Promise<[Error | undefined, { names: string[] } | undefined]> {
+    return this._handleRequest<{ names: string[] }>('getAllRegisteredReferrerName', pubkey)
   }
 }
 
