@@ -18,7 +18,7 @@
               <SelectItem v-if="nameList && nameList.length > 0" v-for="nameItem in nameList" :key="nameItem.id" :value="nameItem.name">
                 {{ nameItem.name }}
               </SelectItem>
-              <SelectItem v-else value="" disabled>
+              <SelectItem v-else value="no-names" disabled>
                 {{ isLoadingNames ? '加载中...' : '暂无可用名字' }}
               </SelectItem>
             </SelectContent>

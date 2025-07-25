@@ -51,7 +51,7 @@
       <Button 
         variant="secondary" 
         class="h-10 w-full"
-        :disabled="!minerInfo.ServerNode"
+        :disabled="minerInfo.ServerNode"
         @click="router.push('/wallet/setting/node')"
       >
         {{ $t('nodeSetting.selectNodeType') }}
@@ -86,4 +86,6 @@ const { data: res, isLoading, isError, error, refetch } = useQuery({
   initialData: {},
 })
 const minerInfo = computed(() => res.value?.data || {})
+console.log('minerInfo', minerInfo);
+
 </script>
