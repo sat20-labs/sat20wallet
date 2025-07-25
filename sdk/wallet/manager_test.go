@@ -9,8 +9,9 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
-	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/btcsuite/btcd/txscript"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -67,17 +68,29 @@ func createNode(t *testing.T, mode, dbPath string) *Manager {
 	} else {
 		if mode == "client" {
 			mnemonic := ""
-			//mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
-			// mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
+
+			// tb1p62gjhywssq42tp85erlnvnumkt267ypndrl0f3s4sje578cgr79sekhsua
+			// mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
+			
+			// tb1pttjr9292tea2nr28ca9zswgdhz0dasnz6n3v58mtg9cyf9wqr49sv8zjep
+			mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
+			
+			// tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv
 			// mnemonic = "remind effort case concert skull live spoil obvious finish top bargain age"
-			mnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
+
+			// tb1p6rk7tq5avpjmpudgut4vkhda5m8eetlzpqd6mrcr6u2022tdwfssfsra5x
+			// mnemonic = "comfort very add tuition senior run eight snap burst appear exile dutch"
+
+			// tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g
+			// mnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
 			_, err := manager.ImportWallet(mnemonic, "123456")
 			if err != nil {
 				t.Fatalf("ImportWallet failed. %v", err)
 			}
 		} else {
-			mnemonic := "comfort very add tuition senior run eight snap burst appear exile dutch"
-			//mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
+			mnemonic := ""
+
+			mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
 			// mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
 			// mnemonic = "remind effort case concert skull live spoil obvious finish top bargain age"
 			// mnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
@@ -115,7 +128,8 @@ func prepare(t *testing.T) {
 func TestPsbt(t *testing.T) {
 	prepare(t)
 
-	psbtStr := "70736274ff0100890200000001d71f33336e92a9e2a794c8a77ffd3b846c335bfc6ac2a0eb026e96d61a04b7220100000000fdffffff025a0b0000000000002251202fad5b1f0dfa1111ca54fb636e030846bd731dca4f2b7af48d8e5b9672d90b25ff630000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b000000000001012b94790000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b011720d210be04396837b11f65eb42527de3f6a1c1c1d51de38ee907fc355c56ee5115000000"
+	// input address: tb1pttjr9292tea2nr28ca9zswgdhz0dasnz6n3v58mtg9cyf9wqr49sv8zjep
+	psbtStr := "70736274ff01005e020000000114fe1543a720f178c472ad179224c268c287438477cba59d76b93e1fec4d68170100000000ffffffff0170170000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b000000000001012bb80b0000000000002251205ae432a8aa5e7aa98d47c74a28390db89edec262d4e2ca1f6b41704495c01d4b010304830000000000"
 	signed, err := _client.SignPsbt(psbtStr, false)
 	if err != nil {
 		t.Fatal()
@@ -126,6 +140,8 @@ func TestPsbt(t *testing.T) {
 	if err != nil {
 		t.Fatal()
 	}
+	// 014112710444510b91aebabc1c7a01dfb732ddc178cbe9df5aa757667129acdf435801d3c3c5b22e5d536304bab4b4531e26b4c78ed7b31df6449a215cc91df4e4bf83
+	fmt.Printf("%s\n", hex.EncodeToString(packet.Inputs[0].FinalScriptWitness))
 
 	err = psbt.MaybeFinalizeAll(packet)
 	if err != nil {
@@ -529,4 +545,98 @@ func TestGetTxAssetInfoFromPsbt(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Printf("%v\n", info)
+}
+
+
+func TestVerifyTx(t *testing.T) {
+	prepare(t)
+
+	txHex := "010000000001032f84604f0cb0991560925fcbf15c427ffd605a002800f1cd5f320a905904f46a0100000000ffffffff12cf5725e9116b8747c127fe15b4d69495a6f28b406defb7763ec99091d61dd50100000000ffffffff87790051681ed948664dfa6730eda17eae1656fc8ad36d407f6193ffbfa2eea50000000000ffffffff04940200000000000022002080631a064208b6d6df4b3762f59d12fb0f6e0f21bb57370aaa4f8866fba918d34a01000000000000225120237771c78df654746be0f191b48c4acc782331cf1756c7b4fde5dd3eac43075d0c8a00000000000022002080631a064208b6d6df4b3762f59d12fb0f6e0f21bb57370aaa4f8866fba918d30000000000000000106a5d0d00cffc030180c0f0978ef841010140552fd1c2c8ed3f240838f4455d4bee71c25426f0aa489e3628b2916700819d33f86685c1ce49f21bdea2a9f79a7f3d4e6a1d52baa8ed1854ba5712d17fb376c704004730440220418c89fdb2aff1de499e9640993a8986c9aaa0d689f6f2911bcaffd279f7e1eb02206d08fc8b32321fae4abe6329768ef0cf4a9c8d8d12d8371914b97890d442219701483045022100edb67dc62f0a591ee3195ff0625c1b3b09c3b16d16c53bb2a94e9d660c89607e02202433e439959a5ae431f50c30edb78ec3bad46c6ad11561eacdf1f6a6cf900402014752210331f024cdf284a7cc50769f0716c5efa8e37ac494db09f2d20e7008c5413def72210367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e52ae01401c7d41caccdd0717a633568157787ae39a09e46bbe210563a12d4d587ab2d105aaf85f7f49b4b7781a3920a00e25335c035001533a7d2f3fa095c51bf7c2be4000000000"
+
+	tx, err := DecodeMsgTx(txHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	PrintJsonTx(tx, "tx")
+
+	missingInputs := make([]string, 0)
+	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
+	for _, txIn := range tx.TxIn {
+		utxo := txIn.PreviousOutPoint.String()
+		txOut, err := _client.GetTxOutFromRawTx(utxo)
+		if err != nil {
+			missingInputs = append(missingInputs, utxo)
+			continue
+		}
+
+		prevFetcher.AddPrevOut(txIn.PreviousOutPoint, &txOut.OutValue)
+	}
+
+	fmt.Printf("missing utxos: %v\n", missingInputs)
+
+	if len(missingInputs) == 0 {
+		fee, err := VerifySignedTxV2(tx, prevFetcher)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("fee: %d\n", fee)
+		fmt.Printf("tx vsize: %d\n", GetTxVirtualSize2(tx))
+	}
+
+}
+
+
+func TestDeployContract_ORDX_Remote(t *testing.T) {
+	prepare(t)
+
+	supportedContracts, err := _client.GetSupportContractInServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("supported contracts: %v\n", supportedContracts)
+
+	deployedContracts, err := _client.GetDeployedContractInServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("deployed contracts: %v\n", deployedContracts)
+
+	assetName := &AssetName{
+		AssetName: swire.AssetName{
+			Protocol: "ordx",
+			Type:     "f",
+			Ticker:   "testTicker",
+		},
+		N: 1000,
+	}
+	launchPool := NewLaunchPoolContract()
+	launchPool.AssetName = assetName.AssetName
+	launchPool.BindingSat = assetName.N
+	launchPool.MintAmtPerSat = assetName.N
+	launchPool.Limit = 10000000
+	launchPool.LaunchRatio = 70
+	launchPool.MaxSupply = 40000000
+
+	fmt.Printf("contract: %s\n", launchPool.Content())
+
+	str := `{"contractType":"launchpool.tc","startBlock":0,"endBlock":0,"assetName":{"Protocol":"ordx","Type":"f","Ticker":"round2"},"mintAmtPerSat":100,"limit":100000,"maxSupply":10000000,"launchRation":70,"bindingSat":1000}`
+	var launchPool2 LaunchPoolContract
+	err = json.Unmarshal([]byte(str), &launchPool2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("contract2: %s\n", launchPool2.Content())
+
+	deployFee, err := _client.QueryFeeForDeployContract(TEMPLATE_CONTRACT_LAUNCHPOOL, (launchPool2.Content()), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("deploy contract %s need %d sats\n", TEMPLATE_CONTRACT_LAUNCHPOOL, deployFee)
+	fmt.Printf("use RemoteDeployContract to deploy a contract on core channel in server node\n")
+
+	invokeParam, err := _client.QueryParamForInvokeContract(TEMPLATE_CONTRACT_LAUNCHPOOL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("use %s as template to invoke contract %s\n", invokeParam, TEMPLATE_CONTRACT_LAUNCHPOOL)
 }

@@ -979,8 +979,11 @@ func (p *IndexerClient) GetNameInfo(name string) (*indexerwire.OrdinalsName, err
 
 func (p *IndexerClient) GetNamesWithKey(address, key string) ([]*indexerwire.OrdinalsName, error) {
 
-	path := fmt.Sprintf("/ns/address/%s?key=%s", address, key)
+	path := fmt.Sprintf("/ns/address/%s", address)
 	url := p.GetUrl(path)
+	url.Query = make(map[string]string)  
+	url.Query["key"] = key
+	
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)

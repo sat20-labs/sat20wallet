@@ -188,19 +188,34 @@ func IsSameTxExceptSigs(tx1, tx2 *wire.MsgTx) bool {
 func VerifySignedTx(tx *wire.MsgTx,
 	prevFetcher txscript.PrevOutputFetcher) error {
 
+	_, err := VerifySignedTxV2(tx, prevFetcher)
+	return err
+}
+
+func VerifySignedTxV2(tx *wire.MsgTx,
+	prevFetcher txscript.PrevOutputFetcher) (int64, error) {
+
+	utxomap := make(map[string]bool)
 	inValue := int64(0)
 	sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
 	for i, txIn := range tx.TxIn {
+		utxo := txIn.PreviousOutPoint.String()
+		_, ok := utxomap[utxo]
+		if ok {
+			return 0, fmt.Errorf("duplicated input %s", utxo)
+		}
+		utxomap[utxo] = true
+		
 		txOut := prevFetcher.FetchPrevOutput(txIn.PreviousOutPoint)
 		vm, err := txscript.NewEngine(txOut.PkScript, tx, i, txscript.StandardVerifyFlags,
 			nil, sigHashes, txOut.Value, prevFetcher)
 		if err != nil {
 			Log.Errorf("Failed to create script engine for input %d: %v", i, err)
-			return err
+			return 0, err
 		}
 		if err := vm.Execute(); err != nil {
 			Log.Errorf("Failed to execute script for input %d: %v", i, err)
-			return err
+			return 0, err
 		}
 		inValue += txOut.Value
 	}
@@ -211,11 +226,20 @@ func VerifySignedTx(tx *wire.MsgTx,
 	}
 
 	if outValue > inValue {
-		return fmt.Errorf("outvalue %d bigger than invalue %d", outValue, inValue)
+		return 0, fmt.Errorf("outvalue %d bigger than invalue %d", outValue, inValue)
 	}
 
-	return nil
+	fee := inValue - outValue
+	vSize := GetTxVirtualSize2(tx)
+	if fee < vSize {
+		// TODO 很多节点要求费率 >= 1sat/vb，但现在已经开始放宽。但我们这里先要求最小1
+		return 0, fmt.Errorf("fee %d less than vsize %d", fee, vSize)
+	}
+	Log.Infof("Tx %s verified, vsize %d, fee %d", tx.TxID(), vSize, fee)
+
+	return inValue - outValue, nil
 }
+
 
 // GetPkScriptFromAddress 根据比特币地址返回对应的锁定脚本(PkScript)
 func GetPkScriptFromAddress(addr string) ([]byte, error) {
@@ -295,13 +319,13 @@ func PrintHexTx(tx *wire.MsgTx) {
 	if err != nil {
 		Log.Warnf("EncodeMsgTx failed. %v", err)
 	}
-	Log.Infof("TX: %s", hexTx)
+	Log.Infof("L1 TX %s vsize %d: %s", tx.TxID(), GetTxVirtualSize2(tx), hexTx)
 }
 
 func PrintJsonTx(tx *wire.MsgTx, name string) {
 	jsonTx := ConvertMsgTx(tx)
 	b, _ := json.Marshal(jsonTx)
-	Log.Infof("L1 %s TX: %s", name, string(b))
+	Log.Infof("L1 %s TX %s vsize %d : %s", name, tx.TxID(), GetTxVirtualSize2(tx), string(b))
 }
 
 
