@@ -482,8 +482,7 @@ type ContractRuntimeBase struct {
 	Divisibility  int    `json:"divisibility"`
 	N             int    `json:"n"`
 	
-	CheckPoint          int    // 上个检查高度
-	CheckPointL1        int    //
+	CheckPoint          int64    // 上个与peer端校验过merkleRoot的invokeCount
 	StaticMerkleRoot    []byte // 合约静态数据
 	AssetMerkleRoot     []byte // 上个检查的资产状态数据
 	CurrAssetMerkleRoot []byte // 当前高度下的资产状态数据
