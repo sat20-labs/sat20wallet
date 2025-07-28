@@ -531,7 +531,7 @@ func (p *IndexerClient) GetAllUtxosWithAddress(address string) ([]*indexerwire.P
 
 // sat/vb
 func (p *IndexerClient) GetFeeRate() int64 {
-	url := p.GetUrl("/extension/default/fee-summary")
+	url := p.GetUrl("/btc/fee/summary")
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
