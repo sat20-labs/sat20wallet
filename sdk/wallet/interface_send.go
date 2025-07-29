@@ -2308,6 +2308,7 @@ func (p *Manager) BuildBatchSendTxV2_ordx(dest []*SendAssetInfo,
 }
 
 // 给不同地址发送不同数量的资产，只支持runes协议, 目标地址不能太多，会超出op_return的限制
+// 返回的fee包括为符文支付的330聪
 func (p *Manager) BuildBatchSendTxV2_runes(dest []*SendAssetInfo,
 	assetName *AssetName, utxos, fees []string,
 	feeRate int64, bInChannel bool) (
@@ -2470,7 +2471,7 @@ func (p *Manager) BuildBatchSendTxV2_runes(dest []*SendAssetInfo,
 		tx.AddTxOut(txOut3)
 	}
 
-	return tx, prevFetcher, fee, nil
+	return tx, prevFetcher, fee + 330, nil
 }
 
 // 构建tx，发送给多个地址不同数量的资产，对于ordx资产，不允许插桩
