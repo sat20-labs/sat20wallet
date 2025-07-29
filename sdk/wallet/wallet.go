@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/btcsuite/btcd/btcutil"
@@ -137,6 +138,11 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 
 	if !bip39.IsMnemonicValid(mnemonic) {
 		Log.Errorf("Mnomonic is invalid")
+		return nil
+	}
+	if strings.Count(mnemonic, " ") != 11 || strings.Count(mnemonic, "\n") > 0 || 
+	strings.Count(mnemonic, "\t") > 0 {
+		Log.Errorf("Mnomonic has invalid char")
 		return nil
 	}
 
