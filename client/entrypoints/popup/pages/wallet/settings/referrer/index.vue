@@ -92,10 +92,11 @@ import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store/wallet'
 import { useNameManager } from '@/composables/useNameManager'
-import { storage } from 'wxt/storage'
+import { useReferrerManager } from '@/composables/useReferrerManager'
 
 const walletStore = useWalletStore()
 const { nameList, isLoadingNames } = useNameManager()
+const { addLocalReferrerName } = useReferrerManager()
 const isLoading = ref(false)
 const showConfirm = ref(false)
 const resultMsg = ref('')
@@ -124,15 +125,9 @@ async function confirmRegister() {
     } else {
       resultMsg.value = '注册成功！'
       resultSuccess.value = true
-      // 保存注册的name到storage
+      // 使用推荐人管理器保存注册的name到本地存储
       if (address.value) {
-        const key: any = `local:referrer_names_${address.value}`
-        let names = await storage.getItem<string[]>(key)
-        if (!names) names = []
-        if (!names.includes(name.value)) {
-          names.push(name.value)
-          await storage.setItem(key, names)
-        }
+        await addLocalReferrerName(address.value, name.value)
       }
       // 清空输入
       name.value = ''

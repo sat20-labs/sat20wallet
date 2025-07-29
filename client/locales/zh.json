@@ -306,7 +306,12 @@
     "unlockAsset": "解锁资产至聪网",
     "splicingIn": "向通道注资",
     "splicingOut": "从通道抽资",
-    "assetOperation": "资产操作"
+    "assetOperation": "资产操作",
+    "resolvingDomain": "正在解析名称...",
+    "domainResolved": "名称解析成功: {name} → {address}",
+    "domainNotFound": "名称未找到: {name}",
+    "domainName": "名称",
+    "resolvedAddress": "解析地址"
   },
   "receiveQRcode": {
     "title": "接收地址",

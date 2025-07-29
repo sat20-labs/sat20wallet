@@ -221,6 +221,94 @@ declare interface WalletManager {
     psbtHex: string,
     utxos: string[]
   ): Promise<SatsnetResponse<{ psbt: string }>>
+
+  // --- UTXO Management Methods ---
+  lockUtxo(
+    address: string,
+    utxo: any,
+    reason?: string
+  ): Promise<SatsnetResponse<any>>
+
+  lockUtxo_SatsNet(
+    address: string,
+    utxo: any,
+    reason?: string
+  ): Promise<SatsnetResponse<any>>
+
+  unlockUtxo(
+    address: string,
+    utxo: any
+  ): Promise<SatsnetResponse<any>>
+
+  unlockUtxo_SatsNet(
+    address: string,
+    utxo: any
+  ): Promise<SatsnetResponse<any>>
+
+  getAllLockedUtxo(
+    address: string
+  ): Promise<SatsnetResponse<any>>
+
+  getAllLockedUtxo_SatsNet(
+    address: string
+  ): Promise<SatsnetResponse<any>>
+
+  // --- UTXO Getter Methods ---
+  getUtxos(): Promise<SatsnetResponse<any>>
+
+  getUtxos_SatsNet(): Promise<SatsnetResponse<any>>
+
+  getUtxosWithAsset(
+    address: string,
+    amt: number,
+    assetName: string
+  ): Promise<SatsnetResponse<any>>
+
+  getUtxosWithAsset_SatsNet(
+    address: string,
+    amt: number,
+    assetName: string
+  ): Promise<SatsnetResponse<any>>
+
+  getUtxosWithAssetV2(
+    address: string,
+    amt: number,
+    assetName: string
+  ): Promise<SatsnetResponse<any>>
+
+  getUtxosWithAssetV2_SatsNet(
+    address: string,
+    amt: number,
+    assetName: string
+  ): Promise<SatsnetResponse<any>>
+
+  // --- Asset Amount Methods ---
+  getAssetAmount(
+    address: string,
+    assetName: string
+  ): Promise<SatsnetResponse<{ amount: number; value: number }>>
+
+  getAssetAmount_SatsNet(
+    address: string,
+    assetName: string
+  ): Promise<SatsnetResponse<{ amount: number; value: number }>>
+
+  // --- Contract Methods ---
+  getFeeForDeployContract(
+    templateName: string,
+    content: string,
+    feeRate: string
+  ): Promise<SatsnetResponse<{ fee: any }>>
+
+  getFeeForInvokeContract(
+    url: string,
+    invoke: string
+  ): Promise<SatsnetResponse<{ fee: any }>>
+
+  getParamForInvokeContract(
+    templateName: string,
+    action: string
+  ): Promise<SatsnetResponse<{ parameter: any }>>
 }
 interface SatsnetStp {
   closeChannel(

@@ -109,6 +109,12 @@ class SatnetApi {
     )
     return response.json()
   }
+  async getReferrerByAddress({ address, network }: any): Promise<any> {
+    const response = await fetch(
+      this.generatePath(`v3/referrer/${address}`, network)
+    )
+    return response.json()
+  }
 }
 
 export default new SatnetApi()

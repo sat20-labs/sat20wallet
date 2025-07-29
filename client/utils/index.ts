@@ -1,5 +1,6 @@
 import { Chain, type Env } from '@/types/index';
 import { Network } from '@/types/index';
+import { ordxApi } from '@/apis';
 export const hideAddress = (
   str?: string | null,
   num: number = 6,
@@ -109,9 +110,24 @@ export function btcToSats(btc: string | number): number {
   return sats;
 }
 
-export function validateBTCAddress(address: string): boolean {
-  const regex = /^[13][a-km-zA-HJ-NP-Z1-9]{26,33}$/;
-  return regex.test(address);
+export function validateBTCAddress(address: string, network: string = 'mainnet'): boolean {
+  if (!address || typeof address !== 'string') return false
+  
+  const trimmedAddress = address.trim()
+  
+  if (network === 'testnet') {
+    // Testnet 地址格式：
+    // 1. Legacy testnet addresses (以 2 开头)
+    // 2. Bech32 testnet addresses (以 tb1 开头)
+    const testnetRegex = /^(tb1[a-z0-9]{39,59}|2[a-km-zA-HJ-NP-Z1-9]{26,33})$/;
+    return testnetRegex.test(trimmedAddress);
+  } else {
+    // Mainnet 地址格式：
+    // 1. Legacy mainnet addresses (以 1 或 3 开头)
+    // 2. Bech32 mainnet addresses (以 bc1 开头)
+    const mainnetRegex = /^(bc1[a-z0-9]{39,59}|[13][a-km-zA-HJ-NP-Z1-9]{26,33})$/;
+    return mainnetRegex.test(trimmedAddress);
+  }
 }
 
 export const formatLargeNumber = (num: number): string => {
@@ -131,3 +147,83 @@ export const formatLargeNumber = (num: number): string => {
   }
   return num.toLocaleString(); // 小于 1000 的数字直接返回
 };
+
+// 域名解析相关工具函数
+export const isDomainName = (input: string, network: string = 'mainnet'): boolean => {
+  // 简化的域名检测：只要不是比特币地址格式，就可能是域名
+  if (!input || typeof input !== 'string') return false
+  
+  const trimmedInput = input.trim()
+  
+  // 如果是比特币地址格式，则不是域名
+  if (validateBTCAddress(trimmedInput, network)) return false
+  
+  // 其他情况都可能是域名，让API来判断
+  return true
+}
+
+export const resolveDomainName = async (name: string, network: string): Promise<{ address: string; name: string } | null> => {
+  try {
+    // 使用 OrdxApi 的 getNsName 方法
+    
+    const response = await ordxApi.getNsName({ name, network })
+    
+    if (response?.data?.address) {
+      return {
+        address: response.data.address,
+        name: name
+      }
+    }
+    
+    return null
+  } catch (error) {
+    console.error(`Error resolving domain ${name}:`, error)
+    return null
+  }
+}
+
+export const validateAndResolveAddress = async (input: string, network: string): Promise<{
+  isDomain: boolean
+  resolvedAddress: string | null
+  originalInput: string
+  domainName: string | null
+}> => {
+  const trimmedInput = input.trim()
+  
+  // 如果是比特币地址，直接返回
+  if (validateBTCAddress(trimmedInput, network)) {
+    return {
+      isDomain: false,
+      resolvedAddress: trimmedInput,
+      originalInput: trimmedInput,
+      domainName: null
+    }
+  }
+  
+  // 对于非比特币地址格式的输入，尝试解析为域名
+  const resolved = await resolveDomainName(trimmedInput, network)
+  return {
+    isDomain: resolved !== null,
+    resolvedAddress: resolved?.address || null,
+    originalInput: trimmedInput,
+    domainName: resolved ? trimmedInput : null
+  }
+}
+
+/*
+测试用例示例：
+
+// 主网地址测试
+validateBTCAddress('1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa', 'mainnet') // true - Legacy mainnet
+validateBTCAddress('bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', 'mainnet') // true - Bech32 mainnet
+validateBTCAddress('3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy', 'mainnet') // true - P2SH mainnet
+
+// 测试网地址测试
+validateBTCAddress('tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', 'testnet') // true - Bech32 testnet
+validateBTCAddress('2N1F1mBJLth1JUoUZBTfu2CfuWU5k5QENJA', 'testnet') // true - Legacy testnet
+
+// 错误地址测试
+validateBTCAddress('invalid-address', 'mainnet') // false
+validateBTCAddress('tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', 'mainnet') // false - testnet地址在mainnet
+validateBTCAddress('bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', 'testnet') // false - mainnet地址在testnet
+*/

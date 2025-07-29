@@ -3,7 +3,7 @@
     <DialogContent class="w-[330px] rounded-lg bg-black">
       <DialogHeader class="flex flex-row items-center justify-between">
         <div>
-          <DialogTitle>{{ title }}</DialogTitle>
+          <DialogTitle>{{ title }}123</DialogTitle>
           <DialogDescription>
             <hr class="mb-4 mt-2 border-t-1 border-zinc-900">
             {{ description }}
@@ -54,6 +54,12 @@
               <Label>{{ $t('assetOperationDialog.address') }}</Label>
               <Input :model-value="address" type="text" :placeholder="$t('assetOperationDialog.enterAddress')"
                 class="h-12 bg-zinc-800" @update:modelValue="handleAddressUpdate" />
+              <!-- 域名解析失败错误提示 -->
+              <div v-if="resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress"
+                class="text-sm text-red-400 flex items-center gap-2">
+                <Icon icon="lucide:alert-circle" class="w-4 h-4" />
+                {{ $t('assetOperationDialog.domainNotFound', { name: resolvedInfo.domainName }) }}
+              </div>
             </div>
           </div>
         </div>
@@ -64,9 +70,14 @@
       </div>
 
       <DialogFooter v-if="selectedTab === 'normal'">
-        <Button class="w-full h-11 mb-2" :disabled="needsAddress && !address" @click="confirmOperation">
+        <Button class="w-full h-11 mb-2" :disabled="needsAddress && (!address || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress))" @click="confirmOperation">
           {{ $t('assetOperationDialog.confirm') }}
         </Button>
+        <!-- 域名解析失败错误提示 -->
+        <div v-if="resolvedInfo && !resolvedInfo.isDomain && !resolvedInfo.resolvedAddress" class="text-sm text-red-400 flex items-center justify-center gap-2 mb-2">
+          <Icon icon="lucide:alert-circle" class="w-4 h-4" />
+          {{ $t('assetOperationDialog.domainNotFound', { name: resolvedInfo.domainName }) }}
+        </div>
       </DialogFooter>
     </DialogContent>
   </Dialog>
@@ -79,29 +90,64 @@
           <Separator />
         </span>
       </AlertDialogTitle>
-      <AlertDialogDesc class="flex justify-center">
+      <!-- 域名解析状态显示 -->
+      <div v-if="isResolving" class="flex justify-center items-center py-4">
+        <div class="text-sm text-blue-400 flex items-center gap-2">
+          <Icon icon="lucide:loader-2" class="w-4 h-4 animate-spin" />
+          {{ $t('assetOperationDialog.resolvingDomain') }}
+        </div>
+      </div>
+
+      <AlertDialogDesc v-if="!isResolving" class="flex justify-center">
         <Icon icon="prime:check-circle" class="w-12 h-12 mr-2 text-green-600" />
         {{ $t('assetOperationDialog.confirmOperation') }}
       </AlertDialogDesc>
-      
+
+      <!-- 显示域名和地址信息 -->
+      <div v-if="!isResolving && resolvedInfo && resolvedInfo.isDomain && resolvedInfo.resolvedAddress"
+        class="mt-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
+        <div class="space-y-2 text-sm">
+          <div class="flex items-center justify-between">
+            <span class="text-zinc-300">{{ $t('assetOperationDialog.domainName') }}:</span>
+            <span class="text-primary font-semibold">{{ resolvedInfo.domainName }}</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-zinc-300">{{ $t('assetOperationDialog.resolvedAddress') }}:</span>
+            <span class="text-primary font-semibold">{{ hideAddress(resolvedInfo.resolvedAddress) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 显示域名解析失败信息 -->
+      <div v-if="!isResolving && resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress"
+        class="mt-4 p-3 bg-red-900/20 rounded-lg border border-red-700">
+        <div class="text-sm text-red-400 flex items-center gap-2">
+          <Icon icon="lucide:alert-circle" class="w-4 h-4" />
+          {{ $t('assetOperationDialog.domainNotFound', { name: resolvedInfo.domainName }) }}
+        </div>
+      </div>
+
       <!-- 显示 btcFeeRate 信息 -->
-      <div v-if="needsBtcFeeRate" class="mt-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
+      <div v-if="!isResolving && needsBtcFeeRate" class="mt-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
         <div class="flex items-center justify-between text-sm">
           <span class="text-zinc-300">BTC Fee Rate:</span>
           <span class="text-primary font-semibold">{{ btcFeeRate }} sats/vB</span>
         </div>
       </div>
-      
+
       <AlertDialogFoot class="my-4 gap-2">
-        <AlertDialogCancel @click="showAlertDialog = false">{{ $t('assetOperationDialog.cancel') }}</AlertDialogCancel>
-        <AlertDialogAction @click="handleConfirm">{{ $t('assetOperationDialog.confirm') }}</AlertDialogAction>
+        <AlertDialogCancel @click="showAlertDialog = false" :disabled="isResolving">{{ $t('assetOperationDialog.cancel')
+          }}</AlertDialogCancel>
+        <AlertDialogAction @click="handleConfirm" :disabled="isResolving || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress)">
+          {{ isResolving ? $t('assetOperationDialog.resolvingDomain') : $t('assetOperationDialog.confirm') }}
+        </AlertDialogAction>
       </AlertDialogFoot>
     </AlertDialogContent>
   </AlertDialog>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -122,6 +168,7 @@ import { Chain } from '@/types/index'
 import { Icon } from '@iconify/vue'
 import SplitSend from '@/entrypoints/popup/pages/wallet/split.vue'
 import { useWalletStore } from '@/store'
+import { validateAndResolveAddress, hideAddress } from '@/utils'
 
 interface Props {
   title: string
@@ -151,9 +198,18 @@ const isOpen = defineModel('open', { type: Boolean })
 
 const showAlertDialog = ref(false)
 
-// 获取钱包 store 中的 btcFeeRate
+// 获取钱包 store 中的 btcFeeRate 和 network
 const walletStore = useWalletStore()
-const { btcFeeRate } = storeToRefs(walletStore)
+const { btcFeeRate, network } = storeToRefs(walletStore)
+
+// 域名解析相关状态
+const isResolving = ref(false)
+const resolvedInfo = ref<{
+  isDomain: boolean
+  resolvedAddress: string | null
+  originalInput: string
+  domainName: string | null
+} | null>(null)
 
 const needsAddress = computed(() => {
   return props.operationType === 'send'
@@ -176,10 +232,50 @@ const handleAmountUpdate = (value: string | number) => {
 }
 
 const handleAddressUpdate = (value: string | number) => {
-  emit('update:address', value.toString())
+  const addressValue = value.toString()
+  emit('update:address', addressValue)
+
+  // 当用户修改地址时，清除之前的解析结果
+  resolvedInfo.value = null
 }
 
-const confirmOperation = () => {
+// 域名解析函数
+const resolveAddress = async (input: string) => {
+  if (!input.trim() || !network.value) return null
+  console.log('input', input);
+
+  isResolving.value = true
+  try {
+    const result = await validateAndResolveAddress(input, network.value)
+    return result
+  } catch (error) {
+    console.error('Error resolving address:', error)
+    return null
+  } finally {
+    isResolving.value = false
+  }
+}
+
+const confirmOperation = async () => {
+  // 在确认时进行域名解析
+  if (needsAddress.value && props.address) {
+    const result = await resolveAddress(props.address)
+    resolvedInfo.value = result
+    
+    // 如果解析成功且是域名，更新地址为解析后的地址
+    if (result?.isDomain && result.resolvedAddress) {
+      emit('update:address', result.resolvedAddress)
+    }
+    console.log(result, result?.isDomain && !result.resolvedAddress);
+
+    // 如果解析失败且不是有效的比特币地址，阻止进入下一步
+    if (result && !result?.isDomain && !result.resolvedAddress) {
+      // 不显示确认对话框，直接返回
+      return
+    }
+  }
+  
+  // 始终显示确认对话框
   showAlertDialog.value = true
 }
 
@@ -196,7 +292,7 @@ const handleConfirm = () => {
 // 设置最大值
 const setMaxAmount = () => {
   console.log('maxAmount', maxAmount.value);
-  
+
   if (maxAmount.value) {
     emit('update:amount', maxAmount.value) // 将最大值传递给父组件
   }
@@ -213,6 +309,9 @@ watch(
   (newVal) => {
     if (newVal) {
       selectedTab.value = 'normal'; // 重置为默认选项
+      // 重置解析状态
+      resolvedInfo.value = null
+      isResolving.value = false
     }
   }
 );

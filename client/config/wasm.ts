@@ -119,7 +119,7 @@ const config: Config = {
       Chain: "mainnet",
       Mode: "client",
       Peers: [
-        "b@03ab606f4dffd65965b4a9db957361800f8b03ed16acac11d5a4672801554596d0@seed.sat20.org:9529",
+        "b@03ab606f4dffd65965b4a9db957361800f8b03ed16acac11d5a4672801554596d0@https://apiprd.sat20.org/stp/mainnet",
         "s@022ab2945f61304f117f55d469c341d606ceb729de436c80c0e6ad7819cdd53ce7@39.108.96.46:9529"
       ],
       IndexerL1: {
@@ -132,14 +132,14 @@ const config: Config = {
         Host: "apiprd.sat20.org",
         Proxy: "satsnet/mainnet"
       },
-      Log: "debug"
+      Log: "info"
     },
     [Network.TESTNET]: {
       Env: "prd",
       Chain: "testnet",
       Mode: "client",
       Peers: [
-        "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@seed.sat20.org:19529",
+        "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@https://apiprd.sat20.org/stp/testnet",
         "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@39.108.96.46:19529"
       ],
       IndexerL1: {
@@ -152,7 +152,7 @@ const config: Config = {
         Host: "apiprd.sat20.org",
         Proxy: "satsnet/testnet"
       },
-      Log: "debug"
+      Log: "info"
     }
   }
 }

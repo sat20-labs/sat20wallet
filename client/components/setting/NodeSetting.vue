@@ -15,32 +15,62 @@
       <div v-if="isLoading" class="text-xs text-muted-foreground">{{ $t('loading', '加载中...') }}</div>
       <div v-if="isError" class="text-xs text-destructive">{{ error?.message || '加载失败' }}</div>
       <div v-if="!isLoading && !isError" class="bg-zinc-800/60 rounded p-3 text-xs text-zinc-200 space-y-2">
-        <template v-if="minerInfo.ServerNode">
-          <div class="flex justify-between items-center">
-            <span class="text-muted-foreground break-keep">连接的节点：</span>
-            <span class="font-mono text-xs break-all">{{ minerInfo.ServerNode }}</span>
+        <template v-if="displayMinerInfo.ServerNode || tempStakeData">
+          <div v-if="tempStakeData" class="text-center text-yellow-400 mb-2">
+            <Icon icon="lucide:clock" class="w-4 h-4 inline mr-1" />
+            节点质押已提交，等待后台处理中...
           </div>
-          <div class="flex justify-between items-center">
+          <div v-if="displayMinerInfo.ServerNode" class="flex justify-between items-center">
+            <span class="text-muted-foreground break-keep">连接的节点：</span>
+            <span class="font-mono text-xs break-all">{{ displayMinerInfo.ServerNode }}</span>
+          </div>
+          <div v-if="displayMinerInfo.ServerNode" class="flex justify-between items-center">
             <span class="text-muted-foreground break-keep">本地节点：</span>
             <span class="font-mono text-xs break-all">{{ publicKey }}</span>
           </div>
-          <div class="flex justify-between items-center">
+          <div v-if="displayMinerInfo.ServerNode" class="flex justify-between items-center">
             <span class="text-muted-foreground break-keep">通道地址：</span>
             <a :href="generateMempoolUrl({
               network: network,
-              path: `address/${minerInfo.ChannelAddr}`,
+              path: `address/${displayMinerInfo.ChannelAddr}`,
             })" target="_blank" class="font-mono text-xs text-blue-400 hover:text-blue-300 underline break-all">
-              {{ minerInfo.ChannelAddr }}
+              {{ displayMinerInfo.ChannelAddr }}
             </a>
           </div>
-          <div class="flex justify-between items-center">
+          <div v-if="displayMinerInfo.ServerNode" class="flex justify-between items-center">
             <span class="text-muted-foreground">质押资产：</span>
-            <span class="font-mono text-xs">{{ minerInfo.AssetName }}</span>
+            <span class="font-mono text-xs">{{ displayMinerInfo.AssetName }}</span>
           </div>
-          <div class="flex justify-between items-center">
+          <div v-if="displayMinerInfo.ServerNode" class="flex justify-between items-center">
             <span class="text-muted-foreground">资产数量：</span>
-            <span class="font-mono text-xs">{{ minerInfo.AssetAmt }}</span>
+            <span class="font-mono text-xs">{{ displayMinerInfo.AssetAmt }}</span>
           </div>
+          <!-- 显示临时质押数据 -->
+          <template v-if="tempStakeData && !displayMinerInfo.ServerNode">
+            <div class="flex justify-between items-center">
+              <span class="text-muted-foreground">交易ID：</span>
+              <a :href="generateMempoolUrl({ network: network, path: `tx/${tempStakeData.txId}` })" 
+                 target="_blank" class="font-mono text-xs text-blue-400 hover:text-blue-300 underline break-all">
+                {{ hideAddress(tempStakeData.txId) }}
+              </a>
+            </div>
+            <div class="flex justify-between items-center">
+              <span class="text-muted-foreground">预定ID：</span>
+              <span class="font-mono text-xs">{{ hideAddress(tempStakeData.resvId) }}</span>
+            </div>
+            <div class="flex justify-between items-center">
+              <span class="text-muted-foreground">质押资产：</span>
+              <span class="font-mono text-xs">{{ tempStakeData.assetName }}</span>
+            </div>
+            <div class="flex justify-between items-center">
+              <span class="text-muted-foreground">质押数量：</span>
+              <span class="font-mono text-xs">{{ tempStakeData.amt }}</span>
+            </div>
+            <div class="flex justify-between items-center">
+              <span class="text-muted-foreground">节点类型：</span>
+              <span class="font-mono text-xs">{{ tempStakeData.isCore ? '核心节点' : '挖矿节点' }}</span>
+            </div>
+          </template>
         </template>
         <template v-else>
           <div class="text-center text-muted-foreground">
@@ -51,7 +81,7 @@
       <Button 
         variant="secondary" 
         class="h-10 w-full"
-        :disabled="minerInfo.ServerNode"
+        :disabled="displayMinerInfo.ServerNode || tempStakeData"
         @click="router.push('/wallet/setting/node')"
       >
         {{ $t('nodeSetting.selectNodeType') }}
@@ -62,16 +92,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useQuery } from '@tanstack/vue-query'
 import { useWalletStore } from '@/store'
 import { Button } from '@/components/ui/button'
 import { satnetApi } from '@/apis'
+import { nodeStakeStorage } from '@/lib/nodeStakeStorage'
+import { hideAddress, generateMempoolUrl } from '@/utils'
+import { NodeStakeData } from '@/types'
 
 const router = useRouter()
 const isExpanded = ref(false)
+const tempStakeData = ref<NodeStakeData | null>(null)
 
 const walletStore = useWalletStore()
 const { network, publicKey } = storeToRefs(walletStore)
@@ -85,7 +119,47 @@ const { data: res, isLoading, isError, error, refetch } = useQuery({
   enabled: () => !!publicKey.value && !!network.value,
   initialData: {},
 })
+
 const minerInfo = computed(() => res.value?.data || {})
+
+// 合并显示数据：优先显示服务器数据，如果没有则显示临时数据
+const displayMinerInfo = computed(() => {
+  if (minerInfo.value.ServerNode) {
+    return minerInfo.value
+  }
+  return {}
+})
+
+// 加载临时质押数据
+const loadTempStakeData = async () => {
+  if (publicKey.value) {
+    try {
+      const data = await nodeStakeStorage.getNodeStakeData(publicKey.value)
+      tempStakeData.value = data
+    } catch (error) {
+      console.error('Failed to load temp stake data:', error)
+    }
+  }
+}
+
+onMounted(async () => {
+  await loadTempStakeData()
+})
+
+// 监听服务器数据变化，当有真实节点信息时清除临时数据
+watch(minerInfo, async (newMinerInfo) => {
+  if (newMinerInfo.ServerNode && tempStakeData.value && publicKey.value) {
+    console.log('Server returned real node info, clearing temp data')
+    try {
+      await nodeStakeStorage.deleteNodeStakeData(publicKey.value)
+      tempStakeData.value = null
+    } catch (error) {
+      console.error('Failed to clear temp stake data:', error)
+    }
+  }
+}, { deep: true })
+
 console.log('minerInfo', minerInfo);
+console.log('tempStakeData', tempStakeData);
 
 </script>

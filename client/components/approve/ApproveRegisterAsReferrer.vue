@@ -37,7 +37,7 @@ import { useToast } from '@/components/ui/toast'
 import stp from '@/utils/stp'
 import { useWalletStore } from '@/store/wallet'
 import { storeToRefs } from 'pinia'
-import { storage } from 'wxt/storage'
+import { useReferrerManager } from '@/composables/useReferrerManager'
 
 interface Props {
   data: {
@@ -55,6 +55,7 @@ const registerError = ref('')
 
 const walletStore = useWalletStore()
 const { address } = storeToRefs(walletStore)
+const { addLocalReferrerName } = useReferrerManager()
 
 const confirm = async () => {
   if (!props.data?.name || typeof props.data?.feeRate !== 'number') {
@@ -80,15 +81,9 @@ const confirm = async () => {
         variant: 'destructive',
       })
     } else {
-      // 保存注册的name到storage
+      // 使用推荐人管理器保存注册的name到本地存储
       if (address.value) {
-        const key = `local:referrer_names_${address.value}` as const
-        let names = await storage.getItem<string[]>(key)
-        if (!names) names = []
-        if (!names.includes(props.data.name)) {
-          names.push(props.data.name)
-          await storage.setItem(key, names)
-        }
+        await addLocalReferrerName(address.value, props.data.name)
       }
       emit('confirm', { txId: res })
     }

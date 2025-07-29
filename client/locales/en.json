@@ -307,7 +307,12 @@
     "unlockAsset": "Unlock Asset",
     "splicingIn": "Splicing In",
     "splicingOut": "Splicing Out",
-    "assetOperation": "Asset Operation"
+    "assetOperation": "Asset Operation",
+    "resolvingDomain": "Resolving name...",
+    "domainResolved": "Name resolved: {name} → {address}",
+    "domainNotFound": "Name not found: {name}",
+    "domainName": "Name",
+    "resolvedAddress": "Resolved Address"
   },
   "receiveQRcode": {
     "title": "Receive Address",

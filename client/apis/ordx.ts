@@ -118,12 +118,7 @@ class OrdxApi {
     return response.json()
   }
 
-  async getReferrerByAddress({ address, network }: any): Promise<any> {
-    const response = await fetch(
-      this.generatePath(`v3/referrer/${address}`, network)
-    )
-    return response.json()
-  }
+  
 
   async getReferreeByName({ name, network, start, limit }: any): Promise<any> {
     const response = await fetch(

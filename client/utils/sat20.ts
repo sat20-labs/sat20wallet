@@ -108,8 +108,8 @@ class WalletManager {
 
   async extractTxFromPsbt(
     psbtHex: string
-  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
-    return this._handleRequest('signPsbt', psbtHex)
+  ): Promise<[Error | undefined, { tx: string } | undefined]> {
+    return this._handleRequest('extractTxFromPsbt', psbtHex)
   }
 
   async signPsbt_SatsNet(
@@ -121,8 +121,8 @@ class WalletManager {
 
   async extractTxFromPsbt_SatsNet(
     psbtHex: string
-  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
-    return this._handleRequest('signPsbt_SatsNet', psbtHex)
+  ): Promise<[Error | undefined, { tx: string } | undefined]> {
+    return this._handleRequest('extractTxFromPsbt_SatsNet', psbtHex)
   }
 
   async sendUtxos_SatsNet(
@@ -236,6 +236,13 @@ class WalletManager {
     return this._handleRequest('splitBatchSignedPsbt', signedHex, network)
   }
 
+  async splitBatchSignedPsbt_SatsNet(
+    signedHex: string,
+    network: string
+  ): Promise<[Error | undefined, { psbts: string[] } | undefined]> {
+    return this._handleRequest('splitBatchSignedPsbt_SatsNet', signedHex, network)
+  }
+
   async finalizeSellOrder_SatsNet(
     psbtHex: string,
     utxos: string[],
@@ -274,6 +281,128 @@ class WalletManager {
     utxos: string[]
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
     return this._handleRequest('addOutputsToPsbt', psbtHex, utxos)
+  }
+
+  // --- UTXO Management Methods ---
+  async lockUtxo(
+    address: string,
+    utxo: any,
+    reason?: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('lockUtxo', address, utxo, reason)
+  }
+
+  async lockUtxo_SatsNet(
+    address: string,
+    utxo: any,
+    reason?: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('lockUtxo_SatsNet', address, utxo, reason)
+  }
+
+  async unlockUtxo(
+    address: string,
+    utxo: any
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('unlockUtxo', address, utxo)
+  }
+
+  async unlockUtxo_SatsNet(
+    address: string,
+    utxo: any
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('unlockUtxo_SatsNet', address, utxo)
+  }
+
+  async getAllLockedUtxo(
+    address: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getAllLockedUtxo', address)
+  }
+
+  async getAllLockedUtxo_SatsNet(
+    address: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getAllLockedUtxo_SatsNet', address)
+  }
+
+  // --- UTXO Getter Methods ---
+  async getUtxos(): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getUtxos')
+  }
+
+  async getUtxos_SatsNet(): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getUtxos_SatsNet')
+  }
+
+  async getUtxosWithAsset(
+    address: string,
+    amt: number,
+    assetName: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getUtxosWithAsset', address, amt, assetName)
+  }
+
+  async getUtxosWithAsset_SatsNet(
+    address: string,
+    amt: number,
+    assetName: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getUtxosWithAsset_SatsNet', address, amt, assetName)
+  }
+
+  async getUtxosWithAssetV2(
+    address: string,
+    amt: number,
+    assetName: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getUtxosWithAssetV2', address, amt, assetName)
+  }
+
+  async getUtxosWithAssetV2_SatsNet(
+    address: string,
+    amt: number,
+    assetName: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getUtxosWithAssetV2_SatsNet', address, amt, assetName)
+  }
+
+  // --- Asset Amount Methods ---
+  async getAssetAmount(
+    address: string,
+    assetName: string
+  ): Promise<[Error | undefined, { amount: number; value: number } | undefined]> {
+    return this._handleRequest('getAssetAmount', address, assetName)
+  }
+
+  async getAssetAmount_SatsNet(
+    address: string,
+    assetName: string
+  ): Promise<[Error | undefined, { amount: number; value: number } | undefined]> {
+    return this._handleRequest('getAssetAmount_SatsNet', address, assetName)
+  }
+
+  // --- Contract Methods ---
+  async getFeeForDeployContract(
+    templateName: string,
+    content: string,
+    feeRate: string
+  ): Promise<[Error | undefined, { fee: any } | undefined]> {
+    return this._handleRequest('getFeeForDeployContract', templateName, content, feeRate)
+  }
+
+  async getFeeForInvokeContract(
+    url: string,
+    invoke: string
+  ): Promise<[Error | undefined, { fee: any } | undefined]> {
+    return this._handleRequest('getFeeForInvokeContract', url, invoke)
+  }
+
+  async getParamForInvokeContract(
+    templateName: string,
+    action: string
+  ): Promise<[Error | undefined, { parameter: any } | undefined]> {
+    return this._handleRequest('getParamForInvokeContract', templateName, action)
   }
 }
 

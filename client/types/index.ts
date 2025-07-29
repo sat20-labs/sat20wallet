@@ -25,3 +25,6 @@ export interface WalletData {
   avatar?: string
   accounts: WalletAccount[]
 }
+
+// 导出节点质押相关类型
+export type { NodeStakeData } from './nodeStake'

@@ -104,6 +104,7 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store/wallet'
 import { hideAddress, generateMempoolUrl } from '@/utils'
+import { nodeStakeStorage } from '@/lib/nodeStakeStorage'
 
 // const guideText = `
 // <span class="text-zinc-200 text-md font-bold mb-2">🔸 普通挖矿节点：轻量接入，人人可参与</span>
@@ -123,7 +124,7 @@ import { hideAddress, generateMempoolUrl } from '@/utils'
 // 🔹 硬件建议：16 核 CPU/64G RAM/2T SSD/高速网络`
 
 const walletStore = useWalletStore()
-const { btcFeeRate, network } = storeToRefs(walletStore)
+const { btcFeeRate, network, publicKey } = storeToRefs(walletStore)
 const isLoading = ref(false)
 const isCore = ref(false)
 const showConfirm = ref(false)
@@ -165,6 +166,22 @@ async function confirmStake() {
       resvId.value = res && res.resvId ? res.resvId : ''
       assetName.value = res && res.assetName ? res.assetName : ''
       amt.value = res && res.amt ? res.amt : ''
+      
+      // 保存节点质押数据到本地存储
+      if (res && publicKey.value) {
+        try {
+          await nodeStakeStorage.saveNodeStakeData(publicKey.value, {
+            txId: res.txId || '',
+            resvId: res.resvId || '',
+            assetName: res.assetName || '',
+            amt: res.amt || '',
+            isCore: pendingCore
+          })
+          console.log('Node stake data saved successfully')
+        } catch (storageError) {
+          console.error('Failed to save node stake data:', storageError)
+        }
+      }
     }
   } catch (e: any) {
     resultMsg.value = e.message || '未知错误'

@@ -75,7 +75,8 @@ import { Input } from '@/components/ui/input'
 import { FormItem } from '@/components/ui/form'
 import { PlusIcon, MinusIcon, Loader2Icon } from 'lucide-vue-next'
 import AssetSection from './AssetSection.vue'
-import { useL2Store, useL1Store, useChannelStore } from '@/store'
+import { useL2Store, useL1Store, useChannelStore, useWalletStore } from '@/store'
+import { storeToRefs } from 'pinia'
 
 interface Props {
   type: string
@@ -91,6 +92,11 @@ const emit = defineEmits(['submit'])
 
 const { type } = toRefs(props)
 const isLoading = ref(false)
+
+// 获取钱包store以访问网络参数
+const walletStore = useWalletStore()
+const { network } = storeToRefs(walletStore)
+
 const inputList = ref<
   {
     id: number
@@ -132,7 +138,7 @@ const asset = computed(() => {
 console.log('asset', asset.value)
 
 const totalAmount = ref<string | number>('')
-const toAddress = ref<string | number>('')
+const toAddress = ref<string>('') // 改为字符串类型
 const showAddress = computed(() =>
   ['l1_send', 'l2_send', 'splicing_out'].includes(props.type)
 )
@@ -169,13 +175,12 @@ const submit = async () => {
   if (showAddress.value) {
     isLoading.value = true
     try {
-      const nsRes = await ordxApi.getNsName({
-        name: toAddress.value,
-        network: 'testnet',
-      })
-
-      if (nsRes?.data?.address) {
-        toAdd = nsRes.data.address
+      // 使用新的域名解析工具函数
+      const { validateAndResolveAddress } = await import('@/utils')
+      const result = await validateAndResolveAddress(toAddress.value, network.value)
+      
+      if (result.isDomain && result.resolvedAddress) {
+        toAdd = result.resolvedAddress
       }
     } catch (error) {
       console.log(error)
