@@ -1257,6 +1257,12 @@ func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 	return txid, nil
 }
 
+func (p *Manager) GenerateStubUtxos(n int, feeRate int64) (string, int64, error) {
+	//
+	return p.BatchSendAssets(p.wallet.GetAddress(), indexer.ASSET_PLAIN_SAT.String(),
+		"330", n, feeRate, nil)
+}
+
 func (p *Manager) BatchSendPlainSats(destAddr string, value int64, n int,
 	feeRate int64, memo []byte) (string, int64, error) {
 	//
