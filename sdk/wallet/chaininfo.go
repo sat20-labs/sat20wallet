@@ -102,6 +102,19 @@ func AddrToPkScript(addr string, netParams *chaincfg.Params) ([]byte, error) {
 	return txscript.PayToAddrScript(address)
 }
 
+func AddressFromPkScript(pkScript []byte, netParams *chaincfg.Params) (string, error) {
+	_, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, netParams)
+	if err != nil {
+		return "", err
+	}
+
+	if len(addresses) == 0 {
+		return "", fmt.Errorf("can't generate address")
+	}
+
+	return addresses[0].EncodeAddress(), nil
+}
+
 func PayToPubKeyHashScript(pubKeyHash []byte) ([]byte, error) {
 	return txscript.NewScriptBuilder().AddOp(txscript.OP_DUP).AddOp(txscript.OP_HASH160).
 		AddData(pubKeyHash).AddOp(txscript.OP_EQUALVERIFY).AddOp(txscript.OP_CHECKSIG).
