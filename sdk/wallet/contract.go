@@ -23,6 +23,7 @@ const (
 	TEMPLATE_CONTRACT_VAULT 	  string = "vault.tc"
 	TEMPLATE_CONTRACT_LAUNCHPOOL  string = "launchpool.tc"
 	TEMPLATE_CONTRACT_STAKE       string = "stake.tc"
+	TEMPLATE_CONTRACT_TRANSCEND   string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
 	TEMPLATE_CONTRACT_MINER_STAKE string = "minerstake.tc"
 
 	CONTRACT_STATUS_EXPIRED int = -2
@@ -684,6 +685,9 @@ func NewContract(cname string) Contract {
 
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		return NewLaunchPoolContract()
+
+	case TEMPLATE_CONTRACT_TRANSCEND:
+		return NewTranscendContract()
 	}
 	return nil
 }
@@ -720,6 +724,9 @@ func NewContractRuntime(stp *Manager, cname string) ContractRuntime {
 
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		r = NewLaunchPoolContractRuntime(stp)
+
+	case TEMPLATE_CONTRACT_TRANSCEND:
+		r = NewTranscendContractRuntime(stp)
 	}
 
 	return r

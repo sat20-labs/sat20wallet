@@ -219,10 +219,12 @@ type SwapContractRunningData struct {
 	TotalProfitTxFee  int64
 
 	TotalDepositAssets *Decimal
+	TotalDepositSats   int64
 	TotalDepositTx     int
 	TotalDepositTxFee  int64
 
 	TotalWithdrawAssets *Decimal
+	TotalWithdrawSats   int64
 	TotalWithdrawTx     int
 	TotalWithdrawTxFee  int64
 }
