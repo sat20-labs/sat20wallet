@@ -1397,11 +1397,14 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 		return nil, nil, 0, fmt.Errorf("not enough plain sats")
 	}
 
-	//fee0 := weightEstimate.Fee(feeRate)
-	weightEstimate.AddP2TROutput() // fee
+	fee0 := weightEstimate.Fee(feeRate)
+	weightEstimate.AddP2TROutput() // fee change
 	fee1 := weightEstimate.Fee(feeRate)
 
 	feeValue := total - required // >= fee0
+	if feeValue < fee0 {
+		return nil, nil, 0, fmt.Errorf("not enough fee")
+	}
 	change := feeValue - fee1
 	if change < 330 {
 		change = 0
