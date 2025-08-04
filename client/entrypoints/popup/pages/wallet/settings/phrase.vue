@@ -65,7 +65,7 @@ import walletManager from '@/utils/sat20'
 import { useWalletStore } from '@/store'
 import { useClipboard } from '@vueuse/core'
 import { hashPassword } from '@/utils/crypto'
-import { useToast } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/toast-new'
 const walletStore = useWalletStore()
 const { walletId } = storeToRefs(walletStore)
 const password = ref<string | number>('')
@@ -86,6 +86,7 @@ const verifyPassword = async () => {
     toast({
       title: 'Error',
       description: 'Please enter password',
+      variant: 'destructive'
     })
     return
   }
@@ -102,6 +103,7 @@ const verifyPassword = async () => {
     toast({
       title: 'Error',
       description: 'Verification failed',
+      variant: 'destructive'
     })
     return
   }

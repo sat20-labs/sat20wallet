@@ -38,7 +38,7 @@
 import { ref, watch, onMounted } from 'vue'
 import { hideAddress } from '~/utils'
 import QRCode from 'qrcode'
-import { toast } from '../ui/toast';
+import { toast } from '@/components/ui/toast-new'
 
 
 // Props for address and chain
@@ -110,8 +110,9 @@ const copyAddress = async () => {
   try {
     await navigator.clipboard.writeText(address)
     toast({
-      title: 'copied to clipboard',
-      description: 'Address copied success!',
+      title: 'Copied to clipboard',
+      description: 'Address copied successfully!',
+      variant: 'success'
     })
     
   } catch (err) {

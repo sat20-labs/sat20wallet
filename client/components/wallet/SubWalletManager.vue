@@ -133,7 +133,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { useToast } from '@/components/ui/toast/use-toast'
+import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store/wallet'
 import type { WalletAccount } from '@/types'
 import { hideAddress } from '@/utils'
@@ -235,6 +235,7 @@ async function createAccount() {
     toast({
       title: '成功',
       description: '账户创建成功',
+      variant: 'success'
     })
     isCreateAccountDialogOpen.value = false
     console.log('router.go(-1)');
@@ -268,6 +269,7 @@ async function deleteAccount() {
     toast({
       title: '成功',
       description: '账户删除成功',
+      variant: 'success'
     })
     isDeleteDialogOpen.value = false
     // 发送 accountsChanged 事件（封装函数）
@@ -293,6 +295,7 @@ async function selectAccount(account: WalletAccountWithDisplay) {
     toast({
       title: '成功',
       description: '切换账户成功',
+      variant: 'success'
     })
     // 发送 accountsChanged 事件（封装函数）
 

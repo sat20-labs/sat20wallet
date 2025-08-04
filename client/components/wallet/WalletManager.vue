@@ -53,6 +53,9 @@
                 <Button v-else variant="outline" size="sm" disabled>
                   {{ $t('walletManager.current') }}
                 </Button>
+                <Button variant="ghost" size="icon" @click="showMnemonicDialog(wallet)">
+                  <Icon icon="lucide:key" class="w-4 h-4" />
+                </Button>
                 <Button v-if="wallet.id !== currentWalletId" variant="ghost" size="icon"
                   class="text-destructive hover:text-destructive" @click="confirmDeleteWallet(wallet)">
                   <Icon icon="lucide:trash-2" class="w-4 h-4" />
@@ -222,6 +225,88 @@
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <!-- Show Mnemonic Dialog -->
+    <Dialog :open="isShowMnemonicDialogOpen" @update:open="isShowMnemonicDialogOpen = $event">
+      <DialogContent class="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle>{{ $t('walletManager.showRecoveryPhrase') }}</DialogTitle>
+          <DialogDescription>
+            <hr class="mb-6 mt-1 border-t-1 border-accent">
+            {{ $t('walletManager.recoveryPhraseDescription') }}
+          </DialogDescription>
+        </DialogHeader>
+        <div class="space-y-4">
+          <Alert variant="destructive">
+            <Icon icon="lucide:alert-triangle" class="w-4 h-4" />
+            <AlertDescription>
+              {{ $t('walletManager.recoveryPhraseWarning') }}
+            </AlertDescription>
+          </Alert>
+          
+          <div v-if="!mnemonicPhrase" class="space-y-4">
+            <div class="space-y-2">
+              <Label for="mnemonicPassword">{{ $t('walletManager.enterPassword') }}</Label>
+              <Input 
+                id="mnemonicPassword" 
+                type="password" 
+                v-model="mnemonicPassword" 
+                :placeholder="$t('walletManager.passwordPlaceholder')"
+                @keyup.enter="verifyMnemonicPassword"
+              />
+            </div>
+            <Button 
+              :disabled="isVerifyingMnemonic" 
+              @click="verifyMnemonicPassword" 
+              class="w-full"
+            >
+              <Icon v-if="isVerifyingMnemonic" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
+              {{ isVerifyingMnemonic ? $t('walletManager.verifying') : $t('walletManager.verify') }}
+            </Button>
+          </div>
+
+          <div v-else class="space-y-4">
+            <div class="relative">
+              <div class="grid grid-cols-3 gap-2 p-4 bg-muted rounded-lg">
+                <div
+                  v-for="(word, i) in mnemonicWords"
+                  :key="i"
+                  class="flex items-center space-x-2"
+                >
+                  <span class="text-muted-foreground text-sm">{{ i + 1 }}.</span>
+                  <span :class="showMnemonic ? '' : 'blur-sm select-none'" class="text-sm font-medium">{{
+                    word
+                  }}</span>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="absolute top-2 right-2"
+                @click="toggleShowMnemonic"
+              >
+                <Icon v-if="showMnemonic" icon="lucide:eye-off" class="h-4 w-4" />
+                <Icon v-else icon="lucide:eye" class="h-4 w-4" />
+              </Button>
+            </div>
+            <div class="flex gap-2">
+              <Button variant="outline" @click="handleCopyMnemonic" class="flex-1">
+                <Icon icon="lucide:copy" class="mr-2 h-4 w-4" />
+                {{ $t('walletManager.copyRecoveryPhrase') }}
+              </Button>
+              <Button variant="default" @click="confirmSavedMnemonic" class="flex-1">
+                {{ $t('walletManager.confirmSaved') }}
+              </Button>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="secondary" @click="closeMnemonicDialog" class="h-11 mt-2">
+            {{ $t('walletManager.close') }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -236,29 +321,34 @@ import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { useToast } from '@/components/ui/toast/use-toast'
+import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store'
 import { WalletData } from '@/types'
 import { Message } from '@/types/message'
 import { sendAccountsChangedEvent } from '@/lib/utils'
 import walletManager from '@/utils/sat20'
 import { hideAddress } from '@/utils'
+import { hashPassword } from '@/utils/crypto'
+import { useClipboard } from '@vueuse/core'
 
 
 const router = useRouter()
 const walletStore = useWalletStore()
 const { wallets } = storeToRefs(walletStore)
 const { toast } = useToast()
+const { copy, isSupported } = useClipboard()
 
 // State
 const isImportWalletDialogOpen = ref(false)
 const isDeleteDialogOpen = ref(false)
 const isEditNameDialogOpen = ref(false)
 const isAvatarDialogOpen = ref(false)
+const isShowMnemonicDialogOpen = ref(false)
 const isCreating = ref(false)
 const isImporting = ref(false)
 const isDeleting = ref(false)
 const isEditingName = ref(false)
+const isVerifyingMnemonic = ref(false)
 
 const importMnemonic = ref('')
 const importPassword = ref('')
@@ -266,6 +356,9 @@ const importConfirmPassword = ref('')
 const walletToDelete = ref<WalletData | null>(null)
 const editingWallet = ref<WalletData | null>(null)
 const editingName = ref('')
+const mnemonicPassword = ref('')
+const mnemonicPhrase = ref('')
+const showMnemonic = ref(false)
 
 // Mock NFTs and BTC Domains data
 const nfts = ref([
@@ -319,12 +412,17 @@ const selectWallet = async (wallet: WalletData) => {
     await walletStore.switchWallet(wallet.id)
     toast({
       title: 'Success',
-      description: 'Wallet switched successfully'
+      description: 'Wallet switched successfully',
+      variant: 'success'
     })
     setTimeout(() => {
       router.go(-1)
-    }, 300)
-    sendAccountsChangedEvent(wallets.value)
+    }, 100)
+    try {
+      sendAccountsChangedEvent(wallets.value)
+    } catch (error) {
+      console.error('Failed to send accounts changed event:', error)
+    }
 
   } catch (error: any) {
     console.error('Failed to switch wallet:', error)
@@ -354,7 +452,8 @@ const deleteWallet = async () => {
 
     toast({
       title: 'Success',
-      description: 'Wallet deleted successfully'
+      description: 'Wallet deleted successfully',
+      variant: 'success'
     })
     isDeleteDialogOpen.value = false
     walletToDelete.value = null
@@ -389,6 +488,7 @@ const createWallet = async () => {
   if (isCreating.value) return
 
   try {
+    isCreating.value = true
     const localPassword = walletStore.password
     if (!localPassword) {
       throw new Error('No password set')
@@ -398,15 +498,17 @@ const createWallet = async () => {
     if (err || !result) {
       throw err || new Error('Failed to create wallet')
     }
-    await walletStore.switchWallet(walletStore.walletId)
+    
+    // 创建成功后，显示助记词
+    mnemonicPhrase.value = result as string
+    showMnemonic.value = false
+    isShowMnemonicDialogOpen.value = true
+    
     toast({
-      title: 'Success',
-      description: 'Wallet created successfully'
+      title: 'Wallet Created Successfully',
+      description: 'Your wallet has been created. Please save your recovery phrase.',
+      variant: 'success'
     })
-    setTimeout(() => {
-      router.go(-1)
-    }, 300)
-    sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
     toast({
       variant: 'destructive',
@@ -441,7 +543,8 @@ const importWallet = async () => {
     isImportWalletDialogOpen.value = false
     toast({
       title: 'Success',
-      description: 'Wallet imported successfully'
+      description: 'Wallet imported successfully',
+      variant: 'success'
     })
     setTimeout(() => {
       router.go(-1)
@@ -475,7 +578,8 @@ const saveWalletName = async () => {
 
     toast({
       title: 'Success',
-      description: 'Wallet name updated successfully'
+      description: 'Wallet name updated successfully',
+      variant: 'success'
     })
     isEditNameDialogOpen.value = false
   } catch (error: any) {
@@ -503,7 +607,8 @@ const selectAvatar = async (imageUrl: string) => {
 
     toast({
       title: 'Success',
-      description: 'Avatar updated successfully'
+      description: 'Avatar updated successfully',
+      variant: 'success'
     })
     isAvatarDialogOpen.value = false
   } catch (error: any) {
@@ -513,6 +618,121 @@ const selectAvatar = async (imageUrl: string) => {
       description: error.message || 'Failed to update avatar'
     })
   }
+}
+
+// 助记词相关的方法和计算属性
+const mnemonicWords = computed(() =>
+  mnemonicPhrase.value.split(' ').filter((word) => word.length > 0)
+)
+
+const showMnemonicDialog = (wallet: WalletData) => {
+  editingWallet.value = wallet
+  mnemonicPhrase.value = ''
+  mnemonicPassword.value = ''
+  showMnemonic.value = false
+  isShowMnemonicDialogOpen.value = true
+}
+
+const verifyMnemonicPassword = async () => {
+  if (!mnemonicPassword.value || !editingWallet.value) {
+    toast({
+      variant: 'destructive',
+      title: 'Error',
+      description: 'Please enter password'
+    })
+    return
+  }
+
+  try {
+    isVerifyingMnemonic.value = true
+    const hashedPassword = await hashPassword(mnemonicPassword.value)
+    const [err, result] = await walletManager.getMnemonice(
+      parseInt(editingWallet.value.id),
+      hashedPassword
+    )
+
+    if (err || !result?.mnemonic) {
+      throw new Error('Verification failed')
+    }
+
+    mnemonicPhrase.value = result.mnemonic
+    toast({
+      title: 'Success',
+      description: 'Password verified successfully',
+      variant: 'success'
+    })
+  } catch (error: any) {
+    toast({
+      variant: 'destructive',
+      title: 'Error',
+      description: error.message || 'Verification failed'
+    })
+  } finally {
+    isVerifyingMnemonic.value = false
+  }
+}
+
+const toggleShowMnemonic = () => {
+  showMnemonic.value = !showMnemonic.value
+}
+
+const handleCopyMnemonic = async () => {
+  if (!isSupported.value) {
+    toast({
+      variant: 'destructive',
+      title: 'Copy Failed',
+      description: 'Clipboard not supported in this browser'
+    })
+    return
+  }
+
+  await copy(mnemonicPhrase.value)
+  toast({
+    title: 'Recovery Phrase Copied',
+    description: 'Your recovery phrase has been copied to clipboard. Keep it safe!',
+    variant: 'success'
+  })
+}
+
+const confirmSavedMnemonic = async () => {
+  isShowMnemonicDialogOpen.value = false
+  
+  // 如果是创建钱包后的助记词展示，需要切换到新钱包并跳转
+  if (editingWallet.value === null) {
+    // 这是创建钱包后的情况
+    try {
+      await walletStore.switchWallet(walletStore.walletId)
+      sendAccountsChangedEvent(wallets.value)
+      toast({
+        title: 'Success',
+        description: 'Wallet created and switched successfully',
+        variant: 'success'
+      })
+      setTimeout(() => {
+        router.go(-1)
+      }, 300)
+    } catch (error: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: error.message || 'Failed to switch to new wallet'
+      })
+    }
+  }
+  
+  // 清理状态
+  mnemonicPhrase.value = ''
+  mnemonicPassword.value = ''
+  showMnemonic.value = false
+  editingWallet.value = null
+}
+
+const closeMnemonicDialog = () => {
+  isShowMnemonicDialogOpen.value = false
+  mnemonicPhrase.value = ''
+  mnemonicPassword.value = ''
+  showMnemonic.value = false
+  editingWallet.value = null
 }
 </script>
 

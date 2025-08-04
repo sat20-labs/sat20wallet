@@ -33,7 +33,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
-import { useToast } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/toast-new'
 import stp from '@/utils/stp'
 import { useWalletStore } from '@/store/wallet'
 import { storeToRefs } from 'pinia'

@@ -96,7 +96,7 @@
           <Loader2Icon v-if="loading" class="mr-2 h-4 w-4 animate-spin" />
           {{ loading ? $t('create.creatingButton') : $t('create.continueButton') }}
         </Button>
-        <Button v-else as-child>
+        <Button v-else @click="handleConfirmSaved" as-child>
           <RouterLink to="/wallet">{{ $t('create.savedButton') }}</RouterLink>
         </Button>
       </div>
@@ -119,7 +119,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { useRouter } from 'vue-router'
-import { useToast } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/toast-new'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Input } from '@/components/ui/input'
@@ -155,6 +155,12 @@ const onSubmit = form.handleSubmit(async (values) => {
   if (!err && result) {
     mnemonic.value = result as string
     step.value = 2
+    // 添加创建成功的提示
+    toast({
+      variant: 'success',
+      title: 'Wallet Created Successfully',
+      description: 'Your wallet has been created. Please save your recovery phrase.',
+    })
     return
   }
 
@@ -169,18 +175,29 @@ const handleCopyMnemonic = async () => {
   if (!isSupported.value) {
     toast({
       variant: 'destructive',
-      description: 'Clipboard not supported',
+      title: 'Copy Failed',
+      description: 'Clipboard not supported in this browser',
     })
     return
   }
 
   await copy(mnemonic.value)
   toast({
-    description: 'Recovery phrase copied',
+    variant: 'success',
+    title: 'Recovery Phrase Copied',
+    description: 'Your recovery phrase has been copied to clipboard. Keep it safe!',
   })
 }
 
 const toggleShowMnemonic = () => {
   showMnemonic.value = !showMnemonic.value
+}
+
+const handleConfirmSaved = () => {
+  toast({
+    variant: 'info',
+    title: 'Proceeding to Wallet',
+    description: 'Taking you to your new wallet. Welcome!',
+  })
 }
 </script>

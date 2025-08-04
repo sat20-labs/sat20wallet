@@ -32,7 +32,7 @@ import { storeToRefs } from 'pinia'
 import { z } from 'zod'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { useWalletStore } from '@/store'
-import { useToast } from '@/components/ui/toast/use-toast'
+import { useToast } from '@/components/ui/toast-new'
 import satsnetStp from '@/utils/stp'
 
 // Define Zod schema for validation
@@ -142,6 +142,7 @@ const confirm = async () => {
     toast({
       title: 'Success',
       description: `Successfully initiated split for ${props.data.amt} units of asset ${props.data.assetName}.`,
+      variant: 'success'
     })
 
     await refreshL2Assets()

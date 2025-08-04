@@ -60,7 +60,7 @@
 import { ref, watch, onMounted, computed } from 'vue'
 import { useWalletStore } from '@/store/wallet'
 import satsnetStp from '@/utils/stp'
-import { useToast } from '@/components/ui/toast/use-toast'
+import { useToast } from '@/components/ui/toast-new'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
@@ -122,7 +122,7 @@ const lockUtxo = async () => {
   if (err) {
     toast({ title: 'Error', description: '锁定失败', variant: 'destructive' })
   } else {
-    toast({ title: 'Success', description: '锁定成功' })
+    toast({ title: 'Success', description: '锁定成功', variant: 'success' })
     utxoInput.value = ''
     fetchLockedUtxos()
   }
@@ -140,7 +140,7 @@ const unlockUtxo = async (idx: number, utxo: any) => {
   if (err) {
     toast({ title: 'Error', description: '解锁失败', variant: 'destructive' })
   } else {
-    toast({ title: 'Success', description: '解锁成功' })
+    toast({ title: 'Success', description: '解锁成功', variant: 'success' })
     fetchLockedUtxos()
   }
 }

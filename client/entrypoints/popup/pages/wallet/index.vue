@@ -105,7 +105,7 @@ import { useWalletStore, useL1Store, useChannelStore } from '@/store'
 import { useL1Assets, useL2Assets } from '@/composables'
 import { useAssetOperations } from '@/composables/useAssetOperations'
 import { useRouter, useRoute } from 'vue-router'
-import { useToast } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/toast-new'
 import satsnetStp from '@/utils/stp'
 import AssetList from '@/components/wallet/AssetList.vue'
 import BalanceSummary from '@/components/asset/BalanceSummary.vue'
@@ -155,12 +155,20 @@ const currentUserName = computed(() => currentName.value)
 const editUserName = () => {
   router.push('/wallet/name-select')
 }
-
+const selectedChainLabel = computed(() => {
+  //console.log('父组件 selectTab:', selectTab.value)
+  const selectedItem = items.find(item => item.value === selectTab.value)
+  //console.log('父组件 selectedItem:', selectedItem)
+  return selectedItem ? selectedItem.label.toLowerCase() : 'unknown' // 默认值为 'unknown'
+})
+console.log('channel', channel)
+console.log('selectedChainLabel', selectedChainLabel)
+console.log('address', address)
 const showAddress = computed(() => {
   if (selectedChainLabel.value === 'bitcoin') {
     return address.value
   } else if (selectedChainLabel.value === 'channel') {
-    return channel.value?.channelId || address.value // 显示通道ID(address)
+    return channel.value?.channelId
   } else if (selectedChainLabel.value === 'satoshinet') {
     return address.value
   }
@@ -229,12 +237,7 @@ const items = [
   },
 ]
 
-const selectedChainLabel = computed(() => {
-  //console.log('父组件 selectTab:', selectTab.value)
-  const selectedItem = items.find(item => item.value === selectTab.value)
-  //console.log('父组件 selectedItem:', selectedItem)
-  return selectedItem ? selectedItem.label.toLowerCase() : 'unknown' // 默认值为 'unknown'
-})
+
 
 
 // 路由和工具
@@ -316,8 +319,9 @@ const channelCallback = async (e: any) => {
   }
   if (msg) {
     toast({
-      title: 'success',
+      title: 'Success',
       description: msg,
+      variant: 'success'
     })
   }
 }

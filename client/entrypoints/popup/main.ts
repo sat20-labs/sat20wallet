@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import '@/assets/index.css'
 import './style.css'
+import 'vue-sonner/style.css' // 添加 vue-sonner 样式
 import App from '@/entrypoints/popup/App.vue'
 import { createPinia } from 'pinia'
 import router from '@/entrypoints/popup/router'

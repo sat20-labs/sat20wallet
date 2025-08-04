@@ -113,6 +113,11 @@ export const useChannelStore = defineStore('channel', () => {
       } catch (error) {
         console.log('解析 JSON 出错:', error)
       }
+    } else {
+      channel.value = null
+      totalSats.value = 0
+      plainBalance.value = 0
+      allAssetList.value = []
     }
   }
 

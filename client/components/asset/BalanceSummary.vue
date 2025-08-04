@@ -63,7 +63,7 @@ import { useChannelStore } from '@/store/channel'
 import { useAssetActions } from '@/composables/useAssetActions'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
 import ReceiveQRcode from '@/components/wallet/ReceiveQRCode.vue'
-import { useToast } from '@/components/ui/toast/use-toast'
+import { useToast } from '@/components/ui/toast-new'
 import { Chain } from '@/types/index'
 import { useGlobalStore } from '@/store/global'
 import { useI18n } from 'vue-i18n'
@@ -284,12 +284,12 @@ const handleAction = (action: string) => {
 // Handle Operation Confirm
 const handleOperationConfirm = async () => {
   if (!selectedAsset.value || !operationAmount.value) {
-    toast({ title: 'Error', description: 'Please enter a valid amount', duration: 600 })
+    toast({ title: 'Error', description: 'Please enter a valid amount', variant: 'destructive', duration: 600 })
     return
   }
 
   if (operationType.value === 'send' && !operationAddress.value) {
-    toast({ title: 'Error', description: 'Please enter a valid address', duration: 600 })
+    toast({ title: 'Error', description: 'Please enter a valid address', variant: 'destructive', duration: 600 })
     return
   }
 

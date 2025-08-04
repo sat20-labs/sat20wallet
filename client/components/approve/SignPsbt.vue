@@ -59,7 +59,7 @@ import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import walletManager from '@/utils/sat20'
-import { useToast } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store'
 import TxDetailSection from './TxDetailSection.vue' // Import the new component
 import stp from '@/utils/stp'

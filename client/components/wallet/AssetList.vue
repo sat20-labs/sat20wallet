@@ -101,7 +101,7 @@
   import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
   import { useL1Store, useL2Store } from '@/store'
   import { useChannelStore } from '@/store/channel'
-  import { useToast } from '@/components/ui/toast/use-toast'
+  import { useToast } from '@/components/ui/toast-new'
   import { useWalletStore } from '@/store'
   import { sleep } from 'radash'
   import { storeToRefs } from 'pinia'
@@ -333,6 +333,7 @@ watch(selectedChain, (newVal) => {
     toast({
       title: 'Error',
       description: message,
+      variant: 'destructive'
     })
   }
   
@@ -414,8 +415,9 @@ watch(selectedChain, (newVal) => {
     const status = await checkChannel(chanid)
     if (!status) {
       toast({
-        title: 'error',
+        title: 'Error',
         description: 'channel tx has not been confirmed',
+        variant: 'destructive',
         duration:1500,
       })
       loading.value = false
@@ -425,8 +427,9 @@ watch(selectedChain, (newVal) => {
     const [err, result] = await satsnetStp.unlockFromChannel(chanid, asset_name, amt, [])
     if (err) {
       toast({
-        title: 'error',
+        title: 'Error',
         description: err.message,
+        variant: 'destructive',
         duration:1500,
       })
       loading.value = false
@@ -438,8 +441,9 @@ watch(selectedChain, (newVal) => {
     refreshL2Assets()
     await channelStore.getAllChannels()
     toast({
-      title: 'success',
+      title: 'Success',
       description: 'unlock success',
+      variant: 'success',
       duration:1500,
     })
   }
@@ -460,23 +464,25 @@ watch(selectedChain, (newVal) => {
       [],
       feeUtxos
     )
-    if (err) {
+        if (err) {
       toast({
-        title: 'error',
+        title: 'Error',
         description: err.message,
+        variant: 'destructive',
         duration:1500,
       })
       loading.value = false
       return
     }
-  
+
     await channelStore.getAllChannels()
     loading.value = false
     refreshL2Assets()
     await channelStore.getAllChannels()
     toast({
-      title: 'success',
+      title: 'Success',
       description: 'lock success',
+      variant: 'success',
       duration:1500,
     })
   }
@@ -486,21 +492,23 @@ watch(selectedChain, (newVal) => {
     loading.value = true
     
     const [err, result] = await satsnetStp.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
-    if (err) {
+        if (err) {
       toast({
-        title: 'error',
+        title: 'Error',
         description: err.message,
+        variant: 'destructive',
         duration:1500,
       })
       loading.value = false
       return
     }
-  
+
     loading.value = false
     refreshL1Assets()
     toast({
-      title: 'success',
+      title: 'Success',
       description: 'send success',
+      variant: 'success',
       duration:1500,
     })
   }
@@ -513,21 +521,23 @@ watch(selectedChain, (newVal) => {
       asset_name,
       amt
     )
-    if (err) {
+        if (err) {
       toast({
-        title: 'error',
+        title: 'Error',
         description: err.message,
+        variant: 'destructive',
         duration:1500,
       })
       loading.value = false
       return
     }
-  
+
     loading.value = false
     refreshL2Assets()
     toast({
-      title: 'success',
+      title: 'Success',
       description: 'send success',
+      variant: 'success',
       duration:1500,
     })
   }
@@ -551,8 +561,9 @@ watch(selectedChain, (newVal) => {
     )
     if (err) {
       toast({
-        title: 'error',
+        title: 'Error',
         description: err.message,
+        variant: 'destructive',
         duration:1500,
       })
       loading.value = false
@@ -562,8 +573,9 @@ watch(selectedChain, (newVal) => {
     refreshL1Assets()
     await channelStore.getAllChannels()
     toast({
-      title: 'success',
+      title: 'Success',
       description: 'deposit success',
+      variant: 'success',
       duration:1500,
     })
   }
@@ -585,22 +597,24 @@ watch(selectedChain, (newVal) => {
       fees,
       btcFeeRate.value
     )
-    if (err) {
+        if (err) {
       toast({
-        title: 'error',
+        title: 'Error',
         description: err.message,
+        variant: 'destructive',
         duration:1500,
       })
       loading.value = false
       return
     }
-  
+
     loading.value = false
     refreshL2Assets()
     await channelStore.getAllChannels()
     toast({
-      title: 'success',
+      title: 'Success',
       description: 'withdraw success',
+      variant: 'success',
       duration:1500,
     })
   }
@@ -610,8 +624,9 @@ watch(selectedChain, (newVal) => {
     if (!selectedAsset.value || !operationAmount.value) return
     if (operationType.value === 'send' && !operationAddress.value) {
       toast({
-        title: 'error',
+        title: 'Error',
         description: 'Please enter address',
+        variant: 'destructive'
       })
       return
     }

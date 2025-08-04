@@ -109,7 +109,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { useToast } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/toast-new'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
@@ -139,7 +139,7 @@ const walletStore = useWalletStore()
 const tab = ref<any>('mnemonic')
 const loading = ref(false)
 
-const showToast = (variant: 'default' | 'destructive', title: string, description: string | Error) => {
+const showToast = (variant: 'default' | 'destructive' | 'success', title: string, description: string | Error) => {
   toast({
     variant,
     title,
@@ -192,7 +192,7 @@ const onSubmit = form.handleSubmit(async (values) => {
         return
       }
 
-      showToast('default', 'Success', 'Wallet imported successfully')
+      showToast('success', 'Success', 'Wallet imported successfully')
       router.push('/wallet')
     }
   }

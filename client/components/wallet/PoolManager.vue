@@ -245,7 +245,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { useToast } from '@/components/ui/toast/use-toast'
+import { useToast } from '@/components/ui/toast-new'
 import { usePoolStore } from '@/store/pool'
 
 const { toast } = useToast()

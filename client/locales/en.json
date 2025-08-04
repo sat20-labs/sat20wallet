@@ -373,7 +373,17 @@
     "confirmDeleteWallet": "Are you sure you want to delete this wallet? This action cannot be undone.",
     "backupRecoveryPhrase": "Make sure you have backed up your recovery phrase before deleting this wallet.",
     "deleting": "Deleting...",
-    "delete": "Delete"
+    "delete": "Delete",
+    "showRecoveryPhrase": "Show Recovery Phrase",
+    "recoveryPhraseDescription": "Enter your password to view your recovery phrase",
+    "recoveryPhraseWarning": "Never share your recovery phrase with anyone. Store it securely offline.",
+    "enterPassword": "Enter Password",
+    "passwordPlaceholder": "Enter your wallet password",
+    "verifying": "Verifying...",
+    "verify": "Verify",
+    "copyRecoveryPhrase": "Copy Recovery Phrase",
+    "close": "Close",
+    "confirmSaved": "I've Saved It"
   },
   "utxoManager": {
     "title": "UTXO Manager",

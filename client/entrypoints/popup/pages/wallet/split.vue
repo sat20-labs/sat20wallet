@@ -110,7 +110,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { useWalletStore } from '@/store';
 import { useL2Assets } from '@/composables/hooks/useL2Assets';
-import { useToast } from '@/components/ui/toast/use-toast';
+import { useToast } from '@/components/ui/toast-new';
 import satsnetStp from '@/utils/stp';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -221,6 +221,7 @@ const onSubmit = form.handleSubmit(async (values) => {
     toast({
       title: 'Success',
       description: `Successfully initiated split: ${values.assetName} : ${values.amt} x ${values.n} `,
+      variant: 'success'
     });
     await refreshL2Assets();
 

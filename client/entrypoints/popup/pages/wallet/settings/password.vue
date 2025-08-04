@@ -60,7 +60,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { useToast } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/toast-new'
 
 const formSchema = toTypedSchema(z.object({
   oldPassword: z.string().min(1, '请输入旧密码'),
@@ -88,7 +88,7 @@ const onSubmit = handleSubmit(async (values) => {
     if (err) {
       toast({ title: '修改失败', description: err?.message || '请检查旧密码是否正确', variant: 'destructive' })
     } else {
-      toast({ title: '修改成功', description: '密码已更新', variant: 'default' })
+      toast({ title: '修改成功', description: '密码已更新', variant: 'success' })
       await walletStore.setPassword(newHash)
 
     }

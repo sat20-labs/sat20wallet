@@ -372,7 +372,17 @@
     "confirmDeleteWallet": "您确定要删除此钱包吗？此操作无法撤销。",
     "backupRecoveryPhrase": "在删除此钱包之前，请确保您已备份恢复助记词。",
     "deleting": "删除中...",
-    "delete": "删除"
+    "delete": "删除",
+    "showRecoveryPhrase": "显示恢复助记词",
+    "recoveryPhraseDescription": "输入您的密码以查看恢复助记词",
+    "recoveryPhraseWarning": "切勿与任何人分享您的恢复助记词。请安全地离线存储。",
+    "enterPassword": "输入密码",
+    "passwordPlaceholder": "输入您的钱包密码",
+    "verifying": "验证中...",
+    "verify": "验证",
+    "copyRecoveryPhrase": "复制恢复助记词",
+    "close": "关闭",
+    "confirmSaved": "我已保存"
   },
   "utxoManager": {
     "title": "UTXO 管理",

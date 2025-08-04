@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { useToast } from '@/components/ui/toast/use-toast'
+import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store'
 import { useChannelStore } from '@/store/channel'
 import { useL1Store } from '@/store/l1'

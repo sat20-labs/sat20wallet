@@ -150,7 +150,7 @@ import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { useChannelStore } from '@/store'
 import satsnetStp from '@/utils/stp'
-import { useToast } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/toast-new'
 import { hideAddress } from '~/utils'
 import { useWalletStore } from '@/store/wallet'
 
@@ -229,6 +229,7 @@ const closeChannel = async () => {
       toast({
         title: 'Success',
         description: 'Channel closed successfully.',
+        variant: 'success'
       });
     }
   }

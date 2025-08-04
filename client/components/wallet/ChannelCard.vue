@@ -52,6 +52,49 @@
       </div>
     </div>
   </div>
+
+  <!-- Channel Confirmation Dialog -->
+  <Dialog :open="showConfirmDialog" @update:open="showConfirmDialog = $event">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>Confirm Channel Opening</DialogTitle>
+        <DialogDescription>
+          <hr class="mb-6 mt-1 border-t-1 border-accent">
+          Please review the channel opening details before proceeding.
+        </DialogDescription>
+      </DialogHeader>
+      <div class="space-y-4">
+        <div class="space-y-2">
+          <Label>Channel Details</Label>
+          <div class="rounded-lg border p-3 space-y-2">
+            <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">Amount:</span>
+              <span class="font-medium">{{ confirmAmount }} sats</span>
+            </div>
+            <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">BTC Fee Rate:</span>
+              <span class="font-medium">{{ btcFeeRate }} sat/vB</span>
+            </div>
+
+          </div>
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="secondary" @click="showConfirmDialog = false" class="h-11 mt-2">
+          Cancel
+        </Button>
+        <Button 
+          :disabled="loading" 
+          @click="confirmOpenChannel" 
+          class="h-11 mt-2"
+        >
+          <Icon v-if="loading" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
+          {{ loading ? 'Opening...' : 'Open Channel' }}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+
   <!-- <div v-if="channel && channel.status > 15" class="mt-8">
     <div class="flex gap-4 w-full">
       <Popover v-if="channel" class="flex-1">
@@ -109,24 +152,26 @@ import { ref, computed, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import Progress from '@/components/ui/progress/index.vue'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Icon } from '@iconify/vue'
 import { useChannelStore, useWalletStore } from '@/store'
 import satsnetStp from '@/utils/stp'
-import { useToast } from '@/components/ui/toast'
-import { hideAddress } from '~/utils'
+import { useToast } from '@/components/ui/toast-new'
 import { getChannelStatusText } from '~/composables'
 import { useL1Store } from '~/store'
-import CopyCard from '@/components/common/CopyCard.vue'
 import ChannelAssetsTabs from '@/components/asset/ChannelAssetsTabs.vue'
 import { sleep } from 'radash'
 
-// const props = defineProps<{
-//   selectedType: string // 改为 selectedType 以匹配 v-model 的默认行为
-// }>()
-
-// const { selectedType } = toRefs(props)
 const selectedType = defineModel<string>('selectedType')
 const emit = defineEmits(['splicing_out', 'unlock', 'update:selectedType'])
 
@@ -145,6 +190,8 @@ const { toast } = useToast()
 const loading = ref(false)
 const showAmt = ref(false)
 const channelAmt = ref('')
+const showConfirmDialog = ref(false)
+const confirmAmount = ref(0)
 
 // 通道状态进度
 const progressValue = computed(() => {
@@ -204,7 +251,9 @@ const updateSelectedType = (value: string) => {
 const clear = () => {
   showAmt.value = false
   channelAmt.value = ''
+  showConfirmDialog.value = false
 }
+
 const amtConfirm = async () => {
   const amt = parseInt(channelAmt.value, 10)
 
@@ -217,21 +266,20 @@ const amtConfirm = async () => {
     return
   }
 
-  const [err11, result11] = await satsnetStp.getChannelStatus(channelAmt.value);
-  if (err11) {
-    toast({
-      title: 'Error',
-      description: err11.message,
-      variant: 'destructive',
-    })
-    return
-  }
-  
 
+  // 设置确认对话框的数据
+  confirmAmount.value = amt
+  
+  // 显示确认对话框
+  showConfirmDialog.value = true
+}
+
+const confirmOpenChannel = async () => {
   loading.value = true
+  showConfirmDialog.value = false
 
   const memo = '::open'
-  const [err, result] = await satsnetStp.openChannel(btcFeeRate.value, amt, [], memo)
+  const [err, result] = await satsnetStp.openChannel(btcFeeRate.value, confirmAmount.value, [], memo)
 
   if (err) {
     toast({
@@ -242,10 +290,16 @@ const amtConfirm = async () => {
     loading.value = false
     return
   }
+  
   await sleep(1000)
   channelStore.getAllChannels()
   clear()
   loading.value = false
+  
+  toast({
+    title: 'Success',
+    description: 'Channel opening initiated',
+  })
 }
 
 const channelStatusText = computed(() => {
@@ -329,3 +383,4 @@ watch([walletId, accountIndex], async () => {
 </script>
 
 <style></style>
+

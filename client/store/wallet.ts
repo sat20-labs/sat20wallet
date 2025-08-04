@@ -166,7 +166,29 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const importWallet = async (mnemonic: string, password: string) => {
-    const [err, res] = await walletManager.importWallet(mnemonic?.trim(), password)
+    // 助记词预处理：去掉前后空格和其他符号，末尾只允许英文字符
+    const cleanMnemonic = (rawMnemonic: string): string => {
+      // 1. 去掉前后空格
+      let cleaned = rawMnemonic.trim()
+      
+      // 2. 去掉所有非字母数字和空格字符（保留空格用于分隔单词）
+      cleaned = cleaned.replace(/[^a-zA-Z0-9\s]/g, '')
+      
+      // 3. 将多个连续空格替换为单个空格
+      cleaned = cleaned.replace(/\s+/g, ' ')
+      
+      // 4. 去掉末尾的空格
+      cleaned = cleaned.trim()
+      
+      // 5. 确保末尾只允许英文字符（如果末尾有空格，去掉）
+      cleaned = cleaned.replace(/\s+$/, '')
+      
+      return cleaned
+    }
+
+    const processedMnemonic = cleanMnemonic(mnemonic)
+    
+    const [err, res] = await walletManager.importWallet(processedMnemonic, password)
     if (err || !res) {
       console.error(err)
       return [err, undefined]
@@ -179,7 +201,7 @@ export const useWalletStore = defineStore('wallet', () => {
     // await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
     await setPassword(password)
-    await satsnetStp.importWallet(mnemonic, password)
+    await satsnetStp.importWallet(processedMnemonic, password)
     await satsnetStp.start()
     await channelStore.getAllChannels()
     const [_e, addressRes] = await walletManager.getWalletAddress(
@@ -210,7 +232,7 @@ export const useWalletStore = defineStore('wallet', () => {
     console.log('importWallet', _wallets);
     console.log('wallet id', walletId);
 
-    return [undefined, mnemonic]
+    return [undefined, processedMnemonic]
   }
   const getWalletInfo = async () => {
     const [_e, addressRes] = await walletManager.getWalletAddress(

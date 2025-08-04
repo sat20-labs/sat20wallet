@@ -101,7 +101,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useToast } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/toast-new'
 import { Icon } from '@iconify/vue'
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -148,6 +148,7 @@ const clearCurrentName = async () => {
     toast({
       title: 'Success',
       description: 'Name cleared successfully',
+      variant: 'success'
     })
   } catch (error) {
     toast({
@@ -168,6 +169,7 @@ const saveName = async () => {
     toast({
       title: 'Success',
       description: 'Name saved successfully',
+      variant: 'success'
     })
     goBack()
   } catch (error) {

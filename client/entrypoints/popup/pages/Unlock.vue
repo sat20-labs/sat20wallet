@@ -75,7 +75,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useToast } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/toast-new'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useForm } from 'vee-validate'
@@ -112,7 +112,7 @@ const loading = ref(false)
 const showPassword = ref(false)
 
 const showToast = (
-  variant: 'default' | 'destructive',
+  variant: 'default' | 'destructive' | 'success',
   title: string,
   description: string | Error
 ) => {
