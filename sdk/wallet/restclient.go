@@ -716,10 +716,22 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 			return nil
 		} else if strings.Contains(result.Msg, "the locked tx is anchored already in sats net") {
 			// 聪网的特殊处理，只检查包含该utxo的anchorTx是否已经被广播，
+			// 这里检查该anchorTx是否就是我们要广播的TxId，如果是，说明anchorTx已经被广播
 			tx, _ := DecodeMsgTx_SatsNet(hexTx)
 			if strings.Contains(result.Msg, tx.TxID()) {
 				// 聪网的特殊处理，只检查包含该utxo的anchorTx是否已经被广播
-				Log.Infof("BroadCastTxHex TX has anchored. %s", result.Msg)
+				Log.Infof("BroadCastTxHex TX has broadcasted. %s", tx.TxID())
+				return nil
+			} else {
+				Log.Errorf("BroadCastTxHex failed, %v", result.Msg)
+				return fmt.Errorf("%s", result.Msg)
+			}
+		} else if strings.Contains(result.Msg, "-25: TX rejected: orphan transaction") {
+			// 聪网的特殊处理: 看看是否该deanchorTx已经存在聪网上
+			tx, _ := DecodeMsgTx_SatsNet(hexTx)
+			_, err := p.GetRawTx(tx.TxID())
+			if err == nil {
+				Log.Infof("BroadCastTxHex TX has broadcasted. %s", tx.TxID())
 				return nil
 			} else {
 				Log.Errorf("BroadCastTxHex failed, %v", result.Msg)

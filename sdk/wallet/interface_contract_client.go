@@ -299,72 +299,72 @@ func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
 		return "", err
 	}
 
-	// 主网不需要invoice，但可以加上（符文就不能用）
+	// 主网不需要invoice
 	var nullDataScript []byte
 	asset := indexer.NewAssetNameFromString(assetName)
 	if asset.Protocol != indexer.PROTOCOL_NAME_RUNES {
 
 		// 将json结构转为script结构
-		var wrapperParam InvokeParam
-		err = json.Unmarshal([]byte(invokeParam), &wrapperParam)
-		if err != nil {
-			return "", err
-		}
+		// var wrapperParam InvokeParam
+		// err = json.Unmarshal([]byte(invokeParam), &wrapperParam)
+		// if err != nil {
+		// 	return "", err
+		// }
 
-		switch wrapperParam.Action {
-		case INVOKE_API_SWAP:
-			// var swapParam SwapInvokeParam
-			// err = json.Unmarshal([]byte(wrapperParam.Param), &swapParam)
-			// if err != nil {
-			// 	return "", err
-			// }
-			// innerParam, err := swapParam.Encode()
-			// if err != nil {
-			// 	return "", err
-			// }
-			//wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-			wrapperParam.Param = ""
-		case INVOKE_API_DEPOSIT:
-			// var param DepositInvokeParam
-			// err = json.Unmarshal([]byte(wrapperParam.Param), &param)
-			// if err != nil {
-			// 	return "", err
-			// }
-			// innerParam, err := param.Encode()
-			// if err != nil {
-			// 	return "", err
-			// }
-			//wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-			wrapperParam.Param = ""
-		default:
-			return "", fmt.Errorf("unsupport action %s", wrapperParam.Action)
-		}
+		// switch wrapperParam.Action {
+		// case INVOKE_API_SWAP:
+		// 	// var swapParam SwapInvokeParam
+		// 	// err = json.Unmarshal([]byte(wrapperParam.Param), &swapParam)
+		// 	// if err != nil {
+		// 	// 	return "", err
+		// 	// }
+		// 	// innerParam, err := swapParam.Encode()
+		// 	// if err != nil {
+		// 	// 	return "", err
+		// 	// }
+		// 	//wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+		// 	wrapperParam.Param = ""
+		// case INVOKE_API_DEPOSIT:
+		// 	// var param DepositInvokeParam
+		// 	// err = json.Unmarshal([]byte(wrapperParam.Param), &param)
+		// 	// if err != nil {
+		// 	// 	return "", err
+		// 	// }
+		// 	// innerParam, err := param.Encode()
+		// 	// if err != nil {
+		// 	// 	return "", err
+		// 	// }
+		// 	//wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+		// 	wrapperParam.Param = ""
+		// default:
+		// 	return "", fmt.Errorf("unsupport action %s", wrapperParam.Action)
+		// }
 
-		buf, err := wrapperParam.Encode()
-		if err != nil {
-			return "", err
-		}
+		// buf, err := wrapperParam.Encode()
+		// if err != nil {
+		// 	return "", err
+		// }
 
-		_, asssetName, tc, err := ParseContractURL(contractURL)
-		if err != nil {
-			return "", err
-		}
-		relativePath := GenerateContractRelativePath(asssetName, tc)
+		// _, asssetName, tc, err := ParseContractURL(contractURL)
+		// if err != nil {
+		// 	return "", err
+		// }
+		// relativePath := GenerateContractRelativePath(asssetName, tc)
 
-		invoke := sindexer.ContractInvokeData{
-			ContractPath: relativePath,
-			InvokeParam:  buf,
-			PubKey:       p.wallet.GetPubKey().SerializeCompressed(),
-		}
+		// invoke := sindexer.ContractInvokeData{
+		// 	ContractPath: relativePath,
+		// 	InvokeParam:  buf,
+		// 	PubKey:       p.wallet.GetPubKey().SerializeCompressed(),
+		// }
 
-		invoice, err := AbbrInvokeContractInvoice(&invoke)
-		if err != nil {
-			return "", err
-		}
-		nullDataScript, err = sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKECONTRACT, invoice)
-		if err != nil {
-			return "", err
-		}
+		// invoice, err := AbbrInvokeContractInvoice(&invoke)
+		// if err != nil {
+		// 	return "", err
+		// }
+		// nullDataScript, err = sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKECONTRACT, invoice)
+		// if err != nil {
+		// 	return "", err
+		// }
 	}
 
 	name := indexer.NewAssetNameFromString(assetName)
@@ -378,9 +378,15 @@ func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
 		return "", err
 	}
 
+	value := fee
+	if indexer.IsPlainAsset(name) {
+		value += dAmt.Int64()
+		dAmt = nil
+	}
+
 	dest := &SendAssetInfo{
 		Address: channelAddr,
-		Value: fee,
+		Value: value,
 		AssetName: indexer.NewAssetNameFromString(assetName),
 		AssetAmt: dAmt,
 	}
