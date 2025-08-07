@@ -2,7 +2,7 @@ package wallet
 
 import (
 	"bytes"
-	
+
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
@@ -44,7 +44,7 @@ const (
 	ORDERTYPE_MINT     = 8
 	ORDERTYPE_UNUSED   = 9
 
-	INVOKE_FEE     		int64 = 10
+	INVOKE_FEE          int64 = 10
 	SWAP_INVOKE_FEE     int64 = 10
 	DEPOSIT_INVOKE_FEE  int64 = DEFAULT_SERVICE_FEE_DEPOSIT
 	WITHDRAW_INVOKE_FEE int64 = DEFAULT_SERVICE_FEE_WITHDRAW
@@ -67,7 +67,6 @@ const (
 )
 
 const ADDR_OPRETURN string = "op_return"
-
 
 type SwapContract struct {
 	ContractBase
@@ -129,7 +128,6 @@ func (p *SwapContract) InvokeParam(action string) string {
 
 }
 
-
 type SwapHistoryItem = InvokeItem
 
 // 买单用来购买的聪数量，只适合swap合约，amm合约需要通过InValue来计算参与交易的聪数量
@@ -139,7 +137,7 @@ func (p *SwapHistoryItem) GetTradingValue() int64 {
 
 // 买单用来购买的聪数量，只适合amm
 func (p *SwapHistoryItem) GetTradingValueForAmm() int64 {
-	return ((p.InValue - SWAP_INVOKE_FEE) * 1000 + 1000 + SWAP_SERVICE_FEE_RATIO - 1) / (1000 + SWAP_SERVICE_FEE_RATIO)
+	return ((p.InValue-SWAP_INVOKE_FEE)*1000 + 1000 + SWAP_SERVICE_FEE_RATIO - 1) / (1000 + SWAP_SERVICE_FEE_RATIO)
 }
 
 // InvokeParam
@@ -241,62 +239,62 @@ type SwapContractRuntimeInDB struct {
 }
 
 type TraderStatistic struct {
-	InvokeCount  int
+	InvokeCount int
 
-	OnSaleAmt    *Decimal
-	OnBuyValue   int64
-	DealAmt      *Decimal // 只累加卖单中成交的资产数量
-	DealValue    int64    // 只累加买单中成交的聪数量
-	RefundAmt    *Decimal
-	RefundValue  int64
-	DepositAmt   *Decimal
-	DepositValue int64
-	WithdrawAmt  *Decimal
+	OnSaleAmt     *Decimal
+	OnBuyValue    int64
+	DealAmt       *Decimal // 只累加卖单中成交的资产数量
+	DealValue     int64    // 只累加买单中成交的聪数量
+	RefundAmt     *Decimal
+	RefundValue   int64
+	DepositAmt    *Decimal
+	DepositValue  int64
+	WithdrawAmt   *Decimal
 	WithdrawValue int64
-	ProfitAmt    *Decimal
-	ProfitValue  int64
+	ProfitAmt     *Decimal
+	ProfitValue   int64
 }
 
 type TraderStatus struct {
 	InvokerStatusBase
-	Address         string
-	OnSaleAmt    *Decimal
-	OnBuyValue   int64
-	DealAmt      *Decimal // 只累加卖单中成交的资产数量
-	DealValue    int64    // 只累加买单中成交的聪数量
-	ProfitAmt    *Decimal
-	ProfitValue  int64
+	Address     string
+	OnSaleAmt   *Decimal
+	OnBuyValue  int64
+	DealAmt     *Decimal // 只累加卖单中成交的资产数量
+	DealValue   int64    // 只累加买单中成交的聪数量
+	ProfitAmt   *Decimal
+	ProfitValue int64
 
-	SwapUtxoMap     map[string]bool // utxo map 交易中的记录
-	ProfitUtxoMap   map[string]bool // utxo map
+	SwapUtxoMap   map[string]bool // utxo map 交易中的记录
+	ProfitUtxoMap map[string]bool // utxo map
 }
 
-func (p* TraderStatus) Statistic() *TraderStatistic {
+func (p *TraderStatus) Statistic() *TraderStatistic {
 	return &TraderStatistic{
-		InvokeCount: p.InvokeCount,
-		OnSaleAmt: p.OnSaleAmt,
-		OnBuyValue: p.OnBuyValue,
-		DealAmt: p.DealAmt,
-		DealValue: p.DealValue,
-		RefundAmt: p.RefundAmt,
-		RefundValue: p.RefundValue,
-		DepositAmt: p.DepositAmt,
-		DepositValue: p.DepositValue,
-		WithdrawAmt: p.WithdrawAmt,
+		InvokeCount:   p.InvokeCount,
+		OnSaleAmt:     p.OnSaleAmt,
+		OnBuyValue:    p.OnBuyValue,
+		DealAmt:       p.DealAmt,
+		DealValue:     p.DealValue,
+		RefundAmt:     p.RefundAmt,
+		RefundValue:   p.RefundValue,
+		DepositAmt:    p.DepositAmt,
+		DepositValue:  p.DepositValue,
+		WithdrawAmt:   p.WithdrawAmt,
 		WithdrawValue: p.WithdrawValue,
-		ProfitAmt: p.ProfitAmt,
-		ProfitValue: p.ProfitValue,
+		ProfitAmt:     p.ProfitAmt,
+		ProfitValue:   p.ProfitValue,
 	}
 }
 
 func NewTraderStatus(address string, divisibility int) *TraderStatus {
 	return &TraderStatus{
 		InvokerStatusBase: *NewInvokerStatusBase(address, divisibility),
-			OnSaleAmt:   indexer.NewDecimal(0, divisibility),
-			DealAmt:     indexer.NewDecimal(0, divisibility),
-			ProfitAmt:   indexer.NewDecimal(0, divisibility),
-		SwapUtxoMap:     make(map[string]bool),
-		ProfitUtxoMap:   make(map[string]bool),
+		OnSaleAmt:         indexer.NewDecimal(0, divisibility),
+		DealAmt:           indexer.NewDecimal(0, divisibility),
+		ProfitAmt:         indexer.NewDecimal(0, divisibility),
+		SwapUtxoMap:       make(map[string]bool),
+		ProfitUtxoMap:     make(map[string]bool),
 	}
 }
 
@@ -350,7 +348,6 @@ func (p *SwapContractRuntime) init() {
 	p.responseHistory = make(map[int][]*SwapHistoryItem)
 }
 
-
 func (p *SwapContractRuntime) GobEncode() ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
@@ -387,7 +384,7 @@ func (p *SwapContractRuntime) GobDecode(data []byte) error {
 	if err := dec.Decode(&p.SwapContractRunningData); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -460,7 +457,6 @@ const (
 	HOUR_SECOND = 60 * 60
 	DAY_SECOND  = 24 * HOUR_SECOND
 )
-
 
 type responseItem_swap struct {
 	Address string `json:"address"`
@@ -607,7 +603,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
 		}
 		// 检查一层网络上是否有足够的资产
-		totalAmt := p.stp.GetAssetBalance(p.ChannelId, p.GetAssetName())
+		totalAmt := p.stp.GetAssetBalance(p.ChannelAddr, p.GetAssetName())
 		if totalAmt.Cmp(indexer.DecimalAdd(amt, p.AssetAmtInPool)) < 0 {
 			return 0, fmt.Errorf("no enough asset in amm pool L1, required %s but only %s-%s",
 				amt.String(), totalAmt.String(), p.AssetAmtInPool.String())
@@ -641,5 +637,5 @@ func calcSwapFee(value int64) int64 {
 
 // 不包括调用费用 （向下取整）
 func calcSwapServiceFee(value int64) int64 {
-	return (value*SWAP_SERVICE_FEE_RATIO) / 1000 // 交易服务费
+	return (value * SWAP_SERVICE_FEE_RATIO) / 1000 // 交易服务费
 }
