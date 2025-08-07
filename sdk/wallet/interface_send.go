@@ -534,35 +534,35 @@ func (p *Manager) BatchSendAssets_SatsNet(destAddr string,
 
 // 发送资产到一个地址上
 func (p *Manager) SendAssets_SatsNet(destAddr string,
-	assetName string, amt string, memo []byte) (string, error) {
+	assetName string, amt string, memo []byte) (*swire.MsgTx, error) {
 
 	if p.wallet == nil {
-		return "", fmt.Errorf("wallet is not created/unlocked")
+		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
 	name := ParseAssetString(assetName)
 	if name == nil {
-		return "", fmt.Errorf("invalid asset name %s", assetName)
+		return nil, fmt.Errorf("invalid asset name %s", assetName)
 	}
 	tickerInfo := p.getTickerInfo(name)
 	if tickerInfo == nil {
-		return "", fmt.Errorf("can't get ticker %s info", assetName)
+		return nil, fmt.Errorf("can't get ticker %s info", assetName)
 	}
 	dAmt, err := indexer.NewDecimalFromString(amt, tickerInfo.Divisibility)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if dAmt.Sign() <= 0 {
-		return "", fmt.Errorf("invalid amt")
+		return nil, fmt.Errorf("invalid amt")
 	}
 	if !IsValidNullData_SatsNet(memo) {
-		return "", fmt.Errorf("invalid length of null data %d", len(memo))
+		return nil, fmt.Errorf("invalid length of null data %d", len(memo))
 	}
 
 	address := p.wallet.GetAddress()
 	outputs := p.l2IndexerClient.GetUtxoListWithTicker(address, name)
 	if len(outputs) == 0 {
 		Log.Errorf("no asset %s", assetName)
-		return "", fmt.Errorf("no asset %s", assetName)
+		return nil, fmt.Errorf("no asset %s", assetName)
 	}
 
 	Log.Infof("SendAssets_SatsNet %s %s", assetName, amt)
@@ -570,11 +570,11 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 
 	addr, err := sbtcutil.DecodeAddress(destAddr, GetChainParam_SatsNet())
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	pkScript, err := stxscript.PayToAddrScript(addr)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	fee := indexer.NewDefaultDecimal(DEFAULT_FEE_SATSNET)
@@ -610,7 +610,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 		}
 	}
 	if assetAmt.Cmp(expectedAmt) < 0 {
-		return "", fmt.Errorf("not enough asset %s", assetName)
+		return nil, fmt.Errorf("not enough asset %s", assetName)
 	}
 
 	var feeOutputs []*indexerwire.TxOutputInfo
@@ -620,7 +620,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 			feeOutputs = p.l2IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 			if len(feeOutputs) == 0 {
 				Log.Errorf("no plain sats")
-				return "", fmt.Errorf("no plain sats")
+				return nil, fmt.Errorf("no plain sats")
 			}
 
 			for _, out := range feeOutputs {
@@ -647,7 +647,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 			}
 
 			if feeValue < DEFAULT_FEE_SATSNET {
-				return "", fmt.Errorf("not enough fee")
+				return nil, fmt.Errorf("not enough fee")
 			}
 		}
 	}
@@ -663,7 +663,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 
 	err = input.SubAsset(&sendAsset)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	feeAsset := swire.AssetInfo{
 		Name:       ASSET_PLAIN_SAT,
@@ -672,13 +672,13 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 	}
 	err = input.SubAsset(&feeAsset)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if !input.Zero() {
 		changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		txOut2 := swire.NewTxOut(input.Value(), input.OutValue.Assets, changePkScript)
 		tx.AddTxOut(txOut2)
@@ -687,7 +687,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 	// attached data
 	if memo != nil {
 		if len(memo) > stxscript.MaxDataCarrierSize {
-			return "", fmt.Errorf("attached data too large")
+			return nil, fmt.Errorf("attached data too large")
 		}
 		txOut3 := swire.NewTxOut(0, nil, memo)
 		tx.AddTxOut(txOut3)
@@ -697,18 +697,18 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 	tx, err = p.SignTx_SatsNet(tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx_SatsNet failed. %v", err)
-		return "", err
+		return nil, err
 	}
 
 	PrintJsonTx_SatsNet(tx, "SendAssets_SatsNet")
 
-	txid, err := p.BroadcastTx_SatsNet(tx)
+	_, err = p.BroadcastTx_SatsNet(tx)
 	if err != nil {
 		Log.Errorf("BroadCastTx_SatsNet failed. %v", err)
-		return "", err
+		return nil, err
 	}
 
-	return txid, nil
+	return tx, nil
 }
 
 // 发送一个op_return，只支付网络费
@@ -1259,41 +1259,49 @@ func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 
 func (p *Manager) GenerateStubUtxos(n int, feeRate int64) (string, int64, error) {
 	//
-	return p.BatchSendAssets(p.wallet.GetAddress(), indexer.ASSET_PLAIN_SAT.String(),
+	tx, fee, err := p.BatchSendAssets(p.wallet.GetAddress(), indexer.ASSET_PLAIN_SAT.String(),
 		"330", n, feeRate, nil)
+	if err != nil {
+		return "", fee, err
+	}
+	return tx.TxID(), fee, nil
 }
 
 func (p *Manager) BatchSendPlainSats(destAddr string, value int64, n int,
 	feeRate int64, memo []byte) (string, int64, error) {
 	//
-	return p.BatchSendAssets(destAddr, indexer.ASSET_PLAIN_SAT.String(),
+	tx, fee, err :=  p.BatchSendAssets(destAddr, indexer.ASSET_PLAIN_SAT.String(),
 		fmt.Sprintf("%d", value), n, feeRate, memo)
+	if err != nil {
+		return "", fee, err
+	}
+	return tx.TxID(), fee, nil
 }
 
 // 发送资产到一个地址上，拆分n个输出
 func (p *Manager) BatchSendAssets(destAddr string, assetName string,
-	amt string, n int, feeRate int64, memo []byte) (string, int64, error) {
+	amt string, n int, feeRate int64, memo []byte) (*wire.MsgTx, int64, error) {
 
 	if p.wallet == nil {
-		return "", 0, fmt.Errorf("wallet is not created/unlocked")
+		return nil, 0, fmt.Errorf("wallet is not created/unlocked")
 	}
 	name := ParseAssetString(assetName)
 	if name == nil {
-		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
+		return nil, 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
 	tickerInfo := p.getTickerInfo(name)
 	if tickerInfo == nil {
-		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
+		return nil, 0, fmt.Errorf("can't get ticker %s info", assetName)
 	}
 	dAmt, err := indexer.NewDecimalFromString(amt, tickerInfo.Divisibility)
 	if err != nil {
-		return "", 0, err
+		return nil, 0, err
 	}
 	if dAmt.Sign() <= 0 {
-		return "", 0, fmt.Errorf("invalid amt")
+		return nil, 0, fmt.Errorf("invalid amt")
 	}
 	if !IsValidNullData(memo) {
-		return "", 0, fmt.Errorf("invalid length of null data %d", len(memo))
+		return nil, 0, fmt.Errorf("invalid length of null data %d", len(memo))
 	}
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
@@ -1309,27 +1317,27 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 		newName := GetAssetName(tickerInfo)
 		tx, prevFetcher, fee, err = p.BuildBatchSendTx_Ordx(destAddr, newName, dAmt, n, feeRate, memo)
 	} else {
-		return "", 0, fmt.Errorf("unsupport batch send for asset name %s", assetName)
+		return nil, 0, fmt.Errorf("unsupport batch send for asset name %s", assetName)
 	}
 	if err != nil {
 		Log.Errorf("buildBatchSendTx failed. %v", err)
-		return "", 0, err
+		return nil, 0, err
 	}
 
 	// sign
 	tx, err = p.SignTx(tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx failed. %v", err)
-		return "", 0, err
+		return nil, 0, err
 	}
 
-	txid, err := p.BroadcastTx(tx)
+	_, err = p.BroadcastTx(tx)
 	if err != nil {
 		Log.Errorf("BroadCastTx failed. %v", err)
-		return "", 0, err
+		return nil, 0, err
 	}
 
-	return txid, fee, nil
+	return tx, fee, nil
 }
 
 // 白聪
@@ -1699,28 +1707,28 @@ func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 
 // 发送指定资产
 func (p *Manager) SendAssets(destAddr string, assetName string,
-	amt string, feeRate int64, memo []byte) (string, error) {
+	amt string, feeRate int64, memo []byte) (*wire.MsgTx, error) {
 
 	if p.wallet == nil {
-		return "", fmt.Errorf("wallet is not created/unlocked")
+		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
 	name := ParseAssetString(assetName)
 	if name == nil {
-		return "", fmt.Errorf("invalid asset name %s", assetName)
+		return nil, fmt.Errorf("invalid asset name %s", assetName)
 	}
 	tickerInfo := p.getTickerInfo(name)
 	if tickerInfo == nil {
-		return "", fmt.Errorf("can't get ticker %s info", assetName)
+		return nil, fmt.Errorf("can't get ticker %s info", assetName)
 	}
 	dAmt, err := indexer.NewDecimalFromString(amt, tickerInfo.Divisibility)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if dAmt.Sign() <= 0 {
-		return "", fmt.Errorf("invalid amt")
+		return nil, fmt.Errorf("invalid amt")
 	}
 	if !IsValidNullData(memo) {
-		return "", fmt.Errorf("invalid length of null data %d", len(memo))
+		return nil, fmt.Errorf("invalid length of null data %d", len(memo))
 	}
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
@@ -1735,64 +1743,64 @@ func (p *Manager) SendAssets(destAddr string, assetName string,
 		return p.SendRunes(destAddr, name, dAmt, feeRate, memo)
 	}
 
-	return "", fmt.Errorf("invalid asset name %s", assetName)
+	return nil, fmt.Errorf("invalid asset name %s", assetName)
 }
 
 // 白聪
-func (p *Manager) SendPlainSats(destAddr string, amt int64, feeRate int64, memo []byte) (string, error) {
+func (p *Manager) SendPlainSats(destAddr string, amt int64, feeRate int64, memo []byte) (*wire.MsgTx, error) {
 	tx, prevFetcher, _, err := p.BuildBatchSendTx_PlainSats(destAddr, amt, 1, feeRate, memo)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// sign
 	tx, err = p.SignTx(tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx failed. %v", err)
-		return "", err
+		return nil, err
 	}
 
-	txid, err := p.BroadcastTx(tx)
+	_, err = p.BroadcastTx(tx)
 	if err != nil {
 		Log.Errorf("BroadCastTx failed. %v", err)
-		return "", err
+		return nil, err
 	}
-	return txid, nil
+	return tx, nil
 }
 
 func (p *Manager) SendOrdxs(destAddr string,
-	name *AssetName, amt *Decimal, feeRate int64, memo []byte) (string, error) {
-	txid, _, err := p.BatchSendAssets(destAddr, name.String(), amt.String(), 1, feeRate, memo)
+	name *AssetName, amt *Decimal, feeRate int64, memo []byte) (*wire.MsgTx, error) {
+	tx, _, err := p.BatchSendAssets(destAddr, name.String(), amt.String(), 1, feeRate, memo)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return txid, nil
+	return tx, nil
 }
 
 func (p *Manager) SendRunes(destAddr string,
-	name *indexer.AssetName, amt *Decimal, feeRate int64, memo []byte) (string, error) {
+	name *indexer.AssetName, amt *Decimal, feeRate int64, memo []byte) (*wire.MsgTx, error) {
 
 	address := p.wallet.GetAddress()
 	outputs := p.l1IndexerClient.GetUtxoListWithTicker(address, name)
 	if len(outputs) == 0 {
 		Log.Errorf("no asset %s", name.String())
-		return "", fmt.Errorf("no asset %s", name.String())
+		return nil, fmt.Errorf("no asset %s", name.String())
 	}
 
 	tx := wire.NewMsgTx(wire.TxVersion)
 
 	addr, err := btcutil.DecodeAddress(destAddr, GetChainParam())
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	destPkScript, err := txscript.PayToAddrScript(addr)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	expectedAmt := amt.Clone()
 
@@ -1830,7 +1838,7 @@ func (p *Manager) SendRunes(destAddr string,
 		}
 	}
 	if remaining.Sign() > 0 {
-		return "", fmt.Errorf("not enough asset %s", name.String())
+		return nil, fmt.Errorf("not enough asset %s", name.String())
 	}
 
 	// 默认输出到第一个非零utxo中
@@ -1840,7 +1848,7 @@ func (p *Manager) SendRunes(destAddr string,
 		// runes: 增加transfer edict
 		runeId, err := p.getRuneIdFromName(name)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		transferEdicts = append(transferEdicts, runestone.Edict{
 			ID:     *runeId,
@@ -1849,7 +1857,7 @@ func (p *Manager) SendRunes(destAddr string,
 		})
 
 		if len(memo) > 0 {
-			return "", fmt.Errorf("mainnet can't support multi op_return")
+			return nil, fmt.Errorf("mainnet can't support multi op_return")
 		}
 	}
 	if len(memo) > 0 {
@@ -1877,7 +1885,7 @@ func (p *Manager) SendRunes(destAddr string,
 		nullDataScript, err := EncipherRunePayload(transferEdicts)
 		if err != nil {
 			Log.Errorf("too many edicts, %d, %v", len(transferEdicts), err)
-			return "", err
+			return nil, err
 		}
 		// 增加费率
 		weightEstimate.AddOutput(nullDataScript)
@@ -1895,7 +1903,7 @@ func (p *Manager) SendRunes(destAddr string,
 		feeOutputs := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 		if len(feeOutputs) == 0 {
 			Log.Errorf("no plain sats")
-			return "", fmt.Errorf("no plain sats")
+			return nil, fmt.Errorf("no plain sats")
 		}
 
 		for _, out := range feeOutputs {
@@ -1921,7 +1929,7 @@ func (p *Manager) SendRunes(destAddr string,
 	fee1 := weightEstimate.Fee(feeRate)
 
 	if feeValue < fee0 {
-		return "", fmt.Errorf("not enough fee")
+		return nil, fmt.Errorf("not enough fee")
 	}
 
 	feeChange := feeValue - fee1
@@ -1944,16 +1952,16 @@ func (p *Manager) SendRunes(destAddr string,
 	tx, err = p.SignTx(tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx failed. %v", err)
-		return "", err
+		return nil, err
 	}
 
-	txid, err := p.BroadcastTx(tx)
+	_, err = p.BroadcastTx(tx)
 	if err != nil {
 		Log.Errorf("BroadCastTx failed. %v", err)
-		return "", err
+		return nil, err
 	}
 
-	return txid, nil
+	return tx, nil
 }
 
 
@@ -1986,16 +1994,22 @@ func (p *Manager) SendAssetsV3(destAddr string, assetName string,
 		feeRate = p.GetFeeRate()
 	}
 
+	var tx *wire.MsgTx
 	if indexer.IsPlainAsset(name) {
-		return p.SendPlainSats(destAddr, dAmt.Int64(), feeRate, memo)
+		tx, err = p.SendPlainSats(destAddr, dAmt.Int64(), feeRate, memo)
 	} else if name.Protocol == indexer.PROTOCOL_NAME_ORDX {
 		newName := GetAssetName(tickerInfo)
-		return p.SendOrdxs(destAddr, newName, dAmt, feeRate, memo)
+		tx, err = p.SendOrdxs(destAddr, newName, dAmt, feeRate, memo)
 	} else if name.Protocol == indexer.PROTOCOL_NAME_RUNES {
-		return p.SendRunes(destAddr, name, dAmt, feeRate, memo)
+		tx, err = p.SendRunes(destAddr, name, dAmt, feeRate, memo)
+	} else {
+		err = fmt.Errorf("invalid asset name %s", assetName)
+	}
+	if err != nil {
+		return "", err
 	}
 
-	return "", fmt.Errorf("invalid asset name %s", assetName)
+	return tx.TxID(), nil
 }
 
 // 给多个地址发送不同数量的白聪
