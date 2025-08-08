@@ -285,7 +285,20 @@
     "registering": "Registering...",
     "binding": "Binding...",
     "confirm": "确认",
-    "cancel": "取消"
+    "cancel": "取消",
+    "BindSuccess": "绑定成功",
+    "BindFailure": "绑定失败",
+    "RegistrationSuccess": "注册成功",
+    "RegistrationFailure": "注册失败",
+    "unbindReferrer": "解除绑定",
+    "unbinding": "解除绑定中...",
+    "unbindSuccess": "解除绑定成功",
+    "unbindFailure": "解除绑定失败",
+    "alreadyBound": "已绑定推荐人",
+    "cannotRebind": "您已经绑定了推荐人，不能重复绑定",
+    "clearLocalRecord": "已清除本地绑定记录",
+    "clearLocalRecordFailed": "清除本地记录失败",
+    "loadingReferrerInfo": "加载推荐人信息中..."
   },
   "assetOperationDialog": {
     "normalSend": "普通",

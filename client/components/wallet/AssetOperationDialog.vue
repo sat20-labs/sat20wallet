@@ -3,7 +3,7 @@
     <DialogContent class="w-[330px] rounded-lg bg-black">
       <DialogHeader class="flex flex-row items-center justify-between">
         <div>
-          <DialogTitle>{{ title }}123</DialogTitle>
+          <DialogTitle>{{ title }}</DialogTitle>
           <DialogDescription>
             <hr class="mb-4 mt-2 border-t-1 border-zinc-900">
             {{ description }}

@@ -8,6 +8,11 @@ export const useReferrerManager = () => {
     return `local:referrer_names_${targetAddress}` as const
   }
 
+  // 生成绑定推荐人的存储键
+  const generateBoundReferrerKey = (targetAddress: string): any => {
+    return `local:bound_referrer_${targetAddress}` as const
+  }
+
   // 获取本地存储的推荐人名字
   const getLocalReferrerNames = async (targetAddress: string): Promise<string[]> => {
     try {
@@ -64,11 +69,50 @@ export const useReferrerManager = () => {
       throw error
     }
   }
+
+  // 获取本地存储的绑定推荐人
+  const getLocalBoundReferrer = async (targetAddress: string): Promise<string | null> => {
+    try {
+      const key = generateBoundReferrerKey(targetAddress)
+      const boundReferrer = await storage.getItem<string>(key)
+      return boundReferrer || null
+    } catch (error) {
+      console.error('Failed to get local bound referrer:', error)
+      return null
+    }
+  }
+
+  // 添加绑定推荐人到本地存储
+  const addLocalBoundReferrer = async (targetAddress: string, referrerName: string): Promise<void> => {
+    try {
+      const key = generateBoundReferrerKey(targetAddress)
+      await storage.setItem(key, referrerName)
+      console.log(`[ReferrerManager] 已添加绑定推荐人到本地存储: ${referrerName} (地址: ${targetAddress})`)
+    } catch (error) {
+      console.error('Failed to add local bound referrer:', error)
+      throw error
+    }
+  }
+
+  // 删除本地存储的绑定推荐人
+  const removeLocalBoundReferrer = async (targetAddress: string): Promise<void> => {
+    try {
+      const key = generateBoundReferrerKey(targetAddress)
+      await storage.removeItem(key)
+      console.log(`[ReferrerManager] 已删除绑定推荐人 (地址: ${targetAddress})`)
+    } catch (error) {
+      console.error('Failed to remove local bound referrer:', error)
+      throw error
+    }
+  }
   
   return {
     getLocalReferrerNames,
     addLocalReferrerName,
     removeLocalReferrerName,
     clearLocalReferrerNames,
+    getLocalBoundReferrer,
+    addLocalBoundReferrer,
+    removeLocalBoundReferrer,
   }
 }

@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { walletStorage } from '@/lib/walletStorage'
 import { Network, Chain, WalletData, WalletAccount } from '@/types'
-import { Message } from '@/types/message'
 import walletManager from '@/utils/sat20'
 import stp from '@/utils/stp'
 import satsnetStp from '@/utils/stp'
@@ -33,10 +32,7 @@ export const useWalletStore = defineStore('wallet', () => {
   const accounts = computed(() => wallet.value?.accounts)
   const account = computed(() => wallet.value?.accounts.find(a => a.index === accountIndex.value))
   const setAddress = async (value: string) => {
-    console.log('old address', address.value);
-
     address.value = value
-    console.log('setAddress', value)
     await walletStorage.setValue('address', value)
   }
 
@@ -127,9 +123,7 @@ export const useWalletStore = defineStore('wallet', () => {
     await setAccountIndex(0)
     await setHasWallet(true)
     await setLocked(false)
-    // await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
-    // await getWalletInfo()
     await satsnetStp.importWallet(_mnemonic, password)
     await setPassword(password)
     await satsnetStp.start()
@@ -168,26 +162,21 @@ export const useWalletStore = defineStore('wallet', () => {
   const importWallet = async (mnemonic: string, password: string) => {
     // 助记词预处理：去掉前后空格和其他符号，末尾只允许英文字符
     const cleanMnemonic = (rawMnemonic: string): string => {
-      // 1. 去掉前后空格
       let cleaned = rawMnemonic.trim()
-      
-      // 2. 去掉所有非字母数字和空格字符（保留空格用于分隔单词）
+
       cleaned = cleaned.replace(/[^a-zA-Z0-9\s]/g, '')
-      
-      // 3. 将多个连续空格替换为单个空格
+
       cleaned = cleaned.replace(/\s+/g, ' ')
-      
-      // 4. 去掉末尾的空格
+
       cleaned = cleaned.trim()
-      
-      // 5. 确保末尾只允许英文字符（如果末尾有空格，去掉）
+
       cleaned = cleaned.replace(/\s+$/, '')
-      
+
       return cleaned
     }
 
     const processedMnemonic = cleanMnemonic(mnemonic)
-    
+
     const [err, res] = await walletManager.importWallet(processedMnemonic, password)
     if (err || !res) {
       console.error(err)
@@ -369,6 +358,14 @@ export const useWalletStore = defineStore('wallet', () => {
     }
   }
 
+  const updateWalletName = async (walletId: string, newName: string) => {
+    const wallet = wallets.value.find(w => w.id === walletId)
+    if (wallet) {
+      wallet.name = newName
+      await walletStorage.setValue('wallets', toRaw(wallets.value))
+    }
+  }
+
   const deleteAccount = async (accountId: number) => {
     const index = wallet.value?.accounts.findIndex(a => a.index === accountId)
     if (index && index > -1) {
@@ -418,6 +415,7 @@ export const useWalletStore = defineStore('wallet', () => {
     addAccount,
     switchToAccount,
     updateAccountName,
+    updateWalletName,
     deleteAccount,
     accounts,
     switchWallet,

@@ -573,8 +573,7 @@ const saveWalletName = async () => {
 
   try {
     isEditingName.value = true
-    // TODO: Implement actual name saving logic
-    editingWallet.value.name = editingName.value
+    await walletStore.updateWalletName(editingWallet.value.id, editingName.value)
 
     toast({
       title: 'Success',

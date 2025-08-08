@@ -35,14 +35,39 @@ export function setLanguage(lang: string) {
   }
 }
 
-walletStorage.initializeState().then(() => {
-  loadWasm().then(() => {
-    createApp(App)
+walletStorage.initializeState()
+  .then(() => {
+    return loadWasm()
+  })
+  .then(() => {
+    const app = createApp(App)
       .use(i18n)
       .component('Icon', Icon)
       .use(VueQueryPlugin)
       .use(createPinia())
       .use(router)
-      .mount('#app')
+    
+    app.mount('#app')
   })
-})
+  .catch((error) => {
+    console.error('❌ 初始化失败:', error)
+    
+    // 显示错误信息给用户
+    const appElement = document.getElementById('app')
+    if (appElement) {
+      appElement.innerHTML = `
+        <div style="
+          padding: 20px;
+          color: white;
+          background: #1a1a1a;
+          border-radius: 8px;
+          margin: 20px;
+          font-family: Arial, sans-serif;
+        ">
+          <h2 style="color: #ff6b6b;">插件初始化失败</h2>
+          <p>错误信息: ${error.message}</p>
+          <p>请检查控制台获取详细信息</p>
+        </div>
+      `
+    }
+  })
