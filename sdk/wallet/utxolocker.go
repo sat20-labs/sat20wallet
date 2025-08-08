@@ -66,6 +66,7 @@ func (p *UtxoLocker) reload() {
 	}
 
 	p.lockmap = loadAllLockedUtxoFromDB(p.db, p.network)
+	//Log.Infof("reload %s %d ", p.network, len(p.lockmap))
 	p.refreshTime = lastTime
 }
 
@@ -384,6 +385,7 @@ func (p *UtxoLocker) CheckExisting() {
 		for _, k := range deletedUtxoVect {
 			DeleteLockedUtxo(p.db, p.network, k)
 			delete(p.lockmap, k)
+			//Log.Infof("deleted locked utxo: %s", k)
 		}
 		p.refreshTime = time.Now().UnixMilli()
 		saveLastLockTime(p.db, p.network, p.refreshTime)
