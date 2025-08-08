@@ -373,13 +373,17 @@ func (p *UtxoLocker) CheckExisting() {
 		for _, u := range existingUtxos {
 			existingUtxoMap[u] = true
 		}
+		deletedUtxoVect := make([]string, 0)
 		for k := range p.lockmap {
 			_, ok := existingUtxoMap[k]
 			if ok {
 				continue
 			}
-
-			p.unlockUtxo(k)
+			deletedUtxoVect = append(deletedUtxoVect, k)
+		}
+		for _, k := range deletedUtxoVect {
+			DeleteLockedUtxo(p.db, p.network, k)
+			delete(p.lockmap, k)
 		}
 		p.refreshTime = time.Now().UnixMilli()
 		saveLastLockTime(p.db, p.network, p.refreshTime)
