@@ -72,6 +72,10 @@
               <span class="font-medium">{{ confirmAmount }} sats</span>
             </div>
             <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">Management Fee:</span>
+              <span class="font-medium">3000 sats</span>
+            </div>
+            <div class="flex justify-between text-sm">
               <span class="text-muted-foreground">BTC Fee Rate:</span>
               <span class="font-medium">{{ btcFeeRate }} sat/vB</span>
             </div>

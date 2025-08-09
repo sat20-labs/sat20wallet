@@ -30,9 +30,9 @@
         <a href="https://github.com/sat20-labs/" target="_blank" class="text-muted-foreground hover:text-primary">
           <Icon icon="bi:github" class="w-4 h-4" />
         </a>
-        <a href="https://t.me/ordxnals" target="_blank" class="text-muted-foreground hover:text-primary">
+        <!-- <a href="https://t.me/ordxnals" target="_blank" class="text-muted-foreground hover:text-primary">
           <Icon icon="bi:telegram" class="w-4 h-4" />
-        </a>
+        </a> -->
       </div>
       <div class="text-sm text-muted-foreground">{{ $t('setting.version') }}: {{ version }}</div>
     </div>

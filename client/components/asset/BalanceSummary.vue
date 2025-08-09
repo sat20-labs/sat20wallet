@@ -5,7 +5,7 @@
       <p class="text-base font-bold text-zinc-500">{{ $t('balanceSummary.totalBalance') }}</p>
       <h2 class="text-3xl font-semibold text-zinc-300" @mouseenter="balanceMouseEnter"
         @mouseleave="showDetails = false">
-        {{ formatBalance(btcBalance.total, props.selectedChain) }}
+        {{ formatBalance(btcBalance.total, props.selectedChain, network) }}
       </h2>
 
       <!-- Balance Details (显示在悬停时) -->
@@ -13,17 +13,17 @@
         class="absolute left-1/2 transform -translate-x-1/2 w-60 mt-2 p-4 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg space-y-2 z-10">
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.available') }}</span>
-          <span class="text-sm text-zinc-400">{{ formatBalance(abailableSats.availableAmt, props.selectedChain)
+          <span class="text-sm text-zinc-400">{{ formatBalance(abailableSats.availableAmt, props.selectedChain, network)
           }}</span>
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.unavailable') }}</span>
-          <span class="text-sm text-zinc-400">{{ formatBalance(abailableSats.lockedAmt, props.selectedChain) }}</span>
+          <span class="text-sm text-zinc-400">{{ formatBalance(abailableSats.lockedAmt, props.selectedChain, network) }}</span>
 
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.total') }}</span>
-          <span class="text-sm text-zinc-400">{{ formatBalance(btcBalance.total, props.selectedChain) }}</span>
+          <span class="text-sm text-zinc-400">{{ formatBalance(btcBalance.total, props.selectedChain, network) }}</span>
         </div>
 
       </div>
@@ -349,11 +349,11 @@ const btcBalance = computed(() => {
 })
 
 // Format Balance
-const formatBalance = (balance: number | string, chain: string) => {
+const formatBalance = (balance: number | string, chain: string, _network: string) => {
   const numericBalance = typeof balance === 'string' ? parseFloat(balance) : balance
   const formattedBalance = (numericBalance / 1e8).toFixed(8)
   //const unit = chain.toLowerCase() === 'bitcoin' ? 'tBTC' : chain.toLowerCase() === 'channel' ? 'cBTC' : 'sBTC'
-  const unit = 'tBTC'
+  const unit = _network === 'testnet' ? 'tBTC' : 'BTC'
   return `${formattedBalance} ${unit}`
 }
 
@@ -398,7 +398,7 @@ const mempoolUrl = computed(() => {
     return generateMempoolUrl({
       network: network.value,
       path: `address/${showAddress.value}`,
-      chain: Chain.SATNET,
+      chain: Chain.BTC,
       env: env.value,
     })
   } else if (props.selectedChain === 'satoshinet') {
