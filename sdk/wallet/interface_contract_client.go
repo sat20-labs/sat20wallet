@@ -173,14 +173,14 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
 
 	// 需要查询合约是否已经关闭?
 	
-	txId, err := p.SendAssets_SatsNet(channelAddr, ASSET_PLAIN_SAT.String(), fmt.Sprintf("%d", fee), nullDataScript)
+	tx, err := p.SendAssets_SatsNet(channelAddr, ASSET_PLAIN_SAT.String(), fmt.Sprintf("%d", fee), nullDataScript)
 	if err != nil {
 		Log.Errorf("SendAssets_SatsNet %s failed", channelAddr)
 		return "", err
 	}
-	Log.Infof("invoke contract %s with txId %s", contractURL, txId)
+	Log.Infof("invoke contract %s with txId %s", contractURL, tx.TxID())
 
-	return txId, nil
+	return tx.TxID(), nil
 }
 
 // 调用合约的同时加入资产

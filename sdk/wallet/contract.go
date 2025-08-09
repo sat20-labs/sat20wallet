@@ -11,6 +11,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	stxscript "github.com/sat20-labs/satoshinet/txscript"
 )
 
 // 仅作为客户端参考定义
@@ -20,7 +21,7 @@ const (
 
 	TEMPLATE_CONTRACT_SWAP        string = "swap.tc"
 	TEMPLATE_CONTRACT_AMM         string = "amm.tc"
-	TEMPLATE_CONTRACT_VAULT 	  string = "vault.tc"
+	TEMPLATE_CONTRACT_VAULT       string = "vault.tc"
 	TEMPLATE_CONTRACT_LAUNCHPOOL  string = "launchpool.tc"
 	TEMPLATE_CONTRACT_STAKE       string = "stake.tc"
 	TEMPLATE_CONTRACT_TRANSCEND   string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
@@ -53,6 +54,7 @@ const (
 	INVOKE_REASON_INNER_ERROR      string = "inner error" // 内部错误
 	INVOKE_REASON_NO_ENOUGH_ASSET  string = "no enough asset"
 	INVOKE_REASON_SLIPPAGE_PROTECT string = "slippage protection"
+	INVOKE_REASON_UTXO_NOT_FOUND   string = "input utxo not found"
 )
 
 // 用在开发过程修改数据库，设置为true，然后数据库自动升级，然后马上要设置为false，并且将所有oldversion的数据结果，等同于最新结构
@@ -94,7 +96,7 @@ type ContractRuntime interface {
 	URL() string          // 绝对路径
 	RelativePath() string // 相对路径，不包括channelId或者其他
 	GetAssetName() *indexer.AssetName
-	GetAssetNameV2() *AssetName 
+	GetAssetNameV2() *AssetName
 	RuntimeContent() []byte                 // 运行时数据，用于备份数据
 	InstallStatus() string                  // 运行时状态，json格式
 	RuntimeStatus() string                  // 运行时状态，json格式
@@ -104,13 +106,12 @@ type ContractRuntime interface {
 	StatusByAddress(string) (string, error) // 运行时状态，json格式
 	GetDeployTime() int64
 	IsExpired() bool
-	GetEnableBlock() (int)
-	GetEnableBlockL1() (int)
+	GetEnableBlock() int
+	GetEnableBlockL1() int
 
 	// 合约调用的支持接口
-	CheckInvokeParam(string) (int64, error)    // 调用合约的参数检查(json)，调用合约前调用
+	CheckInvokeParam(string) (int64, error) // 调用合约的参数检查(json)，调用合约前调用
 	AllowInvoke(*Manager) error
-	
 }
 
 // 合约调用历史记录
@@ -119,6 +120,9 @@ type InvokeHistoryItem interface {
 	GetId() int64
 	GetKey() string
 	HasDone() bool
+	GetHeight() int
+	FromSatsNet() bool
+	ToSatsNet() bool
 	ToNewVersion() InvokeHistoryItem
 }
 
@@ -145,6 +149,18 @@ func (p *InvokeHistoryItemBase) HasDone() bool {
 	return p.Done != DONE_NOTYET
 }
 
+func (p *InvokeHistoryItemBase) GetHeight() int {
+	return -1
+}
+
+func (p *InvokeHistoryItemBase) FromSatsNet() bool {
+	return true
+}
+
+func (p *InvokeHistoryItemBase) ToSatsNet() bool {
+	return true
+}
+
 func (p *InvokeHistoryItemBase) ToNewVersion() InvokeHistoryItem {
 	return p
 }
@@ -162,7 +178,7 @@ func NewInvokeHistoryItem(cn string) InvokeHistoryItem {
 	case TEMPLATE_CONTRACT_AMM:
 		return &SwapHistoryItem{}
 	}
-	return nil
+	return &InvokeItem{}
 }
 
 func NewInvokeHistoryItem_old(cn string) InvokeHistoryItem {
@@ -174,7 +190,6 @@ func NewInvokeHistoryItem_old(cn string) InvokeHistoryItem {
 	// }
 	return &InvokeItem_old{}
 }
-
 
 type InvokeItem_old = InvokeItem
 
@@ -212,7 +227,7 @@ type InvokeItem struct {
 	UtxoId         uint64 // 其实是utxoId
 	OrderTime      int64
 	AssetName      string
-	ServiceFee	   int64
+	ServiceFee     int64
 	UnitPrice      *Decimal // X per Y
 	ExpectedAmt    *Decimal // 期望的数量
 	Address        string   // 所有人
@@ -232,6 +247,19 @@ func (p *InvokeItem) ToNewVersion() InvokeHistoryItem {
 	return p
 }
 
+func (p *InvokeItem) GetHeight() int {
+	h, _, _ := indexer.FromUtxoId(p.UtxoId)
+	return h
+}
+
+func (p *InvokeItem) FromSatsNet() bool {
+	return !p.FromL1
+}
+
+func (p *InvokeItem) ToSatsNet() bool {
+	return !p.ToL1
+}
+
 func (p *InvokeItem) Clone() *InvokeItem {
 	n := *p
 	n.UnitPrice = p.UnitPrice.Clone()
@@ -241,7 +269,6 @@ func (p *InvokeItem) Clone() *InvokeItem {
 	n.OutAmt = p.OutAmt.Clone()
 	return &n
 }
-
 
 type InvokeParam struct {
 	Action string `json:"action"`
@@ -274,13 +301,13 @@ type EnableInvokeParam struct {
 }
 
 func (p *EnableInvokeParam) Encode() ([]byte, error) {
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddInt64(int64(p.HeightL1)).
 		AddInt64(int64(p.HeightL2)).Script()
 }
 
 func (p *EnableInvokeParam) Decode(data []byte) error {
-	tokenizer := txscript.MakeScriptTokenizer(0, data)
+	tokenizer := stxscript.MakeScriptTokenizer(0, data)
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing heightL1")
@@ -301,17 +328,17 @@ type InvokerStatus interface {
 }
 
 type InvokerStatusBase struct {
-	Version         int
-	Address         string
-	InvokeCount  	int
-	DepositAmt   	*Decimal	// 存款总额
-	DepositValue    int64
-	WithdrawAmt  	*Decimal	// 取款总额
-	WithdrawValue   int64
-	RefundAmt    	*Decimal	// 无效退回，不计入存款总额
-	RefundValue     int64
+	Version       int
+	Address       string
+	InvokeCount   int
+	DepositAmt    *Decimal // 存款总额
+	DepositValue  int64
+	WithdrawAmt   *Decimal // 取款总额
+	WithdrawValue int64
+	RefundAmt     *Decimal // 无效退回，不计入存款总额
+	RefundValue   int64
 
-	DepositUtxoMap  map[string]bool // 
+	DepositUtxoMap  map[string]bool //
 	WithdrawUtxoMap map[string]bool // utxo map
 	RefundUtxoMap   map[string]bool // utxo map 要退款的记录，包括指令utxo和要退款的utxo
 	History         map[int][]int64 // 用户的invoke历史记录，每100个为一桶，用InvokeCount计算 TODO 目前统一一块存储，数据量大了后要分桶保存，用到才加载
@@ -320,7 +347,7 @@ type InvokerStatusBase struct {
 
 func NewInvokerStatusBase(address string, divisibility int) *InvokerStatusBase {
 	return &InvokerStatusBase{
-		Address: 	 address,
+		Address:     address,
 		RefundAmt:   indexer.NewDecimal(0, divisibility),
 		DepositAmt:  indexer.NewDecimal(0, divisibility),
 		WithdrawAmt: indexer.NewDecimal(0, divisibility),
@@ -329,7 +356,7 @@ func NewInvokerStatusBase(address string, divisibility int) *InvokerStatusBase {
 		DepositUtxoMap:  make(map[string]bool),
 		WithdrawUtxoMap: make(map[string]bool),
 		History:         make(map[int][]int64),
-		UpdateTime:  	 time.Now().Unix(),
+		UpdateTime:      time.Now().Unix(),
 	}
 }
 
@@ -341,7 +368,6 @@ func (p *InvokerStatusBase) GetKey() string {
 	return p.Address
 }
 
-
 func NewInvokerStatus(cn string) InvokerStatus {
 	switch cn {
 	case TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_AMM:
@@ -351,7 +377,7 @@ func NewInvokerStatus(cn string) InvokerStatus {
 	case TEMPLATE_CONTRACT_VAULT:
 		return &VaultInvokerStatus{}
 	}
-	return nil
+	return &TraderStatus{}
 }
 
 // 合约内容基础结构
@@ -410,7 +436,7 @@ func (p *ContractBase) Content() string {
 }
 
 func (p *ContractBase) Encode() ([]byte, error) {
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddData([]byte(p.TemplateName)).
 		AddData([]byte(p.AssetName.String())).
 		AddInt64(int64(p.StartBlock)).
@@ -418,7 +444,7 @@ func (p *ContractBase) Encode() ([]byte, error) {
 }
 
 func (p *ContractBase) Decode(data []byte) error {
-	tokenizer := txscript.MakeScriptTokenizer(0, data)
+	tokenizer := stxscript.MakeScriptTokenizer(0, data)
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing template name")
@@ -472,21 +498,26 @@ type ContractRuntimeBase struct {
 	DeployTime    int64  `json:"deployTime"` // s
 	Status        int    `json:"status"`
 	EnableBlock   int    `json:"enableBlock"`    // 合约在哪个区块进入ready状态
-	CurrBlock     int    `json:"currentBlock"`   // 合约区块不能跳，必须从EnableBlock开始，一块一块执行
+	CurrBlock     int    `json:"currentBlock"`   // 合约区块不能跳，必须一块一块执行，即使EnableBlock还没到，也要同步
 	EnableBlockL1 int    `json:"enableBlockL1"`  // 合约在哪个区块进入ready状态
 	CurrBlockL1   int    `json:"currentBlockL1"` // 合约区块不能跳，必须从EnableBlock开始，一块一块执行
 	EnableTxId    string `json:"enableTxId"`     // 只设置，暂时没有用起来
 	Deployer      string `json:"deployer"`
 	ResvId        int64  `json:"resvId"`
-	ChannelId     string `json:"channelId"`
+	ChannelAddr   string `json:"channelAddr"`
 	InvokeCount   int64  `json:"invokeCount"`
 	Divisibility  int    `json:"divisibility"`
 	N             int    `json:"n"`
-	
-	CheckPoint          int64    // 上个与peer端校验过merkleRoot的invokeCount
+
+	CheckPoint          int64  // 上个与peer端校验过merkleRoot的invokeCount
 	StaticMerkleRoot    []byte // 合约静态数据
-	AssetMerkleRoot     []byte // 上个检查的资产状态数据
-	CurrAssetMerkleRoot []byte // 当前高度下的资产状态数据
+	AssetMerkleRoot     []byte //
+	CurrAssetMerkleRoot []byte // 上个检查的资产状态数据。每个InvokeCount会有两次计算的机会 invokeCompleted 计算时，合约发起的交易还没被确认，在下一个invokeCompleted时才真正是当前调用次数的结果
+
+	CheckPointBlock   int
+	CheckPointBlockL1 int
+	LocalPubKey       []byte
+	RemotePubKey      []byte
 
 	stp      *Manager
 	contract Contract
@@ -505,7 +536,6 @@ func (p *ContractRuntimeBase) GetAssetNameV2() *AssetName {
 
 func (p *ContractRuntimeBase) InitFromContent(content []byte, stp *Manager) error {
 
-	
 	// p.ChannelId = resv.ChannelId
 	// p.Deployer = resv.Deployer
 	p.stp = stp
@@ -524,8 +554,14 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp *Manager) erro
 		p.Divisibility = tickInfo.Divisibility
 		p.N = tickInfo.N
 	} else {
-		if p.contract.GetTemplateName() != TEMPLATE_CONTRACT_LAUNCHPOOL {
-			return fmt.Errorf("%s can't find ticker %s", p.URL(), p.contract.GetAssetName())
+		tc := p.contract.GetTemplateName()
+		switch tc {
+		case TEMPLATE_CONTRACT_TRANSCEND:
+			p.Divisibility = MAX_ASSET_DIVISIBILITY
+			p.N = 0
+		case TEMPLATE_CONTRACT_LAUNCHPOOL:
+		default:
+			return fmt.Errorf("%s can't find ticker %s", p.URL(), tc)
 		}
 		// 发射池合约肯定找不到，但本身就有足够的数据
 		// 由合约自己设置
@@ -533,7 +569,6 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp *Manager) erro
 
 	return nil
 }
-
 
 func (p *ContractRuntimeBase) GetRuntimeBase() *ContractRuntimeBase {
 	return p
@@ -543,17 +578,16 @@ func (p *ContractRuntimeBase) GetDeployTime() int64 {
 	return p.DeployTime
 }
 
-
 func (p *ContractRuntimeBase) DeploySelf() bool {
 	return false
 }
 
 func (p *ContractRuntimeBase) Address() string {
-	return p.ChannelId
+	return p.ChannelAddr
 }
 
 func (p *ContractRuntimeBase) URL() string {
-	return p.ChannelId + URL_SEPARATOR + p.contract.GetContractName()
+	return p.ChannelAddr + URL_SEPARATOR + p.contract.GetContractName()
 }
 
 func (p *ContractRuntimeBase) RelativePath() string {
@@ -564,7 +598,6 @@ func (p *ContractRuntimeBase) GetStatus() int {
 	return p.Status
 }
 
-
 func (p *ContractRuntimeBase) GetEnableBlock() int {
 	return p.EnableBlock
 }
@@ -573,14 +606,12 @@ func (p *ContractRuntimeBase) GetEnableBlockL1() int {
 	return p.EnableBlockL1
 }
 
-
 func (p *ContractRuntimeBase) IsExpired() bool {
 	if p.contract.GetEndBlock() <= 0 {
 		return false
 	}
 	return p.CurrBlock > p.contract.GetEndBlock()
 }
-
 
 func (p *ContractRuntimeBase) GetDeployer() string {
 	return p.Deployer
@@ -594,11 +625,9 @@ func (p *ContractRuntimeBase) UnconfirmedTxId_SatsNet() string {
 	return ""
 }
 
-
 func (p *ContractRuntimeBase) IsActive() bool {
 	return p.Status == CONTRACT_STATUS_READY && p.EnableBlock <= p.CurrBlock
 }
-
 
 func (p *ContractRuntimeBase) CheckInvokeParam(string) (int64, error) {
 	return 0, nil
@@ -807,14 +836,14 @@ func ParseContractURL(url string) (string, string, string, error) {
 
 // 合约部署
 func UnsignedDeployContractInvoiceV2(data *sindexer.ContractDeployData) ([]byte, error) {
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddData([]byte(data.ContractPath)).
 		AddData([]byte(data.ContractContent)).
 		AddInt64(int64(data.DeployTime)).Script()
 }
 
 func SignedDeployContractInvoiceV2(data *sindexer.ContractDeployData) ([]byte, error) {
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddData([]byte(data.ContractPath)).
 		AddData([]byte(data.ContractContent)).
 		AddInt64(int64(data.DeployTime)).
@@ -822,9 +851,8 @@ func SignedDeployContractInvoiceV2(data *sindexer.ContractDeployData) ([]byte, e
 		AddData(data.RemoteSign).Script()
 }
 
-
 func UnsignedContractEnabledInvoice(url string, heightL1, heightL2 int, pubKey []byte) ([]byte, error) {
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddData([]byte(url)).
 		AddInt64(int64(heightL1)).
 		AddInt64(int64(heightL2)).
@@ -833,7 +861,7 @@ func UnsignedContractEnabledInvoice(url string, heightL1, heightL2 int, pubKey [
 
 // 用在有特别需求的合约
 func SignedContractEnabledInvoice(url string, heightL1, heightL2 int, pubKey []byte, sig []byte) ([]byte, error) {
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddData([]byte(url)).
 		AddInt64(int64(heightL1)).
 		AddInt64(int64(heightL2)).
@@ -843,13 +871,13 @@ func SignedContractEnabledInvoice(url string, heightL1, heightL2 int, pubKey []b
 
 // 合约调用：大多数都只需要这个简化的调用参数
 func AbbrInvokeContractInvoice(data *sindexer.ContractInvokeData) ([]byte, error) {
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddData([]byte(data.ContractPath)).
 		AddData([]byte(data.InvokeParam)).Script()
 }
 
 func UnsignedInvokeContractInvoice(data *sindexer.ContractInvokeData) ([]byte, error) {
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddData([]byte(data.ContractPath)).
 		AddData([]byte(data.InvokeParam)).
 		AddData(data.PubKey).Script()
@@ -857,7 +885,7 @@ func UnsignedInvokeContractInvoice(data *sindexer.ContractInvokeData) ([]byte, e
 
 // 用在有特别需求的合约
 func SignedInvokeContractInvoice(data *sindexer.ContractInvokeData, sig []byte) ([]byte, error) {
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddData([]byte(data.ContractPath)).
 		AddData([]byte(data.InvokeParam)).
 		AddData(data.PubKey).
@@ -872,7 +900,7 @@ func UnsignedAbbrInvokeContractInvoice(contractUrl string, param *InvokeParam) (
 		return nil, err
 	}
 
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddData([]byte(templateName)).
 		AddData([]byte(asetName)).
 		AddData([]byte(param.Action)).Script()
@@ -887,7 +915,7 @@ func SignedAbbrInvokeContractInvoice(contractUrl string, param *InvokeParam, sig
 
 	hashCode := sig[:8]
 
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddData([]byte(templateName)).
 		AddData([]byte(asetName)).
 		AddData([]byte(param.Action)).
@@ -896,7 +924,7 @@ func SignedAbbrInvokeContractInvoice(contractUrl string, param *InvokeParam, sig
 
 // 合约调用结果
 func UnsignedContractResultInvoice(contractPath string, result string, more string) ([]byte, error) {
-	return txscript.NewScriptBuilder().
+	return stxscript.NewScriptBuilder().
 		AddData([]byte(contractPath)).
 		AddData([]byte(result)).
 		AddData([]byte(more)).Script()
@@ -904,7 +932,7 @@ func UnsignedContractResultInvoice(contractPath string, result string, more stri
 
 func ParseContractResultInvoice(script []byte) (string, string, string, error) {
 
-	tokenizer := txscript.MakeScriptTokenizer(0, script)
+	tokenizer := stxscript.MakeScriptTokenizer(0, script)
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return "", "", "", fmt.Errorf("missing contract path")

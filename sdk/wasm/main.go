@@ -1417,14 +1417,14 @@ func sendAssets(this js.Value, p []js.Value) any {
 	}
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		txid, err := _mgr.SendAssets(destAddress, assetName, amt, feeRate64, nil)
+		tx, err := _mgr.SendAssets(destAddress, assetName, amt, feeRate64, nil)
 		if err != nil {
 			wallet.Log.Errorf("SendAssets error: %v", err)
 			return nil, -1, err.Error()
 		}
 
 		return map[string]interface{}{
-			"txId": txid,
+			"txId": tx.TxID(),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
@@ -1457,14 +1457,14 @@ func sendAssets_SatsNet(this js.Value, p []js.Value) any {
 	amt := p2.String()
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		txid, err := _mgr.SendAssets_SatsNet(destAddress, assetName, amt, nil)
+		tx, err := _mgr.SendAssets_SatsNet(destAddress, assetName, amt, nil)
 		if err != nil {
 			wallet.Log.Errorf("SendUtxos_SatsNet error: %v", err)
 			return nil, -1, err.Error()
 		}
 
 		return map[string]interface{}{
-			"txId": txid,
+			"txId": tx.TxID(),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
@@ -1565,14 +1565,14 @@ func batchSendAssets(this js.Value, p []js.Value) any {
 	}
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		txid, fee, err := _mgr.BatchSendAssets(destAddress, assetName, amt, n, feeRate64, nil)
+		tx, fee, err := _mgr.BatchSendAssets(destAddress, assetName, amt, n, feeRate64, nil)
 		if err != nil {
 			wallet.Log.Errorf("BatchSendAssets error: %v", err)
 			return nil, -1, err.Error()
 		}
 
 		return map[string]interface{}{
-			"txId": txid,
+			"txId": tx.TxID(),
 			"fee": fee,
 		}, 0, "ok"
 	})

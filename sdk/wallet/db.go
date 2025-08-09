@@ -21,6 +21,7 @@ const (
 	DB_KEY_INSC        = "insc-"
 	DB_KEY_TICKER_INFO = "t-"
 
+	DB_KEY_UTXO          = "u-"  // u-network-address-utxo
 	DB_KEY_LOCKEDUTXO    = "l-"  // l-network-address-utxo
 	DB_KEY_LOCK_LASTTIME = "lt-" // lt-network-address
 )
@@ -664,4 +665,81 @@ func LoadInscribeResv(db common.KVDB, id int64) (*InscribeResv, error) {
 func DeleteInscribeResv(db common.KVDB, id int64) error {
 	key := GetInscribeResvKey(id)
 	return db.Delete([]byte(key))
+}
+
+
+func GetUtxoKey(network, addr, utxo string) string {
+	return GetDBKeyPrefix() + DB_KEY_UTXO + network + "-" + addr + "-" + utxo
+}
+
+func ParseUtxoKey(key string) (string, string, string, error) {
+	prefix := GetDBKeyPrefix() + DB_KEY_UTXO
+	if !strings.HasPrefix(key, prefix) {
+		return "", "", "", fmt.Errorf("not a utxo key: %s", key)
+	}
+	key = strings.TrimPrefix(key, prefix)
+	parts := strings.Split(key, "-")
+	if len(parts) != 3 {
+		return "", "", "", fmt.Errorf("invalid format: %s", key)
+	}
+	return parts[0], parts[1], parts[2], nil
+}
+
+func saveUtxo(db common.KVDB, network, addr, utxo string, value *TxOutput_SatsNet) error {
+	buf, err := EncodeToBytes(value)
+	if err != nil {
+		Log.Errorf("saveLockedUtxo EncodeToBytes failed. %v", err)
+		return err
+	}
+
+	err = db.Write([]byte(GetUtxoKey(network, addr, utxo)), buf)
+	if err != nil {
+		Log.Errorf("saveLockedUtxo failed. %v", err)
+		return err
+	}
+	Log.Infof("saveLockedUtxo succ. %s", utxo)
+	return nil
+}
+
+func DeleteUtxo(db common.KVDB, network, addr, utxo string) error {
+	return db.Delete([]byte(GetUtxoKey(network, addr, utxo)))
+}
+
+func DeleteAllUtxoInAddress(db common.KVDB, network, addr string) error {
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_UTXO + network + "-" + addr)
+	_, err := DeleteAllKeysWithPrefix(db, prefix)
+	if err != nil {
+		return err
+	}
+	return deleteAllLastLockTime(db, network)
+}
+
+func loadAllUtxoFromDB(db common.KVDB, network string) map[string]map[string]*TxOutput_SatsNet {
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_UTXO + network)
+
+	result := make(map[string]map[string]*TxOutput_SatsNet)
+	db.BatchRead(prefix, false, func(k, v []byte) error {
+		_, addr, utxo, err := ParseUtxoKey(string(k))
+		if err != nil {
+			Log.Errorf("ParseLockedUtxoKey failed. %v", err)
+			return err
+		}
+
+		var value TxOutput_SatsNet
+		err = DecodeFromBytes(v, &value)
+		if err != nil {
+			Log.Errorf("DecodeFromBytes %s failed. %v", string(k), err)
+			return err
+		}
+
+		utxos, ok := result[addr]
+		if !ok {
+			utxos = make(map[string]*TxOutput_SatsNet)
+			result[addr] = utxos
+		}
+		utxos[utxo] = &value
+		return nil
+	})
+
+	return result
 }

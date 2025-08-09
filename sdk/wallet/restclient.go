@@ -706,6 +706,13 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
 		return err
 	}
+	/*
+	                                           要广播的txId																												  ascend 目标utxo的txId         										目标utxo
+	-26: TX rejected: The anchor tx is invalid 41d0c16816756bc32a7b839b7bd3845b0f94c0990da036f486c6fbc4210c4552:the locked tx is anchored already in sats net, anchorTx cbaf995a3b0457f3f821068692b9e4664a8a215b4695caac7c73c279453f503a, utxo c08e081650f45b1f2709962285cc618ee2beeee620a9b6e3b850e571739a15b5:0
+	
+											要广播的txId																											 该tx包含一个输入utxo
+	-25: TX rejected: orphan transaction 7b23cb6e5531bc8a19665576ebb2e6d96a0e703224f8079ae6947dfa93e0f8ba references outputs of unknown or fully-spent transaction adbd1d2d33b9f8b1fdc328941a192ef66403923961f677301647e3f5dd05bced:0
+	*/
 
 	if result.Code != 0 {
 		if strings.Contains(result.Msg, "transaction already exists in blockchain") ||
@@ -717,9 +724,14 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 		} else if strings.Contains(result.Msg, "the locked tx is anchored already in sats net") {
 			// 聪网的特殊处理，只检查包含该utxo的anchorTx是否已经被广播，
 			// 这里检查该anchorTx是否就是我们要广播的TxId，如果是，说明anchorTx已经被广播
+			parts := strings.Split(result.Msg, "the locked tx is anchored already in sats net")
+			if len(parts) != 2 {
+				Log.Errorf("BroadCastTxHex failed, %v", result.Msg)
+				return fmt.Errorf("%s", result.Msg)
+			}
 			tx, _ := DecodeMsgTx_SatsNet(hexTx)
-			if strings.Contains(result.Msg, tx.TxID()) {
-				// 聪网的特殊处理，只检查包含该utxo的anchorTx是否已经被广播
+			if strings.Contains(parts[1], tx.TxID()) {
+				// 聪网的特殊处理，检查包含该utxo的anchorTx是否已经被广播，并且anchorTx相同
 				Log.Infof("BroadCastTxHex TX has broadcasted. %s", tx.TxID())
 				return nil
 			} else {
@@ -727,7 +739,8 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 				return fmt.Errorf("%s", result.Msg)
 			}
 		} else if strings.Contains(result.Msg, "-25: TX rejected: orphan transaction") {
-			// 聪网的特殊处理: 看看是否该deanchorTx已经存在聪网上
+			// TODO 聪网需要处理这种情况
+			// 特殊情况下，一个聪网的deanchorTx广播会触发这种问题: 看看是否该Tx已经存在聪网上
 			tx, _ := DecodeMsgTx_SatsNet(hexTx)
 			_, err := p.GetRawTx(tx.TxID())
 			if err == nil {

@@ -427,11 +427,7 @@ func (p *Manager) GetUtxosForFee(address string, value int64) ([]string, error) 
 		address = p.wallet.GetAddress()
 	}
 
-	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
-	if err != nil {
-		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
-		return nil, err
-	}
+	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	p.utxoLockerL1.Reload(address)
 	if value == 0 {
 		value = MAX_FEE
@@ -440,7 +436,7 @@ func (p *Manager) GetUtxosForFee(address string, value int64) ([]string, error) 
 	result := make([]string, 0)
 	total := int64(0)
 	for _, u := range utxos {
-		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
+		utxo := u.OutPoint
 		if p.utxoLockerL1.IsLocked(utxo) {
 			continue
 		}
@@ -463,11 +459,7 @@ func (p *Manager) GetUtxosForFeeV2(address string, value int64, needStub bool) (
 		address = p.wallet.GetAddress()
 	}
 
-	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
-	if err != nil {
-		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
-		return nil, err
-	}
+	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	p.utxoLockerL1.Reload(address)
 	if value == 0 {
 		value = MAX_FEE
@@ -480,7 +472,7 @@ func (p *Manager) GetUtxosForFeeV2(address string, value int64, needStub bool) (
 		for i >= 0 {
 			u := utxos[i]
 			i--
-			utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
+			utxo := u.OutPoint
 			if p.utxoLockerL1.IsLocked(utxo) {
 				continue
 			}
@@ -492,7 +484,7 @@ func (p *Manager) GetUtxosForFeeV2(address string, value int64, needStub bool) (
 	total := int64(0)
 	for j := 0; j < i; j++ {
 		u := utxos[j]
-		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
+		utxo := u.OutPoint
 		if p.utxoLockerL1.IsLocked(utxo) {
 			continue
 		}
@@ -519,11 +511,7 @@ func (p *Manager) GetUtxosForStubs(address string, n int) ([]string, error) {
 		address = p.wallet.GetAddress()
 	}
 
-	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
-	if err != nil {
-		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
-		return nil, err
-	}
+	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	p.utxoLockerL1.Reload(address)
 
 	// 有序的utxo列表，直接放最后一个
@@ -533,7 +521,7 @@ func (p *Manager) GetUtxosForStubs(address string, n int) ([]string, error) {
 	for i >= 0 {
 		u := utxos[i]
 		i--
-		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
+		utxo := u.OutPoint
 		if p.utxoLockerL1.IsLocked(utxo) {
 			continue
 		}
@@ -558,11 +546,7 @@ func (p *Manager) GetUtxosForFee_SatsNet(address string, value int64) ([]string,
 		address = p.wallet.GetAddress()
 	}
 
-	utxos, _, err := p.l2IndexerClient.GetAllUtxosWithAddress(address)
-	if err != nil {
-		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
-		return nil, err
-	}
+	utxos := p.l2IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	p.utxoLockerL2.Reload(address)
 	if value == 0 {
 		value = DEFAULT_FEE_SATSNET
@@ -571,7 +555,7 @@ func (p *Manager) GetUtxosForFee_SatsNet(address string, value int64) ([]string,
 	result := make([]string, 0)
 	total := int64(0)
 	for _, u := range utxos {
-		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
+		utxo := u.OutPoint
 		if p.utxoLockerL2.IsLocked(utxo) {
 			continue
 		}
