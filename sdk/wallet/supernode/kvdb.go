@@ -3,11 +3,14 @@
 package supernode
 
 import (
+	"bytes"
 	"encoding/gob"
+	"fmt"
 	"io"
 	"os"
 
 	"github.com/dgraph-io/badger/v4"
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
@@ -15,6 +18,8 @@ type kvDB struct {
 	path string
 	db   *badger.DB
 }
+
+var Log = indexer.Log
 
 func runBadgerGC(db *badger.DB) {
 	if db.IsClosed() {
@@ -52,6 +57,7 @@ func NewKVDB(path string) common.KVDB {
 
 	kvdb := kvDB{path:path, db:db}
 	kvdb.BackupToFile("./db_open.bk")
+	kvdb.CompareWithBackupFile("./db_close.bk")
 	return &kvdb
 }
 
@@ -120,6 +126,44 @@ func (p *kvDB) Delete(key []byte) error {
 	}
 	return p.commit()
 }
+
+
+func (p *kvDB) DropPrefix(prefix []byte) error {
+	deletingKeyMap := make(map[string]bool)
+	err := p.BatchRead(prefix, false, func(k, v []byte) error {
+		deletingKeyMap[string(k)] = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	wb := p.NewWriteBatch()
+	defer wb.Close()
+
+	for k := range deletingKeyMap {
+		wb.Delete([]byte(k))
+	}
+	return wb.Flush()
+}
+
+func (p *kvDB) DropAll() error {
+	deletingKeyMap := make(map[string]bool)
+	err := p.BatchRead(nil, false, func(k, v []byte) error {
+		deletingKeyMap[string(k)] = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	wb := p.NewWriteBatch()
+	defer wb.Close()
+
+	for k := range deletingKeyMap {
+		wb.Delete([]byte(k))
+	}
+	return wb.Flush()
+}
+
 
 func (p *kvDB) Close() error {
 	p.BackupToFile("./db_close.bk")
@@ -223,7 +267,7 @@ func (p *kvWriteBatch)Put(key, value []byte) error {
 	return p.wb.Set(key, value)
 }
 
-func (p *kvWriteBatch) Remove(key []byte) error {
+func (p *kvWriteBatch) Delete(key []byte) error {
 	return p.wb.Delete(key)
 }
 
@@ -235,7 +279,7 @@ func (p *kvWriteBatch) Close() {
 	p.wb.Cancel()
 }
 
-func (p *kvDB) NewBatchWrite() common.WriteBatch {
+func (p *kvDB) NewWriteBatch() common.WriteBatch {
 	wb := p.db.NewWriteBatch()
 	return &kvWriteBatch{wb:wb}
 }
@@ -248,9 +292,20 @@ func (p *kvDB) BackupToFile(fname string) error {
 	}
 	defer f.Close()
 	enc := gob.NewEncoder(f)
-	return p.BatchRead(nil, false, func(k, v []byte) error {
+	total := 0
+	err = p.BatchRead(nil, false, func(k, v []byte) error {
+		total++
 		return enc.Encode([2][]byte{k, v})
 	})
+
+	if err != nil {
+		Log.Errorf("BackupToFile %s failed, %v", fname, err)
+		return err
+	}
+
+	Log.Infof("BackupToFile %s succeed, total %d", fname, total)
+
+	return err
 }
 
 func (p *kvDB) RestoreFromFile(backupFile string) error {
@@ -272,5 +327,68 @@ func (p *kvDB) RestoreFromFile(backupFile string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+
+func (p *kvDB) CompareWithBackupFile(backupFile string) error {
+	f, err := os.Open(backupFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	itemsInFile := make(map[string][]byte)
+	dec := gob.NewDecoder(f)
+	for {
+		var kv [2][]byte
+		if err := dec.Decode(&kv); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+		itemsInFile[string(kv[0])] = append([]byte{}, kv[1]...)
+	}
+
+	itemsInDB := make(map[string][]byte)
+	p.BatchRead(nil, false, func(k, v []byte) error {
+		itemsInDB[string(k)] = append([]byte{}, v...)
+		return nil
+	})
+
+	if len(itemsInFile) != len(itemsInDB) {
+		Log.Errorf("count different %d %d", len(itemsInFile), len(itemsInDB))
+		return fmt.Errorf("count different %d %d", len(itemsInFile), len(itemsInDB))
+	}
+
+	succ := true
+	for k, v := range itemsInFile {
+		v2, ok := itemsInDB[k]
+		if !ok {
+			Log.Errorf("can't find key %s in db", k)
+		} else if !bytes.Equal(v, v2) {
+			Log.Errorf("key %s value different", k)
+			succ = false
+		}
+	}
+
+	for k, v := range itemsInDB {
+		v2, ok := itemsInFile[k]
+		if !ok {
+			Log.Errorf("can't find key %s in file", k)
+		} else if !bytes.Equal(v, v2) {
+			Log.Errorf("key %s value different", k)
+			succ = false
+		}
+	}
+
+	if succ {
+		Log.Infof("db file check succeed")
+	} else {
+		Log.Infof("db file check failed")
+	}
+	
+
 	return nil
 }

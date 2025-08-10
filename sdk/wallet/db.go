@@ -474,7 +474,7 @@ func DeleteAllKeysWithPrefix(db common.KVDB, prefix []byte) ([]string, error) {
 		return nil, nil
 	}
 
-	batch := db.NewBatchWrite()
+	batch := db.NewWriteBatch()
 	if batch == nil {
 		Log.Errorf("NewBatchWrite failed")
 		return nil, fmt.Errorf("NewBatchWrite failed")
@@ -482,7 +482,7 @@ func DeleteAllKeysWithPrefix(db common.KVDB, prefix []byte) ([]string, error) {
 	defer batch.Close()
 
 	for _, key := range keys {
-		err := batch.Remove([]byte(key))
+		err := batch.Delete([]byte(key))
 		if err != nil {
 			Log.Errorf("db.Remove %s failed. %v", key, err)
 		}
@@ -598,9 +598,9 @@ func LoadAllInscribeResvFromDB(db common.KVDB) map[int64]*InscribeResv {
 
 	deleteInvalidKey := false
 	if deleteInvalidKey && len(invalidKeys) > 0 {
-		wb := db.NewBatchWrite()
+		wb := db.NewWriteBatch()
 		for _, k := range invalidKeys {
-			wb.Remove([]byte(k))
+			wb.Delete([]byte(k))
 		}
 		wb.Flush()
 	}
