@@ -3,6 +3,10 @@
 package supernode
 
 import (
+	"encoding/gob"
+	"io"
+	"os"
+
 	"github.com/dgraph-io/badger/v4"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
@@ -44,8 +48,10 @@ func NewKVDB(path string) common.KVDB {
 	if err != nil {
 		return nil
 	}
+	
 
 	kvdb := kvDB{path:path, db:db}
+	kvdb.BackupToFile("./db_open.bk")
 	return &kvdb
 }
 
@@ -116,6 +122,7 @@ func (p *kvDB) Delete(key []byte) error {
 }
 
 func (p *kvDB) Close() error {
+	p.BackupToFile("./db_close.bk")
 	return p.close()
 }
 
@@ -233,3 +240,37 @@ func (p *kvDB) NewBatchWrite() common.WriteBatch {
 	return &kvWriteBatch{wb:wb}
 }
 
+
+func (p *kvDB) BackupToFile(fname string) error {
+	f, err := os.Create(fname)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := gob.NewEncoder(f)
+	return p.BatchRead(nil, false, func(k, v []byte) error {
+		return enc.Encode([2][]byte{k, v})
+	})
+}
+
+func (p *kvDB) RestoreFromFile(backupFile string) error {
+	f, err := os.Open(backupFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	dec := gob.NewDecoder(f)
+	for {
+		var kv [2][]byte
+		if err := dec.Decode(&kv); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+		if err := p.put(kv[0], kv[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
