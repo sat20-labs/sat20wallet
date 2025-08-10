@@ -1,5 +1,11 @@
 package common
 
+import "errors"
+
+var (
+	ErrKeyNotFound = errors.New("Key not found")
+)
+
 type WriteBatch interface {
 	Put(key, value []byte) error
 	Delete(key []byte) error
