@@ -77,7 +77,6 @@ export const useL2Assets = () => {
 
   const parseAssetSummary = async () => {
     console.log('summaryQuery.data.value', summaryQuery.data.value)
-
     const assets = summaryQuery.data.value?.data || []
     for await (const item of assets) {
       const key = item.Name.Protocol
@@ -149,8 +148,9 @@ export const useL2Assets = () => {
       console.log('newData network', network.value)
       console.log('newData chain', chain.value)
       console.log('newData', newData)
+      allAssetList.value = []
+      assetsStore.setTotalSats(0)
       if (newData) {
-        allAssetList.value = []
         console.log('newData', newData.data)
         console.log('allAssetList.value', allAssetList.value)
         await parseAssetSummary()

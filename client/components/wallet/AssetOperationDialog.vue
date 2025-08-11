@@ -218,7 +218,7 @@ const needsAddress = computed(() => {
 // 判断哪些操作需要显示 btcFeeRate
 const needsBtcFeeRate = computed(() => {
   const operationsNeedingBtcFeeRate = ['send', 'deposit', 'withdraw', 'splicing_in', 'splicing_out']
-  return operationsNeedingBtcFeeRate.includes(props.operationType || '')
+  return props.chain === 'bitcoin' && operationsNeedingBtcFeeRate.includes(props.operationType || '')
 })
 
 const emit = defineEmits<{

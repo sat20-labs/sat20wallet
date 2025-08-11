@@ -55,32 +55,6 @@
 
     <!-- 资产列表 -->
     <AssetList class="mt-4" v-model:model-value="selectTab" @update:model-value="tabChange">
-      <template #poolswap-content>
-        <Tabs defaultValue="l1" class="w-full">
-          <TabsList class="grid w-full grid-cols-3">
-            <TabsTrigger v-for="item in items" :key="item.value" :value="item.value">
-              {{ $t(`wallet.${item.value}`) }}
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent v-for="item in items" :key="item.value" :value="item.value">
-            <div v-if="item.value === 'l1'">
-              <L1Card v-model:selectedType="selectedType" :assets="l1Assets" mode="poolswap"
-                @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
-            </div>
-
-            <div v-else-if="item.value === 'channel'">
-              <ChannelCard v-model:selectedType="selectedType" @splicing_out="handleSplicingOut"
-                @unlock="handleUnlock" />
-            </div>
-
-            <div v-else-if="item.value === 'l2'">
-              <L2Card v-model:selectedType="selectedType" :mode="'poolswap'" @lock="handleLock" @send="handleSend"
-                @withdraw="handleWithdraw" />
-            </div>
-          </TabsContent>
-        </Tabs>
-      </template>
     </AssetList>
 
   </LayoutHome>
@@ -156,12 +130,10 @@ const editUserName = () => {
   router.push('/wallet/name-select')
 }
 const selectedChainLabel = computed(() => {
-  //console.log('父组件 selectTab:', selectTab.value)
   const selectedItem = items.find(item => item.value === selectTab.value)
-  //console.log('父组件 selectedItem:', selectedItem)
-  return selectedItem ? selectedItem.label.toLowerCase() : 'unknown' // 默认值为 'unknown'
+  return selectedItem ? selectedItem.label.toLowerCase() : 'unknown'
 })
-console.log('channel', channel)
+console.log('selectTab', selectTab)
 console.log('selectedChainLabel', selectedChainLabel)
 console.log('address', address)
 const showAddress = computed(() => {
@@ -328,35 +300,22 @@ const channelCallback = async (e: any) => {
 
 // 监听路由变化
 const handleRouteChange = () => {
+  console.log('route.query', route.query)
   if (route.query?.tab) {
-    selectTab.value = route.query.tab as string
+    const tabQuery = String(route.query.tab)
+    const selectedItem = items.find(item => item.value === tabQuery)
+    selectTab.value = selectedItem?.value || 'l1'
   }
 }
 
 console.log('Debug2: This is index.vue')
 
-const tabMapping = {
-  bitcoin: 'l1',
-  channel: 'channel',
-  satoshinet: 'l2',
-}
-
-const tabChange = (i: string) => {
-  const tabValue = tabMapping[i.toLowerCase() as keyof typeof tabMapping] || i
-  const isValidTab = items.some(item => item.value === tabValue)
-  if (!isValidTab) {
-    console.error('Invalid tab value:', tabValue)
-    return
-  }
-
-  selectTab.value = tabValue
-  console.log('父组件 tabChange:', tabValue)
-  router.replace({
-    path: '/wallet',
-    query: {
-      tab: i,
-    },
-  })
+const tabChange = (value: string) => {
+  console.log('tabChange', value)
+  const isValidTab = items.some(item => item.value === value)
+  if (!isValidTab) return
+  selectTab.value = value
+  router.replace({ path: '/wallet', query: { tab: value } })
 }
 
 

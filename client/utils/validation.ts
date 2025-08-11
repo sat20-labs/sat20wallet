@@ -6,7 +6,7 @@ import * as z from 'zod'
  * 不强制要求特定长度，但提供合理的安全建议
  */
 export const passwordSchema = z.string()
-  .min(6, 'Password must be at least 8 characters')
+.min(6, 'Password must be at least 6 characters')
   .refine(
     (password) => {
       // 提供密码强度建议，但不强制要求

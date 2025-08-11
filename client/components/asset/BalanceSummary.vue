@@ -342,6 +342,8 @@ const handleOperationConfirm = async () => {
 }
 
 // BTC Balance
+console.log('btcBalance', props.selectedChain);
+
 const btcBalance = computed(() => {
   const store = props.selectedChain.toLowerCase() === 'bitcoin' ? l1Store : props.selectedChain.toLowerCase() === 'channel' ? channelStore : l2Store
   const btcAssets = store.plainList || []

@@ -35,12 +35,16 @@
           <div class="flex items-center gap-2">
             <Input
               id="customRate"
-              v-model="customRate"
+              v-model.lazy.number="customRate"
               type="number"
               class="w-24"
               :min="1"
               :max="1000"
+              step="1"
+              inputmode="numeric"
               :placeholder="$t('btcFeeSelect.enterRate')"
+              @keydown="onKeydownInteger"
+              @change="onChangeClampInteger"
             />
             <!-- <Slider v-model="customRate" :min="1" :max="1000" class="flex-1" /> -->
           </div>
@@ -132,6 +136,28 @@ const displayedRate = computed(() =>
     ? customRate.value
     : options.value.find((option) => option.key === selectedRate.value)!.value
 )
+
+const onKeydownInteger = (e: KeyboardEvent) => {
+  const blockedKeys = ['.', 'e', 'E', '+', '-']
+  if (blockedKeys.includes(e.key)) {
+    e.preventDefault()
+  }
+}
+
+const onChangeClampInteger = (e: Event) => {
+  const input = e.target as HTMLInputElement
+  if (input.value === '') {
+    customRate.value = 1
+    input.value = '1'
+    return
+  }
+  const parsed = parseInt(input.value, 10)
+  const clamped = Number.isNaN(parsed)
+    ? 1
+    : Math.min(1000, Math.max(1, Math.trunc(parsed)))
+  if (String(clamped) !== input.value) input.value = String(clamped)
+  if (clamped !== customRate.value) customRate.value = clamped
+}
 
 watch(
   displayedRate,

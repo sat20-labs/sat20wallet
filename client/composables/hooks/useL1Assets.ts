@@ -153,6 +153,7 @@ export const useL1Assets = () => {
     () => summaryQuery.data.value,
     async (newData) => {
       allAssetList.value = []
+      assetsStore.setTotalSats(0)
       if (newData) {
         await parseAssetSummary()
         processAllUtxos(allAssetList.value.map((item) => item.key))

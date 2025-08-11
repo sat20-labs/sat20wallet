@@ -38,7 +38,7 @@
     "step2Subtitle": "Save your recovery phrase",
     "passwordLabel": "Password",
     "passwordPlaceholder": "Enter password",
-    "passwordDescription": "Password must be at least 8 characters with uppercase and number",
+    "passwordDescription": "Password must be at least 6 characters with uppercase and number",
     "confirmPasswordLabel": "Confirm Password",
     "confirmPasswordPlaceholder": "Confirm password",
     "recoveryPhraseWarning": "Never share your recovery phrase. Store it securely offline.",

@@ -38,7 +38,7 @@
     "step2Subtitle": "保存您的恢复助记词",
     "passwordLabel": "密码",
     "passwordPlaceholder": "输入密码",
-    "passwordDescription": "密码必须至少包含 8 个字符，包括大写字母和数字",
+    "passwordDescription": "密码必须至少包含 6 个字符，包括大写字母和数字",
     "confirmPasswordLabel": "确认密码",
     "confirmPasswordPlaceholder": "确认密码",
     "recoveryPhraseWarning": "切勿与任何人分享您的恢复助记词。请将其安全地离线存储。",
