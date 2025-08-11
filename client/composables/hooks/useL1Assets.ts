@@ -98,6 +98,9 @@ export const useL1Assets = () => {
         let label = item.Name.Type === 'e'
         ? `${item.Name.Ticker}（raresats）`
         : item.Name.Ticker;
+        if (item.Name.Type === 'n') {
+          continue
+        }
         // if (key !== '::') {
         //   const [err, res] = await satsnetStp.getTickerInfo(key)
         //   // console.log('ticker res', res)

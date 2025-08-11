@@ -142,6 +142,9 @@ export const useChannelStore = defineStore('channel', () => {
         if (item.Name.Type === '') {
           totalSats.value = item.Amount
         }
+        if (item.Name.Type === 'n') {
+          continue
+        }
         const protocol = item.Name.Protocol
         const key = protocol
           ? `${protocol}:${item.Name.Type}:${item.Name.Ticker}`

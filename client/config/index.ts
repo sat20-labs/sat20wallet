@@ -9,8 +9,8 @@ const testConfig = {
 }
 
 const prodConfig = {
-  ordxBaseUrl: 'https://apiprd.sat20.org',
-  satnetBaseUrl: 'https://apiprd.sat20.org',
+  ordxBaseUrl: 'https://apiprd.ordx.market',
+  satnetBaseUrl: 'https://apiprd.ordx.market',
 }
 
 

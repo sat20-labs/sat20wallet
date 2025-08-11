@@ -7,7 +7,7 @@ export default defineConfig({
   extensionApi: 'chrome',
   modules: ['@wxt-dev/module-vue'],
   manifest: {
-    name: 'sat20wallet',
+    name: 'SAT20 Wallet',
     web_accessible_resources: [
       {
         resources: ['injected.js'],

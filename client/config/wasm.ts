@@ -120,19 +120,19 @@ const config: Config = {
       Mode: "client",
       Peers: [
         "b@03ab606f4dffd65965b4a9db957361800f8b03ed16acac11d5a4672801554596d0@https://apiprd.sat20.org/stp/mainnet",
-        "s@022ab2945f61304f117f55d469c341d606ceb729de436c80c0e6ad7819cdd53ce7@39.108.96.46:9529"
+        "s@022ab2945f61304f117f55d469c341d606ceb729de436c80c0e6ad7819cdd53ce7@https://apiprd.ordx.market/stp/mainnet"
       ],
       IndexerL1: {
         Scheme: "https",
-        Host: "apiprd.sat20.org",
+        Host: "apiprd.ordx.market",
         Proxy: "btc/mainnet"
       },
       IndexerL2: {
         Scheme: "https",
-        Host: "apiprd.sat20.org",
+        Host: "apiprd.ordx.market",
         Proxy: "satsnet/mainnet"
-      },
-      Log: "info"
+      },    
+      Log: "error"
     },
     [Network.TESTNET]: {
       Env: "prd",
@@ -140,24 +140,24 @@ const config: Config = {
       Mode: "client",
       Peers: [
         "b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@https://apiprd.sat20.org/stp/testnet",
-        "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@39.108.96.46:19529"
+        "s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@https://apiprd.ordx.market/stp/testnet"
       ],
       IndexerL1: {
         Scheme: "https",
-        Host: "apiprd.sat20.org",
+        Host: "apiprd.ordx.market",
         Proxy: "btc/testnet"
       },
       IndexerL2: {
         Scheme: "https",
-        Host: "apiprd.sat20.org",
+        Host: "apiprd.ordx.market",
         Proxy: "satsnet/testnet"
       },
-      Log: "info"
+      Log: "error"
     }
   }
 }
 
-export const logLevel = 5 //0: Panic, 1: Fatal, 2: Error, 3: 
+export const logLevel = 2 //0: Panic, 1: Fatal, 2: Error, 3: 
 export const getConfig = (env: string, network: Network): NetworkConfig => {
   const envConfig = config[env as keyof Config]
   if (!envConfig) {
