@@ -220,7 +220,7 @@ func batchDbTest(this js.Value, p []js.Value) any {
 	}
 
 	db := wallet.NewKVDB("")
-	batch := db.NewBatchWrite()
+	batch := db.NewWriteBatch()
 	defer batch.Close()
 	batch.Put([]byte("intValue0"), []byte(strconv.Itoa(intValue)))
 	batch.Put([]byte("intValue1"), []byte(stringValue))

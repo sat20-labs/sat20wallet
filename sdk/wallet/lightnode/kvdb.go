@@ -28,7 +28,7 @@ func (b *jsBatchWrite) Put(key, value []byte) error {
 	return nil
 }
 
-func (b *jsBatchWrite) Remove(key []byte) error {
+func (b *jsBatchWrite) Delete(key []byte) error {
 	keyStr := string(key)
 	b.deletions = append(b.deletions, keyStr)
 	return nil
@@ -260,7 +260,44 @@ func (p *jsDB) Close() error {
 	return nil
 }
 
-func (p *jsDB) NewBatchWrite() common.WriteBatch {
+
+func (p *jsDB) DropPrefix(prefix []byte) error {
+	deletingKeyMap := make(map[string]bool)
+	err := p.BatchRead(prefix, false, func(k, v []byte) error {
+		deletingKeyMap[string(k)] = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	wb := p.NewWriteBatch()
+	defer wb.Close()
+
+	for k := range deletingKeyMap {
+		wb.Delete([]byte(k))
+	}
+	return wb.Flush()
+}
+
+func (p *jsDB) DropAll() error {
+	deletingKeyMap := make(map[string]bool)
+	err := p.BatchRead(nil, false, func(k, v []byte) error {
+		deletingKeyMap[string(k)] = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	wb := p.NewWriteBatch()
+	defer wb.Close()
+
+	for k := range deletingKeyMap {
+		wb.Delete([]byte(k))
+	}
+	return wb.Flush()
+}
+
+func (p *jsDB) NewWriteBatch() common.WriteBatch {
 	return &jsBatchWrite{
 		db:        p,
 		batch:     make(map[string]string),
