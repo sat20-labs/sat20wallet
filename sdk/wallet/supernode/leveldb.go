@@ -223,6 +223,53 @@ func (p *kvDB) BatchReadV2(prefix, seekKey []byte, reverse bool, r func(k, v []b
 	return nil
 }
 
+
+type kvReadBatch struct {
+	db     *leveldb.DB
+	snap *leveldb.Snapshot
+}
+
+func (p *kvReadBatch) Get(key []byte) ([]byte, error) {
+	r, err := p.snap.Get(key, nil)
+	if err != nil {
+		if err == leveldb.ErrNotFound {
+			return nil, common.ErrKeyNotFound
+		}
+		return nil, err
+	}
+	return r, nil
+}
+
+// View 在一致性快照中执行只读操作
+func (p *kvDB) View(fn func(txn common.ReadBatch) error) error {
+	snap, err := p.db.GetSnapshot()
+	if err != nil {
+		return err
+	}
+	defer snap.Release()
+
+	rb := kvReadBatch{
+		db: p.db,
+		snap: snap,
+	}
+
+	return fn(&rb)
+}
+
+// Update 批量写操作（原子性提交）
+// 用法类似 badger 的 db.Update
+func (p *kvDB) Update(fn func(any) error) error {
+	batch := new(leveldb.Batch)
+
+	// 让用户在闭包里构造批量写
+	if err := fn(batch); err != nil {
+		return err
+	}
+
+	// 原子性提交 batch
+	return p.db.Write(batch, nil)
+}
+
 func (p *kvDB) BackupToFile(fname string) error {
 	f, err := os.Create(fname)
 	if err != nil {

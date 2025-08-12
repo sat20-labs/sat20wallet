@@ -110,7 +110,7 @@ func (p *jsDB) get(key []byte) ([]byte, error) {
 				
 				result := args[0]
 				if result.IsUndefined() || result.Get(keyStr).IsUndefined() {
-					reject.Invoke("key not found")
+					reject.Invoke(common.ErrKeyNotFound)
 					return nil
 				}
 				
@@ -124,13 +124,13 @@ func (p *jsDB) get(key []byte) ([]byte, error) {
 		// 等待 Promise 完成
 		value = await(getPromise)
 		if value.IsUndefined() {
-			return nil, fmt.Errorf("key not found")
+			return nil, common.ErrKeyNotFound
 		}
 
 	} else {
 		value = p.db.Call("getItem", keyStr)
 		if value.IsNull() {
-			return nil, fmt.Errorf("key not found") // Key not found
+			return nil, common.ErrKeyNotFound // Key not found
 		}
 	}
 	
@@ -419,6 +419,24 @@ func (p *jsDB) putBatch_Chrome(entries map[string]string) error {
     
     await(setPromise)
     return nil
+}
+
+
+type jsReadBatch struct {
+	db   *jsDB
+}
+
+func (p *jsReadBatch) Get(key []byte) ([]byte, error) {
+	return p.db.Read(key)
+}
+
+// View 在一致性快照中执行只读操作
+func (p *jsDB) View(fn func(txn common.ReadBatch) error) error {
+	rb := jsReadBatch{
+		db: p,
+	}
+
+	return fn(&rb)
 }
 
 func (p *jsDB) removeBatch_Chrome(entries []string) error {

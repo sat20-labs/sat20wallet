@@ -2,9 +2,14 @@ package common
 
 import "errors"
 
+
 var (
 	ErrKeyNotFound = errors.New("Key not found")
 )
+
+type ReadBatch interface {
+	Get(key []byte) ([]byte, error) // 与 KVDB.Read 区分
+}
 
 type WriteBatch interface {
 	Put(key, value []byte) error
@@ -24,8 +29,14 @@ type KVDB interface {
 	Delete(key []byte) error
 	Close() error
 
+
 	NewWriteBatch() WriteBatch
+	
+	// 遍历读
 	BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error) error
 	BatchReadV2(prefix, seekKey []byte, reverse bool, r func(k, v []byte) error) error  // 只用于非客户端模式下
+
+	// 随机读
+	View(func(ReadBatch) error) error
 }
 
