@@ -133,6 +133,11 @@
           <span class="text-zinc-300">BTC Fee Rate:</span>
           <span class="text-primary font-semibold">{{ btcFeeRate }} sats/vB</span>
         </div>
+        <!-- 显示固定手续费 -->
+        <div v-if="props.operationType === 'splicing_out'" class="flex items-center justify-between text-sm mt-2">
+          <span class="text-zinc-300">{{ $t('assetOperationDialog.fixedFee') }}:</span>
+          <span class="text-primary font-semibold">2000 sats</span>
+        </div>
       </div>
 
       <AlertDialogFoot class="my-4 gap-2">

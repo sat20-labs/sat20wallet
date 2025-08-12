@@ -137,6 +137,7 @@
     "splicingOut": "通道抽资",
     "unlock": "解锁"
   },
+
   "l1AssetsTabs": {
     "assetType": {
       "ORDX": "ORDX",
@@ -198,7 +199,8 @@
     "outputs": "输出",
     "addressOrPkScript": "地址/公钥脚本",
     "noChannelTitle": "无通道",
-    "noChannelDescription": "您没有通道。请先创建一个通道。"
+    "noChannelDescription": "您没有通道。请先创建一个通道。",
+    "closeChannelNote": "关闭通道：将收取主网 gas 费，重开需再付 3,000 sats"
   },
   "networkSetting": {
     "title": "环境选项",
@@ -324,7 +326,8 @@
     "domainResolved": "名称解析成功: {name} → {address}",
     "domainNotFound": "名称未找到: {name}",
     "domainName": "名称",
-    "resolvedAddress": "解析地址"
+    "resolvedAddress": "解析地址",
+    "fixedFee": "固定手续费"
   },
   "receiveQRcode": {
     "title": "接收地址",

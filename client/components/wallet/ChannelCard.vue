@@ -72,7 +72,7 @@
               <span class="font-medium">{{ confirmAmount }} sats</span>
             </div>
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">Management Fee:</span>
+              <span class="text-muted-foreground">Open Channel Fee:</span>
               <span class="font-medium">3000 sats</span>
             </div>
             <div class="flex justify-between text-sm">
@@ -98,57 +98,6 @@
       </DialogFooter>
     </DialogContent>
   </Dialog>
-
-  <!-- <div v-if="channel && channel.status > 15" class="mt-8">
-    <div class="flex gap-4 w-full">
-      <Popover v-if="channel" class="flex-1">
-        <PopoverTrigger asChild>
-          <Button class="w-full" :disabled="channel.status !== 16">
-            <Icon icon="material-symbols:flash-off" class="mr-2 h-4 w-4" />
-            Close
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent>
-          <div class="p-4 space-y-4">
-            <p>Are you sure you want to close this channel?</p>
-            <div class="flex justify-end gap-2">
-              <Button variant="ghost" @click="() => {}"> Cancel </Button>
-              <Button
-                :class="{ 'opacity-50 pointer-events-none': loading }"
-                variant="destructive"
-                @click="(e) => closeChannel(() => {}, false)"
-              >
-                Confirm
-              </Button>
-            </div>
-          </div>
-        </PopoverContent>
-      </Popover>
-      <Popover class="flex-1">
-        <PopoverTrigger asChild>
-          <Button class="w-full" variant="destructive">
-            <Icon icon="material-symbols:flash-off" class="mr-2 h-4 w-4" />
-            Force Close
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent>
-          <div class="p-4 space-y-4">
-            <p>Are you sure you want to force close this channel?</p>
-            <div class="flex justify-end gap-2">
-              <Button variant="ghost" @click="() => {}"> Cancel </Button>
-              <Button
-                :class="{ 'opacity-50 pointer-events-none': loading }"
-                variant="destructive"
-                @click="(e) => closeChannel(() => {}, true)"
-              >
-                Confirm
-              </Button>
-            </div>
-          </div>
-        </PopoverContent>
-      </Popover>
-    </div>
-  </div> -->
 </template>
 
 <script lang="ts" setup>

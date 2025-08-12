@@ -45,25 +45,40 @@
             <span class="text-muted-foreground">资产数量：</span>
             <span class="font-mono text-xs">{{ displayMinerInfo.AssetAmt }}</span>
           </div>
+          <div v-if="displayMinerInfo.ServerNode && displayMinerInfo.AnchorTxId"
+            class="flex justify-between items-center">
+            <span class="text-muted-foreground">锚定交易ID：</span>
+            <a :href="generateMempoolUrl({
+              network: network,
+              path: `tx/${displayMinerInfo.AnchorTxId}`,
+            })" target="_blank" class="font-mono text-xs text-blue-400 hover:text-blue-300 underline break-all">
+              {{ hideAddress(displayMinerInfo.AnchorTxId) }}
+            </a>
+          </div>
+          <div v-if="displayMinerInfo.ServerNode && displayMinerInfo.AscendUtxo"
+            class="flex justify-between items-center">
+            <span class="text-muted-foreground break-keep">升级UTXO：</span>
+            <span class="font-mono text-xs break-all">{{ displayMinerInfo.AscendUtxo }}</span>
+          </div>
           <!-- 显示临时质押数据 -->
           <template v-if="tempStakeData && !displayMinerInfo.ServerNode">
             <div class="flex justify-between items-center">
               <span class="text-muted-foreground">交易ID：</span>
-              <a :href="generateMempoolUrl({ network: network, path: `tx/${tempStakeData.txId}` })" 
-                 target="_blank" class="font-mono text-xs text-blue-400 hover:text-blue-300 underline break-all">
+              <a :href="generateMempoolUrl({ network: network, path: `tx/${tempStakeData.txId}` })" target="_blank"
+                class="font-mono text-xs text-blue-400 hover:text-blue-300 underline break-all">
                 {{ hideAddress(tempStakeData.txId) }}
               </a>
             </div>
             <div class="flex justify-between items-center">
-              <span class="text-muted-foreground">预定ID：</span>
-              <span class="font-mono text-xs">{{ hideAddress(tempStakeData.resvId) }}</span>
+              <span class="text-muted-foreground break-keep">预定ID：</span>
+              <span class="font-mono text-xs break-all">{{ hideAddress(tempStakeData.resvId) }}</span>
             </div>
             <div class="flex justify-between items-center">
-              <span class="text-muted-foreground">质押资产：</span>
-              <span class="font-mono text-xs">{{ tempStakeData.assetName }}</span>
+              <span class="text-muted-foreground break-keep">质押资产：</span>
+              <span class="font-mono text-xs break-all">{{ tempStakeData.assetName }}</span>
             </div>
             <div class="flex justify-between items-center">
-              <span class="text-muted-foreground">质押数量：</span>
+              <span class="text-muted-foreground break-keep">质押数量：</span>
               <span class="font-mono text-xs">{{ tempStakeData.amt }}</span>
             </div>
             <div class="flex justify-between items-center">
@@ -78,12 +93,8 @@
           </div>
         </template>
       </div>
-      <Button 
-        variant="secondary" 
-        class="h-10 w-full"
-        :disabled="displayMinerInfo.ServerNode || tempStakeData"
-        @click="router.push('/wallet/setting/node')"
-      >
+      <Button variant="secondary" class="h-10 w-full" :disabled="displayMinerInfo.ServerNode || tempStakeData"
+        @click="router.push('/wallet/setting/node')">
         {{ $t('nodeSetting.selectNodeType') }}
       </Button>
 
@@ -101,7 +112,7 @@ import { Button } from '@/components/ui/button'
 import { satnetApi } from '@/apis'
 import { nodeStakeStorage } from '@/lib/nodeStakeStorage'
 import { hideAddress, generateMempoolUrl } from '@/utils'
-import { NodeStakeData } from '@/types'
+import { Chain, NodeStakeData } from '@/types'
 
 const router = useRouter()
 const isExpanded = ref(false)
@@ -121,6 +132,7 @@ const { data: res, isLoading, isError, error, refetch } = useQuery({
 })
 
 const minerInfo = computed(() => res.value?.data || {})
+console.log('minerInfo', minerInfo.value);
 
 // 合并显示数据：优先显示服务器数据，如果没有则显示临时数据
 const displayMinerInfo = computed(() => {

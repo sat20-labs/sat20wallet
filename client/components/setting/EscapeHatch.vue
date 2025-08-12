@@ -18,8 +18,13 @@
           {{ $t('escapeHatch.assetSafetyDescription') }}
         </p>
 
+        <!-- Close Channel Note -->
+        <p class="text-sm text-muted-foreground mt-4">
+          {{ $t('escapeHatch.closeChannelNote') }}
+        </p>
+
         <!-- Broadcast Button -->
-        <div class="mt-6">
+        <div class="mt-4">
           <Button class="w-full bg-purple-600 text-white" @click="closeChannel">{{ $t('escapeHatch.broadcastTx') }}</Button>
         </div>
 

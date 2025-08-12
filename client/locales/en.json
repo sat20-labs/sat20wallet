@@ -136,6 +136,7 @@
     "splicingOut": "Splicing out",
     "unlock": "Unlock"
   },
+
   "l1AssetsTabs": {
     "assetType": {
       "ORDX": "ORDX",
@@ -197,7 +198,8 @@
     "outputs": "Outputs",
     "addressOrPkScript": "Address/PkScript",
     "noChannelTitle": "No Channel",
-    "noChannelDescription": "You have no channel. Please create a channel first."
+    "noChannelDescription": "You have no channel. Please create a channel first.",
+    "closeChannelNote": "Close Channel: Incurs on-chain gas; reopening costs 3,000 sats again"
   },
   "networkSetting": {
     "title": "Environment Options",
@@ -324,7 +326,8 @@
     "domainResolved": "Name resolved: {name} → {address}",
     "domainNotFound": "Name not found: {name}",
     "domainName": "Name",
-    "resolvedAddress": "Resolved Address"
+    "resolvedAddress": "Resolved Address",
+    "fixedFee": "Fixed Fee"
   },
   "receiveQRcode": {
     "title": "Receive Address",
