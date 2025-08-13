@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -67,6 +68,11 @@ func (p *Manager) inscribe(address string, body string, revealOutValue int64,
 		return nil, err
 	}
 	Log.Infof("commit fee %d, reveal fee %d", txs.CommitTxFee, txs.RevealTxFee)
+
+	err = p.TestAcceptance([]*wire.MsgTx{txs.CommitTx, txs.RevealTx})
+	if err != nil {
+		return nil, err
+	}
 
 	commitTxId, err := p.BroadcastTx(txs.CommitTx)
 	if err != nil {
