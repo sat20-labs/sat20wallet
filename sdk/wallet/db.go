@@ -491,7 +491,7 @@ func DeleteAllKeysWithPrefix(db common.KVDB, prefix []byte) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	Log.Infof("deleted %d keys", len(keys))
+	Log.Infof("deleted %d keys with prefix %s", len(keys), string(prefix))
 	return keys, nil
 }
 
