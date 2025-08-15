@@ -110,7 +110,7 @@ func (p *jsDB) get(key []byte) ([]byte, error) {
 				
 				result := args[0]
 				if result.IsUndefined() || result.Get(keyStr).IsUndefined() {
-					reject.Invoke(common.ErrKeyNotFound)
+					reject.Invoke(common.ErrKeyNotFound.Error())
 					return nil
 				}
 				
