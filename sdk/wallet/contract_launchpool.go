@@ -247,6 +247,11 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 		// two stub utxos
 		total += 660
 
+		// 激活tx
+		total += DEFAULT_FEE_SATSNET
+		// 最后还需要部署amm合约和激活tx
+		total += DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE
+
 		// deploy service fee
 		total += DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT
 
@@ -257,6 +262,11 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 
 		// splicing-in
 		total += CalcFee_SplicingIn(1, feeLen, feeRate)
+
+		// 激活tx
+		total += DEFAULT_FEE_SATSNET
+		// 最后还需要部署amm合约和激活tx
+		total += DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE
 
 		// deploy service fee
 		total += DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT

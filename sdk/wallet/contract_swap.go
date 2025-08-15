@@ -102,7 +102,7 @@ func (p *SwapContract) Content() string {
 
 // 仅仅是估算，并且尽可能多预估了输入和输出
 func (p *SwapContract) DeployFee(feeRate int64) int64 {
-	return DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT + SWAP_INVOKE_FEE // deployTx 的utxo含聪量
+	return DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT + DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE // deployTx 的utxo含聪量
 }
 
 func (p *SwapContract) InvokeParam(action string) string {
