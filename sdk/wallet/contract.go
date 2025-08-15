@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -92,7 +93,7 @@ type ContractRuntime interface {
 	GetRuntimeBase() *ContractRuntimeBase
 
 	GetStatus() int
-	Address() string      // 合约地址
+	Address() string      // 合约钱包地址
 	URL() string          // 绝对路径
 	RelativePath() string // 相对路径，不包括channelId或者其他
 	GetAssetName() *indexer.AssetName
@@ -521,6 +522,10 @@ type ContractRuntimeBase struct {
 
 	stp      *Manager
 	contract Contract
+	runtime  ContractRuntime
+	history  map[string]*InvokeItem
+
+	mutex sync.RWMutex
 }
 
 func (p *ContractRuntimeBase) ToNewVersion() *ContractRuntimeBase {
@@ -539,7 +544,8 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp *Manager) erro
 	// p.ChannelId = resv.ChannelId
 	// p.Deployer = resv.Deployer
 	p.stp = stp
-
+	p.history = make(map[string]*InvokeItem)
+	
 	err := p.contract.Decode(content)
 	if err != nil {
 		return err

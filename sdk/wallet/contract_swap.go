@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"sync"
 	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -33,6 +32,8 @@ const (
 	INVOKE_API_FUND     string = "fund"     //
 	INVOKE_API_DEPOSIT  string = "deposit"  // L1->L2  免费
 	INVOKE_API_WITHDRAW string = "withdraw" // L2->L1  收
+	INVOKE_API_STAKE    string = "stake"    // 如果是L1的stake，必须要有op_return携带invokeParam
+	INVOKE_API_UNSTAKE  string = "unstake"  // 可以unstake到一层
 
 	ORDERTYPE_SELL     = 1
 	ORDERTYPE_BUY      = 2
@@ -42,7 +43,9 @@ const (
 	ORDERTYPE_DEPOSIT  = 6
 	ORDERTYPE_WITHDRAW = 7
 	ORDERTYPE_MINT     = 8
-	ORDERTYPE_UNUSED   = 9
+	ORDERTYPE_STAKE    = 9
+	ORDERTYPE_UNSTAKE  = 10
+	ORDERTYPE_UNUSED   = 11
 
 	INVOKE_FEE          int64 = 10
 	SWAP_INVOKE_FEE     int64 = 10
@@ -301,13 +304,13 @@ func NewTraderStatus(address string, divisibility int) *TraderStatus {
 type SwapContractRuntime struct {
 	SwapContractRuntimeInDB
 
-	swapHistory   map[string]*SwapHistoryItem           // key:utxo 单独记录数据库，区块缓存, 6个区块以后，并且已经成交的可以删除
 	buyPool       []*SwapHistoryItem                    // 还没有成交的记录，按价格从大到小排序
 	sellPool      []*SwapHistoryItem                    // 还没有成交的记录，按价格从小到大排序
 	traderInfoMap map[string]*TraderStatus              // user address -> utxo list 还没有成交的记录
 	refundMap     map[string]map[int64]*SwapHistoryItem // 准备退款的账户, address -> refund invoke item list, 无效的item也放进来，一起退款
 	depositMap    map[string]map[int64]*SwapHistoryItem // 准备deposit的账户, address -> deposit invoke item list
 	withdrawMap   map[string]map[int64]*SwapHistoryItem // 准备withdraw的账户, address -> withdraw invoke item list
+	stubFeeMap    map[int64]int64                       // invokeCount->fee
 	isSending     bool
 
 	refreshTime_swap   int64
@@ -316,8 +319,6 @@ type SwapContractRuntime struct {
 	responseHistory    map[int][]*SwapHistoryItem // 按照100个为一桶，根据区块顺序记录，跟swapHistory保持一致
 	responseAnalytics  *AnalytcisData
 	dealPrice          *Decimal
-
-	mutex sync.RWMutex
 }
 
 func NewSwapContractRuntime(stp *Manager) *SwapContractRuntime {
@@ -338,13 +339,15 @@ func NewSwapContractRuntime(stp *Manager) *SwapContractRuntime {
 
 func (p *SwapContractRuntime) init() {
 	p.contract = p
-	p.swapHistory = make(map[string]*SwapHistoryItem)
+	p.runtime = p
+	p.history = make(map[string]*SwapHistoryItem)
 	p.buyPool = make([]*SwapHistoryItem, 0)
 	p.sellPool = make([]*SwapHistoryItem, 0)
 	p.traderInfoMap = make(map[string]*TraderStatus)
 	p.refundMap = make(map[string]map[int64]*SwapHistoryItem)
 	p.depositMap = make(map[string]map[int64]*SwapHistoryItem)
 	p.withdrawMap = make(map[string]map[int64]*SwapHistoryItem)
+	p.stubFeeMap = make(map[int64]int64)
 	p.responseHistory = make(map[int][]*SwapHistoryItem)
 }
 
@@ -423,8 +426,8 @@ type ItemData struct {
 	AvgPrice *Decimal `json:"avg_price" swaggertype:"string"`
 	// 指定时间段内的资产交易量
 	// example: 500.0
-	Amount *Decimal `json:"amount" swaggertype:"string"`
-	Volume int64    `json:"volume"` // 指定时间段内的交易额
+	AssetAmt  *Decimal `json:"amount" swaggertype:"string"`
+	SatsValue int64    `json:"volume"` // 指定时间段内的交易额
 }
 
 func NewItemData() *ItemData {
@@ -574,13 +577,6 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
 		}
 
-		// 检查二层网络上是否有足够的资产：对应一个anchor交易，就可以解决这个问题
-		// totalAmt := p.stp.GetAssetBalance_SatsNet(p.ChannelId, p.GetAssetName())
-		// if totalAmt.Cmp(indexer.DecimalAdd(amt, p.AssetAmtInPool)) < 0 {
-		// 	return 0, fmt.Errorf("no enough asset in amm pool L2, required %s but only %s (%s-%s)",
-		// 		amt.String(), indexer.DecimalSub(totalAmt, p.AssetAmtInPool).String(), totalAmt.String(), p.AssetAmtInPool.String())
-		// }
-
 		return DEPOSIT_INVOKE_FEE, nil
 
 	case INVOKE_API_WITHDRAW:
@@ -610,9 +606,6 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		}
 
 		if assetName.Protocol == indexer.PROTOCOL_NAME_ORDX {
-			// if indexer.GetBindingSatNum(amt, uint32(p.N)) < 330 {
-			// 	return fmt.Errorf("ordx assset should withdraw at least %d, but only %d", 330 * p.N, amt.Int64())
-			// }
 			if amt.Int64()%int64(p.N) != 0 {
 				return 0, fmt.Errorf("ordx asset should withdraw be times of %d", p.N)
 			}
@@ -622,8 +615,30 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 			N:         p.N,
 		}
 		fee := CalcFee_SendTx(2, 3, 1, &assetName, amt, p.stp.GetFeeRate(), true)
-
 		return WITHDRAW_INVOKE_FEE + fee, nil
+
+	case INVOKE_API_STAKE:
+		var innerParam StakeInvokeParam
+		err := json.Unmarshal([]byte(invoke.Param), &innerParam)
+		if err != nil {
+			return 0, err
+		}
+		if innerParam.OrderType != ORDERTYPE_STAKE {
+			return 0, fmt.Errorf("invalid order type %d", innerParam.OrderType)
+		}
+		if innerParam.AssetName != assetName.String() {
+			return 0, fmt.Errorf("invalid asset name %s", innerParam.AssetName)
+		}
+
+		_, err = indexer.NewDecimalFromString(innerParam.Amt, p.Divisibility)
+		if err != nil {
+			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
+		}
+
+		return DEPOSIT_INVOKE_FEE, nil
+
+	case INVOKE_API_UNSTAKE:
+
 	default:
 		return 0, fmt.Errorf("unsupport action %s", invoke.Action)
 	}

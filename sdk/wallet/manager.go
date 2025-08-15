@@ -828,11 +828,7 @@ func (p *Manager) getAssetAmount_SatsNet(address string, name *swire.AssetName) 
 				assets := u.ToTxAssets()
 				asset, _ := assets.Find(name)
 				if asset != nil {
-					if locked == nil {
-						locked = &asset.Amount
-					} else {
-						locked = locked.Add(&asset.Amount)
-					}
+					locked = locked.Add(&asset.Amount)
 				}
 			}
 		} else {
@@ -842,11 +838,7 @@ func (p *Manager) getAssetAmount_SatsNet(address string, name *swire.AssetName) 
 				assets := u.ToTxAssets()
 				asset, _ := assets.Find(name)
 				if asset != nil {
-					if available == nil {
-						available = &asset.Amount
-					} else {
-						available = available.Add(&asset.Amount)
-					}
+					available = available.Add(&asset.Amount)
 				}
 			}
 		}
