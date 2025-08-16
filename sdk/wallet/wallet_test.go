@@ -1,9 +1,11 @@
 package wallet
 
 import (
+	"encoding/hex"
 	"fmt"
 	"testing"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
 
@@ -192,4 +194,22 @@ func TestImportWallet(t *testing.T) {
 	}
 
 	fmt.Printf("%s\n", wallet.GetAddress())
+}
+
+
+func TestNewWallet(t *testing.T) {
+
+	//wallet := NewInternalWalletWithMnemonic("force plate fold brown kiss sample weapon useful earth useful shop priority", "", GetChainParam())
+	wallet, mn, err := NewInteralWallet(&chaincfg.MainNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("%s\n", mn)
+
+	if wallet == nil {
+		t.Fail()
+	}
+
+	fmt.Printf("%s\n", wallet.GetAddress())
+	fmt.Printf("%s\n", hex.EncodeToString(wallet.GetPubKey().SerializeCompressed()))
 }

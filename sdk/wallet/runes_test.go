@@ -11,8 +11,9 @@ import (
 )
 
 func TestRunePayload(t *testing.T) {
-	hexPayload := "6a5d0800a0900564904e02"
+	hexPayload := "6a5d0d00cffc030180c0f0978ef84101"
 	paylaod, _ := hex.DecodeString(hexPayload)
+	fmt.Printf("len: %d\n %s\n", len(paylaod), hex.EncodeToString(paylaod))
 
 	stone := runestone.Runestone{}
 	result, err := stone.DecipherFromPkScript(paylaod)
@@ -26,6 +27,12 @@ func TestRunePayload(t *testing.T) {
 	for _, v := range result.Runestone.Edicts {
 		fmt.Printf("%v\n", v)
 	}
+
+	payload, err := GetRunesEstimatePayload(nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("len: %d\n %s\n", len(payload), hex.EncodeToString(payload))
 }
 
 
