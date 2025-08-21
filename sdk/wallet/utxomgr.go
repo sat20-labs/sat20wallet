@@ -3,7 +3,7 @@ package wallet
 import (
 	"sync"
 
-	"github.com/sat20-labs/sat20wallet/sdk/common"
+	db "github.com/sat20-labs/indexer/common"
 )
 
 type UtxoMgr struct {
@@ -13,11 +13,11 @@ type UtxoMgr struct {
 	utxomap     map[string]map[string]*TxOutput_SatsNet // addr->utxo -> data
 	refreshTime int64
 
-	db        common.KVDB
+	db        db.KVDB
 	rpcClient IndexerRPCClient
 }
 
-func NewUtxoMgr(db common.KVDB, rpc IndexerRPCClient, network string) *UtxoMgr {
+func NewUtxoMgr(db db.KVDB, rpc IndexerRPCClient, network string) *UtxoMgr {
 	locker := &UtxoMgr{
 		utxomap:   make(map[string]map[string]*TxOutput_SatsNet),
 		db:        db,

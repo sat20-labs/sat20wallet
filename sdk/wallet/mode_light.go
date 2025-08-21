@@ -5,11 +5,11 @@ package wallet
 import (
 	"net/http"
 
-	"github.com/sat20-labs/sat20wallet/sdk/common"
+	db "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/lightnode"
 )
 
-func NewKVDB(_ string) common.KVDB {
+func NewKVDB(_ string) db.KVDB {
 	return lightnode.NewKVDB()
 }
 

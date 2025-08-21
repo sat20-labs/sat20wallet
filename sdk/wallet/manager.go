@@ -17,6 +17,7 @@ import (
 	"lukechampine.com/uint128"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	db "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 )
 
@@ -43,7 +44,7 @@ type Manager struct {
 	msgCallback   NotifyCB
 	tickerInfoMap map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
 
-	db                   common.KVDB
+	db                   db.KVDB
 	http                 HttpClient
 	l1IndexerClient      IndexerRPCClient
 	slaveL1IndexerClient IndexerRPCClient
