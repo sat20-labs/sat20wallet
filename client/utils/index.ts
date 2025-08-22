@@ -46,13 +46,10 @@ export const generateMempoolUrl = ({
   if (chain !== Chain.SATNET && locale) {
     url += `/${locale}`;
   }
-  if (chain !== Chain.SATNET) {
-    if (network === 'testnet') {
-      url += '/testnet4';
-    }
-  } else {
-    url += `/${network}`;
+  if (network === 'testnet') {
+    url += '/testnet4';
   }
+
   if (path) {
     url += `/${path}`;
   }
@@ -112,9 +109,9 @@ export function btcToSats(btc: string | number): number {
 
 export function validateBTCAddress(address: string, network: string = 'mainnet'): boolean {
   if (!address || typeof address !== 'string') return false
-  
+
   const trimmedAddress = address.trim()
-  
+
   if (network === 'testnet') {
     // Testnet 地址格式：
     // 1. Legacy testnet addresses (以 2 开头)
@@ -152,12 +149,12 @@ export const formatLargeNumber = (num: number): string => {
 export const isDomainName = (input: string, network: string = 'mainnet'): boolean => {
   // 简化的域名检测：只要不是比特币地址格式，就可能是域名
   if (!input || typeof input !== 'string') return false
-  
+
   const trimmedInput = input.trim()
-  
+
   // 如果是比特币地址格式，则不是域名
   if (validateBTCAddress(trimmedInput, network)) return false
-  
+
   // 其他情况都可能是域名，让API来判断
   return true
 }
@@ -165,16 +162,16 @@ export const isDomainName = (input: string, network: string = 'mainnet'): boolea
 export const resolveDomainName = async (name: string, network: string): Promise<{ address: string; name: string } | null> => {
   try {
     // 使用 OrdxApi 的 getNsName 方法
-    
+
     const response = await ordxApi.getNsName({ name, network })
-    
+
     if (response?.data?.address) {
       return {
         address: response.data.address,
         name: name
       }
     }
-    
+
     return null
   } catch (error) {
     console.error(`Error resolving domain ${name}:`, error)
@@ -189,7 +186,7 @@ export const validateAndResolveAddress = async (input: string, network: string):
   domainName: string | null
 }> => {
   const trimmedInput = input.trim()
-  
+
   // 如果是比特币地址，直接返回
   if (validateBTCAddress(trimmedInput, network)) {
     return {
@@ -199,7 +196,7 @@ export const validateAndResolveAddress = async (input: string, network: string):
       domainName: null
     }
   }
-  
+
   // 对于非比特币地址格式的输入，尝试解析为域名
   const resolved = await resolveDomainName(trimmedInput, network)
   return {

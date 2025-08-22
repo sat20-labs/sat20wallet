@@ -28,7 +28,7 @@ export default defineConfig({
       extension_pages:
         "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
     },
-    permissions: ['tabs', 'storage', 'activeTab', 'scripting', 'commands'],
+    permissions: ['tabs', 'storage', 'activeTab', 'scripting'],
   },
   runner: {
     startUrls: ['http://localhost:3002/account'],
@@ -42,8 +42,8 @@ export default defineConfig({
   vite: () => ({
     esbuild: {
       target: 'esnext',
-      drop:
-        process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [],
+      // drop:
+        // process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [],
     },
     plugins: [],
     logLevel: 'info' as const,

@@ -29,7 +29,7 @@ const defaultState: WalletState = {
   address: null,
   isConnected: false,
   password: null,
-  network: Network.TESTNET,
+  network: Network.LIVENET,
   chain: Chain.BTC,
   walletId: '',
   accountIndex: 0,

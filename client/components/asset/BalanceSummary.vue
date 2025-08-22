@@ -137,6 +137,7 @@ const fetchAbailableSats = async () => {
   }
   const handler = props.selectedChain.toLowerCase() === 'bitcoin' ? stp.getAssetAmount : stp.getAssetAmount_SatsNet
   const [err, res] = await handler.bind(stp)(address.value, '::')
+  console.log('fetchAbailableSats', err, res);
   if (err || !res) {
     return { availableAmt: 0, lockedAmt: 0 }
   }
@@ -158,10 +159,12 @@ const { data: abailableSatsQuery, refetch: refetchAbailableSats } = useQuery({
   enabled: computed(() => !!address.value && props.selectedChain.toLowerCase() !== 'channel'),
   initialData: { availableAmt: 0, lockedAmt: 0 },
 })
+console.log('abailableSatsQuery', abailableSatsQuery);
 
 watch(abailableSatsQuery, (val) => {
+  console.log('abailableSatsQuery', val);
   if (val) abailableSats.value = val
-}, { immediate: true })
+}, { immediate: true, deep: true })
 
 // balanceMouseEnter 立即刷新
 const balanceMouseEnter = async () => {

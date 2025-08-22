@@ -77,7 +77,7 @@ export const useWalletStore = defineStore('wallet', () => {
 
     try {
       console.log(`Sending NETWORK_CHANGED message with payload: ${value}`)
-      sendNetworkChangedEvent(value)
+      await sendNetworkChangedEvent(value)
     } catch (error) {
       console.error('Failed to send NETWORK_CHANGED message to background:', error)
     }

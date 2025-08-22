@@ -56,7 +56,23 @@ class BackgroundService {
   private onMessageHandler = (message: any, sender: Runtime.MessageSender, sendResponse: (response?: any) => void) => {
     const { type, action, metadata } = message
     if (type === Message.MessageType.EVENT) {
-      if (this.portMap.content) {
+      if (action === Message.MessageAction.ENV_CHANGED || message.event === 'networkChanged') {
+        console.log('收到网络变更事件，开始重新初始化状态和WASM')
+        // 设置WASM重新初始化标志
+        this.isWasmReady = false
+        walletStorage.initializeState().then(async () => {
+          try {
+            await reInitializeWasm()
+            this.isWasmReady = true
+            console.log('网络变更后WASM重新初始化完成')
+            // 处理可能积压的消息
+            await this.processQueuedMessages()
+          } catch (error) {
+            console.error('网络变更后WASM重新初始化失败:', error)
+            this.isWasmReady = true // 即使失败也要设置为true，避免无限等待
+          }
+        })
+      } else if (this.portMap.content) {
         console.log('type', type);
         console.log('action', action);
         console.log('metadata', metadata);
@@ -74,11 +90,6 @@ class BackgroundService {
       const response = this.approvalManager.getApprovalData(metadata.windowId)
       sendResponse(response)
       return true
-    } else if (type === Message.MessageType.REQUEST && (action === Message.MessageAction.ENV_CHANGED || action === Message.MessageAction.NETWORK_CHANGED)) {
-      console.log('调试: 收到环境变更消息', message);
-      walletStorage.initializeState().then(() => {
-        reInitializeWasm()
-      })
     } else if (message.type === 'KEEP_ALIVE_FALLBACK') {
       // 这是为了响应 content.ts 的后备计划
       // 收到这个消息本身就意味着 background 被成功唤醒了

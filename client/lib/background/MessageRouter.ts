@@ -4,6 +4,7 @@ import { walletError } from '@/types/error'
 import { isOriginAuthorized } from '@/lib/authorized-origins'
 import { walletStorage } from '@/lib/walletStorage'
 import service from '@/lib/service'
+import { reInitializeWasm } from '@/lib/background/WasmManager'
 import type { ApprovalManager } from './ApprovalManager'
 
 // The main message handler, moved from background.ts
@@ -29,6 +30,14 @@ export async function handleMessage(
         error: walletError.noWallet,
       })
       return
+    }
+
+    // 检查网络状态，确保WASM使用正确的网络配置
+    const currentNetwork = walletStorage.getValue('network')
+    const wasmNetwork = (globalThis as any).sat20wallet_wasm?.getNetwork?.() || currentNetwork
+    if (currentNetwork && wasmNetwork && currentNetwork !== wasmNetwork) {
+      console.log(`网络状态不一致，重新初始化WASM: 当前=${currentNetwork}, WASM=${wasmNetwork}`)
+      await reInitializeWasm()
     }
 
     // List of methods that require the origin to be authorized.
@@ -308,11 +317,34 @@ export async function handleMessage(
           }
           break
         case Message.MessageAction.GET_ASSET_AMOUNT_SATSNET:
+          // 添加调试日志
+          const currentNetwork = walletStorage.getValue('network')
+          const currentEnv = walletStorage.getValue('env') || 'test'
+          console.log(`GET_ASSET_AMOUNT_SATSNET 调用 - 当前网络: ${currentNetwork}, 环境: ${currentEnv}`)
+          
           ;[reqErr, reqRes] = await service.getAssetAmount_SatsNet(
             data.address,
             data.assetName,
           )
           console.log('reqErr', reqErr);
+          console.log('reqRes', reqRes);
+          
+          // 如果第一次调用失败，检查是否需要重试
+          if (reqErr && (reqErr.message?.includes('network') || reqErr.message?.includes('config'))) {
+            console.log('检测到可能的网络配置问题，重新初始化WASM后重试')
+            try {
+              await reInitializeWasm();
+              // 重试一次
+              [reqErr, reqRes] = await service.getAssetAmount_SatsNet(
+                data.address,
+                data.assetName,
+              )
+              console.log('重试后的结果:', reqErr, reqRes);
+            } catch (retryError) {
+              console.error('重试失败:', retryError)
+            }
+          }
+          
           if (reqErr) {
             errData = { code: -47, message: reqErr.message }
           } else {
