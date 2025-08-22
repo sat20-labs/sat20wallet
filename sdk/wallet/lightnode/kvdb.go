@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	indexer "github.com/sat20-labs/indexer/common"
-	"github.com/sat20-labs/sat20wallet/sdk/common"
+	db "github.com/sat20-labs/indexer/common"
 )
 
 var Log = indexer.Log
@@ -65,7 +65,7 @@ type jsDB struct {
 }
 
 // 页面模式下使用 localStorage ，插件模式下使用 chrome.storage.local
-func NewKVDB() common.KVDB {
+func NewKVDB() db.KVDB {
 	isExtension := false
 	var db js.Value
 	// 页面加载只支持localStorage，以后要支持页面加载的话，需要加配置项来支持
@@ -110,7 +110,7 @@ func (p *jsDB) get(key []byte) ([]byte, error) {
 				
 				result := args[0]
 				if result.IsUndefined() || result.Get(keyStr).IsUndefined() {
-					reject.Invoke("key not found")
+					reject.Invoke(db.ErrKeyNotFound.Error())
 					return nil
 				}
 				
@@ -124,13 +124,13 @@ func (p *jsDB) get(key []byte) ([]byte, error) {
 		// 等待 Promise 完成
 		value = await(getPromise)
 		if value.IsUndefined() {
-			return nil, fmt.Errorf("key not found")
+			return nil, db.ErrKeyNotFound
 		}
 
 	} else {
 		value = p.db.Call("getItem", keyStr)
 		if value.IsNull() {
-			return nil, fmt.Errorf("key not found") // Key not found
+			return nil, db.ErrKeyNotFound // Key not found
 		}
 	}
 	
@@ -297,7 +297,7 @@ func (p *jsDB) DropAll() error {
 	return wb.Flush()
 }
 
-func (p *jsDB) NewWriteBatch() common.WriteBatch {
+func (p *jsDB) NewWriteBatch() db.WriteBatch {
 	return &jsBatchWrite{
 		db:        p,
 		batch:     make(map[string]string),
@@ -419,6 +419,36 @@ func (p *jsDB) putBatch_Chrome(entries map[string]string) error {
     
     await(setPromise)
     return nil
+}
+
+
+type jsReadBatch struct {
+	db   *jsDB
+}
+
+func (p *jsReadBatch) Get(key []byte) ([]byte, error) {
+	return p.db.Read(key)
+}
+
+func (p *jsReadBatch) GetRef(key []byte) ([]byte, error) {
+	return p.db.Read(key)
+}
+
+func (p *jsReadBatch) MultiGet(keys [][]byte) ([][]byte, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *jsReadBatch) MultiGetSorted(keys [][]byte) (map[string][]byte, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+// View 在一致性快照中执行只读操作
+func (p *jsDB) View(fn func(txn db.ReadBatch) error) error {
+	rb := jsReadBatch{
+		db: p,
+	}
+
+	return fn(&rb)
 }
 
 func (p *jsDB) removeBatch_Chrome(entries []string) error {

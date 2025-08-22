@@ -860,7 +860,7 @@ func (p *IndexerClient) GetNonce(pubKey []byte) ([]byte, error) {
 	}
 
 	if result.Code != 0 {
-		Log.Errorf("%v response message %s", url, result.Msg)
+		Log.Warningf("%v response message %s", url, result.Msg)
 		return nil, fmt.Errorf("%s", result.Msg)
 	}
 
@@ -889,7 +889,7 @@ func (p *IndexerClient) PutKVs(req *indexerwire.PutKValueReq) (error) {
 	}
 
 	if result.Code != 0 {
-		Log.Errorf("%v response message %s", url, result.Msg)
+		Log.Warningf("%v response message %s", url, result.Msg)
 		return fmt.Errorf("%s", result.Msg)
 	}
 

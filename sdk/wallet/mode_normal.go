@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/sat20-labs/sat20wallet/sdk/common"
+	db "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/supernode"
 )
 
-func NewKVDB(dbPath string) common.KVDB {
+func NewKVDB(dbPath string) db.KVDB {
 	return supernode.NewKVDB(dbPath)
 }
 

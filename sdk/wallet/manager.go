@@ -17,6 +17,7 @@ import (
 	"lukechampine.com/uint128"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	db "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 )
 
@@ -43,7 +44,7 @@ type Manager struct {
 	msgCallback   NotifyCB
 	tickerInfoMap map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
 
-	db                   common.KVDB
+	db                   db.KVDB
 	http                 HttpClient
 	l1IndexerClient      IndexerRPCClient
 	slaveL1IndexerClient IndexerRPCClient
@@ -828,11 +829,7 @@ func (p *Manager) getAssetAmount_SatsNet(address string, name *swire.AssetName) 
 				assets := u.ToTxAssets()
 				asset, _ := assets.Find(name)
 				if asset != nil {
-					if locked == nil {
-						locked = &asset.Amount
-					} else {
-						locked = locked.Add(&asset.Amount)
-					}
+					locked = locked.Add(&asset.Amount)
 				}
 			}
 		} else {
@@ -842,11 +839,7 @@ func (p *Manager) getAssetAmount_SatsNet(address string, name *swire.AssetName) 
 				assets := u.ToTxAssets()
 				asset, _ := assets.Find(name)
 				if asset != nil {
-					if available == nil {
-						available = &asset.Amount
-					} else {
-						available = available.Add(&asset.Amount)
-					}
+					available = available.Add(&asset.Amount)
 				}
 			}
 		}

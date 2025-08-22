@@ -12,11 +12,12 @@ import (
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	db "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
 
-func NewManager(cfg *common.Config, db common.KVDB) *Manager {
+func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 	Log.Infof("sat20wallet_ver:%s, DB_ver:%s", SOFTWARE_VERSION, DB_VERSION)
 
 	//////////

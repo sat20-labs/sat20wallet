@@ -5,7 +5,6 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/btcsuite/btcd/txscript"
@@ -25,6 +24,11 @@ const (
 	LAUNCH_POOL_MAX_RATION int = 90 // %
 
 	INVOKE_API_MINT string = "mint"
+)
+
+var (
+	LAUNCHPOOL_MIN_SPENT int64 = 50 // 最小开销：激活一个tx 发射一个tx，退款一个tx，部署amm一个tx，amm激活一个tx，需要消耗50聪
+	LAUNCHPOOL_MIN_SATS int64 = 1000 // 
 )
 
 type LaunchPoolContract struct {
@@ -89,6 +93,9 @@ func (p *LaunchPoolContract) CheckContent() error {
 		if p.BindingSat == 0 {
 			return fmt.Errorf("invalid binding sat %d", p.BindingSat)
 		}
+		if p.BindingSat >= 65535 {
+			return fmt.Errorf("binding sat should < 65535")
+		}
 		if p.MaxSupply%int64(p.BindingSat) != 0 {
 			return fmt.Errorf("max supply should be times of bindingSat")
 		}
@@ -108,7 +115,7 @@ func (p *LaunchPoolContract) CheckContent() error {
 		return fmt.Errorf("invalid limit %d", p.Limit)
 	}
 	if p.Limit > p.MaxSupply {
-		return fmt.Errorf("invalid limit %d", p.Limit)
+		return fmt.Errorf("limit %d should not larger than max supply %d", p.Limit, p.MaxSupply)
 	}
 	if p.MaxSupply%p.Limit != 0 {
 		return fmt.Errorf("max supply should be times of limitation")
@@ -122,6 +129,11 @@ func (p *LaunchPoolContract) CheckContent() error {
 
 	if p.LaunchRatio < LAUNCH_POOL_MIN_RATION || p.LaunchRatio > LAUNCH_POOL_MAX_RATION {
 		return fmt.Errorf("invalid launch ratio %d", p.LaunchRatio)
+	}
+
+	minSatsInPool := (p.MaxSupply * int64(p.LaunchRatio) / 100 ) / int64(p.MintAmtPerSat)
+	if minSatsInPool < LAUNCHPOOL_MIN_SATS {
+		return fmt.Errorf("too small sats in pool after launched, %d", minSatsInPool)
 	}
 
 	return nil
@@ -235,6 +247,11 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 		// two stub utxos
 		total += 660
 
+		// 激活tx
+		total += DEFAULT_FEE_SATSNET
+		// 最后还需要部署amm合约和激活tx
+		total += DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE
+
 		// deploy service fee
 		total += DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT
 
@@ -245,6 +262,11 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 
 		// splicing-in
 		total += CalcFee_SplicingIn(1, feeLen, feeRate)
+
+		// 激活tx
+		total += DEFAULT_FEE_SATSNET
+		// 最后还需要部署amm合约和激活tx
+		total += DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE
 
 		// deploy service fee
 		total += DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT
@@ -397,7 +419,6 @@ func (p *LaunchPoolContractRunTime) GobDecode(data []byte) error {
 type LaunchPoolContractRunTime struct {
 	LaunchPoolContractRunTimeInDB
 
-	mintHistory      map[string]*MintHistoryItem // key:utxo 单独记录数据库
 	mintInfoMap      map[string]*MinterStatus    // key: minter address， 缓存数据
 	invalidMintMap   map[string]*MinterStatus    // key: minter address，所有无效的调用记录，每个区块发起一次退款
 	deployTickerResv *InscribeResv
@@ -406,8 +427,6 @@ type LaunchPoolContractRunTime struct {
 	refreshTime   	int64
 	responseCache 	[]*responseItem_launchPool
 	responseHistory []*MintHistoryItem // 按时间排序
-
-	mutex sync.RWMutex
 }
 
 func NewLaunchPoolContractRuntime(stp *Manager) *LaunchPoolContractRunTime {
@@ -427,9 +446,9 @@ func NewLaunchPoolContractRuntime(stp *Manager) *LaunchPoolContractRunTime {
 
 func (p *LaunchPoolContractRunTime) init() {
 	p.contract = p
+	p.runtime = p
 	p.mintInfoMap = make(map[string]*MinterStatus)
 	p.invalidMintMap = make(map[string]*MinterStatus)
-	p.mintHistory = make(map[string]*MintHistoryItem)
 }
 
 func (p *LaunchPoolContractRunTime) InitFromContent(content []byte, stp *Manager) error {
@@ -510,7 +529,6 @@ func (p *LaunchPoolContractRunTime) CheckInvokeParam(param string) (int64, error
 	if dAmt.Int64() <= 0 {
 		return 0, fmt.Errorf("invalid mint amount %s", amt)
 	}
-	
 	
 	// 非虚拟的运行时对象，增加实时检查
 	// if p.channel != nil {

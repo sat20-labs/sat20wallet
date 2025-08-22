@@ -7,7 +7,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/wire"
 
-	"github.com/sat20-labs/sat20wallet/sdk/common"
+	db "github.com/sat20-labs/indexer/common"
 	sbtcutil "github.com/sat20-labs/satoshinet/btcutil"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -29,11 +29,11 @@ type UtxoLocker struct {
 	lockmap     map[string]*LockedUtxo // utxo -> lock time
 	refreshTime int64
 
-	db        common.KVDB
+	db        db.KVDB
 	rpcClient IndexerRPCClient
 }
 
-func NewUtxoLocker(db common.KVDB, rpc IndexerRPCClient, network string) *UtxoLocker {
+func NewUtxoLocker(db db.KVDB, rpc IndexerRPCClient, network string) *UtxoLocker {
 	locker := &UtxoLocker{
 		lockmap:   make(map[string]*LockedUtxo),
 		db:        db,

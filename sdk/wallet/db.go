@@ -10,7 +10,7 @@ import (
 
 	"github.com/btcsuite/btcwallet/snacl"
 	indexer "github.com/sat20-labs/indexer/common"
-	"github.com/sat20-labs/sat20wallet/sdk/common"
+	db "github.com/sat20-labs/indexer/common"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -69,7 +69,7 @@ func DecodeFromBytes(data []byte, target interface{}) error {
 	return dec.Decode(target)
 }
 
-func GetItemsFromDB(prefix []byte, db common.KVDB) (map[string][]byte, error) {
+func GetItemsFromDB(prefix []byte, db db.KVDB) (map[string][]byte, error) {
 	result := make(map[string][]byte, 0)
 	err := db.BatchRead(prefix, false, func(k, v []byte) error {
 		result[string(k)] = v
@@ -109,7 +109,7 @@ func (p *Manager) repair() bool {
 	return false
 }
 
-func loadAllWalletFromDB(db common.KVDB) (map[int64]*WalletInDB, error) {
+func loadAllWalletFromDB(db db.KVDB) (map[int64]*WalletInDB, error) {
 	prefix := []byte(DB_KEY_WALLET)
 
 	result := make(map[int64]*WalletInDB, 0)
@@ -131,7 +131,7 @@ func loadAllWalletFromDB(db common.KVDB) (map[int64]*WalletInDB, error) {
 	return result, err
 }
 
-func saveWallet(db common.KVDB, wallet *WalletInDB) error {
+func saveWallet(db db.KVDB, wallet *WalletInDB) error {
 
 	buf, err := EncodeToBytes(wallet)
 	if err != nil {
@@ -148,7 +148,7 @@ func saveWallet(db common.KVDB, wallet *WalletInDB) error {
 	return nil
 }
 
-func loadWallet(db common.KVDB, id int64) (*WalletInDB, error) {
+func loadWallet(db db.KVDB, id int64) (*WalletInDB, error) {
 	buf, err := db.Read([]byte(getWalletDBKey(id)))
 	if err != nil {
 		Log.Infof("Read %s failed. %v", getWalletDBKey(id), err)
@@ -349,7 +349,7 @@ func ParseLockedUtxoKey(key string) (string, string, error) {
 	return parts[0], parts[1], nil
 }
 
-func saveLockedUtxo(db common.KVDB, network, utxo string, value *LockedUtxo) error {
+func saveLockedUtxo(db db.KVDB, network, utxo string, value *LockedUtxo) error {
 	buf, err := EncodeToBytes(value)
 	if err != nil {
 		Log.Errorf("saveLockedUtxo EncodeToBytes failed. %v", err)
@@ -365,11 +365,11 @@ func saveLockedUtxo(db common.KVDB, network, utxo string, value *LockedUtxo) err
 	return nil
 }
 
-func DeleteLockedUtxo(db common.KVDB, network, utxo string) error {
+func DeleteLockedUtxo(db db.KVDB, network, utxo string) error {
 	return db.Delete([]byte(GetLockedUtxoKey(network, utxo)))
 }
 
-func DeleteAllLockedUtxo(db common.KVDB, network string) error {
+func DeleteAllLockedUtxo(db db.KVDB, network string) error {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_LOCKEDUTXO + network)
 	_, err := DeleteAllKeysWithPrefix(db, prefix)
 	if err != nil {
@@ -379,7 +379,7 @@ func DeleteAllLockedUtxo(db common.KVDB, network string) error {
 }
 
 // 暂时不考虑地址
-func loadAllLockedUtxoFromDB(db common.KVDB, network string) map[string]*LockedUtxo {
+func loadAllLockedUtxoFromDB(db db.KVDB, network string) map[string]*LockedUtxo {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_LOCKEDUTXO + network)
 
 	result := make(map[string]*LockedUtxo, 0)
@@ -423,7 +423,7 @@ func ParseLastLockTimeKey(key string) (string, error) {
 	return parts[0], nil
 }
 
-func saveLastLockTime(db common.KVDB, network string, t int64) error {
+func saveLastLockTime(db db.KVDB, network string, t int64) error {
 	buf, err := EncodeToBytes(t)
 	if err != nil {
 		Log.Errorf("saveLastLockTime EncodeToBytes failed. %v", err)
@@ -439,7 +439,7 @@ func saveLastLockTime(db common.KVDB, network string, t int64) error {
 	return nil
 }
 
-func loadLastLockTime(db common.KVDB, network string) (int64, error) {
+func loadLastLockTime(db db.KVDB, network string) (int64, error) {
 	key := GeLastLockTimeKey(network)
 
 	buf, err := db.Read([]byte(key))
@@ -457,13 +457,13 @@ func loadLastLockTime(db common.KVDB, network string) (int64, error) {
 	return value, nil
 }
 
-func deleteAllLastLockTime(db common.KVDB, network string) error {
+func deleteAllLastLockTime(db db.KVDB, network string) error {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_LOCK_LASTTIME + network)
 	_, err := DeleteAllKeysWithPrefix(db, prefix)
 	return err
 }
 
-func DeleteAllKeysWithPrefix(db common.KVDB, prefix []byte) ([]string, error) {
+func DeleteAllKeysWithPrefix(db db.KVDB, prefix []byte) ([]string, error) {
 	keys := make([]string, 0)
 	err := db.BatchRead(prefix, false, func(k, v []byte) error {
 		keys = append(keys, string(k))
@@ -491,7 +491,7 @@ func DeleteAllKeysWithPrefix(db common.KVDB, prefix []byte) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	Log.Infof("deleted %d keys", len(keys))
+	Log.Infof("deleted %d keys with prefix %s", len(keys), string(prefix))
 	return keys, nil
 }
 
@@ -507,7 +507,7 @@ func ParseTickerInfoKey(key string) (string, error) {
 	return strings.TrimPrefix(key, prefix), nil
 }
 
-func saveTickerInfo(db common.KVDB, ticker *indexer.TickerInfo) error {
+func saveTickerInfo(db db.KVDB, ticker *indexer.TickerInfo) error {
 	buf, err := EncodeToBytes(ticker)
 	if err != nil {
 		Log.Errorf("saveTickerInfo EncodeToBytes failed. %v", err)
@@ -523,7 +523,7 @@ func saveTickerInfo(db common.KVDB, ticker *indexer.TickerInfo) error {
 	return nil
 }
 
-func loadTickerInfo(db common.KVDB, name *swire.AssetName) (*indexer.TickerInfo, error) {
+func loadTickerInfo(db db.KVDB, name *swire.AssetName) (*indexer.TickerInfo, error) {
 	key := GetTickerInfoKey(name.String())
 
 	buf, err := db.Read([]byte(key))
@@ -541,7 +541,7 @@ func loadTickerInfo(db common.KVDB, name *swire.AssetName) (*indexer.TickerInfo,
 	return &value, nil
 }
 
-func deleteAllTickerInfoFromDB(db common.KVDB) error {
+func deleteAllTickerInfoFromDB(db db.KVDB) error {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TICKER_INFO)
 	_, err := DeleteAllKeysWithPrefix(db, prefix)
 	return err
@@ -566,7 +566,7 @@ func ParseInscribeResvKey(key string) (int64, error) {
 	return id, nil
 }
 
-func LoadAllInscribeResvFromDB(db common.KVDB) map[int64]*InscribeResv {
+func LoadAllInscribeResvFromDB(db db.KVDB) map[int64]*InscribeResv {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_INSC)
 
 	result := make(map[int64]*InscribeResv, 0)
@@ -608,7 +608,7 @@ func LoadAllInscribeResvFromDB(db common.KVDB) map[int64]*InscribeResv {
 	return result
 }
 
-func SaveInscribeResv(db common.KVDB, resv *InscribeResv) error {
+func SaveInscribeResv(db db.KVDB, resv *InscribeResv) error {
 
 	buf, err := EncodeToBytes(resv)
 	if err != nil {
@@ -644,7 +644,7 @@ func SaveInscribeResv(db common.KVDB, resv *InscribeResv) error {
 	return nil
 }
 
-func LoadInscribeResv(db common.KVDB, id int64) (*InscribeResv, error) {
+func LoadInscribeResv(db db.KVDB, id int64) (*InscribeResv, error) {
 	key := GetInscribeResvKey(id)
 	var value InscribeResv
 	buf, err := db.Read([]byte(key))
@@ -662,7 +662,7 @@ func LoadInscribeResv(db common.KVDB, id int64) (*InscribeResv, error) {
 	return &value, nil
 }
 
-func DeleteInscribeResv(db common.KVDB, id int64) error {
+func DeleteInscribeResv(db db.KVDB, id int64) error {
 	key := GetInscribeResvKey(id)
 	return db.Delete([]byte(key))
 }
@@ -685,7 +685,7 @@ func ParseUtxoKey(key string) (string, string, string, error) {
 	return parts[0], parts[1], parts[2], nil
 }
 
-func saveUtxo(db common.KVDB, network, addr, utxo string, value *TxOutput_SatsNet) error {
+func saveUtxo(db db.KVDB, network, addr, utxo string, value *TxOutput_SatsNet) error {
 	buf, err := EncodeToBytes(value)
 	if err != nil {
 		Log.Errorf("saveLockedUtxo EncodeToBytes failed. %v", err)
@@ -701,11 +701,11 @@ func saveUtxo(db common.KVDB, network, addr, utxo string, value *TxOutput_SatsNe
 	return nil
 }
 
-func DeleteUtxo(db common.KVDB, network, addr, utxo string) error {
+func DeleteUtxo(db db.KVDB, network, addr, utxo string) error {
 	return db.Delete([]byte(GetUtxoKey(network, addr, utxo)))
 }
 
-func DeleteAllUtxoInAddress(db common.KVDB, network, addr string) error {
+func DeleteAllUtxoInAddress(db db.KVDB, network, addr string) error {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_UTXO + network + "-" + addr)
 	_, err := DeleteAllKeysWithPrefix(db, prefix)
 	if err != nil {
@@ -714,7 +714,7 @@ func DeleteAllUtxoInAddress(db common.KVDB, network, addr string) error {
 	return deleteAllLastLockTime(db, network)
 }
 
-func loadAllUtxoFromDB(db common.KVDB, network string) map[string]map[string]*TxOutput_SatsNet {
+func loadAllUtxoFromDB(db db.KVDB, network string) map[string]map[string]*TxOutput_SatsNet {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_UTXO + network)
 
 	result := make(map[string]map[string]*TxOutput_SatsNet)

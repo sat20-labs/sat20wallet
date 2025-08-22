@@ -50,7 +50,7 @@ func NewAmmContract() *AmmContract {
 }
 
 func (p *AmmContract) CheckContent() error {
-	err := p.ContractBase.CheckContent()
+	err := p.SwapContract.CheckContent()
 	if err != nil {
 		return err
 	}
@@ -104,8 +104,26 @@ func (p *AmmContract) InvokeParam(action string) string {
 		param.Param = string(buf)
 
 	case INVOKE_API_WITHDRAW:
-		var innerParam DepositInvokeParam
+		var innerParam WithdrawInvokeParam
 		innerParam.OrderType = ORDERTYPE_WITHDRAW
+		buf, err := json.Marshal(&innerParam)
+		if err != nil {
+			return ""
+		}
+		param.Param = string(buf)
+
+	case INVOKE_API_STAKE:
+		var innerParam StakeInvokeParam
+		innerParam.OrderType = ORDERTYPE_STAKE
+		buf, err := json.Marshal(&innerParam)
+		if err != nil {
+			return ""
+		}
+		param.Param = string(buf)
+
+	case INVOKE_API_UNSTAKE:
+		var innerParam UnstakeInvokeParam
+		innerParam.OrderType = ORDERTYPE_UNSTAKE
 		buf, err := json.Marshal(&innerParam)
 		if err != nil {
 			return ""
@@ -134,7 +152,7 @@ func (p *AmmContract) Content() string {
 }
 
 func (p *AmmContract) Encode() ([]byte, error) {
-	base, err := p.ContractBase.Encode()
+	base, err := p.SwapContract.Encode()
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +171,7 @@ func (p *AmmContract) Decode(data []byte) error {
 		return fmt.Errorf("missing base content")
 	}
 	base := tokenizer.Data()
-	err := p.ContractBase.Decode(base)
+	err := p.SwapContract.Decode(base)
 	if err != nil {
 		return err
 	}
@@ -212,6 +230,55 @@ func (p *DepositInvokeParam) Decode(data []byte) error {
 }
 
 type WithdrawInvokeParam = DepositInvokeParam
+type StakeInvokeParam = DepositInvokeParam
+
+type UnstakeInvokeParam struct {
+	OrderType int    `json:"orderType"`
+	AssetName string `json:"assetName"` // 资产名字
+	Amt       string `json:"amt"`       // 资产数量
+	ToL1      bool   `json:"toL1"`
+}
+
+func (p *UnstakeInvokeParam) Encode() ([]byte, error) {
+	var toL1 int64
+	if p.ToL1 {
+		toL1 = 1
+	}
+	return txscript.NewScriptBuilder().
+		AddInt64(int64(p.OrderType)).
+		AddData([]byte(p.AssetName)).
+		AddData([]byte(p.Amt)).
+		AddInt64(int64(toL1)).
+		Script()
+}
+
+func (p *UnstakeInvokeParam) Decode(data []byte) error {
+	tokenizer := txscript.MakeScriptTokenizer(0, data)
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing order type")
+	}
+	p.OrderType = int(tokenizer.ExtractInt64())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing asset name")
+	}
+	p.AssetName = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing asset amt")
+	}
+	p.Amt = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing order type")
+	}
+	toL1 := (tokenizer.ExtractInt64())
+	p.ToL1 = toL1 > 0
+
+	return nil
+}
+
 
 type AmmContractRuntime struct {
 	SwapContractRuntime
