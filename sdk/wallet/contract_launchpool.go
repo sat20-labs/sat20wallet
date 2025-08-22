@@ -26,9 +26,10 @@ const (
 	INVOKE_API_MINT string = "mint"
 )
 
+
 var (
-	LAUNCHPOOL_MIN_SPENT int64 = 50 // 最小开销：激活一个tx 发射一个tx，退款一个tx，部署amm一个tx，amm激活一个tx，需要消耗50聪
-	LAUNCHPOOL_MIN_SATS int64 = 1000 // 
+	LAUNCHPOOL_MIN_SPENT int64 = 20 // 最小开销：发射一个tx，10聪，退款一个tx，10聪 （部署amm的开销，算在部署launchpool的开销中）
+	LAUNCHPOOL_MIN_SATS int64 = 100000 // 
 )
 
 type LaunchPoolContract struct {

@@ -26,49 +26,6 @@ func init() {
 	gob.Register(&SwapContractRuntime{})
 }
 
-const (
-	INVOKE_API_SWAP     string = "swap"
-	INVOKE_API_REFUND   string = "refund"
-	INVOKE_API_FUND     string = "fund"     //
-	INVOKE_API_DEPOSIT  string = "deposit"  // L1->L2  免费
-	INVOKE_API_WITHDRAW string = "withdraw" // L2->L1  收
-	INVOKE_API_STAKE    string = "stake"    // 如果是L1的stake，必须要有op_return携带invokeParam
-	INVOKE_API_UNSTAKE  string = "unstake"  // 可以unstake到一层
-
-	ORDERTYPE_SELL     = 1
-	ORDERTYPE_BUY      = 2
-	ORDERTYPE_REFUND   = 3
-	ORDERTYPE_FUND     = 4
-	ORDERTYPE_PROFIT   = 5
-	ORDERTYPE_DEPOSIT  = 6
-	ORDERTYPE_WITHDRAW = 7
-	ORDERTYPE_MINT     = 8
-	ORDERTYPE_STAKE    = 9
-	ORDERTYPE_UNSTAKE  = 10
-	ORDERTYPE_UNUSED   = 11
-
-	INVOKE_FEE          int64 = 10
-	SWAP_INVOKE_FEE     int64 = 10
-	DEPOSIT_INVOKE_FEE  int64 = DEFAULT_SERVICE_FEE_DEPOSIT
-	WITHDRAW_INVOKE_FEE int64 = DEFAULT_SERVICE_FEE_WITHDRAW
-
-	MAX_PRICE_DIVISIBILITY = 10
-	MAX_ASSET_DIVISIBILITY = 10
-
-	MAX_BLOCK_BUFFER = 100
-	BUCK_SIZE        = 100
-
-	SWAP_SERVICE_FEE_RATIO = 8 // 千分之
-	DEPTH_SLOT             = 10
-)
-
-const (
-	DONE_NOTYET          = 0
-	DONE_DEALT           = 1
-	DONE_REFUNDED        = 2
-	DONE_CLOSED_DIRECTLY = 3
-)
-
 const ADDR_OPRETURN string = "op_return"
 
 type SwapContract struct {
@@ -199,8 +156,8 @@ type SwapContractRunningData struct {
 	HighestDealPrice *Decimal
 	LowestDealPrice  *Decimal
 
-	TotalInputAssets *Decimal // 所有进入池子交易的资产数量，包括历史记录 （不包括路过的）
-	TotalInputSats   int64    // 所有进入池子交易的聪数量，包括历史记录 （不包括路过的）
+	TotalInputAssets *Decimal // 所有进入池子交易的资产数量，（包括异常的）
+	TotalInputSats   int64    // 所有进入池子交易的聪数量，（包括异常的）
 
 	TotalDealAssets *Decimal // 已经卖出的资产数量
 	TotalDealSats   int64    // 已经买入资产的聪的数量
@@ -221,13 +178,25 @@ type SwapContractRunningData struct {
 
 	TotalDepositAssets *Decimal
 	TotalDepositSats   int64
-	TotalDepositTx     int
-	TotalDepositTxFee  int64
+	TotalDepositTx     int   // 无用
+	TotalDepositTxFee  int64 // 无用
 
 	TotalWithdrawAssets *Decimal
 	TotalWithdrawSats   int64
 	TotalWithdrawTx     int
 	TotalWithdrawTxFee  int64
+
+	// 新增加
+	TotalStakeAssets *Decimal
+	TotalStakeSats   int64
+
+	TotalUnstakeAssets *Decimal
+	TotalUnstakeSats   int64
+	TotalUnstakeTx     int
+	TotalUnstakeTxFee  int64
+
+	TotalOutputAssets  *Decimal
+	TotalOutputSats    int64
 }
 
 func (p *SwapContractRunningData) ToNewVersion() *SwapContractRunningData {
@@ -241,6 +210,7 @@ type SwapContractRuntimeInDB struct {
 	SwapContractRunningData
 }
 
+// 非数据记录
 type TraderStatistic struct {
 	InvokeCount int
 
@@ -256,9 +226,14 @@ type TraderStatistic struct {
 	WithdrawValue int64
 	ProfitAmt     *Decimal
 	ProfitValue   int64
+	StakeAmt      *Decimal
+	StakeValue    int64
+	UnstakeAmt    *Decimal
+	UnstakeValue  int64
 }
 
-type TraderStatus struct {
+// 数据库记录: 老版本 version=0
+type TraderStatusV0 struct {
 	InvokerStatusBase
 	Address     string
 	OnSaleAmt   *Decimal
@@ -272,7 +247,7 @@ type TraderStatus struct {
 	ProfitUtxoMap map[string]bool // utxo map
 }
 
-func (p *TraderStatus) Statistic() *TraderStatistic {
+func (p *TraderStatusV0) Statistic() *TraderStatistic {
 	return &TraderStatistic{
 		InvokeCount:   p.InvokeCount,
 		OnSaleAmt:     p.OnSaleAmt,
@@ -290,8 +265,8 @@ func (p *TraderStatus) Statistic() *TraderStatistic {
 	}
 }
 
-func NewTraderStatus(address string, divisibility int) *TraderStatus {
-	return &TraderStatus{
+func NewTraderStatusV0(address string, divisibility int) *TraderStatusV0 {
+	return &TraderStatusV0{
 		InvokerStatusBase: *NewInvokerStatusBase(address, divisibility),
 		OnSaleAmt:         indexer.NewDecimal(0, divisibility),
 		DealAmt:           indexer.NewDecimal(0, divisibility),
@@ -299,6 +274,53 @@ func NewTraderStatus(address string, divisibility int) *TraderStatus {
 		SwapUtxoMap:       make(map[string]bool),
 		ProfitUtxoMap:     make(map[string]bool),
 	}
+}
+
+// 新版本，version=1
+type TraderStatus struct {
+	TraderStatusV0
+
+	StakeAmt     *Decimal
+	StakeValue   int64
+	UnStakeAmt   *Decimal
+	UnStakeValue int64
+
+	StakeUtxoMap   map[string]bool // utxo map
+	UnstakeUtxoMap map[string]bool // utxo map
+}
+
+func (p *TraderStatus) Statistic() *TraderStatistic {
+	return &TraderStatistic{
+		InvokeCount:   p.InvokeCount,
+		OnSaleAmt:     p.OnSaleAmt,
+		OnBuyValue:    p.OnBuyValue,
+		DealAmt:       p.DealAmt,
+		DealValue:     p.DealValue,
+		RefundAmt:     p.RefundAmt,
+		RefundValue:   p.RefundValue,
+		DepositAmt:    p.DepositAmt,
+		DepositValue:  p.DepositValue,
+		WithdrawAmt:   p.WithdrawAmt,
+		WithdrawValue: p.WithdrawValue,
+		ProfitAmt:     p.ProfitAmt,
+		ProfitValue:   p.ProfitValue,
+		StakeAmt:      p.StakeAmt,
+		StakeValue:    p.StakeValue,
+		UnstakeAmt:    p.UnStakeAmt,
+		UnstakeValue:  p.UnStakeValue,
+	}
+}
+
+func NewTraderStatus(address string, divisibility int) *TraderStatus {
+	s := &TraderStatus{
+		TraderStatusV0: *NewTraderStatusV0(address, divisibility),
+		StakeAmt:       indexer.NewDecimal(0, divisibility),
+		UnStakeAmt:     indexer.NewDecimal(0, divisibility),
+		StakeUtxoMap:   make(map[string]bool),
+		UnstakeUtxoMap: make(map[string]bool),
+	}
+	s.Version = 1
+	return s
 }
 
 type SwapContractRuntime struct {
@@ -310,6 +332,8 @@ type SwapContractRuntime struct {
 	refundMap     map[string]map[int64]*SwapHistoryItem // 准备退款的账户, address -> refund invoke item list, 无效的item也放进来，一起退款
 	depositMap    map[string]map[int64]*SwapHistoryItem // 准备deposit的账户, address -> deposit invoke item list
 	withdrawMap   map[string]map[int64]*SwapHistoryItem // 准备withdraw的账户, address -> withdraw invoke item list
+	stakeMap      map[string]map[int64]*SwapHistoryItem // 准备stake的账户, address -> stake invoke item list
+	unstakeMap    map[string]map[int64]*SwapHistoryItem // 准备unstake的账户, address -> unstake invoke item list
 	stubFeeMap    map[int64]int64                       // invokeCount->fee
 	isSending     bool
 
@@ -347,6 +371,8 @@ func (p *SwapContractRuntime) init() {
 	p.refundMap = make(map[string]map[int64]*SwapHistoryItem)
 	p.depositMap = make(map[string]map[int64]*SwapHistoryItem)
 	p.withdrawMap = make(map[string]map[int64]*SwapHistoryItem)
+	p.stakeMap = make(map[string]map[int64]*SwapHistoryItem)
+	p.unstakeMap = make(map[string]map[int64]*SwapHistoryItem)
 	p.stubFeeMap = make(map[int64]int64)
 	p.responseHistory = make(map[int][]*SwapHistoryItem)
 }
@@ -389,6 +415,10 @@ func (p *SwapContractRuntime) GobDecode(data []byte) error {
 	}
 
 	return nil
+}
+
+func (p *SwapContractRuntime) GetAssetAmount() (*Decimal, int64) {
+	return p.AssetAmtInPool, p.SatsValueInPool
 }
 
 func (p *SwapContractRuntime) RuntimeContent() []byte {
@@ -560,6 +590,9 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		Log.Infof("refund reason %s", string(invoke.Param))
 
 	case INVOKE_API_DEPOSIT:
+		if templateName != TEMPLATE_CONTRACT_AMM && templateName != TEMPLATE_CONTRACT_TRANSCEND {
+			return 0, fmt.Errorf("unsupport")
+		}
 		var innerParam DepositInvokeParam
 		err := json.Unmarshal([]byte(invoke.Param), &innerParam)
 		if err != nil {
@@ -580,6 +613,9 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		return DEPOSIT_INVOKE_FEE, nil
 
 	case INVOKE_API_WITHDRAW:
+		if templateName != TEMPLATE_CONTRACT_AMM && templateName != TEMPLATE_CONTRACT_TRANSCEND {
+			return 0, fmt.Errorf("unsupport")
+		}
 		var innerParam DepositInvokeParam
 		err := json.Unmarshal([]byte(invoke.Param), &innerParam)
 		if err != nil {
@@ -618,6 +654,9 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		return WITHDRAW_INVOKE_FEE + fee, nil
 
 	case INVOKE_API_STAKE:
+		if templateName != TEMPLATE_CONTRACT_AMM {
+			return 0, fmt.Errorf("unsupport")
+		}
 		var innerParam StakeInvokeParam
 		err := json.Unmarshal([]byte(invoke.Param), &innerParam)
 		if err != nil {
@@ -629,15 +668,66 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		if innerParam.AssetName != assetName.String() {
 			return 0, fmt.Errorf("invalid asset name %s", innerParam.AssetName)
 		}
-
+		if innerParam.Amt == "" || innerParam.Amt == "0" {
+			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
+		}
 		_, err = indexer.NewDecimalFromString(innerParam.Amt, p.Divisibility)
 		if err != nil {
 			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
 		}
+		if innerParam.Value <= 0 {
+			return 0, fmt.Errorf("invalid value %d", innerParam.Value)
+		}
 
-		return DEPOSIT_INVOKE_FEE, nil
+		return INVOKE_FEE, nil
 
 	case INVOKE_API_UNSTAKE:
+		if templateName != TEMPLATE_CONTRACT_AMM {
+			return 0, fmt.Errorf("unsupport")
+		}
+		var innerParam UnstakeInvokeParam
+		err := json.Unmarshal([]byte(invoke.Param), &innerParam)
+		if err != nil {
+			return 0, err
+		}
+		if innerParam.OrderType != ORDERTYPE_UNSTAKE {
+			return 0, fmt.Errorf("invalid order type %d", innerParam.OrderType)
+		}
+		if innerParam.AssetName != assetName.String() {
+			return 0, fmt.Errorf("invalid asset name %s", innerParam.AssetName)
+		}
+		if innerParam.Amt == "" || innerParam.Amt == "0" {
+			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
+		}
+		amt, err := indexer.NewDecimalFromString(innerParam.Amt, p.Divisibility)
+		if err != nil {
+			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
+		}
+		if innerParam.Value <= 0 {
+			return 0, fmt.Errorf("invalid value %d", innerParam.Value)
+		}
+
+		// 检查invoker是否有足够的资产 (TODO 这个接口无法知道inoker，无法检查)
+		if amt.Cmp(p.AssetAmtInPool) > 0 {
+			return 0, fmt.Errorf("no enough asset in pool, required %s but only %s",
+				amt.String(), p.AssetAmtInPool.String())
+		}
+
+		if assetName.Protocol == indexer.PROTOCOL_NAME_ORDX {
+			if amt.Int64()%int64(p.N) != 0 {
+				return 0, fmt.Errorf("ordx asset should withdraw be times of %d", p.N)
+			}
+		}
+
+		if innerParam.ToL1 {
+			assetName := AssetName{
+				AssetName: *p.GetAssetName(),
+				N:         p.N,
+			}
+			fee := CalcFee_SendTx(2, 3, 1, &assetName, amt, p.stp.GetFeeRate(), true)
+			return WITHDRAW_INVOKE_FEE + fee, nil
+		}
+		return INVOKE_FEE, nil
 
 	default:
 		return 0, fmt.Errorf("unsupport action %s", invoke.Action)

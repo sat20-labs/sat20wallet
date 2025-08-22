@@ -32,8 +32,10 @@ const (
 	CONTRACT_STATUS_CLOSED  int = -1
 	CONTRACT_STATUS_INIT    int = 0
 	// ...   deploying status
-	CONTRACT_STATUS_READY int = 100 // 正常工作阶段
-	// ...   running status
+	CONTRACT_STATUS_READY 	int = 100 // 正常工作阶段
+	// ...   running status，101-199，合约正常运行时的自定义状态
+	CONTRACT_STATUS_STAKING int = 101
+
 	CONTRACT_STATUS_CLOSING int = 200 // 进入最后的关闭阶段
 	// ...   closing status, at last change to CONTRACT_STATUS_CLOSED or CONTRACT_STATUS_EXPIRED
 
@@ -46,11 +48,60 @@ const (
 	INVOKE_RESULT_WITHDRAW string = "withdraw"
 	INVOKE_RESULT_DEANCHOR string = "deanchor"
 	INVOKE_RESULT_ANCHOR   string = "anchor"
+	INVOKE_RESULT_STAKE    string = "stake"
+	INVOKE_RESULT_UNSTAKE  string = "unstake"
+)
+
+
+const (
+	INVOKE_API_SWAP     string = "swap"
+	INVOKE_API_REFUND   string = "refund"
+	INVOKE_API_FUND     string = "fund"     //
+	INVOKE_API_DEPOSIT  string = "deposit"  // L1->L2  免费
+	INVOKE_API_WITHDRAW string = "withdraw" // L2->L1  收
+	INVOKE_API_STAKE    string = "stake"    // 如果是L1的stake，必须要有op_return携带invokeParam，否则会被认为是deposit
+	INVOKE_API_UNSTAKE  string = "unstake"  // 可以unstake到一层
+
+	ORDERTYPE_SELL     = 1
+	ORDERTYPE_BUY      = 2
+	ORDERTYPE_REFUND   = 3
+	ORDERTYPE_FUND     = 4
+	ORDERTYPE_PROFIT   = 5
+	ORDERTYPE_DEPOSIT  = 6
+	ORDERTYPE_WITHDRAW = 7
+	ORDERTYPE_MINT     = 8
+	ORDERTYPE_STAKE    = 9
+	ORDERTYPE_UNSTAKE  = 10
+	ORDERTYPE_UNUSED   = 11
+
+	INVOKE_FEE          int64 = 10
+	SWAP_INVOKE_FEE     int64 = 10
+	DEPOSIT_INVOKE_FEE  int64 = DEFAULT_SERVICE_FEE_DEPOSIT
+	WITHDRAW_INVOKE_FEE int64 = DEFAULT_SERVICE_FEE_WITHDRAW
+
+	MAX_PRICE_DIVISIBILITY = 10
+	MAX_ASSET_DIVISIBILITY = 10
+
+	BUCK_SIZE        = 100
+
+	SWAP_SERVICE_FEE_RATIO = 8 // 千分之
+	DEPTH_SLOT             = 10
 )
 
 const (
+	DONE_NOTYET          = 0
+	DONE_DEALT           = 1
+	DONE_REFUNDED        = 2
+	DONE_CLOSED_DIRECTLY = 3
+	DONE_CANCELLED       = 4
+)
+
+
+const (
 	INVOKE_REASON_NORMAL           string = ""
-	INVOKE_REASON_REFUND           string = "refund"
+	INVOKE_REASON_REFUND           string = "refund"  // 退款
+	INVOKE_REASON_CANCEL           string = "cancel"  // 不需要退款，指令取消
+	INVOKE_REASON_STAKING          string = "staking"  
 	INVOKE_REASON_INVALID          string = "invalid"     // 参数错误
 	INVOKE_REASON_INNER_ERROR      string = "inner error" // 内部错误
 	INVOKE_REASON_NO_ENOUGH_ASSET  string = "no enough asset"
@@ -232,16 +283,19 @@ type InvokeItem struct {
 	UnitPrice      *Decimal // X per Y
 	ExpectedAmt    *Decimal // 期望的数量
 	Address        string   // 所有人
-	FromL1         bool     // 是否主网的调用，默认是false
-	InUtxo         string   // sell or buy 的utxo
-	InValue        int64    // 白聪，不包括资产聪
-	InAmt          *Decimal
-	RemainingAmt   *Decimal // 要买或者卖的资产的剩余数量
-	RemainingValue int64    // 用来买资产的聪的剩余数量
-	ToL1           bool     // 是否主网的调用，默认是false
-	OutTxId        string   // 回款的TxId，可能是成交后汇款，也可能是撤销后的回款
-	OutAmt         *Decimal // 买到的资产
-	OutValue       int64    // 卖出得到的聪，扣除服务费
+	FromL1         bool     // InUtxo是否主网的调用，默认是false
+	InUtxo         string   // 调用合约的Utxo
+	InValue        int64    // InUtxo的白聪，不包括资产聪，包括手续费
+	InAmt          *Decimal // InUtxo的资产，每个utxo只能使用一种资产来和合约交互
+	RemainingAmt   *Decimal // 输入资产扣除费用后，能参与合约的资产，动态数据，比如要买或者卖的资产的剩余数量
+	RemainingValue int64    // 输入资产扣除费用后，能参与合约的聪，动态数据，比如用来买资产的聪的剩余数量
+	ToL1           bool     // OutTxId是否主网的调用，默认是false
+	OutTxId        string   // 输出的TxId，可能是成交后汇款，也可能是撤销后的回款
+	OutAmt         *Decimal // 合约交互结果，比如买到的资产
+	OutValue       int64    // 合约交互结果，卖出得到的聪，扣除服务费
+
+	// 增加
+	Padded		   []byte   // 扩展使用
 }
 
 func (p *InvokeItem) ToNewVersion() InvokeHistoryItem {
@@ -632,7 +686,7 @@ func (p *ContractRuntimeBase) UnconfirmedTxId_SatsNet() string {
 }
 
 func (p *ContractRuntimeBase) IsActive() bool {
-	return p.Status == CONTRACT_STATUS_READY && p.EnableBlock <= p.CurrBlock
+	return p.Status >= CONTRACT_STATUS_READY && p.CurrBlock >= p.EnableBlock
 }
 
 func (p *ContractRuntimeBase) CheckInvokeParam(string) (int64, error) {
@@ -645,7 +699,7 @@ func (p *ContractRuntimeBase) AllowInvoke(stp *Manager) error {
 	// if !ok {
 	// 	return fmt.Errorf("not ContractDeployReservation")
 	// }
-	if p.Status != CONTRACT_STATUS_READY {
+	if p.Status < CONTRACT_STATUS_READY {
 		return fmt.Errorf("contract not ready")
 	}
 
@@ -839,6 +893,21 @@ func ParseContractURL(url string) (string, string, string, error) {
 
 	return "", "", "", fmt.Errorf("invalid format of contract url. %s", url)
 }
+
+// full path
+func IsValidContractURL(url string) bool {
+	parts := strings.Split(url, URL_SEPARATOR)
+	// channelid-assetname-type
+	if len(parts) != 3 {
+		return false
+	}
+	if len(parts[0]) == 0 || len(parts[1]) == 0 || len(parts[2]) == 0 {
+		return false
+	}
+	// check template type ?
+	return true
+}
+
 
 // 合约部署
 func UnsignedDeployContractInvoiceV2(data *sindexer.ContractDeployData) ([]byte, error) {
