@@ -28,17 +28,31 @@ AMM交易合约
 3. 在L1上，没有被Ascend过的utxo，可以用来支持withdraw。如果没有足够的utxo可用，就必须先Descend一些utxo（DeAnchorTx）。但必须保留AmmContract指定数量资产。
 4. 在L2上，超出AmmContract的资产，可以直接send出去给用户，用来支持deposit操作。如果不够，就需要先Ascend用户转进来的utxo
 5. 为了简单一点，现在withdraw直接deAnchor，但deposit不执行anchor
+
+AMM V2 交易合约：组池子和动态调整池子
+在第一版本的基础上，增加：
+1. 池子建立的过程: 初始化参数，池子在满足初始化参数后进入AMM模式，在一个周期后自动调整
+2. STAKE和UNSTAKE：在池子的正常运作过程，允许任何stake和unstake，stake和unstake可以swap
+3. SETTLEMENT：运行周期结束，计算池子的运行利润，自动分配利润，但不自动构造交易，默认滚动投资
+4. FROZEN：池子低于初始水位，自动冻结，不能交易，但支持stake和unstake
+5. 默认利润分配比例： LP：节点A：节点B：基金会=55:20:20:5
 */
 
 func init() {
 	gob.Register(&AmmContractRuntime{})
 }
 
+const (
+	DEFAULT_SETTLEMENT_PERIOD int = 5 * 60 * 24 * 7 // 一周
+)
+
 type AmmContract struct {
 	SwapContract
 	AssetAmt string `json:"assetAmt"`
 	SatValue int64  `json:"satValue"`
 	K        string `json:"k"`
+
+	SettlePeriod int `json:"settlePeriod"` // 区块数，从EnableBlock开始算
 }
 
 func NewAmmContract() *AmmContract {
@@ -161,7 +175,9 @@ func (p *AmmContract) Encode() ([]byte, error) {
 		AddData(base).
 		AddData([]byte(p.AssetAmt)).
 		AddInt64(p.SatValue).
-		AddData([]byte(p.K)).Script()
+		AddData([]byte(p.K)).
+		AddInt64(int64(p.SettlePeriod)).
+		Script()
 }
 
 func (p *AmmContract) Decode(data []byte) error {
@@ -190,6 +206,13 @@ func (p *AmmContract) Decode(data []byte) error {
 		return fmt.Errorf("missing K parameter")
 	}
 	p.K = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		// 老版本没有该字段
+		p.SettlePeriod = DEFAULT_SETTLEMENT_PERIOD
+	} else {
+		p.SettlePeriod = int(tokenizer.ExtractInt64())
+	}
 
 	return nil
 }
@@ -230,12 +253,54 @@ func (p *DepositInvokeParam) Decode(data []byte) error {
 }
 
 type WithdrawInvokeParam = DepositInvokeParam
-type StakeInvokeParam = DepositInvokeParam
+
+type StakeInvokeParam struct {
+	OrderType int    `json:"orderType"`
+	AssetName string `json:"assetName"` // 资产名字
+	Amt       string `json:"amt"`       // 资产数量
+	Value     int64  `json:"value"`     // 成比例的聪数量
+}
+
+func (p *StakeInvokeParam) Encode() ([]byte, error) {
+	return txscript.NewScriptBuilder().
+		AddInt64(int64(p.OrderType)).
+		AddData([]byte(p.AssetName)).
+		AddData([]byte(p.Amt)).
+		AddInt64(int64(p.Value)).
+		Script()
+}
+
+func (p *StakeInvokeParam) Decode(data []byte) error {
+	tokenizer := txscript.MakeScriptTokenizer(0, data)
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing order type")
+	}
+	p.OrderType = int(tokenizer.ExtractInt64())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing asset name")
+	}
+	p.AssetName = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing asset amt")
+	}
+	p.Amt = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing sats value")
+	}
+	p.Value = (tokenizer.ExtractInt64())
+
+	return nil
+}
 
 type UnstakeInvokeParam struct {
 	OrderType int    `json:"orderType"`
 	AssetName string `json:"assetName"` // 资产名字
 	Amt       string `json:"amt"`       // 资产数量
+	Value     int64  `json:"value"`     // 成比例的聪数量
 	ToL1      bool   `json:"toL1"`
 }
 
@@ -248,6 +313,7 @@ func (p *UnstakeInvokeParam) Encode() ([]byte, error) {
 		AddInt64(int64(p.OrderType)).
 		AddData([]byte(p.AssetName)).
 		AddData([]byte(p.Amt)).
+		AddInt64(int64(p.Value)).
 		AddInt64(int64(toL1)).
 		Script()
 }
@@ -271,14 +337,18 @@ func (p *UnstakeInvokeParam) Decode(data []byte) error {
 	p.Amt = string(tokenizer.Data())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return fmt.Errorf("missing order type")
+		return fmt.Errorf("missing sats value")
+	}
+	p.Value = (tokenizer.ExtractInt64())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing flag toL1")
 	}
 	toL1 := (tokenizer.ExtractInt64())
 	p.ToL1 = toL1 > 0
 
 	return nil
 }
-
 
 type AmmContractRuntime struct {
 	SwapContractRuntime
