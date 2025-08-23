@@ -32,13 +32,7 @@ export async function handleMessage(
       return
     }
 
-    // 检查网络状态，确保WASM使用正确的网络配置
-    const currentNetwork = walletStorage.getValue('network')
-    const wasmNetwork = (globalThis as any).sat20wallet_wasm?.getNetwork?.() || currentNetwork
-    if (currentNetwork && wasmNetwork && currentNetwork !== wasmNetwork) {
-      console.log(`网络状态不一致，重新初始化WASM: 当前=${currentNetwork}, WASM=${wasmNetwork}`)
-      await reInitializeWasm()
-    }
+    // 网络状态检查和WASM重新初始化逻辑已下沉到 service 层
 
     // List of methods that require the origin to be authorized.
     const METHODS_REQUIRING_AUTHORIZATION = [

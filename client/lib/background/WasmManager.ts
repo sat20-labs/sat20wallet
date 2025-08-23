@@ -1,12 +1,11 @@
 import { browser } from 'wxt/browser'
 import { walletStorage } from '@/lib/walletStorage'
 import { getConfig, logLevel } from '@/config/wasm'
-import { Network } from '@/types'
+import type { Network } from '@/types'
 
 // The Go class is available globally in the service worker context
 // after importScripts('/wasm/wasm_exec.js') is called.
 declare const Go: any
-
 
 export const initializeWasm = async (): Promise<void> => {
   try {
@@ -15,8 +14,8 @@ export const initializeWasm = async (): Promise<void> => {
     const go = new Go()
     const env = walletStorage.getValue('env') || 'test'
     const network = walletStorage.getValue('network') as Network
-    console.log('调试: 加载 WASM 模块, 环境: ', env, '网络: ', network);
-    console.log('调试: 加载 WASM 模块, 配置: ', getConfig(env, network));
+    console.log('调试: 加载 WASM 模块, 环境: ', env, '网络: ', network)
+    console.log('调试: 加载 WASM 模块, 配置: ', getConfig(env, network))
     const wasmPath = browser.runtime.getURL('/wasm/sat20wallet.wasm')
     const response = await fetch(wasmPath)
     const wasmBinary = await response.arrayBuffer()
@@ -42,10 +41,16 @@ export const initializeWasm = async (): Promise<void> => {
 export const reInitializeWasm = async (): Promise<void> => {
   const env = walletStorage.getValue('env') || 'test'
   const network = walletStorage.getValue('network') as Network
-  console.log(`调试: 重新初始化WASM, 环境: ${env}, 网络: ${network}`);
+  console.log(`调试: 重新初始化WASM, 环境: ${env}, 网络: ${network}`)
   const config = getConfig(env, network)
-  console.log('调试: 重新初始化WASM, 配置: ', config);
-  await (globalThis as any).sat20wallet_wasm.release()
-  await (globalThis as any).sat20wallet_wasm.init(config, logLevel)
-  console.log('调试: WASM 重新初始化完成');
-} 
+  console.log('调试: 重新初始化WASM, 配置: ', config)
+  try {
+    await (globalThis as any).sat20wallet_wasm.release()
+    await (globalThis as any).sat20wallet_wasm.init(config, logLevel)
+    console.log('调试: WASM 重新初始化完成')
+  } catch (error) {
+    console.error('调试: WASM 重新初始化失败:', error)
+    throw error
+  }
+}
+ 
