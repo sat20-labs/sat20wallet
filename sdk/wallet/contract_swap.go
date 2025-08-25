@@ -636,9 +636,10 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		}
 		// 检查一层网络上是否有足够的资产
 		totalAmt := p.stp.GetAssetBalance(p.ChannelAddr, p.GetAssetName())
-		if totalAmt.Cmp(indexer.DecimalAdd(amt, p.AssetAmtInPool)) < 0 {
-			return 0, fmt.Errorf("no enough asset in amm pool L1, required %s but only %s-%s",
-				amt.String(), totalAmt.String(), p.AssetAmtInPool.String())
+		available := indexer.DecimalSub(totalAmt, p.AssetAmtInPool)
+		if amt.Cmp(available) > 0 {
+			return 0, fmt.Errorf("no enough asset in amm pool L1, required %s but only %s",
+				amt.String(), available.String())
 		}
 
 		if assetName.Protocol == indexer.PROTOCOL_NAME_ORDX {
