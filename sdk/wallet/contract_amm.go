@@ -92,6 +92,10 @@ func (p *AmmContract) CheckContent() error {
 		return fmt.Errorf("k is not the result of assetAmt*satValue")
 	}
 
+	if p.SettlePeriod != 0 && p.SettlePeriod < DEFAULT_SETTLEMENT_PERIOD {
+		return fmt.Errorf("settle period should bigger than %d", DEFAULT_SETTLEMENT_PERIOD)
+	}
+
 	return nil
 }
 
@@ -356,6 +360,7 @@ type AmmContractRuntime struct {
 	originalValue int64
 	originalAmt   *Decimal
 	k             *Decimal
+	settlePeriod  int
 }
 
 func NewAmmContractRuntime(stp *Manager) *AmmContractRuntime {
@@ -396,6 +401,12 @@ func (p *AmmContractRuntime) InitFromContent(content []byte, stp *Manager) error
 	p.k, err = indexer.NewDecimalFromString(contractBase.K, p.Divisibility+2)
 	if err != nil {
 		return err
+	}
+
+	if contractBase.SettlePeriod == 0 {
+		p.settlePeriod = DEFAULT_SETTLEMENT_PERIOD
+	} else {
+		p.settlePeriod = contractBase.SettlePeriod
 	}
 
 	return nil
