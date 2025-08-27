@@ -81,9 +81,10 @@ export const useWalletStore = defineStore('wallet', () => {
     } catch (error) {
       console.error('Failed to send NETWORK_CHANGED message to background:', error)
     }
-    await stp.release()
-    await walletManager.release()
-    window.location.reload()
+    return true;
+    // await stp.release()
+    // await walletManager.release()
+    // window.location.reload()
   }
 
   const setChain = async (value: Chain) => {

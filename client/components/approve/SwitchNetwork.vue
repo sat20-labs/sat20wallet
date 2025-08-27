@@ -27,8 +27,6 @@
 <script setup lang="ts">
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { useWalletStore } from '@/store'
-import service from '@/lib/service'
-
 interface Props {
   data: any
 }
@@ -40,8 +38,10 @@ const { network } = storeToRefs(walletStore)
 const emit = defineEmits(['confirm', 'cancel'])
 
 const confirm = async () => {
+  setTimeout(() => {
+    emit('confirm', props.data.network)
+  }, 500);
   await walletStore.setNetwork(props.data.network)
-  emit('confirm', props.data.network)
 }
 const cancel = () => {
   emit('cancel')

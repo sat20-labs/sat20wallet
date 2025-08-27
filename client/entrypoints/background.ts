@@ -72,12 +72,10 @@ class BackgroundService {
             this.isWasmReady = true // 即使失败也要设置为true，避免无限等待
           }
         })
+        if (message.event === 'networkChanged' && this.portMap.content) {
+          this.portMap.content.postMessage(message)
+        }
       } else if (this.portMap.content) {
-        console.log('type', type);
-        console.log('action', action);
-        console.log('metadata', metadata);
-        console.log('message', message);
-        console.log('this.portMap.content', this.portMap.content);
         this.portMap.content.postMessage(message)
       }
       return true
