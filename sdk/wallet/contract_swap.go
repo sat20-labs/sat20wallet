@@ -699,7 +699,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		d1 := indexer.DecimalMul(amt, indexer.NewDecimal(valueInPool, p.Divisibility))
 		d2 := indexer.DecimalMul(amtInPool, indexer.NewDecimal(innerParam.Value, p.Divisibility))
 		if d1.Cmp(d2) != 0 {
-			threshold, _ := indexer.NewDecimalFromString("0.001", 3)
+			threshold, _ := indexer.NewDecimalFromString("0.010", 3)
 			if indexer.DecimalSub(d1, d2).Abs().Cmp(indexer.DecimalMul(d2, threshold)) >= 0 {
 				return 0, fmt.Errorf("stake asset should keep the same ratio with current pool: %s %d", innerParam.Amt, innerParam.Value)
 			}
@@ -753,7 +753,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		d1 := indexer.DecimalMul(amt, indexer.NewDecimal(valueInPool, p.Divisibility))
 		d2 := indexer.DecimalMul(amtInPool, indexer.NewDecimal(innerParam.Value, p.Divisibility))
 		if d1.Cmp(d2) != 0 {
-			threshold, _ := indexer.NewDecimalFromString("0.001", 3)
+			threshold, _ := indexer.NewDecimalFromString("0.010", 3)
 			if indexer.DecimalSub(d1, d2).Abs().Cmp(indexer.DecimalMul(d2, threshold)) >= 0 {
 				return 0, fmt.Errorf("stake asset should keep the same ratio with current pool: %s %d", innerParam.Amt, innerParam.Value)
 			}
