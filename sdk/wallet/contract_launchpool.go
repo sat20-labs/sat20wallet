@@ -118,9 +118,9 @@ func (p *LaunchPoolContract) CheckContent() error {
 	if p.Limit > p.MaxSupply {
 		return fmt.Errorf("limit %d should not larger than max supply %d", p.Limit, p.MaxSupply)
 	}
-	if p.MaxSupply%p.Limit != 0 {
-		return fmt.Errorf("max supply should be times of limitation")
-	}
+	// if p.MaxSupply%p.Limit != 0 {
+	// 	return fmt.Errorf("max supply should be times of limitation")
+	// }
 	if p.MaxSupply%int64(p.MintAmtPerSat) != 0 {
 		return fmt.Errorf("max supply should be times of mintAmtPerSat")
 	}

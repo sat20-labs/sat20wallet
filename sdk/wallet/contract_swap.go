@@ -634,11 +634,12 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
 		}
-		// 检查一层网络上是否有足够的资产
+		// 检查一层网络上是否有足够的资产，现在合约不保留一层资产，只需要确保二层资产有足够资产就行
 		totalAmt := p.stp.GetAssetBalance(p.ChannelAddr, p.GetAssetName())
-		if totalAmt.Cmp(indexer.DecimalAdd(amt, p.AssetAmtInPool)) < 0 {
-			return 0, fmt.Errorf("no enough asset in amm pool L1, required %s but only %s-%s",
-				amt.String(), totalAmt.String(), p.AssetAmtInPool.String())
+		// := indexer.DecimalSub(totalAmt, p.AssetAmtInPool)
+		if amt.Cmp(totalAmt) > 0 {
+			return 0, fmt.Errorf("no enough asset in amm pool L1, required %s but only %s",
+				amt.String(), totalAmt.String())
 		}
 
 		if assetName.Protocol == indexer.PROTOCOL_NAME_ORDX {
@@ -671,12 +672,37 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		if innerParam.Amt == "" || innerParam.Amt == "0" {
 			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
 		}
-		_, err = indexer.NewDecimalFromString(innerParam.Amt, p.Divisibility)
+		amt, err := indexer.NewDecimalFromString(innerParam.Amt, p.Divisibility)
 		if err != nil {
 			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
 		}
 		if innerParam.Value <= 0 {
 			return 0, fmt.Errorf("invalid value %d", innerParam.Value)
+		}
+		// 保持相同比例
+		var amtInPool *Decimal
+		var valueInPool int64
+		if p.SatsValueInPool == 0 {
+			amm, ok := p.Contract.(*AmmContract)
+			if !ok {
+				return 0, fmt.Errorf("not AMM contract")
+			}
+			amtInPool, err = indexer.NewDecimalFromString(amm.AssetAmt, MAX_ASSET_DIVISIBILITY)
+			if err != nil {
+				return 0, err
+			}
+			valueInPool = amm.SatValue
+		} else {
+			amtInPool = p.AssetAmtInPool.Clone()
+			valueInPool = p.SatsValueInPool
+		}
+		d1 := indexer.DecimalMul(amt, indexer.NewDecimal(valueInPool, p.Divisibility))
+		d2 := indexer.DecimalMul(amtInPool, indexer.NewDecimal(innerParam.Value, p.Divisibility))
+		if d1.Cmp(d2) != 0 {
+			threshold, _ := indexer.NewDecimalFromString("0.001", 3)
+			if indexer.DecimalSub(d1, d2).Abs().Cmp(indexer.DecimalMul(d2, threshold)) >= 0 {
+				return 0, fmt.Errorf("stake asset should keep the same ratio with current pool: %s %d", innerParam.Amt, innerParam.Value)
+			}
 		}
 
 		return INVOKE_FEE, nil
@@ -705,6 +731,32 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		}
 		if innerParam.Value <= 0 {
 			return 0, fmt.Errorf("invalid value %d", innerParam.Value)
+		}
+
+		// 保持相同比例
+		var amtInPool *Decimal
+		var valueInPool int64
+		if p.SatsValueInPool == 0 {
+			amm, ok := p.Contract.(*AmmContract)
+			if !ok {
+				return 0, fmt.Errorf("not AMM contract")
+			}
+			amtInPool, err = indexer.NewDecimalFromString(amm.AssetAmt, MAX_ASSET_DIVISIBILITY)
+			if err != nil {
+				return 0, err
+			}
+			valueInPool = amm.SatValue
+		} else {
+			amtInPool = p.AssetAmtInPool.Clone()
+			valueInPool = p.SatsValueInPool
+		}
+		d1 := indexer.DecimalMul(amt, indexer.NewDecimal(valueInPool, p.Divisibility))
+		d2 := indexer.DecimalMul(amtInPool, indexer.NewDecimal(innerParam.Value, p.Divisibility))
+		if d1.Cmp(d2) != 0 {
+			threshold, _ := indexer.NewDecimalFromString("0.001", 3)
+			if indexer.DecimalSub(d1, d2).Abs().Cmp(indexer.DecimalMul(d2, threshold)) >= 0 {
+				return 0, fmt.Errorf("stake asset should keep the same ratio with current pool: %s %d", innerParam.Amt, innerParam.Value)
+			}
 		}
 
 		// 检查invoker是否有足够的资产 (TODO 这个接口无法知道inoker，无法检查)
