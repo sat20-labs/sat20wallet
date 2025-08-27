@@ -412,6 +412,40 @@ func (p *AmmContractRuntime) InitFromContent(content []byte, stp *Manager) error
 	return nil
 }
 
+
+func (p *AmmContractRuntime) CalcStakeValueByAssetAmt(amt *Decimal) int64 {
+	var amtInPool *Decimal
+	var valueInPool int64
+	if p.SatsValueInPool == 0 {
+		amtInPool = p.originalAmt.Clone()
+		valueInPool = p.originalValue
+	} else {
+		amtInPool = p.AssetAmtInPool.Clone()
+		valueInPool = p.SatsValueInPool
+	}
+	d1 := indexer.DecimalMul(amt, indexer.NewDecimal(valueInPool, p.Divisibility))
+	d2 := indexer.DecimalDiv(d1, amtInPool)
+	return d2.Round()
+}
+
+func (p *AmmContractRuntime) CalcStakeAssetAmtByValue(value int64) *Decimal {
+	var amtInPool *Decimal
+	var valueInPool int64
+	if p.SatsValueInPool == 0 {
+		amtInPool = p.originalAmt.Clone()
+		valueInPool = p.originalValue
+	} else {
+		amtInPool = p.AssetAmtInPool.Clone()
+		valueInPool = p.SatsValueInPool
+	}
+	d1 := indexer.DecimalMul(amtInPool, indexer.NewDecimal(value, p.Divisibility))
+	return indexer.DecimalDiv(d1, indexer.NewDecimal(valueInPool, p.Divisibility))
+}
+
+func (p *AmmContractRuntime) GetPeriodCount() int {
+	return (p.CurrBlock-p.EnableBlock)/p.settlePeriod
+}
+
 func (p *AmmContractRuntime) GobEncode() ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
