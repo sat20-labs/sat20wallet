@@ -11,16 +11,16 @@ export default defineConfig({
     web_accessible_resources: [
       {
         resources: ['injected.js'],
-        matches: ['*://*/*'],
+        matches: ["<all_urls>"],
       },
       {
         resources: ['sat20wallet.wasm', 'stp.wasm'],
-        matches: ['*://*/*'],
+        matches: ["<all_urls>"],
       },
     ],
     content_scripts: [
       {
-        matches: ['*://*/*'],
+        matches: ["<all_urls>"],
         js: ['content-scripts/content.js'],
       },
     ],
@@ -28,7 +28,7 @@ export default defineConfig({
       extension_pages:
         "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
     },
-    permissions: ['tabs', 'storage', 'activeTab', 'scripting'],
+    permissions: ['storage'],
   },
   runner: {
     startUrls: ['http://localhost:3002/account'],
@@ -43,7 +43,7 @@ export default defineConfig({
     esbuild: {
       target: 'esnext',
       // drop:
-        // process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [],
+      //   process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [],
     },
     plugins: [],
     logLevel: 'info' as const,

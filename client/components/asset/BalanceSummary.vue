@@ -18,7 +18,7 @@
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.unavailable') }}</span>
-          <span class="text-sm text-zinc-400">{{ formatBalance(abailableSats.lockedAmt, props.selectedChain, network) }}</span>
+          <span class="text-sm text-zinc-400">{{ formatBalance(btcBalance.total - abailableSats.availableAmt, props.selectedChain, network) }}</span>
 
         </div>
         <div class="flex justify-between">

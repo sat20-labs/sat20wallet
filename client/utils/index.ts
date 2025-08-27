@@ -47,7 +47,7 @@ export const generateMempoolUrl = ({
     url += `/${locale}`;
   }
   if (network === 'testnet') {
-    url += '/testnet4';
+    url += '/testnet';
   }
 
   if (path) {

@@ -157,7 +157,7 @@ const config: Config = {
   }
 }
 
-export const logLevel = 5 //0: Panic, 1: Fatal, 2: Error, 3: 
+export const logLevel = 5 //0: Panic, 1: Fatal, 2: Error, 3: Warning, 4: Info, 5: Debug
 export const getConfig = (env: string, network: Network): NetworkConfig => {
   const envConfig = config[env as keyof Config]
   if (!envConfig) {
