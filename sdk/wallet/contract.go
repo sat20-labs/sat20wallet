@@ -686,7 +686,9 @@ func (p *ContractRuntimeBase) UnconfirmedTxId_SatsNet() string {
 }
 
 func (p *ContractRuntimeBase) IsActive() bool {
-	return p.Status >= CONTRACT_STATUS_READY && p.CurrBlock >= p.EnableBlock
+	return p.Status >= CONTRACT_STATUS_READY && 
+	p.Status < CONTRACT_STATUS_CLOSING &&
+	p.CurrBlock >= p.EnableBlock
 }
 
 func (p *ContractRuntimeBase) CheckInvokeParam(string) (int64, error) {
