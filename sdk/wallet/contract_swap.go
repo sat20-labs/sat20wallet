@@ -105,7 +105,10 @@ type SwapInvokeParam struct {
 	OrderType int    `json:"orderType"`
 	AssetName string `json:"assetName"` // 要买或者卖的资产名称
 	Amt       string `json:"amt"`       // 要买或者卖的资产数量，以utxo带的资产为准，需要加判断
-	UnitPrice string `json:"unitPrice"` // 资产价格，默认是聪的对价
+	UnitPrice string `json:"unitPrice"` // 资产价格，默认是聪的对价；
+										// 如果是AMM合约：（Amt参数是期望买/卖的最小值）
+										// 	1. 如果是买单，声明utxo带的聪数量，以这些聪购买至少Amt数量的资产
+										//  2. 如果是卖单，声明utxo带的资产数量
 }
 
 func (p *SwapInvokeParam) Encode() ([]byte, error) {
@@ -186,7 +189,6 @@ type SwapContractRunningData struct {
 	TotalWithdrawTx     int
 	TotalWithdrawTxFee  int64
 
-	// 新增加
 	TotalStakeAssets *Decimal
 	TotalStakeSats   int64
 
@@ -197,6 +199,9 @@ type SwapContractRunningData struct {
 
 	TotalOutputAssets  *Decimal
 	TotalOutputSats    int64
+
+	// 新增加
+	AmmK			   *Decimal
 }
 
 func (p *SwapContractRunningData) ToNewVersion() *SwapContractRunningData {
@@ -634,6 +639,10 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
 		}
+		if innerParam.AssetName == indexer.ASSET_PLAIN_SAT.String() && amt.Int64() < 330 {
+			return 0, fmt.Errorf("withdraw sats should bigger than 330")
+		}
+
 		// 检查一层网络上是否有足够的资产，现在合约不保留一层资产，只需要确保二层资产有足够资产就行
 		totalAmt := p.stp.GetAssetBalance(p.ChannelAddr, p.GetAssetName())
 		// := indexer.DecimalSub(totalAmt, p.AssetAmtInPool)

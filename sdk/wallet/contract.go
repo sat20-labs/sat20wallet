@@ -101,12 +101,15 @@ const (
 	INVOKE_REASON_NORMAL           string = ""
 	INVOKE_REASON_REFUND           string = "refund"  // 退款
 	INVOKE_REASON_CANCEL           string = "cancel"  // 不需要退款，指令取消
-	INVOKE_REASON_STAKING          string = "staking"  
 	INVOKE_REASON_INVALID          string = "invalid"     // 参数错误
 	INVOKE_REASON_INNER_ERROR      string = "inner error" // 内部错误
 	INVOKE_REASON_NO_ENOUGH_ASSET  string = "no enough asset"
 	INVOKE_REASON_SLIPPAGE_PROTECT string = "slippage protection"
 	INVOKE_REASON_UTXO_NOT_FOUND   string = "input utxo not found"
+)
+
+const (
+	ERR_MERKLE_ROOT_INCONSISTENT = "contract runtime merkle root is inconsistent"
 )
 
 // 用在开发过程修改数据库，设置为true，然后数据库自动升级，然后马上要设置为false，并且将所有oldversion的数据结果，等同于最新结构
@@ -122,7 +125,7 @@ type ContractDeployAction struct {
 type Contract interface {
 	GetTemplateName() string          // 合约模版名称
 	GetAssetName() *indexer.AssetName // 资产名称
-	GetContractName() string          // 完整名字，包括更多信息
+	GetContractName() string          // 资产名称_模版名称
 	CheckContent() error              // 合约内容检查，部署前调用
 	Content() string                  // 合约内容， json格式
 	InvokeParam(string) string        // 调用合约的参数， json格式
