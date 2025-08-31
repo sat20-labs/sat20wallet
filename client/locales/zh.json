@@ -327,7 +327,9 @@
     "domainNotFound": "名称未找到: {name}",
     "domainName": "名称",
     "resolvedAddress": "解析地址",
-    "fixedFee": "固定手续费"
+    "fixedFee": "固定手续费",
+    "withdrawalFeeInfo": "提取需支付：服务费 2000 sats + 矿工费（预计 300 sats，随网络变化）",
+    "unlockNotice": "⚠️ 解锁提示：从通道解锁到聪网时，需要预留 3000 sats，用于可能的单边退出（承诺交易费用）。"
   },
   "receiveQRcode": {
     "title": "接收地址",

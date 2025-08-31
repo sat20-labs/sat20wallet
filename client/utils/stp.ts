@@ -418,7 +418,7 @@ class SatsnetStp {
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'splicingIn',
-      chanPoint,
+      chanPoint.toString(),
       assetName,
       utxos,
       fees,
@@ -436,7 +436,7 @@ class SatsnetStp {
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'splicingOut',
-      chanPoint,
+      chanPoint.toString(),
       toAddress,
       assetName,
       fees,
@@ -454,7 +454,7 @@ class SatsnetStp {
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'lockToChannel',
-      chanPoint,
+      chanPoint.toString(),
       assetName,
       String(amt),
       utxos,
@@ -470,7 +470,7 @@ class SatsnetStp {
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'unlockFromChannel',
-      channelUtxo,
+      channelUtxo.toString(),
       assetName,
       String(amt),
       feeUtxoList

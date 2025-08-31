@@ -49,7 +49,7 @@ export function useAssetActions() {
   }: any): Promise<void> => {
     loading.value = true
     //console.log('UseAssetAction splicingIn:', chanid, asset_name, utxos, feeUtxos, feeRate, amt)
-    const [err] = await satsnetStp.splicingIn(chanid, asset_name, utxos, feeUtxos, feeRate, amt)
+    const [err] = await satsnetStp.splicingIn(chanid?.toString(), asset_name, utxos, feeUtxos, feeRate, amt)
     if (err) {
       loading.value = false
       handleError(err.message)

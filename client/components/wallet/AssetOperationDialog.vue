@@ -140,6 +140,24 @@
         </div>
       </div>
 
+      <!-- 新增：显示提取费用提示 -->
+      <div v-if="!isResolving && props.operationType === 'withdraw'" 
+           class="mt-4 p-3 bg-blue-900/20 rounded-lg border border-blue-700">
+        <div class="text-sm text-blue-400 flex items-start gap-2">
+          <Icon icon="lucide:info" class="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>{{ $t('assetOperationDialog.withdrawalFeeInfo') }}</span>
+        </div>
+      </div>
+
+      <!-- 新增：显示解锁提示 -->
+      <div v-if="!isResolving && props.operationType === 'unlock'" 
+           class="mt-4 p-3 bg-yellow-900/20 rounded-lg border border-yellow-700">
+        <div class="text-sm text-yellow-400 flex items-start gap-2">
+          <Icon icon="lucide:alert-triangle" class="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>{{ $t('assetOperationDialog.unlockNotice') }}</span>
+        </div>
+      </div>
+
       <AlertDialogFoot class="my-4 gap-2">
         <AlertDialogCancel @click="showAlertDialog = false" :disabled="isResolving">{{ $t('assetOperationDialog.cancel')
           }}</AlertDialogCancel>
@@ -299,7 +317,16 @@ const setMaxAmount = () => {
   console.log('maxAmount', maxAmount.value);
 
   if (maxAmount.value) {
-    emit('update:amount', maxAmount.value) // 将最大值传递给父组件
+    let calculatedAmount = maxAmount.value
+    
+    // 如果是 unlock 操作，需要减去 3000 sats 的预留费用
+    if (props.operationType === 'unlock') {
+      const maxAmountNum = parseFloat(maxAmount.value)
+      const reservedAmount = 3000
+      calculatedAmount = Math.max(0, maxAmountNum - reservedAmount).toString()
+    }
+    
+    emit('update:amount', calculatedAmount) // 将计算后的最大值传递给父组件
   }
 }
 

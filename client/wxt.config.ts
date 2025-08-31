@@ -42,8 +42,8 @@ export default defineConfig({
   vite: () => ({
     esbuild: {
       target: 'esnext',
-      // drop:
-      //   process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [],
+      drop:
+        process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [],
     },
     plugins: [],
     logLevel: 'info' as const,

@@ -327,7 +327,9 @@
     "domainNotFound": "Name not found: {name}",
     "domainName": "Name",
     "resolvedAddress": "Resolved Address",
-    "fixedFee": "Fixed Fee"
+    "fixedFee": "Fixed Fee",
+    "withdrawalFeeInfo": "Withdrawal fee: 2000 sats service fee + miner fee (~300 sats, network-based)",
+    "unlockNotice": "⚠️ Unlock Notice: When unlocking to SatoshiNet, 3000 sats will be reserved to cover potential commitment transaction (unilateral exit) fees."
   },
   "receiveQRcode": {
     "title": "Receive Address",
