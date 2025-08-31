@@ -300,7 +300,7 @@ func (p *Manager) getRuneIdFromName(name *swire.AssetName) (*runestone.RuneId, e
 
 func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 
-	if *name == ASSET_PLAIN_SAT {
+	if *name == ASSET_PLAIN_SAT || *name == db.ASSET_ALL_SAT {
 		return &indexer.TickerInfo{
 			AssetName:    *name,
 			MaxSupply:    "21000000000000000", //  sats
