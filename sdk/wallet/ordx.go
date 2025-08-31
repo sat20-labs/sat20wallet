@@ -408,6 +408,8 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string, 
 		return utxos[i].Value > utxos[j].Value
 	})
 
+	name = strings.ToLower(name)
+	name = strings.TrimSpace(name)
 	body := fmt.Sprintf(CONTENT_SETKV1_BODY, name, key, value)
 	lenBody := len(body)
 	p.utxoLockerL1.Reload(address)
@@ -463,6 +465,9 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string)
 	for k, v := range kv {
 		kvs += fmt.Sprintf(",\"%s\":\"%s\"", k, v)
 	}
+
+	name = strings.ToLower(name)
+	name = strings.TrimSpace(name)
 	body := fmt.Sprintf(CONTENT_SETKV_N_BODY, name, kvs)
 	lenBody := len(body)
 

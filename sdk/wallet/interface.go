@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil/psbt"
@@ -11,8 +12,8 @@ import (
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 
-	indexer "github.com/sat20-labs/indexer/common"
 	db "github.com/sat20-labs/indexer/common"
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
@@ -546,6 +547,9 @@ func (p *Manager) BindReferrer(referrerName, key string, serverPubkey []byte) (s
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
 
+	referrerName = strings.ToLower(referrerName)
+	referrerName = strings.TrimSpace(referrerName)
+	
 	// 检查该名字是否是有效的推荐人名字
 	info, err := p.l1IndexerClient.GetNameInfo(referrerName)
 	if err != nil {
