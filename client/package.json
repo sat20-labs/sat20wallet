@@ -10,7 +10,7 @@
     "bump-version": "node scripts/version-bump.js",
     "build": "node scripts/clean-output.js && npm run bump-version && wxt build",
     "build:firefox": "node scripts/clean-output.js && npm run bump-version && wxt build -b firefox && npm run copy-latest-zip",
-    "zip": "node scripts/clean-output.js && wxt zip && npm run copy-latest-zip",
+    "zip": "node scripts/clean-output.js && npm run bump-version && && wxt zip && npm run copy-latest-zip",
     "zip:firefox": "node scripts/clean-output.js && npm run bump-version && wxt zip -b firefox && npm run copy-latest-zip",
     "compile": "vue-tsc --noEmit",
     "copy-latest-zip": "node scripts/copy-latest-zip.js"
