@@ -224,3 +224,45 @@ validateBTCAddress('invalid-address', 'mainnet') // false
 validateBTCAddress('tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', 'mainnet') // false - testnet地址在mainnet
 validateBTCAddress('bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', 'testnet') // false - mainnet地址在testnet
 */
+
+/**
+ * 检测地址是否为非Taproot地址
+ * 非Taproot地址格式：
+ * - 主网：以 bc1q 开头或其他格式
+ * - 测试网：以 tb1q 开头或其他格式
+ */
+export function isNonTaprootAddress(address: string, network: string = 'mainnet'): boolean {
+  if (!address || typeof address !== 'string') return false
+  
+  const trimmedAddress = address.trim()
+  
+  if (network === 'testnet') {
+    // 测试网非Taproot地址：不以 tb1p 开头
+    return !trimmedAddress.startsWith('tb1p')
+  } else {
+    // 主网非Taproot地址：不以 bc1p 开头
+    return !trimmedAddress.startsWith('bc1p')
+  }
+}
+
+/**
+ * 检测地址是否为非Taproot地址（自动检测网络）
+ * 根据地址前缀自动判断网络类型
+ */
+export function isNonTaprootAddressAuto(address: string): boolean {
+  if (!address || typeof address !== 'string') return false
+  
+  const trimmedAddress = address.trim()
+  
+  // 主网Taproot地址：以 bc1p 开头
+  if (trimmedAddress.startsWith('bc1p')) {
+    return false
+  }
+  
+  // 测试网Taproot地址：以 tb1p 开头
+  if (trimmedAddress.startsWith('tb1p')) {
+    return false
+  }
+  
+  return true
+}
