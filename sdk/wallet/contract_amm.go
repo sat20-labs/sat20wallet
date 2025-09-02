@@ -359,6 +359,7 @@ type AmmContractRuntime struct {
 
 	originalValue int64
 	originalAmt   *Decimal
+	originalK     *Decimal
 	k             *Decimal
 	settlePeriod  int
 }
@@ -397,10 +398,16 @@ func (p *AmmContractRuntime) InitFromContent(content []byte, stp *Manager) error
 		return err
 	}
 	p.originalValue = contractBase.SatValue
-
-	p.k, err = indexer.NewDecimalFromString(contractBase.K, p.Divisibility+2)
+	p.originalK, err = indexer.NewDecimalFromString(contractBase.K, p.Divisibility+2)
 	if err != nil {
 		return err
+	}
+
+	if p.AmmK != nil {
+		p.k = p.AmmK.Clone()
+	} else {
+		p.k = p.originalK.Clone()
+		p.AmmK = p.k.Clone()
 	}
 
 	if contractBase.SettlePeriod == 0 {
@@ -408,10 +415,8 @@ func (p *AmmContractRuntime) InitFromContent(content []byte, stp *Manager) error
 	} else {
 		p.settlePeriod = contractBase.SettlePeriod
 	}
-
 	return nil
 }
-
 
 func (p *AmmContractRuntime) CalcStakeValueByAssetAmt(amt *Decimal) int64 {
 	var amtInPool *Decimal

@@ -639,7 +639,8 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
 		}
-		if innerParam.AssetName == indexer.ASSET_PLAIN_SAT.String() && amt.Int64() < 330 {
+		isPlainSat := innerParam.AssetName == indexer.ASSET_PLAIN_SAT.String()
+		if isPlainSat && amt.Int64() < 330 {
 			return 0, fmt.Errorf("withdraw sats should bigger than 330")
 		}
 
@@ -661,6 +662,9 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 			N:         p.N,
 		}
 		fee := CalcFee_SendTx(2, 3, 1, &assetName, amt, p.stp.GetFeeRate(), true)
+		if isPlainSat {
+			fee += amt.Int64()
+		}
 		return WITHDRAW_INVOKE_FEE + fee, nil
 
 	case INVOKE_API_STAKE:
