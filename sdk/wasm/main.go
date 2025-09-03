@@ -2384,7 +2384,7 @@ func getFeeForInvokeContract(this js.Value, p []js.Value) any {
 
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		fee, err := _mgr.QueryFeeForInvokeContract(url, (invoke))
+		_, fee, err := _mgr.QueryFeeForInvokeContract(url, (invoke))
 		if err != nil {
 			return nil, -1, err.Error()
 		}

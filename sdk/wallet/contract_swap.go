@@ -662,9 +662,6 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 			N:         p.N,
 		}
 		fee := CalcFee_SendTx(2, 3, 1, &assetName, amt, p.stp.GetFeeRate(), true)
-		if isPlainSat {
-			fee += amt.Int64()
-		}
 		return WITHDRAW_INVOKE_FEE + fee, nil
 
 	case INVOKE_API_STAKE:

@@ -164,6 +164,10 @@ type ContractRuntime interface {
 	GetEnableBlock() int
 	GetEnableBlockL1() int
 
+	IsActive() bool // >=ready && enabled
+	IsReady() bool  // ready && enabled
+
+
 	// 合约调用的支持接口
 	CheckInvokeParam(string) (int64, error) // 调用合约的参数检查(json)，调用合约前调用
 	AllowInvoke(*Manager) error
@@ -686,6 +690,11 @@ func (p *ContractRuntimeBase) UnconfirmedTxId() string {
 
 func (p *ContractRuntimeBase) UnconfirmedTxId_SatsNet() string {
 	return ""
+}
+
+func (p *ContractRuntimeBase) IsReady() bool {
+	return p.Status == CONTRACT_STATUS_READY &&
+	p.CurrBlock >= p.EnableBlock
 }
 
 func (p *ContractRuntimeBase) IsActive() bool {

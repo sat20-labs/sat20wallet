@@ -71,24 +71,22 @@ func (p *Manager) QueryParamForInvokeContract(templateName, action string) (stri
 	return c.InvokeParam(action), nil
 }
 
-func (p *Manager) QueryFeeForInvokeContract(contractURL string, invokeParam string) (int64, error) {
-	
-	// client mode
+func (p *Manager) QueryFeeForInvokeContract(contractURL string, invokeParam string) (ContractRuntime, int64, error) {
 	contract := p.getRemoteDeployedContract(contractURL)
 	if contract == nil {
-		return 0, fmt.Errorf("contract not found")
+		
+		return nil, 0, fmt.Errorf("contract not found")
 	}
-	
+
 	// 检查调用参数是否有效。
 	// TODO 以后直接到持有合约的节点上去检查
 	fee, err := contract.CheckInvokeParam(invokeParam)
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
 
-	return fee, nil
+	return contract, fee, nil
 }
-
 
 // 合约状态经常变化，需要实时获取
 func (p *Manager) getRemoteDeployedContract(url string) ContractRuntime {
@@ -132,9 +130,12 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
 		return "", err
 	}
 
-	fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
+	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
 	if err != nil {
 		return "", err
+	}
+	if !runtime.IsActive() {
+		return "", fmt.Errorf("contract is not active")
 	}
 
 	// 将json结构转为script结构
@@ -196,9 +197,12 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam strin
 	}
 
 	// 调用合约的费用
-	fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
+	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
 	if err != nil {
 		return "", err
+	}
+	if !runtime.IsActive() {
+		return "", fmt.Errorf("contract is not active")
 	}
 
 	// 将json结构转为script结构
@@ -237,6 +241,30 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam strin
 
 	case INVOKE_API_REFUND:
 
+	case INVOKE_API_STAKE:
+		var stakeParam StakeInvokeParam
+		err = json.Unmarshal([]byte(wrapperParam.Param), &stakeParam)
+		if err != nil {
+			return "", err
+		}
+		fee += stakeParam.Value
+		innerParam, err := stakeParam.Encode()
+		if err != nil {
+			return "", err
+		}
+		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+		
+	case INVOKE_API_UNSTAKE:
+		var stakeParam UnstakeInvokeParam
+		err = json.Unmarshal([]byte(wrapperParam.Param), &stakeParam)
+		if err != nil {
+			return "", err
+		}
+		innerParam, err := stakeParam.Encode()
+		if err != nil {
+			return "", err
+		}
+		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
 
 	default:
 		return "", fmt.Errorf("unsupport action %s", wrapperParam.Action)
@@ -270,11 +298,22 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam strin
 		return "", err
 	}
 
-	txId, err := p.SendAssetsV3_SatsNet(channelAddr, assetName, amt, fee, nullDataScript)
+	var txId string
+	if amt == "" || amt == "0" {
+		tx, err := p.SendAssets_SatsNet(channelAddr, ASSET_PLAIN_SAT.String(), fmt.Sprintf("%d", fee), nullDataScript)
+		if err != nil {
+			Log.Errorf("SendAssets_SatsNet %s failed", channelAddr)
+			return "", err
+		}
+		txId = tx.TxID()
+	} else {
+		txId, err = p.SendAssetsV3_SatsNet(channelAddr, assetName, amt, fee, nullDataScript)
 	if err != nil {
 		Log.Errorf("SendAssetsV3_SatsNet %s failed", channelAddr)
 		return "", err
 	}
+	}
+	
 	Log.Infof("invoke contract %s with txId %s", contractURL, txId)
 
 	return txId, nil
@@ -294,9 +333,12 @@ func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
 	}
 
 	// 调用合约的费用
-	fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
+	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
 	if err != nil {
 		return "", err
+	}
+	if !runtime.IsActive() {
+		return "", fmt.Errorf("contract is not active")
 	}
 
 	// 主网不需要invoice
@@ -387,7 +429,7 @@ func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
 	dest := &SendAssetInfo{
 		Address: channelAddr,
 		Value: value,
-		AssetName: indexer.NewAssetNameFromString(assetName),
+		AssetName: name,
 		AssetAmt: dAmt,
 	}
 
