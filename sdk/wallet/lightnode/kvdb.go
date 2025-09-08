@@ -9,11 +9,10 @@ import (
 
 	"strings"
 
-	indexer "github.com/sat20-labs/indexer/common"
-	db "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/indexer/common"
 )
 
-var Log = indexer.Log
+var Log = common.Log
 
 type jsBatchWrite struct {
 	db        *jsDB
@@ -37,7 +36,7 @@ func (b *jsBatchWrite) Delete(key []byte) error {
 func (b *jsBatchWrite) Flush() error {
 	if b.db.isExtension {
 		b.db.putBatch_Chrome(b.batch)
-		b.db.removeBatch_Chrome(b.db.deletions)
+		b.db.removeBatch_Chrome(b.deletions)
 	} else {
 		for keyStr, value := range b.batch {
 			b.db.db.Call("setItem", keyStr, string(value))
@@ -61,48 +60,58 @@ type jsDB struct {
 	db        js.Value
 	isExtension bool
 	batch     map[string][]byte
-	deletions []string
 }
 
 // 页面模式下使用 localStorage ，插件模式下使用 chrome.storage.local
-func NewKVDB() db.KVDB {
-	isExtension := false
+func NewKVDB() common.KVDB {
 	var db js.Value
-	// 页面加载只支持localStorage，以后要支持页面加载的话，需要加配置项来支持
-	// db := js.Global().Get("localStorage")
-	// if db.IsUndefined() {
-		chrome := js.Global().Get("chrome")
-		if chrome.IsUndefined() {
-			Log.Errorf("chrome API is not available")
-			return nil
+	isExtension := false
+
+	// 检查是否在插件环境下
+	chrome := js.Global().Get("chrome")
+	if !chrome.IsUndefined() {
+		storage := chrome.Get("storage")
+		if !storage.IsUndefined() {
+			local := storage.Get("local")
+			if !local.IsUndefined() {
+				db = local
+				isExtension = true
+			}
 		}
-		
-		db = chrome.Get("storage").Get("local")
-		if db.IsUndefined() {
-			Log.Errorf("chrome.storage.local is not available")
-			return nil
+	}
+
+	// 如果不是插件环境，则尝试页面环境 localStorage
+	if db.IsUndefined() {
+		localStorage := js.Global().Get("localStorage")
+		if !localStorage.IsUndefined() {
+			db = localStorage
+			isExtension = false
 		}
-		isExtension = true
-	//}
+	}
+
+	// 两种环境都不可用时，报错
+	if db.IsUndefined() {
+		Log.Errorf("No suitable storage API is available (neither chrome.storage.local nor localStorage)")
+		return nil
+	}
 
 	kvdb := jsDB{
-		db: db,
+		db:          db,
 		isExtension: isExtension,
 	}
 	return &kvdb
 }
 
+
 func (p *jsDB) get(key []byte) ([]byte, error) {
 	keyStr := string(key)
 	var value js.Value
 	if p.isExtension {
-		 // 创建 Promise 来处理异步调用
-		 getPromise := js.Global().Get("Promise").New(js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		executor := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 			resolve := args[0]
 			reject := args[1]
-			
-			// 调用 chrome.storage.local.get
-			p.db.Call("get", keyStr, js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+
+			cb := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 				if err := js.Global().Get("chrome").Get("runtime").Get("lastError"); !err.IsUndefined() {
 					reject.Invoke(err.Get("message").String())
 					return nil
@@ -110,27 +119,34 @@ func (p *jsDB) get(key []byte) ([]byte, error) {
 				
 				result := args[0]
 				if result.IsUndefined() || result.Get(keyStr).IsUndefined() {
-					reject.Invoke(db.ErrKeyNotFound.Error())
+					reject.Invoke(common.ErrKeyNotFound.Error())
 					return nil
 				}
 				
 				resolve.Invoke(result.Get(keyStr))
 				return nil
-			}))
+			})
+			defer cb.Release()
+			
+			// 调用 chrome.storage.local.get
+			p.db.Call("get", keyStr, cb)
 			
 			return nil
-		}))
+		})
+		defer executor.Release()
+		 // 创建 Promise 来处理异步调用
+		getPromise := js.Global().Get("Promise").New(executor)
 		
 		// 等待 Promise 完成
 		value = await(getPromise)
 		if value.IsUndefined() {
-			return nil, db.ErrKeyNotFound
+			return nil, common.ErrKeyNotFound
 		}
 
 	} else {
 		value = p.db.Call("getItem", keyStr)
 		if value.IsNull() {
-			return nil, db.ErrKeyNotFound // Key not found
+			return nil, common.ErrKeyNotFound // Key not found
 		}
 	}
 	
@@ -151,14 +167,12 @@ func (p *jsDB) put(key, value []byte) error {
 		// 创建存储对象
 		data := make(map[string]interface{})
 		data[keyStr] = valueStr
-		
-		// 创建 Promise 来处理异步调用
-		setPromise := js.Global().Get("Promise").New(js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+
+		executor := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 			resolve := args[0]
 			reject := args[1]
-			
-			// 调用 chrome.storage.local.set
-			p.db.Call("set", data, js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+
+			cb := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 				if err := js.Global().Get("chrome").Get("runtime").Get("lastError"); !err.IsUndefined() {
 					reject.Invoke(err.Get("message").String())
 					return nil
@@ -166,10 +180,18 @@ func (p *jsDB) put(key, value []byte) error {
 				
 				resolve.Invoke(nil)
 				return nil
-			}))
+			})
+			defer cb.Release()
+			
+			// 调用 chrome.storage.local.set
+			p.db.Call("set", data, cb)
 			
 			return nil
-		}))
+		})
+		defer executor.Release()
+		
+		// 创建 Promise 来处理异步调用
+		setPromise := js.Global().Get("Promise").New(executor)
 		
 		// 等待 Promise 完成
 		await(setPromise)
@@ -184,13 +206,11 @@ func (p *jsDB) put(key, value []byte) error {
 func (p *jsDB) remove(key []byte) error {
 	keyStr := string(key)
 	if p.isExtension {
-		// 创建 Promise 来处理异步调用
-		removePromise := js.Global().Get("Promise").New(js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		executor := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 			resolve := args[0]
 			reject := args[1]
-			
-			// 调用 chrome.storage.local.remove
-			p.db.Call("remove", keyStr, js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+
+			cb := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 				if err := js.Global().Get("chrome").Get("runtime").Get("lastError"); !err.IsUndefined() {
 					reject.Invoke(err.Get("message").String())
 					return nil
@@ -198,10 +218,17 @@ func (p *jsDB) remove(key []byte) error {
 				
 				resolve.Invoke(nil)
 				return nil
-			}))
+			})
+			defer cb.Release()
+			
+			// 调用 chrome.storage.local.remove
+			p.db.Call("remove", keyStr, cb)
 			
 			return nil
-		}))
+		})
+		defer executor.Release()
+		// 创建 Promise 来处理异步调用
+		removePromise := js.Global().Get("Promise").New(executor)
 
 		// 等待 Promise 完成
 		await(removePromise)
@@ -216,18 +243,24 @@ func (p *jsDB) remove(key []byte) error {
 func await(promise js.Value) js.Value {
     done := make(chan js.Value)
     var success js.Value
+	thenCb := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		success = args[0]
+		done <- success
+		return nil
+	})
+	defer thenCb.Release()
+
+	catchCb := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		if len(args) > 0 {
+			done <- args[0]
+		} else {
+			done <- js.Undefined()
+		}
+    	return nil
+	})
+	defer catchCb.Release()
     
-    promise.Call("then",
-        js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-            success = args[0]
-            done <- success
-            return nil
-        }),
-        js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-            done <- js.Undefined()
-            return nil
-        }),
-    )
+    promise.Call("then", thenCb, catchCb)
     
     return <-done
 }
@@ -297,7 +330,7 @@ func (p *jsDB) DropAll() error {
 	return wb.Flush()
 }
 
-func (p *jsDB) NewWriteBatch() db.WriteBatch {
+func (p *jsDB) NewWriteBatch() common.WriteBatch {
 	return &jsBatchWrite{
 		db:        p,
 		batch:     make(map[string]string),
@@ -311,13 +344,11 @@ func (p *jsDB) SetReverse(bool) {
 func (p *jsDB) BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error) error {
     prefixStr := string(prefix)
 	if p.isExtension {
-		// 创建 Promise 处理异步调用
-		getPromise := js.Global().Get("Promise").New(js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		executor := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 			resolve := args[0]
 			reject := args[1]
 
-			// 获取所有存储的数据
-			p.db.Call("get", js.Null(), js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			cb := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 				if err := js.Global().Get("chrome").Get("runtime").Get("lastError"); !err.IsUndefined() {
 					reject.Invoke(err.Get("message").String())
 					return nil
@@ -332,10 +363,17 @@ func (p *jsDB) BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error)
 				// 解析存储的数据
 				resolve.Invoke(result)
 				return nil
-			}))
+			})
+			defer cb.Release()
+
+			// 获取所有存储的数据
+			p.db.Call("get", js.Null(), cb)
 
 			return nil
-		}))
+		})
+		defer executor.Release()
+		// 创建 Promise 处理异步调用
+		getPromise := js.Global().Get("Promise").New(executor)
 
 		// 等待 Promise 完成
 		value := await(getPromise)
@@ -378,8 +416,7 @@ func (p *jsDB) BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error)
 				if err != nil {
 					return err
 				}
-				decodedKey := string(key)
-				if err := r([]byte(decodedKey), []byte(decodedValue)); err != nil {
+				if err := r([]byte(key), (decodedValue)); err != nil {
 					return err
 				}
 			}
@@ -400,22 +437,28 @@ func (p *jsDB) putBatch_Chrome(entries map[string]string) error {
     for key, value := range entries {
         data[key] = value
     }
-    
-    setPromise := js.Global().Get("Promise").New(js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+
+	executor := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
         resolve := args[0]
         reject := args[1]
-        
-        p.db.Call("set", data, js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+
+		cb := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
             if err := js.Global().Get("chrome").Get("runtime").Get("lastError"); !err.IsUndefined() {
                 reject.Invoke(err.Get("message").String())
                 return nil
             }
             resolve.Invoke(nil)
             return nil
-        }))
+        })
+		defer cb.Release()
+        
+        p.db.Call("set", data, cb)
         
         return nil
-    }))
+    })
+	defer executor.Release()
+    
+    setPromise := js.Global().Get("Promise").New(executor)
     
     await(setPromise)
     return nil
@@ -434,16 +477,8 @@ func (p *jsReadBatch) GetRef(key []byte) ([]byte, error) {
 	return p.db.Read(key)
 }
 
-func (p *jsReadBatch) MultiGet(keys [][]byte) ([][]byte, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (p *jsReadBatch) MultiGetSorted(keys [][]byte) (map[string][]byte, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
 // View 在一致性快照中执行只读操作
-func (p *jsDB) View(fn func(txn db.ReadBatch) error) error {
+func (p *jsDB) View(fn func(txn common.ReadBatch) error) error {
 	rb := jsReadBatch{
 		db: p,
 	}
@@ -457,51 +492,28 @@ func (p *jsDB) removeBatch_Chrome(entries []string) error {
     for _, value := range entries {
         data = append(data, value)
     }
-   
-    setPromise := js.Global().Get("Promise").New(js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+
+	executor := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
         resolve := args[0]
         reject := args[1]
-        
-        p.db.Call("remove", data, js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		cb := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
             if err := js.Global().Get("chrome").Get("runtime").Get("lastError"); !err.IsUndefined() {
                 reject.Invoke(err.Get("message").String())
                 return nil
             }
             resolve.Invoke(nil)
             return nil
-        }))
+        })
+		defer cb.Release()
+        
+        p.db.Call("remove", data, cb)
         
         return nil
-    }))
+    })
+	defer executor.Release()
+   
+    setPromise := js.Global().Get("Promise").New(executor)
     
     await(setPromise)
     return nil
-}
-
-func (p *jsDB) getStorageInfo_Chrome() (used float64, remaining float64, err error) {
-    infoPromise := js.Global().Get("Promise").New(js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-        resolve := args[0]
-        reject := args[1]
-        
-        p.db.Call("getBytesInUse", nil, js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-            if err := js.Global().Get("chrome").Get("runtime").Get("lastError"); !err.IsUndefined() {
-                reject.Invoke(err.Get("message").String())
-                return nil
-            }
-            bytesInUse := args[0].Float()
-            // Chrome 存储限制通常是 5MB
-            remaining := 5*1024*1024 - bytesInUse
-            resolve.Invoke([]interface{}{bytesInUse, remaining})
-            return nil
-        }))
-        
-        return nil
-    }))
-    
-    info := await(infoPromise)
-    if info.IsUndefined() {
-        return 0, 0, fmt.Errorf("failed to get storage info")
-    }
-    
-    return info.Index(0).Float(), info.Index(1).Float(), nil
 }
