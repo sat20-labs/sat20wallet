@@ -859,6 +859,36 @@ func signMessage(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
+func signData(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+
+	// jsBytes := p[0]
+	// goBytes := make([]byte, jsBytes.Length())
+	// js.CopyBytesToGo(goBytes, jsBytes)
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "message parameter should be a string")
+	}
+	msg := p[0].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		// 一般前端给json序列化后的string，直接转成[]byte
+		result, err := _mgr.SignMessage([]byte(msg))
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{
+			"signature": hex.EncodeToString(result),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
 func signPsbt(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -2762,6 +2792,7 @@ func main() {
 	obj.Set("getRevocationBaseKey", js.FuncOf(getRevocationBaseKey))
 	// input: none; return: node pubkey (hex string)
 	obj.Set("getNodePubKey", js.FuncOf(getNodePubKey))
+	obj.Set("signData", js.FuncOf(signData))
 	// input: message (hex string) return: signature (hex string)
 	obj.Set("signMessage", js.FuncOf(signMessage))
 	// input: psbt(hexString); return: signed psbt (hexString)
