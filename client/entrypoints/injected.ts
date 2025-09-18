@@ -506,6 +506,15 @@ export default defineUnlistedScript(() => {
         data: { address },
       })
     }
+
+    // 新增：发送资产到多个地址
+    async BatchSendAssetsV2_SatsNet(destAddr: string[], assetName: string, amt: string, n: number): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.BATCH_SEND_ASSETS_V2_SATSNET,
+        data: { destAddr, assetName, amt, n },
+      })
+    }
   }
 
   const sat20 = new Sat20()
