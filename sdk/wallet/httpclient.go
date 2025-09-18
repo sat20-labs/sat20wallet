@@ -79,7 +79,7 @@ func (p *NetClient) SendGetRequest(u *URL) ([]byte, error) {
 		return nil, fmt.Errorf("%s", respBytes)
 	}
 
-	if err == nil && len(respBytes) == 0 {
+	if len(respBytes) == 0 {
 		return nil, fmt.Errorf("server panic: %s", url.String())
 	}
 
@@ -142,7 +142,7 @@ func (p *NetClient) SendPostRequest(u *URL, marshalledJSON []byte) ([]byte, erro
 		return nil, fmt.Errorf("%s", respBytes)
 	}
 
-	if err == nil && len(respBytes) == 0 {
+	if len(respBytes) == 0 {
 		return nil, fmt.Errorf("server panic: %s", url.String())
 	}
 
