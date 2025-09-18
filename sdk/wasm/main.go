@@ -1609,6 +1609,47 @@ func batchSendAssets(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func batchSendAssetsV2_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+
+	pn := p[0]
+	destAddress, err := getStringVector(pn)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	pn = p[1]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "asset name parameter should be a string")
+	}
+	assetName := pn.String()
+
+	// amount
+	pn = p[2]
+	amt, err := getStringVector(pn)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txid, err := _mgr.BatchSendAssetsV2_SatsNet(destAddress, assetName, amt, nil)
+		if err != nil {
+			wallet.Log.Errorf("BatchSendAssetsV2_SatsNet error: %v", err)
+			return nil, -1, err.Error()
+		}
+
+		return map[string]interface{}{
+			"txId": txid,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
 
 
 func getTxAssetInfoFromPsbt(this js.Value, p []js.Value) any {
@@ -2823,6 +2864,7 @@ func main() {
 	obj.Set("sendAssets_SatsNet", js.FuncOf(sendAssets_SatsNet))
 	obj.Set("batchSendAssets_SatsNet", js.FuncOf(batchSendAssets_SatsNet))
 	obj.Set("batchSendAssets", js.FuncOf(batchSendAssets))
+	obj.Set("batchSendAssetsV2_SatsNet", js.FuncOf(batchSendAssetsV2_SatsNet))
 
 	obj.Set("getTickerInfo", js.FuncOf(getTickerInfo))
 	obj.Set("lockUtxo", js.FuncOf(lockUtxo))
