@@ -460,6 +460,7 @@ export async function handleMessage(
         Message.MessageAction.LOCK_TO_CHANNEL,
         Message.MessageAction.UNLOCK_FROM_CHANNEL,
         Message.MessageAction.BATCH_SEND_ASSETS_SATSNET,
+        Message.MessageAction.BATCH_SEND_ASSETS_V2_SATSNET,
         // --- 合约相关 ---
         Message.MessageAction.DEPLOY_CONTRACT_REMOTE,
         Message.MessageAction.INVOKE_CONTRACT_SATSNET,

@@ -102,6 +102,17 @@
     "repeatPlaceholder": "请输入数量",
     "balance": "当前余额"
   },
+  "batchSendAssetsV2": {
+    "confirmTitle": "确认批量发送资产 V2",
+    "description": "在单笔交易中向多个地址发送资产。",
+    "assetName": "资产名称",
+    "amount": "每个地址金额",
+    "batchCount": "接收者数量",
+    "destinationAddresses": "目标地址",
+    "totalAmount": "总金额",
+    "feeNote": "网络费用将自动计算。",
+    "missingData": "缺少必要的数据或数据无效。"
+  },
   "switchNetwork": {
     "title": "允许此网站切换网络？"
   },

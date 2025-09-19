@@ -53,7 +53,7 @@ class BackgroundService {
     }
   }
 
-  private onMessageHandler = (message: any, sender: Runtime.MessageSender, sendResponse: (response?: any) => void) => {
+  private onMessageHandler = (message: any, sender: Runtime.MessageSender, sendResponse: (response?: any) => void): true => {
     const { type, action, metadata } = message
     if (type === Message.MessageType.EVENT) {
       if (action === Message.MessageAction.ENV_CHANGED || message.event === 'networkChanged') {
@@ -92,8 +92,9 @@ class BackgroundService {
       // 这是为了响应 content.ts 的后备计划
       // 收到这个消息本身就意味着 background 被成功唤醒了
       console.log(`调试: 收到来自 ${message.origin} 的后备激活消息，连接即将恢复。`)
+      return true
     }
-    return undefined; // 返回 false 或 undefined 表示是同步响应
+    return true; // 总是返回 true 表示消息已被处理
   }
 
   private handleContentScriptConnection(port: Runtime.Port) {

@@ -19,6 +19,7 @@ import ApproveInvokeContractSatsNet from '@/components/approve/ApproveInvokeCont
 import ApproveInvokeContractV2SatsNet from '@/components/approve/ApproveInvokeContractV2SatsNet.vue'
 import ApproveInvokeContractV2 from '@/components/approve/ApproveInvokeContractV2.vue'
 import ApproveRegisterAsReferrer from '@/components/approve/ApproveRegisterAsReferrer.vue'
+import ApproveBatchSendAssetsV2SatsNet from '@/components/approve/ApproveBatchSendAssetsV2SatsNet.vue'
 import { Message } from '@/types/message'
 
 const { approveData, approve, reject } = useApprove()
@@ -29,6 +30,7 @@ const approveComponentMap: any = {
   [Message.MessageAction.SIGN_MESSAGE]: SignMessage,
   [Message.MessageAction.SIGN_PSBT]: SignPsbt,
   [Message.MessageAction.BATCH_SEND_ASSETS_SATSNET]: SplitAsset,
+  [Message.MessageAction.BATCH_SEND_ASSETS_V2_SATSNET]: ApproveBatchSendAssetsV2SatsNet,
   [Message.MessageAction.DEPLOY_CONTRACT_REMOTE]: ApproveDeployContractRemote,
   [Message.MessageAction.INVOKE_CONTRACT_SATSNET]: ApproveInvokeContractSatsNet,
   [Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET]: ApproveInvokeContractV2SatsNet,

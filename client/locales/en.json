@@ -101,6 +101,17 @@
     "repeat": "Batch Split Nums",
     "repeatPlaceholder": "Enter repeat times"
   },
+  "batchSendAssetsV2": {
+    "confirmTitle": "Confirm Batch Send Assets V2",
+    "description": "Send assets to multiple addresses in a single transaction.",
+    "assetName": "Asset Name",
+    "amount": "Amount per Address",
+    "batchCount": "Number of Recipients",
+    "destinationAddresses": "Destination Addresses",
+    "totalAmount": "Total Amount",
+    "feeNote": "Network fees will be calculated automatically.",
+    "missingData": "Required data is missing or invalid."
+  },
   "switchNetwork": {
     "title": "Allow this site to switch the network?"
   },

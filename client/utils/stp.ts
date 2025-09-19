@@ -61,6 +61,7 @@ interface StpWasmModule {
   getAssetAmount_SatsNet: (...args: any[]) => Promise<WasmResponse<{ amount: string; value: string }>>;
   batchSendAssets_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
   batchSendAssets: (...args: any[]) => Promise<WasmResponse<any>>;
+  batchSendAssetsV2_SatsNet: (destAddr: string[], assetName: string, amtList: string[]) => Promise<WasmResponse<any>>;
   getTxAssetInfoFromPsbt: (...args: any[]) => Promise<WasmResponse<any>>;
   getTxAssetInfoFromPsbt_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
   getCommitTxAssetInfo: (...args: any[]) => Promise<WasmResponse<any>>;
@@ -531,6 +532,10 @@ class SatsnetStp {
   async batchSendAssets(destAddr: string,
     assetName: string, amt: string, n: number, feeRate: number): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
     return this._handleRequest<any>('batchSendAssets', destAddr, assetName, amt, n, feeRate.toString());
+  }
+  async batchSendAssetsV2_SatsNet(destAddr: string[],
+    assetName: string, amtList: string[]): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest<{ txId: string }>('batchSendAssetsV2_SatsNet', destAddr, assetName, amtList);
   }
   async getTxAssetInfoFromPsbt(
     psbtHex: string,
