@@ -586,57 +586,57 @@ func TestVerifyTx(t *testing.T) {
 }
 
 
-func TestDeployContract_ORDX_Remote(t *testing.T) {
-	prepare(t)
+// func TestDeployContract_ORDX_Remote(t *testing.T) {
+// 	prepare(t)
 
-	supportedContracts, err := _client.GetSupportContractInServer()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("supported contracts: %v\n", supportedContracts)
+// 	supportedContracts, err := _client.GetSupportContractInServer()
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// 	fmt.Printf("supported contracts: %v\n", supportedContracts)
 
-	deployedContracts, err := _client.GetDeployedContractInServer()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("deployed contracts: %v\n", deployedContracts)
+// 	deployedContracts, err := _client.GetDeployedContractInServer()
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// 	fmt.Printf("deployed contracts: %v\n", deployedContracts)
 
-	assetName := &AssetName{
-		AssetName: swire.AssetName{
-			Protocol: "ordx",
-			Type:     "f",
-			Ticker:   "testTicker",
-		},
-		N: 1000,
-	}
-	launchPool := NewLaunchPoolContract()
-	launchPool.AssetName = assetName.AssetName
-	launchPool.BindingSat = assetName.N
-	launchPool.MintAmtPerSat = assetName.N
-	launchPool.Limit = 10000000
-	launchPool.LaunchRatio = 70
-	launchPool.MaxSupply = 40000000
+// 	assetName := &AssetName{
+// 		AssetName: swire.AssetName{
+// 			Protocol: "ordx",
+// 			Type:     "f",
+// 			Ticker:   "testTicker",
+// 		},
+// 		N: 1000,
+// 	}
+// 	launchPool := NewLaunchPoolContract()
+// 	launchPool.AssetName = assetName.AssetName
+// 	launchPool.BindingSat = assetName.N
+// 	launchPool.MintAmtPerSat = assetName.N
+// 	launchPool.Limit = 10000000
+// 	launchPool.LaunchRatio = 70
+// 	launchPool.MaxSupply = 40000000
 
-	fmt.Printf("contract: %s\n", launchPool.Content())
+// 	fmt.Printf("contract: %s\n", launchPool.Content())
 
-	str := `{"contractType":"launchpool.tc","startBlock":0,"endBlock":0,"assetName":{"Protocol":"ordx","Type":"f","Ticker":"round2"},"mintAmtPerSat":100,"limit":100000,"maxSupply":10000000,"launchRation":70,"bindingSat":1000}`
-	var launchPool2 LaunchPoolContract
-	err = json.Unmarshal([]byte(str), &launchPool2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("contract2: %s\n", launchPool2.Content())
+// 	str := `{"contractType":"launchpool.tc","startBlock":0,"endBlock":0,"assetName":{"Protocol":"ordx","Type":"f","Ticker":"round2"},"mintAmtPerSat":100,"limit":100000,"maxSupply":10000000,"launchRation":70,"bindingSat":1000}`
+// 	var launchPool2 LaunchPoolContract
+// 	err = json.Unmarshal([]byte(str), &launchPool2)
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// 	fmt.Printf("contract2: %s\n", launchPool2.Content())
 
-	deployFee, err := _client.QueryFeeForDeployContract(TEMPLATE_CONTRACT_LAUNCHPOOL, (launchPool2.Content()), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("deploy contract %s need %d sats\n", TEMPLATE_CONTRACT_LAUNCHPOOL, deployFee)
-	fmt.Printf("use RemoteDeployContract to deploy a contract on core channel in server node\n")
+// 	deployFee, err := _client.QueryFeeForDeployContract(TEMPLATE_CONTRACT_LAUNCHPOOL, (launchPool2.Content()), 1)
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// 	fmt.Printf("deploy contract %s need %d sats\n", TEMPLATE_CONTRACT_LAUNCHPOOL, deployFee)
+// 	fmt.Printf("use RemoteDeployContract to deploy a contract on core channel in server node\n")
 
-	invokeParam, err := _client.QueryParamForInvokeContract(TEMPLATE_CONTRACT_LAUNCHPOOL, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("use %s as template to invoke contract %s\n", invokeParam, TEMPLATE_CONTRACT_LAUNCHPOOL)
-}
+// 	invokeParam, err := _client.QueryParamForInvokeContract(TEMPLATE_CONTRACT_LAUNCHPOOL, "")
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// 	fmt.Printf("use %s as template to invoke contract %s\n", invokeParam, TEMPLATE_CONTRACT_LAUNCHPOOL)
+// }

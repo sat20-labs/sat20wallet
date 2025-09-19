@@ -475,15 +475,18 @@ func (builder *InscriptionBuilder) CalculateFee() (int64, int64) {
 
 func Inscribe(network *chaincfg.Params, request *InscriptionRequest, resvId int64) (*InscribeResv, error) {
 	tool, err := NewInscriptionTool(network, request)
-	if err != nil && err.Error() == "insufficient balance" {
-		return &InscribeResv{
-			CommitTx:    nil,
-			RevealTx:    nil,
-			CommitTxFee: tool.MustCommitTxFee,
-			RevealTxFee: tool.MustRevealTxFee,
-			CommitAddr:  tool.CommitAddr,
-		}, nil
+	if err != nil {
+		return nil, err
 	}
+	// if err != nil && err.Error() == "insufficient balance" {
+	// 	return &InscribeResv{
+	// 		CommitTx:    nil,
+	// 		RevealTx:    nil,
+	// 		CommitTxFee: tool.MustCommitTxFee,
+	// 		RevealTxFee: tool.MustRevealTxFee,
+	// 		CommitAddr:  tool.CommitAddr,
+	// 	}, nil
+	// }
 
 	err = VerifySignedTx(tool.CommitTx, tool.CommitTxPrevOutputFetcher)
 	if err != nil {

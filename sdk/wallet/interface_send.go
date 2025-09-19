@@ -1079,7 +1079,7 @@ func (p *Manager) SendAssetsV2_SatsNet(destAddr string,
 	return txid, nil
 }
 
-// 同时发送资产和聪
+// 同时发送资产和聪，资产可以是聪
 func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 	assetName string, amt string, value int64, memo []byte) (string, error) {
 
