@@ -100,25 +100,25 @@ const options = computed(() => [
   {
     icon: '🐢',
     key: 'slow',
-    value: feeData.value?.hourFee || 0,
+    value: feeData.value?.hourFee || 1,
     label: 'slow',
   },
   {
     icon: '🚗',
     key: 'average',
-    value: feeData.value?.halfHourFee || 0,
+    value: feeData.value?.halfHourFee || 1,
     label: 'average',
   },
   {
     icon: '🚀',
     key: 'fast',
-    value: feeData.value?.fastestFee || 0,
+    value: feeData.value?.fastestFee || 1,
     label: 'fast',
   },
   {
     icon: '⚙️',
     key: 'custom',
-    value: feeData.value?.fastestFee || 0,
+    value: feeData.value?.fastestFee || 1,
     label: 'custom',
   },
 ])

@@ -42,7 +42,23 @@
         <Alert v-if="resultMsg" :variant="resultSuccess ? 'default' : 'destructive'">
           <AlertTitle>{{ resultSuccess ? $t('referrerManagement.RegistrationSuccess') :
             $t('referrerManagement.RegistrationFailure') }}</AlertTitle>
-          <AlertDescription class="break-all">{{ resultMsg }}</AlertDescription>
+          <AlertDescription class="break-all">
+            <div v-if="resultSuccess && resultTxId" class="space-y-2">
+              <div>注册成功！</div>
+              <div class="flex items-center gap-2">
+                <span class="text-sm">交易ID:</span>
+                <button 
+                  @click="handleMempoolClick(resultTxId)"
+                  class="text-primary hover:text-primary/80 underline text-left"
+                  :title="`查看交易 ${resultTxId}`"
+                >
+                  {{ shortenTxId(resultTxId) }}
+                </button>
+                <Icon icon="lucide:external-link" class="w-3 h-3 text-primary" />
+              </div>
+            </div>
+            <div v-else>{{ resultMsg }}</div>
+          </AlertDescription>
         </Alert>
       </div>
       <Dialog v-model:open="showConfirm">
@@ -93,17 +109,45 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useWalletStore } from '@/store/wallet'
 import { useNameManager } from '@/composables/useNameManager'
 import { useReferrerManager } from '@/composables/useReferrerManager'
+import { useGlobalStore } from '@/store/global'
+import { generateMempoolUrl } from '@/utils'
 
 const walletStore = useWalletStore()
+const globalStore = useGlobalStore()
 const { nameList, isLoadingNames } = useNameManager()
-const { addLocalReferrerName } = useReferrerManager()
+const { addLocalReferrerName, cacheReferrerTxId } = useReferrerManager()
 const isLoading = ref(false)
 const showConfirm = ref(false)
 const resultMsg = ref('')
 const resultSuccess = ref(false)
+const resultTxId = ref('')
 const name = ref('')
 
-const { btcFeeRate, address } = storeToRefs(walletStore)
+const { btcFeeRate, address, network } = storeToRefs(walletStore)
+const { env } = storeToRefs(globalStore)
+
+// 缩短显示txId
+function shortenTxId(txId: string, startLength = 8, endLength = 8): string {
+  if (!txId || txId.length <= startLength + endLength) {
+    return txId
+  }
+  return `${txId.slice(0, startLength)}...${txId.slice(-endLength)}`
+}
+
+// 处理点击mempool链接
+function handleMempoolClick(txId: string) {
+  if (txId) {
+    // 使用generateMempoolUrl生成mempool链接
+    const mempoolUrl = generateMempoolUrl({
+      network: network.value,
+      path: `tx/${txId}`,
+    })
+    
+    // 在新标签页中打开mempool链接
+    window.open(mempoolUrl, '_blank', 'noopener,noreferrer')
+  }
+}
+
 function onRegister() {
   if (!name.value) {
     resultMsg.value = '请填写完整信息'
@@ -119,18 +163,26 @@ async function confirmRegister() {
   showConfirm.value = false
   try {
     const [err, res] = await stp.registerAsReferrer(name.value, btcFeeRate.value)
+    console.log('res', res);
     if (err) {
       resultMsg.value = err.message || '注册失败'
       resultSuccess.value = false
-    } else {
+    } else if (res && res.txId) {
+      // 只有存在txId才表示注册成功
       resultMsg.value = '注册成功！'
       resultSuccess.value = true
+      resultTxId.value = res.txId
       // 使用推荐人管理器保存注册的name到本地存储
       if (address.value) {
         await addLocalReferrerName(address.value, name.value)
+        // 缓存注册交易的txId
+        await cacheReferrerTxId(address.value, name.value, res.txId)
       }
-      // 清空输入
       name.value = ''
+    } else {
+      // 没有错误但没有txId，表示注册失败
+      resultMsg.value = '注册失败：未获取到交易ID'
+      resultSuccess.value = false
     }
   } catch (e: any) {
     resultMsg.value = e.message || '未知错误'

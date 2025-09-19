@@ -7,6 +7,12 @@
         @mouseleave="showDetails = false">
         {{ formatBalance(btcBalance.total, props.selectedChain, network) }}
       </h2>
+      
+      <!-- BTC 价值显示 -->
+      <div v-if="btcValue" class="text-sm text-zinc-400 mt-1">
+        ≈ ${{ btcValue.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+        <span class="text-xs text-zinc-500 ml-1">(${{ btcValue.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}/BTC)</span>
+      </div>
 
       <!-- Balance Details (显示在悬停时) -->
       <div v-if="showDetails"
@@ -56,7 +62,8 @@
 
 <script setup lang="ts">
 import { useTranscendingModeStore } from '@/store'
-import { ref, computed, watch } from 'vue'
+import { storeToRefs } from 'pinia'
+import { ref, computed, watch, nextTick } from 'vue'
 import { Button } from '@/components/ui/button'
 import { useL1Store, useL2Store, useWalletStore } from '@/store'
 import { useChannelStore } from '@/store/channel'
@@ -69,6 +76,7 @@ import { useGlobalStore } from '@/store/global'
 import { useI18n } from 'vue-i18n'
 import stp from '@/utils/stp'
 import { useQuery } from '@tanstack/vue-query'
+import { ordxApi } from '@/apis'
 
 const { toast } = useToast()
 const l1Store = useL1Store()
@@ -165,6 +173,17 @@ watch(abailableSatsQuery, (val) => {
   console.log('abailableSatsQuery', val);
   if (val) abailableSats.value = val
 }, { immediate: true, deep: true })
+
+// 获取 BTC 价格
+const { data: btcPriceData } = useQuery({
+  queryKey: ['btcPrice', network],
+  queryFn: async () => {
+    const response = await ordxApi.getBTCPrice({ network: network.value })
+    return response.json()
+  },
+  refetchInterval: 1000 * 60 * 5, // 每5分钟刷新一次
+  enabled: computed(() => !!network.value),
+})
 
 // balanceMouseEnter 立即刷新
 const balanceMouseEnter = async () => {
@@ -361,6 +380,23 @@ const formatBalance = (balance: number | string, chain: string, _network: string
   const unit = _network === 'testnet' ? 'tBTC' : 'BTC'
   return `${formattedBalance} ${unit}`
 }
+
+// 计算 BTC 价值
+const btcValue = computed(() => {
+  if (!btcPriceData.value?.data?.amount || !btcBalance.value.total) {
+    return null
+  }
+  
+  const btcAmount = btcBalance.value.total / 1e8 // 转换为 BTC
+  const price = parseFloat(btcPriceData.value.data.amount) // 从字符串转换为数字
+  const value = btcAmount * price
+  
+  return {
+    amount: btcAmount,
+    price: price,
+    value: value
+  }
+})
 
 
 // 控制详细信息的显示

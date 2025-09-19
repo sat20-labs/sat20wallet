@@ -300,7 +300,8 @@
     "cannotRebind": "您已经绑定了推荐人，不能重复绑定",
     "clearLocalRecord": "已清除本地绑定记录",
     "clearLocalRecordFailed": "清除本地记录失败",
-    "loadingReferrerInfo": "加载推荐人信息中..."
+    "loadingReferrerInfo": "加载推荐人信息中...",
+    "inscribeDomain": "铸造域名"
   },
   "assetOperationDialog": {
     "normalSend": "普通",
@@ -331,7 +332,8 @@
     "withdrawalFeeInfo": "提取需支付：服务费 2000 sats + 矿工费（预计 300 sats，随网络变化）",
     "unlockNotice": "⚠️ 解锁提示：从通道解锁到聪网时，需要预留 3000 sats，用于可能的单边退出（承诺交易费用）。",
     "taprootError": "❌ 不支持非Taproot地址：当前钱包仅支持向Taproot地址（P2TR）转账。",
-    "taprootAddress": "Taproot地址"
+    "taprootAddress": "Taproot地址",
+    "currentBalance": "当前余额"
   },
   "receiveQRcode": {
     "title": "接收地址",
@@ -414,7 +416,11 @@
     "empty": "暂无已锁定 UTXO",
     "action": "操作",
     "reason": "原因",
-    "lockedTime": "锁定时间"
+    "asset": "资产",
+    "lockedTime": "锁定时间",
+    "ordinalsDescription": "这些UTXO包含铭文，解锁后可作为白聪使用",
+    "unlockSelectedBtn": "解锁选中",
+    "selectToUnlock": "选择以解锁"
   },
   "nameSelect": {
     "title": "选择名字",

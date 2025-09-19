@@ -300,7 +300,8 @@
     "cannotRebind": "You have already bound a referrer and cannot rebind",
     "clearLocalRecord": "Local binding record cleared",
     "clearLocalRecordFailed": "Failed to clear local record",
-    "loadingReferrerInfo": "Loading referrer information..."
+    "loadingReferrerInfo": "Loading referrer information...",
+    "inscribeDomain": "Inscribe Domain"
   },
   "assetOperationDialog": {
     "normalSend": "Normal",
@@ -331,7 +332,8 @@
     "withdrawalFeeInfo": "Withdrawal fee: 2000 sats service fee + miner fee (~300 sats, network-based)",
     "unlockNotice": "⚠️ Unlock Notice: When unlocking to SatoshiNet, 3000 sats will be reserved to cover potential commitment transaction (unilateral exit) fees.",
     "taprootError": "❌ Non-Taproot Address Not Supported: This wallet only supports sending to Taproot addresses (P2TR).",
-    "taprootAddress": "Taproot Address"
+    "taprootAddress": "Taproot Address",
+    "currentBalance": "Current Balance"
   },
   "receiveQRcode": {
     "title": "Receive Address",
@@ -414,7 +416,11 @@
     "empty": "No locked UTXOs",
     "action": "Action",
     "reason": "Reason",
-    "lockedTime": "Locked Time"
+    "asset": "Asset",
+    "lockedTime": "Locked Time",
+    "ordinalsDescription": "These UTXOs contain inscriptions and can be used as white sats after unlocking",
+    "unlockSelectedBtn": "Unlock Selected",
+    "selectToUnlock": "Select to unlock"
   },
   "nameSelect": {
     "title": "Select Name",

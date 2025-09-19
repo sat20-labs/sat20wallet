@@ -1,0 +1,13 @@
+html {
+  @apply h-full w-full;
+}
+body {
+  @apply h-full w-full;
+  min-width: 357px;
+  min-height: 600px;
+}
+
+
+#app {
+  @apply w-full h-full overflow-hidden;
+}

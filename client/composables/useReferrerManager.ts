@@ -13,6 +13,11 @@ export const useReferrerManager = () => {
     return `local:bound_referrer_${targetAddress}` as const
   }
 
+  // 生成推荐人注册txId的存储键
+  const generateReferrerTxIdKey = (targetAddress: string, referrerName: string): any => {
+    return `local:referrer_txid_${targetAddress}_${referrerName}` as const
+  }
+
   // 获取本地存储的推荐人名字
   const getLocalReferrerNames = async (targetAddress: string): Promise<string[]> => {
     try {
@@ -105,6 +110,50 @@ export const useReferrerManager = () => {
       throw error
     }
   }
+
+  // 缓存推荐人注册的txId
+  const cacheReferrerTxId = async (targetAddress: string, referrerName: string, txId: string): Promise<void> => {
+    try {
+      const key = generateReferrerTxIdKey(targetAddress, referrerName)
+      await storage.setItem(key, txId)
+      console.log(`[ReferrerManager] 已缓存推荐人注册txId: ${txId} (推荐人: ${referrerName}, 地址: ${targetAddress})`)
+    } catch (error) {
+      console.error('Failed to cache referrer txId:', error)
+      throw error
+    }
+  }
+
+  // 获取推荐人注册的txId
+  const getReferrerTxId = async (targetAddress: string, referrerName: string): Promise<string | null> => {
+    try {
+      const key = generateReferrerTxIdKey(targetAddress, referrerName)
+      const txId = await storage.getItem<string>(key)
+      return txId || null
+    } catch (error) {
+      console.error('Failed to get referrer txId:', error)
+      return null
+    }
+  }
+
+  // 获取所有推荐人的txId映射
+  const getAllReferrerTxIds = async (targetAddress: string): Promise<Record<string, string>> => {
+    try {
+      const names = await getLocalReferrerNames(targetAddress)
+      const txIds: Record<string, string> = {}
+      
+      for (const name of names) {
+        const txId = await getReferrerTxId(targetAddress, name)
+        if (txId) {
+          txIds[name] = txId
+        }
+      }
+      
+      return txIds
+    } catch (error) {
+      console.error('Failed to get all referrer txIds:', error)
+      return {}
+    }
+  }
   
   return {
     getLocalReferrerNames,
@@ -114,5 +163,8 @@ export const useReferrerManager = () => {
     getLocalBoundReferrer,
     addLocalBoundReferrer,
     removeLocalBoundReferrer,
+    cacheReferrerTxId,
+    getReferrerTxId,
+    getAllReferrerTxIds,
   }
 }

@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "strict": true,
+    "jsx": "preserve",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "useDefineForClassFields": true,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    },
+    "lib": ["ESNext", "DOM"],
+    "types": ["vite/client", "@capacitor/cli"]
+  },
+  "include": ["**/*.ts", "**/*.d.ts", "**/*.tsx", "**/*.vue"],
+  "exclude": ["node_modules"]
+}

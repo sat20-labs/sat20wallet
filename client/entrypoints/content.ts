@@ -11,7 +11,6 @@ export default defineContentScript({
     
     let keepAlive: KeepAliveConnection | null = null
     let port: Port | null = null
-    let channel: BroadcastChannel | null = null
     let isExtensionValid = true
     
     // 监听扩展上下文失效
@@ -23,11 +22,6 @@ export default defineContentScript({
 
     // 清理资源
     const cleanup = () => {
-      if (channel) {
-        channel.close()
-        channel = null
-      }
-      
       if (port) {
         try {
           port.disconnect()
@@ -92,7 +86,8 @@ export default defineContentScript({
             }
             // 2. 兼容原有：from BACKGROUND 且 to INJECTED
             if (from === Message.MessageFrom.BACKGROUND && to === Message.MessageTo.INJECTED) {
-              channel?.postMessage(event)
+              // 通过 window.postMessage 发送到 injected script
+              window.postMessage(event, '*')
             }
           })
 
@@ -112,10 +107,7 @@ export default defineContentScript({
           })
         }
 
-        // 初始化广播通道
-        if (!channel) {
-          channel = new BroadcastChannel(Message.Channel.INJECT_CONTENT)
-        }
+        // 不再需要初始化广播通道，使用 window.postMessage 替代
 
         console.log('Connection initialization completed')
       } catch (error) {
@@ -177,7 +169,7 @@ export default defineContentScript({
 
     // 监听扩展上下文变化
     if (browser.runtime.onMessage) {
-      browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      browser.runtime.onMessage.addListener(() => {
         // 如果监听器被调用，说明扩展上下文仍然有效
         isExtensionValid = true
         return undefined

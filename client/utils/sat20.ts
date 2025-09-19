@@ -97,6 +97,12 @@ class WalletManager {
     return this._handleRequest('signMessage', msg)
   }
 
+  async signData(
+    data: string
+  ): Promise<[Error | undefined, { signature: string } | undefined]> {
+    return this._handleRequest('signData', data)
+  }
+
   async signPsbt(
     psbtHex: string,
     bool: boolean

@@ -87,7 +87,7 @@ interface StpWasmModule {
   }>>;
   getContractInvokeHistoryByAddressInServer: (url: string, address: string, start: number, limit: number) => Promise<WasmResponse<string>>;
   // Add new methods
-  registerAsReferrer: (name: string, feeRate: number) => Promise<WasmResponse<string>>;
+  registerAsReferrer: (name: string, feeRate: number) => Promise<WasmResponse<{txId: string}>>;
   bindReferrerForServer: (referrerName: string, serverPubKey: string) => Promise<WasmResponse<string>>;
   getAllRegisteredReferrerName: (pubkey: string) => Promise<WasmResponse<string[]>>;
 }
@@ -705,8 +705,8 @@ class SatsnetStp {
   }
 
   // Add new methods
-  async registerAsReferrer(name: string, feeRate: number): Promise<[Error | undefined, string | undefined]> {
-    return this._handleRequest<string>('registerAsReferrer', name, feeRate.toString())
+  async registerAsReferrer(name: string, feeRate: number): Promise<[Error | undefined, {txId: string} | undefined]> {
+    return this._handleRequest<{txId: string}>('registerAsReferrer', name, feeRate.toString())
   }
 
   async bindReferrerForServer(referrerName: string, serverPubKey: string): Promise<[Error | undefined, string | undefined]> {

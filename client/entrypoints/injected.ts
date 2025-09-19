@@ -17,14 +17,23 @@ export default defineUnlistedScript(() => {
   class Sat20 {
     private eventListeners: { [key: string]: Function[] } = {}
     private tickerCache: Record<string, any> = {}
+    private pendingRequests: Map<string, { resolve: Function; reject: Function; timeout: NodeJS.Timeout }> = new Map()
 
     constructor() {
+      // 监听来自 content script 的响应消息
       window.addEventListener('message', (event) => {
         console.log('injected message', event.data);
 
         const { type, data, event: eventName, metadata = {} } = event.data || {}
-        const { to } = metadata
+        const { to, messageId } = metadata
+        
         if (to !== Message.MessageTo.INJECTED) return
+
+        // 处理响应消息（有 messageId 的消息）
+        if (messageId) {
+          this.handleResponseMessage(event.data)
+          return
+        }
 
         // Handle events
         if (type === Message.MessageType.EVENT && eventName) {
@@ -40,53 +49,59 @@ export default defineUnlistedScript(() => {
       })
     }
 
+    private handleResponseMessage(messageData: any) {
+      console.log('Response message:', messageData)
+      const { type, data, error, metadata = {} } = messageData || {}
+      const { messageId } = metadata
+      
+      if (
+        ![
+          Message.MessageType.APPROVE,
+          Message.MessageType.REQUEST,
+        ].includes(type)
+      )
+        return
+
+      const pendingRequest = this.pendingRequests.get(messageId)
+      if (pendingRequest) {
+        // 清除超时定时器
+        clearTimeout(pendingRequest.timeout)
+        // 从pending请求中移除
+        this.pendingRequests.delete(messageId)
+        
+        if (error) {
+          pendingRequest.reject(new Error(error))
+        } else {
+          pendingRequest.resolve(data)
+        }
+      }
+    }
+
     send<T>({ data, type, action }: SendData): Promise<T> {
       return new Promise((resolve, reject) => {
-        const channel = new BroadcastChannel(Message.Channel.INJECT_CONTENT)
-        const _messageId = `msg_${type}_${action}_${Date.now()}_${Math.random()}`
-        const listener = (event: MessageEvent) => {
-          console.log('Content Script response:', event.data)
-          const { type, data, error, metadata = {} } = event.data || {}
-          const { messageId, to } = metadata
-          if (
-            ![
-              Message.MessageType.APPROVE,
-              Message.MessageType.REQUEST,
-            ].includes(type) &&
-            to !== Message.MessageTo.INJECTED
-          )
-            return
+        const messageId = `msg_${type}_${action}_${Date.now()}_${Math.random()}`
+        
+        // 设置超时处理
+        const timeout = setTimeout(() => {
+          this.pendingRequests.delete(messageId)
+          reject(new Error('Content Script response timeout'))
+        }, 1000 * 60)
+        
+        // 将请求添加到pending队列
+        this.pendingRequests.set(messageId, { resolve, reject, timeout })
 
-          if (messageId === _messageId) {
-            if (data) {
-              resolve(data)
-            }
-            if (error) {
-              reject(new Error(error.message))
-            }
-            channel.removeEventListener('message', listener)
-            channel.close()
-          }
-        }
-        channel.addEventListener('message', listener)
-
+        // 发送消息到 content script
         window.postMessage({
           metadata: {
             origin: window.location.origin,
-            messageId: _messageId,
+            messageId,
             from: Message.MessageFrom.INJECTED,
             to: Message.MessageTo.BACKGROUND,
           },
           type,
           action,
           data,
-        })
-
-        setTimeout(() => {
-          channel.removeEventListener('message', listener)
-          channel.close()
-          reject(new Error('Content Script response timeout'))
-        }, 1000 * 60)
+        }, '*')
       })
     }
 
@@ -487,6 +502,16 @@ export default defineUnlistedScript(() => {
         action: Message.MessageAction.REGISTER_AS_REFERRER,
         data: { name, feeRate },
       })
+    }
+
+    // 清理资源
+    destroy() {
+      // 清理所有pending请求
+      this.pendingRequests.forEach(({ reject, timeout }) => {
+        clearTimeout(timeout)
+        reject(new Error('Sat20 instance destroyed'))
+      })
+      this.pendingRequests.clear()
     }
 
     // 新增：为服务器绑定推荐人

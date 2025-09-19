@@ -129,6 +129,35 @@ class OrdxApi {
     )
     return response.json()
   }
+
+  // --- UTXO Management for Ordinals ---
+  async getLockedUtxos({ address, network }: any): Promise<any> {
+    const response = await fetch(
+      this.generatePath(`v3/utxos/locked/${address}`, network)
+    )
+    return response.json()
+  }
+  async getBTCPrice({ network }: any) {
+    const res = await fetch('https://apiprd.ordx.market/ordx/GetBTCPrice');
+    return res;
+  };
+  async unlockOrdinals({ utxos, pubKey, sig, network }: any): Promise<any> {
+    const response = await fetch(
+      this.generatePath(`v3/utxo/unlock`, network),
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          utxos,
+          pubKey, // Use hex string directly
+          sig, // Use hex string directly
+        }),
+      }
+    )
+    return response.json()
+  }
 }
 
 export default new OrdxApi()

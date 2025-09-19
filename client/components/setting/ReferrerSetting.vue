@@ -35,32 +35,39 @@
           <div v-for="name in referrerNames" :key="name"
             class="inline-flex items-center gap-1 px-2 py-1 bg-red-500/20 rounded text-xs">
             <span>{{ name }}</span>
+            <!-- 如果有txId，显示mempool图标 -->
+            <button 
+              v-if="referrerTxIds[name]" 
+              @click="handleMempoolClick(name)"
+              class="ml-1 p-0.5 hover:bg-red-500/30 rounded transition-colors"
+              :title="`查看 ${name} 的注册交易`"
+            >
+              <Icon icon="lucide:external-link" class="w-3 h-3 text-red-300 hover:text-red-100" />
+            </button>
           </div>
         </div>
       </div>
 
       <div class="flex justify-center gap-3 mb-2" v-if="!isLoading">
-        <Button 
-          :disabled="isLoading" 
-          variant="secondary" 
-          class="h-10 w-32" 
-          @click="handleRegisterClick"
-          :loading="isLoading"
-        >
+        <Button :disabled="referrerNames.length || isLoading" variant="secondary" class="h-10 w-32" @click="handleRegisterClick"
+          :loading="isLoading">
           注册推荐人
         </Button>
-        <Button 
-          :disabled="!!boundReferrer || isLoading" 
-          :variant="boundReferrer ? 'outline' : 'default'"
+        <Button :disabled="!!boundReferrer || isLoading" :variant="boundReferrer ? 'outline' : 'default'"
           :class="boundReferrer || isLoading ? 'opacity-50 cursor-not-allowed bg-gray-600' : ''"
-          @click="handleBindClick"
-          class="h-10 w-32"
-          :loading="isLoading"
-        >
+          @click="handleBindClick" class="h-10 w-32" :loading="isLoading">
           {{ boundReferrer ? '已绑定' : '绑定推荐人' }}
         </Button>
       </div>
-      
+
+      <!-- 铸造域名链接 -->
+      <div class="flex justify-center mb-2">
+        <a href="https://app.ordx.market/inscribe/" target="_blank" rel="noopener noreferrer"
+          class="text-primary hover:text-primary/80 underline">
+          {{ $t('referrerManagement.inscribeDomain') }}
+        </a>
+      </div>
+
       <!-- 当已绑定推荐人时显示提示 -->
       <div v-if="boundReferrer && !isLoading" class="text-center">
         <p class="text-sm text-muted-foreground">
@@ -75,6 +82,7 @@
 import { ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
+import { Icon } from '@iconify/vue'
 import { useWalletStore } from '@/store/wallet'
 import { storeToRefs } from 'pinia'
 import satsnetStp from '@/utils/stp'
@@ -84,6 +92,7 @@ import { useRouter } from 'vue-router'
 import { useReferrerManager } from '@/composables/useReferrerManager'
 import satnetApi from '@/apis/satnet'
 import { Network } from '@/types'
+import { generateMempoolUrl } from '@/utils'
 
 const { t } = useI18n()
 const isExpanded = ref(false)
@@ -92,18 +101,17 @@ const walletStore = useWalletStore()
 const { publicKey, address } = storeToRefs(walletStore)
 const referrerNames = ref<string[]>([])
 const boundReferrer = ref<string | null>(null)
+const referrerTxIds = ref<Record<string, string>>({})
 
 const globalStore = useGlobalStore()
 const { env } = storeToRefs(globalStore)
 const { network } = storeToRefs(walletStore)
 const router = useRouter()
 
-const { getLocalReferrerNames, getLocalBoundReferrer } = useReferrerManager()
+const { getLocalReferrerNames, getLocalBoundReferrer, getAllReferrerTxIds } = useReferrerManager()
 
 function handleRegisterClick() {
-  if (referrerNames.value.length === 0) {
-    router.push('/wallet/setting/referrer/register')
-  }
+  router.push('/wallet/setting/referrer/register')
 }
 
 function handleBindClick() {
@@ -115,6 +123,23 @@ function handleBindClick() {
     router.push('/wallet/setting/referrer/bind')
   }
 }
+
+// 处理点击mempool图标
+function handleMempoolClick(referrerName: string) {
+  const txId = referrerTxIds.value[referrerName]
+  if (txId) {
+    // 使用generateMempoolUrl生成mempool链接
+    const mempoolUrl = generateMempoolUrl({
+      network: network.value,
+      path: `tx/${txId}`,
+    })
+    
+    // 在新标签页中打开mempool链接
+    window.open(mempoolUrl, '_blank', 'noopener,noreferrer')
+  }
+}
+
+
 
 function getServerPubKey() {
   // 获取配置中的第一个Peer的公钥，和bind.vue保持一致
@@ -204,13 +229,28 @@ async function loadReferrerNames() {
   }
 }
 
+// 加载推荐人的txId映射
+async function loadReferrerTxIds() {
+  if (!address.value) return
+
+  try {
+    const txIds = await getAllReferrerTxIds(address.value)
+    referrerTxIds.value = txIds
+    console.log('推荐人txId映射:', txIds)
+  } catch (error) {
+    console.error('加载推荐人txId失败:', error)
+    referrerTxIds.value = {}
+  }
+}
+
 // 加载所有推荐人相关信息
 async function loadAllReferrerInfo() {
   isLoading.value = true
   try {
     await Promise.all([
       loadReferrerNames(),
-      loadBoundReferrer()
+      loadBoundReferrer(),
+      loadReferrerTxIds()
     ])
   } catch (error) {
     console.error('加载推荐人信息失败:', error)
