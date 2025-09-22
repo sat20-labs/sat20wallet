@@ -53,7 +53,14 @@ func (p *NetClient) SendGetRequest(u *URL) ([]byte, error) {
 		url.RawQuery = q.Encode()
 	}
 
-	httpResponse, err := p.Client.Get(url.String())
+	httpRequest, err := http.NewRequest("GET", url.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Close = true
+	httpRequest.Header.Set("Connection", "close")
+
+	httpResponse, err := p.Client.Do(httpRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +121,9 @@ func (p *NetClient) SendPostRequest(u *URL, marshalledJSON []byte) ([]byte, erro
 		return nil, err
 	}
 	httpRequest.Close = true
+	httpRequest.Header.Set("Connection", "close")
 	httpRequest.Header.Set("Content-Type", "application/json")
+	
 
 	httpResponse, err := p.Client.Do(httpRequest)
 	if err != nil {
