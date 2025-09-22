@@ -89,7 +89,7 @@ interface StpWasmModule {
   getContractInvokeHistoryByAddressInServer: (url: string, address: string, start: number, limit: number) => Promise<WasmResponse<string>>;
   // Add new methods
   registerAsReferrer: (name: string, feeRate: number) => Promise<WasmResponse<{txId: string}>>;
-  bindReferrerForServer: (referrerName: string, serverPubKey: string) => Promise<WasmResponse<string>>;
+  bindReferrerForServer: (referrerName: string, serverPubKey: string) => Promise<WasmResponse<{txId: string}>>;
   getAllRegisteredReferrerName: (pubkey: string) => Promise<WasmResponse<string[]>>;
 }
 
@@ -714,8 +714,8 @@ class SatsnetStp {
     return this._handleRequest<{txId: string}>('registerAsReferrer', name, feeRate.toString())
   }
 
-  async bindReferrerForServer(referrerName: string, serverPubKey: string): Promise<[Error | undefined, string | undefined]> {
-    return this._handleRequest<string>('bindReferrerForServer', referrerName, serverPubKey)
+  async bindReferrerForServer(referrerName: string, serverPubKey: string): Promise<[Error | undefined, {txId: string} | undefined]> {
+    return this._handleRequest<{txId: string}>('bindReferrerForServer', referrerName, serverPubKey)
   }
 
   /** 获取所有已注册的推荐人名称 */

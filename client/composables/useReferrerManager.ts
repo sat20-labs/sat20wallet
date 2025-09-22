@@ -13,6 +13,11 @@ export const useReferrerManager = () => {
     return `local:bound_referrer_${targetAddress}` as const
   }
 
+  // 生成绑定推荐人txId的存储键
+  const generateBoundReferrerTxIdKey = (targetAddress: string): any => {
+    return `local:bound_referrer_txid_${targetAddress}` as const
+  }
+
   // 生成推荐人注册txId的存储键
   const generateReferrerTxIdKey = (targetAddress: string, referrerName: string): any => {
     return `local:referrer_txid_${targetAddress}_${referrerName}` as const
@@ -135,23 +140,105 @@ export const useReferrerManager = () => {
     }
   }
 
-  // 获取所有推荐人的txId映射
+  // 获取所有推荐人的txId映射（只返回有txId的推荐人）
   const getAllReferrerTxIds = async (targetAddress: string): Promise<Record<string, string>> => {
     try {
       const names = await getLocalReferrerNames(targetAddress)
       const txIds: Record<string, string> = {}
+      const validNames: string[] = []
       
       for (const name of names) {
         const txId = await getReferrerTxId(targetAddress, name)
         if (txId) {
           txIds[name] = txId
+          validNames.push(name)
         }
+      }
+      
+      // 如果本地存储的名字中有没有txId的，需要清理掉
+      if (validNames.length !== names.length) {
+        await storage.setItem(generateStorageKey(targetAddress), validNames)
+        console.log(`[ReferrerManager] 已清理无效的推荐人缓存，保留有效名字: ${validNames.join(', ')}`)
       }
       
       return txIds
     } catch (error) {
       console.error('Failed to get all referrer txIds:', error)
       return {}
+    }
+  }
+
+  // 缓存绑定推荐人的txId
+  const cacheBoundReferrerTxId = async (targetAddress: string, txId: string): Promise<void> => {
+    try {
+      const key = generateBoundReferrerTxIdKey(targetAddress)
+      await storage.setItem(key, txId)
+      console.log(`[ReferrerManager] 已缓存绑定推荐人txId: ${txId} (地址: ${targetAddress})`)
+    } catch (error) {
+      console.error('Failed to cache bound referrer txId:', error)
+      throw error
+    }
+  }
+
+  // 获取绑定推荐人的txId
+  const getLocalBoundReferrerTxId = async (targetAddress: string): Promise<string | null> => {
+    try {
+      const key = generateBoundReferrerTxIdKey(targetAddress)
+      const txId = await storage.getItem<string>(key)
+      return txId || null
+    } catch (error) {
+      console.error('Failed to get bound referrer txId:', error)
+      return null
+    }
+  }
+
+  // 删除绑定推荐人的txId
+  const removeBoundReferrerTxId = async (targetAddress: string): Promise<void> => {
+    try {
+      const key = generateBoundReferrerTxIdKey(targetAddress)
+      await storage.removeItem(key)
+      console.log(`[ReferrerManager] 已删除绑定推荐人txId (地址: ${targetAddress})`)
+    } catch (error) {
+      console.error('Failed to remove bound referrer txId:', error)
+      throw error
+    }
+  }
+
+  // 清理无效的推荐人缓存（没有txId的推荐人名字）
+  const cleanInvalidReferrerCache = async (targetAddress: string): Promise<void> => {
+    try {
+      const names = await getLocalReferrerNames(targetAddress)
+      const validNames: string[] = []
+      
+      for (const name of names) {
+        const txId = await getReferrerTxId(targetAddress, name)
+        if (txId) {
+          validNames.push(name)
+        } else {
+          // 删除没有txId的推荐人名字
+          await removeLocalReferrerName(targetAddress, name)
+          console.log(`[ReferrerManager] 已清理无效推荐人缓存: ${name}`)
+        }
+      }
+      
+      console.log(`[ReferrerManager] 推荐人缓存清理完成，有效名字: ${validNames.join(', ')}`)
+    } catch (error) {
+      console.error('Failed to clean invalid referrer cache:', error)
+      throw error
+    }
+  }
+
+  // 清理指定推荐人名字的缓存（当服务器有数据时使用）
+  const clearReferrerNameCache = async (targetAddress: string, referrerName: string): Promise<void> => {
+    try {
+      await removeLocalReferrerName(targetAddress, referrerName)
+      // 同时删除对应的txId缓存
+      const txIdKey = generateReferrerTxIdKey(targetAddress, referrerName)
+      await storage.removeItem(txIdKey)
+      console.log(`[ReferrerManager] 已清理推荐人缓存: ${referrerName}`)
+    } catch (error) {
+      console.error('Failed to clear referrer name cache:', error)
+      throw error
     }
   }
   
@@ -166,5 +253,10 @@ export const useReferrerManager = () => {
     cacheReferrerTxId,
     getReferrerTxId,
     getAllReferrerTxIds,
+    cacheBoundReferrerTxId,
+    getLocalBoundReferrerTxId,
+    removeBoundReferrerTxId,
+    cleanInvalidReferrerCache,
+    clearReferrerNameCache,
   }
 }

@@ -38,7 +38,23 @@
         <Alert :variant="resultSuccess ? 'default' : 'destructive'">
           <AlertTitle>{{ resultSuccess ? $t('referrerManagement.BindSuccess') :
             $t('referrerManagement.BindFailure') }}</AlertTitle>
-          <AlertDescription>{{ resultMsg }}</AlertDescription>
+          <AlertDescription class="break-all">
+            <div v-if="resultSuccess && resultTxId" class="space-y-2">
+              <div>绑定成功！</div>
+              <div class="flex items-center gap-2">
+                <span class="text-sm">交易ID:</span>
+                <button 
+                  @click="handleMempoolClick(resultTxId)"
+                  class="text-primary hover:text-primary/80 underline text-left"
+                  :title="`查看交易 ${resultTxId}`"
+                >
+                  {{ shortenTxId(resultTxId) }}
+                </button>
+                <Icon icon="lucide:external-link" class="w-3 h-3 text-primary" />
+              </div>
+            </div>
+            <div v-else>{{ resultMsg }}</div>
+          </AlertDescription>
         </Alert>
       </div>
       <Dialog v-model:open="showConfirm">
@@ -83,10 +99,12 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { Icon } from '@iconify/vue'
 import { useGlobalStore } from '@/store/global'
 import { useWalletStore } from '@/store/wallet'
 import { useReferrerManager } from '@/composables/useReferrerManager'
 import { getConfig } from '@/config/wasm'
+import { generateMempoolUrl } from '@/utils'
 
 
 const { t } = useI18n()
@@ -95,6 +113,7 @@ const isUnbinding = ref(false)
 const showConfirm = ref(false)
 const resultMsg = ref('')
 const resultSuccess = ref(false)
+const resultTxId = ref('')
 const referrerName = ref('')
 const serverPubKey = ref('')
 const localBoundReferrer = ref<string | null>(null)
@@ -103,7 +122,7 @@ const globalStore = useGlobalStore()
 const walletStore = useWalletStore()
 const { env } = storeToRefs(globalStore)
 const { network, address } = storeToRefs(walletStore)
-const { getLocalBoundReferrer, addLocalBoundReferrer, removeLocalBoundReferrer } = useReferrerManager()
+const { getLocalBoundReferrer, addLocalBoundReferrer, removeLocalBoundReferrer, cacheBoundReferrerTxId, removeBoundReferrerTxId, getLocalBoundReferrerTxId } = useReferrerManager()
 
 // 获取配置中的第一个Peer的公钥
 const config = getConfig(env.value, network.value)
@@ -116,16 +135,52 @@ if (firstPeer) {
   }
 }
 
+// 缩短显示txId
+function shortenTxId(txId: string, startLength = 8, endLength = 8): string {
+  if (!txId || txId.length <= startLength + endLength) {
+    return txId
+  }
+  return `${txId.slice(0, startLength)}...${txId.slice(-endLength)}`
+}
+
+// 处理点击mempool链接
+function handleMempoolClick(txId: string) {
+  if (txId) {
+    // 使用generateMempoolUrl生成mempool链接
+    const mempoolUrl = generateMempoolUrl({
+      network: network.value,
+      path: `tx/${txId}`,
+    })
+    
+    // 在新标签页中打开mempool链接
+    window.open(mempoolUrl, '_blank', 'noopener,noreferrer')
+  }
+}
+
 // 加载本地绑定的推荐人
 async function loadLocalBoundReferrer() {
   if (!address.value) return
   
   try {
     const boundReferrer = await getLocalBoundReferrer(address.value)
-    localBoundReferrer.value = boundReferrer
-    console.log('本地绑定的推荐人:', boundReferrer)
+    const boundReferrerTxId = await getLocalBoundReferrerTxId(address.value)
+    
+    // 只有当本地有绑定推荐人且有对应的txId时，才认为绑定有效
+    if (boundReferrer && boundReferrerTxId) {
+      localBoundReferrer.value = boundReferrer
+      console.log('本地绑定的推荐人:', boundReferrer)
+    } else if (boundReferrer && !boundReferrerTxId) {
+      // 如果本地有绑定推荐人但没有txId，说明绑定无效，清除本地缓存
+      console.log('本地绑定推荐人无效（无txId），清除缓存:', boundReferrer)
+      await removeLocalBoundReferrer(address.value)
+      await removeBoundReferrerTxId(address.value)
+      localBoundReferrer.value = null
+    } else {
+      localBoundReferrer.value = null
+    }
   } catch (error) {
     console.error('加载本地绑定推荐人失败:', error)
+    localBoundReferrer.value = null
   }
 }
 
@@ -147,25 +202,35 @@ function onBind() {
 async function confirmBind() {
   isLoading.value = true
   resultMsg.value = ''
+  resultTxId.value = ''
   showConfirm.value = false
   try {
     const [err, res] = await stp.bindReferrerForServer(referrerName.value, serverPubKey.value)
+    console.log('bindReferrerForServer res', res);
     if (err) {
       resultMsg.value = err.message || t('referrerManagement.BindFailure')
       resultSuccess.value = false
-    } else {
-      resultMsg.value = t('referrerManagement.BindSuccess')
+    } else if (res && res.txId) {
+      // bindReferrerForServer 返回包含txId的对象，只有存在txId才表示绑定成功
+      resultMsg.value = '绑定成功！'
       resultSuccess.value = true
+      resultTxId.value = res.txId
       
       // 绑定成功后，记录到本地存储
       if (address.value) {
         await addLocalBoundReferrer(address.value, referrerName.value)
+        // 缓存绑定推荐人的交易ID
+        await cacheBoundReferrerTxId(address.value, res.txId)
         localBoundReferrer.value = referrerName.value
       }
       
       // 清空输入
       referrerName.value = ''
       serverPubKey.value = ''
+    } else {
+      // 没有错误但没有交易ID，表示绑定失败
+      resultMsg.value = '绑定失败：未获取到交易ID'
+      resultSuccess.value = false
     }
   } catch (e: any) {
     resultMsg.value = e.message || '未知错误'
@@ -186,6 +251,8 @@ async function handleUnbind() {
     
     // 只清除本地记录，不调用后端API
     await removeLocalBoundReferrer(address.value)
+    // 同时清除绑定推荐人的交易ID
+    await removeBoundReferrerTxId(address.value)
     localBoundReferrer.value = null
     resultMsg.value = t('referrerManagement.clearLocalRecord')
     resultSuccess.value = true
