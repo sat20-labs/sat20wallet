@@ -1465,8 +1465,8 @@ func sendAssets_SatsNet(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 
-	if len(p) < 3 {
-		return createJsRet(nil, -1,  "Expected 3 parameters")
+	if len(p) < 4 {
+		return createJsRet(nil, -1,  "Expected 4 parameters")
 	}
 
 	if p[0].Type() != js.TypeString {
@@ -1482,12 +1482,26 @@ func sendAssets_SatsNet(this js.Value, p []js.Value) any {
 	// amount
 	p2 := p[2]
 	if p2.Type() != js.TypeString {
-		return createJsRet(nil, -1, "amount parameter should be a int")
+		return createJsRet(nil, -1, "amount parameter should be a string")
 	}
 	amt := p2.String()
 
+	p3 := p[3]
+	if p3.Type() != js.TypeString {
+		return createJsRet(nil, -1, "memo parameter should be a hex string")
+	}
+	m := p3.String()
+	var memo []byte
+	if m != "" {
+		var err error
+		memo, err = hex.DecodeString(m)
+		if err != nil {
+			return createJsRet(nil, -1, "memo parameter should be a hex string")
+		}
+	}
+
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		tx, err := _mgr.SendAssets_SatsNet(destAddress, assetName, amt, nil)
+		tx, err := _mgr.SendAssets_SatsNet(destAddress, assetName, amt, memo)
 		if err != nil {
 			wallet.Log.Errorf("SendUtxos_SatsNet error: %v", err)
 			return nil, -1, err.Error()
