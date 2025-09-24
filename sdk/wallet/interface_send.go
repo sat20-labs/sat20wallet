@@ -178,15 +178,7 @@ func (p *Manager) BuildBatchSendTx_SatsNet(destAddr []string,
 		return nil, nil, err
 	}
 
-	if !input.Zero() {
-		// 最后一个提供输入的utxo获得change
-		// changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
-		// if err != nil {
-		// 	return nil, nil, err
-		// }
-		txOut1 := swire.NewTxOut(input.Value(), input.OutValue.Assets, changePkScript)
-		tx.AddTxOut(txOut1)
-	}
+	SplitChangeAsset(&input, changePkScript, tx)
 	if len(memo) > 0 {
 		txOut2 := swire.NewTxOut(0, nil, memo)
 		tx.AddTxOut(txOut2)
@@ -343,15 +335,7 @@ func (p *Manager) BuildBatchSendTxV2_SatsNet(dest []*SendAssetInfo,
 		return nil, nil, err
 	}
 
-	if !input.Zero() {
-		// 最后一个提供输入的utxo获得change
-		// changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
-		// if err != nil {
-		// 	return nil, nil, err
-		// }
-		txOut1 := swire.NewTxOut(input.Value(), input.OutValue.Assets, changePkScript)
-		tx.AddTxOut(txOut1)
-	}
+	SplitChangeAsset(&input, changePkScript, tx)
 	if len(memo) > 0 {
 		txOut2 := swire.NewTxOut(0, nil, memo)
 		tx.AddTxOut(txOut2)
@@ -359,6 +343,31 @@ func (p *Manager) BuildBatchSendTxV2_SatsNet(dest []*SendAssetInfo,
 
 	return tx, prevFetcher, nil
 	//return nil, nil, fmt.Errorf("not implemented")
+}
+
+func SplitChangeAsset(input *TxOutput_SatsNet, changePkScript []byte, tx *swire.MsgTx) {
+	if !input.Zero() {
+		// 分离所有资产
+		bindingSat := int64(0)
+		txouts := make([]*swire.TxOut, 0)
+		for _, asset := range input.OutValue.Assets {
+			value := indexer.GetBindingSatNum(&asset.Amount, asset.BindingSat)
+			bindingSat += value
+			txOut := swire.NewTxOut(value, swire.TxAssets{asset}, changePkScript)
+			txouts = append(txouts, txOut)
+		}
+		if bindingSat > input.OutValue.Value {
+			// 可能因为历史的原因，有一些utxo聪不足，需要为这些utxo补充聪，
+			txOut1 := swire.NewTxOut(input.Value(), input.OutValue.Assets, changePkScript)
+			tx.AddTxOut(txOut1)
+		} else {
+			for _, txOut := range txouts {
+				tx.AddTxOut(txOut)
+			}
+			txOut := swire.NewTxOut(input.OutValue.Value-bindingSat, nil, changePkScript)
+			tx.AddTxOut(txOut)
+		}
+	}
 }
 
 // 发送资产到一个地址上，拆分n个输出
@@ -505,14 +514,11 @@ func (p *Manager) BatchSendAssets_SatsNet(destAddr string,
 		return "", err
 	}
 
-	if !input.Zero() {
-		changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
-		if err != nil {
-			return "", err
-		}
-		txOut2 := swire.NewTxOut(input.Value(), input.OutValue.Assets, changePkScript)
-		tx.AddTxOut(txOut2)
+	changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
+	if err != nil {
+		return "", err
 	}
+	SplitChangeAsset(&input, changePkScript, tx)
 
 	// sign
 	tx, err = p.SignTx_SatsNet(tx, prevFetcher)
@@ -675,14 +681,11 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 		return nil, err
 	}
 
-	if !input.Zero() {
-		changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
-		if err != nil {
-			return nil, err
-		}
-		txOut2 := swire.NewTxOut(input.Value(), input.OutValue.Assets, changePkScript)
-		tx.AddTxOut(txOut2)
+	changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
+	if err != nil {
+		return nil, err
 	}
+	SplitChangeAsset(&input, changePkScript, tx)
 
 	// attached data
 	if memo != nil {
@@ -1043,14 +1046,11 @@ func (p *Manager) SendAssetsV2_SatsNet(destAddr string,
 		return "", err
 	}
 
-	if !input.Zero() {
-		changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
-		if err != nil {
-			return "", err
-		}
-		txOut2 := swire.NewTxOut(input.Value(), input.OutValue.Assets, changePkScript)
-		tx.AddTxOut(txOut2)
+	changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
+	if err != nil {
+		return "", err
 	}
+	SplitChangeAsset(&input, changePkScript, tx)
 
 	// attached data
 	if memo != nil {
@@ -1221,14 +1221,11 @@ func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 		return "", err
 	}
 
-	if !input.Zero() {
-		changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
-		if err != nil {
-			return "", err
-		}
-		txOut2 := swire.NewTxOut(input.Value(), input.OutValue.Assets, changePkScript)
-		tx.AddTxOut(txOut2)
+	changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
+	if err != nil {
+		return "", err
 	}
+	SplitChangeAsset(&input, changePkScript, tx)
 
 	// attached data
 	if memo != nil {
