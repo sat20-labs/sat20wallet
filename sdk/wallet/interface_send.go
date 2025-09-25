@@ -1314,6 +1314,7 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 		newName := GetAssetName(tickerInfo)
 		tx, prevFetcher, fee, err = p.BuildBatchSendTx_Ordx(destAddr, newName, dAmt, n, feeRate, memo)
 	} else {
+		// TODO 符文，可以支持8个以内的输出
 		return nil, 0, fmt.Errorf("unsupport batch send for asset name %s", assetName)
 	}
 	if err != nil {
@@ -1374,6 +1375,7 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 		weightEstimate.AddOutput(memo[:]) // op_return
 	}
 
+	// TODO 选择合适的utxo
 	p.utxoLockerL1.Reload(address)
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
 	total := int64(0)
@@ -1529,6 +1531,7 @@ func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 		return nil, nil, 0, err
 	}
 
+	// TODO 选择合适的utxo
 	var weightEstimate utils.TxWeightEstimator
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
 	total := int64(0)
@@ -1645,6 +1648,7 @@ func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 		return nil, nil, 0, fmt.Errorf("something wrong, %d != %d", feeValue, suffix)
 	}
 
+	// TODO 选择合适的白聪utxo
 	fee0 := weightEstimate.Fee(feeRate)
 	if feeValue < fee0 {
 		// 增加fee
@@ -1801,6 +1805,7 @@ func (p *Manager) SendRunes(destAddr string,
 	}
 	expectedAmt := amt.Clone()
 
+	// TODO 选择合适的utxo
 	p.utxoLockerL1.Reload(address)
 	var weightEstimate utils.TxWeightEstimator
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
@@ -1894,6 +1899,7 @@ func (p *Manager) SendRunes(destAddr string,
 		tx.AddTxOut(txOut2)
 	}
 
+	// TODO 选择合适的白聪utxo
 	fee0 := weightEstimate.Fee(feeRate)
 	feeValue := changeOutput
 	if feeValue < fee0 {
@@ -2044,6 +2050,7 @@ func (p *Manager) BuildBatchSendTxV2_PlainSats(dest []*SendAssetInfo, utxos, fee
 		weightEstimate.AddOutput(memo[:]) // op_return
 	}
 
+	// TODO 选择合适的utxo
 	p.utxoLockerL1.Reload(address)
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
 	total := int64(0)
@@ -2162,6 +2169,7 @@ func (p *Manager) BuildBatchSendTxV2_ordx(dest []*SendAssetInfo,
 	total := int64(0)
 	var totalAsset *Decimal
 
+	// TODO 选择合适的utxo
 	inputVect := make([]*TxOutput, 0)
 	p.utxoLockerL1.Reload(address)
 	var changePkScript []byte
@@ -2494,6 +2502,7 @@ func (p *Manager) BuildBatchSendTxV2_runes(dest []*SendAssetInfo,
 	return tx, prevFetcher, fee + 330, nil
 }
 
+// 废弃，使用v3版本
 // 构建tx，发送给多个地址不同数量的资产，对于ordx资产，不允许插桩
 func (p *Manager) BatchSendAssetsV2(dest []*SendAssetInfo,
 	assetNameStr string, feeRate int64, memo []byte, bInChannel bool) (string, error) {
