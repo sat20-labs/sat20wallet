@@ -484,7 +484,7 @@ func (p *Manager) BatchSendAssets_SatsNet(destAddr string,
 			}
 
 			if feeValue < DEFAULT_FEE_SATSNET {
-				return "", fmt.Errorf("not enough fee")
+				return "", fmt.Errorf("no enough fee")
 			}
 		}
 	}
@@ -653,7 +653,7 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 			}
 
 			if feeValue < DEFAULT_FEE_SATSNET {
-				return nil, fmt.Errorf("not enough fee")
+				return nil, fmt.Errorf("no enough fee")
 			}
 		}
 	}
@@ -757,7 +757,7 @@ func (p *Manager) SendNullData_SatsNet(memo []byte) (string, error) {
 	}
 
 	if feeValue < DEFAULT_FEE_SATSNET {
-		return "", fmt.Errorf("not enough fee")
+		return "", fmt.Errorf("no enough fee")
 	}
 
 	feeAsset := swire.AssetInfo{
@@ -1004,7 +1004,7 @@ func (p *Manager) SendAssetsV2_SatsNet(destAddr string,
 			}
 
 			if feeValue < satsNum {
-				return "", fmt.Errorf("not enough fee")
+				return "", fmt.Errorf("no enough fee")
 			}
 		}
 	}
@@ -1193,7 +1193,7 @@ func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 			}
 
 			if feeValue < satsNum {
-				return "", fmt.Errorf("not enough fee")
+				return "", fmt.Errorf("no enough fee")
 			}
 		}
 	}
@@ -1408,7 +1408,7 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 
 	feeValue := total - required // >= fee0
 	if feeValue < fee0 {
-		return nil, nil, 0, fmt.Errorf("not enough fee")
+		return nil, nil, 0, fmt.Errorf("no enough fee")
 	}
 	change := feeValue - fee1
 	if change < 330 {
@@ -1678,7 +1678,7 @@ func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 	fee1 := weightEstimate.Fee(feeRate)
 
 	if feeValue < fee0 {
-		return nil, nil, 0, fmt.Errorf("not enough fee")
+		return nil, nil, 0, fmt.Errorf("no enough fee")
 	}
 
 	feeChange := feeValue - fee1
@@ -1926,7 +1926,7 @@ func (p *Manager) SendRunes(destAddr string,
 	fee1 := weightEstimate.Fee(feeRate)
 
 	if feeValue < fee0 {
-		return nil, fmt.Errorf("not enough fee")
+		return nil, fmt.Errorf("no enough fee")
 	}
 
 	feeChange := feeValue - fee1
@@ -2300,7 +2300,7 @@ func (p *Manager) BuildBatchSendTxV2_ordx(dest []*SendAssetInfo,
 	feeValue := total - totalOutputSats
 	fee0 := weightEstimate.Fee(feeRate)
 	if feeValue < fee0 {
-		return nil, nil, 0, fmt.Errorf("not enough fee")
+		return nil, nil, 0, fmt.Errorf("no enough fee")
 	}
 
 	weightEstimate.AddP2TROutput() // fee change
@@ -2475,7 +2475,7 @@ func (p *Manager) BuildBatchSendTxV2_runes(dest []*SendAssetInfo,
 	feeValue := total - totalOutputSats
 	fee0 := weightEstimate.Fee(feeRate)
 	if feeValue < fee0 {
-		return nil, nil, 0, fmt.Errorf("not enough fee")
+		return nil, nil, 0, fmt.Errorf("no enough fee")
 	}
 
 	weightEstimate.AddP2TROutput() // fee change
