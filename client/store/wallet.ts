@@ -6,7 +6,7 @@ import stp from '@/utils/stp'
 import satsnetStp from '@/utils/stp'
 import { useChannelStore } from './channel'
 import { ref, computed, toRaw } from 'vue'
-import { sendNetworkChangedEvent } from '@/lib/utils'
+import { sendNetworkChangedEvent, sendAccountsChangedEvent } from '@/lib/utils'
 
 
 export const useWalletStore = defineStore('wallet', () => {
@@ -26,11 +26,25 @@ export const useWalletStore = defineStore('wallet', () => {
   const hasWallet = ref(!!walletStorage.getValue('hasWallet'))
   const localWallets = walletStorage.getValue('wallets');
   const wallets = ref<WalletData[]>(localWallets ? JSON.parse(JSON.stringify(localWallets)) : [])
+
+  // 添加全局切换状态管理
+  const isSwitchingWallet = ref(false)
+  const isSwitchingAccount = ref(false)
   console.log(wallets);
   console.log(walletId);
   const wallet = computed(() => wallets.value.find(w => w.id === walletId.value))
   const accounts = computed(() => wallet.value?.accounts)
   const account = computed(() => wallet.value?.accounts.find(a => a.index === accountIndex.value))
+
+  // 安全的账户变更事件发送函数
+  const safeSendAccountsChangedEvent = async (accountsData: any) => {
+    try {
+      await sendAccountsChangedEvent(accountsData)
+    } catch (error) {
+      console.warn('sendAccountsChangedEvent failed:', error)
+      // 不中断主流程，仅记录警告
+    }
+  }
   const setAddress = async (value: string) => {
     address.value = value
     await walletStorage.setValue('address', value)
@@ -105,13 +119,34 @@ export const useWalletStore = defineStore('wallet', () => {
   const setFeeRate = (value: number) => {
     feeRate.value = value
   }
-  const switchWallet = async (walletId: string) => {
-    await walletManager.switchWallet(walletId, password.value as string)
-    await satsnetStp.switchWallet(walletId, password.value as string)
-    const currentAccount = wallets.value.find(w => w.id === walletId)?.accounts[0];
-    await setWalletId(walletId);
-    await switchToAccount(currentAccount?.index || 0);
-    await getWalletInfo()
+  const switchWallet = async (walletIdToSwitch: string) => {
+    // 如果正在切换，直接返回
+    if (isSwitchingWallet.value) {
+      console.log('Wallet switch already in progress, ignoring...')
+      return
+    }
+
+    try {
+      isSwitchingWallet.value = true
+      console.log('Starting wallet switch to:', walletIdToSwitch)
+
+      await walletManager.switchWallet(walletIdToSwitch, password.value as string)
+      await satsnetStp.switchWallet(walletIdToSwitch, password.value as string)
+      const currentAccount = wallets.value.find(w => w.id === walletIdToSwitch)?.accounts[0];
+      await setWalletId(walletIdToSwitch);
+      await switchToAccount(currentAccount?.index || 0);
+      await getWalletInfo()
+
+      // 发送账户变更事件（非关键操作）
+      safeSendAccountsChangedEvent(wallets.value)
+      
+      console.log('Wallet switch completed successfully')
+    } catch (error) {
+      console.error('Wallet switch failed:', error)
+      throw error
+    } finally {
+      isSwitchingWallet.value = false
+    }
   }
   const createWallet = async (password: string) => {
     const [err, res] = await walletManager.createWallet(password)
@@ -336,15 +371,36 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const switchToAccount = async (accountId: number) => {
-    await walletManager.switchAccount(accountId)
-    await satsnetStp.switchAccount(accountId)
-    const [_, addressRes] = await walletManager.getWalletAddress(accountId)
-    const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
-    console.log('switchToAccount', await satsnetStp.getWallet());
-    if (addressRes && pubkeyRes) {
-      await setAccountIndex(accountId)
-      await setAddress(addressRes.address)
-      await setPublickey(pubkeyRes.pubKey)
+    // 如果正在切换账户，直接返回
+    if (isSwitchingAccount.value) {
+      console.log('Account switch already in progress, ignoring...')
+      return
+    }
+
+    try {
+      isSwitchingAccount.value = true
+      console.log('Starting account switch to:', accountId)
+
+      await walletManager.switchAccount(accountId)
+      await satsnetStp.switchAccount(accountId)
+      const [_, addressRes] = await walletManager.getWalletAddress(accountId)
+      const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
+      console.log('switchToAccount', await satsnetStp.getWallet());
+      if (addressRes && pubkeyRes) {
+        await setAccountIndex(accountId)
+        await setAddress(addressRes.address)
+        await setPublickey(pubkeyRes.pubKey)
+      }
+
+      // 发送账户变更事件（非关键操作）
+      safeSendAccountsChangedEvent(wallets.value)
+      
+      console.log('Account switch completed successfully')
+    } catch (error) {
+      console.error('Account switch failed:', error)
+      throw error
+    } finally {
+      isSwitchingAccount.value = false
     }
   }
 
@@ -424,5 +480,8 @@ export const useWalletStore = defineStore('wallet', () => {
     setBtcFeeRate,
     satsnetFeeRate,
     setSatsnetFeeRate,
+    // 导出切换状态
+    isSwitchingWallet,
+    isSwitchingAccount,
   }
 })

@@ -142,9 +142,10 @@ class WalletManager {
   async sendAssets_SatsNet(
     destAddr: string,
     assetName: string,
-    amt: number
+    amt: number,
+    memo: string = ""
   ): Promise<[Error | undefined, string | undefined]> {
-    return this._handleRequest('sendAssets_SatsNet', destAddr, assetName, amt)
+    return this._handleRequest('sendAssets_SatsNet', destAddr, assetName, amt, memo)
   }
 
   async init(

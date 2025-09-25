@@ -450,5 +450,15 @@
     "cancel": "取消",
     "save": "保存",
     "saving": "保存中..."
+  },
+  "sendAssets": {
+    "confirmTitle": "发送资产确认",
+    "description": "请确认以下资产转账：",
+    "assetName": "资产名称",
+    "amount": "数量",
+    "destinationAddress": "目标地址",
+    "memo": "备注",
+    "feeNote": "网络费用将从您的余额中扣除。",
+    "missingData": "缺少资产转账所需的必要数据。"
   }
 }

@@ -75,7 +75,8 @@ declare interface WalletManager {
   sendAssets_SatsNet(
     destAddr: string,
     assetName: string,
-    amount: number
+    amount: number,
+    memo?: string
   ): Promise<SatsnetResponse<{ txId: string }>>
 
   getChannelAddrByPeerPubkey(peerPubkey: string): Promise<SatsnetResponse<{ channelAddr: string, peerAddr }>>
@@ -176,7 +177,8 @@ declare interface WalletManager {
   sendAssets_SatsNet(
     destAddr: string,
     assetName: string,
-    amt: number
+    amt: number,
+    memo?: string
   ): Promise<SatsnetResponse<string>>
 
   // Build a batch sell order
@@ -385,7 +387,8 @@ interface SatsnetStp {
   sendAssets_SatsNet(
     address: string,
     assetName: string,
-    amt: number
+    amt: number,
+    memo?: string
   ): SatsnetResponse
   unlockFromChannel(
     channelUtxo: string,

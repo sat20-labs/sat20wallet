@@ -450,5 +450,15 @@
     "cancel": "Cancel",
     "save": "Save",
     "saving": "Saving..."
+  },
+  "sendAssets": {
+    "confirmTitle": "Send Assets Confirmation",
+    "description": "Please confirm the following asset transfer:",
+    "assetName": "Asset Name",
+    "amount": "Amount",
+    "destinationAddress": "Destination Address",
+    "memo": "Memo",
+    "feeNote": "Network fees will be deducted from your balance.",
+    "missingData": "Missing required data for asset transfer."
   }
 }

@@ -334,13 +334,15 @@ class SatsnetStp {
   async sendAssets_SatsNet(
     address: string,
     assetName: string,
-    amt: number
+    amt: number,
+    memo: string = ""
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'sendAssets_SatsNet',
       address,
       assetName,
-      String(amt)
+      String(amt),
+      memo
     )
   }
   async sendAssets(

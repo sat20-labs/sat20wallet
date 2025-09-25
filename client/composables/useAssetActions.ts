@@ -235,7 +235,7 @@ export function useAssetActions() {
   const l2Send = async ({ toAddress, asset_name, amt }: any) => {
     loading.value = true
     console.log('UseAssetAction l2Send:', toAddress, asset_name, amt)
-    const [err] = await satsnetStp.sendAssets_SatsNet(toAddress, asset_name, amt)
+    const [err] = await satsnetStp.sendAssets_SatsNet(toAddress, asset_name, amt, "")
     if (err) {
       handleError(err.message)
       loading.value = false

@@ -11,9 +11,13 @@
           <!-- Sub-wallet List -->
           <div class="space-y-2">
             <div v-for="account in accountsWithAddress" :key="account.index"
-              class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors cursor-pointer"
-              :class="{ 'border-primary/50': account.index === accountIndex }"
-              @click="account.index !== accountIndex && selectAccount(account)">
+              class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
+              :class="{ 
+                'border-primary/50': account.index === accountIndex,
+                'cursor-pointer': !isSwitchingAccount && account.index !== accountIndex,
+                'cursor-not-allowed opacity-50': isSwitchingAccount
+              }"
+              @click="account.index !== accountIndex && !isSwitchingAccount && selectAccount(account)">
               <div class="flex items-center gap-3">
                 <div class="w-10 h-10 rounded-full overflow-hidden bg-muted">
                   <div class="w-full h-full flex items-center justify-center">
@@ -23,7 +27,8 @@
                 <div>
                   <div class="font-medium flex items-center gap-2 text-white/60">
                     {{ account.displayName }}
-                    <Button v-if="account.index === accountIndex" variant="ghost" size="icon" class="h-2 w-2"
+                    <Icon v-if="isSwitchingAccount && account.index === accountIndex" icon="lucide:loader-2" class="w-3 h-3 animate-spin" />
+                    <Button v-if="account.index === accountIndex && !isSwitchingAccount" variant="ghost" size="icon" class="h-2 w-2"
                       @click.stop="showEditNameDialog(account)">
                       <Icon icon="lucide:pencil" class="w-3 h-3" />
                     </Button>
@@ -141,10 +146,12 @@ import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import walletManager from '@/utils/sat20'
 import { sendAccountsChangedEvent } from '@/lib/utils'
 import { useNameManager } from '@/composables/useNameManager'
+import { useDebounceFn } from '@vueuse/core'
 
 const router = useRouter()
 const { toast } = useToast()
 const walletStore = useWalletStore()
+const { isSwitchingAccount } = storeToRefs(walletStore)
 
 // 名字管理
 const { getCurrentName } = useNameManager()
@@ -289,7 +296,8 @@ async function deleteAccount() {
   }
 }
 
-async function selectAccount(account: WalletAccountWithDisplay) {
+// 创建防抖的切换账户函数
+const debouncedSelectAccount = useDebounceFn(async (account: WalletAccountWithDisplay) => {
   try {
     await walletStore.switchToAccount(account.index)
     toast({
@@ -297,14 +305,10 @@ async function selectAccount(account: WalletAccountWithDisplay) {
       description: '切换账户成功',
       variant: 'success'
     })
-    // 发送 accountsChanged 事件（封装函数）
-
     console.log(router.currentRoute.value.path);
-
     setTimeout(() => {
       router.go(-1)
     }, 300)
-    await sendAccountsChangedEvent(accounts.value)
   } catch (error) {
     toast({
       title: '错误',
@@ -312,6 +316,21 @@ async function selectAccount(account: WalletAccountWithDisplay) {
       variant: 'destructive',
     })
   }
+}, 300)
+
+async function selectAccount(account: WalletAccountWithDisplay) {
+  // 如果正在切换账户，直接返回
+  if (isSwitchingAccount.value) {
+    toast({
+      title: '请稍等',
+      description: '账户切换进行中',
+      variant: 'default'
+    })
+    return
+  }
+
+  // 调用防抖函数
+  debouncedSelectAccount(account)
 }
 
 async function copyAddress(address: string) {

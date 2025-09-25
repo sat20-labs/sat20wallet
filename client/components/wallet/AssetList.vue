@@ -541,7 +541,8 @@ const l2Send = async ({ toAddress, asset_name, amt }: any) => {
   const [err, result] = await satsnetStp.sendAssets_SatsNet(
     toAddress,
     asset_name,
-    amt
+    amt,
+    ""
   )
   if (err) {
     toast({

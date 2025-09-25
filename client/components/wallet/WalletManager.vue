@@ -47,8 +47,11 @@
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <Button v-if="wallet.id !== currentWalletId" variant="outline" size="sm" @click="selectWallet(wallet)">
-                  {{ $t('walletManager.switch') }}
+                <Button v-if="wallet.id !== currentWalletId" variant="outline" size="sm" 
+                  @click="selectWallet(wallet)" 
+                  :disabled="isSwitchingWallet">
+                  <Icon v-if="isSwitchingWallet" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
+                  {{ isSwitchingWallet ? $t('walletManager.switching') : $t('walletManager.switch') }}
                 </Button>
                 <Button v-else variant="outline" size="sm" disabled>
                   {{ $t('walletManager.current') }}
@@ -329,12 +332,12 @@ import { sendAccountsChangedEvent } from '@/lib/utils'
 import walletManager from '@/utils/sat20'
 import { hideAddress } from '@/utils'
 import { hashPassword } from '@/utils/crypto'
-import { useClipboard } from '@vueuse/core'
+import { useClipboard, useDebounceFn } from '@vueuse/core'
 
 
 const router = useRouter()
 const walletStore = useWalletStore()
-const { wallets } = storeToRefs(walletStore)
+const { wallets, isSwitchingWallet } = storeToRefs(walletStore)
 const { toast } = useToast()
 const { copy, isSupported } = useClipboard()
 
@@ -407,7 +410,8 @@ watch(wallets, async (newWallets) => {
   }
 }, { immediate: true })
 
-const selectWallet = async (wallet: WalletData) => {
+// 创建防抖的切换钱包函数
+const debouncedSelectWallet = useDebounceFn(async (wallet: WalletData) => {
   try {
     await walletStore.switchWallet(wallet.id)
     toast({
@@ -418,12 +422,6 @@ const selectWallet = async (wallet: WalletData) => {
     setTimeout(() => {
       router.go(-1)
     }, 100)
-    try {
-      sendAccountsChangedEvent(wallets.value)
-    } catch (error) {
-      console.error('Failed to send accounts changed event:', error)
-    }
-
   } catch (error: any) {
     console.error('Failed to switch wallet:', error)
     toast({
@@ -432,6 +430,21 @@ const selectWallet = async (wallet: WalletData) => {
       description: error.message || 'Failed to switch wallet'
     })
   }
+}, 300)
+
+const selectWallet = async (wallet: WalletData) => {
+  // 如果正在切换，直接返回
+  if (isSwitchingWallet.value) {
+    toast({
+      title: 'Please wait',
+      description: 'Wallet switch in progress',
+      variant: 'default'
+    })
+    return
+  }
+
+  // 调用防抖函数
+  debouncedSelectWallet(wallet)
 }
 
 const confirmDeleteWallet = (wallet: WalletData) => {

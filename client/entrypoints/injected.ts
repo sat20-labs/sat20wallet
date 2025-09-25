@@ -260,6 +260,18 @@ export default defineUnlistedScript(() => {
         data: { destAddr, assetName, amtList },
       })
     }
+    async sendAssets_SatsNet(
+      address: string,
+      assetName: string,
+      amt: number,
+      memo: string = ""
+    ): Promise<string> {
+      return this.send<string>({
+        type: Message.MessageType.APPROVE,
+        action: Message.MessageAction.SEND_ASSETS_SATSNET,
+        data: { address, assetName, amt, memo },
+      })
+    }
     async getBalance(): Promise<Balance> {
       return this.send<Balance>({
         type: Message.MessageType.REQUEST,
