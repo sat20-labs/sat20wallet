@@ -2608,7 +2608,7 @@ func CalcFee_SendTx(inputLen, outputLen, feeLen int, assetName *AssetName,
 		}
 	}
 
-	if NeedStubUtxoForAssetV3(assetName, amt) {
+	if NeedStubUtxoForAsset(assetName, amt) {
 		// 需要一个用户的stub utxo作为输入，放在资产输入的上面
 		if bInChannel {
 			weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)

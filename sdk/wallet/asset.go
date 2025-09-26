@@ -302,31 +302,27 @@ func GetCoreAssetName() *indexer.AssetName {
 	return indexer.NewAssetNameFromString(indexer.CORENODE_STAKING_ASSET_NAME)
 }
 
-func NeedStubUtxoForAsset(name *AssetName) bool {
-	if name == nil || name.N == 0 {
-		return false
+// ordx 需要2个
+// runes需要1个
+// brc20需要n个
+func NeedStubUtxoForChannel(name *indexer.AssetName) int {
+	switch name.Protocol {
+	case indexer.PROTOCOL_NAME_RUNES:
+		return 1
+	case indexer.PROTOCOL_NAME_ORDX:
+		if name.Type == indexer.ASSET_TYPE_FT || name.Type != indexer.ASSET_TYPE_EXOTIC {
+			return 2
+		}
+		return 0
+	case indexer.PROTOCOL_NAME_BRC20:
+		return 2
+	default:
+		return 0
 	}
-	return NeedStubUtxoForAssetV2(&name.AssetName)
 }
 
-func NeedStubUtxoForAssetV2(name *indexer.AssetName) bool {
-	if name == nil {
-		return false
-	}
-	if indexer.IsPlainAsset(name) {
-		return false
-	}
-	if name.Protocol != indexer.PROTOCOL_NAME_ORDX {
-		return false
-	}
-	if name.Type != indexer.ASSET_TYPE_FT && name.Type != indexer.ASSET_TYPE_EXOTIC {
-		return false
-	}
-	return true
-}
-
-func NeedStubUtxoForAssetV3(name *AssetName, amt *Decimal) bool {
-	if NeedStubUtxoForAsset(name) {
+func NeedStubUtxoForAsset(name *AssetName, amt *Decimal) bool {
+	if c := NeedStubUtxoForChannel(&name.AssetName); c > 0 {
 		satsNum := GetBindingSatNum(amt, name.N)
 		return satsNum != 0 && satsNum < 330
 	}
