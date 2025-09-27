@@ -351,21 +351,25 @@ func SplitChangeAsset(input *TxOutput_SatsNet, changePkScript []byte, tx *swire.
 		bindingSat := int64(0)
 		txouts := make([]*swire.TxOut, 0)
 		for _, asset := range input.OutValue.Assets {
-			value := indexer.GetBindingSatNum(&asset.Amount, asset.BindingSat)
-			bindingSat += value
-			txOut := swire.NewTxOut(value, swire.TxAssets{asset}, changePkScript)
-			txouts = append(txouts, txOut)
+			if asset.Amount.Sign() > 0 {
+				value := indexer.GetBindingSatNum(&asset.Amount, asset.BindingSat)
+				bindingSat += value
+				txOut := swire.NewTxOut(value, swire.TxAssets{asset}, changePkScript)
+				txouts = append(txouts, txOut)
+			}
 		}
 		if bindingSat > input.OutValue.Value {
-			// 可能因为历史的原因，有一些utxo聪不足，需要为这些utxo补充聪，
+			// 可能因为历史的原因，有一些utxo聪不足，需要为这些utxo补充聪，所以这里不做任何事
 			txOut1 := swire.NewTxOut(input.Value(), input.OutValue.Assets, changePkScript)
 			tx.AddTxOut(txOut1)
 		} else {
 			for _, txOut := range txouts {
 				tx.AddTxOut(txOut)
 			}
-			txOut := swire.NewTxOut(input.OutValue.Value-bindingSat, nil, changePkScript)
-			tx.AddTxOut(txOut)
+			if input.OutValue.Value - bindingSat > 0 {
+				txOut := swire.NewTxOut(input.OutValue.Value-bindingSat, nil, changePkScript)
+				tx.AddTxOut(txOut)
+			}
 		}
 	}
 }
