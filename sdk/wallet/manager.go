@@ -914,3 +914,8 @@ func (p *Manager) GetUtxoLocker() *UtxoLocker {
 func (p *Manager) GetUtxoLocker_SatsNet() *UtxoLocker {
 	return p.utxoLockerL2
 }
+
+func (p *Manager) IsRecentBlockUtxo(utxoId uint64) bool {
+	h, _, _ := indexer.FromUtxoId(utxoId)
+	return p.status.SyncHeight == h
+}
