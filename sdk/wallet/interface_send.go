@@ -2069,6 +2069,127 @@ func (p *Manager) selectUtxosForPlainSats(
 	return prevFetcher, changePkScript, changeOutput, fee0, nil
 }
 
+func (p *Manager) selectUtxosForAsset_SatsNet(assetName *AssetName, requiredAmt *Decimal) (
+	[]*TxOutput_SatsNet, *Decimal, int64, error) {
+
+	address := p.wallet.GetAddress()
+	utxos := p.l2IndexerClient.GetUtxoListWithTicker(address, &assetName.AssetName)
+	if len(utxos) == 0 {
+		return nil, nil, 0, fmt.Errorf("no enough assets")
+	}
+	p.utxoLockerL2.Reload(address)
+
+	// 先选满足条件的utxo
+	totalPlainSats := int64(0)
+	var totalAsset *Decimal
+	selected := make([]*TxOutput_SatsNet, 0)
+	bigger := make([]*TxOutput_SatsNet, 0)
+	for _, u := range utxos {
+		if p.utxoLockerL2.IsLocked(u.OutPoint) {
+			continue
+		}
+		txOut := OutputInfoToOutput_SatsNet(u)
+		assetAmt := txOut.GetAsset(&assetName.AssetName)
+		if assetAmt.Cmp(requiredAmt) > 0 {
+			bigger = append(bigger, txOut)
+			continue
+		}
+
+		selected = append(selected, txOut)
+		totalPlainSats += txOut.GetPlainSat()
+		totalAsset = totalAsset.Add(assetAmt)
+		if totalAsset.Cmp(requiredAmt) >= 0 {
+			break
+		}
+	}
+	if totalAsset.Cmp(requiredAmt) >= 0 {
+		return selected, totalAsset, totalPlainSats, nil
+	}
+
+	// 上面所选的utxo不够，接着从bigger的尾部往前添加
+	for i := len(bigger) - 1; i >= 0; i-- {
+		txOut := bigger[i]
+		if p.utxoLockerL2.IsLocked(txOut.OutPointStr) {
+			continue
+		}
+		
+		selected = append(selected, txOut)
+		totalPlainSats += txOut.GetPlainSat()
+		assetAmt := txOut.GetAsset(&assetName.AssetName)
+		totalAsset = totalAsset.Add(assetAmt)
+		if totalAsset.Cmp(requiredAmt) >= 0 {
+			break
+		}
+	}
+
+	if totalAsset.Cmp(requiredAmt) < 0 {
+		return nil, nil, 0, fmt.Errorf("no enough assets")
+	}
+	return selected, totalAsset, totalPlainSats, nil
+}
+
+// 选择合适大小的utxo，而不是从最大的utxo选择
+func (p *Manager) selectUtxosForFee_SatsNet(feeValue int64) ([]*TxOutput_SatsNet, int64, error) {
+	address := p.wallet.GetAddress()
+	requiredFee := DEFAULT_FEE_SATSNET - feeValue
+	if requiredFee <= 0 {
+		// 不需要新增加fee
+		return nil, feeValue, nil
+	}
+
+	feeOutputs := p.l2IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
+	if len(feeOutputs) == 0 {
+		Log.Errorf("no plain sats")
+		return nil, 0, fmt.Errorf("no plain sats")
+	}
+
+	var totalPlainSats int64
+	bigger := make([]*TxOutput_SatsNet, 0)
+	selected := make([]*TxOutput_SatsNet, 0)
+	for _, out := range feeOutputs {
+		if p.utxoLockerL2.IsLocked(out.OutPoint) {
+			continue
+		}
+		txOut := OutputInfoToOutput_SatsNet(out)
+		plainSats := txOut.GetPlainSat()
+		if plainSats > requiredFee {
+			bigger = append(bigger, txOut)
+			continue
+		}
+		
+		totalPlainSats += plainSats
+		selected = append(selected, txOut)
+		if totalPlainSats >= requiredFee {
+			break
+		}
+	}
+	if totalPlainSats >= requiredFee {
+		return selected, totalPlainSats, nil
+	}
+
+	// 上面所选的utxo不够，接着从bigger的尾部往前添加
+	for i := len(bigger) - 1; i >= 0; i-- {
+		txOut := bigger[i]
+		if p.utxoLockerL2.IsLocked(txOut.OutPointStr) {
+			continue
+		}
+		
+		selected = append(selected, txOut)
+		totalPlainSats += txOut.GetPlainSat()
+		
+		if totalPlainSats >= requiredFee {
+			break
+		}
+	}
+
+	if totalPlainSats < requiredFee {
+		return nil, 0, fmt.Errorf("no enough fee")
+	}
+
+	return selected, totalPlainSats, nil
+}
+
+
 func (p *Manager) selectUtxosForAsset(assetName *AssetName, requiredAmt *Decimal,
 	weightEstimate *utils.TxWeightEstimator, excludeRecentBlock bool) ([]*TxOutput, *Decimal, int64, error) {
 
