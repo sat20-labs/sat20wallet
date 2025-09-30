@@ -1381,8 +1381,9 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 	}
 
 	required := amt * int64(n)
-	prevFetcher, changePkScript, changeOutput, fee0, err := p.selectUtxosForPlainSats(
-		required, feeRate, false, tx, &weightEstimate)
+	prevFetcher, changePkScript, changeOutput, fee0, err := p.SelectUtxosForPlainSats(
+		p.wallet.GetAddress(), nil,
+		required, feeRate, tx, &weightEstimate, false, false)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -1489,8 +1490,9 @@ func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 	// TODO 选择合适的utxo
 	requiredAmt := amt.Clone().MulBigInt(big.NewInt(int64(n)))
 	var weightEstimate utils.TxWeightEstimator
-	selected, totalAsset, total, err := p.selectUtxosForAsset(
-		name, requiredAmt, &weightEstimate, false)
+	selected, totalAsset, total, err := p.SelectUtxosForAsset(
+		p.wallet.GetAddress(), nil,
+		name, requiredAmt, &weightEstimate, false, false)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -1578,8 +1580,8 @@ func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 	if feeValue < fee0 {
 		// 增加fee
 		var selected []*TxOutput
-		selected, feeValue, err = p.selectUtxosForFee(feeValue,
-			feeRate, &weightEstimate, false)
+		selected, feeValue, err = p.SelectUtxosForFee(p.wallet.GetAddress(), nil, 
+			feeValue, feeRate, &weightEstimate, false, false)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -1636,8 +1638,9 @@ func (p *Manager) BuildBatchSendTx_Runes(destAddr string,
 	// TODO 选择合适的utxo
 	requiredAmt := amt.Clone().MulBigInt(big.NewInt(int64(n)))
 	var weightEstimate utils.TxWeightEstimator
-	selected, totalAsset, total, err := p.selectUtxosForAsset(
-		name, requiredAmt, &weightEstimate, false)
+	selected, totalAsset, total, err := p.SelectUtxosForAsset(
+		p.wallet.GetAddress(), nil,
+		name, requiredAmt, &weightEstimate, false, false)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -1704,8 +1707,9 @@ func (p *Manager) BuildBatchSendTx_Runes(destAddr string,
 	if feeValue < fee0 {
 		// 增加fee
 		var selected []*TxOutput
-		selected, feeValue, err = p.selectUtxosForFee(feeValue,
-			feeRate, &weightEstimate, false)
+		selected, feeValue, err = p.SelectUtxosForFee(
+			p.wallet.GetAddress(), nil, feeValue,
+			feeRate, &weightEstimate, false, false)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -1931,9 +1935,11 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx) ([]*TxOutput, []*TxOutput, err
 
 
 // 只用于白聪输出，包括fee
-func (p *Manager) selectUtxosForPlainSats(
-	requiredValue int64, feeRate int64, excludeRecentBlock bool, 
+func (p *Manager) SelectUtxosForPlainSats(
+	address string, excludedUtxoMap map[string]bool,
+	requiredValue int64, feeRate int64,
 	tx *wire.MsgTx, weightEstimate *utils.TxWeightEstimator,
+	excludeRecentBlock, inChannel bool, 
 	) (*txscript.MultiPrevOutFetcher, []byte, int64, int64, error) {
 	/* 规则：
 	1. 先根据目标输出的value，先选1个，或者最多5个utxo，其聪数量不大于value
@@ -1941,7 +1947,6 @@ func (p *Manager) selectUtxosForPlainSats(
 	3. 如果上面的选择方式找不到足够的utxo，就按照老的流程，从最大的开始找。
 	*/
 
-	address := p.wallet.GetAddress()
 	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	if len(utxos) == 0 {
 		return nil, nil, 0, 0, fmt.Errorf("no plain sats")
@@ -1957,8 +1962,10 @@ func (p *Manager) selectUtxosForPlainSats(
 	// 先选满足条件的主utxo
 	total := int64(0)
 	for _, u := range utxos {
-		utxo := u.OutPoint
-		if p.utxoLockerL1.IsLocked(utxo) {
+		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
+			continue
+		}
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -1981,7 +1988,11 @@ func (p *Manager) selectUtxosForPlainSats(
 		txIns = append(txIns, txIn)
 		//tx.AddTxIn(txIn)
 		prevFetcher.AddPrevOut(*outpoint, &out)
-		localWeightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		if inChannel {
+			localWeightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		} else {
+			localWeightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		}
 		total += u.Value
 		if total >= requiredValue {
 			break
@@ -1991,8 +2002,10 @@ func (p *Manager) selectUtxosForPlainSats(
 	// 再选小的utxo作为fee
 	for i := len(utxos) - 1; i >= 0; i-- {
 		u := utxos[i]
-		utxo := u.OutPoint
-		if p.utxoLockerL1.IsLocked(utxo) {
+		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
+			continue
+		}
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -2015,7 +2028,11 @@ func (p *Manager) selectUtxosForPlainSats(
 		//tx.AddTxIn(txIn)
 		txIns = append(txIns, txIn)
 		prevFetcher.AddPrevOut(*outpoint, &out)
-		localWeightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		if inChannel {
+			localWeightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		} else {
+			localWeightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		}
 		total += out.Value
 		if requiredValue+localWeightEstimate.Fee(feeRate) <= total {
 			break
@@ -2035,8 +2052,10 @@ func (p *Manager) selectUtxosForPlainSats(
 	prevFetcher = txscript.NewMultiPrevOutFetcher(nil)
 	total = 0
 	for _, u := range utxos {
-		utxo := u.OutPoint
-		if p.utxoLockerL1.IsLocked(utxo) {
+		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
+			continue
+		}
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -2052,7 +2071,11 @@ func (p *Manager) selectUtxosForPlainSats(
 		txIn := wire.NewTxIn(outpoint, nil, nil)
 		tx.AddTxIn(txIn)
 		prevFetcher.AddPrevOut(*outpoint, &out)
-		weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		if inChannel {
+			weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		} else {
+			weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		}
 		total += out.Value
 		if requiredValue+weightEstimate.Fee(feeRate) <= total {
 			break
@@ -2069,10 +2092,202 @@ func (p *Manager) selectUtxosForPlainSats(
 	return prevFetcher, changePkScript, changeOutput, fee0, nil
 }
 
-func (p *Manager) selectUtxosForAsset_SatsNet(assetName *AssetName, requiredAmt *Decimal) (
+func (p *Manager) SelectUtxosForAsset(address string, excludedUtxoMap map[string]bool,
+	assetName *AssetName, requiredAmt *Decimal,
+	weightEstimate *utils.TxWeightEstimator, excludeRecentBlock, inChannel bool) (
+		[]*TxOutput, *Decimal, int64, error) {
+
+	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &assetName.AssetName)
+	if len(utxos) == 0 {
+		return nil, nil, 0, fmt.Errorf("no enough assets")
+	}
+	p.utxoLockerL1.Reload(address)
+
+	localWeightEstimate := *weightEstimate
+	// 先选满足条件的utxo
+	total := int64(0)
+	var totalAsset *Decimal
+	selected := make([]*TxOutput, 0)
+	for _, u := range utxos {
+		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
+			continue
+		}
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+			continue
+		}
+		if excludeRecentBlock {
+			if p.IsRecentBlockUtxo(u.UtxoId) {
+				continue
+			}
+		}
+		txOut := OutputInfoToOutput(u)
+		if HasMultiAsset(txOut) {
+			continue
+		}
+		assetAmt := txOut.GetAsset(&assetName.AssetName)
+		if assetAmt.Cmp(requiredAmt) > 0 {
+			continue
+		}
+		RemoveNFTAsset(txOut)
+
+		selected = append(selected, txOut)
+		if inChannel {
+			localWeightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		} else {
+			localWeightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		}
+		total += txOut.OutValue.Value
+		totalAsset = totalAsset.Add(assetAmt)
+		if totalAsset.Cmp(requiredAmt) >= 0 {
+			break
+		}
+	}
+	if totalAsset.Cmp(requiredAmt) >= 0 {
+		*weightEstimate = localWeightEstimate
+		return selected, totalAsset, total, nil
+	}
+
+	// 上面所选的utxo不够，换成老的方案：
+	total = int64(0)
+	totalAsset = nil
+	selected = make([]*TxOutput, 0)
+	for _, u := range utxos {
+		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
+			continue
+		}
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+			continue
+		}
+		if excludeRecentBlock {
+			if p.IsRecentBlockUtxo(u.UtxoId) {
+				continue
+			}
+		}
+		txOut := OutputInfoToOutput(u)
+		if HasMultiAsset(txOut) {
+			continue
+		}
+		RemoveNFTAsset(txOut)
+
+		selected = append(selected, txOut)
+		if inChannel {
+			weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		} else {
+			weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		}
+		total += txOut.OutValue.Value
+		assetAmt := txOut.GetAsset(&assetName.AssetName)
+		totalAsset = totalAsset.Add(assetAmt)
+		if totalAsset.Cmp(requiredAmt) >= 0 {
+			break
+		}
+	}
+
+	if totalAsset.Cmp(requiredAmt) < 0 {
+		return nil, nil, 0, fmt.Errorf("no enough assets")
+	}
+	return selected, totalAsset, total, nil
+}
+
+// 选择合适大小的utxo，而不是从最大的utxo选择
+func (p *Manager) SelectUtxosForFee(
+	address string, excludedUtxoMap map[string]bool,
+	feeValue int64, feeRate int64,
+	weightEstimate *utils.TxWeightEstimator,
+	excludeRecentBlock, inChannel bool) ([]*TxOutput, int64, error) {
+	
+	fee0 := weightEstimate.Fee(feeRate)
+	localFeeValue := feeValue
+	requiredFee := fee0 - localFeeValue
+	if requiredFee <= 0 {
+		// 不需要新增加fee
+		return nil, feeValue, nil
+	}
+
+	feeOutputs := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
+	if len(feeOutputs) == 0 {
+		Log.Errorf("no plain sats")
+		return nil, 0, fmt.Errorf("no plain sats")
+	}
+
+	localWeightEstimate := *weightEstimate
+	selected := make([]*TxOutput, 0)
+	for _, out := range feeOutputs {
+		if _, ok := excludedUtxoMap[out.OutPoint]; ok {
+			continue
+		}
+		if p.utxoLockerL1.IsLocked(out.OutPoint) {
+			continue
+		}
+		if excludeRecentBlock {
+			if p.IsRecentBlockUtxo(out.UtxoId) {
+				continue
+			}
+		}
+		if out.Value == 330 {
+			continue
+		}
+		if out.Value > requiredFee {
+			continue
+		}
+		
+		output := OutputInfoToOutput(out)
+		localFeeValue += out.Value
+		selected = append(selected, output)
+		if inChannel {
+			localWeightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		} else {
+			localWeightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		}
+		if localFeeValue >= localWeightEstimate.Fee(feeRate) {
+			break
+		}
+	}
+	if localFeeValue >= localWeightEstimate.Fee(feeRate) {
+		*weightEstimate = localWeightEstimate
+		return selected, localFeeValue, nil
+	}
+
+	// 用老的方案，重新来一遍
+	selected = make([]*TxOutput, 0)
+	for _, out := range feeOutputs {
+		if _, ok := excludedUtxoMap[out.OutPoint]; ok {
+			continue
+		}
+		if p.utxoLockerL1.IsLocked(out.OutPoint) {
+			continue
+		}
+		if excludeRecentBlock {
+			if p.IsRecentBlockUtxo(out.UtxoId) {
+				continue
+			}
+		}
+		output := OutputInfoToOutput(out)
+		feeValue += out.Value
+		selected = append(selected, output)
+		if inChannel {
+			weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		} else {
+			weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		}
+		if feeValue >= weightEstimate.Fee(feeRate) {
+			break
+		}
+	}
+
+	if feeValue < weightEstimate.Fee(feeRate) {
+		return nil, 0, fmt.Errorf("no enough fee")
+	}
+
+	return selected, feeValue, nil
+}
+
+
+func (p *Manager) SelectUtxosForAsset_SatsNet(address string, 
+	excludedUtxoMap map[string]bool,
+	assetName *AssetName, requiredAmt *Decimal) (
 	[]*TxOutput_SatsNet, *Decimal, int64, error) {
 
-	address := p.wallet.GetAddress()
 	utxos := p.l2IndexerClient.GetUtxoListWithTicker(address, &assetName.AssetName)
 	if len(utxos) == 0 {
 		return nil, nil, 0, fmt.Errorf("no enough assets")
@@ -2085,6 +2300,9 @@ func (p *Manager) selectUtxosForAsset_SatsNet(assetName *AssetName, requiredAmt 
 	selected := make([]*TxOutput_SatsNet, 0)
 	bigger := make([]*TxOutput_SatsNet, 0)
 	for _, u := range utxos {
+		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
+			continue
+		}
 		if p.utxoLockerL2.IsLocked(u.OutPoint) {
 			continue
 		}
@@ -2109,10 +2327,6 @@ func (p *Manager) selectUtxosForAsset_SatsNet(assetName *AssetName, requiredAmt 
 	// 上面所选的utxo不够，接着从bigger的尾部往前添加
 	for i := len(bigger) - 1; i >= 0; i-- {
 		txOut := bigger[i]
-		if p.utxoLockerL2.IsLocked(txOut.OutPointStr) {
-			continue
-		}
-		
 		selected = append(selected, txOut)
 		totalPlainSats += txOut.GetPlainSat()
 		assetAmt := txOut.GetAsset(&assetName.AssetName)
@@ -2129,8 +2343,8 @@ func (p *Manager) selectUtxosForAsset_SatsNet(assetName *AssetName, requiredAmt 
 }
 
 // 选择合适大小的utxo，而不是从最大的utxo选择
-func (p *Manager) selectUtxosForFee_SatsNet(feeValue int64) ([]*TxOutput_SatsNet, int64, error) {
-	address := p.wallet.GetAddress()
+func (p *Manager) SelectUtxosForFee_SatsNet(address string, excludedUtxoMap map[string]bool, 
+	feeValue int64) ([]*TxOutput_SatsNet, int64, error) {
 	requiredFee := DEFAULT_FEE_SATSNET - feeValue
 	if requiredFee <= 0 {
 		// 不需要新增加fee
@@ -2147,6 +2361,9 @@ func (p *Manager) selectUtxosForFee_SatsNet(feeValue int64) ([]*TxOutput_SatsNet
 	bigger := make([]*TxOutput_SatsNet, 0)
 	selected := make([]*TxOutput_SatsNet, 0)
 	for _, out := range feeOutputs {
+		if _, ok := excludedUtxoMap[out.OutPoint]; ok {
+			continue
+		}
 		if p.utxoLockerL2.IsLocked(out.OutPoint) {
 			continue
 		}
@@ -2170,13 +2387,8 @@ func (p *Manager) selectUtxosForFee_SatsNet(feeValue int64) ([]*TxOutput_SatsNet
 	// 上面所选的utxo不够，接着从bigger的尾部往前添加
 	for i := len(bigger) - 1; i >= 0; i-- {
 		txOut := bigger[i]
-		if p.utxoLockerL2.IsLocked(txOut.OutPointStr) {
-			continue
-		}
-		
 		selected = append(selected, txOut)
 		totalPlainSats += txOut.GetPlainSat()
-		
 		if totalPlainSats >= requiredFee {
 			break
 		}
@@ -2187,166 +2399,4 @@ func (p *Manager) selectUtxosForFee_SatsNet(feeValue int64) ([]*TxOutput_SatsNet
 	}
 
 	return selected, totalPlainSats, nil
-}
-
-
-func (p *Manager) selectUtxosForAsset(assetName *AssetName, requiredAmt *Decimal,
-	weightEstimate *utils.TxWeightEstimator, excludeRecentBlock bool) ([]*TxOutput, *Decimal, int64, error) {
-
-	address := p.wallet.GetAddress()
-	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &assetName.AssetName)
-	if len(utxos) == 0 {
-		return nil, nil, 0, fmt.Errorf("no enough assets")
-	}
-	p.utxoLockerL1.Reload(address)
-
-	localWeightEstimate := *weightEstimate
-	// 先选满足条件的utxo
-	total := int64(0)
-	var totalAsset *Decimal
-	selected := make([]*TxOutput, 0)
-	for _, u := range utxos {
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
-			continue
-		}
-		if excludeRecentBlock {
-			if p.IsRecentBlockUtxo(u.UtxoId) {
-				continue
-			}
-		}
-		txOut := OutputInfoToOutput(u)
-		if HasMultiAsset(txOut) {
-			continue
-		}
-		assetAmt := txOut.GetAsset(&assetName.AssetName)
-		if assetAmt.Cmp(requiredAmt) > 0 {
-			continue
-		}
-		RemoveNFTAsset(txOut)
-
-		selected = append(selected, txOut)
-		localWeightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
-		total += txOut.OutValue.Value
-		totalAsset = totalAsset.Add(assetAmt)
-		if totalAsset.Cmp(requiredAmt) >= 0 {
-			break
-		}
-	}
-	if totalAsset.Cmp(requiredAmt) >= 0 {
-		*weightEstimate = localWeightEstimate
-		return selected, totalAsset, total, nil
-	}
-
-	// 上面所选的utxo不够，换成老的方案：
-	total = int64(0)
-	totalAsset = nil
-	selected = make([]*TxOutput, 0)
-	for _, u := range utxos {
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
-			continue
-		}
-		if excludeRecentBlock {
-			if p.IsRecentBlockUtxo(u.UtxoId) {
-				continue
-			}
-		}
-		txOut := OutputInfoToOutput(u)
-		if HasMultiAsset(txOut) {
-			continue
-		}
-		RemoveNFTAsset(txOut)
-
-		selected = append(selected, txOut)
-		weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
-		total += txOut.OutValue.Value
-		assetAmt := txOut.GetAsset(&assetName.AssetName)
-		totalAsset = totalAsset.Add(assetAmt)
-		if totalAsset.Cmp(requiredAmt) >= 0 {
-			break
-		}
-	}
-
-	if totalAsset.Cmp(requiredAmt) < 0 {
-		return nil, nil, 0, fmt.Errorf("no enough assets")
-	}
-	return selected, totalAsset, total, nil
-}
-
-// 选择合适大小的utxo，而不是从最大的utxo选择
-func (p *Manager) selectUtxosForFee(
-	feeValue int64, feeRate int64,
-	weightEstimate *utils.TxWeightEstimator,
-	excludeRecentBlock bool) ([]*TxOutput, int64, error) {
-	
-	address := p.wallet.GetAddress()
-	fee0 := weightEstimate.Fee(feeRate)
-	localFeeValue := feeValue
-	requiredFee := fee0 - localFeeValue
-	if requiredFee <= 0 {
-		// 不需要新增加fee
-		return nil, feeValue, nil
-	}
-
-	feeOutputs := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
-	if len(feeOutputs) == 0 {
-		Log.Errorf("no plain sats")
-		return nil, 0, fmt.Errorf("no plain sats")
-	}
-
-	localWeightEstimate := *weightEstimate
-	selected := make([]*TxOutput, 0)
-	for _, out := range feeOutputs {
-		if p.utxoLockerL1.IsLocked(out.OutPoint) {
-			continue
-		}
-		if excludeRecentBlock {
-			if p.IsRecentBlockUtxo(out.UtxoId) {
-				continue
-			}
-		}
-		if out.Value == 330 {
-			continue
-		}
-		if out.Value > requiredFee {
-			continue
-		}
-		
-		output := OutputInfoToOutput(out)
-		localFeeValue += out.Value
-		selected = append(selected, output)
-		localWeightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
-		if localFeeValue >= localWeightEstimate.Fee(feeRate) {
-			break
-		}
-	}
-	if localFeeValue >= localWeightEstimate.Fee(feeRate) {
-		*weightEstimate = localWeightEstimate
-		return selected, localFeeValue, nil
-	}
-
-	// 用老的方案，重新来一遍
-	selected = make([]*TxOutput, 0)
-	for _, out := range feeOutputs {
-		if p.utxoLockerL1.IsLocked(out.OutPoint) {
-			continue
-		}
-		if excludeRecentBlock {
-			if p.IsRecentBlockUtxo(out.UtxoId) {
-				continue
-			}
-		}
-		output := OutputInfoToOutput(out)
-		feeValue += out.Value
-		selected = append(selected, output)
-		weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
-		if feeValue >= weightEstimate.Fee(feeRate) {
-			break
-		}
-	}
-
-	if feeValue < weightEstimate.Fee(feeRate) {
-		return nil, 0, fmt.Errorf("no enough fee")
-	}
-
-	return selected, feeValue, nil
 }
