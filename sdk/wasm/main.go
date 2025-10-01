@@ -2061,7 +2061,7 @@ func getUtxosWithAsset(this js.Value, p []js.Value) any {
 	assetName := p[2].String()
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		utxos, err := _mgr.GetUtxosWithAsset(address, amt, assetName)
+		utxos, err := _mgr.GetUtxosWithAssetForJS(address, amt, assetName)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -2103,7 +2103,7 @@ func getUtxosWithAsset_SatsNet(this js.Value, p []js.Value) any {
 	assetName := p[2].String()
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		utxos, err := _mgr.GetUtxosWithAsset_SatsNet(address, amt, assetName)
+		utxos, err := _mgr.GetUtxosWithAssetForJS_SatsNet(address, amt, assetName)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -2150,7 +2150,7 @@ func getUtxosWithAssetV2(this js.Value, p []js.Value) any {
 	assetName := p[3].String()
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		utxos, fees, err := _mgr.GetUtxosWithAssetV2(address, int64(value), amt, assetName)
+		utxos, fees, err := _mgr.GetUtxosWithAssetV2ForJS(address, int64(value), amt, assetName)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -2202,7 +2202,7 @@ func getUtxosWithAssetV2_SatsNet(this js.Value, p []js.Value) any {
 	assetName := p[3].String()
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		utxos, fees, err := _mgr.GetUtxosWithAssetV2_SatsNet(address, int64(value), amt, assetName)
+		utxos, fees, err := _mgr.GetUtxosWithAssetV2ForJS_SatsNet(address, int64(value), amt, assetName)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -2244,7 +2244,7 @@ func getAssetAmount(this js.Value, p []js.Value) any {
 	assetName := p[1].String()
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		available, locked, err := _mgr.GetAssetAmount(address, assetName)
+		available, locked, err := _mgr.GetAssetAmountForJS(address, assetName)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -2278,7 +2278,7 @@ func getAssetAmount_SatsNet(this js.Value, p []js.Value) any {
 	assetName := p[1].String()
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		available, locked, err := _mgr.GetAssetAmount_SatsNet(address, assetName)
+		available, locked, err := _mgr.GetAssetAmountForJS_SatsNet(address, assetName)
 		if err != nil {
 			return nil, -1, err.Error()
 		}

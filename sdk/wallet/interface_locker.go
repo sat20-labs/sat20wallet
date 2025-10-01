@@ -63,7 +63,7 @@ func (p *Manager) GetLockedUtxoList_SatsNet(address string) (map[string]*LockedU
 	return p.utxoLockerL2.GetLockedUtxoList(), nil
 }
 
-func (p *Manager) GetUtxosWithAsset(address, amt, assetName string) ([]string, error) {
+func (p *Manager) GetUtxosWithAssetForJS(address, amt, assetName string) ([]string, error) {
 	if address == "" {
 		return nil, fmt.Errorf("address is null")
 	}
@@ -83,10 +83,10 @@ func (p *Manager) GetUtxosWithAsset(address, amt, assetName string) ([]string, e
 	if dAmt.Sign() <= 0 {
 		return nil, fmt.Errorf("invalid amt")
 	}
-	return p.getUtxosWithAsset(address, dAmt, asset)
+	return p.GetUtxosWithAsset(address, dAmt, asset, nil)
 }
 
-func (p *Manager) GetUtxosWithAsset_SatsNet(address, amt, assetName string) ([]string, error) {
+func (p *Manager) GetUtxosWithAssetForJS_SatsNet(address, amt, assetName string) ([]string, error) {
 	if address == "" {
 		return nil, fmt.Errorf("address is null")
 	}
@@ -106,10 +106,10 @@ func (p *Manager) GetUtxosWithAsset_SatsNet(address, amt, assetName string) ([]s
 	if dAmt.Sign() <= 0 {
 		return nil, fmt.Errorf("invalid amt")
 	}
-	return p.getUtxosWithAsset_SatsNet(address, dAmt, asset)
+	return p.GetUtxosWithAsset_SatsNet(address, dAmt, asset, nil)
 }
 
-func (p *Manager) GetUtxosWithAssetV2(address string, value int64, amt, assetName string) ([]string, []string, error) {
+func (p *Manager) GetUtxosWithAssetV2ForJS(address string, value int64, amt, assetName string) ([]string, []string, error) {
 	if address == "" {
 		return nil, nil, fmt.Errorf("address is null")
 	}
@@ -129,10 +129,10 @@ func (p *Manager) GetUtxosWithAssetV2(address string, value int64, amt, assetNam
 	if dAmt.Sign() <= 0 {
 		return nil, nil, fmt.Errorf("invalid amt")
 	}
-	return p.getUtxosWithAssetV2(address, value, dAmt, asset)
+	return p.GetUtxosWithAssetV2(address, value, dAmt, asset, nil, false)
 }
 
-func (p *Manager) GetUtxosWithAssetV2_SatsNet(address string, value int64, amt, assetName string) ([]string, []string, error) {
+func (p *Manager) GetUtxosWithAssetV2ForJS_SatsNet(address string, value int64, amt, assetName string) ([]string, []string, error) {
 	if address == "" {
 		return nil, nil, fmt.Errorf("address is null")
 	}
@@ -152,11 +152,11 @@ func (p *Manager) GetUtxosWithAssetV2_SatsNet(address string, value int64, amt, 
 	if dAmt.Sign() <= 0 {
 		return nil, nil, fmt.Errorf("invalid amt")
 	}
-	return p.getUtxosWithAssetV2_SatsNet(address, value, dAmt, asset)
+	return p.GetUtxosWithAssetV2_SatsNet(address, value, dAmt, asset, nil)
 }
 
 // available, locked
-func (p *Manager) GetAssetAmount(address, assetName string) (*Decimal, *Decimal, error) {
+func (p *Manager) GetAssetAmountForJS(address, assetName string) (*Decimal, *Decimal, error) {
 	if address == "" {
 		return nil, nil, fmt.Errorf("address is null")
 	}
@@ -170,11 +170,11 @@ func (p *Manager) GetAssetAmount(address, assetName string) (*Decimal, *Decimal,
 		return nil, nil, fmt.Errorf("can't get ticker %s info", assetName)
 	}
 
-	available, locked := p.getAssetAmount(address, asset)
+	available, locked := p.GetAssetAmount(address, asset, nil)
 	return available, locked, nil
 }
 
-func (p *Manager) GetAssetAmount_SatsNet(address, assetName string) (*Decimal, *Decimal, error) {
+func (p *Manager) GetAssetAmountForJS_SatsNet(address, assetName string) (*Decimal, *Decimal, error) {
 	if address == "" {
 		return nil, nil, fmt.Errorf("address is null")
 	}
@@ -188,7 +188,7 @@ func (p *Manager) GetAssetAmount_SatsNet(address, assetName string) (*Decimal, *
 		return nil, nil, fmt.Errorf("can't get ticker %s info", assetName)
 	}
 
-	available, locked := p.getAssetAmount_SatsNet(address, asset)
+	available, locked := p.GetAssetAmount_SatsNet(address, asset, nil)
 	return available, locked, nil
 }
 

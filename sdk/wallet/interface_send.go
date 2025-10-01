@@ -55,7 +55,7 @@ func (p *Manager) BatchSendAssetsV2_SatsNet(destAddr []string,
 		}
 	}
 
-	utxos, fees, err := p.getUtxosWithAssetV2_SatsNet("", DEFAULT_FEE_SATSNET, totalAmt, name)
+	utxos, fees, err := p.GetUtxosWithAssetV2_SatsNet("", DEFAULT_FEE_SATSNET, totalAmt, name, nil)
 	if err != nil {
 		return "", err
 	}
@@ -213,7 +213,7 @@ func (p *Manager) BatchSendAssetsV3_SatsNet(dest []*SendAssetInfo,
 
 	var err error
 	var utxos, fees []string
-	utxos, fees, err = p.getUtxosWithAssetV2_SatsNet("", totalValue, totalAmt, name)
+	utxos, fees, err = p.GetUtxosWithAssetV2_SatsNet("", totalValue, totalAmt, name, nil)
 	if err != nil {
 		return "", err
 	}
@@ -1116,7 +1116,7 @@ func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 		return "", fmt.Errorf("no asset %s", assetName)
 	}
 
-	Log.Infof("SendAssets_SatsNet %s %s", assetName, amt)
+	Log.Infof("SendAssetsV3_SatsNet %s %s", assetName, amt)
 	tx := swire.NewMsgTx(swire.TxVersion)
 
 	addr, err := sbtcutil.DecodeAddress(destAddr, GetChainParam_SatsNet())
@@ -1381,11 +1381,18 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 	}
 
 	required := amt * int64(n)
-	prevFetcher, changePkScript, changeOutput, fee0, err := p.SelectUtxosForPlainSats(
+	prevFetcher, changePkScript, outputValue, changeOutput, fee0, err := p.SelectUtxosForPlainSats(
 		p.wallet.GetAddress(), nil,
 		required, feeRate, tx, &weightEstimate, false, false)
 	if err != nil {
 		return nil, nil, 0, err
+	}
+	if outputValue != required {
+		// 调整输出
+		amt = outputValue/int64(n)
+		for _, txOut := range tx.TxOut {
+			txOut.Value = amt
+		}
 	}
 
 	weightEstimate.AddP2TROutput() // fee change
@@ -1940,7 +1947,7 @@ func (p *Manager) SelectUtxosForPlainSats(
 	requiredValue int64, feeRate int64,
 	tx *wire.MsgTx, weightEstimate *utils.TxWeightEstimator,
 	excludeRecentBlock, inChannel bool, 
-	) (*txscript.MultiPrevOutFetcher, []byte, int64, int64, error) {
+	) (*txscript.MultiPrevOutFetcher, []byte, int64, int64, int64, error) {
 	/* 规则：
 	1. 先根据目标输出的value，先选1个，或者最多5个utxo，其聪数量不大于value
 	2. 再从其余的聪数量大于330聪的utxo中，凑齐足够的network fee，注意每增加一个输入，其交易的fee就会增加一些
@@ -1949,7 +1956,7 @@ func (p *Manager) SelectUtxosForPlainSats(
 
 	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	if len(utxos) == 0 {
-		return nil, nil, 0, 0, fmt.Errorf("no plain sats")
+		return nil, nil, 0, 0, 0, fmt.Errorf("no plain sats")
 	}
 	changePkScript := utxos[0].PkScript
 	p.utxoLockerL1.Reload(address)
@@ -2045,7 +2052,7 @@ func (p *Manager) SelectUtxosForPlainSats(
 		for _, txIn := range txIns {
 			tx.AddTxIn(txIn)
 		}
-		return prevFetcher, changePkScript, changeOutput, fee0, nil
+		return prevFetcher, changePkScript, requiredValue, changeOutput, fee0, nil
 	}
 
 	// 上面所选的utxo不够，换成老的方案：
@@ -2085,11 +2092,17 @@ func (p *Manager) SelectUtxosForPlainSats(
 	fee0 = weightEstimate.Fee(feeRate)
 	changeOutput = total - requiredValue - fee0
 	if changeOutput < 0 {
-		return nil, nil, 0, 0, fmt.Errorf("no enough plain sats, required %d but only %d",
-			requiredValue+fee0, total)
+		if requiredValue == total {
+			// 很可能是用户选择了MAX，所以需要修改输出
+			requiredValue -= fee0
+			changeOutput = 0
+		} else {
+			return nil, nil, 0, 0, 0, fmt.Errorf("no enough plain sats, required %d but only %d",
+				requiredValue+fee0, total)
+		}
 	}
 	
-	return prevFetcher, changePkScript, changeOutput, fee0, nil
+	return prevFetcher, changePkScript, requiredValue, changeOutput, fee0, nil
 }
 
 func (p *Manager) SelectUtxosForAsset(address string, excludedUtxoMap map[string]bool,
