@@ -425,43 +425,7 @@ func (p *Manager) GetTxOutFromRawTx(utxo string) (*TxOutput, error) {
 
 func (p *Manager) GetUtxosForFee(address string, value int64, 
 	excludedUtxoMap map[string]bool, excludeRecentBlock bool) ([]string, error) {
-	if address == "" {
-		address = p.wallet.GetAddress()
-	}
-
-	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
-	p.utxoLockerL1.Reload(address)
-	if value == 0 {
-		value = MAX_FEE
-	}
-
-	result := make([]string, 0)
-	total := int64(0)
-	for _, u := range utxos {
-		utxo := u.OutPoint
-		if excludeRecentBlock {
-			if p.IsRecentBlockUtxo(u.UtxoId) {
-				continue
-			}
-		}
-		if _, ok := excludedUtxoMap[utxo]; ok {
-			continue
-		}
-		if p.utxoLockerL1.IsLocked(utxo) {
-			continue
-		}
-		total += u.Value
-		result = append(result, utxo)
-		if total >= value {
-			break
-		}
-	}
-
-	if total < value {
-		return nil, fmt.Errorf("no enough utxo for fee, require %d but only %d", value, total)
-	}
-
-	return result, nil
+	return p.SelectUtxosForFeeV2(address, excludedUtxoMap, value, excludeRecentBlock, false)
 }
 
 func (p *Manager) GetUtxosForFeeV2(address string, value int64, 
@@ -490,8 +454,14 @@ func (p *Manager) GetUtxosForFeeV2(address string, value int64,
 			if p.utxoLockerL1.IsLocked(utxo) {
 				continue
 			}
+			if u.Value > 330 {
+				continue
+			}
 			result = append(result, utxo)
 			break
+		}
+		if len(result) == 0 {
+			return nil, fmt.Errorf("no stub utxo")
 		}
 	}
 
@@ -563,178 +533,32 @@ func (p *Manager) GetUtxosForStubs(address string, n int, excludedUtxoMap map[st
 
 func (p *Manager) GetUtxosForFee_SatsNet(address string, value int64, 
 	excludedUtxoMap map[string]bool) ([]string, error) {
-	if address == "" {
-		address = p.wallet.GetAddress()
-	}
-
-	utxos := p.l2IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
-	p.utxoLockerL2.Reload(address)
-	if value == 0 {
-		value = DEFAULT_FEE_SATSNET
-	}
-
-	result := make([]string, 0)
-	total := int64(0)
-	for _, u := range utxos {
-		utxo := u.OutPoint
-		if _, ok := excludedUtxoMap[utxo]; ok {
-			continue
-		}
-		if p.utxoLockerL2.IsLocked(utxo) {
-			continue
-		}
-		total += u.Value
-		result = append(result, utxo)
-		if total >= value {
-			break
-		}
-	}
-
-	if total < value {
-		return nil, fmt.Errorf("no enough utxo for fee, require %d but only %d", value, total)
-	}
-
-	return result, nil
+	
+	return p.SelectUtxosForFeeV2_SatsNet(address, excludedUtxoMap, value)
 }
 
 func (p *Manager) GetUtxosWithAsset(address string, amt *Decimal, assetName *swire.AssetName,
 	excludedUtxoMap map[string]bool) ([]string, error) {
-	if address == "" {
-		address = p.wallet.GetAddress()
-	}
-	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, assetName)
-	p.utxoLockerL1.Reload(address)
-
-	result := make([]string, 0)
-	var total *Decimal
-	for _, u := range utxos {
-		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
-			continue
-		}
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
-			continue
-		}
-		output := OutputInfoToOutput(u)
-		num := output.GetAsset(assetName)
-		if num.Sign() != 0 {
-			total = total.Add(num)
-			result = append(result, output.OutPointStr)
-			if total.Cmp(amt) >= 0 {
-				break
-			}
-		}
-	}
-
-	if total.Cmp(amt) < 0 {
-		return nil, fmt.Errorf("no enough utxo for %s, require %s but only %d", assetName.String(), amt.String(), total)
-	}
-
-	return result, nil
+	return p.SelectUtxosForAssetV2(address, excludedUtxoMap, assetName, amt, false)
 }
 
 func (p *Manager) GetUtxosWithAsset_SatsNet(address string, amt *Decimal, 
 	assetName *swire.AssetName, excludedUtxoMap map[string]bool) ([]string, error) {
-	if address == "" {
-		address = p.wallet.GetAddress()
-	}
-	utxos := p.l2IndexerClient.GetUtxoListWithTicker(address, assetName)
-	p.utxoLockerL2.Reload(address)
-
-	result := make([]string, 0)
-	var total *Decimal
-	for _, u := range utxos {
-		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
-			continue
-		}
-		if p.utxoLockerL2.IsLocked(u.OutPoint) {
-			continue
-		}
-		output := OutputInfoToOutput_SatsNet(u)
-		num := output.GetAsset(assetName)
-		if num.Sign() != 0 {
-			total = total.Add(num)
-			result = append(result, output.OutPointStr)
-			if total.Cmp(amt) >= 0 {
-				break
-			}
-		}
-	}
-
-	if total.Cmp(amt) < 0 {
-		return nil, fmt.Errorf("no enough utxo for %s, require %s but only %d", assetName.String(), amt.String(), total)
-	}
-
-	return result, nil
+	return p.SelectUtxosForAssetV2_SatsNet(address, excludedUtxoMap, assetName, amt)
 }
 
 func (p *Manager) GetUtxosWithAssetV2(address string, plainSats int64,
 	amt *Decimal, assetName *swire.AssetName, 
 	excludedUtxoMap map[string]bool, excludeRecentBlock bool) ([]string, []string, error) {
-	// TODO 最好由索引器提供接口，不要这样多次获取数据
 
-	if address == "" {
-		address = p.wallet.GetAddress()
-	}
-	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, assetName)
-	p.utxoLockerL1.Reload(address)
-
-	resultAssets := make([]string, 0)
-	resultPlains := make([]string, 0)
-	var totalAssets *Decimal
-	var totalPlainSats int64
-	for _, u := range utxos {
-		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
-			continue
-		}
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
-			continue
-		}
-		if excludeRecentBlock {
-			if p.IsRecentBlockUtxo(u.UtxoId) {
-				continue
-			}
-		}
-		output := OutputInfoToOutput(u)
-		num := output.GetAsset(assetName)
-		if num.Sign() > 0 {
-			totalAssets = totalAssets.Add(num)
-			resultAssets = append(resultAssets, output.OutPointStr)
-			if totalAssets.Cmp(amt) >= 0 {
-				break
-			}
-		}
-	}
-	if totalAssets.Cmp(amt) < 0 {
-		return nil, nil, fmt.Errorf("no enough utxo for %s, require %s but only %d", assetName.String(), amt.String(), totalAssets)
+	resultAssets, err := p.SelectUtxosForAssetV2(address, excludedUtxoMap, assetName, amt, excludeRecentBlock)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	if !indexer.IsPlainAsset(assetName) {
-		// 这里是纯粹的白聪，跟L2不一样
-		utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &ASSET_PLAIN_SAT)
-		p.utxoLockerL1.Reload(address)
-		for _, u := range utxos {
-			if _, ok := excludedUtxoMap[u.OutPoint]; ok {
-				continue
-			}
-			if p.utxoLockerL1.IsLocked(u.OutPoint) {
-				continue
-			}
-			if excludeRecentBlock {
-				if p.IsRecentBlockUtxo(u.UtxoId) {
-					continue
-				}
-			}
-			output := OutputInfoToOutput(u)
-			totalPlainSats += output.GetPlainSat()
-			resultPlains = append(resultPlains, output.OutPointStr)
-			if totalPlainSats >= plainSats {
-				break
-			}
-		}
-	}
-	if totalPlainSats < plainSats {
-		// 如果还不够，需要让用户手动操作，先分离出足够的白聪出来
-		return nil, nil, fmt.Errorf("no enough utxo for plain sats, require %d but only %d, ", plainSats, totalPlainSats)
+	resultPlains, err := p.SelectUtxosForFeeV2(address, excludedUtxoMap, plainSats, excludeRecentBlock, false)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return resultAssets, resultPlains, nil
@@ -743,8 +567,7 @@ func (p *Manager) GetUtxosWithAssetV2(address string, plainSats int64,
 // 这里白聪，是指额外的白聪，不包含绑定了指定资产的聪
 func (p *Manager) GetUtxosWithAssetV2_SatsNet(address string, plainSats int64,
 	amt *Decimal, assetName *swire.AssetName, excludedUtxoMap map[string]bool) ([]string, []string, error) {
-	// TODO 最好由索引器提供接口，不要这样多次获取数据
-
+	
 	if address == "" {
 		address = p.wallet.GetAddress()
 	}
