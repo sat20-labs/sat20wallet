@@ -1197,7 +1197,7 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 		return nil, nil, 0, err
 	}
 	if outputValue != required {
-		// 调整输出
+		// 调整输出  TODO　由调用方决定要不要调整
 		amt = outputValue/int64(n)
 		for _, txOut := range tx.TxOut {
 			txOut.Value = amt
