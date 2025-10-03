@@ -2346,12 +2346,13 @@ func (p *Manager) SelectUtxosForFeeV2_SatsNet(address string, excludedUtxoMap ma
 		if p.utxoLockerL2.IsLocked(utxo) {
 			continue
 		}
-		if u.Value > value {
+		plainSats := u.GetPlainSat()
+		if plainSats > value {
 			bigger = append(bigger, u)
 			continue
 		}
 
-		total += u.Value
+		total += plainSats
 		result = append(result, utxo)
 		if total >= value {
 			break

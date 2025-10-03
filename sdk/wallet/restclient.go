@@ -132,7 +132,9 @@ func (p *IndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 	Offsets := make(map[swire.AssetName]indexer.AssetOffsets)
 	for _, info := range result.Data.Assets {
 		Assets.Add(info.ToAssetInfo())
-		Offsets[info.AssetName] = info.Offsets
+		if len(info.Offsets) != 0 {
+			Offsets[info.AssetName] = info.Offsets
+		}
 	}
 
 	output := TxOutput{
