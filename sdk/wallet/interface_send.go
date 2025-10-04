@@ -747,7 +747,7 @@ func (p *Manager) SendNullData_SatsNet(memo []byte) (string, error) {
 		outpoint := output.OutPoint()
 		txOut := output.OutValue
 
-		feeValue += out.GetPlainSat()
+		feeValue += output.GetPlainSat()
 		txIn := swire.NewTxIn(outpoint, nil, nil)
 		tx.AddTxIn(txIn)
 		prevFetcher.AddPrevOut(*outpoint, &txOut)
@@ -2277,7 +2277,8 @@ func (p *Manager) SelectUtxosForFeeV2(
 	for i := len(bigger) - 1; i >= 0; i-- {
 		txOut := bigger[i]
 		result = append(result, txOut.OutPoint)
-		total += txOut.GetPlainSat()
+		output := OutputInfoToOutput(txOut)
+		total += output.GetPlainSat()
 		if total >= value {
 			break
 		}
@@ -2319,7 +2320,7 @@ func (p *Manager) SelectUtxosForFeeV2_SatsNet(address string, excludedUtxoMap ma
 		value = DEFAULT_FEE_SATSNET
 	}
 
-	bigger := make([]*indexerwire.TxOutputInfo, 0)
+	bigger := make([]*TxOutput_SatsNet, 0)
 	result := make([]string, 0)
 	total := int64(0)
 	for _, u := range utxos {
@@ -2330,9 +2331,10 @@ func (p *Manager) SelectUtxosForFeeV2_SatsNet(address string, excludedUtxoMap ma
 		if p.utxoLockerL2.IsLocked(utxo) {
 			continue
 		}
-		plainSats := u.GetPlainSat()
+		output := OutputInfoToOutput_SatsNet(u)
+		plainSats := output.GetPlainSat()
 		if plainSats > value {
-			bigger = append(bigger, u)
+			bigger = append(bigger, output)
 			continue
 		}
 
@@ -2350,7 +2352,7 @@ func (p *Manager) SelectUtxosForFeeV2_SatsNet(address string, excludedUtxoMap ma
 	// 上面所选的utxo不够，接着从bigger的尾部往前添加
 	for i := len(bigger) - 1; i >= 0; i-- {
 		txOut := bigger[i]
-		result = append(result, txOut.OutPoint)
+		result = append(result, txOut.OutPointStr)
 		total += txOut.GetPlainSat()
 		if total >= value {
 			break

@@ -703,10 +703,11 @@ func (p *Manager) GetAssetAmount_SatsNet(address string, name *swire.AssetName,
 
 	p.utxoLockerL2.Reload(address)
 	for _, u := range outputs {
+		output := OutputInfoToOutput_SatsNet(u)
 		_, ok := excludedUtxoMap[u.OutPoint]
 		if ok || p.utxoLockerL2.IsLocked(u.OutPoint) {
 			if bPlainAsset {
-				lockedSats += u.GetPlainSat()
+				lockedSats += output.GetPlainSat()
 			} else {
 				assets := u.ToTxAssets()
 				asset, _ := assets.Find(name)
@@ -716,7 +717,7 @@ func (p *Manager) GetAssetAmount_SatsNet(address string, name *swire.AssetName,
 			}
 		} else {
 			if bPlainAsset {
-				availableSats += u.GetPlainSat()
+				availableSats += output.GetPlainSat()
 			} else {
 				assets := u.ToTxAssets()
 				asset, _ := assets.Find(name)
