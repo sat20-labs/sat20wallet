@@ -300,7 +300,8 @@ func (p *Manager) getRuneIdFromName(name *swire.AssetName) (*runestone.RuneId, e
 
 func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 
-	if *name == ASSET_PLAIN_SAT || *name == db.ASSET_ALL_SAT {
+	if name.String() == ASSET_PLAIN_SAT.String() || 
+	name.String() == db.ASSET_ALL_SAT.String() {
 		return &indexer.TickerInfo{
 			AssetName:    *name,
 			MaxSupply:    "21000000000000000", //  sats
@@ -317,15 +318,15 @@ func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 	}
 
 	// TODO 还在铸造中的ticker，需要每个区块更新一次数据
-	info, err := loadTickerInfo(p.db, name)
-	if err != nil {
+	//info, err := loadTickerInfo(p.db, name)
+	//if err != nil {
 		info = p.l1IndexerClient.GetTickInfo(name)
 		if info == nil {
 			Log.Errorf("GetTickInfo %s failed", name)
 			return nil
 		}
 		saveTickerInfo(p.db, info)
-	}
+	//}
 
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
