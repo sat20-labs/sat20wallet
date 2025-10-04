@@ -366,7 +366,7 @@ func SplitChangeAsset(input *TxOutput_SatsNet, changePkScript []byte, tx *swire.
 			for _, txOut := range txouts {
 				tx.AddTxOut(txOut)
 			}
-			if input.OutValue.Value - bindingSat > 0 {
+			if input.OutValue.Value-bindingSat > 0 {
 				txOut := swire.NewTxOut(input.OutValue.Value-bindingSat, nil, changePkScript)
 				tx.AddTxOut(txOut)
 			}
@@ -946,6 +946,8 @@ func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 		outpoint := output.OutPoint()
 		txOut := output.OutValue
 
+		// 如果该utxo夹杂其他资产，并且其n>1，可能会导致两个原来没有携带聪的资产，这里合并后要求至少一个聪
+		// 合并方需要为这些资产提供足够的聪，这反过来会导致白聪数量降低
 		assetAmt = assetAmt.Add(output.GetAsset(name))
 		txIn := swire.NewTxIn(outpoint, nil, nil)
 		tx.AddTxIn(txIn)
@@ -958,18 +960,7 @@ func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 		}
 	}
 	if assetAmt.Cmp(expectedAmt) < 0 {
-		err := fmt.Errorf("not enough asset %s", assetName)
-		// TODO 如果是合约调用，需要调整合约的参数，才能调整输出的数据
-		// if indexer.IsPlainAsset(name) {
-		// 	// 发送所有的情况下，调整期望的输出
-		// 	if dAmt.Cmp(assetAmt) == 0 {
-		// 		dAmt = dAmt.Sub(fee)
-		// 		err = nil
-		// 	}
-		// }
-		if err != nil {
-			return "", fmt.Errorf("not enough asset %s", assetName)
-		}
+		return "", fmt.Errorf("not enough asset %s", assetName)
 	}
 
 	var feeOutputs []*indexerwire.TxOutputInfo
@@ -1080,7 +1071,7 @@ func (p *Manager) GenerateStubUtxos(n int, feeRate int64) (string, int64, error)
 func (p *Manager) BatchSendPlainSats(destAddr string, value int64, n int,
 	feeRate int64, memo []byte) (string, int64, error) {
 	//
-	tx, fee, err :=  p.BatchSendAssets(destAddr, indexer.ASSET_PLAIN_SAT.String(),
+	tx, fee, err := p.BatchSendAssets(destAddr, indexer.ASSET_PLAIN_SAT.String(),
 		fmt.Sprintf("%d", value), n, feeRate, memo)
 	if err != nil {
 		return "", fee, err
@@ -1198,7 +1189,7 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 	}
 	if outputValue != required {
 		// 调整输出  TODO　由调用方决定要不要调整
-		amt = outputValue/int64(n)
+		amt = outputValue / int64(n)
 		for _, txOut := range tx.TxOut {
 			txOut.Value = amt
 		}
@@ -1292,7 +1283,6 @@ func adjustInputsForSplicingIn(inputs []*TxOutput, name *AssetName) ([]*TxOutput
 func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 	name *AssetName, amt *Decimal, n int, feeRate int64,
 	memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
-
 
 	addr, err := btcutil.DecodeAddress(destAddr, GetChainParam())
 	if err != nil {
@@ -1396,7 +1386,7 @@ func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 	if feeValue < fee0 {
 		// 增加fee
 		var selected []*TxOutput
-		selected, feeValue, err = p.SelectUtxosForFee(p.wallet.GetAddress(), nil, 
+		selected, feeValue, err = p.SelectUtxosForFee(p.wallet.GetAddress(), nil,
 			feeValue, feeRate, &weightEstimate, false, false)
 		if err != nil {
 			return nil, nil, 0, err
@@ -1436,7 +1426,6 @@ func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 	return tx, prevFetcher, feeValue - feeChange, nil
 }
 
-
 // 给同一个地址发送n等分资产
 func (p *Manager) BuildBatchSendTx_Runes(destAddr string,
 	name *AssetName, amt *Decimal, n int, feeRate int64,
@@ -1461,7 +1450,7 @@ func (p *Manager) BuildBatchSendTx_Runes(destAddr string,
 		return nil, nil, 0, err
 	}
 	changePkScript := selected[0].OutValue.PkScript
-	
+
 	tx := wire.NewMsgTx(wire.TxVersion)
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
 	for _, output := range selected {
@@ -1564,7 +1553,6 @@ func (p *Manager) BuildBatchSendTx_Runes(destAddr string,
 	return tx, prevFetcher, feeValue - feeChange, nil
 }
 
-
 // 发送指定资产
 func (p *Manager) SendAssets(destAddr string, assetName string,
 	amt string, feeRate int64, memo []byte) (*wire.MsgTx, error) {
@@ -1572,14 +1560,14 @@ func (p *Manager) SendAssets(destAddr string, assetName string,
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
-	
+
 	if !IsValidNullData(memo) {
 		return nil, fmt.Errorf("invalid length of null data %d", len(memo))
 	}
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
 	}
-	
+
 	tx, _, err := p.BatchSendAssets(destAddr, assetName, amt, 1, feeRate, memo)
 	if err != nil {
 		return nil, err
@@ -1749,14 +1737,13 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx) ([]*TxOutput, []*TxOutput, err
 	return inputs, outputs, nil
 }
 
-
 // 只用于白聪输出，包括fee
 func (p *Manager) SelectUtxosForPlainSats(
 	address string, excludedUtxoMap map[string]bool,
 	requiredValue int64, feeRate int64,
 	tx *wire.MsgTx, weightEstimate *utils.TxWeightEstimator,
-	excludeRecentBlock, inChannel bool, 
-	) (*txscript.MultiPrevOutFetcher, []byte, int64, int64, int64, error) {
+	excludeRecentBlock, inChannel bool,
+) (*txscript.MultiPrevOutFetcher, []byte, int64, int64, int64, error) {
 	/* 规则：
 	1. 先根据目标输出的value，先选1个，或者最多5个utxo，其聪数量不大于value
 	2. 再从其余的聪数量大于330聪的utxo中，凑齐足够的network fee，注意每增加一个输入，其交易的fee就会增加一些
@@ -1796,7 +1783,7 @@ func (p *Manager) SelectUtxosForPlainSats(
 			continue
 		}
 		selected[u.OutPoint] = u
-	
+
 		txOut := OutputInfoToOutput(u)
 		outpoint := txOut.OutPoint()
 		out := txOut.OutValue
@@ -1910,14 +1897,14 @@ func (p *Manager) SelectUtxosForPlainSats(
 				requiredValue+fee0, total)
 		}
 	}
-	
+
 	return prevFetcher, changePkScript, requiredValue, changeOutput, fee0, nil
 }
 
 func (p *Manager) SelectUtxosForAsset(address string, excludedUtxoMap map[string]bool,
 	assetName *indexer.AssetName, requiredAmt *Decimal,
 	weightEstimate *utils.TxWeightEstimator, excludeRecentBlock, inChannel bool) (
-		[]*TxOutput, *Decimal, int64, error) {
+	[]*TxOutput, *Decimal, int64, error) {
 
 	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, assetName)
 	if len(utxos) == 0 {
@@ -2017,7 +2004,7 @@ func (p *Manager) SelectUtxosForFee(
 	feeValue int64, feeRate int64,
 	weightEstimate *utils.TxWeightEstimator,
 	excludeRecentBlock, inChannel bool) ([]*TxOutput, int64, error) {
-	
+
 	fee0 := weightEstimate.Fee(feeRate)
 	localFeeValue := feeValue
 	requiredFee := fee0 - localFeeValue
@@ -2052,7 +2039,7 @@ func (p *Manager) SelectUtxosForFee(
 		if out.Value > requiredFee {
 			continue
 		}
-		
+
 		output := OutputInfoToOutput(out)
 		localFeeValue += out.Value
 		selected = append(selected, output)
@@ -2104,8 +2091,7 @@ func (p *Manager) SelectUtxosForFee(
 	return selected, feeValue, nil
 }
 
-
-func (p *Manager) SelectUtxosForAsset_SatsNet(address string, 
+func (p *Manager) SelectUtxosForAsset_SatsNet(address string,
 	excludedUtxoMap map[string]bool,
 	assetName *indexer.AssetName, requiredAmt *Decimal) (
 	[]*TxOutput_SatsNet, *Decimal, int64, error) {
@@ -2165,7 +2151,7 @@ func (p *Manager) SelectUtxosForAsset_SatsNet(address string,
 }
 
 // 选择合适大小的utxo，而不是从最大的utxo选择
-func (p *Manager) SelectUtxosForFee_SatsNet(address string, excludedUtxoMap map[string]bool, 
+func (p *Manager) SelectUtxosForFee_SatsNet(address string, excludedUtxoMap map[string]bool,
 	feeValue int64) ([]*TxOutput_SatsNet, int64, error) {
 	requiredFee := DEFAULT_FEE_SATSNET - feeValue
 	if requiredFee <= 0 {
@@ -2195,7 +2181,7 @@ func (p *Manager) SelectUtxosForFee_SatsNet(address string, excludedUtxoMap map[
 			bigger = append(bigger, txOut)
 			continue
 		}
-		
+
 		totalPlainSats += plainSats
 		selected = append(selected, txOut)
 		if totalPlainSats >= requiredFee {
@@ -2223,7 +2209,6 @@ func (p *Manager) SelectUtxosForFee_SatsNet(address string, excludedUtxoMap map[
 	return selected, totalPlainSats, nil
 }
 
-
 func (p *Manager) SelectUtxosForAssetV2(address string, excludedUtxoMap map[string]bool,
 	assetName *indexer.AssetName, requiredAmt *Decimal, excludeRecentBlock bool) ([]string, error) {
 
@@ -2245,7 +2230,7 @@ func (p *Manager) SelectUtxosForFeeV2(
 	address string, excludedUtxoMap map[string]bool,
 	value int64,
 	excludeRecentBlock, inChannel bool) ([]string, error) {
-	
+
 	if address == "" {
 		address = p.wallet.GetAddress()
 	}
@@ -2276,7 +2261,7 @@ func (p *Manager) SelectUtxosForFeeV2(
 			bigger = append(bigger, u)
 			continue
 		}
-		
+
 		total += u.Value
 		result = append(result, utxo)
 		if total >= value {
@@ -2305,8 +2290,7 @@ func (p *Manager) SelectUtxosForFeeV2(
 	return result, nil
 }
 
-
-func (p *Manager) SelectUtxosForAssetV2_SatsNet(address string, 
+func (p *Manager) SelectUtxosForAssetV2_SatsNet(address string,
 	excludedUtxoMap map[string]bool,
 	assetName *indexer.AssetName, requiredAmt *Decimal) ([]string, error) {
 
@@ -2323,7 +2307,7 @@ func (p *Manager) SelectUtxosForAssetV2_SatsNet(address string,
 }
 
 // 选择合适大小的utxo，而不是从最大的utxo选择
-func (p *Manager) SelectUtxosForFeeV2_SatsNet(address string, excludedUtxoMap map[string]bool, 
+func (p *Manager) SelectUtxosForFeeV2_SatsNet(address string, excludedUtxoMap map[string]bool,
 	value int64) ([]string, error) {
 	if address == "" {
 		address = p.wallet.GetAddress()
