@@ -426,72 +426,12 @@ func (p *Manager) GetTxOutFromRawTx(utxo string) (*TxOutput, error) {
 
 func (p *Manager) GetUtxosForFee(address string, value int64, 
 	excludedUtxoMap map[string]bool, excludeRecentBlock bool) ([]string, error) {
-	return p.SelectUtxosForFeeV2(address, excludedUtxoMap, value, excludeRecentBlock, false)
-}
-
-func (p *Manager) GetUtxosForFeeV2(address string, value int64, 
-	excludedUtxoMap map[string]bool, needStub bool) ([]string, error) {
+	
 	if address == "" {
 		address = p.wallet.GetAddress()
 	}
 
-	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
-	p.utxoLockerL1.Reload(address)
-	if value == 0 {
-		value = MAX_FEE
-	}
-
-	// 有序的utxo列表，直接放最后一个
-	result := make([]string, 0)
-	i := len(utxos) - 1
-	if needStub {
-		for i >= 0 {
-			u := utxos[i]
-			i--
-			utxo := u.OutPoint
-			if _, ok := excludedUtxoMap[utxo]; ok {
-				continue
-			}
-			if p.utxoLockerL1.IsLocked(utxo) {
-				continue
-			}
-			if u.Value > 330 {
-				continue
-			}
-			result = append(result, utxo)
-			break
-		}
-		if len(result) == 0 {
-			return nil, fmt.Errorf("no stub utxo")
-		}
-	}
-
-	total := int64(0)
-	for j := 0; j < i; j++ {
-		u := utxos[j]
-		utxo := u.OutPoint
-		if _, ok := excludedUtxoMap[utxo]; ok {
-			continue
-		}
-		if p.utxoLockerL1.IsLocked(utxo) {
-			continue
-		}
-		total += u.Value
-		result = append(result, utxo)
-		if total >= value {
-			break
-		}
-	}
-
-	if total < value {
-		return nil, fmt.Errorf("no enough utxo for fee, require %d but only %d", value, total)
-	}
-
-	if needStub && len(result) < 2 {
-		return nil, fmt.Errorf("need at least 2 utxos for fee, but only %d found", len(result))
-	}
-
-	return result, nil
+	return p.SelectUtxosForFeeV2(address, excludedUtxoMap, value, excludeRecentBlock, false)
 }
 
 func (p *Manager) GetUtxosForStubs(address string, n int, excludedUtxoMap map[string]bool,) ([]string, error) {

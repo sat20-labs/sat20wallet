@@ -310,7 +310,7 @@ func NeedStubUtxoForChannel(name *indexer.AssetName) int {
 	case indexer.PROTOCOL_NAME_RUNES:
 		return 1
 	case indexer.PROTOCOL_NAME_ORDX:
-		if name.Type == indexer.ASSET_TYPE_FT || name.Type != indexer.ASSET_TYPE_EXOTIC {
+		if name.Type == indexer.ASSET_TYPE_FT || name.Type == indexer.ASSET_TYPE_EXOTIC {
 			return 2
 		}
 		return 0
