@@ -618,7 +618,12 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 		}
 	}
 	if assetAmt.Cmp(expectedAmt) < 0 {
-		return nil, fmt.Errorf("not enough asset %s", assetName)
+		if indexer.IsPlainAsset(name) && assetAmt.Cmp(dAmt) == 0 {
+			// 转移全部，微调下dAmt
+			dAmt = dAmt.Sub(fee)
+		} else {
+			return nil, fmt.Errorf("not enough asset %s", assetName)
+		}
 	}
 
 	var feeOutputs []*indexerwire.TxOutputInfo

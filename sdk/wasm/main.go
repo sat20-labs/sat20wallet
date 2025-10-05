@@ -1503,7 +1503,7 @@ func sendAssets_SatsNet(this js.Value, p []js.Value) any {
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		tx, err := _mgr.SendAssets_SatsNet(destAddress, assetName, amt, memo)
 		if err != nil {
-			wallet.Log.Errorf("SendUtxos_SatsNet error: %v", err)
+			wallet.Log.Errorf("SendAssets_SatsNet error: %v", err)
 			return nil, -1, err.Error()
 		}
 
