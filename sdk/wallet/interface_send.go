@@ -1073,6 +1073,40 @@ func (p *Manager) GenerateStubUtxos(n int, feeRate int64) (string, int64, error)
 	return tx.TxID(), fee, nil
 }
 
+func (p *Manager) GenerateStubUtxosV2(n int, excludedUtxoMap map[string]bool,
+	feeRate int64) (*wire.MsgTx, int64, error) {
+
+	if p.wallet == nil {
+		return nil, 0, fmt.Errorf("wallet is not created/unlocked")
+	}
+	destAddr := p.wallet.GetAddress()
+
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
+
+	tx, prevFetcher, fee, err := p.BuildBatchSendTx_PlainSats(destAddr, 330, n, excludedUtxoMap, feeRate, nil)
+	if err != nil {
+		Log.Errorf("buildBatchSendTx failed. %v", err)
+		return nil, 0, err
+	}
+
+	// sign
+	tx, err = p.SignTx(tx, prevFetcher)
+	if err != nil {
+		Log.Errorf("SignTx failed. %v", err)
+		return nil, 0, err
+	}
+
+	_, err = p.BroadcastTx(tx)
+	if err != nil {
+		Log.Errorf("BroadCastTx failed. %v", err)
+		return nil, 0, err
+	}
+
+	return tx, fee, nil
+}
+
 func (p *Manager) BatchSendPlainSats(destAddr string, value int64, n int,
 	feeRate int64, memo []byte) (string, int64, error) {
 	//
@@ -1085,7 +1119,7 @@ func (p *Manager) BatchSendPlainSats(destAddr string, value int64, n int,
 }
 
 // 发送资产到一个地址上，拆分n个输出
-func (p *Manager) BatchSendAssets(destAddr string, assetName string,
+func (p *Manager) BatchSendAssets(destAddr string, assetName string, 
 	amt string, n int, feeRate int64, memo []byte) (*wire.MsgTx, int64, error) {
 
 	if p.wallet == nil {
@@ -1118,7 +1152,7 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 	var fee int64
 
 	if indexer.IsPlainAsset(name) {
-		tx, prevFetcher, fee, err = p.BuildBatchSendTx_PlainSats(destAddr, dAmt.Int64(), n, feeRate, memo)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTx_PlainSats(destAddr, dAmt.Int64(), n, nil, feeRate, memo)
 	} else if name.Protocol == indexer.PROTOCOL_NAME_ORDX {
 		newName := GetAssetName(tickerInfo)
 		tx, prevFetcher, fee, err = p.BuildBatchSendTx_Ordx(destAddr, newName, dAmt, n, feeRate, memo)
@@ -1149,6 +1183,7 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 
 // 从p2tr地址发出
 func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
+	excludedUtxoMap map[string]bool,
 	feeRate int64, memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
 	address := p.wallet.GetAddress()
