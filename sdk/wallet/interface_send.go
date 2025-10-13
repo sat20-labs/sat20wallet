@@ -1186,12 +1186,6 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 	excludedUtxoMap map[string]bool,
 	feeRate int64, memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
-	address := p.wallet.GetAddress()
-	outputs := p.l1IndexerClient.GetUtxoListWithTicker(address, &ASSET_PLAIN_SAT)
-	if len(outputs) == 0 {
-		Log.Errorf("no plain sats")
-		return nil, nil, 0, fmt.Errorf("no plain sats")
-	}
 	if amt < 330 {
 		return nil, nil, 0, fmt.Errorf("amount too small")
 	}
@@ -1222,7 +1216,7 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 
 	required := amt * int64(n)
 	prevFetcher, changePkScript, outputValue, changeOutput, fee0, err := p.SelectUtxosForPlainSats(
-		p.wallet.GetAddress(), nil,
+		p.wallet.GetAddress(), excludedUtxoMap,
 		required, feeRate, tx, &weightEstimate, false, false)
 	if err != nil {
 		return nil, nil, 0, err
