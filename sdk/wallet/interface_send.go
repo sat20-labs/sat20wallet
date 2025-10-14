@@ -2262,7 +2262,7 @@ func (p *Manager) SelectUtxosForAssetV2(address string, excludedUtxoMap map[stri
 // 选择合适大小的utxo，而不是从最大的utxo选择
 func (p *Manager) SelectUtxosForFeeV2(
 	address string, excludedUtxoMap map[string]bool,
-	value int64,
+	requiredValue int64,
 	excludeRecentBlock, inChannel bool) ([]string, error) {
 
 	if address == "" {
@@ -2271,8 +2271,8 @@ func (p *Manager) SelectUtxosForFeeV2(
 
 	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	p.utxoLockerL1.Reload(address)
-	if value == 0 {
-		value = MAX_FEE
+	if requiredValue == 0 {
+		requiredValue = MAX_FEE
 	}
 
 	bigger := make([]*indexerwire.TxOutputInfo, 0)
@@ -2291,19 +2291,19 @@ func (p *Manager) SelectUtxosForFeeV2(
 		if p.utxoLockerL1.IsLocked(utxo) {
 			continue
 		}
-		if u.Value > value {
+		if u.Value > requiredValue {
 			bigger = append(bigger, u)
 			continue
 		}
 
 		total += u.Value
 		result = append(result, utxo)
-		if total >= value {
+		if total >= requiredValue {
 			break
 		}
 	}
 
-	if total >= value {
+	if total >= requiredValue {
 		return result, nil
 	}
 
@@ -2313,13 +2313,13 @@ func (p *Manager) SelectUtxosForFeeV2(
 		result = append(result, txOut.OutPoint)
 		output := OutputInfoToOutput(txOut)
 		total += output.GetPlainSat()
-		if total >= value {
+		if total >= requiredValue {
 			break
 		}
 	}
 
-	if total < value {
-		return nil, fmt.Errorf("no enough utxo for fee, require %d but only %d", value, total)
+	if total < requiredValue {
+		return nil, fmt.Errorf("no enough utxo for fee, require %d but only %d", requiredValue, total)
 	}
 
 	return result, nil
@@ -2343,15 +2343,15 @@ func (p *Manager) SelectUtxosForAssetV2_SatsNet(address string,
 
 // 选择合适大小的utxo，而不是从最大的utxo选择
 func (p *Manager) SelectUtxosForFeeV2_SatsNet(address string, excludedUtxoMap map[string]bool,
-	value int64) ([]string, error) {
+	requiredValue int64) ([]string, error) {
 	if address == "" {
 		address = p.wallet.GetAddress()
 	}
 
 	utxos := p.l2IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	p.utxoLockerL2.Reload(address)
-	if value == 0 {
-		value = DEFAULT_FEE_SATSNET
+	if requiredValue == 0 {
+		requiredValue = DEFAULT_FEE_SATSNET
 	}
 
 	bigger := make([]*TxOutput_SatsNet, 0)
@@ -2367,19 +2367,19 @@ func (p *Manager) SelectUtxosForFeeV2_SatsNet(address string, excludedUtxoMap ma
 		}
 		output := OutputInfoToOutput_SatsNet(u)
 		plainSats := output.GetPlainSat()
-		if plainSats > value {
+		if plainSats > requiredValue {
 			bigger = append(bigger, output)
 			continue
 		}
 
 		total += plainSats
 		result = append(result, utxo)
-		if total >= value {
+		if total >= requiredValue {
 			break
 		}
 	}
 
-	if total >= value {
+	if total >= requiredValue {
 		return result, nil
 	}
 
@@ -2388,13 +2388,13 @@ func (p *Manager) SelectUtxosForFeeV2_SatsNet(address string, excludedUtxoMap ma
 		txOut := bigger[i]
 		result = append(result, txOut.OutPointStr)
 		total += txOut.GetPlainSat()
-		if total >= value {
+		if total >= requiredValue {
 			break
 		}
 	}
 
-	if total < value {
-		return nil, fmt.Errorf("no enough utxo for fee, require %d but only %d", value, total)
+	if total < requiredValue {
+		return nil, fmt.Errorf("no enough utxo for fee, require %d but only %d", requiredValue, total)
 	}
 
 	return result, nil
