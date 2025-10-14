@@ -48,3 +48,7 @@ func ParsePubkey(parsedPubKey string) (*secp256k1.PublicKey, error) {
 
 	return pubKey, nil
 }
+
+func RemoveIndex[T any](slice []T, index int) []T {
+    return append(slice[:index], slice[index+1:]...)
+}

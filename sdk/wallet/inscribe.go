@@ -97,19 +97,19 @@ type InscriptionBuilder struct {
 
 // 跟ResvStatus保持一致
 const (
-	RS_FAILED        int = -1
-	RS_CLOSED        int = 0
+	RS_FAILED        ResvStatus = -1
+	RS_CLOSED        ResvStatus = 0
 
-	RS_INIT      int = 0x99
-	RS_CONFIRMED int = 0x10000
+	RS_INIT      ResvStatus = 0x99
+	RS_CONFIRMED ResvStatus = 0x10000
 
-	RS_INSCRIBING_COMMIT_BROADCASTED int = 0x3000
-	RS_INSCRIBING_REVEAL_BROADCASTED int = 0x3001
-	RS_INSCRIBING_CONFIRMED          int = RS_CONFIRMED
+	RS_INSCRIBING_COMMIT_BROADCASTED ResvStatus = 0x3000
+	RS_INSCRIBING_REVEAL_BROADCASTED ResvStatus = 0x3001
+	RS_INSCRIBING_CONFIRMED          ResvStatus = RS_CONFIRMED
 )
 type InscribeResv struct {
 	Id               int64
-	Status           int
+	Status           ResvStatus
 
 	CommitTx         *wire.MsgTx `json:"commitTx"`
 	RevealTx         *wire.MsgTx `json:"revealTx"`

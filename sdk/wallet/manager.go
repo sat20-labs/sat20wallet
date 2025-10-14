@@ -742,3 +742,14 @@ func (p *Manager) IsRecentBlockUtxo(utxoId uint64) bool {
 	h, _, _ := indexer.FromUtxoId(utxoId)
 	return p.status.SyncHeight == h
 }
+
+func (p *Manager) IsCoreNode() bool {
+	pubkey := p.wallet.GetPaymentPubKey().SerializeCompressed()
+	pkStr := hex.EncodeToString(pubkey)
+	if pkStr == indexer.GetBootstrapPubKey() || pkStr == indexer.GetCoreNodePubKey() {
+		return true
+	}
+
+	b, _ := p.l2IndexerClient.IsCoreNode(pubkey)
+	return b
+}

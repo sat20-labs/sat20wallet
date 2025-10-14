@@ -13,7 +13,7 @@ import (
 // 以下接口，作为不依赖钱包的基础api向上层开放
 // 这里的stp模块可能是一个独立的模块，但跟管理钱包的stp模块共享底层数据
 
-func (p *Manager) GetTickerInfo(assetName string) *indexer.TickerInfo {
+func (p *Manager) GetTickerInfoV2(assetName string) *indexer.TickerInfo {
 	asset := ParseAssetString(assetName)
 	if asset == nil {
 		Log.Errorf("invalid asset name %s", assetName)
