@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcwallet/snacl"
-	indexer "github.com/sat20-labs/indexer/common"
 	db "github.com/sat20-labs/indexer/common"
+	indexer "github.com/sat20-labs/indexer/common"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -25,21 +25,18 @@ const (
 	DB_KEY_LOCKEDUTXO    = "l-"  // l-network-address-utxo
 	DB_KEY_LOCK_LASTTIME = "lt-" // lt-network-address
 
-	DB_KEY_RESV   = "resv-"
-
 	DB_KEY_TEMPLATE_CONTRACT        = "tc-"    // tc-url-
 	DB_KEY_TC_INVOKE_HISTORY        = "tch-"   // tch-url-id
 	DB_KEY_TC_INVOKE_HISTORY_BACKUP = "tchbk-" // tchbk-url-id
 	DB_KEY_TC_INVOKE_RESULT         = "tcr-"   // tcr-url-txid
 	DB_KEY_TC_INVOKER_STATUS        = "tcu-"   // tcu-url-addr
-	DB_KEY_TC_SWAP_RUNNINGDATA      = "tcsr-"    // tcsr-url-id
-	DB_KEY_TC_LIQ_DATA              = "tclp-"    // tclp-url-id
+	DB_KEY_TC_SWAP_RUNNINGDATA      = "tcsr-"  // tcsr-url-id
+	DB_KEY_TC_LIQ_DATA              = "tclp-"  // tclp-url-id
 )
 
-var _mode string  // 
+var _mode string  //
 var _chain string // mainnet, testnet
 var _env string   // dev, test, prd
-var _enable_testing bool = false
 
 type Status struct {
 	SoftwareVer    string
@@ -248,8 +245,7 @@ func (p *Manager) saveMnemonic(mn, password string) (int64, error) {
 	return wallet.Id, nil
 }
 
-
-func (p *Manager) saveMnemonicWithPassword(mn, password string, wallet *WalletInDB) (error) {
+func (p *Manager) saveMnemonicWithPassword(mn, password string, wallet *WalletInDB) error {
 	key, err := p.newSnaclKey(password)
 	if err != nil {
 		Log.Errorf("NewSecretKey failed. %v", err)
@@ -339,7 +335,6 @@ func GetDBKeyPrefix() string {
 	}
 	return ""
 }
-
 
 // 暂时不考虑地址
 func GetLockedUtxoKey(network, utxo string) string {
@@ -677,7 +672,6 @@ func DeleteInscribeResv(db db.KVDB, id int64) error {
 	return db.Delete([]byte(key))
 }
 
-
 func GetUtxoKey(network, addr, utxo string) string {
 	return GetDBKeyPrefix() + DB_KEY_UTXO + network + "-" + addr + "-" + utxo
 }
@@ -752,59 +746,6 @@ func loadAllUtxoFromDB(db db.KVDB, network string) map[string]map[string]*TxOutp
 	})
 
 	return result
-}
-
-
-func GetResvKey(ctype string, id int64) string {
-	return fmt.Sprintf("%s%s%s-%d", GetDBKeyPrefix(), DB_KEY_RESV, ctype, id)
-}
-
-func ParseResvKey(key string) (string, int64, error) {
-	prefix := GetDBKeyPrefix() + DB_KEY_RESV
-	if !strings.HasPrefix(key, prefix) {
-		return "", -1, fmt.Errorf("not a reservation: %s", key)
-	}
-	key = strings.TrimPrefix(key, prefix)
-	parts := strings.Split(key, "-")
-	if len(parts) != 2 {
-		return "", -1, fmt.Errorf("invalid reservation key: %s", key)
-	}
-
-	id, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil {
-		return "", -1, err
-	}
-
-	return parts[0], id, nil
-}
-
-
-func saveReservationWithLock(db db.KVDB, resv Reservation) error {
-
-	base := resv.GetBase()
-	base.mutex.Lock()
-	defer base.mutex.Unlock()
-
-	return saveReservation(db, resv)
-}
-
-func saveReservation(db db.KVDB, resv Reservation) error {
-	buf, err := EncodeToBytes(resv.GetStructInDB())
-	if err != nil {
-		Log.Errorf("saveReservation EncodeToBytes failed. %v", err)
-		return err
-	}
-	ctype := resv.GetType()
-	key := GetResvKey(ctype, resv.GetId())
-
-	err = db.Write([]byte(key), buf)
-	if err != nil {
-		Log.Errorf("saveReservation failed. %v", err)
-		return err
-	}
-	//Log.Infof("saveReservation %d succ. %s %x", resv.GetId(), ctype, resv.GetStatus())
-
-	return nil
 }
 
 func GetContractRuntimeKey(url string) string {
@@ -884,9 +825,8 @@ func loadAllContractRuntimeFromDB(stp ContractManager, channelId string) map[str
 	return result
 }
 
-
 func GetSwapContractRunningDataKey(url string, id int) string {
-	return fmt.Sprintf("%s%s-%d", GetDBKeyPrefix() + DB_KEY_TC_SWAP_RUNNINGDATA, url, id)
+	return fmt.Sprintf("%s%s-%d", GetDBKeyPrefix()+DB_KEY_TC_SWAP_RUNNINGDATA, url, id)
 }
 
 func ParseSwapContractRunningDataKey(key string) (string, int, error) {
@@ -978,9 +918,8 @@ func loadAllSwapContractRunningDataFromDB(db db.KVDB, channelId string) map[int]
 	return result
 }
 
-
 func GetLiquidityDataKey(url string, id int) string {
-	return fmt.Sprintf("%s%s-%d", GetDBKeyPrefix() + DB_KEY_TC_LIQ_DATA, url, id)
+	return fmt.Sprintf("%s%s-%d", GetDBKeyPrefix()+DB_KEY_TC_LIQ_DATA, url, id)
 }
 
 func ParseLiquidityDataKey(key string) (string, int, error) {
@@ -1081,7 +1020,6 @@ func loadAllLiquidityDataFromDB(db db.KVDB, channelAddr string) map[int]*Liquidi
 	return result
 }
 
-
 func GetContractInvokeHistoryKey(url, utxo string) string {
 	return GetDBKeyPrefix() + DB_KEY_TC_INVOKE_HISTORY + url + "-" + utxo
 }
@@ -1099,7 +1037,7 @@ func ParseContractInvokeHistoryKey(key string) (string, string, error) {
 	return parts[0], parts[1], nil
 }
 
-func saveContractInvokeHistoryItem(db db.KVDB, url string, value InvokeHistoryItem) error {
+func SaveContractInvokeHistoryItem(db db.KVDB, url string, value InvokeHistoryItem) error {
 	buf, err := EncodeToBytes(value)
 	if err != nil {
 		Log.Errorf("saveContractInvokeHistoryItem EncodeToBytes failed. %v", err)
@@ -1140,7 +1078,7 @@ func deleteContractInvokeHistoryItem(db db.KVDB, url, inkey string) error {
 	return db.Delete([]byte(GetContractInvokeHistoryKey(url, inkey)))
 }
 
-func deleteContractInvokeHistory(db db.KVDB, url string) error {
+func DeleteContractInvokeHistory(db db.KVDB, url string) error {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TC_INVOKE_HISTORY + url)
 	_, err := DeleteAllKeysWithPrefix(db, prefix)
 	if err != nil {
@@ -1149,7 +1087,7 @@ func deleteContractInvokeHistory(db db.KVDB, url string) error {
 	return nil
 }
 
-func loadContractInvokeHistory(db db.KVDB, url string, excludingDone, reverse bool) map[string]InvokeHistoryItem {
+func LoadContractInvokeHistory(db db.KVDB, url string, excludingDone, reverse bool) map[string]InvokeHistoryItem {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TC_INVOKE_HISTORY + url)
 
 	ty := ExtractContractType(url)
@@ -1186,19 +1124,18 @@ func loadContractInvokeHistory(db db.KVDB, url string, excludingDone, reverse bo
 
 	if len(upgradedItems) != 0 {
 		for _, item := range upgradedItems {
-			saveContractInvokeHistoryItem(db, url, item)
+			SaveContractInvokeHistoryItem(db, url, item)
 		}
 	}
 
 	return result
 }
 
-
 func findContractInvokeItem(db db.KVDB, url string, target string) *InvokeItem {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TC_INVOKE_HISTORY + url)
 
 	ty := ExtractContractType(url)
-	
+
 	var result *InvokeItem
 	db.BatchRead(prefix, false, func(k, v []byte) error {
 		_, _, err := ParseContractInvokeHistoryKey(string(k))
@@ -1219,14 +1156,12 @@ func findContractInvokeItem(db db.KVDB, url string, target string) *InvokeItem {
 				return fmt.Errorf("found it")
 			}
 		}
-		
+
 		return nil
 	})
-	
 
 	return result
 }
-
 
 func loadContractInvokeHistoryByHeight(db db.KVDB, url string, excludingDone bool,
 	height int, bSatsNet bool) map[string]InvokeHistoryItem {
@@ -1272,7 +1207,7 @@ func loadContractInvokeHistoryByHeight(db db.KVDB, url string, excludingDone boo
 
 	if len(upgradedItems) != 0 {
 		for _, item := range upgradedItems {
-			saveContractInvokeHistoryItem(db, url, item)
+			SaveContractInvokeHistoryItem(db, url, item)
 		}
 	}
 
@@ -1452,7 +1387,7 @@ func deleteContractInvokerStatus(db db.KVDB, url, address string) error {
 	return db.Delete([]byte(GetContractInvokerStatusKey(url, address)))
 }
 
-func deleteAllContractInvokerStatus(db db.KVDB, url string) error {
+func DeleteAllContractInvokerStatus(db db.KVDB, url string) error {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TC_INVOKER_STATUS + url)
 	_, err := DeleteAllKeysWithPrefix(db, prefix)
 	if err != nil {
@@ -1498,14 +1433,13 @@ func loadAllContractInvokerStatus(db db.KVDB, url string) map[string]InvokerStat
 	return result
 }
 
-func deleteContractRelatedDataFromDB(db db.KVDB, url string) {
+func DeleteContractRelatedDataFromDB(db db.KVDB, url string) {
 	// 如果是无效的url，直接返回
 	if IsValidContractURL(url) {
 		// contract 本身由resv保存，需要去删除resv本身
-		deleteContractInvokeHistory(db, url)
+		DeleteContractInvokeHistory(db, url)
 		deleteContractAllInvokeResult(db, url)
-		deleteAllContractInvokerStatus(db, url)
+		DeleteAllContractInvokerStatus(db, url)
 		Log.Infof("contract %s related data deleted", url)
 	}
 }
-

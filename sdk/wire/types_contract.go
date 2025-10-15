@@ -64,14 +64,6 @@ type ContractStatusResp struct {
 	Status string `json:"status"`
 }
 
-type ResvBaseInfo struct {
-	Id     int64  `json:"id"`
-	Time   string `json:"time"`
-	Type   string `json:"type"`
-	Status int    `json:"status"`
-}
-
-
 type DeployContractRequest struct {
 	MsgHeader
 	ChannelId       string   `json:"channel"`
@@ -113,105 +105,7 @@ type DeployContractAckResp struct {
 	EnableBlock   int   `json:"enableBlock"`
 	EnableBlockL1 int   `json:"enableBlockL1"`
 }
-type PerformContractRequest struct {
-	MsgHeader
-	ChannelId    string `json:"channel"`
-	ContractName string `json:"contractName"`
-	PerformParam string `json:"performParam"`
-	InvoiceSig   []byte `json:"invoiceSig"`
-	ReqTime      int64  `json:"reqTime"`
-	PubKey       []byte `json:"pubKey"`
-}
 
-type PerformContractReq struct {
-	PerformContractRequest
-	Sig []byte `json:"msgSig"`
-}
-
-type PerformContractResp struct { // 是否同意更新状态
-	BaseResp
-	Id         int64  `json:"id"`
-	InvoiceSig []byte `json:"invoiceSig"`
-}
-
-type PerformContractAckReq struct {
-	Id int64 `json:"id"`
-}
-
-type PerformContractAckResp struct {
-	BaseResp
-	Id     int64 `json:"id"`
-	Status int   `json:"status"`
-}
-
-type PerformActionRequest struct {
-	MsgHeader
-	Action      string `json:"action"` // resv type
-	ActionParam []byte `json:"param"`
-	FeeRate     int64  `json:"feeRate"`
-	ReqTime     int64  `json:"reqTime"`
-	SendTxInL1  bool   `json:"sendInL1"`
-	MoreData    []byte `json:"more"`
-	PubKey      []byte `json:"pubKey"`
-}
-
-type PerformActionReq struct {
-	PerformActionRequest
-	Sig []byte `json:"msgSig"`
-}
-
-type PerformActionResp struct {
-	BaseResp
-	Id             int64  `json:"id"`
-	ServiceAddress string `json:"serviceAddress"`
-	ServiceFee     int64  `json:"serviceFee"`
-	Invoice        []byte `json:"invoice"`
-	InvoiceSig     []byte `json:"invoiceSig"`
-}
-
-type PerformActionAckReq struct {
-	Id      int64  `json:"id"`
-	FeeTx   string `json:"tx"`
-	FeeTxId string `json:"txId"`
-}
-
-type PerformActionAckResp struct {
-	BaseResp
-	Id           int64  `json:"id"`
-	Status       int    `json:"status"`
-	ActionResvId int64  `json:"actionResvId"`
-	ActionStatus int    `json:"actionStatus"`
-	ActionResult []byte `json:"actionResult"`
-}
-
-type ActionResultNotify struct {
-	MsgHeader
-	Id     int64  `json:"id"`
-	Action string `json:"action"` // resv type
-	Result int    `json:"result"`
-	Reason string `json:"reason"`
-}
-
-type ActionResultResp struct {
-	BaseResp
-	Id int64 `json:"id"`
-}
-
-type ActionSyncRequest struct {
-	MsgHeader
-	PubKey []byte `json:"pubKey"`
-	Reason string `json:"reason"`
-}
-
-type ActionSyncReq struct {
-	ActionSyncRequest
-	Sig []byte `json:"msgSig"`
-}
-
-type ActionSyncResp struct {
-	BaseResp
-	ChannelData []byte `json:"channelData"`
-}
 
 type TxSignInfo struct {
 	Tx        string   `json:"tx"`

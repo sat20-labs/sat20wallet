@@ -18,41 +18,89 @@ import (
 
 var _test_chain = "testnet"
 var _client *Manager
-var _client2 *Manager
+var _server *Manager
 
-func newTestConf(mode, dbPath string) *common.Config {
+func newTestConfForClient(mode, dbPath string) *common.Config {
 	ret := &common.Config{
 		Env:   "test",
 		Chain: _test_chain,
-		Log:   "debug",
-		DB:    dbPath,
 		Peers: []string{
-			"b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@seed.sat20.org:19529",
-			//"s@02b8b9edca5c0c4b7fb2c2ee6ca7cc7a6e899ba36b182586724282d1d949a90397@127.0.0.1:9080",
-			"s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@39.108.96.46:19529",
+			"b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@https://apiprd.sat20.org/stp/testnet",
+			//"s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@192.168.10.103:19529",
+			"s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@https://apiprd.ordx.market/stp/testnet",
 		},
 		IndexerL1: &common.Indexer{
-			Scheme: "http",
-			Host:   "192.168.10.103:8009",
+			Scheme: "https",
+			Host:   "apiprd.sat20.org",
 			Proxy:  "btc/testnet",
 		},
 		IndexerL2: &common.Indexer{
-			Scheme: "http",
-			Host:   "192.168.10.101:19528",
-			Proxy:  "testnet",
+			Scheme: "https",
+			Host:   "apiprd.sat20.org",
+			Proxy:  "satsnet/testnet",
 		},
+		Log: "debug",
+		DB:  dbPath,
+
+		Mode: mode,
+		
 	}
+
+	// if _test_chain == "mainnet" {
+	// 	ret.Peers[0] = "b@03ab606f4dffd65965b4a9db957361800f8b03ed16acac11d5a4672801554596d0@https://apiprd.sat20.org/stp/mainnet"
+	//     ret.Peers[1] = "s@022ab2945f61304f117f55d469c341d606ceb729de436c80c0e6ad7819cdd53ce7@https://apiprd.ordx.market/stp/mainnet"
+	// }
 
 	return ret
 }
 
-func createNode(t *testing.T, mode, dbPath string) *Manager {
-	cfg := newTestConf(mode, dbPath)
+func newTestConfForServer(mode, dbPath string) *common.Config {
+	ret := &common.Config{
+		Env:   "test",
+		Chain: _test_chain,
+		Peers: []string{
+			"b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@https://apiprd.sat20.org/stp/testnet",
+		},
+		IndexerL1: &common.Indexer{
+			Scheme: "https",
+			Host:   "apiprd.sat20.org",
+			Proxy:  "btc/testnet",
+		},
+		IndexerL2: &common.Indexer{
+			Scheme: "https",
+			Host:   "apiprd.sat20.org",
+			Proxy:  "satsnet/testnet",
+		},
+		Log: "debug",
+		DB:  dbPath,
+
+		Mode: mode,
+	}
+
+	// if _test_chain == "mainnet" {
+	// 	ret.Peers[0] = "b@03ab606f4dffd65965b4a9db957361800f8b03ed16acac11d5a4672801554596d0@https://apiprd.sat20.org/stp/mainnet"
+	//    // ret.Peers[1] = "s@03ab606f4dffd65965b4a9db957361800f8b03ed16acac11d5a4672801554596d0@https://apiprd.sat20.org/stp/mainnet"
+	// }
+
+	return ret
+}
+
+
+
+func initNode(t *testing.T, mode, dbPath string) *Manager {
+
+	var cfg *common.Config
+	if mode == SERVER_NODE || mode == BOOTSTRAP_NODE {
+		cfg = newTestConfForServer(mode, dbPath)
+	} else {
+		cfg = newTestConfForClient(mode, dbPath)
+	}
 	db := NewKVDB(cfg.DB)
 	if db == nil {
 		t.Fatalf("NewKVDB failed")
 	}
 	manager := NewManager(cfg, db)
+
 
 	// mnemonice, err := manager.CreateWallet("123456")
 	// if err != nil {
@@ -100,15 +148,56 @@ func createNode(t *testing.T, mode, dbPath string) *Manager {
 			}
 		}
 	}
+	// client:
+	// tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g
+	// nodeId: 02148cbe135aea8ee9b72f18ca6ddf0efc052e54b6d723cc473a0cc6011766d776
+	// pkscript: 51208c4a6b130077db156fb22e7946711377c06327298b4c7e6e19a6eaa808d19eba
 
+	// server 1
+	// tb1pz747l0qfnt3q2w3ppd45u607rzse0ga85l9vvjtcj8qhcajneqsszqg7z9
+	// nodeId: 02b8b9edca5c0c4b7fb2c2ee6ca7cc7a6e899ba36b182586724282d1d949a90397
+	// pkscript: 512017abefbc099ae2053a210b6b4e69fe18a197a3a7a7cac6497891c17c7653c821
+
+	// server 2
+	// tb1pdw8xjqphyntnvgl3w0vmzkzd7dx266jwcprzwt0qen62pyzpdqhsdvr26h
+	// nodeId: 0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e
+	// pkscript: 51206b8e69003724d73623f173d9b1584df34cad6a4ec046272de0ccf4a09041682f
+
+	// bootstrap:
 	// tb1p62gjhywssq42tp85erlnvnumkt267ypndrl0f3s4sje578cgr79sekhsua
-	// nodeId: 03258dd933765d50bc88630c6584726f739129d209bfeb21053c37a3b62e7a4ab1
+	// nodeId: 025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad
 	// pkscript: 5120d2912b91d0802aa584f4c8ff364f9bb2d5af103368fef4c61584b34f1f081f8b
 
 	fmt.Printf("address: %s\n", manager.GetWallet().GetAddress())
 	pkScript, _ := GetP2TRpkScript(manager.GetWallet().GetPaymentPubKey())
 	fmt.Printf("pkscript: %s\n", hex.EncodeToString(pkScript))
-	fmt.Printf("nodeId: %s\n", hex.EncodeToString(manager.GetWallet().GetNodePubKey().SerializeCompressed()))
+	fmt.Printf("pubkey: %s\n", hex.EncodeToString(manager.GetWallet().GetPaymentPubKey().SerializeCompressed()))
+
+
+	return manager
+}
+
+
+func createNode(t *testing.T, mode, dbPath string, server *Manager) *Manager {
+	manager := initNode(t, mode, dbPath)
+
+	indexerClient1 := NewTestIndexerClient(_network1)
+	indexerClient2 := NewTestIndexerClient(_network2)
+	manager.l1IndexerClient = indexerClient1
+	manager.l2IndexerClient = indexerClient2
+	nodeClient := NewTestNodeClient(server)
+	manager.serverNode.client = nodeClient
+	// if bootstrap != nil {
+	// 	nodeClient := NewTestNodeClient(bootstrap)
+	// 	manager.bootstrapNode[0].client = nodeClient
+	// }
+
+	manager.SetIndexerHttpClient(indexerClient1)
+	manager.SetIndexerHttpClient_SatsNet(indexerClient2)
+	manager.SetServerNodeHttpClient(nodeClient)
+
+	manager.utxoLockerL1.rpcClient = indexerClient1
+	manager.utxoLockerL2.rpcClient = indexerClient2
 
 	return manager
 }
@@ -121,8 +210,8 @@ func prepare(t *testing.T) {
 
 	indexer.CHAIN = _test_chain
 
-	_client = createNode(t, "client", "../db/clientDB")
-	_client2 = createNode(t, "client2", "../db/client2DB")
+	_server = createNode(t, "server", "../db/serverDB", nil)
+	_client = createNode(t, "client", "../db/clientDB", _server)
 }
 
 func TestPsbt(t *testing.T) {
@@ -449,8 +538,8 @@ func TestPsbtFullFlow(t *testing.T) {
 	fmt.Printf("SignPsbt_SatsNet: %s", signedSellPsbt)
 
 	// buyer
-	buyerAddr := _client2.wallet.GetAddress()
-	pkScript2, _ := GetP2TRpkScript(_client2.GetWallet().GetPaymentPubKey())
+	buyerAddr := _server.wallet.GetAddress()
+	pkScript2, _ := GetP2TRpkScript(_server.GetWallet().GetPaymentPubKey())
 	info2 := UtxoInfo{
 		AssetsInUtxo: indexer.AssetsInUtxo{
 			UtxoId:   3985729912833,
@@ -481,7 +570,7 @@ func TestPsbtFullFlow(t *testing.T) {
 	}
 	fmt.Printf("FinalizeSellOrder: %s\n", finalPsbt)
 
-	signedFinalPsbt, err := _client2.SignPsbt_SatsNet(finalPsbt, false)
+	signedFinalPsbt, err := _server.SignPsbt_SatsNet(finalPsbt, false)
 	if err != nil {
 		t.Fatal(err)
 	}

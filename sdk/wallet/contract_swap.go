@@ -365,7 +365,7 @@ type TraderStatistic struct {
 }
 
 const (
-	SETTLE_STATE_NORMAL int = 0
+	SETTLE_STATE_NORMAL             int = 0
 	SETTLE_STATE_REMOVING_LIQ_READY int = 1
 )
 
@@ -422,7 +422,7 @@ type TraderStatus struct {
 	RetrieveAmt   *Decimal // 加池子剩余资产
 	RetrieveValue int64    // 加池子剩余资产
 	LiqSatsValue  int64    // LptAmt 对应的sats的数量，也就是用户的成本，按照addLiq时的对价转换为satsValue
-	                       // 在removeLiq时，按照remove的LptAmt的比例，同时减去对应的LiqSatsValue
+	// 在removeLiq时，按照remove的LptAmt的比例，同时减去对应的LiqSatsValue
 }
 
 func NewTraderStatus(address string, divisibility int) *TraderStatus {
@@ -530,7 +530,7 @@ func (p *SwapContractRuntime) InitFromJson(content []byte, stp ContractManager) 
 	return nil
 }
 
-func (p *SwapContractRuntime) InitFromDB(stp ContractManager, resv *ContractDeployReservation) error {
+func (p *SwapContractRuntime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
 
 	err := p.ContractRuntimeBase.InitFromDB(stp, resv)
 	if err != nil {
@@ -541,7 +541,7 @@ func (p *SwapContractRuntime) InitFromDB(stp ContractManager, resv *ContractDepl
 
 	p.rebuildTraderHistory()
 
-	history := loadContractInvokeHistory(stp.GetDB(), p.URL(), true, false)
+	history := LoadContractInvokeHistory(stp.GetDB(), p.URL(), true, false)
 	for _, v := range history {
 		item, ok := v.(*SwapHistoryItem)
 		if !ok {
@@ -583,7 +583,7 @@ func (p *SwapContractRuntime) rebuildTraderHistory() {
 
 	if p.stp.NeedRebuildTraderHistory() {
 		url := p.URL()
-		history := loadContractInvokeHistory(p.stp.GetDB(), url, false, false)
+		history := LoadContractInvokeHistory(p.stp.GetDB(), url, false, false)
 		if len(history) == 0 {
 			return
 		}
@@ -1534,9 +1534,9 @@ func (p *SwapContractRuntime) DeploySelf() bool {
 func (p *SwapContractRuntime) AllowDeploy() error {
 
 	// 检查合约的资产名称是否已经存在
-	tickerInfo := p.stp.GetTickerInfo(p.resv.Contract.GetAssetName())
+	tickerInfo := p.stp.GetTickerInfo(p.resv.GetContract().GetAssetName())
 	if tickerInfo == nil {
-		return fmt.Errorf("getTickerInfo %s failed", p.resv.Contract.GetAssetName().String())
+		return fmt.Errorf("getTickerInfo %s failed", p.resv.GetContract().GetAssetName().String())
 	}
 
 	err := p.ContractRuntimeBase.AllowDeploy()
@@ -1601,7 +1601,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 			}
 			if swapParam.OrderType == ORDERTYPE_BUY {
 				satsValue := value.Ceil()
-				fee := calcSwapFee(satsValue)
+				fee := CalcSwapFee(satsValue)
 				return fee, nil
 			} else {
 				// sell，暂时只收 SWAP_INVOKE_FEE，在调用时已经支付
@@ -1622,7 +1622,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 			// 如果是卖单，是utxo的资产数量
 			if swapParam.OrderType == ORDERTYPE_BUY {
 				satsValue := price.Int64()
-				fee := calcSwapFee(satsValue)
+				fee := CalcSwapFee(satsValue)
 				return fee, nil
 			} else {
 				// 卖单在交易前扣除资产，进入池子
@@ -1822,7 +1822,7 @@ func (p *SwapContractRuntime) processInvoke_SatsNet(data *InvokeDataInBlock_Sats
 		}
 		if bUpdate {
 			p.refreshTime_swap = 0
-			saveReservation(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+			p.stp.SaveReservation(p.resv)
 		}
 	} else {
 		//Log.Infof("%s not allowed yet, %v", p.RelativePath(), err)
@@ -1873,7 +1873,7 @@ func (p *SwapContractRuntime) processInvoke(data *InvokeDataInBlock) error {
 		}
 		if bUpdate {
 			p.refreshTime_swap = 0
-			saveReservation(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+			p.stp.SaveReservation(p.resv)
 		}
 	} else {
 		Log.Infof("%s allowInvoke failed, %v", p.URL(), err)
@@ -1982,7 +1982,7 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 					bValid = false
 					break
 				}
-				expected := requireValue + calcSwapFee(requireValue)
+				expected := requireValue + CalcSwapFee(requireValue)
 				min := expected * 95 / 100
 				max := expected * 105 / 100
 
@@ -2452,18 +2452,18 @@ func (p *SwapContractRuntime) loadTraderInfo(address string) *TraderStatus {
 	return status
 }
 
-func calcSwapFee(value int64) int64 {
-	return SWAP_INVOKE_FEE + calcSwapServiceFee(value)
+func CalcSwapFee(value int64) int64 {
+	return SWAP_INVOKE_FEE + CalcSwapServiceFee(value)
 }
 
 // 不包括调用费用 （向下取整）
-func calcSwapServiceFee(value int64) int64 {
+func CalcSwapServiceFee(value int64) int64 {
 	return (value * SWAP_SERVICE_FEE_RATIO) / 1000 // 交易服务费
 }
 
 // 是上面的逆运算
 // 根据amm卖出资产得到的聪（扣除calcSwapServiceFee），计算参与交易的聪数量，用于统计（向下取整）
-func calcDealValue(value int64) int64 {
+func CalcDealValue(value int64) int64 {
 	return (value * 1000) / (1000 - SWAP_SERVICE_FEE_RATIO)
 }
 
@@ -2522,7 +2522,7 @@ func (p *SwapContractRuntime) updateContract_swap(
 	case ORDERTYPE_BUY:
 		// 扣除交易服务费用0.8%
 		if tn == TEMPLATE_CONTRACT_SWAP {
-			item.ServiceFee = calcSwapFee(item.GetTradingValue())
+			item.ServiceFee = CalcSwapFee(item.GetTradingValue())
 		} else if tn == TEMPLATE_CONTRACT_AMM {
 			item.UnitPrice = indexer.NewDecimal(0, MAX_PRICE_DIVISIBILITY)
 			// item.ServiceFee = calcSwapFee(price.Int64()) AMM升级后，服务费只记录一个调用费用，参与交易的资产的收费，直接留存在AMM池子中
@@ -2538,7 +2538,7 @@ func (p *SwapContractRuntime) updateContract_swap(
 
 	p.updateContractStatus(item)
 	p.addItem(item)
-	saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
 	return item
 }
 
@@ -2626,7 +2626,7 @@ func (p *SwapContractRuntime) updateContract_deposit(
 	}
 	p.updateContractStatus(item)
 	p.addItem(item)
-	saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
 	return item
 }
 
@@ -2687,7 +2687,7 @@ func (p *SwapContractRuntime) updateContract_liquidity(
 	} else {
 		p.addItem(item)
 	}
-	saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
 	return item
 }
 
@@ -2721,14 +2721,14 @@ func (p *SwapContractRuntime) updateContract_refund(
 	}
 	p.updateContractStatus(item)
 	p.addItem(item)
-	saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
 	return item
 }
 
 func insertItemToTraderHistroy(trader *InvokerStatusBase, item *SwapHistoryItem) {
 	index := getBuckIndex(int64(trader.InvokeCount))
 	if trader.History == nil {
-    	trader.History = make(map[int][]int64)
+		trader.History = make(map[int][]int64)
 	}
 	trader.History[index] = append(trader.History[index], item.Id)
 	trader.InvokeCount++
@@ -3126,7 +3126,7 @@ func (p *SwapContractRuntime) genDealInfo(height int) *DealInfo {
 func (p *SwapContractRuntime) deal() error {
 
 	// 发送
-	if p.resv.IsInitiator {
+	if p.resv.LocalIsInitiator() {
 		// 处理买单
 		p.mutex.RLock()
 		height := p.CurrBlock
@@ -3153,7 +3153,7 @@ func (p *SwapContractRuntime) deal() error {
 				//p.updateWithDealInfo(buyInfo, sellInfo, txId, stp.db)
 				p.updateWithDealInfo_swap(dealInfo)
 				// 成功一步记录一步
-				saveReservationWithLock(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+				p.stp.SaveReservationWithLock(p.resv)
 				Log.Infof("contract %s swap completed, %s", url, txId)
 			}
 		}
@@ -3214,10 +3214,10 @@ func (p *SwapContractRuntime) updateWithDealInfo_swap(dealInfo *DealInfo) {
 			buy.OutTxId = txId
 			buy.Done = DONE_DEALT
 			delete(p.history, buy.InUtxo)
-			saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), buy)
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), buy)
 			trader, ok := p.traderInfoMap[buy.Address]
 			if ok {
-				onBuyValue := buy.InValue - calcSwapFee(buy.InValue)
+				onBuyValue := buy.InValue - CalcSwapFee(buy.InValue)
 				trader.DealValue += onBuyValue - buy.OutValue
 				trader.OnBuyValue -= onBuyValue
 				trader.UpdateTime = time.Now().Unix()
@@ -3268,7 +3268,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_swap(dealInfo *DealInfo) {
 			sell.OutTxId = txId
 			sell.Done = DONE_DEALT
 			delete(p.history, sell.InUtxo)
-			saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), sell)
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), sell)
 			trader, ok := p.traderInfoMap[sell.Address]
 			if ok {
 				trader.DealAmt = indexer.DecimalAdd(trader.DealAmt, sell.InAmt).Sub(sell.OutAmt)
@@ -3444,8 +3444,8 @@ func (p *SwapContractRuntime) swap() error {
 			p.LowestDealPrice = p.LastDealPrice.Clone()
 		}
 
-		saveContractInvokeHistoryItem(p.stp.GetDB(), url, buy)
-		saveContractInvokeHistoryItem(p.stp.GetDB(), url, sell)
+		SaveContractInvokeHistoryItem(p.stp.GetDB(), url, buy)
+		SaveContractInvokeHistoryItem(p.stp.GetDB(), url, sell)
 
 		updated = true
 
@@ -3455,7 +3455,7 @@ func (p *SwapContractRuntime) swap() error {
 
 	// 交易的结果先保存
 	if updated {
-		saveReservation(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+		p.stp.SaveReservation(p.resv)
 		// if p.InvokeCount%100 == 0 {
 		// 	p.checkSelf()
 		// }
@@ -3468,7 +3468,7 @@ func (p *SwapContractRuntime) swap() error {
 
 // 涉及发送各种tx，运行在线程中
 func (p *SwapContractRuntime) sendInvokeResultTx_SatsNet() error {
-	if p.resv.IsInitiator {
+	if p.resv.LocalIsInitiator() {
 		if p.isSending {
 			return nil
 		}
@@ -4139,7 +4139,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_refund(dealInfo *DealInfo) {
 					}
 					item.OutTxId = txId
 				} // 设置为取消，或者直接关闭的item，也需要保存
-				saveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 				deleted = append(deleted, item.Id)
 				delete(p.history, item.InUtxo)
 			}
@@ -4192,7 +4192,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_refund(dealInfo *DealInfo) {
 func (p *SwapContractRuntime) refund() error {
 
 	// 发送
-	if p.resv.IsInitiator {
+	if p.resv.LocalIsInitiator() {
 		if len(p.refundMap) == 0 {
 			return nil
 		}
@@ -4219,7 +4219,7 @@ func (p *SwapContractRuntime) refund() error {
 				// record
 				p.updateWithDealInfo_refund(refundInfo)
 				// 成功一步记录一步
-				saveReservationWithLock(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+				p.stp.SaveReservationWithLock(p.resv)
 
 				Log.Infof("contract %s refund completed, %s", p.URL(), txId)
 			}
@@ -4367,7 +4367,7 @@ func (p *SwapContractRuntime) updateWithDepositItem(item *SwapHistoryItem, txId 
 	item.Done = DONE_DEALT
 
 	url := p.URL()
-	saveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 	delete(p.history, item.InUtxo)
 
 	trader := p.traderInfoMap[item.Address]
@@ -4419,7 +4419,7 @@ func (p *ContractRuntimeBase) GetInvokeOutput(item *SwapHistoryItem) *indexer.Tx
 func (p *SwapContractRuntime) deposit() error {
 
 	// 发送
-	if p.resv.IsInitiator {
+	if p.resv.LocalIsInitiator() {
 		if len(p.depositMap) == 0 {
 			return nil
 		}
@@ -4495,7 +4495,7 @@ func (p *SwapContractRuntime) deposit() error {
 				}
 
 				p.updateWithDealInfo_deposit(dealInfo)
-				saveReservationWithLock(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+				p.stp.SaveReservationWithLock(p.resv)
 			}
 		}
 
@@ -4657,7 +4657,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 			item.RemainingValue = 0
 			item.Done = DONE_DEALT
 			item.Padded = []byte(fmt.Sprintf("%d", dealInfo.Fee)) // 记录该OutTx的费用，方便统计
-			saveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 			delete(p.history, item.InUtxo)
 
 			if trader != nil {
@@ -4692,7 +4692,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 func (p *SwapContractRuntime) withdraw() error {
 
 	// 发送
-	if p.resv.IsInitiator {
+	if p.resv.LocalIsInitiator() {
 		if len(p.withdrawMap) == 0 {
 			return nil
 		}
@@ -4715,7 +4715,7 @@ func (p *SwapContractRuntime) withdraw() error {
 						p.mutex.Lock()
 						p.SwapContractRunningData.TotalWithdrawTxFee += stubFee
 						p.mutex.Unlock()
-						saveReservationWithLock(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+						p.stp.SaveReservationWithLock(p.resv)
 					}
 					Log.Errorf("contract %s sendTx %s failed %v", url, INVOKE_RESULT_WITHDRAW, err)
 					// 下个区块再试
@@ -4727,7 +4727,7 @@ func (p *SwapContractRuntime) withdraw() error {
 				// record
 				p.updateWithDealInfo_withdraw(dealInfo)
 				// 成功一步记录一步
-				saveReservationWithLock(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+				p.stp.SaveReservationWithLock(p.resv)
 				Log.Infof("contract %s withdraw completed, %s", url, txIds[0])
 				//}
 			} else {
@@ -4791,7 +4791,7 @@ func (p *SwapContractRuntime) genRemoveLiquidityInfo(height int) *DealInfo {
 func (p *SwapContractRuntime) retrieve() error {
 
 	// 发送
-	if p.resv.IsInitiator {
+	if p.resv.LocalIsInitiator() {
 		if len(p.removeLiquidityMap) == 0 {
 			return nil
 		}
@@ -4815,7 +4815,7 @@ func (p *SwapContractRuntime) retrieve() error {
 			// record
 			p.updateWithDealInfo_removeLiquidity(removeLiqInfo)
 			// 成功一步记录一步
-			saveReservationWithLock(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+			p.stp.SaveReservationWithLock(p.resv)
 
 			Log.Debugf("contract %s unstake completed, %s", p.URL(), txId)
 		}
@@ -4880,10 +4880,10 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 			item.RemainingAmt = nil
 			item.RemainingValue = 0
 			item.Done = DONE_DEALT
-			saveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 			delete(p.history, item.InUtxo)
 		}
-		
+
 		for _, id := range deletedItems {
 			delete(items, id)
 		}
@@ -5238,7 +5238,7 @@ func (p *SwapContractRuntime) SetPeerActionResult(action string, param any) {
 			return
 		}
 
-		saveReservationWithLock(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+		p.stp.SaveReservationWithLock(p.resv)
 		Log.Infof("%s SetPeerActionResult %s completed", p.URL(), action)
 		return
 
@@ -5402,7 +5402,7 @@ func (p *SwapContractRuntime) HandleInvokeResult(tx *swire.MsgTx, vout int, resu
 }
 
 // 仅用于swap合约
-func verifySwapHistory(history []*SwapHistoryItem, divisibility int,
+func VerifySwapHistory(history []*SwapHistoryItem, divisibility int,
 	org *SwapContractRunningData) (*SwapContractRunningData, error) {
 
 	InvokeCount := int64(0)
@@ -5566,7 +5566,7 @@ func verifySwapHistory(history []*SwapHistoryItem, divisibility int,
 // 仅用于swap合约
 func (p *SwapContractRuntime) checkSelf() error {
 	url := p.URL()
-	history := loadContractInvokeHistory(p.stp.GetDB(), url, false, false)
+	history := LoadContractInvokeHistory(p.stp.GetDB(), url, false, false)
 	Log.Infof("%s history count: %d\n", url, len(history))
 	if len(history) == 0 {
 		return nil
@@ -5594,7 +5594,7 @@ func (p *SwapContractRuntime) checkSelf() error {
 	// 	Log.Infof("running data: %s\n", string(buf))
 	// }
 
-	runningData, err := verifySwapHistory(mid1,
+	runningData, err := VerifySwapHistory(mid1,
 		p.Divisibility, &p.SwapContractRunningData)
 	// 更新统计
 	p.updateRunningData(runningData)

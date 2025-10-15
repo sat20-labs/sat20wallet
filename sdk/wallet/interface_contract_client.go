@@ -62,6 +62,11 @@ func (p *Manager) QueryFeeForDeployContract(templateName string, contractContent
 	return contract.DeployFee(feeRate), nil
 }
 
+// 请求服务端部署一个合约（支付上面计算出来的费用），只支持在聪网调用
+func (p *Manager) DeployContract_Remote(templateName, contractContent string,
+	feeRate int64, sendTxInL1 bool) (string, int64, string, error) {
+	return "", 0, "", fmt.Errorf("not implemented")
+}
 
 // 查询调用合约的参数模板 invokeParam
 func (p *Manager) QueryParamForInvokeContract(templateName, action string) (string, error) {

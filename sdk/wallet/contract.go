@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,10 +20,10 @@ import (
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
+	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
 	swire "github.com/sat20-labs/satoshinet/wire"
-	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
 
 const (
@@ -107,15 +108,18 @@ const (
 	DONE_REFUNDED        = 2
 	DONE_CLOSED_DIRECTLY = 3
 	DONE_CANCELLED       = 4
+)
 
-	
+type ResvStatus int
+
+const (
 	RS_DEPLOY_CONTRACT_STARTED         ResvStatus = 0x2000
 	RS_DEPLOY_CONTRACT_TX_BROADCASTED  ResvStatus = 0x2001
 	RS_DEPLOY_CONTRACT_TX_CONFIRMED    ResvStatus = 0x2002
 	RS_DEPLOY_CONTRACT_INSTALL_STARTED ResvStatus = 0x2003
 	//   合约内置的初始化状态机，最终转到 RS_DEPLOY_CONTRACT_RUNNING 退出
 	RS_DEPLOY_CONTRACT_RUNNING   ResvStatus = RS_DEPLOY_CONTRACT_INSTALL_STARTED + ResvStatus(CONTRACT_STATUS_READY) // 0x2067
-	RS_DEPLOY_CONTRACT_SUPPENDED ResvStatus = RS_DEPLOY_CONTRACT_RUNNING+ResvStatus(CONTRACT_STATUS_CLOSING-CONTRACT_STATUS_READY)
+	RS_DEPLOY_CONTRACT_SUPPENDED ResvStatus = RS_DEPLOY_CONTRACT_RUNNING + ResvStatus(CONTRACT_STATUS_CLOSING-CONTRACT_STATUS_READY)
 	RS_DEPLOY_CONTRACT_COMPLETED ResvStatus = RS_CONFIRMED
 )
 
@@ -138,48 +142,39 @@ const (
 // 用在开发过程修改数据库，设置为true，然后数据库自动升级，然后马上要设置为false，并且将所有oldversion的数据结果，等同于最新结构
 const ContractRuntimeBaseUpgrade = false
 
-type ResvStatus int
-
-type Reservation interface {
+type ContractDeployResvIF interface {
 	GetId() int64
 	GetType() string
 	GetStatus() ResvStatus
 	SetStatus(ResvStatus)
 	GetResult() []byte
 
-	GetBase() *ReservationBase
-	GetStructInDB() interface{}
+	GetContract() ContractRuntime
+	GetMutex() *sync.RWMutex
+	LocalIsInitiator() bool
+
+	GetChannelAddr() string
+	GetDeployer() string
+	GetRemotePubKey() []byte
+
+	GetFeeRate() int64
+	GetFeeUtxos() []string
+	SetFeeUtxos([]string)
+	SetFeeInputs([]*TxOutput_SatsNet)
+	SetRequiredFee(int64)
+	SetServiceFee(int64)
+
+	GetDeployContractTx() *swire.MsgTx
+	SetDeployContractTx(*swire.MsgTx)
+	GetDeployContractTxId() string
+	SetDeployContractTxId(string)
+	SetHasSentDeployTx(int)
+
+	ResyncBlock(start, end int)
+	ResyncBlock_SatsNet(start, end int)
+
+	SignedDeployContractInvoice() ([]byte, error)
 }
-
-
-type ReservationBase struct {
-	Id          int64
-	IsInitiator bool
-	Status      ResvStatus
-
-	mutex 		*sync.RWMutex
-}
-
-func (p *ReservationBase) GetId() int64 {
-	return p.Id
-}
-
-func (p *ReservationBase) GetStatus() ResvStatus {
-	return p.Status
-}
-
-func (p *ReservationBase) SetStatus(r ResvStatus) {
-	p.Status = r
-}
-
-func (p *ReservationBase) GetResult() []byte {
-	return nil
-}
-
-func (p *ReservationBase) GetBase() *ReservationBase {
-	return p
-}
-
 
 type ContractManager interface {
 	/////////////////////////////
@@ -192,20 +187,22 @@ type ContractManager interface {
 	GetFeeRate() int64
 	GetMode() string
 	/////////////////////////////
-	
+
 	GetContract(url string) ContractRuntime
 	GetServerNodePubKey() *secp256k1.PublicKey
-	GetSpecialContract(assetName, templateName string) *ContractDeployReservation
-	GetResv(id int64) Reservation
+	GetSpecialContractResv(assetName, templateName string) ContractDeployResvIF
+	GetDeployReservation(id int64) ContractDeployResvIF
+	SaveReservation(ContractDeployResvIF) error
+	SaveReservationWithLock(ContractDeployResvIF) error
 	GetDB() indexer.KVDB
 	NeedRebuildTraderHistory() bool
 
 	CoGenerateStubUtxos(n int, contractURL string, invokeCount int64, excludeRecentBlock bool) (string, int64, error)
 	CoBatchSendV3(dest []*SendAssetInfo, assetNameStr string,
-		reason, contractURL string, invokeCount int64, memo, static, runtime []byte, 
+		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 		sendDeAnchorTx, excludeRecentBlock bool) ([]string, int64, error)
 	CoSendOrdxWithStub(dest string, assetNameStr string, amt int64, stub string,
-		reason, contractURL string, invokeCount int64, memo, static, runtime []byte, 
+		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 		sendDeAnchorTx, excludeRecentBlock bool) ([]string, int64, error)
 	CoBatchSendV2_SatsNet(dest []*SendAssetInfo, assetName string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error)
@@ -213,14 +210,11 @@ type ContractManager interface {
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error)
 	SendSigReq(req *wwire.SignRequest, sig []byte) ([][][]byte, error)
 
-	ReprocessContractWithBlock(start, end int, resv *ContractDeployReservation) error
-	ReprocessContractWithBlock_SatsNet(start, end int, resv *ContractDeployReservation) error
-
 	SendContractEnabledTx(url string, h1, h2 int) (string, error)
 	CreateContractDepositAnchorTx(contract ContractRuntime, destAddr string,
 		splicingOutput *indexer.TxOutput, assetName *AssetName, memo []byte) (*swire.MsgTx, error)
 
-	SendMessageToUpper(eventName string, data interface{}) 
+	SendMessageToUpper(eventName string, data interface{})
 	BroadcastTx(tx *wire.MsgTx) (string, error)
 	BroadcastTx_SatsNet(tx *swire.MsgTx) (string, error)
 
@@ -229,8 +223,7 @@ type ContractManager interface {
 		fees []string, feeRate int64, deployer string) (string, int64, error)
 }
 
-
-type ActionFunc func(ContractManager, *ContractDeployReservation, any) (any, error)
+type ActionFunc func(ContractManager, ContractDeployResvIF, any) (any, error)
 
 type ContractDeployAction struct {
 	Action ActionFunc
@@ -260,9 +253,9 @@ type Contract interface {
 type ContractRuntime interface {
 	Contract
 
-	InitFromDB(ContractManager, *ContractDeployReservation) error              // 初始化哪些不以大写开头的内部变量
-	InitFromContent([]byte, ContractManager, *ContractDeployReservation) error // 根据合约模版参数初始化合约，非json
-	InitFromJson([]byte, ContractManager) error                                // 一个从json数据构建的非运行对象
+	InitFromDB(ContractManager, ContractDeployResvIF) error              // 初始化哪些不以大写开头的内部变量
+	InitFromContent([]byte, ContractManager, ContractDeployResvIF) error // 根据合约模版参数初始化合约，非json
+	InitFromJson([]byte, ContractManager) error                          // 一个从json数据构建的非运行对象
 	GetRuntimeBase() *ContractRuntimeBase
 
 	GetStatus() int
@@ -399,7 +392,6 @@ func NewInvokeHistoryItem(cn string) InvokeHistoryItem {
 	}
 	return &InvokeItem{}
 }
-
 
 func NewInvokeHistoryItem_old(cn string) InvokeHistoryItem {
 	// switch cn {
@@ -584,19 +576,17 @@ func (p *InvokerStatusBase) GetKey() string {
 	return p.Address
 }
 
-
 func NewInvokerStatus(cn string) InvokerStatus {
 	switch cn {
 	case TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_AMM:
 		return &TraderStatus{}
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		return nil
-	//case TEMPLATE_CONTRACT_VAULT:
-	//	return &VaultInvokerStatus{}
+		//case TEMPLATE_CONTRACT_VAULT:
+		//	return &VaultInvokerStatus{}
 	}
 	return &TraderStatus{}
 }
-
 
 // 合约内容基础结构
 type ContractBase struct {
@@ -791,7 +781,7 @@ type ContractRuntimeBase struct {
 	RemotePubKey      []byte
 
 	history            map[string]*InvokeItem // key:utxo 单独记录数据库，区块缓存, 6个区块以后，并且已经成交的可以删除
-	resv               *ContractDeployReservation
+	resv               ContractDeployResvIF
 	stp                ContractManager
 	contract           Contract
 	runtime            ContractRuntime
@@ -818,17 +808,17 @@ func (p *ContractRuntimeBase) GetAssetNameV2() *AssetName {
 	}
 }
 
-func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManager, resv *ContractDeployReservation) error {
+func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManager, resv ContractDeployResvIF) error {
 	// 这里resv还没有获得正确的ResvId，需要后面补上
 	p.resv = resv
-	p.ChannelAddr = resv.ChannelId
-	p.Deployer = resv.Deployer
+	p.ChannelAddr = resv.GetChannelAddr()
+	p.Deployer = resv.GetDeployer()
 	p.stp = stp
 	p.assetMerkleRootMap = make(map[int64][]byte)
 	p.history = make(map[string]*InvokeItem)
-	p.isInitiator = resv.IsInitiator
+	p.isInitiator = resv.LocalIsInitiator()
 	p.localPubKey = stp.GetWallet().GetPubKey()
-	remotePK, err := utils.BytesToPublicKey(resv.remotePubKey)
+	remotePK, err := utils.BytesToPublicKey(resv.GetRemotePubKey())
 	if err != nil {
 		return err
 	}
@@ -876,15 +866,15 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 	return nil
 }
 
-func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv *ContractDeployReservation) error {
+func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
 	p.resv = resv
-	p.ChannelAddr = resv.ChannelId
-	p.Deployer = resv.Deployer
+	p.ChannelAddr = resv.GetChannelAddr()
+	p.Deployer = resv.GetDeployer()
 	p.stp = stp
 	p.assetMerkleRootMap = make(map[int64][]byte)
 	p.history = make(map[string]*InvokeItem)
 
-	p.isInitiator = resv.IsInitiator
+	p.isInitiator = resv.LocalIsInitiator()
 	var err error
 	p.localPubKey, err = utils.BytesToPublicKey(p.LocalPubKey)
 	if err != nil {
@@ -1014,7 +1004,7 @@ func (p *ContractRuntimeBase) SetEnableBlock(height, heightL1 int) {
 	p.CheckPointBlock = p.EnableBlock
 	p.CheckPointBlockL1 = p.EnableBlockL1
 
-	if p.resv.IsInitiator {
+	if p.resv.LocalIsInitiator() {
 		txId, err := p.stp.SendContractEnabledTx(p.URL(), heightL1, height)
 		if err != nil {
 			// TODO send again later
@@ -1056,12 +1046,13 @@ func (p *ContractRuntimeBase) AllowDeploy() error {
 	}
 
 	// 检查费用是否足够
-	estimatedFee := contract.DeployFee(resv.FeeRate) // 发起人需要给服务节点的费用
+	estimatedFee := contract.DeployFee(resv.GetFeeRate()) // 发起人需要给服务节点的费用
 	if estimatedFee <= DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT {
 		return fmt.Errorf("DeployFee failed")
 	}
 	requiredFee := estimatedFee - DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT // 部署过程需要的费用
-	if len(resv.feeUtxos) == 0 {
+	feeUtxos := resv.GetFeeUtxos()
+	if len(feeUtxos) == 0 {
 		var address string
 		if p.isInitiator {
 			address = p.GetLocalAddress()
@@ -1069,17 +1060,18 @@ func (p *ContractRuntimeBase) AllowDeploy() error {
 			address = p.GetRemoteAddress()
 		}
 
-		utxos, err := p.stp.GetWalletMgr().GetUtxosWithAsset_SatsNet(address, 
+		var err error
+		feeUtxos, err = p.stp.GetWalletMgr().GetUtxosWithAsset_SatsNet(address,
 			indexer.NewDefaultDecimal(requiredFee), &ASSET_PLAIN_SAT, nil)
 		if err != nil {
 			return err
 		}
-		resv.feeUtxos = utxos
+		resv.SetFeeUtxos(feeUtxos)
 	}
 
 	var feeUtxosInfo []*TxOutput_SatsNet
 	plainAmt := int64(0)
-	for _, utxo := range resv.feeUtxos {
+	for _, utxo := range feeUtxos {
 		txOut, err := p.stp.GetIndexerClient_SatsNet().GetTxOutput(utxo)
 		if err != nil {
 			return fmt.Errorf("GetTxOutput %s failed, %v", utxo, err)
@@ -1098,9 +1090,9 @@ func (p *ContractRuntimeBase) AllowDeploy() error {
 	if plainAmt < requiredFee {
 		return fmt.Errorf("no enough fee, required %d but only %d", requiredFee, plainAmt)
 	}
-	resv.feeInputs = feeUtxosInfo
-	resv.RequiredFee = requiredFee
-	resv.ServiceFee = DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT
+	resv.SetFeeInputs(feeUtxosInfo)
+	resv.SetRequiredFee(requiredFee)
+	resv.SetServiceFee(DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT)
 
 	return nil
 }
@@ -1113,37 +1105,39 @@ func (p *ContractRuntimeBase) GetDeployAction() *ContractDeployAction {
 }
 
 // 启动合约
-func runContract(stp ContractManager, resv *ContractDeployReservation, param any) (any, error) {
-	contract := resv.Contract
+func runContract(stp ContractManager, resv ContractDeployResvIF, param any) (any, error) {
+	contract := resv.GetContract()
 
 	txId, ok := param.(string)
 	if !ok {
 		return nil, fmt.Errorf("param not string")
 	}
 
-	resv.mutex.Lock()
-	defer resv.mutex.Unlock()
+	mutex := resv.GetMutex()
+	mutex.Lock()
+	defer mutex.Unlock()
 
-	if txId != resv.DeployContractTxId {
+	if txId != resv.GetDeployContractTxId() {
 		return nil, fmt.Errorf("not deploy txId")
 	}
 
 	// 同时检查并且启动contract
 	if contract.GetStatus() < CONTRACT_STATUS_READY {
 		// 检查合约运行的条件是否完备，如果完备，设置进入运行状态
-		if resv.DeployContractTx == nil {
-			txHex, err := stp.GetIndexerClient_SatsNet().GetRawTx(resv.DeployContractTxId)
+		if resv.GetDeployContractTx() == nil {
+			txHex, err := stp.GetIndexerClient_SatsNet().GetRawTx(resv.GetDeployContractTxId())
 			if err != nil {
-				Log.Errorf("runContract GetRawTx %s failed, %v", resv.DeployContractTxId, err)
+				Log.Errorf("runContract GetRawTx %s failed, %v", resv.GetDeployContractTxId(), err)
 				return nil, err
 			}
-			resv.DeployContractTx, err = DecodeMsgTx_SatsNet(txHex)
+			tx, err := DecodeMsgTx_SatsNet(txHex)
 			if err != nil {
 				return nil, err
 			}
+			resv.SetDeployContractTx(tx)
 		}
 
-		err := contract.IsReadyToRun(resv.DeployContractTx)
+		err := contract.IsReadyToRun(resv.GetDeployContractTx())
 		if err != nil {
 			return nil, err
 		}
@@ -1154,10 +1148,10 @@ func runContract(stp ContractManager, resv *ContractDeployReservation, param any
 		contract.SetReady()
 	}
 
-	resv.HasSentDeployTx = 2
+	resv.SetHasSentDeployTx(2)
 	if contract.GetStatus() >= CONTRACT_STATUS_READY {
-		resv.Status = RS_DEPLOY_CONTRACT_RUNNING
-		saveReservation(stp.GetDB(), resv)
+		resv.SetStatus(RS_DEPLOY_CONTRACT_RUNNING)
+		stp.SaveReservation(resv)
 	}
 
 	return "ok", nil
@@ -1201,7 +1195,7 @@ func (p *ContractRuntimeBase) CheckInvokeParam(string) (int64, error) {
 
 func (p *ContractRuntimeBase) AllowInvoke() error {
 
-	// resv, ok := r.(*ContractDeployReservation)
+	// resv, ok := r.(ContractDeployResvBase)
 	// if !ok {
 	// 	return fmt.Errorf("not ContractDeployReservation")
 	// }
@@ -1324,7 +1318,7 @@ func (p *ContractRuntimeBase) CheckDeployTx(
 	contract := p.runtime
 	resv := p.resv
 
-	pkScript, err := AddrToPkScript(resv.ChannelId, GetChainParam())
+	pkScript, err := AddrToPkScript(resv.GetChannelAddr(), GetChainParam())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1383,7 +1377,7 @@ func (p *ContractRuntimeBase) CheckDeployTx(
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid contract deploy invoice, %v", err)
 	}
-	if p.resv.IsInitiator {
+	if p.resv.LocalIsInitiator() {
 		if !VerifyMessage(p.GetLocalPubKey(), invoice, deployParam.LocalSign) {
 			return nil, nil, fmt.Errorf("invalid contract local sig")
 		}
@@ -1411,7 +1405,7 @@ func (p *ContractRuntimeBase) CheckDeployTx(
 }
 
 func (p *ContractRuntimeBase) CheckInvokeTx_SatsNet(invokeTx *InvokeTx_SatsNet) error {
-	// resv, ok := r.(*ContractDeployReservation)
+	// resv, ok := r.(ContractDeployResvBase)
 	// if !ok {
 	// 	return fmt.Errorf("not ContractDeployReservation")
 	// }
@@ -1585,7 +1579,7 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 			// 也可能是索引器重建数据
 			p.mutex.Unlock()
 			return fmt.Errorf("contract current block %d large than %d", p.CurrBlockL1, data.Height)
-		} else { // p.CurrBlockL1+1 < data.Height 
+		} else { // p.CurrBlockL1+1 < data.Height
 			// 不可能出现，启动时已经同步了区块
 			// Log.Panicf("%s missing some L2 block, current %d, but new block %d", p.URL(), p.CurrBlockL1, data.Height)
 			// 丢失中间的区块
@@ -1629,30 +1623,12 @@ func (p *ContractRuntimeBase) IsMyInvoke_SatsNet(invoke *InvokeTx_SatsNet) bool 
 
 func (p *ContractRuntimeBase) resyncBlock(start, end int) {
 	// 设置resv的属性，暂时不要从外面的区块同步调用进来
-	p.resv.resyncingL1 = true
-	err := p.stp.ReprocessContractWithBlock(start, end, p.resv)
-	p.resv.resyncingL1 = false
-	if err != nil {
-		Log.Errorf("%s reprocessContractWithBlock %d->%d failed, %v",
-			p.URL(), start, end, err)
-	} else {
-		Log.Infof("%s reprocessContractWithBlock succeed  %d->%d",
-			p.URL(), start, end)
-	}
+	p.resv.ResyncBlock(start, end)
 }
 
 func (p *ContractRuntimeBase) resyncBlock_SatsNet(start, end int) {
 	// 设置resv的属性，暂时不要从外面的区块同步调用进来
-	p.resv.resyncingL2 = true
-	err := p.stp.ReprocessContractWithBlock_SatsNet(start, end, p.resv)
-	p.resv.resyncingL2 = false
-	if err != nil {
-		Log.Errorf("%s reprocessContractWithBlock_SatsNet %d->%d failed, %v",
-			p.URL(), start, end, err)
-	} else {
-		Log.Infof("%s reprocessContractWithBlock_SatsNet succeed  %d->%d",
-			p.URL(), start, end)
-	}
+	p.resv.ResyncBlock_SatsNet(start, end)
 }
 
 // 外面不能加锁
@@ -1666,7 +1642,7 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 			if !p.IsMyInvoke_SatsNet(invoke) {
 				continue
 			}
-			if p.resv.IsInitiator {
+			if p.resv.LocalIsInitiator() {
 				continue
 			}
 
@@ -1697,7 +1673,7 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 	// 如果还没有激活，直接返回
 	if p.EnableBlock == 0 || data.Height < p.EnableBlock {
 		if p.CurrBlock < data.Height {
-			// 需要考虑索引器重建数据的可能性，这种情况下，不要更新 p.CurrBlock 
+			// 需要考虑索引器重建数据的可能性，这种情况下，不要更新 p.CurrBlock
 			p.CurrBlock = data.Height
 		}
 		p.lastInvokeCount = p.InvokeCount
@@ -1754,7 +1730,7 @@ func (p *ContractRuntimeBase) InvokeCompleted_SatsNet(data *InvokeDataInBlock_Sa
 func (p *ContractRuntimeBase) calcAssetMerkleRoot() {
 	p.assetMerkleRootMap[(p.lastInvokeCount)] = p.CurrAssetMerkleRoot
 	p.CurrAssetMerkleRoot = p.runtime.CalcRuntimeMerkleRoot()
-	saveReservation(p.stp.GetDB(), p.resv)
+	p.stp.SaveReservationWithLock(p.resv)
 
 	if len(p.assetMerkleRootMap) > 10 {
 		// 删除最小的一个
@@ -1790,7 +1766,7 @@ func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) err
 			if item.Done == DONE_NOTYET {
 				p.runtime.DisableItem(item)
 			}
-			saveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 		}
 
 		p.history[item.InUtxo] = item
@@ -1827,6 +1803,40 @@ func (p *ContractRuntimeBase) AddLostInvokeItem(string, bool) (string, error) {
 	return "", fmt.Errorf("not accepted")
 }
 
+func GetSupportedContracts() []string {
+	result := make([]string, 0)
+	c := NewContract(TEMPLATE_CONTRACT_LAUNCHPOOL)
+	if c != nil {
+		result = append(result, string(c.Content()))
+	}
+
+	c = NewContract(TEMPLATE_CONTRACT_SWAP)
+	if c != nil {
+		result = append(result, string(c.Content()))
+	}
+
+	c = NewContract(TEMPLATE_CONTRACT_AMM)
+	if c != nil {
+		result = append(result, string(c.Content()))
+	}
+
+	c = NewContract(TEMPLATE_CONTRACT_TRANSCEND)
+	if c != nil {
+		result = append(result, string(c.Content()))
+	}
+
+	c = NewContract(TEMPLATE_CONTRACT_VAULT)
+	if c != nil {
+		result = append(result, string(c.Content()))
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i] < result[j]
+	})
+
+	return result
+}
+
 func NewContract(cname string) Contract {
 	switch cname {
 	case TEMPLATE_CONTRACT_SWAP:
@@ -1836,7 +1846,7 @@ func NewContract(cname string) Contract {
 		return NewAmmContract()
 
 	//case TEMPLATE_CONTRACT_VAULT:
-		//return NewVaultContract()
+	//return NewVaultContract()
 
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		return NewLaunchPoolContract()
@@ -1875,7 +1885,7 @@ func NewContractRuntime(stp ContractManager, cname string) ContractRuntime {
 		return NewAmmContractRuntime(stp)
 
 	//case TEMPLATE_CONTRACT_VAULT:
-		//return NewVaultContractRuntime(stp)
+	//return NewVaultContractRuntime(stp)
 
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		r = NewLaunchPoolContractRuntime(stp)

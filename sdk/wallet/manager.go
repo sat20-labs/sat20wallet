@@ -21,6 +21,14 @@ import (
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 )
 
+// //////
+// only use in testing
+var _enable_testing bool = false
+var _not_send_tx = false
+var _not_invoke_block = false
+
+////////
+
 type Node struct {
 	client   NodeRPCClient
 	Host     string // ip:port
@@ -710,6 +718,10 @@ func (p *Manager) GetAssetBalance_SatsNet(address string, name *swire.AssetName)
 }
 
 func (p *Manager) BroadcastTx(tx *wire.MsgTx) (string, error) {
+	if _enable_testing && _not_send_tx {
+		return tx.TxID(), nil
+	}
+
 	txId, err := p.l1IndexerClient.BroadCastTx(tx)
 	if err != nil {
 		Log.Errorf("BroadCastTx %s failed. %v", tx.TxID(), err)
@@ -721,6 +733,10 @@ func (p *Manager) BroadcastTx(tx *wire.MsgTx) (string, error) {
 }
 
 func (p *Manager) BroadcastTx_SatsNet(tx *swire.MsgTx) (string, error) {
+	if _enable_testing && _not_send_tx {
+		return tx.TxID(), nil
+	}
+	
 	txId, err := p.l2IndexerClient.BroadCastTx_SatsNet(tx)
 	if err != nil {
 		Log.Errorf("BroadCastTx_SatsNet %s failed. %v", tx.TxID(), err)

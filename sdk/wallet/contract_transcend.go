@@ -41,17 +41,16 @@ func NewTranscendContract() *TranscendContract {
 	return c
 }
 
-
 func (p *TranscendContract) CheckContent() error {
 	if indexer.IsPlainAsset(&p.AssetName) {
 		return nil
 	}
-	
+
 	err := p.SwapContract.CheckContent()
 	if err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -91,7 +90,6 @@ func (p *TranscendContract) InvokeParam(action string) string {
 
 }
 
-
 func (p *TranscendContract) Encode() ([]byte, error) {
 	return p.SwapContract.Encode()
 }
@@ -112,7 +110,6 @@ func (p *TranscendContract) Content() string {
 func (p *TranscendContract) CalcStaticMerkleRoot() []byte {
 	return CalcContractStaticMerkleRoot(p)
 }
-
 
 type TranscendContractRuntime struct {
 	SwapContractRuntime
@@ -136,11 +133,10 @@ func NewTranscendContractRuntime(stp ContractManager) *TranscendContractRuntime 
 	return p
 }
 
-
 func (p *TranscendContractRuntime) AllowDeploy() error {
 
 	// 如果amm合约存在，不能部署
-	if p.stp.GetSpecialContract(p.GetAssetName().String(), TEMPLATE_CONTRACT_AMM) != nil {
+	if p.stp.GetSpecialContractResv(p.GetAssetName().String(), TEMPLATE_CONTRACT_AMM) != nil {
 		return fmt.Errorf("no need to deploy %s contract", p.RelativePath())
 	}
 
@@ -194,7 +190,7 @@ func (p *TranscendContractRuntime) GobDecode(data []byte) error {
 // 仅用于amm合约
 func (p *TranscendContractRuntime) checkSelf() error {
 	url := p.URL()
-	history := loadContractInvokeHistory(p.stp.GetDB(), url, false, false)
+	history := LoadContractInvokeHistory(p.stp.GetDB(), url, false, false)
 	Log.Infof("%s history count: %d\n", url, len(history))
 	if len(history) == 0 {
 		return nil
@@ -250,7 +246,7 @@ func (p *TranscendContractRuntime) checkSelf() error {
 		}
 		insertItemToTraderHistroy(&trader.InvokerStatusBase, item)
 		trader.DealAmt = trader.DealAmt.Add(item.OutAmt)
-		trader.DealValue += calcDealValue(item.OutValue)
+		trader.DealValue += CalcDealValue(item.OutValue)
 
 		InvokeCount++
 		runningData.TotalInputSats += item.InValue
@@ -278,9 +274,9 @@ func (p *TranscendContractRuntime) checkSelf() error {
 						runningData.AssetAmtInPool = runningData.AssetAmtInPool.Sub(item.OutAmt)
 					} else if item.OrderType == ORDERTYPE_SELL {
 						//runningData.TotalDealAssets = runningData.TotalDealAssets.Add(item.InAmt)
-						runningData.TotalDealSats += calcDealValue(item.OutValue)
+						runningData.TotalDealSats += CalcDealValue(item.OutValue)
 						runningData.AssetAmtInPool = runningData.AssetAmtInPool.Add(item.InAmt)
-						runningData.SatsValueInPool -= calcDealValue(item.OutValue)
+						runningData.SatsValueInPool -= CalcDealValue(item.OutValue)
 					}
 
 					Log.Infof("OnSending %d: Amt: %s-%s-%s Value: %d-%d-%d Price: %s in: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
@@ -302,8 +298,8 @@ func (p *TranscendContractRuntime) checkSelf() error {
 				} else if item.OrderType == ORDERTYPE_SELL {
 					//runningData.TotalDealAssets = runningData.TotalDealAssets.Add(item.InAmt)
 					runningData.AssetAmtInPool = runningData.AssetAmtInPool.Add(item.InAmt)
-					runningData.SatsValueInPool -= calcDealValue(item.OutValue)
-					runningData.TotalDealSats += calcDealValue(item.OutValue)
+					runningData.SatsValueInPool -= CalcDealValue(item.OutValue)
+					runningData.TotalDealSats += CalcDealValue(item.OutValue)
 				}
 
 				// 已经发送

@@ -9,13 +9,13 @@ import (
 	"sort"
 	"time"
 
+	"github.com/btcsuite/btcd/txscript"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
-	"github.com/btcsuite/btcd/txscript"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -30,12 +30,10 @@ const (
 	INVOKE_API_MINT string = "mint"
 )
 
-
 var (
-	LAUNCHPOOL_MIN_SPENT int64 = 20 // 最小开销：发射一个tx，10聪，退款一个tx，10聪 （部署amm的开销，算在部署launchpool的开销中）
-	LAUNCHPOOL_MIN_SATS int64 = 100000 // 
+	LAUNCHPOOL_MIN_SPENT int64 = 20     // 最小开销：发射一个tx，10聪，退款一个tx，10聪 （部署amm的开销，算在部署launchpool的开销中）
+	LAUNCHPOOL_MIN_SATS  int64 = 100000 //
 )
-
 
 type LaunchPoolContract_old = LaunchPoolContract
 
@@ -162,7 +160,7 @@ func (p *LaunchPoolContract) CheckContent() error {
 		return fmt.Errorf("invalid launch ratio %d", p.LaunchRatio)
 	}
 
-	minSatsInPool := (p.MaxSupply * int64(p.LaunchRatio) / 100 ) / int64(p.MintAmtPerSat)
+	minSatsInPool := (p.MaxSupply * int64(p.LaunchRatio) / 100) / int64(p.MintAmtPerSat)
 	if minSatsInPool < LAUNCHPOOL_MIN_SATS {
 		return fmt.Errorf("too small sats in pool after launched, %d", minSatsInPool)
 	}
@@ -303,7 +301,6 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 	return total
 }
 
-
 // 仅仅是估算，并且尽可能多预估了输入和输出
 func CalcFee_SplicingIn(utxoLen, feeLen int, assetName *indexer.AssetName, feeRate int64) int64 {
 
@@ -392,9 +389,9 @@ type LaunchPoolRunningData struct {
 }
 
 type MinterStatus struct {
-	TotalAmt   *Decimal // 有效铸造的资产数量，或者退款的聪数量
-	Settled     bool     // 已经发射，或者已经退款
-	History     []*MintHistoryItem
+	TotalAmt *Decimal // 有效铸造的资产数量，或者退款的聪数量
+	Settled  bool     // 已经发射，或者已经退款
+	History  []*MintHistoryItem
 }
 
 type LaunchPoolInvokeParam = InvokeParam
@@ -507,7 +504,7 @@ func (p *LaunchPoolContractRunTime) init() {
 }
 
 func (p *LaunchPoolContractRunTime) InitFromContent(content []byte, stp ContractManager,
-	resv *ContractDeployReservation) error {
+	resv ContractDeployResvIF) error {
 	err := p.ContractRuntimeBase.InitFromContent(content, stp, resv)
 	if err != nil {
 		Log.Errorf("LaunchPoolContractRunTime.InitFromContent failed, %v", err)
@@ -517,7 +514,6 @@ func (p *LaunchPoolContractRunTime) InitFromContent(content []byte, stp Contract
 	p.N = p.BindingSat
 	return nil
 }
-
 
 func (p *LaunchPoolContractRunTime) InitFromJson(content []byte, stp ContractManager) error {
 	err := json.Unmarshal(content, p)
@@ -529,7 +525,7 @@ func (p *LaunchPoolContractRunTime) InitFromJson(content []byte, stp ContractMan
 	return nil
 }
 
-func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv *ContractDeployReservation) error {
+func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
 	err := p.ContractRuntimeBase.InitFromDB(stp, resv)
 	if err != nil {
 		Log.Errorf("LaunchPoolContractRunTime.InitFromDB failed, %v", err)
@@ -537,10 +533,9 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv *Contra
 	}
 	p.init()
 
-
 	// 用于调试时修改本地一些错误的数据
 	// url := p.URL()
-	// if url == "bc1qmgactfmdfympq5tqld7rc53y4dphvdyqnmtuuv9jwgpn7hqwr2kss26dls_ordx:f:sat20_launchpool.tc" && 
+	// if url == "bc1qmgactfmdfympq5tqld7rc53y4dphvdyqnmtuuv9jwgpn7hqwr2kss26dls_ordx:f:sat20_launchpool.tc" &&
 	// p.InvokeCount == 172 {
 	// 	itemHistory := ``
 	// 	var inputs []*MintHistoryItem
@@ -555,8 +550,7 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv *Contra
 	// 	// saveReservation(p.stp.GetDB(), resv)
 	// }
 
-
-	history := loadContractInvokeHistory(stp.GetDB(), p.URL(), false, false)
+	history := LoadContractInvokeHistory(stp.GetDB(), p.URL(), false, false)
 	for _, v := range history {
 		item, ok := v.(*MintHistoryItem)
 		if !ok {
@@ -570,8 +564,8 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv *Contra
 
 	p.resv = resv
 
-	p.ResvId = resv.Id
-	p.ChannelAddr = resv.ChannelId
+	p.ResvId = resv.GetId()
+	p.ChannelAddr = resv.GetChannelAddr()
 
 	if p.DeployTickerResvId != 0 {
 		p.deployTickerResv = stp.GetWalletMgr().GetInscribeResv(p.DeployTickerResvId)
@@ -588,11 +582,9 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv *Contra
 	return nil
 }
 
-
 func (p *LaunchPoolContractRunTime) GetAssetAmount() (*Decimal, int64) {
 	return p.AssetAmtInPool, p.SatsValueInPool
 }
-
 
 // 调用前自己加锁
 func (p *LaunchPoolContractRunTime) CalcRuntimeMerkleRoot() []byte {
@@ -745,11 +737,11 @@ func (p *LaunchPoolContractRunTime) SetDeployActionResult(status []byte) {
 			// 	p.resv.HasSentDeployTx = 2
 			// } else {
 			p.HasExpanded = 1
-			p.resv.HasSentDeployTx = 1
+			p.resv.SetHasSentDeployTx(1)
 			//}
 		}
 		p.Status = CONTRACT_STATUS_INIT + 3
-		p.resv.DeployContractTxId = p.AnchorTxId
+		p.resv.SetDeployContractTxId(p.AnchorTxId)
 	}
 
 	// 不要在这里设置ready状态，统一由runLaunchPoolContract 设置
@@ -758,23 +750,25 @@ func (p *LaunchPoolContractRunTime) SetDeployActionResult(status []byte) {
 	// 	p.Status = CONTRACT_STATUS_READY
 	// }
 
-	p.resv.Status = RS_DEPLOY_CONTRACT_INSTALL_STARTED + ResvStatus(p.GetStatus())
+	p.resv.SetStatus(RS_DEPLOY_CONTRACT_INSTALL_STARTED + ResvStatus(p.GetStatus()))
 }
 
-func doNothing(ContractManager, Reservation, any) (any, error) {
+func doNothing(ContractManager, ContractDeployResvIF, any) (any, error) {
 	return nil, nil
 }
 
-func deployTicker(stp ContractManager, resv *ContractDeployReservation, _ any) (any, error) {
-	contract, ok := resv.Contract.(*LaunchPoolContractRunTime)
+func deployTicker(stp ContractManager, resv ContractDeployResvIF, _ any) (any, error) {
+	contract, ok := resv.GetContract().(*LaunchPoolContractRunTime)
 	if !ok {
 		return nil, fmt.Errorf("not LaunchPoolContractRunTime")
 	}
 
-	resv.mutex.Lock()
-	defer resv.mutex.Unlock()
+	mutex := resv.GetMutex()
 
-	if resv.IsInitiator {
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	if resv.LocalIsInitiator() {
 		if contract.HasDeployed == 0 {
 
 			switch contract.AssetName.Protocol {
@@ -814,15 +808,15 @@ func deployTicker(stp ContractManager, resv *ContractDeployReservation, _ any) (
 	}
 
 	if contract.DeployTickerTxId != "" {
-		resv.Status = RS_DEPLOY_CONTRACT_INSTALL_STARTED + ResvStatus(contract.GetStatus())
-		saveReservation(stp.GetDB(), &resv.ContractDeployDataInDB)
+		resv.SetStatus(RS_DEPLOY_CONTRACT_INSTALL_STARTED + ResvStatus(contract.GetStatus()))
+		stp.SaveReservation(resv)
 	}
 
 	return contract.InstallStatus(), nil
 }
 
-func mintTicker(stp ContractManager, resv *ContractDeployReservation, param any) (any, error) {
-	contract, ok := resv.Contract.(*LaunchPoolContractRunTime)
+func mintTicker(stp ContractManager, resv ContractDeployResvIF, param any) (any, error) {
+	contract, ok := resv.GetContract().(*LaunchPoolContractRunTime)
 	if !ok {
 		return nil, fmt.Errorf("not LaunchPoolContractRunTime")
 	}
@@ -831,14 +825,15 @@ func mintTicker(stp ContractManager, resv *ContractDeployReservation, param any)
 		return nil, fmt.Errorf("param not string")
 	}
 
-	resv.mutex.Lock()
-	defer resv.mutex.Unlock()
+	mutex := resv.GetMutex()
+	mutex.Lock()
+	defer mutex.Unlock()
 
 	if txId != contract.DeployTickerTxId {
 		return nil, fmt.Errorf("not deploy ticker txId")
 	}
 
-	if resv.IsInitiator {
+	if resv.LocalIsInitiator() {
 		if contract.HasMinted == 0 {
 
 			var mintTxId string
@@ -903,14 +898,14 @@ func mintTicker(stp ContractManager, resv *ContractDeployReservation, param any)
 		contract.HasDeployed = 2
 	}
 
-	resv.Status = RS_DEPLOY_CONTRACT_INSTALL_STARTED + ResvStatus(contract.GetStatus())
-	saveReservation(stp.GetDB(), &resv.ContractDeployDataInDB)
+	resv.SetStatus(RS_DEPLOY_CONTRACT_INSTALL_STARTED + ResvStatus(contract.GetStatus()))
+	stp.SaveReservation(resv)
 
 	return contract.InstallStatus(), nil
 }
 
-func ascendAsset(stp ContractManager, resv *ContractDeployReservation, param any) (any, error) {
-	contract, ok := resv.Contract.(*LaunchPoolContractRunTime)
+func ascendAsset(stp ContractManager, resv ContractDeployResvIF, param any) (any, error) {
+	contract, ok := resv.GetContract().(*LaunchPoolContractRunTime)
 	if !ok {
 		return nil, fmt.Errorf("not LaunchPoolContractRunTime")
 	}
@@ -919,16 +914,18 @@ func ascendAsset(stp ContractManager, resv *ContractDeployReservation, param any
 		return nil, fmt.Errorf("param not string")
 	}
 
-	resv.mutex.Lock()
-	defer resv.mutex.Unlock()
+	mutex := resv.GetMutex()
+	mutex.Lock()
+	defer mutex.Unlock()
+
 	if txId != contract.MintTxId {
 		return nil, fmt.Errorf("not mint ticker txId")
 	}
 
-	if resv.IsInitiator {
+	if resv.LocalIsInitiator() {
 		if contract.HasExpanded == 0 {
 			// 这个才将合约的内容加上
-			signedContract, err := SignedDeployContractInvoice(resv)
+			signedContract, err := resv.SignedDeployContractInvoice()
 			if err != nil {
 				Log.Errorf("DeployContractScript failed. %v", err)
 				return nil, err
@@ -956,8 +953,8 @@ func ascendAsset(stp ContractManager, resv *ContractDeployReservation, param any
 			contract.Status = (CONTRACT_STATUS_INIT + 3)
 			contract.HasExpanded = 1
 			contract.AnchorTxId = anchorTxId
-			resv.DeployContractTxId = anchorTxId
-			resv.HasSentDeployTx = 1
+			resv.SetDeployContractTxId(anchorTxId)
+			resv.SetHasSentDeployTx(1)
 		}
 		contract.HasMinted = 2
 	} else {
@@ -966,14 +963,14 @@ func ascendAsset(stp ContractManager, resv *ContractDeployReservation, param any
 		contract.HasMinted = 2
 	}
 
-	resv.Status = RS_DEPLOY_CONTRACT_INSTALL_STARTED + ResvStatus(contract.GetStatus())
-	saveReservation(stp.GetDB(), &resv.ContractDeployDataInDB)
+	resv.SetStatus(RS_DEPLOY_CONTRACT_INSTALL_STARTED + ResvStatus(contract.GetStatus()))
+	stp.SaveReservation(resv)
 
 	return contract.InstallStatus(), nil
 }
 
-func runLaunchPoolContract(stp ContractManager, resv *ContractDeployReservation, param any) (any, error) {
-	contract, ok := resv.Contract.(*LaunchPoolContractRunTime)
+func runLaunchPoolContract(stp ContractManager, resv ContractDeployResvIF, param any) (any, error) {
+	contract, ok := resv.GetContract().(*LaunchPoolContractRunTime)
 	if !ok {
 		return nil, fmt.Errorf("not LaunchPoolContractRunTime")
 	}
@@ -988,8 +985,9 @@ func runLaunchPoolContract(stp ContractManager, resv *ContractDeployReservation,
 		return nil, fmt.Errorf("param not string")
 	}
 
-	resv.mutex.Lock()
-	defer resv.mutex.Unlock()
+	mutex := resv.GetMutex()
+	mutex.Lock()
+	defer mutex.Unlock()
 
 	if txId != contract.AnchorTxId {
 		return nil, fmt.Errorf("not anchor txId")
@@ -998,20 +996,21 @@ func runLaunchPoolContract(stp ContractManager, resv *ContractDeployReservation,
 	// 同时检查并且启动contract
 	if contract.HasRun == 0 {
 		// 检查合约运行的条件是否完备，如果完备，设置进入运行状态
-		if resv.DeployContractTx == nil {
-			txHex, err := stp.GetIndexerClient_SatsNet().GetRawTx(resv.DeployContractTxId)
+		if resv.GetDeployContractTx() == nil {
+			txHex, err := stp.GetIndexerClient_SatsNet().GetRawTx(resv.GetDeployContractTxId())
 			if err != nil {
-				Log.Errorf("runContract GetRawTx %s failed, %v", resv.DeployContractTxId, err)
+				Log.Errorf("runContract GetRawTx %s failed, %v", resv.GetDeployContractTxId(), err)
 				return nil, err
 			}
-			resv.DeployContractTx, err = DecodeMsgTx_SatsNet(txHex)
+			tx, err := DecodeMsgTx_SatsNet(txHex)
 			if err != nil {
 				return nil, err
 			}
+			resv.SetDeployContractTx(tx)
 		}
 
 		contract.HasExpanded = 2
-		err := contract.IsReadyToRun(resv.DeployContractTx)
+		err := contract.IsReadyToRun(resv.GetDeployContractTx())
 		if err != nil {
 			contract.HasExpanded = 1
 			return nil, err
@@ -1030,10 +1029,10 @@ func runLaunchPoolContract(stp ContractManager, resv *ContractDeployReservation,
 	}
 
 	contract.HasExpanded = 2
-	resv.HasSentDeployTx = 2
+	resv.SetHasSentDeployTx(2)
 	if contract.HasRun == 1 {
-		resv.Status = RS_DEPLOY_CONTRACT_RUNNING
-		saveReservation(stp.GetDB(), &resv.ContractDeployDataInDB)
+		resv.SetStatus(RS_DEPLOY_CONTRACT_RUNNING)
+		stp.SaveReservation(resv)
 	}
 
 	return contract.InstallStatus(), nil
@@ -1219,7 +1218,7 @@ func (p *LaunchPoolContractRunTime) IsReadyToRun(deployTx *swire.MsgTx) error {
 		return err
 	}
 
-	p.ChannelAddr = p.resv.ChannelId
+	p.ChannelAddr = p.resv.GetChannelAddr()
 
 	// utxo是否有指定资产
 	if len(output.Assets) == 0 {
@@ -1320,10 +1319,9 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 		Log.Infof("allowInvoke failed, %v", err)
 		p.ContractRuntimeBase.InvokeCompleted_SatsNet(data)
 	}
-	
 
 	// 是否准备发射？
-	if p.readyToLaunch() &&
+	if p.ReadyToLaunch() &&
 		(p.Status == CONTRACT_STATUS_READY || p.Status == CONTRACT_STATUS_CLOSING) {
 		p.Status = CONTRACT_STATUS_CLOSING
 		if p.CheckPointBlock == p.EnableBlock {
@@ -1331,18 +1329,18 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 			p.CheckPointBlock = data.Height
 			Log.Infof("%s checkpoint %d", p.URL(), p.CheckPoint)
 		}
-		saveReservationWithLock(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+		p.stp.SaveReservationWithLock(p.resv)
 		p.mutex.Unlock()
 
 		delayLaunch := 10
 		if IsTestNet() {
 			delayLaunch = 1
 		}
-		if p.CheckPointBlock + delayLaunch <= data.Height {
+		if p.CheckPointBlock+delayLaunch <= data.Height {
 			// 进入之前先解锁
 			p.IsLaunching = true
 			p.launch()
-		}		
+		}
 	} else {
 		p.mutex.Unlock()
 	}
@@ -1364,7 +1362,6 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock(data *InvokeDataInBlock) err
 func (p *LaunchPoolContractRunTime) LimitToMint() *Decimal {
 	return indexer.DecimalSub(p.MaxAssetToMint(), p.TotalMinted)
 }
-
 
 func (p *LaunchPoolContractRunTime) Invoke(invokeTx *InvokeTx, height int) (InvokeHistoryItem, error) {
 	return nil, nil
@@ -1445,7 +1442,7 @@ func (p *LaunchPoolContractRunTime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, h
 				userLimit = min(userLimit, p.Limit-info.TotalAmt.Int64())
 			}
 		}
-		
+
 		if amt.Int64() > userLimit {
 			// 需要退款一部分
 			amt.SetValue(userLimit)
@@ -1469,9 +1466,9 @@ func (p *LaunchPoolContractRunTime) addItem(item *MintHistoryItem) {
 			info.History = append(info.History, item)
 		} else {
 			info = &MinterStatus{
-				TotalAmt:   amt,
-				Settled: item.Done != DONE_NOTYET,
-				History: []*MintHistoryItem{item},
+				TotalAmt: amt,
+				Settled:  item.Done != DONE_NOTYET,
+				History:  []*MintHistoryItem{item},
 			}
 			p.mintInfoMap[address] = info
 		}
@@ -1484,9 +1481,9 @@ func (p *LaunchPoolContractRunTime) addItem(item *MintHistoryItem) {
 			info.History = append(info.History, item)
 		} else {
 			info = &MinterStatus{
-				TotalAmt:   indexer.NewDefaultDecimal(item.OutValue),
-				Settled: item.Done != DONE_NOTYET, // sendback
-				History: []*MintHistoryItem{item},
+				TotalAmt: indexer.NewDefaultDecimal(item.OutValue),
+				Settled:  item.Done != DONE_NOTYET, // sendback
+				History:  []*MintHistoryItem{item},
 			}
 			p.invalidMintMap[address] = info
 		}
@@ -1539,11 +1536,11 @@ func (p *LaunchPoolContractRunTime) updateContract(
 	p.history[item.InUtxo] = item
 	p.responseHistory = append(p.responseHistory, item)
 	p.addItem(item)
-	saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
 	return item
 }
 
-func (p *LaunchPoolContractRunTime) readyToLaunch() bool {
+func (p *LaunchPoolContractRunTime) ReadyToLaunch() bool {
 	return p.LeftToMint().Sign() <= 0 || p.IsExpired()
 }
 
@@ -1551,7 +1548,7 @@ func (p *LaunchPoolContractRunTime) readyToLaunch() bool {
 func (p *LaunchPoolContractRunTime) setToRefundAll() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
+
 	if len(p.mintInfoMap) == 0 {
 		// 已经处理过
 		return
@@ -1571,9 +1568,9 @@ func (p *LaunchPoolContractRunTime) setToRefundAll() {
 		item.OutAmt = nil
 		item.OutValue = item.InValue
 		p.addItem(item)
-		saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+		SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
 	}
-	
+
 	// 扣除服务费和网络费
 	for _, v := range p.invalidMintMap {
 		v.TotalAmt = v.TotalAmt.Sub(indexer.NewDefaultDecimal(INVOKE_FEE))
@@ -1603,7 +1600,7 @@ func (p *LaunchPoolContractRunTime) launch() error {
 		Log.Infof("contract %s refunded", p.URL())
 	}
 
-	if p.resv.IsInitiator {
+	if p.resv.LocalIsInitiator() {
 		// 组装好所有的tx，然后
 		// 分批发射，每次1000个输出，然后记录
 
@@ -1683,7 +1680,7 @@ func (p *LaunchPoolContractRunTime) launch() error {
 						for _, u := range info.History {
 							u.Done = DONE_DEALT
 							u.OutTxId = txId
-							saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
+							SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
 						}
 					}
 					p.TotalOutputAssets = p.TotalOutputAssets.Add(totalOutputAssetAmt)
@@ -1691,7 +1688,7 @@ func (p *LaunchPoolContractRunTime) launch() error {
 					p.SatsValueInPool -= DEFAULT_FEE_SATSNET
 					p.LaunchTxIDs = append(p.LaunchTxIDs, txId)
 					p.mutex.Unlock()
-					saveReservation(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+					p.stp.SaveReservation(p.resv)
 
 					destAddr = nil
 					destAmt = nil
@@ -1719,9 +1716,9 @@ func (p *LaunchPoolContractRunTime) launch() error {
 		p.isSending = false
 		p.IsLaunching = false
 		p.Status = CONTRACT_STATUS_CLOSED
-		p.resv.Status = RS_DEPLOY_CONTRACT_COMPLETED
+		p.resv.SetStatus(RS_DEPLOY_CONTRACT_COMPLETED)
 		p.mutex.Unlock()
-		saveReservation(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+		p.stp.SaveReservation(p.resv)
 		Log.Infof("contract %s closed", p.URL())
 
 	} else {
@@ -1750,22 +1747,18 @@ func (p *LaunchPoolContractRunTime) deployAmmContract() (string, int64, error) {
 	}
 	Log.Infof("%s deploy an AMM contract %s, txId %s, resvId %d", p.URL(), ammContract.GetContractName(), txId, id)
 
-	resv := p.stp.GetResv(id)
+	resv := p.stp.GetDeployReservation(id)
 	if resv == nil {
 		return "", id, nil
 	}
-	amm, ok := resv.(*ContractDeployReservation)
-	if !ok {
-		return "", id, nil
-	}
 
-	return amm.Contract.URL(), id, nil
+	return resv.GetContract().URL(), id, nil
 }
 
 // 执行退款
 func (p *LaunchPoolContractRunTime) refund() error {
 
-	if p.resv.IsInitiator {
+	if p.resv.LocalIsInitiator() {
 		// 组装好所有的tx，然后
 		// 分批发射，每次1000个输出，然后记录
 		if p.isSending {
@@ -1848,14 +1841,14 @@ func (p *LaunchPoolContractRunTime) refund() error {
 					for _, u := range info.History {
 						u.Done = DONE_REFUNDED
 						u.OutTxId = txId
-						saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
+						SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
 					}
 				}
 				p.TotalOutputSats += totalOutputSatsValue
 				p.SatsValueInPool -= totalOutputSatsValue
 				p.SatsValueInPool -= DEFAULT_FEE_SATSNET
 				p.RefundTxIDs = append(p.RefundTxIDs, txId)
-				saveReservation(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+				p.stp.SaveReservation(p.resv)
 				p.mutex.Unlock()
 
 				destAddr = nil
@@ -2015,7 +2008,7 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 					for _, u := range info.History {
 						u.Done = DONE_DEALT
 						u.OutTxId = dealInfo.TxId
-						saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
+						SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
 					}
 					bUpdate = true
 				}
@@ -2027,7 +2020,7 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 				p.SatsValueInPool -= DEFAULT_FEE_SATSNET
 				p.LaunchTxIDs = append(p.LaunchTxIDs, dealInfo.TxId)
 
-				saveReservation(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+				p.stp.SaveReservation(p.resv)
 				Log.Infof("server: contract %s updated by txId %s", p.URL(), dealInfo.TxId)
 
 			} else {
@@ -2048,7 +2041,7 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 					for _, u := range info.History {
 						u.Done = DONE_REFUNDED
 						u.OutTxId = dealInfo.TxId
-						saveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
+						SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
 					}
 					bUpdate = true
 				}
@@ -2060,7 +2053,7 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 				p.SatsValueInPool -= DEFAULT_FEE_SATSNET
 				p.RefundTxIDs = append(p.RefundTxIDs, dealInfo.TxId)
 
-				saveReservation(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+				p.stp.SaveReservation(p.resv)
 				Log.Infof("server: contract %s updated by txId %s", p.URL(), dealInfo.TxId)
 			} else {
 				// 重复进来
@@ -2083,8 +2076,8 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 			// update status
 			p.IsLaunching = false
 			p.Status = CONTRACT_STATUS_CLOSED
-			p.resv.Status = RS_DEPLOY_CONTRACT_COMPLETED
-			saveReservation(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
+			p.resv.SetStatus(RS_DEPLOY_CONTRACT_COMPLETED)
+			p.stp.SaveReservation(p.resv)
 			Log.Infof("server: contract %s closed", p.URL())
 		}
 
@@ -2096,7 +2089,7 @@ func (p *LaunchPoolContractRunTime) LeftToMint() *Decimal {
 	return indexer.DecimalSub(p.TotalAssetToMint(), p.TotalMinted)
 }
 
-func verifyLaunchPoolHistory(history []*SwapHistoryItem, invokeCount int64, status int, org *LaunchPoolRunningData) (*LaunchPoolRunningData, error) {
+func VerifyLaunchPoolHistory(history []*SwapHistoryItem, invokeCount int64, status int, org *LaunchPoolRunningData) (*LaunchPoolRunningData, error) {
 	InvokeCount := int64(0)
 	mintInfoMap := make(map[string]*MinterStatus)
 	refundMap := make(map[string]*MinterStatus)
@@ -2121,25 +2114,24 @@ func verifyLaunchPoolHistory(history []*SwapHistoryItem, invokeCount int64, stat
 			runningData.TotalOutputAssets = runningData.TotalOutputAssets.Add(item.OutAmt)
 			runningData.TotalOutputSats += item.OutValue
 		}
-		
+
 		if item.OrderType == ORDERTYPE_MINT {
 			if item.Done == DONE_NOTYET {
 				runningData.SatsValueInPool += item.InValue
 				minter, ok := mintInfoMap[item.Address]
 				if !ok {
-					minter =&MinterStatus{}
+					minter = &MinterStatus{}
 					mintInfoMap[item.Address] = minter
 				}
 				minter.TotalAmt = minter.TotalAmt.Add(item.OutAmt)
 
 				Log.Infof("Minting %d: Amt: %s-%s-%s Value: %d-%d-%d Price: %s in: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
 					item.InValue, item.RemainingValue, item.OutValue, item.UnitPrice.String(), item.InUtxo)
-			
 
 			} else if item.Done == DONE_DEALT {
 				runningData.SatsValueInPool += item.InValue
 				runningData.TotalMinted = runningData.TotalMinted.Add(item.OutAmt)
-				
+
 				// 已经发送
 				Log.Infof("Done %d: Amt: %s-%s-%s Value: %d-%d-%d Price: %s in: %s out: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
 					item.InValue, item.RemainingValue, item.OutValue, item.UnitPrice.String(), item.InUtxo, item.OutTxId)
@@ -2161,7 +2153,7 @@ func verifyLaunchPoolHistory(history []*SwapHistoryItem, invokeCount int64, stat
 	if org.IsLaunching || status == CONTRACT_STATUS_CLOSED {
 		runningData.SatsValueInPool -= DEFAULT_FEE_SATSNET * int64(len(txmap))
 	}
-	
+
 	// 对比数据
 	Log.Infof("OnSending: value: %d, amt: %s", onSendingVaue, onSendngAmt.String())
 	Log.Infof("invokeCount %d %d", InvokeCount, invokeCount)
@@ -2190,7 +2182,7 @@ func verifyLaunchPoolHistory(history []*SwapHistoryItem, invokeCount int64, stat
 
 func (p *LaunchPoolContractRunTime) checkSelf() error {
 	url := p.URL()
-	history := loadContractInvokeHistory(p.stp.GetDB(), url, false, false)
+	history := LoadContractInvokeHistory(p.stp.GetDB(), url, false, false)
 	Log.Infof("%s history count: %d\n", url, len(history))
 	if len(history) == 0 {
 		return nil
@@ -2218,7 +2210,7 @@ func (p *LaunchPoolContractRunTime) checkSelf() error {
 	// 	Log.Infof("running data: %s\n", string(buf))
 	// }
 
-	runningData, err := verifyLaunchPoolHistory(mid1,
+	runningData, err := VerifyLaunchPoolHistory(mid1,
 		p.InvokeCount, p.Status, &p.LaunchPoolRunningData)
 	// 更新统计
 	p.updateRunningData(runningData)
@@ -2229,7 +2221,6 @@ func (p *LaunchPoolContractRunTime) checkSelf() error {
 	}
 	return nil
 }
-
 
 func (p *LaunchPoolContractRunTime) updateRunningData(runningData *LaunchPoolRunningData) {
 	// p.LaunchPoolRunningData = runningData
@@ -2242,7 +2233,7 @@ func (p *LaunchPoolContractRunTime) updateRunningData(runningData *LaunchPoolRun
 
 	// p.LaunchPoolRunningData.TotalInputAssets = runningData.TotalInputAssets
 	// p.LaunchPoolRunningData.TotalInputSats = runningData.TotalInputSats
-	
+
 	// p.LaunchPoolRunningData.TotalOutputAssets = runningData.TotalOutputAssets
 	// p.LaunchPoolRunningData.TotalOutputSats = runningData.TotalOutputSats
 
