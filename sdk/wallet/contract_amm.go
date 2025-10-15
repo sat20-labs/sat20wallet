@@ -49,9 +49,12 @@ AMM V2 交易合约：组池子和动态调整池子
 
 */
 
+
 func init() {
-	gob.Register(&AmmContractRuntime{})
+	// 让 gob 知道旧的类型对应新的实现
+	gob.RegisterName("*stp.AmmContractRuntime", new(AmmContractRuntime))
 }
+
 
 var (
 	DEFAULT_SETTLEMENT_PERIOD int = 100000 // 大约2周 10 * 60 * 24 * 7 // 一周

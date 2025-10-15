@@ -25,9 +25,12 @@ Transcend合约
 4. 为了简单一点，现在withdraw直接deAnchor，但deposit不执行anchor
 */
 
+
 func init() {
-	gob.Register(&TranscendContractRuntime{})
+	// 让 gob 知道旧的类型对应新的实现
+	gob.RegisterName("*stp.TranscendContractRuntime", new(TranscendContractRuntime))
 }
+
 
 type TranscendContract struct {
 	SwapContract

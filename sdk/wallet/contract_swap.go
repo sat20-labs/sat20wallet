@@ -31,8 +31,10 @@ import (
 4. 如何计算swap交易的利润：
 */
 
+
 func init() {
-	gob.Register(&SwapContractRuntime{})
+	// 让 gob 知道旧的类型对应新的实现
+	gob.RegisterName("*stp.SwapContractRuntime", new(SwapContractRuntime))
 
 	if IsTestNet() {
 		_valueLimit = 50

@@ -868,8 +868,6 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 
 func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
 	p.resv = resv
-	p.ChannelAddr = resv.GetChannelAddr()
-	p.Deployer = resv.GetDeployer()
 	p.stp = stp
 	p.assetMerkleRootMap = make(map[int64][]byte)
 	p.history = make(map[string]*InvokeItem)

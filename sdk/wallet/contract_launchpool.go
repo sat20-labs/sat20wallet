@@ -19,9 +19,12 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
+
 func init() {
-	gob.Register(&LaunchPoolContractRunTime{})
+	// 让 gob 知道旧的类型对应新的实现
+	gob.RegisterName("*stp.LaunchPoolContractRunTime", new(LaunchPoolContractRunTime))
 }
+
 
 const (
 	LAUNCH_POOL_MIN_RATION int = 60 // %
@@ -564,8 +567,6 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 
 	p.resv = resv
 
-	p.ResvId = resv.GetId()
-	p.ChannelAddr = resv.GetChannelAddr()
 
 	if p.DeployTickerResvId != 0 {
 		p.deployTickerResv = stp.GetWalletMgr().GetInscribeResv(p.DeployTickerResvId)
