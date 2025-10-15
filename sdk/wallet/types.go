@@ -84,3 +84,5 @@ type TxOutput_SatsNet = sindexer.TxOutput
 
 
 type Decimal = indexer.Decimal
+
+

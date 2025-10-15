@@ -55,7 +55,7 @@ func (p *RESTClient) GetUrl(path string) *URL {
 
 type IndexerRPCClient interface {
 	GetTxOutput(utxo string) (*TxOutput, error)  // 索引器接口，被花费后就找不到数据
-	GetAscendData(utxo string) (*sindexer.AscendData, error)
+	GetAscendData(utxo string) (*sindexer.AscendData, error) // TODO 因为Decimal json序列化的修改，索引器暂时将资产列表清空，因为前端还没用到
 	IsCoreNode(pubkey []byte) (bool, error)
 	GetUtxoId(utxo string) (uint64, error)
 	GetRawTx(tx string) (string, error)
@@ -132,7 +132,9 @@ func (p *IndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 	Offsets := make(map[swire.AssetName]indexer.AssetOffsets)
 	for _, info := range result.Data.Assets {
 		Assets.Add(info.ToAssetInfo())
-		Offsets[info.AssetName] = info.Offsets
+		if len(info.Offsets) != 0 {
+			Offsets[info.AssetName] = info.Offsets
+		}
 	}
 
 	output := TxOutput{
@@ -148,6 +150,7 @@ func (p *IndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 
 	return &output, nil
 }
+
 
 func (p *IndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, error) {
 	url := p.GetUrl("/v3/ascend/" + utxo)

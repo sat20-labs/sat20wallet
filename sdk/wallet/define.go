@@ -3,7 +3,7 @@ package wallet
 import "math"
 
 const (
-	SOFTWARE_VERSION = "0.0.67"
+	SOFTWARE_VERSION = "0.0.78"
 	DB_VERSION       = "0.0.1"
 )
 
@@ -44,4 +44,9 @@ const (
 	POOL_INIT_PLAIN_SATS int64 = 100000
 
 	REST_SERVER_PORT string = "9529"
+
+
+	MSG_FEE    string = "fee"
+	MSG_DEPLOY string = "deploy"
+	MSG_MINT   string = "mint"
 )

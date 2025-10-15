@@ -156,6 +156,65 @@ func ParseStandardAnchorScript(script []byte) (*AnchorData, error) {
 }
 
 
+func CheckAnchorPkScript(anchorPkScript []byte) (*AnchorData, []byte, error) {
+	data, err := ParseStandardAnchorScript(anchorPkScript)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	invoice, err := StandardAnchorScript(data.Utxo, data.WitnessScript, data.Value, data.Assets)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	pkScript, err := utils.WitnessScriptHash(data.WitnessScript)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	addrType, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, GetChainParam_SatsNet())
+	if err != nil {
+		return nil, nil, err
+	}
+	if addrType != txscript.WitnessV0ScriptHashTy {
+		return nil, nil, fmt.Errorf("invalid addr type %d", addrType)
+	}
+	Log.Infof("multi-signed address: %s", addresses[0].EncodeAddress()) // 多签地址，也就是L2锁定对应聪的地址
+
+	addrType2, addresses2, _, err := txscript.ExtractPkScriptAddrs(data.WitnessScript, GetChainParam_SatsNet())
+	if err != nil {
+		return nil, nil, err
+	}
+	if addrType2 != txscript.MultiSigTy {
+		return nil,nil, fmt.Errorf("invalid addr type %d", addrType)
+	}
+
+	if len(addresses2) != 2 {
+		return nil, nil, fmt.Errorf("invalid multi-sig addresses")
+	}
+	pubkeyBytes0 := addresses2[0].ScriptAddress()
+	pubkeyBytes1 := addresses2[1].ScriptAddress()
+
+	pubkeyA, err := utils.BytesToPublicKey(pubkeyBytes0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("BytesToPublicKey failed. %v", err)
+	}
+	pubkeyB, err := utils.BytesToPublicKey(pubkeyBytes1)
+	if err != nil {
+		return nil, nil, fmt.Errorf("BytesToPublicKey failed. %v", err)
+	}
+	pubkey := pubkeyBytes0
+	if !VerifyMessage(pubkeyA, invoice, data.Sig) {
+		if VerifyMessage(pubkeyB, invoice, data.Sig) {
+			pubkey = pubkeyBytes1
+			// 签名的是bootstrap node或者core node，可以通过索引器确认
+		} else {
+			return nil, nil, fmt.Errorf("anchorScript VerifyMessage failed")
+		}
+	}
+	return data, pubkey, nil
+}
+
 func DecodeSatsMsgTx(txHex string) (*wire.MsgTx, error) {
 	// 1. 将十六进制字符串解码为字节切片
 	txBytes, err := hex.DecodeString(txHex)

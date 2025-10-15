@@ -102,8 +102,8 @@ func AddrToPkScript(addr string, netParams *chaincfg.Params) ([]byte, error) {
 	return txscript.PayToAddrScript(address)
 }
 
-func AddressFromPkScript(pkScript []byte, netParams *chaincfg.Params) (string, error) {
-	_, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, netParams)
+func AddrFromPkScript(pkScript []byte) (string, error) {
+	_, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, GetChainParam())
 	if err != nil {
 		return "", err
 	}
@@ -125,6 +125,25 @@ func PayToWitnessPubKeyHashScript(pubKeyHash []byte) ([]byte, error) {
 	return txscript.NewScriptBuilder().AddOp(txscript.OP_0).AddData(pubKeyHash).Script()
 }
 
+func HexPubKeyToP2TRAddress(pubKey []byte) string {
+	key, err := btcec.ParsePubKey(pubKey)
+	if err != nil {
+		Log.Errorf("ParsePubKey failed. %v", err)
+		return ""
+	}
+
+	return PublicKeyToP2TRAddress(key)
+}
+
+func HexPubKeyToP2TRPkScript(pubKey []byte) ([]byte, error) {
+	key, err := btcec.ParsePubKey(pubKey)
+	if err != nil {
+		Log.Errorf("ParsePubKey failed. %v", err)
+		return nil, err
+	}
+
+	return GetP2TRpkScript(key)
+}
 
 func PublicKeyToP2TRAddress(pubKey *btcec.PublicKey) string {
 	taprootPubKey := txscript.ComputeTaprootKeyNoScript(pubKey)

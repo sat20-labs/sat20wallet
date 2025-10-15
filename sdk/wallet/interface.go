@@ -54,6 +54,10 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 	_chain = cfg.Chain
 	_mode = cfg.Mode
 
+	if cfg.Chain == "testnet" {
+		LAUNCHPOOL_MIN_SATS = 1000
+	}
+
 	mgr.db = db
 	if mgr.db == nil {
 		Log.Errorf("NewKVDB failed")
