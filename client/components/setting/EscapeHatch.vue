@@ -45,14 +45,10 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <template v-for="(input, index) in parsedInputs" :key="`input-${index}`">
-                    <template v-if="input.Assets && input.Assets.length">
-                      <tr v-for="(asset, assetIndex) in input.Assets" :key="`input-asset-${assetIndex}`">
-                        <td class="truncate">{{ asset.Name.Ticker }}</td>
-                        <td class="text-right truncate">{{ asset.Amount }}</td>
-                      </tr>
-                    </template>
-                  </template>
+                  <tr v-for="(asset, index) in mergedChannelAssets" :key="`merged-asset-${index}`">
+                    <td class="truncate">{{ asset.ticker }}</td>
+                    <td class="text-right truncate">{{ asset.amount }}</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
@@ -204,6 +200,37 @@ const parsedOutputs = computed(() => {
   }
 });
 
+// 合并通道中的资产
+const mergedChannelAssets = computed(() => {
+  if (!parsedInputs.value) return [];
+  
+  const assetMap = new Map();
+  
+  // 遍历所有输入中的资产
+  parsedInputs.value.forEach((input: any) => {
+    if (input.Assets && input.Assets.length) {
+      input.Assets.forEach((asset: any) => {
+        const ticker = asset.Name.Ticker;
+        const amount = BigInt(asset.Amount);
+        
+        if (assetMap.has(ticker)) {
+          // 如果已存在该资产，累加数量
+          assetMap.set(ticker, assetMap.get(ticker) + amount);
+        } else {
+          // 如果不存在，添加新资产
+          assetMap.set(ticker, amount);
+        }
+      });
+    }
+  });
+  
+  // 转换为数组格式
+  return Array.from(assetMap.entries()).map(([ticker, amount]) => ({
+    ticker,
+    amount: amount.toString()
+  }));
+});
+
 // 添加 formatAssets 函数
 const formatAssets = (assets: any): string => {
   if (!assets) return '-';
@@ -246,7 +273,7 @@ watch(channelId, async () => {
 
   if (!channelId.value) return
   const [err, result] = await satsnetStp.getCommitTxAssetInfo(channelId.value)
-  console.log('result', result)
+  console.log('channel result', result)
   console.log('err', err)
   if (err) {
     return false

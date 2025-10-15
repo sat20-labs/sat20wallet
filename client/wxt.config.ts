@@ -42,11 +42,11 @@ export default defineConfig({
   vite: () => ({
     esbuild: {
       target: 'esnext',
-      // drop:
-      //   process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [],
+      drop:
+        process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [],
     },
     plugins: [],
-    logLevel: 'info' as const,
+    logLevel: process.env.NODE_ENV === 'production' ? ('error' as const) : ('info' as const),
     optimizeDeps: {
       esbuildOptions: {
         supported: { 'top-level-await': true },

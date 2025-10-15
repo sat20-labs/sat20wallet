@@ -1,30 +1,17 @@
 <template>
   <TableRow>
     <TableCell v-if="showCheckbox">
-      <Checkbox 
-        :model-value="isSelected"
-        @update:model-value="() => handleToggleSelect()"
-      />
+      <Checkbox :model-value="isSelected" @update:model-value="() => handleToggleSelect()" />
     </TableCell>
     <TableCell class="truncate">
-      <a
-        :href="explorerUrl"
-        target="_blank"
-        class="text-blue-400 underline"
-      >
+      <a :href="explorerUrl" target="_blank" class="text-blue-400 underline">
         {{ displayUtxo }}
       </a>
     </TableCell>
     <TableCell class="truncate">{{ utxo.reason || '-' }}</TableCell>
     <TableCell class="truncate">{{ formattedLockedTime }}</TableCell>
     <TableCell>
-      <Button 
-        v-if="!showCheckbox"
-        size="sm" 
-        variant="default" 
-        :loading="isUnlocking" 
-        @click="handleUnlock"
-      >
+      <Button v-if="!showCheckbox" size="sm" variant="default" :loading="isUnlocking" @click="handleUnlock">
         {{ t('utxoManager.unlockBtn') }}
       </Button>
       <span v-else class="text-sm text-zinc-400">{{ t('utxoManager.selectToUnlock') }}</span>
@@ -67,26 +54,17 @@ const displayUtxo = computed(() => hideAddress(props.utxo.utxo))
 
 const explorerUrl = computed(() => {
   // 如果是SatoshiNet链，跳转到sat20浏览器
-  if (props.chain === Chain.SATNET) {
-    const baseUrl = props.network === 'mainnet' 
-      ? 'https://mainnet.sat20.org/browser/app/#/explorer/utxo'
-      : 'https://testnet.sat20.org/browser/app/#/explorer/utxo'
-    
-    return `${baseUrl}/${props.utxo.utxo}`
-  }
-  
-  // 如果是BTC链，使用mempool
-  return generateMempoolUrl({
-    network: props.network,
-    path: `tx/${props.utxo.txid}`,
-    chain: props.chain,
-    env: env.value
-  })
+  const baseUrl = props.network === 'testnet'
+    ? 'https://testnet.sat20.org/browser/app/#/explorer/utxo'
+    : 'https://mainnet.sat20.org/browser/app/#/explorer/utxo'
+
+  return `${baseUrl}/${props.utxo.utxo}`
+
 })
 
-const formattedLockedTime = computed(() => 
-  props.utxo.lockedTime 
-    ? new Date(props.utxo.lockedTime * 1000).toLocaleString() 
+const formattedLockedTime = computed(() =>
+  props.utxo.lockedTime
+    ? new Date(props.utxo.lockedTime * 1000).toLocaleString()
     : '-'
 )
 
