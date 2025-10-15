@@ -5,7 +5,7 @@
 <script lang="ts" setup>
 import { Button } from '@/components/ui/button'
 import { useWalletStore, useL1Store, useL2Store } from '@/store'
-import { Storage } from '@capacitor/storage';
+import { Storage } from '@/lib/storage-adapter';
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 
@@ -15,7 +15,7 @@ const l2Store = useL2Store()
 const router = useRouter()
 
 const deleteWallet = async () => {
-  await walletStore.deleteWallet()
+  await walletStore.deleteWallet(walletStore.walletId)
   l1Store.reset()
   l2Store.reset()
   await Storage.clear()

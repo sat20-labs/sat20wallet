@@ -2,7 +2,6 @@ import { walletStorage } from '@/lib/walletStorage'
 import { Network, Balance } from '@/types'
 import { ordxApi } from '@/apis'
 import { psbt2tx } from '@/utils/btc'
-import stp from '@/utils/stp'
 import sat20Wallet from '@/utils/sat20'
 
 
@@ -218,7 +217,8 @@ class Service {
 
     return sat20Wallet.getFeeForDeployContract(templateName, content, feeRate)
   }
-  async getFeeForInvokeContract(url: string, invoke: string): Promise<[Error | undefined, { fee: any } | undefined]> {
+
+    async getFeeForInvokeContract(url: string, invoke: string): Promise<[Error | undefined, { fee: any } | undefined]> {
 
     return sat20Wallet.getFeeForInvokeContract(url, invoke)
   }

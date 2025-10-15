@@ -27,6 +27,8 @@ const routes = [
   { path: '/import', component: ImportWallet },
   { path: '/create', component: CreateWallet },
   { path: '/unlock', component: Unlock },
+
+
   
   {
     path: '/wallet',
@@ -90,23 +92,32 @@ const checkPassword = async () => {
     const passwordTime = walletStorage.getValue('passwordTime')
     if (passwordTime) {
       const now = new Date().getTime()
-      if (now - passwordTime > 5 * 60 * 1000) {
+      const timeDiff = now - passwordTime
+      if (timeDiff > 5 * 60 * 1000) {
         await walletStorage.setValue('password', null)
+        await walletStorage.setValue('locked', true)
       }
     }
   }
 }
 
-router.beforeEach(async (to, from) => {
-  console.time('router.beforeEach')
+router.beforeEach(async (to: any,) => {
   const walletStore = useWalletStore()
 
+  // 确保 walletStorage 已经从 localStorage 初始化
+  await walletStorage.initializeState()
+
   const hasWallet = walletStorage.getValue('hasWallet')
+  
+  // 在初始化后再检查密码时效性
   await checkPassword()
+  
   const password = walletStorage.getValue('password')
   const network = walletStorage.getValue('network')
+  // 从 walletStorage 读取最新的锁定状态，确保与存储同步
+  const isLocked = walletStorage.getValue('locked') ?? true
 
-  if (password && walletStore.locked) {
+  if (password && isLocked) {
     await walletStore.unlockWallet(password)
     await walletStore.setLocked(false)
     // if (network) {
@@ -115,29 +126,32 @@ router.beforeEach(async (to, from) => {
     // }
   }
 
+  // 重新获取锁定状态，因为可能在 unlockWallet 中被更新
+  const currentLocked = walletStorage.getValue('locked') ?? true
+
   if (to.path.startsWith('/wallet')) {
     if (hasWallet) {
-      if (walletStore.locked) {
-        console.timeEnd('router.beforeEach')
+      if (currentLocked) {
         return '/unlock?redirect=' + to.path
       }
     } else {
-      console.timeEnd('router.beforeEach')
       return '/'
     }
   } else if (to.path === '/unlock') {
+    // 如果用户已经解锁，重定向到钱包主页或指定页面
+    if (hasWallet && !currentLocked) {
+      const redirectPath = to.query.redirect as string
+      return redirectPath || '/wallet'
+    }
   } else {
     if (hasWallet) {
-      if (walletStore.locked) {
-        console.timeEnd('router.beforeEach')
+      if (currentLocked) {
         return '/unlock?redirect=' + to.path
       } else {
-        console.timeEnd('router.beforeEach')
         return '/wallet'
       }
     }
   }
-  console.timeEnd('router.beforeEach')
 })
 
 export default router

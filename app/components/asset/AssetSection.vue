@@ -37,7 +37,7 @@ import { useRoute } from 'vue-router'
 import { computed, reactive, watch, onMounted } from 'vue'
 
 // 导入缺失的 store
-import { useL2Store, useL1Store, useChannelStore } from '@/store'
+import { useL2Store, useL1Store } from '@/store'
 import { storeToRefs } from 'pinia'
 
 interface Props {
@@ -60,7 +60,6 @@ const emit = defineEmits(['change'])
 
 const l1Store = useL1Store()
 const l2Store = useL2Store()
-const channelStore = useChannelStore()
 const {
   uniqueAssetList: l1UniqueAssetList,
   sat20List: l1FtList,
@@ -75,65 +74,58 @@ const {
   runesList: l2RunesList,
   plainList: l2PlainList,
 } = storeToRefs(l2Store)
-const {
-  uniqueAssetList: ChannelUniqueAssetList,
-  sat20List: channelFtList,
-  brc20List: channelBrc20List,
-  runesList: channelRunesList,
-  plainList: channelPlainList,
-} = storeToRefs(channelStore)
 
 const uniqueAssetList = computed(() => {
   // return props.type === 'lock' ? l2UniqueAssetList.value : l1UniqueAssetList.value
-  if (props.type === 'lock' || props.type === 'l2_send') {
+  if (props.type === 'l2_send') {
     return l2UniqueAssetList.value
-  } else if (props.type === 'splicing_in' || props.type === 'l1_send') {
+  } else if (props.type === 'l1_send') {
     return l1UniqueAssetList.value
   } else {
-    return ChannelUniqueAssetList.value
+    return l2UniqueAssetList.value // 默认使用L2
   }
 })
 
 const plainUtxoList = computed(() => {
   let _list = []
-  if (props.type === 'lock' || props.type === 'l2_send') {
+  if (props.type === 'l2_send') {
     _list = l2PlainList.value
-  } else if (props.type === 'splicing_in' || props.type === 'l1_send') {
+  } else if (props.type === 'l1_send') {
     _list = l1PlainList.value
   } else {
-    _list = channelPlainList.value
+    _list = l2PlainList.value // 默认使用L2
   }
   return _list
 })
 console.log('plainUtxoList', plainUtxoList)
 
 const sat20List = computed(() => {
-  if (props.type === 'lock' || props.type === 'l2_send') {
+  if (props.type === 'l2_send') {
     return l2FtList.value
-  } else if (props.type === 'splicing_in' || props.type === 'l1_send') {
+  } else if (props.type === 'l1_send') {
     return l1FtList.value
   } else {
-    return channelFtList.value
+    return l2FtList.value // 默认使用L2
   }
 })
 
 const runesList = computed(() => {
-  if (props.type === 'lock' || props.type === 'l2_send') {
+  if (props.type === 'l2_send') {
     return l2RunesList.value
-  } else if (props.type === 'splicing_in' || props.type === 'l1_send') {
+  } else if (props.type === 'l1_send') {
     return l1RunesList.value
   } else {
-    return channelRunesList.value
+    return l2RunesList.value
   }
 })
 
 const brc20List = computed(() => {
-  if (props.type === 'lock' || props.type === 'l2_send') {
+  if (props.type === 'l2_send') {
     return l2Brc20List.value
-  } else if (props.type === 'splicing_in' || props.type === 'l1_send') {
+  } else if (props.type === 'l1_send') {
     return l1Brc20List.value
   } else {
-    return channelBrc20List.value
+    return l2RunesList.value
   }
 })
 

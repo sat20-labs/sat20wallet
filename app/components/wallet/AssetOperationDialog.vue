@@ -183,8 +183,8 @@
         </div>
       </div>
 
-      <!-- 新增：显示解锁提示 -->
-      <div v-if="!isResolving && props.operationType === 'unlock'" 
+      <!-- 新增：显示解锁提示（仅针对BTC资产） -->
+      <div v-if="!isResolving && props.operationType === 'unlock' && isBTCAsset" 
            class="mt-4 p-3 bg-yellow-900/20 rounded-lg border border-yellow-700">
         <div class="text-sm text-yellow-400 flex items-start gap-2">
           <Icon icon="lucide:alert-triangle" class="w-4 h-4 mt-0.5 flex-shrink-0" />
@@ -219,7 +219,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, toRefs } from 'vue'
+import { storeToRefs } from 'pinia'
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -289,6 +290,13 @@ const taprootAddress = ref('')
 
 const needsAddress = computed(() => {
   return props.operationType === 'send'
+})
+
+// 判断当前资产是否为BTC
+const isBTCAsset = computed(() => {
+  return props.assetType === '*' || 
+         props.assetKey === '::' || 
+         props.assetTicker === '::'
 })
 
 // 判断哪些操作需要显示 btcFeeRate
@@ -384,8 +392,8 @@ const setMaxAmount = () => {
   if (maxAmount.value) {
     let calculatedAmount = maxAmount.value
     
-    // 如果是 unlock 操作，需要减去 3000 sats 的预留费用
-    if (props.operationType === 'unlock') {
+    // 如果是 unlock 操作且是BTC资产，需要减去 3000 sats 的预留费用
+    if (props.operationType === 'unlock' && isBTCAsset.value) {
       const maxAmountNum = parseFloat(maxAmount.value)
       const reservedAmount = 3000
       calculatedAmount = Math.max(0, maxAmountNum - reservedAmount).toString()

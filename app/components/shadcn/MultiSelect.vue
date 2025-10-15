@@ -27,6 +27,7 @@
 
 <script setup lang='ts'>
 import { CaretSortIcon } from '@radix-icons/vue'
+import { computed } from 'vue'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 const props = defineProps<{

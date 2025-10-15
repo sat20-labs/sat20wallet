@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
 import { config as configMap } from '@/config'
 import { walletStorage } from '@/lib/walletStorage'
 

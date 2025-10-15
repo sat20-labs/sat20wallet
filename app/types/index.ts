@@ -28,3 +28,55 @@ export interface WalletData {
 
 // 导出节点质押相关类型
 export type { NodeStakeData } from './nodeStake'
+
+// --- UTXO Management for Ordinals ---
+export interface FailedUtxoInfo {
+  utxo: string
+  reason: string
+}
+
+export interface UnlockOrdinalsResp {
+  failedUtxos: FailedUtxoInfo[]
+}
+
+export interface LockedUtxoInfo {
+  utxo: string
+  txid: string
+  vout: string
+  reason?: string
+  lockedTime?: number
+}
+
+// API Response types for locked UTXOs
+export interface AssetName {
+  Protocol: string
+  Type: string
+  Ticker: string
+}
+
+export interface AssetOffset {
+  Start: number
+  End: number
+}
+
+export interface Asset {
+  Name: AssetName
+  Amount: string
+  Precision: number
+  BindingSat: number
+  Offsets: AssetOffset[]
+}
+
+export interface LockedUtxoApiResponse {
+  UtxoId: number
+  Outpoint: string
+  Value: number
+  PkScript: string
+  Assets: Asset[]
+}
+
+export interface LockedUtxosApiResponse {
+  code: number
+  msg: string
+  data: LockedUtxoApiResponse[]
+}

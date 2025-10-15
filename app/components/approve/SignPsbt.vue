@@ -62,7 +62,6 @@ import walletManager from '@/utils/sat20'
 import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store'
 import TxDetailSection from './TxDetailSection.vue' // Import the new component
-import stp from '@/utils/stp'
 // Define stricter types if possible for Input/Output/Asset structures
 interface AssetName {
   Protocol: string;
@@ -130,11 +129,11 @@ const getParsedPsbt = async () => {
   try {
     let result
     if (props.data.options?.chain === 'sat20') {
-      result = await stp.getTxAssetInfoFromPsbt_SatsNet(props.data.psbtHex, network.value)
+      result = await walletManager.getTxAssetInfoFromPsbt_SatsNet(props.data.psbtHex, network.value)
     } else {
       console.log('getTxAssetInfoFromPsbt', props.data.psbtHex, network.value);
-      
-      result = await stp.getTxAssetInfoFromPsbt(props.data.psbtHex, network.value)
+
+      result = await walletManager.getTxAssetInfoFromPsbt(props.data.psbtHex, network.value)
     }
     const [err, res] = result
     console.log("Fetched PSBT Info:", res);

@@ -71,7 +71,6 @@
   );
   box-shadow: 0 0 20px rgba(255, 255, 255, 0.05);
   overflow: hidden;
-  margin: 8px;
   position: relative;
   color: #f8f8f8; /* 确保文字为浅色 */
 }
@@ -119,6 +118,7 @@ input, textarea, select {
   background-color: rgba(255, 255, 255, 0.05);
   color: #f8f8f8;
 }
+
 
 /* 确保链接颜色正确 */
 a {
@@ -254,7 +254,7 @@ input:focus {
 .custom-toaster [data-sonner-toast] button[aria-label="Close toast"] {
   position: absolute !important;
   top: -4px !important;
-  right: -14px !important;
+  right: 8px !important;
   left: auto !important;
   bottom: auto !important;
   z-index: 10;

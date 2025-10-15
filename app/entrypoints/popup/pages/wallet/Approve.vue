@@ -1,11 +1,20 @@
 <template>
-  <component
-    :is="componentName"
-    :data="data"
-    :metadata="metadata"
-    @cancel="cancel"
-    @confirm="confirm"
-  ></component>
+  <Dialog v-model:open="isVisible">
+    <DialogContent class="max-w-md">
+      <DialogHeader>
+        <DialogTitle>{{ title }}</DialogTitle>
+      </DialogHeader>
+      <div class="py-4">
+        <component
+          :is="componentName"
+          :data="data"
+          :metadata="metadata"
+          @cancel="cancel"
+          @confirm="confirm"
+        />
+      </div>
+    </DialogContent>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
@@ -19,9 +28,18 @@ import ApproveInvokeContractSatsNet from '@/components/approve/ApproveInvokeCont
 import ApproveInvokeContractV2SatsNet from '@/components/approve/ApproveInvokeContractV2SatsNet.vue'
 import ApproveInvokeContractV2 from '@/components/approve/ApproveInvokeContractV2.vue'
 import ApproveRegisterAsReferrer from '@/components/approve/ApproveRegisterAsReferrer.vue'
+import ApproveSendAssetsSatsNet from '@/components/approve/ApproveSendAssetsSatsNet.vue'
 import { Message } from '@/types/message'
+import { computed } from 'vue'
+import { useApproveStore } from '@/store'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
-const { approveData, approve, reject } = useApprove()
+const approveStore = useApproveStore()
 
 const approveComponentMap: any = {
   [Message.MessageAction.REQUEST_ACCOUNTS]: RequestAccounts,
@@ -34,28 +52,52 @@ const approveComponentMap: any = {
   [Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET]: ApproveInvokeContractV2SatsNet,
   [Message.MessageAction.INVOKE_CONTRACT_V2]: ApproveInvokeContractV2,
   [Message.MessageAction.REGISTER_AS_REFERRER]: ApproveRegisterAsReferrer,
+  [Message.MessageAction.SEND_ASSETS_SATSNET]: ApproveSendAssetsSatsNet,
 }
+
+const { currentRequest, isVisible } = approveStore
 
 const data = computed(() => {
-  return approveData.value?.data ?? {}
+  return currentRequest.value?.data ?? {}
 })
+
 const metadata = computed(() => {
-  return approveData.value?.metadata ?? {}
+  return currentRequest.value?.metadata ?? {}
 })
-console.log(approveData)
-console.log(approveComponentMap)
+
 const componentName = computed(() => {
-  if (!approveData.value?.action) {
+  if (!currentRequest.value?.action) {
     return null
   }
-  return approveComponentMap[approveData.value.action]
+  return approveComponentMap[currentRequest.value.action]
 })
-console.log(componentName)
 
-const confirm = (data: any) => {
-  approve(data)
+const title = computed(() => {
+  if (!currentRequest.value?.action) {
+    return 'Authorization Request'
+  }
+  // 简单的标题映射，可以根据需要扩展
+  const actionToTitle: Record<string, string> = {
+    [Message.MessageAction.REQUEST_ACCOUNTS]: 'Connect Wallet',
+    [Message.MessageAction.SWITCH_NETWORK]: 'Switch Network',
+    [Message.MessageAction.SIGN_MESSAGE]: 'Sign Message',
+    [Message.MessageAction.SIGN_PSBT]: 'Sign Transaction',
+    [Message.MessageAction.BATCH_SEND_ASSETS_SATSNET]: 'Send Assets',
+    [Message.MessageAction.DEPLOY_CONTRACT_REMOTE]: 'Deploy Contract',
+    [Message.MessageAction.INVOKE_CONTRACT_SATSNET]: 'Execute Contract',
+    [Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET]: 'Execute Contract',
+    [Message.MessageAction.INVOKE_CONTRACT_V2]: 'Execute Contract',
+    [Message.MessageAction.REGISTER_AS_REFERRER]: 'Register as Referrer',
+    [Message.MessageAction.SEND_ASSETS_SATSNET]: 'Send Assets',
+  }
+  return actionToTitle[currentRequest.value.action] || 'Authorization Request'
+})
+
+const confirm = (result: any) => {
+  approveStore.confirm(result)
 }
+
 const cancel = () => {
-  reject()
+  approveStore.reject()
 }
 </script>

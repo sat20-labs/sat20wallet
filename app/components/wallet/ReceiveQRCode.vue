@@ -35,10 +35,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
-import { hideAddress } from '~/utils'
+import { ref, watch, onMounted, computed } from 'vue'
+import { hideAddress } from '@/utils'
 import QRCode from 'qrcode'
 import { toast } from '@/components/ui/toast-new'
+import { Icon } from '@iconify/vue'
 
 
 // Props for address and chain

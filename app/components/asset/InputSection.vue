@@ -76,7 +76,7 @@ import { Input } from '@/components/ui/input'
 import { FormItem } from '@/components/ui/form'
 import { PlusIcon, MinusIcon, Loader2Icon } from 'lucide-vue-next'
 import AssetSection from './AssetSection.vue'
-import { useL2Store, useL1Store, useChannelStore, useWalletStore } from '@/store'
+import { useL2Store, useL1Store, useWalletStore } from '@/store'
 import { storeToRefs } from 'pinia'
 
 interface Props {
@@ -111,11 +111,9 @@ const inputList = ref<
 ])
 const l1Store = useL1Store()
 const l2Store = useL2Store()
-const channelStore = useChannelStore()
 
 const { plainList: l1PlainList } = storeToRefs(l1Store)
 const { plainList: l2PlainList } = storeToRefs(l2Store)
-const { plainList: channelPlainList } = storeToRefs(channelStore)
 
 const plainList = computed(() => {
   if (type.value === 'lock') {
@@ -123,7 +121,8 @@ const plainList = computed(() => {
   } else if (type.value === 'splicing_in') {
     return l1PlainList.value
   } else {
-    return channelPlainList.value
+    // 默认返回 L2 列表，因为通道功能已移除
+    return l2PlainList.value
   }
 })
 

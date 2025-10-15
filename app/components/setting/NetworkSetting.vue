@@ -45,13 +45,13 @@
         <div class="text-sm text-muted-foreground mb-4">
           {{ $t('networkSetting.languageSwitch') }}
         </div>
-        <Select v-model="currentLanguage" @update:model-value="(value) => changeLanguage(value as string | null)">
+        <Select v-model="currentLanguage" @update:model-value="(value) => changeLanguage(value as Language | null)">
           <SelectTrigger class="max-w-[160px] bg-gray-900/30 mb-4">
             <SelectValue :placeholder="$t('networkSetting.selectLanguage')" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="en-US">English</SelectItem>
-            <SelectItem value="zh-CN">中文</SelectItem>
+            <SelectItem value="en">English</SelectItem>
+            <SelectItem value="zh">中文</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -62,9 +62,10 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { setLanguage } from '@/entrypoints/popup/main'
+import { setLanguage, type Language } from '@/main'
 import { Network } from '@/types'
 import { Label } from '@/components/ui/label'
+import { Icon } from '@iconify/vue'
 import {
   Select,
   SelectContent,
@@ -73,10 +74,9 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useWalletStore } from '@/store/wallet'
+import { storeToRefs } from 'pinia'
 import { useGlobalStore, type Env } from '@/store/global'
-import { Message } from '@/types/message'
-import stp from '@/utils/stp'
-import walletManager from '@/utils/sat20'
+import { restartApp } from '@/utils/app-restart'
 
 const isExpanded = ref(false)
 const globalStore = useGlobalStore()
@@ -87,21 +87,16 @@ const computedEnv = computed<Env>({
   get: () => globalStore.env,
   set: async (newValue) => {
     await globalStore.setEnv(newValue)
-
-    
-    await stp.release()
-    await walletManager.release()
-    window.location.reload()
+    restartApp()
   }
 })
 
 const { locale } = useI18n()
 const currentLanguage = ref(locale.value)
 
-const changeLanguage = (lang: string | null) => {
-  const language = lang as string | null;
-  if (language) {
-    setLanguage(language) // 调用 setLanguage 更新语言
+const changeLanguage = (lang: Language | null) => {
+  if (lang) {
+    setLanguage(lang) // 调用 setLanguage 更新语言
   }
 }
 </script>

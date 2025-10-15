@@ -19,6 +19,7 @@ import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
 import { useWalletStore } from '@/store'
+import { storeToRefs } from 'pinia'
 
 const router = useRouter()
 const walletStore = useWalletStore()

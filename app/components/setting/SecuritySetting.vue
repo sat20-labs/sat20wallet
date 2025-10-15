@@ -65,6 +65,7 @@ import { ref } from 'vue'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
+import { Icon } from '@iconify/vue'
 import {
   Select,
   SelectContent,

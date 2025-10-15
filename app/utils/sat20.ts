@@ -97,6 +97,12 @@ class WalletManager {
     return this._handleRequest('signMessage', msg)
   }
 
+  async signData(
+    data: string
+  ): Promise<[Error | undefined, { signature: string } | undefined]> {
+    return this._handleRequest('signData', data)
+  }
+
   async signPsbt(
     psbtHex: string,
     bool: boolean
@@ -136,9 +142,27 @@ class WalletManager {
   async sendAssets_SatsNet(
     destAddr: string,
     assetName: string,
-    amt: number
+    amt: number,
+    memo: string = ""
   ): Promise<[Error | undefined, string | undefined]> {
-    return this._handleRequest('sendAssets_SatsNet', destAddr, assetName, amt)
+    return this._handleRequest('sendAssets_SatsNet', destAddr, assetName, amt, memo)
+  }
+
+  async sendAssets(
+    address: string,
+    assetName: string,
+    amt: number,
+    feeRate: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('sendAssets', address, assetName, String(amt), String(feeRate))
+  }
+
+  async batchSendAssetsV2_SatsNet(
+    destAddr: string[],
+    assetName: string,
+    amtList: string[]
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('batchSendAssetsV2_SatsNet', destAddr, assetName, amtList)
   }
 
   async init(
@@ -146,6 +170,10 @@ class WalletManager {
     logLevel: number
   ): Promise<[Error | undefined, void | undefined]> {
     return this._handleRequest('init', config, logLevel)
+  }
+
+  async start(): Promise<[Error | undefined, void | undefined]> {
+    return this._handleRequest('start')
   }
 
   async release(): Promise<[Error | undefined, void | undefined]> {
@@ -368,18 +396,18 @@ class WalletManager {
   }
 
   // --- Asset Amount Methods ---
-  async getAssetAmount(
-    address: string,
-    assetName: string
-  ): Promise<[Error | undefined, { amount: number; value: number } | undefined]> {
-    return this._handleRequest('getAssetAmount', address, assetName)
+  async getAssetAmount(address: string, assetName: string): Promise<[Error | undefined, {
+    availableAmt: number,
+    lockedAmt: number
+  } | undefined]> {
+    return this._handleRequest('getAssetAmount', address, assetName);
   }
 
-  async getAssetAmount_SatsNet(
-    address: string,
-    assetName: string
-  ): Promise<[Error | undefined, { amount: number; value: number } | undefined]> {
-    return this._handleRequest('getAssetAmount_SatsNet', address, assetName)
+  async getAssetAmount_SatsNet(address: string, assetName: string): Promise<[Error | undefined, {
+    availableAmt: number,
+    lockedAmt: number
+  } | undefined]> {
+    return this._handleRequest('getAssetAmount_SatsNet', address, assetName);
   }
 
   // --- Contract Methods ---
@@ -403,6 +431,160 @@ class WalletManager {
     action: string
   ): Promise<[Error | undefined, { parameter: any } | undefined]> {
     return this._handleRequest('getParamForInvokeContract', templateName, action)
+  }
+
+  async invokeContract_SatsNet(
+    url: string,
+    invoke: string,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('invokeContract_SatsNet', url, invoke, feeRate)
+  }
+
+  async invokeContractV2_SatsNet(
+    url: string,
+    invoke: string,
+    assetName: string,
+    amt: string,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('invokeContractV2_SatsNet', url, invoke, assetName, amt, feeRate)
+  }
+
+  async registerAsReferrer(
+    name: string,
+    feeRate: number
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('registerAsReferrer', name, feeRate.toString())
+  }
+
+  async bindReferrerForServer(
+    referrerName: string,
+    serverPubKey: string
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('bindReferrerForServer', referrerName, serverPubKey)
+  }
+
+  async getAllRegisteredReferrerName(
+    pubkey: string
+  ): Promise<[Error | undefined, { names: string[] } | undefined]> {
+    return this._handleRequest('getAllRegisteredReferrerName', pubkey)
+  }
+
+  async deployContract_Remote(
+    templateName: string,
+    content: string,
+    feeRate: string,
+    bol: boolean
+  ): Promise<[Error | undefined, { txId: string; resvId: string } | undefined]> {
+    return this._handleRequest('deployContract_Remote', templateName, content, feeRate, bol)
+  }
+
+  async deposit(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    utxos: string[],
+    fees: string[],
+    feeRate: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest(
+      'deposit',
+      destAddr,
+      assetName,
+      amt,
+      utxos,
+      fees,
+      String(feeRate)
+    )
+  }
+
+  async withdraw(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    utxos: string[],
+    fees: string[],
+    feeRate: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest(
+      'withdraw',
+      destAddr,
+      assetName,
+      amt,
+      utxos,
+      fees,
+      String(feeRate)
+    )
+  }
+
+  async getTxAssetInfoFromPsbt(
+    psbtHex: string,
+    network: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getTxAssetInfoFromPsbt', psbtHex, network)
+  }
+
+  async getTxAssetInfoFromPsbt_SatsNet(
+    psbtHex: string,
+    network: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getTxAssetInfoFromPsbt_SatsNet', psbtHex, network)
+  }
+
+  async getCommitTxAssetInfo(
+    channelId: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getCommitTxAssetInfo', channelId)
+  }
+
+  async getTickerInfo(
+    asset: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getTickerInfo', asset)
+  }
+
+  async batchSendAssets_SatsNet(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    n: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('batchSendAssets_SatsNet', destAddr, assetName, amt, n)
+  }
+
+  async batchSendAssets(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    n: number,
+    feeRate: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('batchSendAssets', destAddr, assetName, amt, n, feeRate.toString())
+  }
+
+  async invokeContractV2(
+    url: string,
+    invoke: string,
+    assetName: string,
+    amt: string,
+    unitPrice: number,
+    serviceFee: number,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('invokeContractV2', url, invoke, assetName, amt, unitPrice, serviceFee, feeRate)
+  }
+
+  async stakeToBeMiner(
+    bCoreNode: boolean,
+    btcFeeRate: string
+  ): Promise<[Error | undefined, {
+    txId: string,
+    resvId: string,
+    assetName: string,
+    amt: string
+  } | undefined]> {
+    return this._handleRequest('stakeToBeMiner', bCoreNode, btcFeeRate)
   }
 }
 

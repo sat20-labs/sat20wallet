@@ -32,7 +32,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import {
   Select,
   SelectContent,
@@ -40,10 +40,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Icon } from '@iconify/vue'
 import { useGlobalStore, type Env } from '@/store/global'
-import { Message } from '@/types/message'
-import stp from '@/utils/stp'
-import walletManager from '@/utils/sat20'
 const isExpanded = ref(false)
 const globalStore = useGlobalStore()
 
@@ -51,10 +49,6 @@ const computedEnv = computed<Env>({
   get: () => globalStore.env,
   set: async (newValue) => {
     await globalStore.setEnv(newValue)
-
-    
-    await stp.release()
-    await walletManager.release()
     window.location.reload()
   }
 })

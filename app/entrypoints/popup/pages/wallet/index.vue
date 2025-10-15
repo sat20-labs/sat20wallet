@@ -2,6 +2,7 @@
   <LayoutHome class="">
     <WalletHeader />
 
+    
     <!-- 没有名字时的提醒区域 -->
     <div v-if="!currentUserName"
       class="flex items-center justify-between p-3 rounded-lg bg-muted/50 border border-muted mb-3">
@@ -64,23 +65,23 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
-import { hideAddress } from '~/utils'
+import { hideAddress } from '@/utils'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import WalletHeader from '@/components/wallet/HomeHeader.vue'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
-import ChannelCard from '@/components/wallet/ChannelCard.vue'
 
 import SubWalletSelector from '@/components/wallet/SubWalletSelector.vue'
 import CopyButton from '@/components/common/CopyButton.vue'
-import { useWalletStore, useL1Store, useChannelStore } from '@/store'
+import { useWalletStore, useL1Store } from '@/store'
 import { useL1Assets, useL2Assets } from '@/composables'
 import { useAssetOperations } from '@/composables/useAssetOperations'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from '@/components/ui/toast-new'
-import satsnetStp from '@/utils/stp'
+import walletManager from '@/utils/sat20'
 import AssetList from '@/components/wallet/AssetList.vue'
 import BalanceSummary from '@/components/asset/BalanceSummary.vue'
 import { useTranscendingModeStore } from '@/store'
@@ -109,9 +110,6 @@ const { refreshL1Assets } = useL1Assets()
 const { refreshL2Assets } = useL2Assets()
 
 let { address, network } = storeToRefs(walletStore)
-
-const channelStore = useChannelStore()
-const { channel } = storeToRefs(channelStore)
 const { plainList, sat20List, brc20List, runesList } = storeToRefs(l1Store)
 
 // 状态管理
@@ -139,8 +137,6 @@ console.log('address', address)
 const showAddress = computed(() => {
   if (selectedChainLabel.value === 'bitcoin') {
     return address.value
-  } else if (selectedChainLabel.value === 'channel') {
-    return channel.value?.channelId
   } else if (selectedChainLabel.value === 'satoshinet') {
     return address.value
   }
@@ -153,14 +149,6 @@ const mempoolUrl = computed(() => {
       network: network.value,
       chain: Chain.BTC,
       path: `address/${address.value}`,
-    })
-  } else if (selectedChainLabel.value === 'channel') {
-    return generateMempoolUrl({
-      network: network.value,
-
-      path: `address/${channel.value?.channelId || address.value}`,
-      chain: Chain.BTC,
-      env: env.value,
     })
   } else if (selectedChainLabel.value === 'satoshinet') {
     return generateMempoolUrl({
@@ -217,6 +205,7 @@ const router = useRouter()
 const route = useRoute()
 const { toast } = useToast()
 
+
 // 资产操作
 const {
   handleSend,
@@ -249,7 +238,7 @@ const channelCallback = async (e: any) => {
   console.log('channel callback')
   let msg = ''
   const channelHandler = async () => {
-    await channelStore.getAllChannels()
+    // await channelStore.getAllChannels() - Removed channel store
   }
   switch (e) {
     case 'splicingin':
@@ -323,7 +312,7 @@ const tabChange = (value: string) => {
 // 生命周期钩子
 onMounted(async () => {
   handleRouteChange()
-  satsnetStp.registerCallback(channelCallback)
+  walletManager.registerCallback(channelCallback)
 
   // 设置当前地址并校验名字
   if (address.value) {

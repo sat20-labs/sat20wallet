@@ -63,8 +63,18 @@
                 class="mr-2 h-4 w-4 animate-spin"
                 icon="mdi:loading"
               />
-              {{ $t('unlock.unlockButton') }}
+              {{ t('unlock.unlockButton') }}
             </Button>
+            <!-- 临时测试按钮 -->
+            <!-- <Button
+              type="button"
+              @click="testToast"
+              variant="outline"
+              size="lg"
+              class="mt-2"
+            >
+              Test Toast
+            </Button> -->
           </div>
         </form>
       </div>
@@ -90,11 +100,11 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 
-import { useChannelStore, useWalletStore } from '@/store'
+import { useWalletStore } from '@/store'
 import walletManager from '@/utils/sat20'
 import { unlockPasswordSchema } from '@/utils/validation'
-import satsnetStp from '@/utils/stp'
 import { hashPassword } from '@/utils/crypto'
+import { useI18n } from 'vue-i18n'
 
 const formSchema = toTypedSchema(unlockPasswordSchema)
 
@@ -103,10 +113,10 @@ const form = useForm({
 })
 
 const walletStore = useWalletStore()
-const channelStore = useChannelStore()
 const router = useRouter()
 const route = useRoute()
 const { toast } = useToast()
+const { t } = useI18n()
 const loading = ref(false)
 
 const showPassword = ref(false)
@@ -116,6 +126,7 @@ const showToast = (
   title: string,
   description: string | Error
 ) => {
+  console.log('showToast called with:', { variant, title, description })
   toast({
     variant,
     title,
@@ -124,26 +135,59 @@ const showToast = (
   })
 }
 
+// 测试函数
+const testToast = () => {
+  console.log('测试 toast 被调用')
+  showToast('destructive', t('common.error'), t('unlock.invalidPassword'))
+}
+
 const onSubmit = form.handleSubmit(async (values) => {
   loading.value = true
 
   // Hash the password using the imported function
   const hashedPassword = await hashPassword(values.password)
 
+  console.log('开始解锁，密码哈希值:', hashedPassword.substring(0, 20) + '...')
+
   const [err, result] = await walletStore.unlockWallet(hashedPassword)
 
+  console.log('解锁结果:', { err, result })
+
   if (!err && result) {
+    console.log('解锁成功，准备跳转')
     const redirectPath = route.query.redirect as string
     router.push(redirectPath || '/wallet')
   } else if (err) {
-    showToast(
-      'destructive',
-      'Error',
-      err instanceof Error ? err.message : JSON.stringify(err)
-    )
+    console.log('解锁失败，错误对象:', err)
+    // 使用本地化的错误消息
+    const errorMessage = err instanceof Error ? err.message : String(err)
+    console.log('错误消息:', errorMessage)
+    let localizedMessage = t('unlock.unlockFailed')
+
+    // 检查是否是密码错误
+    if (errorMessage.includes('invalid password') || errorMessage.includes('密码错误')) {
+      localizedMessage = t('unlock.invalidPassword')
+      console.log('检测到密码错误，使用本地化消息:', localizedMessage)
+    } else if (errorMessage.includes('failed') || errorMessage.includes('失败')) {
+      localizedMessage = t('unlock.unlockFailed')
+      console.log('检测到一般失败，使用本地化消息:', localizedMessage)
+    } else {
+      // 如果是其他错误，显示原始错误消息
+      localizedMessage = errorMessage
+      console.log('其他错误，使用原始消息:', localizedMessage)
+    }
+
+    console.log('准备显示 toast，参数:', {
+      variant: 'destructive',
+      title: t('common.error'),
+      description: localizedMessage
+    })
+
+    showToast('destructive', t('common.error'), localizedMessage)
     loading.value = false
   } else {
-    showToast('destructive', 'Error', 'Failed to unlock wallet')
+    console.log('未知错误：无错误也无结果')
+    showToast('destructive', t('common.error'), t('unlock.unlockFailed'))
     loading.value = false
   }
 })

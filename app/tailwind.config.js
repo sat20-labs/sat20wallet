@@ -2,11 +2,10 @@
 module.exports = {
   darkMode: ['class'],
   content: [
-    './entrypoints/**/*.{ts,tsx,vue}',
-    './components/**/*.{ts,tsx,vue}',
-    './app/**/*.{ts,tsx,vue}',
-    './src/**/*.{ts,tsx,vue}',
-	],
+    './index.html',
+    './entrypoints/**/*.{vue,js,ts,jsx,tsx}',
+    './components/**/*.{vue,js,ts,jsx,tsx}',
+  ],
   theme: {
   	extend: {
   		colors: {

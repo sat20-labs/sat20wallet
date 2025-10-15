@@ -4,7 +4,6 @@ import { storeToRefs } from 'pinia'
 import { ordxApi, satnetApi } from '@/apis'
 import { parallel } from 'radash'
 import { useL2Store, useWalletStore } from '@/store'
-import satsnetStp from '@/utils/stp'
 interface AssetItem {
   id: string
   key: string
@@ -95,16 +94,6 @@ export const useL2Assets = () => {
         if (item.Name.Type === 'n') {
           continue
         }
-        // if (key !== '::') {
-        //   const [err, res] = await satsnetStp.getTickerInfo(key)
-
-        //   if (res?.ticker) {
-        //     const { ticker } = res
-        //     const result = JSON.parse(ticker)
-        //     console.log('l2 ticker result', result)
-        //     label = result?.name.Ticker || label
-        //   }
-        // }
         allAssetList.value.push({
           id: key,
           key,

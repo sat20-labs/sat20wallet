@@ -39,7 +39,8 @@ const props = defineProps({
   },
   mode: {
     type: String as PropType<TranscendingMode>,
-    required: true
+    required: false,
+    default: 'poolswap'
   }
 })
 

@@ -91,9 +91,10 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import stp from '@/utils/stp'
+import walletManager from '@/utils/sat20'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
+import { Icon } from '@iconify/vue'
 
 import { Button } from '@/components/ui/button'
 
@@ -103,6 +104,7 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store/wallet'
+import { storeToRefs } from 'pinia'
 import { hideAddress, generateMempoolUrl } from '@/utils'
 import { nodeStakeStorage } from '@/lib/nodeStakeStorage'
 
@@ -149,7 +151,7 @@ async function confirmStake() {
   resultMsg.value = ''
   showConfirm.value = false
   try {
-    const [err, res] = await stp.stakeToBeMiner(pendingCore, btcFeeRate.value.toString())
+    const [err, res] = await walletManager.stakeToBeMiner(pendingCore, btcFeeRate.value.toString())
     console.log('res', res);
 
     if (err) {

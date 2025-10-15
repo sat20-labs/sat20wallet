@@ -1,4 +1,4 @@
-import { Storage } from '@capacitor/storage';
+import { Storage } from './storage-adapter';
 import { NodeStakeData } from '@/types'
 
 // 存储键的格式

@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
+import { ref, computed, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { ordxApi, satnetApi } from '@/apis'
 import { parallel } from 'radash'
-import satsnetStp from '@/utils/stp'
 import { useL1Store, useWalletStore } from '@/store'
-import { Chain } from '@/types'
 interface AssetItem {
   id: string
   key: string
@@ -101,17 +101,6 @@ export const useL1Assets = () => {
         if (item.Name.Type === 'n') {
           continue
         }
-        // if (key !== '::') {
-        //   const [err, res] = await satsnetStp.getTickerInfo(key)
-        //   // console.log('ticker res', res)
-        //   if (res?.ticker) {
-        //     const { ticker } = res
-        //     const result = JSON.parse(ticker)
-        //     console.log('ticker result', result)
-
-        //     label = result?.name.Ticker || label
-        //   }
-        // }
         allAssetList.value.push({
           id: key,
           key,

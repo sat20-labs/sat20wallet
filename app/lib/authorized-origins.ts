@@ -1,4 +1,4 @@
-import { Storage } from '@capacitor/storage';
+import { Storage } from './storage-adapter';
 
 const AUTHORIZED_ORIGINS_KEY = 'local:authorized_origins';
 
@@ -19,6 +19,10 @@ export const addAuthorizedOrigin = async (origin: string): Promise<void> => {
 
 // 验证来源是否授权
 export const isOriginAuthorized = async (origin: string): Promise<boolean> => {
+  const selfOrigin = window.location.origin;
+  if (origin === selfOrigin) {
+    return true
+  }
   const origins = await getAuthorizedOrigins();
   return origins.includes(origin);
 }; 

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAT20 Bridge Test</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="max-w-2xl mx-auto">
+        <h1 class="text-2xl font-bold mb-6">SAT20 DApp Bridge 测试</h1>
+
+        <div class="bg-white rounded-lg shadow p-6 mb-6">
+            <h2 class="text-lg font-semibold mb-4">状态</h2>
+            <div id="status" class="text-sm">检查中...</div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow p-6">
+            <h2 class="text-lg font-semibold mb-4">测试</h2>
+            <div class="space-y-2">
+                <button onclick="testGetAccounts()" class="bg-blue-500 text-white px-4 py-2 rounded mr-2">
+                    获取账户
+                </button>
+                <button onclick="testGetNetwork()" class="bg-green-500 text-white px-4 py-2 rounded">
+                    获取网络
+                </button>
+            </div>
+            <div id="results" class="mt-4 text-sm font-mono bg-gray-50 p-3 rounded min-h-[100px]"></div>
+        </div>
+    </div>
+
+    <script>
+        let testResults = [];
+
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            testResults.push(`[${timestamp}] ${message}`);
+            updateResults();
+        }
+
+        function updateResults() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = testResults.join('<br>');
+            resultsDiv.scrollTop = resultsDiv.scrollHeight;
+        }
+
+        function checkProvider() {
+            const statusDiv = document.getElementById('status');
+
+            if (window.sat20) {
+                statusDiv.innerHTML = '✅ SAT20 Provider 已连接';
+                statusDiv.className = 'text-green-600 font-semibold';
+                const methods = Object.keys(window.sat20).filter(key => typeof window.sat20[key] === 'function');
+                log(`✅ SAT20 Provider 可用，方法数量: ${methods.length}`);
+                log(`📋 可用方法: ${methods.slice(0, 10).join(', ')}${methods.length > 10 ? '...' : ''}`);
+            } else {
+                statusDiv.innerHTML = '❌ SAT20 Provider 未找到';
+                statusDiv.className = 'text-red-600 font-semibold';
+                log('❌ SAT20 Provider 未检测到');
+            }
+        }
+
+        async function testGetAccounts() {
+            try {
+                log('🔍 测试 getAccounts...');
+                const accounts = await window.sat20.getAccounts();
+                log('✅ getAccounts 成功: ' + JSON.stringify(accounts));
+            } catch (error) {
+                log('❌ getAccounts 失败: ' + error.message);
+            }
+        }
+
+        async function testGetNetwork() {
+            try {
+                log('🔍 测试 getNetwork...');
+                const network = await window.sat20.getNetwork();
+                log('✅ getNetwork 成功: ' + JSON.stringify(network));
+            } catch (error) {
+                log('❌ getNetwork 失败: ' + error.message);
+            }
+        }
+
+        // 页面加载时检查
+        document.addEventListener('DOMContentLoaded', function() {
+            checkProvider();
+
+            // 定期重新检查
+            setInterval(checkProvider, 2000);
+        });
+    </script>
+</body>
+</html>

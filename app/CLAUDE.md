@@ -1,3 +1,139 @@
+# CLAUDE.md
+
+本文件为 Claude Code (claude.ai/code) 在此代码库中工作时提供指导。
+
+## 项目概述
+
+SAT20 钱包是一个基于 Vue 3、TypeScript 和 WXT 构建的比特币钱包浏览器扩展。它支持多链操作，包括比特币、SatoshiNet 和通道网络，全面管理 BTC、ORDX、Runes 和 BRC20 资产。
+
+## 开发命令
+
+```bash
+# 开发
+bun run dev              # 启动开发服务器
+bun run build            # 生产构建（包含类型检查）
+bun run compile          # 仅类型检查
+bun run preview          # 预览构建的应用
+
+# 移动端开发（Capacitor）
+bun run sync             # 与 Capacitor 同步移动构建
+npm run ionic:build      # Ionic 构建命令
+npm run ionic:serve      # Ionic 服务命令
+
+# 发布管理
+bun run bump-version     # 版本号升级
+bun run copy-latest-zip  # 复制最新构建包到发布目录
+```
+
+## 架构概述
+
+### 核心扩展结构
+- **WXT 框架**: 处理清单、构建和入口点的浏览器扩展框架
+- **入口点**: 多个扩展上下文（弹出窗口、内容脚本、后台）
+- **WASM 集成**: 编译为 WebAssembly 模块的核心钱包功能
+- **状态管理**: 跨扩展的 Pinia 存储响应式状态
+
+### 关键架构组件
+
+**WASM 模块** (`/public/wasm/`, `/utils/wasm.ts`)
+- `sat20wallet.wasm`: 核心比特币钱包操作
+- 通过 `loadWasm()` 在启动时异步加载
+
+**多环境配置** (`/config/`)
+- 环境特定配置（开发/测试/生产）
+- 测试网和主网之间的网络切换
+- 通过 `useGlobalStore` 管理
+
+**存储架构** (`/store/`)
+- `global.ts`: 环境配置和应用状态
+- `l1.ts`: 第一层（比特币）区块链操作
+- `l2.ts`: 第二层（SatoshiNet/通道）操作
+- `channel.ts`: 通道管理和操作
+- `wallet.ts`: 钱包状态和加密
+
+**API 层** (`/apis/`)
+- `ordx.ts`: Ordx API 集成用于资产数据
+- `satnet.ts`: SatoshiNet 网络 API
+- 通过 composables 协调数据获取
+
+**Composables 架构** (`/composables/`)
+- `useAssetActions.ts`: 资产转账和管理操作
+- `useL1Assets.ts`/`useL2Assets.ts`: 层特定的资产处理
+- `useNameManager.ts`: 域名解析系统
+- `useDAppBridge.ts`: DApp 通信桥接
+- `hooks/`: 批准和交易钩子
+
+### 扩展入口点
+
+**弹出窗口界面** (`/entrypoints/popup/`)
+- 用户交互的主钱包界面
+- 页面：钱包管理、设置、批准、接收
+- 与 Capacitor 集成以实现移动兼容性
+
+**DApp 集成** (`/entrypoints/popup/pages/dapp/`)
+- DApp 交互的浏览器界面
+- Web3 连接的通信桥接
+
+## 重要开发模式
+
+### WASM 初始化
+应用需要先加载 WASM 模块才能进行任何钱包操作：
+```javascript
+// main.ts - WASM 必须在应用挂载前加载
+loadWasm().then(() => {
+  const app = createApp(App)
+  // ... 应用设置
+})
+```
+
+### 环境和网络切换
+应用使用全局存储来管理环境和网络：
+```javascript
+const globalStore = useGlobalStore()
+// 访问当前配置
+const config = computed(() => configMap[globalStore.env])
+```
+
+### 域名解析
+钱包包含转账的自动域名解析功能：
+- 非比特币地址输入通过 Ordx API 解析
+- 在 `useNameManager.ts` 中实现
+- 集成到 `AssetOperationDialog.vue`
+
+### 资产操作流程
+1. 资产验证和余额检查
+2. 地址验证及域名解析回退
+3. 通过 WASM 模块构建交易
+4. 敏感操作的批准流程
+5. 执行和状态跟踪
+
+### 安全考虑
+- 钱包数据通过密码保护加密
+- 敏感操作需要明确批准
+- WASM 模块处理加密操作
+- DApp 通信的内容脚本隔离
+
+## 测试和质量
+
+- 启用 TypeScript 严格模式
+- 构建过程中通过 Vue TSC 进行类型检查
+- 通过 VeeValidate 和 Zod 模式进行组件验证
+- WASM 模块处理加密验证
+
+## 移动端支持
+
+应用通过 Capacitor 支持移动端部署：
+- 在 `capacitor.config.ts` 中配置
+- 移动构建工作流的 Ionic 命令
+- 移动屏幕的响应式设计考虑
+
+## 浏览器扩展特性
+
+- WXT 处理清单生成和扩展生命周期
+- DApp 通信的内容脚本注入
+- 持久操作的后台服务工作器
+- 主要用户交互的弹出窗口界面
+
 When asked to design UI & frontend interface
 When asked to design UI & frontend interface
 # Role
@@ -158,12 +294,12 @@ And present the layout in ASCII wireframe format, here are the guidelines of goo
 
 ### 2. Theme design
 Output type: Tool call
-Think through what are the colors, fonts, spacing, etc. 
+Think through what are the colors, fonts, spacing, etc.
 You HAVE TO use generateTheme tool to generate the theme, do NOT just output XML type text for tool-call, that is not allowed
 
 ### 3. Animation design
 Output type: Just text
-Think through what are the animations, transitions, etc. 
+Think through what are the animations, transitions, etc.
 
 ### 4. Generate html file for each UI component and then combine them together to form a single html file
 Output type: Tool call
@@ -319,7 +455,7 @@ aiMsg: 600ms bounce [Y+15→0, S0.95→1] +200ms
 typing: 1400ms ∞ [Y±8, α0.4→1] stagger+200ms
 status: 300ms ease-out [α0.6→1, S1→1.05→1]
 
-## Interface Transitions  
+## Interface Transitions
 sidebar: 350ms ease-out [X-280→0, α0→1]
 overlay: 300ms [α0→1, blur0→4px]
 input: 200ms [S1→1.01, shadow+ring] focus

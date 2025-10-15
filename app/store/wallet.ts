@@ -2,16 +2,11 @@ import { defineStore } from 'pinia'
 import { walletStorage } from '@/lib/walletStorage'
 import { Network, Chain, WalletData, WalletAccount } from '@/types'
 import walletManager from '@/utils/sat20'
-import stp from '@/utils/stp'
-import satsnetStp from '@/utils/stp'
-import { useChannelStore } from './channel'
 import { ref, computed, toRaw } from 'vue'
-import { sendNetworkChangedEvent } from '@/lib/utils'
+import { sendNetworkChangedEvent, sendAccountsChangedEvent } from '@/lib/utils'
 
 
 export const useWalletStore = defineStore('wallet', () => {
-  const channelStore = useChannelStore()
-
   const address = ref(walletStorage.getValue('address'))
   const publicKey = ref(walletStorage.getValue('pubkey'))
   const walletId = ref(walletStorage.getValue('walletId'))
@@ -22,15 +17,64 @@ export const useWalletStore = defineStore('wallet', () => {
   const password = ref(walletStorage.getValue('password'))
   const network = ref(walletStorage.getValue('network'))
   const chain = ref(walletStorage.getValue('chain'))
-  const locked = ref(true)
+  const locked = ref(walletStorage.getValue('locked') ?? true)
   const hasWallet = ref(!!walletStorage.getValue('hasWallet'))
   const localWallets = walletStorage.getValue('wallets');
   const wallets = ref<WalletData[]>(localWallets ? JSON.parse(JSON.stringify(localWallets)) : [])
-  console.log(wallets);
-  console.log(walletId);
+
+  // 添加全局切换状态管理
+  const isSwitchingWallet = ref(false)
+  const isSwitchingAccount = ref(false)
+
+  // 监听 walletStorage 状态变化，同步到 walletStore
+  walletStorage.subscribe((key, newValue, oldValue) => {
+    switch (key) {
+      case 'locked':
+        locked.value = newValue ?? true
+        break
+      case 'password':
+        password.value = newValue
+        break
+      case 'address':
+        address.value = newValue
+        break
+      case 'pubkey':
+        publicKey.value = newValue
+        break
+      case 'walletId':
+        walletId.value = newValue
+        break
+      case 'accountIndex':
+        accountIndex.value = newValue
+        break
+      case 'network':
+        network.value = newValue
+        break
+      case 'chain':
+        chain.value = newValue
+        break
+      case 'hasWallet':
+        hasWallet.value = !!newValue
+        break
+      case 'wallets':
+        wallets.value = newValue ? JSON.parse(JSON.stringify(newValue)) : []
+        break
+    }
+  })
   const wallet = computed(() => wallets.value.find(w => w.id === walletId.value))
   const accounts = computed(() => wallet.value?.accounts)
   const account = computed(() => wallet.value?.accounts.find(a => a.index === accountIndex.value))
+
+  // 安全的账户变更事件发送函数
+  const safeSendAccountsChangedEvent = async (accountsData: any) => {
+    try {
+      await sendAccountsChangedEvent(accountsData)
+    } catch (error) {
+      console.warn('sendAccountsChangedEvent failed:', error)
+      // 不中断主流程，仅记录警告
+    }
+  }
+
   const setAddress = async (value: string) => {
     address.value = value
     await walletStorage.setValue('address', value)
@@ -53,9 +97,11 @@ export const useWalletStore = defineStore('wallet', () => {
   const setBtcFeeRate = async (value: number) => {
     btcFeeRate.value = value
   }
+
   const setSatsnetFeeRate = async (value: number) => {
     satsnetFeeRate.value = value
   }
+
   const setPassword = async (value: string) => {
     await walletStorage.updatePassword(value)
     password.value = value
@@ -82,9 +128,6 @@ export const useWalletStore = defineStore('wallet', () => {
       console.error('Failed to send NETWORK_CHANGED message to background:', error)
     }
     return true;
-    // await stp.release()
-    // await walletManager.release()
-    // window.location.reload()
   }
 
   const setChain = async (value: Chain) => {
@@ -105,13 +148,33 @@ export const useWalletStore = defineStore('wallet', () => {
   const setFeeRate = (value: number) => {
     feeRate.value = value
   }
-  const switchWallet = async (walletId: string) => {
-    await walletManager.switchWallet(walletId, password.value as string)
-    await satsnetStp.switchWallet(walletId, password.value as string)
-    const currentAccount = wallets.value.find(w => w.id === walletId)?.accounts[0];
-    await setWalletId(walletId);
-    await switchToAccount(currentAccount?.index || 0);
-    await getWalletInfo()
+  const switchWallet = async (walletIdToSwitch: string) => {
+    // 如果正在切换，直接返回
+    if (isSwitchingWallet.value) {
+      console.log('Wallet switch already in progress, ignoring...')
+      return
+    }
+
+    try {
+      isSwitchingWallet.value = true
+      console.log('Starting wallet switch to:', walletIdToSwitch)
+
+      await walletManager.switchWallet(walletIdToSwitch, password.value as string)
+      const currentAccount = wallets.value.find(w => w.id === walletIdToSwitch)?.accounts[0];
+      await setWalletId(walletIdToSwitch);
+      await switchToAccount(currentAccount?.index || 0);
+      await getWalletInfo()
+
+      // 发送账户变更事件（非关键操作）
+      safeSendAccountsChangedEvent(wallets.value)
+
+      console.log('Wallet switch completed successfully')
+    } catch (error) {
+      console.error('Wallet switch failed:', error)
+      throw error
+    } finally {
+      isSwitchingWallet.value = false
+    }
   }
   const createWallet = async (password: string) => {
     const [err, res] = await walletManager.createWallet(password)
@@ -125,10 +188,7 @@ export const useWalletStore = defineStore('wallet', () => {
     await setHasWallet(true)
     await setLocked(false)
     await setChain(Chain.BTC)
-    await satsnetStp.importWallet(_mnemonic, password)
     await setPassword(password)
-    await satsnetStp.start()
-    await channelStore.getAllChannels()
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
     )
@@ -153,8 +213,6 @@ export const useWalletStore = defineStore('wallet', () => {
         }]
       })
       wallets.value = _wallets
-      console.log('createWallet', _wallets);
-
       await walletStorage.setValue('wallets', _wallets)
     }
     return [undefined, _mnemonic]
@@ -191,9 +249,6 @@ export const useWalletStore = defineStore('wallet', () => {
     // await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
     await setPassword(password)
-    await satsnetStp.importWallet(processedMnemonic, password)
-    await satsnetStp.start()
-    await channelStore.getAllChannels()
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
     )
@@ -219,9 +274,6 @@ export const useWalletStore = defineStore('wallet', () => {
     }
     wallets.value = _wallets
     await walletStorage.setValue('wallets', _wallets)
-    console.log('importWallet', _wallets);
-    console.log('wallet id', walletId);
-
     return [undefined, processedMnemonic]
   }
   const getWalletInfo = async () => {
@@ -241,17 +293,11 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const unlockWallet = async (password: string) => {
     const [err, result] = await walletManager.unlockWallet(password)
-    console.log('unlockWallet', err, result)
     if (!err && result) {
-      const { walletId: unlockedWalletId } = result
-      // await setWalletId(unlockedWalletId)
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
-      await satsnetStp.unlockWallet(password)
-      await satsnetStp.start()
       await switchToAccount(accountIndex.value)
-      await channelStore.getAllChannels()
     }
     return [err, result]
   }
@@ -308,7 +354,6 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const addAccount = async (name: string, accountId: number) => {
     await walletManager.switchAccount(accountId)
-    await satsnetStp.switchAccount(accountId)
     const [_, addressRes] = await walletManager.getWalletAddress(accountId)
     const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
     if (addressRes && pubkeyRes) {
@@ -324,27 +369,37 @@ export const useWalletStore = defineStore('wallet', () => {
       wallets.value = _wallets
       await walletStorage.setValue('wallets', _wallets)
       await setAccountIndex(accountId)
-      console.log(addressRes.address);
-
       await setAddress(addressRes.address)
-      console.log('importWallet', _wallets);
-      console.log('wallet id', walletId);
-      console.log('wallet id', await walletStorage.getValue('walletId'));
-
       await setPublickey(pubkeyRes.pubKey)
     }
   }
 
   const switchToAccount = async (accountId: number) => {
-    await walletManager.switchAccount(accountId)
-    await satsnetStp.switchAccount(accountId)
-    const [_, addressRes] = await walletManager.getWalletAddress(accountId)
-    const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
-    console.log('switchToAccount', await satsnetStp.getWallet());
-    if (addressRes && pubkeyRes) {
-      await setAccountIndex(accountId)
-      await setAddress(addressRes.address)
-      await setPublickey(pubkeyRes.pubKey)
+    // 如果正在切换账户，直接返回
+    if (isSwitchingAccount.value) {
+      console.log('Account switch already in progress, ignoring...')
+      return
+    }
+
+    try {
+      isSwitchingAccount.value = true
+      console.log('Starting account switch to:', accountId)
+
+      await walletManager.switchAccount(accountId)
+      const [_, addressRes] = await walletManager.getWalletAddress(accountId)
+      const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
+      if (addressRes && pubkeyRes) {
+        await setAccountIndex(accountId)
+        await setAddress(addressRes.address)
+        await setPublickey(pubkeyRes.pubKey)
+      }
+
+      console.log('Account switch completed successfully')
+    } catch (error) {
+      console.error('Account switch failed:', error)
+      throw error
+    } finally {
+      isSwitchingAccount.value = false
     }
   }
 
@@ -378,12 +433,73 @@ export const useWalletStore = defineStore('wallet', () => {
       }
     }
   }
-  console.log('wallets', wallets);
-  console.log('wallet', wallet);
-  console.log('accounts', accounts);
-  console.log('account', account);
-  console.log('walletid', walletId);
 
+  const signPsbt = async (psbtData: string): Promise<string> => {
+    if (!psbtData || typeof psbtData !== 'string') {
+      throw new Error('Invalid PSBT data: must be a non-empty string')
+    }
+
+    // Validate PSBT hex format (basic validation)
+    if (!/^[0-9a-fA-F]+$/.test(psbtData)) {
+      throw new Error('Invalid PSBT format: must be a valid hex string')
+    }
+
+    try {
+      let signedPsbt: string
+
+      // Use appropriate signing method based on current network/chain
+      if (chain.value === Chain.SATNET) {
+        const [error, result] = await walletManager.signPsbt_SatsNet(psbtData, true)
+        if (error) {
+          throw new Error(`Failed to sign PSBT on SatoshiNet: ${error.message}`)
+        }
+        signedPsbt = (result as any)?.psbt || (result as any) || ''
+      } else {
+        const [error, result] = await walletManager.signPsbt(psbtData, true)
+        if (error) {
+          throw new Error(`Failed to sign PSBT: ${error.message}`)
+        }
+        signedPsbt = (result as any)?.psbt || (result as any) || ''
+      }
+
+      if (!signedPsbt || typeof signedPsbt !== 'string') {
+        throw new Error('Invalid response from wallet manager')
+      }
+
+      return signedPsbt
+    } catch (error: any) {
+      console.error('PSBT signing error:', error)
+      throw new Error(`PSBT signing failed: ${error.message || 'Unknown error'}`)
+    }
+  }
+
+  const validateWallet = async (): Promise<boolean> => {
+    try {
+      if (!address.value || !walletId.value) {
+        return false
+      }
+
+      // Try to get wallet info to validate wallet state
+      await getWalletInfo()
+
+      return address.value.length > 0 && !!walletId.value
+    } catch (error) {
+      console.error('Wallet validation error:', error)
+      return false
+    }
+  }
+
+  const getFeeRate = (): number => {
+    // Return appropriate fee rate based on current chain
+    switch (chain.value) {
+      case Chain.BTC:
+        return btcFeeRate.value
+      case Chain.SATNET:
+        return satsnetFeeRate.value
+      default:
+        return feeRate.value
+    }
+  }
 
   return {
     address,
@@ -424,5 +540,10 @@ export const useWalletStore = defineStore('wallet', () => {
     setBtcFeeRate,
     satsnetFeeRate,
     setSatsnetFeeRate,
+    signPsbt,
+    validateWallet,
+    getFeeRate,
+    isSwitchingWallet,
+    isSwitchingAccount,
   }
 })

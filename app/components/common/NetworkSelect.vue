@@ -2,7 +2,7 @@
   <div>
     <Button size="xs" variant="outline" @click="isOpen = true" class="px-2 rounded-md">
       <!-- <Icon :icon="showNetwork?.icon" :class="showNetwork?.iconColor" />{{ showNetwork?.name }} -->
-      <Icon :icon="showNetwork?.icon" :class="showNetwork?.iconColor" class="w-5 h-5" />
+      <Icon :icon="showNetwork?.icon || ''" :class="showNetwork?.iconColor" class="w-5 h-5" />
       <ChevronDown class="h-4 w-4" />
     </Button>
 
@@ -39,11 +39,13 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { ChevronDown } from 'lucide-vue-next'
+import { Icon } from '@iconify/vue'
 import walletManager from '@/utils/sat20'
 import { Network } from '@/types'
 import { useWalletStore } from '@/store'
 import { ref, computed } from 'vue'
 import { storeToRefs } from 'pinia'
+import { restartApp } from '@/utils/app-restart'
 
 interface NetworkItem {
   name: string
@@ -72,12 +74,11 @@ const isOpen = ref(false) // 默认不打开对话框
 
 const selectNetwork = async (network: NetworkItem) => {
   console.log(network);
-  setTimeout(() => {
-    location.reload()
-  }, 600);
   await walletStore.setNetwork(network.value)
   isOpen.value = false // 选择后关闭对话框
-  
+
+  // 使用重启方法
+  restartApp()
 }
 
 const showNetwork = computed(() =>

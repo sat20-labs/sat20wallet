@@ -1,5 +1,5 @@
-import { Storage } from '@capacitor/storage';
 import { Network, Balance, Chain, WalletAccount, WalletData } from '@/types'
+import { Storage } from './storage-adapter'
 
 interface WalletState {
   env: 'dev' | 'test' | 'prd'
@@ -45,6 +45,7 @@ class WalletStorage {
   private storageType: 'local' | 'session'
   private listeners: Set<StateChangeCallback>
   private updatePromises: Map<StateKey, Promise<void>>
+  private initialized: boolean = false
 
   private constructor({
     storageType = 'local',
@@ -74,6 +75,10 @@ class WalletStorage {
 
   // 初始化状态
   public async initializeState(): Promise<void> {
+    if (this.initialized) {
+      return // 避免重复初始化
+    }
+
     const loadPromises = Object.keys(defaultState).map(async (key) => {
       const storageKey = key as keyof WalletState
       const { value } = await Storage.get({ key: this.getStorageKey(storageKey) })
@@ -85,6 +90,7 @@ class WalletStorage {
     })
 
     await Promise.all(loadPromises)
+    this.initialized = true
   }
 
   // 获取状态

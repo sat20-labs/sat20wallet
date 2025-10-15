@@ -103,7 +103,7 @@ import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { useToast } from '@/components/ui/toast-new'
-import stp from '@/utils/stp'
+import walletManager from '@/utils/sat20'
 
 interface Props {
   data: {
@@ -168,7 +168,7 @@ const getFee = async () => {
   feeError.value = false
   feeErrorMessage.value = ''
   try {
-    const [err, res] = await stp.getFeeForInvokeContract(
+    const [err, res] = await walletManager.getFeeForInvokeContract(
       props.data.url,
       props.data.invoke
     )
@@ -203,11 +203,15 @@ const confirm = async () => {
   isLoading.value = true
   invokeError.value = ''
   try {
-    const [err, res] = await stp.invokeContractV2(
+    const unitPrice = props.data?.metadata?.unitPrice || 0
+    const serviceFee = props.data?.metadata?.serviceFee || props.data?.serviceFee || 0
+    const [err, res] = await walletManager.invokeContractV2(
       props.data.url,
       props.data.invoke,
       props.data.assetName,
       props.data.amt.toString(),
+      unitPrice,
+      serviceFee,
       props.data.feeRate.toString()
     )
     if (err) {

@@ -53,13 +53,14 @@ import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { useToast } from '@/components/ui/toast-new'
-import stp from '@/utils/stp'
+import sat20Wallet from '@/utils/sat20'
 
 interface Props {
   data: {
     templateName: string;
     content: string; // json string
     feeRate: string;
+    bol: boolean; // 是否使用远程部署
     [key: string]: any;
   }
 }
@@ -95,10 +96,10 @@ const getFee = async () => {
   feeError.value = false
   feeErrorMessage.value = ''
   try {
-    const [err, res] = await stp.getFeeForDeployContract(
+    const [err, res] = await sat20Wallet.getFeeForDeployContract(
       props.data.templateName,
       props.data.content,
-      props.data.feeRate.toString()
+      props.data.feeRate
     )
     console.log('getFeeForDeployContract', err, res)
     if (err) {
@@ -120,7 +121,7 @@ const getFee = async () => {
 watch(() => [props.data?.templateName, props.data?.content, props.data?.feeRate], getFee, { immediate: true })
 
 const confirm = async () => {
-  if (!props.data?.templateName || !props.data?.content) {
+  if (!props.data?.templateName || !props.data?.content || !props.data?.feeRate) {
     toast.toast({
       title: '参数缺失',
       description: '合约模板、参数或费率缺失',
@@ -131,11 +132,11 @@ const confirm = async () => {
   isLoading.value = true
   deployError.value = ''
   try {
-    const [err, res] = await stp.deployContract_Remote(
+    const [err, res] = await sat20Wallet.deployContract_Remote(
       props.data.templateName,
       props.data.content,
-      props.data.feeRate.toString(),
-      props.data.bol
+      props.data.feeRate,
+      props.data.bol ?? false // 默认为 false 如果未提供
     )
     if (err) {
       deployError.value = err.message || '合约部署失败'

@@ -6,12 +6,20 @@
     "importWallet": "Import Existing Wallet",
     "agreement": "By continuing, you agree to our Terms of Service and Privacy Policy"
   },
+  "common": {
+    "error": "Error",
+    "success": "Success",
+    "cancel": "Cancel",
+    "confirm": "Confirm"
+  },
   "unlock": {
     "title": "SAT20 Wallet",
     "subtitle": "Please enter your wallet password to continue",
     "enterPassword": "Enter Your Password",
     "passwordPlaceholder": "Password",
-    "unlockButton": "Unlock"
+    "unlockButton": "Unlock",
+    "invalidPassword": "Invalid password. Please try again.",
+    "unlockFailed": "Failed to unlock wallet. Please check your password and try again."
   },
   "import": {
     "title": "SAT20 Wallet",
@@ -125,18 +133,6 @@
     "Unlock": "Unlock",
     "History": "History"
   },
-  "channelAssetsTabs": {
-    "assetType": {
-      "ORDX": "ORDX",
-      "Runes": "Runes",
-      "BRC20": "BRC20"
-    },
-    "viewTradeHistory": "View Trade History",
-    "viewL2History": "View L2 History",
-    "splicingOut": "Splicing out",
-    "unlock": "Unlock"
-  },
-
   "l1AssetsTabs": {
     "assetType": {
       "ORDX": "ORDX",
@@ -330,7 +326,7 @@
     "resolvedAddress": "Resolved Address",
     "fixedFee": "Fixed Fee",
     "withdrawalFeeInfo": "Withdrawal fee: 2000 sats service fee + miner fee (~300 sats, network-based)",
-    "unlockNotice": "⚠️ Unlock Notice: When unlocking to SatoshiNet, 3000 sats will be reserved to cover potential commitment transaction (unilateral exit) fees.",
+    "unlockNotice": "⚠️ BTC Unlock Notice: When unlocking BTC to SatoshiNet, 3000 sats will be reserved to cover potential commitment transaction (unilateral exit) fees.",
     "taprootError": "❌ Non-Taproot Address Not Supported: This wallet only supports sending to Taproot addresses (P2TR).",
     "taprootAddress": "Taproot Address",
     "currentBalance": "Current Balance"
@@ -370,6 +366,7 @@
   "walletManager": {
     "title": "Wallet Manager",
     "switch": "Switch",
+    "switching": "Switching...",
     "current": "Current",
     "createWallet": "Create Wallet",
     "importWallet": "Import Wallet",
@@ -435,5 +432,26 @@
     "cancel": "Cancel",
     "save": "Save",
     "saving": "Saving..."
+  },
+  "batchSendAssetsV2": {
+    "confirmTitle": "Confirm Batch Send Assets V2",
+    "description": "Send assets to multiple addresses in a single transaction.",
+    "assetName": "Asset Name",
+    "amount": "Amount per Address",
+    "batchCount": "Number of Recipients",
+    "destinationAddresses": "Destination Addresses",
+    "totalAmount": "Total Amount",
+    "feeNote": "Network fees will be calculated automatically.",
+    "missingData": "Required data is missing or invalid."
+  },
+  "sendAssets": {
+    "confirmTitle": "Send Assets Confirmation",
+    "description": "Please confirm the following asset transfer:",
+    "assetName": "Asset Name",
+    "amount": "Amount",
+    "destinationAddress": "Destination Address",
+    "memo": "Memo",
+    "feeNote": "Network fees will be deducted from your balance.",
+    "missingData": "Missing required data for asset transfer."
   }
 }

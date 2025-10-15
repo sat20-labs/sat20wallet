@@ -34,7 +34,7 @@ import { z } from 'zod'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { useWalletStore } from '@/store'
 import { useToast } from '@/components/ui/toast-new'
-import satsnetStp from '@/utils/stp'
+import walletManager from '@/utils/sat20'
 
 // Define Zod schema for validation
 const splitAssetSchema = z.object({
@@ -64,7 +64,7 @@ const label = ref<string | null>(null)
 
 watch(props.data, async (newData) => {
   const { assetName } = newData
-  const [err, res] = await satsnetStp.getTickerInfo(assetName)
+  const [err, res] = await walletManager.getTickerInfo(assetName)
   if (res?.ticker) {
     const { ticker } = res
     const result = JSON.parse(ticker)
@@ -123,7 +123,7 @@ const confirm = async () => {
   loading.value = true
 
   try {
-    const [err, result] = await satsnetStp.batchSendAssets_SatsNet(
+    const [err, result] = await walletManager.batchSendAssets_SatsNet(
       address.value,
       props.data.assetName,
       props.data.amt.toString(),

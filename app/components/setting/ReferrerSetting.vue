@@ -25,6 +25,15 @@
         <span class="text-sm font-medium">已绑定推荐人：</span>
         <div class="flex items-center gap-2 px-2 py-1 bg-green-500/20 rounded">
           <span class="text-sm">{{ boundReferrer }}</span>
+          <!-- 如果有txId，显示mempool图标 -->
+          <button 
+            v-if="boundReferrerTxId" 
+            @click="handleBoundReferrerMempoolClick()"
+            class="ml-1 p-0.5 hover:bg-green-500/30 rounded transition-colors"
+            :title="`查看绑定交易`"
+          >
+            <Icon icon="lucide:external-link" class="w-3 h-3 text-green-300 hover:text-green-100" />
+          </button>
         </div>
       </div>
 
@@ -75,8 +84,9 @@ import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { useWalletStore } from '@/store/wallet'
+import { generateMempoolUrl } from '@/utils'
 import { storeToRefs } from 'pinia'
-import satsnetStp from '@/utils/stp'
+import walletManager from '@/utils/sat20'
 import { useGlobalStore } from '@/store/global'
 import { getConfig } from '@/config/wasm'
 import { useRouter } from 'vue-router'
@@ -91,13 +101,15 @@ const walletStore = useWalletStore()
 const { publicKey, address } = storeToRefs(walletStore)
 const referrerNames = ref<string[]>([])
 const boundReferrer = ref<string | null>(null)
+const referrerTxIds = ref<Record<string, string>>({})
+const boundReferrerTxId = ref<string | null>(null)
 
 const globalStore = useGlobalStore()
 const { env } = storeToRefs(globalStore)
 const { network } = storeToRefs(walletStore)
 const router = useRouter()
 
-const { getLocalReferrerNames, getLocalBoundReferrer } = useReferrerManager()
+const { getLocalReferrerNames, getLocalBoundReferrer, getAllReferrerTxIds, getLocalBoundReferrerTxId, cleanInvalidReferrerCache, clearReferrerNameCache, removeLocalBoundReferrer, removeBoundReferrerTxId } = useReferrerManager()
 
 function handleRegisterClick() {
   router.push('/wallet/setting/referrer/register')
@@ -110,6 +122,35 @@ function handleBindClick() {
   } else {
     // 如果未绑定，跳转到绑定页面进行绑定操作
     router.push('/wallet/setting/referrer/bind')
+  }
+}
+
+// 处理点击mempool图标
+function handleMempoolClick(referrerName: string) {
+  const txId = referrerTxIds.value[referrerName]
+  if (txId) {
+    // 使用generateMempoolUrl生成mempool链接
+    const mempoolUrl = generateMempoolUrl({
+      network: network.value,
+      path: `tx/${txId}`,
+    })
+    
+    // 在新标签页中打开mempool链接
+    window.open(mempoolUrl, '_blank', 'noopener,noreferrer')
+  }
+}
+
+// 处理点击绑定推荐人的mempool图标
+function handleBoundReferrerMempoolClick() {
+  if (boundReferrerTxId.value) {
+    // 使用generateMempoolUrl生成mempool链接
+    const mempoolUrl = generateMempoolUrl({
+      network: network.value,
+      path: `tx/${boundReferrerTxId.value}`,
+    })
+    
+    // 在新标签页中打开mempool链接
+    window.open(mempoolUrl, '_blank', 'noopener,noreferrer')
   }
 }
 
@@ -136,13 +177,22 @@ async function loadBoundReferrer() {
   try {
     // 首先检查本地存储的绑定推荐人
     const localBoundReferrer = await getLocalBoundReferrer(address.value)
-    if (localBoundReferrer) {
+    const localBoundReferrerTxId = await getLocalBoundReferrerTxId(address.value)
+    
+    // 只有当本地有绑定推荐人且有对应的txId时，才认为绑定有效
+    if (localBoundReferrer && localBoundReferrerTxId) {
       boundReferrer.value = localBoundReferrer
+      boundReferrerTxId.value = localBoundReferrerTxId
       console.log('本地绑定的推荐人:', boundReferrer.value)
       return
+    } else if (localBoundReferrer && !localBoundReferrerTxId) {
+      // 如果本地有绑定推荐人但没有txId，说明绑定无效，清除本地缓存
+      console.log('本地绑定推荐人无效（无txId），清除缓存:', localBoundReferrer)
+      await removeLocalBoundReferrer(address.value)
+      await removeBoundReferrerTxId(address.value)
     }
 
-    // 如果本地没有，则从服务器获取
+    // 如果本地没有有效绑定，则从服务器获取
     const networkType = network.value === Network.LIVENET ? 'livenet' : 'testnet'
     console.log('获取绑定推荐人，地址:', address.value, '网络:', networkType)
 
@@ -179,17 +229,31 @@ async function loadReferrerNames() {
     console.log('serverPubKey', serverPubKey)
 
     if (serverPubKey) {
-      const [err, res] = await satsnetStp.getAllRegisteredReferrerName(serverPubKey)
+      const [err, res] = await walletManager.getAllRegisteredReferrerName(serverPubKey)
       console.log('服务器返回:', res)
 
       if (err) {
         console.error('获取推荐人失败', err)
-        // 服务器请求失败，使用本地数据
-        referrerNames.value = localNames
+        // 服务器请求失败，使用本地数据，但需要清理无效缓存
+        await cleanInvalidReferrerCache(address.value)
+        const validLocalNames = await getLocalReferrerNames(address.value)
+        referrerNames.value = validLocalNames
       } else {
         const serverNames = res?.names || []
-        // 如果服务器有数据，使用服务器数据；否则使用本地数据
-        referrerNames.value = serverNames.length > 0 ? serverNames : localNames
+        if (serverNames.length > 0) {
+          // 服务器有数据，使用服务器数据，并清除本地缓存中与服务器数据重复的名字
+          referrerNames.value = serverNames
+          
+          // 清除本地缓存中与服务器数据重复的名字
+          for (const serverName of serverNames) {
+            if (localNames.includes(serverName)) {
+              await clearReferrerNameCache(address.value, serverName)
+            }
+          }
+        } else {
+          // 服务器没有数据，使用本地数据
+          referrerNames.value = localNames
+        }
       }
     } else {
       console.warn('未能获取serverPubKey，使用本地数据')
@@ -203,13 +267,28 @@ async function loadReferrerNames() {
   }
 }
 
+// 加载推荐人txId映射
+async function loadReferrerTxIds() {
+  if (!address.value) return
+
+  try {
+    const txIds = await getAllReferrerTxIds(address.value)
+    referrerTxIds.value = txIds
+    console.log('推荐人txId映射:', txIds)
+  } catch (error) {
+    console.error('加载推荐人txId失败:', error)
+    referrerTxIds.value = {}
+  }
+}
+
 // 加载所有推荐人相关信息
 async function loadAllReferrerInfo() {
   isLoading.value = true
   try {
     await Promise.all([
       loadReferrerNames(),
-      loadBoundReferrer()
+      loadBoundReferrer(),
+      loadReferrerTxIds()
     ])
   } catch (error) {
     console.error('加载推荐人信息失败:', error)

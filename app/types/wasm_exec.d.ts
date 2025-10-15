@@ -445,6 +445,8 @@ interface SatsnetStp {
     assetName: string, amt: string, n: number): Promise<SatsnetResponse<any>>;
   batchSendAssets(destAddr: string,
     assetName: string, amt: string, n: number, feeRate: number): Promise<SatsnetResponse<any>>;
+  batchSendAssetsV2_SatsNet(destAddr: string[],
+    assetName: string, amtList: string[]): Promise<SatsnetResponse<{ txId: string }>>;
 
   /** 获取支持的合约模板 */
   getSupportedContracts(): Promise<SatsnetResponse<{ contractContents: any[] }>>;

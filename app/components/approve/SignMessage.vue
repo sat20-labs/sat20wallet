@@ -35,8 +35,8 @@ const confirm = async () => {
   // await walletStore.setNetwork(props.data.network)
   const [err, res] = await walletManager.signMessage(props.data.message)
   console.log(err, res);
-  if (res?.signature) {
-    emit('confirm', res?.signature)
+  if (res) {
+    emit('confirm', res)
   }
   
 }

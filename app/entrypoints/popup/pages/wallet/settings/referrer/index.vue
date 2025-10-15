@@ -81,7 +81,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import stp from '@/utils/stp'
+import sat20 from '@/utils/sat20'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -118,7 +118,7 @@ async function confirmRegister() {
   resultMsg.value = ''
   showConfirm.value = false
   try {
-    const [err, res] = await stp.registerAsReferrer(name.value, btcFeeRate.value)
+    const [err, res] = await sat20.registerAsReferrer(name.value, btcFeeRate.value)
     if (err) {
       resultMsg.value = err.message || '注册失败'
       resultSuccess.value = false

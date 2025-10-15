@@ -78,6 +78,7 @@
   <script setup lang="ts">
   import { ref } from 'vue'
   import { Button } from '@/components/ui/button'
+  import { Icon } from '@iconify/vue'
   
   const showRawTx = ref(false)
   const showSafetyTips = ref(false)

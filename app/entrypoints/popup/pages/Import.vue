@@ -13,7 +13,7 @@
         <Tabs v-model="tab" class="space-y-4">
           <TabsList class="grid w-full grid-cols-2">
             <TabsTrigger value="mnemonic">{{ $t('import.recoveryPhraseTab') }}</TabsTrigger>
-            <TabsTrigger value="private-key">{{ $t('import.privateKeyTab') }}</TabsTrigger>
+            <!-- <TabsTrigger value="private-key">{{ $t('import.privateKeyTab') }}</TabsTrigger> -->
           </TabsList>
 
           <TabsContent value="mnemonic">

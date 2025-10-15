@@ -17,6 +17,7 @@ import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import CopyCard from '@/components/common/CopyCard.vue'
 import { hideAddress } from '@/utils'
 import { useWalletStore } from '@/store'
+import { storeToRefs } from 'pinia'
 
 const walletStore = useWalletStore()
 const { address } = storeToRefs(walletStore)

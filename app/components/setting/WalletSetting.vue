@@ -25,6 +25,7 @@
 
 <script setup lang="ts">
 import { Button } from '@/components/ui/button'
+import { ref } from 'vue'
 import { Icon } from '@iconify/vue'
 
 const isExpanded = ref(false)

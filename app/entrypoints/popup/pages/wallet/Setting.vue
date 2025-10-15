@@ -8,7 +8,6 @@
         <Icon icon="lucide:lock-keyhole-open" class="w-10 h-10 mr-1 text-green-500 font-bold"/> {{$t('utxoManager.title')}}
       </Button>
       <Separator />
-      <EscapeHatch v-if="transcendingModeStore.selectedTranscendingMode !== 'poolswap'" />     
       <Separator />
       <SecuritySetting />
       <Separator />
@@ -43,13 +42,13 @@
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import WalletHeader from '@/components/wallet/HomeHeader.vue'
 import SecuritySetting from '@/components/setting/SecuritySetting.vue'
-import EscapeHatch from '@/components/setting/EscapeHatch.vue'
 import NetworkSetting from '@/components/setting/NetworkSetting.vue'
 import NodeSetting from '@/components/setting/NodeSetting.vue'
 import ReferrerSetting from '@/components/setting/ReferrerSetting.vue'
 
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import { Icon } from '@iconify/vue'
 import { version } from '@/package.json'
 import { ref } from "vue";
 import { useTranscendingModeStore } from '@/store'

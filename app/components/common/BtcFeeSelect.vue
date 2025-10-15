@@ -64,6 +64,7 @@ import { Input } from '@/components/ui/input'
 import { ref, computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Button } from '@/components/ui/button'
+import { Icon } from '@iconify/vue'
 import {
   Dialog,
   DialogContent,

@@ -20,17 +20,29 @@ interface Props {
 }
 
 const props = defineProps<Props>()
-console.log(props)
+console.log('🔍 RequestAccounts props:', props)
 const walletStore = useWalletStore()
 
 const { address } = storeToRefs(walletStore)
 const emit = defineEmits(['confirm', 'cancel'])
 
 const confirm = async () => {
-  const accounts = await service.getAccounts()
-  // 添加当前 origin 到授权列表
-  await addAuthorizedOrigin(props.metadata.origin)
-  emit('confirm', accounts)
+  try {
+    console.log('🔐 RequestAccounts confirm called')
+    const accounts = await service.getAccounts()
+    console.log('📋 Got accounts:', accounts)
+
+    // 添加当前 origin 到授权列表，确保origin存在
+    const origin = props.metadata?.origin || props.metadata?.dAppOrigin || 'inappbrowser'
+    console.log('📍 Adding authorized origin:', origin)
+    await addAuthorizedOrigin(origin)
+
+    console.log('✅ RequestAccounts confirmed')
+    emit('confirm', accounts)
+  } catch (error) {
+    console.error('❌ RequestAccounts confirm error:', error)
+    throw error
+  }
 }
 const cancel = () => {
   emit('cancel')

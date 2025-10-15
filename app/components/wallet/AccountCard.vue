@@ -18,6 +18,7 @@
 
 <script setup lang="ts">
 import { Card, CardContent } from '@/components/ui/card'
+import { computed } from 'vue'
 import CopyButton from '@/components/common/CopyButton.vue'
 import { hideAddress } from '@/utils'
 interface Props {

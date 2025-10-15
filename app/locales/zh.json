@@ -6,12 +6,20 @@
     "importWallet": "导入现有钱包",
     "agreement": "继续即表示您同意我们的服务条款和隐私政策"
   },
+  "common": {
+    "error": "错误",
+    "success": "成功",
+    "cancel": "取消",
+    "confirm": "确认"
+  },
   "unlock": {
     "title": "SAT20 Wallet",
     "subtitle": "请输入您的钱包密码以继续",
     "enterPassword": "输入您的密码",
     "passwordPlaceholder": "密码",
-    "unlockButton": "解锁"
+    "unlockButton": "解锁",
+    "invalidPassword": "密码错误，请重试。",
+    "unlockFailed": "解锁钱包失败，请检查您的密码并重试。"
   },
   "import": {
     "title": "SAT20 Wallet",
@@ -126,17 +134,7 @@
     "Unlock": "解锁",
     "History": "历史记录"
   },
-  "channelAssetsTabs": {
-    "assetType": {
-      "ORDX": "ORDX",
-      "Runes": "Runes",
-      "BRC20": "BRC20"
-    },
-    "viewTradeHistory": "交易历史",
-    "viewL2History": "查看 L2 历史",
-    "splicingOut": "通道抽资",
-    "unlock": "解锁"
-  },
+
 
   "l1AssetsTabs": {
     "assetType": {
@@ -330,7 +328,7 @@
     "resolvedAddress": "解析地址",
     "fixedFee": "固定手续费",
     "withdrawalFeeInfo": "提取需支付：服务费 2000 sats + 矿工费（预计 300 sats，随网络变化）",
-    "unlockNotice": "⚠️ 解锁提示：从通道解锁到聪网时，需要预留 3000 sats，用于可能的单边退出（承诺交易费用）。",
+    "unlockNotice": "⚠️ BTC解锁提示：从通道解锁BTC到聪网时，需要预留 3000 sats，用于可能的单边退出（承诺交易费用）。",
     "taprootError": "❌ 不支持非Taproot地址：当前钱包仅支持向Taproot地址（P2TR）转账。",
     "taprootAddress": "Taproot地址",
     "currentBalance": "当前余额"
@@ -370,6 +368,7 @@
   "walletManager": {
     "title": "钱包管理",
     "switch": "切换",
+    "switching": "切换中...",
     "current": "当前",
     "createWallet": "创建钱包",
     "importWallet": "导入钱包",
@@ -435,5 +434,26 @@
     "cancel": "取消",
     "save": "保存",
     "saving": "保存中..."
+  },
+  "batchSendAssetsV2": {
+    "confirmTitle": "确认批量发送资产 V2",
+    "description": "在单笔交易中向多个地址发送资产。",
+    "assetName": "资产名称",
+    "amount": "每个地址金额",
+    "batchCount": "接收者数量",
+    "destinationAddresses": "目标地址",
+    "totalAmount": "总金额",
+    "feeNote": "网络费用将自动计算。",
+    "missingData": "缺少必要的数据或数据无效。"
+  },
+  "sendAssets": {
+    "confirmTitle": "发送资产确认",
+    "description": "请确认以下资产转账：",
+    "assetName": "资产名称",
+    "amount": "数量",
+    "destinationAddress": "目标地址",
+    "memo": "备注",
+    "feeNote": "网络费用将从您的余额中扣除。",
+    "missingData": "缺少资产转账所需的必要数据。"
   }
 }

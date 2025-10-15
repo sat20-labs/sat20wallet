@@ -1,3 +1,6 @@
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+
 export const useL1Store = defineStore('l1-assets', () => {
   const assetList = ref<any[]>([])
   const uniqueAssetList = ref<any[]>([])

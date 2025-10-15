@@ -33,16 +33,6 @@
             @deposit="handleDeposit"
           />
         </div>
-        <div v-else-if="item.value === 'channel'">
-          <ChannelCard 
-            :selectedType="selectedType"
-            :address="address"
-            @update:selectedType="selectedType = $event"             
-            @splicing_out="handleSplicingOut"
-            @unlock="handleUnlock"
-          />
-        </div>
-        <div v-if="item.value === 'pool'"><PoolManager /></div>
         <div v-else-if="item.value === 'l2'">
           <L2Card 
             :selectedType="selectedType"
@@ -65,7 +55,6 @@ import { storeToRefs } from 'pinia'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
-import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import { useWalletStore, useL1Store, useL2Store } from '@/store'
 import { useRouter } from 'vue-router'
 
@@ -99,13 +88,13 @@ const items = [
 const l1Assets = computed(() => {
   switch (selectedType.value) {
     case 'BTC':
-      return (l1Store.plainList || []).map(asset => ({ ...asset, type: 'BTC' }))
+      return (l1Store.plainList || []).map((asset: any) => ({ ...asset, type: 'BTC' }))
     case 'ORDX':
-      return (l1Store.sat20List || []).map(asset => ({ ...asset, type: 'ORDX' }))
+      return (l1Store.sat20List || []).map((asset: any) => ({ ...asset, type: 'ORDX' }))
     case 'Runes':
-      return (l1Store.runesList || []).map(asset => ({ ...asset, type: 'Runes' }))
+      return (l1Store.runesList || []).map((asset: any) => ({ ...asset, type: 'Runes' }))
     case 'BRC20':
-      return (l1Store.brc20List || []).map(asset => ({ ...asset, type: 'BRC20' }))
+      return (l1Store.brc20List || []).map((asset: any) => ({ ...asset, type: 'BRC20' }))
     default:
       return []
   }
@@ -114,13 +103,13 @@ const l1Assets = computed(() => {
 const l2Assets = computed(() => {
   switch (selectedType.value) {
     case 'BTC':
-      return (l2Store.plainList || []).map(asset => ({ ...asset, type: 'BTC' }))
+      return (l2Store.plainList || []).map((asset: any) => ({ ...asset, type: 'BTC' }))
     case 'ORDX':
-      return (l2Store.sat20List || []).map(asset => ({ ...asset, type: 'ORDX' }))
+      return (l2Store.sat20List || []).map((asset: any) => ({ ...asset, type: 'ORDX' }))
     case 'Runes':
-      return (l2Store.runesList || []).map(asset => ({ ...asset, type: 'Runes' }))
+      return (l2Store.runesList || []).map((asset: any) => ({ ...asset, type: 'Runes' }))
     case 'BRC20':
-      return (l2Store.brc20List || []).map(asset => ({ ...asset, type: 'BRC20' }))
+      return (l2Store.brc20List || []).map((asset: any) => ({ ...asset, type: 'BRC20' }))
     default:
       return []
   }

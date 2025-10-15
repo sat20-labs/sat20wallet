@@ -1,16 +1,16 @@
 import { ref } from 'vue'
 import { useToast } from '@/components/ui/toast-new'
+import { storeToRefs } from 'pinia'
 import { useWalletStore } from '@/store'
-import { useChannelStore } from '@/store/channel'
+// import { useChannelStore } from '@/store/channel' - Removed channel store
 import { useL1Store } from '@/store/l1'
 import { useL1Assets, useL2Assets } from '@/composables'
 import { useAssetOperations } from '@/composables/useAssetOperations'
-import satsnetStp from '@/utils/stp'
-import { sleep } from 'radash'
+import walletManager from '@/utils/sat20'
 
 export function useAssetActions() {
   const walletStore = useWalletStore()
-  const channelStore = useChannelStore()
+  // const channelStore = useChannelStore() - Removed channel store
   const l1Store = useL1Store()
   const { refreshL1Assets } = useL1Assets()
   const { refreshL2Assets } = useL2Assets()
@@ -29,68 +29,6 @@ export function useAssetActions() {
     })
   }
 
-  // 检查通道状态
-  const checkChannel = async (chanid: string) => {
-    const [err, result] = await satsnetStp.getChannelStatus(chanid)
-    if (err || result !== 16) {
-      return false
-    }
-    return true
-  }
-
-  // Splicing In 操作
-  const splicingIn = async ({
-    chanid,
-    utxos = [],
-    amt,
-    feeUtxos = [],
-    feeRate = btcFeeRate.value,//se feeRate from store if not explicitly passed
-    asset_name,
-  }: any): Promise<void> => {
-    loading.value = true
-    //console.log('UseAssetAction splicingIn:', chanid, asset_name, utxos, feeUtxos, feeRate, amt)
-    const [err] = await satsnetStp.splicingIn(chanid?.toString(), asset_name, utxos, feeUtxos, feeRate, amt)
-    if (err) {
-      loading.value = false
-      handleError(err.message)
-      return
-    }
-    refreshL1Assets()
-    await channelStore.getAllChannels()
-    toast({
-      title: 'Success',
-      description: 'Splicing In successful',
-      duration: 1500,
-    })
-    loading.value = false
-  }
-
-  // Splicing Out 操作
-  const splicingOut = async ({
-    chanid,
-    toAddress,
-    amt,
-    feeRate= btcFeeRate.value,//se feeRate from store if not explicitly passed
-    asset_name,
-  }: any): Promise<void> => {
-    loading.value = true
-    const feeUtxos = l1Store.plainList?.[0]?.utxos || []
-    //console.log('UseAssetAction splicingOut:', chanid, toAddress, amt, feeUtxos, feeRate, asset_name)
-    const [err] = await satsnetStp.splicingOut(chanid, toAddress, asset_name, feeUtxos, feeRate, amt)
-    if (err) {
-      loading.value = false
-      handleError(err.message)
-      return
-    }
-    refreshL1Assets()
-    await channelStore.getAllChannels()
-    toast({
-      title: 'Success',
-      description: 'Splicing Out successful',
-      duration: 1500,
-    })
-    loading.value = false   
-  }
 
   // Deposit 操作
   const deposit = async ({
@@ -102,7 +40,7 @@ export function useAssetActions() {
   }: any) => {
     loading.value = true
     //console.log('UseAssetAction deposit:', toAddress, asset_name, amt, utxos, fees)
-    const [err, result] = await satsnetStp.deposit(
+    const [err] = await walletManager.deposit(
       toAddress,
       asset_name,
       amt,
@@ -121,7 +59,6 @@ export function useAssetActions() {
     }
     loading.value = false
     refreshL1Assets()
-    await channelStore.getAllChannels()
     toast({
       title: 'Success',
       description: 'Deposit successful',
@@ -138,7 +75,7 @@ export function useAssetActions() {
     fees = [],
   }: any) => {
     loading.value = true    
-    const [err, result] = await satsnetStp.withdraw(
+    const [err] = await walletManager.withdraw(
       toAddress,
       asset_name,
       amt,
@@ -158,7 +95,7 @@ export function useAssetActions() {
   
     loading.value = false
     refreshL2Assets()
-    await channelStore.getAllChannels()
+    // await channelStore.getAllChannels() - Removed channel store
     toast({
       title: 'Success',
       description: 'Withdraw successful',
@@ -166,57 +103,12 @@ export function useAssetActions() {
     })
   }
 
-  // Unlock UTXO 操作
-  const unlockUtxo = async ({ chanid, amt, feeUtxos = [], asset_name }: any) => {
-    loading.value = true
-    const status = await checkChannel(chanid)
-    if (!status) {
-      handleError('Channel transaction has not been confirmed')
-      loading.value = false
-      return
-    }
-    const [err] = await satsnetStp.unlockFromChannel(chanid, asset_name, amt, [])
-    if (err) {
-      handleError(err.message)
-      loading.value = false
-      return
-    }
-    await sleep(1000)
-    await channelStore.getAllChannels()
-    refreshL2Assets()
-    toast({
-      title: 'Success',
-      description: 'Unlock UTXO successful',
-      duration:1500,
-    })
-    loading.value = false    
-  }
-
-  // Lock UTXO 操作
-  const lockUtxo = async ({ utxos, chanid, amt, feeUtxos = [], asset_name }: any) => {
-    loading.value = true
-    const [err] = await satsnetStp.lockToChannel(chanid, asset_name, amt, [], [])
-    if (err) {
-      handleError(err.message)
-      loading.value = false
-      return
-    }
-    await channelStore.getAllChannels()
-    refreshL2Assets()
-    toast({
-      title: 'Success',
-      description: 'Lock UTXO successful',
-      duration:1500,
-    })
-    loading.value = false    
-  }
-  console.log('btcFeeRate', btcFeeRate);
   
   // L1 发送操作
   const l1Send = async ({ toAddress, asset_name, amt }: any) => {
     loading.value = true
     console.log('UseAssetAction l1Send:', toAddress, asset_name, amt,  btcFeeRate.value)
-    const [err] = await satsnetStp.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
+    const [err] = await walletManager.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
     if (err) {
       handleError(err.message)
       loading.value = false
@@ -235,7 +127,7 @@ export function useAssetActions() {
   const l2Send = async ({ toAddress, asset_name, amt }: any) => {
     loading.value = true
     console.log('UseAssetAction l2Send:', toAddress, asset_name, amt)
-    const [err] = await satsnetStp.sendAssets_SatsNet(toAddress, asset_name, amt)
+    const [err] = await walletManager.sendAssets_SatsNet(toAddress, asset_name, amt, "")
     if (err) {
       handleError(err.message)
       loading.value = false
@@ -251,12 +143,8 @@ export function useAssetActions() {
   }
 
   return {
-    splicingIn,
-    splicingOut,
     deposit,
     withdraw,
-    unlockUtxo,
-    lockUtxo,
     l1Send,
     l2Send,
     handleError,

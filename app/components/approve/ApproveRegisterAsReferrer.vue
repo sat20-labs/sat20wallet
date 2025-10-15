@@ -34,7 +34,7 @@
 import { ref } from 'vue'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { useToast } from '@/components/ui/toast-new'
-import stp from '@/utils/stp'
+import sat20 from '@/utils/sat20'
 import { useWalletStore } from '@/store/wallet'
 import { storeToRefs } from 'pinia'
 import { useReferrerManager } from '@/composables/useReferrerManager'
@@ -69,7 +69,7 @@ const confirm = async () => {
   isLoading.value = true
   registerError.value = ''
   try {
-    const [err, res] = await stp.registerAsReferrer(
+    const [err, res] = await sat20.registerAsReferrer(
       props.data.name,
       props.data.feeRate
     )
