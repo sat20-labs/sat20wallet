@@ -58,6 +58,7 @@
 import { useTranscendingModeStore } from '@/store'
 import { ref, computed, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
+import { openLink } from '@/utils/browser'
 import { generateMempoolUrl } from '@/utils'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
@@ -220,9 +221,9 @@ const operationDescription = computed(() => {
 })
 
 // Handle Action
-const handleAction = (action: string) => {
+const handleAction = async (action: string) => {
   const asset = btcBalance.value.assets[0] // Assume the first asset is selected
-  
+
 
   if (action === 'receive') {
     receiveAddress.value = address.value ?? '' // Use the address from the store or fallback to an empty string
@@ -232,7 +233,12 @@ const handleAction = (action: string) => {
 
   if (action === 'history') {
     if (mempoolUrl.value) {
-      window.open(mempoolUrl.value, '_blank') // Open mempoolUrl in a new tab
+      try {
+        await openLink(mempoolUrl.value) // 使用统一的链接打开函数
+      } catch (error) {
+        console.error('打开历史记录链接失败:', error)
+        handleError('Failed to open history link')
+      }
     } else {
       handleError('Mempool URL is not available')
     }

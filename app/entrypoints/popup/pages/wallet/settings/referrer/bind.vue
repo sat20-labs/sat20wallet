@@ -104,7 +104,7 @@ import { useGlobalStore } from '@/store/global'
 import { useWalletStore } from '@/store/wallet'
 import { useReferrerManager } from '@/composables/useReferrerManager'
 import { getConfig } from '@/config/wasm'
-import { generateMempoolUrl } from '@/utils'
+import { openMempoolLink } from '@/utils/browser'
 
 
 const { t } = useI18n()
@@ -144,16 +144,14 @@ function shortenTxId(txId: string, startLength = 8, endLength = 8): string {
 }
 
 // 处理点击mempool链接
-function handleMempoolClick(txId: string) {
+async function handleMempoolClick(txId: string) {
   if (txId) {
-    // 使用generateMempoolUrl生成mempool链接
-    const mempoolUrl = generateMempoolUrl({
-      network: network.value,
-      path: `tx/${txId}`,
-    })
-    
-    // 在新标签页中打开mempool链接
-    window.open(mempoolUrl, '_blank', 'noopener,noreferrer')
+    try {
+      // 使用统一的 mempool 链接打开函数
+      await openMempoolLink(network.value, `tx/${txId}`)
+    } catch (error) {
+      console.error('打开 mempool 链接失败:', error)
+    }
   }
 }
 

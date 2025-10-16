@@ -46,6 +46,7 @@ import { ref } from 'vue';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@iconify/vue';
 import { useWebViewBridge } from '@/composables/useWebViewBridge';
+import { openLink } from '@/utils/browser';
 
 interface NavItem {
   icon: any;
@@ -84,8 +85,12 @@ const setActiveItem = (item: NavItem) => {
   }
 };
 
-const openWindow = (url: string) => {
-  window.open(url, '_blank'); // 在新标签页中打开链接
+const openWindow = async (url: string) => {
+  try {
+    await openLink(url); // 使用统一的链接打开函数
+  } catch (error) {
+    console.error('打开链接失败:', error)
+  }
 };
 </script>
 

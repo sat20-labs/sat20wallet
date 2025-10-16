@@ -37,7 +37,7 @@ export const ACTIONS_REQUIRING_ORIGIN_AUTH = [
 
 // InAppBrowser 配置
 export const INAPP_BROWSER_CONFIG: ProviderConfig = {
-  inAppBrowserOptions: "location=yes,fullscreen=yes,clearcache=yes,hideurlbar=yes,clearsessioncache=yes,toolbar=yes,enableviewportscale=yes,mediaPlaybackRequiresUserAction=no,allowInlineMediaPlayback=yes,keyboardDisplayRequiresUserAction=no,suppressesIncrementalRendering=no",
+  inAppBrowserOptions: "location=yes,fullscreen=yes,clearcache=yes,hideurlbar=yes,clearsessioncache=yes,toolbar=no,enableviewportscale=yes,mediaPlaybackRequiresUserAction=no,allowInlineMediaPlayback=yes,keyboardDisplayRequiresUserAction=no,suppressesIncrementalRendering=no",
   timeoutDuration: 60000,
   version: "2.0.0-inappbrowser",
   platform: "inappbrowser",

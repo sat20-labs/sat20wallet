@@ -84,7 +84,7 @@ import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { useWalletStore } from '@/store/wallet'
-import { generateMempoolUrl } from '@/utils'
+import { openMempoolLink } from '@/utils/browser'
 import { storeToRefs } from 'pinia'
 import walletManager from '@/utils/sat20'
 import { useGlobalStore } from '@/store/global'
@@ -125,32 +125,16 @@ function handleBindClick() {
   }
 }
 
-// 处理点击mempool图标
-function handleMempoolClick(referrerName: string) {
-  const txId = referrerTxIds.value[referrerName]
-  if (txId) {
-    // 使用generateMempoolUrl生成mempool链接
-    const mempoolUrl = generateMempoolUrl({
-      network: network.value,
-      path: `tx/${txId}`,
-    })
-    
-    // 在新标签页中打开mempool链接
-    window.open(mempoolUrl, '_blank', 'noopener,noreferrer')
-  }
-}
 
 // 处理点击绑定推荐人的mempool图标
-function handleBoundReferrerMempoolClick() {
+async function handleBoundReferrerMempoolClick() {
   if (boundReferrerTxId.value) {
-    // 使用generateMempoolUrl生成mempool链接
-    const mempoolUrl = generateMempoolUrl({
-      network: network.value,
-      path: `tx/${boundReferrerTxId.value}`,
-    })
-    
-    // 在新标签页中打开mempool链接
-    window.open(mempoolUrl, '_blank', 'noopener,noreferrer')
+    try {
+      // 使用统一的 mempool 链接打开函数
+      await openMempoolLink(network.value, `tx/${boundReferrerTxId.value}`)
+    } catch (error) {
+      console.error('打开 mempool 链接失败:', error)
+    }
   }
 }
 

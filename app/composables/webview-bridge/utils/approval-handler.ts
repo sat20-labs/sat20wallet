@@ -3,6 +3,9 @@ import { Message } from "../../../types/message";
 import { ApprovalMetadata } from "../types";
 import { BrowserManager } from "./browser-manager";
 import { LOG_PREFIXES } from "../constants";
+import { walletStorage } from "@/lib/walletStorage";
+import service from "@/lib/service";
+import sat20Wallet from "@/utils/sat20";
 
 export class ApprovalHandler {
   constructor(private browserManager: BrowserManager) {}
@@ -87,10 +90,7 @@ export class ApprovalHandler {
       console.log(`${LOG_PREFIXES.DIRECT_REQUEST} Handling direct request: ${action}`, { action, data });
 
       // 确保钱包状态已初始化
-      const { walletStorage } = await import("@/lib/walletStorage");
       await walletStorage.initializeState();
-
-      const { default: service } = await import("@/lib/service");
       const hasWallet = await service.getHasWallet();
       if (!hasWallet) {
         throw new Error("No wallet available");
@@ -264,8 +264,7 @@ export class ApprovalHandler {
           break;
         case Message.MessageAction.EXTRACT_TX_FROM_PSBT_SATSNET:
           // 使用 sat20Wallet 直接调用，因为 service 中没有此方法
-          const sat20WalletModule = await import('@/utils/sat20');
-          const [extractSNErr, extractSNRes] = await sat20WalletModule.default.extractTxFromPsbt_SatsNet(
+          const [extractSNErr, extractSNRes] = await sat20Wallet.extractTxFromPsbt_SatsNet(
             data.psbtHex
           );
           if (extractSNErr) throw extractSNErr;
