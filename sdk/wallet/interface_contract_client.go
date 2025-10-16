@@ -77,6 +77,11 @@ func (p *Manager) QueryParamForInvokeContract(templateName, action string) (stri
 	return c.InvokeParam(action), nil
 }
 
+func (p *Manager) IsAmmContractExisting(coreChannelId, assetName string) bool {
+	url := GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_AMM)
+	r := p.getRemoteDeployedContract(url)
+	return r != nil
+}
 
 // 合约状态经常变化，需要实时获取
 func (p *Manager) getRemoteDeployedContract(url string) ContractRuntime {
@@ -108,15 +113,14 @@ func (p *Manager) getRemoteDeployedContract(url string) ContractRuntime {
 	return c
 }
 
-
 func (p *Manager) QueryFeeForInvokeContract(contractURL string, invokeParam string) (ContractRuntime, int64, error) {
-	
+
 	// client mode
 	contract := p.getRemoteDeployedContract(contractURL)
 	if contract == nil {
 		return nil, 0, fmt.Errorf("contract not found")
 	}
-	
+
 	// 检查调用参数是否有效。
 	// TODO 以后直接到持有合约的节点上去检查
 	fee, err := contract.CheckInvokeParam(invokeParam)
@@ -503,5 +507,159 @@ func (p *Manager) sendContractEnabledTx(url string, h1, h2 int) (string, error) 
 		return "", err
 	}
 	Log.Infof("enable contract %s with txId %s", url, txId)
+	return txId, nil
+}
+
+// 存款（充值）：在主网将资产转入流动性池子，流动性池子在聪网将对应资产转入destAddr
+// 返回txid, msgId
+func (p *Manager) DepositWithContract(destAddr string, assetName string, amt string,
+	feeRate int64) (string, error) {
+
+	Log.Infof("DepositWithContract %s %s", assetName, amt)
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+	// if !p.IsReady() {
+	// 	return "", fmt.Errorf("not ready")
+	// }
+
+	// 确保sln在线
+	if !p.checkSuperNodeStatus() {
+		return "", fmt.Errorf("peer is offline")
+	}
+
+	// 检查是否有对应的amm合约，如果存在，通过该合约处理资产进出
+	coreChannelId := p.GetCoreChannelAddr()
+	url := GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_AMM)
+	r := p.getRemoteDeployedContract(url)
+	if r == nil {
+		url = GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_TRANSCEND)
+		r = p.getRemoteDeployedContract(url)
+		if r == nil {
+			return "", fmt.Errorf("can't find a correct contract")
+		}
+	}
+	if !r.IsActive() {
+		return "", fmt.Errorf("contract not active")
+	}
+
+	depositPara := WithdrawInvokeParam{
+		OrderType: ORDERTYPE_DEPOSIT,
+		AssetName: assetName,
+		Amt:       amt,
+	}
+	depositParaBytes, err := json.Marshal(depositPara)
+	if err != nil {
+		return "", err
+	}
+	invokeParam := InvokeParam{
+		Action: INVOKE_API_DEPOSIT,
+		Param:  string(depositParaBytes),
+	}
+	invokeJson, err := json.Marshal(invokeParam)
+	if err != nil {
+		return "", err
+	}
+
+	txId, err := p.InvokeContractV2(url, string(invokeJson), assetName, amt, feeRate)
+	if err != nil {
+		Log.Errorf("InvokeContractV2 %s failed, %v", url, err)
+		return "", err
+	}
+	Log.Infof("DepositWithContract succeed. %s", txId)
+
+	// 通知服务端（执行ascend操作）将txId中输出到通道地址的utxo锁定，否则有可能被withdraw或者其他操作用掉 （临时方案）
+	// 如果合约不是该节点的服务端运行，这个就无效。需要方案2: 在withdraw时，不使用当前区块的utxo
+	RESV_TYPE_DEPOSIT := "deposit"
+	p.serverNode.client.SendActionResultNfty(0, RESV_TYPE_DEPOSIT, 0, txId)
+
+	return txId, nil
+}
+
+// TODO 提取时，需要增加收费，除了固定的  DEFAULT_SERVICE_FEE_WITHDRAW 之外，
+// 还需要支付提取资产的 DEFAULT_FEE_RATIO_WITHDRAW_WITH_CONTRACT
+// 取款（提现）：在聪网将资产转入流动性池子，流动性池子在主网将对应资产转入destAddr
+// 返回txid
+func (p *Manager) WithdrawWithContract(destAddr string, assetName string, amt string,
+	feeRate int64) (string, error) {
+	Log.Infof("WithdrawWithContract %s %s", assetName, amt)
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+	// if !p.IsReady() {
+	// 	return "", fmt.Errorf("not ready")
+	// }
+
+	// 确保sln在线
+	if !p.checkSuperNodeStatus() {
+		return "", fmt.Errorf("peer is offline")
+	}
+
+	// 检查是否有对应的amm合约，如果存在，通过该合约处理资产进出
+	coreChannelId := p.GetCoreChannelAddr()
+	url := GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_AMM)
+	r := p.getRemoteDeployedContract(url)
+	if r == nil {
+		url = GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_TRANSCEND)
+		r = p.getRemoteDeployedContract(url)
+		if r == nil {
+			return "", fmt.Errorf("can't find a correct contract")
+		}
+	}
+	if !r.IsActive() {
+		return "", fmt.Errorf("contract not active")
+	}
+	withdrawPara := WithdrawInvokeParam{
+		OrderType: ORDERTYPE_WITHDRAW,
+		AssetName: assetName,
+		Amt:       amt,
+	}
+	withdrawParaBytes, err := json.Marshal(withdrawPara)
+	if err != nil {
+		return "", err
+	}
+	invokeParam := InvokeParam{
+		Action: INVOKE_API_WITHDRAW,
+		Param:  string(withdrawParaBytes),
+	}
+	invokeJson, err := json.Marshal(invokeParam)
+	if err != nil {
+		return "", err
+	}
+
+	// 修正白聪数量
+	if assetName == indexer.ASSET_PLAIN_SAT.String() {
+		total := p.GetAssetBalance_SatsNet("", indexer.NewAssetNameFromString(assetName))
+		if total.Sign() == 0 {
+			return "", fmt.Errorf("no any asset can be withdrawn")
+		}
+		if total.String() == amt {
+			// 需要扣除调用费用和网络费用
+			fee, err := r.CheckInvokeParam(string(invokeJson))
+			if err != nil {
+				return "", err
+			}
+			total = total.Sub(indexer.NewDefaultDecimal(fee + DEFAULT_FEE_SATSNET))
+
+			amt = total.String()
+			withdrawPara.Amt = amt
+			withdrawParaBytes, err := json.Marshal(withdrawPara)
+			if err != nil {
+				return "", err
+			}
+			invokeParam.Param = string(withdrawParaBytes)
+			invokeJson, err = json.Marshal(invokeParam)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+
+	txId, err := p.InvokeContractV2_Satsnet(url, string(invokeJson), assetName, amt, feeRate)
+	if err != nil {
+		Log.Errorf("InvokeContractV2_Satsnet %s failed, %v", url, err)
+		return "", err
+	}
+	Log.Infof("WithdrawWithContract succeed. %s", txId)
 	return txId, nil
 }

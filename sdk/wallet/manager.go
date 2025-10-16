@@ -16,8 +16,8 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 	"lukechampine.com/uint128"
 
-	indexer "github.com/sat20-labs/indexer/common"
 	db "github.com/sat20-labs/indexer/common"
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 )
 
@@ -138,8 +138,8 @@ func (p *Manager) initNode() error {
 			return fmt.Errorf("invalid AddPeers config item: %s", n)
 		}
 
-		var scheme, host string
-		// http://host:port
+		var scheme, host, proxy string
+		// http://host[:port]/stp/testnet
 		if strings.HasPrefix(parts[2], "http://") {
 			scheme = "http"
 			host = strings.TrimPrefix(parts[2], "http://")
@@ -150,14 +150,27 @@ func (p *Manager) initNode() error {
 			scheme = "http"
 			host = parts[2]
 		}
+		if strings.HasSuffix(host, "/stp/testnet") {
+			host = strings.TrimSuffix(host, "/stp/testnet")
+			proxy = "stp/testnet"
+		} else if strings.HasSuffix(host, "/stp/mainnet") {
+			host = strings.TrimSuffix(host, "/stp/mainnet")
+			proxy = "stp/mainnet"
+		} else {
+			h, p, bfound := strings.Cut(host, "/")
+			host = h
+			if bfound {
+				proxy = p
+			}
+		}
 
 		switch parts[0] {
 		case "b":
 			if bytes.Equal(parsedPubkey.SerializeCompressed(), bootstrappubkey.SerializeCompressed()) {
 				node := &Node{
-					client:   NewNodeClient(scheme, host, "", p.http),
+					client:   NewNodeClient(scheme, host, proxy, p.http),
 					NodeId:   bootstrappubkey,
-					Host:     parts[2],
+					Host:     host,
 					NodeType: BOOTSTRAP_NODE,
 					Pubkey:   bootstrappubkey,
 				}
@@ -171,9 +184,9 @@ func (p *Manager) initNode() error {
 				return fmt.Errorf("too many server node setting")
 			}
 			p.serverNode = &Node{
-				client:   NewNodeClient(scheme, host, "", p.http),
+				client:   NewNodeClient(scheme, host, proxy, p.http),
 				NodeId:   parsedPubkey,
-				Host:     parts[2],
+				Host:     host,
 				NodeType: SERVER_NODE,
 				Pubkey:   parsedPubkey,
 			}
@@ -184,9 +197,16 @@ func (p *Manager) initNode() error {
 
 	if len(p.bootstrapNode) == 0 {
 		Log.Warnf("no bootstrap node setting, use default setting")
-		host := "seed.sat20.org:" + REST_SERVER_PORT
+		host := "apiprd.sat20.org"
+		var proxy string
+		if IsTestNet() {
+			proxy = "/stp/testnet"
+		} else {
+			proxy = "/stp/mainnet"
+		}
+
 		p.bootstrapNode = []*Node{{
-			client:   NewNodeClient("http", host, "", p.http),
+			client:   NewNodeClient("https", host, proxy, p.http),
 			NodeId:   bootstrappubkey,
 			Host:     host,
 			NodeType: BOOTSTRAP_NODE,
@@ -202,7 +222,6 @@ func (p *Manager) initNode() error {
 
 	return nil
 }
-
 func (p *Manager) Close() {
 	p.bInited = false
 }
@@ -223,6 +242,11 @@ func (p *Manager) GetWallet() common.Wallet {
 
 func IsTestNet() bool {
 	return _chain != "mainnet"
+}
+
+func (p *Manager) checkSuperNodeStatus() bool {
+	err := p.serverNode.client.SendActionResultNfty(0, "", 0, "")
+	return err == nil
 }
 
 func (p *Manager) initResvMap() {
@@ -308,8 +332,8 @@ func (p *Manager) getRuneIdFromName(name *swire.AssetName) (*runestone.RuneId, e
 
 func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 
-	if name.String() == ASSET_PLAIN_SAT.String() || 
-	name.String() == db.ASSET_ALL_SAT.String() {
+	if name.String() == ASSET_PLAIN_SAT.String() ||
+		name.String() == db.ASSET_ALL_SAT.String() {
 		return &indexer.TickerInfo{
 			AssetName:    *name,
 			MaxSupply:    "21000000000000000", //  sats
@@ -328,12 +352,12 @@ func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 	// TODO 还在铸造中的ticker，需要每个区块更新一次数据
 	//info, err := loadTickerInfo(p.db, name)
 	//if err != nil {
-		info = p.l1IndexerClient.GetTickInfo(name)
-		if info == nil {
-			Log.Errorf("GetTickInfo %s failed", name)
-			return nil
-		}
-		saveTickerInfo(p.db, info)
+	info = p.l1IndexerClient.GetTickInfo(name)
+	if info == nil {
+		Log.Errorf("GetTickInfo %s failed", name)
+		return nil
+	}
+	saveTickerInfo(p.db, info)
 	//}
 
 	p.mutex.Lock()
@@ -432,9 +456,9 @@ func (p *Manager) GetTxOutFromRawTx(utxo string) (*TxOutput, error) {
 	}, nil
 }
 
-func (p *Manager) GetUtxosForFee(address string, value int64, 
+func (p *Manager) GetUtxosForFee(address string, value int64,
 	excludedUtxoMap map[string]bool, excludeRecentBlock bool) ([]string, error) {
-	
+
 	if address == "" {
 		address = p.wallet.GetAddress()
 	}
@@ -442,7 +466,7 @@ func (p *Manager) GetUtxosForFee(address string, value int64,
 	return p.SelectUtxosForFeeV2(address, excludedUtxoMap, value, excludeRecentBlock, false)
 }
 
-func (p *Manager) GetUtxosForStubs(address string, n int, excludedUtxoMap map[string]bool,) ([]string, error) {
+func (p *Manager) GetUtxosForStubs(address string, n int, excludedUtxoMap map[string]bool) ([]string, error) {
 	if address == "" {
 		address = p.wallet.GetAddress()
 	}
@@ -480,9 +504,9 @@ func (p *Manager) GetUtxosForStubs(address string, n int, excludedUtxoMap map[st
 	return result, nil
 }
 
-func (p *Manager) GetUtxosForFee_SatsNet(address string, value int64, 
+func (p *Manager) GetUtxosForFee_SatsNet(address string, value int64,
 	excludedUtxoMap map[string]bool) ([]string, error) {
-	
+
 	return p.SelectUtxosForFeeV2_SatsNet(address, excludedUtxoMap, value)
 }
 
@@ -491,13 +515,13 @@ func (p *Manager) GetUtxosWithAsset(address string, amt *Decimal, assetName *swi
 	return p.SelectUtxosForAssetV2(address, excludedUtxoMap, assetName, amt, false)
 }
 
-func (p *Manager) GetUtxosWithAsset_SatsNet(address string, amt *Decimal, 
+func (p *Manager) GetUtxosWithAsset_SatsNet(address string, amt *Decimal,
 	assetName *swire.AssetName, excludedUtxoMap map[string]bool) ([]string, error) {
 	return p.SelectUtxosForAssetV2_SatsNet(address, excludedUtxoMap, assetName, amt)
 }
 
 func (p *Manager) GetUtxosWithAssetV2(address string, plainSats int64,
-	amt *Decimal, assetName *swire.AssetName, 
+	amt *Decimal, assetName *swire.AssetName,
 	excludedUtxoMap map[string]bool, excludeRecentBlock bool) ([]string, []string, error) {
 
 	resultAssets, err := p.SelectUtxosForAssetV2(address, excludedUtxoMap, assetName, amt, excludeRecentBlock)
@@ -516,7 +540,7 @@ func (p *Manager) GetUtxosWithAssetV2(address string, plainSats int64,
 // 这里白聪，是指额外的白聪，不包含绑定了指定资产的聪
 func (p *Manager) GetUtxosWithAssetV2_SatsNet(address string, plainSats int64,
 	amt *Decimal, assetName *swire.AssetName, excludedUtxoMap map[string]bool) ([]string, []string, error) {
-	
+
 	if address == "" {
 		address = p.wallet.GetAddress()
 	}
@@ -586,7 +610,7 @@ func (p *Manager) GetUtxosWithAssetV2_SatsNet(address string, plainSats int64,
 }
 
 // available, locked
-func (p *Manager) GetAssetAmount(address string, name *swire.AssetName, 
+func (p *Manager) GetAssetAmount(address string, name *swire.AssetName,
 	excludedUtxoMap map[string]bool) (*Decimal, *Decimal) {
 	if address == "" {
 		address = p.wallet.GetAddress()
@@ -736,7 +760,7 @@ func (p *Manager) BroadcastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 	if _enable_testing && _not_send_tx {
 		return tx.TxID(), nil
 	}
-	
+
 	txId, err := p.l2IndexerClient.BroadCastTx_SatsNet(tx)
 	if err != nil {
 		Log.Errorf("BroadCastTx_SatsNet %s failed. %v", tx.TxID(), err)
@@ -759,6 +783,21 @@ func (p *Manager) IsRecentBlockUtxo(utxoId uint64) bool {
 	return p.status.SyncHeight == h
 }
 
+func (p *Manager) IsBootstrapMode() bool {
+	// TODO 需要检查钱包公钥和资产 ?
+	return p.cfg.Mode == BOOTSTRAP_NODE
+}
+
+func (p *Manager) IsServerMode() bool {
+	// TODO 需要检查钱包公钥和资产 ?
+	return p.cfg.Mode == SERVER_NODE || p.cfg.Mode == BOOTSTRAP_NODE
+}
+
+func (p *Manager) IsBootstrapNode() bool {
+	pubkey := p.wallet.GetPaymentPubKey()
+	return hex.EncodeToString(pubkey.SerializeCompressed()) == indexer.GetBootstrapPubKey()
+}
+
 func (p *Manager) IsCoreNode() bool {
 	pubkey := p.wallet.GetPaymentPubKey().SerializeCompressed()
 	pkStr := hex.EncodeToString(pubkey)
@@ -768,4 +807,21 @@ func (p *Manager) IsCoreNode() bool {
 
 	b, _ := p.l2IndexerClient.IsCoreNode(pubkey)
 	return b
+}
+
+func (p *Manager) GetCoreChannelAddr() string {
+	var coreChannelId string
+	var err error
+	if p.IsServerMode() {
+		coreChannelId, err = GetP2WSHaddress(p.serverNode.Pubkey.SerializeCompressed(),
+			p.wallet.GetPaymentPubKey().SerializeCompressed())
+	} else {
+		bootstrapPubkey, _ := hex.DecodeString(indexer.GetBootstrapPubKey())
+		coreChannelId, err = GetP2WSHaddress(p.serverNode.Pubkey.SerializeCompressed(),
+			bootstrapPubkey)
+	}
+	if err != nil {
+		return ""
+	}
+	return coreChannelId
 }
