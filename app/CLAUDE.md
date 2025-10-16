@@ -6,6 +6,96 @@
 
 SAT20 钱包是一个基于 Vue 3、TypeScript 和 WXT 构建的比特币钱包浏览器扩展。它支持多链操作，包括比特币、SatoshiNet 和通道网络，全面管理 BTC、ORDX、Runes 和 BRC20 资产。
 
+**最新更新**：
+- 已更新 Android 应用名称为 "SAT20 Wallet"（从 "sat20wallet" 更改）
+- 项目已完成从 STP 到 SAT20 的迁移工作
+- 新增浏览器工具模块并优化了 UI 组件
+
+## 项目状态
+
+### 当前分支
+- **主分支**: main
+- **状态**: 领先 origin/main 1 个提交
+- **待提交更改**: Android 应用名称更新
+
+### 最近重要提交
+- `342cd3e` feat: 添加浏览器工具模块并优化UI组件
+- `fd41039` Merge branch 'main' of github.com:sat20-labs/sat20wallet
+- `20dcb81` 完成从 STP 到 SAT20 的迁移工作
+- `c0b51af` feat: update build
+- `725b838` modified
+
+### 已完成功能
+- ✅ WASM 模块集成
+- ✅ 多环境配置系统
+- ✅ 资产管理（BTC、ORDX、Runes、BRC20）
+- ✅ 域名解析系统
+- ✅ DApp 通信桥接
+- ✅ 移动端 Capacitor 集成
+- ✅ 浏览器工具模块
+- ✅ UI 组件优化
+- ✅ 从 STP 到 SAT20 的完整迁移
+
+## 技术栈详情
+
+### 前端框架
+- **Vue 3**: 使用 Composition API 和 `<script setup>` 语法
+- **TypeScript**: 严格模式，完整类型检查
+- **WXT**: 浏览器扩展开发框架
+- **Pinia**: 状态管理，替代 Vuex
+- **Vue Router**: 路由管理
+- **Vite**: 构建工具
+
+### UI 和样式
+- **Tailwind CSS**: 原子化 CSS 框架
+- **Headless UI**: 无样式组件库
+- **Flowbite**: UI 组件库（设计工具偏好）
+- **响应式设计**: 支持移动端和桌面端
+
+### 后端集成
+- **WebAssembly (WASM)**: 核心比特币操作
+- **Capacitor**: 移动端应用包装
+- **Ionic**: 移动端 UI 框架
+
+### 数据层
+- **Ordx API**: 资产数据获取
+- **SatoshiNet API**: 网络交互
+- **Zod**: 数据验证和模式定义
+
+### 开发工具
+- **Bun**: 包管理器和运行时
+- **ESLint + Prettier**: 代码格式化
+- **Vue TSC**: TypeScript 类型检查
+- **VeeValidate**: 表单验证
+
+## 项目结构
+
+```
+app/
+├── entrypoints/           # 扩展入口点
+│   ├── popup/            # 弹出窗口界面
+│   │   ├── pages/        # 页面组件
+│   │   │   ├── wallet/   # 钱包管理
+│   │   │   ├── settings/ # 设置页面
+│   │   │   ├── approve/  # 批准页面
+│   │   │   ├── receive/  # 接收页面
+│   │   │   ├── dapp/     # DApp 交互
+│   │   │   └── browser/  # 浏览器工具
+│   │   └── App.vue       # 主应用组件
+│   ├── content/          # 内容脚本
+│   └── background/       # 后台脚本
+├── public/               # 静态资源
+│   └── wasm/            # WASM 模块
+├── store/               # Pinia 存储
+├── composables/         # 组合式函数
+├── apis/               # API 层
+├── utils/              # 工具函数
+├── components/         # 共享组件
+├── types/              # TypeScript 类型
+├── config/             # 配置文件
+└── assets/             # 资源文件
+```
+
 ## 开发命令
 
 ```bash
@@ -74,6 +164,10 @@ bun run copy-latest-zip  # 复制最新构建包到发布目录
 - DApp 交互的浏览器界面
 - Web3 连接的通信桥接
 
+**浏览器工具模块** (`/entrypoints/popup/pages/browser/`)
+- 新增的浏览器集成工具
+- 增强的用户交互体验
+
 ## 重要开发模式
 
 ### WASM 初始化
@@ -133,6 +227,77 @@ const config = computed(() => configMap[globalStore.env])
 - DApp 通信的内容脚本注入
 - 持久操作的后台服务工作器
 - 主要用户交互的弹出窗口界面
+
+## 开发最佳实践
+
+### 代码规范
+- 使用 TypeScript 严格模式
+- 遵循 Vue 3 Composition API 最佳实践
+- 组件命名使用 PascalCase
+- 文件命名使用 kebab-case
+- 使用 `<script setup>` 语法
+
+### 状态管理模式
+- 全局状态使用 Pinia 存储
+- 组件本地状态使用 `ref` 和 `reactive`
+- 异步操作在 composables 中处理
+- 避免直接修改存储状态，使用 actions
+
+### 安全考虑
+- 私钥和敏感信息通过 WASM 处理
+- 所有敏感操作需要用户批准
+- 使用密码加密保护钱包数据
+- DApp 通信通过内容脚本隔离
+
+### 性能优化
+- WASM 模块异步加载
+- 组件懒加载
+- 图片和资源优化
+- 合理使用计算属性和记忆化
+
+## 调试和故障排除
+
+### 常见问题
+1. **WASM 加载失败**: 检查 `/public/wasm/` 目录和文件路径
+2. **环境配置错误**: 确认 `useGlobalStore()` 中的环境设置
+3. **API 连接问题**: 检查网络配置和 API 端点
+4. **移动端构建问题**: 确认 Capacitor 配置和同步
+
+### 调试工具
+- Vue DevTools
+- 浏览器开发者工具
+- WXT 开发模式
+- Capacitor CLI 调试
+
+## 部署和发布
+
+### 浏览器扩展发布
+1. 运行 `bun run build` 构建生产版本
+2. 测试所有功能正常
+3. 打包并上传到扩展商店
+
+### 移动端发布
+1. 运行 `npm run ionic:build` 构建
+2. 使用 `bun run sync` 同步到原生项目
+3. 通过 Xcode（iOS）或 Android Studio 构建发布
+
+### 版本管理
+- 使用 `bun run bump-version` 更新版本号
+- 遵循语义化版本控制
+- 维护更新日志
+
+## 贡献指南
+
+### 开发流程
+1. Fork 项目并创建功能分支
+2. 遵循代码规范和最佳实践
+3. 添加必要的测试和文档
+4. 提交 Pull Request 进行代码审查
+
+### 提交信息规范
+- 使用 Conventional Commits 格式
+- 类型：feat, fix, docs, style, refactor, test, chore
+- 示例：`feat: 添加新的资产转移功能`
 
 When asked to design UI & frontend interface
 When asked to design UI & frontend interface
