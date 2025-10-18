@@ -490,10 +490,7 @@ func NewSwapContractRuntime(stp ContractManager) *SwapContractRuntime {
 	p := &SwapContractRuntime{
 		SwapContractRuntimeInDB: SwapContractRuntimeInDB{
 			Contract: NewSwapContract(),
-			ContractRuntimeBase: ContractRuntimeBase{
-				DeployTime: time.Now().Unix(),
-				stp:        stp,
-			},
+			ContractRuntimeBase: *NewContractRuntimeBase(stp),
 			SwapContractRunningData: SwapContractRunningData{},
 		},
 	}

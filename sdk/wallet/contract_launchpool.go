@@ -508,10 +508,7 @@ func NewLaunchPoolContractRuntime(stp ContractManager) *LaunchPoolContractRunTim
 	r := &LaunchPoolContractRunTime{
 		LaunchPoolContractRunTimeInDB: LaunchPoolContractRunTimeInDB{
 			LaunchPoolContract: *NewLaunchPoolContract(),
-			ContractRuntimeBase: ContractRuntimeBase{
-				DeployTime: time.Now().Unix(),
-				stp:        stp,
-			},
+			ContractRuntimeBase: *NewContractRuntimeBase(stp),
 			LaunchPoolRunningData: LaunchPoolRunningData{},
 		},
 	}

@@ -757,13 +757,14 @@ type ContractRuntimeBase_old = ContractRuntimeBase
 // 	}
 // }
 
+const INIT_ENABLE_BLOCK int = math.MaxInt
 // 合约运行时基础结构，合约区块以聪网为主，主网区块辅助使用
 type ContractRuntimeBase struct {
 	DeployTime    int64  `json:"deployTime"` // s
 	Status        int    `json:"status"`
-	EnableBlock   int    `json:"enableBlock"`    // 合约在哪个区块进入ready状态
+	EnableBlock   int    `json:"enableBlock"`    // 合约在哪个区块进入ready状态，初始值 INIT_ENABLE_BLOCK
 	CurrBlock     int    `json:"currentBlock"`   // 合约区块不能跳，必须一块一块执行，即使EnableBlock还没到，也要同步
-	EnableBlockL1 int    `json:"enableBlockL1"`  // 合约在哪个区块进入ready状态
+	EnableBlockL1 int    `json:"enableBlockL1"`  // 合约在哪个区块进入ready状态，初始值 INIT_ENABLE_BLOCK
 	CurrBlockL1   int    `json:"currentBlockL1"` // 合约区块不能跳，必须从EnableBlock开始，一块一块执行
 	EnableTxId    string `json:"enableTxId"`     // 只设置，暂时没有用起来
 	Deployer      string `json:"deployer"`
@@ -798,6 +799,15 @@ type ContractRuntimeBase struct {
 	pkScript     []byte
 
 	mutex sync.RWMutex
+}
+
+func NewContractRuntimeBase(stp ContractManager) *ContractRuntimeBase{
+	return &ContractRuntimeBase{
+		EnableBlock: 	INIT_ENABLE_BLOCK,
+		EnableBlockL1: 	INIT_ENABLE_BLOCK,
+		DeployTime: 	time.Now().Unix(),
+		stp:        	stp,
+	}
 }
 
 func (p *ContractRuntimeBase) ToNewVersion() *ContractRuntimeBase {
@@ -1175,6 +1185,7 @@ func (p *ContractRuntimeBase) IsReadyToRun(deployTx *swire.MsgTx) error {
 	return nil
 }
 
+// 这个时候很可能 EnableBlock 还没有设置，CurrBlock 也没有设置
 func (p *ContractRuntimeBase) SetReady() {
 	p.Status = (CONTRACT_STATUS_READY)
 }
@@ -1204,7 +1215,7 @@ func (p *ContractRuntimeBase) AllowInvoke() error {
 		return fmt.Errorf("contract not ready")
 	}
 
-	if p.EnableBlock == 0 {
+	if p.EnableBlock == INIT_ENABLE_BLOCK {
 		return fmt.Errorf("contract enable block not set yet")
 	}
 
@@ -1563,7 +1574,7 @@ func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 
 func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 	p.mutex.Lock()
-	if p.EnableBlockL1 == 0 || data.Height < p.EnableBlockL1 {
+	if p.EnableBlockL1 == INIT_ENABLE_BLOCK || data.Height < p.EnableBlockL1 {
 		if p.CurrBlockL1 == 0 {
 			p.CurrBlockL1 = data.Height
 		}
@@ -1672,7 +1683,7 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 	}
 
 	// 如果还没有激活，直接返回
-	if p.EnableBlock == 0 || data.Height < p.EnableBlock {
+	if p.EnableBlock == INIT_ENABLE_BLOCK || data.Height < p.EnableBlock {
 		if p.CurrBlock < data.Height {
 			// 需要考虑索引器重建数据的可能性，这种情况下，不要更新 p.CurrBlock
 			p.CurrBlock = data.Height

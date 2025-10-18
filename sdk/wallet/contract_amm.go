@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strconv"
 
-	"time"
-
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -506,10 +504,7 @@ func NewAmmContractRuntime(stp ContractManager) *AmmContractRuntime {
 		SwapContractRuntime: SwapContractRuntime{
 			SwapContractRuntimeInDB: SwapContractRuntimeInDB{
 				Contract: NewAmmContract(),
-				ContractRuntimeBase: ContractRuntimeBase{
-					DeployTime: time.Now().Unix(),
-					stp:        stp,
-				},
+				ContractRuntimeBase: *NewContractRuntimeBase(stp),
 				SwapContractRunningData: SwapContractRunningData{},
 			},
 		},
