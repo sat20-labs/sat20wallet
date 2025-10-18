@@ -357,6 +357,7 @@ func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
 	var nullDataScript []byte
 	asset := indexer.NewAssetNameFromString(assetName)
 	if asset.Protocol != indexer.PROTOCOL_NAME_RUNES {
+		// PROTOCOL_NAME_BRC20 ??
 
 		// // 将json结构转为script结构
 		// var wrapperParam InvokeParam
@@ -459,7 +460,7 @@ func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
 }
 
 // 一个特殊的invoke
-func (p *Manager) sendContractEnabledTx(url string, h1, h2 int) (string, error) {
+func (p *Manager) SendContractEnabledTx(url string, h1, h2 int) (string, error) {
 
 	var wrapperParam InvokeParam
 	wrapperParam.Action = INVOKE_API_ENABLE

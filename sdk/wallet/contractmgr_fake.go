@@ -80,9 +80,6 @@ func (p *Manager) SendSigReq(req *wwire.SignRequest, sig []byte) ([][][]byte, er
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (p *Manager) SendContractEnabledTx(url string, h1, h2 int) (string, error) {
-	return "", fmt.Errorf("not implemented")
-}
 func (p *Manager) CreateContractDepositAnchorTx(contract ContractRuntime, destAddr string,
 	splicingOutput *indexer.TxOutput, assetName *AssetName, memo []byte) (*swire.MsgTx, error) {
 	return nil, fmt.Errorf("not implemented")

@@ -1085,7 +1085,7 @@ func (p *Manager) GenerateStubUtxosV2(n int, excludedUtxoMap map[string]bool,
 		feeRate = p.GetFeeRate()
 	}
 
-	tx, prevFetcher, fee, err := p.BuildBatchSendTx_PlainSats(destAddr, 330, n, excludedUtxoMap, feeRate, nil)
+	tx, prevFetcher, fee, err := p.BuildBatchSendTx_btc(destAddr, 330, n, excludedUtxoMap, feeRate, nil)
 	if err != nil {
 		Log.Errorf("buildBatchSendTx failed. %v", err)
 		return nil, 0, err
@@ -1151,15 +1151,20 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 	var prevFetcher *txscript.MultiPrevOutFetcher
 	var fee int64
 
-	if indexer.IsPlainAsset(name) {
-		tx, prevFetcher, fee, err = p.BuildBatchSendTx_PlainSats(destAddr, dAmt.Int64(), n, nil, feeRate, memo)
-	} else if name.Protocol == indexer.PROTOCOL_NAME_ORDX {
-		newName := GetAssetName(tickerInfo)
-		tx, prevFetcher, fee, err = p.BuildBatchSendTx_Ordx(destAddr, newName, dAmt, n, feeRate, memo)
-	} else {
-		newName := GetAssetName(tickerInfo)
-		tx, prevFetcher, fee, err = p.BuildBatchSendTx_Runes(destAddr, newName, dAmt, n, feeRate, memo)
+	newName := GetAssetName(tickerInfo)
+	switch name.Protocol {
+	case "": // btc
+		tx, prevFetcher, fee, err = p.BuildBatchSendTx_btc(destAddr, dAmt.Int64(), n, nil, feeRate, memo)
+	case indexer.PROTOCOL_NAME_ORDX:
+		tx, prevFetcher, fee, err = p.BuildBatchSendTx_ordx(destAddr, newName, dAmt, n, feeRate, memo)
+	case indexer.PROTOCOL_NAME_RUNES:
+		tx, prevFetcher, fee, err = p.BuildBatchSendTx_runes(destAddr, newName, dAmt, n, feeRate, memo)
+	case indexer.PROTOCOL_NAME_BRC20:
+		tx, prevFetcher, fee, err = p.BuildBatchSendTx_brc20(destAddr, newName, dAmt, n, feeRate, memo)
+	default:
+		return nil, 0, fmt.Errorf("buildBatchSendTx unsupport protocol %s", name.Protocol)
 	}
+	
 	if err != nil {
 		Log.Errorf("buildBatchSendTx failed. %v", err)
 		return nil, 0, err
@@ -1182,7 +1187,7 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 }
 
 // 从p2tr地址发出
-func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
+func (p *Manager) BuildBatchSendTx_btc(destAddr string, amt int64, n int,
 	excludedUtxoMap map[string]bool,
 	feeRate int64, memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
@@ -1253,7 +1258,7 @@ func (p *Manager) BuildBatchSendTx_PlainSats(destAddr string, amt int64, n int,
 	return tx, prevFetcher, fee, nil
 }
 
-func adjustInputsForSplicingIn(inputs []*TxOutput, name *AssetName) ([]*TxOutput, int64, int64) {
+func AdjustInputsForSplicingIn(inputs []*TxOutput, name *AssetName) ([]*TxOutput, int64, int64) {
 	hasPrefix := -1
 	prefixOffset := int64(0)
 	hasSuffix := -1
@@ -1314,7 +1319,7 @@ func adjustInputsForSplicingIn(inputs []*TxOutput, name *AssetName) ([]*TxOutput
 }
 
 // 给同一个地址发送n等分资产
-func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
+func (p *Manager) BuildBatchSendTx_ordx(destAddr string,
 	name *AssetName, amt *Decimal, n int, feeRate int64,
 	memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
@@ -1337,7 +1342,7 @@ func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 		return nil, nil, 0, err
 	}
 	var prefix, suffix int64
-	selected, prefix, suffix = adjustInputsForSplicingIn(selected, name)
+	selected, prefix, suffix = AdjustInputsForSplicingIn(selected, name)
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
 	allInput := indexer.NewTxOutput(0)
 	tx := wire.NewMsgTx(wire.TxVersion)
@@ -1461,7 +1466,134 @@ func (p *Manager) BuildBatchSendTx_Ordx(destAddr string,
 }
 
 // 给同一个地址发送n等分资产
-func (p *Manager) BuildBatchSendTx_Runes(destAddr string,
+func (p *Manager) BuildBatchSendTx_runes(destAddr string,
+	name *AssetName, amt *Decimal, n int, feeRate int64,
+	memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+
+	addr, err := btcutil.DecodeAddress(destAddr, GetChainParam())
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	destPkScript, err := txscript.PayToAddrScript(addr)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	// TODO 选择合适的utxo
+	requiredAmt := amt.Clone().MulBigInt(big.NewInt(int64(n)))
+	var weightEstimate utils.TxWeightEstimator
+	selected, totalAsset, total, err := p.SelectUtxosForAsset(
+		p.wallet.GetAddress(), nil,
+		&name.AssetName, requiredAmt, &weightEstimate, false, false)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	changePkScript := selected[0].OutValue.PkScript
+
+	tx := wire.NewMsgTx(wire.TxVersion)
+	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
+	for _, output := range selected {
+		tx.AddTxIn(output.TxIn())
+		prevFetcher.AddPrevOut(*output.OutPoint(), &output.OutValue)
+	}
+
+	// 余额输出到第一个utxo中，其他目标地址从第二个utxo开始
+	// 远端的资产使用edict明确表示输出数量
+	transferEdicts := make([]runestone.Edict, 0)
+	runeId, err := p.getRuneIdFromName(&name.AssetName)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	totalOutputSats := int64(0)
+	if totalAsset.Cmp(requiredAmt) > 0 {
+		// 先输出余额
+		txOut0 := &wire.TxOut{
+			PkScript: changePkScript,
+			Value:    330,
+		}
+		tx.AddTxOut(txOut0)
+		weightEstimate.AddTxOutput(txOut0)
+		totalOutputSats += 330
+	}
+
+	for range n {
+		txOut1 := &wire.TxOut{
+			PkScript: destPkScript,
+			Value:    330,
+		}
+		tx.AddTxOut(txOut1)
+		weightEstimate.AddTxOutput(txOut1)
+		totalOutputSats += 330
+		transferEdicts = append(transferEdicts, runestone.Edict{
+			ID:     *runeId,
+			Output: uint32(len(tx.TxOut) - 1),
+			Amount: amt.ToUint128(),
+		})
+	}
+
+	if len(transferEdicts) > 0 {
+		nullDataScript, err := EncipherRunePayload(transferEdicts)
+		if err != nil {
+			Log.Errorf("too many edicts, %d, %v", len(transferEdicts), err)
+			return nil, nil, 0, err
+		}
+		weightEstimate.AddOutput(nullDataScript)
+
+		txOut2 := &wire.TxOut{
+			PkScript: nullDataScript,
+			Value:    int64(0),
+		}
+		tx.AddTxOut(txOut2)
+	}
+
+	feeValue := total - totalOutputSats
+	fee0 := weightEstimate.Fee(feeRate)
+	if feeValue < fee0 {
+		// 增加fee
+		var selected []*TxOutput
+		selected, feeValue, err = p.SelectUtxosForFee(
+			p.wallet.GetAddress(), nil, feeValue,
+			feeRate, &weightEstimate, false, false)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		for _, output := range selected {
+			tx.AddTxIn(output.TxIn())
+			prevFetcher.AddPrevOut(*output.OutPoint(), &output.OutValue)
+		}
+	}
+
+	fee0 = weightEstimate.Fee(feeRate)
+	weightEstimate.AddP2TROutput() // fee change
+	fee1 := weightEstimate.Fee(feeRate)
+
+	if feeValue < fee0 {
+		return nil, nil, 0, fmt.Errorf("no enough fee")
+	}
+
+	feeChange := feeValue - fee1
+	if feeChange >= 330 {
+		txOut3 := &wire.TxOut{
+			PkScript: changePkScript,
+			Value:    int64(feeChange),
+		}
+		tx.AddTxOut(txOut3)
+	} else {
+		feeChange = 0
+	}
+	if len(memo) > 0 {
+		txOut4 := &wire.TxOut{
+			PkScript: memo,
+			Value:    0,
+		}
+		tx.AddTxOut(txOut4)
+	}
+
+	return tx, prevFetcher, feeValue - feeChange, nil
+}
+
+// 给同一个地址发送n等分资产
+func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 	name *AssetName, amt *Decimal, n int, feeRate int64,
 	memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
@@ -1669,11 +1801,12 @@ func CalcFee_SendTx(inputLen, outputLen, feeLen int, assetName *AssetName,
 	return requiredFee
 }
 
-// 该Tx还没有广播或者广播了还没有确认，才有可能重建
+// 该Tx还没有广播或者广播了还没有确认，才有可能重建，索引器的限制，utxo被花费后就删除了
 func (p *Manager) RebuildTxOutput(tx *wire.MsgTx) ([]*TxOutput, []*TxOutput, error) {
 	// 尝试为tx的输出分配资产
 	// 按ordx协议的规则
 	// 按runes协议的规则
+	// TODO 增加brc20的规则 PROTOCOL_NAME_BRC20
 	var inputs []*TxOutput
 	var input *TxOutput
 	for _, txIn := range tx.TxIn {
@@ -1693,6 +1826,8 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx) ([]*TxOutput, []*TxOutput, err
 			input.Append(info)
 		}
 		inputs = append(inputs, info.Clone())
+
+		// TODO 找出 brc20 的transfer铭文
 	}
 
 	txId := tx.TxID()
@@ -1730,6 +1865,8 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx) ([]*TxOutput, []*TxOutput, err
 			if defaultRuneOutput == -1 {
 				defaultRuneOutput = i
 			}
+
+			// TODO 看看brc20的transfer铭文输出到哪个txOut，重建资产数据
 		}
 		curr.OutPointStr = fmt.Sprintf("%s:%d", txId, i)
 		outputs = append(outputs, curr)
@@ -1935,6 +2072,7 @@ func (p *Manager) SelectUtxosForPlainSats(
 	return prevFetcher, changePkScript, requiredValue, changeOutput, fee0, nil
 }
 
+// TODO GetUtxoListWithTicker，返回 brc20 的transfer铭文，但不支持找零，所以需要提供一个brc20专用的selector PROTOCOL_NAME_BRC20
 func (p *Manager) SelectUtxosForAsset(address string, excludedUtxoMap map[string]bool,
 	assetName *indexer.AssetName, requiredAmt *Decimal,
 	weightEstimate *utils.TxWeightEstimator, excludeRecentBlock, inChannel bool) (
@@ -2411,9 +2549,8 @@ func (p *Manager) BuildSendOrdxTxWithStub(destAddr string, assetName *AssetName,
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("GetPkScriptFromAddress %s failed. %v", destAddr, err)
 	}
-	var address string
-	address = p.wallet.GetAddress()
 	
+	address := p.wallet.GetAddress()
 	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &assetName.AssetName)
 	if len(utxos) == 0 {
 		return nil, nil, 0, fmt.Errorf("no assets %s in %s", assetName.String(), address)
@@ -2619,18 +2756,21 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 	var prevFetcher *txscript.MultiPrevOutFetcher
 	var fee int64
 	var err error
-	if indexer.IsPlainAsset(name) {
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_PlainSats(dest,
-			feeRate, memo, false)
-	} else if name.Protocol == indexer.PROTOCOL_NAME_ORDX {
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_ordx(dest, assetName,
-			feeRate, memo, false)
-	} else if name.Protocol == indexer.PROTOCOL_NAME_RUNES {
-		if len(memo) != 0 {
+
+	switch name.Protocol {
+	case "": // btc
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_btc(dest, feeRate, memo, false)
+	case indexer.PROTOCOL_NAME_ORDX:
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_ordx(dest, assetName, feeRate, memo, false)
+	case indexer.PROTOCOL_NAME_RUNES:
+		if len(memo) != 0 { // TODO 等主网支持多个op_return后再修改
 			return "", 0, fmt.Errorf("do not attach memo when send runes asset")
 		}
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_runes(dest, assetName,
-			feeRate, false)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_runes(dest, assetName, feeRate, false)
+	case indexer.PROTOCOL_NAME_BRC20:
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_brc20(dest, assetName, feeRate, false)
+	default:
+		return "", 0, fmt.Errorf("BatchSendAssetsV3 unsupport protocol %s", name.Protocol)
 	}
 	if err != nil {
 		return "", 0, err
@@ -2656,7 +2796,7 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 }
 
 // 给多个地址发送不同数量的白聪，支持全部发送
-func (p *Manager) BuildBatchSendTxV3_PlainSats(dest []*SendAssetInfo,
+func (p *Manager) BuildBatchSendTxV3_btc(dest []*SendAssetInfo,
 	feeRate int64, memo []byte, excludeRecentBlock bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 	if p.wallet == nil {
 		return nil, nil, 0, fmt.Errorf("wallet is not created/unlocked")
@@ -2845,7 +2985,7 @@ func (p *Manager) BuildBatchSendTxV3_ordx(dest []*SendAssetInfo,
 		return nil, nil, 0, err
 	}
 	var prefix int64
-	selected, prefix, _ = adjustInputsForSplicingIn(selected, assetName)
+	selected, prefix, _ = AdjustInputsForSplicingIn(selected, assetName)
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
 	allInput := indexer.NewTxOutput(0)
 	for _, output := range selected {
@@ -3140,6 +3280,151 @@ func (p *Manager) BuildBatchSendTxV3_runes(dest []*SendAssetInfo,
 	return tx, prevFetcher, fee, nil
 }
 
+
+// 给不同地址发送不同数量的资产
+func (p *Manager) BuildBatchSendTxV3_brc20(dest []*SendAssetInfo,
+	assetName *AssetName,
+	feeRate int64, excludeRecentBlock bool) (
+	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+
+
+	var requiredValue int64
+	var requiredAmt *Decimal
+	var destPkScript [][]byte
+	for _, d := range dest {
+		if d.AssetName != nil {
+			if d.AssetName.String() != assetName.String() {
+				return nil, nil, 0, fmt.Errorf("the asset name is not equal")
+			}
+		}
+		pkScript, err := GetPkScriptFromAddress(d.Address)
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("GetPkScriptFromAddress %s failed. %v", d.Address, err)
+		}
+
+		destPkScript = append(destPkScript, pkScript)
+		requiredAmt = requiredAmt.Add(d.AssetAmt)
+		requiredValue += d.Value
+	}
+
+	var weightEstimate utils.TxWeightEstimator
+	selected, totalAsset, total, err := p.SelectUtxosForAssetV3( 
+		assetName, requiredAmt, &weightEstimate, excludeRecentBlock)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	changePkScript := selected[0].OutValue.PkScript
+
+	tx := wire.NewMsgTx(wire.TxVersion)
+	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
+	for _, output := range selected {
+		tx.AddTxIn(output.TxIn())
+		prevFetcher.AddPrevOut(*output.OutPoint(), &output.OutValue)
+	}
+
+	// 余额输出到第一个utxo中，其他目标地址从第二个utxo开始
+	// 远端的资产使用edict明确表示输出数量
+	transferEdicts := make([]runestone.Edict, 0)
+	runeId, err := p.getRuneIdFromName(&assetName.AssetName)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	totalOutputSats := int64(0)
+	if totalAsset.Cmp(requiredAmt) > 0 {
+		// 先输出余额
+		txOut0 := &wire.TxOut{
+			PkScript: changePkScript,
+			Value:    330,
+		}
+		tx.AddTxOut(txOut0)
+		weightEstimate.AddTxOutput(txOut0)
+		totalOutputSats += 330
+	}
+
+	for i, user := range dest {
+		txOut1 := &wire.TxOut{
+			PkScript: destPkScript[i],
+			Value:    330,
+		}
+		tx.AddTxOut(txOut1)
+		weightEstimate.AddTxOutput(txOut1)
+		totalOutputSats += 330
+		transferEdicts = append(transferEdicts, runestone.Edict{
+			ID:     *runeId,
+			Output: uint32(len(tx.TxOut) - 1),
+			Amount: user.AssetAmt.ToUint128(),
+		})
+	}
+
+	if len(transferEdicts) > 0 {
+		nullDataScript, err := EncipherRunePayload(transferEdicts)
+		if err != nil {
+			Log.Errorf("too many edicts, %d, %v", len(transferEdicts), err)
+			return nil, nil, 0, err
+		}
+		weightEstimate.AddOutput(nullDataScript)
+
+		txOut2 := &wire.TxOut{
+			PkScript: nullDataScript,
+			Value:    int64(0),
+		}
+		tx.AddTxOut(txOut2)
+	}
+
+	// 输出白聪
+	if requiredValue != 0 {
+		for i, user := range dest {
+			if user.Value >= 330 {
+				txOut3 := &wire.TxOut{
+					PkScript: destPkScript[i],
+					Value:    user.Value,
+				}
+				tx.AddTxOut(txOut3)
+				weightEstimate.AddTxOutput(txOut3)
+				totalOutputSats += user.Value
+			} else {
+				return nil, nil, 0, fmt.Errorf("output is less than 330 sats")
+			}
+		}
+	}
+
+	// 剩下的都是白聪
+	feeValue := total - totalOutputSats
+	fee0 := weightEstimate.Fee(feeRate)
+	if feeValue < fee0 {
+		// 增加fee
+		var selected []*TxOutput
+		selected, feeValue, err = p.SelectUtxosForFeeV3(feeValue,
+			feeRate, &weightEstimate, excludeRecentBlock)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		for _, output := range selected {
+			tx.AddTxIn(output.TxIn())
+			prevFetcher.AddPrevOut(*output.OutPoint(), &output.OutValue)
+		}
+	}
+
+	fee0 = weightEstimate.Fee(feeRate)
+	if feeValue < fee0 {
+		return nil, nil, 0, fmt.Errorf("no enough fee")
+	}
+
+	weightEstimate.AddP2TROutput() // fee change
+	fee1 := weightEstimate.Fee(feeRate)
+	fee := fee0
+	feeChange := feeValue - fee1
+	if feeChange >= 330 {
+		fee = fee1
+		txOut3 := &wire.TxOut{
+			PkScript: changePkScript,
+			Value:    int64(feeChange),
+		}
+		tx.AddTxOut(txOut3)
+	}
+
+	return tx, prevFetcher, fee, nil
+}
 
 func (p *Manager) GetOrGenerateStubs(address string, c int,
 	excludedUtxoMap map[string]bool, feeRate int64) ([]*TxOutput, error) {

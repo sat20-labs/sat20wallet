@@ -599,7 +599,8 @@ type ContractBase struct {
 
 func (p *ContractBase) CheckContent() error {
 	if p.AssetName.Protocol != indexer.PROTOCOL_NAME_ORDX &&
-		p.AssetName.Protocol != indexer.PROTOCOL_NAME_RUNES {
+		p.AssetName.Protocol != indexer.PROTOCOL_NAME_RUNES && 
+		p.AssetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return fmt.Errorf("invalid protocol %s", p.AssetName.Protocol)
 	}
 	if p.AssetName.Ticker == "" {
@@ -623,6 +624,8 @@ func (p *ContractBase) CheckContent() error {
 		if err != nil {
 			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
 		}
+	} else if p.AssetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+		
 	}
 
 	if indexer.IsPlainAsset(&p.AssetName) {
