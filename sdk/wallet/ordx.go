@@ -38,7 +38,18 @@ func EstimatedInscribeFee(inputLen, bodyLen int, feeRate int64, revealOutValue i
 	return (commitFee + revealFee) * feeRate + revealOutValue
 }
 
-// 同步修改 GetLPTAssetName
+
+// 只适合 CONTENT_DEPLOY_BODY （可以从EstimatedInscribeFee计算得出）
+func EstimatedDeployFee(inputLen int, feeRate int64) int64 {
+	/*
+		经验数据，调整 CONTENT_DEPLOY_BODY 后需要调整
+		estimatedInputValue1 := 340*feeRate + 330
+		estimatedInputValue2 := 400*feeRate + 330
+		estimatedInputValue3 := 460*feeRate + 330
+	*/
+	return (340+int64(inputLen-1)*60)*feeRate + 330
+}
+
 
 func (p *Manager) inscribe(address string, body string, revealOutValue int64,
 	feeRate int64, commitTxPrevOutputList []*PrevOutput) (*InscribeResv, error) {
@@ -59,6 +70,7 @@ func (p *Manager) inscribe(address string, body string, revealOutValue int64,
 		},
 		DestAddress:   address,
 		ChangeAddress: changeAddr,
+		SignAndSend:   true,
 		Signer:        p.SignTxV2,
 		PublicKey:     wallet.GetPaymentPubKey(),
 	}
@@ -93,17 +105,6 @@ func (p *Manager) inscribe(address string, body string, revealOutValue int64,
 	SaveInscribeResv(p.db, txs)
 
 	return txs, nil
-}
-
-// 只适合 CONTENT_DEPLOY_BODY
-func EstimatedDeployFee(inputLen int, feeRate int64) int64 {
-	/*
-		经验数据，调整 CONTENT_DEPLOY_BODY 后需要调整
-		estimatedInputValue1 := 340*feeRate + 330
-		estimatedInputValue2 := 400*feeRate + 330
-		estimatedInputValue3 := 460*feeRate + 330
-	*/
-	return (340+int64(inputLen-1)*60)*feeRate + 330
 }
 
 func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int) (*InscribeResv, error) {

@@ -122,6 +122,7 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 		},
 		DestAddress:   address,
 		ChangeAddress: changeAddr,
+		SignAndSend:   true,
 		Signer:        p.SignTxV2,
 		PublicKey:     wallet.GetPaymentPubKey(),
 	}
@@ -226,5 +227,5 @@ func (p *Manager) mintRunesAsset(destAddr string, tickInfo *indexer.TickerInfo) 
 	// pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	// address := wallet.GetAddress()
 
-	return "", nil
+	return "", fmt.Errorf("not implemented")
 }

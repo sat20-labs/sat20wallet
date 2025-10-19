@@ -61,8 +61,9 @@ type InscriptionRequest struct {
 	DestAddress   string `json:"destAddress"`
 	ChangeAddress string `json:"changeAddress"`
 
-	Signer    Signer
-	PublicKey *btcec.PublicKey
+	SignAndSend bool
+	Signer      Signer
+	PublicKey   *btcec.PublicKey
 }
 
 type inscriptionTxCtxData struct {
@@ -79,6 +80,7 @@ type Signer func(tx *wire.MsgTx, prevOutFetcher txscript.PrevOutputFetcher) erro
 type InscriptionBuilder struct {
 	Network                   *chaincfg.Params
 	CommitTxPrevOutputFetcher *txscript.MultiPrevOutFetcher
+	SignAndSend               bool // TODO 暂时没用
 	Signer                    Signer
 	PublicKey                 *btcec.PublicKey
 	RevealPrivateKey          *btcec.PrivateKey
@@ -144,6 +146,7 @@ func NewInscriptionTool(network *chaincfg.Params, request *InscriptionRequest) (
 		RevealTxPrevOutputFetcher: txscript.NewMultiPrevOutFetcher(nil),
 		CommitTxPrevOutputList:    request.CommitTxPrevOutputList,
 
+		SignAndSend:      request.SignAndSend,
 		Signer:           request.Signer,
 		PublicKey:        request.PublicKey,
 		RevealAddr:       request.DestAddress,
@@ -328,6 +331,9 @@ func (builder *InscriptionBuilder) buildCommitTx(commitTxPrevOutputList PrevOutp
 	txForEstimate := wire.NewMsgTx(DefaultTxVersion)
 	txForEstimate.TxIn = tx.TxIn
 	txForEstimate.TxOut = tx.TxOut
+
+	// 尝试sign，为了 GetTxVirtualSizeByView。 
+	// TODO 采用 TxWeightEstimator 会更简单 
 	if err = builder.Signer(txForEstimate, builder.CommitTxPrevOutputFetcher); err != nil {
 		return err
 	}

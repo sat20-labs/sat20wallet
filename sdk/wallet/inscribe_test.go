@@ -74,6 +74,7 @@ func TestInscribe(t *testing.T) {
 		},
 		DestAddress:            address,
 		ChangeAddress:          address,
+		SignAndSend:            true,
 		Signer:                 wallet.SignTx,
 		PublicKey:              wallet.GetPaymentPubKey(),
 	}
@@ -120,6 +121,7 @@ func TestInscribeTransfer(t *testing.T) {
 		},
 		DestAddress:            address,
 		ChangeAddress:          address,
+		SignAndSend:            true,
 		Signer:                 wallet.SignTx,
 		PublicKey:              wallet.GetPaymentPubKey(),
 	}
