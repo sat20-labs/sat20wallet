@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">sat20wallet</string>
-    <string name="title_activity_main">sat20wallet</string>
+    <string name="app_name">SAT20 Wallet</string>
+    <string name="title_activity_main">SAT20 Wallet</string>
     <string name="package_name">com.sat20.wallet</string>
     <string name="custom_url_scheme">com.sat20.wallet</string>
 </resources>
