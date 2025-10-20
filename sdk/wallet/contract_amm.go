@@ -16,27 +16,22 @@ import (
 /*
 AMM交易合约
 1. 池子中满足一定的资产份额（常数K）后，合约激活
-2. 两种任意的资产，一般一种是聪
+2. 两种资产，一种是聪 (TODO 支持两种任意资产)
 3. 每笔交易，按照区块顺序自动处理
 4. 每个区块处理完成后，统一回款
 5. 项目方提取池子利润
 
 对该地址上该资产的约定：
-1. 合约参数规定的资产和对应数量，由该合约管理。合约需要确保不论L1和L2上，都有对应数量的资产
+1. 合约参数规定的资产和对应数量，由该合约管理。合约需要确保L2上有对应数量的资产
 	a. AmmContract 的参数规定了池子基本资产, 只有这部分资产必须严格要求L1和L2都要有，并且不允许动用
 	b. SwapContractRunningData 运行参数，包含了合约运行的盈利，也是合约管理的资产，但可能在L1，也可能在L2
 2. 在L1和L2上持有的更多的资产，可以支持withdraw和deposit操作
-3. 在L1上，没有被Ascend过的utxo，可以用来支持withdraw。如果没有足够的utxo可用，就必须先Descend一些utxo（DeAnchorTx）。但必须保留AmmContract指定数量资产。
-4. 在L2上，超出AmmContract的资产，可以直接send出去给用户，用来支持deposit操作。如果不够，就需要先Ascend用户转进来的utxo
-5. 为了简单一点，现在withdraw直接deAnchor，但deposit不执行anchor
 
 AMM V2 交易合约：组池子和动态调整池子
 在第一版本的基础上，增加：
-1. 池子建立的过程: 初始化参数，池子在满足初始化参数后进入AMM模式，在一个周期后自动调整
-2. STAKE和UNSTAKE：在池子的正常运作过程，允许任何stake和unstake，stake和unstake可以swap
-3. SETTLEMENT：运行周期结束，计算池子的运行利润，自动分配利润，但不自动构造交易，默认滚动投资
-4. FROZEN：池子低于初始水位，自动冻结，不能交易，但支持stake和unstake
-5. 默认利润分配比例： LP:市场:基金会=60:35:5，如果是发射池，50:50
+1. 池子建立的过程: 初始化参数，池子在满足初始化参数后进入AMM模式
+2. AddLiq和RemoveLiq：在池子的正常运作过程，随时可以addliq和removeliq
+3. 默认利润分配比例： LP:市场:基金会=60:35:5，如果是发射池，50:50
 
 发射池的部署人，可以提走AMM池子底池的利润，利润需要50:50分成。
 利润的计算：
@@ -276,6 +271,12 @@ func (p *DepositInvokeParam) Encode() ([]byte, error) {
 		AddData([]byte(p.Amt)).Script()
 }
 
+func (p *DepositInvokeParam) EncodeV2() ([]byte, error) {
+	return txscript.NewScriptBuilder().
+		AddInt64(int64(p.OrderType)).
+		AddData([]byte(p.Amt)).Script()
+}
+
 func (p *DepositInvokeParam) Decode(data []byte) error {
 	tokenizer := txscript.MakeScriptTokenizer(0, data)
 
@@ -310,6 +311,14 @@ func (p *AddLiqInvokeParam) Encode() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
 		AddData([]byte(p.AssetName)).
+		AddData([]byte(p.Amt)).
+		AddInt64(int64(p.Value)).
+		Script()
+}
+
+func (p *AddLiqInvokeParam) EncodeV2() ([]byte, error) {
+	return txscript.NewScriptBuilder().
+		AddInt64(int64(p.OrderType)).
 		AddData([]byte(p.Amt)).
 		AddInt64(int64(p.Value)).
 		Script()
@@ -351,6 +360,13 @@ func (p *RemoveLiqInvokeParam) Encode() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
 		AddData([]byte(p.AssetName)).
+		AddData([]byte(p.LptAmt)).
+		Script()
+}
+
+func (p *RemoveLiqInvokeParam) EncodeV2() ([]byte, error) {
+	return txscript.NewScriptBuilder().
+		AddInt64(int64(p.OrderType)).
 		AddData([]byte(p.LptAmt)).
 		Script()
 }

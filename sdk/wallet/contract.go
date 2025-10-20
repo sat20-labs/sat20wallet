@@ -73,6 +73,7 @@ const (
 	INVOKE_API_UNSTAKE         string = "unstake"  // 可以unstake到一层
 	INVOKE_API_ADDLIQUIDITY    string = "addliq"   // 如果是L1，必须要有op_return携带invokeParam，否则会被认为是deposit
 	INVOKE_API_REMOVELIQUIDITY string = "removeliq"
+	INVOKE_API_PROFIT          string = "profit"
 
 	ORDERTYPE_SELL            = 1
 	ORDERTYPE_BUY             = 2
@@ -485,6 +486,14 @@ func (p *InvokeItem) Clone() *InvokeItem {
 	return &n
 }
 
+// InvokeParam.Param
+type InvokeInnerParamIF interface {
+	Encode() ([]byte, error)
+	Decode(data []byte) error
+
+	EncodeV2() ([]byte, error) // 尽可能节省字节数的编码方式，比如不需要资产名称
+}
+
 type InvokeParam struct {
 	Action string `json:"action"`
 	Param  string `json:"param,omitempty"` // 外部使用时是json，内部使用时是编码过的string
@@ -494,6 +503,10 @@ func (p *InvokeParam) Encode() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddData([]byte(p.Action)).
 		AddData([]byte(p.Param)).Script()
+}
+
+func (p *InvokeParam) EncodeV2() ([]byte, error) {
+	return p.Encode()
 }
 
 func (p *InvokeParam) Decode(data []byte) error {
@@ -1489,10 +1502,16 @@ func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
 		return invoke.InvokeParam.ContractPath != p.RelativePath() ||
 			invoke.InvokeParam.ContractPath != p.URL()
 	} else if invoke.TxOutput != nil {
-		// 只检查是否有合约对应的资产
 		assetName := p.contract.GetAssetName()
+		// 除非是符文，否则都是有 InvokeParam 
+		if assetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
+			// 只检查是否有合约对应的资产
+			amt := invoke.TxOutput.GetAsset(assetName)
+			return amt.Sign() != 0
+		}
+		// TODO 老版本，先打开，等钱包更新后，删除以下代码
 		if indexer.IsPlainAsset(assetName) {
-			// TODO 目前只有transcend支持白聪
+			// 只有transcend支持白聪
 			return len(invoke.TxOutput.Assets) == 0
 		}
 		amt := invoke.TxOutput.GetAsset(assetName)
@@ -2142,4 +2161,108 @@ type InvokeTx struct {
 type InvokeDataInBlock struct {
 	Height       int
 	InvokeTxVect []*InvokeTx
+}
+
+func GetInvokeInnerParam(action string) InvokeInnerParamIF {
+	switch action {
+	case INVOKE_API_SWAP:
+		return &SwapInvokeParam{}
+	
+	case INVOKE_API_DEPOSIT:
+		return &DepositInvokeParam{}
+		
+	case INVOKE_API_WITHDRAW:
+		return &WithdrawInvokeParam{}
+		
+	case INVOKE_API_ADDLIQUIDITY:
+		return &AddLiqInvokeParam{}
+		
+	case INVOKE_API_REMOVELIQUIDITY:
+		return &RemoveLiqInvokeParam{}
+
+	default:
+		return nil
+	}
+}
+
+// 将json格式的调用参数，转换为script格式的参数
+func ConvertInvokeParam(jsonInvokeParam string) (*InvokeParam, error) {
+	var wrapperParam InvokeParam
+	err := json.Unmarshal([]byte(jsonInvokeParam), &wrapperParam)
+	if err != nil {
+		return nil, err
+	}
+	param := GetInvokeInnerParam(wrapperParam.Action)
+	if param != nil {
+		err = json.Unmarshal([]byte(wrapperParam.Param), param)
+		if err != nil {
+			return nil, err
+		}
+		
+		innerParam, err := param.Encode()
+		if err != nil {
+			return nil, err
+		}
+		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+	}
+	return &wrapperParam, nil
+
+	// switch wrapperParam.Action {
+	// case INVOKE_API_SWAP:
+	// 	var swapParam SwapInvokeParam
+	// 	err = json.Unmarshal([]byte(wrapperParam.Param), &swapParam)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	innerParam, err := swapParam.Encode()
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+
+	// case INVOKE_API_WITHDRAW:
+	// 	var param WithdrawInvokeParam
+	// 	err = json.Unmarshal([]byte(wrapperParam.Param), &param)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	innerParam, err := param.Encode()
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+
+	// case INVOKE_API_MINT:
+
+	// case INVOKE_API_REFUND:
+
+	// case INVOKE_API_ADDLIQUIDITY:
+	// 	var stakeParam AddLiqInvokeParam
+	// 	err = json.Unmarshal([]byte(wrapperParam.Param), &stakeParam)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	fee += stakeParam.Value
+	// 	innerParam, err := stakeParam.Encode()
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+
+	// case INVOKE_API_REMOVELIQUIDITY:
+	// 	var stakeParam RemoveLiqInvokeParam
+	// 	err = json.Unmarshal([]byte(wrapperParam.Param), &stakeParam)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	innerParam, err := stakeParam.Encode()
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+
+	// default:
+	// 	return nil, fmt.Errorf("unsupport action %s", wrapperParam.Action)
+	// }
+	//return &wrapperParam, nil
 }

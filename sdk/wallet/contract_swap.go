@@ -144,6 +144,13 @@ func (p *SwapInvokeParam) Encode() ([]byte, error) {
 		AddData([]byte(p.UnitPrice)).Script()
 }
 
+func (p *SwapInvokeParam) EncodeV2() ([]byte, error) {
+	return txscript.NewScriptBuilder().
+		AddInt64(int64(p.OrderType)).
+		AddData([]byte(p.Amt)).
+		AddData([]byte(p.UnitPrice)).Script()
+}
+
 func (p *SwapInvokeParam) Decode(data []byte) error {
 	tokenizer := txscript.MakeScriptTokenizer(0, data)
 
@@ -1554,6 +1561,7 @@ func (p *SwapContractRuntime) UnconfirmedTxId_SatsNet() string {
 	return ""
 }
 
+// return fee: 调用费用+该invoke需要的聪数量
 func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 	var invoke InvokeParam
 	err := json.Unmarshal([]byte(param), &invoke)
@@ -1730,34 +1738,8 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		if innerParam.Value <= 0 {
 			return 0, fmt.Errorf("invalid value %d", innerParam.Value)
 		}
-		// 最后没有进入池子的退款
-		// 保持相同比例
-		// var amtInPool *Decimal
-		// var valueInPool int64
-		// if p.SatsValueInPool == 0 {
-		// 	amm, ok := p.Contract.(*AmmContract)
-		// 	if !ok {
-		// 		return 0, fmt.Errorf("not AMM contract")
-		// 	}
-		// 	amtInPool, err = indexer.NewDecimalFromString(amm.AssetAmt, MAX_ASSET_DIVISIBILITY)
-		// 	if err != nil {
-		// 		return 0, err
-		// 	}
-		// 	valueInPool = amm.SatValue
-		// } else {
-		// 	amtInPool = p.AssetAmtInPool.Clone()
-		// 	valueInPool = p.SatsValueInPool
-		// }
-		// d1 := indexer.DecimalMul(amt, indexer.NewDecimal(valueInPool, p.Divisibility))
-		// d2 := indexer.DecimalMul(amtInPool, indexer.NewDecimal(innerParam.Value, p.Divisibility))
-		// if d1.Cmp(d2) != 0 {
-		// 	threshold, _ := indexer.NewDecimalFromString("0.010", 3)
-		// 	if indexer.DecimalSub(d1, d2).Abs().Cmp(indexer.DecimalMul(d2, threshold)) >= 0 {
-		// 		return 0, fmt.Errorf("liquitidy asset should keep the same ratio with current pool: %s %d", innerParam.Amt, innerParam.Value)
-		// 	}
-		// }
 
-		return INVOKE_FEE, nil
+		return INVOKE_FEE + innerParam.Value, nil
 
 	case INVOKE_API_REMOVELIQUIDITY:
 		if templateName != TEMPLATE_CONTRACT_AMM {
@@ -2286,6 +2268,29 @@ func (p *SwapContractRuntime) Invoke(invokeTx *InvokeTx, height int) (InvokeHist
 		if assetAmt.IsZero() {
 			Log.Errorf("utxo %s no asset %s", utxo, p.GetAssetName().String())
 			bValid = false
+		}
+
+		// 如果invokeParam不为nil，要检查数据是否一致
+		if param.Param != "" {
+			paramBytes, err := base64.StdEncoding.DecodeString(param.Param)
+			if err != nil {
+				return nil, err
+			}
+			var depositParam DepositInvokeParam
+			err = depositParam.Decode(paramBytes)
+			if err != nil {
+				return nil, err
+			}
+			if depositParam.AssetName != "" {
+				if depositParam.AssetName != p.GetAssetName().String() {
+					return nil, fmt.Errorf("invalid asset name %s", depositParam.AssetName)
+				}
+			}
+			if depositParam.Amt != "0" && depositParam.Amt != "" {
+				if depositParam.Amt != assetAmt.String() {
+					return nil, fmt.Errorf("invalid asset amt %s", depositParam.Amt)
+				}
+			}
 		}
 
 		// 临时锁定该UTXO TODO 需要一个更好的方案，这里不一定能锁住

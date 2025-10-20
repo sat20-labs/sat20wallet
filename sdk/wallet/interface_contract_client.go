@@ -113,7 +113,7 @@ func (p *Manager) getRemoteDeployedContract(url string) ContractRuntime {
 	return c
 }
 
-func (p *Manager) QueryFeeForInvokeContract(contractURL string, invokeParam string) (ContractRuntime, int64, error) {
+func (p *Manager) QueryFeeForInvokeContract(contractURL string, jsonInvokeParam string) (ContractRuntime, int64, error) {
 
 	// client mode
 	contract := p.getRemoteDeployedContract(contractURL)
@@ -123,7 +123,7 @@ func (p *Manager) QueryFeeForInvokeContract(contractURL string, invokeParam stri
 
 	// 检查调用参数是否有效。
 	// TODO 以后直接到持有合约的节点上去检查
-	fee, err := contract.CheckInvokeParam(invokeParam)
+	fee, err := contract.CheckInvokeParam(jsonInvokeParam)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -132,7 +132,7 @@ func (p *Manager) QueryFeeForInvokeContract(contractURL string, invokeParam stri
 }
 
 // 发送的TX包含调用该合约所需要的聪, invokeParam不支持复杂结构的参数
-func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
+func (p *Manager) InvokeContract_Satsnet(contractURL string, jsonInvokeParam string,
 	feeRate int64) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -143,7 +143,7 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
 		return "", err
 	}
 
-	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
+	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, jsonInvokeParam)
 	if err != nil {
 		return "", err
 	}
@@ -151,13 +151,11 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
 		return "", fmt.Errorf("contract is not active")
 	}
 
-	// 将json结构转为script结构
-	var param InvokeParam
-	err = json.Unmarshal([]byte(invokeParam), &param)
+	wrapperParam, err := ConvertInvokeParam(jsonInvokeParam)
 	if err != nil {
 		return "", err
 	}
-	buf, err := param.Encode()
+	buf, err := wrapperParam.Encode()
 	if err != nil {
 		return "", err
 	}
@@ -185,8 +183,6 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
 		return "", err
 	}
 
-	// 需要查询合约是否已经关闭?
-
 	tx, err := p.SendAssets_SatsNet(channelAddr, ASSET_PLAIN_SAT.String(), fmt.Sprintf("%d", fee), nullDataScript)
 	if err != nil {
 		Log.Errorf("SendAssets_SatsNet %s failed", channelAddr)
@@ -198,7 +194,7 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
 }
 
 // 调用合约的同时加入资产，invokeParam支持复杂结构的参数
-func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam string,
+func (p *Manager) InvokeContractV2_Satsnet(contractURL string, jsonInvokeParam string,
 	assetName string, amt string, feeRate int64) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -210,7 +206,7 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam strin
 	}
 
 	// 调用合约的费用
-	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
+	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, jsonInvokeParam)
 	if err != nil {
 		return "", err
 	}
@@ -218,71 +214,10 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam strin
 		return "", fmt.Errorf("contract is not active")
 	}
 
-	// 将json结构转为script结构
-	var wrapperParam InvokeParam
-	err = json.Unmarshal([]byte(invokeParam), &wrapperParam)
+	wrapperParam, err := ConvertInvokeParam(jsonInvokeParam)
 	if err != nil {
 		return "", err
 	}
-
-	switch wrapperParam.Action {
-	case INVOKE_API_SWAP:
-		var swapParam SwapInvokeParam
-		err = json.Unmarshal([]byte(wrapperParam.Param), &swapParam)
-		if err != nil {
-			return "", err
-		}
-		innerParam, err := swapParam.Encode()
-		if err != nil {
-			return "", err
-		}
-		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-
-	case INVOKE_API_WITHDRAW:
-		var param WithdrawInvokeParam
-		err = json.Unmarshal([]byte(wrapperParam.Param), &param)
-		if err != nil {
-			return "", err
-		}
-		innerParam, err := param.Encode()
-		if err != nil {
-			return "", err
-		}
-		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-
-	case INVOKE_API_MINT:
-
-	case INVOKE_API_REFUND:
-
-	case INVOKE_API_ADDLIQUIDITY:
-		var stakeParam AddLiqInvokeParam
-		err = json.Unmarshal([]byte(wrapperParam.Param), &stakeParam)
-		if err != nil {
-			return "", err
-		}
-		fee += stakeParam.Value
-		innerParam, err := stakeParam.Encode()
-		if err != nil {
-			return "", err
-		}
-		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-
-	case INVOKE_API_REMOVELIQUIDITY:
-		var stakeParam RemoveLiqInvokeParam
-		err = json.Unmarshal([]byte(wrapperParam.Param), &stakeParam)
-		if err != nil {
-			return "", err
-		}
-		innerParam, err := stakeParam.Encode()
-		if err != nil {
-			return "", err
-		}
-		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-
-	default:
-		return "", fmt.Errorf("unsupport action %s", wrapperParam.Action)
-	}
-
 	buf, err := wrapperParam.Encode()
 	if err != nil {
 		return "", err
@@ -333,7 +268,7 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam strin
 }
 
 // 调用合约的同时加入资产
-func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
+func (p *Manager) InvokeContractV2(contractURL string, jsonInvokeParam string,
 	assetName string, amt string, feeRate int64) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -345,7 +280,7 @@ func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
 	}
 
 	// 调用合约的费用
-	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
+	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, jsonInvokeParam)
 	if err != nil {
 		return "", err
 	}
@@ -353,73 +288,38 @@ func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
 		return "", fmt.Errorf("contract is not active")
 	}
 
-	// 主网不需要invoice
 	var nullDataScript []byte
 	asset := indexer.NewAssetNameFromString(assetName)
-	if asset.Protocol != indexer.PROTOCOL_NAME_RUNES {
-		// PROTOCOL_NAME_BRC20 ??
+	if asset.Protocol != indexer.PROTOCOL_NAME_RUNES { // TODO 等主网支持多个op_return后打开
+		wrapperParam, err := ConvertInvokeParam(jsonInvokeParam)
+		if err != nil {
+			return "", err
+		}
+		buf, err := wrapperParam.EncodeV2()
+		if err != nil {
+			return "", err
+		}
 
-		// // 将json结构转为script结构
-		// var wrapperParam InvokeParam
-		// err = json.Unmarshal([]byte(invokeParam), &wrapperParam)
-		// if err != nil {
-		// 	return "", err
-		// }
+		_, asssetName, tc, err := ParseContractURL(contractURL)
+		if err != nil {
+			return "", err
+		}
+		relativePath := GenerateContractRelativePath(asssetName, tc)
 
-		// switch wrapperParam.Action {
-		// case INVOKE_API_SWAP:
-		// 	// var swapParam SwapInvokeParam
-		// 	// err = json.Unmarshal([]byte(wrapperParam.Param), &swapParam)
-		// 	// if err != nil {
-		// 	// 	return "", err
-		// 	// }
-		// 	// innerParam, err := swapParam.Encode()
-		// 	// if err != nil {
-		// 	// 	return "", err
-		// 	// }
-		// 	//wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-		// 	wrapperParam.Param = ""
-		// case INVOKE_API_DEPOSIT:
-		// 	// var param DepositInvokeParam
-		// 	// err = json.Unmarshal([]byte(wrapperParam.Param), &param)
-		// 	// if err != nil {
-		// 	// 	return "", err
-		// 	// }
-		// 	// innerParam, err := param.Encode()
-		// 	// if err != nil {
-		// 	// 	return "", err
-		// 	// }
-		// 	//wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-		// 	wrapperParam.Param = ""
-		// default:
-		// 	return "", fmt.Errorf("unsupport action %s", wrapperParam.Action)
-		// }
+		invoke := sindexer.ContractInvokeData{
+			ContractPath: relativePath, // 资产名字+tc
+			InvokeParam:  buf, // 这里的资产名字必须省略，减少字节数
+			//PubKey:       p.wallet.GetPubKey().SerializeCompressed(),
+		}
 
-		// buf, err := wrapperParam.Encode()
-		// if err != nil {
-		// 	return "", err
-		// }
-
-		// _, asssetName, tc, err := ParseContractURL(contractURL)
-		// if err != nil {
-		// 	return "", err
-		// }
-		// relativePath := GenerateContractRelativePath(asssetName, tc)
-
-		// invoke := sindexer.ContractInvokeData{
-		// 	ContractPath: relativePath,
-		// 	InvokeParam:  buf,
-		// 	PubKey:       p.wallet.GetPubKey().SerializeCompressed(),
-		// }
-
-		// invoice, err := AbbrInvokeContractInvoice(&invoke)
-		// if err != nil {
-		// 	return "", err
-		// }
-		// nullDataScript, err = sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKECONTRACT, invoice)
-		// if err != nil {
-		// 	return "", err
-		// }
+		invoice, err := AbbrInvokeContractInvoice(&invoke)
+		if err != nil {
+			return "", err
+		}
+		nullDataScript, err = sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKECONTRACT, invoice)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	name := indexer.NewAssetNameFromString(assetName)
