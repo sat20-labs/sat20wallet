@@ -301,7 +301,7 @@ type WithdrawInvokeParam = DepositInvokeParam
 
 type AddLiqInvokeParam struct {
 	OrderType int    `json:"orderType"`
-	AssetName string `json:"assetName"` // 资产名字
+	AssetName string `json:"assetName"` // 资产名字 （合约的资产名称，用于识别是哪一个合约）
 	Amt       string `json:"amt"`       // 资产数量
 	Value     int64  `json:"value"`     // 成比例的聪数量
 }
@@ -1155,13 +1155,13 @@ func (p *AmmContractRuntime) generateLPmap(ratio *Decimal) (map[string]*LPInfo, 
 			value += item.RemainingValue
 		}
 
-		stake, ok := liqProviderMap[k]
+		info, ok := liqProviderMap[k]
 		if !ok {
-			stake = &LPInfo{}
-			liqProviderMap[k] = stake
+			info = &LPInfo{}
+			liqProviderMap[k] = info
 		}
-		stake.ReserveAmt = amt
-		stake.ReserveValue = value
+		info.ReserveAmt = amt
+		info.ReserveValue = value
 	}
 
 	if len(liqProviderMap) == 0 {
@@ -1296,7 +1296,7 @@ func (p *AmmContractRuntime) initLiquidity(height int) error {
 	return nil
 }
 
-// 在enable后调用。一次完成，进入ready状态。外面加锁
+// 在settle中调用
 func (p *AmmContractRuntime) addLiquidity(oldAmtInPool *Decimal, oldValueInPool int64, oldTotalLptAmt *Decimal) error {
 
 	if len(p.addLiquidityMap) == 0 {
@@ -1473,6 +1473,97 @@ func (p *AmmContractRuntime) removeLiquidity(oldAmtInPool *Decimal, oldValueInPo
 	return nil
 }
 
+// AddSingleSidedLiquidity 仅增加聪
+func (p *AmmContractRuntime) addSingleSidedLiquidity(value int64) (lpMinted *Decimal, err error) {
+	
+	if value <= 0 {
+		return nil, fmt.Errorf("innvalid value")
+	}
+/*
+设池子当前状态（快照）：
+A = 池中资产 A（数量，单位：asset）
+B = 池中聪（sats）
+K=A⋅B
+
+用户只注入 ΔB（sats）。要实现 等效按比例注入（用户最终获得的 ΔA′,ΔB′ 满足 ΔA′/A=ΔB′/B），
+但用户没有直接提供 A，只提供 B。系统可以用用户提供的部分 B 去做「内部 B→A 的 swap」，产生 ΔA′。
+
+变量：
+令 x = 用于内部 swap 的那部分 B（输入给 swap 的 B）
+则剩下直接进入池子的 B 数为 ΔB−x
+经过 B→A 的 swap（无手续费、恒定乘积模型），池中 A 会被减少到 
+AafterSwap=K/(B+x)。用户从池里拿走的 A（即 swap 给用户的 A）为
+amountAFromSwap=𝐴−𝐾/(𝐵+𝑥).
+这正是用户“通过 swap 得到”的 A，记作 ΔA′.
+
+最终加入到池子实际被当作流动性的量为：
+ΔA′=amountAFromSwap （来自 swap）
+ΔB′=ΔB−x （未用于 swap，直接存入）
+我们要求：ΔA′/A = ΔB′/B
+代入并化简（注意 K=AB）：
+等式变为 𝑥/(𝐵+𝑥)=(Δ𝐵−𝑥)/𝐵
+整理成关于 x 的二次方程（把ΔB写为D）：
+移项得到 x^2+(2B−D)x−DB=0
+判别式 Δ=(2B−D)^2+4DB=D^2+4B^2
+正根（取能满足0≤x≤D 的）：
+x=[−(2B−D)+sqrt(D^2+4B^2)]/2
+
+用该 x：
+ΔA′=A−K/(B+x)
+ΔB′=D−x
+并且满足 
+ΔA′/A=ΔB′/B
+
+然后按照常规比例铸造 LP：
+LPmint=LPtotal⋅ΔA′/A
+（等价地也可用 ΔB′/B）
+*/
+
+	// 原始状态
+	A := p.AssetAmtInPool.Clone()
+	B := indexer.NewDecimal(p.SatsValueInPool, 3)
+	// 不扣除手续费
+	D := indexer.NewDecimal(value, 3)
+
+	// 计算 D^2 + 4B^2，D是输入聪，B是池子中聪数量
+	D2 := D.Mul(D)
+	B2 := B.Mul(B)
+	four := indexer.NewDecimal(4, A.Precision)
+	disc := D2.Add(four.Mul(B2))
+
+	// sqrt(D^2 + 4B^2)
+	sqrtDisc := disc.Sqrt()
+
+	// -(2B - D) + sqrtDisc
+	two := indexer.NewDecimal(2, A.Precision)
+	twoB := B.Mul(two)
+	num := sqrtDisc.Sub(twoB.Sub(D))
+
+	// x: 内部兑换成A的那一部分聪
+	// x = (- (2B - D) + sqrt(D^2 + 4B^2)) / 2
+	x := num.Div(two)
+
+	// A' = A - K/(B + x)
+	//BplusX := B.Add(x)
+	//newA := K.Div(BplusX)
+	//deltaAprime := A.Sub(newA)
+
+	// ΔB' = D - x
+	deltaBprime := D.Sub(x)
+
+	// LP minted = LP_total * (ΔA'/A)
+	//        or = LP_total * (ΔB'/B)
+	lpMinted = p.TotalLptAmt.Mul(deltaBprime.Div(B))
+
+	// 更新池子状态
+	// p.AssetAmtInPool 不会改变
+	p.SatsValueInPool += value
+	p.k = indexer.DecimalMul(indexer.NewDecimal(p.SatsValueInPool, p.Divisibility+2), p.AssetAmtInPool)
+	p.TotalLptAmt = p.TotalLptAmt.Add(lpMinted)
+
+	return lpMinted, nil
+}
+
 // 每个区块高度调用，需要合约处于激活状态。调用前不能加锁
 func (p *AmmContractRuntime) settle(height int) error {
 	// 不能加锁
@@ -1481,6 +1572,9 @@ func (p *AmmContractRuntime) settle(height int) error {
 	}
 
 	if p.Status == CONTRACT_STATUS_READY {
+
+		// 如果有单边加池子，先处理单边加池子，而且必须按照顺序
+
 		// 确保基数相同（本轮交易后的池子参数）
 		oldAmtInPool := p.AssetAmtInPool.Clone()
 		oldValueInPool := p.SatsValueInPool
