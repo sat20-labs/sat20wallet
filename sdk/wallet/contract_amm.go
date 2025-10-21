@@ -1161,7 +1161,7 @@ type LPInfo struct {
 	LeftValue    int64
 }
 
-func (p *AmmContractRuntime) generateLPmap(ratio *Decimal) (map[string]*LPInfo, *Decimal, int64) {
+func (p *AmmContractRuntime) generateLPmap(price *Decimal) (map[string]*LPInfo, *Decimal, int64) {
 	liqProviderMap := make(map[string]*LPInfo)
 	for k, v := range p.addLiquidityMap {
 		var amt *Decimal
@@ -1189,9 +1189,9 @@ func (p *AmmContractRuntime) generateLPmap(ratio *Decimal) (map[string]*LPInfo, 
 	var totalAddedAmt *Decimal
 	for _, v := range liqProviderMap {
 		reserveValue := v.ReserveValue
-		reserveAmt := indexer.DecimalDiv(indexer.NewDecimal(v.ReserveValue, p.Divisibility), ratio)
+		reserveAmt := indexer.DecimalDiv(indexer.NewDecimal(v.ReserveValue, p.Divisibility), price)
 		if reserveAmt.Cmp(v.ReserveAmt) > 0 {
-			reserveValue = indexer.DecimalMul(v.ReserveAmt, ratio).Ceil()
+			reserveValue = indexer.DecimalMul(v.ReserveAmt, price).Ceil()
 			reserveAmt = v.ReserveAmt.Clone()
 		}
 		if reserveValue > v.ReserveValue {
@@ -1212,7 +1212,7 @@ func (p *AmmContractRuntime) generateLPmap(ratio *Decimal) (map[string]*LPInfo, 
 }
 
 func (p *AmmContractRuntime) updateLiquidity(oldAmtInPool *Decimal, oldValueInPool int64,
-	oldTotalLptAmt *Decimal, ratio *Decimal,
+	oldTotalLptAmt *Decimal, price *Decimal,
 	liqProviderMap map[string]*LPInfo, totalAddedAmt *Decimal, totalAddedValue int64) {
 	// 已经准备好了，更新数据
 	url := p.URL()
@@ -1235,7 +1235,7 @@ func (p *AmmContractRuntime) updateLiquidity(oldAmtInPool *Decimal, oldValueInPo
 		trader.LptAmt = trader.LptAmt.Add(lpToken)
 		trader.RetrieveAmt = trader.RetrieveAmt.Add(v.LeftAmt)
 		trader.RetrieveValue += v.LeftValue
-		trader.LiqSatsValue += v.ReserveValue + indexer.DecimalMul(ratio, v.ReserveAmt).Floor()
+		trader.LiqSatsValue += v.ReserveValue + indexer.DecimalMul(price, v.ReserveAmt).Floor()
 
 		p.liquidityData.LPMap[k] = trader.LptAmt.Clone()
 
@@ -1288,9 +1288,9 @@ func (p *AmmContractRuntime) initLiquidity(height int) error {
 		if len(p.addLiquidityMap) == 0 {
 			return nil
 		}
-		ratio := indexer.DecimalDiv(indexer.NewDecimal(p.originalValue, MAX_ASSET_DIVISIBILITY), p.originalAmt)
+		price := indexer.DecimalDiv(indexer.NewDecimal(p.originalValue, MAX_ASSET_DIVISIBILITY), p.originalAmt)
 
-		liqProviderMap, totalAddedAmt, totalAddedValue := p.generateLPmap(ratio)
+		liqProviderMap, totalAddedAmt, totalAddedValue := p.generateLPmap(price)
 		if len(liqProviderMap) == 0 {
 			return nil
 		}
@@ -1302,7 +1302,7 @@ func (p *AmmContractRuntime) initLiquidity(height int) error {
 		}
 
 		oldTotalLptAmt := indexer.DecimalMul(indexer.NewDecimal(totalAddedValue, MAX_ASSET_DIVISIBILITY), totalAddedAmt).Sqrt()
-		p.updateLiquidity(totalAddedAmt, totalAddedValue, oldTotalLptAmt, ratio, liqProviderMap, totalAddedAmt, totalAddedValue)
+		p.updateLiquidity(totalAddedAmt, totalAddedValue, oldTotalLptAmt, price, liqProviderMap, totalAddedAmt, totalAddedValue)
 		p.Status = CONTRACT_STATUS_READY
 		p.stp.SaveReservationWithLock(p.resv)
 		p.saveLatestLiquidityData(height) // 更新流动性数据
@@ -1324,15 +1324,15 @@ func (p *AmmContractRuntime) addLiquidity(oldAmtInPool *Decimal, oldValueInPool 
 		return nil
 	}
 
-	ratio := indexer.DecimalDiv(indexer.NewDecimal(oldValueInPool, MAX_ASSET_DIVISIBILITY), oldAmtInPool)
+	price := indexer.DecimalDiv(indexer.NewDecimal(oldValueInPool, MAX_ASSET_DIVISIBILITY), oldAmtInPool)
 
 	// 新增加资产必须保持同样的比例，投入池子
 	// 每个人都需要按比例出资
-	liqProviderMap, totalAddedAmt, totalAddedValue := p.generateLPmap(ratio)
+	liqProviderMap, totalAddedAmt, totalAddedValue := p.generateLPmap(price)
 	if len(liqProviderMap) == 0 {
 		return nil
 	}
-	p.updateLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt, ratio, liqProviderMap, totalAddedAmt, totalAddedValue)
+	p.updateLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt, price, liqProviderMap, totalAddedAmt, totalAddedValue)
 
 	Log.Infof("%s added liquidity, k = %s, lpt = %s", p.URL(), p.k.String(), p.TotalLptAmt.String())
 
@@ -1364,18 +1364,18 @@ func (p *AmmContractRuntime) removeLiquidity(oldAmtInPool *Decimal, oldValueInPo
 			continue
 		}
 
-		stake, ok := removeLiqMap[k]
+		info, ok := removeLiqMap[k]
 		if !ok {
-			stake = &lpInfo{}
-			removeLiqMap[k] = stake
+			info = &lpInfo{}
+			removeLiqMap[k] = info
 		}
-		stake.LptAmt = lptAmt
+		info.LptAmt = lptAmt
 	}
 	if len(removeLiqMap) == 0 {
 		return nil
 	}
 
-	assetRatio := indexer.DecimalDiv(indexer.NewDecimal(oldValueInPool, MAX_ASSET_DIVISIBILITY), oldAmtInPool)
+	price := indexer.DecimalDiv(indexer.NewDecimal(oldValueInPool, MAX_ASSET_DIVISIBILITY), oldAmtInPool)
 	oldTotalPoolValue := 2 * oldValueInPool
 	lptPerSat := indexer.DecimalDiv(oldTotalLptAmt.NewPrecision(MAX_ASSET_DIVISIBILITY), indexer.NewDecimal(oldTotalPoolValue, MAX_ASSET_DIVISIBILITY))
 
@@ -1413,9 +1413,11 @@ func (p *AmmContractRuntime) removeLiquidity(oldAmtInPool *Decimal, oldValueInPo
 		retrivevValue := indexer.DecimalMul(indexer.NewDecimal(oldValueInPool, p.Divisibility), lptRatio)
 
 		// 转换为sats
-		totalRetrieveSats := retrivevValue.Floor() + indexer.DecimalMul(assetRatio, retrivevAmt).Floor()
+		totalRetrieveSats := retrivevValue.Floor() + indexer.DecimalMul(price, retrivevAmt).Floor()
 		// 成本
 		depositValue := indexer.NewDecimal(trader.LiqSatsValue, MAX_ASSET_DIVISIBILITY).Mul(v.LptAmt).Div(trader.LptAmt).Floor()
+		// 减少成本
+		trader.LiqSatsValue -= depositValue
 		// 利润(用聪来表示)
 		profitValue := totalRetrieveSats - depositValue
 		if profitValue > 0 {
