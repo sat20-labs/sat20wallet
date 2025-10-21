@@ -266,6 +266,7 @@ type ContractRuntime interface {
 	GetRemotePkScript() []byte
 	GetLocalAddress() string
 	GetRemoteAddress() string
+	GetSvrAddress() string // 主导合约的节点地址
 	Address() string // 合约钱包地址
 	GetLocalPubKey() *secp256k1.PublicKey
 	GetRemotePubKey() *secp256k1.PublicKey
@@ -970,6 +971,14 @@ func (p *ContractRuntimeBase) GetRemoteAddress() string {
 	return PublicKeyToP2TRAddress(p.remotePubKey)
 }
 
+func (p *ContractRuntimeBase) GetSvrAddress() string {
+	if p.isInitiator {
+		return p.GetLocalAddress()
+	} else {
+		return p.GetRemoteAddress()
+	} 
+}
+
 func (p *ContractRuntimeBase) GetLocalPubKey() *secp256k1.PublicKey {
 	return p.localPubKey
 }
@@ -1077,13 +1086,7 @@ func (p *ContractRuntimeBase) AllowDeploy() error {
 	requiredFee := estimatedFee - DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT // 部署过程需要的费用
 	feeUtxos := resv.GetFeeUtxos()
 	if len(feeUtxos) == 0 {
-		var address string
-		if p.isInitiator {
-			address = p.GetLocalAddress()
-		} else {
-			address = p.GetRemoteAddress()
-		}
-
+		address := p.GetSvrAddress()
 		var err error
 		feeUtxos, err = p.stp.GetWalletMgr().GetUtxosWithAsset_SatsNet(address,
 			indexer.NewDefaultDecimal(requiredFee), &ASSET_PLAIN_SAT, nil)

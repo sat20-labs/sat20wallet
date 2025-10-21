@@ -2454,6 +2454,10 @@ func (p *SwapContractRuntime) loadTraderInfo(address string) *TraderStatus {
 	}
 	p.traderInfoMap[address] = status
 	return status
+} 
+
+func (p *SwapContractRuntime) loadSvrTraderInfo() *TraderStatus {
+	return p.loadTraderInfo(p.GetSvrAddress())
 }
 
 func CalcSwapFee(value int64) int64 {
@@ -4756,8 +4760,16 @@ func (p *SwapContractRuntime) genRemoveLiquidityInfo(height int) *DealInfo {
 	var totalValue int64
 	var totalAmt *Decimal                          // 资产数量
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
-	for address := range p.removeLiquidityMap {
 
+	addressmap := make(map[string]bool)
+	for address := range p.removeLiquidityMap {
+		addressmap[address] = true
+	}
+	if !PROFIT_REINVESTING && len(addressmap) > 0 {
+		addressmap[p.GetSvrAddress()] = true
+	}
+
+	for address := range addressmap {
 		trader := p.loadTraderInfo(address)
 		if trader == nil {
 			continue
@@ -4854,7 +4866,10 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 		}
 		items, ok := p.removeLiquidityMap[addr]
 		if !ok {
-			Log.Panicf("updateWithDealInfo_removeLiquidity can't find %s for txId %s", addr, dealInfo.TxId)
+			if addr != p.GetSvrAddress() {
+				Log.Panicf("updateWithDealInfo_removeLiquidity can't find %s for txId %s", addr, dealInfo.TxId)
+			}
+			// 服务节点收取利润
 		}
 
 		trader := p.loadTraderInfo(addr)
@@ -4892,7 +4907,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 		for _, id := range deletedItems {
 			delete(items, id)
 		}
-		if len(items) == 0 {
+		if len(deletedItems) != 0 && len(items) == 0 {
 			deletedAddr = append(deletedAddr, addr)
 		}
 	}

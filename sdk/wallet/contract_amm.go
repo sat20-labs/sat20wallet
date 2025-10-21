@@ -61,7 +61,7 @@ var (
 	PROFIT_SHARE_BASE_LP     int = 50
 	PROFIT_SHARE_BASE_MARKET int = 45
 
-	PROFIT_REINVESTING bool = true //
+	PROFIT_REINVESTING bool = false //
 )
 
 type AmmContract struct {
@@ -1094,21 +1094,21 @@ func (p *AmmContractRuntime) GetLiquidityData(start, limit int) string {
 		p.liqProviders = nil
 		if p.BaseLptAmt.Sign() != 0 {
 			p.liqProviders = append(p.liqProviders, &LiqProviderInfo{
-				Address: p.Deployer,
+				Address: "base", // 底池算在通道地址上，但deployer有权力提取利润
 				LptAmt:  p.BaseLptAmt.Clone(),
 			})
 		}
 		if p.TotalFeeLptAmt.Sign() != 0 {
-			var serverAddress string
-			if p.isInitiator {
-				serverAddress = p.GetLocalAddress()
-			} else {
-				serverAddress = p.GetRemoteAddress()
-			}
-			p.liqProviders = append(p.liqProviders, &LiqProviderInfo{
+			serverAddress := p.GetSvrAddress()
+			info := &LiqProviderInfo{
 				Address: serverAddress,
 				LptAmt:  p.TotalFeeLptAmt.Clone(),
-			})
+			}
+			liq, ok := p.liquidityData.LPMap[serverAddress]
+			if ok {
+				info.LptAmt = info.LptAmt.Add(liq)
+			}
+			p.liqProviders = append(p.liqProviders, info)
 		}
 		for k, v := range p.liquidityData.LPMap {
 			p.liqProviders = append(p.liqProviders, &LiqProviderInfo{
@@ -1424,18 +1424,24 @@ func (p *AmmContractRuntime) removeLiquidity(oldAmtInPool *Decimal, oldValueInPo
 			// 扣去归属服务的利润
 			lpProfitValue := calcLPProfit(profitValue)
 			svrProfitValue := profitValue - lpProfitValue
-			discountRatio := indexer.NewDecimal(totalRetrieveSats-svrProfitValue, MAX_ASSET_DIVISIBILITY).Div(indexer.NewDecimal(totalRetrieveSats, MAX_ASSET_DIVISIBILITY))
-			// 用户的输出扣除对应比例
-			retrivevAmt = retrivevAmt.Mul(discountRatio)
-			retrivevValue = retrivevValue.Mul(discountRatio)
-
+			discountRatio := indexer.NewDecimal(svrProfitValue, MAX_ASSET_DIVISIBILITY).Div(indexer.NewDecimal(totalRetrieveSats, MAX_ASSET_DIVISIBILITY))
+			
+			// 服务端的输出
+			svrRetrivevAmt := retrivevAmt.Mul(discountRatio)
+			svrRetrivevValue := retrivevValue.Mul(discountRatio)
+			
+			// 用户的输出
+			retrivevAmt = retrivevAmt.Sub(svrRetrivevAmt)
+			retrivevValue = retrivevValue.Sub(svrRetrivevValue)
 			if PROFIT_REINVESTING {
 				// 服务费用折算为对应的lpt
 				feeLptAmt := indexer.DecimalMul(lptPerSat, indexer.NewDecimal(svrProfitValue, MAX_ASSET_DIVISIBILITY))
 				totalAddedFeeLptAmt = totalAddedFeeLptAmt.Add(feeLptAmt)
 			} else {
 				// 直接提走
-
+				svrTrader := p.loadSvrTraderInfo()
+				svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(svrRetrivevAmt)
+				svrTrader.RetrieveValue += svrRetrivevValue.Floor()
 			}
 		}
 
@@ -1471,9 +1477,53 @@ func (p *AmmContractRuntime) removeLiquidity(oldAmtInPool *Decimal, oldValueInPo
 			}
 		}
 	}
-	Log.Infof("total removed lpt = %s, AddedFeeLpt = %s, retrieved asset %s %d", totalRemovedLptAmt.String(), totalAddedFeeLptAmt.String(), totalRemovedAmt.String(), totalRemovedValue)
 
+	if !PROFIT_REINVESTING {
+		svrTrader := p.loadSvrTraderInfo()
+		if p.TotalFeeLptAmt.Sign() > 0 {
+			// 将历史累积的属于服务端的收益提走
+			lptRatio := indexer.DecimalDiv(p.TotalFeeLptAmt, oldTotalLptAmt)
+			svrRetrivevAmt := indexer.DecimalMul(oldAmtInPool, lptRatio)
+			svrRetrivevValue := indexer.DecimalMul(indexer.NewDecimal(oldValueInPool, p.Divisibility), lptRatio)
+			svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(svrRetrivevAmt)
+			svrTrader.RetrieveValue += svrRetrivevValue.Floor()
+			p.TotalFeeLptAmt = nil
+		}
+		svrTrader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
+		saveContractInvokerStatus(p.stp.GetDB(), url, svrTrader)
+	}
+
+	Log.Infof("total removed lpt = %s, AddedFeeLpt = %s, retrieved asset %s %d", 
+		totalRemovedLptAmt.String(), totalAddedFeeLptAmt.String(), totalRemovedAmt.String(), totalRemovedValue)
+
+	if totalRemovedLptAmt.Cmp(totalAddedFeeLptAmt) <= 0 {
+		str := fmt.Sprintf("totalAddedFeeLptAmt %s larger than totalRemovedLptAmt %s", 
+			totalAddedFeeLptAmt.String(), totalRemovedLptAmt.String())
+		Log.Errorf(str)
+		return fmt.Errorf(str)
+	}
 	realRemovedLpt := totalRemovedLptAmt.Sub(totalAddedFeeLptAmt)
+
+	
+	if p.AssetAmtInPool.Cmp(totalRemovedAmt) < 0 {
+		str := fmt.Sprintf("totalRemovedAmt %s larger than AssetAmtInPool %s", 
+			totalRemovedAmt.String(), p.AssetAmtInPool.String())
+		Log.Errorf(str)
+		return fmt.Errorf(str)
+	}
+	if p.TotalLptAmt.Cmp(realRemovedLpt) < 0 {
+		str := fmt.Sprintf("realRemovedLpt %s larger than TotalLptAmt %s", 
+			realRemovedLpt.String(), p.TotalLptAmt.String())
+		Log.Errorf(str)
+		return fmt.Errorf(str)
+	}
+	if p.SatsValueInPool < totalRemovedValue {
+		str := fmt.Sprintf("totalRemovedValue %d larger than SatsValueInPool %d", 
+			totalRemovedValue, p.SatsValueInPool)
+		Log.Errorf(str)
+		return fmt.Errorf(str)
+	}
+
 	// 更新池子数据
 	p.AssetAmtInPool = p.AssetAmtInPool.Sub(totalRemovedAmt)
 	p.SatsValueInPool -= totalRemovedValue
