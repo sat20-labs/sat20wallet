@@ -57,6 +57,11 @@ var (
 	PROFIT_SHARE_MARKET     int = 35 // 包括节点，每个节点10
 	PROFIT_SHARE_FOUNDATION int = 5  //
 
+	PROFIT_SHARE_LP_Decimal = indexer.NewDecimalWithScale(int64(PROFIT_SHARE_LP)*1000/100, 3)
+	PROFIT_SHARE_MARKET_Decimal = indexer.NewDecimalWithScale(int64(PROFIT_SHARE_MARKET)*1000/100, 3)
+	PROFIT_SHARE_FOUNDATION_Decimal = indexer.NewDecimalWithScale(int64(PROFIT_SHARE_FOUNDATION)*1000/100, 3)
+	PROFIT_SHARE_FOUNDATION_WITH_SVR_Decimal = indexer.NewDecimalWithScale(int64(PROFIT_SHARE_FOUNDATION)*1000/(int64(PROFIT_SHARE_MARKET)*100), 3)
+
 	PROFIT_REINVESTING bool = false //
 )
 
@@ -69,14 +74,26 @@ type AmmContract struct {
 	SettlePeriod int `json:"settlePeriod"` // 区块数，从EnableBlock开始算. 已废弃
 }
 
-func calcLPProfit(profit int64) int64 {
+func calcLPProfit_value(profit int64) int64 {
 	return profit * int64(PROFIT_SHARE_LP) / 100
 }
-func calcServerProfit(profit int64) int64 {
+func calcLPProfit_amt(profit *Decimal) *Decimal {
+	return indexer.DecimalMul(profit, PROFIT_SHARE_LP_Decimal)
+}
+func calcMarketProfit_value(profit int64) int64 {
 	return profit * int64(PROFIT_SHARE_MARKET) / 100
 }
-func calcFoundationProfit(profit int64) int64 {
+func calcMarketProfit_amt(profit *Decimal) *Decimal {
+	return indexer.DecimalMul(profit, PROFIT_SHARE_MARKET_Decimal)
+}
+func calcFoundationProfit_value(profit int64) int64 {
 	return profit * int64(PROFIT_SHARE_FOUNDATION) / 100
+}
+func calcFoundationProfit_amt(profit *Decimal) *Decimal {
+	return indexer.DecimalMul(profit, PROFIT_SHARE_FOUNDATION_Decimal)
+}
+func calcFoundationProfitBySvr(svrprofit *Decimal) *Decimal {
+	return indexer.DecimalMul(svrprofit, PROFIT_SHARE_FOUNDATION_WITH_SVR_Decimal)
 }
 
 func calcFeeProfit(profit int64) int64 {
@@ -459,14 +476,14 @@ func (p *UnstakeInvokeParam) Decode(data []byte) error {
 }
 
 type ProfitInvokeParam struct {
-	OrderType int    `json:"orderType"`
-	Ratio     int    `json:"ratio"`     // 所有利润的比例， 1-100
+	OrderType int       `json:"orderType"`
+	Ratio     string    `json:"ratio"`     // 所有利润的比例， 0-1
 }
 
 func (p *ProfitInvokeParam) Encode() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
-		AddInt64(int64(p.Ratio)).
+		AddData([]byte(p.Ratio)).
 		Script()
 }
 
@@ -485,7 +502,7 @@ func (p *ProfitInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing ratio")
 	}
-	p.Ratio = int(tokenizer.ExtractInt64())
+	p.Ratio = string(tokenizer.Data())
 
 	return nil
 }
@@ -1284,15 +1301,6 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 	oldTotalPoolValue := 2 * oldValueInPool
 	lptPerSat := indexer.DecimalDiv(oldTotalLptAmt.NewPrecision(MAX_ASSET_DIVISIBILITY), indexer.NewDecimal(oldTotalPoolValue, MAX_ASSET_DIVISIBILITY))
 
-	// var market, fundation *TraderStatus
-	// if p.isInitiator {
-	// 	market = p.loadTraderInfo(p.GetLocalAddress())
-	// 	fundation = p.loadTraderInfo(p.GetRemoteAddress())
-	// } else {
-	// 	fundation = p.loadTraderInfo(p.GetLocalAddress())
-	// 	market = p.loadTraderInfo(p.GetRemoteAddress())
-	// }
-
 	url := p.URL()
 	// 将要取回的LPToken，转换为对应的资产，并调整池子容量
 	var totalRemovedLptAmt *Decimal
@@ -1302,75 +1310,105 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 	for k, v := range removeLiqMap {
 		// 计算获得的资产数量
 		trader := p.loadTraderInfo(k)
-		if trader.LptAmt.Sign() <= 0 {
-			Log.Warningf("%s has not enough LPToken, require %s but only %s", k, v.LptAmt.String(), trader.LptAmt.String())
-			continue
-		}
-		if trader.LptAmt.Cmp(v.LptAmt) < 0 {
-			Log.Warningf("%s has not enough LPToken, require %s but only %s", k, v.LptAmt.String(), trader.LptAmt.String())
-			// 修改为全部取出
-			v.LptAmt = trader.LptAmt.Clone()
+		if !baseLpt {
+			if trader.LptAmt.Sign() <= 0 {
+				Log.Warningf("%s has not enough LPToken, require %s but only %s", k, v.LptAmt.String(), trader.LptAmt.String())
+				continue
+			}
+			if trader.LptAmt.Cmp(v.LptAmt) < 0 {
+				Log.Warningf("%s has not enough LPToken, require %s but only %s", k, v.LptAmt.String(), trader.LptAmt.String())
+				// 修改为全部取出
+				v.LptAmt = trader.LptAmt.Clone()
+			}
 		}
 
 		lptRatio := indexer.DecimalDiv(v.LptAmt, oldTotalLptAmt)
 		retrivevAmt := indexer.DecimalMul(oldAmtInPool, lptRatio)
 		retrivevValue := indexer.DecimalMul(indexer.NewDecimal(oldValueInPool, p.Divisibility), lptRatio)
 
-		// 转换为sats
-		totalRetrieveSats := retrivevValue.Floor() + indexer.DecimalMul(price, retrivevAmt).Floor()
-		// 成本
-		depositValue := indexer.NewDecimal(trader.LiqSatsValue, MAX_ASSET_DIVISIBILITY).Mul(v.LptAmt).Div(trader.LptAmt).Floor()
-		// 减少成本
-		trader.LiqSatsValue -= depositValue
-		// 利润(用聪来表示)
-		profitValue := totalRetrieveSats - depositValue
-		if profitValue > 0 {
+		var lpRetrieveAmt, lpRetrieveValue *Decimal
+		if baseLpt {
 			// 扣去归属服务的利润
-			lpProfitValue := calcLPProfit(profitValue)
-			svrProfitValue := profitValue - lpProfitValue
-			discountRatio := indexer.NewDecimal(svrProfitValue, MAX_ASSET_DIVISIBILITY).Div(indexer.NewDecimal(totalRetrieveSats, MAX_ASSET_DIVISIBILITY))
-			
-			// 服务端的输出
-			svrRetrivevAmt := retrivevAmt.Mul(discountRatio)
-			svrRetrivevValue := retrivevValue.Mul(discountRatio)
-			
-			// 用户的输出
-			retrivevAmt = retrivevAmt.Sub(svrRetrivevAmt)
-			retrivevValue = retrivevValue.Sub(svrRetrivevValue)
+			marketRetrivevAmt := calcMarketProfit_amt(retrivevAmt)
+			marketRetrivevValue := calcMarketProfit_amt(retrivevValue)
+			foundationRetrivevAmt := calcFoundationProfit_amt(retrivevAmt)
+			foundationRetrivevValue := calcFoundationProfit_amt(retrivevValue)
+			lpRetrieveAmt = indexer.DecimalSub(retrivevAmt, marketRetrivevAmt).Sub(foundationRetrivevAmt)
+			lpRetrieveValue = indexer.DecimalSub(retrivevValue, marketRetrivevValue).Sub(foundationRetrivevValue)
+
 			if PROFIT_REINVESTING {
 				// 服务费用折算为对应的lpt
-				feeLptAmt := indexer.DecimalMul(lptPerSat, indexer.NewDecimal(svrProfitValue, MAX_ASSET_DIVISIBILITY))
+				feeLptAmt := indexer.DecimalSub(v.LptAmt, calcLPProfit_amt(v.LptAmt))
 				totalAddedFeeLptAmt = totalAddedFeeLptAmt.Add(feeLptAmt)
 			} else {
 				// 直接提走
 				svrTrader := p.loadSvrTraderInfo()
-				svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(svrRetrivevAmt)
-				svrTrader.RetrieveValue += svrRetrivevValue.Floor()
-			}
-		}
+				svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
+				svrTrader.RetrieveValue += marketRetrivevValue.Floor()
 
-		if baseLpt {
+				foundation := p.loadFoundationTraderInfo()
+				foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrivevAmt)
+				foundation.RetrieveValue += foundationRetrivevValue.Floor()
+			}
 			p.BaseLptAmt = p.BaseLptAmt.Sub(v.LptAmt)
 		} else {
+			// 转换为sats
+			totalRetrieveSats := retrivevValue.Floor() + indexer.DecimalMul(price, retrivevAmt).Floor()
+			// 成本
+			depositValue := indexer.NewDecimal(trader.LiqSatsValue, MAX_ASSET_DIVISIBILITY).Mul(v.LptAmt).Div(trader.LptAmt).Floor()
+			// 减少成本
+			trader.LiqSatsValue -= depositValue
+			// 利润(用聪来表示)
+			profitValue := totalRetrieveSats - depositValue
+			if profitValue > 0 {
+				// 扣去归属服务的利润
+				lpProfitValue := calcLPProfit_value(profitValue)
+				svrProfitValue := profitValue - lpProfitValue
+				discountRatio := indexer.NewDecimal(svrProfitValue, MAX_ASSET_DIVISIBILITY).Div(indexer.NewDecimal(totalRetrieveSats, MAX_ASSET_DIVISIBILITY))
+				
+				// 服务端的输出
+				svrRetrivevAmt := retrivevAmt.Mul(discountRatio)
+				svrRetrivevValue := retrivevValue.Mul(discountRatio)
+				
+				// 用户的输出
+				lpRetrieveAmt = retrivevAmt.Sub(svrRetrivevAmt)
+				lpRetrieveValue = retrivevValue.Sub(svrRetrivevValue)
+				if PROFIT_REINVESTING {
+					// 服务费用折算为对应的lpt
+					feeLptAmt := indexer.DecimalMul(lptPerSat, indexer.NewDecimal(svrProfitValue, MAX_ASSET_DIVISIBILITY))
+					totalAddedFeeLptAmt = totalAddedFeeLptAmt.Add(feeLptAmt)
+				} else {
+					// 直接提走
+					foundationRetrivevAmt := calcFoundationProfitBySvr(svrRetrivevAmt)
+					foundationRetrivevValue := calcFoundationProfitBySvr(svrRetrivevValue)
+					marketRetrivevAmt := svrRetrivevAmt.Sub(foundationRetrivevAmt)
+					marketRetrivevValue := svrRetrivevValue.Sub(foundationRetrivevValue)
+					
+					svrTrader := p.loadSvrTraderInfo()
+					svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
+					svrTrader.RetrieveValue += marketRetrivevValue.Floor()
+
+					foundation := p.loadFoundationTraderInfo()
+					foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrivevAmt)
+					foundation.RetrieveValue += foundationRetrivevValue.Floor()
+				}
+			}
 			trader.LptAmt = trader.LptAmt.Sub(v.LptAmt)
-		}
-		
-		trader.RetrieveAmt = trader.RetrieveAmt.Add(retrivevAmt) // 在retrieve中发送出去
-		trader.RetrieveValue += retrivevValue.Floor()
-		trader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
-		saveContractInvokerStatus(p.stp.GetDB(), url, trader)
-
-		totalRemovedLptAmt = totalRemovedLptAmt.Add(v.LptAmt)
-		totalRemovedAmt = totalRemovedAmt.Add(retrivevAmt)
-		totalRemovedValue += retrivevValue.Floor()
-
-		if !baseLpt {
 			if trader.LptAmt.Sign() > 0 {
 				p.liquidityData.LPMap[k] = trader.LptAmt.Clone()
 			} else {
 				delete(p.liquidityData.LPMap, k)
 			}
 		}
+		
+		trader.RetrieveAmt = trader.RetrieveAmt.Add(lpRetrieveAmt) // 在retrieve中发送出去
+		trader.RetrieveValue += lpRetrieveValue.Floor()
+		trader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
+		saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+
+		totalRemovedLptAmt = totalRemovedLptAmt.Add(v.LptAmt)
+		totalRemovedAmt = totalRemovedAmt.Add(retrivevAmt)
+		totalRemovedValue += retrivevValue.Floor()
 
 		// 更新用户的item
 		items := p.removeLiquidityMap[k]
@@ -1391,17 +1429,30 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 
 	if !PROFIT_REINVESTING {
 		svrTrader := p.loadSvrTraderInfo()
+		foundation := p.loadFoundationTraderInfo()
 		if p.TotalFeeLptAmt.Sign() > 0 {
 			// 将历史累积的属于服务端的收益提走
 			lptRatio := indexer.DecimalDiv(p.TotalFeeLptAmt, oldTotalLptAmt)
 			svrRetrivevAmt := indexer.DecimalMul(oldAmtInPool, lptRatio)
 			svrRetrivevValue := indexer.DecimalMul(indexer.NewDecimal(oldValueInPool, p.Divisibility), lptRatio)
-			svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(svrRetrivevAmt)
-			svrTrader.RetrieveValue += svrRetrivevValue.Floor()
+
+			foundationRetrivevAmt := calcFoundationProfitBySvr(svrRetrivevAmt)
+			foundationRetrivevValue := calcFoundationProfitBySvr(svrRetrivevValue)
+			marketRetrivevAmt := svrRetrivevAmt.Sub(foundationRetrivevAmt)
+			marketRetrivevValue := svrRetrivevValue.Sub(foundationRetrivevValue)
+			
+			svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
+			svrTrader.RetrieveValue += marketRetrivevValue.Floor()
+
+			foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrivevAmt)
+			foundation.RetrieveValue += foundationRetrivevValue.Floor()
+
 			p.TotalFeeLptAmt = nil
 		}
 		svrTrader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
 		saveContractInvokerStatus(p.stp.GetDB(), url, svrTrader)
+		foundation.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
+		saveContractInvokerStatus(p.stp.GetDB(), url, foundation)
 	}
 
 	Log.Infof("total removed lpt = %s, AddedFeeLpt = %s, retrieved asset %s %d", 
@@ -1648,10 +1699,11 @@ func (p *AmmContractRuntime) getBaseProfit() *Decimal {
 
 	lptRatio := indexer.DecimalDiv(p.BaseLptAmt, p.TotalLptAmt)
 	k2 := indexer.DecimalMul(p.k, lptRatio)
-	dk := indexer.DecimalSub(k2, p.k)
+	dk := indexer.DecimalSub(k2, p.originalK)
 	if dk.Sign() <= 0 {
 		return nil
 	}
+	dk.SetPrecision(MAX_PRICE_DIVISIBILITY)
 	profitRatio := dk.Div(p.k)
 	return profitRatio.Mul(p.BaseLptAmt)
 }
@@ -1665,12 +1717,24 @@ func (p *AmmContractRuntime) closeItemDirectly(item *SwapHistoryItem) {
 
 // 仅在settle中调用
 func (p *AmmContractRuntime) removeBaseLiquidity(oldAmtInPool *Decimal, oldValueInPool int64, oldTotalLptAmt *Decimal) error {
+	if len(p.removeLiquidityMap) != 0 {
+		return nil
+	}
 	if len(p.profitMap) == 0 {
 		return nil
 	}
 
 	profitLpt := p.getBaseProfit()
-	if profitLpt.Sign() <= 0 {
+	valid := false
+	if profitLpt.Sign() > 0 {
+		oldTotalPoolValue := 2 * oldValueInPool
+		lptPerSat := indexer.DecimalDiv(oldTotalLptAmt.NewPrecision(MAX_ASSET_DIVISIBILITY), indexer.NewDecimal(oldTotalPoolValue, MAX_ASSET_DIVISIBILITY))
+		totalProfitSats := lptPerSat.Mul(profitLpt)
+		if totalProfitSats.Int64() > 10 { // 最小可提取利润
+			valid = true
+		}
+	}
+	if !valid {
 		Log.Errorf("no profit can be retrieved.")
 		for _, v := range p.profitMap {
 			for _, item := range v {
@@ -1697,14 +1761,15 @@ func (p *AmmContractRuntime) removeBaseLiquidity(oldAmtInPool *Decimal, oldValue
 				ratio = ratio.Add(item.ExpectedAmt)
 			}
 		}
-		if ratio.Sign() == 0 {
+		f := ratio.Float64()
+		if f == 0 {
 			for _, item := range v {
 				p.closeItemDirectly(item)
 			}
 			continue
 		}
-		if ratio.Int64() > 100 {
-			ratio = indexer.NewDecimal(100, 0)
+		if f > 1 {
+			ratio = indexer.NewDecimal(1, MAX_ASSET_DIVISIBILITY)
 		}
 
 		info, ok := removeBaseLiqMap[k]
@@ -1718,6 +1783,10 @@ func (p *AmmContractRuntime) removeBaseLiquidity(oldAmtInPool *Decimal, oldValue
 	if len(removeBaseLiqMap) == 0 {
 		return nil
 	}
+
+	// 将 p.profitMap 换到 p.removeLiquidityMap
+	p.removeLiquidityMap = p.profitMap
+	p.profitMap = make(map[string]map[int64]*SwapHistoryItem)
 
 	price := indexer.DecimalDiv(indexer.NewDecimal(oldValueInPool, MAX_ASSET_DIVISIBILITY), oldAmtInPool)
 	return p.updateLiquidity_remove(oldAmtInPool, oldValueInPool, oldTotalLptAmt, price, removeBaseLiqMap, true)

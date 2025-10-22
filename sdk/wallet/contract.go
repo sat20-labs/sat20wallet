@@ -981,6 +981,11 @@ func (p *ContractRuntimeBase) GetSvrAddress() string {
 	} 
 }
 
+func (p *ContractRuntimeBase) GetFoundationAddress() string {
+	addr, _ := indexer.GetBootstrapAddress(GetChainParam())
+	return addr
+}
+
 func (p *ContractRuntimeBase) GetLocalPubKey() *secp256k1.PublicKey {
 	return p.localPubKey
 }

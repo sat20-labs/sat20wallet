@@ -1782,8 +1782,12 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		if innerParam.OrderType != ORDERTYPE_PROFIT {
 			return 0, fmt.Errorf("invalid order type %d", innerParam.OrderType)
 		}
-		
-		if innerParam.Ratio <= 0 || innerParam.Ratio > 100 {
+		ratio, err := indexer.NewDecimalFromString(innerParam.Ratio, MAX_ASSET_DIVISIBILITY)
+		if err != nil {
+			return 0, fmt.Errorf("invalid ratio %s", innerParam.Ratio)
+		}
+		f := ratio.Float64()
+		if f <= 0 || f > 1 {
 			return 0, fmt.Errorf("invalid ratio %d", innerParam.Ratio)
 		}
 		return INVOKE_FEE, nil
@@ -2246,11 +2250,17 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 		}
 
 		// 到这里，客观条件都满足了，如果还不能符合铸造条件，直接设置为无效调用
+		var ratio *Decimal
 		bValid := true
 		for {
-			
-			if invokeParam.Ratio <= 0 || invokeParam.Ratio > 100 {
-				Log.Errorf("invalid ratio %d", invokeParam.Ratio)
+			ratio, err = indexer.NewDecimalFromString(invokeParam.Ratio, MAX_ASSET_DIVISIBILITY)
+			if err != nil {
+				Log.Errorf("invalid ratio %s", invokeParam.Ratio)
+				bValid = false
+				break
+			}
+			if ratio.Sign() <= 0 || ratio.Float64() > 1 {
+				Log.Errorf("invalid ratio %s", invokeParam.Ratio)
 				bValid = false
 				break
 			}
@@ -2281,7 +2291,7 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 		}
 		// 更新合约状态
 		return p.updateContract(address, output, invokeParam.OrderType,
-			indexer.NewDecimal(int64(invokeParam.Ratio), 0), bValid, false, false), nil
+			ratio, bValid, false, false), nil
 
 	default:
 		Log.Errorf("contract %s is not support action %s", url, param.Action)
@@ -2525,6 +2535,10 @@ func (p *SwapContractRuntime) loadTraderInfo(address string) *TraderStatus {
 
 func (p *SwapContractRuntime) loadSvrTraderInfo() *TraderStatus {
 	return p.loadTraderInfo(p.GetSvrAddress())
+}
+
+func (p *SwapContractRuntime) loadFoundationTraderInfo() *TraderStatus {
+	return p.loadTraderInfo(p.GetFoundationAddress())
 }
 
 func CalcSwapFee(value int64) int64 {
@@ -4895,6 +4909,7 @@ func (p *SwapContractRuntime) genRemoveLiquidityInfo(height int) *DealInfo {
 	}
 	if !PROFIT_REINVESTING && len(addressmap) > 0 {
 		addressmap[p.GetSvrAddress()] = true
+		addressmap[p.GetFoundationAddress()] = true
 	}
 
 	for address := range addressmap {
@@ -4994,7 +5009,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 		}
 		items, ok := p.removeLiquidityMap[addr]
 		if !ok {
-			if addr != p.GetSvrAddress() {
+			if addr != p.GetSvrAddress() && addr != p.GetFoundationAddress() {
 				Log.Panicf("updateWithDealInfo_removeLiquidity can't find %s for txId %s", addr, dealInfo.TxId)
 			}
 			// 服务节点收取利润
@@ -5117,10 +5132,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 		}
 		items, ok := p.profitMap[addr]
 		if !ok {
-			if addr != p.GetSvrAddress() {
-				Log.Panicf("updateWithDealInfo_profit can't find %s for txId %s", addr, dealInfo.TxId)
-			}
-			// 服务节点收取利润
+			Log.Panicf("updateWithDealInfo_profit can't find %s for txId %s", addr, dealInfo.TxId)
 		}
 
 		trader := p.loadTraderInfo(addr)
