@@ -50,7 +50,7 @@ export class BiometricService {
 
     try {
       // 动态导入生物识别插件
-      const { BiometricAuth } = await import('capacitor-biometric-auth')
+      const { BiometricAuth } = await import('@aparajita/capacitor-biometric-auth')
       this.BiometricAuth = BiometricAuth
       return true
     } catch (error) {
@@ -78,7 +78,7 @@ export class BiometricService {
         return { supported: false, available: false, error: '插件初始化失败' }
       }
 
-      const result = await this.BiometricAuth.checkBiometry()
+      const result = await this.BiometricAuth.checkAvailability()
 
       return {
         supported: true,
@@ -117,20 +117,19 @@ export class BiometricService {
         }
       }
 
-      const result = await this.BiometricAuth.verify({
+      const result = await this.BiometricAuth.authenticate({
         reason: options.reason || '请使用指纹验证以继续',
         title: options.title || '身份验证',
         subtitle: options.subtitle,
         description: options.description,
         cancelButtonText: options.cancelButtonText || '取消',
-        fallbackButtonText: options.fallbackButtonText || '使用密码',
-        disableFallback: options.disableFallback || false
+        fallbackTitle: options.fallbackButtonText || '使用密码'
       })
 
-      if (result.verified) {
+      if (result.success) {
         return { success: true }
       } else {
-        return { success: false, error: '生物识别验证失败' }
+        return { success: false, error: result.error || '生物识别验证失败' }
       }
     } catch (error) {
       console.error('生物识别认证失败:', error)

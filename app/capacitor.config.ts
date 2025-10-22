@@ -22,6 +22,7 @@ const config: CapacitorConfig = {
       splashImmersive: true
     },
     BiometricAuth: {
+      allowDeviceCredentials: true,
       iosUseCustomAuthUI: true,
       iosFallbackTitle: "使用密码",
       iosTitle: "生物识别验证",

@@ -144,7 +144,12 @@ const hideBalance = ref(false)
 const biometricEnabled = ref(false)
 const biometricLoading = ref(false)
 const hasCredentials = ref(false)
-const biometricStatus = ref({
+const biometricStatus = ref<{
+  supported: boolean
+  available: boolean
+  biometryType?: string
+  error?: string
+}>({
   supported: false,
   available: false,
   biometryType: '',
