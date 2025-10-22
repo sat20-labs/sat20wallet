@@ -51,16 +51,17 @@ const (
 	INVOKE_API_ENABLE string = "enable" // 每个合约的第一个调用，用来激活合约
 
 	INVOKE_RESULT_OK              string = "ok"
-	INVOKE_RESULT_REFUND          string = "refund"
+	INVOKE_RESULT_REFUND          string = INVOKE_API_REFUND
 	INVOKE_RESULT_DEAL            string = "deal"
-	INVOKE_RESULT_DEPOSIT         string = "deposit"
-	INVOKE_RESULT_WITHDRAW        string = "withdraw"
+	INVOKE_RESULT_DEPOSIT         string = INVOKE_API_DEPOSIT
+	INVOKE_RESULT_WITHDRAW        string = INVOKE_API_WITHDRAW
 	INVOKE_RESULT_DEANCHOR        string = "deanchor"
 	INVOKE_RESULT_ANCHOR          string = "anchor"
-	INVOKE_RESULT_STAKE           string = "stake"
-	INVOKE_RESULT_UNSTAKE         string = "unstake"
-	INVOKE_RESULT_ADDLIQUIDITY    string = "addliq"
-	INVOKE_RESULT_REMOVELIQUIDITY string = "removeliq"
+	INVOKE_RESULT_STAKE           string = INVOKE_API_STAKE
+	INVOKE_RESULT_UNSTAKE         string = INVOKE_API_UNSTAKE
+	INVOKE_RESULT_ADDLIQUIDITY    string = INVOKE_API_ADDLIQUIDITY
+	INVOKE_RESULT_REMOVELIQUIDITY string = INVOKE_API_REMOVELIQUIDITY
+	INVOKE_RESULT_PROFIT          string = INVOKE_API_PROFIT
 )
 
 const (
@@ -134,6 +135,7 @@ const (
 	INVOKE_REASON_SLIPPAGE_PROTECT     string = "slippage protection"
 	INVOKE_REASON_UTXO_NOT_FOUND       string = "input utxo not found"
 	INVOKE_REASON_UTXO_NOT_FOUND_REORG string = "input utxo not found after reorg"
+	INVOKE_REASON_NO_PROFIT            string = "no profit"
 )
 
 const (
@@ -2167,24 +2169,61 @@ type InvokeDataInBlock struct {
 }
 
 func GetInvokeInnerParam(action string) InvokeInnerParamIF {
+	orderType := GetOrderTypeWithAction(action)
 	switch action {
 	case INVOKE_API_SWAP:
-		return &SwapInvokeParam{}
+		return &SwapInvokeParam{OrderType: orderType}
 	
+	case INVOKE_API_STAKE:
+		return &StakeInvokeParam{OrderType: orderType}
+
+	case INVOKE_API_UNSTAKE:
+		return &UnstakeInvokeParam{OrderType: orderType}
+
 	case INVOKE_API_DEPOSIT:
-		return &DepositInvokeParam{}
+		return &DepositInvokeParam{OrderType: orderType}
 		
 	case INVOKE_API_WITHDRAW:
-		return &WithdrawInvokeParam{}
+		return &WithdrawInvokeParam{OrderType: orderType}
 		
 	case INVOKE_API_ADDLIQUIDITY:
-		return &AddLiqInvokeParam{}
+		return &AddLiqInvokeParam{OrderType: orderType}
 		
 	case INVOKE_API_REMOVELIQUIDITY:
-		return &RemoveLiqInvokeParam{}
+		return &RemoveLiqInvokeParam{OrderType: orderType}
+
+	case INVOKE_API_PROFIT:
+		return &ProfitInvokeParam{OrderType: orderType}
 
 	default:
 		return nil
+	}
+}
+
+func GetOrderTypeWithAction(action string) int {
+	switch action {
+	case INVOKE_API_DEPOSIT:
+		return ORDERTYPE_DEPOSIT
+	case INVOKE_API_REFUND:
+		return ORDERTYPE_REFUND
+	case INVOKE_API_STAKE:
+		return ORDERTYPE_STAKE
+	case INVOKE_API_UNSTAKE:
+		return ORDERTYPE_UNSTAKE
+	case INVOKE_API_WITHDRAW:
+		return ORDERTYPE_WITHDRAW
+		
+	case INVOKE_API_ADDLIQUIDITY:
+		return ORDERTYPE_ADDLIQUIDITY
+		
+	case INVOKE_API_REMOVELIQUIDITY:
+		return ORDERTYPE_REMOVELIQUIDITY
+
+	case INVOKE_API_PROFIT:
+		return ORDERTYPE_PROFIT
+
+	default:
+		return ORDERTYPE_SELL
 	}
 }
 

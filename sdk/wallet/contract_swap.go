@@ -84,29 +84,26 @@ func (p *SwapContract) DeployFee(feeRate int64) int64 {
 }
 
 func (p *SwapContract) InvokeParam(action string) string {
-
-	switch action {
-	case INVOKE_API_SWAP:
-		var innerParam SwapInvokeParam
+	if action != INVOKE_API_SWAP {
+		return ""
+	}
+	
+	var param InvokeParam
+	param.Action = action
+	innerParam := GetInvokeInnerParam(action)
+	if innerParam != nil {
 		buf, err := json.Marshal(&innerParam)
 		if err != nil {
 			return ""
 		}
-
-		var param InvokeParam
-		param.Action = INVOKE_API_SWAP
 		param.Param = string(buf)
-
-		result, err := json.Marshal(&param)
-		if err != nil {
-			return ""
-		}
-
-		return string(result)
-	default:
-		return ""
 	}
 
+	result, err := json.Marshal(&param)
+	if err != nil {
+		return ""
+	}
+	return string(result)
 }
 
 func (p *SwapContract) CalcStaticMerkleRoot() []byte {
@@ -482,6 +479,7 @@ type SwapContractRuntime struct {
 	removeLiquidityMap map[string]map[int64]*SwapHistoryItem // 准备移除流动性的账户, address -> removeliq invoke item list
 	stakeMap           map[string]map[int64]*SwapHistoryItem // 准备质押的账户, address -> stake invoke item list
 	unstakeMap         map[string]map[int64]*SwapHistoryItem // 准备取消质押的账户, address -> unstake invoke item list
+	profitMap          map[string]map[int64]*SwapHistoryItem // 准备提取利润的账户, address -> profit invoke item list
 	stubFeeMap         map[int64]int64                       // invokeCount->fee
 	isSending          bool
 
@@ -521,6 +519,7 @@ func (p *SwapContractRuntime) init() {
 	p.removeLiquidityMap = make(map[string]map[int64]*SwapHistoryItem)
 	p.stakeMap = make(map[string]map[int64]*SwapHistoryItem)
 	p.unstakeMap = make(map[string]map[int64]*SwapHistoryItem)
+	p.profitMap = make(map[string]map[int64]*SwapHistoryItem)
 	p.stubFeeMap = make(map[int64]int64)
 	p.responseHistory = make(map[int][]*SwapHistoryItem)
 
@@ -1490,6 +1489,7 @@ func (p *SwapContractRuntime) StatusByAddress(address string) (string, error) {
 		RemoveLiq   []string         `json:"removeLiq"`
 		StakeList   []string         `json:"stake"`
 		UnstakeList []string         `json:"unstake"`
+		ProfitList  []string         `json:"profit"`
 	}
 
 	result := &response{}
@@ -1519,8 +1519,8 @@ func (p *SwapContractRuntime) StatusByAddress(address string) (string, error) {
 		for _, v := range p.stakeMap[address] {
 			result.StakeList = append(result.StakeList, v.InUtxo)
 		}
-		for _, v := range p.unstakeMap[address] {
-			result.UnstakeList = append(result.UnstakeList, v.InUtxo)
+		for _, v := range p.profitMap[address] {
+			result.ProfitList = append(result.ProfitList, v.InUtxo)
 		}
 	}
 
@@ -1767,6 +1767,24 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		// 检查invoker是否有足够的资产 (TODO 这个接口无法知道inoker，无法检查)
 		if amt.Cmp(p.TotalLptAmt) > 0 {
 			return 0, fmt.Errorf("no enough lpt asset")
+		}
+		return INVOKE_FEE, nil
+	
+	case INVOKE_API_PROFIT:
+		if templateName != TEMPLATE_CONTRACT_AMM {
+			return 0, fmt.Errorf("unsupport")
+		}
+		var innerParam ProfitInvokeParam
+		err := json.Unmarshal([]byte(invoke.Param), &innerParam)
+		if err != nil {
+			return 0, err
+		}
+		if innerParam.OrderType != ORDERTYPE_PROFIT {
+			return 0, fmt.Errorf("invalid order type %d", innerParam.OrderType)
+		}
+		
+		if innerParam.Ratio <= 0 || innerParam.Ratio > 100 {
+			return 0, fmt.Errorf("invalid ratio %d", innerParam.Ratio)
 		}
 		return INVOKE_FEE, nil
 
@@ -2215,6 +2233,55 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 		// 更新合约状态
 		return p.updateContract_liquidity(address, output, invokeParam.OrderType,
 			assetAmt, 0, bValid, false, false), nil
+
+	case INVOKE_API_PROFIT:
+		paramBytes, err := base64.StdEncoding.DecodeString(param.Param)
+		if err != nil {
+			return nil, err
+		}
+		var invokeParam ProfitInvokeParam
+		err = invokeParam.Decode(paramBytes)
+		if err != nil {
+			return nil, err
+		}
+
+		// 到这里，客观条件都满足了，如果还不能符合铸造条件，直接设置为无效调用
+		bValid := true
+		for {
+			
+			if invokeParam.Ratio <= 0 || invokeParam.Ratio > 100 {
+				Log.Errorf("invalid ratio %d", invokeParam.Ratio)
+				bValid = false
+				break
+			}
+
+			switch invokeParam.OrderType {
+			case ORDERTYPE_PROFIT:
+				plainSats := output.GetPlainSat()
+				if plainSats < INVOKE_FEE {
+					Log.Errorf("utxo %s no enough sats to pay stake fee %d", utxo, INVOKE_FEE)
+					bValid = false
+					break
+				}
+
+				// 检查是否有利润可以提取
+				// profit := p.getBaseProfit()
+				// if profit.Sign() <= 0 {
+				// 	Log.Errorf("no profit to retrieve")
+				// 	bValid = false
+				// 	break
+				// }
+
+			default:
+				Log.Errorf("invalid order type %d", invokeParam.OrderType)
+				bValid = false
+			}
+			break
+
+		}
+		// 更新合约状态
+		return p.updateContract(address, output, invokeParam.OrderType,
+			indexer.NewDecimal(int64(invokeParam.Ratio), 0), bValid, false, false), nil
 
 	default:
 		Log.Errorf("contract %s is not support action %s", url, param.Action)
@@ -2699,6 +2766,61 @@ func (p *SwapContractRuntime) updateContract_liquidity(
 	return item
 }
 
+// 通用的调用参数入口
+func (p *SwapContractRuntime) updateContract(
+	invoker string, output *sindexer.TxOutput,
+	orderType int, expectedAmt *Decimal, 
+	bValid, fromL1, toL1 bool) *SwapHistoryItem {
+
+	assetName := p.GetAssetName()
+	inValue := output.GetPlainSat_Ceil()
+	inAmt := output.GetAsset(assetName)
+
+	serviceFee := INVOKE_FEE
+	remainingValue := inValue - serviceFee
+	remainingAmt := inAmt.Clone()
+
+	reason := INVOKE_REASON_NORMAL
+	if !bValid {
+		reason = INVOKE_REASON_INVALID
+	}
+	item := &SwapHistoryItem{
+		InvokeHistoryItemBase: InvokeHistoryItemBase{
+			Id:     p.InvokeCount,
+			Reason: reason,
+			Done:   DONE_NOTYET,
+		},
+
+		OrderType:      orderType,
+		UtxoId:         output.UtxoId,
+		OrderTime:      time.Now().Unix(),
+		AssetName:      assetName.String(),
+		ServiceFee:     serviceFee,
+		UnitPrice:      nil,
+		ExpectedAmt:    expectedAmt,
+		Address:        invoker,
+		FromL1:         fromL1,
+		InUtxo:         output.OutPointStr,
+		InValue:        inValue,
+		InAmt:          inAmt,
+		RemainingAmt:   remainingAmt,
+		RemainingValue: remainingValue,
+		ToL1:           toL1,
+		OutAmt:         indexer.NewDecimal(0, p.Divisibility),
+		OutValue:       0,
+	}
+	p.updateContractStatus(item)
+	if reason == INVOKE_REASON_INVALID && remainingAmt.Sign() == 0 && remainingValue < 10 {
+		// 无效的指令，直接关闭
+		item.Done = DONE_CLOSED_DIRECTLY
+	} else {
+		p.addItem(item)
+	}
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+	return item
+}
+
+
 func (p *SwapContractRuntime) updateContract_refund(
 	address string, plainSat int64, utxo string, fromL1 bool, utxoId uint64) *SwapHistoryItem {
 
@@ -2776,12 +2898,10 @@ func (p *SwapContractRuntime) updateContractStatus(item *SwapHistoryItem) {
 			p.addRefundItem(item, true)
 
 		case ORDERTYPE_DEPOSIT:
-
 		case ORDERTYPE_WITHDRAW:
-
 		case ORDERTYPE_ADDLIQUIDITY:
-
 		case ORDERTYPE_REMOVELIQUIDITY:
+		case ORDERTYPE_PROFIT:
 
 		default:
 			Log.Errorf("%s updateContractStatus unsupport order type %d", p.URL(), item.OrderType)
@@ -2942,6 +3062,9 @@ func (p *SwapContractRuntime) addItem(item *SwapHistoryItem) {
 
 		case ORDERTYPE_REMOVELIQUIDITY:
 			addItemToMap(item, p.removeLiquidityMap)
+
+		case ORDERTYPE_PROFIT:
+			addItemToMap(item, p.profitMap)
 		}
 	} else {
 		addItemToMap(item, p.refundMap)
@@ -3508,6 +3631,11 @@ func (p *SwapContractRuntime) sendInvokeResultTx_SatsNet() error {
 		err = p.retrieve()
 		if err != nil {
 			Log.Errorf("contract %s retrieve failed, %v", url, err)
+		}
+
+		err = p.profit()
+		if err != nil {
+			Log.Errorf("contract %s profit failed, %v", url, err)
 		}
 
 		p.isSending = false
@@ -4923,6 +5051,168 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 	p.refreshTime_swap = 0
 }
 
+func (p *SwapContractRuntime) genProfitInfo(height int) *DealInfo {
+
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	assetName := p.GetAssetName()
+	var totalValue int64
+	var totalAmt *Decimal                          // 资产数量
+	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
+
+	for address := range p.profitMap {
+		trader := p.loadTraderInfo(address)
+		if trader == nil {
+			continue
+		}
+
+		if trader.ProfitAmt.Sign() == 0 && trader.ProfitValue == 0 {
+			continue
+		}
+		sendInfoMap[address] = &SendAssetInfo{
+			Address:   address,
+			Value:     trader.ProfitValue,
+			AssetName: assetName,
+			AssetAmt:  trader.ProfitAmt.Clone(),
+		}
+
+		totalAmt = totalAmt.Add(trader.ProfitAmt)
+		totalValue += trader.ProfitValue
+	}
+
+	return &DealInfo{
+		SendInfo:          sendInfoMap,
+		AssetName:         assetName,
+		TotalAmt:          totalAmt,
+		TotalValue:        totalValue,
+		Reason:            INVOKE_RESULT_PROFIT,
+		Height:            height,
+		InvokeCount:       p.InvokeCount,
+		StaticMerkleRoot:  p.StaticMerkleRoot,
+		RuntimeMerkleRoot: p.CurrAssetMerkleRoot,
+	}
+}
+
+
+func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	p.TotalProfitAssets = p.TotalProfitAssets.Add(dealInfo.TotalAmt)
+	p.TotalProfitSats += dealInfo.TotalValue
+	p.TotalProfitTx++
+	p.TotalProfitTxFee += dealInfo.Fee
+	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
+	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
+
+	height := dealInfo.Height
+	txId := dealInfo.TxId
+	url := p.URL()
+	// 通过height确定哪些item是需要处理的，然后更新对应的数据
+	deletedAddr := make([]string, 0)
+	for addr, info := range dealInfo.SendInfo {
+		if addr == ADDR_OPRETURN || addr == p.ChannelAddr {
+			continue
+		}
+		items, ok := p.profitMap[addr]
+		if !ok {
+			if addr != p.GetSvrAddress() {
+				Log.Panicf("updateWithDealInfo_profit can't find %s for txId %s", addr, dealInfo.TxId)
+			}
+			// 服务节点收取利润
+		}
+
+		trader := p.loadTraderInfo(addr)
+		if trader == nil {
+			Log.Panicf("%s can't find trader %s", url, addr)
+		}
+		
+		trader.ProfitAmt = trader.ProfitAmt.Sub(info.AssetAmt)
+		trader.ProfitValue -= info.Value
+		saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+
+		deletedItems := make([]int64, 0)
+		for id, item := range items {
+			h, _, _ := indexer.FromUtxoId(item.UtxoId)
+			if h > height {
+				continue
+			}
+
+			deletedItems = append(deletedItems, id)
+
+			// 更新对应数据
+			item.OutTxId = txId
+			item.OutAmt = info.AssetAmt.Clone()
+			item.OutValue = info.Value
+			item.RemainingAmt = nil
+			item.RemainingValue = 0
+			item.Done = DONE_DEALT
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+			delete(p.history, item.InUtxo)
+		}
+
+		for _, id := range deletedItems {
+			delete(items, id)
+		}
+		if len(deletedItems) != 0 && len(items) == 0 {
+			deletedAddr = append(deletedAddr, addr)
+		}
+	}
+	for _, addr := range deletedAddr {
+		delete(p.profitMap, addr)
+	}
+
+	p.CheckPoint = dealInfo.InvokeCount
+	p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
+	p.CheckPointBlock = p.CurrBlock
+	p.CheckPointBlockL1 = p.CurrBlockL1
+
+	p.refreshTime_swap = 0
+}
+
+
+// 提取利润，目前只支持底池的提取
+func (p *SwapContractRuntime) profit() error {
+
+	// 发送
+	if p.resv.LocalIsInitiator() {
+		if len(p.profitMap) == 0 {
+			return nil
+		}
+
+		Log.Debugf("%s start contract %s with action profit", p.stp.GetMode(), p.URL())
+		p.mutex.RLock()
+		height := p.CurrBlock
+		p.mutex.RUnlock()
+		profitInfo := p.genProfitInfo(height)
+		// 发送
+		if len(profitInfo.SendInfo) != 0 {
+			txId, err := p.sendTx_SatsNet(profitInfo, INVOKE_RESULT_PROFIT)
+			if err != nil {
+				Log.Errorf("contract %s sendTx_SatsNet %s failed %v", p.URL(), INVOKE_RESULT_PROFIT, err)
+				// 下个区块再试
+				return err
+			}
+			profitInfo.TxId = txId
+			profitInfo.Fee = DEFAULT_FEE_SATSNET
+
+			// record
+			p.updateWithDealInfo_profit(profitInfo)
+			// 成功一步记录一步
+			p.stp.SaveReservationWithLock(p.resv)
+
+			Log.Debugf("contract %s unstake completed, %s", p.URL(), txId)
+		}
+
+	} else {
+		//Log.Infof("server: waiting the deal Tx of contract %s ", p.URL())
+	}
+
+	return nil
+}
+
+
 func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, error) {
 
 	// 内部自己锁
@@ -5037,6 +5327,12 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 
 		case INVOKE_RESULT_REMOVELIQUIDITY:
 			info := p.genRemoveLiquidityInfo(dealInfo.Height)
+			if info != nil {
+				expectedSendInfo = info.SendInfo
+			}
+
+		case INVOKE_RESULT_PROFIT:
+			info := p.genProfitInfo(dealInfo.Height)
 			if info != nil {
 				expectedSendInfo = info.SendInfo
 			}
@@ -5253,6 +5549,9 @@ func (p *SwapContractRuntime) SetPeerActionResult(action string, param any) {
 
 		case INVOKE_RESULT_REMOVELIQUIDITY:
 			p.updateWithDealInfo_removeLiquidity(dealInfo)
+
+		case INVOKE_RESULT_PROFIT:
+			p.updateWithDealInfo_profit(dealInfo)
 
 		default:
 			return
