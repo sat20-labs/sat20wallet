@@ -65,16 +65,31 @@
               />
               {{ t('unlock.unlockButton') }}
             </Button>
-            <!-- 临时测试按钮 -->
-            <!-- <Button
+
+            <!-- 生物识别解锁按钮 -->
+            <Button
+              v-if="showBiometricButton"
               type="button"
-              @click="testToast"
+              @click="performBiometricUnlock"
+              :disabled="biometricLoading"
               variant="outline"
               size="lg"
               class="mt-2"
             >
-              Test Toast
-            </Button> -->
+              <Icon
+                v-if="!biometricLoading"
+                :inline="true"
+                class="mr-2 h-4 w-4"
+                icon="mdi:fingerprint"
+              />
+              <Icon
+                v-else
+                :inline="true"
+                class="mr-2 h-4 w-4 animate-spin"
+                icon="mdi:loading"
+              />
+              {{ biometricButtonText }}
+            </Button>
           </div>
         </form>
       </div>
@@ -83,7 +98,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from '@/components/ui/toast-new'
 import { Button } from '@/components/ui/button'
@@ -105,6 +120,8 @@ import walletManager from '@/utils/sat20'
 import { unlockPasswordSchema } from '@/utils/validation'
 import { hashPassword } from '@/utils/crypto'
 import { useI18n } from 'vue-i18n'
+import { biometricService } from '@/utils/biometric'
+import { biometricCredentialManager } from '@/utils/biometricCredentials'
 
 const formSchema = toTypedSchema(unlockPasswordSchema)
 
@@ -118,6 +135,9 @@ const route = useRoute()
 const { toast } = useToast()
 const { t } = useI18n()
 const loading = ref(false)
+const biometricLoading = ref(false)
+const showBiometricButton = ref(false)
+const biometricButtonText = ref('使用生物识别解锁')
 
 const showPassword = ref(false)
 
@@ -136,6 +156,103 @@ const showToast = (
 }
 
 // 测试函数
+// 检查生物识别支持
+const checkBiometricSupport = async () => {
+  try {
+    const supportResult = await biometricService.checkBiometricSupport()
+    console.log('生物识别支持检查结果:', supportResult)
+
+    if (supportResult.supported && supportResult.available) {
+      // 检查是否有活跃的生物识别凭据
+      const hasCredentials = biometricCredentialManager.hasActiveCredentials()
+      console.log('是否有活跃的生物识别凭据:', hasCredentials)
+
+      if (hasCredentials) {
+        showBiometricButton.value = true
+        // 根据生物识别类型设置按钮文本
+        const biometryType = supportResult.biometryType
+        if (biometryType === 'faceID') {
+          biometricButtonText.value = '使用面容ID解锁'
+        } else if (biometryType === 'touchID') {
+          biometricButtonText.value = '使用触控ID解锁'
+        } else {
+          biometricButtonText.value = '使用指纹解锁'
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('检查生物识别支持失败:', error)
+  }
+}
+
+// 生物识别解锁
+const performBiometricUnlock = async () => {
+  biometricLoading.value = true
+
+  try {
+    // 提示用户输入密码
+    const password = await promptForPassword()
+    if (!password) {
+      showToast('default', '提示', '请输入密码')
+      biometricLoading.value = false
+      return
+    }
+
+    console.log('开始生物识别验证，密码长度:', password.length)
+
+    // 验证生物识别凭据
+    const credentialResult = await biometricCredentialManager.verifyCredential(password)
+    console.log('生物识别凭据验证结果:', credentialResult)
+
+    if (!credentialResult.valid) {
+      showToast('destructive', t('common.error'), credentialResult.error || '生物识别验证失败')
+      biometricLoading.value = false
+      return
+    }
+
+    // 使用密码解锁钱包
+    const hashedPassword = await hashPassword(password)
+    console.log('生物识别验证成功，开始解锁钱包')
+
+    const [err, result] = await walletStore.unlockWallet(hashedPassword)
+    console.log('钱包解锁结果:', { err, result })
+
+    if (!err && result) {
+      console.log('生物识别解锁成功，准备跳转')
+      const redirectPath = route.query.redirect as string
+      router.push(redirectPath || '/wallet')
+      showToast('success', '解锁成功', '生物识别验证成功')
+    } else if (err) {
+      console.log('钱包解锁失败:', err)
+      const errorMessage = err instanceof Error ? err.message : String(err)
+      let localizedMessage = t('unlock.unlockFailed')
+
+      if (errorMessage.includes('invalid password') || errorMessage.includes('密码错误')) {
+        localizedMessage = t('unlock.invalidPassword')
+      } else {
+        localizedMessage = errorMessage
+      }
+
+      showToast('destructive', t('common.error'), localizedMessage)
+    } else {
+      showToast('destructive', t('common.error'), t('unlock.unlockFailed'))
+    }
+  } catch (error) {
+    console.error('生物识别解锁失败:', error)
+    showToast('destructive', t('common.error'), error instanceof Error ? error.message : '生物识别解锁失败')
+  } finally {
+    biometricLoading.value = false
+  }
+}
+
+// 提示用户输入密码
+const promptForPassword = (): Promise<string | null> => {
+  return new Promise((resolve) => {
+    const password = prompt('请输入钱包密码以验证生物识别:')
+    resolve(password)
+  })
+}
+
 const testToast = () => {
   console.log('测试 toast 被调用')
   showToast('destructive', t('common.error'), t('unlock.invalidPassword'))
@@ -190,6 +307,12 @@ const onSubmit = form.handleSubmit(async (values) => {
     showToast('destructive', t('common.error'), t('unlock.unlockFailed'))
     loading.value = false
   }
+})
+
+// 组件挂载时检查生物识别支持
+onMounted(async () => {
+  console.log('Unlock页面已挂载，检查生物识别支持')
+  await checkBiometricSupport()
 })
 
 // const deleteWallet = async () => {

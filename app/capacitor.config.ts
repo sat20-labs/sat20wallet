@@ -20,6 +20,16 @@ const config: CapacitorConfig = {
       showSpinner: false,
       splashFullScreen: true,
       splashImmersive: true
+    },
+    BiometricAuth: {
+      iosUseCustomAuthUI: true,
+      iosFallbackTitle: "使用密码",
+      iosTitle: "生物识别验证",
+      iosSubtitle: "请验证您的身份",
+      androidTitle: "生物识别验证",
+      androidSubtitle: "请验证您的身份",
+      androidDescription: "请使用指纹或面容解锁钱包",
+      androidNegativeButtonText: "取消"
     }
   }
 };
