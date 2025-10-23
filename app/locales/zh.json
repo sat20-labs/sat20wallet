@@ -33,7 +33,9 @@
     "cannotGetStoredPassword": "未能获取保存的密码",
     "biometricUnlockSuccess": "解锁成功",
     "biometricVerifySuccess": "生物识别验证成功",
-    "biometricUnlockFailed": "生物识别解锁失败"
+    "biometricUnlockFailed": "生物识别解锁失败",
+    "walletStateSynced": "钱包状态已同步",
+    "unlockSuccess": "解锁成功"
   },
   "import": {
     "title": "SAT20 Wallet",
@@ -250,6 +252,7 @@
     "thirtyMinutes": "30 分钟",
     "hideBalance": "隐藏余额",
     "hideBalanceDescription": "启动时自动隐藏余额",
+    "showBalance": "显示余额",
     "showPhrase": "显示助记词",
     "biometricUnlock": "生物识别解锁",
     "biometricUnlockDescription": "启用生物识别快速解锁钱包",

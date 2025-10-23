@@ -33,7 +33,9 @@
     "cannotGetStoredPassword": "Unable to retrieve stored password",
     "biometricUnlockSuccess": "Unlock Successful",
     "biometricVerifySuccess": "Biometric verification successful",
-    "biometricUnlockFailed": "Biometric unlock failed"
+    "biometricUnlockFailed": "Biometric unlock failed",
+    "walletStateSynced": "Wallet state synchronized",
+    "unlockSuccess": "Unlock Successful"
   },
   "import": {
     "title": "SAT20 Wallet",
@@ -247,6 +249,7 @@
     "thirtyMinutes": "30 minutes",
     "hideBalance": "Hide Balance",
     "hideBalanceDescription": "Automatically blur balance on launch",
+    "showBalance": "Show Balance",
     "showPhrase": "Show Phrase",
     "biometricUnlock": "Biometric Unlock",
     "biometricUnlockDescription": "Enable biometric authentication for quick wallet access",

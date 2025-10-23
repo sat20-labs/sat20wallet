@@ -1,8 +1,8 @@
 {
   "name": "sat2-wallet",
-  "description": "manifest.json description",
+  "description": "SAT20 Wallet - 比特币资产移动钱包",
   "private": true,
-  "version": "0.1.10",
+  "version": "0.1.12",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,13 +14,10 @@
     "sync": "bunx cap sync",
     "bump-version": "node scripts/version-bump.js",
     "compile": "vue-tsc --noEmit",
-    "copy-latest-zip": "node scripts/copy-latest-zip.js",
-    "csp:prod": "node scripts/setup-csp.js production",
-    "csp:dev": "node scripts/setup-csp.js development",
-    "build:prod": "bun run csp:prod && bun run build",
-    "build:dev": "bun run csp:dev && bun run build"
+    "copy-latest-build": "node scripts/copy-latest-zip.js"
   },
   "dependencies": {
+    "@aparajita/capacitor-biometric-auth": "^9.0.0",
     "@awesome-cordova-plugins/in-app-browser": "^8.1.0",
     "@bitcoin-js/tiny-secp256k1-asmjs": "^2.2.4",
     "@capacitor/android": "^7.4.3",
@@ -29,7 +26,6 @@
     "@capacitor/core": "^7.4.3",
     "@capacitor/ios": "^7.4.3",
     "@capacitor/storage": "^1.2.5",
-    "@aparajita/capacitor-biometric-auth": "^9.0.0",
     "@google/gemini-cli": "^0.1.22",
     "@iconify/vue": "^4.3.0",
     "@radix-icons/vue": "^1.0.0",
@@ -43,6 +39,7 @@
     "cordova-plugin-inappbrowser": "^6.0.0",
     "date-fns": "^4.1.0",
     "ecpair": "^3.0.0",
+    "eruda": "^3.4.3",
     "lucide-vue-next": "^0.477.0",
     "pinia": "^3.0.3",
     "qrcode": "^1.5.4",
@@ -73,6 +70,7 @@
     "autoprefixer": "^10.4.21",
     "cordova-res": "^0.15.4",
     "postcss": "^8.5.6",
+    "shadcn-vue": "^2.3.2",
     "tailwindcss": "^3.4.18",
     "typescript": "5.6.3",
     "vite": "^7.1.8",

@@ -241,16 +241,15 @@ const performBiometricUnlock = async () => {
       return
     }
 
-    // 生物识别成功，使用获取的密码解锁钱包
-    const password = credentialResult.password
-    if (!password) {
+    // 生物识别成功，使用获取的哈希密码解锁钱包
+    const hashedPassword = credentialResult.password
+    if (!hashedPassword) {
       showToast('destructive', t('common.error'), t('unlock.cannotGetStoredPassword'))
       showPasswordInput.value = true
       biometricLoading.value = false
       return
     }
 
-    const hashedPassword = await hashPassword(password)
     console.log('生物识别验证成功，开始解锁钱包')
 
     const [err, result] = await walletStore.unlockWallet(hashedPassword)
@@ -258,9 +257,18 @@ const performBiometricUnlock = async () => {
 
     if (!err && result) {
       console.log('生物识别解锁成功，准备跳转')
+
+      // 检查是否是"已解锁"状态同步的情况
+      const isAlreadyUnlocked = result && typeof result === 'object' && 'alreadyUnlocked' in result
+      if (isAlreadyUnlocked) {
+        console.log('生物识别检测到钱包已解锁状态同步')
+        showToast('success', t('unlock.biometricUnlockSuccess'), t('unlock.walletStateSynced'))
+      } else {
+        showToast('success', t('unlock.biometricUnlockSuccess'), t('unlock.biometricVerifySuccess'))
+      }
+
       const redirectPath = route.query.redirect as string
       router.push(redirectPath || '/wallet')
-      showToast('success', t('unlock.biometricUnlockSuccess'), t('unlock.biometricVerifySuccess'))
     } else if (err) {
       console.log('钱包解锁失败:', err)
       const errorMessage = err instanceof Error ? err.message : String(err)
@@ -312,10 +320,17 @@ const onSubmit = form.handleSubmit(async (values) => {
   if (!err && result) {
     console.log('解锁成功，准备跳转')
 
-    // 如果有生物识别凭据但没有存储密码，则存储当前密码
+    // 检查是否是"已解锁"状态同步的情况
+    const isAlreadyUnlocked = result && typeof result === 'object' && 'alreadyUnlocked' in result
+    if (isAlreadyUnlocked) {
+      console.log('检测到钱包已解锁状态同步')
+      showToast('success', t('unlock.unlockSuccess'), t('unlock.walletStateSynced'))
+    }
+
+    // 如果有生物识别凭据但没有存储密码，则存储当前哈希密码
     if (showBiometricButton.value && !biometricCredentialManager.getStoredPassword()) {
-      await biometricCredentialManager.storePassword(values.password)
-      console.log('密码已存储，下次可使用生物识别解锁')
+      await biometricCredentialManager.storePassword(hashedPassword)
+      console.log('哈希密码已存储，下次可使用生物识别解锁')
     }
 
     const redirectPath = route.query.redirect as string

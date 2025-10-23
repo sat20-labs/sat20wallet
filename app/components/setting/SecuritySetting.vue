@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full px-2 bg-zinc-700/40 rounded-lg">
+  <div class="w-full px-2  bg-zinc-700/40 rounded-lg">
     <button @click="isExpanded = !isExpanded"
       class="flex items-center justify-between w-full p-2 text-left text-primary font-medium rounded-lg">
       <div>
@@ -49,7 +49,7 @@
         </Button>
       </div>
 
-      <!-- 生物识别设置 -->
+      <!-- 指纹识别设置 -->
       <div class="border-t border-zinc-900/30 pt-4">
         <div class="space-y-4">
           <div class="flex items-center justify-between">
@@ -93,7 +93,7 @@
             {{ biometricStatus.error || t('securitySetting.biometricUnavailable') }}
           </div>
 
-          <!-- 生物识别操作按钮 -->
+        <!-- 指纹识别操作按钮 -->
           <div v-if="biometricEnabled" class="space-y-2">
             <Button
               v-if="!hasCredentials"
@@ -128,6 +128,16 @@
             <Icon icon="lucide:eye-off" class="mr-2 h-4 w-4" /> {{ $t('securitySetting.showPhrase') }}
           </RouterLink>
         </Button>
+        <Button as-child class="h-10 w-full">
+          <RouterLink to="/wallet/setting/publickey" class="w-full">
+            Show Public Key
+          </RouterLink>
+        </Button>
+        <Button as-child class="h-10 w-full">
+          <RouterLink to="/wallet/setting/password" class="w-full">
+            Password
+          </RouterLink>
+        </Button>
       </div>
 
       <!-- 提示对话框 -->
@@ -143,14 +153,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch, onActivated } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-// 原生confirm不需要全局类型声明
+import { Label } from '@/components/ui/label'
+import { Button } from '@/components/ui/button'
+import { Alert } from '@/components/ui/alert-dialog'
+import { Icon } from '@iconify/vue'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { biometricService } from '@/utils/biometric'
+import { biometricCredentialManager } from '@/utils/biometricCredentials'
+import { Storage } from '@/lib/storage-adapter'
 
 const { t } = useI18n()
-
-// 原生confirm不需要额外的处理函数
 
 const isExpanded = ref(false)
 const autoLockTime = ref('5')
@@ -209,9 +230,11 @@ const checkBiometricSupport = async () => {
     biometricStatus.value = result
     console.log('生物识别状态检查:', result)
 
-    // 在原生环境中始终显示生物识别设置
+    // 在原生环境中检查是否有活跃凭据来确定启用状态
     if (result.supported) {
-      biometricEnabled.value = false
+      const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
+      biometricEnabled.value = biometricCredentialManager.hasActiveCredentials()
+      console.log('生物识别启用状态:', biometricEnabled.value)
     }
   } catch (error) {
     console.warn('检查生物识别支持失败:', error)
@@ -224,11 +247,11 @@ const checkBiometricSupport = async () => {
 }
 
 // 检查凭据状态
-const checkCredentialStatus = () => {
+const checkCredentialStatus = async () => {
   try {
-    const credentials = import('@/utils/biometricCredentials').then(module => {
-      hasCredentials.value = module.biometricCredentialManager.hasActiveCredentials()
-    })
+    const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
+    hasCredentials.value = biometricCredentialManager.hasActiveCredentials()
+    console.log('凭据状态检查结果:', hasCredentials.value)
   } catch (error) {
     console.warn('检查凭据状态失败:', error)
     hasCredentials.value = false
@@ -299,7 +322,7 @@ const createBiometricCredential = async (): Promise<boolean> => {
       return false
     }
 
-    // 获取当前钱包密码
+    // 获取当前钱包密码（已经是哈希密码）
     const currentPassword = walletStore.password || ''
 
     if (!currentPassword) {
@@ -307,10 +330,12 @@ const createBiometricCredential = async (): Promise<boolean> => {
       return false
     }
 
+    console.log('创建生物识别凭据，使用已存储的哈希密码:', currentPassword.substring(0, 20) + '...')
+
     // 导入生物识别凭据管理器
     const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
 
-    // 创建生物识别凭据
+    // 创建生物识别凭据（传入哈希密码）
     const result = await biometricCredentialManager.createCredential(
       currentPassword,
       'SAT20 钱包生物识别凭据'
@@ -318,6 +343,7 @@ const createBiometricCredential = async (): Promise<boolean> => {
 
     if (result.success) {
       hasCredentials.value = true
+      biometricEnabled.value = true
       showAlert(t('securitySetting.createCredentialSuccess'), 'success')
       console.log('生物识别凭据创建成功:', result.credentialId)
       return true
@@ -370,6 +396,26 @@ const deleteBiometricCredential = async () => {
 // 组件挂载时检查状态
 onMounted(async () => {
   await checkBiometricSupport()
-  checkCredentialStatus()
+  await checkCredentialStatus()
 })
+
+// 组件激活时重新检查状态（处理从其他页面返回时的状态同步）
+onActivated(async () => {
+  await checkCredentialStatus()
+  // 同步 biometricEnabled 状态
+  const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
+  biometricEnabled.value = biometricCredentialManager.hasActiveCredentials()
+})
+
+// 监听存储变化，处理跨标签页状态同步
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('storage', async (e) => {
+    if (e.key === 'sat20_biometric_credentials') {
+      console.log('检测到凭据存储变化，重新检查状态')
+      await checkCredentialStatus()
+      const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
+      biometricEnabled.value = biometricCredentialManager.hasActiveCredentials()
+    }
+  })
+}
 </script>

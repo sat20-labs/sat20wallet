@@ -20,7 +20,7 @@ export const useWalletStore = defineStore('wallet', () => {
   const locked = ref(walletStorage.getValue('locked') ?? true)
   const hasWallet = ref(!!walletStorage.getValue('hasWallet'))
   const localWallets = walletStorage.getValue('wallets');
-  const wallets = ref<WalletData[]>(localWallets ? JSON.parse(JSON.stringify(localWallets)) : [])
+  const wallets = ref<WalletData[]>(localWallets ? structuredClone(localWallets) : [])
 
   // 添加全局切换状态管理
   const isSwitchingWallet = ref(false)
@@ -57,7 +57,7 @@ export const useWalletStore = defineStore('wallet', () => {
         hasWallet.value = !!newValue
         break
       case 'wallets':
-        wallets.value = newValue ? JSON.parse(JSON.stringify(newValue)) : []
+        wallets.value = newValue ? structuredClone(newValue) : []
         break
     }
   })
@@ -200,7 +200,7 @@ export const useWalletStore = defineStore('wallet', () => {
       const { address } = addressRes
       await setAddress(address)
       await setPublickey(pubkeyRes.pubKey)
-      const _wallets = JSON.parse(JSON.stringify(walletStorage.getValue('wallets')))
+      const _wallets = structuredClone(walletStorage.getValue('wallets'))
       const walletLen = _wallets.length
       _wallets.push({
         id: walletId,
@@ -255,7 +255,7 @@ export const useWalletStore = defineStore('wallet', () => {
     const [_j, pubkeyRes] = await walletManager.getWalletPubkey(
       accountIndex.value
     )
-    const _wallets = JSON.parse(JSON.stringify(walletStorage.getValue('wallets')))
+    const _wallets = structuredClone(walletStorage.getValue('wallets'))
     if (addressRes && pubkeyRes) {
       const { address } = addressRes
       await setAddress(address)
@@ -293,12 +293,32 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const unlockWallet = async (password: string) => {
     const [err, result] = await walletManager.unlockWallet(password)
+
+    // 检查是否是"钱包已解锁"的情况，这种情况下应该视为成功
+    const isAlreadyUnlocked = err && (
+      err.message && err.message.includes('wallet has been unlocked') ||
+      err.toString().includes('wallet has been unlocked')
+    )
+
     if (!err && result) {
+      // 正常解锁成功
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
       await switchToAccount(accountIndex.value)
+      return [undefined, result]
+    } else if (isAlreadyUnlocked) {
+      // 钱包已经解锁，但前端状态可能是锁定的，需要同步状态
+      console.log('检测到钱包已解锁，同步前端状态')
+      await getWalletInfo()
+      await setLocked(false)
+      await setPassword(password)
+      await switchToAccount(accountIndex.value)
+      // 返回成功，不返回错误
+      return [undefined, { alreadyUnlocked: true, message: '钱包已解锁，状态已同步' }]
     }
+
+    // 真正的错误情况
     return [err, result]
   }
 
@@ -363,9 +383,11 @@ export const useWalletStore = defineStore('wallet', () => {
         address: addressRes.address,
         pubKey: pubkeyRes.pubKey
       }
-      const _wallets = JSON.parse(JSON.stringify(walletStorage.getValue('wallets')))
-      const _wallet = _wallets.find((w: any) => w.id === walletId.value)
-      _wallet.accounts.push(newAccount)
+      const _wallets = structuredClone(walletStorage.getValue('wallets'))
+      const _wallet = _wallets?.find((w: any) => w.id === walletId.value)
+      if (_wallet) {
+        _wallet.accounts.push(newAccount)
+      }
       wallets.value = _wallets
       await walletStorage.setValue('wallets', _wallets)
       await setAccountIndex(accountId)
