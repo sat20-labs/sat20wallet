@@ -314,7 +314,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
@@ -420,7 +420,7 @@ const debouncedSelectWallet = useDebounceFn(async (wallet: WalletData) => {
       description: 'Wallet switched successfully',
       variant: 'success'
     })
-    setTimeout(() => {
+    safeSetTimeout(() => {
       router.go(-1)
     }, 100)
   } catch (error: any) {
@@ -471,7 +471,7 @@ const deleteWallet = async () => {
     })
     isDeleteDialogOpen.value = false
     walletToDelete.value = null
-    setTimeout(() => {
+    safeSetTimeout(() => {
       sendAccountsChangedEvent(wallets.value)
     }, 200);
     // 发送 accountsChanged 事件（封装函数）
@@ -560,7 +560,7 @@ const importWallet = async () => {
       description: 'Wallet imported successfully',
       variant: 'success'
     })
-    setTimeout(() => {
+    safeSetTimeout(() => {
       router.go(-1)
     }, 300)
     sendAccountsChangedEvent(wallets.value)
@@ -720,7 +720,7 @@ const confirmSavedMnemonic = async () => {
         description: 'Wallet created and switched successfully',
         variant: 'success'
       })
-      setTimeout(() => {
+      safeSetTimeout(() => {
         router.go(-1)
       }, 300)
     } catch (error: any) {
@@ -746,6 +746,30 @@ const closeMnemonicDialog = () => {
   showMnemonic.value = false
   editingWallet.value = null
 }
+
+// 定时器存储
+const timers: NodeJS.Timeout[] = []
+
+// 安全的定时器创建
+const safeSetTimeout = (callback: () => void, delay: number) => {
+  const timerId = setTimeout(callback, delay)
+  timers.push(timerId)
+  return timerId
+}
+
+// 清理所有定时器
+const clearAllTimers = () => {
+  timers.forEach(timerId => clearTimeout(timerId))
+  timers.length = 0
+}
+
+// 组件卸载时清理资源
+onUnmounted(() => {
+  clearAllTimers()
+  console.log('WalletManager 组件资源已清理')
+})
+
+// 重构现有的 setTimeout 使用 safeSetTimeout
 </script>
 
 <style scoped>

@@ -1,6 +1,6 @@
 <template>
-  <LayoutApprove @confirm="confirm" @cancel="cancel">
-    <div class="p-3 sm:p-4 space-y-3 sm:space-y-4 max-w-full">
+  <LayoutApprove @confirm="confirm" @cancel="cancel" :loading="isLoading">
+    <div class="space-y-3 sm:space-y-4 max-w-full">
       <h2 class="text-xl sm:text-2xl font-semibold text-center px-2">{{ $t('invokeContractSatsNet.title', '合约调用确认') }}</h2>
       <p class="text-xs text-gray-400 text-center mb-3 sm:mb-4 px-2 leading-relaxed">
         {{ $t('invokeContractSatsNet.warning', '请确认以下合约调用信息，确认后将发起链上调用') }}

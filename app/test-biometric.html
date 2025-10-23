@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>生物识别功能测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .info { background-color: #d1ecf1; color: #0c5460; }
+        .warning { background-color: #fff3cd; color: #856404; }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        pre {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SAT20 钱包 - 生物识别功能测试</h1>
+
+        <div class="status info">
+            <strong>测试目标：</strong>验证 Android 生物识别功能是否正常工作
+        </div>
+
+        <h2>环境检查</h2>
+        <div id="environment-status">正在检查...</div>
+
+        <h2>生物识别状态</h2>
+        <div id="biometric-status">未检查</div>
+
+        <h2>测试操作</h2>
+        <button onclick="checkBiometricSupport()" id="check-btn">检查生物识别支持</button>
+        <button onclick="testBiometricAuth()" id="auth-btn" disabled>测试生物识别认证</button>
+
+        <h2>测试日志</h2>
+        <pre id="log">等待测试开始...</pre>
+    </div>
+
+    <script>
+        let biometricService = null;
+        let isNative = false;
+
+        // 日志函数
+        function log(message, type = 'info') {
+            const logElement = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logElement.textContent += `[${timestamp}] ${type.toUpperCase()}: ${message}\n`;
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        // 环境检查
+        function checkEnvironment() {
+            log('开始检查运行环境...');
+
+            // 检查是否在Capacitor环境中
+            if (typeof window !== 'undefined' && window.Capacitor) {
+                isNative = window.Capacitor.isNativePlatform;
+                log(`检测到 Capacitor 环境，原生平台: ${isNative}`);
+
+                if (isNative) {
+                    const platform = window.Capacitor.getPlatform();
+                    log(`当前平台: ${platform}`);
+
+                    if (platform === 'android') {
+                        // 检查Android版本
+                        try {
+                            const deviceInfo = window.Capacitor.getDeviceInfo();
+                            log(`设备信息: ${JSON.stringify(deviceInfo, null, 2)}`);
+                        } catch (error) {
+                            log(`无法获取设备信息: ${error.message}`, 'warning');
+                        }
+                    }
+                }
+            } else {
+                log('未检测到 Capacitor 环境，可能在浏览器中运行', 'warning');
+            }
+
+            updateEnvironmentStatus();
+        }
+
+        function updateEnvironmentStatus() {
+            const statusDiv = document.getElementById('environment-status');
+            if (isNative) {
+                statusDiv.innerHTML = '<div class="status success">✓ 原生环境，生物识别功能可用</div>';
+            } else {
+                statusDiv.innerHTML = '<div class="status warning">⚠ 非原生环境，生物识别功能受限</div>';
+            }
+        }
+
+        // 检查生物识别支持
+        async function checkBiometricSupport() {
+            if (!isNative) {
+                log('非原生环境，无法检查生物识别支持', 'error');
+                return;
+            }
+
+            const checkBtn = document.getElementById('check-btn');
+            checkBtn.disabled = true;
+            checkBtn.textContent = '检查中...';
+
+            try {
+                log('正在检查生物识别支持...');
+
+                // 动态导入生物识别模块
+                const { BiometricAuth } = await import('@aparajita/capacitor-biometric-auth');
+                biometricService = BiometricAuth;
+
+                const result = await biometricService.checkBiometry();
+
+                log(`生物识别检查结果: ${JSON.stringify(result, null, 2)}`);
+
+                updateBiometricStatus(result);
+
+                if (result.isAvailable) {
+                    document.getElementById('auth-btn').disabled = false;
+                    log('生物识别功能可用，可以进行认证测试', 'success');
+                } else {
+                    log(`生物识别功能不可用: ${result.reason || result.code}`, 'error');
+                }
+
+            } catch (error) {
+                log(`检查生物识别支持时发生错误: ${error.message}`, 'error');
+                updateBiometricStatus({ isAvailable: false, error: error.message });
+            } finally {
+                checkBtn.disabled = false;
+                checkBtn.textContent = '检查生物识别支持';
+            }
+        }
+
+        function updateBiometricStatus(result) {
+            const statusDiv = document.getElementById('biometric-status');
+
+            if (result.isAvailable) {
+                const biometryType = getBiometryTypeName(result.biometryType);
+                statusDiv.innerHTML = `
+                    <div class="status success">
+                        ✓ 生物识别可用<br>
+                        类型: ${biometryType}<br>
+                        设备安全: ${result.deviceIsSecure ? '是' : '否'}
+                    </div>
+                `;
+            } else {
+                const error = result.reason || result.error || '未知错误';
+                statusDiv.innerHTML = `
+                    <div class="status error">
+                        ✗ 生物识别不可用<br>
+                        原因: ${error}
+                    </div>
+                `;
+            }
+        }
+
+        function getBiometryTypeName(type) {
+            const types = {
+                0: '无',
+                1: 'Touch ID',
+                2: 'Face ID',
+                3: '指纹识别',
+                4: '面容识别',
+                5: '虹膜识别'
+            };
+            return types[type] || '未知类型';
+        }
+
+        // 测试生物识别认证
+        async function testBiometricAuth() {
+            if (!biometricService) {
+                log('生物识别服务未初始化', 'error');
+                return;
+            }
+
+            const authBtn = document.getElementById('auth-btn');
+            authBtn.disabled = true;
+            authBtn.textContent = '认证中...';
+
+            try {
+                log('开始生物识别认证测试...');
+
+                await biometricService.authenticate({
+                    reason: '测试生物识别认证功能',
+                    title: 'SAT20 钱包认证',
+                    subtitle: '请验证您的身份',
+                    cancelTitle: '取消',
+                    allowDeviceCredential: true,
+                    androidTitle: '生物识别验证',
+                    androidSubtitle: '请使用指纹或面容解锁',
+                    androidConfirmationRequired: false,
+                    androidBiometryStrength: 0 // weak
+                });
+
+                log('✓ 生物识别认证成功！', 'success');
+
+            } catch (error) {
+                log(`生物识别认证失败: ${error.message}`, 'error');
+            } finally {
+                authBtn.disabled = false;
+                authBtn.textContent = '测试生物识别认证';
+            }
+        }
+
+        // 页面加载完成后执行环境检查
+        window.addEventListener('DOMContentLoaded', checkEnvironment);
+    </script>
+</body>
+</html>

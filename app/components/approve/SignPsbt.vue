@@ -1,6 +1,6 @@
 <template>
   <LayoutApprove @confirm="confirm" @cancel="cancel">
-    <div class="p-4 space-y-4">
+    <div class="space-y-4">
       <h2 class="text-2xl font-semibold text-center">{{ $t('signPsbt.title') }}</h2>
       <p class="text-xs text-gray-400 text-center mb-4">
         {{ $t('signPsbt.warning') }}

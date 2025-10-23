@@ -12,7 +12,7 @@ export interface ToastProps {
 
 export function useToast() {
   const showToast = (props: ToastProps) => {
-    const { title, description, variant = 'default', duration = 3000, icon } = props
+    const { title, description, variant = 'default', duration = Infinity, icon } = props
     
     const toastOptions = {
       description,

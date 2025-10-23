@@ -1,6 +1,6 @@
 <template>
   <LayoutApprove @confirm="confirm" @cancel="cancel" :loading="loading">
-    <div class="p-6 space-y-4">
+    <div class="space-y-4">
       <div v-if="isValidData" class="space-y-2">
         <h3 class="text-lg font-semibold">{{ $t('splitAsset.confirmTitle') }}</h3>
         <p class="text-sm text-muted-foreground">

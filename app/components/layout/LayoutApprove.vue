@@ -1,19 +1,17 @@
 <template>
-  <div class="h-full flex flex-col gap-3 sm:gap-4">
-    <div class="flex-1 overflow-hidden">
-      <ScrollArea class="h-full">
-        <slot name="default" />
-      </ScrollArea>
+  <div class="flex flex-col gap-3 sm:gap-4 h-full">
+    <div class="flex-1">
+      <slot name="default" />
     </div>
-    <div class="h-14 sm:h-16 px-3 sm:px-4">
+    <div class="h-14 sm:h-16 px-3 sm:px-4 flex-shrink-0">
       <div class="h-full">
         <slot name="footer">
           <div class="h-full grid grid-cols-2 gap-2 sm:gap-4">
-            <Button variant="outline" @click="$emit('cancel')" class="text-sm sm:text-base h-full min-h-[44px] touch-manipulation">
-              Cancel
+            <Button variant="outline" @click="$emit('cancel')" :disabled="loading" class="text-sm sm:text-base h-full min-h-[44px] touch-manipulation">
+              {{ $t('common.cancel', 'Cancel') }}
             </Button>
-            <Button @click="$emit('confirm')" class="text-sm sm:text-base h-full min-h-[44px] touch-manipulation">
-              Confirm
+            <Button @click="$emit('confirm')" :disabled="loading" class="text-sm sm:text-base h-full min-h-[44px] touch-manipulation">
+              {{ $t('common.confirm', 'Confirm') }}
             </Button>
           </div>
         </slot>
@@ -24,5 +22,10 @@
 
 <script setup lang="ts">
 import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
+
+interface Props {
+  loading?: boolean
+}
+
+defineProps<Props>()
 </script>

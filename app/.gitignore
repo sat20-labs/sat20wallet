@@ -24,3 +24,9 @@ web-ext.config.ts
 *.njsproj
 *.sln
 *.sw?
+
+# APK files
+*.apk
+android/app/build/
+android/app/release/
+android/app/debug/
