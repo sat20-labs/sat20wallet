@@ -15,7 +15,7 @@ const CONTENT_MINT_BRC20_BODY string = `{"p":"brc-20","op":"mint","tick":"%s","a
 const CONTENT_MINT_BRC20_TRANSFER_BODY string = `{"p":"brc-20","op":"transfer","tick":"%s","amt":"%s"}`
 
 
-func (p *Manager) inscribeV2(destAddr string, body string, feeRate int64, defaultUtxos []string) (*InscribeResv, error) {
+func (p *Manager) inscribeV2(destAddr string, body string, feeRate int64, defaultUtxos []string, broadcast bool) (*InscribeResv, error) {
 	wallet := p.wallet
 	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	address := wallet.GetAddress()
@@ -101,7 +101,7 @@ func (p *Manager) inscribeV2(destAddr string, body string, feeRate int64, defaul
 		}
 	}
 
-	return p.inscribe(destAddr, body, 330, feeRate, commitTxPrevOutputList)
+	return p.inscribe(destAddr, body, 330, feeRate, commitTxPrevOutputList, broadcast)
 }
 
 func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, feeRate int64) (*InscribeResv, error) {
@@ -110,7 +110,7 @@ func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, feeRate int6
 	}
 
 	body := fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_4, ticker, max, lim)
-	return p.inscribeV2(p.wallet.GetAddress(), body, feeRate, nil)
+	return p.inscribeV2(p.wallet.GetAddress(), body, feeRate, nil, true)
 }
 
 // 需要调用方确保amt<=limit
@@ -137,12 +137,12 @@ func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_BODY, tickInfo.AssetName.Ticker, amt)
-	return p.inscribeV2(destAddr, body, feeRate, defaultUtxos)
+	return p.inscribeV2(destAddr, body, feeRate, defaultUtxos, true)
 }
 
 // 需要调用方确保amt<=用户持有量
 func (p *Manager) MintTransfer_brc20(destAddr string, assetName *indexer.AssetName,
-	amt *Decimal, defaultUtxos []string, feeRate int64) (*InscribeResv, error) {
+	amt *Decimal, defaultUtxos []string, feeRate int64, broadcast bool) (*InscribeResv, error) {
 
 	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return nil, fmt.Errorf("not brc20")
@@ -157,5 +157,5 @@ func (p *Manager) MintTransfer_brc20(destAddr string, assetName *indexer.AssetNa
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_TRANSFER_BODY, tickInfo.AssetName.Ticker, amt.String())
-	return p.inscribeV2(destAddr, body, feeRate, defaultUtxos)
+	return p.inscribeV2(destAddr, body, feeRate, defaultUtxos, broadcast)
 }

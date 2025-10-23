@@ -756,6 +756,23 @@ func (p *Manager) BroadcastTx(tx *wire.MsgTx) (string, error) {
 	return txId, nil
 }
 
+func (p *Manager) BroadcastTxs(txs []*wire.MsgTx) (error) {
+	if _enable_testing && _not_send_tx {
+		return nil
+	}
+
+	err := p.l1IndexerClient.BroadCastTxs(txs)
+	if err != nil {
+		Log.Errorf("BroadCastTxs failed. %v", err)
+		return err
+	}
+	for _, tx := range txs {
+		p.utxoLockerL1.LockUtxosWithTx(tx)
+		// tx确认后自动解锁
+	}
+	return nil
+}
+
 func (p *Manager) BroadcastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 	if _enable_testing && _not_send_tx {
 		return tx.TxID(), nil

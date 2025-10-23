@@ -33,6 +33,10 @@ type PrevOutput struct {
 	PkScript []byte `json:"pkscript"`
 }
 
+func (p *PrevOutput) Utxo() string {
+	return fmt.Sprintf("%s:%d", p.TxId, p.VOut)
+}
+
 type PrevOutputs []*PrevOutput
 
 type UtxoViewpoint map[wire.OutPoint][]byte

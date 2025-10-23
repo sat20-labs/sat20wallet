@@ -1563,6 +1563,17 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	return tx.TxID(), nil
 }
 
+func (p *TestIndexerClient) BroadCastTxs(txs []*wire.MsgTx) (error) {
+	for _, tx := range txs {
+		_, err := p.BroadCastTx(tx)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (p *TestIndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 
 	txHex, err := EncodeMsgTx_SatsNet(tx)

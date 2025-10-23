@@ -52,7 +52,7 @@ func EstimatedDeployFee(inputLen int, feeRate int64) int64 {
 
 
 func (p *Manager) inscribe(address string, body string, revealOutValue int64,
-	feeRate int64, commitTxPrevOutputList []*PrevOutput) (*InscribeResv, error) {
+	feeRate int64, commitTxPrevOutputList []*PrevOutput, broadcast bool) (*InscribeResv, error) {
 	wallet := p.wallet
 	changeAddr := wallet.GetAddress()
 	if address == "" {
@@ -75,36 +75,31 @@ func (p *Manager) inscribe(address string, body string, revealOutValue int64,
 		PublicKey:     wallet.GetPaymentPubKey(),
 	}
 
-	txs, err := Inscribe(GetChainParam(), request, p.GenerateNewResvId())
+	inscribe, err := Inscribe(GetChainParam(), request, p.GenerateNewResvId())
 	if err != nil {
 		return nil, err
 	}
-	Log.Infof("commit fee %d, reveal fee %d", txs.CommitTxFee, txs.RevealTxFee)
+	Log.Infof("commit fee %d, reveal fee %d", inscribe.CommitTxFee, inscribe.RevealTxFee)
 
-	err = p.TestAcceptance([]*wire.MsgTx{txs.CommitTx, txs.RevealTx})
+	txs := []*wire.MsgTx{inscribe.CommitTx, inscribe.RevealTx}
+	err = p.TestAcceptance(txs)
 	if err != nil {
 		return nil, err
 	}
 
-	commitTxId, err := p.BroadcastTx(txs.CommitTx)
-	if err != nil {
-		return nil, err
+	if broadcast {
+		err := p.BroadcastTxs(txs)
+		if err != nil {
+			return nil, err
+		}
+		Log.Infof("reveal broadcasted, txid: %s", inscribe.RevealTx.TxID())
+	} else {
+		for _, preOut := range commitTxPrevOutputList {
+			p.utxoLockerL1.lockUtxo(preOut.Utxo(), "inscribe")
+		}
 	}
-	Log.Infof("commit txid: %s", commitTxId)
 
-	revealTxId, err := p.BroadcastTx(txs.RevealTx)
-	if err != nil {
-		// 缓存数据，确保可以取回资金
-		txs.Status = RS_INSCRIBING_COMMIT_BROADCASTED
-		SaveInscribeResv(p.db, txs)
-		return txs, err
-	}
-	Log.Infof("reveal txid: %s", revealTxId)
-
-	txs.Status = RS_INSCRIBING_REVEAL_BROADCASTED
-	SaveInscribeResv(p.db, txs)
-
-	return txs, nil
+	return inscribe, nil
 }
 
 func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int) (*InscribeResv, error) {
@@ -180,7 +175,7 @@ func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int) (*Inscr
 
 	pubkey := hex.EncodeToString(p.wallet.GetPaymentPubKey().SerializeCompressed())
 	body := fmt.Sprintf(CONTENT_DEPLOY_BODY, ticker, max, lim, n, pubkey)
-	return p.inscribe("", body, 330, feeRate, commitTxPrevOutputList)
+	return p.inscribe("", body, 330, feeRate, commitTxPrevOutputList, true)
 }
 
 // 只适合 CONTENT_MINT_BODY ，可以估算 CONTENT_MINT_ABBR_BODY
@@ -315,7 +310,7 @@ func (p *Manager) MintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
 		body = fmt.Sprintf(CONTENT_MINT_BODY, tickInfo.AssetName.Ticker, amt)
 	}
 
-	return p.inscribe(destAddr, body, revealOutValue, feeRate, commitTxPrevOutputList)
+	return p.inscribe(destAddr, body, revealOutValue, feeRate, commitTxPrevOutputList, true)
 }
 
 // 暂时不支持coreid后缀
@@ -438,7 +433,7 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string, 
 		return nil, fmt.Errorf("no enough utxos for fee")
 	}
 
-	return p.inscribe("", body, 330, feeRate, commitTxPrevOutputList)
+	return p.inscribe("", body, 330, feeRate, commitTxPrevOutputList, true)
 }
 
 
@@ -497,5 +492,5 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string)
 		return nil, fmt.Errorf("no enough utxos for fee")
 	}
 
-	return p.inscribe("", body, 330, feeRate, commitTxPrevOutputList)
+	return p.inscribe("", body, 330, feeRate, commitTxPrevOutputList, true)
 }
