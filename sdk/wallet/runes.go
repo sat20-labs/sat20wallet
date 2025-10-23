@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 	"lukechampine.com/uint128"
@@ -122,6 +123,7 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 		},
 		DestAddress:   address,
 		ChangeAddress: changeAddr,
+		SignAndSend:   true,
 		Signer:        p.SignTxV2,
 		PublicKey:     wallet.GetPaymentPubKey(),
 	}
@@ -131,6 +133,11 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 		return nil, err
 	}
 	Log.Infof("commit fee %d, reveal fee %d", txs.CommitTxFee, txs.RevealTxFee)
+
+	err = p.TestAcceptance([]*wire.MsgTx{txs.CommitTx, txs.RevealTx})
+	if err != nil {
+		return nil, err
+	}
 
 	commitTxId, err := p.BroadcastTx(txs.CommitTx)
 	if err != nil {
@@ -226,5 +233,5 @@ func (p *Manager) mintRunesAsset(destAddr string, tickInfo *indexer.TickerInfo) 
 	// pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	// address := wallet.GetAddress()
 
-	return "", nil
+	return "", fmt.Errorf("not implemented")
 }

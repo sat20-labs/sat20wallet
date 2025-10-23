@@ -485,10 +485,7 @@ package wallet
 // 	p := &VaultContractRuntime{
 // 		VaultContractRunTimeInDB: VaultContractRunTimeInDB{
 // 			VaultContract: *NewVaultContract(),
-// 			ContractRuntimeBase: ContractRuntimeBase{
-// 				DeployTime: time.Now().Unix(),
-// 				stp:        stp,
-// 			},
+// 			ContractRuntimeBase: *NewContractRuntimeBase(stp),
 // 			VaultRunningData: VaultRunningData{
 // 				AllowDeposit: true,
 // 				AllowWithdraw: false,

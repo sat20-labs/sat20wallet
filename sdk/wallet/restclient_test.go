@@ -12,6 +12,7 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	schainhash "github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	swire "github.com/sat20-labs/satoshinet/wire"
 
@@ -1562,6 +1563,17 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	return tx.TxID(), nil
 }
 
+func (p *TestIndexerClient) BroadCastTxs(txs []*wire.MsgTx) (error) {
+	for _, tx := range txs {
+		_, err := p.BroadCastTx(tx)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (p *TestIndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 
 	txHex, err := EncodeMsgTx_SatsNet(tx)
@@ -1763,3 +1775,82 @@ func (p *TestNodeClient) GetContractAllAddressesReq(contractUrl string, start, l
 func (p *TestNodeClient) GetContractStatusByAddressReq(url, address string) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }
+
+
+func (p *TestNodeClient) SendSigReq(req *wwire.SignRequest,
+	sig []byte) ([][][]byte, error) {
+
+	// signedReq := wwire.SignReq{
+	// 	SignRequest: *req,
+	// 	Sig:         sig,
+	// }
+
+	// return sig2, nil
+	return nil, fmt.Errorf("not implemented")
+}
+
+
+func (p *TestNodeClient) SendActionResultNfty(msgId int64, action string, ret int, reason string) error {
+
+	// req := wwire.ActionResultNotify{
+	// 	Id:     msgId,
+	// 	Action: action,
+	// 	Result: ret,
+	// 	Reason: reason,
+	// }
+
+	// if p.server != nil {
+	// 	err := p.server.HandleActionResultNfty(&req)
+	// 	if err != nil {
+	// 		Log.Errorf("HandleActionResultNfty failed, %v", err)
+	// 		return err
+	// 	}
+	// }
+
+	return nil
+}
+
+func (p *TestNodeClient) SendPingReq(req *wwire.PingReq) (*wwire.PingResp, error) {
+
+	// resp := &wwire.PingResp{
+	// 	BaseResp: wwire.BaseResp{
+	// 		Code: 0,
+	// 		Msg:  "ok",
+	// 	},
+	// 	PingResponse: &wwire.PingResponse{
+	// 		NextAction: "pong",
+	// 	},
+	// }
+
+	// if p.server != nil {
+	// 	resp.PingResponse, _ = p.server.HandlePingReq(req)
+	// 	return resp, nil
+	// }
+
+	//return resp, fmt.Errorf("no server")
+
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendActionSyncReq(req *wwire.ActionSyncReq) (*wwire.ActionSyncResp, error) {
+	// resp := &wwire.ActionSyncResp{
+	// 	BaseResp: wwire.BaseResp{
+	// 		Code: 0,
+	// 		Msg:  "ok",
+	// 	},
+	// }
+
+	// if p.server != nil {
+	// 	buf, err := p.server.HandleActionSyncReq(req)
+	// 	if err != nil {
+	// 		Log.Errorf("HandleActionSyncReq failed, %v", err)
+	// 		return nil, err
+	// 	}
+	// 	resp.ChannelData = buf
+	// 	return resp, nil
+	// }
+
+	// return nil, fmt.Errorf("no server")
+	return nil, fmt.Errorf("not implemented")
+}
+

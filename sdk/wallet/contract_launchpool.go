@@ -299,6 +299,22 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 
 		// deploy service fee
 		total += DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT
+
+	case indexer.PROTOCOL_NAME_BRC20: // TODO 需要根据brc20的数据调整
+		// deploy+mint
+		estimatedDeployFee := []int64{326, 384, 441, 449}
+		total = estimatedDeployFee[feeLen-1]*feeRate + 660
+
+		// splicing-in
+		total += CalcFee_SplicingIn(1, feeLen, p.GetAssetName(), feeRate)
+
+		// 激活tx
+		total += DEFAULT_FEE_SATSNET
+		// 最后还需要部署amm合约和激活tx
+		total += DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE
+
+		// deploy service fee
+		total += DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT
 	}
 
 	return total
@@ -341,6 +357,10 @@ func CalcFee_SplicingIn(utxoLen, feeLen int, assetName *indexer.AssetName, feeRa
 		if assetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
 			// 符文的输入聪数量，在需要余额时可能不够
 			moreSats += 330
+		}
+		if assetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+			// TODO 需要增加至少铭刻两个transfer铭文的聪
+			moreSats += 2000
 		}
 	}
 
@@ -488,10 +508,7 @@ func NewLaunchPoolContractRuntime(stp ContractManager) *LaunchPoolContractRunTim
 	r := &LaunchPoolContractRunTime{
 		LaunchPoolContractRunTimeInDB: LaunchPoolContractRunTimeInDB{
 			LaunchPoolContract: *NewLaunchPoolContract(),
-			ContractRuntimeBase: ContractRuntimeBase{
-				DeployTime: time.Now().Unix(),
-				stp:        stp,
-			},
+			ContractRuntimeBase: *NewContractRuntimeBase(stp),
 			LaunchPoolRunningData: LaunchPoolRunningData{},
 		},
 	}
@@ -797,6 +814,9 @@ func deployTicker(stp ContractManager, resv ContractDeployResvIF, _ any) (any, e
 				contract.deployTickerResv = inscribeResv
 				Log.Infof("DeployRunesTicker %s return %s", contract.AssetName, inscribeResv.CommitTx.TxID())
 				contract.DeployTickerTxId = contract.deployTickerResv.CommitTx.TxID()
+			
+			case indexer.PROTOCOL_NAME_BRC20:
+				// TODO 支持brc20
 			}
 
 			contract.Status = (CONTRACT_STATUS_INIT + 1)
@@ -886,6 +906,8 @@ func mintTicker(stp ContractManager, resv ContractDeployResvIF, param any) (any,
 					Log.Infof("tx %s has not confirmed 6 times", contract.DeployTickerTxId)
 					return nil, fmt.Errorf("not reach 6 confirmations")
 				}
+
+			case indexer.PROTOCOL_NAME_BRC20:
 
 			}
 

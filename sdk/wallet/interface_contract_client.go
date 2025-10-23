@@ -77,6 +77,11 @@ func (p *Manager) QueryParamForInvokeContract(templateName, action string) (stri
 	return c.InvokeParam(action), nil
 }
 
+func (p *Manager) IsAmmContractExisting(coreChannelId, assetName string) bool {
+	url := GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_AMM)
+	r := p.getRemoteDeployedContract(url)
+	return r != nil
+}
 
 // 合约状态经常变化，需要实时获取
 func (p *Manager) getRemoteDeployedContract(url string) ContractRuntime {
@@ -108,18 +113,17 @@ func (p *Manager) getRemoteDeployedContract(url string) ContractRuntime {
 	return c
 }
 
+func (p *Manager) QueryFeeForInvokeContract(contractURL string, jsonInvokeParam string) (ContractRuntime, int64, error) {
 
-func (p *Manager) QueryFeeForInvokeContract(contractURL string, invokeParam string) (ContractRuntime, int64, error) {
-	
 	// client mode
 	contract := p.getRemoteDeployedContract(contractURL)
 	if contract == nil {
 		return nil, 0, fmt.Errorf("contract not found")
 	}
-	
+
 	// 检查调用参数是否有效。
 	// TODO 以后直接到持有合约的节点上去检查
-	fee, err := contract.CheckInvokeParam(invokeParam)
+	fee, err := contract.CheckInvokeParam(jsonInvokeParam)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -128,7 +132,7 @@ func (p *Manager) QueryFeeForInvokeContract(contractURL string, invokeParam stri
 }
 
 // 发送的TX包含调用该合约所需要的聪, invokeParam不支持复杂结构的参数
-func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
+func (p *Manager) InvokeContract_Satsnet(contractURL string, jsonInvokeParam string,
 	feeRate int64) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -139,7 +143,7 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
 		return "", err
 	}
 
-	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
+	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, jsonInvokeParam)
 	if err != nil {
 		return "", err
 	}
@@ -147,13 +151,11 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
 		return "", fmt.Errorf("contract is not active")
 	}
 
-	// 将json结构转为script结构
-	var param InvokeParam
-	err = json.Unmarshal([]byte(invokeParam), &param)
+	wrapperParam, err := ConvertInvokeParam(jsonInvokeParam)
 	if err != nil {
 		return "", err
 	}
-	buf, err := param.Encode()
+	buf, err := wrapperParam.Encode()
 	if err != nil {
 		return "", err
 	}
@@ -181,8 +183,6 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
 		return "", err
 	}
 
-	// 需要查询合约是否已经关闭?
-
 	tx, err := p.SendAssets_SatsNet(channelAddr, ASSET_PLAIN_SAT.String(), fmt.Sprintf("%d", fee), nullDataScript)
 	if err != nil {
 		Log.Errorf("SendAssets_SatsNet %s failed", channelAddr)
@@ -194,7 +194,7 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, invokeParam string,
 }
 
 // 调用合约的同时加入资产，invokeParam支持复杂结构的参数
-func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam string,
+func (p *Manager) InvokeContractV2_Satsnet(contractURL string, jsonInvokeParam string,
 	assetName string, amt string, feeRate int64) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -206,7 +206,7 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam strin
 	}
 
 	// 调用合约的费用
-	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
+	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, jsonInvokeParam)
 	if err != nil {
 		return "", err
 	}
@@ -214,71 +214,10 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam strin
 		return "", fmt.Errorf("contract is not active")
 	}
 
-	// 将json结构转为script结构
-	var wrapperParam InvokeParam
-	err = json.Unmarshal([]byte(invokeParam), &wrapperParam)
+	wrapperParam, err := ConvertInvokeParam(jsonInvokeParam)
 	if err != nil {
 		return "", err
 	}
-
-	switch wrapperParam.Action {
-	case INVOKE_API_SWAP:
-		var swapParam SwapInvokeParam
-		err = json.Unmarshal([]byte(wrapperParam.Param), &swapParam)
-		if err != nil {
-			return "", err
-		}
-		innerParam, err := swapParam.Encode()
-		if err != nil {
-			return "", err
-		}
-		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-
-	case INVOKE_API_WITHDRAW:
-		var param WithdrawInvokeParam
-		err = json.Unmarshal([]byte(wrapperParam.Param), &param)
-		if err != nil {
-			return "", err
-		}
-		innerParam, err := param.Encode()
-		if err != nil {
-			return "", err
-		}
-		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-
-	case INVOKE_API_MINT:
-
-	case INVOKE_API_REFUND:
-
-	case INVOKE_API_ADDLIQUIDITY:
-		var stakeParam AddLiqInvokeParam
-		err = json.Unmarshal([]byte(wrapperParam.Param), &stakeParam)
-		if err != nil {
-			return "", err
-		}
-		fee += stakeParam.Value
-		innerParam, err := stakeParam.Encode()
-		if err != nil {
-			return "", err
-		}
-		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-
-	case INVOKE_API_REMOVELIQUIDITY:
-		var stakeParam RemoveLiqInvokeParam
-		err = json.Unmarshal([]byte(wrapperParam.Param), &stakeParam)
-		if err != nil {
-			return "", err
-		}
-		innerParam, err := stakeParam.Encode()
-		if err != nil {
-			return "", err
-		}
-		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-
-	default:
-		return "", fmt.Errorf("unsupport action %s", wrapperParam.Action)
-	}
-
 	buf, err := wrapperParam.Encode()
 	if err != nil {
 		return "", err
@@ -329,7 +268,7 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, invokeParam strin
 }
 
 // 调用合约的同时加入资产
-func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
+func (p *Manager) InvokeContractV2(contractURL string, jsonInvokeParam string,
 	assetName string, amt string, feeRate int64) (string, error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -341,7 +280,7 @@ func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
 	}
 
 	// 调用合约的费用
-	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, invokeParam)
+	runtime, fee, err := p.QueryFeeForInvokeContract(contractURL, jsonInvokeParam)
 	if err != nil {
 		return "", err
 	}
@@ -349,72 +288,38 @@ func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
 		return "", fmt.Errorf("contract is not active")
 	}
 
-	// 主网不需要invoice
 	var nullDataScript []byte
 	asset := indexer.NewAssetNameFromString(assetName)
-	if asset.Protocol != indexer.PROTOCOL_NAME_RUNES {
+	if asset.Protocol != indexer.PROTOCOL_NAME_RUNES { // TODO 等主网支持多个op_return后打开
+		wrapperParam, err := ConvertInvokeParam(jsonInvokeParam)
+		if err != nil {
+			return "", err
+		}
+		buf, err := wrapperParam.EncodeV2()
+		if err != nil {
+			return "", err
+		}
 
-		// // 将json结构转为script结构
-		// var wrapperParam InvokeParam
-		// err = json.Unmarshal([]byte(invokeParam), &wrapperParam)
-		// if err != nil {
-		// 	return "", err
-		// }
+		_, asssetName, tc, err := ParseContractURL(contractURL)
+		if err != nil {
+			return "", err
+		}
+		relativePath := GenerateContractRelativePath(asssetName, tc)
 
-		// switch wrapperParam.Action {
-		// case INVOKE_API_SWAP:
-		// 	// var swapParam SwapInvokeParam
-		// 	// err = json.Unmarshal([]byte(wrapperParam.Param), &swapParam)
-		// 	// if err != nil {
-		// 	// 	return "", err
-		// 	// }
-		// 	// innerParam, err := swapParam.Encode()
-		// 	// if err != nil {
-		// 	// 	return "", err
-		// 	// }
-		// 	//wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-		// 	wrapperParam.Param = ""
-		// case INVOKE_API_DEPOSIT:
-		// 	// var param DepositInvokeParam
-		// 	// err = json.Unmarshal([]byte(wrapperParam.Param), &param)
-		// 	// if err != nil {
-		// 	// 	return "", err
-		// 	// }
-		// 	// innerParam, err := param.Encode()
-		// 	// if err != nil {
-		// 	// 	return "", err
-		// 	// }
-		// 	//wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
-		// 	wrapperParam.Param = ""
-		// default:
-		// 	return "", fmt.Errorf("unsupport action %s", wrapperParam.Action)
-		// }
+		invoke := sindexer.ContractInvokeData{
+			ContractPath: relativePath, // 资产名字+tc
+			InvokeParam:  buf, // 这里的资产名字必须省略，减少字节数
+			//PubKey:       p.wallet.GetPubKey().SerializeCompressed(),
+		}
 
-		// buf, err := wrapperParam.Encode()
-		// if err != nil {
-		// 	return "", err
-		// }
-
-		// _, asssetName, tc, err := ParseContractURL(contractURL)
-		// if err != nil {
-		// 	return "", err
-		// }
-		// relativePath := GenerateContractRelativePath(asssetName, tc)
-
-		// invoke := sindexer.ContractInvokeData{
-		// 	ContractPath: relativePath,
-		// 	InvokeParam:  buf,
-		// 	PubKey:       p.wallet.GetPubKey().SerializeCompressed(),
-		// }
-
-		// invoice, err := AbbrInvokeContractInvoice(&invoke)
-		// if err != nil {
-		// 	return "", err
-		// }
-		// nullDataScript, err = sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKECONTRACT, invoice)
-		// if err != nil {
-		// 	return "", err
-		// }
+		invoice, err := AbbrInvokeContractInvoice(&invoke)
+		if err != nil {
+			return "", err
+		}
+		nullDataScript, err = sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKECONTRACT, invoice)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	name := indexer.NewAssetNameFromString(assetName)
@@ -455,7 +360,7 @@ func (p *Manager) InvokeContractV2(contractURL string, invokeParam string,
 }
 
 // 一个特殊的invoke
-func (p *Manager) sendContractEnabledTx(url string, h1, h2 int) (string, error) {
+func (p *Manager) SendContractEnabledTx(url string, h1, h2 int) (string, error) {
 
 	var wrapperParam InvokeParam
 	wrapperParam.Action = INVOKE_API_ENABLE
@@ -503,5 +408,159 @@ func (p *Manager) sendContractEnabledTx(url string, h1, h2 int) (string, error) 
 		return "", err
 	}
 	Log.Infof("enable contract %s with txId %s", url, txId)
+	return txId, nil
+}
+
+// 存款（充值）：在主网将资产转入流动性池子，流动性池子在聪网将对应资产转入destAddr
+// 返回txid, msgId
+func (p *Manager) DepositWithContract(destAddr string, assetName string, amt string,
+	feeRate int64) (string, error) {
+
+	Log.Infof("DepositWithContract %s %s", assetName, amt)
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+	// if !p.IsReady() {
+	// 	return "", fmt.Errorf("not ready")
+	// }
+
+	// 确保sln在线
+	if !p.checkSuperNodeStatus() {
+		return "", fmt.Errorf("peer is offline")
+	}
+
+	// 检查是否有对应的amm合约，如果存在，通过该合约处理资产进出
+	coreChannelId := p.GetCoreChannelAddr()
+	url := GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_AMM)
+	r := p.getRemoteDeployedContract(url)
+	if r == nil {
+		url = GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_TRANSCEND)
+		r = p.getRemoteDeployedContract(url)
+		if r == nil {
+			return "", fmt.Errorf("can't find a correct contract")
+		}
+	}
+	if !r.IsActive() {
+		return "", fmt.Errorf("contract not active")
+	}
+
+	depositPara := WithdrawInvokeParam{
+		OrderType: ORDERTYPE_DEPOSIT,
+		AssetName: assetName,
+		Amt:       amt,
+	}
+	depositParaBytes, err := json.Marshal(depositPara)
+	if err != nil {
+		return "", err
+	}
+	invokeParam := InvokeParam{
+		Action: INVOKE_API_DEPOSIT,
+		Param:  string(depositParaBytes),
+	}
+	invokeJson, err := json.Marshal(invokeParam)
+	if err != nil {
+		return "", err
+	}
+
+	txId, err := p.InvokeContractV2(url, string(invokeJson), assetName, amt, feeRate)
+	if err != nil {
+		Log.Errorf("InvokeContractV2 %s failed, %v", url, err)
+		return "", err
+	}
+	Log.Infof("DepositWithContract succeed. %s", txId)
+
+	// 通知服务端（执行ascend操作）将txId中输出到通道地址的utxo锁定，否则有可能被withdraw或者其他操作用掉 （临时方案）
+	// 如果合约不是该节点的服务端运行，这个就无效。需要方案2: 在withdraw时，不使用当前区块的utxo
+	RESV_TYPE_DEPOSIT := "deposit"
+	p.serverNode.client.SendActionResultNfty(0, RESV_TYPE_DEPOSIT, 0, txId)
+
+	return txId, nil
+}
+
+// TODO 提取时，需要增加收费，除了固定的  DEFAULT_SERVICE_FEE_WITHDRAW 之外，
+// 还需要支付提取资产的 DEFAULT_FEE_RATIO_WITHDRAW_WITH_CONTRACT
+// 取款（提现）：在聪网将资产转入流动性池子，流动性池子在主网将对应资产转入destAddr
+// 返回txid
+func (p *Manager) WithdrawWithContract(destAddr string, assetName string, amt string,
+	feeRate int64) (string, error) {
+	Log.Infof("WithdrawWithContract %s %s", assetName, amt)
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+	// if !p.IsReady() {
+	// 	return "", fmt.Errorf("not ready")
+	// }
+
+	// 确保sln在线
+	if !p.checkSuperNodeStatus() {
+		return "", fmt.Errorf("peer is offline")
+	}
+
+	// 检查是否有对应的amm合约，如果存在，通过该合约处理资产进出
+	coreChannelId := p.GetCoreChannelAddr()
+	url := GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_AMM)
+	r := p.getRemoteDeployedContract(url)
+	if r == nil {
+		url = GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_TRANSCEND)
+		r = p.getRemoteDeployedContract(url)
+		if r == nil {
+			return "", fmt.Errorf("can't find a correct contract")
+		}
+	}
+	if !r.IsActive() {
+		return "", fmt.Errorf("contract not active")
+	}
+	withdrawPara := WithdrawInvokeParam{
+		OrderType: ORDERTYPE_WITHDRAW,
+		AssetName: assetName,
+		Amt:       amt,
+	}
+	withdrawParaBytes, err := json.Marshal(withdrawPara)
+	if err != nil {
+		return "", err
+	}
+	invokeParam := InvokeParam{
+		Action: INVOKE_API_WITHDRAW,
+		Param:  string(withdrawParaBytes),
+	}
+	invokeJson, err := json.Marshal(invokeParam)
+	if err != nil {
+		return "", err
+	}
+
+	// 修正白聪数量
+	if assetName == indexer.ASSET_PLAIN_SAT.String() {
+		total := p.GetAssetBalance_SatsNet("", indexer.NewAssetNameFromString(assetName))
+		if total.Sign() == 0 {
+			return "", fmt.Errorf("no any asset can be withdrawn")
+		}
+		if total.String() == amt {
+			// 需要扣除调用费用和网络费用
+			fee, err := r.CheckInvokeParam(string(invokeJson))
+			if err != nil {
+				return "", err
+			}
+			total = total.Sub(indexer.NewDefaultDecimal(fee + DEFAULT_FEE_SATSNET))
+
+			amt = total.String()
+			withdrawPara.Amt = amt
+			withdrawParaBytes, err := json.Marshal(withdrawPara)
+			if err != nil {
+				return "", err
+			}
+			invokeParam.Param = string(withdrawParaBytes)
+			invokeJson, err = json.Marshal(invokeParam)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+
+	txId, err := p.InvokeContractV2_Satsnet(url, string(invokeJson), assetName, amt, feeRate)
+	if err != nil {
+		Log.Errorf("InvokeContractV2_Satsnet %s failed, %v", url, err)
+		return "", err
+	}
+	Log.Infof("WithdrawWithContract succeed. %s", txId)
 	return txId, nil
 }

@@ -31,4 +31,6 @@ const (
 	STP_ACTION_SYNC string = "/action/sync"
 	STP_ACTION_SIGN string = "/action/sign"
 
+	STP_PING string = "/ping"
+
 )

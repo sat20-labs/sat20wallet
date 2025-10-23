@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
 
 const (
@@ -26,6 +27,12 @@ type NodeRPCClient interface {
 	GetContractInvokeHistoryByAddressReq(string, string, int, int)  (string, error)
 	GetContractAllAddressesReq(string, int, int) (string, error)
 	GetContractStatusByAddressReq(string, string) (string, error)
+
+	SendSigReq(req *wwire.SignRequest,
+		sig []byte) ([][][]byte, error)
+	SendActionResultNfty(msgId int64, msg string, result int, reason string) error
+	SendPingReq(*wwire.PingReq) (*wwire.PingResp, error)
+	SendActionSyncReq(req *wwire.ActionSyncReq) (*wwire.ActionSyncResp, error)
 }
 
 
@@ -262,3 +269,117 @@ func (p *NodeClient) GetContractStatusByAddressReq(contractUrl, address string) 
 	return result.Status, nil
 }
 
+func (p *NodeClient) SendSigReq(req *wwire.SignRequest,
+	sig []byte) ([][][]byte, error) {
+
+	signedReq := wwire.SignReq{
+		SignRequest: *req,
+		Sig:         sig,
+	}
+
+	buff, err := json.Marshal(&signedReq)
+	if err != nil {
+		return nil, err
+	}
+
+	url := p.GetUrl(wwire.STP_ACTION_SIGN)
+	rsp, err := p.Http.SendPostRequest(url, buff)
+	if err != nil {
+		Log.Errorf("SendPostRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	var result wwire.SignResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("SendBootstrapSigReq failed, %s", result.Msg)
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+
+	return result.TxSig, nil
+}
+
+
+func (p *NodeClient) SendActionResultNfty(msgId int64, action string, ret int, reason string) error {
+
+	req := wwire.ActionResultNotify{
+		Id:     msgId,
+		Action: action,
+		Result: ret,
+		Reason: reason,
+	}
+
+	buff, err := json.Marshal(&req)
+	if err != nil {
+		return err
+	}
+
+	url := p.GetUrl(wwire.STP_ACTION_NFTY)
+	rsp, err := p.Http.SendPostRequest(url, buff)
+	if err != nil {
+		Log.Errorf("SendPostRequest %v failed. %v", url, err)
+		return err
+	}
+
+	var result wwire.ActionResultResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("SendActionResultNfty failed, %s", result.Msg)
+		return fmt.Errorf("%s", result.Msg)
+	}
+
+	return nil
+}
+
+func (p *NodeClient) SendPingReq(req *wwire.PingReq) (*wwire.PingResp, error) {
+	buff, err := json.Marshal(&req)
+	if err != nil {
+		return nil, err
+	}
+
+	url := p.GetUrl(wwire.STP_PING)
+	rsp, err := p.Http.SendPostRequest(url, buff)
+	if err != nil {
+		Log.Errorf("SendPostRequest %v failed. %v", url, err)
+		return nil, err
+	}
+	Log.Infof("Send PING to %s", url.String())
+
+	var result wwire.PingResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+func (p *NodeClient) SendActionSyncReq(req *wwire.ActionSyncReq) (*wwire.ActionSyncResp, error) {
+	buff, err := json.Marshal(&req)
+	if err != nil {
+		return nil, err
+	}
+
+	url := p.GetUrl(wwire.STP_ACTION_SYNC)
+	rsp, err := p.Http.SendPostRequest(url, buff)
+	if err != nil {
+		Log.Errorf("SendPostRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	var result wwire.ActionSyncResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+
+	return &result, nil
+}

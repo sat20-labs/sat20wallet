@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"sort"
-	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
 )
@@ -123,10 +122,7 @@ func NewTranscendContractRuntime(stp ContractManager) *TranscendContractRuntime 
 		SwapContractRuntime: SwapContractRuntime{
 			SwapContractRuntimeInDB: SwapContractRuntimeInDB{
 				Contract: NewTranscendContract(),
-				ContractRuntimeBase: ContractRuntimeBase{
-					DeployTime: time.Now().Unix(),
-					stp:        stp,
-				},
+				ContractRuntimeBase: *NewContractRuntimeBase(stp),
 				SwapContractRunningData: SwapContractRunningData{},
 			},
 		},

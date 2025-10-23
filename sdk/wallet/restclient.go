@@ -75,6 +75,7 @@ type IndexerRPCClient interface {
 	GetExistingUtxos(utxos []string) ([]string, error)
 	TestRawTx(signedTxs []string) error
 	BroadCastTx(tx *wire.MsgTx) (string, error)
+	BroadCastTxs(tx []*wire.MsgTx) (error)
 	BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
 	GetTickInfo(assetName *swire.AssetName) *indexer.TickerInfo
 	AllowDeployTick(assetName *swire.AssetName) error
@@ -670,6 +671,25 @@ func (p *IndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	return tx.TxID(), nil
 }
 
+func (p *IndexerClient) BroadCastTxs(txs []*wire.MsgTx) (error) {
+	txsHex := make([]string, 0)
+	for _, tx := range txs {
+		str, err := EncodeMsgTx(tx)
+		if err != nil {
+			return err
+		}
+		txsHex = append(txsHex, str)
+	}
+
+	err := p.broadCastHexTxs(txsHex)
+	if err != nil {
+		Log.Errorf("BroadCastTxs failed. %v", err)
+		return err
+	}
+
+	return nil
+}
+
 func (p *IndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 	str, err := EncodeMsgTx_SatsNet(tx)
 	if err != nil {
@@ -759,6 +779,39 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 	}
 
 	Log.Infof("BroadCastTxHex return %s", result.Data)
+	return nil
+}
+
+func (p *IndexerClient) broadCastHexTxs(hexTx []string) error {
+	req := indexerwire.SendRawTxsReq{
+		SignedTxHex: hexTx,
+		Maxfeerate:  0,
+	}
+
+	buff, err := json.Marshal(&req)
+	if err != nil {
+		return err
+	}
+
+	url := p.GetUrl("/btc/txs")
+	rsp, err := p.Http.SendPostRequest(url, buff)
+	if err != nil {
+		Log.Errorf("SendPostRequest %v failed. %v", url, err)
+		return err
+	}
+	
+	var result indexerwire.SendRawTxsResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("broadCastHexTxs error message %s", result.Msg)
+		return fmt.Errorf("%s", result.Msg)
+	}
+
+	Log.Infof("broadCastHexTxs return %v", result.Data)
 	return nil
 }
 

@@ -51,16 +51,17 @@ const (
 	INVOKE_API_ENABLE string = "enable" // 每个合约的第一个调用，用来激活合约
 
 	INVOKE_RESULT_OK              string = "ok"
-	INVOKE_RESULT_REFUND          string = "refund"
+	INVOKE_RESULT_REFUND          string = INVOKE_API_REFUND
 	INVOKE_RESULT_DEAL            string = "deal"
-	INVOKE_RESULT_DEPOSIT         string = "deposit"
-	INVOKE_RESULT_WITHDRAW        string = "withdraw"
+	INVOKE_RESULT_DEPOSIT         string = INVOKE_API_DEPOSIT
+	INVOKE_RESULT_WITHDRAW        string = INVOKE_API_WITHDRAW
 	INVOKE_RESULT_DEANCHOR        string = "deanchor"
 	INVOKE_RESULT_ANCHOR          string = "anchor"
-	INVOKE_RESULT_STAKE           string = "stake"
-	INVOKE_RESULT_UNSTAKE         string = "unstake"
-	INVOKE_RESULT_ADDLIQUIDITY    string = "addliq"
-	INVOKE_RESULT_REMOVELIQUIDITY string = "removeliq"
+	INVOKE_RESULT_STAKE           string = INVOKE_API_STAKE
+	INVOKE_RESULT_UNSTAKE         string = INVOKE_API_UNSTAKE
+	INVOKE_RESULT_ADDLIQUIDITY    string = INVOKE_API_ADDLIQUIDITY
+	INVOKE_RESULT_REMOVELIQUIDITY string = INVOKE_API_REMOVELIQUIDITY
+	INVOKE_RESULT_PROFIT          string = INVOKE_API_PROFIT
 )
 
 const (
@@ -73,6 +74,7 @@ const (
 	INVOKE_API_UNSTAKE         string = "unstake"  // 可以unstake到一层
 	INVOKE_API_ADDLIQUIDITY    string = "addliq"   // 如果是L1，必须要有op_return携带invokeParam，否则会被认为是deposit
 	INVOKE_API_REMOVELIQUIDITY string = "removeliq"
+	INVOKE_API_PROFIT          string = "profit"
 
 	ORDERTYPE_SELL            = 1
 	ORDERTYPE_BUY             = 2
@@ -133,6 +135,7 @@ const (
 	INVOKE_REASON_SLIPPAGE_PROTECT     string = "slippage protection"
 	INVOKE_REASON_UTXO_NOT_FOUND       string = "input utxo not found"
 	INVOKE_REASON_UTXO_NOT_FOUND_REORG string = "input utxo not found after reorg"
+	INVOKE_REASON_NO_PROFIT            string = "no profit"
 )
 
 const (
@@ -265,6 +268,7 @@ type ContractRuntime interface {
 	GetRemotePkScript() []byte
 	GetLocalAddress() string
 	GetRemoteAddress() string
+	GetSvrAddress() string // 主导合约的节点地址
 	Address() string // 合约钱包地址
 	GetLocalPubKey() *secp256k1.PublicKey
 	GetRemotePubKey() *secp256k1.PublicKey
@@ -485,6 +489,14 @@ func (p *InvokeItem) Clone() *InvokeItem {
 	return &n
 }
 
+// InvokeParam.Param
+type InvokeInnerParamIF interface {
+	Encode() ([]byte, error)
+	Decode(data []byte) error
+
+	EncodeV2() ([]byte, error) // 尽可能节省字节数的编码方式，比如不需要资产名称
+}
+
 type InvokeParam struct {
 	Action string `json:"action"`
 	Param  string `json:"param,omitempty"` // 外部使用时是json，内部使用时是编码过的string
@@ -494,6 +506,10 @@ func (p *InvokeParam) Encode() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddData([]byte(p.Action)).
 		AddData([]byte(p.Param)).Script()
+}
+
+func (p *InvokeParam) EncodeV2() ([]byte, error) {
+	return p.Encode()
 }
 
 func (p *InvokeParam) Decode(data []byte) error {
@@ -599,7 +615,8 @@ type ContractBase struct {
 
 func (p *ContractBase) CheckContent() error {
 	if p.AssetName.Protocol != indexer.PROTOCOL_NAME_ORDX &&
-		p.AssetName.Protocol != indexer.PROTOCOL_NAME_RUNES {
+		p.AssetName.Protocol != indexer.PROTOCOL_NAME_RUNES && 
+		p.AssetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return fmt.Errorf("invalid protocol %s", p.AssetName.Protocol)
 	}
 	if p.AssetName.Ticker == "" {
@@ -623,6 +640,8 @@ func (p *ContractBase) CheckContent() error {
 		if err != nil {
 			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
 		}
+	} else if p.AssetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+		
 	}
 
 	if indexer.IsPlainAsset(&p.AssetName) {
@@ -754,13 +773,14 @@ type ContractRuntimeBase_old = ContractRuntimeBase
 // 	}
 // }
 
+const INIT_ENABLE_BLOCK int = math.MaxInt
 // 合约运行时基础结构，合约区块以聪网为主，主网区块辅助使用
 type ContractRuntimeBase struct {
 	DeployTime    int64  `json:"deployTime"` // s
 	Status        int    `json:"status"`
-	EnableBlock   int    `json:"enableBlock"`    // 合约在哪个区块进入ready状态
+	EnableBlock   int    `json:"enableBlock"`    // 合约在哪个区块进入ready状态，初始值 INIT_ENABLE_BLOCK
 	CurrBlock     int    `json:"currentBlock"`   // 合约区块不能跳，必须一块一块执行，即使EnableBlock还没到，也要同步
-	EnableBlockL1 int    `json:"enableBlockL1"`  // 合约在哪个区块进入ready状态
+	EnableBlockL1 int    `json:"enableBlockL1"`  // 合约在哪个区块进入ready状态，初始值 INIT_ENABLE_BLOCK
 	CurrBlockL1   int    `json:"currentBlockL1"` // 合约区块不能跳，必须从EnableBlock开始，一块一块执行
 	EnableTxId    string `json:"enableTxId"`     // 只设置，暂时没有用起来
 	Deployer      string `json:"deployer"`
@@ -795,6 +815,15 @@ type ContractRuntimeBase struct {
 	pkScript     []byte
 
 	mutex sync.RWMutex
+}
+
+func NewContractRuntimeBase(stp ContractManager) *ContractRuntimeBase{
+	return &ContractRuntimeBase{
+		EnableBlock: 	INIT_ENABLE_BLOCK,
+		EnableBlockL1: 	INIT_ENABLE_BLOCK,
+		DeployTime: 	time.Now().Unix(),
+		stp:        	stp,
+	}
 }
 
 func (p *ContractRuntimeBase) ToNewVersion() *ContractRuntimeBase {
@@ -944,6 +973,19 @@ func (p *ContractRuntimeBase) GetRemoteAddress() string {
 	return PublicKeyToP2TRAddress(p.remotePubKey)
 }
 
+func (p *ContractRuntimeBase) GetSvrAddress() string {
+	if p.isInitiator {
+		return p.GetLocalAddress()
+	} else {
+		return p.GetRemoteAddress()
+	} 
+}
+
+func (p *ContractRuntimeBase) GetFoundationAddress() string {
+	addr, _ := indexer.GetBootstrapAddress(GetChainParam())
+	return addr
+}
+
 func (p *ContractRuntimeBase) GetLocalPubKey() *secp256k1.PublicKey {
 	return p.localPubKey
 }
@@ -1051,13 +1093,7 @@ func (p *ContractRuntimeBase) AllowDeploy() error {
 	requiredFee := estimatedFee - DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT // 部署过程需要的费用
 	feeUtxos := resv.GetFeeUtxos()
 	if len(feeUtxos) == 0 {
-		var address string
-		if p.isInitiator {
-			address = p.GetLocalAddress()
-		} else {
-			address = p.GetRemoteAddress()
-		}
-
+		address := p.GetSvrAddress()
 		var err error
 		feeUtxos, err = p.stp.GetWalletMgr().GetUtxosWithAsset_SatsNet(address,
 			indexer.NewDefaultDecimal(requiredFee), &ASSET_PLAIN_SAT, nil)
@@ -1172,6 +1208,7 @@ func (p *ContractRuntimeBase) IsReadyToRun(deployTx *swire.MsgTx) error {
 	return nil
 }
 
+// 这个时候很可能 EnableBlock 还没有设置，CurrBlock 也没有设置
 func (p *ContractRuntimeBase) SetReady() {
 	p.Status = (CONTRACT_STATUS_READY)
 }
@@ -1201,7 +1238,7 @@ func (p *ContractRuntimeBase) AllowInvoke() error {
 		return fmt.Errorf("contract not ready")
 	}
 
-	if p.EnableBlock == 0 {
+	if p.EnableBlock == INIT_ENABLE_BLOCK {
 		return fmt.Errorf("contract enable block not set yet")
 	}
 
@@ -1475,10 +1512,16 @@ func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
 		return invoke.InvokeParam.ContractPath != p.RelativePath() ||
 			invoke.InvokeParam.ContractPath != p.URL()
 	} else if invoke.TxOutput != nil {
-		// 只检查是否有合约对应的资产
 		assetName := p.contract.GetAssetName()
+		// 除非是符文，否则都是有 InvokeParam 
+		if assetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
+			// 只检查是否有合约对应的资产
+			amt := invoke.TxOutput.GetAsset(assetName)
+			return amt.Sign() != 0
+		}
+		// TODO 老版本，先打开，等钱包更新后，删除以下代码
 		if indexer.IsPlainAsset(assetName) {
-			// TODO 目前只有transcend支持白聪
+			// 只有transcend支持白聪
 			return len(invoke.TxOutput.Assets) == 0
 		}
 		amt := invoke.TxOutput.GetAsset(assetName)
@@ -1560,7 +1603,7 @@ func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 
 func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 	p.mutex.Lock()
-	if p.EnableBlockL1 == 0 || data.Height < p.EnableBlockL1 {
+	if p.EnableBlockL1 == INIT_ENABLE_BLOCK || data.Height < p.EnableBlockL1 {
 		if p.CurrBlockL1 == 0 {
 			p.CurrBlockL1 = data.Height
 		}
@@ -1669,7 +1712,7 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 	}
 
 	// 如果还没有激活，直接返回
-	if p.EnableBlock == 0 || data.Height < p.EnableBlock {
+	if p.EnableBlock == INIT_ENABLE_BLOCK || data.Height < p.EnableBlock {
 		if p.CurrBlock < data.Height {
 			// 需要考虑索引器重建数据的可能性，这种情况下，不要更新 p.CurrBlock
 			p.CurrBlock = data.Height
@@ -2128,4 +2171,145 @@ type InvokeTx struct {
 type InvokeDataInBlock struct {
 	Height       int
 	InvokeTxVect []*InvokeTx
+}
+
+func GetInvokeInnerParam(action string) InvokeInnerParamIF {
+	orderType := GetOrderTypeWithAction(action)
+	switch action {
+	case INVOKE_API_SWAP:
+		return &SwapInvokeParam{OrderType: orderType}
+	
+	case INVOKE_API_STAKE:
+		return &StakeInvokeParam{OrderType: orderType}
+
+	case INVOKE_API_UNSTAKE:
+		return &UnstakeInvokeParam{OrderType: orderType}
+
+	case INVOKE_API_DEPOSIT:
+		return &DepositInvokeParam{OrderType: orderType}
+		
+	case INVOKE_API_WITHDRAW:
+		return &WithdrawInvokeParam{OrderType: orderType}
+		
+	case INVOKE_API_ADDLIQUIDITY:
+		return &AddLiqInvokeParam{OrderType: orderType}
+		
+	case INVOKE_API_REMOVELIQUIDITY:
+		return &RemoveLiqInvokeParam{OrderType: orderType}
+
+	case INVOKE_API_PROFIT:
+		return &ProfitInvokeParam{OrderType: orderType}
+
+	default:
+		return nil
+	}
+}
+
+func GetOrderTypeWithAction(action string) int {
+	switch action {
+	case INVOKE_API_DEPOSIT:
+		return ORDERTYPE_DEPOSIT
+	case INVOKE_API_REFUND:
+		return ORDERTYPE_REFUND
+	case INVOKE_API_STAKE:
+		return ORDERTYPE_STAKE
+	case INVOKE_API_UNSTAKE:
+		return ORDERTYPE_UNSTAKE
+	case INVOKE_API_WITHDRAW:
+		return ORDERTYPE_WITHDRAW
+		
+	case INVOKE_API_ADDLIQUIDITY:
+		return ORDERTYPE_ADDLIQUIDITY
+		
+	case INVOKE_API_REMOVELIQUIDITY:
+		return ORDERTYPE_REMOVELIQUIDITY
+
+	case INVOKE_API_PROFIT:
+		return ORDERTYPE_PROFIT
+
+	default:
+		return ORDERTYPE_SELL
+	}
+}
+
+// 将json格式的调用参数，转换为script格式的参数
+func ConvertInvokeParam(jsonInvokeParam string) (*InvokeParam, error) {
+	var wrapperParam InvokeParam
+	err := json.Unmarshal([]byte(jsonInvokeParam), &wrapperParam)
+	if err != nil {
+		return nil, err
+	}
+	param := GetInvokeInnerParam(wrapperParam.Action)
+	if param != nil {
+		err = json.Unmarshal([]byte(wrapperParam.Param), param)
+		if err != nil {
+			return nil, err
+		}
+		
+		innerParam, err := param.Encode()
+		if err != nil {
+			return nil, err
+		}
+		wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+	}
+	return &wrapperParam, nil
+
+	// switch wrapperParam.Action {
+	// case INVOKE_API_SWAP:
+	// 	var swapParam SwapInvokeParam
+	// 	err = json.Unmarshal([]byte(wrapperParam.Param), &swapParam)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	innerParam, err := swapParam.Encode()
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+
+	// case INVOKE_API_WITHDRAW:
+	// 	var param WithdrawInvokeParam
+	// 	err = json.Unmarshal([]byte(wrapperParam.Param), &param)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	innerParam, err := param.Encode()
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+
+	// case INVOKE_API_MINT:
+
+	// case INVOKE_API_REFUND:
+
+	// case INVOKE_API_ADDLIQUIDITY:
+	// 	var stakeParam AddLiqInvokeParam
+	// 	err = json.Unmarshal([]byte(wrapperParam.Param), &stakeParam)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	fee += stakeParam.Value
+	// 	innerParam, err := stakeParam.Encode()
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+
+	// case INVOKE_API_REMOVELIQUIDITY:
+	// 	var stakeParam RemoveLiqInvokeParam
+	// 	err = json.Unmarshal([]byte(wrapperParam.Param), &stakeParam)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	innerParam, err := stakeParam.Encode()
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+
+	// default:
+	// 	return nil, fmt.Errorf("unsupport action %s", wrapperParam.Action)
+	// }
+	//return &wrapperParam, nil
 }
