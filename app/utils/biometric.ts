@@ -35,26 +35,25 @@ export class BiometricService {
    * 检查是否为原生环境
    */
   private checkNativeEnvironment(): boolean {
-    return typeof window !== 'undefined' &&
-           (window.hasOwnProperty('Capacitor') ||
-            (window as any).Capacitor?.isNativePlatform === true)
+    // 默认就是原生环境
+    console.log('生物识别模块：默认启用原生环境')
+    return true
   }
 
   /**
    * 初始化生物识别插件
    */
   private async initializePlugin(): Promise<boolean> {
-    if (!this.isNative) {
-      return false
-    }
+    console.log('开始初始化生物识别插件...')
 
     try {
       // 动态导入生物识别插件
       const { BiometricAuth } = await import('@aparajita/capacitor-biometric-auth')
       this.BiometricAuth = BiometricAuth
+      console.log('生物识别插件初始化成功')
       return true
     } catch (error) {
-      console.warn('生物识别插件加载失败:', error)
+      console.error('生物识别插件加载失败:', error)
       return false
     }
   }
@@ -68,30 +67,72 @@ export class BiometricService {
     biometryType?: string
     error?: string
   }> {
-    if (!this.isNative) {
-      return { supported: false, available: false, error: '非原生环境' }
-    }
+    console.log('开始检查生物识别支持...')
+
+    // 详细的环境检查（仅用于调试）
+    const envInfo = this.getEnvironmentInfo()
+    console.log('当前环境信息:', envInfo)
 
     try {
+      console.log('初始化生物识别插件...')
       const initialized = await this.initializePlugin()
       if (!initialized || !this.BiometricAuth) {
-        return { supported: false, available: false, error: '插件初始化失败' }
+        const error = '生物识别插件未正确安装或配置'
+        console.error('生物识别插件初始化失败', envInfo)
+        return { supported: false, available: false, error }
       }
 
-      const result = await this.BiometricAuth.checkAvailability()
+      console.log('调用原生生物识别检查...')
+      const result = await this.BiometricAuth.checkBiometry()
+      console.log('生物识别检查结果:', result)
 
       return {
         supported: true,
         available: result.isAvailable,
-        biometryType: result.biometryType
+        biometryType: result.biometryType,
+        error: result.reason || undefined
       }
     } catch (error) {
-      console.warn('检查生物识别支持失败:', error)
+      console.error('检查生物识别支持失败:', error)
+      let errorMessage = '未知错误'
+
+      if (error instanceof Error) {
+        // 常见错误处理
+        if (error.message.includes('not implemented')) {
+          errorMessage = '生物识别功能未正确配置，请检查应用权限设置'
+        } else if (error.message.includes('permission')) {
+          errorMessage = '缺少生物识别权限，请重新安装应用'
+        } else if (error.message.includes('BiometricAuth')) {
+          errorMessage = '生物识别插件未正确安装，请重新构建应用'
+        } else {
+          errorMessage = error.message
+        }
+      }
+
       return {
         supported: false,
         available: false,
-        error: error instanceof Error ? error.message : '未知错误'
+        error: errorMessage
       }
+    }
+  }
+
+  /**
+   * 获取详细的环境信息用于调试
+   */
+  private getEnvironmentInfo(): any {
+    try {
+      const capacitor = (window as any).Capacitor
+      return {
+        hasCapacitor: !!capacitor,
+        isNativePlatform: capacitor?.isNativePlatform,
+        platform: capacitor?.getPlatform(),
+        isPluginAvailable: capacitor?.isPluginAvailable('BiometricAuth'),
+        userAgent: navigator.userAgent,
+        isWebView: /wv|WebView/i.test(navigator.userAgent)
+      }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : '未知错误' }
     }
   }
 
@@ -99,9 +140,6 @@ export class BiometricService {
    * 执行生物识别认证
    */
   public async authenticate(options: BiometricOptions = {}): Promise<BiometricResult> {
-    if (!this.isNative) {
-      return { success: false, error: '非原生环境，无法使用生物识别' }
-    }
 
     try {
       const initialized = await this.initializePlugin()
@@ -117,20 +155,18 @@ export class BiometricService {
         }
       }
 
-      const result = await this.BiometricAuth.authenticate({
+      // 调用实际的认证方法
+      await this.BiometricAuth.authenticate({
         reason: options.reason || '请使用指纹验证以继续',
         title: options.title || '身份验证',
         subtitle: options.subtitle,
         description: options.description,
-        cancelButtonText: options.cancelButtonText || '取消',
-        fallbackTitle: options.fallbackButtonText || '使用密码'
+        cancelTitle: options.cancelButtonText || '取消',
+        iosFallbackTitle: options.fallbackButtonText || '使用密码',
+        allowDeviceCredential: true
       })
 
-      if (result.success) {
-        return { success: true }
-      } else {
-        return { success: false, error: result.error || '生物识别验证失败' }
-      }
+      return { success: true }
     } catch (error) {
       console.error('生物识别认证失败:', error)
       return {

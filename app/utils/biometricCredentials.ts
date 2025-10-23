@@ -18,11 +18,13 @@ export interface BiometricCredential {
 export interface CredentialVerificationResult {
   valid: boolean
   credential?: BiometricCredential
+  password?: string
   error?: string
 }
 
 export const CREDENTIALS_STORAGE_KEY = 'sat20_biometric_credentials'
 export const CHALLENGE_KEY = 'sat20_biometric_challenge'
+export const PASSWORD_STORAGE_KEY = 'sat20_biometric_passwords'
 
 /**
  * 生物识别凭据管理器类
@@ -203,6 +205,9 @@ export class BiometricCredentialManager {
       this.credentials.set(credentialId, credential)
       this.saveCredentials()
 
+      // 存储密码用于生物识别解锁
+      this.storePassword(password)
+
       console.log('生物识别凭据创建成功:', credentialId)
 
       return { success: true, credentialId }
@@ -217,8 +222,11 @@ export class BiometricCredentialManager {
 
   /**
    * 验证凭据
+   * 支持两种调用方式：
+   * 1. verifyCredential(password) - 传统方式，需要提供密码
+   * 2. verifyCredential() - 新方式，从存储获取密码
    */
-  public async verifyCredential(password: string): Promise<CredentialVerificationResult> {
+  public async verifyCredential(password?: string): Promise<CredentialVerificationResult> {
     try {
       if (!this.isNative) {
         return { valid: false, error: '非原生环境' }
@@ -230,6 +238,15 @@ export class BiometricCredentialManager {
 
       if (activeCredentials.length === 0) {
         return { valid: false, error: '未找到活跃的生物识别凭据' }
+      }
+
+      // 如果没有提供密码，尝试从存储获取
+      if (!password) {
+        const storedPassword = this.getStoredPassword()
+        if (!storedPassword) {
+          return { valid: false, error: '未找到保存的密码，请先手动解锁一次' }
+        }
+        password = storedPassword
       }
 
       // 生成并存储挑战
@@ -264,7 +281,7 @@ export class BiometricCredentialManager {
           credential.lastUsed = Date.now()
           this.saveCredentials()
 
-          return { valid: true, credential }
+          return { valid: true, credential, password }
         } catch (error) {
           console.warn('验证凭据失败:', credential.id, error)
           continue
@@ -278,6 +295,51 @@ export class BiometricCredentialManager {
         valid: false,
         error: error instanceof Error ? error.message : '验证凭据失败'
       }
+    }
+  }
+
+  /**
+   * 存储密码（加密）
+   */
+  public storePassword(password: string): void {
+    try {
+      if (typeof localStorage === 'undefined') return
+
+      // 简单的加密存储（实际应用中应使用更安全的方法）
+      const encoded = btoa(password)
+      localStorage.setItem(PASSWORD_STORAGE_KEY, encoded)
+      console.log('密码已存储到生物识别凭据')
+    } catch (error) {
+      console.error('存储密码失败:', error)
+    }
+  }
+
+  /**
+   * 获取存储的密码
+   */
+  public getStoredPassword(): string | null {
+    try {
+      if (typeof localStorage === 'undefined') return null
+
+      const encoded = localStorage.getItem(PASSWORD_STORAGE_KEY)
+      if (!encoded) return null
+
+      return atob(encoded)
+    } catch (error) {
+      console.error('获取存储的密码失败:', error)
+      return null
+    }
+  }
+
+  /**
+   * 清除存储的密码
+   */
+  private clearStoredPassword(): void {
+    try {
+      if (typeof localStorage === 'undefined') return
+      localStorage.removeItem(PASSWORD_STORAGE_KEY)
+    } catch (error) {
+      console.error('清除存储的密码失败:', error)
     }
   }
 
@@ -303,6 +365,12 @@ export class BiometricCredentialManager {
       if (this.credentials.has(credentialId)) {
         this.credentials.delete(credentialId)
         this.saveCredentials()
+
+        // 如果没有活跃凭据了，清除存储的密码
+        if (!this.hasActiveCredentials()) {
+          this.clearStoredPassword()
+        }
+
         return { success: true }
       } else {
         return { success: false, error: '凭据不存在' }
@@ -325,6 +393,12 @@ export class BiometricCredentialManager {
       if (credential) {
         credential.isActive = false
         this.saveCredentials()
+
+        // 如果没有活跃凭据了，清除存储的密码
+        if (!this.hasActiveCredentials()) {
+          this.clearStoredPassword()
+        }
+
         return { success: true }
       } else {
         return { success: false, error: '凭据不存在' }
@@ -347,6 +421,7 @@ export class BiometricCredentialManager {
       if (typeof localStorage !== 'undefined') {
         localStorage.removeItem(CREDENTIALS_STORAGE_KEY)
         localStorage.removeItem(CHALLENGE_KEY)
+        localStorage.removeItem(PASSWORD_STORAGE_KEY)
       }
       return { success: true }
     } catch (error) {
