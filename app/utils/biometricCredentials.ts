@@ -209,8 +209,7 @@ export class BiometricCredentialManager {
       // 存储哈希密码用于生物识别解锁
       this.storePassword(hashedPassword)
 
-      console.log('生物识别凭据创建成功:', credentialId)
-
+      
       return { success: true, credentialId }
     } catch (error) {
       console.error('创建生物识别凭据失败:', error)
@@ -284,7 +283,6 @@ export class BiometricCredentialManager {
 
           return { valid: true, credential, password }
         } catch (error) {
-          console.warn('验证凭据失败:', credential.id, error)
           continue
         }
       }
@@ -311,7 +309,6 @@ export class BiometricCredentialManager {
       // 注意：传入的密码已经是哈希值，不需要再次哈希
       const encoded = btoa(hashedPassword)
       localStorage.setItem(PASSWORD_STORAGE_KEY, encoded)
-      console.log('哈希密码已存储到生物识别凭据')
     } catch (error) {
       console.error('存储哈希密码失败:', error)
     }

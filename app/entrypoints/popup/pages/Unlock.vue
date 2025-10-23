@@ -183,7 +183,6 @@ const showToast = (
   title: string,
   description: string | Error
 ) => {
-  console.log('showToast called with:', { variant, title, description })
   toast({
     variant,
     title,
@@ -197,12 +196,9 @@ const showToast = (
 const checkBiometricSupport = async () => {
   try {
     const supportResult = await biometricService.checkBiometricSupport()
-    console.log('生物识别支持检查结果:', supportResult)
-
     if (supportResult.supported && supportResult.available) {
       // 检查是否有活跃的生物识别凭据
       const hasCredentials = biometricCredentialManager.hasActiveCredentials()
-      console.log('是否有活跃的生物识别凭据:', hasCredentials)
 
       if (hasCredentials) {
         showBiometricButton.value = true
@@ -227,11 +223,8 @@ const performBiometricUnlock = async () => {
   biometricLoading.value = true
 
   try {
-    console.log('开始生物识别验证')
-
     // 直接进行生物识别验证，不需要输入密码
     const credentialResult = await biometricCredentialManager.verifyCredential()
-    console.log('生物识别凭据验证结果:', credentialResult)
 
     if (!credentialResult.valid) {
       showToast('destructive', t('common.error'), credentialResult.error || t('unlock.biometricAuthFailed'))
@@ -250,18 +243,12 @@ const performBiometricUnlock = async () => {
       return
     }
 
-    console.log('生物识别验证成功，开始解锁钱包')
-
     const [err, result] = await walletStore.unlockWallet(hashedPassword)
-    console.log('钱包解锁结果:', { err, result })
 
     if (!err && result) {
-      console.log('生物识别解锁成功，准备跳转')
-
       // 检查是否是"已解锁"状态同步的情况
       const isAlreadyUnlocked = result && typeof result === 'object' && 'alreadyUnlocked' in result
       if (isAlreadyUnlocked) {
-        console.log('生物识别检测到钱包已解锁状态同步')
         showToast('success', t('unlock.biometricUnlockSuccess'), t('unlock.walletStateSynced'))
       } else {
         showToast('success', t('unlock.biometricUnlockSuccess'), t('unlock.biometricVerifySuccess'))
@@ -270,7 +257,6 @@ const performBiometricUnlock = async () => {
       const redirectPath = route.query.redirect as string
       router.push(redirectPath || '/wallet')
     } else if (err) {
-      console.log('钱包解锁失败:', err)
       const errorMessage = err instanceof Error ? err.message : String(err)
       let localizedMessage = t('unlock.unlockFailed')
 
@@ -289,7 +275,6 @@ const performBiometricUnlock = async () => {
       showPasswordInput.value = true
     }
   } catch (error) {
-    console.error('生物识别解锁失败:', error)
     showToast('destructive', t('common.error'), error instanceof Error ? error.message : t('unlock.biometricUnlockFailed'))
     // 发生异常，显示密码输入界面
     showPasswordInput.value = true
@@ -300,7 +285,6 @@ const performBiometricUnlock = async () => {
 
 
 const testToast = () => {
-  console.log('测试 toast 被调用')
   showToast('destructive', t('common.error'), t('unlock.invalidPassword'))
 }
 
@@ -311,60 +295,42 @@ const onSubmit = form.handleSubmit(async (values) => {
   // Hash the password using the imported function
   const hashedPassword = await hashPassword(values.password)
 
-  console.log('开始解锁，密码哈希值:', hashedPassword.substring(0, 20) + '...')
+  console.log('开始解锁，使用哈希密码')
 
   const [err, result] = await walletStore.unlockWallet(hashedPassword)
 
-  console.log('解锁结果:', { err, result })
-
   if (!err && result) {
-    console.log('解锁成功，准备跳转')
-
     // 检查是否是"已解锁"状态同步的情况
     const isAlreadyUnlocked = result && typeof result === 'object' && 'alreadyUnlocked' in result
     if (isAlreadyUnlocked) {
-      console.log('检测到钱包已解锁状态同步')
       showToast('success', t('unlock.unlockSuccess'), t('unlock.walletStateSynced'))
     }
 
     // 如果有生物识别凭据但没有存储密码，则存储当前哈希密码
     if (showBiometricButton.value && !biometricCredentialManager.getStoredPassword()) {
       await biometricCredentialManager.storePassword(hashedPassword)
-      console.log('哈希密码已存储，下次可使用生物识别解锁')
     }
 
     const redirectPath = route.query.redirect as string
     router.push(redirectPath || '/wallet')
   } else if (err) {
-    console.log('解锁失败，错误对象:', err)
     // 使用本地化的错误消息
     const errorMessage = err instanceof Error ? err.message : String(err)
-    console.log('错误消息:', errorMessage)
     let localizedMessage = t('unlock.unlockFailed')
 
     // 检查是否是密码错误
     if (errorMessage.includes('invalid password') || errorMessage.includes('密码错误')) {
       localizedMessage = t('unlock.invalidPassword')
-      console.log('检测到密码错误，使用本地化消息:', localizedMessage)
     } else if (errorMessage.includes('failed') || errorMessage.includes('失败')) {
       localizedMessage = t('unlock.unlockFailed')
-      console.log('检测到一般失败，使用本地化消息:', localizedMessage)
     } else {
       // 如果是其他错误，显示原始错误消息
       localizedMessage = errorMessage
-      console.log('其他错误，使用原始消息:', localizedMessage)
     }
-
-    console.log('准备显示 toast，参数:', {
-      variant: 'destructive',
-      title: t('common.error'),
-      description: localizedMessage
-    })
 
     showToast('destructive', t('common.error'), localizedMessage)
     loading.value = false
   } else {
-    console.log('未知错误：无错误也无结果')
     showToast('destructive', t('common.error'), t('unlock.unlockFailed'))
     loading.value = false
   }
@@ -372,7 +338,6 @@ const onSubmit = form.handleSubmit(async (values) => {
 
 // 组件挂载时检查生物识别支持
 onMounted(async () => {
-  console.log('Unlock页面已挂载，检查生物识别支持')
   await checkBiometricSupport()
 
   // 如果支持生物识别且有存储的密码，默认显示生物识别界面

@@ -215,11 +215,8 @@ const showAlert = (message: string, type: 'info' | 'warning' | 'error' | 'succes
 
 // 显示确认对话框 - 使用浏览器原生confirm
 const showConfirm = (message: string, type: 'info' | 'warning' | 'danger' = 'warning'): Promise<boolean> => {
-  console.log('showConfirm 被调用:', { message, type })
-
   // 使用浏览器原生confirm，简单直接
   const result = confirm(message)
-  console.log('原生confirm结果:', result)
   return Promise.resolve(result)
 }
 
@@ -228,13 +225,10 @@ const checkBiometricSupport = async () => {
   try {
     const result = await import('@/utils/biometric').then(module => module.biometricService.checkBiometricSupport())
     biometricStatus.value = result
-    console.log('生物识别状态检查:', result)
-
     // 在原生环境中检查是否有活跃凭据来确定启用状态
     if (result.supported) {
       const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
       biometricEnabled.value = biometricCredentialManager.hasActiveCredentials()
-      console.log('生物识别启用状态:', biometricEnabled.value)
     }
   } catch (error) {
     console.warn('检查生物识别支持失败:', error)
@@ -251,7 +245,6 @@ const checkCredentialStatus = async () => {
   try {
     const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
     hasCredentials.value = biometricCredentialManager.hasActiveCredentials()
-    console.log('凭据状态检查结果:', hasCredentials.value)
   } catch (error) {
     console.warn('检查凭据状态失败:', error)
     hasCredentials.value = false
@@ -265,11 +258,9 @@ const handleBiometricToggle = async (newValue: boolean) => {
   try {
     if (newValue) {
       // 用户尝试开启生物识别
-      console.log('尝试开启生物识别功能...')
 
       // 如果没有凭据，直接提示用户创建
       if (!hasCredentials.value) {
-        console.log('检测到没有生物识别凭据，提示用户创建')
         const shouldCreate = await showConfirm(
           t('securitySetting.createCredentialPrompt', { biometryType: '生物识别' })
         )
@@ -281,13 +272,11 @@ const handleBiometricToggle = async (newValue: boolean) => {
           }
         }
       } else {
-        console.log('生物识别已开启，已有有效凭据')
         showAlert(t('securitySetting.biometricEnabled'), 'success')
         biometricEnabled.value = true
       }
     } else {
       // 用户关闭生物识别
-      console.log('用户关闭生物识别功能')
       const confirmed = await showConfirm(t('securitySetting.disableBiometricConfirm'), 'warning')
 
       if (confirmed) {
@@ -296,7 +285,6 @@ const handleBiometricToggle = async (newValue: boolean) => {
         if (result.success) {
           hasCredentials.value = false
           biometricEnabled.value = false
-          console.log('已清除所有生物识别凭据')
           showAlert(t('securitySetting.biometricDisabled'), 'success')
         } else {
           showAlert(t('securitySetting.clearBiometricFailed', { error: '未知错误' }), 'error')
@@ -311,8 +299,6 @@ const handleBiometricToggle = async (newValue: boolean) => {
 // 创建生物识别凭据
 const createBiometricCredential = async (): Promise<boolean> => {
   try {
-    console.log('开始创建生物识别凭据...')
-
     // 从全局存储获取当前密码
     const walletStore = (await import('@/store/wallet')).useWalletStore()
 
@@ -330,7 +316,7 @@ const createBiometricCredential = async (): Promise<boolean> => {
       return false
     }
 
-    console.log('创建生物识别凭据，使用已存储的哈希密码:', currentPassword.substring(0, 20) + '...')
+    console.log('创建生物识别凭据，使用已存储的哈希密码')
 
     // 导入生物识别凭据管理器
     const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
@@ -345,15 +331,12 @@ const createBiometricCredential = async (): Promise<boolean> => {
       hasCredentials.value = true
       biometricEnabled.value = true
       showAlert(t('securitySetting.createCredentialSuccess'), 'success')
-      console.log('生物识别凭据创建成功:', result.credentialId)
       return true
     } else {
-      console.error('创建生物识别凭据失败:', result.error)
       showAlert(t('securitySetting.createCredentialFailed', { error: result.error || t('securitySetting.unknownError') }), 'error')
       return false
     }
   } catch (error) {
-    console.error('创建生物识别凭据异常:', error)
     showAlert(t('securitySetting.createCredentialFailed', { error: error instanceof Error ? error.message : t('securitySetting.unknownError') }), 'error')
     return false
   } finally {
@@ -386,7 +369,6 @@ const deleteBiometricCredential = async () => {
       }
     }
   } catch (error) {
-    console.error('删除生物识别凭据失败:', error)
     showAlert(t('securitySetting.deleteCredentialFailed', { error: error instanceof Error ? error.message : t('securitySetting.unknownError') }), 'error')
   } finally {
     biometricLoading.value = false
@@ -411,7 +393,6 @@ onActivated(async () => {
 if (typeof window !== 'undefined' && window.addEventListener) {
   window.addEventListener('storage', async (e) => {
     if (e.key === 'sat20_biometric_credentials') {
-      console.log('检测到凭据存储变化，重新检查状态')
       await checkCredentialStatus()
       const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
       biometricEnabled.value = biometricCredentialManager.hasActiveCredentials()
