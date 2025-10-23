@@ -18,13 +18,13 @@ export interface BiometricCredential {
 export interface CredentialVerificationResult {
   valid: boolean
   credential?: BiometricCredential
-  password?: string
+  password?: string // 注意：这里返回的是哈希密码，不是明文密码
   error?: string
 }
 
 export const CREDENTIALS_STORAGE_KEY = 'sat20_biometric_credentials'
 export const CHALLENGE_KEY = 'sat20_biometric_challenge'
-export const PASSWORD_STORAGE_KEY = 'sat20_biometric_passwords'
+export const PASSWORD_STORAGE_KEY = 'sat20_biometric_hashed_passwords'
 
 /**
  * 生物识别凭据管理器类
@@ -155,9 +155,10 @@ export class BiometricCredentialManager {
 
   /**
    * 创建生物识别凭据
+   * 注意：传入的 password 应该是哈希后的密码，不是明文密码
    */
   public async createCredential(
-    password: string,
+    hashedPassword: string,
     name: string = '默认凭据'
   ): Promise<{ success: boolean, credentialId?: string, error?: string }> {
     try {
@@ -189,8 +190,8 @@ export class BiometricCredentialManager {
       const credentialId = this.generateId()
       const credentialIdBytes = new TextEncoder().encode(credentialId)
 
-      // 派生并存储公钥
-      const publicKey = await this.derivePublicKey(password, credentialIdBytes)
+      // 派生并存储公钥（使用哈希密码）
+      const publicKey = await this.derivePublicKey(hashedPassword, credentialIdBytes)
 
       // 创建凭据记录
       const credential: BiometricCredential = {
@@ -205,8 +206,8 @@ export class BiometricCredentialManager {
       this.credentials.set(credentialId, credential)
       this.saveCredentials()
 
-      // 存储密码用于生物识别解锁
-      this.storePassword(password)
+      // 存储哈希密码用于生物识别解锁
+      this.storePassword(hashedPassword)
 
       console.log('生物识别凭据创建成功:', credentialId)
 
@@ -299,23 +300,26 @@ export class BiometricCredentialManager {
   }
 
   /**
-   * 存储密码（加密）
+   * 存储哈希密码（用于生物识别解锁）
+   * 注意：这里存储的是已经哈希后的密码，不是明文密码
    */
-  public storePassword(password: string): void {
+  public storePassword(hashedPassword: string): void {
     try {
       if (typeof localStorage === 'undefined') return
 
-      // 简单的加密存储（实际应用中应使用更安全的方法）
-      const encoded = btoa(password)
+      // 简单的编码存储（实际应用中应使用更安全的方法）
+      // 注意：传入的密码已经是哈希值，不需要再次哈希
+      const encoded = btoa(hashedPassword)
       localStorage.setItem(PASSWORD_STORAGE_KEY, encoded)
-      console.log('密码已存储到生物识别凭据')
+      console.log('哈希密码已存储到生物识别凭据')
     } catch (error) {
-      console.error('存储密码失败:', error)
+      console.error('存储哈希密码失败:', error)
     }
   }
 
   /**
-   * 获取存储的密码
+   * 获取存储的哈希密码
+   * 返回：哈希后的密码（可直接用于钱包解锁）
    */
   public getStoredPassword(): string | null {
     try {
@@ -326,7 +330,7 @@ export class BiometricCredentialManager {
 
       return atob(encoded)
     } catch (error) {
-      console.error('获取存储的密码失败:', error)
+      console.error('获取存储的哈希密码失败:', error)
       return null
     }
   }
@@ -467,10 +471,10 @@ export class BiometricCredentialManager {
 export const biometricCredentialManager = new BiometricCredentialManager()
 
 // 便捷方法
-export const createBiometricCredential = (password: string, name?: string) =>
-  biometricCredentialManager.createCredential(password, name)
-export const verifyBiometricCredential = (password: string) =>
-  biometricCredentialManager.verifyCredential(password)
+export const createBiometricCredential = (hashedPassword: string, name?: string) =>
+  biometricCredentialManager.createCredential(hashedPassword, name)
+export const verifyBiometricCredential = () =>
+  biometricCredentialManager.verifyCredential() // 不传密码，让它从存储获取哈希密码
 export const getBiometricCredentials = () => biometricCredentialManager.getCredentials()
 export const deleteBiometricCredential = (credentialId: string) =>
   biometricCredentialManager.deleteCredential(credentialId)

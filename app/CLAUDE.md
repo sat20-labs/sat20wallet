@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-SAT20 钱包是一个基于 Vue 3、TypeScript 和 WXT 构建的比特币钱包浏览器扩展。它支持多链操作，包括比特币、SatoshiNet 和通道网络，全面管理 BTC、ORDX、Runes 和 BRC20 资产。
+SAT20 钱包是一个基于 Vue 3、TypeScript 和 Capacitor 构建的比特币钱包移动应用。它支持多链操作，包括比特币、SatoshiNet 和通道网络，全面管理 BTC、ORDX、Runes 和 BRC20 资产。
 
 **最新更新**：
 - 已更新 Android 应用名称为 "SAT20 Wallet"（从 "sat20wallet" 更改）
@@ -41,7 +41,7 @@ SAT20 钱包是一个基于 Vue 3、TypeScript 和 WXT 构建的比特币钱包�
 ### 前端框架
 - **Vue 3**: 使用 Composition API 和 `<script setup>` 语法
 - **TypeScript**: 严格模式，完整类型检查
-- **WXT**: 浏览器扩展开发框架
+- **Capacitor**: 移动端应用包装框架
 - **Pinia**: 状态管理，替代 Vuex
 - **Vue Router**: 路由管理
 - **Vite**: 构建工具
@@ -54,8 +54,8 @@ SAT20 钱包是一个基于 Vue 3、TypeScript 和 WXT 构建的比特币钱包�
 
 ### 后端集成
 - **WebAssembly (WASM)**: 核心比特币操作
-- **Capacitor**: 移动端应用包装
 - **Ionic**: 移动端 UI 框架
+- **Native APIs**: 通过 Capacitor 访问设备功能
 
 ### 数据层
 - **Ordx API**: 资产数据获取
@@ -72,18 +72,15 @@ SAT20 钱包是一个基于 Vue 3、TypeScript 和 WXT 构建的比特币钱包�
 
 ```
 app/
-├── entrypoints/           # 扩展入口点
-│   ├── popup/            # 弹出窗口界面
-│   │   ├── pages/        # 页面组件
-│   │   │   ├── wallet/   # 钱包管理
-│   │   │   ├── settings/ # 设置页面
-│   │   │   ├── approve/  # 批准页面
-│   │   │   ├── receive/  # 接收页面
-│   │   │   ├── dapp/     # DApp 交互
-│   │   │   └── browser/  # 浏览器工具
-│   │   └── App.vue       # 主应用组件
-│   ├── content/          # 内容脚本
-│   └── background/       # 后台脚本
+├── entrypoints/           # 应用入口点
+│   └── popup/            # 移动端界面
+│       ├── pages/        # 页面组件
+│       │   ├── wallet/   # 钱包管理
+│       │   ├── settings/ # 设置页面
+│       │   ├── approve/  # 批准页面
+│       │   ├── receive/  # 接收页面
+│       │   └── dapp/     # DApp 交互
+│       └── App.vue       # 主应用组件
 ├── public/               # 静态资源
 │   └── wasm/            # WASM 模块
 ├── store/               # Pinia 存储
@@ -117,11 +114,11 @@ bun run copy-latest-zip  # 复制最新构建包到发布目录
 
 ## 架构概述
 
-### 核心扩展结构
-- **WXT 框架**: 处理清单、构建和入口点的浏览器扩展框架
-- **入口点**: 多个扩展上下文（弹出窗口、内容脚本、后台）
+### 核心应用结构
+- **Capacitor 框架**: 处理移动端包装和原生功能访问
+- **入口点**: 移动端应用主界面
 - **WASM 集成**: 编译为 WebAssembly 模块的核心钱包功能
-- **状态管理**: 跨扩展的 Pinia 存储响应式状态
+- **状态管理**: 全局 Pinia 存储响应式状态
 
 ### 关键架构组件
 
@@ -153,20 +150,16 @@ bun run copy-latest-zip  # 复制最新构建包到发布目录
 - `useDAppBridge.ts`: DApp 通信桥接
 - `hooks/`: 批准和交易钩子
 
-### 扩展入口点
+### 应用入口点
 
-**弹出窗口界面** (`/entrypoints/popup/`)
+**移动端界面** (`/entrypoints/popup/`)
 - 用户交互的主钱包界面
 - 页面：钱包管理、设置、批准、接收
-- 与 Capacitor 集成以实现移动兼容性
+- 通过 Capacitor 与移动设备原生功能集成
 
 **DApp 集成** (`/entrypoints/popup/pages/dapp/`)
-- DApp 交互的浏览器界面
+- DApp 交互界面
 - Web3 连接的通信桥接
-
-**浏览器工具模块** (`/entrypoints/popup/pages/browser/`)
-- 新增的浏览器集成工具
-- 增强的用户交互体验
 
 ## 重要开发模式
 
@@ -205,7 +198,7 @@ const config = computed(() => configMap[globalStore.env])
 - 钱包数据通过密码保护加密
 - 敏感操作需要明确批准
 - WASM 模块处理加密操作
-- DApp 通信的内容脚本隔离
+- 移动端安全存储和生物识别验证
 
 ## 测试和质量
 
@@ -247,7 +240,7 @@ const config = computed(() => configMap[globalStore.env])
 - 私钥和敏感信息通过 WASM 处理
 - 所有敏感操作需要用户批准
 - 使用密码加密保护钱包数据
-- DApp 通信通过内容脚本隔离
+- 移动端安全存储和生物识别验证
 
 ### 性能优化
 - WASM 模块异步加载
@@ -266,15 +259,12 @@ const config = computed(() => configMap[globalStore.env])
 ### 调试工具
 - Vue DevTools
 - 浏览器开发者工具
-- WXT 开发模式
 - Capacitor CLI 调试
+- 移动端调试工具
 
 ## 部署和发布
 
-### 浏览器扩展发布
-1. 运行 `bun run build` 构建生产版本
-2. 测试所有功能正常
-3. 打包并上传到扩展商店
+### 移动端应用发布
 
 ### 移动端发布
 1. 运行 `npm run ionic:build` 构建
