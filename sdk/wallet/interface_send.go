@@ -1183,6 +1183,9 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 	tx, err = p.SignTx(tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx failed. %v", err)
+		if inscribe != nil {
+			p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)	
+		}
 		return nil, 0, err
 	}
 
@@ -2861,6 +2864,11 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 	tx, err = p.SignTx(tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx_SatsNet failed. %v", err)
+		if len(inscribes) != 0 {
+			for _, insc := range inscribes {
+				p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
+			}
+		}
 		return "", 0, err
 	}
 
