@@ -2852,7 +2852,7 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 		}
 		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_runes(srcAddr, nil, dest, assetName, feeRate, false, false)
 	case indexer.PROTOCOL_NAME_BRC20:
-		tx, prevFetcher, fee, inscribes, err = p.BuildBatchSendTxV3_brc20(srcAddr, nil, dest, assetName, feeRate, false, false)
+		tx, prevFetcher, fee, inscribes, err = p.BuildBatchSendTxV3_brc20(srcAddr, nil, dest, assetName, feeRate, memo, false, false)
 	default:
 		return "", 0, fmt.Errorf("BatchSendAssetsV3 unsupport protocol %s", name.Protocol)
 	}
@@ -3384,7 +3384,7 @@ func (p *Manager) BuildBatchSendTxV3_runes(srcAddress string, excluded map[strin
 // 给不同地址发送不同数量的资产
 func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap map[string]bool, 
 	dest []*SendAssetInfo, assetName *AssetName,
-	feeRate int64, excludeRecentBlock, inChannel bool) (
+	feeRate int64, memo []byte, excludeRecentBlock, inChannel bool) (
 	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, []*InscribeResv, error) {
 	// 注意：
 	// 1. 不要提前铸造任何brc20的transfer nft 
@@ -3485,6 +3485,9 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 		return nil, nil, 0, nil, err
 	}
 	
+	if len(memo) > 0 {
+		weightEstimate.AddOutput(memo[:]) // op_return
+	}
 
 	// 输出白聪
 	for i, user := range dest {
@@ -3538,6 +3541,13 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 			Value:    int64(feeChange),
 		}
 		tx.AddTxOut(txOut3)
+	}
+	if len(memo) > 0 {
+		txOut := &wire.TxOut{
+			PkScript: memo,
+			Value:    0,
+		}
+		tx.AddTxOut(txOut)
 	}
 
 	return tx, prevFetcher, fee, inscribes, nil
