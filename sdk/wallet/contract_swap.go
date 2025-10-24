@@ -144,6 +144,7 @@ func (p *SwapInvokeParam) Encode() ([]byte, error) {
 func (p *SwapInvokeParam) EncodeV2() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
+		AddData([]byte("")).
 		AddData([]byte(p.Amt)).
 		AddData([]byte(p.UnitPrice)).Script()
 }

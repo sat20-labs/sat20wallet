@@ -2233,7 +2233,7 @@ func GetOrderTypeWithAction(action string) int {
 }
 
 // 将json格式的调用参数，转换为script格式的参数
-func ConvertInvokeParam(jsonInvokeParam string) (*InvokeParam, error) {
+func ConvertInvokeParam(jsonInvokeParam string, abbr bool) (*InvokeParam, error) {
 	var wrapperParam InvokeParam
 	err := json.Unmarshal([]byte(jsonInvokeParam), &wrapperParam)
 	if err != nil {
@@ -2245,8 +2245,12 @@ func ConvertInvokeParam(jsonInvokeParam string) (*InvokeParam, error) {
 		if err != nil {
 			return nil, err
 		}
-		
-		innerParam, err := param.Encode()
+		var innerParam []byte
+		if abbr {
+			innerParam, err = param.EncodeV2()
+		} else {
+			innerParam, err = param.Encode()
+		}
 		if err != nil {
 			return nil, err
 		}

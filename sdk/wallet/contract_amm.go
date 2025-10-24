@@ -247,6 +247,7 @@ func (p *DepositInvokeParam) Encode() ([]byte, error) {
 func (p *DepositInvokeParam) EncodeV2() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
+		AddData([]byte("")).
 		AddData([]byte(p.Amt)).Script()
 }
 
@@ -264,7 +265,7 @@ func (p *DepositInvokeParam) Decode(data []byte) error {
 	p.AssetName = string(tokenizer.Data())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return fmt.Errorf("missing asset amt")
+		return fmt.Errorf("missing amt")
 	}
 	p.Amt = string(tokenizer.Data())
 
@@ -292,6 +293,7 @@ func (p *AddLiqInvokeParam) Encode() ([]byte, error) {
 func (p *AddLiqInvokeParam) EncodeV2() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
+		AddData([]byte("")).
 		AddData([]byte(p.Amt)).
 		AddInt64(int64(p.Value)).
 		Script()
@@ -340,6 +342,7 @@ func (p *RemoveLiqInvokeParam) Encode() ([]byte, error) {
 func (p *RemoveLiqInvokeParam) EncodeV2() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
+		AddData([]byte("")).
 		AddData([]byte(p.LptAmt)).
 		Script()
 }
@@ -393,6 +396,7 @@ func (p *StakeInvokeParam) Encode() ([]byte, error) {
 func (p *StakeInvokeParam) EncodeV2() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
+		AddData([]byte("")).
 		AddData([]byte(p.Amt)).
 		AddInt64(int64(p.Value)).
 		Script()
@@ -444,6 +448,7 @@ func (p *UnstakeInvokeParam) Encode() ([]byte, error) {
 func (p *UnstakeInvokeParam) EncodeV2() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
+		AddData([]byte("")).
 		AddData([]byte(p.Amt)).
 		AddInt64(int64(p.Value)).
 		Script()

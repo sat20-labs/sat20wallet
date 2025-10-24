@@ -151,7 +151,7 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, jsonInvokeParam str
 		return "", fmt.Errorf("contract is not active")
 	}
 
-	wrapperParam, err := ConvertInvokeParam(jsonInvokeParam)
+	wrapperParam, err := ConvertInvokeParam(jsonInvokeParam, false)
 	if err != nil {
 		return "", err
 	}
@@ -214,7 +214,7 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, jsonInvokeParam s
 		return "", fmt.Errorf("contract is not active")
 	}
 
-	wrapperParam, err := ConvertInvokeParam(jsonInvokeParam)
+	wrapperParam, err := ConvertInvokeParam(jsonInvokeParam, false)
 	if err != nil {
 		return "", err
 	}
@@ -291,7 +291,7 @@ func (p *Manager) InvokeContractV2(contractURL string, jsonInvokeParam string,
 	var nullDataScript []byte
 	asset := indexer.NewAssetNameFromString(assetName)
 	if asset.Protocol != indexer.PROTOCOL_NAME_RUNES { // TODO 等主网支持多个op_return后打开
-		wrapperParam, err := ConvertInvokeParam(jsonInvokeParam)
+		wrapperParam, err := ConvertInvokeParam(jsonInvokeParam, true)
 		if err != nil {
 			return "", err
 		}
