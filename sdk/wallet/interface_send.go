@@ -1819,7 +1819,9 @@ func CalcFee_SendTx(inputLen, outputLen, feeLen int, assetName *AssetName,
 	requiredFee := weightEstimate.Fee(feeRate)
 	switch assetName.Protocol {
 	case indexer.PROTOCOL_NAME_BRC20:
-
+		body := fmt.Sprintf(CONTENT_MINT_BRC20_TRANSFER_BODY, assetName.Ticker, amt.String())
+		estimatedFee := EstimatedInscribeFee(inputLen, len(body), feeRate, 330)
+		requiredFee += estimatedFee
 	case indexer.PROTOCOL_NAME_RUNES:
 		var payload [txscript.MaxDataCarrierSize]byte
 		weightEstimate.AddOutput(payload[:]) // op_return

@@ -129,27 +129,7 @@ func (p *IndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 		return nil, fmt.Errorf("can't find utxo %s", utxo)
 	}
 
-	var Assets swire.TxAssets
-	Offsets := make(map[swire.AssetName]indexer.AssetOffsets)
-	for _, info := range result.Data.Assets {
-		Assets.Add(info.ToAssetInfo())
-		if len(info.Offsets) != 0 {
-			Offsets[info.AssetName] = info.Offsets
-		}
-	}
-
-	output := TxOutput{
-		UtxoId:      result.Data.UtxoId,
-		OutPointStr: result.Data.OutPoint,
-		OutValue:    wire.TxOut{
-			Value: result.Data.Value,
-			PkScript: result.Data.PkScript,
-		},
-		Assets:      Assets,
-		Offsets:     Offsets,
-	}
-
-	return &output, nil
+	return result.Data.ToTxOutput(), nil
 }
 
 

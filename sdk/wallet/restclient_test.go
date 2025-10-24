@@ -1019,13 +1019,17 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 
 				offsets := cloneOffsets(p.network.offsets[i])
 				var utxoAssets []*indexer.DisplayAsset
-				for _, asset := range assets {
+				for _, v := range assets {
 					asset := indexer.DisplayAsset{
-						AssetName:  asset.Name,
-						Amount:     asset.Amount.String(),
-						Precision:  asset.Amount.Precision,
-						BindingSat: int(asset.BindingSat),
-						Offsets:    offsets[asset.Name],
+						AssetName:  v.Name,
+						Amount:     v.Amount.String(),
+						Precision:  v.Amount.Precision,
+						BindingSat: int(v.BindingSat),
+						Offsets:    offsets[v.Name],
+					}
+					if v.Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+						asset.Offsets = []*indexer.OffsetRange{{Start:0, End:1}}
+						asset.OffsetToAmts = []*indexer.OffsetToAmount{{Offset: 0, Amount: v.Amount.String()}}
 					}
 					utxoAssets = append(utxoAssets, &asset)
 				}

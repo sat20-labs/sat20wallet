@@ -3811,7 +3811,7 @@ func (p *ContractRuntimeBase) sendTx_SatsNet(dealInfo *DealInfo, reason string) 
 				Log.Infof("contract %s CoBatchSendV2_SatsNet failed %v, recalculate merkle root and try again", url, err)
 				p.calcAssetMerkleRoot()
 			} else {
-				Log.Infof("contract %s CoBatchSendV2_SatsNet failed %v, wait a second and try again", url, err)
+				Log.Errorf("contract %s CoBatchSendV2_SatsNet failed %v, wait a second and try again", url, err)
 				// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
 				//time.Sleep(2 * time.Second)
 				continue
@@ -3899,7 +3899,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 					Log.Infof("contract %s CoBatchSendV3 failed %v, recalculate merkle root and try again", url, err)
 					p.calcAssetMerkleRoot()
 				} else {
-					Log.Infof("contract %s CoBatchSendV3 failed %v, wait a second and try again", url, err)
+					Log.Errorf("contract %s CoBatchSendV3 failed %v, wait a second and try again", url, err)
 					// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
 					//time.Sleep(2 * time.Second)
 					continue
@@ -3929,7 +3929,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 						Log.Infof("contract %s CoSendOrdxWithStub failed %v, recalculate merkle root and try again", url, err)
 						p.calcAssetMerkleRoot()
 					} else {
-						Log.Infof("contract %s CoSendOrdxWithStub failed %v, wait a second and try again", url, err)
+						Log.Errorf("contract %s CoSendOrdxWithStub failed %v, wait a second and try again", url, err)
 						// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
 						//time.Sleep(2 * time.Second)
 						continue
@@ -4611,7 +4611,7 @@ func (p *SwapContractRuntime) deposit() error {
 							Log.Infof("contract %s notifyAndSendDepositAnchorTxs failed %v, recalculate merkle root and try again", url, err)
 							p.calcAssetMerkleRoot()
 						} else {
-							Log.Infof("contract %s notifyAndSendDepositAnchorTxs failed %v, wait a second and try again", url, err)
+							Log.Errorf("contract %s notifyAndSendDepositAnchorTxs failed %v, wait a second and try again", url, err)
 							// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
 							// time.Sleep(2 * time.Second)
 							continue
