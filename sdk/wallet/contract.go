@@ -203,10 +203,10 @@ type ContractManager interface {
 	CoGenerateStubUtxos(n int, contractURL string, invokeCount int64, excludeRecentBlock bool) (string, int64, error)
 	CoBatchSendV3(dest []*SendAssetInfo, assetNameStr string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
-		sendDeAnchorTx, excludeRecentBlock bool) ([]string, int64, error)
+		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
 	CoSendOrdxWithStub(dest string, assetNameStr string, amt int64, stub string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
-		sendDeAnchorTx, excludeRecentBlock bool) ([]string, int64, error)
+		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
 	CoBatchSendV2_SatsNet(dest []*SendAssetInfo, assetName string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error)
 	CoBatchSend_SatsNet(destAddr []string, assetName string, amtVect []string,

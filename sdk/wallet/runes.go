@@ -123,9 +123,8 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 		},
 		DestAddress:   address,
 		ChangeAddress: changeAddr,
-		SignAndSend:   true,
+		InChannel:     false,
 		Signer:        p.SignTxV2,
-		PublicKey:     wallet.GetPaymentPubKey(),
 	}
 
 	txs, err := Inscribe(GetChainParam(), request, p.GenerateNewResvId())

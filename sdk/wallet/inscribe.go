@@ -65,9 +65,8 @@ type InscriptionRequest struct {
 	DestAddress   string `json:"destAddress"`
 	ChangeAddress string `json:"changeAddress"`
 
-	SignAndSend bool
-	Signer      Signer
-	PublicKey   *btcec.PublicKey
+	InChannel   bool
+	Signer      Signer // sign commit tx
 }
 
 type inscriptionTxCtxData struct {
@@ -84,9 +83,8 @@ type Signer func(tx *wire.MsgTx, prevOutFetcher txscript.PrevOutputFetcher) erro
 type InscriptionBuilder struct {
 	Network                   *chaincfg.Params
 	CommitTxPrevOutputFetcher *txscript.MultiPrevOutFetcher
-	SignAndSend               bool // TODO 暂时没用
+	InChannel                 bool
 	Signer                    Signer
-	PublicKey                 *btcec.PublicKey
 	RevealPrivateKey          *btcec.PrivateKey
 
 	CommitAddr string
@@ -123,6 +121,7 @@ type InscribeResv struct {
 	RevealTxFee      int64       `json:"revealTxFee"`
 	CommitAddr       string      `json:"commitAddr"`
 	RevealPrivateKey []byte      `json:"revealPrivateKey"`
+	CommitTxPrevOutputFetcher *txscript.MultiPrevOutFetcher `json:"commitTxPrevFetcher"`
 }
 
 
@@ -150,9 +149,8 @@ func NewInscriptionTool(network *chaincfg.Params, request *InscriptionRequest) (
 		RevealTxPrevOutputFetcher: txscript.NewMultiPrevOutFetcher(nil),
 		CommitTxPrevOutputList:    request.CommitTxPrevOutputList,
 
-		SignAndSend:      request.SignAndSend,
+		InChannel:        request.InChannel,
 		Signer:           request.Signer,
-		PublicKey:        request.PublicKey,
 		RevealAddr:       request.DestAddress,
 		RevealPrivateKey: privKey,
 	}
@@ -182,7 +180,7 @@ func (builder *InscriptionBuilder) initTool(network *chaincfg.Params,
 	if err != nil {
 		return err
 	}
-	err = builder.buildCommitTx(request.CommitTxPrevOutputList,
+	err = builder.buildCommitTxV2(request.CommitTxPrevOutputList,
 		request.ChangeAddress, totalRevealPrevOutputValue, request.CommitFeeRate, minChangeValue)
 	if err != nil {
 		return err
@@ -305,10 +303,70 @@ func (builder *InscriptionBuilder) buildEmptyRevealTx(revealOutValue, revealFeeR
 	return prevOutputValue, nil
 }
 
-func (builder *InscriptionBuilder) buildCommitTx(commitTxPrevOutputList PrevOutputs,
+// func (builder *InscriptionBuilder) buildCommitTx(commitTxPrevOutputList PrevOutputs,
+// 	changeAddress string, totalRevealPrevOutputValue, commitFeeRate int64, minChangeValue int64) error {
+// 	totalSenderAmount := btcutil.Amount(0)
+// 	tx := wire.NewMsgTx(DefaultTxVersion)
+// 	changePkScript, err := AddrToPkScript(changeAddress, builder.Network)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	for _, prevOutput := range commitTxPrevOutputList {
+// 		txHash, err := chainhash.NewHashFromStr(prevOutput.TxId)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		outPoint := wire.NewOutPoint(txHash, prevOutput.VOut)
+// 		txOut := wire.NewTxOut(prevOutput.Amount, prevOutput.PkScript)
+// 		builder.CommitTxPrevOutputFetcher.AddPrevOut(*outPoint, txOut)
+
+// 		in := wire.NewTxIn(outPoint, nil, nil)
+// 		in.Sequence = DefaultSequenceNum
+// 		tx.AddTxIn(in)
+
+// 		totalSenderAmount += btcutil.Amount(prevOutput.Amount)
+// 	}
+
+// 	tx.AddTxOut(builder.InscriptionTxCtxData.RevealTxPrevOutput)
+// 	tx.AddTxOut(wire.NewTxOut(0, changePkScript))
+
+// 	txForEstimate := wire.NewMsgTx(DefaultTxVersion)
+// 	txForEstimate.TxIn = tx.TxIn
+// 	txForEstimate.TxOut = tx.TxOut
+
+// 	// 尝试sign，为了 GetTxVirtualSizeByView。 
+// 	// TODO 采用 TxWeightEstimator 会更简单 
+// 	if err = builder.Signer(txForEstimate, builder.CommitTxPrevOutputFetcher); err != nil {
+// 		return err
+// 	}
+
+// 	view, _ := commitTxPrevOutputList.UtxoViewpoint(builder.Network)
+// 	fee := btcutil.Amount(
+// 		GetTxVirtualSizeByView(btcutil.NewTx(txForEstimate), view)) * btcutil.Amount(commitFeeRate)
+// 	changeAmount := totalSenderAmount - btcutil.Amount(totalRevealPrevOutputValue) - fee
+// 	if int64(changeAmount) >= minChangeValue {
+// 		tx.TxOut[len(tx.TxOut)-1].Value = int64(changeAmount)
+// 	} else {
+// 		tx.TxOut = tx.TxOut[:len(tx.TxOut)-1]
+// 		if changeAmount < 0 {
+// 			txForEstimate.TxOut = txForEstimate.TxOut[:len(txForEstimate.TxOut)-1]
+// 			feeWithoutChange := btcutil.Amount(GetTxVirtualSizeByView(
+// 				btcutil.NewTx(txForEstimate), view)) * btcutil.Amount(commitFeeRate)
+// 			if totalSenderAmount-btcutil.Amount(totalRevealPrevOutputValue)-feeWithoutChange < 0 {
+// 				builder.MustCommitTxFee = int64(fee)
+// 				return errors.New("insufficient balance")
+// 			}
+// 		}
+// 	}
+// 	builder.CommitTx = tx
+// 	return nil
+// }
+
+func (builder *InscriptionBuilder) buildCommitTxV2(commitTxPrevOutputList PrevOutputs,
 	changeAddress string, totalRevealPrevOutputValue, commitFeeRate int64, minChangeValue int64) error {
-	totalSenderAmount := btcutil.Amount(0)
+	totalSenderAmount := int64(0)
 	tx := wire.NewMsgTx(DefaultTxVersion)
+	var weightEstimate utils.TxWeightEstimator
 	changePkScript, err := AddrToPkScript(changeAddress, builder.Network)
 	if err != nil {
 		return err
@@ -325,39 +383,34 @@ func (builder *InscriptionBuilder) buildCommitTx(commitTxPrevOutputList PrevOutp
 		in := wire.NewTxIn(outPoint, nil, nil)
 		in.Sequence = DefaultSequenceNum
 		tx.AddTxIn(in)
+		if builder.InChannel {
+			weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		} else {
+			weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		}
 
-		totalSenderAmount += btcutil.Amount(prevOutput.Amount)
+		totalSenderAmount += prevOutput.Amount
 	}
 
 	tx.AddTxOut(builder.InscriptionTxCtxData.RevealTxPrevOutput)
-	tx.AddTxOut(wire.NewTxOut(0, changePkScript))
+	weightEstimate.AddTxOutput(builder.InscriptionTxCtxData.RevealTxPrevOutput)
+	fee0 := weightEstimate.Fee(commitFeeRate)
 
-	txForEstimate := wire.NewMsgTx(DefaultTxVersion)
-	txForEstimate.TxIn = tx.TxIn
-	txForEstimate.TxOut = tx.TxOut
+	tx.AddTxOut(wire.NewTxOut(0, changePkScript)) // one change
+	weightEstimate.AddOutput(changePkScript)
+	fee1 := weightEstimate.Fee(commitFeeRate)
 
-	// 尝试sign，为了 GetTxVirtualSizeByView。 
-	// TODO 采用 TxWeightEstimator 会更简单 
-	if err = builder.Signer(txForEstimate, builder.CommitTxPrevOutputFetcher); err != nil {
-		return err
-	}
-
-	view, _ := commitTxPrevOutputList.UtxoViewpoint(builder.Network)
-	fee := btcutil.Amount(
-		GetTxVirtualSizeByView(btcutil.NewTx(txForEstimate), view)) * btcutil.Amount(commitFeeRate)
-	changeAmount := totalSenderAmount - btcutil.Amount(totalRevealPrevOutputValue) - fee
+	
+	changeAmount := totalSenderAmount - totalRevealPrevOutputValue - fee1
 	if int64(changeAmount) >= minChangeValue {
 		tx.TxOut[len(tx.TxOut)-1].Value = int64(changeAmount)
+		builder.MustCommitTxFee = fee1
 	} else {
 		tx.TxOut = tx.TxOut[:len(tx.TxOut)-1]
+		builder.MustCommitTxFee = fee0
+		changeAmount := totalSenderAmount - totalRevealPrevOutputValue - fee0
 		if changeAmount < 0 {
-			txForEstimate.TxOut = txForEstimate.TxOut[:len(txForEstimate.TxOut)-1]
-			feeWithoutChange := btcutil.Amount(GetTxVirtualSizeByView(
-				btcutil.NewTx(txForEstimate), view)) * btcutil.Amount(commitFeeRate)
-			if totalSenderAmount-btcutil.Amount(totalRevealPrevOutputValue)-feeWithoutChange < 0 {
-				builder.MustCommitTxFee = int64(fee)
-				return errors.New("insufficient balance")
-			}
+			return errors.New("insufficient balance")
 		}
 	}
 	builder.CommitTx = tx
@@ -398,6 +451,10 @@ func (builder *InscriptionBuilder) completeRevealTx() error {
 }
 
 func (builder *InscriptionBuilder) signCommitTx() error {
+	if builder.Signer == nil {
+		// 不签名
+		return nil
+	}
 	return builder.Signer(builder.CommitTx, builder.CommitTxPrevOutputFetcher)
 }
 
@@ -475,9 +532,11 @@ func (builder *InscriptionBuilder) CalculateFee() (int64, int64) {
 	}
 
 	revealTxFee := int64(0)
-	for i, in := range builder.RevealTx.TxIn {
+	for _, in := range builder.RevealTx.TxIn {
 		revealTxFee += builder.RevealTxPrevOutputFetcher.FetchPrevOutput(in.PreviousOutPoint).Value
-		revealTxFee -= builder.RevealTx.TxOut[i].Value
+	}
+	for _, out := range builder.RevealTx.TxOut {
+		revealTxFee -= out.Value
 	}
 
 	return commitTxFee, revealTxFee
@@ -488,24 +547,16 @@ func Inscribe(network *chaincfg.Params, request *InscriptionRequest, resvId int6
 	if err != nil {
 		return nil, err
 	}
-	// if err != nil && err.Error() == "insufficient balance" {
-	// 	return &InscribeResv{
-	// 		CommitTx:    nil,
-	// 		RevealTx:    nil,
-	// 		CommitTxFee: tool.MustCommitTxFee,
-	// 		RevealTxFee: tool.MustRevealTxFee,
-	// 		CommitAddr:  tool.CommitAddr,
-	// 	}, nil
-	// }
-
-	err = VerifySignedTx(tool.CommitTx, tool.CommitTxPrevOutputFetcher)
-	if err != nil {
-		return nil, err
-	}
-
-	err = VerifySignedTx(tool.RevealTx, tool.RevealTxPrevOutputFetcher)
-	if err != nil {
-		return nil, err
+	
+	if request.Signer != nil {
+		err = VerifySignedTx(tool.CommitTx, tool.CommitTxPrevOutputFetcher)
+		if err != nil {
+			return nil, err
+		}
+		err = VerifySignedTx(tool.RevealTx, tool.RevealTxPrevOutputFetcher)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	commitTxFee, revealTxFees := tool.CalculateFee()
@@ -519,6 +570,7 @@ func Inscribe(network *chaincfg.Params, request *InscriptionRequest, resvId int6
 		RevealTxFee:      revealTxFees,
 		CommitAddr:       tool.CommitAddr,
 		RevealPrivateKey: tool.RevealPrivateKey.Serialize(),
+		CommitTxPrevOutputFetcher: tool.CommitTxPrevOutputFetcher,
 	}, nil
 }
 

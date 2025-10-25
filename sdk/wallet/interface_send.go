@@ -1173,19 +1173,20 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 	default:
 		return nil, 0, fmt.Errorf("buildBatchSendTx unsupport protocol %s", name.Protocol)
 	}
-	
 	if err != nil {
 		Log.Errorf("buildBatchSendTx failed. %v", err)
 		return nil, 0, err
 	}
+	defer func() {
+		if err != nil && inscribe != nil {
+			p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)
+		}
+	}()
 
 	// sign
 	tx, err = p.SignTx(tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx failed. %v", err)
-		if inscribe != nil {
-			p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)	
-		}
 		return nil, 0, err
 	}
 
@@ -1195,7 +1196,6 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 		err = p.TestAcceptance(txs)
 		if err != nil {
 			Log.Errorf("TestAcceptance failed. %v", err)
-			p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)
 			return nil, 0, err
 		}
 	} else {
@@ -1205,9 +1205,6 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 	err = p.BroadcastTxs(txs)
 	if err != nil {
 		Log.Errorf("BroadcastTxs failed. %v", err)
-		if inscribe != nil {
-			p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)	
-		}
 		return nil, 0, err
 	}
 
@@ -1667,7 +1664,7 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 	wantToMint :=  indexer.DecimalSub(requiredAmt, totalAsset)
 	if wantToMint.Sign() > 0 {
 		// 再铸造一个，加入selected中，还没有广播
-		inscribe, err = p.MintTransfer_brc20(localAddr, &name.AssetName, wantToMint, nil, feeRate, false)
+		inscribe, err = p.MintTransfer_brc20(localAddr, localAddr, &name.AssetName, wantToMint, nil, feeRate, false)
 		if err != nil {
 			Log.Errorf("MintTransfer_brc20 failed, %v", err)
 			return nil, nil, 0, nil, err
@@ -2859,16 +2856,18 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 	if err != nil {
 		return "", 0, err
 	}
+	defer func() {
+		if err != nil && len(inscribes) != 0 {
+			for _, insc := range inscribes {
+				p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
+			}
+		}
+	}()
 
 	// sign
 	tx, err = p.SignTx(tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx_SatsNet failed. %v", err)
-		if len(inscribes) != 0 {
-			for _, insc := range inscribes {
-				p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
-			}
-		}
 		return "", 0, err
 	}
 
@@ -2882,9 +2881,6 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 		err = p.TestAcceptance(txs)
 		if err != nil {
 			Log.Errorf("TestAcceptance failed. %v", err)
-			for _, insc := range inscribes {
-				p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
-			}
 			return "", 0, err
 		}
 	} else {
@@ -2894,11 +2890,6 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 	err = p.BroadcastTxs(txs)
 	if err != nil {
 		Log.Errorf("BroadcastTxs failed. %v", err)
-		if len(inscribes) != 0 {
-			for _, insc := range inscribes {
-				p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
-			}
-		}
 		return "", 0, err
 	}
 	
@@ -3442,7 +3433,7 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 		wantToMint :=  indexer.DecimalSub(requiredAmt, totalAsset)
 		if wantToMint.Sign() > 0 {
 			// 再铸造一个，加入selected中，还没有广播
-			inscribe, err = p.MintTransfer_brc20(localAddr, &assetName.AssetName, wantToMint, nil, feeRate, false)
+			inscribe, err = p.MintTransfer_brc20(localAddr, localAddr, &assetName.AssetName, wantToMint, nil, feeRate, false)
 			if err != nil {
 				Log.Errorf("MintTransfer_brc20 failed, %v", err)
 				break

@@ -1789,7 +1789,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		}
 		f := ratio.Float64()
 		if f <= 0 || f > 1 {
-			return 0, fmt.Errorf("invalid ratio %d", innerParam.Ratio)
+			return 0, fmt.Errorf("invalid ratio %s", innerParam.Ratio)
 		}
 		return INVOKE_FEE, nil
 
@@ -3714,6 +3714,7 @@ func (p *ContractRuntimeBase) notifyAndSendDepositAnchorTxs(anchorTxs []*swire.M
 			Tx:        txHex,
 			L1Tx:      false,
 			LocalSigs: nil,
+			Reason:    "ascend",
 		})
 	}
 
@@ -3832,7 +3833,7 @@ func (p *ContractRuntimeBase) sendTx_SatsNet(dealInfo *DealInfo, reason string) 
 }
 
 func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
-	reason string, sendDeAnchorTx bool, excludeRecentBlock bool) ([]string, int64, int64, error) {
+	reason string, sendDeAnchorTx bool, excludeRecentBlock bool) (string, int64, int64, error) {
 	//
 	sendInfoMap := dealInfo.SendInfo
 	height := dealInfo.Height
@@ -3857,7 +3858,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 	}
 
 	if len(sendInfoVect) == 0 && len(sendInfoVectWithStub) == 0 {
-		return nil, 0, 0, fmt.Errorf("no send info")
+		return "", 0, 0, fmt.Errorf("no send info")
 	}
 
 	sort.Slice(sendInfoVect, func(i, j int) bool {
@@ -3874,7 +3875,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 			stubTx, fee, err := p.stp.CoGenerateStubUtxos(stubNum+10, p.URL(), dealInfo.InvokeCount, excludeRecentBlock)
 			if err != nil {
 				Log.Errorf("CoGenerateStubUtxos %d failed, %v", stubNum+10, err)
-				return nil, 0, 0, err
+				return "", 0, 0, err
 			}
 			Log.Infof("sendTx CoGenerateStubUtxos %s %d", stubTx, fee)
 			for i := range stubNum {
@@ -3886,12 +3887,12 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 	}
 
 	var fee int64
-	var txIds []string
+	var txId string
 	invoice, _ := UnsignedContractResultInvoice(p.RelativePath(), reason, fmt.Sprintf("%d", height))
 	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
 	if len(sendInfoVect) > 0 {
 		for i := 0; i < 3; i++ {
-			txIds, fee, err = p.stp.CoBatchSendV3(sendInfoVect, dealInfo.AssetName.String(),
+			txId, fee, err = p.stp.CoBatchSendV3(sendInfoVect, dealInfo.AssetName.String(),
 				"contract", url, dealInfo.InvokeCount, nullDataScript,
 				dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
 			if err != nil {
@@ -3906,22 +3907,22 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 					continue
 				}
 			}
-			Log.Infof("contract %s CoBatchSendV3 %v %d", url, txIds, fee)
+			Log.Infof("contract %s CoBatchSendV3 %s %d", url, txId, fee)
 			break
 		}
 		if err != nil {
-			return nil, 0, stubFee, err
+			return "", 0, stubFee, err
 		}
 	} else {
 		if stubNum != 0 {
 			p.stp.GetWalletMgr().utxoLockerL1.LockUtxo(stubs[0], "stub for "+reason)
 			// 这里只有一个交易
 			if len(sendInfoVectWithStub) > 1 {
-				return nil, 0, stubFee, fmt.Errorf("only one output in stub is supported")
+				return "", 0, stubFee, fmt.Errorf("only one output in stub is supported")
 			}
 			sendInfo := sendInfoVectWithStub[0]
 			for i := 0; i < 3; i++ {
-				txIds, fee, err = p.stp.CoSendOrdxWithStub(sendInfo.Address, sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(),
+				txId, fee, err = p.stp.CoSendOrdxWithStub(sendInfo.Address, sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(),
 					stubs[0], "contract", url, dealInfo.InvokeCount, nullDataScript,
 					dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
 				if err != nil {
@@ -3936,22 +3937,19 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 						continue
 					}
 				}
-				Log.Infof("contract %s CoSendOrdxWithStub txId %v %d", url, txIds, fee)
+				Log.Infof("contract %s CoSendOrdxWithStub txId %s %d", url, txId, fee)
 				break
 
 			}
 			if err != nil {
 				p.stp.GetWalletMgr().utxoLockerL1.UnlockUtxo(stubs[0])
-				return nil, 0, stubFee, err
+				return "", 0, stubFee, err
 			}
 		}
 	}
 
-	for _, txId := range txIds {
-		saveContractInvokeResult(p.stp.GetDB(), url, txId, reason)
-	}
-
-	return txIds, fee, stubFee, nil
+	saveContractInvokeResult(p.stp.GetDB(), url, txId, reason)
+	return txId, fee, stubFee, nil
 }
 
 func (p *ContractRuntimeBase) genSendInfoFromTx_SatsNet(tx *swire.MsgTx, includedAll bool) (*DealInfo, error) {
@@ -4861,7 +4859,7 @@ func (p *SwapContractRuntime) withdraw() error {
 			if len(dealInfo.SendInfo) != 0 {
 				// 发送费用已经从所有参与者扣除，但如果该交易的聪资产太少，就暂时不发送，等下次
 				//if dealInfo.TotalValue >= _valueLimit || len(dealInfo.SendInfo) >= _addressLimit {
-				txIds, fee, stubFee, err := p.sendTx(dealInfo, INVOKE_RESULT_WITHDRAW, true, true)
+				txId, fee, stubFee, err := p.sendTx(dealInfo, INVOKE_RESULT_WITHDRAW, true, true)
 				if err != nil {
 					if stubFee != 0 {
 						p.mutex.Lock()
@@ -4875,12 +4873,12 @@ func (p *SwapContractRuntime) withdraw() error {
 				}
 				// 调整fee
 				dealInfo.Fee = fee + stubFee
-				dealInfo.TxId = txIds[0]
+				dealInfo.TxId = txId
 				// record
 				p.updateWithDealInfo_withdraw(dealInfo)
 				// 成功一步记录一步
 				p.stp.SaveReservationWithLock(p.resv)
-				Log.Infof("contract %s withdraw completed, %s", url, txIds[0])
+				Log.Infof("contract %s withdraw completed, %s", url, txId)
 				//}
 			} else {
 				break

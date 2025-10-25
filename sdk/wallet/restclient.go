@@ -77,6 +77,7 @@ type IndexerRPCClient interface {
 	BroadCastTx(tx *wire.MsgTx) (string, error)
 	BroadCastTxs(tx []*wire.MsgTx) (error)
 	BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
+	BroadCastTxs_SatsNet(tx []*swire.MsgTx) (error)
 	GetTickInfo(assetName *swire.AssetName) *indexer.TickerInfo
 	AllowDeployTick(assetName *swire.AssetName) error
 	GetUtxoSpentTx(utxo string) (string, error) // TODO L1索引器需要支持这个api
@@ -684,6 +685,27 @@ func (p *IndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 
 	return tx.TxID(), nil
 }
+
+
+func (p *IndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) (error) {
+	txsHex := make([]string, 0)
+	for _, tx := range txs {
+		str, err := EncodeMsgTx_SatsNet(tx)
+		if err != nil {
+			return err
+		}
+		txsHex = append(txsHex, str)
+	}
+
+	err := p.broadCastHexTxs(txsHex)
+	if err != nil {
+		Log.Errorf("broadCastHexTxs failed. %v", err)
+		return err
+	}
+
+	return nil
+}
+
 
 func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 	req := indexerwire.SendRawTxReq{

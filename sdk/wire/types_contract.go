@@ -111,6 +111,7 @@ type TxSignInfo struct {
 	Tx        string   `json:"tx"`
 	L1Tx      bool     `json:"l1Tx"`
 	LocalSigs [][]byte `json:"sigs"`
+	Reason	  string   `json:"reason"`
 }
 
 // sn -> bn messages

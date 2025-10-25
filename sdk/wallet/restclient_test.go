@@ -1665,6 +1665,18 @@ func (p *TestIndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
 	return tx.TxID(), nil
 }
 
+func (p *TestIndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) (error) {
+	for _, tx := range txs {
+		_, err := p.BroadCastTx_SatsNet(tx)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+
 func (p *TestIndexerClient) GetTickInfo(assetName *swire.AssetName) *indexer.TickerInfo {
 	p.network.mutex.RLock()
 	defer p.network.mutex.RUnlock()
