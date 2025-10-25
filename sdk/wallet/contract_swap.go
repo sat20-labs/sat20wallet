@@ -20,6 +20,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
+	stxscript "github.com/sat20-labs/satoshinet/txscript"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -5253,29 +5254,78 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 			// 如果失败，可能走普通转账的deposit，尝试走下面的流程
 		}
 
-		var dealInfo *DealInfo
-		if len(req.Tx) != 1 && len(req.Tx) != 2 {
-			return nil, fmt.Errorf("only 1 or 2 TX can be accepted")
+		type inscribeInfo struct {
+			commitTx *wire.MsgTx
+			remoteSig [][]byte
+			body []byte
+			revealPrivateKey []byte
 		}
-		tx1 := req.Tx[0]
 
-		if tx1.L1Tx {
-			tx, err := DecodeMsgTx(tx1.Tx)
-			if err != nil {
-				return nil, err
-			}
-			dealInfo, err = p.genSendInfoFromTx(tx, req.MoreData)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			tx, err := DecodeMsgTx_SatsNet(tx1.Tx)
-			if err != nil {
-				return nil, err
-			}
-			dealInfo, err = p.genSendInfoFromTx_SatsNet(tx, false)
-			if err != nil {
-				return nil, err
+		var dealInfo *DealInfo
+		var transcendTx *swire.MsgTx
+		var inscribes []*inscribeInfo
+		for _, txInfo := range req.Tx {
+			switch txInfo.Reason {
+			case "ascend", "descend":
+				if txInfo.L1Tx {
+					return nil, fmt.Errorf("only a anchor/deanchor tx followed can be accepted")
+				}
+				transcendTx, err = DecodeMsgTx_SatsNet(txInfo.Tx)
+				if err != nil {
+					return nil, err
+				}
+			
+			case "inscribe":
+				// moredata: transfer body, reveal private key 
+				if len(txInfo.MoreData) == 0 {
+					return nil, fmt.Errorf("should provide more data")
+				}
+				tokenizer := stxscript.MakeScriptTokenizer(0, txInfo.MoreData)
+				if !tokenizer.Next() || tokenizer.Err() != nil {
+					return nil, fmt.Errorf("missing body")
+				}
+				body := tokenizer.Data()
+
+				if !tokenizer.Next() || tokenizer.Err() != nil {
+					return nil, fmt.Errorf("missing reveal private key")
+				}
+				privateKey := (tokenizer.Data())
+
+				if !txInfo.L1Tx {
+					return nil, fmt.Errorf("should be a L1 tx")
+				}
+				tx, err := DecodeMsgTx(txInfo.Tx)
+				if err != nil {
+					return nil, err
+				}
+
+				inscribes = append(inscribes, &inscribeInfo{
+					commitTx: tx,
+					remoteSig: txInfo.LocalSigs,
+					body: body,
+					revealPrivateKey: privateKey,
+				})
+
+			case "": // main tx
+				if txInfo.L1Tx {
+					tx, err := DecodeMsgTx(txInfo.Tx)
+					if err != nil {
+						return nil, err
+					}
+					dealInfo, err = p.genSendInfoFromTx(tx, req.MoreData)
+					if err != nil {
+						return nil, err
+					}
+				} else {
+					tx, err := DecodeMsgTx_SatsNet(txInfo.Tx)
+					if err != nil {
+						return nil, err
+					}
+					dealInfo, err = p.genSendInfoFromTx_SatsNet(tx, false)
+					if err != nil {
+						return nil, err
+					}
+				}
 			}
 		}
 
@@ -5384,16 +5434,8 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 			}
 		}
 
-		if len(req.Tx) == 2 {
-			tx2 := req.Tx[1]
-			if tx2.L1Tx {
-				return nil, fmt.Errorf("only a anchor/deanchor tx followed can be accepted")
-			}
-			tx, err := DecodeMsgTx_SatsNet(tx2.Tx)
-			if err != nil {
-				return nil, err
-			}
-			dealInfo2, err := p.genSendInfoFromTx_SatsNet(tx, true)
+		if transcendTx != nil {
+			dealInfo2, err := p.genSendInfoFromTx_SatsNet(transcendTx, true)
 			if err != nil {
 				return nil, err
 			}
@@ -5417,6 +5459,13 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 			}
 
 			//dealInfo.TxId = dealInfo.TxId + " " + dealInfo2.TxId
+		}
+
+		if len(inscribes) != 0 {
+			// 验证每一个transfer铭文都是转账所需要的，其铭文内容正好能生成commitTx的输出地址
+			for _, insc := range inscribes {
+				Log.Infof("%v", insc)
+			}
 		}
 
 		Log.Infof("%s is allowed by contract %s (reason: %s)", wwire.STP_ACTION_SIGN, p.URL(), dealInfo.Reason)
