@@ -5715,6 +5715,7 @@ func (p *SwapContractRuntime) SetPeerActionResult(action string, param any) {
 	}
 }
 
+// 获取deposit数据，同时做检查
 func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignMoreData_Contract) (*DealInfo, error) {
 	// anchorTxs
 
@@ -5735,7 +5736,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 		if err != nil {
 			return nil, err
 		}
-		data, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
+		anchorData, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
 		if err != nil {
 			Log.Errorf("CheckAnchorPkScript %s failed", tx.TxID())
 			return nil, err
@@ -5780,29 +5781,60 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 			return nil, err
 		}
 		items, ok := p.depositMap[destAddr]
-		if ok {
-			for _, item := range items {
-				if item.InUtxo == data.Utxo {
-					if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
-						continue
-					}
-					h, _, _ := indexer.FromUtxoId(item.UtxoId)
-					if h > targetHeight {
-						continue
-					}
-					maxHeight = max(maxHeight, h)
-
-					sendInfoMap[item.InUtxo] = &SendAssetInfo{
-						Address:   item.Address,
-						Value:     item.RemainingValue,
-						AssetName: assetName,
-						AssetAmt:  item.RemainingAmt.Clone(),
-					}
-					sendTxIdMap[item.InUtxo] = tx.TxID()
-					totalAmt = totalAmt.Add(item.RemainingAmt)
-					totalValue += item.RemainingValue
+		if !ok {
+			return nil, fmt.Errorf("invalid destination address %s", destAddr)
+		}
+		
+		bFound := false
+		for _, item := range items {
+			if item.InUtxo == anchorData.Utxo {
+				if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+					continue
 				}
+				h, _, _ := indexer.FromUtxoId(item.UtxoId)
+				if h > targetHeight {
+					continue
+				}
+				maxHeight = max(maxHeight, h)
+
+				if item.AssetName == indexer.ASSET_PLAIN_SAT.String() {
+					if len(anchorData.Assets) != 0 {
+						return nil, fmt.Errorf("%s assets should be empty", tx.TxID())
+					}
+					if item.RemainingValue != anchorData.Value {
+						return nil, fmt.Errorf("%s invalid value %d, expected %d", tx.TxID(), anchorData.Value, item.RemainingValue)
+					}
+				} else {
+					if len(anchorData.Assets) != 1 {
+						return nil, fmt.Errorf("%s should be only one asset", tx.TxID())
+					}
+					value := indexer.GetBindingSatNum(item.RemainingAmt, uint32(p.N))
+					if value != anchorData.Value {
+						return nil, fmt.Errorf("%s invalid value %d, expected %d", tx.TxID(), anchorData.Value, value)
+					}
+					assetInfo := anchorData.Assets[0]
+					if assetInfo.Name.String() != item.AssetName {
+						return nil, fmt.Errorf("%s invalid asset name %s, expected %s", tx.TxID(), assetInfo.Name.String(), item.AssetName)
+					}
+					if assetInfo.Amount.Cmp(item.RemainingAmt) != 0 {
+						return nil, fmt.Errorf("%s invalid asset amt %s, expected %s", tx.TxID(), assetInfo.Amount.String(), item.RemainingAmt.String())
+					}
+				}
+
+				sendInfoMap[item.InUtxo] = &SendAssetInfo{
+					Address:   item.Address,
+					Value:     item.RemainingValue,
+					AssetName: assetName,
+					AssetAmt:  item.RemainingAmt.Clone(),
+				}
+				sendTxIdMap[item.InUtxo] = tx.TxID()
+				totalAmt = totalAmt.Add(item.RemainingAmt)
+				totalValue += item.RemainingValue
+				bFound = true
 			}
+		}
+		if !bFound {
+			return nil, fmt.Errorf("can't find deposit itme %s", anchorData.Utxo)
 		}
 	}
 
