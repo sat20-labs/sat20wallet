@@ -164,14 +164,17 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 	// return txs, nil
 }
 
-func (p *Manager) DeployRunesTicker(destAddr string, ticker string, symbol int32, max int64) (*InscribeResv, error) {
+func (p *Manager) DeployRunesTicker(destAddr string, ticker string, symbol int32, 
+	max, feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
 
 	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	address := wallet.GetAddress()
 
-	feeRate := p.GetFeeRate()
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
 	etching, err := GenEtching(ticker, symbol, max)
 	if err != nil {
 		return nil, err

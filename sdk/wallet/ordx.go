@@ -80,7 +80,7 @@ func (p *Manager) inscribe(req *InscriptionRequest) (*InscribeResv, error) {
 	return inscribe, nil
 }
 
-func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int) (*InscribeResv, error) {
+func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int, feeRate int64) (*InscribeResv, error) {
 	if n <= 0 || n > 65535 {
 		return nil, fmt.Errorf("n too big (>65535)")
 	}
@@ -96,7 +96,9 @@ func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int) (*Inscr
 	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	address := wallet.GetAddress()
 
-	feeRate := p.GetFeeRate()
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
 	// 经验数据，调整 CONTENT_DEPLOY_BODY 后需要调整
 	// estimatedInputValue1 := 340*feeRate + 330
 	// estimatedInputValue2 := 400*feeRate + 330
@@ -184,7 +186,7 @@ func EstimatedMintFee(inputLen int, feeRate, revealOutValue int64) int64 {
 
 // 需要调用方确保amt<=limit
 func (p *Manager) MintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
-	amt int64, preUtxo string) (*InscribeResv, error) {
+	amt int64, preUtxo string, feeRate int64) (*InscribeResv, error) {
 
 	limit, err := strconv.ParseInt(tickInfo.Limit, 10, 64)
 	if err != nil {
@@ -206,7 +208,9 @@ func (p *Manager) MintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
 	if revealOutValue < 330 {
 		revealOutValue = 330
 	}
-	feeRate := p.GetFeeRate()
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
 	// 经验数据，调整 CONTENT_MINT_BODY 后需要调整
 	// estimatedInputValue1 := 310*feeRate + revealOutValue
 	// estimatedInputValue2 := 370*feeRate + revealOutValue
@@ -458,14 +462,17 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string, 
 }
 
 
-func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string) (*InscribeResv, error) {
+func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string, 
+	feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
 
 	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	address := wallet.GetAddress()
 
-	feeRate := p.GetFeeRate()
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
 	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
 	if err != nil {
 		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)

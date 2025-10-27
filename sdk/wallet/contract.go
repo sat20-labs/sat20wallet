@@ -641,7 +641,9 @@ func (p *ContractBase) CheckContent() error {
 			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
 		}
 	} else if p.AssetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
-		
+		if len(p.AssetName.Ticker) != 4 && len(p.AssetName.Ticker) != 5 {
+			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
+		}
 	}
 
 	if indexer.IsPlainAsset(&p.AssetName) {
