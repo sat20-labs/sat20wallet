@@ -368,3 +368,27 @@ func GetPkScriptType(prevOutScript []byte) txscript.ScriptClass {
 	}
 	return ty
 }
+
+func CompareMsgTx(tx1, tx2 *wire.MsgTx) bool {
+	if tx1 == nil && tx2 == nil {
+		return true
+	}
+	if tx1 == nil && tx2 != nil {
+		return false
+	}
+	if tx1 != nil && tx2 == nil {
+		return false
+	}
+	var err error
+	var tx1Hex, tx2Hex string
+	tx1Hex, err = EncodeMsgTx(tx1)
+	if err != nil {
+		return false
+	}
+	tx2Hex, err = EncodeMsgTx(tx2)
+	if err != nil {
+		return false
+	}
+	
+	return tx1Hex == tx2Hex
+}

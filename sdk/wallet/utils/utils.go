@@ -7,6 +7,14 @@ import (
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
+func BytesToPrivateKey(keyBytes []byte) (*secp256k1.PrivateKey, error) {
+	if len(keyBytes) != 32 {
+		return nil, fmt.Errorf("invalid private key length: %d", len(keyBytes))
+	}
+
+	return secp256k1.PrivKeyFromBytes(keyBytes), nil
+}
+
 // HexToSecp256k1PublicKey 将十六进制字符串格式的公钥转换为 secp256k1.PublicKey
 func BytesToPublicKey(pubKeyBytes []byte) (*secp256k1.PublicKey, error) {
 	// 检查公钥长度

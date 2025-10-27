@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	stxscript "github.com/sat20-labs/satoshinet/txscript"
 )
 
 
@@ -16,7 +17,7 @@ const CONTENT_MINT_BRC20_TRANSFER_BODY string = `{"p":"brc-20","op":"transfer","
 
 
 func (p *Manager) inscribeV2(srcAddr, destAddr string, body string, feeRate int64, 
-	defaultUtxos []string, broadcast bool) (*InscribeResv, error) {
+	defaultUtxos []string, privateKey []byte, inChannel bool) (*InscribeResv, error) {
 	if srcAddr == "" {
 		srcAddr = p.wallet.GetAddress()
 	}
@@ -111,7 +112,33 @@ func (p *Manager) inscribeV2(srcAddr, destAddr string, body string, feeRate int6
 		}
 	}
 
-	return p.inscribe(srcAddr, destAddr, body, 330, feeRate, commitTxPrevOutputList, broadcast)
+	if srcAddr == "" {
+		srcAddr = p.wallet.GetAddress()
+	}
+	if destAddr == "" {
+		destAddr = srcAddr
+	}
+	
+	var signer Signer
+	if !inChannel {
+		signer = p.SignTxV2
+	}
+	req := &InscriptionRequest{
+		CommitTxPrevOutputList: commitTxPrevOutputList,
+		CommitFeeRate:          feeRate,
+		RevealFeeRate:          feeRate,
+		RevealOutValue:         330,
+		RevealPrivateKey:       privateKey,
+		InscriptionData: InscriptionData{
+			ContentType: CONTENT_TYPE,
+			Body:        []byte(body),
+		},
+		DestAddress:   destAddr,
+		ChangeAddress: srcAddr,
+		InChannel:     inChannel,
+		Signer:        signer,
+	}
+	return p.inscribe(req)
 }
 
 func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, feeRate int64) (*InscribeResv, error) {
@@ -120,7 +147,7 @@ func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, feeRate int6
 	}
 
 	body := fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_4, ticker, max, lim)
-	return p.inscribeV2("", "", body, feeRate, nil, true)
+	return p.inscribeV2("", "", body, feeRate, nil, nil, false)
 }
 
 // 需要调用方确保amt<=limit
@@ -147,12 +174,12 @@ func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_BODY, tickInfo.AssetName.Ticker, amt)
-	return p.inscribeV2("", destAddr, body, feeRate, defaultUtxos, true)
+	return p.inscribeV2("", destAddr, body, feeRate, defaultUtxos, nil, false)
 }
 
 // 需要调用方确保amt<=用户持有量
 func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string, assetName *indexer.AssetName,
-	amt *Decimal, defaultUtxos []string, feeRate int64, broadcast bool) (*InscribeResv, error) {
+	amt *Decimal, feeRate int64, defaultUtxos []string, privateKey []byte, inChannel bool) (*InscribeResv, error) {
 
 	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return nil, fmt.Errorf("not brc20")
@@ -167,5 +194,59 @@ func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string, assetName *indexe
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_TRANSFER_BODY, tickInfo.AssetName.Ticker, amt.String())
-	return p.inscribeV2(srcAddr, destAddr, body, feeRate, defaultUtxos, broadcast)
+	return p.inscribeV2(srcAddr, destAddr, body, feeRate, defaultUtxos, privateKey, inChannel)
+}
+
+func GenerateInscribeMoreData(destAddr string, assetName *indexer.AssetName, 
+	amt *Decimal, feeRate int64, revealKey []byte) ([]byte, error) {
+	more, err := stxscript.NewScriptBuilder().
+	AddData([]byte(destAddr)).
+	AddData([]byte(assetName.String())).
+	AddData([]byte(amt.ToFormatString())).
+	AddInt64(feeRate).
+	AddData((revealKey)).Script()
+	if err != nil {
+		return nil, err
+	}
+	return more, nil
+}
+
+func ParseInscribeMoreData(more []byte) (destAddr string, assetName *indexer.AssetName, 
+	amt *Decimal, feeRate int64, revealKey []byte, err error) {
+	tokenizer := stxscript.MakeScriptTokenizer(0, more)
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		err = fmt.Errorf("missing address")
+		return
+	}
+	destAddr = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		err = fmt.Errorf("missing asset name")
+		return
+	}
+	name := string(tokenizer.Data())
+	assetName = indexer.NewAssetNameFromString(name)
+	
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		err = fmt.Errorf("missing asset amt")
+		return
+	}
+	amt, err = indexer.NewDecimalFromFormatString(string(tokenizer.Data()))
+	if err != nil {
+		return
+	}
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		err = fmt.Errorf("missing fee rate")
+		return
+	}
+	feeRate = tokenizer.ExtractInt64()
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		err = fmt.Errorf("missing reveal private key")
+		return
+	}
+	revealKey = (tokenizer.Data())
+	return
 }

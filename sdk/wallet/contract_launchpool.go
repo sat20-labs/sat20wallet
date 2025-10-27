@@ -1918,7 +1918,7 @@ func (p *LaunchPoolContractRunTime) AllowPeerAction(action string, param any) (a
 			if err != nil {
 				return nil, err
 			}
-			dealInfo, err = p.genSendInfoFromTx(tx, req.MoreData)
+			dealInfo, err = p.genSendInfoFromTx(tx, nil, req.MoreData)
 			if err != nil {
 				return nil, err
 			}

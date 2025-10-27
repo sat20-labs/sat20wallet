@@ -51,42 +51,15 @@ func EstimatedDeployFee(inputLen int, feeRate int64) int64 {
 }
 
 
-func (p *Manager) inscribe(srcAddr, destAddr string, body string, revealOutValue int64,
-	feeRate int64, commitTxPrevOutputList []*PrevOutput, broadcast bool) (*InscribeResv, error) {
-	if srcAddr == "" {
-		srcAddr = p.wallet.GetAddress()
-	}
-	if destAddr == "" {
-		destAddr = srcAddr
-	}
-	
-	var signer Signer
-	if broadcast {
-		signer = p.SignTxV2
-	}
-	request := &InscriptionRequest{
-		CommitTxPrevOutputList: commitTxPrevOutputList,
-		CommitFeeRate:          feeRate,
-		RevealFeeRate:          feeRate,
-		RevealOutValue:         revealOutValue,
-		InscriptionData: InscriptionData{
-			ContentType: CONTENT_TYPE,
-			Body:        []byte(body),
-		},
-		DestAddress:   destAddr,
-		ChangeAddress: srcAddr,
-		InChannel:     false,
-		Signer:        signer,
-	}
-
-	inscribe, err := Inscribe(GetChainParam(), request, p.GenerateNewResvId())
+func (p *Manager) inscribe(req *InscriptionRequest) (*InscribeResv, error) {
+	inscribe, err := Inscribe(GetChainParam(), req, p.GenerateNewResvId())
 	if err != nil {
 		return nil, err
 	}
 	Log.Infof("commit fee %d, reveal fee %d", inscribe.CommitTxFee, inscribe.RevealTxFee)
 
 	txs := []*wire.MsgTx{inscribe.CommitTx, inscribe.RevealTx}
-	if broadcast {
+	if req.Signer != nil {
 		err = p.TestAcceptance(txs)
 		if err != nil {
 			return nil, err
@@ -99,7 +72,7 @@ func (p *Manager) inscribe(srcAddr, destAddr string, body string, revealOutValue
 		Log.Infof("reveal broadcasted, txid: %s", inscribe.RevealTx.TxID())
 	} else {
 		// 不广播，只锁定
-		for _, preOut := range commitTxPrevOutputList {
+		for _, preOut := range req.CommitTxPrevOutputList {
 			p.utxoLockerL1.lockUtxo(preOut.Utxo(), "inscribe")
 		}
 	}
@@ -180,7 +153,22 @@ func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int) (*Inscr
 
 	pubkey := hex.EncodeToString(p.wallet.GetPaymentPubKey().SerializeCompressed())
 	body := fmt.Sprintf(CONTENT_DEPLOY_BODY, ticker, max, lim, n, pubkey)
-	return p.inscribe("", "", body, 330, feeRate, commitTxPrevOutputList, true)
+	
+	req := &InscriptionRequest{
+		CommitTxPrevOutputList: commitTxPrevOutputList,
+		CommitFeeRate:          feeRate,
+		RevealFeeRate:          feeRate,
+		RevealOutValue:         330,
+		InscriptionData: InscriptionData{
+			ContentType: CONTENT_TYPE,
+			Body:        []byte(body),
+		},
+		DestAddress:   address,
+		ChangeAddress: address,
+		InChannel:     false,
+		Signer:        p.SignTxV2,
+	}
+	return p.inscribe(req)
 }
 
 // 只适合 CONTENT_MINT_BODY ，可以估算 CONTENT_MINT_ABBR_BODY
@@ -315,7 +303,21 @@ func (p *Manager) MintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
 		body = fmt.Sprintf(CONTENT_MINT_BODY, tickInfo.AssetName.Ticker, amt)
 	}
 
-	return p.inscribe("", destAddr, body, revealOutValue, feeRate, commitTxPrevOutputList, true)
+	req := &InscriptionRequest{
+		CommitTxPrevOutputList: commitTxPrevOutputList,
+		CommitFeeRate:          feeRate,
+		RevealFeeRate:          feeRate,
+		RevealOutValue:         revealOutValue,
+		InscriptionData: InscriptionData{
+			ContentType: CONTENT_TYPE,
+			Body:        []byte(body),
+		},
+		DestAddress:   destAddr,
+		ChangeAddress: address,
+		InChannel:     false,
+		Signer:        p.SignTxV2,
+	}
+	return p.inscribe(req)
 }
 
 // 暂时不支持coreid后缀
@@ -438,7 +440,21 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string, 
 		return nil, fmt.Errorf("no enough utxos for fee")
 	}
 
-	return p.inscribe("", "", body, 330, feeRate, commitTxPrevOutputList, true)
+	req := &InscriptionRequest{
+		CommitTxPrevOutputList: commitTxPrevOutputList,
+		CommitFeeRate:          feeRate,
+		RevealFeeRate:          feeRate,
+		RevealOutValue:         330,
+		InscriptionData: InscriptionData{
+			ContentType: CONTENT_TYPE,
+			Body:        []byte(body),
+		},
+		DestAddress:   address,
+		ChangeAddress: address,
+		InChannel:     false,
+		Signer:        p.SignTxV2,
+	}
+	return p.inscribe(req)
 }
 
 
@@ -497,5 +513,19 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string)
 		return nil, fmt.Errorf("no enough utxos for fee")
 	}
 
-	return p.inscribe("", "", body, 330, feeRate, commitTxPrevOutputList, true)
+	req := &InscriptionRequest{
+		CommitTxPrevOutputList: commitTxPrevOutputList,
+		CommitFeeRate:          feeRate,
+		RevealFeeRate:          feeRate,
+		RevealOutValue:         330,
+		InscriptionData: InscriptionData{
+			ContentType: CONTENT_TYPE,
+			Body:        []byte(body),
+		},
+		DestAddress:   address,
+		ChangeAddress: address,
+		InChannel:     false,
+		Signer:        p.SignTxV2,
+	}
+	return p.inscribe(req)
 }

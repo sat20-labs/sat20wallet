@@ -58,6 +58,7 @@ type InscriptionRequest struct {
 	CommitTxPrevOutputList PrevOutputs     `json:"commitTxPrevOutputList"`
 	CommitFeeRate          int64           `json:"commitFeeRate"`
 	RevealFeeRate          int64           `json:"revealFeeRate"`
+	RevealPrivateKey       []byte          `json:"revealPrivateKey"`
 	InscriptionData        InscriptionData `json:"inscriptionData"`
 	RevealOutValue         int64           `json:"revealOutValue"`
 	MinChangeValue         int64           `json:"minChangeValue"`
@@ -122,6 +123,7 @@ type InscribeResv struct {
 	CommitAddr       string      `json:"commitAddr"`
 	RevealPrivateKey []byte      `json:"revealPrivateKey"`
 	Body             []byte      `json:"body"`
+	FeeRate          int64       `json:"feeRate"`
 	CommitTxPrevOutputFetcher *txscript.MultiPrevOutFetcher `json:"commitTxPrevFetcher"`
 }
 
@@ -140,7 +142,13 @@ const (
 
 func NewInscriptionTool(network *chaincfg.Params, request *InscriptionRequest) (
 	*InscriptionBuilder, error) {
-	privKey, err := btcec.NewPrivateKey()
+	var err error
+	var privKey *secp256k1.PrivateKey
+	if len(request.RevealPrivateKey) != 0 {
+		privKey, err = utils.BytesToPrivateKey(request.RevealPrivateKey)
+	} else {
+		privKey, err = btcec.NewPrivateKey()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -572,6 +580,7 @@ func Inscribe(network *chaincfg.Params, request *InscriptionRequest, resvId int6
 		CommitAddr:       tool.CommitAddr,
 		RevealPrivateKey: tool.RevealPrivateKey.Serialize(),
 		Body:             request.InscriptionData.Body,
+		FeeRate:          request.CommitFeeRate,
 		CommitTxPrevOutputFetcher: tool.CommitTxPrevOutputFetcher,
 	}, nil
 }

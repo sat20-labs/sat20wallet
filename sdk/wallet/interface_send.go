@@ -1664,7 +1664,8 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 	wantToMint :=  indexer.DecimalSub(requiredAmt, totalAsset)
 	if wantToMint.Sign() > 0 {
 		// 再铸造一个，加入selected中，还没有广播
-		inscribe, err = p.MintTransfer_brc20(localAddr, localAddr, &name.AssetName, wantToMint, nil, feeRate, false)
+		inscribe, err = p.MintTransfer_brc20(localAddr, localAddr, 
+			&name.AssetName, wantToMint, feeRate, nil, nil, false)
 		if err != nil {
 			Log.Errorf("MintTransfer_brc20 failed, %v", err)
 			return nil, nil, 0, nil, err
@@ -1835,7 +1836,8 @@ func CalcFee_SendTx(inputLen, outputLen, feeLen int, assetName *AssetName,
 
 // 该Tx还没有广播或者广播了还没有确认，才有可能重建，索引器的限制，utxo被花费后就删除了
 // 只支持一种资产
-func (p *Manager) RebuildTxOutput(tx *wire.MsgTx) ([]*TxOutput, []*TxOutput, error) {
+func (p *Manager) RebuildTxOutput(tx *wire.MsgTx, preFectcher map[string]*TxOutput) (
+	[]*TxOutput, []*TxOutput, error) {
 	// 尝试为tx的输出分配资产
 	// 按ordx协议的规则
 	// 按runes协议的规则
@@ -1848,9 +1850,13 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx) ([]*TxOutput, []*TxOutput, err
 		}
 		utxo := txIn.PreviousOutPoint.String()
 
-		info, err := p.l1IndexerClient.GetTxOutput(utxo)
-		if err != nil {
-			return nil, nil, err
+		info, ok := preFectcher[utxo]
+		if !ok {
+			var err error
+			info, err = p.l1IndexerClient.GetTxOutput(utxo)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 
 		if input == nil {
@@ -3433,7 +3439,8 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 		wantToMint :=  indexer.DecimalSub(requiredAmt, totalAsset)
 		if wantToMint.Sign() > 0 {
 			// 再铸造一个，加入selected中，还没有广播
-			inscribe, err = p.MintTransfer_brc20(localAddr, localAddr, &assetName.AssetName, wantToMint, nil, feeRate, false)
+			inscribe, err = p.MintTransfer_brc20(localAddr, localAddr, &assetName.AssetName, 
+				wantToMint, feeRate, nil, nil, inChannel)
 			if err != nil {
 				Log.Errorf("MintTransfer_brc20 failed, %v", err)
 				break
