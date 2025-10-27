@@ -616,8 +616,13 @@ func (p *IndexerClient) TestRawTx(signedTxs []string) error {
 				continue
 			} else if strings.Contains(r.RejectReason, "the locked tx is anchored already in sats net") {
 				// 只有聪网交易才会走到这里
+				parts := strings.Split(r.RejectReason, "the locked tx is anchored already in sats net")
+				if len(parts) != 2 {
+					Log.Errorf("BroadCastTxHex failed, %v", result.Msg)
+					return fmt.Errorf("%s", result.Msg)
+				}
 				tx, _ := DecodeMsgTx_SatsNet(signedTxs[i])
-				if strings.Contains(r.RejectReason, tx.TxID()) {
+				if strings.Contains(parts[1], tx.TxID()) {
 					// 聪网的特殊处理，只检查包含该utxo的anchorTx是否已经被广播
 					Log.Infof("BroadCastTxHex TX has anchored. %s", r.RejectReason)
 					continue
