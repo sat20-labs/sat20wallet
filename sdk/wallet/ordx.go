@@ -80,7 +80,7 @@ func (p *Manager) inscribe(req *InscriptionRequest) (*InscribeResv, error) {
 	return inscribe, nil
 }
 
-func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int, feeRate int64) (*InscribeResv, error) {
+func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRate int64) (*InscribeResv, error) {
 	if n <= 0 || n > 65535 {
 		return nil, fmt.Errorf("n too big (>65535)")
 	}
@@ -136,18 +136,6 @@ func (p *Manager) DeployOrdxTicker(ticker string, max, lim int64, n int, feeRate
 		if total >= estimatedFee {
 			break
 		}
-		// if len(commitTxPrevOutputList) == 1 && total >= estimatedInputValue1 {
-		// 	ok = true
-		// 	break
-		// }
-		// if len(commitTxPrevOutputList) == 2 && total >= estimatedInputValue2 {
-		// 	ok = true
-		// 	break
-		// }
-		// if len(commitTxPrevOutputList) == 3 && total >= estimatedInputValue3 {
-		// 	ok = true
-		// 	break
-		// }
 	}
 	if total < estimatedFee {
 		return nil, fmt.Errorf("no enough utxos for fee")
@@ -185,8 +173,8 @@ func EstimatedMintFee(inputLen int, feeRate, revealOutValue int64) int64 {
 }
 
 // 需要调用方确保amt<=limit
-func (p *Manager) MintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
-	amt int64, preUtxo string, feeRate int64) (*InscribeResv, error) {
+func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
+	amt int64, defaultUtxos []string, feeRate int64) (*InscribeResv, error) {
 
 	limit, err := strconv.ParseInt(tickInfo.Limit, 10, 64)
 	if err != nil {
@@ -216,95 +204,88 @@ func (p *Manager) MintOrdxAsset(destAddr string, tickInfo *indexer.TickerInfo,
 	// estimatedInputValue2 := 370*feeRate + revealOutValue
 	// estimatedInputValue3 := 430*feeRate + revealOutValue
 
-	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
-	if err != nil {
-		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
-		return nil, err
-	}
-	if len(utxos) == 0 {
-		return nil, fmt.Errorf("no utxos for fee")
-	}
-	sort.Slice(utxos, func(i, j int) bool {
-		return utxos[i].Value > utxos[j].Value
-	})
-
-	commitTxPrevOutputList := make([]*PrevOutput, 0)
-	total := int64(0)
-	included := make(map[string]bool)
-	// preUtxo，可能还没有确认，但可以加进来使用
-	if preUtxo != "" {
-		txOut, err := p.GetTxOutFromRawTx(preUtxo)
-		if err != nil {
-			Log.Errorf("GetTxOutFromRawTx %s failed, %v", preUtxo, err)
-			return nil, err
-		}
-
-		parts := strings.Split(preUtxo, ":")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid utxo %s", preUtxo)
-		}
-		vout, err := strconv.Atoi(parts[1])
-		if err != nil {
-			return nil, err
-		}
-
-		total += txOut.OutValue.Value
-		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-			TxId:     parts[0],
-			VOut:     uint32(vout),
-			Amount:   txOut.OutValue.Value,
-			PkScript: txOut.OutValue.PkScript,
-		})
-		included[preUtxo] = true
-	}
-
-	p.utxoLockerL1.Reload(address)
-
-	estimatedFee := int64(0)
-	for _, u := range utxos {
-		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
-		if p.utxoLockerL1.IsLocked(utxo) {
-			continue
-		}
-		_, ok := included[utxo]
-		if ok {
-			continue
-		}
-		included[preUtxo] = true
-
-		total += u.Value
-		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-			TxId:     u.Txid,
-			VOut:     uint32(u.Vout),
-			Amount:   u.Value,
-			PkScript: pkScript,
-		})
-		estimatedFee = EstimatedMintFee(len(commitTxPrevOutputList), feeRate, revealOutValue)
-		if total >= estimatedFee {
-			break
-		}
-		// if len(commitTxPrevOutputList) == 1 && total >= estimatedInputValue1 {
-		// 	ok = true
-		// 	break
-		// }
-		// if len(commitTxPrevOutputList) == 2 && total >= estimatedInputValue2 {
-		// 	ok = true
-		// 	break
-		// }
-		// if len(commitTxPrevOutputList) == 3 && total >= estimatedInputValue3 {
-		// 	ok = true
-		// 	break
-		// }
-	}
-	if total < estimatedFee {
-		return nil, fmt.Errorf("no enough utxos for fee")
-	}
-
 	var body string
 	if amt == limit {
 		body = fmt.Sprintf(CONTENT_MINT_ABBR_BODY, tickInfo.AssetName.Ticker)
 	} else {
 		body = fmt.Sprintf(CONTENT_MINT_BODY, tickInfo.AssetName.Ticker, amt)
+	}
+
+	commitTxPrevOutputList := make([]*PrevOutput, 0)
+	total := int64(0)
+	included := make(map[string]bool)
+	estimatedFee := EstimatedInscribeFee(1, len(body), feeRate, revealOutValue)
+	
+	if len(defaultUtxos) != 0 {
+		for _, utxo := range defaultUtxos {
+			txOut, err := p.GetTxOutFromRawTx(utxo)
+			if err != nil {
+				Log.Errorf("GetTxOutFromRawTx %s failed, %v", utxo, err)
+				return nil, err
+			}
+
+			parts := strings.Split(utxo, ":")
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("invalid utxo %s", utxo)
+			}
+			vout, err := strconv.Atoi(parts[1])
+			if err != nil {
+				return nil, err
+			}
+
+			total += txOut.OutValue.Value
+			commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
+				TxId:     parts[0],
+				VOut:     uint32(vout),
+				Amount:   txOut.OutValue.Value,
+				PkScript: txOut.OutValue.PkScript,
+			})
+			included[utxo] = true
+
+			estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), 
+				len(body), feeRate, 330)
+			if total >= estimatedFee {
+				break
+			}
+		}
+	}
+
+	if total < estimatedFee {
+		utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
+		if err != nil {
+			Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
+			return nil, err
+		}
+		if len(utxos) == 0 {
+			return nil, fmt.Errorf("no utxos for fee")
+		}
+		p.utxoLockerL1.Reload(address)
+		for _, u := range utxos {
+			utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
+			if p.utxoLockerL1.IsLocked(utxo) {
+				continue
+			}
+			_, ok := included[utxo]
+			if ok {
+				continue
+			}
+			included[utxo] = true
+
+			total += u.Value
+			commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
+				TxId:     u.Txid,
+				VOut:     uint32(u.Vout),
+				Amount:   u.Value,
+				PkScript: pkScript,
+			})
+			estimatedFee = EstimatedMintFee(len(commitTxPrevOutputList), feeRate, revealOutValue)
+			if total >= estimatedFee {
+				break
+			}
+		}
+		if total < estimatedFee {
+			return nil, fmt.Errorf("no enough utxos for fee")
+		}
 	}
 
 	req := &InscriptionRequest{

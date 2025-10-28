@@ -4667,7 +4667,6 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 	isRune := false
 	assetName := p.GetAssetName()
 	isRune = assetName.Protocol == indexer.PROTOCOL_NAME_RUNES
-	// TODO 如何支持 indexer.PROTOCOL_NAME_BRC20
 
 	maxHeight := 0
 	var totalValue int64
@@ -4716,7 +4715,7 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 			if isPlainAsset {
 				not++
 			} else {
-				if indexer.GetBindingSatNum(v.AssetAmt, uint32(n)) < 330 {
+				if n != 0 && indexer.GetBindingSatNum(v.AssetAmt, uint32(n)) < 330 {
 					need = append(need, k)
 				} else {
 					not++

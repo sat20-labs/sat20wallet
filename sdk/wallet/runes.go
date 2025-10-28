@@ -164,7 +164,7 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 	// return txs, nil
 }
 
-func (p *Manager) DeployRunesTicker(destAddr string, ticker string, symbol int32, 
+func (p *Manager) DeployTicker_runes(destAddr string, ticker string, symbol int32, 
 	max, feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
@@ -228,7 +228,7 @@ func (p *Manager) DeployRunesTicker(destAddr string, ticker string, symbol int32
 }
 
 // 需要调用方确保amt<=limit
-func (p *Manager) mintRunesAsset(destAddr string, tickInfo *indexer.TickerInfo) (string, error) {
+func (p *Manager) MintAsset_runes(destAddr string, tickInfo *indexer.TickerInfo) (string, error) {
 
 	//wallet := p.wallet
 

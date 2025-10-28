@@ -301,7 +301,7 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 		total += DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT
 
 	case indexer.PROTOCOL_NAME_BRC20: // TODO 需要根据brc20的数据调整
-		// deploy+mint
+		// deploy
 		estimatedDeployFee := []int64{325, 385, 445, 505}
 		total = estimatedDeployFee[feeLen-1]*feeRate + 330
 
@@ -794,45 +794,40 @@ func deployTicker(stp ContractManager, resv ContractDeployResvIF, _ any) (any, e
 	if resv.LocalIsInitiator() {
 		if contract.HasDeployed == 0 {
 
+			var inscribeResv *InscribeResv
+			var err error
 			switch contract.AssetName.Protocol {
-			case indexer.PROTOCOL_NAME_ORDX: // 一次性完成
-				inscribeResv, err := stp.GetWalletMgr().DeployOrdxTicker(contract.AssetName.Ticker,
+			case indexer.PROTOCOL_NAME_ORDX:
+				inscribeResv, err = stp.GetWalletMgr().DeployTicker_ordx(contract.AssetName.Ticker,
 					contract.MaxSupply, contract.MaxSupply, int(contract.BindingSat), resv.GetFeeRate())
 				if err != nil {
-					Log.Errorf("deployOrdxTicker %s faied, %v", contract.AssetName, err)
+					Log.Errorf("DeployTicker_ordx %s faied, %v", contract.AssetName, err)
 					return nil, err
 				}
-				Log.Infof("deployOrdxTicker %s return %s", contract.AssetName, inscribeResv.RevealTx.TxID())
-				contract.DeployTickerResvId = inscribeResv.Id
-				contract.deployTickerResv = inscribeResv
-				contract.DeployTickerTxId = contract.deployTickerResv.RevealTx.TxID()
+				contract.DeployTickerTxId = inscribeResv.RevealTx.TxID()
 
 			case indexer.PROTOCOL_NAME_RUNES:
 				// 符文部署比较特殊，在一个commitTx提交名字，这里就当作部署好了；然后真正部署时，包括了预挖，所以当作mint。
-				inscribeResv, err := stp.GetWalletMgr().DeployRunesTicker(contract.Address(), contract.AssetName.Ticker, contract.AssetSymbol,
+				inscribeResv, err = stp.GetWalletMgr().DeployTicker_runes(contract.Address(), contract.AssetName.Ticker, contract.AssetSymbol,
 					contract.MaxSupply, resv.GetFeeRate())
 				if err != nil {
-					Log.Errorf("DeployRunesTicker %s faied, %v", contract.AssetName, err)
+					Log.Errorf("DeployTicker_runes %s faied, %v", contract.AssetName, err)
 					return nil, err
 				}
-				contract.DeployTickerResvId = inscribeResv.Id
-				contract.deployTickerResv = inscribeResv
-				Log.Infof("DeployRunesTicker %s return %s", contract.AssetName, inscribeResv.CommitTx.TxID())
-				contract.DeployTickerTxId = contract.deployTickerResv.CommitTx.TxID()
+				contract.DeployTickerTxId = inscribeResv.CommitTx.TxID()
 			
 			case indexer.PROTOCOL_NAME_BRC20:
-				inscribeResv, err := stp.GetWalletMgr().DeployTicker_brc20(contract.AssetName.Ticker,
+				inscribeResv, err = stp.GetWalletMgr().DeployTicker_brc20(contract.AssetName.Ticker,
 					contract.MaxSupply, contract.MaxSupply, resv.GetFeeRate())
 				if err != nil {
 					Log.Errorf("DeployTicker_brc20 %s faied, %v", contract.AssetName, err)
 					return nil, err
 				}
-				Log.Infof("DeployTicker_brc20 %s return %s", contract.AssetName, inscribeResv.RevealTx.TxID())
-				contract.DeployTickerResvId = inscribeResv.Id
-				contract.deployTickerResv = inscribeResv
-				contract.DeployTickerTxId = contract.deployTickerResv.RevealTx.TxID()
+				contract.DeployTickerTxId = inscribeResv.RevealTx.TxID()
 			}
 
+			contract.DeployTickerResvId = inscribeResv.Id
+			contract.deployTickerResv = inscribeResv
 			contract.Status = (CONTRACT_STATUS_INIT + 1)
 			contract.HasDeployed = 1
 			stp.SendMessageToUpper(MSG_DEPLOY, contract.DeployTickerTxId)
@@ -873,7 +868,7 @@ func mintTicker(stp ContractManager, resv ContractDeployResvIF, param any) (any,
 
 			var mintTxId string
 			switch contract.AssetName.Protocol {
-			case indexer.PROTOCOL_NAME_ORDX:
+			case indexer.PROTOCOL_NAME_ORDX, indexer.PROTOCOL_NAME_BRC20:
 				tickerInfo := stp.GetTickerInfo(contract.GetAssetName())
 				if tickerInfo == nil {
 					return nil, fmt.Errorf("can't get ticker %s info", contract.GetAssetName().String())
@@ -883,10 +878,18 @@ func mintTicker(stp ContractManager, resv ContractDeployResvIF, param any) (any,
 					contract.deployTickerResv.Status = (RS_CLOSED)
 					SaveInscribeResv(stp.GetDB(), contract.deployTickerResv)
 				}
-				mintResv, err := stp.GetWalletMgr().MintOrdxAsset(contract.Address(), tickerInfo,
-					contract.MaxSupply, fmt.Sprintf("%s:0", contract.DeployTickerTxId), resv.GetFeeRate())
+				var err error
+				var mintResv *InscribeResv
+				defaultUtxos := []string{fmt.Sprintf("%s:0", contract.DeployTickerTxId)}
+				if contract.AssetName.Protocol == indexer.PROTOCOL_NAME_ORDX {
+					mintResv, err = stp.GetWalletMgr().MintAsset_ordx(contract.Address(), tickerInfo,
+						contract.MaxSupply, defaultUtxos, resv.GetFeeRate())
+				} else {
+					mintResv, err = stp.GetWalletMgr().MintAsset_brc20(contract.Address(), &contract.AssetName,
+						contract.MaxSupply, defaultUtxos, resv.GetFeeRate())
+				}
 				if err != nil {
-					Log.Errorf("mintOrdxAsset %s faied, %v", contract.AssetName, err)
+					Log.Errorf("mintAsset %s faied, %v", contract.AssetName, err)
 					return nil, err
 				}
 				mintResv.Status = (RS_CLOSED)
@@ -895,7 +898,7 @@ func mintTicker(stp ContractManager, resv ContractDeployResvIF, param any) (any,
 				contract.HasDeployed = 2
 				contract.MintTickerResvId = mintResv.Id
 				mintTxId = mintResv.RevealTx.TxID()
-				Log.Infof("mintOrdxAsset %s return txId %s", contract.AssetName, mintTxId)
+				Log.Infof("mintAsset %s return txId %s", contract.AssetName, mintTxId)
 
 			case indexer.PROTOCOL_NAME_RUNES:
 				// 获取确认数
@@ -920,8 +923,6 @@ func mintTicker(stp ContractManager, resv ContractDeployResvIF, param any) (any,
 					Log.Infof("tx %s has not confirmed 6 times", contract.DeployTickerTxId)
 					return nil, fmt.Errorf("not reach 6 confirmations")
 				}
-
-			case indexer.PROTOCOL_NAME_BRC20:
 
 			}
 
