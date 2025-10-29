@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
 )
@@ -15,9 +16,8 @@ const CONTENT_DEPLOY_BRC20_BODY_5 string = `{"p":"brc-20","op":"deploy","tick":"
 const CONTENT_MINT_BRC20_BODY string = `{"p":"brc-20","op":"mint","tick":"%s","amt":"%d"}`
 const CONTENT_MINT_BRC20_TRANSFER_BODY string = `{"p":"brc-20","op":"transfer","tick":"%s","amt":"%s"}`
 
-
 func (p *Manager) inscribeV2(srcAddr, destAddr string, body string, feeRate int64, 
-	defaultUtxos []string, privateKey []byte, inChannel bool) (*InscribeResv, error) {
+	defaultUtxos []string, onlyUsingDefaultUtxos bool, privateKey []byte, inChannel bool) (*InscribeResv, error) {
 	if srcAddr == "" {
 		srcAddr = p.wallet.GetAddress()
 	}
@@ -75,40 +75,46 @@ func (p *Manager) inscribeV2(srcAddr, destAddr string, body string, feeRate int6
 	}
 
 	if total < estimatedFee {
-		utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(srcAddr)
-		if err != nil {
-			Log.Errorf("GetAllUtxosWithAddress %s failed. %v", srcAddr, err)
-			return nil, err
-		}
-		if len(utxos) == 0 {
-			return nil, fmt.Errorf("no utxos for fee")
-		}
+		if onlyUsingDefaultUtxos {
+			// 调整feeRate到最低，尽可能广播该铭刻交易
+			feeRate = 1
+		} else {
+			// 补充
+			utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(srcAddr)
+			if err != nil {
+				Log.Errorf("GetAllUtxosWithAddress %s failed. %v", srcAddr, err)
+				return nil, err
+			}
+			if len(utxos) == 0 {
+				return nil, fmt.Errorf("no utxos for fee")
+			}
 
-		for _, u := range utxos {
-			utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
-			if p.utxoLockerL1.IsLocked(utxo) {
-				continue
+			for _, u := range utxos {
+				utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
+				if p.utxoLockerL1.IsLocked(utxo) {
+					continue
+				}
+				_, ok := included[utxo]
+				if ok {
+					continue
+				}
+				included[utxo] = true
+				total += u.Value
+				commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
+					TxId:     u.Txid,
+					VOut:     uint32(u.Vout),
+					Amount:   u.Value,
+					PkScript: changePkScript,
+				})
+				estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), 
+					len(body), feeRate, 330)
+				if total >= estimatedFee {
+					break
+				}
 			}
-			_, ok := included[utxo]
-			if ok {
-				continue
+			if total < estimatedFee {
+				return nil, fmt.Errorf("no enough utxos for fee")
 			}
-			included[utxo] = true
-			total += u.Value
-			commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-				TxId:     u.Txid,
-				VOut:     uint32(u.Vout),
-				Amount:   u.Value,
-				PkScript: changePkScript,
-			})
-			estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), 
-				len(body), feeRate, 330)
-			if total >= estimatedFee {
-				break
-			}
-		}
-		if total < estimatedFee {
-			return nil, fmt.Errorf("no enough utxos for fee")
 		}
 	}
 
@@ -146,8 +152,17 @@ func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, feeRate int6
 		return nil, fmt.Errorf("invalid max %d", max)
 	}
 
-	body := fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_4, ticker, max, lim)
-	return p.inscribeV2("", "", body, feeRate, nil, nil, false)
+	var body string
+	switch len(ticker) {
+	case 4:
+		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_4, ticker, max, lim)
+	case 5:
+		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_5, ticker, max, lim)
+	default:
+		return nil, fmt.Errorf("invalid ticker length %s", ticker)
+	}
+	
+	return p.inscribeV2("", "", body, feeRate, nil, false, nil, false)
 }
 
 // 需要调用方确保amt<=limit
@@ -174,12 +189,13 @@ func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_BODY, tickInfo.AssetName.Ticker, amt)
-	return p.inscribeV2("", destAddr, body, feeRate, defaultUtxos, nil, false)
+	return p.inscribeV2("", destAddr, body, feeRate, defaultUtxos, false, nil, false)
 }
 
-// 需要调用方确保amt<=用户持有量
+// 需要调用方确保amt<=用户持有量, 注意如果是lockInputs，而且最后不广播，需要对输入的utxo解锁
 func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string, assetName *indexer.AssetName,
-	amt *Decimal, feeRate int64, defaultUtxos []string, privateKey []byte, inChannel bool) (*InscribeResv, error) {
+	amt *Decimal, feeRate int64, defaultUtxos []string, onlyUsingDefaultUtxos bool,  
+	privateKey []byte, inChannel, lockInputs bool) (*InscribeResv, error) {
 
 	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return nil, fmt.Errorf("not brc20")
@@ -194,7 +210,32 @@ func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string, assetName *indexe
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_TRANSFER_BODY, tickInfo.AssetName.Ticker, amt.String())
-	return p.inscribeV2(srcAddr, destAddr, body, feeRate, defaultUtxos, privateKey, inChannel)
+	insc, err := p.inscribeV2(srcAddr, destAddr, body, feeRate, defaultUtxos, onlyUsingDefaultUtxos, privateKey, inChannel)
+	if err != nil {
+		return nil, err
+	}
+	if lockInputs {
+		// 全局锁定输入
+		p.utxoLockerL1.LockUtxosWithTx(insc.CommitTx)
+	}
+	return insc, nil
+}
+
+func GenerateBRC20TransferOutput(revealTx *wire.MsgTx, assetName *indexer.AssetName, amt *Decimal) *indexer.TxOutput {
+	output := indexer.GenerateTxOutput(revealTx, 0)
+	assetInfo := indexer.AssetInfo{
+		Name: *assetName,
+		Amount: *amt,
+		BindingSat: 0,
+	}
+	output.Assets = indexer.TxAssets{assetInfo}
+	output.Offsets = map[indexer.AssetName]indexer.AssetOffsets{
+						*assetName: {{Start:0, End:1}},
+					}
+	output.SatBindingMap = map[int64]*indexer.AssetInfo{
+						0: &assetInfo,
+					}
+	return output
 }
 
 func GenerateInscribeMoreData(destAddr string, assetName *indexer.AssetName, 

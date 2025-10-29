@@ -1178,7 +1178,7 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 		return nil, 0, err
 	}
 	defer func() {
-		if err != nil && inscribe != nil {
+		if inscribe != nil && inscribe.Status != RS_CLOSED {
 			p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)
 		}
 	}()
@@ -1206,6 +1206,9 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 	if err != nil {
 		Log.Errorf("BroadcastTxs failed. %v", err)
 		return nil, 0, err
+	}
+	if inscribe != nil {
+		inscribe.Status = RS_CLOSED
 	}
 
 	return tx, fee, nil
@@ -1665,17 +1668,12 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 	if wantToMint.Sign() > 0 {
 		// 再铸造一个，加入selected中，还没有广播
 		inscribe, err = p.MintTransfer_brc20(localAddr, localAddr, 
-			&name.AssetName, wantToMint, feeRate, nil, nil, false)
+			&name.AssetName, wantToMint, feeRate, nil, false, nil, false, false)
 		if err != nil {
 			Log.Errorf("MintTransfer_brc20 failed, %v", err)
 			return nil, nil, 0, nil, err
 		}
-		output := indexer.GenerateTxOutput(inscribe.RevealTx, 0)
-		output.Assets = indexer.TxAssets{indexer.AssetInfo{
-			Name: name.AssetName,
-			Amount: *wantToMint,
-			BindingSat: 0,
-		}}
+		output := GenerateBRC20TransferOutput(inscribe.RevealTx, &name.AssetName, wantToMint)
 		selected = append(selected, output)
 	}
 	changePkScript := selected[0].OutValue.PkScript
@@ -2863,9 +2861,11 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 		return "", 0, err
 	}
 	defer func() {
-		if err != nil && len(inscribes) != 0 {
+		if len(inscribes) != 0 {
 			for _, insc := range inscribes {
-				p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
+				if insc.Status != RS_CLOSED {
+					p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
+				}
 			}
 		}
 	}()
@@ -2897,6 +2897,9 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 	if err != nil {
 		Log.Errorf("BroadcastTxs failed. %v", err)
 		return "", 0, err
+	}
+	for _, insc := range inscribes {
+		insc.Status = RS_CLOSED
 	}
 	
 	Log.Infof("BatchSendAssetsV3 succeed. %s %d", tx.TxID(), fee)
@@ -3440,17 +3443,12 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 		if wantToMint.Sign() > 0 {
 			// 再铸造一个，加入selected中，还没有广播
 			inscribe, err = p.MintTransfer_brc20(localAddr, localAddr, &assetName.AssetName, 
-				wantToMint, feeRate, nil, nil, inChannel)
+				wantToMint, feeRate, nil, false, nil, inChannel, true)
 			if err != nil {
 				Log.Errorf("MintTransfer_brc20 failed, %v", err)
 				break
 			}
-			output := indexer.GenerateTxOutput(inscribe.RevealTx, 0)
-			output.Assets = indexer.TxAssets{indexer.AssetInfo{
-				Name: assetName.AssetName,
-				Amount: *wantToMint,
-				BindingSat: 0,
-			}}
+			output := GenerateBRC20TransferOutput(inscribe.RevealTx, &assetName.AssetName, wantToMint)
 			selected = append(selected, output)
 			inscribes = append(inscribes, inscribe)
 		}

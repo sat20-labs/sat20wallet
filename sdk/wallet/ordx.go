@@ -50,7 +50,6 @@ func EstimatedDeployFee(inputLen int, feeRate int64) int64 {
 	return (340+int64(inputLen-1)*60)*feeRate + 330
 }
 
-
 func (p *Manager) inscribe(req *InscriptionRequest) (*InscribeResv, error) {
 	inscribe, err := Inscribe(GetChainParam(), req, p.GenerateNewResvId())
 	if err != nil {
@@ -71,10 +70,7 @@ func (p *Manager) inscribe(req *InscriptionRequest) (*InscribeResv, error) {
 		}
 		Log.Infof("reveal broadcasted, txid: %s", inscribe.RevealTx.TxID())
 	} else {
-		// 不广播，只锁定
-		for _, preOut := range req.CommitTxPrevOutputList {
-			p.utxoLockerL1.lockUtxo(preOut.Utxo(), "inscribe")
-		}
+		// 不广播，外部需要锁定输入的utxo，否则该inscribe会无效
 	}
 
 	return inscribe, nil

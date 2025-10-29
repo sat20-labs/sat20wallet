@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
@@ -192,19 +191,7 @@ func ToTxAssets(assets []*indexer.DisplayAsset) swire.TxAssets {
 }
 
 func OutputInfoToOutput(output *indexerwire.TxOutputInfo) *TxOutput {
-	result := &TxOutput{
-		UtxoId:      output.UtxoId,
-		OutPointStr: output.OutPoint,
-		OutValue:    wire.TxOut{Value: output.Value, PkScript: output.PkScript},
-		Offsets:     make(map[swire.AssetName]indexer.AssetOffsets),
-	}
-
-	for _, asset := range output.Assets {
-		result.Assets = append(result.Assets, *asset.ToAssetInfo())
-		result.Offsets[asset.AssetName] = asset.Offsets
-	}
-
-	return result
+	return output.ToTxOutput()
 }
 
 func OutputInfoToOutput_SatsNet(output *indexerwire.TxOutputInfo) *TxOutput_SatsNet {
