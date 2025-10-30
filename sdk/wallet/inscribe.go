@@ -66,6 +66,7 @@ type InscriptionRequest struct {
 	DestAddress   string `json:"destAddress"`
 	ChangeAddress string `json:"changeAddress"`
 
+	Broadcast   bool
 	InChannel   bool
 	Signer      Signer // sign commit tx
 }
@@ -108,8 +109,9 @@ const (
 	RS_INIT      ResvStatus = 0x99
 	RS_CONFIRMED ResvStatus = 0x10000
 
-	RS_INSCRIBING_COMMIT_BROADCASTED ResvStatus = 0x3000
-	RS_INSCRIBING_REVEAL_BROADCASTED ResvStatus = 0x3001
+	RS_INSCRIBING_START              ResvStatus = 0x3000
+	RS_INSCRIBING_COMMIT_BROADCASTED ResvStatus = 0x3001
+	RS_INSCRIBING_REVEAL_BROADCASTED ResvStatus = 0x3002
 	RS_INSCRIBING_CONFIRMED          ResvStatus = RS_CONFIRMED
 )
 type InscribeResv struct {
@@ -127,6 +129,16 @@ type InscribeResv struct {
 	CommitTxPrevOutputFetcher *txscript.MultiPrevOutFetcher `json:"commitTxPrevFetcher"`
 }
 
+func (p *InscribeResv) GetInputs() []string {
+	if p == nil || p.CommitTx == nil {
+		return nil
+	}
+	result := make([]string, len(p.CommitTx.TxIn))
+	for i, o := range p.CommitTx.TxIn {
+		result[i] = o.PreviousOutPoint.String()
+	}
+	return result
+}
 
 const (
 	DefaultTxVersion      = 2

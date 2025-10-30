@@ -17,7 +17,7 @@ const CONTENT_MINT_BRC20_BODY string = `{"p":"brc-20","op":"mint","tick":"%s","a
 const CONTENT_MINT_BRC20_TRANSFER_BODY string = `{"p":"brc-20","op":"transfer","tick":"%s","amt":"%s"}`
 
 func (p *Manager) inscribeV2(srcAddr, destAddr string, body string, feeRate int64, 
-	defaultUtxos []string, onlyUsingDefaultUtxos bool, privateKey []byte, inChannel bool) (*InscribeResv, error) {
+	defaultUtxos []string, onlyUsingDefaultUtxos bool, privateKey []byte, inChannel, broadcast bool) (*InscribeResv, error) {
 	if srcAddr == "" {
 		srcAddr = p.wallet.GetAddress()
 	}
@@ -141,6 +141,7 @@ func (p *Manager) inscribeV2(srcAddr, destAddr string, body string, feeRate int6
 		},
 		DestAddress:   destAddr,
 		ChangeAddress: srcAddr,
+		Broadcast:     broadcast,
 		InChannel:     inChannel,
 		Signer:        signer,
 	}
@@ -162,7 +163,7 @@ func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, feeRate int6
 		return nil, fmt.Errorf("invalid ticker length %s", ticker)
 	}
 	
-	return p.inscribeV2("", "", body, feeRate, nil, false, nil, false)
+	return p.inscribeV2("", "", body, feeRate, nil, false, nil, false, true)
 }
 
 // 需要调用方确保amt<=limit
@@ -189,13 +190,13 @@ func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_BODY, tickInfo.AssetName.Ticker, amt)
-	return p.inscribeV2("", destAddr, body, feeRate, defaultUtxos, false, nil, false)
+	return p.inscribeV2("", destAddr, body, feeRate, defaultUtxos, false, nil, false, true)
 }
 
 // 需要调用方确保amt<=用户持有量, 注意如果是lockInputs，而且最后不广播，需要对输入的utxo解锁
 func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string, assetName *indexer.AssetName,
 	amt *Decimal, feeRate int64, defaultUtxos []string, onlyUsingDefaultUtxos bool,  
-	privateKey []byte, inChannel, lockInputs bool) (*InscribeResv, error) {
+	privateKey []byte, inChannel, broadcast, lockInputs bool) (*InscribeResv, error) {
 
 	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return nil, fmt.Errorf("not brc20")
@@ -210,7 +211,7 @@ func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string, assetName *indexe
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_TRANSFER_BODY, tickInfo.AssetName.Ticker, amt.String())
-	insc, err := p.inscribeV2(srcAddr, destAddr, body, feeRate, defaultUtxos, onlyUsingDefaultUtxos, privateKey, inChannel)
+	insc, err := p.inscribeV2(srcAddr, destAddr, body, feeRate, defaultUtxos, onlyUsingDefaultUtxos, privateKey, inChannel, broadcast)
 	if err != nil {
 		return nil, err
 	}

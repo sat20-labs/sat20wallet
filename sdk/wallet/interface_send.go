@@ -1620,6 +1620,45 @@ func (p *Manager) BuildBatchSendTx_runes(destAddr string,
 	return tx, prevFetcher, feeValue - feeChange, nil
 }
 
+// 需要提前确定地址上有足够的brc20
+func (p *Manager) SelectUtxosForBRC20(srcAddress string, excludedUtxoMap map[string]bool, 
+	assetName *indexer.AssetName, amt *Decimal,
+	feeRate int64, weightEstimate *utils.TxWeightEstimator, 
+	excludeRecentBlock, inChannel bool) ([]*TxOutput, *InscribeResv, int64, error) {
+	selected, totalAsset, total, err := p.SelectUtxosForAsset(
+		srcAddress, excludedUtxoMap,
+		assetName, amt, weightEstimate, excludeRecentBlock, inChannel)
+	if err == nil {
+		if totalAsset.Cmp(amt) != 0 {
+			// 有多的，去掉最后一个，重新铸造一个
+			last := selected[len(selected)-1]
+			totalAsset = totalAsset.Sub(last.GetAsset(assetName))
+			selected = selected[0:len(selected)-1]
+		}
+	} else {
+		// 没有，或者不足
+		// if err.Error() == ERR_NO_ASSETS {
+		// 	// 完全没有
+		// } else {
+		// 	// 有部分
+		// }
+	}
+	var inscribe *InscribeResv
+	wantToMint :=  indexer.DecimalSub(amt, totalAsset)
+	if wantToMint.Sign() > 0 {
+		// 再铸造一个，加入selected中，还没有广播，但锁定输入
+		inscribe, err = p.MintTransfer_brc20(srcAddress, srcAddress, assetName, 
+			wantToMint, feeRate, nil, false, nil, inChannel, false, true)
+		if err != nil {
+			Log.Errorf("MintTransfer_brc20 failed, %v", err)
+			return nil, nil, 0, err
+		}
+		output := GenerateBRC20TransferOutput(inscribe.RevealTx, assetName, wantToMint)
+		selected = append(selected, output)
+	}
+	return selected, inscribe, total, nil
+}
+
 // 给同一个地址发送n等分资产. brc20只支持n==1的情况
 func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 	name *AssetName, amt *Decimal, n int, feeRate int64,
@@ -1641,41 +1680,25 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 		return nil, nil, 0, nil, err
 	}
 
-	// TODO 选择合适的utxo
+	// 先确定总数够不够
 	localAddr := p.wallet.GetAddress()
-	requiredAmt := amt.Clone().MulBigInt(big.NewInt(int64(n)))
+	totalAmt := p.GetAssetBalance(localAddr, &name.AssetName)
+	if totalAmt.Cmp(amt) < 0 {
+		return nil, nil, 0, nil, fmt.Errorf("no enough asset, required %s but only %s", amt.String(), totalAmt.String())
+	}
+
+	// 选择合适的utxo
 	var weightEstimate utils.TxWeightEstimator
-	selected, totalAsset, total, err := p.SelectUtxosForAsset(
-		localAddr, nil,
-		&name.AssetName, requiredAmt, &weightEstimate, false, false)
-	if err == nil {
-		if totalAsset.Cmp(requiredAmt) != 0 {
-			// 有多的，去掉最后一个，重新铸造一个
-			last := selected[len(selected)-1]
-			totalAsset = totalAsset.Sub(last.GetAsset(&name.AssetName))
-			selected = selected[0:len(selected)-1]
-		}
-	} else {
-		// 没有，或者不足
-		// if err.Error() == ERR_NO_ASSETS {
-		// 	// 完全没有
-		// } else {
-		// 	// 有部分
-		// }
+	selected, inscribe, total, err := p.SelectUtxosForBRC20(localAddr, nil, 
+		&name.AssetName, amt, feeRate, &weightEstimate, false, false)
+	if err != nil {
+		return nil, nil, 0, nil, err
 	}
-	var inscribe *InscribeResv
-	wantToMint :=  indexer.DecimalSub(requiredAmt, totalAsset)
-	if wantToMint.Sign() > 0 {
-		// 再铸造一个，加入selected中，还没有广播
-		inscribe, err = p.MintTransfer_brc20(localAddr, localAddr, 
-			&name.AssetName, wantToMint, feeRate, nil, false, nil, false, false)
-		if err != nil {
-			Log.Errorf("MintTransfer_brc20 failed, %v", err)
-			return nil, nil, 0, nil, err
+	defer func() {
+		if inscribe.Status != RS_INSCRIBING_START {
+			p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)
 		}
-		output := GenerateBRC20TransferOutput(inscribe.RevealTx, &name.AssetName, wantToMint)
-		selected = append(selected, output)
-	}
+	}()
 	changePkScript := selected[0].OutValue.PkScript
 
 	tx := wire.NewMsgTx(wire.TxVersion)
@@ -1705,9 +1728,6 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 			localAddr, nil, feeValue,
 			feeRate, &weightEstimate, false, false)
 		if err != nil {
-			if inscribe != nil {
-				p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)
-			}
 			return nil, nil, 0, nil, err
 		}
 		for _, output := range selected {
@@ -1721,9 +1741,6 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 	fee1 := weightEstimate.Fee(feeRate)
 
 	if feeValue < fee0 {
-		if inscribe != nil {
-			p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)
-		}
 		return nil, nil, 0, nil, fmt.Errorf("no enough fee")
 	}
 
@@ -1744,6 +1761,7 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 		}
 		tx.AddTxOut(txOut4)
 	}
+	inscribe.Status = RS_INSCRIBING_START
 
 	return tx, prevFetcher, feeValue - feeChange, inscribe, nil
 }
@@ -2473,7 +2491,7 @@ func (p *Manager) SelectUtxosForAssetV2(address string, excludedUtxoMap map[stri
 func (p *Manager) SelectUtxosForFeeV2(
 	address string, excludedUtxoMap map[string]bool,
 	requiredValue int64,
-	excludeRecentBlock, inChannel bool) ([]string, error) {
+	excludeRecentBlock, inChannel bool) ([]*TxOutput, error) {
 
 	if address == "" {
 		address = p.wallet.GetAddress()
@@ -2486,7 +2504,7 @@ func (p *Manager) SelectUtxosForFeeV2(
 	}
 
 	bigger := make([]*indexerwire.TxOutputInfo, 0)
-	result := make([]string, 0)
+	result := make([]*TxOutput, 0)
 	total := int64(0)
 	for _, u := range utxos {
 		utxo := u.OutPoint
@@ -2507,7 +2525,7 @@ func (p *Manager) SelectUtxosForFeeV2(
 		}
 
 		total += u.Value
-		result = append(result, utxo)
+		result = append(result, u.ToTxOutput())
 		if total >= requiredValue {
 			break
 		}
@@ -2520,7 +2538,7 @@ func (p *Manager) SelectUtxosForFeeV2(
 	// 上面所选的utxo不够，接着从bigger的尾部往前添加
 	for i := len(bigger) - 1; i >= 0; i-- {
 		txOut := bigger[i]
-		result = append(result, txOut.OutPoint)
+		result = append(result, txOut.ToTxOutput())
 		output := OutputInfoToOutput(txOut)
 		total += output.GetPlainSat()
 		if total >= requiredValue {
@@ -3401,6 +3419,25 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 	var err error
 	var changePkScript []byte
 
+	defer func() {
+		for _, insc := range inscribes {
+			if insc.Status != RS_INSCRIBING_START {
+				p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
+			}
+		}
+	}()
+
+	var requiredTotalAmt *Decimal
+	for _, d := range dest {
+		requiredTotalAmt = requiredTotalAmt.Add(d.AssetAmt)
+	}
+
+	// 先确定总数够不够
+	totalAmt := p.GetAssetBalance(localAddr, &assetName.AssetName)
+	if totalAmt.Cmp(requiredTotalAmt) < 0 {
+		return nil, nil, 0, nil, fmt.Errorf("no enough asset, required %s but only %s", requiredTotalAmt.String(), totalAmt.String())
+	}
+
 	for _, d := range dest {
 		if d.AssetName != nil {
 			if d.AssetName.String() != assetName.String() {
@@ -3420,38 +3457,13 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 		destPkScript = append(destPkScript, pkScript)
 
 		requiredAmt := d.AssetAmt
-		selected, totalAsset, total, err := p.SelectUtxosForAsset(
-			localAddr, excludedUtxoMap,
-			&assetName.AssetName, requiredAmt, &weightEstimate, excludeRecentBlock, inChannel)
-		if err == nil {
-			if totalAsset.Cmp(requiredAmt) != 0 {
-				// 有多的，去掉最后一个，重新铸造一个
-				last := selected[len(selected)-1]
-				totalAsset = totalAsset.Sub(last.GetAsset(&assetName.AssetName))
-				selected = selected[0:len(selected)-1]
-			}
-		} else {
-			// 没有，或者不足
-			// if err.Error() == ERR_NO_ASSETS {
-			// 	// 完全没有
-			// } else {
-			// 	// 有部分
-			// }
+
+		selected, inscribe, total, err := p.SelectUtxosForBRC20(localAddr, excludedUtxoMap, 
+			&assetName.AssetName, requiredAmt, feeRate, &weightEstimate, excludeRecentBlock, inChannel)
+		if err != nil {
+			return nil, nil, 0, nil, err
 		}
-		var inscribe *InscribeResv
-		wantToMint :=  indexer.DecimalSub(requiredAmt, totalAsset)
-		if wantToMint.Sign() > 0 {
-			// 再铸造一个，加入selected中，还没有广播
-			inscribe, err = p.MintTransfer_brc20(localAddr, localAddr, &assetName.AssetName, 
-				wantToMint, feeRate, nil, false, nil, inChannel, true)
-			if err != nil {
-				Log.Errorf("MintTransfer_brc20 failed, %v", err)
-				break
-			}
-			output := GenerateBRC20TransferOutput(inscribe.RevealTx, &assetName.AssetName, wantToMint)
-			selected = append(selected, output)
-			inscribes = append(inscribes, inscribe)
-		}
+		inscribes = append(inscribes, inscribe)
 
 		totalInputSats += total
 		for _, output := range selected {
@@ -3475,9 +3487,6 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 	}
 	if err != nil {
 		Log.Errorf(err.Error())
-		for _, insc := range inscribes {
-			p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
-		}
 		return nil, nil, 0, nil, err
 	}
 	
@@ -3507,9 +3516,6 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 		selected, feeValue, err = p.SelectUtxosForFee(localAddr, excludedUtxoMap,
 			feeValue, feeRate, &weightEstimate, excludeRecentBlock, inChannel)
 		if err != nil {
-			for _, insc := range inscribes {
-				p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
-			}
 			return nil, nil, 0, nil, err
 		}
 		for _, output := range selected {
@@ -3520,9 +3526,6 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 
 	fee0 = weightEstimate.Fee(feeRate)
 	if feeValue < fee0 {
-		for _, insc := range inscribes {
-			p.utxoLockerL1.UnlockUtxosWithTx(insc.CommitTx)
-		}
 		return nil, nil, 0, nil, fmt.Errorf("no enough fee")
 	}
 
@@ -3544,6 +3547,10 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 			Value:    0,
 		}
 		tx.AddTxOut(txOut)
+	}
+
+	for _, insc := range inscribes {
+		insc.Status = RS_INSCRIBING_START
 	}
 
 	return tx, prevFetcher, fee, inscribes, nil

@@ -123,6 +123,7 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 		},
 		DestAddress:   address,
 		ChangeAddress: changeAddr,
+		Broadcast:     false,
 		InChannel:     false,
 		Signer:        p.SignTxV2,
 	}

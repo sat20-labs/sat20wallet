@@ -58,7 +58,7 @@ func (p *Manager) inscribe(req *InscriptionRequest) (*InscribeResv, error) {
 	Log.Infof("commit fee %d, reveal fee %d", inscribe.CommitTxFee, inscribe.RevealTxFee)
 
 	txs := []*wire.MsgTx{inscribe.CommitTx, inscribe.RevealTx}
-	if req.Signer != nil {
+	if req.Broadcast {
 		err = p.TestAcceptance(txs)
 		if err != nil {
 			return nil, err
@@ -151,6 +151,7 @@ func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRat
 		},
 		DestAddress:   address,
 		ChangeAddress: address,
+		Broadcast:     true,
 		InChannel:     false,
 		Signer:        p.SignTxV2,
 	}
@@ -295,6 +296,7 @@ func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
 		},
 		DestAddress:   destAddr,
 		ChangeAddress: address,
+		Broadcast:     true,
 		InChannel:     false,
 		Signer:        p.SignTxV2,
 	}
@@ -432,6 +434,7 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string, 
 		},
 		DestAddress:   address,
 		ChangeAddress: address,
+		Broadcast:     true,
 		InChannel:     false,
 		Signer:        p.SignTxV2,
 	}
@@ -508,6 +511,7 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string,
 		},
 		DestAddress:   address,
 		ChangeAddress: address,
+		Broadcast:     true,
 		InChannel:     false,
 		Signer:        p.SignTxV2,
 	}
