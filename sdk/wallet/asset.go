@@ -169,7 +169,9 @@ func GetPlainOffset(output *TxOutput, name *AssetName) (int64, int64, error) {
 
 func CloneOutput(outputs []*indexer.TxOutput) []*indexer.TxOutput {
 	result := make([]*indexer.TxOutput, len(outputs))
-	copy(result, outputs)
+	for i, output := range outputs {
+		result[i] = output.Clone()
+	}
 	return result
 }
 

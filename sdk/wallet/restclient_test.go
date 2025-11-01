@@ -1292,7 +1292,7 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 		}
 
 		// 增加对ordx部署和铸造的支持
-		inscriptions, err := indexer.ParseInscription(txIn.Witness)
+		inscriptions, _, err := indexer.ParseInscription(txIn.Witness)
 		if err != nil {
 			continue
 		}

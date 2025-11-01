@@ -233,7 +233,7 @@ func TestParseOrdinals(t *testing.T) {
 	witness, _ := hex.DecodeString(witnessHex)
 
 
-	inscriptions, err := indexer.ParseInscription([][]byte{witness})
+	inscriptions, _, err := indexer.ParseInscription([][]byte{witness})
 	if err != nil {
 		t.Fatal(err)
 	}
