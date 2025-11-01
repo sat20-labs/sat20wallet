@@ -365,7 +365,7 @@ func CalcFee_SplicingIn(utxoLen, feeLen int, assetName *indexer.AssetName, feeRa
 		}
 		if assetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
 			// TODO 需要增加至少铭刻两个transfer铭文的聪
-			moreSats += 2000
+			moreSats += STUB_VALUE_BRC20
 		}
 	}
 
