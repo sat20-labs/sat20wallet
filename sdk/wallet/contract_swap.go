@@ -5366,6 +5366,9 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 						return nil, err
 					}
 				}
+				
+			default:
+				return nil, fmt.Errorf("not support %s", txInfo.Reason)
 			}
 		}
 

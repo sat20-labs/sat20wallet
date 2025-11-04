@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
@@ -22,23 +23,27 @@ func TestInscribe(t *testing.T) {
 	address := wallet.GetAddress()
 
 	commitTxPrevOutputList := make([]*PrevOutput, 0)
-	commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-		TxId:       "453aa6dd39f31f06cd50b72a8683b8c0402ab36f889d96696317503a025a21b5",
-		VOut:       0,
-		Amount:     546,
-		PkScript:   pkScript,
+	commitTxPrevOutputList = append(commitTxPrevOutputList, &TxOutput{
+		OutPointStr:       "453aa6dd39f31f06cd50b72a8683b8c0402ab36f889d96696317503a025a21b5:0",
+		OutValue: wire.TxOut{
+			Value:     546,
+			PkScript:   pkScript,
+		},
+		
 	})
 	commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-		TxId:       "22c8a4869f2aa9ee5994959c0978106130290cda53f6e933a8dda2dcb82508d4",
-		VOut:       0,
-		Amount:     546,
-		PkScript:   pkScript,
+		OutPointStr:       "22c8a4869f2aa9ee5994959c0978106130290cda53f6e933a8dda2dcb82508d4:0",
+		OutValue: wire.TxOut{
+			Value:     546,
+			PkScript:   pkScript,
+		},
 	})
 	commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-		TxId:       "aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26",
-		VOut:       4,
-		Amount:     1142196,
-		PkScript:   pkScript,
+		OutPointStr:       "aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:4",
+		OutValue: wire.TxOut{
+			Value:     546,
+			PkScript:   pkScript,
+		},
 	})
 
 	// inscriptionDataList := make([]InscriptionData, 0)
@@ -74,7 +79,6 @@ func TestInscribe(t *testing.T) {
 		},
 		DestAddress:            address,
 		ChangeAddress:          address,
-		InChannel:              false,
 		Signer:                 wallet.SignTx,
 	}
 
@@ -103,10 +107,11 @@ func TestInscribeTransfer(t *testing.T) {
 
 	commitTxPrevOutputList := make([]*PrevOutput, 0)
 	commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-		TxId:       "aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26",
-		VOut:       4,
-		Amount:     1142196,
-		PkScript:   pkScript,
+		OutPointStr:       "aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:4",
+		OutValue: wire.TxOut{
+			Value:     1142196,
+			PkScript:   pkScript,
+		},
 	})
 
 	request := &InscriptionRequest{
@@ -120,7 +125,6 @@ func TestInscribeTransfer(t *testing.T) {
 		},
 		DestAddress:            address,
 		ChangeAddress:          address,
-		InChannel:              false,
 		Signer:                 wallet.SignTx,
 	}
 
@@ -150,6 +154,24 @@ func TestInscribeTransfer(t *testing.T) {
 	fmt.Printf("fee: %d\n", EstimatedInscribeFee(1, len(request.InscriptionData.Body), 1, 0))
 }
 
+func TestCalcTransferFee(t *testing.T) {
+	src := "bc1pr0fst3mzyvdkpzatx2cs2cahqwsrnr4nm403kfnv2ec4nys6h5qqt77vxn" // 通道地址
+	dest := "bc1pr0fst3mzyvdkpzatx2cs2cahqwsrnr4nm403kfnv2ec4nys6h5qqt77vxn"
+	assetName := &indexer.AssetName{
+		Protocol: indexer.PROTOCOL_NAME_BRC20,
+		Type: indexer.ASSET_TYPE_FT,
+		Ticker: "ordi",
+	}
+	amt := indexer.NewDecimal(100000, 18)
+	
+	for i := 1; i < 4; i++ {
+		fee, err := CalcFeeForMintTransfer(i, src, dest, SCRIPT_TYPE_SWEEP, assetName, amt, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("%d: fee = %d\n", i, fee)
+	}
+}
 
 func TestCalcFeeOfInscribe(t *testing.T) {
 	// InscriptionData:    InscriptionData{

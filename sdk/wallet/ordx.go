@@ -53,7 +53,7 @@ func EstimatedDeployFee(inputLen int, feeRate int64) int64 {
 func (p *Manager) inscribe(req *InscriptionRequest) (*InscribeResv, error) {
 	inscribe, err := Inscribe(GetChainParam(), req, p.GenerateNewResvId())
 	if err != nil {
-		return nil, err
+		return inscribe, err
 	}
 	Log.Infof("commit fee %d, reveal fee %d", inscribe.CommitTxFee, inscribe.RevealTxFee)
 
@@ -88,8 +88,6 @@ func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRat
 	}
 
 	wallet := p.wallet
-
-	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	address := wallet.GetAddress()
 
 	if feeRate == 0 {
@@ -100,11 +98,7 @@ func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRat
 	// estimatedInputValue2 := 400*feeRate + 330
 	// estimatedInputValue3 := 460*feeRate + 330
 
-	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
-	if err != nil {
-		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
-		return nil, err
-	}
+	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	if len(utxos) == 0 {
 		return nil, fmt.Errorf("no utxos for fee")
 	}
@@ -117,17 +111,11 @@ func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRat
 	total := int64(0)
 	estimatedFee := int64(0)
 	for _, u := range utxos {
-		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
-		if p.utxoLockerL1.IsLocked(utxo) {
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
 			continue
 		}
 		total += u.Value
-		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-			TxId:     u.Txid,
-			VOut:     uint32(u.Vout),
-			Amount:   u.Value,
-			PkScript: pkScript,
-		})
+		commitTxPrevOutputList = append(commitTxPrevOutputList, u.ToTxOutput())
 		estimatedFee = EstimatedDeployFee(len(commitTxPrevOutputList), feeRate)
 		if total >= estimatedFee {
 			break
@@ -152,7 +140,6 @@ func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRat
 		DestAddress:   address,
 		ChangeAddress: address,
 		Broadcast:     true,
-		InChannel:     false,
 		Signer:        p.SignTxV2,
 	}
 	return p.inscribe(req)
@@ -185,8 +172,6 @@ func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
 	}
 
 	wallet := p.wallet
-
-	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	address := wallet.GetAddress()
 
 	revealOutValue := GetBindingSatNum(indexer.NewDefaultDecimal(amt), tickInfo.N)
@@ -215,28 +200,14 @@ func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
 	
 	if len(defaultUtxos) != 0 {
 		for _, utxo := range defaultUtxos {
-			txOut, err := p.GetTxOutFromRawTx(utxo)
+			txOut, err := p.l1IndexerClient.GetTxOutput(utxo)
 			if err != nil {
 				Log.Errorf("GetTxOutFromRawTx %s failed, %v", utxo, err)
 				return nil, err
 			}
 
-			parts := strings.Split(utxo, ":")
-			if len(parts) != 2 {
-				return nil, fmt.Errorf("invalid utxo %s", utxo)
-			}
-			vout, err := strconv.Atoi(parts[1])
-			if err != nil {
-				return nil, err
-			}
-
 			total += txOut.OutValue.Value
-			commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-				TxId:     parts[0],
-				VOut:     uint32(vout),
-				Amount:   txOut.OutValue.Value,
-				PkScript: txOut.OutValue.PkScript,
-			})
+			commitTxPrevOutputList = append(commitTxPrevOutputList, txOut)
 			included[utxo] = true
 
 			estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), 
@@ -248,33 +219,23 @@ func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
 	}
 
 	if total < estimatedFee {
-		utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
-		if err != nil {
-			Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
-			return nil, err
-		}
+		utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 		if len(utxos) == 0 {
 			return nil, fmt.Errorf("no utxos for fee")
 		}
 		p.utxoLockerL1.Reload(address)
 		for _, u := range utxos {
-			utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
-			if p.utxoLockerL1.IsLocked(utxo) {
+			if p.utxoLockerL1.IsLocked(u.OutPoint) {
 				continue
 			}
-			_, ok := included[utxo]
+			_, ok := included[u.OutPoint]
 			if ok {
 				continue
 			}
-			included[utxo] = true
+			included[u.OutPoint] = true
 
 			total += u.Value
-			commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-				TxId:     u.Txid,
-				VOut:     uint32(u.Vout),
-				Amount:   u.Value,
-				PkScript: pkScript,
-			})
+			commitTxPrevOutputList = append(commitTxPrevOutputList, u.ToTxOutput())
 			estimatedFee = EstimatedMintFee(len(commitTxPrevOutputList), feeRate, revealOutValue)
 			if total >= estimatedFee {
 				break
@@ -297,7 +258,6 @@ func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
 		DestAddress:   destAddr,
 		ChangeAddress: address,
 		Broadcast:     true,
-		InChannel:     false,
 		Signer:        p.SignTxV2,
 	}
 	return p.inscribe(req)
@@ -377,16 +337,10 @@ func (p *Manager) GetOrgAssetName(lpt *AssetName) *AssetName {
 func (p *Manager) InscribeKeyValueInName(name string, key string, value string, feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
-
-	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	address := wallet.GetAddress()
 
 
-	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
-	if err != nil {
-		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
-		return nil, err
-	}
+	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	if len(utxos) == 0 {
 		return nil, fmt.Errorf("no utxos for fee")
 	}
@@ -403,17 +357,11 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string, 
 	total := int64(0)
 	estimatedFee := int64(0)
 	for _, u := range utxos {
-		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
-		if p.utxoLockerL1.IsLocked(utxo) {
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
 			continue
 		}
 		total += u.Value
-		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-			TxId:     u.Txid,
-			VOut:     uint32(u.Vout),
-			Amount:   u.Value,
-			PkScript: pkScript,
-		})
+		commitTxPrevOutputList = append(commitTxPrevOutputList, u.ToTxOutput())
 		estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), lenBody, feeRate, 330)
 		if total >= estimatedFee {
 			break
@@ -435,7 +383,6 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string, 
 		DestAddress:   address,
 		ChangeAddress: address,
 		Broadcast:     true,
-		InChannel:     false,
 		Signer:        p.SignTxV2,
 	}
 	return p.inscribe(req)
@@ -446,18 +393,12 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string,
 	feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
-
-	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	address := wallet.GetAddress()
 
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
 	}
-	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
-	if err != nil {
-		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
-		return nil, err
-	}
+	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	if len(utxos) == 0 {
 		return nil, fmt.Errorf("no utxos for fee")
 	}
@@ -480,17 +421,11 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string,
 	total := int64(0)
 	estimatedFee := int64(0)
 	for _, u := range utxos {
-		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
-		if p.utxoLockerL1.IsLocked(utxo) {
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
 			continue
 		}
 		total += u.Value
-		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-			TxId:     u.Txid,
-			VOut:     uint32(u.Vout),
-			Amount:   u.Value,
-			PkScript: pkScript,
-		})
+		commitTxPrevOutputList = append(commitTxPrevOutputList, u.ToTxOutput())
 		estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), lenBody, feeRate, 330)
 		if total >= estimatedFee {
 			break
@@ -512,7 +447,6 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string,
 		DestAddress:   address,
 		ChangeAddress: address,
 		Broadcast:     true,
-		InChannel:     false,
 		Signer:        p.SignTxV2,
 	}
 	return p.inscribe(req)

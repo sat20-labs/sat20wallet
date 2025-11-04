@@ -10,7 +10,6 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -26,33 +25,26 @@ type InscriptionData struct {
 	RevealTxNullData []byte `json:"nullData"` // op_return data
 }
 
-type PrevOutput struct {
-	TxId     string `json:"txId"`
-	VOut     uint32 `json:"vOut"`
-	Amount   int64  `json:"amount"`
-	PkScript []byte `json:"pkscript"`
-}
-
-func (p *PrevOutput) Utxo() string {
-	return fmt.Sprintf("%s:%d", p.TxId, p.VOut)
-}
+type PrevOutput = TxOutput
 
 type PrevOutputs []*PrevOutput
 
 type UtxoViewpoint map[wire.OutPoint][]byte
 
-func (s PrevOutputs) UtxoViewpoint(net *chaincfg.Params) (UtxoViewpoint, error) {
+func (s PrevOutputs) UtxoViewpoint() (UtxoViewpoint, error) {
 	view := make(UtxoViewpoint, len(s))
 	for _, v := range s {
-		h, err := chainhash.NewHashFromStr(v.TxId)
-		if err != nil {
-			return nil, err
-		}
-
-		view[wire.OutPoint{Index: v.VOut, Hash: *h}] = v.PkScript
+		view[*v.OutPoint()] = v.OutValue.PkScript
 	}
 	return view, nil
 }
+
+const (
+	SCRIPT_TYPE_TAPROOTKEYSPEND = 0
+	SCRIPT_TYPE_CHANNEL = 1
+	SCRIPT_TYPE_PUNISH = 2
+	SCRIPT_TYPE_SWEEP = 3
+)
 
 type InscriptionRequest struct {
 	CommitTxPrevOutputList PrevOutputs     `json:"commitTxPrevOutputList"`
@@ -66,9 +58,10 @@ type InscriptionRequest struct {
 	DestAddress   string `json:"destAddress"`
 	ChangeAddress string `json:"changeAddress"`
 
-	Broadcast   bool
-	InChannel   bool
-	Signer      Signer // sign commit tx
+	Broadcast     bool
+	ScriptType    int
+	WitnessScript []byte
+	Signer        Signer // sign commit tx
 }
 
 type inscriptionTxCtxData struct {
@@ -82,10 +75,12 @@ type inscriptionTxCtxData struct {
 
 type Signer func(tx *wire.MsgTx, prevOutFetcher txscript.PrevOutputFetcher) error
 
+
 type InscriptionBuilder struct {
 	Network                   *chaincfg.Params
 	CommitTxPrevOutputFetcher *txscript.MultiPrevOutFetcher
-	InChannel                 bool
+	ScriptType                int  // 0, TaprootKeySpend; 1, 
+	WitnessScript             []byte
 	Signer                    Signer
 	RevealPrivateKey          *btcec.PrivateKey
 
@@ -140,6 +135,17 @@ func (p *InscribeResv) GetInputs() []string {
 	return result
 }
 
+func (p *InscribeResv) GetChangeOutput() *TxOutput {
+	if p == nil || p.CommitTx == nil || len(p.CommitTx.TxOut) < 2 {
+		return nil
+	}
+	
+	return &indexer.TxOutput{
+		OutPointStr: fmt.Sprintf("%s:%d", p.CommitTx.TxID(), 1),
+		OutValue: *p.CommitTx.TxOut[1],
+	}
+}
+
 const (
 	DefaultTxVersion      = 2
 	DefaultSequenceNum    = 0xfffffffd
@@ -170,7 +176,8 @@ func NewInscriptionTool(network *chaincfg.Params, request *InscriptionRequest) (
 		RevealTxPrevOutputFetcher: txscript.NewMultiPrevOutFetcher(nil),
 		CommitTxPrevOutputList:    request.CommitTxPrevOutputList,
 
-		InChannel:        request.InChannel,
+		ScriptType:       request.ScriptType,
+		WitnessScript:    request.WitnessScript,
 		Signer:           request.Signer,
 		RevealAddr:       request.DestAddress,
 		RevealPrivateKey: privKey,
@@ -393,24 +400,25 @@ func (builder *InscriptionBuilder) buildCommitTxV2(commitTxPrevOutputList PrevOu
 		return err
 	}
 	for _, prevOutput := range commitTxPrevOutputList {
-		txHash, err := chainhash.NewHashFromStr(prevOutput.TxId)
-		if err != nil {
-			return err
-		}
-		outPoint := wire.NewOutPoint(txHash, prevOutput.VOut)
-		txOut := wire.NewTxOut(prevOutput.Amount, prevOutput.PkScript)
+		outPoint := prevOutput.OutPoint() //wire.NewOutPoint(txHash, prevOutput.VOut)
+		txOut := prevOutput.TxOut() //wire.NewTxOut(prevOutput, prevOutput.PkScript)
 		builder.CommitTxPrevOutputFetcher.AddPrevOut(*outPoint, txOut)
 
 		in := wire.NewTxIn(outPoint, nil, nil)
 		in.Sequence = DefaultSequenceNum
 		tx.AddTxIn(in)
-		if builder.InChannel {
+		switch builder.ScriptType {
+		case SCRIPT_TYPE_TAPROOTKEYSPEND:
+			weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		case SCRIPT_TYPE_CHANNEL:
 			weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
-		} else {
+		case SCRIPT_TYPE_PUNISH, SCRIPT_TYPE_SWEEP:
+			weightEstimate.AddNestedP2WSHInputV2(int64(len(builder.WitnessScript)))
+		default:
 			weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
 		}
 
-		totalSenderAmount += prevOutput.Amount
+		totalSenderAmount += prevOutput.Value()
 	}
 
 	tx.AddTxOut(builder.InscriptionTxCtxData.RevealTxPrevOutput)
@@ -566,7 +574,11 @@ func (builder *InscriptionBuilder) CalculateFee() (int64, int64) {
 func Inscribe(network *chaincfg.Params, request *InscriptionRequest, resvId int64) (*InscribeResv, error) {
 	tool, err := NewInscriptionTool(network, request)
 	if err != nil {
-		return nil, err
+		resv := &InscribeResv{
+			CommitTxFee: tool.MustCommitTxFee,
+			RevealTxFee: tool.MustRevealTxFee,
+		}
+		return resv, err
 	}
 	
 	if request.Signer != nil {

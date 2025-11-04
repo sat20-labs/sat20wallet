@@ -127,6 +127,13 @@ type RemoteSignMoreData_Contract struct {
 	Action            string        `json:"action"`
 	MoreData          []byte        `json:"more"` // 有时候Tx中无法放入足够数据
 }
+type RemoteSignMoreData_Sweep struct {
+	Tx                []*TxSignInfo `json:"tx1"`
+	ClientPubKey      []byte        `json:"clientPubkey"`
+	Witness           []byte        `json:"witness"`
+	Action            string        `json:"action"`
+	MoreData          []byte        `json:"more"` // 有时候Tx中无法放入足够数据
+}
 type RemoteSignMoreData_Ascend struct {
 	Tx          *TxSignInfo `json:"tx1"`
 	LocalPubKey []byte      `json:"pubkey"`
