@@ -5225,6 +5225,78 @@ func (p *SwapContractRuntime) profit() error {
 	return nil
 }
 
+func ParseInscribeInfo(txSignInfo []*wwire.TxSignInfo) ([]*InscribeInfo, map[string]*TxOutput, error) {
+	var inscribes []*InscribeInfo
+	preOutputs := make(map[string]*TxOutput)
+	for _, txInfo := range txSignInfo {
+		switch txInfo.Reason {
+		case "commit":
+			// moredata: transfer body, reveal private key 
+			if len(txInfo.MoreData) == 0 {
+				return nil, nil, fmt.Errorf("should provide more data")
+			}
+			address, assetName, amt, feeRate, privateKey, err := ParseInscribeMoreData(txInfo.MoreData)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if !txInfo.L1Tx {
+				return nil, nil,fmt.Errorf("should be a L1 tx")
+			}
+			tx, err := DecodeMsgTx(txInfo.Tx)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			inscribes = append(inscribes, &InscribeInfo{
+				CommitTx: tx,
+				RemoteSig: txInfo.LocalSigs,
+				DestAddr: address,
+				AssetName: assetName,
+				Amt: amt,
+				FeeRate: feeRate,
+				RevealPrivateKey: privateKey,
+			})
+		case "reveal":
+			// 一个commit后面必须跟着reveal
+			inscribe := inscribes[len(inscribes)-1]
+			if inscribe == nil || inscribe.CommitTx == nil {
+				return nil, nil, fmt.Errorf("can't find commit tx")
+			}
+			if inscribe.RevealTx != nil {
+				return nil, nil, fmt.Errorf("reveal tx is set")
+			}
+			if !txInfo.L1Tx {
+				return nil, nil, fmt.Errorf("should be a L1 tx")
+			}
+			tx, err := DecodeMsgTx(txInfo.Tx)
+			if err != nil {
+				return nil, nil, err
+			}
+			inscribe.RevealTx = tx
+
+			utxo := fmt.Sprintf("%s:0", tx.TxID())
+			assetInfo := indexer.AssetInfo{
+				Name: *inscribe.AssetName,
+				Amount: *inscribe.Amt,
+				BindingSat: 0,
+			}
+			preOutputs[utxo] = &indexer.TxOutput{
+				UtxoId: INVALID_ID,
+				OutPointStr: utxo,
+				OutValue: *tx.TxOut[0],
+				Assets: indexer.TxAssets{assetInfo},
+				Offsets: map[indexer.AssetName]indexer.AssetOffsets{
+					*inscribe.AssetName: {{Start:0, End:1}},
+				},
+				SatBindingMap: map[int64]*indexer.AssetInfo{
+					0: &assetInfo,
+				},
+			}
+		}
+	}
+	return inscribes, preOutputs, nil
+}
 
 func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, error) {
 
@@ -5256,21 +5328,12 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 			// 如果失败，可能走普通转账的deposit，尝试走下面的流程
 		}
 
-		type inscribeInfo struct {
-			commitTx *wire.MsgTx
-			revealTx *wire.MsgTx
-			remoteSig [][]byte
-			destAddr string
-			assetName *indexer.AssetName
-			amt *Decimal
-			feeRate int64
-			revealPrivateKey []byte
-		}
-
 		var dealInfo *DealInfo
 		var transcendTx *swire.MsgTx
-		var inscribes []*inscribeInfo
-		preOutputs := make(map[string]*TxOutput)
+		inscribes, preOutputs, err := ParseInscribeInfo(req.Tx)
+		if err != nil {
+			return nil, err
+		}
 		for _, txInfo := range req.Tx {
 			switch txInfo.Reason {
 			case "ascend", "descend":
@@ -5282,70 +5345,9 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 					return nil, err
 				}
 			
-			case "commit":
-				// moredata: transfer body, reveal private key 
-				if len(txInfo.MoreData) == 0 {
-					return nil, fmt.Errorf("should provide more data")
-				}
-				address, assetName, amt, feeRate, privateKey, err := ParseInscribeMoreData(txInfo.MoreData)
-				if err != nil {
-					return nil, err
-				}
-
-				if !txInfo.L1Tx {
-					return nil, fmt.Errorf("should be a L1 tx")
-				}
-				tx, err := DecodeMsgTx(txInfo.Tx)
-				if err != nil {
-					return nil, err
-				}
-
-				inscribes = append(inscribes, &inscribeInfo{
-					commitTx: tx,
-					remoteSig: txInfo.LocalSigs,
-					destAddr: address,
-					assetName: assetName,
-					amt: amt,
-					feeRate: feeRate,
-					revealPrivateKey: privateKey,
-				})
-			case "reveal":
-				// 一个commit后面必须跟着reveal
-				inscribe := inscribes[len(inscribes)-1]
-				if inscribe == nil || inscribe.commitTx == nil {
-					return nil, fmt.Errorf("can't find commit tx")
-				}
-				if inscribe.revealTx != nil {
-					return nil, fmt.Errorf("reveal tx is set")
-				}
-				if !txInfo.L1Tx {
-					return nil, fmt.Errorf("should be a L1 tx")
-				}
-				tx, err := DecodeMsgTx(txInfo.Tx)
-				if err != nil {
-					return nil, err
-				}
-				inscribe.revealTx = tx
-
-				utxo := fmt.Sprintf("%s:0", tx.TxID())
-				assetInfo := indexer.AssetInfo{
-					Name: *inscribe.assetName,
-					Amount: *inscribe.amt,
-					BindingSat: 0,
-				}
-				preOutputs[utxo] = &indexer.TxOutput{
-					UtxoId: INVALID_ID,
-					OutPointStr: utxo,
-					OutValue: *tx.TxOut[0],
-					Assets: indexer.TxAssets{assetInfo},
-					Offsets: map[indexer.AssetName]indexer.AssetOffsets{
-						*inscribe.assetName: {{Start:0, End:1}},
-					},
-					SatBindingMap: map[int64]*indexer.AssetInfo{
-						0: &assetInfo,
-					},
-				}
-
+			case "commit", "reveal":
+				// ParseInscribeInfo
+	
 			case "": // main tx
 				if txInfo.L1Tx {
 					tx, err := DecodeMsgTx(txInfo.Tx)
@@ -5514,33 +5516,33 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 			}
 
 			for _, insc := range inscribes {
-				dest := dealInfo.SendInfo[insc.destAddr]
-				if dest.AssetName.String() != insc.assetName.String() {
+				dest := dealInfo.SendInfo[insc.DestAddr]
+				if dest.AssetName.String() != insc.AssetName.String() {
 					return nil, fmt.Errorf("inscribe: different asset name, expected %s but %s",
-				 		dest.AssetName.String(), insc.assetName.String())
+				 		dest.AssetName.String(), insc.AssetName.String())
 				}
-				if dest.AssetAmt.Cmp(insc.amt) != 0 {
+				if dest.AssetAmt.Cmp(insc.Amt) != 0 {
 					return nil, fmt.Errorf("inscribe: different asset amt, expected %s but %s",
-				 		dest.AssetAmt.String(), insc.amt )
+				 		dest.AssetAmt.String(), insc.Amt )
 				}
 
 				inputs := make([]string, 0)
-				for _, txIn := range insc.commitTx.TxIn {
+				for _, txIn := range insc.CommitTx.TxIn {
 					inputs = append(inputs, txIn.PreviousOutPoint.String())
 				}
 				insc2, err := p.stp.GetWalletMgr().MintTransfer_brc20(p.ChannelAddr,
-					insc.destAddr, insc.assetName, insc.amt, insc.feeRate, inputs, true, insc.revealPrivateKey, true, false, false)
+					insc.DestAddr, insc.AssetName, insc.Amt, insc.FeeRate, inputs, true, insc.RevealPrivateKey, true, false, false)
 				if err != nil {
 					return nil, fmt.Errorf("can't regenerate inscribe info from request: %v", insc)
 				}
-				if !CompareMsgTx(insc2.CommitTx, insc.commitTx) {
+				if !CompareMsgTx(insc2.CommitTx, insc.CommitTx) {
 					return nil, fmt.Errorf("commit tx different")
 				}
-				if !CompareMsgTx(insc2.RevealTx, insc.revealTx) {
+				if !CompareMsgTx(insc2.RevealTx, insc.RevealTx) {
 					return nil, fmt.Errorf("reveal tx different")
 				}
 				// reveal的输出是组成主交易的输入之一，其对应的输出前面已经检查
-				utxo := fmt.Sprintf("%s:0", insc.revealTx.TxID())
+				utxo := fmt.Sprintf("%s:0", insc.RevealTx.TxID())
 				_, ok := preOutMap[utxo]
 				if !ok {
 					return nil, fmt.Errorf("reveal output %s is not in main tx", utxo)

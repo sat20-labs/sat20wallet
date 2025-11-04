@@ -124,6 +124,17 @@ type InscribeResv struct {
 	CommitTxPrevOutputFetcher *txscript.MultiPrevOutFetcher `json:"commitTxPrevFetcher"`
 }
 
+type InscribeInfo struct {
+	CommitTx *wire.MsgTx
+	RevealTx *wire.MsgTx
+	RemoteSig [][]byte
+	DestAddr string
+	AssetName *indexer.AssetName
+	Amt *Decimal
+	FeeRate int64
+	RevealPrivateKey []byte
+}
+
 func (p *InscribeResv) GetInputs() []string {
 	if p == nil || p.CommitTx == nil {
 		return nil
