@@ -886,7 +886,7 @@ func mintTicker(stp ContractManager, resv ContractDeployResvIF, param any) (any,
 						contract.MaxSupply, defaultUtxos, resv.GetFeeRate())
 				} else {
 					mintResv, err = stp.GetWalletMgr().MintAsset_brc20(contract.Address(), &contract.AssetName,
-						contract.MaxSupply, defaultUtxos, resv.GetFeeRate())
+						indexer.NewDefaultDecimal(contract.MaxSupply), defaultUtxos, resv.GetFeeRate())
 				}
 				if err != nil {
 					Log.Errorf("mintAsset %s faied, %v", contract.AssetName, err)

@@ -2,7 +2,9 @@ package wallet
 
 import (
 	"fmt"
+	"math"
 	"math/big"
+	"sort"
 
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/txscript"
@@ -1620,42 +1622,142 @@ func (p *Manager) BuildBatchSendTx_runes(destAddr string,
 	return tx, prevFetcher, feeValue - feeChange, nil
 }
 
+// FindClosestSubset 寻找总和最接近 target 的子集
+func FindClosestSubset(outputs []*TxOutput, assetName *indexer.AssetName, target *Decimal) ([]*TxOutput, *Decimal) {
+	n := len(outputs)
+	bestDiff := indexer.NewDecimal(math.MaxInt64, target.Precision)
+	var bestSum *Decimal
+	var bestSubset []*TxOutput
+
+	var dfs func(index int, currentSum *Decimal, subset []*TxOutput)
+	dfs = func(index int, currentSum *Decimal, subset []*TxOutput) {
+		if index == n || currentSum.Cmp(target) == 0 {
+			diff := target.Sub(currentSum)
+			if diff.Cmp(bestDiff) < 0 {
+				bestDiff = diff
+				bestSum = currentSum
+				bestSubset = append([]*TxOutput{}, subset...)
+			}
+			return
+		}
+
+		// 剪枝：若当前和已经远大于目标且为正数，可以提前返回
+		if currentSum.Cmp(target.Add(bestDiff)) > 0 {
+			return
+		}
+
+		// 不选当前元素
+		dfs(index+1, currentSum, subset)
+
+		// 选当前元素
+		curr := outputs[index]
+		amt := curr.GetAsset(assetName)
+		dfs(index+1, currentSum.Add(amt), append(subset, outputs[index]))
+	}
+
+	// 为了让剪枝更有效，可以先排序（小到大）
+	sort.Slice(outputs, func(i, j int) bool {
+		return outputs[i].GetAsset(assetName).Cmp(outputs[j].GetAsset(assetName)) < 0
+	})
+
+	dfs(0, nil, nil)
+	return bestSubset, bestSum
+}
+
 // 需要提前确定地址上有足够的brc20
+// 1. 需要在可选的transfer铭文上凑齐刚好等于所需数量的utxo，
+// 2. 如果没有，也需要检查是否有足够untransferable数量用于铸造
+// 3. 最好的方式，是钱包不要有提前铸造的transfer铭文
 func (p *Manager) SelectUtxosForBRC20(srcAddress string, excludedUtxoMap map[string]bool, 
-	assetName *indexer.AssetName, amt *Decimal,
+	assetName *indexer.AssetName, totalAmt, amt *Decimal,
 	feeRate int64, weightEstimate *utils.TxWeightEstimator, 
 	excludeRecentBlock, inChannel bool) ([]*TxOutput, *InscribeResv, int64, error) {
-	selected, totalAsset, total, err := p.SelectUtxosForAsset(
-		srcAddress, excludedUtxoMap,
-		assetName, amt, weightEstimate, excludeRecentBlock, inChannel)
-	if err == nil {
-		if totalAsset.Cmp(amt) != 0 {
-			// 有多的，去掉最后一个，重新铸造一个
-			last := selected[len(selected)-1]
-			totalAsset = totalAsset.Sub(last.GetAsset(assetName))
-			selected = selected[0:len(selected)-1]
+	// selected, totalAsset, total, err := p.SelectUtxosForAsset(
+	// 	srcAddress, excludedUtxoMap,
+	// 	assetName, amt, weightEstimate, excludeRecentBlock, inChannel)
+	// if err == nil {
+	// 	if totalAsset.Cmp(amt) > 0 {
+	// 		// 有多的，去掉最后一个，重新铸造一个
+	// 		last := selected[len(selected)-1]
+	// 		totalAsset = totalAsset.Sub(last.GetAsset(assetName))
+	// 		selected = selected[0:len(selected)-1]
+	// 		total -= last.Value()
+	// 	}
+	// } else {
+	// 	// 没有，或者不足
+	// 	// if err.Error() == ERR_NO_ASSETS {
+	// 	// 	// 完全没有
+	// 	// } else {
+	// 	// 	// 有部分
+	// 	// }
+	// }
+
+	utxos := p.l1IndexerClient.GetUtxoListWithTicker(srcAddress, assetName)
+	// 是否有恰好相同的transfer铭文
+	var selected []*TxOutput
+	var selectedAmt  *Decimal
+	var totalTransfer *Decimal
+	var total int64
+	for _, u := range utxos {
+		output := u.ToTxOutput()
+		assetAmt := output.GetAsset(assetName)
+		totalTransfer = totalTransfer.Add(assetAmt)
+
+		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
+			continue
 		}
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+			continue
+		}
+		if excludeRecentBlock {
+			if p.IsRecentBlockUtxo(u.UtxoId) {
+				continue
+			}
+		}
+		if HasMultiAsset(output) {
+			continue
+		}
+
+		if selectedAmt.Add(assetAmt).Cmp(amt) <= 0 {
+			RemoveNFTAsset(output)
+			if inChannel {
+				weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+			} else {
+				weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+			}
+			total += output.OutValue.Value
+			selectedAmt = selectedAmt.Add(assetAmt)
+			selected = append(selected, output)
+		}
+	}
+
+	if selectedAmt.Cmp(amt) == 0 {
+		return selected, nil, total, nil
+	}
+
+	// 没有找到合适的，铸造一个合适的
+	mintable := indexer.DecimalSub(totalAmt, totalTransfer)
+	wantToMint := indexer.DecimalSub(amt, selectedAmt)
+	if mintable.Cmp(wantToMint) < 0 {
+		return nil, nil, 0, fmt.Errorf("can't mint %s for asset %s", amt.String(), assetName.String())
+	}
+
+	// 再铸造一个，加入selected中，还没有广播，但锁定输入
+	inscribe, err := p.MintTransfer_brc20(srcAddress, srcAddress, assetName, 
+		wantToMint, feeRate, nil, false, nil, inChannel, false, true)
+	if err != nil {
+		Log.Errorf("MintTransfer_brc20 failed, %v", err)
+		return nil, nil, 0, err
+	}
+	output := GenerateBRC20TransferOutput(inscribe.RevealTx, assetName, wantToMint)
+	selected = append(selected, output)
+	total += output.Value()
+	if inChannel {
+		weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
 	} else {
-		// 没有，或者不足
-		// if err.Error() == ERR_NO_ASSETS {
-		// 	// 完全没有
-		// } else {
-		// 	// 有部分
-		// }
+		weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
 	}
-	var inscribe *InscribeResv
-	wantToMint :=  indexer.DecimalSub(amt, totalAsset)
-	if wantToMint.Sign() > 0 {
-		// 再铸造一个，加入selected中，还没有广播，但锁定输入
-		inscribe, err = p.MintTransfer_brc20(srcAddress, srcAddress, assetName, 
-			wantToMint, feeRate, nil, false, nil, inChannel, false, true)
-		if err != nil {
-			Log.Errorf("MintTransfer_brc20 failed, %v", err)
-			return nil, nil, 0, err
-		}
-		output := GenerateBRC20TransferOutput(inscribe.RevealTx, assetName, wantToMint)
-		selected = append(selected, output)
-	}
+	
 	return selected, inscribe, total, nil
 }
 
@@ -1690,7 +1792,7 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 	// 选择合适的utxo
 	var weightEstimate utils.TxWeightEstimator
 	selected, inscribe, total, err := p.SelectUtxosForBRC20(localAddr, nil, 
-		&name.AssetName, amt, feeRate, &weightEstimate, false, false)
+		&name.AssetName, totalAmt, amt, feeRate, &weightEstimate, false, false)
 	if err != nil {
 		return nil, nil, 0, nil, err
 	}
@@ -2162,7 +2264,7 @@ func (p *Manager) SelectUtxosForPlainSats(
 	return prevFetcher, changePkScript, requiredValue, changeOutput, fee0, nil
 }
 
-// TODO GetUtxoListWithTicker。对于brc20，返回transfer铭文
+// 对于brc20，返回transfer铭文
 func (p *Manager) SelectUtxosForAsset(address string, excludedUtxoMap map[string]bool,
 	assetName *indexer.AssetName, requiredAmt *Decimal,
 	weightEstimate *utils.TxWeightEstimator, excludeRecentBlock, inChannel bool) (
@@ -3459,7 +3561,7 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 		requiredAmt := d.AssetAmt
 
 		selected, inscribe, total, err := p.SelectUtxosForBRC20(localAddr, excludedUtxoMap, 
-			&assetName.AssetName, requiredAmt, feeRate, &weightEstimate, excludeRecentBlock, inChannel)
+			&assetName.AssetName, totalAmt, requiredAmt, feeRate, &weightEstimate, excludeRecentBlock, inChannel)
 		if err != nil {
 			return nil, nil, 0, nil, err
 		}

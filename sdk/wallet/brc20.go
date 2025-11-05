@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
@@ -14,7 +13,7 @@ import (
 
 const CONTENT_DEPLOY_BRC20_BODY_4 string = `{"p":"brc-20","op":"deploy","tick":"%s","max":"%d","lim":"%d","dec":"0"}`
 const CONTENT_DEPLOY_BRC20_BODY_5 string = `{"p":"brc-20","op":"deploy","tick":"%s","max":"%d","lim":"%d","self_mint":"true","dec":"0"}`
-const CONTENT_MINT_BRC20_BODY string = `{"p":"brc-20","op":"mint","tick":"%s","amt":"%d"}`
+const CONTENT_MINT_BRC20_BODY string = `{"p":"brc-20","op":"mint","tick":"%s","amt":"%s"}`
 const CONTENT_MINT_BRC20_TRANSFER_BODY string = `{"p":"brc-20","op":"transfer","tick":"%s","amt":"%s"}`
 
 func (p *Manager) inscribeV2(srcAddr, destAddr string, body string, feeRate int64, 
@@ -120,7 +119,7 @@ func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, feeRate int6
 
 // 需要调用方确保amt<=limit
 func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
-	amt int64, defaultUtxos []string, feeRate int64) (*InscribeResv, error) {
+	amt *Decimal, defaultUtxos []string, feeRate int64) (*InscribeResv, error) {
 
 	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return nil, fmt.Errorf("not brc20")
@@ -130,14 +129,14 @@ func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 		return nil, fmt.Errorf("can't find ticker info %s", assetName.String())
 	}
 
-	limit, err := strconv.ParseInt(tickInfo.Limit, 10, 64)
+	limit, err := indexer.NewDecimalFromString(tickInfo.Limit, tickInfo.Divisibility)
 	if err != nil {
 		return nil, err
 	}
-	if limit < amt {
-		return nil, fmt.Errorf("amt %d biger than limit %d", amt, limit)
+	if limit.Cmp(amt) < 0 {
+		return nil, fmt.Errorf("amt %s biger than limit %s", amt.String(), limit.String())
 	}
-	if amt == 0 {
+	if amt.Sign() == 0 {
 		amt = limit
 	}
 
@@ -151,7 +150,7 @@ func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 		outputs = append(outputs, txOut)
 	}
 
-	body := fmt.Sprintf(CONTENT_MINT_BRC20_BODY, tickInfo.AssetName.Ticker, amt)
+	body := fmt.Sprintf(CONTENT_MINT_BRC20_BODY, tickInfo.AssetName.Ticker, amt.String())
 	return p.inscribeV2("", destAddr, body, feeRate, outputs, false, nil, p.SignTxV2, 0, nil, true)
 }
 
