@@ -2964,18 +2964,19 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 
 	srcAddr := p.wallet.GetAddress()
 	var inscribes []*InscribeResv
+	excluded := make(map[string]bool)
 	switch name.Protocol {
 	case "": // btc
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_btc(srcAddr, nil, dest, feeRate, memo, false, false)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_btc(srcAddr, excluded, dest, feeRate, memo, false, false)
 	case indexer.PROTOCOL_NAME_ORDX:
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_ordx(srcAddr, nil, dest, assetName, feeRate, memo, false, false)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_ordx(srcAddr, excluded, dest, assetName, feeRate, memo, false, false)
 	case indexer.PROTOCOL_NAME_RUNES:
 		if len(memo) != 0 { // TODO 等主网支持多个op_return后再修改
 			return "", 0, fmt.Errorf("do not attach memo when send runes asset")
 		}
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_runes(srcAddr, nil, dest, assetName, feeRate, false, false)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_runes(srcAddr, excluded, dest, assetName, feeRate, false, false)
 	case indexer.PROTOCOL_NAME_BRC20:
-		tx, prevFetcher, fee, inscribes, err = p.BuildBatchSendTxV3_brc20(srcAddr, nil, dest, assetName, feeRate, memo, false, false)
+		tx, prevFetcher, fee, inscribes, err = p.BuildBatchSendTxV3_brc20(srcAddr, excluded, dest, assetName, feeRate, memo, false, false)
 	default:
 		return "", 0, fmt.Errorf("BatchSendAssetsV3 unsupport protocol %s", name.Protocol)
 	}
