@@ -121,7 +121,11 @@ type InscribeResv struct {
 	RevealPrivateKey []byte      `json:"revealPrivateKey"`
 	Body             []byte      `json:"body"`
 	FeeRate          int64       `json:"feeRate"`
-	CommitTxPrevOutputFetcher *txscript.MultiPrevOutFetcher `json:"commitTxPrevFetcher"`
+	commitTxPrevOutputFetcher  *txscript.MultiPrevOutFetcher
+}
+
+func (p *InscribeResv) GetCommitPrevOutputFetcher() txscript.PrevOutputFetcher {
+	return p.commitTxPrevOutputFetcher
 }
 
 type InscribeInfo struct {
@@ -616,7 +620,7 @@ func Inscribe(network *chaincfg.Params, request *InscriptionRequest, resvId int6
 		RevealPrivateKey: tool.RevealPrivateKey.Serialize(),
 		Body:             request.InscriptionData.Body,
 		FeeRate:          request.CommitFeeRate,
-		CommitTxPrevOutputFetcher: tool.CommitTxPrevOutputFetcher,
+		commitTxPrevOutputFetcher: tool.CommitTxPrevOutputFetcher,
 	}, nil
 }
 

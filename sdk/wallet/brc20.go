@@ -325,6 +325,98 @@ func CalcFeeForMintTransfer(inputLen int, srcAddr, destAddr string, scriptType i
 	return insc.CommitTxFee+insc.RevealTxFee+330, nil
 }
 
+func CalcFeeForDeployTicker_brc20(inputLen int, srcAddr, destAddr string, 
+	ticker string, max, lim int64, feeRate int64) (int64, error) {
+	
+	srcPkScript, err := AddrToPkScript(srcAddr, GetChainParam())
+	if err != nil {
+		return 0, err
+	}
+	
+	commitTxPrevOutputList := make([]*PrevOutput, 0)
+	for i := 0; i < inputLen; i++ {
+		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
+			OutPointStr:   fmt.Sprintf("aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:%d", i),
+			OutValue: wire.TxOut{
+				Value:     10000,
+				PkScript:  srcPkScript,
+			},
+		})
+	}
+
+	var body string
+	switch len(ticker) {
+	case 4:
+		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_4, ticker, max, lim)
+	case 5:
+		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_5, ticker, max, lim)
+	default:
+		return 0, fmt.Errorf("invalid ticker length %s", ticker)
+	}
+	request := &InscriptionRequest{
+		CommitTxPrevOutputList: commitTxPrevOutputList,
+		CommitFeeRate:          feeRate,
+		RevealFeeRate:          feeRate,
+		RevealOutValue:         330,
+		InscriptionData:    InscriptionData{
+			ContentType: CONTENT_TYPE,
+			Body:        []byte(body),
+		},
+		DestAddress:            destAddr,
+		ChangeAddress:          srcAddr,
+		ScriptType:             SCRIPT_TYPE_TAPROOTKEYSPEND,
+		Signer:                 nil,
+	}
+
+	insc, err := Inscribe(GetChainParam(), request, 0)
+	if insc == nil {
+		return 0, err
+	}
+	return insc.CommitTxFee+insc.RevealTxFee+330, nil
+}
+
+func CalcFeeForMintAsset_brc20(inputLen int, srcAddr, destAddr string, 
+	assetName *indexer.AssetName, amt *Decimal, feeRate int64) (int64, error) {
+	
+	srcPkScript, err := AddrToPkScript(srcAddr, GetChainParam())
+	if err != nil {
+		return 0, err
+	}
+	
+	commitTxPrevOutputList := make([]*PrevOutput, 0)
+	for i := 0; i < inputLen; i++ {
+		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
+			OutPointStr:   fmt.Sprintf("aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:%d", i),
+			OutValue: wire.TxOut{
+				Value:     10000,
+				PkScript:  srcPkScript,
+			},
+		})
+	}
+
+	body := fmt.Sprintf(CONTENT_MINT_BRC20_BODY, assetName.Ticker, amt.String())
+	request := &InscriptionRequest{
+		CommitTxPrevOutputList: commitTxPrevOutputList,
+		CommitFeeRate:          feeRate,
+		RevealFeeRate:          feeRate,
+		RevealOutValue:         330,
+		InscriptionData:    InscriptionData{
+			ContentType: CONTENT_TYPE,
+			Body:        []byte(body),
+		},
+		DestAddress:            destAddr,
+		ChangeAddress:          srcAddr,
+		ScriptType:             SCRIPT_TYPE_TAPROOTKEYSPEND,
+		Signer:                 nil,
+	}
+
+	insc, err := Inscribe(GetChainParam(), request, 0)
+	if insc == nil {
+		return 0, err
+	}
+	return insc.CommitTxFee+insc.RevealTxFee+330, nil
+}
+
 func GenerateBRC20TransferOutput(revealTx *wire.MsgTx, assetName *indexer.AssetName, amt *Decimal) *indexer.TxOutput {
 	output := indexer.GenerateTxOutput(revealTx, 0)
 	assetInfo := indexer.AssetInfo{

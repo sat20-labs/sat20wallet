@@ -302,13 +302,12 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 
 	case indexer.PROTOCOL_NAME_BRC20: // TODO 需要根据brc20的数据调整
 		// deploy
-		estimatedDeployFee := []int64{325, 385, 445, 505}
+		estimatedDeployFee := []int64{315, 373, 430, 488}
 		total = estimatedDeployFee[feeLen-1]*feeRate + 330
 
 		// mint
-		estimatedMintFee := []int64{310, 370, 430, 490}
-		total += estimatedMintFee[feeLen-1]*feeRate +
-			GetBindingSatNum(indexer.NewDefaultDecimal(p.MaxSupply), assetName.N)
+		estimatedMintFee := []int64{305, 363, 420, 478}
+		total += estimatedMintFee[feeLen-1]*feeRate + 330
 
 		// splicing-in
 		total += CalcFee_SplicingIn(1, feeLen, p.GetAssetName(), feeRate)

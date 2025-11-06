@@ -155,21 +155,40 @@ func TestInscribeTransfer(t *testing.T) {
 }
 
 func TestCalcTransferFee(t *testing.T) {
-	src := "bc1pr0fst3mzyvdkpzatx2cs2cahqwsrnr4nm403kfnv2ec4nys6h5qqt77vxn" // 通道地址
-	dest := "bc1pr0fst3mzyvdkpzatx2cs2cahqwsrnr4nm403kfnv2ec4nys6h5qqt77vxn"
+	src := "tb1p62gjhywssq42tp85erlnvnumkt267ypndrl0f3s4sje578cgr79sekhsua"
+	dest := "tb1qw86hsm7etf4jcqqg556x94s6ska9z0239ahl0tslsuvr5t5kd0nq7vh40m" // channel
 	assetName := &indexer.AssetName{
 		Protocol: indexer.PROTOCOL_NAME_BRC20,
 		Type: indexer.ASSET_TYPE_FT,
 		Ticker: "ordi",
 	}
 	amt := indexer.NewDecimal(100000, 18)
-	
-	for i := 1; i < 4; i++ {
-		fee, err := CalcFeeForMintTransfer(i, src, dest, SCRIPT_TYPE_SWEEP, assetName, amt, 1)
+
+	fmt.Printf("deploy\n")
+	for i := 1; i < 5; i++ {
+		fee, err := CalcFeeForDeployTicker_brc20(i, src, dest, assetName.Ticker, 10000000000, 10000000000, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Printf("%d: fee = %d\n", i, fee)
+		fmt.Printf("%d: fee = %d\n", i, fee-330)
+	}
+
+	fmt.Printf("\nmint\n")
+	for i := 1; i < 5; i++ {
+		fee, err := CalcFeeForMintAsset_brc20(i, src, dest, assetName, amt, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("%d: fee = %d\n", i, fee-330)
+	}
+
+	fmt.Printf("\nmint-transfer\n")
+	for i := 1; i < 5; i++ {
+		fee, err := CalcFeeForMintTransfer(i, src, dest, SCRIPT_TYPE_CHANNEL, assetName, amt, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("%d: fee = %d\n", i, fee-330)
 	}
 }
 

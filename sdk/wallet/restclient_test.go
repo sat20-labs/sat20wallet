@@ -1030,6 +1030,7 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 					if v.Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
 						asset.Offsets = []*indexer.OffsetRange{{Start:0, End:1}}
 						asset.OffsetToAmts = []*indexer.OffsetToAmount{{Offset: 0, Amount: v.Amount.String()}}
+						asset.Invalid = (p.network.utxoUsed[utxo] != "")
 					}
 					utxoAssets = append(utxoAssets, &asset)
 				}
