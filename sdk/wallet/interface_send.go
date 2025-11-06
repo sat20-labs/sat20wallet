@@ -1797,7 +1797,7 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 		return nil, nil, 0, nil, err
 	}
 	defer func() {
-		if inscribe.Status != RS_INSCRIBING_START {
+		if inscribe != nil && inscribe.Status != RS_INSCRIBING_START {
 			p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)
 		}
 	}()
@@ -1863,7 +1863,9 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 		}
 		tx.AddTxOut(txOut4)
 	}
-	inscribe.Status = RS_INSCRIBING_START
+	if inscribe != nil {
+		inscribe.Status = RS_INSCRIBING_START
+	}
 
 	return tx, prevFetcher, feeValue - feeChange, inscribe, nil
 }
