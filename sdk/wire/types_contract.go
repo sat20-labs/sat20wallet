@@ -112,6 +112,7 @@ type TxSignInfo struct {
 	L1Tx      bool     `json:"l1Tx"`
 	LocalSigs [][]byte `json:"sigs"`
 	Reason	  string   `json:"reason"`
+	NotSign	  bool     `json:"notSign"`
 	MoreData  []byte   `json:"more"`
 }
 

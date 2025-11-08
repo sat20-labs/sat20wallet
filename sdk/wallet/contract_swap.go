@@ -3169,7 +3169,7 @@ func (p *SwapContractRuntime) DisableItem(input InvokeHistoryItem) {
 type DealInfo struct {
 	SendInfo          map[string]*SendAssetInfo // deposit时，key是item的InUtxo，其他情况是address
 	SendTxIdMap       map[string]string         // depoist时使用，key是item的InUtxo
-	PreOutputs        []*TxOutput              // 主交易的输入
+	PreOutputs        []*TxOutput              // 主网交易的输入，也可能是前一个交易的输出
 	AssetName         *swire.AssetName
 	TotalAmt          *Decimal // 输出总和
 	TotalValue        int64    // 输出总和
@@ -3716,6 +3716,7 @@ func (p *ContractRuntimeBase) notifyAndSendDepositAnchorTxs(anchorTxs []*swire.M
 			L1Tx:      false,
 			LocalSigs: nil,
 			Reason:    "ascend",
+			NotSign:   true,
 		})
 	}
 
@@ -5547,6 +5548,7 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 						}
 					}
 					inputs = append(inputs, output)
+					dealInfo.PreOutputs = append(dealInfo.PreOutputs, output)
 				}
 				insc2, err := p.stp.GetWalletMgr().MintTransferV2_brc20(p.ChannelAddr,
 					p.ChannelAddr, insc.AssetName, insc.Amt, insc.FeeRate, inputs, true, insc.RevealPrivateKey, true, false, false)
