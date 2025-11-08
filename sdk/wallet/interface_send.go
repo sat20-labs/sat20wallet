@@ -1739,7 +1739,8 @@ func (p *Manager) SelectUtxosForBRC20(srcAddress string, excludedUtxoMap map[str
 	mintable := indexer.DecimalSub(totalAmt, totalTransfer)
 	wantToMint := indexer.DecimalSub(amt, selectedAmt)
 	if mintable.Cmp(wantToMint) < 0 {
-		return nil, nil, 0, fmt.Errorf("can't mint %s for asset %s", amt.String(), assetName.String())
+		return nil, nil, 0, fmt.Errorf("can't mint %s for asset %s, want to mint %s, but only %s", 
+			amt.String(), assetName.String(), wantToMint.String(), mintable.String())
 	}
 
 	// 再铸造一个，加入selected中，还没有广播，但锁定输入
@@ -3568,7 +3569,9 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 		if err != nil {
 			return nil, nil, 0, nil, err
 		}
-		inscribes = append(inscribes, inscribe)
+		if inscribe != nil {
+			inscribes = append(inscribes, inscribe)
+		}
 
 		totalInputSats += total
 		for _, output := range selected {

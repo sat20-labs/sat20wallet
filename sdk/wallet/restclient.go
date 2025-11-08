@@ -68,9 +68,7 @@ type IndexerRPCClient interface {
 	GetBlock(blockHash string) (string, error)
 	GetAssetSummaryWithAddress(address string) *indexerwire.AssetSummary
 	GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexerwire.TxOutputInfo
-	GetPlainUtxoList(address string) []*indexerwire.PlainUtxo
 	GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error)
-	GetAllUtxosWithAddress(address string) ([]*indexerwire.PlainUtxo, []*indexerwire.PlainUtxo, error)
 	GetFeeRate() int64
 	GetExistingUtxos(utxos []string) ([]string, error)
 	TestRawTx(signedTxs []string) error
@@ -443,31 +441,6 @@ func (p *IndexerClient) GetUtxoListWithTicker(address string, ticker *swire.Asse
 	return result.Data
 }
 
-func (p *IndexerClient) GetPlainUtxoList(address string) []*indexerwire.PlainUtxo {
-	url := p.GetUrl("/utxo/address/" + address + "/0")
-	rsp, err := p.Http.SendGetRequest(url)
-	if err != nil {
-		Log.Errorf("SendGetRequest %v failed. %v", url, err)
-		return nil
-	}
-
-	
-
-	// Unmarshal the response.
-	var result indexerwire.PlainUtxosResp
-	if err := json.Unmarshal(rsp, &result); err != nil {
-		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
-		return nil
-	}
-
-	if result.Code != 0 {
-		Log.Errorf("GetPlainUtxoList response message %s", result.Msg)
-		return nil
-	}
-
-	return result.Data
-}
-
 func (p *IndexerClient) GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error) {
 	pkScript, err := GetPkScriptFromAddress(address)
 	if err != nil {
@@ -475,7 +448,7 @@ func (p *IndexerClient) GetUtxosWithAddress(address string) (map[string]*wire.Tx
 	}
 
 	result := make(map[string]*wire.TxOut)
-	utxos1, utxos2, err := p.GetAllUtxosWithAddress(address)
+	utxos1, utxos2, err := p.getAllUtxosWithAddress(address)
 	if err != nil {
 		return nil, err
 	}
@@ -489,7 +462,7 @@ func (p *IndexerClient) GetUtxosWithAddress(address string) (map[string]*wire.Tx
 	return result, nil
 }
 
-func (p *IndexerClient) GetAllUtxosWithAddress(address string) ([]*indexerwire.PlainUtxo, []*indexerwire.PlainUtxo, error) {
+func (p *IndexerClient) getAllUtxosWithAddress(address string) ([]*indexerwire.PlainUtxo, []*indexerwire.PlainUtxo, error) {
 	url := p.GetUrl("/allutxos/address/" + address)
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
@@ -507,7 +480,7 @@ func (p *IndexerClient) GetAllUtxosWithAddress(address string) ([]*indexerwire.P
 	}
 
 	if result.Code != 0 {
-		Log.Errorf("GetAllUtxosWithAddress response message %s", result.Msg)
+		Log.Errorf("getAllUtxosWithAddress response message %s", result.Msg)
 		return nil, nil, fmt.Errorf("%s", result.Msg)
 	}
 

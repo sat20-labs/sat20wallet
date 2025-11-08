@@ -2339,7 +2339,7 @@ func (p *SwapContractRuntime) Invoke(invokeTx *InvokeTx, height int) (InvokeHist
 	case INVOKE_API_DEPOSIT: // 主网没有调用参数时的默认动作
 		// 检查交换资产的数据
 		output := invokeTx.TxOutput
-		assetAmt := output.GetAsset(p.GetAssetName())
+		assetAmt, _ := output.GetAssetV2(p.GetAssetName())
 
 		// 到这里，客观条件都满足了，如果还不能符合铸造条件，那就需要退款
 		bValid := true
