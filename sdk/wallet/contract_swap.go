@@ -5248,6 +5248,11 @@ func ParseInscribeInfo(txSignInfo []*wwire.TxSignInfo) ([]*InscribeInfo, map[str
 				return nil, nil, err
 			}
 
+			if len(tx.TxOut) == 2 {
+				output := indexer.GenerateTxOutput(tx, 1)
+				preOutputs[output.OutPointStr] = output
+			}
+
 			inscribes = append(inscribes, &InscribeInfo{
 				CommitTx: tx,
 				RemoteSig: txInfo.LocalSigs,
@@ -5259,6 +5264,9 @@ func ParseInscribeInfo(txSignInfo []*wwire.TxSignInfo) ([]*InscribeInfo, map[str
 			})
 		case "reveal":
 			// 一个commit后面必须跟着reveal
+			if len(inscribes) == 0 {
+				return nil, nil, fmt.Errorf("no commit tx")
+			}
 			inscribe := inscribes[len(inscribes)-1]
 			if inscribe == nil || inscribe.CommitTx == nil {
 				return nil, nil, fmt.Errorf("can't find commit tx")
@@ -5292,6 +5300,7 @@ func ParseInscribeInfo(txSignInfo []*wwire.TxSignInfo) ([]*InscribeInfo, map[str
 				SatBindingMap: map[int64]*indexer.AssetInfo{
 					0: &assetInfo,
 				},
+				Invalids: make(map[indexer.AssetName]bool),
 			}
 		}
 	}
@@ -5526,12 +5535,21 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 				 		dest.AssetAmt.String(), insc.Amt )
 				}
 
-				inputs := make([]string, 0)
+				inputs := make([]*TxOutput, 0)
 				for _, txIn := range insc.CommitTx.TxIn {
-					inputs = append(inputs, txIn.PreviousOutPoint.String())
+					utxo := txIn.PreviousOutPoint.String()
+					output, ok := preOutputs[utxo]
+					if !ok {
+						output, err = p.stp.GetIndexerClient().GetTxOutput(utxo)
+						if err != nil {
+							Log.Errorf("inscribe: GetTxOutFromRawTx %s failed, %v", utxo, err)
+							return nil, err
+						}
+					}
+					inputs = append(inputs, output)
 				}
-				insc2, err := p.stp.GetWalletMgr().MintTransfer_brc20(p.ChannelAddr,
-					insc.DestAddr, insc.AssetName, insc.Amt, insc.FeeRate, inputs, true, insc.RevealPrivateKey, true, false, false)
+				insc2, err := p.stp.GetWalletMgr().MintTransferV2_brc20(p.ChannelAddr,
+					p.ChannelAddr, insc.AssetName, insc.Amt, insc.FeeRate, inputs, true, insc.RevealPrivateKey, true, false, false)
 				if err != nil {
 					return nil, fmt.Errorf("can't regenerate inscribe info from request: %v", insc)
 				}

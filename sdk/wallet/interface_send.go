@@ -1668,31 +1668,12 @@ func FindClosestSubset(outputs []*TxOutput, assetName *indexer.AssetName, target
 // 1. 需要在可选的transfer铭文上凑齐刚好等于所需数量的utxo，
 // 2. 如果没有，也需要检查是否有足够untransferable数量用于铸造
 // 3. 最好的方式，是钱包不要有提前铸造的transfer铭文
-func (p *Manager) SelectUtxosForBRC20(srcAddress string, excludedUtxoMap map[string]bool, 
+func (p *Manager) SelectUtxosForBRC20(utxomgr *UtxoMgr, excludedUtxoMap map[string]bool, 
 	assetName *indexer.AssetName, totalAmt, amt *Decimal,
 	feeRate int64, weightEstimate *utils.TxWeightEstimator, 
 	excludeRecentBlock, inChannel bool) ([]*TxOutput, *InscribeResv, int64, error) {
-	// selected, totalAsset, total, err := p.SelectUtxosForAsset(
-	// 	srcAddress, excludedUtxoMap,
-	// 	assetName, amt, weightEstimate, excludeRecentBlock, inChannel)
-	// if err == nil {
-	// 	if totalAsset.Cmp(amt) > 0 {
-	// 		// 有多的，去掉最后一个，重新铸造一个
-	// 		last := selected[len(selected)-1]
-	// 		totalAsset = totalAsset.Sub(last.GetAsset(assetName))
-	// 		selected = selected[0:len(selected)-1]
-	// 		total -= last.Value()
-	// 	}
-	// } else {
-	// 	// 没有，或者不足
-	// 	// if err.Error() == ERR_NO_ASSETS {
-	// 	// 	// 完全没有
-	// 	// } else {
-	// 	// 	// 有部分
-	// 	// }
-	// }
-
-	utxos := p.l1IndexerClient.GetUtxoListWithTicker(srcAddress, assetName)
+	
+	utxos := utxomgr.GetUtxoListWithTicker(assetName)
 	// 是否有恰好相同的transfer铭文
 	var selected []*TxOutput
 	var selectedAmt  *Decimal
@@ -1732,6 +1713,7 @@ func (p *Manager) SelectUtxosForBRC20(srcAddress string, excludedUtxoMap map[str
 	}
 
 	if selectedAmt.Cmp(amt) == 0 {
+		utxomgr.RemoveOutputs(selected)
 		return selected, nil, total, nil
 	}
 
@@ -1744,7 +1726,7 @@ func (p *Manager) SelectUtxosForBRC20(srcAddress string, excludedUtxoMap map[str
 	}
 
 	// 再铸造一个，加入selected中，还没有广播，但锁定输入
-	inscribe, err := p.MintTransfer_brc20(srcAddress, srcAddress, assetName, 
+	inscribe, err := p.MintTransferV3_brc20(utxomgr, utxomgr.GetAddress(), assetName, 
 		wantToMint, feeRate, nil, false, nil, inChannel, false, true)
 	if err != nil {
 		Log.Errorf("MintTransfer_brc20 failed, %v", err)
@@ -1757,6 +1739,10 @@ func (p *Manager) SelectUtxosForBRC20(srcAddress string, excludedUtxoMap map[str
 		weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
 	} else {
 		weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+	}
+	if len(inscribe.CommitTx.TxOut) == 2 {
+		output := indexer.GenerateTxOutput(inscribe.CommitTx, 1)
+		utxomgr.AddOutput(&indexer.ASSET_PLAIN_SAT, output.ToAssetsInUtxo())
 	}
 	
 	return selected, inscribe, total, nil
@@ -1785,6 +1771,7 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 
 	// 先确定总数够不够
 	localAddr := p.wallet.GetAddress()
+	utxomgr := NewUtxoMgr(localAddr, p.l1IndexerClient)
 	totalAmt := p.GetAssetBalance(localAddr, &name.AssetName)
 	if totalAmt.Cmp(amt) < 0 {
 		return nil, nil, 0, nil, fmt.Errorf("no enough asset, required %s but only %s", amt.String(), totalAmt.String())
@@ -1792,7 +1779,7 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 
 	// 选择合适的utxo
 	var weightEstimate utils.TxWeightEstimator
-	selected, inscribe, total, err := p.SelectUtxosForBRC20(localAddr, nil, 
+	selected, inscribe, total, err := p.SelectUtxosForBRC20(utxomgr, nil, 
 		&name.AssetName, totalAmt, amt, feeRate, &weightEstimate, false, false)
 	if err != nil {
 		return nil, nil, 0, nil, err
@@ -1827,8 +1814,8 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 	if feeValue < fee0 {
 		// 增加fee
 		var selected []*TxOutput
-		selected, feeValue, err = p.SelectUtxosForFee(
-			localAddr, nil, feeValue,
+		selected, feeValue, err = p.SelectUtxosForFeeV3(
+			utxomgr, nil, feeValue,
 			feeRate, &weightEstimate, false, false)
 		if err != nil {
 			return nil, nil, 0, nil, err
@@ -2365,9 +2352,23 @@ func (p *Manager) SelectUtxosForAsset(address string, excludedUtxoMap map[string
 	return selected, totalAsset, total, nil
 }
 
+
+// 根据tx的实际需求（weightEstimate） 选择utxo
 // 选择合适大小的utxo，而不是从最大的utxo选择
 func (p *Manager) SelectUtxosForFee(
 	address string, excludedUtxoMap map[string]bool,
+	feeValue int64, feeRate int64,
+	weightEstimate *utils.TxWeightEstimator,
+	excludeRecentBlock, inChannel bool) ([]*TxOutput, int64, error) {
+
+	return p.SelectUtxosForFeeV3(NewUtxoMgr(address, p.l1IndexerClient), excludedUtxoMap,
+		feeValue, feeRate, weightEstimate, excludeRecentBlock, inChannel)
+}
+
+// 根据tx的实际需求（weightEstimate） 选择utxo
+// 选择合适大小的utxo，而不是从最大的utxo选择
+func (p *Manager) SelectUtxosForFeeV3(
+	utxoMgr *UtxoMgr, excludedUtxoMap map[string]bool,
 	feeValue int64, feeRate int64,
 	weightEstimate *utils.TxWeightEstimator,
 	excludeRecentBlock, inChannel bool) ([]*TxOutput, int64, error) {
@@ -2380,7 +2381,7 @@ func (p *Manager) SelectUtxosForFee(
 		return nil, feeValue, nil
 	}
 
-	feeOutputs := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
+	feeOutputs := utxoMgr.GetUtxoListWithTicker(&indexer.ASSET_PLAIN_SAT)
 	if len(feeOutputs) == 0 {
 		Log.Errorf("no plain sats")
 		return nil, 0, fmt.Errorf("no plain sats")
@@ -2421,6 +2422,7 @@ func (p *Manager) SelectUtxosForFee(
 	}
 	if localFeeValue >= localWeightEstimate.Fee(feeRate) {
 		*weightEstimate = localWeightEstimate
+		utxoMgr.RemoveOutputs(selected)
 		return selected, localFeeValue, nil
 	}
 
@@ -2455,6 +2457,7 @@ func (p *Manager) SelectUtxosForFee(
 		return nil, 0, fmt.Errorf("no enough plain sats")
 	}
 
+	utxoMgr.RemoveOutputs(selected)
 	return selected, feeValue, nil
 }
 
@@ -2592,6 +2595,7 @@ func (p *Manager) SelectUtxosForAssetV2(address string, excludedUtxoMap map[stri
 	return result, nil
 }
 
+// 根据输入的 requiredValue 选择utxo
 // 选择合适大小的utxo，而不是从最大的utxo选择
 func (p *Manager) SelectUtxosForFeeV2(
 	address string, excludedUtxoMap map[string]bool,
@@ -3107,35 +3111,6 @@ func (p *Manager) BuildBatchSendTxV3_btc(srcAddress string, excluded map[string]
 	return tx, prevFetcher, fee, nil
 }
 
-// 只用于白聪输出，包括fee
-func (p *Manager) SelectUtxosForPlainSatsV3(
-	requiredValue int64, feeRate int64, excludeRecentBlock bool, 
-	tx *wire.MsgTx, weightEstimate *utils.TxWeightEstimator,
-	) (*txscript.MultiPrevOutFetcher, []byte, int64, int64, int64, error) {
-	address := p.wallet.GetAddress()
-	return p.SelectUtxosForPlainSats(address, nil, requiredValue, 
-		feeRate, tx, weightEstimate, excludeRecentBlock, false)
-}
-
-func (p *Manager) SelectUtxosForAssetV3(
-	assetName *AssetName, requiredAmt *Decimal,
-	weightEstimate *utils.TxWeightEstimator, excludeRecentBlock bool) ([]*TxOutput, *Decimal, int64, error) {
-
-	address := p.wallet.GetAddress()	
-	return p.SelectUtxosForAsset(address, nil, &assetName.AssetName, 
-		requiredAmt, weightEstimate, excludeRecentBlock, false)
-}
-
-// 选择合适大小的utxo，而不是从最大的utxo选择
-func (p *Manager) SelectUtxosForFeeV3(
-	feeValue int64, feeRate int64,
-	weightEstimate *utils.TxWeightEstimator,
-	excludeRecentBlock bool) ([]*TxOutput, int64, error) {
-	address := p.wallet.GetAddress()
-	return p.SelectUtxosForFee(address, nil, 
-		feeValue, feeRate, weightEstimate, excludeRecentBlock, false)
-}
-
 // 给不同地址发送不同数量的资产，只支持ordx协议，只支持一个桩
 // 资产和聪分别放在两个utxo中
 func (p *Manager) BuildBatchSendTxV3_ordx(srcAddress string, excluded map[string]bool, 
@@ -3518,7 +3493,7 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
 	var weightEstimate utils.TxWeightEstimator
 	inscribes := make([]*InscribeResv, 0)
-	localAddr := srcAddress
+	utxoMgr := NewUtxoMgr(srcAddress, p.l1IndexerClient)
 	var destPkScript [][]byte
 	totalOutputSats := int64(0)
 	totalInputSats := int64(0)
@@ -3539,7 +3514,7 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 	}
 
 	// 先确定总数够不够
-	totalAmt := p.GetAssetBalance(localAddr, &assetName.AssetName)
+	totalAmt := p.GetAssetBalance(srcAddress, &assetName.AssetName)
 	if totalAmt.Cmp(requiredTotalAmt) < 0 {
 		return nil, nil, 0, nil, fmt.Errorf("no enough asset, required %s but only %s", requiredTotalAmt.String(), totalAmt.String())
 	}
@@ -3564,7 +3539,7 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 
 		requiredAmt := d.AssetAmt
 
-		selected, inscribe, total, err := p.SelectUtxosForBRC20(localAddr, excludedUtxoMap, 
+		selected, inscribe, total, err := p.SelectUtxosForBRC20(utxoMgr, excludedUtxoMap, 
 			&assetName.AssetName, totalAmt, requiredAmt, feeRate, &weightEstimate, excludeRecentBlock, inChannel)
 		if err != nil {
 			return nil, nil, 0, nil, err
@@ -3621,7 +3596,7 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 	if feeValue < fee0 {
 		// 增加fee
 		var selected []*TxOutput
-		selected, feeValue, err = p.SelectUtxosForFee(localAddr, excludedUtxoMap,
+		selected, feeValue, err = p.SelectUtxosForFeeV3(utxoMgr, excludedUtxoMap,
 			feeValue, feeRate, &weightEstimate, excludeRecentBlock, inChannel)
 		if err != nil {
 			return nil, nil, 0, nil, err

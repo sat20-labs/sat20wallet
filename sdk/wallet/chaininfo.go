@@ -379,16 +379,29 @@ func CompareMsgTx(tx1, tx2 *wire.MsgTx) bool {
 	if tx1 != nil && tx2 == nil {
 		return false
 	}
-	var err error
-	var tx1Hex, tx2Hex string
-	tx1Hex, err = EncodeMsgTx(tx1)
-	if err != nil {
+	if len(tx1.TxIn) != len(tx2.TxIn) {
 		return false
 	}
-	tx2Hex, err = EncodeMsgTx(tx2)
-	if err != nil {
+	if len(tx1.TxOut) != len(tx2.TxOut) {
 		return false
 	}
-	
-	return tx1Hex == tx2Hex
+	for i, txIn1 := range tx1.TxIn {
+		txIn2 := tx2.TxIn[i]
+		if txIn1.PreviousOutPoint.String() != txIn2.PreviousOutPoint.String() {
+			return false
+		}
+		if txIn1.Sequence != txIn2.Sequence {
+			return false
+		}
+	}
+	for i, txOut1 := range tx1.TxOut {
+		txOut2 := tx2.TxOut[i]
+		if txOut1.Value != txOut2.Value {
+			return false
+		}
+		if !bytes.Equal(txOut1.PkScript, txOut2.PkScript) {
+			return false
+		}
+	}
+	return true
 }
