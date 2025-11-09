@@ -587,7 +587,8 @@ func (p *Manager) GetUtxosWithAssetV2_SatsNet(address string, plainSats int64,
 		}
 	}
 	if totalAssets.Cmp(expectedAssetAmt) < 0 {
-		return nil, nil, fmt.Errorf("no enough utxo for %s, require %s but only %d", assetName.String(), expectedAssetAmt.String(), totalAssets)
+		return nil, nil, fmt.Errorf("no enough utxo for %s, require %s but only %s", 
+			assetName.String(), expectedAssetAmt.String(), totalAssets.String())
 	}
 
 	if totalPlainSats < plainSats && !indexer.IsPlainAsset(assetName) {
