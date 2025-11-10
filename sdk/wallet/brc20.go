@@ -174,6 +174,13 @@ func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string, assetName *indexe
 		return nil, fmt.Errorf("can't find ticker info %s", assetName.String())
 	}
 
+	if srcAddr == "" {
+		srcAddr = p.wallet.GetAddress()
+	}
+	if destAddr == "" {
+		destAddr = srcAddr
+	}
+
 	if amt.Sign() <= 0 {
 		return nil, fmt.Errorf("amt %s biger than zero", amt.String())
 	}
@@ -217,6 +224,12 @@ func (p *Manager) MintTransferV2_brc20(srcAddr, destAddr string, assetName *inde
 	tickInfo := p.GetTickerInfo(assetName)
 	if tickInfo == nil {
 		return nil, fmt.Errorf("can't find ticker info %s", assetName.String())
+	}
+	if srcAddr == "" {
+		srcAddr = p.wallet.GetAddress()
+	}
+	if destAddr == "" {
+		destAddr = srcAddr
 	}
 
 	if amt.Sign() <= 0 {
@@ -287,6 +300,12 @@ func (p *Manager) MintTransferWithCommitPriKey(srcAddr, destAddr string, assetNa
 	tickInfo := p.GetTickerInfo(assetName)
 	if tickInfo == nil {
 		return nil, fmt.Errorf("can't find ticker info %s", assetName.String())
+	}
+	if srcAddr == "" {
+		srcAddr = p.wallet.GetAddress()
+	}
+	if destAddr == "" {
+		destAddr = srcAddr
 	}
 
 	if amt.Sign() <= 0 {
