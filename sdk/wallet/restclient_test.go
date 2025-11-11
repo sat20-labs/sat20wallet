@@ -1288,7 +1288,7 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 						Amount:     *dAmt,
 						BindingSat: uint32(ticker.N),
 					}
-					input.Assets = append(input.Assets, asset)
+					input.Assets.Add(&asset)
 					satsNum := indexer.GetBindingSatNum(dAmt, uint32(ticker.N))
 					input.Offsets[assetName] = indexer.AssetOffsets{&indexer.OffsetRange{Start: 0, End: satsNum}}
 				}

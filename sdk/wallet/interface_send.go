@@ -1797,16 +1797,15 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 	for _, output := range selected {
 		tx.AddTxIn(output.TxIn())
 		prevFetcher.AddPrevOut(*output.OutPoint(), &output.OutValue)
-
-		value := output.Value()
-		txOut := &wire.TxOut{
-			PkScript: destPkScript,
-			Value:    value,
-		}
-		tx.AddTxOut(txOut)
-		weightEstimate.AddTxOutput(txOut)
-		totalOutputSats += value
+		totalOutputSats += output.Value()
 	}
+	// 所有brc20 transfer 输出到一个utxo
+	txOut := &wire.TxOut{
+		PkScript: destPkScript,
+		Value:    total,
+	}
+	tx.AddTxOut(txOut)
+	weightEstimate.AddTxOutput(txOut)
 
 
 	feeValue := total - totalOutputSats
@@ -3553,17 +3552,16 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 		for _, output := range selected {
 			tx.AddTxIn(output.TxIn())
 			prevFetcher.AddPrevOut(*output.OutPoint(), &output.OutValue)
-
-			value := output.Value()
-			txOut := &wire.TxOut{
-				PkScript: pkScript,
-				Value:    value,
-			}
-			tx.AddTxOut(txOut)
-			weightEstimate.AddTxOutput(txOut)
-			totalOutputSats += value
+			totalOutputSats += output.Value()
 			excludedUtxoMap[output.OutPointStr] = true
 		}
+		// 所有brc20 transfer 输出到一个utxo
+		txOut := &wire.TxOut{
+			PkScript: pkScript,
+			Value:    total,
+		}
+		tx.AddTxOut(txOut)
+		weightEstimate.AddTxOutput(txOut)
 
 		if changePkScript == nil {
 			changePkScript = selected[0].OutValue.PkScript

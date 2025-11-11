@@ -1511,8 +1511,8 @@ func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
 	}
 
 	if invoke.InvokeParam != nil {
-		return invoke.InvokeParam.ContractPath != p.RelativePath() ||
-			invoke.InvokeParam.ContractPath != p.URL()
+		return invoke.InvokeParam.ContractPath == p.RelativePath() ||
+			invoke.InvokeParam.ContractPath == p.URL()
 	} else if invoke.TxOutput != nil {
 		assetName := p.contract.GetAssetName()
 		// 除非是符文，否则都是有 InvokeParam 
@@ -1606,7 +1606,7 @@ func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 	p.mutex.Lock()
 	if p.EnableBlockL1 == INIT_ENABLE_BLOCK || data.Height < p.EnableBlockL1 {
-		if p.CurrBlockL1 == 0 {
+		if p.CurrBlockL1 < data.Height {
 			p.CurrBlockL1 = data.Height
 		}
 		p.lastInvokeCount = p.InvokeCount
@@ -1620,7 +1620,13 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 		if p.CurrBlockL1+1 > data.Height {
 			// TODO 区块回滚，不在这里处理，防止同一个交易处理多次
 			// 也可能是索引器重建数据
+			p.lastInvokeCount = p.InvokeCount
+			currBlock := p.CurrBlockL1
 			p.mutex.Unlock()
+			if currBlock == data.Height {
+				// 最高区块，重新进来
+				return nil
+			}
 			return fmt.Errorf("contract current block %d large than %d", p.CurrBlockL1, data.Height)
 		} else { // p.CurrBlockL1+1 < data.Height
 			// 不可能出现，启动时已经同步了区块
@@ -1631,11 +1637,13 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 			}
 
 			// 同步缺少的区块，确保合约运行正常
-			p.mutex.Unlock()
-			Log.Errorf("%s missing some L1 block, current %d, but new block %d", p.URL(), p.CurrBlockL1, data.Height)
-			p.resyncBlock(p.CurrBlockL1+1, data.Height-1)
-			Log.Infof("%s has resync L1 from %d to %d", p.URL(), p.CurrBlockL1+1, data.Height-1)
-			p.mutex.Lock()
+			if p.CurrBlockL1 + 1 < data.Height {
+				p.mutex.Unlock()
+				Log.Errorf("%s missing some L1 block, current %d, but new block %d", p.URL(), p.CurrBlockL1, data.Height)
+				p.resyncBlock(p.CurrBlockL1+1, data.Height-1)
+				Log.Infof("%s has resync L1 from %d to %d", p.URL(), p.CurrBlockL1+1, data.Height-1)
+				p.mutex.Lock()
+			}
 		}
 	}
 
@@ -1749,12 +1757,14 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 				}
 			}
 
-			// 同步缺少的区块，确保合约运行正常
-			p.mutex.Unlock()
-			Log.Errorf("%s missing some L2 block, current %d, but new block %d", p.URL(), p.CurrBlock, data.Height)
-			p.resyncBlock_SatsNet(p.CurrBlock+1, data.Height-1)
-			Log.Infof("%s has resync L2 from %d to %d", p.URL(), p.CurrBlock+1, data.Height-1)
-			p.mutex.Lock()
+			if p.CurrBlock+1 < data.Height {
+				// 同步缺少的区块，确保合约运行正常
+				p.mutex.Unlock()
+				Log.Errorf("%s missing some L2 block, current %d, but new block %d", p.URL(), p.CurrBlock, data.Height)
+				p.resyncBlock_SatsNet(p.CurrBlock+1, data.Height-1)
+				Log.Infof("%s has resync L2 from %d to %d", p.URL(), p.CurrBlock+1, data.Height-1)
+				p.mutex.Lock()
+			}
 		}
 	}
 
