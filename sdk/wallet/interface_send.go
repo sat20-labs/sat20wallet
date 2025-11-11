@@ -1944,6 +1944,7 @@ func CalcFee_SendTx(inputLen, outputLen, feeLen int, assetName *AssetName,
 
 // 该Tx还没有广播或者广播了还没有确认，才有可能重建，索引器的限制，utxo被花费后就删除了
 // 只支持一种资产
+// 需要同步修改 (p *MiniMemPool) rebuildTxOutput
 func (p *Manager) RebuildTxOutput(tx *wire.MsgTx, preFectcher map[string]*TxOutput) (
 	[]*TxOutput, []*TxOutput, error) {
 	// 尝试为tx的输出分配资产
