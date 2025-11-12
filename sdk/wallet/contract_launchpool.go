@@ -884,8 +884,11 @@ func mintTicker(stp ContractManager, resv ContractDeployResvIF, param any) (any,
 					mintResv, err = stp.GetWalletMgr().MintAsset_ordx(contract.Address(), tickerInfo,
 						contract.MaxSupply, defaultUtxos, resv.GetFeeRate())
 				} else {
+					// unisat的testnet4版本，没有支持Jubilee升级，很多铭文会被认为是cursed，
+					// 比如同一个聪上铭刻，会被认为是cursed。Jubilee升级后就不会有这个问题，这里尽可能就不用使用deploy的输出了，
+					// 因为这会导致在同一个聪上铭刻铸造铭文。
 					mintResv, err = stp.GetWalletMgr().MintAsset_brc20(contract.Address(), &contract.AssetName,
-						indexer.NewDefaultDecimal(contract.MaxSupply), defaultUtxos, resv.GetFeeRate())
+						indexer.NewDefaultDecimal(contract.MaxSupply), nil, resv.GetFeeRate())
 				}
 				if err != nil {
 					Log.Errorf("mintAsset %s faied, %v", contract.AssetName, err)
