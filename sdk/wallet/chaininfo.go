@@ -307,8 +307,8 @@ func IsNullDataScript(script []byte) bool {
 	// OP_RETURN followed by data push up to MaxDataCarrierSize bytes.
 	tokenizer := txscript.MakeScriptTokenizer(0, script[1:])
 	return tokenizer.Next() && tokenizer.Done() &&
-		(txscript.IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= txscript.OP_PUSHDATA4) &&
-		len(tokenizer.Data()) <= txscript.MaxDataCarrierSize
+		(txscript.IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= txscript.OP_PUSHDATA4) //&&
+		//len(tokenizer.Data()) <= txscript.MaxDataCarrierSize 新版本已经放宽
 }
 
 func ConvertMsgTx(tx *wire.MsgTx) *MsgTx {
