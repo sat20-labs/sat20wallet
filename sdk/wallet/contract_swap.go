@@ -5553,7 +5553,8 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 					dealInfo.PreOutputs = append(dealInfo.PreOutputs, output)
 				}
 				insc2, err := p.stp.GetWalletMgr().MintTransferV2_brc20(p.ChannelAddr,
-					p.ChannelAddr, insc.AssetName, insc.Amt, insc.FeeRate, inputs, true, insc.RevealPrivateKey, true, false, false)
+					p.ChannelAddr, map[string]bool{}, insc.AssetName, insc.Amt, insc.FeeRate, 
+					inputs, true, insc.RevealPrivateKey, true, false, false)
 				if err != nil {
 					return nil, fmt.Errorf("can't regenerate inscribe info from request: %v", insc)
 				}

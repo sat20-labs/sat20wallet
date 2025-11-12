@@ -1328,7 +1328,7 @@ func (p *ContractRuntimeBase) AllowPeerAction(action string, param any) (any, er
 			if req.InvokeCount == p.InvokeCount {
 				return nil, fmt.Errorf("%s at %d", ERR_MERKLE_ROOT_INCONSISTENT, req.InvokeCount)
 			} else {
-				return nil, fmt.Errorf("invoke count is inconsistent, %d %d", p.InvokeCount, req.InvokeCount)
+				return nil, fmt.Errorf("invoke count is inconsistent, %d %d", req.InvokeCount, p.InvokeCount)
 			}
 		}
 

@@ -631,6 +631,9 @@ func (p *IndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 }
 
 func (p *IndexerClient) BroadCastTxs(txs []*wire.MsgTx) (error) {
+	if len(txs) == 0 {
+		return nil
+	}
 	txsHex := make([]string, 0)
 	for _, tx := range txs {
 		str, err := EncodeMsgTx(tx)
@@ -666,6 +669,10 @@ func (p *IndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 
 
 func (p *IndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) (error) {
+	if len(txs) == 0 {
+		return nil
+	}
+	
 	txsHex := make([]string, 0)
 	for _, tx := range txs {
 		str, err := EncodeMsgTx_SatsNet(tx)

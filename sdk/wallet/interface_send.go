@@ -1726,7 +1726,8 @@ func (p *Manager) SelectUtxosForBRC20(utxomgr *UtxoMgr, excludedUtxoMap map[stri
 	}
 
 	// 再铸造一个，加入selected中，还没有广播，但锁定输入
-	inscribe, err := p.MintTransferV3_brc20(utxomgr, utxomgr.GetAddress(), assetName, 
+	inscribe, err := p.MintTransferV3_brc20(utxomgr, utxomgr.GetAddress(), 
+		excludedUtxoMap, assetName, 
 		wantToMint, feeRate, nil, false, nil, inChannel, false, true)
 	if err != nil {
 		Log.Errorf("MintTransfer_brc20 failed, %v", err)
