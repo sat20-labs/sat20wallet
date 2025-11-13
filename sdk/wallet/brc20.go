@@ -129,6 +129,23 @@ func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, feeRate int6
 func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 	amt *Decimal, defaultUtxos []string, feeRate int64) (*InscribeResv, error) {
 
+	var outputs []*TxOutput
+	for _, utxo := range defaultUtxos {
+		txOut, err := p.l1IndexerClient.GetTxOutput(utxo)
+		if err != nil {
+			Log.Errorf("GetTxOutFromRawTx %s failed, %v", utxo, err)
+			return nil, err
+		}
+		outputs = append(outputs, txOut)
+	}
+
+	return p.MintAssetV2_brc20(destAddr, assetName, amt, outputs, feeRate)
+}
+
+// 需要调用方确保amt<=limit
+func (p *Manager) MintAssetV2_brc20(destAddr string, assetName *indexer.AssetName,
+	amt *Decimal, defaultUtxos []*TxOutput, feeRate int64) (*InscribeResv, error) {
+
 	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return nil, fmt.Errorf("not brc20")
 	}
@@ -148,20 +165,10 @@ func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 		amt = limit
 	}
 
-	var outputs []*TxOutput
-	for _, utxo := range defaultUtxos {
-		txOut, err := p.l1IndexerClient.GetTxOutput(utxo)
-		if err != nil {
-			Log.Errorf("GetTxOutFromRawTx %s failed, %v", utxo, err)
-			return nil, err
-		}
-		outputs = append(outputs, txOut)
-	}
-
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_BODY, tickInfo.AssetName.Ticker, amt.String())
 	return p.inscribeV2(NewUtxoMgr(p.wallet.GetAddress(), p.l1IndexerClient), destAddr, 
 	map[string]bool{},
-	body, feeRate, outputs, false, nil, p.SignTxV2, 0, nil, true)
+	body, feeRate, defaultUtxos, false, nil, p.SignTxV2, 0, nil, true)
 }
 
 // 需要调用方确保amt<=用户持有量, 注意如果是lockInputs，而且最后不广播，需要对输入的utxo解锁
@@ -172,25 +179,6 @@ func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string,
 	amt *Decimal, feeRate int64, defaultUtxos []string, onlyUsingDefaultUtxos bool,  
 	revealPrivKey []byte, inChannel, broadcast, lockInputs bool) (*InscribeResv, error) {
 
-	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
-		return nil, fmt.Errorf("not brc20")
-	}
-	tickInfo := p.GetTickerInfo(assetName)
-	if tickInfo == nil {
-		return nil, fmt.Errorf("can't find ticker info %s", assetName.String())
-	}
-
-	if srcAddr == "" {
-		srcAddr = p.wallet.GetAddress()
-	}
-	if destAddr == "" {
-		destAddr = srcAddr
-	}
-
-	if amt.Sign() <= 0 {
-		return nil, fmt.Errorf("amt %s biger than zero", amt.String())
-	}
-
 	var outputs []*TxOutput
 	for _, utxo := range defaultUtxos {
 		txOut, err := p.l1IndexerClient.GetTxOutput(utxo)
@@ -201,23 +189,8 @@ func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string,
 		outputs = append(outputs, txOut)
 	}
 
-	var signer Signer
-	if !inChannel {
-		signer = p.SignTxV2
-	}
-	
-	body := fmt.Sprintf(CONTENT_MINT_BRC20_TRANSFER_BODY, tickInfo.AssetName.Ticker, amt.String())
-	insc, err := p.inscribeV2(NewUtxoMgr(srcAddr, p.l1IndexerClient), destAddr, excludedUtxoMap,
-	body, feeRate, outputs, onlyUsingDefaultUtxos, 
-		revealPrivKey, signer, 0, nil, broadcast)
-	if err != nil {
-		return nil, err
-	}
-	if lockInputs {
-		// 全局锁定输入
-		p.utxoLockerL1.LockUtxosWithTx(insc.CommitTx)
-	}
-	return insc, nil
+	return p.MintTransferV2_brc20(srcAddr, destAddr, excludedUtxoMap, assetName,
+	amt, feeRate, outputs, onlyUsingDefaultUtxos, revealPrivKey, inChannel, broadcast, lockInputs)
 }
 
 // defaultUtxos 可以是前置的tx的输出
@@ -227,13 +200,6 @@ func (p *Manager) MintTransferV2_brc20(srcAddr, destAddr string,
 	amt *Decimal, feeRate int64, defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,  
 	revealPrivKey []byte, inChannel, broadcast, lockInputs bool) (*InscribeResv, error) {
 
-	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
-		return nil, fmt.Errorf("not brc20")
-	}
-	tickInfo := p.GetTickerInfo(assetName)
-	if tickInfo == nil {
-		return nil, fmt.Errorf("can't find ticker info %s", assetName.String())
-	}
 	if srcAddr == "" {
 		srcAddr = p.wallet.GetAddress()
 	}
@@ -241,35 +207,35 @@ func (p *Manager) MintTransferV2_brc20(srcAddr, destAddr string,
 		destAddr = srcAddr
 	}
 
-	if amt.Sign() <= 0 {
-		return nil, fmt.Errorf("amt %s biger than zero", amt.String())
-	}
+	return p.MintTransferV3_brc20(NewUtxoMgr(srcAddr, p.l1IndexerClient), destAddr, 
+	excludedUtxoMap, assetName, amt, feeRate, defaultUtxos, onlyUsingDefaultUtxos, 
+	revealPrivKey, inChannel, broadcast, lockInputs)
+}
+
+// defaultUtxos 可以是前置的tx的输出
+func (p *Manager) MintTransferV3_brc20(srcUtxoMgr *UtxoMgr, destAddr string, 
+	excludedUtxoMap map[string]bool,
+	assetName *indexer.AssetName, amt *Decimal, feeRate int64, 
+	defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,  
+	revealPrivKey []byte, inChannel, broadcast, lockInputs bool) (*InscribeResv, error) {
 
 	var signer Signer
 	if !inChannel {
 		signer = p.SignTxV2
 	}
 
-	body := fmt.Sprintf(CONTENT_MINT_BRC20_TRANSFER_BODY, tickInfo.AssetName.Ticker, amt.String())
-	insc, err := p.inscribeV2(NewUtxoMgr(srcAddr, p.l1IndexerClient), destAddr, excludedUtxoMap,
-	body, feeRate, defaultUtxos, onlyUsingDefaultUtxos, 
-		revealPrivKey, signer, 0, nil, broadcast)
-	if err != nil {
-		return nil, err
-	}
-	if lockInputs {
-		// 全局锁定输入
-		p.utxoLockerL1.LockUtxosWithTx(insc.CommitTx)
-	}
-	return insc, nil
+	return p.mintTransfer(srcUtxoMgr, destAddr, excludedUtxoMap, 
+		assetName, amt, feeRate, defaultUtxos, onlyUsingDefaultUtxos, 
+		revealPrivKey, signer, broadcast, lockInputs)
 }
 
+
 // defaultUtxos 可以是前置的tx的输出
-func (p *Manager) MintTransferV3_brc20(srcUtxoMgr *UtxoMgr, destAddr string, 
+func (p *Manager) mintTransfer(srcUtxoMgr *UtxoMgr, destAddr string, 
 	excludedUtxoMap map[string]bool,
-	assetName *indexer.AssetName,
-	amt *Decimal, feeRate int64, defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,  
-	revealPrivKey []byte, inChannel, broadcast, lockInputs bool) (*InscribeResv, error) {
+	assetName *indexer.AssetName, amt *Decimal, feeRate int64, 
+	defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,  
+	revealPrivKey []byte, signer Signer, broadcast, lockInputs bool) (*InscribeResv, error) {
 
 	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return nil, fmt.Errorf("not brc20")
@@ -281,11 +247,6 @@ func (p *Manager) MintTransferV3_brc20(srcUtxoMgr *UtxoMgr, destAddr string,
 
 	if amt.Sign() <= 0 {
 		return nil, fmt.Errorf("amt %s biger than zero", amt.String())
-	}
-
-	var signer Signer
-	if !inChannel {
-		signer = p.SignTxV2
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_TRANSFER_BODY, tickInfo.AssetName.Ticker, amt.String())
