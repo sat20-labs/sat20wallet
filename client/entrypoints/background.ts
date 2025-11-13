@@ -11,7 +11,7 @@ globalThis.Buffer = Buffer3
 
 class BackgroundService {
   private approvalManager = new ApprovalManager()
-  private isWasmReady = false
+  private isWasmReady = true
   private messageQueue: { port: Runtime.Port; event: any }[] = []
   private portMap: {
     content?: Runtime.Port
@@ -21,7 +21,7 @@ class BackgroundService {
   constructor() {
     console.log('Background service worker started.')
     this.setupListeners()
-    this.initialize()
+    // this.initialize()
   }
 
   private async processQueuedMessages() {
@@ -59,10 +59,10 @@ class BackgroundService {
       if (action === Message.MessageAction.ENV_CHANGED || message.event === 'networkChanged') {
         console.log('收到网络变更事件，开始重新初始化状态和WASM')
         // 设置WASM重新初始化标志
-        this.isWasmReady = false
+        this.isWasmReady = true
         walletStorage.initializeState().then(async () => {
           try {
-            await reInitializeWasm()
+            // await reInitializeWasm()
             this.isWasmReady = true
             console.log('网络变更后WASM重新初始化完成')
             // 处理可能积压的消息
