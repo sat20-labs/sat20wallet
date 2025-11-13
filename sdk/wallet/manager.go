@@ -463,7 +463,16 @@ func (p *Manager) GetUtxosForFee(address string, value int64,
 		address = p.wallet.GetAddress()
 	}
 
-	return p.SelectUtxosForFeeV2(address, excludedUtxoMap, value, excludeRecentBlock, false)
+	outputs, err := p.SelectUtxosForFeeV2(address, excludedUtxoMap, value, excludeRecentBlock, false)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]string, len(outputs))
+	for i, output := range outputs {
+		result[i] = output.OutPointStr
+	}
+	return result, nil
 }
 
 func (p *Manager) GetUtxosForStubs(address string, n int, excludedUtxoMap map[string]bool) ([]string, error) {
@@ -529,9 +538,13 @@ func (p *Manager) GetUtxosWithAssetV2(address string, plainSats int64,
 		return nil, nil, err
 	}
 
-	resultPlains, err := p.SelectUtxosForFeeV2(address, excludedUtxoMap, plainSats, excludeRecentBlock, false)
+	outputs, err := p.SelectUtxosForFeeV2(address, excludedUtxoMap, plainSats, excludeRecentBlock, false)
 	if err != nil {
 		return nil, nil, err
+	}
+	resultPlains := make([]string, len(outputs))
+	for i, output := range outputs {
+		resultPlains[i] = output.OutPointStr
 	}
 
 	return resultAssets, resultPlains, nil
@@ -574,7 +587,8 @@ func (p *Manager) GetUtxosWithAssetV2_SatsNet(address string, plainSats int64,
 		}
 	}
 	if totalAssets.Cmp(expectedAssetAmt) < 0 {
-		return nil, nil, fmt.Errorf("no enough utxo for %s, require %s but only %d", assetName.String(), expectedAssetAmt.String(), totalAssets)
+		return nil, nil, fmt.Errorf("no enough utxo for %s, require %s but only %s", 
+			assetName.String(), expectedAssetAmt.String(), totalAssets.String())
 	}
 
 	if totalPlainSats < plainSats && !indexer.IsPlainAsset(assetName) {

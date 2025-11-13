@@ -60,13 +60,13 @@ func (p *Manager) CoGenerateStubUtxos(n int, contractURL string, invokeCount int
 }
 func (p *Manager) CoBatchSendV3(dest []*SendAssetInfo, assetNameStr string,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
-	sendDeAnchorTx, excludeRecentBlock bool) ([]string, int64, error) {
-	return nil, 0, fmt.Errorf("not implemented")
+	sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error) {
+	return "", 0, fmt.Errorf("not implemented")
 }
 func (p *Manager) CoSendOrdxWithStub(dest string, assetNameStr string, amt int64, stub string,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
-	sendDeAnchorTx, excludeRecentBlock bool) ([]string, int64, error) {
-	return nil, 0, fmt.Errorf("not implemented")
+	sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error) {
+	return "", 0, fmt.Errorf("not implemented")
 }
 func (p *Manager) CoBatchSendV2_SatsNet(dest []*SendAssetInfo, assetName string,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error) {

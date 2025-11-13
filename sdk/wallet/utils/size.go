@@ -993,8 +993,8 @@ func (twe *TxWeightEstimator) AddNestedP2WSHInput(
 func (twe *TxWeightEstimator) AddNestedP2WSHInputV2(
 	witnessSize int64) *TxWeightEstimator {
 
-	twe.inputSize += InputSize
-	twe.inputWitnessSize += 1 + 72 + 72 + 1 + witnessSize + 3
+	twe.inputSize += InputSize + NestedP2WSHSize + NestedP2WSHSize + 3
+	twe.inputWitnessSize += witnessSize
 	twe.inputCount++
 	twe.hasWitness = true
 

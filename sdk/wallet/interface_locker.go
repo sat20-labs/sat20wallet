@@ -217,54 +217,27 @@ func (p *Manager) GetTxAssetInfoFromPsbt(psbtStr string) (*TxAssetInfo, error) {
 	// 所有输入资产信息
 	var input *TxOutput
 	for i, txIn := range tx.TxIn {
-		utxoInfo := indexer.AssetsInUtxo{
-			OutPoint: txIn.PreviousOutPoint.String(),
-		}
-		info, err := p.l1IndexerClient.GetTxOutput(utxoInfo.OutPoint)
+		utxo := txIn.PreviousOutPoint.String()
+		info, err := p.l1IndexerClient.GetTxOutput(utxo)
 		if err != nil {
-			Log.Errorf("can't find output info for utxo %s", utxoInfo.OutPoint)
+			Log.Errorf("can't find output info for utxo %s", utxo)
 			return nil, err
 		}
+		utxoInfo := info.ToAssetsInUtxo()
 		
-		utxoInfo.UtxoId = info.UtxoId
-		utxoInfo.PkScript = info.OutValue.PkScript
-		utxoInfo.Value = info.OutValue.Value
-		for _, asset := range info.Assets {
-			precision := 0
-			tickInfo := p.getTickerInfo(&asset.Name)
-			if tickInfo != nil {
-				precision = tickInfo.Divisibility
-			}
-			utxoInfo.Assets = append(utxoInfo.Assets, &indexer.DisplayAsset{
-				AssetName:  asset.Name,
-				Amount:     asset.Amount.String(),
-				Precision:  precision,
-				BindingSat: int(asset.BindingSat),
-				Offsets:    info.Offsets[asset.Name],
-			})
-		}
-
 		if input == nil {
 			input = info
 		} else {
 			input.Append(info)
 		}
 
-		result.InputAssets[i] = &utxoInfo
+		result.InputAssets[i] = utxoInfo
 	}
 
-	// 如果是完整的psbt，按协议规则分配资产；否则直接
-
+	// 如果是完整的psbt，按协议规则分配资产
 	if packet.IsComplete() {
 		// 按协议规则分配资产
 		for i, txOut := range tx.TxOut {
-			utxo := fmt.Sprintf("%s:%d", tx.TxID(), i)
-			utxoInfo := indexer.AssetsInUtxo{
-				OutPoint: utxo,
-				Value:    txOut.Value,
-				PkScript: txOut.PkScript,
-			}
-
 			var err error
 			var curr *indexer.TxOutput
 			curr, input, err = input.Cut(txOut.Value)
@@ -272,25 +245,14 @@ func (p *Manager) GetTxAssetInfoFromPsbt(psbtStr string) (*TxAssetInfo, error) {
 				return nil, err
 			}
 
+			var utxoInfo *indexer.AssetsInUtxo
 			if curr != nil {
-				for _, asset := range curr.Assets {
-					precision := 0
-					tickInfo := p.getTickerInfo(&asset.Name)
-					if tickInfo != nil {
-						precision = tickInfo.Divisibility
-					}
-					utxoInfo.Assets = append(utxoInfo.Assets, &indexer.DisplayAsset{
-						AssetName:  asset.Name,
-						Amount:     asset.Amount.String(),
-						Precision:  precision,
-						BindingSat: int(asset.BindingSat),
-						Offsets:    curr.Offsets[asset.Name],
-					})
-				}
+				utxoInfo = curr.ToAssetsInUtxo()
 			} else {
 				return nil, fmt.Errorf("inputs have no enough asset for output %d", i)
 			}
-			result.OutputAssets[i] = &utxoInfo
+			// TODO 需要支持runes协议分配资产
+			result.OutputAssets[i] = utxoInfo
 		}
 	} else {
 		for i, txOut := range tx.TxOut {

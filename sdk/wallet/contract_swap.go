@@ -80,7 +80,9 @@ func (p *SwapContract) Content() string {
 
 // 仅仅是估算，并且尽可能多预估了输入和输出
 func (p *SwapContract) DeployFee(feeRate int64) int64 {
-	return DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT + DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE // deployTx 的utxo含聪量
+	return DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT + // 服务费，如果不需要，可以在外面扣除
+	DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE + // 部署该合约需要的网络费用和调用合约费用
+	DEFAULT_FEE_SATSNET // 激活合约的网络费用
 }
 
 func (p *SwapContract) InvokeParam(action string) string {
@@ -144,6 +146,7 @@ func (p *SwapInvokeParam) Encode() ([]byte, error) {
 func (p *SwapInvokeParam) EncodeV2() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
+		AddData([]byte("")).
 		AddData([]byte(p.Amt)).
 		AddData([]byte(p.UnitPrice)).Script()
 }
@@ -1788,7 +1791,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		}
 		f := ratio.Float64()
 		if f <= 0 || f > 1 {
-			return 0, fmt.Errorf("invalid ratio %d", innerParam.Ratio)
+			return 0, fmt.Errorf("invalid ratio %s", innerParam.Ratio)
 		}
 		return INVOKE_FEE, nil
 
@@ -2338,7 +2341,7 @@ func (p *SwapContractRuntime) Invoke(invokeTx *InvokeTx, height int) (InvokeHist
 	case INVOKE_API_DEPOSIT: // 主网没有调用参数时的默认动作
 		// 检查交换资产的数据
 		output := invokeTx.TxOutput
-		assetAmt := output.GetAsset(p.GetAssetName())
+		assetAmt, _ := output.GetAssetV2(p.GetAssetName())
 
 		// 到这里，客观条件都满足了，如果还不能符合铸造条件，那就需要退款
 		bValid := true
@@ -3167,7 +3170,8 @@ func (p *SwapContractRuntime) DisableItem(input InvokeHistoryItem) {
 
 type DealInfo struct {
 	SendInfo          map[string]*SendAssetInfo // deposit时，key是item的InUtxo，其他情况是address
-	SendTxIdMap       map[string]string         // depoist时使用，key时item的InUtxo
+	SendTxIdMap       map[string]string         // depoist时使用，key是item的InUtxo
+	PreOutputs        []*TxOutput              // 主网交易的输入，也可能是前一个交易的输出
 	AssetName         *swire.AssetName
 	TotalAmt          *Decimal // 输出总和
 	TotalValue        int64    // 输出总和
@@ -3713,6 +3717,8 @@ func (p *ContractRuntimeBase) notifyAndSendDepositAnchorTxs(anchorTxs []*swire.M
 			Tx:        txHex,
 			L1Tx:      false,
 			LocalSigs: nil,
+			Reason:    "ascend",
+			NotSign:   true,
 		})
 	}
 
@@ -3811,7 +3817,7 @@ func (p *ContractRuntimeBase) sendTx_SatsNet(dealInfo *DealInfo, reason string) 
 				Log.Infof("contract %s CoBatchSendV2_SatsNet failed %v, recalculate merkle root and try again", url, err)
 				p.calcAssetMerkleRoot()
 			} else {
-				Log.Infof("contract %s CoBatchSendV2_SatsNet failed %v, wait a second and try again", url, err)
+				Log.Errorf("contract %s CoBatchSendV2_SatsNet failed %v, wait a second and try again", url, err)
 				// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
 				//time.Sleep(2 * time.Second)
 				continue
@@ -3831,7 +3837,7 @@ func (p *ContractRuntimeBase) sendTx_SatsNet(dealInfo *DealInfo, reason string) 
 }
 
 func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
-	reason string, sendDeAnchorTx bool, excludeRecentBlock bool) ([]string, int64, int64, error) {
+	reason string, sendDeAnchorTx bool, excludeRecentBlock bool) (string, int64, int64, error) {
 	//
 	sendInfoMap := dealInfo.SendInfo
 	height := dealInfo.Height
@@ -3856,7 +3862,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 	}
 
 	if len(sendInfoVect) == 0 && len(sendInfoVectWithStub) == 0 {
-		return nil, 0, 0, fmt.Errorf("no send info")
+		return "", 0, 0, fmt.Errorf("no send info")
 	}
 
 	sort.Slice(sendInfoVect, func(i, j int) bool {
@@ -3873,7 +3879,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 			stubTx, fee, err := p.stp.CoGenerateStubUtxos(stubNum+10, p.URL(), dealInfo.InvokeCount, excludeRecentBlock)
 			if err != nil {
 				Log.Errorf("CoGenerateStubUtxos %d failed, %v", stubNum+10, err)
-				return nil, 0, 0, err
+				return "", 0, 0, err
 			}
 			Log.Infof("sendTx CoGenerateStubUtxos %s %d", stubTx, fee)
 			for i := range stubNum {
@@ -3885,12 +3891,12 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 	}
 
 	var fee int64
-	var txIds []string
+	var txId string
 	invoice, _ := UnsignedContractResultInvoice(p.RelativePath(), reason, fmt.Sprintf("%d", height))
 	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
 	if len(sendInfoVect) > 0 {
 		for i := 0; i < 3; i++ {
-			txIds, fee, err = p.stp.CoBatchSendV3(sendInfoVect, dealInfo.AssetName.String(),
+			txId, fee, err = p.stp.CoBatchSendV3(sendInfoVect, dealInfo.AssetName.String(),
 				"contract", url, dealInfo.InvokeCount, nullDataScript,
 				dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
 			if err != nil {
@@ -3899,28 +3905,28 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 					Log.Infof("contract %s CoBatchSendV3 failed %v, recalculate merkle root and try again", url, err)
 					p.calcAssetMerkleRoot()
 				} else {
-					Log.Infof("contract %s CoBatchSendV3 failed %v, wait a second and try again", url, err)
+					Log.Errorf("contract %s CoBatchSendV3 failed %v, wait a second and try again", url, err)
 					// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
 					//time.Sleep(2 * time.Second)
 					continue
 				}
 			}
-			Log.Infof("contract %s CoBatchSendV3 %v %d", url, txIds, fee)
+			Log.Infof("contract %s CoBatchSendV3 %s %d", url, txId, fee)
 			break
 		}
 		if err != nil {
-			return nil, 0, stubFee, err
+			return "", 0, stubFee, err
 		}
 	} else {
 		if stubNum != 0 {
 			p.stp.GetWalletMgr().utxoLockerL1.LockUtxo(stubs[0], "stub for "+reason)
 			// 这里只有一个交易
 			if len(sendInfoVectWithStub) > 1 {
-				return nil, 0, stubFee, fmt.Errorf("only one output in stub is supported")
+				return "", 0, stubFee, fmt.Errorf("only one output in stub is supported")
 			}
 			sendInfo := sendInfoVectWithStub[0]
 			for i := 0; i < 3; i++ {
-				txIds, fee, err = p.stp.CoSendOrdxWithStub(sendInfo.Address, sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(),
+				txId, fee, err = p.stp.CoSendOrdxWithStub(sendInfo.Address, sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(),
 					stubs[0], "contract", url, dealInfo.InvokeCount, nullDataScript,
 					dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
 				if err != nil {
@@ -3929,28 +3935,25 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 						Log.Infof("contract %s CoSendOrdxWithStub failed %v, recalculate merkle root and try again", url, err)
 						p.calcAssetMerkleRoot()
 					} else {
-						Log.Infof("contract %s CoSendOrdxWithStub failed %v, wait a second and try again", url, err)
+						Log.Errorf("contract %s CoSendOrdxWithStub failed %v, wait a second and try again", url, err)
 						// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
 						//time.Sleep(2 * time.Second)
 						continue
 					}
 				}
-				Log.Infof("contract %s CoSendOrdxWithStub txId %v %d", url, txIds, fee)
+				Log.Infof("contract %s CoSendOrdxWithStub txId %s %d", url, txId, fee)
 				break
 
 			}
 			if err != nil {
 				p.stp.GetWalletMgr().utxoLockerL1.UnlockUtxo(stubs[0])
-				return nil, 0, stubFee, err
+				return "", 0, stubFee, err
 			}
 		}
 	}
 
-	for _, txId := range txIds {
-		saveContractInvokeResult(p.stp.GetDB(), url, txId, reason)
-	}
-
-	return txIds, fee, stubFee, nil
+	saveContractInvokeResult(p.stp.GetDB(), url, txId, reason)
+	return txId, fee, stubFee, nil
 }
 
 func (p *ContractRuntimeBase) genSendInfoFromTx_SatsNet(tx *swire.MsgTx, includedAll bool) (*DealInfo, error) {
@@ -4083,18 +4086,20 @@ func (p *ContractRuntimeBase) GetAssetInfoFromOutput(output *TxOutput) (*indexer
 	return assetName, assetAmt, divisibility, nil
 }
 
-func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, moreData []byte) (*DealInfo, error) {
+func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[string]*TxOutput, 
+	moreData []byte) (*DealInfo, error) {
 
 	dealInfo := &DealInfo{
 		SendInfo: make(map[string]*SendAssetInfo),
 		TxId:     tx.TxID(),
 	}
 
-	inputs, outputs, err := p.stp.GetWalletMgr().RebuildTxOutput(tx)
+	inputs, outputs, err := p.stp.GetWalletMgr().RebuildTxOutput(tx, preFectcher)
 	if err != nil {
 		Log.Errorf("rebuildTxOutput %s failed, %v", tx.TxID(), err)
 		return nil, err
 	}
+	dealInfo.PreOutputs = inputs
 
 	var in, out int64
 	for _, input := range inputs {
@@ -4611,7 +4616,7 @@ func (p *SwapContractRuntime) deposit() error {
 							Log.Infof("contract %s notifyAndSendDepositAnchorTxs failed %v, recalculate merkle root and try again", url, err)
 							p.calcAssetMerkleRoot()
 						} else {
-							Log.Infof("contract %s notifyAndSendDepositAnchorTxs failed %v, wait a second and try again", url, err)
+							Log.Errorf("contract %s notifyAndSendDepositAnchorTxs failed %v, wait a second and try again", url, err)
 							// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
 							// time.Sleep(2 * time.Second)
 							continue
@@ -4665,7 +4670,6 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 	isRune := false
 	assetName := p.GetAssetName()
 	isRune = assetName.Protocol == indexer.PROTOCOL_NAME_RUNES
-	// TODO 如何支持 indexer.PROTOCOL_NAME_BRC20
 
 	maxHeight := 0
 	var totalValue int64
@@ -4714,7 +4718,7 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 			if isPlainAsset {
 				not++
 			} else {
-				if indexer.GetBindingSatNum(v.AssetAmt, uint32(n)) < 330 {
+				if n != 0 && indexer.GetBindingSatNum(v.AssetAmt, uint32(n)) < 330 {
 					need = append(need, k)
 				} else {
 					not++
@@ -4860,7 +4864,7 @@ func (p *SwapContractRuntime) withdraw() error {
 			if len(dealInfo.SendInfo) != 0 {
 				// 发送费用已经从所有参与者扣除，但如果该交易的聪资产太少，就暂时不发送，等下次
 				//if dealInfo.TotalValue >= _valueLimit || len(dealInfo.SendInfo) >= _addressLimit {
-				txIds, fee, stubFee, err := p.sendTx(dealInfo, INVOKE_RESULT_WITHDRAW, true, true)
+				txId, fee, stubFee, err := p.sendTx(dealInfo, INVOKE_RESULT_WITHDRAW, true, true)
 				if err != nil {
 					if stubFee != 0 {
 						p.mutex.Lock()
@@ -4874,12 +4878,12 @@ func (p *SwapContractRuntime) withdraw() error {
 				}
 				// 调整fee
 				dealInfo.Fee = fee + stubFee
-				dealInfo.TxId = txIds[0]
+				dealInfo.TxId = txId
 				// record
 				p.updateWithDealInfo_withdraw(dealInfo)
 				// 成功一步记录一步
 				p.stp.SaveReservationWithLock(p.resv)
-				Log.Infof("contract %s withdraw completed, %s", url, txIds[0])
+				Log.Infof("contract %s withdraw completed, %s", url, txId)
 				//}
 			} else {
 				break
@@ -5224,6 +5228,87 @@ func (p *SwapContractRuntime) profit() error {
 	return nil
 }
 
+func ParseInscribeInfo(txSignInfo []*wwire.TxSignInfo) ([]*InscribeInfo, map[string]*TxOutput, error) {
+	var inscribes []*InscribeInfo
+	preOutputs := make(map[string]*TxOutput)
+	for _, txInfo := range txSignInfo {
+		switch txInfo.Reason {
+		case "commit":
+			// moredata: transfer body, reveal private key 
+			if len(txInfo.MoreData) == 0 {
+				return nil, nil, fmt.Errorf("should provide more data")
+			}
+			address, assetName, amt, feeRate, privateKey, err := ParseInscribeMoreData(txInfo.MoreData)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if !txInfo.L1Tx {
+				return nil, nil,fmt.Errorf("should be a L1 tx")
+			}
+			tx, err := DecodeMsgTx(txInfo.Tx)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if len(tx.TxOut) == 2 {
+				output := indexer.GenerateTxOutput(tx, 1)
+				preOutputs[output.OutPointStr] = output
+			}
+
+			inscribes = append(inscribes, &InscribeInfo{
+				CommitTx: tx,
+				RemoteSig: txInfo.LocalSigs,
+				DestAddr: address,
+				AssetName: assetName,
+				Amt: amt,
+				FeeRate: feeRate,
+				RevealPrivateKey: privateKey,
+			})
+		case "reveal":
+			// 一个commit后面必须跟着reveal
+			if len(inscribes) == 0 {
+				return nil, nil, fmt.Errorf("no commit tx")
+			}
+			inscribe := inscribes[len(inscribes)-1]
+			if inscribe == nil || inscribe.CommitTx == nil {
+				return nil, nil, fmt.Errorf("can't find commit tx")
+			}
+			if inscribe.RevealTx != nil {
+				return nil, nil, fmt.Errorf("reveal tx is set")
+			}
+			if !txInfo.L1Tx {
+				return nil, nil, fmt.Errorf("should be a L1 tx")
+			}
+			tx, err := DecodeMsgTx(txInfo.Tx)
+			if err != nil {
+				return nil, nil, err
+			}
+			inscribe.RevealTx = tx
+
+			utxo := fmt.Sprintf("%s:0", tx.TxID())
+			assetInfo := indexer.AssetInfo{
+				Name: *inscribe.AssetName,
+				Amount: *inscribe.Amt,
+				BindingSat: 0,
+			}
+			preOutputs[utxo] = &indexer.TxOutput{
+				UtxoId: INVALID_ID,
+				OutPointStr: utxo,
+				OutValue: *tx.TxOut[0],
+				Assets: indexer.TxAssets{assetInfo},
+				Offsets: map[indexer.AssetName]indexer.AssetOffsets{
+					*inscribe.AssetName: {{Start:0, End:1}},
+				},
+				SatBindingMap: map[int64]*indexer.AssetInfo{
+					0: &assetInfo,
+				},
+				Invalids: make(map[indexer.AssetName]bool),
+			}
+		}
+	}
+	return inscribes, preOutputs, nil
+}
 
 func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, error) {
 
@@ -5245,6 +5330,7 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 			return nil, fmt.Errorf("not RemoteSignMoreData_Contract")
 		}
 
+		// 1. 读取交易信息
 		if req.Action == INVOKE_API_DEPOSIT {
 			// deposit 特殊处理
 			dealInfo, err := p.genDepositInfoFromAnchorTxs(req)
@@ -5255,31 +5341,52 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 		}
 
 		var dealInfo *DealInfo
-		if len(req.Tx) != 1 && len(req.Tx) != 2 {
-			return nil, fmt.Errorf("only 1 or 2 TX can be accepted")
+		var transcendTx *swire.MsgTx
+		inscribes, preOutputs, err := ParseInscribeInfo(req.Tx)
+		if err != nil {
+			return nil, err
 		}
-		tx1 := req.Tx[0]
-
-		if tx1.L1Tx {
-			tx, err := DecodeMsgTx(tx1.Tx)
-			if err != nil {
-				return nil, err
-			}
-			dealInfo, err = p.genSendInfoFromTx(tx, req.MoreData)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			tx, err := DecodeMsgTx_SatsNet(tx1.Tx)
-			if err != nil {
-				return nil, err
-			}
-			dealInfo, err = p.genSendInfoFromTx_SatsNet(tx, false)
-			if err != nil {
-				return nil, err
+		for _, txInfo := range req.Tx {
+			switch txInfo.Reason {
+			case "ascend", "descend":
+				if txInfo.L1Tx {
+					return nil, fmt.Errorf("only a anchor/deanchor tx followed can be accepted")
+				}
+				transcendTx, err = DecodeMsgTx_SatsNet(txInfo.Tx)
+				if err != nil {
+					return nil, err
+				}
+			
+			case "commit", "reveal":
+				// ParseInscribeInfo
+	
+			case "": // main tx
+				if txInfo.L1Tx {
+					tx, err := DecodeMsgTx(txInfo.Tx)
+					if err != nil {
+						return nil, err
+					}
+					dealInfo, err = p.genSendInfoFromTx(tx, preOutputs, req.MoreData)
+					if err != nil {
+						return nil, err
+					}
+				} else {
+					tx, err := DecodeMsgTx_SatsNet(txInfo.Tx)
+					if err != nil {
+						return nil, err
+					}
+					dealInfo, err = p.genSendInfoFromTx_SatsNet(tx, false)
+					if err != nil {
+						return nil, err
+					}
+				}
+				
+			default:
+				return nil, fmt.Errorf("not support %s", txInfo.Reason)
 			}
 		}
 
+		// 2. 检查主交易的有效性
 		dealInfo.InvokeCount = req.InvokeCount
 		dealInfo.StaticMerkleRoot = req.StaticMerkleRoot
 		dealInfo.RuntimeMerkleRoot = req.RuntimeMerkleRoot
@@ -5385,16 +5492,9 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 			}
 		}
 
-		if len(req.Tx) == 2 {
-			tx2 := req.Tx[1]
-			if tx2.L1Tx {
-				return nil, fmt.Errorf("only a anchor/deanchor tx followed can be accepted")
-			}
-			tx, err := DecodeMsgTx_SatsNet(tx2.Tx)
-			if err != nil {
-				return nil, err
-			}
-			dealInfo2, err := p.genSendInfoFromTx_SatsNet(tx, true)
+		// 3. 检查其他相关交易的有效性
+		if transcendTx != nil {
+			dealInfo2, err := p.genSendInfoFromTx_SatsNet(transcendTx, true)
 			if err != nil {
 				return nil, err
 			}
@@ -5418,6 +5518,59 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 			}
 
 			//dealInfo.TxId = dealInfo.TxId + " " + dealInfo2.TxId
+		}
+
+		if len(inscribes) != 0 {
+			// 验证每一个transfer铭文
+			preOutMap := make(map[string]*TxOutput)
+			for _, output := range dealInfo.PreOutputs {
+				preOutMap[output.OutPointStr] = output
+			}
+
+			for _, insc := range inscribes {
+				dest := dealInfo.SendInfo[insc.DestAddr]
+				if dest.AssetName.String() != insc.AssetName.String() {
+					return nil, fmt.Errorf("inscribe: different asset name, expected %s but %s",
+				 		dest.AssetName.String(), insc.AssetName.String())
+				}
+				if dest.AssetAmt.Cmp(insc.Amt) != 0 {
+					return nil, fmt.Errorf("inscribe: different asset amt, expected %s but %s",
+				 		dest.AssetAmt.String(), insc.Amt )
+				}
+
+				inputs := make([]*TxOutput, 0)
+				for _, txIn := range insc.CommitTx.TxIn {
+					utxo := txIn.PreviousOutPoint.String()
+					output, ok := preOutputs[utxo]
+					if !ok {
+						output, err = p.stp.GetIndexerClient().GetTxOutput(utxo)
+						if err != nil {
+							Log.Errorf("inscribe: GetTxOutFromRawTx %s failed, %v", utxo, err)
+							return nil, err
+						}
+					}
+					inputs = append(inputs, output)
+					dealInfo.PreOutputs = append(dealInfo.PreOutputs, output)
+				}
+				insc2, err := p.stp.GetWalletMgr().MintTransferV2_brc20(p.ChannelAddr,
+					p.ChannelAddr, map[string]bool{}, insc.AssetName, insc.Amt, insc.FeeRate, 
+					inputs, true, insc.RevealPrivateKey, true, false, false)
+				if err != nil {
+					return nil, fmt.Errorf("can't regenerate inscribe info from request: %v", insc)
+				}
+				if !CompareMsgTx(insc2.CommitTx, insc.CommitTx) {
+					return nil, fmt.Errorf("commit tx different")
+				}
+				if !CompareMsgTx(insc2.RevealTx, insc.RevealTx) {
+					return nil, fmt.Errorf("reveal tx different")
+				}
+				// reveal的输出是组成主交易的输入之一，其对应的输出前面已经检查
+				utxo := fmt.Sprintf("%s:0", insc.RevealTx.TxID())
+				_, ok := preOutMap[utxo]
+				if !ok {
+					return nil, fmt.Errorf("reveal output %s is not in main tx", utxo)
+				}
+			}
 		}
 
 		Log.Infof("%s is allowed by contract %s (reason: %s)", wwire.STP_ACTION_SIGN, p.URL(), dealInfo.Reason)
@@ -5589,6 +5742,7 @@ func (p *SwapContractRuntime) SetPeerActionResult(action string, param any) {
 	}
 }
 
+// 获取deposit数据，同时做检查
 func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignMoreData_Contract) (*DealInfo, error) {
 	// anchorTxs
 
@@ -5609,7 +5763,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 		if err != nil {
 			return nil, err
 		}
-		data, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
+		anchorData, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
 		if err != nil {
 			Log.Errorf("CheckAnchorPkScript %s failed", tx.TxID())
 			return nil, err
@@ -5654,29 +5808,60 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 			return nil, err
 		}
 		items, ok := p.depositMap[destAddr]
-		if ok {
-			for _, item := range items {
-				if item.InUtxo == data.Utxo {
-					if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
-						continue
-					}
-					h, _, _ := indexer.FromUtxoId(item.UtxoId)
-					if h > targetHeight {
-						continue
-					}
-					maxHeight = max(maxHeight, h)
-
-					sendInfoMap[item.InUtxo] = &SendAssetInfo{
-						Address:   item.Address,
-						Value:     item.RemainingValue,
-						AssetName: assetName,
-						AssetAmt:  item.RemainingAmt.Clone(),
-					}
-					sendTxIdMap[item.InUtxo] = tx.TxID()
-					totalAmt = totalAmt.Add(item.RemainingAmt)
-					totalValue += item.RemainingValue
+		if !ok {
+			return nil, fmt.Errorf("invalid destination address %s", destAddr)
+		}
+		
+		bFound := false
+		for _, item := range items {
+			if item.InUtxo == anchorData.Utxo {
+				if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+					continue
 				}
+				h, _, _ := indexer.FromUtxoId(item.UtxoId)
+				if h > targetHeight {
+					continue
+				}
+				maxHeight = max(maxHeight, h)
+
+				if item.AssetName == indexer.ASSET_PLAIN_SAT.String() {
+					if len(anchorData.Assets) != 0 {
+						return nil, fmt.Errorf("%s assets should be empty", tx.TxID())
+					}
+					if item.RemainingValue != anchorData.Value {
+						return nil, fmt.Errorf("%s invalid value %d, expected %d", tx.TxID(), anchorData.Value, item.RemainingValue)
+					}
+				} else {
+					if len(anchorData.Assets) != 1 {
+						return nil, fmt.Errorf("%s should be only one asset", tx.TxID())
+					}
+					value := indexer.GetBindingSatNum(item.RemainingAmt, uint32(p.N))
+					if value != anchorData.Value {
+						return nil, fmt.Errorf("%s invalid value %d, expected %d", tx.TxID(), anchorData.Value, value)
+					}
+					assetInfo := anchorData.Assets[0]
+					if assetInfo.Name.String() != item.AssetName {
+						return nil, fmt.Errorf("%s invalid asset name %s, expected %s", tx.TxID(), assetInfo.Name.String(), item.AssetName)
+					}
+					if assetInfo.Amount.Cmp(item.RemainingAmt) != 0 {
+						return nil, fmt.Errorf("%s invalid asset amt %s, expected %s", tx.TxID(), assetInfo.Amount.String(), item.RemainingAmt.String())
+					}
+				}
+
+				sendInfoMap[item.InUtxo] = &SendAssetInfo{
+					Address:   item.Address,
+					Value:     item.RemainingValue,
+					AssetName: assetName,
+					AssetAmt:  item.RemainingAmt.Clone(),
+				}
+				sendTxIdMap[item.InUtxo] = tx.TxID()
+				totalAmt = totalAmt.Add(item.RemainingAmt)
+				totalValue += item.RemainingValue
+				bFound = true
 			}
+		}
+		if !bFound {
+			return nil, fmt.Errorf("can't find deposit itme %s", anchorData.Utxo)
 		}
 	}
 

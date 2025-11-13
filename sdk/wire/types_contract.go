@@ -111,6 +111,9 @@ type TxSignInfo struct {
 	Tx        string   `json:"tx"`
 	L1Tx      bool     `json:"l1Tx"`
 	LocalSigs [][]byte `json:"sigs"`
+	Reason	  string   `json:"reason"`
+	NotSign	  bool     `json:"notSign"`
+	MoreData  []byte   `json:"more"`
 }
 
 // sn -> bn messages
@@ -122,6 +125,13 @@ type RemoteSignMoreData_Contract struct {
 	InvokeCount       int64         `json:"invokeCount"`
 	StaticMerkleRoot  []byte        `json:"staticMerkleRoot"`
 	RuntimeMerkleRoot []byte        `json:"runtimeMerkleRoot"`
+	Action            string        `json:"action"`
+	MoreData          []byte        `json:"more"` // 有时候Tx中无法放入足够数据
+}
+type RemoteSignMoreData_Sweep struct {
+	Tx                []*TxSignInfo `json:"tx1"`
+	ClientPubKey      []byte        `json:"clientPubkey"`
+	Witness           []byte        `json:"witness"`
 	Action            string        `json:"action"`
 	MoreData          []byte        `json:"more"` // 有时候Tx中无法放入足够数据
 }

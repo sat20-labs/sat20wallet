@@ -3,8 +3,6 @@ package wallet
 import (
 	"fmt"
 	"math"
-	"sort"
-	"strconv"
 
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
@@ -123,9 +121,8 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 		},
 		DestAddress:   address,
 		ChangeAddress: changeAddr,
-		SignAndSend:   true,
+		Broadcast:     false,
 		Signer:        p.SignTxV2,
-		PublicKey:     wallet.GetPaymentPubKey(),
 	}
 
 	txs, err := Inscribe(GetChainParam(), request, p.GenerateNewResvId())
@@ -165,14 +162,15 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 	// return txs, nil
 }
 
-func (p *Manager) DeployRunesTicker(destAddr string, ticker string, symbol int32, max int64) (*InscribeResv, error) {
+func (p *Manager) DeployTicker_runes(destAddr string, ticker string, symbol int32, 
+	max, feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
-
-	pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
 	address := wallet.GetAddress()
 
-	feeRate := p.GetFeeRate()
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
 	etching, err := GenEtching(ticker, symbol, max)
 	if err != nil {
 		return nil, err
@@ -185,34 +183,21 @@ func (p *Manager) DeployRunesTicker(destAddr string, ticker string, symbol int32
 		return nil, err
 	}
 
-	utxos, _, err := p.l1IndexerClient.GetAllUtxosWithAddress(address)
-	if err != nil {
-		Log.Errorf("GetAllUtxosWithAddress %s failed. %v", address, err)
-		return nil, err
-	}
+	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	if len(utxos) == 0 {
 		return nil, fmt.Errorf("no utxos for fee")
 	}
-	sort.Slice(utxos, func(i, j int) bool {
-		return utxos[i].Value > utxos[j].Value
-	})
 
 	p.utxoLockerL1.Reload(address)
 	commitTxPrevOutputList := make([]*PrevOutput, 0)
 	total := int64(0)
 	estimatedFee := int64(0)
 	for _, u := range utxos {
-		utxo := u.Txid + ":" + strconv.Itoa(u.Vout)
-		if p.utxoLockerL1.IsLocked(utxo) {
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
 			continue
 		}
 		total += u.Value
-		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-			TxId:     u.Txid,
-			VOut:     uint32(u.Vout),
-			Amount:   u.Value,
-			PkScript: pkScript,
-		})
+		commitTxPrevOutputList = append(commitTxPrevOutputList, u.ToTxOutput())
 		estimatedFee = EstimatedDeployRunesNameFee(len(commitTxPrevOutputList), feeRate)
 		if total >= estimatedFee {
 			break
@@ -226,7 +211,7 @@ func (p *Manager) DeployRunesTicker(destAddr string, ticker string, symbol int32
 }
 
 // 需要调用方确保amt<=limit
-func (p *Manager) mintRunesAsset(destAddr string, tickInfo *indexer.TickerInfo) (string, error) {
+func (p *Manager) MintAsset_runes(destAddr string, tickInfo *indexer.TickerInfo) (string, error) {
 
 	//wallet := p.wallet
 

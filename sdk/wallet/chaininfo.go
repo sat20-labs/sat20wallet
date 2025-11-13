@@ -307,8 +307,8 @@ func IsNullDataScript(script []byte) bool {
 	// OP_RETURN followed by data push up to MaxDataCarrierSize bytes.
 	tokenizer := txscript.MakeScriptTokenizer(0, script[1:])
 	return tokenizer.Next() && tokenizer.Done() &&
-		(txscript.IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= txscript.OP_PUSHDATA4) &&
-		len(tokenizer.Data()) <= txscript.MaxDataCarrierSize
+		(txscript.IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= txscript.OP_PUSHDATA4) //&&
+		//len(tokenizer.Data()) <= txscript.MaxDataCarrierSize 新版本已经放宽
 }
 
 func ConvertMsgTx(tx *wire.MsgTx) *MsgTx {
@@ -367,4 +367,41 @@ func GetPkScriptType(prevOutScript []byte) txscript.ScriptClass {
 		return txscript.WitnessUnknownTy
 	}
 	return ty
+}
+
+func CompareMsgTx(tx1, tx2 *wire.MsgTx) bool {
+	if tx1 == nil && tx2 == nil {
+		return true
+	}
+	if tx1 == nil && tx2 != nil {
+		return false
+	}
+	if tx1 != nil && tx2 == nil {
+		return false
+	}
+	if len(tx1.TxIn) != len(tx2.TxIn) {
+		return false
+	}
+	if len(tx1.TxOut) != len(tx2.TxOut) {
+		return false
+	}
+	for i, txIn1 := range tx1.TxIn {
+		txIn2 := tx2.TxIn[i]
+		if txIn1.PreviousOutPoint.String() != txIn2.PreviousOutPoint.String() {
+			return false
+		}
+		if txIn1.Sequence != txIn2.Sequence {
+			return false
+		}
+	}
+	for i, txOut1 := range tx1.TxOut {
+		txOut2 := tx2.TxOut[i]
+		if txOut1.Value != txOut2.Value {
+			return false
+		}
+		if !bytes.Equal(txOut1.PkScript, txOut2.PkScript) {
+			return false
+		}
+	}
+	return true
 }

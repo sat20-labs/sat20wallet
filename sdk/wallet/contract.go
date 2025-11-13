@@ -203,10 +203,10 @@ type ContractManager interface {
 	CoGenerateStubUtxos(n int, contractURL string, invokeCount int64, excludeRecentBlock bool) (string, int64, error)
 	CoBatchSendV3(dest []*SendAssetInfo, assetNameStr string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
-		sendDeAnchorTx, excludeRecentBlock bool) ([]string, int64, error)
+		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
 	CoSendOrdxWithStub(dest string, assetNameStr string, amt int64, stub string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
-		sendDeAnchorTx, excludeRecentBlock bool) ([]string, int64, error)
+		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
 	CoBatchSendV2_SatsNet(dest []*SendAssetInfo, assetName string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error)
 	CoBatchSend_SatsNet(destAddr []string, assetName string, amtVect []string,
@@ -641,7 +641,9 @@ func (p *ContractBase) CheckContent() error {
 			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
 		}
 	} else if p.AssetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
-		
+		if len(p.AssetName.Ticker) != 4 && len(p.AssetName.Ticker) != 5 {
+			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
+		}
 	}
 
 	if indexer.IsPlainAsset(&p.AssetName) {
@@ -1326,7 +1328,7 @@ func (p *ContractRuntimeBase) AllowPeerAction(action string, param any) (any, er
 			if req.InvokeCount == p.InvokeCount {
 				return nil, fmt.Errorf("%s at %d", ERR_MERKLE_ROOT_INCONSISTENT, req.InvokeCount)
 			} else {
-				return nil, fmt.Errorf("invoke count is inconsistent, %d %d", p.InvokeCount, req.InvokeCount)
+				return nil, fmt.Errorf("invoke count is inconsistent, %d %d", req.InvokeCount, p.InvokeCount)
 			}
 		}
 
@@ -1509,8 +1511,8 @@ func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
 	}
 
 	if invoke.InvokeParam != nil {
-		return invoke.InvokeParam.ContractPath != p.RelativePath() ||
-			invoke.InvokeParam.ContractPath != p.URL()
+		return invoke.InvokeParam.ContractPath == p.RelativePath() ||
+			invoke.InvokeParam.ContractPath == p.URL()
 	} else if invoke.TxOutput != nil {
 		assetName := p.contract.GetAssetName()
 		// 除非是符文，否则都是有 InvokeParam 
@@ -1604,7 +1606,8 @@ func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 	p.mutex.Lock()
 	if p.EnableBlockL1 == INIT_ENABLE_BLOCK || data.Height < p.EnableBlockL1 {
-		if p.CurrBlockL1 == 0 {
+		if p.CurrBlockL1 < data.Height {
+			// 需要考虑索引器重建数据的可能性，这种情况下，不要更新 p.CurrBlock
 			p.CurrBlockL1 = data.Height
 		}
 		p.lastInvokeCount = p.InvokeCount
@@ -1616,10 +1619,11 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 	if p.CurrBlockL1+1 != data.Height {
 		// 异常处理流程，一直等到符合目标的区块，不然就不处理
 		if p.CurrBlockL1+1 > data.Height {
-			// TODO 区块回滚，不在这里处理，防止同一个交易处理多次
+			// 区块回滚，不在这里处理，防止同一个交易处理多次
 			// 也可能是索引器重建数据
+			p.lastInvokeCount = p.InvokeCount
 			p.mutex.Unlock()
-			return fmt.Errorf("contract current block %d large than %d", p.CurrBlockL1, data.Height)
+			return fmt.Errorf("contract current block %d >= data block %d, not need to process it", p.CurrBlockL1, data.Height)
 		} else { // p.CurrBlockL1+1 < data.Height
 			// 不可能出现，启动时已经同步了区块
 			// Log.Panicf("%s missing some L2 block, current %d, but new block %d", p.URL(), p.CurrBlockL1, data.Height)
@@ -1629,11 +1633,13 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 			}
 
 			// 同步缺少的区块，确保合约运行正常
-			p.mutex.Unlock()
-			Log.Errorf("%s missing some L1 block, current %d, but new block %d", p.URL(), p.CurrBlockL1, data.Height)
-			p.resyncBlock(p.CurrBlockL1+1, data.Height-1)
-			Log.Infof("%s has resync L1 from %d to %d", p.URL(), p.CurrBlockL1+1, data.Height-1)
-			p.mutex.Lock()
+			if p.CurrBlockL1 + 1 < data.Height {
+				p.mutex.Unlock()
+				Log.Errorf("%s missing some L1 block, current %d, but new block %d", p.URL(), p.CurrBlockL1, data.Height)
+				p.resyncBlock(p.CurrBlockL1+1, data.Height-1)
+				Log.Infof("%s has resync L1 from %d to %d", p.URL(), p.CurrBlockL1+1, data.Height-1)
+				p.mutex.Lock()
+			}
 		}
 	}
 
@@ -1731,8 +1737,8 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 			p.lastInvokeCount = p.InvokeCount
 			currBlock := p.CurrBlock
 			p.mutex.Unlock()
-			if currBlock == data.Height {
-				// 最高区块，重新进来，看看合约是不是有tx没发送出去
+			if currBlock == data.Height && len(data.InvokeTxVect) == 0 {
+				// 最高区块，重新进来，看看合约是不是有tx没发送出去，这种情况，不要有调用合约的交易
 				return nil
 			}
 			return fmt.Errorf("contract current block %d large than %d", p.CurrBlock, data.Height)
@@ -1747,12 +1753,14 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 				}
 			}
 
-			// 同步缺少的区块，确保合约运行正常
-			p.mutex.Unlock()
-			Log.Errorf("%s missing some L2 block, current %d, but new block %d", p.URL(), p.CurrBlock, data.Height)
-			p.resyncBlock_SatsNet(p.CurrBlock+1, data.Height-1)
-			Log.Infof("%s has resync L2 from %d to %d", p.URL(), p.CurrBlock+1, data.Height-1)
-			p.mutex.Lock()
+			if p.CurrBlock+1 < data.Height {
+				// 同步缺少的区块，确保合约运行正常
+				p.mutex.Unlock()
+				Log.Errorf("%s missing some L2 block, current %d, but new block %d", p.URL(), p.CurrBlock, data.Height)
+				p.resyncBlock_SatsNet(p.CurrBlock+1, data.Height-1)
+				Log.Infof("%s has resync L2 from %d to %d", p.URL(), p.CurrBlock+1, data.Height-1)
+				p.mutex.Lock()
+			}
 		}
 	}
 
@@ -2233,7 +2241,7 @@ func GetOrderTypeWithAction(action string) int {
 }
 
 // 将json格式的调用参数，转换为script格式的参数
-func ConvertInvokeParam(jsonInvokeParam string) (*InvokeParam, error) {
+func ConvertInvokeParam(jsonInvokeParam string, abbr bool) (*InvokeParam, error) {
 	var wrapperParam InvokeParam
 	err := json.Unmarshal([]byte(jsonInvokeParam), &wrapperParam)
 	if err != nil {
@@ -2245,8 +2253,12 @@ func ConvertInvokeParam(jsonInvokeParam string) (*InvokeParam, error) {
 		if err != nil {
 			return nil, err
 		}
-		
-		innerParam, err := param.Encode()
+		var innerParam []byte
+		if abbr {
+			innerParam, err = param.EncodeV2()
+		} else {
+			innerParam, err = param.Encode()
+		}
 		if err != nil {
 			return nil, err
 		}

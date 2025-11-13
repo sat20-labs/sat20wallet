@@ -68,15 +68,14 @@ type IndexerRPCClient interface {
 	GetBlock(blockHash string) (string, error)
 	GetAssetSummaryWithAddress(address string) *indexerwire.AssetSummary
 	GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexerwire.TxOutputInfo
-	GetPlainUtxoList(address string) []*indexerwire.PlainUtxo
 	GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error)
-	GetAllUtxosWithAddress(address string) ([]*indexerwire.PlainUtxo, []*indexerwire.PlainUtxo, error)
 	GetFeeRate() int64
 	GetExistingUtxos(utxos []string) ([]string, error)
 	TestRawTx(signedTxs []string) error
 	BroadCastTx(tx *wire.MsgTx) (string, error)
 	BroadCastTxs(tx []*wire.MsgTx) (error)
 	BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
+	BroadCastTxs_SatsNet(tx []*swire.MsgTx) (error)
 	GetTickInfo(assetName *swire.AssetName) *indexer.TickerInfo
 	AllowDeployTick(assetName *swire.AssetName) error
 	GetUtxoSpentTx(utxo string) (string, error) // TODO L1索引器需要支持这个api
@@ -129,27 +128,7 @@ func (p *IndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 		return nil, fmt.Errorf("can't find utxo %s", utxo)
 	}
 
-	var Assets swire.TxAssets
-	Offsets := make(map[swire.AssetName]indexer.AssetOffsets)
-	for _, info := range result.Data.Assets {
-		Assets.Add(info.ToAssetInfo())
-		if len(info.Offsets) != 0 {
-			Offsets[info.AssetName] = info.Offsets
-		}
-	}
-
-	output := TxOutput{
-		UtxoId:      result.Data.UtxoId,
-		OutPointStr: result.Data.OutPoint,
-		OutValue:    wire.TxOut{
-			Value: result.Data.Value,
-			PkScript: result.Data.PkScript,
-		},
-		Assets:      Assets,
-		Offsets:     Offsets,
-	}
-
-	return &output, nil
+	return result.Data.ToTxOutput(), nil
 }
 
 
@@ -462,31 +441,6 @@ func (p *IndexerClient) GetUtxoListWithTicker(address string, ticker *swire.Asse
 	return result.Data
 }
 
-func (p *IndexerClient) GetPlainUtxoList(address string) []*indexerwire.PlainUtxo {
-	url := p.GetUrl("/utxo/address/" + address + "/0")
-	rsp, err := p.Http.SendGetRequest(url)
-	if err != nil {
-		Log.Errorf("SendGetRequest %v failed. %v", url, err)
-		return nil
-	}
-
-	
-
-	// Unmarshal the response.
-	var result indexerwire.PlainUtxosResp
-	if err := json.Unmarshal(rsp, &result); err != nil {
-		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
-		return nil
-	}
-
-	if result.Code != 0 {
-		Log.Errorf("GetPlainUtxoList response message %s", result.Msg)
-		return nil
-	}
-
-	return result.Data
-}
-
 func (p *IndexerClient) GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error) {
 	pkScript, err := GetPkScriptFromAddress(address)
 	if err != nil {
@@ -494,7 +448,7 @@ func (p *IndexerClient) GetUtxosWithAddress(address string) (map[string]*wire.Tx
 	}
 
 	result := make(map[string]*wire.TxOut)
-	utxos1, utxos2, err := p.GetAllUtxosWithAddress(address)
+	utxos1, utxos2, err := p.getAllUtxosWithAddress(address)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +462,7 @@ func (p *IndexerClient) GetUtxosWithAddress(address string) (map[string]*wire.Tx
 	return result, nil
 }
 
-func (p *IndexerClient) GetAllUtxosWithAddress(address string) ([]*indexerwire.PlainUtxo, []*indexerwire.PlainUtxo, error) {
+func (p *IndexerClient) getAllUtxosWithAddress(address string) ([]*indexerwire.PlainUtxo, []*indexerwire.PlainUtxo, error) {
 	url := p.GetUrl("/allutxos/address/" + address)
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
@@ -526,7 +480,7 @@ func (p *IndexerClient) GetAllUtxosWithAddress(address string) ([]*indexerwire.P
 	}
 
 	if result.Code != 0 {
-		Log.Errorf("GetAllUtxosWithAddress response message %s", result.Msg)
+		Log.Errorf("getAllUtxosWithAddress response message %s", result.Msg)
 		return nil, nil, fmt.Errorf("%s", result.Msg)
 	}
 
@@ -635,8 +589,13 @@ func (p *IndexerClient) TestRawTx(signedTxs []string) error {
 				continue
 			} else if strings.Contains(r.RejectReason, "the locked tx is anchored already in sats net") {
 				// 只有聪网交易才会走到这里
+				parts := strings.Split(r.RejectReason, "the locked tx is anchored already in sats net")
+				if len(parts) != 2 {
+					Log.Errorf("BroadCastTxHex failed, %v", result.Msg)
+					return fmt.Errorf("%s", result.Msg)
+				}
 				tx, _ := DecodeMsgTx_SatsNet(signedTxs[i])
-				if strings.Contains(r.RejectReason, tx.TxID()) {
+				if strings.Contains(parts[1], tx.TxID()) {
 					// 聪网的特殊处理，只检查包含该utxo的anchorTx是否已经被广播
 					Log.Infof("BroadCastTxHex TX has anchored. %s", r.RejectReason)
 					continue
@@ -672,6 +631,9 @@ func (p *IndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 }
 
 func (p *IndexerClient) BroadCastTxs(txs []*wire.MsgTx) (error) {
+	if len(txs) == 0 {
+		return nil
+	}
 	txsHex := make([]string, 0)
 	for _, tx := range txs {
 		str, err := EncodeMsgTx(tx)
@@ -704,6 +666,31 @@ func (p *IndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 
 	return tx.TxID(), nil
 }
+
+
+func (p *IndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) (error) {
+	if len(txs) == 0 {
+		return nil
+	}
+	
+	txsHex := make([]string, 0)
+	for _, tx := range txs {
+		str, err := EncodeMsgTx_SatsNet(tx)
+		if err != nil {
+			return err
+		}
+		txsHex = append(txsHex, str)
+	}
+
+	err := p.broadCastHexTxs(txsHex)
+	if err != nil {
+		Log.Errorf("broadCastHexTxs failed. %v", err)
+		return err
+	}
+
+	return nil
+}
+
 
 func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 	req := indexerwire.SendRawTxReq{

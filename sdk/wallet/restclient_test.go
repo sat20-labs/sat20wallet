@@ -1019,13 +1019,18 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 
 				offsets := cloneOffsets(p.network.offsets[i])
 				var utxoAssets []*indexer.DisplayAsset
-				for _, asset := range assets {
+				for _, v := range assets {
 					asset := indexer.DisplayAsset{
-						AssetName:  asset.Name,
-						Amount:     asset.Amount.String(),
-						Precision:  asset.Amount.Precision,
-						BindingSat: int(asset.BindingSat),
-						Offsets:    offsets[asset.Name],
+						AssetName:  v.Name,
+						Amount:     v.Amount.String(),
+						Precision:  v.Amount.Precision,
+						BindingSat: int(v.BindingSat),
+						Offsets:    offsets[v.Name],
+					}
+					if v.Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+						asset.Offsets = []*indexer.OffsetRange{{Start:0, End:1}}
+						asset.OffsetToAmts = []*indexer.OffsetToAmount{{Offset: 0, Amount: v.Amount.String()}}
+						asset.Invalid = (p.network.utxoUsed[utxo] != "")
 					}
 					utxoAssets = append(utxoAssets, &asset)
 				}
@@ -1046,43 +1051,6 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 	return outputs
 }
 
-func (p *TestIndexerClient) GetPlainUtxoList(address string) []*indexerwire.PlainUtxo {
-	p.network.mutex.RLock()
-	defer p.network.mutex.RUnlock()
-
-	pkScript, err := AddrToPkScript(address, GetChainParam())
-	if err != nil {
-		Log.Errorf("invalid address %s, %v", address, err)
-		return nil
-	}
-
-	outputs := make([]*indexerwire.PlainUtxo, 0)
-	for i, utxo := range p.network.utxos {
-		if p.network.utxoUsed[utxo] != "" {
-			continue
-		}
-
-		assets := p.network.utxoAssets[i]
-		if assets == nil {
-			pkScript2, _ := hex.DecodeString(_pkScripts[p.network.utxoOwner[i]])
-
-			if bytes.Equal(pkScript, pkScript2) {
-				parts := strings.Split(utxo, ":")
-				vout, _ := strconv.Atoi(parts[1])
-				outputs = append(outputs, &indexerwire.PlainUtxo{
-					Txid:  parts[0],
-					Vout:  vout,
-					Value: p.network.utxoValue[i],
-				})
-			}
-		}
-	}
-
-	sort.Slice(outputs, func(i, j int) bool {
-		return outputs[i].Value > outputs[j].Value
-	})
-	return outputs
-}
 
 func (p *TestIndexerClient) GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error) {
 	p.network.mutex.RLock()
@@ -1110,55 +1078,6 @@ func (p *TestIndexerClient) GetUtxosWithAddress(address string) (map[string]*wir
 		}
 	}
 	return outputs, nil
-}
-
-func (p *TestIndexerClient) GetAllUtxosWithAddress(address string) ([]*indexerwire.PlainUtxo, []*indexerwire.PlainUtxo, error) {
-	p.network.mutex.RLock()
-	defer p.network.mutex.RUnlock()
-
-	pkScript, err := AddrToPkScript(address, GetChainParam())
-	if err != nil {
-		Log.Errorf("invalid address %s, %v", address, err)
-		return nil, nil, err
-	}
-
-	plain := make([]*indexerwire.PlainUtxo, 0)
-	others := make([]*indexerwire.PlainUtxo, 0)
-	for i, utxo := range p.network.utxos {
-		if p.network.utxoUsed[utxo] != "" {
-			continue
-		}
-
-		pkScript2, _ := hex.DecodeString(_pkScripts[p.network.utxoOwner[i]])
-
-		if bytes.Equal(pkScript, pkScript2) {
-			assets := p.network.utxoAssets[i]
-
-			parts := strings.Split(utxo, ":")
-			vout, _ := strconv.Atoi(parts[1])
-			u := indexerwire.PlainUtxo{
-				Txid:  parts[0],
-				Vout:  vout,
-				Value: p.network.utxoValue[i],
-			}
-			if assets == nil {
-				plain = append(plain, &u)
-
-			} else {
-				others = append(others, &u)
-			}
-		}
-	}
-
-	sort.Slice(plain, func(i, j int) bool {
-		return plain[i].Value > plain[j].Value
-	})
-
-	sort.Slice(others, func(i, j int) bool {
-		return others[i].Value > others[j].Value
-	})
-
-	return plain, others, nil
 }
 
 // sat/vb
@@ -1288,7 +1207,7 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 		}
 
 		// 增加对ordx部署和铸造的支持
-		inscriptions, err := indexer.ParseInscription(txIn.Witness)
+		inscriptions, _, err := indexer.ParseInscription(txIn.Witness)
 		if err != nil {
 			continue
 		}
@@ -1369,7 +1288,7 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 						Amount:     *dAmt,
 						BindingSat: uint32(ticker.N),
 					}
-					input.Assets = append(input.Assets, asset)
+					input.Assets.Add(&asset)
 					satsNum := indexer.GetBindingSatNum(dAmt, uint32(ticker.N))
 					input.Offsets[assetName] = indexer.AssetOffsets{&indexer.OffsetRange{Start: 0, End: satsNum}}
 				}
@@ -1660,6 +1579,18 @@ func (p *TestIndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
 	fmt.Printf("BroadCastTx_SatsNet succeeded. %s\n", tx.TxID())
 	return tx.TxID(), nil
 }
+
+func (p *TestIndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) (error) {
+	for _, tx := range txs {
+		_, err := p.BroadCastTx_SatsNet(tx)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 
 func (p *TestIndexerClient) GetTickInfo(assetName *swire.AssetName) *indexer.TickerInfo {
 	p.network.mutex.RLock()

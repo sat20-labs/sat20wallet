@@ -375,17 +375,6 @@ func TestVerifySignedPsbtString_satsnet(t *testing.T) {
 
 func TestBuildOrder(t *testing.T) {
 
-	// assset := indexer.DisplayAsset{
-	// 	AssetName: AssetName{
-	// 		Protocol: "ordx",
-	// 		Type: "f",
-	// 		Ticker: "rarepizza",
-	// 	},
-	// 	Amount: "400",
-	// 	Precision: 0,
-	// 	BindingSat: 1,
-	// 	Offsets: nil,
-	// }
 
 	info := UtxoInfo{
 		AssetsInUtxo: indexer.AssetsInUtxo{
@@ -420,17 +409,6 @@ func TestBuildOrder(t *testing.T) {
 
 func TestFinalizeOrder(t *testing.T) {
 
-	// assset := indexer.DisplayAsset{
-	// 	AssetName: AssetName{
-	// 		Protocol: "ordx",
-	// 		Type: "f",
-	// 		Ticker: "rarepizza",
-	// 	},
-	// 	Amount: "400",
-	// 	Precision: 0,
-	// 	BindingSat: 1,
-	// 	Offsets: nil,
-	// }
 	psbt := "70736274ff01005f01000000012a4b6c10fe9b369817650d222d9d7212abde1c9477b54ffdbd7e3e6626357fee0100000000ffffffff01200300000000000000225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380000000000010144900100000000000001046f7264780166097261726570697a7a61053430303a3001225120661a36d11cddce254ed8e38bd46c5ece87bd6fa913ee74f94d707591c817cb380000"
 
 	utxos := []string{

@@ -37,6 +37,7 @@ const (
 	DEFAULT_SERVICE_FEE_RUN_CONTRACT    int64 = 1000 // 通道运行的费用，加上运行合约所得盈利的20%作为运行费用，也就是从合约中提取盈利，需要分给通道节点各10%
 	DEFAULT_FEE_RATIO_WITHDRAW_FROM_CONTRACT int64 = 200  // 千分之
 	DEFAULT_FEE_RATIO                   int64 = 10   // 千分之
+	STUB_VALUE_BRC20                    int64 = 1500
 
 	MAX_FEE         int64 = 100000
 	MAX_FEE_SATSNET int64 = DEFAULT_FEE_SATSNET
