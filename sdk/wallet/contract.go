@@ -1607,6 +1607,7 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 	p.mutex.Lock()
 	if p.EnableBlockL1 == INIT_ENABLE_BLOCK || data.Height < p.EnableBlockL1 {
 		if p.CurrBlockL1 < data.Height {
+			// 需要考虑索引器重建数据的可能性，这种情况下，不要更新 p.CurrBlock
 			p.CurrBlockL1 = data.Height
 		}
 		p.lastInvokeCount = p.InvokeCount
@@ -1618,16 +1619,11 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 	if p.CurrBlockL1+1 != data.Height {
 		// 异常处理流程，一直等到符合目标的区块，不然就不处理
 		if p.CurrBlockL1+1 > data.Height {
-			// TODO 区块回滚，不在这里处理，防止同一个交易处理多次
+			// 区块回滚，不在这里处理，防止同一个交易处理多次
 			// 也可能是索引器重建数据
 			p.lastInvokeCount = p.InvokeCount
-			currBlock := p.CurrBlockL1
 			p.mutex.Unlock()
-			if currBlock == data.Height {
-				// 最高区块，重新进来
-				return nil
-			}
-			return fmt.Errorf("contract current block %d large than %d", p.CurrBlockL1, data.Height)
+			return fmt.Errorf("contract current block %d >= data block %d, not need to process it", p.CurrBlockL1, data.Height)
 		} else { // p.CurrBlockL1+1 < data.Height
 			// 不可能出现，启动时已经同步了区块
 			// Log.Panicf("%s missing some L2 block, current %d, but new block %d", p.URL(), p.CurrBlockL1, data.Height)
@@ -1741,8 +1737,8 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 			p.lastInvokeCount = p.InvokeCount
 			currBlock := p.CurrBlock
 			p.mutex.Unlock()
-			if currBlock == data.Height {
-				// 最高区块，重新进来，看看合约是不是有tx没发送出去
+			if currBlock == data.Height && len(data.InvokeTxVect) == 0 {
+				// 最高区块，重新进来，看看合约是不是有tx没发送出去，这种情况，不要有调用合约的交易
 				return nil
 			}
 			return fmt.Errorf("contract current block %d large than %d", p.CurrBlock, data.Height)
