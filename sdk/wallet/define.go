@@ -39,7 +39,7 @@ const (
 	DEFAULT_FEE_RATIO                   int64 = 10   // 千分之
 	STUB_VALUE_BRC20                    int64 = 1500
 
-	MAX_FEE         int64 = 100000
+	MAX_FEE         int64 = 10000
 	MAX_FEE_SATSNET int64 = DEFAULT_FEE_SATSNET
 
 	POOL_INIT_PLAIN_SATS int64 = 100000
