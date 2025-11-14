@@ -552,9 +552,16 @@ func (p *Manager) BatchSendAssets_SatsNet(destAddr string,
 	return txid, nil
 }
 
+
 // 发送资产到一个地址上
 func (p *Manager) SendAssets_SatsNet(destAddr string,
 	assetName string, amt string, memo []byte) (*swire.MsgTx, error) {
+	return p.sendAssets_SatsNet(destAddr, assetName, amt, memo, true)
+}
+
+// 发送资产到一个地址上
+func (p *Manager) sendAssets_SatsNet(destAddr string,
+	assetName string, amt string, memo []byte, autoAdjust bool) (*swire.MsgTx, error) {
 
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
@@ -628,8 +635,8 @@ func (p *Manager) SendAssets_SatsNet(destAddr string,
 		}
 	}
 	if assetAmt.Cmp(expectedAmt) < 0 {
-		if indexer.IsPlainAsset(name) && assetAmt.Cmp(dAmt) == 0 {
-			// 转移全部，微调下dAmt
+		if autoAdjust && indexer.IsPlainAsset(name) && assetAmt.Cmp(dAmt) == 0 {
+			// 调整输出 转移全部，微调下dAmt
 			dAmt = dAmt.Sub(fee)
 		} else {
 			return nil, fmt.Errorf("not enough asset %s", assetName)
@@ -1095,7 +1102,7 @@ func (p *Manager) GenerateStubUtxosV2(n int, excludedUtxoMap map[string]bool,
 		feeRate = p.GetFeeRate()
 	}
 
-	tx, prevFetcher, fee, err := p.BuildBatchSendTx_btc(destAddr, 330, n, excludedUtxoMap, feeRate, nil)
+	tx, prevFetcher, fee, err := p.BuildBatchSendTx_btc(destAddr, 330, n, excludedUtxoMap, feeRate, nil, false)
 	if err != nil {
 		Log.Errorf("buildBatchSendTx failed. %v", err)
 		return nil, 0, err
@@ -1165,7 +1172,7 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 	newName := GetAssetName(tickerInfo)
 	switch name.Protocol {
 	case "": // btc
-		tx, prevFetcher, fee, err = p.BuildBatchSendTx_btc(destAddr, dAmt.Int64(), n, nil, feeRate, memo)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTx_btc(destAddr, dAmt.Int64(), n, nil, feeRate, memo, true)
 	case indexer.PROTOCOL_NAME_ORDX:
 		tx, prevFetcher, fee, err = p.BuildBatchSendTx_ordx(destAddr, newName, dAmt, n, feeRate, memo)
 	case indexer.PROTOCOL_NAME_RUNES:
@@ -1219,7 +1226,7 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 // 从p2tr地址发出
 func (p *Manager) BuildBatchSendTx_btc(destAddr string, amt int64, n int,
 	excludedUtxoMap map[string]bool,
-	feeRate int64, memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+	feeRate int64, memo []byte, autoAdjust bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
 	if amt < 330 {
 		return nil, nil, 0, fmt.Errorf("amount too small")
@@ -1258,9 +1265,14 @@ func (p *Manager) BuildBatchSendTx_btc(destAddr string, amt int64, n int,
 	}
 	if outputValue != required {
 		// 调整输出  TODO　由调用方决定要不要调整
-		amt = outputValue / int64(n)
-		for _, txOut := range tx.TxOut {
-			txOut.Value = amt
+		if autoAdjust {
+			amt = outputValue / int64(n)
+			for _, txOut := range tx.TxOut {
+				txOut.Value = amt
+			}
+			tx.TxOut[0].Value += outputValue % int64(n)
+		} else {
+			return nil, nil, 0, fmt.Errorf("not enough sats, required %d but only %d", required, outputValue) 
 		}
 	}
 
@@ -2941,7 +2953,7 @@ func (p *Manager) BuildSendOrdxTxWithStub(srcAddress string, excluded map[string
 // 不需要提前预估手续费，能更好利用utxo资源。如果是发送白聪，支持全部发送（内部自动调整发送数量）。
 func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 	assetNameStr string, feeRate int64, memo []byte,
-	reason string) (string, int64, error) {
+	reason string, autoAdjust bool) (string, int64, error) {
 
 	if p.wallet == nil {
 		return "", 0, fmt.Errorf("wallet is not created/unlocked")
@@ -2973,7 +2985,7 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 	excluded := make(map[string]bool)
 	switch name.Protocol {
 	case "": // btc
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_btc(srcAddr, excluded, dest, feeRate, memo, false, false)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_btc(srcAddr, excluded, dest, feeRate, memo, false, false, autoAdjust)
 	case indexer.PROTOCOL_NAME_ORDX:
 		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_ordx(srcAddr, excluded, dest, assetName, feeRate, memo, false, false)
 	case indexer.PROTOCOL_NAME_RUNES:
@@ -3038,7 +3050,7 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 
 // 给多个地址发送不同数量的白聪，支持全部发送
 func (p *Manager) BuildBatchSendTxV3_btc(srcAddress string, excluded map[string]bool, dest []*SendAssetInfo,
-	feeRate int64, memo []byte, excludeRecentBlock, inChannel bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+	feeRate int64, memo []byte, excludeRecentBlock, inChannel, autoAdjust bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 	if p.wallet == nil {
 		return nil, nil, 0, fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -3080,11 +3092,15 @@ func (p *Manager) BuildBatchSendTxV3_btc(srcAddress string, excluded map[string]
 	}
 	if outputValue != requiredValue {
 		// 刚好输出等于所有可用的白聪，才会调整输出的聪数量
-		// TODO　由调用方决定要不要调整
-		if len(dest) != 1 {
+		// 调整输出 TODO　由调用方决定要不要调整
+		if autoAdjust {
+			if len(dest) != 1 {
+				return nil, nil, 0, fmt.Errorf("no enough plain sats")
+			}
+			tx.TxOut[0].Value = outputValue
+		} else {
 			return nil, nil, 0, fmt.Errorf("no enough plain sats")
 		}
-		tx.TxOut[0].Value = outputValue
 	}
 
 	weightEstimate.AddP2TROutput() // fee

@@ -183,9 +183,9 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, jsonInvokeParam str
 		return "", err
 	}
 
-	tx, err := p.SendAssets_SatsNet(channelAddr, ASSET_PLAIN_SAT.String(), fmt.Sprintf("%d", fee), nullDataScript)
+	tx, err := p.sendAssets_SatsNet(channelAddr, ASSET_PLAIN_SAT.String(), fmt.Sprintf("%d", fee), nullDataScript, false)
 	if err != nil {
-		Log.Errorf("SendAssets_SatsNet %s failed", channelAddr)
+		Log.Errorf("sendAssets_SatsNet %s failed", channelAddr)
 		return "", err
 	}
 	Log.Infof("invoke contract %s with txId %s", contractURL, tx.TxID())
@@ -248,9 +248,9 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, jsonInvokeParam s
 
 	var txId string
 	if amt == "" || amt == "0" { // 不需要携带资产
-		tx, err := p.SendAssets_SatsNet(channelAddr, ASSET_PLAIN_SAT.String(), fmt.Sprintf("%d", fee), nullDataScript)
+		tx, err := p.sendAssets_SatsNet(channelAddr, ASSET_PLAIN_SAT.String(), fmt.Sprintf("%d", fee), nullDataScript, false)
 		if err != nil {
-			Log.Errorf("SendAssets_SatsNet %s failed", channelAddr)
+			Log.Errorf("sendAssets_SatsNet %s failed", channelAddr)
 			return "", err
 		}
 		txId = tx.TxID()
@@ -349,7 +349,7 @@ func (p *Manager) InvokeContractV2(contractURL string, jsonInvokeParam string,
 	// TODO 等主网支持多个op_return，就必须加上参数
 	// 这是默认行为，在主网只要有交易往这里面转资产，就自动触发穿越行为
 	// 原因：一方面op_return能写入的数据太少，另一方面runes还会占有，而主网只能有一个op_return
-	txId, fee, err := p.BatchSendAssetsV3([]*SendAssetInfo{dest}, assetName, feeRate, nullDataScript, "")
+	txId, fee, err := p.BatchSendAssetsV3([]*SendAssetInfo{dest}, assetName, feeRate, nullDataScript, "", false)
 	if err != nil {
 		Log.Errorf("BatchSendAssetsV3 %s failed", channelAddr)
 		return "", err
