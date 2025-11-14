@@ -319,7 +319,7 @@ func (p *Manager) MintTransferWithCommitPriKey(srcAddr, destAddr string, assetNa
 	return insc, nil
 }
 
-func CalcFeeForMintTransfer(inputLen int, srcAddr, destAddr string, scriptType int,
+func CalcFeeForMintTransfer(inputLen int, srcAddr, destAddr string, scriptType int, witnessScript []byte,
 	assetName *indexer.AssetName, amt *Decimal, feeRate int64) (int64, error) {
 	
 	srcPkScript, err := AddrToPkScript(srcAddr, GetChainParam())
@@ -351,6 +351,7 @@ func CalcFeeForMintTransfer(inputLen int, srcAddr, destAddr string, scriptType i
 		DestAddress:            destAddr,
 		ChangeAddress:          srcAddr,
 		ScriptType:             scriptType,
+		WitnessScript:          witnessScript,
 		Signer:                 nil,
 	}
 

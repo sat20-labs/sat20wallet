@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
@@ -154,6 +155,88 @@ func TestInscribeTransfer(t *testing.T) {
 	fmt.Printf("fee: %d\n", EstimatedInscribeFee(1, len(request.InscriptionData.Body), 1, 0))
 }
 
+
+// 涉及引导节点
+func CommitDelayScriptForServer(selfKey, bootstrapKey, revokeKey *btcec.PublicKey, csvDelay uint32) (
+	[]byte, []byte, error) {
+
+	toLocalRedeemScript, err := utils.CommitScriptToSelf2(
+		csvDelay, selfKey, bootstrapKey, revokeKey,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	toLocalScriptHash, err := utils.WitnessScriptHash(
+		toLocalRedeemScript,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return toLocalScriptHash,
+		toLocalRedeemScript,
+	nil
+
+}
+
+func CommitDelayScriptForClient(selfKey, revokeKey *btcec.PublicKey, csvDelay uint32) (
+	[]byte, []byte, error) {
+
+	toLocalRedeemScript, err := utils.CommitScriptToSelf(
+		csvDelay, selfKey, revokeKey,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	toLocalScriptHash, err := utils.WitnessScriptHash(
+		toLocalRedeemScript,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+		return toLocalScriptHash,
+		toLocalRedeemScript,
+	nil
+
+}
+
+// 涉及引导节点
+func CommitDirectScriptForServer(remoteKey *btcec.PublicKey, bootstrapKey *btcec.PublicKey) (
+	[]byte, []byte, uint32, error) {
+	// First, create the 2-of-2 multi-sig script itself.
+	witnessScript, err := utils.GenMultiSigScript(remoteKey.SerializeCompressed(), bootstrapKey.SerializeCompressed())
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	// With the 2-of-2 script in had, generate a p2wsh script which pays
+	// to the funding script.
+	pkScript, err := utils.WitnessScriptHash(witnessScript)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	// Since this is a regular P2WKH, the WitnessScipt and PkScript
+	// should both be set to the script hash.
+	return  pkScript,
+		 witnessScript,
+	 0, nil
+
+}
+
+func CommitDirectScriptForClient(remoteKey *btcec.PublicKey) ([]byte, error) {
+
+	pkScriptA, err := GetP2TRpkScript(remoteKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return pkScriptA, nil
+}
+
 func TestCalcTransferFee(t *testing.T) {
 	src := "tb1p62gjhywssq42tp85erlnvnumkt267ypndrl0f3s4sje578cgr79sekhsua"
 	dest := "tb1qw86hsm7etf4jcqqg556x94s6ska9z0239ahl0tslsuvr5t5kd0nq7vh40m" // channel
@@ -182,13 +265,43 @@ func TestCalcTransferFee(t *testing.T) {
 		fmt.Printf("%d: fee = %d\n", i, fee-330)
 	}
 
+
+	wallet1, _, _ := NewInteralWallet(&chaincfg.TestNet3Params)
+	wallet2, _, _ := NewInteralWallet(&chaincfg.TestNet3Params)
+	wallet3, _, _ := NewInteralWallet(&chaincfg.TestNet3Params)
+
+	serverDelayWitness, _, _ := CommitDelayScriptForServer(wallet1.GetPubKey(), wallet2.GetPubKey(), wallet3.GetPubKey(), 1440)
+	serverDirectWitness, _, _, _ := CommitDirectScriptForServer(wallet1.GetPubKey(), wallet2.GetPubKey())
+	clientDelayWitness, _, _ := CommitDelayScriptForClient(wallet1.GetPubKey(), wallet3.GetPubKey(), 1440)
+	clientDirectWitness, _ := CommitDirectScriptForClient(wallet1.GetPubKey())
+
+	type cases struct {
+		st int
+		witness []byte
+	}
+
+	witnesV := []*cases{
+		{SCRIPT_TYPE_TAPROOTKEYSPEND, nil},
+		{SCRIPT_TYPE_CHANNEL, nil},
+		{SCRIPT_TYPE_PUNISH, serverDelayWitness},
+		{SCRIPT_TYPE_PUNISH, serverDirectWitness},
+		{SCRIPT_TYPE_PUNISH, clientDelayWitness},
+		{SCRIPT_TYPE_PUNISH, clientDirectWitness},
+
+		{SCRIPT_TYPE_SWEEP, serverDelayWitness},
+		{SCRIPT_TYPE_SWEEP, serverDirectWitness},
+		{SCRIPT_TYPE_SWEEP, clientDelayWitness},
+		{SCRIPT_TYPE_SWEEP, clientDirectWitness},
+
+	}
+
 	fmt.Printf("\nmint-transfer\n")
-	for i := 1; i < 5; i++ {
-		fee, err := CalcFeeForMintTransfer(i, src, dest, SCRIPT_TYPE_CHANNEL, assetName, amt, 1)
+	for i, c := range witnesV {
+		fee, err := CalcFeeForMintTransfer(1, src, dest, c.st, c.witness, assetName, amt, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Printf("%d: fee = %d\n", i, fee-330)
+		fmt.Printf("%d %d:  fee = %d\n", i, c.st, fee-330)
 	}
 }
 
