@@ -207,9 +207,16 @@ func (p *Manager) MintTransferV2_brc20(srcAddr, destAddr string,
 		destAddr = srcAddr
 	}
 
+	var scriptType int
+	if inChannel {
+		scriptType = SCRIPT_TYPE_CHANNEL
+	} else {
+		scriptType = SCRIPT_TYPE_TAPROOTKEYSPEND
+	}
+
 	return p.MintTransferV3_brc20(NewUtxoMgr(srcAddr, p.l1IndexerClient), destAddr, 
 	excludedUtxoMap, assetName, amt, feeRate, defaultUtxos, onlyUsingDefaultUtxos, 
-	revealPrivKey, inChannel, broadcast, lockInputs)
+	revealPrivKey, scriptType, nil, broadcast, lockInputs)
 }
 
 // defaultUtxos 可以是前置的tx的输出
@@ -217,16 +224,16 @@ func (p *Manager) MintTransferV3_brc20(srcUtxoMgr *UtxoMgr, destAddr string,
 	excludedUtxoMap map[string]bool,
 	assetName *indexer.AssetName, amt *Decimal, feeRate int64, 
 	defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,  
-	revealPrivKey []byte, inChannel, broadcast, lockInputs bool) (*InscribeResv, error) {
+	revealPrivKey []byte, scriptType int, witnessScript []byte, broadcast, lockInputs bool) (*InscribeResv, error) {
 
 	var signer Signer
-	if !inChannel {
+	if scriptType == SCRIPT_TYPE_TAPROOTKEYSPEND {
 		signer = p.SignTxV2
 	}
 
 	return p.mintTransfer(srcUtxoMgr, destAddr, excludedUtxoMap, 
 		assetName, amt, feeRate, defaultUtxos, onlyUsingDefaultUtxos, 
-		revealPrivKey, signer, broadcast, lockInputs)
+		revealPrivKey, signer, scriptType, witnessScript, broadcast, lockInputs)
 }
 
 
@@ -235,7 +242,7 @@ func (p *Manager) mintTransfer(srcUtxoMgr *UtxoMgr, destAddr string,
 	excludedUtxoMap map[string]bool,
 	assetName *indexer.AssetName, amt *Decimal, feeRate int64, 
 	defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,  
-	revealPrivKey []byte, signer Signer, broadcast, lockInputs bool) (*InscribeResv, error) {
+	revealPrivKey []byte, signer Signer, scriptType int, witnessScript []byte, broadcast, lockInputs bool) (*InscribeResv, error) {
 
 	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return nil, fmt.Errorf("not brc20")
@@ -251,7 +258,7 @@ func (p *Manager) mintTransfer(srcUtxoMgr *UtxoMgr, destAddr string,
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_TRANSFER_BODY, tickInfo.AssetName.Ticker, amt.String())
 	insc, err := p.inscribeV2(srcUtxoMgr, destAddr, excludedUtxoMap, body, feeRate, defaultUtxos, onlyUsingDefaultUtxos, 
-		revealPrivKey, signer, 0, nil, broadcast)
+		revealPrivKey, signer, scriptType, witnessScript, broadcast)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +269,7 @@ func (p *Manager) mintTransfer(srcUtxoMgr *UtxoMgr, destAddr string,
 	return insc, nil
 }
 
-// 对commit tx的输出进行punish
+// 使用private key构造铭文的commit tx，适合构建punish tx
 func (p *Manager) MintTransferWithCommitPriKey(srcAddr, destAddr string, assetName *indexer.AssetName,
 	amt *Decimal, feeRate int64, defaultUtxos []*TxOutput, 
 	scriptType int, redeemScript []byte, revPrivKey *secp256k1.PrivateKey) (*InscribeResv, error) {
@@ -291,6 +298,15 @@ func (p *Manager) MintTransferWithCommitPriKey(srcAddr, destAddr string, assetNa
 			preOut := prevFetcher.FetchPrevOutput(txIn.PreviousOutPoint)
 			scriptType := GetPkScriptType(preOut.PkScript)
 			switch scriptType {
+			case txscript.WitnessV1TaprootTy: // p2tr
+				witness, err := txscript.TaprootWitnessSignature(tx, sigHashes, i,
+					preOut.Value, preOut.PkScript,
+					txscript.SigHashDefault, revPrivKey)
+				if err != nil {
+					Log.Errorf("TaprootWitnessSignature failed. %v", err)
+					return err
+				}
+				txIn.Witness = witness
 				
 			case txscript.WitnessV0ScriptHashTy: //"P2WSH": 
 				sigScript, err := txscript.RawTxInWitnessSignature(tx, sigHashes, i,

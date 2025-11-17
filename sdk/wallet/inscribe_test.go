@@ -205,25 +205,25 @@ func CommitDelayScriptForClient(selfKey, revokeKey *btcec.PublicKey, csvDelay ui
 
 // 涉及引导节点
 func CommitDirectScriptForServer(remoteKey *btcec.PublicKey, bootstrapKey *btcec.PublicKey) (
-	[]byte, []byte, uint32, error) {
+	[]byte, []byte, error) {
 	// First, create the 2-of-2 multi-sig script itself.
 	witnessScript, err := utils.GenMultiSigScript(remoteKey.SerializeCompressed(), bootstrapKey.SerializeCompressed())
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, err
 	}
 
 	// With the 2-of-2 script in had, generate a p2wsh script which pays
 	// to the funding script.
 	pkScript, err := utils.WitnessScriptHash(witnessScript)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, err
 	}
 
 	// Since this is a regular P2WKH, the WitnessScipt and PkScript
 	// should both be set to the script hash.
 	return  pkScript,
 		 witnessScript,
-	 0, nil
+	  nil
 
 }
 
@@ -270,10 +270,15 @@ func TestCalcTransferFee(t *testing.T) {
 	wallet2, _, _ := NewInteralWallet(&chaincfg.TestNet3Params)
 	wallet3, _, _ := NewInteralWallet(&chaincfg.TestNet3Params)
 
-	serverDelayWitness, _, _ := CommitDelayScriptForServer(wallet1.GetPubKey(), wallet2.GetPubKey(), wallet3.GetPubKey(), 1440)
-	serverDirectWitness, _, _, _ := CommitDirectScriptForServer(wallet1.GetPubKey(), wallet2.GetPubKey())
-	clientDelayWitness, _, _ := CommitDelayScriptForClient(wallet1.GetPubKey(), wallet3.GetPubKey(), 1440)
+	_, serverDelayWitness, _ := CommitDelayScriptForServer(wallet1.GetPubKey(), wallet2.GetPubKey(), wallet3.GetPubKey(), 1440)
+	_, serverDirectWitness, _ := CommitDirectScriptForServer(wallet1.GetPubKey(), wallet2.GetPubKey())
+	_, clientDelayWitness, _ := CommitDelayScriptForClient(wallet1.GetPubKey(), wallet3.GetPubKey(), 1440)
 	clientDirectWitness, _ := CommitDirectScriptForClient(wallet1.GetPubKey())
+
+	fmt.Printf("serverDelayWitness length %d\n", len(serverDelayWitness))
+	fmt.Printf("serverDirectWitness length %d\n", len(serverDirectWitness))
+	fmt.Printf("clientDelayWitness length %d\n", len(clientDelayWitness))
+	fmt.Printf("clientDirectWitness length %d\n", len(clientDirectWitness))
 
 	type cases struct {
 		st int

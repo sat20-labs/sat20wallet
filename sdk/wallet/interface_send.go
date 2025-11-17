@@ -1738,9 +1738,15 @@ func (p *Manager) SelectUtxosForBRC20(utxomgr *UtxoMgr, excludedUtxoMap map[stri
 	}
 
 	// 再铸造一个，加入selected中，还没有广播，但锁定输入
+	var scriptType int
+	if inChannel {
+		scriptType = SCRIPT_TYPE_CHANNEL
+	} else {
+		scriptType = SCRIPT_TYPE_TAPROOTKEYSPEND
+	}
 	inscribe, err := p.MintTransferV3_brc20(utxomgr, utxomgr.GetAddress(), 
 		excludedUtxoMap, assetName, 
-		wantToMint, feeRate, nil, false, nil, inChannel, false, true)
+		wantToMint, feeRate, nil, false, nil, scriptType, nil, false, true)
 	if err != nil {
 		Log.Errorf("MintTransfer_brc20 failed, %v", err)
 		return nil, nil, 0, err
