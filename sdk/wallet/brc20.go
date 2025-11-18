@@ -227,7 +227,7 @@ func (p *Manager) MintTransferV3_brc20(srcUtxoMgr *UtxoMgr, destAddr string,
 	revealPrivKey []byte, scriptType int, witnessScript []byte, broadcast, lockInputs bool) (*InscribeResv, error) {
 
 	var signer Signer
-	if scriptType == SCRIPT_TYPE_TAPROOTKEYSPEND {
+	if scriptType == SCRIPT_TYPE_TAPROOTKEYSPEND && p.wallet.GetAddress() == srcUtxoMgr.GetAddress() {
 		signer = p.SignTxV2
 	}
 

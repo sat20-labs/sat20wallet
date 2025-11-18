@@ -230,7 +230,7 @@ func (builder *InscriptionBuilder) initTool(network *chaincfg.Params,
 	}
 	err = builder.signCommitTx()
 	if err != nil {
-		return errors.New("sign commit tx error")
+		return fmt.Errorf("sign commit tx error, %v", err)
 	}
 	err = builder.completeRevealTx()
 	if err != nil {
