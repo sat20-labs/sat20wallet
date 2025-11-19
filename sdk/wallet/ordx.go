@@ -31,7 +31,7 @@ const CONTENT_MINT_ABBR_BODY string = `{"p":"ordx","op":"mint","tick":"%s"}`
 const CONTENT_SETKV1_BODY string = `{"p":"sns","op":"update","name":"%s","%s":"%s"}`
 const CONTENT_SETKV_N_BODY string = `{"p":"sns","op":"update","name":"%s""%s"}`
 
-// 不精确，因为 60 这个数稍微大一些，但足够用
+// 不精确，因为 60 这个数稍微大一些，但足够用，也没有考虑输入可能是p2wsh脚本
 func EstimatedInscribeFee(inputLen, bodyLen int, feeRate int64, revealOutValue int64) int64 {
 	commitFee := int64(154 + (inputLen - 1) * 60)
 	revealFee := int64(bodyLen / 4 + 138)
