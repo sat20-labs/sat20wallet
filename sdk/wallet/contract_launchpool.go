@@ -274,7 +274,7 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 			GetBindingSatNum(indexer.NewDefaultDecimal(p.MaxSupply), assetName.N)
 
 		// splicing-in
-		total += CalcFee_SplicingIn(1, feeLen, p.GetAssetName(), feeRate)
+		total += CalcFee_SplicingIn(1, feeLen, p.GetAssetName(), feeRate, 0, 0)
 
 		// 激活tx
 		total += DEFAULT_FEE_SATSNET
@@ -290,7 +290,7 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 		total = estimatedDeployFee[feeLen-1]*feeRate + 660
 
 		// splicing-in
-		total += CalcFee_SplicingIn(1, feeLen, p.GetAssetName(), feeRate)
+		total += CalcFee_SplicingIn(1, feeLen, p.GetAssetName(), feeRate, 0, 0)
 
 		// 激活tx
 		total += DEFAULT_FEE_SATSNET
@@ -310,7 +310,7 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 		total += estimatedMintFee[feeLen-1]*feeRate + 330
 
 		// splicing-in
-		total += CalcFee_SplicingIn(1, feeLen, p.GetAssetName(), feeRate)
+		total += CalcFee_SplicingIn(1, feeLen, p.GetAssetName(), feeRate, 0, 0)
 
 		// 激活tx
 		total += DEFAULT_FEE_SATSNET
@@ -325,13 +325,14 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 }
 
 // 仅仅是估算，并且尽可能多预估了输入和输出
-func CalcFee_SplicingIn(utxoLen, feeLen int, assetName *indexer.AssetName, feeRate int64) int64 {
+func CalcFee_SplicingIn(utxoLen, feeLen int, assetName *indexer.AssetName, feeRate int64, 
+	stubNum int, stubValue int64) int64 {
 
 	var weightEstimate utils.TxWeightEstimator
 
 	// asset utxo
 	for i := 0; i < utxoLen; i++ {
-		weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
 	}
 
 	// fee utxo
@@ -352,19 +353,14 @@ func CalcFee_SplicingIn(utxoLen, feeLen int, assetName *indexer.AssetName, feeRa
 	weightEstimate.AddP2TROutput()  // fees change
 
 	moreSats := int64(0)
-	n := NeedStubUtxoForChannel(assetName)
-	if n > 0 {
-		for range n {
+	if stubNum > 0 {
+		for range stubNum {
 			weightEstimate.AddP2WSHOutput() // stub
-			moreSats += 330
+			moreSats += stubValue
 		}
 		if assetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
 			// 符文的输入聪数量，在需要余额时可能不够
-			moreSats += 330
-		}
-		if assetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
-			// TODO 需要增加至少铭刻两个transfer铭文的聪
-			moreSats += STUB_VALUE_BRC20
+			moreSats += stubValue
 		}
 	}
 

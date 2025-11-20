@@ -5558,6 +5558,8 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 				if err != nil {
 					return nil, fmt.Errorf("can't regenerate inscribe info from request: %v", insc)
 				}
+				PrintJsonTx(insc2.CommitTx, "prev transfer commit for contract")
+				PrintJsonTx(insc2.RevealTx, "prev transfer reveal for contract")
 				if !CompareMsgTx(insc2.CommitTx, insc.CommitTx) {
 					return nil, fmt.Errorf("commit tx different")
 				}

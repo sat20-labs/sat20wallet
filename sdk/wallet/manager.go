@@ -283,7 +283,7 @@ func (p *Manager) GetInscribeResv(id int64) *InscribeResv {
 
 func (p *Manager) GetFeeRate() int64 {
 	if IsTestNet() {
-		return 2
+		return 1
 	}
 	now := time.Now().Unix()
 	if now-p.refreshTimeL1 > 3*60 {

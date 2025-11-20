@@ -42,8 +42,8 @@ func (s PrevOutputs) UtxoViewpoint() (UtxoViewpoint, error) {
 const (
 	SCRIPT_TYPE_TAPROOTKEYSPEND = 0
 	SCRIPT_TYPE_CHANNEL = 1
-	SCRIPT_TYPE_PUNISH = 2
-	SCRIPT_TYPE_SWEEP = 3
+	SCRIPT_TYPE_PUNISH = 2 // 需要提供witness script
+	SCRIPT_TYPE_SWEEP = 3  // 需要提供witness script
 )
 
 type InscriptionRequest struct {
@@ -230,7 +230,7 @@ func (builder *InscriptionBuilder) initTool(network *chaincfg.Params,
 	}
 	err = builder.signCommitTx()
 	if err != nil {
-		return errors.New("sign commit tx error")
+		return fmt.Errorf("sign commit tx error, %v", err)
 	}
 	err = builder.completeRevealTx()
 	if err != nil {

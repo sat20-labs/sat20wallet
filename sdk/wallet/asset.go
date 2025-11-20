@@ -294,24 +294,26 @@ func GetCoreAssetName() *indexer.AssetName {
 // ordx 需要2个
 // runes需要1个
 // brc20需要n个
-func NeedStubUtxoForChannel(name *indexer.AssetName) int {
+// 输出时目标地址上需要的stub
+func NeedStubUtxoForChannel(name *indexer.AssetName) (int, int64) {
 	switch name.Protocol {
 	case indexer.PROTOCOL_NAME_RUNES:
-		return 1
+		return 1, 330
 	case indexer.PROTOCOL_NAME_ORDX:
 		if name.Type == indexer.ASSET_TYPE_FT || name.Type == indexer.ASSET_TYPE_EXOTIC {
-			return 2
+			return 2, 330
 		}
-		return 0
+		return 0, 0
 	case indexer.PROTOCOL_NAME_BRC20:
-		return 2
+		return 2, STUB_VALUE_BRC20
 	default:
-		return 0
+		return 0, 0
 	}
 }
 
-func NeedStubUtxoForAsset(name *AssetName, amt *Decimal) bool {
-	if c := NeedStubUtxoForChannel(&name.AssetName); c > 0 {
+// 输入时需要一个330的stub
+func NeedStubUtxoForInputAsset(name *AssetName, amt *Decimal) bool {
+	if c, _ := NeedStubUtxoForChannel(&name.AssetName); c > 0 {
 		satsNum := GetBindingSatNum(amt, name.N)
 		return satsNum != 0 && satsNum < 330
 	}
