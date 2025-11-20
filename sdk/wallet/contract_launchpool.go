@@ -331,7 +331,7 @@ func CalcFee_SplicingIn(utxoLen, feeLen int, assetName *indexer.AssetName, feeRa
 
 	// asset utxo
 	for i := 0; i < utxoLen; i++ {
-		weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
 	}
 
 	// fee utxo
@@ -352,19 +352,15 @@ func CalcFee_SplicingIn(utxoLen, feeLen int, assetName *indexer.AssetName, feeRa
 	weightEstimate.AddP2TROutput()  // fees change
 
 	moreSats := int64(0)
-	n := NeedStubUtxoForChannel(assetName)
+	n, v := NeedStubUtxoForChannel(assetName)
 	if n > 0 {
 		for range n {
 			weightEstimate.AddP2WSHOutput() // stub
-			moreSats += 330
+			moreSats += v
 		}
 		if assetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
 			// 符文的输入聪数量，在需要余额时可能不够
-			moreSats += 330
-		}
-		if assetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
-			// TODO 需要增加至少铭刻两个transfer铭文的聪
-			moreSats += STUB_VALUE_BRC20
+			moreSats += v
 		}
 	}
 
