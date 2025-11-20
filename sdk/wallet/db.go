@@ -371,6 +371,7 @@ func saveLockedUtxo(db db.KVDB, network, utxo string, value *LockedUtxo) error {
 }
 
 func DeleteLockedUtxo(db db.KVDB, network, utxo string) error {
+	Log.Infof("DeleteLockedUtxo succ. %s", utxo)
 	return db.Delete([]byte(GetLockedUtxoKey(network, utxo)))
 }
 
