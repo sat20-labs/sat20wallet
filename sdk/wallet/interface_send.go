@@ -1748,9 +1748,11 @@ func (p *Manager) SelectUtxosForBRC20(utxomgr *UtxoMgr, excludedUtxoMap map[stri
 		excludedUtxoMap, assetName, 
 		wantToMint, feeRate, nil, false, nil, scriptType, nil, false, true)
 	if err != nil {
-		Log.Errorf("MintTransfer_brc20 failed, %v", err)
+		Log.Errorf("MintTransferV3_brc20 failed, %v", err)
 		return nil, nil, 0, err
 	}
+	PrintJsonTx(inscribe.CommitTx, "prev transfer commit")
+	PrintJsonTx(inscribe.RevealTx, "prev transfer reveal")
 	output := GenerateBRC20TransferOutput(inscribe.RevealTx, assetName, wantToMint)
 	selected = append(selected, output)
 	total += output.Value()
