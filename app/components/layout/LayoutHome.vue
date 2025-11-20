@@ -5,7 +5,9 @@
         <slot />
       </ScrollArea>
     </div>
-    <NavFooter />
+    <div class="safe-area-bottom">
+      <NavFooter />
+    </div>
   </div>
 </template>
 
@@ -26,11 +28,24 @@ import NavFooter from '@/components/layout/NavFooter.vue'
   min-height: calc(100vh - 24px);
 }
 
+.safe-area-bottom {
+  /* 固定边距作为后备方案 (约20px，适合大多数Android设备) */
+  padding-bottom: 20px;
+
+  /* 如果支持环境变量，则使用环境变量覆盖固定值 */
+  padding-bottom: env(safe-area-inset-bottom, 20px);
+}
+
 /* 针对特定设备的媒体查询 */
 @media screen and (min-height: 800px) {
   .safe-area-top {
     padding-top: 32px;
     padding-top: env(safe-area-inset-top, 32px);
+  }
+
+  .safe-area-bottom {
+    padding-bottom: 24px;
+    padding-bottom: env(safe-area-inset-bottom, 24px);
   }
 }
 
@@ -38,6 +53,11 @@ import NavFooter from '@/components/layout/NavFooter.vue'
   .safe-area-top {
     padding-top: 20px;
     padding-top: env(safe-area-inset-top, 20px);
+  }
+
+  .safe-area-bottom {
+    padding-bottom: 16px;
+    padding-bottom: env(safe-area-inset-bottom, 16px);
   }
 }
 </style>

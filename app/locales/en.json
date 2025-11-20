@@ -456,7 +456,11 @@
     "empty": "No locked UTXOs",
     "action": "Action",
     "reason": "Reason",
-    "lockedTime": "Locked Time"
+    "lockedTime": "Locked Time",
+    "ordinalsDescription": "Ordinals are digital assets on Bitcoin, you can select UTXOs to unlock for operations.",
+    "unlockSelectedBtn": "Unlock Selected",
+    "asset": "Asset",
+    "selectToUnlock": "Select to unlock"
   },
   "nameSelect": {
     "title": "Select Name",

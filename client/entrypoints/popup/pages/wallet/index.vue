@@ -119,6 +119,27 @@ const selectTab = ref('l1')
 //const selectedType = ref('BTC')
 const selectedType = ref('ORDX')
 
+const items = [
+  {
+    label: 'Bitcoin',
+    value: 'l1',
+  },
+  {
+    label: 'Channel',
+    value: 'channel',
+  },
+  {
+    label: 'SatoshiNet',
+    value: 'l2',
+  },
+]
+
+const chainLabelMap: Record<string, string> = {
+  l1: 'bitcoin',
+  channel: 'channel',
+  l2: 'satoshinet',
+}
+
 const globalStore = useGlobalStore()
 const { env } = storeToRefs(globalStore)
 
@@ -130,8 +151,7 @@ const editUserName = () => {
   router.push('/wallet/name-select')
 }
 const selectedChainLabel = computed(() => {
-  const selectedItem = items.find(item => item.value === selectTab.value)
-  return selectedItem ? selectedItem.label.toLowerCase() : 'unknown'
+  return chainLabelMap[selectTab.value] || chainLabelMap.l1
 })
 console.log('selectTab', selectTab)
 console.log('selectedChainLabel', selectedChainLabel)
@@ -192,25 +212,6 @@ const l1Assets = computed(() => {
       return []
   }
 })
-
-// 导航项
-const items = [
-  {
-    label: 'Bitcoin',
-    value: 'l1',
-  },
-  {
-    label: 'Channel',
-    value: 'channel',
-  },
-  {
-    label: 'SatoshiNet',
-    value: 'l2',
-  },
-]
-
-
-
 
 // 路由和工具
 const router = useRouter()

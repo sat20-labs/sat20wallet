@@ -37,6 +37,7 @@ zipFiles.sort((a, b) => {
 const latestZip = zipFiles[0]
 const srcPath = path.join(outputDir, latestZip)
 const destPath = path.join(releaseDir, 'sat20wallet-chrome.zip')
+const destPathTest = path.join(releaseDir, 'sat20wallet-chrome-test.zip')
 
 // 确保release目录存在
 if (!fs.existsSync(releaseDir)) {
@@ -45,4 +46,5 @@ if (!fs.existsSync(releaseDir)) {
 
 // 拷贝并重命名
 fs.copyFileSync(srcPath, destPath)
-console.log(`已将最新包 ${latestZip} 拷贝为 release/sat20wallet-chrome.zip`) 
+fs.copyFileSync(srcPath, destPathTest)
+console.log(`已将最新包 ${latestZip} 拷贝为 release/sat20wallet-chrome.zip 和 release/sat20wallet-chrome-test.zip`)

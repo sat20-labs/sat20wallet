@@ -458,7 +458,11 @@
     "empty": "暂无已锁定 UTXO",
     "action": "操作",
     "reason": "原因",
-    "lockedTime": "锁定时间"
+    "lockedTime": "锁定时间",
+    "ordinalsDescription": "Ordinals 是比特币上的数字资产，您可以选择需要解锁的 UTXO 进行操作。",
+    "unlockSelectedBtn": "解锁选中项",
+    "asset": "资产",
+    "selectToUnlock": "选择解锁"
   },
   "nameSelect": {
     "title": "选择名字",
