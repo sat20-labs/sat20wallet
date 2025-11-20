@@ -635,12 +635,13 @@ func (p *IndexerClient) BroadCastTxs(txs []*wire.MsgTx) (error) {
 		return nil
 	}
 	txsHex := make([]string, 0)
-	for _, tx := range txs {
+	for i, tx := range txs {
 		str, err := EncodeMsgTx(tx)
 		if err != nil {
 			return err
 		}
 		txsHex = append(txsHex, str)
+		Log.Infof("%d %s", i, str)
 	}
 
 	err := p.broadCastHexTxs(txsHex)
