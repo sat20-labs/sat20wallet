@@ -12,6 +12,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 func GetChainParam() *chaincfg.Params {
@@ -113,6 +114,29 @@ func AddrFromPkScript(pkScript []byte) (string, error) {
 	}
 
 	return addresses[0].EncodeAddress(), nil
+}
+
+// only for p2tr
+func PubKeyToPkScript(pubKey *secp256k1.PublicKey) ([]byte, error) {
+	return HexPubKeyToP2TRPkScript(pubKey.SerializeCompressed())
+}
+
+func PubKeyFromPkScript(pkScript []byte) ([]byte, error) {
+	return nil, fmt.Errorf("no way")
+}
+
+// only for p2tr
+func PubKeyToAddr(pubKey *secp256k1.PublicKey) (string, error) {
+	taprootPubKey := txscript.ComputeTaprootKeyNoScript(pubKey)
+	addr, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(taprootPubKey), GetChainParam())
+	if err != nil {
+		return "", err
+	}
+	return addr.EncodeAddress(), nil
+}
+
+func PubKeyFromAddr(pkScript []byte) ([]byte, error) {
+	return nil, fmt.Errorf("no way")
 }
 
 func PayToPubKeyHashScript(pubKeyHash []byte) ([]byte, error) {

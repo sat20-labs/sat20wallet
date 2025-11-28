@@ -270,7 +270,7 @@ func (p *Manager) mintTransfer(srcUtxoMgr *UtxoMgr, destAddr string,
 }
 
 // 使用private key构造铭文的commit tx，适合构建punish tx
-func (p *Manager) MintTransferWithCommitPriKey(srcAddr, destAddr string, assetName *indexer.AssetName,
+func (p *Manager) MintTransferWithCommitPriKey(destAddr string, assetName *indexer.AssetName,
 	amt *Decimal, feeRate int64, defaultUtxos []*TxOutput, 
 	scriptType int, redeemScript []byte, revPrivKey *secp256k1.PrivateKey) (*InscribeResv, error) {
 
@@ -281,11 +281,13 @@ func (p *Manager) MintTransferWithCommitPriKey(srcAddr, destAddr string, assetNa
 	if tickInfo == nil {
 		return nil, fmt.Errorf("can't find ticker info %s", assetName.String())
 	}
-	if srcAddr == "" {
-		srcAddr = p.wallet.GetAddress()
+	srcAddr, err := PubKeyToAddr(revPrivKey.PubKey())
+	if err != nil {
+		return nil, err
 	}
+	
 	if destAddr == "" {
-		destAddr = srcAddr
+		destAddr = p.wallet.GetAddress()
 	}
 
 	if amt.Sign() <= 0 {
