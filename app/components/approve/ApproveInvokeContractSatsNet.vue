@@ -1,46 +1,38 @@
 <template>
   <LayoutApprove @confirm="confirm" @cancel="cancel">
-    <div class="p-3 sm:p-4 space-y-3 sm:space-y-4 max-w-full">
-      <h2 class="text-xl sm:text-2xl font-semibold text-center px-2">{{$t('invokeContractSatsNet.title', '合约调用确认')}}</h2>
-      <p class="text-xs text-gray-400 text-center mb-3 sm:mb-4 px-2 leading-relaxed">
+    <div class="p-2 sm:p-3 space-y-2 sm:space-y-3 max-w-full">
+      <h2 class="text-lg sm:text-xl font-semibold text-center px-2">{{$t('invokeContractSatsNet.title', '合约调用确认')}}</h2>
+      <p class="text-xs text-gray-400 text-center mb-2 px-2 leading-relaxed">
         {{$t('invokeContractSatsNet.warning', '请确认以下合约调用信息，确认后将发起链上调用')}}
       </p>
 
       <!-- Basic Info Cards -->
-      <div class="space-y-2 sm:space-y-3">
-        <!-- URL Card -->
-        <div class="bg-muted/30 rounded-lg p-3 sm:p-4">
-          <div class="flex flex-col gap-1">
-            <span class="text-sm font-semibold text-muted-foreground flex-shrink-0">{{$t('invokeContractSatsNet.url', '合约URL')}}</span>
-            <span class="text-sm break-all leading-tight">{{ props.data?.url || '-' }}</span>
-          </div>
+      <div class="bg-muted/30 rounded-lg p-2 sm:p-3 space-y-2">
+        <!-- URL -->
+        <div class="flex items-start justify-between gap-2 py-1">
+          <span class="text-xs font-semibold text-muted-foreground flex-shrink-0">{{$t('invokeContractSatsNet.url', '合约URL')}}</span>
+          <span class="text-xs font-medium break-all leading-tight max-w-[60%]">{{ props.data?.url || '-' }}</span>
         </div>
 
-        <!-- Invoke Parameters Card -->
-        <div class="bg-muted/30 rounded-lg p-3 sm:p-4">
-          <div class="flex flex-col gap-1">
-            <span class="text-sm font-semibold text-muted-foreground flex-shrink-0">{{$t('invokeContractSatsNet.invoke', '调用参数')}}</span>
-            <span class="text-sm break-all leading-tight">{{ props.data?.invoke || '-' }}</span>
-          </div>
+        <!-- Invoke Parameters -->
+        <div class="flex items-start justify-between gap-2 py-1">
+          <span class="text-xs font-semibold text-muted-foreground flex-shrink-0">{{$t('invokeContractSatsNet.invoke', '调用参数')}}</span>
+          <span class="text-xs font-medium break-all leading-tight max-w-[60%] text-right">{{ props.data?.invoke || '-' }}</span>
         </div>
 
-        <!-- Fee Rate Card -->
-        <div class="bg-muted/30 rounded-lg p-3 sm:p-4">
-          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-0">
-            <span class="text-sm font-semibold text-muted-foreground flex-shrink-0">{{$t('invokeContractSatsNet.feeRate', '费率')}}</span>
-            <span class="text-sm font-medium text-right sm:text-left">{{ props.data?.feeRate || '-' }} sats/TX</span>
-          </div>
+        <!-- Fee Rate -->
+        <div class="flex items-center justify-between gap-2 py-1">
+          <span class="text-xs font-semibold text-muted-foreground flex-shrink-0">{{$t('invokeContractSatsNet.feeRate', '费率')}}</span>
+          <span class="text-xs sm:text-sm font-medium text-right">{{ props.data?.feeRate || '-' }} sats/TX</span>
         </div>
 
-        <!-- Estimated Fee Card -->
-        <div class="bg-muted/30 rounded-lg p-3 sm:p-4">
-          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-0">
-            <span class="text-sm font-semibold text-muted-foreground flex-shrink-0">{{$t('invokeContractSatsNet.estimatedFee', '铸造费用')}}</span>
-            <div class="text-right sm:text-left">
-              <span v-if="feeLoading" class="text-sm text-muted-foreground">{{$t('invokeContractSatsNet.loading', '查询中...')}}</span>
-              <span v-else-if="feeError" class="text-sm text-destructive break-words">{{$t('invokeContractSatsNet.feeError', '查询失败')}}</span>
-              <span v-else class="text-sm font-medium break-words">{{ estimatedFee || '-' }} sats</span>
-            </div>
+        <!-- Estimated Fee -->
+        <div class="flex items-center justify-between gap-2 py-1">
+          <span class="text-xs font-semibold text-muted-foreground flex-shrink-0">{{$t('invokeContractSatsNet.estimatedFee', '铸造费用')}}</span>
+          <div class="text-right">
+            <span v-if="feeLoading" class="text-xs text-muted-foreground">{{$t('invokeContractSatsNet.loading', '查询中...')}}</span>
+            <span v-else-if="feeError" class="text-xs text-destructive break-words">{{$t('invokeContractSatsNet.feeError', '查询失败')}}</span>
+            <span v-else class="text-xs sm:text-sm font-medium break-words">{{ estimatedFee || '-' }} sats</span>
           </div>
         </div>
       </div>
@@ -48,11 +40,11 @@
       <!-- 合约参数美化展示 -->
       <Accordion type="single" :collapsible="false" class="w-full">
         <AccordionItem value="item-1" class="border">
-          <AccordionTrigger class="text-sm px-3 py-3 hover:no-underline sm:px-4">
+          <AccordionTrigger class="text-xs px-2 py-2 hover:no-underline sm:px-3">
             <span class="text-left">{{$t('invokeContractSatsNet.viewRawContent', '查看原始调用参数')}}</span>
           </AccordionTrigger>
-          <AccordionContent class="px-3 pb-3 sm:px-4 sm:pb-4">
-            <Alert class="mt-2 border-0">
+          <AccordionContent class="px-2 pb-2 sm:px-3 sm:pb-3">
+            <Alert class="mt-1 border-0">
               <AlertTitle class="text-xs font-normal break-all whitespace-pre-wrap leading-relaxed p-2 -m-2 bg-muted/50 rounded">
                 {{ formattedInvoke }}
               </AlertTitle>
@@ -61,12 +53,12 @@
         </AccordionItem>
       </Accordion>
 
-      <div v-if="isLoading" class="text-center text-muted-foreground mt-3 sm:mt-4 px-2">
+      <div v-if="isLoading" class="text-center text-muted-foreground mt-2 px-2">
         <span class="animate-spin inline-block mr-2">⏳</span>
-        <span class="text-sm break-words">{{$t('invokeContractSatsNet.invoking', '正在调用合约...')}}</span>
+        <span class="text-xs break-words">{{$t('invokeContractSatsNet.invoking', '正在调用合约...')}}</span>
       </div>
-      <div v-if="invokeError && !isLoading" class="text-center text-destructive mt-3 sm:mt-4 px-2">
-        <span class="text-sm break-words">{{ invokeError }}</span>
+      <div v-if="invokeError && !isLoading" class="text-center text-destructive mt-2 px-2">
+        <span class="text-xs break-words">{{ invokeError }}</span>
       </div>
     </div>
   </LayoutApprove>
