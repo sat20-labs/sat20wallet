@@ -277,7 +277,7 @@ type WithdrawInvokeParam struct {
 	OrderType int    `json:"orderType"`
 	AssetName string `json:"assetName"` // 资产名字
 	Amt       string `json:"amt"`       // 资产数量
-	FeeRate   int64  `json:"feeRate"`   
+	FeeRate   int64  `json:"feeRate,omitempty"`   
 }
 
 func (p *WithdrawInvokeParam) Encode() ([]byte, error) {
