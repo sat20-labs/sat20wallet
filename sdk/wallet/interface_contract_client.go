@@ -557,7 +557,7 @@ func (p *Manager) WithdrawWithContract(destAddr string, assetName string, amt st
 		}
 	}
 
-	txId, err := p.InvokeContractV2_Satsnet(url, string(invokeJson), assetName, amt, feeRate)
+	txId, err := p.InvokeContractV2_Satsnet(url, string(invokeJson), assetName, amt, 0)
 	if err != nil {
 		Log.Errorf("InvokeContractV2_Satsnet %s failed, %v", url, err)
 		return "", err
