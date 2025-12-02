@@ -72,7 +72,7 @@ func (p *TranscendContract) InvokeParam(action string) string {
 		param.Param = string(buf)
 
 	case INVOKE_API_WITHDRAW:
-		var innerParam DepositInvokeParam
+		var innerParam WithdrawInvokeParam
 		innerParam.OrderType = ORDERTYPE_WITHDRAW
 		buf, err := json.Marshal(&innerParam)
 		if err != nil {

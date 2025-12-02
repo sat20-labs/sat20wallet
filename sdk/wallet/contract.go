@@ -200,11 +200,12 @@ type ContractManager interface {
 	GetDB() indexer.KVDB
 	NeedRebuildTraderHistory() bool
 
-	CoGenerateStubUtxos(n int, contractURL string, invokeCount int64, excludeRecentBlock bool) (string, int64, error)
-	CoBatchSendV3(dest []*SendAssetInfo, assetNameStr string,
+	CoGenerateStubUtxos(n int, feeRate int64, contractURL string, invokeCount int64, 
+		excludeRecentBlock bool) (string, int64, error)
+	CoBatchSendV3(dest []*SendAssetInfo, assetNameStr string, feeRate int64,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
-	CoSendOrdxWithStub(dest string, assetNameStr string, amt int64, stub string,
+	CoSendOrdxWithStub(dest string, assetNameStr string, amt int64, feeRate int64, stub string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
 	CoBatchSendV2_SatsNet(dest []*SendAssetInfo, assetName string,

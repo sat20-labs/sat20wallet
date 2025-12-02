@@ -54,16 +54,16 @@ func (p *Manager) NeedRebuildTraderHistory() bool {
 	return false
 }
 
-func (p *Manager) CoGenerateStubUtxos(n int, contractURL string, invokeCount int64,
+func (p *Manager) CoGenerateStubUtxos(n int, feeRate int64, contractURL string, invokeCount int64,
 	excludeRecentBlock bool) (string, int64, error) {
 	return "", 0, fmt.Errorf("not implemented")
 }
-func (p *Manager) CoBatchSendV3(dest []*SendAssetInfo, assetNameStr string,
+func (p *Manager) CoBatchSendV3(dest []*SendAssetInfo, assetNameStr string, feeRate int64,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 	sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error) {
 	return "", 0, fmt.Errorf("not implemented")
 }
-func (p *Manager) CoSendOrdxWithStub(dest string, assetNameStr string, amt int64, stub string,
+func (p *Manager) CoSendOrdxWithStub(dest string, assetNameStr string, amt int64, feeRate int64, stub string,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 	sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error) {
 	return "", 0, fmt.Errorf("not implemented")

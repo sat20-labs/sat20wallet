@@ -3195,7 +3195,7 @@ func (p *Manager) BuildBatchSendTxV3_ordx(srcAddress string, excluded map[string
 			var stubTx string
 			var fee int64
 			if inChannel {
-				stubTx, fee, err = p.CoGenerateStubUtxos(stubNum+10, "", 0, false)
+				stubTx, fee, err = p.CoGenerateStubUtxos(stubNum+10, feeRate, "", 0, false)
 			} else {
 				stubTx, fee, err = p.GenerateStubUtxos(2, feeRate)
 			}

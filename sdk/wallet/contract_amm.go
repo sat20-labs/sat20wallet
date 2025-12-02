@@ -272,7 +272,59 @@ func (p *DepositInvokeParam) Decode(data []byte) error {
 	return nil
 }
 
-type WithdrawInvokeParam = DepositInvokeParam
+// InvokeParam
+type WithdrawInvokeParam struct {
+	OrderType int    `json:"orderType"`
+	AssetName string `json:"assetName"` // 资产名字
+	Amt       string `json:"amt"`       // 资产数量
+	FeeRate   int64  `json:"feeRate"`   
+}
+
+func (p *WithdrawInvokeParam) Encode() ([]byte, error) {
+	return txscript.NewScriptBuilder().
+		AddInt64(int64(p.OrderType)).
+		AddData([]byte(p.AssetName)).
+		AddData([]byte(p.Amt)).
+		AddInt64(int64(p.FeeRate)).
+		Script()
+}
+
+func (p *WithdrawInvokeParam) EncodeV2() ([]byte, error) {
+	return txscript.NewScriptBuilder().
+		AddInt64(int64(p.OrderType)).
+		AddData([]byte("")).
+		AddData([]byte(p.Amt)).
+		AddInt64(int64(p.FeeRate)).
+		Script()
+}
+
+func (p *WithdrawInvokeParam) Decode(data []byte) error {
+	tokenizer := txscript.MakeScriptTokenizer(0, data)
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing order type")
+	}
+	p.OrderType = int(tokenizer.ExtractInt64())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing asset name")
+	}
+	p.AssetName = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing amt")
+	}
+	p.Amt = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		Log.Infof("missing fee rate")
+		p.FeeRate = 0
+	} else {
+		p.FeeRate = tokenizer.ExtractInt64()
+	}
+
+	return nil
+}
 
 type AddLiqInvokeParam struct {
 	OrderType int    `json:"orderType"`

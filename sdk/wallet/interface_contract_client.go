@@ -444,7 +444,7 @@ func (p *Manager) DepositWithContract(destAddr string, assetName string, amt str
 		return "", fmt.Errorf("contract not active")
 	}
 
-	depositPara := WithdrawInvokeParam{
+	depositPara := DepositInvokeParam{
 		OrderType: ORDERTYPE_DEPOSIT,
 		AssetName: assetName,
 		Amt:       amt,
@@ -514,6 +514,7 @@ func (p *Manager) WithdrawWithContract(destAddr string, assetName string, amt st
 		OrderType: ORDERTYPE_WITHDRAW,
 		AssetName: assetName,
 		Amt:       amt,
+		FeeRate:   feeRate,
 	}
 	withdrawParaBytes, err := json.Marshal(withdrawPara)
 	if err != nil {

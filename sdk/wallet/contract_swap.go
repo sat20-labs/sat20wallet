@@ -1673,7 +1673,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		if templateName != TEMPLATE_CONTRACT_AMM && templateName != TEMPLATE_CONTRACT_TRANSCEND {
 			return 0, fmt.Errorf("unsupport")
 		}
-		var innerParam DepositInvokeParam
+		var innerParam WithdrawInvokeParam
 		err := json.Unmarshal([]byte(invoke.Param), &innerParam)
 		if err != nil {
 			return 0, err
@@ -1713,7 +1713,11 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 			AssetName: *p.GetAssetName(),
 			N:         p.N,
 		}
-		fee := CalcFee_SendTx(2, 3, 1, &assetName, amt, p.stp.GetFeeRate(), true)
+		feeRate := innerParam.FeeRate
+		if feeRate == 0 {
+			feeRate = p.stp.GetFeeRate()
+		}
+		fee := CalcFee_SendTx(2, 3, 1, &assetName, amt, feeRate, true)
 		return WITHDRAW_INVOKE_FEE + fee, nil
 
 	case INVOKE_API_ADDLIQUIDITY:
@@ -2073,7 +2077,11 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 					AssetName: *p.GetAssetName(),
 					N:         p.N,
 				}
-				fee := CalcFee_SendTx(2, 3, 1, assetName, amt, p.stp.GetFeeRate(), true)
+				feeRate := withdrawParam.FeeRate
+				if feeRate == 0 {
+					feeRate = p.stp.GetFeeRate()
+				}
+				fee := CalcFee_SendTx(2, 3, 1, assetName, amt, feeRate, true)
 				expected := WITHDRAW_INVOKE_FEE + fee
 				min := expected * 95 / 100
 				if plainSats < min {
@@ -2111,7 +2119,7 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 			break
 		}
 		// 更新合约状态
-		return p.updateContract_deposit(address, output, &withdrawParam, bValid, false), nil
+		return p.updateContract_withdraw(address, output, &withdrawParam, bValid, false), nil
 
 	case INVOKE_API_REFUND:
 		// 取回所有资产，包括已经部分成交但还没有发送的和未成交的
@@ -2642,10 +2650,8 @@ func (p *SwapContractRuntime) updateContract_deposit(
 
 	var remainingValue int64
 	var inAmt, expectedAmt, remainingAmt *Decimal
-	orderType := ORDERTYPE_DEPOSIT
 	assetName := p.GetAssetName()
 	if param != nil {
-		orderType = param.OrderType
 		assetName = indexer.NewAssetNameFromString(param.AssetName)
 		expectedAmt, _ = indexer.NewDecimalFromString(param.Amt, p.Divisibility)
 	}
@@ -2653,43 +2659,22 @@ func (p *SwapContractRuntime) updateContract_deposit(
 	bPlainAsset := indexer.IsPlainAsset(assetName)
 	inValue := output.GetPlainSat()
 	serviceFee := inValue
-	if orderType == ORDERTYPE_DEPOSIT {
-		if bPlainAsset {
-			inAmt = nil
-			expectedAmt = indexer.NewDefaultDecimal(inValue)
+	if bPlainAsset {
+		inAmt = nil
+		expectedAmt = indexer.NewDefaultDecimal(inValue)
 
-			remainingValue = inValue
-			remainingAmt = nil
-			serviceFee -= remainingValue
-		} else {
-			inAmt = output.GetAsset(assetName)
-			expectedAmt = inAmt.Clone()
-			remainingAmt = inAmt.Clone()
-		}
+		remainingValue = inValue
+		remainingAmt = nil
+		serviceFee -= remainingValue
 	} else {
-		if bPlainAsset {
-			inAmt = nil
-
-			remainingValue = expectedAmt.Int64()
-			remainingAmt = nil
-			serviceFee -= remainingValue
-		} else {
-			inAmt = output.GetAsset(assetName)
-			expectedAmt = inAmt.Clone()
-			remainingAmt = inAmt.Clone()
-		}
+		inAmt = output.GetAsset(assetName)
+		expectedAmt = inAmt.Clone()
+		remainingAmt = inAmt.Clone()
 	}
-
+	
 	reason := INVOKE_REASON_NORMAL
 	if !bValid {
 		reason = INVOKE_REASON_INVALID
-		if orderType == ORDERTYPE_WITHDRAW {
-			serviceFee -= INVOKE_FEE
-			if serviceFee < 0 {
-				serviceFee = 0
-			}
-			remainingValue += serviceFee - INVOKE_FEE
-		}
 	}
 	item := &SwapHistoryItem{
 		InvokeHistoryItemBase: InvokeHistoryItemBase{
@@ -2698,12 +2683,83 @@ func (p *SwapContractRuntime) updateContract_deposit(
 			Done:   DONE_NOTYET,
 		},
 
-		OrderType:      orderType,
+		OrderType:      ORDERTYPE_DEPOSIT,
 		UtxoId:         output.UtxoId,
 		OrderTime:      time.Now().Unix(),
 		AssetName:      assetName.String(),
 		ServiceFee:     serviceFee,
 		UnitPrice:      nil,
+		ExpectedAmt:    expectedAmt,
+		Address:        address,
+		FromL1:         fromL1,
+		InUtxo:         output.OutPointStr,
+		InValue:        inValue,
+		InAmt:          inAmt,
+		RemainingAmt:   remainingAmt.Clone(),
+		RemainingValue: remainingValue,
+		ToL1:           !fromL1,
+		OutAmt:         indexer.NewDecimal(0, p.Divisibility),
+		OutValue:       0,
+	}
+	p.updateContractStatus(item)
+	p.addItem(item)
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+	return item
+}
+
+
+// 包括withdraw
+func (p *SwapContractRuntime) updateContract_withdraw(
+	address string, output *sindexer.TxOutput,
+	param *WithdrawInvokeParam,
+	bValid, fromL1 bool) *SwapHistoryItem {
+
+	var remainingValue int64
+	var inAmt, expectedAmt, remainingAmt *Decimal
+	assetName := p.GetAssetName()
+	if param != nil {
+		assetName = indexer.NewAssetNameFromString(param.AssetName)
+		expectedAmt, _ = indexer.NewDecimalFromString(param.Amt, p.Divisibility)
+	}
+
+	bPlainAsset := indexer.IsPlainAsset(assetName)
+	inValue := output.GetPlainSat()
+	serviceFee := inValue
+	if bPlainAsset {
+		inAmt = nil
+
+		remainingValue = expectedAmt.Int64()
+		remainingAmt = nil
+		serviceFee -= remainingValue
+	} else {
+		inAmt = output.GetAsset(assetName)
+		expectedAmt = inAmt.Clone()
+		remainingAmt = inAmt.Clone()
+	}
+	
+
+	reason := INVOKE_REASON_NORMAL
+	if !bValid {
+		reason = INVOKE_REASON_INVALID
+		serviceFee -= INVOKE_FEE
+		if serviceFee < 0 {
+			serviceFee = 0
+		}
+		remainingValue += serviceFee - INVOKE_FEE
+	}
+	item := &SwapHistoryItem{
+		InvokeHistoryItemBase: InvokeHistoryItemBase{
+			Id:     p.InvokeCount,
+			Reason: reason,
+			Done:   DONE_NOTYET,
+		},
+
+		OrderType:      ORDERTYPE_WITHDRAW,
+		UtxoId:         output.UtxoId,
+		OrderTime:      time.Now().Unix(),
+		AssetName:      assetName.String(),
+		ServiceFee:     serviceFee,
+		UnitPrice:      indexer.NewDecimal(param.FeeRate, 0), // feeRate
 		ExpectedAmt:    expectedAmt,
 		Address:        address,
 		FromL1:         fromL1,
@@ -3182,6 +3238,7 @@ type DealInfo struct {
 	RuntimeMerkleRoot []byte
 	TxId              string
 	Fee               int64
+	FeeRate           int64
 }
 
 func (p *SwapContractRuntime) genDealInfo(height int) *DealInfo {
@@ -3876,7 +3933,8 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 		stubs, err = p.stp.GetWalletMgr().GetUtxosForStubs(p.Address(), stubNum, nil)
 		if err != nil {
 			// 重新生成一堆
-			stubTx, fee, err := p.stp.CoGenerateStubUtxos(stubNum+10, p.URL(), dealInfo.InvokeCount, excludeRecentBlock)
+			stubTx, fee, err := p.stp.CoGenerateStubUtxos(stubNum+10, dealInfo.FeeRate,
+				p.URL(), dealInfo.InvokeCount, excludeRecentBlock)
 			if err != nil {
 				Log.Errorf("CoGenerateStubUtxos %d failed, %v", stubNum+10, err)
 				return "", 0, 0, err
@@ -3896,7 +3954,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
 	if len(sendInfoVect) > 0 {
 		for i := 0; i < 3; i++ {
-			txId, fee, err = p.stp.CoBatchSendV3(sendInfoVect, dealInfo.AssetName.String(),
+			txId, fee, err = p.stp.CoBatchSendV3(sendInfoVect, dealInfo.AssetName.String(), dealInfo.FeeRate,
 				"contract", url, dealInfo.InvokeCount, nullDataScript,
 				dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
 			if err != nil {
@@ -3926,7 +3984,8 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 			}
 			sendInfo := sendInfoVectWithStub[0]
 			for i := 0; i < 3; i++ {
-				txId, fee, err = p.stp.CoSendOrdxWithStub(sendInfo.Address, sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(),
+				txId, fee, err = p.stp.CoSendOrdxWithStub(sendInfo.Address, 
+					sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(), dealInfo.FeeRate,
 					stubs[0], "contract", url, dealInfo.InvokeCount, nullDataScript,
 					dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
 				if err != nil {
@@ -4671,6 +4730,21 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 	assetName := p.GetAssetName()
 	isRune = assetName.Protocol == indexer.PROTOCOL_NAME_RUNES
 
+	// 如果费率不同，优先处理高费率的交易
+	var highestFeeRate int64
+	for _, withdrawMap := range p.withdrawMap {
+		for _, item := range withdrawMap {
+			h, _, _ := indexer.FromUtxoId(item.UtxoId)
+			if h > height {
+				continue
+			}
+			if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+				continue
+			}
+			highestFeeRate = max(highestFeeRate, item.UnitPrice.Int64())
+		}
+	}
+
 	maxHeight := 0
 	var totalValue int64
 	var totalAmt *Decimal                          // 资产数量
@@ -4682,6 +4756,9 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 				continue
 			}
 			if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+				continue
+			}
+			if item.UnitPrice.Int64() < highestFeeRate {
 				continue
 			}
 			maxHeight = max(maxHeight, h)
@@ -4762,6 +4839,7 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 		InvokeCount:       p.InvokeCount,
 		StaticMerkleRoot:  p.StaticMerkleRoot,
 		RuntimeMerkleRoot: p.CurrAssetMerkleRoot,
+		FeeRate:           highestFeeRate,
 	}
 }
 
