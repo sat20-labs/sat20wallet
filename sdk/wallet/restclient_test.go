@@ -12,15 +12,22 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
-	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	schainhash "github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	swire "github.com/sat20-labs/satoshinet/wire"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 )
+
+type Brc20Transfer struct {
+	Utxo string
+	Address string
+	AssetName *swire.AssetName
+	Amt *Decimal
+}
 
 type network struct {
 	mutex         sync.RWMutex
@@ -36,8 +43,58 @@ type network struct {
 	utxoAssets    []indexer.TxAssets
 	offsets       []map[swire.AssetName]indexer.AssetOffsets
 	utxoOwner     []int
-	ascendMap     map[string]string  // utxo->anchorTxId
-	descendMap    map[string]string  // deanchorTxId->utxo
+	ascendMap     map[string]string // utxo->anchorTxId
+	descendMap    map[string]string // deanchorTxId->utxo
+
+	// brc20, 仅在L1有效
+	addrAssetMap  map[string]map[swire.AssetName]*Decimal // brc20 持有的数量
+	addrTransferMap  map[string]map[swire.AssetName]map[string]bool // brc20 持有的transfer铭文
+	transferInfo  map[string]*Brc20Transfer // brc20 持有的transfer铭文
+	invalids      map[string]map[swire.AssetName]bool // utxo中哪些资产是无效的
+}
+
+func (p *network) InitBRC20AssetInfo() {
+	for i, utxo := range p.utxos {
+		if p.utxoUsed[utxo] != "" {
+			continue
+		}
+
+		addr := _pkScripts[p.utxoOwner[i]]
+		assets := p.utxoAssets[i]
+		
+		for _, asset := range assets {
+			if asset.Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+				assetmap, ok := p.addrAssetMap[addr]
+				if !ok {
+					assetmap = make(map[swire.AssetName]*Decimal)
+					p.addrAssetMap[addr] = assetmap
+				}
+				total := assetmap[asset.Name]
+				assetmap[asset.Name] = total.Add(&asset.Amount).Add(&asset.Amount) // 加倍
+
+				transferMap, ok := p.addrTransferMap[addr]
+				if !ok {
+					transferMap = make(map[swire.AssetName]map[string]bool)
+					p.addrTransferMap[addr] = transferMap
+				}
+				utxomap, ok := transferMap[asset.Name]
+				if !ok {
+					utxomap = make(map[string]bool)
+					transferMap[asset.Name] = utxomap
+				}
+				utxomap[utxo] = true
+
+				p.transferInfo[utxo] = &Brc20Transfer{
+					Utxo: utxo,
+					Address: addr,
+					AssetName: &asset.Name,
+					Amt: &asset.Amount,
+				}
+
+			}
+		}
+		
+	}
 }
 
 func InitTickerInfo(txId string) {
@@ -51,7 +108,8 @@ func InitTickerInfo(txId string) {
 func CloneTickerInfo() map[string]*indexer.TickerInfo {
 	tickerInfo := make(map[string]*indexer.TickerInfo)
 	for k, v := range _tickerInfoRunning {
-		tickerInfo[k] = v
+		n := *v
+		tickerInfo[k] = &n
 	}
 	return tickerInfo
 }
@@ -59,7 +117,8 @@ func CloneTickerInfo() map[string]*indexer.TickerInfo {
 func SetTickerInfo(another map[string]*indexer.TickerInfo) {
 	_tickerInfoRunning = make(map[string]*indexer.TickerInfo)
 	for k, v := range another {
-		_tickerInfoRunning[k] = v
+		n := *v
+		_tickerInfoRunning[k] = &n
 	}
 }
 
@@ -109,9 +168,7 @@ func (p *network) Clone() *network {
 
 	n.utxoAssets = make([]indexer.TxAssets, len(p.utxoAssets))
 	for i, assets := range p.utxoAssets {
-		var newAssets indexer.TxAssets
-		newAssets = append(newAssets, assets.Clone()...)
-		n.utxoAssets[i] = newAssets
+		n.utxoAssets[i] = assets.Clone()
 	}
 
 	n.offsets = make([]map[swire.AssetName]indexer.AssetOffsets, len(p.offsets))
@@ -130,6 +187,48 @@ func (p *network) Clone() *network {
 	n.descendMap = make(map[string]string)
 	for k, v := range p.descendMap {
 		n.descendMap[k] = v
+	}
+
+	n.addrAssetMap = make(map[string]map[swire.AssetName]*Decimal)
+	for addr, assetMap := range p.addrAssetMap {
+		newAssetMap := make(map[swire.AssetName]*Decimal)
+		for k, v := range assetMap {
+			newAssetMap[k] = v.Clone()
+		}
+		n.addrAssetMap[addr] = newAssetMap
+	}
+
+	n.addrTransferMap = make(map[string]map[swire.AssetName]map[string]bool)
+	for addr, transferMap := range p.addrTransferMap {
+		newTransferMap := make(map[swire.AssetName]map[string]bool)
+		for name, um := range transferMap {
+			utxoMap := make(map[string]bool)
+			for k, v := range um {
+				utxoMap[k] = v
+			}
+			newTransferMap[name] = utxoMap
+		}
+		n.addrTransferMap[addr] = newTransferMap
+	}
+
+	n.transferInfo = make(map[string]*Brc20Transfer)
+	for k, v := range p.transferInfo {
+		newInfo := &Brc20Transfer{
+			Utxo: v.Utxo,
+			Address: v.Address,
+			AssetName: v.AssetName,
+			Amt: v.Amt.Clone(),
+		}
+		n.transferInfo[k] = newInfo
+	}
+
+	n.invalids = make(map[string]map[swire.AssetName]bool)
+	for utxo, assetMap := range p.invalids {
+		newAssetMap := make(map[swire.AssetName]bool)
+		for k, v := range assetMap {
+			newAssetMap[k] = v
+		}
+		n.invalids[utxo] = newAssetMap
 	}
 
 	return n
@@ -159,6 +258,10 @@ func (p *network) Set(another *network) {
 	p.utxoOwner = n.utxoOwner
 	p.ascendMap = n.ascendMap
 	p.descendMap = n.descendMap
+	p.addrAssetMap = n.addrAssetMap
+	p.addrTransferMap = n.addrTransferMap
+	p.transferInfo = n.transferInfo
+	p.invalids = n.invalids
 }
 
 func (p *network) IsBitcoinNet() bool {
@@ -180,10 +283,10 @@ var _network1 = &network{
 		20000, 2000000, 20000, 2000000,
 		1000000, 100000, 10000, 10000, // 4-
 		10000, 10000, 10000, 10000, // 8-
-		330, 546, 600, 1000, // 12-
+		330, 330, 330, 330, // 12-
 		10000, 90000, 10000, 10000, // 16-
 		100000, 100000, 10000, 10000, // 20-
-		1000, 1000, 1000, 1000, // 24-
+		1000, 1000, 330, 1000, // 24-
 		10000, 1000, 1010000, 1000, // 28,29,30,31
 		10000, 10000, 10000, 10000, // 32-
 	},
@@ -221,16 +324,16 @@ var _network1 = &network{
 
 		// 12-
 		{
-			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(10000000, 4), BindingSat: 0},
+			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(10000000, 1), BindingSat: 0},
 		},
 		{
-			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(1000000, 4), BindingSat: 0},
+			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(1000000, 1), BindingSat: 0},
 		},
 		{
-			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(100000, 4), BindingSat: 0},
+			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(100000, 1), BindingSat: 0},
 		},
 		{
-			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(10000, 4), BindingSat: 0},
+			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "pizza"}, Amount: *indexer.NewDecimal(10000000, 1), BindingSat: 0},
 		},
 
 		// 16-
@@ -261,7 +364,7 @@ var _network1 = &network{
 			{Name: swire.AssetName{Protocol: "runes", Type: "f", Ticker: "TEST•FIRST•TEST"}, Amount: *indexer.NewDefaultDecimal(10000), BindingSat: 0},
 		},
 		{
-			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(100000000, 4), BindingSat: 0},
+			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(100000000, 1), BindingSat: 0},
 		},
 		nil,
 
@@ -290,7 +393,13 @@ var _network1 = &network{
 		{{Protocol: "ordx", Type: "f", Ticker: "pearl"}: {{Start: 0, End: 1000}, {Start: 3000, End: 4000}, {Start: 5000, End: 9000}}},
 
 		nil, nil, nil, nil,
-		nil, nil, nil, nil,
+
+		// 12
+		{{Protocol: "brc20", Type: "f", Ticker: "ordi"}: {{Start: 0, End: 1}}},
+		{{Protocol: "brc20", Type: "f", Ticker: "ordi"}: {{Start: 0, End: 1}}},
+		{{Protocol: "brc20", Type: "f", Ticker: "ordi"}: {{Start: 0, End: 1}}},
+		{{Protocol: "brc20", Type: "f", Ticker: "pizza"}: {{Start: 0, End: 1}}},
+
 
 		{{Protocol: "ordx", Type: "f", Ticker: "pizza"}: {{Start: 0, End: 10000}}},
 		{{Protocol: "ordx", Type: "f", Ticker: "dogcoin"}: {{Start: 0, End: 90000}}},
@@ -301,7 +410,9 @@ var _network1 = &network{
 		nil, nil, nil,
 
 		{{Protocol: "ordx", Type: "f", Ticker: "pizza"}: {{Start: 0, End: 1000}}},
-		nil, nil, nil,
+		nil, 
+		{{Protocol: "brc20", Type: "f", Ticker: "ordi"}: {{Start: 0, End: 1}}},
+		nil,
 
 		// 28,29,30,31
 		nil,
@@ -323,6 +434,11 @@ var _network1 = &network{
 		1, 1, 1, 1, // 32
 		1, 1, 1, 1,
 	},
+
+	addrAssetMap: map[string]map[swire.AssetName]*Decimal {},
+	addrTransferMap: map[string]map[swire.AssetName]map[string]bool {},
+	transferInfo: map[string]*Brc20Transfer {},
+	invalids: map[string]map[swire.AssetName]bool {},
 }
 
 var _network2 = &network{
@@ -331,11 +447,11 @@ var _network2 = &network{
 	blocks:        make(map[int][]string),
 	txBroadcasted: make(map[string]string),
 
-	utxos:     make([]string, 0),
-	utxoUsed:  make(map[string]string),
-	utxoIndex: make(map[string]int),
-	ascendMap:     make(map[string]string),
-	descendMap:    make(map[string]string),
+	utxos:      make([]string, 0),
+	utxoUsed:   make(map[string]string),
+	utxoIndex:  make(map[string]int),
+	ascendMap:  make(map[string]string),
+	descendMap: make(map[string]string),
 
 	utxoValue: []int64{
 		20000, 20000, 20000, 2000000,
@@ -354,7 +470,7 @@ var _network2 = &network{
 			{Name: swire.AssetName{Protocol: "runes", Type: "f", Ticker: "TEST•FIRST•TEST"}, Amount: *indexer.NewDefaultDecimal(100000000), BindingSat: 0},
 		},
 		{
-			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(100000000, 4), BindingSat: 0},
+			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(100000000, 1), BindingSat: 0},
 		},
 		nil,
 
@@ -365,7 +481,7 @@ var _network2 = &network{
 			{Name: swire.AssetName{Protocol: "runes", Type: "f", Ticker: "TEST•FIRST•TEST"}, Amount: *indexer.NewDefaultDecimal(100000000), BindingSat: 0},
 		},
 		{
-			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(100000000, 4), BindingSat: 0},
+			{Name: swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "ordi"}, Amount: *indexer.NewDecimal(100000000, 1), BindingSat: 0},
 		},
 		{
 			{Name: swire.AssetName{Protocol: "ordx", Type: "f", Ticker: "satoshilpt"}, Amount: *indexer.NewDefaultDecimal(100000000), BindingSat: 1000},
@@ -376,12 +492,8 @@ var _network2 = &network{
 
 	offsets: []map[swire.AssetName]indexer.AssetOffsets{
 		nil, nil, nil, nil,
-		{{Protocol: "ordx", Type: "f", Ticker: "pizza"}: {{Start: 0, End: 10000000}}},
-		nil, nil, nil,
-
-		{{Protocol: "ordx", Type: "f", Ticker: "pizza"}: {{Start: 0, End: 10000000}}},
-		nil, nil, nil,
-
+		nil, nil, nil, nil,
+		nil, nil, nil, nil,
 		nil, nil, nil, nil,
 	},
 
@@ -393,9 +505,8 @@ var _network2 = &network{
 	},
 }
 
-
-var _coreNodeMap = map[string]bool { // pubkey
-	"":true,
+var _coreNodeMap = map[string]bool{ // pubkey
+	"": true,
 }
 
 var _tickerInfoRunning map[string]*indexer.TickerInfo
@@ -442,7 +553,18 @@ var _tickerInfo = map[string]*indexer.TickerInfo{
 			Type:     indexer.ASSET_TYPE_FT,
 			Ticker:   "ordi",
 		},
-		Divisibility: 4,
+		Divisibility: 1,
+		Limit:        "1000",
+		TotalMinted:  "210000000", // 21,000,000
+		MaxSupply:    "210000000",
+	},
+	"brc20:f:pizza": {
+		AssetName: swire.AssetName{
+			Protocol: indexer.PROTOCOL_NAME_BRC20,
+			Type:     indexer.ASSET_TYPE_FT,
+			Ticker:   "pizza",
+		},
+		Divisibility: 1,
 		Limit:        "1000",
 		TotalMinted:  "210000000", // 21,000,000
 		MaxSupply:    "210000000",
@@ -571,11 +693,11 @@ var _pkScripts = []string{
 	"512017abefbc099ae2053a210b6b4e69fe18a197a3a7a7cac6497891c17c7653c821", // server-1
 }
 
-var _nameMap = map[string]*indexerwire.OrdinalsName {
+var _nameMap = map[string]*indexerwire.OrdinalsName{
 	"bigdaddy": {
 		NftItem: indexerwire.NftItem{
-			Id: 0,
-			Name: "bigdaddy",
+			Id:      0,
+			Name:    "bigdaddy",
 			Address: "tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g",
 		},
 	},
@@ -675,7 +797,29 @@ func (p *TestIndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 		OutValue:    wire.TxOut{Value: p.network.utxoValue[index], PkScript: pkScript},
 		Assets:      txAssets.Clone(),
 		Offsets:     cloneOffsets(offsets),
+		SatBindingMap: make(map[int64]*indexer.AssetInfo),
+		Invalids:    make(map[indexer.AssetName]bool),
 	}
+	invalidmap, existing := p.network.invalids[utxo]
+	for _, asset := range output.Assets {
+		if p.network.IsBitcoinNet() && asset.Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+			offsets, ok := output.Offsets[asset.Name]
+			if ok {
+				if len(offsets) != 1 {
+					continue
+				}
+				output.SatBindingMap[offsets[0].Start] = asset.Clone()
+			}
+		}
+
+		if existing {
+			invalid, ok := invalidmap[asset.Name]
+			if ok {
+				output.Invalids[asset.Name] = invalid
+			}
+		}
+	}
+	
 
 	return &output, nil
 }
@@ -916,18 +1060,41 @@ func (p *TestIndexerClient) GetAssetSummaryWithAddress(address string) *indexerw
 		pkScript2, _ := hex.DecodeString(_pkScripts[p.network.utxoOwner[i]])
 		if bytes.Equal(pkScript, pkScript2) {
 			assets := p.network.utxoAssets[i]
-			if assets != nil {
+			if len(assets) != 0 {
+				invalid, ok := p.network.invalids[utxo]
 				for _, asset := range assets {
-					assets, ok := assetmap[asset.Name]
 					if ok {
+						invalid := invalid[asset.Name]
+						if invalid {
+							// 当作白聪
+							assets, ok2 := assetmap[ASSET_PLAIN_SAT]
+							if ok2 {
+								assets.Amount = *assets.Amount.Add(indexer.NewDefaultDecimal(p.network.utxoValue[i]))
+							} else {
+								assetmap[ASSET_PLAIN_SAT] = &swire.AssetInfo{
+									Name:       ASSET_PLAIN_SAT,
+									Amount:     *indexer.NewDefaultDecimal(p.network.utxoValue[i]),
+									BindingSat: 1,
+								}
+							}
+						} else {
+							// transfer nft，直接忽略
+						}
+						continue
+					}
+					assets, ok2 := assetmap[asset.Name]
+					if ok2 {
 						assets.Add(&asset)
 					} else {
-						assetmap[asset.Name] = &asset
+						assetmap[asset.Name] = asset.Clone()
 					}
 				}
 
-				if p.network.name == "satoshinet" {
-					// 加入白聪
+				if p.network.IsBitcoinNet() {
+					
+
+				} else {
+					// 聪网上，看看聪数量是不是比绑定资产的聪多，如果多，就加入白聪
 					bindingSatsNum := assets.GetBindingSatAmout()
 					if p.network.utxoValue[i] > bindingSatsNum {
 						plain := p.network.utxoValue[i] - bindingSatsNum
@@ -957,6 +1124,18 @@ func (p *TestIndexerClient) GetAssetSummaryWithAddress(address string) *indexerw
 			}
 		}
 	}
+
+	// 增加brc20的资产数量
+	addr := hex.EncodeToString(pkScript)
+	brc20AssetMap := p.network.addrAssetMap[addr]
+	for k, v := range brc20AssetMap {
+		assetmap[k] = &indexer.AssetInfo{
+			Name: k,
+			Amount: *v.Clone(),
+			BindingSat: 0,
+		}
+	}
+
 	result := make([]*swire.AssetInfo, 0)
 	for _, v := range assetmap {
 		result = append(result, v)
@@ -987,6 +1166,13 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 		if p.network.utxoUsed[utxo] != "" {
 			continue
 		}
+		invalids, ok := p.network.invalids[utxo]
+		if ok {
+			invalid, ok := invalids[*ticker]
+			if ok && invalid {
+				continue
+			}
+		}
 
 		var output *indexerwire.TxOutputInfo
 		assets := p.network.utxoAssets[i]
@@ -1000,12 +1186,12 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 				}
 			}
 		} else {
-			if assets == nil {
+			if len(assets) == 0 {
 				output = &indexerwire.TxOutputInfo{
 					OutPoint: utxo,
 				}
 			} else {
-				if p.network.name == "satoshinet" && p.network.utxoValue[i] > assets.GetBindingSatAmout() {
+				if !p.network.IsBitcoinNet() && p.network.utxoValue[i] > assets.GetBindingSatAmout() {
 					output = &indexerwire.TxOutputInfo{
 						OutPoint: utxo,
 					}
@@ -1027,10 +1213,9 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 						BindingSat: int(v.BindingSat),
 						Offsets:    offsets[v.Name],
 					}
-					if v.Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
-						asset.Offsets = []*indexer.OffsetRange{{Start:0, End:1}}
+					if v.Name.Protocol == indexer.PROTOCOL_NAME_BRC20 && p.network.IsBitcoinNet() {
+						asset.Offsets = []*indexer.OffsetRange{{Start: 0, End: 1}}
 						asset.OffsetToAmts = []*indexer.OffsetToAmount{{Offset: 0, Amount: v.Amount.String()}}
-						asset.Invalid = (p.network.utxoUsed[utxo] != "")
 					}
 					utxoAssets = append(utxoAssets, &asset)
 				}
@@ -1051,7 +1236,6 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 	return outputs
 }
 
-
 func (p *TestIndexerClient) GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error) {
 	p.network.mutex.RLock()
 	defer p.network.mutex.RUnlock()
@@ -1069,7 +1253,7 @@ func (p *TestIndexerClient) GetUtxosWithAddress(address string) (map[string]*wir
 		}
 
 		assets := p.network.utxoAssets[i]
-		if assets == nil {
+		if len(assets) == 0 {
 			pkScript2, _ := hex.DecodeString(_pkScripts[p.network.utxoOwner[i]])
 
 			if bytes.Equal(pkScript, pkScript2) {
@@ -1173,6 +1357,8 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	// var assetName *swire.AssetName
 	// var offsets indexer.AssetOffsets
 	var input *TxOutput
+	status := 0 // 
+	//var transferFrom *Brc20Transfer
 	//var assetAmt *Decimal
 	for _, txIn := range tx.TxIn {
 		utxo := txIn.PreviousOutPoint.String()
@@ -1181,6 +1367,32 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 			if ok {
 				return "", fmt.Errorf("utxo %s spent in %s", utxo, spendTx)
 			}
+		}
+		transferFrom, ok := p.network.transferInfo[utxo]
+		if ok {
+			from := transferFrom.Address
+			transferMap, ok := p.network.addrTransferMap[from]
+			if !ok {
+				return "", fmt.Errorf("can't find transfer map")
+			}
+			utxomap, ok := transferMap[*transferFrom.AssetName]
+			if !ok {
+				return "", fmt.Errorf("can't find utxo map")
+			}
+
+			assetmap, ok := p.network.addrAssetMap[from]
+			if !ok {
+				return "", fmt.Errorf("no asset to transfer")
+			}
+			total := assetmap[*transferFrom.AssetName]
+			if total.Cmp(transferFrom.Amt) < 0 {
+				return "", fmt.Errorf("no enough asset to transfer")
+			}
+			assetmap[*transferFrom.AssetName] = total.Sub(transferFrom.Amt)
+
+			delete(utxomap, transferFrom.Utxo)
+			delete(p.network.transferInfo, transferFrom.Utxo)
+			status = 3
 		}
 
 		p.network.utxoUsed[utxo] = tx.TxID()
@@ -1191,6 +1403,18 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 		value := p.network.utxoValue[index]
 		txAssets := p.network.utxoAssets[index]
 		txOffsets := p.network.offsets[index]
+		satBindingMap := make(map[int64]*indexer.AssetInfo)
+		if p.network.IsBitcoinNet() && len(txAssets) == 1 && txAssets[0].Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+			if len(txOffsets) != 1 {
+				Log.Panic("")
+			}
+			for k, v := range txOffsets {
+				if len(v) != 1 && k != txAssets[0].Name {
+					Log.Panic("")
+				}
+				satBindingMap[v[0].Start] = txAssets[0].Clone()
+			}
+		}
 
 		in := indexer.TxOutput{
 			OutValue: wire.TxOut{
@@ -1198,6 +1422,7 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 			},
 			Assets:  txAssets,
 			Offsets: cloneOffsets(txOffsets),
+			SatBindingMap: satBindingMap,
 		}
 
 		if input == nil {
@@ -1211,8 +1436,9 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 		if err != nil {
 			continue
 		}
+		
 		for i, insc := range inscriptions {
-			
+
 			protocol, content := indexer.GetProtocol(insc)
 			switch protocol {
 			case "ordx":
@@ -1293,6 +1519,122 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					input.Offsets[assetName] = indexer.AssetOffsets{&indexer.OffsetRange{Start: 0, End: satsNum}}
 				}
 
+			case "brc-20":
+				brc20Content := indexer.ParseBrc20BaseContent(string(content))
+				if brc20Content == nil {
+					continue
+				}
+				switch brc20Content.Op {
+				case "deploy":
+					deployInfo := indexer.ParseBrc20DeployContent(string(content))
+					if deployInfo == nil {
+						continue
+					}
+					if len(deployInfo.Ticker) == 5 {
+						if deployInfo.SelfMint != "true" {
+							Log.Errorf("deploy, tick length 5, but not self_mint")
+							continue
+						}
+					}
+					assetName := indexer.AssetName{
+						Protocol: "brc20",
+						Type:     "f",
+						Ticker:   deployInfo.Ticker,
+					}
+
+					_, ok := _tickerInfoRunning[assetName.String()]
+					if ok {
+						Log.Warnf("ticker %s exists", deployInfo.Ticker)
+						continue
+					}
+
+					dec, err := strconv.Atoi(deployInfo.Decimal)
+					if err != nil {
+						Log.Warnf("invalid dec %s", deployInfo.Decimal)
+					}
+					tickerInfo := indexer.TickerInfo{
+						AssetName:    assetName,
+						Divisibility: dec,
+						Limit:        deployInfo.Lim,
+						TotalMinted:  "0",
+						MaxSupply:    deployInfo.Max,
+					}
+					_tickerInfoRunning[assetName.String()] = &tickerInfo
+
+				case "mint":
+					mintInfo := indexer.ParseBrc20MintContent(string(content))
+					if mintInfo == nil {
+						continue
+					}
+
+					assetName := indexer.AssetName{
+						Protocol: "brc20",
+						Type:     "f",
+						Ticker:   mintInfo.Ticker,
+					}
+					ticker, ok := _tickerInfoRunning[assetName.String()]
+					if !ok {
+						fmt.Printf("ticker %s not exists", mintInfo.Ticker)
+						continue
+					}
+
+					amt := ticker.Limit
+					if mintInfo.Amt != "" {
+						amt = mintInfo.Amt
+					}
+					dAmt, err := indexer.NewDecimalFromString(amt, 0)
+					if err != nil {
+						fmt.Printf("NewDecimalFromString %s failed, %v", amt, err)
+						continue
+					}
+
+					asset := indexer.AssetInfo{
+						Name:       assetName,
+						Amount:     *dAmt,
+						BindingSat: 0,
+					}
+					// 假装是从这个输入转移到输出
+					input.Assets.Add(&asset)
+					input.Offsets[assetName] = indexer.AssetOffsets{&indexer.OffsetRange{Start: 0, End: 1}}
+					input.SatBindingMap[0] = asset.Clone()
+					status = 1
+
+				case "transfer":
+					transferInfo := indexer.ParseBrc20TransferContent(string(content))
+					if transferInfo == nil {
+						continue
+					}
+					
+					assetName := indexer.AssetName{
+						Protocol: "brc20",
+						Type:     "f",
+						Ticker:   transferInfo.Ticker,
+					}
+					ticker, ok := _tickerInfoRunning[assetName.String()]
+					if !ok {
+						fmt.Printf("ticker %s not exists", transferInfo.Ticker)
+						continue
+					}
+
+					amt := transferInfo.Amt
+					dAmt, err := indexer.NewDecimalFromString(amt, ticker.Divisibility)
+					if err != nil {
+						fmt.Printf("NewDecimalFromString %s failed, %v", amt, err)
+						continue
+					}
+
+					asset := indexer.AssetInfo{
+						Name:       assetName,
+						Amount:     *dAmt.Clone(),
+						BindingSat: 0,
+					}
+					// 假装是从这个输入转移到输出，在输出的地方，检查是否有足够的资产可以转移
+					input.Assets.Add(&asset)
+					input.Offsets[assetName] = indexer.AssetOffsets{&indexer.OffsetRange{Start: 0, End: 1}}
+					input.SatBindingMap[0] = asset.Clone()
+					status = 2
+				}
+
 			case "sns":
 				domain := indexer.ParseDomainContent(string(insc[indexer.FIELD_CONTENT]))
 				if domain == nil {
@@ -1301,10 +1643,10 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 				if domain != nil {
 					switch domain.Op {
 					case "reg":
-						
+
 					case "update":
 						var updateInfo *indexer.OrdxUpdateContentV2
-						// 如果有metadata，那么不处理FIELD_CONTENT的内容 
+						// 如果有metadata，那么不处理FIELD_CONTENT的内容
 						if string(insc[indexer.FIELD_META_PROTOCOL]) == "sns" && insc[indexer.FIELD_META_DATA] != nil {
 							updateInfo = indexer.ParseUpdateContent(string(content))
 							updateInfo.P = "sns"
@@ -1312,7 +1654,7 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 							if ok {
 								// 这个有什么用？
 								delete(updateInfo.KVs, "key")
-								updateInfo.KVs[value] = fmt.Sprintf("%si%d", tx.TxID(), i)  
+								updateInfo.KVs[value] = fmt.Sprintf("%si%d", tx.TxID(), i)
 							}
 						} else {
 							updateInfo = indexer.ParseUpdateContent(string(insc[indexer.FIELD_CONTENT]))
@@ -1333,8 +1675,8 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 									}
 									if !found {
 										nameInfo.KVItemList = append(nameInfo.KVItemList, &indexerwire.KVItem{
-											Key: k,
-											Value: v,
+											Key:           k,
+											Value:         v,
 											InscriptionId: fmt.Sprintf("%si%d", tx.TxID(), i),
 										})
 									}
@@ -1343,8 +1685,7 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 						}
 					}
 				}
-			
-				
+
 			}
 		}
 	}
@@ -1358,9 +1699,13 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 		index := len(p.network.utxos) - 1
 		p.network.utxoIndex[utxo] = index
 		p.network.utxoValue = append(p.network.utxoValue, txOut.Value)
+		j := insertPkScript(txOut.PkScript)
+		p.network.utxoOwner = append(p.network.utxoOwner, j)
 
 		var curr *indexer.TxOutput
+		Log.Infof("before cut: %v", *input)
 		curr, input, err = input.Cut(txOut.Value)
+		Log.Infof("after cut: %v\n%v", curr, input)
 		if err != nil {
 			Log.Panicf("Cut failed, %v", err)
 		}
@@ -1369,12 +1714,89 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 		var utxoOffsets map[swire.AssetName]indexer.AssetOffsets
 		utxoAssets = curr.Assets
 		utxoOffsets = curr.Offsets
+		if p.network.IsBitcoinNet() && len(utxoAssets) == 1 && utxoAssets[0].Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+			// status = 1 或者2，一个tx中只有一个，但3可能有多个output
+			switch status {
+			case 1: // brc20 mint
+				addr := hex.EncodeToString(txOut.PkScript)
+				assetmap, ok := p.network.addrAssetMap[addr]
+				if !ok {
+					assetmap = make(map[swire.AssetName]*Decimal)
+					p.network.addrAssetMap[addr] = assetmap
+				}
+				asset := utxoAssets[0]
+				total := assetmap[asset.Name]
+				assetmap[asset.Name] = total.Add(&asset.Amount)
 
+				// 设置invalid
+				// utxoAssets = nil
+				// utxoOffsets = nil
+				invalidmap, ok := p.network.invalids[utxo]
+				if !ok {
+					invalidmap = make(map[swire.AssetName]bool)
+					p.network.invalids[utxo] = invalidmap
+				}
+				invalidmap[asset.Name] = true
+			case 2: // brc20 transfer
+				addr := hex.EncodeToString(txOut.PkScript)
+				assetmap, ok := p.network.addrAssetMap[addr]
+				if !ok {
+					return "", fmt.Errorf("no asset to transfer")
+				}
+				asset := utxoAssets[0]
+				total := assetmap[asset.Name]
+				if total.Cmp(&asset.Amount) < 0 {
+					return "", fmt.Errorf("no enough asset to transfer")
+				}
+				transferMap, ok := p.network.addrTransferMap[addr]
+				if !ok {
+					transferMap = make(map[swire.AssetName]map[string]bool)
+					p.network.addrTransferMap[addr] = transferMap
+				}
+				utxomap, ok := transferMap[asset.Name]
+				if !ok {
+					utxomap = make(map[string]bool)
+					transferMap[asset.Name] = utxomap
+				}
+				utxomap[utxo] = true
+
+				p.network.transferInfo[utxo] = &Brc20Transfer{
+					Utxo: utxo,
+					Address: addr,
+					AssetName: &asset.Name,
+					Amt: asset.Amount.Clone(),
+				}
+
+			case 3:
+				// brc20 的转移
+				to := hex.EncodeToString(txOut.PkScript)
+				assetInfo := utxoAssets[0]
+				assetmap, ok := p.network.addrAssetMap[to]
+				if !ok {
+					assetmap = make(map[swire.AssetName]*Decimal)
+					p.network.addrAssetMap[to] = assetmap
+				}
+				total := assetmap[assetInfo.Name]
+				assetmap[assetInfo.Name] = total.Add(&assetInfo.Amount)
+
+				// 暂时保留，但是设置为invalid
+				// utxoAssets = nil
+				// utxoOffsets = nil
+				invalidmap, ok := p.network.invalids[utxo]
+				if !ok {
+					invalidmap = make(map[swire.AssetName]bool)
+					p.network.invalids[utxo] = invalidmap
+				}
+				invalidmap[assetInfo.Name] = true
+				
+
+			default: 
+				
+			}
+		}
 		p.network.utxoAssets = append(p.network.utxoAssets, utxoAssets)
 		p.network.offsets = append(p.network.offsets, utxoOffsets)
-		j := insertPkScript(txOut.PkScript)
-		p.network.utxoOwner = append(p.network.utxoOwner, j)
-
+	
 		if IsOpReturn(txOut.PkScript) {
 			stone := runestone.Runestone{}
 			result, err := stone.DecipherFromPkScript(txOut.PkScript)
@@ -1482,12 +1904,13 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	return tx.TxID(), nil
 }
 
-func (p *TestIndexerClient) BroadCastTxs(txs []*wire.MsgTx) (error) {
-	for _, tx := range txs {
-		_, err := p.BroadCastTx(tx)
+func (p *TestIndexerClient) BroadCastTxs(txs []*wire.MsgTx) error {
+	for i, tx := range txs {
+		txId, err := p.BroadCastTx(tx)
 		if err != nil {
-			return err
+			return fmt.Errorf("BroadCastTx %d failed, %v", i, err)
 		}
+		fmt.Printf("%d %s broadcasted", i, txId)
 	}
 
 	return nil
@@ -1580,7 +2003,7 @@ func (p *TestIndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
 	return tx.TxID(), nil
 }
 
-func (p *TestIndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) (error) {
+func (p *TestIndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) error {
 	for _, tx := range txs {
 		_, err := p.BroadCastTx_SatsNet(tx)
 		if err != nil {
@@ -1590,7 +2013,6 @@ func (p *TestIndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) (error) {
 
 	return nil
 }
-
 
 func (p *TestIndexerClient) GetTickInfo(assetName *swire.AssetName) *indexer.TickerInfo {
 	p.network.mutex.RLock()
@@ -1637,7 +2059,6 @@ func (p *TestIndexerClient) GetKV(pubkey []byte, key string) (*indexerwire.KeyVa
 
 	return nil, fmt.Errorf("not implemented")
 }
-
 
 // 传回该name绑定的所有kv
 func (p *TestIndexerClient) GetNameInfo(name string) (*indexerwire.OrdinalsName, error) {
