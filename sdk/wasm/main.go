@@ -353,6 +353,34 @@ func createWallet(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
+
+func createMonitorWallet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := p[0].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		id, err := _mgr.CreateMonitorWallet(address)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		wallet.Log.Info("wallet created")
+		return map[string]any{
+			"walletId": fmt.Sprintf("%d", id),
+		}, 0, "ok"
+	})
+
+	return js.Global().Get("Promise").New(handler)
+}
+
 func isWalletExist(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -400,6 +428,41 @@ func importWallet(this js.Value, p []js.Value) any {
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		id, err := _mgr.ImportWallet(mnemonic, password)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{
+			"walletId": fmt.Sprintf("%d", id),
+			"address":  _mgr.GetWallet().GetAddress(),
+		}, 0, "ok"
+	})
+
+	return js.Global().Get("Promise").New(handler)
+}
+
+
+func importWalletWithPrivKey(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "private key parameter should be a hex string")
+	}
+	mnemonic := p[0].String()
+
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "password parameter should be a string")
+	}
+	password := p[1].String()
+
+	wallet.Log.Infof("ImportWallet %s %s", mnemonic, password)
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		id, err := _mgr.ImportWalletWithPrivateKey(mnemonic, password)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -3143,8 +3206,10 @@ func main() {
 	obj.Set("isWalletExist", js.FuncOf(isWalletExist))
 	// input: password;  return: walletId, mnemonic
 	obj.Set("createWallet", js.FuncOf(createWallet))
+	obj.Set("createMonitorWallet", js.FuncOf(createMonitorWallet))
 	// input: mnemonic, password; return: walletId
 	obj.Set("importWallet", js.FuncOf(importWallet))
+	obj.Set("importWalletWithPrivKey", js.FuncOf(importWalletWithPrivKey))
 	// input: password; return: current walletId
 	obj.Set("unlockWallet", js.FuncOf(unlockWallet))
 	// input: none; return: list of wallet id and account number

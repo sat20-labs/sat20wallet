@@ -49,11 +49,18 @@ type Status struct {
 	SyncHeightL2   int
 }
 
+const (
+	WALLET_TYPE_MNEMONIC int = 0
+	WALLET_TYPE_PRIVKEY  int = 1
+	WALLET_TYPE_MONITOR  int = 2
+)
+
 type WalletInDB struct {
 	Id       int64  // 钱包id，也是创建时间
 	Mnemonic []byte // 加密后的数据
 	Salt     []byte
 	Accounts int // 用户启用的子账户数量
+	Type     int // 0: 默认钱包，有助记词；1: 私钥钱包； 2: 观察钱包
 }
 
 func getWalletDBKey(id int64) string {
@@ -215,13 +222,17 @@ func (p *Manager) saveStatus() error {
 }
 
 func (p *Manager) saveMnemonic(mn, password string) (int64, error) {
+	return p.saveSecret(mn, password, WALLET_TYPE_MNEMONIC)
+}
+
+func (p *Manager) saveSecret(secret, password string, ty int) (int64, error) {
 	key, err := p.newSnaclKey(password)
 	if err != nil {
-		Log.Errorf("NewSecretKey failed. %v", err)
+		Log.Errorf("newSnaclKey failed. %v", err)
 		return -1, err
 	}
 
-	en, err := key.Encrypt([]byte(mn))
+	en, err := key.Encrypt([]byte(secret))
 	if err != nil {
 		Log.Errorf("Encrypt failed. %v", err)
 		return -1, err
@@ -234,6 +245,7 @@ func (p *Manager) saveMnemonic(mn, password string) (int64, error) {
 		Mnemonic: en,
 		Salt:     salt,
 		Accounts: 1,
+		Type:     ty,
 	}
 
 	err = saveWallet(p.db, &wallet)
@@ -245,7 +257,7 @@ func (p *Manager) saveMnemonic(mn, password string) (int64, error) {
 	return wallet.Id, nil
 }
 
-func (p *Manager) saveMnemonicWithPassword(mn, password string, wallet *WalletInDB) error {
+func (p *Manager) saveWalletSecretWithPassword(mn, password string, wallet *WalletInDB) error {
 	key, err := p.newSnaclKey(password)
 	if err != nil {
 		Log.Errorf("NewSecretKey failed. %v", err)
@@ -271,7 +283,7 @@ func (p *Manager) saveMnemonicWithPassword(mn, password string, wallet *WalletIn
 	return nil
 }
 
-func (p *Manager) loadMnemonic(id int64, password string) (string, error) {
+func (p *Manager) loadWalletSecret(id int64, password string) (string, error) {
 	wallet, ok := p.walletInfoMap[id]
 	if !ok {
 		// 现在有两个钱包对象在两个模块之中，需要做一些数据同步工作

@@ -4,7 +4,6 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 
-	"github.com/sat20-labs/satoshinet/btcec"
 
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
@@ -13,7 +12,7 @@ import (
 type ChannelWallet interface {
 	GetId() uint32
 	GetCommitSecret(index uint32) *secp256k1.PrivateKey
-	DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey
+	DeriveRevocationPrivKey(commitsecret *secp256k1.PrivateKey) *secp256k1.PrivateKey
 	GetRevocationBaseKey() *secp256k1.PublicKey
 	GetPaymentPubKey() *secp256k1.PublicKey
 
@@ -36,7 +35,7 @@ type Wallet interface {
 
 	// default channel wallet, CWId = 0
 	GetCommitSecret(peer []byte, index uint32) *secp256k1.PrivateKey
-	DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey
+	DeriveRevocationPrivKey(commitsecret *secp256k1.PrivateKey) *secp256k1.PrivateKey
 	GetRevocationBaseKey() *secp256k1.PublicKey
 	GetPaymentPubKey() *secp256k1.PublicKey
 

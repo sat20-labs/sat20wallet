@@ -653,6 +653,33 @@ func TestVerifyTx(t *testing.T) {
 }
 
 
+func TestImportPrivKeyWallet(t *testing.T) {
+	prepare(t)
+
+	privatekey := "cd8deaf4d6f66edca13370f823de0b36fa7e911d1391f3967479e02e066a7cd3"
+	address := "tb1prfcqz85l0x9r03fnxkfs3r78g2ap6afp5740m0c9h7g6xd0s5xkqgzjh4q"
+	oldPS := "123456"
+	newPS := "abcdefgh"
+
+	id, err := _client.ImportWalletWithPrivateKey(privatekey, oldPS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("wallet: %d %s\n", id, _client.wallet.GetAddress())
+
+	if _client.wallet.GetAddress() != address {
+		t.Fatal("different address")
+	}
+
+	err = _client.ChangePassword(oldPS, newPS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("%s\n", _client.GetMnemonic(id, oldPS))
+	fmt.Printf("%s\n", _client.GetMnemonic(id, newPS))
+}
+
+
 // func TestDeployContract_ORDX_Remote(t *testing.T) {
 // 	prepare(t)
 

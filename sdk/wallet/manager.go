@@ -48,7 +48,7 @@ type Manager struct {
 	bStop         bool
 	status        *Status
 	walletInfoMap map[int64]*WalletInDB
-	wallet        *InternalWallet
+	wallet        common.Wallet
 	msgCallback   NotifyCB
 	tickerInfoMap map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
 
