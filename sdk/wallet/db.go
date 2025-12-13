@@ -974,7 +974,7 @@ func saveLiquidityData(db db.KVDB, url string, value *LiquidityData) error {
 			return err
 		}
 	}
-	Log.Infof("saveLiquidityData succ. %s", url)
+	Log.Debugf("saveLiquidityData succ. %s", url)
 	return nil
 }
 
@@ -1361,15 +1361,15 @@ func ParseContractInvokerStatusKey(key string) (string, string, error) {
 func saveContractInvokerStatus(db db.KVDB, url string, value InvokerStatus) error {
 	buf, err := EncodeToBytes(value)
 	if err != nil {
-		Log.Errorf("saveUserContractInvokeStatus EncodeToBytes failed. %v", err)
+		Log.Errorf("saveContractInvokerStatus EncodeToBytes failed. %v", err)
 		return err
 	}
 	err = db.Write([]byte(GetContractInvokerStatusKey(url, value.GetKey())), buf)
 	if err != nil {
-		Log.Errorf("saveUserContractInvokeStatus failed. %v", err)
+		Log.Errorf("saveContractInvokerStatus failed. %v", err)
 		return err
 	}
-	Log.Infof("saveUserContractInvokeStatus succ. %s", value.GetKey())
+	Log.Debugf("saveContractInvokerStatus succ. %s", value.GetKey())
 	return nil
 }
 

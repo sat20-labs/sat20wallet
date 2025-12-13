@@ -1359,6 +1359,8 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 	lptPerSat := indexer.DecimalDiv(oldTotalLptAmt.NewPrecision(MAX_ASSET_DIVISIBILITY), indexer.NewDecimal(oldTotalPoolValue, MAX_ASSET_DIVISIBILITY))
 
 	url := p.URL()
+	svrTrader := p.loadSvrTraderInfo()
+	foundation := p.loadFoundationTraderInfo()
 	// 将要取回的LPToken，转换为对应的资产，并调整池子容量
 	var totalRemovedLptAmt *Decimal
 	var totalAddedFeeLptAmt *Decimal
@@ -1399,11 +1401,9 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 				totalAddedFeeLptAmt = totalAddedFeeLptAmt.Add(feeLptAmt)
 			} else {
 				// 直接提走
-				svrTrader := p.loadSvrTraderInfo()
 				svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
 				svrTrader.RetrieveValue += marketRetrivevValue.Floor()
 
-				foundation := p.loadFoundationTraderInfo()
 				foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrivevAmt)
 				foundation.RetrieveValue += foundationRetrivevValue.Floor()
 			}
@@ -1441,11 +1441,9 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 					marketRetrivevAmt := svrRetrivevAmt.Sub(foundationRetrivevAmt)
 					marketRetrivevValue := svrRetrivevValue.Sub(foundationRetrivevValue)
 					
-					svrTrader := p.loadSvrTraderInfo()
 					svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
 					svrTrader.RetrieveValue += marketRetrivevValue.Floor()
 
-					foundation := p.loadFoundationTraderInfo()
 					foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrivevAmt)
 					foundation.RetrieveValue += foundationRetrivevValue.Floor()
 				}
@@ -1485,8 +1483,6 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 	}
 
 	if !PROFIT_REINVESTING {
-		svrTrader := p.loadSvrTraderInfo()
-		foundation := p.loadFoundationTraderInfo()
 		if p.TotalFeeLptAmt.Sign() > 0 {
 			// 将历史累积的属于服务端的收益提走
 			lptRatio := indexer.DecimalDiv(p.TotalFeeLptAmt, oldTotalLptAmt)
@@ -1866,8 +1862,8 @@ func (p *AmmContractRuntime) settle(height int) error {
 		oldTotalLptAmt := p.TotalLptAmt
 
 		p.addLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt)
-		p.removeLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt)
-		p.removeBaseLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt)
+		p.removeLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt) // 优先处理
+		p.removeBaseLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt) // 等上面完成，再处理
 
 		p.stp.SaveReservationWithLock(p.resv)
 		p.saveLatestLiquidityData(height)

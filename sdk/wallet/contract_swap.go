@@ -4513,7 +4513,7 @@ func (p *SwapContractRuntime) retrieve() error {
 			// 成功一步记录一步
 			p.stp.SaveReservationWithLock(p.resv)
 
-			Log.Debugf("contract %s unstake completed, %s", p.URL(), txId)
+			Log.Debugf("contract %s removeliq completed, %s", p.URL(), txId)
 		}
 
 	} else {
