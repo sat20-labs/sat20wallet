@@ -2529,16 +2529,13 @@ func (p *SwapContractRuntime) loadTraderInfo(address string) *TraderStatus {
 	r, err := loadContractInvokerStatus(p.stp.GetDB(), p.URL(), address)
 	if err != nil {
 		status = NewTraderStatus(address, p.Divisibility)
-		p.traderInfoMap[address] = status
-		return status
+	} else {
+		status, ok = r.(*TraderStatus)
+		if !ok {
+			status = NewTraderStatus(address, p.Divisibility)
+		}
 	}
 
-	status, ok = r.(*TraderStatus)
-	if !ok {
-		status = NewTraderStatus(address, p.Divisibility)
-		p.traderInfoMap[address] = status
-		return status
-	}
 	p.traderInfoMap[address] = status
 	return status
 } 
