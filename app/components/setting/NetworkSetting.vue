@@ -62,7 +62,8 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { setLanguage, type Language } from '@/main'
+import { setLanguage } from '@/main'
+import type { Language } from '@/types'
 import { Network } from '@/types'
 import { Label } from '@/components/ui/label'
 import { Icon } from '@iconify/vue'

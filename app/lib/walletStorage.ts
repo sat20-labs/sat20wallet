@@ -1,8 +1,9 @@
-import { Network, Balance, Chain, WalletAccount, WalletData } from '@/types'
+import { Network, Balance, Chain, WalletAccount, WalletData, Language } from '@/types'
 import { Storage } from './storage-adapter'
 
 interface WalletState {
   env: 'dev' | 'test' | 'prd'
+  language: Language
   hasWallet: boolean
   locked: boolean
   walletId: string
@@ -24,6 +25,7 @@ type BatchUpdateData = Partial<WalletState>
 
 const defaultState: WalletState = {
   env: 'prd',
+  language: 'en',
   locked: true,
   hasWallet: false,
   address: null,
@@ -82,9 +84,9 @@ class WalletStorage {
     const loadPromises = Object.keys(defaultState).map(async (key) => {
       const storageKey = key as keyof WalletState
       const { value } = await Storage.get({ key: this.getStorageKey(storageKey) })
-      
+
       if (value !== null) {
-        ;(this.state[storageKey] as any) =
+        ; (this.state[storageKey] as any) =
           JSON.parse(value) as WalletState[typeof storageKey]
       }
     })
@@ -108,14 +110,14 @@ class WalletStorage {
     key: K,
     value: WalletState[K]
   ): Promise<void> {
-    
+
     const oldValue = this.state[key]
-    
+
 
     try {
       // 存储到本地
       await Storage.set({ key: this.getStorageKey(key), value: JSON.stringify(value) })
-      
+
       // 更新内存中的状态
       this.state[key] = value
 
@@ -142,7 +144,7 @@ class WalletStorage {
           const typedValue = value as WalletState[typeof typedKey]
           updatePromises.push(
             Storage.set({ key: this.getStorageKey(key), value: JSON.stringify(typedValue) }).then(() => {
-              ;(this.state[typedKey] as any) = typedValue
+              ; (this.state[typedKey] as any) = typedValue
               this.notifyListeners(typedKey, typedValue, oldState[typedKey])
             })
           )

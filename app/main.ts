@@ -10,6 +10,7 @@ import zh from './locales/zh.json'
 import { loadWasm } from '@/utils/wasm'
 import { VueQueryPlugin } from '@tanstack/vue-query'
 import { ErudaControl } from '@/utils/eruda-control'
+import type { Language } from '@/types'
 
 // 初始化 eruda 调试工具（默认启用）
 const initEruda = () => {
@@ -29,7 +30,7 @@ const initEruda = () => {
       console.log('🔧 Eruda 调试工具已启动')
 
       // 设置默认启用状态
-      localStorage.setItem('eruda-debug', 'true')
+      localStorage.setItem('eruda-debug', 'false')
     })
   }
 }
@@ -52,10 +53,15 @@ import { walletStorage } from '@/lib/walletStorage'
 
 loadWasm().then(async () => {
   // 初始化 eruda 调试工具
-  initEruda()
+  // initEruda()
 
   // 在应用启动时初始化存储状态
   await walletStorage.initializeState()
+
+  const savedLanguage = walletStorage.getValue('language')
+  if (savedLanguage) {
+    i18n.global.locale.value = savedLanguage
+  }
 
   const app = createApp(App)
   const pinia = createPinia()
@@ -67,14 +73,13 @@ loadWasm().then(async () => {
 
   app.mount('#app')
 
-  // 暴露全局对象和控制方法
-  ;(window as any).sat20 = sat20
-  ;(window as any).erudaControl = ErudaControl
+    // 暴露全局对象和控制方法
+    ; (window as any).sat20 = sat20
+  // ; (window as any).erudaControl = ErudaControl
   // ;(window as any).debugStorage = debugStorage
 });
 
-export type Language = 'en' | 'zh';
-
 export const setLanguage = (locale: Language) => {
   i18n.global.locale.value = locale
+  walletStorage.setValue('language', locale)
 }

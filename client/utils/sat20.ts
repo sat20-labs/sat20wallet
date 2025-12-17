@@ -424,6 +424,259 @@ class WalletManager {
   ): Promise<[Error | undefined, { parameter: any } | undefined]> {
     return this._handleRequest('getParamForInvokeContract', templateName, action)
   }
+
+  // --- Batch Send Methods (从 stp.ts 迁移) ---
+  async batchSendAssets_SatsNet(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    n: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('batchSendAssets_SatsNet', destAddr, assetName, amt, n)
+  }
+
+  async batchSendAssets(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    n: number,
+    feeRate: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('batchSendAssets', destAddr, assetName, amt, n, feeRate.toString())
+  }
+
+  async batchSendAssetsV2_SatsNet(
+    destAddr: string[],
+    assetName: string,
+    amtList: string[]
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('batchSendAssetsV2_SatsNet', destAddr, assetName, amtList)
+  }
+
+  // --- PSBT Info Methods (从 stp.ts 迁移) ---
+  async getTxAssetInfoFromPsbt(
+    psbtHex: string,
+    network: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getTxAssetInfoFromPsbt', psbtHex, network)
+  }
+
+  async getTxAssetInfoFromPsbt_SatsNet(
+    psbtHex: string,
+    network: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getTxAssetInfoFromPsbt_SatsNet', psbtHex, network)
+  }
+
+  // --- Ticker Info (从 stp.ts 迁移) ---
+  async getTickerInfo(
+    asset: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getTickerInfo', asset)
+  }
+
+  // --- Deposit/Withdraw (从 stp.ts 迁移) ---
+  async deposit(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    utxos: string[],
+    fees: string[],
+    feeRate: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest(
+      'deposit',
+      destAddr,
+      assetName,
+      amt,
+      utxos,
+      fees,
+      String(feeRate)
+    )
+  }
+
+  async withdraw(
+    destAddr: string,
+    assetName: string,
+    amt: string,
+    utxos: string[],
+    fees: string[],
+    feeRate: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest(
+      'withdraw',
+      destAddr,
+      assetName,
+      amt,
+      utxos,
+      fees,
+      String(feeRate)
+    )
+  }
+
+  // --- Contract Methods (从 stp.ts 迁移) ---
+  async getSupportedContracts(): Promise<[
+    Error | undefined,
+    { contractContents: any[] } | undefined
+  ]> {
+    return this._handleRequest('getSupportedContracts')
+  }
+
+  async getDeployedContractsInServer(): Promise<[
+    Error | undefined,
+    { contractURLs: any[] } | undefined
+  ]> {
+    return this._handleRequest('getDeployedContractsInServer')
+  }
+
+  async getDeployedContractStatus(url: string): Promise<[
+    Error | undefined,
+    { contractStatus: any } | undefined
+  ]> {
+    return this._handleRequest('getDeployedContractStatus', url)
+  }
+
+  async invokeContract_SatsNet(
+    url: string,
+    invoke: string,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('invokeContract_SatsNet', url, invoke, feeRate)
+  }
+
+  async invokeContractV2_SatsNet(
+    url: string,
+    invoke: string,
+    assetName: string,
+    amt: string,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('invokeContractV2_SatsNet', url, invoke, assetName, amt, feeRate)
+  }
+
+  async invokeContractV2(
+    url: string,
+    invoke: string,
+    assetName: string,
+    amt: string,
+    unitPrice: number,
+    serviceFee: number,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('invokeContractV2', url, invoke, assetName, amt, unitPrice, serviceFee, feeRate)
+  }
+
+  async getContractInvokeHistoryInServer(
+    url: string,
+    start: number,
+    limit: number
+  ): Promise<[Error | undefined, string | undefined]> {
+    return this._handleRequest('getContractInvokeHistoryInServer', url, start, limit)
+  }
+
+  async getContractInvokeHistoryByAddressInServer(
+    url: string,
+    address: string,
+    start: number,
+    limit: number
+  ): Promise<[Error | undefined, string | undefined]> {
+    return this._handleRequest('getContractInvokeHistoryByAddressInServer', url, address, start, limit)
+  }
+
+  async getAllAddressInContract(
+    url: string,
+    start: number,
+    limit: number
+  ): Promise<[Error | undefined, string | undefined]> {
+    return this._handleRequest('getAllAddressInContract', url, start, limit)
+  }
+
+  async getAddressStatusInContract(
+    url: string,
+    address: string
+  ): Promise<[Error | undefined, string | undefined]> {
+    return this._handleRequest('getAddressStatusInContract', url, address)
+  }
+
+  // --- Referrer Methods (从 stp.ts 迁移) ---
+  async getAllRegisteredReferrerName(
+    pubkey: string
+  ): Promise<[Error | undefined, { names: string[] } | undefined]> {
+    return this._handleRequest('getAllRegisteredReferrerName', pubkey)
+  }
+
+  async registerAsReferrer(
+    name: string,
+    feeRate: number
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('registerAsReferrer', name, feeRate.toString())
+  }
+
+  async bindReferrerForServer(
+    referrerName: string,
+    serverPubKey: string
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('bindReferrerForServer', referrerName, serverPubKey)
+  }
+
+  // --- PSBT Methods (从 stp.ts 迁移,部分方法名有变化) ---
+  async addInputsToPsbt_SatsNet(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return this._handleRequest('addInputsToPsbt_SatsNet', psbtHex, utxos)
+  }
+
+  async addOutputsToPsbt_SatsNet(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return this._handleRequest('addOutputsToPsbt_SatsNet', psbtHex, utxos)
+  }
+
+  // --- 新增方法 (sat20 wasm 新增,暂无实现细节) ---
+
+  // TODO: 需要补充参数和返回类型
+  async batchDbTest(...args: any[]): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('batchDbTest', ...args)
+  }
+
+  // TODO: 需要补充参数和返回类型
+  async dbTest(...args: any[]): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('dbTest', ...args)
+  }
+
+  // TODO: 需要补充参数和返回类型
+  async signPsbts(...args: any[]): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('signPsbts', ...args)
+  }
+
+  // TODO: 需要补充参数和返回类型
+  async signPsbts_SatsNet(...args: any[]): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('signPsbts_SatsNet', ...args)
+  }
+
+  // TODO: 需要补充参数和返回类型
+  async extractUnsignedTxFromPsbt(...args: any[]): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('extractUnsignedTxFromPsbt', ...args)
+  }
+
+  // TODO: 需要补充参数和返回类型
+  async extractUnsignedTxFromPsbt_SatsNet(...args: any[]): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('extractUnsignedTxFromPsbt_SatsNet', ...args)
+  }
+
+  // TODO: 需要补充参数和返回类型
+  async isUtxoLocked(...args: any[]): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('isUtxoLocked', ...args)
+  }
+
+  // TODO: 需要补充参数和返回类型
+  async isUtxoLocked_SatsNet(...args: any[]): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('isUtxoLocked_SatsNet', ...args)
+  }
+
+  // 注意: sendAssets 方法已存在,但参数可能不同,需要确认
 }
 
 export default new WalletManager()

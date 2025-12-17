@@ -30,3 +30,12 @@ web-ext.config.ts
 android/app/build/
 android/app/release/
 android/app/debug/
+
+# Android 签名文件（敏感信息）
+*.jks
+*.keystore
+android/gradle.properties
+
+# 构建输出
+builds/
+dist/

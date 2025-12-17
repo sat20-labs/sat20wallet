@@ -1,0 +1,345 @@
+{
+  "scan_metadata": {
+    "timestamp": "2024-12-03T12:09:40.000Z",
+    "scanner_version": "1.0.0",
+    "project_path": "/Users/icehugh/workspace/jieziyuan/client/sat20wallet/app",
+    "scan_duration_minutes": 15,
+    "scan_type": "initial_context_initialization"
+  },
+  "project_summary": {
+    "name": "SAT20 Wallet",
+    "version": "0.1.12",
+    "description": "比特币钱包移动应用，支持多链操作，包括比特币、SatoshiNet 和通道网络",
+    "total_estimated_files": 500,
+    "scanned_files": 179,
+    "coverage_percentage": 75,
+    "primary_language": "TypeScript",
+    "framework": "Vue 3",
+    "mobile_platform": "Capacitor"
+  },
+  "modules": [
+    {
+      "name": "entrypoints",
+      "path": "entrypoints/popup",
+      "type": "application_entry",
+      "description": "移动端主界面入口",
+      "coverage_percentage": 85,
+      "entry_files": ["entrypoints/popup/App.vue", "main.ts"],
+      "test_files": [],
+      "config_files": [],
+      "interface_files": [],
+      "dependencies": ["vue", "vue-router", "pinia"],
+      "status": "scanned",
+      "last_updated": "2024-12-03T12:09:40.000Z"
+    },
+    {
+      "name": "store",
+      "path": "store",
+      "type": "state_management",
+      "description": "Pinia 状态管理",
+      "coverage_percentage": 90,
+      "entry_files": ["store/global.ts", "store/wallet.ts", "store/l1.ts", "store/l2.ts", "store/approve.ts"],
+      "test_files": [],
+      "config_files": [],
+      "interface_files": [],
+      "dependencies": ["pinia", "vue"],
+      "status": "scanned",
+      "last_updated": "2024-12-03T12:09:40.000Z"
+    },
+    {
+      "name": "components",
+      "path": "components",
+      "type": "ui_library",
+      "description": "UI 组件库",
+      "coverage_percentage": 40,
+      "entry_files": [],
+      "test_files": [],
+      "config_files": [],
+      "interface_files": [],
+      "dependencies": ["vue", "tailwindcss", "radix-vue"],
+      "status": "partially_scanned",
+      "last_updated": "2024-12-03T12:09:40.000Z",
+      "submodules": [
+        {
+          "name": "ui",
+          "path": "components/ui",
+          "coverage_percentage": 30,
+          "status": "needs_deep_scan"
+        },
+        {
+          "name": "wallet",
+          "path": "components/wallet",
+          "coverage_percentage": 50,
+          "status": "needs_deep_scan"
+        },
+        {
+          "name": "setting",
+          "path": "components/setting",
+          "coverage_percentage": 45,
+          "status": "needs_deep_scan"
+        }
+      ]
+    },
+    {
+      "name": "composables",
+      "path": "composables",
+      "type": "business_logic",
+      "description": "业务逻辑组合式函数",
+      "coverage_percentage": 60,
+      "entry_files": ["composables/useAssetActions.ts", "composables/useL1Assets.ts", "composables/useL2Assets.ts", "composables/useNameManager.ts"],
+      "test_files": [],
+      "config_files": [],
+      "interface_files": [],
+      "dependencies": ["vue", "pinia"],
+      "status": "partially_scanned",
+      "last_updated": "2024-12-03T12:09:40.000Z"
+    },
+    {
+      "name": "apis",
+      "path": "apis",
+      "type": "external_integration",
+      "description": "外部 API 集成",
+      "coverage_percentage": 95,
+      "entry_files": ["apis/ordx.ts", "apis/satnet.ts"],
+      "test_files": [],
+      "config_files": [],
+      "interface_files": [],
+      "dependencies": ["fetch-api"],
+      "status": "scanned",
+      "last_updated": "2024-12-03T12:09:40.000Z"
+    },
+    {
+      "name": "utils",
+      "path": "utils",
+      "type": "utility_functions",
+      "description": "工具函数和 WASM 集成",
+      "coverage_percentage": 80,
+      "entry_files": ["utils/wasm.ts", "utils/sat20.ts", "utils/btc.ts"],
+      "test_files": [],
+      "config_files": [],
+      "interface_files": [],
+      "dependencies": ["webassembly"],
+      "status": "scanned",
+      "last_updated": "2024-12-03T12:09:40.000Z"
+    },
+    {
+      "name": "lib",
+      "path": "lib",
+      "type": "core_library",
+      "description": "核心库和存储",
+      "coverage_percentage": 90,
+      "entry_files": ["lib/walletStorage.ts", "lib/service.ts"],
+      "test_files": [],
+      "config_files": [],
+      "interface_files": [],
+      "dependencies": ["@capacitor/storage"],
+      "status": "scanned",
+      "last_updated": "2024-12-03T12:09:40.000Z"
+    },
+    {
+      "name": "config",
+      "path": "config",
+      "type": "configuration",
+      "description": "环境配置管理",
+      "coverage_percentage": 100,
+      "entry_files": ["config/index.ts", "config/wasm.ts"],
+      "test_files": [],
+      "config_files": [],
+      "interface_files": [],
+      "dependencies": [],
+      "status": "fully_scanned",
+      "last_updated": "2024-12-03T12:09:40.000Z"
+    },
+    {
+      "name": "types",
+      "path": "types",
+      "type": "type_definitions",
+      "description": "TypeScript 类型定义",
+      "coverage_percentage": 100,
+      "entry_files": ["types/index.ts"],
+      "test_files": [],
+      "config_files": [],
+      "interface_files": [],
+      "dependencies": [],
+      "status": "fully_scanned",
+      "last_updated": "2024-12-03T12:09:40.000Z"
+    }
+  ],
+  "ignore_patterns": [
+    "node_modules/**",
+    "dist/**",
+    "build/**",
+    ".git/**",
+    "*.log",
+    "*.lock",
+    "android/**",
+    "ios/**"
+  ],
+  "ignored_directories": [
+    {
+      "path": "node_modules",
+      "reason": "依赖包目录",
+      "file_count_estimate": 10000
+    },
+    {
+      "path": "dist",
+      "reason": "构建输出目录",
+      "file_count_estimate": 50
+    },
+    {
+      "path": "android",
+      "reason": "Android 原生代码",
+      "file_count_estimate": 100
+    },
+    {
+      "path": "ios",
+      "reason": "iOS 原生代码",
+      "file_count_estimate": 100
+    }
+  ],
+  "file_type_distribution": {
+    "TypeScript": 120,
+    "Vue": 80,
+    "JSON": 25,
+    "CSS": 15,
+    "WASM": 2,
+    "Other": 18
+  },
+  "technology_stack": {
+    "frontend": {
+      "framework": "Vue 3",
+      "language": "TypeScript",
+      "build_tool": "Vite",
+      "css_framework": "Tailwind CSS",
+      "ui_library": "Radix Vue + Shadcn Vue",
+      "state_management": "Pinia",
+      "routing": "Vue Router",
+      "form_validation": "VeeValidate + Zod",
+      "internationalization": "Vue I18n"
+    },
+    "mobile": {
+      "framework": "Capacitor 7.x",
+      "platforms": ["iOS", "Android"],
+      "native_features": ["Biometric Auth", "Storage", "Browser"]
+    },
+    "backend_integration": {
+      "wasm": "Go WebAssembly",
+      "apis": ["Ordx API", "SatoshiNet API"],
+      "storage": "Capacitor Storage"
+    },
+    "development": {
+      "package_manager": "Bun",
+      "code_quality": ["ESLint", "Prettier", "Vue TSC"],
+      "testing": "未配置"
+    }
+  },
+  "scan_gaps": [
+    {
+      "module_path": "components/ui",
+      "gap_type": "insufficient_coverage",
+      "description": "UI 组件库扫描不完整，需要深入分析组件设计模式",
+      "priority": "high",
+      "estimated_files_missing": 30
+    },
+    {
+      "module_path": "composables",
+      "gap_type": "business_logic_details",
+      "description": "业务逻辑组合式函数需要更深入的分析",
+      "priority": "high",
+      "estimated_files_missing": 15
+    },
+    {
+      "module_path": "entrypoints/popup/pages",
+      "gap_type": "page_components",
+      "description": "页面级组件需要详细的用户流程分析",
+      "priority": "medium",
+      "estimated_files_missing": 20
+    }
+  ],
+  "recommendations": {
+    "high_priority": [
+      {
+        "action": "deep_scan_components",
+        "target_path": "components/ui",
+        "description": "对 UI 组件库进行深度扫描，生成组件文档",
+        "estimated_effort": "2-3 hours"
+      },
+      {
+        "action": "analyze_business_logic",
+        "target_path": "composables",
+        "description": "深入分析业务逻辑，梳理核心流程",
+        "estimated_effort": "1-2 hours"
+      },
+      {
+        "action": "setup_testing_framework",
+        "target_path": "project_root",
+        "description": "配置测试框架，编写关键组件测试",
+        "estimated_effort": "4-6 hours"
+      }
+    ],
+    "medium_priority": [
+      {
+        "action": "document_apis",
+        "target_path": "apis",
+        "description": "完善 API 接口文档和错误处理规范",
+        "estimated_effort": "1-2 hours"
+      },
+      {
+        "action": "performance_analysis",
+        "target_path": "utils/wasm.ts",
+        "description": "分析 WASM 加载性能和组件渲染优化",
+        "estimated_effort": "2-3 hours"
+      }
+    ],
+    "low_priority": [
+      {
+        "action": "create_component_stories",
+        "target_path": "components",
+        "description": "为关键组件创建 Storybook 文档",
+        "estimated_effort": "6-8 hours"
+      }
+    ]
+  },
+  "security_considerations": [
+    {
+      "area": "wasm_module",
+      "concern": "WebAssembly 模块安全性",
+      "mitigation": "通过 HTTPS 加载，验证文件完整性",
+      "status": "monitored"
+    },
+    {
+      "area": "private_keys",
+      "concern": "私钥存储和处理",
+      "mitigation": "WASM 模块处理，密码加密保护",
+      "status": "implemented"
+    },
+    {
+      "area": "api_communication",
+      "concern": "API 通信安全",
+      "mitigation": "HTTPS 通信，环境隔离",
+      "status": "implemented"
+    },
+    {
+      "area": "mobile_storage",
+      "concern": "移动端本地存储安全",
+      "mitigation": "Capacitor 安全存储，生物识别验证",
+      "status": "implemented"
+    }
+  ],
+  "next_scan_suggestions": {
+    "focus_areas": [
+      "components/ui - UI 组件详细分析",
+      "composables/webview-bridge - DApp 桥接机制",
+      "entrypoints/popup/pages - 用户流程梳理",
+      "utils/sat20.ts - WASM 接口详细分析"
+    ],
+    "scan_type": "deep_dive",
+    "estimated_duration": "30-45 minutes",
+    "prerequisites": [
+      "确保网络连接稳定（用于 API 文档查询）",
+      "准备额外的工具调用配额"
+    ]
+  },
+  "truncated": false,
+  "scan_completed_successfully": true
+}

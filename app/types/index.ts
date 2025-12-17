@@ -10,6 +10,8 @@ export enum Chain {
   SATNET = 'satnet',
 }
 
+export type Language = 'en' | 'zh';
+
 export type Balance = { confirmed: number; unconfirmed: number; total: number };
 
 export interface WalletAccount {
