@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { walletStorage } from '@/lib/walletStorage'
 import { Network, Chain, WalletData, WalletAccount, WalletType } from '@/types'
 import walletManager from '@/utils/sat20'
-import stp from '@/utils/stp'
 import satsnetStp from '@/utils/stp'
 import { useChannelStore } from './channel'
 import { ref, computed, toRaw } from 'vue'
@@ -119,9 +118,9 @@ export const useWalletStore = defineStore('wallet', () => {
     const env = walletStorage.getValue('env') || 'test'
     const config = getConfig(env, value)
 
-    await stp.release()
+    await satsnetStp.release()
     await walletManager.release()
-    await stp.init(config, logLevel)
+    await satsnetStp.init(config, logLevel)
     await walletManager.init(config, logLevel)
     try {
       console.log(`Sending NETWORK_CHANGED message with payload: ${value}`)
@@ -161,7 +160,6 @@ export const useWalletStore = defineStore('wallet', () => {
       console.log('Starting wallet switch to:', walletIdToSwitch)
 
       await walletManager.switchWallet(walletIdToSwitch, password.value as string)
-      await satsnetStp.switchWallet(walletIdToSwitch, password.value as string)
       const currentAccount = wallets.value.find(w => w.id === walletIdToSwitch)?.accounts[0];
       await setWalletId(walletIdToSwitch);
       await switchToAccount(currentAccount?.index || 0);
@@ -190,7 +188,6 @@ export const useWalletStore = defineStore('wallet', () => {
     await setHasWallet(true)
     await setLocked(false)
     await setChain(Chain.BTC)
-    await satsnetStp.importWallet(_mnemonic, password)
     await setPassword(password)
     await satsnetStp.start()
     await channelStore.getAllChannels()
@@ -257,7 +254,6 @@ export const useWalletStore = defineStore('wallet', () => {
     // await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
     await setPassword(password)
-    await satsnetStp.importWallet(processedMnemonic, password)
     await satsnetStp.start()
     await channelStore.getAllChannels()
     const [_e, addressRes] = await walletManager.getWalletAddress(
@@ -307,9 +303,7 @@ export const useWalletStore = defineStore('wallet', () => {
     await setChain(Chain.BTC)
     await setPassword(password)
 
-    // stp doesn't have importWalletWithPrivKey, try unlock
-    // Assuming walletManager created the shared DB
-    await satsnetStp.unlockWallet(password)
+    // stp wasm 需要单独 start
     await satsnetStp.start()
 
     await channelStore.getAllChannels()
@@ -436,7 +430,6 @@ export const useWalletStore = defineStore('wallet', () => {
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
-      await satsnetStp.unlockWallet(password)
       await satsnetStp.start()
       await switchToAccount(accountIndex.value)
       await channelStore.getAllChannels()
@@ -496,7 +489,6 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const addAccount = async (name: string, accountId: number) => {
     await walletManager.switchAccount(accountId)
-    await satsnetStp.switchAccount(accountId)
     const [_, addressRes] = await walletManager.getWalletAddress(accountId)
     const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
     if (addressRes && pubkeyRes) {
@@ -535,7 +527,6 @@ export const useWalletStore = defineStore('wallet', () => {
       console.log('Starting account switch to:', accountId)
 
       await walletManager.switchAccount(accountId)
-      await satsnetStp.switchAccount(accountId)
       const [_, addressRes] = await walletManager.getWalletAddress(accountId)
       const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
       console.log('switchToAccount', await satsnetStp.getWallet());

@@ -2,7 +2,6 @@ import { walletStorage } from '@/lib/walletStorage'
 import { Network, Balance } from '@/types'
 import { ordxApi } from '@/apis'
 import { psbt2tx } from '@/utils/btc'
-import stp from '@/utils/stp'
 import sat20Wallet from '@/utils/sat20'
 import { reInitializeWasm } from './background/WasmManager'
 
