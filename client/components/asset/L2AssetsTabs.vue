@@ -71,6 +71,7 @@
                 {{ $t('l2AssetsTabs.send') }}
               </Button>
               <Button size="sm" variant="outline" class="border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]"
+                :disabled="!canWithdraw"
                 @click="$emit('withdraw', asset)">
                 <Icon icon="lucide:arrow-up-right" class="w-4 h-4 mr-1" />
                 {{ $t('l2AssetsTabs.withdraw') }}
@@ -89,9 +90,10 @@ import { ref, computed, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { useWalletStore } from '@/store'
-import { Chain } from '@/types/index'
+import { Chain, WalletType } from '@/types/index'
 import { generateMempoolUrl, formatLargeNumber } from '@/utils'
 import { useGlobalStore } from '@/store/global'
+import { storeToRefs } from 'pinia'
 
 // 类型定义
 interface Asset {
@@ -113,8 +115,12 @@ const emit = defineEmits(['update:modelValue', 'lock', 'send', 'withdraw', 'refr
 
 const walletStore = useWalletStore()
 const globalStore = useGlobalStore()
-const { address, network } = storeToRefs(walletStore)
+const { address, network, currentWalletType } = storeToRefs(walletStore)
 const { env } = storeToRefs(globalStore)
+
+// 只有助记词钱包才能使用 withdraw
+const canWithdraw = computed(() => currentWalletType.value === WalletType.MNEMONIC)
+
 const mempoolUrl = computed(() => {
   return generateMempoolUrl({
     network: network.value,

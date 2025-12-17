@@ -56,7 +56,14 @@
                 <Button v-else variant="outline" size="sm" disabled>
                   {{ $t('walletManager.current') }}
                 </Button>
-                <Button variant="ghost" size="icon" @click="showMnemonicDialog(wallet)">
+                <!-- 只有助记词类型的钱包可以查看助记词。历史钱包会被自动迁移为 MNEMONIC 类型 -->
+                <Button 
+                  v-if="!wallet.walletType || wallet.walletType === 'mnemonic'" 
+                  variant="ghost" 
+                  size="icon" 
+                  @click="showMnemonicDialog(wallet)"
+                  :title="$t('walletManager.showRecoveryPhrase')"
+                >
                   <Icon icon="lucide:key" class="w-4 h-4" />
                 </Button>
                 <Button v-if="wallet.id !== currentWalletId" variant="ghost" size="icon"
@@ -175,16 +182,39 @@
           </DialogDescription>
         </DialogHeader>
         <form @submit.prevent="importWallet" class="space-y-4">
-          <div class="space-y-4">
-            <div class="space-y-2">
-              <Label for="mnemonic">{{ $t('walletManager.recoveryPhrase') }}</Label>
-              <Textarea id="mnemonic" v-model="importMnemonic" :placeholder="$t('walletManager.enterRecoveryPhrase')"
-                rows="3" />
-              <p class="text-xs text-muted-foreground">
-                {{ $t('walletManager.recoveryPhraseHint') }}
-              </p>
-            </div>
-          </div>
+          <Tabs v-model="importTab" class="w-full">
+            <TabsList class="grid w-full grid-cols-2">
+              <TabsTrigger value="mnemonic">{{ $t('walletManager.recoveryPhrase') }}</TabsTrigger>
+              <TabsTrigger value="privateKey">{{ $t('walletManager.privateKey') }}</TabsTrigger>
+            </TabsList>
+            
+            <TabsContent value="mnemonic" class="space-y-4">
+              <div class="space-y-2">
+                <Label for="mnemonic">{{ $t('walletManager.recoveryPhrase') }}</Label>
+                <Textarea id="mnemonic" v-model="importMnemonic" :placeholder="$t('walletManager.enterRecoveryPhrase')"
+                  rows="3" />
+                <p class="text-xs text-muted-foreground">
+                  {{ $t('walletManager.recoveryPhraseHint') }}
+                </p>
+              </div>
+            </TabsContent>
+            
+            <TabsContent value="privateKey" class="space-y-4">
+              <div class="space-y-2">
+                <Label for="privateKey">{{ $t('walletManager.privateKey') }}</Label>
+                <Input 
+                  id="privateKey" 
+                  type="password"
+                  v-model="importPrivateKey" 
+                  :placeholder="$t('walletManager.enterPrivateKey')" 
+                />
+                <p class="text-xs text-muted-foreground">
+                  {{ $t('walletManager.privateKeyHint') }}
+                </p>
+              </div>
+            </TabsContent>
+          </Tabs>
+          
           <DialogFooter>
             <Button variant="secondary" type="button" @click="isImportWalletDialogOpen = false" class="h-11 mt-2">
               {{ $t('walletManager.cancel') }}
@@ -315,6 +345,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
@@ -326,7 +357,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store'
-import { WalletData } from '@/types'
+import { WalletData, WalletType } from '@/types'
 import { Message } from '@/types/message'
 import { sendAccountsChangedEvent } from '@/lib/utils'
 import walletManager from '@/utils/sat20'
@@ -354,6 +385,8 @@ const isEditingName = ref(false)
 const isVerifyingMnemonic = ref(false)
 
 const importMnemonic = ref('')
+const importPrivateKey = ref('')
+const importTab = ref('mnemonic')
 const importPassword = ref('')
 const importConfirmPassword = ref('')
 const walletToDelete = ref<WalletData | null>(null)
@@ -492,6 +525,8 @@ const deleteWallet = async () => {
 
 const showImportWalletDialog = () => {
   importMnemonic.value = ''
+  importPrivateKey.value = ''
+  importTab.value = 'mnemonic'
   importPassword.value = ''
   importConfirmPassword.value = ''
   isImportWalletDialogOpen.value = true
@@ -537,17 +572,25 @@ const importWallet = async () => {
   if (isImporting.value) return
 
   try {
-
-    if (!importMnemonic.value) {
-      throw new Error('Please enter your recovery phrase')
-    }
     isImporting.value = true
     const localPassword = walletStore.password
     if (!localPassword) {
       throw new Error('No password set')
     }
 
-    const [err] = await walletStore.importWallet(importMnemonic.value, localPassword)
+    let err
+    if (importTab.value === 'mnemonic') {
+      if (!importMnemonic.value) {
+        throw new Error('Please enter your recovery phrase')
+      }
+      [err] = await walletStore.importWallet(importMnemonic.value, localPassword)
+    } else if (importTab.value === 'privateKey') {
+      if (!importPrivateKey.value) {
+        throw new Error('Please enter your private key')
+      }
+      [err] = await walletStore.importWalletWithPrivKey(importPrivateKey.value, localPassword)
+    }
+    
     if (err) {
       throw err
     }
@@ -638,6 +681,16 @@ const mnemonicWords = computed(() =>
 )
 
 const showMnemonicDialog = (wallet: WalletData) => {
+  // 只有助记词类型的钱包才能查看助记词
+  if (wallet.walletType && wallet.walletType !== WalletType.MNEMONIC) {
+    toast({
+      variant: 'destructive',
+      title: 'Error',
+      description: 'This wallet type does not support mnemonic export'
+    })
+    return
+  }
+  
   editingWallet.value = wallet
   mnemonicPhrase.value = ''
   mnemonicPassword.value = ''

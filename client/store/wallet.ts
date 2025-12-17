@@ -1,11 +1,12 @@
 import { defineStore } from 'pinia'
 import { walletStorage } from '@/lib/walletStorage'
-import { Network, Chain, WalletData, WalletAccount } from '@/types'
+import { Network, Chain, WalletData, WalletAccount, WalletType } from '@/types'
 import walletManager from '@/utils/sat20'
 import stp from '@/utils/stp'
 import satsnetStp from '@/utils/stp'
 import { useChannelStore } from './channel'
 import { ref, computed, toRaw } from 'vue'
+import { getConfig, logLevel } from '@/config/wasm'
 import { sendNetworkChangedEvent, sendAccountsChangedEvent } from '@/lib/utils'
 
 
@@ -27,6 +28,30 @@ export const useWalletStore = defineStore('wallet', () => {
   const localWallets = walletStorage.getValue('wallets');
   const wallets = ref<WalletData[]>(localWallets ? JSON.parse(JSON.stringify(localWallets)) : [])
 
+  // 迁移历史钱包数据：为没有 walletType 的钱包设置默认类型为 MNEMONIC
+  const migrateHistoricalWallets = async () => {
+    let needsUpdate = false
+    const updatedWallets = wallets.value.map(wallet => {
+      if (!wallet.walletType) {
+        needsUpdate = true
+        return {
+          ...wallet,
+          walletType: WalletType.MNEMONIC
+        }
+      }
+      return wallet
+    })
+
+    if (needsUpdate) {
+      wallets.value = updatedWallets
+      await walletStorage.setValue('wallets', toRaw(wallets.value))
+      console.log('Historical wallets migrated to include walletType')
+    }
+  }
+
+  // 立即执行迁移
+  migrateHistoricalWallets()
+
   // 添加全局切换状态管理
   const isSwitchingWallet = ref(false)
   const isSwitchingAccount = ref(false)
@@ -35,6 +60,9 @@ export const useWalletStore = defineStore('wallet', () => {
   const wallet = computed(() => wallets.value.find(w => w.id === walletId.value))
   const accounts = computed(() => wallet.value?.accounts)
   const account = computed(() => wallet.value?.accounts.find(a => a.index === accountIndex.value))
+
+  // 当前钱包类型，默认为助记词类型（兼容历史数据）
+  const currentWalletType = computed(() => wallet.value?.walletType || WalletType.MNEMONIC)
 
   // 安全的账户变更事件发送函数
   const safeSendAccountsChangedEvent = async (accountsData: any) => {
@@ -88,17 +116,19 @@ export const useWalletStore = defineStore('wallet', () => {
       await setAddress(address)
       await setPublickey(pubkeyRes.pubKey)
     }
+    const env = walletStorage.getValue('env') || 'test'
+    const config = getConfig(env, value)
 
+    await stp.release()
+    await walletManager.release()
+    await stp.init(config, logLevel)
+    await walletManager.init(config, logLevel)
     try {
       console.log(`Sending NETWORK_CHANGED message with payload: ${value}`)
       await sendNetworkChangedEvent(value)
     } catch (error) {
       console.error('Failed to send NETWORK_CHANGED message to background:', error)
     }
-    return true;
-    // await stp.release()
-    // await walletManager.release()
-    // window.location.reload()
   }
 
   const setChain = async (value: Chain) => {
@@ -139,7 +169,7 @@ export const useWalletStore = defineStore('wallet', () => {
 
       // 发送账户变更事件（非关键操作）
       safeSendAccountsChangedEvent(wallets.value)
-      
+
       console.log('Wallet switch completed successfully')
     } catch (error) {
       console.error('Wallet switch failed:', error)
@@ -180,6 +210,7 @@ export const useWalletStore = defineStore('wallet', () => {
       _wallets.push({
         id: walletId,
         name: `Wallet ${walletLen + 1}`,
+        walletType: WalletType.MNEMONIC,
         accounts: [{
           index: 0,
           name: `Account ${0 + 1}`,
@@ -244,6 +275,7 @@ export const useWalletStore = defineStore('wallet', () => {
       _wallets.push({
         id: walletId,
         name: `Wallet ${walletLen + 1}`,
+        walletType: WalletType.MNEMONIC,
         accounts: [{
           index: 0,
           name: `Account ${0 + 1}`,
@@ -258,6 +290,127 @@ export const useWalletStore = defineStore('wallet', () => {
     console.log('wallet id', walletId);
 
     return [undefined, processedMnemonic]
+  }
+
+  const importWalletWithPrivKey = async (privateKey: string, password: string): Promise<[Error | undefined, boolean | undefined]> => {
+    const [err, res] = await walletManager.importWalletWithPrivKey(privateKey, password)
+    if (err || !res) {
+      console.error(err)
+      return [err, undefined]
+    }
+    const { walletId } = res
+    const walletIdStr = walletId.toString()
+    await setWalletId(walletIdStr)
+    await setAccountIndex(0)
+    await setHasWallet(true)
+    await setLocked(false)
+    await setChain(Chain.BTC)
+    await setPassword(password)
+
+    // stp doesn't have importWalletWithPrivKey, try unlock
+    // Assuming walletManager created the shared DB
+    await satsnetStp.unlockWallet(password)
+    await satsnetStp.start()
+
+    await channelStore.getAllChannels()
+    const [_e, addressRes] = await walletManager.getWalletAddress(
+      accountIndex.value
+    )
+    const [_j, pubkeyRes] = await walletManager.getWalletPubkey(
+      accountIndex.value
+    )
+    const _wallets = JSON.parse(JSON.stringify(walletStorage.getValue('wallets')))
+    if (addressRes && pubkeyRes) {
+      const { address } = addressRes
+      await setAddress(address)
+      await setPublickey(pubkeyRes.pubKey)
+      const walletLen = _wallets.length
+      _wallets.push({
+        id: walletIdStr,
+        name: `Wallet ${walletLen + 1}`,
+        walletType: WalletType.PRIVATE_KEY,
+        accounts: [{
+          index: 0,
+          name: `Account ${0 + 1}`,
+          address: address,
+          pubKey: pubkeyRes.pubKey
+        }]
+      })
+    }
+    wallets.value = _wallets
+    await walletStorage.setValue('wallets', _wallets)
+
+    return [undefined, true]
+  }
+
+  const createMonitorWallet = async (address: string): Promise<[Error | undefined, boolean | undefined]> => {
+    const [err, res] = await walletManager.createMonitorWallet(address)
+    if (err || !res) {
+      console.error(err)
+      return [err, undefined]
+    }
+    const { walletId } = res
+    const walletIdStr = walletId.toString()
+    await setWalletId(walletIdStr)
+    await setAccountIndex(0)
+    await setHasWallet(true)
+    await setLocked(false)
+    await setChain(Chain.BTC)
+    // Monitor wallet might not have password
+
+    // For monitor wallet, we might not be able to use STP fully if it requires signing?
+    // But we can try to start it? Or maybe it doesn't support monitor wallets yet?
+    // User only asked to add the interface.
+
+    const [_e, addressRes] = await walletManager.getWalletAddress(
+      accountIndex.value
+    )
+    // Monitor wallet, address is what we passed, but let's confirm with getWalletAddress if it works
+    // If it's a monitor wallet, maybe we don't have pubkey in the same way?
+    // But let's try to get what we can.
+
+    const _wallets = JSON.parse(JSON.stringify(walletStorage.getValue('wallets')))
+
+    // If getWalletAddress works
+    if (addressRes) {
+      const { address: returnedAddress } = addressRes
+      await setAddress(returnedAddress)
+      // monitor wallet might not have pubkey available if not derived?
+      // but typically watch-only imports address directly.
+
+      const walletLen = _wallets.length
+      _wallets.push({
+        id: walletIdStr,
+        name: `Monitor Wallet ${walletLen + 1}`,
+        walletType: WalletType.MONITOR,
+        accounts: [{
+          index: 0,
+          name: `Account ${0 + 1}`,
+          address: returnedAddress,
+          pubKey: '' // Monitor wallet might not have pubkey known
+        }]
+      })
+    } else {
+      // Fallback if getWalletAddress fails (shouldn't if wallet created)
+      await setAddress(address)
+      const walletLen = _wallets.length
+      _wallets.push({
+        id: walletIdStr,
+        name: `Monitor Wallet ${walletLen + 1}`,
+        walletType: WalletType.MONITOR,
+        accounts: [{
+          index: 0,
+          name: `Account ${0 + 1}`,
+          address: address,
+          pubKey: ''
+        }]
+      })
+    }
+
+    wallets.value = _wallets
+    await walletStorage.setValue('wallets', _wallets)
+
+    return [undefined, true]
   }
   const getWalletInfo = async () => {
     const [_e, addressRes] = await walletManager.getWalletAddress(
@@ -394,7 +547,7 @@ export const useWalletStore = defineStore('wallet', () => {
 
       // 发送账户变更事件（非关键操作）
       safeSendAccountsChangedEvent(wallets.value)
-      
+
       console.log('Account switch completed successfully')
     } catch (error) {
       console.error('Account switch failed:', error)
@@ -462,6 +615,8 @@ export const useWalletStore = defineStore('wallet', () => {
     setAccountIndex,
     createWallet,
     importWallet,
+    importWalletWithPrivKey,
+    createMonitorWallet,
     getWalletInfo,
     deleteWallet,
     password,
@@ -483,5 +638,7 @@ export const useWalletStore = defineStore('wallet', () => {
     // 导出切换状态
     isSwitchingWallet,
     isSwitchingAccount,
+    // 当前钱包类型
+    currentWalletType,
   }
 })

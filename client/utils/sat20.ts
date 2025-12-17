@@ -38,6 +38,19 @@ class WalletManager {
   ): Promise<[Error | undefined, { walletId: string } | undefined]> {
     return this._handleRequest('importWallet', mnemonic, password.toString())
   }
+
+  async importWalletWithPrivKey(
+    privKey: string,
+    password: string
+  ): Promise<[Error | undefined, { walletId: number } | undefined]> {
+    return this._handleRequest('importWalletWithPrivKey', privKey, password.toString())
+  }
+
+  async createMonitorWallet(
+    address: string
+  ): Promise<[Error | undefined, { walletId: number } | undefined]> {
+    return this._handleRequest('createMonitorWallet', address)
+  }
   async changePassword(
     oldPassword: string,
     newPassword: string

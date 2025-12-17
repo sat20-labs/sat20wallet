@@ -71,7 +71,7 @@ import { useAssetActions } from '@/composables/useAssetActions'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
 import ReceiveQRcode from '@/components/wallet/ReceiveQRCode.vue'
 import { useToast } from '@/components/ui/toast-new'
-import { Chain } from '@/types/index'
+import { Chain, WalletType } from '@/types/index'
 import { useGlobalStore } from '@/store/global'
 import { useI18n } from 'vue-i18n'
 import stp from '@/utils/stp'
@@ -102,7 +102,7 @@ const transcendingModeStore = useTranscendingModeStore()
 const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
 const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
-const { address, network } = storeToRefs(walletStore)
+const { address, network, currentWalletType } = storeToRefs(walletStore)
 const abailableSats = ref<{
   availableAmt: number,
   lockedAmt: number
@@ -163,7 +163,7 @@ const { data: abailableSatsQuery, refetch: refetchAbailableSats } = useQuery({
     computed(() => props.selectedChain)
   ],
   queryFn: fetchAbailableSats,
-  refetchInterval: 5000,
+  refetchInterval: 10000,
   enabled: computed(() => !!address.value && props.selectedChain.toLowerCase() !== 'channel'),
   initialData: { availableAmt: 0, lockedAmt: 0 },
 })
@@ -198,11 +198,18 @@ if (!selectedTranscendingMode.value || !props.selectedChain) {
 }
 // 过滤按钮
 const filteredButtons = computed(() => {
+  const canUseDepositWithdraw = currentWalletType.value === WalletType.MNEMONIC
+  
   return buttons.map(button => {
-    const isDisabled =
+    let isDisabled =
       button.action.toLowerCase() === 'send' &&
       selectedTranscendingMode.value === 'lightning' &&
       props.selectedChain.toLowerCase() === 'channel'
+    
+    // 只有助记词钱包才能使用 deposit 和 withdraw
+    if ((button.action === 'deposit' || button.action === 'withdraw') && !canUseDepositWithdraw) {
+      isDisabled = true
+    }
 
     return {
       ...button,

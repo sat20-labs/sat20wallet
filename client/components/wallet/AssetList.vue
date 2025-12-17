@@ -572,6 +572,7 @@ const deposit = async ({
   amt,
   utxos = [],
   fees = [],
+  feeRate = btcFeeRate.value,
 }: any) => {
   loading.value = true
   const [err, result] = await satsnetStp.deposit(
@@ -580,7 +581,7 @@ const deposit = async ({
     amt,
     utxos,
     fees,
-    btcFeeRate.value
+    feeRate
   )
   if (err) {
     toast({
@@ -610,6 +611,7 @@ const withdraw = async ({
   amt,
   utxos = [],
   fees = [],
+  feeRate = btcFeeRate.value,
 }: any) => {
   loading.value = true
   const [err, result] = await satsnetStp.withdraw(
@@ -618,7 +620,7 @@ const withdraw = async ({
     amt,
     utxos,
     fees,
-    btcFeeRate.value
+    feeRate
   )
   if (err) {
     toast({
@@ -684,6 +686,7 @@ const handleOperationConfirm = async () => {
           amt: amount,
           utxos: [],
           fees: [],
+          feeRate: btcFeeRate.value,
         })
         break
       case 'withdraw':
@@ -693,6 +696,7 @@ const handleOperationConfirm = async () => {
           amt: amount,
           utxos: [],
           fees: [],
+          feeRate: btcFeeRate.value,
         })
         break
       case 'lock':

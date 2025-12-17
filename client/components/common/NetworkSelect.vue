@@ -70,9 +70,7 @@ const isOpen = ref(false) // 默认不打开对话框
 
 const selectNetwork = async (network: NetworkItem) => {
   console.log(network);
-  setTimeout(() => {
-    location.reload()
-  }, 600);
+  console.log('network changed')
   await walletStore.setNetwork(network.value)
   isOpen.value = false // 选择后关闭对话框
   

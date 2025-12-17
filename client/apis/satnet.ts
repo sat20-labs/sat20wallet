@@ -50,7 +50,7 @@ class SatnetApi {
 
   async getAddressSummary({ address, network }: any): Promise<any> {
     const response = await fetch(
-      this.generatePath(`v3/address/summary/${address}`, network)
+      this.generatePath(`v3/address/summary/${address}?type=client`, network)
     )
     return response.json()
   }
@@ -73,7 +73,7 @@ class SatnetApi {
   }: any): Promise<any> {
     const response = await fetch(
       this.generatePath(
-        `v3/address/asset/${address}/${ticker}?start=${start}&limit=${limit}`,
+        `v3/address/asset/${address}/${ticker}?start=${start}&limit=${limit}&test=12`,
         network
       )
     )

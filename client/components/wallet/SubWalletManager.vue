@@ -56,7 +56,13 @@
     <footer class="flex-none z-40 border-t">
       <div class="container max-w-2xl mx-auto p-4">
         <div class="flex gap-2">
-          <Button class="flex-1 gap-2 h-12 flex items-center w-full" variant="default" @click="showCreateAccountDialog">
+          <!-- 只有助记词类型的钱包才能创建子账号 -->
+          <Button 
+            class="flex-1 gap-2 h-12 flex items-center w-full" 
+            variant="default" 
+            @click="showCreateAccountDialog"
+            :disabled="!canCreateAccount"
+          >
             <Icon icon="lucide:plus-circle" class="w-6 h-6 flex-shrink-0" />
             {{ $t('subWalletManager.createNewAccount') }}
           </Button>
@@ -141,17 +147,19 @@ import {
 import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store/wallet'
 import type { WalletAccount } from '@/types'
+import { WalletType } from '@/types'
 import { hideAddress } from '@/utils'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import walletManager from '@/utils/sat20'
 import { sendAccountsChangedEvent } from '@/lib/utils'
 import { useNameManager } from '@/composables/useNameManager'
 import { useDebounceFn } from '@vueuse/core'
+import { storeToRefs } from 'pinia'
 
 const router = useRouter()
 const { toast } = useToast()
 const walletStore = useWalletStore()
-const { isSwitchingAccount } = storeToRefs(walletStore)
+const { isSwitchingAccount, currentWalletType } = storeToRefs(walletStore)
 
 // 名字管理
 const { getCurrentName } = useNameManager()
@@ -174,6 +182,9 @@ const isLoadingAccounts = ref(false)
 
 // Computed
 const { accountIndex, accounts } = storeToRefs(walletStore)
+
+// 只有助记词类型的钱包才能创建子账号
+const canCreateAccount = computed(() => currentWalletType.value === WalletType.MNEMONIC)
 
 watch(accounts, async (newAccounts) => {
   if (!newAccounts) {

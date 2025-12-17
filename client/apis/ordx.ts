@@ -5,9 +5,8 @@ class OrdxApi {
     const env = walletStorage.getValue('env')
     const config = configMap[env]
     const BASE_URL = config.ordxBaseUrl
-    return `${BASE_URL}${
-      network === 'testnet' ? '/btc/testnet' : '/btc/mainnet'
-    }/${path}`
+    return `${BASE_URL}${network === 'testnet' ? '/btc/testnet' : '/btc/mainnet'
+      }/${path}`
   }
 
   async getUtxos({ address, network }: any): Promise<any> {
@@ -39,9 +38,8 @@ class OrdxApi {
   }
 
   async getRecommendedFees({ network }: any): Promise<any> {
-    const url = `https://apiprd.ordx.market/${
-      network === 'livenet' ? '' : 'testnet/'
-    }ordx/GetRecommendedFees`
+    const url = `https://apiprd.ordx.market/${network === 'livenet' ? '' : 'testnet/'
+      }ordx/GetRecommendedFees`
     const response = await fetch(url)
     return response.json()
   }
@@ -59,7 +57,7 @@ class OrdxApi {
 
   async getAddressSummary({ address, network }: any): Promise<any> {
     const response = await fetch(
-      this.generatePath(`v3/address/summary/${address}`, network)
+      this.generatePath(`v3/address/summary/${address}?type=client`, network)
     )
     return response.json()
   }
@@ -87,7 +85,7 @@ class OrdxApi {
   }: any): Promise<any> {
     const response = await fetch(
       this.generatePath(
-        `v3/address/asset/${address}/${ticker}?start=${start}&limit=${limit}`,
+        `v3/address/asset/${address}/${ticker}?start=${start}&limit=${limit}&test=12`,
         network
       )
     )
@@ -118,7 +116,7 @@ class OrdxApi {
     return response.json()
   }
 
-  
+
 
   async getReferreeByName({ name, network, start, limit }: any): Promise<any> {
     const response = await fetch(

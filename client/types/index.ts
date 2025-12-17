@@ -19,11 +19,18 @@ export interface WalletAccount {
   pubKey: string
 }
 
+export enum WalletType {
+  MNEMONIC = 'mnemonic',
+  PRIVATE_KEY = 'privateKey',
+  MONITOR = 'monitor'
+}
+
 export interface WalletData {
   id: string
   name: string
   avatar?: string
   accounts: WalletAccount[]
+  walletType?: WalletType // 默认为 mnemonic 以兼容历史数据
 }
 
 // 导出节点质押相关类型

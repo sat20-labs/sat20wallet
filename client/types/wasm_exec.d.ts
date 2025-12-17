@@ -92,6 +92,15 @@ declare interface WalletManager {
     password: string
   ): Promise<SatsnetResponse<{ walletId: string }>>
 
+  importWalletWithPrivKey(
+    privKey: string,
+    password: string
+  ): Promise<SatsnetResponse<{ walletId: number }>>
+
+  createMonitorWallet(
+    address: string
+  ): Promise<SatsnetResponse<{ walletId: number }>>
+
   // Unlocks an existing wallet using a password and returns the wallet ID.
   unlockWallet(password: string): Promise<SatsnetResponse<{ walletId: string }>>
 
@@ -505,7 +514,7 @@ interface SatsnetStp {
   getAddressStatusInContract(url: string, address: string): Promise<SatsnetResponse<string>>;
   /** 获取合约所有地址 */
   getContractAllAddresses(url: string): Promise<SatsnetResponse<string>>;
-  
+
   /** 注册为推荐人 */
   registerAsReferrer(
     name: string,

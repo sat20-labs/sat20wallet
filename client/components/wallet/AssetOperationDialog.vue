@@ -160,7 +160,6 @@
           {{ $t('assetOperationDialog.domainNotFound', { name: resolvedInfo.domainName }) }}
         </div>
       </div>
-
       <!-- 显示 btcFeeRate 信息 -->
       <div v-if="!isResolving && needsBtcFeeRate" class="mt-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
         <div class="flex items-center justify-between text-sm">
@@ -297,11 +296,16 @@ const isBTCAsset = computed(() => {
          props.assetKey === '::' || 
          props.assetTicker === '::'
 })
-
+console.log('props', props)
 // 判断哪些操作需要显示 btcFeeRate
 const needsBtcFeeRate = computed(() => {
   const operationsNeedingBtcFeeRate = ['send', 'deposit', 'withdraw', 'splicing_in', 'splicing_out']
-  return (props.chain === 'bitcoin' || props.chain === 'channel') && operationsNeedingBtcFeeRate.includes(props.operationType || '')
+  if ((props.chain === 'bitcoin' || props.chain === 'channel') && operationsNeedingBtcFeeRate.includes(props.operationType || '')) {
+    return true
+  } else if (props.chain === 'satoshinet' && props.operationType === 'withdraw') {
+    return true
+  }
+  return false
 })
 
 const emit = defineEmits<{

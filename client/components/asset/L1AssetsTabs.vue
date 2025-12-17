@@ -71,6 +71,7 @@
                 {{ $t('l1AssetsTabs.send') }}
               </Button>
               <Button size="sm" variant="outline" @click="handleDeposit(asset)"
+                :disabled="!canDeposit"
                 class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
                 <Icon icon="lucide:arrow-down-right" class="w-4 h-4 mr-1" />
                 {{ $t('l1AssetsTabs.deposit') }}
@@ -88,9 +89,11 @@ import { ref, computed, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { useWalletStore } from '@/store'
-import { Chain } from '@/types/index'
+import { Chain, WalletType } from '@/types/index'
 import { generateMempoolUrl, formatLargeNumber } from '@/utils'
 import { useGlobalStore } from '@/store/global'
+import { storeToRefs } from 'pinia'
+
 // 类型定义
 interface Asset {
   id: string
@@ -117,8 +120,11 @@ const emit = defineEmits<{
 
 const walletStore = useWalletStore()
 const globalStore = useGlobalStore()
-const { address, network } = storeToRefs(walletStore)
+const { address, network, currentWalletType } = storeToRefs(walletStore)
 const { env } = storeToRefs(globalStore)
+
+// 只有助记词钱包才能使用 deposit
+const canDeposit = computed(() => currentWalletType.value === WalletType.MNEMONIC)
 
 const mempoolUrl = computed(() => {
   return generateMempoolUrl({

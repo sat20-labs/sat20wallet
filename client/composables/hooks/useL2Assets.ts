@@ -46,11 +46,10 @@ export const useL2Assets = () => {
         address: address.value,
         network: network.value,
       }),
-    refetchInterval: 3000,
+    refetchInterval: 6000,
     enabled: computed(() => !!address.value && !!network.value),
   })
 
-  // Asset Processing Functions
   const processAssetUtxo = async (key: string, start = 0, limit = 100) => {
     const result = await clientApi.value.getOrdxAddressHolders({
       address: address.value,

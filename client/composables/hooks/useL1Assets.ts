@@ -43,7 +43,7 @@ export const useL1Assets = () => {
         address: address.value,
         network: network.value,
       }),
-    refetchInterval: 3000,
+    refetchInterval: 30000,
     enabled: computed(() => !!address.value && !!network.value),
   })
 
@@ -54,6 +54,7 @@ export const useL1Assets = () => {
         address: address.value,
         network: network.value,
       }),
+    refetchInterval: 10000,
     enabled: computed(() => !!address.value && !!network.value),
   })
 
@@ -96,8 +97,8 @@ export const useL1Assets = () => {
       }
       if (!allAssetList.value.find((v) => v?.key === key)) {
         let label = item.Name.Type === 'e'
-        ? `${item.Name.Ticker}（raresats）`
-        : item.Name.Ticker;
+          ? `${item.Name.Ticker}（raresats）`
+          : item.Name.Ticker;
         if (item.Name.Type === 'n') {
           continue
         }
