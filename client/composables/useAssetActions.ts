@@ -6,6 +6,7 @@ import { useL1Store } from '@/store/l1'
 import { useL1Assets, useL2Assets } from '@/composables'
 import { useAssetOperations } from '@/composables/useAssetOperations'
 import satsnetStp from '@/utils/stp'
+import sat20 from '@/utils/sat20'
 import { sleep } from 'radash'
 
 export function useAssetActions() {
@@ -70,7 +71,7 @@ export function useAssetActions() {
     chanid,
     toAddress,
     amt,
-    feeRate= btcFeeRate.value,//se feeRate from store if not explicitly passed
+    feeRate = btcFeeRate.value,//se feeRate from store if not explicitly passed
     asset_name,
   }: any): Promise<void> => {
     loading.value = true
@@ -89,7 +90,7 @@ export function useAssetActions() {
       description: 'Splicing Out successful',
       duration: 1500,
     })
-    loading.value = false   
+    loading.value = false
   }
 
   // Deposit 操作
@@ -102,7 +103,7 @@ export function useAssetActions() {
   }: any) => {
     loading.value = true
     //console.log('UseAssetAction deposit:', toAddress, asset_name, amt, utxos, fees)
-    const [err, result] = await satsnetStp.deposit(
+    const [err, result] = await sat20.deposit(
       toAddress,
       asset_name,
       amt,
@@ -114,7 +115,7 @@ export function useAssetActions() {
       toast({
         title: 'error',
         description: err.message,
-        duration:1500,
+        duration: 1500,
       })
       loading.value = false
       return
@@ -125,10 +126,10 @@ export function useAssetActions() {
     toast({
       title: 'Success',
       description: 'Deposit successful',
-      duration:1500,
+      duration: 1500,
     })
   }
-  
+
   // Withdraw 操作
   const withdraw = async ({
     toAddress,
@@ -137,8 +138,8 @@ export function useAssetActions() {
     utxos = [],
     fees = [],
   }: any) => {
-    loading.value = true    
-    const [err, result] = await satsnetStp.withdraw(
+    loading.value = true
+    const [err, result] = await sat20.withdraw(
       toAddress,
       asset_name,
       amt,
@@ -150,19 +151,19 @@ export function useAssetActions() {
       toast({
         title: 'error',
         description: err.message,
-        duration:1500,
+        duration: 1500,
       })
       loading.value = false
       return
     }
-  
+
     loading.value = false
     refreshL2Assets()
     await channelStore.getAllChannels()
     toast({
       title: 'Success',
       description: 'Withdraw successful',
-      duration:1500,
+      duration: 1500,
     })
   }
 
@@ -187,9 +188,9 @@ export function useAssetActions() {
     toast({
       title: 'Success',
       description: 'Unlock UTXO successful',
-      duration:1500,
+      duration: 1500,
     })
-    loading.value = false    
+    loading.value = false
   }
 
   // Lock UTXO 操作
@@ -206,16 +207,16 @@ export function useAssetActions() {
     toast({
       title: 'Success',
       description: 'Lock UTXO successful',
-      duration:1500,
+      duration: 1500,
     })
-    loading.value = false    
+    loading.value = false
   }
   console.log('btcFeeRate', btcFeeRate);
-  
+
   // L1 发送操作
   const l1Send = async ({ toAddress, asset_name, amt }: any) => {
     loading.value = true
-    console.log('UseAssetAction l1Send:', toAddress, asset_name, amt,  btcFeeRate.value)
+    console.log('UseAssetAction l1Send:', toAddress, asset_name, amt, btcFeeRate.value)
     const [err] = await satsnetStp.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
     if (err) {
       handleError(err.message)
@@ -226,16 +227,16 @@ export function useAssetActions() {
     toast({
       title: 'Success',
       description: 'L1 Send successful',
-      duration:1500,
+      duration: 1500,
     })
-    loading.value = false    
+    loading.value = false
   }
 
   // L2 发送操作
   const l2Send = async ({ toAddress, asset_name, amt }: any) => {
     loading.value = true
     console.log('UseAssetAction l2Send:', toAddress, asset_name, amt)
-    const [err] = await satsnetStp.sendAssets_SatsNet(toAddress, asset_name, amt, "")
+    const [err] = await sat20.sendAssets_SatsNet(toAddress, asset_name, amt, "")
     if (err) {
       handleError(err.message)
       loading.value = false
@@ -245,9 +246,9 @@ export function useAssetActions() {
     toast({
       title: 'Success',
       description: 'L2 Send successful',
-      duration:1500,
+      duration: 1500,
     })
-    loading.value = false    
+    loading.value = false
   }
 
   return {

@@ -14,6 +14,12 @@ interface StpWasmModule {
   init: (...args: any[]) => Promise<WasmResponse>;
   registerCallback: (...args: any[]) => Promise<WasmResponse>;
 
+  // 钱包状态同步方法 (stp wasm 需要与 sat20 wasm 保持状态同步)
+  switchWallet: (...args: any[]) => Promise<WasmResponse>;
+  switchAccount: (...args: any[]) => Promise<WasmResponse>;
+  importWallet: (...args: any[]) => Promise<WasmResponse>;
+  unlockWallet: (...args: any[]) => Promise<WasmResponse>;
+
   // 通道管理
   closeChannel: (...args: any[]) => Promise<WasmResponse>;
   isWalletExisting: (...args: any[]) => Promise<WasmResponse<boolean>>;
@@ -86,6 +92,34 @@ class SatsnetStp {
     cb: any
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('registerCallback', cb)
+  }
+
+  // --- 钱包状态同步方法 (stp wasm 需要与 sat20 wasm 保持状态同步) ---
+
+  async switchWallet(
+    id: string,
+    password: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('switchWallet', id, password)
+  }
+
+  async switchAccount(
+    id: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('switchAccount', id)
+  }
+
+  async importWallet(
+    mnemonic: string,
+    password: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('importWallet', mnemonic, password.toString())
+  }
+
+  async unlockWallet(
+    password: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('unlockWallet', password.toString())
   }
 
   async closeChannel(
