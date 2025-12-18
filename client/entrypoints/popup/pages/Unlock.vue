@@ -93,7 +93,6 @@ import {
 import { useChannelStore, useWalletStore } from '@/store'
 import walletManager from '@/utils/sat20'
 import { unlockPasswordSchema } from '@/utils/validation'
-import satsnetStp from '@/utils/stp'
 import { hashPassword } from '@/utils/crypto'
 
 const formSchema = toTypedSchema(unlockPasswordSchema)

@@ -31,7 +31,6 @@
 <script setup lang="ts">
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils' // Assuming you have the cn utility from shadcn
-import satsnetStp from '@/utils/stp'
 // --- Type Definitions (Copied from SignPsbt.vue) ---
 interface AssetName {
   Protocol: string;
