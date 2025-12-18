@@ -1,7 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { ordxApi, satnetApi } from '@/apis'
 import { parallel } from 'radash'
-import satsnetStp from '@/utils/stp'
 import { useL1Store, useWalletStore } from '@/store'
 import { Chain } from '@/types'
 interface AssetItem {
