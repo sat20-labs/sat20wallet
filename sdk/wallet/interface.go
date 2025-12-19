@@ -177,7 +177,7 @@ func (p *Manager) ChangePassword(oldPS, newPS string) error {
 	defer p.mutex.Unlock()
 
 	for id, v := range p.walletInfoMap {
-		mnemonic, err := p.loadWalletSecret(id, oldPS)
+		mnemonic, _, err := p.loadWalletSecret(id, oldPS)
 		if err != nil {
 			Log.Errorf("loadMnemonic %d failed, %v", id, err)
 			return err
@@ -206,12 +206,22 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 		return -1, fmt.Errorf("wallet has been unlocked")
 	}
 
-	mnemonic, err := p.loadWalletSecret(p.status.CurrentWallet, password)
+	secret, ty, err := p.loadWalletSecret(p.status.CurrentWallet, password)
 	if err != nil {
 		return -1, err
 	}
-
-	wallet := NewInternalWalletWithMnemonic(string(mnemonic), "", GetChainParam())
+	var wallet *InternalWallet
+	switch ty {
+	case WALLET_TYPE_MNEMONIC:
+		wallet = NewInternalWalletWithMnemonic(string(secret), "", GetChainParam())
+	case WALLET_TYPE_PRIVKEY:
+		privKeyBytes, err := hex.DecodeString(secret)
+		if err != nil {
+			return 0, err
+		}
+		wallet, _, _ = NewInternalWalletWithPrivKey(privKeyBytes, GetChainParam())
+		
+	}
 	if wallet == nil {
 		return -1, fmt.Errorf("NewWalletWithMnemonic failed")
 	}
@@ -310,12 +320,12 @@ func (p *Manager) GetMnemonic(id int64, password string) string {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	mnemonic, err := p.loadWalletSecret(id, password)
+	serect, _, err := p.loadWalletSecret(id, password)
 	if err != nil {
 		return ""
 	}
 
-	return mnemonic
+	return serect
 }
 
 // private key

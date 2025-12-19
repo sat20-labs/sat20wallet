@@ -283,33 +283,33 @@ func (p *Manager) saveWalletSecretWithPassword(mn, password string, wallet *Wall
 	return nil
 }
 
-func (p *Manager) loadWalletSecret(id int64, password string) (string, error) {
+func (p *Manager) loadWalletSecret(id int64, password string) (string, int, error) {
 	wallet, ok := p.walletInfoMap[id]
 	if !ok {
 		// 现在有两个钱包对象在两个模块之中，需要做一些数据同步工作
 		err := p.initDB()
 		if err != nil {
-			return "", fmt.Errorf("can't find wallet %d", id)
+			return "", 0, fmt.Errorf("can't find wallet %d", id)
 		}
 		wallet, ok = p.walletInfoMap[id]
 		if !ok {
-			return "", fmt.Errorf("can't find wallet %d", id)
+			return "", 0, fmt.Errorf("can't find wallet %d", id)
 		}
 	}
 
 	key, err := p.restoreSnaclKey(wallet.Salt, password)
 	if err != nil {
 		Log.Errorf("restoreSnaclKey failed. %v", err)
-		return "", err
+		return "", 0, err
 	}
 
 	mnemonic, err := key.Decrypt(wallet.Mnemonic)
 	if err != nil {
 		Log.Errorf("Decrypt failed. %v", err)
-		return "", err
+		return "", 0, err
 	}
 
-	return string(mnemonic), nil
+	return string(mnemonic), wallet.Type, nil
 }
 
 func (p *Manager) restoreSnaclKey(salt []byte, password string) (*snacl.SecretKey, error) {
