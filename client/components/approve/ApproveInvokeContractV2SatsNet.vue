@@ -107,7 +107,7 @@ import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { useToast } from '@/components/ui/toast-new'
-import stp from '@/utils/stp'
+import sat20 from '@/utils/sat20'
 interface Props {
   data: {
     url: string;
@@ -166,7 +166,7 @@ const getFee = async () => {
   feeError.value = false
   feeErrorMessage.value = ''
   try {
-    const [err, res] = await stp.getFeeForInvokeContract(
+    const [err, res] = await sat20.getFeeForInvokeContract(
       props.data.url,
       props.data.invoke
     )
@@ -201,7 +201,7 @@ const confirm = async () => {
   isLoading.value = true
   invokeError.value = ''
   try {
-    const [err, res] = await stp.invokeContractV2_SatsNet(
+    const [err, res] = await sat20.invokeContractV2_SatsNet(
       props.data.url,
       props.data.invoke,
       props.data.assetName,

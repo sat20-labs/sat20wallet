@@ -41,6 +41,7 @@ interface StpWasmModule {
   unlockFromChannel: (...args: any[]) => Promise<WasmResponse>;
   getCommitTxAssetInfo: (...args: any[]) => Promise<WasmResponse<any>>;
   deployContract_Local: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
+  deployContract_Remote: (templateName: string, content: string, feeRate: string, bol: boolean) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
 }
 
 class SatsnetStp {
@@ -314,6 +315,19 @@ class SatsnetStp {
     { txId: string; resvId: string } | undefined
   ]> {
     return this._handleRequest<{ txId: string; resvId: string }>('deployContract_Local', templateName, content, feeRate)
+  }
+
+  /** 远程部署合约 */
+  async deployContract_Remote(
+    templateName: string,
+    content: string,
+    feeRate: string,
+    bol: boolean
+  ): Promise<[
+    Error | undefined,
+    { txId: string; resvId: string } | undefined
+  ]> {
+    return this._handleRequest<{ txId: string; resvId: string }>('deployContract_Remote', templateName, content, feeRate, bol)
   }
 }
 

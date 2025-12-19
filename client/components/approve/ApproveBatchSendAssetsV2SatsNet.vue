@@ -61,7 +61,7 @@ import { z } from 'zod'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { useWalletStore } from '@/store'
 import { useToast } from '@/components/ui/toast-new'
-import satsnetStp from '@/utils/stp'
+import sat20 from '@/utils/sat20'
 
 // Define Zod schema for validation
 const batchSendAssetsV2Schema = z.object({
@@ -150,7 +150,7 @@ const confirm = async () => {
     const destAddresses = [...props.data.destAddr]
     const amountList = [...props.data.amtList]
     
-    const [err, result] = await satsnetStp.batchSendAssetsV2_SatsNet(
+    const [err, result] = await sat20.batchSendAssetsV2_SatsNet(
       destAddresses,
       props.data.assetName,
       amountList

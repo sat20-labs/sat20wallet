@@ -54,6 +54,7 @@ import { Alert, AlertTitle } from '@/components/ui/alert'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { useToast } from '@/components/ui/toast-new'
 import stp from '@/utils/stp'
+import walletManager from '@/utils/sat20'
 
 interface Props {
   data: {
@@ -95,7 +96,7 @@ const getFee = async () => {
   feeError.value = false
   feeErrorMessage.value = ''
   try {
-    const [err, res] = await stp.getFeeForDeployContract(
+    const [err, res] = await walletManager.getFeeForDeployContract(
       props.data.templateName,
       props.data.content,
       props.data.feeRate.toString()

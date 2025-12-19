@@ -48,7 +48,7 @@ import { ref, computed } from 'vue'
 import { z } from 'zod'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { useToast } from '@/components/ui/toast-new'
-import satsnetStp from '@/utils/stp'
+import sat20 from '@/utils/sat20'
 
 // Define Zod schema for validation
 const sendAssetsSchema = z.object({
@@ -103,7 +103,7 @@ const confirm = async () => {
   loading.value = true
 
   try {
-    const [err, result] = await satsnetStp.sendAssets_SatsNet(
+    const [err, result] = await sat20.sendAssets_SatsNet(
       props.data.address,
       props.data.assetName,
       props.data.amt,
