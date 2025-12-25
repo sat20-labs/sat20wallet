@@ -26,15 +26,26 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 	indexer.CHAIN = cfg.Chain
 
 	http := NewHTTPClient()
+	l1IndexerMgr := NewIndexerRPCClientMgr()
 	l1 := NewIndexerClient(cfg.IndexerL1.Scheme, cfg.IndexerL1.Host, cfg.IndexerL1.Proxy, http)
+	l1IndexerMgr.Set(l1)
+
+	l2IndexerMgr := NewIndexerRPCClientMgr()
 	l2 := NewIndexerClient(cfg.IndexerL2.Scheme, cfg.IndexerL2.Host, cfg.IndexerL2.Proxy, http)
+	l2IndexerMgr.Set(l2)
+
 	var l12, l22 *IndexerClient
 	if cfg.SlaveIndexerL1 != nil {
 		l12 = NewIndexerClient(cfg.SlaveIndexerL1.Scheme, cfg.SlaveIndexerL1.Host, cfg.SlaveIndexerL1.Proxy, http)
+		l1IndexerMgr.Set(l12)
 	}
 	if cfg.SlaveIndexerL2 != nil {
 		l22 = NewIndexerClient(cfg.SlaveIndexerL2.Scheme, cfg.SlaveIndexerL2.Host, cfg.SlaveIndexerL2.Proxy, http)
+		l2IndexerMgr.Set(l22)
 	}
+
+	l1IndexerMgr.Start()
+	l2IndexerMgr.Start()
 
 	mgr := &Manager{
 		cfg:                  cfg,
@@ -43,12 +54,9 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 		utxoLockerL1:         NewUtxoLocker(db, l1, L1_NETWORK_BITCOIN),
 		utxoLockerL2:         NewUtxoLocker(db, l2, L2_NETWORK_SATOSHI),
 		http:                 http,
-		l1IndexerClient:      l1,
-		l2IndexerClient:      l2,
-		slaveL1IndexerClient: l12,
-		slaveL2IndexerClient: l22,
+		l1IndexerClient:      l1IndexerMgr,
+		l2IndexerClient:      l2IndexerMgr,
 		bInited:              false,
-		bStop:                false,
 	}
 
 	_env = cfg.Env
@@ -70,6 +78,12 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 	}
 
 	return mgr
+}
+
+func (p *Manager) Close() {
+	p.bInited = false
+	p.l1IndexerClient.Stop()
+	p.l2IndexerClient.Stop()
 }
 
 // 使用内部钱包

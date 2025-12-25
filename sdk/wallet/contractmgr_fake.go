@@ -16,11 +16,21 @@ func (p *Manager) GetTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 func (p *Manager) GetWalletMgr() *Manager {
 	return p
 }
+
 func (p *Manager) GetIndexerClient() IndexerRPCClient {
 	return p.l1IndexerClient
 }
+
+func (p *Manager) GetSlaveIndexerClient() IndexerRPCClient {
+	return p.l1IndexerClient.GetSlaveIndexer()
+}
+
 func (p *Manager) GetIndexerClient_SatsNet() IndexerRPCClient {
 	return p.l2IndexerClient
+}
+
+func (p *Manager) GetSlaveIndexerClient_SatsNet() IndexerRPCClient {
+	return p.l2IndexerClient.GetSlaveIndexer()
 }
 
 func (p *Manager) GetMode() string {

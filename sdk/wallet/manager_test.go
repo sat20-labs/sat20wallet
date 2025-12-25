@@ -173,9 +173,15 @@ func createNode(t *testing.T, mode, dbPath string, server, bootstrap *Manager) *
 	manager := initNode(t, mode, dbPath)
 
 	indexerClient1 := NewTestIndexerClient(_network1)
+	l1IndexerMgr := NewIndexerRPCClientMgr()
+	l1IndexerMgr.Set(indexerClient1)
+
 	indexerClient2 := NewTestIndexerClient(_network2)
-	manager.l1IndexerClient = indexerClient1
-	manager.l2IndexerClient = indexerClient2
+	l2IndexerMgr := NewIndexerRPCClientMgr()
+	l2IndexerMgr.Set(indexerClient2)
+
+	manager.l1IndexerClient = l1IndexerMgr
+	manager.l2IndexerClient = l2IndexerMgr
 	nodeClient := NewTestNodeClient(server)
 	manager.serverNode.client = nodeClient
 	if bootstrap != nil {

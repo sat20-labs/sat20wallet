@@ -774,6 +774,15 @@ func NewTestIndexerClient(network *network) *TestIndexerClient {
 	}
 }
 
+
+func (p *TestIndexerClient) Host() string {
+	return p.RESTClient.Host
+}
+
+func (p *TestIndexerClient) Ping() error {
+	return nil
+}
+
 func (p *TestIndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 	p.network.mutex.RLock()
 	defer p.network.mutex.RUnlock()
