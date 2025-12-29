@@ -1378,7 +1378,9 @@ func loadContractInvokerStatus(db db.KVDB, url, address string) (InvokerStatus, 
 
 	buf, err := db.Read([]byte(key))
 	if err != nil {
-		//Log.Errorf("Read %s failed. %v", key, err)
+		if err != indexer.ErrKeyNotFound {
+			Log.Errorf("Read %s failed. %v", key, err)
+		}
 		return nil, err
 	}
 

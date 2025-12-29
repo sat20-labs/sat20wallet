@@ -656,13 +656,6 @@ func (p *AmmContractRuntime) InitFromDB(stp ContractManager, resv ContractDeploy
 		return err
 	}
 
-	// if p.GetTemplateName() == TEMPLATE_CONTRACT_AMM {
-	// 	err = p.checkSelf()
-	// 	if err != nil {
-	// 		Log.Errorf("%s checkSelf failed, %v", p.URL(), err)
-	// 	}
-	// }
-
 	return nil
 }
 
@@ -1365,7 +1358,19 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 	var totalRemovedLptAmt *Decimal
 	var totalAddedFeeLptAmt *Decimal
 	var totalRemovedAmt *Decimal
-	var totalRemovedValue int64
+	var totalRemovedValue *Decimal
+
+	type retrieveInfo struct {
+		amt *Decimal
+		value *Decimal
+		depositvalue int64
+	}
+
+	traders := make(map[string]*retrieveInfo)
+	svrRetrieveInfo := &retrieveInfo{}
+	foundationRetrieveInfo := &retrieveInfo{}
+	
+	// 先计算，不要保存任何数据！！！
 	for k, v := range removeLiqMap {
 		// 计算获得的资产数量
 		trader := p.loadTraderInfo(k)
@@ -1386,6 +1391,7 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 		retrivevValue := indexer.DecimalMul(indexer.NewDecimal(oldValueInPool, p.Divisibility), lptRatio)
 
 		var lpRetrieveAmt, lpRetrieveValue *Decimal
+		var depositValue int64
 		if baseLpt {
 			// 扣去归属服务的利润
 			marketRetrivevAmt := calcMarketProfit_amt(retrivevAmt)
@@ -1401,20 +1407,26 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 				totalAddedFeeLptAmt = totalAddedFeeLptAmt.Add(feeLptAmt)
 			} else {
 				// 直接提走
-				svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
-				svrTrader.RetrieveValue += marketRetrivevValue.Floor()
+				svrRetrieveInfo.amt = svrRetrieveInfo.amt.Add(marketRetrivevAmt)
+				svrRetrieveInfo.value = svrRetrieveInfo.value.Add(marketRetrivevValue)
+				//svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
+				//svrTrader.RetrieveValue += marketRetrivevValue.Floor()
+				Log.Debugf("server retrieve %s %d", marketRetrivevAmt.String(), marketRetrivevValue.Floor())
 
-				foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrivevAmt)
-				foundation.RetrieveValue += foundationRetrivevValue.Floor()
+				foundationRetrieveInfo.amt = foundationRetrieveInfo.amt.Add(foundationRetrivevAmt)
+				foundationRetrieveInfo.value = foundationRetrieveInfo.value.Add(foundationRetrivevValue)
+				//foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrivevAmt)
+				//foundation.RetrieveValue += foundationRetrivevValue.Floor()
+				Log.Debugf("foundation retrieve %s %d", foundationRetrivevAmt.String(), foundationRetrivevValue.Floor())
 			}
-			p.BaseLptAmt = p.BaseLptAmt.Sub(v.LptAmt)
+			//p.BaseLptAmt = p.BaseLptAmt.Sub(v.LptAmt)
 		} else {
 			// 转换为sats
 			totalRetrieveSats := retrivevValue.Floor() + indexer.DecimalMul(price, retrivevAmt).Floor()
 			// 成本
-			depositValue := indexer.NewDecimal(trader.LiqSatsValue, MAX_ASSET_DIVISIBILITY).Mul(v.LptAmt).Div(trader.LptAmt).Floor()
+			depositValue = indexer.NewDecimal(trader.LiqSatsValue, MAX_ASSET_DIVISIBILITY).Mul(v.LptAmt).Div(trader.LptAmt).Floor()
 			// 减少成本
-			trader.LiqSatsValue -= depositValue
+			// trader.LiqSatsValue -= depositValue
 			// 利润(用聪来表示)
 			profitValue := totalRetrieveSats - depositValue
 			if profitValue > 0 {
@@ -1441,45 +1453,55 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 					marketRetrivevAmt := svrRetrivevAmt.Sub(foundationRetrivevAmt)
 					marketRetrivevValue := svrRetrivevValue.Sub(foundationRetrivevValue)
 					
-					svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
-					svrTrader.RetrieveValue += marketRetrivevValue.Floor()
+					svrRetrieveInfo.amt = svrRetrieveInfo.amt.Add(marketRetrivevAmt)
+					svrRetrieveInfo.value = svrRetrieveInfo.value.Add(marketRetrivevValue)
+					//svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
+					//svrTrader.RetrieveValue += marketRetrivevValue.Floor()
+					Log.Debugf("server retrieve %s %d", marketRetrivevAmt.String(), marketRetrivevValue.Floor())
 
-					foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrivevAmt)
-					foundation.RetrieveValue += foundationRetrivevValue.Floor()
+					foundationRetrieveInfo.amt = foundationRetrieveInfo.amt.Add(foundationRetrivevAmt)
+					foundationRetrieveInfo.value = foundationRetrieveInfo.value.Add(foundationRetrivevValue)
+					//foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrivevAmt)
+					//foundation.RetrieveValue += foundationRetrivevValue.Floor()
+					Log.Debugf("foundation retrieve %s %d", foundationRetrivevAmt.String(), foundationRetrivevValue.Floor())
 				}
-			}
-			trader.LptAmt = trader.LptAmt.Sub(v.LptAmt)
-			if trader.LptAmt.Sign() > 0 {
-				p.liquidityData.LPMap[k] = trader.LptAmt.Clone()
 			} else {
-				delete(p.liquidityData.LPMap, k)
+				// 没有利润
+				lpRetrieveAmt = retrivevAmt
+				lpRetrieveValue = retrivevValue
 			}
+			// trader.LptAmt = trader.LptAmt.Sub(v.LptAmt)
+			// if trader.LptAmt.Sign() > 0 {
+			// 	p.liquidityData.LPMap[k] = trader.LptAmt.Clone()
+			// } else {
+			// 	delete(p.liquidityData.LPMap, k)
+			// }
 		}
 		
-		trader.RetrieveAmt = trader.RetrieveAmt.Add(lpRetrieveAmt) // 在retrieve中发送出去
-		trader.RetrieveValue += lpRetrieveValue.Floor()
-		trader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
-		saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+		traderRetrieveInfo := &retrieveInfo{
+			amt: lpRetrieveAmt,
+			value: lpRetrieveValue,
+			depositvalue: depositValue,
+		}
+		traders[trader.InvokerStatusBase.Address] = traderRetrieveInfo
+		// trader.RetrieveAmt = trader.RetrieveAmt.Add(lpRetrieveAmt) // 在retrieve中发送出去
+		// trader.RetrieveValue += lpRetrieveValue.Floor()
+		// trader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
+		// saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+		Log.Debugf("user retrieve %s %d", lpRetrieveAmt.String(), lpRetrieveValue.Floor())
 
 		totalRemovedLptAmt = totalRemovedLptAmt.Add(v.LptAmt)
 		totalRemovedAmt = totalRemovedAmt.Add(retrivevAmt)
-		totalRemovedValue += retrivevValue.Floor()
+		totalRemovedValue = totalRemovedValue.Add(retrivevValue)
 
 		// 更新用户的item
-		items := p.removeLiquidityMap[k]
-		for _, item := range items {
-			if item.Done == DONE_NOTYET && item.Reason == INVOKE_REASON_NORMAL {
-				item.Padded = []byte(fmt.Sprintf("%d", 1)) // 设置下标志，防止重入
-				// 发送出去后再更新该字段
-				// item.Done = DONE_DEALT
-				//delete(p.history, item.InUtxo)
-				// item.OutValue = item.RemainingValue
-				// item.RemainingValue = 0
-				// item.OutAmt = item.RemainingAmt.Clone()
-				// item.RemainingAmt = nil
-				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
-			}
-		}
+		// items := p.removeLiquidityMap[k]
+		// for _, item := range items {
+		// 	if item.Done == DONE_NOTYET && item.Reason == INVOKE_REASON_NORMAL {
+		// 		item.Padded = []byte(fmt.Sprintf("%d", 1)) // 设置下标志，防止重入
+		// 		SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+		// 	}
+		// }
 	}
 
 	if !PROFIT_REINVESTING {
@@ -1494,54 +1516,105 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 			marketRetrivevAmt := svrRetrivevAmt.Sub(foundationRetrivevAmt)
 			marketRetrivevValue := svrRetrivevValue.Sub(foundationRetrivevValue)
 			
-			svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
-			svrTrader.RetrieveValue += marketRetrivevValue.Floor()
+			svrRetrieveInfo.amt = svrRetrieveInfo.amt.Add(marketRetrivevAmt)
+			svrRetrieveInfo.value = svrRetrieveInfo.value.Add(marketRetrivevValue)
+			// svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
+			// svrTrader.RetrieveValue += marketRetrivevValue.Floor()
+			Log.Debugf("server retrieve more from fee %s %d", marketRetrivevAmt.String(), marketRetrivevValue.Floor())
 
-			foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrivevAmt)
-			foundation.RetrieveValue += foundationRetrivevValue.Floor()
+			foundationRetrieveInfo.amt = foundationRetrieveInfo.amt.Add(foundationRetrivevAmt)
+			foundationRetrieveInfo.value = foundationRetrieveInfo.value.Add(foundationRetrivevValue)
+			// foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrivevAmt)
+			// foundation.RetrieveValue += foundationRetrivevValue.Floor()
+			Log.Debugf("foundation retrieve more from fee %s %d", foundationRetrivevAmt.String(), foundationRetrivevValue.Floor())
 
-			p.TotalFeeLptAmt = nil
+			//p.TotalFeeLptAmt = nil
 		}
-		svrTrader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
-		saveContractInvokerStatus(p.stp.GetDB(), url, svrTrader)
-		foundation.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
-		saveContractInvokerStatus(p.stp.GetDB(), url, foundation)
+		// svrTrader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
+		// saveContractInvokerStatus(p.stp.GetDB(), url, svrTrader)
+		// foundation.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
+		// saveContractInvokerStatus(p.stp.GetDB(), url, foundation)
 	}
 
-	Log.Infof("total removed lpt = %s, AddedFeeLpt = %s, retrieved asset %s %d", 
-		totalRemovedLptAmt.String(), totalAddedFeeLptAmt.String(), totalRemovedAmt.String(), totalRemovedValue)
-
+	// 最后验证
 	if totalRemovedLptAmt.Cmp(totalAddedFeeLptAmt) <= 0 {
 		str := fmt.Sprintf("totalAddedFeeLptAmt %s larger than totalRemovedLptAmt %s", 
 			totalAddedFeeLptAmt.String(), totalRemovedLptAmt.String())
 		Log.Errorf(str)
-		return fmt.Errorf(str)
+		return fmt.Errorf(str) 
 	}
 	realRemovedLpt := totalRemovedLptAmt.Sub(totalAddedFeeLptAmt)
 
-	
 	if p.AssetAmtInPool.Cmp(totalRemovedAmt) < 0 {
 		str := fmt.Sprintf("totalRemovedAmt %s larger than AssetAmtInPool %s", 
 			totalRemovedAmt.String(), p.AssetAmtInPool.String())
 		Log.Errorf(str)
-		return fmt.Errorf(str)
+		return fmt.Errorf(str) 
 	}
 	if p.TotalLptAmt.Cmp(realRemovedLpt) < 0 {
 		str := fmt.Sprintf("realRemovedLpt %s larger than TotalLptAmt %s", 
 			realRemovedLpt.String(), p.TotalLptAmt.String())
 		Log.Errorf(str)
-		return fmt.Errorf(str)
+		return fmt.Errorf(str) 
 	}
-	if p.SatsValueInPool < totalRemovedValue {
+	if p.SatsValueInPool < totalRemovedValue.Floor() {
 		str := fmt.Sprintf("totalRemovedValue %d larger than SatsValueInPool %d", 
-			totalRemovedValue, p.SatsValueInPool)
+			totalRemovedValue.Floor(), p.SatsValueInPool)
 		Log.Errorf(str)
-		return fmt.Errorf(str)
+		return fmt.Errorf(str) 
 	}
+
+	// 更新数据
+	Log.Infof("total removed lpt = %s, AddedFeeLpt = %s, retrieved asset %s %d", 
+		totalRemovedLptAmt.String(), totalAddedFeeLptAmt.String(), totalRemovedAmt.String(), totalRemovedValue)
+
+	if baseLpt {
+		p.BaseLptAmt = p.BaseLptAmt.Sub(realRemovedLpt)
+	} else {
+		for addr, info := range traders {
+			trader := p.loadTraderInfo(addr)
+			liqInfo := removeLiqMap[addr]
+			trader.LptAmt = trader.LptAmt.Sub(liqInfo.LptAmt)
+			if trader.LptAmt.Sign() > 0 {
+				p.liquidityData.LPMap[addr] = trader.LptAmt.Clone()
+			} else {
+				delete(p.liquidityData.LPMap, addr)
+			}
+
+			trader.RetrieveAmt = trader.RetrieveAmt.Add(info.amt) // 在retrieve中发送出去
+			trader.RetrieveValue += info.value.Floor()
+			trader.LiqSatsValue -= info.depositvalue
+			trader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
+			saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+
+			// 更新用户的item
+			items := p.removeLiquidityMap[addr]
+			for _, item := range items {
+				if item.Done == DONE_NOTYET && item.Reason == INVOKE_REASON_NORMAL {
+					item.Padded = []byte(fmt.Sprintf("%d", 1)) // 设置下标志，防止重入
+					SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+				}
+			}
+		}
+	}
+	
+	if !PROFIT_REINVESTING {
+		p.TotalFeeLptAmt = nil
+
+		svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(svrRetrieveInfo.amt)
+		svrTrader.RetrieveValue += svrRetrieveInfo.value.Floor()
+		svrTrader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
+		saveContractInvokerStatus(p.stp.GetDB(), url, svrTrader)
+
+		foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrieveInfo.amt)
+		foundation.RetrieveValue += foundationRetrieveInfo.value.Floor()
+		foundation.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
+		saveContractInvokerStatus(p.stp.GetDB(), url, foundation)
+	} 
 
 	// 更新池子数据
 	p.AssetAmtInPool = p.AssetAmtInPool.Sub(totalRemovedAmt)
-	p.SatsValueInPool -= totalRemovedValue
+	p.SatsValueInPool -= totalRemovedValue.Floor()
 	p.TotalLptAmt = p.TotalLptAmt.Sub(realRemovedLpt)
 	p.TotalRemovedLptAmt = p.TotalRemovedLptAmt.Add(realRemovedLpt)
 	p.TotalFeeLptAmt = p.TotalFeeLptAmt.Add(totalAddedFeeLptAmt)
@@ -1627,7 +1700,7 @@ func (p *AmmContractRuntime) removeLiquidity(oldAmtInPool *Decimal, oldValueInPo
 		for _, item := range v {
 			if item.Done == DONE_NOTYET &&
 				item.Reason == INVOKE_REASON_NORMAL &&
-				len(item.Padded) == 0 {
+				len(item.Padded) == 0 { // 还没处理
 				lptAmt = lptAmt.Add(item.ExpectedAmt)
 			}
 		}
@@ -1810,7 +1883,7 @@ func (p *AmmContractRuntime) removeBaseLiquidity(oldAmtInPool *Decimal, oldValue
 		for _, item := range v {
 			if item.Done == DONE_NOTYET &&
 			item.Reason == INVOKE_REASON_NORMAL &&
-			len(item.Padded) == 0 {
+			len(item.Padded) == 0 { // 还没处理
 				ratio = ratio.Add(item.ExpectedAmt)
 			}
 		}

@@ -380,7 +380,7 @@ const (
 // 数据库记录: 老版本 version=0
 type TraderStatusV0 struct {
 	InvokerStatusBase
-	Address     string
+	Address     string // 废弃！！！千万不要使用这个值, 这个值掩盖了InvokerStatusBase中的Address，但老数据库中都是InvokerStatusBase中才有值
 	OnSaleAmt   *Decimal
 	OnBuyValue  int64
 	DealAmt     *Decimal // 只累加卖单中成交的资产数量
@@ -973,9 +973,9 @@ func (p *SwapContractRuntime) updateResponseData() {
 		// responseCache_swap
 		addressmap := make(map[string]*responseItem_swap)
 		for _, v := range p.traderInfoMap {
-			addressmap[v.Address] = &responseItem_swap{
-				Address: v.Address,
-				Buy:     len(p.swapMap[v.Address]),
+			addressmap[v.InvokerStatusBase.Address] = &responseItem_swap{
+				Address: v.InvokerStatusBase.Address,
+				Buy:     len(p.swapMap[v.InvokerStatusBase.Address]),
 			}
 		}
 
@@ -4462,6 +4462,7 @@ func (p *SwapContractRuntime) genRemoveLiquidityInfo(height int) *DealInfo {
 			AssetName: assetName,
 			AssetAmt:  trader.RetrieveAmt.Clone(),
 		}
+		//Log.Debugf("genRemoveLiquidityInfo add sender %s %s %d", address, trader.RetrieveAmt.String(), trader.RetrieveValue)
 
 		totalAmt = totalAmt.Add(trader.RetrieveAmt)
 		totalValue += trader.RetrieveValue
@@ -4530,6 +4531,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 	p.TotalRetrieveTxFee += dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
+	Log.Debugf("%s total retrieve %s %d", p.URL(), p.TotalRetrieveAssets.String(), p.TotalRetrieveSats)
 
 	height := dealInfo.Height
 	txId := dealInfo.TxId
@@ -4559,6 +4561,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 		trader.RetrieveValue -= info.Value
 		trader.SettleState = SETTLE_STATE_NORMAL
 		saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+		Log.Debugf("%s remove liquilitidy completed. %s %s %d", addr, info.AssetName.String(), info.AssetAmt.String(), info.Value)
 
 		deletedItems := make([]int64, 0)
 		for id, item := range items {
