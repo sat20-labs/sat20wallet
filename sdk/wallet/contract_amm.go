@@ -656,6 +656,41 @@ func (p *AmmContractRuntime) InitFromDB(stp ContractManager, resv ContractDeploy
 		return err
 	}
 
+	
+	// 修复处理异常的removeliq
+	// if p.GetAssetName().String() == "ordx:f:pearl" {
+	// 	for _, items := range p.removeLiquidityMap {
+	// 		for _, item := range items {
+	// 			if item.OrderType == 10 && 
+	// 			item.Done == 0 && len(item.Padded) != 0 {
+	// 				Log.Infof("%s removed lpt %s", item.InUtxo, item.ExpectedAmt.String())
+	// 				switch item.InUtxo {
+	// 				case "77c5cf99958482239783d869cb3dd38a0c03ebb02faf3932d0416f44cca4fcfc:0":
+	// 					trader := p.loadTraderInfo(item.Address)
+	// 					trader.RetrieveAmt = trader.RetrieveAmt.Add(indexer.NewDecimal(39555, 0))
+	// 					trader.RetrieveValue += 270922
+	// 				case "84d38ebe20be717ff67dbc0566df5a4ac1041f4352d413e9c398b2bc7599de4f:0":
+	// 					trader := p.loadTraderInfo(item.Address)
+	// 					trader.RetrieveAmt = trader.RetrieveAmt.Add(indexer.NewDecimal(345, 0))
+	// 					trader.RetrieveValue += 3148
+
+	// 				case "3d33740e9f09e1bfede916bee484f496ebaeabbae8832909720f0ef93871fe53:0":
+	// 					trader := p.loadTraderInfo(item.Address)
+	// 					trader.RetrieveAmt = trader.RetrieveAmt.Add(indexer.NewDecimal(345, 0))
+	// 					trader.RetrieveValue += 3148
+
+	// 				case "4cf58f4c97270f244b4179e1f49d9404f99c7507a33bb463cc615e8aa61f4b80:0":
+	// 					trader := p.loadTraderInfo(item.Address)
+	// 					trader.RetrieveAmt = trader.RetrieveAmt.Add(indexer.NewDecimal(3452, 0))
+	// 					trader.RetrieveValue += 31487
+	// 				} 
+					
+	// 				Log.Infof("item fixed: %v", item)
+	// 			}
+	// 		}
+	// 	}
+	// }
+
 	return nil
 }
 
