@@ -1095,6 +1095,12 @@ func (p *LaunchPoolContractRunTime) RuntimeStatus() string {
 	return string(buf)
 }
 
+// TODO 该合约还没有统一接口
+func (p *LaunchPoolContractRunTime) GetInvokerStatus(address string) InvokerStatus {
+	return nil
+}
+
+
 func (p *LaunchPoolContractRunTime) InvokeHistory(_ any, start, limit int) string {
 	type response struct {
 		Total int                `json:"total"`

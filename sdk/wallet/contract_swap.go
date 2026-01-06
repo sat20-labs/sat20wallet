@@ -485,10 +485,9 @@ type SwapContractRuntime struct {
 	stubFeeMap         map[int64]int64                       // invokeCount->fee
 	isSending          bool
 
-	refreshTime_swap   int64
+	// rpc 缓存
 	responseCache_swap []*responseItem_swap
 	responseStatus     *responseStatus_swap
-	responseHistory    map[int][]*SwapHistoryItem // 按照100个为一桶，根据区块顺序记录，跟swapHistory保持一致
 	responseAnalytics  *AnalytcisData
 	dealPrice          *Decimal
 }
@@ -900,7 +899,7 @@ func (p *SwapContractRuntime) calcDepthV2(pool []*SwapHistoryItem, buy bool) []*
 }
 
 func (p *SwapContractRuntime) updateResponseData() {
-	if p.refreshTime_swap == 0 {
+	if p.refreshTime == 0 {
 
 		p.mutex.Lock()
 		defer p.mutex.Unlock()
@@ -998,7 +997,7 @@ func (p *SwapContractRuntime) updateResponseData() {
 		/////////////////////////////////
 		// history
 
-		p.refreshTime_swap = time.Now().Unix()
+		p.refreshTime = time.Now().Unix()
 	}
 }
 
@@ -1247,188 +1246,10 @@ func (p *SwapContractRuntime) genAnalyticsData() *AnalytcisData {
 	return result
 }
 
-func getBuckIndex(id int64) int {
-	return int(id / BUCK_SIZE)
-}
-
-func getBuckSubIndex(id int64) int {
-	return int(id % BUCK_SIZE)
-}
-
-func (p *SwapContractRuntime) getItemFromBuck(id int64) *SwapHistoryItem {
-	index := getBuckIndex(id)
-	subIndex := getBuckSubIndex(id)
-	buck, ok := p.responseHistory[index]
-	if !ok {
-		buck = p.loadBuckFromDB(index)
-	}
-	if buck != nil {
-		return buck[subIndex]
-	}
-	return nil
-}
-
-func (p *SwapContractRuntime) insertBuck(item *SwapHistoryItem) {
-	index := getBuckIndex(item.Id)
-	buck, ok := p.responseHistory[index]
-	if !ok {
-		buck = p.loadBuckFromDB(index)
-	}
-	buck[getBuckSubIndex(item.Id)] = item
-}
-
-func (p *SwapContractRuntime) loadBuckFromDB(id int) []*SwapHistoryItem {
-	items := loadContractInvokeHistoryWithRange(p.stp.GetDB(), p.URL(), id*BUCK_SIZE, BUCK_SIZE)
-	item2 := make([]*SwapHistoryItem, BUCK_SIZE)
-	for _, item := range items {
-		swapItem, ok := item.(*SwapHistoryItem)
-		if ok {
-			item2[getBuckSubIndex(swapItem.Id)] = swapItem
-		}
-	}
-	p.responseHistory[id] = item2
-	return item2
-}
-
 func (p *SwapContractRuntime) InvokeHistory(f any, start, limit int) string {
 	p.updateResponseData()
 
-	// TODO getItemFromBuck 需要写，以后要优化下，不然可能会影响效率，很卡
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	type response struct {
-		Total int                `json:"total"`
-		Start int                `json:"start"`
-		Data  []*SwapHistoryItem `json:"data"`
-	}
-	defaultRsp := `{"total":0,"start":0,"data":[]}`
-
-	// 默认倒序，也就是start是最后一个，往前读取日志
-	if f == nil {
-		result := &response{
-			Total: int(p.InvokeCount),
-			Start: start,
-		}
-		if p.InvokeCount != 0 && start >= 0 && start < int(p.InvokeCount) {
-			if limit <= 0 {
-				limit = 100
-			}
-
-			// 换算成真实坐标
-			start = int(p.InvokeCount) - 1 - start
-			if start < 0 {
-				start = 0
-			}
-			end := start - limit
-			if end < 0 {
-				end = -1 // 不包括end
-			}
-
-			for i := start; i > end; i-- {
-				item := p.getItemFromBuck(int64(i))
-				if item == nil {
-					p.loadBuckFromDB(getBuckIndex(int64(i)))
-					item = p.getItemFromBuck(int64(i))
-					if item == nil {
-						continue
-					}
-				}
-
-				result.Data = append(result.Data, item)
-			}
-		}
-
-		// TODO 如果数据太多，只保留前20，后10，共30桶
-		buf, err := json.Marshal(result)
-		if err != nil {
-			Log.Errorf("Marshal responseHistory failed, %v", err)
-			return defaultRsp
-		}
-		return string(buf)
-	}
-
-	// 根据地址过滤
-	filter := f.(string)
-	parts := strings.Split(filter, "=")
-	if len(parts) != 2 {
-		return defaultRsp
-	}
-	if parts[0] != "address" {
-		return defaultRsp
-	}
-
-	trader := p.loadTraderInfo(parts[1])
-	result := &response{
-		Total: int(trader.InvokeCount),
-		Start: start,
-	}
-	if trader.InvokeCount != 0 && start >= 0 && start < int(trader.InvokeCount) {
-		if limit <= 0 {
-			limit = 100
-		}
-
-		// 换算成真实坐标
-		start = int(trader.InvokeCount) - 1 - start
-		if start < 0 {
-			start = 0
-		}
-		end := start - limit + 1
-		if end < 0 {
-			end = 0 // 包括end
-		}
-
-		url := p.URL()
-		buck1 := getBuckIndex(int64(start))
-		buck2 := getBuckIndex(int64(end))
-		for i := buck1; i >= buck2; i-- {
-			buck, ok := trader.History[i]
-			if !ok {
-				continue
-			}
-
-			var idvect []int64
-			if i == buck1 {
-				if i == buck2 {
-					idvect = buck[end%BUCK_SIZE : (start+1)%BUCK_SIZE]
-				} else {
-					idvect = buck[0 : (start+1)%BUCK_SIZE]
-				}
-			} else if i == buck2 {
-				idvect = buck[end%BUCK_SIZE : BUCK_SIZE]
-			} else {
-				idvect = buck[0:BUCK_SIZE]
-			}
-
-			for j := len(idvect) - 1; j >= 0; j-- {
-				id := idvect[j]
-				item := p.getItemFromBuck(id)
-				if item == nil {
-					itemBase, err := loadContractInvokeHistoryItem(p.stp.GetDB(), url, GetKeyFromId(id))
-					if err != nil {
-						Log.Errorf("loadContractInvokeHistoryItem %s %d failed", url, id)
-						continue
-					}
-					item = itemBase.(*SwapHistoryItem)
-					if item != nil {
-						p.insertBuck(item)
-						result.Data = append(result.Data, item)
-					}
-				} else {
-					result.Data = append(result.Data, item)
-				}
-			}
-		}
-	}
-
-	// 如果数据太多，只保留前20，后10，共30桶
-	buf, err := json.Marshal(result)
-	if err != nil {
-		Log.Errorf("Marshal responseHistory failed, %v", err)
-		return defaultRsp
-	}
-	return string(buf)
-
+	return p.GetRuntimeBase().InvokeHistory(f, start, limit)
 }
 
 type responseItem_swap struct {
@@ -1830,7 +1651,7 @@ func (p *SwapContractRuntime) processInvoke_SatsNet(data *InvokeDataInBlock_Sats
 			}
 		}
 		if bUpdate {
-			p.refreshTime_swap = 0
+			p.refreshTime = 0
 			p.stp.SaveReservation(p.resv)
 		}
 	} else {
@@ -1881,7 +1702,7 @@ func (p *SwapContractRuntime) processInvoke(data *InvokeDataInBlock) error {
 			}
 		}
 		if bUpdate {
-			p.refreshTime_swap = 0
+			p.refreshTime = 0
 			p.stp.SaveReservation(p.resv)
 		}
 	} else {
@@ -2518,6 +2339,10 @@ func (p *SwapContractRuntime) Invoke(invokeTx *InvokeTx, height int) (InvokeHist
 		Log.Errorf("contract %s is not support action %s", p.URL(), param.Action)
 		return nil, fmt.Errorf("not support action %s", param.Action)
 	}
+}
+
+func (p *SwapContractRuntime) GetInvokerStatus(address string) InvokerStatus {
+	return p.loadTraderInfo(address)
 }
 
 func (p *SwapContractRuntime) loadTraderInfo(address string) *TraderStatus {
@@ -3501,7 +3326,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_swap(dealInfo *DealInfo) {
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 
 	//p.checkSelf()
 }
@@ -3878,7 +3703,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_refund(dealInfo *DealInfo) {
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 }
 
 // 退款。（在撮合交易之后进行）
@@ -4036,7 +3861,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 }
 
 func (p *SwapContractRuntime) updateWithDepositItem(item *SwapHistoryItem, txId string) {
@@ -4369,7 +4194,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 }
 
 // 收到withdraw的交易，执行一层分发
@@ -4599,7 +4424,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 }
 
 func (p *SwapContractRuntime) genProfitInfo(height int) *DealInfo {
@@ -4716,7 +4541,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 }
 
 

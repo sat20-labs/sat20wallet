@@ -1179,14 +1179,14 @@ func (p *AmmContractRuntime) saveLatestLiquidityData(height int) {
 	p.liquidityData.TotalSats = p.SatsValueInPool
 	p.liquidityData.TotalLPToken = p.TotalLptAmt.Clone()
 	saveLiquidityData(p.stp.GetDB(), p.URL(), p.liquidityData)
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 }
 
 func (p *AmmContractRuntime) GetLiquidityData(start, limit int) string {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
-	if p.refreshTime_swap == 0 || len(p.liqProviders) == 0 {
+	if p.refreshTime == 0 || len(p.liqProviders) == 0 {
 		p.liqProviders = nil
 		if p.BaseLptAmt.Sign() != 0 {
 			p.liqProviders = append(p.liqProviders, &LiqProviderInfo{

@@ -30,12 +30,15 @@ import (
 const (
 	URL_SEPARATOR = "_"
 
+	// 已经完成的
+	TEMPLATE_CONTRACT_LAUNCHPOOL  string = "launchpool.tc"
 	TEMPLATE_CONTRACT_SWAP        string = "swap.tc"
 	TEMPLATE_CONTRACT_AMM         string = "amm.tc"
-	TEMPLATE_CONTRACT_VAULT       string = "vault.tc"
-	TEMPLATE_CONTRACT_LAUNCHPOOL  string = "launchpool.tc"
-	TEMPLATE_CONTRACT_STAKE       string = "stake.tc"
 	TEMPLATE_CONTRACT_TRANSCEND   string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
+	// 开发中的
+	TEMPLATE_CONTRACT_RECYCLE     string = "recycle.tc"
+	TEMPLATE_CONTRACT_VAULT       string = "vault.tc"
+	TEMPLATE_CONTRACT_STAKE       string = "stake.tc"
 	TEMPLATE_CONTRACT_MINER_STAKE string = "minerstake.tc"
 
 	CONTRACT_STATUS_EXPIRED int = -2
@@ -76,6 +79,7 @@ const (
 	INVOKE_API_ADDLIQUIDITY    string = "addliq"   // 如果是L1，必须要有op_return携带invokeParam，否则会被认为是deposit
 	INVOKE_API_REMOVELIQUIDITY string = "removeliq"
 	INVOKE_API_PROFIT          string = "profit"
+	INVOKE_API_RECYCLE         string = "recycle"
 
 	ORDERTYPE_SELL            = 1
 	ORDERTYPE_BUY             = 2
@@ -89,7 +93,8 @@ const (
 	ORDERTYPE_REMOVELIQUIDITY = 10
 	ORDERTYPE_STAKE           = 11
 	ORDERTYPE_UNSTAKE         = 12
-	ORDERTYPE_UNUSED          = 13
+	ORDERTYPE_RECYCLE         = 13
+	ORDERTYPE_UNUSED          = 14
 
 	INVOKE_FEE          int64 = 10
 	SWAP_INVOKE_FEE     int64 = 10
@@ -264,6 +269,7 @@ type ContractRuntime interface {
 	GetRuntimeBase() *ContractRuntimeBase
 
 	GetStatus() int
+	GetInvokerStatus(string) InvokerStatus
 	GetRedeemScript() []byte
 	GetPkScript() []byte
 	GetLocalPkScript() []byte
@@ -558,6 +564,9 @@ func (p *EnableInvokeParam) Decode(data []byte) error {
 type InvokerStatus interface {
 	GetVersion() int
 	GetKey() string
+
+	GetInvokeCount() int
+	GetHistory() map[int][]int64
 }
 
 type InvokerStatusBase struct {
@@ -593,6 +602,17 @@ func (p *InvokerStatusBase) GetVersion() int {
 func (p *InvokerStatusBase) GetKey() string {
 	return p.Address
 }
+
+
+func (p *InvokerStatusBase) GetInvokeCount() int {
+	return p.InvokeCount
+}
+
+
+func (p *InvokerStatusBase) GetHistory() map[int][]int64 {
+	return p.History
+}
+
 
 func NewInvokerStatus(cn string) InvokerStatus {
 	switch cn {
@@ -817,6 +837,10 @@ type ContractRuntimeBase struct {
 	remotePubKey *secp256k1.PublicKey
 	redeemScript []byte
 	pkScript     []byte
+
+	// rpc 缓存
+	refreshTime   int64
+	responseHistory    map[int][]*InvokeItem  // 按照100个为一桶，根据区块顺序记录，跟swapHistory保持一致
 
 	mutex sync.RWMutex
 }
@@ -1280,8 +1304,189 @@ func (p *ContractRuntimeBase) RuntimeAnalytics() string {
 	return ""
 }
 
-func (p *ContractRuntimeBase) InvokeHistory(any, int, int) string {
-	return ""
+func getBuckIndex(id int64) int {
+	return int(id / BUCK_SIZE)
+}
+
+func getBuckSubIndex(id int64) int {
+	return int(id % BUCK_SIZE)
+}
+
+func (p *ContractRuntimeBase) getItemFromBuck(id int64) *InvokeItem {
+	index := getBuckIndex(id)
+	subIndex := getBuckSubIndex(id)
+	buck, ok := p.responseHistory[index]
+	if !ok {
+		buck = p.loadBuckFromDB(index)
+	}
+	if buck != nil {
+		return buck[subIndex]
+	}
+	return nil
+}
+
+func (p *ContractRuntimeBase) insertBuck(item *InvokeItem) {
+	index := getBuckIndex(item.Id)
+	buck, ok := p.responseHistory[index]
+	if !ok {
+		buck = p.loadBuckFromDB(index)
+	}
+	buck[getBuckSubIndex(item.Id)] = item
+}
+
+func (p *ContractRuntimeBase) loadBuckFromDB(id int) []*InvokeItem {
+	items := loadContractInvokeHistoryWithRange(p.stp.GetDB(), p.URL(), id*BUCK_SIZE, BUCK_SIZE)
+	item2 := make([]*InvokeItem, BUCK_SIZE)
+	for _, item := range items {
+		swapItem, ok := item.(*InvokeItem)
+		if ok {
+			item2[getBuckSubIndex(swapItem.Id)] = swapItem
+		}
+	}
+	p.responseHistory[id] = item2
+	return item2
+}
+
+func (p *ContractRuntimeBase) InvokeHistory(f any, start, limit int) string {
+
+	// TODO getItemFromBuck 需要写，以后要优化下，不然可能会影响效率，很卡
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	type response struct {
+		Total int                `json:"total"`
+		Start int                `json:"start"`
+		Data  []*SwapHistoryItem `json:"data"`
+	}
+	defaultRsp := `{"total":0,"start":0,"data":[]}`
+
+	// 默认倒序，也就是start是最后一个，往前读取日志
+	if f == nil {
+		result := &response{
+			Total: int(p.InvokeCount),
+			Start: start,
+		}
+		if p.InvokeCount != 0 && start >= 0 && start < int(p.InvokeCount) {
+			if limit <= 0 {
+				limit = 100
+			}
+
+			// 换算成真实坐标
+			start = int(p.InvokeCount) - 1 - start
+			if start < 0 {
+				start = 0
+			}
+			end := start - limit
+			if end < 0 {
+				end = -1 // 不包括end
+			}
+
+			for i := start; i > end; i-- {
+				item := p.getItemFromBuck(int64(i))
+				if item == nil {
+					p.loadBuckFromDB(getBuckIndex(int64(i)))
+					item = p.getItemFromBuck(int64(i))
+					if item == nil {
+						continue
+					}
+				}
+
+				result.Data = append(result.Data, item)
+			}
+		}
+
+		// TODO 如果数据太多，只保留前20，后10，共30桶
+		buf, err := json.Marshal(result)
+		if err != nil {
+			Log.Errorf("Marshal responseHistory failed, %v", err)
+			return defaultRsp
+		}
+		return string(buf)
+	}
+
+	// 根据地址过滤
+	filter := f.(string)
+	parts := strings.Split(filter, "=")
+	if len(parts) != 2 {
+		return defaultRsp
+	}
+	if parts[0] != "address" {
+		return defaultRsp
+	}
+
+	trader := p.runtime.GetInvokerStatus(parts[1])
+	invokeCount := trader.GetInvokeCount()
+	history := trader.GetHistory()
+	result := &response{
+		Total: int(invokeCount),
+		Start: start,
+	}
+	if invokeCount != 0 && start >= 0 && start < int(invokeCount) {
+		if limit <= 0 {
+			limit = 100
+		}
+
+		// 换算成真实坐标
+		start = int(invokeCount) - 1 - start
+		if start < 0 {
+			start = 0
+		}
+		end := start - limit + 1
+		if end < 0 {
+			end = 0 // 包括end
+		}
+
+		url := p.URL()
+		buck1 := getBuckIndex(int64(start))
+		buck2 := getBuckIndex(int64(end))
+		for i := buck1; i >= buck2; i-- {
+			buck, ok := history[i]
+			if !ok {
+				continue
+			}
+
+			var idvect []int64
+			if i == buck1 {
+				if i == buck2 {
+					idvect = buck[end%BUCK_SIZE : (start+1)%BUCK_SIZE]
+				} else {
+					idvect = buck[0 : (start+1)%BUCK_SIZE]
+				}
+			} else if i == buck2 {
+				idvect = buck[end%BUCK_SIZE : BUCK_SIZE]
+			} else {
+				idvect = buck[0:BUCK_SIZE]
+			}
+
+			for j := len(idvect) - 1; j >= 0; j-- {
+				id := idvect[j]
+				item := p.getItemFromBuck(id)
+				if item == nil {
+					itemBase, err := loadContractInvokeHistoryItem(p.stp.GetDB(), url, GetKeyFromId(id))
+					if err != nil {
+						Log.Errorf("loadContractInvokeHistoryItem %s %d failed", url, id)
+						continue
+					}
+					item = itemBase.(*SwapHistoryItem)
+					if item != nil {
+						p.insertBuck(item)
+						result.Data = append(result.Data, item)
+					}
+				} else {
+					result.Data = append(result.Data, item)
+				}
+			}
+		}
+	}
+
+	// 如果数据太多，只保留前20，后10，共30桶
+	buf, err := json.Marshal(result)
+	if err != nil {
+		Log.Errorf("Marshal responseHistory failed, %v", err)
+		return defaultRsp
+	}
+	return string(buf)
+
 }
 
 func (p *ContractRuntimeBase) AllAddressInfo(int, int) string {
@@ -1659,7 +1864,7 @@ func (p *ContractRuntimeBase) InvokeCompleted(data *InvokeDataInBlock) {
 
 func (p *ContractRuntimeBase) IsMyInvoke_SatsNet(invoke *InvokeTx_SatsNet) bool {
 	// 输出地址是合约地址
-	if p.ChannelAddr != invoke.Address {
+	if p.ChannelAddr != invoke.Address { // 有些特殊指令只有op_return，没有对应的output，比如合约激活指令
 		channelAddr := ExtractChannelId(invoke.InvokeParam.ContractPath)
 		if channelAddr != p.ChannelAddr {
 			return false
@@ -2400,6 +2605,8 @@ func (p *ContractRuntimeBase) GetInvokeOutput(item *SwapHistoryItem) *indexer.Tx
 	return output
 }
 
+
+
 func GetSupportedContracts() []string {
 	result := make([]string, 0)
 	c := NewContract(TEMPLATE_CONTRACT_LAUNCHPOOL)
@@ -2756,6 +2963,9 @@ func GetInvokeInnerParam(action string) InvokeInnerParamIF {
 	case INVOKE_API_PROFIT:
 		return &ProfitInvokeParam{OrderType: orderType}
 
+	case INVOKE_API_RECYCLE:
+		return &InvokeParam{Action: action}
+
 	default:
 		return nil
 	}
@@ -2782,6 +2992,9 @@ func GetOrderTypeWithAction(action string) int {
 
 	case INVOKE_API_PROFIT:
 		return ORDERTYPE_PROFIT
+
+	case INVOKE_API_RECYCLE:
+		return ORDERTYPE_RECYCLE
 
 	default:
 		return ORDERTYPE_SELL
