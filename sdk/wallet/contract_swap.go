@@ -1376,14 +1376,6 @@ func (p *SwapContractRuntime) AllowDeploy() error {
 	return nil
 }
 
-func (p *SwapContractRuntime) UnconfirmedTxId() string {
-	return ""
-}
-
-func (p *SwapContractRuntime) UnconfirmedTxId_SatsNet() string {
-	return ""
-}
-
 // return fee: 调用费用+该invoke需要的聪数量
 func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 	var invoke InvokeParam
@@ -2967,18 +2959,6 @@ func (p *SwapContractRuntime) addItem(item *SwapHistoryItem) {
 	p.insertBuck(item)
 }
 
-// TODO
-func (p *SwapContractRuntime) DisableItem(input InvokeHistoryItem) {
-	item, ok := input.(*SwapHistoryItem)
-	if !ok {
-		return
-	}
-
-	switch item.OrderType {
-
-	}
-
-}
 
 // func (p *SwapContractRuntime) AddLostInvokeItem(txId string, fromL1 bool) (string, error) {
 

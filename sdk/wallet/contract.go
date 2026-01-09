@@ -66,6 +66,7 @@ const (
 	INVOKE_RESULT_ADDLIQUIDITY    string = INVOKE_API_ADDLIQUIDITY
 	INVOKE_RESULT_REMOVELIQUIDITY string = INVOKE_API_REMOVELIQUIDITY
 	INVOKE_RESULT_PROFIT          string = INVOKE_API_PROFIT
+	INVOKE_RESULT_REWARD          string = "reward"
 )
 
 const (
@@ -80,7 +81,9 @@ const (
 	INVOKE_API_REMOVELIQUIDITY string = "removeliq"
 	INVOKE_API_PROFIT          string = "profit"
 	INVOKE_API_RECYCLE         string = "recycle"
+	INVOKE_API_REWARD          string = "reward"
 
+	ORDERTYPE_NOSPEC          = 0 
 	ORDERTYPE_SELL            = 1
 	ORDERTYPE_BUY             = 2
 	ORDERTYPE_REFUND          = 3
@@ -94,7 +97,8 @@ const (
 	ORDERTYPE_STAKE           = 11
 	ORDERTYPE_UNSTAKE         = 12
 	ORDERTYPE_RECYCLE         = 13
-	ORDERTYPE_UNUSED          = 14
+	ORDERTYPE_REWARD          = 14
+	ORDERTYPE_UNUSED          = 15
 
 	INVOKE_FEE          int64 = 10
 	SWAP_INVOKE_FEE     int64 = 10
@@ -566,9 +570,54 @@ type InvokerStatus interface {
 	GetKey() string
 
 	GetInvokeCount() int
+	GetInvokeAmt() *Decimal
+	GetInvokeValue() int64
 	GetHistory() map[int][]int64
 }
 
+type InvokerStatusBaseV2 struct {
+	Version       int
+	Address       string
+	InvokeCount   int
+	InvokeAmt     *Decimal // 交互资产总额
+	InvokeValue   int64
+	History       map[int][]int64 // 用户的invoke历史记录，每100个为一桶，用InvokeCount计算 TODO 目前统一一块存储，数据量大了后要分桶保存，用到才加载
+	UpdateTime    int64
+}
+
+func NewInvokerStatusBaseV2(address string, divisibility int) *InvokerStatusBaseV2 {
+	return &InvokerStatusBaseV2{
+		Address:    address,
+		History:    make(map[int][]int64),
+		UpdateTime: time.Now().Unix(),
+	}
+}
+
+func (p *InvokerStatusBaseV2) GetVersion() int {
+	return p.Version
+}
+
+func (p *InvokerStatusBaseV2) GetKey() string {
+	return p.Address
+}
+
+func (p *InvokerStatusBaseV2) GetInvokeCount() int {
+	return p.InvokeCount
+}
+
+func (p *InvokerStatusBaseV2) GetInvokeAmt() *Decimal {
+	return p.InvokeAmt
+}
+
+func (p *InvokerStatusBaseV2) GetInvokeValue() int64 {
+	return p.InvokeValue
+}
+
+func (p *InvokerStatusBaseV2) GetHistory() map[int][]int64 {
+	return p.History
+}
+
+// 老的调用者数据结构，新合约不要用，用 InvokerStatusBaseV2 
 type InvokerStatusBase struct {
 	Version       int
 	Address       string
@@ -608,6 +657,14 @@ func (p *InvokerStatusBase) GetInvokeCount() int {
 	return p.InvokeCount
 }
 
+
+func (p *InvokerStatusBase) GetInvokeAmt() *Decimal {
+	return p.DepositAmt.Add(p.WithdrawAmt)
+}
+
+func (p *InvokerStatusBase) GetInvokeValue() int64 {
+	return p.DepositValue + p.WithdrawValue
+}
 
 func (p *InvokerStatusBase) GetHistory() map[int][]int64 {
 	return p.History
@@ -1312,6 +1369,17 @@ func getBuckSubIndex(id int64) int {
 	return int(id % BUCK_SIZE)
 }
 
+func InsertItemToTraderHistroy(trader *InvokerStatusBaseV2, item *InvokeItem) {
+	index := getBuckIndex(int64(trader.InvokeCount))
+	if trader.History == nil {
+		trader.History = make(map[int][]int64)
+	}
+	trader.History[index] = append(trader.History[index], item.Id)
+	trader.InvokeCount++
+	trader.UpdateTime = time.Now().Unix()
+}
+
+
 func (p *ContractRuntimeBase) getItemFromBuck(id int64) *InvokeItem {
 	index := getBuckIndex(id)
 	subIndex := getBuckSubIndex(id)
@@ -1728,7 +1796,7 @@ func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
 			amt := invoke.TxOutput.GetAsset(assetName)
 			return amt.Sign() != 0
 		}
-		// TODO 老版本，先打开，等钱包更新后，删除以下代码
+		// TODO 以后特殊的合约不要单独的地址，所以只要输出地址是合约地址，就不要丢弃
 		if indexer.IsPlainAsset(assetName) {
 			// 只有transcend支持白聪
 			return len(invoke.TxOutput.Assets) == 0
@@ -1981,6 +2049,10 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 // 外面加锁
 func (p *ContractRuntimeBase) InvokeCompleted_SatsNet(data *InvokeDataInBlock_SatsNet) {
 	p.invokeCompleted()
+}
+
+func (p *ContractRuntimeBase) checkSelf() error {
+	return nil
 }
 
 func (p *ContractRuntimeBase) calcAssetMerkleRoot() {
@@ -2606,6 +2678,19 @@ func (p *ContractRuntimeBase) GetInvokeOutput(item *SwapHistoryItem) *indexer.Tx
 }
 
 
+// TODO
+func (p *ContractRuntimeBase) DisableItem(input InvokeHistoryItem) {
+	item, ok := input.(*SwapHistoryItem)
+	if !ok {
+		return
+	}
+
+	switch item.OrderType {
+
+	}
+
+}
+
 
 func GetSupportedContracts() []string {
 	result := make([]string, 0)
@@ -2634,6 +2719,11 @@ func GetSupportedContracts() []string {
 		result = append(result, string(c.Content()))
 	}
 
+	c = NewContract(TEMPLATE_CONTRACT_RECYCLE)
+	if c != nil {
+		result = append(result, string(c.Content()))
+	}
+
 	sort.Slice(result, func(i, j int) bool {
 		return result[i] < result[j]
 	})
@@ -2649,14 +2739,14 @@ func NewContract(cname string) Contract {
 	case TEMPLATE_CONTRACT_AMM:
 		return NewAmmContract()
 
-	//case TEMPLATE_CONTRACT_VAULT:
-	//return NewVaultContract()
-
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		return NewLaunchPoolContract()
 
 	case TEMPLATE_CONTRACT_TRANSCEND:
 		return NewTranscendContract()
+
+	case TEMPLATE_CONTRACT_RECYCLE:
+		return NewRecycleContract()
 	}
 	return nil
 }
@@ -2688,15 +2778,17 @@ func NewContractRuntime(stp ContractManager, cname string) ContractRuntime {
 	case TEMPLATE_CONTRACT_AMM:
 		return NewAmmContractRuntime(stp)
 
-	//case TEMPLATE_CONTRACT_VAULT:
-	//return NewVaultContractRuntime(stp)
-
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		r = NewLaunchPoolContractRuntime(stp)
 
 	case TEMPLATE_CONTRACT_TRANSCEND:
 		r = NewTranscendContractRuntime(stp)
+	
+	case TEMPLATE_CONTRACT_RECYCLE:
+		return NewRecycleContractRunTime(stp)
 	}
+
+	
 
 	return r
 }
@@ -2964,7 +3056,9 @@ func GetInvokeInnerParam(action string) InvokeInnerParamIF {
 		return &ProfitInvokeParam{OrderType: orderType}
 
 	case INVOKE_API_RECYCLE:
-		return &InvokeParam{Action: action}
+		return &RecycleInvokeParam{}
+	case INVOKE_API_REWARD:
+		return &RecycleInvokeParam{}
 
 	default:
 		return nil
@@ -2995,6 +3089,8 @@ func GetOrderTypeWithAction(action string) int {
 
 	case INVOKE_API_RECYCLE:
 		return ORDERTYPE_RECYCLE
+	case INVOKE_API_REWARD:
+		return ORDERTYPE_REWARD
 
 	default:
 		return ORDERTYPE_SELL
