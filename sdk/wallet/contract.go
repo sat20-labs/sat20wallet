@@ -146,6 +146,7 @@ const (
 	INVOKE_REASON_UTXO_NOT_FOUND       string = "input utxo not found"
 	INVOKE_REASON_UTXO_NOT_FOUND_REORG string = "input utxo not found after reorg"
 	INVOKE_REASON_NO_PROFIT            string = "no profit"
+	INVOKE_REASON_UTXO_FORMAT          string = "input utxo incorrect format"
 )
 
 const (
@@ -452,7 +453,7 @@ type InvokeItem struct {
 	InvokeHistoryItemBase
 
 	OrderType      int    //
-	UtxoId         uint64 // 其实是utxoId
+	UtxoId         uint64
 	OrderTime      int64
 	AssetName      string
 	ServiceFee     int64
@@ -3010,6 +3011,7 @@ type InvokeTx_SatsNet struct {
 
 type InvokeDataInBlock_SatsNet struct {
 	Height       int
+	BlockHash    string
 	InvokeTxVect []*InvokeTx_SatsNet
 }
 
@@ -3025,6 +3027,7 @@ type InvokeTx struct {
 
 type InvokeDataInBlock struct {
 	Height       int
+	BlockHash    string
 	InvokeTxVect []*InvokeTx
 }
 

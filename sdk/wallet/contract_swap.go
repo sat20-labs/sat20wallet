@@ -3824,16 +3824,49 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
+	url := p.URL()
 	for inUtxo := range dealInfo.SendInfo {
-
 		item, ok := p.history[inUtxo]
 		if ok {
-			p.updateWithDepositItem(item, dealInfo.SendTxIdMap[inUtxo])
-		} else {
-			// 不是InUtxo，而是address, 那就只有一条记录
-			p.updateWithDepositItem(item, dealInfo.TxId)
-		}
+			txId := dealInfo.SendTxIdMap[inUtxo]
+			if txId == "" {
+				// 异常处理
+				// item.Reason = INVOKE_REASON_UTXO_NOT_FOUND
+				// item.Done = DONE_CLOSED_DIRECTLY
+				continue
+			}
 
+			// deposit utxo 解锁
+			p.stp.GetWalletMgr().utxoLockerL1.UnlockUtxo(item.InUtxo)
+			Log.Infof("deposit utxo %s unlocked", item.InUtxo)
+
+			// 更新对应数据
+			item.OutTxId = txId
+			item.OutAmt = item.RemainingAmt
+			item.OutValue = item.RemainingValue
+			item.RemainingAmt = nil
+			item.RemainingValue = 0
+			item.Done = DONE_DEALT
+
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+			delete(p.history, item.InUtxo)
+
+			trader := p.traderInfoMap[item.Address]
+			if trader != nil {
+				trader.DepositAmt = trader.DepositAmt.Add(item.OutAmt)
+				trader.DepositValue += item.OutValue
+				saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+			}
+
+			items, ok := p.depositMap[item.Address]
+			if ok {
+				delete(items, item.Id)
+			}
+
+			if len(items) == 0 {
+				delete(p.depositMap, item.Address)
+			}
+		}
 	}
 
 	p.CheckPoint = dealInfo.InvokeCount
@@ -3842,47 +3875,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
 	p.refreshTime = 0
-}
-
-func (p *SwapContractRuntime) updateWithDepositItem(item *SwapHistoryItem, txId string) {
-	if txId == "" {
-		// 异常处理
-		// item.Reason = INVOKE_REASON_UTXO_NOT_FOUND
-		// item.Done = DONE_CLOSED_DIRECTLY
-		return
-	}
-
-	// deposit utxo 解锁
-	p.stp.GetWalletMgr().utxoLockerL1.UnlockUtxo(item.InUtxo)
-	Log.Infof("deposit utxo %s unlocked", item.InUtxo)
-
-	// 更新对应数据
-	item.OutTxId = txId
-	item.OutAmt = item.RemainingAmt
-	item.OutValue = item.RemainingValue
-	item.RemainingAmt = nil
-	item.RemainingValue = 0
-	item.Done = DONE_DEALT
-
-	url := p.URL()
-	SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
-	delete(p.history, item.InUtxo)
-
-	trader := p.traderInfoMap[item.Address]
-	if trader != nil {
-		trader.DepositAmt = trader.DepositAmt.Add(item.OutAmt)
-		trader.DepositValue += item.OutValue
-		saveContractInvokerStatus(p.stp.GetDB(), url, trader)
-	}
-
-	items, ok := p.depositMap[item.Address]
-	if ok {
-		delete(items, item.Id)
-	}
-
-	if len(items) == 0 {
-		delete(p.depositMap, item.Address)
-	}
 }
 
 // 收到deposit的交易，执行二层分发
@@ -4114,7 +4106,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 	txId := dealInfo.TxId
 	url := p.URL()
 	// 通过height确定哪些item是需要处理的，然后更新对应的数据
-	deletedAddr := make([]string, 0)
 	for addr := range dealInfo.SendInfo {
 		if addr == ADDR_OPRETURN || addr == p.ChannelAddr {
 			continue
@@ -4162,11 +4153,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 			delete(items, id)
 		}
 		if len(items) == 0 {
-			deletedAddr = append(deletedAddr, addr)
+			delete(p.withdrawMap, addr)
 		}
-	}
-	for _, addr := range deletedAddr {
-		delete(p.withdrawMap, addr)
 	}
 
 	p.CheckPoint = dealInfo.InvokeCount
@@ -4342,7 +4330,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 	txId := dealInfo.TxId
 	url := p.URL()
 	// 通过height确定哪些item是需要处理的，然后更新对应的数据
-	deletedAddr := make([]string, 0)
 	for addr, info := range dealInfo.SendInfo {
 		if addr == ADDR_OPRETURN || addr == p.ChannelAddr {
 			continue
@@ -4392,11 +4379,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 			delete(items, id)
 		}
 		if len(deletedItems) != 0 && len(items) == 0 {
-			deletedAddr = append(deletedAddr, addr)
+			delete(p.removeLiquidityMap, addr)
 		}
-	}
-	for _, addr := range deletedAddr {
-		delete(p.removeLiquidityMap, addr)
 	}
 
 	p.CheckPoint = dealInfo.InvokeCount
@@ -4466,7 +4450,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 	txId := dealInfo.TxId
 	url := p.URL()
 	// 通过height确定哪些item是需要处理的，然后更新对应的数据
-	deletedAddr := make([]string, 0)
 	for addr, info := range dealInfo.SendInfo {
 		if addr == ADDR_OPRETURN || addr == p.ChannelAddr {
 			continue
@@ -4509,11 +4492,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 			delete(items, id)
 		}
 		if len(deletedItems) != 0 && len(items) == 0 {
-			deletedAddr = append(deletedAddr, addr)
+			delete(p.profitMap, addr)
 		}
-	}
-	for _, addr := range deletedAddr {
-		delete(p.profitMap, addr)
 	}
 
 	p.CheckPoint = dealInfo.InvokeCount
