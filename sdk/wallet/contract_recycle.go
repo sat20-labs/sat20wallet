@@ -73,24 +73,57 @@ func (p *RecycleContract) CheckContent() error {
 	if p.NumberOfLastDigits == 0 {
 		return fmt.Errorf("should set the number of digits")
 	}
+	if p.SpecPrizeMatchCount != 0 {
+		if p.SpecPrizeMatchCount > p.NumberOfLastDigits {
+			return fmt.Errorf("SpecPrizeMatchCount should <= NumberOfLastDigits")
+		}
+		if p.SpecPrize < 10 || p.SpecPrize > 90 {
+			return fmt.Errorf("specPrize should a ratio in range of 10-90 percent")
+		}
+	}
 	if p.FirstPrizeMatchCount == 0 {
 		return fmt.Errorf("should set the count of digits of the first prize")
+	}
+	if p.SpecPrizeMatchCount != 0 && p.FirstPrizeMatchCount >= p.SpecPrizeMatchCount {
+		return fmt.Errorf("FirstPrizeMatchCount should < SpecPrizeMatchCount")
+	}
+	if p.FirstPrizeMatchCount > p.NumberOfLastDigits {
+		return fmt.Errorf("FirstPrizeMatchCount should <= NumberOfLastDigits")
 	}
 	if p.FirstPrize == "" || p.FirstPrize == "0" {
 		return fmt.Errorf("should set the first prize")
 	}
+	_, err := indexer.NewDecimalFromString(p.FirstPrize, MAX_ASSET_DIVISIBILITY)
+	if err != nil {
+		return err
+	}
+
 	if p.SecondPrizeMatchCount != 0 {
+		if p.SecondPrizeMatchCount >= p.FirstPrizeMatchCount {
+			return fmt.Errorf("SecondPrizeMatchCount should < FirstPrizeMatchCount")
+		}
 		if p.SecondPrize == "" || p.SecondPrize == "0" {
 			return fmt.Errorf("should set the second prize")
 		}
+		_, err := indexer.NewDecimalFromString(p.SecondPrize, MAX_ASSET_DIVISIBILITY)
+		if err != nil {
+			return err
+		}
 	}
 	if p.ThirdPrizeMatchCount != 0 {
+		if p.ThirdPrizeMatchCount >= p.SecondPrizeMatchCount {
+			return fmt.Errorf("ThirdPrizeMatchCount should < SecondPrizeMatchCount")
+		}
 		if p.ThirdPrize == "" || p.ThirdPrize == "0" {
 			return fmt.Errorf("should set the third prize")
 		}
+		_, err := indexer.NewDecimalFromString(p.ThirdPrize, MAX_ASSET_DIVISIBILITY)
+		if err != nil {
+			return err
+		}
 	}
 
-	err := p.ContractBase.CheckContent()
+	err = p.ContractBase.CheckContent()
 	if err != nil {
 		return err
 	}
@@ -125,7 +158,7 @@ func (p *RecycleContract) Encode() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddData(base).
 		AddInt64(int64(p.NumberOfLastDigits)).
-		AddInt64(int64(p.SecondPrizeMatchCount)).
+		AddInt64(int64(p.SpecPrizeMatchCount)).
 		AddInt64(int64(p.FirstPrizeMatchCount)).
 		AddInt64(int64(p.SecondPrizeMatchCount)).
 		AddInt64(int64(p.ThirdPrizeMatchCount)).
@@ -312,7 +345,6 @@ type RecycleContractRunningData struct {
 	BlockHashMap         map[int]string // 缓存没有处理过的block的hash
 	AssetAmtInPool       *Decimal
 	SatsValueInPool      int64    // 池子中聪的数量
-	TotalInputCount      int      // 回收交易计数
 	TotalInputSats       int64
 	TotalInputAssets     *Decimal // 所有进入池子的资产数量，指主网上每个地址参与回收的每个TX的输入资产总量
 	TotalRewardCount     int      // 获奖交易计数
@@ -321,8 +353,6 @@ type RecycleContractRunningData struct {
 	TotalPoints          int64    // 没有获得奖励，就能获得积分
 	TotalClaimPoints     int64    // 所有已经领取的积分
 	TotalFeeValue        int64    // 所有由合约支付的相关交易的网络费用
-	TotalAddress         int      // 所有参与回收的地址
-	TotalRewardAddress   int      // 所有获奖的地址计数
 }
 
 func (p *RecycleContractRunningData) ToNewVersion() *RecycleContractRunningData {
@@ -1040,6 +1070,8 @@ func (p *RecycleContractRunTime) updateContractStatus(item *SwapHistoryItem) {
 	p.InvokeCount++
 	p.TotalInputAssets = p.TotalInputAssets.Add(item.InAmt)
 	p.TotalInputSats += item.InValue
+	p.SatsValueInPool += item.InValue
+	p.AssetAmtInPool = p.AssetAmtInPool.Add(item.InAmt)
 	
 	if item.Reason == INVOKE_REASON_NORMAL {
 		trader.InvokeAmt = trader.InvokeAmt.Add(item.InAmt)
@@ -1065,12 +1097,12 @@ func (p *RecycleContractRunTime) addItem(item *SwapHistoryItem) {
 
 // XorLastNHex XORs the last n hex digits of blockHash and txId
 // digit by digit (nibble-by-nibble) and returns an n-digit hex string.
-func XorLastNHex(blockHash, txId string, n int) (string, error) {
+func XorLastNHex(blockHash, txId string, n int) (string) {
 	if n <= 0 {
-		return "", fmt.Errorf("n must be positive")
+		return ""
 	}
 	if len(blockHash) < n || len(txId) < n {
-		return "", fmt.Errorf("input shorter than n")
+		return ""
 	}
 
 	bh := strings.ToLower(blockHash[len(blockHash)-n:])
@@ -1079,32 +1111,26 @@ func XorLastNHex(blockHash, txId string, n int) (string, error) {
 	out := make([]byte, n)
 
 	for i := 0; i < n; i++ {
-		v1, err := hexDigit(bh[i])
-		if err != nil {
-			return "", fmt.Errorf("invalid hex in blockHash: %w", err)
-		}
-		v2, err := hexDigit(tx[i])
-		if err != nil {
-			return "", fmt.Errorf("invalid hex in txId: %w", err)
-		}
+		v1 := hexDigit(bh[i])
+		v2 := hexDigit(tx[i])
 
 		// x := v1 ^ v2
 		x := (v1 + v2) % 16 // 相加更容易计算
 		out[i] = toHexDigit(x)
 	}
 
-	return string(out), nil
+	return string(out)
 }
 
 // convert hex char to 0..15
-func hexDigit(c byte) (byte, error) {
+func hexDigit(c byte) (byte) {
 	switch {
 	case c >= '0' && c <= '9':
-		return c - '0', nil
+		return c - '0'
 	case c >= 'a' && c <= 'f':
-		return c - 'a' + 10, nil
+		return c - 'a' + 10
 	default:
-		return 0, fmt.Errorf("not hex: %c", c)
+		return 0
 	}
 }
 
@@ -1169,79 +1195,89 @@ func (p *RecycleContractRunTime) recycle(height int, blockHash string) error {
 	updated := false
 	isPlainAsset := indexer.IsPlainAsset(p.GetAssetName())
 
-	invalidItems := make([]*InvokeItem, 0)
+	specPrize := indexer.NewDecimalWithScale(int64(p.SpecPrize), 2)
+	processedItems := make([]*InvokeItem, 0)
 	invokers := make(map[string]*RecycleInvokerStatus)
-	for _, item := range p.history {
-		// 根据区块和交易，生成兑奖号码
-		// 如果中奖，放入 rewardMap
+	for _, invokes := range p.recycleMap {
+		for _, item := range invokes {
+			// 根据区块和交易，生成兑奖号码
+			// 如果中奖，放入 rewardMap
 
-		// TODO 暂时只支持L1的调用
-		h, _, _ := indexer.FromUtxoId(item.UtxoId)
-		if h > height {
-			continue
-		}
-		txId, _, err := indexer.ParseUtxo(item.InUtxo)
-		if err != nil {
-			item.Reason = INVOKE_REASON_UTXO_FORMAT
-			item.Done = DONE_CLOSED_DIRECTLY
-			invalidItems = append(invalidItems, item)
-		}
-		
-		// 分别取最后8个数字做异或，然后按照中奖规则判断是否中奖
-		result, err := XorLastNHex(blockHash, txId, p.NumberOfLastDigits)
-		if err != nil {
-			item.Reason = INVOKE_REASON_INNER_ERROR
-			item.Done = DONE_CLOSED_DIRECTLY
-			invalidItems = append(invalidItems, item)
-		}
-		item.Padded = []byte(result)
-		
-		var prize *Decimal
-		var points int64
-		n := CountHexDigit(result, '8')
-		if p.FirstPrizeMatchCount > 0 && n >= p.FirstPrizeMatchCount {
-			prize, _ = indexer.NewDecimalFromString(p.FirstPrize, p.Divisibility)
-		} else if p.SecondPrizeMatchCount > 0 && n >= p.SecondPrizeMatchCount {
-			prize, _ = indexer.NewDecimalFromString(p.SecondPrize, p.Divisibility)
-		} else if p.ThirdPrizeMatchCount > 0 && n >= p.ThirdPrizeMatchCount {
-			prize, _ = indexer.NewDecimalFromString(p.ThirdPrize, p.Divisibility)
-		} else {
-			// 仅获得points奖励
-			points = 10
-			item.Done = DONE_CLOSED_DIRECTLY
-			invalidItems = append(invalidItems, item)
-		}
+			// TODO 暂时只支持L1的调用
 
+			if item.Done != DONE_NOTYET {
+				continue
+			}
 
-		invoker := p.loadTraderInfo(item.Address)
-		if isPlainAsset {
-			item.OutValue = prize.Floor()
-			p.SatsValueInPool -= item.OutValue
-			invoker.TotalRewardValue += item.OutValue
-		} else {
-			item.OutAmt = prize
-			p.AssetAmtInPool = p.AssetAmtInPool.Sub(item.OutAmt)
-			invoker.TotalRewardAmt = invoker.TotalRewardAmt.Add(item.OutAmt)
+			h, _, _ := indexer.FromUtxoId(item.UtxoId)
+			if h != height {
+				continue
+			}
+
+			processedItems = append(processedItems, item)
+			txId, _, err := indexer.ParseUtxo(item.InUtxo)
+			if err != nil {
+				item.Reason = INVOKE_REASON_UTXO_FORMAT
+				item.Done = DONE_CLOSED_DIRECTLY
+				continue
+			}
+			
+			// 分别取最后8个数字做异或，然后按照中奖规则判断是否中奖
+			result := XorLastNHex(blockHash, txId, p.NumberOfLastDigits)
+			item.Padded = []byte(result)
+			
+			var prize *Decimal
+			var points int64
+			n := CountHexDigit(result, '8')
+			if p.SpecPrizeMatchCount > 0 && n >= p.SpecPrizeMatchCount {
+				var assetAmt *Decimal
+				if isPlainAsset {
+					assetAmt = indexer.NewDecimal(p.SatsValueInPool, p.Divisibility)
+				} else {
+					assetAmt = p.AssetAmtInPool.Clone()
+				}
+				prize = assetAmt.Mul(specPrize)
+			} else if p.FirstPrizeMatchCount > 0 && n >= p.FirstPrizeMatchCount {
+				prize, _ = indexer.NewDecimalFromString(p.FirstPrize, p.Divisibility)
+			} else if p.SecondPrizeMatchCount > 0 && n >= p.SecondPrizeMatchCount {
+				prize, _ = indexer.NewDecimalFromString(p.SecondPrize, p.Divisibility)
+			} else if p.ThirdPrizeMatchCount > 0 && n >= p.ThirdPrizeMatchCount {
+				prize, _ = indexer.NewDecimalFromString(p.ThirdPrize, p.Divisibility)
+			}
+
+			// TODO 是否在分配奖金时，分配一部分给foundation和服务节点？
+			if prize.Sign() != 0 {
+				addItemToMap(item, p.rewardMap) // item 转到这里继续处理
+				if isPlainAsset {
+					item.OutValue = prize.Floor()
+					p.SatsValueInPool -= item.OutValue
+				} else {
+					item.OutAmt = prize
+					p.AssetAmtInPool = p.AssetAmtInPool.Sub(item.OutAmt)
+				}
+			} else {
+				// 仅获得points奖励
+				points = 10
+				item.Done = DONE_CLOSED_DIRECTLY
+	
+				invoker := p.loadTraderInfo(item.Address)
+				invoker.TotalRewardPoints += points
+				invokers[item.Address] = invoker
+
+				p.TotalPoints += points
+			}
+
+			updated = true
+			Log.Infof("item %s processed: amt=%s, value=%d, points=%d", item.InUtxo,
+				item.OutAmt.String(), item.OutValue, points)
 		}
-		invoker.TotalRewardPoints += points
-		invokers[item.Address] = invoker
-
-		if prize.Sign() != 0 {
-			addItemToMap(item, p.rewardMap)
-		}
-
-		SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
-
-		updated = true
-		// Log.Infof("item processed: amt=%s, value=%d, price=%s, BUY %s <-> SELL %s, ",
-		// 	matchAmt.String(), matchValue, sell.UnitPrice.String(), buy.InUtxo, sell.InUtxo)
 	}
 
 	for _, invoker := range invokers {
 		saveContractInvokerStatus(p.stp.GetDB(), url, invoker)
 	}
 
-	for _, item := range invalidItems {
+	for _, item := range processedItems {
 		removeItemFromMap(item, p.recycleMap)
 		SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 	}
@@ -1288,9 +1324,9 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	p.TotalInputAssets = p.TotalInputAssets.Add(dealInfo.TotalAmt)
-	p.TotalInputSats += dealInfo.TotalValue
-	p.TotalInputCount++
+	p.TotalRewardAmt = p.TotalRewardAmt.Add(dealInfo.TotalAmt)
+	p.TotalRewardValue += dealInfo.TotalValue
+	p.TotalRewardCount++
 	p.TotalFeeValue += dealInfo.Fee
 
 	url := p.URL()
@@ -1303,7 +1339,7 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 			deleted := make([]int64, 0)
 			for _, item := range rewardMap {
 				h, _, _ := indexer.FromUtxoId(item.UtxoId)
-				if h > height {
+				if h != height {
 					continue
 				}
 				if item.Done != DONE_NOTYET {
@@ -1313,7 +1349,7 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 				item.OutTxId = txId
 				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 				deleted = append(deleted, item.Id)
-				delete(p.history, item.InUtxo)
+				delete(p.history, item.InUtxo) // TODO 如果主网的调用，不要从history中删除，至少保留6个区块后再删除
 			}
 
 			for _, id := range deleted {
