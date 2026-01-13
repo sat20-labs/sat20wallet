@@ -1762,10 +1762,21 @@ func (p *LaunchPoolContractRunTime) launch() error {
 		p.mutex.Unlock()
 		p.stp.SaveReservation(p.resv)
 		Log.Infof("contract %s closed", p.URL())
-
 	} else {
-		// 在 HandleUnlockReq 等待peer的操作
-		Log.Infof("server: waiting the close of contract %s ", p.URL())
+		if len(p.mintInfoMap) == 0 {
+			// 没有任何铸造数据，那现在就是超时直接关闭
+			p.mutex.Lock()
+			p.isSending = false
+			p.IsLaunching = false
+			p.Status = CONTRACT_STATUS_CLOSED
+			p.resv.SetStatus(RS_DEPLOY_CONTRACT_COMPLETED)
+			p.mutex.Unlock()
+			p.stp.SaveReservation(p.resv)
+			Log.Infof("contract %s closed", p.URL())
+		} else {
+			// 在 HandleUnlockReq 等待peer的操作
+			Log.Infof("server: waiting the close of contract %s ", p.URL())
+		}
 	}
 
 	return nil
