@@ -19,7 +19,6 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-
 func init() {
 	// 让 gob 知道旧的类型对应新的实现
 	gob.RegisterName("RecycleContractRunTime", new(RecycleContractRunTime))
@@ -29,7 +28,6 @@ func init() {
 		_addressLimit = 1
 	}
 }
-
 
 /*
 垃圾utxo回收合约
@@ -50,10 +48,10 @@ type RecycleContract struct {
 	SecondPrizeMatchCount int
 	ThirdPrizeMatchCount  int
 
-	SpecPrize   int       // 池子中的百分比    
-	FirstPrize 	string  
+	SpecPrize   int // 池子中的百分比
+	FirstPrize  string
 	SecondPrize string
-	ThirdPrize 	string
+	ThirdPrize  string
 }
 
 func NewRecycleContract() *RecycleContract {
@@ -63,7 +61,6 @@ func NewRecycleContract() *RecycleContract {
 		},
 	}
 }
-
 
 func (p *RecycleContract) CheckContent() error {
 	if indexer.IsPlainAsset(&p.AssetName) {
@@ -148,7 +145,6 @@ func (p *RecycleContract) Content() string {
 	return string(b)
 }
 
-
 func (p *RecycleContract) Encode() ([]byte, error) {
 	base, err := p.ContractBase.Encode()
 	if err != nil {
@@ -229,18 +225,17 @@ func (p *RecycleContract) Decode(data []byte) error {
 	return nil
 }
 
-
 func (p *RecycleContract) DeployFee(feeRate int64) int64 {
 	return DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT + // 服务费，如果不需要，可以在外面扣除
-	DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE + // 部署该合约需要的网络费用和调用合约费用
-	DEFAULT_FEE_SATSNET // 激活合约的网络费用
+		DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE + // 部署该合约需要的网络费用和调用合约费用
+		DEFAULT_FEE_SATSNET // 激活合约的网络费用
 }
 
 func (p *RecycleContract) InvokeParam(action string) string {
 	if action != INVOKE_API_RECYCLE {
 		return ""
 	}
-	
+
 	var param InvokeParam
 	param.Action = action
 	param.Param = ""
@@ -256,8 +251,7 @@ func (p *RecycleContract) CalcStaticMerkleRoot() []byte {
 	return CalcContractStaticMerkleRoot(p)
 }
 
-
-// 2. 定义合约调用的数据结构 
+// 2. 定义合约调用的数据结构
 
 // InvokeParam
 type RecycleInvokeParam struct {
@@ -297,11 +291,11 @@ func (p *RecycleInvokeParam) Decode(data []byte) error {
 
 type RecycleInvokerStatus struct {
 	InvokerStatusBaseV2
-	
-	TotalRewardAmt        *Decimal
-	TotalRewardValue      int64
-	TotalRewardPoints     int64
-	TotalClaimPoints      int64
+
+	TotalRewardAmt    *Decimal
+	TotalRewardValue  int64
+	TotalRewardPoints int64
+	TotalClaimPoints  int64
 }
 
 func NewRecycleInvokerStatus(address string, divisibility int) *RecycleInvokerStatus {
@@ -318,7 +312,6 @@ func (p *RecycleInvokerStatus) GetKey() string {
 	return p.Address
 }
 
-
 func (p *RecycleInvokerStatus) GetInvokeCount() int {
 	return p.InvokeCount
 }
@@ -329,7 +322,7 @@ func (p *RecycleInvokerStatus) GetHistory() map[int][]int64 {
 
 // 非数据记录
 type RecycleInvokerStatistic struct {
-	InvokeCount int
+	InvokeCount  int
 	InvokeAmt    string
 	InvokeValue  int64
 	RewardAmt    string
@@ -342,23 +335,22 @@ type RecycleContractRunningData_old = RecycleContractRunningData
 
 // 4. 定义合约运行时需要维护的数据
 type RecycleContractRunningData struct {
-	BlockHashMap         map[int]string // 缓存没有处理过的block的hash
-	AssetAmtInPool       *Decimal
-	SatsValueInPool      int64    // 池子中聪的数量
-	TotalInputSats       int64
-	TotalInputAssets     *Decimal // 所有进入池子的资产数量，指主网上每个地址参与回收的每个TX的输入资产总量
-	TotalRewardCount     int      // 获奖交易计数
-	TotalRewardAmt       *Decimal // 所有奖励出去的资产数量
-	TotalRewardValue     int64    // 所有奖励出去的聪数量
-	TotalPoints          int64    // 没有获得奖励，就能获得积分
-	TotalClaimPoints     int64    // 所有已经领取的积分
-	TotalFeeValue        int64    // 所有由合约支付的相关交易的网络费用
+	BlockHashMap     map[int]string // 缓存没有处理过的block的hash
+	AssetAmtInPool   *Decimal
+	SatsValueInPool  int64 // 池子中聪的数量
+	TotalInputSats   int64
+	TotalInputAssets *Decimal // 所有进入池子的资产数量，指主网上每个地址参与回收的每个TX的输入资产总量
+	TotalRewardCount int      // 获奖交易计数
+	TotalRewardAmt   *Decimal // 所有奖励出去的资产数量
+	TotalRewardValue int64    // 所有奖励出去的聪数量
+	TotalPoints      int64    // 没有获得奖励，就能获得积分
+	TotalClaimPoints int64    // 所有已经领取的积分
+	TotalFeeValue    int64    // 所有由合约支付的相关交易的网络费用
 }
 
 func (p *RecycleContractRunningData) ToNewVersion() *RecycleContractRunningData {
 	return p
 }
-
 
 // 5. 定义合约保存到数据库中的数据
 type RecycleContractRunTimeInDB struct {
@@ -373,21 +365,20 @@ type RecycleContractRunTimeInDB struct {
 type RecycleContractRunTime struct {
 	RecycleContractRunTimeInDB
 
-	history          map[string]*InvokeItem
-	invokerMap       map[string]*RecycleInvokerStatus // key: address
-	recycleMap       map[string]map[int64]*InvokeItem // 还在处理中的调用, address -> invoke item list,
-	rewardMap        map[string]map[int64]*InvokeItem // 获奖的item
-	isSending        bool
+	history    map[string]*InvokeItem
+	invokerMap map[string]*RecycleInvokerStatus // key: address
+	recycleMap map[string]map[int64]*InvokeItem // 还在处理中的调用, address -> invoke item list,
+	rewardMap  map[string]map[int64]*InvokeItem // 获奖的item
+	isSending  bool
 
-	responseCache     []*responseItem_recycle
-	responseStatus    Response_RecycleContract
+	responseCache  []*responseItem_recycle
+	responseStatus Response_RecycleContract
 }
-
 
 func NewRecycleContractRunTime(stp ContractManager) *RecycleContractRunTime {
 	p := &RecycleContractRunTime{
 		RecycleContractRunTimeInDB: RecycleContractRunTimeInDB{
-			RecycleContract: *NewRecycleContract(),
+			RecycleContract:     *NewRecycleContract(),
 			ContractRuntimeBase: *NewContractRuntimeBase(stp),
 			RecycleContractRunningData: RecycleContractRunningData{
 				BlockHashMap: make(map[int]string),
@@ -443,7 +434,6 @@ func (p *RecycleContractRunTime) InitFromDB(stp ContractManager, resv ContractDe
 	return nil
 }
 
-
 // 只计算在 calcAssetMerkleRoot 之前已经确定的数据，其他在广播TX之后才修改的数据暂时不要管，不然容易导致数据不一致
 func CalcRecycleContractRunningDataMerkleRoot(r *RecycleContractRunningData) []byte {
 	var buf []byte
@@ -462,7 +452,6 @@ func CalcRecycleContractRunningDataMerkleRoot(r *RecycleContractRunningData) []b
 	Log.Debugf("hash: %s", hex.EncodeToString(result))
 	return result
 }
-
 
 // 调用前自己加锁
 func (p *RecycleContractRunTime) CalcRuntimeMerkleRoot() []byte {
@@ -530,11 +519,9 @@ func (p *RecycleContractRunTime) GobDecode(data []byte) error {
 	return nil
 }
 
-
 func (p *RecycleContractRunTime) GetAssetAmount() (*Decimal, int64) {
 	return p.AssetAmtInPool, p.SatsValueInPool
 }
-
 
 // 7. rpc接口和相关数据结构定义
 
@@ -550,7 +537,6 @@ func (p *RecycleContractRunTime) RuntimeContent() []byte {
 	return b
 }
 
-
 func (p *RecycleContractRunTime) updateResponseData() {
 	if p.refreshTime == 0 {
 		p.mutex.Lock()
@@ -564,7 +550,6 @@ func (p *RecycleContractRunTime) updateResponseData() {
 		p.refreshTime = time.Now().Unix()
 	}
 }
-
 
 func (p *RecycleContractRunTime) RuntimeStatus() string {
 
@@ -581,7 +566,6 @@ func (p *RecycleContractRunTime) RuntimeStatus() string {
 	return string(buf)
 }
 
-
 func (p *RecycleContractRunTime) RuntimeAnalytics() string {
 	p.updateResponseData()
 
@@ -597,18 +581,16 @@ func (p *RecycleContractRunTime) RuntimeAnalytics() string {
 	return ""
 }
 
-
 func (p *RecycleContractRunTime) InvokeHistory(f any, start, limit int) string {
 	p.updateResponseData()
 
 	return p.GetRuntimeBase().InvokeHistory(f, start, limit)
 }
 
-
 type responseItem_recycle struct {
-	Address     string   `json:"address"`
-	Invoke      string   `json:"invoke"`
-	Reward      string   `json:"reward"`
+	Address string `json:"address"`
+	Invoke  string `json:"invoke"`
+	Reward  string `json:"reward"`
 }
 
 type Response_RecycleContract struct {
@@ -623,8 +605,8 @@ func (p *RecycleContractRunTime) AllAddressInfo(start, limit int) string {
 	defer p.mutex.RUnlock()
 
 	type response struct {
-		Total int                  `json:"total"`
-		Start int                  `json:"start"`
+		Total int                     `json:"total"`
+		Start int                     `json:"start"`
 		Data  []*responseItem_recycle `json:"data"`
 	}
 
@@ -653,9 +635,9 @@ func (p *RecycleContractRunTime) AllAddressInfo(start, limit int) string {
 }
 
 type Response_InvokerStatus struct {
-	Statistic   *RecycleInvokerStatistic `json:"status"`
-	InvokeList []string                  `json:"invokes"`
-	RewardList []string                  `json:"rewards"`
+	Statistic  *RecycleInvokerStatistic `json:"status"`
+	InvokeList []string                 `json:"invokes"`
+	RewardList []string                 `json:"rewards"`
 }
 
 func (p *RecycleContractRunTime) StatusByAddress(address string) (string, error) {
@@ -665,25 +647,23 @@ func (p *RecycleContractRunTime) StatusByAddress(address string) (string, error)
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
-	
-
 	result := &Response_InvokerStatus{}
 	trader := p.loadTraderInfo(address)
 	if trader != nil {
 		result.Statistic = &RecycleInvokerStatistic{
-			InvokeCount: trader.GetInvokeCount(),
-			InvokeAmt: trader.GetInvokeAmt().String(),
-			InvokeValue: trader.GetInvokeValue(),
-			RewardAmt: trader.TotalRewardAmt.String(),
-			RewardValue: trader.TotalRewardValue,
+			InvokeCount:  trader.GetInvokeCount(),
+			InvokeAmt:    trader.GetInvokeAmt().String(),
+			InvokeValue:  trader.GetInvokeValue(),
+			RewardAmt:    trader.TotalRewardAmt.String(),
+			RewardValue:  trader.TotalRewardValue,
 			RewardPoints: trader.TotalRewardPoints,
-			ClaimPoints: trader.TotalClaimPoints,
+			ClaimPoints:  trader.TotalClaimPoints,
 		}
 		invokes := p.recycleMap[address]
 		for _, v := range invokes {
 			result.InvokeList = append(result.InvokeList, v.InUtxo)
 		}
-		
+
 		rewards := p.rewardMap[address]
 		for _, v := range rewards {
 			result.RewardList = append(result.RewardList, v.InUtxo)
@@ -703,7 +683,6 @@ func (p *RecycleContractRunTime) GetInvokerStatus(address string) InvokerStatus 
 	return p.loadTraderInfo(address)
 }
 
-
 func (p *RecycleContractRunTime) loadTraderInfo(address string) *RecycleInvokerStatus {
 	status, ok := p.invokerMap[address]
 	if ok {
@@ -722,12 +701,11 @@ func (p *RecycleContractRunTime) loadTraderInfo(address string) *RecycleInvokerS
 
 	p.invokerMap[address] = status
 	return status
-} 
+}
 
 func (p *RecycleContractRunTime) DeploySelf() bool {
 	return false
 }
-
 
 func (p *RecycleContractRunTime) AllowDeploy() error {
 
@@ -745,7 +723,6 @@ func (p *RecycleContractRunTime) AllowDeploy() error {
 	return nil
 }
 
-
 // return fee: 调用费用+该invoke需要的聪数量
 func (p *RecycleContractRunTime) CheckInvokeParam(param string) (int64, error) {
 	var invoke InvokeParam
@@ -756,13 +733,11 @@ func (p *RecycleContractRunTime) CheckInvokeParam(param string) (int64, error) {
 	//assetName := p.GetAssetName()
 	templateName := p.GetTemplateName()
 	switch invoke.Action {
-	
 
 	case INVOKE_API_RECYCLE:
 		if templateName != TEMPLATE_CONTRACT_RECYCLE {
 			return 0, fmt.Errorf("unsupport")
 		}
-
 
 		return 0, nil
 
@@ -770,40 +745,6 @@ func (p *RecycleContractRunTime) CheckInvokeParam(param string) (int64, error) {
 		return 0, fmt.Errorf("unsupport action %s", invoke.Action)
 	}
 
-}
-
-func (p *RecycleContractRunTime) processInvoke_SatsNet(data *InvokeDataInBlock_SatsNet) error {
-
-	err := p.AllowInvoke()
-	if err == nil {
-
-		bUpdate := false
-		for _, tx := range data.InvokeTxVect {
-			if !p.IsMyInvoke_SatsNet(tx) {
-				continue
-			}
-			err := p.CheckInvokeTx_SatsNet(tx)
-			if err != nil {
-				Log.Warningf("%s CheckInvokeTx_SatsNet failed, %v", p.RelativePath(), err)
-				continue
-			}
-
-			_, err = p.Invoke_SatsNet(tx, data.Height)
-			if err == nil {
-				Log.Infof("%s Invoke_SatsNet %s succeed", p.RelativePath(), tx.Tx.TxID())
-				bUpdate = true
-			} else {
-				Log.Errorf("%s Invoke_SatsNet %s failed, %v", p.RelativePath(), tx.Tx.TxID(), err)
-			}
-		}
-		if bUpdate {
-			p.refreshTime = 0
-			p.stp.SaveReservation(p.resv)
-		}
-	} else {
-		//Log.Infof("%s not allowed yet, %v", p.RelativePath(), err)
-	}
-	return nil
 }
 
 func (p *RecycleContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_SatsNet) error {
@@ -814,46 +755,13 @@ func (p *RecycleContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock
 	}
 
 	p.mutex.Lock()
-	p.processInvoke_SatsNet(data)
+	p.PreprocessInvokeData_SatsNet(data)
 	// p.recycle() 不需要调用，等主网区块过块时一起处理
 	p.ContractRuntimeBase.InvokeCompleted_SatsNet(data)
 	p.mutex.Unlock()
 
 	// 发送
 	// p.sendInvokeResultTx_SatsNet()
-	return nil
-}
-
-func (p *RecycleContractRunTime) processInvoke(data *InvokeDataInBlock) error {
-
-	err := p.AllowInvoke()
-	if err == nil {
-		bUpdate := false
-		for _, tx := range data.InvokeTxVect {
-			if !p.IsMyInvoke(tx) {
-				continue
-			}
-			err := p.CheckInvokeTx(tx)
-			if err != nil {
-				Log.Warningf("%s CheckInvokeTx failed, %v", p.RelativePath(), err)
-				continue
-			}
-
-			_, err = p.Invoke(tx, data.Height)
-			if err == nil {
-				Log.Infof("%s invoke %s succeed", p.RelativePath(), tx.Tx.TxID())
-				bUpdate = true
-			} else {
-				Log.Infof("%s invoke %s failed, %v", p.RelativePath(), tx.Tx.TxID(), err)
-			}
-		}
-		if bUpdate {
-			p.refreshTime = 0
-			p.stp.SaveReservation(p.resv)
-		}
-	} else {
-		Log.Infof("%s allowInvoke failed, %v", p.URL(), err)
-	}
 	return nil
 }
 
@@ -866,22 +774,22 @@ func (p *RecycleContractRunTime) InvokeWithBlock(data *InvokeDataInBlock) error 
 
 	if p.IsActive() {
 		p.mutex.Lock()
-		p.processInvoke(data)
-		p.recycle(data.Height, data.BlockHash)
-		p.ContractRuntimeBase.InvokeCompleted(data)
+		p.PreprocessInvokeData(data)
+		p.process(data.Height, data.BlockHash)
+		p.InvokeCompleted(data)
 		p.mutex.Unlock()
 
 		p.sendInvokeResultTx()
 	} else {
 		p.mutex.Lock()
-		p.ContractRuntimeBase.InvokeCompleted(data)
+		p.InvokeCompleted(data)
 		p.mutex.Unlock()
 	}
 
 	return nil
 }
 
-func (p *RecycleContractRunTime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height int) (InvokeHistoryItem, error) {
+func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeTx_SatsNet, height int) (InvokeHistoryItem, error) {
 
 	invokeData := invokeTx.InvokeParam
 	output := invokeTx.TxOutput
@@ -902,7 +810,7 @@ func (p *RecycleContractRunTime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, heig
 
 	url := p.URL()
 	switch param.Action {
-	
+
 	case INVOKE_API_RECYCLE:
 		paramBytes, err := base64.StdEncoding.DecodeString(param.Param)
 		if err != nil {
@@ -934,7 +842,7 @@ func (p *RecycleContractRunTime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, heig
 	}
 }
 
-func (p *RecycleContractRunTime) Invoke(invokeTx *InvokeTx, height int) (InvokeHistoryItem, error) {
+func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, height int) (InvokeHistoryItem, error) {
 
 	invokeData := invokeTx.InvokeParam
 	output := invokeTx.TxOutput
@@ -1002,7 +910,6 @@ func (p *RecycleContractRunTime) Invoke(invokeTx *InvokeTx, height int) (InvokeH
 	}
 }
 
-
 // 通用的调用参数入口
 func (p *RecycleContractRunTime) updateContract(
 	invoker string, output *sindexer.TxOutput, bValid bool,
@@ -1059,7 +966,6 @@ func (p *RecycleContractRunTime) updateContract(
 	return item
 }
 
-
 // 更新需要写入数据库的数据
 func (p *RecycleContractRunTime) updateContractStatus(item *SwapHistoryItem) {
 	p.history[item.InUtxo] = item
@@ -1072,7 +978,7 @@ func (p *RecycleContractRunTime) updateContractStatus(item *SwapHistoryItem) {
 	p.TotalInputSats += item.InValue
 	p.SatsValueInPool += item.InValue
 	p.AssetAmtInPool = p.AssetAmtInPool.Add(item.InAmt)
-	
+
 	if item.Reason == INVOKE_REASON_NORMAL {
 		trader.InvokeAmt = trader.InvokeAmt.Add(item.InAmt)
 		trader.InvokeValue += item.InValue
@@ -1082,7 +988,6 @@ func (p *RecycleContractRunTime) updateContractStatus(item *SwapHistoryItem) {
 	// 整体状态在外部保存
 }
 
-
 // 不需要写入数据库的缓存数据，不能修改任何需要保存数据库的变量
 func (p *RecycleContractRunTime) addItem(item *SwapHistoryItem) {
 	if item.Reason == INVOKE_REASON_NORMAL {
@@ -1090,14 +995,14 @@ func (p *RecycleContractRunTime) addItem(item *SwapHistoryItem) {
 		case ORDERTYPE_RECYCLE:
 			addItemToMap(item, p.recycleMap)
 		}
-	} 
+	}
 
 	p.insertBuck(item)
 }
 
 // XorLastNHex XORs the last n hex digits of blockHash and txId
 // digit by digit (nibble-by-nibble) and returns an n-digit hex string.
-func XorLastNHex(blockHash, txId string, n int) (string) {
+func XorLastNHex(blockHash, txId string, n int) string {
 	if n <= 0 {
 		return ""
 	}
@@ -1123,7 +1028,7 @@ func XorLastNHex(blockHash, txId string, n int) (string) {
 }
 
 // convert hex char to 0..15
-func hexDigit(c byte) (byte) {
+func hexDigit(c byte) byte {
 	switch {
 	case c >= '0' && c <= '9':
 		return c - '0'
@@ -1142,10 +1047,9 @@ func toHexDigit(v byte) byte {
 	return 'a' + (v - 10)
 }
 
-
 // CountHexDigit counts how many times a given hex digit appears in a hex string.
 // digit must be 0-9 or a-f (case-insensitive).
-func CountHexDigit(hexStr string, digit byte) (int) {
+func CountHexDigit(hexStr string, digit byte) int {
 	// normalize
 	hexStr = strings.ToLower(hexStr)
 	digit = byte(strings.ToLower(string(digit))[0])
@@ -1169,9 +1073,8 @@ func CountHexDigit(hexStr string, digit byte) (int) {
 	return count
 }
 
-
 // 执行回收，每个L1区块统一执行一次
-func (p *RecycleContractRunTime) recycle(height int, blockHash string) error {
+func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 
 	if len(p.recycleMap) == 0 {
 		return nil
@@ -1188,7 +1091,7 @@ func (p *RecycleContractRunTime) recycle(height int, blockHash string) error {
 	blockHash = p.BlockHashMap[height]
 	delete(p.BlockHashMap, height)
 
-	Log.Debugf("%s start contract %s with action recycle with block %d %s", 
+	Log.Debugf("%s start contract %s with action recycle with block %d %s",
 		p.stp.GetMode(), p.URL(), height, blockHash)
 
 	url := p.URL()
@@ -1221,11 +1124,11 @@ func (p *RecycleContractRunTime) recycle(height int, blockHash string) error {
 				item.Done = DONE_CLOSED_DIRECTLY
 				continue
 			}
-			
+
 			// 分别取最后8个数字做异或，然后按照中奖规则判断是否中奖
 			result := XorLastNHex(blockHash, txId, p.NumberOfLastDigits)
 			item.Padded = []byte(result)
-			
+
 			var prize *Decimal
 			var points int64
 			n := CountHexDigit(result, '8')
@@ -1259,7 +1162,7 @@ func (p *RecycleContractRunTime) recycle(height int, blockHash string) error {
 				// 仅获得points奖励
 				points = 10
 				item.Done = DONE_CLOSED_DIRECTLY
-	
+
 				invoker := p.loadTraderInfo(item.Address)
 				invoker.TotalRewardPoints += points
 				invokers[item.Address] = invoker
@@ -1287,10 +1190,8 @@ func (p *RecycleContractRunTime) recycle(height int, blockHash string) error {
 		p.stp.SaveReservation(p.resv)
 	}
 
-
 	return nil
 }
-
 
 // 涉及发送各种tx，运行在线程中
 func (p *RecycleContractRunTime) sendInvokeResultTx() error {
@@ -1318,7 +1219,6 @@ func (p *RecycleContractRunTime) sendInvokeResultTx_SatsNet() error {
 	}
 	return nil
 }
-
 
 func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 	p.mutex.Lock()
@@ -1375,7 +1275,6 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 
 	p.refreshTime = 0
 }
-
 
 func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 
@@ -1495,7 +1394,7 @@ func (p *RecycleContractRunTime) reward() error {
 		p.mutex.RLock()
 		height := p.CurrBlock
 		p.mutex.RUnlock()
-		
+
 		dealInfo := p.genRewardInfo(height)
 		// 发送
 		if len(dealInfo.SendInfo) != 0 {
@@ -1520,7 +1419,7 @@ func (p *RecycleContractRunTime) reward() error {
 			p.stp.SaveReservationWithLock(p.resv)
 			Log.Infof("contract %s withdraw completed, %s", url, txId)
 		}
-		
+
 		Log.Debugf("contract %s withdraw completed", url)
 	} else {
 		Log.Debugf("server: waiting the withdraw Tx of contract %s ", p.URL())
@@ -1528,7 +1427,6 @@ func (p *RecycleContractRunTime) reward() error {
 
 	return nil
 }
-
 
 func (p *RecycleContractRunTime) AllowPeerAction(action string, param any) (any, error) {
 
@@ -1550,12 +1448,12 @@ func (p *RecycleContractRunTime) AllowPeerAction(action string, param any) (any,
 			return nil, fmt.Errorf("not RemoteSignMoreData_Contract")
 		}
 
-		// 1. 读取交易信息	
+		// 1. 读取交易信息
 		// dealInfo, err := p.genRewardInfoFromReq(req)
 		// if err == nil {
 		// 	return dealInfo, nil
 		// }
-		
+
 		var dealInfo *DealInfo
 		var transcendTx *swire.MsgTx
 		inscribes, preOutputs, err := ParseInscribeInfo(req.Tx)
@@ -1572,10 +1470,10 @@ func (p *RecycleContractRunTime) AllowPeerAction(action string, param any) (any,
 				if err != nil {
 					return nil, err
 				}
-			
+
 			case "commit", "reveal":
 				// ParseInscribeInfo
-	
+
 			case "": // main tx
 				if txInfo.L1Tx {
 					tx, err := DecodeMsgTx(txInfo.Tx)
@@ -1596,7 +1494,7 @@ func (p *RecycleContractRunTime) AllowPeerAction(action string, param any) (any,
 						return nil, err
 					}
 				}
-				
+
 			default:
 				return nil, fmt.Errorf("not support %s", txInfo.Reason)
 			}
@@ -1702,11 +1600,11 @@ func (p *RecycleContractRunTime) AllowPeerAction(action string, param any) (any,
 				dest := dealInfo.SendInfo[insc.DestAddr]
 				if dest.AssetName.String() != insc.AssetName.String() {
 					return nil, fmt.Errorf("inscribe: different asset name, expected %s but %s",
-				 		dest.AssetName.String(), insc.AssetName.String())
+						dest.AssetName.String(), insc.AssetName.String())
 				}
 				if dest.AssetAmt.Cmp(insc.Amt) != 0 {
 					return nil, fmt.Errorf("inscribe: different asset amt, expected %s but %s",
-				 		dest.AssetAmt.String(), insc.Amt )
+						dest.AssetAmt.String(), insc.Amt)
 				}
 
 				inputs := make([]*TxOutput, 0)
@@ -1724,7 +1622,7 @@ func (p *RecycleContractRunTime) AllowPeerAction(action string, param any) (any,
 					dealInfo.PreOutputs = append(dealInfo.PreOutputs, output)
 				}
 				insc2, err := p.stp.GetWalletMgr().MintTransferV2_brc20(p.ChannelAddr,
-					p.ChannelAddr, map[string]bool{}, insc.AssetName, insc.Amt, insc.FeeRate, 
+					p.ChannelAddr, map[string]bool{}, insc.AssetName, insc.Amt, insc.FeeRate,
 					inputs, true, insc.RevealPrivateKey, true, false, false)
 				if err != nil {
 					return nil, fmt.Errorf("can't regenerate inscribe info from request: %v", insc)
@@ -1748,7 +1646,6 @@ func (p *RecycleContractRunTime) AllowPeerAction(action string, param any) (any,
 
 		Log.Infof("%s is allowed by contract %s (reason: %s)", wwire.STP_ACTION_SIGN, p.URL(), dealInfo.Reason)
 		return dealInfo, nil
-
 
 	default:
 		return nil, fmt.Errorf("AllowPeerAction not support action %s", action)
@@ -1786,7 +1683,6 @@ func (p *RecycleContractRunTime) SetPeerActionResult(action string, param any) {
 		return
 	}
 }
-
 
 // 获取reward数据，同时做检查
 func (p *RecycleContractRunTime) genRewardInfoFromReq(req *wwire.RemoteSignMoreData_Contract) (*DealInfo, error) {
@@ -1856,7 +1752,7 @@ func (p *RecycleContractRunTime) genRewardInfoFromReq(req *wwire.RemoteSignMoreD
 		if !ok {
 			return nil, fmt.Errorf("invalid destination address %s", destAddr)
 		}
-		
+
 		bFound := false
 		for _, item := range items {
 			if item.InUtxo == anchorData.Utxo {

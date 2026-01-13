@@ -19,12 +19,10 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-
 func init() {
 	// 让 gob 知道旧的类型对应新的实现
 	gob.RegisterName("*stp.LaunchPoolContractRunTime", new(LaunchPoolContractRunTime))
 }
-
 
 const (
 	LAUNCH_POOL_MIN_RATION int = 60 // %
@@ -325,7 +323,7 @@ func (p *LaunchPoolContract) DeployFee(feeRate int64) int64 {
 }
 
 // 仅仅是估算，并且尽可能多预估了输入和输出
-func CalcFee_SplicingIn(utxoLen, feeLen int, assetName *indexer.AssetName, feeRate int64, 
+func CalcFee_SplicingIn(utxoLen, feeLen int, assetName *indexer.AssetName, feeRate int64,
 	stubNum int, stubValue int64) int64 {
 
 	var weightEstimate utils.TxWeightEstimator
@@ -507,8 +505,8 @@ type LaunchPoolContractRunTime struct {
 func NewLaunchPoolContractRuntime(stp ContractManager) *LaunchPoolContractRunTime {
 	r := &LaunchPoolContractRunTime{
 		LaunchPoolContractRunTimeInDB: LaunchPoolContractRunTimeInDB{
-			LaunchPoolContract: *NewLaunchPoolContract(),
-			ContractRuntimeBase: *NewContractRuntimeBase(stp),
+			LaunchPoolContract:    *NewLaunchPoolContract(),
+			ContractRuntimeBase:   *NewContractRuntimeBase(stp),
 			LaunchPoolRunningData: LaunchPoolRunningData{},
 		},
 	}
@@ -583,7 +581,6 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 	}
 
 	p.resv = resv
-
 
 	if p.DeployTickerResvId != 0 {
 		p.deployTickerResv = stp.GetWalletMgr().GetInscribeResv(p.DeployTickerResvId)
@@ -810,7 +807,7 @@ func deployTicker(stp ContractManager, resv ContractDeployResvIF, _ any) (any, e
 					return nil, err
 				}
 				contract.DeployTickerTxId = inscribeResv.CommitTx.TxID()
-			
+
 			case indexer.PROTOCOL_NAME_BRC20:
 				inscribeResv, err = stp.GetWalletMgr().DeployTicker_brc20(contract.AssetName.Ticker,
 					contract.MaxSupply, contract.MaxSupply, resv.GetFeeRate())
@@ -1100,7 +1097,6 @@ func (p *LaunchPoolContractRunTime) GetInvokerStatus(address string) InvokerStat
 	return nil
 }
 
-
 func (p *LaunchPoolContractRunTime) InvokeHistory(_ any, start, limit int) string {
 	type response struct {
 		Total int                `json:"total"`
@@ -1345,7 +1341,7 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 				continue
 			}
 
-			_, err = p.Invoke_SatsNet(tx, data.Height)
+			_, err = p.VerifyAndAcceptInvokeItem_SatsNet(tx, data.Height)
 			if err == nil {
 				Log.Infof("%s Invoke_SatsNet %s succeed", p.RelativePath(), tx.Tx.TxID())
 				bUpdate = true
@@ -1405,11 +1401,11 @@ func (p *LaunchPoolContractRunTime) LimitToMint() *Decimal {
 	return indexer.DecimalSub(p.MaxAssetToMint(), p.TotalMinted)
 }
 
-func (p *LaunchPoolContractRunTime) Invoke(invokeTx *InvokeTx, height int) (InvokeHistoryItem, error) {
+func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, height int) (InvokeHistoryItem, error) {
 	return nil, nil
 }
 
-func (p *LaunchPoolContractRunTime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height int) (InvokeHistoryItem, error) {
+func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeTx_SatsNet, height int) (InvokeHistoryItem, error) {
 
 	invokeData := invokeTx.InvokeParam
 	//output := invokeTx.Tx.TxOut[invokeTx.InvokeVout]

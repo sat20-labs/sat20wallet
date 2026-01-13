@@ -42,12 +42,10 @@ AMM V2 交易合约：组池子和动态调整池子
 
 */
 
-
 func init() {
 	// 让 gob 知道旧的类型对应新的实现
 	gob.RegisterName("*stp.AmmContractRuntime", new(AmmContractRuntime))
 }
-
 
 var (
 	DEFAULT_SETTLEMENT_PERIOD int = 100000 // 大约2周 10 * 60 * 24 * 7 // 一周
@@ -57,9 +55,9 @@ var (
 	PROFIT_SHARE_MARKET     int = 35 // 包括节点，每个节点10
 	PROFIT_SHARE_FOUNDATION int = 5  //
 
-	PROFIT_SHARE_LP_Decimal = indexer.NewDecimalWithScale(int64(PROFIT_SHARE_LP)*1000/100, 3)
-	PROFIT_SHARE_MARKET_Decimal = indexer.NewDecimalWithScale(int64(PROFIT_SHARE_MARKET)*1000/100, 3)
-	PROFIT_SHARE_FOUNDATION_Decimal = indexer.NewDecimalWithScale(int64(PROFIT_SHARE_FOUNDATION)*1000/100, 3)
+	PROFIT_SHARE_LP_Decimal                  = indexer.NewDecimalWithScale(int64(PROFIT_SHARE_LP)*1000/100, 3)
+	PROFIT_SHARE_MARKET_Decimal              = indexer.NewDecimalWithScale(int64(PROFIT_SHARE_MARKET)*1000/100, 3)
+	PROFIT_SHARE_FOUNDATION_Decimal          = indexer.NewDecimalWithScale(int64(PROFIT_SHARE_FOUNDATION)*1000/100, 3)
 	PROFIT_SHARE_FOUNDATION_WITH_SVR_Decimal = indexer.NewDecimalWithScale(int64(PROFIT_SHARE_FOUNDATION)*1000/(int64(PROFIT_SHARE_MARKET)*100), 3)
 
 	PROFIT_REINVESTING bool = false //
@@ -146,7 +144,7 @@ func (p *AmmContract) CheckContent() error {
 
 func (p *AmmContract) InvokeParam(action string) string {
 	// 过滤不支持的action
-	
+
 	var param InvokeParam
 	param.Action = action
 	innerParam := GetInvokeInnerParam(action)
@@ -277,7 +275,7 @@ type WithdrawInvokeParam struct {
 	OrderType int    `json:"orderType"`
 	AssetName string `json:"assetName"` // 资产名字
 	Amt       string `json:"amt"`       // 资产数量
-	FeeRate   int64  `json:"feeRate,omitempty"`   
+	FeeRate   int64  `json:"feeRate,omitempty"`
 }
 
 func (p *WithdrawInvokeParam) Encode() ([]byte, error) {
@@ -496,7 +494,6 @@ func (p *UnstakeInvokeParam) Encode() ([]byte, error) {
 		Script()
 }
 
-
 func (p *UnstakeInvokeParam) EncodeV2() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
@@ -533,8 +530,8 @@ func (p *UnstakeInvokeParam) Decode(data []byte) error {
 }
 
 type ProfitInvokeParam struct {
-	OrderType int       `json:"orderType"`
-	Ratio     string    `json:"ratio"`     // 所有利润的比例， 0-1
+	OrderType int    `json:"orderType"`
+	Ratio     string `json:"ratio"` // 所有利润的比例， 0-1
 }
 
 func (p *ProfitInvokeParam) Encode() ([]byte, error) {
@@ -564,7 +561,6 @@ func (p *ProfitInvokeParam) Decode(data []byte) error {
 	return nil
 }
 
-
 type LiqProviderInfo struct {
 	Address string
 	LptAmt  *Decimal
@@ -587,8 +583,8 @@ func NewAmmContractRuntime(stp ContractManager) *AmmContractRuntime {
 	p := &AmmContractRuntime{
 		SwapContractRuntime: SwapContractRuntime{
 			SwapContractRuntimeInDB: SwapContractRuntimeInDB{
-				Contract: NewAmmContract(),
-				ContractRuntimeBase: *NewContractRuntimeBase(stp),
+				Contract:                NewAmmContract(),
+				ContractRuntimeBase:     *NewContractRuntimeBase(stp),
 				SwapContractRunningData: SwapContractRunningData{},
 			},
 		},
@@ -656,12 +652,11 @@ func (p *AmmContractRuntime) InitFromDB(stp ContractManager, resv ContractDeploy
 		return err
 	}
 
-	
 	// 修复处理异常的removeliq
 	// if p.GetAssetName().String() == "ordx:f:pearl" {
 	// 	for _, items := range p.removeLiquidityMap {
 	// 		for _, item := range items {
-	// 			if item.OrderType == 10 && 
+	// 			if item.OrderType == 10 &&
 	// 			item.Done == 0 && len(item.Padded) != 0 {
 	// 				Log.Infof("%s removed lpt %s", item.InUtxo, item.ExpectedAmt.String())
 	// 				switch item.InUtxo {
@@ -683,8 +678,8 @@ func (p *AmmContractRuntime) InitFromDB(stp ContractManager, resv ContractDeploy
 	// 					trader := p.loadTraderInfo(item.Address)
 	// 					trader.RetrieveAmt = trader.RetrieveAmt.Add(indexer.NewDecimal(3452, 0))
 	// 					trader.RetrieveValue += 31487
-	// 				} 
-					
+	// 				}
+
 	// 				Log.Infof("item fixed: %v", item)
 	// 			}
 	// 		}
@@ -892,7 +887,7 @@ func (p *AmmContractRuntime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sat
 		beforeValue := p.SatsValueInPool
 		//Log.Infof("%s InvokeWithBlock_SatsNet %d %s %d", stp.GetMode(), data.Height, beforeAmt.String(), beforeValue)
 
-		p.processInvoke_SatsNet(data)
+		p.PreprocessInvokeData_SatsNet(data)
 		p.swap(beforeAmt, beforeValue)
 		p.settle(data.Height)
 		p.ContractRuntimeBase.InvokeCompleted_SatsNet(data)
@@ -922,7 +917,7 @@ func (p *AmmContractRuntime) InvokeWithBlock(data *InvokeDataInBlock) error {
 		beforeValue := p.SatsValueInPool
 		Log.Infof("%s InvokeWithBlock %d %s %d", p.stp.GetMode(), data.Height, beforeAmt.String(), beforeValue)
 
-		p.processInvoke(data)
+		p.PreprocessInvokeData(data)
 		// 确保在区块后马上执行swap，发送可以等等
 		p.swap(beforeAmt, beforeValue)
 		p.settle(data.Height)
@@ -1379,6 +1374,7 @@ func (p *AmmContractRuntime) updateLiquidity_add(oldAmtInPool *Decimal, oldValue
 type RemoveLPInfo struct {
 	LptAmt *Decimal
 }
+
 func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldValueInPool int64,
 	oldTotalLptAmt *Decimal, price *Decimal,
 	removeLiqMap map[string]*RemoveLPInfo, baseLpt bool) error {
@@ -1396,15 +1392,15 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 	var totalRemovedValue *Decimal
 
 	type retrieveInfo struct {
-		amt *Decimal
-		value *Decimal
+		amt          *Decimal
+		value        *Decimal
 		depositvalue int64
 	}
 
 	traders := make(map[string]*retrieveInfo)
 	svrRetrieveInfo := &retrieveInfo{}
 	foundationRetrieveInfo := &retrieveInfo{}
-	
+
 	// 先计算，不要保存任何数据！！！
 	for k, v := range removeLiqMap {
 		// 计算获得的资产数量
@@ -1469,11 +1465,11 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 				lpProfitValue := calcLPProfit_value(profitValue)
 				svrProfitValue := profitValue - lpProfitValue
 				discountRatio := indexer.NewDecimal(svrProfitValue, MAX_ASSET_DIVISIBILITY).Div(indexer.NewDecimal(totalRetrieveSats, MAX_ASSET_DIVISIBILITY))
-				
+
 				// 服务端的输出
 				svrRetrivevAmt := retrivevAmt.Mul(discountRatio)
 				svrRetrivevValue := retrivevValue.Mul(discountRatio)
-				
+
 				// 用户的输出
 				lpRetrieveAmt = retrivevAmt.Sub(svrRetrivevAmt)
 				lpRetrieveValue = retrivevValue.Sub(svrRetrivevValue)
@@ -1487,7 +1483,7 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 					foundationRetrivevValue := calcFoundationProfitBySvr(svrRetrivevValue)
 					marketRetrivevAmt := svrRetrivevAmt.Sub(foundationRetrivevAmt)
 					marketRetrivevValue := svrRetrivevValue.Sub(foundationRetrivevValue)
-					
+
 					svrRetrieveInfo.amt = svrRetrieveInfo.amt.Add(marketRetrivevAmt)
 					svrRetrieveInfo.value = svrRetrieveInfo.value.Add(marketRetrivevValue)
 					//svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
@@ -1512,10 +1508,10 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 			// 	delete(p.liquidityData.LPMap, k)
 			// }
 		}
-		
+
 		traderRetrieveInfo := &retrieveInfo{
-			amt: lpRetrieveAmt,
-			value: lpRetrieveValue,
+			amt:          lpRetrieveAmt,
+			value:        lpRetrieveValue,
 			depositvalue: depositValue,
 		}
 		traders[trader.InvokerStatusBase.Address] = traderRetrieveInfo
@@ -1550,7 +1546,7 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 			foundationRetrivevValue := calcFoundationProfitBySvr(svrRetrivevValue)
 			marketRetrivevAmt := svrRetrivevAmt.Sub(foundationRetrivevAmt)
 			marketRetrivevValue := svrRetrivevValue.Sub(foundationRetrivevValue)
-			
+
 			svrRetrieveInfo.amt = svrRetrieveInfo.amt.Add(marketRetrivevAmt)
 			svrRetrieveInfo.value = svrRetrieveInfo.value.Add(marketRetrivevValue)
 			// svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(marketRetrivevAmt)
@@ -1573,34 +1569,34 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 
 	// 最后验证
 	if totalRemovedLptAmt.Cmp(totalAddedFeeLptAmt) <= 0 {
-		str := fmt.Sprintf("totalAddedFeeLptAmt %s larger than totalRemovedLptAmt %s", 
+		str := fmt.Sprintf("totalAddedFeeLptAmt %s larger than totalRemovedLptAmt %s",
 			totalAddedFeeLptAmt.String(), totalRemovedLptAmt.String())
 		Log.Errorf(str)
-		return fmt.Errorf(str) 
+		return fmt.Errorf(str)
 	}
 	realRemovedLpt := totalRemovedLptAmt.Sub(totalAddedFeeLptAmt)
 
 	if p.AssetAmtInPool.Cmp(totalRemovedAmt) < 0 {
-		str := fmt.Sprintf("totalRemovedAmt %s larger than AssetAmtInPool %s", 
+		str := fmt.Sprintf("totalRemovedAmt %s larger than AssetAmtInPool %s",
 			totalRemovedAmt.String(), p.AssetAmtInPool.String())
 		Log.Errorf(str)
-		return fmt.Errorf(str) 
+		return fmt.Errorf(str)
 	}
 	if p.TotalLptAmt.Cmp(realRemovedLpt) < 0 {
-		str := fmt.Sprintf("realRemovedLpt %s larger than TotalLptAmt %s", 
+		str := fmt.Sprintf("realRemovedLpt %s larger than TotalLptAmt %s",
 			realRemovedLpt.String(), p.TotalLptAmt.String())
 		Log.Errorf(str)
-		return fmt.Errorf(str) 
+		return fmt.Errorf(str)
 	}
 	if p.SatsValueInPool < totalRemovedValue.Floor() {
-		str := fmt.Sprintf("totalRemovedValue %d larger than SatsValueInPool %d", 
+		str := fmt.Sprintf("totalRemovedValue %d larger than SatsValueInPool %d",
 			totalRemovedValue.Floor(), p.SatsValueInPool)
 		Log.Errorf(str)
-		return fmt.Errorf(str) 
+		return fmt.Errorf(str)
 	}
 
 	// 更新数据
-	Log.Infof("total removed lpt = %s, AddedFeeLpt = %s, retrieved asset %s %d", 
+	Log.Infof("total removed lpt = %s, AddedFeeLpt = %s, retrieved asset %s %d",
 		totalRemovedLptAmt.String(), totalAddedFeeLptAmt.String(), totalRemovedAmt.String(), totalRemovedValue)
 
 	if baseLpt {
@@ -1632,7 +1628,7 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 			}
 		}
 	}
-	
+
 	if !PROFIT_REINVESTING {
 		p.TotalFeeLptAmt = nil
 
@@ -1645,7 +1641,7 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 		foundation.RetrieveValue += foundationRetrieveInfo.value.Floor()
 		foundation.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
 		saveContractInvokerStatus(p.stp.GetDB(), url, foundation)
-	} 
+	}
 
 	// 更新池子数据
 	p.AssetAmtInPool = p.AssetAmtInPool.Sub(totalRemovedAmt)
@@ -1760,49 +1756,49 @@ func (p *AmmContractRuntime) removeLiquidity(oldAmtInPool *Decimal, oldValueInPo
 
 // AddSingleSidedLiquidity 仅增加聪
 func (p *AmmContractRuntime) addSingleSidedLiquidity(value int64) (lpMinted *Decimal, err error) {
-	
+
 	if value <= 0 {
 		return nil, fmt.Errorf("innvalid value")
 	}
-/*
-设池子当前状态（快照）：
-A = 池中资产 A（数量，单位：asset）
-B = 池中聪（sats）
-K=A⋅B
+	/*
+	   设池子当前状态（快照）：
+	   A = 池中资产 A（数量，单位：asset）
+	   B = 池中聪（sats）
+	   K=A⋅B
 
-用户只注入 ΔB（sats）。要实现 等效按比例注入（用户最终获得的 ΔA′,ΔB′ 满足 ΔA′/A=ΔB′/B），
-但用户没有直接提供 A，只提供 B。系统可以用用户提供的部分 B 去做「内部 B→A 的 swap」，产生 ΔA′。
+	   用户只注入 ΔB（sats）。要实现 等效按比例注入（用户最终获得的 ΔA′,ΔB′ 满足 ΔA′/A=ΔB′/B），
+	   但用户没有直接提供 A，只提供 B。系统可以用用户提供的部分 B 去做「内部 B→A 的 swap」，产生 ΔA′。
 
-变量：
-令 x = 用于内部 swap 的那部分 B（输入给 swap 的 B）
-则剩下直接进入池子的 B 数为 ΔB−x
-经过 B→A 的 swap（无手续费、恒定乘积模型），池中 A 会被减少到 
-AafterSwap=K/(B+x)。用户从池里拿走的 A（即 swap 给用户的 A）为
-amountAFromSwap=𝐴−𝐾/(𝐵+𝑥).
-这正是用户“通过 swap 得到”的 A，记作 ΔA′.
+	   变量：
+	   令 x = 用于内部 swap 的那部分 B（输入给 swap 的 B）
+	   则剩下直接进入池子的 B 数为 ΔB−x
+	   经过 B→A 的 swap（无手续费、恒定乘积模型），池中 A 会被减少到
+	   AafterSwap=K/(B+x)。用户从池里拿走的 A（即 swap 给用户的 A）为
+	   amountAFromSwap=𝐴−𝐾/(𝐵+𝑥).
+	   这正是用户“通过 swap 得到”的 A，记作 ΔA′.
 
-最终加入到池子实际被当作流动性的量为：
-ΔA′=amountAFromSwap （来自 swap）
-ΔB′=ΔB−x （未用于 swap，直接存入）
-我们要求：ΔA′/A = ΔB′/B
-代入并化简（注意 K=AB）：
-等式变为 𝑥/(𝐵+𝑥)=(Δ𝐵−𝑥)/𝐵
-整理成关于 x 的二次方程（把ΔB写为D）：
-移项得到 x^2+(2B−D)x−DB=0
-判别式 Δ=(2B−D)^2+4DB=D^2+4B^2
-正根（取能满足0≤x≤D 的）：
-x=[−(2B−D)+sqrt(D^2+4B^2)]/2
+	   最终加入到池子实际被当作流动性的量为：
+	   ΔA′=amountAFromSwap （来自 swap）
+	   ΔB′=ΔB−x （未用于 swap，直接存入）
+	   我们要求：ΔA′/A = ΔB′/B
+	   代入并化简（注意 K=AB）：
+	   等式变为 𝑥/(𝐵+𝑥)=(Δ𝐵−𝑥)/𝐵
+	   整理成关于 x 的二次方程（把ΔB写为D）：
+	   移项得到 x^2+(2B−D)x−DB=0
+	   判别式 Δ=(2B−D)^2+4DB=D^2+4B^2
+	   正根（取能满足0≤x≤D 的）：
+	   x=[−(2B−D)+sqrt(D^2+4B^2)]/2
 
-用该 x：
-ΔA′=A−K/(B+x)
-ΔB′=D−x
-并且满足 
-ΔA′/A=ΔB′/B
+	   用该 x：
+	   ΔA′=A−K/(B+x)
+	   ΔB′=D−x
+	   并且满足
+	   ΔA′/A=ΔB′/B
 
-然后按照常规比例铸造 LP：
-LPmint=LPtotal⋅ΔA′/A
-（等价地也可用 ΔB′/B）
-*/
+	   然后按照常规比例铸造 LP：
+	   LPmint=LPtotal⋅ΔA′/A
+	   （等价地也可用 ΔB′/B）
+	*/
 
 	// 原始状态
 	A := p.AssetAmtInPool.Clone()
@@ -1849,14 +1845,13 @@ LPmint=LPtotal⋅ΔA′/A
 	return lpMinted, nil
 }
 
-
 func (p *AmmContractRuntime) getBaseProfit() *Decimal {
 	if p.BaseLptAmt.Sign() <= 0 {
 		return nil
 	}
 	if p.k.Cmp(p.originalK) <= 0 {
 		return nil
-	} 
+	}
 
 	lptRatio := indexer.DecimalDiv(p.BaseLptAmt, p.TotalLptAmt)
 	k2 := indexer.DecimalMul(p.k, lptRatio)
@@ -1917,8 +1912,8 @@ func (p *AmmContractRuntime) removeBaseLiquidity(oldAmtInPool *Decimal, oldValue
 		var ratio *Decimal
 		for _, item := range v {
 			if item.Done == DONE_NOTYET &&
-			item.Reason == INVOKE_REASON_NORMAL &&
-			len(item.Padded) == 0 { // 还没处理
+				item.Reason == INVOKE_REASON_NORMAL &&
+				len(item.Padded) == 0 { // 还没处理
 				ratio = ratio.Add(item.ExpectedAmt)
 			}
 		}
@@ -1940,7 +1935,7 @@ func (p *AmmContractRuntime) removeBaseLiquidity(oldAmtInPool *Decimal, oldValue
 		}
 		info.LptAmt = ratio.Mul(profitLpt)
 	}
-	
+
 	if len(removeBaseLiqMap) == 0 {
 		return nil
 	}
@@ -1970,7 +1965,7 @@ func (p *AmmContractRuntime) settle(height int) error {
 		oldTotalLptAmt := p.TotalLptAmt
 
 		p.addLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt)
-		p.removeLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt) // 优先处理
+		p.removeLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt)     // 优先处理
 		p.removeBaseLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt) // 等上面完成，再处理
 
 		p.stp.SaveReservationWithLock(p.resv)
