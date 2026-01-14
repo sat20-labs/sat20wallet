@@ -162,7 +162,6 @@ type ContractDeployResvIF interface {
 	GetStatus() ResvStatus
 	SetStatus(ResvStatus)
 	GetResult() []byte
-	SetUpdated(bool)
 
 	GetContract() ContractRuntime
 	GetMutex() *sync.RWMutex
