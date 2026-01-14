@@ -63,10 +63,6 @@ func NewRecycleContract() *RecycleContract {
 }
 
 func (p *RecycleContract) CheckContent() error {
-	if indexer.IsPlainAsset(&p.AssetName) {
-		return nil
-	}
-
 	if p.NumberOfLastDigits == 0 {
 		return fmt.Errorf("should set the number of digits")
 	}
@@ -77,12 +73,12 @@ func (p *RecycleContract) CheckContent() error {
 		if p.SpecPrize < 10 || p.SpecPrize > 90 {
 			return fmt.Errorf("specPrize should a ratio in range of 10-90 percent")
 		}
+		if p.FirstPrizeMatchCount >= p.SpecPrizeMatchCount {
+			return fmt.Errorf("FirstPrizeMatchCount should < SpecPrizeMatchCount")
+		}
 	}
 	if p.FirstPrizeMatchCount == 0 {
 		return fmt.Errorf("should set the count of digits of the first prize")
-	}
-	if p.SpecPrizeMatchCount != 0 && p.FirstPrizeMatchCount >= p.SpecPrizeMatchCount {
-		return fmt.Errorf("FirstPrizeMatchCount should < SpecPrizeMatchCount")
 	}
 	if p.FirstPrizeMatchCount > p.NumberOfLastDigits {
 		return fmt.Errorf("FirstPrizeMatchCount should <= NumberOfLastDigits")
@@ -1108,7 +1104,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 
 			// TODO 暂时只支持L1的调用
 
-			if item.Done != DONE_NOTYET {
+			if len(item.Padded) != 0 || item.Done != DONE_NOTYET {
 				continue
 			}
 
@@ -1417,12 +1413,12 @@ func (p *RecycleContractRunTime) reward() error {
 			p.updateWithDealInfo_reward(dealInfo)
 			// 成功一步记录一步
 			p.stp.SaveReservationWithLock(p.resv)
-			Log.Infof("contract %s withdraw completed, %s", url, txId)
+			Log.Infof("contract %s reward completed, %s", url, txId)
 		}
 
-		Log.Debugf("contract %s withdraw completed", url)
+		Log.Debugf("contract %s reward completed", url)
 	} else {
-		Log.Debugf("server: waiting the withdraw Tx of contract %s ", p.URL())
+		Log.Debugf("server: waiting the reward Tx of contract %s ", p.URL())
 	}
 
 	return nil

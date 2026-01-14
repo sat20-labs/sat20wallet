@@ -162,6 +162,7 @@ type ContractDeployResvIF interface {
 	GetStatus() ResvStatus
 	SetStatus(ResvStatus)
 	GetResult() []byte
+	SetUpdated(bool)
 
 	GetContract() ContractRuntime
 	GetMutex() *sync.RWMutex
@@ -693,6 +694,9 @@ type ContractBase struct {
 }
 
 func (p *ContractBase) CheckContent() error {
+	if indexer.IsPlainAsset(&p.AssetName) {
+		return nil
+	}
 	if p.AssetName.Protocol != indexer.PROTOCOL_NAME_ORDX &&
 		p.AssetName.Protocol != indexer.PROTOCOL_NAME_RUNES &&
 		p.AssetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
@@ -725,9 +729,6 @@ func (p *ContractBase) CheckContent() error {
 		}
 	}
 
-	if indexer.IsPlainAsset(&p.AssetName) {
-		return fmt.Errorf("should be one asset")
-	}
 	return nil
 }
 
@@ -2753,7 +2754,11 @@ func (p *ContractRuntimeBase) DisableItem(input InvokeHistoryItem) {
 	switch item.OrderType {
 
 	}
+}
 
+// TODO 不应该暴露，等resv和contract分离后取消
+func (p *ContractRuntimeBase) GetMutex() *sync.RWMutex {
+	return &p.mutex
 }
 
 func GetSupportedContracts() []string {
