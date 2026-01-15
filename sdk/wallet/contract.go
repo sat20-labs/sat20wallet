@@ -2190,7 +2190,7 @@ func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
 func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
+
 	url := p.URL()
 	// 只能回跳
 	if bSatsNet {
@@ -2786,11 +2786,6 @@ func (p *ContractRuntimeBase) DisableItem(input InvokeHistoryItem) {
 	switch item.OrderType {
 
 	}
-}
-
-// TODO 不应该暴露，等resv和contract分离后取消
-func (p *ContractRuntimeBase) GetMutex() *sync.RWMutex {
-	return &p.mutex
 }
 
 func GetSupportedContracts() []string {
