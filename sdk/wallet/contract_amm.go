@@ -1568,7 +1568,7 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 	}
 
 	// 最后验证
-	if totalRemovedLptAmt.Cmp(totalAddedFeeLptAmt) <= 0 {
+	if totalRemovedLptAmt.Cmp(totalAddedFeeLptAmt) < 0 {
 		str := fmt.Sprintf("totalAddedFeeLptAmt %s larger than totalRemovedLptAmt %s",
 			totalAddedFeeLptAmt.String(), totalRemovedLptAmt.String())
 		Log.Errorf(str)
@@ -1601,9 +1601,10 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 
 	if baseLpt {
 		p.BaseLptAmt = p.BaseLptAmt.Sub(realRemovedLpt)
-	} else {
-		for addr, info := range traders {
-			trader := p.loadTraderInfo(addr)
+	}
+	for addr, info := range traders {
+		trader := p.loadTraderInfo(addr)
+		if !baseLpt {
 			liqInfo := removeLiqMap[addr]
 			trader.LptAmt = trader.LptAmt.Sub(liqInfo.LptAmt)
 			if trader.LptAmt.Sign() > 0 {
@@ -1611,23 +1612,24 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 			} else {
 				delete(p.liquidityData.LPMap, addr)
 			}
-
-			trader.RetrieveAmt = trader.RetrieveAmt.Add(info.amt) // 在retrieve中发送出去
-			trader.RetrieveValue += info.value.Floor()
 			trader.LiqSatsValue -= info.depositvalue
-			trader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
-			saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+		}
 
-			// 更新用户的item
-			items := p.removeLiquidityMap[addr]
-			for _, item := range items {
-				if item.Done == DONE_NOTYET && item.Reason == INVOKE_REASON_NORMAL {
-					item.Padded = []byte(fmt.Sprintf("%d", 1)) // 设置下标志，防止重入
-					SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
-				}
+		trader.RetrieveAmt = trader.RetrieveAmt.Add(info.amt) // 在retrieve中发送出去
+		trader.RetrieveValue += info.value.Floor()
+		trader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
+		saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+
+		// 更新用户的item
+		items := p.removeLiquidityMap[addr]
+		for _, item := range items {
+			if item.Done == DONE_NOTYET && item.Reason == INVOKE_REASON_NORMAL {
+				item.Padded = []byte(fmt.Sprintf("%d", 1)) // 设置下标志，防止重入
+				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 			}
 		}
 	}
+	
 
 	if !PROFIT_REINVESTING {
 		p.TotalFeeLptAmt = nil
@@ -1940,6 +1942,7 @@ func (p *AmmContractRuntime) removeBaseLiquidity(oldAmtInPool *Decimal, oldValue
 		return nil
 	}
 
+	// TODO 需要确保
 	// 将 p.profitMap 换到 p.removeLiquidityMap
 	p.removeLiquidityMap = p.profitMap
 	p.profitMap = make(map[string]map[int64]*SwapHistoryItem)

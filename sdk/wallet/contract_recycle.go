@@ -801,7 +801,7 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Inv
 	org, ok := p.history[utxo]
 	if ok {
 		org.UtxoId = utxoId
-		return nil, fmt.Errorf("contract utxo %s has been handled", utxo)
+		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
 	url := p.URL()
@@ -861,7 +861,7 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, h
 	org, ok := p.history[utxo]
 	if ok {
 		org.UtxoId = utxoId
-		return nil, fmt.Errorf("contract utxo %s has been handled", utxo)
+		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
 	switch param.Action {

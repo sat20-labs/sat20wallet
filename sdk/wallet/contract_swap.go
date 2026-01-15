@@ -1676,7 +1676,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invoke
 	org, ok := p.history[utxo]
 	if ok {
 		org.UtxoId = utxoId
-		return nil, fmt.Errorf("contract utxo %s has been handled", utxo)
+		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
 	url := p.URL()
@@ -2083,7 +2083,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heig
 	org, ok := p.history[utxo]
 	if ok {
 		org.UtxoId = utxoId
-		return nil, fmt.Errorf("contract utxo %s has been handled", utxo)
+		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
 	switch param.Action {
@@ -2887,71 +2887,6 @@ func (p *SwapContractRuntime) addItem(item *SwapHistoryItem) {
 
 	p.insertBuck(item)
 }
-
-// func (p *SwapContractRuntime) AddLostInvokeItem(txId string, fromL1 bool) (string, error) {
-
-// 	url := p.URL()
-// 	item := findContractInvokeItem(p.stp.GetDB(), url, txId)
-// 	if item != nil {
-// 		return item.GetKey(), fmt.Errorf("same item exists")
-// 	}
-
-// 	if fromL1 {
-// 		txHex, err := p.stp.GetIndexerClient().GetRawTx(txId)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		tx, err := DecodeMsgTx(txHex)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		channelUtxosMap := make(map[string]map[string]bool)
-// 		contractAddrMap := map[string]bool{
-// 			p.Address(): true,
-// 		}
-// 		invokeTx, err := p.stp.generateInvokeInfoFromTx(tx, contractAddrMap, channelUtxosMap)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		err = p.stp.fillInvokeInfo(invokeTx)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		var height int
-// 		height, invokeTx.TxIndex, invokeTx.InvokeVout = indexer.FromUtxoId(invokeTx.TxOutput.UtxoId)
-// 		item, err := p.Invoke(invokeTx, height)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		return item.GetKey(), nil
-
-// 	} else {
-// 		txHex, err := p.stp.l2IndexerClient.GetRawTx(txId)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		tx, err := DecodeMsgTx_SatsNet(txHex)
-// 		if err != nil {
-// 			return "", err
-// 		}
-
-// 		invokeTx, err := p.stp.generateInvokeInfoFromTx_SatsNet(tx)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		err = p.stp.fillInvokeInfo_SatsNet(invokeTx)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		var height int
-// 		height, invokeTx.TxIndex, invokeTx.InvokeVout = indexer.FromUtxoId(invokeTx.TxOutput.UtxoId)
-// 		item, err := p.Invoke_SatsNet(invokeTx, height)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		return item.GetKey(), nil
-// 	}
-// }
 
 type DealInfo struct {
 	SendInfo          map[string]*SendAssetInfo // deposit时，key是item的InUtxo，其他情况是address

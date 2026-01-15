@@ -331,6 +331,7 @@ type ContractRuntime interface {
 	InvokeCompleted(*InvokeDataInBlock)
 	HandleReorg_SatsNet(int, int) error
 	HandleReorg(int, int) error
+	PrepareForReInvoke(height int, bSatsNet bool) // 重新跑区块，需要重新加载历史数据，只为了处理某些漏掉的invoke
 	DisableItem(InvokeHistoryItem) // 因为reorg导致某个item无效
 
 	// 作为通道合约，本地节点不能发起的动作，需要由peer发起，在这里检查和设置结果，并推动合约内部状态变迁
@@ -340,9 +341,6 @@ type ContractRuntime interface {
 
 	checkSelf() error
 	CalcRuntimeMerkleRoot() []byte
-
-	// 维护接口
-	AddLostInvokeItem(string, bool) (string, error)
 }
 
 // 合约调用历史记录
@@ -1976,11 +1974,13 @@ func (p *ContractRuntimeBase) IsMyInvoke_SatsNet(invoke *InvokeTx_SatsNet) bool 
 		invoke.InvokeParam.ContractPath == p.URL()
 }
 
+// 调用方确保p.contractRunningMutex.Lock()
 func (p *ContractRuntimeBase) resyncBlock(start, end int) {
 	// 设置resv的属性，暂时不要从外面的区块同步调用进来
 	p.resv.ResyncBlock(start, end)
 }
 
+// 调用方确保p.contractRunningMutex.Lock()
 func (p *ContractRuntimeBase) resyncBlock_SatsNet(start, end int) {
 	// 设置resv的属性，暂时不要从外面的区块同步调用进来
 	p.resv.ResyncBlock_SatsNet(start, end)
@@ -2142,7 +2142,7 @@ func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) err
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	url := p.URL()
-	history := loadContractInvokeHistoryByHeight(p.stp.GetDB(), url, false, orgHeight, true)
+	history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), url, false, orgHeight, true)
 	for _, v := range history {
 		item, ok := v.(*InvokeItem)
 		if !ok {
@@ -2170,11 +2170,11 @@ func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) err
 	return nil
 }
 
-// 核心是检查输入InUtxo还在不在，不在的话，删除该记录
+// 
 func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	history := loadContractInvokeHistoryByHeight(p.stp.GetDB(), p.URL(), false, orgHeight, false)
+	history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), p.URL(), false, orgHeight, false)
 	for _, v := range history {
 		item, ok := v.(*InvokeItem)
 		if !ok {
@@ -2187,15 +2187,48 @@ func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
 	return nil
 }
 
+func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	
+	url := p.URL()
+	// 只能回跳
+	if bSatsNet {
+		if p.CurrBlock >= height {
+			return
+		}
+		p.CurrBlock = height
+
+		history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), url, false, height, true)
+		for _, v := range history {
+			item, ok := v.(*SwapHistoryItem)
+			if !ok {
+				continue
+			}
+			p.history[item.InUtxo] = item
+		}
+	} else {
+		if p.CurrBlockL1 >= height {
+			return
+		}
+		p.CurrBlockL1 = height
+
+		history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), url, false, height, false)
+		for _, v := range history {
+			item, ok := v.(*SwapHistoryItem)
+			if !ok {
+				continue
+			}
+			p.history[item.InUtxo] = item
+		}
+	}
+}
+
 func (p *ContractRuntimeBase) invokeCompleted() {
 	if p.lastInvokeCount != p.InvokeCount {
 		// 只在区块调用结束后更新合约的merkle root，不管合约后续的动作
 		p.calcAssetMerkleRoot()
 	}
-}
-
-func (p *ContractRuntimeBase) AddLostInvokeItem(string, bool) (string, error) {
-	return "", fmt.Errorf("not accepted")
 }
 
 func (p *ContractRuntimeBase) buildDepositAnchorTx(output *indexer.TxOutput, destAddr string,

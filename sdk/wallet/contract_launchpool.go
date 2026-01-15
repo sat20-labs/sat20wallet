@@ -493,7 +493,7 @@ type LaunchPoolContractRunTime struct {
 	LaunchPoolContractRunTimeInDB
 
 	mintInfoMap      map[string]*MinterStatus // key: minter address， 缓存数据
-	invalidMintMap   map[string]*MinterStatus // key: minter address，所有无效的调用记录，每个区块发起一次退款
+	invalidMintMap   map[string]*MinterStatus // key: minter address，所有无效的调用记录
 	deployTickerResv *InscribeResv
 	isSending        bool
 
@@ -1447,7 +1447,7 @@ func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *
 	org, ok := p.history[utxo]
 	if ok {
 		org.UtxoId = utxoId
-		return nil, fmt.Errorf("contract utxo %s has been handled", utxo)
+		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
 	// 交易是否已经完成
@@ -1759,7 +1759,7 @@ func (p *LaunchPoolContractRunTime) launch() error {
 		p.stp.SaveReservation(p.resv)
 		Log.Infof("contract %s closed", p.URL())
 	} else {
-		if len(p.mintInfoMap) == 0 {
+		if len(p.mintInfoMap) == 0 && len(p.invalidMintMap) == 0 {
 			// 没有任何铸造数据，那现在就是超时直接关闭
 			p.mutex.Lock()
 			p.isSending = false
@@ -1770,7 +1770,7 @@ func (p *LaunchPoolContractRunTime) launch() error {
 			p.stp.SaveReservation(p.resv)
 			Log.Infof("contract %s closed", p.URL())
 		} else {
-			// 在 HandleUnlockReq 等待peer的操作
+			// 在 SetPeerActionResult 等待peer的操作
 			Log.Infof("server: waiting the close of contract %s ", p.URL())
 		}
 	}
