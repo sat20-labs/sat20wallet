@@ -807,6 +807,7 @@ func (p *AmmContractRuntime) SetReady() {
 		}
 	}
 
+	// 这个时候，可能有timing的问题，一个刚广播的invoke，其使用的模版是trancend，而不是amm
 	resv := p.stp.GetSpecialContractResv(p.GetAssetName().String(), TEMPLATE_CONTRACT_TRANSCEND)
 	if resv != nil {
 		// disable transcend contract

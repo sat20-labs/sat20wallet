@@ -1332,6 +1332,9 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 		bUpdate := false
 		for _, tx := range data.InvokeTxVect {
 			// 每个tx最多只对应一个合约调用
+			if tx.Handled {
+				continue
+			}
 			if !p.IsMyInvoke_SatsNet(tx) {
 				continue
 			}
@@ -1491,6 +1494,7 @@ func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *
 	}
 
 	// 更新合约状态
+	invokeTx.Handled = true
 	return p.updateContract(invokeTx.Invoker, output, value, amt, refundValue), nil
 }
 

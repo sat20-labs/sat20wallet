@@ -830,6 +830,7 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Inv
 
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract(address, output, bValid), nil
 
 	default:
@@ -851,7 +852,7 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, h
 		if err != nil {
 			return nil, err
 		}
-	} else {
+	} else { // TODO 主网过来的调用都没有设置参数，跟AMM/transend的符文有冲突，一个地址不能同时部署两个recycle和amm/transcend合约
 		param.Action = INVOKE_API_RECYCLE
 	}
 
@@ -898,6 +899,7 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, h
 		// }
 
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract(address, OutputToSatsNet(output), bValid), nil
 
 	default:
@@ -1209,9 +1211,9 @@ func (p *RecycleContractRunTime) sendInvokeResultTx_SatsNet() error {
 		}
 
 		p.isSending = false
-		Log.Debugf("contract %s sendInvokeResultTx_SatsNet completed", url)
+		//Log.Debugf("contract %s sendInvokeResultTx_SatsNet completed", url)
 	} else {
-		//Log.Infof("server: waiting the deal Tx of contract %s ", p.URL())
+		//Log.Debugf("server: waiting the deal Tx of contract %s ", p.URL())
 	}
 	return nil
 }

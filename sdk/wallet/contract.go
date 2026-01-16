@@ -331,7 +331,7 @@ type ContractRuntime interface {
 	InvokeCompleted(*InvokeDataInBlock)
 	HandleReorg_SatsNet(int, int) error
 	HandleReorg(int, int) error
-	PrepareForReInvoke(height int, bSatsNet bool) // 重新跑区块，需要重新加载历史数据，只为了处理某些漏掉的invoke
+	PrepareForReInvoke(height int, bSatsNet bool) int // 重新跑区块，需要重新加载历史数据，只为了处理某些漏掉的invoke
 	DisableItem(InvokeHistoryItem) // 因为reorg导致某个item无效
 
 	// 作为通道合约，本地节点不能发起的动作，需要由peer发起，在这里检查和设置结果，并推动合约内部状态变迁
@@ -1882,6 +1882,9 @@ func (p *ContractRuntimeBase) PreprocessInvokeData(data *InvokeDataInBlock) erro
 	if err == nil {
 		bUpdate := false
 		for _, tx := range data.InvokeTxVect {
+			if tx.Handled {
+				continue
+			}
 			if !p.IsMyInvoke(tx) {
 				continue
 			}
@@ -1993,6 +1996,9 @@ func (p *ContractRuntimeBase) PreprocessInvokeData_SatsNet(data *InvokeDataInBlo
 
 		bUpdate := false
 		for _, tx := range data.InvokeTxVect {
+			if tx.Handled {
+				continue
+			}
 			if !p.IsMyInvoke_SatsNet(tx) {
 				continue
 			}
@@ -2187,15 +2193,18 @@ func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
 	return nil
 }
 
-func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) {
+func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) int {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
 	url := p.URL()
 	// 只能回跳
 	if bSatsNet {
+		if height < p.EnableBlock {
+			height = p.EnableBlock
+		}
 		if p.CurrBlock < height {
-			return
+			return height
 		}
 		p.CurrBlock = height
 
@@ -2208,8 +2217,11 @@ func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) {
 			p.history[item.InUtxo] = item
 		}
 	} else {
+		if height < p.EnableBlockL1 {
+			height = p.EnableBlockL1
+		}
 		if p.CurrBlockL1 < height {
-			return
+			return height
 		}
 		p.CurrBlockL1 = height
 
@@ -2222,6 +2234,7 @@ func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) {
 			p.history[item.InUtxo] = item
 		}
 	}
+	return height
 }
 
 func (p *ContractRuntimeBase) invokeCompleted() {
@@ -3100,6 +3113,7 @@ type InvokeTx_SatsNet struct {
 	Address     string
 	InvokeParam *sindexer.ContractInvokeData
 	Invoker     string
+	Handled     bool
 }
 
 type InvokeDataInBlock_SatsNet struct {
@@ -3116,6 +3130,7 @@ type InvokeTx struct {
 	Address     string
 	InvokeParam *sindexer.ContractInvokeData
 	Invoker     string
+	Handled     bool
 }
 
 type InvokeDataInBlock struct {

@@ -1679,6 +1679,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invoke
 			org.UtxoId = utxoId
 			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
 		}
+		invokeTx.Handled = true
 		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
@@ -1784,6 +1785,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invoke
 		}
 
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_swap(address, output, &swapParam, bValid), nil
 
 	case INVOKE_API_WITHDRAW:
@@ -1866,10 +1868,12 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invoke
 			break
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_withdraw(address, output, &withdrawParam, bValid, false), nil
 
 	case INVOKE_API_REFUND:
 		// 取回所有资产，包括已经部分成交但还没有发送的和未成交的
+		invokeTx.Handled = true
 		return p.updateContract_refund(address, output.GetPlainSat(), utxo, false, utxoId), nil
 
 	case INVOKE_API_ADDLIQUIDITY:
@@ -1931,6 +1935,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invoke
 			break
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_liquidity(address, output, invokeParam.OrderType,
 			assetAmt, satsValue, bValid, false, false), nil
 
@@ -1993,6 +1998,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invoke
 			break
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_liquidity(address, output, invokeParam.OrderType,
 			assetAmt, 0, bValid, false, false), nil
 
@@ -2048,6 +2054,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invoke
 
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract(address, output, invokeParam.OrderType,
 			ratio, bValid, false, false), nil
 
@@ -2070,12 +2077,13 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heig
 		if err != nil {
 			return nil, err
 		}
-	} else {
+	} else { // TODO 主网过来的调用都没有设置参数，跟AMM/transend的符文有冲突，一个地址不能同时部署两个recycle和amm/transcend合约
 		switch p.GetTemplateName() {
 		case TEMPLATE_CONTRACT_SWAP:
 			return nil, fmt.Errorf("swap contract not support deposit")
 		default:
 		}
+		// 目前只有runes资产没有设置参数
 		param.Action = INVOKE_API_DEPOSIT
 	}
 
@@ -2089,6 +2097,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heig
 			org.UtxoId = utxoId
 			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
 		}
+		invokeTx.Handled = true
 		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
@@ -2137,6 +2146,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heig
 		}
 
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_deposit(address, OutputToSatsNet(output), nil, bValid, true), nil
 
 	case INVOKE_API_ADDLIQUIDITY: // 必须有 invokeTx.InvokeParam
@@ -2198,6 +2208,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heig
 			break
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_liquidity(address, OutputToSatsNet(output),
 			invokeParam.OrderType, assetAmt, satsValue,
 			bValid, false, false), nil
@@ -2261,6 +2272,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heig
 			break
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_liquidity(address, OutputToSatsNet(output),
 			invokeParam.OrderType, assetAmt, 0,
 			bValid, false, false), nil
@@ -3037,9 +3049,9 @@ func (p *SwapContractRuntime) deal() error {
 			}
 		}
 
-		Log.Debugf("contract %s deal completed", url)
+		//Log.Debugf("contract %s deal completed", url)
 	} else {
-		Log.Debugf("server: waiting the deal Tx of contract %s ", p.URL())
+		//Log.Debugf("server: waiting the deal Tx of contract %s ", p.URL())
 	}
 
 	return nil
@@ -3387,9 +3399,9 @@ func (p *SwapContractRuntime) sendInvokeResultTx_SatsNet() error {
 		}
 
 		p.isSending = false
-		Log.Debugf("contract %s sendInvokeResultTx_SatsNet completed", url)
+		//Log.Debugf("contract %s sendInvokeResultTx_SatsNet completed", url)
 	} else {
-		//Log.Infof("server: waiting the deal Tx of contract %s ", p.URL())
+		//Log.Debugf("server: waiting the deal Tx of contract %s ", p.URL())
 	}
 	return nil
 }
@@ -3408,8 +3420,8 @@ func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
 
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
 	maxHeight := 0
-	for _, refundMap := range p.refundMap {
-
+	delAddress := make([]string, 0)
+	for address, refundMap := range p.refundMap {
 		for _, item := range refundMap {
 			h, _, _ := indexer.FromUtxoId(item.UtxoId)
 			if h > height {
@@ -3452,6 +3464,21 @@ func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
 			totalRefundValue += value
 		}
 
+		// 如果没有资产可以退，将这些指令设置为已经处理
+		_, ok := sendInfoMap[address]
+		if !ok {
+			url := p.URL()
+			for _, item := range refundMap {
+				item.Reason = INVOKE_REASON_INVALID
+				item.Done = DONE_DEALT
+				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+				delete(p.history, item.InUtxo)
+			}
+			delAddress = append(delAddress, address)
+		}
+	}
+	for _, address := range delAddress {
+		delete(p.refundMap, address)
 	}
 
 	return &DealInfo{
