@@ -499,7 +499,6 @@ type LaunchPoolContractRunTime struct {
 
 	refreshTime     int64
 	responseCache   []*responseItem_launchPool
-	responseHistory []*MintHistoryItem // 按时间排序
 }
 
 func NewLaunchPoolContractRuntime(stp ContractManager) *LaunchPoolContractRunTime {
@@ -519,6 +518,7 @@ func (p *LaunchPoolContractRunTime) init() {
 	p.runtime = p
 	p.mintInfoMap = make(map[string]*MinterStatus)
 	p.invalidMintMap = make(map[string]*MinterStatus)
+	p.responseHistory = make(map[int][]*InvokeItem)
 }
 
 func (p *LaunchPoolContractRunTime) InitFromContent(content []byte, stp ContractManager,
@@ -576,7 +576,6 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 		}
 
 		p.history[item.InUtxo] = item
-		p.responseHistory = append(p.responseHistory, item)
 		p.addItem(item)
 	}
 
@@ -593,6 +592,20 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 	// if err != nil {
 	// 	Log.Errorf("%s checkSelf failed, %v", p.URL(), err)
 	// }
+
+	if p.Status == CONTRACT_STATUS_CLOSING {
+		needSetRunning := false
+		for _, item := range history {
+			if !item.HasDone() {
+				needSetRunning = true
+				Log.Infof("item not done: %v", item)
+			}
+		}
+		if needSetRunning && p.resv.GetStatus() != RS_DEPLOY_CONTRACT_RUNNING {
+			p.resv.SetStatus(RS_DEPLOY_CONTRACT_RUNNING)
+			p.stp.SaveReservation(resv)
+		}
+	}
 
 	return nil
 }
@@ -1097,34 +1110,8 @@ func (p *LaunchPoolContractRunTime) GetInvokerStatus(address string) InvokerStat
 	return nil
 }
 
-func (p *LaunchPoolContractRunTime) InvokeHistory(_ any, start, limit int) string {
-	type response struct {
-		Total int                `json:"total"`
-		Start int                `json:"start"`
-		Data  []*MintHistoryItem `json:"data"`
-	}
-
-	result := &response{
-		Total: len(p.responseHistory),
-		Start: start,
-	}
-	if start >= 0 && start < len(p.responseHistory) {
-		if limit <= 0 {
-			limit = 100
-		}
-		end := start + limit
-		if end > len(p.responseHistory) {
-			end = len(p.responseHistory)
-		}
-		result.Data = p.responseHistory[start:end]
-	}
-
-	buf, err := json.Marshal(result)
-	if err != nil {
-		Log.Errorf("Marshal InvokeHistory failed, %v", err)
-		return ""
-	}
-	return string(buf)
+func (p *LaunchPoolContractRunTime) InvokeHistory(f any, start, limit int) string {
+	return p.GetRuntimeBase().InvokeHistory(f, start, limit)
 }
 
 type responseItem_launchPool struct {
@@ -1364,13 +1351,15 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 	// 是否准备发射？
 	if p.ReadyToLaunch() &&
 		(p.Status == CONTRACT_STATUS_READY || p.Status == CONTRACT_STATUS_CLOSING) {
-		p.Status = CONTRACT_STATUS_CLOSING
-		if p.CheckPointBlock == p.EnableBlock {
-			// 截止到这里，后续其他invoke都无效
-			p.CheckPointBlock = data.Height
-			Log.Infof("%s checkpoint %d", p.URL(), p.CheckPoint)
+		if p.Status == CONTRACT_STATUS_READY {
+			p.Status = CONTRACT_STATUS_CLOSING
+			if p.CheckPointBlock == p.EnableBlock {
+				// 截止到这里，后续其他invoke都无效
+				p.CheckPointBlock = data.Height
+				Log.Infof("%s checkpoint %d", p.URL(), p.CheckPoint)
+			}
+			p.stp.SaveReservationWithLock(p.resv)
 		}
-		p.stp.SaveReservationWithLock(p.resv)
 		p.mutex.Unlock()
 
 		delayLaunch := 10
@@ -1530,6 +1519,8 @@ func (p *LaunchPoolContractRunTime) addItem(item *MintHistoryItem) {
 			p.invalidMintMap[address] = info
 		}
 	}
+
+	p.insertBuck(item)
 }
 
 func (p *LaunchPoolContractRunTime) DisableItem(input InvokeHistoryItem) {
@@ -1576,7 +1567,6 @@ func (p *LaunchPoolContractRunTime) updateContract(
 		p.TotalInvalid += refundValue
 	}
 	p.history[item.InUtxo] = item
-	p.responseHistory = append(p.responseHistory, item)
 	p.addItem(item)
 	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
 	return item
@@ -1639,7 +1629,7 @@ func (p *LaunchPoolContractRunTime) launch() error {
 			Log.Errorf("refund contract %s failed, %v", p.URL(), err)
 			return err
 		}
-		Log.Infof("contract %s refunded", p.URL())
+		//Log.Infof("contract %s refunded", p.URL())
 	}
 
 	if p.resv.LocalIsInitiator() {
