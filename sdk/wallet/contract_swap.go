@@ -1675,7 +1675,10 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invoke
 	utxo := fmt.Sprintf("%s:%d", invokeTx.Tx.TxID(), invokeTx.InvokeVout)
 	org, ok := p.history[utxo]
 	if ok {
-		org.UtxoId = utxoId
+		if org.UtxoId != utxoId { // reorg
+			org.UtxoId = utxoId
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
+		}
 		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
@@ -2082,7 +2085,10 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heig
 	Log.Infof("utxo %x %s\n", utxoId, utxo)
 	org, ok := p.history[utxo]
 	if ok {
-		org.UtxoId = utxoId
+		if org.UtxoId != utxoId { // reorg
+			org.UtxoId = utxoId
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
+		}
 		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
@@ -2997,6 +3003,9 @@ func (p *SwapContractRuntime) deal() error {
 
 	// 发送
 	if p.resv.LocalIsInitiator() {
+		if len(p.buyPool) == 0 && len(p.sellPool) == 0 {
+			return nil
+		}
 		// 处理买单
 		p.mutex.RLock()
 		height := p.CurrBlock

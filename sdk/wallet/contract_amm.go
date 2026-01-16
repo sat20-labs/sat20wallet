@@ -955,10 +955,6 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 	if p.Status != CONTRACT_STATUS_READY {
 		return false
 	}
-
-	if len(p.buyPool)+len(p.sellPool) == 0 {
-		return false
-	}
 	if len(p.buyPool) == 0 && len(p.sellPool) == 0 {
 		return false
 	}
@@ -1959,20 +1955,23 @@ func (p *AmmContractRuntime) settle(height int) error {
 	}
 
 	if p.Status == CONTRACT_STATUS_READY {
-
 		// 如果有单边加池子，先处理单边加池子，而且必须按照顺序
+		if len(p.addLiquidityMap) != 0 ||
+		len(p.removeLiquidityMap) != 0 || 
+		len(p.profitMap) != 0 {
+			// 确保基数相同（本轮交易后的池子参数）
+			oldAmtInPool := p.AssetAmtInPool.Clone()
+			oldValueInPool := p.SatsValueInPool
+			oldTotalLptAmt := p.TotalLptAmt
 
-		// 确保基数相同（本轮交易后的池子参数）
-		oldAmtInPool := p.AssetAmtInPool.Clone()
-		oldValueInPool := p.SatsValueInPool
-		oldTotalLptAmt := p.TotalLptAmt
+			p.addLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt)
+			p.removeLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt)     // 优先处理
+			p.removeBaseLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt) // 等上面完成，再处理
 
-		p.addLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt)
-		p.removeLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt)     // 优先处理
-		p.removeBaseLiquidity(oldAmtInPool, oldValueInPool, oldTotalLptAmt) // 等上面完成，再处理
-
-		p.stp.SaveReservationWithLock(p.resv)
-		p.saveLatestLiquidityData(height)
+			// TODO 到处都在 SaveReservationWithLock，需要增加确保数据有修改再保存
+			p.stp.SaveReservationWithLock(p.resv)
+			p.saveLatestLiquidityData(height)
+		}
 	}
 
 	return nil

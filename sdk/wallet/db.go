@@ -1176,7 +1176,7 @@ func findContractInvokeItem(db db.KVDB, url string, target string) *InvokeItem {
 	return result
 }
 
-// 从这个高度开始的交易都加载
+// 从这个高度开始的交易都加载： TODO 需要优化下以高度有序，就不需要全部遍历
 func loadContractInvokeHistoryFromHeight(db db.KVDB, url string, excludingDone bool,
 	height int, bSatsNet bool) map[string]InvokeHistoryItem {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TC_INVOKE_HISTORY + url)

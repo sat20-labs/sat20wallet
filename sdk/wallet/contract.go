@@ -2194,7 +2194,7 @@ func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) {
 	url := p.URL()
 	// 只能回跳
 	if bSatsNet {
-		if p.CurrBlock >= height {
+		if p.CurrBlock < height {
 			return
 		}
 		p.CurrBlock = height
@@ -2208,7 +2208,7 @@ func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) {
 			p.history[item.InUtxo] = item
 		}
 	} else {
-		if p.CurrBlockL1 >= height {
+		if p.CurrBlockL1 < height {
 			return
 		}
 		p.CurrBlockL1 = height
