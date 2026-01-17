@@ -1783,7 +1783,7 @@ func (p *LaunchPoolContractRunTime) deployAmmContract() (string, int64, error) {
 	c.K = indexer.DecimalMul(p.AssetAmtInPool, indexer.NewDefaultDecimal(p.SatsValueInPool)).String()
 
 	txId, id, err := p.stp.DeployContract(ammContract.GetTemplateName(),
-		string(ammContract.Content()), nil, 0, p.Deployer)
+		string(ammContract.Content()), nil, 0, 0, p.Deployer)
 	if err != nil {
 		Log.Errorf("%s DeployContract %s failed, %v", p.URL(), ammContract.GetContractName(), err)
 		return "", 0, err

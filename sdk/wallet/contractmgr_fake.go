@@ -99,6 +99,6 @@ func (p *Manager) AscendAssetInCoreChannel(assetNameStr string, utxo string, mem
 	return "", fmt.Errorf("not implemented")
 }
 func (p *Manager) DeployContract(templateName, contractContent string,
-	fees []string, feeRate int64, deployer string) (string, int64, error) {
+	fees []string, feeRate int64, subAccountIndex int, deployer string) (string, int64, error) {
 	return "", 0, fmt.Errorf("not implemented")
 }

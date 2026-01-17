@@ -35,23 +35,27 @@ func init() {
 2. 转入合约地址的小于1000聪的utxo，自动当作合约调用
 3. 合约作用：
   a. 积分积累：每个utxo，根据分别给予1-2-3分
-  b. 自动抽奖：根据打包的block的hash，和交易的hash，两者最后6个数字，异或成兑奖号码
+  b. 自动抽奖：根据打包的block的hash，和交易的hash，两者最后6个数字，相加成兑奖号码
 */
+
+const MATCH_DIGIT = '6'
 
 // 1. 定义合约内容
 type RecycleContract struct {
 	ContractBase
 
 	NumberOfLastDigits    int
-	SpecPrizeMatchCount   int
+	SpecPrizeMatchCount   int 
 	FirstPrizeMatchCount  int
 	SecondPrizeMatchCount int
 	ThirdPrizeMatchCount  int
+	FourthPrizeMatchCount int
 
-	SpecPrize   int // 池子中的百分比
+	SpecPrize   int // （池子-FirstPrize）的百分比，总奖金=FirstPrize+(total-FirstPrize)*SpecPrize/100
 	FirstPrize  string
 	SecondPrize string
 	ThirdPrize  string
+	FourthPrize string
 }
 
 func NewRecycleContract() *RecycleContract {
@@ -70,7 +74,7 @@ func (p *RecycleContract) CheckContent() error {
 		if p.SpecPrizeMatchCount > p.NumberOfLastDigits {
 			return fmt.Errorf("SpecPrizeMatchCount should <= NumberOfLastDigits")
 		}
-		if p.SpecPrize < 10 || p.SpecPrize > 90 {
+		if p.SpecPrize < 10 || p.SpecPrize > 60 {
 			return fmt.Errorf("specPrize should a ratio in range of 10-90 percent")
 		}
 		if p.FirstPrizeMatchCount >= p.SpecPrizeMatchCount {
@@ -115,6 +119,18 @@ func (p *RecycleContract) CheckContent() error {
 			return err
 		}
 	}
+	if p.FourthPrizeMatchCount != 0 {
+		if p.FourthPrizeMatchCount >= p.ThirdPrizeMatchCount {
+			return fmt.Errorf("FourthPrizeMatchCount should < ThirdPrizeMatchCount")
+		}
+		if p.FourthPrize == "" || p.FourthPrize == "0" {
+			return fmt.Errorf("should set the fourth prize")
+		}
+		_, err := indexer.NewDecimalFromString(p.FourthPrize, MAX_ASSET_DIVISIBILITY)
+		if err != nil {
+			return err
+		}
+	}
 
 	err = p.ContractBase.CheckContent()
 	if err != nil {
@@ -154,10 +170,12 @@ func (p *RecycleContract) Encode() ([]byte, error) {
 		AddInt64(int64(p.FirstPrizeMatchCount)).
 		AddInt64(int64(p.SecondPrizeMatchCount)).
 		AddInt64(int64(p.ThirdPrizeMatchCount)).
+		AddInt64(int64(p.FourthPrizeMatchCount)).
 		AddInt64(int64(p.SpecPrize)).
 		AddData([]byte(p.FirstPrize)).
 		AddData([]byte(p.SecondPrize)).
 		AddData([]byte(p.ThirdPrize)).
+		AddData([]byte(p.FourthPrize)).
 		Script()
 }
 
@@ -199,6 +217,11 @@ func (p *RecycleContract) Decode(data []byte) error {
 	p.ThirdPrizeMatchCount = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing FourthPrizeMatchCount")
+	}
+	p.FourthPrizeMatchCount = int(tokenizer.ExtractInt64())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing SpecPrize")
 	}
 	p.SpecPrize = int(tokenizer.ExtractInt64())
@@ -217,6 +240,11 @@ func (p *RecycleContract) Decode(data []byte) error {
 		return fmt.Errorf("missing ThirdPrize")
 	}
 	p.ThirdPrize = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing FourthPrize")
+	}
+	p.FourthPrize = string(tokenizer.Data())
 
 	return nil
 }
@@ -1122,28 +1150,39 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				item.Done = DONE_CLOSED_DIRECTLY
 				continue
 			}
+			// TODO 如果池子资金太少，低于水位，所有输入直接回收
+			
 
 			// 分别取最后8个数字做异或，然后按照中奖规则判断是否中奖
 			result := XorLastNHex(blockHash, txId, p.NumberOfLastDigits)
 			item.Padded = []byte(result)
+			// TODO 如果输入的数量是n倍，如果中奖就是n倍
 
 			var prize *Decimal
 			var points int64
-			n := CountHexDigit(result, '8')
+			n := CountHexDigit(result, MATCH_DIGIT)
 			if p.SpecPrizeMatchCount > 0 && n >= p.SpecPrizeMatchCount {
+				firstPrize, _ := indexer.NewDecimalFromString(p.FirstPrize, p.Divisibility)
 				var assetAmt *Decimal
 				if isPlainAsset {
 					assetAmt = indexer.NewDecimal(p.SatsValueInPool, p.Divisibility)
 				} else {
 					assetAmt = p.AssetAmtInPool.Clone()
 				}
-				prize = assetAmt.Mul(specPrize)
+				if assetAmt.Cmp(firstPrize) <= 0 {
+					// 留下交易手续费
+					prize = assetAmt.Mul(indexer.NewDecimalWithScale(90, 2))
+				} else {
+					prize = assetAmt.Sub(firstPrize).Mul(specPrize).Add(firstPrize)
+				}
 			} else if p.FirstPrizeMatchCount > 0 && n >= p.FirstPrizeMatchCount {
 				prize, _ = indexer.NewDecimalFromString(p.FirstPrize, p.Divisibility)
 			} else if p.SecondPrizeMatchCount > 0 && n >= p.SecondPrizeMatchCount {
 				prize, _ = indexer.NewDecimalFromString(p.SecondPrize, p.Divisibility)
 			} else if p.ThirdPrizeMatchCount > 0 && n >= p.ThirdPrizeMatchCount {
 				prize, _ = indexer.NewDecimalFromString(p.ThirdPrize, p.Divisibility)
+			} else if p.FourthPrizeMatchCount > 0 && n >= p.FourthPrizeMatchCount {
+				prize, _ = indexer.NewDecimalFromString(p.FourthPrize, p.Divisibility)
 			}
 
 			// TODO 是否在分配奖金时，分配一部分给foundation和服务节点？

@@ -24,6 +24,8 @@ type ChannelWallet interface {
 }
 
 type Wallet interface {
+	Clone() Wallet
+
 	SetSubAccount(id uint32)
 	GetSubAccount() uint32
 	
@@ -45,6 +47,13 @@ type Wallet interface {
 	SignPsbt_SatsNet(packet *spsbt.Packet) error
 	SignPsbts(packet []*psbt.Packet) (error)
 	SignPsbts_SatsNet(packet []*spsbt.Packet) error
+
+	SignMessageWithIndex(msg []byte, index uint32) ([]byte, error)
+	SignWalletMessageWithIndex(msg string, index uint32) ([]byte, error)
+	SignPsbtWithIndex(packet *psbt.Packet, index uint32) (error)
+	SignPsbtWithIndex_SatsNet(packet *spsbt.Packet, index uint32) error
+	SignPsbtsWithIndex(packet []*psbt.Packet, index uint32) (error)
+	SignPsbtsWithIndex_SatsNet(packet []*spsbt.Packet, index uint32) error
 	
 	// special channel wallet
 	CreateChannelWallet(peer []byte, id uint32) ChannelWallet

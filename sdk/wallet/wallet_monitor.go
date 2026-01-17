@@ -21,6 +21,12 @@ func NewMonitorWallet(address string,) (*MonitorWallet) {
 	}
 }
 
+func (p *MonitorWallet) Clone() common.Wallet {
+	return &MonitorWallet{
+		address: p.address,
+	}
+}
+
 func (p *MonitorWallet) SetSubAccount(id uint32) {
 }
 func (p *MonitorWallet) GetSubAccount() uint32 {
@@ -73,6 +79,25 @@ func (p *MonitorWallet) SignPsbts(packet []*psbt.Packet) (error) {
 	return fmt.Errorf("not implemented")
 }
 func (p *MonitorWallet) SignPsbts_SatsNet(packet []*spsbt.Packet) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (p *MonitorWallet) SignMessageWithIndex(msg []byte, index uint32) ([]byte, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (p *MonitorWallet) SignWalletMessageWithIndex(msg string, index uint32) ([]byte, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (p *MonitorWallet) SignPsbtWithIndex(packet *psbt.Packet, index uint32) (error) {
+	return fmt.Errorf("not implemented")
+}
+func (p *MonitorWallet) SignPsbtWithIndex_SatsNet(packet *spsbt.Packet, index uint32) error {
+	return fmt.Errorf("not implemented")
+}
+func (p *MonitorWallet) SignPsbtsWithIndex(packet []*psbt.Packet, index uint32) (error) {
+	return fmt.Errorf("not implemented")
+}
+func (p *MonitorWallet) SignPsbtsWithIndex_SatsNet(packet []*spsbt.Packet, index uint32) error {
 	return fmt.Errorf("not implemented")
 }
 	

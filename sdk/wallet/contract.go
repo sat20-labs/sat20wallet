@@ -169,6 +169,7 @@ type ContractDeployResvIF interface {
 
 	GetChannelAddr() string
 	GetDeployer() string
+	GetLocalPubKey() []byte
 	GetRemotePubKey() []byte
 
 	GetFeeRate() int64
@@ -235,7 +236,7 @@ type ContractManager interface {
 
 	AscendAssetInCoreChannel(assetNameStr string, utxo string, memo []byte) (string, error)
 	DeployContract(templateName, contractContent string,
-		fees []string, feeRate int64, deployer string) (string, int64, error)
+		fees []string, feeRate int64, subAccountIndex int, deployer string) (string, int64, error)
 }
 
 type ActionFunc func(ContractManager, ContractDeployResvIF, any) (any, error)
@@ -930,13 +931,17 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 	p.assetMerkleRootMap = make(map[int64][]byte)
 	p.history = make(map[string]*InvokeItem)
 	p.isInitiator = resv.LocalIsInitiator()
-	p.localPubKey = stp.GetWallet().GetPubKey()
+	localPK, err := utils.BytesToPublicKey(resv.GetLocalPubKey())
+	if err != nil {
+		return err
+	}
+	p.localPubKey = localPK
+	p.LocalPubKey = p.localPubKey.SerializeCompressed()
 	remotePK, err := utils.BytesToPublicKey(resv.GetRemotePubKey())
 	if err != nil {
 		return err
 	}
 	p.remotePubKey = remotePK
-	p.LocalPubKey = p.localPubKey.SerializeCompressed()
 	p.RemotePubKey = p.remotePubKey.SerializeCompressed()
 	p.redeemScript, err = utils.GenMultiSigScript(p.LocalPubKey, p.RemotePubKey)
 	if err != nil {

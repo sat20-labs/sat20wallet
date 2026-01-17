@@ -211,6 +211,19 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 	}
 }
 
+func (p *InternalWallet) Clone() common.Wallet {
+	return &InternalWallet{
+		masterkey:              p.masterkey,
+		netParamsL1:            p.netParamsL1,
+		paymentPrivKeys:        make(map[uint32]*secp256k1.PrivateKey), // key: index
+		revocationBasePrivKeys: make(map[uint32]*secp256k1.PrivateKey), // key: change
+		purposes:               make(map[uint32]*hdkeychain.ExtendedKey),
+		accounts:               make(map[uint64]*hdkeychain.ExtendedKey),
+		addresses:              make(map[uint32]btcutil.Address),
+		subWallets:             make(map[uint32]*channelWallet),
+	}
+}
+
 func (p *InternalWallet) CreateChannelWallet(peer []byte, id uint32) common.ChannelWallet {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -911,6 +924,14 @@ func (p *InternalWallet) SignMessage(msg []byte) ([]byte, error) {
 	return p.signMessage(privKey, msg).Serialize(), nil
 }
 
+func (p *InternalWallet) SignMessageWithIndex(msg []byte, index uint32) ([]byte, error) {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
+	p.mutex.Unlock()
+	return p.signMessage(privKey, msg).Serialize(), nil
+}
+
+
 func (p *InternalWallet) signMessage(privKey *secp256k1.PrivateKey, msg []byte) *ecdsa.Signature {
 	// Double hash and sign the data.
 	var msgDigest []byte
@@ -921,6 +942,14 @@ func (p *InternalWallet) signMessage(privKey *secp256k1.PrivateKey, msg []byte) 
 		msgDigest = chainhash.HashB(msg)
 	}
 	return ecdsa.Sign(privKey, msgDigest)
+}
+
+func VerifyMessageWithPubKey(pubKey []byte, msg []byte, sig []byte) bool {
+	pk, err := utils.BytesToPublicKey(pubKey)
+	if err != nil {
+		return false
+	}
+	return VerifyMessage(pk, msg, sig)
 }
 
 func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, sig []byte) bool {
@@ -945,6 +974,13 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, sig []byte) bool {
 func (p *InternalWallet) SignWalletMessage(msg string) ([]byte, error) {
 	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
+	return p.signWalletMessage(privKey, msg), nil
+}
+
+func (p *InternalWallet) SignWalletMessageWithIndex(msg string, index uint32) ([]byte, error) {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
 	p.mutex.Unlock()
 	return p.signWalletMessage(privKey, msg), nil
 }
@@ -974,6 +1010,13 @@ func magicMsgHash(msg string) []byte {
 func (p *InternalWallet) SignPsbt(packet *psbt.Packet) error {
 	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
+	return p.signPsbt(privKey, packet)
+}
+
+func (p *InternalWallet) SignPsbtWithIndex(packet *psbt.Packet, index uint32) error {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
 	p.mutex.Unlock()
 	return p.signPsbt(privKey, packet)
 }
@@ -1056,6 +1099,13 @@ func (p *InternalWallet) SignPsbts(packet []*psbt.Packet) error {
 	return p.signPsbts(privKey, packet)
 }
 
+func (p *InternalWallet) SignPsbtsWithIndex(packet []*psbt.Packet, index uint32) error {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
+	p.mutex.Unlock()
+	return p.signPsbts(privKey, packet)
+}
+
 func (p *InternalWallet) signPsbts(privKey *secp256k1.PrivateKey, packets []*psbt.Packet) error {
 	for i, packet := range packets {
 		err := p.signPsbt(privKey, packet)
@@ -1070,6 +1120,13 @@ func (p *InternalWallet) signPsbts(privKey *secp256k1.PrivateKey, packets []*psb
 func (p *InternalWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
+	return p.signPsbt_SatsNet(privKey, packet)
+}
+
+func (p *InternalWallet) SignPsbtWithIndex_SatsNet(packet *spsbt.Packet, index uint32) error {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
 	p.mutex.Unlock()
 	return p.signPsbt_SatsNet(privKey, packet)
 }
@@ -1148,6 +1205,13 @@ func (p *InternalWallet) signPsbt_SatsNet(privKey *secp256k1.PrivateKey, packet 
 func (p *InternalWallet) SignPsbts_SatsNet(packet []*spsbt.Packet) error {
 	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
+	return p.signPsbts_SatsNet(privKey, packet)
+}
+
+func (p *InternalWallet) SignPsbtsWithIndex_SatsNet(packet []*spsbt.Packet, index uint32) error {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
 	p.mutex.Unlock()
 	return p.signPsbts_SatsNet(privKey, packet)
 }
