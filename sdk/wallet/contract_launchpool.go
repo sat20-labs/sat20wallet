@@ -1684,7 +1684,7 @@ func (p *LaunchPoolContractRunTime) launch() error {
 					var txId string
 					var err error
 					for i := 0; i < 3; i++ {
-						txId, err = p.stp.CoBatchSend_SatsNet(destAddr, p.GetAssetName().String(),
+						txId, err = p.stp.CoBatchSend_SatsNet(p.localWallet, destAddr, p.GetAssetName().String(),
 							destAmt, "contract", p.URL(), invokeCount, nullDataScript, p.StaticMerkleRoot, p.CurrAssetMerkleRoot)
 						if err != nil {
 							Log.Infof("launch contract %s CoBatchSend_SatsNet failed %v, wait a second and try again", p.URL(), err)
@@ -1856,7 +1856,7 @@ func (p *LaunchPoolContractRunTime) refund() error {
 				var txId string
 				var err error
 				for i := 0; i < 3; i++ {
-					txId, err = p.stp.CoBatchSend_SatsNet(destAddr, ASSET_PLAIN_SAT.String(),
+					txId, err = p.stp.CoBatchSend_SatsNet(p.localWallet, destAddr, ASSET_PLAIN_SAT.String(),
 						destAmt, "contract", p.URL(), invokeCount, nullDataScript, p.StaticMerkleRoot, p.CurrAssetMerkleRoot)
 					if err != nil {
 						Log.Infof("refund contract %s CoBatchSend_SatsNet failed %v, wait a second and try again", p.URL(), err)

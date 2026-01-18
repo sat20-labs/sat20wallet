@@ -19,6 +19,7 @@ import (
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
 
@@ -70,7 +71,7 @@ func (p *Manager) BatchSendAssetsV2_SatsNet(destAddr []string,
 		return "", err
 	}
 
-	tx, prevFetcher, err := p.BuildBatchSendTx_SatsNet(destAddr, name, destAmt, utxos, fees, memo)
+	tx, prevFetcher, err := p.BuildBatchSendTx_SatsNet("", destAddr, name, destAmt, utxos, fees, memo)
 	if err != nil {
 		return "", err
 	}
@@ -94,11 +95,10 @@ func (p *Manager) BatchSendAssetsV2_SatsNet(destAddr []string,
 }
 
 // 构建tx，发送给多个地址不同数量的资产，只发送资产（可以是白聪）
-func (p *Manager) BuildBatchSendTx_SatsNet(destAddr []string,
+func (p *Manager) BuildBatchSendTx_SatsNet(localAddress string, destAddr []string,
 	assetName *swire.AssetName, destAmt []*Decimal, utxos, fees []string, memo []byte) (*swire.MsgTx, *stxscript.MultiPrevOutFetcher, error) {
-
-	if p.wallet == nil {
-		return nil, nil, fmt.Errorf("wallet is not created/unlocked")
+	if localAddress == "" {
+		localAddress = p.wallet.GetAddress()
 	}
 
 	if len(destAddr) != len(destAmt) {
@@ -130,7 +130,7 @@ func (p *Manager) BuildBatchSendTx_SatsNet(destAddr []string,
 
 	fee := indexer.NewDefaultDecimal(DEFAULT_FEE_SATSNET)
 
-	p.utxoLockerL2.Reload(p.wallet.GetAddress())
+	p.utxoLockerL2.Reload(localAddress)
 	prevFetcher := stxscript.NewMultiPrevOutFetcher(nil)
 	var input TxOutput_SatsNet
 	value := int64(0)
@@ -228,7 +228,7 @@ func (p *Manager) BatchSendAssetsV3_SatsNet(dest []*SendAssetInfo,
 		return "", err
 	}
 
-	tx, prevFetcher, err := p.BuildBatchSendTxV2_SatsNet(dest, name, utxos, fees, memo)
+	tx, prevFetcher, err := p.BuildBatchSendTxV2_SatsNet("", dest, name, utxos, fees, memo)
 	if err != nil {
 		Log.Errorf("buildBatchSendTxV2_SatsNet failed. %v", err)
 		return "", err
@@ -252,14 +252,11 @@ func (p *Manager) BatchSendAssetsV3_SatsNet(dest []*SendAssetInfo,
 }
 
 // 构建tx，从本地地址或者通道地址，发送资产到指定的地址列表，包括白聪和资产。资产只能一种。
-func (p *Manager) BuildBatchSendTxV2_SatsNet(dest []*SendAssetInfo,
+func (p *Manager) BuildBatchSendTxV2_SatsNet(localAddress string, dest []*SendAssetInfo,
 	assetName *swire.AssetName, utxos, fees []string, memo []byte) (*swire.MsgTx, *stxscript.MultiPrevOutFetcher, error) {
-
-	if p.wallet == nil {
-		return nil, nil, fmt.Errorf("wallet is not created/unlocked")
+	if localAddress == "" {
+		localAddress = p.wallet.GetAddress()
 	}
-	address := p.wallet.GetAddress()
-
 	if len(dest) == 0 {
 		return nil, nil, fmt.Errorf("the lenght of address is 0")
 	}
@@ -287,7 +284,7 @@ func (p *Manager) BuildBatchSendTxV2_SatsNet(dest []*SendAssetInfo,
 
 	fee := indexer.NewDefaultDecimal(DEFAULT_FEE_SATSNET)
 
-	p.utxoLockerL2.Reload(address)
+	p.utxoLockerL2.Reload(localAddress)
 	prevFetcher := stxscript.NewMultiPrevOutFetcher(nil)
 	var input TxOutput_SatsNet
 
@@ -1080,9 +1077,11 @@ func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 	return txid, nil
 }
 
-func (p *Manager) GenerateStubUtxos(n int, feeRate int64) (string, int64, error) {
+func (p *Manager) GenerateStubUtxos(localWallet common.Wallet, 
+	n int, feeRate int64) (string, int64, error) {
 	//
-	tx, fee, err := p.BatchSendAssets(p.wallet.GetAddress(), indexer.ASSET_PLAIN_SAT.String(),
+	tx, fee, err := p.BatchSendAssetsWithWallet(localWallet, 
+		localWallet.GetAddress(), indexer.ASSET_PLAIN_SAT.String(),
 		"330", n, feeRate, nil)
 	if err != nil {
 		return "", fee, err
@@ -1102,7 +1101,8 @@ func (p *Manager) GenerateStubUtxosV2(n int, excludedUtxoMap map[string]bool,
 		feeRate = p.GetFeeRate()
 	}
 
-	tx, prevFetcher, fee, err := p.BuildBatchSendTx_btc(destAddr, 330, n, excludedUtxoMap, feeRate, nil, false)
+	tx, prevFetcher, fee, err := p.BuildBatchSendTx_btc(destAddr, destAddr, 
+		330, n, excludedUtxoMap, feeRate, nil, false)
 	if err != nil {
 		Log.Errorf("buildBatchSendTx failed. %v", err)
 		return nil, 0, err
@@ -1138,9 +1138,16 @@ func (p *Manager) BatchSendPlainSats(destAddr string, value int64, n int,
 // 发送资产到一个地址上，拆分n个输出
 func (p *Manager) BatchSendAssets(destAddr string, assetName string, 
 	amt string, n int, feeRate int64, memo []byte) (*wire.MsgTx, int64, error) {
+	return p.BatchSendAssetsWithWallet(p.wallet, destAddr, assetName, amt, n, feeRate, memo)
+}
 
-	if p.wallet == nil {
-		return nil, 0, fmt.Errorf("wallet is not created/unlocked")
+
+// 发送资产到一个地址上，拆分n个输出
+func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr string, assetName string, 
+	amt string, n int, feeRate int64, memo []byte) (*wire.MsgTx, int64, error) {
+
+	if localWallet == nil {
+		localWallet = p.wallet
 	}
 	name := ParseAssetString(assetName)
 	if name == nil {
@@ -1170,15 +1177,16 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 
 	var inscribe *InscribeResv
 	newName := GetAssetName(tickerInfo)
+	localAddress := localWallet.GetAddress()
 	switch name.Protocol {
 	case "": // btc
-		tx, prevFetcher, fee, err = p.BuildBatchSendTx_btc(destAddr, dAmt.Int64(), n, nil, feeRate, memo, true)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTx_btc(localAddress, destAddr, dAmt.Int64(), n, nil, feeRate, memo, true)
 	case indexer.PROTOCOL_NAME_ORDX:
-		tx, prevFetcher, fee, err = p.BuildBatchSendTx_ordx(destAddr, newName, dAmt, n, feeRate, memo)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTx_ordx(localAddress, destAddr, newName, dAmt, n, feeRate, memo)
 	case indexer.PROTOCOL_NAME_RUNES:
-		tx, prevFetcher, fee, err = p.BuildBatchSendTx_runes(destAddr, newName, dAmt, n, feeRate, memo)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTx_runes(localAddress, destAddr, newName, dAmt, n, feeRate, memo)
 	case indexer.PROTOCOL_NAME_BRC20:
-		tx, prevFetcher, fee, inscribe, err = p.BuildBatchSendTx_brc20(destAddr, newName, dAmt, n, feeRate, memo)
+		tx, prevFetcher, fee, inscribe, err = p.BuildBatchSendTx_brc20(localAddress, destAddr, newName, dAmt, n, feeRate, memo)
 	default:
 		return nil, 0, fmt.Errorf("buildBatchSendTx unsupport protocol %s", name.Protocol)
 	}
@@ -1193,7 +1201,7 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 	}()
 
 	// sign
-	tx, err = p.SignTx(tx, prevFetcher)
+	tx, err = SignTxWithWallet(localWallet, tx, prevFetcher)
 	if err != nil {
 		Log.Errorf("SignTx failed. %v", err)
 		return nil, 0, err
@@ -1224,7 +1232,7 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 }
 
 // 从p2tr地址发出
-func (p *Manager) BuildBatchSendTx_btc(destAddr string, amt int64, n int,
+func (p *Manager) BuildBatchSendTx_btc(localAddress string, destAddr string, amt int64, n int,
 	excludedUtxoMap map[string]bool,
 	feeRate int64, memo []byte, autoAdjust bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
@@ -1258,7 +1266,7 @@ func (p *Manager) BuildBatchSendTx_btc(destAddr string, amt int64, n int,
 
 	required := amt * int64(n)
 	prevFetcher, changePkScript, outputValue, changeOutput, fee0, err := p.SelectUtxosForPlainSats(
-		p.wallet.GetAddress(), excludedUtxoMap,
+		localAddress, excludedUtxoMap,
 		required, feeRate, tx, &weightEstimate, false, false)
 	if err != nil {
 		return nil, nil, 0, err
@@ -1361,7 +1369,7 @@ func AdjustInputsForSplicingIn(inputs []*TxOutput, name *AssetName) ([]*TxOutput
 }
 
 // 给同一个地址发送n等分资产
-func (p *Manager) BuildBatchSendTx_ordx(destAddr string,
+func (p *Manager) BuildBatchSendTx_ordx(localAddr, destAddr string,
 	name *AssetName, amt *Decimal, n int, feeRate int64,
 	memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
@@ -1378,7 +1386,7 @@ func (p *Manager) BuildBatchSendTx_ordx(destAddr string,
 	requiredAmt := amt.Clone().MulBigInt(big.NewInt(int64(n)))
 	var weightEstimate utils.TxWeightEstimator
 	selected, totalAsset, total, err := p.SelectUtxosForAsset(
-		p.wallet.GetAddress(), nil,
+		localAddr, nil,
 		&name.AssetName, requiredAmt, &weightEstimate, false, false)
 	if err != nil {
 		return nil, nil, 0, err
@@ -1467,7 +1475,7 @@ func (p *Manager) BuildBatchSendTx_ordx(destAddr string,
 	if feeValue < fee0 {
 		// 增加fee
 		var selected []*TxOutput
-		selected, feeValue, err = p.SelectUtxosForFee(p.wallet.GetAddress(), nil,
+		selected, feeValue, err = p.SelectUtxosForFee(localAddr, nil,
 			feeValue, feeRate, &weightEstimate, false, false)
 		if err != nil {
 			return nil, nil, 0, err
@@ -1508,7 +1516,7 @@ func (p *Manager) BuildBatchSendTx_ordx(destAddr string,
 }
 
 // 给同一个地址发送n等分资产
-func (p *Manager) BuildBatchSendTx_runes(destAddr string,
+func (p *Manager) BuildBatchSendTx_runes(localAddr, destAddr string,
 	name *AssetName, amt *Decimal, n int, feeRate int64,
 	memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
@@ -1525,7 +1533,7 @@ func (p *Manager) BuildBatchSendTx_runes(destAddr string,
 	requiredAmt := amt.Clone().MulBigInt(big.NewInt(int64(n)))
 	var weightEstimate utils.TxWeightEstimator
 	selected, totalAsset, total, err := p.SelectUtxosForAsset(
-		p.wallet.GetAddress(), nil,
+		localAddr, nil,
 		&name.AssetName, requiredAmt, &weightEstimate, false, false)
 	if err != nil {
 		return nil, nil, 0, err
@@ -1594,7 +1602,7 @@ func (p *Manager) BuildBatchSendTx_runes(destAddr string,
 		// 增加fee
 		var selected []*TxOutput
 		selected, feeValue, err = p.SelectUtxosForFee(
-			p.wallet.GetAddress(), nil, feeValue,
+			localAddr, nil, feeValue,
 			feeRate, &weightEstimate, false, false)
 		if err != nil {
 			return nil, nil, 0, err
@@ -1770,7 +1778,7 @@ func (p *Manager) SelectUtxosForBRC20(utxomgr *UtxoMgr, excludedUtxoMap map[stri
 }
 
 // 给同一个地址发送n等分资产. brc20只支持n==1的情况
-func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
+func (p *Manager) BuildBatchSendTx_brc20(localAddr, destAddr string,
 	name *AssetName, amt *Decimal, n int, feeRate int64,
 	memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, *InscribeResv, error) {
 
@@ -1791,7 +1799,6 @@ func (p *Manager) BuildBatchSendTx_brc20(destAddr string,
 	}
 
 	// 先确定总数够不够
-	localAddr := p.wallet.GetAddress()
 	utxomgr := NewUtxoMgr(localAddr, p.l1IndexerClient)
 	totalAmt := p.GetAssetBalance(localAddr, &name.AssetName)
 	if totalAmt.Cmp(amt) < 0 {
@@ -2995,7 +3002,7 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 	case "": // btc
 		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_btc(srcAddr, excluded, dest, feeRate, memo, false, false, autoAdjust)
 	case indexer.PROTOCOL_NAME_ORDX:
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_ordx(srcAddr, excluded, dest, assetName, feeRate, memo, false, false)
+		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3_ordx(srcAddr, excluded, dest, assetName, feeRate, memo, false, false, p.wallet)
 	case indexer.PROTOCOL_NAME_RUNES:
 		if len(memo) != 0 { // TODO 等主网支持多个op_return后再修改
 			return "", 0, fmt.Errorf("do not attach memo when send runes asset")
@@ -3057,11 +3064,10 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 }
 
 // 给多个地址发送不同数量的白聪，支持全部发送
-func (p *Manager) BuildBatchSendTxV3_btc(srcAddress string, excluded map[string]bool, dest []*SendAssetInfo,
-	feeRate int64, memo []byte, excludeRecentBlock, inChannel, autoAdjust bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
-	if p.wallet == nil {
-		return nil, nil, 0, fmt.Errorf("wallet is not created/unlocked")
-	}
+func (p *Manager) BuildBatchSendTxV3_btc(srcAddress string, excluded map[string]bool, 
+	dest []*SendAssetInfo,
+	feeRate int64, memo []byte, excludeRecentBlock, inChannel, autoAdjust bool,
+	) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 	
 	tx := wire.NewMsgTx(wire.TxVersion)
 	var requiredValue int64
@@ -3140,8 +3146,12 @@ func (p *Manager) BuildBatchSendTxV3_btc(srcAddress string, excluded map[string]
 // 资产和聪分别放在两个utxo中
 func (p *Manager) BuildBatchSendTxV3_ordx(srcAddress string, excluded map[string]bool, 
 	dest []*SendAssetInfo, assetName *AssetName,
-	feeRate int64, memo []byte, excludeRecentBlock, inChannel bool) (
+	feeRate int64, memo []byte, excludeRecentBlock, inChannel bool, localWallet common.Wallet) (
 	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+
+	if localWallet == nil {
+		localWallet = p.wallet
+	}
 
 	tx := wire.NewMsgTx(wire.TxVersion)
 
@@ -3195,9 +3205,9 @@ func (p *Manager) BuildBatchSendTxV3_ordx(srcAddress string, excluded map[string
 			var stubTx string
 			var fee int64
 			if inChannel {
-				stubTx, fee, err = p.CoGenerateStubUtxos(stubNum+10, feeRate, "", 0, false)
+				stubTx, fee, err = p.CoGenerateStubUtxos(localWallet, stubNum+10, feeRate, "", 0, false)
 			} else {
-				stubTx, fee, err = p.GenerateStubUtxos(2, feeRate)
+				stubTx, fee, err = p.GenerateStubUtxos(localWallet, 2, feeRate)
 			}
 			if err != nil {
 				Log.Errorf("GenerateStubUtxos %d failed, %v", stubNum+10, err)

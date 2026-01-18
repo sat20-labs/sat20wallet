@@ -212,17 +212,17 @@ type ContractManager interface {
 	GetDB() indexer.KVDB
 	NeedRebuildTraderHistory() bool
 
-	CoGenerateStubUtxos(n int, feeRate int64, contractURL string, invokeCount int64,
+	CoGenerateStubUtxos(localWallet common.Wallet, n int, feeRate int64, contractURL string, invokeCount int64,
 		excludeRecentBlock bool) (string, int64, error)
-	CoBatchSendV3(dest []*SendAssetInfo, assetNameStr string, feeRate int64,
+	CoBatchSendV3(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
-	CoSendOrdxWithStub(dest string, assetNameStr string, amt int64, feeRate int64, stub string,
+	CoSendOrdxWithStub(localWallet common.Wallet, dest string, assetNameStr string, amt int64, feeRate int64, stub string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
-	CoBatchSendV2_SatsNet(dest []*SendAssetInfo, assetName string,
+	CoBatchSendV2_SatsNet(localWallet common.Wallet, dest []*SendAssetInfo, assetName string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error)
-	CoBatchSend_SatsNet(destAddr []string, assetName string, amtVect []string,
+	CoBatchSend_SatsNet(localWallet common.Wallet, destAddr []string, assetName string, amtVect []string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error)
 	SendSigReq(req *wwire.SignRequest, sig []byte) ([][][]byte, error)
 
@@ -869,7 +869,7 @@ type ContractRuntimeBase struct {
 	ChannelAddr   string `json:"channelAddr"`
 	InvokeCount   int64  `json:"invokeCount"`
 	Divisibility  int    `json:"divisibility"`
-	N             int    `json:"n"`
+	N             int    `json:"n"` // bindingSat
 
 	CheckPoint          int64  // 上个与peer端校验过merkleRoot的invokeCount
 	StaticMerkleRoot    []byte // 合约静态数据
@@ -880,10 +880,12 @@ type ContractRuntimeBase struct {
 	CheckPointBlockL1 int
 	LocalPubKey       []byte
 	RemotePubKey      []byte
+	SubAccoutIndex    uint32 // local wallet subaccount index
 
 	history            map[string]*InvokeItem // key:utxo 单独记录数据库，区块缓存, 6个区块以后，并且已经成交的可以删除
 	resv               ContractDeployResvIF
 	stp                ContractManager
+	localWallet        common.Wallet
 	contract           Contract
 	runtime            ContractRuntime
 	assetMerkleRootMap map[int64][]byte // invokeCount -> AssetMerkleRoot 临时缓存
@@ -2389,7 +2391,7 @@ func (p *ContractRuntimeBase) sendTx_SatsNet(dealInfo *DealInfo, reason string) 
 	var txId string
 	var err error
 	for i := 0; i < 3; i++ {
-		txId, err = p.stp.CoBatchSendV2_SatsNet(sendInfoVect, dealInfo.AssetName.String(),
+		txId, err = p.stp.CoBatchSendV2_SatsNet(p.localWallet, sendInfoVect, dealInfo.AssetName.String(),
 			"contract", url, dealInfo.InvokeCount, nullDataScript,
 			dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot)
 		if err != nil {
@@ -2457,7 +2459,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 		stubs, err = p.stp.GetWalletMgr().GetUtxosForStubs(p.Address(), stubNum, nil)
 		if err != nil {
 			// 重新生成一堆
-			stubTx, fee, err := p.stp.CoGenerateStubUtxos(stubNum+10, dealInfo.FeeRate,
+			stubTx, fee, err := p.stp.CoGenerateStubUtxos(p.localWallet, stubNum+10, dealInfo.FeeRate,
 				p.URL(), dealInfo.InvokeCount, excludeRecentBlock)
 			if err != nil {
 				Log.Errorf("CoGenerateStubUtxos %d failed, %v", stubNum+10, err)
@@ -2478,7 +2480,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
 	if len(sendInfoVect) > 0 {
 		for i := 0; i < 3; i++ {
-			txId, fee, err = p.stp.CoBatchSendV3(sendInfoVect, dealInfo.AssetName.String(), dealInfo.FeeRate,
+			txId, fee, err = p.stp.CoBatchSendV3(p.localWallet, sendInfoVect, dealInfo.AssetName.String(), dealInfo.FeeRate,
 				"contract", url, dealInfo.InvokeCount, nullDataScript,
 				dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
 			if err != nil {
@@ -2508,7 +2510,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 			}
 			sendInfo := sendInfoVectWithStub[0]
 			for i := 0; i < 3; i++ {
-				txId, fee, err = p.stp.CoSendOrdxWithStub(sendInfo.Address,
+				txId, fee, err = p.stp.CoSendOrdxWithStub(p.localWallet, sendInfo.Address,
 					sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(), dealInfo.FeeRate,
 					stubs[0], "contract", url, dealInfo.InvokeCount, nullDataScript,
 					dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)

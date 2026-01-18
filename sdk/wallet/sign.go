@@ -7,6 +7,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
@@ -48,13 +49,17 @@ import (
 // }
 
 func (p *Manager) SignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) (*wire.MsgTx, error) {
+	return SignTxWithWallet(p.wallet, tx, prevFetcher)
+}
 
+
+func SignTxWithWallet(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) (*wire.MsgTx, error) {
 	packet, err := CreatePsbt(tx, prevFetcher, nil)
 	if err != nil {
 		Log.Errorf("wallet.CreatePsbt failed, %v", err)
 		return nil, err
 	}
-	err = p.wallet.SignPsbt(packet)
+	err = localWallet.SignPsbt(packet)
 	if err != nil {
 		Log.Errorf("SignPsbt failed, %v", err)
 		return nil, err

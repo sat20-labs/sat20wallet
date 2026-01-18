@@ -755,7 +755,7 @@ func TestAmmContract(t *testing.T) {
 		amm.sendInvokeResultTx()
 		amm.sendInvokeResultTx_SatsNet()
 		_not_send_tx = false // 需要生成一个新的tx，不然可能影响测试结果
-		txId, err := _server.CoBatchSend_SatsNet([]string{channelId}, ASSET_PLAIN_SAT.String(),
+		txId, err := _server.CoBatchSend_SatsNet(nil, []string{channelId}, ASSET_PLAIN_SAT.String(),
 			[]string{"10"}, "testing", amm.URL(), 0, nil, amm.StaticMerkleRoot, amm.CurrAssetMerkleRoot)
 		if err != nil {
 			t.Fatal(err)
@@ -1007,7 +1007,7 @@ func TestAmmContract_Runes(t *testing.T) {
 		amm.sendInvokeResultTx()
 		amm.sendInvokeResultTx_SatsNet()
 		_not_send_tx = false // 需要生成一个新的tx，不然可能影响测试结果
-		txId, err := _server.CoBatchSend_SatsNet([]string{channelId}, ASSET_PLAIN_SAT.String(),
+		txId, err := _server.CoBatchSend_SatsNet(nil, []string{channelId}, ASSET_PLAIN_SAT.String(),
 			[]string{"10"}, "testing", amm.URL(), 0, nil, amm.StaticMerkleRoot, amm.CurrAssetMerkleRoot)
 		if err != nil {
 			t.Fatal(err)
