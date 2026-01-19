@@ -14,11 +14,13 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	swire "github.com/sat20-labs/satoshinet/wire"
+	"github.com/sirupsen/logrus"
 )
 
 var _test_chain = "testnet"
 var _client *Manager
 var _server *Manager
+var _bootstrap *Manager
 
 func newTestConfForClient(mode, dbPath string) *common.Config {
 	ret := &common.Config{
@@ -43,7 +45,6 @@ func newTestConfForClient(mode, dbPath string) *common.Config {
 		DB:  dbPath,
 
 		Mode: mode,
-		
 	}
 
 	// if _test_chain == "mainnet" {
@@ -85,22 +86,25 @@ func newTestConfForServer(mode, dbPath string) *common.Config {
 	return ret
 }
 
-
-
 func initNode(t *testing.T, mode, dbPath string) *Manager {
 
-	var cfg *common.Config
+	var lcfg *common.Config
 	if mode == SERVER_NODE || mode == BOOTSTRAP_NODE {
-		cfg = newTestConfForServer(mode, dbPath)
+		lcfg = newTestConfForServer(mode, dbPath)
 	} else {
-		cfg = newTestConfForClient(mode, dbPath)
+		lcfg = newTestConfForClient(mode, dbPath)
 	}
-	db := NewKVDB(cfg.DB)
+	db := NewKVDB(lcfg.DB)
 	if db == nil {
 		t.Fatalf("NewKVDB failed")
 	}
-	manager := NewManager(cfg, db)
+	manager := NewManager(lcfg, db)
 
+	lvl, err := logrus.ParseLevel(lcfg.Log)
+	if err != nil {
+		lvl = logrus.DebugLevel
+	}
+	Log.SetLevel(lvl)
 
 	// mnemonice, err := manager.CreateWallet("123456")
 	// if err != nil {
@@ -114,38 +118,25 @@ func initNode(t *testing.T, mode, dbPath string) *Manager {
 			t.Fatalf("UnlockWallet failed. %v", err)
 		}
 	} else {
-		if mode == "client" {
-			mnemonic := ""
-
-			// tb1p62gjhywssq42tp85erlnvnumkt267ypndrl0f3s4sje578cgr79sekhsua
-			// mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
-			
-			// tb1pttjr9292tea2nr28ca9zswgdhz0dasnz6n3v58mtg9cyf9wqr49sv8zjep
-			mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
-			
-			// tb1pvcdrd5gumh8z2nkcuw9agmz7e6rm6mafz0h8f72dwp6erjqhevuqf2uhtv
-			// mnemonic = "remind effort case concert skull live spoil obvious finish top bargain age"
-
-			// tb1p6rk7tq5avpjmpudgut4vkhda5m8eetlzpqd6mrcr6u2022tdwfssfsra5x
-			// mnemonic = "comfort very add tuition senior run eight snap burst appear exile dutch"
-
-			// tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g
-			// mnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
-			_, err := manager.ImportWallet(mnemonic, "123456")
-			if err != nil {
-				t.Fatalf("ImportWallet failed. %v", err)
+		mnemonic := ""
+		if manager.IsServerMode() {
+			if manager.cfg.Mode == "bootstrap" {
+				mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
+			} else {
+				//mnemonic = "suit pitch annual bar plug pull comic response night debate evoke original" // server-1
+				mnemonic = "uniform bulb body vital later special era tourist build chief devote annual"
 			}
 		} else {
-			mnemonic := ""
+			// 跑模拟测试用
+			mnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
+			// tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g
 
-			mnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
-			// mnemonic = "faith fluid swarm never label left vivid fetch scatter dilemma slight wear"
-			// mnemonic = "remind effort case concert skull live spoil obvious finish top bargain age"
-			// mnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
-			_, err := manager.ImportWallet(mnemonic, "123456")
-			if err != nil {
-				t.Fatalf("ImportWallet failed. %v", err)
-			}
+			// mnemonic = "comfort very add tuition senior run eight snap burst appear exile dutch"
+			// tb1p6rk7tq5avpjmpudgut4vkhda5m8eetlzpqd6mrcr6u2022tdwfssfsra5x
+		}
+		_, err := manager.ImportWallet(mnemonic, "123456")
+		if err != nil {
+			t.Fatalf("ImportWallet failed. %v", err)
 		}
 	}
 	// client:
@@ -177,42 +168,229 @@ func initNode(t *testing.T, mode, dbPath string) *Manager {
 	return manager
 }
 
+func createNode(t *testing.T, mode, dbPath string, server, bootstrap *Manager) *Manager {
 
-func createNode(t *testing.T, mode, dbPath string, server *Manager) *Manager {
 	manager := initNode(t, mode, dbPath)
 
 	indexerClient1 := NewTestIndexerClient(_network1)
+	l1IndexerMgr := NewIndexerRPCClientMgr()
+	l1IndexerMgr.Set(indexerClient1)
+
 	indexerClient2 := NewTestIndexerClient(_network2)
-	manager.l1IndexerClient = indexerClient1
-	manager.l2IndexerClient = indexerClient2
+	l2IndexerMgr := NewIndexerRPCClientMgr()
+	l2IndexerMgr.Set(indexerClient2)
+
+	manager.l1IndexerClient = l1IndexerMgr
+	manager.l2IndexerClient = l2IndexerMgr
 	nodeClient := NewTestNodeClient(server)
 	manager.serverNode.client = nodeClient
-	// if bootstrap != nil {
-	// 	nodeClient := NewTestNodeClient(bootstrap)
-	// 	manager.bootstrapNode[0].client = nodeClient
-	// }
+	if bootstrap != nil {
+		nodeClient := NewTestNodeClient(bootstrap)
+		manager.bootstrapNode[0].client = nodeClient
+	}
 
 	manager.SetIndexerHttpClient(indexerClient1)
 	manager.SetIndexerHttpClient_SatsNet(indexerClient2)
 	manager.SetServerNodeHttpClient(nodeClient)
 
-	manager.utxoLockerL1.rpcClient = indexerClient1
-	manager.utxoLockerL2.rpcClient = indexerClient2
+	// manager.utxoLockerL1.rpcClient = indexerClient1
+	// manager.utxoLockerL2.rpcClient = indexerClient2
 
 	return manager
 }
 
+func closeNode(stp *Manager) {
+	stp.initResvMap()
+	stp.status.SyncHeight = -1
+	stp.status.SyncHeightL2 = -1
+	stp.Close()
+}
+
+func createNode_TestNet4(t *testing.T, mode, dbPath string, server *Manager) *Manager {
+
+	manager := initNode(t, mode, dbPath)
+	manager.status.SyncHeight = int(manager.l1IndexerClient.GetSyncHeight())
+	manager.status.SyncHeightL2 = int(manager.l2IndexerClient.GetSyncHeight())
+
+	return manager
+}
+
+func clean(t *testing.T) {
+	if _client != nil {
+		closeNode(_client)
+		_client = nil
+	}
+	if _server != nil {
+		closeNode(_server)
+		_server = nil
+	}
+	if _bootstrap != nil {
+		closeNode(_bootstrap)
+		_bootstrap = nil
+	}
+	err := os.RemoveAll("../db")
+	if err != nil {
+		t.Fatalf("RemoveAll failed: %v\n", err)
+	}
+}
+
 func prepare(t *testing.T) {
+	_enable_testing = true
+	clean(t)
+
+	indexer.ENABLE_TESTING = true
+	indexer.CHAIN = _test_chain
+
+
+	_bootstrap = createNode(t, BOOTSTRAP_NODE, "../db/bootstrapDB", nil, nil)
+	_server = createNode(t, SERVER_NODE, "../db/serverDB", _bootstrap, nil)
+	_client = createNode(t, CLIENT_NODE, "../db/clientDB", _server, _bootstrap)
+
+	tx, err := CreateGenesisTx(_network1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	InitTickerInfo(tx.TxID())
+
+	txId, err := _bootstrap.l1IndexerClient.BroadCastTx(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("bitcoin net genesis tx broadcasted. %s\n", txId)
+	_network1.InitBRC20AssetInfo()
+
+	tx2, err := CreateGenesisTx_SatsNet(_network2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txId, err = _bootstrap.l2IndexerClient.BroadCastTx_SatsNet(tx2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("satoshi net genesis tx broadcasted. %s\n", txId)
+
+	txId, _, err = _server.BatchSendPlainSats(_server.wallet.GetAddress(), 330, 10, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("server stub tx broadcasted. %s\n", txId)
+}
+
+func prepare_TestNet4(t *testing.T) {
+	//_enable_testing = true
+
+
 	err := os.RemoveAll("../db")
 	if err != nil {
 		t.Fatalf("RemoveAll failed: %v\n", err)
 	}
 
-	indexer.CHAIN = _test_chain
-
-	_server = createNode(t, "server", "../db/serverDB", nil)
-	_client = createNode(t, "client", "../db/clientDB", _server)
+	_bootstrap = createNode_TestNet4(t, BOOTSTRAP_NODE, "../db/bootstrapDB", nil)
+	_server = createNode_TestNet4(t, SERVER_NODE, "../db/serverDB", _bootstrap)
+	_client = createNode_TestNet4(t, CLIENT_NODE, "../db/clientDB", _server)
 }
+
+
+type Env struct {
+	network1  *network
+	network2  *network
+	tickInfo  map[string]*indexer.TickerInfo
+}
+
+var _backupEnv Env
+
+func backupEnv() *Env {
+
+	_backupEnv.network1 = _network1.Clone()
+	_backupEnv.network2 = _network2.Clone()
+
+	_backupEnv.tickInfo = CloneTickerInfo()
+
+	n := &Env{}
+	*n = _backupEnv
+	fmt.Println("env backup complete")
+	return n
+}
+
+func restoreEnv() {
+	restoreSpecEnv(&_backupEnv)
+}
+
+func stopNode(stp *Manager) {
+	if stp == nil {
+		return
+	}
+	stp.initResvMap()
+}
+
+func initUtxoLocker(stp *Manager) {
+	DeleteAllLockedUtxo(stp.db, L2_NETWORK_SATOSHI)
+	DeleteAllLockedUtxo(stp.db, L1_NETWORK_BITCOIN)
+	stp.utxoLockerL1.Reload("")
+	stp.utxoLockerL2.Reload("")
+}
+
+// 不要改动channels
+func restoreMgr(stp *Manager) {
+	initUtxoLocker(stp)
+}
+
+func restoreSpecEnv(backup *Env) {
+	stopNode(_client)
+	stopNode(_server)
+	stopNode(_bootstrap)
+
+	_network1.Set(backup.network1)
+	_network2.Set(backup.network2)
+	SetTickerInfo(backup.tickInfo)
+
+	_client.status.SyncHeight = _network1.height - 1
+	_client.status.SyncHeightL2 = _network2.height - 1
+	_server.status.SyncHeight = _network1.height - 1
+	_server.status.SyncHeightL2 = _network2.height - 1
+	_bootstrap.status.SyncHeight = _network1.height - 1
+	_bootstrap.status.SyncHeightL2 = _network2.height - 1
+
+	restoreMgr(_bootstrap)
+	restoreMgr(_server)
+	restoreMgr(_client)
+
+
+	fmt.Println("env restore complete")
+}
+
+
+func backupNetwork() *Env {
+	n := &Env{
+		network1: _network1.Clone(),
+		network2: _network2.Clone(),
+		tickInfo: CloneTickerInfo(),
+	}
+	fmt.Println("network backup complete")
+	return n
+}
+
+func restoreNetwork(backup *Env) {
+	_network1.Set(backup.network1)
+	_network2.Set(backup.network2)
+	SetTickerInfo(backup.tickInfo)
+
+	if _client != nil {
+		initUtxoLocker(_client)
+	}
+
+	if _server != nil {
+		initUtxoLocker(_server)
+	}
+
+	if _bootstrap != nil {
+		initUtxoLocker(_bootstrap)
+	}
+
+	fmt.Println("network restore complete")
+}
+
+
 
 func TestPsbt(t *testing.T) {
 	prepare(t)
@@ -652,6 +830,93 @@ func TestVerifyTx(t *testing.T) {
 
 }
 
+
+func TestImportPrivKeyWallet(t *testing.T) {
+	prepare(t)
+
+	privatekey := "cd8deaf4d6f66edca13370f823de0b36fa7e911d1391f3967479e02e066a7cd3"
+	address := "tb1prfcqz85l0x9r03fnxkfs3r78g2ap6afp5740m0c9h7g6xd0s5xkqgzjh4q"
+	oldPS := "123456"
+	newPS := "abcdefgh"
+
+	id, err := _client.ImportWalletWithPrivateKey(privatekey, oldPS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("wallet: %d %s\n", id, _client.wallet.GetAddress())
+
+	if _client.wallet.GetAddress() != address {
+		t.Fatal("different address")
+	}
+
+	err = _client.ChangePassword(oldPS, newPS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("%s\n", _client.GetMnemonic(id, oldPS))
+	fmt.Printf("%s\n", _client.GetMnemonic(id, newPS))
+}
+
+
+func TestSend_privKeyWallet(t *testing.T) {
+	prepare(t)
+
+	_client.SwitchAccount(1)
+	address := _client.wallet.GetAddress()
+	interalWallet, ok := _client.wallet.(*InternalWallet)
+	if !ok {
+		t.Fatal()
+	}
+	privkey := interalWallet.getPaymentPrivKey().Serialize()
+	privKeyStr := hex.EncodeToString(privkey)
+	fmt.Printf("private key: %s", privKeyStr)
+	fmt.Printf("address: %s", address)
+
+	assetName := &indexer.AssetName{
+		Protocol: "",
+		Type: "",
+		Ticker: "",
+	}
+
+
+	_client.SwitchAccount(0)
+
+	_, err := _client.SendAssets(address, assetName.String(), "10000", 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value11 := _client.GetAssetBalance(address, assetName)
+	if value11.Int64() != 10000 {
+		t.Fatal()
+	}
+
+	id, err := _client.ImportWalletWithPrivateKey(privKeyStr, "123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("private key wallet id: %d", id)
+	fmt.Printf("private key wallet address: %s", _client.wallet.GetAddress())
+	if _client.wallet.GetAddress() != address {
+		t.Fatal()
+	}
+
+	address2 := "tb1pz747l0qfnt3q2w3ppd45u607rzse0ga85l9vvjtcj8qhcajneqsszqg7z9"
+	value21 := _client.GetAssetBalance(address2, assetName)
+	_, err = _client.SendAssets(address2, assetName.String(), "1000", 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	value12 := _client.GetAssetBalance(address, assetName)
+	if value12.Int64() >= 9000 { // 扣除fee
+		t.Fatal()
+	}
+	value22 := _client.GetAssetBalance(address2, assetName)
+	if value22.Int64() != value21.Int64() + 1000 {
+		t.Fatal()
+	}
+
+}
 
 // func TestDeployContract_ORDX_Remote(t *testing.T) {
 // 	prepare(t)

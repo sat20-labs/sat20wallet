@@ -5,6 +5,7 @@ import (
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -16,11 +17,21 @@ func (p *Manager) GetTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 func (p *Manager) GetWalletMgr() *Manager {
 	return p
 }
+
 func (p *Manager) GetIndexerClient() IndexerRPCClient {
 	return p.l1IndexerClient
 }
+
+func (p *Manager) GetSlaveIndexerClient() IndexerRPCClient {
+	return p.l1IndexerClient.GetSlaveIndexer()
+}
+
 func (p *Manager) GetIndexerClient_SatsNet() IndexerRPCClient {
 	return p.l2IndexerClient
+}
+
+func (p *Manager) GetSlaveIndexerClient_SatsNet() IndexerRPCClient {
+	return p.l2IndexerClient.GetSlaveIndexer()
 }
 
 func (p *Manager) GetMode() string {
@@ -54,25 +65,25 @@ func (p *Manager) NeedRebuildTraderHistory() bool {
 	return false
 }
 
-func (p *Manager) CoGenerateStubUtxos(n int, contractURL string, invokeCount int64,
+func (p *Manager) CoGenerateStubUtxos(localWallet common.Wallet, n int, feeRate int64, contractURL string, invokeCount int64,
 	excludeRecentBlock bool) (string, int64, error) {
 	return "", 0, fmt.Errorf("not implemented")
 }
-func (p *Manager) CoBatchSendV3(dest []*SendAssetInfo, assetNameStr string,
+func (p *Manager) CoBatchSendV3(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 	sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error) {
 	return "", 0, fmt.Errorf("not implemented")
 }
-func (p *Manager) CoSendOrdxWithStub(dest string, assetNameStr string, amt int64, stub string,
+func (p *Manager) CoSendOrdxWithStub(localWallet common.Wallet, dest string, assetNameStr string, amt int64, feeRate int64, stub string,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 	sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error) {
 	return "", 0, fmt.Errorf("not implemented")
 }
-func (p *Manager) CoBatchSendV2_SatsNet(dest []*SendAssetInfo, assetName string,
+func (p *Manager) CoBatchSendV2_SatsNet(localWallet common.Wallet, dest []*SendAssetInfo, assetName string,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }
-func (p *Manager) CoBatchSend_SatsNet(destAddr []string, assetName string, amtVect []string,
+func (p *Manager) CoBatchSend_SatsNet(localWallet common.Wallet, destAddr []string, assetName string, amtVect []string,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }
@@ -89,6 +100,6 @@ func (p *Manager) AscendAssetInCoreChannel(assetNameStr string, utxo string, mem
 	return "", fmt.Errorf("not implemented")
 }
 func (p *Manager) DeployContract(templateName, contractContent string,
-	fees []string, feeRate int64, deployer string) (string, int64, error) {
+	fees []string, feeRate int64, subAccountIndex int, deployer string) (string, int64, error) {
 	return "", 0, fmt.Errorf("not implemented")
 }

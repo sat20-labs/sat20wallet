@@ -7,54 +7,25 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-// func (p *Manager) SignTx(tx *wire.MsgTx,
-// 	prevFetcher txscript.PrevOutputFetcher) error {
-
-// 	// privKey := p.wallet.GetPaymentPrivKey()
-// 	// sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
-// 	// for i, in := range tx.TxIn {
-// 	// 	preOut := prevFetcher.FetchPrevOutput(in.PreviousOutPoint)
-// 	// 	if preOut == nil {
-// 	// 		Log.Errorf("can't find outpoint %s", in.PreviousOutPoint)
-// 	// 		return fmt.Errorf("can't find outpoint %s", in.PreviousOutPoint)
-// 	// 	}
-
-// 	// 	scriptType := GetPkScriptType(preOut.PkScript)
-// 	// 	switch scriptType {
-// 	// 	case txscript.WitnessV1TaprootTy: // p2tr
-// 	// 		witness, err := txscript.TaprootWitnessSignature(tx, sigHashes, i,
-// 	// 			preOut.Value, preOut.PkScript,
-// 	// 			txscript.SigHashDefault, privKey)
-// 	// 		if err != nil {
-// 	// 			Log.Errorf("TaprootWitnessSignature failed. %v", err)
-// 	// 			return err
-// 	// 		}
-// 	// 		tx.TxIn[i].Witness = witness
-
-// 	// 	default:
-// 	// 		Log.Errorf("not support type %d", scriptType)
-// 	// 		return fmt.Errorf("not support type %d", scriptType)
-// 	// 	}
-// 	// }
-
-// 	// return nil
-// 	return p.wallet.SignTx(tx, prevFetcher)
-// }
-
 func (p *Manager) SignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) (*wire.MsgTx, error) {
+	return SignTxWithWallet(p.wallet, tx, prevFetcher)
+}
 
+
+func SignTxWithWallet(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) (*wire.MsgTx, error) {
 	packet, err := CreatePsbt(tx, prevFetcher, nil)
 	if err != nil {
 		Log.Errorf("wallet.CreatePsbt failed, %v", err)
 		return nil, err
 	}
-	err = p.wallet.SignPsbt(packet)
+	err = localWallet.SignPsbt(packet)
 	if err != nil {
 		Log.Errorf("SignPsbt failed, %v", err)
 		return nil, err
@@ -91,42 +62,12 @@ func (p *Manager) SignTxV2(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetche
 	return nil
 }
 
-// func (p *Manager) SignTx_SatsNet(tx *swire.MsgTx,
-// 	prevFetcher stxscript.PrevOutputFetcher) error {
-
-// 	// privKey := p.wallet.GetPaymentPrivKey()
-// 	// sigHashes := stxscript.NewTxSigHashes(tx, prevFetcher)
-// 	// for i, in := range tx.TxIn {
-// 	// 	preOut := prevFetcher.FetchPrevOutput(in.PreviousOutPoint)
-// 	// 	if preOut == nil {
-// 	// 		Log.Errorf("can't find outpoint %s", in.PreviousOutPoint)
-// 	// 		return fmt.Errorf("can't find outpoint %s", in.PreviousOutPoint)
-// 	// 	}
-
-// 	// 	scriptType := GetPkScriptType_SatsNet(preOut.PkScript)
-// 	// 	switch scriptType {
-// 	// 	case stxscript.WitnessV1TaprootTy: // p2tr
-// 	// 		witness, err := stxscript.TaprootWitnessSignature(tx, sigHashes, i,
-// 	// 			preOut.Value, preOut.Assets, preOut.PkScript,
-// 	// 			stxscript.SigHashDefault, privKey)
-// 	// 		if err != nil {
-// 	// 			Log.Errorf("TaprootWitnessSignature failed. %v", err)
-// 	// 			return err
-// 	// 		}
-// 	// 		tx.TxIn[i].Witness = witness
-
-// 	// 	default:
-// 	// 		Log.Errorf("not support type %d", scriptType)
-// 	// 		return fmt.Errorf("not support type %d", scriptType)
-// 	// 	}
-// 	// }
-
-// 	// return nil
-// 	return p.wallet.SignTx_SatsNet(tx, prevFetcher)
-// }
-
-
 func (p *Manager) SignTx_SatsNet(tx *swire.MsgTx,
+	prevFetcher stxscript.PrevOutputFetcher) (*swire.MsgTx, error) {
+	return SignTxWithWallet_SatsNet(p.wallet, tx, prevFetcher)
+}
+
+func SignTxWithWallet_SatsNet(localWallet common.Wallet, tx *swire.MsgTx,
 	prevFetcher stxscript.PrevOutputFetcher) (*swire.MsgTx, error) {
 
 	packet, err := CreatePsbt_SatsNet(tx, prevFetcher, nil)
@@ -134,7 +75,7 @@ func (p *Manager) SignTx_SatsNet(tx *swire.MsgTx,
 		Log.Errorf("wallet.CreatePsbt failed, %v", err)
 		return nil, err
 	}
-	err = p.wallet.SignPsbt_SatsNet(packet)
+	err = localWallet.SignPsbt_SatsNet(packet)
 	if err != nil {
 		Log.Errorf("SignPsbt failed, %v", err)
 		return nil, err
@@ -160,7 +101,6 @@ func (p *Manager) SignTx_SatsNet(tx *swire.MsgTx,
 	return finalTx, nil
 }
 
-
 func (p *Manager) SignAndVerifyFundingTx(fundingTx *wire.MsgTx,
 	prevFetcher txscript.PrevOutputFetcher) (*wire.MsgTx, error) {
 
@@ -169,18 +109,23 @@ func (p *Manager) SignAndVerifyFundingTx(fundingTx *wire.MsgTx,
 
 func (p *Manager) PartialSignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	witnessScript []byte, hasSelectingPath bool, peerPubKey []byte) ([][]byte, error) {
+	return PartialSignTxWithWallet(p.wallet, tx, prevFetcher, witnessScript, hasSelectingPath, peerPubKey)
+}
+
+func PartialSignTxWithWallet(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
+	witnessScript []byte, hasSelectingPath bool, peerPubKey []byte) ([][]byte, error) {
 	packet, err := CreatePsbt(tx, prevFetcher, witnessScript)
 	if err != nil {
-		Log.Errorf("wallet.CreatePsbt failed, %v", err)
+		Log.Errorf("CreatePsbt failed, %v", err)
 		return nil, err
 	}
-	err = p.wallet.SignPsbt(packet)
+	err = localWallet.SignPsbt(packet)
 	if err != nil {
 		Log.Errorf("SignPsbt failed, %v", err)
 		return nil, err
 	}
 
-	pubkey := p.wallet.GetPaymentPubKey().SerializeCompressed()
+	pubkey := localWallet.GetPaymentPubKey().SerializeCompressed()
 	pos := GetCurrSignPosition2(pubkey, peerPubKey)
 	result := make([][]byte, 0)
 	for i, txIn := range tx.TxIn {
@@ -237,19 +182,24 @@ func (p *Manager) PartialSignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputF
 
 func (p *Manager) PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
 	witnessScript []byte, peerPubKey []byte) ([][]byte, error) {
+	return PartialSignTxWithWallet_SatsNet(p.wallet, tx, prevFetcher, witnessScript, peerPubKey)
+}
+
+func PartialSignTxWithWallet_SatsNet(localWallet common.Wallet, tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
+	witnessScript []byte, peerPubKey []byte) ([][]byte, error) {
 	packet, err := CreatePsbt_SatsNet(tx, prevFetcher, witnessScript)
 	if err != nil {
 		Log.Errorf("wallet.CreatePsbt failed, %v", err)
 		return nil, err
 	}
-	err = p.wallet.SignPsbt_SatsNet(packet)
+	err = localWallet.SignPsbt_SatsNet(packet)
 	if err != nil {
 		Log.Errorf("SignPsbt failed, %v", err)
 		return nil, err
 	}
 
 	// 保存签名结果在TX中，并且返回签名结果
-	pubkey := p.wallet.GetPaymentPubKey().SerializeCompressed()
+	pubkey := localWallet.GetPaymentPubKey().SerializeCompressed()
 	result := make([][]byte, 0)
 	for i, txIn := range tx.TxIn {
 		input := &packet.Inputs[i]
@@ -293,18 +243,24 @@ func (p *Manager) PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.P
 func (p *Manager) FinalSignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	witnessScript []byte, hasSelectingPath bool,
 	peerPubKey []byte, peerSigs [][]byte) ([][]byte, error) {
+	return FinalSignTxWithWallet(p.wallet, tx, prevFetcher, witnessScript, hasSelectingPath, peerPubKey, peerSigs)
+}
+
+func FinalSignTxWithWallet(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
+	witnessScript []byte, hasSelectingPath bool,
+	peerPubKey []byte, peerSigs [][]byte) ([][]byte, error) {
 	packet, err := CreatePsbtWithPeer(tx, prevFetcher, witnessScript, peerPubKey, peerSigs)
 	if err != nil {
-		Log.Errorf("wallet.CreatePsbt failed, %v", err)
+		Log.Errorf("CreatePsbt failed, %v", err)
 		return nil, err
 	}
-	err = p.wallet.SignPsbt(packet)
+	err = localWallet.SignPsbt(packet)
 	if err != nil {
 		Log.Errorf("SignPsbt failed, %v", err)
 		return nil, err
 	}
 
-	pubkey := p.wallet.GetPaymentPubKey()
+	pubkey := localWallet.GetPaymentPubKey()
 	p2trPkScript, err := GetP2TRpkScript(pubkey)
 	if err != nil {
 		return nil, err
@@ -380,18 +336,23 @@ func (p *Manager) FinalSignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFet
 
 func (p *Manager) FinalSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
 	witnessScript []byte, peerPubKey []byte, peerSigs [][]byte) ([][]byte, error) {
+	return FinalSignTxWithWallet_SatsNet(p.wallet, tx, prevFetcher, witnessScript, peerPubKey, peerSigs)
+}
+
+func FinalSignTxWithWallet_SatsNet(localWallet common.Wallet, tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
+	witnessScript []byte, peerPubKey []byte, peerSigs [][]byte) ([][]byte, error) {
 	packet, err := CreatePsbtWithPeer_SatsNet(tx, prevFetcher, witnessScript, peerPubKey, peerSigs)
 	if err != nil {
-		Log.Errorf("wallet.CreatePsbt failed, %v", err)
+		Log.Errorf("CreatePsbt failed, %v", err)
 		return nil, err
 	}
-	err = p.wallet.SignPsbt_SatsNet(packet)
+	err = localWallet.SignPsbt_SatsNet(packet)
 	if err != nil {
 		Log.Errorf("SignPsbt failed, %v", err)
 		return nil, err
 	}
 
-	pubkey := p.wallet.GetPaymentPubKey()
+	pubkey := localWallet.GetPaymentPubKey()
 	p2trPkScript, err := GetP2TRpkScript(pubkey)
 	if err != nil {
 		return nil, err
@@ -439,24 +400,6 @@ func (p *Manager) FinalSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.Pre
 		}
 	}
 	return result, nil
-}
-
-func (p *Manager) PartialSignCommitTx(redeemScript, peerPubkey []byte, tx *wire.MsgTx, 
-	prevFetcher *txscript.MultiPrevOutFetcher) ([][]byte, error) {
-	return p.PartialSignTx(tx, prevFetcher, redeemScript, false, peerPubkey)
-}
-
-// bootstrap node sign
-func (p *Manager) PartialSignSweepTx(tx *wire.MsgTx, witnessScript []byte,
-	prevFetcher txscript.PrevOutputFetcher, peerPubkey []byte) ([][]byte, error) {
-
-	//result1, _ := p.wallet.PartialSignTx(tx, prevFetcher, witnessScript, 0)
-	return p.PartialSignTx(tx, prevFetcher, witnessScript, true, peerPubkey)
-}
-
-func (p *Manager) PartialSignClosingTx(redeemScript, peerPubkey []byte, tx *wire.MsgTx, 
-	prevFetcher *txscript.MultiPrevOutFetcher) ([][]byte, error) {
-	return p.PartialSignTx(tx, prevFetcher, redeemScript, false, peerPubkey)
 }
 
 func (p *Manager) FinalTxWithPeerSig(redeemScript, localPubkey, peerPubkey []byte, tx *wire.MsgTx,
@@ -726,7 +669,15 @@ func (p *Manager) VerifyTx(redeemScript, localPubkey, peerPubkey []byte, tx *wir
 	return nil
 }
 
-func (p *Manager) VerifySignOfMessage(msg, sig, pubkey []byte) error {
+func SignMessageWithWallet(wallet common.Wallet, msg []byte) ([]byte, error) {
+	sig, err := wallet.SignMessage(msg)
+	if err != nil {
+		return nil, err
+	}
+	return sig, nil
+}
+
+func VerifySignOfMessage(msg, sig, pubkey []byte) error {
 	key, err := utils.BytesToPublicKey(pubkey)
 	if err != nil {
 		return err
@@ -738,6 +689,10 @@ func (p *Manager) VerifySignOfMessage(msg, sig, pubkey []byte) error {
 }
 
 func (p *Manager) TestAcceptance(txs []*wire.MsgTx) error {
+	if len(txs) == 0 {
+		return nil
+	}
+
 	txsHex := make([]string, 0, len(txs))
 	for _, t := range txs {
 		if t == nil {
@@ -762,6 +717,10 @@ func (p *Manager) TestAcceptance(txs []*wire.MsgTx) error {
 }
 
 func (p *Manager) TestAcceptance_SatsNet(txs []*swire.MsgTx) error {
+	if len(txs) == 0 {
+		return nil
+	}
+
 	txsHex := make([]string, 0, len(txs))
 	for _, t := range txs {
 		if t == nil {

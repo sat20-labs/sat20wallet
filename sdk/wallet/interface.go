@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil/psbt"
@@ -25,29 +26,37 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 	indexer.CHAIN = cfg.Chain
 
 	http := NewHTTPClient()
+	l1IndexerMgr := NewIndexerRPCClientMgr()
 	l1 := NewIndexerClient(cfg.IndexerL1.Scheme, cfg.IndexerL1.Host, cfg.IndexerL1.Proxy, http)
+	l1IndexerMgr.Set(l1)
+
+	l2IndexerMgr := NewIndexerRPCClientMgr()
 	l2 := NewIndexerClient(cfg.IndexerL2.Scheme, cfg.IndexerL2.Host, cfg.IndexerL2.Proxy, http)
-	var l12, l22*IndexerClient
+	l2IndexerMgr.Set(l2)
+
+	var l12, l22 *IndexerClient
 	if cfg.SlaveIndexerL1 != nil {
 		l12 = NewIndexerClient(cfg.SlaveIndexerL1.Scheme, cfg.SlaveIndexerL1.Host, cfg.SlaveIndexerL1.Proxy, http)
+		l1IndexerMgr.Set(l12)
 	}
 	if cfg.SlaveIndexerL2 != nil {
 		l22 = NewIndexerClient(cfg.SlaveIndexerL2.Scheme, cfg.SlaveIndexerL2.Host, cfg.SlaveIndexerL2.Proxy, http)
+		l2IndexerMgr.Set(l22)
 	}
 
+	l1IndexerMgr.Start()
+	l2IndexerMgr.Start()
+
 	mgr := &Manager{
-		cfg: cfg,
-		walletInfoMap: nil,
-		tickerInfoMap: make(map[string]*indexer.TickerInfo),
-		utxoLockerL1:              NewUtxoLocker(db, l1, L1_NETWORK_BITCOIN),
-		utxoLockerL2:              NewUtxoLocker(db, l2, L2_NETWORK_SATOSHI),
-		http:                      http,
-		l1IndexerClient:           l1,
-		l2IndexerClient:           l2,
-		slaveL1IndexerClient:      l12,
-		slaveL2IndexerClient:      l22,
-		bInited:       false,
-		bStop:         false,
+		cfg:                  cfg,
+		walletInfoMap:        nil,
+		tickerInfoMap:        make(map[string]*indexer.TickerInfo),
+		utxoLockerL1:         NewUtxoLocker(db, l1, L1_NETWORK_BITCOIN),
+		utxoLockerL2:         NewUtxoLocker(db, l2, L2_NETWORK_SATOSHI),
+		http:                 http,
+		l1IndexerClient:      l1IndexerMgr,
+		l2IndexerClient:      l2IndexerMgr,
+		bInited:              false,
 	}
 
 	_env = cfg.Env
@@ -69,6 +78,12 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 	}
 
 	return mgr
+}
+
+func (p *Manager) Close() {
+	p.bInited = false
+	p.l1IndexerClient.Stop()
+	p.l2IndexerClient.Stop()
 }
 
 // 使用内部钱包
@@ -98,6 +113,20 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 	p.saveStatus()
 
 	return id, mnemonic, nil
+}
+
+func (p *Manager) CreateMonitorWallet(address string) (int64, error) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	wallet := NewMonitorWallet(address)
+	id := time.Now().UnixMicro()
+
+	p.wallet = wallet
+	p.status.CurrentWallet = id
+	p.saveStatus()
+
+	return id, nil
 }
 
 func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) {
@@ -130,24 +159,51 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	return id, nil
 }
 
-func (p *Manager) ChangePassword(oldPS, newPS string) (error) {
+func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (int64, error) {
+
+	privKeyBytes, err := hex.DecodeString(privKey)
+	if err != nil {
+		return 0, err
+	}
+
+	wallet, _, err := NewInternalWalletWithPrivKey(privKeyBytes, GetChainParam())
+	if err != nil {
+		return -1, err
+	}
+
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	id, err := p.saveSecret(privKey, password, WALLET_TYPE_PRIVKEY)
+	if err != nil {
+		return -1, err
+	}
+
+	p.wallet = wallet
+	p.status.CurrentWallet = id
+	p.saveStatus()
+
+	return id, nil
+}
+
+func (p *Manager) ChangePassword(oldPS, newPS string) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
 	for id, v := range p.walletInfoMap {
-		mnemonic, err := p.loadMnemonic(id, oldPS)
+		mnemonic, _, err := p.loadWalletSecret(id, oldPS)
 		if err != nil {
 			Log.Errorf("loadMnemonic %d failed, %v", id, err)
 			return err
 		}
-		
-		err = p.saveMnemonicWithPassword(mnemonic, newPS, v)
+
+		err = p.saveWalletSecretWithPassword(mnemonic, newPS, v)
 		if err != nil {
 			Log.Errorf("saveMnemonicWithPassword %d failed, %v", id, err)
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
@@ -164,12 +220,22 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 		return -1, fmt.Errorf("wallet has been unlocked")
 	}
 
-	mnemonic, err := p.loadMnemonic(p.status.CurrentWallet, password)
+	secret, ty, err := p.loadWalletSecret(p.status.CurrentWallet, password)
 	if err != nil {
 		return -1, err
 	}
-
-	wallet := NewInternalWalletWithMnemonic(string(mnemonic), "", GetChainParam())
+	var wallet *InternalWallet
+	switch ty {
+	case WALLET_TYPE_MNEMONIC:
+		wallet = NewInternalWalletWithMnemonic(string(secret), "", GetChainParam())
+	case WALLET_TYPE_PRIVKEY:
+		privKeyBytes, err := hex.DecodeString(secret)
+		if err != nil {
+			return 0, err
+		}
+		wallet, _, _ = NewInternalWalletWithPrivKey(privKeyBytes, GetChainParam())
+		
+	}
 	if wallet == nil {
 		return -1, fmt.Errorf("NewWalletWithMnemonic failed")
 	}
@@ -267,13 +333,13 @@ func (p *Manager) GetChain() string {
 func (p *Manager) GetMnemonic(id int64, password string) string {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	
-	mnemonic, err := p.loadMnemonic(id, password)
+
+	serect, _, err := p.loadWalletSecret(id, password)
 	if err != nil {
 		return ""
 	}
 
-	return mnemonic
+	return serect
 }
 
 // private key
@@ -281,7 +347,7 @@ func (p *Manager) GetCommitRootKey(peer []byte) []byte {
 	if p.wallet == nil {
 		return nil
 	}
-	privkey, _ := p.wallet.GetCommitRootKey(peer)
+	privkey := p.wallet.GetCommitSecret(peer, 0)
 	return privkey.Serialize()
 }
 
@@ -400,8 +466,6 @@ func (p *Manager) SignPsbt(psbtHex string, bExtract bool) (string, error) {
 	// 	fmt.Printf("%d %s %d\n", ty, addr[0], i)
 	// 	fmt.Printf("sig flag: %x\n", input.SighashType)
 	// }
-	
-
 
 	err = p.wallet.SignPsbt(packet)
 	if err != nil {
@@ -519,14 +583,13 @@ func (p *Manager) GetChannelAddrByPeerPubkey(pubkeyHex string) (string, string, 
 	}
 	p2trAddr := PublicKeyToP2TRAddress(pubkey)
 
-	channelAddr, err := GetP2WSHaddress(p.wallet.GetPubKey().SerializeCompressed(), 
+	channelAddr, err := GetP2WSHaddress(p.wallet.GetPubKey().SerializeCompressed(),
 		pubkey.SerializeCompressed())
 	if err != nil {
 		return "", "", err
 	}
 	return channelAddr, p2trAddr, nil
 }
-
 
 // 对某个btc的名字设置属性
 func (p *Manager) SetKeyValueToName(name string, key, value string, feeRate int64) (string, error) {
@@ -553,7 +616,7 @@ func (p *Manager) BindReferrer(referrerName, key string, serverPubkey []byte) (s
 
 	referrerName = strings.ToLower(referrerName)
 	referrerName = strings.TrimSpace(referrerName)
-	
+
 	// 检查该名字是否是有效的推荐人名字
 	info, err := p.l1IndexerClient.GetNameInfo(referrerName)
 	if err != nil {
@@ -595,4 +658,3 @@ func (p *Manager) BindReferrer(referrerName, key string, serverPubkey []byte) (s
 	Log.Infof("bind referrer %s with txId %s", referrerName, txId)
 	return txId, nil
 }
-

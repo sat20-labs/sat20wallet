@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"sort"
-
 	indexer "github.com/sat20-labs/indexer/common"
 )
 
@@ -72,7 +70,7 @@ func (p *TranscendContract) InvokeParam(action string) string {
 		param.Param = string(buf)
 
 	case INVOKE_API_WITHDRAW:
-		var innerParam DepositInvokeParam
+		var innerParam WithdrawInvokeParam
 		innerParam.OrderType = ORDERTYPE_WITHDRAW
 		buf, err := json.Marshal(&innerParam)
 		if err != nil {
@@ -186,182 +184,6 @@ func (p *TranscendContractRuntime) GobDecode(data []byte) error {
 	return nil
 }
 
-// 仅用于amm合约
 func (p *TranscendContractRuntime) checkSelf() error {
-	url := p.URL()
-	history := LoadContractInvokeHistory(p.stp.GetDB(), url, false, false)
-	Log.Infof("%s history count: %d\n", url, len(history))
-	if len(history) == 0 {
-		return nil
-	}
-
-	mid1 := make([]*SwapHistoryItem, 0)
-	for _, v := range history {
-		item, ok := v.(*SwapHistoryItem)
-		if !ok {
-			continue
-		}
-		mid1 = append(mid1, item)
-
-		// fix
-		// if item.OrderType == ORDERTYPE_DEPOSIT || item.OrderType == ORDERTYPE_WITHDRAW {
-		// 	item.ToL1 = !item.FromL1
-		// 	saveContractInvokeHistoryItem(p.stp.db, url, item)
-		// }
-	}
-
-	sort.Slice(mid1, func(i, j int) bool {
-		return mid1[i].Id < mid1[j].Id
-	})
-
-	// 导出历史记录用于测试
-	// Log.Infof("url: %s\n", url)
-	// buf, _ := json.Marshal(mid1)
-	// Log.Infof("items: %s\n", string(buf))
-	// buf, _ = json.Marshal(p.SwapContractRunningData)
-	// Log.Infof("running data: %s\n", string(buf))
-
-	InvokeCount := int64(0)
-	traderInfoMap := make(map[string]*TraderStatus)
-	var runningData SwapContractRunningData
-	runningData.AssetAmtInPool = nil
-	runningData.SatsValueInPool = 0
-
-	// 重新生成统计数据
-	var onSendingVaue int64
-	var onSendngAmt *Decimal
-	for i, item := range mid1 {
-		if int64(i) != item.Id {
-			return fmt.Errorf("missing history. previous %d, current %d", i-1, item.Id)
-		}
-		// if item.Id == 61 {
-		// 	Log.Infof("")
-		// }
-
-		trader, ok := traderInfoMap[item.Address]
-		if !ok {
-			trader = NewTraderStatus(item.Address, p.Divisibility)
-			traderInfoMap[item.Address] = trader
-		}
-		insertItemToTraderHistroy(&trader.InvokerStatusBase, item)
-		trader.DealAmt = trader.DealAmt.Add(item.OutAmt)
-		trader.DealValue += CalcDealValue(item.OutValue)
-
-		InvokeCount++
-		runningData.TotalInputSats += item.InValue
-		runningData.TotalInputAssets = runningData.TotalInputAssets.Add(item.InAmt)
-		if item.Done != DONE_NOTYET {
-			runningData.TotalOutputAssets = runningData.TotalOutputAssets.Add(item.OutAmt)
-			runningData.TotalOutputSats += item.OutValue
-		}
-
-		if item.OrderType == ORDERTYPE_BUY || item.OrderType == ORDERTYPE_SELL {
-			if item.Done == DONE_NOTYET {
-				Log.Errorf("amm should handle item already. %v", item)
-				if item.Reason == INVOKE_REASON_NORMAL {
-					// 有效的，还在交易中，或者交易完成，准备发送
-					if item.RemainingAmt.Sign() == 0 && item.RemainingValue == 0 {
-						onSendingVaue += item.OutValue
-						onSendngAmt = onSendngAmt.Add(item.OutAmt)
-					}
-
-					// 跟DONE_DEALT同样处理
-					if item.OrderType == ORDERTYPE_BUY {
-						runningData.TotalDealAssets = runningData.TotalDealAssets.Add(item.OutAmt)
-						//runningData.TotalDealSats += item.InValue - calcSwapFee(item.InValue)
-						runningData.SatsValueInPool += item.GetTradingValueForAmm()
-						runningData.AssetAmtInPool = runningData.AssetAmtInPool.Sub(item.OutAmt)
-					} else if item.OrderType == ORDERTYPE_SELL {
-						//runningData.TotalDealAssets = runningData.TotalDealAssets.Add(item.InAmt)
-						runningData.TotalDealSats += CalcDealValue(item.OutValue)
-						runningData.AssetAmtInPool = runningData.AssetAmtInPool.Add(item.InAmt)
-						runningData.SatsValueInPool -= CalcDealValue(item.OutValue)
-					}
-
-					Log.Infof("OnSending %d: Amt: %s-%s-%s Value: %d-%d-%d Price: %s in: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
-						item.InValue, item.RemainingValue, item.OutValue, item.UnitPrice.String(), item.InUtxo)
-				} else {
-					// 无效的，即将退款
-					Log.Infof("Refunding %d: Amt: %s-%s-%s Value: %d-%d-%d Price: %s in: %s reason: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
-						item.InValue, item.RemainingValue, item.OutValue, item.UnitPrice.String(), item.InUtxo, item.Reason)
-					runningData.TotalRefundAssets = runningData.TotalRefundAssets.Add(item.RemainingAmt).Add(item.OutAmt)
-					runningData.TotalRefundSats += item.RemainingValue + item.OutValue
-				}
-
-			} else if item.Done == DONE_DEALT {
-				if item.OrderType == ORDERTYPE_BUY {
-					runningData.TotalDealAssets = runningData.TotalDealAssets.Add(item.OutAmt)
-					//runningData.TotalDealSats += item.InValue - calcSwapFee(item.InValue)
-					runningData.SatsValueInPool += item.GetTradingValueForAmm()
-					runningData.AssetAmtInPool = runningData.AssetAmtInPool.Sub(item.OutAmt)
-				} else if item.OrderType == ORDERTYPE_SELL {
-					//runningData.TotalDealAssets = runningData.TotalDealAssets.Add(item.InAmt)
-					runningData.AssetAmtInPool = runningData.AssetAmtInPool.Add(item.InAmt)
-					runningData.SatsValueInPool -= CalcDealValue(item.OutValue)
-					runningData.TotalDealSats += CalcDealValue(item.OutValue)
-				}
-
-				// 已经发送
-				Log.Infof("Done %d: Amt: %s-%s-%s Value: %d-%d-%d Price: %s in: %s out: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
-					item.InValue, item.RemainingValue, item.OutValue, item.UnitPrice.String(), item.InUtxo, item.OutTxId)
-				runningData.TotalDealCount++
-			} else if item.Done == DONE_REFUNDED {
-				Log.Infof("Refund %d: Amt: %s-%s-%s Value: %d-%d-%d in: %s out: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
-					item.InValue, item.RemainingValue, item.OutValue, item.InUtxo, item.OutTxId)
-				// 退款
-				runningData.TotalRefundTx++
-				runningData.TotalRefundAssets = runningData.TotalRefundAssets.Add(item.OutAmt)
-				runningData.TotalRefundSats += item.OutValue
-			}
-		}
-
-	}
-
-	// 对比数据
-	Log.Infof("OnSending: value: %d, amt: %s", onSendingVaue, onSendngAmt.String())
-	Log.Infof("invokeCount %d %d", InvokeCount, p.InvokeCount)
-	Log.Infof("runningData: \n%v\n%v", runningData, p.SwapContractRunningData)
-
-	// Log.Infof("assetName: %s", p.GetAssetName())
-	// amt := p.stp.GetAssetBalance_SatsNet(p.ChannelId, p.GetAssetName())
-	// Log.Infof("amt: %s", amt.String())
-	// value := p.stp.GetAssetBalance_SatsNet(p.ChannelId, &indexer.ASSET_PLAIN_SAT)
-	// Log.Infof("value: %d", value)
-
-	err := "different: "
-	if runningData.SatsValueInPool != p.SwapContractRunningData.SatsValueInPool {
-		Log.Errorf("SatsValueInPool: %d %d", runningData.SatsValueInPool, p.SwapContractRunningData.SatsValueInPool)
-		err = fmt.Sprintf("%s SatsValueInPool", err)
-	}
-	if runningData.AssetAmtInPool.Cmp(p.SwapContractRunningData.AssetAmtInPool) != 0 {
-		Log.Errorf("AssetAmtInPool: %s %s", runningData.AssetAmtInPool.String(), p.SwapContractRunningData.AssetAmtInPool.String())
-		err = fmt.Sprintf("%s AssetAmtInPool", err)
-	}
-	if runningData.TotalDealSats != p.SwapContractRunningData.TotalDealSats {
-		Log.Errorf("TotalDealSats: %d %d", runningData.TotalDealSats, p.SwapContractRunningData.TotalDealSats)
-		err = fmt.Sprintf("%s TotalDealSats", err)
-	}
-	if runningData.TotalDealAssets.Cmp(p.SwapContractRunningData.TotalDealAssets) != 0 {
-		Log.Errorf("TotalDealAssets: %s %s", runningData.TotalDealAssets.String(), p.SwapContractRunningData.TotalDealAssets.String())
-		err = fmt.Sprintf("%s TotalDealAssets", err)
-	}
-	if runningData.TotalInputSats != p.SwapContractRunningData.TotalInputSats {
-		Log.Errorf("TotalInputSats: %d %d", runningData.TotalInputSats, p.SwapContractRunningData.TotalInputSats)
-		err = fmt.Sprintf("%s TotalInputSats", err)
-	}
-	if runningData.TotalInputAssets.Cmp(p.SwapContractRunningData.TotalInputAssets) != 0 {
-		Log.Errorf("TotalInputAssets: %s %s", runningData.TotalInputAssets.String(), p.SwapContractRunningData.TotalInputAssets.String())
-		err = fmt.Sprintf("%s TotalInputAssets", err)
-	}
-
-	if err == "different: " {
-		return nil
-	}
-
-	// 更新统计
-	// p.SwapContractRunningData = runningData
-	// saveReservation(p.stp.db, &p.resv.ContractDeployDataInDB)
-
-	Log.Errorf(err)
-	return fmt.Errorf("%s", err)
+	return nil
 }

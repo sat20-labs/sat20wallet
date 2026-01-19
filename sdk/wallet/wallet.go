@@ -86,8 +86,8 @@ const DEFAULT_PURPOSE = 86
 /*
 v1:
                     m/purpose'/coinType'/account'/change/index
-钱包的p2tr地址: 	  m/86'     /0'       /0'      /0     /index 
-对应的通道钱包的地址:   m/1017'   /0'      /family'  /index/commitHeight 
+钱包的p2tr地址: 	  m/86'     /0'       /0'      /0     /index
+对应的通道钱包的地址:   m/1017'   /0'      /family'  /index/commitHeight
 		revBase		m/1017'   /0'       /1'       /index/commitHeight
         revRoot     m/1017'   /0'       /2'       /index/commitHeight
 钱包下的每一个子账户(index)都可以跟节点建立通道。
@@ -95,8 +95,8 @@ v1:
 
 v2: （还没实现）
                     m/purpose'/coinType'/account'/change/index
-钱包的p2tr地址: 	  m/86'     /0'       /0'      /0     /index 
-对应的通道钱包的地址:  m/1017'    /family'  /index'  /subId/commitHeight 
+钱包的p2tr地址: 	  m/86'     /0'       /0'      /0     /index
+对应的通道钱包的地址:  m/1017'    /family'  /index'  /subId/commitHeight
 		revBase		m/1017'   /1'       /index   /subId /commitHeight
         revRoot     m/1017'   /2'       /index   /subId /commitHeight
 
@@ -106,18 +106,66 @@ v2: （还没实现）
 
 // 可以支持其他类型，但为了方便，默认只支持p2tr地址类型。
 type InternalWallet struct {
-	masterkey             *hdkeychain.ExtendedKey
-	netParamsL1           *chaincfg.Params // L1
+	masterkey              *hdkeychain.ExtendedKey
+	netParamsL1            *chaincfg.Params // L1
 	paymentPrivKeys        map[uint32]*secp256k1.PrivateKey
 	revocationBasePrivKeys map[uint32]*secp256k1.PrivateKey
-	purposes              map[uint32]*hdkeychain.ExtendedKey // key: purpose
-	accounts              map[uint64]*hdkeychain.ExtendedKey // key: purpose<<32+account
-	addresses             map[uint32]btcutil.Address         // key: index
-	currentIndex          uint32                             // 当前子账户
+	purposes               map[uint32]*hdkeychain.ExtendedKey // key: purpose
+	accounts               map[uint64]*hdkeychain.ExtendedKey // key: purpose<<32+account
+	addresses              map[uint32]btcutil.Address         // key: index
+	currentIndex           uint32                             // 当前子账户
 
-	subWallets            map[uint32]*channelWallet
+	subWallets map[uint32]*channelWallet
 
-	mutex 				  sync.RWMutex
+	mutex sync.RWMutex
+}
+
+// 该实例不是 HD 钱包（masterkey 为 nil），任何依赖 masterkey/purposes/accounts 的函数将不可用或会返回错误
+// 也就输说所有通道相关操作，派生子钱包操作都会失败，只能用于该私钥的签名操作
+func NewInternalWalletWithPrivKey(privateKey []byte, param *chaincfg.Params) (*InternalWallet, string, error) {
+	if len(privateKey) == 0 || param == nil {
+		return nil, "", fmt.Errorf("invalid private key or params")
+	}
+
+	// 从字节创建 secp256k1 私钥
+	priv := secp256k1.PrivKeyFromBytes(privateKey)
+	if priv == nil {
+		return nil, "", fmt.Errorf("invalid private key bytes")
+	}
+
+	w := &InternalWallet{
+		masterkey:              nil,
+		netParamsL1:            param,
+		paymentPrivKeys:        make(map[uint32]*secp256k1.PrivateKey),
+		revocationBasePrivKeys: make(map[uint32]*secp256k1.PrivateKey),
+		purposes:               make(map[uint32]*hdkeychain.ExtendedKey),
+		accounts:               make(map[uint64]*hdkeychain.ExtendedKey),
+		addresses:              make(map[uint32]btcutil.Address),
+		subWallets:             make(map[uint32]*channelWallet),
+		currentIndex:           0,
+	}
+
+	// 将提供的私钥作为 index 0 的支付私钥（以及 revocation base）使用
+	w.paymentPrivKeys[0] = priv
+	// 不要直接复用相同的私钥对象作为 revocation base，
+	// 而是从提供的私钥确定性派生出一个新的私钥以避免复用同一密钥材料。
+	// 派生方法：SHA256( payment_priv || context ) -> 32 字节 -> PrivKeyFromBytes
+	deriveSeed := sha256.Sum256(append(priv.Serialize(), []byte("revocation-base")...))
+	revPriv := secp256k1.PrivKeyFromBytes(deriveSeed[:])
+	if revPriv == nil {
+		Log.Panic("failed to derive revocation base key")
+	}
+	w.revocationBasePrivKeys[0] = revPriv
+
+	// 计算并缓存 index 0 的地址（P2TR）
+	pub := priv.PubKey()
+	addr, err := getAddressFromPubKey(pub, "P2TR", param)
+	if err != nil {
+		return nil, "", err
+	}
+	w.addresses[0] = addr
+
+	return w, addr.EncodeAddress(), nil
 }
 
 func NewInteralWallet(param *chaincfg.Params) (*InternalWallet, string, error) {
@@ -140,8 +188,8 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 		Log.Errorf("Mnomonic is invalid")
 		return nil
 	}
-	if strings.Count(mnemonic, " ") != 11 || strings.Count(mnemonic, "\n") > 0 || 
-	strings.Count(mnemonic, "\t") > 0 {
+	if strings.Count(mnemonic, " ") != 11 || strings.Count(mnemonic, "\n") > 0 ||
+		strings.Count(mnemonic, "\t") > 0 {
 		Log.Errorf("Mnomonic has invalid char")
 		return nil
 	}
@@ -152,14 +200,27 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 		return nil
 	}
 	return &InternalWallet{
-		masterkey:   masterkey,
-		netParamsL1: param,
-		paymentPrivKeys: make(map[uint32]*secp256k1.PrivateKey), // key: index
+		masterkey:              masterkey,
+		netParamsL1:            param,
+		paymentPrivKeys:        make(map[uint32]*secp256k1.PrivateKey), // key: index
 		revocationBasePrivKeys: make(map[uint32]*secp256k1.PrivateKey), // key: change
-		purposes:    make(map[uint32]*hdkeychain.ExtendedKey),
-		accounts:    make(map[uint64]*hdkeychain.ExtendedKey),
-		addresses:   make(map[uint32]btcutil.Address),
-		subWallets:  make(map[uint32]*channelWallet),
+		purposes:               make(map[uint32]*hdkeychain.ExtendedKey),
+		accounts:               make(map[uint64]*hdkeychain.ExtendedKey),
+		addresses:              make(map[uint32]btcutil.Address),
+		subWallets:             make(map[uint32]*channelWallet),
+	}
+}
+
+func (p *InternalWallet) Clone() common.Wallet {
+	return &InternalWallet{
+		masterkey:              p.masterkey,
+		netParamsL1:            p.netParamsL1,
+		paymentPrivKeys:        make(map[uint32]*secp256k1.PrivateKey), // key: index
+		revocationBasePrivKeys: make(map[uint32]*secp256k1.PrivateKey), // key: change
+		purposes:               make(map[uint32]*hdkeychain.ExtendedKey),
+		accounts:               make(map[uint64]*hdkeychain.ExtendedKey),
+		addresses:              make(map[uint32]btcutil.Address),
+		subWallets:             make(map[uint32]*channelWallet),
 	}
 }
 
@@ -231,6 +292,11 @@ func (p *InternalWallet) getBtcUtilAddress(index uint32) (btcutil.Address, error
 func (p *InternalWallet) GetPubKey() *secp256k1.PublicKey {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+
+	if p.masterkey == nil {
+		return p.paymentPrivKeys[0].PubKey()
+	}
+
 	_, pubKey, err := p.getKey("P2TR", 0, p.currentIndex)
 	if err != nil {
 		Log.Errorf("GetPubKey failed. %v", err)
@@ -242,6 +308,10 @@ func (p *InternalWallet) GetPubKey() *secp256k1.PublicKey {
 func (p *InternalWallet) GetPubKeyByIndex(index uint32) *secp256k1.PublicKey {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+	if p.masterkey == nil {
+		return p.paymentPrivKeys[0].PubKey()
+	}
+
 	_, pubKey, err := p.getKey("P2TR", 0, index)
 	if err != nil {
 		Log.Errorf("GetPubKey failed. %v", err)
@@ -362,27 +432,27 @@ func (p *InternalWallet) GetNodePubKey() *secp256k1.PublicKey {
 	// 修改为跟支付钱包是同一个key
 	return p.GetPaymentPubKey()
 
-	/* 
-	purpose := getPurposeFromAddrType("LND")
-	account := getAccountFromFamilyKey(KeyFamilyNodeKey)
-	key := uint64(purpose)<<32 + uint64(account)
-	acckey, ok := p.accounts[key]
-	if !ok {
-		var err error
-		acckey, err = GenerateAccountKey(p.masterkey, purpose, account)
+	/*
+		purpose := getPurposeFromAddrType("LND")
+		account := getAccountFromFamilyKey(KeyFamilyNodeKey)
+		key := uint64(purpose)<<32 + uint64(account)
+		acckey, ok := p.accounts[key]
+		if !ok {
+			var err error
+			acckey, err = GenerateAccountKey(p.masterkey, purpose, account)
+			if err != nil {
+				return nil
+			}
+			p.accounts[key] = acckey
+		}
+
+		_, pubkey, err := generateKeyFromAccountKey(acckey, 0, 0)
 		if err != nil {
+			Log.Errorf("generateKeyFromAccountKey failed. %v", err)
 			return nil
 		}
-		p.accounts[key] = acckey
-	}
 
-	_, pubkey, err := generateKeyFromAccountKey(acckey, 0, 0)
-	if err != nil {
-		Log.Errorf("generateKeyFromAccountKey failed. %v", err)
-		return nil
-	}
-
-	return pubkey
+		return pubkey
 	*/
 }
 
@@ -847,7 +917,6 @@ func (p *InternalWallet) PartialSignTx_SatsNet(tx *swire.MsgTx, prevFetcher stxs
 	return result, nil
 }
 
-
 func (p *InternalWallet) SignMessage(msg []byte) ([]byte, error) {
 	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
@@ -855,8 +924,15 @@ func (p *InternalWallet) SignMessage(msg []byte) ([]byte, error) {
 	return p.signMessage(privKey, msg).Serialize(), nil
 }
 
+func (p *InternalWallet) SignMessageWithIndex(msg []byte, index uint32) ([]byte, error) {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
+	p.mutex.Unlock()
+	return p.signMessage(privKey, msg).Serialize(), nil
+}
 
-func (p *InternalWallet) signMessage(privKey *secp256k1.PrivateKey, msg []byte) (*ecdsa.Signature) {
+
+func (p *InternalWallet) signMessage(privKey *secp256k1.PrivateKey, msg []byte) *ecdsa.Signature {
 	// Double hash and sign the data.
 	var msgDigest []byte
 	doubleHash := false
@@ -868,6 +944,13 @@ func (p *InternalWallet) signMessage(privKey *secp256k1.PrivateKey, msg []byte) 
 	return ecdsa.Sign(privKey, msgDigest)
 }
 
+func VerifyMessageWithPubKey(pubKey []byte, msg []byte, sig []byte) bool {
+	pk, err := utils.BytesToPublicKey(pubKey)
+	if err != nil {
+		return false
+	}
+	return VerifyMessage(pk, msg, sig)
+}
 
 func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, sig []byte) bool {
 	// Compute the hash of the message.
@@ -888,7 +971,6 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, sig []byte) bool {
 	return signature.Verify(msgDigest, pubKey)
 }
 
-
 func (p *InternalWallet) SignWalletMessage(msg string) ([]byte, error) {
 	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
@@ -896,10 +978,16 @@ func (p *InternalWallet) SignWalletMessage(msg string) ([]byte, error) {
 	return p.signWalletMessage(privKey, msg), nil
 }
 
-func (p *InternalWallet) signWalletMessage(privKey *secp256k1.PrivateKey, msg string) ([]byte) {
-	return ecdsa.SignCompact(privKey, magicMsgHash(msg), true)
+func (p *InternalWallet) SignWalletMessageWithIndex(msg string, index uint32) ([]byte, error) {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
+	p.mutex.Unlock()
+	return p.signWalletMessage(privKey, msg), nil
 }
 
+func (p *InternalWallet) signWalletMessage(privKey *secp256k1.PrivateKey, msg string) []byte {
+	return ecdsa.SignCompact(privKey, magicMsgHash(msg), true)
+}
 
 func VerifyWalletMessage(pubKey *secp256k1.PublicKey, msg string, sig []byte) bool {
 	recoveredPK, _, err := ecdsa.RecoverCompact(sig, magicMsgHash(msg))
@@ -913,7 +1001,7 @@ func VerifyWalletMessage(pubKey *secp256k1.PublicKey, msg string, sig []byte) bo
 func magicMsgHash(msg string) []byte {
 	buf := bytes.NewBuffer(nil)
 	wire.WriteVarString(buf, 0, "Bitcoin Signed Message:\n") //nolint:errcheck
-	wire.WriteVarString(buf, 0, msg) //nolint:errcheck
+	wire.WriteVarString(buf, 0, msg)                         //nolint:errcheck
 	bytes := buf.Bytes()
 	return chainhash.DoubleHashB(bytes)
 }
@@ -922,6 +1010,13 @@ func magicMsgHash(msg string) []byte {
 func (p *InternalWallet) SignPsbt(packet *psbt.Packet) error {
 	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
+	return p.signPsbt(privKey, packet)
+}
+
+func (p *InternalWallet) SignPsbtWithIndex(packet *psbt.Packet, index uint32) error {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
 	p.mutex.Unlock()
 	return p.signPsbt(privKey, packet)
 }
@@ -1004,6 +1099,13 @@ func (p *InternalWallet) SignPsbts(packet []*psbt.Packet) error {
 	return p.signPsbts(privKey, packet)
 }
 
+func (p *InternalWallet) SignPsbtsWithIndex(packet []*psbt.Packet, index uint32) error {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
+	p.mutex.Unlock()
+	return p.signPsbts(privKey, packet)
+}
+
 func (p *InternalWallet) signPsbts(privKey *secp256k1.PrivateKey, packets []*psbt.Packet) error {
 	for i, packet := range packets {
 		err := p.signPsbt(privKey, packet)
@@ -1018,6 +1120,13 @@ func (p *InternalWallet) signPsbts(privKey *secp256k1.PrivateKey, packets []*psb
 func (p *InternalWallet) SignPsbt_SatsNet(packet *spsbt.Packet) error {
 	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
+	return p.signPsbt_SatsNet(privKey, packet)
+}
+
+func (p *InternalWallet) SignPsbtWithIndex_SatsNet(packet *spsbt.Packet, index uint32) error {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
 	p.mutex.Unlock()
 	return p.signPsbt_SatsNet(privKey, packet)
 }
@@ -1093,10 +1202,16 @@ func (p *InternalWallet) signPsbt_SatsNet(privKey *secp256k1.PrivateKey, packet 
 	return nil
 }
 
-
 func (p *InternalWallet) SignPsbts_SatsNet(packet []*spsbt.Packet) error {
 	p.mutex.Lock()
 	privKey := p.getPaymentPrivKey()
+	p.mutex.Unlock()
+	return p.signPsbts_SatsNet(privKey, packet)
+}
+
+func (p *InternalWallet) SignPsbtsWithIndex_SatsNet(packet []*spsbt.Packet, index uint32) error {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(index)
 	p.mutex.Unlock()
 	return p.signPsbts_SatsNet(privKey, packet)
 }
@@ -2084,7 +2199,7 @@ func CreatePsbtWithPeer(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	if len(peerSigs) != len(tx.TxIn) {
 		return nil, fmt.Errorf("length of sigs is different from inputs of tx, %d %d", len(peerSigs), len(tx.TxIn))
 	}
-	
+
 	packet, err := psbt.NewFromUnsignedTx(RemoveSignatures(tx))
 	if err != nil {
 		return nil, err
@@ -2144,7 +2259,7 @@ func CreatePsbtWithPeer_SatsNet(tx *swire.MsgTx, prevFetcher stxscript.PrevOutpu
 	if len(peerSigs) != len(tx.TxIn) {
 		return nil, fmt.Errorf("length of sigs is different from inputs of tx, %d %d", len(peerSigs), len(tx.TxIn))
 	}
-	
+
 	packet, err := spsbt.NewFromUnsignedTx(RemoveSignatures_SatsNet(tx))
 	if err != nil {
 		return nil, err

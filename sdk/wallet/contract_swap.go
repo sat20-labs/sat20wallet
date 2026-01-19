@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
@@ -30,7 +29,6 @@ import (
 3. 一个单完全被吃点后，在该区块处理完成后自动回款
 4. 如何计算swap交易的利润：
 */
-
 
 func init() {
 	// 让 gob 知道旧的类型对应新的实现
@@ -81,15 +79,15 @@ func (p *SwapContract) Content() string {
 // 仅仅是估算，并且尽可能多预估了输入和输出
 func (p *SwapContract) DeployFee(feeRate int64) int64 {
 	return DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT + // 服务费，如果不需要，可以在外面扣除
-	DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE + // 部署该合约需要的网络费用和调用合约费用
-	DEFAULT_FEE_SATSNET // 激活合约的网络费用
+		DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE + // 部署该合约需要的网络费用和调用合约费用
+		DEFAULT_FEE_SATSNET // 激活合约的网络费用
 }
 
 func (p *SwapContract) InvokeParam(action string) string {
 	if action != INVOKE_API_SWAP {
 		return ""
 	}
-	
+
 	var param InvokeParam
 	param.Action = action
 	innerParam := GetInvokeInnerParam(action)
@@ -381,7 +379,7 @@ const (
 // 数据库记录: 老版本 version=0
 type TraderStatusV0 struct {
 	InvokerStatusBase
-	Address     string
+	Address     string // 废弃！！！千万不要使用这个值, 这个值掩盖了InvokerStatusBase中的Address，但老数据库中都是InvokerStatusBase中才有值
 	OnSaleAmt   *Decimal
 	OnBuyValue  int64
 	DealAmt     *Decimal // 只累加卖单中成交的资产数量
@@ -486,10 +484,9 @@ type SwapContractRuntime struct {
 	stubFeeMap         map[int64]int64                       // invokeCount->fee
 	isSending          bool
 
-	refreshTime_swap   int64
+	// rpc 缓存
 	responseCache_swap []*responseItem_swap
 	responseStatus     *responseStatus_swap
-	responseHistory    map[int][]*SwapHistoryItem // 按照100个为一桶，根据区块顺序记录，跟swapHistory保持一致
 	responseAnalytics  *AnalytcisData
 	dealPrice          *Decimal
 }
@@ -497,8 +494,8 @@ type SwapContractRuntime struct {
 func NewSwapContractRuntime(stp ContractManager) *SwapContractRuntime {
 	p := &SwapContractRuntime{
 		SwapContractRuntimeInDB: SwapContractRuntimeInDB{
-			Contract: NewSwapContract(),
-			ContractRuntimeBase: *NewContractRuntimeBase(stp),
+			Contract:                NewSwapContract(),
+			ContractRuntimeBase:     *NewContractRuntimeBase(stp),
 			SwapContractRunningData: SwapContractRunningData{},
 		},
 	}
@@ -901,7 +898,7 @@ func (p *SwapContractRuntime) calcDepthV2(pool []*SwapHistoryItem, buy bool) []*
 }
 
 func (p *SwapContractRuntime) updateResponseData() {
-	if p.refreshTime_swap == 0 {
+	if p.refreshTime == 0 {
 
 		p.mutex.Lock()
 		defer p.mutex.Unlock()
@@ -974,9 +971,9 @@ func (p *SwapContractRuntime) updateResponseData() {
 		// responseCache_swap
 		addressmap := make(map[string]*responseItem_swap)
 		for _, v := range p.traderInfoMap {
-			addressmap[v.Address] = &responseItem_swap{
-				Address: v.Address,
-				Buy:     len(p.swapMap[v.Address]),
+			addressmap[v.InvokerStatusBase.Address] = &responseItem_swap{
+				Address: v.InvokerStatusBase.Address,
+				Buy:     len(p.swapMap[v.InvokerStatusBase.Address]),
 			}
 		}
 
@@ -999,7 +996,7 @@ func (p *SwapContractRuntime) updateResponseData() {
 		/////////////////////////////////
 		// history
 
-		p.refreshTime_swap = time.Now().Unix()
+		p.refreshTime = time.Now().Unix()
 	}
 }
 
@@ -1248,188 +1245,10 @@ func (p *SwapContractRuntime) genAnalyticsData() *AnalytcisData {
 	return result
 }
 
-func getBuckIndex(id int64) int {
-	return int(id / BUCK_SIZE)
-}
-
-func getBuckSubIndex(id int64) int {
-	return int(id % BUCK_SIZE)
-}
-
-func (p *SwapContractRuntime) getItemFromBuck(id int64) *SwapHistoryItem {
-	index := getBuckIndex(id)
-	subIndex := getBuckSubIndex(id)
-	buck, ok := p.responseHistory[index]
-	if !ok {
-		buck = p.loadBuckFromDB(index)
-	}
-	if buck != nil {
-		return buck[subIndex]
-	}
-	return nil
-}
-
-func (p *SwapContractRuntime) insertBuck(item *SwapHistoryItem) {
-	index := getBuckIndex(item.Id)
-	buck, ok := p.responseHistory[index]
-	if !ok {
-		buck = p.loadBuckFromDB(index)
-	}
-	buck[getBuckSubIndex(item.Id)] = item
-}
-
-func (p *SwapContractRuntime) loadBuckFromDB(id int) []*SwapHistoryItem {
-	items := loadContractInvokeHistoryWithRange(p.stp.GetDB(), p.URL(), id*BUCK_SIZE, BUCK_SIZE)
-	item2 := make([]*SwapHistoryItem, BUCK_SIZE)
-	for _, item := range items {
-		swapItem, ok := item.(*SwapHistoryItem)
-		if ok {
-			item2[getBuckSubIndex(swapItem.Id)] = swapItem
-		}
-	}
-	p.responseHistory[id] = item2
-	return item2
-}
-
 func (p *SwapContractRuntime) InvokeHistory(f any, start, limit int) string {
 	p.updateResponseData()
 
-	// TODO getItemFromBuck 需要写，以后要优化下，不然可能会影响效率，很卡
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	type response struct {
-		Total int                `json:"total"`
-		Start int                `json:"start"`
-		Data  []*SwapHistoryItem `json:"data"`
-	}
-	defaultRsp := `{"total":0,"start":0,"data":[]}`
-
-	// 默认倒序，也就是start是最后一个，往前读取日志
-	if f == nil {
-		result := &response{
-			Total: int(p.InvokeCount),
-			Start: start,
-		}
-		if p.InvokeCount != 0 && start >= 0 && start < int(p.InvokeCount) {
-			if limit <= 0 {
-				limit = 100
-			}
-
-			// 换算成真实坐标
-			start = int(p.InvokeCount) - 1 - start
-			if start < 0 {
-				start = 0
-			}
-			end := start - limit
-			if end < 0 {
-				end = -1 // 不包括end
-			}
-
-			for i := start; i > end; i-- {
-				item := p.getItemFromBuck(int64(i))
-				if item == nil {
-					p.loadBuckFromDB(getBuckIndex(int64(i)))
-					item = p.getItemFromBuck(int64(i))
-					if item == nil {
-						continue
-					}
-				}
-
-				result.Data = append(result.Data, item)
-			}
-		}
-
-		// TODO 如果数据太多，只保留前20，后10，共30桶
-		buf, err := json.Marshal(result)
-		if err != nil {
-			Log.Errorf("Marshal responseHistory failed, %v", err)
-			return defaultRsp
-		}
-		return string(buf)
-	}
-
-	// 根据地址过滤
-	filter := f.(string)
-	parts := strings.Split(filter, "=")
-	if len(parts) != 2 {
-		return defaultRsp
-	}
-	if parts[0] != "address" {
-		return defaultRsp
-	}
-
-	trader := p.loadTraderInfo(parts[1])
-	result := &response{
-		Total: int(trader.InvokeCount),
-		Start: start,
-	}
-	if trader.InvokeCount != 0 && start >= 0 && start < int(trader.InvokeCount) {
-		if limit <= 0 {
-			limit = 100
-		}
-
-		// 换算成真实坐标
-		start = int(trader.InvokeCount) - 1 - start
-		if start < 0 {
-			start = 0
-		}
-		end := start - limit + 1
-		if end < 0 {
-			end = 0 // 包括end
-		}
-
-		url := p.URL()
-		buck1 := getBuckIndex(int64(start))
-		buck2 := getBuckIndex(int64(end))
-		for i := buck1; i >= buck2; i-- {
-			buck, ok := trader.History[i]
-			if !ok {
-				continue
-			}
-
-			var idvect []int64
-			if i == buck1 {
-				if i == buck2 {
-					idvect = buck[end%BUCK_SIZE : (start+1)%BUCK_SIZE]
-				} else {
-					idvect = buck[0 : (start+1)%BUCK_SIZE]
-				}
-			} else if i == buck2 {
-				idvect = buck[end%BUCK_SIZE : BUCK_SIZE]
-			} else {
-				idvect = buck[0:BUCK_SIZE]
-			}
-
-			for j := len(idvect) - 1; j >= 0; j-- {
-				id := idvect[j]
-				item := p.getItemFromBuck(id)
-				if item == nil {
-					itemBase, err := loadContractInvokeHistoryItem(p.stp.GetDB(), url, GetKeyFromId(id))
-					if err != nil {
-						Log.Errorf("loadContractInvokeHistoryItem %s %d failed", url, id)
-						continue
-					}
-					item = itemBase.(*SwapHistoryItem)
-					if item != nil {
-						p.insertBuck(item)
-						result.Data = append(result.Data, item)
-					}
-				} else {
-					result.Data = append(result.Data, item)
-				}
-			}
-		}
-	}
-
-	// 如果数据太多，只保留前20，后10，共30桶
-	buf, err := json.Marshal(result)
-	if err != nil {
-		Log.Errorf("Marshal responseHistory failed, %v", err)
-		return defaultRsp
-	}
-	return string(buf)
-
+	return p.GetRuntimeBase().InvokeHistory(f, start, limit)
 }
 
 type responseItem_swap struct {
@@ -1556,14 +1375,6 @@ func (p *SwapContractRuntime) AllowDeploy() error {
 	return nil
 }
 
-func (p *SwapContractRuntime) UnconfirmedTxId() string {
-	return ""
-}
-
-func (p *SwapContractRuntime) UnconfirmedTxId_SatsNet() string {
-	return ""
-}
-
 // return fee: 调用费用+该invoke需要的聪数量
 func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 	var invoke InvokeParam
@@ -1673,7 +1484,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		if templateName != TEMPLATE_CONTRACT_AMM && templateName != TEMPLATE_CONTRACT_TRANSCEND {
 			return 0, fmt.Errorf("unsupport")
 		}
-		var innerParam DepositInvokeParam
+		var innerParam WithdrawInvokeParam
 		err := json.Unmarshal([]byte(invoke.Param), &innerParam)
 		if err != nil {
 			return 0, err
@@ -1713,7 +1524,11 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 			AssetName: *p.GetAssetName(),
 			N:         p.N,
 		}
-		fee := CalcFee_SendTx(2, 3, 1, &assetName, amt, p.stp.GetFeeRate(), true)
+		feeRate := innerParam.FeeRate
+		if feeRate == 0 {
+			feeRate = p.stp.GetFeeRate()
+		}
+		fee := CalcFee_SendTx(2, 3, 1, &assetName, amt, feeRate, true)
 		return WITHDRAW_INVOKE_FEE + fee, nil
 
 	case INVOKE_API_ADDLIQUIDITY:
@@ -1772,7 +1587,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 			return 0, fmt.Errorf("no enough lpt asset")
 		}
 		return INVOKE_FEE, nil
-	
+
 	case INVOKE_API_PROFIT:
 		if templateName != TEMPLATE_CONTRACT_AMM {
 			return 0, fmt.Errorf("unsupport")
@@ -1802,40 +1617,6 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 	return SWAP_INVOKE_FEE, nil
 }
 
-func (p *SwapContractRuntime) processInvoke_SatsNet(data *InvokeDataInBlock_SatsNet) error {
-
-	err := p.AllowInvoke()
-	if err == nil {
-
-		bUpdate := false
-		for _, tx := range data.InvokeTxVect {
-			if !p.IsMyInvoke_SatsNet(tx) {
-				continue
-			}
-			err := p.CheckInvokeTx_SatsNet(tx)
-			if err != nil {
-				Log.Warningf("%s CheckInvokeTx_SatsNet failed, %v", p.RelativePath(), err)
-				continue
-			}
-
-			_, err = p.Invoke_SatsNet(tx, data.Height)
-			if err == nil {
-				Log.Infof("%s Invoke_SatsNet %s succeed", p.RelativePath(), tx.Tx.TxID())
-				bUpdate = true
-			} else {
-				Log.Errorf("%s Invoke_SatsNet %s failed, %v", p.RelativePath(), tx.Tx.TxID(), err)
-			}
-		}
-		if bUpdate {
-			p.refreshTime_swap = 0
-			p.stp.SaveReservation(p.resv)
-		}
-	} else {
-		//Log.Infof("%s not allowed yet, %v", p.RelativePath(), err)
-	}
-	return nil
-}
-
 func (p *SwapContractRuntime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_SatsNet) error {
 
 	err := p.ContractRuntimeBase.InvokeWithBlock_SatsNet(data)
@@ -1844,46 +1625,13 @@ func (p *SwapContractRuntime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 	}
 
 	p.mutex.Lock()
-	p.processInvoke_SatsNet(data)
+	p.PreprocessInvokeData_SatsNet(data)
 	p.swap()
 	p.ContractRuntimeBase.InvokeCompleted_SatsNet(data)
 	p.mutex.Unlock()
 
 	// 发送
 	p.sendInvokeResultTx_SatsNet()
-	return nil
-}
-
-func (p *SwapContractRuntime) processInvoke(data *InvokeDataInBlock) error {
-
-	err := p.AllowInvoke()
-	if err == nil {
-		bUpdate := false
-		for _, tx := range data.InvokeTxVect {
-			if !p.IsMyInvoke(tx) {
-				continue
-			}
-			err := p.CheckInvokeTx(tx)
-			if err != nil {
-				Log.Warningf("%s CheckInvokeTx failed, %v", p.RelativePath(), err)
-				continue
-			}
-
-			_, err = p.Invoke(tx, data.Height)
-			if err == nil {
-				Log.Infof("%s invoke %s succeed", p.RelativePath(), tx.Tx.TxID())
-				bUpdate = true
-			} else {
-				Log.Infof("%s invoke %s failed, %v", p.RelativePath(), tx.Tx.TxID(), err)
-			}
-		}
-		if bUpdate {
-			p.refreshTime_swap = 0
-			p.stp.SaveReservation(p.resv)
-		}
-	} else {
-		Log.Infof("%s allowInvoke failed, %v", p.URL(), err)
-	}
 	return nil
 }
 
@@ -1896,7 +1644,7 @@ func (p *SwapContractRuntime) InvokeWithBlock(data *InvokeDataInBlock) error {
 
 	if p.IsActive() {
 		p.mutex.Lock()
-		p.processInvoke(data)
+		p.PreprocessInvokeData(data)
 		p.swap()
 		p.ContractRuntimeBase.InvokeCompleted(data)
 		p.mutex.Unlock()
@@ -1911,7 +1659,7 @@ func (p *SwapContractRuntime) InvokeWithBlock(data *InvokeDataInBlock) error {
 	return nil
 }
 
-func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height int) (InvokeHistoryItem, error) {
+func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeTx_SatsNet, height int) (InvokeHistoryItem, error) {
 
 	invokeData := invokeTx.InvokeParam
 	output := sindexer.GenerateTxOutput(invokeTx.Tx, invokeTx.InvokeVout)
@@ -1927,8 +1675,12 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 	utxo := fmt.Sprintf("%s:%d", invokeTx.Tx.TxID(), invokeTx.InvokeVout)
 	org, ok := p.history[utxo]
 	if ok {
-		org.UtxoId = utxoId
-		return nil, fmt.Errorf("contract utxo %s has been handled", utxo)
+		if org.UtxoId != utxoId { // reorg
+			org.UtxoId = utxoId
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
+		}
+		invokeTx.Handled = true
+		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
 	url := p.URL()
@@ -2033,6 +1785,7 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 		}
 
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_swap(address, output, &swapParam, bValid), nil
 
 	case INVOKE_API_WITHDRAW:
@@ -2073,7 +1826,11 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 					AssetName: *p.GetAssetName(),
 					N:         p.N,
 				}
-				fee := CalcFee_SendTx(2, 3, 1, assetName, amt, p.stp.GetFeeRate(), true)
+				feeRate := withdrawParam.FeeRate
+				if feeRate == 0 {
+					feeRate = p.stp.GetFeeRate()
+				}
+				fee := CalcFee_SendTx(2, 3, 1, assetName, amt, feeRate, true)
 				expected := WITHDRAW_INVOKE_FEE + fee
 				min := expected * 95 / 100
 				if plainSats < min {
@@ -2111,10 +1868,12 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 			break
 		}
 		// 更新合约状态
-		return p.updateContract_deposit(address, output, &withdrawParam, bValid, false), nil
+		invokeTx.Handled = true
+		return p.updateContract_withdraw(address, output, &withdrawParam, bValid, false), nil
 
 	case INVOKE_API_REFUND:
 		// 取回所有资产，包括已经部分成交但还没有发送的和未成交的
+		invokeTx.Handled = true
 		return p.updateContract_refund(address, output.GetPlainSat(), utxo, false, utxoId), nil
 
 	case INVOKE_API_ADDLIQUIDITY:
@@ -2176,6 +1935,7 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 			break
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_liquidity(address, output, invokeParam.OrderType,
 			assetAmt, satsValue, bValid, false, false), nil
 
@@ -2238,6 +1998,7 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 			break
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_liquidity(address, output, invokeParam.OrderType,
 			assetAmt, 0, bValid, false, false), nil
 
@@ -2293,6 +2054,7 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract(address, output, invokeParam.OrderType,
 			ratio, bValid, false, false), nil
 
@@ -2302,7 +2064,7 @@ func (p *SwapContractRuntime) Invoke_SatsNet(invokeTx *InvokeTx_SatsNet, height 
 	}
 }
 
-func (p *SwapContractRuntime) Invoke(invokeTx *InvokeTx, height int) (InvokeHistoryItem, error) {
+func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, height int) (InvokeHistoryItem, error) {
 
 	invokeData := invokeTx.InvokeParam
 	output := indexer.GenerateTxOutput(invokeTx.Tx, invokeTx.InvokeVout)
@@ -2315,12 +2077,13 @@ func (p *SwapContractRuntime) Invoke(invokeTx *InvokeTx, height int) (InvokeHist
 		if err != nil {
 			return nil, err
 		}
-	} else {
+	} else { // TODO 主网过来的调用都没有设置参数，跟AMM/transend的符文有冲突，一个地址不能同时部署两个recycle和amm/transcend合约
 		switch p.GetTemplateName() {
 		case TEMPLATE_CONTRACT_SWAP:
 			return nil, fmt.Errorf("swap contract not support deposit")
 		default:
 		}
+		// 目前只有runes资产没有设置参数
 		param.Action = INVOKE_API_DEPOSIT
 	}
 
@@ -2330,8 +2093,12 @@ func (p *SwapContractRuntime) Invoke(invokeTx *InvokeTx, height int) (InvokeHist
 	Log.Infof("utxo %x %s\n", utxoId, utxo)
 	org, ok := p.history[utxo]
 	if ok {
-		org.UtxoId = utxoId
-		return nil, fmt.Errorf("contract utxo %s has been handled", utxo)
+		if org.UtxoId != utxoId { // reorg
+			org.UtxoId = utxoId
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
+		}
+		invokeTx.Handled = true
+		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
 	switch param.Action {
@@ -2379,6 +2146,7 @@ func (p *SwapContractRuntime) Invoke(invokeTx *InvokeTx, height int) (InvokeHist
 		}
 
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_deposit(address, OutputToSatsNet(output), nil, bValid, true), nil
 
 	case INVOKE_API_ADDLIQUIDITY: // 必须有 invokeTx.InvokeParam
@@ -2440,6 +2208,7 @@ func (p *SwapContractRuntime) Invoke(invokeTx *InvokeTx, height int) (InvokeHist
 			break
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_liquidity(address, OutputToSatsNet(output),
 			invokeParam.OrderType, assetAmt, satsValue,
 			bValid, false, false), nil
@@ -2503,6 +2272,7 @@ func (p *SwapContractRuntime) Invoke(invokeTx *InvokeTx, height int) (InvokeHist
 			break
 		}
 		// 更新合约状态
+		invokeTx.Handled = true
 		return p.updateContract_liquidity(address, OutputToSatsNet(output),
 			invokeParam.OrderType, assetAmt, 0,
 			bValid, false, false), nil
@@ -2511,6 +2281,10 @@ func (p *SwapContractRuntime) Invoke(invokeTx *InvokeTx, height int) (InvokeHist
 		Log.Errorf("contract %s is not support action %s", p.URL(), param.Action)
 		return nil, fmt.Errorf("not support action %s", param.Action)
 	}
+}
+
+func (p *SwapContractRuntime) GetInvokerStatus(address string) InvokerStatus {
+	return p.loadTraderInfo(address)
 }
 
 func (p *SwapContractRuntime) loadTraderInfo(address string) *TraderStatus {
@@ -2522,19 +2296,16 @@ func (p *SwapContractRuntime) loadTraderInfo(address string) *TraderStatus {
 	r, err := loadContractInvokerStatus(p.stp.GetDB(), p.URL(), address)
 	if err != nil {
 		status = NewTraderStatus(address, p.Divisibility)
-		p.traderInfoMap[address] = status
-		return status
+	} else {
+		status, ok = r.(*TraderStatus)
+		if !ok {
+			status = NewTraderStatus(address, p.Divisibility)
+		}
 	}
 
-	status, ok = r.(*TraderStatus)
-	if !ok {
-		status = NewTraderStatus(address, p.Divisibility)
-		p.traderInfoMap[address] = status
-		return status
-	}
 	p.traderInfoMap[address] = status
 	return status
-} 
+}
 
 func (p *SwapContractRuntime) loadSvrTraderInfo() *TraderStatus {
 	return p.loadTraderInfo(p.GetSvrAddress())
@@ -2642,10 +2413,8 @@ func (p *SwapContractRuntime) updateContract_deposit(
 
 	var remainingValue int64
 	var inAmt, expectedAmt, remainingAmt *Decimal
-	orderType := ORDERTYPE_DEPOSIT
 	assetName := p.GetAssetName()
 	if param != nil {
-		orderType = param.OrderType
 		assetName = indexer.NewAssetNameFromString(param.AssetName)
 		expectedAmt, _ = indexer.NewDecimalFromString(param.Amt, p.Divisibility)
 	}
@@ -2653,43 +2422,22 @@ func (p *SwapContractRuntime) updateContract_deposit(
 	bPlainAsset := indexer.IsPlainAsset(assetName)
 	inValue := output.GetPlainSat()
 	serviceFee := inValue
-	if orderType == ORDERTYPE_DEPOSIT {
-		if bPlainAsset {
-			inAmt = nil
-			expectedAmt = indexer.NewDefaultDecimal(inValue)
+	if bPlainAsset {
+		inAmt = nil
+		expectedAmt = indexer.NewDefaultDecimal(inValue)
 
-			remainingValue = inValue
-			remainingAmt = nil
-			serviceFee -= remainingValue
-		} else {
-			inAmt = output.GetAsset(assetName)
-			expectedAmt = inAmt.Clone()
-			remainingAmt = inAmt.Clone()
-		}
+		remainingValue = inValue
+		remainingAmt = nil
+		serviceFee -= remainingValue
 	} else {
-		if bPlainAsset {
-			inAmt = nil
-
-			remainingValue = expectedAmt.Int64()
-			remainingAmt = nil
-			serviceFee -= remainingValue
-		} else {
-			inAmt = output.GetAsset(assetName)
-			expectedAmt = inAmt.Clone()
-			remainingAmt = inAmt.Clone()
-		}
+		inAmt = output.GetAsset(assetName)
+		expectedAmt = inAmt.Clone()
+		remainingAmt = inAmt.Clone()
 	}
 
 	reason := INVOKE_REASON_NORMAL
 	if !bValid {
 		reason = INVOKE_REASON_INVALID
-		if orderType == ORDERTYPE_WITHDRAW {
-			serviceFee -= INVOKE_FEE
-			if serviceFee < 0 {
-				serviceFee = 0
-			}
-			remainingValue += serviceFee - INVOKE_FEE
-		}
 	}
 	item := &SwapHistoryItem{
 		InvokeHistoryItemBase: InvokeHistoryItemBase{
@@ -2698,12 +2446,81 @@ func (p *SwapContractRuntime) updateContract_deposit(
 			Done:   DONE_NOTYET,
 		},
 
-		OrderType:      orderType,
+		OrderType:      ORDERTYPE_DEPOSIT,
 		UtxoId:         output.UtxoId,
 		OrderTime:      time.Now().Unix(),
 		AssetName:      assetName.String(),
 		ServiceFee:     serviceFee,
 		UnitPrice:      nil,
+		ExpectedAmt:    expectedAmt,
+		Address:        address,
+		FromL1:         fromL1,
+		InUtxo:         output.OutPointStr,
+		InValue:        inValue,
+		InAmt:          inAmt,
+		RemainingAmt:   remainingAmt.Clone(),
+		RemainingValue: remainingValue,
+		ToL1:           !fromL1,
+		OutAmt:         indexer.NewDecimal(0, p.Divisibility),
+		OutValue:       0,
+	}
+	p.updateContractStatus(item)
+	p.addItem(item)
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+	return item
+}
+
+// 包括withdraw
+func (p *SwapContractRuntime) updateContract_withdraw(
+	address string, output *sindexer.TxOutput,
+	param *WithdrawInvokeParam,
+	bValid, fromL1 bool) *SwapHistoryItem {
+
+	var remainingValue int64
+	var inAmt, expectedAmt, remainingAmt *Decimal
+	assetName := p.GetAssetName()
+	if param != nil {
+		assetName = indexer.NewAssetNameFromString(param.AssetName)
+		expectedAmt, _ = indexer.NewDecimalFromString(param.Amt, p.Divisibility)
+	}
+
+	bPlainAsset := indexer.IsPlainAsset(assetName)
+	inValue := output.GetPlainSat()
+	serviceFee := inValue
+	if bPlainAsset {
+		inAmt = nil
+
+		remainingValue = expectedAmt.Int64()
+		remainingAmt = nil
+		serviceFee -= remainingValue
+	} else {
+		inAmt = output.GetAsset(assetName)
+		expectedAmt = inAmt.Clone()
+		remainingAmt = inAmt.Clone()
+	}
+
+	reason := INVOKE_REASON_NORMAL
+	if !bValid {
+		reason = INVOKE_REASON_INVALID
+		serviceFee -= INVOKE_FEE
+		if serviceFee < 0 {
+			serviceFee = 0
+		}
+		remainingValue += serviceFee - INVOKE_FEE
+	}
+	item := &SwapHistoryItem{
+		InvokeHistoryItemBase: InvokeHistoryItemBase{
+			Id:     p.InvokeCount,
+			Reason: reason,
+			Done:   DONE_NOTYET,
+		},
+
+		OrderType:      ORDERTYPE_WITHDRAW,
+		UtxoId:         output.UtxoId,
+		OrderTime:      time.Now().Unix(),
+		AssetName:      assetName.String(),
+		ServiceFee:     serviceFee,
+		UnitPrice:      indexer.NewDecimal(param.FeeRate, 0), // feeRate
 		ExpectedAmt:    expectedAmt,
 		Address:        address,
 		FromL1:         fromL1,
@@ -2786,7 +2603,7 @@ func (p *SwapContractRuntime) updateContract_liquidity(
 // 通用的调用参数入口
 func (p *SwapContractRuntime) updateContract(
 	invoker string, output *sindexer.TxOutput,
-	orderType int, expectedAmt *Decimal, 
+	orderType int, expectedAmt *Decimal,
 	bValid, fromL1, toL1 bool) *SwapHistoryItem {
 
 	assetName := p.GetAssetName()
@@ -2836,7 +2653,6 @@ func (p *SwapContractRuntime) updateContract(
 	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
 	return item
 }
-
 
 func (p *SwapContractRuntime) updateContract_refund(
 	address string, plainSat int64, utxo string, fromL1 bool, utxoId uint64) *SwapHistoryItem {
@@ -3090,88 +2906,10 @@ func (p *SwapContractRuntime) addItem(item *SwapHistoryItem) {
 	p.insertBuck(item)
 }
 
-// TODO
-func (p *SwapContractRuntime) DisableItem(input InvokeHistoryItem) {
-	item, ok := input.(*SwapHistoryItem)
-	if !ok {
-		return
-	}
-
-	switch item.OrderType {
-
-	}
-
-}
-
-// func (p *SwapContractRuntime) AddLostInvokeItem(txId string, fromL1 bool) (string, error) {
-
-// 	url := p.URL()
-// 	item := findContractInvokeItem(p.stp.GetDB(), url, txId)
-// 	if item != nil {
-// 		return item.GetKey(), fmt.Errorf("same item exists")
-// 	}
-
-// 	if fromL1 {
-// 		txHex, err := p.stp.GetIndexerClient().GetRawTx(txId)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		tx, err := DecodeMsgTx(txHex)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		channelUtxosMap := make(map[string]map[string]bool)
-// 		contractAddrMap := map[string]bool{
-// 			p.Address(): true,
-// 		}
-// 		invokeTx, err := p.stp.generateInvokeInfoFromTx(tx, contractAddrMap, channelUtxosMap)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		err = p.stp.fillInvokeInfo(invokeTx)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		var height int
-// 		height, invokeTx.TxIndex, invokeTx.InvokeVout = indexer.FromUtxoId(invokeTx.TxOutput.UtxoId)
-// 		item, err := p.Invoke(invokeTx, height)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		return item.GetKey(), nil
-
-// 	} else {
-// 		txHex, err := p.stp.l2IndexerClient.GetRawTx(txId)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		tx, err := DecodeMsgTx_SatsNet(txHex)
-// 		if err != nil {
-// 			return "", err
-// 		}
-
-// 		invokeTx, err := p.stp.generateInvokeInfoFromTx_SatsNet(tx)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		err = p.stp.fillInvokeInfo_SatsNet(invokeTx)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		var height int
-// 		height, invokeTx.TxIndex, invokeTx.InvokeVout = indexer.FromUtxoId(invokeTx.TxOutput.UtxoId)
-// 		item, err := p.Invoke_SatsNet(invokeTx, height)
-// 		if err != nil {
-// 			return "", err
-// 		}
-// 		return item.GetKey(), nil
-// 	}
-// }
-
 type DealInfo struct {
 	SendInfo          map[string]*SendAssetInfo // deposit时，key是item的InUtxo，其他情况是address
 	SendTxIdMap       map[string]string         // depoist时使用，key是item的InUtxo
-	PreOutputs        []*TxOutput              // 主网交易的输入，也可能是前一个交易的输出
+	PreOutputs        []*TxOutput               // 主网交易的输入，也可能是前一个交易的输出
 	AssetName         *swire.AssetName
 	TotalAmt          *Decimal // 输出总和
 	TotalValue        int64    // 输出总和
@@ -3182,6 +2920,7 @@ type DealInfo struct {
 	RuntimeMerkleRoot []byte
 	TxId              string
 	Fee               int64
+	FeeRate           int64
 }
 
 func (p *SwapContractRuntime) genDealInfo(height int) *DealInfo {
@@ -3276,6 +3015,9 @@ func (p *SwapContractRuntime) deal() error {
 
 	// 发送
 	if p.resv.LocalIsInitiator() {
+		if len(p.buyPool) == 0 && len(p.sellPool) == 0 {
+			return nil
+		}
 		// 处理买单
 		p.mutex.RLock()
 		height := p.CurrBlock
@@ -3307,9 +3049,9 @@ func (p *SwapContractRuntime) deal() error {
 			}
 		}
 
-		Log.Debugf("contract %s deal completed", url)
+		//Log.Debugf("contract %s deal completed", url)
 	} else {
-		Log.Debugf("server: waiting the deal Tx of contract %s ", p.URL())
+		//Log.Debugf("server: waiting the deal Tx of contract %s ", p.URL())
 	}
 
 	return nil
@@ -3448,7 +3190,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_swap(dealInfo *DealInfo) {
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 
 	//p.checkSelf()
 }
@@ -3657,530 +3399,15 @@ func (p *SwapContractRuntime) sendInvokeResultTx_SatsNet() error {
 		}
 
 		p.isSending = false
-		Log.Debugf("contract %s sendInvokeResultTx_SatsNet completed", url)
+		//Log.Debugf("contract %s sendInvokeResultTx_SatsNet completed", url)
 	} else {
-		//Log.Infof("server: waiting the deal Tx of contract %s ", p.URL())
+		//Log.Debugf("server: waiting the deal Tx of contract %s ", p.URL())
 	}
 	return nil
 }
 
 func (p *SwapContractRuntime) sendInvokeResultTx() error {
 	return p.sendInvokeResultTx_SatsNet()
-}
-
-func (p *ContractRuntimeBase) buildDepositAnchorTx(output *indexer.TxOutput, destAddr string,
-	height int, reason string) (*swire.MsgTx, error) {
-	//
-	var assetName *AssetName
-	if len(output.Assets) == 0 {
-		assetName = &AssetName{
-			AssetName: indexer.ASSET_PLAIN_SAT,
-			N:         1,
-		}
-	} else {
-		assetName = &AssetName{
-			AssetName: output.Assets[0].Name,
-			N:         int(output.Assets[0].BindingSat),
-		}
-	}
-
-	invoice, _ := UnsignedContractResultInvoice(p.URL(), reason, fmt.Sprintf("%d", height))
-	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
-
-	anchorTx, err := p.stp.CreateContractDepositAnchorTx(p.runtime, destAddr, output, assetName, nullDataScript)
-	if err != nil {
-		Log.Errorf("CreateContractDepositAnchorTx %s %s failed, %v", assetName.String(), output.OutPointStr, err)
-		return nil, err
-	}
-
-	return anchorTx, nil
-}
-
-func (p *ContractRuntimeBase) notifyAndSendDepositAnchorTxs(anchorTxs []*swire.MsgTx) error {
-	// 通知peer, 仅仅为了同步更新merkle root
-	localKey := p.stp.GetWallet().GetPaymentPubKey().SerializeCompressed()
-	peerPubKey := p.stp.GetServerNodePubKey().SerializeCompressed()
-	witness, _, err := GetP2WSHscript(localKey, peerPubKey)
-	if err != nil {
-		Log.Errorf("GetP2WSHscript failed, %v", err)
-		return err
-	}
-
-	var txs []*wwire.TxSignInfo
-	for _, tx := range anchorTxs {
-		txHex, err := EncodeMsgTx_SatsNet(tx)
-		if err != nil {
-			Log.Errorf("EncodeMsgTx_SatsNet failed, %v", err)
-			return err
-		}
-		txs = append(txs, &wwire.TxSignInfo{
-			Tx:        txHex,
-			L1Tx:      false,
-			LocalSigs: nil,
-			Reason:    "ascend",
-			NotSign:   true,
-		})
-	}
-
-	moredata := wwire.RemoteSignMoreData_Contract{
-		Tx:                txs,
-		LocalPubKey:       localKey,
-		Witness:           witness,
-		ContractURL:       p.URL(),
-		InvokeCount:       p.InvokeCount,
-		StaticMerkleRoot:  p.StaticMerkleRoot,
-		RuntimeMerkleRoot: p.CurrAssetMerkleRoot,
-		Action:            INVOKE_API_DEPOSIT,
-	}
-	md, err := json.Marshal(moredata)
-	if err != nil {
-		Log.Errorf("Marshal failed, %v", err)
-		return err
-	}
-
-	req := wwire.SignRequest{
-		ChannelId:    p.ChannelAddr,
-		CommitHeight: -1,
-		Reason:       "contract",
-		MoreData:     md,
-		PubKey:       localKey,
-	}
-	msg, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	sig, err := p.stp.GetWalletMgr().SignMessage(msg)
-	if err != nil {
-		return err
-	}
-
-	_, err = p.stp.SendSigReq(&req, sig)
-	if err != nil {
-		Log.Errorf("SendBootstrapSigReq failed. %v", err)
-		return err
-	}
-
-	// peer已经广播过，这个再次广播
-	for _, tx := range anchorTxs {
-		_, err := p.stp.BroadcastTx_SatsNet(tx)
-		if err != nil && strings.Contains(err.Error(), "can't find utxo") {
-			// -26: TX rejected: The anchor tx is invalid 3e4946319fc0facddbbda06b0153c8fe2be9dffe5db469ef5566e5325f661197:http://127.0.0.1:8023/btc/testnet/v3/utxo/info/77e2027afa5cf8fb90dfc41c22ba0184c1450b6640c26b96148fb77f49d226ff:1 response failed: can't find utxo 77e2027afa5cf8fb90dfc41c22ba0184c1450b6640c26b96148fb77f49d226ff:1
-			parts := strings.Split(err.Error(), "can't find utxo")
-			if len(parts) == 2 {
-				utxo := strings.TrimSpace(parts[1])
-				item, ok := p.history[utxo]
-				if ok {
-					h, _, _ := indexer.FromUtxoId(item.UtxoId)
-					if h+6 < p.CurrBlockL1 {
-						// 这个输入无效，这条记录设置为异常，不再重试
-						Log.Errorf("deposit detect an invalid item %d, set to invalid. ", item.Id)
-						item.Reason = INVOKE_REASON_UTXO_NOT_FOUND
-						item.Done = DONE_CLOSED_DIRECTLY
-					}
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-func (p *ContractRuntimeBase) sendTx_SatsNet(dealInfo *DealInfo, reason string) (string, error) {
-	sendInfoMap := dealInfo.SendInfo
-	height := dealInfo.Height
-
-	sendInfoVect := make([]*SendAssetInfo, 0, len(sendInfoMap))
-	for _, v := range sendInfoMap {
-		if v.AssetAmt.IsZero() && v.Value == 0 {
-			continue
-		}
-		sendInfoVect = append(sendInfoVect, v)
-	}
-
-	sort.Slice(sendInfoVect, func(i, j int) bool {
-		return sendInfoVect[i].Address < sendInfoVect[j].Address
-	})
-
-	invoice, _ := UnsignedContractResultInvoice(p.URL(), reason, fmt.Sprintf("%d", height))
-	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
-
-	url := p.URL()
-	var txId string
-	var err error
-	for i := 0; i < 3; i++ {
-		txId, err = p.stp.CoBatchSendV2_SatsNet(sendInfoVect, dealInfo.AssetName.String(),
-			"contract", url, dealInfo.InvokeCount, nullDataScript,
-			dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot)
-		if err != nil {
-			if strings.Contains(err.Error(), ERR_MERKLE_ROOT_INCONSISTENT) {
-				// recalc
-				Log.Infof("contract %s CoBatchSendV2_SatsNet failed %v, recalculate merkle root and try again", url, err)
-				p.calcAssetMerkleRoot()
-			} else {
-				Log.Errorf("contract %s CoBatchSendV2_SatsNet failed %v, wait a second and try again", url, err)
-				// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
-				//time.Sleep(2 * time.Second)
-				continue
-			}
-		}
-		Log.Infof("contract %s CoBatchSendV2_SatsNet txId %s", url, txId)
-		break
-	}
-	if err != nil {
-		Log.Errorf("contract %s CoBatchSendV2_SatsNet failed %v", url, err)
-		// 下个区块再试
-		return "", err
-	}
-	saveContractInvokeResult(p.stp.GetDB(), url, txId, reason)
-
-	return txId, nil
-}
-
-func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
-	reason string, sendDeAnchorTx bool, excludeRecentBlock bool) (string, int64, int64, error) {
-	//
-	sendInfoMap := dealInfo.SendInfo
-	height := dealInfo.Height
-	stubNum := 0
-	stubs := make([]string, 0)
-	// 分开发送
-	sendInfoVect := make([]*SendAssetInfo, 0, len(sendInfoMap))
-	sendInfoVectWithStub := make([]*SendAssetInfo, 0, len(sendInfoMap))
-	for _, v := range sendInfoMap {
-		if v.AssetAmt.IsZero() && v.Value == 0 {
-			continue
-		}
-
-		if v.AssetName.Protocol == indexer.PROTOCOL_NAME_ORDX {
-			if indexer.GetBindingSatNum(v.AssetAmt, uint32(p.N)) < 330 {
-				stubNum++
-				sendInfoVectWithStub = append(sendInfoVectWithStub, v)
-				continue
-			}
-		}
-		sendInfoVect = append(sendInfoVect, v)
-	}
-
-	if len(sendInfoVect) == 0 && len(sendInfoVectWithStub) == 0 {
-		return "", 0, 0, fmt.Errorf("no send info")
-	}
-
-	sort.Slice(sendInfoVect, func(i, j int) bool {
-		return sendInfoVect[i].Address < sendInfoVect[j].Address
-	})
-
-	url := p.URL()
-	var err error
-	var stubFee int64
-	if stubNum != 0 { // 前面处理过，最多一个
-		stubs, err = p.stp.GetWalletMgr().GetUtxosForStubs(p.Address(), stubNum, nil)
-		if err != nil {
-			// 重新生成一堆
-			stubTx, fee, err := p.stp.CoGenerateStubUtxos(stubNum+10, p.URL(), dealInfo.InvokeCount, excludeRecentBlock)
-			if err != nil {
-				Log.Errorf("CoGenerateStubUtxos %d failed, %v", stubNum+10, err)
-				return "", 0, 0, err
-			}
-			Log.Infof("sendTx CoGenerateStubUtxos %s %d", stubTx, fee)
-			for i := range stubNum {
-				stubs = append(stubs, fmt.Sprintf("%s:%d", stubTx, i))
-			}
-			stubFee = fee
-			saveContractInvokeResult(p.stp.GetDB(), url, stubTx, "stub")
-		}
-	}
-
-	var fee int64
-	var txId string
-	invoice, _ := UnsignedContractResultInvoice(p.RelativePath(), reason, fmt.Sprintf("%d", height))
-	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
-	if len(sendInfoVect) > 0 {
-		for i := 0; i < 3; i++ {
-			txId, fee, err = p.stp.CoBatchSendV3(sendInfoVect, dealInfo.AssetName.String(),
-				"contract", url, dealInfo.InvokeCount, nullDataScript,
-				dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
-			if err != nil {
-				if strings.Contains(err.Error(), ERR_MERKLE_ROOT_INCONSISTENT) {
-					// recalc
-					Log.Infof("contract %s CoBatchSendV3 failed %v, recalculate merkle root and try again", url, err)
-					p.calcAssetMerkleRoot()
-				} else {
-					Log.Errorf("contract %s CoBatchSendV3 failed %v, wait a second and try again", url, err)
-					// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
-					//time.Sleep(2 * time.Second)
-					continue
-				}
-			}
-			Log.Infof("contract %s CoBatchSendV3 %s %d", url, txId, fee)
-			break
-		}
-		if err != nil {
-			return "", 0, stubFee, err
-		}
-	} else {
-		if stubNum != 0 {
-			p.stp.GetWalletMgr().utxoLockerL1.LockUtxo(stubs[0], "stub for "+reason)
-			// 这里只有一个交易
-			if len(sendInfoVectWithStub) > 1 {
-				return "", 0, stubFee, fmt.Errorf("only one output in stub is supported")
-			}
-			sendInfo := sendInfoVectWithStub[0]
-			for i := 0; i < 3; i++ {
-				txId, fee, err = p.stp.CoSendOrdxWithStub(sendInfo.Address, sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(),
-					stubs[0], "contract", url, dealInfo.InvokeCount, nullDataScript,
-					dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
-				if err != nil {
-					if strings.Contains(err.Error(), ERR_MERKLE_ROOT_INCONSISTENT) {
-						// recalc
-						Log.Infof("contract %s CoSendOrdxWithStub failed %v, recalculate merkle root and try again", url, err)
-						p.calcAssetMerkleRoot()
-					} else {
-						Log.Errorf("contract %s CoSendOrdxWithStub failed %v, wait a second and try again", url, err)
-						// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
-						//time.Sleep(2 * time.Second)
-						continue
-					}
-				}
-				Log.Infof("contract %s CoSendOrdxWithStub txId %s %d", url, txId, fee)
-				break
-
-			}
-			if err != nil {
-				p.stp.GetWalletMgr().utxoLockerL1.UnlockUtxo(stubs[0])
-				return "", 0, stubFee, err
-			}
-		}
-	}
-
-	saveContractInvokeResult(p.stp.GetDB(), url, txId, reason)
-	return txId, fee, stubFee, nil
-}
-
-func (p *ContractRuntimeBase) genSendInfoFromTx_SatsNet(tx *swire.MsgTx, includedAll bool) (*DealInfo, error) {
-
-	dealInfo := &DealInfo{
-		SendInfo: make(map[string]*SendAssetInfo),
-		TxId:     tx.TxID(),
-		Fee:      DEFAULT_FEE_SATSNET,
-	}
-
-	assetName := p.contract.GetAssetName()
-	isPlainAsset := indexer.IsPlainAsset(assetName)
-	for i, txOut := range tx.TxOut {
-		if sindexer.IsOpReturn(txOut.PkScript) {
-			ctype, data, err := sindexer.ReadDataFromNullDataScript(txOut.PkScript)
-			if err == nil {
-				switch ctype {
-				case sindexer.CONTENT_TYPE_INVOKERESULT:
-					url, r, h, err := ParseContractResultInvoice(data)
-					if err != nil {
-						Log.Errorf("ParseContractResultInvoice failed, %v", err)
-						return nil, err
-					}
-					if url != p.URL() {
-						if url != p.RelativePath() {
-							return nil, fmt.Errorf("%s not expected contract invoke result tx %s", url, tx.TxID())
-						}
-					}
-					height, err := strconv.ParseInt(h, 10, 32)
-					if err != nil {
-						return nil, err
-					}
-
-					dealInfo.Height = int(height)
-					dealInfo.Reason = r
-				}
-			}
-		}
-
-		addr, err := AddrFromPkScript(txOut.PkScript)
-		if err != nil {
-			addr = ADDR_OPRETURN
-		}
-
-		if !includedAll {
-			if addr == ADDR_OPRETURN || addr == p.ChannelAddr {
-				continue
-			}
-		}
-
-		output := sindexer.GenerateTxOutput(tx, i)
-		// 在计算utxo中的空白聪时，需要和发送方一致：总聪-资产占有的空白聪。不能直接使用GetPlainSat，因为会为资产多预留了一聪
-		value := output.Value() - output.SizeOfBindingSats()
-		amt := output.GetAsset(assetName)
-		if isPlainAsset {
-			amt = nil
-		}
-		info := SendAssetInfo{
-			Address:   addr,
-			Value:     value,
-			AssetName: assetName,
-			AssetAmt:  amt,
-		}
-		old, ok := dealInfo.SendInfo[addr]
-		if ok {
-			old.AssetAmt = old.AssetAmt.Add(info.AssetAmt)
-			old.Value += info.Value
-		} else {
-			dealInfo.SendInfo[addr] = &info
-		}
-		dealInfo.TotalAmt = dealInfo.TotalAmt.Add(amt)
-		dealInfo.TotalValue += info.Value
-	}
-	dealInfo.AssetName = assetName
-
-	return dealInfo, nil
-}
-
-// 因为不清楚具体是哪一种资产，这里按照默认的优先级选择资产： ft>names>nft, ordx>runes
-func (p *ContractRuntimeBase) GetAssetInfoFromOutput(output *TxOutput) (*indexer.AssetName, *Decimal, int, error) {
-	var assetAmt *Decimal
-	var assetName *indexer.AssetName
-	divisibility := 0
-	if len(output.Assets) == 0 {
-		assetAmt = indexer.NewDefaultDecimal(output.Value())
-		assetName = &indexer.ASSET_PLAIN_SAT
-	} else if len(output.Assets) == 1 {
-		// 不管什么资产，都先上
-		assetName = &output.Assets[0].Name
-		assetAmt = output.Assets[0].Amount.Clone()
-		tickInfo := p.stp.GetTickerInfo(assetName)
-		if tickInfo == nil {
-			return nil, nil, 0, fmt.Errorf("can't find tick %s", assetName.String())
-		}
-		divisibility = tickInfo.Divisibility
-	} else {
-		var asset *indexer.AssetInfo
-		for _, a := range output.Assets {
-			switch a.Name.Type {
-			case indexer.ASSET_TYPE_FT:
-				if asset == nil {
-					asset = &a
-				} else {
-					if asset.Name.Protocol == a.Name.Protocol {
-						if asset.Amount.Cmp(&a.Amount) < 0 {
-							asset = &a
-						}
-					} else {
-						if a.Name.Protocol == indexer.PROTOCOL_NAME_ORDX {
-							asset = &a
-						}
-					}
-				}
-
-			case indexer.ASSET_TYPE_EXOTIC:
-				if asset == nil {
-					asset = &a
-				}
-			}
-		}
-		tickInfo := p.stp.GetTickerInfo(&asset.Name)
-		if tickInfo == nil {
-			return nil, nil, 0, fmt.Errorf("can't find tick %s", asset.Name.String())
-		}
-		divisibility = tickInfo.Divisibility
-
-		assetName = &asset.Name
-		assetAmt = asset.Amount.Clone()
-	}
-	return assetName, assetAmt, divisibility, nil
-}
-
-func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[string]*TxOutput, 
-	moreData []byte) (*DealInfo, error) {
-
-	dealInfo := &DealInfo{
-		SendInfo: make(map[string]*SendAssetInfo),
-		TxId:     tx.TxID(),
-	}
-
-	inputs, outputs, err := p.stp.GetWalletMgr().RebuildTxOutput(tx, preFectcher)
-	if err != nil {
-		Log.Errorf("rebuildTxOutput %s failed, %v", tx.TxID(), err)
-		return nil, err
-	}
-	dealInfo.PreOutputs = inputs
-
-	var in, out int64
-	for _, input := range inputs {
-		in += input.Value()
-	}
-
-	assetName := p.contract.GetAssetName()
-	isPlainAsset := indexer.IsPlainAsset(assetName)
-	for i, txOut := range tx.TxOut {
-		out += txOut.Value
-		if sindexer.IsOpReturn(txOut.PkScript) {
-			ctype, data, err := sindexer.ReadDataFromNullDataScript(txOut.PkScript)
-			if err != nil {
-				// 存在符文的情况下，只能传递moreData
-				if len(moreData) != 0 {
-					ctype, data, err = sindexer.ReadDataFromNullDataScript(moreData)
-					if err != nil {
-						return nil, fmt.Errorf("%s invalid more data", p.URL())
-					}
-				}
-			}
-			switch ctype {
-			case sindexer.CONTENT_TYPE_INVOKERESULT:
-				url, r, h, err := ParseContractResultInvoice(data)
-				if err != nil {
-					Log.Errorf("ParseContractResultInvoice failed, %v", err)
-					return nil, err
-				}
-				if url != p.URL() {
-					if url != p.RelativePath() {
-						return nil, fmt.Errorf("%s not expected contract invoke result tx %s", url, tx.TxID())
-					}
-				}
-				height, err := strconv.ParseInt(h, 10, 32)
-				if err != nil {
-					return nil, err
-				}
-
-				dealInfo.Height = int(height)
-				dealInfo.Reason = r
-			}
-
-		} else {
-			addr, err := AddrFromPkScript(txOut.PkScript)
-			if err != nil {
-				Log.Errorf("AddrFromPkScript failed, %v", err)
-				return nil, err
-			}
-			if addr == p.ChannelAddr {
-				continue
-			}
-
-			// 主网有资产的utxo，其value就当作0
-			output := outputs[i]
-			plainSat := int64(0)
-			amt := output.GetAsset(assetName)
-			if isPlainAsset {
-				plainSat = output.GetPlainSat()
-				amt = nil
-			}
-			info := SendAssetInfo{
-				Address:   addr,
-				Value:     plainSat,
-				AssetName: assetName,
-				AssetAmt:  amt,
-			}
-			old, ok := dealInfo.SendInfo[addr]
-			if ok {
-				old.AssetAmt = old.AssetAmt.Add(info.AssetAmt)
-				old.Value += info.Value
-			} else {
-				dealInfo.SendInfo[addr] = &info
-			}
-			dealInfo.TotalAmt = dealInfo.TotalAmt.Add(amt)
-			dealInfo.TotalValue += info.Value
-		}
-	}
-	dealInfo.Fee = in - out
-	dealInfo.AssetName = assetName
-
-	return dealInfo, nil
 }
 
 func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
@@ -4193,8 +3420,8 @@ func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
 
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
 	maxHeight := 0
-	for _, refundMap := range p.refundMap {
-
+	delAddress := make([]string, 0)
+	for address, refundMap := range p.refundMap {
 		for _, item := range refundMap {
 			h, _, _ := indexer.FromUtxoId(item.UtxoId)
 			if h > height {
@@ -4237,6 +3464,21 @@ func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
 			totalRefundValue += value
 		}
 
+		// 如果没有资产可以退，将这些指令设置为已经处理
+		_, ok := sendInfoMap[address]
+		if !ok {
+			url := p.URL()
+			for _, item := range refundMap {
+				item.Reason = INVOKE_REASON_INVALID
+				item.Done = DONE_DEALT
+				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+				delete(p.history, item.InUtxo)
+			}
+			delAddress = append(delAddress, address)
+		}
+	}
+	for _, address := range delAddress {
+		delete(p.refundMap, address)
 	}
 
 	return &DealInfo{
@@ -4340,7 +3582,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_refund(dealInfo *DealInfo) {
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 }
 
 // 退款。（在撮合交易之后进行）
@@ -4481,16 +3723,49 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
+	url := p.URL()
 	for inUtxo := range dealInfo.SendInfo {
-
 		item, ok := p.history[inUtxo]
 		if ok {
-			p.updateWithDepositItem(item, dealInfo.SendTxIdMap[inUtxo])
-		} else {
-			// 不是InUtxo，而是address, 那就只有一条记录
-			p.updateWithDepositItem(item, dealInfo.TxId)
-		}
+			txId := dealInfo.SendTxIdMap[inUtxo]
+			if txId == "" {
+				// 异常处理
+				// item.Reason = INVOKE_REASON_UTXO_NOT_FOUND
+				// item.Done = DONE_CLOSED_DIRECTLY
+				continue
+			}
 
+			// deposit utxo 解锁
+			p.stp.GetWalletMgr().utxoLockerL1.UnlockUtxo(item.InUtxo)
+			Log.Infof("deposit utxo %s unlocked", item.InUtxo)
+
+			// 更新对应数据
+			item.OutTxId = txId
+			item.OutAmt = item.RemainingAmt
+			item.OutValue = item.RemainingValue
+			item.RemainingAmt = nil
+			item.RemainingValue = 0
+			item.Done = DONE_DEALT
+
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+			delete(p.history, item.InUtxo)
+
+			trader := p.traderInfoMap[item.Address]
+			if trader != nil {
+				trader.DepositAmt = trader.DepositAmt.Add(item.OutAmt)
+				trader.DepositValue += item.OutValue
+				saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+			}
+
+			items, ok := p.depositMap[item.Address]
+			if ok {
+				delete(items, item.Id)
+			}
+
+			if len(items) == 0 {
+				delete(p.depositMap, item.Address)
+			}
+		}
 	}
 
 	p.CheckPoint = dealInfo.InvokeCount
@@ -4498,76 +3773,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
-}
-
-func (p *SwapContractRuntime) updateWithDepositItem(item *SwapHistoryItem, txId string) {
-	if txId == "" {
-		// 异常处理
-		// item.Reason = INVOKE_REASON_UTXO_NOT_FOUND
-		// item.Done = DONE_CLOSED_DIRECTLY
-		return
-	}
-
-	// deposit utxo 解锁
-	p.stp.GetWalletMgr().utxoLockerL1.UnlockUtxo(item.InUtxo)
-	Log.Infof("deposit utxo %s unlocked", item.InUtxo)
-
-	// 更新对应数据
-	item.OutTxId = txId
-	item.OutAmt = item.RemainingAmt
-	item.OutValue = item.RemainingValue
-	item.RemainingAmt = nil
-	item.RemainingValue = 0
-	item.Done = DONE_DEALT
-
-	url := p.URL()
-	SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
-	delete(p.history, item.InUtxo)
-
-	trader := p.traderInfoMap[item.Address]
-	if trader != nil {
-		trader.DepositAmt = trader.DepositAmt.Add(item.OutAmt)
-		trader.DepositValue += item.OutValue
-		saveContractInvokerStatus(p.stp.GetDB(), url, trader)
-	}
-
-	items, ok := p.depositMap[item.Address]
-	if ok {
-		delete(items, item.Id)
-	}
-
-	if len(items) == 0 {
-		delete(p.depositMap, item.Address)
-	}
-}
-
-// 根据deposit的item信息，恢复TxOutput
-func (p *ContractRuntimeBase) GetInvokeOutput(item *SwapHistoryItem) *indexer.TxOutput {
-	var value int64
-	isPlainSat := item.AssetName == indexer.ASSET_PLAIN_SAT.String()
-	if isPlainSat {
-		value = item.RemainingValue
-	} else {
-		value = indexer.GetBindingSatNum(item.RemainingAmt, uint32(p.N))
-	}
-	output := &indexer.TxOutput{
-		UtxoId:      item.UtxoId,
-		OutPointStr: item.InUtxo,
-		OutValue: wire.TxOut{
-			Value:    value,
-			PkScript: p.GetPkScript(),
-		},
-	}
-	if !isPlainSat {
-		output.Assets = indexer.TxAssets{indexer.AssetInfo{
-			Name:       *indexer.NewAssetNameFromString(item.AssetName),
-			Amount:     *item.RemainingAmt,
-			BindingSat: uint32(p.N),
-		}}
-	}
-
-	return output
+	p.refreshTime = 0
 }
 
 // 收到deposit的交易，执行二层分发
@@ -4671,6 +3877,21 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 	assetName := p.GetAssetName()
 	isRune = assetName.Protocol == indexer.PROTOCOL_NAME_RUNES
 
+	// 如果费率不同，优先处理高费率的交易
+	var highestFeeRate int64
+	for _, withdrawMap := range p.withdrawMap {
+		for _, item := range withdrawMap {
+			h, _, _ := indexer.FromUtxoId(item.UtxoId)
+			if h > height {
+				continue
+			}
+			if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+				continue
+			}
+			highestFeeRate = max(highestFeeRate, item.UnitPrice.Int64())
+		}
+	}
+
 	maxHeight := 0
 	var totalValue int64
 	var totalAmt *Decimal                          // 资产数量
@@ -4682,6 +3903,9 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 				continue
 			}
 			if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+				continue
+			}
+			if item.UnitPrice.Int64() < highestFeeRate {
 				continue
 			}
 			maxHeight = max(maxHeight, h)
@@ -4762,6 +3986,7 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 		InvokeCount:       p.InvokeCount,
 		StaticMerkleRoot:  p.StaticMerkleRoot,
 		RuntimeMerkleRoot: p.CurrAssetMerkleRoot,
+		FeeRate:           highestFeeRate,
 	}
 }
 
@@ -4780,7 +4005,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 	txId := dealInfo.TxId
 	url := p.URL()
 	// 通过height确定哪些item是需要处理的，然后更新对应的数据
-	deletedAddr := make([]string, 0)
 	for addr := range dealInfo.SendInfo {
 		if addr == ADDR_OPRETURN || addr == p.ChannelAddr {
 			continue
@@ -4828,11 +4052,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 			delete(items, id)
 		}
 		if len(items) == 0 {
-			deletedAddr = append(deletedAddr, addr)
+			delete(p.withdrawMap, addr)
 		}
-	}
-	for _, addr := range deletedAddr {
-		delete(p.withdrawMap, addr)
 	}
 
 	p.CheckPoint = dealInfo.InvokeCount
@@ -4840,7 +4061,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 }
 
 // 收到withdraw的交易，执行一层分发
@@ -4933,6 +4154,7 @@ func (p *SwapContractRuntime) genRemoveLiquidityInfo(height int) *DealInfo {
 			AssetName: assetName,
 			AssetAmt:  trader.RetrieveAmt.Clone(),
 		}
+		//Log.Debugf("genRemoveLiquidityInfo add sender %s %s %d", address, trader.RetrieveAmt.String(), trader.RetrieveValue)
 
 		totalAmt = totalAmt.Add(trader.RetrieveAmt)
 		totalValue += trader.RetrieveValue
@@ -4981,7 +4203,7 @@ func (p *SwapContractRuntime) retrieve() error {
 			// 成功一步记录一步
 			p.stp.SaveReservationWithLock(p.resv)
 
-			Log.Debugf("contract %s unstake completed, %s", p.URL(), txId)
+			Log.Debugf("contract %s removeliq completed, %s", p.URL(), txId)
 		}
 
 	} else {
@@ -5001,12 +4223,12 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 	p.TotalRetrieveTxFee += dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
+	Log.Debugf("%s total retrieve %s %d", p.URL(), p.TotalRetrieveAssets.String(), p.TotalRetrieveSats)
 
 	height := dealInfo.Height
 	txId := dealInfo.TxId
 	url := p.URL()
 	// 通过height确定哪些item是需要处理的，然后更新对应的数据
-	deletedAddr := make([]string, 0)
 	for addr, info := range dealInfo.SendInfo {
 		if addr == ADDR_OPRETURN || addr == p.ChannelAddr {
 			continue
@@ -5030,6 +4252,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 		trader.RetrieveValue -= info.Value
 		trader.SettleState = SETTLE_STATE_NORMAL
 		saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+		Log.Debugf("%s remove liquilitidy completed. %s %s %d", addr, info.AssetName.String(), info.AssetAmt.String(), info.Value)
 
 		deletedItems := make([]int64, 0)
 		for id, item := range items {
@@ -5055,11 +4278,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 			delete(items, id)
 		}
 		if len(deletedItems) != 0 && len(items) == 0 {
-			deletedAddr = append(deletedAddr, addr)
+			delete(p.removeLiquidityMap, addr)
 		}
-	}
-	for _, addr := range deletedAddr {
-		delete(p.removeLiquidityMap, addr)
 	}
 
 	p.CheckPoint = dealInfo.InvokeCount
@@ -5067,7 +4287,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 }
 
 func (p *SwapContractRuntime) genProfitInfo(height int) *DealInfo {
@@ -5113,7 +4333,6 @@ func (p *SwapContractRuntime) genProfitInfo(height int) *DealInfo {
 	}
 }
 
-
 func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -5129,7 +4348,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 	txId := dealInfo.TxId
 	url := p.URL()
 	// 通过height确定哪些item是需要处理的，然后更新对应的数据
-	deletedAddr := make([]string, 0)
 	for addr, info := range dealInfo.SendInfo {
 		if addr == ADDR_OPRETURN || addr == p.ChannelAddr {
 			continue
@@ -5143,7 +4361,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 		if trader == nil {
 			Log.Panicf("%s can't find trader %s", url, addr)
 		}
-		
+
 		trader.ProfitAmt = trader.ProfitAmt.Sub(info.AssetAmt)
 		trader.ProfitValue -= info.Value
 		saveContractInvokerStatus(p.stp.GetDB(), url, trader)
@@ -5172,11 +4390,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 			delete(items, id)
 		}
 		if len(deletedItems) != 0 && len(items) == 0 {
-			deletedAddr = append(deletedAddr, addr)
+			delete(p.profitMap, addr)
 		}
-	}
-	for _, addr := range deletedAddr {
-		delete(p.profitMap, addr)
 	}
 
 	p.CheckPoint = dealInfo.InvokeCount
@@ -5184,9 +4399,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 	p.CheckPointBlock = p.CurrBlock
 	p.CheckPointBlockL1 = p.CurrBlockL1
 
-	p.refreshTime_swap = 0
+	p.refreshTime = 0
 }
-
 
 // 提取利润，目前只支持底池的提取
 func (p *SwapContractRuntime) profit() error {
@@ -5234,7 +4448,7 @@ func ParseInscribeInfo(txSignInfo []*wwire.TxSignInfo) ([]*InscribeInfo, map[str
 	for _, txInfo := range txSignInfo {
 		switch txInfo.Reason {
 		case "commit":
-			// moredata: transfer body, reveal private key 
+			// moredata: transfer body, reveal private key
 			if len(txInfo.MoreData) == 0 {
 				return nil, nil, fmt.Errorf("should provide more data")
 			}
@@ -5244,7 +4458,7 @@ func ParseInscribeInfo(txSignInfo []*wwire.TxSignInfo) ([]*InscribeInfo, map[str
 			}
 
 			if !txInfo.L1Tx {
-				return nil, nil,fmt.Errorf("should be a L1 tx")
+				return nil, nil, fmt.Errorf("should be a L1 tx")
 			}
 			tx, err := DecodeMsgTx(txInfo.Tx)
 			if err != nil {
@@ -5257,12 +4471,12 @@ func ParseInscribeInfo(txSignInfo []*wwire.TxSignInfo) ([]*InscribeInfo, map[str
 			}
 
 			inscribes = append(inscribes, &InscribeInfo{
-				CommitTx: tx,
-				RemoteSig: txInfo.LocalSigs,
-				DestAddr: address,
-				AssetName: assetName,
-				Amt: amt,
-				FeeRate: feeRate,
+				CommitTx:         tx,
+				RemoteSig:        txInfo.LocalSigs,
+				DestAddr:         address,
+				AssetName:        assetName,
+				Amt:              amt,
+				FeeRate:          feeRate,
 				RevealPrivateKey: privateKey,
 			})
 		case "reveal":
@@ -5288,17 +4502,17 @@ func ParseInscribeInfo(txSignInfo []*wwire.TxSignInfo) ([]*InscribeInfo, map[str
 
 			utxo := fmt.Sprintf("%s:0", tx.TxID())
 			assetInfo := indexer.AssetInfo{
-				Name: *inscribe.AssetName,
-				Amount: *inscribe.Amt,
+				Name:       *inscribe.AssetName,
+				Amount:     *inscribe.Amt,
 				BindingSat: 0,
 			}
 			preOutputs[utxo] = &indexer.TxOutput{
-				UtxoId: INVALID_ID,
+				UtxoId:      INVALID_ID,
 				OutPointStr: utxo,
-				OutValue: *tx.TxOut[0],
-				Assets: indexer.TxAssets{assetInfo},
+				OutValue:    *tx.TxOut[0],
+				Assets:      indexer.TxAssets{assetInfo},
 				Offsets: map[indexer.AssetName]indexer.AssetOffsets{
-					*inscribe.AssetName: {{Start:0, End:1}},
+					*inscribe.AssetName: {{Start: 0, End: 1}},
 				},
 				SatBindingMap: map[int64]*indexer.AssetInfo{
 					0: &assetInfo,
@@ -5356,10 +4570,10 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 				if err != nil {
 					return nil, err
 				}
-			
+
 			case "commit", "reveal":
 				// ParseInscribeInfo
-	
+
 			case "": // main tx
 				if txInfo.L1Tx {
 					tx, err := DecodeMsgTx(txInfo.Tx)
@@ -5380,7 +4594,7 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 						return nil, err
 					}
 				}
-				
+
 			default:
 				return nil, fmt.Errorf("not support %s", txInfo.Reason)
 			}
@@ -5531,11 +4745,11 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 				dest := dealInfo.SendInfo[insc.DestAddr]
 				if dest.AssetName.String() != insc.AssetName.String() {
 					return nil, fmt.Errorf("inscribe: different asset name, expected %s but %s",
-				 		dest.AssetName.String(), insc.AssetName.String())
+						dest.AssetName.String(), insc.AssetName.String())
 				}
 				if dest.AssetAmt.Cmp(insc.Amt) != 0 {
 					return nil, fmt.Errorf("inscribe: different asset amt, expected %s but %s",
-				 		dest.AssetAmt.String(), insc.Amt )
+						dest.AssetAmt.String(), insc.Amt)
 				}
 
 				inputs := make([]*TxOutput, 0)
@@ -5553,7 +4767,7 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 					dealInfo.PreOutputs = append(dealInfo.PreOutputs, output)
 				}
 				insc2, err := p.stp.GetWalletMgr().MintTransferV2_brc20(p.ChannelAddr,
-					p.ChannelAddr, map[string]bool{}, insc.AssetName, insc.Amt, insc.FeeRate, 
+					p.ChannelAddr, map[string]bool{}, insc.AssetName, insc.Amt, insc.FeeRate,
 					inputs, true, insc.RevealPrivateKey, true, false, false)
 				if err != nil {
 					return nil, fmt.Errorf("can't regenerate inscribe info from request: %v", insc)
@@ -5813,7 +5027,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 		if !ok {
 			return nil, fmt.Errorf("invalid destination address %s", destAddr)
 		}
-		
+
 		bFound := false
 		for _, item := range items {
 			if item.InUtxo == anchorData.Utxo {

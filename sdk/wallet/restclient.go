@@ -54,6 +54,9 @@ func (p *RESTClient) GetUrl(path string) *URL {
 }
 
 type IndexerRPCClient interface {
+	Host() string
+	Ping() error
+
 	GetTxOutput(utxo string) (*TxOutput, error)  // 索引器接口，被花费后就找不到数据
 	GetAscendData(utxo string) (*sindexer.AscendData, error) // TODO 因为Decimal json序列化的修改，索引器暂时将资产列表清空，因为前端还没用到
 	IsCoreNode(pubkey []byte) (bool, error)
@@ -100,6 +103,33 @@ type IndexerClient struct {
 func NewIndexerClient(scheme, host, proxy string, http HttpClient) *IndexerClient {
 	client := NewRESTClient(scheme, host, proxy, http)
 	return &IndexerClient{client}
+}
+
+func (p *IndexerClient) Host() string {
+	return p.RESTClient.Host
+}
+
+func (p *IndexerClient) Ping() error {
+	url := p.GetUrl("/bestheight")
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return err
+	}
+
+	// Unmarshal the response.
+	var result indexerwire.BestHeightResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return fmt.Errorf("response message %s", result.Msg)
+	}
+
+	return nil
 }
 
 func (p *IndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {

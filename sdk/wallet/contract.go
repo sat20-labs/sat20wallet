@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,12 +30,15 @@ import (
 const (
 	URL_SEPARATOR = "_"
 
-	TEMPLATE_CONTRACT_SWAP        string = "swap.tc"
-	TEMPLATE_CONTRACT_AMM         string = "amm.tc"
+	// 已经完成的
+	TEMPLATE_CONTRACT_LAUNCHPOOL string = "launchpool.tc"
+	TEMPLATE_CONTRACT_SWAP       string = "swap.tc"
+	TEMPLATE_CONTRACT_AMM        string = "amm.tc"
+	TEMPLATE_CONTRACT_TRANSCEND  string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
+	// 开发中的
+	TEMPLATE_CONTRACT_RECYCLE     string = "recycle.tc"
 	TEMPLATE_CONTRACT_VAULT       string = "vault.tc"
-	TEMPLATE_CONTRACT_LAUNCHPOOL  string = "launchpool.tc"
 	TEMPLATE_CONTRACT_STAKE       string = "stake.tc"
-	TEMPLATE_CONTRACT_TRANSCEND   string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
 	TEMPLATE_CONTRACT_MINER_STAKE string = "minerstake.tc"
 
 	CONTRACT_STATUS_EXPIRED int = -2
@@ -62,6 +66,7 @@ const (
 	INVOKE_RESULT_ADDLIQUIDITY    string = INVOKE_API_ADDLIQUIDITY
 	INVOKE_RESULT_REMOVELIQUIDITY string = INVOKE_API_REMOVELIQUIDITY
 	INVOKE_RESULT_PROFIT          string = INVOKE_API_PROFIT
+	INVOKE_RESULT_REWARD          string = "reward"
 )
 
 const (
@@ -75,7 +80,10 @@ const (
 	INVOKE_API_ADDLIQUIDITY    string = "addliq"   // 如果是L1，必须要有op_return携带invokeParam，否则会被认为是deposit
 	INVOKE_API_REMOVELIQUIDITY string = "removeliq"
 	INVOKE_API_PROFIT          string = "profit"
+	INVOKE_API_RECYCLE         string = "recycle"
+	INVOKE_API_REWARD          string = "reward"
 
+	ORDERTYPE_NOSPEC          = 0
 	ORDERTYPE_SELL            = 1
 	ORDERTYPE_BUY             = 2
 	ORDERTYPE_REFUND          = 3
@@ -88,7 +96,9 @@ const (
 	ORDERTYPE_REMOVELIQUIDITY = 10
 	ORDERTYPE_STAKE           = 11
 	ORDERTYPE_UNSTAKE         = 12
-	ORDERTYPE_UNUSED          = 13
+	ORDERTYPE_RECYCLE         = 13
+	ORDERTYPE_REWARD          = 14
+	ORDERTYPE_UNUSED          = 15
 
 	INVOKE_FEE          int64 = 10
 	SWAP_INVOKE_FEE     int64 = 10
@@ -136,6 +146,7 @@ const (
 	INVOKE_REASON_UTXO_NOT_FOUND       string = "input utxo not found"
 	INVOKE_REASON_UTXO_NOT_FOUND_REORG string = "input utxo not found after reorg"
 	INVOKE_REASON_NO_PROFIT            string = "no profit"
+	INVOKE_REASON_UTXO_FORMAT          string = "input utxo incorrect format"
 )
 
 const (
@@ -158,6 +169,7 @@ type ContractDeployResvIF interface {
 
 	GetChannelAddr() string
 	GetDeployer() string
+	GetLocalPubKey() []byte
 	GetRemotePubKey() []byte
 
 	GetFeeRate() int64
@@ -200,16 +212,17 @@ type ContractManager interface {
 	GetDB() indexer.KVDB
 	NeedRebuildTraderHistory() bool
 
-	CoGenerateStubUtxos(n int, contractURL string, invokeCount int64, excludeRecentBlock bool) (string, int64, error)
-	CoBatchSendV3(dest []*SendAssetInfo, assetNameStr string,
+	CoGenerateStubUtxos(localWallet common.Wallet, n int, feeRate int64, contractURL string, invokeCount int64,
+		excludeRecentBlock bool) (string, int64, error)
+	CoBatchSendV3(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
-	CoSendOrdxWithStub(dest string, assetNameStr string, amt int64, stub string,
+	CoSendOrdxWithStub(localWallet common.Wallet, dest string, assetNameStr string, amt int64, feeRate int64, stub string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
-	CoBatchSendV2_SatsNet(dest []*SendAssetInfo, assetName string,
+	CoBatchSendV2_SatsNet(localWallet common.Wallet, dest []*SendAssetInfo, assetName string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error)
-	CoBatchSend_SatsNet(destAddr []string, assetName string, amtVect []string,
+	CoBatchSend_SatsNet(localWallet common.Wallet, destAddr []string, assetName string, amtVect []string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error)
 	SendSigReq(req *wwire.SignRequest, sig []byte) ([][][]byte, error)
 
@@ -223,7 +236,7 @@ type ContractManager interface {
 
 	AscendAssetInCoreChannel(assetNameStr string, utxo string, memo []byte) (string, error)
 	DeployContract(templateName, contractContent string,
-		fees []string, feeRate int64, deployer string) (string, int64, error)
+		fees []string, feeRate int64, subAccountIndex int, deployer string) (string, int64, error)
 }
 
 type ActionFunc func(ContractManager, ContractDeployResvIF, any) (any, error)
@@ -262,6 +275,7 @@ type ContractRuntime interface {
 	GetRuntimeBase() *ContractRuntimeBase
 
 	GetStatus() int
+	GetInvokerStatus(string) InvokerStatus
 	GetRedeemScript() []byte
 	GetPkScript() []byte
 	GetLocalPkScript() []byte
@@ -269,7 +283,7 @@ type ContractRuntime interface {
 	GetLocalAddress() string
 	GetRemoteAddress() string
 	GetSvrAddress() string // 主导合约的节点地址
-	Address() string // 合约钱包地址
+	Address() string       // 合约钱包地址
 	GetLocalPubKey() *secp256k1.PublicKey
 	GetRemotePubKey() *secp256k1.PublicKey
 	IsInitiator() bool
@@ -308,14 +322,17 @@ type ContractRuntime interface {
 	// 合约调用的支持接口
 	CheckInvokeParam(string) (int64, error) // 调用合约的参数检查(json)，调用合约前调用
 	AllowInvoke() error
-	Invoke_SatsNet(*InvokeTx_SatsNet, int) (InvokeHistoryItem, error) // return：被接受，处理结果
-	Invoke(*InvokeTx, int) (InvokeHistoryItem, error)                 // return：被接受，处理结果
+	VerifyAndAcceptInvokeItem_SatsNet(*InvokeTx_SatsNet, int) (InvokeHistoryItem, error) // return：被接受，处理结果
+	VerifyAndAcceptInvokeItem(*InvokeTx, int) (InvokeHistoryItem, error)                 // return：被接受，处理结果
+	PreprocessInvokeData(data *InvokeDataInBlock) error
+	PreprocessInvokeData_SatsNet(data *InvokeDataInBlock_SatsNet) error
 	InvokeWithBlock_SatsNet(*InvokeDataInBlock_SatsNet) error
 	InvokeCompleted_SatsNet(*InvokeDataInBlock_SatsNet)
 	InvokeWithBlock(*InvokeDataInBlock) error
 	InvokeCompleted(*InvokeDataInBlock)
 	HandleReorg_SatsNet(int, int) error
 	HandleReorg(int, int) error
+	PrepareForReInvoke(height int, bSatsNet bool) int // 重新跑区块，需要重新加载历史数据，只为了处理某些漏掉的invoke
 	DisableItem(InvokeHistoryItem) // 因为reorg导致某个item无效
 
 	// 作为通道合约，本地节点不能发起的动作，需要由peer发起，在这里检查和设置结果，并推动合约内部状态变迁
@@ -325,9 +342,6 @@ type ContractRuntime interface {
 
 	checkSelf() error
 	CalcRuntimeMerkleRoot() []byte
-
-	// 维护接口
-	AddLostInvokeItem(string, bool) (string, error)
 }
 
 // 合约调用历史记录
@@ -439,8 +453,8 @@ type InvokeItem_old = InvokeItem
 type InvokeItem struct {
 	InvokeHistoryItemBase
 
-	OrderType      int    //
-	UtxoId         uint64 // 其实是utxoId
+	OrderType      int //
+	UtxoId         uint64
 	OrderTime      int64
 	AssetName      string
 	ServiceFee     int64
@@ -556,8 +570,56 @@ func (p *EnableInvokeParam) Decode(data []byte) error {
 type InvokerStatus interface {
 	GetVersion() int
 	GetKey() string
+
+	GetInvokeCount() int
+	GetInvokeAmt() *Decimal
+	GetInvokeValue() int64
+	GetHistory() map[int][]int64
 }
 
+type InvokerStatusBaseV2 struct {
+	Version     int
+	Address     string
+	InvokeCount int
+	InvokeAmt   *Decimal // 交互资产总额
+	InvokeValue int64
+	History     map[int][]int64 // 用户的invoke历史记录，每100个为一桶，用InvokeCount计算 TODO 目前统一一块存储，数据量大了后要分桶保存，用到才加载
+	UpdateTime  int64
+}
+
+func NewInvokerStatusBaseV2(address string, divisibility int) *InvokerStatusBaseV2 {
+	return &InvokerStatusBaseV2{
+		Address:    address,
+		History:    make(map[int][]int64),
+		UpdateTime: time.Now().Unix(),
+	}
+}
+
+func (p *InvokerStatusBaseV2) GetVersion() int {
+	return p.Version
+}
+
+func (p *InvokerStatusBaseV2) GetKey() string {
+	return p.Address
+}
+
+func (p *InvokerStatusBaseV2) GetInvokeCount() int {
+	return p.InvokeCount
+}
+
+func (p *InvokerStatusBaseV2) GetInvokeAmt() *Decimal {
+	return p.InvokeAmt
+}
+
+func (p *InvokerStatusBaseV2) GetInvokeValue() int64 {
+	return p.InvokeValue
+}
+
+func (p *InvokerStatusBaseV2) GetHistory() map[int][]int64 {
+	return p.History
+}
+
+// 老的调用者数据结构，新合约不要用，用 InvokerStatusBaseV2
 type InvokerStatusBase struct {
 	Version       int
 	Address       string
@@ -592,6 +654,22 @@ func (p *InvokerStatusBase) GetKey() string {
 	return p.Address
 }
 
+func (p *InvokerStatusBase) GetInvokeCount() int {
+	return p.InvokeCount
+}
+
+func (p *InvokerStatusBase) GetInvokeAmt() *Decimal {
+	return p.DepositAmt.Add(p.WithdrawAmt)
+}
+
+func (p *InvokerStatusBase) GetInvokeValue() int64 {
+	return p.DepositValue + p.WithdrawValue
+}
+
+func (p *InvokerStatusBase) GetHistory() map[int][]int64 {
+	return p.History
+}
+
 func NewInvokerStatus(cn string) InvokerStatus {
 	switch cn {
 	case TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_AMM:
@@ -614,8 +692,11 @@ type ContractBase struct {
 }
 
 func (p *ContractBase) CheckContent() error {
+	if indexer.IsPlainAsset(&p.AssetName) {
+		return nil
+	}
 	if p.AssetName.Protocol != indexer.PROTOCOL_NAME_ORDX &&
-		p.AssetName.Protocol != indexer.PROTOCOL_NAME_RUNES && 
+		p.AssetName.Protocol != indexer.PROTOCOL_NAME_RUNES &&
 		p.AssetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
 		return fmt.Errorf("invalid protocol %s", p.AssetName.Protocol)
 	}
@@ -646,9 +727,6 @@ func (p *ContractBase) CheckContent() error {
 		}
 	}
 
-	if indexer.IsPlainAsset(&p.AssetName) {
-		return fmt.Errorf("should be one asset")
-	}
 	return nil
 }
 
@@ -776,6 +854,7 @@ type ContractRuntimeBase_old = ContractRuntimeBase
 // }
 
 const INIT_ENABLE_BLOCK int = math.MaxInt
+
 // 合约运行时基础结构，合约区块以聪网为主，主网区块辅助使用
 type ContractRuntimeBase struct {
 	DeployTime    int64  `json:"deployTime"` // s
@@ -790,7 +869,7 @@ type ContractRuntimeBase struct {
 	ChannelAddr   string `json:"channelAddr"`
 	InvokeCount   int64  `json:"invokeCount"`
 	Divisibility  int    `json:"divisibility"`
-	N             int    `json:"n"`
+	N             int    `json:"n"` // bindingSat
 
 	CheckPoint          int64  // 上个与peer端校验过merkleRoot的invokeCount
 	StaticMerkleRoot    []byte // 合约静态数据
@@ -801,10 +880,12 @@ type ContractRuntimeBase struct {
 	CheckPointBlockL1 int
 	LocalPubKey       []byte
 	RemotePubKey      []byte
+	SubAccoutIndex    uint32 // local wallet subaccount index
 
 	history            map[string]*InvokeItem // key:utxo 单独记录数据库，区块缓存, 6个区块以后，并且已经成交的可以删除
 	resv               ContractDeployResvIF
 	stp                ContractManager
+	localWallet        common.Wallet
 	contract           Contract
 	runtime            ContractRuntime
 	assetMerkleRootMap map[int64][]byte // invokeCount -> AssetMerkleRoot 临时缓存
@@ -816,15 +897,19 @@ type ContractRuntimeBase struct {
 	redeemScript []byte
 	pkScript     []byte
 
+	// rpc 缓存
+	refreshTime     int64
+	responseHistory map[int][]*InvokeItem // 按照100个为一桶，根据区块顺序记录，跟swapHistory保持一致
+
 	mutex sync.RWMutex
 }
 
-func NewContractRuntimeBase(stp ContractManager) *ContractRuntimeBase{
+func NewContractRuntimeBase(stp ContractManager) *ContractRuntimeBase {
 	return &ContractRuntimeBase{
-		EnableBlock: 	INIT_ENABLE_BLOCK,
-		EnableBlockL1: 	INIT_ENABLE_BLOCK,
-		DeployTime: 	time.Now().Unix(),
-		stp:        	stp,
+		EnableBlock:   INIT_ENABLE_BLOCK,
+		EnableBlockL1: INIT_ENABLE_BLOCK,
+		DeployTime:    time.Now().Unix(),
+		stp:           stp,
 	}
 }
 
@@ -848,13 +933,17 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 	p.assetMerkleRootMap = make(map[int64][]byte)
 	p.history = make(map[string]*InvokeItem)
 	p.isInitiator = resv.LocalIsInitiator()
-	p.localPubKey = stp.GetWallet().GetPubKey()
+	localPK, err := utils.BytesToPublicKey(resv.GetLocalPubKey())
+	if err != nil {
+		return err
+	}
+	p.localPubKey = localPK
+	p.LocalPubKey = p.localPubKey.SerializeCompressed()
 	remotePK, err := utils.BytesToPublicKey(resv.GetRemotePubKey())
 	if err != nil {
 		return err
 	}
 	p.remotePubKey = remotePK
-	p.LocalPubKey = p.localPubKey.SerializeCompressed()
 	p.RemotePubKey = p.remotePubKey.SerializeCompressed()
 	p.redeemScript, err = utils.GenMultiSigScript(p.LocalPubKey, p.RemotePubKey)
 	if err != nil {
@@ -980,7 +1069,7 @@ func (p *ContractRuntimeBase) GetSvrAddress() string {
 		return p.GetLocalAddress()
 	} else {
 		return p.GetRemoteAddress()
-	} 
+	}
 }
 
 func (p *ContractRuntimeBase) GetFoundationAddress() string {
@@ -1278,8 +1367,199 @@ func (p *ContractRuntimeBase) RuntimeAnalytics() string {
 	return ""
 }
 
-func (p *ContractRuntimeBase) InvokeHistory(any, int, int) string {
-	return ""
+func getBuckIndex(id int64) int {
+	return int(id / BUCK_SIZE)
+}
+
+func getBuckSubIndex(id int64) int {
+	return int(id % BUCK_SIZE)
+}
+
+func InsertItemToTraderHistroy(trader *InvokerStatusBaseV2, item *InvokeItem) {
+	index := getBuckIndex(int64(trader.InvokeCount))
+	if trader.History == nil {
+		trader.History = make(map[int][]int64)
+	}
+	trader.History[index] = append(trader.History[index], item.Id)
+	trader.InvokeCount++
+	trader.UpdateTime = time.Now().Unix()
+}
+
+func (p *ContractRuntimeBase) getItemFromBuck(id int64) *InvokeItem {
+	index := getBuckIndex(id)
+	subIndex := getBuckSubIndex(id)
+	buck, ok := p.responseHistory[index]
+	if !ok {
+		buck = p.loadBuckFromDB(index)
+	}
+	if buck != nil {
+		return buck[subIndex]
+	}
+	return nil
+}
+
+func (p *ContractRuntimeBase) insertBuck(item *InvokeItem) {
+	index := getBuckIndex(item.Id)
+	buck, ok := p.responseHistory[index]
+	if !ok {
+		buck = p.loadBuckFromDB(index)
+	}
+	buck[getBuckSubIndex(item.Id)] = item
+}
+
+func (p *ContractRuntimeBase) loadBuckFromDB(id int) []*InvokeItem {
+	items := loadContractInvokeHistoryWithRange(p.stp.GetDB(), p.URL(), id*BUCK_SIZE, BUCK_SIZE)
+	item2 := make([]*InvokeItem, BUCK_SIZE)
+	for _, item := range items {
+		swapItem, ok := item.(*InvokeItem)
+		if ok {
+			item2[getBuckSubIndex(swapItem.Id)] = swapItem
+		}
+	}
+	p.responseHistory[id] = item2
+	return item2
+}
+
+func (p *ContractRuntimeBase) InvokeHistory(f any, start, limit int) string {
+
+	// TODO getItemFromBuck 需要写，以后要优化下，不然可能会影响效率，很卡
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	type response struct {
+		Total int                `json:"total"`
+		Start int                `json:"start"`
+		Data  []*SwapHistoryItem `json:"data"`
+	}
+	defaultRsp := `{"total":0,"start":0,"data":[]}`
+
+	// 默认倒序，也就是start是最后一个，往前读取日志
+	if f == nil {
+		result := &response{
+			Total: int(p.InvokeCount),
+			Start: start,
+		}
+		if p.InvokeCount != 0 && start >= 0 && start < int(p.InvokeCount) {
+			if limit <= 0 {
+				limit = 100
+			}
+
+			// 换算成真实坐标
+			start = int(p.InvokeCount) - 1 - start
+			if start < 0 {
+				start = 0
+			}
+			end := start - limit
+			if end < 0 {
+				end = -1 // 不包括end
+			}
+
+			for i := start; i > end; i-- {
+				item := p.getItemFromBuck(int64(i))
+				if item == nil {
+					p.loadBuckFromDB(getBuckIndex(int64(i)))
+					item = p.getItemFromBuck(int64(i))
+					if item == nil {
+						continue
+					}
+				}
+
+				result.Data = append(result.Data, item)
+			}
+		}
+
+		// TODO 如果数据太多，只保留前20，后10，共30桶
+		buf, err := json.Marshal(result)
+		if err != nil {
+			Log.Errorf("Marshal responseHistory failed, %v", err)
+			return defaultRsp
+		}
+		return string(buf)
+	}
+
+	// 根据地址过滤
+	filter := f.(string)
+	parts := strings.Split(filter, "=")
+	if len(parts) != 2 {
+		return defaultRsp
+	}
+	if parts[0] != "address" {
+		return defaultRsp
+	}
+
+	trader := p.runtime.GetInvokerStatus(parts[1])
+	invokeCount := trader.GetInvokeCount()
+	history := trader.GetHistory()
+	result := &response{
+		Total: int(invokeCount),
+		Start: start,
+	}
+	if invokeCount != 0 && start >= 0 && start < int(invokeCount) {
+		if limit <= 0 {
+			limit = 100
+		}
+
+		// 换算成真实坐标
+		start = int(invokeCount) - 1 - start
+		if start < 0 {
+			start = 0
+		}
+		end := start - limit + 1
+		if end < 0 {
+			end = 0 // 包括end
+		}
+
+		url := p.URL()
+		buck1 := getBuckIndex(int64(start))
+		buck2 := getBuckIndex(int64(end))
+		for i := buck1; i >= buck2; i-- {
+			buck, ok := history[i]
+			if !ok {
+				continue
+			}
+
+			var idvect []int64
+			if i == buck1 {
+				if i == buck2 {
+					idvect = buck[end%BUCK_SIZE : (start+1)%BUCK_SIZE]
+				} else {
+					idvect = buck[0 : (start+1)%BUCK_SIZE]
+				}
+			} else if i == buck2 {
+				idvect = buck[end%BUCK_SIZE : BUCK_SIZE]
+			} else {
+				idvect = buck[0:BUCK_SIZE]
+			}
+
+			for j := len(idvect) - 1; j >= 0; j-- {
+				id := idvect[j]
+				item := p.getItemFromBuck(id)
+				if item == nil {
+					itemBase, err := loadContractInvokeHistoryItem(p.stp.GetDB(), url, GetKeyFromId(id))
+					if err != nil {
+						Log.Errorf("loadContractInvokeHistoryItem %s %d failed", url, id)
+						continue
+					}
+					item = itemBase.(*SwapHistoryItem)
+					if item != nil {
+						p.insertBuck(item)
+						result.Data = append(result.Data, item)
+					}
+				} else {
+					result.Data = append(result.Data, item)
+				}
+			}
+		}
+	}
+
+	// 如果数据太多，只保留前20，后10，共30桶
+	buf, err := json.Marshal(result)
+	if err != nil {
+		Log.Errorf("Marshal responseHistory failed, %v", err)
+		return defaultRsp
+	}
+	return string(buf)
+
 }
 
 func (p *ContractRuntimeBase) AllAddressInfo(int, int) string {
@@ -1515,13 +1795,13 @@ func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
 			invoke.InvokeParam.ContractPath == p.URL()
 	} else if invoke.TxOutput != nil {
 		assetName := p.contract.GetAssetName()
-		// 除非是符文，否则都是有 InvokeParam 
+		// 除非是符文，否则都是有 InvokeParam
 		if assetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
 			// 只检查是否有合约对应的资产
 			amt := invoke.TxOutput.GetAsset(assetName)
 			return amt.Sign() != 0
 		}
-		// TODO 老版本，先打开，等钱包更新后，删除以下代码
+		// TODO 以后特殊的合约不要单独的地址，所以只要输出地址是合约地址，就不要丢弃
 		if indexer.IsPlainAsset(assetName) {
 			// 只有transcend支持白聪
 			return len(invoke.TxOutput.Assets) == 0
@@ -1603,6 +1883,42 @@ func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 	return nil
 }
 
+func (p *ContractRuntimeBase) PreprocessInvokeData(data *InvokeDataInBlock) error {
+
+	err := p.runtime.AllowInvoke()
+	if err == nil {
+		bUpdate := false
+		for _, tx := range data.InvokeTxVect {
+			if tx.Handled {
+				continue
+			}
+			if !p.IsMyInvoke(tx) {
+				continue
+			}
+			err := p.CheckInvokeTx(tx)
+			if err != nil {
+				Log.Warningf("%s CheckInvokeTx failed, %v", p.RelativePath(), err)
+				continue
+			}
+
+			_, err = p.runtime.VerifyAndAcceptInvokeItem(tx, data.Height)
+			if err == nil {
+				Log.Infof("%s invoke %s succeed", p.RelativePath(), tx.Tx.TxID())
+				bUpdate = true
+			} else {
+				Log.Infof("%s invoke %s failed, %v", p.RelativePath(), tx.Tx.TxID(), err)
+			}
+		}
+		if bUpdate {
+			p.refreshTime = 0
+			p.stp.SaveReservation(p.resv)
+		}
+	} else {
+		Log.Infof("%s allowInvoke failed, %v", p.URL(), err)
+	}
+	return nil
+}
+
 func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 	p.mutex.Lock()
 	if p.EnableBlockL1 == INIT_ENABLE_BLOCK || data.Height < p.EnableBlockL1 {
@@ -1633,7 +1949,7 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 			}
 
 			// 同步缺少的区块，确保合约运行正常
-			if p.CurrBlockL1 + 1 < data.Height {
+			if p.CurrBlockL1+1 < data.Height {
 				p.mutex.Unlock()
 				Log.Errorf("%s missing some L1 block, current %d, but new block %d", p.URL(), p.CurrBlockL1, data.Height)
 				p.resyncBlock(p.CurrBlockL1+1, data.Height-1)
@@ -1657,7 +1973,7 @@ func (p *ContractRuntimeBase) InvokeCompleted(data *InvokeDataInBlock) {
 
 func (p *ContractRuntimeBase) IsMyInvoke_SatsNet(invoke *InvokeTx_SatsNet) bool {
 	// 输出地址是合约地址
-	if p.ChannelAddr != invoke.Address {
+	if p.ChannelAddr != invoke.Address { // 有些特殊指令只有op_return，没有对应的output，比如合约激活指令
 		channelAddr := ExtractChannelId(invoke.InvokeParam.ContractPath)
 		if channelAddr != p.ChannelAddr {
 			return false
@@ -1668,14 +1984,53 @@ func (p *ContractRuntimeBase) IsMyInvoke_SatsNet(invoke *InvokeTx_SatsNet) bool 
 		invoke.InvokeParam.ContractPath == p.URL()
 }
 
+// 调用方确保p.contractRunningMutex.Lock()
 func (p *ContractRuntimeBase) resyncBlock(start, end int) {
 	// 设置resv的属性，暂时不要从外面的区块同步调用进来
 	p.resv.ResyncBlock(start, end)
 }
 
+// 调用方确保p.contractRunningMutex.Lock()
 func (p *ContractRuntimeBase) resyncBlock_SatsNet(start, end int) {
 	// 设置resv的属性，暂时不要从外面的区块同步调用进来
 	p.resv.ResyncBlock_SatsNet(start, end)
+}
+
+func (p *ContractRuntimeBase) PreprocessInvokeData_SatsNet(data *InvokeDataInBlock_SatsNet) error {
+
+	err := p.runtime.AllowInvoke()
+	if err == nil {
+
+		bUpdate := false
+		for _, tx := range data.InvokeTxVect {
+			if tx.Handled {
+				continue
+			}
+			if !p.IsMyInvoke_SatsNet(tx) {
+				continue
+			}
+			err := p.CheckInvokeTx_SatsNet(tx)
+			if err != nil {
+				Log.Warningf("%s CheckInvokeTx_SatsNet failed, %v", p.RelativePath(), err)
+				continue
+			}
+
+			_, err = p.runtime.VerifyAndAcceptInvokeItem_SatsNet(tx, data.Height)
+			if err == nil {
+				Log.Infof("%s Invoke_SatsNet %s succeed", p.RelativePath(), tx.Tx.TxID())
+				bUpdate = true
+			} else {
+				Log.Errorf("%s Invoke_SatsNet %s failed, %v", p.RelativePath(), tx.Tx.TxID(), err)
+			}
+		}
+		if bUpdate {
+			p.refreshTime = 0
+			p.stp.SaveReservation(p.resv)
+		}
+	} else {
+		//Log.Infof("%s not allowed yet, %v", p.RelativePath(), err)
+	}
+	return nil
 }
 
 // 外面不能加锁
@@ -1776,6 +2131,10 @@ func (p *ContractRuntimeBase) InvokeCompleted_SatsNet(data *InvokeDataInBlock_Sa
 	p.invokeCompleted()
 }
 
+func (p *ContractRuntimeBase) checkSelf() error {
+	return nil
+}
+
 func (p *ContractRuntimeBase) calcAssetMerkleRoot() {
 	p.assetMerkleRootMap[(p.lastInvokeCount)] = p.CurrAssetMerkleRoot
 	p.CurrAssetMerkleRoot = p.runtime.CalcRuntimeMerkleRoot()
@@ -1796,7 +2155,7 @@ func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) err
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	url := p.URL()
-	history := loadContractInvokeHistoryByHeight(p.stp.GetDB(), url, false, orgHeight, true)
+	history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), url, false, orgHeight, true)
 	for _, v := range history {
 		item, ok := v.(*InvokeItem)
 		if !ok {
@@ -1824,11 +2183,11 @@ func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) err
 	return nil
 }
 
-// 核心是检查输入InUtxo还在不在，不在的话，删除该记录
+// 
 func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	history := loadContractInvokeHistoryByHeight(p.stp.GetDB(), p.URL(), false, orgHeight, false)
+	history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), p.URL(), false, orgHeight, false)
 	for _, v := range history {
 		item, ok := v.(*InvokeItem)
 		if !ok {
@@ -1841,6 +2200,50 @@ func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
 	return nil
 }
 
+func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) int {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	url := p.URL()
+	// 只能回跳
+	if bSatsNet {
+		if height < p.EnableBlock {
+			height = p.EnableBlock
+		}
+		if p.CurrBlock < height {
+			return height
+		}
+		p.CurrBlock = height
+
+		history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), url, false, height, true)
+		for _, v := range history {
+			item, ok := v.(*SwapHistoryItem)
+			if !ok {
+				continue
+			}
+			p.history[item.InUtxo] = item
+		}
+	} else {
+		if height < p.EnableBlockL1 {
+			height = p.EnableBlockL1
+		}
+		if p.CurrBlockL1 < height {
+			return height
+		}
+		p.CurrBlockL1 = height
+
+		history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), url, false, height, false)
+		for _, v := range history {
+			item, ok := v.(*SwapHistoryItem)
+			if !ok {
+				continue
+			}
+			p.history[item.InUtxo] = item
+		}
+	}
+	return height
+}
+
 func (p *ContractRuntimeBase) invokeCompleted() {
 	if p.lastInvokeCount != p.InvokeCount {
 		// 只在区块调用结束后更新合约的merkle root，不管合约后续的动作
@@ -1848,8 +2251,561 @@ func (p *ContractRuntimeBase) invokeCompleted() {
 	}
 }
 
-func (p *ContractRuntimeBase) AddLostInvokeItem(string, bool) (string, error) {
-	return "", fmt.Errorf("not accepted")
+func (p *ContractRuntimeBase) buildDepositAnchorTx(output *indexer.TxOutput, destAddr string,
+	height int, reason string) (*swire.MsgTx, error) {
+	//
+	var assetName *AssetName
+	if len(output.Assets) == 0 {
+		assetName = &AssetName{
+			AssetName: indexer.ASSET_PLAIN_SAT,
+			N:         1,
+		}
+	} else {
+		assetName = &AssetName{
+			AssetName: output.Assets[0].Name,
+			N:         int(output.Assets[0].BindingSat),
+		}
+	}
+
+	invoice, _ := UnsignedContractResultInvoice(p.URL(), reason, fmt.Sprintf("%d", height))
+	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
+
+	anchorTx, err := p.stp.CreateContractDepositAnchorTx(p.runtime, destAddr, output, assetName, nullDataScript)
+	if err != nil {
+		Log.Errorf("CreateContractDepositAnchorTx %s %s failed, %v", assetName.String(), output.OutPointStr, err)
+		return nil, err
+	}
+
+	return anchorTx, nil
+}
+
+func (p *ContractRuntimeBase) notifyAndSendDepositAnchorTxs(anchorTxs []*swire.MsgTx) error {
+	// 通知peer, 仅仅为了同步更新merkle root
+	localKey := p.stp.GetWallet().GetPaymentPubKey().SerializeCompressed()
+	peerPubKey := p.stp.GetServerNodePubKey().SerializeCompressed()
+	witness, _, err := GetP2WSHscript(localKey, peerPubKey)
+	if err != nil {
+		Log.Errorf("GetP2WSHscript failed, %v", err)
+		return err
+	}
+
+	var txs []*wwire.TxSignInfo
+	for _, tx := range anchorTxs {
+		txHex, err := EncodeMsgTx_SatsNet(tx)
+		if err != nil {
+			Log.Errorf("EncodeMsgTx_SatsNet failed, %v", err)
+			return err
+		}
+		txs = append(txs, &wwire.TxSignInfo{
+			Tx:        txHex,
+			L1Tx:      false,
+			LocalSigs: nil,
+			Reason:    "ascend",
+			NotSign:   true,
+		})
+	}
+
+	moredata := wwire.RemoteSignMoreData_Contract{
+		Tx:                txs,
+		LocalPubKey:       localKey,
+		Witness:           witness,
+		ContractURL:       p.URL(),
+		InvokeCount:       p.InvokeCount,
+		StaticMerkleRoot:  p.StaticMerkleRoot,
+		RuntimeMerkleRoot: p.CurrAssetMerkleRoot,
+		Action:            INVOKE_API_DEPOSIT,
+	}
+	md, err := json.Marshal(moredata)
+	if err != nil {
+		Log.Errorf("Marshal failed, %v", err)
+		return err
+	}
+
+	req := wwire.SignRequest{
+		ChannelId:    p.ChannelAddr,
+		CommitHeight: -1,
+		Reason:       "contract",
+		MoreData:     md,
+		PubKey:       localKey,
+	}
+	msg, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	sig, err := p.stp.GetWalletMgr().SignMessage(msg)
+	if err != nil {
+		return err
+	}
+
+	_, err = p.stp.SendSigReq(&req, sig)
+	if err != nil {
+		Log.Errorf("SendBootstrapSigReq failed. %v", err)
+		return err
+	}
+
+	// peer已经广播过，这个再次广播
+	for _, tx := range anchorTxs {
+		_, err := p.stp.BroadcastTx_SatsNet(tx)
+		if err != nil && strings.Contains(err.Error(), "can't find utxo") {
+			// -26: TX rejected: The anchor tx is invalid 3e4946319fc0facddbbda06b0153c8fe2be9dffe5db469ef5566e5325f661197:http://127.0.0.1:8023/btc/testnet/v3/utxo/info/77e2027afa5cf8fb90dfc41c22ba0184c1450b6640c26b96148fb77f49d226ff:1 response failed: can't find utxo 77e2027afa5cf8fb90dfc41c22ba0184c1450b6640c26b96148fb77f49d226ff:1
+			parts := strings.Split(err.Error(), "can't find utxo")
+			if len(parts) == 2 {
+				utxo := strings.TrimSpace(parts[1])
+				item, ok := p.history[utxo]
+				if ok {
+					h, _, _ := indexer.FromUtxoId(item.UtxoId)
+					if h+6 < p.CurrBlockL1 {
+						// 这个输入无效，这条记录设置为异常，不再重试
+						Log.Errorf("deposit detect an invalid item %d, set to invalid. ", item.Id)
+						item.Reason = INVOKE_REASON_UTXO_NOT_FOUND
+						item.Done = DONE_CLOSED_DIRECTLY
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (p *ContractRuntimeBase) sendTx_SatsNet(dealInfo *DealInfo, reason string) (string, error) {
+	sendInfoMap := dealInfo.SendInfo
+	height := dealInfo.Height
+
+	sendInfoVect := make([]*SendAssetInfo, 0, len(sendInfoMap))
+	for _, v := range sendInfoMap {
+		if v.AssetAmt.IsZero() && v.Value == 0 {
+			continue
+		}
+		sendInfoVect = append(sendInfoVect, v)
+	}
+
+	sort.Slice(sendInfoVect, func(i, j int) bool {
+		return sendInfoVect[i].Address < sendInfoVect[j].Address
+	})
+
+	invoice, _ := UnsignedContractResultInvoice(p.URL(), reason, fmt.Sprintf("%d", height))
+	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
+
+	url := p.URL()
+	var txId string
+	var err error
+	for i := 0; i < 3; i++ {
+		txId, err = p.stp.CoBatchSendV2_SatsNet(p.localWallet, sendInfoVect, dealInfo.AssetName.String(),
+			"contract", url, dealInfo.InvokeCount, nullDataScript,
+			dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot)
+		if err != nil {
+			if strings.Contains(err.Error(), ERR_MERKLE_ROOT_INCONSISTENT) {
+				// recalc
+				Log.Infof("contract %s CoBatchSendV2_SatsNet failed %v, recalculate merkle root and try again", url, err)
+				p.calcAssetMerkleRoot()
+			} else {
+				Log.Errorf("contract %s CoBatchSendV2_SatsNet failed %v, wait a second and try again", url, err)
+				// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
+				//time.Sleep(2 * time.Second)
+				continue
+			}
+		}
+		Log.Infof("contract %s CoBatchSendV2_SatsNet txId %s", url, txId)
+		break
+	}
+	if err != nil {
+		Log.Errorf("contract %s CoBatchSendV2_SatsNet failed %v", url, err)
+		// 下个区块再试
+		return "", err
+	}
+	saveContractInvokeResult(p.stp.GetDB(), url, txId, reason)
+
+	return txId, nil
+}
+
+func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
+	reason string, sendDeAnchorTx bool, excludeRecentBlock bool) (string, int64, int64, error) {
+	//
+	sendInfoMap := dealInfo.SendInfo
+	height := dealInfo.Height
+	stubNum := 0
+	stubs := make([]string, 0)
+	// 分开发送
+	sendInfoVect := make([]*SendAssetInfo, 0, len(sendInfoMap))
+	sendInfoVectWithStub := make([]*SendAssetInfo, 0, len(sendInfoMap))
+	for _, v := range sendInfoMap {
+		if v.AssetAmt.IsZero() && v.Value == 0 {
+			continue
+		}
+
+		if v.AssetName.Protocol == indexer.PROTOCOL_NAME_ORDX {
+			if indexer.GetBindingSatNum(v.AssetAmt, uint32(p.N)) < 330 {
+				stubNum++
+				sendInfoVectWithStub = append(sendInfoVectWithStub, v)
+				continue
+			}
+		}
+		sendInfoVect = append(sendInfoVect, v)
+	}
+
+	if len(sendInfoVect) == 0 && len(sendInfoVectWithStub) == 0 {
+		return "", 0, 0, fmt.Errorf("no send info")
+	}
+
+	sort.Slice(sendInfoVect, func(i, j int) bool {
+		return sendInfoVect[i].Address < sendInfoVect[j].Address
+	})
+
+	url := p.URL()
+	var err error
+	var stubFee int64
+	if stubNum != 0 { // 前面处理过，最多一个
+		stubs, err = p.stp.GetWalletMgr().GetUtxosForStubs(p.Address(), stubNum, nil)
+		if err != nil {
+			// 重新生成一堆
+			stubTx, fee, err := p.stp.CoGenerateStubUtxos(p.localWallet, stubNum+10, dealInfo.FeeRate,
+				p.URL(), dealInfo.InvokeCount, excludeRecentBlock)
+			if err != nil {
+				Log.Errorf("CoGenerateStubUtxos %d failed, %v", stubNum+10, err)
+				return "", 0, 0, err
+			}
+			Log.Infof("sendTx CoGenerateStubUtxos %s %d", stubTx, fee)
+			for i := range stubNum {
+				stubs = append(stubs, fmt.Sprintf("%s:%d", stubTx, i))
+			}
+			stubFee = fee
+			saveContractInvokeResult(p.stp.GetDB(), url, stubTx, "stub")
+		}
+	}
+
+	var fee int64
+	var txId string
+	invoice, _ := UnsignedContractResultInvoice(p.RelativePath(), reason, fmt.Sprintf("%d", height))
+	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
+	if len(sendInfoVect) > 0 {
+		for i := 0; i < 3; i++ {
+			txId, fee, err = p.stp.CoBatchSendV3(p.localWallet, sendInfoVect, dealInfo.AssetName.String(), dealInfo.FeeRate,
+				"contract", url, dealInfo.InvokeCount, nullDataScript,
+				dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
+			if err != nil {
+				if strings.Contains(err.Error(), ERR_MERKLE_ROOT_INCONSISTENT) {
+					// recalc
+					Log.Infof("contract %s CoBatchSendV3 failed %v, recalculate merkle root and try again", url, err)
+					p.calcAssetMerkleRoot()
+				} else {
+					Log.Errorf("contract %s CoBatchSendV3 failed %v, wait a second and try again", url, err)
+					// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
+					//time.Sleep(2 * time.Second)
+					continue
+				}
+			}
+			Log.Infof("contract %s CoBatchSendV3 %s %d", url, txId, fee)
+			break
+		}
+		if err != nil {
+			return "", 0, stubFee, err
+		}
+	} else {
+		if stubNum != 0 {
+			p.stp.GetWalletMgr().utxoLockerL1.LockUtxo(stubs[0], "stub for "+reason)
+			// 这里只有一个交易
+			if len(sendInfoVectWithStub) > 1 {
+				return "", 0, stubFee, fmt.Errorf("only one output in stub is supported")
+			}
+			sendInfo := sendInfoVectWithStub[0]
+			for i := 0; i < 3; i++ {
+				txId, fee, err = p.stp.CoSendOrdxWithStub(p.localWallet, sendInfo.Address,
+					sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(), dealInfo.FeeRate,
+					stubs[0], "contract", url, dealInfo.InvokeCount, nullDataScript,
+					dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
+				if err != nil {
+					if strings.Contains(err.Error(), ERR_MERKLE_ROOT_INCONSISTENT) {
+						// recalc
+						Log.Infof("contract %s CoSendOrdxWithStub failed %v, recalculate merkle root and try again", url, err)
+						p.calcAssetMerkleRoot()
+					} else {
+						Log.Errorf("contract %s CoSendOrdxWithStub failed %v, wait a second and try again", url, err)
+						// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
+						//time.Sleep(2 * time.Second)
+						continue
+					}
+				}
+				Log.Infof("contract %s CoSendOrdxWithStub txId %s %d", url, txId, fee)
+				break
+
+			}
+			if err != nil {
+				p.stp.GetWalletMgr().utxoLockerL1.UnlockUtxo(stubs[0])
+				return "", 0, stubFee, err
+			}
+		}
+	}
+
+	saveContractInvokeResult(p.stp.GetDB(), url, txId, reason)
+	return txId, fee, stubFee, nil
+}
+
+func (p *ContractRuntimeBase) genSendInfoFromTx_SatsNet(tx *swire.MsgTx, includedAll bool) (*DealInfo, error) {
+
+	dealInfo := &DealInfo{
+		SendInfo: make(map[string]*SendAssetInfo),
+		TxId:     tx.TxID(),
+		Fee:      DEFAULT_FEE_SATSNET,
+	}
+
+	assetName := p.contract.GetAssetName()
+	isPlainAsset := indexer.IsPlainAsset(assetName)
+	for i, txOut := range tx.TxOut {
+		if sindexer.IsOpReturn(txOut.PkScript) {
+			ctype, data, err := sindexer.ReadDataFromNullDataScript(txOut.PkScript)
+			if err == nil {
+				switch ctype {
+				case sindexer.CONTENT_TYPE_INVOKERESULT:
+					url, r, h, err := ParseContractResultInvoice(data)
+					if err != nil {
+						Log.Errorf("ParseContractResultInvoice failed, %v", err)
+						return nil, err
+					}
+					if url != p.URL() {
+						if url != p.RelativePath() {
+							return nil, fmt.Errorf("%s not expected contract invoke result tx %s", url, tx.TxID())
+						}
+					}
+					height, err := strconv.ParseInt(h, 10, 32)
+					if err != nil {
+						return nil, err
+					}
+
+					dealInfo.Height = int(height)
+					dealInfo.Reason = r
+				}
+			}
+		}
+
+		addr, err := AddrFromPkScript(txOut.PkScript)
+		if err != nil {
+			addr = ADDR_OPRETURN
+		}
+
+		if !includedAll {
+			if addr == ADDR_OPRETURN || addr == p.ChannelAddr {
+				continue
+			}
+		}
+
+		output := sindexer.GenerateTxOutput(tx, i)
+		// 在计算utxo中的空白聪时，需要和发送方一致：总聪-资产占有的空白聪。不能直接使用GetPlainSat，因为会为资产多预留了一聪
+		value := output.Value() - output.SizeOfBindingSats()
+		amt := output.GetAsset(assetName)
+		if isPlainAsset {
+			amt = nil
+		}
+		info := SendAssetInfo{
+			Address:   addr,
+			Value:     value,
+			AssetName: assetName,
+			AssetAmt:  amt,
+		}
+		old, ok := dealInfo.SendInfo[addr]
+		if ok {
+			old.AssetAmt = old.AssetAmt.Add(info.AssetAmt)
+			old.Value += info.Value
+		} else {
+			dealInfo.SendInfo[addr] = &info
+		}
+		dealInfo.TotalAmt = dealInfo.TotalAmt.Add(amt)
+		dealInfo.TotalValue += info.Value
+	}
+	dealInfo.AssetName = assetName
+
+	return dealInfo, nil
+}
+
+// 因为不清楚具体是哪一种资产，这里按照默认的优先级选择资产： ft>names>nft, ordx>runes
+func (p *ContractRuntimeBase) GetAssetInfoFromOutput(output *TxOutput) (*indexer.AssetName, *Decimal, int, error) {
+	var assetAmt *Decimal
+	var assetName *indexer.AssetName
+	divisibility := 0
+	if len(output.Assets) == 0 {
+		assetAmt = indexer.NewDefaultDecimal(output.Value())
+		assetName = &indexer.ASSET_PLAIN_SAT
+	} else if len(output.Assets) == 1 {
+		// 不管什么资产，都先上
+		assetName = &output.Assets[0].Name
+		assetAmt = output.Assets[0].Amount.Clone()
+		tickInfo := p.stp.GetTickerInfo(assetName)
+		if tickInfo == nil {
+			return nil, nil, 0, fmt.Errorf("can't find tick %s", assetName.String())
+		}
+		divisibility = tickInfo.Divisibility
+	} else {
+		var asset *indexer.AssetInfo
+		for _, a := range output.Assets {
+			switch a.Name.Type {
+			case indexer.ASSET_TYPE_FT:
+				if asset == nil {
+					asset = &a
+				} else {
+					if asset.Name.Protocol == a.Name.Protocol {
+						if asset.Amount.Cmp(&a.Amount) < 0 {
+							asset = &a
+						}
+					} else {
+						if a.Name.Protocol == indexer.PROTOCOL_NAME_ORDX {
+							asset = &a
+						}
+					}
+				}
+
+			case indexer.ASSET_TYPE_EXOTIC:
+				if asset == nil {
+					asset = &a
+				}
+			}
+		}
+		tickInfo := p.stp.GetTickerInfo(&asset.Name)
+		if tickInfo == nil {
+			return nil, nil, 0, fmt.Errorf("can't find tick %s", asset.Name.String())
+		}
+		divisibility = tickInfo.Divisibility
+
+		assetName = &asset.Name
+		assetAmt = asset.Amount.Clone()
+	}
+	return assetName, assetAmt, divisibility, nil
+}
+
+func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[string]*TxOutput,
+	moreData []byte) (*DealInfo, error) {
+
+	dealInfo := &DealInfo{
+		SendInfo: make(map[string]*SendAssetInfo),
+		TxId:     tx.TxID(),
+	}
+
+	inputs, outputs, err := p.stp.GetWalletMgr().RebuildTxOutput(tx, preFectcher)
+	if err != nil {
+		Log.Errorf("rebuildTxOutput %s failed, %v", tx.TxID(), err)
+		return nil, err
+	}
+	dealInfo.PreOutputs = inputs
+
+	var in, out int64
+	for _, input := range inputs {
+		in += input.Value()
+	}
+
+	assetName := p.contract.GetAssetName()
+	isPlainAsset := indexer.IsPlainAsset(assetName)
+	for i, txOut := range tx.TxOut {
+		out += txOut.Value
+		if sindexer.IsOpReturn(txOut.PkScript) {
+			ctype, data, err := sindexer.ReadDataFromNullDataScript(txOut.PkScript)
+			if err != nil {
+				// 存在符文的情况下，只能传递moreData
+				if len(moreData) != 0 {
+					ctype, data, err = sindexer.ReadDataFromNullDataScript(moreData)
+					if err != nil {
+						return nil, fmt.Errorf("%s invalid more data", p.URL())
+					}
+				}
+			}
+			switch ctype {
+			case sindexer.CONTENT_TYPE_INVOKERESULT:
+				url, r, h, err := ParseContractResultInvoice(data)
+				if err != nil {
+					Log.Errorf("ParseContractResultInvoice failed, %v", err)
+					return nil, err
+				}
+				if url != p.URL() {
+					if url != p.RelativePath() {
+						return nil, fmt.Errorf("%s not expected contract invoke result tx %s", url, tx.TxID())
+					}
+				}
+				height, err := strconv.ParseInt(h, 10, 32)
+				if err != nil {
+					return nil, err
+				}
+
+				dealInfo.Height = int(height)
+				dealInfo.Reason = r
+			}
+
+		} else {
+			addr, err := AddrFromPkScript(txOut.PkScript)
+			if err != nil {
+				Log.Errorf("AddrFromPkScript failed, %v", err)
+				return nil, err
+			}
+			if addr == p.ChannelAddr {
+				continue
+			}
+
+			// 主网有资产的utxo，其value就当作0
+			output := outputs[i]
+			plainSat := int64(0)
+			amt := output.GetAsset(assetName)
+			if isPlainAsset {
+				plainSat = output.GetPlainSat()
+				amt = nil
+			}
+			info := SendAssetInfo{
+				Address:   addr,
+				Value:     plainSat,
+				AssetName: assetName,
+				AssetAmt:  amt,
+			}
+			old, ok := dealInfo.SendInfo[addr]
+			if ok {
+				old.AssetAmt = old.AssetAmt.Add(info.AssetAmt)
+				old.Value += info.Value
+			} else {
+				dealInfo.SendInfo[addr] = &info
+			}
+			dealInfo.TotalAmt = dealInfo.TotalAmt.Add(amt)
+			dealInfo.TotalValue += info.Value
+		}
+	}
+	dealInfo.Fee = in - out
+	dealInfo.AssetName = assetName
+
+	return dealInfo, nil
+}
+
+// 根据deposit的item信息，恢复TxOutput
+func (p *ContractRuntimeBase) GetInvokeOutput(item *SwapHistoryItem) *indexer.TxOutput {
+	var value int64
+	isPlainSat := item.AssetName == indexer.ASSET_PLAIN_SAT.String()
+	if isPlainSat {
+		value = item.RemainingValue
+	} else {
+		value = indexer.GetBindingSatNum(item.RemainingAmt, uint32(p.N))
+	}
+	output := &indexer.TxOutput{
+		UtxoId:      item.UtxoId,
+		OutPointStr: item.InUtxo,
+		OutValue: wire.TxOut{
+			Value:    value,
+			PkScript: p.GetPkScript(),
+		},
+	}
+	if !isPlainSat {
+		output.Assets = indexer.TxAssets{indexer.AssetInfo{
+			Name:       *indexer.NewAssetNameFromString(item.AssetName),
+			Amount:     *item.RemainingAmt,
+			BindingSat: uint32(p.N),
+		}}
+	}
+
+	return output
+}
+
+// TODO
+func (p *ContractRuntimeBase) DisableItem(input InvokeHistoryItem) {
+	item, ok := input.(*SwapHistoryItem)
+	if !ok {
+		return
+	}
+
+	switch item.OrderType {
+
+	}
 }
 
 func GetSupportedContracts() []string {
@@ -1879,6 +2835,11 @@ func GetSupportedContracts() []string {
 		result = append(result, string(c.Content()))
 	}
 
+	c = NewContract(TEMPLATE_CONTRACT_RECYCLE)
+	if c != nil {
+		result = append(result, string(c.Content()))
+	}
+
 	sort.Slice(result, func(i, j int) bool {
 		return result[i] < result[j]
 	})
@@ -1894,14 +2855,14 @@ func NewContract(cname string) Contract {
 	case TEMPLATE_CONTRACT_AMM:
 		return NewAmmContract()
 
-	//case TEMPLATE_CONTRACT_VAULT:
-	//return NewVaultContract()
-
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		return NewLaunchPoolContract()
 
 	case TEMPLATE_CONTRACT_TRANSCEND:
 		return NewTranscendContract()
+
+	case TEMPLATE_CONTRACT_RECYCLE:
+		return NewRecycleContract()
 	}
 	return nil
 }
@@ -1933,14 +2894,14 @@ func NewContractRuntime(stp ContractManager, cname string) ContractRuntime {
 	case TEMPLATE_CONTRACT_AMM:
 		return NewAmmContractRuntime(stp)
 
-	//case TEMPLATE_CONTRACT_VAULT:
-	//return NewVaultContractRuntime(stp)
-
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		r = NewLaunchPoolContractRuntime(stp)
 
 	case TEMPLATE_CONTRACT_TRANSCEND:
 		r = NewTranscendContractRuntime(stp)
+
+	case TEMPLATE_CONTRACT_RECYCLE:
+		return NewRecycleContractRunTime(stp)
 	}
 
 	return r
@@ -2159,10 +3120,12 @@ type InvokeTx_SatsNet struct {
 	Address     string
 	InvokeParam *sindexer.ContractInvokeData
 	Invoker     string
+	Handled     bool
 }
 
 type InvokeDataInBlock_SatsNet struct {
 	Height       int
+	BlockHash    string
 	InvokeTxVect []*InvokeTx_SatsNet
 }
 
@@ -2174,10 +3137,12 @@ type InvokeTx struct {
 	Address     string
 	InvokeParam *sindexer.ContractInvokeData
 	Invoker     string
+	Handled     bool
 }
 
 type InvokeDataInBlock struct {
 	Height       int
+	BlockHash    string
 	InvokeTxVect []*InvokeTx
 }
 
@@ -2186,7 +3151,7 @@ func GetInvokeInnerParam(action string) InvokeInnerParamIF {
 	switch action {
 	case INVOKE_API_SWAP:
 		return &SwapInvokeParam{OrderType: orderType}
-	
+
 	case INVOKE_API_STAKE:
 		return &StakeInvokeParam{OrderType: orderType}
 
@@ -2195,18 +3160,23 @@ func GetInvokeInnerParam(action string) InvokeInnerParamIF {
 
 	case INVOKE_API_DEPOSIT:
 		return &DepositInvokeParam{OrderType: orderType}
-		
+
 	case INVOKE_API_WITHDRAW:
 		return &WithdrawInvokeParam{OrderType: orderType}
-		
+
 	case INVOKE_API_ADDLIQUIDITY:
 		return &AddLiqInvokeParam{OrderType: orderType}
-		
+
 	case INVOKE_API_REMOVELIQUIDITY:
 		return &RemoveLiqInvokeParam{OrderType: orderType}
 
 	case INVOKE_API_PROFIT:
 		return &ProfitInvokeParam{OrderType: orderType}
+
+	case INVOKE_API_RECYCLE:
+		return &RecycleInvokeParam{}
+	case INVOKE_API_REWARD:
+		return &RecycleInvokeParam{}
 
 	default:
 		return nil
@@ -2225,15 +3195,20 @@ func GetOrderTypeWithAction(action string) int {
 		return ORDERTYPE_UNSTAKE
 	case INVOKE_API_WITHDRAW:
 		return ORDERTYPE_WITHDRAW
-		
+
 	case INVOKE_API_ADDLIQUIDITY:
 		return ORDERTYPE_ADDLIQUIDITY
-		
+
 	case INVOKE_API_REMOVELIQUIDITY:
 		return ORDERTYPE_REMOVELIQUIDITY
 
 	case INVOKE_API_PROFIT:
 		return ORDERTYPE_PROFIT
+
+	case INVOKE_API_RECYCLE:
+		return ORDERTYPE_RECYCLE
+	case INVOKE_API_REWARD:
+		return ORDERTYPE_REWARD
 
 	default:
 		return ORDERTYPE_SELL

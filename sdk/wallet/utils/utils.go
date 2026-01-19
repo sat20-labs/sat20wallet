@@ -60,3 +60,9 @@ func ParsePubkey(parsedPubKey string) (*secp256k1.PublicKey, error) {
 func RemoveIndex[T any](slice []T, index int) []T {
     return append(slice[:index], slice[index+1:]...)
 }
+
+func CloneSlice[T any](slice []T) []T {
+	n := make([]T, len(slice))
+	copy(n, slice)
+	return n
+}

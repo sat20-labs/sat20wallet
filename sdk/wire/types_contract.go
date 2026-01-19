@@ -66,7 +66,8 @@ type ContractStatusResp struct {
 
 type DeployContractRequest struct {
 	MsgHeader
-	ChannelId       string   `json:"channel"`
+	ChannelAddr     string   `json:"channel"` // 通道地址
+	PeerPubKey      []byte   `json:"peerKey"` // 通道一端的公钥，如果为空，使用主公钥
 	ContractName    string   `json:"contractName"`
 	ContractContent []byte   `json:"contractContent"`
 	Deployer        string   `json:"deployer"` // the address of the deployer
@@ -74,7 +75,7 @@ type DeployContractRequest struct {
 	Fees            []string `json:"fees"`
 	FeeRate         int64    `json:"feeRate"`
 	ReqTime         int64    `json:"reqTime"`
-	PubKey          []byte   `json:"pubKey"`
+	PubKey          []byte   `json:"pubKey"` // 主公钥
 }
 
 type DeployContractReq struct {

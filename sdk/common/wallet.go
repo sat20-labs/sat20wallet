@@ -4,7 +4,6 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 
-	"github.com/sat20-labs/satoshinet/btcec"
 
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
@@ -13,7 +12,7 @@ import (
 type ChannelWallet interface {
 	GetId() uint32
 	GetCommitSecret(index uint32) *secp256k1.PrivateKey
-	DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey
+	DeriveRevocationPrivKey(commitsecret *secp256k1.PrivateKey) *secp256k1.PrivateKey
 	GetRevocationBaseKey() *secp256k1.PublicKey
 	GetPaymentPubKey() *secp256k1.PublicKey
 
@@ -25,6 +24,8 @@ type ChannelWallet interface {
 }
 
 type Wallet interface {
+	Clone() Wallet
+
 	SetSubAccount(id uint32)
 	GetSubAccount() uint32
 	
@@ -36,7 +37,7 @@ type Wallet interface {
 
 	// default channel wallet, CWId = 0
 	GetCommitSecret(peer []byte, index uint32) *secp256k1.PrivateKey
-	DeriveRevocationPrivKey(commitsecret *btcec.PrivateKey) *btcec.PrivateKey
+	DeriveRevocationPrivKey(commitsecret *secp256k1.PrivateKey) *secp256k1.PrivateKey
 	GetRevocationBaseKey() *secp256k1.PublicKey
 	GetPaymentPubKey() *secp256k1.PublicKey
 
@@ -46,6 +47,13 @@ type Wallet interface {
 	SignPsbt_SatsNet(packet *spsbt.Packet) error
 	SignPsbts(packet []*psbt.Packet) (error)
 	SignPsbts_SatsNet(packet []*spsbt.Packet) error
+
+	SignMessageWithIndex(msg []byte, index uint32) ([]byte, error)
+	SignWalletMessageWithIndex(msg string, index uint32) ([]byte, error)
+	SignPsbtWithIndex(packet *psbt.Packet, index uint32) (error)
+	SignPsbtWithIndex_SatsNet(packet *spsbt.Packet, index uint32) error
+	SignPsbtsWithIndex(packet []*psbt.Packet, index uint32) (error)
+	SignPsbtsWithIndex_SatsNet(packet []*spsbt.Packet, index uint32) error
 	
 	// special channel wallet
 	CreateChannelWallet(peer []byte, id uint32) ChannelWallet

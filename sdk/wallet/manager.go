@@ -45,19 +45,16 @@ type Manager struct {
 
 	cfg           *common.Config
 	bInited       bool
-	bStop         bool
 	status        *Status
 	walletInfoMap map[int64]*WalletInDB
-	wallet        *InternalWallet
+	wallet        common.Wallet
 	msgCallback   NotifyCB
 	tickerInfoMap map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
 
 	db                   db.KVDB
 	http                 HttpClient
-	l1IndexerClient      IndexerRPCClient
-	slaveL1IndexerClient IndexerRPCClient
-	l2IndexerClient      IndexerRPCClient
-	slaveL2IndexerClient IndexerRPCClient
+	l1IndexerClient      *IndexerRPCClientMgr
+	l2IndexerClient      *IndexerRPCClientMgr
 
 	bootstrapNode []*Node // 引导节点，全网目前唯一，以后由基金会提供至少3个，通过MPC管理密钥
 	serverNode    *Node   // 服务节点，由引导节点更新维护，一般情况下，用户只跟一个服务节点打交道
@@ -96,13 +93,21 @@ func (p *Manager) init() error {
 	return nil
 }
 
+func (p *Manager) GetIndexerRPCClient() IndexerRPCClient {
+	return p.l1IndexerClient
+}
+
 func (p *Manager) SetIndexerHttpClient(client IndexerRPCClient) {
-	p.l1IndexerClient = client
+	p.l1IndexerClient.SetMaster(client)
 	p.utxoLockerL1.rpcClient = client
 }
 
+func (p *Manager) GetIndexerRPCClient_SatsNet() IndexerRPCClient {
+	return p.l2IndexerClient
+}
+
 func (p *Manager) SetIndexerHttpClient_SatsNet(client IndexerRPCClient) {
-	p.l2IndexerClient = client
+	p.l2IndexerClient.SetMaster(client)
 	p.utxoLockerL2.rpcClient = client
 }
 
@@ -221,9 +226,6 @@ func (p *Manager) initNode() error {
 	Log.Infof("server node id: %s", hex.EncodeToString(p.serverNode.NodeId.SerializeCompressed()))
 
 	return nil
-}
-func (p *Manager) Close() {
-	p.bInited = false
 }
 
 func (p *Manager) checkSelf() error {
