@@ -569,7 +569,9 @@ func (p *RecycleContractRunTime) updateResponseData() {
 		// responseCache
 
 		// responseStatus
+		tickerInfo := p.stp.GetTickerInfo(&p.AssetName)
 		p.responseStatus.RecycleContractRunTimeInDB = &p.RecycleContractRunTimeInDB
+		p.responseStatus.DisplayName = tickerInfo.DisplayName
 
 		p.refreshTime = time.Now().Unix()
 	}
@@ -619,6 +621,9 @@ type responseItem_recycle struct {
 
 type Response_RecycleContract struct {
 	*RecycleContractRunTimeInDB
+
+	// 增加更多参数
+	DisplayName  string       `json:"displayName"`
 }
 
 func (p *RecycleContractRunTime) AllAddressInfo(start, limit int) string {

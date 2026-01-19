@@ -25,6 +25,7 @@ type ChannelWallet interface {
 
 type Wallet interface {
 	Clone() Wallet
+	CloneByPubKey([]byte) Wallet
 
 	SetSubAccount(id uint32)
 	GetSubAccount() uint32

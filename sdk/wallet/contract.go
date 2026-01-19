@@ -171,6 +171,7 @@ type ContractDeployResvIF interface {
 	GetDeployer() string
 	GetLocalPubKey() []byte
 	GetRemotePubKey() []byte
+	GetCoreNodePubKey() []byte
 
 	GetFeeRate() int64
 	GetFeeUtxos() []string
@@ -236,7 +237,7 @@ type ContractManager interface {
 
 	AscendAssetInCoreChannel(assetNameStr string, utxo string, memo []byte) (string, error)
 	DeployContract(templateName, contractContent string,
-		fees []string, feeRate int64, subAccountIndex int, deployer string) (string, int64, error)
+		fees []string, feeRate int64, deployer string, subAccountIndex uint32) (string, int64, error)
 }
 
 type ActionFunc func(ContractManager, ContractDeployResvIF, any) (any, error)
@@ -284,6 +285,7 @@ type ContractRuntime interface {
 	GetRemoteAddress() string
 	GetSvrAddress() string // 主导合约的节点地址
 	Address() string       // 合约钱包地址
+	GetCoreNodePubKey() *secp256k1.PublicKey
 	GetLocalPubKey() *secp256k1.PublicKey
 	GetRemotePubKey() *secp256k1.PublicKey
 	IsInitiator() bool
@@ -880,7 +882,7 @@ type ContractRuntimeBase struct {
 	CheckPointBlockL1 int
 	LocalPubKey       []byte
 	RemotePubKey      []byte
-	SubAccoutIndex    uint32 // local wallet subaccount index
+	CoreNodePubKey    []byte // 提供合约创建的核心节点的pubkey
 
 	history            map[string]*InvokeItem // key:utxo 单独记录数据库，区块缓存, 6个区块以后，并且已经成交的可以删除
 	resv               ContractDeployResvIF
@@ -894,6 +896,7 @@ type ContractRuntimeBase struct {
 	isInitiator  bool
 	localPubKey  *secp256k1.PublicKey
 	remotePubKey *secp256k1.PublicKey
+	coreNodePubKey *secp256k1.PublicKey
 	redeemScript []byte
 	pkScript     []byte
 
@@ -945,6 +948,18 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 	}
 	p.remotePubKey = remotePK
 	p.RemotePubKey = p.remotePubKey.SerializeCompressed()
+	p.CoreNodePubKey = resv.GetCoreNodePubKey()
+	if len(p.CoreNodePubKey) == 0 {
+		if p.isInitiator {
+			p.CoreNodePubKey = p.LocalPubKey
+		} else {
+			p.CoreNodePubKey = p.RemotePubKey
+		}
+	}
+	p.coreNodePubKey, err = utils.BytesToPublicKey(p.CoreNodePubKey)
+	if err != nil {
+		return err
+	}
 	p.redeemScript, err = utils.GenMultiSigScript(p.LocalPubKey, p.RemotePubKey)
 	if err != nil {
 		return err
@@ -953,6 +968,8 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 	if err != nil {
 		return err
 	}
+	p.localWallet = p.stp.GetWallet().CloneByPubKey(p.LocalPubKey)
+	
 
 	err = p.contract.Decode(content)
 	if err != nil {
@@ -1002,6 +1019,17 @@ func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv ContractDeplo
 	if err != nil {
 		return err
 	}
+	if len(p.CoreNodePubKey) == 0 {
+		if p.isInitiator {
+			p.CoreNodePubKey = p.LocalPubKey
+		} else {
+			p.CoreNodePubKey = p.RemotePubKey
+		}
+	}
+	p.coreNodePubKey, err = utils.BytesToPublicKey(p.CoreNodePubKey)
+	if err != nil {
+		return err
+	}
 	p.redeemScript, err = utils.GenMultiSigScript(p.LocalPubKey, p.RemotePubKey)
 	if err != nil {
 		return err
@@ -1010,6 +1038,7 @@ func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv ContractDeplo
 	if err != nil {
 		return err
 	}
+	p.localWallet = p.stp.GetWallet().CloneByPubKey(p.LocalPubKey)
 
 	return nil
 }
@@ -1064,6 +1093,10 @@ func (p *ContractRuntimeBase) GetRemoteAddress() string {
 	return PublicKeyToP2TRAddress(p.remotePubKey)
 }
 
+func (p *ContractRuntimeBase) GetCodeNodeAddress() string {
+	return PublicKeyToP2TRAddress(p.coreNodePubKey)
+}
+
 func (p *ContractRuntimeBase) GetSvrAddress() string {
 	if p.isInitiator {
 		return p.GetLocalAddress()
@@ -1075,6 +1108,10 @@ func (p *ContractRuntimeBase) GetSvrAddress() string {
 func (p *ContractRuntimeBase) GetFoundationAddress() string {
 	addr, _ := indexer.GetBootstrapAddress(GetChainParam())
 	return addr
+}
+
+func (p *ContractRuntimeBase) GetCoreNodePubKey() *secp256k1.PublicKey {
+	return p.coreNodePubKey
 }
 
 func (p *ContractRuntimeBase) GetLocalPubKey() *secp256k1.PublicKey {
@@ -1184,7 +1221,7 @@ func (p *ContractRuntimeBase) AllowDeploy() error {
 	requiredFee := estimatedFee - DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT // 部署过程需要的费用
 	feeUtxos := resv.GetFeeUtxos()
 	if len(feeUtxos) == 0 {
-		address := p.GetSvrAddress()
+		address := p.GetCodeNodeAddress()
 		var err error
 		feeUtxos, err = p.stp.GetWalletMgr().GetUtxosWithAsset_SatsNet(address,
 			indexer.NewDefaultDecimal(requiredFee), &ASSET_PLAIN_SAT, nil)
@@ -1696,7 +1733,9 @@ func (p *ContractRuntimeBase) CheckDeployTx(
 	}
 	if p.resv.LocalIsInitiator() {
 		if !VerifyMessage(p.GetLocalPubKey(), invoice, deployParam.LocalSign) {
-			return nil, nil, fmt.Errorf("invalid contract local sig")
+			if !VerifyMessage(p.GetCoreNodePubKey(), invoice, deployParam.LocalSign) {
+				return nil, nil, fmt.Errorf("invalid contract local sig")
+			}
 		}
 		if !VerifyMessage(p.GetRemotePubKey(), invoice, deployParam.RemoteSign) {
 			return nil, nil, fmt.Errorf("invalid contract remote sig")
@@ -1706,7 +1745,9 @@ func (p *ContractRuntimeBase) CheckDeployTx(
 			return nil, nil, fmt.Errorf("invalid contract remote sig")
 		}
 		if !VerifyMessage(p.GetRemotePubKey(), invoice, deployParam.LocalSign) {
-			return nil, nil, fmt.Errorf("invalid contract local sig")
+			if !VerifyMessage(p.GetCoreNodePubKey(), invoice, deployParam.LocalSign) {
+				return nil, nil, fmt.Errorf("invalid contract local sig")
+			}
 		}
 	}
 
@@ -2281,8 +2322,8 @@ func (p *ContractRuntimeBase) buildDepositAnchorTx(output *indexer.TxOutput, des
 
 func (p *ContractRuntimeBase) notifyAndSendDepositAnchorTxs(anchorTxs []*swire.MsgTx) error {
 	// 通知peer, 仅仅为了同步更新merkle root
-	localKey := p.stp.GetWallet().GetPaymentPubKey().SerializeCompressed()
-	peerPubKey := p.stp.GetServerNodePubKey().SerializeCompressed()
+	localKey := p.LocalPubKey
+	peerPubKey := p.RemotePubKey
 	witness, _, err := GetP2WSHscript(localKey, peerPubKey)
 	if err != nil {
 		Log.Errorf("GetP2WSHscript failed, %v", err)

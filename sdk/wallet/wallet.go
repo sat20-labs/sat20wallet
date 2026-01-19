@@ -221,7 +221,24 @@ func (p *InternalWallet) Clone() common.Wallet {
 		accounts:               make(map[uint64]*hdkeychain.ExtendedKey),
 		addresses:              make(map[uint32]btcutil.Address),
 		subWallets:             make(map[uint32]*channelWallet),
+		currentIndex:           p.currentIndex,
 	}
+}
+
+func (p *InternalWallet) CloneByPubKey(pubkey []byte) common.Wallet {
+	i := uint32(0)
+	for ; i < 1000; i++ {
+		pk := p.GetPubKeyByIndex(i).SerializeCompressed()
+		if bytes.Equal(pk, pubkey) {
+			break
+		}
+	}
+	if i >= 1000 {
+		return nil
+	}
+	n := p.Clone()
+	n.SetSubAccount(i)
+	return n
 }
 
 func (p *InternalWallet) CreateChannelWallet(peer []byte, id uint32) common.ChannelWallet {

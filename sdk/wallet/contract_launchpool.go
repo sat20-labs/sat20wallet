@@ -1093,11 +1093,30 @@ func (p *LaunchPoolContractRunTime) RuntimeContent() []byte {
 	return b
 }
 
+
 func (p *LaunchPoolContractRunTime) RuntimeStatus() string {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
-	buf, err := json.Marshal(p)
+
+	type responseStatus struct {
+		*LaunchPoolContractRunTimeInDB
+
+		// 增加更多参数
+		DisplayName  string       `json:"displayName"`
+	}
+
+	var displayName string
+	tickerInfo := p.stp.GetTickerInfo(p.GetAssetName())
+	if tickerInfo != nil {
+		displayName = tickerInfo.DisplayName
+	}
+	result := &responseStatus{
+		LaunchPoolContractRunTimeInDB: &p.LaunchPoolContractRunTimeInDB,
+		DisplayName: displayName,
+	}
+
+	buf, err := json.Marshal(result)
 	if err != nil {
 		Log.Errorf("GetContractStatus Marshal %s failed, %v", p.URL(), err)
 		return ""
@@ -1783,7 +1802,7 @@ func (p *LaunchPoolContractRunTime) deployAmmContract() (string, int64, error) {
 	c.K = indexer.DecimalMul(p.AssetAmtInPool, indexer.NewDefaultDecimal(p.SatsValueInPool)).String()
 
 	txId, id, err := p.stp.DeployContract(ammContract.GetTemplateName(),
-		string(ammContract.Content()), nil, 0, 0, p.Deployer)
+		string(ammContract.Content()), nil, 0, p.Deployer, 0)
 	if err != nil {
 		Log.Errorf("%s DeployContract %s failed, %v", p.URL(), ammContract.GetContractName(), err)
 		return "", 0, err

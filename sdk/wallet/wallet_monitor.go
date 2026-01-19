@@ -27,6 +27,10 @@ func (p *MonitorWallet) Clone() common.Wallet {
 	}
 }
 
+func (p *MonitorWallet) CloneByPubKey(pubkey []byte) common.Wallet {
+	return nil
+}
+
 func (p *MonitorWallet) SetSubAccount(id uint32) {
 }
 func (p *MonitorWallet) GetSubAccount() uint32 {

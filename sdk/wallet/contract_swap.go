@@ -723,6 +723,7 @@ type responseStatus_swap struct {
 	SellDepth    []*DepthInfo `json:"sellDepth"`
 	TradeInfo24H *ItemData    `json:"24hour"`
 	TradeInfo30D *ItemData    `json:"30day"`
+	DisplayName  string       `json:"displayName"`
 }
 
 func getPriceSpan(pool []*SwapHistoryItem, buy bool) (*Decimal, *Decimal, *Decimal, int) {
@@ -928,11 +929,13 @@ func (p *SwapContractRuntime) updateResponseData() {
 			buyDepth = p.calcDepth(p.buyPool, maxBuyPrice.Clone(), true, buySpan)
 		}
 
+		tickerInfo := p.stp.GetTickerInfo(p.GetAssetName())
 		p.responseStatus = &responseStatus_swap{
 			SwapContractRuntimeInDB: &p.SwapContractRuntimeInDB,
 			DealPrice:               minSellPrice.String(),
 			BuyDepth:                buyDepth,
 			SellDepth:               sellDepth,
+			DisplayName:             tickerInfo.DisplayName,
 		}
 
 		data24H := &ItemData{}
