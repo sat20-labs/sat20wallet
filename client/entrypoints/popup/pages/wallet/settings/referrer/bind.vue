@@ -92,7 +92,7 @@
 import { ref, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
-import stp from '@/utils/stp'
+import sat20 from '@/utils/sat20'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -205,7 +205,7 @@ async function confirmBind() {
   resultTxId.value = ''
   showConfirm.value = false
   try {
-    const [err, res] = await stp.bindReferrerForServer(referrerName.value, serverPubKey.value)
+    const [err, res] = await sat20.bindReferrerForServer(referrerName.value, serverPubKey.value)
     console.log('bindReferrerForServer res', res);
     if (err) {
       resultMsg.value = err.message || t('referrerManagement.BindFailure')

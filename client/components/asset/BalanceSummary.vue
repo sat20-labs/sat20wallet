@@ -74,7 +74,7 @@ import { useToast } from '@/components/ui/toast-new'
 import { Chain, WalletType } from '@/types/index'
 import { useGlobalStore } from '@/store/global'
 import { useI18n } from 'vue-i18n'
-import stp from '@/utils/stp'
+import walletManager from '@/utils/sat20'
 import { useQuery } from '@tanstack/vue-query'
 import { ordxApi } from '@/apis'
 
@@ -143,8 +143,8 @@ const fetchAbailableSats = async () => {
     // 通道模式下，availableAmt 为 totalSats，lockedAmt 为 0
     return { availableAmt: channelStore.totalSats, lockedAmt: 0 }
   }
-  const handler = props.selectedChain.toLowerCase() === 'bitcoin' ? stp.getAssetAmount : stp.getAssetAmount_SatsNet
-  const [err, res] = await handler.bind(stp)(address.value, '::')
+  const handler = props.selectedChain.toLowerCase() === 'bitcoin' ? walletManager.getAssetAmount : walletManager.getAssetAmount_SatsNet
+  const [err, res] = await handler.bind(walletManager)(address.value, '::')
   console.log('fetchAbailableSats', err, res);
   if (err || !res) {
     return { availableAmt: 0, lockedAmt: 0 }
@@ -198,7 +198,7 @@ if (!selectedTranscendingMode.value || !props.selectedChain) {
 }
 // 过滤按钮
 const filteredButtons = computed(() => {
-  const canUseDepositWithdraw = currentWalletType.value === WalletType.MNEMONIC
+  const canUseDepositWithdraw = currentWalletType.value === WalletType.MNEMONIC || currentWalletType.value === WalletType.PRIVATE_KEY
   
   return buttons.map(button => {
     let isDisabled =

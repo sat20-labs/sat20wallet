@@ -118,8 +118,11 @@ const globalStore = useGlobalStore()
 const { address, network, currentWalletType } = storeToRefs(walletStore)
 const { env } = storeToRefs(globalStore)
 
-// 只有助记词钱包才能使用 withdraw
-const canWithdraw = computed(() => currentWalletType.value === WalletType.MNEMONIC)
+// 允许助记词钱包和私钥钱包使用 withdraw
+const canWithdraw = computed(() => 
+  currentWalletType.value === WalletType.MNEMONIC || 
+  currentWalletType.value === WalletType.PRIVATE_KEY
+)
 
 const mempoolUrl = computed(() => {
   return generateMempoolUrl({
@@ -131,8 +134,7 @@ const mempoolUrl = computed(() => {
 })
 
 // 资产类型
-//const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
-const assetTypes = ['ORDX', 'Runes', 'BRC20']
+const assetTypes = [ 'BRC20', 'ORDX', 'Runes',]
 const selectedType = ref(props.modelValue || assetTypes[0])
 
 // 过滤资产

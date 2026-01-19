@@ -217,7 +217,7 @@ export function useAssetActions() {
   const l1Send = async ({ toAddress, asset_name, amt }: any) => {
     loading.value = true
     console.log('UseAssetAction l1Send:', toAddress, asset_name, amt, btcFeeRate.value)
-    const [err] = await satsnetStp.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
+    const [err] = await sat20.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
     if (err) {
       handleError(err.message)
       loading.value = false

@@ -166,9 +166,6 @@ export const useWalletStore = defineStore('wallet', () => {
       await switchToAccount(currentAccount?.index || 0);
       await getWalletInfo()
 
-      // 发送账户变更事件（非关键操作）
-      safeSendAccountsChangedEvent(wallets.value)
-
       console.log('Wallet switch completed successfully')
     } catch (error) {
       console.error('Wallet switch failed:', error)
@@ -304,10 +301,8 @@ export const useWalletStore = defineStore('wallet', () => {
     await setHasWallet(true)
     await setLocked(false)
     await setChain(Chain.BTC)
+    await satsnetStp.importWalletWithPrivKey(privateKey, password)
     await setPassword(password)
-
-    // stp wasm 需要解锁钱包
-    await satsnetStp.unlockWallet(password)
     await satsnetStp.start()
 
     await channelStore.getAllChannels()
@@ -436,7 +431,7 @@ export const useWalletStore = defineStore('wallet', () => {
       await setPassword(password)
       await satsnetStp.unlockWallet(password)
       await satsnetStp.start()
-      await switchToAccount(accountIndex.value)
+      await switchToAccount(accountIndex.value, false)
       await channelStore.getAllChannels()
     }
     return [err, result]
@@ -521,7 +516,7 @@ export const useWalletStore = defineStore('wallet', () => {
     }
   }
 
-  const switchToAccount = async (accountId: number) => {
+  const switchToAccount = async (accountId: number, emitEvent: boolean = true) => {
     // 如果正在切换账户，直接返回
     if (isSwitchingAccount.value) {
       console.log('Account switch already in progress, ignoring...')
@@ -536,15 +531,28 @@ export const useWalletStore = defineStore('wallet', () => {
       await satsnetStp.switchAccount(accountId)
       const [_, addressRes] = await walletManager.getWalletAddress(accountId)
       const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
-      console.log('switchToAccount', await satsnetStp.getWallet());
+
+      const currentAddress = address.value
+
       if (addressRes && pubkeyRes) {
         await setAccountIndex(accountId)
         await setAddress(addressRes.address)
         await setPublickey(pubkeyRes.pubKey)
       }
 
-      // 发送账户变更事件（非关键操作）
-      safeSendAccountsChangedEvent(wallets.value)
+      // 只有在满足以下条件时才发送账户变更事件：
+      // 1. emitEvent 为 true
+      // 2. 新地址存在
+      // 3. 旧地址存在（如果是 null，说明是窗口首次加载，不应视为变更）
+      // 4. 地址真正发生了变化（忽略大小写，防止 Bech32 地址大小写不一致导致的循环）
+      if (
+        emitEvent &&
+        address.value &&
+        currentAddress &&
+        address.value.toLowerCase() !== currentAddress.toLowerCase()
+      ) {
+        safeSendAccountsChangedEvent([address.value])
+      }
 
       console.log('Account switch completed successfully')
     } catch (error) {

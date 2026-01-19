@@ -148,7 +148,6 @@
     "splicingOut": "通道抽资",
     "unlock": "解锁"
   },
-
   "l1AssetsTabs": {
     "assetType": {
       "ORDX": "ORDX",
@@ -266,14 +265,13 @@
     "nodeAddress": "节点地址",
     "becomeMiner": "加入普通挖矿节点",
     "becomeCoreNode": "加入核心节点",
-    "confirmCoreDescription": "确认要成为核心节点吗？",   
+    "confirmCoreDescription": "确认要成为核心节点吗？",
     "confirmMinerDescription": "确认要成为普通挖矿节点吗？",
     "confirmDescription": "操作后将调用链上质押接口 !",
     "dialogTitle": "确认操作",
-    "cancel": "取消",   
+    "cancel": "取消",
     "confirm": "确认",
     "guideText": "加入聪网，共建比特币资产化生态底座<br>当前开放两类节点，均可立即参与:<br><br><span class=\\\"text-zinc-200 text-md font-bold mb-2\\\">1、 普通挖矿节点：轻量接入，人人可参与</span><br><br>◆ 仅限质押 $PEARL 无需GPU及ASIC<br>◆ 硬件(4核 CPU / 8G RAM / 100G SSD)<br>◆ 与主流节点同步，参与 PoS 挖矿机制<br>◆ 不运行索引器，部署快速、维护简单<br><br><span class=\\\"text-zinc-200 text-md font-bold mb-2\\\">2、 核心节点：构建 BTC 原生服务底座</span><br><br>◆ 同步 BTC 主网节点与原始全节点<br>◆ 开放API服务(交易索引、核心通道接入)<br>◆ 承载协议资产(ORDX、Runes 等)的进出<br>◆ 硬件(16核CPU/64G RAM/2T SSD)/高速网络"
-
   },
   "referrerManagement": {
     "title": "推荐人管理",
@@ -283,18 +281,18 @@
     "referrerName": "推荐人名称",
     "referrerNamePlaceholder": "请输入推荐人名称",
     "bindReferrer": "绑定推荐人",
-    "bindReferrerDescription": "绑定您的推荐人以获得奖励",    
+    "bindReferrerDescription": "绑定您的推荐人以获得奖励",
     "gasFeeRate": "Gas FeeRate(sats)",
     "gasFeeRatePlaceHolder": "请输入Gas FeeRate",
     "operationSuccess": "注册成功",
     "operationFailure": "注册失败",
     "DialogHeader": "注册推荐人",
     "confirmRegisterDescription": "您确定要注册为推荐人吗？",
-    "confirmBindDescription": "确认要绑定推荐人吗？", 
+    "confirmBindDescription": "确认要绑定推荐人吗？",
     "serverPubKey": "聪交换市场公钥",
-    "serverPubKeyPlaceholder": "请输入聪交换市场公钥",  
+    "serverPubKeyPlaceholder": "请输入聪交换市场公钥",
     "DialogFooter": "注册后，您将无法更改推荐人名称或 Gas FeeRate。",
-    "bindButton": "Bind", 
+    "bindButton": "Bind",
     "registering": "Registering...",
     "binding": "Binding...",
     "confirm": "确认",
@@ -381,6 +379,7 @@
   "walletManager": {
     "title": "钱包管理",
     "switch": "切换",
+    "switching": "切换中...",
     "current": "当前",
     "createWallet": "创建钱包",
     "importWallet": "导入钱包",
@@ -399,6 +398,9 @@
     "recoveryPhrase": "恢复助记词",
     "enterRecoveryPhrase": "输入您的恢复助记词，单词之间用空格分隔",
     "recoveryPhraseHint": "按正确顺序输入您的12个恢复助记词单词",
+    "privateKey": "私钥",
+    "enterPrivateKey": "输入您的私钥",
+    "privateKeyHint": "输入您的十六进制格式(Hex)钱包私钥",
     "importing": "导入中...",
     "import": "导入",
     "deleteWallet": "删除钱包",

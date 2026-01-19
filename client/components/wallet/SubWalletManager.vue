@@ -12,12 +12,11 @@
           <div class="space-y-2">
             <div v-for="account in accountsWithAddress" :key="account.index"
               class="flex items-center justify-between p-3 rounded-lg border hover:bg-accent/50 transition-colors"
-              :class="{ 
+              :class="{
                 'border-primary/50': account.index === accountIndex,
                 'cursor-pointer': !isSwitchingAccount && account.index !== accountIndex,
                 'cursor-not-allowed opacity-50': isSwitchingAccount
-              }"
-              @click="account.index !== accountIndex && !isSwitchingAccount && selectAccount(account)">
+              }" @click="account.index !== accountIndex && !isSwitchingAccount && selectAccount(account)">
               <div class="flex items-center gap-3">
                 <div class="w-10 h-10 rounded-full overflow-hidden bg-muted">
                   <div class="w-full h-full flex items-center justify-center">
@@ -27,9 +26,10 @@
                 <div>
                   <div class="font-medium flex items-center gap-2 text-white/60">
                     {{ account.displayName }}
-                    <Icon v-if="isSwitchingAccount && account.index === accountIndex" icon="lucide:loader-2" class="w-3 h-3 animate-spin" />
-                    <Button v-if="account.index === accountIndex && !isSwitchingAccount" variant="ghost" size="icon" class="h-2 w-2"
-                      @click.stop="showEditNameDialog(account)">
+                    <Icon v-if="isSwitchingAccount && account.index === accountIndex" icon="lucide:loader-2"
+                      class="w-3 h-3 animate-spin" />
+                    <Button v-if="account.index === accountIndex && !isSwitchingAccount" variant="ghost" size="icon"
+                      class="h-2 w-2" @click.stop="showEditNameDialog(account)">
                       <Icon icon="lucide:pencil" class="w-3 h-3" />
                     </Button>
                   </div>
@@ -57,12 +57,8 @@
       <div class="container max-w-2xl mx-auto p-4">
         <div class="flex gap-2">
           <!-- 只有助记词类型的钱包才能创建子账号 -->
-          <Button 
-            class="flex-1 gap-2 h-12 flex items-center w-full" 
-            variant="default" 
-            @click="showCreateAccountDialog"
-            :disabled="!canCreateAccount"
-          >
+          <Button class="flex-1 gap-2 h-12 flex items-center w-full" variant="default" @click="showCreateAccountDialog"
+            :disabled="!canCreateAccount">
             <Icon icon="lucide:plus-circle" class="w-6 h-6 flex-shrink-0" />
             {{ $t('subWalletManager.createNewAccount') }}
           </Button>
@@ -245,11 +241,6 @@ async function createAccount() {
     const newAccountId = accounts.value?.length || 0
     const accountName = newAccountName.value.trim() || `Account ${newAccountId + 1}`
     await walletStore.addAccount(accountName, newAccountId)
-    try {
-      await sendAccountsChangedEvent(newAccountId)
-    } catch (error) {
-      console.error('sendAccountsChangedEvent error', error);
-    }
     toast({
       title: '成功',
       description: '账户创建成功',
@@ -260,7 +251,7 @@ async function createAccount() {
     router.go(-1)
   } catch (error) {
     console.log('error', error);
-    
+
     isCreating.value = false
     toast({
       title: '错误',
@@ -290,8 +281,7 @@ async function deleteAccount() {
       variant: 'success'
     })
     isDeleteDialogOpen.value = false
-    // 发送 accountsChanged 事件（封装函数）
-    await sendAccountsChangedEvent(accounts.value)
+    // 账户变更事件现在由 store 自动处理
     setTimeout(() => {
       router.back()
     }, 300)

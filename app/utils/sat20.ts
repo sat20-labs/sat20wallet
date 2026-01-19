@@ -110,6 +110,13 @@ class WalletManager {
     return this._handleRequest('signPsbt', psbtHex, bool)
   }
 
+  async signPsbts(
+    psbtHexs: string[],
+    bool: boolean
+  ): Promise<[Error | undefined, { psbts: string[] } | undefined]> {
+    return this._handleRequest('signPsbts', psbtHexs, bool)
+  }
+
 
 
   async extractTxFromPsbt(
@@ -129,6 +136,18 @@ class WalletManager {
     psbtHex: string
   ): Promise<[Error | undefined, { tx: string } | undefined]> {
     return this._handleRequest('extractTxFromPsbt_SatsNet', psbtHex)
+  }
+
+  async extractUnsignedTxFromPsbt(
+    psbtHex: string
+  ): Promise<[Error | undefined, { tx: string } | undefined]> {
+    return this._handleRequest('extractUnsignedTxFromPsbt', psbtHex)
+  }
+
+  async extractUnsignedTxFromPsbt_SatsNet(
+    psbtHex: string
+  ): Promise<[Error | undefined, { tx: string } | undefined]> {
+    return this._handleRequest('extractUnsignedTxFromPsbt_SatsNet', psbtHex)
   }
 
   async sendUtxos_SatsNet(
@@ -411,6 +430,18 @@ class WalletManager {
   }
 
   // --- Contract Methods ---
+  async getSupportedContracts(): Promise<[Error | undefined, { contractContents: any[] } | undefined]> {
+    return this._handleRequest('getSupportedContracts')
+  }
+
+  async getDeployedContractsInServer(): Promise<[Error | undefined, { contractURLs: any[] } | undefined]> {
+    return this._handleRequest('getDeployedContractsInServer')
+  }
+
+  async getDeployedContractStatus(url: string): Promise<[Error | undefined, { contractStatus: any } | undefined]> {
+    return this._handleRequest('getDeployedContractStatus', url)
+  }
+
   async getFeeForDeployContract(
     templateName: string,
     content: string,
@@ -419,18 +450,18 @@ class WalletManager {
     return this._handleRequest('getFeeForDeployContract', templateName, content, feeRate)
   }
 
-  async getFeeForInvokeContract(
-    url: string,
-    invoke: string
-  ): Promise<[Error | undefined, { fee: any } | undefined]> {
-    return this._handleRequest('getFeeForInvokeContract', url, invoke)
-  }
-
   async getParamForInvokeContract(
     templateName: string,
     action: string
   ): Promise<[Error | undefined, { parameter: any } | undefined]> {
     return this._handleRequest('getParamForInvokeContract', templateName, action)
+  }
+
+  async getFeeForInvokeContract(
+    url: string,
+    invoke: string
+  ): Promise<[Error | undefined, { fee: any } | undefined]> {
+    return this._handleRequest('getFeeForInvokeContract', url, invoke)
   }
 
   async invokeContract_SatsNet(
@@ -451,6 +482,41 @@ class WalletManager {
     return this._handleRequest('invokeContractV2_SatsNet', url, invoke, assetName, amt, feeRate)
   }
 
+  async invokeContractV2(
+    url: string,
+    invoke: string,
+    assetName: string,
+    amt: string,
+    unitPrice: number,
+    serviceFee: number,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('invokeContractV2', url, invoke, assetName, amt, unitPrice, serviceFee, feeRate)
+  }
+
+  async getContractInvokeHistoryInServer(url: string, start: number, limit: number): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getContractInvokeHistoryInServer', url, start, limit)
+  }
+
+  async getContractInvokeHistoryByAddressInServer(url: string, address: string, start: number, limit: number): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getContractInvokeHistoryByAddressInServer', url, address, start, limit)
+  }
+
+  async getAllAddressInContract(url: string, start: number, limit: number): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getAllAddressInContract', url, start, limit)
+  }
+
+  async getAddressStatusInContract(url: string, address: string): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getAddressStatusInContract', url, address)
+  }
+
+  // --- Referrer Methods ---
+  async getAllRegisteredReferrerName(
+    pubkey: string
+  ): Promise<[Error | undefined, { names: string[] } | undefined]> {
+    return this._handleRequest('getAllRegisteredReferrerName', pubkey)
+  }
+
   async registerAsReferrer(
     name: string,
     feeRate: number
@@ -463,21 +529,6 @@ class WalletManager {
     serverPubKey: string
   ): Promise<[Error | undefined, { txId: string } | undefined]> {
     return this._handleRequest('bindReferrerForServer', referrerName, serverPubKey)
-  }
-
-  async getAllRegisteredReferrerName(
-    pubkey: string
-  ): Promise<[Error | undefined, { names: string[] } | undefined]> {
-    return this._handleRequest('getAllRegisteredReferrerName', pubkey)
-  }
-
-  async deployContract_Remote(
-    templateName: string,
-    content: string,
-    feeRate: string,
-    bol: boolean
-  ): Promise<[Error | undefined, { txId: string; resvId: string } | undefined]> {
-    return this._handleRequest('deployContract_Remote', templateName, content, feeRate, bol)
   }
 
   async deposit(
@@ -561,30 +612,6 @@ class WalletManager {
     feeRate: number
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('batchSendAssets', destAddr, assetName, amt, n, feeRate.toString())
-  }
-
-  async invokeContractV2(
-    url: string,
-    invoke: string,
-    assetName: string,
-    amt: string,
-    unitPrice: number,
-    serviceFee: number,
-    feeRate: string
-  ): Promise<[Error | undefined, { txId: string } | undefined]> {
-    return this._handleRequest('invokeContractV2', url, invoke, assetName, amt, unitPrice, serviceFee, feeRate)
-  }
-
-  async stakeToBeMiner(
-    bCoreNode: boolean,
-    btcFeeRate: string
-  ): Promise<[Error | undefined, {
-    txId: string,
-    resvId: string,
-    assetName: string,
-    amt: string
-  } | undefined]> {
-    return this._handleRequest('stakeToBeMiner', bCoreNode, btcFeeRate)
   }
 }
 

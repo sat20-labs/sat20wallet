@@ -3,6 +3,7 @@ import { Network, Balance } from '@/types'
 import { ordxApi } from '@/apis'
 import { psbt2tx } from '@/utils/btc'
 import sat20Wallet from '@/utils/sat20'
+import satsnetStp from '@/utils/stp'
 import { reInitializeWasm } from './background/WasmManager'
 
 class Service {
@@ -94,7 +95,7 @@ class Service {
 
   async splitBatchSignedPsbt(signedHex: string, network: string): Promise<[Error | undefined, { psbts: string[] } | undefined]> {
     await reInitializeWasm()
-    return sat20Wallet.splitBatchSignedPsbt(signedHex, network)
+    return satsnetStp.splitBatchSignedPsbt(signedHex, network)
   }
   async splitBatchSignedPsbt_SatsNet(signedHex: string, network: string): Promise<[Error | undefined, { psbts: string[] } | undefined]> {
     await reInitializeWasm()
@@ -132,7 +133,7 @@ class Service {
     utxos: string[],
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
     await reInitializeWasm()
-    return sat20Wallet.addInputsToPsbt(psbtHex, utxos)
+    return satsnetStp.addInputsToPsbt(psbtHex, utxos)
   }
 
   async addOutputsToPsbt(
@@ -140,7 +141,7 @@ class Service {
     utxos: string[],
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
     await reInitializeWasm()
-    return sat20Wallet.addOutputsToPsbt(psbtHex, utxos)
+    return satsnetStp.addOutputsToPsbt(psbtHex, utxos)
   }
 
   async lockUtxo(address: string, utxo: any, reason?: string): Promise<[Error | undefined, any | undefined]> {

@@ -10,12 +10,16 @@
         <!-- Basic Info Section -->
         <div class="bg-muted/50 rounded-lg p-2 sm:p-3">
           <div class="flex items-center justify-between gap-2 py-1">
-            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.action', '操作类型') }}</span>
-            <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.action || '-' }}</span>
+            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.action', '操作类型')
+              }}</span>
+            <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.action || '-'
+              }}</span>
           </div>
           <div class="flex items-start justify-between gap-2 py-1">
-            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.url', '合约URL') }}</span>
-            <span class="text-xs font-medium text-right break-all leading-tight max-w-[60%]">{{ props.data?.url || '-' }}</span>
+            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.url', '合约URL')
+              }}</span>
+            <span class="text-xs font-medium text-right break-all leading-tight max-w-[60%]">{{ props.data?.url || '-'
+              }}</span>
           </div>
         </div>
 
@@ -27,33 +31,42 @@
           <!-- Swap Specific Details -->
           <template v-if="props.data?.metadata?.action === 'swap'">
             <div class="flex items-center justify-between gap-2 py-1">
-              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.orderType', '订单类型') }}</span>
-              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.orderType === 1 ? $t('invokeContractSatsNet.sell',
-                '卖出') : $t('invokeContractSatsNet.buy', '买入') }}</span>
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.orderType', '订单类型')
+                }}</span>
+              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.orderType ===
+                1 ? $t('invokeContractSatsNet.sell',
+                  '卖出') : $t('invokeContractSatsNet.buy', '买入') }}</span>
             </div>
             <div class="flex items-center justify-between gap-2 py-1">
-              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.quantity', '数量') }}</span>
-              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.quantity || '-' }}</span>
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.quantity', '数量')
+                }}</span>
+              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.quantity ||
+                '-' }}</span>
             </div>
             <div class="flex items-center justify-between gap-2 py-1">
-              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.unitPrice', '单价') }}</span>
-              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.unitPrice || '-' }} sats</span>
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.unitPrice', '单价')
+                }}</span>
+              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.unitPrice ||
+                '-' }} sats</span>
             </div>
           </template>
 
           <div class="flex items-center justify-between gap-2 py-1">
-            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.serviceFee', '网络费') }}</span>
-            <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.networkFee || '-' }}
+            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.serviceFee', '网络费')
+              }}</span>
+            <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.networkFee ||
+              '-' }}
               sats</span>
           </div>
           <div class="flex items-center justify-between gap-2 py-1">
-            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.estimatedFee', '服务费') }}</span>
+            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.estimatedFee', '服务费')
+              }}</span>
             <div class="text-right">
               <span v-if="feeLoading" class="text-xs text-muted-foreground">{{ $t('invokeContractSatsNet.loading',
                 '查询中...') }}</span>
               <span v-else-if="feeError" class="text-xs text-destructive">{{ feeErrorMessage ||
                 $t('invokeContractSatsNet.feeError',
-                '查询失败')}}</span>
+                  '查询失败') }}</span>
               <span v-else class="text-xs sm:text-sm font-medium">{{ estimatedFee || '-' }} sats</span>
             </div>
           </div>
@@ -77,7 +90,8 @@
             </AccordionTrigger>
             <AccordionContent class="px-2 pb-2 sm:px-3 sm:pb-3">
               <Alert class="mt-1 border-0">
-                <AlertTitle class="text-xs font-normal break-all whitespace-pre-wrap leading-relaxed p-2 -m-2 bg-muted/50 rounded">
+                <AlertTitle
+                  class="text-xs font-normal break-all whitespace-pre-wrap leading-relaxed p-2 -m-2 bg-muted/50 rounded">
                   {{ formattedInvoke }}
                 </AlertTitle>
               </Alert>
@@ -87,7 +101,9 @@
       </div>
 
       <div v-if="isLoading" class="text-center text-muted-foreground mt-2">
-        <span class="animate-spin inline-block mr-2">⏳</span> <span class="text-xs">{{ $t('invokeContractSatsNet.invoking', '正在调用合约...') }}</span>
+        <span class="animate-spin inline-block mr-2">⏳</span> <span class="text-xs">{{
+          $t('invokeContractSatsNet.invoking',
+            '正在调用合约...') }}</span>
       </div>
       <div v-if="invokeError && !isLoading" class="text-center text-destructive mt-2">
         <span class="text-xs">{{ invokeError }}</span>
@@ -102,7 +118,7 @@ import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { useToast } from '@/components/ui/toast-new'
-import walletManager from '@/utils/sat20'
+import sat20 from '@/utils/sat20'
 
 interface Props {
   data: {
@@ -137,17 +153,17 @@ const formattedInvoke = computed(() => {
 
 const totalCost = computed(() => {
   if (!props.data?.metadata?.action || !estimatedFee.value) return '-'
-    const orderType = props.data.metadata.orderType
-    if (orderType === 6) { // 卖出
-      return `${Math.ceil(Number(estimatedFee.value))} sats` // 只有网络费，向上取整
-    } else { // 买入
-      const quantity = Number(props.data.metadata.quantity || 0)
-      const unitPrice = Number(props.data.metadata.unitPrice || 0)
-      const serviceFee = Number(props.data.metadata.serviceFee || props.data.serviceFee || 0)
-      const networkFee = Number(estimatedFee.value || 0)
-      
-      const total = Math.ceil((quantity * unitPrice) + serviceFee + networkFee)
-      return `${total.toLocaleString()} sats`
+  const orderType = props.data.metadata.orderType
+  if (orderType === 6) { // 卖出
+    return `${Math.ceil(Number(estimatedFee.value))} sats` // 只有网络费，向上取整
+  } else { // 买入
+    const quantity = Number(props.data.metadata.quantity || 0)
+    const unitPrice = Number(props.data.metadata.unitPrice || 0)
+    const serviceFee = Number(props.data.metadata.serviceFee || props.data.serviceFee || 0)
+    const networkFee = Number(estimatedFee.value || 0)
+
+    const total = Math.ceil((quantity * unitPrice) + serviceFee + networkFee)
+    return `${total.toLocaleString()} sats`
   }
   return '-'
 })
@@ -167,7 +183,7 @@ const getFee = async () => {
   feeError.value = false
   feeErrorMessage.value = ''
   try {
-    const [err, res] = await walletManager.getFeeForInvokeContract(
+    const [err, res] = await sat20.getFeeForInvokeContract(
       props.data.url,
       props.data.invoke
     )
@@ -204,7 +220,7 @@ const confirm = async () => {
   try {
     const unitPrice = props.data?.metadata?.unitPrice || 0
     const serviceFee = props.data?.metadata?.serviceFee || props.data?.serviceFee || 0
-    const [err, res] = await walletManager.invokeContractV2(
+    const [err, res] = await sat20.invokeContractV2(
       props.data.url,
       props.data.invoke,
       props.data.assetName,

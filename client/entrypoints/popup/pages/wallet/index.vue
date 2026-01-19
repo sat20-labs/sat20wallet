@@ -117,7 +117,7 @@ const { plainList, sat20List, brc20List, runesList } = storeToRefs(l1Store)
 // 状态管理
 const selectTab = ref('l1')
 //const selectedType = ref('BTC')
-const selectedType = ref('ORDX')
+const selectedType = ref('BRC20')
 
 const items = [
   {
@@ -325,6 +325,7 @@ const tabChange = (value: string) => {
 onMounted(async () => {
   handleRouteChange()
   satsnetStp.registerCallback(channelCallback)
+  sat20.registerCallback(channelCallback)
 
   // 设置当前地址并校验名字
   if (address.value) {

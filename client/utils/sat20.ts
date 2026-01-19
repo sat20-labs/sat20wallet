@@ -144,14 +144,6 @@ class WalletManager {
     return this._handleRequest('extractTxFromPsbt_SatsNet', psbtHex)
   }
 
-  async sendUtxos_SatsNet(
-    destAddr: string,
-    utxos: string[],
-    fees: string[]
-  ): Promise<[Error | undefined, string | undefined]> {
-    return this._handleRequest('sendUtxos_SatsNet', destAddr, utxos, fees)
-  }
-
   async sendAssets_SatsNet(
     destAddr: string,
     assetName: string,
@@ -159,6 +151,15 @@ class WalletManager {
     memo: string = ""
   ): Promise<[Error | undefined, string | undefined]> {
     return this._handleRequest('sendAssets_SatsNet', destAddr, assetName, amt, memo)
+  }
+
+  async sendAssets(
+    destAddr: string,
+    assetName: string,
+    amt: number,
+    feeRate: number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('sendAssets', destAddr, assetName, String(amt), String(feeRate))
   }
 
   async init(
@@ -202,22 +203,6 @@ class WalletManager {
     return this._handleRequest('getWalletPubkey', accountId)
   }
 
-  async getPaymentPubKey(): Promise<[Error | undefined, string | undefined]> {
-    return this._handleRequest('getPaymentPubKey')
-  }
-
-  async getPublicKey(
-    id: number
-  ): Promise<[Error | undefined, Uint8Array | undefined]> {
-    return this._handleRequest('getPublicKey', id)
-  }
-
-  async getCommitRootKey(
-    peer: Uint8Array
-  ): Promise<[Error | undefined, Uint8Array | undefined]> {
-    return this._handleRequest('getCommitRootKey', peer)
-  }
-
   async getCommitSecret(
     peer: Uint8Array,
     index: number
@@ -247,13 +232,6 @@ class WalletManager {
     network: string
   ): Promise<[Error | undefined, { orderId: string } | undefined]> {
     return this._handleRequest('buildBatchSellOrder_SatsNet', utxos, address, network)
-  }
-
-  async splitBatchSignedPsbt(
-    signedHex: string,
-    network: string
-  ): Promise<[Error | undefined, { psbts: string[] } | undefined]> {
-    return this._handleRequest('splitBatchSignedPsbt', signedHex, network)
   }
 
   async splitBatchSignedPsbt_SatsNet(
@@ -289,20 +267,6 @@ class WalletManager {
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
     return this._handleRequest('mergeBatchSignedPsbt_SatsNet', psbts, network)
   }
-  async addInputsToPsbt(
-    psbtHex: string,
-    utxos: string[]
-  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
-    return this._handleRequest('addInputsToPsbt', psbtHex, utxos)
-  }
-
-  async addOutputsToPsbt(
-    psbtHex: string,
-    utxos: string[]
-  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
-    return this._handleRequest('addOutputsToPsbt', psbtHex, utxos)
-  }
-
   // --- UTXO Management Methods ---
   async lockUtxo(
     address: string,
@@ -391,14 +355,14 @@ class WalletManager {
   async getAssetAmount(
     address: string,
     assetName: string
-  ): Promise<[Error | undefined, { amount: number; value: number } | undefined]> {
+  ): Promise<[Error | undefined, { availableAmt: number; lockedAmt: number } | undefined]> {
     return this._handleRequest('getAssetAmount', address, assetName)
   }
 
   async getAssetAmount_SatsNet(
     address: string,
     assetName: string
-  ): Promise<[Error | undefined, { amount: number; value: number } | undefined]> {
+  ): Promise<[Error | undefined, { availableAmt: number; lockedAmt: number } | undefined]> {
     return this._handleRequest('getAssetAmount_SatsNet', address, assetName)
   }
 
@@ -410,6 +374,7 @@ class WalletManager {
   ): Promise<[Error | undefined, { fee: any } | undefined]> {
     return this._handleRequest('getFeeForDeployContract', templateName, content, feeRate)
   }
+
 
   async getFeeForInvokeContract(
     url: string,

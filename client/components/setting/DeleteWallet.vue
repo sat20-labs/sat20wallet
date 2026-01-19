@@ -15,7 +15,7 @@ const l2Store = useL2Store()
 const router = useRouter()
 
 const deleteWallet = async () => {
-  await walletStore.deleteWallet()
+  await walletStore.deleteWallet(walletStore.walletId)
   l1Store.reset()
   l2Store.reset()
   await storage.clear('local')

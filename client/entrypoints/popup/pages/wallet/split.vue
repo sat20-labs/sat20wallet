@@ -111,7 +111,7 @@ import { storeToRefs } from 'pinia';
 import { useWalletStore } from '@/store';
 import { useL2Assets } from '@/composables/hooks/useL2Assets';
 import { useToast } from '@/components/ui/toast-new';
-import satsnetStp from '@/utils/stp';
+import sat20 from '@/utils/sat20';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Icon } from '@iconify/vue';
@@ -170,7 +170,7 @@ const fetchAssetBalance = async (assetName: string) => {
   if (!assetName || !address.value) return;
 
   try {
-    const [err, result] = await satsnetStp.getAssetAmount(address.value, assetName);
+    const [err, result] = await sat20.getAssetAmount(address.value, assetName);
     if (err) {
       console.error('Error fetching asset balance:', err);
       return;
@@ -202,7 +202,7 @@ const onSubmit = form.handleSubmit(async (values) => {
   loading.value = true;
 
   try {
-    const [err, result] = await satsnetStp.batchSendAssets(
+    const [err, result] = await sat20.batchSendAssets(
       values.destAddr,
       values.assetName,
       values.amt.toString(),

@@ -121,7 +121,7 @@ const mempoolUrl = computed(() => {
 
 // 资产类型
 //const assetTypes = ['BTC', 'ORDX', 'Runes', 'BRC20']
-const assetTypes = ['ORDX', 'Runes', 'BRC20']
+const assetTypes = ['BRC20', 'ORDX', 'Runes']
 const selectedType = ref(props.modelValue || assetTypes[0])
 
 // 过滤资产

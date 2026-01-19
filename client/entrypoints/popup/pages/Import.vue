@@ -27,11 +27,7 @@
               <FormItem>
                 <FormLabel>{{ $t('import.recoveryPhraseLabel') }}</FormLabel>
                 <FormControl>
-                  <Textarea
-                    v-bind="componentField"
-                    :placeholder="$t('import.recoveryPhrasePlaceholder')"
-                    rows="3"
-                  />
+                  <Textarea v-bind="componentField" :placeholder="$t('import.recoveryPhrasePlaceholder')" rows="3" />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -50,11 +46,7 @@
               <FormItem>
                 <FormLabel>{{ $t('import.privateKeyLabel') }}</FormLabel>
                 <FormControl>
-                  <Input
-                    type="password"
-                    v-bind="componentField"
-                    :placeholder="$t('import.privateKeyPlaceholder')"
-                  />
+                  <Input v-bind="componentField" :placeholder="$t('import.privateKeyPlaceholder')" />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -66,11 +58,7 @@
               <FormItem>
                 <FormLabel>{{ $t('import.newPasswordLabel') }}</FormLabel>
                 <FormControl>
-                  <Input
-                    type="password"
-                    v-bind="componentField"
-                    :placeholder="$t('import.newPasswordPlaceholder')"
-                  />
+                  <Input type="password" v-bind="componentField" :placeholder="$t('import.newPasswordPlaceholder')" />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -80,11 +68,8 @@
               <FormItem>
                 <FormLabel>{{ $t('import.confirmPasswordLabel') }}</FormLabel>
                 <FormControl>
-                  <Input
-                    type="password"
-                    v-bind="componentField"
-                    :placeholder="$t('import.confirmPasswordPlaceholder')"
-                  />
+                  <Input type="password" v-bind="componentField"
+                    :placeholder="$t('import.confirmPasswordPlaceholder')" />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -93,7 +78,7 @@
         </Tabs>
 
         <div class="flex justify-between mt-8 gap-2">
-          <Button variant="outline" type="button" class="w-full h-11">
+          <Button variant="outline" type="button" class="w-full h-11" as-child>
             <RouterLink to="/">{{ $t('import.cancelButton') }}</RouterLink>
           </Button>
           <Button type="submit" :disabled="loading" class="w-full h-11">
@@ -131,7 +116,7 @@ import {
 import { useWalletStore } from '@/store'
 import { passwordSchema, mnemonicSchema, privateKeySchema } from '@/utils/validation'
 import { hashPassword } from '@/utils/crypto'
-import {KeyRound, Loader2Icon} from 'lucide-vue-next'
+import { KeyRound, Loader2Icon } from 'lucide-vue-next'
 
 const { toast } = useToast()
 const router = useRouter()

@@ -50,7 +50,6 @@ import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
 import walletManager from '@/utils/sat20'
-import satsnetStp from '@/utils/stp'
 import {
   FormField,
   FormItem,

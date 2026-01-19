@@ -1,4 +1,5 @@
 import satsnetStp from '@/utils/stp'
+import walletManager from '@/utils/sat20'
 import { useWalletStore } from '@/store'
 import { parallel } from 'radash'
 interface OutPoint {
@@ -171,7 +172,7 @@ export const useChannelStore = defineStore('channel', () => {
       }
       const getAssetInfo = async (key: string) => {
         //console.log('获取资产信息:', key)
-        const [err, res] = await satsnetStp.getTickerInfo(key)
+        const [err, res] = await walletManager.getTickerInfo(key)
         if (res?.ticker) {
           const { ticker } = res
           const result = JSON.parse(ticker)

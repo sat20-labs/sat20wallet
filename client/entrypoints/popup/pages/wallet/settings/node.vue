@@ -25,7 +25,7 @@
         </CardHeader>
         <CardContent>
           <div class="flex flex-col gap-4">
-            <Button aria-label="become Core Node" @click="onStake(true)" :loading="isLoading && isCore">
+            <Button aria-label="become Core Node" disabled @click="onStake(true)" :loading="isLoading && isCore">
               {{ $t('nodeSetting.becomeCoreNode') }}
             </Button>
             <Button variant="secondary" aria-label="become Miner" @click="onStake(false)"
@@ -91,6 +91,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import stp from '@/utils/stp'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
@@ -166,7 +167,7 @@ async function confirmStake() {
       resvId.value = res && res.resvId ? res.resvId : ''
       assetName.value = res && res.assetName ? res.assetName : ''
       amt.value = res && res.amt ? res.amt : ''
-      
+
       // 保存节点质押数据到本地存储
       if (res && publicKey.value) {
         try {

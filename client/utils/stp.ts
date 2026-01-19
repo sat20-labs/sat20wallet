@@ -18,6 +18,7 @@ interface StpWasmModule {
   switchWallet: (...args: any[]) => Promise<WasmResponse>;
   switchAccount: (...args: any[]) => Promise<WasmResponse>;
   importWallet: (...args: any[]) => Promise<WasmResponse>;
+  importWalletWithPrivKey: (...args: any[]) => Promise<WasmResponse>;
   unlockWallet: (...args: any[]) => Promise<WasmResponse>;
 
   // 通道管理
@@ -34,7 +35,6 @@ interface StpWasmModule {
   getCurrentChannel: (...args: any[]) => Promise<WasmResponse>;
   getChannel: (...args: any[]) => Promise<WasmResponse>;
   getChannelStatus: (...args: any[]) => Promise<WasmResponse>;
-  sendAssets: (...args: any[]) => Promise<WasmResponse>;
   splicingIn: (...args: any[]) => Promise<WasmResponse>;
   splicingOut: (...args: any[]) => Promise<WasmResponse>;
   lockToChannel: (...args: any[]) => Promise<WasmResponse>;
@@ -42,6 +42,10 @@ interface StpWasmModule {
   getCommitTxAssetInfo: (...args: any[]) => Promise<WasmResponse<any>>;
   deployContract_Local: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
   deployContract_Remote: (templateName: string, content: string, feeRate: string, bol: boolean) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
+  stakeToBeMiner: (bCoreNode: boolean, btcFeeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string; assetName: string; amt: string }>>;
+  splitBatchSignedPsbt: (signedHex: string, network: string) => Promise<WasmResponse<{ psbts: string[] }>>;
+  addInputsToPsbt: (psbtHex: string, utxos: string[]) => Promise<WasmResponse<{ psbt: string }>>;
+  addOutputsToPsbt: (psbtHex: string, utxos: string[]) => Promise<WasmResponse<{ psbt: string }>>;
 }
 
 class SatsnetStp {
@@ -115,6 +119,13 @@ class SatsnetStp {
     password: string
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('importWallet', mnemonic, password.toString())
+  }
+
+  async importWalletWithPrivKey(
+    privKey: string,
+    password: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('importWalletWithPrivKey', privKey, password.toString())
   }
 
   async unlockWallet(
@@ -214,20 +225,6 @@ class SatsnetStp {
     )
   }
 
-  async sendAssets(
-    address: string,
-    assetName: string,
-    amt: number,
-    feeRate: number
-  ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest(
-      'sendAssets',
-      address,
-      assetName,
-      String(amt),
-      String(feeRate)
-    )
-  }
 
   async splicingIn(
     chanPoint: string,
@@ -328,6 +325,35 @@ class SatsnetStp {
     { txId: string; resvId: string } | undefined
   ]> {
     return this._handleRequest<{ txId: string; resvId: string }>('deployContract_Remote', templateName, content, feeRate, bol)
+  }
+
+  /** 质押成为矿工/核心节点 */
+  async stakeToBeMiner(
+    bCoreNode: boolean,
+    btcFeeRate: string
+  ): Promise<[Error | undefined, { txId: string; resvId: string; assetName: string; amt: string } | undefined]> {
+    return this._handleRequest<{ txId: string; resvId: string; assetName: string; amt: string }>('stakeToBeMiner', bCoreNode, btcFeeRate)
+  }
+
+  async splitBatchSignedPsbt(
+    signedHex: string,
+    network: string
+  ): Promise<[Error | undefined, { psbts: string[] } | undefined]> {
+    return this._handleRequest('splitBatchSignedPsbt', signedHex, network)
+  }
+
+  async addInputsToPsbt(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return this._handleRequest('addInputsToPsbt', psbtHex, utxos)
+  }
+
+  async addOutputsToPsbt(
+    psbtHex: string,
+    utxos: string[]
+  ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    return this._handleRequest('addOutputsToPsbt', psbtHex, utxos)
   }
 }
 

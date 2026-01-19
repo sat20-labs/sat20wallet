@@ -116,7 +116,7 @@ const walletStore = useWalletStore()
 const { toast } = useToast()
 const transcendingModeStore = useTranscendingModeStore()
 
-  const props = defineProps({
+const props = defineProps({
   modelValue: {
     type: String,
     required: true,
@@ -143,7 +143,7 @@ type ChainType = 'l1' | 'channel' | 'l2'
 //const selectedTranscendingMode = ref<TranscendingMode>('poolswap')
 const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
 const selectedChain = ref<ChainType>('l1')
-const selectedAssetType = ref('ORDX')
+const selectedAssetType = ref('BRC20')
 
 // 将父组件的 v-model 值与子组件内部的选项进行映射（统一使用 items 的 value）
 const parentToChildTabMap: Record<string, ChainType> = {
@@ -287,11 +287,11 @@ const handleTabChange = (value: string | number) => {
   console.log('handleTabChange', value)
   // console.log('子组件 Tab changed:', value);
   changeTab(String(value)); // 调用 changeTab 函数来发出事件
-  selectedAssetType.value = 'ORDX' // 重置为初始值
+  selectedAssetType.value = 'BRC20' // 重置为初始值
 }
 watch(selectedChain, (newVal) => {
   // console.log('Chain changed to:', newVal)
-  selectedAssetType.value = 'ORDX' // 重置为初始值
+  selectedAssetType.value = 'BRC20' // 重置为初始值
 })
 
 const handleSplicingIn = (asset: any) => {
@@ -513,7 +513,7 @@ const lockUtxo = async ({
 const l1Send = async ({ toAddress, asset_name, amt }: any) => {
   loading.value = true
 
-  const [err, result] = await satsnetStp.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
+  const [err, result] = await sat20.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
   if (err) {
     toast({
       title: 'Error',
@@ -538,7 +538,7 @@ const l1Send = async ({ toAddress, asset_name, amt }: any) => {
 // L2 发送操作
 const l2Send = async ({ toAddress, asset_name, amt }: any) => {
   loading.value = true
-  const [err, result] = await satsnetStp.sendAssets_SatsNet(
+  const [err, result] = await sat20.sendAssets_SatsNet(
     toAddress,
     asset_name,
     amt,
@@ -575,7 +575,7 @@ const deposit = async ({
   feeRate = btcFeeRate.value,
 }: any) => {
   loading.value = true
-  const [err, result] = await satsnetStp.deposit(
+  const [err, result] = await sat20.deposit(
     toAddress,
     asset_name,
     amt,
@@ -614,7 +614,7 @@ const withdraw = async ({
   feeRate = btcFeeRate.value,
 }: any) => {
   loading.value = true
-  const [err, result] = await satsnetStp.withdraw(
+  const [err, result] = await sat20.withdraw(
     toAddress,
     asset_name,
     amt,
@@ -750,13 +750,13 @@ const handleOperationConfirm = async () => {
 }
 
 watch(selectedChain, async (newVal) => {
-  selectedAssetType.value = 'ORDX'
+  selectedAssetType.value = 'BRC20'
 })
 
 
 watch(selectedTranscendingMode, async (newVal) => {
   selectedChain.value = 'l1'
-  selectedAssetType.value = 'ORDX'
+  selectedAssetType.value = 'BRC20'
 
   try {
     if (newVal === 'lightning') {

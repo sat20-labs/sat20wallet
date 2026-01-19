@@ -1,24 +1,25 @@
 <template>
   <LayoutApprove @confirm="confirm" @cancel="cancel">
     <div class="p-4 space-y-4">
-      <h2 class="text-2xl font-semibold text-center">{{$t('deployContractRemote.title', '合约远程部署确认')}}</h2>
+      <h2 class="text-2xl font-semibold text-center">{{ $t('deployContractRemote.title', '合约远程部署确认') }}</h2>
       <p class="text-xs text-gray-400 text-center mb-4">
-        {{$t('deployContractRemote.warning', '请确认以下合约部署信息，确认后将发起链上部署')}}
+        {{ $t('deployContractRemote.warning', '请确认以下合约部署信息，确认后将发起链上部署') }}
       </p>
 
       <div class="space-y-2">
         <div>
-          <span class="font-semibold">{{$t('deployContractRemote.templateName', '合约模板')}}：</span>
+          <span class="font-semibold">{{ $t('deployContractRemote.templateName', '合约模板') }}：</span>
           <span>{{ props.data?.templateName || '-' }}</span>
         </div>
         <div>
-          <span class="font-semibold">{{$t('deployContractRemote.feeRate', '费率')}}：</span>
+          <span class="font-semibold">{{ $t('deployContractRemote.feeRate', '费率') }}：</span>
           <span>{{ props.data?.feeRate || '-' }} sats</span>
         </div>
         <div>
-          <span class="font-semibold">{{$t('deployContractRemote.estimatedFee', '预估费用')}}：</span>
-          <span v-if="feeLoading">{{$t('deployContractRemote.loading', '查询中...')}}</span>
-          <span v-else-if="feeError" class="text-destructive">{{ feeErrorMessage || $t('deployContractRemote.feeError', '查询失败') }}</span>
+          <span class="font-semibold">{{ $t('deployContractRemote.estimatedFee', '预估费用') }}：</span>
+          <span v-if="feeLoading">{{ $t('deployContractRemote.loading', '查询中...') }}</span>
+          <span v-else-if="feeError" class="text-destructive">{{ feeErrorMessage || $t('deployContractRemote.feeError',
+            '查询失败') }}</span>
           <span v-else>{{ estimatedFee || '-' }} sats</span>
         </div>
       </div>
@@ -26,7 +27,8 @@
       <!-- 合约参数美化展示 -->
       <Accordion type="single" collapsible class="w-full mt-2">
         <AccordionItem value="item-1">
-          <AccordionTrigger class="text-sm">{{$t('deployContractRemote.viewRawContent', '查看原始合约参数')}}</AccordionTrigger>
+          <AccordionTrigger class="text-sm">{{ $t('deployContractRemote.viewRawContent', '查看原始合约参数') }}
+          </AccordionTrigger>
           <AccordionContent>
             <Alert class="mt-2">
               <AlertTitle class="text-xs font-normal break-all whitespace-pre-wrap">
@@ -38,7 +40,7 @@
       </Accordion>
 
       <div v-if="isLoading" class="text-center text-muted-foreground">
-        <span class="animate-spin inline-block mr-2">⏳</span> {{$t('deployContractRemote.deploying', '正在部署合约...')}}
+        <span class="animate-spin inline-block mr-2">⏳</span> {{ $t('deployContractRemote.deploying', '正在部署合约...') }}
       </div>
       <div v-if="deployError && !isLoading" class="text-center text-destructive">
         {{ deployError }}
@@ -53,7 +55,8 @@ import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { useToast } from '@/components/ui/toast-new'
-import sat20Wallet from '@/utils/sat20'
+import sat20 from '@/utils/sat20'
+import stp from '@/utils/stp'
 
 interface Props {
   data: {
@@ -96,7 +99,7 @@ const getFee = async () => {
   feeError.value = false
   feeErrorMessage.value = ''
   try {
-    const [err, res] = await sat20Wallet.getFeeForDeployContract(
+    const [err, res] = await sat20.getFeeForDeployContract(
       props.data.templateName,
       props.data.content,
       props.data.feeRate
@@ -132,7 +135,7 @@ const confirm = async () => {
   isLoading.value = true
   deployError.value = ''
   try {
-    const [err, res] = await sat20Wallet.deployContract_Remote(
+    const [err, res] = await stp.deployContract_Remote(
       props.data.templateName,
       props.data.content,
       props.data.feeRate,
@@ -170,4 +173,4 @@ const confirm = async () => {
 const cancel = () => {
   emit('cancel')
 }
-</script> 
+</script>

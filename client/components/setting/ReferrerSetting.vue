@@ -94,7 +94,7 @@ import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { useWalletStore } from '@/store/wallet'
 import { storeToRefs } from 'pinia'
-import satsnetStp from '@/utils/stp'
+import sat20 from '@/utils/sat20'
 import { useGlobalStore } from '@/store/global'
 import { getConfig } from '@/config/wasm'
 import { useRouter } from 'vue-router'
@@ -237,7 +237,7 @@ async function loadReferrerNames() {
     console.log('serverPubKey', serverPubKey)
 
     if (serverPubKey) {
-      const [err, res] = await satsnetStp.getAllRegisteredReferrerName(serverPubKey)
+      const [err, res] = await sat20.getAllRegisteredReferrerName(serverPubKey)
       console.log('服务器返回:', res)
 
       if (err) {

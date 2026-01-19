@@ -45,6 +45,11 @@ export const reInitializeWasm = async (): Promise<void> => {
   const config = getConfig(env, network)
   console.log('调试: 重新初始化WASM, 配置: ', config)
   try {
+    if (!(globalThis as any).sat20wallet_wasm) {
+      console.log('调试: WASM 未初始化，正在执行初始化...')
+      await initializeWasm()
+      return
+    }
     await (globalThis as any).sat20wallet_wasm.release()
     await (globalThis as any).sat20wallet_wasm.init(config, logLevel)
     console.log('调试: WASM 重新初始化完成')
@@ -53,4 +58,3 @@ export const reInitializeWasm = async (): Promise<void> => {
     throw error
   }
 }
- 

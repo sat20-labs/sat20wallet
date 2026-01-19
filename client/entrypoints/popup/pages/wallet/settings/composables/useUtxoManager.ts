@@ -68,9 +68,9 @@ export function useUtxoManager() {
         [, res] = await walletManager.getAllLockedUtxo_SatsNet(addressStr.value)
       }
       lockedUtxos.value = Object.entries(res || {}).map(([utxo, infoStr]) => {
-        let info
+        let info: any
         try {
-          info = JSON.parse(infoStr)
+          info = typeof infoStr === 'string' ? JSON.parse(infoStr) : infoStr
         } catch (e) {
           info = {}
         }

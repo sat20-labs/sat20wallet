@@ -47,8 +47,7 @@
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <Button v-if="wallet.id !== currentWalletId" variant="outline" size="sm" 
-                  @click="selectWallet(wallet)" 
+                <Button v-if="wallet.id !== currentWalletId" variant="outline" size="sm" @click="selectWallet(wallet)"
                   :disabled="isSwitchingWallet">
                   <Icon v-if="isSwitchingWallet" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
                   {{ isSwitchingWallet ? $t('walletManager.switching') : $t('walletManager.switch') }}
@@ -57,13 +56,8 @@
                   {{ $t('walletManager.current') }}
                 </Button>
                 <!-- 只有助记词类型的钱包可以查看助记词。历史钱包会被自动迁移为 MNEMONIC 类型 -->
-                <Button 
-                  v-if="!wallet.walletType || wallet.walletType === 'mnemonic'" 
-                  variant="ghost" 
-                  size="icon" 
-                  @click="showMnemonicDialog(wallet)"
-                  :title="$t('walletManager.showRecoveryPhrase')"
-                >
+                <Button v-if="!wallet.walletType || wallet.walletType === 'mnemonic'" variant="ghost" size="icon"
+                  @click="showMnemonicDialog(wallet)" :title="$t('walletManager.showRecoveryPhrase')">
                   <Icon icon="lucide:key" class="w-4 h-4" />
                 </Button>
                 <Button v-if="wallet.id !== currentWalletId" variant="ghost" size="icon"
@@ -187,7 +181,7 @@
               <TabsTrigger value="mnemonic">{{ $t('walletManager.recoveryPhrase') }}</TabsTrigger>
               <TabsTrigger value="privateKey">{{ $t('walletManager.privateKey') }}</TabsTrigger>
             </TabsList>
-            
+
             <TabsContent value="mnemonic" class="space-y-4">
               <div class="space-y-2">
                 <Label for="mnemonic">{{ $t('walletManager.recoveryPhrase') }}</Label>
@@ -198,23 +192,19 @@
                 </p>
               </div>
             </TabsContent>
-            
+
             <TabsContent value="privateKey" class="space-y-4">
               <div class="space-y-2">
                 <Label for="privateKey">{{ $t('walletManager.privateKey') }}</Label>
-                <Input 
-                  id="privateKey" 
-                  type="password"
-                  v-model="importPrivateKey" 
-                  :placeholder="$t('walletManager.enterPrivateKey')" 
-                />
+                <Input id="privateKey" type="text" v-model="importPrivateKey"
+                  :placeholder="$t('walletManager.enterPrivateKey')" />
                 <p class="text-xs text-muted-foreground">
                   {{ $t('walletManager.privateKeyHint') }}
                 </p>
               </div>
             </TabsContent>
           </Tabs>
-          
+
           <DialogFooter>
             <Button variant="secondary" type="button" @click="isImportWalletDialogOpen = false" class="h-11 mt-2">
               {{ $t('walletManager.cancel') }}
@@ -276,23 +266,14 @@
               {{ $t('walletManager.recoveryPhraseWarning') }}
             </AlertDescription>
           </Alert>
-          
+
           <div v-if="!mnemonicPhrase" class="space-y-4">
             <div class="space-y-2">
               <Label for="mnemonicPassword">{{ $t('walletManager.enterPassword') }}</Label>
-              <Input 
-                id="mnemonicPassword" 
-                type="password" 
-                v-model="mnemonicPassword" 
-                :placeholder="$t('walletManager.passwordPlaceholder')"
-                @keyup.enter="verifyMnemonicPassword"
-              />
+              <Input id="mnemonicPassword" type="password" v-model="mnemonicPassword"
+                :placeholder="$t('walletManager.passwordPlaceholder')" @keyup.enter="verifyMnemonicPassword" />
             </div>
-            <Button 
-              :disabled="isVerifyingMnemonic" 
-              @click="verifyMnemonicPassword" 
-              class="w-full"
-            >
+            <Button :disabled="isVerifyingMnemonic" @click="verifyMnemonicPassword" class="w-full">
               <Icon v-if="isVerifyingMnemonic" icon="lucide:loader-2" class="w-4 h-4 mr-2 animate-spin" />
               {{ isVerifyingMnemonic ? $t('walletManager.verifying') : $t('walletManager.verify') }}
             </Button>
@@ -301,23 +282,14 @@
           <div v-else class="space-y-4">
             <div class="relative">
               <div class="grid grid-cols-3 gap-2 p-4 bg-muted rounded-lg">
-                <div
-                  v-for="(word, i) in mnemonicWords"
-                  :key="i"
-                  class="flex items-center space-x-2"
-                >
+                <div v-for="(word, i) in mnemonicWords" :key="i" class="flex items-center space-x-2">
                   <span class="text-muted-foreground text-sm">{{ i + 1 }}.</span>
                   <span :class="showMnemonic ? '' : 'blur-sm select-none'" class="text-sm font-medium">{{
                     word
                   }}</span>
                 </div>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="absolute top-2 right-2"
-                @click="toggleShowMnemonic"
-              >
+              <Button variant="ghost" size="icon" class="absolute top-2 right-2" @click="toggleShowMnemonic">
                 <Icon v-if="showMnemonic" icon="lucide:eye-off" class="h-4 w-4" />
                 <Icon v-else icon="lucide:eye" class="h-4 w-4" />
               </Button>
@@ -503,13 +475,10 @@ const deleteWallet = async () => {
     })
     isDeleteDialogOpen.value = false
     walletToDelete.value = null
-    setTimeout(() => {
-      sendAccountsChangedEvent(wallets.value)
-    }, 200);
-    // 发送 accountsChanged 事件（封装函数）
+    // 账户变更事件现在由 store 自动处理
   } catch (error: any) {
     console.log(error);
-    
+
     toast({
       variant: 'destructive',
       title: 'Error',
@@ -517,7 +486,7 @@ const deleteWallet = async () => {
     })
   } finally {
     console.log('finished ');
-    
+
     isDeleting.value = false
   }
 }
@@ -546,12 +515,12 @@ const createWallet = async () => {
     if (err || !result) {
       throw err || new Error('Failed to create wallet')
     }
-    
+
     // 创建成功后，显示助记词
     mnemonicPhrase.value = result as string
     showMnemonic.value = false
     isShowMnemonicDialogOpen.value = true
-    
+
     toast({
       title: 'Wallet Created Successfully',
       description: 'Your wallet has been created. Please save your recovery phrase.',
@@ -590,7 +559,7 @@ const importWallet = async () => {
       }
       [err] = await walletStore.importWalletWithPrivKey(importPrivateKey.value, localPassword)
     }
-    
+
     if (err) {
       throw err
     }
@@ -605,7 +574,7 @@ const importWallet = async () => {
     setTimeout(() => {
       router.go(-1)
     }, 300)
-    sendAccountsChangedEvent(wallets.value)
+    // 账户变更事件现在由 store 自动处理
   } catch (error: any) {
     toast({
       variant: 'destructive',
@@ -690,7 +659,7 @@ const showMnemonicDialog = (wallet: WalletData) => {
     })
     return
   }
-  
+
   editingWallet.value = wallet
   mnemonicPhrase.value = ''
   mnemonicPassword.value = ''
@@ -761,13 +730,12 @@ const handleCopyMnemonic = async () => {
 
 const confirmSavedMnemonic = async () => {
   isShowMnemonicDialogOpen.value = false
-  
+
   // 如果是创建钱包后的助记词展示，需要切换到新钱包并跳转
   if (editingWallet.value === null) {
     // 这是创建钱包后的情况
     try {
       await walletStore.switchWallet(walletStore.walletId)
-      sendAccountsChangedEvent(wallets.value)
       toast({
         title: 'Success',
         description: 'Wallet created and switched successfully',
@@ -784,7 +752,7 @@ const confirmSavedMnemonic = async () => {
       })
     }
   }
-  
+
   // 清理状态
   mnemonicPhrase.value = ''
   mnemonicPassword.value = ''

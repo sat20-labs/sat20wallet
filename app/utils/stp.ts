@@ -18,9 +18,11 @@ interface StpWasmModule {
   hello: (...args: any[]) => Promise<WasmResponse<string>>;
   start: (...args: any[]) => Promise<WasmResponse>;
   importWallet: (...args: any[]) => Promise<WasmResponse>;
+  importWalletWithPrivKey: (...args: any[]) => Promise<WasmResponse>;
   switchWallet: (...args: any[]) => Promise<WasmResponse>;
   changePassword: (...args: any[]) => Promise<WasmResponse>;
   switchAccount: (...args: any[]) => Promise<WasmResponse>;
+  switchChain: (...args: any[]) => Promise<WasmResponse>;
   init: (...args: any[]) => Promise<WasmResponse>;
   getVersion: (...args: any[]) => Promise<WasmResponse<string>>;
   registerCallback: (...args: any[]) => Promise<WasmResponse>;
@@ -30,9 +32,12 @@ interface StpWasmModule {
   unlockUtxo_SatsNet: (...args: any[]) => Promise<WasmResponse>;
   getAllLockedUtxo: (...args: any[]) => Promise<WasmResponse<any[]>>; // Assuming array
   getAllLockedUtxo_SatsNet: (...args: any[]) => Promise<WasmResponse<any[]>>; // Assuming array
+  isUtxoLocked: (...args: any[]) => Promise<WasmResponse<boolean>>;
+  isUtxoLocked_SatsNet: (...args: any[]) => Promise<WasmResponse<boolean>>;
   openChannel: (...args: any[]) => Promise<WasmResponse>;
   release: (...args: any[]) => Promise<WasmResponse>;
   getWallet: (...args: any[]) => Promise<WasmResponse>; // Specify wallet type if known
+  getLocalAssetSummary: (...args: any[]) => Promise<WasmResponse<any>>;
   getTickerInfo: (...args: any[]) => Promise<WasmResponse>; // Specify ticker info type if known
   runesAmtV2ToV3: (...args: any[]) => Promise<WasmResponse<string>>; // Assuming string result
   runesAmtV3ToV2: (...args: any[]) => Promise<WasmResponse<string>>; // Assuming string result
@@ -61,6 +66,7 @@ interface StpWasmModule {
   getAssetAmount_SatsNet: (...args: any[]) => Promise<WasmResponse<{ amount: string; value: string }>>;
   batchSendAssets_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
   batchSendAssets: (...args: any[]) => Promise<WasmResponse<any>>;
+  batchSendAssetsV2_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
   getTxAssetInfoFromPsbt: (...args: any[]) => Promise<WasmResponse<any>>;
   getTxAssetInfoFromPsbt_SatsNet: (...args: any[]) => Promise<WasmResponse<any>>;
   getCommitTxAssetInfo: (...args: any[]) => Promise<WasmResponse<any>>;
@@ -170,6 +176,12 @@ class SatsnetStp {
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('switchAccount', id)
   }
+  async switchChain(
+    chain: string,
+    password: string
+  ): Promise<[Error | undefined, void | undefined]> {
+    return this._handleRequest('switchChain', chain, password)
+  }
 
   async hello(): Promise<[Error | undefined, string | undefined]> { // Refined return type
     return this._handleRequest<string>('hello')
@@ -186,6 +198,16 @@ class SatsnetStp {
     return this._handleRequest(
       'importWallet',
       mnemonic,
+      password.toString()
+    )
+  }
+  async importWalletWithPrivKey(
+    privKey: string,
+    password: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest(
+      'importWalletWithPrivKey',
+      privKey,
       password.toString()
     )
   }
@@ -260,6 +282,12 @@ class SatsnetStp {
       address
     )
   }
+  async isUtxoLocked(address: string, utxo: any): Promise<[Error | undefined, boolean | undefined]> {
+    return this._handleRequest<boolean>('isUtxoLocked', address, utxo)
+  }
+  async isUtxoLocked_SatsNet(address: string, utxo: any): Promise<[Error | undefined, boolean | undefined]> {
+    return this._handleRequest<boolean>('isUtxoLocked_SatsNet', address, utxo)
+  }
 
   async openChannel(
     feeRate: number,
@@ -282,6 +310,9 @@ class SatsnetStp {
 
   async getWallet(): Promise<[Error | undefined, any | undefined]> { // TODO: Specify wallet type
     return this._handleRequest('getWallet')
+  }
+  async getLocalAssetSummary(): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getLocalAssetSummary')
   }
   async getTickerInfo(
     asset: string
@@ -532,6 +563,10 @@ class SatsnetStp {
     assetName: string, amt: string, n: number, feeRate: number): Promise<[Error | undefined, { amount: string; value: string } | undefined]> {
     return this._handleRequest<any>('batchSendAssets', destAddr, assetName, amt, n, feeRate.toString());
   }
+  async batchSendAssetsV2_SatsNet(destAddr: string[],
+    assetName: string, amtList: string[]): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest<any>('batchSendAssetsV2_SatsNet', destAddr, assetName, amtList);
+  }
   async getTxAssetInfoFromPsbt(
     psbtHex: string,
     network: string
@@ -647,17 +682,17 @@ class SatsnetStp {
   ]> {
     return this._handleRequest<{ txId: string }>('invokeContract_SatsNet', url, invoke, feeRate)
   }
-  async invokeContractV2_SatsNet(url: string, invoke: string, assetName: string, amt: string, feeRate: string): Promise<[
+  async invokeContractV2_SatsNet(url: string, invoke: string, assetName: string, amt: string, unitPrice: number, serviceFee: number, feeRate: string): Promise<[
     Error | undefined,
     { txId: string } | undefined
   ]> {
-    return this._handleRequest<{ txId: string }>('invokeContractV2_SatsNet', url, invoke, assetName, amt, feeRate)
+    return this._handleRequest<{ txId: string }>('invokeContractV2_SatsNet', url, invoke, assetName, amt, unitPrice, serviceFee, feeRate)
   }
-  async invokeContractV2(url: string, invoke: string, assetName: string, amt: string, feeRate: string): Promise<[
+  async invokeContractV2(url: string, invoke: string, assetName: string, amt: string, unitPrice: number, serviceFee: number, feeRate: string): Promise<[
     Error | undefined,
     { txId: string } | undefined
   ]> {
-    return this._handleRequest<{ txId: string }>('invokeContractV2', url, invoke, assetName, amt, feeRate)
+    return this._handleRequest<{ txId: string }>('invokeContractV2', url, invoke, assetName, amt, unitPrice, serviceFee, feeRate)
   }
 
   /** 根据地址获取合约状态 */
