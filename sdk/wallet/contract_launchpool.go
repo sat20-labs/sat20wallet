@@ -2077,6 +2077,7 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 			}
 
 			if bUpdate {
+				p.CheckPointBlock = dealInfo.Height
 				p.TotalOutputAssets = p.TotalOutputAssets.Add(totalOutputAssetAmt)
 				p.AssetAmtInPool = p.AssetAmtInPool.Sub(totalOutputAssetAmt)
 				p.SatsValueInPool -= DEFAULT_FEE_SATSNET
@@ -2110,6 +2111,7 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 			}
 
 			if bUpdate {
+				p.CheckPointBlock = dealInfo.Height
 				p.TotalOutputSats += totalOutputSatsValue
 				p.SatsValueInPool -= totalOutputSatsValue
 				p.SatsValueInPool -= DEFAULT_FEE_SATSNET

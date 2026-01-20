@@ -29,13 +29,25 @@ func init() {
 	}
 }
 
+
+var (
+	MIN_POOL_VALUE          int64 = 10000
+
+	// 池子利润分配比例
+	REWARD_SHARE_INVOKER    int = 80 // 包括项目方，资金方
+	REWARD_SHARE_SERVER     int = 10 // 包括两个节点，每个节点10
+
+	REWARD_SHARE_INVOKER_Decimal    = indexer.NewDecimalWithScale(int64(REWARD_SHARE_INVOKER)*1000/100, 3)
+	REWARD_SHARE_SERVER_Decimal     = indexer.NewDecimalWithScale(int64(REWARD_SHARE_SERVER)*1000/100, 3)
+)
+
 /*
-垃圾utxo回收合约
-1. 在主网运行
-2. 转入合约地址的小于1000聪的utxo，自动当作合约调用
-3. 合约作用：
-  a. 积分积累：每个utxo，根据分别给予1-2-3分
-  b. 自动抽奖：根据打包的block的hash，和交易的hash，两者最后6个数字，相加成兑奖号码
+垃圾utxo回收合约：净化主网，降低垃圾utxo数量
+1. 在主网往合约地址转入垃圾utxo，自动合约调用
+2. 合约作用：
+  a. 幸运奖励：根据打包的block的hash，和交易的hash，两者最后6个数字，相加成兑奖号码
+  b. 积分积累：没有足够的运气时，根据聪数量，分别给予（value/330）*10的积分
+  c. 奖金自动分发，分发时，扣除20%，分别给运行合约的两个节点各10%，用于维持节点运行
 */
 
 const MATCH_DIGIT = '6'
@@ -1155,10 +1167,19 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				item.Done = DONE_CLOSED_DIRECTLY
 				continue
 			}
+			if item.InValue < 330 {
+				item.Reason = INVOKE_REASON_UTXO_TOO_SMALL
+				item.Done = DONE_CLOSED_DIRECTLY
+				continue
+			}
 			// TODO 如果池子资金太少，低于水位，所有输入直接回收
+			if p.SatsValueInPool < MIN_POOL_VALUE {
+				item.Reason = INVOKE_REASON_POOL_TOO_SMALL
+				item.Done = DONE_CLOSED_DIRECTLY
+				continue
+			}
 			
-
-			// 分别取最后8个数字做异或，然后按照中奖规则判断是否中奖
+			// 分别取最后n个数字做加法，然后按照中奖规则判断是否中奖
 			result := XorLastNHex(blockHash, txId, p.NumberOfLastDigits)
 			item.Padded = []byte(result)
 			// TODO 如果输入的数量是n倍，如果中奖就是n倍
@@ -1202,7 +1223,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				}
 			} else {
 				// 仅获得points奖励
-				points = 10
+				points = 10 * (item.InValue/330)
 				item.Done = DONE_CLOSED_DIRECTLY
 
 				invoker := p.loadTraderInfo(item.Address)
@@ -1270,6 +1291,7 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 	p.TotalRewardValue += dealInfo.TotalValue
 	p.TotalRewardCount++
 	p.TotalFeeValue += dealInfo.Fee
+	p.SatsValueInPool -= dealInfo.Fee
 
 	url := p.URL()
 	height := dealInfo.Height
@@ -1289,33 +1311,48 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 				}
 				item.Done = DONE_DEALT
 				item.OutTxId = txId
+				item.RemainingAmt = nil
+				item.RemainingValue = 0
+				item.ToL1 = true
 				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 				deleted = append(deleted, item.Id)
 				delete(p.history, item.InUtxo) // TODO 如果主网的调用，不要从history中删除，至少保留6个区块后再删除
 			}
-
 			for _, id := range deleted {
 				delete(rewardMap, id)
 			}
 			if len(rewardMap) == 0 {
 				delete(p.rewardMap, address)
 			}
-
-			trader := p.loadTraderInfo(address)
-			if trader != nil {
-				trader.TotalRewardAmt = trader.TotalRewardAmt.Add(info.AssetAmt)
-				trader.TotalRewardValue += info.Value
-				saveContractInvokerStatus(p.stp.GetDB(), url, trader)
-			}
+		}
+		trader := p.loadTraderInfo(address)
+		if trader != nil {
+			trader.TotalRewardAmt = trader.TotalRewardAmt.Add(info.AssetAmt)
+			trader.TotalRewardValue += info.Value
+			saveContractInvokerStatus(p.stp.GetDB(), url, trader)
 		}
 	}
 
 	p.CheckPoint = dealInfo.InvokeCount
 	p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
-	p.CheckPointBlock = p.CurrBlock
-	p.CheckPointBlockL1 = p.CurrBlockL1
+	p.CheckPointBlockL1 = dealInfo.Height
 
 	p.refreshTime = 0
+}
+
+func addSendInfo(sendInfoMap map[string]*SendAssetInfo, address string, 
+	assetName *indexer.AssetName) *SendAssetInfo {
+	info, ok := sendInfoMap[address]
+	if !ok {
+		info = &SendAssetInfo{
+			Address:   address,
+			Value:     0,
+			AssetName: assetName,
+			AssetAmt:  nil,
+		}
+		sendInfoMap[address] = info
+	}
+	return info
 }
 
 func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
@@ -1326,6 +1363,9 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 	isRune := false
 	assetName := p.GetAssetName()
 	isRune = assetName.Protocol == indexer.PROTOCOL_NAME_RUNES
+
+	localPeerAddr := p.GetLocalAddress()
+	remotePeerAddr := p.GetRemoteAddress()
 
 	maxHeight := 0
 	var totalValue int64
@@ -1342,23 +1382,27 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 			}
 			maxHeight = max(maxHeight, h)
 
-			info, ok := sendInfoMap[item.Address]
-			if !ok {
-				info = &SendAssetInfo{
-					Address:   item.Address,
-					Value:     0,
-					AssetName: assetName,
-					AssetAmt:  nil,
-				}
-				sendInfoMap[item.Address] = info
-			}
+			amt1 := item.OutAmt.Mul(REWARD_SHARE_INVOKER_Decimal)
+			value1 := item.OutValue * int64(REWARD_SHARE_INVOKER) / 100
+			amt2 := item.OutAmt.Mul(REWARD_SHARE_SERVER_Decimal)
+			value2 := item.OutValue * int64(REWARD_SHARE_SERVER) / 100
 
-			info.AssetAmt = info.AssetAmt.Add(item.OutAmt)
-			info.Value += item.OutValue
 			totalAmt = totalAmt.Add(item.OutAmt)
 			totalValue += item.OutValue
 
-			if isRune && len(sendInfoMap) == 8 {
+			info := addSendInfo(sendInfoMap, item.Address, assetName)
+			info.AssetAmt = info.AssetAmt.Add(amt1)
+			info.Value += value1
+
+			info = addSendInfo(sendInfoMap, localPeerAddr, assetName)
+			info.AssetAmt = info.AssetAmt.Add(amt2)
+			info.Value += value2
+
+			info = addSendInfo(sendInfoMap, remotePeerAddr, assetName)
+			info.AssetAmt = info.AssetAmt.Add(amt2)
+			info.Value += value2
+			
+			if isRune && len(sendInfoMap) >= 8 {
 				break // 其他后面再处理
 			}
 		}

@@ -147,6 +147,8 @@ const (
 	INVOKE_REASON_UTXO_NOT_FOUND_REORG string = "input utxo not found after reorg"
 	INVOKE_REASON_NO_PROFIT            string = "no profit"
 	INVOKE_REASON_UTXO_FORMAT          string = "input utxo incorrect format"
+	INVOKE_REASON_UTXO_TOO_SMALL       string = "input utxo value too small"
+	INVOKE_REASON_POOL_TOO_SMALL       string = "pool value too small"
 )
 
 const (
@@ -283,8 +285,8 @@ type ContractRuntime interface {
 	GetRemotePkScript() []byte
 	GetLocalAddress() string
 	GetRemoteAddress() string
-	GetSvrAddress() string // 主导合约的节点地址
-	Address() string       // 合约钱包地址
+	GetServerAddress() string // 主导合约的节点地址
+	Address() string          // 合约钱包地址
 	GetCoreNodePubKey() *secp256k1.PublicKey
 	GetLocalPubKey() *secp256k1.PublicKey
 	GetRemotePubKey() *secp256k1.PublicKey
@@ -335,7 +337,7 @@ type ContractRuntime interface {
 	HandleReorg_SatsNet(int, int) error
 	HandleReorg(int, int) error
 	PrepareForReInvoke(height int, bSatsNet bool) int // 重新跑区块，需要重新加载历史数据，只为了处理某些漏掉的invoke
-	DisableItem(InvokeHistoryItem) // 因为reorg导致某个item无效
+	DisableItem(InvokeHistoryItem)                    // 因为reorg导致某个item无效
 
 	// 作为通道合约，本地节点不能发起的动作，需要由peer发起，在这里检查和设置结果，并推动合约内部状态变迁
 	AllowPeerAction(string, any) (any, error)
@@ -893,12 +895,12 @@ type ContractRuntimeBase struct {
 	assetMerkleRootMap map[int64][]byte // invokeCount -> AssetMerkleRoot 临时缓存
 	lastInvokeCount    int64            // 上个区块的InvokeCount
 
-	isInitiator  bool
-	localPubKey  *secp256k1.PublicKey
-	remotePubKey *secp256k1.PublicKey
+	isInitiator    bool
+	localPubKey    *secp256k1.PublicKey
+	remotePubKey   *secp256k1.PublicKey
 	coreNodePubKey *secp256k1.PublicKey
-	redeemScript []byte
-	pkScript     []byte
+	redeemScript   []byte
+	pkScript       []byte
 
 	// rpc 缓存
 	refreshTime     int64
@@ -969,7 +971,6 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 		return err
 	}
 	p.localWallet = p.stp.GetWallet().CloneByPubKey(p.LocalPubKey)
-	
 
 	err = p.contract.Decode(content)
 	if err != nil {
@@ -1097,12 +1098,8 @@ func (p *ContractRuntimeBase) GetCodeNodeAddress() string {
 	return PublicKeyToP2TRAddress(p.coreNodePubKey)
 }
 
-func (p *ContractRuntimeBase) GetSvrAddress() string {
-	if p.isInitiator {
-		return p.GetLocalAddress()
-	} else {
-		return p.GetRemoteAddress()
-	}
+func (p *ContractRuntimeBase) GetServerAddress() string {
+	return p.GetCodeNodeAddress()
 }
 
 func (p *ContractRuntimeBase) GetFoundationAddress() string {
@@ -2224,7 +2221,6 @@ func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) err
 	return nil
 }
 
-// 
 func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()

@@ -1187,7 +1187,7 @@ func (p *AmmContractRuntime) GetLiquidityData(start, limit int) string {
 			})
 		}
 		if p.TotalFeeLptAmt.Sign() != 0 {
-			serverAddress := p.GetSvrAddress()
+			serverAddress := p.GetServerAddress()
 			info := &LiqProviderInfo{
 				Address: serverAddress,
 				LptAmt:  p.TotalFeeLptAmt.Clone(),
@@ -1380,7 +1380,7 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 	lptPerSat := indexer.DecimalDiv(oldTotalLptAmt.NewPrecision(MAX_ASSET_DIVISIBILITY), indexer.NewDecimal(oldTotalPoolValue, MAX_ASSET_DIVISIBILITY))
 
 	url := p.URL()
-	svrTrader := p.loadSvrTraderInfo()
+	svrTrader := p.loadServerTraderInfo()
 	foundation := p.loadFoundationTraderInfo()
 	// 将要取回的LPToken，转换为对应的资产，并调整池子容量
 	var totalRemovedLptAmt *Decimal
@@ -1626,7 +1626,6 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 			}
 		}
 	}
-	
 
 	if !PROFIT_REINVESTING {
 		p.TotalFeeLptAmt = nil
@@ -1958,8 +1957,8 @@ func (p *AmmContractRuntime) settle(height int) error {
 	if p.Status == CONTRACT_STATUS_READY {
 		// 如果有单边加池子，先处理单边加池子，而且必须按照顺序
 		if len(p.addLiquidityMap) != 0 ||
-		len(p.removeLiquidityMap) != 0 || 
-		len(p.profitMap) != 0 {
+			len(p.removeLiquidityMap) != 0 ||
+			len(p.profitMap) != 0 {
 			// 确保基数相同（本轮交易后的池子参数）
 			oldAmtInPool := p.AssetAmtInPool.Clone()
 			oldValueInPool := p.SatsValueInPool

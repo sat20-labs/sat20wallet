@@ -2310,8 +2310,8 @@ func (p *SwapContractRuntime) loadTraderInfo(address string) *TraderStatus {
 	return status
 }
 
-func (p *SwapContractRuntime) loadSvrTraderInfo() *TraderStatus {
-	return p.loadTraderInfo(p.GetSvrAddress())
+func (p *SwapContractRuntime) loadServerTraderInfo() *TraderStatus {
+	return p.loadTraderInfo(p.GetServerAddress())
 }
 
 func (p *SwapContractRuntime) loadFoundationTraderInfo() *TraderStatus {
@@ -3067,6 +3067,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_swap(dealInfo *DealInfo) {
 
 	p.TotalDealTx++
 	p.TotalDealTxFee += dealInfo.Fee
+	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
@@ -3190,8 +3191,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_swap(dealInfo *DealInfo) {
 
 	p.CheckPoint = dealInfo.InvokeCount
 	p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
-	p.CheckPointBlock = p.CurrBlock
-	p.CheckPointBlockL1 = p.CurrBlockL1
+	p.CheckPointBlock = dealInfo.Height
+	//p.CheckPointBlockL1 = p.CurrBlockL1
 
 	p.refreshTime = 0
 
@@ -3505,6 +3506,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_refund(dealInfo *DealInfo) {
 	p.TotalRefundSats += dealInfo.TotalValue
 	p.TotalRefundTx++
 	p.TotalRefundTxFee += dealInfo.Fee
+	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
@@ -3582,8 +3584,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_refund(dealInfo *DealInfo) {
 
 	p.CheckPoint = dealInfo.InvokeCount
 	p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
-	p.CheckPointBlock = p.CurrBlock
-	p.CheckPointBlockL1 = p.CurrBlockL1
+	p.CheckPointBlock = dealInfo.Height
+	//p.CheckPointBlockL1 = p.CurrBlockL1
 
 	p.refreshTime = 0
 }
@@ -3723,6 +3725,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 	p.TotalDepositSats += dealInfo.TotalValue
 	p.TotalDepositTx++
 	p.TotalDepositTxFee += dealInfo.Fee
+	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
@@ -3773,8 +3776,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 
 	p.CheckPoint = dealInfo.InvokeCount
 	p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
-	p.CheckPointBlock = p.CurrBlock
-	p.CheckPointBlockL1 = p.CurrBlockL1
+	//p.CheckPointBlock = dealInfo.Height
+	p.CheckPointBlockL1 = dealInfo.Height
 
 	p.refreshTime = 0
 }
@@ -4001,6 +4004,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 	p.TotalWithdrawSats += dealInfo.TotalValue
 	p.TotalWithdrawTx++
 	p.TotalWithdrawTxFee += dealInfo.Fee
+	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
@@ -4061,8 +4065,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 
 	p.CheckPoint = dealInfo.InvokeCount
 	p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
-	p.CheckPointBlock = p.CurrBlock
-	p.CheckPointBlockL1 = p.CurrBlockL1
+	p.CheckPointBlock = dealInfo.Height
+	//p.CheckPointBlockL1 = dealInfo.Height
 
 	p.refreshTime = 0
 }
@@ -4136,7 +4140,7 @@ func (p *SwapContractRuntime) genRemoveLiquidityInfo(height int) *DealInfo {
 		addressmap[address] = true
 	}
 	if !PROFIT_REINVESTING && len(addressmap) > 0 {
-		addressmap[p.GetSvrAddress()] = true
+		addressmap[p.GetServerAddress()] = true
 		addressmap[p.GetFoundationAddress()] = true
 	}
 
@@ -4224,6 +4228,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 	p.TotalRetrieveSats += dealInfo.TotalValue
 	p.TotalRetrieveTx++
 	p.TotalRetrieveTxFee += dealInfo.Fee
+	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 	Log.Debugf("%s total retrieve %s %d", p.URL(), p.TotalRetrieveAssets.String(), p.TotalRetrieveSats)
@@ -4238,7 +4243,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 		}
 		items, ok := p.removeLiquidityMap[addr]
 		if !ok {
-			if addr != p.GetSvrAddress() && addr != p.GetFoundationAddress() {
+			if addr != p.GetServerAddress() && addr != p.GetFoundationAddress() {
 				Log.Panicf("updateWithDealInfo_removeLiquidity can't find %s for txId %s", addr, dealInfo.TxId)
 			}
 			// 服务节点收取利润
@@ -4287,8 +4292,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 
 	p.CheckPoint = dealInfo.InvokeCount
 	p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
-	p.CheckPointBlock = p.CurrBlock
-	p.CheckPointBlockL1 = p.CurrBlockL1
+	p.CheckPointBlock = dealInfo.Height
+	//p.CheckPointBlockL1 = p.CurrBlockL1
 
 	p.refreshTime = 0
 }
@@ -4344,6 +4349,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 	p.TotalProfitSats += dealInfo.TotalValue
 	p.TotalProfitTx++
 	p.TotalProfitTxFee += dealInfo.Fee
+	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
@@ -4399,8 +4405,8 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 
 	p.CheckPoint = dealInfo.InvokeCount
 	p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
-	p.CheckPointBlock = p.CurrBlock
-	p.CheckPointBlockL1 = p.CurrBlockL1
+	p.CheckPointBlock = dealInfo.Height
+	//p.CheckPointBlockL1 = p.CurrBlockL1
 
 	p.refreshTime = 0
 }
