@@ -3067,7 +3067,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_swap(dealInfo *DealInfo) {
 
 	p.TotalDealTx++
 	p.TotalDealTxFee += dealInfo.Fee
-	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
@@ -3506,7 +3505,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_refund(dealInfo *DealInfo) {
 	p.TotalRefundSats += dealInfo.TotalValue
 	p.TotalRefundTx++
 	p.TotalRefundTxFee += dealInfo.Fee
-	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
@@ -3725,7 +3723,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 	p.TotalDepositSats += dealInfo.TotalValue
 	p.TotalDepositTx++
 	p.TotalDepositTxFee += dealInfo.Fee
-	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
@@ -4004,7 +4001,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 	p.TotalWithdrawSats += dealInfo.TotalValue
 	p.TotalWithdrawTx++
 	p.TotalWithdrawTxFee += dealInfo.Fee
-	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
@@ -4228,7 +4224,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 	p.TotalRetrieveSats += dealInfo.TotalValue
 	p.TotalRetrieveTx++
 	p.TotalRetrieveTxFee += dealInfo.Fee
-	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 	Log.Debugf("%s total retrieve %s %d", p.URL(), p.TotalRetrieveAssets.String(), p.TotalRetrieveSats)
@@ -4349,7 +4344,6 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 	p.TotalProfitSats += dealInfo.TotalValue
 	p.TotalProfitTx++
 	p.TotalProfitTxFee += dealInfo.Fee
-	p.SatsValueInPool -= dealInfo.Fee
 	p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
