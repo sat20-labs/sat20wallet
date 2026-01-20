@@ -951,7 +951,7 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 	p.remotePubKey = remotePK
 	p.RemotePubKey = p.remotePubKey.SerializeCompressed()
 	p.CoreNodePubKey = resv.GetCoreNodePubKey()
-	if len(p.CoreNodePubKey) == 0 {
+	if len(p.CoreNodePubKey) == 0 { // 兼容老版本
 		if p.isInitiator {
 			p.CoreNodePubKey = p.LocalPubKey
 		} else {
@@ -1020,7 +1020,7 @@ func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv ContractDeplo
 	if err != nil {
 		return err
 	}
-	if len(p.CoreNodePubKey) == 0 {
+	if len(p.CoreNodePubKey) == 0 { // 兼容老版本
 		if p.isInitiator {
 			p.CoreNodePubKey = p.LocalPubKey
 		} else {

@@ -1884,7 +1884,7 @@ func (p *AmmContractRuntime) removeBaseLiquidity(oldAmtInPool *Decimal, oldValue
 		oldTotalPoolValue := 2 * oldValueInPool
 		lptPerSat := indexer.DecimalDiv(oldTotalLptAmt.NewPrecision(MAX_ASSET_DIVISIBILITY), indexer.NewDecimal(oldTotalPoolValue, MAX_ASSET_DIVISIBILITY))
 		totalProfitSats := lptPerSat.Mul(profitLpt)
-		if totalProfitSats.Int64() > 10 { // 最小可提取利润
+		if totalProfitSats.Int64() > 100 { // 最小可提取利润
 			valid = true
 		}
 	}
