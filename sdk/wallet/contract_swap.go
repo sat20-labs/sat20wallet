@@ -522,7 +522,7 @@ func (p *SwapContractRuntime) init() {
 	p.stubFeeMap = make(map[int64]int64)
 }
 
-func (p *SwapContractRuntime) InitFromJson(content []byte) error {
+func (p *SwapContractRuntime) InitFromJson(content []byte, stp ContractManager) error {
 	err := json.Unmarshal(content, p)
 	if err != nil {
 		return err
@@ -532,9 +532,8 @@ func (p *SwapContractRuntime) InitFromJson(content []byte) error {
 	return nil
 }
 
-func (p *SwapContractRuntime) InitFromDB(resv ContractDeployResvIF) error {
-
-	err := p.ContractRuntimeBase.InitFromDB(resv)
+func (p *SwapContractRuntime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
+	err := p.ContractRuntimeBase.InitFromDB(stp, resv)
 	if err != nil {
 		Log.Errorf("SwapContractRuntime.InitFromDB failed, %v", err)
 		return err

@@ -433,7 +433,7 @@ func (p *RecycleContractRunTime) init() {
 	p.rewardMap = make(map[string]map[int64]*InvokeItem)
 }
 
-func (p *RecycleContractRunTime) InitFromJson(content []byte) error {
+func (p *RecycleContractRunTime) InitFromJson(content []byte, stp ContractManager,) error {
 	err := json.Unmarshal(content, p)
 	if err != nil {
 		return err
@@ -443,9 +443,9 @@ func (p *RecycleContractRunTime) InitFromJson(content []byte) error {
 	return nil
 }
 
-func (p *RecycleContractRunTime) InitFromDB(resv ContractDeployResvIF) error {
+func (p *RecycleContractRunTime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
 
-	err := p.ContractRuntimeBase.InitFromDB(resv)
+	err := p.ContractRuntimeBase.InitFromDB(stp, resv)
 	if err != nil {
 		Log.Errorf("SwapContractRuntime.InitFromDB failed, %v", err)
 		return err

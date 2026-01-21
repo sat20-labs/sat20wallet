@@ -520,9 +520,9 @@ func (p *LaunchPoolContractRunTime) init() {
 	p.invalidMintMap = make(map[string]*MinterStatus)
 }
 
-func (p *LaunchPoolContractRunTime) InitFromContent(content []byte,
+func (p *LaunchPoolContractRunTime) InitFromContent(content []byte, stp ContractManager,
 	resv ContractDeployResvIF) error {
-	err := p.ContractRuntimeBase.InitFromContent(content, resv)
+	err := p.ContractRuntimeBase.InitFromContent(content, stp, resv)
 	if err != nil {
 		Log.Errorf("LaunchPoolContractRunTime.InitFromContent failed, %v", err)
 		return err
@@ -532,7 +532,7 @@ func (p *LaunchPoolContractRunTime) InitFromContent(content []byte,
 	return nil
 }
 
-func (p *LaunchPoolContractRunTime) InitFromJson(content []byte) error {
+func (p *LaunchPoolContractRunTime) InitFromJson(content []byte, stp ContractManager,) error {
 	err := json.Unmarshal(content, p)
 	if err != nil {
 		return err
@@ -542,8 +542,8 @@ func (p *LaunchPoolContractRunTime) InitFromJson(content []byte) error {
 	return nil
 }
 
-func (p *LaunchPoolContractRunTime) InitFromDB(resv ContractDeployResvIF) error {
-	err := p.ContractRuntimeBase.InitFromDB(resv)
+func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
+	err := p.ContractRuntimeBase.InitFromDB(stp, resv)
 	if err != nil {
 		Log.Errorf("LaunchPoolContractRunTime.InitFromDB failed, %v", err)
 		return err

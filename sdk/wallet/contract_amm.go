@@ -594,8 +594,8 @@ func NewAmmContractRuntime(stp ContractManager) *AmmContractRuntime {
 	return p
 }
 
-func (p *AmmContractRuntime) InitFromContent(content []byte, resv ContractDeployResvIF) error {
-	err := p.SwapContractRuntime.InitFromContent(content, resv)
+func (p *AmmContractRuntime) InitFromContent(content []byte, stp ContractManager, resv ContractDeployResvIF) error {
+	err := p.SwapContractRuntime.InitFromContent(content, stp, resv)
 	if err != nil {
 		return err
 	}
@@ -629,7 +629,8 @@ func (p *AmmContractRuntime) InitFromContent(content []byte, resv ContractDeploy
 	return nil
 }
 
-func (p *AmmContractRuntime) InitFromJson(content []byte) error {
+func (p *AmmContractRuntime) InitFromJson(content []byte, stp ContractManager) error {
+	p.init()
 	err := json.Unmarshal(content, p)
 	if err != nil {
 		return err
@@ -642,8 +643,8 @@ func (p *AmmContractRuntime) InitFromJson(content []byte) error {
 	return nil
 }
 
-func (p *AmmContractRuntime) InitFromDB(resv ContractDeployResvIF) error {
-	err := p.SwapContractRuntime.InitFromDB(resv)
+func (p *AmmContractRuntime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
+	err := p.SwapContractRuntime.InitFromDB(stp, resv)
 	if err != nil {
 		return err
 	}

@@ -272,9 +272,9 @@ type Contract interface {
 type ContractRuntime interface {
 	Contract
 
-	InitFromDB(ContractDeployResvIF) error              // 初始化哪些不以大写开头的内部变量
-	InitFromContent([]byte, ContractDeployResvIF) error // 根据合约模版参数初始化合约，非json
-	InitFromJson([]byte) error                          // 一个从json数据构建的非运行对象
+	InitFromDB(ContractManager, ContractDeployResvIF) error              // 初始化哪些不以大写开头的内部变量
+	InitFromContent([]byte, ContractManager, ContractDeployResvIF) error // 根据合约模版参数初始化合约，非json
+	InitFromJson([]byte, ContractManager) error                          // 一个从json数据构建的非运行对象
 	GetRuntimeBase() *ContractRuntimeBase
 
 	GetStatus() int
@@ -923,16 +923,21 @@ type ContractRuntimeBase struct {
 }
 
 func NewContractRuntimeBase(stp ContractManager) *ContractRuntimeBase {
-	return &ContractRuntimeBase{
+	n := &ContractRuntimeBase{
 		EnableBlock:        INIT_ENABLE_BLOCK,
 		EnableBlockL1:      INIT_ENABLE_BLOCK,
 		DeployTime:         time.Now().Unix(),
-		stp:                stp,
-		db:                 stp.GetDB(),
-		history:            make(map[string]*InvokeItem),
-		assetMerkleRootMap: make(map[int64][]byte),
-		responseHistory:    make(map[int][]*InvokeItem),
 	}
+	n.init(stp)
+	return n
+}
+
+func (p *ContractRuntimeBase) init(stp ContractManager) {
+	p.stp = stp
+	p.db = stp.GetDB()
+	p.history = make(map[string]*InvokeItem)
+	p.assetMerkleRootMap = make(map[int64][]byte)
+	p.responseHistory = make(map[int][]*InvokeItem)
 }
 
 func (p *ContractRuntimeBase) ToNewVersion() *ContractRuntimeBase {
@@ -946,8 +951,9 @@ func (p *ContractRuntimeBase) GetAssetNameV2() *AssetName {
 	}
 }
 
-func (p *ContractRuntimeBase) InitFromContent(content []byte, resv ContractDeployResvIF) error {
+func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManager, resv ContractDeployResvIF) error {
 	// 这里resv还没有获得正确的ResvId，需要后面补上
+	p.init(stp)
 	p.resv = resv
 	p.ChannelAddr = resv.GetChannelAddr()
 	p.Deployer = resv.GetDeployer()
@@ -1019,9 +1025,9 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, resv ContractDeplo
 	return nil
 }
 
-func (p *ContractRuntimeBase) InitFromDB(resv ContractDeployResvIF) error {
+func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
+	p.init(stp)
 	p.resv = resv
-
 	p.isInitiator = resv.LocalIsInitiator()
 	var err error
 	p.localPubKey, err = utils.BytesToPublicKey(p.LocalPubKey)
