@@ -1033,8 +1033,8 @@ func loadAllLiquidityDataFromDB(db db.KVDB, channelAddr string) map[int]*Liquidi
 	return result
 }
 
-func GetContractInvokeHistoryKey(url, utxo string) string {
-	return GetDBKeyPrefix() + DB_KEY_TC_INVOKE_HISTORY + url + "-" + utxo
+func GetContractInvokeHistoryKey(url, key string) string {
+	return GetDBKeyPrefix() + DB_KEY_TC_INVOKE_HISTORY + url + "-" + key
 }
 
 func ParseContractInvokeHistoryKey(key string) (string, string, error) {
@@ -1185,14 +1185,14 @@ func loadContractInvokeHistoryFromHeight(db db.KVDB, url string, excludingDone b
 	result := make(map[string]InvokeHistoryItem, 0)
 	upgradedItems := make([]InvokeHistoryItem, 0)
 	db.BatchRead(prefix, false, func(k, v []byte) error {
-		_, inkey, err := ParseContractInvokeHistoryKey(string(k))
-		if err != nil {
-			Log.Errorf("ParseContractInvokeHistoryKey failed. %v", err)
-			return nil
-		}
+		// _, inkey, err := ParseContractInvokeHistoryKey(string(k))
+		// if err != nil {
+		// 	Log.Errorf("ParseContractInvokeHistoryKey failed. %v", err)
+		// 	return nil
+		// }
 
 		item := NewInvokeHistoryItem(ty)
-		err = DecodeFromBytes(v, item)
+		err := DecodeFromBytes(v, item)
 		if err != nil {
 			// try old version
 			item = NewInvokeHistoryItem_old(ty)
@@ -1215,7 +1215,7 @@ func loadContractInvokeHistoryFromHeight(db db.KVDB, url string, excludingDone b
 			return nil
 		}
 
-		result[inkey] = item
+		result[item.GetInvokeUtxo()] = item
 		return nil
 	})
 

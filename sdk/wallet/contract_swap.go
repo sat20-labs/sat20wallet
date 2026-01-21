@@ -507,7 +507,6 @@ func NewSwapContractRuntime(stp ContractManager) *SwapContractRuntime {
 func (p *SwapContractRuntime) init() {
 	p.contract = p
 	p.runtime = p
-	p.history = make(map[string]*SwapHistoryItem)
 	p.buyPool = make([]*SwapHistoryItem, 0)
 	p.sellPool = make([]*SwapHistoryItem, 0)
 	p.traderInfoMap = make(map[string]*TraderStatus)
@@ -521,11 +520,9 @@ func (p *SwapContractRuntime) init() {
 	p.unstakeMap = make(map[string]map[int64]*SwapHistoryItem)
 	p.profitMap = make(map[string]map[int64]*SwapHistoryItem)
 	p.stubFeeMap = make(map[int64]int64)
-	p.responseHistory = make(map[int][]*SwapHistoryItem)
-
 }
 
-func (p *SwapContractRuntime) InitFromJson(content []byte, stp ContractManager) error {
+func (p *SwapContractRuntime) InitFromJson(content []byte) error {
 	err := json.Unmarshal(content, p)
 	if err != nil {
 		return err
@@ -535,9 +532,9 @@ func (p *SwapContractRuntime) InitFromJson(content []byte, stp ContractManager) 
 	return nil
 }
 
-func (p *SwapContractRuntime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
+func (p *SwapContractRuntime) InitFromDB(resv ContractDeployResvIF) error {
 
-	err := p.ContractRuntimeBase.InitFromDB(stp, resv)
+	err := p.ContractRuntimeBase.InitFromDB(resv)
 	if err != nil {
 		Log.Errorf("SwapContractRuntime.InitFromDB failed, %v", err)
 		return err
@@ -546,7 +543,7 @@ func (p *SwapContractRuntime) InitFromDB(stp ContractManager, resv ContractDeplo
 
 	p.rebuildTraderHistory()
 
-	history := LoadContractInvokeHistory(stp.GetDB(), p.URL(), true, false)
+	history := LoadContractInvokeHistory(p.db, p.URL(), true, false)
 	for _, v := range history {
 		item, ok := v.(*SwapHistoryItem)
 		if !ok {
@@ -3751,7 +3748,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 			item.Done = DONE_DEALT
 
 			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
-			delete(p.history, item.InUtxo)
+			//delete(p.history, item.InUtxo) 主网调用，暂时不删除，可能reorg
 
 			trader := p.traderInfoMap[item.Address]
 			if trader != nil {
@@ -5098,7 +5095,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 	}, nil
 }
 
-func (p *SwapContractRuntime) HandleInvokeResult(tx *swire.MsgTx, vout int, result string, more string) {
+func (p *SwapContractRuntime) HandleInvokeResult_SatsNet(tx *swire.MsgTx, vout int, result string, more string) {
 	if result == INVOKE_RESULT_DEPOSIT {
 		// height, err := strconv.Atoi(more)
 		// if err != nil {

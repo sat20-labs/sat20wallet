@@ -401,7 +401,6 @@ type RecycleContractRunTimeInDB struct {
 type RecycleContractRunTime struct {
 	RecycleContractRunTimeInDB
 
-	history    map[string]*InvokeItem
 	invokerMap map[string]*RecycleInvokerStatus // key: address
 	recycleMap map[string]map[int64]*InvokeItem // 还在处理中的调用, address -> invoke item list,
 	rewardMap  map[string]map[int64]*InvokeItem // 获奖的item
@@ -429,14 +428,12 @@ func NewRecycleContractRunTime(stp ContractManager) *RecycleContractRunTime {
 func (p *RecycleContractRunTime) init() {
 	p.contract = p
 	p.runtime = p
-	p.history = make(map[string]*InvokeItem)
 	p.invokerMap = make(map[string]*RecycleInvokerStatus)
 	p.recycleMap = make(map[string]map[int64]*InvokeItem)
 	p.rewardMap = make(map[string]map[int64]*InvokeItem)
-	p.responseHistory = make(map[int][]*InvokeItem)
 }
 
-func (p *RecycleContractRunTime) InitFromJson(content []byte, stp ContractManager) error {
+func (p *RecycleContractRunTime) InitFromJson(content []byte) error {
 	err := json.Unmarshal(content, p)
 	if err != nil {
 		return err
@@ -446,16 +443,16 @@ func (p *RecycleContractRunTime) InitFromJson(content []byte, stp ContractManage
 	return nil
 }
 
-func (p *RecycleContractRunTime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
+func (p *RecycleContractRunTime) InitFromDB(resv ContractDeployResvIF) error {
 
-	err := p.ContractRuntimeBase.InitFromDB(stp, resv)
+	err := p.ContractRuntimeBase.InitFromDB(resv)
 	if err != nil {
 		Log.Errorf("SwapContractRuntime.InitFromDB failed, %v", err)
 		return err
 	}
 	p.init()
 
-	history := LoadContractInvokeHistory(stp.GetDB(), p.URL(), true, false)
+	history := LoadContractInvokeHistory(p.db, p.URL(), true, false)
 	for _, v := range history {
 		item, ok := v.(*SwapHistoryItem)
 		if !ok {
@@ -470,6 +467,11 @@ func (p *RecycleContractRunTime) InitFromDB(stp ContractManager, resv ContractDe
 	return nil
 }
 
+func (p *RecycleContractRunTime) IsActive() bool {
+	return p.ContractRuntimeBase.IsActive() &&
+		p.CurrBlockL1 >= p.EnableBlockL1
+}
+
 // 只计算在 calcAssetMerkleRoot 之前已经确定的数据，其他在广播TX之后才修改的数据暂时不要管，不然容易导致数据不一致
 func CalcRecycleContractRunningDataMerkleRoot(r *RecycleContractRunningData) []byte {
 	var buf []byte
@@ -478,7 +480,7 @@ func CalcRecycleContractRunningDataMerkleRoot(r *RecycleContractRunningData) []b
 		r.TotalInputAssets.String(), r.TotalInputSats)
 	buf = append(buf, buf2...)
 
-	buf2 = fmt.Sprintf("%d %s %d ", r.TotalRewardCount, r.TotalRewardAmt.String(), r.TotalRewardValue)
+	buf2 = fmt.Sprintf("%d %s %d %d", r.TotalRewardCount, r.TotalRewardAmt.String(), r.TotalRewardValue, r.TotalFeeValue)
 	buf = append(buf, buf2...)
 
 	Log.Debugf("RecycleContractRunningData: %s", string(buf))
@@ -1292,6 +1294,7 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 	p.TotalRewardCount++
 	p.TotalFeeValue += dealInfo.Fee
 	p.SatsValueInPool -= dealInfo.Fee
+	Log.Debugf("reward count %d, fee %d, txId %s", p.TotalRewardCount, dealInfo.Fee, dealInfo.TxId)
 
 	url := p.URL()
 	height := dealInfo.Height
@@ -1316,7 +1319,7 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 				item.ToL1 = true
 				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 				deleted = append(deleted, item.Id)
-				delete(p.history, item.InUtxo) // TODO 如果主网的调用，不要从history中删除，至少保留6个区块后再删除
+				//delete(p.history, item.InUtxo) // TODO 如果主网的调用，不要从history中删除，至少保留6个区块后再删除
 			}
 			for _, id := range deleted {
 				delete(rewardMap, id)

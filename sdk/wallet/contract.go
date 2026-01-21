@@ -272,9 +272,9 @@ type Contract interface {
 type ContractRuntime interface {
 	Contract
 
-	InitFromDB(ContractManager, ContractDeployResvIF) error              // 初始化哪些不以大写开头的内部变量
-	InitFromContent([]byte, ContractManager, ContractDeployResvIF) error // 根据合约模版参数初始化合约，非json
-	InitFromJson([]byte, ContractManager) error                          // 一个从json数据构建的非运行对象
+	InitFromDB(ContractDeployResvIF) error              // 初始化哪些不以大写开头的内部变量
+	InitFromContent([]byte, ContractDeployResvIF) error // 根据合约模版参数初始化合约，非json
+	InitFromJson([]byte) error                          // 一个从json数据构建的非运行对象
 	GetRuntimeBase() *ContractRuntimeBase
 
 	GetStatus() int
@@ -336,13 +336,16 @@ type ContractRuntime interface {
 	InvokeCompleted(*InvokeDataInBlock)
 	HandleReorg_SatsNet(int, int) error
 	HandleReorg(int, int) error
-	PrepareForReInvoke(height int, bSatsNet bool) int // 重新跑区块，需要重新加载历史数据，只为了处理某些漏掉的invoke
 	DisableItem(InvokeHistoryItem)                    // 因为reorg导致某个item无效
+	PrepareForReInvoke(height int, bSatsNet bool) int // 重新跑区块，需要重新加载历史数据，只为了处理某些漏掉的invoke
+	GetInvokeHistoryWithBlock(height int) map[string]InvokeHistoryItem
+	GetInvokeHistoryWithBlock_SatsNet(height int) map[string]InvokeHistoryItem
 
 	// 作为通道合约，本地节点不能发起的动作，需要由peer发起，在这里检查和设置结果，并推动合约内部状态变迁
 	AllowPeerAction(string, any) (any, error)
 	SetPeerActionResult(string, any)
-	HandleInvokeResult(*swire.MsgTx, int, string, string) // 处理感兴趣的调用结果，只处理聪网的Tx
+	HandleInvokeResult_SatsNet(*swire.MsgTx, int, string, string) // 处理感兴趣的调用结果，只处理聪网的Tx
+	HandleInvokeResult(*wire.MsgTx, int, string, string) // 处理感兴趣的调用结果
 
 	checkSelf() error
 	CalcRuntimeMerkleRoot() []byte
@@ -353,6 +356,7 @@ type InvokeHistoryItem interface {
 	GetVersion() int
 	GetId() int64
 	GetKey() string
+	GetInvokeUtxo() string
 	HasDone() bool
 	GetHeight() int
 	FromSatsNet() bool
@@ -377,6 +381,10 @@ func (p *InvokeHistoryItemBase) GetId() int64 {
 
 func (p *InvokeHistoryItemBase) GetKey() string {
 	return GetKeyFromId(p.Id)
+}
+
+func (p *InvokeHistoryItemBase) GetInvokeUtxo() string {
+	return ""
 }
 
 func (p *InvokeHistoryItemBase) HasDone() bool {
@@ -482,6 +490,10 @@ type InvokeItem struct {
 
 func (p *InvokeItem) ToNewVersion() InvokeHistoryItem {
 	return p
+}
+
+func (p *InvokeItem) GetInvokeUtxo() string {
+	return p.InUtxo
 }
 
 func (p *InvokeItem) GetHeight() int {
@@ -889,6 +901,7 @@ type ContractRuntimeBase struct {
 	history            map[string]*InvokeItem // key:utxo 单独记录数据库，区块缓存, 6个区块以后，并且已经成交的可以删除
 	resv               ContractDeployResvIF
 	stp                ContractManager
+	db                 indexer.KVDB
 	localWallet        common.Wallet
 	contract           Contract
 	runtime            ContractRuntime
@@ -904,17 +917,21 @@ type ContractRuntimeBase struct {
 
 	// rpc 缓存
 	refreshTime     int64
-	responseHistory map[int][]*InvokeItem // 按照100个为一桶，根据区块顺序记录，跟swapHistory保持一致
+	responseHistory map[int][]*InvokeItem // 按照100个为一桶，根据区块顺序记录，跟 history 保持一致
 
 	mutex sync.RWMutex
 }
 
 func NewContractRuntimeBase(stp ContractManager) *ContractRuntimeBase {
 	return &ContractRuntimeBase{
-		EnableBlock:   INIT_ENABLE_BLOCK,
-		EnableBlockL1: INIT_ENABLE_BLOCK,
-		DeployTime:    time.Now().Unix(),
-		stp:           stp,
+		EnableBlock:        INIT_ENABLE_BLOCK,
+		EnableBlockL1:      INIT_ENABLE_BLOCK,
+		DeployTime:         time.Now().Unix(),
+		stp:                stp,
+		db:                 stp.GetDB(),
+		history:            make(map[string]*InvokeItem),
+		assetMerkleRootMap: make(map[int64][]byte),
+		responseHistory:    make(map[int][]*InvokeItem),
 	}
 }
 
@@ -929,14 +946,12 @@ func (p *ContractRuntimeBase) GetAssetNameV2() *AssetName {
 	}
 }
 
-func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManager, resv ContractDeployResvIF) error {
+func (p *ContractRuntimeBase) InitFromContent(content []byte, resv ContractDeployResvIF) error {
 	// 这里resv还没有获得正确的ResvId，需要后面补上
 	p.resv = resv
 	p.ChannelAddr = resv.GetChannelAddr()
 	p.Deployer = resv.GetDeployer()
-	p.stp = stp
-	p.assetMerkleRootMap = make(map[int64][]byte)
-	p.history = make(map[string]*InvokeItem)
+
 	p.isInitiator = resv.LocalIsInitiator()
 	localPK, err := utils.BytesToPublicKey(resv.GetLocalPubKey())
 	if err != nil {
@@ -981,7 +996,7 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 		return err
 	}
 
-	tickInfo := stp.GetTickerInfo(p.contract.GetAssetName())
+	tickInfo := p.stp.GetTickerInfo(p.contract.GetAssetName())
 	if tickInfo != nil {
 		p.Divisibility = tickInfo.Divisibility
 		p.N = tickInfo.N
@@ -1004,11 +1019,8 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 	return nil
 }
 
-func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
+func (p *ContractRuntimeBase) InitFromDB(resv ContractDeployResvIF) error {
 	p.resv = resv
-	p.stp = stp
-	p.assetMerkleRootMap = make(map[int64][]byte)
-	p.history = make(map[string]*InvokeItem)
 
 	p.isInitiator = resv.LocalIsInitiator()
 	var err error
@@ -1655,9 +1667,14 @@ func (p *ContractRuntimeBase) SetPeerActionResult(string, any) {
 
 }
 
-func (p *ContractRuntimeBase) HandleInvokeResult(*swire.MsgTx, int, string, string) {
+func (p *ContractRuntimeBase) HandleInvokeResult_SatsNet(*swire.MsgTx, int, string, string) {
 
 }
+
+func (p *ContractRuntimeBase) HandleInvokeResult(*wire.MsgTx, int, string, string) {
+
+}
+
 
 func (p *ContractRuntimeBase) CheckDeployTx(
 	deployTx *swire.MsgTx) (*swire.TxOut, *sindexer.ContractDeployData, error) {
@@ -2279,6 +2296,42 @@ func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) int 
 		}
 	}
 	return height
+}
+
+func (p *ContractRuntimeBase) GetInvokeHistoryWithBlock(height int) map[string]InvokeHistoryItem {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	history := loadContractInvokeHistoryFromHeight(p.db, p.runtime.URL(), false, height, false)
+	for _, v := range p.history {
+		if v.FromL1 {
+			_, ok := history[v.InUtxo]
+			if !ok {
+				h, _, _ := indexer.FromUtxoId(v.UtxoId)
+				if h == height {
+					history[v.InUtxo] = v.Clone()
+				}
+			}
+		}
+	}
+	return history
+}
+
+func (p *ContractRuntimeBase) GetInvokeHistoryWithBlock_SatsNet(height int) map[string]InvokeHistoryItem {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	history := loadContractInvokeHistoryFromHeight(p.db, p.runtime.URL(), false, height, true)
+	for _, v := range p.history {
+		if !v.FromL1 {
+			_, ok := history[v.InUtxo]
+			if !ok {
+				h, _, _ := indexer.FromUtxoId(v.UtxoId)
+				if h == height {
+					history[v.InUtxo] = v.Clone()
+				}
+			}
+		}
+	}
+	return history
 }
 
 func (p *ContractRuntimeBase) invokeCompleted() {

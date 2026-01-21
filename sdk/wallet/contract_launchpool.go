@@ -518,12 +518,11 @@ func (p *LaunchPoolContractRunTime) init() {
 	p.runtime = p
 	p.mintInfoMap = make(map[string]*MinterStatus)
 	p.invalidMintMap = make(map[string]*MinterStatus)
-	p.responseHistory = make(map[int][]*InvokeItem)
 }
 
-func (p *LaunchPoolContractRunTime) InitFromContent(content []byte, stp ContractManager,
+func (p *LaunchPoolContractRunTime) InitFromContent(content []byte,
 	resv ContractDeployResvIF) error {
-	err := p.ContractRuntimeBase.InitFromContent(content, stp, resv)
+	err := p.ContractRuntimeBase.InitFromContent(content, resv)
 	if err != nil {
 		Log.Errorf("LaunchPoolContractRunTime.InitFromContent failed, %v", err)
 		return err
@@ -533,7 +532,7 @@ func (p *LaunchPoolContractRunTime) InitFromContent(content []byte, stp Contract
 	return nil
 }
 
-func (p *LaunchPoolContractRunTime) InitFromJson(content []byte, stp ContractManager) error {
+func (p *LaunchPoolContractRunTime) InitFromJson(content []byte) error {
 	err := json.Unmarshal(content, p)
 	if err != nil {
 		return err
@@ -543,8 +542,8 @@ func (p *LaunchPoolContractRunTime) InitFromJson(content []byte, stp ContractMan
 	return nil
 }
 
-func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
-	err := p.ContractRuntimeBase.InitFromDB(stp, resv)
+func (p *LaunchPoolContractRunTime) InitFromDB(resv ContractDeployResvIF) error {
+	err := p.ContractRuntimeBase.InitFromDB(resv)
 	if err != nil {
 		Log.Errorf("LaunchPoolContractRunTime.InitFromDB failed, %v", err)
 		return err
@@ -568,7 +567,7 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 	// 	// saveReservation(p.stp.GetDB(), resv)
 	// }
 
-	history := LoadContractInvokeHistory(stp.GetDB(), p.URL(), false, false)
+	history := LoadContractInvokeHistory(p.db, p.URL(), false, false)
 	for _, v := range history {
 		item, ok := v.(*MintHistoryItem)
 		if !ok {
@@ -582,7 +581,7 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 	p.resv = resv
 
 	if p.DeployTickerResvId != 0 {
-		p.deployTickerResv = stp.GetWalletMgr().GetInscribeResv(p.DeployTickerResvId)
+		p.deployTickerResv = p.stp.GetWalletMgr().GetInscribeResv(p.DeployTickerResvId)
 	}
 
 	// p.calcAssetMerkleRoot()

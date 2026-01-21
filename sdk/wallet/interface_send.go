@@ -1295,6 +1295,8 @@ func (p *Manager) BuildBatchSendTx_btc(localAddress string, destAddr string, amt
 			Value:    int64(changeOutput),
 		}
 		tx.AddTxOut(txOut2)
+	} else {
+		fee = fee1 + changeOutput
 	}
 
 	if len(memo) > 0 {
@@ -3129,6 +3131,8 @@ func (p *Manager) BuildBatchSendTxV3_btc(srcAddress string, excluded map[string]
 			Value:    int64(changeOutput),
 		}
 		tx.AddTxOut(txOut2)
+	} else {
+		fee = fee1 + changeOutput
 	}
 
 	if len(memo) > 0 {
@@ -3357,7 +3361,9 @@ func (p *Manager) BuildBatchSendTxV3_ordx(srcAddress string, excluded map[string
 			Value:    int64(feeChange),
 		}
 		tx.AddTxOut(txOut4)
-	} 
+	} else {
+		fee = fee1 + feeChange
+	}
 	if len(memo) > 0 {
 		txOut5 := &wire.TxOut{
 			PkScript: memo,
@@ -3509,6 +3515,8 @@ func (p *Manager) BuildBatchSendTxV3_runes(srcAddress string, excluded map[strin
 			Value:    int64(feeChange),
 		}
 		tx.AddTxOut(txOut3)
+	} else {
+		fee = fee1 + feeChange
 	}
 
 	return tx, prevFetcher, fee, nil
@@ -3657,7 +3665,10 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 			Value:    int64(feeChange),
 		}
 		tx.AddTxOut(txOut3)
+	} else {
+		fee = fee1 + feeChange
 	}
+
 	if len(memo) > 0 {
 		txOut := &wire.TxOut{
 			PkScript: memo,

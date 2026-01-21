@@ -594,8 +594,8 @@ func NewAmmContractRuntime(stp ContractManager) *AmmContractRuntime {
 	return p
 }
 
-func (p *AmmContractRuntime) InitFromContent(content []byte, stp ContractManager, resv ContractDeployResvIF) error {
-	err := p.SwapContractRuntime.InitFromContent(content, stp, resv)
+func (p *AmmContractRuntime) InitFromContent(content []byte, resv ContractDeployResvIF) error {
+	err := p.SwapContractRuntime.InitFromContent(content, resv)
 	if err != nil {
 		return err
 	}
@@ -620,7 +620,7 @@ func (p *AmmContractRuntime) InitFromContent(content []byte, stp ContractManager
 					launchpool.AmmResvId = p.ResvId // 这个时候ResvId还是0 TODO
 					launchpool.AmmContractURL = p.URL()
 					launchpool.mutex.Unlock()
-					stp.SaveReservationWithLock(launchpool.resv)
+					p.stp.SaveReservationWithLock(launchpool.resv)
 				}
 			}
 		}
@@ -629,7 +629,7 @@ func (p *AmmContractRuntime) InitFromContent(content []byte, stp ContractManager
 	return nil
 }
 
-func (p *AmmContractRuntime) InitFromJson(content []byte, stp ContractManager) error {
+func (p *AmmContractRuntime) InitFromJson(content []byte) error {
 	err := json.Unmarshal(content, p)
 	if err != nil {
 		return err
@@ -642,8 +642,8 @@ func (p *AmmContractRuntime) InitFromJson(content []byte, stp ContractManager) e
 	return nil
 }
 
-func (p *AmmContractRuntime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
-	err := p.SwapContractRuntime.InitFromDB(stp, resv)
+func (p *AmmContractRuntime) InitFromDB(resv ContractDeployResvIF) error {
+	err := p.SwapContractRuntime.InitFromDB(resv)
 	if err != nil {
 		return err
 	}
