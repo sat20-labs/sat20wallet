@@ -4551,6 +4551,7 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 			if err == nil {
 				return dealInfo, nil
 			}
+			Log.Errorf("genDepositInfoFromAnchorTxs %s failed, %v", req.ContractURL, err)
 			// 如果失败，可能走普通转账的deposit，尝试走下面的流程
 		}
 
