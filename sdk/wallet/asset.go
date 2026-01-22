@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
@@ -42,6 +43,19 @@ func OutputToSatsNet(output *TxOutput) *TxOutput_SatsNet {
 			PkScript: output.OutValue.PkScript,
 			Assets:   output.Assets.Clone(),
 		},
+	}
+	return &n
+}
+
+func OutputFromSatsNet(output *TxOutput_SatsNet) *TxOutput {
+	n := TxOutput{
+		UtxoId:      output.UtxoId,
+		OutPointStr: output.OutPointStr,
+		OutValue: wire.TxOut{
+			Value:    output.Value(),
+			PkScript: output.OutValue.PkScript,
+		},
+		Assets:   output.OutValue.Assets.Clone(),
 	}
 	return &n
 }

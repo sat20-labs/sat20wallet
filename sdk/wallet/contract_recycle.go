@@ -879,7 +879,7 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Inv
 		}
 		// 更新合约状态
 		invokeTx.Handled = true
-		return p.updateContract(address, output, bValid), nil
+		return p.updateContract(address, OutputFromSatsNet(output), bValid, false), nil
 
 	default:
 		Log.Errorf("contract %s is not support action %s", url, param.Action)
@@ -948,7 +948,7 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, h
 
 		// 更新合约状态
 		invokeTx.Handled = true
-		return p.updateContract(address, OutputToSatsNet(output), bValid), nil
+		return p.updateContract(address, output, bValid, true), nil
 
 	default:
 		Log.Errorf("contract %s is not support action %s", p.URL(), param.Action)
@@ -958,13 +958,15 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, h
 
 // 通用的调用参数入口
 func (p *RecycleContractRunTime) updateContract(
-	invoker string, output *sindexer.TxOutput, bValid bool,
+	invoker string, output *indexer.TxOutput, bValid bool, fromL1 bool,
 ) *InvokeItem {
 
 	assetName := p.GetAssetName()
-	inValue := output.GetPlainSat_Ceil()
+	var inValue int64
 	var inAmt *Decimal
-	if !indexer.IsPlainAsset(assetName) {
+	if indexer.IsPlainAsset(assetName) {
+		inValue = output.OutValue.Value
+	} else {
 		inAmt = output.GetAsset(assetName)
 	}
 
@@ -991,7 +993,7 @@ func (p *RecycleContractRunTime) updateContract(
 		UnitPrice:      nil,
 		ExpectedAmt:    nil,
 		Address:        invoker,
-		FromL1:         true,
+		FromL1:         fromL1,
 		InUtxo:         output.OutPointStr,
 		InValue:        inValue,
 		InAmt:          inAmt,
