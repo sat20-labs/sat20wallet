@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1142,24 +1143,36 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 	url := p.URL()
 	updated := false
 	isPlainAsset := indexer.IsPlainAsset(p.GetAssetName())
+	heightL2 := p.stp.GetIndexerClient_SatsNet().GetSyncHeight()
 
 	specPrize := indexer.NewDecimalWithScale(int64(p.SpecPrize), 2)
 	processedItems := make([]*InvokeItem, 0)
 	invokers := make(map[string]*RecycleInvokerStatus)
+	type pair struct {
+		prize *Decimal
+		item *InvokeItem
+	}
+	matched := make([]*pair, 0)
+	var totalReward *Decimal
 	for _, invokes := range p.recycleMap {
 		for _, item := range invokes {
-			// 根据区块和交易，生成兑奖号码
+			// 根据区块和交易，生成幸运号码
 			// 如果中奖，放入 rewardMap
-
-			// TODO 暂时只支持L1的调用
 
 			if len(item.Padded) != 0 || item.Done != DONE_NOTYET {
 				continue
 			}
 
 			h, _, _ := indexer.FromUtxoId(item.UtxoId)
-			if h != height {
-				continue
+			if item.FromL1 {
+				if h != height {
+					continue
+				}
+			} else {
+				// 所有比 heightL2-5 区块后生成的交易，都推迟到下一次
+				if h >= heightL2-5 {
+					continue
+				}
 			}
 
 			processedItems = append(processedItems, item)
@@ -1181,15 +1194,16 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				continue
 			}
 			
-			// 分别取最后n个数字做加法，然后按照中奖规则判断是否中奖
+			// 分别取最后 NumberOfLastDigits 个数字做加法，然后按照中奖规则判断是否中奖
 			result := XorLastNHex(blockHash, txId, p.NumberOfLastDigits)
 			item.Padded = []byte(result)
-			// TODO 如果输入的数量是n倍，如果中奖就是n倍
+			// 如果输入的数量是n倍，如果奖励就是n倍
+			n := item.InValue / 500
 
 			var prize *Decimal
 			var points int64
-			n := CountHexDigit(result, MATCH_DIGIT)
-			if p.SpecPrizeMatchCount > 0 && n >= p.SpecPrizeMatchCount {
+			number := CountHexDigit(result, MATCH_DIGIT)
+			if p.SpecPrizeMatchCount > 0 && number >= p.SpecPrizeMatchCount {
 				firstPrize, _ := indexer.NewDecimalFromString(p.FirstPrize, p.Divisibility)
 				var assetAmt *Decimal
 				if isPlainAsset {
@@ -1197,32 +1211,26 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				} else {
 					assetAmt = p.AssetAmtInPool.Clone()
 				}
-				if assetAmt.Cmp(firstPrize) <= 0 {
-					// 留下交易手续费
-					prize = assetAmt.Mul(indexer.NewDecimalWithScale(90, 2))
-				} else {
-					prize = assetAmt.Sub(firstPrize).Mul(specPrize).Add(firstPrize)
-				}
-			} else if p.FirstPrizeMatchCount > 0 && n >= p.FirstPrizeMatchCount {
+				prize = assetAmt.Sub(firstPrize).Mul(specPrize).Add(firstPrize)
+			} else if p.FirstPrizeMatchCount > 0 && number >= p.FirstPrizeMatchCount {
 				prize, _ = indexer.NewDecimalFromString(p.FirstPrize, p.Divisibility)
-			} else if p.SecondPrizeMatchCount > 0 && n >= p.SecondPrizeMatchCount {
+			} else if p.SecondPrizeMatchCount > 0 && number >= p.SecondPrizeMatchCount {
 				prize, _ = indexer.NewDecimalFromString(p.SecondPrize, p.Divisibility)
-			} else if p.ThirdPrizeMatchCount > 0 && n >= p.ThirdPrizeMatchCount {
+			} else if p.ThirdPrizeMatchCount > 0 && number >= p.ThirdPrizeMatchCount {
 				prize, _ = indexer.NewDecimalFromString(p.ThirdPrize, p.Divisibility)
-			} else if p.FourthPrizeMatchCount > 0 && n >= p.FourthPrizeMatchCount {
+			} else if p.FourthPrizeMatchCount > 0 && number >= p.FourthPrizeMatchCount {
 				prize, _ = indexer.NewDecimalFromString(p.FourthPrize, p.Divisibility)
 			}
 
-			// TODO 是否在分配奖金时，分配一部分给foundation和服务节点？
 			if prize.Sign() != 0 {
-				addItemToMap(item, p.rewardMap) // item 转到这里继续处理
-				if isPlainAsset {
-					item.OutValue = prize.Floor()
-					p.SatsValueInPool -= item.OutValue
-				} else {
-					item.OutAmt = prize
-					p.AssetAmtInPool = p.AssetAmtInPool.Sub(item.OutAmt)
+				if n > 1 {
+					prize = prize.Mul(indexer.NewDecimal(n, 0))
 				}
+				totalReward = totalReward.Add(prize)
+				matched = append(matched, &pair{
+					prize: prize,
+					item: item,
+				})
 			} else {
 				// 仅获得points奖励
 				points = 10 * (item.InValue/330)
@@ -1241,16 +1249,74 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 		}
 	}
 
+	if totalReward.Sign() != 0 {
+		var assetAmt *Decimal
+		if isPlainAsset {
+			assetAmt = indexer.NewDecimal(p.SatsValueInPool, p.Divisibility).
+			Mul(indexer.NewDecimalWithScale(80, 2))
+		} else {
+			assetAmt = p.AssetAmtInPool.Clone().Mul(indexer.NewDecimalWithScale(80, 2))
+		}
+
+		// 奖励不能超过80%，超过80%的话，需要降低最高奖励
+		if totalReward.Cmp(assetAmt) > 0 {
+			sort.Slice(matched, func(i, j int) bool {
+				if matched[i].prize.Cmp(matched[j].prize) == 0 {
+					if matched[i].item.FromL1 == matched[j].item.FromL1 {
+						return matched[i].item.UtxoId < matched[j].item.UtxoId
+					}
+					var a, b int
+					if matched[i].item.FromL1 {
+						a = 1
+					} else {
+						a = 0
+					}
+					if matched[j].item.FromL1 {
+						b = 1
+					} else {
+						b = 0
+					}
+					return a < b
+				}
+				return matched[i].prize.Cmp(matched[j].prize) < 0
+			})
+		}
+
+		// 按顺序扣，扣到没有为止
+		for _, item := range matched {
+			if assetAmt.Cmp(item.prize) >= 0 {
+				assetAmt = assetAmt.Sub(item.prize)
+			} else {
+				if assetAmt.Sign() > 0 {
+					item.prize = assetAmt
+					assetAmt = nil
+				} else {
+					item.item.Reason = INVOKE_REASON_POOL_TOO_SMALL
+					item.item.Done = DONE_CLOSED_DIRECTLY
+					continue
+				}
+			}
+			if isPlainAsset {
+				item.item.OutValue = item.prize.Floor()
+				p.SatsValueInPool -= item.item.OutValue
+			} else {
+				item.item.OutAmt = item.prize
+				p.AssetAmtInPool = p.AssetAmtInPool.Sub(item.item.OutAmt)
+			}
+			addItemToMap(item.item, p.rewardMap) // item 转到这里继续处理
+		}
+	}
+
 	for _, invoker := range invokers {
-		saveContractInvokerStatus(p.stp.GetDB(), url, invoker)
+		saveContractInvokerStatus(p.db, url, invoker)
 	}
 
 	for _, item := range processedItems {
 		removeItemFromMap(item, p.recycleMap)
-		SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+		SaveContractInvokeHistoryItem(p.db, url, item)
 	}
 
-	// 交易的结果先保存
+	// 结果先保存
 	if updated {
 		p.stp.SaveReservation(p.resv)
 	}
