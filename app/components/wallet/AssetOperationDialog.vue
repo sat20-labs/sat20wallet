@@ -15,10 +15,11 @@
       <div v-if="props.assetKey || props.assetTicker" class="mb-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
         <div class="flex items-center gap-3">
           <!-- 资产图标 -->
-          <div class="w-10 h-10 flex items-center justify-center rounded-full bg-zinc-700 text-zinc-200 font-bold text-lg">
+          <div
+            class="w-10 h-10 flex items-center justify-center rounded-full bg-zinc-700 text-zinc-200 font-bold text-lg">
             <span>{{ getAssetIcon() }}</span>
           </div>
-          
+
           <!-- 资产信息 -->
           <div class="flex-1">
             <div class="flex items-center justify-between">
@@ -104,11 +105,14 @@
       </div>
 
       <DialogFooter v-if="selectedTab === 'normal'">
-        <Button class="w-full h-11 mb-2" :disabled="needsAddress && (!address || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress) || isTaprootDetected)" @click="confirmOperation">
+        <Button class="w-full h-11 mb-2"
+          :disabled="needsAddress && (!address || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress) || isTaprootDetected)"
+          @click="confirmOperation">
           {{ $t('assetOperationDialog.confirm') }}
         </Button>
         <!-- 域名解析失败错误提示 -->
-        <div v-if="resolvedInfo && !resolvedInfo.isDomain && !resolvedInfo.resolvedAddress" class="text-sm text-red-400 flex items-center justify-center gap-2 mb-2">
+        <div v-if="resolvedInfo && !resolvedInfo.isDomain && !resolvedInfo.resolvedAddress"
+          class="text-sm text-red-400 flex items-center justify-center gap-2 mb-2">
           <Icon icon="lucide:alert-circle" class="w-4 h-4" />
           {{ $t('assetOperationDialog.domainNotFound', { name: resolvedInfo.domainName }) }}
         </div>
@@ -175,8 +179,8 @@
       </div>
 
       <!-- 新增：显示提取费用提示 -->
-      <div v-if="!isResolving && props.operationType === 'withdraw'" 
-           class="mt-4 p-3 bg-blue-900/20 rounded-lg border border-blue-700">
+      <div v-if="!isResolving && props.operationType === 'withdraw'"
+        class="mt-4 p-3 bg-blue-900/20 rounded-lg border border-blue-700">
         <div class="text-sm text-blue-400 flex items-start gap-2">
           <Icon icon="lucide:info" class="w-4 h-4 mt-0.5 flex-shrink-0" />
           <span>{{ $t('assetOperationDialog.withdrawalFeeInfo') }}</span>
@@ -184,8 +188,8 @@
       </div>
 
       <!-- 新增：显示解锁提示（仅针对BTC资产） -->
-      <div v-if="!isResolving && props.operationType === 'unlock' && isBTCAsset" 
-           class="mt-4 p-3 bg-yellow-900/20 rounded-lg border border-yellow-700">
+      <div v-if="!isResolving && props.operationType === 'unlock' && isBTCAsset"
+        class="mt-4 p-3 bg-yellow-900/20 rounded-lg border border-yellow-700">
         <div class="text-sm text-yellow-400 flex items-start gap-2">
           <Icon icon="lucide:alert-triangle" class="w-4 h-4 mt-0.5 flex-shrink-0" />
           <span>{{ $t('assetOperationDialog.unlockNotice') }}</span>
@@ -193,8 +197,7 @@
       </div>
 
       <!-- 新增：显示Taproot地址错误 -->
-      <div v-if="!isResolving && isTaprootDetected" 
-           class="mt-4 p-3 bg-red-900/20 rounded-lg border border-red-700">
+      <div v-if="!isResolving && isTaprootDetected" class="mt-4 p-3 bg-red-900/20 rounded-lg border border-red-700">
         <div class="text-sm text-red-400 flex items-start gap-2">
           <Icon icon="lucide:alert-circle" class="w-4 h-4 mt-0.5 flex-shrink-0" />
           <span>{{ $t('assetOperationDialog.taprootError') }}</span>
@@ -209,8 +212,9 @@
 
       <AlertDialogFoot class="my-4 gap-2">
         <AlertDialogCancel @click="showAlertDialog = false" :disabled="isResolving">{{ $t('assetOperationDialog.cancel')
-          }}</AlertDialogCancel>
-        <AlertDialogAction @click="handleConfirm" :disabled="isResolving || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress) || isTaprootDetected">
+        }}</AlertDialogCancel>
+        <AlertDialogAction @click="handleConfirm"
+          :disabled="isResolving || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress) || isTaprootDetected">
           {{ isResolving ? $t('assetOperationDialog.resolvingDomain') : $t('assetOperationDialog.confirm') }}
         </AlertDialogAction>
       </AlertDialogFoot>
@@ -294,9 +298,9 @@ const needsAddress = computed(() => {
 
 // 判断当前资产是否为BTC
 const isBTCAsset = computed(() => {
-  return props.assetType === '*' || 
-         props.assetKey === '::' || 
-         props.assetTicker === '::'
+  return props.assetType === '*' ||
+    props.assetKey === '::' ||
+    props.assetTicker === '::'
 })
 
 // 判断哪些操作需要显示 btcFeeRate
@@ -345,7 +349,7 @@ const confirmOperation = async () => {
   if (needsAddress.value && props.address) {
     const result = await resolveAddress(props.address)
     resolvedInfo.value = result
-    
+
     // 如果解析成功且是域名，更新地址为解析后的地址
     if (result?.isDomain && result.resolvedAddress) {
       emit('update:address', result.resolvedAddress)
@@ -357,20 +361,20 @@ const confirmOperation = async () => {
       // 不显示确认对话框，直接返回
       return
     }
-    
+
     // 检测是否为非taproot地址
     const finalAddress = result?.isDomain && result.resolvedAddress ? result.resolvedAddress : props.address
-    if (isNonTaprootAddressAuto(finalAddress)) {
-      // 如果是非taproot地址，设置状态
-      isTaprootDetected.value = true
-      taprootAddress.value = finalAddress
-      console.warn('Non-Taproot address detected:', finalAddress)
-    } else {
-      isTaprootDetected.value = false
-      taprootAddress.value = ''
-    }
+    // if (isNonTaprootAddressAuto(finalAddress)) {
+    //   // 如果是非taproot地址，设置状态
+    //   isTaprootDetected.value = true
+    //   taprootAddress.value = finalAddress
+    //   console.warn('Non-Taproot address detected:', finalAddress)
+    // } else {
+    //   isTaprootDetected.value = false
+    //   taprootAddress.value = ''
+    // }
   }
-  
+
   // 始终显示确认对话框
   showAlertDialog.value = true
 }
@@ -391,14 +395,14 @@ const setMaxAmount = () => {
 
   if (maxAmount.value) {
     let calculatedAmount = maxAmount.value
-    
+
     // 如果是 unlock 操作且是BTC资产，需要减去 3000 sats 的预留费用
     if (props.operationType === 'unlock' && isBTCAsset.value) {
       const maxAmountNum = parseFloat(maxAmount.value)
       const reservedAmount = 3000
       calculatedAmount = Math.max(0, maxAmountNum - reservedAmount).toString()
     }
-    
+
     emit('update:amount', calculatedAmount) // 将计算后的最大值传递给父组件
   }
 }

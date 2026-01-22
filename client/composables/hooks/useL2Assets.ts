@@ -70,7 +70,7 @@ export const useL2Assets = () => {
 
   const processAllUtxos = async (tickers: string[]) => {
     if (!tickers.length) return
-    await parallel(3, tickers, (ticker) => processAssetUtxo(ticker))
+    // await parallel(3, tickers, (ticker) => processAssetUtxo(ticker))
   }
 
   const parseAssetSummary = async () => {
