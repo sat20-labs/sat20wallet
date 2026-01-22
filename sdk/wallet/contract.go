@@ -1856,17 +1856,16 @@ func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
 			invoke.InvokeParam.ContractPath == p.URL()
 	} else if invoke.TxOutput != nil {
 		assetName := p.contract.GetAssetName()
-		// 除非是符文，否则都是有 InvokeParam
 		if assetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
 			// 只检查是否有合约对应的资产
 			amt := invoke.TxOutput.GetAsset(assetName)
 			return amt.Sign() != 0
 		}
-		// TODO 以后特殊的合约不要单独的地址，所以只要输出地址是合约地址，就不要丢弃
-		if indexer.IsPlainAsset(assetName) {
-			// 只有transcend支持白聪
-			return len(invoke.TxOutput.Assets) == 0
+		// TODO 目前除了符文的deposit，也就只有recycle合约不需要调用参数
+		if p.contract.GetTemplateName() == TEMPLATE_CONTRACT_RECYCLE {
+			return true
 		}
+		// 只要有合约对应的资产，就尝试调用
 		amt := invoke.TxOutput.GetAsset(assetName)
 		return amt.Sign() != 0
 	}
