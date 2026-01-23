@@ -1456,7 +1456,11 @@ func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *
 	utxo := fmt.Sprintf("%s:%d", invokeTx.Tx.TxID(), invokeTx.InvokeVout)
 	org, ok := p.history[utxo]
 	if ok {
-		org.UtxoId = utxoId
+		if org.UtxoId != utxoId { // reorg
+			org.UtxoId = utxoId
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
+		}
+		invokeTx.Handled = true
 		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 

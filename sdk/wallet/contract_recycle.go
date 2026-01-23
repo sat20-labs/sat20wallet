@@ -798,14 +798,20 @@ func (p *RecycleContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock
 		return err
 	}
 
-	p.mutex.Lock()
-	p.PreprocessInvokeData_SatsNet(data)
-	// p.recycle() 不需要调用，等主网区块过块时一起处理
-	p.ContractRuntimeBase.InvokeCompleted_SatsNet(data)
-	p.mutex.Unlock()
+	if p.IsActive() {
+		p.mutex.Lock()
+		p.PreprocessInvokeData_SatsNet(data)
+		//p.process(data.Height, data.BlockHash) 不需要调用，等主网区块过块时一起处理
+		p.InvokeCompleted_SatsNet(data)
+		p.mutex.Unlock()
 
-	// 发送
-	// p.sendInvokeResultTx_SatsNet()
+		p.sendInvokeResultTx()
+	} else {
+		p.mutex.Lock()
+		p.InvokeCompleted_SatsNet(data)
+		p.mutex.Unlock()
+	}
+
 	return nil
 }
 
@@ -833,6 +839,14 @@ func (p *RecycleContractRunTime) InvokeWithBlock(data *InvokeDataInBlock) error 
 	return nil
 }
 
+func (p *RecycleContractRunTime) HandleReorg(orgHeight, currHeight int) error {
+	p.ContractRuntimeBase.HandleReorg(orgHeight, currHeight)
+	for i := orgHeight; i <= currHeight; i++ {
+		delete(p.BlockHashMap, i)
+	}
+	return nil
+}
+
 func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeTx_SatsNet, height int) (InvokeHistoryItem, error) {
 
 	invokeData := invokeTx.InvokeParam
@@ -848,7 +862,11 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Inv
 	utxo := output.OutPointStr
 	org, ok := p.history[utxo]
 	if ok {
-		org.UtxoId = utxoId
+		if org.UtxoId != utxoId { // reorg
+			org.UtxoId = utxoId
+			SaveContractInvokeHistoryItem(p.db, p.URL(), org)
+		}
+		invokeTx.Handled = true
 		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
@@ -869,9 +887,9 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Inv
 		// 到这里，客观条件都满足了，如果还不能符合铸造条件，直接设置为无效调用
 		bValid := true
 		for {
-			plainSats := output.GetPlainSat()
+			plainSats := output.OutValue.Value
 			if plainSats < 500 {
-				Log.Errorf("utxo %s no enough sats to pay stake fee %d", utxo, 500)
+				Log.Errorf("utxo %s no enough sats %d", utxo, 500)
 				bValid = false
 				break
 			}
@@ -879,7 +897,10 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Inv
 		}
 		// 更新合约状态
 		invokeTx.Handled = true
-		return p.updateContract(address, OutputFromSatsNet(output), bValid, false), nil
+		newTxOut := OutputFromSatsNet(output)
+		// 为了处理方便，将L2的交易，当作是一个特殊的L1交易，
+		newTxOut.UtxoId = indexer.ToUtxoId(p.CurrBlockL1, 0, 0)
+		return p.updateContract(address, newTxOut, bValid, false), nil
 
 	default:
 		Log.Errorf("contract %s is not support action %s", url, param.Action)
@@ -909,7 +930,11 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, h
 	Log.Infof("utxo %x %s\n", utxoId, utxo)
 	org, ok := p.history[utxo]
 	if ok {
-		org.UtxoId = utxoId
+		if org.UtxoId != utxoId { // reorg
+			org.UtxoId = utxoId
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
+		}
+		invokeTx.Handled = true
 		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
@@ -1041,7 +1066,14 @@ func (p *RecycleContractRunTime) addItem(item *SwapHistoryItem) {
 	if item.Reason == INVOKE_REASON_NORMAL {
 		switch item.OrderType {
 		case ORDERTYPE_RECYCLE:
-			addItemToMap(item, p.recycleMap)
+			if len(item.Padded) == 0 {
+				addItemToMap(item, p.recycleMap)
+			} else {
+				if item.OutAmt.Sign() != 0 || item.OutValue != 0 {
+					addItemToMap(item, p.rewardMap)
+				}
+			}
+			
 		}
 	}
 
@@ -1132,12 +1164,20 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 	}
 	p.BlockHashMap[height] = blockHash
 	// 考虑到区块回滚的问题，必须过块6个区块，才处理奖励
-	if len(p.BlockHashMap) < 6 {
+	height -= 5
+	blockHash, ok := p.BlockHashMap[height]
+	if !ok {
 		return nil
 	}
-	height -= 5
-	blockHash = p.BlockHashMap[height]
-	delete(p.BlockHashMap, height)
+	wantToDel := make([]int, 0, len(p.BlockHashMap))
+	for k := range p.BlockHashMap {
+		if k <= height {
+			wantToDel = append(wantToDel, k)
+		}
+	}
+	for _, k := range wantToDel {
+		delete(p.BlockHashMap, k)
+	}
 
 	Log.Debugf("%s start contract %s with action recycle with block %d %s",
 		p.stp.GetMode(), p.URL(), height, blockHash)
@@ -1145,7 +1185,6 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 	url := p.URL()
 	updated := false
 	isPlainAsset := indexer.IsPlainAsset(p.GetAssetName())
-	heightL2 := p.stp.GetIndexerClient_SatsNet().GetSyncHeight()
 
 	specPrize := indexer.NewDecimalWithScale(int64(p.SpecPrize), 2)
 	processedItems := make([]*InvokeItem, 0)
@@ -1165,16 +1204,10 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				continue
 			}
 
+			// 不区分L2，前面已经修改过L2的utxoId
 			h, _, _ := indexer.FromUtxoId(item.UtxoId)
-			if item.FromL1 {
-				if h != height {
-					continue
-				}
-			} else {
-				// 所有比 heightL2-5 区块后生成的交易，都推迟到下一次
-				if h >= heightL2-5 {
-					continue
-				}
+			if h > height {
+				continue
 			}
 
 			processedItems = append(processedItems, item)
@@ -1246,8 +1279,8 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 			}
 
 			updated = true
-			Log.Infof("item %s processed: amt=%s, value=%d, points=%d", item.InUtxo,
-				item.OutAmt.String(), item.OutValue, points)
+			Log.Infof("item %s processed: inValue=%d, code=%s, prize=%s, points=%d", item.InUtxo,
+				item.InValue, result, prize.String(), points)
 		}
 	}
 
@@ -1374,7 +1407,7 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 			deleted := make([]int64, 0)
 			for _, item := range rewardMap {
 				h, _, _ := indexer.FromUtxoId(item.UtxoId)
-				if h != height {
+				if h > height {
 					continue
 				}
 				if item.Done != DONE_NOTYET {
@@ -1448,7 +1481,7 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 			if h > height {
 				continue
 			}
-			if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+			if item.Done != DONE_NOTYET {
 				continue
 			}
 			maxHeight = max(maxHeight, h)
@@ -1549,10 +1582,10 @@ func (p *RecycleContractRunTime) reward() error {
 		Log.Debugf("%s start contract %s with action reward", p.stp.GetMode(), url)
 
 		p.mutex.RLock()
-		height := p.CurrBlock
+		heightL1 := p.CurrBlockL1
 		p.mutex.RUnlock()
 
-		dealInfo := p.genRewardInfo(height)
+		dealInfo := p.genRewardInfo(heightL1)
 		// 发送
 		if len(dealInfo.SendInfo) != 0 {
 			txId, fee, stubFee, err := p.sendTx(dealInfo, INVOKE_RESULT_REWARD, false, false)

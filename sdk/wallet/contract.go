@@ -335,7 +335,7 @@ type ContractRuntime interface {
 	InvokeWithBlock(*InvokeDataInBlock) error
 	InvokeCompleted(*InvokeDataInBlock)
 	HandleReorg_SatsNet(int, int) error
-	HandleReorg(int, int) error
+	HandleReorg(int, int) error // 新链起点，新链高点
 	DisableItem(InvokeHistoryItem)                    // 因为reorg导致某个item无效
 	PrepareForReInvoke(height int, bSatsNet bool) int // 重新跑区块，需要重新加载历史数据，只为了处理某些漏掉的invoke
 	GetInvokeHistoryWithBlock(height int) map[string]InvokeHistoryItem
@@ -942,6 +942,32 @@ func (p *ContractRuntimeBase) init(stp ContractManager) {
 
 func (p *ContractRuntimeBase) ToNewVersion() *ContractRuntimeBase {
 	return p
+}
+
+
+func (p *ContractRuntimeBase) SetWithPeer(n *ContractRuntimeBase) {
+	p.DeployTime = n.DeployTime
+	p.Status = n.Status
+	p.EnableBlock = n.EnableBlock
+	p.CurrBlock = n.CurrBlock
+	p.EnableBlockL1 = n.EnableBlockL1
+	p.CurrBlockL1 = n.CurrBlockL1
+	p.EnableTxId = n.EnableTxId
+	p.Deployer = n.Deployer
+	p.ResvId = n.ResvId
+	p.ChannelAddr = n.ChannelAddr
+	p.InvokeCount = n.InvokeCount
+	p.Divisibility = n.Divisibility
+	p.N = n.N
+	p.CheckPoint = n.CheckPoint
+	p.StaticMerkleRoot = n.StaticMerkleRoot
+	p.AssetMerkleRoot = n.AssetMerkleRoot
+	p.CurrAssetMerkleRoot = n.CurrAssetMerkleRoot
+	p.CheckPointBlock = n.CheckPointBlock
+	p.CheckPointBlockL1 = n.CheckPointBlockL1
+	p.LocalPubKey = n.RemotePubKey
+	p.RemotePubKey = n.LocalPubKey
+	p.CoreNodePubKey = n.CoreNodePubKey
 }
 
 func (p *ContractRuntimeBase) GetAssetNameV2() *AssetName {
@@ -2243,10 +2269,13 @@ func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) err
 	return nil
 }
 
+// 输入： 新链起点，新链高点
+// 处理：历史数据中，从orgHeight开始的所有数据，其utxoId都失效，但不修改其处理结果
 func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), p.URL(), false, orgHeight, false)
+	url := p.URL()
+	history := loadContractInvokeHistoryFromHeight(p.stp.GetDB(), url, false, orgHeight, false)
 	for _, v := range history {
 		item, ok := v.(*InvokeItem)
 		if !ok {
@@ -2254,9 +2283,10 @@ func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
 		}
 		item.UtxoId = 0
 		p.history[item.InUtxo] = item
+		SaveContractInvokeHistoryItem(p.db, url, item)
 	}
 	p.CurrBlockL1 = orgHeight - 1
-	return nil
+	return p.stp.SaveReservation(p.resv)
 }
 
 func (p *ContractRuntimeBase) PrepareForReInvoke(height int, bSatsNet bool) int {
