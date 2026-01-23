@@ -30,16 +30,15 @@ func init() {
 	}
 }
 
-
 var (
-	MIN_POOL_VALUE          int64 = 10000
+	MIN_POOL_VALUE int64 = 10000
 
 	// 池子利润分配比例
-	REWARD_SHARE_INVOKER    int = 80 // 包括项目方，资金方
-	REWARD_SHARE_SERVER     int = 10 // 包括两个节点，每个节点10
+	REWARD_SHARE_INVOKER int = 80 // 包括项目方，资金方
+	REWARD_SHARE_SERVER  int = 10 // 包括两个节点，每个节点10
 
-	REWARD_SHARE_INVOKER_Decimal    = indexer.NewDecimalWithScale(int64(REWARD_SHARE_INVOKER)*1000/100, 3)
-	REWARD_SHARE_SERVER_Decimal     = indexer.NewDecimalWithScale(int64(REWARD_SHARE_SERVER)*1000/100, 3)
+	REWARD_SHARE_INVOKER_Decimal = indexer.NewDecimalWithScale(int64(REWARD_SHARE_INVOKER)*1000/100, 3)
+	REWARD_SHARE_SERVER_Decimal  = indexer.NewDecimalWithScale(int64(REWARD_SHARE_SERVER)*1000/100, 3)
 )
 
 /*
@@ -58,7 +57,7 @@ type RecycleContract struct {
 	ContractBase
 
 	NumberOfLastDigits    int
-	SpecPrizeMatchCount   int 
+	SpecPrizeMatchCount   int
 	FirstPrizeMatchCount  int
 	SecondPrizeMatchCount int
 	ThirdPrizeMatchCount  int
@@ -434,7 +433,7 @@ func (p *RecycleContractRunTime) init() {
 	p.rewardMap = make(map[string]map[int64]*InvokeItem)
 }
 
-func (p *RecycleContractRunTime) InitFromJson(content []byte, stp ContractManager,) error {
+func (p *RecycleContractRunTime) InitFromJson(content []byte, stp ContractManager) error {
 	err := json.Unmarshal(content, p)
 	if err != nil {
 		return err
@@ -638,7 +637,7 @@ type Response_RecycleContract struct {
 	*RecycleContractRunTimeInDB
 
 	// 增加更多参数
-	DisplayName  string       `json:"displayName"`
+	DisplayName string `json:"displayName"`
 }
 
 func (p *RecycleContractRunTime) AllAddressInfo(start, limit int) string {
@@ -789,6 +788,14 @@ func (p *RecycleContractRunTime) CheckInvokeParam(param string) (int64, error) {
 		return 0, fmt.Errorf("unsupport action %s", invoke.Action)
 	}
 
+}
+
+func (p *RecycleContractRunTime) AllowInvokeWithNoParam() bool {
+	return true
+}
+
+func (p *RecycleContractRunTime) AllowInvokeWithNoParam_SatsNet() bool {
+	return true
 }
 
 func (p *RecycleContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_SatsNet) error {
@@ -1073,7 +1080,7 @@ func (p *RecycleContractRunTime) addItem(item *SwapHistoryItem) {
 					addItemToMap(item, p.rewardMap)
 				}
 			}
-			
+
 		}
 	}
 
@@ -1191,7 +1198,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 	invokers := make(map[string]*RecycleInvokerStatus)
 	type pair struct {
 		prize *Decimal
-		item *InvokeItem
+		item  *InvokeItem
 	}
 	matched := make([]*pair, 0)
 	var totalReward *Decimal
@@ -1217,58 +1224,55 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				item.Done = DONE_CLOSED_DIRECTLY
 				continue
 			}
-			if item.InValue < 330 {
-				item.Reason = INVOKE_REASON_UTXO_TOO_SMALL
-				item.Done = DONE_CLOSED_DIRECTLY
-				continue
-			}
-			// TODO 如果池子资金太少，低于水位，所有输入直接回收
-			if p.SatsValueInPool < MIN_POOL_VALUE {
-				item.Reason = INVOKE_REASON_POOL_TOO_SMALL
-				item.Done = DONE_CLOSED_DIRECTLY
-				continue
-			}
-			
-			// 分别取最后 NumberOfLastDigits 个数字做加法，然后按照中奖规则判断是否中奖
-			result := XorLastNHex(blockHash, txId, p.NumberOfLastDigits)
-			item.Padded = []byte(result)
-			// 如果输入的数量是n倍，如果奖励就是n倍
-			n := item.InValue / 500
 
 			var prize *Decimal
 			var points int64
-			number := CountHexDigit(result, MATCH_DIGIT)
-			if p.SpecPrizeMatchCount > 0 && number >= p.SpecPrizeMatchCount {
-				firstPrize, _ := indexer.NewDecimalFromString(p.FirstPrize, p.Divisibility)
-				var assetAmt *Decimal
-				if isPlainAsset {
-					assetAmt = indexer.NewDecimal(p.SatsValueInPool, p.Divisibility)
-				} else {
-					assetAmt = p.AssetAmtInPool.Clone()
+			var result string
+			if item.InValue >= 330 && p.SatsValueInPool >= MIN_POOL_VALUE {
+				// 分别取最后 NumberOfLastDigits 个数字做加法，然后按照中奖规则判断是否中奖
+				result = XorLastNHex(blockHash, txId, p.NumberOfLastDigits)
+				item.Padded = []byte(result)
+				// 如果输入的数量是n倍，如果奖励就是n倍
+				
+				number := CountHexDigit(result, MATCH_DIGIT)
+				if p.SpecPrizeMatchCount > 0 && number >= p.SpecPrizeMatchCount {
+					firstPrize, _ := indexer.NewDecimalFromString(p.FirstPrize, p.Divisibility)
+					var assetAmt *Decimal
+					if isPlainAsset {
+						assetAmt = indexer.NewDecimal(p.SatsValueInPool, p.Divisibility)
+					} else {
+						assetAmt = p.AssetAmtInPool.Clone()
+					}
+					prize = assetAmt.Sub(firstPrize).Mul(specPrize).Add(firstPrize)
+				} else if p.FirstPrizeMatchCount > 0 && number >= p.FirstPrizeMatchCount {
+					prize, _ = indexer.NewDecimalFromString(p.FirstPrize, p.Divisibility)
+				} else if p.SecondPrizeMatchCount > 0 && number >= p.SecondPrizeMatchCount {
+					prize, _ = indexer.NewDecimalFromString(p.SecondPrize, p.Divisibility)
+				} else if p.ThirdPrizeMatchCount > 0 && number >= p.ThirdPrizeMatchCount {
+					prize, _ = indexer.NewDecimalFromString(p.ThirdPrize, p.Divisibility)
+				} else if p.FourthPrizeMatchCount > 0 && number >= p.FourthPrizeMatchCount {
+					prize, _ = indexer.NewDecimalFromString(p.FourthPrize, p.Divisibility)
 				}
-				prize = assetAmt.Sub(firstPrize).Mul(specPrize).Add(firstPrize)
-			} else if p.FirstPrizeMatchCount > 0 && number >= p.FirstPrizeMatchCount {
-				prize, _ = indexer.NewDecimalFromString(p.FirstPrize, p.Divisibility)
-			} else if p.SecondPrizeMatchCount > 0 && number >= p.SecondPrizeMatchCount {
-				prize, _ = indexer.NewDecimalFromString(p.SecondPrize, p.Divisibility)
-			} else if p.ThirdPrizeMatchCount > 0 && number >= p.ThirdPrizeMatchCount {
-				prize, _ = indexer.NewDecimalFromString(p.ThirdPrize, p.Divisibility)
-			} else if p.FourthPrizeMatchCount > 0 && number >= p.FourthPrizeMatchCount {
-				prize, _ = indexer.NewDecimalFromString(p.FourthPrize, p.Divisibility)
 			}
 
 			if prize.Sign() != 0 {
+				n := item.InValue / 500
 				if n > 1 {
 					prize = prize.Mul(indexer.NewDecimal(n, 0))
 				}
 				totalReward = totalReward.Add(prize)
 				matched = append(matched, &pair{
 					prize: prize,
-					item: item,
+					item:  item,
 				})
 			} else {
+				if item.InValue < 330 {
+					item.Reason = INVOKE_REASON_UTXO_TOO_SMALL
+				} else if p.SatsValueInPool < MIN_POOL_VALUE {
+					item.Reason = INVOKE_REASON_POOL_TOO_SMALL
+				}
 				// 仅获得points奖励
-				points = 10 * (item.InValue/330)
+				points = 10 * item.InValue / 330
 				item.Done = DONE_CLOSED_DIRECTLY
 
 				invoker := p.loadTraderInfo(item.Address)
@@ -1288,7 +1292,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 		var assetAmt *Decimal
 		if isPlainAsset {
 			assetAmt = indexer.NewDecimal(p.SatsValueInPool, p.Divisibility).
-			Mul(indexer.NewDecimalWithScale(80, 2))
+				Mul(indexer.NewDecimalWithScale(80, 2))
 		} else {
 			assetAmt = p.AssetAmtInPool.Clone().Mul(indexer.NewDecimalWithScale(80, 2))
 		}
@@ -1444,7 +1448,7 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 	p.refreshTime = 0
 }
 
-func addSendInfo(sendInfoMap map[string]*SendAssetInfo, address string, 
+func addSendInfo(sendInfoMap map[string]*SendAssetInfo, address string,
 	assetName *indexer.AssetName) *SendAssetInfo {
 	info, ok := sendInfoMap[address]
 	if !ok {
@@ -1505,7 +1509,7 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 			info = addSendInfo(sendInfoMap, remotePeerAddr, assetName)
 			info.AssetAmt = info.AssetAmt.Add(amt2)
 			info.Value += value2
-			
+
 			if isRune && len(sendInfoMap) >= 8 {
 				break // 其他后面再处理
 			}

@@ -22,12 +22,10 @@ Transcend合约
 4. 为了简单一点，现在withdraw直接deAnchor，但deposit不执行anchor
 */
 
-
 func init() {
 	// 让 gob 知道旧的类型对应新的实现
 	gob.RegisterName("*stp.TranscendContractRuntime", new(TranscendContractRuntime))
 }
-
 
 type TranscendContract struct {
 	SwapContract
@@ -119,8 +117,8 @@ func NewTranscendContractRuntime(stp ContractManager) *TranscendContractRuntime 
 	p := &TranscendContractRuntime{
 		SwapContractRuntime: SwapContractRuntime{
 			SwapContractRuntimeInDB: SwapContractRuntimeInDB{
-				Contract: NewTranscendContract(),
-				ContractRuntimeBase: *NewContractRuntimeBase(stp),
+				Contract:                NewTranscendContract(),
+				ContractRuntimeBase:     *NewContractRuntimeBase(stp),
 				SwapContractRunningData: SwapContractRunningData{},
 			},
 		},
@@ -128,6 +126,12 @@ func NewTranscendContractRuntime(stp ContractManager) *TranscendContractRuntime 
 	p.init()
 
 	return p
+}
+
+func (p *TranscendContractRuntime) init() {
+	p.SwapContractRuntime.init()
+	p.contract = p
+	p.runtime = p
 }
 
 func (p *TranscendContractRuntime) AllowDeploy() error {
@@ -143,6 +147,10 @@ func (p *TranscendContractRuntime) AllowDeploy() error {
 	}
 
 	return nil
+}
+
+func (p *TranscendContractRuntime) AllowInvokeWithNoParam() bool {
+	return p.GetAssetName().Protocol == indexer.PROTOCOL_NAME_RUNES
 }
 
 func (p *TranscendContractRuntime) GobEncode() ([]byte, error) {

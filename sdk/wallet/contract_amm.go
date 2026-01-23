@@ -594,6 +594,13 @@ func NewAmmContractRuntime(stp ContractManager) *AmmContractRuntime {
 	return p
 }
 
+
+func (p *AmmContractRuntime) init() {
+	p.SwapContractRuntime.init()
+	p.contract = p
+	p.runtime = p
+}
+
 func (p *AmmContractRuntime) InitFromContent(content []byte, stp ContractManager, resv ContractDeployResvIF) error {
 	err := p.SwapContractRuntime.InitFromContent(content, stp, resv)
 	if err != nil {
@@ -870,6 +877,10 @@ func (p *AmmContractRuntime) GobDecode(data []byte) error {
 	}
 
 	return nil
+}
+
+func (p *AmmContractRuntime) AllowInvokeWithNoParam() bool {
+	return p.GetAssetName().Protocol == indexer.PROTOCOL_NAME_RUNES
 }
 
 func (p *AmmContractRuntime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_SatsNet) error {

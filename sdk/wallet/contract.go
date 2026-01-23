@@ -326,6 +326,8 @@ type ContractRuntime interface {
 	// 合约调用的支持接口
 	CheckInvokeParam(string) (int64, error) // 调用合约的参数检查(json)，调用合约前调用
 	AllowInvoke() error
+	AllowInvokeWithNoParam() bool
+	AllowInvokeWithNoParam_SatsNet() bool
 	VerifyAndAcceptInvokeItem_SatsNet(*InvokeTx_SatsNet, int) (InvokeHistoryItem, error) // return：被接受，处理结果
 	VerifyAndAcceptInvokeItem(*InvokeTx, int) (InvokeHistoryItem, error)                 // return：被接受，处理结果
 	PreprocessInvokeData(data *InvokeDataInBlock) error
@@ -335,7 +337,7 @@ type ContractRuntime interface {
 	InvokeWithBlock(*InvokeDataInBlock) error
 	InvokeCompleted(*InvokeDataInBlock)
 	HandleReorg_SatsNet(int, int) error
-	HandleReorg(int, int) error // 新链起点，新链高点
+	HandleReorg(int, int) error                       // 新链起点，新链高点
 	DisableItem(InvokeHistoryItem)                    // 因为reorg导致某个item无效
 	PrepareForReInvoke(height int, bSatsNet bool) int // 重新跑区块，需要重新加载历史数据，只为了处理某些漏掉的invoke
 	GetInvokeHistoryWithBlock(height int) map[string]InvokeHistoryItem
@@ -345,7 +347,7 @@ type ContractRuntime interface {
 	AllowPeerAction(string, any) (any, error)
 	SetPeerActionResult(string, any)
 	HandleInvokeResult_SatsNet(*swire.MsgTx, int, string, string) // 处理感兴趣的调用结果，只处理聪网的Tx
-	HandleInvokeResult(*wire.MsgTx, int, string, string) // 处理感兴趣的调用结果
+	HandleInvokeResult(*wire.MsgTx, int, string, string)          // 处理感兴趣的调用结果
 
 	checkSelf() error
 	CalcRuntimeMerkleRoot() []byte
@@ -924,9 +926,9 @@ type ContractRuntimeBase struct {
 
 func NewContractRuntimeBase(stp ContractManager) *ContractRuntimeBase {
 	n := &ContractRuntimeBase{
-		EnableBlock:        INIT_ENABLE_BLOCK,
-		EnableBlockL1:      INIT_ENABLE_BLOCK,
-		DeployTime:         time.Now().Unix(),
+		EnableBlock:   INIT_ENABLE_BLOCK,
+		EnableBlockL1: INIT_ENABLE_BLOCK,
+		DeployTime:    time.Now().Unix(),
 	}
 	n.init(stp)
 	return n
@@ -943,7 +945,6 @@ func (p *ContractRuntimeBase) init(stp ContractManager) {
 func (p *ContractRuntimeBase) ToNewVersion() *ContractRuntimeBase {
 	return p
 }
-
 
 func (p *ContractRuntimeBase) SetWithPeer(n *ContractRuntimeBase) {
 	p.DeployTime = n.DeployTime
@@ -1429,6 +1430,14 @@ func (p *ContractRuntimeBase) AllowInvoke() error {
 	return nil
 }
 
+func (p *ContractRuntimeBase) AllowInvokeWithNoParam() bool {
+	return false
+}
+
+func (p *ContractRuntimeBase) AllowInvokeWithNoParam_SatsNet() bool {
+	return false
+}
+
 func (p *ContractRuntimeBase) RuntimeContent() []byte {
 	return nil
 }
@@ -1707,7 +1716,6 @@ func (p *ContractRuntimeBase) HandleInvokeResult(*wire.MsgTx, int, string, strin
 
 }
 
-
 func (p *ContractRuntimeBase) CheckDeployTx(
 	deployTx *swire.MsgTx) (*swire.TxOut, *sindexer.ContractDeployData, error) {
 
@@ -1815,7 +1823,9 @@ func (p *ContractRuntimeBase) CheckInvokeTx_SatsNet(invokeTx *InvokeTx_SatsNet) 
 	// }
 
 	if invokeTx.InvokeParam == nil {
-		return fmt.Errorf("invalid contract invoke TX, parameter is nil")
+		if !p.runtime.AllowInvokeWithNoParam_SatsNet() {
+			return fmt.Errorf("invalid contract invoke TX, parameter is nil")
+		}
 	}
 
 	invokeParam := invokeTx.InvokeParam
@@ -1838,34 +1848,12 @@ func (p *ContractRuntimeBase) CheckInvokeTx_SatsNet(invokeTx *InvokeTx_SatsNet) 
 		}
 	}
 
-	var invokerAddr string
-	if len(invokeParam.PubKey) == 0 {
-		// 取最后一个输入作为调用者
-		txIn := invokeTx.Tx.TxIn[len(invokeTx.Tx.TxIn)-1]
-		preTxId := txIn.PreviousOutPoint.Hash.String()
-		txHex, err := p.stp.GetIndexerClient_SatsNet().GetRawTx(preTxId)
-		if err != nil {
-			Log.Errorf("GetRawTx %s failed, %v", preTxId, err)
-			return err
+	if len(invokeParam.PubKey) != 0 {
+		invokerAddr := HexPubKeyToP2TRAddress(invokeParam.PubKey)
+		if len(invokerAddr) != 0 {
+			invokeTx.Invoker = invokerAddr
 		}
-		preTx, err := DecodeMsgTx_SatsNet(txHex)
-		if err != nil {
-			Log.Errorf("DecodeMsgTx_SatsNet from %s failed, %v", preTxId, err)
-			return err
-		}
-		if int(txIn.PreviousOutPoint.Index) >= len(preTx.TxOut) {
-			return fmt.Errorf("index out of bound. %d %s", txIn.PreviousOutPoint.Index, preTxId)
-		}
-		txOut := preTx.TxOut[txIn.PreviousOutPoint.Index]
-		invokerAddr, err = AddrFromPkScript(txOut.PkScript)
-		if err != nil {
-			Log.Errorf("AddrFromPkScript %s failed, %v", hex.EncodeToString(txOut.PkScript), err)
-			return err
-		}
-	} else {
-		invokerAddr = HexPubKeyToP2TRAddress(invokeParam.PubKey)
 	}
-	invokeTx.Invoker = invokerAddr
 
 	return nil
 }
@@ -1900,13 +1888,12 @@ func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
 
 func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 
-	if invokeTx.InvokeParam != nil {
-		invokeParam := invokeTx.InvokeParam
-
-		if invokeTx.TxOutput == nil {
-			return fmt.Errorf("invalid contract invoke TX, fundingOutput is nil")
+	if invokeTx.InvokeParam == nil {
+		if !p.runtime.AllowInvokeWithNoParam() {
+			return fmt.Errorf("invalid contract invoke TX, parameter is nil")
 		}
-
+	} else {
+		invokeParam := invokeTx.InvokeParam
 		if len(invokeParam.PubKey) != 0 && len(invokeParam.Sig) != 0 {
 			invoice, err := UnsignedInvokeContractInvoice(invokeParam)
 			if err != nil {
@@ -1920,50 +1907,13 @@ func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 				return fmt.Errorf("invalid contract sig")
 			}
 		}
-
 		if len(invokeParam.PubKey) != 0 {
 			invokeTx.Invoker = HexPubKeyToP2TRAddress(invokeParam.PubKey)
 		}
-	} else if invokeTx.TxOutput != nil {
-		// 已经检查过
-		// 只检查是否有合约对应的资产
-		// amt := invokeTx.TxOutput.GetAsset(p.contract.wallet.GetAssetName())
-		// if amt.Sign() == 0 {
-		// 	// TODO 以后考虑白聪也可以
-		// 	return fmt.Errorf("no asset %s", p.contract.wallet.GetAssetName().String())
-		// }
 	}
 
-	if invokeTx.Invoker == "" {
-		// 取最后一个输入作为调用者
-		txIn := invokeTx.Tx.TxIn[len(invokeTx.Tx.TxIn)-1]
-		preTxId := txIn.PreviousOutPoint.Hash.String()
-		txHex, err := p.stp.GetIndexerClient().GetRawTx(preTxId)
-		if err != nil {
-			Log.Errorf("GetRawTx %s failed, %v", preTxId, err)
-			return err
-		}
-		preTx, err := DecodeMsgTx(txHex)
-		if err != nil {
-			Log.Errorf("DecodeMsgTx from %s failed, %v", preTxId, err)
-			return err
-		}
-		if int(txIn.PreviousOutPoint.Index) >= len(preTx.TxOut) {
-			return fmt.Errorf("index out of bound. %d %s", txIn.PreviousOutPoint.Index, preTxId)
-		}
-		txOut := preTx.TxOut[txIn.PreviousOutPoint.Index]
-		invokeTx.Invoker, err = AddrFromPkScript(txOut.PkScript)
-		if err != nil {
-			Log.Errorf("AddrFromPkScript %s failed, %v", hex.EncodeToString(txOut.PkScript), err)
-			return err
-		}
-
-		// 如果输入和输出是同一个地址，很可能是合约地址的withdraw操作，直接忽略
-		if invokeTx.TxOutput != nil {
-			if bytes.Equal(txOut.PkScript, invokeTx.TxOutput.OutValue.PkScript) {
-				return fmt.Errorf("contract withdraw transaction %s, not need to do anything", invokeTx.Tx.TxID())
-			}
-		}
+	if invokeTx.TxOutput == nil {
+		return fmt.Errorf("invalid contract invoke TX, fundingOutput is nil")
 	}
 
 	return nil
