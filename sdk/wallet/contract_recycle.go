@@ -93,6 +93,8 @@ func (p *RecycleContract) CheckContent() error {
 			return fmt.Errorf("FirstPrizeMatchCount should < SpecPrizeMatchCount")
 		}
 	}
+
+	var minPrize *Decimal
 	if p.FirstPrizeMatchCount == 0 {
 		return fmt.Errorf("should set the count of digits of the first prize")
 	}
@@ -102,10 +104,11 @@ func (p *RecycleContract) CheckContent() error {
 	if p.FirstPrize == "" || p.FirstPrize == "0" {
 		return fmt.Errorf("should set the first prize")
 	}
-	_, err := indexer.NewDecimalFromString(p.FirstPrize, MAX_ASSET_DIVISIBILITY)
+	d, err := indexer.NewDecimalFromString(p.FirstPrize, MAX_ASSET_DIVISIBILITY)
 	if err != nil {
 		return err
 	}
+	minPrize = d
 
 	if p.SecondPrizeMatchCount != 0 {
 		if p.SecondPrizeMatchCount >= p.FirstPrizeMatchCount {
@@ -114,10 +117,11 @@ func (p *RecycleContract) CheckContent() error {
 		if p.SecondPrize == "" || p.SecondPrize == "0" {
 			return fmt.Errorf("should set the second prize")
 		}
-		_, err := indexer.NewDecimalFromString(p.SecondPrize, MAX_ASSET_DIVISIBILITY)
+		d, err := indexer.NewDecimalFromString(p.SecondPrize, MAX_ASSET_DIVISIBILITY)
 		if err != nil {
 			return err
 		}
+		minPrize = d
 	}
 	if p.ThirdPrizeMatchCount != 0 {
 		if p.ThirdPrizeMatchCount >= p.SecondPrizeMatchCount {
@@ -126,10 +130,11 @@ func (p *RecycleContract) CheckContent() error {
 		if p.ThirdPrize == "" || p.ThirdPrize == "0" {
 			return fmt.Errorf("should set the third prize")
 		}
-		_, err := indexer.NewDecimalFromString(p.ThirdPrize, MAX_ASSET_DIVISIBILITY)
+		d, err := indexer.NewDecimalFromString(p.ThirdPrize, MAX_ASSET_DIVISIBILITY)
 		if err != nil {
 			return err
 		}
+		minPrize = d
 	}
 	if p.FourthPrizeMatchCount != 0 {
 		if p.FourthPrizeMatchCount >= p.ThirdPrizeMatchCount {
@@ -138,9 +143,17 @@ func (p *RecycleContract) CheckContent() error {
 		if p.FourthPrize == "" || p.FourthPrize == "0" {
 			return fmt.Errorf("should set the fourth prize")
 		}
-		_, err := indexer.NewDecimalFromString(p.FourthPrize, MAX_ASSET_DIVISIBILITY)
+		d, err := indexer.NewDecimalFromString(p.FourthPrize, MAX_ASSET_DIVISIBILITY)
 		if err != nil {
 			return err
+		}
+		minPrize = d
+	}
+
+	// 最低奖金的分成大于330
+	if indexer.IsPlainAsset(&p.AssetName) {
+		if minPrize.Mul(REWARD_SHARE_SERVER_Decimal).Int64() < 330 {
+			return fmt.Errorf("the min prize should should larger than %d", 330*100/REWARD_SHARE_SERVER)
 		}
 	}
 
@@ -687,8 +700,8 @@ func (p *RecycleContractRunTime) StatusByAddress(address string) (string, error)
 
 	//p.updateResponseData()
 
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 
 	result := &Response_InvokerStatus{}
 	trader := p.loadTraderInfo(address)
@@ -861,10 +874,15 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Inv
 	address := invokeTx.Invoker
 
 	var param InvokeParam
-	err := param.Decode(invokeData.InvokeParam)
-	if err != nil {
-		return nil, err
+	if invokeData != nil && invokeData.InvokeParam != nil {
+		err := param.Decode(invokeData.InvokeParam)
+		if err != nil {
+			return nil, err
+		}
+	} else { // TODO 主网过来的调用都没有设置参数，跟AMM/transend的符文有冲突，一个地址不能同时部署两个recycle和amm/transcend合约
+		param.Action = INVOKE_API_RECYCLE
 	}
+
 	utxoId := output.UtxoId
 	utxo := output.OutPointStr
 	org, ok := p.history[utxo]
@@ -881,33 +899,49 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Inv
 	switch param.Action {
 
 	case INVOKE_API_RECYCLE:
-		paramBytes, err := base64.StdEncoding.DecodeString(param.Param)
-		if err != nil {
-			return nil, err
+		if output.OutValue.Value < 500 {
+			return nil, fmt.Errorf("utxo %s should have sats >= 500", utxo)
 		}
-		var invokeParam InvokeParam
-		err = invokeParam.Decode(paramBytes)
-		if err != nil {
-			return nil, err
-		}
-
-		// 到这里，客观条件都满足了，如果还不能符合铸造条件，直接设置为无效调用
-		bValid := true
-		for {
-			plainSats := output.OutValue.Value
-			if plainSats < 500 {
-				Log.Errorf("utxo %s no enough sats %d", utxo, 500)
-				bValid = false
-				break
+		if param.Param != "" {
+			paramBytes, err := base64.StdEncoding.DecodeString(param.Param)
+			if err != nil {
+				return nil, err
 			}
-
+			var recycleParam RecycleInvokeParam
+			err = recycleParam.Decode(paramBytes)
+			if err != nil {
+				return nil, err
+			}
+			if recycleParam.AssetName != "" {
+				if recycleParam.AssetName != p.GetAssetName().String() {
+					return nil, fmt.Errorf("invalid asset name %s", recycleParam.AssetName)
+				}
+			}
+			if recycleParam.Amt != "0" && recycleParam.Amt != "" {
+				if indexer.IsPlainAsset(p.GetAssetName()) {
+					value, err := strconv.ParseInt(recycleParam.Amt, 10, 64)
+					if err != nil {
+						return nil, err
+					}
+					if value < output.OutValue.Value {
+						return nil, fmt.Errorf("input value is not the same as parameter")
+					}
+				} else {
+					if recycleParam.Amt != p.GetAssetName().String() {
+						return nil, fmt.Errorf("invalid asset amt %s", recycleParam.Amt)
+					}
+				}
+			}
 		}
+
 		// 更新合约状态
 		invokeTx.Handled = true
 		newTxOut := OutputFromSatsNet(output)
-		// 为了处理方便，将L2的交易，当作是一个特殊的L1交易，
-		newTxOut.UtxoId = indexer.ToUtxoId(p.CurrBlockL1, 0, 0)
-		return p.updateContract(address, newTxOut, bValid, false), nil
+		// 为了处理方便，将L2的交易，当作是一个特殊的L1交易：当作在下一个区块打包的交易
+		// 其区块高度，由主网节点高度确定（这要求合约两个节点都是连接到同一个主网节点）
+		heightL1 := int(p.stp.GetIndexerClient().GetBestHeight())
+		newTxOut.UtxoId = indexer.ToUtxoId(heightL1+1, 0, 0)
+		return p.updateContract(address, newTxOut, true, false), nil
 
 	default:
 		Log.Errorf("contract %s is not support action %s", url, param.Action)
@@ -921,7 +955,6 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, h
 	output := invokeTx.TxOutput
 	address := invokeTx.Invoker
 
-	// 如果invokeData.InvokeParam == nil 默认就是deposit
 	var param InvokeParam
 	if invokeData != nil && invokeData.InvokeParam != nil {
 		err := param.Decode(invokeData.InvokeParam)
@@ -956,27 +989,37 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, h
 		bValid := true
 
 		// 如果invokeParam不为nil，要检查数据是否一致
-		// if param.Param != "" {
-		// 	paramBytes, err := base64.StdEncoding.DecodeString(param.Param)
-		// 	if err != nil {
-		// 		return nil, err
-		// 	}
-		// 	var depositParam DepositInvokeParam
-		// 	err = depositParam.Decode(paramBytes)
-		// 	if err != nil {
-		// 		return nil, err
-		// 	}
-		// 	if depositParam.AssetName != "" {
-		// 		if depositParam.AssetName != p.GetAssetName().String() {
-		// 			return nil, fmt.Errorf("invalid asset name %s", depositParam.AssetName)
-		// 		}
-		// 	}
-		// 	if depositParam.Amt != "0" && depositParam.Amt != "" {
-		// 		if depositParam.Amt != assetAmt.String() {
-		// 			return nil, fmt.Errorf("invalid asset amt %s", depositParam.Amt)
-		// 		}
-		// 	}
-		// }
+		if param.Param != "" {
+			paramBytes, err := base64.StdEncoding.DecodeString(param.Param)
+			if err != nil {
+				return nil, err
+			}
+			var recycleParam RecycleInvokeParam
+			err = recycleParam.Decode(paramBytes)
+			if err != nil {
+				return nil, err
+			}
+			if recycleParam.AssetName != "" {
+				if recycleParam.AssetName != p.GetAssetName().String() {
+					return nil, fmt.Errorf("invalid asset name %s", recycleParam.AssetName)
+				}
+			}
+			if recycleParam.Amt != "0" && recycleParam.Amt != "" {
+				if indexer.IsPlainAsset(p.GetAssetName()) {
+					value, err := strconv.ParseInt(recycleParam.Amt, 10, 64)
+					if err != nil {
+						return nil, err
+					}
+					if value < output.OutValue.Value {
+						return nil, fmt.Errorf("input value is not the same as parameter")
+					}
+				} else {
+					if recycleParam.Amt != p.GetAssetName().String() {
+						return nil, fmt.Errorf("invalid asset amt %s", recycleParam.Amt)
+					}
+				}
+			}
+		}
 
 		// 更新合约状态
 		invokeTx.Handled = true
@@ -1326,11 +1369,11 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 			if assetAmt.Cmp(item.prize) >= 0 {
 				assetAmt = assetAmt.Sub(item.prize)
 			} else {
+				item.item.Reason = INVOKE_REASON_POOL_TOO_SMALL
 				if assetAmt.Sign() > 0 {
 					item.prize = assetAmt
 					assetAmt = nil
 				} else {
-					item.item.Reason = INVOKE_REASON_POOL_TOO_SMALL
 					item.item.Done = DONE_CLOSED_DIRECTLY
 					continue
 				}
@@ -1490,6 +1533,7 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 			}
 			maxHeight = max(maxHeight, h)
 
+			// TODO 需要确保最低奖的分成大于330
 			amt1 := item.OutAmt.Mul(REWARD_SHARE_INVOKER_Decimal)
 			value1 := item.OutValue * int64(REWARD_SHARE_INVOKER) / 100
 			amt2 := item.OutAmt.Mul(REWARD_SHARE_SERVER_Decimal)

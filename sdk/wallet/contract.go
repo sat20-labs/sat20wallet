@@ -1817,74 +1817,41 @@ func (p *ContractRuntimeBase) CheckDeployTx(
 }
 
 func (p *ContractRuntimeBase) CheckInvokeTx_SatsNet(invokeTx *InvokeTx_SatsNet) error {
-	// resv, ok := r.(ContractDeployResvBase)
-	// if !ok {
-	// 	return fmt.Errorf("not ContractDeployReservation")
-	// }
-
 	if invokeTx.InvokeParam == nil {
 		if !p.runtime.AllowInvokeWithNoParam_SatsNet() {
 			return fmt.Errorf("invalid contract invoke TX, parameter is nil")
 		}
+	} else {
+		invokeParam := invokeTx.InvokeParam
+		if len(invokeParam.PubKey) != 0 && len(invokeParam.Sig) != 0 {
+			invoice, err := UnsignedInvokeContractInvoice(invokeParam)
+			if err != nil {
+				return fmt.Errorf("invalid contract invoice, %v", err)
+			}
+			pubkey, err := utils.BytesToPublicKey(invokeParam.PubKey)
+			if err != nil {
+				return fmt.Errorf("invalid contract initor key, %v", err)
+			}
+			if !VerifyMessage(pubkey, invoice, invokeParam.Sig) {
+				return fmt.Errorf("invalid contract sig")
+			}
+		}
+
+		if len(invokeParam.PubKey) != 0 {
+			invokerAddr := HexPubKeyToP2TRAddress(invokeParam.PubKey)
+			if len(invokerAddr) != 0 {
+				invokeTx.Invoker = invokerAddr
+			}
+		}
 	}
 
-	invokeParam := invokeTx.InvokeParam
-
-	if invokeTx.TxOutput == nil { // 可能是该合约的enable调用
+	if invokeTx.TxOutput == nil { // 可能是该合约的enable调用，但已经在前面处理了
 		return fmt.Errorf("invalid contract invoke TX, fundingOutput is nil, maybe a enable invoke tx: %s", invokeTx.Tx.TxID())
-	}
-
-	if len(invokeParam.PubKey) != 0 && len(invokeParam.Sig) != 0 {
-		invoice, err := UnsignedInvokeContractInvoice(invokeParam)
-		if err != nil {
-			return fmt.Errorf("invalid contract invoice, %v", err)
-		}
-		pubkey, err := utils.BytesToPublicKey(invokeParam.PubKey)
-		if err != nil {
-			return fmt.Errorf("invalid contract initor key, %v", err)
-		}
-		if !VerifyMessage(pubkey, invoice, invokeParam.Sig) {
-			return fmt.Errorf("invalid contract sig")
-		}
-	}
-
-	if len(invokeParam.PubKey) != 0 {
-		invokerAddr := HexPubKeyToP2TRAddress(invokeParam.PubKey)
-		if len(invokerAddr) != 0 {
-			invokeTx.Invoker = invokerAddr
-		}
 	}
 
 	return nil
 }
 
-func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
-
-	// 输出地址是合约地址
-	if p.ChannelAddr != invoke.Address {
-		return false
-	}
-
-	if invoke.InvokeParam != nil {
-		return invoke.InvokeParam.ContractPath == p.RelativePath() ||
-			invoke.InvokeParam.ContractPath == p.URL()
-	} else if invoke.TxOutput != nil {
-		assetName := p.contract.GetAssetName()
-		if assetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
-			// 只检查是否有合约对应的资产
-			amt := invoke.TxOutput.GetAsset(assetName)
-			return amt.Sign() != 0
-		}
-		// TODO 目前除了符文的deposit，也就只有recycle合约不需要调用参数
-		if p.contract.GetTemplateName() == TEMPLATE_CONTRACT_RECYCLE {
-			return true
-		}
-		// 只要有合约对应的资产，就尝试调用
-		amt := invoke.TxOutput.GetAsset(assetName)
-		return amt.Sign() != 0
-	}
-	return false
-}
 
 func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 
@@ -1908,7 +1875,10 @@ func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 			}
 		}
 		if len(invokeParam.PubKey) != 0 {
-			invokeTx.Invoker = HexPubKeyToP2TRAddress(invokeParam.PubKey)
+			invokerAddr := HexPubKeyToP2TRAddress(invokeParam.PubKey)
+			if len(invokerAddr) != 0 {
+				invokeTx.Invoker = invokerAddr
+			}
 		}
 	}
 
@@ -1918,6 +1888,40 @@ func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 
 	return nil
 }
+
+func (p *ContractRuntimeBase) IsMyInvoke_SatsNet(invoke *InvokeTx_SatsNet) bool {
+	// 输出地址是合约地址
+	if p.ChannelAddr != invoke.Address { // 有些特殊指令只有op_return，没有对应的output，比如合约激活指令
+		channelAddr := ExtractChannelId(invoke.InvokeParam.ContractPath)
+		if channelAddr != p.ChannelAddr {
+			return false
+		}
+	}
+	if invoke.InvokeParam != nil {
+		return invoke.InvokeParam.ContractPath == p.RelativePath() ||
+			invoke.InvokeParam.ContractPath == p.URL()
+	}
+	return p.runtime.AllowInvokeWithNoParam_SatsNet()
+}
+
+func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
+
+	// 输出地址是合约地址
+	if p.ChannelAddr != invoke.Address {
+		channelAddr := ExtractChannelId(invoke.InvokeParam.ContractPath)
+		if channelAddr != p.ChannelAddr {
+			return false
+		}
+	}
+
+	if invoke.InvokeParam != nil {
+		return invoke.InvokeParam.ContractPath == p.RelativePath() ||
+			invoke.InvokeParam.ContractPath == p.URL()
+	} 
+	
+	return p.runtime.AllowInvokeWithNoParam()
+}
+
 
 func (p *ContractRuntimeBase) PreprocessInvokeData(data *InvokeDataInBlock) error {
 
@@ -2007,18 +2011,6 @@ func (p *ContractRuntimeBase) InvokeCompleted(data *InvokeDataInBlock) {
 	p.invokeCompleted()
 }
 
-func (p *ContractRuntimeBase) IsMyInvoke_SatsNet(invoke *InvokeTx_SatsNet) bool {
-	// 输出地址是合约地址
-	if p.ChannelAddr != invoke.Address { // 有些特殊指令只有op_return，没有对应的output，比如合约激活指令
-		channelAddr := ExtractChannelId(invoke.InvokeParam.ContractPath)
-		if channelAddr != p.ChannelAddr {
-			return false
-		}
-	}
-
-	return invoke.InvokeParam.ContractPath == p.RelativePath() ||
-		invoke.InvokeParam.ContractPath == p.URL()
-}
 
 // 调用方确保p.contractRunningMutex.Lock()
 func (p *ContractRuntimeBase) resyncBlock(start, end int) {
@@ -2076,14 +2068,18 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 	p.mutex.Lock()
 	if p.EnableTxId == "" {
 		for _, invoke := range data.InvokeTxVect {
-			invokeParam := invoke.InvokeParam
+			
 			if !p.IsMyInvoke_SatsNet(invoke) {
 				continue
 			}
 			if p.resv.LocalIsInitiator() {
 				continue
 			}
+			if invoke.InvokeParam == nil {
+				continue
+			}
 
+			invokeParam := invoke.InvokeParam
 			var param InvokeParam
 			err := param.Decode(invokeParam.InvokeParam)
 			if err != nil {

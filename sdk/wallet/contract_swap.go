@@ -425,7 +425,7 @@ type TraderStatus struct {
 	UnStakeAmt    *Decimal
 	UnStakeValue  int64
 	LptAmt        *Decimal // 持有的LptToken数量
-	SettleState   int      // 0: 正常运行； 1: 准备清退，可以发起退款交易；退款交易完成后，回到0
+	SettleState   int      // 废弃，只看下面两个变量
 	RetrieveAmt   *Decimal // 加池子剩余资产
 	RetrieveValue int64    // 加池子剩余资产
 	LiqSatsValue  int64    // LptAmt 对应的sats的数量，也就是用户的成本，按照addLiq时的对价转换为satsValue
@@ -4141,9 +4141,9 @@ func (p *SwapContractRuntime) genRemoveLiquidityInfo(height int) *DealInfo {
 		if trader == nil {
 			continue
 		}
-		if trader.SettleState != SETTLE_STATE_REMOVING_LIQ_READY {
-			continue
-		}
+		// if trader.SettleState != SETTLE_STATE_REMOVING_LIQ_READY {
+		// 	continue
+		// }
 		if trader.RetrieveAmt.Sign() == 0 && trader.RetrieveValue == 0 {
 			continue
 		}
@@ -4244,9 +4244,9 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 		if trader == nil {
 			Log.Panicf("%s can't find trader %s", url, addr)
 		}
-		if trader.SettleState != SETTLE_STATE_REMOVING_LIQ_READY {
-			continue
-		}
+		// if trader.SettleState != SETTLE_STATE_REMOVING_LIQ_READY {
+		// 	continue
+		// }
 		trader.RetrieveAmt = trader.RetrieveAmt.Sub(info.AssetAmt)
 		trader.RetrieveValue -= info.Value
 		trader.SettleState = SETTLE_STATE_NORMAL
