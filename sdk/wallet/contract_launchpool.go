@@ -609,6 +609,10 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 	return nil
 }
 
+func (p *LaunchPoolContractRunTime) IsIdle() bool {
+	return len(p.mintInfoMap) == 0 && len(p.invalidMintMap) == 0
+}
+
 func (p *LaunchPoolContractRunTime) GetAssetAmount() (*Decimal, int64) {
 	return p.AssetAmtInPool, p.SatsValueInPool
 }

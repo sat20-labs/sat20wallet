@@ -580,6 +580,15 @@ func (p *SwapContractRuntime) InitFromDB(stp ContractManager, resv ContractDeplo
 	return nil
 }
 
+func (p *SwapContractRuntime) IsIdle() bool {
+	return len(p.buyPool) == 0 && len(p.sellPool) == 0 &&
+	len(p.swapMap) == 0 && len(p.refundMap) == 0 && 
+	len(p.depositMap) == 0 && len(p.withdrawMap) == 0 &&
+	len(p.addLiquidityMap) == 0 && len(p.removeLiquidityMap) == 0 &&
+	len(p.stakeMap) == 0 && len(p.unstakeMap) == 0 &&
+	len(p.profitMap) == 0
+}
+
 func (p *SwapContractRuntime) rebuildTraderHistory() {
 
 	if p.stp.NeedRebuildTraderHistory() {

@@ -480,6 +480,10 @@ func (p *RecycleContractRunTime) InitFromDB(stp ContractManager, resv ContractDe
 	return nil
 }
 
+func (p *RecycleContractRunTime) IsIdle() bool {
+	return len(p.recycleMap) == 0 && len(p.rewardMap) == 0
+}
+
 func (p *RecycleContractRunTime) IsActive() bool {
 	return p.ContractRuntimeBase.IsActive() &&
 		p.CurrBlockL1 >= p.EnableBlockL1
