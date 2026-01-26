@@ -1893,8 +1893,12 @@ func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 func (p *ContractRuntimeBase) IsMyInvoke_SatsNet(invoke *InvokeTx_SatsNet) bool {
 	// 输出地址是合约地址
 	if p.ChannelAddr != invoke.Address { // 有些特殊指令只有op_return，没有对应的output，比如合约激活指令
-		channelAddr := ExtractChannelId(invoke.InvokeParam.ContractPath)
-		if channelAddr != p.ChannelAddr {
+		if invoke.Address == "" && invoke.InvokeParam != nil {
+			channelAddr := ExtractChannelId(invoke.InvokeParam.ContractPath)
+			if channelAddr != p.ChannelAddr {
+				return false
+			}
+		} else {
 			return false
 		}
 	}
@@ -1909,8 +1913,12 @@ func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
 
 	// 输出地址是合约地址
 	if p.ChannelAddr != invoke.Address {
-		channelAddr := ExtractChannelId(invoke.InvokeParam.ContractPath)
-		if channelAddr != p.ChannelAddr {
+		if invoke.Address == "" && invoke.InvokeParam != nil {
+			channelAddr := ExtractChannelId(invoke.InvokeParam.ContractPath)
+			if channelAddr != p.ChannelAddr {
+				return false
+			}
+		} else {
 			return false
 		}
 	}

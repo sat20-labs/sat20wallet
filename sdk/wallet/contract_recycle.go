@@ -1269,6 +1269,8 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 			if err != nil {
 				item.Reason = INVOKE_REASON_UTXO_FORMAT
 				item.Done = DONE_CLOSED_DIRECTLY
+				item.RemainingAmt = nil
+				item.RemainingValue = 0
 				continue
 			}
 
@@ -1321,6 +1323,8 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				// 仅获得points奖励
 				points = 10 * item.InValue / 330
 				item.Done = DONE_CLOSED_DIRECTLY
+				item.RemainingAmt = nil
+				item.RemainingValue = 0
 
 				invoker := p.loadTraderInfo(item.Address)
 				invoker.TotalRewardPoints += points
@@ -1379,6 +1383,8 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 					assetAmt = nil
 				} else {
 					item.item.Done = DONE_CLOSED_DIRECTLY
+					item.item.RemainingAmt = nil
+					item.item.RemainingValue = 0
 					continue
 				}
 			}
