@@ -342,6 +342,7 @@ type ContractRuntime interface {
 	PrepareForReInvoke(height int, bSatsNet bool) int // 重新跑区块，需要重新加载历史数据，只为了处理某些漏掉的invoke
 	GetInvokeHistoryWithBlock(height int) map[string]InvokeHistoryItem
 	GetInvokeHistoryWithBlock_SatsNet(height int) map[string]InvokeHistoryItem
+	IsIdle() bool // 所有合约已经处理完成
 
 	// 作为通道合约，本地节点不能发起的动作，需要由peer发起，在这里检查和设置结果，并推动合约内部状态变迁
 	AllowPeerAction(string, any) (any, error)
