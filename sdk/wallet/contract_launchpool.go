@@ -600,9 +600,11 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 				Log.Infof("item not done: %v", item)
 			}
 		}
-		if needSetRunning && p.resv.GetStatus() != RS_DEPLOY_CONTRACT_RUNNING {
-			p.resv.SetStatus(RS_DEPLOY_CONTRACT_RUNNING)
-			p.stp.SaveReservation(resv)
+		if needSetRunning {
+			if p.resv.GetStatus() != RS_DEPLOY_CONTRACT_RUNNING {
+				p.resv.SetStatus(RS_DEPLOY_CONTRACT_RUNNING)
+				p.stp.SaveReservation(resv)
+			}
 		}
 	}
 
@@ -1667,7 +1669,7 @@ func (p *LaunchPoolContractRunTime) launch() error {
 		}
 		p.isSending = true
 
-		Log.Infof("%s start launch contract %s", p.stp.GetMode(), p.URL())
+		Log.Debugf("%s start launch contract %s", p.stp.GetMode(), p.URL())
 
 		type addrvalue struct {
 			address string
@@ -1835,7 +1837,7 @@ func (p *LaunchPoolContractRunTime) refund() error {
 		}
 		p.isSending = true
 
-		Log.Infof("%s start refund contract %s", p.stp.GetMode(), p.URL())
+		Log.Debugf("%s start refund contract %s", p.stp.GetMode(), p.URL())
 
 		type addrvalue struct {
 			address string
@@ -1861,7 +1863,7 @@ func (p *LaunchPoolContractRunTime) refund() error {
 
 		if len(refundAddresses) == 0 {
 			p.isSending = false
-			Log.Infof("no refund addresses for contract %s", p.URL())
+			Log.Debugf("no refund addresses for contract %s", p.URL())
 			return nil
 		}
 
