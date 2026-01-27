@@ -45,6 +45,10 @@ export class BrowserUtil {
         // 在移动端使用 Capacitor Browser
         await Browser.open({
           url,
+          // 确保工具栏显示（iOS 的 SFSafariViewController 会显示完成按钮）
+          toolbarColor: '#ffffff',
+          // 允许返回导航
+          canGoBack: true,
           ...capacitorOptions
         })
       } else {

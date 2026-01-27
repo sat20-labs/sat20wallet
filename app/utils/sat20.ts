@@ -613,6 +613,17 @@ class WalletManager {
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('batchSendAssets', destAddr, assetName, amt, n, feeRate.toString())
   }
+
+  async stakeToBeMiner(bCoreNode: boolean, btcFeeRate: string): Promise<
+    [Error | undefined, {
+      txId: string,
+      resvId: string,
+      assetName: string,
+      amt: string
+    } | undefined]
+  > {
+    return this._handleRequest('stakeToBeMiner', bCoreNode, btcFeeRate)
+  }
 }
 
 export default new WalletManager()

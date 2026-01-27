@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.sat20.wallet',
-  appName: 'SAT20 Wallet',
+  appName: 'SAT20Wallet',
   webDir: 'dist',
   server: {
     androidScheme: 'https',
@@ -10,7 +10,7 @@ const config: CapacitorConfig = {
     cleartext: true
   },
   ios: {
-    scheme: 'SAT20Wallet'
+    scheme: 'App'
   },
   android: {
     // Android 性能优化配置
