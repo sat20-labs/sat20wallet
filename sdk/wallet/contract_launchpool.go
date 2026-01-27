@@ -27,6 +27,7 @@ func init() {
 const (
 	LAUNCH_POOL_MIN_RATION int = 60 // %
 	LAUNCH_POOL_MAX_RATION int = 90 // %
+	RESERVE_TO_FOUNDATION  int = 5  // %
 
 	INVOKE_API_MINT string = "mint"
 )
@@ -69,6 +70,7 @@ type LaunchPoolContract struct {
 	Limit         int64 `json:"limit"`         // 每个地址最大铸造量，0 不限制
 	MaxSupply     int64 `json:"maxSupply"`     // 最大资产供应量，
 	LaunchRatio   int   `json:"launchRation"`  // 铸造量达到总量的多少比例后，自动发射，向之前所有铸造者自动转token；
+	ReserveRatio  int   `json:"reserveRation"` // 预留给部署者的比例，默认为0。注意如果有预留部分，其中的5%会给到foundation
 	// 剩下的比例，留存在池子中当作流动性池子
 	// 比例必须在LAUNCH_POOL_MIN_RATION 和 LAUNCH_POOL_MAX_RATION 之间
 }
@@ -160,6 +162,11 @@ func (p *LaunchPoolContract) CheckContent() error {
 	if p.LaunchRatio < LAUNCH_POOL_MIN_RATION || p.LaunchRatio > LAUNCH_POOL_MAX_RATION {
 		return fmt.Errorf("invalid launch ratio %d", p.LaunchRatio)
 	}
+	if p.ReserveRatio != 0 {
+		if p.ReserveRatio + p.LaunchRatio > LAUNCH_POOL_MAX_RATION {
+			return fmt.Errorf("invalid reserve ratio %d", p.ReserveRatio)
+		}
+	}
 
 	minSatsInPool := (p.MaxSupply * int64(p.LaunchRatio) / 100) / int64(p.MintAmtPerSat)
 	if minSatsInPool < LAUNCHPOOL_MIN_SATS {
@@ -192,7 +199,9 @@ func (p *LaunchPoolContract) Encode() ([]byte, error) {
 		AddInt64(int64(p.MintAmtPerSat)).
 		AddInt64(int64(p.Limit)).
 		AddInt64(int64(p.MaxSupply)).
-		AddInt64(int64(p.LaunchRatio)).Script()
+		AddInt64(int64(p.LaunchRatio)).
+		AddInt64(int64(p.ReserveRatio)).
+		Script()
 }
 
 func (p *LaunchPoolContract) Decode(data []byte) error {
@@ -248,6 +257,12 @@ func (p *LaunchPoolContract) Decode(data []byte) error {
 		return fmt.Errorf("invalid ratio: %v", err)
 	}
 	p.LaunchRatio = int(tokenizer.ExtractInt64())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		p.ReserveRatio = 0
+	} else {
+		p.ReserveRatio = int(tokenizer.ExtractInt64())
+	}
 
 	return nil
 }
@@ -577,8 +592,8 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 		p.history[item.InUtxo] = item
 		p.addItem(item)
 	}
+	p.handleReserveRatio()
 
-	p.resv = resv
 
 	if p.DeployTickerResvId != 0 {
 		p.deployTickerResv = p.stp.GetWalletMgr().GetInscribeResv(p.DeployTickerResvId)
@@ -1377,6 +1392,7 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 		(p.Status == CONTRACT_STATUS_READY || p.Status == CONTRACT_STATUS_CLOSING) {
 		if p.Status == CONTRACT_STATUS_READY {
 			p.Status = CONTRACT_STATUS_CLOSING
+			p.handleReserveRatio()
 			if p.CheckPointBlock == p.EnableBlock {
 				// 截止到这里，后续其他invoke都无效
 				p.CheckPointBlock = data.Height
@@ -1386,9 +1402,10 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 		}
 		p.mutex.Unlock()
 
+		// 设置delay，是为了将这后续的invoke退款
 		delayLaunch := 10
 		if IsTestNet() {
-			delayLaunch = 1
+			delayLaunch = 3
 		}
 		if p.CheckPointBlock+delayLaunch <= data.Height {
 			// 进入之前先解锁
@@ -1400,6 +1417,31 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 	}
 
 	return nil
+}
+
+func (p *LaunchPoolContractRunTime) handleReserveRatio() {
+	if p.ReserveRatio != 0 && p.Status == CONTRACT_STATUS_CLOSING {
+		totalReservedAmt := p.MaxSupply*int64(p.ReserveRatio)/100
+		deployerPart := totalReservedAmt * int64(100-RESERVE_TO_FOUNDATION) / 100
+		foundationPart := totalReservedAmt * int64(RESERVE_TO_FOUNDATION) / 100
+
+		// 因为没有保存reserve是否已经发射的信息，需要做进一步的检查
+		// 最后一个发射出去的是reserve部分，如果还需要发射，那就还没有把reserve部分发射出去
+		// 另外，硬顶是 LAUNCH_POOL_MAX_RATION ，剩下的资产数量不可能比这个少
+		minLeft := p.MaxSupply*int64(100-LAUNCH_POOL_MAX_RATION)/100
+		currLeft := p.AssetAmtInPool.Int64()
+		if currLeft < totalReservedAmt || currLeft < minLeft {
+			return
+		}
+
+		deployerAddr := p.Deployer
+		deployer := addMintInfo(deployerAddr, p.mintInfoMap)
+		deployer.TotalAmt = deployer.TotalAmt.Add(indexer.NewDefaultDecimal(deployerPart))
+		
+		foundationAddr := p.GetFoundationAddress()
+		foundation := addMintInfo(foundationAddr, p.mintInfoMap)
+		foundation.TotalAmt = foundation.TotalAmt.Add(indexer.NewDefaultDecimal(foundationPart))
+	}
 }
 
 func (p *LaunchPoolContractRunTime) InvokeWithBlock(data *InvokeDataInBlock) error {
@@ -1515,37 +1557,30 @@ func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *
 	return p.updateContract(invokeTx.Invoker, output, value, amt, refundValue), nil
 }
 
+func addMintInfo(address string, mintInfoMap map[string]*MinterStatus) *MinterStatus {
+	info, ok := mintInfoMap[address]
+	if !ok {
+		info = &MinterStatus{}
+		mintInfoMap[address] = info
+	}
+	return info
+}
+
 func (p *LaunchPoolContractRunTime) addItem(item *MintHistoryItem) {
 	address := item.Address
 	amt := item.OutAmt
-	if amt.Sign() != 0 {
-		info, ok := p.mintInfoMap[address]
-		if ok {
-			info.TotalAmt = info.TotalAmt.Add(amt)
-			info.History = append(info.History, item)
-		} else {
-			info = &MinterStatus{
-				TotalAmt: amt,
-				Settled:  item.Done != DONE_NOTYET,
-				History:  []*MintHistoryItem{item},
-			}
-			p.mintInfoMap[address] = info
-		}
+	if amt.Sign() != 0 { // 铸造成功的item
+		info := addMintInfo(address, p.mintInfoMap)
+		info.TotalAmt = info.TotalAmt.Add(amt)
+		info.History = append(info.History, item)
+		info.Settled = item.Done != DONE_NOTYET
 	}
 
-	if item.OutValue != 0 {
-		info, ok := p.invalidMintMap[address]
-		if ok {
-			info.TotalAmt = info.TotalAmt.Add(indexer.NewDefaultDecimal(item.OutValue))
-			info.History = append(info.History, item)
-		} else {
-			info = &MinterStatus{
-				TotalAmt: indexer.NewDefaultDecimal(item.OutValue),
-				Settled:  item.Done != DONE_NOTYET, // sendback
-				History:  []*MintHistoryItem{item},
-			}
-			p.invalidMintMap[address] = info
-		}
+	if item.OutValue != 0 { // 失败的item
+		info := addMintInfo(address, p.invalidMintMap)
+		info.TotalAmt = info.TotalAmt.Add(indexer.NewDefaultDecimal(item.OutValue))
+		info.History = append(info.History, item)
+		info.Settled = item.Done != DONE_NOTYET // sendback
 	}
 
 	p.insertBuck(item)
@@ -1673,32 +1708,58 @@ func (p *LaunchPoolContractRunTime) launch() error {
 
 		type addrvalue struct {
 			address string
-			amt     string
+			amt     *Decimal
 		}
 
 		p.mutex.RLock()
 		invokeCount := p.InvokeCount
 		height := p.CurrBlock
 		launchAddresses := make([]*addrvalue, 0, len(p.mintInfoMap))
+		foundationAddr := p.GetFoundationAddress()
+		deployerAddr := p.Deployer
 		for k, v := range p.mintInfoMap {
 			if v.Settled {
 				continue
 			}
 
+			// reserve 放最后加入
+			if p.ReserveRatio != 0 {
+				if k == foundationAddr || k == deployerAddr {
+					continue
+				}
+			}
+
 			launchAddresses = append(launchAddresses, &addrvalue{
 				address: k,
-				amt:     v.TotalAmt.String(),
+				amt:     v.TotalAmt,
 			})
 		}
 		p.mutex.RUnlock()
 
 		if len(launchAddresses) != 0 {
+			// 如果有reserve部分，reserve数量比较大，一般放最后
 			sort.Slice(launchAddresses, func(i, j int) bool {
-				return launchAddresses[i].address < launchAddresses[j].address
+				return launchAddresses[i].amt.Cmp(launchAddresses[j].amt) < 0
 			})
+			if p.ReserveRatio != 0 {
+				foundation, ok := p.mintInfoMap[foundationAddr]
+				if ok && foundation.TotalAmt.Sign() != 0 {
+					launchAddresses = append(launchAddresses, &addrvalue{
+						address: foundationAddr,
+						amt:     foundation.TotalAmt,
+					})
+				}
+				deployer, ok := p.mintInfoMap[deployerAddr]
+				if ok && deployer.TotalAmt.Sign() != 0 {
+					launchAddresses = append(launchAddresses, &addrvalue{
+						address: deployerAddr,
+						amt:     deployer.TotalAmt,
+					})
+				}
+			}
 
 			var destAddr []string
-			var destAmt []string
+			var destAmt []*Decimal
 			for i, out := range launchAddresses {
 				destAddr = append(destAddr, string(out.address))
 				destAmt = append(destAmt, out.amt)
@@ -1841,7 +1902,7 @@ func (p *LaunchPoolContractRunTime) refund() error {
 
 		type addrvalue struct {
 			address string
-			amt     string
+			amt     *Decimal
 		}
 
 		p.mutex.RLock()
@@ -1856,7 +1917,7 @@ func (p *LaunchPoolContractRunTime) refund() error {
 			// TODO 如何支付网络费用
 			refundAddresses = append(refundAddresses, &addrvalue{
 				address: k,
-				amt:     v.TotalAmt.String(),
+				amt:     v.TotalAmt,
 			})
 		}
 		p.mutex.RUnlock()
@@ -1868,11 +1929,11 @@ func (p *LaunchPoolContractRunTime) refund() error {
 		}
 
 		sort.Slice(refundAddresses, func(i, j int) bool {
-			return refundAddresses[i].address < refundAddresses[j].address
+			return refundAddresses[i].amt.Cmp(refundAddresses[j].amt) > 0
 		})
 
 		var destAddr []string
-		var destAmt []string
+		var destAmt []*Decimal
 		for i, out := range refundAddresses {
 			destAddr = append(destAddr, string(out.address))
 			destAmt = append(destAmt, out.amt)

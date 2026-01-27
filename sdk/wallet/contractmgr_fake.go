@@ -83,7 +83,7 @@ func (p *Manager) CoBatchSendV2_SatsNet(localWallet common.Wallet, dest []*SendA
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }
-func (p *Manager) CoBatchSend_SatsNet(localWallet common.Wallet, destAddr []string, assetName string, amtVect []string,
+func (p *Manager) CoBatchSend_SatsNet(localWallet common.Wallet, destAddr []string, assetName string, amtVect []*Decimal,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }

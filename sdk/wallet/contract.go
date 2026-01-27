@@ -225,7 +225,7 @@ type ContractManager interface {
 		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
 	CoBatchSendV2_SatsNet(localWallet common.Wallet, dest []*SendAssetInfo, assetName string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error)
-	CoBatchSend_SatsNet(localWallet common.Wallet, destAddr []string, assetName string, amtVect []string,
+	CoBatchSend_SatsNet(localWallet common.Wallet, destAddr []string, assetName string, amtVect []*Decimal,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error)
 	SendSigReq(req *wwire.SignRequest, sig []byte) ([][][]byte, error)
 
