@@ -1310,6 +1310,77 @@ func (p *Manager) BuildBatchSendTx_btc(localAddress string, destAddr string, amt
 	return tx, prevFetcher, fee, nil
 }
 
+
+// 从p2tr地址发出
+func (p *Manager) BuildSendTx_garbage(localAddress string, destAddr string, required int64,
+	excludedUtxoMap map[string]bool,
+	feeRate int64, memo []byte) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+
+	if required < 330 {
+		return nil, nil, 0, fmt.Errorf("amount too small")
+	}
+
+	tx := wire.NewMsgTx(wire.TxVersion)
+
+	addr, err := btcutil.DecodeAddress(destAddr, GetChainParam())
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	destPkScript, err := txscript.PayToAddrScript(addr)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	var weightEstimate utils.TxWeightEstimator
+	
+	weightEstimate.AddP2TROutput() // output
+	txOut := &wire.TxOut{
+		PkScript: destPkScript,
+		Value:    int64(required),
+	}
+	tx.AddTxOut(txOut)
+	
+	if len(memo) > 0 {
+		weightEstimate.AddOutput(memo[:]) // op_return
+	}
+
+	prevFetcher, changePkScript, outputValue, changeOutput, fee0, err := p.SelectUtxosForGarbage(
+		localAddress, excludedUtxoMap,
+		required, feeRate, tx, &weightEstimate, false, false)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if outputValue != required {
+		return nil, nil, 0, fmt.Errorf("not enough sats, required %d but only %d", required, outputValue) 
+	}
+
+	weightEstimate.AddP2TROutput() // fee change
+	fee1 := weightEstimate.Fee(feeRate)
+	changeOutput += fee0 - fee1
+	fee := fee0
+	if changeOutput >= 330 {
+		fee = fee1
+		txOut2 := &wire.TxOut{
+			PkScript: changePkScript,
+			Value:    int64(changeOutput),
+		}
+		tx.AddTxOut(txOut2)
+	} else {
+		fee = fee1 + changeOutput
+	}
+
+	if len(memo) > 0 {
+		txOut3 := &wire.TxOut{
+			PkScript: memo,
+			Value:    0,
+		}
+		tx.AddTxOut(txOut3)
+	}
+
+	return tx, prevFetcher, fee, nil
+}
+
+
 func AdjustInputsForSplicingIn(inputs []*TxOutput, name *AssetName) ([]*TxOutput, int64, int64) {
 	hasPrefix := -1
 	prefixOffset := int64(0)
@@ -1909,6 +1980,41 @@ func (p *Manager) SendAssets(destAddr string, assetName string,
 	return tx, nil
 }
 
+
+// 发送所谓的”垃圾“UTXO
+func (p *Manager) SendGarbage(destAddr string, value int64, feeRate int64) (*wire.MsgTx, error) {
+
+	if p.wallet == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
+
+	tx, prevFetcher, _, err := p.BuildSendTx_garbage(p.wallet.GetAddress(), destAddr, 
+		value, map[string]bool{}, feeRate, nil)
+	if err != nil {
+		Log.Errorf("BuildSendTx_garbage failed. %v", err)
+		return nil, err
+	}
+
+	// sign
+	tx, err = p.SignTx(tx, prevFetcher)
+	if err != nil {
+		Log.Errorf("SignTx failed. %v", err)
+		return nil, err
+	}
+
+	_, err = p.BroadcastTx(tx)
+	if err != nil {
+		Log.Errorf("BroadCastTx failed. %v", err)
+		return nil, err
+	}
+
+	return tx, nil
+}
+
 // 仅仅是估算，并且尽可能多预估了输入和输出
 func CalcFee_SendTx(inputLen, outputLen, feeLen int, assetName *AssetName,
 	amt *Decimal, feeRate int64, bInChannel bool) int64 {
@@ -2120,6 +2226,120 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx, preFectcher map[string]*TxOutp
 	return inputs, outputs, nil
 }
 
+
+// 优先选择无用的铭文，再加上小额的utxo
+func (p *Manager) SelectUtxosForGarbage(
+	address string, excludedUtxoMap map[string]bool,
+	requiredValue int64, feeRate int64,
+	tx *wire.MsgTx, weightEstimate *utils.TxWeightEstimator,
+	excludeRecentBlock, inChannel bool,
+) (*txscript.MultiPrevOutFetcher, []byte, int64, int64, int64, error) {
+
+	utxos, err := p.l1IndexerClient.GetUnusableUtxosWithAddress(address)
+	if err != nil {
+		return nil, nil, 0, 0, 0, fmt.Errorf("no garbage utxo")
+	}
+	changePkScript := utxos[0].OutValue.PkScript
+	p.utxoLockerL1.Reload(address)
+
+	selected := make(map[string]*TxOutput)
+	localWeightEstimate := *weightEstimate
+	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
+	txIns := make([]*wire.TxIn, 0)
+
+	// 先选满足条件的主utxo
+	total := int64(0)
+	for _, u := range utxos {
+		if _, ok := excludedUtxoMap[u.OutPointStr]; ok {
+			continue
+		}
+		if p.utxoLockerL1.IsLocked(u.OutPointStr) {
+			continue
+		}
+		if excludeRecentBlock {
+			if p.IsRecentBlockUtxo(u.UtxoId) {
+				continue
+			}
+		}
+		
+		if u.OutValue.Value >= requiredValue {
+			continue
+		}
+		selected[u.OutPointStr] = u
+
+		outpoint := u.OutPoint()
+		out := u.OutValue
+		txIn := wire.NewTxIn(outpoint, nil, nil)
+		txIns = append(txIns, txIn)
+		//tx.AddTxIn(txIn)
+		prevFetcher.AddPrevOut(*outpoint, &out)
+		if inChannel {
+			localWeightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		} else {
+			localWeightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		}
+		total += u.OutValue.Value
+		if total >= requiredValue {
+			break
+		}
+	}
+	if total < requiredValue {
+		return nil, nil, 0, 0, 0, fmt.Errorf("no enough garbage utxo, required %d but only %d", requiredValue, total)
+	}
+
+	feeUtxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
+	if len(feeUtxos) == 0 {
+		return nil, nil, 0, 0, 0, fmt.Errorf("no plain sats")
+	}
+	// 再选小的utxo作为fee
+	for i := len(feeUtxos) - 1; i >= 0; i-- {
+		u := feeUtxos[i]
+		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
+			continue
+		}
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+			continue
+		}
+		if excludeRecentBlock {
+			if p.IsRecentBlockUtxo(u.UtxoId) {
+				continue
+			}
+		}
+		if _, ok := selected[u.OutPoint]; ok {
+			continue
+		}
+
+		txOut := OutputInfoToOutput(feeUtxos[i])
+		outpoint := txOut.OutPoint()
+		out := txOut.OutValue
+
+		txIn := wire.NewTxIn(outpoint, nil, nil)
+		//tx.AddTxIn(txIn)
+		txIns = append(txIns, txIn)
+		prevFetcher.AddPrevOut(*outpoint, &out)
+		if inChannel {
+			localWeightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
+		} else {
+			localWeightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		}
+		total += out.Value
+		if requiredValue+localWeightEstimate.Fee(feeRate) <= total {
+			break
+		}
+	}
+	fee0 := localWeightEstimate.Fee(feeRate)
+	changeOutput := total - requiredValue - fee0
+	if changeOutput < 0 {
+		return nil, nil, 0, 0, 0, fmt.Errorf("no enough plain sats")
+	}
+	
+	*weightEstimate = localWeightEstimate
+	for _, txIn := range txIns {
+		tx.AddTxIn(txIn)
+	}
+	return prevFetcher, changePkScript, requiredValue, changeOutput, fee0, nil
+}
+
 // 只用于白聪输出，包括fee
 func (p *Manager) SelectUtxosForPlainSats(
 	address string, excludedUtxoMap map[string]bool,
@@ -2131,6 +2351,7 @@ func (p *Manager) SelectUtxosForPlainSats(
 	1. 先根据目标输出的value，先选1个，或者最多5个utxo，其聪数量不大于value
 	2. 再从其余的聪数量大于330聪的utxo中，凑齐足够的network fee，注意每增加一个输入，其交易的fee就会增加一些
 	3. 如果上面的选择方式找不到足够的utxo，就按照老的流程，从最大的开始找。
+	不选择330，是因为某些操作会主动切割330作为stub
 	*/
 
 	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)

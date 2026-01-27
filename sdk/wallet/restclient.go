@@ -72,6 +72,7 @@ type IndexerRPCClient interface {
 	GetAssetSummaryWithAddress(address string) *indexerwire.AssetSummary
 	GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexerwire.TxOutputInfo
 	GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error)
+	GetUnusableUtxosWithAddress(address string) ([]*TxOutput, error)
 	GetFeeRate() int64
 	GetExistingUtxos(utxos []string) ([]string, error)
 	TestRawTx(signedTxs []string) error
@@ -490,6 +491,34 @@ func (p *IndexerClient) GetUtxosWithAddress(address string) (map[string]*wire.Tx
 		result[utxo.Txid+":"+strconv.Itoa(utxo.Vout)] = wire.NewTxOut(utxo.Value, pkScript)
 	}
 	return result, nil
+}
+
+func (p *IndexerClient) GetUnusableUtxosWithAddress(address string) ([]*TxOutput, error) {
+	url := p.GetUrl("/v3/utxos/locked/" + address)
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	// Unmarshal the response.
+	var result indexerwire.TxOutputListRespV3
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("GetUnusableUtxosWithAddress response message %s", result.Msg)
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+
+	outputs := make([]*TxOutput, 0)
+	for _, output := range result.Data {
+		outputs = append(outputs, output.ToTxOutput())
+	}
+
+	return outputs, nil
 }
 
 func (p *IndexerClient) getAllUtxosWithAddress(address string) ([]*indexerwire.PlainUtxo, []*indexerwire.PlainUtxo, error) {

@@ -269,6 +269,9 @@ func (p *IndexerRPCClientMgr) GetUtxosWithAddress(address string) (map[string]*w
 	}
 	return result, err
 }
+func (p *IndexerRPCClientMgr) GetUnusableUtxosWithAddress(address string) ([]*TxOutput, error) {
+	return p.getActiveIndexer().GetUnusableUtxosWithAddress(address)
+}
 func (p *IndexerRPCClientMgr) GetFeeRate() int64 {
 	return p.getActiveIndexer().GetFeeRate()
 }

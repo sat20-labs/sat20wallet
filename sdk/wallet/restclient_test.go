@@ -1273,6 +1273,10 @@ func (p *TestIndexerClient) GetUtxosWithAddress(address string) (map[string]*wir
 	return outputs, nil
 }
 
+func (p *TestIndexerClient) GetUnusableUtxosWithAddress(address string) ([]*TxOutput, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 // sat/vb
 func (p *TestIndexerClient) GetFeeRate() int64 {
 	return 1
