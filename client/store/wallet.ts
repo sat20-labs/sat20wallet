@@ -58,7 +58,7 @@ export const useWalletStore = defineStore('wallet', () => {
   console.log(walletId);
   const wallet = computed(() => wallets.value.find(w => w.id === walletId.value))
   const accounts = computed(() => wallet.value?.accounts)
-  const account = computed(() => wallet.value?.accounts.find(a => a.index === accountIndex.value))
+  const account = computed(() => wallet.value?.accounts?.find(a => a.index === accountIndex.value))
 
   // 当前钱包类型，默认为助记词类型（兼容历史数据）
   const currentWalletType = computed(() => wallet.value?.walletType || WalletType.MNEMONIC)
@@ -499,20 +499,30 @@ export const useWalletStore = defineStore('wallet', () => {
         address: addressRes.address,
         pubKey: pubkeyRes.pubKey
       }
-      const _wallets = JSON.parse(JSON.stringify(walletStorage.getValue('wallets')))
-      const _wallet = _wallets.find((w: any) => w.id === walletId.value)
-      _wallet.accounts.push(newAccount)
-      wallets.value = _wallets
-      await walletStorage.setValue('wallets', _wallets)
+
+      // 使用响应式的 wallets.value 而不是重新从 storage 读取，确保状态一致
+      const walletToUpdate = wallets.value.find(w => w.id === walletId.value)
+      console.log('walletToUpdate', walletToUpdate);
+      if (!walletToUpdate) {
+        console.error('addAccount: Current wallet not found', walletId.value)
+        return
+      }
+      console.log('walletToUpdate.accounts', walletToUpdate.accounts);
+      if (!Array.isArray(walletToUpdate.accounts)) {
+        console.warn('addAccount: wallet.accounts is not an array, initializing...', walletToUpdate.accounts)
+        walletToUpdate.accounts = []
+      }
+
+      walletToUpdate.accounts.push(newAccount)
+
+      // 保存到存储
+      await walletStorage.setValue('wallets', toRaw(wallets.value))
+
       await setAccountIndex(accountId)
-      console.log(addressRes.address);
-
       await setAddress(addressRes.address)
-      console.log('importWallet', _wallets);
-      console.log('wallet id', walletId);
-      console.log('wallet id', await walletStorage.getValue('walletId'));
-
       await setPublickey(pubkeyRes.pubKey)
+
+      console.log('addAccount success:', addressRes.address);
     }
   }
 
@@ -566,7 +576,7 @@ export const useWalletStore = defineStore('wallet', () => {
   const updateAccountName = async (accountId: number, newName: string) => {
     if (account) {
       const wallet = wallets.value.find(w => w.id === walletId.value)
-      const account = wallet?.accounts.find(a => a.index === accountId)
+      const account = wallet?.accounts?.find(a => a.index === accountId)
       if (account) {
         account.name = newName
       }
@@ -583,13 +593,20 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const deleteAccount = async (accountId: number) => {
-    const index = wallet.value?.accounts.findIndex(a => a.index === accountId)
-    if (index && index > -1) {
-      wallet.value?.accounts.splice(index, 1)
+    const parentWallet = wallets.value.find(w => w.id === walletId.value)
+    if (!parentWallet) return
+
+    const index = parentWallet.accounts.findIndex(a => a.index === accountId)
+    if (index !== -1) {
+      parentWallet.accounts.splice(index, 1)
       await walletStorage.setValue('wallets', toRaw(wallets.value))
-      const prevAccount = wallet.value?.accounts[index - 1]
-      if (prevAccount) {
-        await switchToAccount(prevAccount.index)
+
+      // 如果删除的是当前选中的账户，或者当前选中的账户不再存在，切换到上一个账号
+      if (accountIndex.value === accountId || !parentWallet.accounts.find(a => a.index === accountIndex.value)) {
+        const prevAccount = parentWallet.accounts[Math.max(0, index - 1)]
+        if (prevAccount) {
+          await switchToAccount(prevAccount.index)
+        }
       }
     }
   }
