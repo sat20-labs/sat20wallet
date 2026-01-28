@@ -1474,6 +1474,54 @@ func getStringVector(p js.Value) ([]string, error) {
 	return strs, nil
 }
 
+func sendGarbage(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 4 {
+		return createJsRet(nil, -1, "Expected 4 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "destAddr parameter should be a string")
+	}
+	destAddress := p[0].String()
+
+	utxos, err := getStringVector(p[1])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	// amount
+	p2 := p[2]
+	if p2.Type() != js.TypeNumber {
+		return createJsRet(nil, -1, "amount parameter should be a number")
+	}
+	amt := p2.Int()
+
+	if p[3].Type() != js.TypeString {
+		return createJsRet(nil, -1, "feeRate parameter should be a string")
+	}
+	feeRate := p[3].String()
+	feeRate64, err := strconv.ParseInt(feeRate, 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		tx, err := _mgr.SendGarbage(destAddress, utxos, int64(amt), feeRate64)
+		if err != nil {
+			wallet.Log.Errorf("SendGarbage error: %v", err)
+			return nil, -1, err.Error()
+		}
+
+		return map[string]interface{}{
+			"txId": tx.TxID(),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
 
 func sendAssets(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -3264,6 +3312,7 @@ func main() {
 
 
 	obj.Set("sendAssets", js.FuncOf(sendAssets))
+	obj.Set("sendGarbage", js.FuncOf(sendGarbage))
 	obj.Set("sendAssets_SatsNet", js.FuncOf(sendAssets_SatsNet))
 	obj.Set("batchSendAssets_SatsNet", js.FuncOf(batchSendAssets_SatsNet))
 	obj.Set("batchSendAssets", js.FuncOf(batchSendAssets))
