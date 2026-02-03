@@ -744,6 +744,7 @@ func (p *ContractBase) CheckContent() error {
 		if len(p.AssetName.Ticker) != 4 && len(p.AssetName.Ticker) != 5 {
 			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
 		}
+		p.AssetName.Ticker = strings.ToLower(p.AssetName.Ticker)
 	}
 
 	return nil

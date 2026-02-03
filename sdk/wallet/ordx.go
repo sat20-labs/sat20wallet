@@ -451,3 +451,55 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string,
 	}
 	return p.inscribe(req)
 }
+
+func (p *Manager) InscribeName(name string, feeRate int64) (*InscribeResv, error) {
+	wallet := p.wallet
+	address := wallet.GetAddress()
+
+	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
+	if len(utxos) == 0 {
+		return nil, fmt.Errorf("no utxos for fee")
+	}
+	sort.Slice(utxos, func(i, j int) bool {
+		return utxos[i].Value > utxos[j].Value
+	})
+
+	name = strings.ToLower(name)
+	name = strings.TrimSpace(name)
+	body := name
+	lenBody := len(body)
+	p.utxoLockerL1.Reload(address)
+	commitTxPrevOutputList := make([]*PrevOutput, 0)
+	total := int64(0)
+	estimatedFee := int64(0)
+	for _, u := range utxos {
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+			continue
+		}
+		total += u.Value
+		commitTxPrevOutputList = append(commitTxPrevOutputList, u.ToTxOutput())
+		estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), lenBody, feeRate, 330)
+		if total >= estimatedFee {
+			break
+		}
+	}
+	if total < estimatedFee {
+		return nil, fmt.Errorf("no enough utxos for fee")
+	}
+
+	req := &InscriptionRequest{
+		CommitTxPrevOutputList: commitTxPrevOutputList,
+		CommitFeeRate:          feeRate,
+		RevealFeeRate:          feeRate,
+		RevealOutValue:         330,
+		InscriptionData: InscriptionData{
+			ContentType: CONTENT_TYPE,
+			Body:        []byte(body),
+		},
+		DestAddress:   address,
+		ChangeAddress: address,
+		Broadcast:     true,
+		Signer:        p.SignTxV2,
+	}
+	return p.inscribe(req)
+}

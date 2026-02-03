@@ -63,14 +63,15 @@ type LaunchPoolContract_old = LaunchPoolContract
 // }
 
 type LaunchPoolContract struct {
-	ContractBase
+	ContractBase  // 对于AssetName，这里需要根据资产协议处理大小写字母。比如符文，都是大写，比如brc20，都必须小写。
 	AssetSymbol   int32 `json:"assetSymbol,omitempty"`
 	BindingSat    int   `json:"bindingSat"`    // 每一聪绑定的资产数量，每一聪携带的该资产数量，用于在一层铸造ordx资产时使用
 	MintAmtPerSat int   `json:"mintAmtPerSat"` // 在二层分发时，每一聪换多少资产数量，一般MintAmtPerSat比BindingSat小10-1000倍
 	Limit         int64 `json:"limit"`         // 每个地址最大铸造量，0 不限制
 	MaxSupply     int64 `json:"maxSupply"`     // 最大资产供应量，
 	LaunchRatio   int   `json:"launchRation"`  // 铸造量达到总量的多少比例后，自动发射，向之前所有铸造者自动转token；
-	ReserveRatio  int   `json:"reserveRation"` // 预留给部署者的比例，默认为0。注意如果有预留部分，其中的5%会给到foundation
+	ReserveRatio  int   `json:"reserveRation,omitempty"` // 预留给部署者的比例，默认为0。注意如果有预留部分，其中的5%会给到foundation
+	DisplayName   string `json:"displayName,omitempty"`
 	// 剩下的比例，留存在池子中当作流动性池子
 	// 比例必须在LAUNCH_POOL_MIN_RATION 和 LAUNCH_POOL_MAX_RATION 之间
 }
@@ -116,7 +117,10 @@ func (p *LaunchPoolContract) TotalSatsToMint() int64 {
 }
 
 func (p *LaunchPoolContract) CheckContent() error {
-	err := p.ContractBase.CheckContent()
+	if p.DisplayName == "" {
+		p.DisplayName = p.AssetName.Ticker
+	}
+	err := p.ContractBase.CheckContent() // 可能会修改 p.AssetName.Ticker
 	if err != nil {
 		return err
 	}
@@ -201,6 +205,7 @@ func (p *LaunchPoolContract) Encode() ([]byte, error) {
 		AddInt64(int64(p.MaxSupply)).
 		AddInt64(int64(p.LaunchRatio)).
 		AddInt64(int64(p.ReserveRatio)).
+		AddData([]byte(p.DisplayName)).
 		Script()
 }
 
@@ -262,6 +267,12 @@ func (p *LaunchPoolContract) Decode(data []byte) error {
 		p.ReserveRatio = 0
 	} else {
 		p.ReserveRatio = int(tokenizer.ExtractInt64())
+	}
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		p.DisplayName = ""
+	} else {
+		p.DisplayName = string(tokenizer.Data())
 	}
 
 	return nil
@@ -823,7 +834,7 @@ func deployTicker(stp ContractManager, resv ContractDeployResvIF, _ any) (any, e
 			var err error
 			switch contract.AssetName.Protocol {
 			case indexer.PROTOCOL_NAME_ORDX:
-				inscribeResv, err = stp.GetWalletMgr().DeployTicker_ordx(contract.AssetName.Ticker,
+				inscribeResv, err = stp.GetWalletMgr().DeployTicker_ordx(contract.DisplayName,
 					contract.MaxSupply, contract.MaxSupply, int(contract.BindingSat), resv.GetFeeRate())
 				if err != nil {
 					Log.Errorf("DeployTicker_ordx %s faied, %v", contract.AssetName, err)
@@ -833,7 +844,7 @@ func deployTicker(stp ContractManager, resv ContractDeployResvIF, _ any) (any, e
 
 			case indexer.PROTOCOL_NAME_RUNES:
 				// 符文部署比较特殊，在一个commitTx提交名字，这里就当作部署好了；然后真正部署时，包括了预挖，所以当作mint。
-				inscribeResv, err = stp.GetWalletMgr().DeployTicker_runes(contract.Address(), contract.AssetName.Ticker, contract.AssetSymbol,
+				inscribeResv, err = stp.GetWalletMgr().DeployTicker_runes(contract.Address(), contract.DisplayName, contract.AssetSymbol,
 					contract.MaxSupply, resv.GetFeeRate())
 				if err != nil {
 					Log.Errorf("DeployTicker_runes %s faied, %v", contract.AssetName, err)
@@ -842,7 +853,7 @@ func deployTicker(stp ContractManager, resv ContractDeployResvIF, _ any) (any, e
 				contract.DeployTickerTxId = inscribeResv.CommitTx.TxID()
 
 			case indexer.PROTOCOL_NAME_BRC20:
-				inscribeResv, err = stp.GetWalletMgr().DeployTicker_brc20(contract.AssetName.Ticker,
+				inscribeResv, err = stp.GetWalletMgr().DeployTicker_brc20(contract.DisplayName,
 					contract.MaxSupply, contract.MaxSupply, resv.GetFeeRate())
 				if err != nil {
 					Log.Errorf("DeployTicker_brc20 %s faied, %v", contract.AssetName, err)
