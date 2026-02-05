@@ -597,7 +597,6 @@ func NewAmmContractRuntime(stp ContractManager) *AmmContractRuntime {
 
 func (p *AmmContractRuntime) init() {
 	p.SwapContractRuntime.init()
-	p.contract = p
 	p.runtime = p
 }
 

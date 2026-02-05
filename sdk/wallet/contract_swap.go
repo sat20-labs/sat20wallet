@@ -76,13 +76,6 @@ func (p *SwapContract) Content() string {
 	return string(b)
 }
 
-// 仅仅是估算，并且尽可能多预估了输入和输出
-func (p *SwapContract) DeployFee(feeRate int64) int64 {
-	return DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT + // 服务费，如果不需要，可以在外面扣除
-		DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE + // 部署该合约需要的网络费用和调用合约费用
-		DEFAULT_FEE_SATSNET // 激活合约的网络费用
-}
-
 func (p *SwapContract) InvokeParam(action string) string {
 	if action != INVOKE_API_SWAP {
 		return ""
@@ -505,7 +498,6 @@ func NewSwapContractRuntime(stp ContractManager) *SwapContractRuntime {
 }
 
 func (p *SwapContractRuntime) init() {
-	p.contract = p
 	p.runtime = p
 	p.buyPool = make([]*SwapHistoryItem, 0)
 	p.sellPool = make([]*SwapHistoryItem, 0)

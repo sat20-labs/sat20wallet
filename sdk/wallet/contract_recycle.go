@@ -23,11 +23,6 @@ import (
 func init() {
 	// 让 gob 知道旧的类型对应新的实现
 	gob.RegisterName("RecycleContractRunTime", new(RecycleContractRunTime))
-
-	if IsTestNet() {
-		_valueLimit = 50
-		_addressLimit = 1
-	}
 }
 
 var (
@@ -71,11 +66,13 @@ type RecycleContract struct {
 }
 
 func NewRecycleContract() *RecycleContract {
-	return &RecycleContract{
+	c := &RecycleContract{
 		ContractBase: ContractBase{
 			TemplateName: TEMPLATE_CONTRACT_RECYCLE,
 		},
 	}
+	c.contract = c
+	return c
 }
 
 func (p *RecycleContract) CheckContent() error {
@@ -163,23 +160,6 @@ func (p *RecycleContract) CheckContent() error {
 	}
 
 	return nil
-}
-
-func (p *RecycleContract) GetContractName() string {
-	return p.AssetName.String() + URL_SEPARATOR + p.TemplateName
-}
-
-func (p *RecycleContract) GetAssetName() *swire.AssetName {
-	return &p.AssetName
-}
-
-func (p *RecycleContract) Content() string {
-	b, err := json.Marshal(p)
-	if err != nil {
-		Log.Errorf("Marshal Contract failed, %v", err)
-		return ""
-	}
-	return string(b)
 }
 
 func (p *RecycleContract) Encode() ([]byte, error) {
@@ -274,12 +254,6 @@ func (p *RecycleContract) Decode(data []byte) error {
 	return nil
 }
 
-func (p *RecycleContract) DeployFee(feeRate int64) int64 {
-	return DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT + // 服务费，如果不需要，可以在外面扣除
-		DEFAULT_FEE_SATSNET + SWAP_INVOKE_FEE + // 部署该合约需要的网络费用和调用合约费用
-		DEFAULT_FEE_SATSNET // 激活合约的网络费用
-}
-
 func (p *RecycleContract) InvokeParam(action string) string {
 	if action != INVOKE_API_RECYCLE {
 		return ""
@@ -294,10 +268,6 @@ func (p *RecycleContract) InvokeParam(action string) string {
 		return ""
 	}
 	return string(result)
-}
-
-func (p *RecycleContract) CalcStaticMerkleRoot() []byte {
-	return CalcContractStaticMerkleRoot(p)
 }
 
 // 2. 定义合约调用的数据结构

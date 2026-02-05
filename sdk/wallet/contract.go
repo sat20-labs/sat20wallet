@@ -37,9 +37,9 @@ const (
 	TEMPLATE_CONTRACT_TRANSCEND  string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
 	// 开发中的
 	TEMPLATE_CONTRACT_RECYCLE     string = "recycle.tc"
+	TEMPLATE_CONTRACT_FUNDATION   string = "fundation.tc"
 	TEMPLATE_CONTRACT_VAULT       string = "vault.tc"
 	TEMPLATE_CONTRACT_STAKE       string = "stake.tc"
-	TEMPLATE_CONTRACT_MINER_STAKE string = "minerstake.tc"
 
 	CONTRACT_STATUS_EXPIRED int = -2
 	CONTRACT_STATUS_CLOSED  int = -1
@@ -82,6 +82,10 @@ const (
 	INVOKE_API_PROFIT          string = "profit"
 	INVOKE_API_RECYCLE         string = "recycle"
 	INVOKE_API_REWARD          string = "reward"
+	INVOKE_API_REGISTER        string = "register"
+	INVOKE_API_DONATE          string = "donate"
+	INVOKE_API_AIRDROP         string = "airdrop"
+	INVOKE_API_VALIDATE        string = "validate"
 
 	ORDERTYPE_NOSPEC          = 0
 	ORDERTYPE_SELL            = 1
@@ -98,7 +102,11 @@ const (
 	ORDERTYPE_UNSTAKE         = 12
 	ORDERTYPE_RECYCLE         = 13
 	ORDERTYPE_REWARD          = 14
-	ORDERTYPE_UNUSED          = 15
+	ORDERTYPE_REGISTER        = 15
+	ORDERTYPE_DONATE          = 16
+	ORDERTYPE_AIRDROP         = 17
+	ORDERTYPE_VALIDATE        = 18
+	ORDERTYPE_UNUSED          = 19
 
 	INVOKE_FEE          int64 = 10
 	SWAP_INVOKE_FEE     int64 = 10
@@ -708,6 +716,12 @@ type ContractBase struct {
 	StartBlock   int               `json:"startBlock"` // 0，部署即可以使用
 	EndBlock     int               `json:"endBlock"`   // 0，部署后永久可用，除非合约其他规则
 	//Sendback     bool   `json:"sendBack"` // send back when invoke fail(only send in satsnet)
+
+	contract     Contract
+}
+
+func (p *ContractBase) GetContractName() string {
+	return p.AssetName.String() + URL_SEPARATOR + p.TemplateName
 }
 
 func (p *ContractBase) CheckContent() error {
@@ -755,7 +769,7 @@ func (p *ContractBase) GetContractBase() *ContractBase {
 }
 
 func (p *ContractBase) Content() string {
-	buf, err := json.Marshal(p)
+	buf, err := json.Marshal(p.contract)
 	if err != nil {
 		Log.Panicf("Marshal ContractBase failed, %v", err)
 	}
@@ -813,11 +827,17 @@ func (p *ContractBase) GetEndBlock() int {
 }
 
 func (p *ContractBase) DeployFee(feeRate int64) int64 {
-	return 0
+	return DEFAULT_SERVICE_FEE_DEPLOY_CONTRACT + // 服务费，如果不需要，可以在外面扣除
+		DEFAULT_FEE_SATSNET + INVOKE_FEE + // 部署该合约需要的网络费用和调用合约费用
+		DEFAULT_FEE_SATSNET // 激活合约的网络费用
 }
 
 func (p *ContractBase) InvokeParam(string) string {
 	return ""
+}
+
+func (p *ContractBase) CalcStaticMerkleRoot() []byte {
+	return CalcContractStaticMerkleRoot(p.contract)
 }
 
 type ContractRuntimeBase_old = ContractRuntimeBase
@@ -907,7 +927,7 @@ type ContractRuntimeBase struct {
 	stp                ContractManager
 	db                 indexer.KVDB
 	localWallet        common.Wallet
-	contract           Contract
+	
 	runtime            ContractRuntime
 	assetMerkleRootMap map[int64][]byte // invokeCount -> AssetMerkleRoot 临时缓存
 	lastInvokeCount    int64            // 上个区块的InvokeCount
@@ -975,7 +995,7 @@ func (p *ContractRuntimeBase) SetWithPeer(n *ContractRuntimeBase) {
 
 func (p *ContractRuntimeBase) GetAssetNameV2() *AssetName {
 	return &AssetName{
-		AssetName: *p.contract.GetAssetName(),
+		AssetName: *p.runtime.GetAssetName(),
 		N:         p.N,
 	}
 }
@@ -1022,21 +1042,21 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 	}
 	p.localWallet = p.stp.GetWallet().CloneByPubKey(p.LocalPubKey)
 
-	err = p.contract.Decode(content)
+	err = p.runtime.Decode(content)
 	if err != nil {
 		return err
 	}
-	err = p.contract.CheckContent()
+	err = p.runtime.CheckContent()
 	if err != nil {
 		return err
 	}
 
-	tickInfo := p.stp.GetTickerInfo(p.contract.GetAssetName())
+	tickInfo := p.stp.GetTickerInfo(p.runtime.GetAssetName())
 	if tickInfo != nil {
 		p.Divisibility = tickInfo.Divisibility
 		p.N = tickInfo.N
 	} else {
-		tc := p.contract.GetTemplateName()
+		tc := p.runtime.GetTemplateName()
 		switch tc {
 		case TEMPLATE_CONTRACT_TRANSCEND:
 			p.Divisibility = MAX_ASSET_DIVISIBILITY
@@ -1049,7 +1069,7 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 		// 由合约自己设置
 	}
 
-	p.StaticMerkleRoot = p.contract.CalcStaticMerkleRoot()
+	p.StaticMerkleRoot = p.runtime.CalcStaticMerkleRoot()
 
 	return nil
 }
@@ -1171,14 +1191,14 @@ func (p *ContractRuntimeBase) IsInitiator() bool {
 }
 
 func (p *ContractRuntimeBase) URL() string {
-	if p.contract == nil {
+	if p.runtime == nil {
 		return ""
 	}
-	return p.ChannelAddr + URL_SEPARATOR + p.contract.GetContractName()
+	return p.ChannelAddr + URL_SEPARATOR + p.runtime.GetContractName()
 }
 
 func (p *ContractRuntimeBase) RelativePath() string {
-	return p.contract.GetContractName()
+	return p.runtime.GetContractName()
 }
 
 func (p *ContractRuntimeBase) GetStatus() int {
@@ -1229,10 +1249,10 @@ func (p *ContractRuntimeBase) SetEnableBlock(height, heightL1 int) {
 }
 
 func (p *ContractRuntimeBase) IsExpired() bool {
-	if p.contract.GetEndBlock() <= 0 {
+	if p.runtime.GetEndBlock() <= 0 {
 		return false
 	}
-	return p.CurrBlock > p.contract.GetEndBlock()
+	return p.CurrBlock > p.runtime.GetEndBlock()
 }
 
 func (p *ContractRuntimeBase) GetDeployer() string {
@@ -1418,13 +1438,13 @@ func (p *ContractRuntimeBase) AllowInvoke() error {
 		return fmt.Errorf("contract not enabled")
 	}
 
-	if p.contract.GetStartBlock() != 0 {
-		if p.CurrBlock < p.contract.GetStartBlock() {
+	if p.runtime.GetStartBlock() != 0 {
+		if p.CurrBlock < p.runtime.GetStartBlock() {
 			return fmt.Errorf("not reach start block")
 		}
 	}
-	if p.contract.GetEndBlock() != 0 {
-		if p.CurrBlock > p.contract.GetEndBlock() {
+	if p.runtime.GetEndBlock() != 0 {
+		if p.CurrBlock > p.runtime.GetEndBlock() {
 			return fmt.Errorf("exceed the end block")
 		}
 	}
@@ -2630,7 +2650,7 @@ func (p *ContractRuntimeBase) genSendInfoFromTx_SatsNet(tx *swire.MsgTx, include
 		Fee:      DEFAULT_FEE_SATSNET,
 	}
 
-	assetName := p.contract.GetAssetName()
+	assetName := p.runtime.GetAssetName()
 	isPlainAsset := indexer.IsPlainAsset(assetName)
 	for i, txOut := range tx.TxOut {
 		if sindexer.IsOpReturn(txOut.PkScript) {
@@ -2772,7 +2792,7 @@ func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[
 		in += input.Value()
 	}
 
-	assetName := p.contract.GetAssetName()
+	assetName := p.runtime.GetAssetName()
 	isPlainAsset := indexer.IsPlainAsset(assetName)
 	for i, txOut := range tx.TxOut {
 		out += txOut.Value

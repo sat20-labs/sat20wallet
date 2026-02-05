@@ -130,7 +130,6 @@ func NewTranscendContractRuntime(stp ContractManager) *TranscendContractRuntime 
 
 func (p *TranscendContractRuntime) init() {
 	p.SwapContractRuntime.init()
-	p.contract = p
 	p.runtime = p
 }
 
