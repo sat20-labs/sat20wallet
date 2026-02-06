@@ -66,7 +66,7 @@ const (
 	INVOKE_RESULT_ADDLIQUIDITY    string = INVOKE_API_ADDLIQUIDITY
 	INVOKE_RESULT_REMOVELIQUIDITY string = INVOKE_API_REMOVELIQUIDITY
 	INVOKE_RESULT_PROFIT          string = INVOKE_API_PROFIT
-	INVOKE_RESULT_REWARD          string = "reward"
+	INVOKE_RESULT_REWARD          string = INVOKE_API_REWARD
 )
 
 const (
@@ -261,6 +261,7 @@ type Contract interface {
 	GetTemplateName() string          // 合约模版名称
 	GetAssetName() *indexer.AssetName // 资产名称
 	GetContractName() string          // 资产名称_模版名称
+	IsExclusive() bool                // 是否需要独占合约地址（地址上仅有一个合约）
 	CheckContent() error              // 合约内容检查，部署前调用
 	Content() string                  // 合约内容， json格式
 	InvokeParam(string) string        // 调用合约的参数， json格式
@@ -722,6 +723,10 @@ type ContractBase struct {
 
 func (p *ContractBase) GetContractName() string {
 	return p.AssetName.String() + URL_SEPARATOR + p.TemplateName
+}
+
+func (p *ContractBase) IsExclusive() bool {
+	return false
 }
 
 func (p *ContractBase) CheckContent() error {
@@ -1461,7 +1466,15 @@ func (p *ContractRuntimeBase) AllowInvokeWithNoParam_SatsNet() bool {
 }
 
 func (p *ContractRuntimeBase) RuntimeContent() []byte {
-	return nil
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	b, err := EncodeToBytes(p.runtime)
+	if err != nil {
+		Log.Errorf("ContractRuntimeBase.RuntimeContent Marshal failed, %v", err)
+		return nil
+	}
+	return b
 }
 
 func (p *ContractRuntimeBase) InstallStatus() string {

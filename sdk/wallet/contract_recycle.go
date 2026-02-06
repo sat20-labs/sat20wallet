@@ -37,7 +37,7 @@ var (
 )
 
 /*
-垃圾utxo回收合约：净化主网，降低垃圾utxo数量
+垃圾utxo回收合约：净化主网，降低垃圾utxo数量 （独立的地址）
 1. 在主网往合约地址转入垃圾utxo，自动合约调用
 2. 合约作用：
   a. 幸运奖励：根据打包的block的hash，和交易的hash，两者最后6个数字，相加成兑奖号码
@@ -73,6 +73,10 @@ func NewRecycleContract() *RecycleContract {
 	}
 	c.contract = c
 	return c
+}
+
+func (p *RecycleContract) IsExclusive() bool {
+	return true
 }
 
 func (p *RecycleContract) CheckContent() error {
@@ -387,7 +391,6 @@ type RecycleContractRunTime struct {
 	invokerMap map[string]*RecycleInvokerStatus // key: address
 	recycleMap map[string]map[int64]*InvokeItem // 还在处理中的调用, address -> invoke item list,
 	rewardMap  map[string]map[int64]*InvokeItem // 获奖的item
-	isSending  bool
 
 	responseCache  []*responseItem_recycle
 	responseStatus Response_RecycleContract
@@ -442,7 +445,7 @@ func (p *RecycleContractRunTime) InitFromDB(stp ContractManager, resv ContractDe
 			continue
 		}
 
-		p.loadTraderInfo(item.Address)
+		p.loadInvokerInfo(item.Address)
 		p.addItem(item)
 		p.history[item.InUtxo] = item
 	}
@@ -678,7 +681,7 @@ func (p *RecycleContractRunTime) StatusByAddress(address string) (string, error)
 	defer p.mutex.Unlock()
 
 	result := &Response_InvokerStatus{}
-	trader := p.loadTraderInfo(address)
+	trader := p.loadInvokerInfo(address)
 	if trader != nil {
 		result.Statistic = &RecycleInvokerStatistic{
 			InvokeCount:  trader.GetInvokeCount(),
@@ -710,10 +713,10 @@ func (p *RecycleContractRunTime) StatusByAddress(address string) (string, error)
 }
 
 func (p *RecycleContractRunTime) GetInvokerStatus(address string) InvokerStatus {
-	return p.loadTraderInfo(address)
+	return p.loadInvokerInfo(address)
 }
 
-func (p *RecycleContractRunTime) loadTraderInfo(address string) *RecycleInvokerStatus {
+func (p *RecycleContractRunTime) loadInvokerInfo(address string) *RecycleInvokerStatus {
 	status, ok := p.invokerMap[address]
 	if ok {
 		return status
@@ -918,7 +921,7 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Inv
 		return p.updateContract(address, newTxOut, true, false), nil
 
 	default:
-		Log.Errorf("contract %s is not support action %s", url, param.Action)
+		Log.Errorf("contract %s does not support action %s", url, param.Action)
 		return nil, fmt.Errorf("not support action %s", param.Action)
 	}
 }
@@ -1000,7 +1003,7 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, h
 		return p.updateContract(address, output, bValid, true), nil
 
 	default:
-		Log.Errorf("contract %s is not support action %s", p.URL(), param.Action)
+		Log.Errorf("contract %s does not support action %s", p.URL(), param.Action)
 		return nil, fmt.Errorf("not support action %s", param.Action)
 	}
 }
@@ -1067,7 +1070,7 @@ func (p *RecycleContractRunTime) updateContract(
 func (p *RecycleContractRunTime) updateContractStatus(item *SwapHistoryItem) {
 	p.history[item.InUtxo] = item
 
-	trader := p.loadTraderInfo(item.Address)
+	trader := p.loadInvokerInfo(item.Address)
 	InsertItemToTraderHistroy(&trader.InvokerStatusBaseV2, item)
 
 	p.InvokeCount++
@@ -1296,7 +1299,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				item.RemainingAmt = nil
 				item.RemainingValue = 0
 
-				invoker := p.loadTraderInfo(item.Address)
+				invoker := p.loadInvokerInfo(item.Address)
 				invoker.TotalRewardPoints += points
 				invokers[item.Address] = invoker
 
@@ -1394,18 +1397,12 @@ func (p *RecycleContractRunTime) sendInvokeResultTx() error {
 // 涉及发送各种tx，运行在线程中
 func (p *RecycleContractRunTime) sendInvokeResultTx_SatsNet() error {
 	if p.resv.LocalIsInitiator() {
-		if p.isSending {
-			return nil
-		}
-		p.isSending = true
 		url := p.URL()
 
 		err := p.reward()
 		if err != nil {
 			Log.Errorf("contract %s deal failed, %v", url, err)
 		}
-
-		p.isSending = false
 		//Log.Debugf("contract %s sendInvokeResultTx_SatsNet completed", url)
 	} else {
 		//Log.Debugf("server: waiting the deal Tx of contract %s ", p.URL())
@@ -1456,7 +1453,7 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 				delete(p.rewardMap, address)
 			}
 		}
-		trader := p.loadTraderInfo(address)
+		trader := p.loadInvokerInfo(address)
 		if trader != nil {
 			trader.TotalRewardAmt = trader.TotalRewardAmt.Add(info.AssetAmt)
 			trader.TotalRewardValue += info.Value

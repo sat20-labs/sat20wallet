@@ -2059,7 +2059,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invoke
 			ratio, bValid, false, false), nil
 
 	default:
-		Log.Errorf("contract %s is not support action %s", url, param.Action)
+		Log.Errorf("contract %s does not support action %s", url, param.Action)
 		return nil, fmt.Errorf("not support action %s", param.Action)
 	}
 }
@@ -2278,7 +2278,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heig
 			bValid, false, false), nil
 
 	default:
-		Log.Errorf("contract %s is not support action %s", p.URL(), param.Action)
+		Log.Errorf("contract %s does not support action %s", p.URL(), param.Action)
 		return nil, fmt.Errorf("not support action %s", param.Action)
 	}
 }
