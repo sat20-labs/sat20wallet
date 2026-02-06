@@ -150,9 +150,12 @@ func (p *LaunchPoolContract) CheckContent() error {
 	if p.Limit < 0 {
 		return fmt.Errorf("invalid limit %d", p.Limit)
 	}
-	if p.Limit > p.MaxSupply {
-		return fmt.Errorf("limit %d should not larger than max supply %d", p.Limit, p.MaxSupply)
+	limit := p.MaxSupply * int64(p.LaunchRatio) / 100
+	if p.Limit > limit {
+		return fmt.Errorf("limit %d should not larger than %d", p.Limit, limit)
 	}
+	// limit可以为0，不限制
+
 	// if p.MaxSupply%p.Limit != 0 {
 	// 	return fmt.Errorf("max supply should be times of limitation")
 	// }
@@ -1465,11 +1468,6 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock(data *InvokeDataInBlock) err
 	return nil
 }
 
-// 当前能铸造的额度: asset num
-func (p *LaunchPoolContractRunTime) LimitToMint() *Decimal {
-	return indexer.DecimalSub(p.MaxAssetToMint(), p.TotalMinted)
-}
-
 func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, height int) (InvokeHistoryItem, error) {
 	return nil, nil
 }
@@ -1544,9 +1542,9 @@ func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *
 		// 2. 是否该地址还有额度，是否超过池子总额度
 		var userLimit int64
 		if p.Limit == 0 {
-			userLimit = p.LimitToMint().Int64()
+			userLimit = p.LeftToMint().Int64()
 		} else {
-			userLimit = min(p.Limit, p.LimitToMint().Int64())
+			userLimit = min(p.Limit, p.LeftToMint().Int64())
 			address := HexPubKeyToP2TRAddress(invokeData.PubKey)
 			info, ok := p.mintInfoMap[address]
 			if ok {
