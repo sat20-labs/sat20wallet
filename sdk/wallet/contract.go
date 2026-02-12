@@ -36,10 +36,10 @@ const (
 	TEMPLATE_CONTRACT_AMM        string = "amm.tc"
 	TEMPLATE_CONTRACT_TRANSCEND  string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
 	// 开发中的
-	TEMPLATE_CONTRACT_RECYCLE     string = "recycle.tc"
-	TEMPLATE_CONTRACT_FUNDATION   string = "fundation.tc"
-	TEMPLATE_CONTRACT_VAULT       string = "vault.tc"
-	TEMPLATE_CONTRACT_STAKE       string = "stake.tc"
+	TEMPLATE_CONTRACT_RECYCLE   string = "recycle.tc"
+	TEMPLATE_CONTRACT_FUNDATION string = "fundation.tc"
+	TEMPLATE_CONTRACT_VAULT     string = "vault.tc"
+	TEMPLATE_CONTRACT_STAKE     string = "stake.tc"
 
 	CONTRACT_STATUS_EXPIRED int = -2
 	CONTRACT_STATUS_CLOSED  int = -1
@@ -718,7 +718,7 @@ type ContractBase struct {
 	EndBlock     int               `json:"endBlock"`   // 0，部署后永久可用，除非合约其他规则
 	//Sendback     bool   `json:"sendBack"` // send back when invoke fail(only send in satsnet)
 
-	contract     Contract
+	contract Contract
 }
 
 func (p *ContractBase) GetContractName() string {
@@ -927,12 +927,12 @@ type ContractRuntimeBase struct {
 	RemotePubKey      []byte
 	CoreNodePubKey    []byte // 提供合约创建的核心节点的pubkey
 
-	history            map[string]*InvokeItem // key:utxo 单独记录数据库，区块缓存, 6个区块以后，并且已经成交的可以删除
-	resv               ContractDeployResvIF
-	stp                ContractManager
-	db                 indexer.KVDB
-	localWallet        common.Wallet
-	
+	history     map[string]*InvokeItem // key:utxo 单独记录数据库，区块缓存, 6个区块以后，并且已经成交的可以删除
+	resv        ContractDeployResvIF
+	stp         ContractManager
+	db          indexer.KVDB
+	localWallet common.Wallet
+
 	runtime            ContractRuntime
 	assetMerkleRootMap map[int64][]byte // invokeCount -> AssetMerkleRoot 临时缓存
 	lastInvokeCount    int64            // 上个区块的InvokeCount
@@ -1497,14 +1497,14 @@ func getBuckSubIndex(id int64) int {
 	return int(id % BUCK_SIZE)
 }
 
-func InsertItemToTraderHistroy(trader *InvokerStatusBaseV2, item *InvokeItem) {
-	index := getBuckIndex(int64(trader.InvokeCount))
-	if trader.History == nil {
-		trader.History = make(map[int][]int64)
+func InsertItemToInvokerHistroy(invoker *InvokerStatusBaseV2, item *InvokeItem) {
+	index := getBuckIndex(int64(invoker.InvokeCount))
+	if invoker.History == nil {
+		invoker.History = make(map[int][]int64)
 	}
-	trader.History[index] = append(trader.History[index], item.Id)
-	trader.InvokeCount++
-	trader.UpdateTime = time.Now().Unix()
+	invoker.History[index] = append(invoker.History[index], item.Id)
+	invoker.InvokeCount++
+	invoker.UpdateTime = time.Now().Unix()
 }
 
 func (p *ContractRuntimeBase) getItemFromBuck(id int64) *InvokeItem {
@@ -1887,7 +1887,6 @@ func (p *ContractRuntimeBase) CheckInvokeTx_SatsNet(invokeTx *InvokeTx_SatsNet) 
 	return nil
 }
 
-
 func (p *ContractRuntimeBase) CheckInvokeTx(invokeTx *InvokeTx) error {
 
 	if invokeTx.InvokeParam == nil {
@@ -1960,11 +1959,10 @@ func (p *ContractRuntimeBase) IsMyInvoke(invoke *InvokeTx) bool {
 	if invoke.InvokeParam != nil {
 		return invoke.InvokeParam.ContractPath == p.RelativePath() ||
 			invoke.InvokeParam.ContractPath == p.URL()
-	} 
-	
+	}
+
 	return p.runtime.AllowInvokeWithNoParam()
 }
-
 
 func (p *ContractRuntimeBase) PreprocessInvokeData(data *InvokeDataInBlock) error {
 
@@ -2054,7 +2052,6 @@ func (p *ContractRuntimeBase) InvokeCompleted(data *InvokeDataInBlock) {
 	p.invokeCompleted()
 }
 
-
 // 调用方确保p.contractRunningMutex.Lock()
 func (p *ContractRuntimeBase) resyncBlock(start, end int) {
 	// 设置resv的属性，暂时不要从外面的区块同步调用进来
@@ -2111,7 +2108,7 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 	p.mutex.Lock()
 	if p.EnableTxId == "" {
 		for _, invoke := range data.InvokeTxVect {
-			
+
 			if !p.IsMyInvoke_SatsNet(invoke) {
 				continue
 			}

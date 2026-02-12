@@ -1071,7 +1071,7 @@ func (p *RecycleContractRunTime) updateContractStatus(item *SwapHistoryItem) {
 	p.history[item.InUtxo] = item
 
 	trader := p.loadInvokerInfo(item.Address)
-	InsertItemToTraderHistroy(&trader.InvokerStatusBaseV2, item)
+	InsertItemToInvokerHistroy(&trader.InvokerStatusBaseV2, item)
 
 	p.InvokeCount++
 	p.TotalInputAssets = p.TotalInputAssets.Add(item.InAmt)
@@ -1255,7 +1255,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				result = XorLastNHex(blockHash, txId, p.NumberOfLastDigits)
 				item.Padded = []byte(result)
 				// 如果输入的数量是n倍，如果奖励就是n倍
-				
+
 				number := CountHexDigit(result, MATCH_DIGIT)
 				if p.SpecPrizeMatchCount > 0 && number >= p.SpecPrizeMatchCount {
 					firstPrize, _ := indexer.NewDecimalFromString(p.FirstPrize, p.Divisibility)

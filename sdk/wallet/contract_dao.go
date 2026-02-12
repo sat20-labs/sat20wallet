@@ -25,7 +25,6 @@ func init() {
 	gob.Register(new(DaoContractRunTime))
 }
 
-
 /*
 社区基金管理合约：按照社区制定的规则，管理社区基金 （独立的地址）
 功能：
@@ -40,27 +39,27 @@ func init() {
 */
 
 const (
-	MIN_REGISTER_FEE int64 = 20
-	MIN_VALIDATOR_NUM int = 3
+	MIN_REGISTER_FEE  int64 = 20
+	MIN_VALIDATOR_NUM int   = 3
 )
 
 // 1. 定义合约内容
 type DaoContract struct {
 	ContractBase
 	// 池子最少的激活资产
-	AssetAmt     string
-	SatValue     int64
+	AssetAmt string
+	SatValue int64
 
 	ValidatorNum    int   // 至少3
 	RegisterFee     int64 // 最少20
 	RegisterTimeOut int   // 聪网区块数，注册审核时间，超时自动确认
-	
-	// airdrop 
+
+	// airdrop
 	HoldingAssetName indexer.AssetName
 	HoldingAssetAmt  string
 	AirDropRatio     int
 	AirDropLimit     string
-	AirDropTimeOut	 int // 聪网区块数，超时自动确认
+	AirDropTimeOut   int // 聪网区块数，超时自动确认
 	ReferralRatio    int // 默认为0，在空投中，一部分给被推荐人
 
 	// 更多的配置数据
@@ -71,7 +70,7 @@ func NewDaoContract() *DaoContract {
 		ContractBase: ContractBase{
 			TemplateName: TEMPLATE_CONTRACT_FUNDATION,
 		},
-		RegisterFee: MIN_REGISTER_FEE,
+		RegisterFee:  MIN_REGISTER_FEE,
 		ValidatorNum: MIN_VALIDATOR_NUM,
 	}
 	c.contract = c
@@ -93,8 +92,8 @@ func (p *DaoContract) CheckContent() error {
 	if p.SatValue < 0 {
 		return fmt.Errorf("invalid SatValue")
 	}
-	
-	// 
+
+	//
 	if p.RegisterFee < MIN_REGISTER_FEE {
 		return fmt.Errorf("invalid RegisterFee, should >= %d", MIN_REGISTER_FEE)
 	}
@@ -213,7 +212,6 @@ func (p *DaoContract) Decode(data []byte) error {
 	}
 	p.ReferralRatio = int(tokenizer.ExtractInt64())
 
-
 	return nil
 }
 
@@ -240,8 +238,8 @@ func (p *DaoContract) InvokeParam(action string) string {
 
 // InvokeParam
 type RegisterInvokeParam struct {
-	UID 		string `json:"uid"` 
-	ReferrerUID string `json:"referrerUid"` 
+	UID         string `json:"uid"`
+	ReferrerUID string `json:"referrerUid"`
 }
 
 func (p *RegisterInvokeParam) Encode() ([]byte, error) {
@@ -270,7 +268,7 @@ func (p *RegisterInvokeParam) Decode(data []byte) error {
 	return nil
 }
 
-////
+// //
 type DonateInvokeParam struct {
 	AssetName string `json:"assetName"` // 资产名字
 	Amt       string `json:"amt"`       // 资产数量
@@ -314,7 +312,7 @@ func (p *DonateInvokeParam) Decode(data []byte) error {
 	return nil
 }
 
-////
+// //
 type AirDropInvokeParam struct {
 	UIDs []string `json:"uids"`
 }
@@ -340,8 +338,8 @@ func (p *AirDropInvokeParam) Decode(data []byte) error {
 }
 
 type ValidateInvokeParam struct {
-	OrderType int `json:"orderType"`
-	Param  []byte `json:"para"`
+	OrderType int    `json:"orderType"`
+	Param     []byte `json:"para"`
 }
 
 func (p *ValidateInvokeParam) Encode() ([]byte, error) {
@@ -376,11 +374,11 @@ func (p *ValidateInvokeParam) Decode(data []byte) error {
 type DaoInvokerStatus struct {
 	InvokerStatusBaseV2
 
-	ReferrerUID       string    // 推荐人UID
-	UID               string    // 自身UID
-	TotalAirdropAmt   *Decimal  // 作为推荐人得到的空投
-	Airdropped        bool      // 作为被推荐人，已经让推荐人得到了空投
-	ReferralUIDs      []string  // 所有有效推荐的UID
+	ReferrerUID     string   // 推荐人UID
+	UID             string   // 自身UID
+	TotalAirdropAmt *Decimal // 作为推荐人得到的空投
+	Airdropped      bool     // 作为被推荐人，已经让推荐人得到了空投
+	ReferralUIDs    []string // 所有有效推荐的UID
 }
 
 func NewDaoInvokerStatus(address string, divisibility int) *DaoInvokerStatus {
@@ -420,15 +418,15 @@ type DaoContractRunningData_old = DaoContractRunningData
 
 // 4. 定义合约运行时需要维护的数据
 type DaoContractRunningData struct {
-	AssetAmtInPool   *Decimal
-	SatsValueInPool  int64 // 池子中聪的数量
+	AssetAmtInPool  *Decimal
+	SatsValueInPool int64 // 池子中聪的数量
 
 	TotalDonateCount  int
 	TotalDonateAmt    *Decimal // 所有进入池子的资产数量，指主网上每个地址参与回收的每个TX的输入资产总量
 	TotalInputValue   int64
-	TotalAirdropCount int     // 空投交易计数
-	TotalAirdropAmt   *Decimal // 所有空投出去的资产数量
-	TotalFeeValue     int64    // 所有由合约支付的相关交易的网络费用
+	TotalAirdropCount int             // 空投交易计数
+	TotalAirdropAmt   *Decimal        // 所有空投出去的资产数量
+	TotalFeeValue     int64           // 所有由合约支付的相关交易的网络费用
 	Validators        map[string]bool // address
 }
 
@@ -449,11 +447,11 @@ type DaoContractRunTimeInDB struct {
 type DaoContractRunTime struct {
 	DaoContractRunTimeInDB
 
-	invokerMap 		map[string]*DaoInvokerStatus // key: address
-	registerMap  	map[string]map[int64]*InvokeItem 
-	donateMap 		map[string]map[int64]*InvokeItem // 还在处理中的调用, address -> invoke item list,
-	airdropMap  	map[string]map[int64]*InvokeItem 
-	validateMap  	map[string]map[int64]*InvokeItem 
+	invokerMap  map[string]*DaoInvokerStatus // key: address
+	registerMap map[string]map[int64]*InvokeItem
+	donateMap   map[string]map[int64]*InvokeItem // 还在处理中的调用, address -> invoke item list,
+	airdropMap  map[string]map[int64]*InvokeItem
+	validateMap map[string]map[int64]*InvokeItem
 
 	responseCache  []*responseItem_dao
 	responseStatus Response_DaoContract
@@ -462,7 +460,7 @@ type DaoContractRunTime struct {
 func NewDaoContractRunTime(stp ContractManager) *DaoContractRunTime {
 	p := &DaoContractRunTime{
 		DaoContractRunTimeInDB: DaoContractRunTimeInDB{
-			DaoContract:     *NewDaoContract(),
+			DaoContract:         *NewDaoContract(),
 			ContractRuntimeBase: *NewContractRuntimeBase(stp),
 			DaoContractRunningData: DaoContractRunningData{
 				Validators: make(map[string]bool),
@@ -673,9 +671,9 @@ func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
 }
 
 type responseItem_dao struct {
-	Address string `json:"address"`
+	Address    string `json:"address"`
 	DonateAmt  string `json:"donate"`
-	AirdropAmt  string `json:"airdrop"`
+	AirdropAmt string `json:"airdrop"`
 }
 
 type Response_DaoContract struct {
@@ -693,8 +691,8 @@ func (p *DaoContractRunTime) AllAddressInfo(start, limit int) string {
 	defer p.mutex.RUnlock()
 
 	type response struct {
-		Total int                     `json:"total"`
-		Start int                     `json:"start"`
+		Total int                 `json:"total"`
+		Start int                 `json:"start"`
 		Data  []*responseItem_dao `json:"data"`
 	}
 
@@ -723,9 +721,9 @@ func (p *DaoContractRunTime) AllAddressInfo(start, limit int) string {
 }
 
 type Response_DaoInvokerStatus struct {
-	Statistic  *DaoInvokerStatistic `json:"status"`
-	DonateList []string                    `json:"donnate"`
-	AirdropList []string                   `json:"airdrop"`
+	Statistic   *DaoInvokerStatistic `json:"status"`
+	DonateList  []string             `json:"donnate"`
+	AirdropList []string             `json:"airdrop"`
 }
 
 func (p *DaoContractRunTime) StatusByAddress(address string) (string, error) {
@@ -739,12 +737,12 @@ func (p *DaoContractRunTime) StatusByAddress(address string) (string, error) {
 	invoker := p.loadInvokerInfo(address)
 	if invoker != nil {
 		result.Statistic = &DaoInvokerStatistic{
-			ReferrerUID:  invoker.ReferrerUID,
-			UID:          invoker.UID,
-			InvokeCount:  invoker.GetInvokeCount(),
-			DonateAmt:    invoker.GetInvokeAmt().String(),
-			DonateValue:  invoker.GetInvokeValue(),
-			AirdropAmt:   invoker.TotalAirdropAmt.String(),
+			ReferrerUID:   invoker.ReferrerUID,
+			UID:           invoker.UID,
+			InvokeCount:   invoker.GetInvokeCount(),
+			DonateAmt:     invoker.GetInvokeAmt().String(),
+			DonateValue:   invoker.GetInvokeValue(),
+			AirdropAmt:    invoker.TotalAirdropAmt.String(),
 			ReferralCount: len(invoker.ReferralUIDs),
 		}
 		invokes := p.donateMap[address]
@@ -832,7 +830,7 @@ func (p *DaoContractRunTime) CheckInvokeParam(param string) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		
+
 		if innerParam.UID == "" {
 			return 0, fmt.Errorf("invalid uid")
 		}
@@ -866,7 +864,7 @@ func (p *DaoContractRunTime) CheckInvokeParam(param string) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		
+
 		if len(innerParam.UIDs) == 0 {
 			return 0, fmt.Errorf("invalid UIDs")
 		}
@@ -878,7 +876,7 @@ func (p *DaoContractRunTime) CheckInvokeParam(param string) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		
+
 		if len(innerParam.Param) == 0 {
 			return 0, fmt.Errorf("invalid parameter")
 		}
@@ -900,7 +898,6 @@ func (p *DaoContractRunTime) CheckInvokeParam(param string) (int64, error) {
 			return 0, fmt.Errorf("invalid order type %d", innerParam.OrderType)
 		}
 
-		
 		return 0, nil
 
 	default:
@@ -1012,8 +1009,8 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 		if innerParam.UID == "" {
 			return nil, fmt.Errorf("invalid UID %s", innerParam.UID)
 		}
-		
-		return p.updateContract(ORDERTYPE_REGISTER, address, output, true, false), nil
+
+		return p.updateContract(ORDERTYPE_REGISTER, paramBytes, address, output, true, false), nil
 
 	case INVOKE_API_DONATE:
 		assetAmt := output.GetAsset(p.GetAssetName())
@@ -1048,8 +1045,8 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 				return nil, fmt.Errorf("invalid sats value %d", innerParam.Value)
 			}
 		}
-		
-		return p.updateContract(ORDERTYPE_DONATE, address, output, true, false), nil
+
+		return p.updateContract(ORDERTYPE_DONATE, paramBytes, address, output, true, false), nil
 
 	case INVOKE_API_AIRDROP:
 		if param.Param == "" {
@@ -1067,9 +1064,8 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 		if len(innerParam.UIDs) == 0 {
 			return nil, fmt.Errorf("invalid UIDs")
 		}
-		
-		return p.updateContract(ORDERTYPE_AIRDROP, address, output, true, false), nil
 
+		return p.updateContract(ORDERTYPE_AIRDROP, paramBytes, address, output, true, false), nil
 
 	case INVOKE_API_VALIDATE:
 		if param.Param == "" {
@@ -1102,8 +1098,8 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 		default:
 			return nil, fmt.Errorf("invalid order type %d", innerParam.OrderType)
 		}
-		
-		return p.updateContract(ORDERTYPE_VALIDATE, address, output, true, false), nil
+
+		return p.updateContract(ORDERTYPE_VALIDATE, paramBytes, address, output, true, false), nil
 
 	default:
 		Log.Errorf("contract %s does not support action %s", url, param.Action)
@@ -1175,8 +1171,8 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heigh
 				return nil, fmt.Errorf("invalid sats value %d", innerParam.Value)
 			}
 		}
-		
-		return p.updateContract(ORDERTYPE_DONATE, address, OutputToSatsNet(output), true, true), nil
+
+		return p.updateContract(ORDERTYPE_DONATE, paramBytes, address, OutputToSatsNet(output), true, true), nil
 
 	default:
 		Log.Errorf("contract %s does not support action %s", p.URL(), param.Action)
@@ -1185,7 +1181,7 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heigh
 }
 
 // 通用的调用参数入口
-func (p *DaoContractRunTime) updateContract(order int,
+func (p *DaoContractRunTime) updateContract(order int, param []byte,
 	invoker string, output *TxOutput_SatsNet, bValid bool, fromL1 bool,
 ) *InvokeItem {
 
@@ -1206,7 +1202,7 @@ func (p *DaoContractRunTime) updateContract(order int,
 	if !bValid {
 		reason = INVOKE_REASON_INVALID
 	}
-	item := &SwapHistoryItem{
+	item := &InvokeItem{
 		InvokeHistoryItemBase: InvokeHistoryItemBase{
 			Id:     p.InvokeCount,
 			Reason: reason,
@@ -1230,6 +1226,7 @@ func (p *DaoContractRunTime) updateContract(order int,
 		ToL1:           false,
 		OutAmt:         indexer.NewDecimal(0, p.Divisibility),
 		OutValue:       0,
+		Padded:         param,
 	}
 	p.updateContractStatus(item)
 	if reason == INVOKE_REASON_INVALID {
@@ -1246,8 +1243,8 @@ func (p *DaoContractRunTime) updateContract(order int,
 func (p *DaoContractRunTime) updateContractStatus(item *SwapHistoryItem) {
 	p.history[item.InUtxo] = item
 
-	trader := p.loadInvokerInfo(item.Address)
-	InsertItemToTraderHistroy(&trader.InvokerStatusBaseV2, item)
+	invoker := p.loadInvokerInfo(item.Address)
+	InsertItemToInvokerHistroy(&invoker.InvokerStatusBaseV2, item)
 
 	p.InvokeCount++
 	p.TotalDonateAmt = p.TotalDonateAmt.Add(item.InAmt)
@@ -1256,11 +1253,11 @@ func (p *DaoContractRunTime) updateContractStatus(item *SwapHistoryItem) {
 	p.AssetAmtInPool = p.AssetAmtInPool.Add(item.InAmt)
 
 	if item.Reason == INVOKE_REASON_NORMAL {
-		trader.InvokeAmt = trader.InvokeAmt.Add(item.InAmt)
-		trader.InvokeValue += item.InValue
+		invoker.InvokeAmt = invoker.InvokeAmt.Add(item.InAmt)
+		invoker.InvokeValue += item.InValue
 	} // else 只可能是 INVOKE_REASON_INVALID 不用更新任何数据
 
-	saveContractInvokerStatus(p.stp.GetDB(), p.URL(), trader)
+	saveContractInvokerStatus(p.stp.GetDB(), p.URL(), invoker)
 	// 整体状态在外部保存
 }
 
@@ -1300,10 +1297,9 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 
 	processedItems := make([]*InvokeItem, 0)
 	invokers := make(map[string]*DaoInvokerStatus)
-	
+
 	for _, invokes := range p.donateMap {
 		for _, item := range invokes {
-			
 
 			updated = true
 			Log.Infof("item %s processed: inValue=%d", item.InUtxo,
@@ -1336,7 +1332,7 @@ func (p *DaoContractRunTime) sendInvokeResultTx() error {
 // 涉及发送各种tx，运行在线程中
 func (p *DaoContractRunTime) sendInvokeResultTx_SatsNet() error {
 	if p.resv.LocalIsInitiator() {
-		
+
 		url := p.URL()
 
 		err := p.airdrop()
