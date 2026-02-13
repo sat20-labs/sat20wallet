@@ -14,7 +14,6 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -339,12 +338,16 @@ func (p *AirDropInvokeParam) Decode(data []byte) error {
 
 type ValidateInvokeParam struct {
 	OrderType int    `json:"orderType"`
+	Result    int    `json:"result"`
+	Reason    string `json:"reason"`
 	Param     []byte `json:"para"`
 }
 
 func (p *ValidateInvokeParam) Encode() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddInt64(int64(p.OrderType)).
+		AddInt64(int64(p.Result)).
+		AddData([]byte(p.Reason)).
 		AddData([]byte(p.Param)).
 		Script()
 }
@@ -357,9 +360,19 @@ func (p *ValidateInvokeParam) Decode(data []byte) error {
 	tokenizer := txscript.MakeScriptTokenizer(0, data)
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return fmt.Errorf("missing type")
+		return fmt.Errorf("missing order type")
 	}
 	p.OrderType = int(tokenizer.ExtractInt64())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing result")
+	}
+	p.Result = int(tokenizer.ExtractInt64())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing amt")
+	}
+	p.Reason = string(tokenizer.Data())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing amt")
@@ -427,7 +440,7 @@ type DaoContractRunningData struct {
 	TotalAirdropCount int             // 空投交易计数
 	TotalAirdropAmt   *Decimal        // 所有空投出去的资产数量
 	TotalFeeValue     int64           // 所有由合约支付的相关交易的网络费用
-	Validators        map[string]bool // address
+	Validators        map[string]*Decimal // address
 }
 
 func (p *DaoContractRunningData) ToNewVersion() *DaoContractRunningData {
@@ -452,6 +465,10 @@ type DaoContractRunTime struct {
 	donateMap   map[string]map[int64]*InvokeItem // 还在处理中的调用, address -> invoke item list,
 	airdropMap  map[string]map[int64]*InvokeItem
 	validateMap map[string]map[int64]*InvokeItem
+	uidMap      map[string]string // uid->address
+
+	airdropRatio *Decimal
+	airdropLimit *Decimal
 
 	responseCache  []*responseItem_dao
 	responseStatus Response_DaoContract
@@ -463,7 +480,7 @@ func NewDaoContractRunTime(stp ContractManager) *DaoContractRunTime {
 			DaoContract:         *NewDaoContract(),
 			ContractRuntimeBase: *NewContractRuntimeBase(stp),
 			DaoContractRunningData: DaoContractRunningData{
-				Validators: make(map[string]bool),
+				Validators: make(map[string]*Decimal),
 			},
 		},
 	}
@@ -480,6 +497,7 @@ func (p *DaoContractRunTime) init() {
 	p.airdropMap = make(map[string]map[int64]*InvokeItem)
 	p.donateMap = make(map[string]map[int64]*InvokeItem)
 	p.validateMap = make(map[string]map[int64]*InvokeItem)
+	p.uidMap = make(map[string]string)
 }
 
 func (p *DaoContractRunTime) InitFromJson(content []byte, stp ContractManager) error {
@@ -501,9 +519,10 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 	}
 	p.init()
 
-	history := LoadContractInvokeHistory(p.db, p.URL(), true, false)
+	url := p.URL()
+	history := LoadContractInvokeHistory(p.db, url, true, false)
 	for _, v := range history {
-		item, ok := v.(*SwapHistoryItem)
+		item, ok := v.(*InvokeItem)
 		if !ok {
 			continue
 		}
@@ -511,6 +530,15 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 		p.loadInvokerInfo(item.Address)
 		p.addItem(item)
 		p.history[item.InUtxo] = item
+	}
+
+	invokers := loadAllContractInvokerStatus(p.db, url)
+	for _, v := range invokers {
+		invoker, ok := v.(*DaoInvokerStatus)
+		if !ok {
+			continue
+		}
+		p.uidMap[invoker.UID] = invoker.Address
 	}
 
 	return nil
@@ -1036,7 +1064,11 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 			}
 		}
 		if innerParam.Amt != "0" && innerParam.Amt != "" {
-			if innerParam.Amt != assetAmt.String() {
+			assetInParm, err := indexer.NewDecimalFromString(innerParam.Amt, MAX_ASSET_DIVISIBILITY)
+			if err != nil {
+				return nil, err
+			}
+			if assetInParm.Cmp(assetAmt) > 0 {
 				return nil, fmt.Errorf("invalid asset amt %s", innerParam.Amt)
 			}
 		}
@@ -1046,7 +1078,7 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 			}
 		}
 
-		return p.updateContract(ORDERTYPE_DONATE, paramBytes, address, output, true, false), nil
+		return p.updateContract(ORDERTYPE_DONATE, nil, address, output, true, false), nil
 
 	case INVOKE_API_AIRDROP:
 		if param.Param == "" {
@@ -1240,7 +1272,7 @@ func (p *DaoContractRunTime) updateContract(order int, param []byte,
 }
 
 // 更新需要写入数据库的数据
-func (p *DaoContractRunTime) updateContractStatus(item *SwapHistoryItem) {
+func (p *DaoContractRunTime) updateContractStatus(item *InvokeItem) {
 	p.history[item.InUtxo] = item
 
 	invoker := p.loadInvokerInfo(item.Address)
@@ -1255,6 +1287,17 @@ func (p *DaoContractRunTime) updateContractStatus(item *SwapHistoryItem) {
 	if item.Reason == INVOKE_REASON_NORMAL {
 		invoker.InvokeAmt = invoker.InvokeAmt.Add(item.InAmt)
 		invoker.InvokeValue += item.InValue
+		switch item.OrderType {
+		case ORDERTYPE_REGISTER:
+
+		case ORDERTYPE_DONATE:
+
+		case ORDERTYPE_AIRDROP:
+			
+
+		case ORDERTYPE_VALIDATE:
+		
+		}
 	} // else 只可能是 INVOKE_REASON_INVALID 不用更新任何数据
 
 	saveContractInvokerStatus(p.stp.GetDB(), p.URL(), invoker)
@@ -1262,7 +1305,7 @@ func (p *DaoContractRunTime) updateContractStatus(item *SwapHistoryItem) {
 }
 
 // 不需要写入数据库的缓存数据，不能修改任何需要保存数据库的变量
-func (p *DaoContractRunTime) addItem(item *SwapHistoryItem) {
+func (p *DaoContractRunTime) addItem(item *InvokeItem) {
 	if item.Reason == INVOKE_REASON_NORMAL {
 		switch item.OrderType {
 		case ORDERTYPE_REGISTER:
@@ -1282,38 +1325,268 @@ func (p *DaoContractRunTime) addItem(item *SwapHistoryItem) {
 	p.insertBuck(item)
 }
 
+func (p *DaoContractRunTime) getMinDonator() (string, *Decimal) {
+	var minDonate *Decimal
+	var minAddr string
+	for addr := range p.Validators {
+		invoker := p.loadInvokerInfo(addr)
+		if minDonate.Cmp(invoker.InvokeAmt) > 0 {
+			minDonate = invoker.InvokeAmt.Clone()
+			minAddr = addr
+		}
+	}
+	return minAddr, minDonate
+}
+
+func (p *DaoContractRunTime) handleRegisterItem(item *InvokeItem, 
+	result int, reason string, invokers map[string]*DaoInvokerStatus) {
+	if result == 0 {
+		var innerParam RegisterInvokeParam
+		err := innerParam.Decode(item.Padded)
+		if err != nil {
+			// 不可能会出现，前面检查过了
+			return 
+		}
+
+		item.Done = DONE_DEALT
+		invoker := p.loadInvokerInfo(item.Address)
+		if invoker.UID == "" {
+			invoker.UID = innerParam.UID
+		}
+		if invoker.ReferrerUID == "" {
+			invoker.ReferrerUID = innerParam.ReferrerUID
+			// 反向绑定
+			referrerAddr, ok := p.uidMap[innerParam.ReferrerUID]
+			if ok {
+				referrer := p.loadInvokerInfo(referrerAddr)
+				referrer.ReferralUIDs = indexer.InsertVector_string(referrer.ReferralUIDs, innerParam.UID)
+				invokers[referrerAddr] = referrer
+			}
+		}
+	} else {
+		item.Reason = reason
+		item.Done = DONE_CLOSED_DIRECTLY
+	}
+	delete(p.history, item.InUtxo)
+	removeItemFromMap(item, p.registerMap)
+}
+
+func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem, 
+	result int, reason string, invokers map[string]*DaoInvokerStatus) {
+	if result == 0 {
+		var innerParam AirDropInvokeParam
+		err := innerParam.Decode(item.Padded)
+		if err != nil {
+			// 不可能会出现，前面检查过了
+			return 
+		}
+
+		invoker := p.loadInvokerInfo(item.Address)
+
+		var totalAirdropAmt *Decimal
+		for _, uid := range innerParam.UIDs {
+			// 确保每一个uid的referrer都是 uid
+			referralAddr, ok := p.uidMap[uid] 
+			if !ok {
+				Log.Errorf("can't find address with uid %s", uid)
+				continue
+			}
+			referral := p.loadInvokerInfo(referralAddr)
+			if referral.ReferrerUID != invoker.UID {
+				Log.Errorf("invoker %s has different referrer %s, expected %d", referralAddr, referral.ReferrerUID, uid, invoker.UID)
+				continue
+			}
+			if referral.Airdropped {
+				continue
+			}
+
+			// 检查对应的资产数据
+			amt1 := p.stp.GetWalletMgr().GetAssetBalance(referralAddr, &p.AssetName)
+			amt2 := p.stp.GetWalletMgr().GetAssetBalance_SatsNet(referralAddr, &p.AssetName)
+			amt := amt1.Add(amt2)
+			// 如果没有资产，先直接返回
+			if amt.Sign() == 0 {
+				continue
+			}
+			
+			airdrop := amt.Mul(p.airdropRatio)
+			if airdrop.Cmp(p.airdropLimit) > 0 {
+				airdrop = p.airdropLimit.Clone()
+			}
+			totalAirdropAmt = totalAirdropAmt.Add(airdrop)
+			referral.Airdropped = true
+			invokers[referral.Address] = referral
+		}
+
+		if totalAirdropAmt.Sign() != 0 {
+			invokers[invoker.Address] = invoker
+			item.OutAmt = totalAirdropAmt
+		}
+	} else {
+		item.Reason = reason
+		item.Done = DONE_CLOSED_DIRECTLY
+		delete(p.history, item.InUtxo)
+		removeItemFromMap(item, p.airdropMap)
+	}
+}
+
 // 执行
 func (p *DaoContractRunTime) process(height int, blockHash string) error {
 	if len(p.donateMap) == 0 {
 		return nil
 	}
 
-	Log.Debugf("%s start contract %s with action recycle with block %d %s",
+	Log.Debugf("%s start contract %s with action with block %d %s",
 		p.stp.GetMode(), p.URL(), height, blockHash)
 
 	url := p.URL()
 	updated := false
-	//isPlainAsset := indexer.IsPlainAsset(p.GetAssetName())
 
-	processedItems := make([]*InvokeItem, 0)
 	invokers := make(map[string]*DaoInvokerStatus)
+	
+	// 1. 执行donate，目标是更新排行版
+	if len(p.donateMap) > 0 {
+		minAddr, minDonate := p.getMinDonator()
+		for addr, items := range p.donateMap {
+			invoker := p.loadInvokerInfo(addr)
+			invokers[addr] = invoker
 
-	for _, invokes := range p.donateMap {
-		for _, item := range invokes {
+			if invoker.InvokeAmt.Cmp(minDonate) > 0 {
+				p.Validators[addr] = invoker.InvokeAmt.Clone()
+				if len(p.Validators) > p.ValidatorNum {
+					// 删除最小的validator
+					delete(p.Validators, minAddr)
+					minAddr, minDonate = p.getMinDonator()
+				}
+			}
 
-			updated = true
-			Log.Infof("item %s processed: inValue=%d", item.InUtxo,
-				item.InValue)
+			for _, item := range items {
+				item.RemainingAmt = nil
+				item.RemainingValue = 0
+				item.Done = DONE_DEALT
+				delete(p.history, item.InUtxo)
+				SaveContractInvokeHistoryItem(p.db, url, item)
+			}
+		}
+		updated = true
+		p.donateMap = make(map[string]map[int64]*InvokeItem)
+	}
+
+	// 2. 执行validate
+	if len(p.validateMap) > 0 {
+		for addr, items := range p.validateMap {
+			_, ok := p.validateMap[addr]
+			if !ok {
+				// 全部设置为无效
+				for _, item := range items {
+					item.Reason = INVOKE_REASON_INVALID_VALIDATOR
+					item.Done = DONE_CLOSED_DIRECTLY
+					delete(p.history, item.InUtxo)
+					SaveContractInvokeHistoryItem(p.db, url, item)
+				}
+				continue
+			}
+
+			for _, item := range items {
+				var innerParam ValidateInvokeParam
+				err := innerParam.Decode(item.Padded)
+				if err != nil {
+					// 不可能出现，前面检查过
+					continue
+				}
+				if len(innerParam.Param) == 0 {
+					// 不可能出现，前面检查过
+					continue
+				}
+				ids := strings.Split(string(innerParam.Param), " ")
+				switch innerParam.OrderType {
+				case ORDERTYPE_REGISTER:
+					for _, id := range ids {
+						itemId, err := strconv.ParseInt(id, 10, 64)
+						if err != nil {
+							// 不可能出现，前面检查过
+							Log.Errorf("%s invalid parameter %s", url, id)
+							continue
+						}
+						registerItem := p.getItemFromBuck(itemId)
+						if registerItem == nil {
+							Log.Errorf("%s can't find item %d", url, itemId)
+							continue
+						}
+						p.handleRegisterItem(registerItem, innerParam.Result, 
+							innerParam.Reason, invokers)
+					}
+
+				case ORDERTYPE_AIRDROP:
+					for _, id := range ids {
+						itemId, err := strconv.ParseInt(id, 10, 64)
+						if err != nil {
+							// 不可能出现，前面检查过
+							Log.Errorf("%s invalid parameter %s", url, id)
+							continue
+						}
+						airdropItem := p.getItemFromBuck(itemId)
+						if airdropItem == nil {
+							Log.Errorf("%s can't find item %d", url, itemId)
+							continue
+						}
+						p.handleAirdropItem(airdropItem, innerParam.Result, 
+							innerParam.Reason, invokers)
+					}
+				}
+
+				item.Done = DONE_DEALT
+				delete(p.history, item.InUtxo)
+				SaveContractInvokeHistoryItem(p.db, url, item)
+			}
+		}
+		updated = true
+		p.validateMap = make(map[string]map[int64]*InvokeItem)
+	}
+
+	// 3. 执行register
+	if len(p.registerMap) > 0 {
+		processedItems := make([]*InvokeItem, 0)
+		for addr, items := range p.registerMap {
+			invoker := p.loadInvokerInfo(addr)
+			invokers[addr] = invoker
+			for _, item := range items {
+				h, _, _ := indexer.FromUtxoId(item.UtxoId)
+				if height - h < p.RegisterTimeOut {
+					continue
+				}
+				p.handleRegisterItem(item, 0, "", invokers)
+				processedItems = append(processedItems, item)
+				updated = true
+			}
+		}
+
+		for _, item := range processedItems {
+			delete(p.history, item.InUtxo)
+			removeItemFromMap(item, p.registerMap)
+			SaveContractInvokeHistoryItem(p.db, url, item)
+		}
+	}
+
+	// 4. 执行airdrop
+	if len(p.airdropMap) > 0 {
+		for addr, items := range p.airdropMap {
+			invoker := p.loadInvokerInfo(addr)
+			invokers[addr] = invoker
+			for _, item := range items {
+				h, _, _ := indexer.FromUtxoId(item.UtxoId)
+				if height - h < p.AirDropTimeOut {
+					continue
+				}
+				p.handleAirdropItem(item, 0, "", invokers)
+				SaveContractInvokeHistoryItem(p.db, url, item)
+				updated = true
+			}
 		}
 	}
 
 	for _, invoker := range invokers {
 		saveContractInvokerStatus(p.db, url, invoker)
-	}
-
-	for _, item := range processedItems {
-		removeItemFromMap(item, p.donateMap)
-		SaveContractInvokeHistoryItem(p.db, url, item)
 	}
 
 	// 结果先保存
@@ -1347,6 +1620,8 @@ func (p *DaoContractRunTime) sendInvokeResultTx_SatsNet() error {
 	return nil
 }
 
+// TODO 是否将涉及到的invokeItem的id列表，放入DealInfo中，发签名请求时同步到peer？这样确保不会有错误
+// 目前是靠区块高度来对应处理所有相关invokeItem
 func (p *DaoContractRunTime) updateWithDealInfo_airdrop(dealInfo *DealInfo) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -1362,10 +1637,10 @@ func (p *DaoContractRunTime) updateWithDealInfo_airdrop(dealInfo *DealInfo) {
 	txId := dealInfo.TxId
 
 	for address, info := range dealInfo.SendInfo {
-		rewardMap, ok := p.airdropMap[address]
+		airdropMap, ok := p.airdropMap[address]
 		if ok {
 			deleted := make([]int64, 0)
-			for _, item := range rewardMap {
+			for _, item := range airdropMap {
 				h, _, _ := indexer.FromUtxoId(item.UtxoId)
 				if h > height {
 					continue
@@ -1383,18 +1658,16 @@ func (p *DaoContractRunTime) updateWithDealInfo_airdrop(dealInfo *DealInfo) {
 				delete(p.history, item.InUtxo)
 			}
 			for _, id := range deleted {
-				delete(rewardMap, id)
+				delete(airdropMap, id)
 			}
-			if len(rewardMap) == 0 {
+			if len(airdropMap) == 0 {
 				delete(p.airdropMap, address)
 			}
 		}
-		trader := p.loadInvokerInfo(address)
-		if trader != nil {
-			trader.TotalAirdropAmt = trader.TotalAirdropAmt.Add(info.AssetAmt)
-			saveContractInvokerStatus(p.stp.GetDB(), url, trader)
-
-			// TODO 需要同步设置哪些被推荐人的空投标志
+		invoker := p.loadInvokerInfo(address)
+		if invoker != nil {
+			invoker.TotalAirdropAmt = invoker.TotalAirdropAmt.Add(info.AssetAmt)
+			saveContractInvokerStatus(p.stp.GetDB(), url, invoker)
 		}
 	}
 
@@ -1416,8 +1689,8 @@ func (p *DaoContractRunTime) genAirdropInfo(height int) *DealInfo {
 	var totalValue int64
 	var totalAmt *Decimal                          // 资产数量
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
-	for _, rewardMap := range p.airdropMap {
-		for _, item := range rewardMap {
+	for _, airdropMap := range p.airdropMap {
+		for _, item := range airdropMap {
 			h, _, _ := indexer.FromUtxoId(item.UtxoId)
 			if h > height {
 				continue
@@ -1583,20 +1856,6 @@ func (p *DaoContractRunTime) AllowPeerAction(action string, param any) (any, err
 			if info != nil {
 				expectedSendInfo = info.SendInfo
 			}
-			// 调整fee
-			n := p.N
-			if n == 0 {
-				dealInfo.Fee += int64(len(dealInfo.SendInfo) * 330)
-			} else {
-				if len(dealInfo.SendInfo) == 1 {
-					if !indexer.IsPlainAsset(p.GetAssetName()) {
-						satsNum := indexer.GetBindingSatNum(dealInfo.TotalAmt, uint32(n))
-						if satsNum < 330 {
-							dealInfo.Fee += 330
-						}
-					}
-				}
-			}
 
 		default:
 			return nil, fmt.Errorf("not expected contract invoke reason %s", dealInfo.Reason)
@@ -1751,139 +2010,4 @@ func (p *DaoContractRunTime) SetPeerActionResult(action string, param any) {
 		Log.Infof("%s SetPeerActionResult %s completed", p.URL(), action)
 		return
 	}
-}
-
-func (p *DaoContractRunTime) genRewardInfoFromReq(req *wwire.RemoteSignMoreData_Contract) (*DealInfo, error) {
-
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
-
-	assetName := p.GetAssetName()
-	maxHeight := 0
-	var totalValue int64
-	var totalAmt *Decimal                          // 资产数量
-	sendInfoMap := make(map[string]*SendAssetInfo) // key: inUtxo
-	sendTxIdMap := make(map[string]string)
-	for _, tx := range req.Tx {
-		if tx.L1Tx {
-			return nil, fmt.Errorf("not anchor TX")
-		}
-		tx, err := DecodeMsgTx_SatsNet(tx.Tx)
-		if err != nil {
-			return nil, err
-		}
-		anchorData, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
-		if err != nil {
-			Log.Errorf("CheckAnchorPkScript %s failed", tx.TxID())
-			return nil, err
-		}
-
-		// 进一步检查输出的invoice
-		targetHeight := 0
-		for _, txOut := range tx.TxOut {
-			if sindexer.IsOpReturn(txOut.PkScript) {
-				ctype, data, err := sindexer.ReadDataFromNullDataScript(txOut.PkScript)
-				if err == nil {
-					switch ctype {
-					case sindexer.CONTENT_TYPE_INVOKERESULT:
-						url, r, h, err := ParseContractResultInvoice(data)
-						if err != nil {
-							Log.Errorf("ParseContractResultInvoice failed, %v", err)
-							return nil, err
-						}
-						if url != p.URL() {
-							if url != p.RelativePath() {
-								return nil, fmt.Errorf("%s not expected contract invoke result tx %s", url, tx.TxID())
-							}
-						}
-						height, err := strconv.ParseInt(h, 10, 32)
-						if err != nil {
-							return nil, err
-						}
-						if r != INVOKE_RESULT_DEPOSIT {
-							return nil, fmt.Errorf("%s is not a deposit anchor tx", tx.TxID())
-						}
-
-						targetHeight = int(height)
-					}
-				}
-			}
-		}
-
-		// 到这里可以确定是一个anchorTx，第一个输出是目标地址
-		destAddr, err := AddrFromPkScript(tx.TxOut[0].PkScript)
-		if err != nil {
-			Log.Errorf("AddressFromPkScript %s failed, %v", tx.TxID(), err)
-			return nil, err
-		}
-		items, ok := p.airdropMap[destAddr]
-		if !ok {
-			return nil, fmt.Errorf("invalid destination address %s", destAddr)
-		}
-
-		bFound := false
-		for _, item := range items {
-			if item.InUtxo == anchorData.Utxo {
-				if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
-					continue
-				}
-				h, _, _ := indexer.FromUtxoId(item.UtxoId)
-				if h > targetHeight {
-					continue
-				}
-				maxHeight = max(maxHeight, h)
-
-				if item.AssetName == indexer.ASSET_PLAIN_SAT.String() {
-					if len(anchorData.Assets) != 0 {
-						return nil, fmt.Errorf("%s assets should be empty", tx.TxID())
-					}
-					if item.RemainingValue != anchorData.Value {
-						return nil, fmt.Errorf("%s invalid value %d, expected %d", tx.TxID(), anchorData.Value, item.RemainingValue)
-					}
-				} else {
-					if len(anchorData.Assets) != 1 {
-						return nil, fmt.Errorf("%s should be only one asset", tx.TxID())
-					}
-					value := indexer.GetBindingSatNum(item.RemainingAmt, uint32(p.N))
-					if value != anchorData.Value {
-						return nil, fmt.Errorf("%s invalid value %d, expected %d", tx.TxID(), anchorData.Value, value)
-					}
-					assetInfo := anchorData.Assets[0]
-					if assetInfo.Name.String() != item.AssetName {
-						return nil, fmt.Errorf("%s invalid asset name %s, expected %s", tx.TxID(), assetInfo.Name.String(), item.AssetName)
-					}
-					if assetInfo.Amount.Cmp(item.RemainingAmt) != 0 {
-						return nil, fmt.Errorf("%s invalid asset amt %s, expected %s", tx.TxID(), assetInfo.Amount.String(), item.RemainingAmt.String())
-					}
-				}
-
-				sendInfoMap[item.InUtxo] = &SendAssetInfo{
-					Address:   item.Address,
-					Value:     item.RemainingValue,
-					AssetName: assetName,
-					AssetAmt:  item.RemainingAmt.Clone(),
-				}
-				sendTxIdMap[item.InUtxo] = tx.TxID()
-				totalAmt = totalAmt.Add(item.RemainingAmt)
-				totalValue += item.RemainingValue
-				bFound = true
-			}
-		}
-		if !bFound {
-			return nil, fmt.Errorf("can't find deposit itme %s", anchorData.Utxo)
-		}
-	}
-
-	return &DealInfo{
-		SendInfo:          sendInfoMap,
-		SendTxIdMap:       sendTxIdMap,
-		AssetName:         assetName,
-		TotalAmt:          totalAmt,
-		TotalValue:        totalValue,
-		Reason:            INVOKE_RESULT_DEPOSIT,
-		Height:            maxHeight,
-		InvokeCount:       req.InvokeCount,
-		StaticMerkleRoot:  req.StaticMerkleRoot,
-		RuntimeMerkleRoot: req.RuntimeMerkleRoot,
-	}, nil
 }

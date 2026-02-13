@@ -157,6 +157,7 @@ const (
 	INVOKE_REASON_UTXO_FORMAT          string = "input utxo incorrect format"
 	INVOKE_REASON_UTXO_TOO_SMALL       string = "input utxo value too small"
 	INVOKE_REASON_POOL_TOO_SMALL       string = "pool value too small"
+	INVOKE_REASON_INVALID_VALIDATOR    string = "invalid validator"
 )
 
 const (
@@ -484,7 +485,7 @@ type InvokeItem struct {
 	ServiceFee     int64
 	UnitPrice      *Decimal // X per Y
 	ExpectedAmt    *Decimal // 期望的数量
-	Address        string   // 所有人
+	Address        string   // invoker
 	FromL1         bool     // InUtxo是否主网的调用，默认是false
 	InUtxo         string   // 调用合约的Utxo
 	InValue        int64    // InUtxo的白聪，不包括资产聪，包括手续费
