@@ -124,6 +124,9 @@ func (p *LaunchPoolContract) CheckContent() error {
 	if err != nil {
 		return err
 	}
+	if len(p.AssetName.Ticker) != 4 { // 暂时不支持5字符
+		return fmt.Errorf("invalid ticker length %d", len(p.AssetName.Ticker))
+	}
 
 	if p.AssetName.Protocol == indexer.PROTOCOL_NAME_ORDX {
 		if p.BindingSat == 0 {

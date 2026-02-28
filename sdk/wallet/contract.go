@@ -36,10 +36,10 @@ const (
 	TEMPLATE_CONTRACT_AMM        string = "amm.tc"
 	TEMPLATE_CONTRACT_TRANSCEND  string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
 	// 开发中的
-	TEMPLATE_CONTRACT_RECYCLE   string = "recycle.tc"
-	TEMPLATE_CONTRACT_FUNDATION string = "fundation.tc"
-	TEMPLATE_CONTRACT_VAULT     string = "vault.tc"
-	TEMPLATE_CONTRACT_STAKE     string = "stake.tc"
+	TEMPLATE_CONTRACT_RECYCLE string = "recycle.tc"
+	TEMPLATE_CONTRACT_DAO     string = "dao.tc"
+	TEMPLATE_CONTRACT_VAULT   string = "vault.tc"
+	TEMPLATE_CONTRACT_STAKE   string = "stake.tc"
 
 	CONTRACT_STATUS_EXPIRED int = -2
 	CONTRACT_STATUS_CLOSED  int = -1
@@ -761,7 +761,7 @@ func (p *ContractBase) CheckContent() error {
 			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
 		}
 	} else if p.AssetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
-		if len(p.AssetName.Ticker) != 4 { // 暂时不支持5字符
+		if len(p.AssetName.Ticker) != 4 && len(p.AssetName.Ticker) != 5 {
 			return fmt.Errorf("invalid ticker length %d", len(p.AssetName.Ticker))
 		}
 		p.AssetName.Ticker = strings.ToLower(p.AssetName.Ticker)
@@ -2975,6 +2975,9 @@ func NewContract(cname string) Contract {
 
 	case TEMPLATE_CONTRACT_RECYCLE:
 		return NewRecycleContract()
+
+	case TEMPLATE_CONTRACT_DAO:
+		return NewDaoContract()
 	}
 	return nil
 }
@@ -3014,6 +3017,9 @@ func NewContractRuntime(stp ContractManager, cname string) ContractRuntime {
 
 	case TEMPLATE_CONTRACT_RECYCLE:
 		return NewRecycleContractRunTime(stp)
+
+	case TEMPLATE_CONTRACT_DAO:
+		return NewDaoContractRunTime(stp)
 	}
 
 	return r
@@ -3289,6 +3295,15 @@ func GetInvokeInnerParam(action string) InvokeInnerParamIF {
 		return &RecycleInvokeParam{}
 	case INVOKE_API_REWARD:
 		return &RecycleInvokeParam{}
+	
+	case INVOKE_API_REGISTER:
+		return &RegisterInvokeParam{}
+	case INVOKE_API_DONATE:
+		return &DonateInvokeParam{}
+	case INVOKE_API_AIRDROP:
+		return &AirDropInvokeParam{}
+	case INVOKE_API_VALIDATE:
+		return &ValidateInvokeParam{}
 
 	default:
 		return nil
@@ -3321,6 +3336,15 @@ func GetOrderTypeWithAction(action string) int {
 		return ORDERTYPE_RECYCLE
 	case INVOKE_API_REWARD:
 		return ORDERTYPE_REWARD
+
+	case INVOKE_API_REGISTER:
+		return ORDERTYPE_REGISTER
+	case INVOKE_API_DONATE:
+		return ORDERTYPE_DONATE
+	case INVOKE_API_AIRDROP:
+		return ORDERTYPE_AIRDROP
+	case INVOKE_API_VALIDATE:
+		return ORDERTYPE_VALIDATE
 
 	default:
 		return ORDERTYPE_SELL

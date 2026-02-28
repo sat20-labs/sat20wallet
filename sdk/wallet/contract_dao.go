@@ -49,17 +49,17 @@ type DaoContract struct {
 	AssetAmt string
 	SatValue int64
 
-	ValidatorNum    int   // 至少3
+	ValidatorNum    int   // 默认3
 	RegisterFee     int64 // 最少20
 	RegisterTimeOut int   // 聪网区块数，注册审核时间，超时自动确认
 
-	// airdrop
+	// airdrop conditions
 	HoldingAssetName indexer.AssetName
-	HoldingAssetAmt  string
-	AirDropRatio     int
-	AirDropLimit     string
-	AirDropTimeOut   int // 聪网区块数，超时自动确认
-	ReferralRatio    int // 默认为0，在空投中，一部分给被推荐人
+	HoldingAssetAmt  string // 需要大于这个数量才能获得空投
+	AirDropRatio     string // 乘数
+	AirDropLimit     string // 空投量限额
+	AirDropTimeOut   int    // 聪网区块数，超时自动确认
+	ReferralRatio    int    // 百分比，默认为0，在空投中，一部分给被推荐人
 
 	// 更多的配置数据
 }
@@ -67,7 +67,7 @@ type DaoContract struct {
 func NewDaoContract() *DaoContract {
 	c := &DaoContract{
 		ContractBase: ContractBase{
-			TemplateName: TEMPLATE_CONTRACT_FUNDATION,
+			TemplateName: TEMPLATE_CONTRACT_DAO,
 		},
 		RegisterFee:  MIN_REGISTER_FEE,
 		ValidatorNum: MIN_VALIDATOR_NUM,
@@ -104,9 +104,11 @@ func (p *DaoContract) CheckContent() error {
 	if err != nil {
 		return fmt.Errorf("invalid HoldingAssetAmt %s", p.HoldingAssetAmt)
 	}
-	if p.AirDropRatio <= 0 {
-		return fmt.Errorf("AirDropRatio should >= 0")
+	_, err = indexer.NewDecimalFromString(p.AirDropRatio, MAX_ASSET_DIVISIBILITY)
+	if err != nil {
+		return fmt.Errorf("invalid AirDropRatio %s", p.HoldingAssetAmt)
 	}
+
 	if p.AirDropLimit != "" && p.AirDropLimit != "0" {
 		_, err = indexer.NewDecimalFromString(p.AirDropLimit, MAX_ASSET_DIVISIBILITY)
 		if err != nil {
@@ -144,12 +146,14 @@ func (p *DaoContract) Encode() ([]byte, error) {
 		AddData(base).
 		AddData([]byte(p.AssetAmt)).
 		AddInt64(p.SatValue).
-		AddInt64(p.RegisterFee).
 		AddInt64(int64(p.ValidatorNum)).
+		AddInt64(p.RegisterFee).
+		AddInt64(int64(p.RegisterTimeOut)).
 		AddData([]byte(p.HoldingAssetName.String())).
 		AddData([]byte(p.HoldingAssetAmt)).
-		AddInt64(int64(p.AirDropRatio)).
+		AddData([]byte(p.AirDropRatio)).
 		AddData([]byte(p.AirDropLimit)).
+		AddInt64(int64(p.AirDropTimeOut)).
 		AddInt64(int64(p.ReferralRatio)).
 		Script()
 }
@@ -177,14 +181,19 @@ func (p *DaoContract) Decode(data []byte) error {
 	p.SatValue = tokenizer.ExtractInt64()
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing ValidatorNum")
+	}
+	p.ValidatorNum = int(tokenizer.ExtractInt64())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing RegisterFee")
 	}
 	p.RegisterFee = tokenizer.ExtractInt64()
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return fmt.Errorf("missing ValidatorNum")
+		return fmt.Errorf("missing RegisterTimeOut")
 	}
-	p.ValidatorNum = int(tokenizer.ExtractInt64())
+	p.RegisterTimeOut = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing HoldingAssetName")
@@ -199,12 +208,17 @@ func (p *DaoContract) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing AirDropRatio")
 	}
-	p.AirDropRatio = int(tokenizer.ExtractInt64())
+	p.AirDropRatio = string(tokenizer.Data())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing AirDropLimit")
 	}
 	p.AirDropLimit = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing AirDropTimeOut")
+	}
+	p.AirDropTimeOut = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing ReferralRatio")
@@ -437,9 +451,9 @@ type DaoContractRunningData struct {
 	TotalDonateCount  int
 	TotalDonateAmt    *Decimal // 所有进入池子的资产数量，指主网上每个地址参与回收的每个TX的输入资产总量
 	TotalInputValue   int64
-	TotalAirdropCount int             // 空投交易计数
-	TotalAirdropAmt   *Decimal        // 所有空投出去的资产数量
-	TotalFeeValue     int64           // 所有由合约支付的相关交易的网络费用
+	TotalAirdropCount int                 // 空投交易计数
+	TotalAirdropAmt   *Decimal            // 所有空投出去的资产数量
+	TotalFeeValue     int64               // 所有由合约支付的相关交易的网络费用
 	Validators        map[string]*Decimal // address
 }
 
@@ -847,7 +861,7 @@ func (p *DaoContractRunTime) CheckInvokeParam(param string) (int64, error) {
 	}
 	assetName := p.GetAssetName()
 	templateName := p.GetTemplateName()
-	if templateName != TEMPLATE_CONTRACT_FUNDATION {
+	if templateName != TEMPLATE_CONTRACT_DAO {
 		return 0, fmt.Errorf("unsupport")
 	}
 
@@ -1293,10 +1307,9 @@ func (p *DaoContractRunTime) updateContractStatus(item *InvokeItem) {
 		case ORDERTYPE_DONATE:
 
 		case ORDERTYPE_AIRDROP:
-			
 
 		case ORDERTYPE_VALIDATE:
-		
+
 		}
 	} // else 只可能是 INVOKE_REASON_INVALID 不用更新任何数据
 
@@ -1338,14 +1351,14 @@ func (p *DaoContractRunTime) getMinDonator() (string, *Decimal) {
 	return minAddr, minDonate
 }
 
-func (p *DaoContractRunTime) handleRegisterItem(item *InvokeItem, 
+func (p *DaoContractRunTime) handleRegisterItem(item *InvokeItem,
 	result int, reason string, invokers map[string]*DaoInvokerStatus) {
 	if result == 0 {
 		var innerParam RegisterInvokeParam
 		err := innerParam.Decode(item.Padded)
 		if err != nil {
 			// 不可能会出现，前面检查过了
-			return 
+			return
 		}
 
 		item.Done = DONE_DEALT
@@ -1371,14 +1384,14 @@ func (p *DaoContractRunTime) handleRegisterItem(item *InvokeItem,
 	removeItemFromMap(item, p.registerMap)
 }
 
-func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem, 
+func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
 	result int, reason string, invokers map[string]*DaoInvokerStatus) {
 	if result == 0 {
 		var innerParam AirDropInvokeParam
 		err := innerParam.Decode(item.Padded)
 		if err != nil {
 			// 不可能会出现，前面检查过了
-			return 
+			return
 		}
 
 		invoker := p.loadInvokerInfo(item.Address)
@@ -1386,7 +1399,7 @@ func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
 		var totalAirdropAmt *Decimal
 		for _, uid := range innerParam.UIDs {
 			// 确保每一个uid的referrer都是 uid
-			referralAddr, ok := p.uidMap[uid] 
+			referralAddr, ok := p.uidMap[uid]
 			if !ok {
 				Log.Errorf("can't find address with uid %s", uid)
 				continue
@@ -1408,12 +1421,13 @@ func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
 			if amt.Sign() == 0 {
 				continue
 			}
-			
+
 			airdrop := amt.Mul(p.airdropRatio)
 			if airdrop.Cmp(p.airdropLimit) > 0 {
 				airdrop = p.airdropLimit.Clone()
 			}
 			totalAirdropAmt = totalAirdropAmt.Add(airdrop)
+			// 设置空投标志
 			referral.Airdropped = true
 			invokers[referral.Address] = referral
 		}
@@ -1443,7 +1457,7 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 	updated := false
 
 	invokers := make(map[string]*DaoInvokerStatus)
-	
+
 	// 1. 执行donate，目标是更新排行版
 	if len(p.donateMap) > 0 {
 		minAddr, minDonate := p.getMinDonator()
@@ -1513,7 +1527,7 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 							Log.Errorf("%s can't find item %d", url, itemId)
 							continue
 						}
-						p.handleRegisterItem(registerItem, innerParam.Result, 
+						p.handleRegisterItem(registerItem, innerParam.Result,
 							innerParam.Reason, invokers)
 					}
 
@@ -1530,7 +1544,7 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 							Log.Errorf("%s can't find item %d", url, itemId)
 							continue
 						}
-						p.handleAirdropItem(airdropItem, innerParam.Result, 
+						p.handleAirdropItem(airdropItem, innerParam.Result,
 							innerParam.Reason, invokers)
 					}
 				}
@@ -1552,7 +1566,7 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 			invokers[addr] = invoker
 			for _, item := range items {
 				h, _, _ := indexer.FromUtxoId(item.UtxoId)
-				if height - h < p.RegisterTimeOut {
+				if height-h < p.RegisterTimeOut {
 					continue
 				}
 				p.handleRegisterItem(item, 0, "", invokers)
@@ -1575,7 +1589,7 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 			invokers[addr] = invoker
 			for _, item := range items {
 				h, _, _ := indexer.FromUtxoId(item.UtxoId)
-				if height - h < p.AirDropTimeOut {
+				if height-h < p.AirDropTimeOut {
 					continue
 				}
 				p.handleAirdropItem(item, 0, "", invokers)
@@ -2010,4 +2024,11 @@ func (p *DaoContractRunTime) SetPeerActionResult(action string, param any) {
 		Log.Infof("%s SetPeerActionResult %s completed", p.URL(), action)
 		return
 	}
+}
+
+func (p *DaoContractRunTime) CheckUID(uid string) bool {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	_, ok := p.uidMap[uid]
+	return ok
 }

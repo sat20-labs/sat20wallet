@@ -131,7 +131,7 @@ func (p *Manager) QueryFeeForInvokeContract(contractURL string, jsonInvokeParam 
 	return contract, fee, nil
 }
 
-// 发送的TX包含调用该合约所需要的聪, invokeParam不支持复杂结构的参数
+// 发送的TX包含调用该合约所需要的聪
 func (p *Manager) InvokeContract_Satsnet(contractURL string, jsonInvokeParam string,
 	feeRate int64) (string, error) {
 	if p.wallet == nil {
@@ -193,7 +193,7 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, jsonInvokeParam str
 	return tx.TxID(), nil
 }
 
-// 调用合约的同时加入资产，invokeParam支持复杂结构的参数
+// 调用合约的同时加入资产
 func (p *Manager) InvokeContractV2_Satsnet(contractURL string, jsonInvokeParam string,
 	assetName string, amt string, feeRate int64) (string, error) {
 	if p.wallet == nil {
