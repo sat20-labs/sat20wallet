@@ -2361,6 +2361,31 @@ func (p *ContractRuntimeBase) invokeCompleted() {
 		// 只在区块调用结束后更新合约的merkle root，不管合约后续的动作
 		p.calcAssetMerkleRoot()
 	}
+
+	// 清理已经完成的invokeItem
+	if len(p.history) != 0 {
+		cleanlist := make([]string, 0)
+		for k, item := range p.history {
+			if item.FromL1 {
+				if item.Done != DONE_NOTYET {
+					h, _, _ := indexer.FromUtxoId(item.UtxoId)
+					if p.CurrBlockL1 - 6 > h {
+						cleanlist = append(cleanlist, k)
+					}
+				}
+			} else {
+				if item.Done != DONE_NOTYET {
+					h, _, _ := indexer.FromUtxoId(item.UtxoId)
+					if p.CurrBlock - 6 > h {
+						cleanlist = append(cleanlist, k)
+					}
+				}
+			}
+		}
+		for _, k := range cleanlist {
+			delete(p.history, k)
+		}
+	}
 }
 
 func (p *ContractRuntimeBase) buildDepositAnchorTx(output *indexer.TxOutput, destAddr string,
@@ -2918,6 +2943,14 @@ func (p *ContractRuntimeBase) DisableItem(input InvokeHistoryItem) {
 	switch item.OrderType {
 
 	}
+}
+
+// 只检查当前的history
+func (p *ContractRuntimeBase) InvokeItemExists(utxo string) bool {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	_, ok := p.history[utxo]
+	return ok
 }
 
 func GetSupportedContracts() []string {
