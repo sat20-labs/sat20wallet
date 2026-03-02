@@ -2953,6 +2953,16 @@ func (p *ContractRuntimeBase) InvokeItemExists(utxo string) bool {
 	return ok
 }
 
+func (p *ContractRuntimeBase) GetItemId(utxo string) int64 {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	item, ok := p.history[utxo]
+	if ok {
+		return item.Id
+	}
+	return -1
+}
+
 func GetSupportedContracts() []string {
 	result := make([]string, 0)
 	c := NewContract(TEMPLATE_CONTRACT_LAUNCHPOOL)

@@ -951,14 +951,14 @@ func (p *DaoContractRunTime) CheckInvokeParam(param string) (int64, error) {
 		case ORDERTYPE_REGISTER:
 			// item id list
 
-		case ORDERTYPE_DONATE:
+		case ORDERTYPE_AIRDROP:
 			// item id list
 
 		default:
 			return 0, fmt.Errorf("invalid order type %d", innerParam.OrderType)
 		}
 
-		return 0, nil
+		return INVOKE_FEE, nil
 
 	default:
 		return 0, fmt.Errorf("unsupport action %s", invoke.Action)
@@ -1256,7 +1256,7 @@ func (p *DaoContractRunTime) updateContract(order int, param []byte,
 	inValue = output.GetPlainSat()
 	inAmt = output.GetAsset(assetName)
 
-	serviceFee := int64(0)
+	serviceFee := INVOKE_FEE
 	remainingValue := inValue - serviceFee
 	remainingAmt := inAmt.Clone()
 
