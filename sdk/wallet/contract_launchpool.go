@@ -124,7 +124,7 @@ func (p *LaunchPoolContract) CheckContent() error {
 	if err != nil {
 		return err
 	}
-	if len(p.AssetName.Ticker) != 4 { // 暂时不支持5字符
+	if p.AssetName.Protocol == indexer.PROTOCOL_NAME_BRC20 && len(p.AssetName.Ticker) != 4 { // 暂时不支持5字符
 		return fmt.Errorf("invalid ticker length %d", len(p.AssetName.Ticker))
 	}
 
@@ -1884,7 +1884,7 @@ func (p *LaunchPoolContractRunTime) deployAmmContract() (string, int64, error) {
 	c.K = indexer.DecimalMul(p.AssetAmtInPool, indexer.NewDefaultDecimal(p.SatsValueInPool)).String()
 
 	txId, id, err := p.stp.DeployContract(ammContract.GetTemplateName(),
-		string(ammContract.Content()), nil, 0, p.Deployer, 0)
+		string(ammContract.Content()), nil, 0, p.Deployer, int(p.localWallet.GetSubAccount()))
 	if err != nil {
 		Log.Errorf("%s DeployContract %s failed, %v", p.URL(), ammContract.GetContractName(), err)
 		return "", 0, err

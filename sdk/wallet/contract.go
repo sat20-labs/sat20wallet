@@ -248,7 +248,7 @@ type ContractManager interface {
 
 	AscendAssetInCoreChannel(assetNameStr string, utxo string, memo []byte) (string, error)
 	DeployContract(templateName, contractContent string,
-		fees []string, feeRate int64, deployer string, subAccountIndex uint32) (string, int64, error)
+		fees []string, feeRate int64, deployer string, subAccountIndex int) (string, int64, error)
 }
 
 type ActionFunc func(ContractManager, ContractDeployResvIF, any) (any, error)
@@ -924,6 +924,8 @@ type ContractRuntimeBase struct {
 
 	CheckPointBlock   int
 	CheckPointBlockL1 int
+	// 如果是合约的响应方，只需要使用subAccount=0的地址；
+	// 合约的发起方，需要根据合约的 IsExclusive 属性，确定使用哪个subAccount
 	LocalPubKey       []byte
 	RemotePubKey      []byte
 	CoreNodePubKey    []byte // 提供合约创建的核心节点的pubkey
