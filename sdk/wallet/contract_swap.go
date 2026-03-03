@@ -478,7 +478,7 @@ type SwapContractRuntime struct {
 	isSending          bool
 
 	// rpc 缓存
-	responseCache_swap []*responseItem_swap
+	responseCache      []*responseItem_swap
 	responseStatus     *responseStatus_swap
 	responseAnalytics  *AnalytcisData
 	dealPrice          *Decimal
@@ -968,7 +968,7 @@ func (p *SwapContractRuntime) updateResponseData() {
 		p.responseStatus.TradeInfo30D = data30D
 
 		/////////////////////////
-		// responseCache_swap
+		// responseCache
 		addressmap := make(map[string]*responseItem_swap)
 		for _, v := range p.traderInfoMap {
 			addressmap[v.InvokerStatusBase.Address] = &responseItem_swap{
@@ -977,20 +977,20 @@ func (p *SwapContractRuntime) updateResponseData() {
 			}
 		}
 
-		p.responseCache_swap = make([]*responseItem_swap, 0, len(addressmap))
+		p.responseCache = make([]*responseItem_swap, 0, len(addressmap))
 		for _, v := range addressmap {
-			p.responseCache_swap = append(p.responseCache_swap, v)
+			p.responseCache = append(p.responseCache, v)
 		}
 
-		sort.Slice(p.responseCache_swap, func(i, j int) bool {
-			if p.responseCache_swap[i].Buy == p.responseCache_swap[j].Buy {
-				if p.responseCache_swap[i].Sell == p.responseCache_swap[j].Sell {
-					return p.responseCache_swap[i].Address < p.responseCache_swap[j].Address
+		sort.Slice(p.responseCache, func(i, j int) bool {
+			if p.responseCache[i].Buy == p.responseCache[j].Buy {
+				if p.responseCache[i].Sell == p.responseCache[j].Sell {
+					return p.responseCache[i].Address < p.responseCache[j].Address
 				} else {
-					return p.responseCache_swap[i].Sell > p.responseCache_swap[j].Sell
+					return p.responseCache[i].Sell > p.responseCache[j].Sell
 				}
 			}
-			return p.responseCache_swap[i].Buy > p.responseCache_swap[j].Buy
+			return p.responseCache[i].Buy > p.responseCache[j].Buy
 		})
 
 		/////////////////////////////////
@@ -1271,20 +1271,20 @@ func (p *SwapContractRuntime) AllAddressInfo(start, limit int) string {
 	}
 
 	result := &response{
-		Total: len(p.responseCache_swap),
+		Total: len(p.responseCache),
 		Start: start,
 	}
-	if start < 0 || start >= len(p.responseCache_swap) {
+	if start < 0 || start >= len(p.responseCache) {
 		return ""
 	}
 	if limit <= 0 {
 		limit = 100
 	}
 	end := start + limit
-	if end > len(p.responseCache_swap) {
-		end = len(p.responseCache_swap)
+	if end > len(p.responseCache) {
+		end = len(p.responseCache)
 	}
-	result.Data = p.responseCache_swap[start:end]
+	result.Data = p.responseCache[start:end]
 
 	buf, err := json.Marshal(result)
 	if err != nil {
