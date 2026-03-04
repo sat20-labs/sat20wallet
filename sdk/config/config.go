@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"fmt"
@@ -7,9 +7,11 @@ import (
 
 	"gopkg.in/yaml.v2"
 
-	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sirupsen/logrus"
+
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
+
 
 func GetBaseDir() string {
 	execPath, err := os.Executable()
@@ -23,13 +25,18 @@ func GetBaseDir() string {
 	return execPath
 }
 
-func InitConfig() *common.Config {
-	cfgFile := GetBaseDir() + "/conf.yaml"
+func InitConfig() (*common.Config, error) {
+	cfgFile := GetBaseDir()+"/conf.yaml"
+	fmt.Printf("cfg path: %s\n", cfgFile)
 	cfg, err := LoadYamlConf(cfgFile)
 	if err != nil {
-		cfg = NewDefaultYamlConf()
+		return nil, err
 	}
-	return cfg
+	if cfg.DB == "" {
+		cfg.DB = "./data"
+	}
+	fmt.Printf("db path: %s\n", cfg.DB)
+	return cfg, nil
 }
 
 func LoadYamlConf(cfgPath string) (*common.Config, error) {
@@ -54,15 +61,6 @@ func LoadYamlConf(cfgPath string) (*common.Config, error) {
 	return cfg, nil
 }
 
-func NewDefaultYamlConf() *common.Config {
-	chain := "testnet4"
-	ret := &common.Config{
-		Chain: chain,
-		Log: "error",
-	}
-
-	return ret
-}
 
 func SaveYamlConf(conf *common.Config, filePath string) error {
 	data, err := yaml.Marshal(conf)

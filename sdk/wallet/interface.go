@@ -44,9 +44,6 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 		l2IndexerMgr.Set(l22)
 	}
 
-	l1IndexerMgr.Start()
-	l2IndexerMgr.Start()
-
 	mgr := &Manager{
 		cfg:                  cfg,
 		walletInfoMap:        nil,
@@ -78,6 +75,11 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 	}
 
 	return mgr
+}
+
+func (p *Manager) Start() {
+	p.l1IndexerClient.Start()
+	p.l2IndexerClient.Start()
 }
 
 func (p *Manager) Close() {

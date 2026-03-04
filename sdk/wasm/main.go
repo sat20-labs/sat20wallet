@@ -299,6 +299,7 @@ func initManager(this js.Value, p []js.Value) any {
 		if _mgr == nil {
 			return nil, -1, "NewManager failed"
 		}
+		_mgr.Start()
 		wallet.Log.Info("Manager created")
 		return nil, 0, "ok"
 	})

@@ -355,9 +355,9 @@ func (p *AirDropInvokeParam) Decode(data []byte) error {
 
 type ValidateInvokeParam struct {
 	OrderType int    `json:"orderType"` // ORDERTYPE_REGISTER or ORDERTYPE_AIRDROP
-	Result    int    `json:"result"`
+	Result    int    `json:"result"`	// 0 成功；其他，失败
 	Reason    string `json:"reason"`
-	Param     []byte `json:"para"`
+	Param     []byte `json:"para"`      // 以空格隔开的id列表，id是invokeItem的id
 }
 
 func (p *ValidateInvokeParam) Encode() ([]byte, error) {

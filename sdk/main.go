@@ -1,16 +1,9 @@
 package main
 
 import (
-	"fmt"
-	"io"
-	"os"
-	"time"
-
-	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
-	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/sat20-labs/sat20wallet/sdk/config"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
-	"github.com/sirupsen/logrus"
 )
 
 func main() {
@@ -20,8 +13,12 @@ func main() {
 		return
 	}
 
-	cfg := InitConfig()
-	InitLog(cfg)
+	cfg, err := config.InitConfig()
+	if err != nil {
+		wallet.Log.Errorf("InitConfig failed")
+		return
+	}
+	wallet.InitLog(cfg)
 
 	db := wallet.NewKVDB(cfg.DB)
 	if db == nil {
@@ -60,34 +57,9 @@ func main() {
 		wallet.Log.Infof("wallet address: %s", mgr.GetWallet().GetAddress())
 	}
 	// 生产环境，需要手动创建钱包，并且解锁
+	mgr.Start()
 
 	<-interceptor.ShutdownChannel()
 
 	wallet.Log.Info("main exit.")
-}
-
-func InitLog(cfg *common.Config) error {
-	var writers []io.Writer
-	logPath := "./log/" + cfg.Chain
-
-	lvl, err := logrus.ParseLevel(cfg.Log)
-	if err != nil {
-		lvl = logrus.InfoLevel
-	}
-	wallet.Log.SetLevel(lvl)
-
-	fileHook, err := rotatelogs.New(
-		logPath+"/stpd-%Y%m%d%H%M.log",
-		rotatelogs.WithLinkName(logPath+"/stpd.log"),
-		rotatelogs.WithMaxAge(30*24*time.Hour),
-		rotatelogs.WithRotationTime(24*time.Hour),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create RotateFile hook, error: %s", err)
-	}
-	writers = append(writers, fileHook)
-	writers = append(writers, os.Stdout)
-	wallet.Log.SetOutput(io.MultiWriter(writers...))
-
-	return nil
 }

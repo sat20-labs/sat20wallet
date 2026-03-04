@@ -4,6 +4,7 @@ package wallet
 
 import (
 	"net/http"
+	"fmt"
 
 	db "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/lightnode"
@@ -23,3 +24,7 @@ func NewHTTPClient() HttpClient {
 	return &NetClient{Client: httpClient}
 }
 
+
+func LoadPassword(path string) (string, error) {
+	return "", fmt.Errorf("not implemented")
+}

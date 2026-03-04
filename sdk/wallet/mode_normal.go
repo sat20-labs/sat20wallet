@@ -5,6 +5,8 @@ package wallet
 import (
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	db "github.com/sat20-labs/indexer/common"
@@ -38,4 +40,12 @@ func NewHTTPClient() HttpClient {
 	}
 
 	return &NetClient{Client: httpClient}
+}
+
+func LoadPassword(path string) (string, error) {
+	password, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(password)), nil
 }
