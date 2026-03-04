@@ -35,11 +35,11 @@ const (
 	TEMPLATE_CONTRACT_SWAP       string = "swap.tc"
 	TEMPLATE_CONTRACT_AMM        string = "amm.tc"
 	TEMPLATE_CONTRACT_TRANSCEND  string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
+	TEMPLATE_CONTRACT_RECYCLE    string = "recycle.tc"
+	TEMPLATE_CONTRACT_DAO        string = "dao.tc"
 	// 开发中的
-	TEMPLATE_CONTRACT_RECYCLE string = "recycle.tc"
-	TEMPLATE_CONTRACT_DAO     string = "dao.tc"
-	TEMPLATE_CONTRACT_VAULT   string = "vault.tc"
-	TEMPLATE_CONTRACT_STAKE   string = "stake.tc"
+	TEMPLATE_CONTRACT_VAULT      string = "vault.tc"
+	TEMPLATE_CONTRACT_STAKE      string = "stake.tc"
 
 	CONTRACT_STATUS_EXPIRED int = -2
 	CONTRACT_STATUS_CLOSED  int = -1
@@ -2987,12 +2987,17 @@ func GetSupportedContracts() []string {
 		result = append(result, string(c.Content()))
 	}
 
-	c = NewContract(TEMPLATE_CONTRACT_VAULT)
+	// c = NewContract(TEMPLATE_CONTRACT_VAULT)
+	// if c != nil {
+	// 	result = append(result, string(c.Content()))
+	// }
+
+	c = NewContract(TEMPLATE_CONTRACT_RECYCLE)
 	if c != nil {
 		result = append(result, string(c.Content()))
 	}
 
-	c = NewContract(TEMPLATE_CONTRACT_RECYCLE)
+	c = NewContract(TEMPLATE_CONTRACT_DAO)
 	if c != nil {
 		result = append(result, string(c.Content()))
 	}
