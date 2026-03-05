@@ -514,6 +514,7 @@ func (p *SwapContractRuntime) init() {
 	p.stubFeeMap = make(map[int64]int64)
 }
 
+// 这个接口过来的对象，一般调用过 NewSwapContractRuntime 
 func (p *SwapContractRuntime) InitFromJson(content []byte, stp ContractManager) error {
 	err := json.Unmarshal(content, p)
 	if err != nil {
@@ -524,6 +525,7 @@ func (p *SwapContractRuntime) InitFromJson(content []byte, stp ContractManager) 
 	return nil
 }
 
+// 从gob中加载的对象，并没有经过 NewSwapContractRuntime 赋值，需要重新初始化一些对象
 func (p *SwapContractRuntime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
 	err := p.ContractRuntimeBase.InitFromDB(stp, resv)
 	if err != nil {

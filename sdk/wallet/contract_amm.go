@@ -590,21 +590,18 @@ func NewAmmContractRuntime(stp ContractManager) *AmmContractRuntime {
 		},
 	}
 	p.init()
+	p.runtime = p
 
 	return p
 }
 
-
-func (p *AmmContractRuntime) init() {
-	p.SwapContractRuntime.init()
-	p.runtime = p
-}
 
 func (p *AmmContractRuntime) InitFromContent(content []byte, stp ContractManager, resv ContractDeployResvIF) error {
 	err := p.SwapContractRuntime.InitFromContent(content, stp, resv)
 	if err != nil {
 		return err
 	}
+	p.runtime = p
 
 	err = p.setOriginalValue()
 	if err != nil {
@@ -637,6 +634,7 @@ func (p *AmmContractRuntime) InitFromContent(content []byte, stp ContractManager
 
 func (p *AmmContractRuntime) InitFromJson(content []byte, stp ContractManager) error {
 	p.init()
+	p.runtime = p
 	err := json.Unmarshal(content, p)
 	if err != nil {
 		return err
@@ -649,11 +647,13 @@ func (p *AmmContractRuntime) InitFromJson(content []byte, stp ContractManager) e
 	return nil
 }
 
+// 从gob中加载的对象，并没有经过 NewSwapContractRuntime 赋值，需要重新初始化一些对象
 func (p *AmmContractRuntime) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
 	err := p.SwapContractRuntime.InitFromDB(stp, resv)
 	if err != nil {
 		return err
 	}
+	p.runtime = p
 	err = p.setOriginalValue()
 	if err != nil {
 		return err
