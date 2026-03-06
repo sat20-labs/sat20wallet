@@ -111,9 +111,7 @@ export function useAppVersion() {
       isForceUpdate.value = info.forceUpdate
       
       if (hasUpdate.value) {
-        if (!silent) {
-          showUpdateNotification(info)
-        }
+        showUpdateNotification(info)
         return true
       } else {
         if (!silent) {

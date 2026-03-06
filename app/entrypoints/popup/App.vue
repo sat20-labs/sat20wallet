@@ -55,7 +55,7 @@ onBeforeMount(async () => {
 });
 
 onMounted(() => {
-  // 延迟检查版本更新，使用非静默模式（显示提醒）
-  setTimeout(() => checkForUpdates(false), 2000);
+  // 静默检查版本更新（有新版本才提醒）
+  setTimeout(() => checkForUpdates(true), 2000);
 });
 </script>
