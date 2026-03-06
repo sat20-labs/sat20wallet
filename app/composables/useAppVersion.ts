@@ -31,6 +31,16 @@ export function useAppVersion() {
   const hasUpdate = ref(false)
   const remoteVersion = ref<RemoteVersionInfo | null>(null)
   const isForceUpdate = ref(false)
+  const lastCheckedVersion = ref<string | null>(null)
+
+  // 检查是否已经提醒过当前版本（避免重复提醒）
+  const shouldShowNotification = (version: string): boolean => {
+    const skipped = localStorage.getItem('skipVersion')
+    if (skipped === version) {
+      return false // 用户选择跳过此版本
+    }
+    return lastCheckedVersion.value !== version
+  }
 
   const fetchRemoteVersion = async (): Promise<RemoteVersionInfo | null> => {
     try {
@@ -52,18 +62,28 @@ export function useAppVersion() {
   }
 
   const showUpdateNotification = (info: RemoteVersionInfo) => {
+    // 如果用户选择跳过此版本，不再提醒
+    if (!shouldShowNotification(info.version)) {
+      console.log('已跳过版本提醒:', info.version)
+      return
+    }
+
     if (info.forceUpdate) {
       toast({
         variant: 'destructive',
         title: '⚠️ 发现重要版本更新',
         description: `${info.releaseNotes} - 请前往 GitHub 下载最新版本`,
+        duration: 10000,
       })
+      lastCheckedVersion.value = info.version
     } else {
       toast({
         variant: 'info',
         title: '🎉 发现新版本',
         description: `当前：v${localVersion} → 最新：v${info.version}`,
+        duration: 8000,
       })
+      lastCheckedVersion.value = info.version
     }
   }
 
