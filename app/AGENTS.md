@@ -32,6 +32,29 @@ bun run bump-version     # 版本号升级 (SemVer)
 bun run copy-latest-zip  # 复制最新构建包到 release 目录
 ```
 
+### Android 构建和签名命令
+```bash
+# 1. 升级版本号
+bun run bump-version
+
+# 2. 构建 Web 资源
+bun run build:skip-check
+
+# 3. 同步到 Android
+cd android && ./gradlew clean
+
+# 4. 构建 Release APK（自动签名）
+./gradlew assembleRelease
+
+# 5. 验证 APK 签名
+cd ..
+./verify-apk.sh [version]  # 例：./verify-apk.sh 0.1.13
+
+# 6. 手动验证签名
+keytool -printcert -jarfile release/SAT20-Wallet-v[VERSION]-release-signed.apk
+jarsigner -verify release/SAT20-Wallet-v[VERSION]-release-signed.apk
+```
+
 ### 测试命令
 **当前未配置测试框架**。建议未来添加：
 - Vitest + Vue Test Utils (单元测试)
@@ -243,6 +266,164 @@ await walletStorage.batchUpdate({ address, network })
 
 ---
 
+## 📦 版本管理
+
+### version.json 文件位置
+项目中有多个 `version.json` 文件，需要保持同步更新：
+- `public/version.json` - 主要版本文件（源文件）
+- `dist/version.json` - 构建输出文件（自动同步）
+- `ios/App/App/public/version.json` - iOS 版本文件（通过 `bun run sync` 同步）
+- `android/.../public/version.json` - Android 版本文件（通过 `bun run sync` 同步）
+
+### version.json 格式
+```json
+{
+  "version": "0.1.13",
+  "releaseNotes": "移除了转账地址的 Taproot 验证限制，现在支持向所有有效的比特币地址转账",
+  "forceUpdate": false,
+  "minVersion": "0.1.0",
+  "publishedAt": "2026-03-06T22:30:00.000Z"
+}
+```
+
+### 版本号规范
+- **格式**: SemVer (语义化版本) - `MAJOR.MINOR.PATCH`
+  - `MAJOR`: 重大变更，不向后兼容
+  - `MINOR`: 新功能，向后兼容
+  - `PATCH`: Bug 修复，向后兼容
+- **示例**: `0.1.12` → `0.1.13` → `0.2.0` → `1.0.0`
+
+### 发布流程
+1. **更新版本号**: `bun run bump-version`
+2. **更新 version.json**: 修改 `public/version.json` 中的版本号和发布说明
+3. **构建 Web 资源**: `bun run build:skip-check`
+4. **构建 Android APK**: 执行 Android 签名流程
+5. **同步到移动端**: `bun run sync`（更新 iOS/Android 的 version.json）
+6. **验证和测试**: 使用 `./verify-apk.sh` 验证签名
+7. **发布到应用商店**: 上传签名的 APK
+
+---
+
+## 🔐 Release 签名
+
+### Keystore 信息
+- **文件路径**: `/Users/icehugh/workspace/jieziyuan/client/sat20wallet/app/sat20wallet-release.jks`
+- **别名**: `sat20wallet`
+- **密码**: `sat20wallet2024`
+- **有效期**: 27 年（到 2053-07-22）
+- **算法**: SHA384withRSA
+- **密钥长度**: 2048-bit RSA
+
+### 证书指纹
+```
+SHA256: 5F:8B:92:27:0F:85:14:C4:94:9B:17:88:91:54:D4:F4:ED:C4:C1:01:F5:E7:62:7D:4C:AA:1B:D0:72:2C:C2:03
+SHA1: 3C:E7:D2:76:9E:C9:DF:FF:4F:C3:2E:7A:EA:21:EE:A3:16:27:70:C3
+```
+
+### Android 签名配置
+Gradle 配置文件：`android/app/build.gradle`
+```groovy
+signingConfigs {
+    release {
+        if (project.hasProperty('MYAPP_UPLOAD_STORE_FILE')) {
+            storeFile file(MYAPP_UPLOAD_STORE_FILE)
+            storePassword MYAPP_UPLOAD_STORE_PASSWORD
+            keyAlias MYAPP_UPLOAD_KEY_ALIAS
+            keyPassword MYAPP_UPLOAD_KEY_PASSWORD
+        }
+    }
+}
+```
+
+环境变量配置：`android/gradle.properties`
+```properties
+MYAPP_UPLOAD_STORE_FILE=/Users/icehugh/workspace/jieziyuan/client/sat20wallet/app/sat20wallet-release.jks
+MYAPP_UPLOAD_KEY_ALIAS=sat20wallet
+MYAPP_UPLOAD_KEY_PASSWORD=sat20wallet2024
+MYAPP_UPLOAD_STORE_PASSWORD=sat20wallet2024
+```
+
+### 签名验证方法
+
+#### 方法 1: 使用验证脚本（推荐）
+```bash
+./verify-apk.sh 0.1.13
+```
+
+#### 方法 2: 手动验证证书
+```bash
+keytool -printcert -jarfile release/SAT20-Wallet-v0.1.13-release-signed.apk
+```
+
+#### 方法 3: 验证 APK 完整性
+```bash
+jarsigner -verify release/SAT20-Wallet-v0.1.13-release-signed.apk
+```
+
+### 签名最佳实践
+1. ✅ **备份 Keystore**: 已备份到多个安全位置
+   - `release/sat20wallet-release-backup.jks`
+   - `release/sat20wallet-release-v0.1.12.jks`
+   - `/Users/icehugh/.backup/sat20wallet/sat20wallet-release.jks`
+
+2. ✅ **保持一致性**: 所有版本使用同一密钥签名，确保可以无缝升级
+
+3. ✅ **验证签名**: 每次构建后都要验证签名是否正确
+
+4. ⚠️ **安全警告**: 
+   - 切勿将 Keystore 文件提交到 Git
+   - 切勿公开分享密钥密码
+   - 使用密码管理器保存密码
+
+### Release 目录结构
+```
+release/
+├── RELEASE-v0.1.13.md              # 发布说明文档
+├── SAT20-Wallet-v0.1.13-release-signed.apk  # 已签名的 APK
+├── KEYSTORE_INFO.md                # Keystore 详细信息
+├── SIGNING_SUMMARY.md              # 签名摘要
+├── TESTING-GUIDE.md                # 测试指南
+└── sat20wallet-release-backup.jks  # 备份密钥库
+```
+
+### 常见问题
+
+**Q: APK 安装失败，显示"应用未安装"**
+A: 可能是签名不一致。确保使用相同的 Keystore 签名。
+
+**Q: 如何检查 APK 是否已签名？**
+A: 运行 `keytool -printcert -jarfile your-app.apk`，如果有证书信息说明已签名。
+
+**Q: Keystore 丢失了怎么办？**
+A: 从备份位置恢复。如果所有备份都丢失，需要创建新的 Keystore 并更改应用包名重新发布。
+
+---
+
+## 📱 移动端构建
+
+### Android 构建流程
+```bash
+# 1. 清理并构建
+cd android && ./gradlew clean assembleRelease
+
+# 2. 查找 APK
+ls -lh app/build/outputs/apk/release/
+
+# 3. 复制到 release 目录
+cp app/build/outputs/apk/release/app-release.apk \
+   ../../release/SAT20-Wallet-v[VERSION]-release-signed.apk
+
+# 4. 验证签名
+../../verify-apk.sh [VERSION]
+```
+
+### iOS 构建注意事项
+- iOS 构建需要 Xcode 和 Apple Developer 证书
+- 使用 Xcode Archive 进行构建和签名
+- 通过 App Store Connect 发布
+
+---
+
 ## 🧪 测试策略 (建议)
 
 当前无测试配置，推荐添加：
@@ -283,6 +464,7 @@ export default defineConfig({
 
 ## 🚀 快速开始
 
+### 开发环境
 ```bash
 # 1. 安装依赖
 bun install
@@ -297,6 +479,27 @@ bun run compile
 bun run build
 
 # 5. 同步到移动端
+bun run sync
+```
+
+### 发布版本
+```bash
+# 1. 升级版本号 (PATCH)
+bun run bump-version
+
+# 2. 更新 public/version.json 中的版本号和发布说明
+
+# 3. 构建 Web 资源
+bun run build:skip-check
+
+# 4. 构建签名 APK
+cd android && ./gradlew clean assembleRelease
+
+# 5. 验证签名
+cd ..
+./verify-apk.sh 0.1.13
+
+# 6. 同步到移动端
 bun run sync
 ```
 

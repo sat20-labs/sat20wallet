@@ -38,4 +38,11 @@ android/gradle.properties
 
 # 构建输出
 builds/
+dist/*.apk
+*.jks
+*.keystore
+release/*.apk
 dist/
+node_modules/
+.output/
+

@@ -372,8 +372,6 @@
     "fixedFee": "Fixed Fee",
     "withdrawalFeeInfo": "Withdrawal fee: 2000 sats service fee + miner fee (~300 sats, network-based)",
     "unlockNotice": "⚠️ BTC Unlock Notice: When unlocking BTC to SatoshiNet, 3000 sats will be reserved to cover potential commitment transaction (unilateral exit) fees.",
-    "taprootError": "❌ Non-Taproot Address Not Supported: This wallet only supports sending to Taproot addresses (P2TR).",
-    "taprootAddress": "Taproot Address",
     "currentBalance": "Current Balance"
   },
   "receiveQRcode": {

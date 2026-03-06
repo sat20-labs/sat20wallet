@@ -106,7 +106,7 @@
 
       <DialogFooter v-if="selectedTab === 'normal'">
         <Button class="w-full h-11 mb-2"
-          :disabled="needsAddress && (!address || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress) || isTaprootDetected)"
+          :disabled="needsAddress && (!address || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress))"
           @click="confirmOperation">
           {{ $t('assetOperationDialog.confirm') }}
         </Button>
@@ -196,25 +196,11 @@
         </div>
       </div>
 
-      <!-- 新增：显示Taproot地址错误 -->
-      <div v-if="!isResolving && isTaprootDetected" class="mt-4 p-3 bg-red-900/20 rounded-lg border border-red-700">
-        <div class="text-sm text-red-400 flex items-start gap-2">
-          <Icon icon="lucide:alert-circle" class="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <span>{{ $t('assetOperationDialog.taprootError') }}</span>
-        </div>
-        <div class="mt-2 text-sm text-red-400/80">
-          <div class="flex items-center justify-between">
-            <span>{{ $t('assetOperationDialog.taprootAddress') }}:</span>
-            <span class="font-mono">{{ hideAddress(taprootAddress, 10) }}</span>
-          </div>
-        </div>
-      </div>
-
       <AlertDialogFoot class="my-4 gap-2">
         <AlertDialogCancel @click="showAlertDialog = false" :disabled="isResolving">{{ $t('assetOperationDialog.cancel')
         }}</AlertDialogCancel>
         <AlertDialogAction @click="handleConfirm"
-          :disabled="isResolving || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress) || isTaprootDetected">
+          :disabled="isResolving || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress)">
           {{ isResolving ? $t('assetOperationDialog.resolvingDomain') : $t('assetOperationDialog.confirm') }}
         </AlertDialogAction>
       </AlertDialogFoot>
@@ -245,7 +231,7 @@ import { Chain } from '@/types/index'
 import { Icon } from '@iconify/vue'
 import SplitSend from '@/entrypoints/popup/pages/wallet/split.vue'
 import { useWalletStore } from '@/store'
-import { validateAndResolveAddress, hideAddress, isNonTaprootAddressAuto } from '@/utils'
+import { validateAndResolveAddress, hideAddress } from '@/utils'
 
 interface Props {
   title: string
@@ -287,10 +273,6 @@ const resolvedInfo = ref<{
   originalInput: string
   domainName: string | null
 } | null>(null)
-
-// Taproot地址检测状态
-const isTaprootDetected = ref(false)
-const taprootAddress = ref('')
 
 const needsAddress = computed(() => {
   return props.operationType === 'send'
@@ -361,18 +343,6 @@ const confirmOperation = async () => {
       // 不显示确认对话框，直接返回
       return
     }
-
-    // 检测是否为非taproot地址
-    const finalAddress = result?.isDomain && result.resolvedAddress ? result.resolvedAddress : props.address
-    // if (isNonTaprootAddressAuto(finalAddress)) {
-    //   // 如果是非taproot地址，设置状态
-    //   isTaprootDetected.value = true
-    //   taprootAddress.value = finalAddress
-    //   console.warn('Non-Taproot address detected:', finalAddress)
-    // } else {
-    //   isTaprootDetected.value = false
-    //   taprootAddress.value = ''
-    // }
   }
 
   // 始终显示确认对话框
