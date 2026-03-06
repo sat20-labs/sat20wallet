@@ -1,0 +1,7 @@
+{
+  "version": "0.1.13",
+  "releaseNotes": "修复了转账手续费计算问题，优化了资产列表加载性能",
+  "forceUpdate": false,
+  "minVersion": "0.1.0",
+  "publishedAt": "2026-03-06T10:00:00.000Z"
+}
