@@ -1,7 +1,7 @@
 {
-  "version": "0.1.14",
-  "releaseNotes": "优化版本检查逻辑：启动时静默检查更新，版本一致时不显示提示",
+  "version": "0.1.15",
+  "releaseNotes": "测试版本更新功能",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-03-06T23:26:00.000Z"
+  "publishedAt": "2026-03-06T23:45:00.000Z"
 }
