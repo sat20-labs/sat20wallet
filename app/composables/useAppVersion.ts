@@ -36,7 +36,7 @@ export function useAppVersion() {
     try {
       const timestamp = Date.now()
       const response = await fetch(
-        `https://raw.githubusercontent.com/jieziyuan/sat20wallet/main/version.json?t=${timestamp}`
+        `https://raw.githubusercontent.com/sat20-labs/sat20wallet/main/version.json?t=${timestamp}`
       )
       
       if (!response.ok) {
