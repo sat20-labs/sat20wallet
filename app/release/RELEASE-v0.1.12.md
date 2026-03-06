@@ -4,8 +4,10 @@
 
 - **版本号**: v0.1.12
 - **构建时间**: 2026-03-06
-- **构建类型**: Android APK
-- **包大小**: 20 MB
+- **构建类型**: Android APK (已签名)
+- **包大小**: 16 MB
+- **签名状态**: ✅ 已签名 (SHA384withRSA, 2048-bit)
+- **证书有效期**: 2026-03-06 至 2053-07-22
 
 ---
 
@@ -55,9 +57,14 @@
 
 ### Android APK
 - **Debug 版本**: `SAT20-Wallet-v0.1.12-debug.apk` (20 MB) ✅ 已签名
-- **Release 版本**: `SAT20-Wallet-v0.1.12-release-unsigned.apk` (20 MB) ⚠️ 未签名
+- **Release 版本**: `SAT20-Wallet-v0.1.12-release-signed.apk` (16 MB) ✅ **已签名**
 - **构建方式**: `./gradlew assembleDebug` / `assembleRelease`
-- **注意**: Release 版本需签名后才能用于正式发布
+- **签名信息**: 
+  - Keystore: `sat20wallet-release.jks`
+  - 别名：sat20wallet
+  - 算法：SHA384withRSA
+  - 密钥长度：2048-bit
+  - 证书所有者：CN=SAT20 Wallet, OU=SAT20 Labs, O=SAT20
 
 ---
 
@@ -137,7 +144,7 @@ git push origin main --tags
 ### 兼容性
 - ✅ Android 7.0+ (API 24+)
 - ✅ Debug 版本可安装测试
-- ⚠️ Release 版本需签名后发布
+- ✅ **Release 版本已签名，可直接安装和发布**
 
 ---
 
@@ -169,22 +176,29 @@ git push origin main --tags
 
 ```
 Web 构建时间：4.31s
-Android 构建时间：~30 秒
-Gradle Tasks: 278 (168 executed, 67 from cache)
+Android 构建时间：~33 秒
+Gradle Tasks: 287 (153 executed, 104 from cache)
 模块数量：2935
 APK 大小：
   - Debug: 20 MB
-  - Release (unsigned): 20 MB
+  - Release (signed): 16 MB
+签名信息：
+  - 算法：SHA384withRSA
+  - 密钥长度：2048-bit
+  - 有效期：27 年（至 2053-07-22）
+  - 证书所有者：CN=SAT20 Wallet, OU=SAT20 Labs, O=SAT20
 ```
 
 ---
 
 ## ⚠️ 注意事项
 
-1. **APK 签名**: Release APK 必须签名后才能安装
-2. **版本同步**: 及时更新 package.json 和 version.json
-3. **测试建议**: 先在测试设备验证 Debug 版本
-4. **Google Play**: 需要签名并符合商店政策
+1. **签名文件**: `sat20wallet-release.jks` 需安全备份
+2. **密码管理**: Keystore 密码为 `sat20wallet2024`
+3. **版本同步**: 及时更新 package.json 和 version.json
+4. **测试建议**: 先在测试设备验证
+5. **Google Play**: Release APK 已签名，可直接用于发布
+6. **证书有效期**: 27 年，至 2053-07-22
 
 ---
 
