@@ -727,6 +727,9 @@ func (p *DaoContractRunTime) updateResponseData() {
 		p.responseStatus.RegisterList = make([]string, 0)
 		for _, registers := range p.registerMap {
 			for _, v := range registers {
+				if v.Done != DONE_NOTYET {
+					continue
+				}
 				item := invokeItem_register{
 					Id: v.Id,
 					InUtxo: v.InUtxo,
@@ -748,7 +751,7 @@ func (p *DaoContractRunTime) updateResponseData() {
 				if err != nil {
 					continue
 				}
-				p.responseStatus.AirdropList = append(p.responseStatus.AirdropList, string(buf))
+				p.responseStatus.RegisterList = append(p.responseStatus.RegisterList, string(buf))
 			}
 		}
 
@@ -756,6 +759,9 @@ func (p *DaoContractRunTime) updateResponseData() {
 		for addr, airdrops := range p.airdropMap {
 			invoker := p.loadInvokerInfo(addr)
 			for _, v := range airdrops {
+				if v.Done != DONE_NOTYET {
+					continue
+				}
 				item := invokeItem_airdrop{
 					Id: v.Id,
 					InUtxo: v.InUtxo,
