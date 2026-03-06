@@ -73,8 +73,10 @@
     "savedButton": "我已保存恢复助记词"
   },
   "setting": {
-    "title": "System Settings",
-    "version": "版本"
+    "title": "系统设置",
+    "version": "版本",
+    "checkUpdate": "检查更新",
+    "checking": "检查中..."
   },
   "wallet": {
     "viewTradeHistory": "查看交易历史",

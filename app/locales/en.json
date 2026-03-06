@@ -74,7 +74,9 @@
   },
   "setting": {
     "title": "System Settings",
-    "version": "Version"
+    "version": "Version",
+    "checkUpdate": "Check for Updates",
+    "checking": "Checking..."
   },
   "wallet": {
     "viewTradeHistory": "View Trade History",

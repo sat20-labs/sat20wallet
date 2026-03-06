@@ -18,22 +18,23 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, onBeforeMount } from "vue";
+import { ref, onBeforeMount, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import walletManager from "@/utils/sat20";
 import Toaster from "@/components/ui/toast-new/Toaster.vue";
 import Approve from "@/entrypoints/popup/pages/wallet/Approve.vue";
 import { useWalletStore } from "@/store";
+import { useAppVersion } from "@/composables/useAppVersion";
 
 const loading = ref(false);
 const walletStore = useWalletStore();
 const router = useRouter();
+const { checkForUpdates } = useAppVersion();
 
 const getWalletStatus = async () => {
   const [err, res] = await walletManager.isWalletExist();
   if (err) {
     console.error(err);
-    // Even if there's an error, navigate to create as a fallback
     router.push("/");
     return;
   }
@@ -51,5 +52,9 @@ onBeforeMount(async () => {
   loading.value = true;
   await getWalletStatus();
   loading.value = false;
+});
+
+onMounted(() => {
+  setTimeout(() => checkForUpdates(true), 2000);
 });
 </script>

@@ -7,6 +7,10 @@
       <Button variant="secondary" class="w-full h-10 mt-2 border-gray-600/50 bg-zinc-700/40" @click="$router.push({ path: '/wallet/setting/utxo' })">
         <Icon icon="lucide:lock-keyhole-open" class="w-10 h-10 mr-1 text-green-500 font-bold"/> {{$t('utxoManager.title')}}
       </Button>
+      <Button variant="secondary" class="w-full h-10 mt-2 border-gray-600/50 bg-zinc-700/40" @click="checkForUpdates(false)">
+        <Icon :icon="isChecking ? 'lucide:loader' : 'lucide:github'" class="w-10 h-10 mr-1 text-blue-500 font-bold" :class="{ 'animate-spin': isChecking }"/> 
+        {{ isChecking ? $t('setting.checking') : $t('setting.checkUpdate') }}
+      </Button>
       <Separator />
       <Separator />
       <SecuritySetting />
@@ -52,6 +56,7 @@ import { Icon } from '@iconify/vue'
 import { version } from '@/package.json'
 import { ref } from "vue";
 import { useTranscendingModeStore } from '@/store'
+import { useAppVersion } from '@/composables/useAppVersion'
 
 type TranscendingMode = 'poolswap' | 'lightning'
 const selectedTranscendingMode = ref<TranscendingMode>('poolswap')
@@ -59,4 +64,6 @@ const selectedTranscendingMode = ref<TranscendingMode>('poolswap')
 const transcendingModeStore = useTranscendingModeStore()
 
 const isOpen = ref(false);
+
+const { isChecking, checkForUpdates } = useAppVersion()
 </script>
