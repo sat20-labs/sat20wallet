@@ -1019,7 +1019,7 @@ func ascendAsset(stp ContractManager, resv ContractDeployResvIF, param any) (any
 			}
 
 			utxo := contract.MintTxId + ":0"
-			anchorTxId, err := stp.AscendAssetInCoreChannel(contract.GetAssetName().String(), utxo, nullDataScript)
+			anchorTxId, err := stp.AscendAssetInCoreChannel(contract.GetAssetName().String(), utxo, false, nullDataScript)
 			if err != nil {
 				Log.Errorf("AscendAsset %s failed, %v", utxo, err)
 				return nil, err

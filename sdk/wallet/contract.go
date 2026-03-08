@@ -246,7 +246,7 @@ type ContractManager interface {
 	BroadcastTx(tx *wire.MsgTx) (string, error)
 	BroadcastTx_SatsNet(tx *swire.MsgTx) (string, error)
 
-	AscendAssetInCoreChannel(assetNameStr string, utxo string, memo []byte) (string, error)
+	AscendAssetInCoreChannel(assetNameStr string, utxo string, ascendToSender bool, memo []byte) (string, error)
 	DeployContract(templateName, contractContent string,
 		fees []string, feeRate int64, deployer string, subAccountIndex int) (string, int64, error)
 }

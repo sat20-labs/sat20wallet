@@ -96,7 +96,7 @@ func (p *Manager) CreateContractDepositAnchorTx(contract ContractRuntime, destAd
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (p *Manager) AscendAssetInCoreChannel(assetNameStr string, utxo string, memo []byte) (string, error) {
+func (p *Manager) AscendAssetInCoreChannel(assetNameStr string, utxo string, ascendToSender bool, memo []byte) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }
 func (p *Manager) DeployContract(templateName, contractContent string,
