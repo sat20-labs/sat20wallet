@@ -482,7 +482,7 @@ type DaoContractRunTime struct {
 	donateMap   map[string]map[int64]*InvokeItem // 还在处理中的调用, address -> invoke item list,
 	airdropMap  map[string]map[int64]*InvokeItem
 	validateMap map[string]map[int64]*InvokeItem
-	uidMap      map[string]string // uid->address
+	uidMap      map[string]string // uid->address 所有
 
 	airdropThreshold *Decimal
 	airdropRatio *Decimal
@@ -490,6 +490,7 @@ type DaoContractRunTime struct {
 
 	responseCache  []*responseItem_dao
 	responseStatus Response_DaoContract
+	responseInvokerMap map[string]*Response_DaoInvokerStatus
 }
 
 func NewDaoContractRunTime(stp ContractManager) *DaoContractRunTime {
@@ -516,6 +517,7 @@ func (p *DaoContractRunTime) init() {
 	p.donateMap = make(map[string]map[int64]*InvokeItem)
 	p.validateMap = make(map[string]map[int64]*InvokeItem)
 	p.uidMap = make(map[string]string)
+	p.responseInvokerMap = make(map[string]*Response_DaoInvokerStatus)
 
 	p.airdropRatio, _ = indexer.NewDecimalFromString(p.AirDropRatio, p.Divisibility)
 	p.airdropLimit, _ = indexer.NewDecimalFromString(p.AirDropLimit, p.Divisibility)
@@ -572,8 +574,17 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 		if !ok {
 			continue
 		}
-		p.uidMap[invoker.UID] = invoker.Address
+		if invoker.UID != "" {
+			p.uidMap[invoker.UID] = invoker.Address
+		}
 	}
+
+	// fix
+	// if url == "tb1qfwx8fyajtk9yrefdru5tkz7k2q0xxs0mwv3gu4teya75awcsfj8qfyaupt_brc20:f:ordi_dao.tc" {
+	// 	p.RegisterTimeOut = 10
+	// 	p.AirDropTimeOut = 10
+	// 	p.stp.SaveReservation(p.resv)
+	// }
 
 	return nil
 }
@@ -704,8 +715,9 @@ func (p *DaoContractRunTime) updateResponseData() {
 		/////////////////////////
 		// responseCache
 		// TODO 不能保证所有的invoker都在，仅仅是为了提高效率
-		p.responseCache = make([]*responseItem_dao, 0, len(p.invokerMap))
-		for _, v := range p.invokerMap {
+		p.responseCache = make([]*responseItem_dao, 0, len(p.uidMap))
+		for _, address := range p.uidMap {
+			v := p.loadInvokerInfo(address)
 			item := &responseItem_dao{
 				Address: v.Address,
 				UID: 	 v.UID,
@@ -720,6 +732,7 @@ func (p *DaoContractRunTime) updateResponseData() {
 			return p.responseCache[i].UID < p.responseCache[j].UID
 		})
 
+		/////////////////////////
 		// responseStatus
 		p.responseStatus.DaoContractRunTimeInDB = &p.DaoContractRunTimeInDB
 		p.responseStatus.UIDCount = len(p.uidMap)
@@ -786,6 +799,10 @@ func (p *DaoContractRunTime) updateResponseData() {
 				p.responseStatus.AirdropList = append(p.responseStatus.AirdropList, string(buf))
 			}
 		}
+
+		/////////////////////////
+		// responseInvokerMap
+		p.responseInvokerMap = make(map[string]*Response_DaoInvokerStatus)
 
 		p.refreshTime = time.Now().Unix()
 	}
@@ -882,46 +899,59 @@ func (p *DaoContractRunTime) AllAddressInfo(start, limit int) string {
 	return string(buf)
 }
 
+type ReferralInfo struct {
+	UID      string `json:"uid"`
+	AssetAmt string `json:"amount"`
+}
+
 type Response_DaoInvokerStatus struct {
 	Statistic    *DaoInvokerStatistic `json:"status"`
-	DonateList   []string             `json:"donnate"`
-	AirdropList  []string             `json:"airdrop"`
-	ReferralList []string             `json:"referral"`
+	AirdropList  []string             `json:"airdrops"`
+	ReferralList []*ReferralInfo      `json:"referrals"`
 }
 
 func (p *DaoContractRunTime) StatusByAddress(address string) (string, error) {
 
-	//p.updateResponseData()
+	p.updateResponseData()
 
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	result := &Response_DaoInvokerStatus{}
-	invoker := p.loadInvokerInfo(address)
-	if invoker != nil {
-		result.Statistic = &DaoInvokerStatistic{
-			ReferrerUID:   invoker.ReferrerUID,
-			UID:           invoker.UID,
-			InvokeCount:   invoker.GetInvokeCount(),
-			DonateAmt:     invoker.GetInvokeAmt().String(),
-			DonateValue:   invoker.GetInvokeValue(),
-			AirdropAmt:    invoker.TotalAirdropAmt.String(),
-			ReferralCount: len(invoker.ReferralUIDs),
-		}
+	result, ok := p.responseInvokerMap[address]
+	if !ok {
+		result = &Response_DaoInvokerStatus{}
+		invoker := p.loadInvokerInfo(address)
+		if invoker != nil {
+			result.Statistic = &DaoInvokerStatistic{
+				ReferrerUID:   invoker.ReferrerUID,
+				UID:           invoker.UID,
+				InvokeCount:   invoker.GetInvokeCount(),
+				DonateAmt:     invoker.GetInvokeAmt().String(),
+				DonateValue:   invoker.GetInvokeValue(),
+				AirdropAmt:    invoker.TotalAirdropAmt.String(),
+				ReferralCount: len(invoker.ReferralUIDs),
+			}
 
-		invokes := p.donateMap[address]
-		for _, v := range invokes {
-			result.DonateList = append(result.DonateList, v.InUtxo)
-		}
+			airdrops := p.airdropMap[address]
+			for _, v := range airdrops {
+				result.AirdropList = append(result.AirdropList, v.InUtxo)
+			}
 
-		airdrops := p.airdropMap[address]
-		for _, v := range airdrops {
-			result.AirdropList = append(result.AirdropList, v.InUtxo)
-		}
+			// 只返回还没有获取到空投的uid
+			for _, v := range invoker.ReferralUIDs {
+				_, amt, ok := p.checkAirdropFlag(invoker.UID, v)
+				if !ok {
+					continue
+				}
+				airdrop := p.calcAirdropAmt(amt)
 
-		for _, v := range invoker.ReferralUIDs {
-			result.AirdropList = append(result.AirdropList, v)
+				result.ReferralList = append(result.ReferralList, &ReferralInfo{
+					UID: v,
+					AssetAmt: airdrop.String(),
+				})
+			}
 		}
+		p.responseInvokerMap[address] = result
 	}
 
 	buf, err := json.Marshal(result)
@@ -1511,12 +1541,53 @@ func (p *DaoContractRunTime) handleRegisterItem(item *InvokeItem,
 				invokers[referrerAddr] = referrer
 			}
 		}
+		Log.Infof("%s bind uid %s, refererUID %s", item.Address, invoker.UID, invoker.ReferrerUID)
 	} else {
 		item.Reason = reason
 		item.Done = DONE_CLOSED_DIRECTLY
 	}
 	//delete(p.history, item.InUtxo) 暂时不删除，防止reorg
 	SaveContractInvokeHistoryItem(p.db, p.URL(), item)
+}
+
+func (p *DaoContractRunTime) checkAirdropFlag(refererUID, uid string) (*DaoInvokerStatus, *Decimal, bool) {
+	referralAddr, ok := p.uidMap[uid]
+	if !ok {
+		Log.Errorf("can't find address with uid %s", uid)
+		return nil, nil, false
+	}
+	referral := p.loadInvokerInfo(referralAddr)
+	if referral.ReferrerUID != refererUID {
+		Log.Errorf("invoker %s has different referrer %s, expected %s", referralAddr, referral.ReferrerUID, refererUID)
+		return nil, nil, false
+	}
+	if referral.Airdropped {
+		return nil, nil, false
+	}
+
+	// 检查对应的资产数据
+	amt1 := p.stp.GetWalletMgr().GetAssetBalance(referralAddr, &p.HoldingAssetName)
+	amt2 := p.stp.GetWalletMgr().GetAssetBalance_SatsNet(referralAddr, &p.HoldingAssetName)
+	amt := amt1.Add(amt2)
+	// 如果没有资产，先直接返回
+	if amt.Sign() == 0 {
+		return nil, nil, false
+	}
+	if p.airdropThreshold.Sign() != 0 {
+		if amt.Cmp(p.airdropThreshold) < 0 {
+			return nil, nil, false
+		}
+	}
+
+	return referral, amt, true
+}
+
+func (p *DaoContractRunTime) calcAirdropAmt(amt *Decimal) *Decimal {
+	airdrop := amt.Mul(p.airdropRatio)
+	if airdrop.Cmp(p.airdropLimit) > 0 {
+		airdrop = p.airdropLimit.Clone()
+	}
+	return airdrop
 }
 
 func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
@@ -1540,38 +1611,11 @@ func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
 		var totalAirdropAmt *Decimal
 		for _, uid := range innerParam.UIDs {
 			// 确保每一个uid的referrer都是 uid
-			referralAddr, ok := p.uidMap[uid]
+			referral, amt, ok := p.checkAirdropFlag(invoker.UID, uid)
 			if !ok {
-				Log.Errorf("can't find address with uid %s", uid)
 				continue
 			}
-			referral := p.loadInvokerInfo(referralAddr)
-			if referral.ReferrerUID != invoker.UID {
-				Log.Errorf("invoker %s has different referrer %s, expected %s", referralAddr, referral.ReferrerUID, invoker.UID)
-				continue
-			}
-			if referral.Airdropped {
-				continue
-			}
-
-			// 检查对应的资产数据
-			amt1 := p.stp.GetWalletMgr().GetAssetBalance(referralAddr, &p.HoldingAssetName)
-			amt2 := p.stp.GetWalletMgr().GetAssetBalance_SatsNet(referralAddr, &p.HoldingAssetName)
-			amt := amt1.Add(amt2)
-			// 如果没有资产，先直接返回
-			if amt.Sign() == 0 {
-				continue
-			}
-			if p.airdropThreshold.Sign() != 0 {
-				if amt.Cmp(p.airdropThreshold) < 0 {
-					continue
-				}
-			}
-
-			airdrop := amt.Mul(p.airdropRatio)
-			if airdrop.Cmp(p.airdropLimit) > 0 {
-				airdrop = p.airdropLimit.Clone()
-			}
+			airdrop := p.calcAirdropAmt(amt)
 			totalAirdropAmt = totalAirdropAmt.Add(airdrop)
 			// 设置空投标志
 			referral.Airdropped = true
@@ -1681,6 +1725,11 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 							innerParam.Reason, invokers)
 						removeItemFromMap(registerItem, p.registerMap)
 					}
+					if innerParam.Result == 0 {
+						Log.Infof("register items %s are accepted by %s", innerParam.Param, item.Address)
+					} else {
+						Log.Infof("register items %s are rejected by %s", innerParam.Param, item.Address)
+					}
 
 				case ORDERTYPE_AIRDROP:
 					for _, id := range ids {
@@ -1699,6 +1748,11 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 							innerParam.Reason, invokers) == false {
 							removeItemFromMap(airdropItem, p.airdropMap)
 						}
+					}
+					if innerParam.Result == 0 {
+						Log.Infof("airdrop items %s are accepted by %s", innerParam.Param, item.Address)
+					} else {
+						Log.Infof("airdrop items %s are rejected by %s", innerParam.Param, item.Address)
 					}
 				}
 			}

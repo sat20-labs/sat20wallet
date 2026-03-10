@@ -707,6 +707,10 @@ func NewInvokerStatus(cn string) InvokerStatus {
 		return nil
 		//case TEMPLATE_CONTRACT_VAULT:
 		//	return &VaultInvokerStatus{}
+	case TEMPLATE_CONTRACT_RECYCLE:
+		return &RecycleInvokerStatus{}
+	case TEMPLATE_CONTRACT_DAO:
+		return &DaoInvokerStatus{}
 	}
 	return &TraderStatus{}
 }
