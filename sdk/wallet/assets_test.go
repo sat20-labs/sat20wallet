@@ -111,3 +111,11 @@ func TestParseAnchorScript(t *testing.T) {
 	fmt.Printf("%v", data)
 
 }
+
+
+func TestParseUtxoId(t *testing.T) {
+	
+	h, txIndex, vout := indexer.FromUtxoId(113284057661440)
+	fmt.Printf("%d %d %d\n", h, txIndex, vout)
+
+}

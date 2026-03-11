@@ -1147,7 +1147,7 @@ func (p *DaoContractRunTime) InvokeWithBlock(data *InvokeDataInBlock) error {
 	if p.IsActive() {
 		p.mutex.Lock()
 		p.PreprocessInvokeData(data)
-		p.process(data.Height, data.BlockHash)
+		// p.process(data.Height, data.BlockHash) 只处理聪网
 		p.InvokeCompleted(data)
 		p.mutex.Unlock()
 
@@ -1639,7 +1639,7 @@ func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
 	return ret
 }
 
-// 执行
+// 执行 height和blockhash必须来自聪网
 func (p *DaoContractRunTime) process(height int, blockHash string) error {
 	Log.Debugf("%s process contract %s with block %d %s",
 		p.stp.GetMode(), p.URL(), height, blockHash)
