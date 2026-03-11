@@ -47,13 +47,22 @@ export default defineConfig({
     },
     plugins: [],
     logLevel: process.env.NODE_ENV === 'production' ? ('error' as const) : ('info' as const),
+    define: {
+      __VUE_PROD_DEVTOOLS__: 'false',
+    },
     optimizeDeps: {
+      exclude: [
+        '@vue/devtools-kit',
+        '@vue/devtools-api',
+        '@vue/devtools-core',
+      ],
+      include: ['pinia'],
       esbuildOptions: {
         supported: { 'top-level-await': true },
         define: { global: 'globalThis' },
         plugins: [
           NodeGlobalsPolyfillPlugin({
-            process: true, // fix nuxt3 process
+            process: true,
             buffer: true,
           }) as any,
           NodeModulesPolyfillPlugin(),
