@@ -1656,9 +1656,11 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 			invoker := p.loadInvokerInfo(addr)
 			invokers[addr] = invoker
 
-			if invoker.InvokeAmt.Cmp(minDonate) > 0 {
+			if len(p.Validators) < p.ValidatorNum {
 				p.Validators[addr] = invoker.InvokeAmt.Clone()
-				if len(p.Validators) > p.ValidatorNum {
+			} else {
+				if invoker.InvokeAmt.Cmp(minDonate) > 0 {
+					p.Validators[addr] = invoker.InvokeAmt.Clone()
 					// 删除最小的validator
 					delete(p.Validators, minAddr)
 				}
