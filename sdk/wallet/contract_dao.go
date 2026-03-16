@@ -43,6 +43,8 @@ const (
 	MIN_AIRDROP_FEE   int64 = 20
 
 	DEF_VALIDATOR_NUM int   = 5
+
+	RANKING_MAX_SIZE int = 100
 )
 
 // 1. 定义合约内容
@@ -482,7 +484,10 @@ type DaoContractRunTime struct {
 	donateMap   map[string]map[int64]*InvokeItem // 还在处理中的调用, address -> invoke item list,
 	airdropMap  map[string]map[int64]*InvokeItem
 	validateMap map[string]map[int64]*InvokeItem
+	
 	uidMap      map[string]string // uid->address 所有
+	donateRanking map[string]*Decimal  // 前100名
+	airdropRanking map[string]*Decimal // 前100名
 
 	airdropThreshold *Decimal
 	airdropRatio *Decimal
@@ -491,6 +496,7 @@ type DaoContractRunTime struct {
 	responseCache  []*responseItem_dao
 	responseStatus Response_DaoContract
 	responseInvokerMap map[string]*Response_DaoInvokerStatus
+	responseAnalytics *analytcisData_dao
 }
 
 func NewDaoContractRunTime(stp ContractManager) *DaoContractRunTime {
@@ -516,7 +522,10 @@ func (p *DaoContractRunTime) init() {
 	p.airdropMap = make(map[string]map[int64]*InvokeItem)
 	p.donateMap = make(map[string]map[int64]*InvokeItem)
 	p.validateMap = make(map[string]map[int64]*InvokeItem)
+
 	p.uidMap = make(map[string]string)
+	p.donateRanking = make(map[string]*Decimal)
+	p.airdropRanking = make(map[string]*Decimal)
 	p.responseInvokerMap = make(map[string]*Response_DaoInvokerStatus)
 
 	p.airdropRatio, _ = indexer.NewDecimalFromString(p.AirDropRatio, p.Divisibility)
@@ -568,7 +577,9 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 		p.history[item.InUtxo] = item
 	}
 
+	
 	invokers := loadAllContractInvokerStatus(p.db, url)
+	invokerVector := make([]*DaoInvokerStatus, 0, len(invokers))
 	for _, v := range invokers {
 		invoker, ok := v.(*DaoInvokerStatus)
 		if !ok {
@@ -577,6 +588,35 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 		if invoker.UID != "" {
 			p.uidMap[invoker.UID] = invoker.Address
 		}
+		invokerVector = append(invokerVector, invoker)
+	}
+	sort.Slice(invokerVector, func(i, j int) bool {
+		r := invokerVector[i].InvokeAmt.Cmp(invokerVector[j].InvokeAmt)
+		if r == 0 {
+			return invokerVector[i].GetOldestItemId() < invokerVector[j].GetOldestItemId()
+		}
+		return r > 0
+	})
+	for i := 0; i < RANKING_MAX_SIZE && i < len(invokerVector); i++ {
+		invoker := invokerVector[i]
+		if invoker.InvokeAmt.Sign() == 0 {
+			continue
+		}
+		p.donateRanking[invoker.Address] = invoker.InvokeAmt.Clone()
+	}
+	sort.Slice(invokerVector, func(i, j int) bool {
+		r := invokerVector[i].TotalAirdropAmt.Cmp(invokerVector[j].TotalAirdropAmt)
+		if r == 0 {
+			return invokerVector[i].GetOldestItemId() < invokerVector[j].GetOldestItemId()
+		}
+		return r > 0
+	})
+	for i := 0; i < RANKING_MAX_SIZE && i < len(invokerVector); i++ {
+		invoker := invokerVector[i]
+		if invoker.TotalAirdropAmt.Sign() == 0 {
+			continue
+		}
+		p.airdropRanking[invoker.Address] = invoker.TotalAirdropAmt.Clone()
 	}
 
 	// fix
@@ -804,6 +844,51 @@ func (p *DaoContractRunTime) updateResponseData() {
 		// responseInvokerMap
 		p.responseInvokerMap = make(map[string]*Response_DaoInvokerStatus)
 
+
+		/////////////////////////
+		// responseAnalytics
+		p.responseAnalytics = &analytcisData_dao{
+			AssetsName: &p.AssetName,
+		}
+		donate := make([]*analytcisItem_dao, 0, len(p.donateRanking))
+		for addr, amt := range p.donateRanking {
+			invoker := p.loadInvokerInfo(addr)
+			donate = append(donate, &analytcisItem_dao{
+				UID: invoker.UID,
+				Address: addr,
+				Amount: amt,
+				ReferralCount: len(invoker.ReferralUIDs),
+			})
+		}
+		sort.Slice(donate, func(i, j int) bool {
+			r := donate[i].Amount.Cmp(donate[j].Amount)
+			if r == 0 {
+				return donate[i].ReferralCount > donate[j].ReferralCount
+			}
+			return r > 0
+		})
+		p.responseAnalytics.ItemsDonate = donate
+
+		airdrop := make([]*analytcisItem_dao, 0, len(p.airdropRanking))
+		for addr, amt := range p.airdropRanking {
+			invoker := p.loadInvokerInfo(addr)
+			airdrop = append(airdrop, &analytcisItem_dao{
+				UID: invoker.UID,
+				Address: addr,
+				Amount: amt,
+				ReferralCount: len(invoker.ReferralUIDs),
+			})
+		}
+		sort.Slice(airdrop, func(i, j int) bool {
+			r := airdrop[i].Amount.Cmp(airdrop[j].Amount)
+			if r == 0 {
+				return airdrop[i].ReferralCount > airdrop[j].ReferralCount
+			}
+			return r > 0
+		})
+		p.responseAnalytics.ItemsAirdrop = airdrop
+
+
 		p.refreshTime = time.Now().Unix()
 	}
 }
@@ -823,19 +908,31 @@ func (p *DaoContractRunTime) RuntimeStatus() string {
 	return string(buf)
 }
 
+type analytcisItem_dao struct {
+	UID 		  string 	`json:"uid"`
+	Address 	  string 	`json:"address"`
+	Amount 		  *Decimal 	`json:"amt"` // 空投或者捐赠的资产数量
+	ReferralCount int 		`json:"referralCount,omitempty"` // 被推荐人数量（作为空投参数时），其他设置为0
+}
+
+type analytcisData_dao struct {
+	AssetsName   *indexer.AssetName   `json:"assets_name"`
+	ItemsDonate  []*analytcisItem_dao `json:"items_donate"`
+	ItemsAirdrop []*analytcisItem_dao `json:"items_airdrop"`
+}
+
 func (p *DaoContractRunTime) RuntimeAnalytics() string {
 	p.updateResponseData()
 
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
-	// buf, err := json.Marshal(p.responseAnalytics)
-	// if err != nil {
-	// 	Log.Errorf("RuntimeAnalytics Marshal %s failed, %v", p.URL(), err)
-	// 	return ""
-	// }
-	// return string(buf)
-	return ""
+	buf, err := json.Marshal(p.responseAnalytics)
+	if err != nil {
+		Log.Errorf("RuntimeAnalytics Marshal %s failed, %v", p.URL(), err)
+		return ""
+	}
+	return string(buf)
 }
 
 func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
@@ -1492,11 +1589,11 @@ func (p *DaoContractRunTime) addItem(item *InvokeItem) {
 	p.insertBuck(item)
 }
 
-func (p *DaoContractRunTime) getMinDonator() (string, *Decimal) {
+func getMinItem(items map[string]*Decimal) (string, *Decimal) {
 	var minDonate *Decimal
 	var minAddr string
 
-	for addr, donate := range p.Validators {
+	for addr, donate := range items {
 		if minDonate.Sign() == 0 {
 			minDonate = donate.Clone()
 			minAddr = addr
@@ -1508,6 +1605,22 @@ func (p *DaoContractRunTime) getMinDonator() (string, *Decimal) {
 		}
 	}
 	return minAddr, minDonate
+}
+
+func updateItems(items map[string]*Decimal, maxSize int, addr string, amt *Decimal) bool {
+	minAddr, minDonate := getMinItem(items)
+	if len(items) < maxSize {
+		items[addr] = amt
+		return true
+	} else {
+		if amt.Cmp(minDonate) > 0 {
+			items[addr] = amt
+			// 删除最小的validator
+			delete(items, minAddr)
+			return true
+		}
+	}
+	return false
 }
 
 func (p *DaoContractRunTime) handleRegisterItem(item *InvokeItem,
@@ -1652,19 +1765,11 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 	// 1. 执行donate，目标是更新排行版
 	if len(p.donateMap) > 0 {
 		for addr, items := range p.donateMap {
-			minAddr, minDonate := p.getMinDonator()
 			invoker := p.loadInvokerInfo(addr)
 			invokers[addr] = invoker
 
-			if len(p.Validators) < p.ValidatorNum {
-				p.Validators[addr] = invoker.InvokeAmt.Clone()
-			} else {
-				if invoker.InvokeAmt.Cmp(minDonate) > 0 {
-					p.Validators[addr] = invoker.InvokeAmt.Clone()
-					// 删除最小的validator
-					delete(p.Validators, minAddr)
-				}
-			}
+			updateItems(p.Validators, p.ValidatorNum, addr, invoker.InvokeAmt.Clone())
+			updateItems(p.donateRanking, RANKING_MAX_SIZE, addr, invoker.InvokeAmt.Clone())
 
 			for _, item := range items {
 				item.RemainingAmt = nil
@@ -1681,7 +1786,7 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 	// 2. 执行validate
 	if len(p.validateMap) > 0 {
 		for addr, items := range p.validateMap {
-			_, ok := p.validateMap[addr]
+			_, ok := p.Validators[addr]
 			if !ok {
 				// 全部设置为无效
 				for _, item := range items {
@@ -1888,6 +1993,8 @@ func (p *DaoContractRunTime) updateWithDealInfo_airdrop(dealInfo *DealInfo) {
 		if invoker != nil {
 			invoker.TotalAirdropAmt = invoker.TotalAirdropAmt.Add(info.AssetAmt)
 			saveContractInvokerStatus(p.stp.GetDB(), url, invoker)
+
+			updateItems(p.airdropRanking, RANKING_MAX_SIZE, invoker.Address, invoker.TotalAirdropAmt.Clone())
 		}
 	}
 

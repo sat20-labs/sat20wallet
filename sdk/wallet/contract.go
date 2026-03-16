@@ -648,6 +648,22 @@ func (p *InvokerStatusBaseV2) GetHistory() map[int][]int64 {
 	return p.History
 }
 
+func (p *InvokerStatusBaseV2) GetOldestItemId() int64 {
+	minBulkId := math.MaxInt
+	for id := range p.History {
+		if id < minBulkId {
+			minBulkId = id
+		}
+	}
+	if minBulkId != math.MaxInt {
+		bulk := p.History[minBulkId]
+		if len(bulk) > 0 {
+			return bulk[0]
+		}
+	}
+	return math.MaxInt64
+}
+
 // 老的调用者数据结构，新合约不要用，用 InvokerStatusBaseV2
 type InvokerStatusBase struct {
 	Version       int
