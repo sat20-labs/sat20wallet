@@ -2467,6 +2467,34 @@ func getDeployedContractStatus(this js.Value, p []js.Value) any {
 }
 
 
+func getDeployedContractAnalytics(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "contract URL parameter should be a string")
+	}
+	url := p[0].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		status, err := _mgr.GetContractAnalyticsInServer(url)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		return map[string]any{
+			"Analytics": status,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+
 func getFeeForDeployContract(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -3340,6 +3368,7 @@ func main() {
 	obj.Set("getSupportedContracts", js.FuncOf(getSupportedContracts))
 	obj.Set("getDeployedContractsInServer", js.FuncOf(getDeployedContractsInServer))
 	obj.Set("getDeployedContractStatus", js.FuncOf(getDeployedContractStatus))
+	obj.Set("getDeployedContractAnalytics", js.FuncOf(getDeployedContractAnalytics))
 	obj.Set("getFeeForDeployContract", js.FuncOf(getFeeForDeployContract))
 	//obj.Set("deployContract_Remote", js.FuncOf(deployContract_Remote))
 	obj.Set("getParamForInvokeContract", js.FuncOf(getParamForInvokeContract))
