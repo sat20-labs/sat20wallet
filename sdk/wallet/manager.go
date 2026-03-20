@@ -858,3 +858,7 @@ func (p *Manager) GetCoreChannelAddr() string {
 	}
 	return coreChannelId
 }
+
+func (p *Manager) GetSyncHeightL1() int {
+	return p.l1IndexerClient.GetSyncHeight()
+}

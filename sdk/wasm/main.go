@@ -2983,11 +2983,12 @@ func stakeToBeMiner(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 
+		height := _mgr.GetSyncHeightL1()
 		return map[string]interface{}{
 			"txId":      txId,
 			"resvId":    id,
-			"assetName": indexer.GetStakeAssetName(),
-			"amt":       indexer.GetStakeAssetAmt(),
+			"assetName": indexer.GetStakeAssetName(height),
+			"amt":       indexer.GetStakeAssetAmt(height),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
