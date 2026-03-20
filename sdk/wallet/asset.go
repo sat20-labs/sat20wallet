@@ -292,17 +292,11 @@ func IsCoreAsset(assetName *indexer.AssetName) bool {
 }
 
 func GetCoreAssetAmount() int64 {
-	if IsTestNet() {
-		return indexer.TESTNET_CORENODE_STAKING_ASSET_AMOUNT
-	}
-	return indexer.CORENODE_STAKING_ASSET_AMOUNT
+	return indexer.GetStakeAssetAmt()
 }
 
 func GetCoreAssetName() *indexer.AssetName {
-	if IsTestNet() {
-		return indexer.NewAssetNameFromString(indexer.TESTNET_CORENODE_STAKING_ASSET_NAME)
-	}
-	return indexer.NewAssetNameFromString(indexer.CORENODE_STAKING_ASSET_NAME)
+	return indexer.NewAssetNameFromString(indexer.GetStakeAssetName())
 }
 
 // ordx 需要2个
