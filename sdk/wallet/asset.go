@@ -287,18 +287,6 @@ func IsLPT(assetName *AssetName) bool {
 		strings.Contains(assetName.Ticker, ".lpt")
 }
 
-func IsCoreAsset(assetName *indexer.AssetName) bool {
-	return assetName.String() == GetCoreAssetName().String()
-}
-
-func GetCoreAssetAmount() int64 {
-	return indexer.GetStakeAssetAmt()
-}
-
-func GetCoreAssetName() *indexer.AssetName {
-	return indexer.NewAssetNameFromString(indexer.GetStakeAssetName())
-}
-
 // ordx 需要2个
 // runes需要1个
 // brc20需要n个
