@@ -478,10 +478,10 @@ type SwapContractRuntime struct {
 	isSending          bool
 
 	// rpc 缓存
-	responseCache      []*responseItem_swap
-	responseStatus     *responseStatus_swap
-	responseAnalytics  *AnalytcisData
-	dealPrice          *Decimal
+	responseCache     []*responseItem_swap
+	responseStatus    *responseStatus_swap
+	responseAnalytics *AnalytcisData
+	dealPrice         *Decimal
 }
 
 func NewSwapContractRuntime(stp ContractManager) *SwapContractRuntime {
@@ -514,7 +514,7 @@ func (p *SwapContractRuntime) init() {
 	p.stubFeeMap = make(map[int64]int64)
 }
 
-// 这个接口过来的对象，一般调用过 NewSwapContractRuntime 
+// 这个接口过来的对象，一般调用过 NewSwapContractRuntime
 func (p *SwapContractRuntime) InitFromJson(content []byte, stp ContractManager) error {
 	err := json.Unmarshal(content, p)
 	if err != nil {
@@ -576,11 +576,11 @@ func (p *SwapContractRuntime) InitFromDB(stp ContractManager, resv ContractDeplo
 
 func (p *SwapContractRuntime) IsIdle() bool {
 	return len(p.buyPool) == 0 && len(p.sellPool) == 0 &&
-	len(p.swapMap) == 0 && len(p.refundMap) == 0 && 
-	len(p.depositMap) == 0 && len(p.withdrawMap) == 0 &&
-	len(p.addLiquidityMap) == 0 && len(p.removeLiquidityMap) == 0 &&
-	len(p.stakeMap) == 0 && len(p.unstakeMap) == 0 &&
-	len(p.profitMap) == 0
+		len(p.swapMap) == 0 && len(p.refundMap) == 0 &&
+		len(p.depositMap) == 0 && len(p.withdrawMap) == 0 &&
+		len(p.addLiquidityMap) == 0 && len(p.removeLiquidityMap) == 0 &&
+		len(p.stakeMap) == 0 && len(p.unstakeMap) == 0 &&
+		len(p.profitMap) == 0
 }
 
 func (p *SwapContractRuntime) rebuildTraderHistory() {
@@ -1133,7 +1133,7 @@ func (p *SwapContractRuntime) genAnalyticsData() *AnalytcisData {
 
 	for i := p.InvokeCount; i >= 0; i-- {
 		item := p.getItemFromBuck(i)
-		if item == nil || item.Done != DONE_DEALT {
+		if item == nil || item.Done != ITEM_STATUS_DEALT {
 			continue
 		}
 
@@ -2354,7 +2354,7 @@ func (p *SwapContractRuntime) updateContract_swap(
 		InvokeHistoryItemBase: InvokeHistoryItemBase{
 			Id:     p.InvokeCount,
 			Reason: reason,
-			Done:   DONE_NOTYET,
+			Done:   ITEM_STATUS_INIT,
 		},
 
 		OrderType:      param.OrderType,
@@ -2445,7 +2445,7 @@ func (p *SwapContractRuntime) updateContract_deposit(
 		InvokeHistoryItemBase: InvokeHistoryItemBase{
 			Id:     p.InvokeCount,
 			Reason: reason,
-			Done:   DONE_NOTYET,
+			Done:   ITEM_STATUS_INIT,
 		},
 
 		OrderType:      ORDERTYPE_DEPOSIT,
@@ -2514,7 +2514,7 @@ func (p *SwapContractRuntime) updateContract_withdraw(
 		InvokeHistoryItemBase: InvokeHistoryItemBase{
 			Id:     p.InvokeCount,
 			Reason: reason,
-			Done:   DONE_NOTYET,
+			Done:   ITEM_STATUS_INIT,
 		},
 
 		OrderType:      ORDERTYPE_WITHDRAW,
@@ -2570,7 +2570,7 @@ func (p *SwapContractRuntime) updateContract_liquidity(
 		InvokeHistoryItemBase: InvokeHistoryItemBase{
 			Id:     p.InvokeCount,
 			Reason: reason,
-			Done:   DONE_NOTYET,
+			Done:   ITEM_STATUS_INIT,
 		},
 
 		OrderType:      orderType,
@@ -2594,7 +2594,7 @@ func (p *SwapContractRuntime) updateContract_liquidity(
 	p.updateContractStatus(item)
 	if reason == INVOKE_REASON_INVALID && orderType == ORDERTYPE_REMOVELIQUIDITY {
 		// 无效的指令，直接关闭
-		item.Done = DONE_CLOSED_DIRECTLY
+		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
 	} else {
 		p.addItem(item)
 	}
@@ -2624,7 +2624,7 @@ func (p *SwapContractRuntime) updateContract(
 		InvokeHistoryItemBase: InvokeHistoryItemBase{
 			Id:     p.InvokeCount,
 			Reason: reason,
-			Done:   DONE_NOTYET,
+			Done:   ITEM_STATUS_INIT,
 		},
 
 		OrderType:      orderType,
@@ -2648,7 +2648,7 @@ func (p *SwapContractRuntime) updateContract(
 	p.updateContractStatus(item)
 	if reason == INVOKE_REASON_INVALID && remainingAmt.Sign() == 0 && remainingValue < 10 {
 		// 无效的指令，直接关闭
-		item.Done = DONE_CLOSED_DIRECTLY
+		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
 	} else {
 		p.addItem(item)
 	}
@@ -2663,7 +2663,7 @@ func (p *SwapContractRuntime) updateContract_refund(
 		InvokeHistoryItemBase: InvokeHistoryItemBase{
 			Id:     p.InvokeCount,
 			Reason: INVOKE_REASON_NORMAL,
-			Done:   DONE_NOTYET,
+			Done:   ITEM_STATUS_INIT,
 		},
 
 		OrderType:      ORDERTYPE_REFUND,
@@ -2774,7 +2774,7 @@ func (p *SwapContractRuntime) addRefundItem(item *SwapHistoryItem, updatePool bo
 		if len(swapmap) == 0 {
 			// 没有交易数据，该条记录无效
 			item.Reason = INVOKE_REASON_INVALID
-			item.Done = DONE_DEALT
+			item.Done = ITEM_STATUS_DEALT
 		} else {
 			if updatePool {
 				// 将相关交易从pool中撤下
@@ -2805,7 +2805,7 @@ func (p *SwapContractRuntime) addRefundItem(item *SwapHistoryItem, updatePool bo
 
 			// 将所有该用户的item都设置为refund
 			for _, swapItem := range swapmap {
-				if swapItem.Reason == INVOKE_REASON_NORMAL && swapItem.Done == DONE_NOTYET {
+				if swapItem.Reason == INVOKE_REASON_NORMAL && swapItem.Done == ITEM_STATUS_INIT {
 					swapItem.Reason = INVOKE_REASON_REFUND
 					addItemToMap(swapItem, p.refundMap)
 					// buy&sell pool在updateWithDealInfo_refund时统一处理无效的item
@@ -2843,7 +2843,7 @@ func (p *SwapContractRuntime) addRefundItem(item *SwapHistoryItem, updatePool bo
 		if item.Reason == INVOKE_REASON_NORMAL {
 			item.Reason = INVOKE_REASON_REFUND
 		}
-		if item.Done == DONE_NOTYET {
+		if item.Done == ITEM_STATUS_INIT {
 			addItemToMap(item, p.refundMap)
 		}
 
@@ -2937,7 +2937,7 @@ func (p *SwapContractRuntime) genDealInfo(height int) *DealInfo {
 	// 检查remainning为0的记录，发起转账，并记录成交记录
 	maxHeight := 0
 	for _, buy := range p.buyPool {
-		if buy.Done != DONE_NOTYET {
+		if buy.Finished() {
 			continue
 		}
 		h, _, _ := indexer.FromUtxoId(buy.UtxoId)
@@ -2969,7 +2969,7 @@ func (p *SwapContractRuntime) genDealInfo(height int) *DealInfo {
 	}
 
 	for _, sell := range p.sellPool {
-		if sell.Done != DONE_NOTYET {
+		if sell.Finished() {
 			continue
 		}
 		h, _, _ := indexer.FromUtxoId(sell.UtxoId)
@@ -3099,13 +3099,13 @@ func (p *SwapContractRuntime) updateWithDealInfo_swap(dealInfo *DealInfo) {
 			break
 		}
 
-		if buy.Done == DONE_NOTYET {
+		if buy.Done == ITEM_STATUS_INIT {
 			// 这条记录已经完全处理完成
 			sendInfo.AssetAmt = sendInfo.AssetAmt.Sub(buy.OutAmt)
 			sendInfo.Value -= buy.OutValue
 
 			buy.OutTxId = txId
-			buy.Done = DONE_DEALT
+			buy.Done = ITEM_STATUS_DEALT
 			delete(p.history, buy.InUtxo)
 			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), buy)
 			trader, ok := p.traderInfoMap[buy.Address]
@@ -3153,13 +3153,13 @@ func (p *SwapContractRuntime) updateWithDealInfo_swap(dealInfo *DealInfo) {
 			break
 		}
 
-		if sell.Done == DONE_NOTYET {
+		if sell.Done == ITEM_STATUS_INIT {
 			// 这条记录已经完全处理完成
 			sendInfo.AssetAmt = sendInfo.AssetAmt.Sub(sell.OutAmt)
 			sendInfo.Value -= sell.OutValue
 
 			sell.OutTxId = txId
-			sell.Done = DONE_DEALT
+			sell.Done = ITEM_STATUS_DEALT
 			delete(p.history, sell.InUtxo)
 			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), sell)
 			trader, ok := p.traderInfoMap[sell.Address]
@@ -3429,7 +3429,7 @@ func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
 			if h > height {
 				continue
 			}
-			if item.Done != DONE_NOTYET {
+			if item.Finished() {
 				continue
 			}
 			maxHeight = max(maxHeight, h)
@@ -3472,7 +3472,7 @@ func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
 			url := p.URL()
 			for _, item := range refundMap {
 				item.Reason = INVOKE_REASON_INVALID
-				item.Done = DONE_DEALT
+				item.Done = ITEM_STATUS_DEALT
 				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 				delete(p.history, item.InUtxo)
 			}
@@ -3520,13 +3520,13 @@ func (p *SwapContractRuntime) updateWithDealInfo_refund(dealInfo *DealInfo) {
 				if h > height {
 					continue
 				}
-				if item.Done == DONE_NOTYET {
+				if item.Done == ITEM_STATUS_INIT {
 					if item.OrderType == ORDERTYPE_REFUND {
 						// 指令
-						item.Done = DONE_DEALT
+						item.Done = ITEM_STATUS_DEALT
 					} else {
 						// 数据
-						item.Done = DONE_REFUNDED
+						item.Done = ITEM_STATUS_REFUNDED
 						if item.RemainingValue != 0 {
 							item.OutValue += item.RemainingValue
 							item.RemainingValue = 0
@@ -3657,7 +3657,7 @@ func (p *SwapContractRuntime) genDepositInfo(height int) *DealInfo {
 			if h > height {
 				continue
 			}
-			if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+			if item.Finished() || item.Reason != INVOKE_REASON_NORMAL {
 				continue
 			}
 			maxHeight = max(maxHeight, h)
@@ -3747,7 +3747,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_deposit(dealInfo *DealInfo) {
 			item.OutValue = item.RemainingValue
 			item.RemainingAmt = nil
 			item.RemainingValue = 0
-			item.Done = DONE_DEALT
+			item.Done = ITEM_STATUS_DEALT
 
 			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 			//delete(p.history, item.InUtxo) 主网调用，暂时不删除，可能reorg
@@ -3887,7 +3887,7 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 			if h > height {
 				continue
 			}
-			if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+			if item.Finished() || item.Reason != INVOKE_REASON_NORMAL {
 				continue
 			}
 			highestFeeRate = max(highestFeeRate, item.UnitPrice.Int64())
@@ -3904,7 +3904,7 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 			if h > height {
 				continue
 			}
-			if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+			if item.Finished() || item.Reason != INVOKE_REASON_NORMAL {
 				continue
 			}
 			if item.UnitPrice.Int64() < highestFeeRate {
@@ -4036,7 +4036,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 			item.OutValue = item.RemainingValue
 			item.RemainingAmt = nil
 			item.RemainingValue = 0
-			item.Done = DONE_DEALT
+			item.Done = ITEM_STATUS_DEALT
 			item.Padded = []byte(fmt.Sprintf("%d", dealInfo.Fee)) // 记录该OutTx的费用，方便统计
 			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 			delete(p.history, item.InUtxo)
@@ -4271,7 +4271,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 			item.OutValue = info.Value
 			item.RemainingAmt = nil
 			item.RemainingValue = 0
-			item.Done = DONE_DEALT
+			item.Done = ITEM_STATUS_DEALT
 			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 			delete(p.history, item.InUtxo)
 		}
@@ -4383,7 +4383,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_profit(dealInfo *DealInfo) {
 			item.OutValue = info.Value
 			item.RemainingAmt = nil
 			item.RemainingValue = 0
-			item.Done = DONE_DEALT
+			item.Done = ITEM_STATUS_DEALT
 			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 			delete(p.history, item.InUtxo)
 		}
@@ -5034,7 +5034,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 		bFound := false
 		for _, item := range items {
 			if item.InUtxo == anchorData.Utxo {
-				if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+				if item.Finished() || item.Reason != INVOKE_REASON_NORMAL {
 					continue
 				}
 				h, _, _ := indexer.FromUtxoId(item.UtxoId)
@@ -5167,13 +5167,13 @@ func VerifySwapHistory(history []*SwapHistoryItem, divisibility int,
 		InvokeCount++
 		runningData.TotalInputSats += item.InValue
 		runningData.TotalInputAssets = runningData.TotalInputAssets.Add(item.InAmt)
-		if item.Done != DONE_NOTYET {
+		if item.Finished() {
 			runningData.TotalOutputAssets = runningData.TotalOutputAssets.Add(item.OutAmt)
 			runningData.TotalOutputSats += item.OutValue
 		}
 
 		if item.OrderType == ORDERTYPE_BUY || item.OrderType == ORDERTYPE_SELL {
-			if item.Done == DONE_NOTYET {
+			if item.Done == ITEM_STATUS_INIT {
 				if item.Reason == INVOKE_REASON_NORMAL {
 					// 有效的，还在交易中，或者交易完成，准备发送
 					if item.RemainingAmt.Sign() == 0 && item.RemainingValue == 0 {
@@ -5202,7 +5202,7 @@ func VerifySwapHistory(history []*SwapHistoryItem, divisibility int,
 					runningData.TotalRefundSats += item.RemainingValue + item.OutValue
 				}
 
-			} else if item.Done == DONE_DEALT {
+			} else if item.Done == ITEM_STATUS_DEALT {
 				dealTxMap[item.OutTxId] = true
 				runningData.TotalDealCount++
 				runningData.TotalDealTx = len(dealTxMap)
@@ -5215,7 +5215,7 @@ func VerifySwapHistory(history []*SwapHistoryItem, divisibility int,
 				// 已经发送
 				Log.Infof("Done %d: Amt: %s-%s-%s Value: %d-%d-%d Price: %s in: %s out: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
 					item.InValue, item.RemainingValue, item.OutValue, item.UnitPrice.String(), item.InUtxo, item.OutTxId)
-			} else if item.Done == DONE_REFUNDED {
+			} else if item.Done == ITEM_STATUS_REFUNDED {
 				Log.Infof("Refund %d: Amt: %s-%s-%s Value: %d-%d-%d in: %s out: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
 					item.InValue, item.RemainingValue, item.OutValue, item.InUtxo, item.OutTxId)
 				// 退款

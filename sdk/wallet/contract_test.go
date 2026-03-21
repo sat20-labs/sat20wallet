@@ -207,7 +207,7 @@ func TestLaunchPoolContract(t *testing.T) {
 		// 去掉处理结果
 		item.RemainingAmt = item.InAmt.Clone()
 		item.RemainingValue = item.InValue
-		item.Done = DONE_NOTYET
+		item.Done = ITEM_STATUS_INIT
 		if item.Reason != INVOKE_REASON_INVALID {
 			item.Reason = INVOKE_REASON_NORMAL
 		}
@@ -422,7 +422,7 @@ func TestSwapContract(t *testing.T) {
 		item.RemainingValue = item.InValue - item.ServiceFee
 		item.OutAmt = nil
 		item.OutValue = 0
-		item.Done = DONE_NOTYET
+		item.Done = ITEM_STATUS_INIT
 		if item.Reason != INVOKE_REASON_INVALID {
 			item.Reason = INVOKE_REASON_NORMAL
 		}
@@ -668,7 +668,7 @@ func TestAmmContract(t *testing.T) {
 		item.RemainingValue = item.InValue
 		item.OutAmt = nil
 		item.OutValue = 0
-		item.Done = DONE_NOTYET
+		item.Done = ITEM_STATUS_INIT
 		item.UtxoId = indexer.ToUtxoId(_server.status.SyncHeightL2, 1, 0)
 		if item.Reason != INVOKE_REASON_INVALID {
 			item.Reason = INVOKE_REASON_NORMAL
@@ -919,7 +919,7 @@ func TestAmmContract_Runes(t *testing.T) {
 		item.RemainingValue = item.InValue
 		item.OutAmt = nil
 		item.OutValue = 0
-		item.Done = DONE_NOTYET
+		item.Done = ITEM_STATUS_INIT
 		item.UtxoId = indexer.ToUtxoId(_server.status.SyncHeightL2, 1, 0)
 		if item.Reason != INVOKE_REASON_INVALID {
 			item.Reason = INVOKE_REASON_NORMAL

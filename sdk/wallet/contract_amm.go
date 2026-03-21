@@ -595,7 +595,6 @@ func NewAmmContractRuntime(stp ContractManager) *AmmContractRuntime {
 	return p
 }
 
-
 func (p *AmmContractRuntime) InitFromContent(content []byte, stp ContractManager, resv ContractDeployResvIF) error {
 	err := p.SwapContractRuntime.InitFromContent(content, stp, resv)
 	if err != nil {
@@ -993,7 +992,7 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 	updated := false
 	refundItems := make([]*SwapHistoryItem, 0)
 	for _, item := range ammPool {
-		if item.Reason != INVOKE_REASON_NORMAL || item.Done != DONE_NOTYET {
+		if item.Reason != INVOKE_REASON_NORMAL || item.Finished() {
 			refundItems = append(refundItems, item)
 			continue
 		}
@@ -1018,7 +1017,7 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 				Log.Errorf("AMM buy %s: in_amt=%s, min_value=%s, real_value=%s, utxo: %s", INVOKE_REASON_NO_ENOUGH_ASSET,
 					item.InAmt.String(), item.ExpectedAmt.String(), realswapValue, item.InUtxo)
 				item.Reason = INVOKE_REASON_NO_ENOUGH_ASSET
-				item.Done = DONE_CLOSED_DIRECTLY // 不退款，直接关闭
+				item.Done = ITEM_STATUS_CLOSED_DIRECTLY // 不退款，直接关闭
 				refundItems = append(refundItems, item)
 				continue
 			}
@@ -1065,7 +1064,7 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 				Log.Errorf("AMM sell %s: in_amt=%s, min_value=%s, real_amt=%s, utxo: %s", INVOKE_REASON_NO_ENOUGH_ASSET,
 					item.InAmt.String(), item.ExpectedAmt.String(), realSwapAmt.String(), item.InUtxo)
 				item.Reason = INVOKE_REASON_NO_ENOUGH_ASSET
-				item.Done = DONE_CLOSED_DIRECTLY // 不退款，直接关闭
+				item.Done = ITEM_STATUS_CLOSED_DIRECTLY // 不退款，直接关闭
 				refundItems = append(refundItems, item)
 				continue
 			}
@@ -1100,7 +1099,7 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 				item.OutAmt = nil
 				item.RemainingAmt = nil
 				item.Reason = INVOKE_REASON_NO_ENOUGH_ASSET
-				item.Done = DONE_CLOSED_DIRECTLY // 不退款，直接关闭
+				item.Done = ITEM_STATUS_CLOSED_DIRECTLY // 不退款，直接关闭
 				refundItems = append(refundItems, item)
 				continue
 			}
@@ -1341,8 +1340,8 @@ func (p *AmmContractRuntime) updateLiquidity_add(oldAmtInPool *Decimal, oldValue
 		// 更新用户的item
 		items := p.addLiquidityMap[k]
 		for _, item := range items {
-			if item.Done == DONE_NOTYET && item.Reason == INVOKE_REASON_NORMAL {
-				item.Done = DONE_DEALT
+			if item.Done == ITEM_STATUS_INIT && item.Reason == INVOKE_REASON_NORMAL {
+				item.Done = ITEM_STATUS_DEALT
 				delete(p.history, item.InUtxo)
 				if item.RemainingValue <= v.ReserveValue {
 					v.ReserveValue -= item.RemainingValue
@@ -1631,7 +1630,7 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 		// 更新用户的item
 		items := p.removeLiquidityMap[addr]
 		for _, item := range items {
-			if item.Done == DONE_NOTYET && item.Reason == INVOKE_REASON_NORMAL {
+			if item.Done == ITEM_STATUS_INIT && item.Reason == INVOKE_REASON_NORMAL {
 				item.Padded = []byte(fmt.Sprintf("%d", 1)) // 设置下标志，防止重入
 				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 			}
@@ -1738,7 +1737,7 @@ func (p *AmmContractRuntime) removeLiquidity(oldAmtInPool *Decimal, oldValueInPo
 	for k, v := range p.removeLiquidityMap {
 		var lptAmt *Decimal
 		for _, item := range v {
-			if item.Done == DONE_NOTYET &&
+			if item.Done == ITEM_STATUS_INIT &&
 				item.Reason == INVOKE_REASON_NORMAL &&
 				len(item.Padded) == 0 { // 还没处理
 				lptAmt = lptAmt.Add(item.ExpectedAmt)
@@ -1875,7 +1874,7 @@ func (p *AmmContractRuntime) getBaseProfit() *Decimal {
 
 func (p *AmmContractRuntime) closeItemDirectly(item *SwapHistoryItem) {
 	item.Reason = INVOKE_REASON_NO_PROFIT
-	item.Done = DONE_CLOSED_DIRECTLY // 不退款，直接关闭
+	item.Done = ITEM_STATUS_CLOSED_DIRECTLY // 不退款，直接关闭
 	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
 	delete(p.history, item.InUtxo)
 }
@@ -1920,7 +1919,7 @@ func (p *AmmContractRuntime) removeBaseLiquidity(oldAmtInPool *Decimal, oldValue
 		}
 		var ratio *Decimal
 		for _, item := range v {
-			if item.Done == DONE_NOTYET &&
+			if item.Done == ITEM_STATUS_INIT &&
 				item.Reason == INVOKE_REASON_NORMAL &&
 				len(item.Padded) == 0 { // 还没处理
 				ratio = ratio.Add(item.ExpectedAmt)
@@ -2026,7 +2025,7 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 		InvokeCount++
 		runningData.TotalInputSats += item.InValue
 		runningData.TotalInputAssets = runningData.TotalInputAssets.Add(item.InAmt)
-		if item.Done != DONE_NOTYET {
+		if item.Finished() {
 			runningData.TotalOutputAssets = runningData.TotalOutputAssets.Add(item.OutAmt)
 			runningData.TotalOutputSats += item.OutValue
 		}
@@ -2035,7 +2034,7 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 		case ORDERTYPE_BUY, ORDERTYPE_SELL:
 
 			switch item.Done {
-			case DONE_NOTYET:
+			case ITEM_STATUS_INIT:
 				Log.Errorf("amm should handle item already. %v", item)
 				if item.Reason == INVOKE_REASON_NORMAL {
 					// 有效的，还在交易中，或者交易完成，准备发送
@@ -2067,7 +2066,7 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 					runningData.TotalRefundSats += item.RemainingValue + item.OutValue
 				}
 
-			case DONE_DEALT:
+			case ITEM_STATUS_DEALT:
 				dealTxMap[item.OutTxId] = true
 				runningData.TotalDealCount++
 				if len(dealTxMap) != runningData.TotalDealCount {
@@ -2091,7 +2090,7 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 				Log.Infof("swap %d: Amt: %s-%s-%s Value: %d-%d-%d Price: %s in: %s out: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
 					item.InValue, item.RemainingValue, item.OutValue, item.UnitPrice.String(), item.InUtxo, item.OutTxId)
 
-			case DONE_REFUNDED:
+			case ITEM_STATUS_REFUNDED:
 				Log.Infof("Refund %d: Amt: %s-%s-%s Value: %d-%d-%d in: %s out: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
 					item.InValue, item.RemainingValue, item.OutValue, item.InUtxo, item.OutTxId)
 				// 退款
@@ -2111,8 +2110,8 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 
 		case ORDERTYPE_DEPOSIT:
 			switch item.Done {
-			case DONE_NOTYET:
-			case DONE_DEALT:
+			case ITEM_STATUS_INIT:
+			case ITEM_STATUS_DEALT:
 				depositTxMap[item.OutTxId] = true
 				runningData.TotalDepositTx = len(depositTxMap)
 				runningData.TotalDealTxFee = 0
@@ -2127,8 +2126,8 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 
 		case ORDERTYPE_WITHDRAW:
 			switch item.Done {
-			case DONE_NOTYET:
-			case DONE_DEALT:
+			case ITEM_STATUS_INIT:
+			case ITEM_STATUS_DEALT:
 				_, ok := withdrawTxMap[item.OutTxId]
 				if !ok {
 					// 新的withdraw txid
@@ -2151,8 +2150,8 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 
 		case ORDERTYPE_ADDLIQUIDITY:
 			switch item.Done {
-			case DONE_NOTYET:
-			case DONE_DEALT:
+			case ITEM_STATUS_INIT:
+			case ITEM_STATUS_DEALT:
 				runningData.TotalStakeAssets = runningData.TotalStakeAssets.Add(item.OutAmt)
 				runningData.TotalStakeSats += item.OutValue
 
@@ -2162,8 +2161,8 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 
 		case ORDERTYPE_REMOVELIQUIDITY:
 			switch item.Done {
-			case DONE_NOTYET:
-			case DONE_DEALT:
+			case ITEM_STATUS_INIT:
+			case ITEM_STATUS_DEALT:
 				unstakeTxMap[item.OutTxId] = true
 				runningData.TotalUnstakeTx = len(unstakeTxMap)
 				runningData.TotalUnstakeTxFee = int64(runningData.TotalUnstakeTx) * DEFAULT_FEE_SATSNET

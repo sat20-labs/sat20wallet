@@ -63,14 +63,14 @@ type LaunchPoolContract_old = LaunchPoolContract
 // }
 
 type LaunchPoolContract struct {
-	ContractBase  // 对于AssetName，这里需要根据资产协议处理大小写字母。比如符文，都是大写，比如brc20，都必须小写。
-	AssetSymbol   int32 `json:"assetSymbol,omitempty"`
-	BindingSat    int   `json:"bindingSat"`    // 每一聪绑定的资产数量，每一聪携带的该资产数量，用于在一层铸造ordx资产时使用
-	MintAmtPerSat int   `json:"mintAmtPerSat"` // 在二层分发时，每一聪换多少资产数量，一般MintAmtPerSat比BindingSat小10-1000倍
-	Limit         int64 `json:"limit"`         // 每个地址最大铸造量，0 不限制
-	MaxSupply     int64 `json:"maxSupply"`     // 最大资产供应量，
-	LaunchRatio   int   `json:"launchRation"`  // 铸造量达到总量的多少比例后，自动发射，向之前所有铸造者自动转token；
-	ReserveRatio  int   `json:"reserveRation,omitempty"` // 预留给部署者的比例，默认为0。注意如果有预留部分，其中的5%会给到foundation
+	ContractBase         // 对于AssetName，这里需要根据资产协议处理大小写字母。比如符文，都是大写，比如brc20，都必须小写。
+	AssetSymbol   int32  `json:"assetSymbol,omitempty"`
+	BindingSat    int    `json:"bindingSat"`              // 每一聪绑定的资产数量，每一聪携带的该资产数量，用于在一层铸造ordx资产时使用
+	MintAmtPerSat int    `json:"mintAmtPerSat"`           // 在二层分发时，每一聪换多少资产数量，一般MintAmtPerSat比BindingSat小10-1000倍
+	Limit         int64  `json:"limit"`                   // 每个地址最大铸造量，0 不限制
+	MaxSupply     int64  `json:"maxSupply"`               // 最大资产供应量，
+	LaunchRatio   int    `json:"launchRation"`            // 铸造量达到总量的多少比例后，自动发射，向之前所有铸造者自动转token；
+	ReserveRatio  int    `json:"reserveRation,omitempty"` // 预留给部署者的比例，默认为0。注意如果有预留部分，其中的5%会给到foundation
 	DisplayName   string `json:"displayName,omitempty"`
 	// 剩下的比例，留存在池子中当作流动性池子
 	// 比例必须在LAUNCH_POOL_MIN_RATION 和 LAUNCH_POOL_MAX_RATION 之间
@@ -173,7 +173,7 @@ func (p *LaunchPoolContract) CheckContent() error {
 		return fmt.Errorf("invalid launch ratio %d", p.LaunchRatio)
 	}
 	if p.ReserveRatio != 0 {
-		if p.ReserveRatio + p.LaunchRatio > LAUNCH_POOL_MAX_RATION {
+		if p.ReserveRatio+p.LaunchRatio > LAUNCH_POOL_MAX_RATION {
 			return fmt.Errorf("invalid reserve ratio %d", p.ReserveRatio)
 		}
 	}
@@ -529,8 +529,8 @@ type LaunchPoolContractRunTime struct {
 	deployTickerResv *InscribeResv
 	isSending        bool
 
-	refreshTime     int64
-	responseCache   []*responseItem_launchPool
+	refreshTime   int64
+	responseCache []*responseItem_launchPool
 }
 
 func NewLaunchPoolContractRuntime(stp ContractManager) *LaunchPoolContractRunTime {
@@ -564,7 +564,7 @@ func (p *LaunchPoolContractRunTime) InitFromContent(content []byte, stp Contract
 	return nil
 }
 
-func (p *LaunchPoolContractRunTime) InitFromJson(content []byte, stp ContractManager,) error {
+func (p *LaunchPoolContractRunTime) InitFromJson(content []byte, stp ContractManager) error {
 	err := json.Unmarshal(content, p)
 	if err != nil {
 		return err
@@ -611,7 +611,6 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 	}
 	p.handleReserveRatio()
 
-
 	if p.DeployTickerResvId != 0 {
 		p.deployTickerResv = p.stp.GetWalletMgr().GetInscribeResv(p.DeployTickerResvId)
 	}
@@ -627,7 +626,7 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 	if p.Status == CONTRACT_STATUS_CLOSING {
 		needSetRunning := false
 		for _, item := range history {
-			if !item.HasDone() {
+			if !item.Finished() {
 				needSetRunning = true
 				Log.Infof("item not done: %v", item)
 			}
@@ -1130,17 +1129,15 @@ func (p *LaunchPoolContractRunTime) RuntimeContent() []byte {
 	return b
 }
 
-
 func (p *LaunchPoolContractRunTime) RuntimeStatus() string {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-
 
 	type responseStatus struct {
 		*LaunchPoolContractRunTimeInDB
 
 		// 增加更多参数
-		DisplayName  string       `json:"displayName"`
+		DisplayName string `json:"displayName"`
 	}
 
 	var displayName string
@@ -1150,7 +1147,7 @@ func (p *LaunchPoolContractRunTime) RuntimeStatus() string {
 	}
 	result := &responseStatus{
 		LaunchPoolContractRunTimeInDB: &p.LaunchPoolContractRunTimeInDB,
-		DisplayName: displayName,
+		DisplayName:                   displayName,
 	}
 
 	buf, err := json.Marshal(result)
@@ -1438,14 +1435,14 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 
 func (p *LaunchPoolContractRunTime) handleReserveRatio() {
 	if p.ReserveRatio != 0 && p.Status == CONTRACT_STATUS_CLOSING {
-		totalReservedAmt := p.MaxSupply*int64(p.ReserveRatio)/100
+		totalReservedAmt := p.MaxSupply * int64(p.ReserveRatio) / 100
 		deployerPart := totalReservedAmt * int64(100-RESERVE_TO_FOUNDATION) / 100
 		foundationPart := totalReservedAmt * int64(RESERVE_TO_FOUNDATION) / 100
 
 		// 因为没有保存reserve是否已经发射的信息，需要做进一步的检查
 		// 最后一个发射出去的是reserve部分，如果还需要发射，那就还没有把reserve部分发射出去
 		// 另外，硬顶是 LAUNCH_POOL_MAX_RATION ，剩下的资产数量不可能比这个少
-		minLeft := p.MaxSupply*int64(100-LAUNCH_POOL_MAX_RATION)/100
+		minLeft := p.MaxSupply * int64(100-LAUNCH_POOL_MAX_RATION) / 100
 		currLeft := p.AssetAmtInPool.Int64()
 		if currLeft < totalReservedAmt || currLeft < minLeft {
 			return
@@ -1454,7 +1451,7 @@ func (p *LaunchPoolContractRunTime) handleReserveRatio() {
 		deployerAddr := p.Deployer
 		deployer := addMintInfo(deployerAddr, p.mintInfoMap)
 		deployer.TotalAmt = deployer.TotalAmt.Add(indexer.NewDefaultDecimal(deployerPart))
-		
+
 		foundationAddr := p.GetFoundationAddress()
 		foundation := addMintInfo(foundationAddr, p.mintInfoMap)
 		foundation.TotalAmt = foundation.TotalAmt.Add(indexer.NewDefaultDecimal(foundationPart))
@@ -1585,14 +1582,14 @@ func (p *LaunchPoolContractRunTime) addItem(item *MintHistoryItem) {
 		info := addMintInfo(address, p.mintInfoMap)
 		info.TotalAmt = info.TotalAmt.Add(amt)
 		info.History = append(info.History, item)
-		info.Settled = item.Done != DONE_NOTYET
+		info.Settled = item.Finished()
 	}
 
 	if item.OutValue != 0 { // 失败的item
 		info := addMintInfo(address, p.invalidMintMap)
 		info.TotalAmt = info.TotalAmt.Add(indexer.NewDefaultDecimal(item.OutValue))
 		info.History = append(info.History, item)
-		info.Settled = item.Done != DONE_NOTYET // sendback
+		info.Settled = item.Finished() // sendback
 	}
 
 	p.insertBuck(item)
@@ -1811,7 +1808,7 @@ func (p *LaunchPoolContractRunTime) launch() error {
 						info.Settled = true
 						totalOutputAssetAmt = totalOutputAssetAmt.Add(info.TotalAmt)
 						for _, u := range info.History {
-							u.Done = DONE_DEALT
+							u.Done = ITEM_STATUS_DEALT
 							u.OutTxId = txId
 							SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
 						}
@@ -1983,7 +1980,7 @@ func (p *LaunchPoolContractRunTime) refund() error {
 					info.Settled = true
 					totalOutputSatsValue += info.TotalAmt.Int64()
 					for _, u := range info.History {
-						u.Done = DONE_REFUNDED
+						u.Done = ITEM_STATUS_REFUNDED
 						u.OutTxId = txId
 						SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
 					}
@@ -2150,7 +2147,7 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 					info.Settled = true
 					totalOutputAssetAmt = totalOutputAssetAmt.Add(info.TotalAmt)
 					for _, u := range info.History {
-						u.Done = DONE_DEALT
+						u.Done = ITEM_STATUS_DEALT
 						u.OutTxId = dealInfo.TxId
 						SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
 					}
@@ -2184,7 +2181,7 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 					info.Settled = true
 					totalOutputSatsValue += info.TotalAmt.Int64()
 					for _, u := range info.History {
-						u.Done = DONE_REFUNDED
+						u.Done = ITEM_STATUS_REFUNDED
 						u.OutTxId = dealInfo.TxId
 						SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), u)
 					}
@@ -2256,13 +2253,13 @@ func VerifyLaunchPoolHistory(history []*SwapHistoryItem, invokeCount int64, stat
 		InvokeCount++
 		runningData.TotalInputSats += item.InValue
 		runningData.TotalInputAssets = runningData.TotalInputAssets.Add(item.InAmt)
-		if item.Done != DONE_NOTYET {
+		if item.Finished() {
 			runningData.TotalOutputAssets = runningData.TotalOutputAssets.Add(item.OutAmt)
 			runningData.TotalOutputSats += item.OutValue
 		}
 
 		if item.OrderType == ORDERTYPE_MINT {
-			if item.Done == DONE_NOTYET {
+			if item.Done == ITEM_STATUS_INIT {
 				runningData.SatsValueInPool += item.InValue
 				minter, ok := mintInfoMap[item.Address]
 				if !ok {
@@ -2274,14 +2271,14 @@ func VerifyLaunchPoolHistory(history []*SwapHistoryItem, invokeCount int64, stat
 				Log.Infof("Minting %d: Amt: %s-%s-%s Value: %d-%d-%d Price: %s in: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
 					item.InValue, item.RemainingValue, item.OutValue, item.UnitPrice.String(), item.InUtxo)
 
-			} else if item.Done == DONE_DEALT {
+			} else if item.Done == ITEM_STATUS_DEALT {
 				runningData.SatsValueInPool += item.InValue
 				runningData.TotalMinted = runningData.TotalMinted.Add(item.OutAmt)
 
 				// 已经发送
 				Log.Infof("Done %d: Amt: %s-%s-%s Value: %d-%d-%d Price: %s in: %s out: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
 					item.InValue, item.RemainingValue, item.OutValue, item.UnitPrice.String(), item.InUtxo, item.OutTxId)
-			} else if item.Done == DONE_REFUNDED {
+			} else if item.Done == ITEM_STATUS_REFUNDED {
 				Log.Infof("Refund %d: Amt: %s-%s-%s Value: %d-%d-%d in: %s out: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
 					item.InValue, item.RemainingValue, item.OutValue, item.InUtxo, item.OutTxId)
 				// 退款

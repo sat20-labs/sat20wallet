@@ -1034,7 +1034,7 @@ func (p *RecycleContractRunTime) updateContract(
 		InvokeHistoryItemBase: InvokeHistoryItemBase{
 			Id:     p.InvokeCount,
 			Reason: reason,
-			Done:   DONE_NOTYET,
+			Done:   ITEM_STATUS_INIT,
 		},
 
 		OrderType:      ORDERTYPE_RECYCLE,
@@ -1058,7 +1058,7 @@ func (p *RecycleContractRunTime) updateContract(
 	p.updateContractStatus(item)
 	if reason == INVOKE_REASON_INVALID {
 		// 无效的指令，直接关闭
-		item.Done = DONE_CLOSED_DIRECTLY
+		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
 	} else {
 		p.addItem(item)
 	}
@@ -1227,7 +1227,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 			// 根据区块和交易，生成幸运号码
 			// 如果中奖，放入 rewardMap
 
-			if len(item.Padded) != 0 || item.Done != DONE_NOTYET {
+			if len(item.Padded) != 0 || item.Finished() {
 				continue
 			}
 
@@ -1241,7 +1241,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 			txId, _, err := indexer.ParseUtxo(item.InUtxo)
 			if err != nil {
 				item.Reason = INVOKE_REASON_UTXO_FORMAT
-				item.Done = DONE_CLOSED_DIRECTLY
+				item.Done = ITEM_STATUS_CLOSED_DIRECTLY
 				item.RemainingAmt = nil
 				item.RemainingValue = 0
 				continue
@@ -1295,7 +1295,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				}
 				// 仅获得points奖励
 				points = 10 * item.InValue / 330
-				item.Done = DONE_CLOSED_DIRECTLY
+				item.Done = ITEM_STATUS_CLOSED_DIRECTLY
 				item.RemainingAmt = nil
 				item.RemainingValue = 0
 
@@ -1355,7 +1355,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 					item.prize = assetAmt
 					assetAmt = nil
 				} else {
-					item.item.Done = DONE_CLOSED_DIRECTLY
+					item.item.Done = ITEM_STATUS_CLOSED_DIRECTLY
 					item.item.RemainingAmt = nil
 					item.item.RemainingValue = 0
 					continue
@@ -1434,10 +1434,10 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 				if h > height {
 					continue
 				}
-				if item.Done != DONE_NOTYET {
+				if item.Finished() {
 					continue
 				}
-				item.Done = DONE_DEALT
+				item.Done = ITEM_STATUS_DEALT
 				item.OutTxId = txId
 				item.RemainingAmt = nil
 				item.RemainingValue = 0
@@ -1505,7 +1505,7 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 			if h > height {
 				continue
 			}
-			if item.Done != DONE_NOTYET {
+			if item.Finished() {
 				continue
 			}
 			maxHeight = max(maxHeight, h)
@@ -1971,7 +1971,7 @@ func (p *RecycleContractRunTime) genRewardInfoFromReq(req *wwire.RemoteSignMoreD
 		bFound := false
 		for _, item := range items {
 			if item.InUtxo == anchorData.Utxo {
-				if item.Done != DONE_NOTYET || item.Reason != INVOKE_REASON_NORMAL {
+				if item.Finished() || item.Reason != INVOKE_REASON_NORMAL {
 					continue
 				}
 				h, _, _ := indexer.FromUtxoId(item.UtxoId)

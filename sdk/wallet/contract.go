@@ -38,8 +38,8 @@ const (
 	TEMPLATE_CONTRACT_RECYCLE    string = "recycle.tc"
 	TEMPLATE_CONTRACT_DAO        string = "dao.tc"
 	// 开发中的
-	TEMPLATE_CONTRACT_VAULT      string = "vault.tc"
-	TEMPLATE_CONTRACT_STAKE      string = "stake.tc"
+	TEMPLATE_CONTRACT_VAULT string = "vault.tc"
+	TEMPLATE_CONTRACT_STAKE string = "stake.tc"
 
 	CONTRACT_STATUS_EXPIRED int = -2
 	CONTRACT_STATUS_CLOSED  int = -1
@@ -123,11 +123,12 @@ const (
 )
 
 const (
-	DONE_NOTYET          = 0
-	DONE_DEALT           = 1
-	DONE_REFUNDED        = 2
-	DONE_CLOSED_DIRECTLY = 3
-	DONE_CANCELLED       = 4
+	ITEM_STATUS_READY_TO_SEND   = -1 // 处理完成，等待发送，然后设置为 DONE_DEALT
+	ITEM_STATUS_INIT            = 0
+	ITEM_STATUS_DEALT           = 1
+	ITEM_STATUS_REFUNDED        = 2
+	ITEM_STATUS_CLOSED_DIRECTLY = 3
+	ITEM_STATUS_CANCELLED       = 4
 )
 
 type ResvStatus int
@@ -370,7 +371,7 @@ type InvokeHistoryItem interface {
 	GetId() int64
 	GetKey() string
 	GetInvokeUtxo() string
-	HasDone() bool
+	Finished() bool
 	GetHeight() int
 	FromSatsNet() bool
 	ToSatsNet() bool
@@ -400,8 +401,8 @@ func (p *InvokeHistoryItemBase) GetInvokeUtxo() string {
 	return ""
 }
 
-func (p *InvokeHistoryItemBase) HasDone() bool {
-	return p.Done != DONE_NOTYET
+func (p *InvokeHistoryItemBase) Finished() bool {
+	return p.Done > ITEM_STATUS_INIT
 }
 
 func (p *InvokeHistoryItemBase) GetHeight() int {
@@ -946,9 +947,9 @@ type ContractRuntimeBase struct {
 	CheckPointBlockL1 int
 	// 如果是合约的响应方，只需要使用subAccount=0的地址；
 	// 合约的发起方，需要根据合约的 IsExclusive 属性，确定使用哪个subAccount
-	LocalPubKey       []byte
-	RemotePubKey      []byte
-	CoreNodePubKey    []byte // 提供合约创建的核心节点的pubkey
+	LocalPubKey    []byte
+	RemotePubKey   []byte
+	CoreNodePubKey []byte // 提供合约创建的核心节点的pubkey
 
 	history     map[string]*InvokeItem // key:utxo 单独记录数据库，区块缓存, 6个区块以后，并且已经成交的可以删除
 	resv        ContractDeployResvIF
@@ -2266,7 +2267,7 @@ func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) err
 			// tx 不存在了，需要将该条记录设置为无效
 			Log.Warnf("HandleReorg_SatsNet delete invoke item %s", item.InUtxo)
 			item.Reason = INVOKE_REASON_UTXO_NOT_FOUND_REORG
-			if item.Done == DONE_NOTYET {
+			if item.Done == ITEM_STATUS_INIT {
 				p.runtime.DisableItem(item)
 			}
 			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
@@ -2389,16 +2390,16 @@ func (p *ContractRuntimeBase) invokeCompleted() {
 		cleanlist := make([]string, 0)
 		for k, item := range p.history {
 			if item.FromL1 {
-				if item.Done != DONE_NOTYET {
+				if item.Finished() {
 					h, _, _ := indexer.FromUtxoId(item.UtxoId)
-					if p.CurrBlockL1 - 6 > h {
+					if p.CurrBlockL1-6 > h {
 						cleanlist = append(cleanlist, k)
 					}
 				}
 			} else {
-				if item.Done != DONE_NOTYET {
+				if item.Finished() {
 					h, _, _ := indexer.FromUtxoId(item.UtxoId)
-					if p.CurrBlock - 6 > h {
+					if p.CurrBlock-6 > h {
 						cleanlist = append(cleanlist, k)
 					}
 				}
@@ -2517,7 +2518,7 @@ func (p *ContractRuntimeBase) notifyAndSendDepositAnchorTxs(anchorTxs []*swire.M
 						// 这个输入无效，这条记录设置为异常，不再重试
 						Log.Errorf("deposit detect an invalid item %d, set to invalid. ", item.Id)
 						item.Reason = INVOKE_REASON_UTXO_NOT_FOUND
-						item.Done = DONE_CLOSED_DIRECTLY
+						item.Done = ITEM_STATUS_CLOSED_DIRECTLY
 					}
 				}
 			}
@@ -3365,7 +3366,7 @@ func GetInvokeInnerParam(action string) InvokeInnerParamIF {
 		return &RecycleInvokeParam{}
 	case INVOKE_API_REWARD:
 		return &RecycleInvokeParam{}
-	
+
 	case INVOKE_API_REGISTER:
 		return &RegisterInvokeParam{}
 	case INVOKE_API_DONATE:
