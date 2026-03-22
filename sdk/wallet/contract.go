@@ -159,6 +159,7 @@ const (
 	INVOKE_REASON_UTXO_TOO_SMALL       string = "input utxo value too small"
 	INVOKE_REASON_POOL_TOO_SMALL       string = "pool value too small"
 	INVOKE_REASON_INVALID_VALIDATOR    string = "invalid validator"
+	INVOKE_REASON_NO_AIRDROP_ASSET     string = "no airdrop asset"
 )
 
 const (
@@ -530,6 +531,10 @@ func (p *InvokeItem) Clone() *InvokeItem {
 	n.InAmt = p.InAmt.Clone()
 	n.RemainingAmt = p.RemainingAmt.Clone()
 	n.OutAmt = p.OutAmt.Clone()
+	if len(p.Padded) > 0 {
+		n.Padded = make([]byte, len(p.Padded))
+		copy(n.Padded, p.Padded)
+	}
 	return &n
 }
 
@@ -1566,77 +1571,67 @@ func (p *ContractRuntimeBase) loadBuckFromDB(id int) []*InvokeItem {
 	return item2
 }
 
-func (p *ContractRuntimeBase) InvokeHistory(f any, start, limit int) string {
-
-	// TODO getItemFromBuck 需要写，以后要优化下，不然可能会影响效率，很卡
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	type response struct {
-		Total int                `json:"total"`
-		Start int                `json:"start"`
-		Data  []*SwapHistoryItem `json:"data"`
-	}
-	defaultRsp := `{"total":0,"start":0,"data":[]}`
-
-	// 默认倒序，也就是start是最后一个，往前读取日志
-	if f == nil {
-		result := &response{
-			Total: int(p.InvokeCount),
-			Start: start,
+func parseQuery(q string) map[string]string {
+	// name1=value1&name2=value2&...
+	result := make(map[string]string)
+	parts := strings.Split(q, "&")
+	for _, part := range parts {
+		nv := strings.Split(part, "=")
+		if len(nv) != 2 {
+			continue
 		}
-		if p.InvokeCount != 0 && start >= 0 && start < int(p.InvokeCount) {
-			if limit <= 0 {
-				limit = 100
-			}
+		result[nv[0]] = nv[1]
+	}
+	return result
+}
 
-			// 换算成真实坐标
-			start = int(p.InvokeCount) - 1 - start
-			if start < 0 {
-				start = 0
-			}
-			end := start - limit
-			if end < 0 {
-				end = -1 // 不包括end
-			}
+type response_history struct {
+	Total int                `json:"total"`
+	Start int                `json:"start"`
+	Data  []*SwapHistoryItem `json:"data"`
+}
 
-			for i := start; i > end; i-- {
-				item := p.getItemFromBuck(int64(i))
+func (p *ContractRuntimeBase) genHistoryResp(start, limit int) *response_history {
+	result := &response_history{
+		Total: int(p.InvokeCount),
+		Start: start,
+	}
+	if p.InvokeCount != 0 && start >= 0 && start < int(p.InvokeCount) {
+		if limit <= 0 {
+			limit = 100
+		}
+
+		// 换算成真实坐标
+		start = int(p.InvokeCount) - 1 - start
+		if start < 0 {
+			start = 0
+		}
+		end := start - limit
+		if end < 0 {
+			end = -1 // 不包括end
+		}
+
+		for i := start; i > end; i-- {
+			item := p.getItemFromBuck(int64(i))
+			if item == nil {
+				p.loadBuckFromDB(getBuckIndex(int64(i)))
+				item = p.getItemFromBuck(int64(i))
 				if item == nil {
-					p.loadBuckFromDB(getBuckIndex(int64(i)))
-					item = p.getItemFromBuck(int64(i))
-					if item == nil {
-						continue
-					}
+					continue
 				}
-
-				result.Data = append(result.Data, item)
 			}
+
+			result.Data = append(result.Data, item)
 		}
-
-		// TODO 如果数据太多，只保留前20，后10，共30桶
-		buf, err := json.Marshal(result)
-		if err != nil {
-			Log.Errorf("Marshal responseHistory failed, %v", err)
-			return defaultRsp
-		}
-		return string(buf)
 	}
+	return result
+}
 
-	// 根据地址过滤
-	filter := f.(string)
-	parts := strings.Split(filter, "=")
-	if len(parts) != 2 {
-		return defaultRsp
-	}
-	if parts[0] != "address" {
-		return defaultRsp
-	}
-
-	trader := p.runtime.GetInvokerStatus(parts[1])
+func (p *ContractRuntimeBase) genHistoryRespWithAddress(addr string, start, limit int) *response_history {
+	trader := p.runtime.GetInvokerStatus(addr)
 	invokeCount := trader.GetInvokeCount()
 	history := trader.GetHistory()
-	result := &response{
+	result := &response_history{
 		Total: int(invokeCount),
 		Start: start,
 	}
@@ -1697,8 +1692,38 @@ func (p *ContractRuntimeBase) InvokeHistory(f any, start, limit int) string {
 			}
 		}
 	}
+	return result
+}
 
-	// 如果数据太多，只保留前20，后10，共30桶
+func (p *ContractRuntimeBase) invokeHistory(f any, start, limit int) *response_history {
+	if f == nil {
+		// 默认倒序，也就是start是最后一个，往前读取日志
+		return p.genHistoryResp(start, limit)
+	} else {
+		// 根据地址过滤
+		filter := f.(string) // name1=value1&name2=value2&...
+		query := parseQuery(filter)
+		addr, ok := query["address"]
+		if ok {
+			return p.genHistoryRespWithAddress(addr, start, limit)
+		}
+	}
+	return nil
+}
+
+func (p *ContractRuntimeBase) InvokeHistory(f any, start, limit int) string {
+
+	// TODO getItemFromBuck 需要写，以后要优化下，不然可能会影响效率，很卡
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+
+	defaultRsp := `{"total":0,"start":0,"data":[]}`
+	result := p.invokeHistory(f, start, limit)
+	if result == nil {
+		Log.Errorf("invokeHistory failed")
+		return defaultRsp
+	}
 	buf, err := json.Marshal(result)
 	if err != nil {
 		Log.Errorf("Marshal responseHistory failed, %v", err)
@@ -2974,6 +2999,16 @@ func (p *ContractRuntimeBase) InvokeItemExists(utxo string) bool {
 	defer p.mutex.RUnlock()
 	_, ok := p.history[utxo]
 	return ok
+}
+
+func (p *ContractRuntimeBase) IsItemHandled(utxo string) bool {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	item, ok := p.history[utxo]
+	if ok {
+		return item.Done != ITEM_STATUS_INIT
+	}
+	return false
 }
 
 func (p *ContractRuntimeBase) GetItemId(utxo string) int64 {

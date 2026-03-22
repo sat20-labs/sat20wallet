@@ -446,6 +446,7 @@ type DaoInvokerStatus struct {
 	UID             string   // 自身UID
 	TotalAirdropAmt *Decimal // 作为推荐人得到的空投
 	Airdropped      bool     // 作为被推荐人，已经让推荐人得到了空投
+	AirdroppedAmt   *Decimal // 作为被推荐人，已经让推荐人得到了空投的数量
 	ReferralUIDs    []string // 所有有效推荐的UID
 }
 
@@ -529,10 +530,10 @@ type DaoContractRunTime struct {
 	airdropRatio     *Decimal
 	airdropLimit     *Decimal
 
-	responseCache      []*responseItem_dao
-	responseStatus     Response_DaoContract
-	responseInvokerMap map[string]*Response_DaoInvokerStatus
-	responseAnalytics  *analytcisData_dao
+	responseCache      []*responseItem_dao // 所有注册成功的invoker的简单状态
+	responseStatus     Response_DaoContract // 合约状态
+	responseInvokerMap map[string]*Response_DaoInvokerStatus // 
+	responseAnalytics  *analytcisData_dao // 两个排行榜
 }
 
 func NewDaoContractRunTime(stp ContractManager) *DaoContractRunTime {
@@ -788,7 +789,6 @@ func (p *DaoContractRunTime) updateResponseData() {
 
 		/////////////////////////
 		// responseCache
-		// TODO 不能保证所有的invoker都在，仅仅是为了提高效率
 		p.responseCache = make([]*responseItem_dao, 0, len(p.uidMap))
 		for _, address := range p.uidMap {
 			v := p.loadInvokerInfo(address)
@@ -967,10 +967,67 @@ func (p *DaoContractRunTime) RuntimeAnalytics() string {
 	return string(buf)
 }
 
-func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
-	p.updateResponseData()
+type DaoHistoryItem struct {
+	*InvokeItem
 
-	return p.GetRuntimeBase().InvokeHistory(f, start, limit)
+	// 将pad数据展开
+	*AirdropResult  `json:"airdrop,omitempty"`
+}
+
+type response_history_dao struct {
+	Total int                `json:"total"`
+	Start int                `json:"start"`
+	Data  []*DaoHistoryItem  `json:"data"`
+}
+
+func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
+	//p.updateResponseData()
+
+	//return p.GetRuntimeBase().InvokeHistory(f, start, limit)
+
+	defaultRsp := `{"total":0,"start":0,"data":[]}`
+	var buf []byte
+	var err error
+	orig := p.invokeHistory(f, start, limit)
+
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	result := response_history_dao{
+		Total: orig.Total,
+		Start: orig.Start,
+	}
+	
+	for _, item := range orig.Data {
+		n := &DaoHistoryItem{
+			InvokeItem: item.Clone(),
+		}
+
+		switch n.OrderType {
+		case ORDERTYPE_AIRDROP:
+			airdrop := &AirdropResult{}
+			err := airdrop.Decode(n.Padded)
+			if err != nil {
+				n.Padded = nil
+				continue
+			}
+			for _, item := range airdrop.Items {
+				item.Address = p.uidMap[item.UID]
+			}
+			n.AirdropResult = airdrop
+
+		case ORDERTYPE_VALIDATE:
+		}
+		n.Padded = nil
+		result.Data = append(result.Data, n)
+	}
+
+	buf, err = json.Marshal(result)
+	if err != nil {
+		Log.Errorf("Marshal responseHistory failed, %v", err)
+		return defaultRsp
+	}
+	
+	return string(buf)
 }
 
 type responseItem_dao struct {
@@ -1748,42 +1805,103 @@ func (p *DaoContractRunTime) calcAirdropAmt(amt *Decimal) *Decimal {
 	return airdrop
 }
 
+
+type AirdropItem struct {
+	UID        string `json:"uid"`        // 被推荐人
+	Address    string `json:"address"`    // 被推荐人
+	Result     string `json:"result"`     // 从该被推荐人获得的空投数量，或者被拒绝的原因
+}
+
+type AirdropResult struct {
+	Items []*AirdropItem `json:"items,omitempty"` 
+}
+
+func (p *AirdropResult) Encode() ([]byte, error) {
+	builder := txscript.NewScriptBuilder()
+	for _, item := range p.Items {
+		builder = builder.AddData([]byte(item.UID+":"+item.Result)) // 不保存address
+	}
+	return builder.Script()
+}
+
+func (p *AirdropResult) Decode(data []byte) error {
+	tokenizer := txscript.MakeScriptTokenizer(0, data)
+	for tokenizer.Next() && tokenizer.Err() == nil {
+		item := string(tokenizer.Data())
+		parts := strings.Split(item, ":")
+		if len(parts) != 2 {
+			continue
+		}
+		p.Items = append(p.Items, &AirdropItem{
+			UID: parts[0],
+			Result: parts[1],
+		})
+	}
+	return nil
+}
+
+
 func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
 	result int, reason string, invokers map[string]*DaoInvokerStatus) bool {
 	ret := false
+	newPadded := AirdropResult{}
+	var innerParam AirDropInvokeParam
+	paramBytes, err := base64.StdEncoding.DecodeString(string(item.Padded))
+	if err != nil {
+		// 不可能会出现，前面检查过了
+		item.Reason = INVOKE_REASON_INVALID
+		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
+		item.Padded, _ = newPadded.Encode()
+		return false
+	}
+	err = innerParam.Decode(paramBytes)
+	if err != nil {
+		// 不可能会出现，前面检查过了
+		item.Reason = INVOKE_REASON_INVALID
+		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
+		item.Padded, _ = newPadded.Encode()
+		return false
+	}
+
+	invoker := p.loadInvokerInfo(item.Address)
+	//invokers[item.Address] = invoker 没有更新，不需要加入
+
+	var totalAirdropAmt *Decimal
+	for _, uid := range innerParam.UIDs {
+		if result != 0 {
+			newPadded.Items = append(newPadded.Items, &AirdropItem{
+				UID: uid,
+				Result: "rejected",
+			})
+			continue
+		}
+
+		// 确保每一个uid的referrer都是 uid
+		referral, amt, ok := p.checkAirdropFlag(invoker.UID, uid, invokers)
+		if !ok {
+			newPadded.Items = append(newPadded.Items, &AirdropItem{
+				UID: uid,
+				Result: "0",
+			})
+			continue
+		}
+		airdrop := p.calcAirdropAmt(amt)
+		totalAirdropAmt = totalAirdropAmt.Add(airdrop)
+		// 设置空投标志
+		referral.Airdropped = true
+		referral.AirdroppedAmt = referral.AirdroppedAmt.Add(airdrop)
+		invokers[referral.Address] = referral
+
+		newPadded.Items = append(newPadded.Items, &AirdropItem{
+			UID: uid,
+			Result: "+"+airdrop.String(),
+		})
+	}
+
+	// 更新pad数据
+	item.Padded, _ = newPadded.Encode()
+
 	if result == 0 {
-		var innerParam AirDropInvokeParam
-		paramBytes, err := base64.StdEncoding.DecodeString(string(item.Padded))
-		if err != nil {
-			item.Reason = INVOKE_REASON_INVALID
-			item.Done = ITEM_STATUS_CLOSED_DIRECTLY
-			return false
-		}
-		err = innerParam.Decode(paramBytes)
-		if err != nil {
-			// 不可能会出现，前面检查过了
-			item.Reason = INVOKE_REASON_INVALID
-			item.Done = ITEM_STATUS_CLOSED_DIRECTLY
-			return false
-		}
-
-		invoker := p.loadInvokerInfo(item.Address)
-		//invokers[item.Address] = invoker
-
-		var totalAirdropAmt *Decimal
-		for _, uid := range innerParam.UIDs {
-			// 确保每一个uid的referrer都是 uid
-			referral, amt, ok := p.checkAirdropFlag(invoker.UID, uid, invokers)
-			if !ok {
-				continue
-			}
-			airdrop := p.calcAirdropAmt(amt)
-			totalAirdropAmt = totalAirdropAmt.Add(airdrop)
-			// 设置空投标志
-			referral.Airdropped = true
-			invokers[referral.Address] = referral
-		}
-
 		if totalAirdropAmt.Sign() != 0 {
 			// 成功后再更新
 			//invoker.TotalAirdropAmt = invoker.TotalAirdropAmt.Add(totalAirdropAmt)
@@ -1792,16 +1910,16 @@ func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
 			item.Done = ITEM_STATUS_READY_TO_SEND
 			ret = true
 		} else {
-			item.Reason = INVOKE_REASON_NO_ENOUGH_ASSET
+			item.Reason = INVOKE_REASON_NO_AIRDROP_ASSET
 			item.Done = ITEM_STATUS_CLOSED_DIRECTLY
 		}
-
-		Log.Infof("%s airdrop item %d with result %d", item.Address, item.Id, result)
 	} else {
 		item.Reason = reason
 		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
-		//delete(p.history, item.InUtxo) 暂时不删除，防止reorg
 	}
+
+	Log.Infof("%s airdrop item %d with result %d", item.Address, item.Id, result)
+	
 
 	SaveContractInvokeHistoryItem(p.db, p.URL(), item)
 	return ret
@@ -1917,6 +2035,9 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 						Log.Infof("airdrop items %s are rejected by %s", innerParam.Param, item.Address)
 					}
 				}
+
+				item.Done = ITEM_STATUS_DEALT
+				SaveContractInvokeHistoryItem(p.db, url, item)
 			}
 		}
 		updated = true
