@@ -1395,6 +1395,7 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 			return nil, fmt.Errorf("invalid UID %s", innerParam.UID)
 		}
 
+		invokeTx.Handled = true
 		return p.updateContract(ORDERTYPE_REGISTER, []byte(param.Param), address, output, true, false), nil
 
 	case INVOKE_API_DONATE:
@@ -1435,6 +1436,7 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 			}
 		}
 
+		invokeTx.Handled = true
 		return p.updateContract(ORDERTYPE_DONATE, nil, address, output, true, false), nil
 
 	case INVOKE_API_AIRDROP:
@@ -1454,6 +1456,7 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 			return nil, fmt.Errorf("invalid UIDs")
 		}
 
+		invokeTx.Handled = true
 		return p.updateContract(ORDERTYPE_AIRDROP, []byte(param.Param), address, output, true, false), nil
 
 	case INVOKE_API_VALIDATE:
@@ -1488,6 +1491,7 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 			return nil, fmt.Errorf("invalid order type %d", innerParam.OrderType)
 		}
 
+		invokeTx.Handled = true
 		return p.updateContract(ORDERTYPE_VALIDATE, []byte(param.Param), address, output, true, false), nil
 
 	default:
@@ -1561,6 +1565,7 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heigh
 			}
 		}
 
+		invokeTx.Handled = true
 		return p.updateContract(ORDERTYPE_DONATE, []byte(param.Param), address, OutputToSatsNet(output), true, true), nil
 
 	default:

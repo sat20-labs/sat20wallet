@@ -2115,8 +2115,8 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, heig
 		// 到这里，客观条件都满足了，如果还不能符合铸造条件，那就需要退款
 		bValid := true
 		if assetAmt.IsZero() {
-			Log.Errorf("utxo %s no asset %s", utxo, p.GetAssetName().String())
-			bValid = false
+			// 很可能不是属于该合约的调用，因为没有调用参数，可能会混淆
+			return nil, fmt.Errorf("utxo %s no asset %s", utxo, p.GetAssetName().String())
 		}
 
 		// 如果invokeParam不为nil，要检查数据是否一致
