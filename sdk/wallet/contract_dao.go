@@ -967,11 +967,25 @@ func (p *DaoContractRunTime) RuntimeAnalytics() string {
 	return string(buf)
 }
 
+
+type ValidateItem struct {
+	ID         int64  `json:"id"`         // history id
+	Address    string `json:"address"`    // invoker
+	Result     int    `json:"result"`
+	Reason     string `json:"reason"`
+}
+
+type ValidateResult struct {
+	IDs string `json:"ids,omitempty"` 
+	Reason string `json:"reason,omitempty"` 
+}
+
 type DaoHistoryItem struct {
 	*InvokeItem
 
 	// 将pad数据展开
 	*AirdropResult  `json:"airdrop,omitempty"`
+	*ValidateResult `json:"validate,omitempty"`
 }
 
 type response_history_dao struct {
@@ -1010,12 +1024,31 @@ func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
 				n.Padded = nil
 				continue
 			}
-			for _, item := range airdrop.Items {
-				item.Address = p.uidMap[item.UID]
+			for _, it := range airdrop.Items {
+				it.Address = p.uidMap[it.UID]
 			}
 			n.AirdropResult = airdrop
 
 		case ORDERTYPE_VALIDATE:
+			validate := &ValidateResult{}
+			var innerParam ValidateInvokeParam
+			paramBytes, err := base64.StdEncoding.DecodeString(string(n.Padded))
+			if err != nil {
+				n.Padded = nil
+				continue
+			}
+			err = innerParam.Decode(paramBytes)
+			if err != nil {
+				n.Padded = nil
+				continue
+			}
+			validate.IDs = string(innerParam.Param)
+			if innerParam.Result == 0 {
+				validate.Reason = "validated"
+			} else {
+				validate.Reason = innerParam.Reason
+			}
+			n.ValidateResult = validate
 		}
 		n.Padded = nil
 		result.Data = append(result.Data, n)
@@ -1980,6 +2013,7 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 				var innerParam ValidateInvokeParam
 				paramBytes, err := base64.StdEncoding.DecodeString(string(item.Padded))
 				if err != nil {
+					// 不可能会出现，前面检查过了
 					continue
 				}
 				err = innerParam.Decode(paramBytes)
