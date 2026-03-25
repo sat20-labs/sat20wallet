@@ -66,3 +66,11 @@ func CloneSlice[T any](slice []T) []T {
 	copy(n, slice)
 	return n
 }
+
+func CloneStringMap[V any](m map[string]V) map[string]V {
+	n := make(map[string]V)
+	for k, v := range m {
+		n[k] = v
+	}
+	return n
+}

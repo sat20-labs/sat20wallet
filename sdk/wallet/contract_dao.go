@@ -8,11 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -43,8 +43,12 @@ const (
 	MIN_AIRDROP_FEE  int64 = 20
 
 	DEF_VALIDATOR_NUM int = 5
+	RANKING_MAX_SIZE  int = 100
 
-	RANKING_MAX_SIZE int = 100
+	RESULT_UNHANDLED int = 1
+	RESULT_OK 		 int = 0
+	RESULT_REJECTED  int = -1
+	RESULT_INVALID 	 int = -2
 )
 
 // 1. 定义合约内容
@@ -302,6 +306,82 @@ func (p *RegisterInvokeParam) Decode(data []byte) error {
 	return nil
 }
 
+func (p *RegisterInvokeParam) Check() error {
+	if p.UID == "" {
+		return fmt.Errorf("invalid uid")
+	}
+	return nil
+}
+
+// 推荐人绑定被推荐人
+type ReferralParam struct {
+	UID     string `json:"uid"`
+	Address string `json:"address"`
+}
+type BindInvokeParam struct {
+	Items   []*ReferralParam `json:"items"`
+}
+
+func (p *BindInvokeParam) Encode() ([]byte, error) {
+	builder := txscript.NewScriptBuilder()
+	for _, item := range p.Items {
+		builder = builder.AddData([]byte(item.UID)).AddData([]byte(item.Address))
+	}
+	return builder.Script()
+}
+
+func (p *BindInvokeParam) EncodeV2() ([]byte, error) {
+	return p.Encode()
+}
+
+func (p *BindInvokeParam) Decode(data []byte) error {
+
+	tokenizer := txscript.MakeScriptTokenizer(0, data)
+	for tokenizer.Next() && tokenizer.Err() == nil {
+		var item ReferralParam
+		item.UID = string(tokenizer.Data())
+		if !tokenizer.Next() || tokenizer.Err() != nil {
+			return fmt.Errorf("missing address")
+		}
+		item.Address = string(tokenizer.Data())
+		p.Items = append(p.Items, &item)
+	}
+
+	return nil
+}
+
+func (p *BindInvokeParam) Check() error {
+	if len(p.Items) == 0 {
+		return fmt.Errorf("empty items")
+	}
+	for _, item := range p.Items {
+		if len(item.UID) == 0 {
+			return fmt.Errorf("invalid uid %v", item.UID)
+		}
+		if len(item.Address) == 0 || !IsBtcAddress(item.Address) {
+			return fmt.Errorf("invalid address")
+		}
+	}
+
+	return nil
+}
+
+type AddressResult struct {
+	Address string
+	Result int
+}
+
+func (p *BindInvokeParam) ToPaded() ([]byte, error) {
+	result := make(map[string]*AddressResult)
+	for _, item := range p.Items {
+		result[item.UID] = &AddressResult{
+			Address: item.Address,
+			Result: RESULT_UNHANDLED, // unhandle
+		}
+	}
+	return EncodeToBytes(result)
+}
+
 // //
 type DonateInvokeParam struct {
 	AssetName string `json:"assetName"` // 资产名字
@@ -346,9 +426,26 @@ func (p *DonateInvokeParam) Decode(data []byte) error {
 	return nil
 }
 
+func (p *DonateInvokeParam) Check() error {
+	name := indexer.NewAssetNameFromString(p.AssetName) 
+	if p.AssetName != name.String() {
+		return fmt.Errorf("invalid asset name %s", p.AssetName)
+	}
+
+	_, err := indexer.NewDecimalFromString(p.Amt, MAX_ASSET_DIVISIBILITY)
+	if err != nil {
+		return fmt.Errorf("invalid amt %s", p.Amt)
+	}
+
+	if p.Value < 0 {
+		return fmt.Errorf("invalid value %d", p.Value)
+	}
+	return nil
+}
+
 // //
 type AirDropInvokeParam struct {
-	UIDs []string `json:"uids"` // 格式 uid:address 或者 uid
+	UIDs []string `json:"uids"` // uid
 }
 
 func (p *AirDropInvokeParam) Encode() ([]byte, error) {
@@ -371,31 +468,49 @@ func (p *AirDropInvokeParam) Decode(data []byte) error {
 	return nil
 }
 
-func (p *AirDropInvokeParam) GetUIDs() []string {
-	uids := make([]string, 0, len(p.UIDs))
-	for _, uid := range p.UIDs {
-		u, _ := retrieveFromInvokeUID(uid)
-		uids = append(uids, u)
+func (p *AirDropInvokeParam) Check() error {
+	if len(p.UIDs) == 0 {
+		return fmt.Errorf("invalid UIDs")
 	}
-	return uids
+	return nil
 }
 
-func retrieveFromInvokeUID(uid string) (string, string) {
-	parts := strings.Split(uid, ":")
-	switch len(parts) {
-	case 1:
-		return parts[0], ""
-	case 2:
-		return parts[0], parts[1]
+
+func (p *AirDropInvokeParam) ToPaded() ([]byte, error) {
+	result := make(map[string]string)
+	for _, uid := range p.UIDs {
+		result[uid] = ""
 	}
-	return uid, ""
+	return EncodeToBytes(result)
 }
+
+
+func (p *AirDropInvokeParam) GetUIDs() []string {
+	// uids := make([]string, 0, len(p.UIDs))
+	// for _, uid := range p.UIDs {
+	// 	u, _ := retrieveFromInvokeUID(uid)
+	// 	uids = append(uids, u)
+	// }
+	// return uids
+	return p.UIDs
+}
+
+// func retrieveFromInvokeUID(uid string) (string, string) {
+// 	parts := strings.Split(uid, ":")
+// 	switch len(parts) {
+// 	case 1:
+// 		return parts[0], ""
+// 	case 2:
+// 		return parts[0], parts[1]
+// 	}
+// 	return uid, ""
+// }
 
 type ValidateInvokeParam struct {
 	OrderType int    `json:"orderType"` // ORDERTYPE_REGISTER or ORDERTYPE_AIRDROP
 	Result    int    `json:"result"`    // 0 成功；其他，失败
 	Reason    string `json:"reason"`
-	Param     []byte `json:"para"` // 以空格隔开的id列表，id是invokeItem的id
+	Param     []byte `json:"para"` // 以空格隔开的id列表，id是uid
 }
 
 func (p *ValidateInvokeParam) Encode() ([]byte, error) {
@@ -436,6 +551,25 @@ func (p *ValidateInvokeParam) Decode(data []byte) error {
 
 	return nil
 }
+
+func (p *ValidateInvokeParam) Check() error {
+	if len(p.Param) == 0 {
+		return fmt.Errorf("invalid parameter")
+	}
+	// uids := strings.Split(string(p.Param), " ")
+	switch p.OrderType {
+	case ORDERTYPE_REGISTER:
+		// uid list
+
+	case ORDERTYPE_AIRDROP:
+		// uid list
+
+	default:
+		return fmt.Errorf("invalid order type %d", p.OrderType)
+	}
+	return nil
+}
+
 
 // 3. 定义合约交互者的数据结构
 
@@ -512,19 +646,28 @@ type DaoContractRunTimeInDB struct {
 	DaoContractRunningData
 }
 
+type UnhandledBindInfo struct {
+	ItemId		int64
+	UID 		string
+	Address     string
+	ReferrerUID  string
+}
+
 // 6. 合约运行时状态
 type DaoContractRunTime struct {
 	DaoContractRunTimeInDB
 
 	invokerMap  map[string]*DaoInvokerStatus // key: address
 	registerMap map[string]map[int64]*InvokeItem
+	bindMap     map[string]map[int64]*InvokeItem
 	donateMap   map[string]map[int64]*InvokeItem // 还在处理中的调用, address -> invoke item list,
 	airdropMap  map[string]map[int64]*InvokeItem
 	validateMap map[string]map[int64]*InvokeItem
 
-	uidMap         map[string]string   // uid->address 所有
-	donateRanking  map[string]*Decimal // 前100名
-	airdropRanking map[string]*Decimal // 前100名
+	uidMap          map[string]string   // uid->address 所有有效的
+	unhandledUidMap map[string]*UnhandledBindInfo  // uid 还在处理中的
+	donateRanking   map[string]*Decimal // 前100名
+	airdropRanking  map[string]*Decimal // 前100名
 
 	airdropThreshold *Decimal
 	airdropRatio     *Decimal
@@ -556,11 +699,13 @@ func (p *DaoContractRunTime) init() {
 	p.runtime = p
 	p.invokerMap = make(map[string]*DaoInvokerStatus)
 	p.registerMap = make(map[string]map[int64]*InvokeItem)
+	p.bindMap = make(map[string]map[int64]*InvokeItem)
 	p.airdropMap = make(map[string]map[int64]*InvokeItem)
 	p.donateMap = make(map[string]map[int64]*InvokeItem)
 	p.validateMap = make(map[string]map[int64]*InvokeItem)
 
 	p.uidMap = make(map[string]string)
+	p.unhandledUidMap = make(map[string]*UnhandledBindInfo)
 	p.donateRanking = make(map[string]*Decimal)
 	p.airdropRanking = make(map[string]*Decimal)
 	p.responseInvokerMap = make(map[string]*Response_DaoInvokerStatus)
@@ -601,17 +746,6 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 	p.init()
 
 	url := p.URL()
-	history := LoadContractInvokeHistory(p.db, url, true, false)
-	for _, v := range history {
-		item, ok := v.(*InvokeItem)
-		if !ok {
-			continue
-		}
-
-		p.loadInvokerInfo(item.Address)
-		p.addItem(item)
-		p.history[item.InUtxo] = item
-	}
 
 	invokers := loadAllContractInvokerStatus(p.db, url)
 	invokerVector := make([]*DaoInvokerStatus, 0, len(invokers))
@@ -652,6 +786,19 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 			continue
 		}
 		p.airdropRanking[invoker.Address] = invoker.TotalAirdropAmt.Clone()
+	}
+
+	// 在 uidMap 后
+	history := LoadContractInvokeHistory(p.db, url, true, false)
+	for _, v := range history {
+		item, ok := v.(*InvokeItem)
+		if !ok {
+			continue
+		}
+
+		p.loadInvokerInfo(item.Address)
+		p.addItem(item)
+		p.history[item.InUtxo] = item
 	}
 
 	// fix
@@ -841,6 +988,35 @@ func (p *DaoContractRunTime) updateResponseData() {
 				p.responseStatus.RegisterList = append(p.responseStatus.RegisterList, string(buf))
 			}
 		}
+		for _, binds := range p.bindMap {
+			for _, v := range binds {
+				if v.Finished() {
+					continue
+				}
+				var pad map[string]*AddressResult
+				err := DecodeFromBytes(v.Padded, &pad)
+				if err != nil {
+					Log.Errorf("DecodeFromBytes Padded failed, %v", err)
+					continue
+				}
+
+				referrer := p.loadInvokerInfo(v.Address)
+				for uid, r := range pad {
+					item := invokeItem_register{
+						Id:      v.Id,
+						InUtxo:  v.InUtxo,
+						Address: r.Address,
+						UID:     uid,
+						ReferrerUID: referrer.UID,
+					}
+					buf, err := json.Marshal(item)
+					if err != nil {
+						continue
+					}
+					p.responseStatus.RegisterList = append(p.responseStatus.RegisterList, string(buf))
+				}
+			}
+		}
 
 		p.responseStatus.AirdropList = make([]string, 0)
 		for addr, airdrops := range p.airdropMap {
@@ -976,7 +1152,12 @@ type ValidateItem struct {
 }
 
 type ValidateResult struct {
-	IDs string `json:"ids,omitempty"` 
+	UIDs string `json:"uids,omitempty"` 
+	Reason string `json:"reason,omitempty"` 
+}
+
+type BindResult struct {
+	UIDs string `json:"uids,omitempty"` 
 	Reason string `json:"reason,omitempty"` 
 }
 
@@ -986,6 +1167,7 @@ type DaoHistoryItem struct {
 	// 将pad数据展开
 	*AirdropResult  `json:"airdrop,omitempty"`
 	*ValidateResult `json:"validate,omitempty"`
+	BindResult *AirdropResult     `json:"bind,omitempty"`
 }
 
 type response_history_dao struct {
@@ -1017,15 +1199,50 @@ func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
 		}
 
 		switch n.OrderType {
+		case ORDERTYPE_BIND:
+			bind := &AirdropResult{}
+			var pad map[string]*AddressResult
+			err := DecodeFromBytes(item.Padded, &pad)
+			if err != nil {
+				Log.Errorf("DecodeFromBytes Padded failed, %v", err)
+				continue
+			}
+
+			for k, v := range pad {
+				var result string 
+				switch v.Result {
+				case RESULT_OK:
+					result = "ok"
+				case RESULT_INVALID:
+					result = "invalid"
+				case RESULT_REJECTED:
+					result = "rejected"
+				case RESULT_UNHANDLED:
+					result = "unhandled"
+				}
+				bind.Items = append(bind.Items, &AirdropItem{
+					UID: k,
+					Address: v.Address,
+					Result: result,
+				})
+			}
+			n.BindResult = bind
+
 		case ORDERTYPE_AIRDROP:
 			airdrop := &AirdropResult{}
-			err := airdrop.Decode(n.Padded)
+			var pad map[string]string  // uid->result
+			err := DecodeFromBytes(item.Padded, &pad)
 			if err != nil {
 				n.Padded = nil
 				continue
 			}
-			for _, it := range airdrop.Items {
-				it.Address = p.uidMap[it.UID]
+
+			for k, v := range pad {
+				airdrop.Items = append(airdrop.Items, &AirdropItem{
+					UID: k,
+					Address: p.uidMap[k],
+					Result: v,
+				})
 			}
 			n.AirdropResult = airdrop
 
@@ -1042,7 +1259,7 @@ func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
 				n.Padded = nil
 				continue
 			}
-			validate.IDs = string(innerParam.Param)
+			validate.UIDs = string(innerParam.Param)
 			if innerParam.Result == 0 {
 				validate.Reason = "validated"
 			} else {
@@ -1077,7 +1294,7 @@ type Response_DaoContract struct {
 
 	// 增加更多参数
 	UIDCount     int      `json:"uidCount"`
-	RegisterList []string `json:"registerList"`
+	RegisterList []string `json:"registerList"` // include bind
 	AirdropList  []string `json:"airdropList"`
 }
 
@@ -1157,9 +1374,8 @@ func (p *DaoContractRunTime) StatusByAddress(address string) (string, error) {
 			}
 
 			// 只返回还没有获取到空投的uid
-			invokers := map[string]*DaoInvokerStatus{}
 			for _, v := range invoker.ReferralUIDs {
-				_, amt, ok := p.checkAirdropFlag(invoker.UID, v, invokers)
+				_, amt, ok := p.checkAirdropFlag(invoker.UID, v)
 				if !ok {
 					continue
 				}
@@ -1248,9 +1464,9 @@ func (p *DaoContractRunTime) CheckInvokeParam(param string) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-
-		if innerParam.UID == "" {
-			return 0, fmt.Errorf("invalid uid")
+		err = innerParam.Check()
+		if err != nil {
+			return 0, err
 		}
 
 		return p.RegisterFee, nil
@@ -1265,13 +1481,9 @@ func (p *DaoContractRunTime) CheckInvokeParam(param string) (int64, error) {
 			return 0, fmt.Errorf("invalid asset name %s", innerParam.AssetName)
 		}
 
-		_, err = indexer.NewDecimalFromString(innerParam.Amt, p.Divisibility)
+		err = innerParam.Check()
 		if err != nil {
-			return 0, fmt.Errorf("invalid amt %s", innerParam.Amt)
-		}
-
-		if innerParam.Value < 0 {
-			return 0, fmt.Errorf("invalid value %d", innerParam.Value)
+			return 0, err
 		}
 
 		return INVOKE_FEE, nil
@@ -1283,9 +1495,11 @@ func (p *DaoContractRunTime) CheckInvokeParam(param string) (int64, error) {
 			return 0, err
 		}
 
-		if len(innerParam.UIDs) == 0 {
-			return 0, fmt.Errorf("invalid UIDs")
+		err = innerParam.Check()
+		if err != nil {
+			return 0, err
 		}
+
 		return MIN_AIRDROP_FEE, nil
 
 	case INVOKE_API_VALIDATE:
@@ -1295,25 +1509,23 @@ func (p *DaoContractRunTime) CheckInvokeParam(param string) (int64, error) {
 			return 0, err
 		}
 
-		if len(innerParam.Param) == 0 {
-			return 0, fmt.Errorf("invalid parameter")
+		err = innerParam.Check()
+		if err != nil {
+			return 0, err
 		}
-		items := strings.Split(string(innerParam.Param), " ")
-		for _, item := range items {
-			_, err := strconv.ParseInt(item, 10, 64)
-			if err != nil {
-				return 0, fmt.Errorf("invalid parameter")
-			}
+
+		return INVOKE_FEE, nil
+
+	case INVOKE_API_BIND:
+		var innerParam BindInvokeParam
+		err := json.Unmarshal([]byte(invoke.Param), &innerParam)
+		if err != nil {
+			return 0, err
 		}
-		switch innerParam.OrderType {
-		case ORDERTYPE_REGISTER:
-			// item id list
 
-		case ORDERTYPE_AIRDROP:
-			// item id list
-
-		default:
-			return 0, fmt.Errorf("invalid order type %d", innerParam.OrderType)
+		err = innerParam.Check()
+		if err != nil {
+			return 0, err
 		}
 
 		return INVOKE_FEE, nil
@@ -1424,8 +1636,9 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 		if err != nil {
 			return nil, err
 		}
-		if innerParam.UID == "" {
-			return nil, fmt.Errorf("invalid UID %s", innerParam.UID)
+		err = innerParam.Check()
+		if err != nil {
+			return nil, err
 		}
 
 		invokeTx.Handled = true
@@ -1488,9 +1701,14 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 		if len(innerParam.UIDs) == 0 {
 			return nil, fmt.Errorf("invalid UIDs")
 		}
+		paded, err := innerParam.ToPaded()
+		if err != nil {
+			return nil, err
+		}
+
 
 		invokeTx.Handled = true
-		return p.updateContract(ORDERTYPE_AIRDROP, []byte(param.Param), address, output, true, false), nil
+		return p.updateContract(ORDERTYPE_AIRDROP, paded, address, output, true, false), nil
 
 	case INVOKE_API_VALIDATE:
 		if param.Param == "" {
@@ -1508,13 +1726,9 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 		if len(innerParam.Param) == 0 {
 			return nil, fmt.Errorf("invalid Parameter")
 		}
-		items := strings.Split(string(innerParam.Param), " ")
-		for _, item := range items {
-			_, err := strconv.ParseInt(item, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid parameter")
-			}
-		}
+		//items := strings.Split(string(innerParam.Param), " ")
+		//
+		
 		switch innerParam.OrderType {
 		case ORDERTYPE_REGISTER:
 
@@ -1526,6 +1740,36 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 
 		invokeTx.Handled = true
 		return p.updateContract(ORDERTYPE_VALIDATE, []byte(param.Param), address, output, true, false), nil
+
+	case INVOKE_API_BIND:
+		if param.Param == "" {
+			return nil, fmt.Errorf("invalid parameter")
+		}
+		paramBytes, err := base64.StdEncoding.DecodeString(param.Param)
+		if err != nil {
+			return nil, err
+		}
+		var innerParam BindInvokeParam
+		err = innerParam.Decode(paramBytes)
+		if err != nil {
+			return nil, err
+		}
+		err = innerParam.Check()
+		if err != nil {
+			return nil, err
+		}
+		referrer := p.loadInvokerInfo(address)
+		if referrer.UID == "" {
+			return nil, fmt.Errorf("referrer hasn't uid")
+		}
+
+		paded, err := innerParam.ToPaded()
+		if err != nil {
+			return nil, err
+		}
+
+		invokeTx.Handled = true
+		return p.updateContract(ORDERTYPE_BIND, paded, address, output, true, false), nil
 
 	default:
 		Log.Errorf("contract %s does not support action %s", url, param.Action)
@@ -1696,18 +1940,81 @@ func (p *DaoContractRunTime) updateContractStatus(item *InvokeItem) {
 	// 整体状态在外部保存
 }
 
+func (p *DaoContractRunTime) addUnhandledUID_register(item *InvokeItem) {
+	var innerParam RegisterInvokeParam
+	paramBytes, err := base64.StdEncoding.DecodeString(string(item.Padded))
+	if err != nil {
+		return
+	}
+	err = innerParam.Decode(paramBytes)
+	if err != nil {
+		// 不可能会出现，前面检查过了
+		return
+	}
+	p.unhandledUidMap[innerParam.UID] = &UnhandledBindInfo{
+		ItemId: item.Id,
+		UID: innerParam.UID,
+		Address: item.Address,
+		ReferrerUID: innerParam.ReferrerUID,
+	}
+}
+
+func (p *DaoContractRunTime) addUnhandledUID_bind(item *InvokeItem) {
+	var pad map[string]*AddressResult
+	err := DecodeFromBytes(item.Padded, &pad)
+	if err != nil {
+		return
+	}
+	referrer := p.loadInvokerInfo(item.Address)
+	for uid, value := range pad {
+		if value.Result == RESULT_UNHANDLED {
+			p.unhandledUidMap[uid] = &UnhandledBindInfo{
+				ItemId: item.Id,
+				UID: uid,
+				Address: value.Address,
+				ReferrerUID: referrer.UID,
+			}
+		}
+	}
+}
+
+func (p *DaoContractRunTime) addUnhandledUID_airdrop(item *InvokeItem) {
+	var pad map[string]string // uid->result
+	err := DecodeFromBytes(item.Padded, &pad)
+	if err != nil {
+		return
+	}
+	referrer := p.loadInvokerInfo(item.Address)
+	for uid, result := range pad {
+		if result == "" {
+			p.unhandledUidMap[uid] = &UnhandledBindInfo{
+				ItemId: item.Id,
+				UID: uid,
+				Address: p.uidMap[uid],
+				ReferrerUID: referrer.UID,
+			}
+		}
+	}
+}
+
 // 不需要写入数据库的缓存数据，不能修改任何需要保存数据库的变量
 func (p *DaoContractRunTime) addItem(item *InvokeItem) {
 	if item.Reason == INVOKE_REASON_NORMAL {
 		switch item.OrderType {
 		case ORDERTYPE_REGISTER:
 			addItemToMap(item, p.registerMap)
+			p.addUnhandledUID_register(item)
+
+		case ORDERTYPE_BIND:
+			addItemToMap(item, p.bindMap)
+			p.addUnhandledUID_bind(item)
 
 		case ORDERTYPE_DONATE:
 			addItemToMap(item, p.donateMap)
 
 		case ORDERTYPE_AIRDROP:
 			addItemToMap(item, p.airdropMap)
+			p.addUnhandledUID_airdrop(item)
 
 		case ORDERTYPE_VALIDATE:
 			addItemToMap(item, p.validateMap)
@@ -1752,70 +2059,73 @@ func updateItems(items map[string]*Decimal, maxSize int, addr string, amt *Decim
 }
 
 func (p *DaoContractRunTime) binding(address, uid, referrerUID string, force bool,
-	invokers map[string]*DaoInvokerStatus) {
-	invoker := p.loadInvokerInfo(address)
-	invokers[address] = invoker
-	if invoker.UID == "" || force {
-		invoker.UID = uid
-		p.uidMap[invoker.UID] = invoker.Address
+	invokers map[string]*DaoInvokerStatus) int {
+	referral := p.loadInvokerInfo(address)
+	invokers[address] = referral
+	result := RESULT_INVALID
+	if referral.UID == "" || force {
+		referral.UID = uid
+		p.uidMap[uid] = address
+		result = RESULT_OK
 	}
-	if (invoker.ReferrerUID == "" || force) && referrerUID != "" {
-		invoker.ReferrerUID = referrerUID
+	if (referral.ReferrerUID == "" || force) && referrerUID != "" {
+		referral.ReferrerUID = referrerUID
 		// 反向绑定
 		referrerAddr, ok := p.uidMap[referrerUID]
 		if ok {
 			referrer := p.loadInvokerInfo(referrerAddr)
 			referrer.ReferralUIDs = indexer.InsertVector_string(referrer.ReferralUIDs, uid)
 			invokers[referrerAddr] = referrer
+			result = RESULT_OK
 		}
 	}
-	Log.Infof("%s bind uid %s, refererUID %s", address, uid, invoker.ReferrerUID)
+	Log.Infof("%s bind uid %s, referrerUID %s", address, uid, referral.ReferrerUID)
+	return result
 }
 
 func (p *DaoContractRunTime) handleRegisterItem(item *InvokeItem,
 	result int, reason string, invokers map[string]*DaoInvokerStatus) {
+	var innerParam RegisterInvokeParam
+	paramBytes, err := base64.StdEncoding.DecodeString(string(item.Padded))
+	if err != nil {
+		return
+	}
+	err = innerParam.Decode(paramBytes)
+	if err != nil {
+		// 不可能会出现，前面检查过了
+		return
+	}
 	if result == 0 {
-		var innerParam RegisterInvokeParam
-		paramBytes, err := base64.StdEncoding.DecodeString(string(item.Padded))
-		if err != nil {
-			return
-		}
-		err = innerParam.Decode(paramBytes)
-		if err != nil {
-			// 不可能会出现，前面检查过了
-			return
-		}
-
 		item.Done = ITEM_STATUS_DEALT
 		p.binding(item.Address, innerParam.UID, innerParam.ReferrerUID, true, invokers)
 	} else {
 		item.Reason = reason
 		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
 	}
+	delete(p.unhandledUidMap, innerParam.UID)
 	//delete(p.history, item.InUtxo) 暂时不删除，防止reorg
 	SaveContractInvokeHistoryItem(p.db, p.URL(), item)
 }
 
-func (p *DaoContractRunTime) checkAirdropFlag(refererUID, uid string,
-	invokers map[string]*DaoInvokerStatus) (*DaoInvokerStatus, *Decimal, bool) {
-	uid, addr := retrieveFromInvokeUID(uid)
+func (p *DaoContractRunTime) checkAirdropFlag(referrerUID, uid string) (*DaoInvokerStatus, *Decimal, bool) {
+	//uid, addr := retrieveFromInvokeUID(uid)
 	referralAddr, ok := p.uidMap[uid]
 	if !ok {
-		if !p.OnlyRegisterSelf && addr != "" {
-			// 建设者注册被推荐人的uid，一个特殊的注册流程
-			p.binding(addr, uid, refererUID, false, invokers)
-		} else {
+		// if !p.OnlyRegisterSelf && addr != "" {
+		// 	// 建设者注册被推荐人的uid，一个特殊的注册流程
+		// 	p.binding(addr, uid, referrerUID, false, invokers)
+		// } else {
 			Log.Errorf("can't find address with uid %s", uid)
 			return nil, nil, false
-		}
+		//}
 	}
 	referral := p.loadInvokerInfo(referralAddr)
-	if referral.ReferrerUID != refererUID {
-		Log.Errorf("invoker %s has different referrer %s, expected %s", referralAddr, referral.ReferrerUID, refererUID)
+	if referral.ReferrerUID != referrerUID {
+		Log.Errorf("invoker %s has different referrer %s, expected %s", referralAddr, referral.ReferrerUID, referrerUID)
 		return nil, nil, false
 	}
 	if referral.Airdropped {
-		return nil, nil, false
+		return referral, nil, false
 	}
 
 	// 检查对应的资产数据
@@ -1824,11 +2134,11 @@ func (p *DaoContractRunTime) checkAirdropFlag(refererUID, uid string,
 	amt := amt1.Add(amt2)
 	// 如果没有资产，先直接返回
 	if amt.Sign() == 0 {
-		return nil, nil, false
+		return referral, nil, false
 	}
 	if p.airdropThreshold.Sign() != 0 {
 		if amt.Cmp(p.airdropThreshold) < 0 {
-			return nil, nil, false
+			return referral, nil, false
 		}
 	}
 
@@ -1879,25 +2189,16 @@ func (p *AirdropResult) Decode(data []byte) error {
 }
 
 
-func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
-	result int, reason string, invokers map[string]*DaoInvokerStatus) bool {
+func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem, 
+	invokers map[string]*DaoInvokerStatus) bool {
 	ret := false
-	newPadded := AirdropResult{}
-	var innerParam AirDropInvokeParam
-	paramBytes, err := base64.StdEncoding.DecodeString(string(item.Padded))
+
+	var pad map[string]string  // uid->result
+	err := DecodeFromBytes(item.Padded, &pad)
 	if err != nil {
-		// 不可能会出现，前面检查过了
+		Log.Errorf("DecodeFromBytes %s failed %v", item.InUtxo, err)
 		item.Reason = INVOKE_REASON_INVALID
 		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
-		item.Padded, _ = newPadded.Encode()
-		return false
-	}
-	err = innerParam.Decode(paramBytes)
-	if err != nil {
-		// 不可能会出现，前面检查过了
-		item.Reason = INVOKE_REASON_INVALID
-		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
-		item.Padded, _ = newPadded.Encode()
 		return false
 	}
 
@@ -1905,60 +2206,57 @@ func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
 	//invokers[item.Address] = invoker 没有更新，不需要加入
 
 	var totalAirdropAmt *Decimal
-	for _, uid := range innerParam.UIDs {
-		if result != 0 {
-			newPadded.Items = append(newPadded.Items, &AirdropItem{
-				UID: uid,
-				Result: "rejected",
-			})
-			continue
-		}
+	oldPad := utils.CloneStringMap(pad)
+	updated := false
+	for uid, value := range oldPad {
+		var airdrop *Decimal
+		if value != "" {
+			// 被validate过，尝试看看是否能解码
+			airdrop, err = indexer.NewDecimalFromString(value, p.Divisibility)
+			if err != nil {
+				continue
+			}
+			// 有效的结果
+		} else {
+			updated = true
+			// 确保每一个uid的referrer都是 uid
+			referral, amt, ok := p.checkAirdropFlag(invoker.UID, uid)
+			if !ok {
+				if referral == nil {
+					pad[uid] = "invalid"
+				} else {
+					pad[uid] = "0"
+				}
+				continue
+			}
+			airdrop = p.calcAirdropAmt(amt)
+			pad[uid] = airdrop.String()
+			delete(p.unhandledUidMap, uid)
 
-		// 确保每一个uid的referrer都是 uid
-		referral, amt, ok := p.checkAirdropFlag(invoker.UID, uid, invokers)
-		if !ok {
-			newPadded.Items = append(newPadded.Items, &AirdropItem{
-				UID: uid,
-				Result: "0",
-			})
-			continue
+			referral.Airdropped = true
+			referral.AirdroppedAmt = referral.AirdroppedAmt.Add(airdrop)
+			invokers[referral.Address] = referral
 		}
-		airdrop := p.calcAirdropAmt(amt)
 		totalAirdropAmt = totalAirdropAmt.Add(airdrop)
-		// 设置空投标志
-		referral.Airdropped = true
-		referral.AirdroppedAmt = referral.AirdroppedAmt.Add(airdrop)
-		invokers[referral.Address] = referral
-
-		newPadded.Items = append(newPadded.Items, &AirdropItem{
-			UID: uid,
-			Result: "+"+airdrop.String(),
-		})
 	}
 
 	// 更新pad数据
-	item.Padded, _ = newPadded.Encode()
-
-	if result == 0 {
-		if totalAirdropAmt.Sign() != 0 {
-			// 成功后再更新
-			//invoker.TotalAirdropAmt = invoker.TotalAirdropAmt.Add(totalAirdropAmt)
-			//invokers[invoker.Address] = invoker
-			item.OutAmt = totalAirdropAmt
-			item.Done = ITEM_STATUS_READY_TO_SEND
-			ret = true
-		} else {
-			item.Reason = INVOKE_REASON_NO_AIRDROP_ASSET
-			item.Done = ITEM_STATUS_CLOSED_DIRECTLY
-		}
+	if updated {
+		item.Padded, _ = EncodeToBytes(pad)
+	}
+	if totalAirdropAmt.Sign() != 0 {
+		// 成功后再更新
+		//invoker.TotalAirdropAmt = invoker.TotalAirdropAmt.Add(totalAirdropAmt)
+		//invokers[invoker.Address] = invoker
+		item.OutAmt = totalAirdropAmt
+		item.Done = ITEM_STATUS_READY_TO_SEND
+		ret = true
 	} else {
-		item.Reason = reason
+		item.Reason = INVOKE_REASON_NO_AIRDROP_ASSET
 		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
 	}
-
-	Log.Infof("%s airdrop item %d with result %d", item.Address, item.Id, result)
 	
-
+	Log.Infof("%s airdrop item %d with result %s", item.Address, item.Id, totalAirdropAmt.String())
 	SaveContractInvokeHistoryItem(p.db, p.URL(), item)
 	return ret
 }
@@ -1996,6 +2294,7 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 
 	// 2. 执行validate
 	if len(p.validateMap) > 0 {
+		toSaveItems := make(map[int64]*InvokeItem)
 		for addr, items := range p.validateMap {
 			_, ok := p.Validators[addr]
 			if !ok {
@@ -2025,59 +2324,122 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 					// 不可能出现，前面检查过
 					continue
 				}
-				ids := strings.Split(string(innerParam.Param), " ")
-				switch innerParam.OrderType {
-				case ORDERTYPE_REGISTER:
-					for _, id := range ids {
-						itemId, err := strconv.ParseInt(id, 10, 64)
-						if err != nil {
-							// 不可能出现，前面检查过
-							Log.Errorf("%s invalid parameter %s", url, id)
-							continue
-						}
-						registerItem := p.getItemFromBuck(itemId)
-						if registerItem == nil {
-							Log.Errorf("%s can't find item %d", url, itemId)
-							continue
-						}
-						p.handleRegisterItem(registerItem, innerParam.Result,
-							innerParam.Reason, invokers)
-						removeItemFromMap(registerItem, p.registerMap)
-					}
-					if innerParam.Result == 0 {
-						Log.Infof("register items %s are accepted by %s", innerParam.Param, item.Address)
-					} else {
-						Log.Infof("register items %s are rejected by %s", innerParam.Param, item.Address)
+				uids := strings.Split(string(innerParam.Param), " ")
+				for _, uid := range uids {
+					info, ok := p.unhandledUidMap[uid]
+					if !ok {
+						Log.Errorf("uid %s is not in unhandled map", uid)
+						continue
 					}
 
-				case ORDERTYPE_AIRDROP:
-					for _, id := range ids {
-						itemId, err := strconv.ParseInt(id, 10, 64)
-						if err != nil {
-							// 不可能出现，前面检查过
-							Log.Errorf("%s invalid parameter %s", url, id)
-							continue
-						}
-						airdropItem := p.getItemFromBuck(itemId)
-						if airdropItem == nil {
-							Log.Errorf("%s can't find item %d", url, itemId)
-							continue
-						}
-						if p.handleAirdropItem(airdropItem, innerParam.Result,
-							innerParam.Reason, invokers) == false {
-							removeItemFromMap(airdropItem, p.airdropMap)
-						}
+					handingItem := p.getItemFromBuck(info.ItemId)
+					if handingItem == nil {
+						Log.Errorf("%s can't find item %d", url, info.ItemId)
+						continue
 					}
-					if innerParam.Result == 0 {
-						Log.Infof("airdrop items %s are accepted by %s", innerParam.Param, item.Address)
-					} else {
-						Log.Infof("airdrop items %s are rejected by %s", innerParam.Param, item.Address)
+
+					switch innerParam.OrderType {
+					case ORDERTYPE_REGISTER: // 包括bind
+						
+						switch handingItem.OrderType {
+						case ORDERTYPE_REGISTER:
+							p.handleRegisterItem(handingItem, innerParam.Result,
+								innerParam.Reason, invokers)
+							removeItemFromMap(handingItem, p.registerMap)
+
+						case ORDERTYPE_BIND:
+							var pad map[string]*AddressResult
+							err := DecodeFromBytes(handingItem.Padded, &pad)
+							if err != nil {
+								continue
+							}
+							delete(p.unhandledUidMap, uid)
+							referrer := p.loadInvokerInfo(handingItem.Address)
+							value, ok := pad[uid]
+							if ok {
+								if innerParam.Result == 0 {
+									value.Result = p.binding(value.Address, uid, referrer.UID, false, invokers)
+								} else {
+									value.Result = RESULT_REJECTED
+								}
+
+								finished := true
+								for _, v := range pad {
+									if v.Result == RESULT_UNHANDLED {
+										finished = false
+										break
+									}
+								}
+								if finished {
+									handingItem.Done = ITEM_STATUS_READY_TO_SEND
+								}
+
+								handingItem.Padded, _ = EncodeToBytes(pad)
+								toSaveItems[handingItem.Id] = handingItem
+								//SaveContractInvokeHistoryItem(p.db, p.URL(), handingItem)
+							}
+						}
+						
+					case ORDERTYPE_AIRDROP:
+						var pad map[string]string  // uid->result
+						err := DecodeFromBytes(handingItem.Padded, &pad)
+						if err != nil {
+							continue
+						}
+						referrer := p.loadInvokerInfo(handingItem.Address)
+						value, ok := pad[uid]
+						if ok && value == "" {
+							if innerParam.Result == 0 {
+								// 确保每一个uid的referrer都是 uid
+								referral, amt, ok := p.checkAirdropFlag(referrer.UID, uid)
+								if ok {
+									airdrop := p.calcAirdropAmt(amt)
+									// 设置空投标志
+									referral.Airdropped = true
+									referral.AirdroppedAmt = referral.AirdroppedAmt.Add(airdrop)
+									invokers[referral.Address] = referral
+
+									pad[uid] = airdrop.String()
+								} else {
+									if referral == nil {
+										pad[uid] = "invalid"
+									} else {
+										pad[uid] = "0"
+									}
+								}
+							} else {
+								if innerParam.Reason == "" {
+									pad[uid] = "rejected"
+								} else {
+									pad[uid] = innerParam.Reason
+								}
+							}
+
+							finished := true
+							for _, v := range pad {
+								if v == "" {
+									finished = false
+									break
+								}
+							}
+							if finished {
+								handingItem.Done = ITEM_STATUS_READY_TO_SEND
+							}
+
+							delete(p.unhandledUidMap, uid)
+							handingItem.Padded, _ = EncodeToBytes(pad)
+							toSaveItems[handingItem.Id] = handingItem
+							//SaveContractInvokeHistoryItem(p.db, p.URL(), handingItem)
+						}
 					}
 				}
 
 				item.Done = ITEM_STATUS_DEALT
 				SaveContractInvokeHistoryItem(p.db, url, item)
 			}
+		}
+		for _, v := range toSaveItems {
+			SaveContractInvokeHistoryItem(p.db, url, v)
 		}
 		updated = true
 		p.validateMap = make(map[string]map[int64]*InvokeItem)
@@ -2090,6 +2452,9 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 			deletedItems := make([]int64, 0)
 			for id, item := range items {
 				h, _, _ := indexer.FromUtxoId(item.UtxoId)
+				if item.Finished() {
+					continue
+				}
 				if height-h < p.RegisterTimeOut {
 					continue
 				}
@@ -2111,20 +2476,76 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 		}
 	}
 
-	// 4. 执行airdrop
+	// 4. 执行bind
+	if len(p.bindMap) > 0 {
+		handled := make([]string, 0)
+		for addr, items := range p.bindMap {
+			deletedItems := make([]int64, 0)
+			for id, item := range items {
+				if item.Finished() {
+					continue
+				}
+				if item.Done != ITEM_STATUS_READY_TO_SEND { // 全部被审核完成
+					h, _, _ := indexer.FromUtxoId(item.UtxoId)
+					if height-h < p.RegisterTimeOut { // 超时
+						continue
+					}
+				}
+
+				var pad map[string]*AddressResult
+				err := DecodeFromBytes(item.Padded, &pad)
+				if err != nil {
+					Log.Errorf("DecodeFromBytes Padded failed, %v", err)
+					continue
+				}
+				referrer := p.loadInvokerInfo(item.Address)
+				updated := false
+				for uid, value := range pad {
+					if value.Result == RESULT_UNHANDLED {
+						value.Result = p.binding(value.Address, uid, referrer.UID, false, invokers)
+						updated = true
+					}
+				}
+				if updated {
+					item.Padded, _ = EncodeToBytes(pad)
+				}
+				item.Done = ITEM_STATUS_DEALT
+				SaveContractInvokeHistoryItem(p.db, p.URL(), item)
+
+				deletedItems = append(deletedItems, id)
+				updated = true
+			}
+
+			for _, id := range deletedItems {
+				delete(items, id)
+			}
+			if len(items) == 0 {
+				handled = append(handled, addr)
+			}
+		}
+
+		for _, addr := range handled {
+			delete(p.bindMap, addr)
+		}
+	}
+
+	// 5. 执行airdrop
 	if len(p.airdropMap) > 0 {
 		handled := make([]string, 0)
 		for addr, items := range p.airdropMap {
 			deletedItems := make([]int64, 0)
 			for id, item := range items {
-				h, _, _ := indexer.FromUtxoId(item.UtxoId)
-				if height-h < p.AirDropTimeOut {
+				if item.Finished() {
 					continue
 				}
-				if item.Done != ITEM_STATUS_INIT {
-					continue
+				if item.Done != ITEM_STATUS_READY_TO_SEND { // 全部被审核完成
+					h, _, _ := indexer.FromUtxoId(item.UtxoId)
+					if height-h < p.AirDropTimeOut { // 超时
+						continue
+					}
 				}
-				if p.handleAirdropItem(item, 0, "", invokers) == false {
+				
+				if p.handleAirdropItem(item, invokers) == false {
 					deletedItems = append(deletedItems, id)
 				}
 				SaveContractInvokeHistoryItem(p.db, url, item)

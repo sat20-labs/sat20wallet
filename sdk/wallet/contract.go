@@ -86,6 +86,7 @@ const (
 	INVOKE_API_DONATE          string = "donate"
 	INVOKE_API_AIRDROP         string = "airdrop"
 	INVOKE_API_VALIDATE        string = "validate"
+	INVOKE_API_BIND            string = "bind"
 
 	ORDERTYPE_NOSPEC          = 0
 	ORDERTYPE_SELL            = 1
@@ -106,7 +107,8 @@ const (
 	ORDERTYPE_DONATE          = 16
 	ORDERTYPE_AIRDROP         = 17
 	ORDERTYPE_VALIDATE        = 18
-	ORDERTYPE_UNUSED          = 19
+	ORDERTYPE_BIND            = 19
+	ORDERTYPE_UNUSED          = 20
 
 	INVOKE_FEE          int64 = 10
 	SWAP_INVOKE_FEE     int64 = 10
@@ -3410,6 +3412,8 @@ func GetInvokeInnerParam(action string) InvokeInnerParamIF {
 		return &AirDropInvokeParam{}
 	case INVOKE_API_VALIDATE:
 		return &ValidateInvokeParam{}
+	case INVOKE_API_BIND:
+		return &BindInvokeParam{}
 
 	default:
 		return nil
@@ -3451,6 +3455,8 @@ func GetOrderTypeWithAction(action string) int {
 		return ORDERTYPE_AIRDROP
 	case INVOKE_API_VALIDATE:
 		return ORDERTYPE_VALIDATE
+	case INVOKE_API_BIND:
+		return ORDERTYPE_BIND
 
 	default:
 		return ORDERTYPE_SELL

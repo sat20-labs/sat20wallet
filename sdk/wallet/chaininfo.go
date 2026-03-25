@@ -296,6 +296,10 @@ func VerifySignedTxV2(tx *wire.MsgTx,
 	return inValue - outValue, nil
 }
 
+func IsBtcAddress(addr string) bool {
+	_, err := btcutil.DecodeAddress(addr, GetChainParam())
+	return err == nil
+}
 
 // GetPkScriptFromAddress 根据比特币地址返回对应的锁定脚本(PkScript)
 func GetPkScriptFromAddress(addr string) ([]byte, error) {
