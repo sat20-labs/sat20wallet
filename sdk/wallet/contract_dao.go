@@ -1002,6 +1002,9 @@ func (p *DaoContractRunTime) updateResponseData() {
 
 				referrer := p.loadInvokerInfo(v.Address)
 				for uid, r := range pad {
+					if r.Result != RESULT_UNHANDLED {
+						continue
+					}
 					item := invokeItem_register{
 						Id:      v.Id,
 						InUtxo:  v.InUtxo,
@@ -1152,6 +1155,7 @@ type ValidateItem struct {
 }
 
 type ValidateResult struct {
+	Type int `json:"type"` // ORDERTYPE_REGISTER or ORDERTYPE_AIRDROP 
 	UIDs string `json:"uids,omitempty"` 
 	Reason string `json:"reason,omitempty"` 
 }
@@ -1198,74 +1202,66 @@ func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
 			InvokeItem: item.Clone(),
 		}
 
+		// 历史数据可能padded中的数据格式不对，直接忽略
 		switch n.OrderType {
 		case ORDERTYPE_BIND:
 			bind := &AirdropResult{}
 			var pad map[string]*AddressResult
 			err := DecodeFromBytes(item.Padded, &pad)
-			if err != nil {
-				Log.Errorf("DecodeFromBytes Padded failed, %v", err)
-				continue
-			}
-
-			for k, v := range pad {
-				var result string 
-				switch v.Result {
-				case RESULT_OK:
-					result = "ok"
-				case RESULT_INVALID:
-					result = "invalid"
-				case RESULT_REJECTED:
-					result = "rejected"
-				case RESULT_UNHANDLED:
-					result = "unhandled"
+			if err == nil {
+				for k, v := range pad {
+					var result string 
+					switch v.Result {
+					case RESULT_OK:
+						result = "validated"
+					case RESULT_INVALID:
+						result = "invalid"
+					case RESULT_REJECTED:
+						result = "rejected"
+					case RESULT_UNHANDLED:
+						result = "validating"
+					}
+					bind.Items = append(bind.Items, &AirdropItem{
+						UID: k,
+						Address: v.Address,
+						Result: result,
+					})
 				}
-				bind.Items = append(bind.Items, &AirdropItem{
-					UID: k,
-					Address: v.Address,
-					Result: result,
-				})
+				n.BindResult = bind
 			}
-			n.BindResult = bind
 
 		case ORDERTYPE_AIRDROP:
 			airdrop := &AirdropResult{}
 			var pad map[string]string  // uid->result
 			err := DecodeFromBytes(item.Padded, &pad)
-			if err != nil {
-				n.Padded = nil
-				continue
+			if err == nil {
+				for k, v := range pad {
+					airdrop.Items = append(airdrop.Items, &AirdropItem{
+						UID: k,
+						Address: p.uidMap[k],
+						Result: v,
+					})
+				}
+				n.AirdropResult = airdrop
 			}
-
-			for k, v := range pad {
-				airdrop.Items = append(airdrop.Items, &AirdropItem{
-					UID: k,
-					Address: p.uidMap[k],
-					Result: v,
-				})
-			}
-			n.AirdropResult = airdrop
 
 		case ORDERTYPE_VALIDATE:
 			validate := &ValidateResult{}
 			var innerParam ValidateInvokeParam
 			paramBytes, err := base64.StdEncoding.DecodeString(string(n.Padded))
-			if err != nil {
-				n.Padded = nil
-				continue
+			if err == nil {
+				err = innerParam.Decode(paramBytes)
+				if err == nil {
+					validate.Type = innerParam.OrderType
+					validate.UIDs = string(innerParam.Param)
+					if innerParam.Result == 0 {
+						validate.Reason = "validated"
+					} else {
+						validate.Reason = innerParam.Reason
+					}
+					n.ValidateResult = validate
+				}
 			}
-			err = innerParam.Decode(paramBytes)
-			if err != nil {
-				n.Padded = nil
-				continue
-			}
-			validate.UIDs = string(innerParam.Param)
-			if innerParam.Result == 0 {
-				validate.Reason = "validated"
-			} else {
-				validate.Reason = innerParam.Reason
-			}
-			n.ValidateResult = validate
 		}
 		n.Padded = nil
 		result.Data = append(result.Data, n)

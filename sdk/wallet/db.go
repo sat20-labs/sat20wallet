@@ -1127,7 +1127,7 @@ func LoadContractInvokeHistory(db db.KVDB, url string, excludingDone, reverse bo
 			upgradedItems = append(upgradedItems, item)
 		}
 
-		if excludingDone && item.Finished() {
+		if excludingDone && (item.Finished() && item.GetInvokeUtxoId() != REORG_UTXOID) {
 			return nil
 		}
 
@@ -1205,7 +1205,7 @@ func loadContractInvokeHistoryFromHeight(db db.KVDB, url string, excludingDone b
 			upgradedItems = append(upgradedItems, item)
 		}
 
-		if excludingDone && item.Finished() {
+		if excludingDone && (item.Finished() && item.GetInvokeUtxoId() != REORG_UTXOID) {
 			return nil
 		}
 		if item.FromSatsNet() != bSatsNet {

@@ -211,7 +211,7 @@ func (p *IndexerClient) IsCoreNode(pubkey []byte) (bool, error) {
 
 // 只有未花费的能拿到id
 func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
-	url := p.GetUrl("/utxo/range/" + utxo)
+	url := p.GetUrl("/v3/utxo/info/" + utxo)
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
@@ -221,7 +221,7 @@ func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
 	
 
 	// Unmarshal the response.
-	var result indexerwire.UtxoInfoResp
+	var result indexerwire.TxOutputRespV3
 	if err := json.Unmarshal(rsp, &result); err != nil {
 		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
 		return INVALID_ID, err
@@ -232,11 +232,11 @@ func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
 		return INVALID_ID, fmt.Errorf("%s", result.Msg)
 	}
 
-	if result.Data.Id == INVALID_ID {
+	if result.Data.UtxoId == INVALID_ID {
 		return INVALID_ID, fmt.Errorf("can't find utxo %s", utxo)
 	}
 
-	return result.Data.Id, nil
+	return result.Data.UtxoId, nil
 }
 
 // btcutil.Tx

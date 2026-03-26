@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -122,6 +124,8 @@ const (
 
 	SWAP_SERVICE_FEE_RATIO = 8 // 千分之
 	DEPTH_SLOT             = 10
+
+	REORG_UTXOID uint64 = 0 //
 )
 
 const (
@@ -374,6 +378,7 @@ type InvokeHistoryItem interface {
 	GetId() int64
 	GetKey() string
 	GetInvokeUtxo() string
+	GetInvokeUtxoId() uint64
 	Finished() bool
 	GetHeight() int
 	FromSatsNet() bool
@@ -400,29 +405,10 @@ func (p *InvokeHistoryItemBase) GetKey() string {
 	return GetKeyFromId(p.Id)
 }
 
-func (p *InvokeHistoryItemBase) GetInvokeUtxo() string {
-	return ""
-}
-
 func (p *InvokeHistoryItemBase) Finished() bool {
 	return p.Done > ITEM_STATUS_INIT
 }
 
-func (p *InvokeHistoryItemBase) GetHeight() int {
-	return -1
-}
-
-func (p *InvokeHistoryItemBase) FromSatsNet() bool {
-	return true
-}
-
-func (p *InvokeHistoryItemBase) ToSatsNet() bool {
-	return true
-}
-
-func (p *InvokeHistoryItemBase) ToNewVersion() InvokeHistoryItem {
-	return p
-}
 
 func GetKeyFromId(id int64) string {
 	return fmt.Sprintf("%012d", id)
@@ -513,6 +499,10 @@ func (p *InvokeItem) GetInvokeUtxo() string {
 	return p.InUtxo
 }
 
+func (p *InvokeItem) GetInvokeUtxoId() uint64 {
+	return p.UtxoId
+}
+
 func (p *InvokeItem) GetHeight() int {
 	h, _, _ := indexer.FromUtxoId(p.UtxoId)
 	return h
@@ -551,12 +541,38 @@ type InvokeInnerParamIF interface {
 type InvokeParam struct {
 	Action string `json:"action"`
 	Param  string `json:"param,omitempty"` // 外部使用时是json，内部使用时是编码过的string
+	Encoding string `json:"encoding,omitempty"` // br
 }
 
 func (p *InvokeParam) Encode() ([]byte, error) {
-	return txscript.NewScriptBuilder().
-		AddData([]byte(p.Action)).
-		AddData([]byte(p.Param)).Script()
+	builder := txscript.NewScriptBuilder().
+		AddData([]byte(p.Action))
+	if p.Encoding != "" {
+		if p.Encoding == "br" {
+			//Log.Infof("before compress %d\n", len(p.Param))
+			param, err := base64.StdEncoding.DecodeString(p.Param)
+			if err != nil {
+				return nil, err
+			}
+			// 需要解码为原始的二进制数据，才更好压缩： 544->407->275
+			// 如果不解码，直接压缩: 544->414 
+			//Log.Infof("mid compress %d\n", len(param))
+			param, err = BrotliCompress([]byte(param))
+			if err != nil {
+				return nil, err
+			}
+			//Log.Infof("after compress %d\n", len(param))
+
+			builder = builder.AddData(param)
+			builder = builder.AddData([]byte(p.Encoding))
+
+		} else {
+			return nil, fmt.Errorf("not support encoding type")
+		}
+	} else {
+		builder = builder.AddData([]byte(p.Param))
+	}
+	return builder.Script()
 }
 
 func (p *InvokeParam) EncodeV2() ([]byte, error) {
@@ -573,8 +589,48 @@ func (p *InvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing parameter")
 	}
-	p.Param = string(tokenizer.Data())
+	param := (tokenizer.Data())
+
+	if tokenizer.Next() && tokenizer.Err() == nil {
+		p.Encoding = string(tokenizer.Data())
+		if p.Encoding == "br" {
+			var err error
+			param, err = BrotliDecompress(param)
+			if err != nil {
+				return err
+			}
+			param = []byte(base64.StdEncoding.EncodeToString(param))
+		} else {
+			return fmt.Errorf("not support encoding type %s", p.Encoding)
+		}
+	}
+	p.Param = string(param)
 	return nil
+}
+
+func BrotliCompress(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	w := brotli.NewWriter(&buf)
+
+	_, err := w.Write(data)
+	if err != nil {
+		return nil, err
+	}
+
+	w.Close()
+	return buf.Bytes(), nil
+}
+
+func BrotliDecompress(data []byte) ([]byte, error) {
+	reader := brotli.NewReader(bytes.NewReader(data))
+
+	var out bytes.Buffer
+	_, err := io.Copy(&out, reader)
+	if err != nil {
+		return nil, err
+	}
+
+	return out.Bytes(), nil
 }
 
 type EnableInvokeParam struct {
@@ -2284,7 +2340,7 @@ func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) err
 		if !ok {
 			continue
 		}
-		item.UtxoId = 0
+		item.UtxoId = REORG_UTXOID
 		parts := strings.Split(item.InUtxo, ":")
 		if len(parts) != 2 {
 			continue
@@ -2318,7 +2374,7 @@ func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
 		if !ok {
 			continue
 		}
-		item.UtxoId = 0
+		item.UtxoId = REORG_UTXOID
 		p.history[item.InUtxo] = item
 		SaveContractInvokeHistoryItem(p.db, url, item)
 	}

@@ -14,6 +14,7 @@ replace github.com/sat20-labs/satoshinet => ../../satoshinet
 replace github.com/sat20-labs/indexer => ../../indexer
 
 require (
+	github.com/andybalholm/brotli v1.1.0
 	github.com/btcsuite/btcd v0.24.2
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4
 	github.com/btcsuite/btcd/btcutil v1.1.6
