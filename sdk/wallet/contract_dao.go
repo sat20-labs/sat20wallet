@@ -1028,22 +1028,24 @@ func (p *DaoContractRunTime) updateResponseData() {
 				if v.Finished() {
 					continue
 				}
+				var pad map[string]string
+				err := DecodeFromBytes(v.Padded, &pad)
+				if err != nil {
+					Log.Errorf("DecodeFromBytes Padded failed, %v", err)
+					continue
+				}
+
 				item := invokeItem_airdrop{
 					Id:      v.Id,
 					InUtxo:  v.InUtxo,
 					Address: v.Address,
 					UID:     invoker.UID,
 				}
-				paramBytes, err := base64.StdEncoding.DecodeString(string(v.Padded))
-				if err != nil {
-					continue
+				for uid, result := range pad {
+					if result == "" {
+						item.ReferralUIDs = append(item.ReferralUIDs, uid)
+					}
 				}
-				var innerParam AirDropInvokeParam
-				err = innerParam.Decode(paramBytes)
-				if err != nil {
-					continue
-				}
-				item.ReferralUIDs = innerParam.GetUIDs()
 
 				buf, err := json.Marshal(item)
 				if err != nil {
@@ -1371,6 +1373,12 @@ func (p *DaoContractRunTime) StatusByAddress(address string) (string, error) {
 
 			// 只返回还没有获取到空投的uid
 			for _, v := range invoker.ReferralUIDs {
+				// 过滤已经在等待审核的空投uid
+				_, ok := p.unhandledUidMap[v]
+				if ok {
+					continue
+				}
+
 				_, amt, ok := p.checkAirdropFlag(invoker.UID, v)
 				if !ok {
 					continue
