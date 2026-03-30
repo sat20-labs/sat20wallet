@@ -14,6 +14,7 @@ type Config struct {
 	SyncServer           *RPCService `yaml:"syncServer"`
 	RebuildTraderHistory bool        `yaml:"rebuildTraderHistory"`
 
+	CoreNodes      []string        `yaml:"corenodes"` // 仅在bootstrap有效
 	Peers          []string        `yaml:"peers"`
 	IndexerL1      *Indexer        `yaml:"indexer_layer1"`
 	SlaveIndexerL1 *Indexer        `yaml:"slave_indexer_layer1"` // 可以不设置
