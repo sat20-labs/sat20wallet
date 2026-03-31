@@ -674,7 +674,7 @@ type DaoContractRunTime struct {
 	airdropLimit     *Decimal
 
 	responseCache      []*responseItem_dao // 所有注册成功的invoker的简单状态
-	responseStatus     Response_DaoContract // 合约状态
+	responseStatus     Response_DaoContract // 合约状态，包括审核内容
 	responseInvokerMap map[string]*Response_DaoInvokerStatus // 
 	responseAnalytics  *analytcisData_dao // 两个排行榜
 }
@@ -926,7 +926,7 @@ type invokeItem_airdrop struct {
 	InUtxo       string
 	Address      string
 	UID          string
-	ReferralUIDs []string
+	ReferrerUID  string  // 发起申请的人
 }
 
 func (p *DaoContractRunTime) updateResponseData() {
@@ -1035,23 +1035,22 @@ func (p *DaoContractRunTime) updateResponseData() {
 					continue
 				}
 
-				item := invokeItem_airdrop{
-					Id:      v.Id,
-					InUtxo:  v.InUtxo,
-					Address: v.Address,
-					UID:     invoker.UID,
-				}
 				for uid, result := range pad {
 					if result == "" {
-						item.ReferralUIDs = append(item.ReferralUIDs, uid)
+						item := invokeItem_airdrop{
+							Id:      v.Id,
+							InUtxo:  v.InUtxo,
+							Address: p.uidMap[uid],
+							UID:     uid,
+							ReferrerUID: invoker.UID,
+						}
+						buf, err := json.Marshal(item)
+						if err != nil {
+							continue
+						}
+						p.responseStatus.AirdropList = append(p.responseStatus.AirdropList, string(buf))
 					}
 				}
-
-				buf, err := json.Marshal(item)
-				if err != nil {
-					continue
-				}
-				p.responseStatus.AirdropList = append(p.responseStatus.AirdropList, string(buf))
 			}
 		}
 
