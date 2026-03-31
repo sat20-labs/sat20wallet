@@ -47,9 +47,26 @@ const (
 
 	RESULT_UNHANDLED int = 1
 	RESULT_OK 		 int = 0
-	RESULT_REJECTED  int = -1
-	RESULT_INVALID 	 int = -2
+	RESULT_REJECTED  int = -1 // reject by validator
+	RESULT_INVALID 	 int = -2 // 内部错误
 )
+
+func GetResultString(r int) string {
+	var result string
+	switch r {
+	case RESULT_OK:
+		result = "validated"
+	case RESULT_INVALID:
+		result = "invalid"
+	case RESULT_REJECTED:
+		result = "rejected"
+	case RESULT_UNHANDLED:
+		result = "validating"
+	default:
+		result = "unknown"
+	}
+	return result
+}
 
 // 1. 定义合约内容
 type DaoContract struct {
@@ -803,9 +820,7 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 
 	// fix
 	// if url == "tb1qfwx8fyajtk9yrefdru5tkz7k2q0xxs0mwv3gu4teya75awcsfj8qfyaupt_brc20:f:ordi_dao.tc" {
-	// 	p.RegisterTimeOut = 10
-	// 	p.AirDropTimeOut = 10
-	// 	p.stp.SaveReservation(p.resv)
+		
 	// }
 
 	return nil
@@ -1166,13 +1181,19 @@ type BindResult struct {
 	Reason string `json:"reason,omitempty"` 
 }
 
+type RegisterResult struct {
+	UID string `json:"uid"` 
+	ReferrerUID string `json:"referrerUID,omitempty"` 
+}
+
 type DaoHistoryItem struct {
 	*InvokeItem
 
 	// 将pad数据展开
 	*AirdropResult  `json:"airdrop,omitempty"`
 	*ValidateResult `json:"validate,omitempty"`
-	BindResult *AirdropResult     `json:"bind,omitempty"`
+	BindResult *AirdropResult `json:"bind,omitempty"`
+	RegResult *RegisterResult `json:"register,omitempty"`
 }
 
 type response_history_dao struct {
@@ -1205,27 +1226,29 @@ func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
 
 		// 历史数据可能padded中的数据格式不对，直接忽略
 		switch n.OrderType {
+		case ORDERTYPE_REGISTER:
+			paramBytes, err := base64.StdEncoding.DecodeString(string(n.Padded))
+			if err == nil {
+				var innerParam RegisterInvokeParam
+				err = innerParam.Decode(paramBytes)
+				if err == nil {
+					n.RegResult = &RegisterResult{
+						UID: innerParam.UID,
+						ReferrerUID: innerParam.ReferrerUID,
+					}
+				}
+			}
+
 		case ORDERTYPE_BIND:
 			bind := &AirdropResult{}
 			var pad map[string]*AddressResult
 			err := DecodeFromBytes(item.Padded, &pad)
 			if err == nil {
 				for k, v := range pad {
-					var result string 
-					switch v.Result {
-					case RESULT_OK:
-						result = "validated"
-					case RESULT_INVALID:
-						result = "invalid"
-					case RESULT_REJECTED:
-						result = "rejected"
-					case RESULT_UNHANDLED:
-						result = "validating"
-					}
 					bind.Items = append(bind.Items, &AirdropItem{
 						UID: k,
 						Address: v.Address,
-						Result: result,
+						Result: GetResultString(v.Result),
 					})
 				}
 				n.BindResult = bind
@@ -1341,6 +1364,10 @@ type Response_DaoInvokerStatus struct {
 	Statistic    *DaoInvokerStatistic `json:"status"`
 	AirdropList  []string             `json:"airdrops"`
 	ReferralList []*ReferralInfo      `json:"referrals"`
+
+	// 数据采集时间
+	currentHeightL1 int
+	currentHeightL2 int
 }
 
 func (p *DaoContractRunTime) StatusByAddress(address string) (string, error) {
@@ -1390,7 +1417,23 @@ func (p *DaoContractRunTime) StatusByAddress(address string) (string, error) {
 				})
 			}
 		}
+		result.currentHeightL1 = p.CurrBlockL1
+		result.currentHeightL2 = p.CurrBlock
 		p.responseInvokerMap[address] = result
+	} else {
+		if result.currentHeightL1 != p.CurrBlockL1 || result.currentHeightL2 != p.CurrBlock {
+			// 更新空投数据
+			for _, v := range result.ReferralList {
+				_, amt, ok := p.checkAirdropFlag(result.Statistic.UID, v.UID)
+				if !ok {
+					continue
+				}
+				airdrop := p.calcAirdropAmt(amt)
+				v.AssetAmt = airdrop.String()
+			}
+			result.currentHeightL1 = p.CurrBlockL1
+			result.currentHeightL2 = p.CurrBlock
+		}
 	}
 
 	buf, err := json.Marshal(result)
@@ -2063,6 +2106,15 @@ func updateItems(items map[string]*Decimal, maxSize int, addr string, amt *Decim
 
 func (p *DaoContractRunTime) binding(address, uid, referrerUID string, force bool,
 	invokers map[string]*DaoInvokerStatus) int {
+	
+	oldAddr, ok := p.uidMap[uid]
+	if ok {
+		if oldAddr != address {
+			// uid已经存在
+			return RESULT_INVALID
+		}
+	}
+
 	referral := p.loadInvokerInfo(address)
 	invokers[address] = referral
 	result := RESULT_INVALID
@@ -2099,8 +2151,13 @@ func (p *DaoContractRunTime) handleRegisterItem(item *InvokeItem,
 		return
 	}
 	if result == 0 {
-		item.Done = ITEM_STATUS_DEALT
-		p.binding(item.Address, innerParam.UID, innerParam.ReferrerUID, true, invokers)
+		ret := p.binding(item.Address, innerParam.UID, innerParam.ReferrerUID, true, invokers)
+		if ret == RESULT_OK {
+			item.Done = ITEM_STATUS_DEALT
+		} else {
+			item.Reason = GetResultString(ret)
+			item.Done = ITEM_STATUS_CLOSED_DIRECTLY
+		}
 	} else {
 		item.Reason = reason
 		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
