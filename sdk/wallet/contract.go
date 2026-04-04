@@ -119,6 +119,7 @@ const (
 
 	MAX_PRICE_DIVISIBILITY = 10
 	MAX_ASSET_DIVISIBILITY = 10
+	DEAL_DIVISIBILITY      = 6
 
 	BUCK_SIZE = 100
 
@@ -1013,6 +1014,7 @@ type ContractRuntimeBase struct {
 	LocalPubKey    []byte
 	RemotePubKey   []byte
 	CoreNodePubKey []byte // 提供合约创建的核心节点的pubkey
+	// --- 同步修改 SetWithPeer
 
 	history     map[string]*InvokeItem // key:utxo 单独记录数据库，区块缓存, 6个区块以后，并且已经成交的可以删除
 	resv        ContractDeployResvIF
@@ -1034,6 +1036,8 @@ type ContractRuntimeBase struct {
 	// rpc 缓存
 	refreshTime     int64
 	responseHistory map[int][]*InvokeItem // 按照100个为一桶，根据区块顺序记录，跟 history 保持一致
+
+	dealDivisibility  int // 有些小数点太长，最后结算时没必要那么长，保留一部分即可
 
 	mutex sync.RWMutex
 }
@@ -1160,6 +1164,11 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 		// 发射池合约肯定找不到，但本身就有足够的数据
 		// 由合约自己设置
 	}
+	if p.Divisibility > DEAL_DIVISIBILITY {
+		p.dealDivisibility = DEAL_DIVISIBILITY
+	} else {
+		p.dealDivisibility = p.Divisibility
+	}
 
 	p.StaticMerkleRoot = p.runtime.CalcStaticMerkleRoot()
 
@@ -1199,6 +1208,12 @@ func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv ContractDeplo
 		return err
 	}
 	p.localWallet = p.stp.GetWallet().CloneByPubKey(p.LocalPubKey)
+
+	if p.Divisibility > DEAL_DIVISIBILITY {
+		p.dealDivisibility = DEAL_DIVISIBILITY
+	} else {
+		p.dealDivisibility = p.Divisibility
+	}
 
 	return nil
 }

@@ -2308,6 +2308,7 @@ func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
 		// 成功后再更新
 		//invoker.TotalAirdropAmt = invoker.TotalAirdropAmt.Add(totalAirdropAmt)
 		//invokers[invoker.Address] = invoker
+		totalAirdropAmt.SetPrecision(p.dealDivisibility)
 		item.OutAmt = totalAirdropAmt
 		item.Done = ITEM_STATUS_READY_TO_SEND
 		ret = true

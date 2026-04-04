@@ -1044,7 +1044,8 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 				continue
 			}
 
-			p.LastDealPrice = indexer.DecimalDiv(realswapValue.SetPrecision(MAX_PRICE_DIVISIBILITY), outAmt)
+			outAmt.SetPrecision(p.dealDivisibility)
+			p.LastDealPrice = indexer.DecimalDiv(realswapValue.SetPrecision(p.dealDivisibility), outAmt)
 
 			// 更新池子
 			satsValueInPool += item.RemainingValue // 利润留存在池子中
@@ -1104,8 +1105,9 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 				continue
 			}
 
+			realSwapAmt.SetPrecision(p.dealDivisibility)
 			p.LastDealPrice = indexer.DecimalDiv(
-				indexer.NewDecimal(outValue, MAX_PRICE_DIVISIBILITY), realSwapAmt)
+				indexer.NewDecimal(outValue, p.dealDivisibility), realSwapAmt)
 
 			// 更新池子
 			assetAmtInPool = assetAmtInPool.Add(item.RemainingAmt) // 利润留在池子中
@@ -1622,6 +1624,7 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 			trader.LiqSatsValue -= info.depositvalue
 		}
 
+		info.amt.SetPrecision(p.dealDivisibility)
 		trader.RetrieveAmt = trader.RetrieveAmt.Add(info.amt) // 在retrieve中发送出去
 		trader.RetrieveValue += info.value.Floor()
 		trader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
@@ -1640,11 +1643,13 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 	if !PROFIT_REINVESTING {
 		p.TotalFeeLptAmt = nil
 
+		svrRetrieveInfo.amt.SetPrecision(p.dealDivisibility)
 		svrTrader.RetrieveAmt = svrTrader.RetrieveAmt.Add(svrRetrieveInfo.amt)
 		svrTrader.RetrieveValue += svrRetrieveInfo.value.Floor()
 		svrTrader.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
 		saveContractInvokerStatus(p.stp.GetDB(), url, svrTrader)
 
+		foundationRetrieveInfo.amt.SetPrecision(p.dealDivisibility)
 		foundation.RetrieveAmt = foundation.RetrieveAmt.Add(foundationRetrieveInfo.amt)
 		foundation.RetrieveValue += foundationRetrieveInfo.value.Floor()
 		foundation.SettleState = SETTLE_STATE_REMOVING_LIQ_READY
