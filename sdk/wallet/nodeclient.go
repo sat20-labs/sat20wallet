@@ -303,7 +303,7 @@ func (p *NodeClient) SendSigReq(req *wwire.SignRequest,
 	return result.TxSig, nil
 }
 
-
+// TODO 增加消息发送者的公钥和签名
 func (p *NodeClient) SendActionResultNfty(msgId int64, action string, ret int, reason string) error {
 
 	req := wwire.ActionResultNotify{
