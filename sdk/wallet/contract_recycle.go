@@ -1352,7 +1352,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 			} else {
 				item.item.Reason = INVOKE_REASON_POOL_TOO_SMALL
 				if assetAmt.Sign() > 0 {
-					item.prize = assetAmt
+					item.prize = assetAmt.Clone()
 					assetAmt = nil
 				} else {
 					item.item.Done = ITEM_STATUS_CLOSED_DIRECTLY
@@ -1365,7 +1365,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				item.item.OutValue = item.prize.Floor()
 				p.SatsValueInPool -= item.item.OutValue
 			} else {
-				item.item.OutAmt = item.prize
+				item.item.OutAmt = item.prize.Clone()
 				p.AssetAmtInPool = p.AssetAmtInPool.Sub(item.item.OutAmt)
 			}
 			addItemToMap(item.item, p.rewardMap) // item 转到这里继续处理
@@ -1419,7 +1419,9 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 	p.TotalRewardCount++
 	p.TotalFeeValue += dealInfo.Fee
 	p.SatsValueInPool -= dealInfo.Fee
-	Log.Debugf("reward count %d, fee %d, txId %s", p.TotalRewardCount, dealInfo.Fee, dealInfo.TxId)
+	Log.Debugf("reward count %d, fee %d, amt %s, value %d, txId %s", 
+		p.TotalRewardCount, dealInfo.Fee, dealInfo.TotalAmt.String(), 
+		dealInfo.TotalValue, dealInfo.TxId)
 
 	url := p.URL()
 	height := dealInfo.Height
@@ -1511,10 +1513,12 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 			maxHeight = max(maxHeight, h)
 
 			// TODO 需要确保最低奖的分成大于330
-			amt1 := item.OutAmt.Mul(REWARD_SHARE_INVOKER_Decimal)
-			value1 := item.OutValue * int64(REWARD_SHARE_INVOKER) / 100
+			// amt1 := item.OutAmt.Mul(REWARD_SHARE_INVOKER_Decimal)
+			//value1 := item.OutValue * int64(REWARD_SHARE_INVOKER) / 100
 			amt2 := item.OutAmt.Mul(REWARD_SHARE_SERVER_Decimal)
 			value2 := item.OutValue * int64(REWARD_SHARE_SERVER) / 100
+			value1 := item.OutValue - value2 - value2
+			amt1 := item.OutAmt.Sub(amt2).Sub(amt2)
 
 			totalAmt = totalAmt.Add(item.OutAmt)
 			totalValue += item.OutValue
@@ -1580,6 +1584,9 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 			}
 		}
 	}
+
+	Log.Debugf("genRewardInfo count %d, amt %s, value %d", 
+		p.TotalRewardCount+1, totalAmt.String(), totalValue)
 
 	return &DealInfo{
 		SendInfo:          sendInfoMap,
