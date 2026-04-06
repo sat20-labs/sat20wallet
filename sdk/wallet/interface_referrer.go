@@ -119,7 +119,6 @@ func (p *Manager) RegisterAsReferrer(name string, feeRate int64) (string, error)
 
 	localPubKey := p.wallet.GetPubKey().SerializeCompressed()
 	moredata := wwire.RemoteSignMoreData_Msg{
-		LocalPubKey: localPubKey,
 		Action:      "register_referrer",
 		Data:    	[]byte(name),
 	}
@@ -131,17 +130,19 @@ func (p *Manager) RegisterAsReferrer(name string, feeRate int64) (string, error)
 
 	// 请求服务端一个签名
 	req := wwire.SignRequest{
+		MsgHeader:    wwire.NewMsgHeader(),
 		ChannelId:    "",
 		CommitHeight: 0,
 		Reason:       "sign",
 		MoreData:     md,
 		PubKey:       localPubKey,
+		NodeId:       p.wallet.GetNodePubKey().SerializeCompressed(),
 	}
 	msg, err := json.Marshal(req)
 	if err != nil {
 		return "", err
 	}
-	sig, err := p.SignMessage(msg)
+	sig, err := p.wallet.SignMessageWithIndex(msg, 0)
 	if err != nil {
 		return "", err
 	}

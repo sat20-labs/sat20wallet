@@ -307,10 +307,11 @@ func (p *NodeClient) SendSigReq(req *wwire.SignRequest,
 func (p *NodeClient) SendActionResultNfty(msgId int64, action string, ret int, reason string) error {
 
 	req := wwire.ActionResultNotify{
-		Id:     msgId,
-		Action: action,
-		Result: ret,
-		Reason: reason,
+		MsgHeader: 	wwire.NewMsgHeader(),
+		Id:     	msgId,
+		Action: 	action,
+		Result: 	ret,
+		Reason: 	reason,
 	}
 
 	buff, err := json.Marshal(&req)

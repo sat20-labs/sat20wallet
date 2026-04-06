@@ -1,5 +1,9 @@
 package wire
 
+const (
+	MSG_VERSION int = 1
+)
+
 type Message interface {
 	GetVersion() int
 	GetMsgId() string
@@ -8,6 +12,12 @@ type Message interface {
 type MsgHeader struct {
 	Version int    `json:"version"`
 	MsgId   string `json:"msgId"`
+}
+
+func NewMsgHeader() MsgHeader {
+	return MsgHeader{
+		Version: MSG_VERSION,
+	}
 }
 
 func (p *MsgHeader) GetVersion() int {
@@ -67,7 +77,6 @@ type ContractStatusResp struct {
 type DeployContractRequest struct {
 	MsgHeader
 	ChannelAddr     string   `json:"channel"` // 通道地址
-	PeerPubKey      []byte   `json:"peerKey"` // 通道一端的公钥，如果为空，使用主公钥
 	ContractName    string   `json:"contractName"`
 	ContractContent []byte   `json:"contractContent"`
 	Deployer        string   `json:"deployer"` // the address of the deployer
@@ -75,7 +84,8 @@ type DeployContractRequest struct {
 	Fees            []string `json:"fees"`
 	FeeRate         int64    `json:"feeRate"`
 	ReqTime         int64    `json:"reqTime"`
-	PubKey          []byte   `json:"pubKey"` // 主公钥
+	PubKey          []byte   `json:"pubKey"`
+	NodeId          []byte   `json:"nodeId,omitempty"`
 }
 
 type DeployContractReq struct {
@@ -120,7 +130,6 @@ type TxSignInfo struct {
 // sn -> bn messages
 type RemoteSignMoreData_Contract struct {
 	Tx                []*TxSignInfo `json:"tx1"`
-	LocalPubKey       []byte        `json:"pubkey"`
 	Witness           []byte        `json:"witness"`
 	ContractURL       string        `json:"contractURL"`
 	InvokeCount       int64         `json:"invokeCount"`
@@ -131,19 +140,16 @@ type RemoteSignMoreData_Contract struct {
 }
 type RemoteSignMoreData_Sweep struct {
 	Tx                []*TxSignInfo `json:"tx1"`
-	ClientPubKey      []byte        `json:"clientPubkey"`
 	Witness           []byte        `json:"witness"`
 	Action            string        `json:"action"`
 	MoreData          []byte        `json:"more"` // 有时候Tx中无法放入足够数据
 }
 type RemoteSignMoreData_Ascend struct {
 	Tx          *TxSignInfo `json:"tx1"`
-	LocalPubKey []byte      `json:"pubkey"`
 	Witness     []byte      `json:"witness"`
 	MoreData    []byte      `json:"more"` // 有时候Tx中无法放入足够数据
 }
 type RemoteSignMoreData_Msg struct {
-	LocalPubKey []byte `json:"pubkey"`
 	Action      string `json:"action"`
 	Data        []byte `json:"data"`
 }
@@ -155,6 +161,7 @@ type SignRequest struct {
 	Reason       string   `json:"reason"`
 	MoreData     []byte   `json:"more"`
 	PubKey       []byte   `json:"pubKey"`
+	NodeId       []byte   `json:"nodeId,omitempty"`
 }
 
 type SignReq struct {

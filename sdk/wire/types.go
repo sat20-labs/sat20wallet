@@ -13,9 +13,10 @@ type AbbrChannelInfo struct {
 
 type PingRequest struct {
 	MsgHeader
-	PubKey  []byte           `json:"pubKey"`
-	Mode    string           `json:"mode"`
-	Channel *AbbrChannelInfo `json:"info"`
+	PubKey  	[]byte           `json:"pubKey"`
+	Mode    	string           `json:"mode"`
+	Channel 	*AbbrChannelInfo `json:"info"`
+	NodeId  	[]byte   		 `json:"nodeId,omitempty"`
 }
 
 type PingReq struct {
@@ -35,48 +36,6 @@ type PingResp struct {
 	*PingResponse
 }
 
-
-type PerformActionRequest struct {
-	MsgHeader
-	Action      string `json:"action"` // resv type
-	ActionParam []byte `json:"param"`
-	FeeRate     int64  `json:"feeRate"`
-	ReqTime     int64  `json:"reqTime"`
-	SendTxInL1  bool   `json:"sendInL1"`
-	MoreData    []byte `json:"more"`
-	PubKey      []byte `json:"pubKey"`
-}
-
-type PerformActionReq struct {
-	PerformActionRequest
-	Sig []byte `json:"msgSig"`
-}
-
-type PerformActionResp struct {
-	BaseResp
-	Id             int64  `json:"id"`
-	ServiceAddress string `json:"serviceAddress"`
-	ServiceFee     int64  `json:"serviceFee"`
-	Invoice        []byte `json:"invoice"`
-	InvoiceSig     []byte `json:"invoiceSig"`
-}
-
-type PerformActionAckReq struct {
-	Id      int64  `json:"id"`
-	FeeTx   string `json:"tx"`
-	FeeTxId string `json:"txId"`
-}
-
-type PerformActionAckResp struct {
-	BaseResp
-	Id           int64  `json:"id"`
-	Status       int    `json:"status"`
-	ActionResvId int64  `json:"actionResvId"`
-	ActionStatus int    `json:"actionStatus"`
-	ActionResult []byte `json:"actionResult"`
-}
-
-
 type ActionResultNotify struct {
 	MsgHeader
 	Id     int64  `json:"id"`
@@ -92,8 +51,9 @@ type ActionResultResp struct {
 
 type ActionSyncRequest struct {
 	MsgHeader
-	PubKey []byte `json:"pubKey"`
-	Reason string `json:"reason"`
+	PubKey 		[]byte `json:"pubKey"`
+	Reason 		string `json:"reason"`
+	NodeId 	    []byte `json:"nodeId,omitempty"` 
 }
 
 type ActionSyncReq struct {

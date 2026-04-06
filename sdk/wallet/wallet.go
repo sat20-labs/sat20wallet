@@ -286,6 +286,9 @@ func (p *InternalWallet) getBtcUtilAddress(index uint32) (btcutil.Address, error
 	if ok {
 		return address, nil
 	}
+	if p.masterkey == nil {
+		return nil, fmt.Errorf("can't derive sub account")
+	}
 
 	purpose := getPurposeFromAddrType(addressType)
 	purposeKey, err := p.getPurposeKey(purpose)
@@ -444,10 +447,14 @@ func (p *InternalWallet) getRevocationBaseKey(change uint32) (*secp256k1.Private
 	return privk, pubk
 }
 
+// index=0 作为nodeId
 func (p *InternalWallet) GetNodePubKey() *secp256k1.PublicKey {
 
 	// 修改为跟支付钱包是同一个key
-	return p.GetPaymentPubKey()
+	// return p.GetPaymentPubKey()
+
+	// 修改为index=0的公钥
+	return p.GetPubKeyByIndex(0)
 
 	/*
 		purpose := getPurposeFromAddrType("LND")

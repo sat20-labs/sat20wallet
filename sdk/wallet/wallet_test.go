@@ -25,7 +25,7 @@ func TestRevocationKeyDerivation(t *testing.T) {
 
 	// First, we'll generate a commitment point, and a commitment secret.
 	// These will be used to derive the ultimate revocation keys.
-	commitSecret, commitPoint := wallet1.GetCommitRootKey(wallet2.GetNodePubKey().SerializeCompressed())
+	commitSecret, commitPoint := wallet1.GetCommitRootKey(wallet2.GetPubKey().SerializeCompressed())
 
 	// With the commitment secrets generated, we'll now create the base
 	// keys we'll use to derive the revocation key from.
@@ -60,7 +60,7 @@ func TestRevocationKeyDerivation_SubWallet(t *testing.T) {
 
 	// First, we'll generate a commitment point, and a commitment secret.
 	// These will be used to derive the ultimate revocation keys.
-	commitSecret, commitPoint := wallet1.GetCommitRootKey(wallet2.GetNodePubKey().SerializeCompressed())
+	commitSecret, commitPoint := wallet1.GetCommitRootKey(wallet2.GetPubKey().SerializeCompressed())
 
 	// With the commitment secrets generated, we'll now create the base
 	// keys we'll use to derive the revocation key from.
@@ -104,7 +104,7 @@ func TestRevocationKeyDerivationV2(t *testing.T) {
 	{
 		// First, we'll generate a commitment point, and a commitment secret.
 		// These will be used to derive the ultimate revocation keys.
-		commitSecret, commitPoint := channelRevKey1.GetCommitRootKey(paymentWallet2.GetNodePubKey().SerializeCompressed())
+		commitSecret, commitPoint := channelRevKey1.GetCommitRootKey(paymentWallet2.GetPubKey().SerializeCompressed())
 
 		// With the commitment secrets generated, we'll now create the base
 		// keys we'll use to derive the revocation key from.
@@ -128,7 +128,7 @@ func TestRevocationKeyDerivationV2(t *testing.T) {
 	{
 		// First, we'll generate a commitment point, and a commitment secret.
 		// These will be used to derive the ultimate revocation keys.
-		commitSecret, commitPoint := channelRevKey2.GetCommitRootKey(paymentWallet1.GetNodePubKey().SerializeCompressed())
+		commitSecret, commitPoint := channelRevKey2.GetCommitRootKey(paymentWallet1.GetPubKey().SerializeCompressed())
 
 		// With the commitment secrets generated, we'll now create the base
 		// keys we'll use to derive the revocation key from.
@@ -164,7 +164,7 @@ func TestTweakKeyDerivation(t *testing.T) {
 
 	// First, we'll generate a commitment point, and a commitment secret.
 	// These will be used to derive the ultimate revocation keys.
-	_, commitPoint := wallet1.GetCommitRootKey(wallet2.GetNodePubKey().SerializeCompressed())
+	_, commitPoint := wallet1.GetCommitRootKey(wallet2.GetPubKey().SerializeCompressed())
 
 	// With the commitment secrets generated, we'll now create the base
 	// keys we'll use to derive the revocation key from.

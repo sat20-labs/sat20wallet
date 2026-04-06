@@ -1293,6 +1293,10 @@ func (p *ContractRuntimeBase) GetRemotePubKey() *secp256k1.PublicKey {
 	return p.remotePubKey
 }
 
+func (p *ContractRuntimeBase) GetLocalWallet() common.Wallet {
+	return p.localWallet
+}
+
 func (p *ContractRuntimeBase) IsInitiator() bool {
 	return p.isInitiator
 }
@@ -2565,7 +2569,6 @@ func (p *ContractRuntimeBase) notifyAndSendDepositAnchorTxs(anchorTxs []*swire.M
 
 	moredata := wwire.RemoteSignMoreData_Contract{
 		Tx:                txs,
-		LocalPubKey:       localKey,
 		Witness:           witness,
 		ContractURL:       p.URL(),
 		InvokeCount:       p.InvokeCount,
@@ -2580,17 +2583,19 @@ func (p *ContractRuntimeBase) notifyAndSendDepositAnchorTxs(anchorTxs []*swire.M
 	}
 
 	req := wwire.SignRequest{
+		MsgHeader:    wwire.NewMsgHeader(),
 		ChannelId:    p.ChannelAddr,
 		CommitHeight: -1,
 		Reason:       "contract",
 		MoreData:     md,
 		PubKey:       localKey,
+		NodeId:       p.CoreNodePubKey,
 	}
 	msg, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
-	sig, err := p.stp.GetWalletMgr().SignMessage(msg)
+	sig, err := p.localWallet.SignMessageWithIndex(msg, 0)
 	if err != nil {
 		return err
 	}
