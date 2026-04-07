@@ -1045,7 +1045,7 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 			}
 
 			outAmt.SetPrecision(p.dealDivisibility)
-			p.LastDealPrice = indexer.DecimalDiv(realswapValue.SetPrecision(p.dealDivisibility), outAmt)
+			p.LastDealPrice = indexer.DecimalDiv(realswapValue.SetPrecision(p.dealDivisibility+2), outAmt)
 
 			// 更新池子
 			satsValueInPool += item.RemainingValue // 利润留存在池子中
@@ -1107,7 +1107,7 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 
 			realSwapAmt.SetPrecision(p.dealDivisibility)
 			p.LastDealPrice = indexer.DecimalDiv(
-				indexer.NewDecimal(outValue, p.dealDivisibility), realSwapAmt)
+				indexer.NewDecimal(outValue, p.dealDivisibility+2), realSwapAmt)
 
 			// 更新池子
 			assetAmtInPool = assetAmtInPool.Add(item.RemainingAmt) // 利润留在池子中
