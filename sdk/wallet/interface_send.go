@@ -1787,12 +1787,12 @@ func (p *Manager) SelectUtxosForBRC20(utxomgr *UtxoMgr, excludedUtxoMap map[stri
 				continue
 			}
 		}
-		if HasMultiAsset(output) {
+		if HasMultiAsset(output, assetName) {
 			continue
 		}
 
 		if selectedAmt.Add(assetAmt).Cmp(amt) <= 0 {
-			RemoveNFTAsset(output)
+			RemoveOtherAssets(output, assetName)
 			if inChannel {
 				weightEstimate.AddWitnessInput(utils.MultiSigWitnessSize)
 			} else {
@@ -2563,14 +2563,14 @@ func (p *Manager) SelectUtxosForAsset(address string, excludedUtxoMap map[string
 			}
 		}
 		txOut := OutputInfoToOutput(u)
-		if HasMultiAsset(txOut) {
+		if HasMultiAsset(txOut, assetName) {
 			continue
 		}
 		assetAmt := txOut.GetAsset(assetName)
 		if assetAmt.Cmp(requiredAmt) > 0 {
 			continue
 		}
-		RemoveNFTAsset(txOut)
+		RemoveOtherAssets(txOut, assetName)
 
 		selected = append(selected, txOut)
 		if inChannel {
@@ -2606,10 +2606,10 @@ func (p *Manager) SelectUtxosForAsset(address string, excludedUtxoMap map[string
 			}
 		}
 		txOut := OutputInfoToOutput(u)
-		if HasMultiAsset(txOut) {
+		if HasMultiAsset(txOut, assetName) {
 			continue
 		}
-		RemoveNFTAsset(txOut)
+		RemoveOtherAssets(txOut, assetName)
 
 		selected = append(selected, txOut)
 		if inChannel {
@@ -3072,10 +3072,10 @@ func (p *Manager) BuildSendOrdxTxWithStub(srcAddress string, excluded map[string
 		}
 		txOut := OutputInfoToOutput(u)
 
-		if HasMultiAsset(txOut) {
+		if HasMultiAsset(txOut, &assetName.AssetName) {
 			continue
 		}
-		RemoveNFTAsset(txOut) //  否则TxOutput.Split 会失败
+		RemoveOtherAssets(txOut, &assetName.AssetName) //  否则TxOutput.Split 会失败
 
 		inputVect = append(inputVect, txOut)
 		outpoint := txOut.OutPoint()

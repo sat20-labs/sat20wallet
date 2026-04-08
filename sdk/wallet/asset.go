@@ -124,14 +124,13 @@ func AlignAsset(output *TxOutput, name *swire.AssetName) error {
 	return nil
 }
 
-// remove unknown nft
-func RemoveNFTAsset(output *TxOutput) {
+// 清除不相干资产
+func RemoveOtherAssets(output *TxOutput, assetName *indexer.AssetName) {
 	
 	var filtered indexer.TxAssets
+	name := assetName.String()
 	for _, asset := range output.Assets {
-		if asset.Name.Protocol == indexer.PROTOCOL_NAME_ORDX &&
-			asset.Name.Type == indexer.ASSET_TYPE_NFT {
-			delete(output.Offsets, asset.Name)
+		if asset.Name.String() != name {
 			continue
 		}
 		filtered = append(filtered, asset)
@@ -139,22 +138,44 @@ func RemoveNFTAsset(output *TxOutput) {
 	output.Assets = filtered
 }
 
-func HasMultiAsset(output *TxOutput) bool {
-	var hasOrdx, hasRunes, hasBrc20 int
+// 除了指定资产之外，是否有其他重要资产
+func HasMultiAsset(output *TxOutput, assetName *indexer.AssetName) bool {
+	name := assetName.String()
 	for _, asset := range output.Assets {
-		if asset.Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
-			hasBrc20++
-		} else if asset.Name.Protocol == indexer.PROTOCOL_NAME_RUNES {
-			hasRunes++
-		} else if asset.Name.Protocol == indexer.PROTOCOL_NAME_ORDX {
+		if asset.Name.String() == name {
+			continue
+		}
+		// 构成低层基础资产的，不算重复
+		switch assetName.Protocol {
+		case indexer.PROTOCOL_NAME_RUNES:
+			// 任何其他资产都冲突
+			return true
+		case indexer.PROTOCOL_NAME_BRC20:
+			// 过滤mint时的铭文
 			if asset.Name.Type == indexer.ASSET_TYPE_NFT {
-				// 忽略nft
 				continue
 			}
-			hasOrdx++
+			return true
+		case indexer.PROTOCOL_NAME_ORDX:
+			// 过滤低层的铭文，或者稀有聪
+			switch asset.Name.Type { // 这两种有可能是底层资产
+			case indexer.ASSET_TYPE_NFT:
+				if assetName.Type == indexer.ASSET_TYPE_NS ||
+				assetName.Type == indexer.ASSET_TYPE_FT {
+					continue
+				}
+
+			case indexer.ASSET_TYPE_EXOTIC:
+				if assetName.Type == indexer.ASSET_TYPE_FT {
+					continue
+				}
+			}
+			
+			return true
 		}
 	}
-	return (hasOrdx+hasRunes+hasBrc20) >= 2
+	
+	return false
 }
 
 // 获取output中指定资产的前后空白聪偏移值
