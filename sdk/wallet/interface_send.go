@@ -2794,7 +2794,7 @@ func (p *Manager) SelectUtxosForAsset_SatsNet(address string,
 	}
 
 	if totalAsset.Cmp(requiredAmt) < 0 {
-		return nil, nil, 0, fmt.Errorf("no enough assets")
+		return nil, nil, 0, fmt.Errorf(ERR_NO_ENOUGH_ASSETS)
 	}
 	return selected, totalAsset, totalPlainSats, nil
 }

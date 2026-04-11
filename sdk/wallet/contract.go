@@ -2367,7 +2367,7 @@ func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) err
 		_, err := p.stp.GetIndexerClient_SatsNet().GetTxInfo(parts[0])
 		if err != nil {
 			// tx 不存在了，需要将该条记录设置为无效
-			Log.Warnf("HandleReorg_SatsNet delete invoke item %s", item.InUtxo)
+			Log.Warnf("%s HandleReorg_SatsNet delete invoke item %d %s", url, item.UtxoId, item.InUtxo)
 			item.Reason = INVOKE_REASON_UTXO_NOT_FOUND_REORG
 			if item.Done == ITEM_STATUS_INIT {
 				p.runtime.DisableItem(item)
