@@ -49,6 +49,9 @@
       >
         <template #suffix v-if="asset?.protocol !== 'runes'"> sats </template>
       </Input>
+      <div v-if="usdValue" class="text-sm text-zinc-400 mt-1">
+        ≈ ${{ usdValue.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) }}
+      </div>
     </FormItem>
   </div>
   <div class="flex justify-end">
@@ -77,6 +80,7 @@ import { PlusIcon, MinusIcon, Loader2Icon } from 'lucide-vue-next'
 import AssetSection from './AssetSection.vue'
 import { useL2Store, useL1Store, useChannelStore, useWalletStore } from '@/store'
 import { storeToRefs } from 'pinia'
+import { useSatsToUsd } from '~/composables/useSatsToUsd'
 
 interface Props {
   type: string
@@ -139,6 +143,9 @@ console.log('asset', asset.value)
 
 const totalAmount = ref<string | number>('')
 const toAddress = ref<string>('') // 改为字符串类型
+
+// USD value display
+const { usdValue } = useSatsToUsd(totalAmount)
 const showAddress = computed(() =>
   ['l1_send', 'l2_send', 'splicing_out'].includes(props.type)
 )

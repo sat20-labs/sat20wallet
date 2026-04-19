@@ -83,17 +83,15 @@
                   {{ $t('assetOperationDialog.max') }}
                 </Button>
               </div>
+              <!-- USD value display -->
+              <div v-if="usdValue" class="text-sm text-zinc-400">
+                ≈ ${{ usdValue.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) }}
+              </div>
             </div>
             <div v-if="needsAddress" class="space-y-2">
               <Label>{{ $t('assetOperationDialog.address') }}</Label>
               <Input :model-value="address" type="text" :placeholder="$t('assetOperationDialog.enterAddress')"
                 class="h-12 bg-zinc-800" @update:modelValue="handleAddressUpdate" />
-              <!-- 域名解析失败错误提示 -->
-              <div v-if="resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress"
-                class="text-sm text-red-400 flex items-center gap-2">
-                <Icon icon="lucide:alert-circle" class="w-4 h-4" />
-                {{ $t('assetOperationDialog.domainNotFound', { name: resolvedInfo.domainName }) }}
-              </div>
             </div>
           </div>
         </div>
@@ -104,14 +102,9 @@
       </div>
 
       <DialogFooter v-if="selectedTab === 'normal'">
-        <Button class="w-full h-11 mb-2" :disabled="needsAddress && (!address || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress))" @click="confirmOperation">
+        <Button class="w-full h-11 mb-2" :disabled="needsAddress && !address" @click="confirmOperation">
           {{ $t('assetOperationDialog.confirm') }}
         </Button>
-        <!-- 域名解析失败错误提示 -->
-        <div v-if="resolvedInfo && !resolvedInfo.isDomain && !resolvedInfo.resolvedAddress" class="text-sm text-red-400 flex items-center justify-center gap-2 mb-2">
-          <Icon icon="lucide:alert-circle" class="w-4 h-4" />
-          {{ $t('assetOperationDialog.domainNotFound', { name: resolvedInfo.domainName }) }}
-        </div>
       </DialogFooter>
     </DialogContent>
   </Dialog>
@@ -152,14 +145,6 @@
         </div>
       </div>
 
-      <!-- 显示域名解析失败信息 -->
-      <div v-if="!isResolving && resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress"
-        class="mt-4 p-3 bg-red-900/20 rounded-lg border border-red-700">
-        <div class="text-sm text-red-400 flex items-center gap-2">
-          <Icon icon="lucide:alert-circle" class="w-4 h-4" />
-          {{ $t('assetOperationDialog.domainNotFound', { name: resolvedInfo.domainName }) }}
-        </div>
-      </div>
       <!-- 显示 btcFeeRate 信息 -->
       <div v-if="!isResolving && needsBtcFeeRate" class="mt-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
         <div class="flex items-center justify-between text-sm">
@@ -194,7 +179,7 @@
       <AlertDialogFoot class="my-4 gap-2">
         <AlertDialogCancel @click="showAlertDialog = false" :disabled="isResolving">{{ $t('assetOperationDialog.cancel')
           }}</AlertDialogCancel>
-        <AlertDialogAction @click="handleConfirm" :disabled="isResolving || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress)">
+        <AlertDialogAction @click="handleConfirm" :disabled="isResolving">
           {{ isResolving ? $t('assetOperationDialog.resolvingDomain') : $t('assetOperationDialog.confirm') }}
         </AlertDialogAction>
       </AlertDialogFoot>
@@ -203,7 +188,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, toRef } from 'vue'
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -225,6 +210,7 @@ import { Icon } from '@iconify/vue'
 import SplitSend from '@/entrypoints/popup/pages/wallet/split.vue'
 import { useWalletStore } from '@/store'
 import { validateAndResolveAddress, hideAddress } from '@/utils'
+import { useSatsToUsd } from '~/composables/useSatsToUsd'
 
 interface Props {
   title: string
@@ -247,6 +233,10 @@ const props = withDefaults(defineProps<Props>(), {
 const { maxAmount } = toRefs(props)
 console.log('assetType: ', props.assetType)
 console.log('props', props);
+
+// USD value display for amount input
+const amountRef = toRef(props, 'amount')
+const { usdValue } = useSatsToUsd(amountRef)
 
 const selectedTab = ref('normal') // 默认选中普通发送
 
@@ -336,10 +326,11 @@ const confirmOperation = async () => {
     }
     console.log(result, result?.isDomain && !result.resolvedAddress);
 
-    // 如果解析失败且不是有效的比特币地址，阻止进入下一步
+    // 如果域名解析失败，把用户输入当作最终地址，不做检测
+    // 不再阻止用户继续操作
     if (result && !result?.isDomain && !result.resolvedAddress) {
-      // 不显示确认对话框，直接返回
-      return
+      // 域名找不到，使用用户输入的原始地址
+      console.log('Domain name not found, using user input as address')
     }
 
     // 跳过 taproot 地址检测
