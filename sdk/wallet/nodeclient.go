@@ -7,16 +7,6 @@ import (
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
 
-const (
-	QUERY_INFO_SUPPORT_CONTRACTS 		string = "/info/contracts/support"
-	QUERY_INFO_DEPLOYED_CONTRACTS 		string = "/info/contracts/deployed"
-	QUERY_INFO_CONTRACT 				string = "/info/contract"
-	QUERY_INFO_CONTRACT_INVOKE_HISTORY 	string = "/info/contract/history"
-	QUERY_INFO_CONTRACT_ALLUSER 		string = "/info/contract/alluser"
-	QUERY_INFO_CONTRACT_ANALYTICS 		string = "/info/contract/analytics"
-	QUERY_INFO_CONTRACT_USER 			string = "/info/contract/user"
-	QUERY_INFO_CONTRACT_USERHISTORY 	string = "/info/contract/userhistory"
-)
 
 type NodeRPCClient interface {
 	GetSupportedContractsReq() ([]string, error)
@@ -25,6 +15,7 @@ type NodeRPCClient interface {
 	GetContractAnalyticsReq(string) (string, error)
 	GetContractInvokeHistoryReq(string, int, int) (string, error)
 	GetContractInvokeHistoryByAddressReq(string, string, int, int)  (string, error)
+	GetContractInvokeItemByInUtxoReq(string, string)  (string, error)
 	GetContractAllAddressesReq(string, int, int) (string, error)
 	GetContractStatusByAddressReq(string, string) (string, error)
 
@@ -66,7 +57,7 @@ func NewNodeClient(scheme, host, proxy string, http HttpClient) *NodeClient {
 }
 
 func (p *NodeClient) GetSupportedContractsReq() ([]string, error) {
-	url := p.GetUrl(QUERY_INFO_SUPPORT_CONTRACTS)
+	url := p.GetUrl(wwire.QUERY_INFO_SUPPORT_CONTRACTS)
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
@@ -89,7 +80,7 @@ func (p *NodeClient) GetSupportedContractsReq() ([]string, error) {
 }
 
 func (p *NodeClient) GetDeployedContractsReq() ([]string, error) {
-	url := p.GetUrl(QUERY_INFO_DEPLOYED_CONTRACTS)
+	url := p.GetUrl(wwire.QUERY_INFO_DEPLOYED_CONTRACTS)
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
@@ -112,7 +103,7 @@ func (p *NodeClient) GetDeployedContractsReq() ([]string, error) {
 }
 
 func (p *NodeClient) GetContractStatusReq(contractUrl string) (string, error) {
-	url := p.GetUrl(QUERY_INFO_CONTRACT + "/" + contractUrl)
+	url := p.GetUrl(wwire.QUERY_INFO_CONTRACT + "/" + contractUrl)
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
@@ -135,7 +126,7 @@ func (p *NodeClient) GetContractStatusReq(contractUrl string) (string, error) {
 }
 
 func (p *NodeClient) GetContractAnalyticsReq(contractUrl string) (string, error) {
-	url := p.GetUrl(QUERY_INFO_CONTRACT_ANALYTICS + "/" + contractUrl)
+	url := p.GetUrl(wwire.QUERY_INFO_CONTRACT_ANALYTICS + "/" + contractUrl)
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
@@ -159,7 +150,7 @@ func (p *NodeClient) GetContractAnalyticsReq(contractUrl string) (string, error)
 
 
 func (p *NodeClient) GetContractInvokeHistoryReq(contractUrl string, start, limit int) (string, error) {
-	url := p.GetUrl(QUERY_INFO_CONTRACT_INVOKE_HISTORY + "/" + contractUrl)
+	url := p.GetUrl(wwire.QUERY_INFO_CONTRACT_INVOKE_HISTORY + "/" + contractUrl)
 	if start != 0 || limit != 0 {
 		url.Query = make(map[string]string)  
 		url.Query["start"] = fmt.Sprintf("%d", start)
@@ -189,7 +180,7 @@ func (p *NodeClient) GetContractInvokeHistoryReq(contractUrl string, start, limi
 
 func (p *NodeClient) GetContractInvokeHistoryByAddressReq(contractUrl, address string, start, limit int) (string, error) {
 
-	url := p.GetUrl(QUERY_INFO_CONTRACT_USERHISTORY + "/" + contractUrl + "/" + address)
+	url := p.GetUrl(wwire.QUERY_INFO_CONTRACT_USERHISTORY + "/" + contractUrl + "/" + address)
 	if start != 0 || limit != 0 {
 		url.Query = make(map[string]string)  
 		url.Query["start"] = fmt.Sprintf("%d", start)
@@ -216,10 +207,33 @@ func (p *NodeClient) GetContractInvokeHistoryByAddressReq(contractUrl, address s
 	return result.Status, nil
 }
 
+func (p *NodeClient) GetContractInvokeItemByInUtxoReq(contractUrl, inUtxo string) (string, error) {
+
+	url := p.GetUrl(wwire.QUERY_INFO_CONTRACT_INVOKE_ITEM + "/" + contractUrl + "/" + inUtxo)
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return "", err
+	}
+
+	// Unmarshal the response.
+	var result ContractStatusResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return "", err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return "", fmt.Errorf("%s", result.Msg)
+	}
+
+	return result.Status, nil
+}
 
 func (p *NodeClient) GetContractAllAddressesReq(contractUrl string, start, limit int) (string, error) {
 
-	url := p.GetUrl(QUERY_INFO_CONTRACT_ALLUSER + "/" + contractUrl)
+	url := p.GetUrl(wwire.QUERY_INFO_CONTRACT_ALLUSER + "/" + contractUrl)
 	if start != 0 || limit != 0 {
 		url.Query = make(map[string]string)  
 		url.Query["start"] = fmt.Sprintf("%d", start)
@@ -247,7 +261,7 @@ func (p *NodeClient) GetContractAllAddressesReq(contractUrl string, start, limit
 }
 
 func (p *NodeClient) GetContractStatusByAddressReq(contractUrl, address string) (string, error) {
-	url := p.GetUrl(QUERY_INFO_CONTRACT_USER + "/" + contractUrl + "/" + address)
+	url := p.GetUrl(wwire.QUERY_INFO_CONTRACT_USER + "/" + contractUrl + "/" + address)
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)

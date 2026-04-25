@@ -2129,6 +2129,10 @@ func (p *TestNodeClient) GetContractInvokeHistoryReq(contractUrl string, start, 
 	return "", fmt.Errorf("not implemented")
 }
 
+func (p *TestNodeClient) GetContractInvokeItemByInUtxoReq(contractUrl, inUtxo string) (string, error) {
+	return "", fmt.Errorf("not implemented")
+}
+
 func (p *TestNodeClient) GetContractInvokeHistoryByAddressReq(contractUrl, address string, start, limit int) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }

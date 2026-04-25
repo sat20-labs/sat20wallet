@@ -10,6 +10,7 @@ const (
 	QUERY_INFO_CONTRACT_FEE_INVOKE     string = "/info/contract/invokefee"
 	QUERY_INFO_CONTRACT                string = "/info/contract"
 	QUERY_INFO_CONTRACT_INVOKE_HISTORY string = "/info/contract/history"
+	QUERY_INFO_CONTRACT_INVOKE_ITEM    string = "/info/contract/item/inutxo"
 	QUERY_INFO_CONTRACT_LIQPROVIDER    string = "/info/contract/liqprovider"
 	QUERY_INFO_CONTRACT_ALLUSER        string = "/info/contract/alluser"
 	QUERY_INFO_CONTRACT_ANALYTICS      string = "/info/contract/analytics"

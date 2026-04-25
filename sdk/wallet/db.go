@@ -27,6 +27,7 @@ const (
 
 	DB_KEY_TEMPLATE_CONTRACT        = "tc-"    // tc-url-
 	DB_KEY_TC_INVOKE_HISTORY        = "tch-"   // tch-url-id
+	DB_KEY_TC_INVOKE_ITEM           = "tci-"   // tci-url-inutxo -> id
 	DB_KEY_TC_INVOKE_HISTORY_BACKUP = "tchbk-" // tchbk-url-id
 	DB_KEY_TC_INVOKE_RESULT         = "tcr-"   // tcr-url-txid
 	DB_KEY_TC_INVOKER_STATUS        = "tcu-"   // tcu-url-addr
@@ -1050,6 +1051,10 @@ func ParseContractInvokeHistoryKey(key string) (string, string, error) {
 	return parts[0], parts[1], nil
 }
 
+func GetContractInvokeHistoryKey2(url, inutxo string) string {
+	return GetDBKeyPrefix() + DB_KEY_TC_INVOKE_ITEM + url + "-" + inutxo
+}
+
 func SaveContractInvokeHistoryItem(db db.KVDB, url string, value InvokeHistoryItem) error {
 	buf, err := EncodeToBytes(value)
 	if err != nil {
@@ -1061,6 +1066,14 @@ func SaveContractInvokeHistoryItem(db db.KVDB, url string, value InvokeHistoryIt
 		Log.Errorf("saveContractInvokeHistoryItem failed. %v", err)
 		return err
 	}
+
+	err = db.Write([]byte(GetContractInvokeHistoryKey2(url, value.GetInvokeUtxo())), 
+		[]byte(value.GetKey()))
+	if err != nil {
+		Log.Errorf("saveContractInvokeHistoryItem2 failed. %v", err)
+		return err
+	}
+
 	Log.Infof("saveContractInvokeHistoryItem succ. %s", value.GetKey())
 	return nil
 }
@@ -1087,13 +1100,30 @@ func loadContractInvokeHistoryItem(db db.KVDB, url, inkey string) (InvokeHistory
 	return item, nil
 }
 
-func deleteContractInvokeHistoryItem(db db.KVDB, url, inkey string) error {
-	return db.Delete([]byte(GetContractInvokeHistoryKey(url, inkey)))
+func loadContractInvokeHistoryItemByInUtxo(db db.KVDB, url, inUtxo string) (InvokeHistoryItem, error) {
+	key := GetContractInvokeHistoryKey2(url, inUtxo)
+	buf, err := db.Read([]byte(key))
+	if err != nil {
+		Log.Errorf("Read %s failed. %v", key, err)
+		return nil, err
+	}
+	return loadContractInvokeHistoryItem(db, url, string(buf))
+}
+
+func deleteContractInvokeHistoryItem(db db.KVDB, url string, value InvokeHistoryItem) error {
+	db.Delete([]byte(GetContractInvokeHistoryKey(url, value.GetKey())))
+	db.Delete([]byte(GetContractInvokeHistoryKey2(url, value.GetInvokeUtxo())))
+	return nil
 }
 
 func DeleteContractInvokeHistory(db db.KVDB, url string) error {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_TC_INVOKE_HISTORY + url)
 	_, err := DeleteAllKeysWithPrefix(db, prefix)
+	if err != nil {
+		return err
+	}
+	prefix2 := []byte(GetDBKeyPrefix() + DB_KEY_TC_INVOKE_ITEM + url)
+	_, err = DeleteAllKeysWithPrefix(db, prefix2)
 	if err != nil {
 		return err
 	}
@@ -1266,7 +1296,7 @@ func GetContractInvokeHistoryBackupKey(url, txId string) string {
 // 将该记录从invoke history中删除，备份到backup history中
 func backupContractInvokeHistoryItem(db db.KVDB, url string, value InvokeHistoryItem) error {
 
-	deleteContractInvokeHistoryItem(db, url, value.GetKey())
+	deleteContractInvokeHistoryItem(db, url, value)
 
 	key := GetContractInvokeHistoryBackupKey(url, value.GetKey())
 	buf, err := EncodeToBytes(value)

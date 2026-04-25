@@ -319,6 +319,7 @@ type ContractRuntime interface {
 	RuntimeStatus() string                  // 运行时状态，json格式
 	RuntimeAnalytics() string               // 运行时状态，json格式
 	InvokeHistory(any, int, int) string     // 调用历史记录，可以增加过滤条件
+	QueryInvokeItem(string) (string, error)      // 根据inUtxo查找item，json格式
 	AllAddressInfo(int, int) string         // 所有地址信息，json格式
 	StatusByAddress(string) (string, error) // 运行时状态，json格式
 	GetDeployTime() int64
@@ -1808,6 +1809,28 @@ func (p *ContractRuntimeBase) InvokeHistory(f any, start, limit int) string {
 	}
 	return string(buf)
 
+}
+
+func (p *ContractRuntimeBase) QueryInvokeItem(inUtxo string) (string, error) {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	item, ok := p.history[inUtxo]
+	if !ok {
+		it, err := loadContractInvokeHistoryItemByInUtxo(p.db, p.URL(), inUtxo)
+		if err != nil {
+			return "", err
+		}
+		item, ok = it.(*InvokeItem)
+		if !ok {
+			return "", fmt.Errorf("can't find invoke item with %s", inUtxo)
+		}
+	}
+	buf, err := json.Marshal(item)
+	if err != nil {
+		return "", fmt.Errorf("Marshal invoke item failed, %v", err)
+	}
+	return string(buf), nil
 }
 
 func (p *ContractRuntimeBase) AllAddressInfo(int, int) string {
