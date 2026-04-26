@@ -1804,6 +1804,12 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invoke
 		if withdrawParam.AssetName != p.GetAssetName().String() {
 			return nil, fmt.Errorf("invalid asset name %s", withdrawParam.AssetName)
 		}
+		if withdrawParam.DestAddr != "" {
+			if !IsBtcAddress(withdrawParam.DestAddr) {
+				Log.Warningf("%s withdraw invoke %s invalid dest address %s", url, utxo, withdrawParam.DestAddr)
+				withdrawParam.DestAddr = ""
+			}
+		}
 
 		// 到这里，客观条件都满足了，如果还不能符合铸造条件，那就需要退款
 
@@ -2534,6 +2540,7 @@ func (p *SwapContractRuntime) updateContract_withdraw(
 		ToL1:           !fromL1,
 		OutAmt:         indexer.NewDecimal(0, p.Divisibility),
 		OutValue:       0,
+		Padded:         []byte(param.DestAddr),
 	}
 	p.updateContractStatus(item)
 	p.addItem(item)
@@ -3912,15 +3919,20 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 			}
 			maxHeight = max(maxHeight, h)
 
-			info, ok := sendInfoMap[item.Address]
+			destAddr := item.Address
+			if len(item.Padded) != 0 {
+				destAddr = string(item.Padded)
+			}
+
+			info, ok := sendInfoMap[destAddr]
 			if !ok {
 				info = &SendAssetInfo{
-					Address:   item.Address,
+					Address:   destAddr,
 					Value:     0,
 					AssetName: assetName,
 					AssetAmt:  nil,
 				}
-				sendInfoMap[item.Address] = info
+				sendInfoMap[destAddr] = info
 			}
 
 			info.AssetAmt = info.AssetAmt.Add(item.RemainingAmt)
@@ -3992,6 +4004,23 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 	}
 }
 
+func (p *SwapContractRuntime) updateItem(item *SwapHistoryItem, txId string, trader *TraderStatus) {
+	// 更新对应数据
+	item.OutTxId = txId
+	item.OutAmt = item.RemainingAmt
+	item.OutValue = item.RemainingValue
+	item.RemainingAmt = nil
+	item.RemainingValue = 0
+	item.Done = ITEM_STATUS_DEALT
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+	delete(p.history, item.InUtxo)
+
+	if trader != nil {
+		trader.WithdrawAmt = trader.WithdrawAmt.Add(item.OutAmt)
+		trader.WithdrawValue += item.OutValue
+	}
+}
+
 func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -4007,14 +4036,16 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 	txId := dealInfo.TxId
 	url := p.URL()
 	// 通过height确定哪些item是需要处理的，然后更新对应的数据
+	sendToDest := make(map[string]bool)
 	for addr := range dealInfo.SendInfo {
 		if addr == ADDR_OPRETURN || addr == p.ChannelAddr {
 			continue
 		}
 		items, ok := p.withdrawMap[addr]
 		if !ok {
+			sendToDest[addr] = true // 可能是设置了destAddr的提取，另外处理
 			// 数据丢失？不应该出现这种情况
-			Log.Errorf("updateWithDealInfo_withdraw can't find %s for txId %s", addr, dealInfo.TxId)
+			//Log.Errorf("updateWithDealInfo_withdraw can't find %s for txId %s", addr, dealInfo.TxId)
 			continue
 		}
 		trader := p.traderInfoMap[addr]
@@ -4031,20 +4062,7 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 			deletedItems = append(deletedItems, id)
 
 			// 更新对应数据
-			item.OutTxId = txId
-			item.OutAmt = item.RemainingAmt
-			item.OutValue = item.RemainingValue
-			item.RemainingAmt = nil
-			item.RemainingValue = 0
-			item.Done = ITEM_STATUS_DEALT
-			item.Padded = []byte(fmt.Sprintf("%d", dealInfo.Fee)) // 记录该OutTx的费用，方便统计
-			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
-			delete(p.history, item.InUtxo)
-
-			if trader != nil {
-				trader.WithdrawAmt = trader.WithdrawAmt.Add(item.OutAmt)
-				trader.WithdrawValue += item.OutValue
-			}
+			p.updateItem(item, txId, trader)
 		}
 		if trader != nil {
 			saveContractInvokerStatus(p.stp.GetDB(), url, trader)
@@ -4054,6 +4072,48 @@ func (p *SwapContractRuntime) updateWithDealInfo_withdraw(dealInfo *DealInfo) {
 			delete(items, id)
 		}
 		if len(items) == 0 {
+			delete(p.withdrawMap, addr)
+		}
+	}
+
+	// 处理设置了destAddr的提取
+	if len(sendToDest) != 0 {
+		deleteAddr := make([]string, 0)
+		for addr, items := range p.withdrawMap {
+			trader := p.traderInfoMap[addr]
+			deletedItems := make([]int64, 0)
+			for id, item := range items {
+				if item.Done >= ITEM_STATUS_DEALT {
+					continue
+				}
+				_, ok := sendToDest[string(item.Padded)]
+				if !ok {
+					continue
+				}
+
+				h, _, _ := indexer.FromUtxoId(item.UtxoId)
+				if h > height {
+					continue
+				}
+				if item.AssetName != dealInfo.AssetName.String() {
+					continue
+				}
+				deletedItems = append(deletedItems, id)
+				// 更新对应数据
+				p.updateItem(item, txId, trader)
+			}
+			if trader != nil {
+				saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+			}
+
+			for _, id := range deletedItems {
+				delete(items, id)
+			}
+			if len(items) == 0 {
+				deleteAddr = append(deleteAddr, addr)
+			}
+		}
+		for _, addr := range deleteAddr {
 			delete(p.withdrawMap, addr)
 		}
 	}
@@ -4095,7 +4155,7 @@ func (p *SwapContractRuntime) withdraw() error {
 						p.mutex.Unlock()
 						p.stp.SaveReservationWithLock(p.resv)
 					}
-					Log.Errorf("contract %s sendTx %s failed %v", url, INVOKE_RESULT_WITHDRAW, err)
+					Log.Errorf("contract %s sendTx %s failed, %v", url, INVOKE_RESULT_WITHDRAW, err)
 					// 下个区块再试
 					return err
 				}

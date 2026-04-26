@@ -496,8 +496,29 @@ func (p *Manager) WithdrawWithContract(destAddr string, assetName string, amt st
 		return "", fmt.Errorf("peer is offline")
 	}
 
+	if destAddr != "" && !IsBtcAddress(destAddr) {
+		return "", fmt.Errorf("invalid dest address")
+	}
+
 	// 检查是否有对应的amm合约，如果存在，通过该合约处理资产进出
 	coreChannelId := p.GetCoreChannelAddr()
+
+	// 检查其主网地址是否有足够的资产
+	name := indexer.NewAssetNameFromString(assetName)
+	tickInfo := p.GetTickerInfo(name)
+	if tickInfo == nil {
+		return "", fmt.Errorf("can't find ticker info %s", assetName)
+	}
+	dAmt, err := indexer.NewDecimalFromString(amt, tickInfo.Divisibility)
+	if err != nil {
+		return "", err
+	}
+	total := p.GetAssetBalance(coreChannelId, indexer.NewAssetNameFromString(assetName))
+	if total.Cmp(dAmt) < 0 {
+		return "", fmt.Errorf("no enough asset %s in channel %s, require %s but only %s", 
+		assetName, coreChannelId, amt, total.String())		
+	}
+
 	url := GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_AMM)
 	r := p.getRemoteDeployedContract(url)
 	if r == nil {
@@ -515,6 +536,7 @@ func (p *Manager) WithdrawWithContract(destAddr string, assetName string, amt st
 		AssetName: assetName,
 		Amt:       amt,
 		FeeRate:   feeRate,
+		DestAddr:  destAddr,
 	}
 	withdrawParaBytes, err := json.Marshal(withdrawPara)
 	if err != nil {

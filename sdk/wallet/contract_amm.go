@@ -276,6 +276,7 @@ type WithdrawInvokeParam struct {
 	AssetName string `json:"assetName"` // 资产名字
 	Amt       string `json:"amt"`       // 资产数量
 	FeeRate   int64  `json:"feeRate,omitempty"`
+	DestAddr  string `json:"destAddr,omitempty"`
 }
 
 func (p *WithdrawInvokeParam) Encode() ([]byte, error) {
@@ -284,6 +285,7 @@ func (p *WithdrawInvokeParam) Encode() ([]byte, error) {
 		AddData([]byte(p.AssetName)).
 		AddData([]byte(p.Amt)).
 		AddInt64(int64(p.FeeRate)).
+		AddData([]byte(p.DestAddr)).
 		Script()
 }
 
@@ -293,6 +295,7 @@ func (p *WithdrawInvokeParam) EncodeV2() ([]byte, error) {
 		AddData([]byte("")).
 		AddData([]byte(p.Amt)).
 		AddInt64(int64(p.FeeRate)).
+		AddData([]byte(p.DestAddr)).
 		Script()
 }
 
@@ -319,6 +322,13 @@ func (p *WithdrawInvokeParam) Decode(data []byte) error {
 		p.FeeRate = 0
 	} else {
 		p.FeeRate = tokenizer.ExtractInt64()
+	}
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		Log.Infof("missing dest addr")
+		p.DestAddr = ""
+	} else {
+		p.DestAddr = string(tokenizer.Data())
 	}
 
 	return nil
