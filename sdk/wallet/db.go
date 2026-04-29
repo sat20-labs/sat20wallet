@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/btcsuite/btcwallet/snacl"
 	db "github.com/sat20-labs/indexer/common"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -124,10 +124,10 @@ func (p *Manager) repair() bool {
 	return false
 }
 
-func loadAllWalletFromDB(db db.KVDB) (map[int64]*WalletInDB, error) {
+func loadAllWalletFromDB(db db.KVDB) (map[int64]*WalletInfo, error) {
 	prefix := []byte(DB_KEY_WALLET)
 
-	result := make(map[int64]*WalletInDB, 0)
+	result := make(map[int64]*WalletInfo, 0)
 	err := db.BatchRead(prefix, false, func(k, v []byte) error {
 
 		var walletInfo WalletInDB
@@ -139,7 +139,9 @@ func loadAllWalletFromDB(db db.KVDB) (map[int64]*WalletInDB, error) {
 
 		Log.Infof("wallet %d loaded", walletInfo.Id)
 
-		result[walletInfo.Id] = &walletInfo
+		result[walletInfo.Id] = &WalletInfo{
+			WalletInDB: walletInfo,
+		}
 		return nil
 	})
 
@@ -222,27 +224,27 @@ func (p *Manager) saveStatus() error {
 	return nil
 }
 
-func (p *Manager) saveMnemonic(mn, password string) (int64, error) {
-	return p.saveSecret(mn, password, WALLET_TYPE_MNEMONIC)
+func (p *Manager) saveMnemonic(mn, password string, wallet common.Wallet) (error) {
+	return p.saveSecret(mn, password, WALLET_TYPE_MNEMONIC, wallet)
 }
 
-func (p *Manager) saveSecret(secret, password string, ty int) (int64, error) {
+func (p *Manager) saveSecret(secret, password string, ty int, w common.Wallet) (error) {
 	key, err := p.newSnaclKey(password)
 	if err != nil {
 		Log.Errorf("newSnaclKey failed. %v", err)
-		return -1, err
+		return err
 	}
 
 	en, err := key.Encrypt([]byte(secret))
 	if err != nil {
 		Log.Errorf("Encrypt failed. %v", err)
-		return -1, err
+		return err
 	}
 
 	salt := key.Marshal()
 
 	wallet := WalletInDB{
-		Id:       time.Now().UnixMicro(),
+		Id:       w.GetId(),
 		Mnemonic: en,
 		Salt:     salt,
 		Accounts: 1,
@@ -251,11 +253,14 @@ func (p *Manager) saveSecret(secret, password string, ty int) (int64, error) {
 
 	err = saveWallet(p.db, &wallet)
 	if err != nil {
-		return -1, err
+		return err
 	}
 
-	p.walletInfoMap[wallet.Id] = &wallet
-	return wallet.Id, nil
+	p.walletInfoMap[wallet.Id] = &WalletInfo{
+		WalletInDB: wallet,
+		Wallet:     w,
+	}
+	return nil
 }
 
 func (p *Manager) saveWalletSecretWithPassword(mn, password string, wallet *WalletInDB) error {
@@ -284,33 +289,20 @@ func (p *Manager) saveWalletSecretWithPassword(mn, password string, wallet *Wall
 	return nil
 }
 
-func (p *Manager) loadWalletSecret(id int64, password string) (string, int, error) {
-	wallet, ok := p.walletInfoMap[id]
-	if !ok {
-		// 现在有两个钱包对象在两个模块之中，需要做一些数据同步工作
-		err := p.initDB()
-		if err != nil {
-			return "", 0, fmt.Errorf("can't find wallet %d", id)
-		}
-		wallet, ok = p.walletInfoMap[id]
-		if !ok {
-			return "", 0, fmt.Errorf("can't find wallet %d", id)
-		}
-	}
-
-	key, err := p.restoreSnaclKey(wallet.Salt, password)
+func (p *Manager) loadWalletSecret(w *WalletInfo, password string) (string, error) {
+	key, err := p.restoreSnaclKey(w.Salt, password)
 	if err != nil {
 		Log.Errorf("restoreSnaclKey failed. %v", err)
-		return "", 0, err
+		return "", err
 	}
 
-	mnemonic, err := key.Decrypt(wallet.Mnemonic)
+	mnemonic, err := key.Decrypt(w.Mnemonic)
 	if err != nil {
 		Log.Errorf("Decrypt failed. %v", err)
-		return "", 0, err
+		return "", err
 	}
 
-	return string(mnemonic), wallet.Type, nil
+	return string(mnemonic), nil
 }
 
 func (p *Manager) restoreSnaclKey(salt []byte, password string) (*snacl.SecretKey, error) {

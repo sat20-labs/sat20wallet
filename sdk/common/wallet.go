@@ -8,6 +8,13 @@ import (
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
 
+
+type WalletId struct {
+	Id int64
+	SubAccountId uint32
+}
+
+
 // 方便对通道的操作进行签名和验证，id是子账户id，从0开始
 type ChannelWallet interface {
 	GetId() uint32
@@ -27,6 +34,8 @@ type Wallet interface {
 	Clone() Wallet
 	CloneByPubKey([]byte) Wallet
 
+	GetId() int64
+	GetWalletId() WalletId
 	SetSubAccount(id uint32)
 	GetSubAccount() uint32
 	
@@ -34,7 +43,7 @@ type Wallet interface {
 	GetAddress() string
 	GetPubKeyByIndex(uint32) *secp256k1.PublicKey
 	GetAddressByIndex(uint32) string
-	GetNodePubKey() *secp256k1.PublicKey
+	GetNodePubKey() *secp256k1.PublicKey // subAccount = 0
 
 	// default channel wallet, CWId = 0
 	GetCommitSecret(peer []byte, index uint32) *secp256k1.PrivateKey

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil/psbt"
@@ -105,30 +104,32 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 		return -1, "", err
 	}
 
-	id, err := p.saveMnemonic(mnemonic, password)
+	err = p.saveMnemonic(mnemonic, password, wallet)
 	if err != nil {
 		return -1, "", err
 	}
 
 	p.wallet = wallet
-	p.status.CurrentWallet = id
+	p.status.CurrentWallet = wallet.GetId()
+	p.status.CurrentAccount = 0
 	p.saveStatus()
 
-	return id, mnemonic, nil
+	return p.status.CurrentWallet, mnemonic, nil
 }
 
+// TODO 未完成，还没有保存
 func (p *Manager) CreateMonitorWallet(address string) (int64, error) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
 	wallet := NewMonitorWallet(address)
-	id := time.Now().UnixMicro()
 
 	p.wallet = wallet
-	p.status.CurrentWallet = id
+	p.status.CurrentWallet = wallet.GetId()
+	p.status.CurrentAccount = 0
 	p.saveStatus()
 
-	return id, nil
+	return p.status.CurrentWallet, nil
 }
 
 func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) {
@@ -149,16 +150,17 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	id, err := p.saveMnemonic(mnemonic, password)
+	err := p.saveMnemonic(mnemonic, password, wallet)
 	if err != nil {
 		return -1, err
 	}
 
 	p.wallet = wallet
-	p.status.CurrentWallet = id
+	p.status.CurrentWallet = wallet.GetId()
+	p.status.CurrentAccount = 0
 	p.saveStatus()
 
-	return id, nil
+	return p.status.CurrentWallet, nil
 }
 
 func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (int64, error) {
@@ -176,16 +178,17 @@ func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (i
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	id, err := p.saveSecret(privKey, password, WALLET_TYPE_PRIVKEY)
+	err = p.saveSecret(privKey, password, WALLET_TYPE_PRIVKEY, wallet)
 	if err != nil {
 		return -1, err
 	}
 
 	p.wallet = wallet
-	p.status.CurrentWallet = id
+	p.status.CurrentWallet = wallet.GetId()
+	p.status.CurrentAccount = 0
 	p.saveStatus()
 
-	return id, nil
+	return p.status.CurrentWallet, nil
 }
 
 func (p *Manager) ChangePassword(oldPS, newPS string) error {
@@ -193,13 +196,13 @@ func (p *Manager) ChangePassword(oldPS, newPS string) error {
 	defer p.mutex.Unlock()
 
 	for id, v := range p.walletInfoMap {
-		mnemonic, _, err := p.loadWalletSecret(id, oldPS)
+		mnemonic, err := p.loadWalletSecret(v, oldPS)
 		if err != nil {
 			Log.Errorf("loadMnemonic %d failed, %v", id, err)
 			return err
 		}
 
-		err = p.saveWalletSecretWithPassword(mnemonic, newPS, v)
+		err = p.saveWalletSecretWithPassword(mnemonic, newPS, &v.WalletInDB)
 		if err != nil {
 			Log.Errorf("saveMnemonicWithPassword %d failed, %v", id, err)
 			return err
@@ -216,36 +219,62 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 	return p.unlockWallet(password)
 }
 
+// 同时解锁所有的钱包
 func (p *Manager) unlockWallet(password string) (int64, error) {
 
 	if p.wallet != nil {
 		return -1, fmt.Errorf("wallet has been unlocked")
 	}
 
-	secret, ty, err := p.loadWalletSecret(p.status.CurrentWallet, password)
-	if err != nil {
-		return -1, err
-	}
-	var wallet *InternalWallet
-	switch ty {
-	case WALLET_TYPE_MNEMONIC:
-		wallet = NewInternalWalletWithMnemonic(string(secret), "", GetChainParam())
-	case WALLET_TYPE_PRIVKEY:
-		privKeyBytes, err := hex.DecodeString(secret)
-		if err != nil {
-			return 0, err
+	for _, walletInfo := range p.walletInfoMap {
+		if walletInfo.Wallet != nil {
+			continue
 		}
-		wallet, _, _ = NewInternalWalletWithPrivKey(privKeyBytes, GetChainParam())
-		
-	}
-	if wallet == nil {
-		return -1, fmt.Errorf("NewWalletWithMnemonic failed")
+		secret, err := p.loadWalletSecret(walletInfo, password)
+		if err != nil {
+			Log.Errorf("loadWalletSecret %d failed. %v", walletInfo.Id, err)
+			return -1, fmt.Errorf("password is incorrect")
+		}
+		switch walletInfo.Type {
+		case WALLET_TYPE_MNEMONIC:
+			walletInfo.Wallet = NewInternalWalletWithMnemonic(string(secret), "", GetChainParam())
+			if walletInfo.Wallet == nil {
+				Log.Errorf("NewInternalWalletWithMnemonic failed")
+				continue
+			}
+		case WALLET_TYPE_PRIVKEY:
+			privKeyBytes, err := hex.DecodeString(string(secret))
+			if err != nil {
+				Log.Errorf("hex.DecodeString failed, %v", err)
+				continue
+			}
+			walletInfo.Wallet, _, _ = NewInternalWalletWithPrivKey(privKeyBytes, GetChainParam())
+			if walletInfo.Wallet == nil {
+				Log.Errorf("NewInternalWalletWithPrivKey failed")
+				continue
+			}
+		}
 	}
 
-	p.wallet = wallet
-	p.status.CurrentAccount = 0
+	p.wallet = p.walletInfoMap[p.status.CurrentWallet].Wallet
+	if p.wallet != nil {
+		if p.status.CurrentAccount > 0 {
+			p.wallet.SetSubAccount(p.status.CurrentAccount)
+		}
+		return p.status.CurrentWallet, nil
+	}
+	Log.Errorf("can't find wallet %d, set to first wallet", p.status.CurrentWallet)
+	for id, walletInfo := range p.walletInfoMap {
+		if walletInfo.Wallet != nil {
+			p.wallet = walletInfo.Wallet
+			p.status.CurrentWallet = id
+			p.status.CurrentAccount = 0
+			p.saveStatus()
+			return p.status.CurrentWallet, nil
+		}
+	}
 
-	return p.status.CurrentWallet, nil
+	return -1, fmt.Errorf("can't unlock any wallet")
 }
 
 func (p *Manager) GetAllWallets() map[int64]int {
@@ -259,6 +288,7 @@ func (p *Manager) GetAllWallets() map[int64]int {
 	return result
 }
 
+// 不再需要密码
 func (p *Manager) SwitchWallet(id int64, password string) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -266,22 +296,82 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 	if p.status.CurrentWallet == id {
 		return nil
 	}
-
-	oldWalletId := p.status.CurrentWallet
-	oldAccount := p.status.CurrentAccount
-	p.status.CurrentWallet = id
-	oldWallet := p.wallet
-	p.wallet = nil
-	_, err := p.unlockWallet(password)
-	if err == nil {
-		p.saveStatus()
-	} else {
-		p.status.CurrentWallet = oldWalletId
-		p.status.CurrentAccount = oldAccount
-		p.wallet = oldWallet
+	w, ok := p.walletInfoMap[id]
+	if !ok {
+		// 不再考虑js模块存在两个模块的问题，由js模块自己重新加载
+		// 插件钱包有两个钱包对象，需要做数据同步，简单加载就行
+		//p.initDB()
+		//_, ok := p.walletInfoMap[id]
+		//if !ok {
+			return fmt.Errorf("can't find wallet %d", id)
+		//}
 	}
-	return err
+
+	p.status.CurrentWallet = id
+	p.status.CurrentAccount = 0
+	p.wallet = w.Wallet
+	p.saveStatus()
+	
+	return nil
 }
+
+func (p *Manager) GetCurrentWalletId() int64 {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	return p.status.CurrentWallet
+}
+
+
+func (p *Manager) GetCurrentAccountId() uint32 {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	return p.status.CurrentAccount
+}
+
+// 不改变当前钱包和账户
+func (p *Manager) FindWalletById(id int64) common.Wallet {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	walletInfo, ok := p.walletInfoMap[id]
+	if !ok {
+		return nil
+	}
+	
+	return walletInfo.Wallet
+}
+
+// 不改变当前钱包和账户
+func (p *Manager) GetWalletId(w common.Wallet) int64 {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	for id, walletInfo := range p.walletInfoMap {
+		if walletInfo.Wallet != nil && walletInfo.Wallet.GetNodePubKey().IsEqual(w.GetNodePubKey()) {
+			return id
+		}
+	}
+	
+	return 0
+}
+
+
+// 不改变当前钱包和账户
+func (p *Manager) FindWalletByPubKey(pubKey []byte) common.Wallet {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	for _, walletInfo := range p.walletInfoMap {
+		if bytes.Equal(walletInfo.Wallet.GetNodePubKey().SerializeCompressed(), pubKey) {
+			return walletInfo.Wallet
+		}
+	}
+
+	return nil
+}
+
 
 func (p *Manager) SwitchAccount(id uint32) {
 	p.mutex.Lock()
@@ -296,7 +386,7 @@ func (p *Manager) SwitchAccount(id uint32) {
 		// 必须有
 		if walletInfo.Accounts < int(id) {
 			walletInfo.Accounts = int(id)
-			saveWallet(p.db, walletInfo)
+			saveWallet(p.db, &walletInfo.WalletInDB)
 		}
 	}
 
@@ -336,7 +426,12 @@ func (p *Manager) GetMnemonic(id int64, password string) string {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	serect, _, err := p.loadWalletSecret(id, password)
+	w, ok := p.walletInfoMap[id]
+	if !ok {
+		return ""
+	}
+
+	serect, err := p.loadWalletSecret(w, password)
 	if err != nil {
 		return ""
 	}

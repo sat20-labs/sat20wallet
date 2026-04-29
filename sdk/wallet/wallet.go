@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
@@ -114,6 +115,7 @@ type InternalWallet struct {
 	accounts               map[uint64]*hdkeychain.ExtendedKey // key: purpose<<32+account
 	addresses              map[uint32]btcutil.Address         // key: index
 	currentIndex           uint32                             // 当前子账户
+	id    			       int64
 
 	subWallets map[uint32]*channelWallet
 
@@ -143,6 +145,7 @@ func NewInternalWalletWithPrivKey(privateKey []byte, param *chaincfg.Params) (*I
 		addresses:              make(map[uint32]btcutil.Address),
 		subWallets:             make(map[uint32]*channelWallet),
 		currentIndex:           0,
+		id: 					time.Now().UnixMicro(),
 	}
 
 	// 将提供的私钥作为 index 0 的支付私钥（以及 revocation base）使用
@@ -208,6 +211,8 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 		accounts:               make(map[uint64]*hdkeychain.ExtendedKey),
 		addresses:              make(map[uint32]btcutil.Address),
 		subWallets:             make(map[uint32]*channelWallet),
+		currentIndex:           0,
+		id: 					time.Now().UnixMicro(),
 	}
 }
 
@@ -222,6 +227,7 @@ func (p *InternalWallet) Clone() common.Wallet {
 		addresses:              make(map[uint32]btcutil.Address),
 		subWallets:             make(map[uint32]*channelWallet),
 		currentIndex:           p.currentIndex,
+		id: 					p.id,
 	}
 }
 
@@ -239,6 +245,17 @@ func (p *InternalWallet) CloneByPubKey(pubkey []byte) common.Wallet {
 	n := p.Clone()
 	n.SetSubAccount(i)
 	return n
+}
+
+func (p *InternalWallet) GetId() int64 {
+	return p.id
+}
+
+func (p *InternalWallet) GetWalletId() common.WalletId {
+	return common.WalletId{
+		Id: p.id,
+		SubAccountId: p.currentIndex,
+	}
 }
 
 func (p *InternalWallet) CreateChannelWallet(peer []byte, id uint32) common.ChannelWallet {

@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -12,18 +13,33 @@ import (
 
 type MonitorWallet struct {
 	address string
+	id      int64
 }
 
 
 func NewMonitorWallet(address string,) (*MonitorWallet) {
 	return &MonitorWallet{
 		address: address,
+		id: time.Now().UnixMicro(),
 	}
 }
 
 func (p *MonitorWallet) Clone() common.Wallet {
 	return &MonitorWallet{
 		address: p.address,
+		id: p.id,
+	}
+}
+
+
+func (p *MonitorWallet) GetId() int64 {
+	return p.id
+}
+
+func (p *MonitorWallet) GetWalletId() common.WalletId {
+	return common.WalletId{
+		Id: p.id,
+		SubAccountId: 0,
 	}
 }
 

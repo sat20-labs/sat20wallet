@@ -402,7 +402,7 @@ func FinalSignTxWithWallet_SatsNet(localWallet common.Wallet, tx *swire.MsgTx, p
 	return result, nil
 }
 
-func (p *Manager) FinalTxWithPeerSig(redeemScript, localPubkey, peerPubkey []byte, tx *wire.MsgTx,
+func FinalTxWithPeerSig(redeemScript, localPubkey, peerPubkey []byte, tx *wire.MsgTx,
 	prevFetcher txscript.PrevOutputFetcher, theirSig [][]byte) error {
 
 	multiSignScript, mulpkScript, err := GetP2WSHscript(localPubkey, peerPubkey)
@@ -411,9 +411,7 @@ func (p *Manager) FinalTxWithPeerSig(redeemScript, localPubkey, peerPubkey []byt
 		return err
 	}
 	pos := GetCurrSignPosition2(localPubkey, peerPubkey)
-
-	pubkey := p.wallet.GetPaymentPubKey()
-	p2trPkScript, err := GetP2TRpkScript(pubkey)
+	p2trPkScript, err := HexPubKeyToP2TRPkScript(localPubkey)
 	if err != nil {
 		Log.Errorf("CreatePkScriptForP2TR failed. %v", err)
 		return err
@@ -452,7 +450,7 @@ func (p *Manager) FinalTxWithPeerSig(redeemScript, localPubkey, peerPubkey []byt
 	return nil
 }
 
-func (p *Manager) FinalTxWithPeerSig_SatsNet(redeemScript, localPubkey, peerPubkey []byte, tx *swire.MsgTx,
+func FinalTxWithPeerSig_SatsNet(redeemScript, localPubkey, peerPubkey []byte, tx *swire.MsgTx,
 	prevFetcher stxscript.PrevOutputFetcher, theirSig [][]byte) error {
 
 	multiSignScript, mulpkScript, err := GetP2WSHscript(localPubkey, peerPubkey)
@@ -461,9 +459,7 @@ func (p *Manager) FinalTxWithPeerSig_SatsNet(redeemScript, localPubkey, peerPubk
 		return err
 	}
 	pos := GetCurrSignPosition2(localPubkey, peerPubkey)
-
-	pubkey := p.wallet.GetPaymentPubKey()
-	p2trPkScript, err := GetP2TRpkScript(pubkey)
+	p2trPkScript, err := HexPubKeyToP2TRPkScript(localPubkey)
 	if err != nil {
 		Log.Errorf("CreatePkScriptForP2TR failed. %v", err)
 		return err
@@ -502,7 +498,7 @@ func (p *Manager) FinalTxWithPeerSig_SatsNet(redeemScript, localPubkey, peerPubk
 	return nil
 }
 
-func (p *Manager) CleanPeerSig(redeemScript, localPubkey, peerPubkey []byte, tx *wire.MsgTx,
+func CleanPeerSig(redeemScript, localPubkey, peerPubkey []byte, tx *wire.MsgTx,
 	prevFetcher txscript.PrevOutputFetcher) error {
 
 	multiSignScript, mulpkScript, err := GetP2WSHscript(localPubkey, peerPubkey)
@@ -512,8 +508,7 @@ func (p *Manager) CleanPeerSig(redeemScript, localPubkey, peerPubkey []byte, tx 
 	}
 	pos := GetCurrSignPosition2(localPubkey, peerPubkey)
 
-	pubkey := p.wallet.GetPaymentPubKey()
-	p2trPkScript, err := GetP2TRpkScript(pubkey)
+	p2trPkScript, err := HexPubKeyToP2TRPkScript(localPubkey)
 	if err != nil {
 		Log.Errorf("CreatePkScriptForP2TR failed. %v", err)
 		return err
@@ -552,7 +547,7 @@ func (p *Manager) CleanPeerSig(redeemScript, localPubkey, peerPubkey []byte, tx 
 	return nil
 }
 
-func (p *Manager) CleanPeerSig_SatsNet(redeemScript, localPubkey, peerPubkey []byte, tx *swire.MsgTx,
+func CleanPeerSig_SatsNet(redeemScript, localPubkey, peerPubkey []byte, tx *swire.MsgTx,
 	prevFetcher stxscript.PrevOutputFetcher) error {
 
 	multiSignScript, mulpkScript, err := GetP2WSHscript(localPubkey, peerPubkey)
@@ -562,8 +557,7 @@ func (p *Manager) CleanPeerSig_SatsNet(redeemScript, localPubkey, peerPubkey []b
 	}
 	pos := GetCurrSignPosition2(localPubkey, peerPubkey)
 
-	pubkey := p.wallet.GetPaymentPubKey()
-	p2trPkScript, err := GetP2TRpkScript(pubkey)
+	p2trPkScript, err := HexPubKeyToP2TRPkScript(localPubkey)
 	if err != nil {
 		Log.Errorf("CreatePkScriptForP2TR failed. %v", err)
 		return err
@@ -637,10 +631,10 @@ func (p *Manager) SignAndVerifyTx_SatsNet(redeemScript, peerPubkey []byte, tx *s
 	return sigs, nil
 }
 
-func (p *Manager) VerifyTx_SatsNet(redeemScript, localPubkey, peerPubkey []byte, tx *swire.MsgTx,
+func VerifyTx_SatsNet(redeemScript, localPubkey, peerPubkey []byte, tx *swire.MsgTx,
 	prevFetcher stxscript.PrevOutputFetcher, theirSig [][]byte) error {
 
-	err := p.FinalTxWithPeerSig_SatsNet(redeemScript, localPubkey, peerPubkey, tx, prevFetcher, theirSig)
+	err := FinalTxWithPeerSig_SatsNet(redeemScript, localPubkey, peerPubkey, tx, prevFetcher, theirSig)
 	if err != nil {
 		return err
 	}
@@ -653,10 +647,10 @@ func (p *Manager) VerifyTx_SatsNet(redeemScript, localPubkey, peerPubkey []byte,
 	return nil
 }
 
-func (p *Manager) VerifyTx(redeemScript, localPubkey, peerPubkey []byte, tx *wire.MsgTx,
+func VerifyTx(redeemScript, localPubkey, peerPubkey []byte, tx *wire.MsgTx,
 	prevFetcher txscript.PrevOutputFetcher, theirSig [][]byte) error {
 
-	err := p.FinalTxWithPeerSig(redeemScript, localPubkey, peerPubkey, tx, prevFetcher, theirSig)
+	err := FinalTxWithPeerSig(redeemScript, localPubkey, peerPubkey, tx, prevFetcher, theirSig)
 	if err != nil {
 		return err
 	}

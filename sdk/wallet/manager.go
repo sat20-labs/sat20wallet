@@ -37,6 +37,11 @@ type Node struct {
 	Pubkey   *secp256k1.PublicKey
 }
 
+type WalletInfo struct {
+	WalletInDB
+	Wallet common.Wallet
+}
+
 type NotifyCB func(string, interface{})
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet
@@ -46,7 +51,7 @@ type Manager struct {
 	cfg           *common.Config
 	bInited       bool
 	status        *Status
-	walletInfoMap map[int64]*WalletInDB
+	walletInfoMap map[int64]*WalletInfo
 	wallet        common.Wallet
 	msgCallback   NotifyCB
 	tickerInfoMap map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
@@ -239,6 +244,8 @@ func (p *Manager) dbStatistic() bool {
 }
 
 func (p *Manager) GetWallet() common.Wallet {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	return p.wallet
 }
 

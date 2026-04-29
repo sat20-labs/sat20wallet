@@ -118,7 +118,7 @@ func AddrFromPkScript(pkScript []byte) (string, error) {
 
 // only for p2tr
 func PubKeyToPkScript(pubKey *secp256k1.PublicKey) ([]byte, error) {
-	return HexPubKeyToP2TRPkScript(pubKey.SerializeCompressed())
+	return GetP2TRpkScript(pubKey)
 }
 
 func PubKeyFromPkScript(pkScript []byte) ([]byte, error) {
