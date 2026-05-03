@@ -237,7 +237,7 @@ type ContractManager interface {
 		excludeRecentBlock bool) (string, int64, error)
 	CoBatchSendV3(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
-		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
+		sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress bool) (string, int64, error)
 	CoSendOrdxWithStub(localWallet common.Wallet, dest string, assetNameStr string, amt int64, feeRate int64, stub string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
@@ -2540,14 +2540,14 @@ func (p *ContractRuntimeBase) buildDepositAnchorTx(output *indexer.TxOutput, des
 	height int, reason string) (*swire.MsgTx, error) {
 	//
 	var assetName *AssetName
-	if len(output.Assets) == 0 {
+	if !output.HasAsset() {
 		assetName = &AssetName{
 			AssetName: indexer.ASSET_PLAIN_SAT,
 			N:         1,
 		}
 	} else {
 		assetName = &AssetName{
-			AssetName: output.Assets[0].Name,
+			AssetName: output.Assets[0].Name, // TODO 可能有brc20在前面？
 			N:         int(output.Assets[0].BindingSat),
 		}
 	}
@@ -2768,7 +2768,7 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 		for i := 0; i < 3; i++ {
 			txId, fee, err = p.stp.CoBatchSendV3(p.localWallet, sendInfoVect, dealInfo.AssetName.String(), dealInfo.FeeRate,
 				"contract", url, dealInfo.InvokeCount, nullDataScript,
-				dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
+				dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock, false)
 			if err != nil {
 				if strings.Contains(err.Error(), ERR_MERKLE_ROOT_INCONSISTENT) {
 					// recalc
@@ -2901,60 +2901,6 @@ func (p *ContractRuntimeBase) genSendInfoFromTx_SatsNet(tx *swire.MsgTx, include
 	dealInfo.AssetName = assetName
 
 	return dealInfo, nil
-}
-
-// 因为不清楚具体是哪一种资产，这里按照默认的优先级选择资产： ft>names>nft, ordx>runes
-func (p *ContractRuntimeBase) GetAssetInfoFromOutput(output *TxOutput) (*indexer.AssetName, *Decimal, int, error) {
-	var assetAmt *Decimal
-	var assetName *indexer.AssetName
-	divisibility := 0
-	if len(output.Assets) == 0 {
-		assetAmt = indexer.NewDefaultDecimal(output.Value())
-		assetName = &indexer.ASSET_PLAIN_SAT
-	} else if len(output.Assets) == 1 {
-		// 不管什么资产，都先上
-		assetName = &output.Assets[0].Name
-		assetAmt = output.Assets[0].Amount.Clone()
-		tickInfo := p.stp.GetTickerInfo(assetName)
-		if tickInfo == nil {
-			return nil, nil, 0, fmt.Errorf("can't find tick %s", assetName.String())
-		}
-		divisibility = tickInfo.Divisibility
-	} else {
-		var asset *indexer.AssetInfo
-		for _, a := range output.Assets {
-			switch a.Name.Type {
-			case indexer.ASSET_TYPE_FT:
-				if asset == nil {
-					asset = &a
-				} else {
-					if asset.Name.Protocol == a.Name.Protocol {
-						if asset.Amount.Cmp(&a.Amount) < 0 {
-							asset = &a
-						}
-					} else {
-						if a.Name.Protocol == indexer.PROTOCOL_NAME_ORDX {
-							asset = &a
-						}
-					}
-				}
-
-			case indexer.ASSET_TYPE_EXOTIC:
-				if asset == nil {
-					asset = &a
-				}
-			}
-		}
-		tickInfo := p.stp.GetTickerInfo(&asset.Name)
-		if tickInfo == nil {
-			return nil, nil, 0, fmt.Errorf("can't find tick %s", asset.Name.String())
-		}
-		divisibility = tickInfo.Divisibility
-
-		assetName = &asset.Name
-		assetAmt = asset.Amount.Clone()
-	}
-	return assetName, assetAmt, divisibility, nil
 }
 
 func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[string]*TxOutput,

@@ -13,20 +13,24 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	schainhash "github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	stxscript "github.com/sat20-labs/satoshinet/txscript"
 	swire "github.com/sat20-labs/satoshinet/wire"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	sindexerwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 )
 
 type Brc20Transfer struct {
-	Utxo string
-	Address string
+	Utxo      string
+	Address   string
 	AssetName *swire.AssetName
-	Amt *Decimal
+	Amt       *Decimal
 }
 
 type network struct {
@@ -47,12 +51,13 @@ type network struct {
 	descendMap    map[string]string // deanchorTxId->utxo
 
 	// brc20, 仅在L1有效
-	addrAssetMap  map[string]map[swire.AssetName]*Decimal // brc20 持有的数量
-	addrTransferMap  map[string]map[swire.AssetName]map[string]bool // brc20 持有的transfer铭文
-	transferInfo  map[string]*Brc20Transfer // brc20 持有的transfer铭文
-	invalids      map[string]map[swire.AssetName]bool // utxo中哪些资产是无效的
+	addrAssetMap    map[string]map[swire.AssetName]*Decimal        // brc20 持有的数量
+	addrTransferMap map[string]map[swire.AssetName]map[string]bool // brc20 持有的transfer铭文
+	transferInfo    map[string]*Brc20Transfer                      // brc20 持有的transfer铭文
+	invalids        map[string]map[swire.AssetName]bool            // utxo中哪些资产是无效的
 }
 
+// 将预设的brc20资产都当作可以转移的
 func (p *network) InitBRC20AssetInfo() {
 	for i, utxo := range p.utxos {
 		if p.utxoUsed[utxo] != "" {
@@ -61,7 +66,7 @@ func (p *network) InitBRC20AssetInfo() {
 
 		addr := _pkScripts[p.utxoOwner[i]]
 		assets := p.utxoAssets[i]
-		
+
 		for _, asset := range assets {
 			if asset.Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
 				assetmap, ok := p.addrAssetMap[addr]
@@ -85,15 +90,15 @@ func (p *network) InitBRC20AssetInfo() {
 				utxomap[utxo] = true
 
 				p.transferInfo[utxo] = &Brc20Transfer{
-					Utxo: utxo,
-					Address: addr,
+					Utxo:      utxo,
+					Address:   addr,
 					AssetName: &asset.Name,
-					Amt: &asset.Amount,
+					Amt:       &asset.Amount,
 				}
 
 			}
 		}
-		
+
 	}
 }
 
@@ -214,10 +219,10 @@ func (p *network) Clone() *network {
 	n.transferInfo = make(map[string]*Brc20Transfer)
 	for k, v := range p.transferInfo {
 		newInfo := &Brc20Transfer{
-			Utxo: v.Utxo,
-			Address: v.Address,
+			Utxo:      v.Utxo,
+			Address:   v.Address,
 			AssetName: v.AssetName,
-			Amt: v.Amt.Clone(),
+			Amt:       v.Amt.Clone(),
 		}
 		n.transferInfo[k] = newInfo
 	}
@@ -280,7 +285,7 @@ var _network1 = &network{
 	descendMap:    make(map[string]string),
 
 	utxoValue: []int64{
-		20000, 2000000, 20000, 2000000,
+		20000, 2000000, 20000, 200000000,
 		1000000, 100000, 10000, 10000, // 4-
 		10000, 10000, 10000, 10000, // 8-
 		330, 330, 330, 330, // 12-
@@ -400,7 +405,6 @@ var _network1 = &network{
 		{{Protocol: "brc20", Type: "f", Ticker: "ordi"}: {{Start: 0, End: 1}}},
 		{{Protocol: "brc20", Type: "f", Ticker: "pizza"}: {{Start: 0, End: 1}}},
 
-
 		{{Protocol: "ordx", Type: "f", Ticker: "pizza"}: {{Start: 0, End: 10000}}},
 		{{Protocol: "ordx", Type: "f", Ticker: "dogcoin"}: {{Start: 0, End: 90000}}},
 		{{Protocol: "ordx", Type: "e", Ticker: "vintage"}: {{Start: 1000, End: 9000}}},
@@ -410,7 +414,7 @@ var _network1 = &network{
 		nil, nil, nil,
 
 		{{Protocol: "ordx", Type: "f", Ticker: "pizza"}: {{Start: 0, End: 1000}}},
-		nil, 
+		nil,
 		{{Protocol: "brc20", Type: "f", Ticker: "ordi"}: {{Start: 0, End: 1}}},
 		nil,
 
@@ -435,10 +439,10 @@ var _network1 = &network{
 		1, 1, 1, 1,
 	},
 
-	addrAssetMap: map[string]map[swire.AssetName]*Decimal {},
-	addrTransferMap: map[string]map[swire.AssetName]map[string]bool {},
-	transferInfo: map[string]*Brc20Transfer {},
-	invalids: map[string]map[swire.AssetName]bool {},
+	addrAssetMap:    map[string]map[swire.AssetName]*Decimal{},
+	addrTransferMap: map[string]map[swire.AssetName]map[string]bool{},
+	transferInfo:    map[string]*Brc20Transfer{},
+	invalids:        map[string]map[swire.AssetName]bool{},
 }
 
 var _network2 = &network{
@@ -506,8 +510,11 @@ var _network2 = &network{
 }
 
 var _coreNodeMap = map[string]bool{ // pubkey
-	"": true,
+	"025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad": true,
+	"0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e": true,
 }
+var _minerInfoMap = map[string]*sindexer.MinerInfo{}                      // pubkey
+var _coreNodeChildMap = map[string]map[string]*sindexer.MinerAscendInfo{} // pubkey->child pubkey
 
 var _tickerInfoRunning map[string]*indexer.TickerInfo
 var _tickerInfo = map[string]*indexer.TickerInfo{
@@ -774,7 +781,6 @@ func NewTestIndexerClient(network *network) *TestIndexerClient {
 	}
 }
 
-
 func (p *TestIndexerClient) Host() string {
 	return p.RESTClient.Host
 }
@@ -784,6 +790,11 @@ func (p *TestIndexerClient) Ping() error {
 }
 
 func (p *TestIndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
+	utxoId, err := p.GetUtxoId(utxo)
+	if err != nil {
+		return nil, err
+	}
+
 	p.network.mutex.RLock()
 	defer p.network.mutex.RUnlock()
 
@@ -802,12 +813,13 @@ func (p *TestIndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 	pkScript, _ := hex.DecodeString(_pkScripts[p.network.utxoOwner[index]])
 
 	output := TxOutput{
-		OutPointStr: utxo,
-		OutValue:    wire.TxOut{Value: p.network.utxoValue[index], PkScript: pkScript},
-		Assets:      txAssets.Clone(),
-		Offsets:     cloneOffsets(offsets),
+		UtxoId:        utxoId,
+		OutPointStr:   utxo,
+		OutValue:      wire.TxOut{Value: p.network.utxoValue[index], PkScript: pkScript},
+		Assets:        txAssets.Clone(),
+		Offsets:       cloneOffsets(offsets),
 		SatBindingMap: make(map[int64]*indexer.AssetInfo),
-		Invalids:    make(map[indexer.AssetName]bool),
+		Invalids:      make(map[indexer.AssetName]bool),
 	}
 	invalidmap, existing := p.network.invalids[utxo]
 	for _, asset := range output.Assets {
@@ -828,7 +840,6 @@ func (p *TestIndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 			}
 		}
 	}
-	
 
 	return &output, nil
 }
@@ -853,12 +864,62 @@ func (p *TestIndexerClient) IsCoreNode(pubkey []byte) (bool, error) {
 	return ok, nil
 }
 
+func (p *TestIndexerClient) GetCoreNodeInfo(pubkey []byte) (*sindexer.CoreNodeInfo, error) {
+	pkStr := hex.EncodeToString(pubkey)
+	_, ok := _coreNodeMap[pkStr]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+	info := sindexer.NewCoreNodeInfo(nil)
+	if minerInfo, ok := _minerInfoMap[pkStr]; ok {
+		info.MinerInfo = *minerInfo
+	}
+	if childMap, ok := _coreNodeChildMap[pkStr]; ok {
+		info.ChildMiners = childMap
+	}
+	return info, nil
+}
+
+func (p *TestIndexerClient) IsMinerNode(pubkey []byte) (bool, error) {
+	ok, _ := p.IsCoreNode(pubkey)
+	if ok {
+		return true, nil
+	}
+	pkStr := hex.EncodeToString(pubkey)
+	if _, ok := _coreNodeMap[pkStr]; ok {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (p *TestIndexerClient) GetMinerInfo(pubkey []byte) (*sindexerwire.MinerInfo, error) {
+	pkStr := hex.EncodeToString(pubkey)
+
+	c, err := p.GetCoreNodeInfo(pubkey)
+	if err == nil {
+		return &sindexerwire.MinerInfo{
+			MinerInfo:  &c.MinerInfo,
+			IsCoreNode: true,
+			ChildCount: len(c.ChildMiners),
+		}, nil
+	}
+
+	info, ok := _minerInfoMap[pkStr]
+	if ok {
+		return &sindexerwire.MinerInfo{
+			MinerInfo:  info,
+			IsCoreNode: false,
+		}, nil
+	}
+	return nil, fmt.Errorf("not a miner")
+}
+
 // 只有未花费的能拿到id
 func (p *TestIndexerClient) GetUtxoId(utxo string) (uint64, error) {
 	p.network.mutex.RLock()
 	defer p.network.mutex.RUnlock()
 
-	index, ok := p.network.utxoIndex[utxo]
+	_, ok := p.network.utxoIndex[utxo]
 	if !ok {
 		return INVALID_ID, fmt.Errorf("can't find utxo %s", utxo)
 	}
@@ -867,7 +928,20 @@ func (p *TestIndexerClient) GetUtxoId(utxo string) (uint64, error) {
 		return INVALID_ID, fmt.Errorf("utxo %s is spent", utxo)
 	}
 
-	return uint64(index), nil
+	txId, vout, err := indexer.ParseUtxo(utxo)
+	if err != nil {
+		return INVALID_ID, err
+	}
+	for height, txList := range p.network.blocks {
+		for txIndex, tx := range txList {
+			if tx == txId {
+				utxoId := indexer.ToUtxoId(height, txIndex, vout)
+				return utxoId, nil
+			}
+		}
+	}
+
+	return INVALID_ID, fmt.Errorf("utxo %s is invalid", utxo)
 }
 
 // btcutil.Tx
@@ -881,6 +955,8 @@ func (p *TestIndexerClient) GetRawTx(tx string) (string, error) {
 
 // btcutil.Tx
 func (p *TestIndexerClient) GetTxInfo(tx string) (*indexerwire.TxSimpleInfo, error) {
+	p.network.mutex.RLock()
+	defer p.network.mutex.RUnlock()
 	_, ok := p.network.txBroadcasted[tx]
 	if !ok {
 		return nil, fmt.Errorf("not found")
@@ -921,6 +997,9 @@ func (p *TestIndexerClient) getTxHeight(tx string) (int, error) {
 	for k, idList := range p.network.blocks {
 		for _, id := range idList {
 			if id == tx {
+				if k == p.network.height {
+					return -1, nil
+				}
 				return k, nil
 			}
 		}
@@ -934,22 +1013,20 @@ func (p *TestIndexerClient) IsTxConfirmed(tx string) bool {
 	return height >= 0
 }
 
+func (p *TestIndexerClient) generateNewBlock() {
+	if len(p.network.blocks[p.network.height]) > 0 {
+		Log.Infof("%s generate block %d, tx count %d", p.network.name, p.network.height, len(p.network.blocks[p.network.height]))
+		p.network.height++
+		p.network.lastTime = time.Now().UnixMilli()
+	}
+}
+
+// 由这个接口决定出块
 func (p *TestIndexerClient) GetSyncHeight() int {
 	p.network.mutex.Lock()
 	defer p.network.mutex.Unlock()
 
-	if p.network.height < 0 {
-		p.network.height = 0
-		p.network.lastTime = time.Now().UnixMilli()
-	} else {
-		now := time.Now().UnixMilli()
-		if now-p.network.lastTime >= 1000 {
-			if len(p.network.blocks[p.network.height]) > 0 {
-				p.network.height++
-				p.network.lastTime = now
-			}
-		}
-	}
+	p.generateNewBlock() // 有tx就生成新的块，确定性
 	return p.network.height - 1
 }
 
@@ -968,11 +1045,12 @@ func BuildBlockFromHexTxs(txHexes []string) (*wire.MsgBlock, error) {
 		Version:    0x20000000,
 		PrevBlock:  chainhash.Hash{}, // 可以根据需要替换为某个真实区块hash
 		MerkleRoot: chainhash.Hash{}, // 不做检查，不需要真实Merkle根
-		Timestamp:  time.Now(),
+		Timestamp:  time.Unix(0, 0),
 		Bits:       0x1d00ffff, // 通常是难度目标
 		Nonce:      0,
 	})
 
+	var buf []byte
 	for _, txHex := range txHexes {
 		tx, err := DecodeMsgTx(txHex)
 		if err != nil {
@@ -980,7 +1058,9 @@ func BuildBlockFromHexTxs(txHexes []string) (*wire.MsgBlock, error) {
 		}
 
 		block.AddTransaction(tx)
+		buf = append(buf, []byte(tx.TxID())...)
 	}
+	block.Header.MerkleRoot = chainhash.DoubleHashH(buf)
 
 	return block, nil
 }
@@ -991,18 +1071,22 @@ func BuildBlockFromHexTxs_SatsNet(txHexes []string) (*swire.MsgBlock, error) {
 		Version:    0x20000000,
 		PrevBlock:  schainhash.Hash{}, // 可以根据需要替换为某个真实区块hash
 		MerkleRoot: schainhash.Hash{}, // 不做检查，不需要真实Merkle根
-		Timestamp:  time.Now(),
+		Timestamp:  time.Unix(0, 0),
 		Bits:       0x1d00ffff, // 通常是难度目标
 		Nonce:      0,
 	})
 
+	var buf []byte
 	for _, txHex := range txHexes {
 		tx, err := DecodeMsgTx_SatsNet(txHex)
 		if err != nil {
 			return nil, err
 		}
+
 		block.AddTransaction(tx)
+		buf = append(buf, []byte(tx.TxID())...)
 	}
+	block.Header.MerkleRoot = schainhash.DoubleHashH(buf)
 
 	return block, nil
 }
@@ -1070,46 +1154,47 @@ func (p *TestIndexerClient) GetAssetSummaryWithAddress(address string) *indexerw
 		if bytes.Equal(pkScript, pkScript2) {
 			assets := p.network.utxoAssets[i]
 			if len(assets) != 0 {
-				invalid, ok := p.network.invalids[utxo]
+				invalids := p.network.invalids[utxo]
+				hasAsset := false
 				for _, asset := range assets {
-					if ok {
-						invalid := invalid[asset.Name]
+					if invalids != nil {
+						invalid := invalids[asset.Name]
 						if invalid {
-							// 当作白聪
-							assets, ok2 := assetmap[ASSET_PLAIN_SAT]
-							if ok2 {
-								assets.Amount = *assets.Amount.Add(indexer.NewDefaultDecimal(p.network.utxoValue[i]))
-							} else {
-								assetmap[ASSET_PLAIN_SAT] = &swire.AssetInfo{
-									Name:       ASSET_PLAIN_SAT,
-									Amount:     *indexer.NewDefaultDecimal(p.network.utxoValue[i]),
-									BindingSat: 1,
-								}
-							}
-						} else {
-							// transfer nft，直接忽略
+							// 该资产无效
+							continue
 						}
-						continue
 					}
-					assets, ok2 := assetmap[asset.Name]
+					hasAsset = true
+					assets2, ok2 := assetmap[asset.Name]
 					if ok2 {
-						assets.Add(&asset)
+						assets2.Add(&asset)
 					} else {
 						assetmap[asset.Name] = asset.Clone()
 					}
 				}
+				if !hasAsset {
+					assets2, ok2 := assetmap[ASSET_PLAIN_SAT]
+					if ok2 {
+						assets2.Amount = *assets2.Amount.Add(indexer.NewDefaultDecimal(p.network.utxoValue[i]))
+					} else {
+						assetmap[ASSET_PLAIN_SAT] = &swire.AssetInfo{
+							Name:       ASSET_PLAIN_SAT,
+							Amount:     *indexer.NewDefaultDecimal(p.network.utxoValue[i]),
+							BindingSat: 1,
+						}
+					}
+				}
 
 				if p.network.IsBitcoinNet() {
-					
 
 				} else {
 					// 聪网上，看看聪数量是不是比绑定资产的聪多，如果多，就加入白聪
 					bindingSatsNum := assets.GetBindingSatAmout()
 					if p.network.utxoValue[i] > bindingSatsNum {
 						plain := p.network.utxoValue[i] - bindingSatsNum
-						assets, ok := assetmap[ASSET_PLAIN_SAT]
+						assets2, ok := assetmap[ASSET_PLAIN_SAT]
 						if ok {
-							assets.Amount = *assets.Amount.Add(indexer.NewDefaultDecimal(plain))
+							assets2.Amount = *assets2.Amount.Add(indexer.NewDefaultDecimal(plain))
 						} else {
 							assetmap[ASSET_PLAIN_SAT] = &swire.AssetInfo{
 								Name:       ASSET_PLAIN_SAT,
@@ -1120,9 +1205,9 @@ func (p *TestIndexerClient) GetAssetSummaryWithAddress(address string) *indexerw
 					}
 				}
 			} else {
-				assets, ok := assetmap[ASSET_PLAIN_SAT]
+				assets2, ok := assetmap[ASSET_PLAIN_SAT]
 				if ok {
-					assets.Amount = *assets.Amount.Add(indexer.NewDefaultDecimal(p.network.utxoValue[i]))
+					assets2.Amount = *assets2.Amount.Add(indexer.NewDefaultDecimal(p.network.utxoValue[i]))
 				} else {
 					assetmap[ASSET_PLAIN_SAT] = &swire.AssetInfo{
 						Name:       ASSET_PLAIN_SAT,
@@ -1138,9 +1223,12 @@ func (p *TestIndexerClient) GetAssetSummaryWithAddress(address string) *indexerw
 	addr := hex.EncodeToString(pkScript)
 	brc20AssetMap := p.network.addrAssetMap[addr]
 	for k, v := range brc20AssetMap {
+		if v.IsZero() {
+			continue
+		}
 		assetmap[k] = &indexer.AssetInfo{
-			Name: k,
-			Amount: *v.Clone(),
+			Name:       k,
+			Amount:     *v.Clone(),
 			BindingSat: 0,
 		}
 	}
@@ -1159,6 +1247,10 @@ func (p *TestIndexerClient) GetAssetSummaryWithAddress(address string) *indexerw
 	}
 }
 
+func (p *TestIndexerClient) GetIndexerPubKey() ([]byte, error) {
+	return hex.DecodeString(indexer.GetBootstrapPubKey())
+}
+
 func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexerwire.TxOutputInfo {
 	p.network.mutex.RLock()
 	defer p.network.mutex.RUnlock()
@@ -1169,25 +1261,29 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 		return nil
 	}
 
+	// 过滤无效资产
+
 	outputs := make([]*indexerwire.TxOutputInfo, 0)
 	for i, utxo := range p.network.utxos {
 
 		if p.network.utxoUsed[utxo] != "" {
 			continue
 		}
-		invalids, ok := p.network.invalids[utxo]
-		if ok {
-			invalid, ok := invalids[*ticker]
-			if ok && invalid {
-				continue
-			}
-		}
 
 		var output *indexerwire.TxOutputInfo
 		assets := p.network.utxoAssets[i]
+		invalids := p.network.invalids[utxo]
+		validAssets := make(swire.TxAssets, 0, len(assets))
+		for _, asset := range assets {
+			if invalids != nil && invalids[asset.Name] {
+				continue
+			}
+			validAssets = append(validAssets, asset)
+		}
+
 		if *ticker != ASSET_PLAIN_SAT {
-			if assets != nil {
-				_, err := assets.Find(ticker)
+			if validAssets != nil {
+				_, err := validAssets.Find(ticker)
 				if err == nil {
 					output = &indexerwire.TxOutputInfo{
 						OutPoint: utxo,
@@ -1195,12 +1291,12 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 				}
 			}
 		} else {
-			if len(assets) == 0 {
+			if len(validAssets) == 0 {
 				output = &indexerwire.TxOutputInfo{
 					OutPoint: utxo,
 				}
 			} else {
-				if !p.network.IsBitcoinNet() && p.network.utxoValue[i] > assets.GetBindingSatAmout() {
+				if !p.network.IsBitcoinNet() && p.network.utxoValue[i] > validAssets.GetBindingSatAmout() {
 					output = &indexerwire.TxOutputInfo{
 						OutPoint: utxo,
 					}
@@ -1214,7 +1310,7 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 
 				offsets := cloneOffsets(p.network.offsets[i])
 				var utxoAssets []*indexer.DisplayAsset
-				for _, v := range assets {
+				for _, v := range validAssets {
 					asset := indexer.DisplayAsset{
 						AssetName:  v.Name,
 						Amount:     v.Amount.String(),
@@ -1331,24 +1427,12 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	}
 	p.network.txBroadcasted[tx.TxID()] = txHex
 
-	if p.network.height == 0 {
-		p.network.lastTime = time.Now().UnixMilli()
-	} else {
-		now := time.Now().UnixMilli()
-		if now-p.network.lastTime >= 1000 {
-			if len(p.network.blocks[p.network.height]) > 0 {
-				p.network.height++
-				p.network.lastTime = now
-			}
-		}
-	}
-
 	txs := p.network.blocks[p.network.height]
 	txs = append(txs, tx.TxID())
 	p.network.blocks[p.network.height] = txs
 
 	if string(tx.TxIn[0].SignatureScript) == "genesis" {
-		for i, _ := range tx.TxOut {
+		for i, txOut := range tx.TxOut {
 			utxo := fmt.Sprintf("%s:%d", tx.TxID(), i)
 			p.network.utxos = append(p.network.utxos, utxo)
 			index := len(p.network.utxos) - 1
@@ -1358,8 +1442,35 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 			// p.network.offsets = append(p.network.offsets, nil)
 			// j := insertPkScript(txOut.PkScript)
 			// p.network.utxoOwner = append(p.network.utxoOwner, j)
+
+			if p.network.IsBitcoinNet() {
+				utxoAssets := p.network.utxoAssets[index]
+				addr := hex.EncodeToString(txOut.PkScript)
+				assetmap, ok := p.network.addrAssetMap[addr]
+				if !ok {
+					assetmap = make(map[swire.AssetName]*Decimal)
+					p.network.addrAssetMap[addr] = assetmap
+				}
+				for _, asset := range utxoAssets {
+					if asset.Name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+						total := assetmap[asset.Name]
+						assetmap[asset.Name] = total.Add(&asset.Amount)
+
+						// 设置invalid
+						// utxoAssets = nil
+						// utxoOffsets = nil
+						invalidmap, ok := p.network.invalids[utxo]
+						if !ok {
+							invalidmap = make(map[swire.AssetName]bool)
+							p.network.invalids[utxo] = invalidmap
+						}
+						invalidmap[asset.Name] = true
+					}
+				}
+			}
+
 		}
-		p.network.height++
+		p.generateNewBlock()
 		fmt.Printf("bitcoin genesis txId %s\n", tx.TxID())
 		return tx.TxID(), nil
 	}
@@ -1370,7 +1481,7 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	// var assetName *swire.AssetName
 	// var offsets indexer.AssetOffsets
 	var input *TxOutput
-	status := 0 // 
+	status := 0 //
 	//var transferFrom *Brc20Transfer
 	//var assetAmt *Decimal
 	for _, txIn := range tx.TxIn {
@@ -1433,9 +1544,16 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 			OutValue: wire.TxOut{
 				Value: value,
 			},
-			Assets:  txAssets,
-			Offsets: cloneOffsets(txOffsets),
+			Assets:        txAssets,
+			Offsets:       cloneOffsets(txOffsets),
 			SatBindingMap: satBindingMap,
+			Invalids:      make(map[indexer.AssetName]bool),
+		}
+		invalidmap, existing := p.network.invalids[utxo]
+		if existing {
+			for assetName, invalid := range invalidmap {
+				in.Invalids[assetName] = invalid
+			}
 		}
 
 		if input == nil {
@@ -1449,7 +1567,7 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 		if err != nil {
 			continue
 		}
-		
+
 		for i, insc := range inscriptions {
 
 			protocol, content := indexer.GetProtocol(insc)
@@ -1617,7 +1735,7 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					if transferInfo == nil {
 						continue
 					}
-					
+
 					assetName := indexer.AssetName{
 						Protocol: "brc20",
 						Type:     "f",
@@ -1699,11 +1817,41 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					}
 				}
 
+			default:
+				// 可能是名字
+				if protocol == "" {
+					content := insc[indexer.FIELD_CONTENT]
+					if len(content) <= indexer.MAX_NAME_LEN {
+						name := string(content)
+						tickerInfo := indexer.TickerInfo{
+							AssetName: indexer.AssetName{
+								Protocol: indexer.PROTOCOL_NAME_ORDX,
+								Type:     indexer.ASSET_TYPE_NS,
+								Ticker:   name,
+							},
+							Divisibility: 0,
+							Limit:        "1",
+							TotalMinted:  "1",
+							MaxSupply:    "1",
+							N:            1,
+						}
+						_tickerInfoRunning[tickerInfo.AssetName.String()] = &tickerInfo
+
+						asset := indexer.AssetInfo{
+							Name:       tickerInfo.AssetName,
+							Amount:     *indexer.NewDecimal(1, 0),
+							BindingSat: 1,
+						}
+						input.Assets.Add(&asset)
+						input.Offsets[tickerInfo.AssetName] = indexer.AssetOffsets{&indexer.OffsetRange{Start: 0, End: 1}}
+					}
+				}
 			}
 		}
 	}
 
-	var runesOutputUtxo, premineOutput string
+	var runesOutputUtxo, firstRuneOutputUtxo, premineOutput string
+	var runePointer *uint32
 	var edicts []runestone.Edict
 	var premineAssetInfo *indexer.AssetInfo
 	for i, txOut := range tx.TxOut {
@@ -1774,10 +1922,10 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 				utxomap[utxo] = true
 
 				p.network.transferInfo[utxo] = &Brc20Transfer{
-					Utxo: utxo,
-					Address: addr,
+					Utxo:      utxo,
+					Address:   addr,
 					AssetName: &asset.Name,
-					Amt: asset.Amount.Clone(),
+					Amt:       asset.Amount.Clone(),
 				}
 
 			case 3:
@@ -1801,15 +1949,14 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					p.network.invalids[utxo] = invalidmap
 				}
 				invalidmap[assetInfo.Name] = true
-				
 
-			default: 
-				
+			default:
+
 			}
 		}
 		p.network.utxoAssets = append(p.network.utxoAssets, utxoAssets)
 		p.network.offsets = append(p.network.offsets, utxoOffsets)
-	
+
 		if IsOpReturn(txOut.PkScript) {
 			stone := runestone.Runestone{}
 			result, err := stone.DecipherFromPkScript(txOut.PkScript)
@@ -1856,11 +2003,20 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 					}
 
 					edicts = result.Runestone.Edicts
+					runePointer = result.Runestone.Pointer
 				}
 			}
 		} else {
 			if runesOutputUtxo == "" {
 				runesOutputUtxo = utxo
+			}
+			if firstRuneOutputUtxo == "" {
+				for _, asset := range utxoAssets {
+					if asset.Name.Protocol == indexer.PROTOCOL_NAME_RUNES {
+						firstRuneOutputUtxo = utxo
+						break
+					}
+				}
 			}
 		}
 	}
@@ -1873,6 +2029,35 @@ func (p *TestIndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 		err = p.network.utxoAssets[index].Add(premineAssetInfo)
 		if err != nil {
 			return "", err
+		}
+	}
+
+	if runePointer != nil {
+		runesOutputUtxo = fmt.Sprintf("%s:%d", tx.TxID(), *runePointer)
+		if firstRuneOutputUtxo != "" && firstRuneOutputUtxo != runesOutputUtxo {
+			index1, ok := p.network.utxoIndex[firstRuneOutputUtxo]
+			if !ok {
+				return "", fmt.Errorf("can't find utxo %s", firstRuneOutputUtxo)
+			}
+			index2, ok := p.network.utxoIndex[runesOutputUtxo]
+			if !ok {
+				return "", fmt.Errorf("can't find utxo %s", runesOutputUtxo)
+			}
+			for i := 0; i < len(p.network.utxoAssets[index1]); {
+				asset := p.network.utxoAssets[index1][i]
+				if asset.Name.Protocol != indexer.PROTOCOL_NAME_RUNES {
+					i++
+					continue
+				}
+				err = p.network.utxoAssets[index2].Add(&asset)
+				if err != nil {
+					return "", err
+				}
+				err = p.network.utxoAssets[index1].Subtract(&asset)
+				if err != nil {
+					return "", err
+				}
+			}
 		}
 	}
 
@@ -1947,18 +2132,6 @@ func (p *TestIndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
 	}
 	p.network.txBroadcasted[tx.TxID()] = txHex
 
-	if p.network.height == 0 {
-		p.network.lastTime = time.Now().UnixMilli()
-	} else {
-		now := time.Now().UnixMilli()
-		if now-p.network.lastTime >= 1000 {
-			if len(p.network.blocks[p.network.height]) > 0 {
-				p.network.height++
-				p.network.lastTime = now
-			}
-		}
-	}
-
 	txs := p.network.blocks[p.network.height]
 	txs = append(txs, tx.TxID())
 	p.network.blocks[p.network.height] = txs
@@ -1975,31 +2148,40 @@ func (p *TestIndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
 			// j := insertPkScript(txOut.PkScript)
 			// p.network.utxoOwner = append(p.network.utxoOwner, j)
 		}
-		p.network.height++
+		p.generateNewBlock()
 		fmt.Printf("satsnet genesis txId %s\n", tx.TxID())
 		return tx.TxID(), nil
 	}
 
+	var inputAddress string
+	var anchorData *AnchorData
 	for _, txIn := range tx.TxIn {
 		utxo := txIn.PreviousOutPoint.String()
 		if txIn.PreviousOutPoint.Index == swire.AnchorTxOutIndex {
-			data, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
+			anchorData, _, err = CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
 			if err == nil {
-				p.network.ascendMap[data.Utxo] = tx.TxID()
-				// pubkeyStr := hex.EncodeToString(pubkey)
-				// if pubkeyStr == indexer.GetBootstrapPubKey() {
-				// 	_coreNodeMap[pubkeyStr] = true
-				// }
+				p.network.ascendMap[anchorData.Utxo] = tx.TxID()
 			}
 		} else if txIn.PreviousOutPoint.Index < swire.AnchorTxOutIndex {
 			spendTx, ok := p.network.utxoUsed[utxo]
 			if ok {
 				return "", fmt.Errorf("utxo %s spent in %s", utxo, spendTx)
 			}
+			if inputAddress == "" {
+				index, ok := p.network.utxoIndex[utxo]
+				if ok {
+					pkScript, err := hex.DecodeString(_pkScripts[p.network.utxoOwner[index]])
+					if err == nil {
+						inputAddress, _ = getSatsNetAddressFromPkScript(pkScript)
+					}
+				}
+			}
 		}
 		p.network.utxoUsed[utxo] = tx.TxID()
 	}
 
+	var descendTxOut *swire.TxOut
+	var descendTxId string
 	for i, txOut := range tx.TxOut {
 		utxo := fmt.Sprintf("%s:%d", tx.TxID(), i)
 		p.network.utxos = append(p.network.utxos, utxo)
@@ -2010,10 +2192,201 @@ func (p *TestIndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
 		p.network.offsets = append(p.network.offsets, nil)
 		j := insertPkScript(txOut.PkScript)
 		p.network.utxoOwner = append(p.network.utxoOwner, j)
+
+		ctype, data, err := sindexer.ReadDataFromNullDataScript(txOut.PkScript)
+		if err == nil {
+			switch ctype {
+			case sindexer.CONTENT_TYPE_DESCENDING:
+				descendTxOut = txOut
+				descendTxId = string(data)
+				p.network.descendMap[string(data)] = utxo
+
+			case sindexer.CONTENT_TYPE_STAKE:
+				if anchorData != nil {
+					p.addTestMinerNodeFromAnchor(anchorData, tx.TxID())
+				}
+
+			case sindexer.CONTENT_TYPE_UNSTAKE:
+				if descendTxOut != nil {
+					p.removeTestMinerNodeFromDescend(inputAddress, p.network.height, descendTxOut, data, descendTxId)
+				}
+			}
+		}
 	}
 
 	fmt.Printf("BroadCastTx_SatsNet succeeded. %s\n", tx.TxID())
 	return tx.TxID(), nil
+}
+
+func (p *TestIndexerClient) addTestMinerNodeFromAnchor(data *AnchorData, anchorTxId string) {
+	pubA, pubB, err := getAnchorPubKeysForTest(data)
+	if err != nil {
+		fmt.Printf("addTestMinerNodeFromAnchor get pubkeys failed: %v\n", err)
+		return
+	}
+	if !hasTestStakeEligibility(p.network.height, data.Assets) {
+		return
+	}
+
+	channelAddr, err := GetP2WSHaddress(pubA, pubB)
+	if err != nil {
+		fmt.Printf("addTestMinerNodeFromAnchor GetP2WSHaddress failed: %v\n", err)
+		return
+	}
+	parentKey := hex.EncodeToString(pubA)
+	nodeKey := hex.EncodeToString(pubB)
+	info := (&sindexer.AscendData{
+		Height:      p.network.height,
+		FundingUtxo: data.Utxo,
+		AnchorTxId:  anchorTxId,
+		Value:       data.Value,
+		Assets:      data.Assets,
+		Sig:         data.Sig,
+		Address:     channelAddr,
+		PubA:        pubA,
+		PubB:        pubB,
+	}).ToMinerInfo()
+
+	if parentKey == indexer.GetBootstrapPubKey() {
+		_coreNodeMap[nodeKey] = true
+		_minerInfoMap[nodeKey] = info
+		addTestCoreNodeChild(parentKey, nodeKey, p.network.height, data.Utxo)
+		if _, ok := _coreNodeChildMap[nodeKey]; !ok {
+			_coreNodeChildMap[nodeKey] = make(map[string]*sindexer.MinerAscendInfo)
+		}
+		fmt.Printf("test indexer add core node %s at height %d\n", nodeKey, p.network.height)
+		return
+	}
+
+	if _, ok := _coreNodeMap[parentKey]; !ok {
+		return
+	}
+	_minerInfoMap[nodeKey] = info
+	addTestCoreNodeChild(parentKey, nodeKey, p.network.height, data.Utxo)
+	fmt.Printf("test indexer add miner node %s under %s at height %d\n", nodeKey, parentKey, p.network.height)
+}
+
+func (p *TestIndexerClient) removeTestMinerNodeFromDescend(channelAddr string, height int,
+	descendTxOut *swire.TxOut, data []byte, descendTxId string) {
+
+	assetName, amt, err := sindexer.ParseStakeInvoice(data)
+	if err != nil {
+		fmt.Printf("removeTestMinerNodeFromDescend invalid unstake data: %v\n", err)
+		return
+	}
+	if assetName != indexer.GetStakeAssetName(height) {
+		fmt.Printf("removeTestMinerNodeFromDescend invalid stake asset %s\n", assetName)
+		return
+	}
+	info, err := descendTxOut.Assets.Find(indexer.NewAssetNameFromString(assetName))
+	if err != nil || info.Amount.Cmp(amt) != 0 {
+		fmt.Printf("removeTestMinerNodeFromDescend invalid descend asset %s %s\n", assetName, amt.String())
+		return
+	}
+
+	nodeKey, minerInfo := findTestMinerByChannel(channelAddr)
+	if nodeKey == "" || minerInfo == nil {
+		fmt.Printf("removeTestMinerNodeFromDescend can't find miner from channel %s\n", channelAddr)
+		return
+	}
+
+	if _, ok := _coreNodeMap[nodeKey]; ok {
+		if len(_coreNodeChildMap[nodeKey]) != 0 {
+			fmt.Printf("removeTestMinerNodeFromDescend core node %s still has child miners\n", nodeKey)
+			return
+		}
+		deleteTestCoreNodeChild(minerInfo.ServerNode, nodeKey)
+		delete(_coreNodeMap, nodeKey)
+		delete(_coreNodeChildMap, nodeKey)
+		delete(_minerInfoMap, nodeKey)
+		fmt.Printf("test indexer remove core node %s at tx %s\n", nodeKey, descendTxId)
+		return
+	}
+
+	deleteTestCoreNodeChild(minerInfo.ServerNode, nodeKey)
+	delete(_minerInfoMap, nodeKey)
+	fmt.Printf("test indexer remove miner node %s at tx %s\n", nodeKey, descendTxId)
+}
+
+func getAnchorPubKeysForTest(data *AnchorData) ([]byte, []byte, error) {
+	addrType, addresses, _, err := stxscript.ExtractPkScriptAddrs(data.WitnessScript, GetChainParam_SatsNet())
+	if err != nil {
+		return nil, nil, err
+	}
+	if addrType != stxscript.MultiSigTy || len(addresses) != 2 {
+		return nil, nil, fmt.Errorf("invalid anchor witness script")
+	}
+	pubA := addresses[0].ScriptAddress()
+	pubB := addresses[1].ScriptAddress()
+
+	invoice, err := sindexer.StandardAnchorScript(data.Utxo, data.WitnessScript, data.Value, data.Assets)
+	if err != nil {
+		return nil, nil, err
+	}
+	pubKeyA, err := utils.BytesToPublicKey(pubA)
+	if err != nil {
+		return nil, nil, fmt.Errorf("BytesToPublicKey failed. %v", err)
+	}
+	if VerifyMessage(pubKeyA, invoice, data.Sig) {
+		return pubA, pubB, nil
+	}
+	pubKeyB, err := utils.BytesToPublicKey(pubB)
+	if err != nil {
+		return nil, nil, fmt.Errorf("BytesToPublicKey failed. %v", err)
+	}
+	if VerifyMessage(pubKeyB, invoice, data.Sig) {
+		return pubB, pubA, nil
+	}
+	return nil, nil, fmt.Errorf("anchor signature is not signed by either multisig pubkey")
+}
+
+func hasTestStakeEligibility(height int, assets swire.TxAssets) bool {
+	assetName := indexer.GetStakeAssetNameWithHeightL2(height)
+	assetAmt := indexer.GetStakeAssetAmtWithHeightL2(height)
+	for _, asset := range assets {
+		if asset.Name.String() == assetName {
+			return asset.Amount.Int64() >= assetAmt
+		}
+	}
+	return false
+}
+
+func addTestCoreNodeChild(parentKey, childKey string, height int, ascendUtxo string) {
+	childMap, ok := _coreNodeChildMap[parentKey]
+	if !ok {
+		childMap = make(map[string]*sindexer.MinerAscendInfo)
+		_coreNodeChildMap[parentKey] = childMap
+	}
+	childMap[childKey] = &sindexer.MinerAscendInfo{
+		AscendHeight: height,
+		AscendUtxo:   ascendUtxo,
+	}
+}
+
+func deleteTestCoreNodeChild(parentKey, childKey string) {
+	if childMap, ok := _coreNodeChildMap[parentKey]; ok {
+		delete(childMap, childKey)
+	}
+}
+
+func findTestMinerByChannel(channelAddr string) (string, *sindexer.MinerInfo) {
+	for nodeKey, info := range _minerInfoMap {
+		if info.ChannelAddr == channelAddr {
+			return nodeKey, info
+		}
+	}
+	return "", nil
+}
+
+func getSatsNetAddressFromPkScript(pkScript []byte) (string, error) {
+	_, addresses, _, err := stxscript.ExtractPkScriptAddrs(pkScript, GetChainParam_SatsNet())
+	if err != nil {
+		return "", err
+	}
+	if len(addresses) == 0 {
+		return "", fmt.Errorf("can't extract satsnet address")
+	}
+	return addresses[0].EncodeAddress(), nil
 }
 
 func (p *TestIndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) error {
@@ -2087,7 +2460,6 @@ func (p *TestIndexerClient) GetNamesWithKey(address, key string) (
 	return nil, fmt.Errorf("not implemented")
 }
 
-
 type TestNodeClient struct {
 	*RESTClient
 	server *Manager
@@ -2145,7 +2517,6 @@ func (p *TestNodeClient) GetContractStatusByAddressReq(url, address string) (str
 	return "", fmt.Errorf("not implemented")
 }
 
-
 func (p *TestNodeClient) SendSigReq(req *wwire.SignRequest,
 	sig []byte) ([][][]byte, error) {
 
@@ -2157,7 +2528,6 @@ func (p *TestNodeClient) SendSigReq(req *wwire.SignRequest,
 	// return sig2, nil
 	return nil, fmt.Errorf("not implemented")
 }
-
 
 func (p *TestNodeClient) SendActionResultNfty(msgId int64, action string, ret int, reason string) error {
 
@@ -2222,4 +2592,3 @@ func (p *TestNodeClient) SendActionSyncReq(req *wwire.ActionSyncReq) (*wwire.Act
 	// return nil, fmt.Errorf("no server")
 	return nil, fmt.Errorf("not implemented")
 }
-

@@ -739,7 +739,7 @@ func (p *Manager) GetAssetBalance(address string, name *swire.AssetName) *Decima
 	if assets != nil {
 		for _, u := range assets.Data {
 			if u.Name == *name {
-				return &u.Amount
+				return u.Amount.Clone()
 			}
 		}
 	}
@@ -756,7 +756,7 @@ func (p *Manager) GetAssetBalance_SatsNet(address string, name *swire.AssetName)
 	if assets != nil {
 		for _, u := range assets.Data {
 			if u.Name == *name {
-				return &u.Amount
+				return u.Amount.Clone()
 			}
 		}
 	}

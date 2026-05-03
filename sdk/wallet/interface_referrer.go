@@ -120,7 +120,7 @@ func (p *Manager) RegisterAsReferrer(name string, feeRate int64) (string, error)
 	localPubKey := p.wallet.GetPubKey().SerializeCompressed()
 	moredata := wwire.RemoteSignMoreData_Msg{
 		Action:      "register_referrer",
-		Data:    	[]byte(name),
+		MoreData:    	[]byte(name),
 	}
 	md, err := json.Marshal(moredata)
 	if err != nil {

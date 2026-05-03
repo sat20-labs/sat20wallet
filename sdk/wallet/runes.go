@@ -25,8 +25,13 @@ func GetRunesEstimatePayload(_ *AssetName, vout int) ([]byte, error) {
 }
 
 func EncipherRunePayload(edicts []runestone.Edict) ([]byte, error) {
+	return EncipherRunePayloadWithPointer(edicts, nil)
+}
+
+func EncipherRunePayloadWithPointer(edicts []runestone.Edict, pointer *uint32) ([]byte, error) {
 	stone := runestone.Runestone{
-		Edicts: edicts,
+		Edicts:  edicts,
+		Pointer: pointer,
 	}
 
 	result, err := stone.Encipher()
@@ -162,7 +167,7 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 	// return txs, nil
 }
 
-func (p *Manager) DeployTicker_runes(destAddr string, ticker string, symbol int32, 
+func (p *Manager) DeployTicker_runes(destAddr string, ticker string, symbol int32,
 	max, feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet

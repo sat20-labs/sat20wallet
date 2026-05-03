@@ -138,21 +138,16 @@ type RemoteSignMoreData_Contract struct {
 	Action            string        `json:"action"`
 	MoreData          []byte        `json:"more"` // 有时候Tx中无法放入足够数据
 }
-type RemoteSignMoreData_Sweep struct {
+type RemoteSignMoreData struct {
 	Tx                []*TxSignInfo `json:"tx1"`
 	Witness           []byte        `json:"witness"`
 	Action            string        `json:"action"`
 	MoreData          []byte        `json:"more"` // 有时候Tx中无法放入足够数据
 }
-type RemoteSignMoreData_Ascend struct {
-	Tx          *TxSignInfo `json:"tx1"`
-	Witness     []byte      `json:"witness"`
-	MoreData    []byte      `json:"more"` // 有时候Tx中无法放入足够数据
-}
-type RemoteSignMoreData_Msg struct {
-	Action      string `json:"action"`
-	Data        []byte `json:"data"`
-}
+type RemoteSignMoreData_Sweep = RemoteSignMoreData
+type RemoteSignMoreData_Ascend = RemoteSignMoreData
+type RemoteSignMoreData_Msg = RemoteSignMoreData
+
 type SignRequest struct {
 	MsgHeader
 	ChannelId    string   `json:"channel"`

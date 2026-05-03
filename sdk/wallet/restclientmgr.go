@@ -10,18 +10,19 @@ import (
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	sindexerwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 type IndexerRPCClientMgr struct {
 	indexers []IndexerRPCClient // 默认第一个是master，第二个是slave
-	active IndexerRPCClient
-	ticker *time.Ticker
+	active   IndexerRPCClient
+	ticker   *time.Ticker
 
 	mutex sync.RWMutex
 }
 
-func NewIndexerRPCClientMgr() *IndexerRPCClientMgr{
+func NewIndexerRPCClientMgr() *IndexerRPCClientMgr {
 	return &IndexerRPCClientMgr{}
 }
 
@@ -118,9 +119,8 @@ func shouldSwitchIndexer(err error) bool {
 	}
 	e := err.Error()
 	return strings.Contains(e, "connection refused") ||
-	strings.Contains(e, "panic")
+		strings.Contains(e, "panic")
 }
-
 
 func (p *IndexerRPCClientMgr) GetSlaveIndexer() IndexerRPCClient {
 	p.mutex.RLock()
@@ -130,7 +130,6 @@ func (p *IndexerRPCClientMgr) GetSlaveIndexer() IndexerRPCClient {
 	}
 	return p.indexers[1]
 }
-
 
 // indexer interface
 
@@ -142,7 +141,7 @@ func (p *IndexerRPCClientMgr) Host() string {
 	return active.Host()
 }
 
-func (p *IndexerRPCClientMgr) Ping() (error) {
+func (p *IndexerRPCClientMgr) Ping() error {
 	err := p.getActiveIndexer().Ping()
 	if shouldSwitchIndexer(err) {
 		indexer := p.selector()
@@ -180,6 +179,36 @@ func (p *IndexerRPCClientMgr) IsCoreNode(pubkey []byte) (bool, error) {
 		indexer := p.selector()
 		if indexer != nil {
 			result, err = indexer.IsCoreNode(pubkey)
+		}
+	}
+	return result, err
+}
+func (p *IndexerRPCClientMgr) GetCoreNodeInfo(pubkey []byte) (*sindexer.CoreNodeInfo, error) {
+	result, err := p.getActiveIndexer().GetCoreNodeInfo(pubkey)
+	if shouldSwitchIndexer(err) {
+		indexer := p.selector()
+		if indexer != nil {
+			result, err = indexer.GetCoreNodeInfo(pubkey)
+		}
+	}
+	return result, err
+}
+func (p *IndexerRPCClientMgr) IsMinerNode(pubkey []byte) (bool, error) {
+	result, err := p.getActiveIndexer().IsMinerNode(pubkey)
+	if shouldSwitchIndexer(err) {
+		indexer := p.selector()
+		if indexer != nil {
+			result, err = indexer.IsMinerNode(pubkey)
+		}
+	}
+	return result, err
+}
+func (p *IndexerRPCClientMgr) GetMinerInfo(pubkey []byte) (*sindexerwire.MinerInfo, error) {
+	result, err := p.getActiveIndexer().GetMinerInfo(pubkey)
+	if shouldSwitchIndexer(err) {
+		indexer := p.selector()
+		if indexer != nil {
+			result, err = indexer.GetMinerInfo(pubkey)
 		}
 	}
 	return result, err
@@ -256,6 +285,16 @@ func (p *IndexerRPCClientMgr) GetBlock(blockHash string) (string, error) {
 func (p *IndexerRPCClientMgr) GetAssetSummaryWithAddress(address string) *indexerwire.AssetSummary {
 	return p.getActiveIndexer().GetAssetSummaryWithAddress(address)
 }
+func (p *IndexerRPCClientMgr) GetIndexerPubKey() ([]byte, error) {
+	result, err := p.getActiveIndexer().GetIndexerPubKey()
+	if shouldSwitchIndexer(err) {
+		indexer := p.selector()
+		if indexer != nil {
+			result, err = indexer.GetIndexerPubKey()
+		}
+	}
+	return result, err
+}
 func (p *IndexerRPCClientMgr) GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexerwire.TxOutputInfo {
 	return p.getActiveIndexer().GetUtxoListWithTicker(address, ticker)
 }
@@ -305,7 +344,7 @@ func (p *IndexerRPCClientMgr) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	}
 	return result, err
 }
-func (p *IndexerRPCClientMgr) BroadCastTxs(tx []*wire.MsgTx) (error) {
+func (p *IndexerRPCClientMgr) BroadCastTxs(tx []*wire.MsgTx) error {
 	err := p.getActiveIndexer().BroadCastTxs(tx)
 	if shouldSwitchIndexer(err) {
 		indexer := p.selector()
@@ -325,7 +364,7 @@ func (p *IndexerRPCClientMgr) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, erro
 	}
 	return result, err
 }
-func (p *IndexerRPCClientMgr) BroadCastTxs_SatsNet(tx []*swire.MsgTx) (error) {
+func (p *IndexerRPCClientMgr) BroadCastTxs_SatsNet(tx []*swire.MsgTx) error {
 	err := p.getActiveIndexer().BroadCastTxs_SatsNet(tx)
 	if shouldSwitchIndexer(err) {
 		indexer := p.selector()
@@ -369,7 +408,7 @@ func (p *IndexerRPCClientMgr) GetServiceIncoming(addr string) (int, int64, error
 	return r1, r2, err
 }
 
-	// for dkvs
+// for dkvs
 func (p *IndexerRPCClientMgr) GetNonce(pubKey []byte) ([]byte, error) {
 	result, err := p.getActiveIndexer().GetNonce(pubKey)
 	if shouldSwitchIndexer(err) {
@@ -380,7 +419,7 @@ func (p *IndexerRPCClientMgr) GetNonce(pubKey []byte) ([]byte, error) {
 	}
 	return result, err
 }
-func (p *IndexerRPCClientMgr) PutKVs(req *indexerwire.PutKValueReq) (error) {
+func (p *IndexerRPCClientMgr) PutKVs(req *indexerwire.PutKValueReq) error {
 	err := p.getActiveIndexer().PutKVs(req)
 	if shouldSwitchIndexer(err) {
 		indexer := p.selector()
@@ -390,7 +429,7 @@ func (p *IndexerRPCClientMgr) PutKVs(req *indexerwire.PutKValueReq) (error) {
 	}
 	return err
 }
-func (p *IndexerRPCClientMgr) DelKVs(req *indexerwire.DelKValueReq) (error) {
+func (p *IndexerRPCClientMgr) DelKVs(req *indexerwire.DelKValueReq) error {
 	err := p.getActiveIndexer().DelKVs(req)
 	if shouldSwitchIndexer(err) {
 		indexer := p.selector()
@@ -411,7 +450,7 @@ func (p *IndexerRPCClientMgr) GetKV(pubkey []byte, key string) (*indexerwire.Key
 	return result, err
 }
 
-	// for names
+// for names
 func (p *IndexerRPCClientMgr) GetNameInfo(in string) (*indexerwire.OrdinalsName, error) {
 	result, err := p.getActiveIndexer().GetNameInfo(in)
 	if shouldSwitchIndexer(err) {

@@ -124,20 +124,6 @@ func AlignAsset(output *TxOutput, name *swire.AssetName) error {
 	return nil
 }
 
-// 清除不相干资产
-func RemoveOtherAssets(output *TxOutput, assetName *indexer.AssetName) {
-	
-	var filtered indexer.TxAssets
-	name := assetName.String()
-	for _, asset := range output.Assets {
-		if asset.Name.String() != name {
-			continue
-		}
-		filtered = append(filtered, asset)
-	}
-	output.Assets = filtered
-}
-
 // 除了指定资产之外，是否有其他重要资产
 func HasMultiAsset(output *TxOutput, assetName *indexer.AssetName) bool {
 	name := assetName.String()

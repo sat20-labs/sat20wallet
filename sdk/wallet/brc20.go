@@ -16,6 +16,7 @@ const CONTENT_DEPLOY_BRC20_BODY_5 string = `{"p":"brc-20","op":"deploy","tick":"
 const CONTENT_MINT_BRC20_BODY string = `{"p":"brc-20","op":"mint","tick":"%s","amt":"%s"}`
 const CONTENT_MINT_BRC20_TRANSFER_BODY string = `{"p":"brc-20","op":"transfer","tick":"%s","amt":"%s"}`
 
+// scriptType = SCRIPT_TYPE_PUNISH or SCRIPT_TYPE_SWEEP时，必须设置witnessScript
 func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string, 
 	excludedUtxoMap map[string]bool,
 	body string, feeRate int64, 

@@ -16,7 +16,6 @@ import (
 	sindexerwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 )
 
-
 type RESTClient struct {
 	Scheme string
 	Host   string
@@ -57,9 +56,12 @@ type IndexerRPCClient interface {
 	Host() string
 	Ping() error
 
-	GetTxOutput(utxo string) (*TxOutput, error)  // 索引器接口，被花费后就找不到数据
+	GetTxOutput(utxo string) (*TxOutput, error)              // 索引器接口，被花费后就找不到数据
 	GetAscendData(utxo string) (*sindexer.AscendData, error) // TODO 因为Decimal json序列化的修改，索引器暂时将资产列表清空，因为前端还没用到
 	IsCoreNode(pubkey []byte) (bool, error)
+	GetCoreNodeInfo(pubkey []byte) (*sindexer.CoreNodeInfo, error)
+	IsMinerNode(pubkey []byte) (bool, error)
+	GetMinerInfo(pubkey []byte) (*sindexerwire.MinerInfo, error) // core node 也是miner
 	GetUtxoId(utxo string) (uint64, error)
 	GetRawTx(tx string) (string, error)
 	GetTxInfo(tx string) (*indexerwire.TxSimpleInfo, error)
@@ -70,6 +72,7 @@ type IndexerRPCClient interface {
 	GetBlockHash(height int) (string, error)
 	GetBlock(blockHash string) (string, error)
 	GetAssetSummaryWithAddress(address string) *indexerwire.AssetSummary
+	GetIndexerPubKey() ([]byte, error)
 	GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexerwire.TxOutputInfo
 	GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error)
 	GetUnusableUtxosWithAddress(address string) ([]*TxOutput, error)
@@ -77,9 +80,9 @@ type IndexerRPCClient interface {
 	GetExistingUtxos(utxos []string) ([]string, error)
 	TestRawTx(signedTxs []string) error
 	BroadCastTx(tx *wire.MsgTx) (string, error)
-	BroadCastTxs(tx []*wire.MsgTx) (error)
+	BroadCastTxs(tx []*wire.MsgTx) error
 	BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
-	BroadCastTxs_SatsNet(tx []*swire.MsgTx) (error)
+	BroadCastTxs_SatsNet(tx []*swire.MsgTx) error
 	GetTickInfo(assetName *swire.AssetName) *indexer.TickerInfo
 	AllowDeployTick(assetName *swire.AssetName) error
 	GetUtxoSpentTx(utxo string) (string, error) // TODO L1索引器需要支持这个api
@@ -87,15 +90,14 @@ type IndexerRPCClient interface {
 
 	// for dkvs
 	GetNonce(pubKey []byte) ([]byte, error)
-	PutKVs(req *indexerwire.PutKValueReq) (error)
-	DelKVs(req *indexerwire.DelKValueReq) (error)
+	PutKVs(req *indexerwire.PutKValueReq) error
+	DelKVs(req *indexerwire.DelKValueReq) error
 	GetKV(pubkey []byte, key string) (*indexerwire.KeyValue, error)
 
 	// for names
 	GetNameInfo(string) (*indexerwire.OrdinalsName, error)
 	GetNamesWithKey(string, string) ([]*indexerwire.OrdinalsName, error)
 }
-
 
 type IndexerClient struct {
 	*RESTClient
@@ -162,7 +164,6 @@ func (p *IndexerClient) GetTxOutput(utxo string) (*TxOutput, error) {
 	return result.Data.ToTxOutput(), nil
 }
 
-
 func (p *IndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, error) {
 	url := p.GetUrl("/v3/ascend/" + utxo)
 	rsp, err := p.Http.SendGetRequest(url)
@@ -209,6 +210,72 @@ func (p *IndexerClient) IsCoreNode(pubkey []byte) (bool, error) {
 	return result.Data, nil
 }
 
+func (p *IndexerClient) GetCoreNodeInfo(pubkey []byte) (*sindexer.CoreNodeInfo, error) {
+	url := p.GetUrl("/v3/corenode/info/" + hex.EncodeToString(pubkey))
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	var result sindexerwire.GetCoreNodeInfoResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+
+	return result.Data, nil
+}
+
+func (p *IndexerClient) IsMinerNode(pubkey []byte) (bool, error) {
+	url := p.GetUrl("/v3/miner/check/" + hex.EncodeToString(pubkey))
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return false, err
+	}
+
+	var result sindexerwire.CheckCoreNodeResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return false, err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return false, fmt.Errorf("%s", result.Msg)
+	}
+
+	return result.Data, nil
+}
+
+func (p *IndexerClient) GetMinerInfo(pubkey []byte) (*sindexerwire.MinerInfo, error) {
+	url := p.GetUrl("/v3/miner/info/" + hex.EncodeToString(pubkey))
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	var result sindexerwire.GetMinerInfoResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+
+	return result.Data, nil
+}
+
 // 只有未花费的能拿到id
 func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
 	url := p.GetUrl("/v3/utxo/info/" + utxo)
@@ -217,8 +284,6 @@ func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return INVALID_ID, err
 	}
-
-	
 
 	// Unmarshal the response.
 	var result indexerwire.TxOutputRespV3
@@ -248,8 +313,6 @@ func (p *IndexerClient) GetRawTx(tx string) (string, error) {
 		return "", err
 	}
 
-	
-
 	// Unmarshal the response.
 	var result indexerwire.TxResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -273,8 +336,6 @@ func (p *IndexerClient) GetTxInfo(tx string) (*indexerwire.TxSimpleInfo, error) 
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil, err
 	}
-
-	
 
 	// Unmarshal the response.
 	var result indexerwire.TxSimpleInfoResp
@@ -318,8 +379,6 @@ func (p *IndexerClient) GetSyncHeight() int {
 		return -1
 	}
 
-	
-
 	// Unmarshal the response.
 	var result indexerwire.BestHeightResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -344,8 +403,6 @@ func (p *IndexerClient) GetBestHeight() int64 {
 		return -1
 	}
 
-	
-
 	// Unmarshal the response.
 	var result indexerwire.BestBlockHeightResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -368,8 +425,6 @@ func (p *IndexerClient) GetBlockHash(height int) (string, error) {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return "", err
 	}
-
-	
 
 	// Unmarshal the response.
 	var result indexerwire.BlockHashResp
@@ -394,8 +449,6 @@ func (p *IndexerClient) GetBlock(blockHash string) (string, error) {
 		return "", err
 	}
 
-	
-
 	// Unmarshal the response.
 	var result indexerwire.RawBlockResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -418,8 +471,6 @@ func (p *IndexerClient) GetAssetSummaryWithAddress(address string) *indexerwire.
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil
 	}
-
-	
 
 	// Unmarshal the response.
 	var result indexerwire.AssetSummaryRespV3
@@ -447,6 +498,26 @@ func (p *IndexerClient) GetAssetSummaryWithAddress(address string) *indexerwire.
 	}
 }
 
+func (p *IndexerClient) GetIndexerPubKey() ([]byte, error) {
+	url := p.GetUrl("/v3/indexer/pubkey")
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	var result indexerwire.IndexerPubKeyResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+	return hex.DecodeString(result.PubKey)
+}
+
 func (p *IndexerClient) GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexerwire.TxOutputInfo {
 	url := p.GetUrl("/v3/address/asset/" + address + "/" + ticker.String())
 	rsp, err := p.Http.SendGetRequest(url)
@@ -454,8 +525,6 @@ func (p *IndexerClient) GetUtxoListWithTicker(address string, ticker *swire.Asse
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil
 	}
-
-	
 
 	// Unmarshal the response.
 	var result indexerwire.UtxosWithAssetRespV3
@@ -529,8 +598,6 @@ func (p *IndexerClient) getAllUtxosWithAddress(address string) ([]*indexerwire.P
 		return nil, nil, err
 	}
 
-	
-
 	// Unmarshal the response.
 	var result indexerwire.AllUtxosResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -554,8 +621,6 @@ func (p *IndexerClient) GetFeeRate() int64 {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return 0
 	}
-
-	
 
 	// Unmarshal the response.
 	var result indexerwire.FeeSummaryResp
@@ -597,7 +662,6 @@ func (p *IndexerClient) GetExistingUtxos(utxos []string) ([]string, error) {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
 		return nil, err
 	}
-	
 
 	var result indexerwire.ExistingUtxoResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -629,7 +693,6 @@ func (p *IndexerClient) TestRawTx(signedTxs []string) error {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
 		return err
 	}
-	
 
 	var result indexerwire.TestRawTxResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -662,7 +725,7 @@ func (p *IndexerClient) TestRawTx(signedTxs []string) error {
 					Log.Errorf("%v", r.RejectReason)
 					return fmt.Errorf("%d:%s", i, r.RejectReason)
 				}
-				
+
 			}
 			Log.Errorf("this raw tx %s is not accepted by mempool, %s", signedTxs[i], r.RejectReason)
 			return fmt.Errorf("%d:%s", i, r.RejectReason)
@@ -670,7 +733,7 @@ func (p *IndexerClient) TestRawTx(signedTxs []string) error {
 			//Log.Debugf("this raw tx %s is accepted by mempool", signedTxs[i])
 		}
 	}
-	
+
 	return nil
 }
 
@@ -689,7 +752,7 @@ func (p *IndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	return tx.TxID(), nil
 }
 
-func (p *IndexerClient) BroadCastTxs(txs []*wire.MsgTx) (error) {
+func (p *IndexerClient) BroadCastTxs(txs []*wire.MsgTx) error {
 	if len(txs) == 0 {
 		return nil
 	}
@@ -727,12 +790,11 @@ func (p *IndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 	return tx.TxID(), nil
 }
 
-
-func (p *IndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) (error) {
+func (p *IndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) error {
 	if len(txs) == 0 {
 		return nil
 	}
-	
+
 	txsHex := make([]string, 0)
 	for _, tx := range txs {
 		str, err := EncodeMsgTx_SatsNet(tx)
@@ -751,7 +813,6 @@ func (p *IndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) (error) {
 	return nil
 }
 
-
 func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 	req := indexerwire.SendRawTxReq{
 		SignedTxHex: hexTx,
@@ -769,7 +830,6 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
 		return err
 	}
-	
 
 	var result indexerwire.SendRawTxResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -777,11 +837,11 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 		return err
 	}
 	/*
-	                                           要广播的txId																												  ascend 目标utxo的txId         										目标utxo
-	-26: TX rejected: The anchor tx is invalid 41d0c16816756bc32a7b839b7bd3845b0f94c0990da036f486c6fbc4210c4552:the locked tx is anchored already in sats net, anchorTx cbaf995a3b0457f3f821068692b9e4664a8a215b4695caac7c73c279453f503a, utxo c08e081650f45b1f2709962285cc618ee2beeee620a9b6e3b850e571739a15b5:0
-	
-											要广播的txId																											 该tx包含一个输入utxo
-	-25: TX rejected: orphan transaction 7b23cb6e5531bc8a19665576ebb2e6d96a0e703224f8079ae6947dfa93e0f8ba references outputs of unknown or fully-spent transaction adbd1d2d33b9f8b1fdc328941a192ef66403923961f677301647e3f5dd05bced:0
+		                                           要广播的txId																												  ascend 目标utxo的txId         										目标utxo
+		-26: TX rejected: The anchor tx is invalid 41d0c16816756bc32a7b839b7bd3845b0f94c0990da036f486c6fbc4210c4552:the locked tx is anchored already in sats net, anchorTx cbaf995a3b0457f3f821068692b9e4664a8a215b4695caac7c73c279453f503a, utxo c08e081650f45b1f2709962285cc618ee2beeee620a9b6e3b850e571739a15b5:0
+
+												要广播的txId																											 该tx包含一个输入utxo
+		-25: TX rejected: orphan transaction 7b23cb6e5531bc8a19665576ebb2e6d96a0e703224f8079ae6947dfa93e0f8ba references outputs of unknown or fully-spent transaction adbd1d2d33b9f8b1fdc328941a192ef66403923961f677301647e3f5dd05bced:0
 	*/
 
 	if result.Code != 0 {
@@ -846,7 +906,7 @@ func (p *IndexerClient) broadCastHexTxs(hexTx []string) error {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
 		return err
 	}
-	
+
 	var result indexerwire.SendRawTxsResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
 		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
@@ -869,8 +929,6 @@ func (p *IndexerClient) GetTickInfo(assetName *swire.AssetName) *indexer.TickerI
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return nil
 	}
-
-	
 
 	// Unmarshal the response.
 	var result indexerwire.TickerInfoResp
@@ -954,7 +1012,6 @@ func (p *IndexerClient) GetNonce(pubKey []byte) ([]byte, error) {
 		Log.Warningf("SendPostRequest %v failed. %v", url, err)
 		return nil, err
 	}
-	
 
 	var result indexerwire.GetNonceResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -970,8 +1027,8 @@ func (p *IndexerClient) GetNonce(pubKey []byte) ([]byte, error) {
 	return result.Nonce, nil
 }
 
-func (p *IndexerClient) PutKVs(req *indexerwire.PutKValueReq) (error) {
-	
+func (p *IndexerClient) PutKVs(req *indexerwire.PutKValueReq) error {
+
 	buff, err := json.Marshal(&req)
 	if err != nil {
 		return err
@@ -983,7 +1040,6 @@ func (p *IndexerClient) PutKVs(req *indexerwire.PutKValueReq) (error) {
 		Log.Warningf("SendPostRequest %v failed. %v", url, err)
 		return err
 	}
-	
 
 	var result indexerwire.PutKValueResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -999,7 +1055,7 @@ func (p *IndexerClient) PutKVs(req *indexerwire.PutKValueReq) (error) {
 	return nil
 }
 
-func (p *IndexerClient) DelKVs(req *indexerwire.DelKValueReq) (error) {
+func (p *IndexerClient) DelKVs(req *indexerwire.DelKValueReq) error {
 	buff, err := json.Marshal(&req)
 	if err != nil {
 		return err
@@ -1011,7 +1067,6 @@ func (p *IndexerClient) DelKVs(req *indexerwire.DelKValueReq) (error) {
 		Log.Warningf("SendPostRequest %v failed. %v", url, err)
 		return err
 	}
-	
 
 	var result indexerwire.DelKValueResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
@@ -1038,7 +1093,6 @@ func (p *IndexerClient) GetKV(pubkey []byte, key string) (*indexerwire.KeyValue,
 		return nil, err
 	}
 
-	
 	var result indexerwire.GetValueResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
 		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
@@ -1090,7 +1144,6 @@ func (p *IndexerClient) GetNameInfo(name string) (*indexerwire.OrdinalsName, err
 		return nil, err
 	}
 
-	
 	var result indexerwire.NamePropertiesResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
 		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
@@ -1109,9 +1162,9 @@ func (p *IndexerClient) GetNamesWithKey(address, key string) ([]*indexerwire.Ord
 
 	path := fmt.Sprintf("/ns/address/%s", address)
 	url := p.GetUrl(path)
-	url.Query = make(map[string]string)  
+	url.Query = make(map[string]string)
 	url.Query["key"] = key
-	
+
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)

@@ -71,7 +71,7 @@ func (p *Manager) CoGenerateStubUtxos(localWallet common.Wallet, n int, feeRate 
 }
 func (p *Manager) CoBatchSendV3(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
-	sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error) {
+	sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress bool) (string, int64, error) {
 	return "", 0, fmt.Errorf("not implemented")
 }
 func (p *Manager) CoSendOrdxWithStub(localWallet common.Wallet, dest string, assetNameStr string, amt int64, feeRate int64, stub string,
