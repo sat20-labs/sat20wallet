@@ -17,7 +17,7 @@ type WalletId struct {
 
 // 方便对通道的操作进行签名和验证，id是子账户id，从0开始
 type ChannelWallet interface {
-	GetId() uint32
+	GetSubAccount() uint32
 	GetCommitSecret(index uint32) *secp256k1.PrivateKey
 	DeriveRevocationPrivKey(commitsecret *secp256k1.PrivateKey) *secp256k1.PrivateKey
 	GetRevocationBaseKey() *secp256k1.PublicKey

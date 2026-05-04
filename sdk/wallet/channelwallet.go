@@ -22,7 +22,7 @@ func NewChannelWallet(wallet *InternalWallet, peerId []byte, id uint32) *channel
 	}
 }
 
-func (p *channelWallet) GetId() uint32 {
+func (p *channelWallet) GetSubAccount() uint32 {
 	return p.id
 }
 
