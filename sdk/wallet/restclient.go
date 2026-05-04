@@ -74,6 +74,7 @@ type IndexerRPCClient interface {
 	GetAssetSummaryWithAddress(address string) *indexerwire.AssetSummary
 	GetIndexerPubKey() ([]byte, error)
 	GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexerwire.TxOutputInfo
+	GetUtxoListWithBRC20Ticker(address string, ticker *swire.AssetName, invalid bool) []*indexerwire.TxOutputInfo
 	GetUtxosWithAddress(address string) (map[string]*wire.TxOut, error)
 	GetUnusableUtxosWithAddress(address string) ([]*TxOutput, error)
 	GetFeeRate() int64
@@ -527,6 +528,31 @@ func (p *IndexerClient) GetUtxoListWithTicker(address string, ticker *swire.Asse
 	}
 
 	// Unmarshal the response.
+	var result indexerwire.UtxosWithAssetRespV3
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return nil
+	}
+
+	return result.Data
+}
+
+func (p *IndexerClient) GetUtxoListWithBRC20Ticker(address string, ticker *swire.AssetName, invalid bool) []*indexerwire.TxOutputInfo {
+	url := p.GetUrl("/v3/address/asset/" + address + "/" + ticker.String())
+	if invalid {
+		url.Query = map[string]string{"invalid": "true"}
+	}
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return nil
+	}
+
 	var result indexerwire.UtxosWithAssetRespV3
 	if err := json.Unmarshal(rsp, &result); err != nil {
 		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))

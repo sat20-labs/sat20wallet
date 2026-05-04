@@ -1252,6 +1252,14 @@ func (p *TestIndexerClient) GetIndexerPubKey() ([]byte, error) {
 }
 
 func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexerwire.TxOutputInfo {
+	return p.getUtxoListWithTicker(address, ticker, false)
+}
+
+func (p *TestIndexerClient) GetUtxoListWithBRC20Ticker(address string, ticker *swire.AssetName, invalid bool) []*indexerwire.TxOutputInfo {
+	return p.getUtxoListWithTicker(address, ticker, invalid)
+}
+
+func (p *TestIndexerClient) getUtxoListWithTicker(address string, ticker *swire.AssetName, includeInvalid bool) []*indexerwire.TxOutputInfo {
 	p.network.mutex.RLock()
 	defer p.network.mutex.RUnlock()
 
@@ -1274,19 +1282,32 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 		assets := p.network.utxoAssets[i]
 		invalids := p.network.invalids[utxo]
 		validAssets := make(swire.TxAssets, 0, len(assets))
+		invalidAssets := make(swire.TxAssets, 0, len(assets))
 		for _, asset := range assets {
 			if invalids != nil && invalids[asset.Name] {
+				invalidAssets = append(invalidAssets, asset)
 				continue
 			}
 			validAssets = append(validAssets, asset)
 		}
 
 		if *ticker != ASSET_PLAIN_SAT {
+			if includeInvalid {
+				if invalidAssets != nil {
+					_, err := invalidAssets.Find(ticker)
+					if err == nil {
+						output = &indexerwire.TxOutputInfo{
+							OutPoint: utxo,
+						}
+					}
+				}
+			} else {
 			if validAssets != nil {
 				_, err := validAssets.Find(ticker)
-				if err == nil {
+					if err == nil {
 					output = &indexerwire.TxOutputInfo{
 						OutPoint: utxo,
+						}
 					}
 				}
 			}
@@ -1304,13 +1325,20 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 			}
 		}
 
+		var selectedAssets swire.TxAssets
+		if includeInvalid {
+			selectedAssets = invalidAssets
+		} else {
+			selectedAssets = validAssets
+		}
+
 		if output != nil {
 			pkScript2, _ := hex.DecodeString(_pkScripts[p.network.utxoOwner[i]])
 			if bytes.Equal(pkScript, pkScript2) {
 
 				offsets := cloneOffsets(p.network.offsets[i])
 				var utxoAssets []*indexer.DisplayAsset
-				for _, v := range validAssets {
+				for _, v := range selectedAssets {
 					asset := indexer.DisplayAsset{
 						AssetName:  v.Name,
 						Amount:     v.Amount.String(),
@@ -1321,6 +1349,7 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 					if v.Name.Protocol == indexer.PROTOCOL_NAME_BRC20 && p.network.IsBitcoinNet() {
 						asset.Offsets = []*indexer.OffsetRange{{Start: 0, End: 1}}
 						asset.OffsetToAmts = []*indexer.OffsetToAmount{{Offset: 0, Amount: v.Amount.String()}}
+						asset.Invalid = includeInvalid
 					}
 					utxoAssets = append(utxoAssets, &asset)
 				}
