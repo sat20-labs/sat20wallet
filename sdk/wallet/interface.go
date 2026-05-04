@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -225,6 +226,9 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 	if p.wallet != nil {
 		return -1, fmt.Errorf("wallet has been unlocked")
 	}
+	if len(p.walletInfoMap) == 0 {
+		return -1, fmt.Errorf("no wallet")
+	}
 
 	for _, walletInfo := range p.walletInfoMap {
 		if walletInfo.Wallet != nil {
@@ -256,25 +260,29 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 		}
 	}
 
-	p.wallet = p.walletInfoMap[p.status.CurrentWallet].Wallet
-	if p.wallet != nil {
-		if p.status.CurrentAccount > 0 {
-			p.wallet.SetSubAccount(p.status.CurrentAccount)
+	info, ok := p.walletInfoMap[p.status.CurrentWallet]
+	if !ok {
+		// reset to first wallet
+		min := int64(math.MaxInt64)
+		for id := range p.walletInfoMap {
+			if id < min {
+				min = id
+			}
 		}
-		return p.status.CurrentWallet, nil
-	}
-	Log.Errorf("can't find wallet %d, set to first wallet", p.status.CurrentWallet)
-	for id, walletInfo := range p.walletInfoMap {
-		if walletInfo.Wallet != nil {
-			p.wallet = walletInfo.Wallet
-			p.status.CurrentWallet = id
-			p.status.CurrentAccount = 0
-			p.saveStatus()
-			return p.status.CurrentWallet, nil
+		p.status.CurrentWallet = min
+		p.status.CurrentAccount = 0
+		p.saveStatus()
+
+		info = p.walletInfoMap[p.status.CurrentWallet]
+		if info == nil {
+			return -1, fmt.Errorf("can't unlock any wallet")
 		}
 	}
 
-	return -1, fmt.Errorf("can't unlock any wallet")
+	p.wallet = info.Wallet
+	p.wallet.SetSubAccount(p.status.CurrentAccount)
+	
+	return p.status.CurrentWallet, nil
 }
 
 func (p *Manager) GetAllWallets() map[int64]int {
