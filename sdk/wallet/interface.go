@@ -342,6 +342,9 @@ func (p *Manager) GetCurrentAccountId() uint32 {
 func (p *Manager) FindWalletById(id int64) common.Wallet {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
+	if id == 0 {
+		return p.wallet
+	}
 
 	walletInfo, ok := p.walletInfoMap[id]
 	if !ok {
