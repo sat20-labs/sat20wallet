@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/btcsuite/btcd/txscript"
@@ -28,8 +29,6 @@ const (
 	LAUNCH_POOL_MIN_RATION int = 60 // %
 	LAUNCH_POOL_MAX_RATION int = 90 // %
 	RESERVE_TO_FOUNDATION  int = 5  // %
-
-	INVOKE_API_MINT string = "mint"
 )
 
 var (
@@ -436,6 +435,10 @@ type LaunchPoolRunningData struct {
 	IsLaunching       bool
 	LaunchTxIDs       []string // 发射
 	RefundTxIDs       []string // 退款
+	CloseRequested    bool
+	CloseInvokeTxID   string
+	CloseAssetTxID    string
+	ReturnToDeployer  bool
 
 	AmmContractURL string
 	AmmResvId      int64
@@ -1322,39 +1325,48 @@ func (p *LaunchPoolContractRunTime) CheckInvokeParam(param string) (int64, error
 	if err != nil {
 		return 0, err
 	}
-	if invoke.Action != INVOKE_API_MINT {
+	switch invoke.Action {
+	case INVOKE_API_MINT:
+		amt := string(invoke.Param)
+		if amt == "" || amt == "0" {
+			return 0, fmt.Errorf("should set a special amt")
+		}
+
+		dAmt, err := indexer.NewDecimalFromString(amt, 0)
+		if err != nil {
+			return 0, fmt.Errorf("invalid mint amount %s", amt)
+		}
+		if p.Limit > 0 && dAmt.Int64() > p.Limit {
+			return 0, fmt.Errorf("mint amount %s exceed the limit %d", amt, p.Limit)
+		}
+		if dAmt.Int64() <= 0 {
+			return 0, fmt.Errorf("invalid mint amount %s", amt)
+		}
+
+		// 非虚拟的运行时对象，增加实时检查
+		// if p.channel != nil {
+		// 	var invoke LaunchPoolInvokeParam
+		// 	err = json.Unmarshal([]byte(param), &invoke)
+		// 	if err != nil {
+		// 		return err
+		// 	}
+		// 	if invoke.Param != "" && invoke.Param != "0" {
+		// 		amt, err := indexer.NewDecimalFromString(invoke.Param, 0)
+
+		// 	}
+		// }
+
+		return indexer.GetBindingSatNum(dAmt, uint32(p.MintAmtPerSat)), nil
+
+	case INVOKE_API_CLOSE:
+		if invoke.Param != "" {
+			return 0, fmt.Errorf("close invoke should not have param")
+		}
+		return INVOKE_FEE, nil
+
+	default:
 		return 0, fmt.Errorf("invalid action %s", invoke.Action)
 	}
-	amt := string(invoke.Param)
-	if amt == "" || amt == "0" {
-		return 0, fmt.Errorf("should set a special amt")
-	}
-
-	dAmt, err := indexer.NewDecimalFromString(amt, 0)
-	if err != nil {
-		return 0, fmt.Errorf("invalid mint amount %s", amt)
-	}
-	if p.Limit > 0 && dAmt.Int64() > p.Limit {
-		return 0, fmt.Errorf("mint amount %s exceed the limit %d", amt, p.Limit)
-	}
-	if dAmt.Int64() <= 0 {
-		return 0, fmt.Errorf("invalid mint amount %s", amt)
-	}
-
-	// 非虚拟的运行时对象，增加实时检查
-	// if p.channel != nil {
-	// 	var invoke LaunchPoolInvokeParam
-	// 	err = json.Unmarshal([]byte(param), &invoke)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	if invoke.Param != "" && invoke.Param != "0" {
-	// 		amt, err := indexer.NewDecimalFromString(invoke.Param, 0)
-
-	// 	}
-	// }
-
-	return indexer.GetBindingSatNum(dAmt, uint32(p.MintAmtPerSat)), nil
 }
 
 func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_SatsNet) error {
@@ -1401,12 +1413,14 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 		p.ContractRuntimeBase.InvokeCompleted_SatsNet(data)
 	}
 
-	// 是否准备发射？
-	if p.ReadyToLaunch() &&
+	// 是否准备关闭？
+	if p.shouldStartClosing() &&
 		(p.Status == CONTRACT_STATUS_READY || p.Status == CONTRACT_STATUS_CLOSING) {
 		if p.Status == CONTRACT_STATUS_READY {
 			p.Status = CONTRACT_STATUS_CLOSING
-			p.handleReserveRatio()
+			if !p.ReturnToDeployer {
+				p.handleReserveRatio()
+			}
 			if p.CheckPointBlock == p.EnableBlock {
 				// 截止到这里，后续其他invoke都无效
 				p.CheckPointBlock = data.Height
@@ -1468,32 +1482,172 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock(data *InvokeDataInBlock) err
 	return nil
 }
 
+func (p *LaunchPoolContractRunTime) shouldStartClosing() bool {
+	return p.CloseRequested || p.ReadyToLaunch()
+}
+
+func (p *LaunchPoolContractRunTime) requestClose(txID string, height int) {
+	if p.CloseInvokeTxID == txID {
+		return
+	}
+
+	p.CloseRequested = true
+	p.ReturnToDeployer = true
+	p.CloseInvokeTxID = txID
+	p.Status = CONTRACT_STATUS_CLOSING
+	if p.CheckPointBlock < height {
+		p.CheckPointBlock = height
+	}
+}
+
+func (p *LaunchPoolContractRunTime) updateContract_close(
+	invokerAddr string, output *sindexer.TxOutput, value int64) *MintHistoryItem {
+
+	item := &MintHistoryItem{
+		InvokeHistoryItemBase: InvokeHistoryItemBase{
+			Version: 1,
+			Id:      p.InvokeCount,
+			Reason:  INVOKE_REASON_NORMAL,
+			Done:    ITEM_STATUS_INIT,
+		},
+		OrderType:      ORDERTYPE_CLOSE,
+		UtxoId:         output.UtxoId,
+		OrderTime:      time.Now().Unix(),
+		AssetName:      p.GetAssetName().String(),
+		ServiceFee:     INVOKE_FEE,
+		Address:        invokerAddr,
+		FromL1:         false,
+		InUtxo:         output.OutPointStr,
+		InValue:        value,
+		RemainingValue: value - INVOKE_FEE,
+		ToL1:           false,
+	}
+
+	p.InvokeCount++
+	p.history[item.InUtxo] = item
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+	return item
+}
+
+func (p *LaunchPoolContractRunTime) getCloseHistoryItem() *MintHistoryItem {
+	if p.CloseInvokeTxID == "" {
+		return nil
+	}
+	prefix := p.CloseInvokeTxID + ":"
+	for utxo, item := range p.history {
+		if !strings.HasPrefix(utxo, prefix) {
+			continue
+		}
+		return item
+	}
+	return nil
+}
+
+func (p *LaunchPoolContractRunTime) recordCloseRefundTxID(txID string) {
+	item := p.getCloseHistoryItem()
+	if item == nil || txID == "" {
+		return
+	}
+	item.Padded = []byte(txID)
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+}
+
+func (p *LaunchPoolContractRunTime) recordCloseAssetTxID(txID string) {
+	item := p.getCloseHistoryItem()
+	if item == nil || txID == "" {
+		return
+	}
+	item.OutTxId = txID
+	item.Done = ITEM_STATUS_DEALT
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+}
+
+func (p *LaunchPoolContractRunTime) allResultSettled() bool {
+	for _, v := range p.mintInfoMap {
+		if !v.Settled {
+			return false
+		}
+	}
+	for _, v := range p.invalidMintMap {
+		if !v.Settled {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *LaunchPoolContractRunTime) canFinishClose() bool {
+	if !p.allResultSettled() {
+		return false
+	}
+	if p.ReturnToDeployer && p.AssetAmtInPool.Sign() > 0 && p.CloseAssetTxID == "" {
+		return false
+	}
+	return true
+}
+
+func (p *LaunchPoolContractRunTime) finishClose() {
+	p.IsLaunching = false
+	p.Status = CONTRACT_STATUS_CLOSED
+	p.resv.SetStatus(RS_DEPLOY_CONTRACT_COMPLETED)
+}
+
 func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, height int) (InvokeHistoryItem, error) {
 	return nil, nil
 }
 
 func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeTx_SatsNet, height int) (InvokeHistoryItem, error) {
-
 	invokeData := invokeTx.InvokeParam
-	//output := invokeTx.Tx.TxOut[invokeTx.InvokeVout]
 	output := sindexer.GenerateTxOutput(invokeTx.Tx, invokeTx.InvokeVout)
-
 	var param LaunchPoolInvokeParam
 	err := param.Decode(invokeData.InvokeParam)
 	if err != nil {
 		return nil, err
 	}
-	if param.Action != INVOKE_API_MINT {
-		return nil, fmt.Errorf("invalid action %s", param.Action)
-	}
-
-	value := output.GetPlainSat()
-	if value == 0 {
-		return nil, fmt.Errorf("invalid plain sats 0")
-	}
 
 	utxoId := indexer.ToUtxoId(height, invokeTx.TxIndex, invokeTx.InvokeVout)
 	output.UtxoId = utxoId
+	utxo := fmt.Sprintf("%s:%d", invokeTx.Tx.TxID(), invokeTx.InvokeVout)
+	org, ok := p.history[utxo]
+	if ok {
+		if org.UtxoId != utxoId { // reorg
+			org.UtxoId = utxoId
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
+		}
+		invokeTx.Handled = true
+		return nil, fmt.Errorf("contract utxo %s exists", utxo)
+	}
+
+	value := output.GetPlainSat()
+	switch param.Action {
+	case INVOKE_API_CLOSE:
+		if invokeTx.Invoker != p.Deployer {
+			return nil, fmt.Errorf("only deployer can close the contract")
+		}
+		if p.GetStatus() != CONTRACT_STATUS_READY {
+			return nil, fmt.Errorf("contract is not ready to close")
+		}
+		if p.IsLaunching || p.ReadyToLaunch() {
+			return nil, fmt.Errorf("contract has started launching")
+		}
+		if value < INVOKE_FEE {
+			return nil, fmt.Errorf("invalid close fee %d", value)
+		}
+
+		invokeTx.Handled = true
+		item := p.updateContract_close(invokeTx.Invoker, output, value)
+		p.requestClose(invokeTx.Tx.TxID(), height)
+		return item, nil
+
+	case INVOKE_API_MINT:
+		if value == 0 {
+			return nil, fmt.Errorf("invalid plain sats 0")
+		}
+
+	default:
+		return nil, fmt.Errorf("invalid action %s", param.Action)
+	}
+
 	var amt *Decimal
 	amtParam := string(param.Param)
 	if amtParam == "0" || amtParam == "" {
@@ -1507,18 +1661,6 @@ func (p *LaunchPoolContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *
 		if value < indexer.GetBindingSatNum(amt, uint32(p.MintAmtPerSat)) {
 			return nil, fmt.Errorf("contract amt %s too large", amtParam)
 		}
-	}
-
-	// 是否没有重复交易提交
-	utxo := fmt.Sprintf("%s:%d", invokeTx.Tx.TxID(), invokeTx.InvokeVout)
-	org, ok := p.history[utxo]
-	if ok {
-		if org.UtxoId != utxoId { // reorg
-			org.UtxoId = utxoId
-			SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), org)
-		}
-		invokeTx.Handled = true
-		return nil, fmt.Errorf("contract utxo %s exists", utxo)
 	}
 
 	// 交易是否已经完成
@@ -1578,7 +1720,7 @@ func addMintInfo(address string, mintInfoMap map[string]*MinterStatus) *MinterSt
 func (p *LaunchPoolContractRunTime) addItem(item *MintHistoryItem) {
 	address := item.Address
 	amt := item.OutAmt
-	if amt.Sign() != 0 { // 铸造成功的item
+	if item.OrderType == ORDERTYPE_MINT && amt.Sign() != 0 { // 铸造成功的item
 		info := addMintInfo(address, p.mintInfoMap)
 		info.TotalAmt = info.TotalAmt.Add(amt)
 		info.History = append(info.History, item)
@@ -1602,7 +1744,7 @@ func (p *LaunchPoolContractRunTime) DisableItem(input InvokeHistoryItem) {
 	}
 	p.TotalInputSats -= item.InValue
 	p.SatsValueInPool -= item.InValue
-	if item.OutAmt.Sign() > 0 {
+	if item.OutAmt != nil && item.OutAmt.Sign() > 0 {
 		p.TotalMinted = p.TotalMinted.Sub(item.OutAmt)
 	}
 }
@@ -1661,16 +1803,18 @@ func (p *LaunchPoolContractRunTime) setToRefundAll() {
 	p.mintInfoMap = make(map[string]*MinterStatus)
 	p.invalidMintMap = make(map[string]*MinterStatus)
 
-	totalAmt := p.LaunchPoolRunningData.TotalInputAssets.Clone()
-	p.LaunchPoolRunningData = LaunchPoolRunningData{}
-	p.LaunchPoolRunningData.TotalInputAssets = totalAmt.Clone()
-	p.LaunchPoolRunningData.AssetAmtInPool = totalAmt
+	p.TotalInputSats = 0
+	p.TotalInvalid = 0
+	p.SatsValueInPool = 0
 	for _, item := range p.history {
+		if item.OrderType != ORDERTYPE_MINT {
+			continue
+		}
 		p.TotalInputSats += item.InValue
 		p.TotalInvalid += item.InValue
 		p.SatsValueInPool += item.InValue
-		item.OutAmt = nil
-		item.OutValue = item.InValue
+		item.OutAmt = nil // 设置为铸造失败
+		item.OutValue = item.InValue // 设置退款
 		p.addItem(item)
 		SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
 	}
@@ -1691,7 +1835,8 @@ func (p *LaunchPoolContractRunTime) launch() error {
 	// defer p.mutex.Unlock()
 
 	// 如果不满足发射条件，并且超时，全部退款
-	if p.LeftToMint().Sign() > 0 && p.IsExpired() {
+	if p.CloseRequested || (p.LeftToMint().Sign() > 0 && p.IsExpired()) {
+		p.ReturnToDeployer = true
 		p.setToRefundAll()
 	}
 
@@ -1704,7 +1849,28 @@ func (p *LaunchPoolContractRunTime) launch() error {
 		//Log.Infof("contract %s refunded", p.URL())
 	}
 
+	if p.ReturnToDeployer {
+		err := p.returnAssetsToDeployer()
+		if err != nil {
+			Log.Errorf("return assets for contract %s failed, %v", p.URL(), err)
+			return err
+		}
+	}
+
 	if p.resv.LocalIsInitiator() {
+		if p.ReturnToDeployer {
+			p.mutex.Lock()
+			if p.canFinishClose() {
+				p.finishClose()
+				p.mutex.Unlock()
+				p.stp.SaveReservation(p.resv)
+				Log.Infof("contract %s closed", p.URL())
+			} else {
+				p.mutex.Unlock()
+			}
+			return nil
+		}
+
 		// 组装好所有的tx，然后
 		// 分批发射，每次1000个输出，然后记录
 
@@ -1870,6 +2036,62 @@ func (p *LaunchPoolContractRunTime) launch() error {
 	return nil
 }
 
+func (p *LaunchPoolContractRunTime) returnAssetsToDeployer() error {
+	if !p.ReturnToDeployer {
+		return nil
+	}
+
+	if !p.resv.LocalIsInitiator() {
+		Log.Infof("server: waiting the asset close of contract %s ", p.URL())
+		return nil
+	}
+
+	p.mutex.RLock()
+	assetAmt := p.AssetAmtInPool.Clone()
+	invokeCount := p.InvokeCount
+	height := p.CurrBlock
+	deployer := p.Deployer
+	closeAssetTxID := p.CloseAssetTxID
+	p.mutex.RUnlock()
+
+	if closeAssetTxID != "" || assetAmt.Sign() <= 0 {
+		return nil
+	}
+
+	invoice, _ := UnsignedContractResultInvoice(p.URL(),
+		INVOKE_RESULT_CLOSE, fmt.Sprintf("%d", height))
+	nullDataScript, _ := sindexer.NullDataScript(
+		sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
+
+	var txID string
+	var err error
+	for i := 0; i < 3; i++ {
+		txID, err = p.stp.CoBatchSend_SatsNet(p.localWallet, []string{deployer}, p.GetAssetName().String(),
+			[]*Decimal{assetAmt}, "contract", p.URL(), invokeCount, nullDataScript, p.StaticMerkleRoot, p.CurrAssetMerkleRoot)
+		if err == nil {
+			break
+		}
+		Log.Infof("close contract %s CoBatchSend_SatsNet failed %v, wait a second and try again", p.URL(), err)
+	}
+	if err != nil {
+		return err
+	}
+
+	p.mutex.Lock()
+	if p.CloseAssetTxID == "" {
+		p.CloseAssetTxID = txID
+		p.TotalOutputAssets = p.TotalOutputAssets.Add(assetAmt)
+		p.AssetAmtInPool = p.AssetAmtInPool.Sub(assetAmt)
+		p.SatsValueInPool -= DEFAULT_FEE_SATSNET
+		p.recordCloseAssetTxID(txID)
+	}
+	p.mutex.Unlock()
+	p.stp.SaveReservation(p.resv)
+	Log.Infof("contract %s returned remaining assets to deployer with txId %s", p.URL(), txID)
+
+	return nil
+}
+
 func (p *LaunchPoolContractRunTime) deployAmmContract() (string, int64, error) {
 	assetName := p.GetAssetName()
 
@@ -1989,6 +2211,9 @@ func (p *LaunchPoolContractRunTime) refund() error {
 				p.SatsValueInPool -= totalOutputSatsValue
 				p.SatsValueInPool -= DEFAULT_FEE_SATSNET
 				p.RefundTxIDs = append(p.RefundTxIDs, txId)
+				if p.CloseRequested {
+					p.recordCloseRefundTxID(txId)
+				}
 				p.stp.SaveReservation(p.resv)
 				p.mutex.Unlock()
 
@@ -2064,8 +2289,12 @@ func (p *LaunchPoolContractRunTime) AllowPeerAction(action string, param any) (a
 		dealInfo.StaticMerkleRoot = req.StaticMerkleRoot
 		dealInfo.RuntimeMerkleRoot = req.RuntimeMerkleRoot
 
-		if !p.IsLaunching {
+		if dealInfo.Reason == INVOKE_RESULT_OK && !p.IsLaunching {
 			return nil, fmt.Errorf("contract not in lanuch status")
+		}
+		if (dealInfo.Reason == INVOKE_RESULT_REFUND || dealInfo.Reason == INVOKE_RESULT_CLOSE) &&
+			p.GetStatus() < CONTRACT_STATUS_CLOSING {
+			return nil, fmt.Errorf("contract not in closing status")
 		}
 
 		if dealInfo.Reason == INVOKE_RESULT_OK {
@@ -2089,7 +2318,7 @@ func (p *LaunchPoolContractRunTime) AllowPeerAction(action string, param any) (a
 				}
 			}
 			Log.Infof("%s is allowed by contract %s with launch action", wwire.STP_ACTION_SIGN, p.URL())
-		} else {
+		} else if dealInfo.Reason == INVOKE_RESULT_REFUND {
 			mintInfo := p.invalidMintMap
 			for addr, infoInTx := range dealInfo.SendInfo {
 				if addr == ADDR_OPRETURN {
@@ -2110,6 +2339,20 @@ func (p *LaunchPoolContractRunTime) AllowPeerAction(action string, param any) (a
 				}
 			}
 			Log.Infof("%s is allowed by contract %s with refund action", wwire.STP_ACTION_SIGN, p.URL())
+		} else if dealInfo.Reason == INVOKE_RESULT_CLOSE {
+			if len(dealInfo.SendInfo) != 1 {
+				return nil, fmt.Errorf("close tx should have exactly one receiver")
+			}
+			infoInTx, ok := dealInfo.SendInfo[p.Deployer]
+			if !ok {
+				return nil, fmt.Errorf("close tx should send assets to deployer")
+			}
+			if infoInTx.AssetAmt.Cmp(p.AssetAmtInPool) != 0 {
+				return nil, fmt.Errorf("close asset amount incorrect, %s %s", infoInTx.AssetAmt.String(), p.AssetAmtInPool.String())
+			}
+			Log.Infof("%s is allowed by contract %s with close action", wwire.STP_ACTION_SIGN, p.URL())
+		} else {
+			return nil, fmt.Errorf("unsupported reason %s", dealInfo.Reason)
 		}
 		return dealInfo, nil
 
@@ -2172,7 +2415,7 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 		} else if dealInfo.Reason == INVOKE_RESULT_REFUND {
 			mintInfo := p.invalidMintMap
 			var totalOutputSatsValue int64
-			for addr, _ := range dealInfo.SendInfo {
+			for addr := range dealInfo.SendInfo {
 				info, ok := mintInfo[addr]
 				if !ok {
 					continue
@@ -2195,31 +2438,36 @@ func (p *LaunchPoolContractRunTime) SetPeerActionResult(action string, param any
 				p.SatsValueInPool -= totalOutputSatsValue
 				p.SatsValueInPool -= DEFAULT_FEE_SATSNET
 				p.RefundTxIDs = append(p.RefundTxIDs, dealInfo.TxId)
+				if p.CloseRequested {
+					p.recordCloseRefundTxID(dealInfo.TxId)
+				}
 
 				p.stp.SaveReservation(p.resv)
 				Log.Infof("server: contract %s updated by txId %s", p.URL(), dealInfo.TxId)
 			} else {
 				// 重复进来
 			}
+		} else if dealInfo.Reason == INVOKE_RESULT_CLOSE {
+			if p.CloseAssetTxID == "" {
+				p.CheckPointBlock = dealInfo.Height
+				p.TotalOutputAssets = p.TotalOutputAssets.Add(dealInfo.TotalAmt)
+				p.AssetAmtInPool = p.AssetAmtInPool.Sub(dealInfo.TotalAmt)
+				p.SatsValueInPool -= DEFAULT_FEE_SATSNET
+				p.CloseAssetTxID = dealInfo.TxId
+				p.recordCloseAssetTxID(dealInfo.TxId)
+				bUpdate = true
+
+				p.stp.SaveReservation(p.resv)
+				Log.Infof("server: contract %s updated by close txId %s", p.URL(), dealInfo.TxId)
+			}
 		}
 
 		if bUpdate {
-			// 看看是否全部完成
-			for _, v := range p.mintInfoMap {
-				if !v.Settled {
-					return
-				}
-			}
-			for _, v := range p.invalidMintMap {
-				if !v.Settled {
-					return
-				}
+			if !p.canFinishClose() {
+				return
 			}
 
-			// update status
-			p.IsLaunching = false
-			p.Status = CONTRACT_STATUS_CLOSED
-			p.resv.SetStatus(RS_DEPLOY_CONTRACT_COMPLETED)
+			p.finishClose()
 			p.stp.SaveReservation(p.resv)
 			Log.Infof("server: contract %s closed", p.URL())
 		}

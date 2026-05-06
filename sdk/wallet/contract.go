@@ -69,6 +69,7 @@ const (
 	INVOKE_RESULT_REMOVELIQUIDITY string = INVOKE_API_REMOVELIQUIDITY
 	INVOKE_RESULT_PROFIT          string = INVOKE_API_PROFIT
 	INVOKE_RESULT_REWARD          string = INVOKE_API_REWARD
+	INVOKE_RESULT_CLOSE           string = INVOKE_API_CLOSE
 )
 
 const (
@@ -77,6 +78,7 @@ const (
 	INVOKE_API_FUND            string = "fund"     //
 	INVOKE_API_DEPOSIT         string = "deposit"  // L1->L2  免费
 	INVOKE_API_WITHDRAW        string = "withdraw" // L2->L1  收
+	INVOKE_API_MINT 		   string = "mint"
 	INVOKE_API_STAKE           string = "stake"    // 如果是L1的stake，必须要有op_return携带invokeParam，否则会被认为是deposit
 	INVOKE_API_UNSTAKE         string = "unstake"  // 可以unstake到一层
 	INVOKE_API_ADDLIQUIDITY    string = "addliq"   // 如果是L1，必须要有op_return携带invokeParam，否则会被认为是deposit
@@ -89,6 +91,7 @@ const (
 	INVOKE_API_AIRDROP         string = "airdrop"
 	INVOKE_API_VALIDATE        string = "validate"
 	INVOKE_API_BIND            string = "bind"
+	INVOKE_API_CLOSE           string = "close"
 
 	ORDERTYPE_NOSPEC          = 0
 	ORDERTYPE_SELL            = 1
@@ -110,7 +113,8 @@ const (
 	ORDERTYPE_AIRDROP         = 17
 	ORDERTYPE_VALIDATE        = 18
 	ORDERTYPE_BIND            = 19
-	ORDERTYPE_UNUSED          = 20
+	ORDERTYPE_CLOSE           = 20
+	ORDERTYPE_UNUSED          = 21
 
 	INVOKE_FEE          int64 = 10
 	SWAP_INVOKE_FEE     int64 = 10
@@ -319,7 +323,7 @@ type ContractRuntime interface {
 	RuntimeStatus() string                  // 运行时状态，json格式
 	RuntimeAnalytics() string               // 运行时状态，json格式
 	InvokeHistory(any, int, int) string     // 调用历史记录，可以增加过滤条件
-	QueryInvokeItem(string) (string, error)      // 根据inUtxo查找item，json格式
+	QueryInvokeItem(string) (string, error) // 根据inUtxo查找item，json格式
 	AllAddressInfo(int, int) string         // 所有地址信息，json格式
 	StatusByAddress(string) (string, error) // 运行时状态，json格式
 	GetDeployTime() int64
@@ -410,7 +414,6 @@ func (p *InvokeHistoryItemBase) GetKey() string {
 func (p *InvokeHistoryItemBase) Finished() bool {
 	return p.Done > ITEM_STATUS_INIT
 }
-
 
 func GetKeyFromId(id int64) string {
 	return fmt.Sprintf("%012d", id)
@@ -541,8 +544,8 @@ type InvokeInnerParamIF interface {
 }
 
 type InvokeParam struct {
-	Action string `json:"action"`
-	Param  string `json:"param,omitempty"` // 外部使用时是json，内部使用时是编码过的string
+	Action   string `json:"action"`
+	Param    string `json:"param,omitempty"`    // 外部使用时是json，内部使用时是编码过的string
 	Encoding string `json:"encoding,omitempty"` // br
 }
 
@@ -557,7 +560,7 @@ func (p *InvokeParam) Encode() ([]byte, error) {
 				return nil, err
 			}
 			// 需要解码为原始的二进制数据，才更好压缩： 544->407->275
-			// 如果不解码，直接压缩: 544->414 
+			// 如果不解码，直接压缩: 544->414
 			//Log.Infof("mid compress %d\n", len(param))
 			param, err = BrotliCompress([]byte(param))
 			if err != nil {
@@ -1038,7 +1041,7 @@ type ContractRuntimeBase struct {
 	refreshTime     int64
 	responseHistory map[int][]*InvokeItem // 按照100个为一桶，根据区块顺序记录，跟 history 保持一致
 
-	dealDivisibility  int // 有些小数点太长，最后结算时没必要那么长，保留一部分即可
+	dealDivisibility int // 有些小数点太长，最后结算时没必要那么长，保留一部分即可
 
 	mutex sync.RWMutex
 }
@@ -1794,7 +1797,6 @@ func (p *ContractRuntimeBase) InvokeHistory(f any, start, limit int) string {
 	// TODO getItemFromBuck 需要写，以后要优化下，不然可能会影响效率，很卡
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-
 
 	defaultRsp := `{"total":0,"start":0,"data":[]}`
 	result := p.invokeHistory(f, start, limit)
@@ -3491,6 +3493,8 @@ func GetOrderTypeWithAction(action string) int {
 		return ORDERTYPE_RECYCLE
 	case INVOKE_API_REWARD:
 		return ORDERTYPE_REWARD
+	case INVOKE_API_CLOSE:
+		return ORDERTYPE_CLOSE
 
 	case INVOKE_API_REGISTER:
 		return ORDERTYPE_REGISTER
