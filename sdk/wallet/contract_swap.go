@@ -2918,7 +2918,8 @@ func (p *SwapContractRuntime) addItem(item *SwapHistoryItem) {
 type DealInfo struct {
 	SendInfo          map[string]*SendAssetInfo // deposit时，key是item的InUtxo，其他情况是address
 	SendTxIdMap       map[string]string         // depoist时使用，key是item的InUtxo
-	PreOutputs        []*TxOutput               // 主网交易的输入，也可能是前一个交易的输出
+	ItemIDs           []int64
+	PreOutputs        []*TxOutput // 主网交易的输入，也可能是前一个交易的输出
 	AssetName         *swire.AssetName
 	TotalAmt          *Decimal // 输出总和
 	TotalValue        int64    // 输出总和
@@ -2932,11 +2933,40 @@ type DealInfo struct {
 	FeeRate           int64
 }
 
+func appendDealItemID(itemIDs []int64, id int64) []int64 {
+	for _, existing := range itemIDs {
+		if existing == id {
+			return itemIDs
+		}
+	}
+	return append(itemIDs, id)
+}
+
+func (p *SwapContractRuntime) loadHistoryItemByID(id int64) *SwapHistoryItem {
+	if item := p.getItemFromBuck(id); item != nil {
+		return item
+	}
+
+	itemBase, err := loadContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), GetKeyFromId(id))
+	if err != nil {
+		Log.Errorf("loadContractInvokeHistoryItem %s %d failed, %v", p.URL(), id, err)
+		return nil
+	}
+	item, ok := itemBase.(*SwapHistoryItem)
+	if !ok {
+		Log.Errorf("%s item %d type mismatch", p.URL(), id)
+		return nil
+	}
+	p.insertBuck(item)
+	return item
+}
+
 func (p *SwapContractRuntime) genDealInfo(height int) *DealInfo {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
 	sendInfoMap := make(map[string]*SendAssetInfo)
+	itemIDs := make([]int64, 0)
 
 	var sendTotalAmt *Decimal // 资产数量
 	var sendTotalValue int64  // 交易所需的聪数量
@@ -2953,6 +2983,7 @@ func (p *SwapContractRuntime) genDealInfo(height int) *DealInfo {
 		}
 		if buy.RemainingValue == 0 {
 			maxHeight = max(maxHeight, h)
+			itemIDs = append(itemIDs, buy.Id)
 
 			info, ok := sendInfoMap[buy.Address]
 			if !ok {
@@ -2985,6 +3016,7 @@ func (p *SwapContractRuntime) genDealInfo(height int) *DealInfo {
 		}
 		if sell.RemainingAmt.Sign() == 0 {
 			maxHeight = max(maxHeight, h)
+			itemIDs = append(itemIDs, sell.Id)
 
 			info, ok := sendInfoMap[sell.Address]
 			if !ok {
@@ -3009,6 +3041,7 @@ func (p *SwapContractRuntime) genDealInfo(height int) *DealInfo {
 
 	return &DealInfo{
 		SendInfo:          sendInfoMap,
+		ItemIDs:           itemIDs,
 		AssetName:         p.GetAssetName(),
 		TotalAmt:          sendTotalAmt,   // 实际买到的
 		TotalValue:        sendTotalValue, // 退款
@@ -3428,6 +3461,7 @@ func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
 	var totalRefundValue int64  // 交易所需的聪数量
 
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
+	itemIDs := make([]int64, 0)
 	maxHeight := 0
 	delAddress := make([]string, 0)
 	for address, refundMap := range p.refundMap {
@@ -3440,6 +3474,7 @@ func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
 				continue
 			}
 			maxHeight = max(maxHeight, h)
+			itemIDs = appendDealItemID(itemIDs, item.Id)
 			if item.RemainingAmt.IsZero() && item.RemainingValue == 0 {
 				// 不需要更新什么数据
 				continue
@@ -3492,6 +3527,7 @@ func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
 
 	return &DealInfo{
 		SendInfo:          sendInfoMap,
+		ItemIDs:           itemIDs,
 		AssetName:         p.GetAssetName(),
 		TotalAmt:          totalRefundAmt,
 		TotalValue:        totalRefundValue,
@@ -3651,6 +3687,7 @@ func (p *SwapContractRuntime) genDepositInfo(height int) *DealInfo {
 	var totalValue int64
 	var totalAmt *Decimal                          // 资产数量
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
+	itemIDs := make([]int64, 0)
 	for _, depositMap := range p.depositMap {
 		for _, item := range depositMap {
 			// 处理deposit异常： 配合发送交易的代码，用来单独处理某个utxo没有正确asend的导致deposit失败的问题
@@ -3668,6 +3705,7 @@ func (p *SwapContractRuntime) genDepositInfo(height int) *DealInfo {
 				continue
 			}
 			maxHeight = max(maxHeight, h)
+			itemIDs = appendDealItemID(itemIDs, item.Id)
 
 			sendInfoMap[item.InUtxo] = &SendAssetInfo{
 				Address:   item.Address,
@@ -3710,6 +3748,7 @@ func (p *SwapContractRuntime) genDepositInfo(height int) *DealInfo {
 
 	return &DealInfo{
 		SendInfo:          sendInfoMap,
+		ItemIDs:           itemIDs,
 		AssetName:         assetName,
 		TotalAmt:          totalAmt,
 		TotalValue:        totalValue,
@@ -3812,7 +3851,7 @@ func (p *SwapContractRuntime) deposit() error {
 				}
 				h, _, _ := indexer.FromUtxoId(item.UtxoId)
 				output := p.GetInvokeOutput(item)
-				anchorTx, err := p.buildDepositAnchorTx(output, v.Address, h, INVOKE_RESULT_DEPOSIT)
+				anchorTx, err := p.buildDepositAnchorTx(item.Id, output, v.Address, h, INVOKE_RESULT_DEPOSIT)
 				if err != nil {
 					Log.Errorf("contract %s buildAndBroadcastAnchorTx %s failed, %v", url, output.OutPointStr, err)
 					return err
@@ -3905,6 +3944,7 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 	var totalValue int64
 	var totalAmt *Decimal                          // 资产数量
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
+	itemIDs := make([]int64, 0)
 	for _, withdrawMap := range p.withdrawMap {
 		for _, item := range withdrawMap {
 			h, _, _ := indexer.FromUtxoId(item.UtxoId)
@@ -3918,6 +3958,7 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 				continue
 			}
 			maxHeight = max(maxHeight, h)
+			itemIDs = appendDealItemID(itemIDs, item.Id)
 
 			destAddr := item.Address
 			if len(item.Padded) != 0 {
@@ -3992,6 +4033,7 @@ func (p *SwapContractRuntime) genWithdrawInfo(height int) *DealInfo {
 
 	return &DealInfo{
 		SendInfo:          sendInfoMap,
+		ItemIDs:           itemIDs,
 		AssetName:         assetName,
 		TotalAmt:          totalAmt,
 		TotalValue:        totalValue,
@@ -4189,6 +4231,7 @@ func (p *SwapContractRuntime) genRemoveLiquidityInfo(height int) *DealInfo {
 	var totalValue int64
 	var totalAmt *Decimal                          // 资产数量
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
+	itemIDs := make([]int64, 0)
 
 	addressmap := make(map[string]bool)
 	for address := range p.removeLiquidityMap {
@@ -4221,9 +4264,19 @@ func (p *SwapContractRuntime) genRemoveLiquidityInfo(height int) *DealInfo {
 		totalAmt = totalAmt.Add(trader.RetrieveAmt)
 		totalValue += trader.RetrieveValue
 	}
+	for _, items := range p.removeLiquidityMap {
+		for _, item := range items {
+			h, _, _ := indexer.FromUtxoId(item.UtxoId)
+			if h > height || item.Finished() {
+				continue
+			}
+			itemIDs = appendDealItemID(itemIDs, item.Id)
+		}
+	}
 
 	return &DealInfo{
 		SendInfo:          sendInfoMap,
+		ItemIDs:           itemIDs,
 		AssetName:         assetName,
 		TotalAmt:          totalAmt,
 		TotalValue:        totalValue,
@@ -4290,6 +4343,58 @@ func (p *SwapContractRuntime) updateWithDealInfo_removeLiquidity(dealInfo *DealI
 	height := dealInfo.Height
 	txId := dealInfo.TxId
 	url := p.URL()
+	if len(dealInfo.ItemIDs) != 0 {
+		addrItems := make(map[string][]*SwapHistoryItem)
+		for _, id := range dealInfo.ItemIDs {
+			item := p.loadHistoryItemByID(id)
+			if item == nil || item.Finished() {
+				continue
+			}
+			addrItems[item.Address] = append(addrItems[item.Address], item)
+		}
+
+		for addr, items := range addrItems {
+			info, ok := dealInfo.SendInfo[addr]
+			if !ok {
+				Log.Warningf("updateWithDealInfo_removeLiquidity can't find send info for %s in %s", addr, txId)
+				continue
+			}
+
+			trader := p.loadTraderInfo(addr)
+			if trader == nil {
+				Log.Panicf("%s can't find trader %s", url, addr)
+			}
+			trader.RetrieveAmt = trader.RetrieveAmt.Sub(info.AssetAmt)
+			trader.RetrieveValue -= info.Value
+			trader.SettleState = SETTLE_STATE_NORMAL
+			saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+
+			for _, item := range items {
+				item.OutTxId = txId
+				item.OutAmt = info.AssetAmt.Clone()
+				item.OutValue = info.Value
+				item.RemainingAmt = nil
+				item.RemainingValue = 0
+				item.Done = ITEM_STATUS_DEALT
+				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+				delete(p.history, item.InUtxo)
+
+				if addrItemsInMap, ok := p.removeLiquidityMap[addr]; ok {
+					delete(addrItemsInMap, item.Id)
+					if len(addrItemsInMap) == 0 {
+						delete(p.removeLiquidityMap, addr)
+					}
+				}
+			}
+		}
+
+		p.CheckPoint = dealInfo.InvokeCount
+		p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
+		p.CheckPointBlock = dealInfo.Height
+		p.refreshTime = 0
+		return
+	}
+
 	// 通过height确定哪些item是需要处理的，然后更新对应的数据
 	for addr, info := range dealInfo.SendInfo {
 		if addr == ADDR_OPRETURN || addr == p.ChannelAddr {
@@ -4361,8 +4466,9 @@ func (p *SwapContractRuntime) genProfitInfo(height int) *DealInfo {
 	var totalValue int64
 	var totalAmt *Decimal                          // 资产数量
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
+	itemIDs := make([]int64, 0)
 
-	for address := range p.profitMap {
+	for address, items := range p.profitMap {
 		trader := p.loadTraderInfo(address)
 		if trader == nil {
 			continue
@@ -4380,10 +4486,18 @@ func (p *SwapContractRuntime) genProfitInfo(height int) *DealInfo {
 
 		totalAmt = totalAmt.Add(trader.ProfitAmt)
 		totalValue += trader.ProfitValue
+		for _, item := range items {
+			h, _, _ := indexer.FromUtxoId(item.UtxoId)
+			if h > height || item.Finished() {
+				continue
+			}
+			itemIDs = appendDealItemID(itemIDs, item.Id)
+		}
 	}
 
 	return &DealInfo{
 		SendInfo:          sendInfoMap,
+		ItemIDs:           itemIDs,
 		AssetName:         assetName,
 		TotalAmt:          totalAmt,
 		TotalValue:        totalValue,
@@ -5001,6 +5115,10 @@ func (p *SwapContractRuntime) SetPeerActionResult(action string, param any) {
 			return
 		}
 
+		if dealInfo.TxId != "" {
+			saveContractInvokeResult(p.stp.GetDB(), p.URL(), dealInfo.TxId, dealInfo.Reason)
+		}
+
 		p.stp.SaveReservationWithLock(p.resv)
 		Log.Infof("%s SetPeerActionResult %s completed", p.URL(), action)
 		return
@@ -5021,6 +5139,72 @@ func (p *SwapContractRuntime) SetPeerActionResult(action string, param any) {
 	}
 }
 
+func (p *SwapContractRuntime) genDepositInfoFromResultTx(tx *swire.MsgTx, details *InvokeResultMore) (*DealInfo, error) {
+	data, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
+	if err != nil {
+		return nil, err
+	}
+
+	destAddr, err := AddrFromPkScript(tx.TxOut[0].PkScript)
+	if err != nil {
+		return nil, err
+	}
+
+	items, ok := p.depositMap[destAddr]
+	if !ok {
+		return nil, fmt.Errorf("invalid destination address %s", destAddr)
+	}
+
+	itemIDs := details.ItemIDs
+	sendInfoMap := make(map[string]*SendAssetInfo)
+	sendTxIdMap := make(map[string]string)
+	var totalAmt *Decimal
+	var totalValue int64
+	maxHeight := details.Height
+	found := false
+	for _, item := range items {
+		if item.InUtxo != data.Utxo {
+			continue
+		}
+		if item.Finished() || item.Reason != INVOKE_REASON_NORMAL {
+			continue
+		}
+		h, _, _ := indexer.FromUtxoId(item.UtxoId)
+		if maxHeight != 0 && h > maxHeight {
+			continue
+		}
+		maxHeight = max(maxHeight, h)
+		sendInfoMap[item.InUtxo] = &SendAssetInfo{
+			Address:   item.Address,
+			Value:     item.RemainingValue,
+			AssetName: p.GetAssetName(),
+			AssetAmt:  item.RemainingAmt.Clone(),
+		}
+		sendTxIdMap[item.InUtxo] = tx.TxID()
+		itemIDs = appendDealItemID(itemIDs, item.Id)
+		totalAmt = totalAmt.Add(item.RemainingAmt)
+		totalValue += item.RemainingValue
+		found = true
+		break
+	}
+	if !found {
+		return nil, fmt.Errorf("can't find deposit item %s", data.Utxo)
+	}
+
+	return &DealInfo{
+		SendInfo:    sendInfoMap,
+		SendTxIdMap: sendTxIdMap,
+		ItemIDs:     itemIDs,
+		AssetName:   p.GetAssetName(),
+		TotalAmt:    totalAmt,
+		TotalValue:  totalValue,
+		Reason:      INVOKE_RESULT_DEPOSIT,
+		Height:      maxHeight,
+		TxId:        tx.TxID(),
+		Fee:         DEFAULT_FEE_SATSNET,
+	}, nil
+}
+
 // 获取deposit数据，同时做检查
 func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignMoreData_Contract) (*DealInfo, error) {
 	// anchorTxs
@@ -5034,6 +5218,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 	var totalAmt *Decimal                          // 资产数量
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: inUtxo
 	sendTxIdMap := make(map[string]string)
+	itemIDs := make([]int64, 0)
 	for _, tx := range req.Tx {
 		if tx.L1Tx {
 			return nil, fmt.Errorf("not anchor TX")
@@ -5066,7 +5251,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 								return nil, fmt.Errorf("%s not expected contract invoke result tx %s", url, tx.TxID())
 							}
 						}
-						height, err := strconv.ParseInt(h, 10, 32)
+						more, err := ParseInvokeResultMore(h)
 						if err != nil {
 							return nil, err
 						}
@@ -5074,7 +5259,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 							return nil, fmt.Errorf("%s is not a deposit anchor tx", tx.TxID())
 						}
 
-						targetHeight = int(height)
+						targetHeight = more.Height
 					}
 				}
 			}
@@ -5134,6 +5319,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 					AssetAmt:  item.RemainingAmt.Clone(),
 				}
 				sendTxIdMap[item.InUtxo] = tx.TxID()
+				itemIDs = appendDealItemID(itemIDs, item.Id)
 				totalAmt = totalAmt.Add(item.RemainingAmt)
 				totalValue += item.RemainingValue
 				bFound = true
@@ -5147,6 +5333,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 	return &DealInfo{
 		SendInfo:          sendInfoMap,
 		SendTxIdMap:       sendTxIdMap,
+		ItemIDs:           itemIDs,
 		AssetName:         assetName,
 		TotalAmt:          totalAmt,
 		TotalValue:        totalValue,
@@ -5159,41 +5346,54 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 }
 
 func (p *SwapContractRuntime) HandleInvokeResult_SatsNet(tx *swire.MsgTx, vout int, result string, more string) {
-	if result == INVOKE_RESULT_DEPOSIT {
-		// height, err := strconv.Atoi(more)
-		// if err != nil {
-		// 	Log.Errorf("HandleInvokeResult %s Atoi %s failed", tx.TxID(), more)
-		// 	return
-		// }
-
-		data, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
-		if err != nil {
-			Log.Errorf("HandleInvokeResult %s CheckAnchorPkScript failed", tx.TxID())
-			return
-		}
-
-		// 到这里可以确定是一个anchorTx，第一个输出是目标地址
-		destAddr, err := AddrFromPkScript(tx.TxOut[0].PkScript)
-		if err != nil {
-			Log.Errorf("HandleInvokeResult %s AddressFromPkScript failed, %v", tx.TxID(), err)
-			return
-		}
-		items, ok := p.depositMap[destAddr]
-		if ok {
-			for _, item := range items {
-				if item.InUtxo == data.Utxo {
-					// 不在这里更新，因为merkle root更新会异常
-					// p.updateWithDepositItem(item, tx.TxID())
-					// saveReservationWithLock(p.stp.GetDB(), &p.resv.ContractDeployDataInDB)
-					// p.mutex.Lock()
-					// p.invokeCompleted()
-					// p.mutex.Unlock()
-					// Log.Infof("item %d %s done.", item.Id, item.InUtxo)
-					break
-				}
-			}
-		}
+	if _, ok := loadContractInvokeResult(p.stp.GetDB(), p.URL(), tx.TxID()); ok {
+		return
 	}
+
+	details, err := ParseInvokeResultMore(more)
+	if err != nil {
+		Log.Errorf("HandleInvokeResult %s ParseInvokeResultMore failed, %v", tx.TxID(), err)
+		return
+	}
+
+	var dealInfo *DealInfo
+	switch result {
+	case INVOKE_RESULT_DEAL, INVOKE_RESULT_REFUND, INVOKE_RESULT_WITHDRAW,
+		INVOKE_RESULT_REMOVELIQUIDITY, INVOKE_RESULT_PROFIT:
+		dealInfo, err = p.genSendInfoFromTx_SatsNet(tx, false)
+	case INVOKE_RESULT_DEPOSIT:
+		dealInfo, err = p.genDepositInfoFromResultTx(tx, details)
+	default:
+		return
+	}
+	if err != nil {
+		Log.Errorf("HandleInvokeResult %s gen deal info failed, %v", tx.TxID(), err)
+		return
+	}
+
+	dealInfo.InvokeCount = p.InvokeCount
+	dealInfo.StaticMerkleRoot = p.StaticMerkleRoot
+	dealInfo.RuntimeMerkleRoot = p.CurrAssetMerkleRoot
+
+	switch dealInfo.Reason {
+	case INVOKE_RESULT_DEAL:
+		p.updateWithDealInfo_swap(dealInfo)
+	case INVOKE_RESULT_REFUND:
+		p.updateWithDealInfo_refund(dealInfo)
+	case INVOKE_RESULT_DEPOSIT:
+		p.updateWithDealInfo_deposit(dealInfo)
+	case INVOKE_RESULT_WITHDRAW:
+		p.updateWithDealInfo_withdraw(dealInfo)
+	case INVOKE_RESULT_REMOVELIQUIDITY:
+		p.updateWithDealInfo_removeLiquidity(dealInfo)
+	case INVOKE_RESULT_PROFIT:
+		p.updateWithDealInfo_profit(dealInfo)
+	default:
+		return
+	}
+
+	saveContractInvokeResult(p.stp.GetDB(), p.URL(), tx.TxID(), dealInfo.Reason)
+	p.stp.SaveReservationWithLock(p.resv)
 }
 
 // 仅用于swap合约

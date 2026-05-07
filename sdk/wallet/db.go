@@ -224,11 +224,11 @@ func (p *Manager) saveStatus() error {
 	return nil
 }
 
-func (p *Manager) saveMnemonic(mn, password string, wallet common.Wallet) (error) {
+func (p *Manager) saveMnemonic(mn, password string, wallet common.Wallet) error {
 	return p.saveSecret(mn, password, WALLET_TYPE_MNEMONIC, wallet)
 }
 
-func (p *Manager) saveSecret(secret, password string, ty int, w common.Wallet) (error) {
+func (p *Manager) saveSecret(secret, password string, ty int, w common.Wallet) error {
 	key, err := p.newSnaclKey(password)
 	if err != nil {
 		Log.Errorf("newSnaclKey failed. %v", err)
@@ -1059,7 +1059,7 @@ func SaveContractInvokeHistoryItem(db db.KVDB, url string, value InvokeHistoryIt
 		return err
 	}
 
-	err = db.Write([]byte(GetContractInvokeHistoryKey2(url, value.GetInvokeUtxo())), 
+	err = db.Write([]byte(GetContractInvokeHistoryKey2(url, value.GetInvokeUtxo())),
 		[]byte(value.GetKey()))
 	if err != nil {
 		Log.Errorf("saveContractInvokeHistoryItem2 failed. %v", err)
@@ -1331,6 +1331,14 @@ func saveContractInvokeResult(db db.KVDB, url string, txId, reason string) error
 	}
 	Log.Infof("saveContractInvokeResult succ. %s", key)
 	return nil
+}
+
+func loadContractInvokeResult(db db.KVDB, url, txId string) (string, bool) {
+	buf, err := db.Read([]byte(GetContractInvokeResultKey(url, txId)))
+	if err != nil || len(buf) == 0 {
+		return "", false
+	}
+	return string(buf), true
 }
 
 func deleteContractInvokeResult(db db.KVDB, url, txId string) error {

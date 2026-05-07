@@ -35,6 +35,50 @@ func sendInBackground(run *bool) {
 	}
 }
 
+func TestInvokeResultMoreRoundTrip(t *testing.T) {
+	more, err := EncodeInvokeResultMore(123456, []int64{1, 17, 1024, 65537})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ParseInvokeResultMore(more)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Height != 123456 {
+		t.Fatalf("unexpected height %d", result.Height)
+	}
+	if len(result.ItemIDs) != 4 {
+		t.Fatalf("unexpected item id count %d", len(result.ItemIDs))
+	}
+	for i, expected := range []int64{1, 17, 1024, 65537} {
+		if result.ItemIDs[i] != expected {
+			t.Fatalf("unexpected item id %d at %d", result.ItemIDs[i], i)
+		}
+	}
+}
+
+func TestInvokeResultMoreBackwardCompatible(t *testing.T) {
+	result, err := ParseInvokeResultMore("12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Height != 12345 || len(result.ItemIDs) != 0 {
+		t.Fatalf("unexpected parsed result %+v", result)
+	}
+
+	result, err = ParseInvokeResultMore(`{"height":88,"itemIds":[2,3]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Height != 88 {
+		t.Fatalf("unexpected height %d", result.Height)
+	}
+	if len(result.ItemIDs) != 2 || result.ItemIDs[0] != 2 || result.ItemIDs[1] != 3 {
+		t.Fatalf("unexpected item ids %+v", result.ItemIDs)
+	}
+}
+
 func waitContractReady(url string, stp *Manager) error {
 	ct := ExtractContractType(url)
 	i := 0

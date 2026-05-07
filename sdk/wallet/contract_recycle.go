@@ -1419,8 +1419,8 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 	p.TotalRewardCount++
 	p.TotalFeeValue += dealInfo.Fee
 	p.SatsValueInPool -= dealInfo.Fee
-	Log.Debugf("reward count %d, fee %d, amt %s, value %d, txId %s", 
-		p.TotalRewardCount, dealInfo.Fee, dealInfo.TotalAmt.String(), 
+	Log.Debugf("reward count %d, fee %d, amt %s, value %d, txId %s",
+		p.TotalRewardCount, dealInfo.Fee, dealInfo.TotalAmt.String(),
 		dealInfo.TotalValue, dealInfo.TxId)
 
 	url := p.URL()
@@ -1501,6 +1501,7 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 	var totalValue int64
 	var totalAmt *Decimal                          // 资产数量
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
+	itemIDs := make([]int64, 0)
 	for _, rewardMap := range p.rewardMap {
 		for _, item := range rewardMap {
 			h, _, _ := indexer.FromUtxoId(item.UtxoId)
@@ -1511,6 +1512,7 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 				continue
 			}
 			maxHeight = max(maxHeight, h)
+			itemIDs = appendDealItemID(itemIDs, item.Id)
 
 			// TODO 需要确保最低奖的分成大于330
 			// amt1 := item.OutAmt.Mul(REWARD_SHARE_INVOKER_Decimal)
@@ -1585,11 +1587,12 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 		}
 	}
 
-	Log.Debugf("genRewardInfo count %d, amt %s, value %d", 
+	Log.Debugf("genRewardInfo count %d, amt %s, value %d",
 		p.TotalRewardCount+1, totalAmt.String(), totalValue)
 
 	return &DealInfo{
 		SendInfo:          sendInfoMap,
+		ItemIDs:           itemIDs,
 		AssetName:         assetName,
 		TotalAmt:          totalAmt,
 		TotalValue:        totalValue,
@@ -1906,6 +1909,28 @@ func (p *RecycleContractRunTime) SetPeerActionResult(action string, param any) {
 	}
 }
 
+func (p *RecycleContractRunTime) HandleInvokeResult_SatsNet(tx *swire.MsgTx, vout int, result string, more string) {
+	if _, ok := loadContractInvokeResult(p.stp.GetDB(), p.URL(), tx.TxID()); ok {
+		return
+	}
+
+	dealInfo, err := p.genSendInfoFromTx_SatsNet(tx, false)
+	if err != nil {
+		Log.Errorf("HandleInvokeResult %s genSendInfoFromTx_SatsNet failed, %v", tx.TxID(), err)
+		return
+	}
+	if dealInfo.Reason != INVOKE_RESULT_REWARD {
+		return
+	}
+
+	dealInfo.InvokeCount = p.InvokeCount
+	dealInfo.StaticMerkleRoot = p.StaticMerkleRoot
+	dealInfo.RuntimeMerkleRoot = p.CurrAssetMerkleRoot
+	p.updateWithDealInfo_reward(dealInfo)
+	saveContractInvokeResult(p.stp.GetDB(), p.URL(), tx.TxID(), dealInfo.Reason)
+	p.stp.SaveReservationWithLock(p.resv)
+}
+
 // 获取reward数据，同时做检查
 func (p *RecycleContractRunTime) genRewardInfoFromReq(req *wwire.RemoteSignMoreData_Contract) (*DealInfo, error) {
 
@@ -1950,7 +1975,7 @@ func (p *RecycleContractRunTime) genRewardInfoFromReq(req *wwire.RemoteSignMoreD
 								return nil, fmt.Errorf("%s not expected contract invoke result tx %s", url, tx.TxID())
 							}
 						}
-						height, err := strconv.ParseInt(h, 10, 32)
+						more, err := ParseInvokeResultMore(h)
 						if err != nil {
 							return nil, err
 						}
@@ -1958,7 +1983,7 @@ func (p *RecycleContractRunTime) genRewardInfoFromReq(req *wwire.RemoteSignMoreD
 							return nil, fmt.Errorf("%s is not a deposit anchor tx", tx.TxID())
 						}
 
-						targetHeight = int(height)
+						targetHeight = more.Height
 					}
 				}
 			}

@@ -46,9 +46,9 @@ const (
 	RANKING_MAX_SIZE  int = 100
 
 	RESULT_UNHANDLED int = 1
-	RESULT_OK 		 int = 0
+	RESULT_OK        int = 0
 	RESULT_REJECTED  int = -1 // reject by validator
-	RESULT_INVALID 	 int = -2 // 内部错误
+	RESULT_INVALID   int = -2 // 内部错误
 )
 
 func GetResultString(r int) string {
@@ -336,7 +336,7 @@ type ReferralParam struct {
 	Address string `json:"address"`
 }
 type BindInvokeParam struct {
-	Items   []*ReferralParam `json:"items"`
+	Items []*ReferralParam `json:"items"`
 }
 
 func (p *BindInvokeParam) Encode() ([]byte, error) {
@@ -385,7 +385,7 @@ func (p *BindInvokeParam) Check() error {
 
 type AddressResult struct {
 	Address string
-	Result int
+	Result  int
 }
 
 func (p *BindInvokeParam) ToPaded() ([]byte, error) {
@@ -393,7 +393,7 @@ func (p *BindInvokeParam) ToPaded() ([]byte, error) {
 	for _, item := range p.Items {
 		result[item.UID] = &AddressResult{
 			Address: item.Address,
-			Result: RESULT_UNHANDLED, // unhandle
+			Result:  RESULT_UNHANDLED, // unhandle
 		}
 	}
 	return EncodeToBytes(result)
@@ -444,7 +444,7 @@ func (p *DonateInvokeParam) Decode(data []byte) error {
 }
 
 func (p *DonateInvokeParam) Check() error {
-	name := indexer.NewAssetNameFromString(p.AssetName) 
+	name := indexer.NewAssetNameFromString(p.AssetName)
 	if p.AssetName != name.String() {
 		return fmt.Errorf("invalid asset name %s", p.AssetName)
 	}
@@ -492,7 +492,6 @@ func (p *AirDropInvokeParam) Check() error {
 	return nil
 }
 
-
 func (p *AirDropInvokeParam) ToPaded() ([]byte, error) {
 	result := make(map[string]string)
 	for _, uid := range p.UIDs {
@@ -500,7 +499,6 @@ func (p *AirDropInvokeParam) ToPaded() ([]byte, error) {
 	}
 	return EncodeToBytes(result)
 }
-
 
 func (p *AirDropInvokeParam) GetUIDs() []string {
 	// uids := make([]string, 0, len(p.UIDs))
@@ -587,7 +585,6 @@ func (p *ValidateInvokeParam) Check() error {
 	return nil
 }
 
-
 // 3. 定义合约交互者的数据结构
 
 type DaoInvokerStatus struct {
@@ -664,10 +661,10 @@ type DaoContractRunTimeInDB struct {
 }
 
 type UnhandledBindInfo struct {
-	ItemId		int64
-	UID 		string
+	ItemId      int64
+	UID         string
 	Address     string
-	ReferrerUID  string
+	ReferrerUID string
 }
 
 // 6. 合约运行时状态
@@ -681,19 +678,19 @@ type DaoContractRunTime struct {
 	airdropMap  map[string]map[int64]*InvokeItem
 	validateMap map[string]map[int64]*InvokeItem
 
-	uidMap          map[string]string   // uid->address 所有有效的
-	unhandledUidMap map[string]*UnhandledBindInfo  // uid 还在处理中的
-	donateRanking   map[string]*Decimal // 前100名
-	airdropRanking  map[string]*Decimal // 前100名
+	uidMap          map[string]string             // uid->address 所有有效的
+	unhandledUidMap map[string]*UnhandledBindInfo // uid 还在处理中的
+	donateRanking   map[string]*Decimal           // 前100名
+	airdropRanking  map[string]*Decimal           // 前100名
 
 	airdropThreshold *Decimal
 	airdropRatio     *Decimal
 	airdropLimit     *Decimal
 
-	responseCache      []*responseItem_dao // 所有注册成功的invoker的简单状态
-	responseStatus     Response_DaoContract // 合约状态，包括审核内容
-	responseInvokerMap map[string]*Response_DaoInvokerStatus // 
-	responseAnalytics  *analytcisData_dao // 两个排行榜
+	responseCache      []*responseItem_dao                   // 所有注册成功的invoker的简单状态
+	responseStatus     Response_DaoContract                  // 合约状态，包括审核内容
+	responseInvokerMap map[string]*Response_DaoInvokerStatus //
+	responseAnalytics  *analytcisData_dao                    // 两个排行榜
 }
 
 func NewDaoContractRunTime(stp ContractManager) *DaoContractRunTime {
@@ -820,7 +817,7 @@ func (p *DaoContractRunTime) InitFromDB(stp ContractManager, resv ContractDeploy
 
 	// fix
 	// if url == "tb1qfwx8fyajtk9yrefdru5tkz7k2q0xxs0mwv3gu4teya75awcsfj8qfyaupt_brc20:f:ordi_dao.tc" {
-		
+
 	// }
 
 	return nil
@@ -937,11 +934,11 @@ type invokeItem_register struct {
 }
 
 type invokeItem_airdrop struct {
-	Id           int64
-	InUtxo       string
-	Address      string
-	UID          string
-	ReferrerUID  string  // 发起申请的人
+	Id          int64
+	InUtxo      string
+	Address     string
+	UID         string
+	ReferrerUID string // 发起申请的人
 }
 
 func (p *DaoContractRunTime) updateResponseData() {
@@ -1021,10 +1018,10 @@ func (p *DaoContractRunTime) updateResponseData() {
 						continue
 					}
 					item := invokeItem_register{
-						Id:      v.Id,
-						InUtxo:  v.InUtxo,
-						Address: r.Address,
-						UID:     uid,
+						Id:          v.Id,
+						InUtxo:      v.InUtxo,
+						Address:     r.Address,
+						UID:         uid,
 						ReferrerUID: referrer.UID,
 					}
 					buf, err := json.Marshal(item)
@@ -1053,10 +1050,10 @@ func (p *DaoContractRunTime) updateResponseData() {
 				for uid, result := range pad {
 					if result == "" {
 						item := invokeItem_airdrop{
-							Id:      v.Id,
-							InUtxo:  v.InUtxo,
-							Address: p.uidMap[uid],
-							UID:     uid,
+							Id:          v.Id,
+							InUtxo:      v.InUtxo,
+							Address:     p.uidMap[uid],
+							UID:         uid,
 							ReferrerUID: invoker.UID,
 						}
 						buf, err := json.Marshal(item)
@@ -1162,28 +1159,27 @@ func (p *DaoContractRunTime) RuntimeAnalytics() string {
 	return string(buf)
 }
 
-
 type ValidateItem struct {
-	ID         int64  `json:"id"`         // history id
-	Address    string `json:"address"`    // invoker
-	Result     int    `json:"result"`
-	Reason     string `json:"reason"`
+	ID      int64  `json:"id"`      // history id
+	Address string `json:"address"` // invoker
+	Result  int    `json:"result"`
+	Reason  string `json:"reason"`
 }
 
 type ValidateResult struct {
-	Type int `json:"type"` // ORDERTYPE_REGISTER or ORDERTYPE_AIRDROP 
-	UIDs string `json:"uids,omitempty"` 
-	Reason string `json:"reason,omitempty"` 
+	Type   int    `json:"type"` // ORDERTYPE_REGISTER or ORDERTYPE_AIRDROP
+	UIDs   string `json:"uids,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type BindResult struct {
-	UIDs string `json:"uids,omitempty"` 
-	Reason string `json:"reason,omitempty"` 
+	UIDs   string `json:"uids,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type RegisterResult struct {
-	UID string `json:"uid"` 
-	ReferrerUID string `json:"referrerUID,omitempty"` 
+	UID         string `json:"uid"`
+	ReferrerUID string `json:"referrerUID,omitempty"`
 }
 
 type DaoHistoryItem struct {
@@ -1192,14 +1188,14 @@ type DaoHistoryItem struct {
 	// 将pad数据展开
 	*AirdropResult  `json:"airdrop,omitempty"`
 	*ValidateResult `json:"validate,omitempty"`
-	BindResult *AirdropResult `json:"bind,omitempty"`
-	RegResult *RegisterResult `json:"register,omitempty"`
+	BindResult      *AirdropResult  `json:"bind,omitempty"`
+	RegResult       *RegisterResult `json:"register,omitempty"`
 }
 
 type response_history_dao struct {
-	Total int                `json:"total"`
-	Start int                `json:"start"`
-	Data  []*DaoHistoryItem  `json:"data"`
+	Total int               `json:"total"`
+	Start int               `json:"start"`
+	Data  []*DaoHistoryItem `json:"data"`
 }
 
 func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
@@ -1218,7 +1214,7 @@ func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
 		Total: orig.Total,
 		Start: orig.Start,
 	}
-	
+
 	for _, item := range orig.Data {
 		n := &DaoHistoryItem{
 			InvokeItem: item.Clone(),
@@ -1233,7 +1229,7 @@ func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
 				err = innerParam.Decode(paramBytes)
 				if err == nil {
 					n.RegResult = &RegisterResult{
-						UID: innerParam.UID,
+						UID:         innerParam.UID,
 						ReferrerUID: innerParam.ReferrerUID,
 					}
 				}
@@ -1246,9 +1242,9 @@ func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
 			if err == nil {
 				for k, v := range pad {
 					bind.Items = append(bind.Items, &AirdropItem{
-						UID: k,
+						UID:     k,
 						Address: v.Address,
-						Result: GetResultString(v.Result),
+						Result:  GetResultString(v.Result),
 					})
 				}
 				n.BindResult = bind
@@ -1256,14 +1252,14 @@ func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
 
 		case ORDERTYPE_AIRDROP:
 			airdrop := &AirdropResult{}
-			var pad map[string]string  // uid->result
+			var pad map[string]string // uid->result
 			err := DecodeFromBytes(item.Padded, &pad)
 			if err == nil {
 				for k, v := range pad {
 					airdrop.Items = append(airdrop.Items, &AirdropItem{
-						UID: k,
+						UID:     k,
 						Address: p.uidMap[k],
-						Result: v,
+						Result:  v,
 					})
 				}
 				n.AirdropResult = airdrop
@@ -1296,7 +1292,7 @@ func (p *DaoContractRunTime) InvokeHistory(f any, start, limit int) string {
 		Log.Errorf("Marshal responseHistory failed, %v", err)
 		return defaultRsp
 	}
-	
+
 	return string(buf)
 }
 
@@ -1752,7 +1748,6 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 			return nil, err
 		}
 
-
 		invokeTx.Handled = true
 		return p.updateContract(ORDERTYPE_AIRDROP, paded, address, output, true, false), nil
 
@@ -1774,7 +1769,7 @@ func (p *DaoContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *InvokeT
 		}
 		//items := strings.Split(string(innerParam.Param), " ")
 		//
-		
+
 		switch innerParam.OrderType {
 		case ORDERTYPE_REGISTER:
 
@@ -1998,9 +1993,9 @@ func (p *DaoContractRunTime) addUnhandledUID_register(item *InvokeItem) {
 		return
 	}
 	p.unhandledUidMap[innerParam.UID] = &UnhandledBindInfo{
-		ItemId: item.Id,
-		UID: innerParam.UID,
-		Address: item.Address,
+		ItemId:      item.Id,
+		UID:         innerParam.UID,
+		Address:     item.Address,
 		ReferrerUID: innerParam.ReferrerUID,
 	}
 }
@@ -2015,9 +2010,9 @@ func (p *DaoContractRunTime) addUnhandledUID_bind(item *InvokeItem) {
 	for uid, value := range pad {
 		if value.Result == RESULT_UNHANDLED {
 			p.unhandledUidMap[uid] = &UnhandledBindInfo{
-				ItemId: item.Id,
-				UID: uid,
-				Address: value.Address,
+				ItemId:      item.Id,
+				UID:         uid,
+				Address:     value.Address,
 				ReferrerUID: referrer.UID,
 			}
 		}
@@ -2034,9 +2029,9 @@ func (p *DaoContractRunTime) addUnhandledUID_airdrop(item *InvokeItem) {
 	for uid, result := range pad {
 		if result == "" {
 			p.unhandledUidMap[uid] = &UnhandledBindInfo{
-				ItemId: item.Id,
-				UID: uid,
-				Address: p.uidMap[uid],
+				ItemId:      item.Id,
+				UID:         uid,
+				Address:     p.uidMap[uid],
 				ReferrerUID: referrer.UID,
 			}
 		}
@@ -2106,7 +2101,7 @@ func updateItems(items map[string]*Decimal, maxSize int, addr string, amt *Decim
 
 func (p *DaoContractRunTime) binding(address, uid, referrerUID string, force bool,
 	invokers map[string]*DaoInvokerStatus) int {
-	
+
 	oldAddr, ok := p.uidMap[uid]
 	if ok {
 		if oldAddr != address {
@@ -2175,8 +2170,8 @@ func (p *DaoContractRunTime) checkAirdropFlag(referrerUID, uid string) (*DaoInvo
 		// 	// 建设者注册被推荐人的uid，一个特殊的注册流程
 		// 	p.binding(addr, uid, referrerUID, false, invokers)
 		// } else {
-			Log.Errorf("can't find address with uid %s", uid)
-			return nil, nil, false
+		Log.Errorf("can't find address with uid %s", uid)
+		return nil, nil, false
 		//}
 	}
 	referral := p.loadInvokerInfo(referralAddr)
@@ -2213,21 +2208,20 @@ func (p *DaoContractRunTime) calcAirdropAmt(amt *Decimal) *Decimal {
 	return airdrop
 }
 
-
 type AirdropItem struct {
-	UID        string `json:"uid"`        // 被推荐人
-	Address    string `json:"address"`    // 被推荐人
-	Result     string `json:"result"`     // 从该被推荐人获得的空投数量，或者被拒绝的原因
+	UID     string `json:"uid"`     // 被推荐人
+	Address string `json:"address"` // 被推荐人
+	Result  string `json:"result"`  // 从该被推荐人获得的空投数量，或者被拒绝的原因
 }
 
 type AirdropResult struct {
-	Items []*AirdropItem `json:"items,omitempty"` 
+	Items []*AirdropItem `json:"items,omitempty"`
 }
 
 func (p *AirdropResult) Encode() ([]byte, error) {
 	builder := txscript.NewScriptBuilder()
 	for _, item := range p.Items {
-		builder = builder.AddData([]byte(item.UID+":"+item.Result)) // 不保存address
+		builder = builder.AddData([]byte(item.UID + ":" + item.Result)) // 不保存address
 	}
 	return builder.Script()
 }
@@ -2241,19 +2235,18 @@ func (p *AirdropResult) Decode(data []byte) error {
 			continue
 		}
 		p.Items = append(p.Items, &AirdropItem{
-			UID: parts[0],
+			UID:    parts[0],
 			Result: parts[1],
 		})
 	}
 	return nil
 }
 
-
-func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem, 
+func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
 	invokers map[string]*DaoInvokerStatus) bool {
 	ret := false
 
-	var pad map[string]string  // uid->result
+	var pad map[string]string // uid->result
 	err := DecodeFromBytes(item.Padded, &pad)
 	if err != nil {
 		Log.Errorf("DecodeFromBytes %s failed %v", item.InUtxo, err)
@@ -2316,7 +2309,7 @@ func (p *DaoContractRunTime) handleAirdropItem(item *InvokeItem,
 		item.Reason = INVOKE_REASON_NO_AIRDROP_ASSET
 		item.Done = ITEM_STATUS_CLOSED_DIRECTLY
 	}
-	
+
 	Log.Infof("%s airdrop item %d with result %s", item.Address, item.Id, totalAirdropAmt.String())
 	SaveContractInvokeHistoryItem(p.db, p.URL(), item)
 	return ret
@@ -2401,7 +2394,7 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 
 					switch innerParam.OrderType {
 					case ORDERTYPE_REGISTER: // 包括bind
-						
+
 						switch handingItem.OrderType {
 						case ORDERTYPE_REGISTER:
 							p.handleRegisterItem(handingItem, innerParam.Result,
@@ -2440,9 +2433,9 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 								//SaveContractInvokeHistoryItem(p.db, p.URL(), handingItem)
 							}
 						}
-						
+
 					case ORDERTYPE_AIRDROP:
-						var pad map[string]string  // uid->result
+						var pad map[string]string // uid->result
 						err := DecodeFromBytes(handingItem.Padded, &pad)
 						if err != nil {
 							continue
@@ -2605,7 +2598,7 @@ func (p *DaoContractRunTime) process(height int, blockHash string) error {
 						continue
 					}
 				}
-				
+
 				if p.handleAirdropItem(item, invokers) == false {
 					deletedItems = append(deletedItems, id)
 				}
@@ -2732,6 +2725,7 @@ func (p *DaoContractRunTime) genAirdropInfo(height int) *DealInfo {
 	var totalValue int64
 	var totalAmt *Decimal                          // 资产数量
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
+	itemIDs := make([]int64, 0)
 	for _, airdropMap := range p.airdropMap {
 		for _, item := range airdropMap {
 			h, _, _ := indexer.FromUtxoId(item.UtxoId)
@@ -2742,6 +2736,7 @@ func (p *DaoContractRunTime) genAirdropInfo(height int) *DealInfo {
 				continue
 			}
 			maxHeight = max(maxHeight, h)
+			itemIDs = appendDealItemID(itemIDs, item.Id)
 
 			if item.OutAmt.Sign() != 0 || item.OutValue != 0 {
 				totalAmt = totalAmt.Add(item.OutAmt)
@@ -2756,6 +2751,7 @@ func (p *DaoContractRunTime) genAirdropInfo(height int) *DealInfo {
 
 	return &DealInfo{
 		SendInfo:          sendInfoMap,
+		ItemIDs:           itemIDs,
 		AssetName:         assetName,
 		TotalAmt:          totalAmt,
 		TotalValue:        totalValue,
@@ -3045,10 +3041,36 @@ func (p *DaoContractRunTime) SetPeerActionResult(action string, param any) {
 			return
 		}
 
+		if dealInfo.TxId != "" {
+			saveContractInvokeResult(p.stp.GetDB(), p.URL(), dealInfo.TxId, dealInfo.Reason)
+		}
+
 		p.stp.SaveReservationWithLock(p.resv)
 		Log.Infof("%s SetPeerActionResult %s completed", p.URL(), action)
 		return
 	}
+}
+
+func (p *DaoContractRunTime) HandleInvokeResult_SatsNet(tx *swire.MsgTx, vout int, result string, more string) {
+	if _, ok := loadContractInvokeResult(p.stp.GetDB(), p.URL(), tx.TxID()); ok {
+		return
+	}
+
+	dealInfo, err := p.genSendInfoFromTx_SatsNet(tx, false)
+	if err != nil {
+		Log.Errorf("HandleInvokeResult %s genSendInfoFromTx_SatsNet failed, %v", tx.TxID(), err)
+		return
+	}
+	if dealInfo.Reason != INVOKE_API_AIRDROP {
+		return
+	}
+
+	dealInfo.InvokeCount = p.InvokeCount
+	dealInfo.StaticMerkleRoot = p.StaticMerkleRoot
+	dealInfo.RuntimeMerkleRoot = p.CurrAssetMerkleRoot
+	p.updateWithDealInfo_airdrop(dealInfo)
+	saveContractInvokeResult(p.stp.GetDB(), p.URL(), tx.TxID(), dealInfo.Reason)
+	p.stp.SaveReservationWithLock(p.resv)
 }
 
 func (p *DaoContractRunTime) CheckUID(uid string) bool {

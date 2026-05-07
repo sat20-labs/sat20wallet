@@ -78,10 +78,10 @@ const (
 	INVOKE_API_FUND            string = "fund"     //
 	INVOKE_API_DEPOSIT         string = "deposit"  // L1->L2  免费
 	INVOKE_API_WITHDRAW        string = "withdraw" // L2->L1  收
-	INVOKE_API_MINT 		   string = "mint"
-	INVOKE_API_STAKE           string = "stake"    // 如果是L1的stake，必须要有op_return携带invokeParam，否则会被认为是deposit
-	INVOKE_API_UNSTAKE         string = "unstake"  // 可以unstake到一层
-	INVOKE_API_ADDLIQUIDITY    string = "addliq"   // 如果是L1，必须要有op_return携带invokeParam，否则会被认为是deposit
+	INVOKE_API_MINT            string = "mint"
+	INVOKE_API_STAKE           string = "stake"   // 如果是L1的stake，必须要有op_return携带invokeParam，否则会被认为是deposit
+	INVOKE_API_UNSTAKE         string = "unstake" // 可以unstake到一层
+	INVOKE_API_ADDLIQUIDITY    string = "addliq"  // 如果是L1，必须要有op_return携带invokeParam，否则会被认为是deposit
 	INVOKE_API_REMOVELIQUIDITY string = "removeliq"
 	INVOKE_API_PROFIT          string = "profit"
 	INVOKE_API_RECYCLE         string = "recycle"
@@ -494,6 +494,11 @@ type InvokeItem struct {
 
 	// 增加
 	Padded []byte // 扩展使用
+}
+
+type InvokeResultMore struct {
+	Height  int     `json:"height"`
+	ItemIDs []int64 `json:"itemIds,omitempty"`
 }
 
 func (p *InvokeItem) ToNewVersion() InvokeHistoryItem {
@@ -2538,7 +2543,7 @@ func (p *ContractRuntimeBase) invokeCompleted() {
 	}
 }
 
-func (p *ContractRuntimeBase) buildDepositAnchorTx(output *indexer.TxOutput, destAddr string,
+func (p *ContractRuntimeBase) buildDepositAnchorTx(itemId int64, output *indexer.TxOutput, destAddr string,
 	height int, reason string) (*swire.MsgTx, error) {
 	//
 	var assetName *AssetName
@@ -2554,7 +2559,8 @@ func (p *ContractRuntimeBase) buildDepositAnchorTx(output *indexer.TxOutput, des
 		}
 	}
 
-	invoice, _ := UnsignedContractResultInvoice(p.URL(), reason, fmt.Sprintf("%d", height))
+	more, _ := EncodeInvokeResultMore(height, []int64{itemId})
+	invoice, _ := UnsignedContractResultInvoice(p.URL(), reason, more)
 	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
 
 	anchorTx, err := p.stp.CreateContractDepositAnchorTx(p.runtime, destAddr, output, assetName, nullDataScript)
@@ -2672,7 +2678,8 @@ func (p *ContractRuntimeBase) sendTx_SatsNet(dealInfo *DealInfo, reason string) 
 		return sendInfoVect[i].Address < sendInfoVect[j].Address
 	})
 
-	invoice, _ := UnsignedContractResultInvoice(p.URL(), reason, fmt.Sprintf("%d", height))
+	more, _ := EncodeInvokeResultMore(height, dealInfo.ItemIDs)
+	invoice, _ := UnsignedContractResultInvoice(p.URL(), reason, more)
 	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
 
 	url := p.URL()
@@ -2764,7 +2771,8 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 
 	var fee int64
 	var txId string
-	invoice, _ := UnsignedContractResultInvoice(p.RelativePath(), reason, fmt.Sprintf("%d", height))
+	more, _ := EncodeInvokeResultMore(height, dealInfo.ItemIDs)
+	invoice, _ := UnsignedContractResultInvoice(p.RelativePath(), reason, more)
 	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
 	if len(sendInfoVect) > 0 {
 		for i := 0; i < 3; i++ {
@@ -2855,12 +2863,13 @@ func (p *ContractRuntimeBase) genSendInfoFromTx_SatsNet(tx *swire.MsgTx, include
 							return nil, fmt.Errorf("%s not expected contract invoke result tx %s", url, tx.TxID())
 						}
 					}
-					height, err := strconv.ParseInt(h, 10, 32)
+					more, err := ParseInvokeResultMore(h)
 					if err != nil {
 						return nil, err
 					}
 
-					dealInfo.Height = int(height)
+					dealInfo.Height = more.Height
+					dealInfo.ItemIDs = more.ItemIDs
 					dealInfo.Reason = r
 				}
 			}
@@ -2952,12 +2961,13 @@ func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[
 						return nil, fmt.Errorf("%s not expected contract invoke result tx %s", url, tx.TxID())
 					}
 				}
-				height, err := strconv.ParseInt(h, 10, 32)
+				more, err := ParseInvokeResultMore(h)
 				if err != nil {
 					return nil, err
 				}
 
-				dealInfo.Height = int(height)
+				dealInfo.Height = more.Height
+				dealInfo.ItemIDs = more.ItemIDs
 				dealInfo.Reason = r
 			}
 
@@ -3383,6 +3393,105 @@ func ParseContractResultInvoice(script []byte) (string, string, string, error) {
 	more := string(tokenizer.Data())
 
 	return contractURL, result, more, nil
+}
+
+func EncodeInvokeResultMore(height int, itemIDs []int64) (string, error) {
+	builder := txscript.NewScriptBuilder().
+		AddInt64(int64(height)).
+		AddInt64(int64(len(itemIDs)))
+	for _, id := range itemIDs {
+		builder.AddInt64(id)
+	}
+
+	buf, err := builder.Script()
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
+
+func ParseInvokeResultMore(more string) (*InvokeResultMore, error) {
+	if more == "" {
+		return &InvokeResultMore{}, nil
+	}
+
+	// 兼容老数据
+	height, err := strconv.Atoi(more)
+	if err == nil {
+		return &InvokeResultMore{Height: height}, nil
+	}
+
+	var result InvokeResultMore
+	if err := json.Unmarshal([]byte(more), &result); err != nil {
+		return parseInvokeResultMoreScript([]byte(more))
+	}
+	return &result, nil
+}
+
+func parseInvokeResultMoreScript(data []byte) (*InvokeResultMore, error) {
+	tokenizer := txscript.MakeScriptTokenizer(0, data)
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return nil, fmt.Errorf("missing height")
+	}
+	height, err := parseInvokeResultMoreScriptNum(tokenizer.Opcode(), tokenizer.Data())
+	if err != nil {
+		return nil, err
+	}
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return nil, fmt.Errorf("missing item count")
+	}
+	count, err := parseInvokeResultMoreScriptNum(tokenizer.Opcode(), tokenizer.Data())
+	if err != nil {
+		return nil, err
+	}
+	if count < 0 {
+		return nil, fmt.Errorf("invalid item count %d", count)
+	}
+
+	result := &InvokeResultMore{
+		Height: int(height),
+	}
+	if count > 0 {
+		result.ItemIDs = make([]int64, 0, count)
+	}
+
+	for i := int64(0); i < count; i++ {
+		if !tokenizer.Next() || tokenizer.Err() != nil {
+			return nil, fmt.Errorf("missing item id %d", i)
+		}
+		id, err := parseInvokeResultMoreScriptNum(tokenizer.Opcode(), tokenizer.Data())
+		if err != nil {
+			return nil, err
+		}
+		result.ItemIDs = append(result.ItemIDs, id)
+	}
+
+	if tokenizer.Next() || tokenizer.Err() != nil {
+		return nil, fmt.Errorf("unexpected trailing data")
+	}
+
+	return result, nil
+}
+
+func parseInvokeResultMoreScriptNum(opcode byte, data []byte) (int64, error) {
+	switch opcode {
+	case txscript.OP_0:
+		return 0, nil
+	case txscript.OP_1NEGATE:
+		return -1, nil
+	}
+
+	if opcode >= txscript.OP_1 && opcode <= txscript.OP_16 {
+		return int64(opcode - (txscript.OP_1 - 1)), nil
+	}
+
+	num, err := txscript.MakeScriptNum(data, true, 8)
+	if err != nil {
+		return 0, err
+	}
+	return int64(num), nil
 }
 
 type InvokeTx_SatsNet struct {
