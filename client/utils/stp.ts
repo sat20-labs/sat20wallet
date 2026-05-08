@@ -38,14 +38,21 @@ interface StpWasmModule {
   splicingIn: (...args: any[]) => Promise<WasmResponse>;
   splicingOut: (...args: any[]) => Promise<WasmResponse>;
   lockToChannel: (...args: any[]) => Promise<WasmResponse>;
+  lockToChannelWithExpand: (...args: any[]) => Promise<WasmResponse>;
   unlockFromChannel: (...args: any[]) => Promise<WasmResponse>;
   getCommitTxAssetInfo: (...args: any[]) => Promise<WasmResponse<any>>;
   deployContract_Local: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
   deployContract_Remote: (templateName: string, content: string, feeRate: string, bol: boolean) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
   stakeToBeMiner: (bCoreNode: boolean, btcFeeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string; assetName: string; amt: string }>>;
+  minerUnstake: (btcFeeRate: string) => Promise<WasmResponse<{ txId: string }>>;
   splitBatchSignedPsbt: (signedHex: string, network: string) => Promise<WasmResponse<{ psbts: string[] }>>;
   addInputsToPsbt: (psbtHex: string, utxos: string[]) => Promise<WasmResponse<{ psbt: string }>>;
   addOutputsToPsbt: (psbtHex: string, utxos: string[]) => Promise<WasmResponse<{ psbt: string }>>;
+}
+
+export const parseLockExpandRequiredAmount = (message: string): string | undefined => {
+  const match = message.match(/^not allow lock, only\s+([0-9][0-9,]*(?:\.[0-9]+)?)\s+assets can be used$/i)
+  return match?.[1]
 }
 
 class SatsnetStp {
@@ -281,6 +288,21 @@ class SatsnetStp {
     )
   }
 
+  async lockToChannelWithExpand(
+    chanPoint: string,
+    assetName: string,
+    amt: number | string,
+    feeRate: number | string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest(
+      'lockToChannelWithExpand',
+      chanPoint.toString(),
+      assetName,
+      String(amt),
+      String(feeRate)
+    )
+  }
+
   async unlockFromChannel(
     channelUtxo: string,
     assetName: string,
@@ -333,6 +355,13 @@ class SatsnetStp {
     btcFeeRate: string
   ): Promise<[Error | undefined, { txId: string; resvId: string; assetName: string; amt: string } | undefined]> {
     return this._handleRequest<{ txId: string; resvId: string; assetName: string; amt: string }>('stakeToBeMiner', bCoreNode, btcFeeRate)
+  }
+
+  /** 取消质押 */
+  async minerUnstake(
+    btcFeeRate: string
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest<{ txId: string }>('minerUnstake', btcFeeRate)
   }
 
   async splitBatchSignedPsbt(

@@ -84,6 +84,30 @@
       :operation-type="operationType" :max-amount="selectedAsset?.amount" :asset-type="selectedAsset?.type"
       :asset-ticker="selectedAsset?.label" :asset-key="selectedAsset?.key" @update:amount="operationAmount = $event"
       @update:address="operationAddress = $event" @confirm="handleOperationConfirm" />
+
+    <Dialog :open="showLockExpandDialog" @update:open="handleLockExpandOpenChange">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ t('assetOperationDialog.expandChannelTitle') }}</DialogTitle>
+          <DialogDescription class="space-y-3">
+            <p>
+              {{ t('assetOperationDialog.lockAvailableAmount', { amount: pendingLockExpand?.availableAmount || '0' }) }}
+            </p>
+            <p>
+              {{ t('assetOperationDialog.expandChannelFeeInfo') }}
+            </p>
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="secondary" class="h-11 mt-2" @click="cancelLockExpand">
+            {{ t('assetOperationDialog.cancel') }}
+          </Button>
+          <Button class="h-11 mt-2" :disabled="loading" @click="confirmLockExpand">
+            {{ t('assetOperationDialog.expandChannel') }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -93,9 +117,17 @@ import { Icon } from '@iconify/vue'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
-import satsnetStp from '@/utils/stp'
+import satsnetStp, { parseLockExpandRequiredAmount } from '@/utils/stp'
 import sat20 from '@/utils/sat20'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import PoolManager from '@/components/wallet/PoolManager.vue'
@@ -235,6 +267,13 @@ const operationAmount = ref('')
 const operationAddress = ref('')
 const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
+const showLockExpandDialog = ref(false)
+const pendingLockExpand = ref<{
+  chanid: string
+  assetName: string
+  amt: string
+  availableAmount: string
+} | null>(null)
 
 const { t } = useI18n()
 
@@ -487,6 +526,19 @@ const lockUtxo = async ({
     feeUtxos
   )
   if (err) {
+    const availableAmount = parseLockExpandRequiredAmount(err.message)
+    if (availableAmount) {
+      loading.value = false
+      return {
+        expandRequired: true,
+        availableAmount,
+        request: {
+          chanid,
+          assetName: asset_name,
+          amt: String(amt),
+        },
+      }
+    }
     toast({
       title: 'Error',
       description: err.message,
@@ -507,6 +559,66 @@ const lockUtxo = async ({
     variant: 'success',
     duration: 1500,
   })
+}
+
+const cancelLockExpand = () => {
+  pendingLockExpand.value = null
+  showLockExpandDialog.value = false
+}
+
+const handleLockExpandOpenChange = (open: boolean) => {
+  showLockExpandDialog.value = open
+  if (!open) {
+    pendingLockExpand.value = null
+  }
+}
+
+const confirmLockExpand = async () => {
+  if (!pendingLockExpand.value) return
+
+  loading.value = true
+  const { chanid, assetName, amt } = pendingLockExpand.value
+  if (!chanid) {
+    toast({
+      title: 'Error',
+      description: 'Channel ID is required',
+      variant: 'destructive',
+      duration: 1500,
+    })
+    loading.value = false
+    cancelLockExpand()
+    return
+  }
+
+  const [err] = await satsnetStp.lockToChannelWithExpand(
+    chanid,
+    assetName,
+    amt,
+    btcFeeRate.value
+  )
+
+  if (err) {
+    toast({
+      title: 'Error',
+      description: err.message,
+      variant: 'destructive',
+      duration: 1500,
+    })
+    loading.value = false
+    return
+  }
+
+  await channelStore.getAllChannels()
+  loading.value = false
+  refreshL2Assets()
+  await channelStore.getAllChannels()
+  toast({
+    title: 'Success',
+    description: 'lock success',
+    variant: 'success',
+    duration: 1500,
+  })
+  cancelLockExpand()
 }
 
 // L1 发送操作
@@ -700,13 +812,34 @@ const handleOperationConfirm = async () => {
         })
         break
       case 'lock':
-        await lockUtxo({
+        const lockResult = await lockUtxo({
           chanid: chainid,
           utxos: [],
           amt: amount,
           feeUtxos: [],
           asset_name: asset.key,
         })
+        if (lockResult?.expandRequired) {
+          if (!lockResult.request?.chanid) {
+            toast({
+              title: 'Error',
+              description: 'Channel ID is required',
+              variant: 'destructive',
+              duration: 1500,
+            })
+            return
+          }
+
+          pendingLockExpand.value = lockResult.request
+            ? {
+                ...lockResult.request,
+                availableAmount: lockResult.availableAmount,
+              }
+            : null
+          showDialog.value = false
+          showLockExpandDialog.value = true
+          return
+        }
         break
       case 'unlock':
         await unlockUtxo({

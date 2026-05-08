@@ -93,9 +93,12 @@
           </div>
         </template>
       </div>
-      <Button variant="secondary" class="h-10 w-full" :disabled="displayMinerInfo.ServerNode || tempStakeData"
-        @click="router.push('/wallet/setting/node')">
-        {{ $t('nodeSetting.selectNodeType') }}
+      <Button 
+        :variant="displayMinerInfo.ServerNode || tempStakeData ? 'destructive' : 'secondary'" 
+        class="h-10 w-full" 
+        @click="router.push('/wallet/setting/node')"
+      >
+        {{ (displayMinerInfo.ServerNode || tempStakeData) ? $t('nodeSetting.unstake', '取消质押') : $t('nodeSetting.selectNodeType') }}
       </Button>
 
     </div>

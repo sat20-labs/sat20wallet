@@ -211,6 +211,25 @@ export function useAssetActions() {
     })
     loading.value = false
   }
+
+  const lockUtxoWithExpand = async ({ chanid, amt, asset_name, feeRate = btcFeeRate.value }: any) => {
+    loading.value = true
+    const [err] = await satsnetStp.lockToChannelWithExpand(chanid, asset_name, amt, feeRate)
+    if (err) {
+      handleError(err.message)
+      loading.value = false
+      return false
+    }
+    await channelStore.getAllChannels()
+    refreshL2Assets()
+    toast({
+      title: 'Success',
+      description: 'Lock UTXO successful',
+      duration: 1500,
+    })
+    loading.value = false
+    return true
+  }
   console.log('btcFeeRate', btcFeeRate);
 
   // L1 发送操作
@@ -258,6 +277,7 @@ export function useAssetActions() {
     withdraw,
     unlockUtxo,
     lockUtxo,
+    lockUtxoWithExpand,
     l1Send,
     l2Send,
     handleError,

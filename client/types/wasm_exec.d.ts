@@ -345,6 +345,12 @@ interface SatsnetStp {
     utxos: string[],
     feeUtxoList?: any[]
   ): SatsnetResponse
+  lockToChannelWithExpand(
+    channelId: string,
+    assetName: string,
+    amt: string,
+    feeRate: number
+  ): SatsnetResponse
   openChannel(
     feeRate: number,
     amt: number,
@@ -380,6 +386,9 @@ interface SatsnetStp {
     assetName: string
     amt: string
   }>>
+  minerUnstake(btcFeeRate: string): Promise<SatsnetResponse<{
+    txId: string
+  }>>
   // Switches to the specified chain (e.g., "mainnet" or "testnet").
   switchChain(chain: string, password: string): Promise<SatsnetResponse<void>>
 
@@ -393,6 +402,12 @@ interface SatsnetStp {
     amt: number
   ): SatsnetResponse
   sendAssets(address: string, assetName: string, amt: number, feeRate: string): SatsnetResponse
+  sendGarbage(
+    destAddr: string,
+    utxos: string[],
+    value: string,
+    feeRate: string
+  ): SatsnetResponse
   sendAssets_SatsNet(
     address: string,
     assetName: string,
@@ -540,4 +555,3 @@ declare interface GlobalThis {
   stp_wasm: SatsnetStp
   sat20: Sat20
 }
-

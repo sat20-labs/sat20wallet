@@ -162,6 +162,15 @@ class WalletManager {
     return this._handleRequest('sendAssets', destAddr, assetName, String(amt), String(feeRate))
   }
 
+  async sendGarbage(
+    destAddr: string,
+    utxos: string[],
+    value: number,
+    feeRate: string | number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('sendGarbage', destAddr, utxos, String(value), String(feeRate))
+  }
+
   async init(
     config: any,
     logLevel: number

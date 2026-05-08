@@ -14,7 +14,7 @@ export default defineConfig({
         matches: ["<all_urls>"],
       },
       {
-        resources: ['sat20wallet.wasm', 'stp.wasm'],
+        resources: ['wasm/sat20wallet.wasm', 'wasm/stpd.wasm'],
         matches: ["<all_urls>"],
       },
     ],
@@ -49,6 +49,7 @@ export default defineConfig({
     logLevel: process.env.NODE_ENV === 'production' ? ('error' as const) : ('info' as const),
     define: {
       __VUE_PROD_DEVTOOLS__: 'false',
+      __DEV__: 'false',
     },
     optimizeDeps: {
       exclude: [

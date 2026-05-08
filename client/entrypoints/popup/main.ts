@@ -1,3 +1,25 @@
+// localStorage polyfill for @vue/devtools-kit (must be before any imports)
+if (typeof global !== 'undefined' && !global.localStorage) {
+  global.localStorage = {
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {},
+    clear: () => {},
+    key: () => null,
+    get length() { return 0; }
+  }
+}
+if (typeof globalThis !== 'undefined' && !globalThis.localStorage) {
+  globalThis.localStorage = {
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {},
+    clear: () => {},
+    key: () => null,
+    get length() { return 0; }
+  }
+}
+
 import { createApp } from 'vue'
 import '@/assets/index.css'
 import './style.css'

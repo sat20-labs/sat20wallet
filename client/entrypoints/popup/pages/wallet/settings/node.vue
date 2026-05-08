@@ -24,22 +24,42 @@
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div class="flex flex-col gap-4">
-            <Button aria-label="become Core Node" disabled @click="onStake(true)" :loading="isLoading && isCore">
-              {{ $t('nodeSetting.becomeCoreNode') }}
+          <!-- 已质押状态：显示取消质押按钮 -->
+          <template v-if="isStaked">
+            <div class="text-sm text-muted-foreground mb-4 p-3 bg-zinc-800/60 rounded">
+              <div class="flex items-center gap-2 text-green-400 mb-2">
+                <Icon icon="lucide:check-circle" class="w-4 h-4" />
+                <span>{{ $t('nodeSetting.alreadyStaked') }}</span>
+              </div>
+            </div>
+            <Button 
+              variant="destructive" 
+              class="w-full" 
+              @click="onUnstake"
+              :loading="isUnstaking"
+            >
+              {{ $t('nodeSetting.unstake') }}
             </Button>
-            <Button variant="secondary" aria-label="become Miner" @click="onStake(false)"
-              :loading="isLoading && !isCore">
-              {{ $t('nodeSetting.becomeMiner') }}
-            </Button>
-
-          </div>
+          </template>
+          
+          <!-- 未质押状态：显示质押按钮 -->
+          <template v-else>
+            <div class="flex flex-col gap-4">
+              <Button aria-label="become Core Node" disabled @click="onStake(true)" :loading="isLoading && isCore">
+                {{ $t('nodeSetting.becomeCoreNode') }}
+              </Button>
+              <Button variant="secondary" aria-label="become Miner" @click="onStake(false)"
+                :loading="isLoading && !isCore">
+                {{ $t('nodeSetting.becomeMiner') }}
+              </Button>
+            </div>
+          </template>
         </CardContent>
         <CardFooter v-if="resultMsg">
           <Alert :variant="resultSuccess ? 'default' : 'destructive'">
             <!-- <AlertTitle>{{ resultSuccess ? 'Operate Successfull' : 'Operation Fail' }}</AlertTitle> -->
             <AlertDescription>{{ resultMsg }}</AlertDescription>
-            <div v-if="resultSuccess" class="mt-2 text-xs text-gray-500">Node Type: <span class="text-zinc-400 ml-1">{{
+            <div v-if="resultSuccess && !isUnstaking" class="mt-2 text-xs text-gray-500">Node Type: <span class="text-zinc-400 ml-1">{{
               isCore ? 'Core Node' : 'Mining Node' }}</span></div>
             <div v-if="txId" class="mt-2 text-xs text-gray-500">Transaction ID:<span class="text-zinc-400 ml-1">
                 <a :href="generateMempoolUrl({ network: network, path: `tx/${txId}` })" target="_blank"
@@ -54,14 +74,10 @@
             <div v-if="amt" class="mt-2 text-xs text-gray-500">Staked Amount: <span class="text-zinc-400 ml-1">{{ amt
             }}</span></div>
           </Alert>
-          <!-- <template v-if="resultSuccess">
-            <div v-if="txId" class="mt-2 text-xs text-gray-500">交易ID：{{ hideAddress(txId) }}</div>
-            <div v-if="resvId" class="mt-2 text-xs text-gray-500">预定ID：{{ hideAddress(resvId) }}</div>
-            <div v-if="assetName" class="mt-2 text-xs text-gray-500">资产名称：{{ assetName }}</div>
-            <div v-if="amt" class="mt-2 text-xs text-gray-500">质押数量：{{ amt }}</div>
-          </template> -->
         </CardFooter>
       </Card>
+      
+      <!-- 质押确认弹窗 -->
       <Dialog v-model:open="showConfirm">
         <DialogContent class="w-[95%]">
           <DialogHeader>
@@ -85,13 +101,74 @@
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      
+      <!-- 取消质押确认弹窗 -->
+      <Dialog v-model:open="showUnstakeConfirm">
+        <DialogContent class="w-[95%]">
+          <DialogHeader>
+            <DialogTitle class="text-yellow-400 flex items-center gap-2">
+              <Icon icon="lucide:alert-triangle" class="w-6 h-6" />
+              {{ $t('nodeSetting.confirmUnstake') }}
+            </DialogTitle>
+            <hr class="my-2 border-zinc-950" />
+            <DialogDescription>
+              <div class="space-y-3 py-2">
+                <p class="text-center">
+                  {{ $t('nodeSetting.confirmUnstakeDescription') }}
+                </p>
+                <div class="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 text-sm">
+                  <div class="flex items-start gap-2 text-yellow-400">
+                    <Icon icon="lucide:alert-circle" class="w-5 h-5 mt-0.5 flex-shrink-0" />
+                    <span class="text-yellow-300">{{ $t('nodeSetting.unstakeWarning') }}</span>
+                  </div>
+                </div>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <div class="flex justify-end gap-3">
+              <Button variant="destructive" @click="confirmUnstake" :loading="isUnstaking" class="w-36">
+                {{ $t('nodeSetting.confirm') }}
+              </Button>
+              <Button variant="secondary" @click="showUnstakeConfirm = false" class="w-36">
+                {{ $t('nodeSetting.cancel') }}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      
+      <!-- 取消质押进行中提示 -->
+      <Dialog v-model:open="showUnstakingProgress">
+        <DialogContent class="w-[95%]" :onPointerDownOutside="(e: Event) => e.preventDefault()">
+          <DialogHeader>
+            <DialogTitle class="text-yellow-400 flex items-center gap-2">
+              <Icon icon="lucide:loader-2" class="w-6 h-6 animate-spin" />
+              {{ $t('nodeSetting.unstaking') }}
+            </DialogTitle>
+          </DialogHeader>
+          <div class="py-4">
+            <div class="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 text-sm">
+              <div class="flex items-start gap-2 text-yellow-400 mb-3">
+                <Icon icon="lucide:alert-circle" class="w-5 h-5 mt-0.5 flex-shrink-0" />
+                <span class="text-yellow-300">{{ $t('nodeSetting.unstakeWarning') }}</span>
+              </div>
+              <div class="flex items-center gap-2 text-zinc-300">
+                <Icon icon="lucide:loader-2" class="w-4 h-4 animate-spin" />
+                <span>{{ $t('nodeSetting.unstakeProcessing') }}</span>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   </LayoutSecond>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useQuery } from '@tanstack/vue-query'
 import stp from '@/utils/stp'
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
@@ -106,29 +183,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useWalletStore } from '@/store/wallet'
 import { hideAddress, generateMempoolUrl } from '@/utils'
 import { nodeStakeStorage } from '@/lib/nodeStakeStorage'
-
-// const guideText = `
-// <span class="text-zinc-200 text-md font-bold mb-2">🔸 普通挖矿节点：轻量接入，人人可参与</span>
-
-//  🔹 仅需质押$PEARL，无需 GPU 或 ASIC；
-//  🔹 极低硬件要求（4核 CPU/8G RAM/100G SSD）；
-//  🔹 与核心节点协同运行，参与 PoS 挖矿收益分配；
-//  🔹 不同步全链、不运行索引器，部署快捷、维护简便。
-//  🔹 一种全新的BTC参与方式 —— 无需矿场，只需上线。
-
-// <span class="text-zinc-200 text-md font-bold mb-2">🔸 核心节点：构建 BTC 原生服务底座</span>
-
-// 🔹 同时运行 BTC 主网节点与聪网全节点；
-// 🔹 部署多类型索引器、智能合约、通道服务与前端 API 接入；
-// 🔹 承载生态协议资产（ORDX、Runes、BRC20、Ordinals 等）的底层运行逻辑；
-// 🔹 分润来自普通节点收益，具备完整服务能力与高性能要求。
-// 🔹 硬件建议：16 核 CPU/64G RAM/2T SSD/高速网络`
+import { satnetApi } from '@/apis'
 
 const walletStore = useWalletStore()
 const { btcFeeRate, network, publicKey } = storeToRefs(walletStore)
 const isLoading = ref(false)
 const isCore = ref(false)
 const showConfirm = ref(false)
+const showUnstakeConfirm = ref(false)
+const showUnstakingProgress = ref(false)
+const isUnstaking = ref(false)
 const resultMsg = ref('')
 const resultSuccess = ref(false)
 const txId = ref('')
@@ -139,10 +203,31 @@ let pendingCore = false
 
 const guideUrl = "https://github.com/sat20-labs/satoshinet/blob/main/install/guide.md"
 
+// 查询矿工信息以判断是否已质押
+const { data: minerInfoRes, refetch: refetchMinerInfo } = useQuery({
+  queryKey: ['minerInfo', publicKey, network],
+  queryFn: () => {
+    if (!publicKey.value || !network.value) return Promise.resolve({})
+    return satnetApi.getMinerInfo({ pubkey: publicKey.value, network: network.value })
+  },
+  enabled: computed(() => !!publicKey.value && !!network.value),
+  refetchInterval: 30000,
+})
+
+// 判断是否已质押
+const isStaked = computed(() => {
+  const minerInfo = minerInfoRes.value?.data
+  return !!(minerInfo?.ServerNode)
+})
+
 function onStake(core: boolean) {
   isCore.value = core
   pendingCore = core
   showConfirm.value = true
+}
+
+function onUnstake() {
+  showUnstakeConfirm.value = true
 }
 
 async function confirmStake() {
@@ -194,6 +279,57 @@ async function confirmStake() {
   } finally {
     isLoading.value = false
   }
+}
+
+async function confirmUnstake() {
+  isUnstaking.value = true
+  showUnstakeConfirm.value = false
+  showUnstakingProgress.value = true
+  resultMsg.value = ''
+  
+  try {
+    const [err, res] = await stp.minerUnstake(btcFeeRate.value.toString())
+    console.log('minerUnstake res', res)
+
+    if (err) {
+      resultMsg.value = err.message || $t('nodeSetting.unstakeFailed')
+      resultSuccess.value = false
+      txId.value = ''
+    } else {
+      resultMsg.value = $t('nodeSetting.unstakeSuccess')
+      resultSuccess.value = true
+      txId.value = res && res.txId ? res.txId : ''
+      
+      // 清除本地质押数据
+      if (publicKey.value) {
+        try {
+          await nodeStakeStorage.deleteNodeStakeData(publicKey.value)
+          console.log('Node stake data deleted successfully')
+        } catch (storageError) {
+          console.error('Failed to delete node stake data:', storageError)
+        }
+      }
+      
+      // 刷新矿工信息
+      await refetchMinerInfo()
+    }
+  } catch (e: any) {
+    resultMsg.value = e.message || $t('nodeSetting.unstakeFailed')
+    resultSuccess.value = false
+    txId.value = ''
+  } finally {
+    isUnstaking.value = false
+    showUnstakingProgress.value = false
+  }
+}
+
+// 简单的翻译函数
+function $t(key: string): string {
+  const translations: Record<string, string> = {
+    'nodeSetting.unstakeFailed': '取消质押失败',
+    'nodeSetting.unstakeSuccess': '取消质押成功！',
+  }
+  return translations[key] || key
 }
 </script>
 
