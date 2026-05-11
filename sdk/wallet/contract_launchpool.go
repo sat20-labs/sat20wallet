@@ -2612,7 +2612,7 @@ func (p *LaunchPoolContractRunTime) checkSelf() error {
 	p.updateRunningData(runningData)
 
 	if err != nil {
-		Log.Errorf(err.Error())
+		Log.Error(err)
 		return err
 	}
 	return nil

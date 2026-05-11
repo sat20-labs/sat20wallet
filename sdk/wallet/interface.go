@@ -418,6 +418,9 @@ func (p *Manager) SwitchChain(chain, password string) error {
 		p.status.CurrentChain = chain
 		oldWallet := p.wallet
 		p.wallet = nil
+		for _, walletInfo := range p.walletInfoMap {
+			walletInfo.Wallet = nil
+		}
 		_, err := p.unlockWallet(password)
 		if err == nil {
 			p.saveStatus()

@@ -3938,7 +3938,7 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 		}
 	}
 	if err != nil {
-		Log.Errorf(err.Error())
+		Log.Error(err.Error())
 		return nil, nil, 0, nil, err
 	}
 

@@ -1590,28 +1590,28 @@ func (p *AmmContractRuntime) updateLiquidity_remove(oldAmtInPool *Decimal, oldVa
 	if totalRemovedLptAmt.Cmp(totalAddedFeeLptAmt) < 0 {
 		str := fmt.Sprintf("totalAddedFeeLptAmt %s larger than totalRemovedLptAmt %s",
 			totalAddedFeeLptAmt.String(), totalRemovedLptAmt.String())
-		Log.Errorf(str)
-		return fmt.Errorf(str)
+		Log.Error(str)
+		return fmt.Errorf("%s", str)
 	}
 	realRemovedLpt := totalRemovedLptAmt.Sub(totalAddedFeeLptAmt)
 
 	if p.AssetAmtInPool.Cmp(totalRemovedAmt) < 0 {
 		str := fmt.Sprintf("totalRemovedAmt %s larger than AssetAmtInPool %s",
 			totalRemovedAmt.String(), p.AssetAmtInPool.String())
-		Log.Errorf(str)
-		return fmt.Errorf(str)
+		Log.Error(str)
+		return fmt.Errorf("%s", str)
 	}
 	if p.TotalLptAmt.Cmp(realRemovedLpt) < 0 {
 		str := fmt.Sprintf("realRemovedLpt %s larger than TotalLptAmt %s",
 			realRemovedLpt.String(), p.TotalLptAmt.String())
-		Log.Errorf(str)
-		return fmt.Errorf(str)
+		Log.Error(str)
+		return fmt.Errorf("%s", str)
 	}
 	if p.SatsValueInPool < totalRemovedValue.Floor() {
 		str := fmt.Sprintf("totalRemovedValue %d larger than SatsValueInPool %d",
 			totalRemovedValue.Floor(), p.SatsValueInPool)
-		Log.Errorf(str)
-		return fmt.Errorf(str)
+		Log.Error(str)
+		return fmt.Errorf("%s", str)
 	}
 
 	// 更新数据
@@ -2278,7 +2278,7 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 		return &runningData, nil
 	}
 
-	Log.Errorf(err)
+	Log.Error(err)
 	return &runningData, fmt.Errorf("%s", err)
 }
 
@@ -2324,7 +2324,7 @@ func (p *AmmContractRuntime) checkSelf() error {
 	p.updateRunningData(runningData)
 
 	if err != nil {
-		Log.Errorf(err.Error())
+		Log.Error(err)
 		return err
 	}
 	return nil

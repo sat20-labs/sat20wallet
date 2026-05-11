@@ -5554,7 +5554,7 @@ func VerifySwapHistory(history []*SwapHistoryItem, divisibility int,
 		return &runningData, nil
 	}
 
-	Log.Errorf(err)
+	Log.Error(err)
 	return &runningData, fmt.Errorf("%s", err)
 }
 
@@ -5595,7 +5595,7 @@ func (p *SwapContractRuntime) checkSelf() error {
 	p.updateRunningData(runningData)
 
 	if err != nil {
-		Log.Errorf(err.Error())
+		Log.Error(err.Error())
 		return err
 	}
 	return nil

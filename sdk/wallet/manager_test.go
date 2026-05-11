@@ -776,6 +776,19 @@ func TestChangePassword(t *testing.T) {
 	fmt.Printf("%s\n", _client.GetMnemonic(id, newPS))
 }
 
+func TestSwitchChain(t *testing.T) {
+	prepare(t)
+
+	fmt.Printf("testnet address: %s\n", _client.wallet.GetAddress())
+
+	err := _client.SwitchChain("mainnet", "123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("mainnet address: %s\n", _client.wallet.GetAddress())
+}
+
+
 func TestGetTxAssetInfoFromPsbt(t *testing.T) {
 	prepare(t)
 

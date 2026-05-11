@@ -988,7 +988,7 @@ func (p *IndexerClient) AllowDeployTick(assetName *swire.AssetName) error {
 
 	if result.Code != 0 {
 		Log.Errorf("%v response message %s", url, result.Msg)
-		return fmt.Errorf(result.Msg)
+		return fmt.Errorf("%s", result.Msg)
 	}
 
 	return nil
@@ -1016,7 +1016,7 @@ func (p *IndexerClient) GetServiceIncoming(addr string) (int, int64, error) {
 
 	if result.Code != 0 {
 		Log.Errorf("%v response message %s", url, result.Msg)
-		return 0, 0, fmt.Errorf(result.Msg)
+		return 0, 0, fmt.Errorf("%s", result.Msg)
 	}
 
 	return 0, 0, nil
