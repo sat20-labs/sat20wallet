@@ -1406,6 +1406,7 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 		}
 		if bUpdate {
 			p.refreshTime = 0
+			p.stp.SaveReservationWithLock(p.resv)
 		}
 		p.ContractRuntimeBase.InvokeCompleted_SatsNet(data)
 	} else {
@@ -1434,6 +1435,9 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 		delayLaunch := 10
 		if IsTestNet() {
 			delayLaunch = 3
+		}
+		if p.CloseRequested {
+			delayLaunch = 0
 		}
 		if p.CheckPointBlock+delayLaunch <= data.Height {
 			// 进入之前先解锁
@@ -1820,8 +1824,9 @@ func (p *LaunchPoolContractRunTime) setToRefundAll() {
 	}
 
 	// 扣除服务费和网络费
+	fee := indexer.NewDefaultDecimal(INVOKE_FEE)
 	for _, v := range p.invalidMintMap {
-		v.TotalAmt = v.TotalAmt.Sub(indexer.NewDefaultDecimal(INVOKE_FEE))
+		v.TotalAmt = v.TotalAmt.Sub(fee)
 		if v.TotalAmt.Sign() < 0 {
 			v.TotalAmt = nil
 		}
