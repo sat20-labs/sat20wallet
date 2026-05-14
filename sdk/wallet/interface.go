@@ -318,6 +318,7 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 	p.status.CurrentWallet = id
 	p.status.CurrentAccount = 0
 	p.wallet = w.Wallet
+	p.wallet.SetSubAccount(0)
 	p.saveStatus()
 	
 	return nil
