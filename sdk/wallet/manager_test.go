@@ -780,12 +780,64 @@ func TestSwitchChain(t *testing.T) {
 	prepare(t)
 
 	fmt.Printf("testnet address: %s\n", _client.wallet.GetAddress())
-
-	err := _client.SwitchChain("mainnet", "123456")
+	pw := "123456"
+	id1 := _client.GetCurrentWalletId()
+	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
+	id2, _, err := _client.CreateWallet(pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
+	id3, _, err := _client.CreateWallet(pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
+	
+	err = _client.SwitchChain("mainnet", pw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fmt.Printf("mainnet address: %s\n", _client.wallet.GetAddress())
+	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
+	err = _client.SwitchWallet(id1, pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
+	err = _client.SwitchWallet(id2, pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
+	err = _client.SwitchWallet(id3, pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = _client.SwitchChain("testnet", pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("testnet address: %s\n", _client.wallet.GetAddress())
+	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
+
+
+	err = _client.SwitchWallet(id1, pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
+	err = _client.SwitchWallet(id2, pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
+	err = _client.SwitchWallet(id3, pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
 }
 
 
