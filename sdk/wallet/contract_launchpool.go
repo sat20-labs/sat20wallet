@@ -26,9 +26,9 @@ func init() {
 }
 
 const (
-	LAUNCH_POOL_MIN_RATION int = 60 // %
-	LAUNCH_POOL_MAX_RATION int = 90 // %
-	RESERVE_TO_FOUNDATION  int = 5  // %
+	LAUNCH_POOL_MIN_RATION int = 10 // %
+	LAUNCH_POOL_MAX_RATION int = 95 // %
+	RESERVE_TO_FOUNDATION  int = 5  // 千分之
 )
 
 var (
@@ -69,7 +69,7 @@ type LaunchPoolContract struct {
 	Limit         int64  `json:"limit"`                   // 每个地址最大铸造量，0 不限制
 	MaxSupply     int64  `json:"maxSupply"`               // 最大资产供应量，
 	LaunchRatio   int    `json:"launchRation"`            // 铸造量达到总量的多少比例后，自动发射，向之前所有铸造者自动转token；
-	ReserveRatio  int    `json:"reserveRation,omitempty"` // 预留给部署者的比例，默认为0。注意如果有预留部分，其中的5%会给到foundation
+	ReserveRatio  int    `json:"reserveRation,omitempty"` // 预留给部署者的比例，默认为0。注意如果有预留部分，其中的RESERVE_TO_FOUNDATION会给到foundation
 	DisplayName   string `json:"displayName,omitempty"`
 	// 剩下的比例，留存在池子中当作流动性池子
 	// 比例必须在LAUNCH_POOL_MIN_RATION 和 LAUNCH_POOL_MAX_RATION 之间
@@ -1454,8 +1454,8 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 func (p *LaunchPoolContractRunTime) handleReserveRatio() {
 	if p.ReserveRatio != 0 && p.Status == CONTRACT_STATUS_CLOSING {
 		totalReservedAmt := p.MaxSupply * int64(p.ReserveRatio) / 100
-		deployerPart := totalReservedAmt * int64(100-RESERVE_TO_FOUNDATION) / 100
-		foundationPart := totalReservedAmt * int64(RESERVE_TO_FOUNDATION) / 100
+		deployerPart := totalReservedAmt * int64(1000-RESERVE_TO_FOUNDATION) / 1000
+		foundationPart := totalReservedAmt * int64(RESERVE_TO_FOUNDATION) / 1000
 
 		// 因为没有保存reserve是否已经发射的信息，需要做进一步的检查
 		// 最后一个发射出去的是reserve部分，如果还需要发射，那就还没有把reserve部分发射出去
@@ -1470,9 +1470,11 @@ func (p *LaunchPoolContractRunTime) handleReserveRatio() {
 		deployer := addMintInfo(deployerAddr, p.mintInfoMap)
 		deployer.TotalAmt = deployer.TotalAmt.Add(indexer.NewDefaultDecimal(deployerPart))
 
-		foundationAddr := p.GetFoundationAddress()
-		foundation := addMintInfo(foundationAddr, p.mintInfoMap)
-		foundation.TotalAmt = foundation.TotalAmt.Add(indexer.NewDefaultDecimal(foundationPart))
+		if foundationPart != 0 {
+			foundationAddr := p.GetFoundationAddress()
+			foundation := addMintInfo(foundationAddr, p.mintInfoMap)
+			foundation.TotalAmt = foundation.TotalAmt.Add(indexer.NewDefaultDecimal(foundationPart))
+		}
 	}
 }
 
