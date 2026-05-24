@@ -385,6 +385,27 @@ func (p *Manager) FindWalletByPubKey(pubKey []byte) common.Wallet {
 }
 
 
+// 不改变当前钱包和账户
+func (p *Manager) FindWalletByPubKeyWithDepth(pubKey []byte, depth uint32) common.Wallet {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	for _, walletInfo := range p.walletInfoMap {
+		if bytes.Equal(walletInfo.Wallet.GetNodePubKey().SerializeCompressed(), pubKey) {
+			return walletInfo.Wallet
+		}
+		w := walletInfo.Wallet.Clone()
+		for i := uint32(1); i <= depth; i++ {
+			w.SetSubAccount(i)
+			if bytes.Equal(w.GetNodePubKey().SerializeCompressed(), pubKey) {
+				return w
+			}
+		}
+	}
+
+	return nil
+}
+
 func (p *Manager) SwitchAccount(id uint32) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
