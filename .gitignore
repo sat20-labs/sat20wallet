@@ -1,4 +1,21 @@
 .DS_Store
+
+# PWA dependencies and build output
+pwa/node_modules/
+pwa/dist/
+
+# PWA local environment files
+pwa/.env
+pwa/.env.*
+!pwa/.env.example
+
+# PWA test and tooling output
+pwa/coverage/
+pwa/.nyc_output/
+pwa/.vite/
+pwa/.vite-temp/
+pwa/*.log
+
 sdk/db
 sdk/log
 sdk/wasm/html/wasm/sat20wallet.wasm

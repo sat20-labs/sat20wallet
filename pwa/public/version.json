@@ -1,0 +1,7 @@
+{
+  "version": "0.1.32",
+  "releaseNotes": "Android 生物识别仅允许 HTTPS 环境",
+  "forceUpdate": false,
+  "minVersion": "0.1.0",
+  "publishedAt": "2026-03-06T23:45:00.000Z"
+}

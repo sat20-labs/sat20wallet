@@ -1,0 +1,55 @@
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import { config as configMap } from '@/config'
+import { walletStorage } from '@/lib/walletStorage'
+
+export type Env = 'dev' | 'test' | 'prd'
+export const useGlobalStore = defineStore('global', () => {
+
+  const loading = ref(false)
+  const version = ref(0)
+  const env = ref<Env>(walletStorage.getValue('env') || 'prd')
+  const stpVersion = ref('0.0.0')
+  const autoLockTime = ref(walletStorage.getValue('autoLockTime') || '5')
+  const hideBalance = ref(Boolean(walletStorage.getValue('hideBalance')))
+
+  const config = computed(() => {
+    return configMap[env.value]
+  })
+  const setStpVersion = (value: string) => {
+    stpVersion.value = value
+  }
+  const setVersion = (value: number) => {
+    version.value = value
+  }
+  const setLoading = (value: boolean) => {
+    loading.value = value
+  }
+  const setEnv = async (value: Env) => {
+    env.value = value
+    await walletStorage.setValue('env', value)
+  }
+  const setAutoLockTime = async (value: string) => {
+    autoLockTime.value = value
+    await walletStorage.setValue('autoLockTime', value)
+  }
+  const setHideBalance = async (value: boolean) => {
+    hideBalance.value = value
+    await walletStorage.setValue('hideBalance', value)
+  }
+  return {
+    loading,
+    setLoading,
+    version,
+    setVersion,
+    stpVersion,
+    setStpVersion,
+    env,
+    setEnv,
+    config,
+    autoLockTime,
+    setAutoLockTime,
+    hideBalance,
+    setHideBalance,
+  }
+})

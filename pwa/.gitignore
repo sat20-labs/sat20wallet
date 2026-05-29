@@ -1,0 +1,14 @@
+node_modules/
+dist/
+
+.DS_Store
+*.log
+
+.env
+.env.*
+!.env.example
+
+coverage/
+.nyc_output/
+.vite/
+.vite-temp/
