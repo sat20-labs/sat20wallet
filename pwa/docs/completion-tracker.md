@@ -12,7 +12,11 @@ Updated: 2026-05-29
 - Market `/market/` serves successfully in local dev and does not emit local `X-Frame-Options` or `frame-ancestors` headers.
 - PWA has an embedded Market route at `#/wallet/dapp`.
 - PWA DApp bridge validates origin, request id, nonce, expiry, duplicate requests, and requires connect before other actions.
-- Current PWA build is configured for subpath deployment under `/pwa/`: Vite base, manifest `id/start_url/scope`, icon URLs, service worker registration, WASM loading, and app shell cache paths use `/pwa/`.
+- Current PWA build is configured for `/pwa/` in production and `/` in local dev:
+  - Vite base defaults to `/` for `npm run dev`.
+  - Vite base defaults to `/pwa/` for `npm run build`.
+  - Manifest uses relative `id/start_url/scope` and icon URLs so it works at both `/` and `/pwa/`.
+  - Service worker registration, WASM loading, and app shell cache paths use `import.meta.env.BASE_URL`.
 
 ## Verified Locally
 

@@ -3,8 +3,8 @@ import vue from '@vitejs/plugin-vue'
 import path from 'path'
 
 // https://vitejs.dev/config/
-export default defineConfig({
-  base: '/pwa/',
+export default defineConfig(({ mode }) => ({
+  base: process.env.VITE_PWA_BASE_PATH || (mode === 'production' ? '/pwa/' : '/'),
   plugins: [vue()],
   server: {
     port: 5173,
@@ -20,4 +20,4 @@ export default defineConfig({
       '~': path.resolve(__dirname, './'),
     },
   },
-})
+}))
