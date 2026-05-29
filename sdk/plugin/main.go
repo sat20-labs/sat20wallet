@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os"
 
-	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sat20-labs/sat20wallet/sdk/config"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet"
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
 
 var _mgr *wallet.Manager
@@ -22,8 +24,15 @@ func InitWalletMgr(dbPath string) error {
 	if dbPath != "" {
 		lcfg.DB = dbPath
 	}
+	if mnemonic := firstEnv("SATOSHINET_WALLET_MNEMONIC", "SATOSHINET_RPCTEST_STP_MNEMONIC"); mnemonic != "" {
+		lcfg.Wallet.Mnemonic = mnemonic
+	}
+	if password := firstEnv("SATOSHINET_WALLET_PASSWORD", "SATOSHINET_RPCTEST_STP_PASSWORD"); password != "" {
+		lcfg.Wallet.Password = password
+	} else if os.Getenv("SATOSHINET_RPCTEST_STP_MNEMONIC") != "" {
+		lcfg.Wallet.Password = "rpctest"
+	}
 	wallet.InitLog(lcfg)
-
 
 	///////
 	db := wallet.NewKVDB(lcfg.DB + "/db/stp/" + lcfg.Chain)
@@ -40,7 +49,7 @@ func InitWalletMgr(dbPath string) error {
 
 	// 需要提前把钱包解锁，节点需要计算通道地址
 	if lcfg.Wallet.PSFile != "" {
-		pw, err := wallet.LoadPassword(lcfg.DB+"/"+lcfg.Wallet.PSFile)
+		pw, err := wallet.LoadPassword(lcfg.DB + "/" + lcfg.Wallet.PSFile)
 		if err == nil {
 			_, err = _mgr.UnlockWallet(pw)
 			if err != nil {
@@ -57,8 +66,24 @@ func InitWalletMgr(dbPath string) error {
 			}
 		}
 	}
+	if _mgr.GetWallet() == nil && lcfg.Wallet.Mnemonic != "" && lcfg.Wallet.Password != "" {
+		wallet.Log.Info("initiate wallet by configuration wallet")
+		_, err = _mgr.ImportWallet(lcfg.Wallet.Mnemonic, lcfg.Wallet.Password)
+		if err != nil {
+			wallet.Log.Errorf("ImportWallet failed, %v", err)
+		}
+	}
 
 	return nil
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // 在钱包创建或者解锁后调用
@@ -94,6 +119,17 @@ func SignMsg(msg []byte) ([]byte, error) {
 	return sig, nil
 }
 
+func SignPsbt_SatsNet(packet *spsbt.Packet) error {
+	if _mgr == nil {
+		return fmt.Errorf("STPManager not init")
+	}
+	wallet := _mgr.GetWallet()
+	if wallet == nil {
+		return fmt.Errorf("wallet is not created/unlocked/connected")
+	}
+	return wallet.SignPsbt_SatsNet(packet)
+}
+
 func IsWalletExisting() bool {
 	if _mgr == nil {
 		return false
@@ -108,7 +144,6 @@ func IsUnlocked() bool {
 	wallet := _mgr.GetWallet()
 	return wallet != nil
 }
-
 
 func UnlockWallet(pw string) error {
 	if _mgr == nil {
@@ -126,7 +161,7 @@ func CreateWallet(pw string) (string, error) {
 	return mn, err
 }
 
-func ImportWallet(mn, pw string) (error) {
+func ImportWallet(mn, pw string) error {
 	if _mgr == nil {
 		return fmt.Errorf("STPManager not init")
 	}

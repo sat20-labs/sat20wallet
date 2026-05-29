@@ -12,6 +12,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -91,16 +92,7 @@ func CalcFee_SatsNet() int64 {
 }
 
 func StandardAnchorScript(fundingUtxo string, witnessScript []byte, value int64, assets wire.TxAssets) ([]byte, error) {
-	assetsBuf, err := wire.SerializeTxAssets(&assets)
-	if err != nil {
-		return nil, err
-	}
-
-	return txscript.NewScriptBuilder().
-		AddData([]byte(fundingUtxo)).
-		AddData(witnessScript).
-		AddInt64(int64(value)).
-		AddData(assetsBuf).Script()
+	return sindexer.StandardAnchorScript(fundingUtxo, witnessScript, value, assets)
 }
 
 
@@ -114,45 +106,12 @@ type AnchorData struct {
 
 func ParseStandardAnchorScript(script []byte) (*AnchorData, error) {
 	data := AnchorData{}
-	tokenizer := txscript.MakeScriptTokenizer(0, script)
+	
+	var err error
+	data.Utxo, data.WitnessScript, data.Value, data.Assets, data.Sig, err = 
+		sindexer.ParseStandardAnchorScript(script)
 
-	// 读取utxo
-	if !tokenizer.Next() {
-		return nil, fmt.Errorf("script too short: missing txid")
-	}
-	data.Utxo = string(tokenizer.Data())
-
-	// 读取pkScript
-	if !tokenizer.Next() {
-		return nil, fmt.Errorf("script too short: missing pkScript")
-	}
-	data.WitnessScript = tokenizer.Data()
-
-	// 读取value
-	if !tokenizer.Next() {
-		return nil, fmt.Errorf("script too short: missing value")
-	}
-	data.Value = tokenizer.ExtractInt64()
-
-	// 读取assets
-	if !tokenizer.Next() {
-		return nil, fmt.Errorf("script too short: missing assets")
-	}
-	assetsBuf := tokenizer.Data()
-	if assetsBuf != nil {
-		err := wire.DeserializeTxAssets(&data.Assets, assetsBuf)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// 读取sig
-	if !tokenizer.Next() {
-		return nil, fmt.Errorf("script too short: missing signature")
-	}
-	data.Sig = tokenizer.Data()
-
-	return &data, nil
+	return &data, err
 }
 
 

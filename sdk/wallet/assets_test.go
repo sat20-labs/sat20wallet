@@ -2,13 +2,13 @@ package wallet
 
 import (
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"testing"
 
 	"github.com/btcsuite/btcd/wire"
-	swire "github.com/sat20-labs/satoshinet/wire"
 	indexer "github.com/sat20-labs/indexer/common"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 
@@ -75,8 +75,8 @@ func TestAnchorScript(t *testing.T) {
 	}
 	var witnessScript [71]byte
 
-	anchorPkScript, err := StandardAnchorScript(txOutput.OutPointStr, witnessScript[:],
-		txOutput.Value(), txOutput.Assets)
+	anchorPkScript, err := sindexer.StandardAnchorScriptWithSig(txOutput.OutPointStr, witnessScript[:],
+		txOutput.Value(), txOutput.Assets, []byte("signature"))
 	if err != nil {
 		t.Fatalf("")
 	}
@@ -97,19 +97,6 @@ func TestAnchorScript(t *testing.T) {
 	if !data.Assets.Equal(txOutput.Assets) {
 		t.Fatalf("")
 	}
-}
-
-
-func TestParseAnchorScript(t *testing.T) {
-	
-	anchorPkScript := "42363564623638323264653835656135646630366366323331386565656239623933326633633265353466653264376662353432336561373838646661636564663a304752210367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e2103e1b100115fb667b374734510b76ddcc937fbdf7e8b238258be79c00f08b6401e52ae02942000"
-	by, _ := hex.DecodeString(anchorPkScript)
-	data, err := ParseStandardAnchorScript(by)
-	if err != nil {
-		t.Fatalf("")
-	}
-	fmt.Printf("%v", data)
-
 }
 
 

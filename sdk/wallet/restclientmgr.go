@@ -18,6 +18,7 @@ type IndexerRPCClientMgr struct {
 	indexers []IndexerRPCClient // 默认第一个是master，第二个是slave
 	active   IndexerRPCClient
 	ticker   *time.Ticker
+	stop     chan struct{}
 
 	mutex sync.RWMutex
 }
@@ -27,17 +28,34 @@ func NewIndexerRPCClientMgr() *IndexerRPCClientMgr {
 }
 
 func (p *IndexerRPCClientMgr) Start() {
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	if p.ticker != nil {
 		return
 	}
+	duration := 60
+	if _enable_testing {
+		duration = 3
+	}
+	p.ticker = time.NewTicker(time.Duration(duration) * time.Second)
+	p.stop = make(chan struct{})
 	go p.pingThread()
 }
 
 func (p *IndexerRPCClientMgr) Stop() {
-	p.ticker.Stop()
-	p.ticker = nil
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	if p.ticker == nil && p.stop == nil {
+		return
+	}
+	if p.ticker != nil {
+		p.ticker.Stop()
+		p.ticker = nil
+	}
+	if p.stop != nil {
+		close(p.stop)
+		p.stop = nil
+	}
 }
 
 func (p *IndexerRPCClientMgr) Set(rpc IndexerRPCClient) {
@@ -89,16 +107,19 @@ func (p *IndexerRPCClientMgr) selector() IndexerRPCClient {
 func (p *IndexerRPCClientMgr) pingThread() {
 	Log.Infof("pingThread start")
 
-	duration := 60
-	if _enable_testing {
-		duration = 3
-	}
-	p.ticker = time.NewTicker(time.Duration(duration) * time.Second)
-
 	p.ping()
+	p.mutex.RLock()
+	ticker := p.ticker
+	stop := p.stop
+	p.mutex.RUnlock()
+	if ticker == nil || stop == nil {
+		Log.Infof("pingThread exit.")
+		return
+	}
 	select {
-	case <-p.ticker.C:
+	case <-ticker.C:
 		p.ping()
+	case <-stop:
 	}
 
 	Log.Infof("pingThread exit.")
