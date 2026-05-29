@@ -39,7 +39,9 @@ const registerServiceWorker = () => {
   }
 
   const register = () => {
-    navigator.serviceWorker.register('/service-worker.js').catch((error) => {
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}service-worker.js`, {
+      scope: import.meta.env.BASE_URL,
+    }).catch((error) => {
       console.warn('Service worker registration failed:', error)
     })
   }

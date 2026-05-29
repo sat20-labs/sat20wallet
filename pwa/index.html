@@ -8,9 +8,9 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="SAT20 Wallet" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/icon/32.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/icon/apple-touch-icon.png" />
+    <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="32x32" href="%BASE_URL%icon/32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="%BASE_URL%icon/apple-touch-icon.png" />
     <style>
       * {
         -webkit-touch-callout: none;
@@ -22,7 +22,7 @@
         user-select: text;
       }
     </style>
-    <script src="/wasm/wasm_exec.js"></script>
+    <script src="%BASE_URL%wasm/wasm_exec.js"></script>
     <title>SAT20 Wallet</title>
     <script type="module">
       import { Buffer } from 'buffer'

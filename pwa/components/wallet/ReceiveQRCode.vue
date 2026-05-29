@@ -95,12 +95,12 @@ const currentIcon = computed(() => {
     bitcoin: {
       // icon: 'cryptocurrency:btc',
       // iconColor: 'text-orange-500',
-      imagePath: '/icon/testnet.svg', // Replace with actual image path
+      imagePath: `${import.meta.env.BASE_URL}icon/testnet.svg`,
     },
     satoshinet: {
       // icon: 'cryptocurrency:btc',
       // iconColor: 'text-green-500',
-      imagePath: '/icon/satoshinet.svg', // Replace with actual image path
+      imagePath: `${import.meta.env.BASE_URL}icon/satoshinet.svg`,
     },
   }
   return icons[chain.toLowerCase()] || icons['bitcoin']

@@ -1,21 +1,23 @@
 const CACHE_NAME = 'sat20-wallet-pwa-v0.1.32'
+const APP_BASE = new URL(self.registration.scope).pathname.replace(/\/$/, '')
+const withBase = (path) => `${APP_BASE}${path}`
 
 const PRECACHE_URLS = [
-  '/',
-  '/index.html',
-  '/wasm/wasm_exec.js',
-  '/wasm/sat20wallet.wasm',
-  '/wasm/stpd.wasm',
-  '/icon/apple-touch-icon.png',
-  '/icon/sat20-logo-app.png',
-  '/icon/maskable-512.png',
-  '/icon/maskable-192.png',
-  '/icon/512.png',
-  '/icon/192.png',
-  '/icon/128.png',
-  '/icon/48.png',
-  '/icon/32.png',
-  '/icon/16.png'
+  withBase('/'),
+  withBase('/index.html'),
+  withBase('/wasm/wasm_exec.js'),
+  withBase('/wasm/sat20wallet.wasm'),
+  withBase('/wasm/stpd.wasm'),
+  withBase('/icon/apple-touch-icon.png'),
+  withBase('/icon/sat20-logo-app.png'),
+  withBase('/icon/maskable-512.png'),
+  withBase('/icon/maskable-192.png'),
+  withBase('/icon/512.png'),
+  withBase('/icon/192.png'),
+  withBase('/icon/128.png'),
+  withBase('/icon/48.png'),
+  withBase('/icon/32.png'),
+  withBase('/icon/16.png')
 ]
 
 self.addEventListener('install', (event) => {
@@ -58,12 +60,12 @@ self.addEventListener('fetch', (event) => {
 
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match('/index.html'))
+      fetch(event.request).catch(() => caches.match(withBase('/index.html')))
     )
     return
   }
 
-  if (requestUrl.pathname === '/manifest.webmanifest' || requestUrl.pathname === '/version.json') {
+  if (requestUrl.pathname === withBase('/manifest.webmanifest') || requestUrl.pathname === withBase('/version.json')) {
     event.respondWith(
       fetch(event.request).catch(() => caches.match(event.request))
     )

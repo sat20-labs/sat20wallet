@@ -11,7 +11,7 @@ const loadWalletWasm = async () => {
   const network = walletStorage.getValue('network') || Network.LIVENET
   console.log('env', env, 'network', network)
   const go = new (window as any).Go()
-  const wasmPath = '/wasm/sat20wallet.wasm'
+  const wasmPath = `${import.meta.env.BASE_URL}wasm/sat20wallet.wasm`
   const response = await fetch(wasmPath)
   const wasmBinary = await response.arrayBuffer()
   const wasmModule = await WebAssembly.instantiate(wasmBinary, go.importObject)

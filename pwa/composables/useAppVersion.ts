@@ -38,7 +38,7 @@ export function useAppVersion() {
   const lastCheckedVersion = ref<string | null>(null)
   const versionUrl = import.meta.env.VITE_SAT20_VERSION_URL
     || (import.meta.env.DEV
-      ? '/version.json'
+      ? `${import.meta.env.BASE_URL}version.json`
       : 'https://raw.githubusercontent.com/sat20-labs/sat20wallet/main/version.json')
 
   // 检查是否已经提醒过当前版本（避免重复提醒）
