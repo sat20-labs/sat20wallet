@@ -84,53 +84,43 @@ const router = createRouter({
   routes,
 })
 
-const checkPassword = async () => {
-  const password = walletStorage.getValue('password')
-  if (password) {
-    const passwordTime = walletStorage.getValue('passwordTime')
-    if (passwordTime) {
-      const now = new Date().getTime()
-      if (now - passwordTime > 5 * 60 * 1000) {
-        await walletStorage.setValue('password', null)
-      }
-    }
-  }
-}
-
-router.beforeEach(async (to, from) => {
+router.beforeEach(async (to) => {
   console.time('router.beforeEach')
   const walletStore = useWalletStore()
 
   const hasWallet = walletStorage.getValue('hasWallet')
-  await checkPassword()
-  const password = walletStorage.getValue('password')
-  const network = walletStorage.getValue('network')
+  const password = walletStore.password
 
   if (password && walletStore.locked) {
-    await walletStore.unlockWallet(password)
-    await walletStore.setLocked(false)
-    // if (network) {
-    //   console.log('network', network)
-    //   await walletStore.setNetwork(network)
-    // }
+    const [err] = await walletStore.unlockWallet(password)
+    if (err) {
+      await walletStore.setPassword('')
+      await walletStore.setLocked(true)
+    } else {
+      await walletStore.setLocked(false)
+    }
   }
 
   if (to.path.startsWith('/wallet')) {
     if (hasWallet) {
       if (walletStore.locked) {
         console.timeEnd('router.beforeEach')
-        return '/unlock?redirect=' + to.path
+        return { path: '/unlock', query: { redirect: to.fullPath } }
       }
     } else {
       console.timeEnd('router.beforeEach')
       return '/'
     }
   } else if (to.path === '/unlock') {
+    if (hasWallet && !walletStore.locked) {
+      console.timeEnd('router.beforeEach')
+      return (to.query.redirect as string) || '/wallet'
+    }
   } else {
     if (hasWallet) {
       if (walletStore.locked) {
         console.timeEnd('router.beforeEach')
-        return '/unlock?redirect=' + to.path
+        return { path: '/unlock', query: { redirect: to.fullPath } }
       } else {
         console.timeEnd('router.beforeEach')
         return '/wallet'

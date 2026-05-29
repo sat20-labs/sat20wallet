@@ -19,7 +19,7 @@ export const useWalletStore = defineStore('wallet', () => {
   const feeRate = ref(0)
   const btcFeeRate = ref(1)
   const satsnetFeeRate = ref(10)
-  const password = ref(walletStorage.getValue('password'))
+  const password = ref('')
   const network = ref(walletStorage.getValue('network'))
   const chain = ref(walletStorage.getValue('chain'))
   const locked = ref(true)
@@ -98,7 +98,6 @@ export const useWalletStore = defineStore('wallet', () => {
     satsnetFeeRate.value = value
   }
   const setPassword = async (value: string) => {
-    await walletStorage.updatePassword(value)
     password.value = value
   }
 

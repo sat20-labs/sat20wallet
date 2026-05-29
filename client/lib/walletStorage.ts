@@ -9,10 +9,8 @@ interface WalletState {
   accountIndex: number
   address: string | null
   isConnected: boolean
-  password: string | null
   network: Network
   chain: Chain
-  passwordTime: number | null
   balance: Balance
   pubkey: string | null
   wallets: WalletData[]
@@ -28,14 +26,12 @@ const defaultState: WalletState = {
   hasWallet: false,
   address: null,
   isConnected: false,
-  password: null,
   network: Network.LIVENET,
   chain: Chain.BTC,
   walletId: '',
   accountIndex: 0,
   balance: { confirmed: 0, unconfirmed: 0, total: 0 },
   pubkey: null,
-  passwordTime: null,
   wallets: [],
 }
 
@@ -155,15 +151,6 @@ class WalletStorage {
     }
   }
 
-  // 特殊的更新方法，用于处理密码相关的状态
-  public async updatePassword(password: string | null): Promise<void> {
-    const updates: BatchUpdateData = {
-      password,
-      passwordTime: password ? new Date().getTime() : null,
-    }
-    await this.batchUpdate(updates)
-  }
-
   // 订阅状态变化
   public subscribe(callback: StateChangeCallback): () => void {
     this.listeners.add(callback)
@@ -237,4 +224,3 @@ const unsubscribe = walletStorage.subscribe((key, newValue, oldValue) => {
 // 取消订阅
 unsubscribe()
 */
-
