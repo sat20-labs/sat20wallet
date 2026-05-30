@@ -450,6 +450,15 @@ class WalletManager {
     return this._handleRequest('getFeeForDeployContract', templateName, content, feeRate)
   }
 
+  async deployContract_Remote(
+    templateName: string,
+    content: string,
+    feeRate: string,
+    bol: boolean
+  ): Promise<[Error | undefined, { txId: string; resvId: string } | undefined]> {
+    return this._handleRequest('deployContract_Remote', templateName, content, feeRate, bol)
+  }
+
   async getParamForInvokeContract(
     templateName: string,
     action: string

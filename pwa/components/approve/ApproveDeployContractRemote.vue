@@ -56,7 +56,6 @@ import { Alert, AlertTitle } from '@/components/ui/alert'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { useToast } from '@/components/ui/toast-new'
 import sat20 from '@/utils/sat20'
-import stp from '@/utils/stp'
 
 interface Props {
   data: {
@@ -135,7 +134,7 @@ const confirm = async () => {
   isLoading.value = true
   deployError.value = ''
   try {
-    const [err, res] = await stp.deployContract_Remote(
+    const [err, res] = await sat20.deployContract_Remote(
       props.data.templateName,
       props.data.content,
       props.data.feeRate,
