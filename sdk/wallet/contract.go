@@ -34,7 +34,8 @@ const (
 
 	// 已经完成的
 	TEMPLATE_CONTRACT_LAUNCHPOOL string = "launchpool.tc"
-	TEMPLATE_CONTRACT_SWAP       string = "swap.tc"
+	TEMPLATE_CONTRACT_LIMITORDER string = "limitorder.tc"
+	TEMPLATE_CONTRACT_SWAP       string = "swap.tc" // legacy name for limitorder.tc
 	TEMPLATE_CONTRACT_AMM        string = "amm.tc"
 	TEMPLATE_CONTRACT_TRANSCEND  string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
 	TEMPLATE_CONTRACT_RECYCLE    string = "recycle.tc"
@@ -421,7 +422,7 @@ func GetKeyFromId(id int64) string {
 
 func NewInvokeHistoryItem(cn string) InvokeHistoryItem {
 	switch cn {
-	case TEMPLATE_CONTRACT_SWAP:
+	case TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_LIMITORDER:
 		return &SwapHistoryItem{}
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		return &MintHistoryItem{}
@@ -791,7 +792,7 @@ func (p *InvokerStatusBase) GetHistory() map[int][]int64 {
 
 func NewInvokerStatus(cn string) InvokerStatus {
 	switch cn {
-	case TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_AMM:
+	case TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_LIMITORDER, TEMPLATE_CONTRACT_AMM:
 		return &TraderStatus{}
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		return nil
@@ -3087,7 +3088,7 @@ func GetSupportedContracts() []string {
 		result = append(result, string(c.Content()))
 	}
 
-	c = NewContract(TEMPLATE_CONTRACT_SWAP)
+	c = NewContract(TEMPLATE_CONTRACT_LIMITORDER)
 	if c != nil {
 		result = append(result, string(c.Content()))
 	}
@@ -3129,6 +3130,11 @@ func NewContract(cname string) Contract {
 	case TEMPLATE_CONTRACT_SWAP:
 		return NewSwapContract()
 
+	case TEMPLATE_CONTRACT_LIMITORDER:
+		c := NewSwapContract()
+		c.TemplateName = TEMPLATE_CONTRACT_LIMITORDER
+		return c
+
 	case TEMPLATE_CONTRACT_AMM:
 		return NewAmmContract()
 
@@ -3168,7 +3174,7 @@ func ContractContentUnMarsh(cname string, jsonStr string) (Contract, error) {
 func NewContractRuntime(stp ContractManager, cname string) ContractRuntime {
 	var r ContractRuntime
 	switch cname {
-	case TEMPLATE_CONTRACT_SWAP:
+	case TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_LIMITORDER:
 		return NewSwapContractRuntime(stp)
 
 	case TEMPLATE_CONTRACT_AMM:
