@@ -32,8 +32,8 @@ export interface CredentialVerificationResult {
 }
 
 export const CREDENTIALS_STORAGE_KEY = 'local:wallet_biometric_credentials'
-const PRF_UNAVAILABLE_ERROR = '无法从 WebAuthn PRF 获取加密密钥，无法安全解密钱包密码。请继续使用密码解锁。'
-const WEBAUTHN_OPERATION_TIMEOUT_MS = 12000
+const PRF_UNAVAILABLE_ERROR = '当前浏览器或系统生物识别凭据不支持 WebAuthn PRF，无法安全保存钱包解锁密码。请继续使用密码解锁。'
+const WEBAUTHN_OPERATION_TIMEOUT_MS = 60000
 
 type WebAuthnPrfResults = {
   prf?: {
@@ -93,6 +93,9 @@ const normalizeWebAuthnError = (error: unknown): Error => {
   const message = error instanceof Error ? error.message : String(error)
   if (/TLS certificate|certificate error|secure context|not allowed/i.test(message)) {
     return new Error('生物识别需要没有证书错误的安全 HTTPS 环境。请使用有效证书的 HTTPS 地址，或在本地测试时使用 Chrome 已信任的安全 origin。')
+  }
+  if (/credential manager|unknown error occurred while talking to the credential manager/i.test(message)) {
+    return new Error('Android Credential Manager 无法创建通行密钥。请确认 Chrome、Google Play services 和系统已更新，并已启用屏幕锁/指纹；本次将继续使用密码解锁。')
   }
   return error instanceof Error ? error : new Error(message || 'WebAuthn 操作失败')
 }
@@ -157,7 +160,26 @@ const debugWebAuthn = (phase: string, data: Record<string, unknown>) => {
     ...((window as Window & { __SAT20_WEBAUTHN_DEBUG__?: unknown[] }).__SAT20_WEBAUTHN_DEBUG__ ?? []),
     payload,
   ]
+  ;(window as Window & { __SAT20_WEBAUTHN_SUMMARY__?: () => unknown }).__SAT20_WEBAUTHN_SUMMARY__ = () => ({
+    support: (window as Window & { __SAT20_WEBAUTHN_SUPPORT__?: unknown[] }).__SAT20_WEBAUTHN_SUPPORT__ ?? [],
+    debug: (window as Window & { __SAT20_WEBAUTHN_DEBUG__?: unknown[] }).__SAT20_WEBAUTHN_DEBUG__ ?? [],
+  })
   console.warn(`[SAT20 WebAuthn] ${JSON.stringify(payload)}`)
+}
+
+const isRecoverablePrfModeError = (error: unknown): boolean => {
+  const name = error instanceof DOMException ? error.name : error instanceof Error ? error.name : ''
+  const message = error instanceof Error ? error.message : String(error)
+
+  return name === 'NotSupportedError' ||
+    name === 'SyntaxError' ||
+    /prf|extension|evalByCredential|not supported|unsupported/i.test(message)
+}
+
+const isApplePlatform = (): boolean => /Macintosh|Mac OS X|iPhone|iPad|iPod/i.test(navigator.userAgent)
+
+const getWebAuthnPlatformPath = (): 'apple-tested' | 'passkeyprf' => {
+  return isApplePlatform() ? 'apple-tested' : 'passkeyprf'
 }
 
 const deriveAesKey = async (prfOutput: ArrayBuffer): Promise<CryptoKey> => {
@@ -265,6 +287,11 @@ export class BiometricCredentialManager {
     return prf?.results?.first
   }
 
+  private readPrfEnabled(credential: PublicKeyCredential): boolean {
+    const extensionResults = credential.getClientExtensionResults() as WebAuthnPrfResults
+    return extensionResults.prf?.enabled === true
+  }
+
   private async createWebAuthnCredential(salt: Uint8Array): Promise<{
     credentialId: string
     prfOutput?: ArrayBuffer
@@ -274,6 +301,44 @@ export class BiometricCredentialManager {
 
     let credential: PublicKeyCredential | null
     try {
+      const platformPath = getWebAuthnPlatformPath()
+      const useApplePlatformPath = platformPath === 'apple-tested'
+
+      debugWebAuthn('create-start', {
+        rpId: this.getRpId(),
+        platformPath,
+        residentKey: useApplePlatformPath ? 'discouraged' : 'required',
+        userVerification: 'required',
+        requestCreatePrf: useApplePlatformPath ? 'eval' : 'capability',
+      })
+
+      const extensions = useApplePlatformPath
+        ? {
+            credProps: true,
+            prf: {
+              eval: {
+                first: salt,
+              },
+            },
+          }
+        : {
+            credProps: true,
+            prf: {},
+          }
+
+      const authenticatorSelection = useApplePlatformPath
+        ? {
+            authenticatorAttachment: 'platform',
+            residentKey: 'discouraged',
+            requireResidentKey: false,
+            userVerification: 'required',
+          }
+        : {
+            authenticatorAttachment: 'platform',
+            residentKey: 'required',
+            userVerification: 'required',
+          }
+
       credential = await withWebAuthnTimeout((signal) => navigator.credentials.create({
         publicKey: {
           challenge: randomBytes(32),
@@ -290,22 +355,10 @@ export class BiometricCredentialManager {
             { type: 'public-key', alg: -7 },
             { type: 'public-key', alg: -257 },
           ],
-          authenticatorSelection: {
-            authenticatorAttachment: 'platform',
-            residentKey: 'required',
-            requireResidentKey: true,
-            userVerification: 'required',
-          },
+          authenticatorSelection,
           attestation: 'none',
           timeout: WEBAUTHN_OPERATION_TIMEOUT_MS,
-          extensions: {
-            credProps: true,
-            prf: {
-              eval: {
-                first: salt,
-              },
-            },
-          } as any,
+          extensions: extensions as any,
         },
         signal,
       } as any) as Promise<PublicKeyCredential | null>, 'WebAuthn credential creation')
@@ -330,9 +383,14 @@ export class BiometricCredentialManager {
       prf: describePrfResults(credential),
     })
 
+    const prfOutput = this.readPrfOutput(credential)
+    if (!isApplePlatform() && !this.readPrfEnabled(credential)) {
+      throw new Error(PRF_UNAVAILABLE_ERROR)
+    }
+
     return {
       credentialId: toBase64Url(credential.rawId),
-      prfOutput: this.readPrfOutput(credential),
+      prfOutput,
       transports,
     }
   }
@@ -368,7 +426,6 @@ export class BiometricCredentialManager {
             {
               id: fromBase64Url(credential.id),
               type: 'public-key',
-              transports: credential.transports?.length ? credential.transports : undefined,
             },
           ],
           userVerification: 'required',
@@ -404,15 +461,31 @@ export class BiometricCredentialManager {
   }> {
     const modes: WebAuthnPrfMode[] = credential.prfMode
       ? [credential.prfMode, credential.prfMode === 'evalByCredential' ? 'eval' : 'evalByCredential']
-      : ['evalByCredential', 'eval']
+      : isApplePlatform() ? ['evalByCredential', 'eval'] : ['eval', 'evalByCredential']
 
     for (const mode of modes) {
-      const output = await this.tryGetPrfOutput(credential, mode)
-      if (output) {
-        return { output, mode }
+      try {
+        const output = await this.tryGetPrfOutput(credential, mode)
+        if (output) {
+          return { output, mode }
+        }
+      } catch (error) {
+        debugWebAuthn('get-prf-mode-failed', {
+          mode,
+          credentialId: credential.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+
+        if (!isRecoverablePrfModeError(error)) {
+          throw error
+        }
       }
     }
 
+    debugWebAuthn('get-prf-unavailable', {
+      credentialId: credential.id,
+      modes,
+    })
     throw new Error(PRF_UNAVAILABLE_ERROR)
   }
 
@@ -432,14 +505,6 @@ export class BiometricCredentialManager {
     try {
       await this.ensureLoaded()
 
-      const supportCheck = await this.checkBiometricSupport()
-      if (!supportCheck.available) {
-        return {
-          success: false,
-          error: supportCheck.error || '设备不支持生物识别或未设置',
-        }
-      }
-
       const salt = randomBytes(32)
       const createdCredential = await this.createWebAuthnCredential(salt)
       const credentialId = createdCredential.credentialId
@@ -454,13 +519,12 @@ export class BiometricCredentialManager {
         transports: createdCredential.transports,
       }
 
-      let encrypted: { iv: string; encryptedPassword: string }
-      if (createdCredential.prfOutput) {
-        credential.prfMode = 'evalByCredential'
-        encrypted = await encryptPasswordWithPrf(hashedPassword, createdCredential.prfOutput)
-      } else {
-        throw new Error(PRF_UNAVAILABLE_ERROR)
-      }
+      const prfResult = createdCredential.prfOutput
+        ? { output: createdCredential.prfOutput, mode: 'eval' as WebAuthnPrfMode }
+        : await this.getPrfOutput(credential)
+
+      credential.prfMode = prfResult.mode
+      const encrypted = await encryptPasswordWithPrf(hashedPassword, prfResult.output)
 
       credential.iv = encrypted.iv
       credential.encryptedPassword = encrypted.encryptedPassword

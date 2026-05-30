@@ -1,7 +1,9 @@
 {
-  "version": "0.1.32",
+  "version": "0.1.33",
+  "buildId": "20260530T071925Z",
+  "commit": "29f3c407da3b",
   "releaseNotes": "Android 生物识别仅允许 HTTPS 环境",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-03-06T23:45:00.000Z"
+  "publishedAt": "2026-05-30T07:19:25.580Z"
 }

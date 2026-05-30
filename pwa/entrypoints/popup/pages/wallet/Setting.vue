@@ -34,7 +34,7 @@
         </a> -->
       </div>
       <div class="flex items-center gap-2 text-sm text-muted-foreground">
-        <span>{{ $t('setting.version') }}: {{ version }}</span>
+        <span>{{ $t('setting.version') }}: {{ versionDisplay }}</span>
         <Button
           variant="ghost"
           size="sm"
@@ -47,7 +47,7 @@
             class="h-3.5 w-3.5"
             :class="{ 'animate-spin': isChecking || isUpdating }"
           />
-          {{ isChecking || isUpdating ? $t('setting.updating') : $t('setting.checkAndUpdate') }}
+          {{ isChecking ? $t('setting.checking') : (isUpdating ? $t('setting.updating') : $t('setting.checkAndUpdate')) }}
         </Button>
       </div>
     </div>
@@ -65,8 +65,7 @@ import ReferrerSetting from '@/components/setting/ReferrerSetting.vue'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Icon } from '@iconify/vue'
-import { version } from '@/package.json'
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useTranscendingModeStore } from '@/store'
 import { useAppVersion } from '@/composables/useAppVersion'
 
@@ -77,5 +76,6 @@ const transcendingModeStore = useTranscendingModeStore()
 
 const isOpen = ref(false);
 
-const { isChecking, isUpdating, checkAndUpdate } = useAppVersion()
+const { isChecking, isUpdating, checkAndUpdate, localVersion, localBuildId } = useAppVersion()
+const versionDisplay = computed(() => localBuildId ? `${localVersion}+${localBuildId}` : localVersion)
 </script>

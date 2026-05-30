@@ -168,14 +168,18 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useGlobalStore } from '@/store/global'
+import { useWalletStore } from '@/store/wallet'
 import { storeToRefs } from 'pinia'
+import { biometricService } from '@/utils/biometric'
+import { biometricCredentialManager } from '@/utils/biometricCredentials'
 
 const { t } = useI18n()
-const BIOMETRIC_UI_TIMEOUT_MS = 12000
+const BIOMETRIC_UI_TIMEOUT_MS = 60000
 const BIOMETRIC_UNSUPPORTED_ORIGIN_ERROR = '当前环境不能安全启用生物识别。请使用有效 HTTPS 地址，或在 Android 调试时通过 adb reverse 使用 http://localhost:5173。'
 
 const isExpanded = ref(false)
 const globalStore = useGlobalStore()
+const walletStore = useWalletStore()
 const { autoLockTime, hideBalance } = storeToRefs(globalStore)
 
 // 生物识别相关状态
@@ -194,6 +198,7 @@ const biometricStatus = ref<{
   supported: boolean
   available: boolean
   biometryType?: string
+  capabilities?: Record<string, boolean | undefined>
   error?: string
 }>({
   supported: false,
@@ -214,6 +219,20 @@ const showAlert = (message: string, type: 'info' | 'warning' | 'error' | 'succes
       alertDialog.value.open = false
     }, 3000)
   }
+}
+
+const markBiometricUnavailable = (message: string) => {
+  biometricStatus.value = {
+    supported: true,
+    available: false,
+    error: message,
+  }
+  hasCredentials.value = false
+  biometricEnabled.value = false
+}
+
+const isBiometricUnavailableError = (message: string) => {
+  return /WebAuthn PRF|Credential Manager|不支持|无法安全保存|超时|timed out|not supported/i.test(message)
 }
 
 // 显示确认对话框 - 使用浏览器原生confirm
@@ -256,7 +275,7 @@ const withBiometricTimeout = async <T,>(promise: Promise<T>): Promise<T> => {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error('生物识别验证超时。当前浏览器或安装环境没有返回系统验证结果，请使用有效 HTTPS 或 Android localhost 安全 origin 后重试。')), BIOMETRIC_UI_TIMEOUT_MS)
+      setTimeout(() => reject(new Error('生物识别验证超时。当前浏览器或安装环境没有返回系统验证结果，请使用密码解锁后重试。')), BIOMETRIC_UI_TIMEOUT_MS)
     }),
   ])
 }
@@ -272,11 +291,10 @@ const toggleHideBalance = async () => {
 // 检查生物识别支持
 const checkBiometricSupport = async () => {
   try {
-    const result = await import('@/utils/biometric').then(module => module.biometricService.checkBiometricSupport())
+    const result = await biometricService.checkBiometricSupport()
     biometricStatus.value = result
     // 在原生环境中检查是否有活跃凭据来确定启用状态
     if (result.supported) {
-      const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
       biometricEnabled.value = await biometricCredentialManager.hasActiveCredentials()
     }
   } catch (error) {
@@ -292,7 +310,6 @@ const checkBiometricSupport = async () => {
 // 检查凭据状态
 const checkCredentialStatus = async () => {
   try {
-    const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
     hasCredentials.value = await biometricCredentialManager.hasActiveCredentials()
     biometricEnabled.value = hasCredentials.value
   } catch (error) {
@@ -322,35 +339,16 @@ const handleBiometricToggle = async (newValue: boolean) => {
 
   try {
     if (newValue) {
-      // 用户尝试开启生物识别
-      const biometricModule = await import('@/utils/biometric')
-      const support = await biometricModule.biometricService.checkBiometricSupport()
-      biometricStatus.value = support
-      if (!support.available) {
-        showAlert(support.error || t('securitySetting.biometricUnavailable'), 'warning')
-        await checkCredentialStatus()
-        return
-      }
-
-      const shouldCreate = await showConfirm(
-        t('securitySetting.createCredentialPrompt', { biometryType: '生物识别' })
-      )
-
-      if (shouldCreate) {
-        const success = await createBiometricCredential()
-        if (success) {
-          biometricEnabled.value = true
-        }
-      } else {
-        await checkCredentialStatus()
+      const success = await createBiometricCredential()
+      if (success) {
+        biometricEnabled.value = true
       }
     } else {
       // 用户关闭生物识别
       const confirmed = await showConfirm(t('securitySetting.disableBiometricConfirm'), 'warning')
 
       if (confirmed) {
-        const credentialsModule = await import('@/utils/biometricCredentials')
-        const result = await credentialsModule.biometricCredentialManager.clearAllCredentials()
+        const result = await biometricCredentialManager.clearAllCredentials()
         if (result.success) {
           hasCredentials.value = false
           biometricEnabled.value = false
@@ -368,9 +366,6 @@ const handleBiometricToggle = async (newValue: boolean) => {
 // 创建生物识别凭据
 const createBiometricCredential = async (): Promise<boolean> => {
   try {
-    // 从全局存储获取当前密码
-    const walletStore = (await import('@/store/wallet')).useWalletStore()
-
     // 检查钱包是否已解锁
     if (walletStore.locked) {
       showAlert(t('securitySetting.walletLockedError'), 'error')
@@ -384,9 +379,6 @@ const createBiometricCredential = async (): Promise<boolean> => {
       showAlert(t('securitySetting.passwordRequiredError'), 'error')
       return false
     }
-
-    // 导入生物识别凭据管理器
-    const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
 
     // 创建生物识别凭据（传入哈希密码）
     const result = await withBiometricTimeout(
@@ -402,11 +394,19 @@ const createBiometricCredential = async (): Promise<boolean> => {
       showAlert(t('securitySetting.createCredentialSuccess'), 'success')
       return true
     } else {
-      showAlert(t('securitySetting.createCredentialFailed', { error: result.error || t('securitySetting.unknownError') }), 'error')
+      const message = result.error || t('securitySetting.unknownError')
+      if (isBiometricUnavailableError(message)) {
+        markBiometricUnavailable(message)
+      }
+      showAlert(t('securitySetting.createCredentialFailed', { error: message }), 'error')
       return false
     }
   } catch (error) {
-    showAlert(t('securitySetting.createCredentialFailed', { error: error instanceof Error ? error.message : t('securitySetting.unknownError') }), 'error')
+    const message = error instanceof Error ? error.message : t('securitySetting.unknownError')
+    if (isBiometricUnavailableError(message)) {
+      markBiometricUnavailable(message)
+    }
+    showAlert(t('securitySetting.createCredentialFailed', { error: message }), 'error')
     return false
   } finally {
     biometricLoading.value = false
@@ -423,11 +423,10 @@ const deleteBiometricCredential = async () => {
       return
     }
 
-    const credentialsModule = await import('@/utils/biometricCredentials')
-    const credentials = await credentialsModule.biometricCredentialManager.getActiveCredentials()
+    const credentials = await biometricCredentialManager.getActiveCredentials()
 
     if (credentials.length > 0) {
-      const result = await credentialsModule.biometricCredentialManager.deleteCredential(credentials[0].id)
+      const result = await biometricCredentialManager.deleteCredential(credentials[0].id)
 
       if (result.success) {
         hasCredentials.value = false
@@ -454,7 +453,6 @@ onMounted(async () => {
 onActivated(async () => {
   await checkCredentialStatus()
   // 同步 biometricEnabled 状态
-  const { biometricCredentialManager } = await import('@/utils/biometricCredentials')
   biometricEnabled.value = await biometricCredentialManager.hasActiveCredentials()
 })
 

@@ -1,4 +1,5 @@
-const CACHE_NAME = 'sat20-wallet-pwa-v0.1.32'
+const CACHE_NAME = 'sat20-wallet-pwa-v0.1.33-20260530T071925Z'
+const CACHE_PREFIX = 'sat20-wallet-pwa-'
 const APP_BASE = new URL(self.registration.scope).pathname.replace(/\/$/, '')
 const withBase = (path) => `${APP_BASE}${path}`
 
@@ -23,7 +24,9 @@ const PRECACHE_URLS = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_URLS))
+      .then((cache) => cache.addAll(
+        PRECACHE_URLS.map((url) => new Request(url, { cache: 'reload' }))
+      ))
       .then(() => self.skipWaiting())
   )
 })
@@ -33,7 +36,7 @@ self.addEventListener('activate', (event) => {
     caches.keys()
       .then((keys) => Promise.all(
         keys
-          .filter((key) => key !== CACHE_NAME)
+          .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
           .map((key) => caches.delete(key))
       ))
       .then(() => self.clients.claim())
@@ -60,14 +63,19 @@ self.addEventListener('fetch', (event) => {
 
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match(withBase('/index.html')))
+      fetch(new Request(event.request, { cache: 'no-store' }))
+        .catch(() => caches.match(withBase('/index.html')))
     )
     return
   }
 
-  if (requestUrl.pathname === withBase('/manifest.webmanifest') || requestUrl.pathname === withBase('/version.json')) {
+  if (
+    requestUrl.pathname === withBase('/manifest.webmanifest') ||
+    requestUrl.pathname === withBase('/version.json')
+  ) {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match(event.request))
+      fetch(new Request(event.request, { cache: 'no-store' }))
+        .catch(() => caches.match(event.request))
     )
     return
   }

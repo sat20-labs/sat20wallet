@@ -1,16 +1,20 @@
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/components/ui/toast-new/use-toast'
-import { version as localVersion } from '@/package.json'
 import { usePwaUpdate } from './usePwaUpdate'
 
 export interface RemoteVersionInfo {
   version: string
+  buildId?: string
+  commit?: string
   releaseNotes: string
   forceUpdate: boolean
   minVersion: string
   publishedAt: string
 }
+
+const localVersion = __SAT20_APP_VERSION__
+const localBuildId = __SAT20_BUILD_ID__
 
 function compareVersions(current: string, remote: string): number {
   const currentParts = current.replace('v', '').split('.').map(Number)
@@ -37,9 +41,7 @@ export function useAppVersion() {
   const isForceUpdate = ref(false)
   const lastCheckedVersion = ref<string | null>(null)
   const versionUrl = import.meta.env.VITE_SAT20_VERSION_URL
-    || (import.meta.env.DEV
-      ? `${import.meta.env.BASE_URL}version.json`
-      : 'https://raw.githubusercontent.com/sat20-labs/sat20wallet/main/version.json')
+    || `${import.meta.env.BASE_URL}version.json`
 
   // 检查是否已经提醒过当前版本（避免重复提醒）
   const shouldShowNotification = (version: string): boolean => {
@@ -108,8 +110,9 @@ export function useAppVersion() {
 
       remoteVersion.value = info
       const comparison = compareVersions(localVersion, info.version)
+      const buildChanged = comparison === 0 && Boolean(info.buildId) && info.buildId !== localBuildId
 
-      hasUpdate.value = comparison > 0
+      hasUpdate.value = comparison > 0 || buildChanged
       isForceUpdate.value = info.forceUpdate
 
       if (hasUpdate.value) {
@@ -161,7 +164,9 @@ export function useAppVersion() {
 
       remoteVersion.value = info
       const comparison = compareVersions(localVersion, info.version)
-      hasUpdate.value = comparison > 0
+      const buildChanged = comparison === 0 && Boolean(info.buildId) && info.buildId !== localBuildId
+
+      hasUpdate.value = comparison > 0 || buildChanged
       isForceUpdate.value = info.forceUpdate
 
       if (!hasUpdate.value) {
@@ -177,8 +182,8 @@ export function useAppVersion() {
         variant: 'info',
         title: t('setting.updateAvailableTitle'),
         description: t('setting.updatingVersionDescription', {
-          current: localVersion,
-          latest: info.version,
+          current: localBuildId ? `${localVersion}+${localBuildId}` : localVersion,
+          latest: info.buildId ? `${info.version}+${info.buildId}` : info.version,
         }),
         duration: 3000,
       })
@@ -204,6 +209,7 @@ export function useAppVersion() {
     remoteVersion,
     isForceUpdate,
     localVersion,
+    localBuildId,
     checkForUpdates,
     checkAndUpdate,
     manualCheck,

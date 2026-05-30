@@ -53,6 +53,47 @@ const registerServiceWorker = () => {
   }
 }
 
+const renderStartupError = (error: unknown) => {
+  console.error('SAT20 Wallet startup failed:', error)
+  const appRoot = document.getElementById('app')
+  if (!appRoot) return
+
+  appRoot.innerHTML = `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#09090b;color:#f4f4f5;padding:24px;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+      <div style="max-width:420px;width:100%;border:1px solid rgba(244,244,245,.14);border-radius:8px;padding:20px;background:#18181b;">
+        <h1 style="font-size:18px;margin:0 0 10px;">SAT20 Wallet failed to start</h1>
+        <p style="font-size:14px;line-height:1.55;color:#d4d4d8;margin:0 0 16px;">The app cache may be inconsistent after an update. Wallet data is kept locally; clearing the app shell cache will not delete the wallet.</p>
+        <button id="sat20-recover-cache" style="width:100%;height:40px;border:0;border-radius:6px;background:#f4f4f5;color:#09090b;font-weight:600;">Clear cache and reload</button>
+        <p style="font-size:12px;line-height:1.45;color:#a1a1aa;margin:14px 0 0;">If this screen remains, clear sat20.org site data from the browser settings and open the wallet again.</p>
+      </div>
+    </div>
+  `
+
+  document.getElementById('sat20-recover-cache')?.addEventListener('click', async () => {
+    try {
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations()
+        await Promise.all(
+          registrations
+            .filter((registration) => registration.scope.includes('/pwa/'))
+            .map((registration) => registration.unregister())
+        )
+      }
+
+      if ('caches' in window) {
+        const keys = await caches.keys()
+        await Promise.all(
+          keys
+            .filter((key) => key.startsWith('sat20-wallet-pwa-'))
+            .map((key) => caches.delete(key))
+        )
+      }
+    } finally {
+      window.location.replace(`${import.meta.env.BASE_URL}?recover=${Date.now()}`)
+    }
+  })
+}
+
 loadWasm().then(async () => {
   // 在应用启动时初始化存储状态
   await walletStorage.initializeState()
@@ -90,7 +131,7 @@ loadWasm().then(async () => {
   }
 
   registerServiceWorker()
-});
+}).catch(renderStartupError);
 
 export const setLanguage = (locale: Language) => {
   i18n.global.locale.value = locale
