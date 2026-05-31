@@ -37,6 +37,7 @@ const (
 	TEMPLATE_CONTRACT_LIMITORDER string = "limitorder.tc"
 	TEMPLATE_CONTRACT_SWAP       string = "swap.tc" // legacy name for limitorder.tc
 	TEMPLATE_CONTRACT_AMM        string = "amm.tc"
+	TEMPLATE_CONTRACT_EXCHANGE   string = "exchange.tc"
 	TEMPLATE_CONTRACT_TRANSCEND  string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
 	TEMPLATE_CONTRACT_RECYCLE    string = "recycle.tc"
 	TEMPLATE_CONTRACT_DAO        string = "dao.tc"
