@@ -751,15 +751,15 @@ func agentInvokeParam(req *AgentContractInvokeRequest) ([]byte, error) {
 }
 
 func (p *Manager) agentGasAssetAmount(baseGas uint64, override uint64, gasAssetName string) (uint64, string, error) {
-	if gasAssetName == "" {
-		gasAssetName = agentcontract.DefaultGasConfig().GasAssetName
-	}
-	if override != 0 {
-		return override, gasAssetName, nil
-	}
 	height := p.l2IndexerClient.GetBestHeight()
 	if height < 0 {
 		height = 0
+	}
+	if gasAssetName == "" {
+		gasAssetName = contractcommon.GasAssetNameAtHeight(int64(height) + 1)
+	}
+	if override != 0 {
+		return override, gasAssetName, nil
 	}
 	amount, err := contractcommon.GasFeeAtHeight(baseGas, uint64(height))
 	if err != nil {
@@ -1236,15 +1236,15 @@ func (p *Manager) evmBaseGasFee(baseGas uint64) (uint64, error) {
 }
 
 func (p *Manager) evmGasAssetAmount(gasLimit uint64, needsResult bool, override uint64, gasAssetName string) (uint64, string, error) {
-	if gasAssetName == "" {
-		gasAssetName = contractcommon.GasAssetName
-	}
-	if override != 0 {
-		return override, gasAssetName, nil
-	}
 	height := p.l2IndexerClient.GetBestHeight()
 	if height < 0 {
 		height = 0
+	}
+	if gasAssetName == "" {
+		gasAssetName = contractcommon.GasAssetNameAtHeight(int64(height) + 1)
+	}
+	if override != 0 {
+		return override, gasAssetName, nil
 	}
 	amount, err := contractcommon.GasFeeAtHeight(gasLimit, uint64(height))
 	if err != nil {
