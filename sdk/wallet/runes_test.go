@@ -35,11 +35,9 @@ func TestRunePayload(t *testing.T) {
 	fmt.Printf("len: %d\n %s\n", len(payload), hex.EncodeToString(payload))
 }
 
-
-
 func TestParseRuneEtching(t *testing.T) {
 	// hexPayload := "6a5d18020104eb8385e294b4e2f718033005964e0680e8e6a78e06" // RUNESXBITCOIN
-	hexPayload := "6a5d2102010487a1c3f0c0ebf7fb9d01010503d4040595e80706808084fea6dee1111601"  // DOGGOTOTHEMOON
+	hexPayload := "6a5d2102010487a1c3f0c0ebf7fb9d01010503d4040595e80706808084fea6dee1111601" // DOGGOTOTHEMOON
 	paylaod, _ := hex.DecodeString(hexPayload)
 
 	stone := runestone.Runestone{}
@@ -52,13 +50,13 @@ func TestParseRuneEtching(t *testing.T) {
 	fmt.Printf("Etching: %v\n", result.Runestone.Etching)
 
 	fmt.Printf("Mint:\n %v", result.Runestone.Mint)
-	
+
 	fmt.Printf("edicts:\n")
 	for _, v := range result.Runestone.Edicts {
 		fmt.Printf("%v\n", v)
 	}
 
-	fmt.Printf("Pointer :%v\n", *result.Runestone.Pointer )  // output index
+	fmt.Printf("Pointer :%v\n", *result.Runestone.Pointer) // output index
 }
 
 func printEtching(etching *runestone.Etching) {
@@ -76,12 +74,12 @@ func printEtching(etching *runestone.Etching) {
 		fmt.Printf("Terms: %v", *etching.Terms)
 	}
 	fmt.Printf("Turbo: %v\n", etching.Turbo)
-	
+
 }
 
 func TestRuneEtching(t *testing.T) {
-	
-	// symbol: UTF-16BE	
+
+	// symbol: UTF-16BE
 	etching, err := GenEtching("MMMM•TEST•HHHH•MMMM", 0x058D, 100000000)
 	//etching, err := GenEtching("DOG•GO•TO•THE•MOON", 0x058D, 100000000)
 	if err != nil {
@@ -90,7 +88,7 @@ func TestRuneEtching(t *testing.T) {
 
 	printEtching(etching)
 
-	// check 
+	// check
 	runeCommit := etching.Rune.Commitment()
 	rune := runestone.NewRune(indexer.ParseRunesName(runeCommit))
 	fmt.Printf("%s\n", rune.String())
@@ -107,8 +105,7 @@ func TestRuneEtching(t *testing.T) {
 		t.Fatal(err)
 	}
 
-
-	hexPayload := "6a5d19020104baa392f5d488e9d1cc9a13038811058d0b0680c2d72f" 
+	hexPayload := "6a5d19020104baa392f5d488e9d1cc9a13038811058d0b0680c2d72f"
 	payload, _ := hex.DecodeString(hexPayload)
 
 	if !bytes.Equal(nullData, payload) {
@@ -121,7 +118,49 @@ func TestRuneEtching(t *testing.T) {
 	}
 
 	printEtching(result.Runestone.Etching)
-	
+
+}
+
+func TestRuneEtchingWithTerms(t *testing.T) {
+	selfMintEtching, err := GenEtchingWithTerms("MMMM•SELF•HHHH•MMMM", 'S', 100000000, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selfMintEtching.Premine == nil || selfMintEtching.Premine.Lo != 100000000 {
+		t.Fatalf("unexpected self-mint premine: %+v", selfMintEtching.Premine)
+	}
+	if selfMintEtching.Terms != nil {
+		t.Fatalf("self-mint etching should not have terms: %+v", selfMintEtching.Terms)
+	}
+
+	openMintEtching, err := GenEtchingWithTerms("MMMM•OPEN•HHHH•MMMM", 'O', 100000000, 10000, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openMintEtching.Premine != nil {
+		t.Fatalf("open-mint etching should not have premine: %+v", openMintEtching.Premine)
+	}
+	if openMintEtching.Terms == nil || openMintEtching.Terms.Amount == nil || openMintEtching.Terms.Cap == nil {
+		t.Fatalf("open-mint etching should have amount and cap: %+v", openMintEtching.Terms)
+	}
+	if openMintEtching.Terms.Amount.Lo != 10000 || openMintEtching.Terms.Cap.Lo != 10000 {
+		t.Fatalf("unexpected open-mint terms: %+v", openMintEtching.Terms)
+	}
+
+	stone := runestone.Runestone{Etching: openMintEtching}
+	payload, err := stone.Encipher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := stone.DecipherFromPkScript(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Runestone.Etching.Terms == nil ||
+		decoded.Runestone.Etching.Terms.Amount.Lo != 10000 ||
+		decoded.Runestone.Etching.Terms.Cap.Lo != 10000 {
+		t.Fatalf("decoded open-mint terms mismatch: %+v", decoded.Runestone.Etching.Terms)
+	}
 }
 
 /*
@@ -229,9 +268,8 @@ https://www.oklink.com/zh-hans/bitcoin/tx/9327998a4aee68a6792db8b00540976ebf81b3
 
 func TestParseOrdinals(t *testing.T) {
 
-	witnessHex := "20db8fe1cebdd4720fedf41695e42e92f4a205d581ea90abce5ceae951d955a02aac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004ca97b2270223a226f726478222c226f70223a226465706c6f79222c227469636b223a2274657374646f67222c226d6178223a223231303030222c226c696d223a223231303030222c226e223a22313030222c2273656c66223a22313030222c22646573223a22303336376632366166323364633430666461643036373532633338323634666536323162376262616662316434316162343336623837646564313932663133333665227d68" 
+	witnessHex := "20db8fe1cebdd4720fedf41695e42e92f4a205d581ea90abce5ceae951d955a02aac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004ca97b2270223a226f726478222c226f70223a226465706c6f79222c227469636b223a2274657374646f67222c226d6178223a223231303030222c226c696d223a223231303030222c226e223a22313030222c2273656c66223a22313030222c22646573223a22303336376632366166323364633430666461643036373532633338323634666536323162376262616662316434316162343336623837646564313932663133333665227d68"
 	witness, _ := hex.DecodeString(witnessHex)
-
 
 	inscriptions, _, err := indexer.ParseInscription([][]byte{witness})
 	if err != nil {
@@ -242,7 +280,7 @@ func TestParseOrdinals(t *testing.T) {
 		for field, content := range v {
 			fmt.Printf("field %d\n", field)
 			if field == 11 {
-				fmt.Printf("inscriptionId: %s\n", indexer.ParseInscriptionId(content)) 
+				fmt.Printf("inscriptionId: %s\n", indexer.ParseInscriptionId(content))
 			} else if field == 13 {
 				runes := runestone.NewRune(indexer.ParseRunesName(content))
 				fmt.Printf("runes name: %s\n", runes.String()) // 9df7df5c0e10d087
@@ -253,4 +291,3 @@ func TestParseOrdinals(t *testing.T) {
 	}
 	fmt.Printf("\n")
 }
-

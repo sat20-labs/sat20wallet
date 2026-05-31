@@ -68,23 +68,51 @@ func DecipherRunePayload(pkScript []byte) ([]runestone.Edict, error) {
 	return result.Runestone.Edicts, nil
 }
 
-// 定制的铸造
 func GenEtching(displayName string, symbol int32, maxSupply int64) (*runestone.Etching, error) {
+	return GenEtchingWithTerms(displayName, symbol, maxSupply, 0, true)
+}
+
+// 定制的铸造
+func GenEtchingWithTerms(displayName string, symbol int32, maxSupply, limit int64, selfMint bool) (*runestone.Etching, error) {
+	if maxSupply <= 0 {
+		return nil, fmt.Errorf("invalid max supply %d", maxSupply)
+	}
+	if !selfMint {
+		if limit <= 0 {
+			return nil, fmt.Errorf("invalid mint limit %d", limit)
+		}
+		if maxSupply%limit != 0 {
+			return nil, fmt.Errorf("max supply %d must be divisible by mint limit %d", maxSupply, limit)
+		}
+	}
+
 	spacerRune, err := runestone.SpacedRuneFromString(displayName)
 	if err != nil {
 		Log.Errorf("SpacedRuneFromString %s failed, %v", displayName, err)
 		return nil, err
 	}
 
-	premine := uint128.New(uint64(maxSupply), 0)
+	var premine *uint128.Uint128
+	var terms *runestone.Terms
+	if selfMint {
+		v := uint128.New(uint64(maxSupply), 0)
+		premine = &v
+	} else {
+		amount := uint128.New(uint64(limit), 0)
+		cap := uint128.New(uint64(maxSupply/limit), 0)
+		terms = &runestone.Terms{
+			Amount: &amount,
+			Cap:    &cap,
+		}
+	}
 
 	return &runestone.Etching{
 		Divisibility: nil,
-		Premine:      &premine,
+		Premine:      premine,
 		Rune:         &spacerRune.Rune,
 		Spacers:      &spacerRune.Spacers,
 		Symbol:       &symbol,
-		Terms:        nil,
+		Terms:        terms,
 		Turbo:        false,
 	}, nil
 }
@@ -106,6 +134,30 @@ func EstimatedDeployRunesNameFee(inputLen int, feeRate int64) int64 {
 }
 
 func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
+	feeRate int64, commitTxPrevOutputList []*PrevOutput) (*InscribeResv, error) {
+	txs, err := p.PrepareInscribeRunes(address, runeName, nullData, feeRate, commitTxPrevOutputList)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = p.BroadcastRunesDeployCommit(txs)
+	if err != nil {
+		return nil, err
+	}
+
+	// 等待6个确认后才能发送etching指令
+	return txs, nil
+}
+
+func (p *Manager) saveInscribeResv(resv *InscribeResv) error {
+	p.mutex.Lock()
+	p.inscibeMap[resv.Id] = resv
+	p.mutex.Unlock()
+
+	return SaveInscribeResv(p.db, resv)
+}
+
+func (p *Manager) PrepareInscribeRunes(address string, runeName, nullData []byte,
 	feeRate int64, commitTxPrevOutputList []*PrevOutput) (*InscribeResv, error) {
 	wallet := p.wallet
 	changeAddr := wallet.GetAddress()
@@ -141,34 +193,86 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 		return nil, err
 	}
 
-	commitTxId, err := p.BroadcastTx(txs.CommitTx)
+	txs.Status = RS_INSCRIBING_START
+	err = p.saveInscribeResv(txs)
 	if err != nil {
 		return nil, err
 	}
+	p.utxoLockerL1.LockUtxosWithTx(txs.CommitTx)
+
+	return txs, nil
+}
+
+func RunesDeployRequiredFee(resv *InscribeResv) int64 {
+	if resv == nil {
+		return 0
+	}
+
+	revealOutValue := int64(0)
+	if resv.RevealTx != nil {
+		for _, out := range resv.RevealTx.TxOut {
+			if !IsOpReturn(out.PkScript) {
+				revealOutValue += out.Value
+			}
+		}
+	}
+
+	return resv.CommitTxFee + resv.RevealTxFee + revealOutValue
+}
+
+func (p *Manager) BroadcastRunesDeployCommit(resv *InscribeResv) (string, error) {
+	if resv == nil || resv.CommitTx == nil {
+		return "", fmt.Errorf("invalid runes deploy reservation")
+	}
+	if resv.Status >= RS_INSCRIBING_COMMIT_BROADCASTED {
+		return resv.CommitTx.TxID(), nil
+	}
+
+	commitTxId, err := p.BroadcastTx(resv.CommitTx)
+	if err != nil {
+		return "", err
+	}
 	Log.Infof("commit txid: %s", commitTxId)
 
-	// 缓存
-	txs.Status = RS_INSCRIBING_COMMIT_BROADCASTED
-	SaveInscribeResv(p.db, txs)
+	resv.Status = RS_INSCRIBING_COMMIT_BROADCASTED
+	err = p.saveInscribeResv(resv)
+	if err != nil {
+		return "", err
+	}
 
-	// 等待6个确认后才能发送etching指令
-	return txs, nil
+	return commitTxId, nil
+}
 
-	// revealTxId, err := p.BroadcastTx(txs.RevealTx)
-	// if err != nil {
-	// 	// 缓存数据，确保可以取回资金
-	// 	return txs, err
-	// }
-	// Log.Infof("reveal txid: %s", revealTxId)
+func (p *Manager) BroadcastRunesDeployReveal(resv *InscribeResv) (string, error) {
+	if resv == nil || resv.RevealTx == nil {
+		return "", fmt.Errorf("invalid runes deploy reservation")
+	}
+	if resv.Status >= RS_INSCRIBING_REVEAL_BROADCASTED {
+		return resv.RevealTx.TxID(), nil
+	}
 
-	// txs.Status = RS_INSCRIBING_REVEAL_BROADCASTED
-	// saveReservation(p.db, txs)
+	revealTxId, err := p.BroadcastTx(resv.RevealTx)
+	if err != nil {
+		return "", err
+	}
+	Log.Infof("reveal txid: %s", revealTxId)
 
-	// return txs, nil
+	resv.Status = RS_INSCRIBING_REVEAL_BROADCASTED
+	err = p.saveInscribeResv(resv)
+	if err != nil {
+		return "", err
+	}
+
+	return revealTxId, nil
 }
 
 func (p *Manager) DeployTicker_runes(destAddr string, ticker string, symbol int32,
 	max, feeRate int64) (*InscribeResv, error) {
+	return p.DeployTicker_runesWithTerms(destAddr, ticker, symbol, max, 0, true, feeRate)
+}
+
+func (p *Manager) DeployTicker_runesWithTerms(destAddr string, ticker string, symbol int32,
+	max, limit int64, selfMint bool, feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
 	address := wallet.GetAddress()
@@ -176,7 +280,7 @@ func (p *Manager) DeployTicker_runes(destAddr string, ticker string, symbol int3
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
 	}
-	etching, err := GenEtching(ticker, symbol, max)
+	etching, err := GenEtchingWithTerms(ticker, symbol, max, limit, selfMint)
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +317,59 @@ func (p *Manager) DeployTicker_runes(destAddr string, ticker string, symbol int3
 	}
 
 	return p.inscribeRunes(destAddr, etching.Rune.Commitment(), nullData, feeRate, commitTxPrevOutputList)
+}
+
+func (p *Manager) PrepareDeployTicker_runes(destAddr string, ticker string, symbol int32,
+	max, feeRate int64) (*InscribeResv, error) {
+	return p.PrepareDeployTicker_runesWithTerms(destAddr, ticker, symbol, max, 0, true, feeRate)
+}
+
+func (p *Manager) PrepareDeployTicker_runesWithTerms(destAddr string, ticker string, symbol int32,
+	max, limit int64, selfMint bool, feeRate int64) (*InscribeResv, error) {
+
+	wallet := p.wallet
+	address := wallet.GetAddress()
+
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
+	etching, err := GenEtchingWithTerms(ticker, symbol, max, limit, selfMint)
+	if err != nil {
+		return nil, err
+	}
+	stone := runestone.Runestone{
+		Etching: etching,
+	}
+	nullData, err := stone.Encipher()
+	if err != nil {
+		return nil, err
+	}
+
+	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
+	if len(utxos) == 0 {
+		return nil, fmt.Errorf("no utxos for fee")
+	}
+
+	p.utxoLockerL1.Reload(address)
+	commitTxPrevOutputList := make([]*PrevOutput, 0)
+	total := int64(0)
+	estimatedFee := int64(0)
+	for _, u := range utxos {
+		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+			continue
+		}
+		total += u.Value
+		commitTxPrevOutputList = append(commitTxPrevOutputList, u.ToTxOutput())
+		estimatedFee = EstimatedDeployRunesNameFee(len(commitTxPrevOutputList), feeRate)
+		if total >= estimatedFee {
+			break
+		}
+	}
+	if total < estimatedFee {
+		return nil, fmt.Errorf("no enough utxos for fee")
+	}
+
+	return p.PrepareInscribeRunes(destAddr, etching.Rune.Commitment(), nullData, feeRate, commitTxPrevOutputList)
 }
 
 // 需要调用方确保amt<=limit
