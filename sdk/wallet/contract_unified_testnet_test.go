@@ -121,6 +121,214 @@ func TestUnifiedEVMDeployInvoke_testnet(t *testing.T) {
 	}
 }
 
+func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
+	if os.Getenv("SAT20WALLET_CONTRACT_TESTNET") != "1" {
+		t.Skip("set SAT20WALLET_CONTRACT_TESTNET=1 to spend testnet gas and test default template invokes")
+	}
+	manager := newContractTestnetManager(t)
+
+	limitOrder := NewContract(TEMPLATE_CONTRACT_LIMITORDER)
+	if limitOrder == nil {
+		t.Fatalf("NewContract(%s) returned nil", TEMPLATE_CONTRACT_LIMITORDER)
+	}
+	limitOrder.GetContractBase().AssetName = *ParseAssetString(unifiedTemplateTestAsset)
+	limitStartHeight := manager.l2IndexerClient.GetBestHeight()
+	limitDeploy, err := manager.DeployUnifiedContract(&ContractDeployRequest{
+		ContractType: ContractTypeTemplate,
+		Template: &TemplateContractDeployRequest{
+			TemplateName:    TEMPLATE_CONTRACT_LIMITORDER,
+			ContractContent: string(limitOrder.Content()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Deploy limitorder failed: %v", err)
+	}
+	t.Logf("limitorder deploy result: %+v", limitDeploy)
+	if err := waitL2HeightAbove(t, manager, limitStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("limitorder deploy was not confirmed: %v", err)
+	}
+	if err := waitContractIndexed(t, manager, limitDeploy.ContractAddress, 2*time.Minute); err != nil {
+		t.Fatalf("limitorder was not indexed after deploy: %v", err)
+	}
+
+	limitSellGas, _, err := manager.templateGasAssetAmount(contractcommon.InvokeBaseGas, true, 0, "")
+	if err != nil {
+		t.Fatalf("estimate limitorder sell gas failed: %v", err)
+	}
+	limitSellStartHeight := manager.l2IndexerClient.GetBestHeight()
+	limitSell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType: ContractTypeTemplate,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: limitDeploy.ContractAddress,
+			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
+				OrderType: ORDERTYPE_SELL,
+				AssetName: unifiedTemplateTestAsset,
+				Amt:       "1",
+				UnitPrice: "1",
+			}),
+			CallNonce:      uint64(time.Now().UnixNano()),
+			GasAssetAmount: limitSellGas + 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Invoke limitorder sell failed: %v", err)
+	}
+	t.Logf("limitorder sell result: %+v", limitSell)
+	if err := waitL2HeightAbove(t, manager, limitSellStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("limitorder sell was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, limitDeploy.ContractAddress, 1, 2*time.Minute); err != nil {
+		t.Fatalf("limitorder sell was not indexed: %v", err)
+	}
+
+	limitDefaultStartHeight := manager.l2IndexerClient.GetBestHeight()
+	limitDefaultBuy, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType:  ContractTypeTemplate,
+		DefaultInvoke: true,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: limitDeploy.ContractAddress,
+			DefaultInvoke:   true,
+			Value:           1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Default invoke limitorder buy failed: %v", err)
+	}
+	t.Logf("limitorder default buy result: %+v", limitDefaultBuy)
+	if err := waitL2HeightAbove(t, manager, limitDefaultStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("limitorder default buy was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, limitDeploy.ContractAddress, 2, 2*time.Minute); err != nil {
+		t.Fatalf("limitorder default buy was not indexed: %v", err)
+	}
+
+	amm := NewAmmContract()
+	amm.AssetName = *ParseAssetString(unifiedTemplateTestAsset)
+	amm.AssetAmt = "10000"
+	amm.SatValue = 100
+	amm.K = "1000000"
+	ammStartHeight := manager.l2IndexerClient.GetBestHeight()
+	ammDeploy, err := manager.DeployUnifiedContract(&ContractDeployRequest{
+		ContractType: ContractTypeTemplate,
+		Template: &TemplateContractDeployRequest{
+			TemplateName:    TEMPLATE_CONTRACT_AMM,
+			ContractContent: string(amm.Content()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Deploy AMM failed: %v", err)
+	}
+	t.Logf("amm deploy result: %+v", ammDeploy)
+	if err := waitL2HeightAbove(t, manager, ammStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("AMM deploy was not confirmed: %v", err)
+	}
+	if err := waitContractIndexed(t, manager, ammDeploy.ContractAddress, 2*time.Minute); err != nil {
+		t.Fatalf("AMM was not indexed after deploy: %v", err)
+	}
+
+	ammDefaultBuyStartHeight := manager.l2IndexerClient.GetBestHeight()
+	ammDefaultBuy, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType:  ContractTypeTemplate,
+		DefaultInvoke: true,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: ammDeploy.ContractAddress,
+			DefaultInvoke:   true,
+			Value:           1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Default invoke AMM buy failed: %v", err)
+	}
+	t.Logf("amm default buy result: %+v", ammDefaultBuy)
+	if err := waitL2HeightAbove(t, manager, ammDefaultBuyStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("AMM default buy was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 1, 2*time.Minute); err != nil {
+		t.Fatalf("AMM default buy was not indexed: %v", err)
+	}
+
+	ammDefaultSellStartHeight := manager.l2IndexerClient.GetBestHeight()
+	ammDefaultSell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType:  ContractTypeTemplate,
+		DefaultInvoke: true,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: ammDeploy.ContractAddress,
+			DefaultInvoke:   true,
+			AssetName:       unifiedTemplateTestAsset,
+			Amount:          "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Default invoke AMM sell failed: %v", err)
+	}
+	t.Logf("amm default sell result: %+v", ammDefaultSell)
+	if err := waitL2HeightAbove(t, manager, ammDefaultSellStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("AMM default sell was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 2, 2*time.Minute); err != nil {
+		t.Fatalf("AMM default sell was not indexed: %v", err)
+	}
+}
+
+func TestUnifiedTemplateDefaultInvokeExistingAMM_testnet(t *testing.T) {
+	if os.Getenv("SAT20WALLET_CONTRACT_TESTNET") != "1" {
+		t.Skip("set SAT20WALLET_CONTRACT_TESTNET=1 to spend testnet gas and test default AMM invokes")
+	}
+	manager := newContractTestnetManager(t)
+	ammAddress := findTestnetTemplateContract(t, manager, TEMPLATE_CONTRACT_AMM)
+	beforeInfo, err := manager.QueryContract(&ContractQueryRequest{Query: ContractQueryState, Contract: ammAddress})
+	if err != nil {
+		t.Fatalf("query AMM state failed: %v", err)
+	}
+	beforeCount, err := templateInvokeCount(beforeInfo)
+	if err != nil {
+		t.Fatalf("parse AMM invoke count failed: %v", err)
+	}
+
+	buyStartHeight := manager.l2IndexerClient.GetBestHeight()
+	buy, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType:  ContractTypeTemplate,
+		DefaultInvoke: true,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: ammAddress,
+			DefaultInvoke:   true,
+			Value:           1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Default invoke existing AMM buy failed: %v", err)
+	}
+	t.Logf("existing AMM default buy result: %+v", buy)
+	if err := waitL2HeightAbove(t, manager, buyStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("existing AMM default buy was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, ammAddress, beforeCount+1, 2*time.Minute); err != nil {
+		t.Fatalf("existing AMM default buy was not indexed: %v", err)
+	}
+
+	sellStartHeight := manager.l2IndexerClient.GetBestHeight()
+	sell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType:  ContractTypeTemplate,
+		DefaultInvoke: true,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: ammAddress,
+			DefaultInvoke:   true,
+			AssetName:       unifiedTemplateTestAsset,
+			Amount:          "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Default invoke existing AMM sell failed: %v", err)
+	}
+	t.Logf("existing AMM default sell result: %+v", sell)
+	if err := waitL2HeightAbove(t, manager, sellStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("existing AMM default sell was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, ammAddress, beforeCount+2, 2*time.Minute); err != nil {
+		t.Fatalf("existing AMM default sell was not indexed: %v", err)
+	}
+}
+
 func TestUnifiedAgentPredictionDeployBet_testnet(t *testing.T) {
 	if os.Getenv("SAT20WALLET_CONTRACT_TESTNET") != "1" {
 		t.Skip("set SAT20WALLET_CONTRACT_TESTNET=1 to spend testnet gas and deploy/invoke an agent prediction contract")
@@ -485,6 +693,31 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 	} else {
 		t.Logf("AMM refund rejected as expected: %v", err)
 	}
+}
+
+func findTestnetTemplateContract(t *testing.T, manager *Manager, subtype string) string {
+	t.Helper()
+	result, err := manager.QueryContract(&ContractQueryRequest{Query: ContractQueryList, Start: 0, Limit: 50})
+	if err != nil {
+		t.Fatalf("QueryContract list failed: %v", err)
+	}
+	var root struct {
+		Data []struct {
+			Address string `json:"address"`
+			Name    string `json:"name"`
+			Subtype string `json:"subtype"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(result), &root); err != nil {
+		t.Fatalf("unmarshal contract list: %v", err)
+	}
+	for _, item := range root.Data {
+		if item.Address != "" && (item.Name == subtype || item.Subtype == subtype) {
+			return item.Address
+		}
+	}
+	t.Fatalf("missing testnet template contract %s in list: %s", subtype, result)
+	return ""
 }
 
 func mustEncodedTemplateInvokeJSON(t *testing.T, action string, param []byte) string {
