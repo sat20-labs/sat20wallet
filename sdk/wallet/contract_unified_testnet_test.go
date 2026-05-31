@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sirupsen/logrus"
 )
 
@@ -262,6 +264,56 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 		t.Fatalf("limitorder invoke was not indexed: %v", err)
 	}
 
+	limitRefundStartHeight := manager.l2IndexerClient.GetBestHeight()
+	limitRefund, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType: ContractTypeTemplate,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: limitDeploy.ContractAddress,
+			JSONInvokeParam: mustEncodedTemplateInvokeJSON(t, INVOKE_API_REFUND, mustEncodeTemplateParam((&contractcommon.TemplateRefundInvokeParam{ItemIDs: []int64{1}}).Encode())),
+			CallNonce:       uint64(time.Now().UnixNano()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Invoke limitorder refund failed: %v", err)
+	}
+	t.Logf("limitorder refund result: %+v", limitRefund)
+	if err := waitL2HeightAbove(t, manager, limitRefundStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("limitorder refund was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, limitDeploy.ContractAddress, 2, 2*time.Minute); err != nil {
+		t.Fatalf("limitorder refund was not indexed: %v", err)
+	}
+
+	limitSellGas, _, err := manager.templateGasAssetAmount(contractcommon.InvokeBaseGas, true, 0, "")
+	if err != nil {
+		t.Fatalf("estimate limitorder sell gas failed: %v", err)
+	}
+	limitSellStartHeight := manager.l2IndexerClient.GetBestHeight()
+	limitSell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType: ContractTypeTemplate,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: limitDeploy.ContractAddress,
+			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
+				OrderType: ORDERTYPE_SELL,
+				AssetName: unifiedTemplateTestAsset,
+				Amt:       "1",
+				UnitPrice: "1",
+			}),
+			CallNonce:      uint64(time.Now().UnixNano()),
+			GasAssetAmount: limitSellGas + 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Invoke limitorder sell failed: %v", err)
+	}
+	t.Logf("limitorder sell result: %+v", limitSell)
+	if err := waitL2HeightAbove(t, manager, limitSellStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("limitorder sell was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, limitDeploy.ContractAddress, 3, 2*time.Minute); err != nil {
+		t.Fatalf("limitorder sell was not indexed: %v", err)
+	}
+
 	amm := NewAmmContract()
 	amm.AssetName = *ParseAssetString(unifiedTemplateTestAsset)
 	amm.AssetAmt = "10000"
@@ -315,6 +367,62 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 		t.Fatalf("AMM swap was not indexed: %v", err)
 	}
 
+	ammSellGas, _, err := manager.templateGasAssetAmount(contractcommon.InvokeBaseGas, true, 0, "")
+	if err != nil {
+		t.Fatalf("estimate AMM sell gas failed: %v", err)
+	}
+	ammSellStartHeight := manager.l2IndexerClient.GetBestHeight()
+	ammSell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType: ContractTypeTemplate,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: ammDeploy.ContractAddress,
+			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
+				OrderType: ORDERTYPE_SELL,
+				AssetName: unifiedTemplateTestAsset,
+				Amt:       "1",
+				UnitPrice: "1",
+			}),
+			CallNonce:      uint64(time.Now().UnixNano()),
+			GasAssetAmount: ammSellGas + 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Invoke AMM sell swap failed: %v", err)
+	}
+	t.Logf("amm sell result: %+v", ammSell)
+	if err := waitL2HeightAbove(t, manager, ammSellStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("AMM sell was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 2, 2*time.Minute); err != nil {
+		t.Fatalf("AMM sell was not indexed: %v", err)
+	}
+
+	ammBuyAgainStartHeight := manager.l2IndexerClient.GetBestHeight()
+	ammBuyAgain, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType: ContractTypeTemplate,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: ammDeploy.ContractAddress,
+			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
+				OrderType: ORDERTYPE_BUY,
+				AssetName: unifiedTemplateTestAsset,
+				Amt:       "1",
+				UnitPrice: "2",
+			}),
+			CallNonce: uint64(time.Now().UnixNano()),
+			Value:     12,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Invoke AMM second buy swap failed: %v", err)
+	}
+	t.Logf("amm second buy result: %+v", ammBuyAgain)
+	if err := waitL2HeightAbove(t, manager, ammBuyAgainStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("AMM second buy was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 3, 2*time.Minute); err != nil {
+		t.Fatalf("AMM second buy was not indexed: %v", err)
+	}
+
 	ammAddLiqStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammAddLiq, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
 		ContractType: ContractTypeTemplate,
@@ -337,7 +445,7 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 	if err := waitL2HeightAbove(t, manager, ammAddLiqStartHeight, 4*time.Minute); err != nil {
 		t.Fatalf("AMM add liquidity was not confirmed: %v", err)
 	}
-	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 2, 2*time.Minute); err != nil {
+	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 4, 2*time.Minute); err != nil {
 		t.Fatalf("AMM add liquidity was not indexed: %v", err)
 	}
 
@@ -361,9 +469,34 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 	if err := waitL2HeightAbove(t, manager, ammRemoveLiqStartHeight, 4*time.Minute); err != nil {
 		t.Fatalf("AMM remove liquidity was not confirmed: %v", err)
 	}
-	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 3, 2*time.Minute); err != nil {
+	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 5, 2*time.Minute); err != nil {
 		t.Fatalf("AMM remove liquidity was not indexed: %v", err)
 	}
+
+	if _, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType: ContractTypeTemplate,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: ammDeploy.ContractAddress,
+			JSONInvokeParam: mustEncodedTemplateInvokeJSON(t, INVOKE_API_REFUND, mustEncodeTemplateParam((&contractcommon.TemplateRefundInvokeParam{ItemIDs: []int64{1}}).Encode())),
+			CallNonce:       uint64(time.Now().UnixNano()),
+		},
+	}); err == nil {
+		t.Fatalf("AMM refund unexpectedly succeeded")
+	} else {
+		t.Logf("AMM refund rejected as expected: %v", err)
+	}
+}
+
+func mustEncodedTemplateInvokeJSON(t *testing.T, action string, param []byte) string {
+	t.Helper()
+	outer, err := json.Marshal(InvokeParam{
+		Action: action,
+		Param:  base64.StdEncoding.EncodeToString(param),
+	})
+	if err != nil {
+		t.Fatalf("marshal encoded invoke param: %v", err)
+	}
+	return string(outer)
 }
 
 func waitAgentPredictionStatus(t *testing.T, manager *Manager, contract string, wantContractStatus, wantPredictionStatus string, timeout time.Duration) error {

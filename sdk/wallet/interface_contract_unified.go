@@ -519,6 +519,9 @@ func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractT
 	if err != nil {
 		return nil, err
 	}
+	if err := p.checkTemplateInvokeSupported(treq.ContractAddress, converted.Action); err != nil {
+		return nil, err
+	}
 	param, err := base64.StdEncoding.DecodeString(converted.Param)
 	if err != nil {
 		return nil, fmt.Errorf("decode template invoke param: %w", err)
@@ -579,6 +582,55 @@ func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractT
 		GasLimit:        gasLimit,
 		Nonce:           callNonce,
 	}, nil
+}
+
+func (p *Manager) checkTemplateInvokeSupported(contractAddress, action string) error {
+	info, err := p.l2IndexerClient.GetContractJSON(contractAddress)
+	if err != nil {
+		return fmt.Errorf("query template contract before %s: %w", action, err)
+	}
+	type templateInfo struct {
+		Name    string `json:"name"`
+		Subtype string `json:"subtype"`
+		Details struct {
+			Template struct {
+				TemplateName string `json:"templateName"`
+			} `json:"template"`
+		} `json:"details"`
+	}
+	var direct templateInfo
+	if err := json.Unmarshal([]byte(info), &direct); err != nil {
+		return fmt.Errorf("decode template contract before %s: %w", action, err)
+	}
+	var wrapped struct {
+		Data templateInfo `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(info), &wrapped)
+
+	templateName := direct.Details.Template.TemplateName
+	if templateName == "" {
+		templateName = direct.Subtype
+	}
+	if templateName == "" {
+		templateName = direct.Name
+	}
+	if templateName == "" {
+		templateName = wrapped.Data.Details.Template.TemplateName
+	}
+	if templateName == "" {
+		templateName = wrapped.Data.Subtype
+	}
+	if templateName == "" {
+		templateName = wrapped.Data.Name
+	}
+	normalized := contractcommon.NormalizeTemplateName(templateName)
+	if !contractcommon.IsKnownTemplateName(normalized) {
+		return nil
+	}
+	if !contractcommon.IsTemplateInvokeActionSupported(normalized, action) {
+		return fmt.Errorf("template contract %s does not support %s", normalized, action)
+	}
+	return nil
 }
 
 func (p *Manager) buildNativeTemplateContract(req *TemplateContractDeployRequest) (tmplcontract.Contract, int64, uint64, error) {
@@ -709,14 +761,7 @@ func (p *Manager) templateGasAssetAmount(gasLimit uint64, needsResult bool, over
 }
 
 func normalizeTemplateName(name string) string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_LIMITORDER:
-		return TEMPLATE_CONTRACT_LIMITORDER
-	case TEMPLATE_CONTRACT_AMM:
-		return TEMPLATE_CONTRACT_AMM
-	default:
-		return strings.ToLower(strings.TrimSpace(name))
-	}
+	return contractcommon.NormalizeTemplateName(name)
 }
 
 func (p *Manager) EstimateEVMDeployContract(req *EVMContractDeployRequest) (*ContractTxResult, error) {

@@ -4,9 +4,9 @@
 package main
 
 import (
-	"encoding/json"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -14,8 +14,8 @@ import (
 	"syscall/js"
 
 	indexer "github.com/sat20-labs/indexer/common"
-	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sirupsen/logrus"
 )
 
@@ -75,7 +75,7 @@ func parseIndexerConfig(indexer js.Value) (*common.Indexer, error) {
 			cfg.Proxy = ""
 		}
 		return &cfg, nil
-	} 
+	}
 	return nil, fmt.Errorf("Indexer must be an object")
 }
 
@@ -124,7 +124,6 @@ func parseConfigFromJS(jsConfig js.Value) (*common.Config, error) {
 	}
 	slaveIndexerL1 := jsConfig.Get("SlaveIndexerL1")
 	cfg.SlaveIndexerL1, _ = parseIndexerConfig(slaveIndexerL1)
-	
 
 	indexerL2 := jsConfig.Get("IndexerL2")
 	cfg.IndexerL2, err = parseIndexerConfig(indexerL2)
@@ -354,7 +353,6 @@ func createWallet(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
-
 func createMonitorWallet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -440,7 +438,6 @@ func importWallet(this js.Value, p []js.Value) any {
 
 	return js.Global().Get("Promise").New(handler)
 }
-
 
 func importWalletWithPrivKey(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -745,7 +742,6 @@ func getChannelAddrByPeerPubkey(this js.Value, p []js.Value) any {
 	}
 	pubkey := p[0].String()
 
-
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		channelAddr, peerAddr, err := _mgr.GetChannelAddrByPeerPubkey(pubkey)
 		if err != nil {
@@ -753,7 +749,7 @@ func getChannelAddrByPeerPubkey(this js.Value, p []js.Value) any {
 		}
 		return map[string]any{
 			"channelAddr": channelAddr,
-			"peerAddr": peerAddr,
+			"peerAddr":    peerAddr,
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
@@ -1175,7 +1171,6 @@ func extractTxFromPsbt_SatsNet(this js.Value, p []js.Value) any {
 	return createJsRet(data, 0, "ok")
 }
 
-
 func extractUnsignedTxFromPsbt(this js.Value, p []js.Value) any {
 
 	if len(p) < 1 {
@@ -1579,7 +1574,7 @@ func sendAssets_SatsNet(this js.Value, p []js.Value) any {
 	}
 
 	if len(p) < 4 {
-		return createJsRet(nil, -1,  "Expected 4 parameters")
+		return createJsRet(nil, -1, "Expected 4 parameters")
 	}
 
 	if p[0].Type() != js.TypeString {
@@ -1626,7 +1621,6 @@ func sendAssets_SatsNet(this js.Value, p []js.Value) any {
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func batchSendAssets_SatsNet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -1677,7 +1671,7 @@ func batchSendAssets_SatsNet(this js.Value, p []js.Value) any {
 }
 
 func batchSendAssets(this js.Value, p []js.Value) any {
-	
+
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
@@ -1730,7 +1724,7 @@ func batchSendAssets(this js.Value, p []js.Value) any {
 
 		return map[string]interface{}{
 			"txId": tx.TxID(),
-			"fee": fee,
+			"fee":  fee,
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
@@ -1778,7 +1772,6 @@ func batchSendAssetsV2_SatsNet(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-
 func getTxAssetInfoFromPsbt(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -1810,15 +1803,14 @@ func getTxAssetInfoFromPsbt(this js.Value, p []js.Value) any {
 		}
 
 		return map[string]any{
-			"txId":  info.TxId,
-			"txHex": info.TxHex,
-			"inputs": string(inputs),
+			"txId":    info.TxId,
+			"txHex":   info.TxHex,
+			"inputs":  string(inputs),
 			"outputs": string(outputs),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func getTxAssetInfoFromPsbt_SatsNet(this js.Value, p []js.Value) any {
 	if len(p) < 1 {
@@ -1846,9 +1838,9 @@ func getTxAssetInfoFromPsbt_SatsNet(this js.Value, p []js.Value) any {
 	}
 
 	data := map[string]any{
-		"txId": info.TxId,
-		"txHex": info.TxHex,
-		"inputs": string(inputs),
+		"txId":    info.TxId,
+		"txHex":   info.TxHex,
+		"inputs":  string(inputs),
 		"outputs": string(outputs),
 	}
 
@@ -2002,8 +1994,8 @@ func getAllLockedUtxo(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 
-		result := make(map[string]any) 
-		for k,v := range utxoMap {
+		result := make(map[string]any)
+		for k, v := range utxoMap {
 			buf, err := json.Marshal(v)
 			if err != nil {
 				continue
@@ -2014,7 +2006,6 @@ func getAllLockedUtxo(this js.Value, p []js.Value) any {
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func lockUtxo_SatsNet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2116,15 +2107,14 @@ func getAllLockedUtxo_SatsNet(this js.Value, p []js.Value) any {
 	}
 	address := p[0].String()
 
-
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		utxoMap, err := _mgr.GetLockedUtxoList_SatsNet(address)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
 
-		result := make(map[string]any) 
-		for k,v := range utxoMap {
+		result := make(map[string]any)
+		for k, v := range utxoMap {
 			buf, err := json.Marshal(v)
 			if err != nil {
 				continue
@@ -2166,7 +2156,7 @@ func getUtxosWithAsset(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 
-		result := make([]interface{}, 0) 
+		result := make([]interface{}, 0)
 		for _, v := range utxos {
 			result = append(result, v)
 		}
@@ -2176,7 +2166,6 @@ func getUtxosWithAsset(this js.Value, p []js.Value) any {
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func getUtxosWithAsset_SatsNet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2208,7 +2197,7 @@ func getUtxosWithAsset_SatsNet(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 
-		result := make([]interface{}, 0) 
+		result := make([]interface{}, 0)
 		for _, v := range utxos {
 			result = append(result, v)
 		}
@@ -2218,7 +2207,6 @@ func getUtxosWithAsset_SatsNet(this js.Value, p []js.Value) any {
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func getUtxosWithAssetV2(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2255,22 +2243,21 @@ func getUtxosWithAssetV2(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 
-		result := make([]interface{}, 0) 
+		result := make([]interface{}, 0)
 		for _, v := range utxos {
 			result = append(result, v)
 		}
-		result2 := make([]interface{}, 0) 
+		result2 := make([]interface{}, 0)
 		for _, v := range fees {
 			result2 = append(result2, v)
 		}
 		return map[string]interface{}{
 			"utxos": result,
-			"fees": result2,
+			"fees":  result2,
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func getUtxosWithAssetV2_SatsNet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2307,22 +2294,21 @@ func getUtxosWithAssetV2_SatsNet(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 
-		result := make([]interface{}, 0) 
+		result := make([]interface{}, 0)
 		for _, v := range utxos {
 			result = append(result, v)
 		}
-		result2 := make([]interface{}, 0) 
+		result2 := make([]interface{}, 0)
 		for _, v := range fees {
 			result2 = append(result2, v)
 		}
 		return map[string]interface{}{
 			"utxos": result,
-			"fees": result2,
+			"fees":  result2,
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func getAssetAmount(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2351,12 +2337,11 @@ func getAssetAmount(this js.Value, p []js.Value) any {
 
 		return map[string]any{
 			"availableAmt": available.String(),
-			"lockedAmt": locked.String(),
+			"lockedAmt":    locked.String(),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func getAssetAmount_SatsNet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2385,12 +2370,109 @@ func getAssetAmount_SatsNet(this js.Value, p []js.Value) any {
 
 		return map[string]any{
 			"availableAmt": available.String(),
-			"lockedAmt": locked.String(),
+			"lockedAmt":    locked.String(),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func contractTxResultForJS(result *wallet.ContractTxResult) map[string]any {
+	if result == nil {
+		return nil
+	}
+	resultJSON, _ := json.Marshal(result)
+	return map[string]any{
+		"result":          string(resultJSON),
+		"contractType":    result.ContractType,
+		"txid":            result.TxID,
+		"contractAddress": result.ContractAddress,
+		"caller":          result.Caller,
+		"gasAssetName":    result.GasAssetName,
+		"gasAssetAmount":  strconv.FormatUint(result.GasAssetAmount, 10),
+		"gasFeeAmount":    strconv.FormatUint(result.GasFeeAmount, 10),
+		"gasFundAmount":   strconv.FormatUint(result.GasFundAmount, 10),
+		"gasLimit":        strconv.FormatUint(result.GasLimit, 10),
+		"nonce":           strconv.FormatUint(result.Nonce, 10),
+	}
+}
+
+func queryContract(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameter")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "contract query request parameter should be a json string")
+	}
+	reqJSON := p[0].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		var req wallet.ContractQueryRequest
+		if err := json.Unmarshal([]byte(reqJSON), &req); err != nil {
+			return nil, -1, err.Error()
+		}
+		result, err := _mgr.QueryContract(&req)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"result": result}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func deployUnifiedContract(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameter")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "contract deploy request parameter should be a json string")
+	}
+	reqJSON := p[0].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		var req wallet.ContractDeployRequest
+		if err := json.Unmarshal([]byte(reqJSON), &req); err != nil {
+			return nil, -1, err.Error()
+		}
+		result, err := _mgr.DeployUnifiedContract(&req)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return contractTxResultForJS(result), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func invokeUnifiedContract(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameter")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "contract invoke request parameter should be a json string")
+	}
+	reqJSON := p[0].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		var req wallet.ContractInvokeRequest
+		if err := json.Unmarshal([]byte(reqJSON), &req); err != nil {
+			return nil, -1, err.Error()
+		}
+		result, err := _mgr.InvokeUnifiedContract(&req)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return contractTxResultForJS(result), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
 
 func getSupportedContracts(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2438,7 +2520,6 @@ func getDeployedContractsInServer(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-
 func getDeployedContractStatus(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -2466,7 +2547,6 @@ func getDeployedContractStatus(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-
 func getDeployedContractAnalytics(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -2493,7 +2573,6 @@ func getDeployedContractAnalytics(this js.Value, p []js.Value) any {
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func getFeeForDeployContract(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2538,7 +2617,6 @@ func getFeeForDeployContract(this js.Value, p []js.Value) any {
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func deployContract_Remote(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2626,7 +2704,6 @@ func getParamForInvokeContract(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-
 func getFeeForInvokeContract(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -2648,7 +2725,6 @@ func getFeeForInvokeContract(this js.Value, p []js.Value) any {
 	}
 	invoke := pn.String()
 
-
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		_, fee, err := _mgr.QueryFeeForInvokeContract(url, (invoke))
 		if err != nil {
@@ -2661,7 +2737,6 @@ func getFeeForInvokeContract(this js.Value, p []js.Value) any {
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func invokeContractV2(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2687,15 +2762,15 @@ func invokeContractV2(this js.Value, p []js.Value) any {
 	pn = p[2]
 	if pn.Type() != js.TypeString {
 		return createJsRet(nil, -1, "asset name parameter should be a string")
-    }
-    assetName := pn.String()
+	}
+	assetName := pn.String()
 
-    // amount
-    pn = p[3]
-    if pn.Type() != js.TypeString {
-        return createJsRet(nil, -1, "amount parameter should be a string")
-    }
-    amt := pn.String()
+	// amount
+	pn = p[3]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	amt := pn.String()
 
 	pn = p[4]
 	if pn.Type() != js.TypeString {
@@ -2719,7 +2794,6 @@ func invokeContractV2(this js.Value, p []js.Value) any {
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func invokeContract_SatsNet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2765,7 +2839,6 @@ func invokeContract_SatsNet(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-
 func invokeContractV2_SatsNet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -2790,15 +2863,15 @@ func invokeContractV2_SatsNet(this js.Value, p []js.Value) any {
 	pn = p[2]
 	if pn.Type() != js.TypeString {
 		return createJsRet(nil, -1, "asset name parameter should be a string")
-    }
-    assetName := pn.String()
+	}
+	assetName := pn.String()
 
-    // amount
-    pn = p[3]
-    if pn.Type() != js.TypeString {
-        return createJsRet(nil, -1, "amount parameter should be a string")
-    }
-    amt := pn.String()
+	// amount
+	pn = p[3]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	amt := pn.String()
 
 	pn = p[4]
 	if pn.Type() != js.TypeString {
@@ -2823,7 +2896,6 @@ func invokeContractV2_SatsNet(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-
 func getContractInvokeHistoryInServer(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -2844,13 +2916,13 @@ func getContractInvokeHistoryInServer(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "start parameter should be a number")
 	}
 	start := pn.Int()
-	
+
 	pn = p[2]
 	if pn.Type() != js.TypeNumber {
 		return createJsRet(nil, -1, "limit parameter should be a number")
 	}
 	limit := pn.Int()
-	
+
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		history, err := _mgr.GetContractInvokeHistoryInServer(url, start, limit)
 		if err != nil {
@@ -2863,7 +2935,6 @@ func getContractInvokeHistoryInServer(this js.Value, p []js.Value) any {
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func getContractInvokeHistoryByAddressInServer(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2891,13 +2962,13 @@ func getContractInvokeHistoryByAddressInServer(this js.Value, p []js.Value) any 
 		return createJsRet(nil, -1, "start parameter should be a number")
 	}
 	start := pn.Int()
-	
+
 	pn = p[3]
 	if pn.Type() != js.TypeNumber {
 		return createJsRet(nil, -1, "limit parameter should be a number")
 	}
 	limit := pn.Int()
-	
+
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		history, err := _mgr.GetInvokeHistoryByAddressInContract(url, address, start, limit)
 		if err != nil {
@@ -2931,13 +3002,13 @@ func getAllAddressInContract(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "start parameter should be a number")
 	}
 	start := pn.Int()
-	
+
 	pn = p[2]
 	if pn.Type() != js.TypeNumber {
 		return createJsRet(nil, -1, "limit parameter should be a number")
 	}
 	limit := pn.Int()
-	
+
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		addresses, err := _mgr.GetAllAddressesInContract(url, start, limit)
 		if err != nil {
@@ -2950,7 +3021,6 @@ func getAllAddressInContract(this js.Value, p []js.Value) any {
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func stakeToBeMiner(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -2994,7 +3064,6 @@ func stakeToBeMiner(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-
 func getAddressStatusInContract(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -3016,7 +3085,6 @@ func getAddressStatusInContract(this js.Value, p []js.Value) any {
 	}
 	address := pn.String()
 
-
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		info, err := _mgr.GetUserStatusInContract(url, (address))
 		if err != nil {
@@ -3029,7 +3097,6 @@ func getAddressStatusInContract(this js.Value, p []js.Value) any {
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func deposit(this js.Value, p []js.Value) any {
 	msg := "ok"
@@ -3099,7 +3166,7 @@ func deposit(this js.Value, p []js.Value) any {
 		}
 
 		return map[string]interface{}{
-			"txId":   txId,
+			"txId": txId,
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
@@ -3159,12 +3226,11 @@ func withdraw(this js.Value, p []js.Value) any {
 		}
 
 		return map[string]interface{}{
-			"txId":   txId,
+			"txId": txId,
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
-
 
 func getAllRegisteredReferrerName(this js.Value, p []js.Value) any {
 	if _mgr == nil {
@@ -3174,7 +3240,6 @@ func getAllRegisteredReferrerName(this js.Value, p []js.Value) any {
 	if len(p) < 1 {
 		return createJsRet(nil, -1, "Expected 2 parameters")
 	}
-
 
 	pn := p[0]
 	if pn.Type() != js.TypeString {
@@ -3271,7 +3336,6 @@ func bindReferrerForServer(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-
 func main() {
 	obj := js.Global().Get("Object").New()
 	obj.Set("batchDbTest", js.FuncOf(batchDbTest))
@@ -3340,7 +3404,6 @@ func main() {
 	obj.Set("addInputsToPsbt_SatsNet", js.FuncOf(addInputsToPsbt_SatsNet))
 	obj.Set("addOutputsToPsbt_SatsNet", js.FuncOf(addOutputsToPsbt_SatsNet))
 
-
 	obj.Set("sendAssets", js.FuncOf(sendAssets))
 	obj.Set("sendGarbage", js.FuncOf(sendGarbage))
 	obj.Set("sendAssets_SatsNet", js.FuncOf(sendAssets_SatsNet))
@@ -3365,7 +3428,9 @@ func main() {
 	obj.Set("getAssetAmount", js.FuncOf(getAssetAmount))
 	obj.Set("getAssetAmount_SatsNet", js.FuncOf(getAssetAmount_SatsNet))
 
-
+	obj.Set("queryContract", js.FuncOf(queryContract))
+	obj.Set("deployUnifiedContract", js.FuncOf(deployUnifiedContract))
+	obj.Set("invokeUnifiedContract", js.FuncOf(invokeUnifiedContract))
 	obj.Set("getSupportedContracts", js.FuncOf(getSupportedContracts))
 	obj.Set("getDeployedContractsInServer", js.FuncOf(getDeployedContractsInServer))
 	obj.Set("getDeployedContractStatus", js.FuncOf(getDeployedContractStatus))
@@ -3377,7 +3442,7 @@ func main() {
 	obj.Set("invokeContract_SatsNet", js.FuncOf(invokeContract_SatsNet))
 	obj.Set("invokeContractV2_SatsNet", js.FuncOf(invokeContractV2_SatsNet))
 	obj.Set("invokeContractV2", js.FuncOf(invokeContractV2))
-	obj.Set("getContractInvokeHistoryInServer", js.FuncOf(getContractInvokeHistoryInServer)) 
+	obj.Set("getContractInvokeHistoryInServer", js.FuncOf(getContractInvokeHistoryInServer))
 	obj.Set("getContractInvokeHistoryByAddressInServer", js.FuncOf(getContractInvokeHistoryByAddressInServer))
 	obj.Set("getAllAddressInContract", js.FuncOf(getAllAddressInContract))
 	obj.Set("getAddressStatusInContract", js.FuncOf(getAddressStatusInContract))
