@@ -7,6 +7,7 @@ import (
 
 	indexer "github.com/sat20-labs/indexer/common"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	"github.com/sat20-labs/satoshinet/txscript"
 )
 
 ///////////////////////////////
@@ -65,7 +66,78 @@ func (p *Manager) QueryFeeForDeployContract(templateName string, contractContent
 // 请求服务端部署一个合约（支付上面计算出来的费用），只支持在聪网调用
 func (p *Manager) DeployContract_Remote(templateName, contractContent string,
 	feeRate int64, sendTxInL1 bool) (string, int64, string, error) {
-	return "", 0, "", fmt.Errorf("not implemented")
+	if p.wallet == nil {
+		return "", 0, "", fmt.Errorf("wallet is not created/unlocked")
+	}
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
+
+	contract, err := ContractContentUnMarsh(templateName, contractContent)
+	if err != nil {
+		return "", 0, "", err
+	}
+	buf, err := contract.Encode()
+	if err != nil {
+		return "", 0, "", err
+	}
+
+	param, err := txscript.NewScriptBuilder().
+		AddData([]byte(templateName)).
+		AddData([]byte(buf)).Script()
+	if err != nil {
+		return "", -1, "", err
+	}
+
+	doAction := func(resv *RemoteActionPerformData) (string, string, error) {
+		signedScript, err := SignedPerformRemoteActionInvoice(resv.Action, resv.InvoiceSig)
+		if err != nil {
+			return "", "", fmt.Errorf("SignedPerformRemoteActionInvoice failed. %v", err)
+		}
+
+		nullDataScript, err := sindexer.NullDataScript(sindexer.CONTENT_TYPE_PERFORMACTION, signedScript)
+		if err != nil {
+			return "", "", fmt.Errorf("NullDataScript failed. %v", err)
+		}
+
+		var txHex, txId string
+		if resv.SendTxInL1 {
+			tx, err := p.SendAssets(resv.ServiceAddr, ASSET_PLAIN_SAT.String(),
+				fmt.Sprintf("%d", resv.ServiceFee), resv.FeeRate, nullDataScript)
+			if err != nil {
+				Log.Errorf("SendAssets %s %d failed, %v", resv.ServiceAddr, resv.ServiceFee, err)
+				return "", "", err
+			}
+			txId = tx.TxID()
+			txHex, err = EncodeMsgTx(tx)
+			if err != nil {
+				return "", "", err
+			}
+		} else {
+			tx, err := p.SendAssets_SatsNet(resv.ServiceAddr, ASSET_PLAIN_SAT.String(),
+				fmt.Sprintf("%d", resv.ServiceFee), nullDataScript)
+			if err != nil {
+				Log.Errorf("SendAssets_SatsNet %s %d failed, %v", resv.ServiceAddr, resv.ServiceFee, err)
+				return "", "", err
+			}
+			txId = tx.TxID()
+			txHex, err = EncodeMsgTx_SatsNet(tx)
+			if err != nil {
+				return "", "", err
+			}
+		}
+
+		return txHex, txId, nil
+	}
+
+	txId, resvId, result, err := p.PerformRemoteAction(doAction, REMOTE_ACTION_DEPLOY_CONTRACT, param, nil, feeRate, sendTxInL1, false)
+	if err != nil {
+		Log.Errorf("DeployContract_Remote %s failed: %v", templateName, err)
+		return "", 0, "", err
+	}
+	Log.Infof("deploy contract %s with txId %s, reserveId %d", templateName, txId, resvId)
+
+	return txId, resvId, string(result), nil
 }
 
 // 查询调用合约的参数模板 invokeParam
@@ -308,7 +380,7 @@ func (p *Manager) InvokeContractV2(contractURL string, jsonInvokeParam string,
 
 		invoke := sindexer.ContractInvokeData{
 			ContractPath: relativePath, // 资产名字+tc
-			InvokeParam:  buf, // 这里的资产名字必须省略，减少字节数
+			InvokeParam:  buf,          // 这里的资产名字必须省略，减少字节数
 			//PubKey:       p.wallet.GetPubKey().SerializeCompressed(),
 		}
 
@@ -515,8 +587,8 @@ func (p *Manager) WithdrawWithContract(destAddr string, assetName string, amt st
 	}
 	total := p.GetAssetBalance(coreChannelId, indexer.NewAssetNameFromString(assetName))
 	if total.Cmp(dAmt) < 0 {
-		return "", fmt.Errorf("no enough asset %s in channel %s, require %s but only %s", 
-		assetName, coreChannelId, amt, total.String())		
+		return "", fmt.Errorf("no enough asset %s in channel %s, require %s but only %s",
+			assetName, coreChannelId, amt, total.String())
 	}
 
 	url := GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_AMM)

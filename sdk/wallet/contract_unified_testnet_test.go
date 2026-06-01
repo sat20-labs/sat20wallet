@@ -151,7 +151,7 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 		t.Fatalf("limitorder was not indexed after deploy: %v", err)
 	}
 
-	limitSellGas, _, err := manager.templateGasAssetAmount(contractcommon.InvokeBaseGas, true, 0, "")
+	limitSellGas, _, err := manager.templateGasAssetAmount(contractcommon.InvokeBaseGas, true, 0)
 	if err != nil {
 		t.Fatalf("estimate limitorder sell gas failed: %v", err)
 	}
@@ -168,6 +168,7 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 			}),
 			CallNonce:      uint64(time.Now().UnixNano()),
 			GasAssetAmount: limitSellGas + 1,
+			Value:          10,
 		},
 	})
 	if err != nil {
@@ -202,11 +203,59 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 		t.Fatalf("limitorder default buy was not indexed: %v", err)
 	}
 
+	limitExplicitBuyStartHeight := manager.l2IndexerClient.GetBestHeight()
+	limitExplicitBuy, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType: ContractTypeTemplate,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: limitDeploy.ContractAddress,
+			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
+				OrderType: ORDERTYPE_BUY,
+				AssetName: unifiedTemplateTestAsset,
+				Amt:       "1",
+				UnitPrice: "1",
+			}),
+			CallNonce: uint64(time.Now().UnixNano()),
+			Value:     11,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Invoke limitorder buy failed: %v", err)
+	}
+	t.Logf("limitorder explicit buy result: %+v", limitExplicitBuy)
+	if err := waitL2HeightAbove(t, manager, limitExplicitBuyStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("limitorder explicit buy was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, limitDeploy.ContractAddress, 3, 2*time.Minute); err != nil {
+		t.Fatalf("limitorder explicit buy was not indexed: %v", err)
+	}
+
+	limitDefaultSellStartHeight := manager.l2IndexerClient.GetBestHeight()
+	limitDefaultSell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType:  ContractTypeTemplate,
+		DefaultInvoke: true,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: limitDeploy.ContractAddress,
+			DefaultInvoke:   true,
+			AssetName:       unifiedTemplateTestAsset,
+			Amount:          "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Default invoke limitorder sell failed: %v", err)
+	}
+	t.Logf("limitorder default sell result: %+v", limitDefaultSell)
+	if err := waitL2HeightAbove(t, manager, limitDefaultSellStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("limitorder default sell was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, limitDeploy.ContractAddress, 4, 2*time.Minute); err != nil {
+		t.Fatalf("limitorder default sell was not indexed: %v", err)
+	}
+
 	amm := NewAmmContract()
 	amm.AssetName = *ParseAssetString(unifiedTemplateTestAsset)
-	amm.AssetAmt = "10000"
-	amm.SatValue = 100
-	amm.K = "1000000"
+	amm.AssetAmt = "1"
+	amm.SatValue = 1
+	amm.K = "1"
 	ammStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammDeploy, err := manager.DeployUnifiedContract(&ContractDeployRequest{
 		ContractType: ContractTypeTemplate,
@@ -226,6 +275,34 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 		t.Fatalf("AMM was not indexed after deploy: %v", err)
 	}
 
+	ammAddLiqStartHeight := manager.l2IndexerClient.GetBestHeight()
+	ammAddLiq, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType: ContractTypeTemplate,
+		Template: &TemplateContractInvokeRequest{
+			ContractAddress: ammDeploy.ContractAddress,
+			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_ADDLIQUIDITY, AddLiqInvokeParam{
+				OrderType: ORDERTYPE_ADDLIQUIDITY,
+				AssetName: unifiedTemplateTestAsset,
+				Amt:       "1",
+				Value:     1,
+			}),
+			CallNonce: uint64(time.Now().UnixNano()),
+			AssetName: unifiedTemplateTestAsset,
+			Amount:    "1",
+			Value:     1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Invoke AMM add liquidity failed: %v", err)
+	}
+	t.Logf("amm add liquidity result: %+v", ammAddLiq)
+	if err := waitL2HeightAbove(t, manager, ammAddLiqStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("AMM add liquidity was not confirmed: %v", err)
+	}
+	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 1, 2*time.Minute); err != nil {
+		t.Fatalf("AMM add liquidity was not indexed: %v", err)
+	}
+
 	ammDefaultBuyStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammDefaultBuy, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
 		ContractType:  ContractTypeTemplate,
@@ -243,7 +320,7 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 	if err := waitL2HeightAbove(t, manager, ammDefaultBuyStartHeight, 4*time.Minute); err != nil {
 		t.Fatalf("AMM default buy was not confirmed: %v", err)
 	}
-	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 1, 2*time.Minute); err != nil {
+	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 2, 2*time.Minute); err != nil {
 		t.Fatalf("AMM default buy was not indexed: %v", err)
 	}
 
@@ -265,7 +342,7 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 	if err := waitL2HeightAbove(t, manager, ammDefaultSellStartHeight, 4*time.Minute); err != nil {
 		t.Fatalf("AMM default sell was not confirmed: %v", err)
 	}
-	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 2, 2*time.Minute); err != nil {
+	if err := waitTemplateInvokeCount(t, manager, ammDeploy.ContractAddress, 3, 2*time.Minute); err != nil {
 		t.Fatalf("AMM default sell was not indexed: %v", err)
 	}
 }
@@ -492,7 +569,7 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 		t.Fatalf("limitorder refund was not indexed: %v", err)
 	}
 
-	limitSellGas, _, err := manager.templateGasAssetAmount(contractcommon.InvokeBaseGas, true, 0, "")
+	limitSellGas, _, err := manager.templateGasAssetAmount(contractcommon.InvokeBaseGas, true, 0)
 	if err != nil {
 		t.Fatalf("estimate limitorder sell gas failed: %v", err)
 	}
@@ -509,6 +586,7 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 			}),
 			CallNonce:      uint64(time.Now().UnixNano()),
 			GasAssetAmount: limitSellGas + 1,
+			Value:          10,
 		},
 	})
 	if err != nil {
@@ -575,7 +653,7 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 		t.Fatalf("AMM swap was not indexed: %v", err)
 	}
 
-	ammSellGas, _, err := manager.templateGasAssetAmount(contractcommon.InvokeBaseGas, true, 0, "")
+	ammSellGas, _, err := manager.templateGasAssetAmount(contractcommon.InvokeBaseGas, true, 0)
 	if err != nil {
 		t.Fatalf("estimate AMM sell gas failed: %v", err)
 	}
@@ -592,6 +670,7 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 			}),
 			CallNonce:      uint64(time.Now().UnixNano()),
 			GasAssetAmount: ammSellGas + 1,
+			Value:          10,
 		},
 	})
 	if err != nil {

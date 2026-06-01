@@ -93,6 +93,41 @@ func TestUnifiedNativeTemplateTxCoverage(t *testing.T) {
 		LptAmt:    "25",
 	}).Encode()))
 	assertNativeTemplateInvokeRejected(t, ammRuntime, tmplcontract.InvokeAPIRefund, mustEncodeTemplateParam((&tmplcontract.RefundInvokeParam{ItemIDs: []int64{3}}).Encode()))
+
+	exchange := tmplcontract.NewExchangeContract(contractcommon.GasAssetName, indexer.ASSET_PLAIN_SAT.String(), tmplcontract.ExchangePriceModeHeight, []tmplcontract.ExchangePriceStep{{
+		Threshold: "0",
+		BPerA:     "0.0001",
+	}})
+	exchangeAddr, exchangeRuntime := assertNativeTemplateDeployTx(t, exchange, "exchange")
+	assertNativeTemplateInvokeTx(t, exchangeAddr, exchangeRuntime, tmplcontract.InvokeAPIExchange, mustEncodeTemplateParam((&tmplcontract.ExchangeInvokeParam{MinOutA: "1"}).Encode()))
+	assertNativeTemplateInvokeTx(t, exchangeAddr, exchangeRuntime, tmplcontract.InvokeAPIClose, nil)
+}
+
+func TestBuildNativeTemplateExchangeContract(t *testing.T) {
+	exchange := tmplcontract.NewExchangeContract(contractcommon.GasAssetName, indexer.ASSET_PLAIN_SAT.String(), tmplcontract.ExchangePriceModeHeight, []tmplcontract.ExchangePriceStep{{
+		Threshold: "0",
+		BPerA:     "0.0001",
+	}, {
+		Threshold: "100",
+		BPerA:     "0.0001111111",
+	}})
+	content, err := json.Marshal(exchange)
+	if err != nil {
+		t.Fatalf("marshal exchange content: %v", err)
+	}
+	contract, fundingValue, fundingAssetAmount, err := (&Manager{}).buildNativeTemplateContract(&TemplateContractDeployRequest{
+		TemplateName:    TEMPLATE_CONTRACT_EXCHANGE,
+		ContractContent: string(content),
+	})
+	if err != nil {
+		t.Fatalf("buildNativeTemplateContract(exchange): %v", err)
+	}
+	if contract.TemplateName() != tmplcontract.TemplateExchange {
+		t.Fatalf("unexpected template %s", contract.TemplateName())
+	}
+	if fundingValue != 0 || fundingAssetAmount != 0 {
+		t.Fatalf("unexpected exchange deploy funding value=%d asset=%d", fundingValue, fundingAssetAmount)
+	}
 }
 
 func assertTemplateContractContent(t *testing.T, manager *Manager, templateName string, contract Contract) {

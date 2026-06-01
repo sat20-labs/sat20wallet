@@ -73,7 +73,6 @@ type TemplateContractDeployRequest struct {
 	GasLimit        uint64
 	RandomHex       string
 	GasAssetAmount  uint64
-	GasAssetName    string
 	FundingValue    int64
 }
 
@@ -83,7 +82,6 @@ type TemplateContractInvokeRequest struct {
 	GasLimit        uint64
 	CallNonce       uint64
 	GasAssetAmount  uint64
-	GasAssetName    string
 	Value           int64
 	AssetName       string
 	Amount          string
@@ -98,7 +96,6 @@ type EVMContractDeployRequest struct {
 	GasLimit               uint64
 	DeployNonce            uint64
 	GasAssetAmount         uint64
-	GasAssetName           string
 }
 
 type EVMContractInvokeRequest struct {
@@ -107,7 +104,6 @@ type EVMContractInvokeRequest struct {
 	GasLimit        uint64
 	CallNonce       uint64
 	GasAssetAmount  uint64
-	GasAssetName    string
 	Value           int64
 	AssetName       string
 	Amount          string
@@ -145,7 +141,6 @@ type AgentContractDeployRequest struct {
 	GasLimit        uint64
 	RandomHex       string
 	GasAssetAmount  uint64
-	GasAssetName    string
 }
 
 type AgentContractInvokeRequest struct {
@@ -156,7 +151,6 @@ type AgentContractInvokeRequest struct {
 	GasLimit        uint64
 	CallNonce       uint64
 	GasAssetAmount  uint64
-	GasAssetName    string
 	BetAssetName    string
 	BetAmount       string
 	Value           int64
@@ -170,7 +164,6 @@ type ContractTxResult struct {
 	TxID            string `json:"txid"`
 	ContractAddress string `json:"contractAddress,omitempty"`
 	Caller          string `json:"caller,omitempty"`
-	GasAssetName    string `json:"gasAssetName,omitempty"`
 	GasAssetAmount  uint64 `json:"gasAssetAmount,omitempty"`
 	GasFeeAmount    uint64 `json:"gasFeeAmount,omitempty"`
 	GasFundAmount   uint64 `json:"gasFundAmount,omitempty"`
@@ -265,11 +258,11 @@ func (p *Manager) deployAgentContract(req *AgentContractDeployRequest) (*Contrac
 	if gasLimit == 0 {
 		gasLimit = agentcontract.DefaultGasConfig().DeployBaseGas
 	}
-	deployBaseFee, gasAsset, err := p.agentGasAssetAmount(agentcontract.DefaultGasConfig().DeployBaseGas, 0, req.GasAssetName)
+	deployBaseFee, gasAsset, err := p.agentGasAssetAmount(agentcontract.DefaultGasConfig().DeployBaseGas, 0)
 	if err != nil {
 		return nil, err
 	}
-	invokeBaseFee, _, err := p.agentGasAssetAmount(agentcontract.DefaultGasConfig().InvokeBaseGas, 0, gasAsset)
+	invokeBaseFee, _, err := p.agentGasAssetAmount(agentcontract.DefaultGasConfig().InvokeBaseGas, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +316,6 @@ func (p *Manager) deployAgentContract(req *AgentContractDeployRequest) (*Contrac
 		ContractType:    ContractTypeAgent,
 		TxID:            txid,
 		ContractAddress: contractAddr.EncodeAddress(),
-		GasAssetName:    gasAsset,
 		GasAssetAmount:  gasAmount,
 		GasFeeAmount:    deployBaseFee,
 		GasFundAmount:   fundingAmount,
@@ -341,7 +333,7 @@ func (p *Manager) invokeAgentContract(req *AgentContractInvokeRequest) (*Contrac
 		if amount == "" {
 			amount = req.BetAmount
 		}
-		return p.invokeDefaultContract(ContractTypeAgent, req.ContractAddress, req.Value, req.GasLimit, req.GasAssetAmount, req.GasAssetName, assetName, amount)
+		return p.invokeDefaultContract(ContractTypeAgent, req.ContractAddress, req.Value, req.GasLimit, req.GasAssetAmount, assetName, amount)
 	}
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
@@ -368,7 +360,7 @@ func (p *Manager) invokeAgentContract(req *AgentContractInvokeRequest) (*Contrac
 	if gasLimit == 0 {
 		gasLimit = agentcontract.DefaultGasConfig().InvokeBaseGas
 	}
-	gasAmount, gasAsset, err := p.agentGasAssetAmount(agentcontract.DefaultGasConfig().InvokeBaseGas, req.GasAssetAmount, req.GasAssetName)
+	gasAmount, gasAsset, err := p.agentGasAssetAmount(agentcontract.DefaultGasConfig().InvokeBaseGas, req.GasAssetAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +416,6 @@ func (p *Manager) invokeAgentContract(req *AgentContractInvokeRequest) (*Contrac
 		ContractType:    ContractTypeAgent,
 		TxID:            txid,
 		ContractAddress: req.ContractAddress,
-		GasAssetName:    gasAsset,
 		GasAssetAmount:  gasAmount,
 		GasFeeAmount:    gasAmount - fundingAmount,
 		GasFundAmount:   fundingAmount,
@@ -458,7 +449,7 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 	if gasLimit == 0 {
 		gasLimit = contractcommon.DeployBaseGas
 	}
-	gasAmount, gasAsset, err := p.templateGasAssetAmount(gasLimit, true, treq.GasAssetAmount, treq.GasAssetName)
+	gasAmount, gasAsset, err := p.templateGasAssetAmount(gasLimit, true, treq.GasAssetAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -510,7 +501,6 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 		ContractType:    ContractTypeTemplate,
 		TxID:            txid,
 		ContractAddress: contractAddr.EncodeAddress(),
-		GasAssetName:    gasAsset,
 		GasAssetAmount:  gasAmount,
 		GasFeeAmount:    gasBaseFee,
 		GasFundAmount:   gasAmount - gasBaseFee,
@@ -539,7 +529,7 @@ func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractT
 		treq.Amount = req.Amount
 	}
 	if treq.DefaultInvoke || req.DefaultInvoke {
-		return p.invokeDefaultContract(ContractTypeTemplate, treq.ContractAddress, treq.Value, treq.GasLimit, treq.GasAssetAmount, treq.GasAssetName, treq.AssetName, treq.Amount)
+		return p.invokeDefaultContract(ContractTypeTemplate, treq.ContractAddress, treq.Value, treq.GasLimit, treq.GasAssetAmount, treq.AssetName, treq.Amount)
 	}
 	contract, err := contractcommon.DecodeContractAddress(treq.ContractAddress)
 	if err != nil {
@@ -560,7 +550,7 @@ func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractT
 	if gasLimit == 0 {
 		gasLimit = contractcommon.InvokeBaseGas
 	}
-	gasAmount, gasAsset, err := p.templateGasAssetAmount(gasLimit, !treq.SkipResultFee, treq.GasAssetAmount, treq.GasAssetName)
+	gasAmount, gasAsset, err := p.templateGasAssetAmount(gasLimit, !treq.SkipResultFee, treq.GasAssetAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -575,7 +565,7 @@ func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractT
 	if callNonce == 0 {
 		callNonce = uint64(time.Now().UnixNano())
 	}
-	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectEVMContractFunding(gasAsset, gasAmount, gasAmount-gasBaseFee, treq.Value)
+	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectDefaultContractFunding(gasAsset, gasAmount, gasAmount-gasBaseFee, treq.Value, treq.AssetName, treq.Amount)
 	if err != nil {
 		return nil, err
 	}
@@ -605,7 +595,6 @@ func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractT
 		ContractType:    ContractTypeTemplate,
 		TxID:            txid,
 		ContractAddress: treq.ContractAddress,
-		GasAssetName:    gasAsset,
 		GasAssetAmount:  gasAmount,
 		GasFeeAmount:    gasBaseFee,
 		GasFundAmount:   gasAmount - gasBaseFee,
@@ -671,6 +660,16 @@ func (p *Manager) buildNativeTemplateContract(req *TemplateContractDeployRequest
 	if name == "" {
 		return nil, 0, 0, fmt.Errorf("missing template name")
 	}
+	if name == TEMPLATE_CONTRACT_EXCHANGE {
+		var exchange tmplcontract.ExchangeContract
+		if err := json.Unmarshal([]byte(req.ContractContent), &exchange); err != nil {
+			return nil, 0, 0, err
+		}
+		if err := exchange.CheckContent(); err != nil {
+			return nil, 0, 0, err
+		}
+		return tmplcontract.NewExchangeContract(exchange.AssetAName, exchange.AssetBName, exchange.PriceMode, exchange.Steps), 0, 0, nil
+	}
 	contract, err := ContractContentUnMarsh(name, req.ContractContent)
 	if err != nil {
 		return nil, 0, 0, err
@@ -685,10 +684,7 @@ func (p *Manager) buildNativeTemplateContract(req *TemplateContractDeployRequest
 			return nil, 0, 0, fmt.Errorf("template content is not AMM")
 		}
 		assetFunding := uint64(0)
-		gasAsset := req.GasAssetName
-		if gasAsset == "" {
-			gasAsset = contractcommon.GasAssetName
-		}
+		gasAsset := p.contractGasAssetNameForNextBlock()
 		if assetName == gasAsset {
 			amt, err := indexer.NewDecimalFromString(amm.AssetAmt, MAX_ASSET_DIVISIBILITY)
 			if err != nil {
@@ -750,14 +746,28 @@ func agentInvokeParam(req *AgentContractInvokeRequest) ([]byte, error) {
 	return []byte(req.ParamJSON), nil
 }
 
-func (p *Manager) agentGasAssetAmount(baseGas uint64, override uint64, gasAssetName string) (uint64, string, error) {
+func (p *Manager) satsNetBestHeight() int64 {
+	if p == nil || p.l2IndexerClient == nil {
+		return 0
+	}
 	height := p.l2IndexerClient.GetBestHeight()
 	if height < 0 {
-		height = 0
+		return 0
 	}
-	if gasAssetName == "" {
-		gasAssetName = contractcommon.GasAssetNameAtHeight(int64(height) + 1)
-	}
+	return int64(height)
+}
+
+func (p *Manager) contractGasAssetNameForNextBlock() string {
+	return p.contractGasAssetNameForHeight(p.satsNetBestHeight() + 1)
+}
+
+func (p *Manager) contractGasAssetNameForHeight(height int64) string {
+	return contractcommon.GasAssetNameAtHeight(GetChainParam_SatsNet().Net, height)
+}
+
+func (p *Manager) agentGasAssetAmount(baseGas uint64, override uint64) (uint64, string, error) {
+	height := p.satsNetBestHeight()
+	gasAssetName := p.contractGasAssetNameForHeight(height + 1)
 	if override != 0 {
 		return override, gasAssetName, nil
 	}
@@ -786,8 +796,8 @@ func decodeTemplateRandom(randomHex string) ([]byte, error) {
 	return decodeHexField("template random", randomHex)
 }
 
-func (p *Manager) templateGasAssetAmount(gasLimit uint64, needsResult bool, override uint64, gasAssetName string) (uint64, string, error) {
-	return p.evmGasAssetAmount(gasLimit, needsResult, override, gasAssetName)
+func (p *Manager) templateGasAssetAmount(gasLimit uint64, needsResult bool, override uint64) (uint64, string, error) {
+	return p.evmGasAssetAmount(gasLimit, needsResult, override)
 }
 
 func normalizeTemplateName(name string) string {
@@ -806,7 +816,7 @@ func (p *Manager) EstimateEVMDeployContract(req *EVMContractDeployRequest) (*Con
 	if gasLimit == 0 {
 		gasLimit = contractcommon.DeployBaseGas
 	}
-	gasAmount, gasAsset, err := p.evmGasAssetAmount(gasLimit, true, req.GasAssetAmount, req.GasAssetName)
+	gasAmount, _, err := p.evmGasAssetAmount(gasLimit, true, req.GasAssetAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -825,7 +835,6 @@ func (p *Manager) EstimateEVMDeployContract(req *EVMContractDeployRequest) (*Con
 		ContractType:    ContractTypeEVM,
 		ContractAddress: contract.EncodeAddress(),
 		Caller:          caller.String(),
-		GasAssetName:    gasAsset,
 		GasAssetAmount:  gasAmount,
 		GasFeeAmount:    gasBaseFee,
 		GasFundAmount:   gasAmount - gasBaseFee,
@@ -846,7 +855,8 @@ func (p *Manager) deployEVMContract(req *EVMContractDeployRequest) (*ContractTxR
 	if err != nil {
 		return nil, err
 	}
-	funding, inputs, changeOutputs, prevFetcher, caller, err := p.selectEVMContractFunding(estimate.GasAssetName, estimate.GasAssetAmount, estimate.GasFundAmount, 0)
+	gasAsset := p.contractGasAssetNameForNextBlock()
+	funding, inputs, changeOutputs, prevFetcher, caller, err := p.selectEVMContractFunding(gasAsset, estimate.GasAssetAmount, estimate.GasFundAmount, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -880,7 +890,7 @@ func (p *Manager) deployEVMContract(req *EVMContractDeployRequest) (*ContractTxR
 
 func (p *Manager) invokeEVMContract(req *EVMContractInvokeRequest) (*ContractTxResult, error) {
 	if req != nil && req.DefaultInvoke {
-		return p.invokeDefaultContract(ContractTypeEVM, req.ContractAddress, req.Value, req.GasLimit, req.GasAssetAmount, req.GasAssetName, req.AssetName, req.Amount)
+		return p.invokeDefaultContract(ContractTypeEVM, req.ContractAddress, req.Value, req.GasLimit, req.GasAssetAmount, req.AssetName, req.Amount)
 	}
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
@@ -896,7 +906,7 @@ func (p *Manager) invokeEVMContract(req *EVMContractInvokeRequest) (*ContractTxR
 	if gasLimit == 0 {
 		gasLimit = contractcommon.InvokeBaseGas
 	}
-	gasAmount, gasAsset, err := p.evmGasAssetAmount(gasLimit, !req.SkipResultFee, req.GasAssetAmount, req.GasAssetName)
+	gasAmount, gasAsset, err := p.evmGasAssetAmount(gasLimit, !req.SkipResultFee, req.GasAssetAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -941,7 +951,6 @@ func (p *Manager) invokeEVMContract(req *EVMContractInvokeRequest) (*ContractTxR
 		TxID:            txid,
 		ContractAddress: req.ContractAddress,
 		Caller:          caller.String(),
-		GasAssetName:    gasAsset,
 		GasAssetAmount:  gasAmount,
 		GasFeeAmount:    gasBaseFee,
 		GasFundAmount:   gasAmount - gasBaseFee,
@@ -950,7 +959,7 @@ func (p *Manager) invokeEVMContract(req *EVMContractInvokeRequest) (*ContractTxR
 	}, nil
 }
 
-func (p *Manager) invokeDefaultContract(contractType, contractAddress string, value int64, gasLimit uint64, gasOverride uint64, gasAssetName, assetName, amount string) (*ContractTxResult, error) {
+func (p *Manager) invokeDefaultContract(contractType, contractAddress string, value int64, gasLimit uint64, gasOverride uint64, assetName, amount string) (*ContractTxResult, error) {
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -961,7 +970,7 @@ func (p *Manager) invokeDefaultContract(contractType, contractAddress string, va
 	if gasLimit == 0 {
 		gasLimit = contractcommon.InvokeBaseGas
 	}
-	fundingGasAmount, gasAsset, err := p.evmGasAssetAmount(gasLimit, false, gasOverride, gasAssetName)
+	fundingGasAmount, gasAsset, err := p.evmGasAssetAmount(gasLimit, false, gasOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -1004,7 +1013,6 @@ func (p *Manager) invokeDefaultContract(contractType, contractAddress string, va
 		TxID:            txid,
 		ContractAddress: contractAddress,
 		Caller:          caller.String(),
-		GasAssetName:    gasAsset,
 		GasAssetAmount:  gasAmount,
 		GasFeeAmount:    gasBaseFee,
 		GasFundAmount:   fundingGasAmount,
@@ -1228,21 +1236,13 @@ func (p *Manager) evmCallerFromPreviousPkScript(pkScript []byte) (contractcommon
 }
 
 func (p *Manager) evmBaseGasFee(baseGas uint64) (uint64, error) {
-	height := p.l2IndexerClient.GetBestHeight()
-	if height < 0 {
-		height = 0
-	}
+	height := p.satsNetBestHeight()
 	return contractcommon.GasFeeAtHeight(baseGas, uint64(height))
 }
 
-func (p *Manager) evmGasAssetAmount(gasLimit uint64, needsResult bool, override uint64, gasAssetName string) (uint64, string, error) {
-	height := p.l2IndexerClient.GetBestHeight()
-	if height < 0 {
-		height = 0
-	}
-	if gasAssetName == "" {
-		gasAssetName = contractcommon.GasAssetNameAtHeight(int64(height) + 1)
-	}
+func (p *Manager) evmGasAssetAmount(gasLimit uint64, needsResult bool, override uint64) (uint64, string, error) {
+	height := p.satsNetBestHeight()
+	gasAssetName := p.contractGasAssetNameForHeight(height + 1)
 	if override != 0 {
 		return override, gasAssetName, nil
 	}
