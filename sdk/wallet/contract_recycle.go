@@ -801,8 +801,6 @@ func (p *RecycleContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock
 		//p.process(data.Height, data.BlockHash) 不需要调用，等主网区块过块时一起处理
 		p.InvokeCompleted_SatsNet(data)
 		p.mutex.Unlock()
-
-		p.sendInvokeResultTx()
 	} else {
 		p.mutex.Lock()
 		p.InvokeCompleted_SatsNet(data)
@@ -914,10 +912,6 @@ func (p *RecycleContractRunTime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Inv
 		// 更新合约状态
 		invokeTx.Handled = true
 		newTxOut := OutputFromSatsNet(output)
-		// 为了处理方便，将L2的交易，当作是一个特殊的L1交易：当作在下一个区块打包的交易
-		// 其区块高度，由主网节点高度确定（这要求合约两个节点都是连接到同一个主网节点）
-		heightL1 := int(p.stp.GetIndexerClient().GetBestHeight())
-		newTxOut.UtxoId = indexer.ToUtxoId(heightL1+1, 0, 0)
 		return p.updateContract(address, newTxOut, true, false), nil
 
 	default:
@@ -1427,39 +1421,63 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 	height := dealInfo.Height
 	txId := dealInfo.TxId
 
-	for address, info := range dealInfo.SendInfo {
-		rewardMap, ok := p.rewardMap[address]
-		if ok {
-			deleted := make([]int64, 0)
-			for _, item := range rewardMap {
-				h, _, _ := indexer.FromUtxoId(item.UtxoId)
-				if h > height {
-					continue
-				}
-				if item.Finished() {
-					continue
-				}
-				item.Done = ITEM_STATUS_DEALT
-				item.OutTxId = txId
-				item.RemainingAmt = nil
-				item.RemainingValue = 0
-				item.ToL1 = true
-				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
-				deleted = append(deleted, item.Id)
-				//delete(p.history, item.InUtxo) // TODO 如果主网的调用，不要从history中删除，至少保留6个区块后再删除
+	if len(dealInfo.ItemIDs) != 0 {
+		addrItems := make(map[string][]*InvokeItem)
+		for _, id := range dealInfo.ItemIDs {
+			item := p.loadHistoryRewardItemByID(id)
+			if item == nil || item.Finished() {
+				continue
 			}
-			for _, id := range deleted {
-				delete(rewardMap, id)
+			addrItems[item.Address] = append(addrItems[item.Address], item)
+		}
+		for address, info := range dealInfo.SendInfo {
+			for _, item := range addrItems[address] {
+				p.markRewardItemDealt(item, txId)
 			}
-			if len(rewardMap) == 0 {
-				delete(p.rewardMap, address)
+			trader := p.loadInvokerInfo(address)
+			if trader != nil {
+				trader.TotalRewardAmt = trader.TotalRewardAmt.Add(info.AssetAmt)
+				trader.TotalRewardValue += info.Value
+				saveContractInvokerStatus(p.stp.GetDB(), url, trader)
 			}
 		}
-		trader := p.loadInvokerInfo(address)
-		if trader != nil {
-			trader.TotalRewardAmt = trader.TotalRewardAmt.Add(info.AssetAmt)
-			trader.TotalRewardValue += info.Value
-			saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+	} else {
+		for address, info := range dealInfo.SendInfo {
+			rewardMap, ok := p.rewardMap[address]
+			if ok {
+				for _, item := range rewardMap {
+					h, _, _ := indexer.FromUtxoId(item.UtxoId)
+					if h > height {
+						continue
+					}
+					if item.Finished() {
+						continue
+					}
+					p.markRewardItemDealt(item, txId)
+					//delete(p.history, item.InUtxo) // TODO 如果主网的调用，不要从history中删除，至少保留6个区块后再删除
+				}
+			}
+			trader := p.loadInvokerInfo(address)
+			if trader != nil {
+				trader.TotalRewardAmt = trader.TotalRewardAmt.Add(info.AssetAmt)
+				trader.TotalRewardValue += info.Value
+				saveContractInvokerStatus(p.stp.GetDB(), url, trader)
+			}
+		}
+	}
+
+	for address, rewardMap := range p.rewardMap {
+		deleted := make([]int64, 0)
+		for id, item := range rewardMap {
+			if item.Finished() {
+				deleted = append(deleted, id)
+			}
+		}
+		for _, id := range deleted {
+			delete(rewardMap, id)
+		}
+		if len(rewardMap) == 0 {
+			delete(p.rewardMap, address)
 		}
 	}
 
@@ -1468,6 +1486,28 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 	p.CheckPointBlockL1 = dealInfo.Height
 
 	p.refreshTime = 0
+}
+
+func (p *RecycleContractRunTime) markRewardItemDealt(item *InvokeItem, txId string) {
+	item.Done = ITEM_STATUS_DEALT
+	item.OutTxId = txId
+	item.RemainingAmt = nil
+	item.RemainingValue = 0
+	item.ToL1 = true
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+}
+
+func (p *RecycleContractRunTime) loadHistoryRewardItemByID(id int64) *InvokeItem {
+	itemBase, err := loadContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), GetKeyFromId(id))
+	if err != nil {
+		Log.Errorf("loadContractInvokeHistoryItem %s %d failed, %v", p.URL(), id, err)
+		return nil
+	}
+	item, ok := itemBase.(*InvokeItem)
+	if !ok {
+		return nil
+	}
+	return item
 }
 
 func addSendInfo(sendInfoMap map[string]*SendAssetInfo, address string,
@@ -1486,7 +1526,22 @@ func addSendInfo(sendInfoMap map[string]*SendAssetInfo, address string,
 }
 
 func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
+	return p.genRewardInfoWithItemFilter(height, nil)
+}
 
+func (p *RecycleContractRunTime) genRewardInfoByItemIDs(height int, itemIDs []int64) *DealInfo {
+	if len(itemIDs) == 0 {
+		return p.genRewardInfo(height)
+	}
+
+	itemFilter := make(map[int64]bool, len(itemIDs))
+	for _, id := range itemIDs {
+		itemFilter[id] = true
+	}
+	return p.genRewardInfoWithItemFilter(height, itemFilter)
+}
+
+func (p *RecycleContractRunTime) genRewardInfoWithItemFilter(height int, itemFilter map[int64]bool) *DealInfo {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
@@ -1502,41 +1557,32 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 	var totalAmt *Decimal                          // 资产数量
 	sendInfoMap := make(map[string]*SendAssetInfo) // key: address
 	itemIDs := make([]int64, 0)
+	seenItems := make(map[int64]bool)
 	for _, rewardMap := range p.rewardMap {
 		for _, item := range rewardMap {
-			h, _, _ := indexer.FromUtxoId(item.UtxoId)
-			if h > height {
+			if itemFilter != nil && !itemFilter[item.Id] {
 				continue
 			}
-			if item.Finished() {
+			seenItems[item.Id] = true
+			p.addRewardSendInfo(height, item, assetName, localPeerAddr, remotePeerAddr,
+				sendInfoMap, &itemIDs, &maxHeight, &totalAmt, &totalValue)
+			if isRune && len(sendInfoMap) >= 8 {
+				break // 其他后面再处理
+			}
+		}
+	}
+
+	if itemFilter != nil {
+		for id := range itemFilter {
+			if seenItems[id] {
 				continue
 			}
-			maxHeight = max(maxHeight, h)
-			itemIDs = appendDealItemID(itemIDs, item.Id)
-
-			// TODO 需要确保最低奖的分成大于330
-			// amt1 := item.OutAmt.Mul(REWARD_SHARE_INVOKER_Decimal)
-			//value1 := item.OutValue * int64(REWARD_SHARE_INVOKER) / 100
-			amt2 := item.OutAmt.Mul(REWARD_SHARE_SERVER_Decimal)
-			value2 := item.OutValue * int64(REWARD_SHARE_SERVER) / 100
-			value1 := item.OutValue - value2 - value2
-			amt1 := item.OutAmt.Sub(amt2).Sub(amt2)
-
-			totalAmt = totalAmt.Add(item.OutAmt)
-			totalValue += item.OutValue
-
-			info := addSendInfo(sendInfoMap, item.Address, assetName)
-			info.AssetAmt = info.AssetAmt.Add(amt1)
-			info.Value += value1
-
-			info = addSendInfo(sendInfoMap, localPeerAddr, assetName)
-			info.AssetAmt = info.AssetAmt.Add(amt2)
-			info.Value += value2
-
-			info = addSendInfo(sendInfoMap, remotePeerAddr, assetName)
-			info.AssetAmt = info.AssetAmt.Add(amt2)
-			info.Value += value2
-
+			item := p.loadHistoryRewardItemByID(id)
+			if item == nil {
+				continue
+			}
+			p.addRewardSendInfo(height, item, assetName, localPeerAddr, remotePeerAddr,
+				sendInfoMap, &itemIDs, &maxHeight, &totalAmt, &totalValue)
 			if isRune && len(sendInfoMap) >= 8 {
 				break // 其他后面再处理
 			}
@@ -1596,12 +1642,54 @@ func (p *RecycleContractRunTime) genRewardInfo(height int) *DealInfo {
 		AssetName:         assetName,
 		TotalAmt:          totalAmt,
 		TotalValue:        totalValue,
-		Reason:            INVOKE_RESULT_WITHDRAW,
+		Reason:            INVOKE_RESULT_REWARD,
 		Height:            maxHeight,
 		InvokeCount:       p.InvokeCount,
 		StaticMerkleRoot:  p.StaticMerkleRoot,
 		RuntimeMerkleRoot: p.CurrAssetMerkleRoot,
 	}
+}
+
+func (p *RecycleContractRunTime) addRewardSendInfo(height int, item *InvokeItem,
+	assetName *indexer.AssetName, localPeerAddr, remotePeerAddr string,
+	sendInfoMap map[string]*SendAssetInfo, itemIDs *[]int64,
+	maxHeight *int, totalAmt **Decimal, totalValue *int64) {
+	h, _, _ := indexer.FromUtxoId(item.UtxoId)
+	if h > height {
+		return
+	}
+	if item.Finished() {
+		return
+	}
+	if item.OutValue == 0 && (item.OutAmt == nil || item.OutAmt.IsZero()) {
+		return
+	}
+
+	*maxHeight = max(*maxHeight, h)
+	*itemIDs = appendDealItemID(*itemIDs, item.Id)
+
+	// TODO 需要确保最低奖的分成大于330
+	// amt1 := item.OutAmt.Mul(REWARD_SHARE_INVOKER_Decimal)
+	//value1 := item.OutValue * int64(REWARD_SHARE_INVOKER) / 100
+	amt2 := item.OutAmt.Mul(REWARD_SHARE_SERVER_Decimal)
+	value2 := item.OutValue * int64(REWARD_SHARE_SERVER) / 100
+	value1 := item.OutValue - value2 - value2
+	amt1 := item.OutAmt.Sub(amt2).Sub(amt2)
+
+	*totalAmt = (*totalAmt).Add(item.OutAmt)
+	*totalValue += item.OutValue
+
+	info := addSendInfo(sendInfoMap, item.Address, assetName)
+	info.AssetAmt = info.AssetAmt.Add(amt1)
+	info.Value += value1
+
+	info = addSendInfo(sendInfoMap, localPeerAddr, assetName)
+	info.AssetAmt = info.AssetAmt.Add(amt2)
+	info.Value += value2
+
+	info = addSendInfo(sendInfoMap, remotePeerAddr, assetName)
+	info.AssetAmt = info.AssetAmt.Add(amt2)
+	info.Value += value2
 }
 
 // 收到withdraw的交易，执行一层分发
@@ -1735,7 +1823,7 @@ func (p *RecycleContractRunTime) AllowPeerAction(action string, param any) (any,
 		switch dealInfo.Reason {
 
 		case INVOKE_RESULT_REWARD:
-			info := p.genRewardInfo(dealInfo.Height)
+			info := p.genRewardInfoByItemIDs(dealInfo.Height, dealInfo.ItemIDs)
 			if info != nil {
 				expectedSendInfo = info.SendInfo
 			}

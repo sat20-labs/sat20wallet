@@ -7,15 +7,14 @@ import (
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
 
-
 type NodeRPCClient interface {
 	GetSupportedContractsReq() ([]string, error)
 	GetDeployedContractsReq() ([]string, error)
 	GetContractStatusReq(string) (string, error)
 	GetContractAnalyticsReq(string) (string, error)
 	GetContractInvokeHistoryReq(string, int, int) (string, error)
-	GetContractInvokeHistoryByAddressReq(string, string, int, int)  (string, error)
-	GetContractInvokeItemByInUtxoReq(string, string)  (string, error)
+	GetContractInvokeHistoryByAddressReq(string, string, int, int) (string, error)
+	GetContractInvokeItemByInUtxoReq(string, string) (string, error)
 	GetContractAllAddressesReq(string, int, int) (string, error)
 	GetContractStatusByAddressReq(string, string) (string, error)
 
@@ -25,7 +24,6 @@ type NodeRPCClient interface {
 	SendPingReq(*wwire.PingReq) (*wwire.PingResp, error)
 	SendActionSyncReq(req *wwire.ActionSyncReq) (*wwire.ActionSyncResp, error)
 }
-
 
 type BaseResp struct {
 	Code int    `json:"code" example:"0"`
@@ -148,11 +146,86 @@ func (p *NodeClient) GetContractAnalyticsReq(contractUrl string) (string, error)
 	return result.Status, nil
 }
 
+func (p *NodeClient) SendPerformRemoteActionReq(info *RemoteActionPerformReservation) error {
+	req := wwire.PerformActionReq{
+		PerformActionRequest: *info.req,
+		Sig:                  info.ReqSig,
+	}
+
+	buff, err := json.Marshal(&req)
+	if err != nil {
+		return err
+	}
+
+	url := p.GetUrl(wwire.STP_PERFORM_ACTION_REQ)
+	rsp, err := p.Http.SendPostRequest(url, buff)
+	if err != nil {
+		Log.Errorf("SendPostRequest %v failed. %v", url, err)
+		return err
+	}
+
+	var result wwire.PerformActionResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("SendPerformActionReq failed, %s", result.Msg)
+		return fmt.Errorf("%s", result.Msg)
+	}
+
+	info.Id = result.Id
+	info.ServiceAddr = result.ServiceAddress
+	info.ServiceFee = result.ServiceFee
+	info.Invoice = result.Invoice
+	info.InvoiceSig = result.InvoiceSig
+
+	return nil
+}
+
+func (p *NodeClient) SendPerformRemoteActionAckReq(info *RemoteActionPerformReservation) error {
+	req := wwire.PerformActionAckReq{
+		Id:      info.Id,
+		FeeTx:   info.FeeTx,
+		FeeTxId: info.FeeTxId,
+	}
+
+	buff, err := json.Marshal(&req)
+	if err != nil {
+		return err
+	}
+
+	url := p.GetUrl(wwire.STP_PERFORM_ACTION_ACK)
+	rsp, err := p.Http.SendPostRequest(url, buff)
+	if err != nil {
+		Log.Errorf("SendPostRequest %v failed. %v", url, err)
+		return err
+	}
+
+	var result wwire.PerformActionAckResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("SendPerformActionAckReq failed, %s", result.Msg)
+		return fmt.Errorf("%s", result.Msg)
+	}
+
+	info.Status = ResvStatus(result.Status)
+	info.ActionResvId = result.ActionResvId
+	info.ActionStatus = result.ActionStatus
+	info.ActionResult = result.ActionResult
+
+	return nil
+}
 
 func (p *NodeClient) GetContractInvokeHistoryReq(contractUrl string, start, limit int) (string, error) {
 	url := p.GetUrl(wwire.QUERY_INFO_CONTRACT_INVOKE_HISTORY + "/" + contractUrl)
 	if start != 0 || limit != 0 {
-		url.Query = make(map[string]string)  
+		url.Query = make(map[string]string)
 		url.Query["start"] = fmt.Sprintf("%d", start)
 		url.Query["limit"] = fmt.Sprintf("%d", limit)
 	}
@@ -177,12 +250,11 @@ func (p *NodeClient) GetContractInvokeHistoryReq(contractUrl string, start, limi
 	return result.Status, nil
 }
 
-
 func (p *NodeClient) GetContractInvokeHistoryByAddressReq(contractUrl, address string, start, limit int) (string, error) {
 
 	url := p.GetUrl(wwire.QUERY_INFO_CONTRACT_USERHISTORY + "/" + contractUrl + "/" + address)
 	if start != 0 || limit != 0 {
-		url.Query = make(map[string]string)  
+		url.Query = make(map[string]string)
 		url.Query["start"] = fmt.Sprintf("%d", start)
 		url.Query["limit"] = fmt.Sprintf("%d", limit)
 	}
@@ -235,7 +307,7 @@ func (p *NodeClient) GetContractAllAddressesReq(contractUrl string, start, limit
 
 	url := p.GetUrl(wwire.QUERY_INFO_CONTRACT_ALLUSER + "/" + contractUrl)
 	if start != 0 || limit != 0 {
-		url.Query = make(map[string]string)  
+		url.Query = make(map[string]string)
 		url.Query["start"] = fmt.Sprintf("%d", start)
 		url.Query["limit"] = fmt.Sprintf("%d", limit)
 	}
@@ -321,11 +393,11 @@ func (p *NodeClient) SendSigReq(req *wwire.SignRequest,
 func (p *NodeClient) SendActionResultNfty(msgId int64, action string, ret int, reason string) error {
 
 	req := wwire.ActionResultNotify{
-		MsgHeader: 	wwire.NewMsgHeader(),
-		Id:     	msgId,
-		Action: 	action,
-		Result: 	ret,
-		Reason: 	reason,
+		MsgHeader: wwire.NewMsgHeader(),
+		Id:        msgId,
+		Action:    action,
+		Result:    ret,
+		Reason:    reason,
 	}
 
 	buff, err := json.Marshal(&req)

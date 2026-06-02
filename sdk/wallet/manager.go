@@ -23,9 +23,9 @@ import (
 
 // //////
 // only use in testing
-var _enable_testing bool = false
-var _not_send_tx = false
-var _not_invoke_block = false
+var ENABLE_TESTING bool = false
+var NOT_SEND_TX = false
+var NOT_INVOKE_BLOCK = false
 
 ////////
 
@@ -37,6 +37,29 @@ type Node struct {
 	Pubkey   *secp256k1.PublicKey
 }
 
+func NewNode(client NodeRPCClient, host, nodeType string, nodeId, pubkey *secp256k1.PublicKey) *Node {
+	return &Node{
+		client:   client,
+		Host:     host,
+		NodeType: nodeType,
+		NodeId:   nodeId,
+		Pubkey:   pubkey,
+	}
+}
+
+func (p *Node) RPCClient() NodeRPCClient {
+	if p == nil {
+		return nil
+	}
+	return p.client
+}
+
+func (p *Node) SetRPCClient(client NodeRPCClient) {
+	if p != nil {
+		p.client = client
+	}
+}
+
 type WalletInfo struct {
 	WalletInDB
 	Wallet common.Wallet
@@ -44,22 +67,42 @@ type WalletInfo struct {
 
 type NotifyCB func(string, interface{})
 
+const (
+	ACTION_STATUS_EVENT_COMPLETED = "completed"
+	ACTION_STATUS_EVENT_FAILED    = "failed"
+)
+
+type ActionStatusEvent struct {
+	Event      string
+	Resv       Reservation
+	ResvType   string
+	Action     string
+	Status     ResvStatus
+	Err        error
+	SendTxInL1 bool
+}
+
+type ActionStatusCallback func(*ActionStatusEvent)
+type MonitorTickCallback func(sendTxInL1 bool)
+
 // 密码只有一个，助记词可以有多组，对应不同的wallet
 type Manager struct {
 	mutex sync.RWMutex
 
-	cfg           *common.Config
-	bInited       bool
-	status        *Status
-	walletInfoMap map[int64]*WalletInfo
-	wallet        common.Wallet
-	msgCallback   NotifyCB
-	tickerInfoMap map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
+	cfg            *common.Config
+	bInited        bool
+	status         *Status
+	walletInfoMap  map[int64]*WalletInfo
+	wallet         common.Wallet
+	msgCallback    NotifyCB
+	actionCallback ActionStatusCallback
+	monitorTicks   []MonitorTickCallback
+	tickerInfoMap  map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
 
-	db                   db.KVDB
-	http                 HttpClient
-	l1IndexerClient      *IndexerRPCClientMgr
-	l2IndexerClient      *IndexerRPCClientMgr
+	db              db.KVDB
+	http            HttpClient
+	l1IndexerClient *IndexerRPCClientMgr
+	l2IndexerClient *IndexerRPCClientMgr
 
 	bootstrapNode []*Node // 引导节点，全网目前唯一，以后由基金会提供至少3个，通过MPC管理密钥
 	serverNode    *Node   // 服务节点，由引导节点更新维护，一般情况下，用户只跟一个服务节点打交道
@@ -73,6 +116,17 @@ type Manager struct {
 	refreshTimeL2 int64
 
 	inscibeMap map[int64]*InscribeResv // key: timestamp
+
+	localActionPerformMap  map[int64]*LocalActionPerformData
+	remoteActionPerformMap map[int64]*RemoteActionPerformReservation
+	resvMap                map[int64]Reservation
+
+	actionMonitorLock    sync.Mutex
+	actionMonitorL1Lock  sync.Mutex
+	actionMonitorL2Lock  sync.Mutex
+	actionMonitorStop    chan struct{}
+	actionMonitorWG      sync.WaitGroup
+	actionMonitorRunning bool
 }
 
 func (p *Manager) init() error {
@@ -118,6 +172,18 @@ func (p *Manager) SetIndexerHttpClient_SatsNet(client IndexerRPCClient) {
 
 func (p *Manager) SetServerNodeHttpClient(client NodeRPCClient) {
 	p.serverNode.client = client
+}
+
+func (p *Manager) SetServerNode(node *Node) {
+	p.serverNode = node
+}
+
+func (p *Manager) GetServerNode() *Node {
+	return p.serverNode
+}
+
+func (p *Manager) GetBootstrapNodes() []*Node {
+	return p.bootstrapNode
 }
 
 func GetBootstrapPubKey() *secp256k1.PublicKey {
@@ -177,13 +243,7 @@ func (p *Manager) initNode() error {
 		switch parts[0] {
 		case "b":
 			if bytes.Equal(parsedPubkey.SerializeCompressed(), bootstrappubkey.SerializeCompressed()) {
-				node := &Node{
-					client:   NewNodeClient(scheme, host, proxy, p.http),
-					NodeId:   bootstrappubkey,
-					Host:     host,
-					NodeType: BOOTSTRAP_NODE,
-					Pubkey:   bootstrappubkey,
-				}
+				node := NewNode(NewNodeClient(scheme, host, proxy, p.http), host, BOOTSTRAP_NODE, bootstrappubkey, bootstrappubkey)
 				p.bootstrapNode = append(p.bootstrapNode, node)
 			} else {
 				return fmt.Errorf("invalid bootstrap pubkey")
@@ -193,13 +253,7 @@ func (p *Manager) initNode() error {
 			if p.serverNode != nil {
 				return fmt.Errorf("too many server node setting")
 			}
-			p.serverNode = &Node{
-				client:   NewNodeClient(scheme, host, proxy, p.http),
-				NodeId:   parsedPubkey,
-				Host:     host,
-				NodeType: SERVER_NODE,
-				Pubkey:   parsedPubkey,
-			}
+			p.serverNode = NewNode(NewNodeClient(scheme, host, proxy, p.http), host, SERVER_NODE, parsedPubkey, parsedPubkey)
 		default:
 			Log.Errorf("not support type %s", n)
 		}
@@ -215,13 +269,9 @@ func (p *Manager) initNode() error {
 			proxy = "/stp/mainnet"
 		}
 
-		p.bootstrapNode = []*Node{{
-			client:   NewNodeClient("https", host, proxy, p.http),
-			NodeId:   bootstrappubkey,
-			Host:     host,
-			NodeType: BOOTSTRAP_NODE,
-			Pubkey:   bootstrappubkey,
-		}}
+		p.bootstrapNode = []*Node{
+			NewNode(NewNodeClient("https", host, proxy, p.http), host, BOOTSTRAP_NODE, bootstrappubkey, bootstrappubkey),
+		}
 	}
 
 	if p.serverNode == nil {
@@ -263,6 +313,9 @@ func (p *Manager) initResvMap() {
 	defer p.mutex.Unlock()
 
 	p.inscibeMap = make(map[int64]*InscribeResv)
+	p.localActionPerformMap = make(map[int64]*LocalActionPerformData)
+	p.remoteActionPerformMap = make(map[int64]*RemoteActionPerformReservation)
+	p.resvMap = make(map[int64]Reservation)
 }
 
 func (p *Manager) GenerateNewResvId() int64 {
@@ -270,7 +323,7 @@ func (p *Manager) GenerateNewResvId() int64 {
 	defer p.mutex.Unlock()
 	id := time.Now().UnixMicro()
 	for {
-		_, ok := p.inscibeMap[id]
+		_, ok := p.resvMap[id]
 		if ok {
 			id++
 			continue
@@ -288,6 +341,71 @@ func (p *Manager) GetInscribeResv(id int64) *InscribeResv {
 		return r
 	}
 	return nil
+}
+
+func (p *Manager) GetResv(id int64) Reservation {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return p.resvMap[id]
+}
+
+func (p *Manager) GetRemoteAction(id int64) *RemoteActionPerformReservation {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return p.remoteActionPerformMap[id]
+}
+
+func (p *Manager) GetAllResv() map[int64]Reservation {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	result := make(map[int64]Reservation, len(p.resvMap))
+	for id, resv := range p.resvMap {
+		result[id] = resv
+	}
+	return result
+}
+
+func (p *Manager) addResv(r Reservation) {
+	if r == nil {
+		return
+	}
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.addResvLocked(r)
+}
+
+func (p *Manager) addResvLocked(r Reservation) {
+	id := r.GetId()
+	if id == 0 {
+		return
+	}
+	p.resvMap[id] = r
+	switch r.GetType() {
+	case RESV_TYPE_INSC:
+		p.inscibeMap[id] = r.(*InscribeResv)
+	case RESV_TYPE_LOCALACTION:
+		p.localActionPerformMap[id] = r.(*LocalActionPerformData)
+	case RESV_TYPE_REMOTEACTION:
+		p.remoteActionPerformMap[id] = r.(*RemoteActionPerformReservation)
+	}
+}
+
+func (p *Manager) DelResvWithId(id int64) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	resv := p.resvMap[id]
+	if resv == nil {
+		return
+	}
+	delete(p.resvMap, id)
+	switch resv.GetType() {
+	case RESV_TYPE_INSC:
+		delete(p.inscibeMap, id)
+	case RESV_TYPE_LOCALACTION:
+		delete(p.localActionPerformMap, id)
+	case RESV_TYPE_REMOTEACTION:
+		delete(p.remoteActionPerformMap, id)
+	}
 }
 
 func (p *Manager) GetFeeRate() int64 {
@@ -596,7 +714,7 @@ func (p *Manager) GetUtxosWithAssetV2_SatsNet(address string, plainSats int64,
 		}
 	}
 	if totalAssets.Cmp(expectedAssetAmt) < 0 {
-		return nil, nil, fmt.Errorf("no enough utxo for %s, require %s but only %s", 
+		return nil, nil, fmt.Errorf("no enough utxo for %s, require %s but only %s",
 			assetName.String(), expectedAssetAmt.String(), totalAssets.String())
 	}
 
@@ -765,7 +883,7 @@ func (p *Manager) GetAssetBalance_SatsNet(address string, name *swire.AssetName)
 }
 
 func (p *Manager) BroadcastTx(tx *wire.MsgTx) (string, error) {
-	if _enable_testing && _not_send_tx {
+	if ENABLE_TESTING && NOT_SEND_TX {
 		return tx.TxID(), nil
 	}
 
@@ -779,8 +897,8 @@ func (p *Manager) BroadcastTx(tx *wire.MsgTx) (string, error) {
 	return txId, nil
 }
 
-func (p *Manager) BroadcastTxs(txs []*wire.MsgTx) (error) {
-	if _enable_testing && _not_send_tx {
+func (p *Manager) BroadcastTxs(txs []*wire.MsgTx) error {
+	if ENABLE_TESTING && NOT_SEND_TX {
 		return nil
 	}
 
@@ -797,7 +915,7 @@ func (p *Manager) BroadcastTxs(txs []*wire.MsgTx) (error) {
 }
 
 func (p *Manager) BroadcastTx_SatsNet(tx *swire.MsgTx) (string, error) {
-	if _enable_testing && _not_send_tx {
+	if ENABLE_TESTING && NOT_SEND_TX {
 		return tx.TxID(), nil
 	}
 
@@ -808,6 +926,19 @@ func (p *Manager) BroadcastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 	}
 	p.utxoLockerL2.LockUtxosWithTx_SatsNet(tx)
 	return txId, nil
+}
+
+func (p *Manager) BroadcastTxs_SatsNet(txs []*swire.MsgTx) error {
+	if ENABLE_TESTING && NOT_SEND_TX {
+		return nil
+	}
+
+	for _, tx := range txs {
+		if _, err := p.BroadcastTx_SatsNet(tx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *Manager) GetUtxoLocker() *UtxoLocker {

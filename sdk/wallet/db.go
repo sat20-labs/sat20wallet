@@ -18,7 +18,7 @@ const (
 	DB_KEY_STATUS = "wallet-status"
 	DB_KEY_WALLET = "wallet-id-"
 
-	DB_KEY_INSC        = "insc-"
+	DB_KEY_RESV        = "resv-"
 	DB_KEY_TICKER_INFO = "t-"
 
 	DB_KEY_UTXO          = "u-"  // u-network-address-utxo
@@ -109,7 +109,10 @@ func (p *Manager) initDB() error {
 	}
 	p.walletInfoMap = wallets
 
-	p.inscibeMap = LoadAllInscribeResvFromDB(p.db)
+	loadedResv := LoadAllResvFromDB(p.db, p)
+	for _, resv := range loadedResv {
+		p.addResvLocked(resv)
+	}
 
 	p.utxoLockerL1.Init()
 	p.utxoLockerL2.Init()
@@ -558,52 +561,78 @@ func deleteAllTickerInfoFromDB(db db.KVDB) error {
 	return err
 }
 
-func GetInscribeResvKey(id int64) string {
-	return fmt.Sprintf("%s%s%d", GetDBKeyPrefix(), DB_KEY_INSC, id)
+func SaveInscribeResv(db db.KVDB, resv *InscribeResv) error {
+	return SaveReservation(db, resv)
 }
 
-func ParseInscribeResvKey(key string) (int64, error) {
-	prefix := GetDBKeyPrefix() + DB_KEY_INSC
+func LoadInscribeResv(db db.KVDB, id int64) (*InscribeResv, error) {
+	resv, err := LoadReservation(db, nil, RESV_TYPE_INSC, id)
+	if err != nil {
+		return nil, err
+	}
+	insc, ok := resv.(*InscribeResv)
+	if !ok {
+		return nil, fmt.Errorf("reservation %d is not inscribe", id)
+	}
+	return insc, nil
+}
+
+func DeleteInscribeResv(db db.KVDB, id int64) error {
+	return DeleteReservation(db, RESV_TYPE_INSC, id)
+}
+
+func GetResvKey(typ string, id int64) string {
+	return fmt.Sprintf("%s%s%s-%d", GetDBKeyPrefix(), DB_KEY_RESV, typ, id)
+}
+
+func ParseResvKey(key string) (string, int64, error) {
+	prefix := GetDBKeyPrefix() + DB_KEY_RESV
 	if !strings.HasPrefix(key, prefix) {
-		return -1, fmt.Errorf("not a reservation: %s", key)
+		return "", -1, fmt.Errorf("not a reservation: %s", key)
 	}
 	key = strings.TrimPrefix(key, prefix)
-
-	id, err := strconv.ParseInt(key, 10, 64)
-	if err != nil {
-		return -1, err
+	parts := strings.Split(key, "-")
+	if len(parts) != 2 {
+		return "", -1, fmt.Errorf("invalid reservation key: %s", key)
 	}
-
-	return id, nil
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return "", -1, err
+	}
+	return parts[0], id, nil
 }
 
-func LoadAllInscribeResvFromDB(db db.KVDB) map[int64]*InscribeResv {
-	prefix := []byte(GetDBKeyPrefix() + DB_KEY_INSC)
-
-	result := make(map[int64]*InscribeResv, 0)
+func LoadAllResvFromDB(db db.KVDB, walletMgr *Manager) map[int64]Reservation {
+	prefix := []byte(GetDBKeyPrefix() + DB_KEY_RESV)
+	result := make(map[int64]Reservation, 0)
 	invalidKeys := make([]string, 0)
 	db.BatchRead(prefix, false, func(k, v []byte) error {
-
-		id, err := ParseInscribeResvKey(string(k))
+		typ, id, err := ParseResvKey(string(k))
 		if err != nil {
-			Log.Errorf("ParseInscribeResvKey failed. %v", err)
+			Log.Errorf("ParseResvKey failed. %v", err)
 			return nil
 		}
-
-		var value InscribeResv
-		err = DecodeFromBytes(v, &value)
+		value := newResvFromType(typ)
+		if value == nil {
+			return nil
+		}
+		err = DecodeFromBytes(v, value.GetStructInDB())
 		if err != nil {
 			invalidKeys = append(invalidKeys, string(k))
 			Log.Errorf("DecodeFromBytes %s failed. %v", string(k), err)
 			return nil
 		}
-
-		if value.Status <= RS_CLOSED {
+		if value.GetStatus() <= RS_CLOSED {
 			return nil
 		}
-
-		result[id] = &value
-		Log.Infof("loadAllInscribeResvFromDB loaded. %d", value.Id)
+		err = value.InitLocalWallet(walletMgr)
+		if err != nil {
+			invalidKeys = append(invalidKeys, string(k))
+			Log.Errorf("InitLocalWallet %s failed. %v", string(k), err)
+			return nil
+		}
+		result[id] = value
+		Log.Infof("LoadAllResvFromDB loaded. %d %s 0x%x", value.GetId(), value.GetType(), value.GetStatus())
 		return nil
 	})
 
@@ -615,66 +644,61 @@ func LoadAllInscribeResvFromDB(db db.KVDB) map[int64]*InscribeResv {
 		}
 		wb.Flush()
 	}
-
 	return result
 }
 
-func SaveInscribeResv(db db.KVDB, resv *InscribeResv) error {
+func (p *Manager) SaveWalletReservation(resv Reservation) error {
+	if resv == nil {
+		return nil
+	}
+	return SaveReservation(p.db, resv)
+}
 
-	buf, err := EncodeToBytes(resv)
+func SaveReservation(db db.KVDB, resv Reservation) error {
+	if resv == nil {
+		return nil
+	}
+	buf, err := EncodeToBytes(resv.GetStructInDB())
 	if err != nil {
-		Log.Errorf("saveInscribeResv EncodeToBytes failed. %v", err)
+		Log.Errorf("SaveReservation EncodeToBytes failed. %v", err)
 		return err
 	}
-	key := GetInscribeResvKey(resv.Id)
-
+	key := GetResvKey(resv.GetType(), resv.GetId())
 	err = db.Write([]byte(key), buf)
 	if err != nil {
-		Log.Errorf("saveInscribeResv failed. %v", err)
+		Log.Errorf("SaveReservation failed. %v", err)
 		return err
 	}
-	Log.Infof("saveInscribeResv %d succ. %x", resv.Id, resv.Status)
-
-	if _enable_testing {
-		newResv, err := LoadInscribeResv(db, resv.Id)
-		if err != nil {
-			Log.Panicf("saveInscribeResv loadReservation failed, %v", err)
-		}
-
-		buf2, err := EncodeToBytes(newResv)
-		if err != nil {
-			Log.Panicf("saveInscribeResv EncodeToBytes failed. %v", err)
-		}
-
-		if !bytes.Equal(buf, buf2) {
-			Log.Panic("buf not equal")
-		}
-		Log.Infof("resv %d checked", resv.Id)
-	}
-
+	Log.Infof("SaveReservation %d succ. %s %x", resv.GetId(), resv.GetType(), resv.GetStatus())
 	return nil
 }
 
-func LoadInscribeResv(db db.KVDB, id int64) (*InscribeResv, error) {
-	key := GetInscribeResvKey(id)
-	var value InscribeResv
+func LoadReservation(db db.KVDB, walletMgr *Manager, typ string, id int64) (Reservation, error) {
+	key := GetResvKey(typ, id)
+	value := newResvFromType(typ)
+	if value == nil {
+		return nil, fmt.Errorf("newResvFromType %s failed", typ)
+	}
 	buf, err := db.Read([]byte(key))
 	if err != nil {
-		//Log.Errorf("Read %s failed. %v", key, err)
 		return nil, err
 	}
-
-	err = DecodeFromBytes(buf, &value)
+	err = DecodeFromBytes(buf, value.GetStructInDB())
 	if err != nil {
 		Log.Errorf("DecodeFromBytes %s failed. %v", key, err)
 		return nil, err
 	}
-
-	return &value, nil
+	if walletMgr != nil {
+		err = value.InitLocalWallet(walletMgr)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return value, nil
 }
 
-func DeleteInscribeResv(db db.KVDB, id int64) error {
-	key := GetInscribeResvKey(id)
+func DeleteReservation(db db.KVDB, typ string, id int64) error {
+	key := GetResvKey(typ, id)
 	return db.Delete([]byte(key))
 }
 

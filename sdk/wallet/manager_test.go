@@ -164,7 +164,6 @@ func initNode(t *testing.T, mode, dbPath string) *Manager {
 	fmt.Printf("pkscript: %s\n", hex.EncodeToString(pkScript))
 	fmt.Printf("pubkey: %s\n", hex.EncodeToString(manager.GetWallet().GetPaymentPubKey().SerializeCompressed()))
 
-
 	return manager
 }
 
@@ -235,12 +234,11 @@ func clean(t *testing.T) {
 }
 
 func prepare(t *testing.T) {
-	_enable_testing = true
+	ENABLE_TESTING = true
 	clean(t)
 
 	indexer.ENABLE_TESTING = true
 	indexer.CHAIN = _test_chain
-
 
 	_bootstrap = createNode(t, BOOTSTRAP_NODE, "../db/bootstrapDB", nil, nil)
 	_server = createNode(t, SERVER_NODE, "../db/serverDB", _bootstrap, nil)
@@ -277,8 +275,7 @@ func prepare(t *testing.T) {
 }
 
 func prepare_TestNet4(t *testing.T) {
-	//_enable_testing = true
-
+	//ENABLE_TESTING = true
 
 	err := os.RemoveAll("../db")
 	if err != nil {
@@ -290,11 +287,10 @@ func prepare_TestNet4(t *testing.T) {
 	_client = createNode_TestNet4(t, CLIENT_NODE, "../db/clientDB", _server)
 }
 
-
 type Env struct {
-	network1  *network
-	network2  *network
-	tickInfo  map[string]*indexer.TickerInfo
+	network1 *network
+	network2 *network
+	tickInfo map[string]*indexer.TickerInfo
 }
 
 var _backupEnv Env
@@ -355,10 +351,8 @@ func restoreSpecEnv(backup *Env) {
 	restoreMgr(_server)
 	restoreMgr(_client)
 
-
 	fmt.Println("env restore complete")
 }
-
 
 func backupNetwork() *Env {
 	n := &Env{
@@ -389,8 +383,6 @@ func restoreNetwork(backup *Env) {
 
 	fmt.Println("network restore complete")
 }
-
-
 
 func TestPsbt(t *testing.T) {
 	prepare(t)
@@ -553,7 +545,6 @@ func TestVerifySignedPsbtString_satsnet(t *testing.T) {
 
 func TestBuildOrder(t *testing.T) {
 
-
 	info := UtxoInfo{
 		AssetsInUtxo: indexer.AssetsInUtxo{
 			UtxoId:   1030792413185,
@@ -571,7 +562,7 @@ func TestBuildOrder(t *testing.T) {
 			},
 			Amount:     "100",
 			BindingSat: 1,
-			Precision: 0,
+			Precision:  0,
 		},
 	}
 
@@ -760,7 +751,6 @@ func TestPsbtFullFlow(t *testing.T) {
 
 }
 
-
 func TestChangePassword(t *testing.T) {
 	prepare(t)
 
@@ -793,7 +783,7 @@ func TestSwitchChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
-	
+
 	err = _client.SwitchChain("mainnet", pw)
 	if err != nil {
 		t.Fatal(err)
@@ -822,7 +812,6 @@ func TestSwitchChain(t *testing.T) {
 	fmt.Printf("testnet address: %s\n", _client.wallet.GetAddress())
 	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
 
-
 	err = _client.SwitchWallet(id1, pw)
 	if err != nil {
 		t.Fatal(err)
@@ -840,7 +829,6 @@ func TestSwitchChain(t *testing.T) {
 	fmt.Printf("current wallet id: %d\n", _client.GetCurrentWalletId())
 }
 
-
 func TestGetTxAssetInfoFromPsbt(t *testing.T) {
 	prepare(t)
 
@@ -856,7 +844,6 @@ func TestGetTxAssetInfoFromPsbt(t *testing.T) {
 	}
 	fmt.Printf("%v\n", info)
 }
-
 
 func TestVerifyTx(t *testing.T) {
 	prepare(t)
@@ -895,7 +882,6 @@ func TestVerifyTx(t *testing.T) {
 
 }
 
-
 func TestImportPrivKeyWallet(t *testing.T) {
 	prepare(t)
 
@@ -922,7 +908,6 @@ func TestImportPrivKeyWallet(t *testing.T) {
 	fmt.Printf("%s\n", _client.GetMnemonic(id, newPS))
 }
 
-
 func TestSend_privKeyWallet(t *testing.T) {
 	prepare(t)
 
@@ -939,10 +924,9 @@ func TestSend_privKeyWallet(t *testing.T) {
 
 	assetName := &indexer.AssetName{
 		Protocol: "",
-		Type: "",
-		Ticker: "",
+		Type:     "",
+		Ticker:   "",
 	}
-
 
 	_client.SwitchAccount(0)
 
@@ -977,7 +961,7 @@ func TestSend_privKeyWallet(t *testing.T) {
 		t.Fatal()
 	}
 	value22 := _client.GetAssetBalance(address2, assetName)
-	if value22.Int64() != value21.Int64() + 1000 {
+	if value22.Int64() != value21.Int64()+1000 {
 		t.Fatal()
 	}
 

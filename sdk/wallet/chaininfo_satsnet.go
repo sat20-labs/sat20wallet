@@ -17,7 +17,6 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-
 func GetChainParam_SatsNet() *chaincfg.Params {
 	if IsTestNet() {
 		return &chaincfg.TestNetParams
@@ -95,25 +94,23 @@ func StandardAnchorScript(fundingUtxo string, witnessScript []byte, value int64,
 	return sindexer.StandardAnchorScript(fundingUtxo, witnessScript, value, assets)
 }
 
-
 type AnchorData struct {
-	Utxo		  string
+	Utxo          string
 	WitnessScript []byte
-	Value		  int64
-	Assets		  wire.TxAssets
-	Sig			  []byte
+	Value         int64
+	Assets        wire.TxAssets
+	Sig           []byte
 }
 
 func ParseStandardAnchorScript(script []byte) (*AnchorData, error) {
 	data := AnchorData{}
-	
+
 	var err error
-	data.Utxo, data.WitnessScript, data.Value, data.Assets, data.Sig, err = 
+	data.Utxo, data.WitnessScript, data.Value, data.Assets, data.Sig, err =
 		sindexer.ParseStandardAnchorScript(script)
 
 	return &data, err
 }
-
 
 func CheckAnchorPkScript(anchorPkScript []byte) (*AnchorData, []byte, error) {
 	data, err := ParseStandardAnchorScript(anchorPkScript)
@@ -145,7 +142,7 @@ func CheckAnchorPkScript(anchorPkScript []byte) (*AnchorData, []byte, error) {
 		return nil, nil, err
 	}
 	if addrType2 != txscript.MultiSigTy {
-		return nil,nil, fmt.Errorf("invalid addr type %d", addrType)
+		return nil, nil, fmt.Errorf("invalid addr type %d", addrType)
 	}
 
 	if len(addresses2) != 2 {
@@ -331,6 +328,19 @@ func GetP2WSHaddress(a, b []byte) (string, error) {
 		return "", err
 	}
 
+	_, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, GetChainParam_SatsNet())
+	if err != nil {
+		return "", err
+	}
+
+	if len(addresses) == 0 {
+		return "", fmt.Errorf("can't generate p2wsh address")
+	}
+
+	return addresses[0].EncodeAddress(), nil
+}
+
+func GetP2WSHaddressFromScript(pkScript []byte) (string, error) {
 	_, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, GetChainParam_SatsNet())
 	if err != nil {
 		return "", err

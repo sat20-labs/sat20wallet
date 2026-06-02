@@ -41,9 +41,9 @@ func (s PrevOutputs) UtxoViewpoint() (UtxoViewpoint, error) {
 
 const (
 	SCRIPT_TYPE_TAPROOTKEYSPEND = 0
-	SCRIPT_TYPE_CHANNEL = 1
-	SCRIPT_TYPE_PUNISH = 2 // 需要提供witness script
-	SCRIPT_TYPE_SWEEP = 3  // 需要提供witness script
+	SCRIPT_TYPE_CHANNEL         = 1
+	SCRIPT_TYPE_PUNISH          = 2 // 需要提供witness script
+	SCRIPT_TYPE_SWEEP           = 3 // 需要提供witness script
 )
 
 type InscriptionRequest struct {
@@ -75,11 +75,10 @@ type inscriptionTxCtxData struct {
 
 type Signer func(tx *wire.MsgTx, prevOutFetcher txscript.PrevOutputFetcher) error
 
-
 type InscriptionBuilder struct {
 	Network                   *chaincfg.Params
 	CommitTxPrevOutputFetcher *txscript.MultiPrevOutFetcher
-	ScriptType                int  // 0, TaprootKeySpend; 1, 
+	ScriptType                int // 0, TaprootKeySpend; 1,
 	WitnessScript             []byte
 	Signer                    Signer
 	RevealPrivateKey          *btcec.PrivateKey
@@ -98,8 +97,8 @@ type InscriptionBuilder struct {
 
 // 跟ResvStatus保持一致
 const (
-	RS_FAILED        ResvStatus = -1
-	RS_CLOSED        ResvStatus = 0
+	RS_FAILED ResvStatus = -1
+	RS_CLOSED ResvStatus = 0
 
 	RS_INIT      ResvStatus = 0x99
 	RS_CONFIRMED ResvStatus = 0x10000
@@ -109,19 +108,27 @@ const (
 	RS_INSCRIBING_REVEAL_BROADCASTED ResvStatus = 0x3002
 	RS_INSCRIBING_CONFIRMED          ResvStatus = RS_CONFIRMED
 )
-type InscribeResv struct {
-	Id               int64
-	Status           ResvStatus
 
-	CommitTx         *wire.MsgTx `json:"commitTx"`
-	RevealTx         *wire.MsgTx `json:"revealTx"`
-	CommitTxFee      int64       `json:"commitTxFee"`
-	RevealTxFee      int64       `json:"revealTxFee"`
-	CommitAddr       string      `json:"commitAddr"`
-	RevealPrivateKey []byte      `json:"revealPrivateKey"`
-	Body             []byte      `json:"body"`
-	FeeRate          int64       `json:"feeRate"`
-	commitTxPrevOutputFetcher  *txscript.MultiPrevOutFetcher
+type InscribeResv struct {
+	ReservationBase
+
+	CommitTx                  *wire.MsgTx `json:"commitTx"`
+	RevealTx                  *wire.MsgTx `json:"revealTx"`
+	CommitTxFee               int64       `json:"commitTxFee"`
+	RevealTxFee               int64       `json:"revealTxFee"`
+	CommitAddr                string      `json:"commitAddr"`
+	RevealPrivateKey          []byte      `json:"revealPrivateKey"`
+	Body                      []byte      `json:"body"`
+	FeeRate                   int64       `json:"feeRate"`
+	commitTxPrevOutputFetcher *txscript.MultiPrevOutFetcher
+}
+
+func (p *InscribeResv) GetType() string {
+	return RESV_TYPE_INSC
+}
+
+func (p *InscribeResv) GetStructInDB() any {
+	return p
 }
 
 func (p *InscribeResv) GetCommitPrevOutputFetcher() txscript.PrevOutputFetcher {
@@ -129,13 +136,13 @@ func (p *InscribeResv) GetCommitPrevOutputFetcher() txscript.PrevOutputFetcher {
 }
 
 type InscribeInfo struct {
-	CommitTx *wire.MsgTx
-	RevealTx *wire.MsgTx
-	RemoteSig [][]byte
-	DestAddr string
-	AssetName *indexer.AssetName
-	Amt *Decimal
-	FeeRate int64
+	CommitTx         *wire.MsgTx
+	RevealTx         *wire.MsgTx
+	RemoteSig        [][]byte
+	DestAddr         string
+	AssetName        *indexer.AssetName
+	Amt              *Decimal
+	FeeRate          int64
 	RevealPrivateKey []byte
 }
 
@@ -154,10 +161,10 @@ func (p *InscribeResv) GetChangeOutput() *TxOutput {
 	if p == nil || p.CommitTx == nil || len(p.CommitTx.TxOut) < 2 {
 		return nil
 	}
-	
+
 	return &indexer.TxOutput{
 		OutPointStr: fmt.Sprintf("%s:%d", p.CommitTx.TxID(), 1),
-		OutValue: *p.CommitTx.TxOut[1],
+		OutValue:    *p.CommitTx.TxOut[1],
 	}
 }
 
@@ -377,8 +384,8 @@ func (builder *InscriptionBuilder) buildEmptyRevealTx(revealOutValue, revealFeeR
 // 	txForEstimate.TxIn = tx.TxIn
 // 	txForEstimate.TxOut = tx.TxOut
 
-// 	// 尝试sign，为了 GetTxVirtualSizeByView。 
-// 	// TODO 采用 TxWeightEstimator 会更简单 
+// 	// 尝试sign，为了 GetTxVirtualSizeByView。
+// 	// TODO 采用 TxWeightEstimator 会更简单
 // 	if err = builder.Signer(txForEstimate, builder.CommitTxPrevOutputFetcher); err != nil {
 // 		return err
 // 	}
@@ -416,7 +423,7 @@ func (builder *InscriptionBuilder) buildCommitTxV2(commitTxPrevOutputList PrevOu
 	}
 	for _, prevOutput := range commitTxPrevOutputList {
 		outPoint := prevOutput.OutPoint() //wire.NewOutPoint(txHash, prevOutput.VOut)
-		txOut := prevOutput.TxOut() //wire.NewTxOut(prevOutput, prevOutput.PkScript)
+		txOut := prevOutput.TxOut()       //wire.NewTxOut(prevOutput, prevOutput.PkScript)
 		builder.CommitTxPrevOutputFetcher.AddPrevOut(*outPoint, txOut)
 
 		in := wire.NewTxIn(outPoint, nil, nil)
@@ -444,7 +451,6 @@ func (builder *InscriptionBuilder) buildCommitTxV2(commitTxPrevOutputList PrevOu
 	weightEstimate.AddOutput(changePkScript)
 	fee1 := weightEstimate.Fee(commitFeeRate)
 
-	
 	changeAmount := totalSenderAmount - totalRevealPrevOutputValue - fee1
 	if int64(changeAmount) >= minChangeValue {
 		tx.TxOut[len(tx.TxOut)-1].Value = int64(changeAmount)
@@ -595,7 +601,7 @@ func Inscribe(network *chaincfg.Params, request *InscriptionRequest, resvId int6
 		}
 		return resv, err
 	}
-	
+
 	if request.Signer != nil {
 		err = VerifySignedTx(tool.CommitTx, tool.CommitTxPrevOutputFetcher)
 		if err != nil {
@@ -609,17 +615,15 @@ func Inscribe(network *chaincfg.Params, request *InscriptionRequest, resvId int6
 
 	commitTxFee, revealTxFees := tool.CalculateFee()
 	return &InscribeResv{
-		Id: resvId,
-		Status: RS_INIT,
-
-		CommitTx:         tool.CommitTx,
-		RevealTx:         tool.RevealTx,
-		CommitTxFee:      commitTxFee,
-		RevealTxFee:      revealTxFees,
-		CommitAddr:       tool.CommitAddr,
-		RevealPrivateKey: tool.RevealPrivateKey.Serialize(),
-		Body:             request.InscriptionData.Body,
-		FeeRate:          request.CommitFeeRate,
+		ReservationBase:           newReservationBase(resvId, RS_INIT, nil),
+		CommitTx:                  tool.CommitTx,
+		RevealTx:                  tool.RevealTx,
+		CommitTxFee:               commitTxFee,
+		RevealTxFee:               revealTxFees,
+		CommitAddr:                tool.CommitAddr,
+		RevealPrivateKey:          tool.RevealPrivateKey.Serialize(),
+		Body:                      request.InscriptionData.Body,
+		FeeRate:                   request.CommitFeeRate,
 		commitTxPrevOutputFetcher: tool.CommitTxPrevOutputFetcher,
 	}, nil
 }
@@ -690,7 +694,6 @@ func getTxVirtualSize(tx *btcutil.Tx) int64 {
 	// to 4. The division by 4 creates a discount for wit witness data.
 	return (GetTransactionWeight(tx) + (WitnessScaleFactor - 1)) / WitnessScaleFactor
 }
-
 
 // RuleError identifies a rule violation.  It is used to indicate that
 // processing of a block or transaction failed due to one of the many validation

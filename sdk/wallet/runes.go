@@ -39,7 +39,7 @@ func EncipherRunePayloadWithPointer(edicts []runestone.Edict, pointer *uint32) (
 		return nil, err
 	}
 
-	if _enable_testing {
+	if ENABLE_TESTING {
 		edicts2, err := DecipherRunePayload(result)
 		if err != nil {
 			Log.Errorf("DecipherRunePayload failed. %v", err)
@@ -152,6 +152,7 @@ func (p *Manager) inscribeRunes(address string, runeName, nullData []byte,
 func (p *Manager) saveInscribeResv(resv *InscribeResv) error {
 	p.mutex.Lock()
 	p.inscibeMap[resv.Id] = resv
+	p.resvMap[resv.Id] = resv
 	p.mutex.Unlock()
 
 	return SaveInscribeResv(p.db, resv)

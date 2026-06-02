@@ -1032,7 +1032,10 @@ func (p *TestIndexerClient) GetSyncHeight() int {
 
 // 通过indexer访问btc节点，效率比较低。最好改用上面的接口。
 func (p *TestIndexerClient) GetBestHeight() int64 {
-	return int64(p.GetSyncHeight())
+	p.network.mutex.Lock()
+	defer p.network.mutex.Unlock()
+
+	return int64(p.network.height - 1)
 }
 
 func (p *TestIndexerClient) GetBlockHash(height int) (string, error) {
@@ -1302,11 +1305,11 @@ func (p *TestIndexerClient) getUtxoListWithTicker(address string, ticker *swire.
 					}
 				}
 			} else {
-			if validAssets != nil {
-				_, err := validAssets.Find(ticker)
+				if validAssets != nil {
+					_, err := validAssets.Find(ticker)
 					if err == nil {
-					output = &indexerwire.TxOutputInfo{
-						OutPoint: utxo,
+						output = &indexerwire.TxOutputInfo{
+							OutPoint: utxo,
 						}
 					}
 				}
@@ -2556,6 +2559,14 @@ func (p *TestNodeClient) SendSigReq(req *wwire.SignRequest,
 
 	// return sig2, nil
 	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendPerformRemoteActionReq(info *RemoteActionPerformReservation) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendPerformRemoteActionAckReq(info *RemoteActionPerformReservation) error {
+	return fmt.Errorf("not implemented")
 }
 
 func (p *TestNodeClient) SendActionResultNfty(msgId int64, action string, ret int, reason string) error {

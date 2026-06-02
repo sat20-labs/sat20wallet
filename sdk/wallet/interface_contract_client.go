@@ -89,7 +89,7 @@ func (p *Manager) DeployContract_Remote(templateName, contractContent string,
 		return "", -1, "", err
 	}
 
-	doAction := func(resv *RemoteActionPerformData) (string, string, error) {
+	doAction := func(resv *RemoteActionPerformReservation) (string, string, error) {
 		signedScript, err := SignedPerformRemoteActionInvoice(resv.Action, resv.InvoiceSig)
 		if err != nil {
 			return "", "", fmt.Errorf("SignedPerformRemoteActionInvoice failed. %v", err)

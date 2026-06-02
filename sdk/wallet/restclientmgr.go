@@ -34,7 +34,7 @@ func (p *IndexerRPCClientMgr) Start() {
 		return
 	}
 	duration := 60
-	if _enable_testing {
+	if ENABLE_TESTING {
 		duration = 3
 	}
 	p.ticker = time.NewTicker(time.Duration(duration) * time.Second)

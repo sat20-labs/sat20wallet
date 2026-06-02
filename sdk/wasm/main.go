@@ -2387,7 +2387,6 @@ func contractTxResultForJS(result *wallet.ContractTxResult) map[string]any {
 		"txid":            result.TxID,
 		"contractAddress": result.ContractAddress,
 		"caller":          result.Caller,
-		"gasAssetName":    result.GasAssetName,
 		"gasAssetAmount":  strconv.FormatUint(result.GasAssetAmount, 10),
 		"gasFeeAmount":    strconv.FormatUint(result.GasFeeAmount, 10),
 		"gasFundAmount":   strconv.FormatUint(result.GasFundAmount, 10),

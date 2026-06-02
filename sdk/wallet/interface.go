@@ -45,15 +45,15 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 	}
 
 	mgr := &Manager{
-		cfg:                  cfg,
-		walletInfoMap:        nil,
-		tickerInfoMap:        make(map[string]*indexer.TickerInfo),
-		utxoLockerL1:         NewUtxoLocker(db, l1, L1_NETWORK_BITCOIN),
-		utxoLockerL2:         NewUtxoLocker(db, l2, L2_NETWORK_SATOSHI),
-		http:                 http,
-		l1IndexerClient:      l1IndexerMgr,
-		l2IndexerClient:      l2IndexerMgr,
-		bInited:              false,
+		cfg:             cfg,
+		walletInfoMap:   nil,
+		tickerInfoMap:   make(map[string]*indexer.TickerInfo),
+		utxoLockerL1:    NewUtxoLocker(db, l1, L1_NETWORK_BITCOIN),
+		utxoLockerL2:    NewUtxoLocker(db, l2, L2_NETWORK_SATOSHI),
+		http:            http,
+		l1IndexerClient: l1IndexerMgr,
+		l2IndexerClient: l2IndexerMgr,
+		bInited:         false,
 	}
 
 	_env = cfg.Env
@@ -80,12 +80,18 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 func (p *Manager) Start() {
 	p.l1IndexerClient.Start()
 	p.l2IndexerClient.Start()
+	p.startActionMonitor()
+}
+
+func (p *Manager) Stop() {
+	p.stopActionMonitor()
+	p.l1IndexerClient.Stop()
+	p.l2IndexerClient.Stop()
 }
 
 func (p *Manager) Close() {
+	p.Stop()
 	p.bInited = false
-	p.l1IndexerClient.Stop()
-	p.l2IndexerClient.Stop()
 }
 
 // 使用内部钱包
@@ -281,7 +287,7 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 
 	p.wallet = info.Wallet
 	p.wallet.SetSubAccount(p.status.CurrentAccount)
-	
+
 	return p.status.CurrentWallet, nil
 }
 
@@ -311,7 +317,7 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 		//p.initDB()
 		//_, ok := p.walletInfoMap[id]
 		//if !ok {
-			return fmt.Errorf("can't find wallet %d", id)
+		return fmt.Errorf("can't find wallet %d", id)
 		//}
 	}
 
@@ -320,7 +326,7 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 	p.wallet = w.Wallet
 	p.wallet.SetSubAccount(0)
 	p.saveStatus()
-	
+
 	return nil
 }
 
@@ -330,7 +336,6 @@ func (p *Manager) GetCurrentWalletId() int64 {
 
 	return p.status.CurrentWallet
 }
-
 
 func (p *Manager) GetCurrentAccountId() uint32 {
 	p.mutex.RLock()
@@ -351,7 +356,7 @@ func (p *Manager) FindWalletById(id int64) common.Wallet {
 	if !ok {
 		return nil
 	}
-	
+
 	return walletInfo.Wallet
 }
 
@@ -365,10 +370,9 @@ func (p *Manager) GetWalletId(w common.Wallet) int64 {
 			return id
 		}
 	}
-	
+
 	return 0
 }
-
 
 // 不改变当前钱包和账户
 func (p *Manager) FindWalletByPubKey(pubKey []byte) common.Wallet {
@@ -383,7 +387,6 @@ func (p *Manager) FindWalletByPubKey(pubKey []byte) common.Wallet {
 
 	return nil
 }
-
 
 // 不改变当前钱包和账户
 func (p *Manager) FindWalletByPubKeyWithDepth(pubKey []byte, depth uint32) common.Wallet {

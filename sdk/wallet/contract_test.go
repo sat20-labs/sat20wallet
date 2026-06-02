@@ -242,8 +242,8 @@ func TestLaunchPoolContract(t *testing.T) {
 	}
 
 	fmt.Printf("size %d\n", len(inputs))
-	_not_invoke_block = true // 停止 InvokeWithBlock 和 InvokeWithBlock_SatsNet
-	_not_send_tx = true      // 停止广播
+	NOT_INVOKE_BLOCK = true // 停止 InvokeWithBlock 和 InvokeWithBlock_SatsNet
+	NOT_SEND_TX = true      // 停止广播
 	for _, item := range inputs {
 		//for i := 179; i < len(inputs); i++ {
 		//item := inputs[i]
@@ -455,8 +455,8 @@ func TestSwapContract(t *testing.T) {
 	}
 
 	fmt.Printf("size %d\n", len(inputs))
-	_not_invoke_block = true // 停止 InvokeWithBlock 和 InvokeWithBlock_SatsNet
-	_not_send_tx = true      // 停止广播
+	NOT_INVOKE_BLOCK = true // 停止 InvokeWithBlock 和 InvokeWithBlock_SatsNet
+	NOT_SEND_TX = true      // 停止广播
 	for _, item := range inputs {
 		//for i := 179; i < len(inputs); i++ {
 		//item := inputs[i]
@@ -704,7 +704,7 @@ func TestAmmContract(t *testing.T) {
 	if !bytes.Equal(amm.StaticMerkleRoot, amm2.StaticMerkleRoot) {
 		t.Fatal("static merkle root not inconsistent")
 	}
-	_not_invoke_block = true // 停止 InvokeWithBlock 和 InvokeWithBlock_SatsNet
+	NOT_INVOKE_BLOCK = true // 停止 InvokeWithBlock 和 InvokeWithBlock_SatsNet
 	for _, item := range inputs {
 		fmt.Printf("item: %v\n", item)
 		// 去掉处理结果
@@ -763,7 +763,7 @@ func TestAmmContract(t *testing.T) {
 				item2.RemainingValue = 0
 			}
 
-			_not_send_tx = false
+			NOT_SEND_TX = false
 			amm.updateContractStatus(item)
 			amm.addItem(item)
 			SaveContractInvokeHistoryItem(_server.db, url, item)
@@ -795,10 +795,10 @@ func TestAmmContract(t *testing.T) {
 			t.Fatal("asset merkle root not inconsistent")
 		}
 
-		_not_send_tx = true // 停止广播
+		NOT_SEND_TX = true // 停止广播
 		amm.sendInvokeResultTx()
 		amm.sendInvokeResultTx_SatsNet()
-		_not_send_tx = false // 需要生成一个新的tx，不然可能影响测试结果
+		NOT_SEND_TX = false // 需要生成一个新的tx，不然可能影响测试结果
 		txId, err := _server.CoBatchSend_SatsNet(nil, []string{channelId}, ASSET_PLAIN_SAT.String(),
 			[]*Decimal{indexer.NewDecimal(10, 0)}, "testing", amm.URL(), 0, nil, amm.StaticMerkleRoot, amm.CurrAssetMerkleRoot)
 		if err != nil {
@@ -955,7 +955,7 @@ func TestAmmContract_Runes(t *testing.T) {
 	if !bytes.Equal(amm.StaticMerkleRoot, amm2.StaticMerkleRoot) {
 		t.Fatal("static merkle root not inconsistent")
 	}
-	_not_invoke_block = true // 停止 InvokeWithBlock 和 InvokeWithBlock_SatsNet
+	NOT_INVOKE_BLOCK = true // 停止 InvokeWithBlock 和 InvokeWithBlock_SatsNet
 	for _, item := range inputs {
 		fmt.Printf("item: %v\n", item)
 		// 去掉处理结果
@@ -1015,7 +1015,7 @@ func TestAmmContract_Runes(t *testing.T) {
 				item2.RemainingValue = 0
 			}
 
-			_not_send_tx = false
+			NOT_SEND_TX = false
 			amm.updateContractStatus(item)
 			amm.addItem(item)
 			SaveContractInvokeHistoryItem(_server.db, url, item)
@@ -1047,10 +1047,10 @@ func TestAmmContract_Runes(t *testing.T) {
 			t.Fatal("asset merkle root not inconsistent")
 		}
 
-		_not_send_tx = true // 停止广播
+		NOT_SEND_TX = true // 停止广播
 		amm.sendInvokeResultTx()
 		amm.sendInvokeResultTx_SatsNet()
-		_not_send_tx = false // 需要生成一个新的tx，不然可能影响测试结果
+		NOT_SEND_TX = false // 需要生成一个新的tx，不然可能影响测试结果
 		txId, err := _server.CoBatchSend_SatsNet(nil, []string{channelId}, ASSET_PLAIN_SAT.String(),
 			[]*Decimal{indexer.NewDecimal(10, 0)}, "testing", amm.URL(), 0, nil, amm.StaticMerkleRoot, amm.CurrAssetMerkleRoot)
 		if err != nil {

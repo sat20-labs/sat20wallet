@@ -5006,7 +5006,7 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 		return nil, nil
 
 	case "testing":
-		if !_enable_testing {
+		if !ENABLE_TESTING {
 			return nil, fmt.Errorf("not support")
 		}
 

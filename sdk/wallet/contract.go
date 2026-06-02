@@ -2380,6 +2380,12 @@ func (p *ContractRuntimeBase) calcAssetMerkleRoot() {
 	}
 }
 
+func (p *ContractRuntimeBase) refreshDealInfoMerkleRoot(dealInfo *DealInfo) {
+	dealInfo.InvokeCount = p.InvokeCount
+	dealInfo.StaticMerkleRoot = p.StaticMerkleRoot
+	dealInfo.RuntimeMerkleRoot = p.CurrAssetMerkleRoot
+}
+
 // 核心是检查输入InUtxo还在不在，不在的话，删除该记录
 func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) error {
 	p.mutex.Lock()
@@ -2696,6 +2702,8 @@ func (p *ContractRuntimeBase) sendTx_SatsNet(dealInfo *DealInfo, reason string) 
 				// recalc
 				Log.Infof("contract %s CoBatchSendV2_SatsNet failed %v, recalculate merkle root and try again", url, err)
 				p.calcAssetMerkleRoot()
+				p.refreshDealInfoMerkleRoot(dealInfo)
+				continue
 			} else {
 				Log.Errorf("contract %s CoBatchSendV2_SatsNet failed %v, wait a second and try again", url, err)
 				// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
@@ -2786,6 +2794,8 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 					// recalc
 					Log.Infof("contract %s CoBatchSendV3 failed %v, recalculate merkle root and try again", url, err)
 					p.calcAssetMerkleRoot()
+					p.refreshDealInfoMerkleRoot(dealInfo)
+					continue
 				} else {
 					Log.Errorf("contract %s CoBatchSendV3 failed %v, wait a second and try again", url, err)
 					// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
@@ -2817,6 +2827,8 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 						// recalc
 						Log.Infof("contract %s CoSendOrdxWithStub failed %v, recalculate merkle root and try again", url, err)
 						p.calcAssetMerkleRoot()
+						p.refreshDealInfoMerkleRoot(dealInfo)
+						continue
 					} else {
 						Log.Errorf("contract %s CoSendOrdxWithStub failed %v, wait a second and try again", url, err)
 						// 服务端可能还没有同步到数据，需要多尝试几次，但不要卡太久
