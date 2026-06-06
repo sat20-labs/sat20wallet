@@ -194,6 +194,18 @@ func (p *IndexerRPCClientMgr) GetAscendData(utxo string) (*sindexer.AscendData, 
 	}
 	return result, err
 }
+
+func (p *IndexerRPCClientMgr) GetChannelLedger(channel string) ([]*sindexer.ChannelLedgerEntry, error) {
+	result, err := p.getActiveIndexer().GetChannelLedger(channel)
+	if shouldSwitchIndexer(err) {
+		indexer := p.selector()
+		if indexer != nil {
+			result, err = indexer.GetChannelLedger(channel)
+		}
+	}
+	return result, err
+}
+
 func (p *IndexerRPCClientMgr) IsCoreNode(pubkey []byte) (bool, error) {
 	result, err := p.getActiveIndexer().IsCoreNode(pubkey)
 	if shouldSwitchIndexer(err) {

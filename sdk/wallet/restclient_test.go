@@ -854,6 +854,10 @@ func (p *TestIndexerClient) GetAscendData(utxo string) (*sindexer.AscendData, er
 	return nil, fmt.Errorf("not found")
 }
 
+func (p *TestIndexerClient) GetChannelLedger(channel string) ([]*sindexer.ChannelLedgerEntry, error) {
+	return []*sindexer.ChannelLedgerEntry{}, nil
+}
+
 func (p *TestIndexerClient) IsCoreNode(pubkey []byte) (bool, error) {
 	pkStr := hex.EncodeToString(pubkey)
 	if pkStr == indexer.GetBootstrapPubKey() || pkStr == indexer.GetCoreNodePubKey() {
