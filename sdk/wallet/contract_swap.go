@@ -5352,7 +5352,7 @@ func (p *SwapContractRuntime) HandleInvokeResult_SatsNet(tx *swire.MsgTx, vout i
 
 	details, err := ParseInvokeResultMore(more)
 	if err != nil {
-		Log.Errorf("HandleInvokeResult %s ParseInvokeResultMore failed, %v", tx.TxID(), err)
+		Log.Errorf("HandleInvokeResult_SatsNet %s ParseInvokeResultMore failed, %v", tx.TxID(), err)
 		return
 	}
 
@@ -5367,7 +5367,7 @@ func (p *SwapContractRuntime) HandleInvokeResult_SatsNet(tx *swire.MsgTx, vout i
 		return
 	}
 	if err != nil {
-		Log.Errorf("HandleInvokeResult %s gen deal info failed, %v", tx.TxID(), err)
+		Log.Errorf("HandleInvokeResult_SatsNet %s gen deal info failed, %v", tx.TxID(), err)
 		return
 	}
 

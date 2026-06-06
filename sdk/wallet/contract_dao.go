@@ -3058,7 +3058,7 @@ func (p *DaoContractRunTime) HandleInvokeResult_SatsNet(tx *swire.MsgTx, vout in
 
 	dealInfo, err := p.genSendInfoFromTx_SatsNet(tx, false)
 	if err != nil {
-		Log.Errorf("HandleInvokeResult %s genSendInfoFromTx_SatsNet failed, %v", tx.TxID(), err)
+		Log.Errorf("HandleInvokeResult_SatsNet %s genSendInfoFromTx_SatsNet failed, %v", tx.TxID(), err)
 		return
 	}
 	if dealInfo.Reason != INVOKE_API_AIRDROP {

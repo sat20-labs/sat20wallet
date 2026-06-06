@@ -2004,7 +2004,7 @@ func (p *RecycleContractRunTime) HandleInvokeResult_SatsNet(tx *swire.MsgTx, vou
 
 	dealInfo, err := p.genSendInfoFromTx_SatsNet(tx, false)
 	if err != nil {
-		Log.Errorf("HandleInvokeResult %s genSendInfoFromTx_SatsNet failed, %v", tx.TxID(), err)
+		Log.Errorf("HandleInvokeResult_SatsNet %s genSendInfoFromTx_SatsNet failed, %v", tx.TxID(), err)
 		return
 	}
 	if dealInfo.Reason != INVOKE_RESULT_REWARD {
