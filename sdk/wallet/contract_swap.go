@@ -3070,8 +3070,8 @@ func (p *SwapContractRuntime) deal() error {
 
 		if len(dealInfo.SendInfo) != 0 {
 			// 发送费用已经从所有参与者扣除，但如果该交易的聪资产太少，就暂时不发送，等下次
-			if dealInfo.TotalValue+indexer.DecimalMul(dealInfo.TotalAmt, p.dealPrice).Int64() >= _valueLimit ||
-				len(dealInfo.SendInfo) >= _addressLimit {
+			//if dealInfo.TotalValue+indexer.DecimalMul(dealInfo.TotalAmt, p.dealPrice).Int64() >= _valueLimit ||
+			//	len(dealInfo.SendInfo) >= _addressLimit {
 				txId, err := p.sendTx_SatsNet(dealInfo, INVOKE_RESULT_DEAL)
 				if err != nil {
 					p.isSending = false
@@ -3088,7 +3088,7 @@ func (p *SwapContractRuntime) deal() error {
 				// 成功一步记录一步
 				p.stp.SaveReservationWithLock(p.resv)
 				Log.Infof("contract %s swap completed, %s", url, txId)
-			}
+			//}
 		}
 
 		//Log.Debugf("contract %s deal completed", url)
@@ -3648,7 +3648,7 @@ func (p *SwapContractRuntime) refund() error {
 		// 发送
 		if len(refundInfo.SendInfo) != 0 {
 			// 发送费用已经从所有参与者扣除，但如果该交易的聪资产太少，就暂时不发送，等下次
-			if refundInfo.TotalValue >= _valueLimit || len(refundInfo.SendInfo) >= _addressLimit {
+			//if refundInfo.TotalValue >= _valueLimit || len(refundInfo.SendInfo) >= _addressLimit {
 				txId, err := p.sendTx_SatsNet(refundInfo, INVOKE_RESULT_REFUND)
 				if err != nil {
 					Log.Errorf("contract %s sendTx_SatsNet %s failed %v", p.URL(), INVOKE_RESULT_REFUND, err)
@@ -3664,7 +3664,7 @@ func (p *SwapContractRuntime) refund() error {
 				p.stp.SaveReservationWithLock(p.resv)
 
 				Log.Infof("contract %s refund completed, %s", p.URL(), txId)
-			}
+			//}
 		}
 
 		//Log.Debugf("contract %s refund completed", p.URL())
