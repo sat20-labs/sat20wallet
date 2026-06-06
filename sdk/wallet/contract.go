@@ -192,6 +192,7 @@ type ContractDeployResvIF interface {
 	GetContract() ContractRuntime
 	GetMutex() *sync.RWMutex
 	LocalIsInitiator() bool
+	SetInitiator(bool)
 
 	GetChannelAddr() string
 	GetDeployer() string
@@ -1189,6 +1190,10 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
 	p.init(stp)
 	p.resv = resv
+
+	resv.SetInitiator(true)
+	stp.SaveReservation(resv)
+	
 	p.isInitiator = resv.LocalIsInitiator()
 	var err error
 	p.localPubKey, err = utils.BytesToPublicKey(p.LocalPubKey)
