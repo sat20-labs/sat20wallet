@@ -90,6 +90,7 @@ const APPROVAL_ACTIONS = new Set<string>([
   Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET,
   Message.MessageAction.REGISTER_AS_REFERRER,
   Message.MessageAction.BIND_REFERRER_FOR_SERVER,
+  Message.MessageAction.SEND_ASSETS_SATSNET,
   Message.MessageAction.BATCH_SEND_ASSETS_SATSNET,
   Message.MessageAction.BATCH_SEND_ASSETS_V2_SATSNET,
 ])

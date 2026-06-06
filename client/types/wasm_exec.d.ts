@@ -320,6 +320,32 @@ declare interface WalletManager {
     templateName: string,
     action: string
   ): Promise<SatsnetResponse<{ parameter: any }>>
+
+  stakeToBeMiner(bCoreNode: boolean, btcFeeRate: string): Promise<SatsnetResponse<{
+    txId: string,
+    resvId: string,
+    assetName: string,
+    amt: string
+  }>>
+
+  minerUnstake(btcFeeRate: string): Promise<SatsnetResponse<{
+    txId: string,
+    resvId: string
+  }>>
+
+  DeployRunes_Remote(
+    assetName: string,
+    symbol: number,
+    maxSupply: string,
+    limit: string,
+    selfMint: boolean,
+    destAddr: string,
+    feeRate: string
+  ): Promise<SatsnetResponse<{
+    txId: string,
+    resvId: string,
+    result: string
+  }>>
 }
 interface SatsnetStp {
   closeChannel(

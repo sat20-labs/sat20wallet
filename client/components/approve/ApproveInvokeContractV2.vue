@@ -208,8 +208,6 @@ const confirm = async () => {
       props.data.invoke,
       props.data.assetName,
       props.data.amt.toString(),
-      Number(props.data.metadata?.unitPrice || 0),
-      Number(props.data.metadata?.serviceFee || props.data.serviceFee || 0),
       props.data.feeRate.toString()
     )
     if (err) {

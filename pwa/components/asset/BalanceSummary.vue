@@ -62,7 +62,7 @@ import { openLink } from '@/utils/browser'
 import { generateMempoolUrl } from '@/utils'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
-import { useL1Store, useL2Store, useWalletStore } from '@/store'
+import { useChannelStore, useL1Store, useL2Store, useWalletStore } from '@/store'
 import { useAssetActions } from '@/composables/useAssetActions'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
 import ReceiveQRcode from '@/components/wallet/ReceiveQRCode.vue'
@@ -77,8 +77,9 @@ const { toast } = useToast()
 const l1Store = useL1Store()
 const l2Store = useL2Store()
 const walletStore = useWalletStore()
+const channelStore = useChannelStore()
 
-const { deposit, withdraw, l1Send, l2Send, handleError } = useAssetActions()
+const { deposit, withdraw, splicingIn, splicingOut, unlockUtxo, lockUtxo, l1Send, l2Send, handleError } = useAssetActions()
 
 const showReceiveDialog = ref(false)
 const receiveAddress = ref('') // QRCode address
@@ -104,12 +105,16 @@ const abailableSats = ref<{
   availableAmt: 0,
   lockedAmt: 0
 })
-// const { channel } = storeToRefs(channelStore) - Removed channel store
+const { channel } = storeToRefs(channelStore)
 
 type OperationType =
   | 'send'
   | 'deposit'
   | 'withdraw'
+  | 'lock'
+  | 'unlock'
+  | 'splicing_in'
+  | 'splicing_out'
 
 // 按钮配置
 const buttons = [
@@ -117,13 +122,20 @@ const buttons = [
   { label: 'Send', icon: 'lucide:send', action: 'send', modes: ['poolswap', 'lightning'], chains: ['Bitcoin', 'SatoshiNet'] },
   { label: 'Deposit', icon: 'lucide:arrow-down-right', action: 'deposit', modes: ['poolswap'], chains: ['Bitcoin'] },
   { label: 'Withdraw', icon: 'lucide:arrow-up-right', action: 'withdraw', modes: ['poolswap'], chains: ['SatoshiNet'] },
-  { label: 'History', icon: 'lucide:clock', action: 'history', modes: ['poolswap', 'lightning'], chains: ['Bitcoin', 'SatoshiNet'] },
+  { label: 'Splicing in', icon: 'lets-icons:sign-in-squre', action: 'splicing_in', modes: ['lightning'], chains: ['Bitcoin'] },
+  { label: 'Splicing out', icon: 'lets-icons:sign-out-squre', action: 'splicing_out', modes: ['lightning'], chains: ['Channel'] },
+  { label: 'Lock', icon: 'lucide:lock', action: 'lock', modes: ['lightning'], chains: ['SatoshiNet'] },
+  { label: 'Unlock', icon: 'lucide:unlock', action: 'unlock', modes: ['lightning'], chains: ['Channel'] },
+  { label: 'History', icon: 'lucide:clock', action: 'history', modes: ['poolswap', 'lightning'], chains: ['Bitcoin', 'Channel', 'SatoshiNet'] },
 ]
 
 // 查询方法
 const fetchAbailableSats = async () => {
   if (!address.value) {
     return { availableAmt: 0, lockedAmt: 0 }
+  }
+  if (props.selectedChain.toLowerCase() === 'channel') {
+    return { availableAmt: channelStore.totalSats, lockedAmt: 0 }
   }
   const handler = props.selectedChain.toLowerCase() === 'bitcoin' ? sat20.getAssetAmount : sat20.getAssetAmount_SatsNet
   const [err, res] = await handler.bind(sat20)(address.value, '::')
@@ -187,6 +199,14 @@ const translatedOperationTitle = computed(() => {
       return t('assetOperationDialog.depositAsset')
     case 'withdraw':
       return t('assetOperationDialog.withdrawAsset')
+    case 'lock':
+      return t('assetOperationDialog.lockAsset')
+    case 'unlock':
+      return t('assetOperationDialog.unlockAsset')
+    case 'splicing_in':
+      return t('assetOperationDialog.splicingIn')
+    case 'splicing_out':
+      return t('assetOperationDialog.splicingOut')
     default:
       return t('assetOperationDialog.assetOperation')
   }
@@ -194,6 +214,8 @@ const translatedOperationTitle = computed(() => {
 const showAddress = computed(() => {
   if (selectedChain === 'bitcoin') {
     return address.value
+  } else if (selectedChain === 'channel') {
+    return channel.value?.channelId || address.value
   } else if (selectedChain === 'satoshinet') {
     return address.value
   }
@@ -273,6 +295,7 @@ const handleOperationConfirm = async () => {
 
   const asset = selectedAsset.value
   const amount = operationAmount.value
+  const chanid = channel.value?.channelId
   const toAddress = operationType.value === 'send' ? operationAddress.value : address.value
 
   try {
@@ -289,6 +312,18 @@ const handleOperationConfirm = async () => {
         break
       case 'withdraw':
         await withdraw({ toAddress, asset_name: asset.id, amt: amount, utxos: [], fees: [] })
+        break
+      case 'splicing_in':
+        await splicingIn({ chanid, amt: amount, asset_name: asset.id })
+        break
+      case 'splicing_out':
+        await splicingOut({ chanid, toAddress, amt: amount, asset_name: asset.id })
+        break
+      case 'lock':
+        await lockUtxo({ chanid, amt: amount, asset_name: asset.id })
+        break
+      case 'unlock':
+        await unlockUtxo({ chanid, amt: amount, asset_name: asset.id })
         break
       default:
         handleError('Unsupported operation')
@@ -310,7 +345,11 @@ const handleOperationConfirm = async () => {
 console.log('btcBalance', props.selectedChain);
 
 const btcBalance = computed(() => {
-  const store = props.selectedChain.toLowerCase() === 'bitcoin' ? l1Store : l2Store
+  const store = props.selectedChain.toLowerCase() === 'bitcoin'
+    ? l1Store
+    : props.selectedChain.toLowerCase() === 'channel'
+      ? channelStore
+      : l2Store
   const btcAssets = store.plainList || []
   return { total: store.totalSats, assets: btcAssets }
 })
@@ -364,6 +403,13 @@ const mempoolUrl = computed(() => {
     return generateMempoolUrl({
       network: network.value,
       path: `address/${showAddress.value}`,
+    })
+  } else if (props.selectedChain === 'channel') {
+    return generateMempoolUrl({
+      network: network.value,
+      path: `address/${showAddress.value}`,
+      chain: Chain.BTC,
+      env: env.value,
     })
   } else if (props.selectedChain === 'satoshinet') {
     return generateMempoolUrl({

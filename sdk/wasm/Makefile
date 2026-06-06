@@ -20,6 +20,7 @@ all:
 	GOOS=js GOARCH=wasm go build -o html/wasm/sat20wallet.wasm -ldflags="-s -w" main.go
 	if command -v wasm-opt > /dev/null; then wasm-opt -Oz html/wasm/sat20wallet.wasm -o html/wasm/sat20wallet.wasm --enable-bulk-memory; fi
 	cp html/wasm/sat20wallet.wasm ~/github/sat20wallet/client/public/wasm/sat20wallet.wasm
+	cp html/wasm/sat20wallet.wasm ~/github/sat20wallet/pwa/public/wasm/sat20wallet.wasm
 # wasm-opt -Oz html/wasm/sat20wallet.wasm -o html/wasm/sat20wallet.wasm --enable-bulk-memory 
 # tinygo build -o out.wasm -target wasm -no-debug main.go
 

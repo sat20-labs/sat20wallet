@@ -76,12 +76,13 @@ import L2Card from '@/components/wallet/L2Card.vue'
 
 import SubWalletSelector from '@/components/wallet/SubWalletSelector.vue'
 import CopyButton from '@/components/common/CopyButton.vue'
-import { useWalletStore, useL1Store } from '@/store'
+import { useChannelStore, useWalletStore, useL1Store } from '@/store'
 import { useL1Assets, useL2Assets } from '@/composables'
 import { useAssetOperations } from '@/composables/useAssetOperations'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from '@/components/ui/toast-new'
 import walletManager from '@/utils/sat20'
+import satsnetStp from '@/utils/stp'
 import AssetList from '@/components/wallet/AssetList.vue'
 import BalanceSummary from '@/components/asset/BalanceSummary.vue'
 import { useTranscendingModeStore } from '@/store'
@@ -96,6 +97,7 @@ console.log('Debug: This is index.vue')
 // 钱包数据
 const walletStore = useWalletStore()
 const l1Store = useL1Store()
+const channelStore = useChannelStore()
 const transcendingModeStore = useTranscendingModeStore()
 
 // 名字管理
@@ -110,6 +112,7 @@ const { refreshL1Assets } = useL1Assets()
 const { refreshL2Assets } = useL2Assets()
 
 let { address, network } = storeToRefs(walletStore)
+const { channel } = storeToRefs(channelStore)
 const { plainList, sat20List, brc20List, runesList } = storeToRefs(l1Store)
 
 // 状态管理
@@ -137,6 +140,8 @@ console.log('address', address)
 const showAddress = computed(() => {
   if (selectedChainLabel.value === 'bitcoin') {
     return address.value
+  } else if (selectedChainLabel.value === 'channel') {
+    return channel.value?.channelId || address.value
   } else if (selectedChainLabel.value === 'satoshinet') {
     return address.value
   }
@@ -149,6 +154,13 @@ const mempoolUrl = computed(() => {
       network: network.value,
       chain: Chain.BTC,
       path: `address/${address.value}`,
+    })
+  } else if (selectedChainLabel.value === 'channel') {
+    return generateMempoolUrl({
+      network: network.value,
+      chain: Chain.BTC,
+      path: `address/${showAddress.value}`,
+      env: env.value,
     })
   } else if (selectedChainLabel.value === 'satoshinet') {
     return generateMempoolUrl({
@@ -238,7 +250,7 @@ const channelCallback = async (e: any) => {
   console.log('channel callback')
   let msg = ''
   const channelHandler = async () => {
-    // await channelStore.getAllChannels() - Removed channel store
+    await channelStore.getAllChannels()
   }
   switch (e) {
     case 'splicingin':
@@ -313,6 +325,8 @@ const tabChange = (value: string) => {
 onMounted(async () => {
   handleRouteChange()
   walletManager.registerCallback(channelCallback)
+  satsnetStp.registerCallback(channelCallback)
+  await channelStore.getAllChannels()
 
   // 设置当前地址并校验名字
   if (address.value) {

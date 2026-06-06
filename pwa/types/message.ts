@@ -94,5 +94,7 @@ export namespace Message {
     // --- 资产发送相关 ---
     SEND_ASSETS_SATSNET = 'SEND_ASSETS_SATSNET',
     BATCH_SEND_ASSETS_V2_SATSNET = 'BATCH_SEND_ASSETS_V2_SATSNET',
+    // --- AI Agent 操作 ---
+    AGENT_OPERATION = 'AGENT_OPERATION',
   }
 }

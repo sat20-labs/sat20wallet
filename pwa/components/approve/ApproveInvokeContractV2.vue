@@ -218,15 +218,11 @@ const confirm = async () => {
   isLoading.value = true
   invokeError.value = ''
   try {
-    const unitPrice = props.data?.metadata?.unitPrice || 0
-    const serviceFee = props.data?.metadata?.serviceFee || props.data?.serviceFee || 0
     const [err, res] = await sat20.invokeContractV2(
       props.data.url,
       props.data.invoke,
       props.data.assetName,
       props.data.amt.toString(),
-      unitPrice,
-      serviceFee,
       props.data.feeRate.toString()
     )
     if (err) {

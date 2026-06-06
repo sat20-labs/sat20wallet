@@ -164,7 +164,17 @@
     "Unlock": "解锁",
     "History": "历史记录"
   },
-
+  "channelAssetsTabs": {
+    "assetType": {
+      "ORDX": "ORDX",
+      "Runes": "Runes",
+      "BRC20": "BRC20"
+    },
+    "viewTradeHistory": "交易历史",
+    "viewL2History": "查看 L2 历史",
+    "splicingOut": "通道抽资",
+    "unlock": "解锁"
+  },
 
   "l1AssetsTabs": {
     "assetType": {

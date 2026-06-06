@@ -496,11 +496,9 @@ class WalletManager {
     invoke: string,
     assetName: string,
     amt: string,
-    unitPrice: number,
-    serviceFee: number,
     feeRate: string
   ): Promise<[Error | undefined, { txId: string } | undefined]> {
-    return this._handleRequest('invokeContractV2', url, invoke, assetName, amt, unitPrice, serviceFee, feeRate)
+    return this._handleRequest('invokeContractV2', url, invoke, assetName, amt, feeRate)
   }
 
   async getContractInvokeHistoryInServer(url: string, start: number, limit: number): Promise<[Error | undefined, any | undefined]> {
@@ -632,6 +630,42 @@ class WalletManager {
     } | undefined]
   > {
     return this._handleRequest('stakeToBeMiner', bCoreNode, btcFeeRate)
+  }
+
+  async minerUnstake(btcFeeRate: string): Promise<
+    [Error | undefined, {
+      txId: string,
+      resvId: string,
+    } | undefined]
+  > {
+    return this._handleRequest('minerUnstake', btcFeeRate)
+  }
+
+  async DeployRunes_Remote(
+    assetName: string,
+    symbol: number,
+    maxSupply: string,
+    limit: string,
+    selfMint: boolean,
+    destAddr: string,
+    feeRate: string
+  ): Promise<
+    [Error | undefined, {
+      txId: string,
+      resvId: string,
+      result: string,
+    } | undefined]
+  > {
+    return this._handleRequest(
+      'DeployRunes_Remote',
+      assetName,
+      symbol,
+      maxSupply,
+      limit,
+      selfMint,
+      destAddr,
+      feeRate
+    )
   }
 }
 

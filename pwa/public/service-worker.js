@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sat20-wallet-pwa-v0.1.33-20260530T144233Z'
+const CACHE_NAME = 'sat20-wallet-pwa-v0.1.34-20260605T102702Z'
 const CACHE_PREFIX = 'sat20-wallet-pwa-'
 const APP_BASE = new URL(self.registration.scope).pathname.replace(/\/$/, '')
 const withBase = (path) => `${APP_BASE}${path}`
@@ -8,6 +8,7 @@ const PRECACHE_URLS = [
   withBase('/index.html'),
   withBase('/wasm/wasm_exec.js'),
   withBase('/wasm/sat20wallet.wasm'),
+  withBase('/wasm/stpd.wasm'),
   withBase('/icon/apple-touch-icon.png'),
   withBase('/icon/sat20-logo-app.png'),
   withBase('/icon/maskable-512.png'),

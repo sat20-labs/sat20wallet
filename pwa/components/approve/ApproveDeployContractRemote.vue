@@ -137,7 +137,7 @@ const confirm = async () => {
     const [err, res] = await sat20.deployContract_Remote(
       props.data.templateName,
       props.data.content,
-      props.data.feeRate,
+      props.data.feeRate.toString(),
       props.data.bol ?? false // 默认为 false 如果未提供
     )
     if (err) {

@@ -2,10 +2,17 @@
   <div class="space-y-4 w-full">
 
     <Tabs defaultValue="l1" v-model="selectedChain" @update:model-value="handleTabChange" class="w-full">
-      <TabsList class="grid w-full grid-cols-2 mb-4 bg-zinc-700/90">
+      <TabsList
+        class="grid w-full mb-4 bg-zinc-700/90"
+        :class="transcendingModeStore.selectedTranscendingMode === 'lightning' ? 'grid-cols-3' : 'grid-cols-2'"
+      >
         <TabsTrigger value="l1">
           <Icon icon="cryptocurrency:btc" class="w-4 h-4 mr-1 justify-self-center" />
           Bitcoin
+        </TabsTrigger>
+        <TabsTrigger v-if="transcendingModeStore.selectedTranscendingMode === 'lightning'" value="channel">
+          <Icon icon="lucide:zap" class="w-4 h-4 mr-1 justify-self-center" />
+          Channel
         </TabsTrigger>
         <TabsTrigger value="l2">
           <Icon icon="lucide:globe-lock" class="w-4 h-4 mr-1 justify-self-center" />
@@ -15,12 +22,19 @@
 
       <TabsContent value="l1">
         <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets"
-          @send="handleSend" @deposit="handleDeposit" />
+          :mode="transcendingModeStore.selectedTranscendingMode"
+          @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
+      </TabsContent>
+
+      <TabsContent v-if="transcendingModeStore.selectedTranscendingMode === 'lightning'" value="channel">
+        <ChannelCard v-model:selectedType="selectedAssetType" @splicing_out="handleSplicingOut"
+          @unlock="handleUnlock" />
       </TabsContent>
 
       <TabsContent value="l2">
         <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets"
-          @send="handleSend" @withdraw="handleWithdraw" />
+          :mode="transcendingModeStore.selectedTranscendingMode"
+          @lock="handleLock" @send="handleSend" @withdraw="handleWithdraw" />
       </TabsContent>
     </Tabs>
 
@@ -43,18 +57,28 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
+import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import walletManager from '@/utils/sat20'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
-import { useL1Store, useL2Store } from '@/store'
+import { useChannelStore, useL1Store, useL2Store, useTranscendingModeStore } from '@/store'
 import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store'
 import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
+import { useAssetActions } from '@/composables/useAssetActions'
 
 const { refreshL1Assets } = useL1Assets()
 const { refreshL2Assets } = useL2Assets()
 const walletStore = useWalletStore()
 const { toast } = useToast()
+const channelStore = useChannelStore()
+const transcendingModeStore = useTranscendingModeStore()
+const {
+  splicingIn: runSplicingIn,
+  splicingOut: runSplicingOut,
+  unlockUtxo,
+  lockUtxo,
+} = useAssetActions()
 
   const props = defineProps({
   modelValue: {
@@ -67,12 +91,16 @@ type OperationType =
   | 'send'
   | 'deposit'
   | 'withdraw'
+  | 'lock'
+  | 'unlock'
+  | 'splicing_in'
+  | 'splicing_out'
 
 const loading = ref(false)
 const { address, btcFeeRate } = storeToRefs(walletStore)
 
 // 状态管理
-type ChainType = 'l1' | 'l2'
+type ChainType = 'l1' | 'channel' | 'l2'
 
 const selectedChain = ref<ChainType>('l1')
 const selectedAssetType = ref('ORDX')
@@ -80,6 +108,7 @@ const selectedAssetType = ref('ORDX')
 // 将父组件的 v-model 值与子组件内部的选项进行映射（统一使用 items 的 value）
 const parentToChildTabMap: Record<string, ChainType> = {
   l1: 'l1',
+  channel: 'channel',
   l2: 'l2',
 }
 
@@ -99,6 +128,7 @@ watch(
 // Store
 const l1Store = useL1Store()
 const l2Store = useL2Store()
+const { channel } = storeToRefs(channelStore)
 // 资产列表
 const filteredAssets = computed(() => {
   let assets: any[] = []
@@ -136,8 +166,12 @@ const filteredAssets = computed(() => {
         return []
     }
   }
-  const isMainnet = selectedChain.value === 'l1'
-  assets = getChainAssets(isMainnet)
+  if (selectedChain.value === 'channel') {
+    assets = []
+  } else {
+    const isMainnet = selectedChain.value === 'l1'
+    assets = getChainAssets(isMainnet)
+  }
 
   console.log('Filtered Assets:', assets)
   return assets
@@ -160,6 +194,14 @@ const translatedOperationTitle = computed(() => {
       return t('assetOperationDialog.depositAsset')
     case 'withdraw':
       return t('assetOperationDialog.withdrawAsset')
+    case 'lock':
+      return t('assetOperationDialog.lockAsset')
+    case 'unlock':
+      return t('assetOperationDialog.unlockAsset')
+    case 'splicing_in':
+      return t('assetOperationDialog.splicingIn')
+    case 'splicing_out':
+      return t('assetOperationDialog.splicingOut')
     default:
       return t('assetOperationDialog.assetOperation')
   }
@@ -178,6 +220,10 @@ const emit = defineEmits<{
   (e: 'send', asset: any): void
   (e: 'deposit', asset: any): void
   (e: 'withdraw', asset: any): void
+  (e: 'lock', asset: any): void
+  (e: 'unlock', asset: any): void
+  (e: 'splicing_in', asset: any): void
+  (e: 'splicing_out', asset: any): void
   (e: 'update:model-value', value: string): void
 }>()
 
@@ -201,6 +247,13 @@ const handleSend = (asset: any) => {
   showDialog.value = true
 }
 
+const handleSplicingIn = (asset: any) => {
+  operationType.value = 'splicing_in'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
 const handleDeposit = (asset: any) => {
   // console.log('TranscendingMode - Deposit:', asset)
   operationType.value = 'deposit'
@@ -212,6 +265,27 @@ const handleDeposit = (asset: any) => {
 const handleWithdraw = (asset: any) => {
   // console.log('TranscendingMode - Withdraw:', asset)
   operationType.value = 'withdraw'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+const handleLock = (asset: any) => {
+  operationType.value = 'lock'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+const handleUnlock = (asset: any) => {
+  operationType.value = 'unlock'
+  selectedAsset.value = asset
+  operationAmount.value = ''
+  showDialog.value = true
+}
+
+const handleSplicingOut = (asset: any) => {
+  operationType.value = 'splicing_out'
   selectedAsset.value = asset
   operationAmount.value = ''
   showDialog.value = true
@@ -371,6 +445,7 @@ const handleOperationConfirm = async () => {
 
   const asset = selectedAsset.value
   const amount = operationAmount.value
+  const chanid = channel.value?.channelId
   const toAddress =
     operationType.value === 'send' ? operationAddress.value : address.value
 
@@ -407,6 +482,35 @@ const handleOperationConfirm = async () => {
           amt: amount,
           utxos: [],
           fees: [],
+        })
+        break
+      case 'splicing_in':
+        await runSplicingIn({
+          chanid,
+          amt: amount,
+          asset_name: asset.key,
+        })
+        break
+      case 'splicing_out':
+        await runSplicingOut({
+          chanid,
+          toAddress,
+          amt: amount,
+          asset_name: asset.key,
+        })
+        break
+      case 'lock':
+        await lockUtxo({
+          chanid,
+          amt: amount,
+          asset_name: asset.key,
+        })
+        break
+      case 'unlock':
+        await unlockUtxo({
+          chanid,
+          amt: amount,
+          asset_name: asset.key,
         })
         break
     }

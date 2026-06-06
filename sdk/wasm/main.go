@@ -3063,6 +3063,122 @@ func stakeToBeMiner(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func minerUnstake(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameter")
+	}
+
+	pn := p[0]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "feeRate parameter should be a string")
+	}
+	feeRate := pn.String()
+	feeRate64, err := strconv.ParseInt(feeRate, 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txId, id, err := _mgr.MinerUnstake(feeRate64)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		return map[string]interface{}{
+			"txId":   txId,
+			"resvId": id,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func deployRunesRemote(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+
+	if len(p) < 7 {
+		return createJsRet(nil, -1, "Expected 7 parameters")
+	}
+
+	pn := p[0]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "assetName parameter should be a string")
+	}
+	assetName := pn.String()
+
+	pn = p[1]
+	if pn.Type() != js.TypeNumber {
+		return createJsRet(nil, -1, "symbol parameter should be a number")
+	}
+	symbol := int32(pn.Int())
+
+	pn = p[2]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "maxSupply parameter should be a string")
+	}
+	maxSupply, err := strconv.ParseInt(pn.String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	pn = p[3]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "limit parameter should be a string")
+	}
+	limit, err := strconv.ParseInt(pn.String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	pn = p[4]
+	if pn.Type() != js.TypeBoolean {
+		return createJsRet(nil, -1, "selfMint parameter should be a bool")
+	}
+	selfMint := pn.Bool()
+
+	pn = p[5]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "destAddr parameter should be a string")
+	}
+	destAddr := pn.String()
+
+	pn = p[6]
+	if pn.Type() != js.TypeString {
+		return createJsRet(nil, -1, "feeRate parameter should be a string")
+	}
+	feeRate, err := strconv.ParseInt(pn.String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txId, id, result, err := _mgr.DeployRunes_Remote(
+			assetName,
+			symbol,
+			maxSupply,
+			limit,
+			selfMint,
+			destAddr,
+			feeRate,
+		)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		return map[string]interface{}{
+			"txId":   txId,
+			"resvId": id,
+			"result": result,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
 func getAddressStatusInContract(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -3435,7 +3551,7 @@ func main() {
 	obj.Set("getDeployedContractStatus", js.FuncOf(getDeployedContractStatus))
 	obj.Set("getDeployedContractAnalytics", js.FuncOf(getDeployedContractAnalytics))
 	obj.Set("getFeeForDeployContract", js.FuncOf(getFeeForDeployContract))
-	//obj.Set("deployContract_Remote", js.FuncOf(deployContract_Remote))
+	obj.Set("deployContract_Remote", js.FuncOf(deployContract_Remote))
 	obj.Set("getParamForInvokeContract", js.FuncOf(getParamForInvokeContract))
 	obj.Set("getFeeForInvokeContract", js.FuncOf(getFeeForInvokeContract))
 	obj.Set("invokeContract_SatsNet", js.FuncOf(invokeContract_SatsNet))
@@ -3448,7 +3564,9 @@ func main() {
 
 	obj.Set("deposit", js.FuncOf(deposit))
 	obj.Set("withdraw", js.FuncOf(withdraw))
-	//obj.Set("stakeToBeMiner", js.FuncOf(stakeToBeMiner))
+	obj.Set("stakeToBeMiner", js.FuncOf(stakeToBeMiner))
+	obj.Set("minerUnstake", js.FuncOf(minerUnstake))
+	obj.Set("DeployRunes_Remote", js.FuncOf(deployRunesRemote))
 	obj.Set("getAllRegisteredReferrerName", js.FuncOf(getAllRegisteredReferrerName))
 	obj.Set("registerAsReferrer", js.FuncOf(registerAsReferrer))
 	obj.Set("bindReferrerForServer", js.FuncOf(bindReferrerForServer))

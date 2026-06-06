@@ -8,20 +8,58 @@
       <BtcFeeSelect @change="walletStore.setBtcFeeRate" />
       <SatsnetFeeSelect @change="walletStore.setSatsnetFeeRate" />
       <NetworkSelect />
+      <Button
+        size="xs"
+        variant="ghost"
+        class="flex h-7 items-center justify-center rounded-md border border-zinc-800 bg-zinc-800 text-foreground/80"
+        @click="showTranscendingMode = true"
+      >
+        <Icon :icon="currentIcon" class="h-4 w-4" />
+        <ChevronDown class="h-4 w-4" />
+      </Button>
     </div>
 
-    </header>
+    <div
+      v-if="showTranscendingMode"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    >
+      <div class="relative w-[330px] rounded-lg border border-zinc-700 bg-zinc-900 p-4 shadow-lg">
+        <button
+          class="absolute right-2 top-2 text-gray-500 hover:text-gray-300"
+          @click="showTranscendingMode = false"
+        >
+          <Icon icon="lucide:x" class="h-5 w-5" />
+        </button>
+        <TranscendingMode @close="showTranscendingMode = false" />
+      </div>
+    </div>
+  </header>
 </template>
 
 <script setup lang="ts">
+import { computed, ref } from 'vue'
+import { storeToRefs } from 'pinia'
+import { Icon } from '@iconify/vue'
 import BtcFeeSelect from '@/components/common/BtcFeeSelect.vue'
 import SatsnetFeeSelect from '@/components/common/SatsnetFeeSelect.vue'
 import NetworkSelect from '@/components/common/NetworkSelect.vue'
 import WalletSelector from './WalletSelector.vue'
-import { useWalletStore } from '@/store'
+import TranscendingMode from '@/components/wallet/TranscendingMode.vue'
+import { ChevronDown } from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
+import { useTranscendingModeStore, useWalletStore } from '@/store'
 
 // 状态管理
 const walletStore = useWalletStore()
+const transcendingModeStore = useTranscendingModeStore()
+const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
+const showTranscendingMode = ref(false)
+
+const currentIcon = computed(() => {
+  return selectedTranscendingMode.value === 'poolswap'
+    ? 'material-icon-theme:hurl'
+    : 'material-icon-theme:supabase'
+})
 
 // 事件处理
 const handleWalletChange = (wallet: any) => {

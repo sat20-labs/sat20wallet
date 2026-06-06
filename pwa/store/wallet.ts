@@ -2,11 +2,15 @@ import { defineStore } from 'pinia'
 import { walletStorage } from '@/lib/walletStorage'
 import { Network, Chain, WalletData, WalletAccount } from '@/types'
 import walletManager from '@/utils/sat20'
+import satsnetStp from '@/utils/stp'
+import { useChannelStore } from './channel'
 import { ref, computed, toRaw } from 'vue'
 import { sendNetworkChangedEvent, sendAccountsChangedEvent } from '@/lib/utils'
+import { getConfig, logLevel } from '@/config/wasm'
 
 
 export const useWalletStore = defineStore('wallet', () => {
+  const channelStore = useChannelStore()
   const address = ref(walletStorage.getValue('address'))
   const publicKey = ref(walletStorage.getValue('pubkey'))
   const walletId = ref(walletStorage.getValue('walletId'))
@@ -72,6 +76,14 @@ export const useWalletStore = defineStore('wallet', () => {
     }
   }
 
+  const runStpSync = async (label: string, fn: () => Promise<[Error | undefined, any | undefined]>) => {
+    const [err, result] = await fn()
+    if (err) {
+      console.warn(`STP sync failed during ${label}:`, err)
+    }
+    return result
+  }
+
   const setAddress = async (value: string) => {
     address.value = value
     await walletStorage.setValue('address', value)
@@ -117,6 +129,14 @@ export const useWalletStore = defineStore('wallet', () => {
       await setPublickey(pubkeyRes.pubKey)
     }
 
+    const env = walletStorage.getValue('env') || 'test'
+    const config = getConfig(env, value)
+    await runStpSync('network release', () => satsnetStp.release())
+    await walletManager.release()
+    await runStpSync('network init', () => satsnetStp.init(config, logLevel))
+    await walletManager.init(config, logLevel)
+    await channelStore.getAllChannels()
+
     try {
       console.log(`Sending NETWORK_CHANGED message with payload: ${value}`)
       await sendNetworkChangedEvent(value)
@@ -161,6 +181,7 @@ export const useWalletStore = defineStore('wallet', () => {
       console.log('Starting wallet switch to:', walletIdToSwitch)
 
       await walletManager.switchWallet(walletIdToSwitch, password.value as string)
+      await runStpSync('switchWallet', () => satsnetStp.switchWallet(walletIdToSwitch, password.value as string))
       const currentAccount = wallets.value.find(w => w.id === walletIdToSwitch)?.accounts[0];
       await setWalletId(walletIdToSwitch);
       await switchToAccount(currentAccount?.index || 0);
@@ -190,6 +211,9 @@ export const useWalletStore = defineStore('wallet', () => {
     await setLocked(false)
     await setChain(Chain.BTC)
     await setPassword(password)
+    await runStpSync('createWallet import', () => satsnetStp.importWallet(_mnemonic, password))
+    await runStpSync('createWallet start', () => satsnetStp.start())
+    await channelStore.getAllChannels()
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
     )
@@ -250,6 +274,9 @@ export const useWalletStore = defineStore('wallet', () => {
     // await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
     await setPassword(password)
+    await runStpSync('importWallet import', () => satsnetStp.importWallet(processedMnemonic, password))
+    await runStpSync('importWallet start', () => satsnetStp.start())
+    await channelStore.getAllChannels()
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
     )
@@ -306,7 +333,10 @@ export const useWalletStore = defineStore('wallet', () => {
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
+      await runStpSync('unlockWallet', () => satsnetStp.unlockWallet(password))
+      await runStpSync('unlockWallet start', () => satsnetStp.start())
       await switchToAccount(accountIndex.value)
+      await channelStore.getAllChannels()
       return [undefined, result]
     } else if (isAlreadyUnlocked) {
       // 钱包已经解锁，但前端状态可能是锁定的，需要同步状态
@@ -314,7 +344,10 @@ export const useWalletStore = defineStore('wallet', () => {
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
+      await runStpSync('unlockWallet existing', () => satsnetStp.unlockWallet(password))
+      await runStpSync('unlockWallet existing start', () => satsnetStp.start())
       await switchToAccount(accountIndex.value)
+      await channelStore.getAllChannels()
       // 返回成功，不返回错误
       return [undefined, { alreadyUnlocked: true, message: '钱包已解锁，状态已同步' }]
     }
@@ -375,6 +408,7 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const addAccount = async (name: string, accountId: number) => {
     await walletManager.switchAccount(accountId)
+    await runStpSync('addAccount switchAccount', () => satsnetStp.switchAccount(accountId))
     const [_, addressRes] = await walletManager.getWalletAddress(accountId)
     const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
     if (addressRes && pubkeyRes) {
@@ -409,6 +443,7 @@ export const useWalletStore = defineStore('wallet', () => {
       console.log('Starting account switch to:', accountId)
 
       await walletManager.switchAccount(accountId)
+      await runStpSync('switchToAccount', () => satsnetStp.switchAccount(accountId))
       const [_, addressRes] = await walletManager.getWalletAddress(accountId)
       const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
       if (addressRes && pubkeyRes) {

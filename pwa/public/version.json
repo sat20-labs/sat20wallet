@@ -1,9 +1,9 @@
 {
-  "version": "0.1.33",
-  "buildId": "20260530T144233Z",
-  "commit": "ddc165806a78",
-  "releaseNotes": "Android 生物识别仅允许 HTTPS 环境",
+  "version": "0.1.34",
+  "buildId": "20260605T102702Z",
+  "commit": "c651751b6307",
+  "releaseNotes": "恢复通道管理 STP 模块",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-05-30T14:42:33.125Z"
+  "publishedAt": "2026-06-05T10:27:02.038Z"
 }

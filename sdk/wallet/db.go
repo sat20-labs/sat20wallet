@@ -1428,6 +1428,10 @@ func saveContractInvokerStatus(db db.KVDB, url string, value InvokerStatus) erro
 	return nil
 }
 
+func SaveContractInvokerStatus(db db.KVDB, url string, value InvokerStatus) error {
+	return saveContractInvokerStatus(db, url, value)
+}
+
 func loadContractInvokerStatus(db db.KVDB, url, address string) (InvokerStatus, error) {
 	key := GetContractInvokerStatusKey(url, address)
 

@@ -163,6 +163,17 @@
     "Unlock": "Unlock",
     "History": "History"
   },
+  "channelAssetsTabs": {
+    "assetType": {
+      "ORDX": "ORDX",
+      "Runes": "Runes",
+      "BRC20": "BRC20"
+    },
+    "viewTradeHistory": "View Trade History",
+    "viewL2History": "View L2 History",
+    "splicingOut": "Splicing out",
+    "unlock": "Unlock"
+  },
   "l1AssetsTabs": {
     "assetType": {
       "ORDX": "ORDX",
