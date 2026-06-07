@@ -84,6 +84,7 @@ export function usePwaUpdate() {
     } catch (error) {
       console.warn('PWA update failed, falling back to reload:', error)
     } finally {
+      await clearAppShellCache()
       window.location.reload()
     }
   }

@@ -13,8 +13,13 @@ export interface RemoteVersionInfo {
   publishedAt: string
 }
 
-const localVersion = __SAT20_APP_VERSION__
-const localBuildId = __SAT20_BUILD_ID__
+const getEmbeddedVersion = () => (
+  typeof __SAT20_APP_VERSION__ === 'string' ? __SAT20_APP_VERSION__ : '0.0.0'
+)
+
+const getEmbeddedBuildId = () => (
+  typeof __SAT20_BUILD_ID__ === 'string' ? __SAT20_BUILD_ID__ : ''
+)
 
 function compareVersions(current: string, remote: string): number {
   const currentParts = current.replace('v', '').split('.').map(Number)
@@ -40,6 +45,8 @@ export function useAppVersion() {
   const remoteVersion = ref<RemoteVersionInfo | null>(null)
   const isForceUpdate = ref(false)
   const lastCheckedVersion = ref<string | null>(null)
+  const localVersion = ref(getEmbeddedVersion())
+  const localBuildId = ref(getEmbeddedBuildId())
   const versionUrl = import.meta.env.VITE_SAT20_VERSION_URL
     || `${import.meta.env.BASE_URL}version.json`
 
@@ -86,9 +93,24 @@ export function useAppVersion() {
       })
       lastCheckedVersion.value = info.version
     } else {
-      notifyUpdateAvailable(`当前：v${localVersion} → 最新：v${info.version}`)
+      notifyUpdateAvailable(`当前：v${localVersion.value} → 最新：v${info.version}`)
       lastCheckedVersion.value = info.version
     }
+  }
+
+  const syncDevelopmentVersion = async () => {
+    if (!import.meta.env.DEV) {
+      return
+    }
+
+    const info = await fetchRemoteVersion()
+    if (!info) {
+      return
+    }
+
+    localVersion.value = info.version
+    localBuildId.value = info.buildId || ''
+    remoteVersion.value = info
   }
 
   const checkForUpdates = async (silent = false): Promise<boolean> => {
@@ -109,8 +131,8 @@ export function useAppVersion() {
       }
 
       remoteVersion.value = info
-      const comparison = compareVersions(localVersion, info.version)
-      const buildChanged = comparison === 0 && Boolean(info.buildId) && info.buildId !== localBuildId
+      const comparison = compareVersions(localVersion.value, info.version)
+      const buildChanged = comparison === 0 && Boolean(info.buildId) && info.buildId !== localBuildId.value
 
       hasUpdate.value = comparison > 0 || buildChanged
       isForceUpdate.value = info.forceUpdate
@@ -123,7 +145,7 @@ export function useAppVersion() {
           toast({
             variant: 'success',
             title: t('setting.latestVersionTitle'),
-            description: t('setting.currentVersionDescription', { version: localVersion }),
+            description: t('setting.currentVersionDescription', { version: localVersion.value }),
           })
         }
         return false
@@ -163,8 +185,8 @@ export function useAppVersion() {
       }
 
       remoteVersion.value = info
-      const comparison = compareVersions(localVersion, info.version)
-      const buildChanged = comparison === 0 && Boolean(info.buildId) && info.buildId !== localBuildId
+      const comparison = compareVersions(localVersion.value, info.version)
+      const buildChanged = comparison === 0 && Boolean(info.buildId) && info.buildId !== localBuildId.value
 
       hasUpdate.value = comparison > 0 || buildChanged
       isForceUpdate.value = info.forceUpdate
@@ -173,7 +195,7 @@ export function useAppVersion() {
         toast({
           variant: 'success',
           title: t('setting.latestVersionTitle'),
-          description: t('setting.currentVersionDescription', { version: localVersion }),
+          description: t('setting.currentVersionDescription', { version: localVersion.value }),
         })
         return false
       }
@@ -182,7 +204,7 @@ export function useAppVersion() {
         variant: 'info',
         title: t('setting.updateAvailableTitle'),
         description: t('setting.updatingVersionDescription', {
-          current: localBuildId ? `${localVersion}+${localBuildId}` : localVersion,
+          current: localBuildId.value ? `${localVersion.value}+${localBuildId.value}` : localVersion.value,
           latest: info.buildId ? `${info.version}+${info.buildId}` : info.version,
         }),
         duration: 3000,
@@ -201,6 +223,8 @@ export function useAppVersion() {
       isChecking.value = false
     }
   }
+
+  void syncDevelopmentVersion()
 
   return {
     isChecking,

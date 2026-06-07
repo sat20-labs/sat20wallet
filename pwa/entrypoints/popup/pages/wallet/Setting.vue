@@ -79,5 +79,5 @@ const transcendingModeStore = useTranscendingModeStore()
 const isOpen = ref(false);
 
 const { isChecking, isUpdating, checkAndUpdate, localVersion, localBuildId } = useAppVersion()
-const versionDisplay = computed(() => localBuildId ? `${localVersion}+${localBuildId}` : localVersion)
+const versionDisplay = computed(() => localBuildId.value ? `${localVersion.value}+${localBuildId.value}` : localVersion.value)
 </script>

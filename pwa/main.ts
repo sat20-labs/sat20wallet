@@ -38,6 +38,31 @@ const registerServiceWorker = () => {
     return
   }
 
+  if (import.meta.env.DEV) {
+    window.addEventListener('load', async () => {
+      try {
+        const registrations = await navigator.serviceWorker.getRegistrations()
+        await Promise.all(
+          registrations
+            .filter((registration) => registration.scope.startsWith(window.location.origin))
+            .map((registration) => registration.unregister())
+        )
+
+        if ('caches' in window) {
+          const keys = await caches.keys()
+          await Promise.all(
+            keys
+              .filter((key) => key.startsWith('sat20-wallet-pwa-'))
+              .map((key) => caches.delete(key))
+          )
+        }
+      } catch (error) {
+        console.warn('Failed to clear development service worker cache:', error)
+      }
+    }, { once: true })
+    return
+  }
+
   const register = () => {
     navigator.serviceWorker.register(`${import.meta.env.BASE_URL}service-worker.js`, {
       scope: import.meta.env.BASE_URL,
