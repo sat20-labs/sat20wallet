@@ -12,6 +12,7 @@ interface WasmResponse<T = any> {
 interface StpWasmModule {
   // STP wasm 自己的基础方法
   init: (...args: any[]) => Promise<WasmResponse>;
+  getVersion: (...args: any[]) => Promise<WasmResponse<string>>;
   registerCallback: (...args: any[]) => Promise<WasmResponse>;
 
   // 钱包状态同步方法 (stp wasm 需要与 sat20 wasm 保持状态同步)
@@ -98,6 +99,10 @@ class SatsnetStp {
     logLevel: number
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('init', cfg, logLevel)
+  }
+
+  async getVersion(): Promise<[Error | undefined, string | undefined]> {
+    return this._handleRequest<string>('getVersion')
   }
 
   async registerCallback(
