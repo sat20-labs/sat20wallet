@@ -1102,17 +1102,3 @@ func CalcFee_CommitTx(in, out int, feeRate int64) int64 {
 	return weightEstimate.Fee(feeRate)
 }
 
-
-func CalcFee_SplicingOutTx(in, out int, feeRate int64) int64 {
-	var weightEstimate TxWeightEstimator
-	for i := 0; i < in; i++ {
-		weightEstimate.AddWitnessInput(MultiSigWitnessSize)
-	}
-	
-	weightEstimate.AddP2WSHOutput()
-	for i := 0; i < out-1; i++ {
-		weightEstimate.AddP2TROutput()
-	}
-
-	return weightEstimate.Fee(feeRate)
-}
