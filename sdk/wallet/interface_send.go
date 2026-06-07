@@ -2984,6 +2984,70 @@ func (p *Manager) SelectUtxosForFeeV2(
 	return result, nil
 }
 
+func (p *Manager) SelectUtxosForFeeV2WithMgr(
+	utxoMgr *UtxoMgr, excludedUtxoMap map[string]bool,
+	requiredValue int64, excludeRecentBlock bool) ([]*TxOutput, error) {
+
+	if utxoMgr == nil {
+		return nil, fmt.Errorf("nil utxo manager")
+	}
+	address := utxoMgr.GetAddress()
+	utxos := utxoMgr.GetUtxoListWithTicker(&indexer.ASSET_PLAIN_SAT)
+	p.utxoLockerL1.Reload(address)
+	if requiredValue == 0 {
+		requiredValue = MAX_FEE
+	}
+
+	bigger := make([]*indexer.AssetsInUtxo, 0)
+	result := make([]*TxOutput, 0)
+	total := int64(0)
+	for _, u := range utxos {
+		utxo := u.OutPoint
+		if excludeRecentBlock {
+			if p.IsRecentBlockUtxo(u.UtxoId) {
+				continue
+			}
+		}
+		if _, ok := excludedUtxoMap[utxo]; ok {
+			continue
+		}
+		if p.utxoLockerL1.IsLocked(utxo) {
+			continue
+		}
+		if u.Value > requiredValue {
+			bigger = append(bigger, u)
+			continue
+		}
+
+		total += u.Value
+		result = append(result, u.ToTxOutput())
+		if total >= requiredValue {
+			break
+		}
+	}
+
+	if total >= requiredValue {
+		utxoMgr.RemoveOutputs(result)
+		return result, nil
+	}
+
+	for i := len(bigger) - 1; i >= 0; i-- {
+		output := bigger[i].ToTxOutput()
+		result = append(result, output)
+		total += output.GetPlainSat()
+		if total >= requiredValue {
+			break
+		}
+	}
+
+	if total < requiredValue {
+		return nil, fmt.Errorf("no enough utxo for fee, require %d but only %d", requiredValue, total)
+	}
+
+	utxoMgr.RemoveOutputs(result)
+	return result, nil
+}
+
 func (p *Manager) SelectUtxosForAssetV2_SatsNet(address string,
 	excludedUtxoMap map[string]bool,
 	assetName *indexer.AssetName, requiredAmt *Decimal) ([]string, error) {
