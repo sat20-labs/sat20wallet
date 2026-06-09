@@ -1452,7 +1452,16 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 				return SWAP_INVOKE_FEE, nil
 			}
 
-		} else {
+		} else if templateName == TEMPLATE_CONTRACT_FAUCET {
+			// 可以不设置amt
+			
+			// unitprice 实际是utxo的聪数量
+			if swapParam.OrderType == ORDERTYPE_BUY {
+				return SWAP_INVOKE_FEE, nil
+			} else {
+				return SWAP_INVOKE_FEE, fmt.Errorf("faucet only support buy")
+			}
+		}else {
 			return 0, fmt.Errorf("invalid template %s", templateName)
 		}
 
@@ -1534,7 +1543,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		return WITHDRAW_INVOKE_FEE + fee, nil
 
 	case INVOKE_API_ADDLIQUIDITY:
-		if templateName != TEMPLATE_CONTRACT_AMM {
+		if templateName != TEMPLATE_CONTRACT_AMM && templateName != TEMPLATE_CONTRACT_FAUCET{
 			return 0, fmt.Errorf("unsupport")
 		}
 		var innerParam AddLiqInvokeParam
@@ -1788,7 +1797,7 @@ func (p *SwapContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invoke
 
 		// 更新合约状态
 		invokeTx.Handled = true
-		return p.updateContract_swap(address, output, &swapParam, bValid), nil
+		return p.updateContract_swap(address, output, &swapParam, false, bValid), nil
 
 	case INVOKE_API_WITHDRAW:
 		// 检查资产的数据
@@ -2339,7 +2348,7 @@ func CalcDealValue(value int64) int64 {
 }
 
 func (p *SwapContractRuntime) updateContract_swap(
-	address string, output *sindexer.TxOutput, param *SwapInvokeParam,
+	address string, output *sindexer.TxOutput, param *SwapInvokeParam, fromL1 bool,
 	bValid bool) *SwapHistoryItem {
 
 	inValue := output.GetPlainSat_Ceil()
@@ -2371,7 +2380,7 @@ func (p *SwapContractRuntime) updateContract_swap(
 		UnitPrice:      price,
 		ExpectedAmt:    expectedAmt,
 		Address:        address,
-		FromL1:         false,
+		FromL1:         fromL1,
 		InUtxo:         output.OutPointStr,
 		InValue:        inValue,
 		InAmt:          inAmt,

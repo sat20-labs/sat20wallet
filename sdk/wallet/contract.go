@@ -39,6 +39,7 @@ const (
 	TEMPLATE_CONTRACT_AMM        string = "amm.tc"
 	TEMPLATE_CONTRACT_EXCHANGE   string = "exchange.tc"
 	TEMPLATE_CONTRACT_TRANSCEND  string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
+	TEMPLATE_CONTRACT_FAUCET     string = "faucet.tc" // 支持L1/L2不带参数的兑换gas
 	TEMPLATE_CONTRACT_RECYCLE    string = "recycle.tc"
 	TEMPLATE_CONTRACT_DAO        string = "dao.tc"
 	// 开发中的
@@ -794,8 +795,6 @@ func (p *InvokerStatusBase) GetHistory() map[int][]int64 {
 
 func NewInvokerStatus(cn string) InvokerStatus {
 	switch cn {
-	case TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_LIMITORDER, TEMPLATE_CONTRACT_AMM:
-		return &TraderStatus{}
 	case TEMPLATE_CONTRACT_LAUNCHPOOL:
 		return nil
 		//case TEMPLATE_CONTRACT_VAULT:
@@ -2196,8 +2195,9 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 			if p.CurrBlockL1+1 < data.Height {
 				p.mutex.Unlock()
 				Log.Errorf("%s missing some L1 block, current %d, but new block %d", p.URL(), p.CurrBlockL1, data.Height)
-				p.resyncBlock(p.CurrBlockL1+1, data.Height-1)
-				Log.Infof("%s has resync L1 from %d to %d", p.URL(), p.CurrBlockL1+1, data.Height-1)
+				from := p.CurrBlockL1+1
+				p.resyncBlock(from, data.Height-1)
+				Log.Infof("%s has resync L1 from %d to %d", p.URL(), from, data.Height-1)
 				p.mutex.Lock()
 			}
 		}
@@ -2347,8 +2347,9 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 				// 同步缺少的区块，确保合约运行正常
 				p.mutex.Unlock()
 				Log.Errorf("%s missing some L2 block, current %d, but new block %d", p.URL(), p.CurrBlock, data.Height)
-				p.resyncBlock_SatsNet(p.CurrBlock+1, data.Height-1)
-				Log.Infof("%s has resync L2 from %d to %d", p.URL(), p.CurrBlock+1, data.Height-1)
+				from := p.CurrBlock+1
+				p.resyncBlock_SatsNet(from, data.Height-1)
+				Log.Infof("%s has resync L2 from %d to %d", p.URL(), from, data.Height-1)
 				p.mutex.Lock()
 			}
 		}
@@ -3136,6 +3137,11 @@ func GetSupportedContracts() []string {
 		result = append(result, string(c.Content()))
 	}
 
+	c = NewContract(TEMPLATE_CONTRACT_FAUCET)
+	if c != nil {
+		result = append(result, string(c.Content()))
+	}
+
 	sort.Slice(result, func(i, j int) bool {
 		return result[i] < result[j]
 	})
@@ -3167,6 +3173,9 @@ func NewContract(cname string) Contract {
 
 	case TEMPLATE_CONTRACT_DAO:
 		return NewDaoContract()
+
+	case TEMPLATE_CONTRACT_FAUCET:
+		return NewFaucetContract()
 	}
 	return nil
 }
@@ -3209,6 +3218,9 @@ func NewContractRuntime(stp ContractManager, cname string) ContractRuntime {
 
 	case TEMPLATE_CONTRACT_DAO:
 		return NewDaoContractRunTime(stp)
+
+	case TEMPLATE_CONTRACT_FAUCET:
+		return NewFaucetContractRuntime(stp)
 	}
 
 	return r
