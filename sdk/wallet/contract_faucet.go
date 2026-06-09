@@ -12,19 +12,11 @@ import (
 
 /*
 Faucet合约
-1. 支持指定资产进入和退出聪网，优先级比amm低，但支持白聪
-2. 每个区块处理完成后，统一回款
-3. 项目方提取池子利润 （只能提取白聪，默认的分配规则：项目方：节点A：节点B：基金会=55:20:20:5）
-
-对该地址上该资产的约定：
-1. 利润是白聪总量
-2. 在L1上，没有被Ascend过的utxo，可以用来支持withdraw。如果没有足够的utxo可用，就必须先Descend一些utxo（DeAnchorTx）。但必须保留FaucetContract指定数量资产。
-3. 在L2上，超出FaucetContract的资产，可以直接send出去给用户，用来支持deposit操作。如果不够，就需要先Ascend用户转进来的utxo
-4. 为了简单一点，现在withdraw直接deAnchor，但deposit不执行anchor
+1. 按照指定的费率兑换资产，目前主要用于兑换聪网gas
+2. 支持默认调用，无论是L1/L2，直接往合约地址发送聪，自动兑换，结果转移到L2上调用者地址
 */
 
 func init() {
-	// 让 gob 知道旧的类型对应新的实现
 	gob.Register(new(FaucetContractRuntime))
 }
 
