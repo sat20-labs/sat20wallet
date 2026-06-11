@@ -147,7 +147,7 @@ func (p *network) Clone() *network {
 	for k, v := range p.blocks {
 		txList := make([]string, len(v))
 		copy(txList, v)
-		n.blocks[k] = v
+		n.blocks[k] = txList
 	}
 
 	n.txBroadcasted = make(map[string]string)

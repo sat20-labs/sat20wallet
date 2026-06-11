@@ -10,17 +10,16 @@ import (
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
 )
 
-
 const CONTENT_DEPLOY_BRC20_BODY_4 string = `{"p":"brc-20","op":"deploy","tick":"%s","max":"%d","lim":"%d","dec":"0"}`
 const CONTENT_DEPLOY_BRC20_BODY_5 string = `{"p":"brc-20","op":"deploy","tick":"%s","max":"%d","lim":"%d","self_mint":"true","dec":"0"}`
 const CONTENT_MINT_BRC20_BODY string = `{"p":"brc-20","op":"mint","tick":"%s","amt":"%s"}`
 const CONTENT_MINT_BRC20_TRANSFER_BODY string = `{"p":"brc-20","op":"transfer","tick":"%s","amt":"%s"}`
 
 // scriptType = SCRIPT_TYPE_PUNISH or SCRIPT_TYPE_SWEEP时，必须设置witnessScript
-func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string, 
+func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string,
 	excludedUtxoMap map[string]bool,
-	body string, feeRate int64, 
-	defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool, realPrivateKey []byte, 
+	body string, feeRate int64,
+	defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool, revealPrivateKey []byte,
 	signer Signer, scriptType int, witnessScript []byte, broadcast bool) (*InscribeResv, error) {
 	srcAddr := srcUtxoMgr.GetAddress()
 	if srcAddr == "" {
@@ -45,8 +44,8 @@ func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string,
 			commitTxPrevOutputList = append(commitTxPrevOutputList, utxo)
 			excludedUtxoMap[utxo.OutPointStr] = true
 		}
-		estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), 
-				len(body), feeRate, 330)
+		estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList),
+			len(body), feeRate, 330)
 	}
 
 	if total < estimatedFee {
@@ -69,7 +68,7 @@ func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string,
 				}
 				total += u.Value
 				commitTxPrevOutputList = append(commitTxPrevOutputList, u.ToTxOutput())
-				estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), 
+				estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList),
 					len(body), feeRate, 330)
 				if total >= estimatedFee {
 					break
@@ -86,7 +85,7 @@ func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string,
 		CommitFeeRate:          feeRate,
 		RevealFeeRate:          feeRate,
 		RevealOutValue:         330,
-		RevealPrivateKey:       realPrivateKey,
+		RevealPrivateKey:       revealPrivateKey,
 		InscriptionData: InscriptionData{
 			ContentType: CONTENT_TYPE,
 			Body:        []byte(body),
@@ -122,10 +121,10 @@ func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, feeRate int6
 	default:
 		return nil, fmt.Errorf("invalid ticker length %s", ticker)
 	}
-	
-	return p.inscribeV2(NewUtxoMgr(p.wallet.GetAddress(), p.l1IndexerClient), "", 
-	map[string]bool{},
-	body, feeRate, nil, false, nil, p.SignTxV2, 0, nil, true)
+
+	return p.inscribeV2(NewUtxoMgr(p.wallet.GetAddress(), p.l1IndexerClient), "",
+		map[string]bool{},
+		body, feeRate, nil, false, nil, p.SignTxV2, 0, nil, true)
 }
 
 // 需要调用方确保amt<=limit
@@ -169,17 +168,17 @@ func (p *Manager) MintAssetV2_brc20(destAddr string, assetName *indexer.AssetNam
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_BODY, tickInfo.AssetName.Ticker, amt.String())
-	return p.inscribeV2(NewUtxoMgr(p.wallet.GetAddress(), p.l1IndexerClient), destAddr, 
-	map[string]bool{},
-	body, feeRate, defaultUtxos, false, nil, p.SignTxV2, 0, nil, true)
+	return p.inscribeV2(NewUtxoMgr(p.wallet.GetAddress(), p.l1IndexerClient), destAddr,
+		map[string]bool{},
+		body, feeRate, defaultUtxos, false, nil, p.SignTxV2, 0, nil, true)
 }
 
 // 需要调用方确保amt<=用户持有量, 注意如果是lockInputs，而且最后不广播，需要对输入的utxo解锁
 // 注意输入的defaultUtxos必须确保indexer能返回数据
-func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string, 
+func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string,
 	excludedUtxoMap map[string]bool,
 	assetName *indexer.AssetName,
-	amt *Decimal, feeRate int64, defaultUtxos []string, onlyUsingDefaultUtxos bool,  
+	amt *Decimal, feeRate int64, defaultUtxos []string, onlyUsingDefaultUtxos bool,
 	revealPrivKey []byte, inChannel, broadcast, lockInputs bool) (*InscribeResv, error) {
 
 	var outputs []*TxOutput
@@ -193,14 +192,14 @@ func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string,
 	}
 
 	return p.MintTransferV2_brc20(srcAddr, destAddr, excludedUtxoMap, assetName,
-	amt, feeRate, outputs, onlyUsingDefaultUtxos, revealPrivKey, inChannel, broadcast, lockInputs)
+		amt, feeRate, outputs, onlyUsingDefaultUtxos, revealPrivKey, inChannel, broadcast, lockInputs)
 }
 
 // defaultUtxos 可以是前置的tx的输出
-func (p *Manager) MintTransferV2_brc20(srcAddr, destAddr string, 
+func (p *Manager) MintTransferV2_brc20(srcAddr, destAddr string,
 	excludedUtxoMap map[string]bool,
 	assetName *indexer.AssetName,
-	amt *Decimal, feeRate int64, defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,  
+	amt *Decimal, feeRate int64, defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,
 	revealPrivKey []byte, inChannel, broadcast, lockInputs bool) (*InscribeResv, error) {
 
 	if srcAddr == "" {
@@ -217,16 +216,16 @@ func (p *Manager) MintTransferV2_brc20(srcAddr, destAddr string,
 		scriptType = SCRIPT_TYPE_TAPROOTKEYSPEND
 	}
 
-	return p.MintTransferV3_brc20(NewUtxoMgr(srcAddr, p.l1IndexerClient), destAddr, 
-	excludedUtxoMap, assetName, amt, feeRate, defaultUtxos, onlyUsingDefaultUtxos, 
-	revealPrivKey, scriptType, nil, broadcast, lockInputs)
+	return p.MintTransferV3_brc20(NewUtxoMgr(srcAddr, p.l1IndexerClient), destAddr,
+		excludedUtxoMap, assetName, amt, feeRate, defaultUtxos, onlyUsingDefaultUtxos,
+		revealPrivKey, scriptType, nil, broadcast, lockInputs)
 }
 
 // defaultUtxos 可以是前置的tx的输出
-func (p *Manager) MintTransferV3_brc20(srcUtxoMgr *UtxoMgr, destAddr string, 
+func (p *Manager) MintTransferV3_brc20(srcUtxoMgr *UtxoMgr, destAddr string,
 	excludedUtxoMap map[string]bool,
-	assetName *indexer.AssetName, amt *Decimal, feeRate int64, 
-	defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,  
+	assetName *indexer.AssetName, amt *Decimal, feeRate int64,
+	defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,
 	revealPrivKey []byte, scriptType int, witnessScript []byte, broadcast, lockInputs bool) (*InscribeResv, error) {
 
 	var signer Signer
@@ -234,17 +233,16 @@ func (p *Manager) MintTransferV3_brc20(srcUtxoMgr *UtxoMgr, destAddr string,
 		signer = p.SignTxV2
 	}
 
-	return p.mintTransfer(srcUtxoMgr, destAddr, excludedUtxoMap, 
-		assetName, amt, feeRate, defaultUtxos, onlyUsingDefaultUtxos, 
+	return p.mintTransfer(srcUtxoMgr, destAddr, excludedUtxoMap,
+		assetName, amt, feeRate, defaultUtxos, onlyUsingDefaultUtxos,
 		revealPrivKey, signer, scriptType, witnessScript, broadcast, lockInputs)
 }
 
-
 // defaultUtxos 可以是前置的tx的输出
-func (p *Manager) mintTransfer(srcUtxoMgr *UtxoMgr, destAddr string, 
+func (p *Manager) mintTransfer(srcUtxoMgr *UtxoMgr, destAddr string,
 	excludedUtxoMap map[string]bool,
-	assetName *indexer.AssetName, amt *Decimal, feeRate int64, 
-	defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,  
+	assetName *indexer.AssetName, amt *Decimal, feeRate int64,
+	defaultUtxos []*TxOutput, onlyUsingDefaultUtxos bool,
 	revealPrivKey []byte, signer Signer, scriptType int, witnessScript []byte, broadcast, lockInputs bool) (*InscribeResv, error) {
 
 	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
@@ -260,7 +258,7 @@ func (p *Manager) mintTransfer(srcUtxoMgr *UtxoMgr, destAddr string,
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_TRANSFER_BODY, tickInfo.AssetName.Ticker, amt.String())
-	insc, err := p.inscribeV2(srcUtxoMgr, destAddr, excludedUtxoMap, body, feeRate, defaultUtxos, onlyUsingDefaultUtxos, 
+	insc, err := p.inscribeV2(srcUtxoMgr, destAddr, excludedUtxoMap, body, feeRate, defaultUtxos, onlyUsingDefaultUtxos,
 		revealPrivKey, signer, scriptType, witnessScript, broadcast)
 	if err != nil {
 		return nil, err
@@ -274,7 +272,7 @@ func (p *Manager) mintTransfer(srcUtxoMgr *UtxoMgr, destAddr string,
 
 // 使用private key构造铭文的commit tx，适合构建punish tx
 func (p *Manager) MintTransferWithCommitPriKey(destAddr string, assetName *indexer.AssetName,
-	amt *Decimal, feeRate int64, defaultUtxos []*TxOutput, 
+	amt *Decimal, feeRate int64, defaultUtxos []*TxOutput,
 	scriptType int, redeemScript []byte, revPrivKey *secp256k1.PrivateKey) (*InscribeResv, error) {
 
 	if assetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
@@ -288,7 +286,7 @@ func (p *Manager) MintTransferWithCommitPriKey(destAddr string, assetName *index
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if destAddr == "" {
 		destAddr = p.wallet.GetAddress()
 	}
@@ -297,7 +295,7 @@ func (p *Manager) MintTransferWithCommitPriKey(destAddr string, assetName *index
 		return nil, fmt.Errorf("amt %s biger than zero", amt.String())
 	}
 
-	signer := func (tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
+	signer := func(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
 		sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
 		for i, txIn := range tx.TxIn {
 			preOut := prevFetcher.FetchPrevOutput(txIn.PreviousOutPoint)
@@ -312,8 +310,8 @@ func (p *Manager) MintTransferWithCommitPriKey(destAddr string, assetName *index
 					return err
 				}
 				txIn.Witness = witness
-				
-			case txscript.WitnessV0ScriptHashTy: //"P2WSH": 
+
+			case txscript.WitnessV0ScriptHashTy: //"P2WSH":
 				sigScript, err := txscript.RawTxInWitnessSignature(tx, sigHashes, i,
 					preOut.Value, redeemScript, txscript.SigHashAll, revPrivKey)
 				if err != nil {
@@ -330,9 +328,9 @@ func (p *Manager) MintTransferWithCommitPriKey(destAddr string, assetName *index
 	}
 
 	body := fmt.Sprintf(CONTENT_MINT_BRC20_TRANSFER_BODY, tickInfo.AssetName.Ticker, amt.String())
-	insc, err := p.inscribeV2(NewUtxoMgr(srcAddr, p.l1IndexerClient), destAddr, 
+	insc, err := p.inscribeV2(NewUtxoMgr(srcAddr, p.l1IndexerClient), destAddr,
 		map[string]bool{},
-		body, feeRate, defaultUtxos, true, nil, 
+		body, feeRate, defaultUtxos, true, revPrivKey.Serialize(),
 		signer, scriptType, redeemScript, false)
 	if err != nil {
 		return nil, err
@@ -342,19 +340,19 @@ func (p *Manager) MintTransferWithCommitPriKey(destAddr string, assetName *index
 
 func CalcFeeForMintTransfer(inputLen int, srcAddr, destAddr string, scriptType int, witnessScript []byte,
 	assetName *indexer.AssetName, amt *Decimal, feeRate int64) (int64, error) {
-	
+
 	srcPkScript, err := AddrToPkScript(srcAddr, GetChainParam())
 	if err != nil {
 		return 0, err
 	}
-	
+
 	commitTxPrevOutputList := make([]*PrevOutput, 0)
 	for i := 0; i < inputLen; i++ {
 		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-			OutPointStr:   fmt.Sprintf("aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:%d", i),
+			OutPointStr: fmt.Sprintf("aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:%d", i),
 			OutValue: wire.TxOut{
-				Value:     10000,
-				PkScript:  srcPkScript,
+				Value:    10000,
+				PkScript: srcPkScript,
 			},
 		})
 	}
@@ -365,39 +363,39 @@ func CalcFeeForMintTransfer(inputLen int, srcAddr, destAddr string, scriptType i
 		CommitFeeRate:          feeRate,
 		RevealFeeRate:          feeRate,
 		RevealOutValue:         330,
-		InscriptionData:    InscriptionData{
+		InscriptionData: InscriptionData{
 			ContentType: CONTENT_TYPE,
 			Body:        []byte(body),
 		},
-		DestAddress:            destAddr,
-		ChangeAddress:          srcAddr,
-		ScriptType:             scriptType,
-		WitnessScript:          witnessScript,
-		Signer:                 nil,
+		DestAddress:   destAddr,
+		ChangeAddress: srcAddr,
+		ScriptType:    scriptType,
+		WitnessScript: witnessScript,
+		Signer:        nil,
 	}
 
 	insc, err := Inscribe(GetChainParam(), request, 0)
 	if insc == nil {
 		return 0, err
 	}
-	return insc.CommitTxFee+insc.RevealTxFee+330, nil
+	return insc.CommitTxFee + insc.RevealTxFee + 330, nil
 }
 
-func CalcFeeForDeployTicker_brc20(inputLen int, srcAddr, destAddr string, 
+func CalcFeeForDeployTicker_brc20(inputLen int, srcAddr, destAddr string,
 	ticker string, max, lim int64, feeRate int64) (int64, error) {
-	
+
 	srcPkScript, err := AddrToPkScript(srcAddr, GetChainParam())
 	if err != nil {
 		return 0, err
 	}
-	
+
 	commitTxPrevOutputList := make([]*PrevOutput, 0)
 	for i := 0; i < inputLen; i++ {
 		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-			OutPointStr:   fmt.Sprintf("aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:%d", i),
+			OutPointStr: fmt.Sprintf("aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:%d", i),
 			OutValue: wire.TxOut{
-				Value:     10000,
-				PkScript:  srcPkScript,
+				Value:    10000,
+				PkScript: srcPkScript,
 			},
 		})
 	}
@@ -416,38 +414,38 @@ func CalcFeeForDeployTicker_brc20(inputLen int, srcAddr, destAddr string,
 		CommitFeeRate:          feeRate,
 		RevealFeeRate:          feeRate,
 		RevealOutValue:         330,
-		InscriptionData:    InscriptionData{
+		InscriptionData: InscriptionData{
 			ContentType: CONTENT_TYPE,
 			Body:        []byte(body),
 		},
-		DestAddress:            destAddr,
-		ChangeAddress:          srcAddr,
-		ScriptType:             SCRIPT_TYPE_TAPROOTKEYSPEND,
-		Signer:                 nil,
+		DestAddress:   destAddr,
+		ChangeAddress: srcAddr,
+		ScriptType:    SCRIPT_TYPE_TAPROOTKEYSPEND,
+		Signer:        nil,
 	}
 
 	insc, err := Inscribe(GetChainParam(), request, 0)
 	if insc == nil {
 		return 0, err
 	}
-	return insc.CommitTxFee+insc.RevealTxFee+330, nil
+	return insc.CommitTxFee + insc.RevealTxFee + 330, nil
 }
 
-func CalcFeeForMintAsset_brc20(inputLen int, srcAddr, destAddr string, 
+func CalcFeeForMintAsset_brc20(inputLen int, srcAddr, destAddr string,
 	assetName *indexer.AssetName, amt *Decimal, feeRate int64) (int64, error) {
-	
+
 	srcPkScript, err := AddrToPkScript(srcAddr, GetChainParam())
 	if err != nil {
 		return 0, err
 	}
-	
+
 	commitTxPrevOutputList := make([]*PrevOutput, 0)
 	for i := 0; i < inputLen; i++ {
 		commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-			OutPointStr:   fmt.Sprintf("aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:%d", i),
+			OutPointStr: fmt.Sprintf("aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:%d", i),
 			OutValue: wire.TxOut{
-				Value:     10000,
-				PkScript:  srcPkScript,
+				Value:    10000,
+				PkScript: srcPkScript,
 			},
 		})
 	}
@@ -458,55 +456,55 @@ func CalcFeeForMintAsset_brc20(inputLen int, srcAddr, destAddr string,
 		CommitFeeRate:          feeRate,
 		RevealFeeRate:          feeRate,
 		RevealOutValue:         330,
-		InscriptionData:    InscriptionData{
+		InscriptionData: InscriptionData{
 			ContentType: CONTENT_TYPE,
 			Body:        []byte(body),
 		},
-		DestAddress:            destAddr,
-		ChangeAddress:          srcAddr,
-		ScriptType:             SCRIPT_TYPE_TAPROOTKEYSPEND,
-		Signer:                 nil,
+		DestAddress:   destAddr,
+		ChangeAddress: srcAddr,
+		ScriptType:    SCRIPT_TYPE_TAPROOTKEYSPEND,
+		Signer:        nil,
 	}
 
 	insc, err := Inscribe(GetChainParam(), request, 0)
 	if insc == nil {
 		return 0, err
 	}
-	return insc.CommitTxFee+insc.RevealTxFee+330, nil
+	return insc.CommitTxFee + insc.RevealTxFee + 330, nil
 }
 
 func GenerateBRC20TransferOutput(revealTx *wire.MsgTx, assetName *indexer.AssetName, amt *Decimal) *indexer.TxOutput {
 	output := indexer.GenerateTxOutput(revealTx, 0)
 	assetInfo := indexer.AssetInfo{
-		Name: *assetName,
-		Amount: *amt,
+		Name:       *assetName,
+		Amount:     *amt,
 		BindingSat: 0,
 	}
 	output.Assets = indexer.TxAssets{assetInfo}
 	output.Offsets = map[indexer.AssetName]indexer.AssetOffsets{
-						*assetName: {{Start:0, End:1}},
-					}
+		*assetName: {{Start: 0, End: 1}},
+	}
 	output.SatBindingMap = map[int64]*indexer.AssetInfo{
-						0: &assetInfo,
-					}
+		0: &assetInfo,
+	}
 	return output
 }
 
-func GenerateInscribeMoreData(destAddr string, assetName *indexer.AssetName, 
+func GenerateInscribeMoreData(destAddr string, assetName *indexer.AssetName,
 	amt *Decimal, feeRate int64, revealKey []byte) ([]byte, error) {
 	more, err := stxscript.NewScriptBuilder().
-	AddData([]byte(destAddr)).
-	AddData([]byte(assetName.String())).
-	AddData([]byte(amt.ToFormatString())).
-	AddInt64(feeRate).
-	AddData((revealKey)).Script()
+		AddData([]byte(destAddr)).
+		AddData([]byte(assetName.String())).
+		AddData([]byte(amt.ToFormatString())).
+		AddInt64(feeRate).
+		AddData((revealKey)).Script()
 	if err != nil {
 		return nil, err
 	}
 	return more, nil
 }
 
-func ParseInscribeMoreData(more []byte) (destAddr string, assetName *indexer.AssetName, 
+func ParseInscribeMoreData(more []byte) (destAddr string, assetName *indexer.AssetName,
 	amt *Decimal, feeRate int64, revealKey []byte, err error) {
 	tokenizer := stxscript.MakeScriptTokenizer(0, more)
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -521,7 +519,6 @@ func ParseInscribeMoreData(more []byte) (destAddr string, assetName *indexer.Ass
 	}
 	name := string(tokenizer.Data())
 	assetName = indexer.NewAssetNameFromString(name)
-	
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		err = fmt.Errorf("missing asset amt")
