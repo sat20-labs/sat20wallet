@@ -94,7 +94,7 @@ func TestUnifiedNativeTemplateTxCoverage(t *testing.T) {
 	}).Encode()))
 	assertNativeTemplateInvokeRejected(t, ammRuntime, tmplcontract.InvokeAPIRefund, mustEncodeTemplateParam((&tmplcontract.RefundInvokeParam{ItemIDs: []int64{3}}).Encode()))
 
-	exchange := tmplcontract.NewExchangeContract(contractcommon.GasAssetName, indexer.ASSET_PLAIN_SAT.String(), tmplcontract.ExchangePriceModeHeight, []tmplcontract.ExchangePriceStep{{
+	exchange := tmplcontract.NewExchangeContract(GetGasAssetName(), indexer.ASSET_PLAIN_SAT.String(), tmplcontract.ExchangePriceModeHeight, []tmplcontract.ExchangePriceStep{{
 		Threshold: "0",
 		BPerA:     "0.0001",
 	}})
@@ -104,7 +104,7 @@ func TestUnifiedNativeTemplateTxCoverage(t *testing.T) {
 }
 
 func TestBuildNativeTemplateExchangeContract(t *testing.T) {
-	exchange := tmplcontract.NewExchangeContract(contractcommon.GasAssetName, indexer.ASSET_PLAIN_SAT.String(), tmplcontract.ExchangePriceModeHeight, []tmplcontract.ExchangePriceStep{{
+	exchange := tmplcontract.NewExchangeContract(GetGasAssetName(), indexer.ASSET_PLAIN_SAT.String(), tmplcontract.ExchangePriceModeHeight, []tmplcontract.ExchangePriceStep{{
 		Threshold: "0",
 		BPerA:     "0.0001",
 	}, {
@@ -317,7 +317,7 @@ func assertNativeTemplateInvokeRejected(t *testing.T, runtime *tmplcontract.Cont
 }
 
 func testTemplateFundingTxOut(amount int64) swire.TxOut {
-	gasName := swire.NewAssetNameFromString(contractcommon.GasAssetName)
+	gasName := swire.NewAssetNameFromString(GetGasAssetName())
 	return *swire.NewTxOut(0, swire.TxAssets{{
 		Name:   *gasName,
 		Amount: *indexer.NewDefaultDecimal(amount),

@@ -684,7 +684,7 @@ func (p *Manager) buildNativeTemplateContract(req *TemplateContractDeployRequest
 			return nil, 0, 0, fmt.Errorf("template content is not AMM")
 		}
 		assetFunding := uint64(0)
-		gasAsset := p.contractGasAssetNameForNextBlock()
+		gasAsset := GetGasAssetName()
 		if assetName == gasAsset {
 			amt, err := indexer.NewDecimalFromString(amm.AssetAmt, MAX_ASSET_DIVISIBILITY)
 			if err != nil {
@@ -757,20 +757,16 @@ func (p *Manager) satsNetBestHeight() int64 {
 	return int64(height)
 }
 
-func (p *Manager) contractGasAssetNameForNextBlock() string {
-	return p.contractGasAssetNameForHeight(p.satsNetBestHeight() + 1)
-}
-
-func (p *Manager) contractGasAssetNameForHeight(height int64) string {
-	return contractcommon.GasAssetNameAtHeight(GetChainParam_SatsNet().Net, height)
+func GetGasAssetName() string {
+	return contractcommon.GasAssetNameForNet(GetChainParam_SatsNet().Net)
 }
 
 func (p *Manager) agentGasAssetAmount(baseGas uint64, override uint64) (uint64, string, error) {
-	height := p.satsNetBestHeight()
-	gasAssetName := p.contractGasAssetNameForHeight(height + 1)
+	gasAssetName := GetGasAssetName()
 	if override != 0 {
 		return override, gasAssetName, nil
 	}
+	height := p.satsNetBestHeight()
 	amount, err := contractcommon.GasFeeAtHeight(baseGas, uint64(height))
 	if err != nil {
 		return 0, "", err
@@ -855,7 +851,7 @@ func (p *Manager) deployEVMContract(req *EVMContractDeployRequest) (*ContractTxR
 	if err != nil {
 		return nil, err
 	}
-	gasAsset := p.contractGasAssetNameForNextBlock()
+	gasAsset := GetGasAssetName()
 	funding, inputs, changeOutputs, prevFetcher, caller, err := p.selectEVMContractFunding(gasAsset, estimate.GasAssetAmount, estimate.GasFundAmount, 0)
 	if err != nil {
 		return nil, err
@@ -1363,11 +1359,11 @@ func (p *Manager) evmBaseGasFee(baseGas uint64) (uint64, error) {
 }
 
 func (p *Manager) evmGasAssetAmount(gasLimit uint64, needsResult bool, override uint64) (uint64, string, error) {
-	height := p.satsNetBestHeight()
-	gasAssetName := p.contractGasAssetNameForHeight(height + 1)
+	gasAssetName := GetGasAssetName()
 	if override != 0 {
 		return override, gasAssetName, nil
 	}
+	height := p.satsNetBestHeight()
 	amount, err := contractcommon.GasFeeAtHeight(gasLimit, uint64(height))
 	if err != nil {
 		return 0, "", err
