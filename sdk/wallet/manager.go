@@ -477,15 +477,23 @@ func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 	}
 
 	// TODO 还在铸造中的ticker，需要每个区块更新一次数据
-	//info, err := loadTickerInfo(p.db, name)
-	//if err != nil {
+	info, err := loadTickerInfo(p.db, name)
+	if err == nil && info != nil {
+		p.mutex.Lock()
+		p.tickerInfoMap[info.AssetName.String()] = info
+		if info.AssetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
+			p.tickerInfoMap[info.DisplayName] = info
+		}
+		p.mutex.Unlock()
+		return info
+	}
+
 	info = p.l1IndexerClient.GetTickInfo(name)
 	if info == nil {
 		Log.Errorf("GetTickInfo %s failed", name)
 		return nil
 	}
 	saveTickerInfo(p.db, info)
-	//}
 
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
