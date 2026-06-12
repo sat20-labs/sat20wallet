@@ -35,6 +35,41 @@ func TestRunePayload(t *testing.T) {
 	fmt.Printf("len: %d\n %s\n", len(payload), hex.EncodeToString(payload))
 }
 
+
+func TestRuneMintPayload(t *testing.T) {
+	runeId := runestone.RuneId{
+		Block: 1,
+		Tx: 1,
+	}
+	{
+		payload, err := EncipherRuneMintPayload(&runeId, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stone := runestone.Runestone{}
+		result, err := stone.DecipherFromPkScript(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("mint: %v %v\n", result.Runestone.Mint, result.Runestone.Pointer)
+	}
+
+	{
+		pointer := uint32(1)
+		payload, err := EncipherRuneMintPayload(&runeId, &pointer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stone := runestone.Runestone{}
+		result, err := stone.DecipherFromPkScript(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("mint: %v %d\n", result.Runestone.Mint, *result.Runestone.Pointer)
+	}
+}
+
+
 func TestParseRuneEtching(t *testing.T) {
 	// hexPayload := "6a5d18020104eb8385e294b4e2f718033005964e0680e8e6a78e06" // RUNESXBITCOIN
 	hexPayload := "6a5d2102010487a1c3f0c0ebf7fb9d01010503d4040595e80706808084fea6dee1111601" // DOGGOTOTHEMOON

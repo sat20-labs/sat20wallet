@@ -256,7 +256,7 @@ func (p *Manager) DeployRunes_Remote(assetName string, symbol int32, maxSupply i
 	}
 
 	param, err := EncodeRemoteDeployRunesParam(&RemoteDeployRunesParam{
-		AssetName: assetName,
+		AssetName: normalizeRemoteDeployRunesAssetName(assetName),
 		Symbol:    symbol,
 		MaxSupply: maxSupply,
 		Limit:     limit,
@@ -299,6 +299,17 @@ func (p *Manager) DeployRunes_Remote(assetName string, symbol int32, maxSupply i
 	}
 
 	return txId, resvId, string(result), nil
+}
+
+func normalizeRemoteDeployRunesAssetName(assetName string) string {
+	asset := ParseAssetString(assetName)
+	if asset != nil && asset.Protocol == indexer.PROTOCOL_NAME_RUNES {
+		return asset.String()
+	}
+	if strings.Contains(assetName, ":") {
+		return assetName
+	}
+	return fmt.Sprintf("%s:%s:%s", indexer.PROTOCOL_NAME_RUNES, indexer.ASSET_TYPE_FT, assetName)
 }
 
 // 在主网质押足够的资产，以便成为一个Miner

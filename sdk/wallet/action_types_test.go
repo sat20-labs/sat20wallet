@@ -117,3 +117,21 @@ func TestRemoteDeployRunesParamRoundTrip(t *testing.T) {
 		t.Fatalf("round trip mismatch: got %+v want %+v", out, in)
 	}
 }
+
+func TestNormalizeRemoteDeployRunesAssetName(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "SATOSHINET•GAS", want: "runes:f:SATOSHINET•GAS"},
+		{name: "runes:f:SATOSHINET•GAS", want: "runes:f:SATOSHINET•GAS"},
+		{name: "brc20:f:SATOSHINET", want: "brc20:f:SATOSHINET"},
+	}
+
+	for _, tt := range tests {
+		got := normalizeRemoteDeployRunesAssetName(tt.name)
+		if got != tt.want {
+			t.Fatalf("normalizeRemoteDeployRunesAssetName(%q) = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}

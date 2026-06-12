@@ -59,6 +59,8 @@ type IndexerRPCClient interface {
 	GetTxOutput(utxo string) (*TxOutput, error)              // 索引器接口，被花费后就找不到数据
 	GetAscendData(utxo string) (*sindexer.AscendData, error) // TODO 因为Decimal json序列化的修改，索引器暂时将资产列表清空，因为前端还没用到
 	GetChannelLedger(channel string) ([]*sindexer.ChannelLedgerEntry, error)
+	GetChannelStateEvents(channel string) ([]*sindexer.ChannelStateEvent, error)
+	RecordChannelStateEvent(event *sindexer.ChannelStateEvent) error
 	IsCoreNode(pubkey []byte) (bool, error)
 	GetCoreNodeInfo(pubkey []byte) (*sindexer.CoreNodeInfo, error)
 	IsMinerNode(pubkey []byte) (bool, error)
@@ -209,6 +211,56 @@ func (p *IndexerClient) GetChannelLedger(channel string) ([]*sindexer.ChannelLed
 	}
 
 	return result.Data, nil
+}
+
+func (p *IndexerClient) GetChannelStateEvents(channel string) ([]*sindexer.ChannelStateEvent, error) {
+	url := p.GetUrl("/v3/channel/state/" + channel)
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	var result sindexerwire.ChannelStateEventResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+
+	return result.Data, nil
+}
+
+func (p *IndexerClient) RecordChannelStateEvent(event *sindexer.ChannelStateEvent) error {
+	url := p.GetUrl("/v3/channel/state")
+	req := &sindexerwire.ChannelStateEventReq{
+		ConfirmUnsafeTestOnly: true,
+		Data:                  event,
+	}
+	reqJson, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	rsp, err := p.Http.SendPostRequest(url, reqJson)
+	if err != nil {
+		Log.Errorf("SendPostRequest %v failed. %v", url, err)
+		return err
+	}
+
+	var result sindexerwire.ChannelStateEventResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return err
+	}
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return fmt.Errorf("%s", result.Msg)
+	}
+	return nil
 }
 
 func (p *IndexerClient) IsCoreNode(pubkey []byte) (bool, error) {

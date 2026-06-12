@@ -858,6 +858,14 @@ func (p *TestIndexerClient) GetChannelLedger(channel string) ([]*sindexer.Channe
 	return []*sindexer.ChannelLedgerEntry{}, nil
 }
 
+func (p *TestIndexerClient) GetChannelStateEvents(channel string) ([]*sindexer.ChannelStateEvent, error) {
+	return []*sindexer.ChannelStateEvent{}, nil
+}
+
+func (p *TestIndexerClient) RecordChannelStateEvent(event *sindexer.ChannelStateEvent) error {
+	return nil
+}
+
 func (p *TestIndexerClient) IsCoreNode(pubkey []byte) (bool, error) {
 	pkStr := hex.EncodeToString(pubkey)
 	if pkStr == indexer.GetBootstrapPubKey() || pkStr == indexer.GetCoreNodePubKey() {

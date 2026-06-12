@@ -206,6 +206,28 @@ func (p *IndexerRPCClientMgr) GetChannelLedger(channel string) ([]*sindexer.Chan
 	return result, err
 }
 
+func (p *IndexerRPCClientMgr) GetChannelStateEvents(channel string) ([]*sindexer.ChannelStateEvent, error) {
+	result, err := p.getActiveIndexer().GetChannelStateEvents(channel)
+	if shouldSwitchIndexer(err) {
+		indexer := p.selector()
+		if indexer != nil {
+			result, err = indexer.GetChannelStateEvents(channel)
+		}
+	}
+	return result, err
+}
+
+func (p *IndexerRPCClientMgr) RecordChannelStateEvent(event *sindexer.ChannelStateEvent) error {
+	err := p.getActiveIndexer().RecordChannelStateEvent(event)
+	if shouldSwitchIndexer(err) {
+		indexer := p.selector()
+		if indexer != nil {
+			err = indexer.RecordChannelStateEvent(event)
+		}
+	}
+	return err
+}
+
 func (p *IndexerRPCClientMgr) IsCoreNode(pubkey []byte) (bool, error) {
 	result, err := p.getActiveIndexer().IsCoreNode(pubkey)
 	if shouldSwitchIndexer(err) {

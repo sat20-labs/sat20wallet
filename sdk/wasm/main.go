@@ -3451,6 +3451,237 @@ func bindReferrerForServer(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func inscribeResult(resv *wallet.InscribeResv) map[string]interface{} {
+	result := map[string]interface{}{
+		"resvId": resv.Id,
+	}
+	if resv.CommitTx != nil {
+		result["commitTxId"] = resv.CommitTx.TxID()
+	}
+	if resv.RevealTx != nil {
+		txID := resv.RevealTx.TxID()
+		result["revealTxId"] = txID
+		result["txId"] = txID
+	} else if resv.CommitTx != nil {
+		result["txId"] = resv.CommitTx.TxID()
+	}
+	return result
+}
+
+func deployTickerOrdx(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 5 {
+		return createJsRet(nil, -1, "Expected 5 parameters")
+	}
+	if p[0].Type() != js.TypeString || p[1].Type() != js.TypeString || p[2].Type() != js.TypeString || p[4].Type() != js.TypeString {
+		return createJsRet(nil, -1, "ticker, max, limit and feeRate should be strings")
+	}
+	if p[3].Type() != js.TypeNumber {
+		return createJsRet(nil, -1, "bindingSat should be a number")
+	}
+	ticker := strings.TrimSpace(p[0].String())
+	maxSupply, err := strconv.ParseInt(p[1].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	limit, err := strconv.ParseInt(p[2].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	bindingSat := p[3].Int()
+	feeRate, err := strconv.ParseInt(p[4].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		resv, err := _mgr.DeployTicker_ordx(ticker, maxSupply, limit, bindingSat, feeRate)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return inscribeResult(resv), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func mintAssetOrdx(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+	if p[0].Type() != js.TypeString || p[1].Type() != js.TypeString || p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "ticker, amount and feeRate should be strings")
+	}
+	ticker := strings.TrimSpace(p[0].String())
+	amount, err := strconv.ParseInt(p[1].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	feeRate, err := strconv.ParseInt(p[2].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		w := _mgr.GetWallet()
+		if w == nil {
+			return nil, -1, "wallet is not created/unlocked"
+		}
+		assetName := indexer.NewAssetNameFromString(fmt.Sprintf("%s:%s:%s", indexer.PROTOCOL_NAME_ORDX, indexer.ASSET_TYPE_FT, ticker))
+		tickInfo := _mgr.GetTickerInfo(assetName)
+		if tickInfo == nil {
+			return nil, -1, fmt.Sprintf("can't find ticker info %s", assetName.String())
+		}
+		resv, err := _mgr.MintAsset_ordx(w.GetAddress(), tickInfo, amount, nil, feeRate)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return inscribeResult(resv), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func mintAssetRunes(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+	if p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "ticker and feeRate should be strings")
+	}
+	ticker := strings.TrimSpace(p[0].String())
+	feeRate, err := strconv.ParseInt(p[1].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		w := _mgr.GetWallet()
+		if w == nil {
+			return nil, -1, "wallet is not created/unlocked"
+		}
+		assetName := indexer.NewAssetNameFromString(fmt.Sprintf("%s:%s:%s", indexer.PROTOCOL_NAME_RUNES, indexer.ASSET_TYPE_FT, ticker))
+		tickInfo := _mgr.GetTickerInfo(assetName)
+		if tickInfo == nil {
+			return nil, -1, fmt.Sprintf("can't find ticker info %s", assetName.String())
+		}
+		txId, err := _mgr.MintAsset_runes(w.GetAddress(), tickInfo, feeRate)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{
+			"txId": txId,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func deployTickerBrc20(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 4 {
+		return createJsRet(nil, -1, "Expected 4 parameters")
+	}
+	if p[0].Type() != js.TypeString || p[1].Type() != js.TypeString || p[2].Type() != js.TypeString || p[3].Type() != js.TypeString {
+		return createJsRet(nil, -1, "ticker, max, limit and feeRate should be strings")
+	}
+	ticker := strings.TrimSpace(p[0].String())
+	maxSupply, err := strconv.ParseInt(p[1].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	limit, err := strconv.ParseInt(p[2].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	feeRate, err := strconv.ParseInt(p[3].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		resv, err := _mgr.DeployTicker_brc20(ticker, maxSupply, limit, feeRate)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return inscribeResult(resv), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func mintAssetBrc20(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+	if p[0].Type() != js.TypeString || p[1].Type() != js.TypeString || p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "ticker, amount and feeRate should be strings")
+	}
+	ticker := strings.TrimSpace(p[0].String())
+	amount := p[1].String()
+	feeRate, err := strconv.ParseInt(p[2].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		w := _mgr.GetWallet()
+		if w == nil {
+			return nil, -1, "wallet is not created/unlocked"
+		}
+		assetName := indexer.NewAssetNameFromString(fmt.Sprintf("%s:%s:%s", indexer.PROTOCOL_NAME_BRC20, indexer.ASSET_TYPE_FT, ticker))
+		tickInfo := _mgr.GetTickerInfo(assetName)
+		if tickInfo == nil {
+			return nil, -1, fmt.Sprintf("can't find ticker info %s", assetName.String())
+		}
+		amt, err := indexer.NewDecimalFromString(amount, tickInfo.Divisibility)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		resv, err := _mgr.MintAsset_brc20(w.GetAddress(), assetName, amt, nil, feeRate)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return inscribeResult(resv), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func inscribeName(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+	if p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "name and feeRate should be strings")
+	}
+	name := strings.TrimSpace(p[0].String())
+	feeRate, err := strconv.ParseInt(p[1].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		resv, err := _mgr.InscribeName(name, feeRate)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return inscribeResult(resv), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
 func main() {
 	obj := js.Global().Get("Object").New()
 	obj.Set("batchDbTest", js.FuncOf(batchDbTest))
@@ -3567,6 +3798,12 @@ func main() {
 	obj.Set("stakeToBeMiner", js.FuncOf(stakeToBeMiner))
 	obj.Set("minerUnstake", js.FuncOf(minerUnstake))
 	obj.Set("DeployRunes_Remote", js.FuncOf(deployRunesRemote))
+	obj.Set("deployTickerOrdx", js.FuncOf(deployTickerOrdx))
+	obj.Set("mintAssetOrdx", js.FuncOf(mintAssetOrdx))
+	obj.Set("mintAssetRunes", js.FuncOf(mintAssetRunes))
+	obj.Set("deployTickerBrc20", js.FuncOf(deployTickerBrc20))
+	obj.Set("mintAssetBrc20", js.FuncOf(mintAssetBrc20))
+	obj.Set("inscribeName", js.FuncOf(inscribeName))
 	obj.Set("getAllRegisteredReferrerName", js.FuncOf(getAllRegisteredReferrerName))
 	obj.Set("registerAsReferrer", js.FuncOf(registerAsReferrer))
 	obj.Set("bindReferrerForServer", js.FuncOf(bindReferrerForServer))

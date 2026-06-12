@@ -3,6 +3,7 @@ package wallet
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
@@ -56,6 +57,19 @@ func EncipherRunePayloadWithPointer(edicts []runestone.Edict, pointer *uint32) (
 	}
 
 	return result, nil
+}
+
+func EncipherRuneMintPayload(runeId *runestone.RuneId, pointer *uint32) ([]byte, error) {
+	if runeId == nil {
+		return nil, fmt.Errorf("rune id is nil")
+	}
+
+	stone := runestone.Runestone{
+		Mint:    runeId,
+		Pointer: pointer,
+	}
+
+	return stone.Encipher()
 }
 
 func DecipherRunePayload(pkScript []byte) ([]runestone.Edict, error) {
@@ -373,13 +387,43 @@ func (p *Manager) PrepareDeployTicker_runesWithTerms(destAddr string, ticker str
 	return p.PrepareInscribeRunes(destAddr, etching.Rune.Commitment(), nullData, feeRate, commitTxPrevOutputList)
 }
 
-// 需要调用方确保amt<=limit
-func (p *Manager) MintAsset_runes(destAddr string, tickInfo *indexer.TickerInfo) (string, error) {
+func runeIdFromTickerInfo(tickInfo *indexer.TickerInfo) (*runestone.RuneId, error) {
+	if tickInfo == nil {
+		return nil, fmt.Errorf("ticker info is nil")
+	}
+	if tickInfo.AssetName.Protocol != indexer.PROTOCOL_NAME_RUNES {
+		return nil, fmt.Errorf("not runes")
+	}
+	if strings.Contains(tickInfo.DisplayName, ":") {
+		return runestone.RuneIdFromString(tickInfo.DisplayName)
+	}
+	if strings.Contains(tickInfo.AssetName.Ticker, ":") {
+		return runestone.RuneIdFromString(tickInfo.AssetName.Ticker)
+	}
+	return nil, fmt.Errorf("can't resolve rune id for %s", tickInfo.AssetName.String())
+}
 
-	//wallet := p.wallet
+func (p *Manager) MintAsset_runes(destAddr string, tickInfo *indexer.TickerInfo, feeRate int64) (string, error) {
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+	if destAddr == "" {
+		destAddr = p.wallet.GetAddress()
+	}
 
-	// pkScript, _ := GetP2TRpkScript(wallet.GetPaymentPubKey())
-	// address := wallet.GetAddress()
+	runeId, err := runeIdFromTickerInfo(tickInfo)
+	if err != nil {
+		return "", err
+	}
 
-	return "", fmt.Errorf("not implemented")
+	nullData, err := EncipherRuneMintPayload(runeId, nil)
+	if err != nil {
+		return "", err
+	}
+
+	tx, err := p.SendAssets(destAddr, ASSET_PLAIN_SAT.String(), "330", feeRate, nullData)
+	if err != nil {
+		return "", err
+	}
+	return tx.TxID(), nil
 }
