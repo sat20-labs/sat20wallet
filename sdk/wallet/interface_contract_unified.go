@@ -230,6 +230,260 @@ func (p *Manager) InvokeUnifiedContract(req *ContractInvokeRequest) (*ContractTx
 	}
 }
 
+func (p *Manager) QueryParamForInvokeUnifiedContract(contractType, subtype, action string) (string, error) {
+	action = strings.TrimSpace(action)
+	if action == "" {
+		action = contractcommon.ContractInvokeAPIDefault
+	}
+	if action == contractcommon.ContractInvokeAPIDefault {
+		return "{}", nil
+	}
+	rawContractType := strings.TrimSpace(contractType)
+	contractType = normalizeContractType(rawContractType)
+	if contractType == ContractTypeTemplate && normalizeTemplateName(subtype) == "" {
+		if templateName := normalizeTemplateName(rawContractType); templateName != "" {
+			subtype = templateName
+		}
+	}
+	switch contractType {
+	case ContractTypeTemplate:
+		templateName := normalizeTemplateName(subtype)
+		if templateName == "" {
+			return "", fmt.Errorf("missing template contract subtype")
+		}
+		if templateName == TEMPLATE_CONTRACT_EXCHANGE {
+			return exchangeInvokeParam(action)
+		}
+		c := NewContract(templateName)
+		if c == nil {
+			return "", fmt.Errorf("template contract %s not found", templateName)
+		}
+		param := c.InvokeParam(action)
+		if param == "" {
+			return "", fmt.Errorf("template contract %s does not support %s", templateName, action)
+		}
+		return param, nil
+	case ContractTypeAgent:
+		return agentInvokeParamTemplate(subtype, action)
+	case ContractTypeEVM:
+		return evmInvokeParamTemplate(action)
+	default:
+		return "", fmt.Errorf("unsupported contract type %s", contractType)
+	}
+}
+
+func (p *Manager) QueryFeeForInvokeUnifiedContract(req *ContractInvokeRequest) (uint64, error) {
+	if req == nil {
+		return 0, fmt.Errorf("missing contract invoke fee request")
+	}
+	switch normalizeContractType(req.ContractType) {
+	case ContractTypeTemplate:
+		return p.queryTemplateInvokeFee(req)
+	case ContractTypeAgent:
+		return p.queryAgentInvokeFee(req.Agent)
+	case ContractTypeEVM:
+		return p.queryEVMInvokeFee(req.EVM)
+	default:
+		return 0, fmt.Errorf("unsupported contract type %s", req.ContractType)
+	}
+}
+
+func exchangeInvokeParam(action string) (string, error) {
+	if !contractcommon.IsTemplateInvokeActionSupported(TEMPLATE_CONTRACT_EXCHANGE, action) {
+		return "", fmt.Errorf("template contract %s does not support %s", TEMPLATE_CONTRACT_EXCHANGE, action)
+	}
+	param := InvokeParam{Action: action}
+	switch action {
+	case contractcommon.TemplateInvokeAPIExchange:
+		buf, err := json.Marshal(&tmplcontract.ExchangeInvokeParam{})
+		if err != nil {
+			return "", err
+		}
+		param.Param = string(buf)
+	case contractcommon.TemplateInvokeAPIClose:
+	default:
+		return "", fmt.Errorf("template contract %s does not support %s", TEMPLATE_CONTRACT_EXCHANGE, action)
+	}
+	result, err := json.Marshal(&param)
+	if err != nil {
+		return "", err
+	}
+	return string(result), nil
+}
+
+func agentInvokeParamTemplate(subtype, action string) (string, error) {
+	if strings.TrimSpace(subtype) == "" {
+		subtype = agentcontract.SubtypePrediction
+	}
+	if subtype != agentcontract.SubtypePrediction {
+		return "", fmt.Errorf("agent contract %s not found", subtype)
+	}
+	switch action {
+	case agentcontract.InvokeAPIReady:
+		return "{}", nil
+	case agentcontract.InvokeAPIBet:
+		param := agentcontract.PredictionBetParam{}
+		buf, err := json.Marshal(&param)
+		if err != nil {
+			return "", err
+		}
+		return string(buf), nil
+	case agentcontract.InvokeAPIConfirm:
+		param := agentcontract.PredictionConfirmParam{}
+		buf, err := json.Marshal(&param)
+		if err != nil {
+			return "", err
+		}
+		return string(buf), nil
+	case agentcontract.InvokeAPIReject:
+		param := agentcontract.PredictionRejectParam{}
+		buf, err := json.Marshal(&param)
+		if err != nil {
+			return "", err
+		}
+		return string(buf), nil
+	default:
+		return "", fmt.Errorf("agent contract %s does not support %s", subtype, action)
+	}
+}
+
+func evmInvokeParamTemplate(action string) (string, error) {
+	switch action {
+	case "call":
+		return `{"calldataHex":""}`, nil
+	default:
+		return "", fmt.Errorf("evm contract does not support %s", action)
+	}
+}
+
+func (p *Manager) queryTemplateInvokeFee(req *ContractInvokeRequest) (uint64, error) {
+	treq := &TemplateContractInvokeRequest{}
+	if req.Template != nil {
+		*treq = *req.Template
+	}
+	if treq.ContractAddress == "" {
+		treq.ContractAddress = req.ContractURL
+	}
+	if treq.AssetName == "" {
+		treq.AssetName = req.AssetName
+	}
+	if treq.Amount == "" {
+		treq.Amount = req.Amount
+	}
+	if treq.JSONInvokeParam == "" {
+		treq.JSONInvokeParam = req.JSONInvokeParam
+	}
+	defaultInvoke := treq.DefaultInvoke || req.DefaultInvoke
+	gasLimit := treq.GasLimit
+	if gasLimit == 0 {
+		gasLimit = contractcommon.InvokeBaseGas
+	}
+	if defaultInvoke {
+		return p.queryDefaultInvokeFee(ContractTypeTemplate, gasLimit, treq.GasAssetAmount)
+	}
+	converted, err := ConvertInvokeParam(treq.JSONInvokeParam, false)
+	if err != nil {
+		return 0, err
+	}
+	if treq.ContractAddress != "" {
+		if err := p.checkTemplateInvokeSupported(treq.ContractAddress, converted.Action); err != nil {
+			return 0, err
+		}
+	}
+	gasAmount, _, err := p.templateGasAssetAmount(gasLimit, !treq.SkipResultFee, treq.GasAssetAmount)
+	if err != nil {
+		return 0, err
+	}
+	gasBaseFee, err := p.evmBaseGasFee(contractcommon.InvokeBaseGas)
+	if err != nil {
+		return 0, err
+	}
+	if gasAmount < gasBaseFee {
+		return 0, fmt.Errorf("gas asset amount %d is less than required base gas fee %d", gasAmount, gasBaseFee)
+	}
+	return gasAmount, nil
+}
+
+func (p *Manager) queryAgentInvokeFee(req *AgentContractInvokeRequest) (uint64, error) {
+	if req == nil {
+		return 0, fmt.Errorf("missing agent invoke fee request")
+	}
+	defaultInvoke := req.DefaultInvoke
+	gasLimit := req.GasLimit
+	if gasLimit == 0 {
+		gasLimit = agentcontract.DefaultGasConfig().InvokeBaseGas
+	}
+	if defaultInvoke {
+		return p.queryDefaultInvokeFee(ContractTypeAgent, gasLimit, req.GasAssetAmount)
+	}
+	action := strings.TrimSpace(req.Action)
+	if action == "" && req.Bet != nil {
+		action = agentcontract.InvokeAPIBet
+	}
+	if action == "" {
+		return 0, fmt.Errorf("missing agent invoke action")
+	}
+	gasAmount, _, err := p.agentGasAssetAmount(agentcontract.DefaultGasConfig().InvokeBaseGas, req.GasAssetAmount)
+	if err != nil {
+		return 0, err
+	}
+	fundingAmount := uint64(0)
+	if action == agentcontract.InvokeAPIBet {
+		fundingAmount, err = assetAmountStringToUint64("agent bet amount", req.BetAmount)
+		if err != nil {
+			return 0, err
+		}
+		if math.MaxUint64-gasAmount < fundingAmount {
+			return 0, fmt.Errorf("agent invoke gas amount overflows uint64")
+		}
+		gasAmount += fundingAmount
+	}
+	return gasAmount, nil
+}
+
+func (p *Manager) queryEVMInvokeFee(req *EVMContractInvokeRequest) (uint64, error) {
+	if req == nil {
+		return 0, fmt.Errorf("missing evm invoke fee request")
+	}
+	gasLimit := req.GasLimit
+	if gasLimit == 0 {
+		gasLimit = contractcommon.InvokeBaseGas
+	}
+	if req.DefaultInvoke {
+		return 0, nil
+	}
+	gasAmount, _, err := p.evmGasAssetAmount(gasLimit, true, req.GasAssetAmount)
+	if err != nil {
+		return 0, err
+	}
+	gasBaseFee, err := p.evmBaseGasFee(contractcommon.InvokeBaseGas)
+	if err != nil {
+		return 0, err
+	}
+	if gasAmount < gasBaseFee {
+		return 0, fmt.Errorf("gas asset amount %d is less than required base gas fee %d", gasAmount, gasBaseFee)
+	}
+	return gasAmount, nil
+}
+
+func (p *Manager) queryDefaultInvokeFee(contractType string, gasLimit uint64, gasOverride uint64) (uint64, error) {
+	if contractType == ContractTypeEVM {
+		return 0, nil
+	}
+	fundingGasAmount, _, err := p.evmGasAssetAmount(gasLimit, false, gasOverride)
+	if err != nil {
+		return 0, err
+	}
+	gasBaseFee, err := p.evmBaseGasFee(contractcommon.InvokeBaseGas)
+	if err != nil {
+		return 0, err
+	}
+	if math.MaxUint64-fundingGasAmount < gasBaseFee {
+		return 0, fmt.Errorf("gas asset amount overflows uint64")
+	}
+	return fundingGasAmount + gasBaseFee, nil
+}
+
 func (p *Manager) deployAgentContract(req *AgentContractDeployRequest) (*ContractTxResult, error) {
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
@@ -1399,7 +1653,7 @@ func (p *Manager) contractAddressPrefix() string {
 
 func normalizeContractType(t string) string {
 	switch strings.ToLower(strings.TrimSpace(t)) {
-	case "", ContractTypeTemplate, "channel", "template:channel", TEMPLATE_CONTRACT_LIMITORDER, TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_AMM:
+	case "", ContractTypeTemplate, "channel", "template:channel", TEMPLATE_CONTRACT_LIMITORDER, TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_AMM, TEMPLATE_CONTRACT_EXCHANGE:
 		return ContractTypeTemplate
 	case ContractTypeAgent, "agent:prediction":
 		return ContractTypeAgent

@@ -2473,6 +2473,62 @@ func invokeUnifiedContract(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func getParamForInvokeUnifiedContract(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+	for i := 0; i < 3; i++ {
+		if p[i].Type() != js.TypeString {
+			return createJsRet(nil, -1, "contract type, subtype and action parameters should be strings")
+		}
+	}
+	contractType := p[0].String()
+	subtype := p[1].String()
+	action := p[2].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		param, err := _mgr.QueryParamForInvokeUnifiedContract(contractType, subtype, action)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{
+			"parameter": param,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func getFeeForInvokeUnifiedContract(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameter")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "contract invoke request parameter should be a json string")
+	}
+	reqJSON := p[0].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		var req wallet.ContractInvokeRequest
+		if err := json.Unmarshal([]byte(reqJSON), &req); err != nil {
+			return nil, -1, err.Error()
+		}
+		fee, err := _mgr.QueryFeeForInvokeUnifiedContract(&req)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{
+			"fee": strconv.FormatUint(fee, 10),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
 func getSupportedContracts(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -3777,6 +3833,8 @@ func main() {
 	obj.Set("queryContract", js.FuncOf(queryContract))
 	obj.Set("deployUnifiedContract", js.FuncOf(deployUnifiedContract))
 	obj.Set("invokeUnifiedContract", js.FuncOf(invokeUnifiedContract))
+	obj.Set("getParamForInvokeUnifiedContract", js.FuncOf(getParamForInvokeUnifiedContract))
+	obj.Set("getFeeForInvokeUnifiedContract", js.FuncOf(getFeeForInvokeUnifiedContract))
 	obj.Set("getSupportedContracts", js.FuncOf(getSupportedContracts))
 	obj.Set("getDeployedContractsInServer", js.FuncOf(getDeployedContractsInServer))
 	obj.Set("getDeployedContractStatus", js.FuncOf(getDeployedContractStatus))
