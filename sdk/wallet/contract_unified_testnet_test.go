@@ -11,8 +11,7 @@ import (
 	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
-	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sirupsen/logrus"
 )
 
@@ -465,7 +464,7 @@ func TestUnifiedAgentPredictionDeployBet_testnet(t *testing.T) {
 		ContractType: ContractTypeAgent,
 		Agent: &AgentContractInvokeRequest{
 			ContractAddress: deploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, agentcontract.InvokeAPIBet, agentcontract.PredictionBetParam{OutcomeID: "a"}),
+			JSONInvokeParam: mustInvokeJSON(t, contractcommon.AgentInvokeAPIBet, contractcommon.AgentPredictionBetParam{OutcomeID: "a"}),
 			BetAssetName:    unifiedTemplateTestAsset,
 			BetAmount:       "1",
 			GasLimit:        100000,

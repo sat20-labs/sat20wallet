@@ -7,9 +7,7 @@ import (
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
-	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -66,67 +64,91 @@ func TestUnifiedTemplateContractsLocalCoverage(t *testing.T) {
 }
 
 func TestUnifiedNativeTemplateTxCoverage(t *testing.T) {
-	limitOrder := tmplcontract.NewLimitOrderContract(unifiedTemplateTestAsset)
-	limitAddr, limitRuntime := assertNativeTemplateDeployTx(t, limitOrder, "limit-order")
-	assertNativeTemplateInvokeTx(t, limitAddr, limitRuntime, tmplcontract.InvokeAPISwap, mustEncodeTemplateParam((&tmplcontract.LimitOrderInvokeParam{
-		OrderType: tmplcontract.OrderTypeSell,
+	limitContent, err := contractcommon.EncodeTemplateLimitOrderContent(unifiedTemplateTestAsset)
+	if err != nil {
+		t.Fatalf("EncodeTemplateLimitOrderContent: %v", err)
+	}
+	limitAddr := assertNativeTemplateDeployTx(t, contractcommon.TemplateLimitOrder, limitContent, "limit-order")
+	assertNativeTemplateInvokeTx(t, limitAddr, contractcommon.TemplateInvokeAPISwap, mustEncodeTemplateParam((&contractcommon.TemplateLimitOrderInvokeParam{
+		OrderType: contractcommon.OrderTypeSell,
 		AssetName: unifiedTemplateTestAsset,
 		Amt:       "1000",
 		UnitPrice: "2",
 	}).Encode()))
-	assertNativeTemplateInvokeTx(t, limitAddr, limitRuntime, tmplcontract.InvokeAPIRefund, mustEncodeTemplateParam((&tmplcontract.RefundInvokeParam{ItemIDs: []int64{1, 2}}).Encode()))
+	assertNativeTemplateInvokeTx(t, limitAddr, contractcommon.TemplateInvokeAPIRefund, mustEncodeTemplateParam((&contractcommon.TemplateRefundInvokeParam{ItemIDs: []int64{1, 2}}).Encode()))
 
-	amm := tmplcontract.NewAMMContract(unifiedTemplateTestAsset, "100000", 1000, "100000000")
-	ammAddr, ammRuntime := assertNativeTemplateDeployTx(t, amm, "amm")
-	assertNativeTemplateInvokeTx(t, ammAddr, ammRuntime, tmplcontract.InvokeAPISwap, mustEncodeTemplateParam((&tmplcontract.LimitOrderInvokeParam{
-		OrderType: tmplcontract.OrderTypeBuy,
+	ammContent, err := contractcommon.EncodeTemplateAMMContent(unifiedTemplateTestAsset, "100000", 1000, "100000000")
+	if err != nil {
+		t.Fatalf("EncodeTemplateAMMContent: %v", err)
+	}
+	ammAddr := assertNativeTemplateDeployTx(t, contractcommon.TemplateAMM, ammContent, "amm")
+	assertNativeTemplateInvokeTx(t, ammAddr, contractcommon.TemplateInvokeAPISwap, mustEncodeTemplateParam((&contractcommon.TemplateLimitOrderInvokeParam{
+		OrderType: contractcommon.OrderTypeBuy,
 		AssetName: unifiedTemplateTestAsset,
 		Amt:       "100",
 		UnitPrice: "3",
 	}).Encode()))
-	assertNativeTemplateInvokeTx(t, ammAddr, ammRuntime, tmplcontract.InvokeAPIAddLiquidity, mustEncodeTemplateParam((&tmplcontract.AddLiquidityInvokeParam{
-		OrderType: tmplcontract.OrderTypeAddLiquidity,
+	assertNativeTemplateInvokeTx(t, ammAddr, contractcommon.TemplateInvokeAPIAddLiquidity, mustEncodeTemplateParam((&contractcommon.TemplateAddLiquidityInvokeParam{
+		OrderType: contractcommon.OrderTypeAddLiquidity,
 		AssetName: unifiedTemplateTestAsset,
 		Amt:       "5000",
 		Value:     50,
 	}).Encode()))
-	assertNativeTemplateInvokeTx(t, ammAddr, ammRuntime, tmplcontract.InvokeAPIRemoveLiquidity, mustEncodeTemplateParam((&tmplcontract.RemoveLiquidityInvokeParam{
-		OrderType: tmplcontract.OrderTypeRemoveLiquidity,
+	assertNativeTemplateInvokeTx(t, ammAddr, contractcommon.TemplateInvokeAPIRemoveLiquidity, mustEncodeTemplateParam((&contractcommon.TemplateRemoveLiquidityInvokeParam{
+		OrderType: contractcommon.OrderTypeRemoveLiquidity,
 		AssetName: unifiedTemplateTestAsset,
 		LptAmt:    "25",
 	}).Encode()))
-	assertNativeTemplateInvokeRejected(t, ammRuntime, tmplcontract.InvokeAPIRefund, mustEncodeTemplateParam((&tmplcontract.RefundInvokeParam{ItemIDs: []int64{3}}).Encode()))
+	if contractcommon.IsTemplateInvokeActionSupported(contractcommon.TemplateAMM, contractcommon.TemplateInvokeAPIRefund) {
+		t.Fatalf("AMM should not support refund invoke")
+	}
 
-	exchange := tmplcontract.NewExchangeContract(GetGasAssetName(), indexer.ASSET_PLAIN_SAT.String(), tmplcontract.ExchangePriceModeHeight, []tmplcontract.ExchangePriceStep{{
-		Threshold: "0",
-		BPerA:     "0.0001",
-	}})
-	exchangeAddr, exchangeRuntime := assertNativeTemplateDeployTx(t, exchange, "exchange")
-	assertNativeTemplateInvokeTx(t, exchangeAddr, exchangeRuntime, tmplcontract.InvokeAPIExchange, mustEncodeTemplateParam((&tmplcontract.ExchangeInvokeParam{MinOutA: "1"}).Encode()))
-	assertNativeTemplateInvokeTx(t, exchangeAddr, exchangeRuntime, tmplcontract.InvokeAPIClose, nil)
+	exchangeContent, err := contractcommon.EncodeTemplateExchangeContent(contractcommon.TemplateExchangeContract{
+		AssetAName: GetGasAssetName(),
+		AssetBName: indexer.ASSET_PLAIN_SAT.String(),
+		PriceMode:  contractcommon.ExchangePriceModeHeight,
+		Steps: []contractcommon.TemplateExchangePriceStep{{
+			Threshold: "0",
+			BPerA:     "0.0001",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("EncodeTemplateExchangeContent: %v", err)
+	}
+	exchangeAddr := assertNativeTemplateDeployTx(t, contractcommon.TemplateExchange, exchangeContent, "exchange")
+	assertNativeTemplateInvokeTx(t, exchangeAddr, contractcommon.TemplateInvokeAPIExchange, mustEncodeTemplateParam((&contractcommon.TemplateExchangeInvokeParam{MinOutA: "1"}).Encode()))
+	assertNativeTemplateInvokeTx(t, exchangeAddr, contractcommon.TemplateInvokeAPIClose, nil)
 }
 
 func TestBuildNativeTemplateExchangeContract(t *testing.T) {
-	exchange := tmplcontract.NewExchangeContract(GetGasAssetName(), indexer.ASSET_PLAIN_SAT.String(), tmplcontract.ExchangePriceModeHeight, []tmplcontract.ExchangePriceStep{{
-		Threshold: "0",
-		BPerA:     "0.0001",
-	}, {
-		Threshold: "100",
-		BPerA:     "0.0001111111",
-	}})
+	exchange := contractcommon.TemplateExchangeContract{
+		AssetAName: GetGasAssetName(),
+		AssetBName: indexer.ASSET_PLAIN_SAT.String(),
+		PriceMode:  contractcommon.ExchangePriceModeHeight,
+		Steps: []contractcommon.TemplateExchangePriceStep{{
+			Threshold: "0",
+			BPerA:     "0.0001",
+		}, {
+			Threshold: "100",
+			BPerA:     "0.0001111111",
+		}},
+	}
 	content, err := json.Marshal(exchange)
 	if err != nil {
 		t.Fatalf("marshal exchange content: %v", err)
 	}
-	contract, fundingValue, fundingAssetAmount, err := (&Manager{}).buildNativeTemplateContract(&TemplateContractDeployRequest{
+	templateName, encoded, fundingValue, fundingAssetAmount, err := (&Manager{}).buildNativeTemplateContract(&TemplateContractDeployRequest{
 		TemplateName:    TEMPLATE_CONTRACT_EXCHANGE,
 		ContractContent: string(content),
 	})
 	if err != nil {
 		t.Fatalf("buildNativeTemplateContract(exchange): %v", err)
 	}
-	if contract.TemplateName() != tmplcontract.TemplateExchange {
-		t.Fatalf("unexpected template %s", contract.TemplateName())
+	if templateName != contractcommon.TemplateExchange {
+		t.Fatalf("unexpected template %s", templateName)
+	}
+	if len(encoded) == 0 {
+		t.Fatalf("expected encoded exchange content")
 	}
 	if fundingValue != 0 || fundingAssetAmount != 0 {
 		t.Fatalf("unexpected exchange deploy funding value=%d asset=%d", fundingValue, fundingAssetAmount)
@@ -244,7 +266,7 @@ func assertRemoveLiquidityInvokeParamRoundTrip(t *testing.T, manager *Manager, p
 func assertCloseInvokeParamRoundTrip(t *testing.T) {
 	t.Helper()
 	for _, invokeJSON := range []string{
-		mustInvokeJSON(t, INVOKE_API_CLOSE, tmplcontract.CloseInvokeParam{}),
+		mustInvokeJSON(t, INVOKE_API_CLOSE, contractcommon.TemplateCloseInvokeParam{}),
 		mustInvokeJSONWithRawParam(t, INVOKE_API_CLOSE, ""),
 	} {
 		converted, err := ConvertUnifiedInvokeParam(ContractTypeTemplate, TEMPLATE_CONTRACT_EXCHANGE, invokeJSON)
@@ -258,7 +280,7 @@ func assertCloseInvokeParamRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("decode close param: %v", err)
 		}
-		var decoded tmplcontract.CloseInvokeParam
+		var decoded contractcommon.TemplateCloseInvokeParam
 		if err := decoded.Decode(encoded); err != nil {
 			t.Fatalf("decode close script: %v", err)
 		}
@@ -313,8 +335,8 @@ func assertUnifiedTemplateInvokeParamQuery(t *testing.T, manager *Manager) {
 
 func assertUnifiedAgentInvokeParamQuery(t *testing.T, manager *Manager) {
 	t.Helper()
-	for _, action := range []string{agentcontract.InvokeAPIReady, agentcontract.InvokeAPIBet, agentcontract.InvokeAPIConfirm, agentcontract.InvokeAPIReject} {
-		paramJSON, err := manager.QueryParamForInvokeUnifiedContract(ContractTypeAgent, agentcontract.SubtypePrediction, action)
+	for _, action := range []string{contractcommon.AgentInvokeAPIReady, contractcommon.AgentInvokeAPIBet, contractcommon.AgentInvokeAPIConfirm, contractcommon.AgentInvokeAPIReject} {
+		paramJSON, err := manager.QueryParamForInvokeUnifiedContract(ContractTypeAgent, contractcommon.SubtypePrediction, action)
 		if err != nil {
 			t.Fatalf("QueryParamForInvokeUnifiedContract(agent, %s): %v", action, err)
 		}
@@ -326,8 +348,8 @@ func assertUnifiedAgentInvokeParamQuery(t *testing.T, manager *Manager) {
 			t.Fatalf("unexpected agent action %s", wrapper.Action)
 		}
 	}
-	invokeJSON := mustInvokeJSON(t, agentcontract.InvokeAPIBet, agentcontract.PredictionBetParam{OutcomeID: "a"})
-	converted, err := ConvertUnifiedInvokeParam(ContractTypeAgent, agentcontract.SubtypePrediction, invokeJSON)
+	invokeJSON := mustInvokeJSON(t, contractcommon.AgentInvokeAPIBet, contractcommon.AgentPredictionBetParam{OutcomeID: "a"})
+	converted, err := ConvertUnifiedInvokeParam(ContractTypeAgent, contractcommon.SubtypePrediction, invokeJSON)
 	if err != nil {
 		t.Fatalf("ConvertUnifiedInvokeParam(agent bet): %v", err)
 	}
@@ -335,7 +357,7 @@ func assertUnifiedAgentInvokeParamQuery(t *testing.T, manager *Manager) {
 	if err != nil {
 		t.Fatalf("decode agent bet param: %v", err)
 	}
-	decoded, err := agentcontract.DecodePredictionBetParam(encoded)
+	decoded, err := contractcommon.DecodeAgentPredictionBetParam(encoded)
 	if err != nil {
 		t.Fatalf("decode agent bet payload: %v", err)
 	}
@@ -371,46 +393,49 @@ func assertUnifiedEVMInvokeParamQuery(t *testing.T, manager *Manager) {
 	}
 }
 
-func assertNativeTemplateDeployTx(t *testing.T, contract tmplcontract.Contract, randomSuffix string) (tmplcontract.ContractAddress, *tmplcontract.ContractRuntime) {
+func assertNativeTemplateDeployTx(t *testing.T, templateName string, content []byte, randomSuffix string) contractcommon.ContractAddress {
 	t.Helper()
-	tx, addr, err := tmplcontract.BuildDeployTx(tmplcontract.DeployTxBuildRequest{
-		ContractPrefix: contractcommon.TestnetContractPrefix,
-		Contract:       contract,
-		Deployer:       "tb1ptestdeployer000000000000000000000000000000",
-		Random:         []byte("sdk-" + randomSuffix),
-		GasLimit:       contractcommon.DeployBaseGas,
-		Funding:        testTemplateFundingTxOut(100000),
-		Inputs:         []swire.OutPoint{testTemplateOutPoint(randomSuffix)},
+	tx, addr, err := contractcommon.BuildTemplateDeployTx(contractcommon.TemplateDeployTxBuildRequest{
+		ContractPrefix:  contractcommon.TestnetContractPrefix,
+		TemplateName:    templateName,
+		TemplateVersion: contractcommon.CurrentTemplateVersion,
+		ContractContent: content,
+		Deployer:        "tb1ptestdeployer000000000000000000000000000000",
+		Random:          []byte("sdk-" + randomSuffix),
+		GasLimit:        contractcommon.DeployBaseGas,
+		Funding:         testTemplateFundingTxOut(100000),
+		Inputs:          []swire.OutPoint{testTemplateOutPoint(randomSuffix)},
 	})
 	if err != nil {
-		t.Fatalf("BuildDeployTx(%s): %v", contract.TemplateName(), err)
+		t.Fatalf("BuildTemplateDeployTx(%s): %v", templateName, err)
 	}
-	parsed, err := tmplcontract.ParseTx(tx, tmplcontract.StandardContractScriptResolver(contractcommon.TestnetContractPrefix))
+	txType, rawPayload, err := contractcommon.ReadNullDataScript(tx.TxOut[0].PkScript)
 	if err != nil {
-		t.Fatalf("ParseTx deploy(%s): %v", contract.TemplateName(), err)
+		t.Fatalf("ReadNullDataScript deploy(%s): %v", templateName, err)
 	}
-	if parsed.Type != tmplcontract.TxTypeDeploy || parsed.Deploy == nil {
-		t.Fatalf("unexpected parsed deploy tx %+v", parsed)
+	if txType != contractcommon.TxTypeDeploy {
+		t.Fatalf("unexpected deploy tx type %v", txType)
 	}
-	validated, err := tmplcontract.ValidateDeployTxBasic(tx, contractcommon.TestnetContractPrefix, tmplcontract.NewDefaultRegistry(), tmplcontract.DefaultGasConfig())
+	payload, err := contractcommon.DecodeTemplateDeployPayload(rawPayload)
 	if err != nil {
-		t.Fatalf("ValidateDeployTxBasic(%s): %v", contract.TemplateName(), err)
+		t.Fatalf("DecodeTemplateDeployPayload(%s): %v", templateName, err)
 	}
-	if !validated.Address.Equal(addr) {
-		t.Fatalf("deploy address mismatch %s != %s", validated.Address.EncodeAddress(), addr.EncodeAddress())
+	if payload.TemplateName != templateName {
+		t.Fatalf("template mismatch %s != %s", payload.TemplateName, templateName)
 	}
-	if validated.Runtime.TemplateName() != contract.TemplateName() {
-		t.Fatalf("runtime template mismatch %s != %s", validated.Runtime.TemplateName(), contract.TemplateName())
+	derived, _, err := contractcommon.DeriveTemplateContractAddress(contractcommon.TestnetContractPrefix, content, payload.Deployer, payload.Random)
+	if err != nil {
+		t.Fatalf("DeriveTemplateContractAddress(%s): %v", templateName, err)
 	}
-	return addr, validated.Runtime
+	if !derived.Equal(addr) {
+		t.Fatalf("deploy address mismatch %s != %s", derived.EncodeAddress(), addr.EncodeAddress())
+	}
+	return addr
 }
 
-func assertNativeTemplateInvokeTx(t *testing.T, contract tmplcontract.ContractAddress, runtime *tmplcontract.ContractRuntime, action string, param []byte) {
+func assertNativeTemplateInvokeTx(t *testing.T, contract contractcommon.ContractAddress, action string, param []byte) {
 	t.Helper()
-	if err := runtime.CheckInvoke(action, param); err != nil {
-		t.Fatalf("runtime CheckInvoke(%s): %v", action, err)
-	}
-	tx, err := tmplcontract.BuildInvokeTx(tmplcontract.InvokeTxBuildRequest{
+	tx, err := contractcommon.BuildTemplateInvokeTx(contractcommon.TemplateInvokeTxBuildRequest{
 		Contract:  contract,
 		GasLimit:  contractcommon.InvokeBaseGas,
 		CallNonce: 1,
@@ -420,32 +445,32 @@ func assertNativeTemplateInvokeTx(t *testing.T, contract tmplcontract.ContractAd
 		Inputs:    []swire.OutPoint{testTemplateOutPoint(action)},
 	})
 	if err != nil {
-		t.Fatalf("BuildInvokeTx(%s): %v", action, err)
+		t.Fatalf("BuildTemplateInvokeTx(%s): %v", action, err)
 	}
-	validated, err := tmplcontract.ValidateInvokeTxBasic(
-		tx,
-		tmplcontract.StandardContractScriptResolver(contractcommon.TestnetContractPrefix),
-		func(addr tmplcontract.ContractAddress) bool { return addr.Equal(contract) },
-		tmplcontract.DefaultGasConfig(),
-	)
+	txType, rawPayload, err := contractcommon.ReadNullDataScript(tx.TxOut[0].PkScript)
 	if err != nil {
-		t.Fatalf("ValidateInvokeTxBasic(%s): %v", action, err)
+		t.Fatalf("ReadNullDataScript invoke(%s): %v", action, err)
 	}
-	if !validated.Contract.Equal(contract) {
-		t.Fatalf("invoke contract mismatch %s != %s", validated.Contract.EncodeAddress(), contract.EncodeAddress())
+	if txType != contractcommon.TxTypeInvoke {
+		t.Fatalf("unexpected invoke tx type %v", txType)
 	}
-	if validated.Payload.Action != action {
-		t.Fatalf("invoke action mismatch %s != %s", validated.Payload.Action, action)
+	payload, err := contractcommon.DecodeTemplateInvokePayload(rawPayload)
+	if err != nil {
+		t.Fatalf("DecodeTemplateInvokePayload(%s): %v", action, err)
 	}
-	if len(validated.FundingOutputs) == 0 {
+	if payload.Action != action {
+		t.Fatalf("invoke action mismatch %s != %s", payload.Action, action)
+	}
+	contractOut := tx.TxOut[1]
+	addr, ok, err := contractcommon.ParseContractPkScript(contractOut.PkScript, contractcommon.TestnetContractPrefix)
+	if err != nil {
+		t.Fatalf("ParseContractPkScript(%s): %v", action, err)
+	}
+	if !ok || !addr.Equal(contract) {
+		t.Fatalf("invoke contract output mismatch")
+	}
+	if len(contractOut.Assets) == 0 {
 		t.Fatalf("expected funding output for %s", action)
-	}
-}
-
-func assertNativeTemplateInvokeRejected(t *testing.T, runtime *tmplcontract.ContractRuntime, action string, param []byte) {
-	t.Helper()
-	if err := runtime.CheckInvoke(action, param); err == nil {
-		t.Fatalf("expected %s invoke to be rejected by %s", action, runtime.TemplateName())
 	}
 }
 

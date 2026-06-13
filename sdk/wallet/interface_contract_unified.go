@@ -12,12 +12,9 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
-	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
-	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
 	swire "github.com/sat20-labs/satoshinet/wire"
-	"golang.org/x/crypto/sha3"
 )
 
 const (
@@ -288,7 +285,7 @@ func templateInvokeParamTemplate(templateName, action string) (string, error) {
 	switch action {
 	case contractcommon.TemplateInvokeAPISwap:
 		innerParam = map[string]interface{}{
-			"orderType": tmplcontract.OrderTypeBuy,
+			"orderType": contractcommon.OrderTypeBuy,
 			"assetName": "",
 			"amt":       "",
 			"unitPrice": "",
@@ -299,14 +296,14 @@ func templateInvokeParamTemplate(templateName, action string) (string, error) {
 		}
 	case contractcommon.TemplateInvokeAPIAddLiquidity:
 		innerParam = map[string]interface{}{
-			"orderType": tmplcontract.OrderTypeAddLiquidity,
+			"orderType": contractcommon.OrderTypeAddLiquidity,
 			"assetName": "",
 			"amt":       "",
 			"value":     0,
 		}
 	case contractcommon.TemplateInvokeAPIRemoveLiquidity:
 		innerParam = map[string]interface{}{
-			"orderType": tmplcontract.OrderTypeRemoveLiquidity,
+			"orderType": contractcommon.OrderTypeRemoveLiquidity,
 			"assetName": "",
 			"lptAmt":    "",
 		}
@@ -377,7 +374,7 @@ func convertTemplateInvokeParam(templateName, jsonInvokeParam string) (*InvokePa
 	)
 	switch wrapperParam.Action {
 	case contractcommon.TemplateInvokeAPISwap:
-		var param tmplcontract.LimitOrderInvokeParam
+		var param contractcommon.TemplateLimitOrderInvokeParam
 		if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
 			return nil, err
 		}
@@ -389,25 +386,25 @@ func convertTemplateInvokeParam(templateName, jsonInvokeParam string) (*InvokePa
 		}
 		innerParam, err = param.Encode()
 	case contractcommon.TemplateInvokeAPIAddLiquidity:
-		var param tmplcontract.AddLiquidityInvokeParam
+		var param contractcommon.TemplateAddLiquidityInvokeParam
 		if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
 			return nil, err
 		}
 		innerParam, err = param.Encode()
 	case contractcommon.TemplateInvokeAPIRemoveLiquidity:
-		var param tmplcontract.RemoveLiquidityInvokeParam
+		var param contractcommon.TemplateRemoveLiquidityInvokeParam
 		if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
 			return nil, err
 		}
 		innerParam, err = param.Encode()
 	case contractcommon.TemplateInvokeAPIExchange:
-		var param tmplcontract.ExchangeInvokeParam
+		var param contractcommon.TemplateExchangeInvokeParam
 		if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
 			return nil, err
 		}
 		innerParam, err = param.Encode()
 	case contractcommon.TemplateInvokeAPIClose:
-		param := tmplcontract.CloseInvokeParam{}
+		param := contractcommon.TemplateCloseInvokeParam{}
 		if strings.TrimSpace(wrapperParam.Param) != "" {
 			if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
 				return nil, err
@@ -426,22 +423,22 @@ func convertTemplateInvokeParam(templateName, jsonInvokeParam string) (*InvokePa
 
 func agentInvokeParamTemplate(subtype, action string) (string, error) {
 	if strings.TrimSpace(subtype) == "" {
-		subtype = agentcontract.SubtypePrediction
+		subtype = contractcommon.SubtypePrediction
 	}
 	action = strings.ToLower(strings.TrimSpace(action))
-	if subtype != agentcontract.SubtypePrediction {
+	if subtype != contractcommon.SubtypePrediction {
 		return "", fmt.Errorf("agent contract %s not found", subtype)
 	}
 	var innerParam interface{}
 	switch action {
-	case agentcontract.InvokeAPIReady:
+	case contractcommon.AgentInvokeAPIReady:
 		innerParam = nil
-	case agentcontract.InvokeAPIBet:
-		innerParam = agentcontract.PredictionBetParam{}
-	case agentcontract.InvokeAPIConfirm:
-		innerParam = agentcontract.PredictionConfirmParam{}
-	case agentcontract.InvokeAPIReject:
-		innerParam = agentcontract.PredictionRejectParam{}
+	case contractcommon.AgentInvokeAPIBet:
+		innerParam = contractcommon.AgentPredictionBetParam{}
+	case contractcommon.AgentInvokeAPIConfirm:
+		innerParam = contractcommon.AgentPredictionConfirmParam{}
+	case contractcommon.AgentInvokeAPIReject:
+		innerParam = contractcommon.AgentPredictionRejectParam{}
 	default:
 		return "", fmt.Errorf("agent contract %s does not support %s", subtype, action)
 	}
@@ -460,9 +457,9 @@ func evmInvokeParamTemplate(action string) (string, error) {
 
 func convertAgentInvokeParam(subtype, jsonInvokeParam string) (*InvokeParam, error) {
 	if strings.TrimSpace(subtype) == "" {
-		subtype = agentcontract.SubtypePrediction
+		subtype = contractcommon.SubtypePrediction
 	}
-	if subtype != agentcontract.SubtypePrediction {
+	if subtype != contractcommon.SubtypePrediction {
 		return nil, fmt.Errorf("agent contract %s not found", subtype)
 	}
 	wrapperParam, err := parseUnifiedInvokeParam(jsonInvokeParam)
@@ -471,22 +468,22 @@ func convertAgentInvokeParam(subtype, jsonInvokeParam string) (*InvokeParam, err
 	}
 	var innerParam []byte
 	switch wrapperParam.Action {
-	case agentcontract.InvokeAPIReady:
+	case contractcommon.AgentInvokeAPIReady:
 		innerParam = nil
-	case agentcontract.InvokeAPIBet:
-		var param agentcontract.PredictionBetParam
+	case contractcommon.AgentInvokeAPIBet:
+		var param contractcommon.AgentPredictionBetParam
 		if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
 			return nil, err
 		}
 		innerParam, err = param.Encode()
-	case agentcontract.InvokeAPIConfirm:
-		var param agentcontract.PredictionConfirmParam
+	case contractcommon.AgentInvokeAPIConfirm:
+		var param contractcommon.AgentPredictionConfirmParam
 		if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
 			return nil, err
 		}
 		innerParam, err = param.Encode()
-	case agentcontract.InvokeAPIReject:
-		var param agentcontract.PredictionRejectParam
+	case contractcommon.AgentInvokeAPIReject:
+		var param contractcommon.AgentPredictionRejectParam
 		if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
 			return nil, err
 		}
@@ -588,21 +585,21 @@ func (p *Manager) queryAgentInvokeFee(req *ContractInvokeRequest) (uint64, error
 	defaultInvoke := areq.DefaultInvoke || req.DefaultInvoke
 	gasLimit := areq.GasLimit
 	if gasLimit == 0 {
-		gasLimit = agentcontract.DefaultGasConfig().InvokeBaseGas
+		gasLimit = contractcommon.InvokeBaseGas
 	}
 	if defaultInvoke {
 		return p.queryDefaultInvokeFee(ContractTypeAgent, gasLimit, areq.GasAssetAmount)
 	}
-	converted, err := ConvertUnifiedInvokeParam(ContractTypeAgent, agentcontract.SubtypePrediction, areq.JSONInvokeParam)
+	converted, err := ConvertUnifiedInvokeParam(ContractTypeAgent, contractcommon.SubtypePrediction, areq.JSONInvokeParam)
 	if err != nil {
 		return 0, err
 	}
-	gasAmount, _, err := p.agentGasAssetAmount(agentcontract.DefaultGasConfig().InvokeBaseGas, areq.GasAssetAmount)
+	gasAmount, _, err := p.agentGasAssetAmount(contractcommon.InvokeBaseGas, areq.GasAssetAmount)
 	if err != nil {
 		return 0, err
 	}
 	fundingAmount := uint64(0)
-	if converted.Action == agentcontract.InvokeAPIBet {
+	if converted.Action == contractcommon.AgentInvokeAPIBet {
 		fundingAmount, err = assetAmountStringToUint64("agent bet amount", areq.BetAmount)
 		if err != nil {
 			return 0, err
@@ -680,14 +677,14 @@ func (p *Manager) deployAgentContract(req *AgentContractDeployRequest) (*Contrac
 	}
 	subtype := strings.TrimSpace(req.Subtype)
 	if subtype == "" {
-		subtype = agentcontract.SubtypePrediction
+		subtype = contractcommon.SubtypePrediction
 	}
 	content, err := agentPredictionContent(req)
 	if err != nil {
 		return nil, err
 	}
-	if subtype == agentcontract.SubtypePrediction {
-		contract, err := agentcontract.DecodePredictionContract(content)
+	if subtype == contractcommon.SubtypePrediction {
+		contract, err := contractcommon.DecodeAgentPredictionContract(content)
 		if err != nil {
 			return nil, fmt.Errorf("decode prediction contract: %w", err)
 		}
@@ -697,13 +694,13 @@ func (p *Manager) deployAgentContract(req *AgentContractDeployRequest) (*Contrac
 	}
 	gasLimit := req.GasLimit
 	if gasLimit == 0 {
-		gasLimit = agentcontract.DefaultGasConfig().DeployBaseGas
+		gasLimit = contractcommon.DeployBaseGas
 	}
-	deployBaseFee, gasAsset, err := p.agentGasAssetAmount(agentcontract.DefaultGasConfig().DeployBaseGas, 0)
+	deployBaseFee, gasAsset, err := p.agentGasAssetAmount(contractcommon.DeployBaseGas, 0)
 	if err != nil {
 		return nil, err
 	}
-	invokeBaseFee, _, err := p.agentGasAssetAmount(agentcontract.DefaultGasConfig().InvokeBaseGas, 0)
+	invokeBaseFee, _, err := p.agentGasAssetAmount(contractcommon.InvokeBaseGas, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -729,10 +726,10 @@ func (p *Manager) deployAgentContract(req *AgentContractDeployRequest) (*Contrac
 	if len(random) == 0 {
 		random = []byte(fmt.Sprintf("%s:%d", p.wallet.GetAddress(), time.Now().UnixNano()))
 	}
-	tx, contractAddr, err := agentcontract.BuildDeployTx(agentcontract.DeployTxBuildRequest{
+	tx, contractAddr, err := contractcommon.BuildAgentDeployTx(contractcommon.AgentDeployTxBuildRequest{
 		ContractPrefix:  p.contractAddressPrefix(),
 		Subtype:         subtype,
-		AgentVersion:    agentcontract.CurrentAgentVersion,
+		AgentVersion:    contractcommon.CurrentAgentVersion,
 		Deployer:        p.wallet.GetAddress(),
 		Random:          random,
 		ContractContent: content,
@@ -788,7 +785,7 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 	if err != nil {
 		return nil, err
 	}
-	converted, err := ConvertUnifiedInvokeParam(ContractTypeAgent, agentcontract.SubtypePrediction, areq.JSONInvokeParam)
+	converted, err := ConvertUnifiedInvokeParam(ContractTypeAgent, contractcommon.SubtypePrediction, areq.JSONInvokeParam)
 	if err != nil {
 		return nil, err
 	}
@@ -798,14 +795,14 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 	}
 	gasLimit := areq.GasLimit
 	if gasLimit == 0 {
-		gasLimit = agentcontract.DefaultGasConfig().InvokeBaseGas
+		gasLimit = contractcommon.InvokeBaseGas
 	}
-	gasAmount, gasAsset, err := p.agentGasAssetAmount(agentcontract.DefaultGasConfig().InvokeBaseGas, areq.GasAssetAmount)
+	gasAmount, gasAsset, err := p.agentGasAssetAmount(contractcommon.InvokeBaseGas, areq.GasAssetAmount)
 	if err != nil {
 		return nil, err
 	}
 	fundingAmount := uint64(0)
-	if converted.Action == agentcontract.InvokeAPIBet {
+	if converted.Action == contractcommon.AgentInvokeAPIBet {
 		fundingAmount, err = assetAmountStringToUint64("agent bet amount", areq.BetAmount)
 		if err != nil {
 			return nil, err
@@ -823,7 +820,7 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 	if err != nil {
 		return nil, err
 	}
-	tx, err := agentcontract.BuildInvokeTx(agentcontract.InvokeTxBuildRequest{
+	tx, err := contractcommon.BuildAgentInvokeTx(contractcommon.AgentInvokeTxBuildRequest{
 		Contract:      contract,
 		GasLimit:      gasLimit,
 		CallNonce:     callNonce,
@@ -871,7 +868,7 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 	if treq.ContractContent == "" {
 		treq.ContractContent = req.ContractContent
 	}
-	contract, fundingValue, fundingAssetAmount, err := p.buildNativeTemplateContract(treq)
+	templateName, content, fundingValue, fundingAssetAmount, err := p.buildNativeTemplateContract(treq)
 	if err != nil {
 		return nil, err
 	}
@@ -908,15 +905,17 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 	if len(random) == 0 {
 		random = []byte(fmt.Sprintf("%s:%d", p.wallet.GetAddress(), time.Now().UnixNano()))
 	}
-	tx, contractAddr, err := tmplcontract.BuildDeployTx(tmplcontract.DeployTxBuildRequest{
-		ContractPrefix: p.contractAddressPrefix(),
-		Contract:       contract,
-		Deployer:       p.wallet.GetAddress(),
-		Random:         random,
-		GasLimit:       gasLimit,
-		Funding:        funding,
-		Inputs:         inputs,
-		ChangeOutputs:  changeOutputs,
+	tx, contractAddr, err := contractcommon.BuildTemplateDeployTx(contractcommon.TemplateDeployTxBuildRequest{
+		ContractPrefix:  p.contractAddressPrefix(),
+		TemplateName:    templateName,
+		TemplateVersion: contractcommon.CurrentTemplateVersion,
+		ContractContent: content,
+		Deployer:        p.wallet.GetAddress(),
+		Random:          random,
+		GasLimit:        gasLimit,
+		Funding:         funding,
+		Inputs:          inputs,
+		ChangeOutputs:   changeOutputs,
 	})
 	if err != nil {
 		return nil, err
@@ -1002,7 +1001,7 @@ func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractT
 	if err != nil {
 		return nil, err
 	}
-	tx, err := tmplcontract.BuildInvokeTx(tmplcontract.InvokeTxBuildRequest{
+	tx, err := contractcommon.BuildTemplateInvokeTx(contractcommon.TemplateInvokeTxBuildRequest{
 		Contract:      contract,
 		GasLimit:      gasLimit,
 		CallNonce:     callNonce,
@@ -1085,52 +1084,61 @@ func (p *Manager) checkTemplateInvokeSupported(contractAddress, action string) e
 	return nil
 }
 
-func (p *Manager) buildNativeTemplateContract(req *TemplateContractDeployRequest) (tmplcontract.Contract, int64, uint64, error) {
+func (p *Manager) buildNativeTemplateContract(req *TemplateContractDeployRequest) (string, []byte, int64, uint64, error) {
 	if req == nil {
-		return nil, 0, 0, fmt.Errorf("missing template deploy request")
+		return "", nil, 0, 0, fmt.Errorf("missing template deploy request")
 	}
 	name := normalizeTemplateName(req.TemplateName)
 	if name == "" {
-		return nil, 0, 0, fmt.Errorf("missing template name")
+		return "", nil, 0, 0, fmt.Errorf("missing template name")
 	}
 	if name == TEMPLATE_CONTRACT_EXCHANGE {
-		var exchange tmplcontract.ExchangeContract
+		var exchange contractcommon.TemplateExchangeContract
 		if err := json.Unmarshal([]byte(req.ContractContent), &exchange); err != nil {
-			return nil, 0, 0, err
+			return "", nil, 0, 0, err
 		}
-		if err := exchange.CheckContent(); err != nil {
-			return nil, 0, 0, err
+		content, err := contractcommon.EncodeTemplateExchangeContent(exchange)
+		if err != nil {
+			return "", nil, 0, 0, err
 		}
-		return tmplcontract.NewExchangeContract(exchange.AssetAName, exchange.AssetBName, exchange.PriceMode, exchange.Steps), 0, 0, nil
+		return contractcommon.TemplateExchange, content, 0, 0, nil
 	}
 	contract, err := ContractContentUnMarsh(name, req.ContractContent)
 	if err != nil {
-		return nil, 0, 0, err
+		return "", nil, 0, 0, err
 	}
 	assetName := contract.GetAssetName().String()
 	switch name {
 	case TEMPLATE_CONTRACT_LIMITORDER, TEMPLATE_CONTRACT_SWAP:
-		return tmplcontract.NewLimitOrderContract(assetName), 0, 0, nil
+		content, err := contractcommon.EncodeTemplateLimitOrderContent(assetName)
+		if err != nil {
+			return "", nil, 0, 0, err
+		}
+		return contractcommon.TemplateLimitOrder, content, 0, 0, nil
 	case TEMPLATE_CONTRACT_AMM:
 		amm, ok := contract.(*AmmContract)
 		if !ok {
-			return nil, 0, 0, fmt.Errorf("template content is not AMM")
+			return "", nil, 0, 0, fmt.Errorf("template content is not AMM")
 		}
 		assetFunding := uint64(0)
 		gasAsset := GetGasAssetName()
 		if assetName == gasAsset {
 			amt, err := indexer.NewDecimalFromString(amm.AssetAmt, MAX_ASSET_DIVISIBILITY)
 			if err != nil {
-				return nil, 0, 0, err
+				return "", nil, 0, 0, err
 			}
 			if amt.Int64() < 0 {
-				return nil, 0, 0, fmt.Errorf("invalid AMM asset amount %s", amm.AssetAmt)
+				return "", nil, 0, 0, fmt.Errorf("invalid AMM asset amount %s", amm.AssetAmt)
 			}
 			assetFunding = uint64(amt.Int64())
 		}
-		return tmplcontract.NewAMMContract(assetName, amm.AssetAmt, amm.SatValue, amm.K), amm.SatValue, assetFunding, nil
+		content, err := contractcommon.EncodeTemplateAMMContent(assetName, amm.AssetAmt, amm.SatValue, amm.K)
+		if err != nil {
+			return "", nil, 0, 0, err
+		}
+		return contractcommon.TemplateAMM, content, amm.SatValue, assetFunding, nil
 	default:
-		return nil, 0, 0, fmt.Errorf("unsupported template contract %s", req.TemplateName)
+		return "", nil, 0, 0, fmt.Errorf("unsupported template contract %s", req.TemplateName)
 	}
 }
 
@@ -1139,7 +1147,7 @@ func agentPredictionContent(req *AgentContractDeployRequest) ([]byte, error) {
 		return nil, fmt.Errorf("missing agent deploy request")
 	}
 	if req.Prediction != nil {
-		prediction := agentcontract.PredictionContract{
+		prediction := contractcommon.AgentPredictionContract{
 			Subtype:      req.Prediction.Subtype,
 			Title:        req.Prediction.Title,
 			Description:  req.Prediction.Description,
@@ -1152,11 +1160,11 @@ func agentPredictionContent(req *AgentContractDeployRequest) ([]byte, error) {
 			MinBetUnit:   req.Prediction.MinBetUnit,
 		}
 		if prediction.Subtype == "" {
-			prediction.Subtype = agentcontract.SubtypePrediction
+			prediction.Subtype = contractcommon.SubtypePrediction
 		}
-		prediction.Outcomes = make([]agentcontract.PredictionOutcome, 0, len(req.Prediction.Outcomes))
+		prediction.Outcomes = make([]contractcommon.AgentPredictionOutcome, 0, len(req.Prediction.Outcomes))
 		for _, outcome := range req.Prediction.Outcomes {
-			prediction.Outcomes = append(prediction.Outcomes, agentcontract.PredictionOutcome{ID: outcome.ID, Text: outcome.Text})
+			prediction.Outcomes = append(prediction.Outcomes, contractcommon.AgentPredictionOutcome{ID: outcome.ID, Text: outcome.Text})
 		}
 		return prediction.Encode()
 	}
@@ -1243,7 +1251,7 @@ func (p *Manager) EstimateEVMDeployContract(req *EVMContractDeployRequest) (*Con
 	if gasAmount < gasBaseFee {
 		return nil, fmt.Errorf("gas asset amount %d is less than required base gas fee %d", gasAmount, gasBaseFee)
 	}
-	contract, err := deriveCreateContractAddress(p.contractAddressPrefix(), caller, req.DeployNonce)
+	contract, err := contractcommon.DeriveEVMCreateContractAddress(p.contractAddressPrefix(), caller, req.DeployNonce)
 	if err != nil {
 		return nil, err
 	}
@@ -1276,7 +1284,7 @@ func (p *Manager) deployEVMContract(req *EVMContractDeployRequest) (*ContractTxR
 	if err != nil {
 		return nil, err
 	}
-	tx, contract, err := buildEVMDeployTx(evmDeployTxBuildRequest{
+	tx, contract, err := contractcommon.BuildEVMDeployTx(contractcommon.EVMDeployTxBuildRequest{
 		ContractPrefix: p.contractAddressPrefix(),
 		Caller:         caller,
 		GasLimit:       estimate.GasLimit,
@@ -1355,7 +1363,7 @@ func (p *Manager) invokeEVMContract(req *ContractInvokeRequest) (*ContractTxResu
 	if err != nil {
 		return nil, err
 	}
-	tx, err := buildEVMInvokeTx(evmInvokeTxBuildRequest{
+	tx, err := contractcommon.BuildEVMInvokeTx(contractcommon.EVMInvokeTxBuildRequest{
 		Contract:      contract,
 		GasLimit:      gasLimit,
 		CallNonce:     ereq.CallNonce,
@@ -1880,109 +1888,6 @@ func decodeHexField(name, s string) ([]byte, error) {
 	return b, nil
 }
 
-type evmDeployTxBuildRequest struct {
-	ContractPrefix string
-	Caller         contractcommon.EVMAddress
-	GasLimit       uint64
-	DeployNonce    uint64
-	InitCode       []byte
-	Funding        swire.TxOut
-	Inputs         []swire.OutPoint
-	ChangeOutputs  []*swire.TxOut
-}
-
-type evmInvokeTxBuildRequest struct {
-	Contract      contractcommon.ContractAddress
-	GasLimit      uint64
-	CallNonce     uint64
-	Calldata      []byte
-	Funding       swire.TxOut
-	Inputs        []swire.OutPoint
-	ChangeOutputs []*swire.TxOut
-}
-
-func buildEVMDeployTx(req evmDeployTxBuildRequest) (*swire.MsgTx, contractcommon.ContractAddress, error) {
-	prefix := req.ContractPrefix
-	if prefix == "" {
-		prefix = contractcommon.TestnetContractPrefix
-	}
-	contract, err := deriveCreateContractAddress(prefix, req.Caller, req.DeployNonce)
-	if err != nil {
-		return nil, contractcommon.ContractAddress{}, err
-	}
-	if err := validateEVMFundingTxOut(req.Funding); err != nil {
-		return nil, contractcommon.ContractAddress{}, err
-	}
-	scripts, err := contractcommon.DeployNullDataScripts(contractcommon.DeployPayload{GasLimit: req.GasLimit, DeployNonce: req.DeployNonce, InitCode: append([]byte(nil), req.InitCode...)})
-	if err != nil {
-		return nil, contractcommon.ContractAddress{}, err
-	}
-	contractOut, err := contractTxOutFromFunding(req.Funding, contract)
-	if err != nil {
-		return nil, contractcommon.ContractAddress{}, err
-	}
-	tx := newEVMUnsignedTx(req.Inputs)
-	for _, script := range scripts {
-		tx.AddTxOut(swire.NewTxOut(0, nil, script))
-	}
-	tx.AddTxOut(contractOut)
-	addEVMChangeOutputs(tx, req.ChangeOutputs)
-	return tx, contract, nil
-}
-
-func buildEVMInvokeTx(req evmInvokeTxBuildRequest) (*swire.MsgTx, error) {
-	if err := validateEVMFundingTxOut(req.Funding); err != nil {
-		return nil, err
-	}
-	scripts, err := contractcommon.InvokeNullDataScripts(contractcommon.InvokePayload{GasLimit: req.GasLimit, CallNonce: req.CallNonce, Calldata: append([]byte(nil), req.Calldata...)})
-	if err != nil {
-		return nil, err
-	}
-	contractOut, err := contractTxOutFromFunding(req.Funding, req.Contract)
-	if err != nil {
-		return nil, err
-	}
-	tx := newEVMUnsignedTx(req.Inputs)
-	for _, script := range scripts {
-		tx.AddTxOut(swire.NewTxOut(0, nil, script))
-	}
-	tx.AddTxOut(contractOut)
-	addEVMChangeOutputs(tx, req.ChangeOutputs)
-	return tx, nil
-}
-
-func validateEVMFundingTxOut(funding swire.TxOut) error {
-	return contractcommon.ValidateFundingTxOut(funding, contractcommon.FundingValidation{RequireFunding: true})
-}
-
-func contractTxOutFromFunding(funding swire.TxOut, contract contractcommon.ContractAddress) (*swire.TxOut, error) {
-	pkScript, err := contractcommon.ContractPkScript(contract)
-	if err != nil {
-		return nil, err
-	}
-	return swire.NewTxOut(funding.Value, funding.Assets.Clone(), pkScript), nil
-}
-
-func newEVMUnsignedTx(inputs []swire.OutPoint) *swire.MsgTx {
-	tx := swire.NewMsgTx(2)
-	for i := range inputs {
-		tx.AddTxIn(swire.NewTxIn(&inputs[i], nil, nil))
-	}
-	return tx
-}
-
-func addEVMChangeOutputs(tx *swire.MsgTx, outputs []*swire.TxOut) {
-	for _, output := range outputs {
-		if output == nil {
-			continue
-		}
-		cp := *output
-		cp.PkScript = append([]byte(nil), output.PkScript...)
-		cp.Assets = output.Assets.Clone()
-		tx.AddTxOut(&cp)
-	}
-}
-
 func evmAddressFromPublicKey(pubKey []byte) (contractcommon.EVMAddress, error) {
 	var addr contractcommon.EVMAddress
 	if len(pubKey) != 33 && len(pubKey) != 65 {
@@ -1990,71 +1895,4 @@ func evmAddressFromPublicKey(pubKey []byte) (contractcommon.EVMAddress, error) {
 	}
 	copy(addr[:], btcutil.Hash160(pubKey))
 	return addr, nil
-}
-
-func deriveCreateContractAddress(prefix string, caller contractcommon.EVMAddress, nonce uint64) (contractcommon.ContractAddress, error) {
-	payload := rlpEncodeCreateAddress(caller, nonce)
-	hash := sha3.NewLegacyKeccak256()
-	_, _ = hash.Write(payload)
-	sum := hash.Sum(nil)
-	var addr contractcommon.EVMAddress
-	copy(addr[:], sum[len(sum)-20:])
-	return contractcommon.NewContractAddress(prefix, contractcommon.AddressVersionV1, contractcommon.ContractTypeEVM, addr)
-}
-
-func rlpEncodeCreateAddress(caller contractcommon.EVMAddress, nonce uint64) []byte {
-	addr := rlpEncodeBytes(caller[:])
-	n := rlpEncodeUint(nonce)
-	payload := append(addr, n...)
-	return appendRLPListPrefix(payload)
-}
-
-func rlpEncodeUint(v uint64) []byte {
-	if v == 0 {
-		return []byte{0x80}
-	}
-	var buf [8]byte
-	i := len(buf)
-	for v > 0 {
-		i--
-		buf[i] = byte(v)
-		v >>= 8
-	}
-	return rlpEncodeBytes(buf[i:])
-}
-
-func rlpEncodeBytes(b []byte) []byte {
-	if len(b) == 1 && b[0] < 0x80 {
-		return []byte{b[0]}
-	}
-	if len(b) <= 55 {
-		out := []byte{byte(0x80 + len(b))}
-		return append(out, b...)
-	}
-	lenBytes := encodeLength(len(b))
-	out := []byte{byte(0xb7 + len(lenBytes))}
-	out = append(out, lenBytes...)
-	return append(out, b...)
-}
-
-func appendRLPListPrefix(payload []byte) []byte {
-	if len(payload) <= 55 {
-		out := []byte{byte(0xc0 + len(payload))}
-		return append(out, payload...)
-	}
-	lenBytes := encodeLength(len(payload))
-	out := []byte{byte(0xf7 + len(lenBytes))}
-	out = append(out, lenBytes...)
-	return append(out, payload...)
-}
-
-func encodeLength(n int) []byte {
-	var buf [8]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte(n)
-		n >>= 8
-	}
-	return buf[i:]
 }
