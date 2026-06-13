@@ -21,6 +21,7 @@ import Approve from '@/entrypoints/popup/pages/wallet/Approve.vue'
 import UtxoManager from '@/entrypoints/popup/pages/wallet/settings/UtxoManager.vue'
 import SplitAsset from '@/entrypoints/popup/pages/wallet/split.vue'
 import DappMarket from '@/entrypoints/popup/pages/wallet/DappMarket.vue'
+import Tools from '@/entrypoints/popup/pages/wallet/Tools.vue'
 import { walletStorage } from '@/lib/walletStorage'
 
 const routes = [
@@ -76,6 +77,7 @@ const routes = [
       },
       { path: 'receive', component: WalletReceive },
       { path: 'dapp', component: DappMarket },
+      { path: 'tools', component: Tools },
       { path: 'approve', component: Approve },
       { path: 'manager', component: WalletManager },
       { path: 'sub-wallet-manager', component: SubWalletManager },

@@ -294,6 +294,24 @@ declare interface WalletManager {
   ): Promise<SatsnetResponse<{ amount: number; value: number }>>
 
   // --- Contract Methods ---
+  deployUnifiedContract(
+    req: string
+  ): Promise<SatsnetResponse<any>>
+
+  invokeUnifiedContract(
+    req: string
+  ): Promise<SatsnetResponse<any>>
+
+  getParamForInvokeUnifiedContract(
+    contractType: string,
+    subtype: string,
+    action: string
+  ): Promise<SatsnetResponse<{ parameter: any }>>
+
+  getFeeForInvokeUnifiedContract(
+    req: string
+  ): Promise<SatsnetResponse<{ fee: any }>>
+
   getFeeForDeployContract(
     templateName: string,
     content: string,
@@ -335,6 +353,13 @@ declare interface WalletManager {
     resvId: string,
     result: string
   }>>
+
+  deployTickerOrdx(ticker: string, max: string, limit: string, bindingSat: number, feeRate: string): Promise<SatsnetResponse<any>>
+  mintAssetOrdx(ticker: string, amount: string, feeRate: string): Promise<SatsnetResponse<any>>
+  mintAssetRunes(ticker: string, feeRate: string): Promise<SatsnetResponse<any>>
+  deployTickerBrc20(ticker: string, max: string, limit: string, feeRate: string): Promise<SatsnetResponse<any>>
+  mintAssetBrc20(ticker: string, amount: string, feeRate: string): Promise<SatsnetResponse<any>>
+  inscribeName(name: string, feeRate: string): Promise<SatsnetResponse<any>>
 }
 interface SatsnetStp {
   closeChannel(
@@ -484,6 +509,25 @@ interface SatsnetStp {
   getDeployedContractStatus(url: string): Promise<SatsnetResponse<{ contractStatus: any }>>;
 
   /** 查询部署合约所需费用 */
+  deployUnifiedContract(
+    req: string
+  ): Promise<SatsnetResponse<any>>;
+
+  invokeUnifiedContract(
+    req: string
+  ): Promise<SatsnetResponse<any>>;
+
+  getParamForInvokeUnifiedContract(
+    contractType: string,
+    subtype: string,
+    action: string
+  ): Promise<SatsnetResponse<{ parameter: any }>>;
+
+  getFeeForInvokeUnifiedContract(
+    req: string
+  ): Promise<SatsnetResponse<{ fee: any }>>;
+
+  /** 查询部署合约所需费用 */
   getFeeForDeployContract(
     templateName: string,
     content: string, // json string
@@ -543,6 +587,12 @@ interface SatsnetStp {
 
   /** 获取所有已注册的推荐人名称 */
   getAllRegisteredReferrerName(pubkey: string): SatsnetResponse<{ names: string[] }>
+
+  deployTickerOrdx(ticker: string, max: string, limit: string, bindingSat: number, feeRate: string): Promise<SatsnetResponse<any>>;
+  mintAssetOrdx(ticker: string, amount: string, feeRate: string): Promise<SatsnetResponse<any>>;
+  deployTickerBrc20(ticker: string, max: string, limit: string, feeRate: string): Promise<SatsnetResponse<any>>;
+  mintAssetBrc20(ticker: string, amount: string, feeRate: string): Promise<SatsnetResponse<any>>;
+  inscribeName(name: string, feeRate: string): Promise<SatsnetResponse<any>>;
 }
 declare interface Window {
   sat20wallet_wasm: WalletManager

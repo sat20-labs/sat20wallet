@@ -39,6 +39,7 @@ const navItems: NavItem[] = [
       router.push('/wallet/dapp');
     }
   },
+  { icon: 'lucide:wrench', label: 'Tools', to: '/wallet/tools' },
   { icon: 'lucide:settings', label: 'Setting', to: '/wallet/setting' },
 ];
 

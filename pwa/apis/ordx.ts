@@ -57,6 +57,14 @@ class OrdxApi {
     return response.json()
   }
 
+  async getMintPermission({ protocol, ticker, address, network }: any): Promise<any> {
+    const query = protocol ? `?protocol=${encodeURIComponent(protocol)}` : ''
+    const response = await fetch(
+      this.generatePath(`mint/permission/${encodeURIComponent(ticker)}/${address}${query}`, network)
+    )
+    return response.json()
+  }
+
   async getAddressSummary({ address, network }: any): Promise<any> {
     const response = await fetch(
       this.generatePath(`v3/address/summary/${address}`, network)

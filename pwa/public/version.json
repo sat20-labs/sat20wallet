@@ -1,9 +1,9 @@
 {
   "version": "0.1.34",
-  "buildId": "20260607T152126Z",
-  "commit": "ca82778d781d",
+  "buildId": "20260612T033901Z",
+  "commit": "f8c4e7f6af87",
   "releaseNotes": "恢复通道管理 STP 模块",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-06-07T15:21:26.297Z"
+  "publishedAt": "2026-06-12T03:39:01.442Z"
 }

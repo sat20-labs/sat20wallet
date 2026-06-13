@@ -161,10 +161,10 @@ class WalletManager {
   async sendAssets_SatsNet(
     destAddr: string,
     assetName: string,
-    amt: number,
+    amt: string | number,
     memo: string = ""
   ): Promise<[Error | undefined, string | undefined]> {
-    return this._handleRequest('sendAssets_SatsNet', destAddr, assetName, amt, memo)
+    return this._handleRequest('sendAssets_SatsNet', destAddr, assetName, String(amt), String(memo))
   }
 
   async sendAssets(
@@ -447,7 +447,7 @@ class WalletManager {
     content: string,
     feeRate: string
   ): Promise<[Error | undefined, { fee: any } | undefined]> {
-    return this._handleRequest('getFeeForDeployContract', templateName, content, feeRate)
+    return this._handleRequest('getFeeForDeployContract', templateName, content, String(feeRate))
   }
 
   async deployContract_Remote(
@@ -456,7 +456,57 @@ class WalletManager {
     feeRate: string,
     bol: boolean
   ): Promise<[Error | undefined, { txId: string; resvId: string } | undefined]> {
-    return this._handleRequest('deployContract_Remote', templateName, content, feeRate, bol)
+    return this._handleRequest('deployContract_Remote', templateName, content, String(feeRate), bol)
+  }
+
+  async queryContract(req: Record<string, unknown>): Promise<[Error | undefined, { result: string } | undefined]> {
+    return this._handleRequest('queryContract', JSON.stringify(req))
+  }
+
+  async deployUnifiedContract(req: Record<string, unknown>): Promise<
+    [Error | undefined, {
+      contractType: string,
+      txid: string,
+      contractAddress?: string,
+      caller?: string,
+      gasAssetAmount?: string,
+      gasFeeAmount?: string,
+      gasFundAmount?: string,
+      gasLimit?: string,
+      nonce?: string,
+    } | undefined]
+  > {
+    return this._handleRequest('deployUnifiedContract', JSON.stringify(req))
+  }
+
+  async invokeUnifiedContract(req: Record<string, unknown>): Promise<
+    [Error | undefined, {
+      contractType: string,
+      txid: string,
+      contractAddress?: string,
+      caller?: string,
+      gasAssetAmount?: string,
+      gasFeeAmount?: string,
+      gasFundAmount?: string,
+      gasLimit?: string,
+      nonce?: string,
+    } | undefined]
+  > {
+    return this._handleRequest('invokeUnifiedContract', JSON.stringify(req))
+  }
+
+  async getParamForInvokeUnifiedContract(
+    contractType: string,
+    subtype: string,
+    action: string
+  ): Promise<[Error | undefined, { parameter: any } | undefined]> {
+    return this._handleRequest('getParamForInvokeUnifiedContract', contractType, subtype, action)
+  }
+
+  async getFeeForInvokeUnifiedContract(
+    req: Record<string, unknown>
+  ): Promise<[Error | undefined, { fee: any } | undefined]> {
+    return this._handleRequest('getFeeForInvokeUnifiedContract', JSON.stringify(req))
   }
 
   async getParamForInvokeContract(
@@ -660,12 +710,61 @@ class WalletManager {
       'DeployRunes_Remote',
       assetName,
       symbol,
-      maxSupply,
-      limit,
+      String(maxSupply),
+      String(limit),
       selfMint,
       destAddr,
-      feeRate
+      String(feeRate)
     )
+  }
+
+  async deployTickerOrdx(
+    ticker: string,
+    max: string,
+    limit: string,
+    bindingSat: number,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string; commitTxId: string; revealTxId: string; resvId: string } | undefined]> {
+    return this._handleRequest('deployTickerOrdx', ticker, String(max), String(limit), bindingSat, String(feeRate))
+  }
+
+  async mintAssetOrdx(
+    ticker: string,
+    amount: string,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string; commitTxId: string; revealTxId: string; resvId: string } | undefined]> {
+    return this._handleRequest('mintAssetOrdx', ticker, String(amount), String(feeRate))
+  }
+
+  async mintAssetRunes(
+    ticker: string,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
+    return this._handleRequest('mintAssetRunes', ticker, String(feeRate))
+  }
+
+  async deployTickerBrc20(
+    ticker: string,
+    max: string,
+    limit: string,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string; commitTxId: string; revealTxId: string; resvId: string } | undefined]> {
+    return this._handleRequest('deployTickerBrc20', ticker, String(max), String(limit), String(feeRate))
+  }
+
+  async mintAssetBrc20(
+    ticker: string,
+    amount: string,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string; commitTxId: string; revealTxId: string; resvId: string } | undefined]> {
+    return this._handleRequest('mintAssetBrc20', ticker, String(amount), String(feeRate))
+  }
+
+  async inscribeName(
+    name: string,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string; commitTxId: string; revealTxId: string; resvId: string } | undefined]> {
+    return this._handleRequest('inscribeName', name, String(feeRate))
   }
 }
 
