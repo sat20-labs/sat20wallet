@@ -7,6 +7,7 @@ import (
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -60,6 +61,8 @@ func TestUnifiedTemplateContractsLocalCoverage(t *testing.T) {
 		AssetName: unifiedTemplateTestAsset,
 		LptAmt:    "25",
 	})
+	assertCloseInvokeParamRoundTrip(t)
+	assertUnifiedTemplateInvokeParamQuery(t, manager)
 }
 
 func TestUnifiedNativeTemplateTxCoverage(t *testing.T) {
@@ -169,9 +172,9 @@ func assertTemplateContractContent(t *testing.T, manager *Manager, templateName 
 func assertSwapInvokeParamRoundTrip(t *testing.T, manager *Manager, templateName string, param SwapInvokeParam) {
 	t.Helper()
 	invokeJSON := mustInvokeJSON(t, INVOKE_API_SWAP, param)
-	converted, err := ConvertInvokeParam(invokeJSON, false)
+	converted, err := ConvertUnifiedInvokeParam(ContractTypeTemplate, templateName, invokeJSON)
 	if err != nil {
-		t.Fatalf("ConvertInvokeParam(%s swap): %v", templateName, err)
+		t.Fatalf("ConvertUnifiedInvokeParam(%s swap): %v", templateName, err)
 	}
 	if converted.Action != INVOKE_API_SWAP {
 		t.Fatalf("unexpected action %s", converted.Action)
@@ -195,9 +198,9 @@ func assertSwapInvokeParamRoundTrip(t *testing.T, manager *Manager, templateName
 func assertAddLiquidityInvokeParamRoundTrip(t *testing.T, manager *Manager, param AddLiqInvokeParam) {
 	t.Helper()
 	invokeJSON := mustInvokeJSON(t, INVOKE_API_ADDLIQUIDITY, param)
-	converted, err := ConvertInvokeParam(invokeJSON, false)
+	converted, err := ConvertUnifiedInvokeParam(ContractTypeTemplate, TEMPLATE_CONTRACT_AMM, invokeJSON)
 	if err != nil {
-		t.Fatalf("ConvertInvokeParam(addliq): %v", err)
+		t.Fatalf("ConvertUnifiedInvokeParam(addliq): %v", err)
 	}
 	encoded, err := base64.StdEncoding.DecodeString(converted.Param)
 	if err != nil {
@@ -218,9 +221,9 @@ func assertAddLiquidityInvokeParamRoundTrip(t *testing.T, manager *Manager, para
 func assertRemoveLiquidityInvokeParamRoundTrip(t *testing.T, manager *Manager, param RemoveLiqInvokeParam) {
 	t.Helper()
 	invokeJSON := mustInvokeJSON(t, INVOKE_API_REMOVELIQUIDITY, param)
-	converted, err := ConvertInvokeParam(invokeJSON, false)
+	converted, err := ConvertUnifiedInvokeParam(ContractTypeTemplate, TEMPLATE_CONTRACT_AMM, invokeJSON)
 	if err != nil {
-		t.Fatalf("ConvertInvokeParam(removeliq): %v", err)
+		t.Fatalf("ConvertUnifiedInvokeParam(removeliq): %v", err)
 	}
 	encoded, err := base64.StdEncoding.DecodeString(converted.Param)
 	if err != nil {
@@ -235,6 +238,136 @@ func assertRemoveLiquidityInvokeParamRoundTrip(t *testing.T, manager *Manager, p
 	}
 	if _, err := manager.QueryParamForInvokeContract(TEMPLATE_CONTRACT_AMM, INVOKE_API_REMOVELIQUIDITY); err != nil {
 		t.Fatalf("QueryParamForInvokeContract(amm, removeliq): %v", err)
+	}
+}
+
+func assertCloseInvokeParamRoundTrip(t *testing.T) {
+	t.Helper()
+	for _, invokeJSON := range []string{
+		mustInvokeJSON(t, INVOKE_API_CLOSE, tmplcontract.CloseInvokeParam{}),
+		mustInvokeJSONWithRawParam(t, INVOKE_API_CLOSE, ""),
+	} {
+		converted, err := ConvertUnifiedInvokeParam(ContractTypeTemplate, TEMPLATE_CONTRACT_EXCHANGE, invokeJSON)
+		if err != nil {
+			t.Fatalf("ConvertUnifiedInvokeParam(close): %v", err)
+		}
+		if converted.Action != INVOKE_API_CLOSE {
+			t.Fatalf("unexpected close action %s", converted.Action)
+		}
+		encoded, err := base64.StdEncoding.DecodeString(converted.Param)
+		if err != nil {
+			t.Fatalf("decode close param: %v", err)
+		}
+		var decoded tmplcontract.CloseInvokeParam
+		if err := decoded.Decode(encoded); err != nil {
+			t.Fatalf("decode close script: %v", err)
+		}
+	}
+}
+
+func assertUnifiedTemplateInvokeParamQuery(t *testing.T, manager *Manager) {
+	t.Helper()
+	tests := []struct {
+		subtype string
+		action  string
+		fields  []string
+	}{
+		{TEMPLATE_CONTRACT_LIMITORDER, INVOKE_API_SWAP, []string{"orderType", "assetName", "amt", "unitPrice"}},
+		{TEMPLATE_CONTRACT_LIMITORDER, INVOKE_API_REFUND, []string{"itemIds"}},
+		{TEMPLATE_CONTRACT_AMM, INVOKE_API_ADDLIQUIDITY, []string{"orderType", "assetName", "amt", "value"}},
+		{TEMPLATE_CONTRACT_AMM, INVOKE_API_REMOVELIQUIDITY, []string{"orderType", "assetName", "lptAmt"}},
+		{TEMPLATE_CONTRACT_EXCHANGE, contractcommon.TemplateInvokeAPIExchange, []string{"minOutA"}},
+		{TEMPLATE_CONTRACT_EXCHANGE, INVOKE_API_CLOSE, nil},
+	}
+	for _, tt := range tests {
+		paramJSON, err := manager.QueryParamForInvokeUnifiedContract(ContractTypeTemplate, tt.subtype, tt.action)
+		if err != nil {
+			t.Fatalf("QueryParamForInvokeUnifiedContract(%s, %s): %v", tt.subtype, tt.action, err)
+		}
+		var wrapper InvokeParam
+		if err := json.Unmarshal([]byte(paramJSON), &wrapper); err != nil {
+			t.Fatalf("unmarshal unified invoke wrapper: %v", err)
+		}
+		if wrapper.Action != tt.action {
+			t.Fatalf("unexpected unified action %s", wrapper.Action)
+		}
+		if len(tt.fields) == 0 {
+			if wrapper.Param != "" {
+				t.Fatalf("expected empty close param, got %q", wrapper.Param)
+			}
+			continue
+		}
+		var fields map[string]interface{}
+		if err := json.Unmarshal([]byte(wrapper.Param), &fields); err != nil {
+			t.Fatalf("unmarshal unified inner param: %v", err)
+		}
+		for _, field := range tt.fields {
+			if _, ok := fields[field]; !ok {
+				t.Fatalf("missing field %s in %s", field, wrapper.Param)
+			}
+		}
+	}
+	assertUnifiedAgentInvokeParamQuery(t, manager)
+	assertUnifiedEVMInvokeParamQuery(t, manager)
+}
+
+func assertUnifiedAgentInvokeParamQuery(t *testing.T, manager *Manager) {
+	t.Helper()
+	for _, action := range []string{agentcontract.InvokeAPIReady, agentcontract.InvokeAPIBet, agentcontract.InvokeAPIConfirm, agentcontract.InvokeAPIReject} {
+		paramJSON, err := manager.QueryParamForInvokeUnifiedContract(ContractTypeAgent, agentcontract.SubtypePrediction, action)
+		if err != nil {
+			t.Fatalf("QueryParamForInvokeUnifiedContract(agent, %s): %v", action, err)
+		}
+		var wrapper InvokeParam
+		if err := json.Unmarshal([]byte(paramJSON), &wrapper); err != nil {
+			t.Fatalf("unmarshal agent invoke wrapper: %v", err)
+		}
+		if wrapper.Action != action {
+			t.Fatalf("unexpected agent action %s", wrapper.Action)
+		}
+	}
+	invokeJSON := mustInvokeJSON(t, agentcontract.InvokeAPIBet, agentcontract.PredictionBetParam{OutcomeID: "a"})
+	converted, err := ConvertUnifiedInvokeParam(ContractTypeAgent, agentcontract.SubtypePrediction, invokeJSON)
+	if err != nil {
+		t.Fatalf("ConvertUnifiedInvokeParam(agent bet): %v", err)
+	}
+	encoded, err := base64.StdEncoding.DecodeString(converted.Param)
+	if err != nil {
+		t.Fatalf("decode agent bet param: %v", err)
+	}
+	decoded, err := agentcontract.DecodePredictionBetParam(encoded)
+	if err != nil {
+		t.Fatalf("decode agent bet payload: %v", err)
+	}
+	if decoded.OutcomeID != "a" {
+		t.Fatalf("unexpected agent outcome %s", decoded.OutcomeID)
+	}
+}
+
+func assertUnifiedEVMInvokeParamQuery(t *testing.T, manager *Manager) {
+	t.Helper()
+	paramJSON, err := manager.QueryParamForInvokeUnifiedContract(ContractTypeEVM, "", "call")
+	if err != nil {
+		t.Fatalf("QueryParamForInvokeUnifiedContract(evm, call): %v", err)
+	}
+	var wrapper InvokeParam
+	if err := json.Unmarshal([]byte(paramJSON), &wrapper); err != nil {
+		t.Fatalf("unmarshal evm invoke wrapper: %v", err)
+	}
+	if wrapper.Action != "call" {
+		t.Fatalf("unexpected evm action %s", wrapper.Action)
+	}
+	invokeJSON := mustInvokeJSON(t, "call", map[string]string{"calldataHex": "0xdeadbeef"})
+	converted, err := ConvertUnifiedInvokeParam(ContractTypeEVM, "", invokeJSON)
+	if err != nil {
+		t.Fatalf("ConvertUnifiedInvokeParam(evm call): %v", err)
+	}
+	encoded, err := base64.StdEncoding.DecodeString(converted.Param)
+	if err != nil {
+		t.Fatalf("decode evm call param: %v", err)
+	}
+	if string(encoded) != string([]byte{0xde, 0xad, 0xbe, 0xef}) {
+		t.Fatalf("unexpected evm calldata %x", encoded)
 	}
 }
 
@@ -336,6 +469,15 @@ func mustInvokeJSON(t *testing.T, action string, param any) string {
 		t.Fatalf("marshal inner invoke param: %v", err)
 	}
 	outer, err := json.Marshal(InvokeParam{Action: action, Param: string(inner)})
+	if err != nil {
+		t.Fatalf("marshal invoke param: %v", err)
+	}
+	return string(outer)
+}
+
+func mustInvokeJSONWithRawParam(t *testing.T, action string, param string) string {
+	t.Helper()
+	outer, err := json.Marshal(InvokeParam{Action: action, Param: param})
 	if err != nil {
 		t.Fatalf("marshal invoke param: %v", err)
 	}

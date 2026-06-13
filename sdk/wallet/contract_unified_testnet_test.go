@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sirupsen/logrus"
 )
@@ -108,6 +109,7 @@ func TestUnifiedEVMDeployInvoke_testnet(t *testing.T) {
 		ContractType: ContractTypeEVM,
 		EVM: &EVMContractInvokeRequest{
 			ContractAddress: deploy.ContractAddress,
+			JSONInvokeParam: mustInvokeJSON(t, "call", map[string]string{"calldataHex": ""}),
 			GasLimit:        30000,
 			CallNonce:       deployNonce + 1,
 		},
@@ -463,7 +465,7 @@ func TestUnifiedAgentPredictionDeployBet_testnet(t *testing.T) {
 		ContractType: ContractTypeAgent,
 		Agent: &AgentContractInvokeRequest{
 			ContractAddress: deploy.ContractAddress,
-			Bet:             &AgentPredictionBetParam{OutcomeID: "a"},
+			JSONInvokeParam: mustInvokeJSON(t, agentcontract.InvokeAPIBet, agentcontract.PredictionBetParam{OutcomeID: "a"}),
 			BetAssetName:    unifiedTemplateTestAsset,
 			BetAmount:       "1",
 			GasLimit:        100000,
