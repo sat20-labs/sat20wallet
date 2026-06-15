@@ -75,7 +75,7 @@ declare interface WalletManager {
   sendAssets_SatsNet(
     destAddr: string,
     assetName: string,
-    amount: number
+    amount: string | number
   ): Promise<SatsnetResponse<{ txId: string }>>
 
   getChannelAddrByPeerPubkey(peerPubkey: string): Promise<SatsnetResponse<{ channelAddr: string, peerAddr }>>
@@ -176,7 +176,7 @@ declare interface WalletManager {
   sendAssets_SatsNet(
     destAddr: string,
     assetName: string,
-    amt: number
+    amt: string | number
   ): Promise<SatsnetResponse<string>>
 
   // Build a batch sell order
@@ -260,25 +260,25 @@ declare interface WalletManager {
 
   getUtxosWithAsset(
     address: string,
-    amt: number,
+    amt: string | number,
     assetName: string
   ): Promise<SatsnetResponse<any>>
 
   getUtxosWithAsset_SatsNet(
     address: string,
-    amt: number,
+    amt: string | number,
     assetName: string
   ): Promise<SatsnetResponse<any>>
 
   getUtxosWithAssetV2(
     address: string,
-    amt: number,
+    amt: string | number,
     assetName: string
   ): Promise<SatsnetResponse<any>>
 
   getUtxosWithAssetV2_SatsNet(
     address: string,
-    amt: number,
+    amt: string | number,
     assetName: string
   ): Promise<SatsnetResponse<any>>
 
@@ -328,14 +328,14 @@ declare interface WalletManager {
     action: string
   ): Promise<SatsnetResponse<{ parameter: any }>>
 
-  stakeToBeMiner(bCoreNode: boolean, btcFeeRate: string): Promise<SatsnetResponse<{
+  stakeToBeMiner(bCoreNode: boolean, btcFeeRate: string | number): Promise<SatsnetResponse<{
     txId: string,
     resvId: string,
     assetName: string,
     amt: string
   }>>
 
-  minerUnstake(btcFeeRate: string): Promise<SatsnetResponse<{
+  minerUnstake(btcFeeRate: string | number): Promise<SatsnetResponse<{
     txId: string,
     resvId: string
   }>>
@@ -347,6 +347,7 @@ declare interface WalletManager {
     limit: string,
     selfMint: boolean,
     destAddr: string,
+    divisibility: string | number,
     feeRate: string
   ): Promise<SatsnetResponse<{
     txId: string,
@@ -357,14 +358,14 @@ declare interface WalletManager {
   deployTickerOrdx(ticker: string, max: string, limit: string, bindingSat: number, feeRate: string): Promise<SatsnetResponse<any>>
   mintAssetOrdx(ticker: string, amount: string, feeRate: string): Promise<SatsnetResponse<any>>
   mintAssetRunes(ticker: string, feeRate: string): Promise<SatsnetResponse<any>>
-  deployTickerBrc20(ticker: string, max: string, limit: string, feeRate: string): Promise<SatsnetResponse<any>>
+  deployTickerBrc20(ticker: string, max: string, limit: string, decimal: string | number, feeRate: string): Promise<SatsnetResponse<any>>
   mintAssetBrc20(ticker: string, amount: string, feeRate: string): Promise<SatsnetResponse<any>>
   inscribeName(name: string, feeRate: string): Promise<SatsnetResponse<any>>
 }
 interface SatsnetStp {
   closeChannel(
     chanPoint: string,
-    feeRate: number,
+    feeRate: string | number,
     force: boolean
   ): SatsnetResponse
   createWallet(password: string): SatsnetResponse
@@ -381,13 +382,13 @@ interface SatsnetStp {
   lockToChannel(
     chanPoint: string,
     assetName: string,
-    amt: number,
+    amt: string | number,
     utxos: string[],
     feeUtxoList?: any[]
   ): SatsnetResponse
   openChannel(
-    feeRate: number,
-    amt: number,
+    feeRate: string | number,
+    amt: string | number,
     utxoList: string[],
     memo: string
   ): SatsnetResponse
@@ -396,16 +397,16 @@ interface SatsnetStp {
     assetName: string,
     utxos: string[],
     fees: string[],
-    feeRate: number,
-    amt: number
+    feeRate: string | number,
+    amt: string | number
   ): SatsnetResponse
   splicingOut(
     chanPoint: string,
     toAddress: string,
     assetName: string,
     fees: string[],
-    feeRate: number,
-    amt: number
+    feeRate: string | number,
+    amt: string | number
   ): SatsnetResponse
   release(): SatsnetResponse
   getWallet(): SatsnetResponse
@@ -414,7 +415,7 @@ interface SatsnetStp {
   changePassword(oldPassword: string, newPassword: string): Promise<SatsnetResponse<void>>
   // Switches to the account with the specified ID.
   switchAccount(id: number): Promise<SatsnetResponse<void>>
-  stakeToBeMiner(bCoreNode: boolean, btcFeeRate: string): Promise<SatsnetResponse<{
+  stakeToBeMiner(bCoreNode: boolean, btcFeeRate: string | number): Promise<SatsnetResponse<{
     txId: string,
     resvId: string
     assetName: string
@@ -430,18 +431,18 @@ interface SatsnetStp {
   sendUtxos_SatsNet(
     address: string,
     utxos: string[],
-    amt: number
+    amt: string | number
   ): SatsnetResponse
-  sendAssets(address: string, assetName: string, amt: number, feeRate: string): SatsnetResponse
+  sendAssets(address: string, assetName: string, amt: string | number, feeRate: string | number): SatsnetResponse
   sendAssets_SatsNet(
     address: string,
     assetName: string,
-    amt: number
+    amt: string | number
   ): SatsnetResponse
   unlockFromChannel(
     channelUtxo: string,
     assetName: string,
-    amt: number,
+    amt: string | number,
     feeUtxoList?: any[]
   ): SatsnetResponse
   unlockWallet(password: string): SatsnetResponse
@@ -452,7 +453,7 @@ interface SatsnetStp {
     amt: string,
     utxos: string[],
     fees: string[],
-    feeRate: number
+    feeRate: string | number
   ): SatsnetResponse<{ txId: string; value: number }>
 
   withdraw(
@@ -461,7 +462,7 @@ interface SatsnetStp {
     amt: string,
     utxos: string[],
     fees: string[],
-    feeRate: number
+    feeRate: string | number
   ): SatsnetResponse<{ txId: string; value: number }>
 
   getAllLockedUtxo(address: string): Promise<SatsnetResponse<any>>
@@ -474,10 +475,10 @@ interface SatsnetStp {
   // --- Added UTXO Getter Methods ---
   getUtxos(): Promise<SatsnetResponse<any>> // Replace 'any' with specific return type if known
   getUtxos_SatsNet(): Promise<SatsnetResponse<any>> // Replace 'any' with specific return type if known
-  getUtxosWithAsset(address: string, amt: number, assetName: string,): Promise<SatsnetResponse<any>> // Add params, replace 'any'
-  getUtxosWithAsset_SatsNet(address: string, amt: number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
-  getUtxosWithAssetV2(address: string, amt: number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
-  getUtxosWithAssetV2_SatsNet(address: string, amt: number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
+  getUtxosWithAsset(address: string, amt: string | number, assetName: string,): Promise<SatsnetResponse<any>> // Add params, replace 'any'
+  getUtxosWithAsset_SatsNet(address: string, amt: string | number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
+  getUtxosWithAssetV2(address: string, amt: string | number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
+  getUtxosWithAssetV2_SatsNet(address: string, amt: string | number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
   getCommitTxAssetInfo(
     channelId: string
   ): Promise<SatsnetResponse<any>>
@@ -495,7 +496,7 @@ interface SatsnetStp {
   batchSendAssets_SatsNet(destAddr: string,
     assetName: string, amt: string, n: number): Promise<SatsnetResponse<any>>;
   batchSendAssets(destAddr: string,
-    assetName: string, amt: string, n: number, feeRate: number): Promise<SatsnetResponse<any>>;
+    assetName: string, amt: string | number, n: number, feeRate: string | number): Promise<SatsnetResponse<any>>;
   batchSendAssetsV2_SatsNet(destAddr: string[],
     assetName: string, amtList: string[]): Promise<SatsnetResponse<{ txId: string }>>;
 
@@ -576,7 +577,7 @@ interface SatsnetStp {
   /** 注册为推荐人 */
   registerAsReferrer(
     name: string,
-    feeRate: number
+    feeRate: string | number
   ): Promise<SatsnetResponse<string>>;
 
   /** 为服务器绑定推荐人 */
@@ -590,7 +591,7 @@ interface SatsnetStp {
 
   deployTickerOrdx(ticker: string, max: string, limit: string, bindingSat: number, feeRate: string): Promise<SatsnetResponse<any>>;
   mintAssetOrdx(ticker: string, amount: string, feeRate: string): Promise<SatsnetResponse<any>>;
-  deployTickerBrc20(ticker: string, max: string, limit: string, feeRate: string): Promise<SatsnetResponse<any>>;
+  deployTickerBrc20(ticker: string, max: string, limit: string, decimal: string | number, feeRate: string): Promise<SatsnetResponse<any>>;
   mintAssetBrc20(ticker: string, amount: string, feeRate: string): Promise<SatsnetResponse<any>>;
   inscribeName(name: string, feeRate: string): Promise<SatsnetResponse<any>>;
 }

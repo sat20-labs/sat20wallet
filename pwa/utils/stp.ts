@@ -36,16 +36,25 @@ interface StpWasmModule {
   getCurrentChannel: (...args: any[]) => Promise<WasmResponse>;
   getChannel: (...args: any[]) => Promise<WasmResponse>;
   getChannelStatus: (...args: any[]) => Promise<WasmResponse>;
+  reservationStatus: (...args: any[]) => Promise<WasmResponse>;
+  allReservations: (...args: any[]) => Promise<WasmResponse>;
+  safetySnapshot: (...args: any[]) => Promise<WasmResponse>;
+  commitmentExport: (...args: any[]) => Promise<WasmResponse>;
+  punishStatus: (...args: any[]) => Promise<WasmResponse>;
+  punishBuild: (...args: any[]) => Promise<WasmResponse>;
+  punishBroadcast: (...args: any[]) => Promise<WasmResponse>;
+  forceClosePlan: (...args: any[]) => Promise<WasmResponse>;
+  sweepBuild: (...args: any[]) => Promise<WasmResponse>;
   splicingIn: (...args: any[]) => Promise<WasmResponse>;
   splicingOut: (...args: any[]) => Promise<WasmResponse>;
   lockToChannel: (...args: any[]) => Promise<WasmResponse>;
   lockToChannelWithExpand: (...args: any[]) => Promise<WasmResponse>;
   unlockFromChannel: (...args: any[]) => Promise<WasmResponse>;
   getCommitTxAssetInfo: (...args: any[]) => Promise<WasmResponse<any>>;
-  deployContract_Local: (templateName: string, content: string, feeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
-  deployContract_Remote: (templateName: string, content: string, feeRate: string, bol: boolean) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
-  stakeToBeMiner: (bCoreNode: boolean, btcFeeRate: string) => Promise<WasmResponse<{ txId: string; resvId: string; assetName: string; amt: string }>>;
-  minerUnstake: (btcFeeRate: string) => Promise<WasmResponse<{ txId: string }>>;
+  deployContract_Local: (templateName: string, content: string, feeRate: string | number) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
+  deployContract_Remote: (templateName: string, content: string, feeRate: string | number, bol: boolean) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
+  stakeToBeMiner: (bCoreNode: boolean, btcFeeRate: string | number) => Promise<WasmResponse<{ txId: string; resvId: string; assetName: string; amt: string }>>;
+  minerUnstake: (btcFeeRate: string | number) => Promise<WasmResponse<{ txId: string }>>;
   splitBatchSignedPsbt: (signedHex: string, network: string) => Promise<WasmResponse<{ psbts: string[] }>>;
   addInputsToPsbt: (psbtHex: string, utxos: string[]) => Promise<WasmResponse<{ psbt: string }>>;
   addOutputsToPsbt: (psbtHex: string, utxos: string[]) => Promise<WasmResponse<{ psbt: string }>>;
@@ -148,7 +157,7 @@ class SatsnetStp {
 
   async closeChannel(
     chanPoint: string,
-    feeRate: number,
+    feeRate: string | number,
     force: boolean
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
@@ -172,8 +181,8 @@ class SatsnetStp {
   }
 
   async openChannel(
-    feeRate: number,
-    amt: number,
+    feeRate: string | number,
+    amt: string | number,
     utxoList: string[],
     memo: string
   ): Promise<[Error | undefined, any | undefined]> {
@@ -201,7 +210,7 @@ class SatsnetStp {
     return this._handleRequest<string>(
       'runesAmtV2ToV3',
       asset,
-      assetAmt
+      String(assetAmt)
     )
   }
 
@@ -237,14 +246,71 @@ class SatsnetStp {
     )
   }
 
+  async reservationStatus(
+    id: string | number
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('reservationStatus', String(id))
+  }
+
+  async allReservations(): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('allReservations')
+  }
+
+  async safetySnapshot(
+    channelId: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('safetySnapshot', channelId)
+  }
+
+  async commitmentExport(
+    channelId: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('commitmentExport', channelId)
+  }
+
+  async punishStatus(
+    channelId: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('punishStatus', channelId)
+  }
+
+  async punishBuild(
+    channelId: string,
+    commitTxId: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('punishBuild', channelId, commitTxId)
+  }
+
+  async punishBroadcast(
+    channelId: string,
+    commitTxId: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('punishBroadcast', channelId, commitTxId)
+  }
+
+  async forceClosePlan(
+    channelId: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('forceClosePlan', channelId)
+  }
+
+  async sweepBuild(
+    channelId: string,
+    commitTxId?: string,
+    height?: string | number,
+    broadcast?: boolean
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('sweepBuild', channelId, commitTxId || '', height || '', Boolean(broadcast))
+  }
+
 
   async splicingIn(
     chanPoint: string,
     assetName: string,
     utxos: string[],
     fees: string[],
-    feeRate: number,
-    amt: number
+    feeRate: string | number,
+    amt: string | number
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'splicingIn',
@@ -262,8 +328,8 @@ class SatsnetStp {
     toAddress: string,
     assetName: string,
     fees: string[],
-    feeRate: number,
-    amt: number
+    feeRate: string | number,
+    amt: string | number
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'splicingOut',
@@ -279,7 +345,7 @@ class SatsnetStp {
   async lockToChannel(
     chanPoint: string,
     assetName: string,
-    amt: number,
+    amt: string | number,
     utxos: string[],
     feeUtxoList?: any[]
   ): Promise<[Error | undefined, any | undefined]> {
@@ -311,7 +377,7 @@ class SatsnetStp {
   async unlockFromChannel(
     channelUtxo: string,
     assetName: string,
-    amt: number,
+    amt: string | number,
     feeUtxoList?: any[]
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
@@ -333,40 +399,40 @@ class SatsnetStp {
   async deployContract_Local(
     templateName: string,
     content: string,
-    feeRate: string
+    feeRate: string | number
   ): Promise<[
     Error | undefined,
     { txId: string; resvId: string } | undefined
   ]> {
-    return this._handleRequest<{ txId: string; resvId: string }>('deployContract_Local', templateName, content, feeRate)
+    return this._handleRequest<{ txId: string; resvId: string }>('deployContract_Local', templateName, content, String(feeRate))
   }
 
   /** 远程部署合约 */
   async deployContract_Remote(
     templateName: string,
     content: string,
-    feeRate: string,
+    feeRate: string | number,
     bol: boolean
   ): Promise<[
     Error | undefined,
     { txId: string; resvId: string } | undefined
   ]> {
-    return this._handleRequest<{ txId: string; resvId: string }>('deployContract_Remote', templateName, content, feeRate, bol)
+    return this._handleRequest<{ txId: string; resvId: string }>('deployContract_Remote', templateName, content, String(feeRate), bol)
   }
 
   /** 质押成为矿工/核心节点 */
   async stakeToBeMiner(
     bCoreNode: boolean,
-    btcFeeRate: string
+    btcFeeRate: string | number
   ): Promise<[Error | undefined, { txId: string; resvId: string; assetName: string; amt: string } | undefined]> {
-    return this._handleRequest<{ txId: string; resvId: string; assetName: string; amt: string }>('stakeToBeMiner', bCoreNode, btcFeeRate)
+    return this._handleRequest<{ txId: string; resvId: string; assetName: string; amt: string }>('stakeToBeMiner', bCoreNode, String(btcFeeRate))
   }
 
   /** 取消质押 */
   async minerUnstake(
-    btcFeeRate: string
+    btcFeeRate: string | number
   ): Promise<[Error | undefined, { txId: string } | undefined]> {
-    return this._handleRequest<{ txId: string }>('minerUnstake', btcFeeRate)
+    return this._handleRequest<{ txId: string }>('minerUnstake', String(btcFeeRate))
   }
 
   async splitBatchSignedPsbt(

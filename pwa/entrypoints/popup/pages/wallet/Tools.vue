@@ -470,6 +470,10 @@
                   <Input v-model="deployLimit" type="number" />
                 </div>
               </div>
+              <div v-if="deployProtocol === 'brc20' || deployProtocol === 'runes'" class="space-y-1">
+                <Label>{{ deployProtocol === 'brc20' ? '小数位 decimal' : '小数位 divisibility' }}</Label>
+                <Input v-model="deployDecimals" type="number" min="0" :max="deployProtocol === 'brc20' ? 18 : 38" />
+              </div>
               <label class="flex items-center gap-2 text-sm text-muted-foreground">
                 <Checkbox v-model:checked="deploySelfMint" />
                 只能部署者铸造
@@ -581,7 +585,7 @@ import sat20 from '@/utils/sat20'
 import { useWalletStore } from '@/store'
 
 const SMART_CONTRACT_DOC_URL = 'https://docs.sat20.org/circulation/contract/'
-const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qtysvxt6ftg6ph8dln9e9gx8tu35ahaekckupyqqa2dz63gdmcvrsl6yvdn'
+const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qnuunrp2chq3lm7khvqdjh8krmnts0srqz505cjq04smxxy3xtxmq5nw7ct'
 
 const { toast } = useToast()
 const walletStore = useWalletStore()
@@ -688,6 +692,7 @@ const deployProtocol = ref<'ordx' | 'runes' | 'brc20'>('ordx')
 const deployTicker = ref('')
 const deployMaxSupply = ref('21000000')
 const deployLimit = ref('1000')
+const deployDecimals = ref('0')
 const deploySelfMint = ref(false)
 const bindingSatOptions = ['1', '10', '100', '1000', '10000', '100000']
 const bindingSat = ref('1')
@@ -731,6 +736,16 @@ const parsePositiveInteger = (value: string, field: string) => {
     throw new Error(`${field} 必须是正整数`)
   }
   return parsed
+}
+
+const parseDeployDecimals = () => {
+  const value = String(deployDecimals.value || '').trim()
+  const parsed = Number(value)
+  const max = deployProtocol.value === 'brc20' ? 18 : 38
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > max) {
+    throw new Error(`小数位必须是 0-${max} 之间的整数`)
+  }
+  return String(parsed)
 }
 
 const RUNES_SPACER = '•'
@@ -798,6 +813,7 @@ const isMintAssetReady = computed(() => mintCanMint.value && mintCheckKey.value 
 const isMintDidReady = computed(() => didCanMint.value && didCheckKey.value === currentDidCheckKey.value)
 watch(deployProtocol, (protocol) => {
   if (protocol === 'runes') deployTicker.value = normalizeTicker(deployTicker.value, protocol)
+  deployDecimals.value = protocol === 'brc20' ? '18' : '0'
 })
 watch(mintProtocol, (protocol) => {
   if (protocol === 'runes') mintTicker.value = normalizeTicker(mintTicker.value, protocol)
@@ -834,7 +850,7 @@ const sendFaucetSats = async () => {
   try {
     isFaucetSending.value = true
     faucetResult.value = ''
-    const amount = parsePositiveInteger(faucetAmount.value, '发送聪数量')
+    const amount = String(parsePositiveInteger(faucetAmount.value, '发送聪数量'))
     const [err, txid] = await sat20.sendAssets_SatsNet(faucetAddress.value.trim(), '::', amount, '')
     if (err) throw err
     faucetResult.value = txid || ''
@@ -1964,14 +1980,16 @@ const deployTickerAction = async () => {
       deployTickerResult.value = res?.txId || ''
     } else if (deployProtocol.value === 'brc20') {
       if (ticker.length !== 4) throw new Error('当前钱包暂不支持部署 BRC20 self mint ticker')
-      const [err, res] = await sat20.deployTickerBrc20(ticker, deployMaxSupply.value, deployLimit.value, mintFeeRate.value)
+      const decimal = parseDeployDecimals()
+      const [err, res] = await sat20.deployTickerBrc20(ticker, deployMaxSupply.value, deployLimit.value, decimal, mintFeeRate.value)
       if (err) throw err
       deployTickerResult.value = res?.txId || ''
     } else {
       const destAddress = walletStore.address || ''
       if (!destAddress) throw new Error('当前钱包地址不可用')
       const runesLimit = deploySelfMint.value ? deployMaxSupply.value : deployLimit.value
-      const [err, res] = await sat20.DeployRunes_Remote(ticker, 0, deployMaxSupply.value, runesLimit, deploySelfMint.value, destAddress, mintFeeRate.value)
+      const divisibility = parseDeployDecimals()
+      const [err, res] = await sat20.DeployRunes_Remote(ticker, 0, deployMaxSupply.value, runesLimit, deploySelfMint.value, destAddress, divisibility, mintFeeRate.value)
       if (err) throw err
       deployTickerResult.value = res?.txId || ''
     }

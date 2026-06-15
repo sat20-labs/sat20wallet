@@ -8,6 +8,14 @@
         </p>
       </div>
 
+      <div class="rounded-md border p-3 space-y-1">
+        <div class="flex items-center justify-between gap-3">
+          <p class="text-xs text-muted-foreground">Risk category</p>
+          <span class="rounded-sm border px-2 py-0.5 text-xs font-medium">{{ riskCategory.label }}</span>
+        </div>
+        <p class="text-sm text-muted-foreground">{{ riskCategory.description }}</p>
+      </div>
+
       <div class="rounded-md border p-4 space-y-3 bg-muted/50">
         <div>
           <p class="text-xs text-muted-foreground">Operation</p>
@@ -46,6 +54,32 @@ const errorMessage = ref<string | null>(null)
 
 const operation = computed(() => props.data.operation || '')
 const params = computed(() => props.data.params || {})
+
+const riskCategory = computed(() => {
+  const op = operation.value
+  if (['wallet.status', 'stp.status', 'wallet.transaction', 'stp.transaction', 'stp.safety_snapshot', 'stp.commitment_export', 'stp.punish_status', 'stp.force_close_plan'].includes(op)) {
+    return {
+      label: 'Read-only safety',
+      description: 'This operation reads wallet, transaction, channel, or safety evidence without moving assets.',
+    }
+  }
+  if (['wallet.export_mnemonic', 'wallet.change_password', 'wallet.import', 'wallet.create'].includes(op)) {
+    return {
+      label: 'Secret-moving',
+      description: 'This operation can create, reveal, import, or modify wallet secrets. Verify it carefully.',
+    }
+  }
+  if (['stp.punish_build', 'stp.punish_broadcast', 'stp.sweep_build'].includes(op)) {
+    return {
+      label: 'Protective safety',
+      description: 'This operation protects user assets during force-close or revoked-commitment recovery.',
+    }
+  }
+  return {
+    label: 'Value-moving',
+    description: 'This operation may move BTC, SatoshiNet assets, or STP channel state. Check the asset, amount, destination, and channel.',
+  }
+})
 
 const summaryRows = computed(() => {
   const keys = [

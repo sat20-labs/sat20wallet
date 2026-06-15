@@ -150,7 +150,7 @@ const asParamsObject = (action: string, params: unknown): Record<string, unknown
     case 'bindReferrerForServer':
       return { referrerName: params[0], serverPubKey: params[1] }
     case 'batchSendAssets_SatsNet':
-      return { assetName: params[0], amt: Number(params[1]), n: Number(params[2]) }
+      return { assetName: params[0], amt: String(params[1]), n: Number(params[2]) }
     case 'batchSendAssetsV2_SatsNet':
       return { destAddr: params[0], assetName: params[1], amtList: params[2] }
     case 'getDeployedContractStatus':
@@ -160,14 +160,14 @@ const asParamsObject = (action: string, params: unknown): Record<string, unknown
     case 'invokeContract_SatsNet':
       return { url: params[0], invoke: params[1], feeRate: params[2] }
     case 'invokeContractV2_SatsNet':
-      return { url: params[0], invoke: params[1], assetName: params[2], amt: params[3], feeRate: params[4], metadata: params[5] ?? {} }
+      return { url: params[0], invoke: params[1], assetName: params[2], amt: String(params[3]), feeRate: String(params[4]), metadata: params[5] ?? {} }
     case 'invokeContractV2':
       return {
         url: params[0],
         invoke: params[1],
         assetName: params[2],
-        amt: params[3],
-        feeRate: params[4],
+        amt: String(params[3]),
+        feeRate: String(params[4]),
         metadata: params[5] ?? {},
       }
     default:

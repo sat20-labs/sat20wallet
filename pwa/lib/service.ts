@@ -199,22 +199,22 @@ class Service {
     return sat20Wallet.getUtxos_SatsNet()
   }
 
-  async getUtxosWithAsset(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
+  async getUtxosWithAsset(address: string, amt: string | number, assetName: string): Promise<[Error | undefined, any | undefined]> {
 
     return sat20Wallet.getUtxosWithAsset(address, amt, assetName)
   }
 
-  async getUtxosWithAsset_SatsNet(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
+  async getUtxosWithAsset_SatsNet(address: string, amt: string | number, assetName: string): Promise<[Error | undefined, any | undefined]> {
 
     return sat20Wallet.getUtxosWithAsset_SatsNet(address, amt, assetName)
   }
 
-  async getUtxosWithAssetV2(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
+  async getUtxosWithAssetV2(address: string, amt: string | number, assetName: string): Promise<[Error | undefined, any | undefined]> {
 
     return sat20Wallet.getUtxosWithAssetV2(address, amt, assetName)
   }
 
-  async getUtxosWithAssetV2_SatsNet(address: string, amt: number, assetName: string): Promise<[Error | undefined, any | undefined]> {
+  async getUtxosWithAssetV2_SatsNet(address: string, amt: string | number, assetName: string): Promise<[Error | undefined, any | undefined]> {
 
     return sat20Wallet.getUtxosWithAssetV2_SatsNet(address, amt, assetName)
   }

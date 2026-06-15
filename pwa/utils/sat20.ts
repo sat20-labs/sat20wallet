@@ -170,8 +170,8 @@ class WalletManager {
   async sendAssets(
     address: string,
     assetName: string,
-    amt: number,
-    feeRate: number
+    amt: string | number,
+    feeRate: string | number
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('sendAssets', address, assetName, String(amt), String(feeRate))
   }
@@ -384,34 +384,34 @@ class WalletManager {
 
   async getUtxosWithAsset(
     address: string,
-    amt: number,
+    amt: string | number,
     assetName: string
   ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('getUtxosWithAsset', address, amt, assetName)
+    return this._handleRequest('getUtxosWithAsset', address, String(amt), assetName)
   }
 
   async getUtxosWithAsset_SatsNet(
     address: string,
-    amt: number,
+    amt: string | number,
     assetName: string
   ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('getUtxosWithAsset_SatsNet', address, amt, assetName)
+    return this._handleRequest('getUtxosWithAsset_SatsNet', address, String(amt), assetName)
   }
 
   async getUtxosWithAssetV2(
     address: string,
-    amt: number,
+    amt: string | number,
     assetName: string
   ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('getUtxosWithAssetV2', address, amt, assetName)
+    return this._handleRequest('getUtxosWithAssetV2', address, String(amt), assetName)
   }
 
   async getUtxosWithAssetV2_SatsNet(
     address: string,
-    amt: number,
+    amt: string | number,
     assetName: string
   ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('getUtxosWithAssetV2_SatsNet', address, amt, assetName)
+    return this._handleRequest('getUtxosWithAssetV2_SatsNet', address, String(amt), assetName)
   }
 
   // --- Asset Amount Methods ---
@@ -528,27 +528,27 @@ class WalletManager {
     invoke: string,
     feeRate: string
   ): Promise<[Error | undefined, { txId: string } | undefined]> {
-    return this._handleRequest('invokeContract_SatsNet', url, invoke, feeRate)
+    return this._handleRequest('invokeContract_SatsNet', url, invoke, String(feeRate))
   }
 
   async invokeContractV2_SatsNet(
     url: string,
     invoke: string,
     assetName: string,
-    amt: string,
-    feeRate: string
+    amt: string | number,
+    feeRate: string | number
   ): Promise<[Error | undefined, { txId: string } | undefined]> {
-    return this._handleRequest('invokeContractV2_SatsNet', url, invoke, assetName, amt, feeRate)
+    return this._handleRequest('invokeContractV2_SatsNet', url, invoke, assetName, String(amt), String(feeRate))
   }
 
   async invokeContractV2(
     url: string,
     invoke: string,
     assetName: string,
-    amt: string,
-    feeRate: string
+    amt: string | number,
+    feeRate: string | number
   ): Promise<[Error | undefined, { txId: string } | undefined]> {
-    return this._handleRequest('invokeContractV2', url, invoke, assetName, amt, feeRate)
+    return this._handleRequest('invokeContractV2', url, invoke, assetName, String(amt), String(feeRate))
   }
 
   async getContractInvokeHistoryInServer(url: string, start: number, limit: number): Promise<[Error | undefined, any | undefined]> {
@@ -576,9 +576,9 @@ class WalletManager {
 
   async registerAsReferrer(
     name: string,
-    feeRate: number
+    feeRate: string | number
   ): Promise<[Error | undefined, { txId: string } | undefined]> {
-    return this._handleRequest('registerAsReferrer', name, feeRate.toString())
+    return this._handleRequest('registerAsReferrer', name, String(feeRate))
   }
 
   async bindReferrerForServer(
@@ -591,16 +591,16 @@ class WalletManager {
   async deposit(
     destAddr: string,
     assetName: string,
-    amt: string,
+    amt: string | number,
     utxos: string[],
     fees: string[],
-    feeRate: number
+    feeRate: string | number
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'deposit',
       destAddr,
       assetName,
-      amt,
+      String(amt),
       utxos,
       fees,
       String(feeRate)
@@ -610,16 +610,16 @@ class WalletManager {
   async withdraw(
     destAddr: string,
     assetName: string,
-    amt: string,
+    amt: string | number,
     utxos: string[],
     fees: string[],
-    feeRate: number
+    feeRate: string | number
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'withdraw',
       destAddr,
       assetName,
-      amt,
+      String(amt),
       utxos,
       fees,
       String(feeRate)
@@ -655,23 +655,23 @@ class WalletManager {
   async batchSendAssets_SatsNet(
     destAddr: string,
     assetName: string,
-    amt: string,
+    amt: string | number,
     n: number
   ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('batchSendAssets_SatsNet', destAddr, assetName, amt, n)
+    return this._handleRequest('batchSendAssets_SatsNet', destAddr, assetName, String(amt), n)
   }
 
   async batchSendAssets(
     destAddr: string,
     assetName: string,
-    amt: string,
+    amt: string | number,
     n: number,
-    feeRate: number
+    feeRate: string | number
   ): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('batchSendAssets', destAddr, assetName, amt, n, feeRate.toString())
+    return this._handleRequest('batchSendAssets', destAddr, assetName, String(amt), n, String(feeRate))
   }
 
-  async stakeToBeMiner(bCoreNode: boolean, btcFeeRate: string): Promise<
+  async stakeToBeMiner(bCoreNode: boolean, btcFeeRate: string | number): Promise<
     [Error | undefined, {
       txId: string,
       resvId: string,
@@ -679,16 +679,16 @@ class WalletManager {
       amt: string
     } | undefined]
   > {
-    return this._handleRequest('stakeToBeMiner', bCoreNode, btcFeeRate)
+    return this._handleRequest('stakeToBeMiner', bCoreNode, String(btcFeeRate))
   }
 
-  async minerUnstake(btcFeeRate: string): Promise<
+  async minerUnstake(btcFeeRate: string | number): Promise<
     [Error | undefined, {
       txId: string,
       resvId: string,
     } | undefined]
   > {
-    return this._handleRequest('minerUnstake', btcFeeRate)
+    return this._handleRequest('minerUnstake', String(btcFeeRate))
   }
 
   async DeployRunes_Remote(
@@ -698,6 +698,7 @@ class WalletManager {
     limit: string,
     selfMint: boolean,
     destAddr: string,
+    divisibility: string | number,
     feeRate: string
   ): Promise<
     [Error | undefined, {
@@ -714,6 +715,7 @@ class WalletManager {
       String(limit),
       selfMint,
       destAddr,
+      String(divisibility),
       String(feeRate)
     )
   }
@@ -747,9 +749,10 @@ class WalletManager {
     ticker: string,
     max: string,
     limit: string,
+    decimal: string | number,
     feeRate: string
   ): Promise<[Error | undefined, { txId: string; commitTxId: string; revealTxId: string; resvId: string } | undefined]> {
-    return this._handleRequest('deployTickerBrc20', ticker, String(max), String(limit), String(feeRate))
+    return this._handleRequest('deployTickerBrc20', ticker, String(max), String(limit), String(decimal), String(feeRate))
   }
 
   async mintAssetBrc20(
