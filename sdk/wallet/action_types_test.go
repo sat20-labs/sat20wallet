@@ -98,12 +98,13 @@ func TestSTPActionReservationGobShapeStaysBackwardCompatible(t *testing.T) {
 
 func TestRemoteDeployRunesParamRoundTrip(t *testing.T) {
 	in := &RemoteDeployRunesParam{
-		AssetName: "runes:f:TEST",
-		Symbol:    42,
-		MaxSupply: 21000000,
-		Limit:     1000,
-		SelfMint:  false,
-		DestAddr:  "tb1ptest",
+		AssetName:    "runes:f:TEST",
+		Symbol:       42,
+		MaxSupply:    21000000,
+		Limit:        1000,
+		SelfMint:     false,
+		DestAddr:     "tb1ptest",
+		Divisibility: 8,
 	}
 	script, err := EncodeRemoteDeployRunesParam(in)
 	if err != nil {

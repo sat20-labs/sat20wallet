@@ -10,8 +10,8 @@ import (
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
 )
 
-const CONTENT_DEPLOY_BRC20_BODY_4 string = `{"p":"brc-20","op":"deploy","tick":"%s","max":"%d","lim":"%d","dec":"0"}`
-const CONTENT_DEPLOY_BRC20_BODY_5 string = `{"p":"brc-20","op":"deploy","tick":"%s","max":"%d","lim":"%d","self_mint":"true","dec":"0"}`
+const CONTENT_DEPLOY_BRC20_BODY_4 string = `{"p":"brc-20","op":"deploy","tick":"%s","max":"%d","lim":"%d","dec":"%d"}`
+const CONTENT_DEPLOY_BRC20_BODY_5 string = `{"p":"brc-20","op":"deploy","tick":"%s","max":"%d","lim":"%d","self_mint":"true","dec":"%d"}`
 const CONTENT_MINT_BRC20_BODY string = `{"p":"brc-20","op":"mint","tick":"%s","amt":"%s"}`
 const CONTENT_MINT_BRC20_TRANSFER_BODY string = `{"p":"brc-20","op":"transfer","tick":"%s","amt":"%s"}`
 
@@ -105,17 +105,20 @@ func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string,
 	return inscribe, err
 }
 
-func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, feeRate int64) (*InscribeResv, error) {
+func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, decimal int64, feeRate int64) (*InscribeResv, error) {
 	if max%lim != 0 {
 		return nil, fmt.Errorf("invalid max %d", max)
+	}
+	if decimal < 0 || decimal > 18 {
+		return nil, fmt.Errorf("invalid decimal %d", decimal)
 	}
 
 	var body string
 	switch len(ticker) {
 	case 4:
-		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_4, ticker, max, lim)
+		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_4, ticker, max, lim, decimal)
 	case 5:
-		//body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_5, ticker, max, lim)
+		//body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_5, ticker, max, lim, decimal)
 		// TODO 因为 MintAsset_brc20 不支持铸造5字符，暂时不要支持
 		return nil, fmt.Errorf("not support 5-bytes ticker")
 	default:
@@ -382,7 +385,7 @@ func CalcFeeForMintTransfer(inputLen int, srcAddr, destAddr string, scriptType i
 }
 
 func CalcFeeForDeployTicker_brc20(inputLen int, srcAddr, destAddr string,
-	ticker string, max, lim int64, feeRate int64) (int64, error) {
+	ticker string, max, lim int64, decimal int64, feeRate int64) (int64, error) {
 
 	srcPkScript, err := AddrToPkScript(srcAddr, GetChainParam())
 	if err != nil {
@@ -403,9 +406,9 @@ func CalcFeeForDeployTicker_brc20(inputLen int, srcAddr, destAddr string,
 	var body string
 	switch len(ticker) {
 	case 4:
-		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_4, ticker, max, lim)
+		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_4, ticker, max, lim, decimal)
 	case 5:
-		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_5, ticker, max, lim)
+		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_5, ticker, max, lim, decimal)
 	default:
 		return 0, fmt.Errorf("invalid ticker length %s", ticker)
 	}

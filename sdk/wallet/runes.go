@@ -83,13 +83,16 @@ func DecipherRunePayload(pkScript []byte) ([]runestone.Edict, error) {
 }
 
 func GenEtching(displayName string, symbol int32, maxSupply int64) (*runestone.Etching, error) {
-	return GenEtchingWithTerms(displayName, symbol, maxSupply, 0, true)
+	return GenEtchingWithTerms(displayName, symbol, maxSupply, 0, true, 0)
 }
 
 // 定制的铸造
-func GenEtchingWithTerms(displayName string, symbol int32, maxSupply, limit int64, selfMint bool) (*runestone.Etching, error) {
+func GenEtchingWithTerms(displayName string, symbol int32, maxSupply, limit int64, selfMint bool, divisibility int64) (*runestone.Etching, error) {
 	if maxSupply <= 0 {
 		return nil, fmt.Errorf("invalid max supply %d", maxSupply)
+	}
+	if divisibility < 0 || divisibility > int64(runestone.MaxDivisibility) {
+		return nil, fmt.Errorf("invalid divisibility %d", divisibility)
 	}
 	if !selfMint {
 		if limit <= 0 {
@@ -120,8 +123,9 @@ func GenEtchingWithTerms(displayName string, symbol int32, maxSupply, limit int6
 		}
 	}
 
+	d := uint8(divisibility)
 	return &runestone.Etching{
-		Divisibility: nil,
+		Divisibility: &d,
 		Premine:      premine,
 		Rune:         &spacerRune.Rune,
 		Spacers:      &spacerRune.Spacers,
@@ -283,11 +287,11 @@ func (p *Manager) BroadcastRunesDeployReveal(resv *InscribeResv) (string, error)
 
 func (p *Manager) DeployTicker_runes(destAddr string, ticker string, symbol int32,
 	max, feeRate int64) (*InscribeResv, error) {
-	return p.DeployTicker_runesWithTerms(destAddr, ticker, symbol, max, 0, true, feeRate)
+	return p.DeployTicker_runesWithTerms(destAddr, ticker, symbol, max, 0, true, 0, feeRate)
 }
 
 func (p *Manager) DeployTicker_runesWithTerms(destAddr string, ticker string, symbol int32,
-	max, limit int64, selfMint bool, feeRate int64) (*InscribeResv, error) {
+	max, limit int64, selfMint bool, divisibility int64, feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
 	address := wallet.GetAddress()
@@ -295,7 +299,7 @@ func (p *Manager) DeployTicker_runesWithTerms(destAddr string, ticker string, sy
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
 	}
-	etching, err := GenEtchingWithTerms(ticker, symbol, max, limit, selfMint)
+	etching, err := GenEtchingWithTerms(ticker, symbol, max, limit, selfMint, divisibility)
 	if err != nil {
 		return nil, err
 	}
@@ -336,11 +340,11 @@ func (p *Manager) DeployTicker_runesWithTerms(destAddr string, ticker string, sy
 
 func (p *Manager) PrepareDeployTicker_runes(destAddr string, ticker string, symbol int32,
 	max, feeRate int64) (*InscribeResv, error) {
-	return p.PrepareDeployTicker_runesWithTerms(destAddr, ticker, symbol, max, 0, true, feeRate)
+	return p.PrepareDeployTicker_runesWithTerms(destAddr, ticker, symbol, max, 0, true, 0, feeRate)
 }
 
 func (p *Manager) PrepareDeployTicker_runesWithTerms(destAddr string, ticker string, symbol int32,
-	max, limit int64, selfMint bool, feeRate int64) (*InscribeResv, error) {
+	max, limit int64, selfMint bool, divisibility int64, feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
 	address := wallet.GetAddress()
@@ -348,7 +352,7 @@ func (p *Manager) PrepareDeployTicker_runesWithTerms(destAddr string, ticker str
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
 	}
-	etching, err := GenEtchingWithTerms(ticker, symbol, max, limit, selfMint)
+	etching, err := GenEtchingWithTerms(ticker, symbol, max, limit, selfMint, divisibility)
 	if err != nil {
 		return nil, err
 	}

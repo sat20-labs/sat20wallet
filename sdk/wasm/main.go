@@ -3203,7 +3203,21 @@ func deployRunesRemote(this js.Value, p []js.Value) any {
 	}
 	destAddr := pn.String()
 
-	pn = p[6]
+	divisibility := int64(0)
+	feeRateIndex := 6
+	if len(p) >= 8 {
+		pn = p[6]
+		if pn.Type() != js.TypeString {
+			return createJsRet(nil, -1, "divisibility parameter should be a string")
+		}
+		divisibility, err = strconv.ParseInt(pn.String(), 10, 64)
+		if err != nil {
+			return createJsRet(nil, -1, err.Error())
+		}
+		feeRateIndex = 7
+	}
+
+	pn = p[feeRateIndex]
 	if pn.Type() != js.TypeString {
 		return createJsRet(nil, -1, "feeRate parameter should be a string")
 	}
@@ -3220,6 +3234,7 @@ func deployRunesRemote(this js.Value, p []js.Value) any {
 			limit,
 			selfMint,
 			destAddr,
+			divisibility,
 			feeRate,
 		)
 		if err != nil {
@@ -3657,13 +3672,25 @@ func deployTickerBrc20(this js.Value, p []js.Value) any {
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	feeRate, err := strconv.ParseInt(p[3].String(), 10, 64)
+	decimal := int64(0)
+	feeRateIndex := 3
+	if len(p) >= 5 {
+		if p[4].Type() != js.TypeString {
+			return createJsRet(nil, -1, "decimal and feeRate should be strings")
+		}
+		decimal, err = strconv.ParseInt(p[3].String(), 10, 64)
+		if err != nil {
+			return createJsRet(nil, -1, err.Error())
+		}
+		feeRateIndex = 4
+	}
+	feeRate, err := strconv.ParseInt(p[feeRateIndex].String(), 10, 64)
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		resv, err := _mgr.DeployTicker_brc20(ticker, maxSupply, limit, feeRate)
+		resv, err := _mgr.DeployTicker_brc20(ticker, maxSupply, limit, decimal, feeRate)
 		if err != nil {
 			return nil, -1, err.Error()
 		}

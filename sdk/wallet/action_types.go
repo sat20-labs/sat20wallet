@@ -89,12 +89,13 @@ const (
 const REMOTE_DEPLOY_RUNES_SERVICE_FEE int64 = 2000
 
 type RemoteDeployRunesParam struct {
-	AssetName string `json:"assetName"`
-	Symbol    int32  `json:"symbol"`
-	MaxSupply int64  `json:"maxSupply"`
-	Limit     int64  `json:"limit"`
-	SelfMint  bool   `json:"selfmint"`
-	DestAddr  string `json:"destAddr,omitempty"`
+	AssetName    string `json:"assetName"`
+	Symbol       int32  `json:"symbol"`
+	MaxSupply    int64  `json:"maxSupply"`
+	Limit        int64  `json:"limit"`
+	SelfMint     bool   `json:"selfmint"`
+	DestAddr     string `json:"destAddr,omitempty"`
+	Divisibility int64  `json:"divisibility"`
 }
 
 type RemoteDeployRunesResult struct {
@@ -175,6 +176,7 @@ func EncodeRemoteDeployRunesParam(param *RemoteDeployRunesParam) ([]byte, error)
 		AddInt64(param.Limit).
 		AddInt64(selfMint).
 		AddData([]byte(param.DestAddr)).
+		AddInt64(param.Divisibility).
 		Script()
 }
 
@@ -209,17 +211,25 @@ func DecodeRemoteDeployRunesParam(script []byte) (*RemoteDeployRunesParam, error
 		}
 	}
 	destAddr := string(tokenizer.Data())
+	divisibility := int64(0)
+	if !tokenizer.Done() {
+		if !tokenizer.Next() || tokenizer.Err() != nil {
+			return nil, fmt.Errorf("parameter is missing divisibility")
+		}
+		divisibility = tokenizer.ExtractInt64()
+	}
 	if !tokenizer.Done() {
 		return nil, fmt.Errorf("too many parameters")
 	}
 
 	return &RemoteDeployRunesParam{
-		AssetName: assetName,
-		Symbol:    symbol,
-		MaxSupply: maxSupply,
-		Limit:     limit,
-		SelfMint:  selfMint,
-		DestAddr:  destAddr,
+		AssetName:    assetName,
+		Symbol:       symbol,
+		MaxSupply:    maxSupply,
+		Limit:        limit,
+		SelfMint:     selfMint,
+		DestAddr:     destAddr,
+		Divisibility: divisibility,
 	}, nil
 }
 

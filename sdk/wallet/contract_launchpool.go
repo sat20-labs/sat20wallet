@@ -862,7 +862,7 @@ func deployTicker(stp ContractManager, resv ContractDeployResvIF, _ any) (any, e
 
 			case indexer.PROTOCOL_NAME_BRC20:
 				inscribeResv, err = stp.GetWalletMgr().DeployTicker_brc20(contract.DisplayName,
-					contract.MaxSupply, contract.MaxSupply, resv.GetFeeRate())
+					contract.MaxSupply, contract.MaxSupply, 0, resv.GetFeeRate())
 				if err != nil {
 					Log.Errorf("DeployTicker_brc20 %s faied, %v", contract.AssetName, err)
 					return nil, err
@@ -1819,7 +1819,7 @@ func (p *LaunchPoolContractRunTime) setToRefundAll() {
 		p.TotalInputSats += item.InValue
 		p.TotalInvalid += item.InValue
 		p.SatsValueInPool += item.InValue
-		item.OutAmt = nil // 设置为铸造失败
+		item.OutAmt = nil            // 设置为铸造失败
 		item.OutValue = item.InValue // 设置退款
 		p.addItem(item)
 		SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)

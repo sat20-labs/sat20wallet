@@ -25,25 +25,24 @@ func TestInscribe(t *testing.T) {
 
 	commitTxPrevOutputList := make([]*PrevOutput, 0)
 	commitTxPrevOutputList = append(commitTxPrevOutputList, &TxOutput{
-		OutPointStr:       "453aa6dd39f31f06cd50b72a8683b8c0402ab36f889d96696317503a025a21b5:0",
+		OutPointStr: "453aa6dd39f31f06cd50b72a8683b8c0402ab36f889d96696317503a025a21b5:0",
 		OutValue: wire.TxOut{
-			Value:     546,
-			PkScript:   pkScript,
-		},
-		
-	})
-	commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-		OutPointStr:       "22c8a4869f2aa9ee5994959c0978106130290cda53f6e933a8dda2dcb82508d4:0",
-		OutValue: wire.TxOut{
-			Value:     546,
-			PkScript:   pkScript,
+			Value:    546,
+			PkScript: pkScript,
 		},
 	})
 	commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-		OutPointStr:       "aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:4",
+		OutPointStr: "22c8a4869f2aa9ee5994959c0978106130290cda53f6e933a8dda2dcb82508d4:0",
 		OutValue: wire.TxOut{
-			Value:     546,
-			PkScript:   pkScript,
+			Value:    546,
+			PkScript: pkScript,
+		},
+	})
+	commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
+		OutPointStr: "aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:4",
+		OutValue: wire.TxOut{
+			Value:    546,
+			PkScript: pkScript,
 		},
 	})
 
@@ -51,22 +50,22 @@ func TestInscribe(t *testing.T) {
 	// inscriptionDataList = append(inscriptionDataList, InscriptionData{
 	// 	ContentType: "text/plain;charset=utf-8",
 	// 	Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"100"}`),
-		
+
 	// })
 	// inscriptionDataList = append(inscriptionDataList, InscriptionData{
 	// 	ContentType: "text/plain;charset=utf-8",
 	// 	Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"10"}`),
-		
+
 	// })
 	// inscriptionDataList = append(inscriptionDataList, InscriptionData{
 	// 	ContentType: "text/plain;charset=utf-8",
 	// 	Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"10000"}`),
-		
+
 	// })
 	// inscriptionDataList = append(inscriptionDataList, InscriptionData{
 	// 	ContentType: "text/plain;charset=utf-8",
 	// 	Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"1"}`),
-		
+
 	// })
 
 	request := &InscriptionRequest{
@@ -74,13 +73,13 @@ func TestInscribe(t *testing.T) {
 		CommitFeeRate:          2,
 		RevealFeeRate:          2,
 		RevealOutValue:         330,
-		InscriptionData:        InscriptionData{
+		InscriptionData: InscriptionData{
 			ContentType: "text/plain;charset=utf-8",
 			Body:        []byte(`{"p":"brc-20","op":"mint","tick":"xcvb","amt":"10000"}`),
 		},
-		DestAddress:            address,
-		ChangeAddress:          address,
-		Signer:                 wallet.SignTx,
+		DestAddress:   address,
+		ChangeAddress: address,
+		Signer:        wallet.SignTx,
 	}
 
 	txs, err := Inscribe(network, request, 0)
@@ -91,7 +90,7 @@ func TestInscribe(t *testing.T) {
 
 	fmt.Printf("commit Fee: %d\n", txs.CommitTxFee)
 	fmt.Printf("reveal Fee: %d\n", txs.RevealTxFee)
-	fmt.Printf("fee: %d\n", EstimatedInscribeFee(len(commitTxPrevOutputList), 
+	fmt.Printf("fee: %d\n", EstimatedInscribeFee(len(commitTxPrevOutputList),
 		len(request.InscriptionData.Body), 2, 0))
 }
 
@@ -108,10 +107,10 @@ func TestInscribeTransfer(t *testing.T) {
 
 	commitTxPrevOutputList := make([]*PrevOutput, 0)
 	commitTxPrevOutputList = append(commitTxPrevOutputList, &PrevOutput{
-		OutPointStr:       "aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:4",
+		OutPointStr: "aa09fa48dda0e2b7de1843c3db8d3f2d7f2cbe0f83331a125b06516a348abd26:4",
 		OutValue: wire.TxOut{
-			Value:     1142196,
-			PkScript:   pkScript,
+			Value:    1142196,
+			PkScript: pkScript,
 		},
 	})
 
@@ -120,13 +119,13 @@ func TestInscribeTransfer(t *testing.T) {
 		CommitFeeRate:          1,
 		RevealFeeRate:          1,
 		RevealOutValue:         330,
-		InscriptionData:    InscriptionData{
+		InscriptionData: InscriptionData{
 			ContentType: "text/plain;charset=utf-8",
 			Body:        []byte(`{"p":"brc-20","op":"transfer","tick":"ordi","amt":"100"}`),
 		},
-		DestAddress:            address,
-		ChangeAddress:          address,
-		Signer:                 wallet.SignTx,
+		DestAddress:   address,
+		ChangeAddress: address,
+		Signer:        wallet.SignTx,
 	}
 
 	txs, err := Inscribe(network, request, 0)
@@ -147,14 +146,12 @@ func TestInscribeTransfer(t *testing.T) {
 	}
 	fmt.Printf("reveal Tx: %s\n", rawTx2)
 
-
 	fmt.Printf("commit vsize: %d\n", GetTxVirtualSize2(txs.CommitTx))
 	fmt.Printf("reveal vsize: %d\n", GetTxVirtualSize2(txs.RevealTx))
 	fmt.Printf("length of body: %d\n", len(request.InscriptionData.Body))
 
 	fmt.Printf("fee: %d\n", EstimatedInscribeFee(1, len(request.InscriptionData.Body), 1, 0))
 }
-
 
 // 涉及引导节点
 func CommitDelayScriptForServer(selfKey, bootstrapKey, revokeKey *btcec.PublicKey, csvDelay uint32) (
@@ -176,7 +173,7 @@ func CommitDelayScriptForServer(selfKey, bootstrapKey, revokeKey *btcec.PublicKe
 
 	return toLocalScriptHash,
 		toLocalRedeemScript,
-	nil
+		nil
 
 }
 
@@ -197,9 +194,9 @@ func CommitDelayScriptForClient(selfKey, revokeKey *btcec.PublicKey, csvDelay ui
 		return nil, nil, err
 	}
 
-		return toLocalScriptHash,
+	return toLocalScriptHash,
 		toLocalRedeemScript,
-	nil
+		nil
 
 }
 
@@ -221,9 +218,9 @@ func CommitDirectScriptForServer(remoteKey *btcec.PublicKey, bootstrapKey *btcec
 
 	// Since this is a regular P2WKH, the WitnessScipt and PkScript
 	// should both be set to the script hash.
-	return  pkScript,
-		 witnessScript,
-	  nil
+	return pkScript,
+		witnessScript,
+		nil
 
 }
 
@@ -242,14 +239,14 @@ func TestCalcTransferFee(t *testing.T) {
 	dest := "tb1qw86hsm7etf4jcqqg556x94s6ska9z0239ahl0tslsuvr5t5kd0nq7vh40m" // channel
 	assetName := &indexer.AssetName{
 		Protocol: indexer.PROTOCOL_NAME_BRC20,
-		Type: indexer.ASSET_TYPE_FT,
-		Ticker: "ordi",
+		Type:     indexer.ASSET_TYPE_FT,
+		Ticker:   "ordi",
 	}
 	amt := indexer.NewDecimal(100000, 18)
 
 	fmt.Printf("deploy\n")
 	for i := 1; i < 5; i++ {
-		fee, err := CalcFeeForDeployTicker_brc20(i, src, dest, assetName.Ticker, 10000000000, 10000000000, 1)
+		fee, err := CalcFeeForDeployTicker_brc20(i, src, dest, assetName.Ticker, 10000000000, 10000000000, 0, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -264,7 +261,6 @@ func TestCalcTransferFee(t *testing.T) {
 		}
 		fmt.Printf("%d: fee = %d\n", i, fee-330)
 	}
-
 
 	wallet1, _, _ := NewInteralWallet(&chaincfg.TestNet3Params)
 	wallet2, _, _ := NewInteralWallet(&chaincfg.TestNet3Params)
@@ -281,7 +277,7 @@ func TestCalcTransferFee(t *testing.T) {
 	fmt.Printf("clientDirectWitness length %d\n", len(clientDirectWitness))
 
 	type cases struct {
-		st int
+		st      int
 		witness []byte
 	}
 
@@ -297,7 +293,6 @@ func TestCalcTransferFee(t *testing.T) {
 		{SCRIPT_TYPE_SWEEP, serverDirectWitness},
 		{SCRIPT_TYPE_SWEEP, clientDelayWitness},
 		{SCRIPT_TYPE_SWEEP, clientDirectWitness},
-
 	}
 
 	fmt.Printf("\nmint-transfer\n")
@@ -356,7 +351,7 @@ func TestCalcFeeOfInscribe(t *testing.T) {
 		// }
 		// size += int64(len(txIn.Witness))
 		// fmt.Printf("input:%d %d %d\n", i, txIn.Witness.SerializeSize(), size)
-		
+
 		//size := txIn.Witness.SerializeSize()
 		weightEstimate2.AddWitnessInput(int64(txIn.Witness.SerializeSize()))
 	}
@@ -370,10 +365,9 @@ func TestCalcFeeOfInscribe(t *testing.T) {
 	fmt.Printf("weight:%d \n", vsize2)
 }
 
-
 func TestParseInscription(t *testing.T) {
 
-	witnessHex := "205639fe2c85b8f63034bfe9aa69a1f3dc113046284c72f761c36478076054f453ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004ca77b2270223a226f726478222c226f70223a226465706c6f79222c227469636b223a227a657573222c226d6178223a223231303030222c226c696d223a223231303030222c226e223a2231303030222c2273656c66223a22313030222c22646573223a22303336376632366166323364633430666461643036373532633338323634666536323162376262616662316434316162343336623837646564313932663133333665227d68" 
+	witnessHex := "205639fe2c85b8f63034bfe9aa69a1f3dc113046284c72f761c36478076054f453ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d38004ca77b2270223a226f726478222c226f70223a226465706c6f79222c227469636b223a227a657573222c226d6178223a223231303030222c226c696d223a223231303030222c226e223a2231303030222c2273656c66223a22313030222c22646573223a22303336376632366166323364633430666461643036373532633338323634666536323162376262616662316434316162343336623837646564313932663133333665227d68"
 	witness, _ := hex.DecodeString(witnessHex)
 
 	inscriptions, _, err := indexer.ParseInscription([][]byte{witness})
@@ -384,9 +378,9 @@ func TestParseInscription(t *testing.T) {
 		fmt.Printf("%d\n", k)
 		for field, content := range v {
 			if field == indexer.FIELD_CONTENT {
-				fmt.Printf("content: %s\n", string(content)) 
+				fmt.Printf("content: %s\n", string(content))
 			} else if field == indexer.FIELD_DELEGATE {
-				fmt.Printf("inscriptionId: %s\n", indexer.ParseInscriptionId(content)) 
+				fmt.Printf("inscriptionId: %s\n", indexer.ParseInscriptionId(content))
 			} else if field == indexer.FIELD_CONTENT_TYPE {
 				fmt.Printf("content type: %s\n", string(content))
 			} else {
@@ -396,4 +390,3 @@ func TestParseInscription(t *testing.T) {
 	}
 	fmt.Printf("\n")
 }
-

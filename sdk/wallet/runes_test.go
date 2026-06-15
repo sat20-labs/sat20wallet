@@ -35,11 +35,10 @@ func TestRunePayload(t *testing.T) {
 	fmt.Printf("len: %d\n %s\n", len(payload), hex.EncodeToString(payload))
 }
 
-
 func TestRuneMintPayload(t *testing.T) {
 	runeId := runestone.RuneId{
 		Block: 1,
-		Tx: 1,
+		Tx:    1,
 	}
 	{
 		payload, err := EncipherRuneMintPayload(&runeId, nil)
@@ -68,7 +67,6 @@ func TestRuneMintPayload(t *testing.T) {
 		fmt.Printf("mint: %v %d\n", result.Runestone.Mint, *result.Runestone.Pointer)
 	}
 }
-
 
 func TestParseRuneEtching(t *testing.T) {
 	// hexPayload := "6a5d18020104eb8385e294b4e2f718033005964e0680e8e6a78e06" // RUNESXBITCOIN
@@ -157,7 +155,7 @@ func TestRuneEtching(t *testing.T) {
 }
 
 func TestRuneEtchingWithTerms(t *testing.T) {
-	selfMintEtching, err := GenEtchingWithTerms("MMMM•SELF•HHHH•MMMM", 'S', 100000000, 0, true)
+	selfMintEtching, err := GenEtchingWithTerms("MMMM•SELF•HHHH•MMMM", 'S', 100000000, 0, true, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +166,7 @@ func TestRuneEtchingWithTerms(t *testing.T) {
 		t.Fatalf("self-mint etching should not have terms: %+v", selfMintEtching.Terms)
 	}
 
-	openMintEtching, err := GenEtchingWithTerms("MMMM•OPEN•HHHH•MMMM", 'O', 100000000, 10000, false)
+	openMintEtching, err := GenEtchingWithTerms("MMMM•OPEN•HHHH•MMMM", 'O', 100000000, 10000, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

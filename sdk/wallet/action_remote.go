@@ -247,7 +247,7 @@ func (p *Manager) handleRemoteActionStatus(resv *RemoteActionPerformReservation)
 }
 
 func (p *Manager) DeployRunes_Remote(assetName string, symbol int32, maxSupply int64,
-	limit int64, selfMint bool, destAddr string, feeRate int64) (string, int64, string, error) {
+	limit int64, selfMint bool, destAddr string, divisibility int64, feeRate int64) (string, int64, string, error) {
 	if p.wallet == nil {
 		return "", 0, "", fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -256,12 +256,13 @@ func (p *Manager) DeployRunes_Remote(assetName string, symbol int32, maxSupply i
 	}
 
 	param, err := EncodeRemoteDeployRunesParam(&RemoteDeployRunesParam{
-		AssetName: normalizeRemoteDeployRunesAssetName(assetName),
-		Symbol:    symbol,
-		MaxSupply: maxSupply,
-		Limit:     limit,
-		SelfMint:  selfMint,
-		DestAddr:  destAddr,
+		AssetName:    normalizeRemoteDeployRunesAssetName(assetName),
+		Symbol:       symbol,
+		MaxSupply:    maxSupply,
+		Limit:        limit,
+		SelfMint:     selfMint,
+		DestAddr:     destAddr,
+		Divisibility: divisibility,
 	})
 	if err != nil {
 		return "", 0, "", err
