@@ -118,9 +118,7 @@ func (p *Manager) DeployTicker_brc20(ticker string, max, lim int64, decimal int6
 	case 4:
 		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_4, ticker, max, lim, decimal)
 	case 5:
-		//body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_5, ticker, max, lim, decimal)
-		// TODO 因为 MintAsset_brc20 不支持铸造5字符，暂时不要支持
-		return nil, fmt.Errorf("not support 5-bytes ticker")
+		body = fmt.Sprintf(CONTENT_DEPLOY_BRC20_BODY_5, ticker, max, lim, decimal)
 	default:
 		return nil, fmt.Errorf("invalid ticker length %s", ticker)
 	}
