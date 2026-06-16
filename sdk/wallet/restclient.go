@@ -60,7 +60,7 @@ type IndexerRPCClient interface {
 	GetAscendData(utxo string) (*sindexer.AscendData, error) // TODO 因为Decimal json序列化的修改，索引器暂时将资产列表清空，因为前端还没用到
 	GetChannelLedger(channel string) ([]*sindexer.ChannelLedgerEntry, error)
 	GetChannelStateEvents(channel string) ([]*sindexer.ChannelStateEvent, error)
-	RecordChannelStateEvent(event *sindexer.ChannelStateEvent) error
+	RecordChannelStateEvent(event *sindexer.ChannelStateEvent, pubkey, sig []byte) error
 	IsCoreNode(pubkey []byte) (bool, error)
 	GetCoreNodeInfo(pubkey []byte) (*sindexer.CoreNodeInfo, error)
 	IsMinerNode(pubkey []byte) (bool, error)
@@ -236,11 +236,13 @@ func (p *IndexerClient) GetChannelStateEvents(channel string) ([]*sindexer.Chann
 	return result.Data, nil
 }
 
-func (p *IndexerClient) RecordChannelStateEvent(event *sindexer.ChannelStateEvent) error {
+func (p *IndexerClient) RecordChannelStateEvent(event *sindexer.ChannelStateEvent, pubkey, sig []byte) error {
 	url := p.GetUrl("/v3/channel/state")
 	req := &sindexerwire.ChannelStateEventReq{
 		ConfirmUnsafeTestOnly: true,
 		Data:                  event,
+		PubKey:                pubkey,
+		Sig:                   sig,
 	}
 	reqJson, err := json.Marshal(req)
 	if err != nil {

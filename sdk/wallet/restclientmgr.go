@@ -217,12 +217,12 @@ func (p *IndexerRPCClientMgr) GetChannelStateEvents(channel string) ([]*sindexer
 	return result, err
 }
 
-func (p *IndexerRPCClientMgr) RecordChannelStateEvent(event *sindexer.ChannelStateEvent) error {
-	err := p.getActiveIndexer().RecordChannelStateEvent(event)
+func (p *IndexerRPCClientMgr) RecordChannelStateEvent(event *sindexer.ChannelStateEvent, pubkey, sig []byte) error {
+	err := p.getActiveIndexer().RecordChannelStateEvent(event, pubkey, sig)
 	if shouldSwitchIndexer(err) {
 		indexer := p.selector()
 		if indexer != nil {
-			err = indexer.RecordChannelStateEvent(event)
+			err = indexer.RecordChannelStateEvent(event, pubkey, sig)
 		}
 	}
 	return err

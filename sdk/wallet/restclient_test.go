@@ -862,7 +862,7 @@ func (p *TestIndexerClient) GetChannelStateEvents(channel string) ([]*sindexer.C
 	return []*sindexer.ChannelStateEvent{}, nil
 }
 
-func (p *TestIndexerClient) RecordChannelStateEvent(event *sindexer.ChannelStateEvent) error {
+func (p *TestIndexerClient) RecordChannelStateEvent(event *sindexer.ChannelStateEvent, pubkey, sig []byte) error {
 	return nil
 }
 
