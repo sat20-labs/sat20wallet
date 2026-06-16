@@ -3,39 +3,39 @@
     <WalletHeader />
     <div class="space-y-4 px-1 pb-4">
       <header class="space-y-2">
-        <h2 class="text-2xl font-medium text-zinc-600/90">工具</h2>
+        <h2 class="text-2xl font-medium text-zinc-600/90">{{ t('tools.title') }}</h2>
         <p class="text-xs leading-5 text-muted-foreground">
-          常用资产和合约操作集中在这里。
+          {{ t('tools.subtitle') }}
         </p>
       </header>
 
       <Tabs v-model="activeTab" class="w-full">
         <TabsList class="grid w-full grid-cols-3">
-          <TabsTrigger value="faucet">水龙头</TabsTrigger>
-          <TabsTrigger value="contracts">智能合约</TabsTrigger>
-          <TabsTrigger value="mint">铸造</TabsTrigger>
+          <TabsTrigger value="faucet">{{ t('tools.tabs.faucet') }}</TabsTrigger>
+          <TabsTrigger value="contracts">{{ t('tools.tabs.contracts') }}</TabsTrigger>
+          <TabsTrigger value="mint">{{ t('tools.tabs.mint') }}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="faucet" class="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle class="text-base">聪网 GAS 水龙头</CardTitle>
+              <CardTitle class="text-base">{{ t('tools.faucet.title') }}</CardTitle>
               <CardDescription>
-                往合约地址转入一些聪，在聪网上获得智能合约的 GAS。
+                {{ t('tools.faucet.description') }}
               </CardDescription>
             </CardHeader>
             <CardContent class="space-y-3">
               <div class="space-y-1">
-                <Label>合约地址</Label>
+                <Label>{{ t('tools.faucet.contractAddress') }}</Label>
                 <Input v-model="faucetAddress" />
               </div>
               <div class="space-y-1">
-                <Label>发送聪数量</Label>
+                <Label>{{ t('tools.faucet.amount') }}</Label>
                 <Input v-model="faucetAmount" type="number" min="1" />
               </div>
               <Button class="w-full" :disabled="isFaucetSending" @click="sendFaucetSats">
                 <Icon :icon="isFaucetSending ? 'lucide:loader' : 'lucide:send'" class="h-4 w-4" :class="{ 'animate-spin': isFaucetSending }" />
-                发送聪
+                {{ t('tools.faucet.send') }}
               </Button>
               <p v-if="faucetResult" class="break-all text-xs text-muted-foreground">txid: {{ faucetResult }}</p>
             </CardContent>
@@ -44,40 +44,40 @@
 
         <TabsContent value="contracts" class="mt-4 space-y-4">
           <p class="text-xs leading-5 text-muted-foreground">
-            在聪网上部署/调用智能合约。
+            {{ t('tools.contracts.description') }}
             <a
-              :href="SMART_CONTRACT_DOC_URL"
+              :href="smartContractDocUrl"
               target="_blank"
               rel="noopener noreferrer"
               class="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
             >
               <Icon icon="lucide:file-text" class="h-3.5 w-3.5" />
-              智能合约白皮书
+              {{ t('tools.contracts.whitepaper') }}
             </a>
           </p>
           <Card>
             <CardHeader>
-              <CardTitle class="text-base">部署智能合约</CardTitle>
-              <CardDescription>目前支持模板合约和自然语言合约；EVM 合约暂未启用。</CardDescription>
+              <CardTitle class="text-base">{{ t('tools.contracts.deployTitle') }}</CardTitle>
+              <CardDescription>{{ t('tools.contracts.deployDescription') }}</CardDescription>
             </CardHeader>
             <CardContent class="space-y-3">
               <div class="grid grid-cols-2 gap-3">
                 <div class="space-y-1">
-                  <Label>合约类型</Label>
+                  <Label>{{ t('tools.contracts.contractType') }}</Label>
                   <Select v-model="deployContractType">
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="template">模板合约</SelectItem>
-                      <SelectItem value="agent">自然语言合约</SelectItem>
-                      <SelectItem value="evm" disabled>EVM 合约（暂未启用）</SelectItem>
+                      <SelectItem value="template">{{ t('tools.contractTypes.template') }}</SelectItem>
+                      <SelectItem value="agent">{{ t('tools.contractTypes.agent') }}</SelectItem>
+                      <SelectItem value="evm" disabled>{{ t('tools.contractTypes.evmDisabled') }}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div class="space-y-1">
-                  <Label>Gas 上限</Label>
-                  <Input v-model="deployContractGasLimit" type="number" min="1" placeholder="默认" />
+                  <Label>{{ t('tools.contracts.gasLimit') }}</Label>
+                  <Input v-model="deployContractGasLimit" type="number" min="1" :placeholder="t('tools.common.default')" />
                 </div>
               </div>
 
@@ -85,7 +85,7 @@
                 <div class="grid grid-cols-[1fr_auto] gap-2">
                   <Select v-model="selectedContractSchemaKey" @update:model-value="selectContractSchema">
                     <SelectTrigger>
-                      <SelectValue placeholder="选择模板合约" />
+                      <SelectValue :placeholder="t('tools.contracts.selectTemplate')" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem
@@ -99,7 +99,7 @@
                   </Select>
                   <Button variant="secondary" :disabled="isLoadingSupportedContracts" @click="loadSupportedContracts">
                     <Icon :icon="isLoadingSupportedContracts ? 'lucide:loader' : 'lucide:refresh-cw'" class="h-4 w-4" :class="{ 'animate-spin': isLoadingSupportedContracts }" />
-                    加载
+                    {{ t('tools.common.load') }}
                   </Button>
                 </div>
                 <div v-if="selectedContractSchema?.description" class="text-xs text-muted-foreground">
@@ -125,7 +125,7 @@
                     >
                       <div class="flex items-center justify-between">
                         <span class="text-xs text-muted-foreground">{{ field.label }} #{{ rowIndex + 1 }}</span>
-                        <Button size="sm" variant="ghost" @click="removeFormArrayItem(field.name, rowIndex)">删除</Button>
+                        <Button size="sm" variant="ghost" @click="removeFormArrayItem(field.name, rowIndex)">{{ t('tools.common.delete') }}</Button>
                       </div>
                       <div v-for="child in field.fields || []" :key="child.name" class="space-y-1">
                         <Label>{{ child.label }}</Label>
@@ -136,7 +136,7 @@
                         />
                       </div>
                     </div>
-                    <Button size="sm" variant="secondary" @click="addFormArrayItem(field)">添加{{ field.label }}</Button>
+                    <Button size="sm" variant="secondary" @click="addFormArrayItem(field)">{{ t('tools.common.add', { label: field.label }) }}</Button>
                   </div>
                   <Textarea
                     v-else-if="field.type === 'textarea'"
@@ -162,16 +162,16 @@
                         <SelectItem value="ordx">ordx</SelectItem>
                         <SelectItem value="runes">runes</SelectItem>
                         <SelectItem value="brc20">brc20</SelectItem>
-                        <SelectItem value="sats">聪</SelectItem>
+                        <SelectItem value="sats">{{ t('tools.common.sats') }}</SelectItem>
                       </SelectContent>
                     </Select>
                     <Input
                       :model-value="contractAssetTicker(field.name)"
                       :disabled="contractAssetProtocol(field.name) === 'sats'"
-                      placeholder="ticker 名称"
+                      :placeholder="t('tools.common.tickerName')"
                       @update:model-value="setContractAssetTicker(field.name, $event)"
                     />
-                    <Button variant="secondary" @click="checkContractAsset(field.name)">检查</Button>
+                    <Button variant="secondary" @click="checkContractAsset(field.name)">{{ t('tools.common.check') }}</Button>
                   </div>
                   <Input
                     v-else
@@ -186,7 +186,7 @@
                 <div class="grid grid-cols-[1fr_auto] gap-2">
                   <Select v-model="selectedContractSchemaKey" @update:model-value="selectContractSchema">
                     <SelectTrigger>
-                      <SelectValue placeholder="选择自然语言合约" />
+                      <SelectValue :placeholder="t('tools.contracts.selectAgent')" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem
@@ -200,7 +200,7 @@
                   </Select>
                   <Button variant="secondary" :disabled="isLoadingSupportedContracts" @click="loadSupportedContracts">
                     <Icon :icon="isLoadingSupportedContracts ? 'lucide:loader' : 'lucide:refresh-cw'" class="h-4 w-4" :class="{ 'animate-spin': isLoadingSupportedContracts }" />
-                    加载
+                    {{ t('tools.common.load') }}
                   </Button>
                 </div>
                 <div v-if="selectedContractSchema?.description" class="text-xs text-muted-foreground">
@@ -226,7 +226,7 @@
                     >
                       <div class="flex items-center justify-between">
                         <span class="text-xs text-muted-foreground">{{ field.label }} #{{ rowIndex + 1 }}</span>
-                        <Button size="sm" variant="ghost" @click="removeFormArrayItem(field.name, rowIndex)">删除</Button>
+                        <Button size="sm" variant="ghost" @click="removeFormArrayItem(field.name, rowIndex)">{{ t('tools.common.delete') }}</Button>
                       </div>
                       <div v-for="child in field.fields || []" :key="child.name" class="space-y-1">
                         <Label>{{ child.label }}</Label>
@@ -237,7 +237,7 @@
                         />
                       </div>
                     </div>
-                    <Button size="sm" variant="secondary" @click="addFormArrayItem(field)">添加{{ field.label }}</Button>
+                    <Button size="sm" variant="secondary" @click="addFormArrayItem(field)">{{ t('tools.common.add', { label: field.label }) }}</Button>
                   </div>
                   <Textarea
                     v-else-if="field.type === 'textarea'"
@@ -263,16 +263,16 @@
                         <SelectItem value="ordx">ordx</SelectItem>
                         <SelectItem value="runes">runes</SelectItem>
                         <SelectItem value="brc20">brc20</SelectItem>
-                        <SelectItem value="sats">聪</SelectItem>
+                        <SelectItem value="sats">{{ t('tools.common.sats') }}</SelectItem>
                       </SelectContent>
                     </Select>
                     <Input
                       :model-value="contractAssetTicker(field.name)"
                       :disabled="contractAssetProtocol(field.name) === 'sats'"
-                      placeholder="ticker 名称"
+                      :placeholder="t('tools.common.tickerName')"
                       @update:model-value="setContractAssetTicker(field.name, $event)"
                     />
-                    <Button variant="secondary" @click="checkContractAsset(field.name)">检查</Button>
+                    <Button variant="secondary" @click="checkContractAsset(field.name)">{{ t('tools.common.check') }}</Button>
                   </div>
                   <Input
                     v-else
@@ -284,34 +284,34 @@
               </template>
 
               <div v-else class="rounded-sm border border-dashed border-border p-3 text-xs text-muted-foreground">
-                EVM 合约部署暂未启用。
+                {{ t('tools.contracts.evmDeployDisabled') }}
               </div>
 
               <Button class="w-full" :disabled="!canDeploySmartContract || isDeployingSmartContract" @click="deploySmartContract">
                 <Icon :icon="isDeployingSmartContract ? 'lucide:loader' : 'lucide:rocket'" class="h-4 w-4" :class="{ 'animate-spin': isDeployingSmartContract }" />
-                部署智能合约
+                {{ t('tools.contracts.deployButton') }}
               </Button>
               <pre v-if="deploySmartContractResult" class="max-h-40 overflow-auto rounded-sm bg-zinc-950/60 p-3 text-xs leading-5 text-zinc-200">{{ deploySmartContractResult }}</pre>
             </CardContent>
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle class="text-base">智能合约检索</CardTitle>
-              <CardDescription>从聪网 L2 indexer 查询智能合约列表和状态。</CardDescription>
+              <CardTitle class="text-base">{{ t('tools.contracts.searchTitle') }}</CardTitle>
+              <CardDescription>{{ t('tools.contracts.searchDescription') }}</CardDescription>
             </CardHeader>
             <CardContent class="space-y-3">
               <div class="grid grid-cols-[1fr_auto] gap-2">
-                <Input v-model="contractQuery" placeholder="输入合约地址精确检索" />
+                <Input v-model="contractQuery" :placeholder="t('tools.contracts.contractSearchPlaceholder')" />
                 <Button variant="secondary" :disabled="isContractLoading" @click="loadContract">
                   <Icon :icon="isContractLoading ? 'lucide:loader' : 'lucide:search'" class="h-4 w-4" :class="{ 'animate-spin': isContractLoading }" />
                 </Button>
               </div>
               <div class="grid grid-cols-2 gap-2">
-                <Button variant="outline" :disabled="isContractLoading" @click="loadContracts">加载列表</Button>
-                <Button variant="outline" :disabled="!selectedContractAddress || isContractLoading" @click="loadContractHistory">查询历史</Button>
+                <Button variant="outline" :disabled="isContractLoading" @click="loadContracts">{{ t('tools.contracts.loadList') }}</Button>
+                <Button variant="outline" :disabled="!selectedContractAddress || isContractLoading" @click="loadContractHistory">{{ t('tools.contracts.queryHistory') }}</Button>
               </div>
               <div v-if="contractList.length" class="space-y-2">
-                <Label>合约列表</Label>
+                <Label>{{ t('tools.contracts.contractList') }}</Label>
                 <button
                   v-for="contract in contractList"
                   :key="contract.address || contract.Address"
@@ -325,21 +325,21 @@
               </div>
               <div v-if="ammContractSummary" class="grid grid-cols-2 gap-2 rounded-sm border border-border bg-muted/30 p-3 text-xs">
                 <div>
-                  <div class="text-muted-foreground">资产 A</div>
+                  <div class="text-muted-foreground">{{ t('tools.contracts.assetA') }}</div>
                   <div class="mt-1 break-all font-medium">{{ ammContractSummary.assetAName }}</div>
                   <div class="mt-1 text-muted-foreground">{{ ammContractSummary.assetAAmount }}</div>
                 </div>
                 <div>
-                  <div class="text-muted-foreground">资产 B</div>
+                  <div class="text-muted-foreground">{{ t('tools.contracts.assetB') }}</div>
                   <div class="mt-1 break-all font-medium">{{ ammContractSummary.assetBName }}</div>
                   <div class="mt-1 text-muted-foreground">{{ ammContractSummary.assetBAmount }}</div>
                 </div>
                 <div class="col-span-2 border-t border-border pt-2">
-                  <span class="text-muted-foreground">价格（资产 B / 资产 A）：</span>
+                  <span class="text-muted-foreground">{{ t('tools.contracts.priceBA') }}</span>
                   <span class="font-medium">{{ ammContractSummary.price }}</span>
                 </div>
                 <div class="col-span-2">
-                  <span class="text-muted-foreground">状态：</span>
+                  <span class="text-muted-foreground">{{ t('tools.contracts.status') }}</span>
                   <span class="font-medium">{{ ammContractSummary.status }}</span>
                 </div>
               </div>
@@ -349,28 +349,28 @@
 
           <Card>
             <CardHeader>
-              <CardTitle class="text-base">构造调用交易</CardTitle>
+              <CardTitle class="text-base">{{ t('tools.contracts.invokeTitle') }}</CardTitle>
               <CardDescription>
-                查询合约后选择接口，钱包会按接口参数构造并广播聪网智能合约调用交易。
+                {{ t('tools.contracts.invokeDescription') }}
               </CardDescription>
             </CardHeader>
             <CardContent class="space-y-3">
               <div class="space-y-1">
-                <Label>合约地址</Label>
+                <Label>{{ t('tools.contracts.contractAddress') }}</Label>
                 <Input v-model="invokeContractAddress" />
               </div>
               <div class="grid grid-cols-2 gap-3">
                 <div class="space-y-1">
-                  <Label>合约类型</Label>
+                  <Label>{{ t('tools.contracts.contractType') }}</Label>
                   <div class="flex h-10 items-center rounded-sm border border-input bg-muted/40 px-3 text-sm">
                     {{ invokeContractTypeLabel }}
                   </div>
                 </div>
                 <div class="space-y-1">
-                  <Label>接口</Label>
+                  <Label>{{ t('tools.contracts.action') }}</Label>
                   <Select v-model="invokeAction" @update:model-value="loadInvokeParamTemplate">
                     <SelectTrigger>
-                      <SelectValue placeholder="选择接口" />
+                      <SelectValue :placeholder="t('tools.contracts.selectAction')" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem v-for="action in invokeActionOptions" :key="action" :value="action">
@@ -382,7 +382,7 @@
               </div>
               <div v-if="invokeContractType === 'evm' && invokeAction === 'call'" class="space-y-1">
                 <Label>Calldata Hex</Label>
-                <Textarea v-model="invokeEvmCalldataHex" class="min-h-20 font-mono text-xs" placeholder="不带 0x 或带 0x 均可" />
+                <Textarea v-model="invokeEvmCalldataHex" class="min-h-20 font-mono text-xs" :placeholder="t('tools.contracts.calldataPlaceholder')" />
               </div>
               <div v-else-if="invokeParamFields.length" class="space-y-3">
                 <div v-for="field in invokeParamFields" :key="field.key" class="space-y-1">
@@ -413,11 +413,11 @@
                 </div>
               </div>
               <div v-else class="rounded-sm border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-                当前接口无需填写额外参数。
+                {{ t('tools.contracts.noExtraParams') }}
               </div>
               <Button class="w-full" :disabled="isInvokingContract" @click="invokeSmartContract">
                 <Icon :icon="isInvokingContract ? 'lucide:loader' : 'lucide:radio-tower'" class="h-4 w-4" :class="{ 'animate-spin': isInvokingContract }" />
-                签名并广播
+                {{ t('tools.contracts.signAndBroadcast') }}
               </Button>
               <p v-if="contractInvokeResult" class="break-all text-xs text-muted-foreground">txid: {{ contractInvokeResult }}</p>
             </CardContent>
@@ -426,16 +426,16 @@
 
         <TabsContent value="mint" class="mt-4 space-y-4">
           <p class="text-xs leading-5 text-muted-foreground">
-            在比特币网络上铸造各种资产。
+            {{ t('tools.mint.description') }}
           </p>
           <Card>
             <CardHeader>
-              <CardTitle class="text-base">部署 ticker</CardTitle>
+              <CardTitle class="text-base">{{ t('tools.mint.deployTickerTitle') }}</CardTitle>
             </CardHeader>
             <CardContent class="space-y-3">
               <div class="grid grid-cols-2 gap-3">
                 <div class="space-y-1">
-                  <Label>协议</Label>
+                  <Label>{{ t('tools.mint.protocol') }}</Label>
                   <Select v-model="deployProtocol">
                     <SelectTrigger>
                       <SelectValue />
@@ -448,38 +448,42 @@
                   </Select>
                 </div>
                 <div class="space-y-1">
-                  <Label>费率</Label>
+                  <Label>{{ t('tools.mint.feeRate') }}</Label>
                   <Input v-model="mintFeeRate" type="number" min="1" />
                 </div>
               </div>
               <div class="grid grid-cols-[1fr_auto] gap-2">
                 <Input
                   v-model="deployTicker"
-                  placeholder="ticker 名称"
+                  :placeholder="t('tools.common.tickerName')"
                   @update:model-value="handleDeployTickerInput"
                 />
-                <Button variant="secondary" @click="checkDeployTicker">检查</Button>
+                <Button variant="secondary" @click="checkDeployTicker">{{ t('tools.common.check') }}</Button>
               </div>
               <div :class="showDeployLimit ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'">
                 <div class="space-y-1">
-                  <Label>最大数量</Label>
+                  <Label>{{ t('tools.mint.maxSupply') }}</Label>
                   <Input v-model="deployMaxSupply" type="number" />
                 </div>
                 <div v-if="showDeployLimit" class="space-y-1">
-                  <Label>每次铸造数量</Label>
+                  <Label>{{ t('tools.mint.mintLimit') }}</Label>
                   <Input v-model="deployLimit" type="number" />
                 </div>
               </div>
               <div v-if="deployProtocol === 'brc20' || deployProtocol === 'runes'" class="space-y-1">
-                <Label>{{ deployProtocol === 'brc20' ? '小数位 decimal' : '小数位 divisibility' }}</Label>
+                <Label>{{ deployProtocol === 'brc20' ? t('tools.mint.decimal') : t('tools.mint.divisibility') }}</Label>
                 <Input v-model="deployDecimals" type="number" min="0" :max="deployProtocol === 'brc20' ? 18 : 38" />
               </div>
-              <label class="flex items-center gap-2 text-sm text-muted-foreground">
-                <Checkbox v-model:checked="deploySelfMint" />
-                只能部署者铸造
+              <label v-if="showDeploySelfMint" class="flex items-center gap-2 text-sm text-muted-foreground">
+                <Checkbox
+                  :checked="effectiveDeploySelfMint"
+                  :disabled="deployProtocol === 'brc20'"
+                  @update:checked="handleDeploySelfMintChange"
+                />
+                {{ t('tools.mint.selfMint') }}
               </label>
               <div v-if="deployProtocol === 'ordx'" class="space-y-1">
-                <Label>每聪绑定资产份数</Label>
+                <Label>{{ t('tools.mint.bindingSat') }}</Label>
                 <Select v-model="bindingSat">
                   <SelectTrigger>
                     <SelectValue />
@@ -493,7 +497,7 @@
               </div>
               <Button class="w-full" :disabled="!isDeployTickerReady || isDeployingTicker" @click="deployTickerAction">
                 <Icon :icon="isDeployingTicker ? 'lucide:loader' : 'lucide:upload-cloud'" class="h-4 w-4" :class="{ 'animate-spin': isDeployingTicker }" />
-                部署 ticker
+                {{ t('tools.mint.deployTicker') }}
               </Button>
               <p v-if="deployTickerResult" class="break-all text-xs text-muted-foreground">txid: {{ deployTickerResult }}</p>
             </CardContent>
@@ -501,12 +505,12 @@
 
           <Card>
             <CardHeader>
-              <CardTitle class="text-base">铸造资产</CardTitle>
+              <CardTitle class="text-base">{{ t('tools.mint.mintAssetTitle') }}</CardTitle>
             </CardHeader>
             <CardContent class="space-y-3">
               <div class="grid grid-cols-2 gap-3">
                 <div class="space-y-1">
-                  <Label>协议</Label>
+                  <Label>{{ t('tools.mint.protocol') }}</Label>
                   <Select v-model="mintProtocol">
                     <SelectTrigger>
                       <SelectValue />
@@ -519,24 +523,24 @@
                   </Select>
                 </div>
                 <div class="space-y-1">
-                  <Label>数量</Label>
+                  <Label>{{ t('tools.mint.amount') }}</Label>
                   <Input v-model="mintAmount" type="number" :disabled="mintProtocol === 'runes'" />
                   <p v-if="mintProtocol === 'runes'" class="text-xs text-muted-foreground">
-                    Runes 每次铸造数量由部署条款决定。
+                    {{ t('tools.mint.runesAmountHint') }}
                   </p>
                 </div>
               </div>
               <div class="grid grid-cols-[1fr_auto] gap-2">
                 <Input
                   v-model="mintTicker"
-                  placeholder="ticker 名称"
+                  :placeholder="t('tools.common.tickerName')"
                   @update:model-value="handleMintTickerInput"
                 />
-                <Button variant="secondary" @click="checkMintTicker">检查</Button>
+                <Button variant="secondary" @click="checkMintTicker">{{ t('tools.common.check') }}</Button>
               </div>
               <Button class="w-full" :disabled="!isMintAssetReady || isMintingAsset" @click="mintAssetAction">
                 <Icon :icon="isMintingAsset ? 'lucide:loader' : 'lucide:coins'" class="h-4 w-4" :class="{ 'animate-spin': isMintingAsset }" />
-                铸造资产
+                {{ t('tools.mint.mintAsset') }}
               </Button>
               <p v-if="mintAssetResult" class="break-all text-xs text-muted-foreground">txid: {{ mintAssetResult }}</p>
             </CardContent>
@@ -544,16 +548,16 @@
 
           <Card>
             <CardHeader>
-              <CardTitle class="text-base">铸造 DID</CardTitle>
+              <CardTitle class="text-base">{{ t('tools.mint.mintDidTitle') }}</CardTitle>
             </CardHeader>
             <CardContent class="space-y-3">
               <div class="grid grid-cols-[1fr_auto] gap-2">
-                <Input v-model="didName" placeholder="输入名字" />
-                <Button variant="secondary" @click="checkDidName">检查</Button>
+                <Input v-model="didName" :placeholder="t('tools.mint.namePlaceholder')" />
+                <Button variant="secondary" @click="checkDidName">{{ t('tools.common.check') }}</Button>
               </div>
               <Button class="w-full" :disabled="!isMintDidReady || isMintingDid" @click="mintDidAction">
                 <Icon :icon="isMintingDid ? 'lucide:loader' : 'lucide:badge-check'" class="h-4 w-4" :class="{ 'animate-spin': isMintingDid }" />
-                铸造 DID
+                {{ t('tools.mint.mintDid') }}
               </Button>
               <p v-if="didMintResult" class="break-all text-xs text-muted-foreground">txid: {{ didMintResult }}</p>
             </CardContent>
@@ -561,11 +565,32 @@
         </TabsContent>
       </Tabs>
     </div>
+
+    <Dialog :open="txConfirmOpen" @update:open="handleTxConfirmOpenChange">
+      <DialogContent class="max-w-[92vw] rounded-sm border-border bg-background sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ t('tools.txConfirm.title') }}</DialogTitle>
+          <DialogDescription>
+            {{ t('tools.txConfirm.description') }}
+          </DialogDescription>
+        </DialogHeader>
+        <div class="space-y-2 rounded-sm border border-border bg-muted/30 p-3 text-sm">
+          <div v-for="row in txConfirmRows" :key="row.label" class="grid grid-cols-[88px_1fr] gap-3">
+            <span class="text-muted-foreground">{{ row.label }}</span>
+            <span class="break-all font-medium">{{ row.value }}</span>
+          </div>
+        </div>
+        <DialogFooter class="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+          <Button variant="outline" @click="resolveTxConfirm(false)">{{ t('common.cancel') }}</Button>
+          <Button @click="resolveTxConfirm(true)">{{ t('common.confirm') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </LayoutHome>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
 import LayoutHome from '@/components/layout/LayoutHome.vue'
@@ -573,23 +598,32 @@ import WalletHeader from '@/components/wallet/HomeHeader.vue'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast-new/use-toast'
+import { useI18n } from 'vue-i18n'
 import { smartContractApi } from '@/apis'
 import ordxApi from '@/apis/ordx'
 import sat20 from '@/utils/sat20'
-import { useWalletStore } from '@/store'
+import { useGlobalStore, useWalletStore } from '@/store'
+import { Storage } from '@/lib/storage-adapter'
 
-const SMART_CONTRACT_DOC_URL = 'https://docs.sat20.org/circulation/contract/'
+const SMART_CONTRACT_DOC_URL_ZH = 'https://docs.sat20.org/protocol-xie-yi-yu-bai-pi-shu/smart-contracts'
+const SMART_CONTRACT_DOC_URL_EN = 'https://docs.sat20.org/english/protocols-and-whitepapers/smart-contracts'
 const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qnuunrp2chq3lm7khvqdjh8krmnts0srqz505cjq04smxxy3xtxmq5nw7ct'
+const SUPPORTED_CONTRACTS_CACHE_PREFIX = 'tools:supported_contracts'
 
 const { toast } = useToast()
+const { t, locale } = useI18n()
 const walletStore = useWalletStore()
+const globalStore = useGlobalStore()
 const { network } = storeToRefs(walletStore)
+const { env } = storeToRefs(globalStore)
+const smartContractDocUrl = computed(() => String(locale.value).startsWith('en') ? SMART_CONTRACT_DOC_URL_EN : SMART_CONTRACT_DOC_URL_ZH)
 
 const activeTab = ref('faucet')
 
@@ -643,11 +677,11 @@ const invokeActionOptions = computed(() => {
 })
 const invokeContractTypeLabel = computed(() => {
   if (invokeContractType.value === 'template') {
-    return invokeContractSubtype.value ? `模板合约 (${invokeContractSubtype.value})` : '模板合约'
+    return invokeContractSubtype.value ? t('tools.contractTypes.templateWithSubtype', { subtype: invokeContractSubtype.value }) : t('tools.contractTypes.template')
   }
-  if (invokeContractType.value === 'agent') return '自然语言合约'
-  if (invokeContractType.value === 'evm') return 'EVM 合约'
-  return '未知合约'
+  if (invokeContractType.value === 'agent') return t('tools.contractTypes.agent')
+  if (invokeContractType.value === 'evm') return t('tools.contractTypes.evm')
+  return t('tools.contractTypes.unknown')
 })
 const deployContractType = ref<'template' | 'agent' | 'evm'>('template')
 type ContractFieldSchema = {
@@ -696,6 +730,11 @@ const deployDecimals = ref('0')
 const deploySelfMint = ref(false)
 const bindingSatOptions = ['1', '10', '100', '1000', '10000', '100000']
 const bindingSat = ref('1')
+const deployTickerNormalized = computed(() => normalizeTicker(deployTicker.value, deployProtocol.value))
+const brc20DeployTickerLength = computed(() => deployProtocol.value === 'brc20' ? deployTickerNormalized.value.length : 0)
+const isBrc20DeploySelfMint = computed(() => deployProtocol.value === 'brc20' && brc20DeployTickerLength.value === 5)
+const effectiveDeploySelfMint = computed(() => deployProtocol.value === 'brc20' ? isBrc20DeploySelfMint.value : deploySelfMint.value)
+const showDeploySelfMint = computed(() => deployProtocol.value !== 'brc20' || isBrc20DeploySelfMint.value)
 const showDeployLimit = computed(() => !(deployProtocol.value === 'runes' && deploySelfMint.value))
 const mintFeeRate = ref('1')
 const deployTickerResult = ref('')
@@ -717,6 +756,75 @@ const didCheckKey = ref('')
 const didMintResult = ref('')
 const isMintingDid = ref(false)
 
+type ToolTxConfirmRow = {
+  label: string
+  value: string
+}
+
+type ToolTxConfirmPayload = {
+  purpose: string
+  to?: string
+  asset?: string
+  amount?: string
+  network?: string
+  feeRate?: string
+  details?: ToolTxConfirmRow[]
+}
+
+const txConfirmOpen = ref(false)
+const txConfirmPayload = ref<ToolTxConfirmPayload | null>(null)
+let txConfirmResolver: ((confirmed: boolean) => void) | null = null
+
+const compactRows = (rows: Array<ToolTxConfirmRow | null | undefined>) => (
+  rows.filter((row): row is ToolTxConfirmRow => Boolean(row?.value))
+)
+
+const txConfirmRows = computed(() => {
+  const payload = txConfirmPayload.value
+  if (!payload) return []
+  return compactRows([
+    { label: t('tools.txConfirm.purpose'), value: payload.purpose },
+    payload.to ? { label: t('tools.txConfirm.to'), value: payload.to } : null,
+    payload.asset ? { label: t('tools.txConfirm.asset'), value: payload.asset } : null,
+    payload.amount ? { label: t('tools.txConfirm.amount'), value: payload.amount } : null,
+    payload.network ? { label: t('tools.txConfirm.network'), value: payload.network } : null,
+    payload.feeRate ? { label: t('tools.txConfirm.feeRate'), value: payload.feeRate } : null,
+    ...(payload.details || []),
+  ])
+})
+
+const resolveTxConfirm = (confirmed: boolean) => {
+  const resolver = txConfirmResolver
+  txConfirmResolver = null
+  txConfirmOpen.value = false
+  if (resolver) resolver(confirmed)
+}
+
+const handleTxConfirmOpenChange = (open: boolean) => {
+  if (!open) {
+    resolveTxConfirm(false)
+    return
+  }
+  txConfirmOpen.value = true
+}
+
+const confirmToolTransaction = (payload: ToolTxConfirmPayload) => new Promise<boolean>((resolve) => {
+  if (txConfirmResolver) txConfirmResolver(false)
+  txConfirmPayload.value = payload
+  txConfirmResolver = resolve
+  txConfirmOpen.value = true
+})
+
+const txDetail = (label: string, value: unknown): ToolTxConfirmRow | null => {
+  const text = String(value ?? '').trim()
+  return text ? { label, value: text } : null
+}
+
+const l1NetworkLabel = () => t('tools.txConfirm.bitcoinNetwork', { network: network.value || 'testnet' })
+const l2NetworkLabel = () => t('tools.txConfirm.satoshiNetNetwork', { network: network.value || 'testnet' })
+const currentWalletAddress = () => walletStore.address || t('tools.txConfirm.currentWallet')
+const calculatedAmountLabel = () => t('tools.txConfirm.calculatedByWallet')
+
 const showError = (title: string, error: unknown) => {
   toast({
     title,
@@ -733,7 +841,7 @@ const showSuccess = (title: string, description: string) => {
 const parsePositiveInteger = (value: string, field: string) => {
   const parsed = Number(value)
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${field} 必须是正整数`)
+    throw new Error(t('tools.errors.mustBePositiveInteger', { field }))
   }
   return parsed
 }
@@ -743,9 +851,15 @@ const parseDeployDecimals = () => {
   const parsed = Number(value)
   const max = deployProtocol.value === 'brc20' ? 18 : 38
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > max) {
-    throw new Error(`小数位必须是 0-${max} 之间的整数`)
+    throw new Error(t('tools.errors.decimalsRange', { max }))
   }
   return String(parsed)
+}
+
+const validateDeployTickerForProtocol = (protocol: string, ticker: string) => {
+  if (protocol === 'brc20' && ticker.length !== 4 && ticker.length !== 5) {
+    throw new Error(t('tools.errors.brc20DeployTickerLength'))
+  }
 }
 
 const RUNES_SPACER = '•'
@@ -800,6 +914,11 @@ const handleDeployTickerInput = (value: string | number) => {
 const handleMintTickerInput = (value: string | number) => {
   mintTicker.value = normalizeTickerInput(String(value), mintProtocol.value)
 }
+const handleDeploySelfMintChange = (value: boolean) => {
+  if (deployProtocol.value !== 'brc20') {
+    deploySelfMint.value = value
+  }
+}
 const currentDeployCheckKey = computed(() => `${deployProtocol.value}:${normalizeTicker(deployTicker.value, deployProtocol.value)}`)
 const currentMintCheckKey = computed(() => [
   mintProtocol.value,
@@ -815,6 +934,11 @@ watch(deployProtocol, (protocol) => {
   if (protocol === 'runes') deployTicker.value = normalizeTicker(deployTicker.value, protocol)
   deployDecimals.value = protocol === 'brc20' ? '18' : '0'
 })
+watch([deployProtocol, deployTicker], () => {
+  if (deployProtocol.value === 'brc20') {
+    deploySelfMint.value = deployTickerNormalized.value.length === 5
+  }
+})
 watch(mintProtocol, (protocol) => {
   if (protocol === 'runes') mintTicker.value = normalizeTicker(mintTicker.value, protocol)
 })
@@ -822,6 +946,16 @@ watch(deployContractType, () => {
   selectedContractSchemaKey.value = ''
   deployContractForm.value = {}
   selectFirstSchemaForType()
+})
+watch([env, network], () => {
+  selectedContractSchemaKey.value = ''
+  deployContractForm.value = {}
+  contractSchemas.value = []
+  void restoreSupportedContractsCache()
+})
+
+onMounted(() => {
+  void restoreSupportedContractsCache()
 })
 const normalizeDecimalForCompare = (value: unknown) => {
   const text = String(value ?? '').trim()
@@ -850,13 +984,21 @@ const sendFaucetSats = async () => {
   try {
     isFaucetSending.value = true
     faucetResult.value = ''
-    const amount = String(parsePositiveInteger(faucetAmount.value, '发送聪数量'))
+    const amount = String(parsePositiveInteger(faucetAmount.value, t('tools.faucet.amount')))
+    const confirmed = await confirmToolTransaction({
+      purpose: t('tools.txConfirm.purposes.faucetGas'),
+      to: faucetAddress.value.trim(),
+      asset: displayAssetName('::'),
+      amount,
+      network: l2NetworkLabel(),
+    })
+    if (!confirmed) return
     const [err, txid] = await sat20.sendAssets_SatsNet(faucetAddress.value.trim(), '::', amount, '')
     if (err) throw err
     faucetResult.value = txid || ''
-    showSuccess('发送成功', txid || '交易已提交')
+    showSuccess(t('tools.messages.sendSuccess'), txid || t('tools.messages.txSubmitted'))
   } catch (error) {
-    showError('发送失败', error)
+    showError(t('tools.messages.sendFailed'), error)
   } finally {
     isFaucetSending.value = false
   }
@@ -916,8 +1058,46 @@ const findContractString = (keys: string[]) => {
 
 const displayAssetName = (assetName: string) => {
   if (!assetName) return '-'
-  if (assetName === '::') return '聪'
+  if (assetName === '::') return t('tools.common.sats')
   return assetName
+}
+
+const invokeTransactionSummary = (contract: string, req: Record<string, unknown>): ToolTxConfirmPayload => {
+  const params = invokeParams()
+  const details = compactRows([
+    txDetail(t('tools.txConfirm.contractType'), invokeContractTypeLabel.value),
+    txDetail(t('tools.txConfirm.action'), invokeAction.value),
+  ])
+  let asset = t('tools.txConfirm.contractFunding')
+  let amount = calculatedAmountLabel()
+
+  if (invokeContractType.value === 'template') {
+    const templateReq = (req.Template || {}) as Record<string, unknown>
+    if (templateReq.AssetName) {
+      asset = displayAssetName(String(templateReq.AssetName))
+    }
+    if (templateReq.Amount) {
+      amount = String(templateReq.Amount)
+    }
+    if (templateReq.Value) {
+      details.push({ label: t('tools.txConfirm.satsAmount'), value: String(templateReq.Value) })
+      if (!templateReq.AssetName) {
+        asset = displayAssetName('::')
+        amount = String(templateReq.Value)
+      }
+    }
+  } else if (invokeContractType.value === 'agent' && params.outcome_id) {
+    details.push({ label: t('tools.invoke.outcomeId'), value: String(params.outcome_id) })
+  }
+
+  return {
+    purpose: t('tools.txConfirm.purposes.invokeSmartContract'),
+    to: contract,
+    asset,
+    amount,
+    network: l2NetworkLabel(),
+    details,
+  }
 }
 
 const isPositiveDecimalValue = (value: unknown) => {
@@ -978,12 +1158,12 @@ const ammCanSwap = computed(() => (
 const ammContractSummary = computed(() => {
   if (invokeContractSubtype.value !== 'amm.tc') return null
   return {
-    assetAName: displayAssetName(contractAssetAName.value || '资产 A'),
+    assetAName: displayAssetName(contractAssetAName.value || t('tools.contracts.assetA')),
     assetAAmount: contractAssetAAmount.value,
     assetBName: displayAssetName(contractAssetBName.value),
     assetBAmount: contractAssetBAmount.value,
     price: decimalRatio(contractAssetBAmount.value, contractAssetAAmount.value),
-    status: ammCanSwap.value ? '可交易' : '需要先添加流动性',
+    status: ammCanSwap.value ? t('tools.contracts.tradable') : t('tools.contracts.needLiquidity'),
   }
 })
 
@@ -1001,25 +1181,25 @@ type InvokeParamField = {
 }
 
 const invokeParamLabels: Record<string, string> = {
-  orderType: '订单类型',
-  assetName: '资产名称',
-  amt: '资产数量',
-  unitPrice: '单价',
-  value: '聪数量',
-  lptAmt: '流动性资产数量',
-  minOutA: '最小获得资产 A 数量',
-  outcome_id: '结果 ID',
-  result_type: '结果类型',
-  source_url: '来源 URL',
-  result_url: '结果 URL',
-  result_hash: '结果哈希',
-  observed_at: '观察时间',
-  agent_version: 'Agent 版本',
-  model_version: '模型版本',
-  core_node_pubkey: 'Core Node 公钥',
-  core_node_signature: 'Core Node 签名',
-  reason: '原因',
-  checked_at: '检查时间',
+  orderType: t('tools.invoke.orderType'),
+  assetName: t('tools.invoke.assetName'),
+  amt: t('tools.invoke.assetAmount'),
+  unitPrice: t('tools.invoke.unitPrice'),
+  value: t('tools.invoke.satsAmount'),
+  lptAmt: t('tools.invoke.lptAmount'),
+  minOutA: t('tools.invoke.minOutA'),
+  outcome_id: t('tools.invoke.outcomeId'),
+  result_type: t('tools.invoke.resultType'),
+  source_url: t('tools.invoke.sourceUrl'),
+  result_url: t('tools.invoke.resultUrl'),
+  result_hash: t('tools.invoke.resultHash'),
+  observed_at: t('tools.invoke.observedAt'),
+  agent_version: t('tools.invoke.agentVersion'),
+  model_version: t('tools.invoke.modelVersion'),
+  core_node_pubkey: t('tools.invoke.coreNodePubkey'),
+  core_node_signature: t('tools.invoke.coreNodeSignature'),
+  reason: t('tools.invoke.reason'),
+  checked_at: t('tools.invoke.checkedAt'),
   calldataHex: 'Calldata Hex',
 }
 
@@ -1128,14 +1308,14 @@ const invokeHiddenField = (key: string, value: string, valueKind: InvokeParamFie
 })
 const invokeOrderTypeField = (): InvokeParamField => ({
   key: 'orderType',
-  label: '订单类型',
+  label: t('tools.invoke.orderType'),
   placeholder: '',
   defaultValue: '2',
   type: 'number',
   valueKind: 'number',
   options: [
-    { label: '买入', value: '2' },
-    { label: '卖出', value: '1' },
+    { label: t('tools.invoke.buy'), value: '2' },
+    { label: t('tools.invoke.sell'), value: '1' },
   ],
 })
 
@@ -1148,69 +1328,69 @@ const localInvokeTemplate = () => {
       if (action === 'swap') {
         return [
           invokeOrderTypeField(),
-          invokeTextField('assetName', '资产名称', '默认使用合约资产 A', assetA, 'string', { balanceAsset: 'assetName' }),
-          invokeTextField('amt', '资产数量', '', '', 'string', { balanceAsset: 'assetName' }),
-          invokeTextField('unitPrice', '单价'),
+          invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.invoke.defaultContractAssetA'), assetA, 'string', { balanceAsset: 'assetName' }),
+          invokeTextField('amt', t('tools.invoke.assetAmount'), '', '', 'string', { balanceAsset: 'assetName' }),
+          invokeTextField('unitPrice', t('tools.invoke.unitPrice')),
         ]
       }
       if (action === 'refund') {
-        return [invokeTextField('itemIds', '订单 ID', '可选，多个 ID 用英文逗号分隔', '', 'intList')]
+        return [invokeTextField('itemIds', t('tools.invoke.orderId'), t('tools.invoke.orderIdPlaceholder'), '', 'intList')]
       }
     }
     if (invokeContractSubtype.value === 'amm.tc') {
       if (action === 'swap') {
         return [
           invokeOrderTypeField(),
-          invokeTextField('assetName', '资产名称', '默认使用资产 A', assetA, 'string', { balanceAsset: 'assetName' }),
-          invokeTextField('amt', '资产数量', '', '', 'string', { balanceAsset: 'assetName' }),
-          invokeTextField('unitPrice', '单价，可参考上方价格'),
+          invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.invoke.defaultAssetA'), assetA, 'string', { balanceAsset: 'assetName' }),
+          invokeTextField('amt', t('tools.invoke.assetAmount'), '', '', 'string', { balanceAsset: 'assetName' }),
+          invokeTextField('unitPrice', t('tools.invoke.unitPriceHint')),
         ]
       }
       if (action === 'addliq') {
         return [
           invokeHiddenField('orderType', '9'),
-          invokeTextField('assetName', '资产名称', '默认使用资产 A', assetA, 'string', { balanceAsset: 'assetName' }),
-          invokeTextField('amt', '资产数量', '', '', 'string', { balanceAsset: 'assetName' }),
-          invokeTextField('value', '聪数量', '', '', 'number', { balanceAsset: '::' }),
+          invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.invoke.defaultAssetA'), assetA, 'string', { balanceAsset: 'assetName' }),
+          invokeTextField('amt', t('tools.invoke.assetAmount'), '', '', 'string', { balanceAsset: 'assetName' }),
+          invokeTextField('value', t('tools.invoke.satsAmount'), '', '', 'number', { balanceAsset: '::' }),
         ]
       }
       if (action === 'removeliq') {
         return [
           invokeHiddenField('orderType', '10'),
-          invokeTextField('assetName', '资产名称', '默认使用资产 A', assetA, 'string', { balanceAsset: 'assetName' }),
-          invokeTextField('lptAmt', '流动性资产数量', '', '', 'string', { balanceLabel: '当前 LP 可用' }),
+          invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.invoke.defaultAssetA'), assetA, 'string', { balanceAsset: 'assetName' }),
+          invokeTextField('lptAmt', t('tools.invoke.lptAmount'), '', '', 'string', { balanceLabel: t('tools.invoke.currentLpAvailable') }),
         ]
       }
     }
     if (invokeContractSubtype.value === 'exchange.tc' && action === 'exchange') {
-      return [invokeTextField('minOutA', '最小获得资产 A 数量', '可选')]
+      return [invokeTextField('minOutA', t('tools.invoke.minOutA'), t('tools.common.optional'))]
     }
   }
   if (invokeContractType.value === 'agent') {
-    if (action === 'bet') return [invokeTextField('outcome_id', '结果 ID')]
+    if (action === 'bet') return [invokeTextField('outcome_id', t('tools.invoke.outcomeId'))]
     if (action === 'confirm') {
       return [
-        invokeTextField('result_type', '结果类型', 'outcome / invalid / cancelled'),
-        invokeTextField('outcome_id', '结果 ID', 'result_type 为 outcome 时填写'),
-        invokeTextField('source_url', '来源 URL'),
-        invokeTextField('result_url', '结果 URL'),
-        invokeTextField('result_hash', '结果哈希'),
-        invokeTextField('observed_at', '观察时间', 'Unix 时间戳', '', 'number'),
-        invokeTextField('agent_version', 'Agent 版本', '可选'),
-        invokeTextField('model_version', '模型版本', '可选'),
-        invokeTextField('core_node_pubkey', 'Core Node 公钥', '可选'),
-        invokeTextField('core_node_signature', 'Core Node 签名', '可选'),
+        invokeTextField('result_type', t('tools.invoke.resultType'), 'outcome / invalid / cancelled'),
+        invokeTextField('outcome_id', t('tools.invoke.outcomeId'), t('tools.invoke.outcomeIdWhenOutcome')),
+        invokeTextField('source_url', t('tools.invoke.sourceUrl')),
+        invokeTextField('result_url', t('tools.invoke.resultUrl')),
+        invokeTextField('result_hash', t('tools.invoke.resultHash')),
+        invokeTextField('observed_at', t('tools.invoke.observedAt'), t('tools.invoke.unixTimestamp'), '', 'number'),
+        invokeTextField('agent_version', t('tools.invoke.agentVersion'), t('tools.common.optional')),
+        invokeTextField('model_version', t('tools.invoke.modelVersion'), t('tools.common.optional')),
+        invokeTextField('core_node_pubkey', t('tools.invoke.coreNodePubkey'), t('tools.common.optional')),
+        invokeTextField('core_node_signature', t('tools.invoke.coreNodeSignature'), t('tools.common.optional')),
       ]
     }
     if (action === 'reject') {
       return [
-        invokeTextField('reason', '原因'),
-        invokeTextField('checked_at', '检查时间', 'Unix 时间戳', '', 'number'),
+        invokeTextField('reason', t('tools.invoke.reason')),
+        invokeTextField('checked_at', t('tools.invoke.checkedAt'), t('tools.invoke.unixTimestamp'), '', 'number'),
       ]
     }
   }
   if (invokeContractType.value === 'evm' && action === 'call') {
-    return [invokeTextField('calldataHex', 'Calldata Hex', '不带 0x 或带 0x 均可')]
+    return [invokeTextField('calldataHex', 'Calldata Hex', t('tools.contracts.calldataPlaceholder'))]
   }
   return []
 }
@@ -1293,15 +1473,15 @@ const invokeFieldBalanceText = (field: InvokeParamField) => {
   if (field.key === 'assetName') return ''
   if (field.key === 'lptAmt') {
     const lpBalance = findLpBalanceForWallet()
-    return lpBalance ? `${field.balanceLabel || '可用'}：${lpBalance}` : ''
+    return lpBalance ? t('tools.invoke.balanceLine', { label: field.balanceLabel || t('tools.common.available'), value: lpBalance }) : ''
   }
   const assetName = resolveInvokeBalanceAsset(field)
   if (!assetName || !isQueryableInvokeAsset(assetName)) return ''
   const balance = invokeBalanceMap.value[invokeBalanceCacheKey(assetName)]
-  const label = field.balanceLabel || `${displayAssetName(assetName)} 可用`
-  if (!balance || balance.loading) return `${label}：查询中...`
-  if (balance.error) return `${label}：查询失败`
-  return `${label}：${balance.availableAmt}`
+  const label = field.balanceLabel || t('tools.invoke.assetAvailableLabel', { asset: displayAssetName(assetName) })
+  if (!balance || balance.loading) return t('tools.invoke.balanceLoading', { label })
+  if (balance.error) return t('tools.invoke.balanceFailed', { label })
+  return t('tools.invoke.balanceLine', { label, value: balance.availableAmt })
 }
 
 const parseDecimalUnits = (value: unknown) => {
@@ -1370,14 +1550,14 @@ const addLiquidityRatioBase = computed(() => {
     return {
       assetA: contractAssetAInPool.value,
       assetB: contractAssetBInPool.value,
-      source: '当前池子比例',
+      source: t('tools.invoke.currentPoolRatio'),
     }
   }
   if (isPositiveDecimalString(contractRequiredAssetA.value) && isPositiveDecimalString(contractRequiredAssetB.value)) {
     return {
       assetA: contractRequiredAssetA.value,
       assetB: contractRequiredAssetB.value,
-      source: '初始要求比例',
+      source: t('tools.invoke.initialRequiredRatio'),
     }
   }
   return null
@@ -1387,44 +1567,44 @@ const addLiquidityRequiredText = () => {
   const requiredA = contractRequiredAssetA.value
   const requiredB = contractRequiredAssetB.value
   if (!isPositiveDecimalString(requiredA) && !isPositiveDecimalString(requiredB)) return ''
-  const assetAName = displayAssetName(contractAssetAName.value || '资产 A')
+  const assetAName = displayAssetName(contractAssetAName.value || t('tools.contracts.assetA'))
   const assetBName = displayAssetName(contractAssetBName.value)
   const remainingA = subtractDecimalNonNegative(requiredA || '0', contractAssetAInPool.value)
   const remainingB = subtractDecimalNonNegative(requiredB || '0', contractAssetBInPool.value)
   const remainingText = remainingA || remainingB
-    ? `；当前还需：${assetAName} ${remainingA || '0'}，${assetBName} ${remainingB || '0'}`
+    ? t('tools.invoke.currentlyNeeds', { assetA: assetAName, amountA: remainingA || '0', assetB: assetBName, amountB: remainingB || '0' })
     : ''
-  return `池子最低要求：${assetAName} ${requiredA || '0'}，${assetBName} ${requiredB || '0'}${remainingText}`
+  return `${t('tools.invoke.poolMinimumRequirement', { assetA: assetAName, amountA: requiredA || '0', assetB: assetBName, amountB: requiredB || '0' })}${remainingText}`
 }
 
 const invokeFieldHelpText = (field: InvokeParamField) => {
   if (invokeContractSubtype.value !== 'amm.tc' || invokeAction.value !== 'addliq') return ''
-  const assetAName = displayAssetName(contractAssetAName.value || '资产 A')
+  const assetAName = displayAssetName(contractAssetAName.value || t('tools.contracts.assetA'))
   const assetBName = displayAssetName(contractAssetBName.value)
   const ratio = addLiquidityRatioBase.value
   if (field.key === 'assetName') {
     const requiredText = addLiquidityRequiredText()
     if (!ratio) return requiredText
-    return `${requiredText}；${ratio.source}：${assetAName} ${ratio.assetA} / ${assetBName} ${ratio.assetB}`
+    return `${requiredText}${t('tools.invoke.ratioText', { source: ratio.source, assetA: assetAName, amountA: ratio.assetA, assetB: assetBName, amountB: ratio.assetB })}`
   }
   if (!ratio) return ''
   if (field.key === 'amt') {
     const amount = String(invokeParamForm.value.amt || '').trim()
     if (isPositiveDecimalString(amount)) {
       const matchedB = multiplyByDecimalRatioCeil(amount, ratio.assetB, ratio.assetA)
-      return matchedB ? `按${ratio.source}，匹配${assetBName}数量约为：${matchedB}` : ''
+      return matchedB ? t('tools.invoke.matchedAmount', { source: ratio.source, asset: assetBName, amount: matchedB }) : ''
     }
     const remainingA = subtractDecimalNonNegative(contractRequiredAssetA.value || '0', contractAssetAInPool.value)
-    return isPositiveDecimalString(remainingA) ? `${assetAName} 最少还需：${remainingA}` : ''
+    return isPositiveDecimalString(remainingA) ? t('tools.invoke.minimumStillNeeded', { asset: assetAName, amount: remainingA }) : ''
   }
   if (field.key === 'value') {
     const value = String(invokeParamForm.value.value || '').trim()
     if (isPositiveDecimalString(value)) {
       const matchedA = multiplyByDecimalRatioCeil(value, ratio.assetA, ratio.assetB)
-      return matchedA ? `按${ratio.source}，匹配${assetAName}数量约为：${matchedA}` : ''
+      return matchedA ? t('tools.invoke.matchedAmount', { source: ratio.source, asset: assetAName, amount: matchedA }) : ''
     }
     const remainingB = subtractDecimalNonNegative(contractRequiredAssetB.value || '0', contractAssetBInPool.value)
-    return isPositiveDecimalString(remainingB) ? `${assetBName} 最少还需：${remainingB}` : ''
+    return isPositiveDecimalString(remainingB) ? t('tools.invoke.minimumStillNeeded', { asset: assetBName, amount: remainingB }) : ''
   }
   return ''
 }
@@ -1541,9 +1721,9 @@ const walletContractSchemas = (contracts: string[] = []): ContractSchema[] => {
       type: 'template',
       subtype: 'limitorder.tc',
       name: 'limitorder.tc',
-      label: '限价单模板合约',
+      label: t('tools.schemas.limitOrder'),
       enabled: true,
-      fields: [{ name: 'assetName', label: '交易资产', type: 'asset', required: true, placeholder: '如 ordx:f:dogcoin' }],
+      fields: [{ name: 'assetName', label: t('tools.schemas.tradeAsset'), type: 'asset', required: true, placeholder: t('tools.placeholders.assetExampleDogcoin') }],
     })
   }
   if (has('amm.tc')) {
@@ -1551,13 +1731,13 @@ const walletContractSchemas = (contracts: string[] = []): ContractSchema[] => {
       type: 'template',
       subtype: 'amm.tc',
       name: 'amm.tc',
-      label: 'AMM 模板合约',
+      label: t('tools.schemas.amm'),
       enabled: true,
       fields: [
-        { name: 'assetName', label: '池子资产', type: 'asset', required: true, placeholder: '如 ordx:f:dogcoin' },
-        { name: 'assetAmt', label: '初始资产数量', type: 'decimal', required: true, placeholder: '如 100000' },
-        { name: 'satValue', label: '初始聪数量', type: 'integer', required: true, placeholder: '如 1000' },
-        { name: 'k', label: '常数 K', type: 'computed', placeholder: '根据初始资产数量和初始聪数量自动计算' },
+        { name: 'assetName', label: t('tools.schemas.poolAsset'), type: 'asset', required: true, placeholder: t('tools.placeholders.assetExampleDogcoin') },
+        { name: 'assetAmt', label: t('tools.schemas.initialAssetAmount'), type: 'decimal', required: true, placeholder: t('tools.placeholders.amount100000') },
+        { name: 'satValue', label: t('tools.schemas.initialSatsAmount'), type: 'integer', required: true, placeholder: t('tools.placeholders.sats1000') },
+        { name: 'k', label: t('tools.schemas.constantK'), type: 'computed', placeholder: t('tools.schemas.constantKPlaceholder') },
       ],
     })
   }
@@ -1566,30 +1746,30 @@ const walletContractSchemas = (contracts: string[] = []): ContractSchema[] => {
       type: 'template',
       subtype: 'exchange.tc',
       name: 'exchange.tc',
-      label: '兑换模板合约',
+      label: t('tools.schemas.exchange'),
       enabled: true,
       fields: [
-        { name: 'assetAName', label: '资产 A', type: 'asset', required: true, placeholder: '如 ordx:f:asset_a' },
-        { name: 'assetBName', label: '资产 B', type: 'asset', required: true, placeholder: '如 ::' },
+        { name: 'assetAName', label: t('tools.contracts.assetA'), type: 'asset', required: true, placeholder: t('tools.placeholders.assetExampleA') },
+        { name: 'assetBName', label: t('tools.contracts.assetB'), type: 'asset', required: true, placeholder: t('tools.placeholders.satsAsset') },
         {
           name: 'priceMode',
-          label: '价格模式',
+          label: t('tools.schemas.priceMode'),
           type: 'select',
           required: true,
           default: 'height',
           options: [
-            { label: '按区块高度', value: 'height' },
-            { label: '按已售出资产 A', value: 'sold_a' },
+            { label: t('tools.schemas.byBlockHeight'), value: 'height' },
+            { label: t('tools.schemas.bySoldAssetA'), value: 'sold_a' },
           ],
         },
         {
           name: 'steps',
-          label: '价格阶梯',
+          label: t('tools.schemas.priceSteps'),
           type: 'array',
           required: true,
           fields: [
-            { name: 'threshold', label: '阈值', type: 'decimal', required: true, default: '0' },
-            { name: 'bPerA', label: '每份 A 可换 B', type: 'decimal', required: true, placeholder: '如 0.0001' },
+            { name: 'threshold', label: t('tools.schemas.threshold'), type: 'decimal', required: true, default: '0' },
+            { name: 'bPerA', label: t('tools.schemas.bPerA'), type: 'decimal', required: true, placeholder: t('tools.placeholders.decimal0001') },
           ],
         },
       ],
@@ -1600,36 +1780,36 @@ const walletContractSchemas = (contracts: string[] = []): ContractSchema[] => {
       type: 'agent',
       subtype: 'prediction',
       name: 'agent:prediction',
-      label: '自然语言预测合约',
+      label: t('tools.schemas.predictionAgent'),
       enabled: true,
       fields: [
-        { name: 'title', label: '标题', type: 'text', required: true },
-        { name: 'description', label: '描述', type: 'textarea', required: true },
+        { name: 'title', label: t('tools.schemas.title'), type: 'text', required: true },
+        { name: 'description', label: t('tools.schemas.description'), type: 'textarea', required: true },
         {
           name: 'time_base',
-          label: '时间类型',
+          label: t('tools.schemas.timeType'),
           type: 'select',
           required: true,
           default: 'unix',
           options: [
-            { label: 'Unix 时间戳', value: 'unix' },
-            { label: '区块高度', value: 'height' },
+            { label: t('tools.invoke.unixTimestamp'), value: 'unix' },
+            { label: t('tools.schemas.blockHeight'), value: 'height' },
           ],
         },
-        { name: 'event_time', label: '事件时间', type: 'integer', required: true },
-        { name: 'bet_deadline', label: '下注截止', type: 'integer', required: true },
-        { name: 'confirm_after', label: '可确认时间', type: 'integer', required: true },
-        { name: 'source_url', label: '信息来源 URL', type: 'url', required: true },
-        { name: 'bet_asset', label: '下注资产', type: 'asset', required: true, default: '::' },
-        { name: 'min_bet_unit', label: '最小下注单位', type: 'decimal', required: true, default: '1000' },
+        { name: 'event_time', label: t('tools.schemas.eventTime'), type: 'integer', required: true },
+        { name: 'bet_deadline', label: t('tools.schemas.betDeadline'), type: 'integer', required: true },
+        { name: 'confirm_after', label: t('tools.schemas.confirmAfter'), type: 'integer', required: true },
+        { name: 'source_url', label: t('tools.schemas.sourceInfoUrl'), type: 'url', required: true },
+        { name: 'bet_asset', label: t('tools.schemas.betAsset'), type: 'asset', required: true, default: '::' },
+        { name: 'min_bet_unit', label: t('tools.schemas.minBetUnit'), type: 'decimal', required: true, default: '1000' },
         {
           name: 'outcomes',
-          label: '结果选项',
+          label: t('tools.schemas.outcomes'),
           type: 'array',
           required: true,
           fields: [
-            { name: 'id', label: 'ID', type: 'text', required: true, placeholder: '如 yes' },
-            { name: 'text', label: '显示文本', type: 'text', required: true },
+            { name: 'id', label: 'ID', type: 'text', required: true, placeholder: t('tools.placeholders.yes') },
+            { name: 'text', label: t('tools.schemas.displayText'), type: 'text', required: true },
           ],
         },
       ],
@@ -1690,17 +1870,17 @@ const computedContractFieldValue = (field: ContractFieldSchema) => {
 const checkContractAsset = async (fieldName: string) => {
   try {
     const assetName = String(deployContractForm.value[fieldName] || '').trim()
-    if (!assetName) throw new Error('请输入资产名称')
+    if (!assetName) throw new Error(t('tools.errors.enterAssetName'))
     if (assetName === '::') {
-      showSuccess('资产可用', '聪资产')
+      showSuccess(t('tools.messages.assetAvailable'), t('tools.messages.satsAsset'))
       return
     }
-    if (!contractAssetTicker(fieldName).trim()) throw new Error('请输入 ticker 名称')
+    if (!contractAssetTicker(fieldName).trim()) throw new Error(t('tools.errors.enterTickerName'))
     const [err] = await sat20.getTickerInfo(assetName)
     if (err) throw err
-    showSuccess('资产可用', assetName)
+    showSuccess(t('tools.messages.assetAvailable'), assetName)
   } catch (error) {
-    showError('资产检查失败', error)
+    showError(t('tools.messages.assetCheckFailed'), error)
   }
 }
 
@@ -1729,17 +1909,49 @@ const selectFirstSchemaForType = () => {
   }
 }
 
+const supportedContractsCacheKey = () => `${SUPPORTED_CONTRACTS_CACHE_PREFIX}:${env.value || 'prd'}:${network.value || 'testnet'}`
+
+const applySupportedContracts = (contracts: string[]) => {
+  contractSchemas.value = walletContractSchemas(contracts)
+  if (contractSchemas.value.length) {
+    selectFirstSchemaForType()
+  }
+}
+
+const saveSupportedContractsCache = async (contracts: string[]) => {
+  await Storage.set({
+    key: supportedContractsCacheKey(),
+    value: JSON.stringify({
+      contracts,
+      updatedAt: Date.now(),
+    }),
+  })
+}
+
+const restoreSupportedContractsCache = async () => {
+  const { value } = await Storage.get({ key: supportedContractsCacheKey() })
+  if (!value) return
+  try {
+    const cached = JSON.parse(value)
+    if (!Array.isArray(cached?.contracts)) return
+    applySupportedContracts(cached.contracts.filter((item: unknown) => typeof item === 'string'))
+  } catch (error) {
+    console.warn('[SAT20 Tools] restore supported contracts cache failed', error)
+  }
+}
+
 const loadSupportedContracts = async () => {
   try {
     isLoadingSupportedContracts.value = true
     const res = await smartContractApi.getContracts({ network: network.value || 'testnet', start: 0, limit: 1 })
-    if (res?.code !== 0) throw new Error(res?.msg || '加载智能合约列表失败')
-    contractSchemas.value = walletContractSchemas(res.contracts || [])
-    if (!contractSchemas.value.length) throw new Error('当前 indexer 没有返回可部署合约参数')
-    selectFirstSchemaForType()
-    showSuccess('加载完成', `找到 ${contractSchemas.value.filter((schema) => schema.enabled).length} 类可部署合约`)
+    if (res?.code !== 0) throw new Error(res?.msg || t('tools.errors.loadContractListFailed'))
+    const contracts = Array.isArray(res.contracts) ? res.contracts.filter((item: unknown) => typeof item === 'string') : []
+    applySupportedContracts(contracts)
+    if (!contractSchemas.value.length) throw new Error(t('tools.errors.noDeployableContracts'))
+    await saveSupportedContractsCache(contracts)
+    showSuccess(t('tools.messages.loadComplete'), t('tools.messages.deployableContractsFound', { count: contractSchemas.value.filter((schema) => schema.enabled).length }))
   } catch (error) {
-    showError('加载失败', error)
+    showError(t('tools.messages.loadFailed'), error)
   } finally {
     isLoadingSupportedContracts.value = false
   }
@@ -1755,13 +1967,13 @@ const assetNameObject = (assetName: string) => {
 const multiplyDecimalByInteger = (decimalValue: unknown, integerValue: unknown) => {
   const decimal = String(decimalValue ?? '').trim()
   const integer = String(integerValue ?? '').trim()
-  if (!/^\d+(\.\d+)?$/.test(decimal)) throw new Error('初始资产数量必须是非负数字')
-  if (!/^\d+$/.test(integer)) throw new Error('初始聪数量必须是正整数')
+  if (!/^\d+(\.\d+)?$/.test(decimal)) throw new Error(t('tools.errors.initialAssetAmountNonNegative'))
+  if (!/^\d+$/.test(integer)) throw new Error(t('tools.errors.initialSatsPositiveInteger'))
   const multiplier = BigInt(integer)
-  if (multiplier <= 0n) throw new Error('初始聪数量必须是正整数')
+  if (multiplier <= 0n) throw new Error(t('tools.errors.initialSatsPositiveInteger'))
   const [integerPart, fractionPart = ''] = decimal.split('.')
   const decimalUnits = BigInt(`${integerPart || '0'}${fractionPart}`)
-  if (decimalUnits <= 0n) throw new Error('初始资产数量必须大于 0')
+  if (decimalUnits <= 0n) throw new Error(t('tools.errors.initialAssetAmountPositive'))
   const product = decimalUnits * multiplier
   if (!fractionPart.length) return product.toString()
   const padded = product.toString().padStart(fractionPart.length + 1, '0')
@@ -1798,7 +2010,7 @@ const buildTemplateContractContent = (schema: ContractSchema) => {
         })),
       })
     default:
-      throw new Error(`暂不支持部署模板 ${schema.name}`)
+      throw new Error(t('tools.errors.unsupportedTemplate', { name: schema.name }))
   }
 }
 
@@ -1827,9 +2039,9 @@ const deploySmartContract = async () => {
     isDeployingSmartContract.value = true
     deploySmartContractResult.value = ''
     const schema = selectedContractSchema.value
-    if (!schema) throw new Error('请选择合约类型')
-    if (!formHasRequiredValues(schema.fields || [])) throw new Error('请填写必填参数')
-    const gasLimit = parseOptionalPositiveInteger(deployContractGasLimit.value, 'Gas 上限')
+    if (!schema) throw new Error(t('tools.errors.selectContractType'))
+    if (!formHasRequiredValues(schema.fields || [])) throw new Error(t('tools.errors.fillRequiredParams'))
+    const gasLimit = parseOptionalPositiveInteger(deployContractGasLimit.value, t('tools.contracts.gasLimit'))
     let req: Record<string, unknown>
     if (schema.type === 'template') {
       req = {
@@ -1850,14 +2062,27 @@ const deploySmartContract = async () => {
         },
       }
     } else {
-      throw new Error('EVM 合约暂未启用')
+      throw new Error(t('tools.errors.evmDisabled'))
     }
+    const confirmed = await confirmToolTransaction({
+      purpose: t('tools.txConfirm.purposes.deploySmartContract'),
+      to: t('tools.txConfirm.smartContractSystem'),
+      asset: displayAssetName('::'),
+      amount: calculatedAmountLabel(),
+      network: l2NetworkLabel(),
+      details: compactRows([
+        txDetail(t('tools.txConfirm.contractType'), schema.label || schema.name),
+        txDetail(t('tools.txConfirm.schema'), schema.subtype || schema.name),
+        gasLimit ? txDetail(t('tools.contracts.gasLimit'), gasLimit) : null,
+      ]),
+    })
+    if (!confirmed) return
     const [err, res] = await sat20.deployUnifiedContract(req)
     if (err) throw err
     deploySmartContractResult.value = JSON.stringify(res, null, 2)
-    showSuccess('部署已提交', res?.txid || res?.contractAddress || '交易已广播')
+    showSuccess(t('tools.messages.deploySubmitted'), res?.txid || res?.contractAddress || t('tools.messages.txBroadcasted'))
   } catch (error) {
-    showError('部署失败', error)
+    showError(t('tools.messages.deployFailed'), error)
   } finally {
     isDeployingSmartContract.value = false
   }
@@ -1867,11 +2092,11 @@ const loadContracts = async () => {
   try {
     isContractLoading.value = true
     const res = await smartContractApi.getContracts({ network: network.value || 'testnet', start: 0, limit: 50 })
-    if (res?.code !== 0) throw new Error(res?.msg || '查询合约列表失败')
+    if (res?.code !== 0) throw new Error(res?.msg || t('tools.errors.queryContractListFailed'))
     contractList.value = res.data || []
-    showSuccess('查询完成', `找到 ${contractList.value.length} 个智能合约`)
+    showSuccess(t('tools.messages.queryComplete'), t('tools.messages.contractsFound', { count: contractList.value.length }))
   } catch (error) {
-    showError('查询失败', error)
+    showError(t('tools.messages.queryFailed'), error)
   } finally {
     isContractLoading.value = false
   }
@@ -1880,7 +2105,7 @@ const loadContracts = async () => {
 const loadContract = async () => {
   const contract = contractQuery.value.trim()
   if (!contract) {
-    showError('参数错误', '请输入合约地址')
+    showError(t('tools.messages.parameterError'), t('tools.errors.enterContractAddress'))
     return
   }
   try {
@@ -1889,13 +2114,13 @@ const loadContract = async () => {
       smartContractApi.getContract({ network: network.value || 'testnet', contract }),
       smartContractApi.getContractState({ network: network.value || 'testnet', contract }),
     ])
-    if (summary?.code !== 0) throw new Error(summary?.msg || '查询合约失败')
+    if (summary?.code !== 0) throw new Error(summary?.msg || t('tools.errors.queryContractFailed'))
     selectedContract.value = summary.data
     contractState.value = state?.code === 0 ? state.data || state.status : state
     contractHistory.value = null
     invokeContractAddress.value = contract
   } catch (error) {
-    showError('查询失败', error)
+    showError(t('tools.messages.queryFailed'), error)
   } finally {
     isContractLoading.value = false
   }
@@ -1904,16 +2129,16 @@ const loadContract = async () => {
 const loadContractHistory = async () => {
   const contract = selectedContractAddress.value
   if (!contract) {
-    showError('参数错误', '请先选择或输入合约地址')
+    showError(t('tools.messages.parameterError'), t('tools.errors.selectOrEnterContractAddress'))
     return
   }
   try {
     isContractLoading.value = true
     const res = await smartContractApi.getContractHistory({ network: network.value || 'testnet', contract })
-    if (res?.code !== 0) throw new Error(res?.msg || '查询合约历史失败')
+    if (res?.code !== 0) throw new Error(res?.msg || t('tools.errors.queryContractHistoryFailed'))
     contractHistory.value = res.data || []
   } catch (error) {
-    showError('查询失败', error)
+    showError(t('tools.messages.queryFailed'), error)
   } finally {
     isContractLoading.value = false
   }
@@ -1931,17 +2156,19 @@ const invokeSmartContract = async () => {
     isInvokingContract.value = true
     contractInvokeResult.value = ''
     const contract = invokeContractAddress.value.trim()
-    if (!contract) throw new Error('请输入合约地址')
+    if (!contract) throw new Error(t('tools.errors.enterContractAddress'))
     const req = buildUnifiedInvokeRequest(contract)
     if (import.meta.env.DEV) {
       console.log('[SAT20 Tools] invokeUnifiedContract request', req)
     }
+    const confirmed = await confirmToolTransaction(invokeTransactionSummary(contract, req))
+    if (!confirmed) return
     const [err, res] = await sat20.invokeUnifiedContract(req)
     if (err) throw err
     contractInvokeResult.value = res?.txid || ''
-    showSuccess('调用已提交', res?.txid || '交易已广播')
+    showSuccess(t('tools.messages.invokeSubmitted'), res?.txid || t('tools.messages.txBroadcasted'))
   } catch (error) {
-    showError('调用失败', error)
+    showError(t('tools.messages.invokeFailed'), error)
   } finally {
     isInvokingContract.value = false
   }
@@ -1952,16 +2179,22 @@ const checkDeployTicker = async () => {
   deployCheckKey.value = ''
   const ticker = normalizeTicker(deployTicker.value, deployProtocol.value)
   if (!ticker) {
-    showError('参数错误', '请输入 ticker')
+    showError(t('tools.messages.parameterError'), t('tools.errors.enterTicker'))
+    return
+  }
+  try {
+    validateDeployTickerForProtocol(deployProtocol.value, ticker)
+  } catch (error) {
+    showError(t('tools.messages.parameterError'), error)
     return
   }
   const [err] = await sat20.getTickerInfo(assetNameFor(deployProtocol.value, ticker))
   if (err) {
     deployCanDeploy.value = true
     deployCheckKey.value = currentDeployCheckKey.value
-    showSuccess('可以部署', `${deployProtocol.value}:${ticker} 暂未查询到已部署信息`)
+    showSuccess(t('tools.messages.canDeploy'), t('tools.messages.tickerNotDeployed', { protocol: deployProtocol.value, ticker }))
   } else {
-    showError('不能部署', 'ticker 已存在或 indexer 返回了现有信息')
+    showError(t('tools.messages.cannotDeploy'), t('tools.errors.tickerExists'))
   }
 }
 
@@ -1970,32 +2203,66 @@ const deployTickerAction = async () => {
     isDeployingTicker.value = true
     deployTickerResult.value = ''
     const ticker = normalizeTicker(deployTicker.value, deployProtocol.value)
-    if (!ticker) throw new Error('请输入 ticker')
-    if (!isDeployTickerReady.value) throw new Error('请先检查 ticker，检查通过后再部署')
+    if (!ticker) throw new Error(t('tools.errors.enterTicker'))
+    validateDeployTickerForProtocol(deployProtocol.value, ticker)
+    if (!isDeployTickerReady.value) throw new Error(t('tools.errors.checkTickerBeforeDeploy'))
+    const deployDetails = compactRows([
+      txDetail(t('tools.txConfirm.protocol'), deployProtocol.value),
+      txDetail(t('tools.txConfirm.ticker'), ticker),
+      txDetail(t('tools.mint.maxSupply'), deployMaxSupply.value),
+      showDeployLimit.value ? txDetail(t('tools.mint.mintLimit'), deployLimit.value) : null,
+      txDetail(t('tools.mint.feeRate'), mintFeeRate.value),
+    ])
+    let ordxBindingSat = 0
+    let deployDecimal = ''
+    let runesDestAddress = ''
+    let runesLimit = deployLimit.value
     if (deployProtocol.value === 'ordx') {
-      const n = parsePositiveInteger(bindingSat.value, '每聪绑定资产份数')
-      if (!bindingSatOptions.includes(String(n))) throw new Error('每聪绑定资产份数只能选择 1、10、100、1000、10000、100000')
-      const [err, res] = await sat20.deployTickerOrdx(ticker, deployMaxSupply.value, deployLimit.value, n, mintFeeRate.value)
+      ordxBindingSat = parsePositiveInteger(bindingSat.value, t('tools.mint.bindingSat'))
+      if (!bindingSatOptions.includes(String(ordxBindingSat))) throw new Error(t('tools.errors.bindingSatOptions'))
+      deployDetails.push({ label: t('tools.mint.bindingSat'), value: String(ordxBindingSat) })
+    } else if (deployProtocol.value === 'brc20') {
+      deployDecimal = parseDeployDecimals()
+      deployDetails.push(
+        { label: t('tools.mint.decimal'), value: deployDecimal },
+        { label: t('tools.mint.selfMint'), value: effectiveDeploySelfMint.value ? t('common.enable') : t('common.disable') },
+      )
+    } else {
+      runesDestAddress = walletStore.address || ''
+      if (!runesDestAddress) throw new Error(t('tools.errors.walletAddressUnavailable'))
+      runesLimit = deploySelfMint.value ? deployMaxSupply.value : deployLimit.value
+      deployDecimal = parseDeployDecimals()
+      deployDetails.push(
+        { label: t('tools.mint.divisibility'), value: deployDecimal },
+        { label: t('tools.mint.selfMint'), value: deploySelfMint.value ? t('common.enable') : t('common.disable') },
+      )
+    }
+    const confirmed = await confirmToolTransaction({
+      purpose: t('tools.txConfirm.purposes.deployTicker'),
+      to: deployProtocol.value === 'runes' ? runesDestAddress : currentWalletAddress(),
+      asset: displayAssetName('::'),
+      amount: calculatedAmountLabel(),
+      network: l1NetworkLabel(),
+      feeRate: mintFeeRate.value,
+      details: deployDetails,
+    })
+    if (!confirmed) return
+    if (deployProtocol.value === 'ordx') {
+      const [err, res] = await sat20.deployTickerOrdx(ticker, deployMaxSupply.value, deployLimit.value, ordxBindingSat, mintFeeRate.value)
       if (err) throw err
       deployTickerResult.value = res?.txId || ''
     } else if (deployProtocol.value === 'brc20') {
-      if (ticker.length !== 4) throw new Error('当前钱包暂不支持部署 BRC20 self mint ticker')
-      const decimal = parseDeployDecimals()
-      const [err, res] = await sat20.deployTickerBrc20(ticker, deployMaxSupply.value, deployLimit.value, decimal, mintFeeRate.value)
+      const [err, res] = await sat20.deployTickerBrc20(ticker, deployMaxSupply.value, deployLimit.value, deployDecimal, mintFeeRate.value)
       if (err) throw err
       deployTickerResult.value = res?.txId || ''
     } else {
-      const destAddress = walletStore.address || ''
-      if (!destAddress) throw new Error('当前钱包地址不可用')
-      const runesLimit = deploySelfMint.value ? deployMaxSupply.value : deployLimit.value
-      const divisibility = parseDeployDecimals()
-      const [err, res] = await sat20.DeployRunes_Remote(ticker, 0, deployMaxSupply.value, runesLimit, deploySelfMint.value, destAddress, divisibility, mintFeeRate.value)
+      const [err, res] = await sat20.DeployRunes_Remote(ticker, 0, deployMaxSupply.value, runesLimit, deploySelfMint.value, runesDestAddress, deployDecimal, mintFeeRate.value)
       if (err) throw err
       deployTickerResult.value = res?.txId || ''
     }
-    showSuccess('部署已提交', deployTickerResult.value || '交易已广播')
+    showSuccess(t('tools.messages.deploySubmitted'), deployTickerResult.value || t('tools.messages.txBroadcasted'))
   } catch (error) {
-    showError('部署失败', error)
+    showError(t('tools.messages.deployFailed'), error)
   } finally {
     isDeployingTicker.value = false
   }
@@ -2006,17 +2273,17 @@ const checkMintTickerAvailability = async (showAvailableToast = true) => {
   mintCheckKey.value = ''
   const ticker = normalizeTicker(mintTicker.value, mintProtocol.value)
   if (!ticker) {
-    showError('参数错误', '请输入 ticker')
+    showError(t('tools.messages.parameterError'), t('tools.errors.enterTicker'))
     return false
   }
   const address = walletStore.address || ''
   if (!address) {
-    showError('参数错误', '当前钱包地址不可用')
+    showError(t('tools.messages.parameterError'), t('tools.errors.walletAddressUnavailable'))
     return false
   }
   const [err, res] = await sat20.getTickerInfo(assetNameFor(mintProtocol.value, ticker))
   if (err) {
-    showError('不能铸造', '未查询到 ticker 信息')
+    showError(t('tools.messages.cannotMint'), t('tools.errors.tickerInfoNotFound'))
     return false
   }
   let mintLimit = ''
@@ -2029,7 +2296,7 @@ const checkMintTickerAvailability = async (showAvailableToast = true) => {
     // Keep manual input when the response shape is unknown.
   }
   if (mintProtocol.value === 'brc20' && (ticker.length !== 4 || Number(tickerInfo?.selfmint || tickerInfo?.SelfMint || 0) > 0)) {
-    showError('不能铸造', '当前钱包暂不支持 BRC20 self mint ticker')
+    showError(t('tools.messages.cannotMint'), t('tools.errors.brc20SelfMintUnsupported'))
     return false
   }
 
@@ -2040,25 +2307,25 @@ const checkMintTickerAvailability = async (showAvailableToast = true) => {
     network: network.value,
   })
   if (permission?.code !== 0 || !permission?.data) {
-    showError('不能铸造', permission?.msg || '当前地址没有铸造权限')
+    showError(t('tools.messages.cannotMint'), permission?.msg || t('tools.errors.noMintPermission'))
     return false
   }
   const permissionAmount = String(permission.data.amount ?? '')
   if (!isPositiveDecimalString(permissionAmount)) {
-    showError('不能铸造', '当前地址可铸造数量为 0')
+    showError(t('tools.messages.cannotMint'), t('tools.errors.mintableAmountZero'))
     return false
   }
   if (mintProtocol.value !== 'runes') {
     if (!isPositiveDecimalString(mintAmount.value)) {
-      showError('参数错误', '请输入有效的铸造数量')
+      showError(t('tools.messages.parameterError'), t('tools.errors.enterValidMintAmount'))
       return false
     }
     if (isPositiveDecimalString(mintLimit) && compareDecimalStrings(mintAmount.value, mintLimit) > 0) {
-      showError('不能铸造', `单次最多可铸造 ${mintLimit}`)
+      showError(t('tools.messages.cannotMint'), t('tools.errors.singleMintLimit', { amount: mintLimit }))
       return false
     }
     if (compareDecimalStrings(mintAmount.value, permissionAmount) > 0) {
-      showError('不能铸造', `当前地址最多可铸造 ${permissionAmount}`)
+      showError(t('tools.messages.cannotMint'), t('tools.errors.addressMintLimit', { amount: permissionAmount }))
       return false
     }
   } else if (!mintAmount.value) {
@@ -2066,7 +2333,7 @@ const checkMintTickerAvailability = async (showAvailableToast = true) => {
   }
 
   if (showAvailableToast) {
-    showSuccess('可以铸造', `当前地址最多可铸造 ${permissionAmount}`)
+    showSuccess(t('tools.messages.canMint'), t('tools.errors.addressMintLimit', { amount: permissionAmount }))
   }
   mintCanMint.value = true
   mintCheckKey.value = currentMintCheckKey.value
@@ -2082,11 +2349,24 @@ const mintAssetAction = async () => {
     isMintingAsset.value = true
     mintAssetResult.value = ''
     const ticker = normalizeTicker(mintTicker.value, mintProtocol.value)
-    if (!ticker) throw new Error('请输入 ticker')
-    if (mintProtocol.value !== 'runes' && !mintAmount.value) throw new Error('请输入铸造数量')
-    if (!isMintAssetReady.value) throw new Error('请先检查 ticker 和铸造权限，检查通过后再铸造')
+    if (!ticker) throw new Error(t('tools.errors.enterTicker'))
+    if (mintProtocol.value !== 'runes' && !mintAmount.value) throw new Error(t('tools.errors.enterMintAmount'))
+    if (!isMintAssetReady.value) throw new Error(t('tools.errors.checkTickerBeforeMint'))
     const canMint = await checkMintTickerAvailability(false)
     if (!canMint) return
+    const confirmed = await confirmToolTransaction({
+      purpose: t('tools.txConfirm.purposes.mintAsset'),
+      to: currentWalletAddress(),
+      asset: displayAssetName(assetNameFor(mintProtocol.value, ticker)),
+      amount: mintProtocol.value === 'runes' ? t('tools.txConfirm.deploymentTerms') : mintAmount.value,
+      network: l1NetworkLabel(),
+      feeRate: mintFeeRate.value,
+      details: compactRows([
+        txDetail(t('tools.txConfirm.protocol'), mintProtocol.value),
+        txDetail(t('tools.txConfirm.ticker'), ticker),
+      ]),
+    })
+    if (!confirmed) return
     const [err, res] = mintProtocol.value === 'ordx'
       ? await sat20.mintAssetOrdx(ticker, mintAmount.value, mintFeeRate.value)
       : mintProtocol.value === 'runes'
@@ -2094,9 +2374,9 @@ const mintAssetAction = async () => {
         : await sat20.mintAssetBrc20(ticker, mintAmount.value, mintFeeRate.value)
     if (err) throw err
     mintAssetResult.value = res?.txId || ''
-    showSuccess('铸造已提交', mintAssetResult.value || '交易已广播')
+    showSuccess(t('tools.messages.mintSubmitted'), mintAssetResult.value || t('tools.messages.txBroadcasted'))
   } catch (error) {
-    showError('铸造失败', error)
+    showError(t('tools.messages.mintFailed'), error)
   } finally {
     isMintingAsset.value = false
   }
@@ -2107,27 +2387,27 @@ const checkDidNameAvailability = async (showAvailableToast = true) => {
   didCanMint.value = false
   didCheckKey.value = ''
   if (!name) {
-    showError('参数错误', '请输入名字')
+    showError(t('tools.messages.parameterError'), t('tools.errors.enterName'))
     return false
   }
   if (/\s|\//.test(name)) {
-    showError('参数错误', '名字不能包含空白字符或 /')
+    showError(t('tools.messages.parameterError'), t('tools.errors.invalidName'))
     return false
   }
   try {
     const res = await ordxApi.getNsName({ name, network: network.value })
     if (res?.code === 0 && res?.data) {
-      showError('不能铸造', '名字已存在')
+      showError(t('tools.messages.cannotMint'), t('tools.errors.nameExists'))
       return false
     }
     didCanMint.value = true
     didCheckKey.value = currentDidCheckKey.value
     if (showAvailableToast) {
-      showSuccess('可以铸造', `${name} 暂未查询到已注册信息`)
+      showSuccess(t('tools.messages.canMint'), t('tools.messages.nameAvailable', { name }))
     }
     return true
   } catch (error) {
-    showError('检查失败', error)
+    showError(t('tools.messages.checkFailed'), error)
     return false
   }
 }
@@ -2141,15 +2421,27 @@ const mintDidAction = async () => {
     isMintingDid.value = true
     didMintResult.value = ''
     const name = didName.value.trim().toLowerCase()
-    if (!isMintDidReady.value) throw new Error('请先检查 DID 名字，检查通过后再铸造')
+    if (!isMintDidReady.value) throw new Error(t('tools.errors.checkDidBeforeMint'))
     const canMint = await checkDidNameAvailability(false)
     if (!canMint || !name) return
+    const confirmed = await confirmToolTransaction({
+      purpose: t('tools.txConfirm.purposes.mintDid'),
+      to: currentWalletAddress(),
+      asset: displayAssetName('::'),
+      amount: calculatedAmountLabel(),
+      network: l1NetworkLabel(),
+      feeRate: mintFeeRate.value,
+      details: compactRows([
+        txDetail(t('tools.txConfirm.name'), name),
+      ]),
+    })
+    if (!confirmed) return
     const [err, res] = await sat20.inscribeName(name, mintFeeRate.value)
     if (err) throw err
     didMintResult.value = res?.txId || ''
-    showSuccess('DID 铸造已提交', didMintResult.value || '交易已广播')
+    showSuccess(t('tools.messages.didMintSubmitted'), didMintResult.value || t('tools.messages.txBroadcasted'))
   } catch (error) {
-    showError('DID 铸造失败', error)
+    showError(t('tools.messages.didMintFailed'), error)
   } finally {
     isMintingDid.value = false
   }
