@@ -1270,6 +1270,10 @@ func (p *TestIndexerClient) GetUtxoListWithTicker(address string, ticker *swire.
 	return p.getUtxoListWithTicker(address, ticker, false)
 }
 
+func (p *TestIndexerClient) GetAllUtxosWithAddress(address string) []*indexerwire.TxOutputInfo {
+	return p.getUtxoListWithTicker(address, nil, false)
+}
+
 func (p *TestIndexerClient) GetUtxoListWithBRC20Ticker(address string, ticker *swire.AssetName, invalid bool) []*indexerwire.TxOutputInfo {
 	return p.getUtxoListWithTicker(address, ticker, invalid)
 }
@@ -1306,7 +1310,11 @@ func (p *TestIndexerClient) getUtxoListWithTicker(address string, ticker *swire.
 			validAssets = append(validAssets, asset)
 		}
 
-		if *ticker != ASSET_PLAIN_SAT {
+		if ticker == nil {
+			output = &indexerwire.TxOutputInfo{
+				OutPoint: utxo,
+			}
+		} else if *ticker != ASSET_PLAIN_SAT {
 			if includeInvalid {
 				if invalidAssets != nil {
 					_, err := invalidAssets.Find(ticker)

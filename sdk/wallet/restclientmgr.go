@@ -353,6 +353,9 @@ func (p *IndexerRPCClientMgr) GetIndexerPubKey() ([]byte, error) {
 func (p *IndexerRPCClientMgr) GetUtxoListWithTicker(address string, ticker *swire.AssetName) []*indexerwire.TxOutputInfo {
 	return p.getActiveIndexer().GetUtxoListWithTicker(address, ticker)
 }
+func (p *IndexerRPCClientMgr) GetAllUtxosWithAddress(address string) []*indexerwire.TxOutputInfo {
+	return p.getActiveIndexer().GetAllUtxosWithAddress(address)
+}
 func (p *IndexerRPCClientMgr) GetUtxoListWithBRC20Ticker(address string, ticker *swire.AssetName, invalid bool) []*indexerwire.TxOutputInfo {
 	return p.getActiveIndexer().GetUtxoListWithBRC20Ticker(address, ticker, invalid)
 }
