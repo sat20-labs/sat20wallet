@@ -366,6 +366,29 @@ func assertUnifiedAgentInvokeParamQuery(t *testing.T, manager *Manager) {
 	}
 }
 
+func TestQueryAgentInvokeFeeDoesNotIncludeBetAmount(t *testing.T) {
+	manager := &Manager{}
+	invokeJSON := mustInvokeJSON(t, contractcommon.AgentInvokeAPIBet, contractcommon.AgentPredictionBetParam{OutcomeID: "a"})
+	fee, err := manager.QueryFeeForInvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType: ContractTypeAgent,
+		Agent: &AgentContractInvokeRequest{
+			JSONInvokeParam: invokeJSON,
+			BetAssetName:    contractcommon.SatoshiAssetName,
+			BetAmount:       "1000",
+		},
+	})
+	if err != nil {
+		t.Fatalf("QueryFeeForInvokeUnifiedContract(agent bet): %v", err)
+	}
+	want, _, err := manager.agentGasAssetAmount(contractcommon.InvokeBaseGas, 0)
+	if err != nil {
+		t.Fatalf("agentGasAssetAmount: %v", err)
+	}
+	if fee != want {
+		t.Fatalf("agent bet fee includes bet amount: got %d want %d", fee, want)
+	}
+}
+
 func assertUnifiedEVMInvokeParamQuery(t *testing.T, manager *Manager) {
 	t.Helper()
 	paramJSON, err := manager.QueryParamForInvokeUnifiedContract(ContractTypeEVM, "", "call")

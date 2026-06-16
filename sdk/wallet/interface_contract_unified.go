@@ -598,16 +598,13 @@ func (p *Manager) queryAgentInvokeFee(req *ContractInvokeRequest) (uint64, error
 	if err != nil {
 		return 0, err
 	}
-	fundingAmount := uint64(0)
 	if converted.Action == contractcommon.AgentInvokeAPIBet {
-		fundingAmount, err = assetAmountStringToUint64("agent bet amount", areq.BetAmount)
-		if err != nil {
+		if strings.TrimSpace(areq.BetAssetName) == "" {
+			return 0, fmt.Errorf("agent bet asset is required")
+		}
+		if _, err := assetAmountStringToUint64("agent bet amount", areq.BetAmount); err != nil {
 			return 0, err
 		}
-		if math.MaxUint64-gasAmount < fundingAmount {
-			return 0, fmt.Errorf("agent invoke gas amount overflows uint64")
-		}
-		gasAmount += fundingAmount
 	}
 	return gasAmount, nil
 }
@@ -715,7 +712,7 @@ func (p *Manager) deployAgentContract(req *AgentContractDeployRequest) (*Contrac
 		return nil, fmt.Errorf("agent deploy gas asset amount %d is less than required base gas fee %d", gasAmount, deployBaseFee)
 	}
 	fundingAmount := gasAmount - deployBaseFee
-	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectEVMContractFunding(gasAsset, gasAmount, fundingAmount, 0)
+	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectUnifiedContractFunding(gasAsset, gasAmount, fundingAmount, 0, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -801,22 +798,22 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 	if err != nil {
 		return nil, err
 	}
-	fundingAmount := uint64(0)
+	fundingAssets := make([]contractFundingAsset, 0, 1)
 	if converted.Action == contractcommon.AgentInvokeAPIBet {
-		fundingAmount, err = assetAmountStringToUint64("agent bet amount", areq.BetAmount)
-		if err != nil {
+		betAssetName := strings.TrimSpace(areq.BetAssetName)
+		if betAssetName == "" {
+			return nil, fmt.Errorf("agent bet asset is required")
+		}
+		if _, err := assetAmountStringToUint64("agent bet amount", areq.BetAmount); err != nil {
 			return nil, err
 		}
-		if math.MaxUint64-gasAmount < fundingAmount {
-			return nil, fmt.Errorf("agent invoke gas amount overflows uint64")
-		}
-		gasAmount += fundingAmount
+		fundingAssets = append(fundingAssets, contractFundingAsset{Name: betAssetName, Amount: areq.BetAmount})
 	}
 	callNonce := areq.CallNonce
 	if callNonce == 0 {
 		callNonce = uint64(time.Now().UnixNano())
 	}
-	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectEVMContractFunding(gasAsset, gasAmount, fundingAmount, areq.Value)
+	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectUnifiedContractFunding(gasAsset, gasAmount, 0, areq.Value, fundingAssets)
 	if err != nil {
 		return nil, err
 	}
@@ -847,8 +844,8 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 		TxID:            txid,
 		ContractAddress: areq.ContractAddress,
 		GasAssetAmount:  gasAmount,
-		GasFeeAmount:    gasAmount - fundingAmount,
-		GasFundAmount:   fundingAmount,
+		GasFeeAmount:    gasAmount,
+		GasFundAmount:   0,
 		GasLimit:        gasLimit,
 		Nonce:           callNonce,
 	}, nil
@@ -894,7 +891,7 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 	if gasAmount < gasBaseFee {
 		return nil, fmt.Errorf("gas asset amount %d is less than required base gas fee %d", gasAmount, gasBaseFee)
 	}
-	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectEVMContractFunding(gasAsset, gasAmount, gasAmount-gasBaseFee, fundingValue)
+	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectUnifiedContractFunding(gasAsset, gasAmount, gasAmount-gasBaseFee, fundingValue, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1280,7 +1277,7 @@ func (p *Manager) deployEVMContract(req *EVMContractDeployRequest) (*ContractTxR
 		return nil, err
 	}
 	gasAsset := GetGasAssetName()
-	funding, inputs, changeOutputs, prevFetcher, caller, err := p.selectEVMContractFunding(gasAsset, estimate.GasAssetAmount, estimate.GasFundAmount, 0)
+	funding, inputs, changeOutputs, prevFetcher, caller, err := p.selectUnifiedContractFunding(gasAsset, estimate.GasAssetAmount, estimate.GasFundAmount, 0, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1359,7 +1356,7 @@ func (p *Manager) invokeEVMContract(req *ContractInvokeRequest) (*ContractTxResu
 	if err != nil {
 		return nil, fmt.Errorf("decode evm calldata: %w", err)
 	}
-	funding, inputs, changeOutputs, prevFetcher, caller, err := p.selectEVMContractFunding(gasAsset, gasAmount, gasAmount-gasBaseFee, ereq.Value)
+	funding, inputs, changeOutputs, prevFetcher, caller, err := p.selectUnifiedContractFunding(gasAsset, gasAmount, gasAmount-gasBaseFee, ereq.Value, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1577,118 +1574,20 @@ func (p *Manager) selectEVMDefaultContractFunding(value int64, assetName string,
 	return funding, inputs, changeTx.TxOut, prevFetcher, caller, nil
 }
 
-func (p *Manager) selectDefaultContractFunding(gasAssetName string, gasAmount uint64, fundingGasAmount uint64, value int64, assetName string, amount string) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, contractcommon.EVMAddress, error) {
-	if gasAmount > uint64(math.MaxInt64) {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("gas asset amount overflows int64")
-	}
-	if fundingGasAmount > gasAmount {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract funding gas amount %d exceeds selected gas amount %d", fundingGasAmount, gasAmount)
-	}
-	if fundingGasAmount > uint64(math.MaxInt64) {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract funding gas amount overflows int64")
-	}
-	if value < 0 {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract value must be non-negative")
-	}
-	gasName := swire.NewAssetNameFromString(gasAssetName)
-	if gasName == nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("invalid gas asset %s", gasAssetName)
-	}
-	selected := make([]string, 0)
-	gasAmt := indexer.NewDefaultDecimal(int64(gasAmount))
-	gasAssetUtxos, gasPlainUtxos, err := p.GetUtxosWithAssetV2_SatsNet("", value, gasAmt, gasName, nil)
-	if err != nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
-	}
-	selected = append(selected, gasAssetUtxos...)
-	selected = append(selected, gasPlainUtxos...)
-	var businessName *swire.AssetName
-	var businessAmt *indexer.Decimal
-	if assetName != "" && amount != "" {
-		businessName = swire.NewAssetNameFromString(assetName)
-		if businessName == nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("invalid default invoke asset %s", assetName)
-		}
-		businessAmt, err = indexer.NewDecimalFromString(amount, MAX_ASSET_DIVISIBILITY)
-		if err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
-		}
-		assetUtxos, _, err := p.GetUtxosWithAssetV2_SatsNet("", 0, businessAmt, businessName, nil)
-		if err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
-		}
-		selected = append(selected, assetUtxos...)
-	}
-	outputMap := make(map[string]*TxOutput_SatsNet)
-	address := p.wallet.GetAddress()
-	for _, name := range []*swire.AssetName{gasName, businessName, &ASSET_PLAIN_SAT} {
-		if name == nil {
-			continue
-		}
-		for _, info := range p.l2IndexerClient.GetUtxoListWithTicker(address, name) {
-			outputMap[info.OutPoint] = OutputInfoToOutput_SatsNet(info)
-		}
-	}
-	prevFetcher := stxscript.NewMultiPrevOutFetcher(nil)
-	inputs := make([]swire.OutPoint, 0, len(selected))
-	var input TxOutput_SatsNet
-	var callerPkScript []byte
-	seen := make(map[string]bool)
-	for _, utxo := range selected {
-		if seen[utxo] {
-			continue
-		}
-		seen[utxo] = true
-		outpoint, err := swire.NewOutPointFromString(utxo)
-		if err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
-		}
-		output := outputMap[utxo]
-		if output == nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("selected utxo %s is missing from indexer asset lists", utxo)
-		}
-		input.Merge(output)
-		inputs = append(inputs, *outpoint)
-		prevFetcher.AddPrevOut(*outpoint, &output.OutValue)
-		callerPkScript = output.OutValue.PkScript
-	}
-	caller, err := p.evmCallerFromPreviousPkScript(callerPkScript)
-	if err != nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
-	}
-	if err := input.SubAsset(&swire.AssetInfo{Name: *gasName, Amount: *gasAmt}); err != nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
-	}
-	var fundingAssets swire.TxAssets
-	if fundingGasAmount > 0 {
-		fundingGasAmt := indexer.NewDefaultDecimal(int64(fundingGasAmount))
-		fundingAssets = swire.TxAssets{{Name: *gasName, Amount: *fundingGasAmt}}
-	}
-	if businessName != nil && businessAmt != nil && businessAmt.Sign() > 0 {
-		business := swire.AssetInfo{Name: *businessName, Amount: *businessAmt}
-		if err := input.SubAsset(&business); err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
-		}
-		if err := fundingAssets.Merge(swire.TxAssets{business}); err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
-		}
-	}
-	if value > 0 {
-		if err := input.SubAsset(&swire.AssetInfo{Name: ASSET_PLAIN_SAT, Amount: *indexer.NewDefaultDecimal(value), BindingSat: 1}); err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
-		}
-	}
-	changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
-	if err != nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
-	}
-	changeTx := swire.NewMsgTx(swire.TxVersion)
-	SplitChangeAsset(&input, changePkScript, changeTx)
-	funding := *swire.NewTxOut(value, fundingAssets, nil)
-	return funding, inputs, changeTx.TxOut, prevFetcher, caller, nil
+type contractFundingAsset struct {
+	Name   string
+	Amount string
 }
 
-func (p *Manager) selectEVMContractFunding(gasAssetName string, gasAmount uint64, fundingGasAmount uint64, value int64) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, contractcommon.EVMAddress, error) {
+func (p *Manager) selectDefaultContractFunding(gasAssetName string, gasAmount uint64, fundingGasAmount uint64, value int64, assetName string, amount string) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, contractcommon.EVMAddress, error) {
+	var fundingAssets []contractFundingAsset
+	if strings.TrimSpace(assetName) != "" && strings.TrimSpace(amount) != "" {
+		fundingAssets = []contractFundingAsset{{Name: assetName, Amount: amount}}
+	}
+	return p.selectUnifiedContractFunding(gasAssetName, gasAmount, fundingGasAmount, value, fundingAssets)
+}
+
+func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount uint64, fundingGasAmount uint64, value int64, businessAssets []contractFundingAsset) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, contractcommon.EVMAddress, error) {
 	if gasAmount > uint64(math.MaxInt64) {
 		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("gas asset amount overflows int64")
 	}
@@ -1705,20 +1604,83 @@ func (p *Manager) selectEVMContractFunding(gasAssetName string, gasAmount uint64
 	if gasName == nil {
 		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("invalid gas asset %s", gasAssetName)
 	}
+
+	fundingValue := value
+	type parsedBusinessAsset struct {
+		Name   *swire.AssetName
+		Amount *indexer.Decimal
+	}
+	parsedBusinessAssets := make([]parsedBusinessAsset, 0, len(businessAssets))
+	for _, asset := range businessAssets {
+		assetName := strings.TrimSpace(asset.Name)
+		amount := strings.TrimSpace(asset.Amount)
+		if assetName == "" && amount == "" {
+			continue
+		}
+		if assetName == "" || amount == "" {
+			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract funding asset and amount must be provided together")
+		}
+		if assetName == contractcommon.SatoshiAssetName {
+			assetValue, err := assetAmountStringToUint64("contract funding value", amount)
+			if err != nil {
+				return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			}
+			if assetValue > uint64(math.MaxInt64) {
+				return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract funding value overflows int64")
+			}
+			valueInt := int64(assetValue)
+			if fundingValue > math.MaxInt64-valueInt {
+				return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract funding value overflows int64")
+			}
+			fundingValue += valueInt
+			continue
+		}
+		name := swire.NewAssetNameFromString(assetName)
+		if name == nil {
+			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("invalid contract funding asset %s", assetName)
+		}
+		amt, err := indexer.NewDecimalFromString(amount, MAX_ASSET_DIVISIBILITY)
+		if err != nil {
+			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+		}
+		if amt.Sign() <= 0 {
+			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract funding asset %s amount must be positive", assetName)
+		}
+		parsedBusinessAssets = append(parsedBusinessAssets, parsedBusinessAsset{Name: name, Amount: amt})
+	}
+
 	gasAmt := indexer.NewDefaultDecimal(int64(gasAmount))
-	assetUtxos, feeUtxos, err := p.GetUtxosWithAssetV2_SatsNet("", value, gasAmt, gasName, nil)
+	assetUtxos, feeUtxos, err := p.GetUtxosWithAssetV2_SatsNet("", fundingValue, gasAmt, gasName, nil)
 	if err != nil {
 		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
 	}
 	selected := append([]string{}, assetUtxos...)
 	selected = append(selected, feeUtxos...)
+	for _, asset := range parsedBusinessAssets {
+		assetUtxos, _, err := p.GetUtxosWithAssetV2_SatsNet("", 0, asset.Amount, asset.Name, nil)
+		if err != nil {
+			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+		}
+		selected = append(selected, assetUtxos...)
+	}
+
 	outputMap := make(map[string]*TxOutput_SatsNet)
 	address := p.wallet.GetAddress()
-	for _, info := range p.l2IndexerClient.GetUtxoListWithTicker(address, gasName) {
-		outputMap[info.OutPoint] = OutputInfoToOutput_SatsNet(info)
+	outputNames := []*swire.AssetName{gasName, &ASSET_PLAIN_SAT}
+	for _, asset := range parsedBusinessAssets {
+		outputNames = append(outputNames, asset.Name)
 	}
-	for _, info := range p.l2IndexerClient.GetUtxoListWithTicker(address, &ASSET_PLAIN_SAT) {
-		if _, ok := outputMap[info.OutPoint]; !ok {
+	seenNames := make(map[string]bool)
+	for _, name := range outputNames {
+		if name == nil {
+			continue
+		}
+		nameKey := name.String()
+		if seenNames[nameKey] {
+			continue
+		}
+		seenNames[nameKey] = true
+		for _, info := range p.l2IndexerClient.GetUtxoListWithTicker(address, name) {
 			outputMap[info.OutPoint] = OutputInfoToOutput_SatsNet(info)
 		}
 	}
@@ -1756,8 +1718,21 @@ func (p *Manager) selectEVMContractFunding(gasAssetName string, gasAmount uint64
 	if err := input.SubAsset(&gasInputAsset); err != nil {
 		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
 	}
-	if value > 0 {
-		if err := input.SubAsset(&swire.AssetInfo{Name: ASSET_PLAIN_SAT, Amount: *indexer.NewDefaultDecimal(value), BindingSat: 1}); err != nil {
+	var fundingAssets swire.TxAssets
+	if fundingGasAmount > 0 {
+		fundingAssets = swire.TxAssets{{Name: *gasName, Amount: *indexer.NewDefaultDecimal(int64(fundingGasAmount))}}
+	}
+	for _, asset := range parsedBusinessAssets {
+		business := swire.AssetInfo{Name: *asset.Name, Amount: *asset.Amount}
+		if err := input.SubAsset(&business); err != nil {
+			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+		}
+		if err := fundingAssets.Merge(swire.TxAssets{business}); err != nil {
+			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+		}
+	}
+	if fundingValue > 0 {
+		if err := input.SubAsset(&swire.AssetInfo{Name: ASSET_PLAIN_SAT, Amount: *indexer.NewDefaultDecimal(fundingValue), BindingSat: 1}); err != nil {
 			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
 		}
 	}
@@ -1767,11 +1742,7 @@ func (p *Manager) selectEVMContractFunding(gasAssetName string, gasAmount uint64
 	}
 	changeTx := swire.NewMsgTx(swire.TxVersion)
 	SplitChangeAsset(&input, changePkScript, changeTx)
-	var fundingAssets swire.TxAssets
-	if fundingGasAmount > 0 {
-		fundingAssets = swire.TxAssets{{Name: *gasName, Amount: *indexer.NewDefaultDecimal(int64(fundingGasAmount))}}
-	}
-	funding := *swire.NewTxOut(value, fundingAssets, nil)
+	funding := *swire.NewTxOut(fundingValue, fundingAssets, nil)
 	return funding, inputs, changeTx.TxOut, prevFetcher, caller, nil
 }
 
