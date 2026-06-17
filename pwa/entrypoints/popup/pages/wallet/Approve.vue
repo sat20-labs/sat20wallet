@@ -29,6 +29,7 @@ import SignPsbt from "@/components/approve/SignPsbt.vue";
 import SplitAsset from "@/components/approve/SplitAsset.vue";
 import ApproveDeployContractRemote from "@/components/approve/ApproveDeployContractRemote.vue";
 import ApproveInvokeContractSatsNet from "@/components/approve/ApproveInvokeContractSatsNet.vue";
+import ApproveInvokeUnifiedContract from "@/components/approve/ApproveInvokeUnifiedContract.vue";
 import ApproveInvokeContractV2SatsNet from "@/components/approve/ApproveInvokeContractV2SatsNet.vue";
 import ApproveInvokeContractV2 from "@/components/approve/ApproveInvokeContractV2.vue";
 import ApproveRegisterAsReferrer from "@/components/approve/ApproveRegisterAsReferrer.vue";
@@ -54,6 +55,7 @@ const approveComponentMap: any = {
   [Message.MessageAction.BATCH_SEND_ASSETS_SATSNET]: SplitAsset,
   [Message.MessageAction.DEPLOY_CONTRACT_REMOTE]: ApproveDeployContractRemote,
   [Message.MessageAction.INVOKE_CONTRACT_SATSNET]: ApproveInvokeContractSatsNet,
+  [Message.MessageAction.INVOKE_UNIFIED_CONTRACT]: ApproveInvokeUnifiedContract,
   [Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET]:
     ApproveInvokeContractV2SatsNet,
   [Message.MessageAction.INVOKE_CONTRACT_V2]: ApproveInvokeContractV2,
@@ -93,6 +95,7 @@ const title = computed(() => {
     [Message.MessageAction.BATCH_SEND_ASSETS_SATSNET]: "Send Assets",
     [Message.MessageAction.DEPLOY_CONTRACT_REMOTE]: "Deploy Contract",
     [Message.MessageAction.INVOKE_CONTRACT_SATSNET]: "Execute Contract",
+    [Message.MessageAction.INVOKE_UNIFIED_CONTRACT]: "Execute Contract",
     [Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET]: "Execute Contract",
     [Message.MessageAction.INVOKE_CONTRACT_V2]: "Execute Contract",
     [Message.MessageAction.REGISTER_AS_REFERRER]: "Register as Referrer",

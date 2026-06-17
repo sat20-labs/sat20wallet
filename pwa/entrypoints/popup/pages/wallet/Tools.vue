@@ -107,7 +107,11 @@
                 </div>
                 <div v-for="field in selectedContractSchema?.fields || []" :key="field.name" class="space-y-1">
                   <Label>{{ field.label }}</Label>
-                  <Select v-if="field.type === 'select'" v-model="deployContractForm[field.name]">
+                  <Select
+                    v-if="field.type === 'select'"
+                    v-model="deployContractForm[field.name]"
+                    @update:model-value="handleDeployContractSelectChange(field.name, $event)"
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -127,12 +131,13 @@
                         <span class="text-xs text-muted-foreground">{{ field.label }} #{{ rowIndex + 1 }}</span>
                         <Button size="sm" variant="ghost" @click="removeFormArrayItem(field.name, rowIndex)">{{ t('tools.common.delete') }}</Button>
                       </div>
-                      <div v-for="child in field.fields || []" :key="child.name" class="space-y-1">
+                      <div v-for="child in visibleArrayFields(field)" :key="child.name" class="space-y-1">
                         <Label>{{ child.label }}</Label>
                         <Input
                           v-model="formArray(field.name)[rowIndex][child.name]"
                           :type="inputTypeForField(child)"
                           :placeholder="child.placeholder || child.default || ''"
+                          :maxlength="child.maxLength"
                         />
                       </div>
                     </div>
@@ -172,6 +177,23 @@
                       @update:model-value="setContractAssetTicker(field.name, $event)"
                     />
                     <Button variant="secondary" @click="checkContractAsset(field.name)">{{ t('tools.common.check') }}</Button>
+                  </div>
+                  <div v-else-if="isDateTimePickerField(field)" class="grid grid-cols-[1fr_auto] gap-2">
+                    <Input
+                      v-model="deployContractForm[field.name]"
+                      type="datetime-local"
+                      :data-contract-time-field="field.name"
+                      :placeholder="field.placeholder || field.default || ''"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      :title="t('tools.common.pickDateTime')"
+                      @click="openDateTimePicker(field.name)"
+                    >
+                      <Icon icon="lucide:calendar-clock" class="h-4 w-4" />
+                      <span>{{ t('tools.common.pick') }}</span>
+                    </Button>
                   </div>
                   <Input
                     v-else
@@ -208,7 +230,11 @@
                 </div>
                 <div v-for="field in selectedContractSchema?.fields || []" :key="field.name" class="space-y-1">
                   <Label>{{ field.label }}</Label>
-                  <Select v-if="field.type === 'select'" v-model="deployContractForm[field.name]">
+                  <Select
+                    v-if="field.type === 'select'"
+                    v-model="deployContractForm[field.name]"
+                    @update:model-value="handleDeployContractSelectChange(field.name, $event)"
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -228,12 +254,13 @@
                         <span class="text-xs text-muted-foreground">{{ field.label }} #{{ rowIndex + 1 }}</span>
                         <Button size="sm" variant="ghost" @click="removeFormArrayItem(field.name, rowIndex)">{{ t('tools.common.delete') }}</Button>
                       </div>
-                      <div v-for="child in field.fields || []" :key="child.name" class="space-y-1">
+                      <div v-for="child in visibleArrayFields(field)" :key="child.name" class="space-y-1">
                         <Label>{{ child.label }}</Label>
                         <Input
                           v-model="formArray(field.name)[rowIndex][child.name]"
                           :type="inputTypeForField(child)"
                           :placeholder="child.placeholder || child.default || ''"
+                          :maxlength="child.maxLength"
                         />
                       </div>
                     </div>
@@ -273,6 +300,23 @@
                       @update:model-value="setContractAssetTicker(field.name, $event)"
                     />
                     <Button variant="secondary" @click="checkContractAsset(field.name)">{{ t('tools.common.check') }}</Button>
+                  </div>
+                  <div v-else-if="isDateTimePickerField(field)" class="grid grid-cols-[1fr_auto] gap-2">
+                    <Input
+                      v-model="deployContractForm[field.name]"
+                      type="datetime-local"
+                      :data-contract-time-field="field.name"
+                      :placeholder="field.placeholder || field.default || ''"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      :title="t('tools.common.pickDateTime')"
+                      @click="openDateTimePicker(field.name)"
+                    >
+                      <Icon icon="lucide:calendar-clock" class="h-4 w-4" />
+                      <span>{{ t('tools.common.pick') }}</span>
+                    </Button>
                   </div>
                   <Input
                     v-else
@@ -586,6 +630,36 @@
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <Dialog :open="dateTimePickerOpen" @update:open="dateTimePickerOpen = $event">
+      <DialogContent class="max-w-[92vw] rounded-sm border-border bg-background sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ t('tools.common.pickDateTime') }}</DialogTitle>
+          <DialogDescription>
+            {{ dateTimePickerFieldLabel }}
+          </DialogDescription>
+        </DialogHeader>
+        <div class="space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-1">
+              <Label>{{ t('tools.common.date') }}</Label>
+              <Input v-model="dateTimePickerDate" type="date" />
+            </div>
+            <div class="space-y-1">
+              <Label>{{ t('tools.common.time') }}</Label>
+              <Input v-model="dateTimePickerTime" type="time" />
+            </div>
+          </div>
+          <Button class="w-full" :disabled="!dateTimePickerDate || !dateTimePickerTime" @click="confirmDateTimePicker">
+            <Icon icon="lucide:check" class="h-4 w-4" />
+            {{ t('tools.common.useSelectedDateTime') }}
+          </Button>
+        </div>
+        <DialogFooter class="sm:justify-end">
+          <Button variant="outline" @click="dateTimePickerOpen = false">{{ t('common.cancel') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </LayoutHome>
 </template>
 
@@ -691,6 +765,9 @@ type ContractFieldSchema = {
   required?: boolean
   default?: string
   placeholder?: string
+  hidden?: boolean
+  maxLength?: number
+  minRows?: number
   options?: { label: string; value: string }[]
   fields?: ContractFieldSchema[]
 }
@@ -704,6 +781,8 @@ type ContractSchema = {
   actions?: string[]
   fields?: ContractFieldSchema[]
 }
+const AGENT_PREDICTION_TIME_FIELDS = ['event_time', 'bet_deadline', 'confirm_after']
+const AGENT_PREDICTION_OUTCOME_TEXT_MAX_LENGTH = 128
 const contractSchemas = ref<ContractSchema[]>([])
 const selectedContractSchemaKey = ref('')
 const deployContractForm = ref<Record<string, any>>({})
@@ -711,10 +790,18 @@ const deployContractGasLimit = ref('')
 const deploySmartContractResult = ref('')
 const isLoadingSupportedContracts = ref(false)
 const isDeployingSmartContract = ref(false)
+const dateTimePickerOpen = ref(false)
+const dateTimePickerFieldName = ref('')
+const dateTimePickerDate = ref('')
+const dateTimePickerTime = ref('')
 const schemaKey = (schema: ContractSchema) => `${schema.type}:${schema.subtype || schema.name}`
 const deployableTemplateSchemas = computed(() => contractSchemas.value.filter((schema) => schema.type === 'template' && schema.enabled))
 const deployableAgentSchemas = computed(() => contractSchemas.value.filter((schema) => schema.type === 'agent' && schema.enabled))
 const selectedContractSchema = computed(() => contractSchemas.value.find((schema) => schemaKey(schema) === selectedContractSchemaKey.value))
+const dateTimePickerFieldLabel = computed(() => {
+  const field = (selectedContractSchema.value?.fields || []).find((item) => item.name === dateTimePickerFieldName.value)
+  return field?.label || t('tools.common.pickDateTime')
+})
 const canDeploySmartContract = computed(() => {
   if (deployContractType.value === 'evm') return false
   const schema = selectedContractSchema.value
@@ -897,6 +984,16 @@ const contractAssetTicker = (fieldName: string) => {
 const contractAssetNameFor = (protocol: string, ticker: string) => {
   if (protocol === 'sats') return '::'
   return assetNameFor(protocol, ticker)
+}
+const normalizedContractAssetName = (assetName: unknown) => {
+  const text = String(assetName ?? '').trim()
+  if (!text || text === '::' || text === 'sats') return '::'
+  const protocol = text.split(':')[0]
+  if (protocol === 'sats') return '::'
+  const ticker = contractAssetTickerFromName(text).trim()
+  if (!ticker) throw new Error(t('tools.errors.enterTickerName'))
+  if (contractAssetProtocols.includes(protocol)) return assetNameFor(protocol, ticker)
+  return assetNameFor('ordx', ticker)
 }
 const setContractAssetProtocol = (fieldName: string, protocolValue: unknown) => {
   const protocol = String(protocolValue || 'ordx')
@@ -1708,6 +1805,7 @@ const buildUnifiedInvokeRequest = (contract: string) => {
 }
 
 const inputTypeForField = (field: ContractFieldSchema) => {
+  if (isDateTimePickerField(field)) return 'datetime-local'
   if (field.type === 'integer' || field.type === 'decimal') return 'number'
   if (field.type === 'url') return 'url'
   return 'text'
@@ -1807,9 +1905,9 @@ const walletContractSchemas = (contracts: string[] = []): ContractSchema[] => {
           label: t('tools.schemas.outcomes'),
           type: 'array',
           required: true,
+          minRows: 2,
           fields: [
-            { name: 'id', label: 'ID', type: 'text', required: true, placeholder: t('tools.placeholders.yes') },
-            { name: 'text', label: t('tools.schemas.displayText'), type: 'text', required: true },
+            { name: 'text', label: t('tools.schemas.displayText'), type: 'text', required: true, maxLength: AGENT_PREDICTION_OUTCOME_TEXT_MAX_LENGTH },
           ],
         },
       ],
@@ -1825,6 +1923,8 @@ const formArray = (name: string): Record<string, string>[] => {
   return deployContractForm.value[name]
 }
 
+const visibleArrayFields = (field: ContractFieldSchema) => (field.fields || []).filter((child) => !child.hidden)
+
 const emptyArrayRow = (field: ContractFieldSchema) => Object.fromEntries(
   (field.fields || []).map((child) => [child.name, child.default || ''])
 )
@@ -1838,10 +1938,11 @@ const removeFormArrayItem = (name: string, index: number) => {
 }
 
 const fieldHasValue = (field: ContractFieldSchema, value: unknown): boolean => {
+  if (field.hidden) return true
   if (!field.required) return true
   if (field.type === 'array') {
     const rows = Array.isArray(value) ? value : []
-    return rows.length > 0 && rows.every((row) => formHasRequiredValues(field.fields || [], row))
+    return rows.length >= (field.minRows || 1) && rows.every((row) => formHasRequiredValues(field.fields || [], row))
   }
   if (field.type === 'asset') {
     const assetName = String(value ?? '').trim()
@@ -1891,7 +1992,8 @@ const selectContractSchema = (value: unknown) => {
   deployContractForm.value = {}
   for (const field of schema?.fields || []) {
     if (field.type === 'array') {
-      deployContractForm.value[field.name] = [emptyArrayRow(field)]
+      const rows = Math.max(field.minRows || 1, 1)
+      deployContractForm.value[field.name] = Array.from({ length: rows }, () => emptyArrayRow(field))
     } else {
       deployContractForm.value[field.name] = field.default || ''
     }
@@ -1906,6 +2008,50 @@ const selectFirstSchemaForType = () => {
       : []
   if (candidates.length && !candidates.some((schema) => schemaKey(schema) === selectedContractSchemaKey.value)) {
     selectContractSchema(schemaKey(candidates[0]))
+  }
+}
+
+const isAgentPredictionSchema = () => selectedContractSchema.value?.type === 'agent' && selectedContractSchema.value?.subtype === 'prediction'
+const isAgentPredictionUnixTime = () => isAgentPredictionSchema() && String(deployContractForm.value.time_base || 'unix') === 'unix'
+const isAgentPredictionTimeField = (field: ContractFieldSchema) => AGENT_PREDICTION_TIME_FIELDS.includes(field.name)
+const isDateTimePickerField = (field: ContractFieldSchema) => isAgentPredictionTimeField(field) && isAgentPredictionUnixTime()
+
+const currentLocalDateTimeParts = () => {
+  const now = new Date()
+  const yyyy = String(now.getFullYear())
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const dd = String(now.getDate()).padStart(2, '0')
+  const hh = String(now.getHours()).padStart(2, '0')
+  const mi = String(now.getMinutes()).padStart(2, '0')
+  return { date: `${yyyy}-${mm}-${dd}`, time: `${hh}:${mi}` }
+}
+
+const openDateTimePicker = (fieldName: string) => {
+  const raw = String(deployContractForm.value[fieldName] || '')
+  const fallback = currentLocalDateTimeParts()
+  const [date, time] = raw.includes('T') ? raw.split('T') : ['', '']
+  dateTimePickerFieldName.value = fieldName
+  dateTimePickerDate.value = date || fallback.date
+  dateTimePickerTime.value = (time || fallback.time).slice(0, 5)
+  dateTimePickerOpen.value = true
+}
+
+const confirmDateTimePicker = () => {
+  if (!dateTimePickerFieldName.value || !dateTimePickerDate.value || !dateTimePickerTime.value) return
+  deployContractForm.value[dateTimePickerFieldName.value] = `${dateTimePickerDate.value}T${dateTimePickerTime.value}`
+  dateTimePickerOpen.value = false
+}
+
+const resetAgentPredictionTimeFields = () => {
+  for (const fieldName of AGENT_PREDICTION_TIME_FIELDS) {
+    deployContractForm.value[fieldName] = ''
+  }
+}
+
+const handleDeployContractSelectChange = (fieldName: string, value: unknown) => {
+  deployContractForm.value[fieldName] = String(value ?? '')
+  if (fieldName === 'time_base' && isAgentPredictionSchema()) {
+    resetAgentPredictionTimeFields()
   }
 }
 
@@ -2014,23 +2160,53 @@ const buildTemplateContractContent = (schema: ContractSchema) => {
   }
 }
 
+const agentPredictionTimeValue = (fieldName: string, fieldLabel: string, timeBase: string) => {
+  const text = String(deployContractForm.value[fieldName] ?? '').trim()
+  if (timeBase !== 'unix') return Number(text)
+  if (/^\d+$/.test(text)) return Number(text)
+  const timestamp = new Date(text).getTime()
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    throw new Error(t('tools.errors.invalidDateTime', { field: fieldLabel }))
+  }
+  return Math.floor(timestamp / 1000)
+}
+
+const agentPredictionOutcomeId = (index: number) => {
+  if (index < 0 || index >= 26) {
+    throw new Error(t('tools.errors.tooManyPredictionOutcomes', { max: 26 }))
+  }
+  return String.fromCharCode('a'.charCodeAt(0) + index)
+}
+
+const buildAgentPredictionOutcomes = () => {
+  const rows = Array.isArray(deployContractForm.value.outcomes) ? deployContractForm.value.outcomes : []
+  return rows.map((outcome: any, index: number) => {
+    const text = String(outcome.text || '').trim()
+    if (text.length > AGENT_PREDICTION_OUTCOME_TEXT_MAX_LENGTH) {
+      throw new Error(t('tools.errors.predictionOutcomeTooLong', { max: AGENT_PREDICTION_OUTCOME_TEXT_MAX_LENGTH }))
+    }
+    return {
+      id: agentPredictionOutcomeId(index),
+      text,
+    }
+  })
+}
+
 const buildAgentPrediction = () => {
   const form = deployContractForm.value
+  const timeBase = String(form.time_base || 'unix').trim()
   return {
     subtype: 'prediction',
     title: String(form.title || '').trim(),
     description: String(form.description || '').trim(),
-    time_base: String(form.time_base || 'unix').trim(),
-    event_time: Number(form.event_time),
-    bet_deadline: Number(form.bet_deadline),
-    confirm_after: Number(form.confirm_after),
+    time_base: timeBase,
+    event_time: agentPredictionTimeValue('event_time', t('tools.schemas.eventTime'), timeBase),
+    bet_deadline: agentPredictionTimeValue('bet_deadline', t('tools.schemas.betDeadline'), timeBase),
+    confirm_after: agentPredictionTimeValue('confirm_after', t('tools.schemas.confirmAfter'), timeBase),
     source_url: String(form.source_url || '').trim(),
-    bet_asset: String(form.bet_asset || '::').trim(),
+    bet_asset: normalizedContractAssetName(form.bet_asset),
     min_bet_unit: String(form.min_bet_unit || '').trim(),
-    outcomes: (Array.isArray(form.outcomes) ? form.outcomes : []).map((outcome: any) => ({
-      id: String(outcome.id || '').trim(),
-      text: String(outcome.text || '').trim(),
-    })),
+    outcomes: buildAgentPredictionOutcomes(),
   }
 }
 

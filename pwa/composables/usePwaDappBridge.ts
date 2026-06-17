@@ -68,6 +68,7 @@ const ACTION_ALIASES: Record<string, Message.MessageAction | string> = {
   unlockUtxo_SatsNet: Message.MessageAction.UNLOCK_UTXO_SATSNET,
   deployContract_Remote: Message.MessageAction.DEPLOY_CONTRACT_REMOTE,
   invokeContract_SatsNet: Message.MessageAction.INVOKE_CONTRACT_SATSNET,
+  invokeUnifiedContract: Message.MessageAction.INVOKE_UNIFIED_CONTRACT,
   invokeContractV2: Message.MessageAction.INVOKE_CONTRACT_V2,
   invokeContractV2_SatsNet: Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET,
   getParamForInvokeContract: Message.MessageAction.QUERY_PARAM_FOR_INVOKE_CONTRACT,
@@ -86,6 +87,7 @@ const APPROVAL_ACTIONS = new Set<string>([
   Message.MessageAction.SIGN_PSBT,
   Message.MessageAction.DEPLOY_CONTRACT_REMOTE,
   Message.MessageAction.INVOKE_CONTRACT_SATSNET,
+  Message.MessageAction.INVOKE_UNIFIED_CONTRACT,
   Message.MessageAction.INVOKE_CONTRACT_V2,
   Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET,
   Message.MessageAction.REGISTER_AS_REFERRER,
@@ -95,7 +97,10 @@ const APPROVAL_ACTIONS = new Set<string>([
   Message.MessageAction.BATCH_SEND_ASSETS_V2_SATSNET,
 ])
 
-const normaliseAction = (action: string) => ACTION_ALIASES[action] ?? action
+const MESSAGE_ACTION_BY_KEY = Message.MessageAction as unknown as Record<string, Message.MessageAction | string>
+
+const normaliseAction = (action: string) =>
+  ACTION_ALIASES[action] ?? MESSAGE_ACTION_BY_KEY[action] ?? action
 
 const asParamsObject = (action: string, params: unknown): Record<string, unknown> => {
   if (!Array.isArray(params)) {
@@ -159,6 +164,9 @@ const asParamsObject = (action: string, params: unknown): Record<string, unknown
       return { templateName: params[0], content: params[1], feeRate: params[2], bol: params[3] }
     case 'invokeContract_SatsNet':
       return { url: params[0], invoke: params[1], feeRate: params[2] }
+    case 'invokeUnifiedContract':
+    case 'INVOKE_UNIFIED_CONTRACT':
+      return { req: params[0] }
     case 'invokeContractV2_SatsNet':
       return { url: params[0], invoke: params[1], assetName: params[2], amt: String(params[3]), feeRate: String(params[4]), metadata: params[5] ?? {} }
     case 'invokeContractV2':

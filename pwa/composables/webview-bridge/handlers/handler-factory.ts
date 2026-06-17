@@ -70,6 +70,7 @@ export class HandlerFactory {
       DEPLOY_CONTRACT_REMOTE: (callbackId, data) => this.contractHandlers.handleDeployContractRemote(callbackId, data),
       INVOKE_CONTRACT_V2: (callbackId, data) => this.contractHandlers.handleInvokeContractV2(callbackId, data),
       INVOKE_CONTRACT_SATSNET: (callbackId, data) => this.contractHandlers.handleInvokeContractSatsNet(callbackId, data),
+      INVOKE_UNIFIED_CONTRACT: (callbackId, data) => this.contractHandlers.handleInvokeUnifiedContract(callbackId, data),
       INVOKE_CONTRACT_V2_SATSNET: (callbackId, data) => this.contractHandlers.handleInvokeContractV2SatsNet(callbackId, data),
       GET_FEE_FOR_DEPLOY_CONTRACT: (callbackId, data) => this.contractHandlers.handleGetFeeForDeployContract(callbackId, data),
       GET_FEE_FOR_INVOKE_CONTRACT: (callbackId, data) => this.contractHandlers.handleGetFeeForInvokeContract(callbackId, data),

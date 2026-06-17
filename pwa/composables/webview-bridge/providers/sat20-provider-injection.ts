@@ -280,6 +280,10 @@ export class Sat20ProviderInjection {
         return sendMessage('INVOKE_CONTRACT_SATSNET', { url: url, invoke: invoke, feeRate: feeRate });
       },
 
+      invokeUnifiedContract: function(req, options) {
+        return sendMessage('INVOKE_UNIFIED_CONTRACT', { req: req, options: options });
+      },
+
       invokeContractV2_SatsNet: function(url, invoke, assetName, amt, feeRate, metadata, options) {
         return sendMessage('INVOKE_CONTRACT_V2_SATSNET', { url: url, invoke: invoke, assetName: assetName, amt: amt, feeRate: feeRate, metadata: metadata, options: options });
       },

@@ -84,6 +84,7 @@ export namespace Message {
     QUERY_PARAM_FOR_INVOKE_CONTRACT = 'QUERY_PARAM_FOR_INVOKE_CONTRACT',
     DEPLOY_CONTRACT_REMOTE = 'deployContract_Remote',
     INVOKE_CONTRACT_SATSNET = 'invokeContract_SatsNet',
+    INVOKE_UNIFIED_CONTRACT = 'invokeUnifiedContract',
     INVOKE_CONTRACT_V2_SATSNET = 'invokeContractV2_SatsNet',
     INVOKE_CONTRACT_V2 = 'invokeContractV2',
     // --- 推荐人相关 ---

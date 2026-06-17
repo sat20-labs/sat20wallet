@@ -289,6 +289,14 @@ export class ApprovalHandler {
           if (batchSendV2Err) throw batchSendV2Err;
           result = batchSendV2Res;
           break;
+        case Message.MessageAction.INVOKE_UNIFIED_CONTRACT:
+          result = await this.handleWalletApproval(
+            action,
+            data,
+            typeof data?.callbackId === "string" ? data.callbackId : `direct-${Date.now()}`,
+            typeof data?.url === "string" ? data.url : "inappbrowser"
+          );
+          break;
         case Message.MessageAction.EXTRACT_TX_FROM_PSBT:
           const [extractErr, extractRes] = await service.extractTxFromPsbt(
             data.psbtHex,

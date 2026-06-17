@@ -67,6 +67,25 @@ export class ContractHandlers {
   }
 
   /**
+   * 处理 INVOKE_UNIFIED_CONTRACT - 需要用户授权
+   */
+  async handleInvokeUnifiedContract(callbackId: string, data: any): Promise<void> {
+    try {
+      console.log("⚡ Handling INVOKE_UNIFIED_CONTRACT", { callbackId, data });
+      const result = await this.approvalHandler.handleWalletApproval(
+        Message.MessageAction.INVOKE_UNIFIED_CONTRACT,
+        data,
+        callbackId,
+        this.currentUrl()
+      );
+      this.responseHandler.sendResponse(callbackId, result, null);
+    } catch (error) {
+      console.error("❌ INVOKE_UNIFIED_CONTRACT error:", error);
+      this.responseHandler.sendResponse(callbackId, null, error as Error);
+    }
+  }
+
+  /**
    * 处理 INVOKE_CONTRACT_V2_SATSNET - 需要用户授权
    */
   async handleInvokeContractV2SatsNet(callbackId: string, data: any): Promise<void> {
