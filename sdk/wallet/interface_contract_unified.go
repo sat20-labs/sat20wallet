@@ -67,7 +67,7 @@ type ContractInvokeRequest struct {
 type TemplateContractDeployRequest struct {
 	TemplateName    string
 	ContractContent string
-	GasLimit        uint64
+	GasLimit        int64
 	RandomHex       string
 	GasAssetAmount  uint64
 	FundingValue    int64
@@ -76,7 +76,7 @@ type TemplateContractDeployRequest struct {
 type TemplateContractInvokeRequest struct {
 	ContractAddress string
 	JSONInvokeParam string
-	GasLimit        uint64
+	GasLimit        int64
 	CallNonce       uint64
 	GasAssetAmount  uint64
 	Value           int64
@@ -90,7 +90,7 @@ type EVMContractDeployRequest struct {
 	InitCodeHex            string
 	BytecodeHex            string
 	ConstructorCalldataHex string
-	GasLimit               uint64
+	GasLimit               int64
 	DeployNonce            uint64
 	GasAssetAmount         uint64
 }
@@ -98,7 +98,7 @@ type EVMContractDeployRequest struct {
 type EVMContractInvokeRequest struct {
 	ContractAddress string
 	JSONInvokeParam string
-	GasLimit        uint64
+	GasLimit        int64
 	CallNonce       uint64
 	GasAssetAmount  uint64
 	Value           int64
@@ -135,7 +135,7 @@ type AgentContractDeployRequest struct {
 	Subtype         string
 	Prediction      *AgentPredictionContract
 	ContractContent string
-	GasLimit        uint64
+	GasLimit        int64
 	RandomHex       string
 	GasAssetAmount  uint64
 }
@@ -143,7 +143,7 @@ type AgentContractDeployRequest struct {
 type AgentContractInvokeRequest struct {
 	ContractAddress string
 	JSONInvokeParam string
-	GasLimit        uint64
+	GasLimit        int64
 	CallNonce       uint64
 	GasAssetAmount  uint64
 	BetAssetName    string
@@ -162,7 +162,7 @@ type ContractTxResult struct {
 	GasAssetAmount  uint64 `json:"gasAssetAmount,omitempty"`
 	GasFeeAmount    uint64 `json:"gasFeeAmount,omitempty"`
 	GasFundAmount   uint64 `json:"gasFundAmount,omitempty"`
-	GasLimit        uint64 `json:"gasLimit,omitempty"`
+	GasLimit        int64  `json:"gasLimit,omitempty"`
 	Nonce           uint64 `json:"nonce,omitempty"`
 }
 
@@ -647,7 +647,7 @@ func (p *Manager) queryEVMInvokeFee(req *ContractInvokeRequest) (uint64, error) 
 	return gasAmount, nil
 }
 
-func (p *Manager) queryDefaultInvokeFee(contractType string, gasLimit uint64, gasOverride uint64) (uint64, error) {
+func (p *Manager) queryDefaultInvokeFee(contractType string, gasLimit int64, gasOverride uint64) (uint64, error) {
 	if contractType == ContractTypeEVM {
 		return 0, nil
 	}
@@ -1186,7 +1186,7 @@ func GetGasAssetName() string {
 	return contractcommon.GasAssetNameForNet(GetChainParam_SatsNet().Net)
 }
 
-func (p *Manager) agentGasAssetAmount(baseGas uint64, override uint64) (uint64, string, error) {
+func (p *Manager) agentGasAssetAmount(baseGas int64, override uint64) (uint64, string, error) {
 	gasAssetName := GetGasAssetName()
 	if override != 0 {
 		return override, gasAssetName, nil
@@ -1217,7 +1217,7 @@ func decodeTemplateRandom(randomHex string) ([]byte, error) {
 	return decodeHexField("template random", randomHex)
 }
 
-func (p *Manager) templateGasAssetAmount(gasLimit uint64, needsResult bool, override uint64) (uint64, string, error) {
+func (p *Manager) templateGasAssetAmount(gasLimit int64, needsResult bool, override uint64) (uint64, string, error) {
 	return p.evmGasAssetAmount(gasLimit, needsResult, override)
 }
 
@@ -1394,7 +1394,7 @@ func (p *Manager) invokeEVMContract(req *ContractInvokeRequest) (*ContractTxResu
 	}, nil
 }
 
-func (p *Manager) invokeDefaultContract(contractType, contractAddress string, value int64, gasLimit uint64, gasOverride uint64, assetName, amount string) (*ContractTxResult, error) {
+func (p *Manager) invokeDefaultContract(contractType, contractAddress string, value int64, gasLimit int64, gasOverride uint64, assetName, amount string) (*ContractTxResult, error) {
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -1766,12 +1766,12 @@ func (p *Manager) evmCallerFromPreviousPkScript(pkScript []byte) (contractcommon
 	return caller, nil
 }
 
-func (p *Manager) evmBaseGasFee(baseGas uint64) (uint64, error) {
+func (p *Manager) evmBaseGasFee(baseGas int64) (uint64, error) {
 	height := p.satsNetBestHeight()
 	return contractcommon.GasFeeAtHeight(baseGas, uint64(height))
 }
 
-func (p *Manager) evmGasAssetAmount(gasLimit uint64, needsResult bool, override uint64) (uint64, string, error) {
+func (p *Manager) evmGasAssetAmount(gasLimit int64, needsResult bool, override uint64) (uint64, string, error) {
 	gasAssetName := GetGasAssetName()
 	if override != 0 {
 		return override, gasAssetName, nil
