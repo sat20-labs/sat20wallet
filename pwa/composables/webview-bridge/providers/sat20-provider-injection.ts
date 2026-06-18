@@ -206,6 +206,10 @@ export class Sat20ProviderInjection {
         return sendMessage('SIGN_MESSAGE', { message: message, type: type });
       },
 
+      signData: function(data) {
+        return sendMessage('SIGN_DATA', { message: data, signData: true });
+      },
+
       signPsbt: function(psbtHex, options) {
         return sendMessage('SIGN_PSBT', { psbtHex: psbtHex, options: options });
       },

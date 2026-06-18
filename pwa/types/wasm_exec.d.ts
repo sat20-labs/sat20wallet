@@ -298,6 +298,12 @@ declare interface WalletManager {
     req: string
   ): Promise<SatsnetResponse<any>>
 
+  buildUnifiedContractContent(
+    contractType: string,
+    subtype: string,
+    jsonContent: string
+  ): Promise<SatsnetResponse<{ content: string; contentEncoding: string }>>
+
   invokeUnifiedContract(
     req: string
   ): Promise<SatsnetResponse<any>>
@@ -513,6 +519,12 @@ interface SatsnetStp {
   deployUnifiedContract(
     req: string
   ): Promise<SatsnetResponse<any>>;
+
+  buildUnifiedContractContent(
+    contractType: string,
+    subtype: string,
+    jsonContent: string
+  ): Promise<SatsnetResponse<{ content: string; contentEncoding: string }>>;
 
   invokeUnifiedContract(
     req: string

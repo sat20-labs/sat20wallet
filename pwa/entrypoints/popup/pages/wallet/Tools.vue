@@ -688,7 +688,7 @@ import { Storage } from '@/lib/storage-adapter'
 
 const SMART_CONTRACT_DOC_URL_ZH = 'https://docs.sat20.org/protocol-xie-yi-yu-bai-pi-shu/smart-contracts'
 const SMART_CONTRACT_DOC_URL_EN = 'https://docs.sat20.org/english/protocols-and-whitepapers/smart-contracts'
-const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qnuunrp2chq3lm7khvqdjh8krmnts0srqz505cjq04smxxy3xtxmq5nw7ct'
+const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qgxe3g7synqpszhgglk9y27u4rj46cul3mkggeresapw9kthll7vs0dr9na'
 const SUPPORTED_CONTRACTS_CACHE_PREFIX = 'tools:supported_contracts'
 
 const { toast } = useToast()
@@ -1169,18 +1169,19 @@ const invokeTransactionSummary = (contract: string, req: Record<string, unknown>
   let amount = calculatedAmountLabel()
 
   if (invokeContractType.value === 'template') {
-    const templateReq = (req.Template || {}) as Record<string, unknown>
-    if (templateReq.AssetName) {
-      asset = displayAssetName(String(templateReq.AssetName))
+    const assets = Array.isArray(req.Assets) ? req.Assets as Record<string, unknown>[] : []
+    const firstAsset = assets[0] || {}
+    if (firstAsset.AssetName) {
+      asset = displayAssetName(String(firstAsset.AssetName))
     }
-    if (templateReq.Amount) {
-      amount = String(templateReq.Amount)
+    if (firstAsset.Amount) {
+      amount = String(firstAsset.Amount)
     }
-    if (templateReq.Value) {
-      details.push({ label: t('tools.txConfirm.satsAmount'), value: String(templateReq.Value) })
-      if (!templateReq.AssetName) {
+    if (req.Value) {
+      details.push({ label: t('tools.txConfirm.satsAmount'), value: String(req.Value) })
+      if (!firstAsset.AssetName) {
         asset = displayAssetName('::')
-        amount = String(templateReq.Value)
+        amount = String(req.Value)
       }
     }
   } else if (invokeContractType.value === 'agent' && params.outcome_id) {
@@ -1733,75 +1734,62 @@ const loadInvokeParamTemplate = () => {
 const buildUnifiedInvokeRequest = (contract: string) => {
   const action = invokeAction.value
   if (invokeContractType.value === 'template') {
-    const templateReq: Record<string, unknown> = {
+    const req: Record<string, unknown> = {
+      ContractType: 'template',
+      SubType: invokeContractSubtype.value,
       ContractAddress: contract,
     }
     if (action === 'default') {
-      templateReq.DefaultInvoke = true
+      req.DefaultInvoke = true
     } else {
       const params = invokeParams()
-      templateReq.JSONInvokeParam = JSON.stringify({
-        action: invokeParamWrapperAction.value || action,
-        param: Object.keys(params).length ? JSON.stringify(params) : '',
-      })
+      req.Action = invokeParamWrapperAction.value || action
+      req.Param = Object.keys(params).length ? JSON.stringify(params) : ''
       if (action === 'swap') {
         const orderType = Number(params.orderType || 0)
         if (orderType === 1) {
-          templateReq.AssetName = String(params.assetName || '').trim()
-          templateReq.Amount = String(params.amt || '').trim()
+          req.Assets = [{ AssetName: String(params.assetName || '').trim(), Amount: String(params.amt || '').trim() }]
         } else if (orderType === 2) {
-          templateReq.Value = invokeContractSubtype.value === 'amm.tc'
+          req.Value = invokeContractSubtype.value === 'amm.tc'
             ? Number(params.unitPrice || 0)
             : limitOrderFundingValue(params.amt, params.unitPrice)
         }
       }
       if (action === 'addliq') {
-        templateReq.AssetName = String(params.assetName || '').trim()
-        templateReq.Amount = String(params.amt || '').trim()
-        templateReq.Value = Number(params.value || 0)
+        req.Assets = [{ AssetName: String(params.assetName || '').trim(), Amount: String(params.amt || '').trim() }]
+        req.Value = Number(params.value || 0)
       }
     }
-    return {
-      ContractType: 'template',
-      DefaultInvoke: action === 'default',
-      Template: templateReq,
-    }
+    return req
   }
   if (invokeContractType.value === 'agent') {
-    const agentReq: Record<string, unknown> = {
+    const req: Record<string, unknown> = {
+      ContractType: 'agent',
+      SubType: invokeContractSubtype.value || 'prediction',
       ContractAddress: contract,
     }
     if (action === 'default') {
-      agentReq.DefaultInvoke = true
+      req.DefaultInvoke = true
     } else {
       const params = invokeParams()
-      agentReq.JSONInvokeParam = JSON.stringify({
-        action: invokeParamWrapperAction.value || action,
-        param: Object.keys(params).length ? JSON.stringify(params) : '',
-      })
+      req.Action = invokeParamWrapperAction.value || action
+      req.Param = Object.keys(params).length ? JSON.stringify(params) : ''
     }
-    return {
-      ContractType: 'agent',
-      Agent: agentReq,
-    }
+    return req
   }
-  const evmReq: Record<string, unknown> = {
+  const req: Record<string, unknown> = {
+    ContractType: 'evm',
     ContractAddress: contract,
   }
   if (action === 'default') {
-    evmReq.DefaultInvoke = true
+    req.DefaultInvoke = true
   } else {
     const params = invokeParams()
     const calldataHex = String(params.calldataHex || invokeEvmCalldataHex.value).trim().replace(/^0x/i, '')
-    evmReq.JSONInvokeParam = JSON.stringify({
-      action: invokeParamWrapperAction.value || action,
-      param: JSON.stringify({ calldataHex }),
-    })
+    req.Action = invokeParamWrapperAction.value || action
+    req.Param = JSON.stringify({ calldataHex })
   }
-  return {
-    ContractType: 'evm',
-    EVM: evmReq,
-  }
+  return req
 }
 
 const inputTypeForField = (field: ContractFieldSchema) => {
@@ -2220,22 +2208,35 @@ const deploySmartContract = async () => {
     const gasLimit = parseOptionalPositiveInteger(deployContractGasLimit.value, t('tools.contracts.gasLimit'))
     let req: Record<string, unknown>
     if (schema.type === 'template') {
+      const subtype = schema.subtype || schema.name
+      const jsonContent = buildTemplateContractContent(schema)
+      const [contentErr, contentRes] = await sat20.buildUnifiedContractContent('template', subtype, jsonContent)
+      if (contentErr) throw contentErr
       req = {
         ContractType: 'template',
-        Template: {
-          TemplateName: schema.subtype || schema.name,
-          ContractContent: buildTemplateContractContent(schema),
-          GasLimit: gasLimit || undefined,
-        },
+        SubType: subtype,
+        ContractContent: contentRes?.content,
+        ContentEncoding: contentRes?.contentEncoding || 'base64',
+        GasLimit: gasLimit || undefined,
+      }
+      if (subtype === 'amm.tc') {
+        req.FundingValue = Number(deployContractForm.value.satValue || 0)
+        req.Assets = [{
+          AssetName: normalizedContractAssetName(deployContractForm.value.assetName),
+          Amount: String(deployContractForm.value.assetAmt || '').trim(),
+        }]
       }
     } else if (schema.type === 'agent') {
+      const subtype = schema.subtype || 'prediction'
+      const prediction = buildAgentPrediction()
+      const [contentErr, contentRes] = await sat20.buildUnifiedContractContent('agent', subtype, JSON.stringify(prediction))
+      if (contentErr) throw contentErr
       req = {
         ContractType: 'agent',
-        Agent: {
-          Subtype: schema.subtype || 'prediction',
-          Prediction: buildAgentPrediction(),
-          GasLimit: gasLimit || undefined,
-        },
+        SubType: subtype,
+        ContractContent: contentRes?.content,
+        ContentEncoding: contentRes?.contentEncoding || 'base64',
+        GasLimit: gasLimit || undefined,
       }
     } else {
       throw new Error(t('tools.errors.evmDisabled'))

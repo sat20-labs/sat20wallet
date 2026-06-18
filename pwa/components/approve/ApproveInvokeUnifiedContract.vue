@@ -88,11 +88,14 @@ const isLoading = ref(false)
 const invokeError = ref('')
 
 const req = computed(() => props.data?.req || {})
-const agent = computed(() => req.value?.Agent || req.value?.agent || {})
 const contractType = computed(() => req.value?.ContractType || req.value?.contractType || '')
-const contractAddress = computed(() => agent.value?.ContractAddress || agent.value?.contractAddress || '')
-const betAssetName = computed(() => agent.value?.BetAssetName || agent.value?.betAssetName || '')
-const betAmount = computed(() => agent.value?.BetAmount || agent.value?.betAmount || '')
+const contractAddress = computed(() => req.value?.ContractAddress || req.value?.contractAddress || '')
+const firstAsset = computed(() => {
+  const assets = req.value?.Assets || req.value?.assets
+  return Array.isArray(assets) ? (assets[0] || {}) : {}
+})
+const betAssetName = computed(() => firstAsset.value?.AssetName || firstAsset.value?.assetName || '')
+const betAmount = computed(() => firstAsset.value?.Amount || firstAsset.value?.amount || '')
 
 const formattedRequest = computed(() => JSON.stringify(req.value || {}, null, 2))
 

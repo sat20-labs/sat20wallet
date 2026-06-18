@@ -479,6 +479,14 @@ class WalletManager {
     return this._handleRequest('deployUnifiedContract', JSON.stringify(req))
   }
 
+  async buildUnifiedContractContent(
+    contractType: string,
+    subtype: string,
+    jsonContent: string
+  ): Promise<[Error | undefined, { content: string; contentEncoding: string } | undefined]> {
+    return this._handleRequest('buildUnifiedContractContent', contractType, subtype, jsonContent)
+  }
+
   async invokeUnifiedContract(req: Record<string, unknown>): Promise<
     [Error | undefined, {
       contractType: string,

@@ -33,7 +33,10 @@ const { network } = storeToRefs(walletStore)
 
 const confirm = async () => {
   // await walletStore.setNetwork(props.data.network)
-  const [err, res] = await walletManager.signMessage(props.data.message)
+  const message = props.data.message ?? props.data.data ?? ''
+  const [err, res] = props.data.signData
+    ? await walletManager.signData(message)
+    : await walletManager.signMessage(message)
   console.log(err, res);
   if (res) {
     emit('confirm', res)

@@ -50,6 +50,7 @@ const ACTION_ALIASES: Record<string, Message.MessageAction | string> = {
   switchNetwork: Message.MessageAction.SWITCH_NETWORK,
   signPsbt: Message.MessageAction.SIGN_PSBT,
   signMessage: Message.MessageAction.SIGN_MESSAGE,
+  signData: Message.MessageAction.SIGN_DATA,
   pushTx: Message.MessageAction.PUSH_TX,
   pushPsbt: Message.MessageAction.PUSH_PSBT,
   buildBatchSellOrder: Message.MessageAction.BUILD_BATCH_SELL_ORDER,
@@ -84,6 +85,7 @@ const APPROVAL_ACTIONS = new Set<string>([
   Message.MessageAction.REQUEST_ACCOUNTS,
   Message.MessageAction.SWITCH_NETWORK,
   Message.MessageAction.SIGN_MESSAGE,
+  Message.MessageAction.SIGN_DATA,
   Message.MessageAction.SIGN_PSBT,
   Message.MessageAction.DEPLOY_CONTRACT_REMOTE,
   Message.MessageAction.INVOKE_CONTRACT_SATSNET,
@@ -112,6 +114,8 @@ const asParamsObject = (action: string, params: unknown): Record<string, unknown
       return { psbtHex: params[0], options: params[1] ?? {} }
     case 'signMessage':
       return { message: params[0] }
+    case 'signData':
+      return { message: params[0], signData: true }
     case 'pushTx':
       return { rawtx: params[0], options: params[1] ?? {} }
     case 'pushPsbt':

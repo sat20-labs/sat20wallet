@@ -29,6 +29,25 @@ export class TransactionHandlers {
   }
 
   /**
+   * 处理 SIGN_DATA - 签原始协议数据，需要用户授权
+   */
+  async handleSignData(callbackId: string, data: any): Promise<void> {
+    try {
+      console.log("✍️ Handling SIGN_DATA", { callbackId, data });
+      const result = await this.approvalHandler.handleWalletApproval(
+        Message.MessageAction.SIGN_DATA,
+        { ...data, signData: true },
+        callbackId,
+        this.currentUrl()
+      );
+      this.responseHandler.sendResponse(callbackId, result, null);
+    } catch (error) {
+      console.error("❌ SIGN_DATA error:", error);
+      this.responseHandler.sendResponse(callbackId, null, error as Error);
+    }
+  }
+
+  /**
    * 处理 SIGN_PSBT - 需要用户授权
    */
   async handleSignPsbt(callbackId: string, data: any): Promise<void> {

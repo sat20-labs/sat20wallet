@@ -43,6 +43,7 @@ export namespace Message {
     GET_BALANCE = 'GET_BALANCE',
     SEND_BITCOIN = 'SEND_BITCOIN',
     SIGN_MESSAGE = 'SIGN_MESSAGE',
+    SIGN_DATA = 'SIGN_DATA',
     SIGN_PSBT = 'SIGN_PSBT',
     SIGN_PSBTS = 'SIGN_PSBTS',
     PUSH_TX = 'PUSH_TX',

@@ -43,6 +43,7 @@ export class HandlerFactory {
 
       // 交易相关处理器
       SIGN_MESSAGE: (callbackId, data) => this.transactionHandlers.handleSignMessage(callbackId, data),
+      SIGN_DATA: (callbackId, data) => this.transactionHandlers.handleSignData(callbackId, data),
       SIGN_PSBT: (callbackId, data) => this.transactionHandlers.handleSignPsbt(callbackId, data),
       SIGN_PSBTS: (callbackId, data) => this.transactionHandlers.handleSignPsbts(callbackId, data),
       SEND_BITCOIN: (callbackId, data) => this.transactionHandlers.handleSendBitcoin(callbackId, data),
