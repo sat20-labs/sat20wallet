@@ -2387,10 +2387,10 @@ func contractTxResultForJS(result *wallet.ContractTxResult) map[string]any {
 		"txid":            result.TxID,
 		"contractAddress": result.ContractAddress,
 		"caller":          result.Caller,
-		"gasAssetAmount":  strconv.FormatUint(result.GasAssetAmount, 10),
-		"gasFeeAmount":    strconv.FormatUint(result.GasFeeAmount, 10),
-		"gasFundAmount":   strconv.FormatUint(result.GasFundAmount, 10),
-		"gasLimit":        strconv.FormatUint(result.GasLimit, 10),
+		"gasAssetAmount":  strconv.FormatInt(result.GasAssetAmount, 10),
+		"gasFeeAmount":    strconv.FormatInt(result.GasFeeAmount, 10),
+		"gasFundAmount":   strconv.FormatInt(result.GasFundAmount, 10),
+		"gasLimit":        strconv.FormatInt(result.GasLimit, 10),
 		"nonce":           strconv.FormatUint(result.Nonce, 10),
 	}
 }
@@ -2417,6 +2417,32 @@ func queryContract(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{"result": result}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func buildUnifiedContractContent(this js.Value, p []js.Value) any {
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+	for i := 0; i < 3; i++ {
+		if p[i].Type() != js.TypeString {
+			return createJsRet(nil, -1, "contract type, subtype and content parameters should be strings")
+		}
+	}
+	contractType := p[0].String()
+	subtype := p[1].String()
+	jsonContent := p[2].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		content, err := wallet.BuildUnifiedContractContent(contractType, subtype, jsonContent)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{
+			"content":         content,
+			"contentEncoding": "base64",
+		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
@@ -2523,7 +2549,7 @@ func getFeeForInvokeUnifiedContract(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]interface{}{
-			"fee": strconv.FormatUint(fee, 10),
+			"fee": strconv.FormatInt(fee, 10),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
@@ -3858,6 +3884,7 @@ func main() {
 	obj.Set("getAssetAmount_SatsNet", js.FuncOf(getAssetAmount_SatsNet))
 
 	obj.Set("queryContract", js.FuncOf(queryContract))
+	obj.Set("buildUnifiedContractContent", js.FuncOf(buildUnifiedContractContent))
 	obj.Set("deployUnifiedContract", js.FuncOf(deployUnifiedContract))
 	obj.Set("invokeUnifiedContract", js.FuncOf(invokeUnifiedContract))
 	obj.Set("getParamForInvokeUnifiedContract", js.FuncOf(getParamForInvokeUnifiedContract))

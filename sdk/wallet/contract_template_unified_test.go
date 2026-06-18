@@ -137,21 +137,15 @@ func TestBuildNativeTemplateExchangeContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal exchange content: %v", err)
 	}
-	templateName, encoded, fundingValue, fundingAssetAmount, err := (&Manager{}).buildNativeTemplateContract(&TemplateContractDeployRequest{
-		TemplateName:    TEMPLATE_CONTRACT_EXCHANGE,
-		ContractContent: string(content),
-	})
+	templateName, encoded, err := encodeTemplateContractContent(TEMPLATE_CONTRACT_EXCHANGE, string(content))
 	if err != nil {
-		t.Fatalf("buildNativeTemplateContract(exchange): %v", err)
+		t.Fatalf("encodeTemplateContractContent(exchange): %v", err)
 	}
 	if templateName != contractcommon.TemplateExchange {
 		t.Fatalf("unexpected template %s", templateName)
 	}
 	if len(encoded) == 0 {
 		t.Fatalf("expected encoded exchange content")
-	}
-	if fundingValue != 0 || fundingAssetAmount != 0 {
-		t.Fatalf("unexpected exchange deploy funding value=%d asset=%d", fundingValue, fundingAssetAmount)
 	}
 }
 
@@ -371,11 +365,9 @@ func TestQueryAgentInvokeFeeDoesNotIncludeBetAmount(t *testing.T) {
 	invokeJSON := mustInvokeJSON(t, contractcommon.AgentInvokeAPIBet, contractcommon.AgentPredictionBetParam{OutcomeID: "a"})
 	fee, err := manager.QueryFeeForInvokeUnifiedContract(&ContractInvokeRequest{
 		ContractType: ContractTypeAgent,
-		Agent: &AgentContractInvokeRequest{
-			JSONInvokeParam: invokeJSON,
-			BetAssetName:    contractcommon.SatoshiAssetName,
-			BetAmount:       "1000",
-		},
+		Action:       contractcommon.AgentInvokeAPIBet,
+		Param:        mustInvokeInnerParam(t, invokeJSON),
+		Assets:       []ContractFundingAsset{{AssetName: contractcommon.SatoshiAssetName, Amount: "1000"}},
 	})
 	if err != nil {
 		t.Fatalf("QueryFeeForInvokeUnifiedContract(agent bet): %v", err)
@@ -418,19 +410,20 @@ func assertUnifiedEVMInvokeParamQuery(t *testing.T, manager *Manager) {
 
 func assertNativeTemplateDeployTx(t *testing.T, templateName string, content []byte, randomSuffix string) contractcommon.ContractAddress {
 	t.Helper()
-	tx, addr, err := contractcommon.BuildTemplateDeployTx(contractcommon.TemplateDeployTxBuildRequest{
+	tx, addr, err := contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
 		ContractPrefix:  contractcommon.TestnetContractPrefix,
-		TemplateName:    templateName,
-		TemplateVersion: contractcommon.CurrentTemplateVersion,
+		Type:            contractcommon.ContractTypeTemplate,
+		SubType:         templateName,
+		Version:         contractcommon.CurrentTemplateVersion,
 		ContractContent: content,
 		Deployer:        "tb1ptestdeployer000000000000000000000000000000",
-		Random:          []byte("sdk-" + randomSuffix),
+		DeployNonce:     uint64(len(randomSuffix) + 1),
 		GasLimit:        contractcommon.DeployBaseGas,
 		Funding:         testTemplateFundingTxOut(100000),
 		Inputs:          []swire.OutPoint{testTemplateOutPoint(randomSuffix)},
 	})
 	if err != nil {
-		t.Fatalf("BuildTemplateDeployTx(%s): %v", templateName, err)
+		t.Fatalf("BuildDeployTx(%s): %v", templateName, err)
 	}
 	txType, rawPayload, err := contractcommon.ReadNullDataScript(tx.TxOut[0].PkScript)
 	if err != nil {
@@ -439,14 +432,19 @@ func assertNativeTemplateDeployTx(t *testing.T, templateName string, content []b
 	if txType != contractcommon.TxTypeDeploy {
 		t.Fatalf("unexpected deploy tx type %v", txType)
 	}
-	payload, err := contractcommon.DecodeTemplateDeployPayload(rawPayload)
+	payload, err := contractcommon.DecodeDeployPayload(rawPayload)
 	if err != nil {
-		t.Fatalf("DecodeTemplateDeployPayload(%s): %v", templateName, err)
+		t.Fatalf("DecodeDeployPayload(%s): %v", templateName, err)
 	}
-	if payload.TemplateName != templateName {
-		t.Fatalf("template mismatch %s != %s", payload.TemplateName, templateName)
+	if payload.Type != contractcommon.ContractTypeTemplate {
+		t.Fatalf("unexpected deploy contract type %d", payload.Type)
 	}
-	derived, _, err := contractcommon.DeriveTemplateContractAddress(contractcommon.TestnetContractPrefix, content, payload.Deployer, payload.Random)
+	if payload.SubType != templateName {
+		t.Fatalf("template mismatch %s != %s", payload.SubType, templateName)
+	}
+	derived, _, err := contractcommon.DeriveTemplateContractAddress(
+		contractcommon.TestnetContractPrefix, content,
+		"tb1ptestdeployer000000000000000000000000000000", payload.DeployNonce)
 	if err != nil {
 		t.Fatalf("DeriveTemplateContractAddress(%s): %v", templateName, err)
 	}
@@ -458,7 +456,7 @@ func assertNativeTemplateDeployTx(t *testing.T, templateName string, content []b
 
 func assertNativeTemplateInvokeTx(t *testing.T, contract contractcommon.ContractAddress, action string, param []byte) {
 	t.Helper()
-	tx, err := contractcommon.BuildTemplateInvokeTx(contractcommon.TemplateInvokeTxBuildRequest{
+	tx, err := contractcommon.BuildInvokeTx(contractcommon.InvokeTxBuildRequest{
 		Contract:  contract,
 		GasLimit:  contractcommon.InvokeBaseGas,
 		CallNonce: 1,
@@ -468,7 +466,7 @@ func assertNativeTemplateInvokeTx(t *testing.T, contract contractcommon.Contract
 		Inputs:    []swire.OutPoint{testTemplateOutPoint(action)},
 	})
 	if err != nil {
-		t.Fatalf("BuildTemplateInvokeTx(%s): %v", action, err)
+		t.Fatalf("BuildInvokeTx(%s): %v", action, err)
 	}
 	txType, rawPayload, err := contractcommon.ReadNullDataScript(tx.TxOut[0].PkScript)
 	if err != nil {
@@ -477,9 +475,9 @@ func assertNativeTemplateInvokeTx(t *testing.T, contract contractcommon.Contract
 	if txType != contractcommon.TxTypeInvoke {
 		t.Fatalf("unexpected invoke tx type %v", txType)
 	}
-	payload, err := contractcommon.DecodeTemplateInvokePayload(rawPayload)
+	payload, err := contractcommon.DecodeInvokePayload(rawPayload)
 	if err != nil {
-		t.Fatalf("DecodeTemplateInvokePayload(%s): %v", action, err)
+		t.Fatalf("DecodeInvokePayload(%s): %v", action, err)
 	}
 	if payload.Action != action {
 		t.Fatalf("invoke action mismatch %s != %s", payload.Action, action)
@@ -521,6 +519,33 @@ func mustInvokeJSON(t *testing.T, action string, param any) string {
 		t.Fatalf("marshal invoke param: %v", err)
 	}
 	return string(outer)
+}
+
+func mustJSONParam(t *testing.T, param any) string {
+	t.Helper()
+	data, err := json.Marshal(param)
+	if err != nil {
+		t.Fatalf("marshal invoke inner param: %v", err)
+	}
+	return string(data)
+}
+
+func mustUnifiedContractContent(t *testing.T, contractType, subtype, jsonContent string) string {
+	t.Helper()
+	content, err := BuildUnifiedContractContent(contractType, subtype, jsonContent)
+	if err != nil {
+		t.Fatalf("BuildUnifiedContractContent(%s, %s): %v", contractType, subtype, err)
+	}
+	return content
+}
+
+func mustInvokeInnerParam(t *testing.T, invokeJSON string) string {
+	t.Helper()
+	var outer InvokeParam
+	if err := json.Unmarshal([]byte(invokeJSON), &outer); err != nil {
+		t.Fatalf("unmarshal invoke param: %v", err)
+	}
+	return outer.Param
 }
 
 func mustInvokeJSONWithRawParam(t *testing.T, action string, param string) string {

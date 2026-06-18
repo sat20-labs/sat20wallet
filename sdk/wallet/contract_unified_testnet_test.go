@@ -80,13 +80,11 @@ func TestUnifiedEVMDeployInvoke_testnet(t *testing.T) {
 	startHeight := manager.l2IndexerClient.GetBestHeight()
 	deployNonce := uint64(time.Now().Unix())
 	deploy, err := manager.DeployUnifiedContract(&ContractDeployRequest{
-		ContractType: ContractTypeEVM,
-		EVM: &EVMContractDeployRequest{
-			// Init code returns a one-byte STOP runtime.
-			InitCodeHex: "6001600c60003960016000f300",
-			GasLimit:    150000,
-			DeployNonce: deployNonce,
-		},
+		ContractType:    ContractTypeEVM,
+		ContractContent: "6001600c60003960016000f300",
+		ContentEncoding: "hex",
+		GasLimit:        150000,
+		DeployNonce:     deployNonce,
 	})
 	if err != nil {
 		t.Fatalf("DeployUnifiedContract failed: %v", err)
@@ -105,13 +103,12 @@ func TestUnifiedEVMDeployInvoke_testnet(t *testing.T) {
 	}
 
 	invoke, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeEVM,
-		EVM: &EVMContractInvokeRequest{
-			ContractAddress: deploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, "call", map[string]string{"calldataHex": ""}),
-			GasLimit:        30000,
-			CallNonce:       deployNonce + 1,
-		},
+		ContractType:    ContractTypeEVM,
+		ContractAddress: deploy.ContractAddress,
+		Action:          "call",
+		Param:           mustJSONParam(t, map[string]string{"calldataHex": ""}),
+		GasLimit:        30000,
+		CallNonce:       deployNonce + 1,
 	})
 	if err != nil {
 		t.Fatalf("InvokeUnifiedContract failed: %v", err)
@@ -135,11 +132,10 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 	limitOrder.GetContractBase().AssetName = *ParseAssetString(unifiedTemplateTestAsset)
 	limitStartHeight := manager.l2IndexerClient.GetBestHeight()
 	limitDeploy, err := manager.DeployUnifiedContract(&ContractDeployRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractDeployRequest{
-			TemplateName:    TEMPLATE_CONTRACT_LIMITORDER,
-			ContractContent: string(limitOrder.Content()),
-		},
+		ContractType:    ContractTypeTemplate,
+		SubType:         TEMPLATE_CONTRACT_LIMITORDER,
+		ContractContent: mustUnifiedContractContent(t, ContractTypeTemplate, TEMPLATE_CONTRACT_LIMITORDER, string(limitOrder.Content())),
+		ContentEncoding: "base64",
 	})
 	if err != nil {
 		t.Fatalf("Deploy limitorder failed: %v", err)
@@ -158,19 +154,18 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 	}
 	limitSellStartHeight := manager.l2IndexerClient.GetBestHeight()
 	limitSell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: limitDeploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
-				OrderType: ORDERTYPE_SELL,
-				AssetName: unifiedTemplateTestAsset,
-				Amt:       "1",
-				UnitPrice: "1",
-			}),
-			CallNonce:      uint64(time.Now().UnixNano()),
-			GasAssetAmount: limitSellGas + 1,
-			Value:          10,
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: limitDeploy.ContractAddress,
+		Action:          INVOKE_API_SWAP,
+		Param: mustJSONParam(t, SwapInvokeParam{
+			OrderType: ORDERTYPE_SELL,
+			AssetName: unifiedTemplateTestAsset,
+			Amt:       "1",
+			UnitPrice: "1",
+		}),
+		CallNonce:      uint64(time.Now().UnixNano()),
+		GasAssetAmount: int64(limitSellGas + 1),
+		Value:          10,
 	})
 	if err != nil {
 		t.Fatalf("Invoke limitorder sell failed: %v", err)
@@ -185,13 +180,10 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 
 	limitDefaultStartHeight := manager.l2IndexerClient.GetBestHeight()
 	limitDefaultBuy, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType:  ContractTypeTemplate,
-		DefaultInvoke: true,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: limitDeploy.ContractAddress,
-			DefaultInvoke:   true,
-			Value:           1,
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: limitDeploy.ContractAddress,
+		DefaultInvoke:   true,
+		Value:           1,
 	})
 	if err != nil {
 		t.Fatalf("Default invoke limitorder buy failed: %v", err)
@@ -206,18 +198,17 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 
 	limitExplicitBuyStartHeight := manager.l2IndexerClient.GetBestHeight()
 	limitExplicitBuy, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: limitDeploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
-				OrderType: ORDERTYPE_BUY,
-				AssetName: unifiedTemplateTestAsset,
-				Amt:       "1",
-				UnitPrice: "1",
-			}),
-			CallNonce: uint64(time.Now().UnixNano()),
-			Value:     11,
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: limitDeploy.ContractAddress,
+		Action:          INVOKE_API_SWAP,
+		Param: mustJSONParam(t, SwapInvokeParam{
+			OrderType: ORDERTYPE_BUY,
+			AssetName: unifiedTemplateTestAsset,
+			Amt:       "1",
+			UnitPrice: "1",
+		}),
+		CallNonce: uint64(time.Now().UnixNano()),
+		Value:     11,
 	})
 	if err != nil {
 		t.Fatalf("Invoke limitorder buy failed: %v", err)
@@ -232,14 +223,10 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 
 	limitDefaultSellStartHeight := manager.l2IndexerClient.GetBestHeight()
 	limitDefaultSell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType:  ContractTypeTemplate,
-		DefaultInvoke: true,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: limitDeploy.ContractAddress,
-			DefaultInvoke:   true,
-			AssetName:       unifiedTemplateTestAsset,
-			Amount:          "1",
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: limitDeploy.ContractAddress,
+		DefaultInvoke:   true,
+		Assets:          []ContractFundingAsset{{AssetName: unifiedTemplateTestAsset, Amount: "1"}},
 	})
 	if err != nil {
 		t.Fatalf("Default invoke limitorder sell failed: %v", err)
@@ -259,11 +246,12 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 	amm.K = "1"
 	ammStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammDeploy, err := manager.DeployUnifiedContract(&ContractDeployRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractDeployRequest{
-			TemplateName:    TEMPLATE_CONTRACT_AMM,
-			ContractContent: string(amm.Content()),
-		},
+		ContractType:    ContractTypeTemplate,
+		SubType:         TEMPLATE_CONTRACT_AMM,
+		ContractContent: mustUnifiedContractContent(t, ContractTypeTemplate, TEMPLATE_CONTRACT_AMM, string(amm.Content())),
+		ContentEncoding: "base64",
+		FundingValue:    amm.SatValue,
+		Assets:          []ContractFundingAsset{{AssetName: unifiedTemplateTestAsset, Amount: amm.AssetAmt}},
 	})
 	if err != nil {
 		t.Fatalf("Deploy AMM failed: %v", err)
@@ -278,20 +266,18 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 
 	ammAddLiqStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammAddLiq, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: ammDeploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_ADDLIQUIDITY, AddLiqInvokeParam{
-				OrderType: ORDERTYPE_ADDLIQUIDITY,
-				AssetName: unifiedTemplateTestAsset,
-				Amt:       "1",
-				Value:     1,
-			}),
-			CallNonce: uint64(time.Now().UnixNano()),
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: ammDeploy.ContractAddress,
+		Action:          INVOKE_API_ADDLIQUIDITY,
+		Param: mustJSONParam(t, AddLiqInvokeParam{
+			OrderType: ORDERTYPE_ADDLIQUIDITY,
 			AssetName: unifiedTemplateTestAsset,
-			Amount:    "1",
+			Amt:       "1",
 			Value:     1,
-		},
+		}),
+		CallNonce: uint64(time.Now().UnixNano()),
+		Assets:    []ContractFundingAsset{{AssetName: unifiedTemplateTestAsset, Amount: "1"}},
+		Value:     1,
 	})
 	if err != nil {
 		t.Fatalf("Invoke AMM add liquidity failed: %v", err)
@@ -306,13 +292,10 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 
 	ammDefaultBuyStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammDefaultBuy, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType:  ContractTypeTemplate,
-		DefaultInvoke: true,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: ammDeploy.ContractAddress,
-			DefaultInvoke:   true,
-			Value:           1,
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: ammDeploy.ContractAddress,
+		DefaultInvoke:   true,
+		Value:           1,
 	})
 	if err != nil {
 		t.Fatalf("Default invoke AMM buy failed: %v", err)
@@ -327,14 +310,10 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 
 	ammDefaultSellStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammDefaultSell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType:  ContractTypeTemplate,
-		DefaultInvoke: true,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: ammDeploy.ContractAddress,
-			DefaultInvoke:   true,
-			AssetName:       unifiedTemplateTestAsset,
-			Amount:          "1",
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: ammDeploy.ContractAddress,
+		DefaultInvoke:   true,
+		Assets:          []ContractFundingAsset{{AssetName: unifiedTemplateTestAsset, Amount: "1"}},
 	})
 	if err != nil {
 		t.Fatalf("Default invoke AMM sell failed: %v", err)
@@ -365,13 +344,10 @@ func TestUnifiedTemplateDefaultInvokeExistingAMM_testnet(t *testing.T) {
 
 	buyStartHeight := manager.l2IndexerClient.GetBestHeight()
 	buy, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType:  ContractTypeTemplate,
-		DefaultInvoke: true,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: ammAddress,
-			DefaultInvoke:   true,
-			Value:           1,
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: ammAddress,
+		DefaultInvoke:   true,
+		Value:           1,
 	})
 	if err != nil {
 		t.Fatalf("Default invoke existing AMM buy failed: %v", err)
@@ -386,14 +362,10 @@ func TestUnifiedTemplateDefaultInvokeExistingAMM_testnet(t *testing.T) {
 
 	sellStartHeight := manager.l2IndexerClient.GetBestHeight()
 	sell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType:  ContractTypeTemplate,
-		DefaultInvoke: true,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: ammAddress,
-			DefaultInvoke:   true,
-			AssetName:       unifiedTemplateTestAsset,
-			Amount:          "1",
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: ammAddress,
+		DefaultInvoke:   true,
+		Assets:          []ContractFundingAsset{{AssetName: unifiedTemplateTestAsset, Amount: "1"}},
 	})
 	if err != nil {
 		t.Fatalf("Default invoke existing AMM sell failed: %v", err)
@@ -435,12 +407,13 @@ func TestUnifiedAgentPredictionDeployBet_testnet(t *testing.T) {
 			{ID: "b", Text: "Team Beta wins"},
 		},
 	}
+	predictionJSON := mustJSONParam(t, prediction)
 	deploy, err := manager.DeployUnifiedContract(&ContractDeployRequest{
-		ContractType: ContractTypeAgent,
-		Agent: &AgentContractDeployRequest{
-			Prediction: prediction,
-			GasLimit:   100000,
-		},
+		ContractType:    ContractTypeAgent,
+		SubType:         contractcommon.SubtypePrediction,
+		ContractContent: mustUnifiedContractContent(t, ContractTypeAgent, contractcommon.SubtypePrediction, predictionJSON),
+		ContentEncoding: "base64",
+		GasLimit:        100000,
 	})
 	if err != nil {
 		t.Fatalf("Deploy agent prediction failed: %v", err)
@@ -461,14 +434,13 @@ func TestUnifiedAgentPredictionDeployBet_testnet(t *testing.T) {
 
 	betStartHeight := manager.l2IndexerClient.GetBestHeight()
 	bet, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeAgent,
-		Agent: &AgentContractInvokeRequest{
-			ContractAddress: deploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, contractcommon.AgentInvokeAPIBet, contractcommon.AgentPredictionBetParam{OutcomeID: "a"}),
-			BetAssetName:    unifiedTemplateTestAsset,
-			BetAmount:       "1",
-			GasLimit:        100000,
-		},
+		ContractType:    ContractTypeAgent,
+		SubType:         contractcommon.SubtypePrediction,
+		ContractAddress: deploy.ContractAddress,
+		Action:          contractcommon.AgentInvokeAPIBet,
+		Param:           mustJSONParam(t, contractcommon.AgentPredictionBetParam{OutcomeID: "a"}),
+		Assets:          []ContractFundingAsset{{AssetName: unifiedTemplateTestAsset, Amount: "1"}},
+		GasLimit:        100000,
 	})
 	if err != nil {
 		t.Fatalf("Invoke agent bet failed: %v", err)
@@ -504,11 +476,10 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 	limitOrder.GetContractBase().AssetName = *ParseAssetString(unifiedTemplateTestAsset)
 	limitStartHeight := manager.l2IndexerClient.GetBestHeight()
 	limitDeploy, err := manager.DeployUnifiedContract(&ContractDeployRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractDeployRequest{
-			TemplateName:    TEMPLATE_CONTRACT_LIMITORDER,
-			ContractContent: string(limitOrder.Content()),
-		},
+		ContractType:    ContractTypeTemplate,
+		SubType:         TEMPLATE_CONTRACT_LIMITORDER,
+		ContractContent: mustUnifiedContractContent(t, ContractTypeTemplate, TEMPLATE_CONTRACT_LIMITORDER, string(limitOrder.Content())),
+		ContentEncoding: "base64",
 	})
 	if err != nil {
 		t.Fatalf("Deploy limitorder failed: %v", err)
@@ -526,18 +497,17 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 
 	limitInvokeStartHeight := manager.l2IndexerClient.GetBestHeight()
 	limitInvoke, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: limitDeploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
-				OrderType: ORDERTYPE_BUY,
-				AssetName: unifiedTemplateTestAsset,
-				Amt:       "1",
-				UnitPrice: "1",
-			}),
-			CallNonce: uint64(time.Now().UnixNano()),
-			Value:     11,
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: limitDeploy.ContractAddress,
+		Action:          INVOKE_API_SWAP,
+		Param: mustJSONParam(t, SwapInvokeParam{
+			OrderType: ORDERTYPE_BUY,
+			AssetName: unifiedTemplateTestAsset,
+			Amt:       "1",
+			UnitPrice: "1",
+		}),
+		CallNonce: uint64(time.Now().UnixNano()),
+		Value:     11,
 	})
 	if err != nil {
 		t.Fatalf("Invoke limitorder swap failed: %v", err)
@@ -552,12 +522,12 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 
 	limitRefundStartHeight := manager.l2IndexerClient.GetBestHeight()
 	limitRefund, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: limitDeploy.ContractAddress,
-			JSONInvokeParam: mustEncodedTemplateInvokeJSON(t, INVOKE_API_REFUND, mustEncodeTemplateParam((&contractcommon.TemplateRefundInvokeParam{ItemIDs: []int64{1}}).Encode())),
-			CallNonce:       uint64(time.Now().UnixNano()),
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: limitDeploy.ContractAddress,
+		Action:          INVOKE_API_REFUND,
+		Param:           mustEncodedTemplateInvokeParam(t, mustEncodeTemplateParam((&contractcommon.TemplateRefundInvokeParam{ItemIDs: []int64{1}}).Encode())),
+		ParamEncoding:   "base64",
+		CallNonce:       uint64(time.Now().UnixNano()),
 	})
 	if err != nil {
 		t.Fatalf("Invoke limitorder refund failed: %v", err)
@@ -576,19 +546,18 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 	}
 	limitSellStartHeight := manager.l2IndexerClient.GetBestHeight()
 	limitSell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: limitDeploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
-				OrderType: ORDERTYPE_SELL,
-				AssetName: unifiedTemplateTestAsset,
-				Amt:       "1",
-				UnitPrice: "1",
-			}),
-			CallNonce:      uint64(time.Now().UnixNano()),
-			GasAssetAmount: limitSellGas + 1,
-			Value:          10,
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: limitDeploy.ContractAddress,
+		Action:          INVOKE_API_SWAP,
+		Param: mustJSONParam(t, SwapInvokeParam{
+			OrderType: ORDERTYPE_SELL,
+			AssetName: unifiedTemplateTestAsset,
+			Amt:       "1",
+			UnitPrice: "1",
+		}),
+		CallNonce:      uint64(time.Now().UnixNano()),
+		GasAssetAmount: int64(limitSellGas + 1),
+		Value:          10,
 	})
 	if err != nil {
 		t.Fatalf("Invoke limitorder sell failed: %v", err)
@@ -608,11 +577,12 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 	amm.K = "10000"
 	ammStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammDeploy, err := manager.DeployUnifiedContract(&ContractDeployRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractDeployRequest{
-			TemplateName:    TEMPLATE_CONTRACT_AMM,
-			ContractContent: string(amm.Content()),
-		},
+		ContractType:    ContractTypeTemplate,
+		SubType:         TEMPLATE_CONTRACT_AMM,
+		ContractContent: mustUnifiedContractContent(t, ContractTypeTemplate, TEMPLATE_CONTRACT_AMM, string(amm.Content())),
+		ContentEncoding: "base64",
+		FundingValue:    amm.SatValue,
+		Assets:          []ContractFundingAsset{{AssetName: unifiedTemplateTestAsset, Amount: amm.AssetAmt}},
 	})
 	if err != nil {
 		t.Fatalf("Deploy AMM failed: %v", err)
@@ -630,18 +600,17 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 
 	ammInvokeStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammInvoke, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: ammDeploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
-				OrderType: ORDERTYPE_BUY,
-				AssetName: unifiedTemplateTestAsset,
-				Amt:       "1",
-				UnitPrice: "1",
-			}),
-			CallNonce: uint64(time.Now().UnixNano()),
-			Value:     11,
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: ammDeploy.ContractAddress,
+		Action:          INVOKE_API_SWAP,
+		Param: mustJSONParam(t, SwapInvokeParam{
+			OrderType: ORDERTYPE_BUY,
+			AssetName: unifiedTemplateTestAsset,
+			Amt:       "1",
+			UnitPrice: "1",
+		}),
+		CallNonce: uint64(time.Now().UnixNano()),
+		Value:     11,
 	})
 	if err != nil {
 		t.Fatalf("Invoke AMM swap failed: %v", err)
@@ -660,19 +629,18 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 	}
 	ammSellStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammSell, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: ammDeploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
-				OrderType: ORDERTYPE_SELL,
-				AssetName: unifiedTemplateTestAsset,
-				Amt:       "1",
-				UnitPrice: "1",
-			}),
-			CallNonce:      uint64(time.Now().UnixNano()),
-			GasAssetAmount: ammSellGas + 1,
-			Value:          10,
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: ammDeploy.ContractAddress,
+		Action:          INVOKE_API_SWAP,
+		Param: mustJSONParam(t, SwapInvokeParam{
+			OrderType: ORDERTYPE_SELL,
+			AssetName: unifiedTemplateTestAsset,
+			Amt:       "1",
+			UnitPrice: "1",
+		}),
+		CallNonce:      uint64(time.Now().UnixNano()),
+		GasAssetAmount: int64(ammSellGas + 1),
+		Value:          10,
 	})
 	if err != nil {
 		t.Fatalf("Invoke AMM sell swap failed: %v", err)
@@ -687,18 +655,17 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 
 	ammBuyAgainStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammBuyAgain, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: ammDeploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_SWAP, SwapInvokeParam{
-				OrderType: ORDERTYPE_BUY,
-				AssetName: unifiedTemplateTestAsset,
-				Amt:       "1",
-				UnitPrice: "2",
-			}),
-			CallNonce: uint64(time.Now().UnixNano()),
-			Value:     12,
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: ammDeploy.ContractAddress,
+		Action:          INVOKE_API_SWAP,
+		Param: mustJSONParam(t, SwapInvokeParam{
+			OrderType: ORDERTYPE_BUY,
+			AssetName: unifiedTemplateTestAsset,
+			Amt:       "1",
+			UnitPrice: "2",
+		}),
+		CallNonce: uint64(time.Now().UnixNano()),
+		Value:     12,
 	})
 	if err != nil {
 		t.Fatalf("Invoke AMM second buy swap failed: %v", err)
@@ -713,18 +680,18 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 
 	ammAddLiqStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammAddLiq, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: ammDeploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_ADDLIQUIDITY, AddLiqInvokeParam{
-				OrderType: ORDERTYPE_ADDLIQUIDITY,
-				AssetName: unifiedTemplateTestAsset,
-				Amt:       "1",
-				Value:     1,
-			}),
-			CallNonce: uint64(time.Now().UnixNano()),
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: ammDeploy.ContractAddress,
+		Action:          INVOKE_API_ADDLIQUIDITY,
+		Param: mustJSONParam(t, AddLiqInvokeParam{
+			OrderType: ORDERTYPE_ADDLIQUIDITY,
+			AssetName: unifiedTemplateTestAsset,
+			Amt:       "1",
 			Value:     1,
-		},
+		}),
+		CallNonce: uint64(time.Now().UnixNano()),
+		Assets:    []ContractFundingAsset{{AssetName: unifiedTemplateTestAsset, Amount: "1"}},
+		Value:     1,
 	})
 	if err != nil {
 		t.Fatalf("Invoke AMM add liquidity failed: %v", err)
@@ -739,16 +706,15 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 
 	ammRemoveLiqStartHeight := manager.l2IndexerClient.GetBestHeight()
 	ammRemoveLiq, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: ammDeploy.ContractAddress,
-			JSONInvokeParam: mustInvokeJSON(t, INVOKE_API_REMOVELIQUIDITY, RemoveLiqInvokeParam{
-				OrderType: ORDERTYPE_REMOVELIQUIDITY,
-				AssetName: unifiedTemplateTestAsset,
-				LptAmt:    "1",
-			}),
-			CallNonce: uint64(time.Now().UnixNano()),
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: ammDeploy.ContractAddress,
+		Action:          INVOKE_API_REMOVELIQUIDITY,
+		Param: mustJSONParam(t, RemoveLiqInvokeParam{
+			OrderType: ORDERTYPE_REMOVELIQUIDITY,
+			AssetName: unifiedTemplateTestAsset,
+			LptAmt:    "1",
+		}),
+		CallNonce: uint64(time.Now().UnixNano()),
 	})
 	if err != nil {
 		t.Fatalf("Invoke AMM remove liquidity failed: %v", err)
@@ -762,12 +728,12 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 	}
 
 	if _, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
-		ContractType: ContractTypeTemplate,
-		Template: &TemplateContractInvokeRequest{
-			ContractAddress: ammDeploy.ContractAddress,
-			JSONInvokeParam: mustEncodedTemplateInvokeJSON(t, INVOKE_API_REFUND, mustEncodeTemplateParam((&contractcommon.TemplateRefundInvokeParam{ItemIDs: []int64{1}}).Encode())),
-			CallNonce:       uint64(time.Now().UnixNano()),
-		},
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: ammDeploy.ContractAddress,
+		Action:          INVOKE_API_REFUND,
+		Param:           mustEncodedTemplateInvokeParam(t, mustEncodeTemplateParam((&contractcommon.TemplateRefundInvokeParam{ItemIDs: []int64{1}}).Encode())),
+		ParamEncoding:   "base64",
+		CallNonce:       uint64(time.Now().UnixNano()),
 	}); err == nil {
 		t.Fatalf("AMM refund unexpectedly succeeded")
 	} else {
@@ -800,16 +766,9 @@ func findTestnetTemplateContract(t *testing.T, manager *Manager, subtype string)
 	return ""
 }
 
-func mustEncodedTemplateInvokeJSON(t *testing.T, action string, param []byte) string {
+func mustEncodedTemplateInvokeParam(t *testing.T, param []byte) string {
 	t.Helper()
-	outer, err := json.Marshal(InvokeParam{
-		Action: action,
-		Param:  base64.StdEncoding.EncodeToString(param),
-	})
-	if err != nil {
-		t.Fatalf("marshal encoded invoke param: %v", err)
-	}
-	return string(outer)
+	return base64.StdEncoding.EncodeToString(param)
 }
 
 func waitAgentPredictionStatus(t *testing.T, manager *Manager, contract string, wantContractStatus, wantPredictionStatus string, timeout time.Duration) error {
