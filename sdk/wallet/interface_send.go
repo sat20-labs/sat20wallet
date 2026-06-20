@@ -3320,6 +3320,86 @@ func (p *Manager) BuildSendOrdxTxWithStub(srcAddress string, excluded map[string
 	return tx, prevFetcher, feeValue - feeChange + stubInfo.Value(), nil
 }
 
+func (p *Manager) BuildSendOrdxTxWithStubFromAddress(localWallet common.Wallet, srcAddress string, destAddr string, assetName *AssetName,
+	amt int64, stub string, feeRate int64, memo []byte, inChannel, excludeRecentBlock bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+	if localWallet == nil {
+		localWallet = p.wallet
+	}
+	if srcAddress == "" && localWallet != nil {
+		srcAddress = localWallet.GetAddress()
+	}
+
+	excluded := make(map[string]bool)
+	if inChannel {
+		if channel := p.GetChannel(srcAddress); channel != nil {
+			channel.Mutex.RLock()
+			excluded = channel.UtxosInControl()
+			channel.Mutex.RUnlock()
+		}
+	}
+
+	return p.BuildSendOrdxTxWithStub(srcAddress, excluded, destAddr, assetName, amt, stub, feeRate, memo, excludeRecentBlock, inChannel)
+}
+
+func (p *Manager) batchSendSourceContext(localWallet common.Wallet, srcAddress string, inChannel bool) (common.Wallet, map[string]bool) {
+	if localWallet == nil {
+		localWallet = p.wallet
+	}
+	if srcAddress == "" && localWallet != nil {
+		srcAddress = localWallet.GetAddress()
+	}
+
+	excluded := make(map[string]bool)
+	if inChannel {
+		if channel := p.GetChannel(srcAddress); channel != nil {
+			channel.Mutex.RLock()
+			excluded = channel.UtxosInControl()
+			channel.Mutex.RUnlock()
+			if localWallet == p.wallet {
+				localWallet = channel.LocalWallet()
+			}
+		}
+	}
+
+	return localWallet, excluded
+}
+
+func (p *Manager) BuildBatchSendTxV3BTCFromAddress(srcAddress string, dest []*SendAssetInfo,
+	feeRate int64, memo []byte, inChannel, excludeRecentBlock bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+	_, excluded := p.batchSendSourceContext(nil, srcAddress, inChannel)
+	if srcAddress == "" && p.wallet != nil {
+		srcAddress = p.wallet.GetAddress()
+	}
+	return p.BuildBatchSendTxV3_btc(srcAddress, excluded, dest, feeRate, memo, excludeRecentBlock, inChannel, false)
+}
+
+func (p *Manager) BuildBatchSendTxV3OrdxFromAddress(localWallet common.Wallet, srcAddress string, dest []*SendAssetInfo,
+	assetName *AssetName, feeRate int64, memo []byte, inChannel, excludeRecentBlock, payFeeByLocalAddress bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+	localWallet, excluded := p.batchSendSourceContext(localWallet, srcAddress, inChannel)
+	if srcAddress == "" && localWallet != nil {
+		srcAddress = localWallet.GetAddress()
+	}
+	return p.BuildBatchSendTxV3_ordx(srcAddress, excluded, dest, assetName, feeRate, memo, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress)
+}
+
+func (p *Manager) BuildBatchSendTxV3RunesFromAddress(localWallet common.Wallet, srcAddress string, dest []*SendAssetInfo,
+	assetName *AssetName, feeRate int64, inChannel, excludeRecentBlock, payFeeByLocalAddress bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+	localWallet, excluded := p.batchSendSourceContext(localWallet, srcAddress, inChannel)
+	if srcAddress == "" && localWallet != nil {
+		srcAddress = localWallet.GetAddress()
+	}
+	return p.BuildBatchSendTxV3_runes(srcAddress, excluded, dest, assetName, feeRate, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress)
+}
+
+func (p *Manager) BuildBatchSendTxV3BRC20FromAddress(localWallet common.Wallet, srcAddress string, dest []*SendAssetInfo,
+	assetName *AssetName, feeRate int64, memo []byte, inChannel, excludeRecentBlock, payFeeByLocalAddress bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, []*InscribeResv, error) {
+	localWallet, excluded := p.batchSendSourceContext(localWallet, srcAddress, inChannel)
+	if srcAddress == "" && localWallet != nil {
+		srcAddress = localWallet.GetAddress()
+	}
+	return p.BuildBatchSendTxV3_brc20(srcAddress, excluded, dest, assetName, feeRate, memo, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress)
+}
+
 // 构建tx，发送给多个地址不同数量的资产。对于ordx资产，允许插桩，但这种情况下只允许一个地址
 // 不需要提前预估手续费，能更好利用utxo资源。如果是发送白聪，支持全部发送（内部自动调整发送数量）。
 func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,

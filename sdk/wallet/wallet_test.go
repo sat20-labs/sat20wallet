@@ -150,8 +150,6 @@ func TestRevocationKeyDerivationV2(t *testing.T) {
 }
 
 func TestTweakKeyDerivation(t *testing.T) {
-	t.Parallel()
-
 	wallet1, _, err := NewInteralWallet(GetChainParam())
 	if err != nil {
 		t.Fatalf("NewWallet failed %v", err)

@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
 
 type NodeRPCClient interface {
+	GetNodeInfoReq(nodeId string) (*Node, error)
 	GetSupportedContractsReq() ([]string, error)
 	GetDeployedContractsReq() ([]string, error)
 	GetContractStatusReq(string) (string, error)
@@ -21,8 +23,53 @@ type NodeRPCClient interface {
 	SendSigReq(req *wwire.SignRequest,
 		sig []byte) ([][][]byte, error)
 	SendActionResultNfty(msgId int64, msg string, result int, reason string) error
+	SendPerformRemoteActionReq(info *RemoteActionPerformReservation) error
+	SendPerformRemoteActionAckReq(info *RemoteActionPerformReservation) error
 	SendPingReq(*wwire.PingReq) (*wwire.PingResp, error)
 	SendActionSyncReq(req *wwire.ActionSyncReq) (*wwire.ActionSyncResp, error)
+
+	SendChannelOpenReq(req *wwire.ChannelOpenReq) (*wwire.ChannelOpenResp, error)
+	SendChannelFundingCreatedReq(req *wwire.FundingCreatedReq) (*wwire.FundingCreatedResp, error)
+	SendChannelFundingBroadcastedReq(req *wwire.FundingBroadcastedReq) (*wwire.FundingBroadcastedResp, error)
+	SendOpenChannelReq(info *FundingReservation) error
+	SendFundingCreatedReq(info *FundingReservation) error
+	SendFundingBroadcastedReq(info *FundingReservation) error
+	SendChannelCloseReq(req *wwire.ChannelCloseReq) (*wwire.ChannelCloseResp, error)
+	SendChannelClosingSignedReq(req *wwire.ClosingSignedReq) (*wwire.ClosingSignedResp, error)
+	SendChannelClosingBroadcastedReq(req *wwire.ClosingBroadcastedReq) (*wwire.ClosingBroadcastedResp, error)
+	SendCloseChannelReq(info *ClosingReservation) error
+	SendClosingSignedReq(info *ClosingReservation) error
+	SendClosingBroadcastedReq(info *ClosingReservation) error
+	SendChannelLockReq(req *wwire.LockReq) (*wwire.LockResp, error)
+	SendChannelLockCommitSigAndRevokeReq(req *wwire.LockCommitSigAndRevokeReq) (*wwire.LockCommitSigAndRevokeResp, error)
+	SendChannelLockAckReq(req *wwire.LockAckReq) (*wwire.LockAckResp, error)
+	SendLockReq(info *PaymentReservation) error
+	SendLockCommitSigAndRevokeReq(info *PaymentReservation) error
+	SendLockAckReq(info *PaymentReservation) error
+	SendChannelUnlockReq(req *wwire.UnlockReq) (*wwire.UnlockResp, error)
+	SendChannelUnlockCommitSigReq(req *wwire.UnlockCommitSigReq) (*wwire.UnlockCommitSigResp, error)
+	SendChannelUnlockRevokeAndAckReq(req *wwire.UnlockRevokeAndAckReq) (*wwire.UnlockRevokeAndAckResp, error)
+	SendUnlockReq(info *PaymentReservation) error
+	SendUnlockCommitSigReq(info *PaymentReservation) error
+	SendUnlockRevokeAndAckReq(info *PaymentReservation) error
+	SendChannelRecoverPaymentReq(req *wwire.RecoverPaymentRequireReq) (*wwire.RecoverPaymentRequireResp, error)
+	SendChannelRecoverPaymentCommitSigReq(req *wwire.RecoverPaymentCommitSigReq) (*wwire.RecoverPaymentCommitSigResp, error)
+	SendChannelRecoverPaymentRevokeAndAckReq(req *wwire.RecoverPaymentRevokeAndAckReq) (*wwire.RecoverPaymentRevokeAndAckResp, error)
+	SendRecoverPaymentReq(info *PaymentReservation) error
+	SendRecoverPaymentCommitSigReq(info *PaymentReservation) error
+	SendRecoverPaymentRevokeAndAckReq(info *PaymentReservation) error
+	SendChannelSplicingInReq(req *wwire.SplicingInReq) (*wwire.SplicingInResp, error)
+	SendChannelSplicingInCommitSigReq(req *wwire.SplicingInCommitSigReq) (*wwire.SplicingInCommitSigResp, error)
+	SendChannelSplicingInRevokeAndAckReq(req *wwire.SplicingInRevokeAndAckReq) (*wwire.SplicingInRevokeAndAckResp, error)
+	SendSplicingInReq(info *SplicingReservation) error
+	SendSplicingInCommitSigReq(info *SplicingReservation) error
+	SendSplicingInRevokeAndAckReq(info *SplicingReservation) error
+	SendChannelSplicingOutReq(req *wwire.SplicingOutReq) (*wwire.SplicingOutResp, error)
+	SendChannelSplicingOutCommitSigReq(req *wwire.SplicingOutCommitSigReq) (*wwire.SplicingOutCommitSigResp, error)
+	SendChannelSplicingOutRevokeAndAckReq(req *wwire.SplicingOutRevokeAndAckReq) (*wwire.SplicingOutRevokeAndAckResp, error)
+	SendSplicingOutReq(info *SplicingReservation) error
+	SendSplicingOutCommitSigReq(info *SplicingReservation) error
+	SendSplicingOutRevokeAndAckReq(info *SplicingReservation) error
 }
 
 type BaseResp struct {
@@ -40,6 +87,18 @@ type DeployedContractResp struct {
 	ContractURLs []string `json:"url"`
 }
 
+type nodeInfoResp struct {
+	BaseResp
+	Node *nodeInfo `json:"node"`
+}
+
+type nodeInfo struct {
+	NodeType string `json:"nodeType"`
+	NodeId   string `json:"nodeId"`
+	PubKey   string `json:"pubKey"`
+	Host     string `json:"host"`
+}
+
 type ContractStatusResp struct {
 	BaseResp
 	Status string `json:"status"`
@@ -52,6 +111,47 @@ type NodeClient struct {
 func NewNodeClient(scheme, host, proxy string, http HttpClient) *NodeClient {
 	client := NewRESTClient(scheme, host, proxy, http)
 	return &NodeClient{client}
+}
+
+func (p *NodeClient) GetNodeInfoReq(nodeId string) (*Node, error) {
+	url := p.GetUrl("/info/node/" + nodeId)
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	var result nodeInfoResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+	if result.Code != 0 {
+		Log.Errorf("%v response message %s", url, result.Msg)
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+	if result.Node == nil {
+		return nil, fmt.Errorf("empty node info %s", nodeId)
+	}
+
+	node := &Node{
+		NodeType: result.Node.NodeType,
+		Host:     result.Node.Host,
+	}
+	if result.Node.NodeId != "" {
+		nodeIdKey, err := utils.ParsePubkey(result.Node.NodeId)
+		if err == nil {
+			node.NodeId = nodeIdKey
+		}
+	}
+	if result.Node.PubKey != "" {
+		pubKey, err := utils.ParsePubkey(result.Node.PubKey)
+		if err == nil {
+			node.Pubkey = pubKey
+		}
+	}
+
+	return node, nil
 }
 
 func (p *NodeClient) GetSupportedContractsReq() ([]string, error) {

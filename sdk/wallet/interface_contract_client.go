@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
@@ -40,6 +41,10 @@ func (p *Manager) GetInvokeHistoryByAddressInContract(url, address string, start
 	return p.serverNode.client.GetContractInvokeHistoryByAddressReq(url, address, start, limit)
 }
 
+func (p *Manager) GetInvokeItemByInUtxoInContract(url, inUtxo string) (string, error) {
+	return p.serverNode.client.GetContractInvokeItemByInUtxoReq(url, inUtxo)
+}
+
 func (p *Manager) GetAllAddressesInContract(url string, start, limit int) (string, error) {
 	return p.serverNode.client.GetContractAllAddressesReq(url, start, limit)
 }
@@ -50,6 +55,56 @@ func (p *Manager) GetContractAnalyticsInServer(url string) (string, error) {
 
 func (p *Manager) GetUserStatusInContract(url, address string) (string, error) {
 	return p.serverNode.client.GetContractStatusByAddressReq(url, address)
+}
+
+func (p *Manager) GetTranscendContractWithAssetNameInServer(assetName string) (string, error) {
+	urls, err := p.GetDeployedContractInServer()
+	if err != nil {
+		return "", err
+	}
+	var tmp string
+	for _, url := range urls {
+		if strings.Contains(url, assetName) {
+			if strings.Contains(url, TEMPLATE_CONTRACT_AMM) {
+				return url, nil
+			}
+			if strings.Contains(url, TEMPLATE_CONTRACT_TRANSCEND) {
+				tmp = url
+			}
+		}
+	}
+	if tmp != "" {
+		return tmp, nil
+	}
+	return "", fmt.Errorf("can't find transcend contract")
+}
+
+func (p *Manager) HasContractInChannel(channelId string) bool {
+	urls, err := p.GetDeployedContractInServer()
+	if err != nil {
+		Log.Warnf("GetDeployedContractInServer failed while checking channel contracts %s: %v", channelId, err)
+		return false
+	}
+	for _, url := range urls {
+		if ExtractChannelId(url) == channelId {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Manager) IsControlByContract(channelId string, assetName string) bool {
+	urls, err := p.GetDeployedContractInServer()
+	if err != nil {
+		Log.Warnf("GetDeployedContractInServer failed while checking contract control %s/%s: %v", channelId, assetName, err)
+		return false
+	}
+	for _, url := range urls {
+		if ExtractChannelId(url) == channelId && strings.Contains(url, assetName) {
+			return true
+		}
+	}
+	return false
 }
 
 // 根据合约名称和配置参数，计算部署合约的费用（聪） feerate是主网费率

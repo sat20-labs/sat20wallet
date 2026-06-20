@@ -15,13 +15,13 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-type remoteSignData struct {
-	tx           *wire.MsgTx
-	prevFetcher  txscript.PrevOutputFetcher
-	tx2          *swire.MsgTx
-	prevFetcher2 stxscript.PrevOutputFetcher
-	fee          int64
-	notSign      bool
+type RemoteSignData struct {
+	Tx           *wire.MsgTx
+	PrevFetcher  txscript.PrevOutputFetcher
+	Tx2          *swire.MsgTx
+	PrevFetcher2 stxscript.PrevOutputFetcher
+	Fee          int64
+	NotSign      bool
 }
 
 func (p *Manager) BatchSendAssetsV3FromAddress(dest []*SendAssetInfo,
@@ -63,6 +63,14 @@ func (p *Manager) CoBatchSendAssetsV3FromAddress(localWallet common.Wallet, dest
 	}
 
 	excluded := make(map[string]bool)
+	if channel := p.GetChannel(channelId); channel != nil {
+		channel.Mutex.RLock()
+		excluded = channel.UtxosInControl()
+		channel.Mutex.RUnlock()
+		if localWallet == p.wallet {
+			localWallet = channel.LocalWallet()
+		}
+	}
 	var tx *wire.MsgTx
 	var prevFetcher *txscript.MultiPrevOutFetcher
 	var fee int64
@@ -403,9 +411,9 @@ func (p *Manager) CreateDeAnchorTx(channelAddr string, splicingOutTxId string,
 }
 
 func (p *Manager) generateSignData(localWallet common.Wallet, inscribes []*InscribeResv, dest []*SendAssetInfo,
-	witness, peerPubKey []byte, notSign bool) ([]*remoteSignData, []*wwire.TxSignInfo, []*wire.MsgTx, error) {
+	witness, peerPubKey []byte, notSign bool) ([]*RemoteSignData, []*wwire.TxSignInfo, []*wire.MsgTx, error) {
 
-	signData := make([]*remoteSignData, 0)
+	signData := make([]*RemoteSignData, 0)
 	txs := make([]*wire.MsgTx, 0)
 	txsSignInfo := make([]*wwire.TxSignInfo, 0)
 	for i, insc := range inscribes {
@@ -437,10 +445,15 @@ func (p *Manager) generateSignData(localWallet common.Wallet, inscribes []*Inscr
 	return signData, txsSignInfo, txs, nil
 }
 
+func (p *Manager) GenerateSignData(localWallet common.Wallet, inscribes []*InscribeResv, dest []*SendAssetInfo,
+	witness, peerPubKey []byte, notSign bool) ([]*RemoteSignData, []*wwire.TxSignInfo, []*wire.MsgTx, error) {
+	return p.generateSignData(localWallet, inscribes, dest, witness, peerPubKey, notSign)
+}
+
 func (p *Manager) addToSignData(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	fee int64, reason string, more, witness, peerPubKey []byte,
-	signData []*remoteSignData, txsSignInfo []*wwire.TxSignInfo,
-	txs []*wire.MsgTx, notSign bool) ([]*remoteSignData, []*wwire.TxSignInfo, []*wire.MsgTx, error) {
+	signData []*RemoteSignData, txsSignInfo []*wwire.TxSignInfo,
+	txs []*wire.MsgTx, notSign bool) ([]*RemoteSignData, []*wwire.TxSignInfo, []*wire.MsgTx, error) {
 
 	var sigs [][]byte
 	if prevFetcher != nil {
@@ -462,21 +475,28 @@ func (p *Manager) addToSignData(localWallet common.Wallet, tx *wire.MsgTx, prevF
 		NotSign:   notSign,
 		MoreData:  more,
 	})
-	signData = append(signData, &remoteSignData{
-		tx:          tx,
-		prevFetcher: prevFetcher,
-		fee:         fee,
-		notSign:     notSign,
+	signData = append(signData, &RemoteSignData{
+		Tx:          tx,
+		PrevFetcher: prevFetcher,
+		Fee:         fee,
+		NotSign:     notSign,
 	})
 	txs = append(txs, tx)
 
 	return signData, txsSignInfo, txs, nil
 }
 
+func (p *Manager) AddToSignData(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
+	fee int64, reason string, more, witness, peerPubKey []byte,
+	signData []*RemoteSignData, txsSignInfo []*wwire.TxSignInfo,
+	txs []*wire.MsgTx, notSign bool) ([]*RemoteSignData, []*wwire.TxSignInfo, []*wire.MsgTx, error) {
+	return p.addToSignData(localWallet, tx, prevFetcher, fee, reason, more, witness, peerPubKey, signData, txsSignInfo, txs, notSign)
+}
+
 func (p *Manager) addToSignData_SatsNet(localWallet common.Wallet, tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
 	fee int64, reason string, witness, peerPubKey []byte,
-	signData []*remoteSignData, txsSignInfo []*wwire.TxSignInfo,
-	txs []*swire.MsgTx, notSign bool) ([]*remoteSignData, []*wwire.TxSignInfo, []*swire.MsgTx, error) {
+	signData []*RemoteSignData, txsSignInfo []*wwire.TxSignInfo,
+	txs []*swire.MsgTx, notSign bool) ([]*RemoteSignData, []*wwire.TxSignInfo, []*swire.MsgTx, error) {
 
 	sigs, err := PartialSignTxWithWallet_SatsNet(localWallet, tx, prevFetcher, witness, peerPubKey)
 	if err != nil {
@@ -493,19 +513,26 @@ func (p *Manager) addToSignData_SatsNet(localWallet common.Wallet, tx *swire.Msg
 		Reason:    reason,
 		NotSign:   notSign,
 	})
-	signData = append(signData, &remoteSignData{
-		tx2:          tx,
-		prevFetcher2: prevFetcher,
-		fee:          fee,
-		notSign:      notSign,
+	signData = append(signData, &RemoteSignData{
+		Tx2:          tx,
+		PrevFetcher2: prevFetcher,
+		Fee:          fee,
+		NotSign:      notSign,
 	})
 	txs = append(txs, tx)
 
 	return signData, txsSignInfo, txs, nil
 }
 
+func (p *Manager) AddToSignDataSatsNet(localWallet common.Wallet, tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
+	fee int64, reason string, witness, peerPubKey []byte,
+	signData []*RemoteSignData, txsSignInfo []*wwire.TxSignInfo,
+	txs []*swire.MsgTx, notSign bool) ([]*RemoteSignData, []*wwire.TxSignInfo, []*swire.MsgTx, error) {
+	return p.addToSignData_SatsNet(localWallet, tx, prevFetcher, fee, reason, witness, peerPubKey, signData, txsSignInfo, txs, notSign)
+}
+
 func (p *Manager) reqRemoteSignAndBroadcast(localWallet common.Wallet, witness, peerPubKey []byte,
-	reason, channelId string, signData []*remoteSignData, txsSignInfo []*wwire.TxSignInfo,
+	reason, channelId string, signData []*RemoteSignData, txsSignInfo []*wwire.TxSignInfo,
 	txs []*wire.MsgTx, txs2 []*swire.MsgTx, md []byte) (*wire.MsgTx, int64, error) {
 
 	localKey := localWallet.GetPaymentPubKey().SerializeCompressed()
@@ -534,24 +561,24 @@ func (p *Manager) reqRemoteSignAndBroadcast(localWallet common.Wallet, witness, 
 	var mainTx *wire.MsgTx
 	totalFee := int64(0)
 	for i, data := range signData {
-		if data.notSign {
+		if data.NotSign {
 			continue
 		}
-		if data.tx != nil {
-			_, err = FinalSignTxWithWallet(localWallet, data.tx, data.prevFetcher, witness, false, peerPubKey, peerSig[i])
+		if data.Tx != nil {
+			_, err = FinalSignTxWithWallet(localWallet, data.Tx, data.PrevFetcher, witness, false, peerPubKey, peerSig[i])
 			if err != nil {
 				return nil, 0, err
 			}
-			totalFee += data.fee
+			totalFee += data.Fee
 			if txsSignInfo[i].Reason == "" {
-				mainTx = data.tx
+				mainTx = data.Tx
 			}
 		} else {
-			_, err = FinalSignTxWithWallet_SatsNet(localWallet, data.tx2, data.prevFetcher2, witness, peerPubKey, peerSig[i])
+			_, err = FinalSignTxWithWallet_SatsNet(localWallet, data.Tx2, data.PrevFetcher2, witness, peerPubKey, peerSig[i])
 			if err != nil {
 				return nil, 0, err
 			}
-			totalFee += data.fee
+			totalFee += data.Fee
 		}
 	}
 	if mainTx == nil {
@@ -566,6 +593,12 @@ func (p *Manager) reqRemoteSignAndBroadcast(localWallet common.Wallet, witness, 
 	}
 
 	return mainTx, totalFee, nil
+}
+
+func (p *Manager) ReqRemoteSignAndBroadcast(localWallet common.Wallet, witness, peerPubKey []byte,
+	reason, channelId string, signData []*RemoteSignData, txsSignInfo []*wwire.TxSignInfo,
+	txs []*wire.MsgTx, txs2 []*swire.MsgTx, md []byte) (*wire.MsgTx, int64, error) {
+	return p.reqRemoteSignAndBroadcast(localWallet, witness, peerPubKey, reason, channelId, signData, txsSignInfo, txs, txs2, md)
 }
 
 func (p *Manager) channelWitness(localWallet common.Wallet, channelId string) ([]byte, []byte, error) {
@@ -586,6 +619,10 @@ func (p *Manager) channelWitness(localWallet common.Wallet, channelId string) ([
 		return nil, nil, fmt.Errorf("invalid channel %s", channelId)
 	}
 	return witness, peerPubKey, nil
+}
+
+func (p *Manager) ChannelWitness(localWallet common.Wallet, channelId string) ([]byte, []byte, error) {
+	return p.channelWitness(localWallet, channelId)
 }
 
 func (p *Manager) unlockOpenInscribes(inscribes []*InscribeResv) {

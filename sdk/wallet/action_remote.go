@@ -15,12 +15,6 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-type remoteActionRPCClient interface {
-	SendPerformRemoteActionReq(info *RemoteActionPerformReservation) error
-	SendPerformRemoteActionAckReq(info *RemoteActionPerformReservation) error
-	SendActionResultNfty(msgId int64, msg string, result int, reason string) error
-}
-
 // PerformRemoteAction requests a server-side STP action, lets the wallet build
 // and broadcast the required fee/action tx, and then ACKs the server.
 func (p *Manager) PerformRemoteAction(doAction StartRemoteAction, action string, actionParam, more []byte,
@@ -102,7 +96,7 @@ func (p *Manager) PerformRemoteAction(doAction StartRemoteAction, action string,
 }
 
 func (p *Manager) newRemoteAction(action string, actionParam, more []byte,
-	feeRate int64, sendTxInL1, toBootstrap bool) (*RemoteActionPerformReservation, remoteActionRPCClient, *secp256k1.PublicKey, error) {
+	feeRate int64, sendTxInL1, toBootstrap bool) (*RemoteActionPerformReservation, NodeRPCClient, *secp256k1.PublicKey, error) {
 
 	client, node, err := p.remoteActionClient(toBootstrap)
 	if err != nil {
@@ -135,7 +129,7 @@ func (p *Manager) newRemoteAction(action string, actionParam, more []byte,
 	return resv, client, node.Pubkey, nil
 }
 
-func (p *Manager) remoteActionClient(toBootstrap bool) (remoteActionRPCClient, *Node, error) {
+func (p *Manager) remoteActionClient(toBootstrap bool) (NodeRPCClient, *Node, error) {
 	node := p.serverNode
 	if toBootstrap {
 		if len(p.bootstrapNode) == 0 {
@@ -146,7 +140,7 @@ func (p *Manager) remoteActionClient(toBootstrap bool) (remoteActionRPCClient, *
 	if node == nil || node.client == nil {
 		return nil, nil, fmt.Errorf("server node is not initialized")
 	}
-	client, ok := node.client.(remoteActionRPCClient)
+	client, ok := node.client.(NodeRPCClient)
 	if !ok {
 		return nil, nil, fmt.Errorf("node client does not support remote action")
 	}
@@ -180,7 +174,10 @@ func (p *Manager) HandleRemoteActionStatus(sendTxInL1 bool) {
 	p.mutex.RLock()
 	remoteActionMap := make(map[int64]*RemoteActionPerformReservation, len(p.remoteActionPerformMap))
 	for id, resv := range p.remoteActionPerformMap {
-		remoteActionMap[id] = resv
+		action, ok := resv.(*RemoteActionPerformReservation)
+		if ok && action.IsInitiator {
+			remoteActionMap[id] = action
+		}
 	}
 	p.mutex.RUnlock()
 
@@ -225,6 +222,10 @@ func (p *Manager) handleRemoteActionStatus(resv *RemoteActionPerformReservation)
 		return nil
 	}
 
+	if err := p.confirmRemoteActionTx(resv); err != nil {
+		return err
+	}
+
 	client, _, err := p.remoteActionClient(resv.SendToBootstrapNode)
 	if err != nil {
 		return err
@@ -241,8 +242,44 @@ func (p *Manager) handleRemoteActionStatus(resv *RemoteActionPerformReservation)
 			return err
 		}
 		resv.Status = RS_CLOSED
+		if err := p.SaveWalletReservation(resv); err != nil {
+			return err
+		}
+		p.DelResvWithId(resv.Id)
+		return nil
 	}
 
+	return p.SaveWalletReservation(resv)
+}
+
+func (p *Manager) confirmRemoteActionTx(resv *RemoteActionPerformReservation) error {
+	if resv.Status != RS_PERFORM_ACTION_TX_BROADCASTED {
+		return nil
+	}
+
+	var (
+		txId      string
+		confirmed bool
+	)
+	if resv.SendTxInL1 {
+		txId = resv.UnconfirmedTxId()
+		if txId == "" {
+			return nil
+		}
+		confirmed = p.l1IndexerClient.IsTxConfirmed(txId)
+	} else {
+		txId = resv.UnconfirmedTxId_SatsNet()
+		if txId == "" {
+			return nil
+		}
+		confirmed = p.l2IndexerClient.IsTxConfirmed(txId)
+	}
+	if !confirmed {
+		return nil
+	}
+
+	Log.Infof("remote action tx confirmed: %s", txId)
+	resv.Status = RS_PERFORM_ACTION_TX_CONFIRMED
 	return p.SaveWalletReservation(resv)
 }
 

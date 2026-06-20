@@ -755,6 +755,661 @@ func getChannelAddrByPeerPubkey(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
+func openChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 4 {
+		return createJsRet(nil, -1, "Expected 4 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "feeRate parameter should be a string")
+	}
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	utxoList, err := getStringVector(p[2])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	if p[3].Type() != js.TypeString {
+		return createJsRet(nil, -1, "memo parameter should be a string")
+	}
+
+	feeRate, err := strconv.ParseInt(p[0].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	amt, err := strconv.ParseInt(p[1].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	memo := p[3].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		channel, err := _mgr.OpenChannel(feeRate, amt, utxoList, memo)
+		if err != nil {
+			wallet.Log.Errorf("OpenChannel error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"channel": channel}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func closeChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel parameter should be a string")
+	}
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "feeRate parameter should be a string")
+	}
+	feeRate, err := strconv.ParseInt(p[1].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	if p[2].Type() != js.TypeBoolean {
+		return createJsRet(nil, -1, "force parameter should be a boolean")
+	}
+	channel := p[0].String()
+	force := p[2].Bool()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		closeTxId, deAnchorTxId, err := _mgr.CloseChannel(channel, feeRate, force)
+		if err != nil {
+			wallet.Log.Errorf("CloseChannel error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{
+			"closeTxId":    closeTxId,
+			"deAnchorTxId": deAnchorTxId,
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func channelData(channel *wallet.Channel) (map[string]any, error) {
+	if channel == nil {
+		return nil, fmt.Errorf("channel is nil")
+	}
+	info := wallet.ConvertChannel(channel)
+	channelJSON, err := json.Marshal(info)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"address":   info.Address,
+		"channelId": info.ChannelId,
+		"status":    info.Status,
+		"json":      string(channelJSON),
+	}, nil
+}
+
+func getChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel parameter should be a string")
+	}
+	data, err := channelData(_mgr.FindChannel(p[0].String()))
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return createJsRet(data, 0, "ok")
+}
+
+func getCurrentChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	data, err := channelData(_mgr.GetCurrentChannel())
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return createJsRet(data, 0, "ok")
+}
+
+func getChannelStatus(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel parameter should be a string")
+	}
+	return createJsRet(_mgr.GetChannelStatus(p[0].String()), 0, "ok")
+}
+
+func getAllChannels(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	channels := _mgr.GetAllChannels()
+	result := make([]*wallet.ChannelInfo, 0, len(channels))
+	for _, c := range channels {
+		result = append(result, wallet.ConvertChannel(c))
+	}
+	channelsJSON, err := json.Marshal(result)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return createJsRet(map[string]any{"channels": string(channelsJSON)}, 0, "ok")
+}
+
+func reservationStatus(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected reservation id parameter")
+	}
+
+	var id int64
+	var err error
+	switch p[0].Type() {
+	case js.TypeNumber:
+		id = int64(p[0].Int())
+	case js.TypeString:
+		id, err = strconv.ParseInt(strings.TrimSpace(p[0].String()), 10, 64)
+		if err != nil {
+			return createJsRet(nil, -1, err.Error())
+		}
+	default:
+		return createJsRet(nil, -1, "reservation id parameter should be a number or string")
+	}
+
+	resv := _mgr.GetResv(id)
+	if resv == nil {
+		return createJsRet(nil, -1, "reservation not found")
+	}
+	buf, err := json.Marshal(resv.GetStructInDB())
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return createJsRet(map[string]interface{}{
+		"reservation_id": resv.GetId(),
+		"type":           resv.GetType(),
+		"status":         int(resv.GetStatus()),
+		"json":           string(buf),
+	}, 0, "ok")
+}
+
+func allReservations(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	resvs := _mgr.GetAllResv()
+	items := make([]interface{}, 0, len(resvs))
+	for _, resv := range resvs {
+		item := map[string]interface{}{
+			"reservation_id": resv.GetId(),
+			"type":           resv.GetType(),
+			"status":         int(resv.GetStatus()),
+		}
+		if buf, err := json.Marshal(resv.GetStructInDB()); err == nil {
+			item["json"] = string(buf)
+		}
+		items = append(items, item)
+	}
+	return createJsRet(map[string]interface{}{"reservations": items}, 0, "ok")
+}
+
+func unlockFromChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 4 {
+		return createJsRet(nil, -1, "Expected 4 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel parameter should be a string")
+	}
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "assetName parameter should be a string")
+	}
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	feeUtxoList, err := getStringVector(p[3])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	channel := p[0].String()
+	assetName := p[1].String()
+	amt := p[2].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		unlockTxId, _, err := _mgr.UnlockFromChannel(channel, "", assetName, amt, feeUtxoList, nil)
+		if err != nil {
+			wallet.Log.Errorf("UnlockFromChannel error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"unlockTxId": unlockTxId}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func lockToChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 5 {
+		return createJsRet(nil, -1, "Expected 5 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel Id parameter should be a string")
+	}
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "assetName parameter should be a string")
+	}
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	utxoList, err := getStringVector(p[3])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	feeList, err := getStringVector(p[4])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	channel := p[0].String()
+	assetName := p[1].String()
+	amt := p[2].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		lockTxId, _, err := _mgr.LockToChannel(channel, assetName, amt, utxoList, feeList, nil)
+		if err != nil {
+			wallet.Log.Errorf("LockToChannel error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"lockTxId": lockTxId}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func lockToChannelWithExpand(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 4 {
+		return createJsRet(nil, -1, "Expected 4 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel Id parameter should be a string")
+	}
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "assetName parameter should be a string")
+	}
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	if p[3].Type() != js.TypeString {
+		return createJsRet(nil, -1, "feeRate parameter should be a string")
+	}
+	feeRate, err := strconv.ParseInt(p[3].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	channel := p[0].String()
+	assetName := p[1].String()
+	amt := p[2].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		lockTxId, id, err := _mgr.LockToChannelWithExpand(channel, assetName, amt, feeRate)
+		if err != nil {
+			wallet.Log.Errorf("LockToChannelWithExpand error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"lockTxId": lockTxId, "id": id}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func batchUnlockFromChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 5 {
+		return createJsRet(nil, -1, "Expected 5 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel parameter should be a string")
+	}
+	destAddr, err := getStringVector(p[1])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "assetName parameter should be a string")
+	}
+	if p[3].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	feeUtxos, err := getStringVector(p[4])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	channel := p[0].String()
+	assetName := p[2].String()
+	amt := p[3].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txId, id, err := _mgr.BatchUnlockFromChannel(channel, destAddr, assetName, amt, feeUtxos, nil, "", nil)
+		if err != nil {
+			wallet.Log.Errorf("BatchUnlockFromChannel error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"unlockTxId": txId, "id": id}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func batchUnlockFromChannelV2(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 5 {
+		return createJsRet(nil, -1, "Expected 5 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel parameter should be a string")
+	}
+	destAddr, err := getStringVector(p[1])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "assetName parameter should be a string")
+	}
+	amtVect, err := getStringVector(p[3])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	feeUtxos, err := getStringVector(p[4])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	channel := p[0].String()
+	assetName := p[2].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txId, id, err := _mgr.BatchUnlockFromChannelV2(channel, destAddr, assetName, amtVect, feeUtxos, nil, "", nil)
+		if err != nil {
+			wallet.Log.Errorf("BatchUnlockFromChannelV2 error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"unlockTxId": txId, "id": id}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func expandChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+	if p[0].Type() != js.TypeString || p[1].Type() != js.TypeString || p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel, assetName and utxo parameters should be strings")
+	}
+	channel := p[0].String()
+	assetName := p[1].String()
+	utxo := p[2].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txId, amt, id, err := _mgr.ExpandChannel(channel, assetName, utxo, "", nil)
+		if err != nil {
+			wallet.Log.Errorf("ExpandChannel error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"txId": txId, "amount": amt, "id": id}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func expandChannel_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 3 {
+		return createJsRet(nil, -1, "Expected 3 parameters")
+	}
+	if p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel and assetName parameters should be strings")
+	}
+	utxos, err := getStringVector(p[2])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	channel := p[0].String()
+	assetName := p[1].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		amt, err := _mgr.ExpandChannel_SatsNet(channel, assetName, utxos)
+		if err != nil {
+			wallet.Log.Errorf("ExpandChannel_SatsNet error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"amount": amt}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func expandAll_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+	if p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel and assetName parameters should be strings")
+	}
+	channel := p[0].String()
+	assetName := p[1].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		amt, err := _mgr.ExpandAll_SatsNet(channel, assetName)
+		if err != nil {
+			wallet.Log.Errorf("ExpandAll_SatsNet error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"amount": amt}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func expandAsset(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+	if p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel and assetName parameters should be strings")
+	}
+	channel := p[0].String()
+	assetName := p[1].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txIds, amt, err := _mgr.ExpandAsset(channel, assetName)
+		if err != nil {
+			wallet.Log.Errorf("ExpandAsset error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"txIds": txIds, "amount": amt}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func reopenChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 || p[0].Type() != js.TypeBoolean {
+		return createJsRet(nil, -1, "expandAll parameter should be a boolean")
+	}
+	expandAll := p[0].Bool()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txId, err := _mgr.ReopenChannel(expandAll)
+		if err != nil {
+			wallet.Log.Errorf("ReopenChannel error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"txId": txId}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func rebuildChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txId, err := _mgr.RebuildChannel()
+		if err != nil {
+			wallet.Log.Errorf("RebuildChannel error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"txId": txId}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func restoreChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 || p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel parameter should be a string")
+	}
+	channelID := p[0].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		channel, err := _mgr.RestoreChannel(channelID)
+		if err != nil {
+			wallet.Log.Errorf("RestoreChannel error: %v", err)
+			return nil, -1, err.Error()
+		}
+		data, err := channelData(channel)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func splicingIn(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 6 {
+		return createJsRet(nil, -1, "Expected 6 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel Id parameter should be a string")
+	}
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "assetName parameter should be a string")
+	}
+	utxos, err := getStringVector(p[2])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	fees, err := getStringVector(p[3])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	if p[4].Type() != js.TypeString {
+		return createJsRet(nil, -1, "feeRate parameter should be a string")
+	}
+	feeRate, err := strconv.ParseInt(p[4].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	if p[5].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	channel := p[0].String()
+	assetName := p[1].String()
+	amt := p[5].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txId, id, err := _mgr.SplicingIn(channel, assetName, amt,
+			utxos, fees, nil, nil, feeRate, wallet.SPLICING_REASON_LOCAL)
+		if err != nil {
+			wallet.Log.Errorf("SplicingIn error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"txId": txId, "resvId": id}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func splicingOut(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 6 {
+		return createJsRet(nil, -1, "Expected 6 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel Id parameter should be a string")
+	}
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "destAddr parameter should be a string")
+	}
+	if p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "assetName parameter should be a string")
+	}
+	fees, err := getStringVector(p[3])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	if p[4].Type() != js.TypeString {
+		return createJsRet(nil, -1, "feeRate parameter should be a string")
+	}
+	feeRate, err := strconv.ParseInt(p[4].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	if p[5].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+	channel := p[0].String()
+	destAddr := p[1].String()
+	assetName := p[2].String()
+	amt := p[5].String()
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txId, id, err := _mgr.SplicingOut(channel, destAddr, assetName, amt,
+			fees, nil, nil, feeRate, wallet.SPLICING_REASON_LOCAL, nil)
+		if err != nil {
+			wallet.Log.Errorf("SplicingOut error: %v", err)
+			return nil, -1, err.Error()
+		}
+		return map[string]interface{}{"txId": txId, "resvId": id}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
 func getCommitSecret(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -3825,6 +4480,28 @@ func main() {
 	// input: account id; return: current wallet public key
 	obj.Set("getWalletPubkey", js.FuncOf(getWalletPubkey))
 	obj.Set("getChannelAddrByPeerPubkey", js.FuncOf(getChannelAddrByPeerPubkey))
+	obj.Set("openChannel", js.FuncOf(openChannel))
+	obj.Set("closeChannel", js.FuncOf(closeChannel))
+	obj.Set("getChannel", js.FuncOf(getChannel))
+	obj.Set("getCurrentChannel", js.FuncOf(getCurrentChannel))
+	obj.Set("getChannelStatus", js.FuncOf(getChannelStatus))
+	obj.Set("getAllChannels", js.FuncOf(getAllChannels))
+	obj.Set("reservationStatus", js.FuncOf(reservationStatus))
+	obj.Set("allReservations", js.FuncOf(allReservations))
+	obj.Set("unlockFromChannel", js.FuncOf(unlockFromChannel))
+	obj.Set("lockToChannel", js.FuncOf(lockToChannel))
+	obj.Set("lockToChannelWithExpand", js.FuncOf(lockToChannelWithExpand))
+	obj.Set("batchUnlockFromChannel", js.FuncOf(batchUnlockFromChannel))
+	obj.Set("batchUnlockFromChannelV2", js.FuncOf(batchUnlockFromChannelV2))
+	obj.Set("expandChannel", js.FuncOf(expandChannel))
+	obj.Set("expandChannel_SatsNet", js.FuncOf(expandChannel_SatsNet))
+	obj.Set("expandAll_SatsNet", js.FuncOf(expandAll_SatsNet))
+	obj.Set("expandAsset", js.FuncOf(expandAsset))
+	obj.Set("reopenChannel", js.FuncOf(reopenChannel))
+	obj.Set("rebuildChannel", js.FuncOf(rebuildChannel))
+	obj.Set("restoreChannel", js.FuncOf(restoreChannel))
+	obj.Set("splicingIn", js.FuncOf(splicingIn))
+	obj.Set("splicingOut", js.FuncOf(splicingOut))
 	// input: node pubkey(hex string), index; return: commit secrect (hex string)
 	obj.Set("getCommitSecret", js.FuncOf(getCommitSecret))
 	// input: commit secrect(hex string), index; return: revocation priv key (hex string)

@@ -7,6 +7,10 @@ import (
 )
 
 const (
+	RESV_TYPE_OPEN         = "open"
+	RESV_TYPE_CLOSE        = "close"
+	RESV_TYPE_PAYMENT      = "pay"
+	RESV_TYPE_SPLICING     = "splicing"
 	RESV_TYPE_INSC         = "insc"
 	RESV_TYPE_LOCALACTION  = "localaction"
 	RESV_TYPE_REMOTEACTION = "remoteaction"
@@ -133,6 +137,22 @@ func NewReservationBase(id int64, isInitiator bool, status ResvStatus, wallet co
 
 func newResvFromType(typ string) Reservation {
 	switch typ {
+	case RESV_TYPE_OPEN:
+		return &FundingReservation{
+			FundingDataInDB: FundingDataInDB{ReservationBase: ReservationBase{mutex: new(sync.RWMutex)}},
+		}
+	case RESV_TYPE_CLOSE:
+		return &ClosingReservation{
+			ClosingDataInDB: ClosingDataInDB{ReservationBase: ReservationBase{mutex: new(sync.RWMutex)}},
+		}
+	case RESV_TYPE_PAYMENT:
+		return &PaymentReservation{
+			PaymentDataInDB: PaymentDataInDB{ReservationBase: ReservationBase{mutex: new(sync.RWMutex)}},
+		}
+	case RESV_TYPE_SPLICING:
+		return &SplicingReservation{
+			SplicingDataInDB: SplicingDataInDB{ReservationBase: ReservationBase{mutex: new(sync.RWMutex)}},
+		}
 	case RESV_TYPE_LOCALACTION:
 		return &LocalActionPerformData{
 			ReservationBase: ReservationBase{mutex: new(sync.RWMutex)},

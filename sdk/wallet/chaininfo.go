@@ -116,6 +116,19 @@ func AddrFromPkScript(pkScript []byte) (string, error) {
 	return addresses[0].EncodeAddress(), nil
 }
 
+func AddressFromPkScript(pkScript []byte, netParams *chaincfg.Params) (string, error) {
+	_, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, netParams)
+	if err != nil {
+		return "", err
+	}
+
+	if len(addresses) == 0 {
+		return "", fmt.Errorf("can't generate address")
+	}
+
+	return addresses[0].EncodeAddress(), nil
+}
+
 // only for p2tr
 func PubKeyToPkScript(pubKey *secp256k1.PublicKey) ([]byte, error) {
 	return GetP2TRpkScript(pubKey)
@@ -261,7 +274,7 @@ func VerifySignedTxV2(tx *wire.MsgTx,
 			return 0, fmt.Errorf("duplicated input %s", utxo)
 		}
 		utxomap[utxo] = true
-		
+
 		txOut := prevFetcher.FetchPrevOutput(txIn.PreviousOutPoint)
 		vm, err := txscript.NewEngine(txOut.PkScript, tx, i, txscript.StandardVerifyFlags,
 			nil, sigHashes, txOut.Value, prevFetcher)
@@ -336,7 +349,7 @@ func IsNullDataScript(script []byte) bool {
 	tokenizer := txscript.MakeScriptTokenizer(0, script[1:])
 	return tokenizer.Next() && tokenizer.Done() &&
 		(txscript.IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= txscript.OP_PUSHDATA4) //&&
-		//len(tokenizer.Data()) <= txscript.MaxDataCarrierSize 新版本已经放宽
+	//len(tokenizer.Data()) <= txscript.MaxDataCarrierSize 新版本已经放宽
 }
 
 func ConvertMsgTx(tx *wire.MsgTx) *MsgTx {
@@ -345,15 +358,15 @@ func ConvertMsgTx(tx *wire.MsgTx) *MsgTx {
 	}
 
 	msg := &MsgTx{
-		Version: tx.Version,
+		Version:  tx.Version,
 		LockTime: tx.LockTime,
 	}
 	msg.TxIn = make([]*TxIn, 0)
 	for _, in := range tx.TxIn {
 		txin := &TxIn{
 			PreviousOutPoint: OutPoint{Hash: in.PreviousOutPoint.Hash.String(), Index: in.PreviousOutPoint.Index},
-			SignatureScript: hex.EncodeToString(in.SignatureScript),
-			Sequence: in.Sequence,
+			SignatureScript:  hex.EncodeToString(in.SignatureScript),
+			Sequence:         in.Sequence,
 		}
 		txin.Witness = make([]string, 0)
 		for _, w := range in.Witness {
@@ -365,13 +378,13 @@ func ConvertMsgTx(tx *wire.MsgTx) *MsgTx {
 	msg.TxOut = make([]*TxOut, 0)
 	for _, out := range tx.TxOut {
 		txout := &TxOut{
-			Value: out.Value,
+			Value:    out.Value,
 			PkScript: hex.EncodeToString(out.PkScript),
 		}
 		msg.TxOut = append(msg.TxOut, txout)
 	}
 
-   return msg
+	return msg
 }
 
 func PrintHexTx(tx *wire.MsgTx) {
@@ -387,7 +400,6 @@ func PrintJsonTx(tx *wire.MsgTx, name string) {
 	b, _ := json.Marshal(jsonTx)
 	Log.Infof("L1 %s TX %s vsize %d : %s", name, tx.TxID(), GetTxVirtualSize2(tx), string(b))
 }
-
 
 func GetPkScriptType(prevOutScript []byte) txscript.ScriptClass {
 	ty, _, _, err := txscript.ExtractPkScriptAddrs(prevOutScript, GetChainParam())

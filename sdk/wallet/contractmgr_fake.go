@@ -67,17 +67,17 @@ func (p *Manager) NeedRebuildTraderHistory() bool {
 
 func (p *Manager) CoGenerateStubUtxos(localWallet common.Wallet, n int, feeRate int64, contractURL string, invokeCount int64,
 	excludeRecentBlock bool) (string, int64, error) {
-	return "", 0, fmt.Errorf("not implemented")
+	return p.coGenerateStubUtxos(localWallet, n, feeRate, contractURL, invokeCount, excludeRecentBlock)
 }
 func (p *Manager) CoBatchSendV3(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 	sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress bool) (string, int64, error) {
-	return "", 0, fmt.Errorf("not implemented")
+	return p.coBatchSendV3(localWallet, dest, assetNameStr, feeRate, reason, contractURL, invokeCount, memo, static, runtime, sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress)
 }
 func (p *Manager) CoSendOrdxWithStub(localWallet common.Wallet, dest string, assetNameStr string, amt int64, feeRate int64, stub string,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 	sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error) {
-	return "", 0, fmt.Errorf("not implemented")
+	return p.coSendOrdxWithStub(localWallet, dest, assetNameStr, amt, feeRate, stub, reason, contractURL, invokeCount, memo, static, runtime, sendDeAnchorTx, excludeRecentBlock)
 }
 func (p *Manager) CoBatchSendV2_SatsNet(localWallet common.Wallet, dest []*SendAssetInfo, assetName string,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error) {

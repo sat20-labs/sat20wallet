@@ -18,6 +18,7 @@ const (
 )
 
 type LocalActionParam_Expand struct {
+	ChannelId   string
 	AssetName   *AssetName
 	Amt         *Decimal
 	ContractURL string
@@ -67,6 +68,20 @@ func (p *LocalActionPerformData) GetType() string {
 
 func (p *LocalActionPerformData) GetStructInDB() any {
 	return p
+}
+
+func (p *LocalActionPerformData) UnconfirmedTxId() string {
+	if p.TxId != "" && p.IsL1Tx && p.Status == RS_PERFORM_ACTION_TX_BROADCASTED {
+		return p.TxId
+	}
+	return ""
+}
+
+func (p *LocalActionPerformData) UnconfirmedTxId_SatsNet() string {
+	if p.TxId != "" && !p.IsL1Tx && p.Status == RS_PERFORM_ACTION_TX_BROADCASTED {
+		return p.TxId
+	}
+	return ""
 }
 
 func (p *LocalActionPerformData) GetCurrentResvId() int64 {
@@ -141,6 +156,20 @@ func (p *RemoteActionPerformReservation) GetType() string {
 
 func (p *RemoteActionPerformReservation) GetStructInDB() any {
 	return p
+}
+
+func (p *RemoteActionPerformReservation) UnconfirmedTxId() string {
+	if p.SendTxInL1 && p.Status == RS_PERFORM_ACTION_TX_BROADCASTED {
+		return p.FeeTxId
+	}
+	return ""
+}
+
+func (p *RemoteActionPerformReservation) UnconfirmedTxId_SatsNet() string {
+	if !p.SendTxInL1 && p.Status == RS_PERFORM_ACTION_TX_BROADCASTED {
+		return p.FeeTxId
+	}
+	return ""
 }
 
 type StartRemoteAction func(resv *RemoteActionPerformReservation) (string, string, error)

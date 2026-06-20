@@ -18,7 +18,6 @@ func (p *Manager) SignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher)
 	return SignTxWithWallet(p.wallet, tx, prevFetcher)
 }
 
-
 func SignTxWithWallet(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) (*wire.MsgTx, error) {
 	packet, err := CreatePsbt(tx, prevFetcher, nil)
 	if err != nil {
@@ -51,7 +50,7 @@ func SignTxWithWallet(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txs
 	return finalTx, nil
 }
 
-func (p *Manager) SignTxV2(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) (error) {
+func (p *Manager) SignTxV2(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
 
 	signedTx, err := p.SignTx(tx, prevFetcher)
 	if err != nil {
@@ -498,6 +497,46 @@ func FinalTxWithPeerSig_SatsNet(redeemScript, localPubkey, peerPubkey []byte, tx
 	return nil
 }
 
+func FinalTxWithChannelPeerSig(channel *Channel, tx *wire.MsgTx,
+	prevFetcher txscript.PrevOutputFetcher, theirSig [][]byte) error {
+	return FinalTxWithPeerSig(channel.RedeemScript, channel.GetLocalPubKey().SerializeCompressed(),
+		channel.GetRemotePubKey().SerializeCompressed(), tx, prevFetcher, theirSig)
+}
+
+func FinalTxWithChannelPeerSig_SatsNet(channel *Channel, tx *swire.MsgTx,
+	prevFetcher stxscript.PrevOutputFetcher, theirSig [][]byte) error {
+	return FinalTxWithPeerSig_SatsNet(channel.RedeemScript, channel.GetLocalPubKey().SerializeCompressed(),
+		channel.GetRemotePubKey().SerializeCompressed(), tx, prevFetcher, theirSig)
+}
+
+func SignAndVerifyTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
+	localPubKey []byte, sig [][]byte) error {
+
+	p2trPkScript, err := HexPubKeyToP2TRPkScript(localPubKey)
+	if err != nil {
+		return err
+	}
+
+	for i, in := range tx.TxIn {
+		preOut := prevFetcher.FetchPrevOutput(in.PreviousOutPoint)
+		if preOut == nil {
+			Log.Errorf("can't find outpoint %s", in.PreviousOutPoint)
+			return fmt.Errorf("can't find outpoint %s", in.PreviousOutPoint)
+		}
+
+		if !bytes.Equal(preOut.PkScript, p2trPkScript) {
+			continue
+		}
+
+		switch GetPkScriptType(preOut.PkScript) {
+		case txscript.WitnessV1TaprootTy:
+			in.Witness = wire.TxWitness{sig[i]}
+		}
+	}
+
+	return VerifySignedTx(tx, prevFetcher)
+}
+
 func CleanPeerSig(redeemScript, localPubkey, peerPubkey []byte, tx *wire.MsgTx,
 	prevFetcher txscript.PrevOutputFetcher) error {
 
@@ -595,7 +634,6 @@ func CleanPeerSig_SatsNet(redeemScript, localPubkey, peerPubkey []byte, tx *swir
 
 	return nil
 }
-
 
 func (p *Manager) SignAndVerifyTx(redeemScript, peerPubkey []byte, tx *wire.MsgTx,
 	prevFetcher txscript.PrevOutputFetcher, theirSig [][]byte) ([][]byte, error) {
@@ -699,7 +737,7 @@ func (p *Manager) TestAcceptance(txs []*wire.MsgTx) error {
 		}
 		txsHex = append(txsHex, hexTx)
 	}
-	
+
 	// 承诺交易不会马上广播，所以提前检查非常重要
 	// 所有前置TX都需要加入一起检查
 	err := p.l1IndexerClient.TestRawTx(txsHex)
@@ -728,7 +766,7 @@ func (p *Manager) TestAcceptance_SatsNet(txs []*swire.MsgTx) error {
 		txsHex = append(txsHex, hexTx)
 		break // 聪网只支持检查一个
 	}
-	
+
 	// 所有前置TX都需要加入一起检查
 	err := p.l2IndexerClient.TestRawTx(txsHex)
 	if err != nil {

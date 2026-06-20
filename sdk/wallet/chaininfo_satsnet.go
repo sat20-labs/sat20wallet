@@ -27,10 +27,18 @@ func GetChainParam_SatsNet() *chaincfg.Params {
 
 func VerifySignedTx_SatsNet(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
 
+	utxomap := make(map[string]bool)
 	inValue := int64(0)
 	var inAssets wire.TxAssets
 	sigHashes := txscript.NewTxSigHashes(tx, prevFetcher)
 	for i, txIn := range tx.TxIn {
+		utxo := txIn.PreviousOutPoint.String()
+		_, ok := utxomap[utxo]
+		if ok {
+			return fmt.Errorf("duplicated input %s", utxo)
+		}
+		utxomap[utxo] = true
+
 		txOut := prevFetcher.FetchPrevOutput(txIn.PreviousOutPoint)
 		vm, err := txscript.NewEngine(txOut.PkScript, tx, i, txscript.StandardVerifyFlags,
 			nil, sigHashes, txOut.Value, txOut.Assets, prevFetcher)
@@ -79,6 +87,10 @@ func VerifySignedTx_SatsNet(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetch
 		err := inAssets.Split(outAssets)
 		if err != nil {
 			return err
+		}
+
+		if len(inAssets) > 0 {
+			return fmt.Errorf("some assets spent to miner")
 		}
 	}
 

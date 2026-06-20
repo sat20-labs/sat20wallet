@@ -154,7 +154,7 @@ func TestInscribeTransfer(t *testing.T) {
 }
 
 // 涉及引导节点
-func CommitDelayScriptForServer(selfKey, bootstrapKey, revokeKey *btcec.PublicKey, csvDelay uint32) (
+func testCommitDelayScriptForServer(selfKey, bootstrapKey, revokeKey *btcec.PublicKey, csvDelay uint32) (
 	[]byte, []byte, error) {
 
 	toLocalRedeemScript, err := utils.CommitScriptToSelf2(
@@ -177,7 +177,7 @@ func CommitDelayScriptForServer(selfKey, bootstrapKey, revokeKey *btcec.PublicKe
 
 }
 
-func CommitDelayScriptForClient(selfKey, revokeKey *btcec.PublicKey, csvDelay uint32) (
+func testCommitDelayScriptForClient(selfKey, revokeKey *btcec.PublicKey, csvDelay uint32) (
 	[]byte, []byte, error) {
 
 	toLocalRedeemScript, err := utils.CommitScriptToSelf(
@@ -201,7 +201,7 @@ func CommitDelayScriptForClient(selfKey, revokeKey *btcec.PublicKey, csvDelay ui
 }
 
 // 涉及引导节点
-func CommitDirectScriptForServer(remoteKey *btcec.PublicKey, bootstrapKey *btcec.PublicKey) (
+func testCommitDirectScriptForServer(remoteKey *btcec.PublicKey, bootstrapKey *btcec.PublicKey) (
 	[]byte, []byte, error) {
 	// First, create the 2-of-2 multi-sig script itself.
 	witnessScript, err := utils.GenMultiSigScript(remoteKey.SerializeCompressed(), bootstrapKey.SerializeCompressed())
@@ -224,7 +224,7 @@ func CommitDirectScriptForServer(remoteKey *btcec.PublicKey, bootstrapKey *btcec
 
 }
 
-func CommitDirectScriptForClient(remoteKey *btcec.PublicKey) ([]byte, error) {
+func testCommitDirectScriptForClient(remoteKey *btcec.PublicKey) ([]byte, error) {
 
 	pkScriptA, err := GetP2TRpkScript(remoteKey)
 	if err != nil {
@@ -266,10 +266,10 @@ func TestCalcTransferFee(t *testing.T) {
 	wallet2, _, _ := NewInteralWallet(&chaincfg.TestNet3Params)
 	wallet3, _, _ := NewInteralWallet(&chaincfg.TestNet3Params)
 
-	_, serverDelayWitness, _ := CommitDelayScriptForServer(wallet1.GetPubKey(), wallet2.GetPubKey(), wallet3.GetPubKey(), 1440)
-	_, serverDirectWitness, _ := CommitDirectScriptForServer(wallet1.GetPubKey(), wallet2.GetPubKey())
-	_, clientDelayWitness, _ := CommitDelayScriptForClient(wallet1.GetPubKey(), wallet3.GetPubKey(), 1440)
-	clientDirectWitness, _ := CommitDirectScriptForClient(wallet1.GetPubKey())
+	_, serverDelayWitness, _ := testCommitDelayScriptForServer(wallet1.GetPubKey(), wallet2.GetPubKey(), wallet3.GetPubKey(), 1440)
+	_, serverDirectWitness, _ := testCommitDirectScriptForServer(wallet1.GetPubKey(), wallet2.GetPubKey())
+	_, clientDelayWitness, _ := testCommitDelayScriptForClient(wallet1.GetPubKey(), wallet3.GetPubKey(), 1440)
+	clientDirectWitness, _ := testCommitDirectScriptForClient(wallet1.GetPubKey())
 
 	fmt.Printf("serverDelayWitness length %d\n", len(serverDelayWitness))
 	fmt.Printf("serverDirectWitness length %d\n", len(serverDirectWitness))

@@ -2589,6 +2589,139 @@ func (p *TestNodeClient) SendPerformRemoteActionAckReq(info *RemoteActionPerform
 	return fmt.Errorf("not implemented")
 }
 
+func (p *TestNodeClient) SendOpenChannelReq(info *FundingReservation) error {
+	_, err := p.SendChannelOpenReq(&wwire.ChannelOpenReq{
+		OpenChannelRequest: *info.Req,
+		Sig:                info.ReqSig,
+	})
+	return err
+}
+
+func (p *TestNodeClient) SendFundingCreatedReq(info *FundingReservation) error {
+	_, err := p.SendChannelFundingCreatedReq(&wwire.FundingCreatedReq{
+		FundingCreated: *info.FundingCreated,
+	})
+	return err
+}
+
+func (p *TestNodeClient) SendFundingBroadcastedReq(info *FundingReservation) error {
+	_, err := p.SendChannelFundingBroadcastedReq(&wwire.FundingBroadcastedReq{
+		FundingBroadcasted: *info.FundingBroadcasted,
+	})
+	return err
+}
+
+func (p *TestNodeClient) SendCloseChannelReq(info *ClosingReservation) error {
+	_, err := p.SendChannelCloseReq(&wwire.ChannelCloseReq{
+		CloseChannelRequest: *info.Req,
+		Sig:                 info.ReqSig,
+	})
+	return err
+}
+
+func (p *TestNodeClient) SendClosingSignedReq(info *ClosingReservation) error {
+	_, err := p.SendChannelClosingSignedReq(&wwire.ClosingSignedReq{
+		ChannelId:     info.ChannelId,
+		ClosingSigned: *info.LocalSigned,
+	})
+	return err
+}
+
+func (p *TestNodeClient) SendClosingBroadcastedReq(info *ClosingReservation) error {
+	_, err := p.SendChannelClosingBroadcastedReq(&wwire.ClosingBroadcastedReq{
+		ChannelId:          info.ChannelId,
+		ClosingBroadcasted: *info.ClosingBroadcasted,
+	})
+	return err
+}
+
+func (p *TestNodeClient) SendUnlockReq(info *PaymentReservation) error {
+	_, err := p.SendChannelUnlockReq(&wwire.UnlockReq{
+		UnlockRequest: *info.UnlockReq,
+		Sig:           info.ReqSig,
+	})
+	return err
+}
+
+func (p *TestNodeClient) SendUnlockCommitSigReq(info *PaymentReservation) error {
+	_, err := p.SendChannelUnlockCommitSigReq(&wwire.UnlockCommitSigReq{})
+	return err
+}
+
+func (p *TestNodeClient) SendUnlockRevokeAndAckReq(info *PaymentReservation) error {
+	_, err := p.SendChannelUnlockRevokeAndAckReq(&wwire.UnlockRevokeAndAckReq{})
+	return err
+}
+
+func (p *TestNodeClient) SendRecoverPaymentReq(info *PaymentReservation) error {
+	_, err := p.SendChannelRecoverPaymentReq(&wwire.RecoverPaymentRequireReq{})
+	return err
+}
+
+func (p *TestNodeClient) SendRecoverPaymentCommitSigReq(info *PaymentReservation) error {
+	_, err := p.SendChannelRecoverPaymentCommitSigReq(&wwire.RecoverPaymentCommitSigReq{})
+	return err
+}
+
+func (p *TestNodeClient) SendRecoverPaymentRevokeAndAckReq(info *PaymentReservation) error {
+	_, err := p.SendChannelRecoverPaymentRevokeAndAckReq(&wwire.RecoverPaymentRevokeAndAckReq{})
+	return err
+}
+
+func (p *TestNodeClient) SendLockReq(info *PaymentReservation) error {
+	_, err := p.SendChannelLockReq(&wwire.LockReq{
+		LockRequest: *info.LockReq,
+		Sig:         info.ReqSig,
+	})
+	return err
+}
+
+func (p *TestNodeClient) SendLockCommitSigAndRevokeReq(info *PaymentReservation) error {
+	_, err := p.SendChannelLockCommitSigAndRevokeReq(&wwire.LockCommitSigAndRevokeReq{})
+	return err
+}
+
+func (p *TestNodeClient) SendLockAckReq(info *PaymentReservation) error {
+	_, err := p.SendChannelLockAckReq(&wwire.LockAckReq{})
+	return err
+}
+
+func (p *TestNodeClient) SendSplicingInReq(info *SplicingReservation) error {
+	_, err := p.SendChannelSplicingInReq(&wwire.SplicingInReq{
+		SplicingInRequest: *info.InReq,
+		Sig:               info.ReqSig,
+	})
+	return err
+}
+
+func (p *TestNodeClient) SendSplicingInCommitSigReq(info *SplicingReservation) error {
+	_, err := p.SendChannelSplicingInCommitSigReq(&wwire.SplicingInCommitSigReq{})
+	return err
+}
+
+func (p *TestNodeClient) SendSplicingInRevokeAndAckReq(info *SplicingReservation) error {
+	_, err := p.SendChannelSplicingInRevokeAndAckReq(&wwire.SplicingInRevokeAndAckReq{})
+	return err
+}
+
+func (p *TestNodeClient) SendSplicingOutReq(info *SplicingReservation) error {
+	_, err := p.SendChannelSplicingOutReq(&wwire.SplicingOutReq{
+		SplicingOutRequest: *info.OutReq,
+		Sig:                info.ReqSig,
+	})
+	return err
+}
+
+func (p *TestNodeClient) SendSplicingOutCommitSigReq(info *SplicingReservation) error {
+	_, err := p.SendChannelSplicingOutCommitSigReq(&wwire.SplicingOutCommitSigReq{})
+	return err
+}
+
+func (p *TestNodeClient) SendSplicingOutRevokeAndAckReq(info *SplicingReservation) error {
+	_, err := p.SendChannelSplicingOutRevokeAndAckReq(&wwire.SplicingOutRevokeAndAckReq{})
+	return err
+}
+
 func (p *TestNodeClient) SendActionResultNfty(msgId int64, action string, ret int, reason string) error {
 
 	// req := wwire.ActionResultNotify{
@@ -2650,5 +2783,89 @@ func (p *TestNodeClient) SendActionSyncReq(req *wwire.ActionSyncReq) (*wwire.Act
 	// }
 
 	// return nil, fmt.Errorf("no server")
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelOpenReq(req *wwire.ChannelOpenReq) (*wwire.ChannelOpenResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelFundingCreatedReq(req *wwire.FundingCreatedReq) (*wwire.FundingCreatedResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelFundingBroadcastedReq(req *wwire.FundingBroadcastedReq) (*wwire.FundingBroadcastedResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelCloseReq(req *wwire.ChannelCloseReq) (*wwire.ChannelCloseResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelClosingSignedReq(req *wwire.ClosingSignedReq) (*wwire.ClosingSignedResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelClosingBroadcastedReq(req *wwire.ClosingBroadcastedReq) (*wwire.ClosingBroadcastedResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelLockReq(req *wwire.LockReq) (*wwire.LockResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelLockCommitSigAndRevokeReq(req *wwire.LockCommitSigAndRevokeReq) (*wwire.LockCommitSigAndRevokeResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelLockAckReq(req *wwire.LockAckReq) (*wwire.LockAckResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelUnlockReq(req *wwire.UnlockReq) (*wwire.UnlockResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelUnlockCommitSigReq(req *wwire.UnlockCommitSigReq) (*wwire.UnlockCommitSigResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelUnlockRevokeAndAckReq(req *wwire.UnlockRevokeAndAckReq) (*wwire.UnlockRevokeAndAckResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelRecoverPaymentReq(req *wwire.RecoverPaymentRequireReq) (*wwire.RecoverPaymentRequireResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelRecoverPaymentCommitSigReq(req *wwire.RecoverPaymentCommitSigReq) (*wwire.RecoverPaymentCommitSigResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelRecoverPaymentRevokeAndAckReq(req *wwire.RecoverPaymentRevokeAndAckReq) (*wwire.RecoverPaymentRevokeAndAckResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelSplicingInReq(req *wwire.SplicingInReq) (*wwire.SplicingInResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelSplicingInCommitSigReq(req *wwire.SplicingInCommitSigReq) (*wwire.SplicingInCommitSigResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelSplicingInRevokeAndAckReq(req *wwire.SplicingInRevokeAndAckReq) (*wwire.SplicingInRevokeAndAckResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelSplicingOutReq(req *wwire.SplicingOutReq) (*wwire.SplicingOutResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelSplicingOutCommitSigReq(req *wwire.SplicingOutCommitSigReq) (*wwire.SplicingOutCommitSigResp, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (p *TestNodeClient) SendChannelSplicingOutRevokeAndAckReq(req *wwire.SplicingOutRevokeAndAckReq) (*wwire.SplicingOutRevokeAndAckResp, error) {
 	return nil, fmt.Errorf("not implemented")
 }

@@ -45,15 +45,16 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 	}
 
 	mgr := &Manager{
-		cfg:             cfg,
-		walletInfoMap:   nil,
-		tickerInfoMap:   make(map[string]*indexer.TickerInfo),
-		utxoLockerL1:    NewUtxoLocker(db, l1, L1_NETWORK_BITCOIN),
-		utxoLockerL2:    NewUtxoLocker(db, l2, L2_NETWORK_SATOSHI),
-		http:            http,
-		l1IndexerClient: l1IndexerMgr,
-		l2IndexerClient: l2IndexerMgr,
-		bInited:         false,
+		cfg:                  cfg,
+		walletInfoMap:        nil,
+		tickerInfoMap:        make(map[string]*indexer.TickerInfo),
+		utxoLockerL1:         NewUtxoLocker(db, l1, L1_NETWORK_BITCOIN),
+		utxoLockerL2:         NewUtxoLocker(db, l2, L2_NETWORK_SATOSHI),
+		http:                 http,
+		l1IndexerClient:      l1IndexerMgr,
+		l2IndexerClient:      l2IndexerMgr,
+		channelBackupHandler: noopChannelBackupHandler{},
+		bInited:              false,
 	}
 
 	_env = cfg.Env
@@ -81,6 +82,10 @@ func (p *Manager) Start() {
 	p.l1IndexerClient.Start()
 	p.l2IndexerClient.Start()
 	p.startActionMonitor()
+}
+
+func (p *Manager) IsReady() bool {
+	return p.bInited && p.actionMonitorRunning
 }
 
 func (p *Manager) Stop() {
@@ -725,6 +730,39 @@ func (p *Manager) GetChannelAddrByPeerPubkey(pubkeyHex string) (string, string, 
 		return "", "", err
 	}
 	return channelAddr, p2trAddr, nil
+}
+
+func (p *Manager) GetUtxoWithAddressFromTx(txId, address string) (string, error) {
+	raw, err := p.GetIndexerClient().GetRawTx(txId)
+	if err != nil {
+		return "", err
+	}
+	tx, err := DecodeMsgTx(raw)
+	if err != nil {
+		return "", err
+	}
+
+	for i, txOut := range tx.TxOut {
+		addr, err := AddrFromPkScript(txOut.PkScript)
+		if err != nil {
+			continue
+		}
+		if address == addr {
+			return fmt.Sprintf("%s:%d", txId, i), nil
+		}
+	}
+	return "", fmt.Errorf("can't find utxo with address %s in tx %s", address, txId)
+}
+
+func (p *Manager) GetChannelAddress() (string, error) {
+	if p.wallet == nil {
+		return "", fmt.Errorf("wallet is not created/unlocked")
+	}
+	if p.serverNode == nil || p.serverNode.Pubkey == nil {
+		return "", fmt.Errorf("server node is not initialized")
+	}
+	return GetP2WSHaddress(p.serverNode.Pubkey.SerializeCompressed(),
+		p.wallet.GetPaymentPubKey().SerializeCompressed())
 }
 
 // 对某个btc的名字设置属性

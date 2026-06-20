@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/btcsuite/btcwallet/snacl"
 	db "github.com/sat20-labs/indexer/common"
@@ -20,6 +21,7 @@ const (
 
 	DB_KEY_RESV        = "resv-"
 	DB_KEY_TICKER_INFO = "t-"
+	DB_KEY_CHANNEL     = "c-"
 
 	DB_KEY_UTXO          = "u-"  // u-network-address-utxo
 	DB_KEY_LOCKEDUTXO    = "l-"  // l-network-address-utxo
@@ -35,6 +37,8 @@ const (
 	DB_KEY_TC_LIQ_DATA              = "tclp-"  // tclp-url-id
 )
 
+const legacySTPStatusKey = "status"
+
 var _mode string  //
 var _chain string // mainnet, testnet
 var _env string   // dev, test, prd
@@ -48,6 +52,27 @@ type Status struct {
 	CurrentChain   string
 	SyncHeight     int
 	SyncHeightL2   int
+
+	SyncHeightL1            int
+	BlockHashMapL1          map[int]string
+	BlockHashMapL2          map[int]string
+	MaxFeeRateL1            int64
+	HasStaked               bool
+	ContractSubAccountIndex uint32
+
+	sync.RWMutex
+}
+
+type STPClientStatus struct {
+	SoftwareVer  string
+	DBver        string
+	SyncHeightL1 int
+	SyncHeightL2 int
+
+	BlockHashMapL1 map[int]string
+	BlockHashMapL2 map[int]string
+
+	MaxFeeRateL1 int64
 }
 
 const (
@@ -186,24 +211,37 @@ func loadWallet(db db.KVDB, id int64) (*WalletInDB, error) {
 }
 
 func (p *Manager) loadStatus() *Status {
+	p.status = loadStatusFromDB(p.db)
+	return p.status
+}
 
+func loadStatusFromDB(kvdb db.KVDB) *Status {
 	result := &Status{
-		SoftwareVer:  SOFTWARE_VERSION,
-		DBver:        DB_VERSION,
-		CurrentChain: _chain,
+		SoftwareVer: SOFTWARE_VERSION,
+		DBver:       DB_VERSION,
 	}
-	p.status = result
+	normalizeStatus(result)
 
-	buf, err := p.db.Read([]byte(DB_KEY_STATUS))
-	if err != nil {
-		Log.Infof("Read %s failed. %v", DB_KEY_STATUS, err)
-		return result
+	keys := []string{DB_KEY_STATUS}
+	legacyKey := GetDBKeyPrefix() + legacySTPStatusKey
+	if legacyKey != DB_KEY_STATUS {
+		keys = append(keys, legacyKey)
 	}
 
-	err = DecodeFromBytes(buf, &result)
-	if err != nil {
-		Log.Errorf("DecodeFromBytes failed. %v", err)
-		return result
+	for _, key := range keys {
+		buf, err := kvdb.Read([]byte(key))
+		if err != nil {
+			Log.Infof("Read %s failed. %v", key, err)
+			continue
+		}
+
+		loaded := &Status{}
+		if err := DecodeFromBytes(buf, loaded); err != nil {
+			Log.Errorf("DecodeFromBytes %s failed. %v", key, err)
+			continue
+		}
+		normalizeStatus(loaded)
+		return loaded
 	}
 
 	return result
@@ -211,7 +249,9 @@ func (p *Manager) loadStatus() *Status {
 
 func (p *Manager) saveStatus() error {
 	if p.status != nil {
+		p.status.RLock()
 		buf, err := EncodeToBytes(p.status)
+		p.status.RUnlock()
 		if err != nil {
 			return err
 		}
@@ -221,10 +261,62 @@ func (p *Manager) saveStatus() error {
 			Log.Infof("saveStatus failed. %v", err)
 			return err
 		}
+		if shouldWriteLegacySTPStatus(p.status) {
+			legacyKey := GetDBKeyPrefix() + legacySTPStatusKey
+			if legacyKey != DB_KEY_STATUS {
+				if err := p.db.Write([]byte(legacyKey), buf); err != nil {
+					Log.Infof("save legacy status failed. %v", err)
+					return err
+				}
+			}
+		}
 		Log.Infof("saveStatus succ")
 	}
 
 	return nil
+}
+
+func normalizeStatus(status *Status) {
+	if status.SoftwareVer == "" {
+		status.SoftwareVer = SOFTWARE_VERSION
+	}
+	if status.DBver == "" {
+		status.DBver = DB_VERSION
+	}
+	if status.CurrentChain == "" {
+		status.CurrentChain = _chain
+	}
+	if status.BlockHashMapL1 == nil {
+		status.BlockHashMapL1 = make(map[int]string)
+	}
+	if status.BlockHashMapL2 == nil {
+		status.BlockHashMapL2 = make(map[int]string)
+	}
+}
+
+func shouldWriteLegacySTPStatus(status *Status) bool {
+	if status == nil {
+		return false
+	}
+	return status.SyncHeightL1 != 0 ||
+		status.SyncHeightL2 != 0 ||
+		len(status.BlockHashMapL1) != 0 ||
+		len(status.BlockHashMapL2) != 0 ||
+		status.MaxFeeRateL1 != 0 ||
+		status.HasStaked ||
+		status.ContractSubAccountIndex != 0
+}
+
+func (p *Manager) GetStatus() *Status {
+	return p.status
+}
+
+func LoadStatusFromDB(kvdb db.KVDB) *Status {
+	return loadStatusFromDB(kvdb)
+}
+
+func (p *Manager) SaveStatus() error {
+	return p.saveStatus()
 }
 
 func (p *Manager) saveMnemonic(mn, password string, wallet common.Wallet) error {

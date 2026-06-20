@@ -84,20 +84,31 @@ type ActionStatusEvent struct {
 
 type ActionStatusCallback func(*ActionStatusEvent)
 type MonitorTickCallback func(sendTxInL1 bool)
+type ChannelBackupHandler interface {
+	BackupChannel(channel *Channel, data []byte) error
+}
+
+type noopChannelBackupHandler struct{}
+
+func (noopChannelBackupHandler) BackupChannel(*Channel, []byte) error {
+	return nil
+}
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet
 type Manager struct {
 	mutex sync.RWMutex
 
-	cfg            *common.Config
-	bInited        bool
-	status         *Status
-	walletInfoMap  map[int64]*WalletInfo
-	wallet         common.Wallet
-	msgCallback    NotifyCB
-	actionCallback ActionStatusCallback
-	monitorTicks   []MonitorTickCallback
-	tickerInfoMap  map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
+	cfg                   *common.Config
+	bInited               bool
+	status                *Status
+	walletInfoMap         map[int64]*WalletInfo
+	wallet                common.Wallet
+	msgCallback           NotifyCB
+	actionCallback        ActionStatusCallback
+	channelStatusCallback ActionStatusCallback
+	monitorTicks          []MonitorTickCallback
+	channelBackupHandler  ChannelBackupHandler
+	tickerInfoMap         map[string]*indexer.TickerInfo // 缓存数据, key: AssetName.String()
 
 	db              db.KVDB
 	http            HttpClient
@@ -109,17 +120,28 @@ type Manager struct {
 
 	utxoLockerL1 *UtxoLocker
 	utxoLockerL2 *UtxoLocker
+	watchTower   *WatchTower
 
-	feeRateL1     int64 // sat/vkb
-	refreshTimeL1 int64
-	feeRateL2     int64 // sat/vkb
-	refreshTimeL2 int64
+	feeRateL1             int64 // sat/vkb
+	refreshTimeL1         int64
+	feeRateL2             int64 // sat/vkb
+	refreshTimeL2         int64
+	serverOnline          bool
+	refreshTimeServerNode int64
 
 	inscibeMap map[int64]*InscribeResv // key: timestamp
 
-	localActionPerformMap  map[int64]*LocalActionPerformData
-	remoteActionPerformMap map[int64]*RemoteActionPerformReservation
+	paymentChannelMap  map[int64]*PaymentReservation  // key: timestamp
+	fundingChannelMap  map[int64]*FundingReservation  // key: funding id (timestamp)
+	closingChannelMap  map[int64]*ClosingReservation  // key: closing id (timestamp)
+	splicingChannelMap map[int64]*SplicingReservation // key: timestamp
+
+	localActionPerformMap  map[int64]Reservation
+	remoteActionPerformMap map[int64]Reservation
 	resvMap                map[int64]Reservation
+
+	nodeMap    map[string]string   // key: peer address + local address -> channelId
+	channelMap map[string]*Channel // key: channelId. 活跃的channel，维持状态是最新的
 
 	actionMonitorLock    sync.Mutex
 	actionMonitorL1Lock  sync.Mutex
@@ -147,9 +169,21 @@ func (p *Manager) init() error {
 		return err
 	}
 
+	p.watchTower = NewWatchTower(p)
 	p.bInited = true
 
 	return nil
+}
+
+func (p *Manager) GetWatchTower() *WatchTower {
+	return p.watchTower
+}
+
+func (p *Manager) SetStatus(status *Status) {
+	if status == nil {
+		return
+	}
+	p.status = status
 }
 
 func (p *Manager) GetIndexerRPCClient() IndexerRPCClient {
@@ -308,13 +342,78 @@ func (p *Manager) checkSuperNodeStatus() bool {
 	return err == nil
 }
 
+func (p *Manager) CheckSuperNodeStatus() bool {
+	return p.checkSuperNodeStatus()
+}
+
+func (p *Manager) ServerIsBootstrapNode() bool {
+	if p.serverNode == nil || p.serverNode.Pubkey == nil {
+		return false
+	}
+	pubkey := p.serverNode.Pubkey
+	return hex.EncodeToString(pubkey.SerializeCompressed()) == indexer.GetBootstrapPubKey()
+}
+
+func (p *Manager) HasStaked(pubkey []byte) bool {
+	channelAddr, err := indexer.GetCoreNodeChannelAddress(pubkey, GetChainParam())
+	if err != nil {
+		return false
+	}
+
+	if ENABLE_TESTING && p.wallet != nil {
+		switch p.wallet.GetAddress() {
+		case "tb1p62gjhywssq42tp85erlnvnumkt267ypndrl0f3s4sje578cgr79sekhsua":
+			return true
+		case "tb1pdw8xjqphyntnvgl3w0vmzkzd7dx266jwcprzwt0qen62pyzpdqhsdvr26h":
+			return true
+		case "tb1pz747l0qfnt3q2w3ppd45u607rzse0ga85l9vvjtcj8qhcajneqsszqg7z9":
+			return true
+		}
+	}
+
+	amt := indexer.GetStakeAssetAmt(p.GetSyncHeightL1())
+	ticker := indexer.NewAssetNameFromString(indexer.GetStakeAssetName(p.GetSyncHeightL1()))
+	outputs := p.GetIndexerRPCClient().GetUtxoListWithTicker(channelAddr, ticker)
+	value := int64(0)
+	for _, u := range outputs {
+		value += u.Value
+	}
+	return value >= amt
+}
+
+func (p *Manager) IsPeerOnline(_ []byte) bool {
+	now := time.Now().Unix()
+	if now-p.refreshTimeServerNode > 3*60 {
+		err := p.serverNode.client.SendActionResultNfty(0, "", 0, "")
+		p.serverOnline = err == nil
+		p.refreshTimeServerNode = now
+	}
+	return p.serverOnline
+}
+
 func (p *Manager) initResvMap() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
+	p.resetResvMapsLocked()
+	p.nodeMap = make(map[string]string)
+	p.channelMap = make(map[string]*Channel)
+}
+
+func (p *Manager) ResetResvMaps() {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.resetResvMapsLocked()
+}
+
+func (p *Manager) resetResvMapsLocked() {
 	p.inscibeMap = make(map[int64]*InscribeResv)
-	p.localActionPerformMap = make(map[int64]*LocalActionPerformData)
-	p.remoteActionPerformMap = make(map[int64]*RemoteActionPerformReservation)
+	p.paymentChannelMap = make(map[int64]*PaymentReservation)
+	p.fundingChannelMap = make(map[int64]*FundingReservation)
+	p.closingChannelMap = make(map[int64]*ClosingReservation)
+	p.splicingChannelMap = make(map[int64]*SplicingReservation)
+	p.localActionPerformMap = make(map[int64]Reservation)
+	p.remoteActionPerformMap = make(map[int64]Reservation)
 	p.resvMap = make(map[int64]Reservation)
 }
 
@@ -352,7 +451,51 @@ func (p *Manager) GetResv(id int64) Reservation {
 func (p *Manager) GetRemoteAction(id int64) *RemoteActionPerformReservation {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	return p.remoteActionPerformMap[id]
+	resv, ok := p.remoteActionPerformMap[id].(*RemoteActionPerformReservation)
+	if !ok {
+		return nil
+	}
+	return resv
+}
+
+func (p *Manager) GetRemoteActionReservation(id int64) (Reservation, bool) {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	resv, ok := p.remoteActionPerformMap[id]
+	return resv, ok
+}
+
+func (p *Manager) GetRemoteActionReservations() map[int64]Reservation {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	result := make(map[int64]Reservation, len(p.remoteActionPerformMap))
+	for id, resv := range p.remoteActionPerformMap {
+		if resv == nil || resv.GetStatus() <= RS_CLOSED {
+			continue
+		}
+		result[id] = resv
+	}
+	return result
+}
+
+func (p *Manager) GetLocalActionReservation(id int64) (Reservation, bool) {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	resv, ok := p.localActionPerformMap[id]
+	return resv, ok
+}
+
+func (p *Manager) GetLocalActionReservations() map[int64]Reservation {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	result := make(map[int64]Reservation, len(p.localActionPerformMap))
+	for id, resv := range p.localActionPerformMap {
+		if resv == nil || resv.GetStatus() <= RS_CLOSED {
+			continue
+		}
+		result[id] = resv
+	}
+	return result
 }
 
 func (p *Manager) GetAllResv() map[int64]Reservation {
@@ -374,6 +517,10 @@ func (p *Manager) addResv(r Reservation) {
 	p.addResvLocked(r)
 }
 
+func (p *Manager) AddResv(r Reservation) {
+	p.addResv(r)
+}
+
 func (p *Manager) addResvLocked(r Reservation) {
 	id := r.GetId()
 	if id == 0 {
@@ -383,10 +530,18 @@ func (p *Manager) addResvLocked(r Reservation) {
 	switch r.GetType() {
 	case RESV_TYPE_INSC:
 		p.inscibeMap[id] = r.(*InscribeResv)
+	case RESV_TYPE_PAYMENT:
+		p.paymentChannelMap[id] = r.(*PaymentReservation)
+	case RESV_TYPE_OPEN:
+		p.fundingChannelMap[id] = r.(*FundingReservation)
+	case RESV_TYPE_CLOSE:
+		p.closingChannelMap[id] = r.(*ClosingReservation)
+	case RESV_TYPE_SPLICING:
+		p.splicingChannelMap[id] = r.(*SplicingReservation)
 	case RESV_TYPE_LOCALACTION:
-		p.localActionPerformMap[id] = r.(*LocalActionPerformData)
+		p.localActionPerformMap[id] = r
 	case RESV_TYPE_REMOTEACTION:
-		p.remoteActionPerformMap[id] = r.(*RemoteActionPerformReservation)
+		p.remoteActionPerformMap[id] = r
 	}
 }
 
@@ -401,6 +556,14 @@ func (p *Manager) DelResvWithId(id int64) {
 	switch resv.GetType() {
 	case RESV_TYPE_INSC:
 		delete(p.inscibeMap, id)
+	case RESV_TYPE_PAYMENT:
+		delete(p.paymentChannelMap, id)
+	case RESV_TYPE_OPEN:
+		delete(p.fundingChannelMap, id)
+	case RESV_TYPE_CLOSE:
+		delete(p.closingChannelMap, id)
+	case RESV_TYPE_SPLICING:
+		delete(p.splicingChannelMap, id)
 	case RESV_TYPE_LOCALACTION:
 		delete(p.localActionPerformMap, id)
 	case RESV_TYPE_REMOTEACTION:
@@ -656,17 +819,26 @@ func (p *Manager) GetUtxosForFee_SatsNet(address string, value int64,
 
 func (p *Manager) GetUtxosWithAsset(address string, amt *Decimal, assetName *swire.AssetName,
 	excludedUtxoMap map[string]bool) ([]string, error) {
+	if address == "" {
+		address = p.wallet.GetAddress()
+	}
 	return p.SelectUtxosForAssetV2(address, excludedUtxoMap, assetName, amt, false)
 }
 
 func (p *Manager) GetUtxosWithAsset_SatsNet(address string, amt *Decimal,
 	assetName *swire.AssetName, excludedUtxoMap map[string]bool) ([]string, error) {
+	if address == "" {
+		address = p.wallet.GetAddress()
+	}
 	return p.SelectUtxosForAssetV2_SatsNet(address, excludedUtxoMap, assetName, amt)
 }
 
 func (p *Manager) GetUtxosWithAssetV2(address string, plainSats int64,
 	amt *Decimal, assetName *swire.AssetName,
 	excludedUtxoMap map[string]bool, excludeRecentBlock bool) ([]string, []string, error) {
+	if address == "" {
+		address = p.wallet.GetAddress()
+	}
 
 	resultAssets, err := p.SelectUtxosForAssetV2(address, excludedUtxoMap, assetName, amt, excludeRecentBlock)
 	if err != nil {
@@ -929,6 +1101,16 @@ func (p *Manager) BroadcastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 
 	txId, err := p.l2IndexerClient.BroadCastTx_SatsNet(tx)
 	if err != nil {
+		if isBroadcastResultUnknown(err) {
+			txId = tx.TxID()
+			if p.isL2TxVisible(txId) {
+				Log.Warnf("BroadCastTx_SatsNet %s returned an unknown network error, but tx is visible. %v", txId, err)
+			} else {
+				Log.Warnf("BroadCastTx_SatsNet %s result is unknown and tx is not visible yet. Keep pending for retry. %v", txId, err)
+			}
+			p.utxoLockerL2.LockUtxosWithTx_SatsNet(tx)
+			return txId, nil
+		}
 		Log.Errorf("BroadCastTx_SatsNet %s failed. %v", tx.TxID(), err)
 		return "", err
 	}

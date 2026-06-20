@@ -11,6 +11,10 @@ func (p *Manager) RegisterActionStatusCallback(callback ActionStatusCallback) {
 	p.actionCallback = callback
 }
 
+func (p *Manager) RegisterChannelStatusCallback(callback ActionStatusCallback) {
+	p.channelStatusCallback = callback
+}
+
 func (p *Manager) RegisterMonitorTickCallback(callback MonitorTickCallback) {
 	if callback != nil {
 		p.monitorTicks = append(p.monitorTicks, callback)
@@ -20,6 +24,12 @@ func (p *Manager) RegisterMonitorTickCallback(callback MonitorTickCallback) {
 func (p *Manager) notifyActionStatus(event *ActionStatusEvent) {
 	if p.actionCallback != nil {
 		p.actionCallback(event)
+	}
+}
+
+func (p *Manager) notifyChannelStatus(event *ActionStatusEvent) {
+	if p.channelStatusCallback != nil {
+		p.channelStatusCallback(event)
 	}
 }
 
@@ -75,6 +85,7 @@ func (p *Manager) actionMonitorThread(stop <-chan struct{}, sendTxInL1 bool) {
 		}
 		defer unlock()
 
+		p.HandleChannelReservationStatus(sendTxInL1)
 		p.HandleRemoteActionStatus(sendTxInL1)
 		p.HandleLocalActionStatus(sendTxInL1)
 		p.notifyMonitorTick(sendTxInL1)
