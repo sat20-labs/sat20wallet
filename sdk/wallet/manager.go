@@ -1101,16 +1101,6 @@ func (p *Manager) BroadcastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 
 	txId, err := p.l2IndexerClient.BroadCastTx_SatsNet(tx)
 	if err != nil {
-		if isBroadcastResultUnknown(err) {
-			txId = tx.TxID()
-			if p.isL2TxVisible(txId) {
-				Log.Warnf("BroadCastTx_SatsNet %s returned an unknown network error, but tx is visible. %v", txId, err)
-			} else {
-				Log.Warnf("BroadCastTx_SatsNet %s result is unknown and tx is not visible yet. Keep pending for retry. %v", txId, err)
-			}
-			p.utxoLockerL2.LockUtxosWithTx_SatsNet(tx)
-			return txId, nil
-		}
 		Log.Errorf("BroadCastTx_SatsNet %s failed. %v", tx.TxID(), err)
 		return "", err
 	}
