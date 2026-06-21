@@ -5,6 +5,10 @@ import { Network } from '@/types'
 import { getConfig } from '@/config/wasm'
 import walletManager from '@/utils/sat20'
 import satsnetStp from '@/utils/stp'
+import {
+  assessStpValueMovementSafety,
+  isStpAgentValueMovementOperation,
+} from '@/composables/usePwaAgentAdapterSafety'
 
 export const PWA_AGENT_METHODS = [
   'wallet.status',
@@ -463,6 +467,34 @@ const forceClosePlan = async (operation: string, params: AgentParams) => {
   })
 }
 
+const requireStpSafetyForValueMovement = async (operation: string, params: AgentParams) => {
+  if (!isStpAgentValueMovementOperation(operation)) {
+    return null
+  }
+
+  const snapshot = await safetySnapshot('stp.safety_snapshot', params)
+  if (!snapshot.ok) {
+    return failure(
+      operation,
+      'SAFETY_BLOCKED',
+      'Unable to verify STP safety before executing a value-moving Agent operation.',
+      (snapshot as any).error
+    )
+  }
+
+  const assessment = assessStpValueMovementSafety(snapshot)
+  if (!assessment.allowed) {
+    return failure(
+      operation,
+      'SAFETY_BLOCKED',
+      assessment.reason || 'STP safety preflight blocked this value-moving Agent operation.',
+      assessment.details
+    )
+  }
+
+  return null
+}
+
 export const executePwaAgentOperation = async (
   operation: string,
   params: AgentParams = {},
@@ -616,6 +648,8 @@ export const executePwaAgentOperation = async (
         if (!channelId) {
           return failure(operation, 'MISSING_CHANNEL_ID', 'stp.close requires channel_id.')
         }
+        const safetyError = await requireStpSafetyForValueMovement(operation, params)
+        if (safetyError) return safetyError
         return unwrap(
           operation,
           satsnetStp.closeChannel(channelId, optionalNumber(params, 'fee_rate', 1), Boolean(params.force))
@@ -629,6 +663,8 @@ export const executePwaAgentOperation = async (
         if (!channelId) {
           return failure(operation, 'MISSING_CHANNEL_ID', 'stp.splicing_in requires channel_id.')
         }
+        const safetyError = await requireStpSafetyForValueMovement(operation, params)
+        if (safetyError) return safetyError
         return unwrap(
           operation,
           satsnetStp.splicingIn(
@@ -649,6 +685,8 @@ export const executePwaAgentOperation = async (
         if (!channelId) {
           return failure(operation, 'MISSING_CHANNEL_ID', 'stp.splicing_out requires channel_id.')
         }
+        const safetyError = await requireStpSafetyForValueMovement(operation, params)
+        if (safetyError) return safetyError
         return unwrap(
           operation,
           satsnetStp.splicingOut(
@@ -669,6 +707,8 @@ export const executePwaAgentOperation = async (
         if (!channelId) {
           return failure(operation, 'MISSING_CHANNEL_ID', 'stp.lock requires channel_id.')
         }
+        const safetyError = await requireStpSafetyForValueMovement(operation, params)
+        if (safetyError) return safetyError
         return unwrap(
           operation,
           satsnetStp.lockToChannel(
@@ -688,6 +728,8 @@ export const executePwaAgentOperation = async (
         if (!channelId) {
           return failure(operation, 'MISSING_CHANNEL_ID', 'stp.lock_with_expand requires channel_id.')
         }
+        const safetyError = await requireStpSafetyForValueMovement(operation, params)
+        if (safetyError) return safetyError
         return unwrap(
           operation,
           satsnetStp.lockToChannelWithExpand(
@@ -706,6 +748,8 @@ export const executePwaAgentOperation = async (
         if (!channelId) {
           return failure(operation, 'MISSING_CHANNEL_ID', 'stp.unlock requires channel_id.')
         }
+        const safetyError = await requireStpSafetyForValueMovement(operation, params)
+        if (safetyError) return safetyError
         return unwrap(
           operation,
           satsnetStp.unlockFromChannel(

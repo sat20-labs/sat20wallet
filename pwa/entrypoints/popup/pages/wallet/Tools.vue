@@ -2198,6 +2198,94 @@ const buildAgentPrediction = () => {
   }
 }
 
+const fetchWithTimeout = async (url: string, init: RequestInit = {}, timeoutMs = 12000) => {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, {
+      ...init,
+      redirect: 'follow',
+      signal: controller.signal,
+    })
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
+const assertPredictionSourceURLReachable = async (sourceURL: string) => {
+  let parsed: URL
+  try {
+    parsed = new URL(sourceURL)
+  } catch {
+    throw new Error('Prediction source URL is invalid')
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Prediction source URL must use http or https')
+  }
+
+  try {
+    const response = await fetchWithTimeout(sourceURL, { method: 'GET', cache: 'no-store' })
+    if (!response.ok) {
+      throw new Error(`Prediction source URL returned HTTP ${response.status}`)
+    }
+    return
+  } catch (error) {
+    if (!(error instanceof TypeError)) {
+      throw error
+    }
+  }
+
+  try {
+    await fetchWithTimeout(sourceURL, {
+      method: 'GET',
+      mode: 'no-cors',
+      cache: 'no-store',
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Prediction source URL is not reachable: ${message}`)
+  }
+}
+
+const parseReviewReadyData = (response: any) => {
+  if (response?.data && typeof response.data === 'object') return response.data
+  if (typeof response?.data === 'string') {
+    try {
+      return JSON.parse(response.data)
+    } catch {
+      return null
+    }
+  }
+  if (typeof response?.status === 'string') {
+    try {
+      return JSON.parse(response.status)
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+const validateAgentPredictionBeforeDeploy = async (prediction: Record<string, unknown>) => {
+  const sourceURL = String(prediction.source_url || '').trim()
+  await assertPredictionSourceURLReachable(sourceURL)
+
+  const response = await smartContractApi.reviewPredictionReady({
+    network: network.value || 'testnet',
+    contract: prediction,
+  })
+  if (response?.code !== 0) {
+    throw new Error(response?.msg || 'Prediction ready review failed')
+  }
+  const review = parseReviewReadyData(response)
+  if (!review?.urlReachable) {
+    throw new Error(review?.reason || 'Prediction source URL is not reachable by oracle')
+  }
+  if (!review?.ready) {
+    throw new Error(review?.reason || 'Prediction contract cannot pass oracle ready review')
+  }
+}
+
 const deploySmartContract = async () => {
   try {
     isDeployingSmartContract.value = true
@@ -2229,6 +2317,9 @@ const deploySmartContract = async () => {
     } else if (schema.type === 'agent') {
       const subtype = schema.subtype || 'prediction'
       const prediction = buildAgentPrediction()
+      if (subtype === 'prediction') {
+        await validateAgentPredictionBeforeDeploy(prediction)
+      }
       const [contentErr, contentRes] = await sat20.buildUnifiedContractContent('agent', subtype, JSON.stringify(prediction))
       if (contentErr) throw contentErr
       req = {

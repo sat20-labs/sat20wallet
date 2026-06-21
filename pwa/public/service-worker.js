@@ -8,7 +8,6 @@ const PRECACHE_URLS = [
   withBase('/index.html'),
   withBase('/wasm/wasm_exec.js'),
   withBase('/wasm/sat20wallet.wasm'),
-  withBase('/wasm/stpd.wasm'),
   withBase('/icon/apple-touch-icon.png'),
   withBase('/icon/sat20-logo-app.png'),
   withBase('/icon/maskable-512.png'),

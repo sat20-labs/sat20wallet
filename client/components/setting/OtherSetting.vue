@@ -42,7 +42,6 @@ import {
 } from '@/components/ui/select'
 import { useGlobalStore, type Env } from '@/store/global'
 import { Message } from '@/types/message'
-import stp from '@/utils/stp'
 import walletManager from '@/utils/sat20'
 const isExpanded = ref(false)
 const globalStore = useGlobalStore()
@@ -63,7 +62,6 @@ const computedEnv = computed<Env>({
     } catch (error) {
       console.error('Failed to send ENV_CHANGED message to background:', error)
     }
-    await stp.release()
     await walletManager.release()
     window.location.reload()
   }

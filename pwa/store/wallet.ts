@@ -131,9 +131,7 @@ export const useWalletStore = defineStore('wallet', () => {
 
     const env = walletStorage.getValue('env') || 'test'
     const config = getConfig(env, value)
-    await runStpSync('network release', () => satsnetStp.release())
     await walletManager.release()
-    await runStpSync('network init', () => satsnetStp.init(config, logLevel))
     await walletManager.init(config, logLevel)
     await channelStore.getAllChannels()
 
@@ -181,7 +179,6 @@ export const useWalletStore = defineStore('wallet', () => {
       console.log('Starting wallet switch to:', walletIdToSwitch)
 
       await walletManager.switchWallet(walletIdToSwitch, password.value as string)
-      await runStpSync('switchWallet', () => satsnetStp.switchWallet(walletIdToSwitch, password.value as string))
       const currentAccount = wallets.value.find(w => w.id === walletIdToSwitch)?.accounts[0];
       await setWalletId(walletIdToSwitch);
       await switchToAccount(currentAccount?.index || 0);
@@ -211,8 +208,7 @@ export const useWalletStore = defineStore('wallet', () => {
     await setLocked(false)
     await setChain(Chain.BTC)
     await setPassword(password)
-    await runStpSync('createWallet import', () => satsnetStp.importWallet(_mnemonic, password))
-    await runStpSync('createWallet start', () => satsnetStp.start())
+    await runStpSync('createWallet channel start', () => satsnetStp.start())
     await channelStore.getAllChannels()
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
@@ -274,8 +270,7 @@ export const useWalletStore = defineStore('wallet', () => {
     // await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
     await setPassword(password)
-    await runStpSync('importWallet import', () => satsnetStp.importWallet(processedMnemonic, password))
-    await runStpSync('importWallet start', () => satsnetStp.start())
+    await runStpSync('importWallet channel start', () => satsnetStp.start())
     await channelStore.getAllChannels()
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
@@ -333,8 +328,7 @@ export const useWalletStore = defineStore('wallet', () => {
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
-      await runStpSync('unlockWallet', () => satsnetStp.unlockWallet(password))
-      await runStpSync('unlockWallet start', () => satsnetStp.start())
+      await runStpSync('unlockWallet channel start', () => satsnetStp.start())
       await switchToAccount(accountIndex.value)
       await channelStore.getAllChannels()
       return [undefined, result]
@@ -344,8 +338,7 @@ export const useWalletStore = defineStore('wallet', () => {
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
-      await runStpSync('unlockWallet existing', () => satsnetStp.unlockWallet(password))
-      await runStpSync('unlockWallet existing start', () => satsnetStp.start())
+      await runStpSync('unlockWallet existing channel start', () => satsnetStp.start())
       await switchToAccount(accountIndex.value)
       await channelStore.getAllChannels()
       // 返回成功，不返回错误
@@ -408,7 +401,6 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const addAccount = async (name: string, accountId: number) => {
     await walletManager.switchAccount(accountId)
-    await runStpSync('addAccount switchAccount', () => satsnetStp.switchAccount(accountId))
     const [_, addressRes] = await walletManager.getWalletAddress(accountId)
     const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
     if (addressRes && pubkeyRes) {
@@ -443,7 +435,6 @@ export const useWalletStore = defineStore('wallet', () => {
       console.log('Starting account switch to:', accountId)
 
       await walletManager.switchAccount(accountId)
-      await runStpSync('switchToAccount', () => satsnetStp.switchAccount(accountId))
       const [_, addressRes] = await walletManager.getWalletAddress(accountId)
       const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
       if (addressRes && pubkeyRes) {

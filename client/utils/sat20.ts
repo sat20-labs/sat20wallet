@@ -384,6 +384,22 @@ class WalletManager {
     return this._handleRequest('getFeeForDeployContract', templateName, content, feeRate)
   }
 
+  async deployContract_Remote(
+    templateName: string,
+    content: string,
+    feeRate: string,
+    bol: boolean
+  ): Promise<[Error | undefined, { txId: string; resvId: string } | undefined]> {
+    return this._handleRequest('deployContract_Remote', templateName, content, feeRate, bol)
+  }
+
+  async deployContract_Local(
+    templateName: string,
+    content: string,
+    feeRate: string
+  ): Promise<[Error | undefined, { txId: string; resvId: string } | undefined]> {
+    return this._handleRequest('deployContract_Local', templateName, content, feeRate)
+  }
 
   async getFeeForInvokeContract(
     url: string,

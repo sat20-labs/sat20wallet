@@ -30,7 +30,6 @@ export const initializeWasm = async (): Promise<void> => {
     )
     console.log('调试: sat20wallet.wasm 加载并初始化完成')
 
-    // await loadStpWasm()
     console.log('调试: 所有 WASM 模块加载成功')
   } catch (error) {
     console.error('调试: WASM 模块加载失败:', error)

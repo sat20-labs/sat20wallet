@@ -6,6 +6,17 @@
         {{ $t('signMessage.warning') }}
       </p>
       <p class="text-center text-base mb-2">{{ $t('signMessage.signing') }}</p>
+      <div class="mb-3 rounded-md border p-3 space-y-2 bg-muted/50">
+        <div class="flex items-center justify-between gap-3">
+          <p class="text-xs text-muted-foreground">Signature payload</p>
+          <span class="rounded-sm border px-2 py-0.5 text-xs font-medium">{{ signatureSummary.title }}</span>
+        </div>
+        <p v-if="signatureSummary.warning" class="text-xs text-destructive">{{ signatureSummary.warning }}</p>
+        <div v-for="row in signatureSummary.rows" :key="row.key">
+          <p class="text-xs text-muted-foreground">{{ row.key }}</p>
+          <p class="text-sm font-mono break-all">{{ row.value }}</p>
+        </div>
+      </div>
       <Alert>
         <AlertTitle class="text-center text-base break-all">{{ props.data.message }}</AlertTitle>
       </Alert>
@@ -14,12 +25,11 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
 import walletManager from '@/utils/sat20'
-import { useWalletStore } from '@/store'
-import { storeToRefs } from 'pinia'
-import service from '@/lib/service'
+import { summarizeSignaturePayload } from '@/composables/usePwaAgentRiskPolicy'
 
 interface Props {
   data: any
@@ -28,8 +38,8 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits(['confirm', 'cancel'])
 
-const walletStore = useWalletStore()
-const { network } = storeToRefs(walletStore)
+const signaturePayload = computed(() => props.data.message ?? props.data.data ?? '')
+const signatureSummary = computed(() => summarizeSignaturePayload(signaturePayload.value))
 
 const confirm = async () => {
   // await walletStore.setNetwork(props.data.network)

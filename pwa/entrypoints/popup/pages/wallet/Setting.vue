@@ -53,7 +53,6 @@
       </div>
       <div class="space-y-1 text-xs text-muted-foreground/80">
         <div>sat20wallet.wasm: {{ sat20WasmVersion }}</div>
-        <div>stpd.wasm: {{ stpWasmVersion }}</div>
       </div>
     </div>
   </LayoutHome>
@@ -75,7 +74,6 @@ import { computed, onMounted, ref } from "vue";
 import { useTranscendingModeStore } from '@/store'
 import { useAppVersion } from '@/composables/useAppVersion'
 import sat20 from '@/utils/sat20'
-import stp from '@/utils/stp'
 
 type TranscendingMode = 'poolswap' | 'lightning'
 const selectedTranscendingMode = ref<TranscendingMode>('poolswap')
@@ -87,13 +85,9 @@ const isOpen = ref(false);
 const { isChecking, isUpdating, checkAndUpdate, localVersion, localBuildId } = useAppVersion()
 const versionDisplay = computed(() => localBuildId.value ? `${localVersion.value}+${localBuildId.value}` : localVersion.value)
 const sat20WasmVersion = ref('-')
-const stpWasmVersion = ref('-')
 
 onMounted(async () => {
   const [sat20Err, sat20Version] = await sat20.getVersion()
   sat20WasmVersion.value = sat20Err ? 'unavailable' : (sat20Version?.version || '-')
-
-  const [stpErr, stpVersion] = await stp.getVersion()
-  stpWasmVersion.value = stpErr ? 'unavailable' : (stpVersion || '-')
 })
 </script>

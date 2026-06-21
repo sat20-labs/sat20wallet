@@ -7,14 +7,13 @@ interface WasmResponse<T = any> {
   data?: T;
 }
 
-// Define the interface for the WASM module attached to globalThis
-// 只保留 STP 特有的方法
+// Channel/STP methods are now exported by sat20wallet.wasm.
 interface StpWasmModule {
-  // STP wasm 自己的基础方法
+  // 基础方法
   init: (...args: any[]) => Promise<WasmResponse>;
   registerCallback: (...args: any[]) => Promise<WasmResponse>;
 
-  // 钱包状态同步方法 (stp wasm 需要与 sat20 wasm 保持状态同步)
+  // 钱包状态方法
   switchWallet: (...args: any[]) => Promise<WasmResponse>;
   switchAccount: (...args: any[]) => Promise<WasmResponse>;
   importWallet: (...args: any[]) => Promise<WasmResponse>;
@@ -60,29 +59,29 @@ class SatsnetStp {
     methodName: keyof StpWasmModule,
     ...args: any[]
   ): Promise<[Error | undefined, T | undefined]> {
-    const globalStp = (globalThis as any).stp_wasm;
+    const globalWallet = (globalThis as any).sat20wallet_wasm;
 
-    const stpModuleTyped = globalStp
-      ? (globalStp as unknown as StpWasmModule)
+    const stpModuleTyped = globalWallet
+      ? (globalWallet as unknown as StpWasmModule)
       : undefined;
 
     if (!stpModuleTyped || typeof stpModuleTyped[methodName] !== 'function') {
-      const errorMsg = `stp_wasm or method "${methodName}" not found on globalThis.`
+      const errorMsg = `sat20wallet_wasm or method "${methodName}" not found on globalThis.`
       console.error(errorMsg)
       return [new Error(errorMsg), undefined]
     }
     const method = stpModuleTyped[methodName] as (...args: any[]) => Promise<WasmResponse<T>>;
-    console.log('stp method', methodName, args);
+    console.log('sat20wallet channel method', methodName, args);
     const [err, result] = await tryit(method)(...args)
-    console.log('stp method', methodName, args, result);
+    console.log('sat20wallet channel method', methodName, args, result);
 
     if (err) {
-      console.error(`stp ${methodName} error: ${err.message}`)
+      console.error(`sat20wallet channel ${methodName} error: ${err.message}`)
       return [err, undefined]
     }
 
     if (result && typeof result.code === 'number' && result.code !== 0) {
-      const errorMsg = result.msg || `stp ${methodName} failed with code ${result.code}`;
+      const errorMsg = result.msg || `sat20wallet channel ${methodName} failed with code ${result.code}`;
       console.error(errorMsg);
       return [new Error(errorMsg), undefined];
     }
@@ -91,7 +90,7 @@ class SatsnetStp {
     return [undefined, result?.data]
   }
 
-  // --- STP 特有方法 (通道管理相关) ---
+  // --- 通道管理相关方法 ---
 
   async init(
     cfg: any,
@@ -106,7 +105,7 @@ class SatsnetStp {
     return this._handleRequest('registerCallback', cb)
   }
 
-  // --- 钱包状态同步方法 (stp wasm 需要与 sat20 wasm 保持状态同步) ---
+  // --- 钱包状态方法，由 sat20wallet.wasm 统一导出 ---
 
   async switchWallet(
     id: string,

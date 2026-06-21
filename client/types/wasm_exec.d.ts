@@ -573,11 +573,9 @@ interface SatsnetStp {
 }
 declare interface Window {
   sat20wallet_wasm: WalletManager
-  stp_wasm: SatsnetStp
   sat20: Sat20
 }
 declare interface GlobalThis {
   sat20wallet_wasm: WalletManager
-  stp_wasm: SatsnetStp
   sat20: Sat20
 }

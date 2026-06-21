@@ -15,7 +15,8 @@
     "verify:wallet-basics": "node scripts/verify/wallet-basics-flow.mjs",
     "verify:l1-orderbook": "node scripts/verify/l1-orderbook-flow.mjs",
     "verify:l2-contract": "node scripts/verify/l2-contract-flow.mjs",
-    "verify:channel-management": "node scripts/verify/channel-management-smoke.mjs"
+    "verify:channel-management": "node scripts/verify/channel-management-smoke.mjs",
+    "verify:agent-safety": "node scripts/verify/agent-safety-preflight.mjs"
   },
   "dependencies": {
     "@bitcoin-js/tiny-secp256k1-asmjs": "^2.2.4",

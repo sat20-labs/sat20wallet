@@ -30,33 +30,26 @@ async function assertContains(relativePath, patterns, label) {
   checks.push(`${label}: ${relativePath}`);
 }
 
-await assertFile('public/wasm/stpd.wasm', 'STP wasm');
+await assertFile('public/wasm/sat20wallet.wasm', 'Wallet wasm');
 
 await assertContains('public/service-worker.js', [
-  'wasm/stpd.wasm',
+  'wasm/sat20wallet.wasm',
   /sat20-wallet-pwa-v0\.1\.34-/,
 ], 'PWA offline precache');
 
 await assertContains('utils/wasm.ts', [
-  'loadStpWasm',
-  'wasm/stpd.wasm',
-  'satsnetStp.init',
-], 'STP wasm loader');
+  'wasm/sat20wallet.wasm',
+  'walletManager.init',
+], 'Wallet wasm loader');
 
 await assertContains('utils/stp.ts', [
+  'sat20wallet_wasm',
   'openChannel',
   'splicingIn',
   'splicingOut',
   'lockToChannel',
   'unlockFromChannel',
-], 'STP wrapper API');
-
-await assertContains('store/wallet.ts', [
-  'satsnetStp.importWallet',
-  'satsnetStp.unlockWallet',
-  'satsnetStp.switchWallet',
-  'satsnetStp.switchAccount',
-], 'Wallet/STP state sync');
+], 'Channel wrapper API');
 
 await assertContains('store/channel.ts', [
   'getAllChannels',

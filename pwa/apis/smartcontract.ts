@@ -41,6 +41,26 @@ class SmartContractApi {
     const response = await fetch(this.generatePath(`/${encodeURIComponent(contract)}/analytics`, network))
     return response.json()
   }
+
+  async reviewPredictionReady({
+    network,
+    contract,
+    checkedAt,
+  }: {
+    network: string
+    contract: Record<string, unknown>
+    checkedAt?: number
+  }) {
+    const response = await fetch(this.generatePath('/prediction/review-ready', network), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contract,
+        checkedAt,
+      }),
+    })
+    return response.json()
+  }
 }
 
 export default new SmartContractApi()

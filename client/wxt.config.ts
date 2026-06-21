@@ -14,7 +14,7 @@ export default defineConfig({
         matches: ["<all_urls>"],
       },
       {
-        resources: ['wasm/sat20wallet.wasm', 'wasm/stpd.wasm'],
+        resources: ['wasm/sat20wallet.wasm'],
         matches: ["<all_urls>"],
       },
     ],

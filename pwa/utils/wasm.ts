@@ -1,5 +1,4 @@
 import walletManager from '@/utils/sat20'
-import satsnetStp from '@/utils/stp'
 import { getConfig, logLevel } from '@/config/wasm'
 import { Network } from '@/types'
 import { walletStorage } from '@/lib/walletStorage'
@@ -27,13 +26,6 @@ const loadWalletWasm = async () => {
   await walletManager.init(config, logLevel)
 }
 
-const loadStpWasm = async () => {
-  const config = await getRuntimeConfig()
-  await instantiateGoWasm(`${import.meta.env.BASE_URL}wasm/stpd.wasm`)
-  await satsnetStp.init(config, logLevel)
-}
-
 export const loadWasm = async () => {
   await loadWalletWasm()
-  await loadStpWasm()
 }
