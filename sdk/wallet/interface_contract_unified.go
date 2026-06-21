@@ -148,6 +148,22 @@ func (p *Manager) DeployUnifiedContract(req *ContractDeployRequest) (*ContractTx
 	}
 }
 
+func (p *Manager) EstimateDeployUnifiedContract(req *ContractDeployRequest) (*ContractTxResult, error) {
+	if req == nil {
+		return nil, fmt.Errorf("missing contract deploy request")
+	}
+	switch normalizeContractType(req.ContractType) {
+	case ContractTypeEVM:
+		return p.EstimateEVMDeployContract(req)
+	case ContractTypeTemplate:
+		return p.estimateTemplateDeployContract(req)
+	case ContractTypeAgent:
+		return p.estimateAgentDeployContract(req)
+	default:
+		return nil, fmt.Errorf("unsupported contract type %s", req.ContractType)
+	}
+}
+
 func (p *Manager) InvokeUnifiedContract(req *ContractInvokeRequest) (*ContractTxResult, error) {
 	if req == nil {
 		return nil, fmt.Errorf("missing contract invoke request")
@@ -626,6 +642,80 @@ func (p *Manager) queryDefaultInvokeFee(contractType string, gasLimit int64, gas
 	return fundingGasAmount + gasBaseFee, nil
 }
 
+func (p *Manager) estimateAgentDeployContract(req *ContractDeployRequest) (*ContractTxResult, error) {
+	if p.wallet == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	if req == nil {
+		return nil, fmt.Errorf("missing agent deploy request")
+	}
+	subtype := strings.TrimSpace(req.SubType)
+	if subtype == "" {
+		subtype = contractcommon.SubtypePrediction
+	}
+	content, err := decodeContractContent(req.ContractContent, req.ContentEncoding)
+	if err != nil {
+		return nil, err
+	}
+	if len(content) == 0 {
+		return nil, fmt.Errorf("missing agent contract content")
+	}
+	if subtype == contractcommon.SubtypePrediction {
+		contract, err := contractcommon.DecodeAgentPredictionContract(content)
+		if err != nil {
+			return nil, fmt.Errorf("decode prediction contract: %w", err)
+		}
+		if err := contract.Check(); err != nil {
+			return nil, err
+		}
+	}
+	gasLimit := req.GasLimit
+	if gasLimit == 0 {
+		gasLimit = contractcommon.DeployBaseGas
+	}
+	deployBaseFee, _, err := p.agentGasAssetAmount(contractcommon.DeployBaseGas, 0)
+	if err != nil {
+		return nil, err
+	}
+	invokeBaseFee, _, err := p.agentGasAssetAmount(contractcommon.InvokeBaseGas, 0)
+	if err != nil {
+		return nil, err
+	}
+	gasAmount, err := gasOverrideAmount("agent deploy gas asset amount", req.GasAssetAmount)
+	if err != nil {
+		return nil, err
+	}
+	if gasAmount == 0 {
+		if invokeBaseFee > math.MaxInt64/2 || deployBaseFee > math.MaxInt64-invokeBaseFee*2 {
+			return nil, fmt.Errorf("agent deploy default gas amount overflows int64")
+		}
+		gasAmount = deployBaseFee + invokeBaseFee*2
+	}
+	if gasAmount < deployBaseFee {
+		return nil, fmt.Errorf("agent deploy gas asset amount %d is less than required base gas fee %d", gasAmount, deployBaseFee)
+	}
+	contractAddr, _, err := contractcommon.DeriveAgentContractAddress(
+		p.contractAddressPrefix(),
+		subtype,
+		content,
+		p.wallet.GetAddress(),
+		req.DeployNonce,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &ContractTxResult{
+		ContractType:    ContractTypeAgent,
+		ContractAddress: contractAddr.EncodeAddress(),
+		Caller:          p.wallet.GetAddress(),
+		GasAssetAmount:  gasAmount,
+		GasFeeAmount:    deployBaseFee,
+		GasFundAmount:   gasAmount - deployBaseFee,
+		GasLimit:        gasLimit,
+		Nonce:           req.DeployNonce,
+	}, nil
+}
+
 func (p *Manager) deployAgentContract(req *ContractDeployRequest) (*ContractTxResult, error) {
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
@@ -808,6 +898,64 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 		GasFundAmount:   0,
 		GasLimit:        gasLimit,
 		Nonce:           callNonce,
+	}, nil
+}
+
+func (p *Manager) estimateTemplateDeployContract(req *ContractDeployRequest) (*ContractTxResult, error) {
+	if p.wallet == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	if req == nil {
+		return nil, fmt.Errorf("missing template deploy request")
+	}
+	templateName := normalizeTemplateName(req.SubType)
+	if templateName == "" {
+		return nil, fmt.Errorf("missing template contract subtype")
+	}
+	content, err := decodeContractContent(req.ContractContent, req.ContentEncoding)
+	if err != nil {
+		return nil, err
+	}
+	if len(content) == 0 {
+		return nil, fmt.Errorf("missing template contract content")
+	}
+	gasLimit := req.GasLimit
+	if gasLimit == 0 {
+		gasLimit = contractcommon.DeployBaseGas
+	}
+	gasOverride, err := gasOverrideAmount("gas asset amount", req.GasAssetAmount)
+	if err != nil {
+		return nil, err
+	}
+	gasAmount, _, err := p.templateGasAssetAmount(gasLimit, true, gasOverride)
+	if err != nil {
+		return nil, err
+	}
+	gasBaseFee, err := p.evmBaseGasFee(contractcommon.DeployBaseGas)
+	if err != nil {
+		return nil, err
+	}
+	if gasAmount < gasBaseFee {
+		return nil, fmt.Errorf("gas asset amount %d is less than required base gas fee %d", gasAmount, gasBaseFee)
+	}
+	contractAddr, _, err := contractcommon.DeriveTemplateContractAddress(
+		p.contractAddressPrefix(),
+		content,
+		p.wallet.GetAddress(),
+		req.DeployNonce,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &ContractTxResult{
+		ContractType:    ContractTypeTemplate,
+		ContractAddress: contractAddr.EncodeAddress(),
+		Caller:          p.wallet.GetAddress(),
+		GasAssetAmount:  gasAmount,
+		GasFeeAmount:    gasBaseFee,
+		GasFundAmount:   gasAmount - gasBaseFee,
+		GasLimit:        gasLimit,
+		Nonce:           req.DeployNonce,
 	}, nil
 }
 

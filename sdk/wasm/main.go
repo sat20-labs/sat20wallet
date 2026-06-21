@@ -3128,6 +3128,32 @@ func deployUnifiedContract(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func estimateDeployUnifiedContract(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameter")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "contract deploy request parameter should be a json string")
+	}
+	reqJSON := p[0].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		var req wallet.ContractDeployRequest
+		if err := json.Unmarshal([]byte(reqJSON), &req); err != nil {
+			return nil, -1, err.Error()
+		}
+		result, err := _mgr.EstimateDeployUnifiedContract(&req)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return contractTxResultForJS(result), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
 func invokeUnifiedContract(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -4563,6 +4589,7 @@ func main() {
 	obj.Set("queryContract", js.FuncOf(queryContract))
 	obj.Set("buildUnifiedContractContent", js.FuncOf(buildUnifiedContractContent))
 	obj.Set("deployUnifiedContract", js.FuncOf(deployUnifiedContract))
+	obj.Set("estimateDeployUnifiedContract", js.FuncOf(estimateDeployUnifiedContract))
 	obj.Set("invokeUnifiedContract", js.FuncOf(invokeUnifiedContract))
 	obj.Set("getParamForInvokeUnifiedContract", js.FuncOf(getParamForInvokeUnifiedContract))
 	obj.Set("getFeeForInvokeUnifiedContract", js.FuncOf(getFeeForInvokeUnifiedContract))
