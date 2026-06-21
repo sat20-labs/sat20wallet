@@ -29,6 +29,20 @@ func (p *Manager) createContractWithdrawDeAnchorTx(channelAddr string, sendInfo 
 func (p *Manager) coSendOrdxWithStub(localWallet common.Wallet, dest string, assetNameStr string, amt int64,
 	feeRate int64, stub string, reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 	sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error) {
+	return p.coSendOrdxWithStubWithMaxConfirmedInputHeight(localWallet, dest, assetNameStr, amt, feeRate,
+		stub, reason, contractURL, invokeCount, memo, static, runtime, sendDeAnchorTx, excludeRecentBlock, 0)
+}
+
+func (p *Manager) coSendOrdxWithStubHeight(localWallet common.Wallet, dest string, assetNameStr string, amt int64,
+	feeRate int64, stub string, reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
+	sendDeAnchorTx, excludeRecentBlock bool, maxConfirmedInputHeight int) (string, int64, error) {
+	return p.coSendOrdxWithStubWithMaxConfirmedInputHeight(localWallet, dest, assetNameStr, amt, feeRate,
+		stub, reason, contractURL, invokeCount, memo, static, runtime, sendDeAnchorTx, excludeRecentBlock, maxConfirmedInputHeight)
+}
+
+func (p *Manager) coSendOrdxWithStubWithMaxConfirmedInputHeight(localWallet common.Wallet, dest string, assetNameStr string, amt int64,
+	feeRate int64, stub string, reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
+	sendDeAnchorTx, excludeRecentBlock bool, maxConfirmedInputHeight int) (string, int64, error) {
 
 	start := time.Now()
 	Log.Infof("CoSendOrdxWithStub %s", assetNameStr)
@@ -61,7 +75,7 @@ func (p *Manager) coSendOrdxWithStub(localWallet common.Wallet, dest string, ass
 		return "", 0, err
 	}
 
-	tx, prevFetcher, fee, err := p.BuildSendOrdxTxWithStubFromAddress(localWallet, channelID, dest, assetName, amt, stub, feeRate, memo, true, excludeRecentBlock)
+	tx, prevFetcher, fee, err := p.buildSendOrdxTxWithStubFromAddressWithHeight(localWallet, channelID, dest, assetName, amt, stub, feeRate, memo, true, excludeRecentBlock, maxConfirmedInputHeight)
 	if err != nil {
 		return "", 0, err
 	}
@@ -118,6 +132,22 @@ func (p *Manager) coSendOrdxWithStub(localWallet common.Wallet, dest string, ass
 func (p *Manager) coBatchSendV3(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 	sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress bool) (string, int64, error) {
+	return p.coBatchSendV3WithMaxConfirmedInputHeight(localWallet, dest, assetNameStr, feeRate,
+		reason, contractURL, invokeCount, memo, static, runtime,
+		sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress, 0)
+}
+
+func (p *Manager) coBatchSendV3Height(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
+	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
+	sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress bool, maxConfirmedInputHeight int) (string, int64, error) {
+	return p.coBatchSendV3WithMaxConfirmedInputHeight(localWallet, dest, assetNameStr, feeRate,
+		reason, contractURL, invokeCount, memo, static, runtime,
+		sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress, maxConfirmedInputHeight)
+}
+
+func (p *Manager) coBatchSendV3WithMaxConfirmedInputHeight(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
+	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
+	sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress bool, maxConfirmedInputHeight int) (string, int64, error) {
 
 	start := time.Now()
 	Log.Infof("CoBatchSendV3 %s", assetNameStr)
@@ -154,13 +184,13 @@ func (p *Manager) coBatchSendV3(localWallet common.Wallet, dest []*SendAssetInfo
 	)
 	switch asset.Protocol {
 	case "":
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3BTCFromAddress(channelID, dest, feeRate, memo, true, excludeRecentBlock)
+		tx, prevFetcher, fee, err = p.buildBatchSendTxWithAddressHeight_btc(channelID, dest, feeRate, memo, true, excludeRecentBlock, maxConfirmedInputHeight)
 	case indexer.PROTOCOL_NAME_ORDX:
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3OrdxFromAddress(localWallet, channelID, dest, assetName, feeRate, memo, true, excludeRecentBlock, payFeeByCurrentAddress)
+		tx, prevFetcher, fee, err = p.buildBatchSendTxWithAddressHeight_ordx(localWallet, channelID, dest, assetName, feeRate, memo, true, excludeRecentBlock, payFeeByCurrentAddress, maxConfirmedInputHeight)
 	case indexer.PROTOCOL_NAME_RUNES:
-		tx, prevFetcher, fee, err = p.BuildBatchSendTxV3RunesFromAddress(localWallet, channelID, dest, assetName, feeRate, true, excludeRecentBlock, payFeeByCurrentAddress)
+		tx, prevFetcher, fee, err = p.buildBatchSendTxWithAddressHeight_runes(localWallet, channelID, dest, assetName, feeRate, true, excludeRecentBlock, payFeeByCurrentAddress, maxConfirmedInputHeight)
 	case indexer.PROTOCOL_NAME_BRC20:
-		tx, prevFetcher, fee, inscribes, err = p.BuildBatchSendTxV3BRC20FromAddress(localWallet, channelID, dest, assetName, feeRate, memo, true, excludeRecentBlock, payFeeByCurrentAddress)
+		tx, prevFetcher, fee, inscribes, err = p.buildBatchSendTxWithAddressHeight_brc20(localWallet, channelID, dest, assetName, feeRate, memo, true, excludeRecentBlock, payFeeByCurrentAddress, maxConfirmedInputHeight)
 	default:
 		return "", 0, fmt.Errorf("CoBatchSendV3 unsupport protocol %s", asset.Protocol)
 	}

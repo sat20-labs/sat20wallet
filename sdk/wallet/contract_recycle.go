@@ -358,7 +358,8 @@ type RecycleContractRunningData_old = RecycleContractRunningData
 
 // 4. 定义合约运行时需要维护的数据
 type RecycleContractRunningData struct {
-	BlockHashMap     map[int]string // 缓存没有处理过的block的hash
+	BlockHashMap     map[int]string // 缓存存在invokeItem的L1 block hash
+	BlockHashMapL2   map[int]string // 缓存存在invokeItem的L2 block hash
 	AssetAmtInPool   *Decimal
 	SatsValueInPool  int64 // 池子中聪的数量
 	TotalInputSats   int64
@@ -402,7 +403,8 @@ func NewRecycleContractRunTime(stp ContractManager) *RecycleContractRunTime {
 			RecycleContract:     *NewRecycleContract(),
 			ContractRuntimeBase: *NewContractRuntimeBase(stp),
 			RecycleContractRunningData: RecycleContractRunningData{
-				BlockHashMap: make(map[int]string),
+				BlockHashMap:   make(map[int]string),
+				BlockHashMapL2: make(map[int]string),
 			},
 		},
 	}
@@ -414,9 +416,19 @@ func NewRecycleContractRunTime(stp ContractManager) *RecycleContractRunTime {
 func (p *RecycleContractRunTime) init() {
 	p.contract = p
 	p.runtime = p
+	p.ensureBlockHashMaps()
 	p.invokerMap = make(map[string]*RecycleInvokerStatus)
 	p.recycleMap = make(map[string]map[int64]*InvokeItem)
 	p.rewardMap = make(map[string]map[int64]*InvokeItem)
+}
+
+func (p *RecycleContractRunTime) ensureBlockHashMaps() {
+	if p.BlockHashMap == nil {
+		p.BlockHashMap = make(map[int]string)
+	}
+	if p.BlockHashMapL2 == nil {
+		p.BlockHashMapL2 = make(map[int]string)
+	}
 }
 
 func (p *RecycleContractRunTime) InitFromJson(content []byte, stp ContractManager) error {
@@ -798,7 +810,7 @@ func (p *RecycleContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock
 	if p.IsActive() {
 		p.mutex.Lock()
 		p.PreprocessInvokeData_SatsNet(data)
-		//p.process(data.Height, data.BlockHash) 不需要调用，等主网区块过块时一起处理
+		p.process(data.Height, data.BlockHash, false)
 		p.InvokeCompleted_SatsNet(data)
 		p.mutex.Unlock()
 	} else {
@@ -820,7 +832,7 @@ func (p *RecycleContractRunTime) InvokeWithBlock(data *InvokeDataInBlock) error 
 	if p.IsActive() {
 		p.mutex.Lock()
 		p.PreprocessInvokeData(data)
-		p.process(data.Height, data.BlockHash)
+		p.process(data.Height, data.BlockHash, true)
 		p.InvokeCompleted(data)
 		p.mutex.Unlock()
 
@@ -1174,8 +1186,66 @@ func CountHexDigit(hexStr string, digit byte) int {
 	return count
 }
 
-// 执行回收，每个L1区块统一执行一次
-func (p *RecycleContractRunTime) process(height int, blockHash string) error {
+// 执行回收，L1/L2分别按各自区块确认后处理
+func (p *RecycleContractRunTime) recycleBlockHashMap(fromL1 bool) map[int]string {
+	p.ensureBlockHashMaps()
+	if fromL1 {
+		return p.BlockHashMap
+	}
+	return p.BlockHashMapL2
+}
+
+func (p *RecycleContractRunTime) chainName(fromL1 bool) string {
+	if fromL1 {
+		return "L1"
+	}
+	return "L2"
+}
+
+func (p *RecycleContractRunTime) hasRecycleItemAtBlock(height int, fromL1 bool) bool {
+	for _, invokes := range p.recycleMap {
+		for _, item := range invokes {
+			if item.FromL1 != fromL1 || len(item.Padded) != 0 || item.Finished() {
+				continue
+			}
+			h, _, _ := indexer.FromUtxoId(item.UtxoId)
+			if h == height {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (p *RecycleContractRunTime) cacheRecycleBlockHashIfNeeded(height int, blockHash string, fromL1 bool) {
+	if blockHash == "" || !p.hasRecycleItemAtBlock(height, fromL1) {
+		return
+	}
+	p.recycleBlockHashMap(fromL1)[height] = blockHash
+}
+
+func (p *RecycleContractRunTime) getRecycleItemBlockHash(height int, fromL1 bool) (string, bool) {
+	blockHashMap := p.recycleBlockHashMap(fromL1)
+	blockHash, ok := blockHashMap[height]
+	if ok && blockHash != "" {
+		return blockHash, true
+	}
+
+	var err error
+	if fromL1 {
+		blockHash, err = p.stp.GetIndexerClient().GetBlockHash(height)
+	} else {
+		blockHash, err = p.stp.GetIndexerClient_SatsNet().GetBlockHash(height)
+	}
+	if err != nil || blockHash == "" {
+		Log.Warnf("%s get %s block hash %d failed, %v", p.URL(), p.chainName(fromL1), height, err)
+		return "", false
+	}
+	blockHashMap[height] = blockHash
+	return blockHash, true
+}
+
+func (p *RecycleContractRunTime) process(height int, blockHash string, fromL1 bool) error {
 
 	if len(p.recycleMap) == 0 {
 		return nil
@@ -1183,25 +1253,13 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 	if blockHash == "" {
 		return nil
 	}
-	p.BlockHashMap[height] = blockHash
-	// 考虑到区块回滚的问题，必须过块6个区块，才处理奖励
-	height -= 5
-	blockHash, ok := p.BlockHashMap[height]
-	if !ok {
-		return nil
-	}
-	wantToDel := make([]int, 0, len(p.BlockHashMap))
-	for k := range p.BlockHashMap {
-		if k <= height {
-			wantToDel = append(wantToDel, k)
-		}
-	}
-	for _, k := range wantToDel {
-		delete(p.BlockHashMap, k)
-	}
+	p.cacheRecycleBlockHashIfNeeded(height, blockHash, fromL1)
 
-	Log.Debugf("%s start contract %s with action recycle with block %d %s",
-		p.stp.GetMode(), p.URL(), height, blockHash)
+	// 考虑到区块回滚的问题，必须过块6个区块，才处理奖励
+	confirmedHeight := height - 5
+
+	Log.Debugf("%s start contract %s with action recycle on %s confirmed block %d",
+		p.stp.GetMode(), p.URL(), p.chainName(fromL1), confirmedHeight)
 
 	url := p.URL()
 	updated := false
@@ -1225,9 +1283,12 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 				continue
 			}
 
-			// 不区分L2，前面已经修改过L2的utxoId
 			h, _, _ := indexer.FromUtxoId(item.UtxoId)
-			if h > height {
+			if item.FromL1 != fromL1 || h > confirmedHeight {
+				continue
+			}
+			itemBlockHash, ok := p.getRecycleItemBlockHash(h, fromL1)
+			if !ok {
 				continue
 			}
 
@@ -1246,7 +1307,7 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 			var result string
 			if item.InValue >= 330 && p.SatsValueInPool >= MIN_POOL_VALUE {
 				// 分别取最后 NumberOfLastDigits 个数字做加法，然后按照中奖规则判断是否中奖
-				result = XorLastNHex(blockHash, txId, p.NumberOfLastDigits)
+				result = XorLastNHex(itemBlockHash, txId, p.NumberOfLastDigits)
 				item.Padded = []byte(result)
 				// 如果输入的数量是n倍，如果奖励就是n倍
 
@@ -1301,8 +1362,8 @@ func (p *RecycleContractRunTime) process(height int, blockHash string) error {
 			}
 
 			updated = true
-			Log.Infof("item %s processed: inValue=%d, code=%s, prize=%s, points=%d", item.InUtxo,
-				item.InValue, result, prize.String(), points)
+			Log.Infof("item %s processed with %s block %d %s: inValue=%d, code=%s, prize=%s, points=%d",
+				item.InUtxo, p.chainName(fromL1), h, itemBlockHash, item.InValue, result, prize.String(), points)
 		}
 	}
 

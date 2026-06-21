@@ -39,7 +39,7 @@ const (
 	TEMPLATE_CONTRACT_AMM        string = "amm.tc"
 	TEMPLATE_CONTRACT_EXCHANGE   string = "exchange.tc"
 	TEMPLATE_CONTRACT_TRANSCEND  string = "transcend.tc" // 支持任意资产进出通道，优先级比 TEMPLATE_CONTRACT_AMM 低
-	TEMPLATE_CONTRACT_FAUCET     string = "faucet.tc" // 支持L1/L2不带参数的兑换gas
+	TEMPLATE_CONTRACT_FAUCET     string = "faucet.tc"    // 支持L1/L2不带参数的兑换gas
 	TEMPLATE_CONTRACT_RECYCLE    string = "recycle.tc"
 	TEMPLATE_CONTRACT_DAO        string = "dao.tc"
 	// 开发中的
@@ -246,9 +246,15 @@ type ContractManager interface {
 	CoBatchSendV3(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 		sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress bool) (string, int64, error)
+	CoBatchSendV3_Height(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
+		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
+		sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress bool, maxConfirmedInputHeight int) (string, int64, error)
 	CoSendOrdxWithStub(localWallet common.Wallet, dest string, assetNameStr string, amt int64, feeRate int64, stub string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 		sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error)
+	CoSendOrdxWithStub_Height(localWallet common.Wallet, dest string, assetNameStr string, amt int64, feeRate int64, stub string,
+		reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
+		sendDeAnchorTx, excludeRecentBlock bool, maxConfirmedInputHeight int) (string, int64, error)
 	CoBatchSendV2_SatsNet(localWallet common.Wallet, dest []*SendAssetInfo, assetName string,
 		reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error)
 	CoBatchSend_SatsNet(localWallet common.Wallet, destAddr []string, assetName string, amtVect []*Decimal,
@@ -1192,7 +1198,7 @@ func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv ContractDeplo
 
 	resv.SetInitiator(true)
 	stp.SaveReservation(resv)
-	
+
 	p.isInitiator = resv.LocalIsInitiator()
 	var err error
 	p.localPubKey, err = utils.BytesToPublicKey(p.LocalPubKey)
@@ -2195,7 +2201,7 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 			if p.CurrBlockL1+1 < data.Height {
 				p.mutex.Unlock()
 				Log.Errorf("%s missing some L1 block, current %d, but new block %d", p.URL(), p.CurrBlockL1, data.Height)
-				from := p.CurrBlockL1+1
+				from := p.CurrBlockL1 + 1
 				p.resyncBlock(from, data.Height-1)
 				Log.Infof("%s has resync L1 from %d to %d", p.URL(), from, data.Height-1)
 				p.mutex.Lock()
@@ -2347,7 +2353,7 @@ func (p *ContractRuntimeBase) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sa
 				// 同步缺少的区块，确保合约运行正常
 				p.mutex.Unlock()
 				Log.Errorf("%s missing some L2 block, current %d, but new block %d", p.URL(), p.CurrBlock, data.Height)
-				from := p.CurrBlock+1
+				from := p.CurrBlock + 1
 				p.resyncBlock_SatsNet(from, data.Height-1)
 				Log.Infof("%s has resync L2 from %d to %d", p.URL(), from, data.Height-1)
 				p.mutex.Lock()
@@ -2792,9 +2798,15 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
 	if len(sendInfoVect) > 0 {
 		for i := 0; i < 3; i++ {
-			txId, fee, err = p.stp.CoBatchSendV3(p.localWallet, sendInfoVect, dealInfo.AssetName.String(), dealInfo.FeeRate,
-				"contract", url, dealInfo.InvokeCount, nullDataScript,
-				dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock, false)
+			if reason == INVOKE_RESULT_REWARD && dealInfo.Height > 0 {
+				txId, fee, err = p.stp.CoBatchSendV3_Height(p.localWallet, sendInfoVect, dealInfo.AssetName.String(), dealInfo.FeeRate,
+					"contract", url, dealInfo.InvokeCount, nullDataScript,
+					dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock, false, dealInfo.Height)
+			} else {
+				txId, fee, err = p.stp.CoBatchSendV3(p.localWallet, sendInfoVect, dealInfo.AssetName.String(), dealInfo.FeeRate,
+					"contract", url, dealInfo.InvokeCount, nullDataScript,
+					dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock, false)
+			}
 			if err != nil {
 				if strings.Contains(err.Error(), ERR_MERKLE_ROOT_INCONSISTENT) {
 					// recalc
@@ -2824,10 +2836,17 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 			}
 			sendInfo := sendInfoVectWithStub[0]
 			for i := 0; i < 3; i++ {
-				txId, fee, err = p.stp.CoSendOrdxWithStub(p.localWallet, sendInfo.Address,
-					sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(), dealInfo.FeeRate,
-					stubs[0], "contract", url, dealInfo.InvokeCount, nullDataScript,
-					dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
+				if reason == INVOKE_RESULT_REWARD && dealInfo.Height > 0 {
+					txId, fee, err = p.stp.CoSendOrdxWithStub_Height(p.localWallet, sendInfo.Address,
+						sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(), dealInfo.FeeRate,
+						stubs[0], "contract", url, dealInfo.InvokeCount, nullDataScript,
+						dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock, dealInfo.Height)
+				} else {
+					txId, fee, err = p.stp.CoSendOrdxWithStub(p.localWallet, sendInfo.Address,
+						sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(), dealInfo.FeeRate,
+						stubs[0], "contract", url, dealInfo.InvokeCount, nullDataScript,
+						dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock)
+				}
 				if err != nil {
 					if strings.Contains(err.Error(), ERR_MERKLE_ROOT_INCONSISTENT) {
 						// recalc

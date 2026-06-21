@@ -31,6 +31,14 @@ const (
 	ERR_NO_ENOUGH_SATS string = "no enough plain sats"
 )
 
+func (p *Manager) confirmedUtxoAfterHeight(utxoId uint64, maxConfirmedInputHeight int) bool {
+	if maxConfirmedInputHeight <= 0 || utxoId == 0 {
+		return false
+	}
+	height, _, _ := indexer.FromUtxoId(utxoId)
+	return height > maxConfirmedInputHeight
+}
+
 // 发送给多个地址不同数量资产
 func (p *Manager) BatchSendAssetsV2_SatsNet(destAddr []string,
 	assetName string, amtVect []string, memo []byte) (string, error) {
@@ -1765,6 +1773,17 @@ func (p *Manager) SelectUtxosForBRC20(utxomgr *UtxoMgr, excludedUtxoMap map[stri
 	feeRate int64, weightEstimate *utils.TxWeightEstimator,
 	excludeRecentBlock, inChannel bool) ([]*TxOutput, *InscribeResv, int64, error) {
 
+	return p.selectUtxosForBRC20WithHeight(utxomgr, excludedUtxoMap,
+		feeutxomgr, feeexcludedUtxoMap, assetName, totalAmt, amt, feeRate,
+		weightEstimate, excludeRecentBlock, inChannel, 0)
+}
+
+func (p *Manager) selectUtxosForBRC20WithHeight(utxomgr *UtxoMgr, excludedUtxoMap map[string]bool,
+	feeutxomgr *UtxoMgr, feeexcludedUtxoMap map[string]bool,
+	assetName *indexer.AssetName, totalAmt, amt *Decimal,
+	feeRate int64, weightEstimate *utils.TxWeightEstimator,
+	excludeRecentBlock, inChannel bool, maxConfirmedInputHeight int) ([]*TxOutput, *InscribeResv, int64, error) {
+
 	utxos := utxomgr.GetUtxoListWithTicker(assetName)
 	// 是否有恰好相同的transfer铭文
 	var selected []*TxOutput
@@ -1786,6 +1805,9 @@ func (p *Manager) SelectUtxosForBRC20(utxomgr *UtxoMgr, excludedUtxoMap map[stri
 			if p.IsRecentBlockUtxo(u.UtxoId) {
 				continue
 			}
+		}
+		if p.confirmedUtxoAfterHeight(u.UtxoId, maxConfirmedInputHeight) {
+			continue
 		}
 		if HasMultiAsset(output, assetName) {
 			continue
@@ -2415,6 +2437,18 @@ func (p *Manager) SelectUtxosForPlainSats(
 	tx *wire.MsgTx, weightEstimate *utils.TxWeightEstimator,
 	excludeRecentBlock, inChannel, autoAdjust bool,
 ) (*txscript.MultiPrevOutFetcher, []byte, int64, int64, int64, error) {
+
+	return p.selectUtxosForPlainSatsWithHeight(address, excludedUtxoMap,
+		requiredValue, feeRate, tx, weightEstimate, excludeRecentBlock, inChannel, autoAdjust, 0)
+}
+
+func (p *Manager) selectUtxosForPlainSatsWithHeight(
+	address string, excludedUtxoMap map[string]bool,
+	requiredValue int64, feeRate int64,
+	tx *wire.MsgTx, weightEstimate *utils.TxWeightEstimator,
+	excludeRecentBlock, inChannel, autoAdjust bool,
+	maxConfirmedInputHeight int,
+) (*txscript.MultiPrevOutFetcher, []byte, int64, int64, int64, error) {
 	/* 规则：
 	1. 先根据目标输出的value，先选1个，或者最多5个utxo，其聪数量不大于value
 	2. 再从其余的聪数量大于330聪的utxo中，凑齐足够的network fee，注意每增加一个输入，其交易的fee就会增加一些
@@ -2447,6 +2481,9 @@ func (p *Manager) SelectUtxosForPlainSats(
 			if p.IsRecentBlockUtxo(u.UtxoId) {
 				continue
 			}
+		}
+		if p.confirmedUtxoAfterHeight(u.UtxoId, maxConfirmedInputHeight) {
+			continue
 		}
 		if u.Value == 330 {
 			continue
@@ -2487,6 +2524,9 @@ func (p *Manager) SelectUtxosForPlainSats(
 			if p.IsRecentBlockUtxo(u.UtxoId) {
 				continue
 			}
+		}
+		if p.confirmedUtxoAfterHeight(u.UtxoId, maxConfirmedInputHeight) {
+			continue
 		}
 		if u.Value == 330 {
 			continue
@@ -2538,6 +2578,9 @@ func (p *Manager) SelectUtxosForPlainSats(
 				continue
 			}
 		}
+		if p.confirmedUtxoAfterHeight(u.UtxoId, maxConfirmedInputHeight) {
+			continue
+		}
 		txOut := OutputInfoToOutput(u)
 
 		outpoint := txOut.OutPoint()
@@ -2583,6 +2626,16 @@ func (p *Manager) SelectUtxosForAsset(address string, excludedUtxoMap map[string
 	weightEstimate *utils.TxWeightEstimator, excludeRecentBlock, inChannel bool) (
 	[]*TxOutput, *Decimal, int64, error) {
 
+	return p.selectUtxosForAssetWithHeight(address, excludedUtxoMap,
+		assetName, requiredAmt, weightEstimate, excludeRecentBlock, inChannel, 0)
+}
+
+func (p *Manager) selectUtxosForAssetWithHeight(address string, excludedUtxoMap map[string]bool,
+	assetName *indexer.AssetName, requiredAmt *Decimal,
+	weightEstimate *utils.TxWeightEstimator, excludeRecentBlock, inChannel bool,
+	maxConfirmedInputHeight int) (
+	[]*TxOutput, *Decimal, int64, error) {
+
 	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, assetName)
 	if len(utxos) == 0 {
 		return nil, nil, 0, fmt.Errorf(ERR_NO_ASSETS)
@@ -2605,6 +2658,9 @@ func (p *Manager) SelectUtxosForAsset(address string, excludedUtxoMap map[string
 			if p.IsRecentBlockUtxo(u.UtxoId) {
 				continue
 			}
+		}
+		if p.confirmedUtxoAfterHeight(u.UtxoId, maxConfirmedInputHeight) {
+			continue
 		}
 		txOut := OutputInfoToOutput(u)
 		if HasMultiAsset(txOut, assetName) {
@@ -2648,6 +2704,9 @@ func (p *Manager) SelectUtxosForAsset(address string, excludedUtxoMap map[string
 			if p.IsRecentBlockUtxo(u.UtxoId) {
 				continue
 			}
+		}
+		if p.confirmedUtxoAfterHeight(u.UtxoId, maxConfirmedInputHeight) {
+			continue
 		}
 		txOut := OutputInfoToOutput(u)
 		if HasMultiAsset(txOut, assetName) {
@@ -2695,6 +2754,17 @@ func (p *Manager) SelectUtxosForFeeV3(
 	weightEstimate *utils.TxWeightEstimator,
 	excludeRecentBlock, inChannel bool) ([]*TxOutput, int64, error) {
 
+	return p.selectUtxosForFeeV3WithHeight(utxoMgr, excludedUtxoMap,
+		feeValue, feeRate, weightEstimate, excludeRecentBlock, inChannel, 0)
+}
+
+func (p *Manager) selectUtxosForFeeV3WithHeight(
+	utxoMgr *UtxoMgr, excludedUtxoMap map[string]bool,
+	feeValue int64, feeRate int64,
+	weightEstimate *utils.TxWeightEstimator,
+	excludeRecentBlock, inChannel bool,
+	maxConfirmedInputHeight int) ([]*TxOutput, int64, error) {
+
 	fee0 := weightEstimate.Fee(feeRate)
 	localFeeValue := feeValue
 	requiredFee := fee0 - localFeeValue
@@ -2722,6 +2792,9 @@ func (p *Manager) SelectUtxosForFeeV3(
 			if p.IsRecentBlockUtxo(out.UtxoId) {
 				continue
 			}
+		}
+		if p.confirmedUtxoAfterHeight(out.UtxoId, maxConfirmedInputHeight) {
+			continue
 		}
 		if out.Value == 330 {
 			continue
@@ -2761,6 +2834,9 @@ func (p *Manager) SelectUtxosForFeeV3(
 			if p.IsRecentBlockUtxo(out.UtxoId) {
 				continue
 			}
+		}
+		if p.confirmedUtxoAfterHeight(out.UtxoId, maxConfirmedInputHeight) {
+			continue
 		}
 		output := OutputInfoToOutput(out)
 		feeValue += out.Value
@@ -3128,6 +3204,14 @@ func (p *Manager) SelectUtxosForFeeV2_SatsNet(address string, excludedUtxoMap ma
 func (p *Manager) BuildSendOrdxTxWithStub(srcAddress string, excluded map[string]bool, destAddr string, assetName *AssetName,
 	amt int64, stub string, feeRate int64, memo []byte, excludeRecentBlock, inChannel bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
+	return p.buildSendOrdxTxWithStubWithHeight(srcAddress, excluded, destAddr, assetName,
+		amt, stub, feeRate, memo, excludeRecentBlock, inChannel, 0)
+}
+
+func (p *Manager) buildSendOrdxTxWithStubWithHeight(srcAddress string, excluded map[string]bool, destAddr string, assetName *AssetName,
+	amt int64, stub string, feeRate int64, memo []byte, excludeRecentBlock, inChannel bool,
+	maxConfirmedInputHeight int) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+
 	destPkScript, err := GetPkScriptFromAddress(destAddr)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("GetPkScriptFromAddress %s failed. %v", destAddr, err)
@@ -3171,6 +3255,9 @@ func (p *Manager) BuildSendOrdxTxWithStub(srcAddress string, excluded map[string
 			if p.IsRecentBlockUtxo(u.UtxoId) {
 				continue
 			}
+		}
+		if p.confirmedUtxoAfterHeight(u.UtxoId, maxConfirmedInputHeight) {
+			continue
 		}
 		if _, ok := excluded[u.OutPoint]; ok {
 			continue
@@ -3280,8 +3367,8 @@ func (p *Manager) BuildSendOrdxTxWithStub(srcAddress string, excluded map[string
 	if feeValue < fee0 {
 		// 增加fee
 		var selected []*TxOutput
-		selected, feeValue, err = p.SelectUtxosForFee(srcAddress, excluded, feeValue,
-			feeRate, &weightEstimate, excludeRecentBlock, inChannel)
+		selected, feeValue, err = p.selectUtxosForFeeV3WithHeight(NewUtxoMgr(srcAddress, p.l1IndexerClient), excluded, feeValue,
+			feeRate, &weightEstimate, excludeRecentBlock, inChannel, maxConfirmedInputHeight)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -3322,6 +3409,13 @@ func (p *Manager) BuildSendOrdxTxWithStub(srcAddress string, excluded map[string
 
 func (p *Manager) BuildSendOrdxTxWithStubFromAddress(localWallet common.Wallet, srcAddress string, destAddr string, assetName *AssetName,
 	amt int64, stub string, feeRate int64, memo []byte, inChannel, excludeRecentBlock bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+	return p.buildSendOrdxTxWithStubFromAddressWithHeight(localWallet, srcAddress, destAddr, assetName,
+		amt, stub, feeRate, memo, inChannel, excludeRecentBlock, 0)
+}
+
+func (p *Manager) buildSendOrdxTxWithStubFromAddressWithHeight(localWallet common.Wallet, srcAddress string, destAddr string, assetName *AssetName,
+	amt int64, stub string, feeRate int64, memo []byte, inChannel, excludeRecentBlock bool,
+	maxConfirmedInputHeight int) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 	if localWallet == nil {
 		localWallet = p.wallet
 	}
@@ -3338,7 +3432,7 @@ func (p *Manager) BuildSendOrdxTxWithStubFromAddress(localWallet common.Wallet, 
 		}
 	}
 
-	return p.BuildSendOrdxTxWithStub(srcAddress, excluded, destAddr, assetName, amt, stub, feeRate, memo, excludeRecentBlock, inChannel)
+	return p.buildSendOrdxTxWithStubWithHeight(srcAddress, excluded, destAddr, assetName, amt, stub, feeRate, memo, excludeRecentBlock, inChannel, maxConfirmedInputHeight)
 }
 
 func (p *Manager) batchSendSourceContext(localWallet common.Wallet, srcAddress string, inChannel bool) (common.Wallet, map[string]bool) {
@@ -3366,38 +3460,66 @@ func (p *Manager) batchSendSourceContext(localWallet common.Wallet, srcAddress s
 
 func (p *Manager) BuildBatchSendTxV3BTCFromAddress(srcAddress string, dest []*SendAssetInfo,
 	feeRate int64, memo []byte, inChannel, excludeRecentBlock bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+	return p.buildBatchSendTxWithAddressHeight_btc(srcAddress, dest, feeRate, memo,
+		inChannel, excludeRecentBlock, 0)
+}
+
+func (p *Manager) buildBatchSendTxWithAddressHeight_btc(srcAddress string, dest []*SendAssetInfo,
+	feeRate int64, memo []byte, inChannel, excludeRecentBlock bool,
+	maxConfirmedInputHeight int) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 	_, excluded := p.batchSendSourceContext(nil, srcAddress, inChannel)
 	if srcAddress == "" && p.wallet != nil {
 		srcAddress = p.wallet.GetAddress()
 	}
-	return p.BuildBatchSendTxV3_btc(srcAddress, excluded, dest, feeRate, memo, excludeRecentBlock, inChannel, false)
+	return p.buildBatchSendTxWithHeight_btc(srcAddress, excluded, dest, feeRate, memo, excludeRecentBlock, inChannel, false, maxConfirmedInputHeight)
 }
 
 func (p *Manager) BuildBatchSendTxV3OrdxFromAddress(localWallet common.Wallet, srcAddress string, dest []*SendAssetInfo,
 	assetName *AssetName, feeRate int64, memo []byte, inChannel, excludeRecentBlock, payFeeByLocalAddress bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+	return p.buildBatchSendTxWithAddressHeight_ordx(localWallet, srcAddress, dest, assetName,
+		feeRate, memo, inChannel, excludeRecentBlock, payFeeByLocalAddress, 0)
+}
+
+func (p *Manager) buildBatchSendTxWithAddressHeight_ordx(localWallet common.Wallet, srcAddress string, dest []*SendAssetInfo,
+	assetName *AssetName, feeRate int64, memo []byte, inChannel, excludeRecentBlock, payFeeByLocalAddress bool,
+	maxConfirmedInputHeight int) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 	localWallet, excluded := p.batchSendSourceContext(localWallet, srcAddress, inChannel)
 	if srcAddress == "" && localWallet != nil {
 		srcAddress = localWallet.GetAddress()
 	}
-	return p.BuildBatchSendTxV3_ordx(srcAddress, excluded, dest, assetName, feeRate, memo, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress)
+	return p.buildBatchSendTxWithHeight_ordx(srcAddress, excluded, dest, assetName, feeRate, memo, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress, maxConfirmedInputHeight)
 }
 
 func (p *Manager) BuildBatchSendTxV3RunesFromAddress(localWallet common.Wallet, srcAddress string, dest []*SendAssetInfo,
 	assetName *AssetName, feeRate int64, inChannel, excludeRecentBlock, payFeeByLocalAddress bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+	return p.buildBatchSendTxWithAddressHeight_runes(localWallet, srcAddress, dest, assetName,
+		feeRate, inChannel, excludeRecentBlock, payFeeByLocalAddress, 0)
+}
+
+func (p *Manager) buildBatchSendTxWithAddressHeight_runes(localWallet common.Wallet, srcAddress string, dest []*SendAssetInfo,
+	assetName *AssetName, feeRate int64, inChannel, excludeRecentBlock, payFeeByLocalAddress bool,
+	maxConfirmedInputHeight int) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 	localWallet, excluded := p.batchSendSourceContext(localWallet, srcAddress, inChannel)
 	if srcAddress == "" && localWallet != nil {
 		srcAddress = localWallet.GetAddress()
 	}
-	return p.BuildBatchSendTxV3_runes(srcAddress, excluded, dest, assetName, feeRate, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress)
+	return p.buildBatchSendTxWithHeight_runes(srcAddress, excluded, dest, assetName, feeRate, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress, maxConfirmedInputHeight)
 }
 
 func (p *Manager) BuildBatchSendTxV3BRC20FromAddress(localWallet common.Wallet, srcAddress string, dest []*SendAssetInfo,
 	assetName *AssetName, feeRate int64, memo []byte, inChannel, excludeRecentBlock, payFeeByLocalAddress bool) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, []*InscribeResv, error) {
+	return p.buildBatchSendTxWithAddressHeight_brc20(localWallet, srcAddress, dest, assetName,
+		feeRate, memo, inChannel, excludeRecentBlock, payFeeByLocalAddress, 0)
+}
+
+func (p *Manager) buildBatchSendTxWithAddressHeight_brc20(localWallet common.Wallet, srcAddress string, dest []*SendAssetInfo,
+	assetName *AssetName, feeRate int64, memo []byte, inChannel, excludeRecentBlock, payFeeByLocalAddress bool,
+	maxConfirmedInputHeight int) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, []*InscribeResv, error) {
 	localWallet, excluded := p.batchSendSourceContext(localWallet, srcAddress, inChannel)
 	if srcAddress == "" && localWallet != nil {
 		srcAddress = localWallet.GetAddress()
 	}
-	return p.BuildBatchSendTxV3_brc20(srcAddress, excluded, dest, assetName, feeRate, memo, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress)
+	return p.buildBatchSendTxWithHeight_brc20(srcAddress, excluded, dest, assetName, feeRate, memo, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress, maxConfirmedInputHeight)
 }
 
 // 构建tx，发送给多个地址不同数量的资产。对于ordx资产，允许插桩，但这种情况下只允许一个地址
@@ -3509,6 +3631,16 @@ func (p *Manager) BuildBatchSendTxV3_btc(srcAddress string, excluded map[string]
 	feeRate int64, memo []byte, excludeRecentBlock, inChannel, autoAdjust bool,
 ) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
+	return p.buildBatchSendTxWithHeight_btc(srcAddress, excluded, dest, feeRate,
+		memo, excludeRecentBlock, inChannel, autoAdjust, 0)
+}
+
+func (p *Manager) buildBatchSendTxWithHeight_btc(srcAddress string, excluded map[string]bool,
+	dest []*SendAssetInfo,
+	feeRate int64, memo []byte, excludeRecentBlock, inChannel, autoAdjust bool,
+	maxConfirmedInputHeight int,
+) (*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+
 	tx := wire.NewMsgTx(wire.TxVersion)
 	var requiredValue int64
 	var weightEstimate utils.TxWeightEstimator
@@ -3540,8 +3672,8 @@ func (p *Manager) BuildBatchSendTxV3_btc(srcAddress string, excluded map[string]
 	}
 
 	prevFetcher, changePkScript, outputValue, changeOutput, fee0, err :=
-		p.SelectUtxosForPlainSats(srcAddress, excluded, requiredValue, feeRate,
-			tx, &weightEstimate, excludeRecentBlock, inChannel, autoAdjust)
+		p.selectUtxosForPlainSatsWithHeight(srcAddress, excluded, requiredValue, feeRate,
+			tx, &weightEstimate, excludeRecentBlock, inChannel, autoAdjust, maxConfirmedInputHeight)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -3591,13 +3723,24 @@ func (p *Manager) buildBatchSendTxV3_fee(
 	tx *wire.MsgTx, weightEstimate *utils.TxWeightEstimator, prevFetcher *txscript.MultiPrevOutFetcher,
 	feeValue, feeRate int64, changePkScript []byte) (int64, error) {
 
+	return p.buildBatchSendTxV3FeeWithHeight(utxoMgr, excluded,
+		excludeRecentBlock, inChannel, tx, weightEstimate, prevFetcher,
+		feeValue, feeRate, changePkScript, 0)
+}
+
+func (p *Manager) buildBatchSendTxV3FeeWithHeight(
+	utxoMgr *UtxoMgr, excluded map[string]bool,
+	excludeRecentBlock, inChannel bool,
+	tx *wire.MsgTx, weightEstimate *utils.TxWeightEstimator, prevFetcher *txscript.MultiPrevOutFetcher,
+	feeValue, feeRate int64, changePkScript []byte, maxConfirmedInputHeight int) (int64, error) {
+
 	fee0 := weightEstimate.Fee(feeRate)
 	if feeValue < fee0 {
 		// 增加fee
 		var err error
 		var selected []*TxOutput
-		selected, feeValue, err = p.SelectUtxosForFeeV3(utxoMgr, excluded, feeValue,
-			feeRate, weightEstimate, excludeRecentBlock, inChannel)
+		selected, feeValue, err = p.selectUtxosForFeeV3WithHeight(utxoMgr, excluded, feeValue,
+			feeRate, weightEstimate, excludeRecentBlock, inChannel, maxConfirmedInputHeight)
 		if err != nil {
 			return 0, err
 		}
@@ -3646,6 +3789,16 @@ func (p *Manager) BuildBatchSendTxV3_ordx(srcAddress string, excluded map[string
 	dest []*SendAssetInfo, assetName *AssetName,
 	feeRate int64, memo []byte, excludeRecentBlock, inChannel bool,
 	localWallet common.Wallet, payFeeByLocalAddress bool) (
+	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+
+	return p.buildBatchSendTxWithHeight_ordx(srcAddress, excluded, dest, assetName,
+		feeRate, memo, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress, 0)
+}
+
+func (p *Manager) buildBatchSendTxWithHeight_ordx(srcAddress string, excluded map[string]bool,
+	dest []*SendAssetInfo, assetName *AssetName,
+	feeRate int64, memo []byte, excludeRecentBlock, inChannel bool,
+	localWallet common.Wallet, payFeeByLocalAddress bool, maxConfirmedInputHeight int) (
 	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
 	if localWallet == nil {
@@ -3719,8 +3872,8 @@ func (p *Manager) BuildBatchSendTxV3_ordx(srcAddress string, excluded map[string
 			stubFee = fee
 		}
 
-		tx, prevFetch, fee, err := p.BuildSendOrdxTxWithStub(srcAddress, excluded, dest[0].Address, assetName,
-			dest[0].AssetAmt.Int64(), stubs[0], feeRate, memo, excludeRecentBlock, inChannel)
+		tx, prevFetch, fee, err := p.buildSendOrdxTxWithStubWithHeight(srcAddress, excluded, dest[0].Address, assetName,
+			dest[0].AssetAmt.Int64(), stubs[0], feeRate, memo, excludeRecentBlock, inChannel, maxConfirmedInputHeight)
 		if err != nil {
 			return nil, nil, stubFee, err
 		}
@@ -3728,8 +3881,8 @@ func (p *Manager) BuildBatchSendTxV3_ordx(srcAddress string, excluded map[string
 	}
 
 	var weightEstimate utils.TxWeightEstimator
-	selected, totalAsset, total, err := p.SelectUtxosForAsset(srcAddress, excluded,
-		&assetName.AssetName, requiredAmt, &weightEstimate, excludeRecentBlock, inChannel)
+	selected, totalAsset, total, err := p.selectUtxosForAssetWithHeight(srcAddress, excluded,
+		&assetName.AssetName, requiredAmt, &weightEstimate, excludeRecentBlock, inChannel, maxConfirmedInputHeight)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -3832,9 +3985,9 @@ func (p *Manager) BuildBatchSendTxV3_ordx(srcAddress string, excluded map[string
 		utxoMgr = NewUtxoMgr(srcAddress, p.l1IndexerClient)
 	}
 	feeValue += total - totalOutputSats
-	fee, err := p.buildBatchSendTxV3_fee(utxoMgr, excluded,
+	fee, err := p.buildBatchSendTxV3FeeWithHeight(utxoMgr, excluded,
 		excludeRecentBlock, feeInChannel, tx, &weightEstimate, prevFetcher,
-		feeValue, feeRate, feeChangePkScript)
+		feeValue, feeRate, feeChangePkScript, maxConfirmedInputHeight)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -3855,6 +4008,16 @@ func (p *Manager) BuildBatchSendTxV3_runes(srcAddress string, excluded map[strin
 	dest []*SendAssetInfo, assetName *AssetName,
 	feeRate int64, excludeRecentBlock, inChannel bool,
 	localWallet common.Wallet, payFeeByLocalAddress bool) (
+	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
+
+	return p.buildBatchSendTxWithHeight_runes(srcAddress, excluded, dest, assetName,
+		feeRate, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress, 0)
+}
+
+func (p *Manager) buildBatchSendTxWithHeight_runes(srcAddress string, excluded map[string]bool,
+	dest []*SendAssetInfo, assetName *AssetName,
+	feeRate int64, excludeRecentBlock, inChannel bool,
+	localWallet common.Wallet, payFeeByLocalAddress bool, maxConfirmedInputHeight int) (
 	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, error) {
 
 	var requiredValue int64
@@ -3880,8 +4043,8 @@ func (p *Manager) BuildBatchSendTxV3_runes(srcAddress string, excluded map[strin
 	}
 
 	var weightEstimate utils.TxWeightEstimator
-	selected, totalAsset, total, err := p.SelectUtxosForAsset(srcAddress, excluded,
-		&assetName.AssetName, requiredAmt, &weightEstimate, excludeRecentBlock, inChannel)
+	selected, totalAsset, total, err := p.selectUtxosForAssetWithHeight(srcAddress, excluded,
+		&assetName.AssetName, requiredAmt, &weightEstimate, excludeRecentBlock, inChannel, maxConfirmedInputHeight)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -3968,9 +4131,9 @@ func (p *Manager) BuildBatchSendTxV3_runes(srcAddress string, excluded map[strin
 		utxoMgr = NewUtxoMgr(srcAddress, p.l1IndexerClient)
 	}
 	feeValue := total - totalOutputSats
-	fee, err := p.buildBatchSendTxV3_fee(utxoMgr, excluded,
+	fee, err := p.buildBatchSendTxV3FeeWithHeight(utxoMgr, excluded,
 		excludeRecentBlock, feeInChannel, tx, &weightEstimate, prevFetcher,
-		feeValue, feeRate, feeChangePkScript)
+		feeValue, feeRate, feeChangePkScript, maxConfirmedInputHeight)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -3991,6 +4154,16 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 	dest []*SendAssetInfo, assetName *AssetName,
 	feeRate int64, memo []byte, excludeRecentBlock, inChannel bool,
 	localWallet common.Wallet, payFeeByLocalAddress bool) (
+	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, []*InscribeResv, error) {
+
+	return p.buildBatchSendTxWithHeight_brc20(srcAddress, excludedUtxoMap, dest, assetName,
+		feeRate, memo, excludeRecentBlock, inChannel, localWallet, payFeeByLocalAddress, 0)
+}
+
+func (p *Manager) buildBatchSendTxWithHeight_brc20(srcAddress string, excludedUtxoMap map[string]bool,
+	dest []*SendAssetInfo, assetName *AssetName,
+	feeRate int64, memo []byte, excludeRecentBlock, inChannel bool,
+	localWallet common.Wallet, payFeeByLocalAddress bool, maxConfirmedInputHeight int) (
 	*wire.MsgTx, *txscript.MultiPrevOutFetcher, int64, []*InscribeResv, error) {
 	// 注意：
 	// 1. 不要提前铸造任何brc20的transfer nft
@@ -4053,8 +4226,8 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 
 		requiredAmt := d.AssetAmt
 
-		selected, inscribe, total, err := p.SelectUtxosForBRC20(utxoMgr, excludedUtxoMap, feeutxoMgr, feeexcludedUtxoMap,
-			&assetName.AssetName, totalAmt, requiredAmt, feeRate, &weightEstimate, excludeRecentBlock, inChannel)
+		selected, inscribe, total, err := p.selectUtxosForBRC20WithHeight(utxoMgr, excludedUtxoMap, feeutxoMgr, feeexcludedUtxoMap,
+			&assetName.AssetName, totalAmt, requiredAmt, feeRate, &weightEstimate, excludeRecentBlock, inChannel, maxConfirmedInputHeight)
 		if err != nil {
 			return nil, nil, 0, nil, err
 		}
@@ -4110,13 +4283,13 @@ func (p *Manager) BuildBatchSendTxV3_brc20(srcAddress string, excludedUtxoMap ma
 		if err != nil {
 			return nil, nil, 0, nil, err
 		}
-		fee, err = p.buildBatchSendTxV3_fee(feeutxoMgr, feeexcludedUtxoMap,
+		fee, err = p.buildBatchSendTxV3FeeWithHeight(feeutxoMgr, feeexcludedUtxoMap,
 			excludeRecentBlock, false, tx, &weightEstimate, prevFetcher,
-			feeValue, feeRate, feeChangePkScript)
+			feeValue, feeRate, feeChangePkScript, maxConfirmedInputHeight)
 	} else {
-		fee, err = p.buildBatchSendTxV3_fee(utxoMgr, excludedUtxoMap,
+		fee, err = p.buildBatchSendTxV3FeeWithHeight(utxoMgr, excludedUtxoMap,
 			excludeRecentBlock, inChannel, tx, &weightEstimate, prevFetcher,
-			feeValue, feeRate, changePkScript)
+			feeValue, feeRate, changePkScript, maxConfirmedInputHeight)
 	}
 
 	if err != nil {

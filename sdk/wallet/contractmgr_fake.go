@@ -74,10 +74,20 @@ func (p *Manager) CoBatchSendV3(localWallet common.Wallet, dest []*SendAssetInfo
 	sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress bool) (string, int64, error) {
 	return p.coBatchSendV3(localWallet, dest, assetNameStr, feeRate, reason, contractURL, invokeCount, memo, static, runtime, sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress)
 }
+func (p *Manager) CoBatchSendV3_Height(localWallet common.Wallet, dest []*SendAssetInfo, assetNameStr string, feeRate int64,
+	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
+	sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress bool, maxConfirmedInputHeight int) (string, int64, error) {
+	return p.coBatchSendV3Height(localWallet, dest, assetNameStr, feeRate, reason, contractURL, invokeCount, memo, static, runtime, sendDeAnchorTx, excludeRecentBlock, payFeeByCurrentAddress, maxConfirmedInputHeight)
+}
 func (p *Manager) CoSendOrdxWithStub(localWallet common.Wallet, dest string, assetNameStr string, amt int64, feeRate int64, stub string,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
 	sendDeAnchorTx, excludeRecentBlock bool) (string, int64, error) {
 	return p.coSendOrdxWithStub(localWallet, dest, assetNameStr, amt, feeRate, stub, reason, contractURL, invokeCount, memo, static, runtime, sendDeAnchorTx, excludeRecentBlock)
+}
+func (p *Manager) CoSendOrdxWithStub_Height(localWallet common.Wallet, dest string, assetNameStr string, amt int64, feeRate int64, stub string,
+	reason, contractURL string, invokeCount int64, memo, static, runtime []byte,
+	sendDeAnchorTx, excludeRecentBlock bool, maxConfirmedInputHeight int) (string, int64, error) {
+	return p.coSendOrdxWithStubHeight(localWallet, dest, assetNameStr, amt, feeRate, stub, reason, contractURL, invokeCount, memo, static, runtime, sendDeAnchorTx, excludeRecentBlock, maxConfirmedInputHeight)
 }
 func (p *Manager) CoBatchSendV2_SatsNet(localWallet common.Wallet, dest []*SendAssetInfo, assetName string,
 	reason, contractURL string, invokeCount int64, memo, static, runtime []byte) (string, error) {
