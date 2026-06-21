@@ -26,7 +26,10 @@ func GetChainParam_SatsNet() *chaincfg.Params {
 }
 
 func VerifySignedTx_SatsNet(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) error {
+	return VerifySignedTxSatsNetAllowBurn(tx, prevFetcher, nil)
+}
 
+func VerifySignedTxSatsNetAllowBurn(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher, allowedBurn wire.TxAssets) error {
 	utxomap := make(map[string]bool)
 	inValue := int64(0)
 	var inAssets wire.TxAssets
@@ -90,7 +93,13 @@ func VerifySignedTx_SatsNet(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetch
 		}
 
 		if len(inAssets) > 0 {
-			return fmt.Errorf("some assets spent to miner")
+			if len(allowedBurn) == 0 {
+				return fmt.Errorf("some assets spent to miner")
+			}
+			allowed := allowedBurn.Clone()
+			if err := (&allowed).Split(inAssets); err != nil {
+				return fmt.Errorf("some assets spent to miner: %w", err)
+			}
 		}
 	}
 

@@ -7,6 +7,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
@@ -69,9 +70,29 @@ func (p *Manager) SignTx_SatsNet(tx *swire.MsgTx,
 	return SignTxWithWallet_SatsNet(p.wallet, tx, prevFetcher)
 }
 
+func (p *Manager) SignContractTx_SatsNet(tx *swire.MsgTx,
+	prevFetcher stxscript.PrevOutputFetcher, gasAssetName string, gasFeeAmount int64) (*swire.MsgTx, error) {
+	var allowedBurn swire.TxAssets
+	if gasFeeAmount > 0 {
+		gasName := swire.NewAssetNameFromString(gasAssetName)
+		if gasName == nil {
+			return nil, fmt.Errorf("invalid gas asset %s", gasAssetName)
+		}
+		allowedBurn = swire.TxAssets{{
+			Name:   *gasName,
+			Amount: *indexer.NewDefaultDecimal(gasFeeAmount),
+		}}
+	}
+	return SignTxWithWalletAllowAssetBurn_SatsNet(p.wallet, tx, prevFetcher, allowedBurn)
+}
+
 func SignTxWithWallet_SatsNet(localWallet common.Wallet, tx *swire.MsgTx,
 	prevFetcher stxscript.PrevOutputFetcher) (*swire.MsgTx, error) {
+	return SignTxWithWalletAllowAssetBurn_SatsNet(localWallet, tx, prevFetcher, nil)
+}
 
+func SignTxWithWalletAllowAssetBurn_SatsNet(localWallet common.Wallet, tx *swire.MsgTx,
+	prevFetcher stxscript.PrevOutputFetcher, allowedBurn swire.TxAssets) (*swire.MsgTx, error) {
 	packet, err := CreatePsbt_SatsNet(tx, prevFetcher, nil)
 	if err != nil {
 		Log.Errorf("wallet.CreatePsbt failed, %v", err)
@@ -97,7 +118,7 @@ func SignTxWithWallet_SatsNet(localWallet common.Wallet, tx *swire.MsgTx,
 		return nil, err
 	}
 
-	err = VerifySignedTx_SatsNet(finalTx, prevFetcher)
+	err = VerifySignedTxSatsNetAllowBurn(finalTx, prevFetcher, allowedBurn)
 	if err != nil {
 		clearPsbtSigningData_SatsNet(packet)
 		return nil, err

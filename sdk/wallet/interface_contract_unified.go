@@ -704,7 +704,7 @@ func (p *Manager) deployAgentContract(req *ContractDeployRequest) (*ContractTxRe
 	if err != nil {
 		return nil, err
 	}
-	signedTx, err := p.SignTx_SatsNet(tx, prevFetcher)
+	signedTx, err := p.SignContractTx_SatsNet(tx, prevFetcher, gasAsset, deployBaseFee)
 	if err != nil {
 		return nil, err
 	}
@@ -790,7 +790,7 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 	if err != nil {
 		return nil, err
 	}
-	signedTx, err := p.SignTx_SatsNet(tx, prevFetcher)
+	signedTx, err := p.SignContractTx_SatsNet(tx, prevFetcher, gasAsset, gasAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -873,7 +873,7 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 	if err != nil {
 		return nil, err
 	}
-	signedTx, err := p.SignTx_SatsNet(tx, prevFetcher)
+	signedTx, err := p.SignContractTx_SatsNet(tx, prevFetcher, gasAsset, gasBaseFee)
 	if err != nil {
 		return nil, err
 	}
@@ -960,7 +960,7 @@ func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractT
 	if err != nil {
 		return nil, err
 	}
-	signedTx, err := p.SignTx_SatsNet(tx, prevFetcher)
+	signedTx, err := p.SignContractTx_SatsNet(tx, prevFetcher, gasAsset, gasBaseFee)
 	if err != nil {
 		return nil, err
 	}
@@ -1283,7 +1283,7 @@ func (p *Manager) deployEVMContract(req *ContractDeployRequest) (*ContractTxResu
 	if err != nil {
 		return nil, err
 	}
-	signedTx, err := p.SignTx_SatsNet(tx, prevFetcher)
+	signedTx, err := p.SignContractTx_SatsNet(tx, prevFetcher, GetGasAssetName(), estimate.GasFeeAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -1356,7 +1356,7 @@ func (p *Manager) invokeEVMContract(req *ContractInvokeRequest) (*ContractTxResu
 	if err != nil {
 		return nil, err
 	}
-	signedTx, err := p.SignTx_SatsNet(tx, prevFetcher)
+	signedTx, err := p.SignContractTx_SatsNet(tx, prevFetcher, gasAsset, gasBaseFee)
 	if err != nil {
 		return nil, err
 	}
@@ -1397,6 +1397,7 @@ func (p *Manager) invokeDefaultContract(contractType, contractAddress string, va
 	var fundingGasAmount int64
 	var gasAmount int64
 	var gasBaseFee int64
+	var gasAsset string
 	if contractType == ContractTypeEVM {
 		if gasOverride != 0 {
 			return nil, fmt.Errorf("gas override is not supported for EVM default invoke")
@@ -1406,7 +1407,6 @@ func (p *Manager) invokeDefaultContract(contractType, contractAddress string, va
 			return nil, err
 		}
 	} else {
-		var gasAsset string
 		fundingGasAmount, gasAsset, err = p.evmGasAssetAmount(gasLimit, false, gasOverride)
 		if err != nil {
 			return nil, err
@@ -1437,7 +1437,7 @@ func (p *Manager) invokeDefaultContract(contractType, contractAddress string, va
 	for _, change := range changeOutputs {
 		tx.AddTxOut(change)
 	}
-	signedTx, err := p.SignTx_SatsNet(tx, prevFetcher)
+	signedTx, err := p.SignContractTx_SatsNet(tx, prevFetcher, gasAsset, gasBaseFee)
 	if err != nil {
 		return nil, err
 	}
