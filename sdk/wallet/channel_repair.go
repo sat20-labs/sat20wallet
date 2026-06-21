@@ -72,12 +72,17 @@ func (p *ChannelInDB) RemoveManagedL1Utxos(stale map[string]bool) []string {
 		}
 		removed = append(removed, r...)
 	}
+	toDelete := make([]string, 0)
 	for utxo := range p.PendingUtxos {
 		if stale[utxo] {
 			removed = append(removed, utxo)
-			delete(p.PendingUtxos, utxo)
+			toDelete = append(toDelete, utxo)
 		}
 	}
+	for _, utxo := range toDelete {
+		delete(p.PendingUtxos, utxo)
+	}
+	
 	sort.Strings(removed)
 	return removed
 }

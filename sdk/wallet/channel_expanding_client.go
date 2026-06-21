@@ -130,27 +130,6 @@ func isPeerChannelPendingError(err error) bool {
 	return strings.Contains(msg, "can't find channel") || strings.Contains(msg, "is not ready")
 }
 
-func (p *Manager) sendSplicingInReqWithRetry(channel *Channel, resv *SplicingReservation) error {
-	var err error
-	attempts := 12
-	delay := time.Second
-	if ENABLE_TESTING {
-		attempts = 20
-		delay = 100 * time.Millisecond
-	}
-	for i := 0; i < attempts; i++ {
-		err = channel.PeerRPC.SendSplicingInReq(resv)
-		if err == nil {
-			return nil
-		}
-		if !isPeerChannelPendingError(err) {
-			return err
-		}
-		time.Sleep(delay)
-	}
-	return err
-}
-
 func (p *Manager) getAllUnmanagedUtxos(channel *Channel, assetName *swire.AssetName) ([]string, error) {
 	var utxomap []*indexerwire.TxOutputInfo
 	if assetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
@@ -361,7 +340,7 @@ func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.
 			err = fmt.Errorf("peer rpc is not initialized")
 			break
 		}
-		err = p.sendSplicingInReqWithRetry(channel, &resv)
+		err = channel.PeerRPC.SendSplicingInReq(&resv)
 		if err != nil {
 			Log.Errorf("SendSplicingInReq failed. %v", err)
 			break

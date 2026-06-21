@@ -240,8 +240,8 @@ func (p *UtxoLocker) IsLocked(utxo string) bool {
 }
 
 func (p *UtxoLocker) GetLockedUtxoList() map[string]*LockedUtxo {
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 
 	p.reload()
 	result := make(map[string]*LockedUtxo)
