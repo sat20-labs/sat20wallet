@@ -107,11 +107,8 @@ func (p *Manager) signAndVerifyCommitTx(channel *Channel, prevSignedTx []*wire.M
 
 	// 验证完成后移除对端签名，避免本地持久化或导出完整 commitment tx 后被
 	// 误广播，也避免把对端签名暴露给不该拥有完整交易的一侧。
-	err = CleanPeerSig(channel.RedeemScript, channel.GetLocalPubKey().SerializeCompressed(),
+	CleanPeerSig(channel.RedeemScript, channel.GetLocalPubKey().SerializeCompressed(),
 		channel.GetRemotePubKey().SerializeCompressed(), tx, prevFetcher)
-	if err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -228,11 +225,8 @@ func (p *Manager) SignAndVerifyCommitTxV2(channel *Channel, checkAcceptance bool
 
 	// V2 路径同样只保留本地可控的半签名状态，避免完整 commitment tx 在本地
 	// 数据库中长期存在。
-	err = CleanPeerSig(channel.RedeemScript, channel.GetLocalPubKey().SerializeCompressed(),
+	CleanPeerSig(channel.RedeemScript, channel.GetLocalPubKey().SerializeCompressed(),
 		channel.GetRemotePubKey().SerializeCompressed(), tx, prevFetcher)
-	if err != nil {
-		return err
-	}
 
 	return nil
 }

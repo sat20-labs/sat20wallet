@@ -33,17 +33,20 @@ func SignTxWithWallet(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txs
 	err = psbt.MaybeFinalizeAll(packet)
 	if err != nil {
 		Log.Errorf("MaybeFinalizeAll failed, %v", err)
+		clearPsbtSigningData(packet)
 		return nil, err
 	}
 
 	finalTx, err := psbt.Extract(packet)
 	if err != nil {
 		Log.Errorf("Extract failed, %v", err)
+		clearPsbtSigningData(packet)
 		return nil, err
 	}
 
 	err = VerifySignedTx(finalTx, prevFetcher)
 	if err != nil {
+		clearPsbtSigningData(packet)
 		return nil, err
 	}
 
@@ -83,21 +86,80 @@ func SignTxWithWallet_SatsNet(localWallet common.Wallet, tx *swire.MsgTx,
 	err = spsbt.MaybeFinalizeAll(packet)
 	if err != nil {
 		Log.Errorf("MaybeFinalizeAll failed, %v", err)
+		clearPsbtSigningData_SatsNet(packet)
 		return nil, err
 	}
 
 	finalTx, err := spsbt.Extract(packet)
 	if err != nil {
 		Log.Errorf("Extract failed, %v", err)
+		clearPsbtSigningData_SatsNet(packet)
 		return nil, err
 	}
 
 	err = VerifySignedTx_SatsNet(finalTx, prevFetcher)
 	if err != nil {
+		clearPsbtSigningData_SatsNet(packet)
 		return nil, err
 	}
 
 	return finalTx, nil
+}
+
+func clearPsbtSigningData(packet *psbt.Packet) {
+	for i := range packet.Inputs {
+		input := &packet.Inputs[i]
+		for _, sig := range input.PartialSigs {
+			if sig != nil {
+				clearBytes(sig.Signature)
+			}
+		}
+		for _, sig := range input.TaprootScriptSpendSig {
+			if sig != nil {
+				clearBytes(sig.Signature)
+			}
+		}
+		clearBytes(input.TaprootKeySpendSig)
+		clearBytes(input.FinalScriptSig)
+		clearBytes(input.FinalScriptWitness)
+
+		input.PartialSigs = nil
+		input.TaprootKeySpendSig = nil
+		input.TaprootScriptSpendSig = nil
+		input.FinalScriptSig = nil
+		input.FinalScriptWitness = nil
+	}
+}
+
+func clearPsbtSigningData_SatsNet(packet *spsbt.Packet) {
+	for i := range packet.Inputs {
+		input := &packet.Inputs[i]
+		for _, sig := range input.PartialSigs {
+			if sig != nil {
+				clearBytes(sig.Signature)
+			}
+		}
+		for _, sig := range input.TaprootScriptSpendSig {
+			if sig != nil {
+				clearBytes(sig.Signature)
+			}
+		}
+		clearBytes(input.TaprootKeySpendSig)
+		clearBytes(input.FinalScriptSig)
+		clearBytes(input.FinalScriptWitness)
+
+		input.PartialSigs = nil
+		input.TaprootKeySpendSig = nil
+		input.TaprootScriptSpendSig = nil
+		input.FinalScriptSig = nil
+		input.FinalScriptWitness = nil
+	}
+}
+
+func clearBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 func (p *Manager) SignAndVerifyFundingTx(fundingTx *wire.MsgTx,
