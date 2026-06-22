@@ -71,7 +71,11 @@
       "satoshiNetNetwork": "SatoshiNet {network}",
       "currentWallet": "Current wallet",
       "smartContractSystem": "Smart contract system",
+      "smartContractGas": "Smart contract GAS",
       "contractFunding": "Contract funding asset",
+      "gasFeeAmount": "Gas fee",
+      "gasFundAmount": "Gas fund",
+      "fundingAsset": "Funding asset",
       "calculatedByWallet": "Calculated when the wallet builds the transaction",
       "deploymentTerms": "Defined by deployment terms",
       "purposes": {

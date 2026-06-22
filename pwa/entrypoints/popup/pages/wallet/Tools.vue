@@ -911,6 +911,9 @@ const l1NetworkLabel = () => t('tools.txConfirm.bitcoinNetwork', { network: netw
 const l2NetworkLabel = () => t('tools.txConfirm.satoshiNetNetwork', { network: network.value || 'testnet' })
 const currentWalletAddress = () => walletStore.address || t('tools.txConfirm.currentWallet')
 const calculatedAmountLabel = () => t('tools.txConfirm.calculatedByWallet')
+const contractFundingAssets = (req: Record<string, unknown>) => (
+  Array.isArray(req.Assets) ? req.Assets as Record<string, unknown>[] : []
+)
 
 const showError = (title: string, error: unknown) => {
   toast({
@@ -2332,16 +2335,26 @@ const deploySmartContract = async () => {
     } else {
       throw new Error(t('tools.errors.evmDisabled'))
     }
+    const [estimateErr, estimate] = await sat20.estimateDeployUnifiedContract(req)
+    if (estimateErr) throw estimateErr
+    const fundingAssets = contractFundingAssets(req)
     const confirmed = await confirmToolTransaction({
       purpose: t('tools.txConfirm.purposes.deploySmartContract'),
       to: t('tools.txConfirm.smartContractSystem'),
-      asset: displayAssetName('::'),
-      amount: calculatedAmountLabel(),
+      asset: t('tools.txConfirm.smartContractGas'),
+      amount: estimate?.gasAssetAmount || calculatedAmountLabel(),
       network: l2NetworkLabel(),
       details: compactRows([
         txDetail(t('tools.txConfirm.contractType'), schema.label || schema.name),
         txDetail(t('tools.txConfirm.schema'), schema.subtype || schema.name),
+        txDetail(t('tools.txConfirm.gasFeeAmount'), estimate?.gasFeeAmount),
+        txDetail(t('tools.txConfirm.gasFundAmount'), estimate?.gasFundAmount),
         gasLimit ? txDetail(t('tools.contracts.gasLimit'), gasLimit) : null,
+        req.FundingValue ? txDetail(t('tools.txConfirm.satsAmount'), req.FundingValue) : null,
+        ...fundingAssets.map((asset) => txDetail(
+          t('tools.txConfirm.fundingAsset'),
+          `${displayAssetName(String(asset.AssetName || ''))} ${String(asset.Amount || '').trim()}`
+        )),
       ]),
     })
     if (!confirmed) return

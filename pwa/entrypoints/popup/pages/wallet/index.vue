@@ -52,7 +52,7 @@
       <SubWalletSelector @wallet-changed="handleSubWalletChange" @wallet-created="handleSubWalletCreated" />
     </div>
     <!-- 资产余额 -->
-    <BalanceSummary :key="selectedChainLabel" :selectedChain="selectedChainLabel" :mempool-url="mempoolUrl" />
+    <BalanceSummary :key="balanceSummaryKey" :selectedChain="selectedChainLabel" :mempool-url="mempoolUrl" />
 
     <!-- 资产列表 -->
     <AssetList class="mt-4" v-model:model-value="selectTab" @update:model-value="tabChange">
@@ -76,7 +76,7 @@ import L2Card from '@/components/wallet/L2Card.vue'
 
 import SubWalletSelector from '@/components/wallet/SubWalletSelector.vue'
 import CopyButton from '@/components/common/CopyButton.vue'
-import { useChannelStore, useWalletStore, useL1Store } from '@/store'
+import { useChannelStore, useWalletStore, useL1Store, useL2Store } from '@/store'
 import { useL1Assets, useL2Assets } from '@/composables'
 import { useAssetOperations } from '@/composables/useAssetOperations'
 import { useRouter, useRoute } from 'vue-router'
@@ -97,6 +97,7 @@ console.log('Debug: This is index.vue')
 // 钱包数据
 const walletStore = useWalletStore()
 const l1Store = useL1Store()
+const l2Store = useL2Store()
 const channelStore = useChannelStore()
 const transcendingModeStore = useTranscendingModeStore()
 
@@ -113,6 +114,7 @@ const { refreshL2Assets } = useL2Assets()
 
 let { address, network } = storeToRefs(walletStore)
 const { channel } = storeToRefs(channelStore)
+const { accountIndex, walletId } = storeToRefs(walletStore)
 const { plainList, sat20List, brc20List, runesList } = storeToRefs(l1Store)
 
 // 状态管理
@@ -134,6 +136,12 @@ const selectedChainLabel = computed(() => {
   const selectedItem = items.find(item => item.value === selectTab.value)
   return selectedItem ? selectedItem.label.toLowerCase() : 'unknown'
 })
+const balanceSummaryKey = computed(() => [
+  selectedChainLabel.value,
+  walletId.value || '',
+  accountIndex.value ?? '',
+  address.value || '',
+].join(':'))
 console.log('selectTab', selectTab)
 console.log('selectedChainLabel', selectedChainLabel)
 console.log('address', address)
@@ -173,11 +181,20 @@ const mempoolUrl = computed(() => {
   return '' // 默认返回空字符串，防止未匹配的情况
 })
 
-watch(() => address.value, (newVal, oldVal) => {
-  console.log('new_addresschange', newVal, oldVal)
-}, {
-  immediate: true,
-})
+watch(
+  () => [walletId.value, accountIndex.value, address.value, network.value],
+  async (newVal, oldVal) => {
+    console.log('wallet_summary_context_change', newVal, oldVal)
+    if (!address.value || JSON.stringify(newVal) === JSON.stringify(oldVal)) return
+    l1Store.reset()
+    l2Store.reset()
+    await Promise.all([
+      refreshL1Assets({ resetState: true, clearCache: true }),
+      refreshL2Assets({ resetState: true, clearCache: true }),
+    ])
+  },
+  { immediate: true }
+)
 const l1Assets = computed(() => {
   switch (selectedType.value) {
     case 'BTC':
@@ -309,6 +326,8 @@ const handleRouteChange = () => {
   }
 }
 
+watch(() => route.query.tab, handleRouteChange, { immediate: true })
+
 console.log('Debug2: This is index.vue')
 
 const tabChange = (value: string) => {
@@ -323,7 +342,6 @@ const tabChange = (value: string) => {
 
 // 生命周期钩子
 onMounted(async () => {
-  handleRouteChange()
   walletManager.registerCallback(channelCallback)
   satsnetStp.registerCallback(channelCallback)
   await channelStore.getAllChannels()

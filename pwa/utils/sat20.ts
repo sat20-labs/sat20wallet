@@ -479,6 +479,21 @@ class WalletManager {
     return this._handleRequest('deployUnifiedContract', JSON.stringify(req))
   }
 
+  async estimateDeployUnifiedContract(req: Record<string, unknown>): Promise<
+    [Error | undefined, {
+      contractType: string,
+      contractAddress?: string,
+      caller?: string,
+      gasAssetAmount?: string,
+      gasFeeAmount?: string,
+      gasFundAmount?: string,
+      gasLimit?: string,
+      nonce?: string,
+    } | undefined]
+  > {
+    return this._handleRequest('estimateDeployUnifiedContract', JSON.stringify(req))
+  }
+
   async buildUnifiedContractContent(
     contractType: string,
     subtype: string,

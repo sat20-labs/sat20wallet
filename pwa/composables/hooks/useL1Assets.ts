@@ -252,7 +252,10 @@ export const useL1Assets = () => {
       // }})
     }
 
-    // 重置状态
+    if (resetState) {
+      allAssetList.value = []
+      assetsStore.reset()
+    }
 
     // 创建一个 Promise 数组来收集所有需要等待的请求
     const refreshPromises = []

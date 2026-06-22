@@ -248,6 +248,10 @@ export const useL2Assets = () => {
         },
       })
     }
+    if (resetState) {
+      allAssetList.value = []
+      assetsStore.reset()
+    }
     const refreshPromises = []
 
     // 刷新摘要数据

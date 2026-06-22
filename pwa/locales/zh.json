@@ -71,7 +71,11 @@
       "satoshiNetNetwork": "SatoshiNet {network}",
       "currentWallet": "当前钱包",
       "smartContractSystem": "智能合约系统",
+      "smartContractGas": "智能合约 GAS",
       "contractFunding": "合约调用资产",
+      "gasFeeAmount": "Gas 手续费",
+      "gasFundAmount": "Gas 预存",
+      "fundingAsset": "转入资产",
       "calculatedByWallet": "由钱包构造时计算",
       "deploymentTerms": "由部署条款决定",
       "purposes": {
