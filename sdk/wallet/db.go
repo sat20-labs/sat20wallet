@@ -38,6 +38,7 @@ const (
 )
 
 const legacySTPStatusKey = "status"
+const initialStatusBlockHashWindow = 144
 
 var _mode string  //
 var _chain string // mainnet, testnet
@@ -61,6 +62,24 @@ type Status struct {
 	ContractSubAccountIndex uint32
 
 	sync.RWMutex
+}
+
+type statusOnDisk struct {
+	SoftwareVer    string
+	DBver          string
+	TotalWallet    int
+	CurrentWallet  int64
+	CurrentAccount uint32
+	CurrentChain   string
+	SyncHeight     int
+	SyncHeightL2   int
+
+	SyncHeightL1            int
+	BlockHashMapL1          map[int]string
+	BlockHashMapL2          map[int]string
+	MaxFeeRateL1            int64
+	HasStaked               bool
+	ContractSubAccountIndex uint32
 }
 
 type STPClientStatus struct {
@@ -211,64 +230,207 @@ func loadWallet(db db.KVDB, id int64) (*WalletInDB, error) {
 }
 
 func (p *Manager) loadStatus() *Status {
-	p.status = loadStatusFromDB(p.db)
+	var loaded bool
+	p.status, loaded = loadStatusWithLegacyMigrationResult(p.db)
+	if !loaded {
+		p.initStatusFromIndexerTips(p.status)
+		if err := saveStatusToDB(p.db, p.status); err != nil {
+			Log.Infof("save initialized status failed. %v", err)
+		}
+	}
 	return p.status
 }
 
 func loadStatusFromDB(kvdb db.KVDB) *Status {
+	result := newDefaultStatus()
+	if status, ok := readStatusFromDB(kvdb, DB_KEY_STATUS); ok {
+		return status
+	}
+	if status, ok := readLegacySTPStatusFromDB(kvdb); ok {
+		return status
+	}
+	return result
+}
+
+func loadStatusWithLegacyMigration(kvdb db.KVDB) *Status {
+	status, _ := loadStatusWithLegacyMigrationResult(kvdb)
+	return status
+}
+
+func loadStatusWithLegacyMigrationResult(kvdb db.KVDB) (*Status, bool) {
+	status, hasStatus := readStatusFromDB(kvdb, DB_KEY_STATUS)
+	legacyStatus, hasLegacy := readLegacySTPStatusFromDB(kvdb)
+
+	if !hasStatus {
+		if hasLegacy {
+			status = legacyStatus
+		} else {
+			status = newDefaultStatus()
+		}
+	} else if hasLegacy {
+		mergeLegacySTPStatus(status, legacyStatus)
+	}
+	normalizeStatus(status)
+
+	if hasLegacy {
+		if err := saveStatusToDB(kvdb, status); err != nil {
+			Log.Infof("migrate legacy status failed. %v", err)
+		} else if err := kvdb.Delete([]byte(legacySTPStatusDBKey())); err != nil {
+			Log.Infof("delete legacy status failed. %v", err)
+		} else {
+			Log.Infof("legacy status migrated")
+		}
+	}
+
+	return status, hasStatus || hasLegacy
+}
+
+func newDefaultStatus() *Status {
 	result := &Status{
-		SoftwareVer: SOFTWARE_VERSION,
-		DBver:       DB_VERSION,
+		SoftwareVer:  SOFTWARE_VERSION,
+		DBver:        DB_VERSION,
+		SyncHeight:   -1,
+		SyncHeightL1: -1,
+		SyncHeightL2: -1,
 	}
 	normalizeStatus(result)
-
-	keys := []string{DB_KEY_STATUS}
-	legacyKey := GetDBKeyPrefix() + legacySTPStatusKey
-	if legacyKey != DB_KEY_STATUS {
-		keys = append(keys, legacyKey)
-	}
-
-	for _, key := range keys {
-		buf, err := kvdb.Read([]byte(key))
-		if err != nil {
-			Log.Infof("Read %s failed. %v", key, err)
-			continue
-		}
-
-		loaded := &Status{}
-		if err := DecodeFromBytes(buf, loaded); err != nil {
-			Log.Errorf("DecodeFromBytes %s failed. %v", key, err)
-			continue
-		}
-		normalizeStatus(loaded)
-		return loaded
-	}
-
 	return result
+}
+
+func readStatusFromDB(kvdb db.KVDB, key string) (*Status, bool) {
+	buf, err := kvdb.Read([]byte(key))
+	if err != nil {
+		Log.Infof("Read %s failed. %v", key, err)
+		return nil, false
+	}
+
+	status := &Status{}
+	if err := decodeStatusFromBytes(buf, status); err != nil {
+		Log.Errorf("DecodeFromBytes %s failed. %v", key, err)
+		return nil, false
+	}
+	normalizeStatus(status)
+	return status, true
+}
+
+func readLegacySTPStatusFromDB(kvdb db.KVDB) (*Status, bool) {
+	key := legacySTPStatusDBKey()
+	if key == DB_KEY_STATUS {
+		return nil, false
+	}
+	return readStatusFromDB(kvdb, key)
+}
+
+func legacySTPStatusDBKey() string {
+	return GetDBKeyPrefix() + legacySTPStatusKey
+}
+
+func mergeLegacySTPStatus(status, legacy *Status) {
+	if status == nil || legacy == nil {
+		return
+	}
+	if legacy.SyncHeight != 0 {
+		status.SyncHeight = legacy.SyncHeight
+	}
+	if legacy.SyncHeightL1 != 0 {
+		status.SyncHeightL1 = legacy.SyncHeightL1
+	} else if legacy.SyncHeight != 0 {
+		status.SyncHeightL1 = legacy.SyncHeight
+	}
+	if legacy.SyncHeightL2 != 0 {
+		status.SyncHeightL2 = legacy.SyncHeightL2
+	}
+	if len(legacy.BlockHashMapL1) != 0 {
+		status.BlockHashMapL1 = legacy.BlockHashMapL1
+	}
+	if len(legacy.BlockHashMapL2) != 0 {
+		status.BlockHashMapL2 = legacy.BlockHashMapL2
+	}
+	if legacy.MaxFeeRateL1 != 0 {
+		status.MaxFeeRateL1 = legacy.MaxFeeRateL1
+	}
+	if legacy.HasStaked {
+		status.HasStaked = true
+	}
+	if legacy.ContractSubAccountIndex != 0 {
+		status.ContractSubAccountIndex = legacy.ContractSubAccountIndex
+	}
+}
+
+func saveStatusToDB(kvdb db.KVDB, status *Status) error {
+	buf, err := encodeStatusToBytes(status)
+	if err != nil {
+		return err
+	}
+	return kvdb.Write([]byte(DB_KEY_STATUS), buf)
+}
+
+func encodeStatusToBytes(status *Status) ([]byte, error) {
+	status.RLock()
+	onDisk := statusOnDisk{
+		SoftwareVer:             status.SoftwareVer,
+		DBver:                   status.DBver,
+		TotalWallet:             status.TotalWallet,
+		CurrentWallet:           status.CurrentWallet,
+		CurrentAccount:          status.CurrentAccount,
+		CurrentChain:            status.CurrentChain,
+		SyncHeight:              status.SyncHeight,
+		SyncHeightL2:            status.SyncHeightL2,
+		SyncHeightL1:            status.SyncHeightL1,
+		BlockHashMapL1:          cloneIntStringMap(status.BlockHashMapL1),
+		BlockHashMapL2:          cloneIntStringMap(status.BlockHashMapL2),
+		MaxFeeRateL1:            status.MaxFeeRateL1,
+		HasStaked:               status.HasStaked,
+		ContractSubAccountIndex: status.ContractSubAccountIndex,
+	}
+	status.RUnlock()
+	return EncodeToBytes(&onDisk)
+}
+
+func decodeStatusFromBytes(buf []byte, status *Status) error {
+	onDisk := &statusOnDisk{}
+	if err := DecodeFromBytes(buf, onDisk); err == nil {
+		*status = Status{
+			SoftwareVer:             onDisk.SoftwareVer,
+			DBver:                   onDisk.DBver,
+			TotalWallet:             onDisk.TotalWallet,
+			CurrentWallet:           onDisk.CurrentWallet,
+			CurrentAccount:          onDisk.CurrentAccount,
+			CurrentChain:            onDisk.CurrentChain,
+			SyncHeight:              onDisk.SyncHeight,
+			SyncHeightL2:            onDisk.SyncHeightL2,
+			SyncHeightL1:            onDisk.SyncHeightL1,
+			BlockHashMapL1:          onDisk.BlockHashMapL1,
+			BlockHashMapL2:          onDisk.BlockHashMapL2,
+			MaxFeeRateL1:            onDisk.MaxFeeRateL1,
+			HasStaked:               onDisk.HasStaked,
+			ContractSubAccountIndex: onDisk.ContractSubAccountIndex,
+		}
+		return nil
+	}
+	return DecodeFromBytes(buf, status)
+}
+
+func cloneIntStringMap(src map[int]string) map[int]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[int]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func (p *Manager) saveStatus() error {
 	if p.status != nil {
-		p.status.RLock()
-		buf, err := EncodeToBytes(p.status)
-		p.status.RUnlock()
-		if err != nil {
-			return err
-		}
-
-		err = p.db.Write([]byte(DB_KEY_STATUS), buf)
-		if err != nil {
+		if err := saveStatusToDB(p.db, p.status); err != nil {
 			Log.Infof("saveStatus failed. %v", err)
 			return err
 		}
-		if shouldWriteLegacySTPStatus(p.status) {
-			legacyKey := GetDBKeyPrefix() + legacySTPStatusKey
-			if legacyKey != DB_KEY_STATUS {
-				if err := p.db.Write([]byte(legacyKey), buf); err != nil {
-					Log.Infof("save legacy status failed. %v", err)
-					return err
-				}
-			}
+		legacyKey := legacySTPStatusDBKey()
+		if legacyKey != DB_KEY_STATUS {
+			_ = p.db.Delete([]byte(legacyKey))
 		}
 		Log.Infof("saveStatus succ")
 	}
@@ -292,19 +454,55 @@ func normalizeStatus(status *Status) {
 	if status.BlockHashMapL2 == nil {
 		status.BlockHashMapL2 = make(map[int]string)
 	}
+	if status.SyncHeightL1 == 0 {
+		if status.SyncHeight != 0 {
+			status.SyncHeightL1 = status.SyncHeight
+		} else if len(status.BlockHashMapL1) == 0 {
+			status.SyncHeight = -1
+			status.SyncHeightL1 = -1
+		}
+	}
+	if status.SyncHeightL2 == 0 && len(status.BlockHashMapL2) == 0 {
+		status.SyncHeightL2 = -1
+	}
 }
 
-func shouldWriteLegacySTPStatus(status *Status) bool {
+func (p *Manager) initStatusFromIndexerTips(status *Status) {
 	if status == nil {
-		return false
+		return
 	}
-	return status.SyncHeightL1 != 0 ||
-		status.SyncHeightL2 != 0 ||
-		len(status.BlockHashMapL1) != 0 ||
-		len(status.BlockHashMapL2) != 0 ||
-		status.MaxFeeRateL1 != 0 ||
-		status.HasStaked ||
-		status.ContractSubAccountIndex != 0
+	if p.l1IndexerClient != nil {
+		if height := p.l1IndexerClient.GetSyncHeight(); height >= 0 {
+			status.SyncHeight = height
+			status.SyncHeightL1 = height
+			fillBlockHashMap(status.BlockHashMapL1, height, p.l1IndexerClient)
+		}
+	}
+	if p.l2IndexerClient != nil {
+		if height := p.l2IndexerClient.GetSyncHeight(); height >= 0 {
+			status.SyncHeightL2 = height
+			fillBlockHashMap(status.BlockHashMapL2, height, p.l2IndexerClient)
+		}
+	}
+}
+
+func fillBlockHashMap(dst map[int]string, height int, client interface {
+	GetBlockHash(int) (string, error)
+}) {
+	if dst == nil || client == nil || height < 0 {
+		return
+	}
+	start := height - initialStatusBlockHashWindow + 1
+	if start < 0 {
+		start = 0
+	}
+	for h := start; h <= height; h++ {
+		hash, err := client.GetBlockHash(h)
+		if err != nil {
+			continue
+		}
+		dst[h] = hash
+	}
 }
 
 func (p *Manager) GetStatus() *Status {
