@@ -1929,7 +1929,7 @@ func (p *ContractRuntimeBase) CheckDeployTx(
 	contract := p.runtime
 	resv := p.resv
 
-	pkScript, err := AddrToPkScript(resv.GetChannelAddr(), GetChainParam())
+	pkScript, err := AddrToPkScript_SatsNet(resv.GetChannelAddr(), GetChainParam_SatsNet())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2914,7 +2914,7 @@ func (p *ContractRuntimeBase) genSendInfoFromTx_SatsNet(tx *swire.MsgTx, include
 			}
 		}
 
-		addr, err := AddrFromPkScript(txOut.PkScript)
+		addr, err := AddrFromPkScript_SatsNet(txOut.PkScript)
 		if err != nil {
 			addr = ADDR_OPRETURN
 		}

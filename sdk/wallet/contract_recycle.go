@@ -2139,7 +2139,7 @@ func (p *RecycleContractRunTime) genRewardInfoFromReq(req *wwire.RemoteSignMoreD
 		}
 
 		// 到这里可以确定是一个anchorTx，第一个输出是目标地址
-		destAddr, err := AddrFromPkScript(tx.TxOut[0].PkScript)
+		destAddr, err := AddrFromPkScript_SatsNet(tx.TxOut[0].PkScript)
 		if err != nil {
 			Log.Errorf("AddressFromPkScript %s failed, %v", tx.TxID(), err)
 			return nil, err

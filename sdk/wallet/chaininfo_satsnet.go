@@ -466,6 +466,32 @@ func IsAddressInPkScript_SatsNet(pkScript []byte, address string) bool {
 	return false
 }
 
+func AddrToPkScript_SatsNet(addr string, netParams *chaincfg.Params) ([]byte, error) {
+	address, err := btcutil.DecodeAddress(addr, netParams)
+	if err != nil {
+		return nil, err
+	}
+
+	return txscript.PayToAddrScript(address)
+}
+
+func AddrFromPkScript_SatsNet(pkScript []byte) (string, error) {
+	return AddressFromPkScript_SatsNet(pkScript, GetChainParam_SatsNet())
+}
+
+func AddressFromPkScript_SatsNet(pkScript []byte, netParams *chaincfg.Params) (string, error) {
+	_, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, netParams)
+	if err != nil {
+		return "", err
+	}
+
+	if len(addresses) == 0 {
+		return "", fmt.Errorf("can't generate address")
+	}
+
+	return addresses[0].EncodeAddress(), nil
+}
+
 func PublicKeyToP2TRAddress_SatsNet(pubKey *btcec.PublicKey) string {
 	taprootPubKey := txscript.ComputeTaprootKeyNoScript(pubKey)
 	addr, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(taprootPubKey), GetChainParam_SatsNet())
@@ -565,14 +591,7 @@ func DecodeBtcUtilTx_SatsNet(encodedStr string) (*btcutil.Tx, error) {
 
 // GetPkScriptFromAddress 根据比特币地址返回对应的锁定脚本(PkScript)
 func GetPkScriptFromAddress_SatsNet(addr string) ([]byte, error) {
-	// 解析地址，这里使用主网参数，如果是测试网需要使用&chaincfg.TestNet3Params
-	address, err := btcutil.DecodeAddress(addr, GetChainParam_SatsNet())
-	if err != nil {
-		return nil, fmt.Errorf("invalid address: %v", err)
-	}
-
-	// 根据地址类型生成对应的PkScript
-	return txscript.PayToAddrScript(address)
+	return AddrToPkScript_SatsNet(addr, GetChainParam_SatsNet())
 }
 
 func UtxoToWireOutpoint_SatsNet(utxo string) (*wire.OutPoint, error) {

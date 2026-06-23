@@ -5060,7 +5060,7 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 					continue
 				}
 
-				addr, err := AddrFromPkScript(txOut.PkScript)
+				addr, err := AddrFromPkScript_SatsNet(txOut.PkScript)
 				if err != nil {
 					Log.Errorf("AddrFromPkScript failed, %v", err)
 					return nil, err
@@ -5154,7 +5154,7 @@ func (p *SwapContractRuntime) genDepositInfoFromResultTx(tx *swire.MsgTx, detail
 		return nil, err
 	}
 
-	destAddr, err := AddrFromPkScript(tx.TxOut[0].PkScript)
+	destAddr, err := AddrFromPkScript_SatsNet(tx.TxOut[0].PkScript)
 	if err != nil {
 		return nil, err
 	}
@@ -5275,7 +5275,7 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 		}
 
 		// 到这里可以确定是一个anchorTx，第一个输出是目标地址
-		destAddr, err := AddrFromPkScript(tx.TxOut[0].PkScript)
+		destAddr, err := AddrFromPkScript_SatsNet(tx.TxOut[0].PkScript)
 		if err != nil {
 			Log.Errorf("AddressFromPkScript %s failed, %v", tx.TxID(), err)
 			return nil, err
