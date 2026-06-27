@@ -577,7 +577,8 @@ func (p *Manager) queryAgentInvokeFee(req *ContractInvokeRequest) (int64, error)
 	if err != nil {
 		return 0, err
 	}
-	gasAmount, _, err := p.agentGasAssetAmount(contractcommon.InvokeBaseGas, gasOverride)
+	needsResultFunding := converted.Action == contractcommon.AgentInvokeAPIBet && !req.SkipResultFee
+	gasAmount, _, err := p.agentInvokeGasAssetAmount(needsResultFunding, gasOverride)
 	if err != nil {
 		return 0, err
 	}
@@ -846,7 +847,16 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 	if gasLimit == 0 {
 		gasLimit = contractcommon.InvokeBaseGas
 	}
-	gasAmount, gasAsset, err := p.agentGasAssetAmount(contractcommon.InvokeBaseGas, gasOverride)
+	needsResultFunding := converted.Action == contractcommon.AgentInvokeAPIBet && !req.SkipResultFee
+	gasAmount, gasAsset, err := p.agentInvokeGasAssetAmount(needsResultFunding, gasOverride)
+	if err != nil {
+		return nil, err
+	}
+	gasBaseFee, _, err := p.agentGasAssetAmount(contractcommon.InvokeBaseGas, 0)
+	if err != nil {
+		return nil, err
+	}
+	fundingGasAmount, err := agentInvokeFundingGasAmount(converted.Action, req.SkipResultFee, gasAmount, gasBaseFee)
 	if err != nil {
 		return nil, err
 	}
@@ -863,7 +873,7 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 	if callNonce == 0 {
 		callNonce = uint64(time.Now().UnixNano())
 	}
-	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectUnifiedContractFunding(gasAsset, gasAmount, 0, req.Value, fundingAssets)
+	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectUnifiedContractFunding(gasAsset, gasAmount, fundingGasAmount, req.Value, fundingAssets)
 	if err != nil {
 		return nil, err
 	}
@@ -880,7 +890,11 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 	if err != nil {
 		return nil, err
 	}
-	signedTx, err := p.SignContractTx_SatsNet(tx, prevFetcher, gasAsset, gasAmount)
+	gasFeeAmount := gasAmount
+	if needsResultFunding {
+		gasFeeAmount = gasBaseFee
+	}
+	signedTx, err := p.SignContractTx_SatsNet(tx, prevFetcher, gasAsset, gasFeeAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -894,8 +908,8 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 		TxID:            txid,
 		ContractAddress: req.ContractAddress,
 		GasAssetAmount:  gasAmount,
-		GasFeeAmount:    gasAmount,
-		GasFundAmount:   0,
+		GasFeeAmount:    gasFeeAmount,
+		GasFundAmount:   fundingGasAmount,
 		GasLimit:        gasLimit,
 		Nonce:           callNonce,
 	}, nil
@@ -1333,6 +1347,20 @@ func (p *Manager) agentGasAssetAmount(baseGas int64, override int64) (int64, str
 		return 0, "", err
 	}
 	return amount, gasAssetName, nil
+}
+
+func (p *Manager) agentInvokeGasAssetAmount(needsResult bool, override int64) (int64, string, error) {
+	return p.evmGasAssetAmount(contractcommon.InvokeBaseGas, needsResult, override)
+}
+
+func agentInvokeFundingGasAmount(action string, skipResultFee bool, gasAmount, gasBaseFee int64) (int64, error) {
+	if action != contractcommon.AgentInvokeAPIBet || skipResultFee {
+		return 0, nil
+	}
+	if gasAmount < gasBaseFee {
+		return 0, fmt.Errorf("gas asset amount %d is less than required base gas fee %d", gasAmount, gasBaseFee)
+	}
+	return gasAmount - gasBaseFee, nil
 }
 
 func assetAmountStringToInt64(name, value string) (int64, error) {

@@ -360,7 +360,7 @@ func assertUnifiedAgentInvokeParamQuery(t *testing.T, manager *Manager) {
 	}
 }
 
-func TestQueryAgentInvokeFeeDoesNotIncludeBetAmount(t *testing.T) {
+func TestQueryAgentInvokeFeeIncludesResultFeeButNotBetAmount(t *testing.T) {
 	manager := &Manager{}
 	invokeJSON := mustInvokeJSON(t, contractcommon.AgentInvokeAPIBet, contractcommon.AgentPredictionBetParam{OutcomeID: "a"})
 	fee, err := manager.QueryFeeForInvokeUnifiedContract(&ContractInvokeRequest{
@@ -372,12 +372,39 @@ func TestQueryAgentInvokeFeeDoesNotIncludeBetAmount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryFeeForInvokeUnifiedContract(agent bet): %v", err)
 	}
-	want, _, err := manager.agentGasAssetAmount(contractcommon.InvokeBaseGas, 0)
+	want, _, err := manager.agentInvokeGasAssetAmount(true, 0)
 	if err != nil {
-		t.Fatalf("agentGasAssetAmount: %v", err)
+		t.Fatalf("agentInvokeGasAssetAmount: %v", err)
 	}
 	if fee != want {
-		t.Fatalf("agent bet fee includes bet amount: got %d want %d", fee, want)
+		t.Fatalf("agent bet fee mismatch: got %d want %d", fee, want)
+	}
+}
+
+func TestAgentInvokeFundingGasAmount(t *testing.T) {
+	funding, err := agentInvokeFundingGasAmount(contractcommon.AgentInvokeAPIBet, false, 150, 50)
+	if err != nil {
+		t.Fatalf("agentInvokeFundingGasAmount bet failed: %v", err)
+	}
+	if funding != 100 {
+		t.Fatalf("agent bet funding gas mismatch: got %d want 100", funding)
+	}
+	funding, err = agentInvokeFundingGasAmount(contractcommon.AgentInvokeAPIBet, true, 150, 50)
+	if err != nil {
+		t.Fatalf("agentInvokeFundingGasAmount skip failed: %v", err)
+	}
+	if funding != 0 {
+		t.Fatalf("skip result fee funding gas mismatch: got %d want 0", funding)
+	}
+	funding, err = agentInvokeFundingGasAmount(contractcommon.AgentInvokeAPIConfirm, false, 150, 50)
+	if err != nil {
+		t.Fatalf("agentInvokeFundingGasAmount confirm failed: %v", err)
+	}
+	if funding != 0 {
+		t.Fatalf("confirm funding gas mismatch: got %d want 0", funding)
+	}
+	if _, err := agentInvokeFundingGasAmount(contractcommon.AgentInvokeAPIBet, false, 40, 50); err == nil {
+		t.Fatalf("expected agent bet funding gas below base fee error")
 	}
 }
 
