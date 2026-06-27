@@ -97,30 +97,39 @@ export const useChannelStore = defineStore('channel', () => {
   const allAssetList = ref<any[]>([])
   const plainBalance = ref(0)
   const totalSats = ref(0)
+  let getAllChannelsPromise: Promise<void> | null = null
 
   const getAllChannels = async () => {
-    const [_, resull] = await satsnetStp.getAllChannels()
-    const [, currentChannel] = await satsnetStp.getCurrentChannel()
-    console.log('currentChannel', currentChannel)
+    if (getAllChannelsPromise) return getAllChannelsPromise
 
-    if (currentChannel?.json) {
-      try {
-        const c = JSON.parse(currentChannel.json)
-        if (c.localbalanceL1) {
-          channel.value = c
-        } else {
-          console.log('数据不完整，localbalanceL1 不存在:', c)
-          channel.value = null
+    getAllChannelsPromise = (async () => {
+      await satsnetStp.getAllChannels()
+      const [, currentChannel] = await satsnetStp.getCurrentChannel()
+      console.log('currentChannel', currentChannel)
+
+      if (currentChannel?.json) {
+        try {
+          const c = JSON.parse(currentChannel.json)
+          if (c.localbalanceL1) {
+            channel.value = c
+          } else {
+            console.log('数据不完整，localbalanceL1 不存在:', c)
+            channel.value = null
+          }
+        } catch (error) {
+          console.log('解析 JSON 出错:', error)
         }
-      } catch (error) {
-        console.log('解析 JSON 出错:', error)
+      } else {
+        channel.value = null
+        totalSats.value = 0
+        plainBalance.value = 0
+        allAssetList.value = []
       }
-    } else {
-      channel.value = null
-      totalSats.value = 0
-      plainBalance.value = 0
-      allAssetList.value = []
-    }
+    })().finally(() => {
+      getAllChannelsPromise = null
+    })
+
+    return getAllChannelsPromise
   }
 
   const parseChannel = async () => {
@@ -259,7 +268,7 @@ export const useChannelStore = defineStore('channel', () => {
         parseChannel()
       }
     },
-    { immediate: true, deep: true }
+    { immediate: true }
   )
 
   return {

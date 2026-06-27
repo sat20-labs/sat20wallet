@@ -100,6 +100,8 @@ const l1Store = useL1Store()
 const l2Store = useL2Store()
 const channelStore = useChannelStore()
 const transcendingModeStore = useTranscendingModeStore()
+const router = useRouter()
+const route = useRoute()
 
 // 名字管理
 const {
@@ -109,16 +111,24 @@ const {
 } = useNameManager()
 
 const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
-const { refreshL1Assets } = useL1Assets()
-const { refreshL2Assets } = useL2Assets()
 
 let { address, network } = storeToRefs(walletStore)
 const { channel } = storeToRefs(channelStore)
 const { accountIndex, walletId } = storeToRefs(walletStore)
 const { plainList, sat20List, brc20List, runesList } = storeToRefs(l1Store)
 
+const routeTab = () => {
+  const tab = String(route.query?.tab || 'l1')
+  return ['l1', 'channel', 'l2'].includes(tab) ? tab : 'l1'
+}
+
 // 状态管理
-const selectTab = ref('l1')
+const selectTab = ref(routeTab())
+const isL1AssetsActive = computed(() => selectTab.value === 'l1')
+const isL2AssetsActive = computed(() => selectTab.value === 'l2')
+const isChannelActive = computed(() => selectTab.value === 'channel')
+const { refreshL1Assets } = useL1Assets({ enabled: isL1AssetsActive })
+const { refreshL2Assets } = useL2Assets({ enabled: isL2AssetsActive })
 //const selectedType = ref('BTC')
 const selectedType = ref('ORDX')
 
@@ -181,6 +191,20 @@ const mempoolUrl = computed(() => {
   return '' // 默认返回空字符串，防止未匹配的情况
 })
 
+const refreshActiveWalletView = async (options: { resetState?: boolean; clearCache?: boolean } = {}) => {
+  if (isL1AssetsActive.value) {
+    await refreshL1Assets(options)
+    return
+  }
+  if (isL2AssetsActive.value) {
+    await refreshL2Assets(options)
+    return
+  }
+  if (isChannelActive.value && selectedTranscendingMode.value === 'lightning') {
+    await channelStore.getAllChannels()
+  }
+}
+
 watch(
   () => [walletId.value, accountIndex.value, address.value, network.value],
   async (newVal, oldVal) => {
@@ -188,12 +212,16 @@ watch(
     if (!address.value || JSON.stringify(newVal) === JSON.stringify(oldVal)) return
     l1Store.reset()
     l2Store.reset()
-    await Promise.all([
-      refreshL1Assets({ resetState: true, clearCache: true }),
-      refreshL2Assets({ resetState: true, clearCache: true }),
-    ])
+    await refreshActiveWalletView({ resetState: true, clearCache: true })
   },
   { immediate: true }
+)
+
+watch(
+  selectTab,
+  async () => {
+    await refreshActiveWalletView({ resetState: false, clearCache: false })
+  }
 )
 const l1Assets = computed(() => {
   switch (selectedType.value) {
@@ -229,9 +257,6 @@ const items = [
 
 
 
-// 路由和工具
-const router = useRouter()
-const route = useRoute()
 const { toast } = useToast()
 
 
@@ -249,17 +274,13 @@ const {
 // 处理钱包切换
 const handleSubWalletChange = async (wallet: any) => {
   console.log('SubWallet changed:', wallet)
-  // 重新加载资产列表
-  await refreshL1Assets()
-  await refreshL2Assets()
+  await refreshActiveWalletView()
 }
 
 // 处理新钱包创建
 const handleSubWalletCreated = async (wallet: any) => {
   console.log('New SubWallet created:', wallet)
-  // 重新加载资产列表
-  await refreshL1Assets()
-  await refreshL2Assets()
+  await refreshActiveWalletView()
 }
 
 // 处理通道回调
@@ -302,9 +323,7 @@ const channelCallback = async (e: any) => {
       await refreshL2Assets()
       break
     default:
-      refreshL1Assets()
-      refreshL2Assets()
-      channelHandler()
+      await refreshActiveWalletView()
       break
   }
   if (msg) {
@@ -344,7 +363,6 @@ const tabChange = (value: string) => {
 onMounted(async () => {
   walletManager.registerCallback(channelCallback)
   satsnetStp.registerCallback(channelCallback)
-  await channelStore.getAllChannels()
 
   // 设置当前地址并校验名字
   if (address.value) {

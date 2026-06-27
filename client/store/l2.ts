@@ -29,6 +29,7 @@ export const useL2Store = defineStore('l2-assets', () => {
     runesList.value = []
     brc20List.value = []
     ordList.value = []
+    totalSats.value = 0
   }
 
   

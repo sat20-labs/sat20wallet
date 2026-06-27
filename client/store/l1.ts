@@ -30,6 +30,7 @@ export const useL1Store = defineStore('l1-assets', () => {
     runesList.value = []
     brc20List.value = []
     ordList.value = []
+    totalSats.value = 0
   }
   return {
     assetList,

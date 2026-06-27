@@ -140,9 +140,16 @@ import { sleep } from 'radash'
 import { storeToRefs } from 'pinia'
 import { useTranscendingModeStore } from '@/store'
 import { useI18n } from 'vue-i18n'
+import { useQueryClient } from '@tanstack/vue-query'
 
-const { refreshL1Assets } = useL1Assets()
-const { refreshL2Assets } = useL2Assets()
+const queryClient = useQueryClient()
+const refreshL1Assets = () => {
+  queryClient.invalidateQueries({ queryKey: ['summary-l1'] })
+  queryClient.invalidateQueries({ queryKey: ['ns-l1'] })
+}
+const refreshL2Assets = () => {
+  queryClient.invalidateQueries({ queryKey: ['summary-l2'] })
+}
 const channelStore = useChannelStore()
 const walletStore = useWalletStore()
 const { toast } = useToast()

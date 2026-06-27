@@ -149,7 +149,7 @@ const fetchAbailableSats = async () => {
   }
 }
 
-// useQuery 定时获取
+// useQuery 低频获取，鼠标查看详情时会立即刷新一次。
 const { data: abailableSatsQuery, refetch: refetchAbailableSats } = useQuery({
   queryKey: [
     'abailableSats',
@@ -157,7 +157,7 @@ const { data: abailableSatsQuery, refetch: refetchAbailableSats } = useQuery({
     computed(() => props.selectedChain)
   ],
   queryFn: fetchAbailableSats,
-  refetchInterval: 5000,
+  refetchInterval: 60 * 1000,
   enabled: computed(() => !!address.value),
   initialData: { availableAmt: 0, lockedAmt: 0 },
 })

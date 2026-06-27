@@ -3,24 +3,32 @@ import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store'
 import { useChannelStore } from '@/store/channel'
 import { useL1Store } from '@/store/l1'
-import { useL1Assets, useL2Assets } from '@/composables'
 import { useAssetOperations } from '@/composables/useAssetOperations'
 import satsnetStp from '@/utils/stp'
 import sat20 from '@/utils/sat20'
 import { sleep } from 'radash'
+import { useQueryClient } from '@tanstack/vue-query'
 
 export function useAssetActions() {
   const walletStore = useWalletStore()
   const channelStore = useChannelStore()
   const l1Store = useL1Store()
-  const { refreshL1Assets } = useL1Assets()
-  const { refreshL2Assets } = useL2Assets()
+  const queryClient = useQueryClient()
   const { toast } = useToast()
   const { address, feeRate, btcFeeRate } = storeToRefs(walletStore)
 
   // const { handleAssetOperation } = useAssetOperations()
 
   const loading = ref(false)
+
+  const refreshL1Assets = () => {
+    queryClient.invalidateQueries({ queryKey: ['summary-l1'] })
+    queryClient.invalidateQueries({ queryKey: ['ns-l1'] })
+  }
+
+  const refreshL2Assets = () => {
+    queryClient.invalidateQueries({ queryKey: ['summary-l2'] })
+  }
 
   // 错误处理函数
   const handleError = (message: string) => {

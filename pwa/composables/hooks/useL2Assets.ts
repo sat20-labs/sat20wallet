@@ -2,7 +2,6 @@ import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { ref, computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { satnetApi } from '@/apis'
-import { parallel } from 'radash'
 import { useGlobalStore, useL2Store, useWalletStore } from '@/store'
 import {
   applyAssetSnapshot,
@@ -24,13 +23,29 @@ interface AssetItem {
 // 定义刷新选项接口
 interface RefreshOptions {
   resetState?: boolean
-  refreshNs?: boolean
   refreshSummary?: boolean
-  refreshUtxos?: boolean
   clearCache?: boolean
 }
 
-export const useL2Assets = () => {
+interface UseAssetQueryOptions {
+  enabled?: boolean | { value: boolean }
+}
+
+interface AssetQueryContext {
+  env: string
+  network: string
+  chain: 'satnet'
+  address: string
+}
+
+interface SummaryQueryResult {
+  context: AssetQueryContext
+  response: any
+}
+
+let l2RefreshPromise: Promise<void> | null = null
+
+export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
   const assetsStore = useL2Store()
   const walletStore = useWalletStore()
   const globalStore = useGlobalStore()
@@ -49,61 +64,61 @@ export const useL2Assets = () => {
     return satnetApi
   })
 
-  const summaryQuery = useQuery({
-    queryKey: ['summary-l2', address, network],
-    queryFn: () =>
-      clientApi.value.getAddressSummary({
-        address: address.value,
-        network: network.value,
-      }),
-    refetchInterval: 3000,
-    enabled: computed(() => !!address.value && !!network.value),
+  const queryEnabled = computed(() => {
+    const enabled = options.enabled
+    if (typeof enabled === 'boolean') return enabled
+    return enabled?.value ?? true
   })
 
-  // Asset Processing Functions
-  const processAssetUtxo = async (key: string, start = 0, limit = 100) => {
-    const result = await clientApi.value.getOrdxAddressHolders({
-      address: address.value,
-      ticker: key,
+  const currentContext = (): AssetQueryContext | null => {
+    if (!address.value || !network.value) return null
+    return {
+      env: env.value,
       network: network.value,
-      start,
-      limit,
-    })
-
-    if (result?.data?.length) {
-      result.data.forEach(({ Outpoint }: any) => {
-        const findItem = allAssetList.value?.find((a) => a.key === key)
-        if (findItem && !findItem.utxos?.includes(Outpoint)) {
-          findItem.utxos.push(Outpoint)
-        }
-      })
+      chain: 'satnet',
+      address: address.value,
     }
   }
 
-  const processAllUtxos = async (tickers: string[]) => {
-    if (!tickers.length) return
-    await parallel(3, tickers, (ticker) => processAssetUtxo(ticker))
-  }
+  const isCurrentContext = (context: AssetQueryContext) => (
+    context.env === env.value &&
+    context.network === network.value &&
+    context.address === address.value
+  )
 
-  const parseAssetSummary = async () => {
-    console.log('summaryQuery.data.value', summaryQuery.data.value)
-    const assets = summaryQuery.data.value?.data || []
-    for await (const item of assets) {
+  const summaryQuery = useQuery({
+    queryKey: ['summary-l2', address, network, env],
+    queryFn: async (): Promise<SummaryQueryResult | null> => {
+      const context = currentContext()
+      if (!context) return null
+      const response = await clientApi.value.getAddressSummary({
+        address: context.address,
+        network: context.network,
+      })
+      return { context, response }
+    },
+    refetchInterval: computed(() => queryEnabled.value ? 60 * 1000 : false),
+    enabled: computed(() => queryEnabled.value && !!address.value && !!network.value),
+  })
+
+  const parseAssetSummary = (assets: any[]) => {
+    const list: AssetItem[] = []
+    let totalSats = 0
+    for (const item of assets) {
       const key = item.Name.Protocol
         ? `${item.Name.Protocol}:${item.Name.Type}:${item.Name.Ticker}`
         : '::'
       if (item.Name.Type === '*') {
-        const totalSats = item.Amount
-        assetsStore.setTotalSats(totalSats)
+        totalSats = item.Amount
       }
-      if (!allAssetList.value.find((v) => v?.key === key)) {
+      if (!list.find((v) => v?.key === key)) {
         let label = item.Name.Type === 'e'
           ? `${item.Name.Ticker}（raresats）`
           : item.Name.Ticker;
         if (item.Name.Type === 'n') {
           continue
         }
-        allAssetList.value.push({
+        list.push({
           id: key,
           key,
           protocol: item.Name.Protocol,
@@ -115,10 +130,11 @@ export const useL2Assets = () => {
         })
       }
     }
+    return { list, totalSats }
   }
 
   // Store Updates
-  const updateStoreAssets = (list: AssetItem[]) => {
+  const updateStoreAssets = (list: AssetItem[], totalSats: number) => {
     assetsStore.setSat20List(list.filter((item) => item?.protocol === 'ordx'))
     assetsStore.setRunesList(list.filter((item) => item?.protocol === 'runes'))
     assetsStore.setBrc20List(list.filter((item) => item?.protocol === 'brc20'))
@@ -138,36 +154,34 @@ export const useL2Assets = () => {
         : []),
     ]
     assetsStore.setUniqueAssetList(uniqueTypes)
+    assetsStore.setTotalSats(totalSats)
   }
 
-  const snapshotInput = computed(() => {
-    if (!address.value || !network.value) return null
-    return {
-      env: env.value,
-      network: network.value,
-      chain: 'satnet',
-      address: address.value,
-    }
-  })
+  const snapshotInput = computed(() => currentContext())
 
-  const persistSnapshot = async () => {
-    if (!snapshotInput.value || hydratingSnapshot.value) return
+  const persistSnapshot = async (
+    context: AssetQueryContext,
+    rawAssets: any[],
+    parsedAssets: AssetItem[],
+    totalSats: number
+  ) => {
+    if (hydratingSnapshot.value || !isCurrentContext(context)) return
     await saveAssetSnapshot(
-      snapshotInput.value,
+      context,
       buildAssetSnapshotFromAssets(
-        summaryQuery.data.value?.data || [],
-        allAssetList.value,
-        assetsStore.totalSats
+        rawAssets,
+        parsedAssets,
+        totalSats
       )
     )
   }
 
-  const hydrateSnapshot = async () => {
-    if (!snapshotInput.value) return
+  const hydrateSnapshot = async (context: AssetQueryContext | null) => {
+    if (!context) return
     hydratingSnapshot.value = true
     try {
-      const snapshot = await loadAssetSnapshot(snapshotInput.value)
-      if (snapshot) {
+      const snapshot = await loadAssetSnapshot(context)
+      if (snapshot && isCurrentContext(context)) {
         applyAssetSnapshot(assetsStore, snapshot)
         allAssetList.value = [
           ...(snapshot.plainList || []),
@@ -187,24 +201,15 @@ export const useL2Assets = () => {
 
   watch(
     () => summaryQuery.data.value,
-    async (newData) => {
-      if (!newData) return
+    async (payload) => {
+      if (!payload?.context || !payload.response || !isCurrentContext(payload.context)) return
 
-      console.log('newData address', address.value)
-      console.log('newData network', network.value)
-      console.log('newData chain', chain.value)
-      console.log('newData', newData)
-      allAssetList.value = []
-      assetsStore.setTotalSats(0)
-      console.log('newData', newData.data)
-      console.log('allAssetList.value', allAssetList.value)
-      await parseAssetSummary()
-      updateStoreAssets(allAssetList.value)
-      assetsStore.setAssetList(newData?.data || [])
-      await persistSnapshot()
-      await processAllUtxos(allAssetList.value.map((item) => item.key))
-      updateStoreAssets(allAssetList.value)
-      await persistSnapshot()
+      const rawAssets = payload.response?.data || []
+      const { list, totalSats } = parseAssetSummary(rawAssets)
+      allAssetList.value = list
+      updateStoreAssets(list, totalSats)
+      assetsStore.setAssetList(rawAssets)
+      await persistSnapshot(payload.context, rawAssets, list, totalSats)
     },
     {
       deep: true,
@@ -216,52 +221,39 @@ export const useL2Assets = () => {
    * 刷新所有资产数据
    * @param {RefreshOptions} options - 刷新选项
    * @param {boolean} options.resetState - 是否重置状态，默认为 true
-   * @param {boolean} options.refreshNs - 是否刷新命名空间数据，默认为 true
    * @param {boolean} options.refreshSummary - 是否刷新摘要数据，默认为 true
-   * @param {boolean} options.refreshUtxos - 是否在摘要数据刷新后重新处理 UTXO，默认为 true
    * @param {boolean} options.clearCache - 是否清除缓存，默认为 true
    * @returns {Promise<void>}
    */
   const refreshL2Assets = async (options: RefreshOptions = {}) => {
-    const {
-      resetState = true,
-      refreshNs = true,
-      refreshSummary = true,
-      refreshUtxos = true,
-      clearCache = true,
-    } = options
+    if (l2RefreshPromise) return l2RefreshPromise
 
-    // 清除缓存
-    if (clearCache) {
-      // 清除特定查询的缓存
-      if (refreshSummary) {
-        queryClient.invalidateQueries({
-          queryKey: ['summary-l2', address.value, network.value],
-        })
+    l2RefreshPromise = (async () => {
+      const {
+        resetState = true,
+        refreshSummary = true,
+        clearCache = true,
+      } = options
+
+      if (clearCache && refreshSummary) {
+        queryClient.invalidateQueries({ queryKey: ['summary-l2'] })
+      }
+      if (resetState) {
+        allAssetList.value = []
+        assetsStore.reset()
+      }
+      const refreshPromises = []
+
+      if (queryEnabled.value && refreshSummary) {
+        refreshPromises.push(summaryQuery.refetch())
       }
 
-      // 可选：清除与当前地址相关的所有缓存
-      queryClient.invalidateQueries({
-        predicate: (query) => {
-          const queryKey = query.queryKey as string[]
-          return queryKey.includes(address.value || '')
-        },
-      })
-    }
-    if (resetState) {
-      allAssetList.value = []
-      assetsStore.reset()
-    }
-    const refreshPromises = []
+      await Promise.all(refreshPromises)
+    })().finally(() => {
+      l2RefreshPromise = null
+    })
 
-    // 刷新摘要数据
-    if (refreshSummary) {
-      const summaryPromise = summaryQuery.refetch()
-      refreshPromises.push(summaryPromise)
-    }
-
-    // 等待所有刷新操作完成
-    await Promise.all(refreshPromises)
+    return l2RefreshPromise
   }
 
   return {

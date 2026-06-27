@@ -49,8 +49,6 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { useL1Assets } from '@/composables/hooks/useL1Assets'
-import { useL2Assets } from '@/composables/hooks/useL2Assets'
 import { Icon } from '@iconify/vue'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
@@ -66,9 +64,9 @@ import { useWalletStore } from '@/store'
 import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 import { useAssetActions } from '@/composables/useAssetActions'
+import { useQueryClient } from '@tanstack/vue-query'
 
-const { refreshL1Assets } = useL1Assets()
-const { refreshL2Assets } = useL2Assets()
+const queryClient = useQueryClient()
 const walletStore = useWalletStore()
 const { toast } = useToast()
 const channelStore = useChannelStore()
@@ -98,6 +96,15 @@ type OperationType =
 
 const loading = ref(false)
 const { address, btcFeeRate } = storeToRefs(walletStore)
+
+const refreshL1Assets = () => {
+  queryClient.invalidateQueries({ queryKey: ['summary-l1'] })
+  queryClient.invalidateQueries({ queryKey: ['ns-l1'] })
+}
+
+const refreshL2Assets = () => {
+  queryClient.invalidateQueries({ queryKey: ['summary-l2'] })
+}
 
 // 状态管理
 type ChainType = 'l1' | 'channel' | 'l2'

@@ -51,7 +51,7 @@
       <SubWalletSelector @wallet-changed="handleSubWalletChange" @wallet-created="handleSubWalletCreated" />
     </div>
     <!-- 资产余额 -->
-    <BalanceSummary :key="selectedChainLabel" :selectedChain="selectedChainLabel" :mempool-url="mempoolUrl" />
+    <BalanceSummary :key="balanceSummaryKey" :selectedChain="selectedChainLabel" :mempool-url="mempoolUrl" />
 
     <!-- 资产列表 -->
     <AssetList class="mt-4" v-model:model-value="selectTab" @update:model-value="tabChange">
@@ -75,7 +75,7 @@ import ChannelCard from '@/components/wallet/ChannelCard.vue'
 
 import SubWalletSelector from '@/components/wallet/SubWalletSelector.vue'
 import CopyButton from '@/components/common/CopyButton.vue'
-import { useWalletStore, useL1Store, useChannelStore } from '@/store'
+import { useWalletStore, useL1Store, useL2Store, useChannelStore } from '@/store'
 import { useL1Assets, useL2Assets } from '@/composables'
 import { useAssetOperations } from '@/composables/useAssetOperations'
 import { useRouter, useRoute } from 'vue-router'
@@ -95,6 +95,7 @@ console.log('Debug: This is index.vue')
 // 钱包数据
 const walletStore = useWalletStore()
 const l1Store = useL1Store()
+const l2Store = useL2Store()
 const transcendingModeStore = useTranscendingModeStore()
 
 // 名字管理
@@ -105,10 +106,8 @@ const {
 } = useNameManager()
 
 const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
-const { refreshL1Assets } = useL1Assets()
-const { refreshL2Assets } = useL2Assets()
 
-let { address, network } = storeToRefs(walletStore)
+let { address, network, accountIndex, walletId } = storeToRefs(walletStore)
 
 const channelStore = useChannelStore()
 const { channel } = storeToRefs(channelStore)
@@ -116,6 +115,11 @@ const { plainList, sat20List, brc20List, runesList } = storeToRefs(l1Store)
 
 // 状态管理
 const selectTab = ref('l1')
+const isL1AssetsActive = computed(() => selectTab.value === 'l1')
+const isL2AssetsActive = computed(() => selectTab.value === 'l2')
+const isChannelActive = computed(() => selectTab.value === 'channel')
+const { refreshL1Assets } = useL1Assets({ enabled: isL1AssetsActive })
+const { refreshL2Assets } = useL2Assets({ enabled: isL2AssetsActive })
 //const selectedType = ref('BTC')
 const selectedType = ref('BRC20')
 
@@ -153,6 +157,12 @@ const editUserName = () => {
 const selectedChainLabel = computed(() => {
   return chainLabelMap[selectTab.value] || chainLabelMap.l1
 })
+const balanceSummaryKey = computed(() => [
+  selectedChainLabel.value,
+  walletId.value || '',
+  accountIndex.value ?? '',
+  address.value || '',
+].join(':'))
 console.log('selectTab', selectTab)
 console.log('selectedChainLabel', selectedChainLabel)
 console.log('address', address)
@@ -193,11 +203,31 @@ const mempoolUrl = computed(() => {
   return '' // 默认返回空字符串，防止未匹配的情况
 })
 
-watch(() => address.value, (newVal, oldVal) => {
-  console.log('new_addresschange', newVal, oldVal)
-}, {
-  immediate: true,
-})
+const refreshActiveWalletView = async () => {
+  if (isL1AssetsActive.value) {
+    await refreshL1Assets({ resetState: true, clearCache: true })
+    return
+  }
+  if (isL2AssetsActive.value) {
+    await refreshL2Assets({ resetState: true, clearCache: true })
+    return
+  }
+  if (isChannelActive.value && selectedTranscendingMode.value === 'lightning') {
+    await channelStore.getAllChannels()
+  }
+}
+
+watch(
+  () => [walletId.value, accountIndex.value, address.value, network.value, selectTab.value],
+  async (newVal, oldVal) => {
+    console.log('wallet_summary_context_change', newVal, oldVal)
+    if (!address.value || JSON.stringify(newVal) === JSON.stringify(oldVal)) return
+    l1Store.reset()
+    l2Store.reset()
+    await refreshActiveWalletView()
+  },
+  { immediate: true }
+)
 const l1Assets = computed(() => {
   switch (selectedType.value) {
     case 'BTC':
@@ -232,17 +262,13 @@ const {
 // 处理钱包切换
 const handleSubWalletChange = async (wallet: any) => {
   console.log('SubWallet changed:', wallet)
-  // 重新加载资产列表
-  await refreshL1Assets()
-  await refreshL2Assets()
+  await refreshActiveWalletView()
 }
 
 // 处理新钱包创建
 const handleSubWalletCreated = async (wallet: any) => {
   console.log('New SubWallet created:', wallet)
-  // 重新加载资产列表
-  await refreshL1Assets()
-  await refreshL2Assets()
+  await refreshActiveWalletView()
 }
 
 // 处理通道回调
@@ -285,9 +311,7 @@ const channelCallback = async (e: any) => {
       await refreshL2Assets()
       break
     default:
-      refreshL1Assets()
-      refreshL2Assets()
-      channelHandler()
+      await refreshActiveWalletView()
       break
   }
   if (msg) {
@@ -309,6 +333,8 @@ const handleRouteChange = () => {
   }
 }
 
+watch(() => route.query.tab, handleRouteChange, { immediate: true })
+
 console.log('Debug2: This is index.vue')
 
 const tabChange = (value: string) => {
@@ -323,7 +349,6 @@ const tabChange = (value: string) => {
 
 // 生命周期钩子
 onMounted(async () => {
-  handleRouteChange()
   satsnetStp.registerCallback(channelCallback)
   sat20.registerCallback(channelCallback)
 
