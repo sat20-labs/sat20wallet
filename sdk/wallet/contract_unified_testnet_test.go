@@ -165,7 +165,6 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 		}),
 		CallNonce:      uint64(time.Now().UnixNano()),
 		GasAssetAmount: int64(limitSellGas + 1),
-		Value:          10,
 	})
 	if err != nil {
 		t.Fatalf("Invoke limitorder sell failed: %v", err)
@@ -208,7 +207,7 @@ func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
 			UnitPrice: "1",
 		}),
 		CallNonce: uint64(time.Now().UnixNano()),
-		Value:     11,
+		Value:     1,
 	})
 	if err != nil {
 		t.Fatalf("Invoke limitorder buy failed: %v", err)
@@ -507,7 +506,7 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 			UnitPrice: "1",
 		}),
 		CallNonce: uint64(time.Now().UnixNano()),
-		Value:     11,
+		Value:     1,
 	})
 	if err != nil {
 		t.Fatalf("Invoke limitorder swap failed: %v", err)
@@ -557,7 +556,6 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 		}),
 		CallNonce:      uint64(time.Now().UnixNano()),
 		GasAssetAmount: int64(limitSellGas + 1),
-		Value:          10,
 	})
 	if err != nil {
 		t.Fatalf("Invoke limitorder sell failed: %v", err)
@@ -610,7 +608,7 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 			UnitPrice: "1",
 		}),
 		CallNonce: uint64(time.Now().UnixNano()),
-		Value:     11,
+		Value:     1,
 	})
 	if err != nil {
 		t.Fatalf("Invoke AMM swap failed: %v", err)
@@ -640,7 +638,7 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 		}),
 		CallNonce:      uint64(time.Now().UnixNano()),
 		GasAssetAmount: int64(ammSellGas + 1),
-		Value:          10,
+		Assets:         []ContractFundingAsset{{AssetName: unifiedTemplateTestAsset, Amount: "1"}},
 	})
 	if err != nil {
 		t.Fatalf("Invoke AMM sell swap failed: %v", err)
@@ -665,7 +663,7 @@ func TestUnifiedTemplateDeployInvoke_testnet(t *testing.T) {
 			UnitPrice: "2",
 		}),
 		CallNonce: uint64(time.Now().UnixNano()),
-		Value:     12,
+		Value:     2,
 	})
 	if err != nil {
 		t.Fatalf("Invoke AMM second buy swap failed: %v", err)

@@ -695,12 +695,13 @@ func (p *Manager) estimateAgentDeployContract(req *ContractDeployRequest) (*Cont
 	if gasAmount < deployBaseFee {
 		return nil, fmt.Errorf("agent deploy gas asset amount %d is less than required base gas fee %d", gasAmount, deployBaseFee)
 	}
+	deployNonce := uint64(time.Now().UnixNano())
 	contractAddr, _, err := contractcommon.DeriveAgentContractAddress(
 		p.contractAddressPrefix(),
 		subtype,
 		content,
 		p.wallet.GetAddress(),
-		req.DeployNonce,
+		deployNonce,
 	)
 	if err != nil {
 		return nil, err
@@ -713,7 +714,7 @@ func (p *Manager) estimateAgentDeployContract(req *ContractDeployRequest) (*Cont
 		GasFeeAmount:    deployBaseFee,
 		GasFundAmount:   gasAmount - deployBaseFee,
 		GasLimit:        gasLimit,
-		Nonce:           req.DeployNonce,
+		Nonce:           deployNonce,
 	}, nil
 }
 
@@ -779,13 +780,14 @@ func (p *Manager) deployAgentContract(req *ContractDeployRequest) (*ContractTxRe
 	if version == 0 {
 		version = contractcommon.CurrentAgentVersion
 	}
+	deployNonce := uint64(time.Now().UnixNano())
 	tx, contractAddr, err := contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
 		ContractPrefix:  p.contractAddressPrefix(),
 		Type:            contractcommon.ContractTypeAgent,
 		SubType:         subtype,
 		Version:         version,
 		Deployer:        p.wallet.GetAddress(),
-		DeployNonce:     req.DeployNonce,
+		DeployNonce:     deployNonce,
 		ContractContent: content,
 		GasLimit:        gasLimit,
 		Funding:         funding,
@@ -812,7 +814,7 @@ func (p *Manager) deployAgentContract(req *ContractDeployRequest) (*ContractTxRe
 		GasFeeAmount:    deployBaseFee,
 		GasFundAmount:   fundingAmount,
 		GasLimit:        gasLimit,
-		Nonce:           req.DeployNonce,
+		Nonce:           deployNonce,
 	}, nil
 }
 
@@ -952,11 +954,12 @@ func (p *Manager) estimateTemplateDeployContract(req *ContractDeployRequest) (*C
 	if gasAmount < gasBaseFee {
 		return nil, fmt.Errorf("gas asset amount %d is less than required base gas fee %d", gasAmount, gasBaseFee)
 	}
+	deployNonce := uint64(time.Now().UnixNano())
 	contractAddr, _, err := contractcommon.DeriveTemplateContractAddress(
 		p.contractAddressPrefix(),
 		content,
 		p.wallet.GetAddress(),
-		req.DeployNonce,
+		deployNonce,
 	)
 	if err != nil {
 		return nil, err
@@ -969,7 +972,7 @@ func (p *Manager) estimateTemplateDeployContract(req *ContractDeployRequest) (*C
 		GasFeeAmount:    gasBaseFee,
 		GasFundAmount:   gasAmount - gasBaseFee,
 		GasLimit:        gasLimit,
-		Nonce:           req.DeployNonce,
+		Nonce:           deployNonce,
 	}, nil
 }
 
@@ -1019,6 +1022,7 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 	if version == 0 {
 		version = contractcommon.CurrentTemplateVersion
 	}
+	deployNonce := uint64(time.Now().UnixNano())
 	tx, contractAddr, err := contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
 		ContractPrefix:  p.contractAddressPrefix(),
 		Type:            contractcommon.ContractTypeTemplate,
@@ -1026,7 +1030,7 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 		Version:         version,
 		ContractContent: content,
 		Deployer:        p.wallet.GetAddress(),
-		DeployNonce:     req.DeployNonce,
+		DeployNonce:     deployNonce,
 		GasLimit:        gasLimit,
 		Funding:         funding,
 		Inputs:          inputs,
@@ -1052,7 +1056,7 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 		GasFeeAmount:    gasBaseFee,
 		GasFundAmount:   gasAmount - gasBaseFee,
 		GasLimit:        gasLimit,
-		Nonce:           req.DeployNonce,
+		Nonce:           deployNonce,
 	}, nil
 }
 
@@ -1409,7 +1413,8 @@ func (p *Manager) EstimateEVMDeployContract(req *ContractDeployRequest) (*Contra
 	if gasAmount < gasBaseFee {
 		return nil, fmt.Errorf("gas asset amount %d is less than required base gas fee %d", gasAmount, gasBaseFee)
 	}
-	contract, err := contractcommon.DeriveEVMCreateContractAddress(p.contractAddressPrefix(), caller, req.DeployNonce)
+	deployNonce := uint64(time.Now().UnixNano())
+	contract, err := contractcommon.DeriveEVMCreateContractAddress(p.contractAddressPrefix(), caller, deployNonce)
 	if err != nil {
 		return nil, err
 	}
@@ -1421,7 +1426,7 @@ func (p *Manager) EstimateEVMDeployContract(req *ContractDeployRequest) (*Contra
 		GasFeeAmount:    gasBaseFee,
 		GasFundAmount:   gasAmount - gasBaseFee,
 		GasLimit:        gasLimit,
-		Nonce:           req.DeployNonce,
+		Nonce:           deployNonce,
 	}, nil
 }
 
