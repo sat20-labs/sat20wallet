@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,9 +12,13 @@ import (
 	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	sbtcutil "github.com/sat20-labs/satoshinet/btcutil"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	swire "github.com/sat20-labs/satoshinet/wire"
 	"github.com/sirupsen/logrus"
 )
+
+const liveTestnetBootstrapAddress = "tb1p62gjhywssq42tp85erlnvnumkt267ypndrl0f3s4sje578cgr79sekhsua"
 
 func newContractTestnetManager(t *testing.T) *Manager {
 	t.Helper()
@@ -83,7 +88,8 @@ func TestUnifiedEVMDeployInvoke_testnet(t *testing.T) {
 		ContractType:    ContractTypeEVM,
 		ContractContent: "6001600c60003960016000f300",
 		ContentEncoding: "hex",
-		GasLimit:        150000,
+		GasLimit:        contractcommon.DeployBaseGas,
+		GasAssetAmount:  20000,
 		DeployNonce:     deployNonce,
 	})
 	if err != nil {
@@ -107,7 +113,8 @@ func TestUnifiedEVMDeployInvoke_testnet(t *testing.T) {
 		ContractAddress: deploy.ContractAddress,
 		Action:          "call",
 		Param:           mustJSONParam(t, map[string]string{"calldataHex": ""}),
-		GasLimit:        30000,
+		GasLimit:        contractcommon.InvokeBaseGas,
+		GasAssetAmount:  20000,
 		CallNonce:       deployNonce + 1,
 	})
 	if err != nil {
@@ -117,6 +124,91 @@ func TestUnifiedEVMDeployInvoke_testnet(t *testing.T) {
 	if invoke.TxID == "" {
 		t.Fatalf("invalid invoke result: %+v", invoke)
 	}
+}
+
+func TestEVMCloseProfit_testnet(t *testing.T) {
+	if os.Getenv("SAT20WALLET_EVM_CLOSE_LIVE") != "1" {
+		t.Skip("set SAT20WALLET_EVM_CLOSE_LIVE=1 to spend testnet gas and test EVM close profit")
+	}
+	manager := newContractTestnetManager(t)
+	deployer := manager.wallet.GetAddress()
+	bootstrap := liveTestnetBootstrapAddress
+	startHeight := manager.l2IndexerClient.GetBestHeight()
+	deploy, err := manager.DeployUnifiedContract(&ContractDeployRequest{
+		ContractType:    ContractTypeEVM,
+		ContractContent: evmLiveInitCodeHex([]byte{0x60, 0x01, 0x60, 0x00, 0x55}),
+		ContentEncoding: "hex",
+		GasLimit:        contractcommon.DeployBaseGas,
+		GasAssetAmount:  20000,
+	})
+	if err != nil {
+		t.Fatalf("DeployUnifiedContract failed: %v", err)
+	}
+	t.Logf("evm close/profit deploy: %+v", deploy)
+	if err := waitL2HeightAbove(t, manager, startHeight, 4*time.Minute); err != nil {
+		t.Fatalf("deploy was not confirmed: %v", err)
+	}
+	if err := waitContractIndexed(t, manager, deploy.ContractAddress, 2*time.Minute); err != nil {
+		t.Fatalf("contract was not indexed after deploy: %v", err)
+	}
+
+	fundStart := manager.l2IndexerClient.GetBestHeight()
+	fund, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType:    ContractTypeEVM,
+		ContractAddress: deploy.ContractAddress,
+		DefaultInvoke:   true,
+		Value:           100,
+	})
+	if err != nil {
+		t.Fatalf("fund EVM contract failed: %v", err)
+	}
+	t.Logf("evm close/profit fund: %+v", fund)
+	if err := waitL2HeightAbove(t, manager, fundStart, 4*time.Minute); err != nil {
+		t.Fatalf("fund was not confirmed: %v", err)
+	}
+
+	closeStart := manager.l2IndexerClient.GetBestHeight()
+	closeResult, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType:    ContractTypeEVM,
+		ContractAddress: deploy.ContractAddress,
+		Action:          contractcommon.ContractInvokeAPIClose,
+		CallNonce:       uint64(time.Now().UnixNano()),
+		GasLimit:        contractcommon.InvokeBaseGas,
+		GasAssetAmount:  20000,
+	})
+	if err != nil {
+		t.Fatalf("close EVM contract failed: %v", err)
+	}
+	t.Logf("evm close/profit close invoke: %+v", closeResult)
+	if err := waitL2HeightAbove(t, manager, closeStart, 4*time.Minute); err != nil {
+		t.Fatalf("close was not confirmed: %v", err)
+	}
+	closeHeight, err := waitL2TxHeight(t, manager, closeResult.TxID, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("close tx height: %v", err)
+	}
+	resultTx := findL2ResultSpendingTx(t, manager, int(closeHeight), closeResult.TxID)
+	values := txOutputValuesByAddress(t, resultTx)
+	if values[deployer] != 60 {
+		t.Fatalf("deployer profit mismatch: got %d want 60 outputs=%v", values[deployer], values)
+	}
+	if values[bootstrap] != 40 {
+		t.Fatalf("bootstrap profit mismatch: got %d want 40 outputs=%v", values[bootstrap], values)
+	}
+	t.Logf("evm close/profit result tx=%s outputs=%v", resultTx.TxID(), values)
+}
+
+func evmLiveInitCodeHex(runtime []byte) string {
+	init := []byte{
+		0x60, byte(len(runtime)),
+		0x60, 0x0c,
+		0x60, 0x00,
+		0x39,
+		0x60, byte(len(runtime)),
+		0x60, 0x00,
+		0xf3,
+	}
+	return hex.EncodeToString(append(init, runtime...))
 }
 
 func TestUnifiedTemplateDefaultInvoke_testnet(t *testing.T) {
@@ -938,6 +1030,85 @@ func waitL2HeightAbove(t *testing.T, manager *Manager, height int64, timeout tim
 		time.Sleep(5 * time.Second)
 	}
 	return fmt.Errorf("timeout waiting for l2 height > %d, last height %d", height, lastHeight)
+}
+
+func waitL2TxHeight(t *testing.T, manager *Manager, txid string, timeout time.Duration) (int64, error) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		info, err := manager.l2IndexerClient.GetTxInfo(txid)
+		if err == nil && info != nil && info.Confirmations > 0 {
+			t.Logf("l2 tx confirmed: %s height=%d confirmations=%d", txid, info.BlockHeight, info.Confirmations)
+			return info.BlockHeight, nil
+		}
+		lastErr = err
+		time.Sleep(5 * time.Second)
+	}
+	return 0, fmt.Errorf("timeout waiting for tx %s confirmation: %v", txid, lastErr)
+}
+
+func findL2ResultSpendingTx(t *testing.T, manager *Manager, height int, invokeTxID string) *swire.MsgTx {
+	t.Helper()
+	block := l2BlockAtHeight(t, manager, height)
+	var found *swire.MsgTx
+	for _, tx := range block.Transactions() {
+		msgTx := tx.MsgTx()
+		if msgTx.TxID() == invokeTxID {
+			continue
+		}
+		for _, in := range msgTx.TxIn {
+			if in.PreviousOutPoint.Hash.String() != invokeTxID {
+				continue
+			}
+			if found != nil && found.TxID() != msgTx.TxID() {
+				t.Fatalf("multiple result txs spend invoke %s: %s and %s", invokeTxID, found.TxID(), msgTx.TxID())
+			}
+			found = msgTx
+		}
+	}
+	if found == nil {
+		t.Fatalf("result tx spending invoke %s not found at height %d", invokeTxID, height)
+	}
+	return found
+}
+
+func l2BlockAtHeight(t *testing.T, manager *Manager, height int) *sbtcutil.Block {
+	t.Helper()
+	hash, err := manager.l2IndexerClient.GetBlockHash(height)
+	if err != nil {
+		t.Fatalf("get L2 block hash %d: %v", height, err)
+	}
+	rawBlock, err := manager.l2IndexerClient.GetBlock(hash)
+	if err != nil {
+		t.Fatalf("get L2 block %d %s: %v", height, hash, err)
+	}
+	data, err := hex.DecodeString(rawBlock)
+	if err != nil {
+		t.Fatalf("decode L2 block %d: %v", height, err)
+	}
+	block, err := sbtcutil.NewBlockFromBytes(data)
+	if err != nil {
+		t.Fatalf("parse L2 block %d: %v", height, err)
+	}
+	return block
+}
+
+func txOutputValuesByAddress(t *testing.T, tx *swire.MsgTx) map[string]int64 {
+	t.Helper()
+	values := make(map[string]int64)
+	for vout, out := range tx.TxOut {
+		if out == nil || out.Value == 0 {
+			continue
+		}
+		addr, err := AddrFromPkScript_SatsNet(out.PkScript)
+		if err != nil {
+			t.Logf("skip non-address output %s:%d value=%d: %v", tx.TxID(), vout, out.Value, err)
+			continue
+		}
+		values[addr] += out.Value
+	}
+	return values
 }
 
 func waitContractIndexed(t *testing.T, manager *Manager, contract string, timeout time.Duration) error {

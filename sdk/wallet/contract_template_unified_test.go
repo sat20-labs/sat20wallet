@@ -3,6 +3,7 @@ package wallet
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -61,6 +62,19 @@ func TestUnifiedTemplateContractsLocalCoverage(t *testing.T) {
 	})
 	assertCloseInvokeParamRoundTrip(t)
 	assertUnifiedTemplateInvokeParamQuery(t, manager)
+}
+
+func TestEVMDeployRejectsLowGas(t *testing.T) {
+	manager := &Manager{}
+	_, err := manager.EstimateEVMDeployContract(&ContractDeployRequest{
+		ContractType:    ContractTypeEVM,
+		ContractContent: "00",
+		ContentEncoding: "hex",
+		GasLimit:        contractcommon.TriggerBaseGas,
+	})
+	if err == nil || !strings.Contains(err.Error(), "less than required base gas") {
+		t.Fatalf("expected low gas error, got %v", err)
+	}
 }
 
 func TestUnifiedNativeTemplateTxCoverage(t *testing.T) {
@@ -329,7 +343,7 @@ func assertUnifiedTemplateInvokeParamQuery(t *testing.T, manager *Manager) {
 
 func assertUnifiedAgentInvokeParamQuery(t *testing.T, manager *Manager) {
 	t.Helper()
-	for _, action := range []string{contractcommon.AgentInvokeAPIReady, contractcommon.AgentInvokeAPIBet, contractcommon.AgentInvokeAPIConfirm, contractcommon.AgentInvokeAPIReject} {
+	for _, action := range []string{contractcommon.AgentInvokeAPIReady, contractcommon.AgentInvokeAPIBet, contractcommon.AgentInvokeAPIConfirm, contractcommon.AgentInvokeAPIReject, contractcommon.AgentInvokeAPIClose} {
 		paramJSON, err := manager.QueryParamForInvokeUnifiedContract(ContractTypeAgent, contractcommon.SubtypePrediction, action)
 		if err != nil {
 			t.Fatalf("QueryParamForInvokeUnifiedContract(agent, %s): %v", action, err)
@@ -357,6 +371,14 @@ func assertUnifiedAgentInvokeParamQuery(t *testing.T, manager *Manager) {
 	}
 	if decoded.OutcomeID != "a" {
 		t.Fatalf("unexpected agent outcome %s", decoded.OutcomeID)
+	}
+	closeJSON := mustInvokeJSON(t, contractcommon.AgentInvokeAPIClose, nil)
+	closeConverted, err := ConvertUnifiedInvokeParam(ContractTypeAgent, contractcommon.SubtypePrediction, closeJSON)
+	if err != nil {
+		t.Fatalf("ConvertUnifiedInvokeParam(agent close): %v", err)
+	}
+	if closeConverted.Action != contractcommon.AgentInvokeAPIClose || closeConverted.Param != "" {
+		t.Fatalf("unexpected agent close conversion: %+v", closeConverted)
 	}
 }
 
@@ -432,6 +454,24 @@ func assertUnifiedEVMInvokeParamQuery(t *testing.T, manager *Manager) {
 	}
 	if string(encoded) != string([]byte{0xde, 0xad, 0xbe, 0xef}) {
 		t.Fatalf("unexpected evm calldata %x", encoded)
+	}
+	closeParamJSON, err := manager.QueryParamForInvokeUnifiedContract(ContractTypeEVM, "", contractcommon.ContractInvokeAPIClose)
+	if err != nil {
+		t.Fatalf("QueryParamForInvokeUnifiedContract(evm, close): %v", err)
+	}
+	wrapper = InvokeParam{}
+	if err := json.Unmarshal([]byte(closeParamJSON), &wrapper); err != nil {
+		t.Fatalf("unmarshal evm close wrapper: %v", err)
+	}
+	if wrapper.Action != contractcommon.ContractInvokeAPIClose || wrapper.Param != "" {
+		t.Fatalf("unexpected evm close wrapper: %+v", wrapper)
+	}
+	closeConverted, err := ConvertUnifiedInvokeParam(ContractTypeEVM, "", closeParamJSON)
+	if err != nil {
+		t.Fatalf("ConvertUnifiedInvokeParam(evm close): %v", err)
+	}
+	if closeConverted.Action != contractcommon.ContractInvokeAPIClose || closeConverted.Param != "" {
+		t.Fatalf("unexpected evm close conversion: %+v", closeConverted)
 	}
 }
 

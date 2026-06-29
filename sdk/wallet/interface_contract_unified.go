@@ -394,6 +394,8 @@ func agentInvokeParamTemplate(subtype, action string) (string, error) {
 		innerParam = contractcommon.AgentPredictionConfirmParam{}
 	case contractcommon.AgentInvokeAPIReject:
 		innerParam = contractcommon.AgentPredictionRejectParam{}
+	case contractcommon.AgentInvokeAPIClose:
+		innerParam = nil
 	default:
 		return "", fmt.Errorf("agent contract %s does not support %s", subtype, action)
 	}
@@ -405,6 +407,8 @@ func evmInvokeParamTemplate(action string) (string, error) {
 	switch action {
 	case "call":
 		return unifiedInvokeParamTemplate(action, map[string]interface{}{"calldataHex": ""})
+	case contractcommon.ContractInvokeAPIClose:
+		return unifiedInvokeParamTemplate(action, nil)
 	default:
 		return "", fmt.Errorf("evm contract does not support %s", action)
 	}
@@ -443,6 +447,8 @@ func convertAgentInvokeParam(subtype, jsonInvokeParam string) (*InvokeParam, err
 			return nil, err
 		}
 		innerParam, err = param.Encode()
+	case contractcommon.AgentInvokeAPIClose:
+		innerParam = nil
 	default:
 		return nil, fmt.Errorf("agent contract %s does not support %s", subtype, wrapperParam.Action)
 	}
@@ -457,6 +463,10 @@ func convertEVMInvokeParam(jsonInvokeParam string) (*InvokeParam, error) {
 	wrapperParam, err := parseUnifiedInvokeParam(jsonInvokeParam)
 	if err != nil {
 		return nil, err
+	}
+	if wrapperParam.Action == contractcommon.ContractInvokeAPIClose {
+		wrapperParam.Param = ""
+		return wrapperParam, nil
 	}
 	if wrapperParam.Action != "call" {
 		return nil, fmt.Errorf("evm contract does not support %s", wrapperParam.Action)
@@ -939,6 +949,10 @@ func (p *Manager) estimateTemplateDeployContract(req *ContractDeployRequest) (*C
 	if gasLimit == 0 {
 		gasLimit = contractcommon.DeployBaseGas
 	}
+	if gasLimit < contractcommon.DeployBaseGas {
+		return nil, fmt.Errorf("template deploy gas limit %d is less than required base gas %d",
+			gasLimit, contractcommon.DeployBaseGas)
+	}
 	gasOverride, err := gasOverrideAmount("gas asset amount", req.GasAssetAmount)
 	if err != nil {
 		return nil, err
@@ -1390,13 +1404,17 @@ func (p *Manager) EstimateEVMDeployContract(req *ContractDeployRequest) (*Contra
 	if req == nil {
 		return nil, fmt.Errorf("missing evm deploy request")
 	}
-	caller, err := p.walletEVMAddress()
-	if err != nil {
-		return nil, err
-	}
 	gasLimit := req.GasLimit
 	if gasLimit == 0 {
 		gasLimit = contractcommon.DeployBaseGas
+	}
+	if gasLimit < contractcommon.DeployBaseGas {
+		return nil, fmt.Errorf("evm deploy gas limit %d is less than required base gas %d",
+			gasLimit, contractcommon.DeployBaseGas)
+	}
+	caller, err := p.walletEVMAddress()
+	if err != nil {
+		return nil, err
 	}
 	gasOverride, err := gasOverrideAmount("gas asset amount", req.GasAssetAmount)
 	if err != nil {
@@ -1529,6 +1547,7 @@ func (p *Manager) invokeEVMContract(req *ContractInvokeRequest) (*ContractTxResu
 		Contract:     contract,
 		GasLimit:     gasLimit,
 		CallNonce:    req.CallNonce,
+		Action:       converted.Action,
 		Param:        calldata,
 		Funding:      funding,
 		Inputs:       inputs,
