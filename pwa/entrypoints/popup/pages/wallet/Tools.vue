@@ -55,7 +55,46 @@
               {{ t('tools.contracts.whitepaper') }}
             </a>
           </p>
-          <Card>
+          <div v-if="contractToolPage === 'home'" class="grid gap-3">
+            <button
+              type="button"
+              class="rounded-sm border border-border bg-card p-4 text-left transition-colors hover:bg-accent"
+              @click="openContractToolPage('deploy')"
+            >
+              <div class="flex items-center gap-3">
+                <Icon icon="lucide:rocket" class="h-5 w-5 text-primary" />
+                <div>
+                  <div class="text-base font-medium">{{ t('tools.contracts.deployTitle') }}</div>
+                  <div class="mt-1 text-xs leading-5 text-muted-foreground">{{ t('tools.contracts.deployDescription') }}</div>
+                </div>
+              </div>
+            </button>
+            <button
+              type="button"
+              class="rounded-sm border border-border bg-card p-4 text-left transition-colors hover:bg-accent"
+              @click="openContractToolPage('invoke')"
+            >
+              <div class="flex items-center gap-3">
+                <Icon icon="lucide:radio-tower" class="h-5 w-5 text-primary" />
+                <div>
+                  <div class="text-base font-medium">{{ t('tools.contracts.invokeSmartContract') }}</div>
+                  <div class="mt-1 text-xs leading-5 text-muted-foreground">{{ t('tools.contracts.invokeDescription') }}</div>
+                </div>
+              </div>
+            </button>
+          </div>
+
+          <div v-else class="flex items-center justify-between gap-3">
+            <Button variant="ghost" size="sm" @click="openContractToolPage('home')">
+              <Icon icon="lucide:arrow-left" class="h-4 w-4" />
+              {{ t('common.back') }}
+            </Button>
+            <div class="text-sm font-medium">
+              {{ contractToolPage === 'deploy' ? t('tools.contracts.deployTitle') : t('tools.contracts.invokeSmartContract') }}
+            </div>
+          </div>
+
+          <Card v-if="contractToolPage === 'deploy'">
             <CardHeader>
               <CardTitle class="text-base">{{ t('tools.contracts.deployTitle') }}</CardTitle>
               <CardDescription>{{ t('tools.contracts.deployDescription') }}</CardDescription>
@@ -338,7 +377,8 @@
               <pre v-if="deploySmartContractResult" class="max-h-40 overflow-auto rounded-sm bg-zinc-950/60 p-3 text-xs leading-5 text-zinc-200">{{ deploySmartContractResult }}</pre>
             </CardContent>
           </Card>
-          <Card>
+          <template v-if="contractToolPage === 'invoke'">
+          <Card v-if="invokeToolPage === 'list'">
             <CardHeader>
               <CardTitle class="text-base">{{ t('tools.contracts.searchTitle') }}</CardTitle>
               <CardDescription>{{ t('tools.contracts.searchDescription') }}</CardDescription>
@@ -351,43 +391,71 @@
                 </Button>
               </div>
               <div class="grid grid-cols-2 gap-2">
-                <Button variant="outline" :disabled="isContractLoading" @click="loadContracts">{{ t('tools.contracts.loadList') }}</Button>
+                <Button variant="outline" :disabled="isContractLoading" @click="() => loadContracts()">{{ t('tools.contracts.loadList') }}</Button>
                 <Button variant="outline" :disabled="!selectedContractAddress || isContractLoading" @click="loadContractHistory">{{ t('tools.contracts.queryHistory') }}</Button>
               </div>
-              <div v-if="contractList.length" class="space-y-2">
+              <div v-if="contractList.length" class="space-y-3">
                 <Label>{{ t('tools.contracts.contractList') }}</Label>
-                <button
-                  v-for="contract in contractList"
-                  :key="contract.address || contract.Address"
-                  type="button"
-                  class="w-full rounded-sm border border-border px-3 py-2 text-left text-xs hover:bg-accent"
-                  @click="selectContract(contract)"
-                >
-                  <div class="font-medium">{{ contract.name || contract.Name || contract.subtype || contract.Subtype || 'contract' }}</div>
-                  <div class="break-all text-muted-foreground">{{ contract.address || contract.Address }}</div>
-                </button>
-              </div>
-              <div v-if="ammContractSummary" class="grid grid-cols-2 gap-2 rounded-sm border border-border bg-muted/30 p-3 text-xs">
-                <div>
-                  <div class="text-muted-foreground">{{ t('tools.contracts.assetA') }}</div>
-                  <div class="mt-1 break-all font-medium">{{ ammContractSummary.assetAName }}</div>
-                  <div class="mt-1 text-muted-foreground">{{ ammContractSummary.assetAAmount }}</div>
-                </div>
-                <div>
-                  <div class="text-muted-foreground">{{ t('tools.contracts.assetB') }}</div>
-                  <div class="mt-1 break-all font-medium">{{ ammContractSummary.assetBName }}</div>
-                  <div class="mt-1 text-muted-foreground">{{ ammContractSummary.assetBAmount }}</div>
-                </div>
-                <div class="col-span-2 border-t border-border pt-2">
-                  <span class="text-muted-foreground">{{ t('tools.contracts.priceBA') }}</span>
-                  <span class="font-medium">{{ ammContractSummary.price }}</span>
-                </div>
-                <div class="col-span-2">
-                  <span class="text-muted-foreground">{{ t('tools.contracts.status') }}</span>
-                  <span class="font-medium">{{ ammContractSummary.status }}</span>
+                <div v-for="group in groupedContractList" :key="group.key" class="space-y-2">
+                  <div class="text-xs font-medium text-muted-foreground">{{ group.label }}</div>
+                  <button
+                    v-for="contract in group.contracts"
+                    :key="contractAddressOf(contract)"
+                    type="button"
+                    class="w-full rounded-sm border border-border px-3 py-2 text-left text-xs hover:bg-accent"
+                    :class="{ 'border-primary bg-primary/10': contractAddressOf(contract) === invokeContractAddress }"
+                    @click="selectContract(contract)"
+                  >
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="font-medium">{{ contractDisplayName(contract) }}</span>
+                      <span class="shrink-0 rounded-sm bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{{ contractTypeLabel(contract) }}</span>
+                    </div>
+                    <div class="mt-1 break-all text-muted-foreground">{{ contractAddressOf(contract) }}</div>
+                    <div v-if="contractAssetLine(contract)" class="mt-1 text-muted-foreground">{{ contractAssetLine(contract) }}</div>
+                  </button>
                 </div>
               </div>
-              <pre v-else-if="contractStatusText" class="max-h-56 overflow-auto rounded-sm bg-zinc-950/60 p-3 text-xs leading-5 text-zinc-200">{{ contractStatusText }}</pre>
+            </CardContent>
+          </Card>
+
+          <template v-if="invokeToolPage === 'detail'">
+          <div class="flex items-center justify-between gap-3">
+            <Button variant="ghost" size="sm" @click="invokeToolPage = 'list'">
+              <Icon icon="lucide:arrow-left" class="h-4 w-4" />
+              {{ t('tools.contracts.backToContractList') }}
+            </Button>
+          </div>
+
+          <Card v-if="contractSummaryRows.length || contractActionChips.length || contractStatusText">
+            <CardHeader class="pb-3">
+              <div class="flex items-center justify-between gap-3">
+                <CardTitle class="text-base">{{ t('tools.contracts.realtimeStatus') }}</CardTitle>
+                <Button variant="outline" size="sm" :disabled="isContractLoading" @click="loadSelectedContractState">
+                  <Icon :icon="isContractLoading ? 'lucide:loader' : 'lucide:refresh-cw'" class="h-4 w-4" :class="{ 'animate-spin': isContractLoading }" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent class="space-y-3">
+              <div v-if="contractSummaryRows.length" class="grid grid-cols-2 gap-2 rounded-sm border border-border bg-muted/30 p-3 text-xs">
+                <div v-for="row in contractSummaryRows" :key="row.label" :class="row.wide ? 'col-span-2' : ''">
+                  <div class="text-muted-foreground">{{ row.label }}</div>
+                  <div class="mt-1 break-all font-medium">{{ row.value }}</div>
+                </div>
+              </div>
+              <div v-if="contractActionChips.length" class="rounded-sm border border-border bg-muted/30 p-3">
+                <div class="mb-2 text-xs text-muted-foreground">{{ t('tools.contracts.availableActions') }}</div>
+                <div class="flex flex-wrap gap-2">
+                  <span
+                    v-for="action in contractActionChips"
+                    :key="action.value"
+                    class="rounded-sm px-2 py-1 text-xs"
+                    :class="action.enabled ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground line-through'"
+                  >
+                    {{ action.label }}
+                  </span>
+                </div>
+              </div>
+              <pre v-if="!contractSummaryRows.length && contractStatusText" class="max-h-56 overflow-auto rounded-sm bg-zinc-950/60 p-3 text-xs leading-5 text-zinc-200">{{ contractStatusText }}</pre>
             </CardContent>
           </Card>
 
@@ -417,11 +485,47 @@
                       <SelectValue :placeholder="t('tools.contracts.selectAction')" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem v-for="action in invokeActionOptions" :key="action" :value="action">
+                      <SelectItem v-for="action in invokeActionOptions" :key="action" :value="action" :disabled="isInvokeActionDisabled(action)">
                         {{ action }}
                       </SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+              </div>
+              <div v-if="invokeActionNotice || invokeActionContextRows.length || limitOrderQuickPrices.length || orderbookPreviewRows.length" class="space-y-3 rounded-sm border border-border bg-muted/30 p-3 text-xs">
+                <p v-if="invokeActionNotice" class="leading-5 text-muted-foreground">{{ invokeActionNotice }}</p>
+                <div v-if="invokeActionContextRows.length" class="grid grid-cols-2 gap-2">
+                  <div v-for="row in invokeActionContextRows" :key="row.label" :class="row.wide ? 'col-span-2' : ''">
+                    <div class="text-muted-foreground">{{ row.label }}</div>
+                    <div class="mt-1 break-all font-medium">{{ row.value }}</div>
+                  </div>
+                </div>
+                <div v-if="limitOrderQuickPrices.length" class="grid grid-cols-3 gap-2">
+                  <Button
+                    v-for="price in limitOrderQuickPrices"
+                    :key="price.label"
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    :disabled="!price.value"
+                    class="h-auto flex-col gap-1 py-2 text-xs"
+                    @click="applyInvokeUnitPrice(price.value)"
+                  >
+                    <span>{{ price.label }}</span>
+                    <span class="text-muted-foreground">{{ price.value || '--' }}</span>
+                  </Button>
+                </div>
+                <div v-if="orderbookPreviewRows.length" class="space-y-2">
+                  <div class="grid grid-cols-3 gap-2 text-muted-foreground">
+                    <span>{{ t('tools.contracts.depthPrice') }}</span>
+                    <span>{{ t('tools.contracts.depthQuantity') }}</span>
+                    <span>{{ t('tools.contracts.depthTotal') }}</span>
+                  </div>
+                  <div v-for="row in orderbookPreviewRows" :key="`${row.side}-${row.price}-${row.quantity}`" class="grid grid-cols-3 gap-2">
+                    <span :class="row.side === 'buy' ? 'text-green-500' : 'text-red-500'">{{ row.price }}</span>
+                    <span>{{ row.quantity }}</span>
+                    <span>{{ row.total }}</span>
+                  </div>
                 </div>
               </div>
               <div v-if="invokeContractType === 'evm' && invokeAction === 'call'" class="space-y-1">
@@ -431,7 +535,7 @@
               <div v-else-if="invokeParamFields.length" class="space-y-3">
                 <div v-for="field in invokeParamFields" :key="field.key" class="space-y-1">
                   <Label>{{ field.label }}</Label>
-                  <Select v-if="field.options?.length" v-model="invokeParamForm[field.key]">
+                  <Select v-if="field.options?.length" v-model="invokeParamForm[field.key]" @update:model-value="onInvokeParamInput(field)">
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -446,6 +550,8 @@
                     v-model="invokeParamForm[field.key]"
                     :type="field.type"
                     :placeholder="field.placeholder"
+                    :readonly="field.readonly"
+                    :class="{ 'bg-muted/40': field.readonly }"
                     @update:model-value="onInvokeParamInput(field)"
                   />
                   <p v-if="invokeFieldBalanceText(field)" class="text-xs text-muted-foreground">
@@ -466,6 +572,8 @@
               <p v-if="contractInvokeResult" class="break-all text-xs text-muted-foreground">txid: {{ contractInvokeResult }}</p>
             </CardContent>
           </Card>
+          </template>
+          </template>
         </TabsContent>
 
         <TabsContent value="mint" class="mt-4 space-y-4">
@@ -700,6 +808,8 @@ const { env } = storeToRefs(globalStore)
 const smartContractDocUrl = computed(() => String(locale.value).startsWith('en') ? SMART_CONTRACT_DOC_URL_EN : SMART_CONTRACT_DOC_URL_ZH)
 
 const activeTab = ref('faucet')
+const contractToolPage = ref<'home' | 'deploy' | 'invoke'>('home')
+const invokeToolPage = ref<'list' | 'detail'>('list')
 
 const faucetAddress = ref(TEMP_FAUCET_CONTRACT_ADDRESS)
 const faucetAmount = ref('1000')
@@ -741,7 +851,7 @@ const templateInvokeActionsBySubtype: Record<string, string[]> = {
 const agentInvokeActions = ['default', 'ready', 'bet', 'confirm', 'reject']
 const invokeActionOptions = computed(() => {
   if (invokeContractType.value === 'template') {
-    if (invokeContractSubtype.value === 'amm.tc' && !ammCanSwap.value) {
+    if (invokeContractSubtype.value === 'amm.tc' && isAmmLiquidityOpen.value) {
       return ['addliq', 'close']
     }
     return templateInvokeActionsBySubtype[invokeContractSubtype.value] || ['default']
@@ -756,6 +866,67 @@ const invokeContractTypeLabel = computed(() => {
   if (invokeContractType.value === 'agent') return t('tools.contractTypes.agent')
   if (invokeContractType.value === 'evm') return t('tools.contractTypes.evm')
   return t('tools.contractTypes.unknown')
+})
+
+const contractAddressOf = (contract: any) => String(contract?.address || contract?.Address || contract?.contractAddress || contract?.ContractAddress || '').trim()
+const contractDisplayName = (contract: any) => (
+  contract?.label
+  || contract?.Label
+  || contract?.name
+  || contract?.Name
+  || contract?.subtype
+  || contract?.Subtype
+  || contract?.templateName
+  || contract?.TemplateName
+  || 'contract'
+)
+const contractSubtypeOf = (contract: any) => String(
+  contract?.subtype
+  || contract?.Subtype
+  || contract?.templateName
+  || contract?.TemplateName
+  || contract?.name
+  || contract?.Name
+  || ''
+).trim()
+const contractTypeOf = (contract: any): 'template' | 'agent' | 'evm' | '' => (
+  normalizeInvokeContractType(contract?.contractType || contract?.ContractType || contract?.type || contract?.Type)
+)
+const contractTypeLabel = (contract: any) => {
+  const type = contractTypeOf(contract)
+  const subtype = contractSubtypeOf(contract)
+  if (type === 'template') return subtype ? t('tools.contractTypes.templateWithSubtype', { subtype }) : t('tools.contractTypes.template')
+  if (type === 'agent') return t('tools.contractTypes.agent')
+  if (type === 'evm') return t('tools.contractTypes.evm')
+  return t('tools.contractTypes.unknown')
+}
+const contractAssetLine = (contract: any) => {
+  const values = [
+    contract?.assetName,
+    contract?.AssetName,
+    contract?.assetAName,
+    contract?.AssetAName,
+    contract?.assetBName,
+    contract?.AssetBName,
+  ].map((item) => assetNameFromUnknown(item)).filter(Boolean)
+  return [...new Set(values)].map((item) => displayAssetName(String(item))).join(' / ')
+}
+const groupedContractList = computed(() => {
+  const groups = new Map<string, { key: string; label: string; contracts: any[] }>()
+  for (const contract of contractList.value) {
+    const type = contractTypeOf(contract)
+    const subtype = contractSubtypeOf(contract)
+    const key = `${type || 'unknown'}:${subtype || 'default'}`
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        label: contractTypeLabel(contract),
+        contracts: [],
+      })
+    }
+    groups.get(key)?.contracts.push(contract)
+  }
+  return Array.from(groups.values())
 })
 const deployContractType = ref<'template' | 'agent' | 'evm'>('template')
 type ContractFieldSchema = {
@@ -1156,6 +1327,46 @@ const findContractString = (keys: string[]) => {
   ))
 }
 
+const findContractScalar = (keys: string[]) => {
+  const wanted = new Set(keys.map((key) => key.toLowerCase()))
+  return walkValues(contractLookupPayload(), (key, item) => {
+    if (!wanted.has(key.toLowerCase())) return undefined
+    if (typeof item === 'string' && item.trim()) return item.trim()
+    if (typeof item === 'number' || typeof item === 'boolean') return String(item)
+    return undefined
+  })
+}
+
+const findContractArray = (keys: string[]) => {
+  const wanted = new Set(keys.map((key) => key.toLowerCase()))
+  let result: unknown[] = []
+  walkValues(contractLookupPayload(), (key, item) => {
+    if (wanted.has(key.toLowerCase()) && Array.isArray(item)) {
+      result = item
+      return '__found__'
+    }
+    return undefined
+  })
+  return result
+}
+
+const assetNameFromUnknown = (item: unknown) => {
+  if (typeof item === 'string' && item.trim()) return item.trim()
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return ''
+  const value = item as Record<string, unknown>
+  const protocol = String(value.Protocol || value.protocol || '').trim()
+  const type = String(value.Type || value.type || '').trim()
+  const ticker = String(value.Ticker || value.ticker || '').trim()
+  return protocol && type && ticker ? `${protocol}:${type}:${ticker}` : ''
+}
+
+const findContractAssetName = (keys: string[]) => {
+  const wanted = new Set(keys.map((key) => key.toLowerCase()))
+  return walkValues(contractLookupPayload(), (key, item) => (
+    wanted.has(key.toLowerCase()) ? assetNameFromUnknown(item) || undefined : undefined
+  )) || ''
+}
+
 const displayAssetName = (assetName: string) => {
   if (!assetName) return '-'
   if (assetName === '::') return t('tools.common.sats')
@@ -1243,30 +1454,265 @@ const inferInvokeContractSubtype = () => {
   }) || ''
 }
 
-const contractAssetAName = computed(() => findContractString(['assetAName', 'AssetAName', 'assetName', 'AssetName']))
-const contractAssetBName = computed(() => findContractString(['assetBName', 'AssetBName']) || '::')
-const contractAssetAInPool = computed(() => findContractString(['assetAInPool', 'AssetAInPool']) || '0')
-const contractAssetBInPool = computed(() => findContractString(['assetBInPool', 'AssetBInPool']) || '0')
-const contractRequiredAssetA = computed(() => findContractString(['requiredAssetA', 'RequiredAssetA']) || '')
-const contractRequiredAssetB = computed(() => findContractString(['requiredAssetB', 'RequiredAssetB']) || '')
+const contractAssetAName = computed(() => (
+  findContractAssetName(['assetAName', 'AssetAName', 'assetName', 'AssetName'])
+  || findContractString(['assetAName', 'AssetAName', 'assetName', 'AssetName'])
+))
+const contractAssetBName = computed(() => (
+  findContractAssetName(['assetBName', 'AssetBName'])
+  || findContractString(['assetBName', 'AssetBName'])
+  || '::'
+))
+const contractAssetAInPool = computed(() => findContractScalar(['assetAInPool', 'AssetAInPool', 'AssetAmtInPool']) || '0')
+const contractAssetBInPool = computed(() => findContractScalar(['assetBInPool', 'AssetBInPool', 'SatsValueInPool']) || '0')
+const contractRequiredAssetA = computed(() => findContractScalar(['requiredAssetA', 'RequiredAssetA', 'assetAmt', 'AssetAmt']) || '')
+const contractRequiredAssetB = computed(() => findContractScalar(['requiredAssetB', 'RequiredAssetB', 'satValue', 'SatValue']) || '')
 const contractAssetAAmount = computed(() => contractAssetAInPool.value || '-')
 const contractAssetBAmount = computed(() => contractAssetBInPool.value || contractRequiredAssetB.value || '-')
+const contractStatusCode = computed(() => findContractScalar(['status', 'Status']) || '')
+const contractEnableBlock = computed(() => findContractScalar(['enableBlock', 'EnableBlock']) || '')
+const contractDeployerAddress = computed(() => findContractString(['deployer', 'Deployer', 'deployerAddress', 'DeployerAddress']) || '')
+const isContractDeployer = computed(() => {
+  const address = String(walletStore.address || '').trim().toLowerCase()
+  const deployer = contractDeployerAddress.value.trim().toLowerCase()
+  return !!address && !!deployer && address === deployer
+})
+const isAmmLiquidityOpen = computed(() => invokeContractSubtype.value === 'amm.tc' && contractStatusCode.value === '101')
 const ammCanSwap = computed(() => (
   invokeContractSubtype.value === 'amm.tc'
   && isPositiveDecimalValue(contractAssetAAmount.value)
   && isPositiveDecimalValue(contractAssetBAmount.value)
+  && !isAmmLiquidityOpen.value
 ))
-const ammContractSummary = computed(() => {
-  if (invokeContractSubtype.value !== 'amm.tc') return null
-  return {
-    assetAName: displayAssetName(contractAssetAName.value || t('tools.contracts.assetA')),
-    assetAAmount: contractAssetAAmount.value,
-    assetBName: displayAssetName(contractAssetBName.value),
-    assetBAmount: contractAssetBAmount.value,
-    price: decimalRatio(contractAssetBAmount.value, contractAssetAAmount.value),
-    status: ammCanSwap.value ? t('tools.contracts.tradable') : t('tools.contracts.needLiquidity'),
+const contractStatusLabel = computed(() => {
+  if (invokeContractSubtype.value === 'amm.tc') {
+    if (isAmmLiquidityOpen.value) return t('tools.contracts.liquidityOpen')
+    return ammCanSwap.value ? t('tools.contracts.tradable') : t('tools.contracts.needLiquidity')
   }
+  if (['limitorder.tc', 'swap.tc'].includes(invokeContractSubtype.value)) {
+    return t('tools.contracts.orderbookAvailable')
+  }
+  return contractStatusCode.value || '-'
 })
+const depthValue = (item: unknown, keys: string[]) => {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return ''
+  const value = item as Record<string, unknown>
+  for (const key of keys) {
+    const direct = value[key]
+    if (direct !== undefined && direct !== null && String(direct).trim()) return String(direct).trim()
+  }
+  return ''
+}
+const depthPrice = (item: unknown) => depthValue(item, ['Price', 'price', 'UnitPrice', 'unitPrice'])
+const depthQuantity = (item: unknown) => depthValue(item, ['Amt', 'amt', 'Amount', 'amount', 'Quantity', 'quantity'])
+const depthTotal = (item: unknown) => depthValue(item, ['Value', 'value', 'TotalValue', 'totalValue'])
+const contractBuyDepth = computed(() => findContractArray(['buyDepth', 'BuyDepth']))
+const contractSellDepth = computed(() => findContractArray(['sellDepth', 'SellDepth']))
+const bestBuyPrice = computed(() => contractBuyDepth.value.map(depthPrice).find(Boolean) || '-')
+const bestSellPrice = computed(() => contractSellDepth.value.map(depthPrice).find(Boolean) || '-')
+const numericDepthPrice = (item: unknown) => {
+  const n = Number(depthPrice(item))
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
+const topBidPrice = computed(() => {
+  const prices = contractBuyDepth.value.map(numericDepthPrice).filter((item): item is number => item !== undefined)
+  return prices.length ? Math.max(...prices) : undefined
+})
+const lowestAskPrice = computed(() => {
+  const prices = contractSellDepth.value.map(numericDepthPrice).filter((item): item is number => item !== undefined)
+  return prices.length ? Math.min(...prices) : undefined
+})
+const middleOrderPrice = computed(() => (
+  topBidPrice.value !== undefined && lowestAskPrice.value !== undefined
+    ? (topBidPrice.value + lowestAskPrice.value) / 2
+    : undefined
+))
+const formatOptionalPrice = (value: number | undefined) => value === undefined ? '' : Number(value.toFixed(10)).toString()
+const limitOrderQuickPrices = computed(() => {
+  if (!['limitorder.tc', 'swap.tc'].includes(invokeContractSubtype.value) || invokeAction.value !== 'swap') return []
+  return [
+    { label: t('tools.contracts.lowestAsk'), value: formatOptionalPrice(lowestAskPrice.value) },
+    { label: t('tools.contracts.midPrice'), value: formatOptionalPrice(middleOrderPrice.value) },
+    { label: t('tools.contracts.topBid'), value: formatOptionalPrice(topBidPrice.value) },
+  ]
+})
+const sortedDepthRows = (items: unknown[], side: 'buy' | 'sell') => (
+  items
+    .map((item) => ({
+      side,
+      price: depthPrice(item) || '-',
+      quantity: depthQuantity(item) || '-',
+      total: depthTotal(item) || '-',
+      sortPrice: Number(depthPrice(item)) || 0,
+    }))
+    .sort((a, b) => side === 'buy' ? b.sortPrice - a.sortPrice : a.sortPrice - b.sortPrice)
+    .slice(0, 4)
+)
+const orderbookPreviewRows = computed(() => {
+  if (!['limitorder.tc', 'swap.tc'].includes(invokeContractSubtype.value) || invokeAction.value !== 'swap') return []
+  return [
+    ...sortedDepthRows(contractSellDepth.value, 'sell'),
+    ...sortedDepthRows(contractBuyDepth.value, 'buy'),
+  ]
+})
+const contractSummaryRows = computed(() => {
+  const rows: { label: string; value: string; wide?: boolean }[] = []
+  if (invokeContractSubtype.value === 'amm.tc') {
+    rows.push(
+      { label: t('tools.contracts.statusLabel'), value: contractStatusLabel.value },
+      { label: t('tools.contracts.assetA'), value: `${displayAssetName(contractAssetAName.value || t('tools.contracts.assetA'))} ${contractAssetAAmount.value}` },
+      { label: t('tools.contracts.assetB'), value: `${displayAssetName(contractAssetBName.value)} ${contractAssetBAmount.value}` },
+      { label: t('tools.contracts.priceBA'), value: decimalRatio(contractAssetBAmount.value, contractAssetAAmount.value) },
+    )
+    if (contractEnableBlock.value) rows.push({ label: t('tools.contracts.enableBlock'), value: contractEnableBlock.value })
+    if (contractDeployerAddress.value) rows.push({ label: t('tools.contracts.deployer'), value: contractDeployerAddress.value, wide: true })
+    return rows
+  }
+  if (['limitorder.tc', 'swap.tc'].includes(invokeContractSubtype.value)) {
+    rows.push(
+      { label: t('tools.contracts.statusLabel'), value: contractStatusLabel.value },
+      { label: t('tools.invoke.assetName'), value: displayAssetName(contractAssetAName.value || '-') },
+      { label: t('tools.contracts.buyOrders'), value: String(contractBuyDepth.value.length) },
+      { label: t('tools.contracts.sellOrders'), value: String(contractSellDepth.value.length) },
+      { label: t('tools.contracts.bestBuyPrice'), value: bestBuyPrice.value },
+      { label: t('tools.contracts.bestSellPrice'), value: bestSellPrice.value },
+    )
+    if (contractEnableBlock.value) rows.push({ label: t('tools.contracts.enableBlock'), value: contractEnableBlock.value })
+    if (contractDeployerAddress.value) rows.push({ label: t('tools.contracts.deployer'), value: contractDeployerAddress.value, wide: true })
+    return rows
+  }
+  return rows
+})
+const isInvokeActionDisabled = (action: string) => (
+  invokeContractSubtype.value === 'amm.tc'
+  && action === 'close'
+  && !isContractDeployer.value
+)
+const contractActionChips = computed(() => invokeActionOptions.value.map((action) => ({
+  value: action,
+  label: action,
+  enabled: !isInvokeActionDisabled(action),
+})))
+const preferredInvokeAction = (): string => {
+  if (invokeContractType.value === 'template') {
+    if (invokeContractSubtype.value === 'amm.tc') return isAmmLiquidityOpen.value ? 'addliq' : 'swap'
+    if (['limitorder.tc', 'swap.tc'].includes(invokeContractSubtype.value)) return 'swap'
+    if (invokeContractSubtype.value === 'exchange.tc') return 'exchange'
+  }
+  return ''
+}
+type ContextRow = { label: string; value: string; wide?: boolean }
+const invokeOrderTypeText = computed(() => {
+  const orderType = String(invokeParamForm.value.orderType || '').trim()
+  if (orderType === '1') return t('tools.invoke.sell')
+  if (orderType === '2') return t('tools.invoke.buy')
+  return '-'
+})
+const displayInvokeAssetName = computed(() => displayAssetName(String(invokeParamForm.value.assetName || contractAssetAName.value || '').trim()))
+const estimatedAmmSwapRows = () => {
+  const rows: ContextRow[] = []
+  const orderType = String(invokeParamForm.value.orderType || '').trim()
+  const amount = String(invokeParamForm.value.amt || '').trim()
+  const value = String(invokeParamForm.value.unitPrice || '').trim()
+  if (orderType === '1') {
+    const estimatedSats = isPositiveDecimalString(amount)
+      ? multiplyByDecimalRatioCeil(amount, contractAssetBAmount.value, contractAssetAAmount.value)
+      : ''
+    rows.push(
+      { label: t('tools.contracts.payAsset'), value: `${amount || '-'} ${displayInvokeAssetName.value}` },
+      { label: t('tools.contracts.estimatedReceive'), value: `${estimatedSats || '-'} ${displayAssetName('::')}` },
+    )
+  } else if (orderType === '2') {
+    const estimatedAsset = isPositiveDecimalString(value)
+      ? multiplyByDecimalRatioCeil(value, contractAssetAAmount.value, contractAssetBAmount.value)
+      : ''
+    rows.push(
+      { label: t('tools.contracts.payAsset'), value: `${value || '-'} ${displayAssetName('::')}` },
+      { label: t('tools.contracts.estimatedReceive'), value: `${estimatedAsset || '-'} ${displayInvokeAssetName.value}` },
+    )
+  }
+  return rows
+}
+const estimatedLimitOrderRows = () => {
+  const rows: ContextRow[] = []
+  const orderType = String(invokeParamForm.value.orderType || '').trim()
+  const amount = String(invokeParamForm.value.amt || '').trim()
+  const unitPrice = String(invokeParamForm.value.unitPrice || '').trim()
+  const value = multiplyDecimalsCeilInt(amount, unitPrice)
+  if (orderType === '2') {
+    rows.push(
+      { label: t('tools.contracts.orderSide'), value: t('tools.invoke.buy') },
+      { label: t('tools.contracts.orderValue'), value: value > 0 ? `${value} ${displayAssetName('::')}` : '-' },
+      { label: t('tools.contracts.estimatedPay'), value: value > 0 ? `${limitOrderFundingValue(amount, unitPrice)} ${displayAssetName('::')}` : '-' },
+    )
+  } else if (orderType === '1') {
+    rows.push(
+      { label: t('tools.contracts.orderSide'), value: t('tools.invoke.sell') },
+      { label: t('tools.contracts.payAsset'), value: `${amount || '-'} ${displayInvokeAssetName.value}` },
+      { label: t('tools.contracts.estimatedReceive'), value: value > 0 ? `${value} ${displayAssetName('::')}` : '-' },
+    )
+  }
+  return rows
+}
+const invokeActionNotice = computed(() => {
+  if (invokeContractSubtype.value === 'amm.tc') {
+    if (invokeAction.value === 'swap') return t('tools.contracts.ammSwapNotice')
+    if (invokeAction.value === 'addliq') return t('tools.contracts.ammAddLiquidityNotice')
+    if (invokeAction.value === 'removeliq') return t('tools.contracts.ammRemoveLiquidityNotice')
+    if (invokeAction.value === 'close') return isContractDeployer.value ? t('tools.contracts.closeNotice') : t('tools.contracts.closeDisabledNotice')
+  }
+  if (['limitorder.tc', 'swap.tc'].includes(invokeContractSubtype.value)) {
+    if (invokeAction.value === 'swap') return t('tools.contracts.limitOrderSwapNotice')
+    if (invokeAction.value === 'refund') return t('tools.contracts.limitOrderRefundNotice')
+    if (invokeAction.value === 'close') return t('tools.contracts.closeNotice')
+  }
+  return ''
+})
+const invokeActionContextRows = computed<ContextRow[]>(() => {
+  const rows: ContextRow[] = []
+  if (invokeContractSubtype.value === 'amm.tc') {
+    rows.push(
+      { label: t('tools.contracts.currentPrice'), value: `${decimalRatio(contractAssetBAmount.value, contractAssetAAmount.value)} ${displayAssetName('::')} / ${displayAssetName(contractAssetAName.value || '')}` },
+      { label: t('tools.contracts.poolAssetInfo'), value: `${contractAssetAAmount.value} ${displayAssetName(contractAssetAName.value || '')} / ${contractAssetBAmount.value} ${displayAssetName(contractAssetBName.value)}`, wide: true },
+    )
+    if (invokeAction.value === 'swap') rows.push(...estimatedAmmSwapRows())
+    if (invokeAction.value === 'addliq') {
+      rows.push({ label: t('tools.contracts.requiredRatio'), value: addLiquidityRatioBase.value ? `${addLiquidityRatioBase.value.assetA} ${displayAssetName(contractAssetAName.value || '')} / ${addLiquidityRatioBase.value.assetB} ${displayAssetName(contractAssetBName.value)}` : '-' , wide: true })
+    }
+    if (invokeAction.value === 'removeliq') {
+      rows.push({ label: t('tools.contracts.lpAvailable'), value: findLpBalanceForWallet() || '-' })
+    }
+    return rows
+  }
+  if (['limitorder.tc', 'swap.tc'].includes(invokeContractSubtype.value)) {
+    rows.push(
+      { label: t('tools.contracts.topBid'), value: formatOptionalPrice(topBidPrice.value) || '-' },
+      { label: t('tools.contracts.lowestAsk'), value: formatOptionalPrice(lowestAskPrice.value) || '-' },
+    )
+    if (invokeAction.value === 'swap') rows.push(...estimatedLimitOrderRows())
+    return rows
+  }
+  return rows
+})
+const applyInvokeUnitPrice = (value: string) => {
+  if (!value) return
+  invokeParamForm.value.unitPrice = value
+}
+const firstEnabledInvokeAction = () => {
+  const preferred = preferredInvokeAction()
+  if (preferred && invokeActionOptions.value.includes(preferred) && !isInvokeActionDisabled(preferred)) return preferred
+  return invokeActionOptions.value.find((action) => !isInvokeActionDisabled(action)) || invokeActionOptions.value[0] || 'default'
+}
+const ensureEnabledInvokeAction = () => {
+  const preferred = preferredInvokeAction()
+  if (
+    !invokeActionOptions.value.includes(invokeAction.value)
+    || isInvokeActionDisabled(invokeAction.value)
+    || (preferred && invokeAction.value === 'default' && preferred !== 'default')
+  ) {
+    invokeAction.value = firstEnabledInvokeAction()
+  }
+}
 
 type InvokeParamField = {
   key: string
@@ -1275,6 +1721,8 @@ type InvokeParamField = {
   placeholder: string
   defaultValue?: string
   hidden?: boolean
+  readonly?: boolean
+  submit?: boolean
   valueKind?: 'string' | 'number' | 'intList'
   balanceAsset?: string | 'assetName'
   balanceLabel?: string
@@ -1307,11 +1755,10 @@ const invokeParamLabels: Record<string, string> = {
 const invokeParamFieldTemplates = ref<InvokeParamField[]>([])
 const invokeParamFields = computed<InvokeParamField[]>(() => invokeParamFieldTemplates.value.filter((field) => !field.hidden))
 const invokeBalanceMap = ref<Record<string, { availableAmt: string; lockedAmt: string; loading?: boolean; error?: string }>>({})
+const assetPrecisionMap = ref<Record<string, number>>({ '::': 0, sats: 0 })
 
 watch([invokeContractType, invokeContractSubtype], () => {
-  if (!invokeActionOptions.value.includes(invokeAction.value)) {
-    invokeAction.value = invokeActionOptions.value[0] || 'default'
-  }
+  ensureEnabledInvokeAction()
   void loadInvokeParamTemplate()
 })
 
@@ -1320,6 +1767,7 @@ watch([selectedContract, contractState], () => {
   if (inferred) invokeContractType.value = inferred
   const subtype = inferInvokeContractSubtype()
   if (subtype) invokeContractSubtype.value = subtype
+  ensureEnabledInvokeAction()
   void loadInvokeParamTemplate()
 })
 
@@ -1335,8 +1783,8 @@ const parseMaybeJson = (value: unknown) => {
 }
 
 const normalizeInvokeParamValue = (key: string, value: unknown) => {
-  const text = String(value ?? '').trim()
   const field = invokeParamFieldTemplates.value.find((item) => item.key === key)
+  const text = truncateDecimalToPrecision(value, field ? precisionForInvokeField(field) : undefined).trim()
   if (field?.valueKind === 'intList') {
     if (!text) return []
     return text.split(',').map((item) => Number(item.trim())).filter((item) => Number.isInteger(item) && item >= 0)
@@ -1348,8 +1796,91 @@ const normalizeInvokeParamValue = (key: string, value: unknown) => {
 }
 
 const invokeParams = () => Object.fromEntries(
-  Object.entries(invokeParamForm.value).map(([key, value]) => [key, normalizeInvokeParamValue(key, value)])
+  invokeParamFieldTemplates.value
+    .filter((field) => field.submit !== false)
+    .map((field) => [field.key, normalizeInvokeParamValue(field.key, invokeParamForm.value[field.key])])
 )
+
+const parseTickerPayload = (value: unknown): unknown => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const record = value as Record<string, unknown>
+  if (typeof record.ticker === 'string') {
+    try {
+      return JSON.parse(record.ticker)
+    } catch {
+      return value
+    }
+  }
+  return record.data || record.ticker || value
+}
+
+const precisionFromTickerInfo = (value: unknown): number | undefined => {
+  const parsed = parseTickerPayload(value)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+  const record = parsed as Record<string, unknown>
+  const raw = record.divisibility ?? record.Divisibility ?? record.decimal ?? record.Decimal ?? record.dec ?? record.Dec
+  const precision = Number(raw)
+  return Number.isInteger(precision) && precision >= 0 ? precision : undefined
+}
+
+const normalizePrecisionAssetName = (assetName: string) => {
+  const text = assetName.trim()
+  if (!text || text === '::' || text.toLowerCase() === 'sats') return '::'
+  return text
+}
+
+const loadAssetPrecision = async (assetName: string) => {
+  const key = normalizePrecisionAssetName(assetName)
+  if (key in assetPrecisionMap.value) return assetPrecisionMap.value[key]
+  if (!isQueryableInvokeAsset(key)) return undefined
+  try {
+    const [err, res] = await sat20.getTickerInfo(key)
+    if (err) throw err
+    const precision = precisionFromTickerInfo(res)
+    if (precision !== undefined) {
+      assetPrecisionMap.value = { ...assetPrecisionMap.value, [key]: precision }
+      return precision
+    }
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn('[SAT20 Tools] getTickerInfo precision failed', key, error)
+  }
+  return undefined
+}
+
+const truncateDecimalToPrecision = (value: unknown, precision: number | undefined) => {
+  const text = String(value ?? '').trim()
+  if (!text || precision === undefined || precision < 0) return text
+  const match = text.match(/^(\d+)(?:\.(\d*))?/)
+  if (!match) return text
+  const integerPart = match[1] || '0'
+  const fractionPart = match[2] || ''
+  if (precision <= 0) return integerPart
+  if (text.endsWith('.')) return text
+  return fractionPart ? `${integerPart}.${fractionPart.slice(0, precision)}` : integerPart
+}
+
+const precisionForInvokeField = (field: InvokeParamField) => {
+  const assetName = resolveInvokeBalanceAsset(field)
+  if (!assetName) return undefined
+  return assetPrecisionMap.value[normalizePrecisionAssetName(assetName)]
+}
+
+const applyInvokeFieldPrecision = (field: InvokeParamField) => {
+  if (field.key === 'assetName' || field.valueKind === 'intList') return
+  const precision = precisionForInvokeField(field)
+  const current = invokeParamForm.value[field.key]
+  const truncated = truncateDecimalToPrecision(current, precision)
+  if (truncated !== current) {
+    invokeParamForm.value[field.key] = truncated
+  }
+}
+
+const ensureInvokeFieldPrecision = async (field: InvokeParamField) => {
+  const assetName = resolveInvokeBalanceAsset(field)
+  if (!assetName) return
+  await loadAssetPrecision(assetName)
+  applyInvokeFieldPrecision(field)
+}
 
 const applyInvokeParamTemplate = (parameter: unknown) => {
   const parsed = parseMaybeJson(parameter)
@@ -1407,6 +1938,18 @@ const invokeHiddenField = (key: string, value: string, valueKind: InvokeParamFie
   valueKind,
   hidden: true,
 })
+const invokeAssetBAmountLabel = () => t('tools.invoke.assetBAmount', { asset: displayAssetName(contractAssetBName.value) })
+const invokeAssetBField = (key = 'assetBAmount', extra: Partial<InvokeParamField> = {}) => {
+  const valueKind = extra.valueKind || 'string'
+  return invokeTextField(
+    key,
+    invokeAssetBAmountLabel(),
+    t('tools.invoke.autoCalculated'),
+    '',
+    valueKind,
+    { balanceAsset: contractAssetBName.value || '::', ...extra },
+  )
+}
 const invokeOrderTypeField = (): InvokeParamField => ({
   key: 'orderType',
   label: t('tools.invoke.orderType'),
@@ -1432,6 +1975,7 @@ const localInvokeTemplate = () => {
           invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.invoke.defaultContractAssetA'), assetA, 'string', { balanceAsset: 'assetName' }),
           invokeTextField('amt', t('tools.invoke.assetAmount'), '', '', 'string', { balanceAsset: 'assetName' }),
           invokeTextField('unitPrice', t('tools.invoke.unitPrice')),
+          invokeAssetBField('assetBAmount', { readonly: true, submit: false }),
         ]
       }
       if (action === 'refund') {
@@ -1444,7 +1988,7 @@ const localInvokeTemplate = () => {
           invokeOrderTypeField(),
           invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.invoke.defaultAssetA'), assetA, 'string', { balanceAsset: 'assetName' }),
           invokeTextField('amt', t('tools.invoke.assetAmount'), '', '', 'string', { balanceAsset: 'assetName' }),
-          invokeTextField('unitPrice', t('tools.invoke.unitPriceHint')),
+          invokeAssetBField('unitPrice'),
         ]
       }
       if (action === 'addliq') {
@@ -1452,7 +1996,7 @@ const localInvokeTemplate = () => {
           invokeHiddenField('orderType', '9'),
           invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.invoke.defaultAssetA'), assetA, 'string', { balanceAsset: 'assetName' }),
           invokeTextField('amt', t('tools.invoke.assetAmount'), '', '', 'string', { balanceAsset: 'assetName' }),
-          invokeTextField('value', t('tools.invoke.satsAmount'), '', '', 'number', { balanceAsset: '::' }),
+          invokeAssetBField('value', { valueKind: 'number' }),
         ]
       }
       if (action === 'removeliq') {
@@ -1551,6 +2095,7 @@ const loadInvokeFieldBalances = () => {
   for (const field of invokeParamFieldTemplates.value) {
     const assetName = resolveInvokeBalanceAsset(field)
     if (assetName) assets.add(assetName)
+    void ensureInvokeFieldPrecision(field)
   }
   for (const assetName of assets) {
     void loadInvokeAssetBalance(assetName)
@@ -1710,17 +2255,56 @@ const invokeFieldHelpText = (field: InvokeParamField) => {
   return ''
 }
 
+const calculateAmmAssetBAmount = (amount: string, ratio: { assetA: string; assetB: string } | null) => (
+  amount && ratio
+    ? multiplyByDecimalRatioCeil(amount, ratio.assetB, ratio.assetA)
+    : ''
+)
+
+const calculateLimitOrderAssetBAmount = (amount: string, unitPrice: string) => {
+  if (!amount || !unitPrice) return ''
+  const value = multiplyDecimalsCeilInt(amount, unitPrice)
+  return value > 0 ? String(value) : ''
+}
+
+const invokeFieldByKey = (key: string) => invokeParamFieldTemplates.value.find((field) => field.key === key)
+const truncateInvokeFieldValue = (key: string, value: string) => {
+  const field = invokeFieldByKey(key)
+  if (!field) return value
+  return truncateDecimalToPrecision(value, precisionForInvokeField(field))
+}
+
+const syncInvokeAssetBAmount = (changedKey = '') => {
+  const amount = String(invokeParamForm.value.amt || '').trim()
+  if (invokeContractSubtype.value === 'amm.tc') {
+    if (invokeAction.value === 'addliq' && ['amt', 'orderType'].includes(changedKey)) {
+      invokeParamForm.value.value = truncateInvokeFieldValue('value', calculateAmmAssetBAmount(amount, addLiquidityRatioBase.value))
+      return
+    }
+    if (invokeAction.value === 'swap' && ['amt', 'orderType'].includes(changedKey)) {
+      invokeParamForm.value.unitPrice = truncateInvokeFieldValue('unitPrice', calculateAmmAssetBAmount(amount, {
+        assetA: contractAssetAAmount.value,
+        assetB: contractAssetBAmount.value,
+      }))
+    }
+    return
+  }
+  if (['limitorder.tc', 'swap.tc'].includes(invokeContractSubtype.value) && invokeAction.value === 'swap') {
+    if (['amt', 'unitPrice', 'orderType'].includes(changedKey)) {
+      invokeParamForm.value.assetBAmount = truncateInvokeFieldValue('assetBAmount', calculateLimitOrderAssetBAmount(amount, String(invokeParamForm.value.unitPrice || '').trim()))
+    }
+  }
+}
+
 const onInvokeParamInput = (field: InvokeParamField) => {
   if (field.key === 'assetName') {
     loadInvokeFieldBalances()
   }
-  if (invokeContractSubtype.value === 'amm.tc' && invokeAction.value === 'addliq' && field.key === 'amt') {
-    const amount = String(invokeParamForm.value.amt || '').trim()
-    const ratio = addLiquidityRatioBase.value
-    invokeParamForm.value.value = amount && ratio
-      ? multiplyByDecimalRatioCeil(amount, ratio.assetB, ratio.assetA)
-      : ''
-  }
+  applyInvokeFieldPrecision(field)
+  void ensureInvokeFieldPrecision(field).then(() => {
+    syncInvokeAssetBAmount(field.key)
+  })
+  syncInvokeAssetBAmount(field.key)
 }
 
 const loadInvokeParamTemplate = () => {
@@ -1731,6 +2315,7 @@ const loadInvokeParamTemplate = () => {
   invokeParamTemplate.value = Object.fromEntries(invokeParamFieldTemplates.value.map((field) => [field.key, field.placeholder]))
   invokeParamForm.value = Object.fromEntries(invokeParamFieldTemplates.value.map((field) => [field.key, field.defaultValue || '']))
   invokeParamWrapperAction.value = invokeAction.value
+  syncInvokeAssetBAmount('amt')
   loadInvokeFieldBalances()
 }
 
@@ -2369,13 +2954,25 @@ const deploySmartContract = async () => {
   }
 }
 
-const loadContracts = async () => {
+const openContractToolPage = (page: 'home' | 'deploy' | 'invoke') => {
+  contractToolPage.value = page
+  if (page === 'invoke') {
+    invokeToolPage.value = 'list'
+  }
+  if (page === 'invoke' && !contractList.value.length) {
+    void loadContracts({ silent: true })
+  }
+}
+
+const loadContracts = async (options: { silent?: boolean } = {}) => {
   try {
     isContractLoading.value = true
     const res = await smartContractApi.getContracts({ network: network.value || 'testnet', start: 0, limit: 50 })
     if (res?.code !== 0) throw new Error(res?.msg || t('tools.errors.queryContractListFailed'))
     contractList.value = res.data || []
-    showSuccess(t('tools.messages.queryComplete'), t('tools.messages.contractsFound', { count: contractList.value.length }))
+    if (!options.silent) {
+      showSuccess(t('tools.messages.queryComplete'), t('tools.messages.contractsFound', { count: contractList.value.length }))
+    }
   } catch (error) {
     showError(t('tools.messages.queryFailed'), error)
   } finally {
@@ -2400,6 +2997,7 @@ const loadContract = async () => {
     contractState.value = state?.code === 0 ? state.data || state.status : state
     contractHistory.value = null
     invokeContractAddress.value = contract
+    invokeToolPage.value = 'detail'
   } catch (error) {
     showError(t('tools.messages.queryFailed'), error)
   } finally {
@@ -2425,11 +3023,32 @@ const loadContractHistory = async () => {
   }
 }
 
-const selectContract = (contract: any) => {
+const loadSelectedContractState = async () => {
+  const contract = invokeContractAddress.value.trim() || selectedContractAddress.value
+  if (!contract) {
+    showError(t('tools.messages.parameterError'), t('tools.errors.selectOrEnterContractAddress'))
+    return
+  }
+  try {
+    isContractLoading.value = true
+    const state = await smartContractApi.getContractState({ network: network.value || 'testnet', contract })
+    contractState.value = state?.code === 0 ? state.data || state.status : state
+    contractHistory.value = null
+  } catch (error) {
+    showError(t('tools.messages.queryFailed'), error)
+  } finally {
+    isContractLoading.value = false
+  }
+}
+
+const selectContract = async (contract: any) => {
   selectedContract.value = contract
-  const address = contract.address || contract.Address || ''
+  const address = contractAddressOf(contract)
   contractQuery.value = address
   invokeContractAddress.value = address
+  if (!address) return
+  invokeToolPage.value = 'detail'
+  await loadSelectedContractState()
 }
 
 const invokeSmartContract = async () => {
@@ -2438,6 +3057,7 @@ const invokeSmartContract = async () => {
     contractInvokeResult.value = ''
     const contract = invokeContractAddress.value.trim()
     if (!contract) throw new Error(t('tools.errors.enterContractAddress'))
+    if (isInvokeActionDisabled(invokeAction.value)) throw new Error(t('tools.errors.actionUnavailable'))
     const req = buildUnifiedInvokeRequest(contract)
     if (import.meta.env.DEV) {
       console.log('[SAT20 Tools] invokeUnifiedContract request', req)
