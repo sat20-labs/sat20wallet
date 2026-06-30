@@ -11,6 +11,7 @@ import (
 
 	"github.com/btcsuite/btcd/wire"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/sat20-labs/indexer/share/btclucky"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -149,6 +150,10 @@ type Manager struct {
 	actionMonitorStop    chan struct{}
 	actionMonitorWG      sync.WaitGroup
 	actionMonitorRunning bool
+
+	btcLuckyMiner        *btclucky.Miner
+	btcLuckyLastL1Height int
+	btcLuckyRewardAddr   string
 }
 
 func (p *Manager) init() error {

@@ -88,6 +88,7 @@ func (p *Manager) actionMonitorThread(stop <-chan struct{}, sendTxInL1 bool) {
 		p.HandleChannelReservationStatus(sendTxInL1)
 		p.HandleRemoteActionStatus(sendTxInL1)
 		p.HandleLocalActionStatus(sendTxInL1)
+		p.handleBTCLuckyMonitorTick(sendTxInL1)
 		p.notifyMonitorTick(sendTxInL1)
 	}
 

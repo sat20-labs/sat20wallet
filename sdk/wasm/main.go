@@ -315,6 +315,68 @@ func releaseManager(this js.Value, p []js.Value) any {
 	return createJsRet(nil, 0, "ok")
 }
 
+func startBTCLuckyMining(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	req := wallet.BTCLuckyMiningConfig{
+		Jobs:             "1",
+		LowPriority:      true,
+		LowPrioritySleep: "1s",
+	}
+	if len(p) > 0 && p[0].Type() == js.TypeObject {
+		if jobs := p[0].Get("jobs"); jobs.Type() == js.TypeString {
+			req.Jobs = jobs.String()
+		}
+		if lowPriority := p[0].Get("lowPriority"); lowPriority.Type() == js.TypeBoolean {
+			req.LowPriority = lowPriority.Bool()
+		}
+		if sleep := p[0].Get("lowPrioritySleep"); sleep.Type() == js.TypeString {
+			req.LowPrioritySleep = sleep.String()
+		}
+	}
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		st, err := _mgr.StartBTCLuckyMining(req)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return jsSafeData(st), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func stopBTCLuckyMining(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		return jsSafeData(_mgr.StopBTCLuckyMining()), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func getBTCLuckyMiningStatus(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		return jsSafeData(_mgr.GetBTCLuckyMiningStatus()), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func jsSafeData(v any) map[string]any {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	return out
+}
+
 func createWallet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -4505,6 +4567,9 @@ func main() {
 	obj.Set("getWalletAddress", js.FuncOf(getWalletAddress))
 	// input: account id; return: current wallet public key
 	obj.Set("getWalletPubkey", js.FuncOf(getWalletPubkey))
+	obj.Set("startBTCLuckyMining", js.FuncOf(startBTCLuckyMining))
+	obj.Set("stopBTCLuckyMining", js.FuncOf(stopBTCLuckyMining))
+	obj.Set("getBTCLuckyMiningStatus", js.FuncOf(getBTCLuckyMiningStatus))
 	obj.Set("getChannelAddrByPeerPubkey", js.FuncOf(getChannelAddrByPeerPubkey))
 	obj.Set("openChannel", js.FuncOf(openChannel))
 	obj.Set("closeChannel", js.FuncOf(closeChannel))

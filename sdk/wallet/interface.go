@@ -89,6 +89,9 @@ func (p *Manager) IsReady() bool {
 }
 
 func (p *Manager) Stop() {
+	if p.btcLuckyMiner != nil {
+		p.btcLuckyMiner.Stop()
+	}
 	p.stopActionMonitor()
 	p.l1IndexerClient.Stop()
 	p.l2IndexerClient.Stop()
