@@ -70,6 +70,12 @@ type ContractFundingAsset struct {
 	Amount    string
 }
 
+type EVMCalldataInvokeParam struct {
+	Calldata       string `json:"calldata,omitempty"`
+	CalldataHex    string `json:"calldataHex,omitempty"`
+	CalldataBase64 string `json:"calldataBase64,omitempty"`
+}
+
 type AgentPredictionOutcome struct {
 	ID   string `json:"id"`
 	Text string `json:"text"`
@@ -405,8 +411,8 @@ func agentInvokeParamTemplate(subtype, action string) (string, error) {
 func evmInvokeParamTemplate(action string) (string, error) {
 	action = strings.ToLower(strings.TrimSpace(action))
 	switch action {
-	case "call":
-		return unifiedInvokeParamTemplate(action, map[string]interface{}{"calldataHex": ""})
+	case contractcommon.ContractInvokeAPICall:
+		return unifiedInvokeParamTemplate(action, EVMCalldataInvokeParam{})
 	case contractcommon.ContractInvokeAPIClose:
 		return unifiedInvokeParamTemplate(action, nil)
 	default:
@@ -468,21 +474,58 @@ func convertEVMInvokeParam(jsonInvokeParam string) (*InvokeParam, error) {
 		wrapperParam.Param = ""
 		return wrapperParam, nil
 	}
-	if wrapperParam.Action != "call" {
+	if wrapperParam.Action != contractcommon.ContractInvokeAPICall {
 		return nil, fmt.Errorf("evm contract does not support %s", wrapperParam.Action)
 	}
-	var param struct {
-		CalldataHex string `json:"calldataHex"`
-	}
-	if err := json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
-		return nil, err
-	}
-	calldata, err := decodeHexField("calldata", param.CalldataHex)
+	innerParam, err := decodeEVMCalldataParam(wrapperParam.Param)
 	if err != nil {
 		return nil, err
 	}
-	wrapperParam.Param = base64.StdEncoding.EncodeToString(calldata)
+	wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
 	return wrapperParam, nil
+}
+
+func decodeEVMCalldataParam(param string) ([]byte, error) {
+	if strings.TrimSpace(param) == "" {
+		return nil, nil
+	}
+	var call EVMCalldataInvokeParam
+	if err := json.Unmarshal([]byte(param), &call); err != nil {
+		return nil, err
+	}
+	var provided int
+	var decoded []byte
+	if strings.TrimSpace(call.CalldataBase64) != "" {
+		provided++
+		data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(call.CalldataBase64))
+		if err != nil {
+			return nil, fmt.Errorf("decode evm calldata base64: %w", err)
+		}
+		decoded = data
+	}
+	hexValue := strings.TrimSpace(call.CalldataHex)
+	if hexValue == "" {
+		hexValue = strings.TrimSpace(call.Calldata)
+	}
+	if hexValue != "" {
+		provided++
+		data, err := decodeHexField("evm calldata", hexValue)
+		if err != nil {
+			return nil, err
+		}
+		decoded = data
+	}
+	if provided > 1 {
+		return nil, fmt.Errorf("evm calldata must specify only one encoding")
+	}
+	return decoded, nil
+}
+
+func emptyJSONParam(param string) string {
+	if strings.TrimSpace(param) == "" {
+		return "{}"
+	}
+	return param
 }
 
 func convertUnifiedInvokeRequestParam(contractType string, req *ContractInvokeRequest) (*InvokeParam, error) {
@@ -1535,9 +1578,9 @@ func (p *Manager) invokeEVMContract(req *ContractInvokeRequest) (*ContractTxResu
 	if err != nil {
 		return nil, err
 	}
-	calldata, err := base64.StdEncoding.DecodeString(converted.Param)
+	invokeParam, err := base64.StdEncoding.DecodeString(converted.Param)
 	if err != nil {
-		return nil, fmt.Errorf("decode evm calldata: %w", err)
+		return nil, fmt.Errorf("decode evm invoke param: %w", err)
 	}
 	funding, inputs, changeOutputs, prevFetcher, caller, err := p.selectUnifiedContractFunding(gasAsset, gasAmount, gasAmount-gasBaseFee, req.Value, contractFundingAssets(req.Assets))
 	if err != nil {
@@ -1548,7 +1591,7 @@ func (p *Manager) invokeEVMContract(req *ContractInvokeRequest) (*ContractTxResu
 		GasLimit:     gasLimit,
 		CallNonce:    req.CallNonce,
 		Action:       converted.Action,
-		Param:        calldata,
+		Param:        invokeParam,
 		Funding:      funding,
 		Inputs:       inputs,
 		ExtraOutputs: changeOutputs,

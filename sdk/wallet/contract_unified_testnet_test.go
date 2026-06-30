@@ -111,8 +111,8 @@ func TestUnifiedEVMDeployInvoke_testnet(t *testing.T) {
 	invoke, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
 		ContractType:    ContractTypeEVM,
 		ContractAddress: deploy.ContractAddress,
-		Action:          "call",
-		Param:           mustJSONParam(t, map[string]string{"calldataHex": ""}),
+		Action:          contractcommon.ContractInvokeAPICall,
+		Param:           mustJSONParam(t, EVMCalldataInvokeParam{}),
 		GasLimit:        contractcommon.InvokeBaseGas,
 		GasAssetAmount:  20000,
 		CallNonce:       deployNonce + 1,

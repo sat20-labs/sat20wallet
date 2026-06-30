@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -432,7 +433,7 @@ func TestAgentInvokeFundingGasAmount(t *testing.T) {
 
 func assertUnifiedEVMInvokeParamQuery(t *testing.T, manager *Manager) {
 	t.Helper()
-	paramJSON, err := manager.QueryParamForInvokeUnifiedContract(ContractTypeEVM, "", "call")
+	paramJSON, err := manager.QueryParamForInvokeUnifiedContract(ContractTypeEVM, contractcommon.EVMSubtypeAMM, contractcommon.ContractInvokeAPICall)
 	if err != nil {
 		t.Fatalf("QueryParamForInvokeUnifiedContract(evm, call): %v", err)
 	}
@@ -440,10 +441,12 @@ func assertUnifiedEVMInvokeParamQuery(t *testing.T, manager *Manager) {
 	if err := json.Unmarshal([]byte(paramJSON), &wrapper); err != nil {
 		t.Fatalf("unmarshal evm invoke wrapper: %v", err)
 	}
-	if wrapper.Action != "call" {
+	if wrapper.Action != contractcommon.ContractInvokeAPICall {
 		t.Fatalf("unexpected evm action %s", wrapper.Action)
 	}
-	invokeJSON := mustInvokeJSON(t, "call", map[string]string{"calldataHex": "0xdeadbeef"})
+	invokeJSON := mustInvokeJSON(t, contractcommon.ContractInvokeAPICall, EVMCalldataInvokeParam{
+		CalldataHex: "0xdeadbeef",
+	})
 	converted, err := ConvertUnifiedInvokeParam(ContractTypeEVM, "", invokeJSON)
 	if err != nil {
 		t.Fatalf("ConvertUnifiedInvokeParam(evm call): %v", err)
@@ -452,8 +455,8 @@ func assertUnifiedEVMInvokeParamQuery(t *testing.T, manager *Manager) {
 	if err != nil {
 		t.Fatalf("decode evm call param: %v", err)
 	}
-	if string(encoded) != string([]byte{0xde, 0xad, 0xbe, 0xef}) {
-		t.Fatalf("unexpected evm calldata %x", encoded)
+	if got := hex.EncodeToString(encoded); got != "deadbeef" {
+		t.Fatalf("unexpected evm calldata %s", got)
 	}
 	closeParamJSON, err := manager.QueryParamForInvokeUnifiedContract(ContractTypeEVM, "", contractcommon.ContractInvokeAPIClose)
 	if err != nil {
