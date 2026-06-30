@@ -10,10 +10,11 @@
       </header>
 
       <Tabs v-model="activeTab" class="w-full">
-        <TabsList class="grid w-full grid-cols-3">
+        <TabsList class="grid w-full grid-cols-4">
           <TabsTrigger value="faucet">{{ t('tools.tabs.faucet') }}</TabsTrigger>
           <TabsTrigger value="contracts">{{ t('tools.tabs.contracts') }}</TabsTrigger>
           <TabsTrigger value="mint">{{ t('tools.tabs.mint') }}</TabsTrigger>
+          <TabsTrigger value="mining">Mining</TabsTrigger>
         </TabsList>
 
         <TabsContent value="faucet" class="mt-4">
@@ -528,11 +529,7 @@
                   </div>
                 </div>
               </div>
-              <div v-if="invokeContractType === 'evm' && invokeAction === 'call'" class="space-y-1">
-                <Label>Calldata Hex</Label>
-                <Textarea v-model="invokeEvmCalldataHex" class="min-h-20 font-mono text-xs" :placeholder="t('tools.contracts.calldataPlaceholder')" />
-              </div>
-              <div v-else-if="invokeParamFields.length" class="space-y-3">
+              <div v-if="invokeParamFields.length" class="space-y-3">
                 <div v-for="field in invokeParamFields" :key="field.key" class="space-y-1">
                   <Label>{{ field.label }}</Label>
                   <Select v-if="field.options?.length" v-model="invokeParamForm[field.key]" @update:model-value="onInvokeParamInput(field)">
@@ -574,6 +571,23 @@
           </Card>
           </template>
           </template>
+        </TabsContent>
+
+        <TabsContent value="mining" class="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle class="text-base">BTC Lucky Mining</CardTitle>
+              <CardDescription>
+                参与 BTC 幸运挖矿，中奖后自动向 L1 提交区块。
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button class="w-full justify-start" @click="router.push('/wallet/btc-lucky-mining')">
+                <Icon icon="lucide:pickaxe" class="h-4 w-4" />
+                打开挖矿
+              </Button>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="mint" class="mt-4 space-y-4">
@@ -788,6 +802,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast-new/use-toast'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { smartContractApi } from '@/apis'
 import ordxApi from '@/apis/ordx'
 import sat20 from '@/utils/sat20'
@@ -801,6 +816,7 @@ const SUPPORTED_CONTRACTS_CACHE_PREFIX = 'tools:supported_contracts'
 
 const { toast } = useToast()
 const { t, locale } = useI18n()
+const router = useRouter()
 const walletStore = useWalletStore()
 const globalStore = useGlobalStore()
 const { network } = storeToRefs(walletStore)
@@ -839,7 +855,6 @@ const invokeAction = ref('default')
 const invokeParamForm = ref<Record<string, string>>({})
 const invokeParamTemplate = ref<Record<string, any>>({})
 const invokeParamWrapperAction = ref('')
-const invokeEvmCalldataHex = ref('')
 const contractInvokeResult = ref('')
 const isInvokingContract = ref(false)
 const templateInvokeActionsBySubtype: Record<string, string[]> = {
@@ -849,6 +864,11 @@ const templateInvokeActionsBySubtype: Record<string, string[]> = {
   'exchange.tc': ['exchange', 'close'],
 }
 const agentInvokeActions = ['default', 'ready', 'bet', 'confirm', 'reject']
+const evmInvokeActions = [
+  'default', 'inc', 'addliq', 'swap', 'removeliq', 'release', 'pledge', 'claim',
+  'withdraw', 'mint', 'burn', 'transfer', 'approve', 'transferfrom',
+  'assertbalance', 'assertallowance', 'assertsupply', 'transferasset', 'close',
+]
 const invokeActionOptions = computed(() => {
   if (invokeContractType.value === 'template') {
     if (invokeContractSubtype.value === 'amm.tc' && isAmmLiquidityOpen.value) {
@@ -857,7 +877,7 @@ const invokeActionOptions = computed(() => {
     return templateInvokeActionsBySubtype[invokeContractSubtype.value] || ['default']
   }
   if (invokeContractType.value === 'agent') return agentInvokeActions
-  return ['default', 'call']
+  return evmInvokeActions
 })
 const invokeContractTypeLabel = computed(() => {
   if (invokeContractType.value === 'template') {
@@ -1749,7 +1769,17 @@ const invokeParamLabels: Record<string, string> = {
   core_node_signature: t('tools.invoke.coreNodeSignature'),
   reason: t('tools.invoke.reason'),
   checked_at: t('tools.invoke.checkedAt'),
-  calldataHex: 'Calldata Hex',
+  recipient: t('tools.invoke.recipient'),
+  minOut: 'Min Out',
+  assetAmt: t('tools.invoke.assetAmount'),
+  amount: t('tools.invoke.assetAmount'),
+  beneficiary: t('tools.invoke.beneficiary'),
+  n: 'N',
+  authorizationBase64: 'Authorization Base64',
+  to: t('tools.invoke.recipient'),
+  from: 'From',
+  spender: 'Spender',
+  expected: 'Expected',
 }
 
 const invokeParamFieldTemplates = ref<InvokeParamField[]>([])
@@ -1907,9 +1937,6 @@ const applyInvokeParamTemplate = (parameter: unknown) => {
         : String(value ?? ''),
     ])
   )
-  if ('calldataHex' in fields) {
-    invokeEvmCalldataHex.value = String(fields.calldataHex ?? '')
-  }
 }
 
 const invokeTextField = (
@@ -2034,8 +2061,79 @@ const localInvokeTemplate = () => {
       ]
     }
   }
-  if (invokeContractType.value === 'evm' && action === 'call') {
-    return [invokeTextField('calldataHex', 'Calldata Hex', t('tools.contracts.calldataPlaceholder'))]
+  if (invokeContractType.value === 'evm') {
+    if (action === 'addliq') {
+      return [
+        invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.invoke.defaultAssetA'), assetA, 'string', { balanceAsset: 'assetName' }),
+        invokeTextField('assetAmt', t('tools.invoke.assetAmount'), '', '', 'string', { balanceAsset: 'assetName' }),
+        invokeTextField('value', t('tools.invoke.satsAmount'), '', '', 'number', { balanceAsset: '::' }),
+      ]
+    }
+    if (action === 'swap') {
+      return [
+        invokeTextField('recipient', t('tools.invoke.recipient')),
+        invokeTextField('minOut', 'Min Out'),
+        invokeTextField('value', t('tools.invoke.satsAmount'), t('tools.common.optional'), '', 'number', { balanceAsset: '::' }),
+        invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.common.optional'), assetA, 'string', { balanceAsset: 'assetName' }),
+        invokeTextField('assetAmt', t('tools.invoke.assetAmount'), t('tools.common.optional'), '', 'string', { balanceAsset: 'assetName' }),
+      ]
+    }
+    if (action === 'removeliq') {
+      return [
+        invokeTextField('recipient', t('tools.invoke.recipient')),
+        invokeTextField('assetAmt', t('tools.invoke.assetAmount')),
+        invokeTextField('value', t('tools.invoke.satsAmount'), '', '', 'number'),
+      ]
+    }
+    if (action === 'release') {
+      return [invokeTextField('recipient', t('tools.invoke.recipient')), invokeTextField('amount', t('tools.invoke.assetAmount'))]
+    }
+    if (action === 'pledge') {
+      return [
+        invokeTextField('value', t('tools.invoke.satsAmount'), t('tools.common.optional'), '', 'number', { balanceAsset: '::' }),
+        invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.common.optional'), assetA, 'string', { balanceAsset: 'assetName' }),
+        invokeTextField('assetAmt', t('tools.invoke.assetAmount'), t('tools.common.optional'), '', 'string', { balanceAsset: 'assetName' }),
+      ]
+    }
+    if (action === 'claim') return [invokeTextField('beneficiary', t('tools.invoke.beneficiary'))]
+    if (action === 'withdraw') {
+      return [
+        invokeTextField('n', 'N', '', '', 'number'),
+        invokeTextField('authorizationBase64', 'Authorization Base64'),
+      ]
+    }
+    if (['mint', 'transfer'].includes(action)) {
+      return [invokeTextField('to', t('tools.invoke.recipient')), invokeTextField('amount', t('tools.invoke.assetAmount'), '', '', 'number')]
+    }
+    if (action === 'burn') return [invokeTextField('amount', t('tools.invoke.assetAmount'), '', '', 'number')]
+    if (action === 'approve') {
+      return [invokeTextField('spender', 'Spender'), invokeTextField('amount', t('tools.invoke.assetAmount'), '', '', 'number')]
+    }
+    if (action === 'transferfrom') {
+      return [
+        invokeTextField('from', 'From'),
+        invokeTextField('to', t('tools.invoke.recipient')),
+        invokeTextField('amount', t('tools.invoke.assetAmount'), '', '', 'number'),
+      ]
+    }
+    if (action === 'assertbalance') {
+      return [invokeTextField('account', 'Account'), invokeTextField('expected', 'Expected', '', '', 'number')]
+    }
+    if (action === 'assertallowance') {
+      return [
+        invokeTextField('owner', 'Owner'),
+        invokeTextField('spender', 'Spender'),
+        invokeTextField('expected', 'Expected', '', '', 'number'),
+      ]
+    }
+    if (action === 'assertsupply') return [invokeTextField('expected', 'Expected', '', '', 'number')]
+    if (action === 'transferasset') {
+      return [
+        invokeTextField('assetName', t('tools.invoke.assetName'), '', assetA, 'string', { balanceAsset: 'assetName' }),
+        invokeTextField('to', t('tools.invoke.recipient')),
+        invokeTextField('amount', t('tools.invoke.assetAmount'), '', '', 'string', { balanceAsset: 'assetName' }),
+      ]
+    }
   }
   return []
 }
@@ -2373,9 +2471,15 @@ const buildUnifiedInvokeRequest = (contract: string) => {
     req.DefaultInvoke = true
   } else {
     const params = invokeParams()
-    const calldataHex = String(params.calldataHex || invokeEvmCalldataHex.value).trim().replace(/^0x/i, '')
     req.Action = invokeParamWrapperAction.value || action
-    req.Param = JSON.stringify({ calldataHex })
+    if (['addliq', 'swap', 'pledge'].includes(action)) {
+      const value = Number(params.value || 0)
+      if (value > 0) req.Value = value
+      const assetName = String(params.assetName || '').trim()
+      const assetAmt = String(params.assetAmt || params.amount || '').trim()
+      if (assetName && assetAmt) req.Assets = [{ AssetName: assetName, Amount: assetAmt }]
+    }
+    req.Param = Object.keys(params).length ? JSON.stringify(params) : ''
   }
   return req
 }

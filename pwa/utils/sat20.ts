@@ -211,6 +211,22 @@ class WalletManager {
     return this._handleRequest('getVersion')
   }
 
+  async startBTCLuckyMining(config: {
+    jobs: string
+    lowPriority: boolean
+    lowPrioritySleep: string
+  }): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('startBTCLuckyMining', config)
+  }
+
+  async stopBTCLuckyMining(): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('stopBTCLuckyMining')
+  }
+
+  async getBTCLuckyMiningStatus(): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('getBTCLuckyMiningStatus')
+  }
+
   async registerCallback(
     callback: Function
   ): Promise<[Error | undefined, void | undefined]> {

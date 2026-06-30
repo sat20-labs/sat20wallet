@@ -23,6 +23,7 @@ import SplitAsset from '@/entrypoints/popup/pages/wallet/split.vue'
 import DappMarket from '@/entrypoints/popup/pages/wallet/DappMarket.vue'
 import Tools from '@/entrypoints/popup/pages/wallet/Tools.vue'
 import AgentSignData from '@/entrypoints/popup/pages/wallet/AgentSignData.vue'
+import BTCLuckyMining from '@/entrypoints/popup/pages/wallet/BTCLuckyMining.vue'
 import { walletStorage } from '@/lib/walletStorage'
 
 const routes = [
@@ -80,6 +81,7 @@ const routes = [
       { path: 'dapp', component: DappMarket },
       { path: 'agent-sign-data', component: AgentSignData },
       { path: 'tools', component: Tools },
+      { path: 'btc-lucky-mining', component: BTCLuckyMining },
       { path: 'approve', component: Approve },
       { path: 'manager', component: WalletManager },
       { path: 'sub-wallet-manager', component: SubWalletManager },

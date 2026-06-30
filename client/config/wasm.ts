@@ -40,12 +40,12 @@ const config: Config = {
       ],
       IndexerL1: {
         Scheme: "https",
-        Host: "apidev.sat20.org",
+        Host: "apidev.ordx.market",
         Proxy: "btc/mainnet"
       },
       IndexerL2: {
         Scheme: "https",
-        Host: "apidev.sat20.org",
+        Host: "apidev.ordx.market",
         Proxy: "satsnet/mainnet"
       },
       Log: "debug"
@@ -60,12 +60,12 @@ const config: Config = {
       ],
       IndexerL1: {
         Scheme: "https",
-        Host: "apidev.sat20.org",
+        Host: "apidev.ordx.market",
         Proxy: "btc/testnet"
       },
       IndexerL2: {
         Scheme: "https",
-        Host: "apidev.sat20.org",
+        Host: "apidev.ordx.market",
         Proxy: "satsnet/testnet"
       },
       Log: "debug"
@@ -82,12 +82,12 @@ const config: Config = {
       ],
       IndexerL1: {
         Scheme: "https",
-        Host: "apitest.sat20.org",
+        Host: "apitest.ordx.market",
         Proxy: "btc/mainnet"
       },
       IndexerL2: {
         Scheme: "https",
-        Host: "apitest.sat20.org",
+        Host: "apitest.ordx.market",
         Proxy: "satsnet/mainnet"
       },
       Log: "debug"
@@ -102,12 +102,12 @@ const config: Config = {
       ],
       IndexerL1: {
         Scheme: "https",
-        Host: "apitest.sat20.org",
+        Host: "apitest.ordx.market",
         Proxy: "btc/testnet"
       },
       IndexerL2: {
         Scheme: "https",
-        Host: "apitest.sat20.org",
+        Host: "apitest.ordx.market",
         Proxy: "satsnet/testnet"
       },
       Log: "debug"

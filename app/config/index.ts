@@ -4,8 +4,8 @@ const devConfig = {
 }
 
 const testConfig = {
-  ordxBaseUrl: 'https://apitest.sat20.org',
-  satnetBaseUrl: 'https://apitest.sat20.org',
+  ordxBaseUrl: 'https://apitest.ordx.market',
+  satnetBaseUrl: 'https://apitest.ordx.market',
 }
 
 const prodConfig = {
