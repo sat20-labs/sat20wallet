@@ -33,15 +33,31 @@ func createAsyncJsHandler(task AsyncTaskFunc) js.Func {
 		resolve := args[0]
 		// reject := args[1]
 
-		go func() {
-			data, code, msg := task()
-			result := createJsRet(data, code, msg)
-			jsResult := js.Global().Get("Object").New()
-			for key, value := range result {
-				jsResult.Set(key, value)
-			}
-			resolve.Invoke(jsResult)
-		}()
+		var callback js.Func
+		callback = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			callback.Release()
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						result := createJsRet(nil, -1, fmt.Sprintf("wasm panic: %v", r))
+						jsResult := js.Global().Get("Object").New()
+						for key, value := range result {
+							jsResult.Set(key, value)
+						}
+						resolve.Invoke(jsResult)
+					}
+				}()
+				data, code, msg := task()
+				result := createJsRet(data, code, msg)
+				jsResult := js.Global().Get("Object").New()
+				for key, value := range result {
+					jsResult.Set(key, value)
+				}
+				resolve.Invoke(jsResult)
+			}()
+			return nil
+		})
+		js.Global().Call("setTimeout", callback, 0)
 
 		return nil
 	})
