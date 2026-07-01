@@ -33,33 +33,37 @@ const i18n = createI18n({
 import sat20 from './utils/sat20'
 import { walletStorage } from '@/lib/walletStorage'
 
+const clearDevelopmentServiceWorkerCache = async () => {
+  if (!import.meta.env.DEV || !('serviceWorker' in navigator)) {
+    return
+  }
+  try {
+    const registrations = await navigator.serviceWorker.getRegistrations()
+    await Promise.all(
+      registrations
+        .filter((registration) => registration.scope.startsWith(window.location.origin))
+        .map((registration) => registration.unregister())
+    )
+
+    if ('caches' in window) {
+      const keys = await caches.keys()
+      await Promise.all(
+        keys
+          .filter((key) => key.startsWith('sat20-wallet-pwa-'))
+          .map((key) => caches.delete(key))
+      )
+    }
+  } catch (error) {
+    console.warn('Failed to clear development service worker cache:', error)
+  }
+}
+
 const registerServiceWorker = () => {
   if (!('serviceWorker' in navigator)) {
     return
   }
 
   if (import.meta.env.DEV) {
-    window.addEventListener('load', async () => {
-      try {
-        const registrations = await navigator.serviceWorker.getRegistrations()
-        await Promise.all(
-          registrations
-            .filter((registration) => registration.scope.startsWith(window.location.origin))
-            .map((registration) => registration.unregister())
-        )
-
-        if ('caches' in window) {
-          const keys = await caches.keys()
-          await Promise.all(
-            keys
-              .filter((key) => key.startsWith('sat20-wallet-pwa-'))
-              .map((key) => caches.delete(key))
-          )
-        }
-      } catch (error) {
-        console.warn('Failed to clear development service worker cache:', error)
-      }
-    }, { once: true })
     return
   }
 
@@ -119,7 +123,7 @@ const renderStartupError = (error: unknown) => {
   })
 }
 
-loadWasm().then(async () => {
+clearDevelopmentServiceWorkerCache().then(loadWasm).then(async () => {
   // 在应用启动时初始化存储状态
   await walletStorage.initializeState()
 

@@ -96,22 +96,23 @@
       "send": "发送聪"
     },
     "contractTypes": {
-      "template": "模板合约",
-      "templateWithSubtype": "模板合约 ({subtype})",
-      "agent": "自然语言合约",
-      "evm": "EVM 合约",
-      "evmDisabled": "EVM 合约（暂未启用）",
-      "unknown": "未知合约"
+      "template": "模板",
+      "templateWithSubtype": "模板 ({subtype})",
+      "agent": "自然语言",
+      "evm": "EVM",
+      "evmDisabled": "EVM（暂未启用）",
+      "unknown": "未知"
     },
     "contracts": {
       "description": "在聪网上部署/调用智能合约。",
       "whitepaper": "智能合约白皮书",
       "deployTitle": "部署智能合约",
-      "deployDescription": "目前支持模板合约和自然语言合约；EVM 合约暂未启用。",
+      "deployDescription": "支持模板合约、自然语言合约，以及 EVM init code 部署。",
       "contractType": "合约类型",
       "gasLimit": "Gas 上限",
       "selectTemplate": "选择模板合约",
       "selectAgent": "选择自然语言合约",
+      "selectEVM": "选择 EVM 合约",
       "evmDeployDisabled": "EVM 合约部署暂未启用。",
       "deployButton": "部署智能合约",
       "invokeSmartContract": "调用智能合约",
@@ -234,6 +235,26 @@
       "matchedAmount": "按{source}，匹配{asset}数量约为：{amount}",
       "minimumStillNeeded": "{asset} 最少还需：{amount}"
     },
+    "evmInvoke": {
+      "abi": "合约 ABI",
+      "abiPlaceholder": "粘贴 JSON ABI、包含 abi 字段的 artifact，或 human-readable ABI",
+      "abiHint": "只显示非 view/pure 函数，用于构造 EVM calldata。",
+      "abiNotFound": "JSON 中没有找到 abi 数组",
+      "function": "函数",
+      "selectFunction": "选择函数",
+      "funding": "Funding 输出",
+      "fundingSats": "聪",
+      "fundingAssetName": "资产名称",
+      "fundingAssetAmount": "资产数量",
+      "fundingAssetIncomplete": "Funding 资产名称和数量必须同时填写",
+      "calldataPreview": "Calldata 预览",
+      "jsonValuePlaceholder": "使用 JSON 表示数组或 tuple",
+      "invalidInteger": "{name} 必须是整数",
+      "invalidBool": "{name} 必须是 true/false",
+      "invalidHex": "{name} 必须是 0x 十六进制",
+      "invalidTuple": "{name} 必须是 JSON 对象或数组",
+      "invalidArray": "{name} 必须是 JSON 数组"
+    },
     "schemas": {
       "limitOrder": "限价单",
       "tradeAsset": "交易资产",
@@ -262,7 +283,11 @@
       "betAsset": "下注资产",
       "minBetUnit": "最小下注单位",
       "outcomes": "结果选项",
-      "displayText": "显示文本"
+      "displayText": "显示文本",
+      "evmAmm": "标准 EVM AMM",
+      "evmLimitOrder": "标准 EVM 限价单",
+      "evmInitCodeHex": "Init code hex",
+      "evmInitCodeDescription": "粘贴已编译的 EVM init code，需要包含构造参数。"
     },
     "placeholders": {
       "assetExampleDogcoin": "如 ordx:f:dogcoin",
@@ -321,6 +346,7 @@
       "selectContractType": "请选择合约类型",
       "fillRequiredParams": "请填写必填参数",
       "evmDisabled": "EVM 合约暂未启用",
+      "deployReturnedNoTxid": "钱包没有返回部署交易 ID",
       "queryContractListFailed": "查询合约列表失败",
       "enterContractAddress": "请输入合约地址",
       "queryContractFailed": "查询合约失败",

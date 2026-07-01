@@ -111,7 +111,7 @@
                     <SelectContent>
                       <SelectItem value="template">{{ t('tools.contractTypes.template') }}</SelectItem>
                       <SelectItem value="agent">{{ t('tools.contractTypes.agent') }}</SelectItem>
-                      <SelectItem value="evm" disabled>{{ t('tools.contractTypes.evmDisabled') }}</SelectItem>
+                      <SelectItem value="evm">{{ t('tools.contractTypes.evm') }}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -367,9 +367,42 @@
                 </div>
               </template>
 
-              <div v-else class="rounded-sm border border-dashed border-border p-3 text-xs text-muted-foreground">
-                {{ t('tools.contracts.evmDeployDisabled') }}
-              </div>
+              <template v-else-if="deployContractType === 'evm'">
+                <div class="grid grid-cols-[1fr_auto] gap-2">
+                  <Select v-model="selectedContractSchemaKey" @update:model-value="selectContractSchema">
+                    <SelectTrigger>
+                      <SelectValue :placeholder="t('tools.contracts.selectEVM')" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="schema in deployableEVMSchemas"
+                        :key="schemaKey(schema)"
+                        :value="schemaKey(schema)"
+                      >
+                        {{ schema.label || schema.name }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div v-if="selectedContractSchema?.description" class="text-xs text-muted-foreground">
+                  {{ selectedContractSchema.description }}
+                </div>
+                <div v-for="field in selectedContractSchema?.fields || []" :key="field.name" class="space-y-1">
+                  <Label>{{ field.label }}</Label>
+                  <Textarea
+                    v-if="field.type === 'textarea'"
+                    v-model="deployContractForm[field.name]"
+                    class="min-h-32 font-mono text-xs"
+                    :placeholder="field.placeholder || field.default || ''"
+                  />
+                  <Input
+                    v-else
+                    v-model="deployContractForm[field.name]"
+                    :type="inputTypeForField(field)"
+                    :placeholder="field.placeholder || field.default || ''"
+                  />
+                </div>
+              </template>
 
               <Button class="w-full" :disabled="!canDeploySmartContract || isDeployingSmartContract" @click="deploySmartContract">
                 <Icon :icon="isDeployingSmartContract ? 'lucide:loader' : 'lucide:rocket'" class="h-4 w-4" :class="{ 'animate-spin': isDeployingSmartContract }" />
@@ -529,6 +562,74 @@
                   </div>
                 </div>
               </div>
+              <div v-if="isEVMCallInvoke" class="space-y-3 rounded-sm border border-border bg-muted/30 p-3">
+                <div class="space-y-1">
+                  <Label>{{ t('tools.evmInvoke.abi') }}</Label>
+                  <Textarea
+                    v-model="evmAbiText"
+                    class="min-h-32 font-mono text-xs"
+                    :placeholder="t('tools.evmInvoke.abiPlaceholder')"
+                  />
+                  <p v-if="evmAbiParseError" class="text-xs text-destructive">{{ evmAbiParseError }}</p>
+                  <p v-else class="text-xs text-muted-foreground">{{ t('tools.evmInvoke.abiHint') }}</p>
+                </div>
+                <div class="space-y-1">
+                  <Label>{{ t('tools.evmInvoke.function') }}</Label>
+                  <Select v-model="evmFunctionName">
+                    <SelectTrigger>
+                      <SelectValue :placeholder="t('tools.evmInvoke.selectFunction')" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="fn in evmCallableFunctions"
+                        :key="evmFunctionSelectorKey(fn)"
+                        :value="evmFunctionSelectorKey(fn)"
+                      >
+                        {{ evmFunctionLabel(fn) }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div v-if="selectedEVMFunction" class="space-y-3">
+                  <div v-for="(input, inputIndex) in selectedEVMFunction.inputs || []" :key="evmInputKey(input, inputIndex)" class="space-y-1">
+                    <Label>{{ evmInputLabel(input, inputIndex) }}</Label>
+                    <Textarea
+                      v-if="evmInputNeedsTextarea(input)"
+                      v-model="evmFunctionArgs[evmInputKey(input, inputIndex)]"
+                      class="min-h-20 font-mono text-xs"
+                      :placeholder="evmInputPlaceholder(input)"
+                    />
+                    <Input
+                      v-else
+                      v-model="evmFunctionArgs[evmInputKey(input, inputIndex)]"
+                      :type="evmInputType(input)"
+                      :placeholder="evmInputPlaceholder(input)"
+                    />
+                  </div>
+                  <div class="space-y-2 rounded-sm border border-border bg-background/60 p-3">
+                    <div class="text-xs font-medium">{{ t('tools.evmInvoke.funding') }}</div>
+                    <div class="grid grid-cols-2 gap-2">
+                      <div class="space-y-1">
+                        <Label>{{ t('tools.evmInvoke.fundingSats') }}</Label>
+                        <Input v-model="evmFundingSats" type="number" min="0" :placeholder="t('tools.common.optional')" />
+                      </div>
+                      <div class="space-y-1">
+                        <Label>{{ t('tools.evmInvoke.fundingAssetAmount') }}</Label>
+                        <Input v-model="evmFundingAssetAmount" :placeholder="t('tools.common.optional')" />
+                      </div>
+                    </div>
+                    <div class="space-y-1">
+                      <Label>{{ t('tools.evmInvoke.fundingAssetName') }}</Label>
+                      <Input v-model="evmFundingAssetName" :placeholder="t('tools.placeholders.assetExampleDogcoin')" />
+                    </div>
+                  </div>
+                  <div class="space-y-1">
+                    <Label>{{ t('tools.evmInvoke.calldataPreview') }}</Label>
+                    <pre class="max-h-24 overflow-auto rounded-sm bg-zinc-950/60 p-2 text-[11px] leading-5 text-zinc-200">{{ evmCalldataPreview || '-' }}</pre>
+                    <p v-if="evmCalldataError" class="text-xs text-destructive">{{ evmCalldataError }}</p>
+                  </div>
+                </div>
+              </div>
               <div v-if="invokeParamFields.length" class="space-y-3">
                 <div v-for="field in invokeParamFields" :key="field.key" class="space-y-1">
                   <Label>{{ field.label }}</Label>
@@ -559,7 +660,7 @@
                   </p>
                 </div>
               </div>
-              <div v-else class="rounded-sm border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+              <div v-else-if="!isEVMCallInvoke" class="rounded-sm border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
                 {{ t('tools.contracts.noExtraParams') }}
               </div>
               <Button class="w-full" :disabled="isInvokingContract" @click="invokeSmartContract">
@@ -803,6 +904,11 @@ import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast-new/use-toast'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import * as Abi from 'ox/Abi'
+import * as AbiFunction from 'ox/AbiFunction'
+import type { Abi as EVMAbi } from 'ox/Abi'
+import type { AbiFunction as EVMAbiFunction } from 'ox/AbiFunction'
+import type { AbiParameter } from 'abitype'
 import { smartContractApi } from '@/apis'
 import ordxApi from '@/apis/ordx'
 import sat20 from '@/utils/sat20'
@@ -811,7 +917,7 @@ import { Storage } from '@/lib/storage-adapter'
 
 const SMART_CONTRACT_DOC_URL_ZH = 'https://docs.sat20.org/protocol-xie-yi-yu-bai-pi-shu/smart-contracts'
 const SMART_CONTRACT_DOC_URL_EN = 'https://docs.sat20.org/english/protocols-and-whitepapers/smart-contracts'
-const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qgxe3g7synqpszhgglk9y27u4rj46cul3mkggeresapw9kthll7vs0dr9na'
+const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qysmtl3y9f3p63stj96c6vre0ktgu7qjpcr6ujfczexrngldee7wsz5n3qa'
 const SUPPORTED_CONTRACTS_CACHE_PREFIX = 'tools:supported_contracts'
 
 const { toast } = useToast()
@@ -864,11 +970,7 @@ const templateInvokeActionsBySubtype: Record<string, string[]> = {
   'exchange.tc': ['exchange', 'close'],
 }
 const agentInvokeActions = ['default', 'ready', 'bet', 'confirm', 'reject']
-const evmInvokeActions = [
-  'default', 'inc', 'addliq', 'swap', 'removeliq', 'release', 'pledge', 'claim',
-  'withdraw', 'mint', 'burn', 'transfer', 'approve', 'transferfrom',
-  'assertbalance', 'assertallowance', 'assertsupply', 'transferasset', 'close',
-]
+const evmInvokeActions = ['call', 'default', 'close']
 const invokeActionOptions = computed(() => {
   if (invokeContractType.value === 'template') {
     if (invokeContractSubtype.value === 'amm.tc' && isAmmLiquidityOpen.value) {
@@ -889,17 +991,30 @@ const invokeContractTypeLabel = computed(() => {
 })
 
 const contractAddressOf = (contract: any) => String(contract?.address || contract?.Address || contract?.contractAddress || contract?.ContractAddress || '').trim()
-const contractDisplayName = (contract: any) => (
+const contractBaseDisplayName = (contract: any) => String(
   contract?.label
   || contract?.Label
-  || contract?.name
-  || contract?.Name
+  || contract?.details?.contract?.name
+  || contract?.details?.contract?.Name
   || contract?.subtype
   || contract?.Subtype
   || contract?.templateName
   || contract?.TemplateName
+  || contract?.contractName
+  || contract?.ContractName
+  || contract?.name
+  || contract?.Name
   || 'contract'
-)
+).trim()
+const displayContractBaseName = (contract: any) => {
+  const name = contractBaseDisplayName(contract)
+  return name.endsWith('.tc') ? name.slice(0, -3) : name
+}
+const contractDisplayName = (contract: any) => {
+  const name = displayContractBaseName(contract)
+  const assets = contractAssetLine(contract)
+  return assets ? `${name}(${assets})` : name
+}
 const contractSubtypeOf = (contract: any) => String(
   contract?.subtype
   || contract?.Subtype
@@ -914,8 +1029,7 @@ const contractTypeOf = (contract: any): 'template' | 'agent' | 'evm' | '' => (
 )
 const contractTypeLabel = (contract: any) => {
   const type = contractTypeOf(contract)
-  const subtype = contractSubtypeOf(contract)
-  if (type === 'template') return subtype ? t('tools.contractTypes.templateWithSubtype', { subtype }) : t('tools.contractTypes.template')
+  if (type === 'template') return t('tools.contractTypes.template')
   if (type === 'agent') return t('tools.contractTypes.agent')
   if (type === 'evm') return t('tools.contractTypes.evm')
   return t('tools.contractTypes.unknown')
@@ -928,15 +1042,25 @@ const contractAssetLine = (contract: any) => {
     contract?.AssetAName,
     contract?.assetBName,
     contract?.AssetBName,
-  ].map((item) => assetNameFromUnknown(item)).filter(Boolean)
+    contract?.details?.contract?.assetName,
+    contract?.details?.contract?.AssetName,
+    contract?.details?.contract?.assetAName,
+    contract?.details?.contract?.AssetAName,
+    contract?.details?.contract?.assetBName,
+    contract?.details?.contract?.AssetBName,
+    contract?.details?.contract?.assets,
+    contract?.details?.contract?.Assets,
+    contract?.details?.prediction?.bet_asset,
+    contract?.details?.prediction?.betAsset,
+    contract?.details?.prediction?.BetAsset,
+  ].flatMap((item) => assetNamesFromUnknown(item)).filter(Boolean)
   return [...new Set(values)].map((item) => displayAssetName(String(item))).join(' / ')
 }
 const groupedContractList = computed(() => {
   const groups = new Map<string, { key: string; label: string; contracts: any[] }>()
   for (const contract of contractList.value) {
     const type = contractTypeOf(contract)
-    const subtype = contractSubtypeOf(contract)
-    const key = `${type || 'unknown'}:${subtype || 'default'}`
+    const key = type || 'unknown'
     if (!groups.has(key)) {
       groups.set(key, {
         key,
@@ -988,13 +1112,13 @@ const dateTimePickerTime = ref('')
 const schemaKey = (schema: ContractSchema) => `${schema.type}:${schema.subtype || schema.name}`
 const deployableTemplateSchemas = computed(() => contractSchemas.value.filter((schema) => schema.type === 'template' && schema.enabled))
 const deployableAgentSchemas = computed(() => contractSchemas.value.filter((schema) => schema.type === 'agent' && schema.enabled))
+const deployableEVMSchemas = computed(() => contractSchemas.value.filter((schema) => schema.type === 'evm' && schema.enabled))
 const selectedContractSchema = computed(() => contractSchemas.value.find((schema) => schemaKey(schema) === selectedContractSchemaKey.value))
 const dateTimePickerFieldLabel = computed(() => {
   const field = (selectedContractSchema.value?.fields || []).find((item) => item.name === dateTimePickerFieldName.value)
   return field?.label || t('tools.common.pickDateTime')
 })
 const canDeploySmartContract = computed(() => {
-  if (deployContractType.value === 'evm') return false
   const schema = selectedContractSchema.value
   if (!schema || !schema.enabled) return false
   return formHasRequiredValues(schema.fields || [])
@@ -1380,6 +1504,12 @@ const assetNameFromUnknown = (item: unknown) => {
   return protocol && type && ticker ? `${protocol}:${type}:${ticker}` : ''
 }
 
+const assetNamesFromUnknown = (item: unknown): string[] => {
+  if (Array.isArray(item)) return item.flatMap((entry) => assetNamesFromUnknown(entry))
+  const asset = assetNameFromUnknown(item) || (typeof item === 'string' ? item.trim() : '')
+  return asset ? [asset] : []
+}
+
 const findContractAssetName = (keys: string[]) => {
   const wanted = new Set(keys.map((key) => key.toLowerCase()))
   return walkValues(contractLookupPayload(), (key, item) => (
@@ -1420,6 +1550,22 @@ const invokeTransactionSummary = (contract: string, req: Record<string, unknown>
     }
   } else if (invokeContractType.value === 'agent' && params.outcome_id) {
     details.push({ label: t('tools.invoke.outcomeId'), value: String(params.outcome_id) })
+  } else if (invokeContractType.value === 'evm') {
+    if (req.Value) {
+      details.push({ label: t('tools.txConfirm.satsAmount'), value: String(req.Value) })
+    }
+    for (const fundingAsset of contractFundingAssets(req)) {
+      const row = txDetail(
+        t('tools.txConfirm.fundingAsset'),
+        `${displayAssetName(String(fundingAsset.AssetName || ''))} ${String(fundingAsset.Amount || '').trim()}`
+      )
+      if (row) details.push(row)
+    }
+    if (invokeAction.value === 'call') {
+      const fn = selectedEVMFunction.value
+      const row = txDetail(t('tools.evmInvoke.function'), fn ? evmFunctionLabel(fn) : '')
+      if (row) details.push(row)
+    }
   }
 
   return {
@@ -1614,6 +1760,7 @@ const contractActionChips = computed(() => invokeActionOptions.value.map((action
   enabled: !isInvokeActionDisabled(action),
 })))
 const preferredInvokeAction = (): string => {
+  if (invokeContractType.value === 'evm') return 'call'
   if (invokeContractType.value === 'template') {
     if (invokeContractSubtype.value === 'amm.tc') return isAmmLiquidityOpen.value ? 'addliq' : 'swap'
     if (['limitorder.tc', 'swap.tc'].includes(invokeContractSubtype.value)) return 'swap'
@@ -1786,6 +1933,153 @@ const invokeParamFieldTemplates = ref<InvokeParamField[]>([])
 const invokeParamFields = computed<InvokeParamField[]>(() => invokeParamFieldTemplates.value.filter((field) => !field.hidden))
 const invokeBalanceMap = ref<Record<string, { availableAmt: string; lockedAmt: string; loading?: boolean; error?: string }>>({})
 const assetPrecisionMap = ref<Record<string, number>>({ '::': 0, sats: 0 })
+const evmAbiText = ref('')
+const evmAbiParseError = ref('')
+const evmFunctionName = ref('')
+const evmFunctionArgs = ref<Record<string, string>>({})
+const evmFundingSats = ref('')
+const evmFundingAssetName = ref('')
+const evmFundingAssetAmount = ref('')
+const isEVMCallInvoke = computed(() => invokeContractType.value === 'evm' && invokeAction.value === 'call')
+
+const parseEVMABIText = (text: string): EVMAbi => {
+  const trimmed = text.trim()
+  if (!trimmed) return []
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    const parsed = JSON.parse(trimmed)
+    const abi = Array.isArray(parsed) ? parsed : parsed?.abi
+    if (!Array.isArray(abi)) throw new Error(t('tools.evmInvoke.abiNotFound'))
+    return Abi.from(abi as EVMAbi)
+  }
+  return Abi.from(trimmed.split('\n').map((line) => line.trim()).filter(Boolean))
+}
+
+const evmParsedAbi = computed<EVMAbi>(() => {
+  evmAbiParseError.value = ''
+  try {
+    return parseEVMABIText(evmAbiText.value)
+  } catch (error) {
+    evmAbiParseError.value = error instanceof Error ? error.message : String(error)
+    return []
+  }
+})
+
+const isMutableEVMFunction = (item: EVMAbi[number]): item is EVMAbiFunction => (
+  item.type === 'function' && item.stateMutability !== 'view' && item.stateMutability !== 'pure'
+)
+const evmFunctionSelectorKey = (fn: EVMAbiFunction) => `${fn.name}(${(fn.inputs || []).map((input) => input.type).join(',')})`
+const evmFunctionLabel = (fn: EVMAbiFunction) => evmFunctionSelectorKey(fn)
+const evmCallableFunctions = computed(() => evmParsedAbi.value.filter(isMutableEVMFunction))
+const selectedEVMFunction = computed(() => evmCallableFunctions.value.find((fn) => evmFunctionSelectorKey(fn) === evmFunctionName.value))
+
+watch(evmCallableFunctions, (functions) => {
+  if (!functions.length) {
+    evmFunctionName.value = ''
+    return
+  }
+  if (!functions.some((fn) => evmFunctionSelectorKey(fn) === evmFunctionName.value)) {
+    evmFunctionName.value = evmFunctionSelectorKey(functions[0])
+  }
+})
+
+watch(selectedEVMFunction, (fn) => {
+  const previous = evmFunctionArgs.value
+  evmFunctionArgs.value = Object.fromEntries((fn?.inputs || []).map((input, index) => [
+    evmInputKey(input, index),
+    previous[evmInputKey(input, index)] || '',
+  ]))
+})
+
+const evmInputKey = (_input: AbiParameter, index: number) => String(index)
+const evmInputLabel = (input: AbiParameter, index: number) => `${input.name || `arg${index}`} (${input.type})`
+const evmInputNeedsTextarea = (input: AbiParameter) => input.type.includes('[') || input.type.startsWith('tuple')
+const evmInputType = (input: AbiParameter) => input.type === 'bool' ? 'text' : input.type.startsWith('uint') || input.type.startsWith('int') ? 'number' : 'text'
+const evmInputPlaceholder = (input: AbiParameter) => {
+  if (input.type === 'bool') return 'true / false'
+  if (input.type.includes('[') || input.type.startsWith('tuple')) return t('tools.evmInvoke.jsonValuePlaceholder')
+  if (input.type.startsWith('bytes')) return '0x...'
+  if (input.type === 'address') return '0x...'
+  return ''
+}
+
+const parseEVMPrimitiveArg = (input: AbiParameter, value: unknown): unknown => {
+  const type = input.type
+  const text = String(value ?? '').trim()
+  if (type.startsWith('uint') || type.startsWith('int')) {
+    if (!/^-?\d+$/.test(text)) throw new Error(t('tools.evmInvoke.invalidInteger', { name: input.name || input.type }))
+    return BigInt(text)
+  }
+  if (type === 'bool') {
+    if (text.toLowerCase() === 'true' || text === '1') return true
+    if (text.toLowerCase() === 'false' || text === '0') return false
+    throw new Error(t('tools.evmInvoke.invalidBool', { name: input.name || input.type }))
+  }
+  if (type.startsWith('bytes')) {
+    if (!/^0x[0-9a-fA-F]*$/.test(text)) throw new Error(t('tools.evmInvoke.invalidHex', { name: input.name || input.type }))
+    return text
+  }
+  return text
+}
+
+const evmArrayBaseParameter = (input: AbiParameter): AbiParameter => ({
+  ...input,
+  type: input.type.replace(/\[[^\]]*\]$/, ''),
+} as AbiParameter)
+
+const parseEVMTupleArg = (input: AbiParameter, value: unknown): unknown => {
+  const components = (input as AbiParameter & { components?: AbiParameter[] }).components || []
+  if (!components.length) return value
+  if (Array.isArray(value)) {
+    return components.map((component, index) => parseEVMArg(component, value[index]))
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return components.map((component, index) => parseEVMArg(component, record[component.name || String(index)]))
+  }
+  throw new Error(t('tools.evmInvoke.invalidTuple', { name: input.name || input.type }))
+}
+
+const parseEVMArg = (input: AbiParameter, value: unknown): unknown => {
+  if (input.type.endsWith(']')) {
+    const text = String(value ?? '').trim()
+    if (!text) return []
+    const parsed = JSON.parse(text)
+    if (!Array.isArray(parsed)) throw new Error(t('tools.evmInvoke.invalidArray', { name: input.name || input.type }))
+    const baseInput = evmArrayBaseParameter(input)
+    return parsed.map((item) => parseEVMArg(baseInput, item))
+  }
+  if (input.type.startsWith('tuple')) {
+    const text = typeof value === 'string' ? value.trim() : ''
+    const parsed = text ? JSON.parse(text) : value
+    return parseEVMTupleArg(input, parsed)
+  }
+  return parseEVMPrimitiveArg(input, value)
+}
+
+const buildEVMCallDataHex = () => {
+  const fn = selectedEVMFunction.value
+  if (!fn) throw new Error(t('tools.evmInvoke.selectFunction'))
+  const args = (fn.inputs || []).map((input, index) => parseEVMArg(input, evmFunctionArgs.value[evmInputKey(input, index)]))
+  return AbiFunction.encodeData(fn, args)
+}
+
+const evmCalldataError = computed(() => {
+  if (!isEVMCallInvoke.value || !selectedEVMFunction.value) return ''
+  try {
+    buildEVMCallDataHex()
+    return ''
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+})
+const evmCalldataPreview = computed(() => {
+  if (!isEVMCallInvoke.value || !selectedEVMFunction.value || evmCalldataError.value) return ''
+  try {
+    return buildEVMCallDataHex()
+  } catch {
+    return ''
+  }
+})
 
 watch([invokeContractType, invokeContractSubtype], () => {
   ensureEnabledInvokeAction()
@@ -2058,80 +2352,6 @@ const localInvokeTemplate = () => {
       return [
         invokeTextField('reason', t('tools.invoke.reason')),
         invokeTextField('checked_at', t('tools.invoke.checkedAt'), t('tools.invoke.unixTimestamp'), '', 'number'),
-      ]
-    }
-  }
-  if (invokeContractType.value === 'evm') {
-    if (action === 'addliq') {
-      return [
-        invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.invoke.defaultAssetA'), assetA, 'string', { balanceAsset: 'assetName' }),
-        invokeTextField('assetAmt', t('tools.invoke.assetAmount'), '', '', 'string', { balanceAsset: 'assetName' }),
-        invokeTextField('value', t('tools.invoke.satsAmount'), '', '', 'number', { balanceAsset: '::' }),
-      ]
-    }
-    if (action === 'swap') {
-      return [
-        invokeTextField('recipient', t('tools.invoke.recipient')),
-        invokeTextField('minOut', 'Min Out'),
-        invokeTextField('value', t('tools.invoke.satsAmount'), t('tools.common.optional'), '', 'number', { balanceAsset: '::' }),
-        invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.common.optional'), assetA, 'string', { balanceAsset: 'assetName' }),
-        invokeTextField('assetAmt', t('tools.invoke.assetAmount'), t('tools.common.optional'), '', 'string', { balanceAsset: 'assetName' }),
-      ]
-    }
-    if (action === 'removeliq') {
-      return [
-        invokeTextField('recipient', t('tools.invoke.recipient')),
-        invokeTextField('assetAmt', t('tools.invoke.assetAmount')),
-        invokeTextField('value', t('tools.invoke.satsAmount'), '', '', 'number'),
-      ]
-    }
-    if (action === 'release') {
-      return [invokeTextField('recipient', t('tools.invoke.recipient')), invokeTextField('amount', t('tools.invoke.assetAmount'))]
-    }
-    if (action === 'pledge') {
-      return [
-        invokeTextField('value', t('tools.invoke.satsAmount'), t('tools.common.optional'), '', 'number', { balanceAsset: '::' }),
-        invokeTextField('assetName', t('tools.invoke.assetName'), t('tools.common.optional'), assetA, 'string', { balanceAsset: 'assetName' }),
-        invokeTextField('assetAmt', t('tools.invoke.assetAmount'), t('tools.common.optional'), '', 'string', { balanceAsset: 'assetName' }),
-      ]
-    }
-    if (action === 'claim') return [invokeTextField('beneficiary', t('tools.invoke.beneficiary'))]
-    if (action === 'withdraw') {
-      return [
-        invokeTextField('n', 'N', '', '', 'number'),
-        invokeTextField('authorizationBase64', 'Authorization Base64'),
-      ]
-    }
-    if (['mint', 'transfer'].includes(action)) {
-      return [invokeTextField('to', t('tools.invoke.recipient')), invokeTextField('amount', t('tools.invoke.assetAmount'), '', '', 'number')]
-    }
-    if (action === 'burn') return [invokeTextField('amount', t('tools.invoke.assetAmount'), '', '', 'number')]
-    if (action === 'approve') {
-      return [invokeTextField('spender', 'Spender'), invokeTextField('amount', t('tools.invoke.assetAmount'), '', '', 'number')]
-    }
-    if (action === 'transferfrom') {
-      return [
-        invokeTextField('from', 'From'),
-        invokeTextField('to', t('tools.invoke.recipient')),
-        invokeTextField('amount', t('tools.invoke.assetAmount'), '', '', 'number'),
-      ]
-    }
-    if (action === 'assertbalance') {
-      return [invokeTextField('account', 'Account'), invokeTextField('expected', 'Expected', '', '', 'number')]
-    }
-    if (action === 'assertallowance') {
-      return [
-        invokeTextField('owner', 'Owner'),
-        invokeTextField('spender', 'Spender'),
-        invokeTextField('expected', 'Expected', '', '', 'number'),
-      ]
-    }
-    if (action === 'assertsupply') return [invokeTextField('expected', 'Expected', '', '', 'number')]
-    if (action === 'transferasset') {
-      return [
-        invokeTextField('assetName', t('tools.invoke.assetName'), '', assetA, 'string', { balanceAsset: 'assetName' }),
-        invokeTextField('to', t('tools.invoke.recipient')),
-        invokeTextField('amount', t('tools.invoke.assetAmount'), '', '', 'string', { balanceAsset: 'assetName' }),
       ]
     }
   }
@@ -2470,16 +2690,20 @@ const buildUnifiedInvokeRequest = (contract: string) => {
   if (action === 'default') {
     req.DefaultInvoke = true
   } else {
-    const params = invokeParams()
-    req.Action = invokeParamWrapperAction.value || action
-    if (['addliq', 'swap', 'pledge'].includes(action)) {
-      const value = Number(params.value || 0)
-      if (value > 0) req.Value = value
-      const assetName = String(params.assetName || '').trim()
-      const assetAmt = String(params.assetAmt || params.amount || '').trim()
-      if (assetName && assetAmt) req.Assets = [{ AssetName: assetName, Amount: assetAmt }]
+    req.Action = action
+    if (action === 'call') {
+      req.Param = JSON.stringify({ calldataHex: buildEVMCallDataHex() })
+      const satsValue = Number(String(evmFundingSats.value || '').trim() || 0)
+      if (Number.isFinite(satsValue) && satsValue > 0) req.Value = satsValue
+      const assetName = String(evmFundingAssetName.value || '').trim()
+      const assetAmount = String(evmFundingAssetAmount.value || '').trim()
+      if (assetName || assetAmount) {
+        if (!assetName || !assetAmount) throw new Error(t('tools.evmInvoke.fundingAssetIncomplete'))
+        req.Assets = [{ AssetName: normalizedContractAssetName(assetName), Amount: assetAmount }]
+      }
+    } else {
+      req.Param = ''
     }
-    req.Param = Object.keys(params).length ? JSON.stringify(params) : ''
   }
   return req
 }
@@ -2593,6 +2817,28 @@ const walletContractSchemas = (contracts: string[] = []): ContractSchema[] => {
       ],
     })
   }
+  schemas.push({
+    type: 'evm',
+    subtype: 'amm',
+    name: 'evm:amm',
+    label: t('tools.schemas.evmAmm'),
+    enabled: true,
+    description: t('tools.schemas.evmInitCodeDescription'),
+    fields: [
+      { name: 'initCodeHex', label: t('tools.schemas.evmInitCodeHex'), type: 'textarea', required: true, placeholder: '0x6080...' },
+    ],
+  })
+  schemas.push({
+    type: 'evm',
+    subtype: 'limitorder',
+    name: 'evm:limitorder',
+    label: t('tools.schemas.evmLimitOrder'),
+    enabled: true,
+    description: t('tools.schemas.evmInitCodeDescription'),
+    fields: [
+      { name: 'initCodeHex', label: t('tools.schemas.evmInitCodeHex'), type: 'textarea', required: true, placeholder: '0x6080...' },
+    ],
+  })
   return schemas
 }
 
@@ -2685,7 +2931,9 @@ const selectFirstSchemaForType = () => {
     ? deployableAgentSchemas.value
     : deployContractType.value === 'template'
       ? deployableTemplateSchemas.value
-      : []
+      : deployContractType.value === 'evm'
+        ? deployableEVMSchemas.value
+        : []
   if (candidates.length && !candidates.some((schema) => schemaKey(schema) === selectedContractSchemaKey.value)) {
     selectContractSchema(schemaKey(candidates[0]))
   }
@@ -3021,6 +3269,18 @@ const deploySmartContract = async () => {
         ContentEncoding: contentRes?.contentEncoding || 'base64',
         GasLimit: gasLimit || undefined,
       }
+    } else if (schema.type === 'evm') {
+      const subtype = schema.subtype || schema.name
+      const initCodeHex = String(deployContractForm.value.initCodeHex || '').trim()
+      const [contentErr, contentRes] = await sat20.buildUnifiedContractContent('evm', subtype, JSON.stringify({ initCodeHex }))
+      if (contentErr) throw contentErr
+      req = {
+        ContractType: 'evm',
+        SubType: subtype,
+        ContractContent: contentRes?.content,
+        ContentEncoding: contentRes?.contentEncoding || 'base64',
+        GasLimit: gasLimit || undefined,
+      }
     } else {
       throw new Error(t('tools.errors.evmDisabled'))
     }
@@ -3049,9 +3309,17 @@ const deploySmartContract = async () => {
     if (!confirmed) return
     const [err, res] = await sat20.deployUnifiedContract(req)
     if (err) throw err
+    if (!res?.txid) {
+      deploySmartContractResult.value = JSON.stringify(res ?? null, null, 2)
+      throw new Error(t('tools.errors.deployReturnedNoTxid'))
+    }
     deploySmartContractResult.value = JSON.stringify(res, null, 2)
     showSuccess(t('tools.messages.deploySubmitted'), res?.txid || res?.contractAddress || t('tools.messages.txBroadcasted'))
   } catch (error) {
+    deploySmartContractResult.value = JSON.stringify({
+      stage: 'error',
+      message: error instanceof Error ? error.message : String(error),
+    }, null, 2)
     showError(t('tools.messages.deployFailed'), error)
   } finally {
     isDeployingSmartContract.value = false
@@ -3068,12 +3336,49 @@ const openContractToolPage = (page: 'home' | 'deploy' | 'invoke') => {
   }
 }
 
+const withStateQueryTimeout = async <T,>(promise: Promise<T>, timeoutMs = 2500): Promise<T | undefined> => {
+  let timer: number | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timer = window.setTimeout(() => resolve(undefined), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) window.clearTimeout(timer)
+  }
+}
+
+const enrichContractListWithState = async (contracts: any[]) => (
+  Promise.all(contracts.map(async (contract) => {
+    const address = contractAddressOf(contract)
+    if (!address) return contract
+    try {
+      const res = await withStateQueryTimeout(
+        smartContractApi.getContractState({ network: network.value || 'testnet', contract: address }),
+      )
+      if (res?.code !== 0 || !res?.data) return contract
+      return {
+        ...contract,
+        state: res.data.state ?? contract.state,
+        details: {
+          ...(contract.details || {}),
+          ...(res.data.details || {}),
+        },
+      }
+    } catch {
+      return contract
+    }
+  }))
+)
+
 const loadContracts = async (options: { silent?: boolean } = {}) => {
   try {
     isContractLoading.value = true
     const res = await smartContractApi.getContracts({ network: network.value || 'testnet', start: 0, limit: 50 })
     if (res?.code !== 0) throw new Error(res?.msg || t('tools.errors.queryContractListFailed'))
-    contractList.value = res.data || []
+    contractList.value = await enrichContractListWithState(res.data || [])
     if (!options.silent) {
       showSuccess(t('tools.messages.queryComplete'), t('tools.messages.contractsFound', { count: contractList.value.length }))
     }

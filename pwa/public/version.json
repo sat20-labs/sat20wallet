@@ -1,9 +1,9 @@
 {
-  "version": "0.1.34",
-  "buildId": "20260623T160035Z",
-  "commit": "a75914169015",
-  "releaseNotes": "恢复通道管理 STP 模块",
+  "version": "0.1.35",
+  "buildId": "20260701T064530Z",
+  "commit": "86104e9c5c7a",
+  "releaseNotes": "PWA钱包功能更新",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-06-23T16:00:35.472Z"
+  "publishedAt": "2026-07-01T06:45:30.846Z"
 }

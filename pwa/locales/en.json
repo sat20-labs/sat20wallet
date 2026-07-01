@@ -96,22 +96,23 @@
       "send": "Send sats"
     },
     "contractTypes": {
-      "template": "Template Contract",
-      "templateWithSubtype": "Template Contract ({subtype})",
-      "agent": "Natural Language Contract",
-      "evm": "EVM Contract",
-      "evmDisabled": "EVM Contract (disabled)",
-      "unknown": "Unknown Contract"
+      "template": "Template",
+      "templateWithSubtype": "Template ({subtype})",
+      "agent": "Agent",
+      "evm": "EVM",
+      "evmDisabled": "EVM (disabled)",
+      "unknown": "Unknown"
     },
     "contracts": {
       "description": "Deploy and invoke smart contracts on SatoshiNet.",
       "whitepaper": "Smart Contract Whitepaper",
       "deployTitle": "Deploy Smart Contract",
-      "deployDescription": "Template contracts and natural language contracts are supported. EVM contracts are disabled for now.",
+      "deployDescription": "Template contracts, natural language contracts, and EVM init-code deployment are supported.",
       "contractType": "Contract type",
       "gasLimit": "Gas limit",
       "selectTemplate": "Select template contract",
       "selectAgent": "Select natural language contract",
+      "selectEVM": "Select EVM contract",
       "evmDeployDisabled": "EVM contract deployment is disabled.",
       "deployButton": "Deploy Smart Contract",
       "invokeSmartContract": "Invoke Smart Contract",
@@ -234,6 +235,26 @@
       "matchedAmount": "By {source}, matched {asset} amount is about: {amount}",
       "minimumStillNeeded": "{asset} still needs at least: {amount}"
     },
+    "evmInvoke": {
+      "abi": "Contract ABI",
+      "abiPlaceholder": "Paste JSON ABI, an artifact with an abi field, or human-readable ABI",
+      "abiHint": "Only non-view/non-pure functions are shown for EVM calldata generation.",
+      "abiNotFound": "No abi array was found in the JSON",
+      "function": "Function",
+      "selectFunction": "Select function",
+      "funding": "Funding outputs",
+      "fundingSats": "Sats",
+      "fundingAssetName": "Asset name",
+      "fundingAssetAmount": "Asset amount",
+      "fundingAssetIncomplete": "Funding asset name and amount must both be filled",
+      "calldataPreview": "Calldata preview",
+      "jsonValuePlaceholder": "Use JSON for arrays or tuples",
+      "invalidInteger": "{name} must be an integer",
+      "invalidBool": "{name} must be true/false",
+      "invalidHex": "{name} must be 0x hex",
+      "invalidTuple": "{name} must be a JSON object or array",
+      "invalidArray": "{name} must be a JSON array"
+    },
     "schemas": {
       "limitOrder": "Limit Order",
       "tradeAsset": "Trade asset",
@@ -262,7 +283,11 @@
       "betAsset": "Bet asset",
       "minBetUnit": "Minimum bet unit",
       "outcomes": "Outcomes",
-      "displayText": "Display text"
+      "displayText": "Display text",
+      "evmAmm": "Standard EVM AMM",
+      "evmLimitOrder": "Standard EVM Limit Order",
+      "evmInitCodeHex": "Init code hex",
+      "evmInitCodeDescription": "Paste compiled EVM init code, including constructor arguments."
     },
     "placeholders": {
       "assetExampleDogcoin": "e.g. ordx:f:dogcoin",
@@ -321,6 +346,7 @@
       "selectContractType": "Select a contract type",
       "fillRequiredParams": "Fill in required parameters",
       "evmDisabled": "EVM contracts are disabled",
+      "deployReturnedNoTxid": "Wallet did not return a deployment transaction id",
       "queryContractListFailed": "Failed to query contract list",
       "enterContractAddress": "Enter a contract address",
       "queryContractFailed": "Failed to query contract",

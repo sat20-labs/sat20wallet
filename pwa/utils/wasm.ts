@@ -22,7 +22,8 @@ const instantiateGoWasm = async (path: string) => {
 
 const loadWalletWasm = async () => {
   const config = await getRuntimeConfig()
-  await instantiateGoWasm(`${import.meta.env.BASE_URL}wasm/sat20wallet.wasm`)
+  const wasmVersion = import.meta.env.DEV ? `?t=${Date.now()}` : ''
+  await instantiateGoWasm(`${import.meta.env.BASE_URL}wasm/sat20wallet.wasm${wasmVersion}`)
   await walletManager.init(config, logLevel)
 }
 

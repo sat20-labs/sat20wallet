@@ -76,12 +76,26 @@ export const useWalletStore = defineStore('wallet', () => {
     }
   }
 
-  const runStpSync = async (label: string, fn: () => Promise<[Error | undefined, any | undefined]>) => {
-    const [err, result] = await fn()
-    if (err) {
-      console.warn(`STP sync failed during ${label}:`, err)
+  const runStpSyncInBackground = (label: string, fn: () => Promise<[Error | undefined, any | undefined]>) => {
+    if (import.meta.env.DEV) {
+      console.info(`Skip automatic STP sync during ${label} in development mode`)
+      return
     }
-    return result
+    void fn()
+      .then(([err]) => {
+        if (err) {
+          console.warn(`STP sync failed during ${label}:`, err)
+        }
+      })
+      .catch((error) => {
+        console.warn(`STP sync failed during ${label}:`, error)
+      })
+  }
+
+  const refreshChannelsInBackground = (label: string) => {
+    void channelStore.getAllChannels().catch((error) => {
+      console.warn(`Channel refresh failed during ${label}:`, error)
+    })
   }
 
   const setAddress = async (value: string) => {
@@ -208,8 +222,8 @@ export const useWalletStore = defineStore('wallet', () => {
     await setLocked(false)
     await setChain(Chain.BTC)
     await setPassword(password)
-    await runStpSync('createWallet channel start', () => satsnetStp.start())
-    await channelStore.getAllChannels()
+    runStpSyncInBackground('createWallet channel start', () => satsnetStp.start())
+    refreshChannelsInBackground('createWallet')
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
     )
@@ -270,8 +284,8 @@ export const useWalletStore = defineStore('wallet', () => {
     // await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
     await setPassword(password)
-    await runStpSync('importWallet channel start', () => satsnetStp.start())
-    await channelStore.getAllChannels()
+    runStpSyncInBackground('importWallet channel start', () => satsnetStp.start())
+    refreshChannelsInBackground('importWallet')
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
     )
@@ -328,9 +342,9 @@ export const useWalletStore = defineStore('wallet', () => {
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
-      await runStpSync('unlockWallet channel start', () => satsnetStp.start())
+      runStpSyncInBackground('unlockWallet channel start', () => satsnetStp.start())
       await switchToAccount(accountIndex.value)
-      await channelStore.getAllChannels()
+      refreshChannelsInBackground('unlockWallet')
       return [undefined, result]
     } else if (isAlreadyUnlocked) {
       // 钱包已经解锁，但前端状态可能是锁定的，需要同步状态
@@ -338,9 +352,9 @@ export const useWalletStore = defineStore('wallet', () => {
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
-      await runStpSync('unlockWallet existing channel start', () => satsnetStp.start())
+      runStpSyncInBackground('unlockWallet existing channel start', () => satsnetStp.start())
       await switchToAccount(accountIndex.value)
-      await channelStore.getAllChannels()
+      refreshChannelsInBackground('unlockWallet existing')
       // 返回成功，不返回错误
       return [undefined, { alreadyUnlocked: true, message: '钱包已解锁，状态已同步' }]
     }
