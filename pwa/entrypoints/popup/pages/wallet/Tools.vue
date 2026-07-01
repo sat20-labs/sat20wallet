@@ -983,7 +983,12 @@ const invokeActionOptions = computed(() => {
 })
 const invokeContractTypeLabel = computed(() => {
   if (invokeContractType.value === 'template') {
-    return invokeContractSubtype.value ? t('tools.contractTypes.templateWithSubtype', { subtype: invokeContractSubtype.value }) : t('tools.contractTypes.template')
+    if (!invokeContractSubtype.value) return t('tools.contractTypes.template')
+    const name = invokeContractSubtype.value.endsWith('.tc') ? invokeContractSubtype.value.slice(0, -3) : invokeContractSubtype.value
+    const asset = contractAssetAName.value ? displayAssetName(contractAssetAName.value) : ''
+    return asset
+      ? t('tools.contractTypes.templateWithSubtype', { subtype: `${name}: ${asset}` })
+      : t('tools.contractTypes.templateWithSubtype', { subtype: name })
   }
   if (invokeContractType.value === 'agent') return t('tools.contractTypes.agent')
   if (invokeContractType.value === 'evm') return t('tools.contractTypes.evm')
@@ -996,6 +1001,12 @@ const contractBaseDisplayName = (contract: any) => String(
   || contract?.Label
   || contract?.details?.contract?.name
   || contract?.details?.contract?.Name
+  || contract?.state?.name
+  || contract?.state?.Name
+  || contract?.state?.templateName
+  || contract?.state?.TemplateName
+  || contract?.state?.subtype
+  || contract?.state?.Subtype
   || contract?.subtype
   || contract?.Subtype
   || contract?.templateName
@@ -1050,6 +1061,22 @@ const contractAssetLine = (contract: any) => {
     contract?.details?.contract?.AssetBName,
     contract?.details?.contract?.assets,
     contract?.details?.contract?.Assets,
+    contract?.state?.assetName,
+    contract?.state?.AssetName,
+    contract?.state?.assetAName,
+    contract?.state?.AssetAName,
+    contract?.state?.assetBName,
+    contract?.state?.AssetBName,
+    contract?.state?.assets,
+    contract?.state?.Assets,
+    contract?.state?.managedAssets,
+    contract?.state?.ManagedAssets,
+    contract?.state?.custom?.assetName,
+    contract?.state?.custom?.AssetName,
+    contract?.state?.custom?.assetAName,
+    contract?.state?.custom?.AssetAName,
+    contract?.state?.custom?.assetBName,
+    contract?.state?.custom?.AssetBName,
     contract?.details?.prediction?.bet_asset,
     contract?.details?.prediction?.betAsset,
     contract?.details?.prediction?.BetAsset,
@@ -1636,6 +1663,11 @@ const contractRequiredAssetB = computed(() => findContractScalar(['requiredAsset
 const contractAssetAAmount = computed(() => contractAssetAInPool.value || '-')
 const contractAssetBAmount = computed(() => contractAssetBInPool.value || contractRequiredAssetB.value || '-')
 const contractStatusCode = computed(() => findContractScalar(['status', 'Status']) || '')
+const contractTradingReady = computed(() => {
+  const value = findContractScalar(['tradingReady', 'TradingReady'])
+  if (!value) return undefined
+  return value === 'true'
+})
 const contractEnableBlock = computed(() => findContractScalar(['enableBlock', 'EnableBlock']) || '')
 const contractDeployerAddress = computed(() => findContractString(['deployer', 'Deployer', 'deployerAddress', 'DeployerAddress']) || '')
 const isContractDeployer = computed(() => {
@@ -1643,11 +1675,21 @@ const isContractDeployer = computed(() => {
   const deployer = contractDeployerAddress.value.trim().toLowerCase()
   return !!address && !!deployer && address === deployer
 })
-const isAmmLiquidityOpen = computed(() => invokeContractSubtype.value === 'amm.tc' && contractStatusCode.value === '101')
+const isAmmLiquidityOpen = computed(() => (
+  invokeContractSubtype.value === 'amm.tc'
+  && (
+    contractStatusCode.value === '101'
+    || (
+      contractTradingReady.value === false
+      && (!isPositiveDecimalValue(contractAssetAInPool.value) || !isPositiveDecimalValue(contractAssetBInPool.value))
+    )
+  )
+))
 const ammCanSwap = computed(() => (
   invokeContractSubtype.value === 'amm.tc'
   && isPositiveDecimalValue(contractAssetAAmount.value)
   && isPositiveDecimalValue(contractAssetBAmount.value)
+  && contractTradingReady.value !== false
   && !isAmmLiquidityOpen.value
 ))
 const contractStatusLabel = computed(() => {
@@ -1672,8 +1714,15 @@ const depthValue = (item: unknown, keys: string[]) => {
 const depthPrice = (item: unknown) => depthValue(item, ['Price', 'price', 'UnitPrice', 'unitPrice'])
 const depthQuantity = (item: unknown) => depthValue(item, ['Amt', 'amt', 'Amount', 'amount', 'Quantity', 'quantity'])
 const depthTotal = (item: unknown) => depthValue(item, ['Value', 'value', 'TotalValue', 'totalValue'])
-const contractBuyDepth = computed(() => findContractArray(['buyDepth', 'BuyDepth']))
-const contractSellDepth = computed(() => findContractArray(['sellDepth', 'SellDepth']))
+
+const contractBuyDepth = computed(() => {
+  const explicit = findContractArray(['buyDepth', 'BuyDepth'])
+  return explicit
+})
+const contractSellDepth = computed(() => {
+  const explicit = findContractArray(['sellDepth', 'SellDepth'])
+  return explicit
+})
 const bestBuyPrice = computed(() => contractBuyDepth.value.map(depthPrice).find(Boolean) || '-')
 const bestSellPrice = computed(() => contractSellDepth.value.map(depthPrice).find(Boolean) || '-')
 const numericDepthPrice = (item: unknown) => {
@@ -1783,19 +1832,16 @@ const estimatedAmmSwapRows = () => {
   const value = String(invokeParamForm.value.unitPrice || '').trim()
   if (orderType === '1') {
     const estimatedSats = isPositiveDecimalString(amount)
-      ? multiplyByDecimalRatioCeil(amount, contractAssetBAmount.value, contractAssetAAmount.value)
+      ? calculateAmmSellSatsAmount(amount, contractAssetAAmount.value, contractAssetBAmount.value)
       : ''
     rows.push(
       { label: t('tools.contracts.payAsset'), value: `${amount || '-'} ${displayInvokeAssetName.value}` },
       { label: t('tools.contracts.estimatedReceive'), value: `${estimatedSats || '-'} ${displayAssetName('::')}` },
     )
   } else if (orderType === '2') {
-    const estimatedAsset = isPositiveDecimalString(value)
-      ? multiplyByDecimalRatioCeil(value, contractAssetAAmount.value, contractAssetBAmount.value)
-      : ''
     rows.push(
       { label: t('tools.contracts.payAsset'), value: `${value || '-'} ${displayAssetName('::')}` },
-      { label: t('tools.contracts.estimatedReceive'), value: `${estimatedAsset || '-'} ${displayInvokeAssetName.value}` },
+      { label: t('tools.contracts.estimatedReceive'), value: `${amount || '-'} ${displayInvokeAssetName.value}` },
     )
   }
   return rows
@@ -2492,6 +2538,20 @@ const multiplyByDecimalRatioCeil = (value: unknown, numerator: unknown, denomina
   return formatDecimalUnits(resultUnits, precision)
 }
 
+const ceilDivBigInt = (numerator: bigint, denominator: bigint) => {
+  if (denominator <= 0n) return null
+  return (numerator + denominator - 1n) / denominator
+}
+
+const floorDivBigInt = (numerator: bigint, denominator: bigint) => {
+  if (denominator <= 0n) return null
+  return numerator / denominator
+}
+
+const addAmmBuySlippageBuffer = (value: bigint) => ceilDivBigInt(value * 105n, 100n)
+
+const applyAmmSellSlippageMinOut = (value: bigint) => floorDivBigInt(value * 95n, 100n)
+
 const multiplyDecimalsCeilInt = (left: unknown, right: unknown) => {
   const a = parseDecimalUnits(left)
   const b = parseDecimalUnits(right)
@@ -2579,6 +2639,62 @@ const calculateAmmAssetBAmount = (amount: string, ratio: { assetA: string; asset
     : ''
 )
 
+const calculateAmmBuySatsAmount = (targetAssetAmount: string, poolAssetAmount: string, poolSatsAmount: string) => {
+  const target = parseDecimalUnits(targetAssetAmount)
+  const poolAsset = parseDecimalUnits(poolAssetAmount)
+  const poolSats = parseDecimalUnits(poolSatsAmount)
+  if (!target || !poolAsset || !poolSats || poolSats.units <= 0n) return ''
+
+  const assetScale = Math.max(target.scale, poolAsset.scale)
+  const targetUnits = target.units * pow10BigInt(assetScale - target.scale)
+  const poolAssetUnits = poolAsset.units * pow10BigInt(assetScale - poolAsset.scale)
+  if (targetUnits <= 0n || poolAssetUnits <= targetUnits) return ''
+
+  const swapFeeBase = 1000n
+  const swapFeeRetained = 992n
+  const numerator = poolSats.units * targetUnits * swapFeeBase
+  const denominator = (poolAssetUnits - targetUnits) * swapFeeRetained * pow10BigInt(poolSats.scale)
+  const sats = ceilDivBigInt(numerator, denominator)
+  const bufferedSats = sats && sats > 0n ? addAmmBuySlippageBuffer(sats) : null
+  return bufferedSats && bufferedSats > 0n ? bufferedSats.toString() : ''
+}
+
+const calculateAmmSellSatsUnits = (inputAssetAmount: string, poolAssetAmount: string, poolSatsAmount: string) => {
+  const input = parseDecimalUnits(inputAssetAmount)
+  const poolAsset = parseDecimalUnits(poolAssetAmount)
+  const poolSats = parseDecimalUnits(poolSatsAmount)
+  if (!input || !poolAsset || !poolSats || poolSats.units <= 0n) return null
+
+  const assetScale = Math.max(input.scale, poolAsset.scale)
+  const inputUnits = input.units * pow10BigInt(assetScale - input.scale)
+  const poolAssetUnits = poolAsset.units * pow10BigInt(assetScale - poolAsset.scale)
+  if (inputUnits <= 0n || poolAssetUnits <= 0n) return null
+
+  const swapFeeBase = 1000n
+  const swapFeeRetained = 992n
+  const denominator = poolAssetUnits * swapFeeBase + inputUnits * swapFeeRetained
+  const newPoolSats = ceilDivBigInt(poolAssetUnits * poolSats.units * swapFeeBase, denominator)
+  if (!newPoolSats || poolSats.units <= newPoolSats) return null
+  return {
+    units: poolSats.units - newPoolSats,
+    scale: poolSats.scale,
+  }
+}
+
+const calculateAmmSellSatsAmount = (inputAssetAmount: string, poolAssetAmount: string, poolSatsAmount: string) => {
+  const out = calculateAmmSellSatsUnits(inputAssetAmount, poolAssetAmount, poolSatsAmount)
+  if (!out || out.units <= 0n) return ''
+  return formatDecimalUnits(out.units, out.scale)
+}
+
+const calculateAmmSellMinSatsAmount = (inputAssetAmount: string, poolAssetAmount: string, poolSatsAmount: string) => {
+  const out = calculateAmmSellSatsUnits(inputAssetAmount, poolAssetAmount, poolSatsAmount)
+  if (!out || out.units <= 0n) return ''
+  const minOut = applyAmmSellSlippageMinOut(out.units)
+  if (!minOut || minOut <= 0n) return out.units > 0n ? formatDecimalUnits(1n, out.scale) : ''
+  return formatDecimalUnits(minOut, out.scale)
+}
+
 const calculateLimitOrderAssetBAmount = (amount: string, unitPrice: string) => {
   if (!amount || !unitPrice) return ''
   const value = multiplyDecimalsCeilInt(amount, unitPrice)
@@ -2586,6 +2702,15 @@ const calculateLimitOrderAssetBAmount = (amount: string, unitPrice: string) => {
 }
 
 const invokeFieldByKey = (key: string) => invokeParamFieldTemplates.value.find((field) => field.key === key)
+const refreshAmmSwapAssetBLabel = () => {
+  if (invokeContractSubtype.value !== 'amm.tc' || invokeAction.value !== 'swap') return
+  const field = invokeFieldByKey('unitPrice')
+  if (!field) return
+  const asset = displayAssetName(contractAssetBName.value)
+  field.label = String(invokeParamForm.value.orderType || '').trim() === '1'
+    ? t('tools.invoke.minOutAmount', { asset })
+    : t('tools.invoke.assetBAmount', { asset })
+}
 const truncateInvokeFieldValue = (key: string, value: string) => {
   const field = invokeFieldByKey(key)
   if (!field) return value
@@ -2600,10 +2725,12 @@ const syncInvokeAssetBAmount = (changedKey = '') => {
       return
     }
     if (invokeAction.value === 'swap' && ['amt', 'orderType'].includes(changedKey)) {
-      invokeParamForm.value.unitPrice = truncateInvokeFieldValue('unitPrice', calculateAmmAssetBAmount(amount, {
-        assetA: contractAssetAAmount.value,
-        assetB: contractAssetBAmount.value,
-      }))
+      refreshAmmSwapAssetBLabel()
+      const orderType = Number(invokeParamForm.value.orderType || 0)
+      const assetBAmount = orderType === 2
+        ? calculateAmmBuySatsAmount(amount, contractAssetAAmount.value, contractAssetBAmount.value)
+        : calculateAmmSellMinSatsAmount(amount, contractAssetAAmount.value, contractAssetBAmount.value)
+      invokeParamForm.value.unitPrice = truncateInvokeFieldValue('unitPrice', assetBAmount)
     }
     return
   }
@@ -2649,10 +2776,14 @@ const buildUnifiedInvokeRequest = (contract: string) => {
       req.DefaultInvoke = true
     } else {
       const params = invokeParams()
+      const submitParams = { ...params }
+      const orderType = Number(params.orderType || 0)
+      if (invokeContractSubtype.value === 'amm.tc' && action === 'swap' && orderType === 1) {
+        submitParams.amt = String(params.unitPrice || params.amt || '').trim()
+      }
       req.Action = invokeParamWrapperAction.value || action
-      req.Param = Object.keys(params).length ? JSON.stringify(params) : ''
+      req.Param = Object.keys(submitParams).length ? JSON.stringify(submitParams) : ''
       if (action === 'swap') {
-        const orderType = Number(params.orderType || 0)
         if (orderType === 1) {
           req.Assets = [{ AssetName: String(params.assetName || '').trim(), Amount: String(params.amt || '').trim() }]
         } else if (orderType === 2) {

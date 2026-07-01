@@ -196,6 +196,7 @@
       "assetName": "资产名称",
       "assetAmount": "资产数量",
       "assetBAmount": "{asset}数量",
+      "minOutAmount": "最低获得{asset}",
       "unitPrice": "单价",
       "satsAmount": "聪数量",
       "lptAmount": "流动性资产数量",

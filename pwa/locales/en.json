@@ -196,6 +196,7 @@
       "assetName": "Asset name",
       "assetAmount": "Asset amount",
       "assetBAmount": "{asset} amount",
+      "minOutAmount": "Min {asset} out",
       "unitPrice": "Unit price",
       "satsAmount": "Sats amount",
       "lptAmount": "LP token amount",
