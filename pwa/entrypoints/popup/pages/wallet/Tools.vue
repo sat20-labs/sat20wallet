@@ -996,6 +996,13 @@ const invokeContractTypeLabel = computed(() => {
 })
 
 const contractAddressOf = (contract: any) => String(contract?.address || contract?.Address || contract?.contractAddress || contract?.ContractAddress || '').trim()
+const contractStateName = (contract: any) => String(
+  contract?.state?.name
+  || contract?.state?.Name
+  || contract?.details?.contract?.name
+  || contract?.details?.contract?.Name
+  || ''
+).trim()
 const contractBaseDisplayName = (contract: any) => String(
   contract?.label
   || contract?.Label
@@ -1018,7 +1025,9 @@ const contractBaseDisplayName = (contract: any) => String(
   || 'contract'
 ).trim()
 const displayContractBaseName = (contract: any) => {
-  const name = contractBaseDisplayName(contract)
+  const name = contractTypeOf(contract) === 'evm'
+    ? (contractStateName(contract) || 'unknown')
+    : contractBaseDisplayName(contract)
   return name.endsWith('.tc') ? name.slice(0, -3) : name
 }
 const contractDisplayName = (contract: any) => {
@@ -1061,6 +1070,8 @@ const contractAssetLine = (contract: any) => {
     contract?.details?.contract?.AssetBName,
     contract?.details?.contract?.assets,
     contract?.details?.contract?.Assets,
+    contract?.details?.contract?.managedAssets,
+    contract?.details?.contract?.ManagedAssets,
     contract?.state?.assetName,
     contract?.state?.AssetName,
     contract?.state?.assetAName,
@@ -1077,11 +1088,15 @@ const contractAssetLine = (contract: any) => {
     contract?.state?.custom?.AssetAName,
     contract?.state?.custom?.assetBName,
     contract?.state?.custom?.AssetBName,
+    contract?.state?.custom?.assets,
+    contract?.state?.custom?.Assets,
+    contract?.state?.custom?.managedAssets,
+    contract?.state?.custom?.ManagedAssets,
     contract?.details?.prediction?.bet_asset,
     contract?.details?.prediction?.betAsset,
     contract?.details?.prediction?.BetAsset,
   ].flatMap((item) => assetNamesFromUnknown(item)).filter(Boolean)
-  return [...new Set(values)].map((item) => displayAssetName(String(item))).join(' / ')
+  return [...new Set(values)].map((item) => displayAssetName(String(item))).join('/')
 }
 const groupedContractList = computed(() => {
   const groups = new Map<string, { key: string; label: string; contracts: any[] }>()
