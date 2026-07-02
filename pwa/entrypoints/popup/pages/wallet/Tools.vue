@@ -550,16 +550,22 @@
                   </Button>
                 </div>
                 <div v-if="orderbookPreviewRows.length" class="space-y-2">
-                  <div class="grid grid-cols-3 gap-2 text-muted-foreground">
+                  <div class="grid grid-cols-[1fr_1fr_1fr] gap-2 text-muted-foreground">
                     <span>{{ t('tools.contracts.depthPrice') }}</span>
                     <span>{{ t('tools.contracts.depthQuantity') }}</span>
                     <span>{{ t('tools.contracts.depthTotal') }}</span>
                   </div>
-                  <div v-for="row in orderbookPreviewRows" :key="`${row.side}-${row.price}-${row.quantity}`" class="grid grid-cols-3 gap-2">
+                  <button
+                    v-for="row in orderbookPreviewRows"
+                    :key="`${row.side}-${row.price}-${row.quantity}-${row.total}`"
+                    type="button"
+                    class="grid w-full grid-cols-[1fr_1fr_1fr] gap-2 rounded-sm py-0.5 text-left hover:bg-primary/10"
+                    @click="applyOrderbookRow(row)"
+                  >
                     <span :class="row.side === 'buy' ? 'text-green-500' : 'text-red-500'">{{ row.price }}</span>
                     <span>{{ row.quantity }}</span>
                     <span>{{ row.total }}</span>
-                  </div>
+                  </button>
                 </div>
               </div>
               <div v-if="isEVMCallInvoke" class="space-y-3 rounded-sm border border-border bg-muted/30 p-3">
@@ -917,7 +923,7 @@ import { Storage } from '@/lib/storage-adapter'
 
 const SMART_CONTRACT_DOC_URL_ZH = 'https://docs.sat20.org/protocol-xie-yi-yu-bai-pi-shu/smart-contracts'
 const SMART_CONTRACT_DOC_URL_EN = 'https://docs.sat20.org/english/protocols-and-whitepapers/smart-contracts'
-const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qysmtl3y9f3p63stj96c6vre0ktgu7qjpcr6ujfczexrngldee7wsz5n3qa'
+const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qk6ad48w0pv46rsqqmxlph7vc6xvr2r56ay89asd259marfh9f98swg0dxx'
 const SUPPORTED_CONTRACTS_CACHE_PREFIX = 'tools:supported_contracts'
 
 const { toast } = useToast()
@@ -1502,8 +1508,8 @@ const walkValues = (value: unknown, visitor: (key: string, item: unknown) => str
 }
 
 const contractLookupPayload = () => ({
-  selected: selectedContract.value,
   state: contractState.value,
+  selected: selectedContract.value,
 })
 
 const findContractString = (keys: string[]) => {
@@ -1775,7 +1781,7 @@ const sortedDepthRows = (items: unknown[], side: 'buy' | 'sell') => (
       total: depthTotal(item) || '-',
       sortPrice: Number(depthPrice(item)) || 0,
     }))
-    .sort((a, b) => side === 'buy' ? b.sortPrice - a.sortPrice : a.sortPrice - b.sortPrice)
+    .sort((a, b) => b.sortPrice - a.sortPrice)
     .slice(0, 4)
 )
 const orderbookPreviewRows = computed(() => {
@@ -1925,6 +1931,19 @@ const invokeActionContextRows = computed<ContextRow[]>(() => {
 const applyInvokeUnitPrice = (value: string) => {
   if (!value) return
   invokeParamForm.value.unitPrice = value
+}
+const applyOrderbookRow = (row: { side: 'buy' | 'sell'; price: string; quantity: string; total: string }) => {
+  if (!row.price || row.price === '-') return
+  invokeParamForm.value.orderType = row.side === 'sell' ? '2' : '1'
+  if (contractAssetAName.value && !String(invokeParamForm.value.assetName || '').trim()) {
+    invokeParamForm.value.assetName = contractAssetAName.value
+  }
+  if (row.quantity && row.quantity !== '-') {
+    invokeParamForm.value.amt = truncateInvokeFieldValue('amt', row.quantity)
+  }
+  invokeParamForm.value.unitPrice = truncateInvokeFieldValue('unitPrice', row.price)
+  refreshAmmSwapAssetBLabel()
+  syncLimitOrderAssetBAmount()
 }
 const firstEnabledInvokeAction = () => {
   const preferred = preferredInvokeAction()
@@ -2617,6 +2636,13 @@ const addLiquidityRequiredText = () => {
 }
 
 const invokeFieldHelpText = (field: InvokeParamField) => {
+  if (invokeContractSubtype.value === 'amm.tc' && invokeAction.value === 'swap') {
+    const orderType = String(invokeParamForm.value.orderType || '').trim()
+    if (orderType === '2' && field.key === 'unitPrice') {
+      return t('tools.invoke.ammBuySatsEstimateHint')
+    }
+    return ''
+  }
   if (invokeContractSubtype.value !== 'amm.tc' || invokeAction.value !== 'addliq') return ''
   const assetAName = displayAssetName(contractAssetAName.value || t('tools.contracts.assetA'))
   const assetBName = displayAssetName(contractAssetBName.value)
@@ -2715,6 +2741,11 @@ const calculateLimitOrderAssetBAmount = (amount: string, unitPrice: string) => {
   const value = multiplyDecimalsCeilInt(amount, unitPrice)
   return value > 0 ? String(value) : ''
 }
+const syncLimitOrderAssetBAmount = () => {
+  const amount = String(invokeParamForm.value.amt || '').trim()
+  const unitPrice = String(invokeParamForm.value.unitPrice || '').trim()
+  invokeParamForm.value.assetBAmount = truncateInvokeFieldValue('assetBAmount', calculateLimitOrderAssetBAmount(amount, unitPrice))
+}
 
 const invokeFieldByKey = (key: string) => invokeParamFieldTemplates.value.find((field) => field.key === key)
 const refreshAmmSwapAssetBLabel = () => {
@@ -2751,7 +2782,7 @@ const syncInvokeAssetBAmount = (changedKey = '') => {
   }
   if (['limitorder.tc', 'swap.tc'].includes(invokeContractSubtype.value) && invokeAction.value === 'swap') {
     if (['amt', 'unitPrice', 'orderType'].includes(changedKey)) {
-      invokeParamForm.value.assetBAmount = truncateInvokeFieldValue('assetBAmount', calculateLimitOrderAssetBAmount(amount, String(invokeParamForm.value.unitPrice || '').trim()))
+      syncLimitOrderAssetBAmount()
     }
   }
 }
@@ -3586,7 +3617,13 @@ const loadSelectedContractState = async () => {
   }
   try {
     isContractLoading.value = true
-    const state = await smartContractApi.getContractState({ network: network.value || 'testnet', contract })
+    const [summary, state] = await Promise.all([
+      smartContractApi.getContract({ network: network.value || 'testnet', contract }),
+      smartContractApi.getContractState({ network: network.value || 'testnet', contract }),
+    ])
+    if (summary?.code === 0) {
+      selectedContract.value = summary.data
+    }
     contractState.value = state?.code === 0 ? state.data || state.status : state
     contractHistory.value = null
   } catch (error) {

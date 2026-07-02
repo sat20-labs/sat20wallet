@@ -228,6 +228,7 @@
       "balanceLoading": "{label}：查询中...",
       "balanceFailed": "{label}：查询失败",
       "balanceLine": "{label}：{value}",
+      "ammBuySatsEstimateHint": "这是预估支付金额，成交后剩余聪会退回。",
       "currentPoolRatio": "当前池子比例",
       "initialRequiredRatio": "初始要求比例",
       "currentlyNeeds": "；当前还需：{assetA} {amountA}，{assetB} {amountB}",

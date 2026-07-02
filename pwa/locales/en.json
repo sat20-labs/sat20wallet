@@ -228,6 +228,7 @@
       "balanceLoading": "{label}: loading...",
       "balanceFailed": "{label}: failed to query",
       "balanceLine": "{label}: {value}",
+      "ammBuySatsEstimateHint": "Estimated payment. Unused sats are refunded after execution.",
       "currentPoolRatio": "current pool ratio",
       "initialRequiredRatio": "initial required ratio",
       "currentlyNeeds": "; currently needs: {assetA} {amountA}, {assetB} {amountB}",
