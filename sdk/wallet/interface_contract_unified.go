@@ -1455,7 +1455,7 @@ func (p *Manager) EstimateEVMDeployContract(req *ContractDeployRequest) (*Contra
 		return nil, fmt.Errorf("evm deploy gas limit %d is less than required base gas %d",
 			gasLimit, contractcommon.DeployBaseGas)
 	}
-	caller, err := p.walletEVMAddress()
+	callerAddress, err := p.walletEVMAddress()
 	if err != nil {
 		return nil, err
 	}
@@ -1475,6 +1475,10 @@ func (p *Manager) EstimateEVMDeployContract(req *ContractDeployRequest) (*Contra
 		return nil, fmt.Errorf("gas asset amount %d is less than required base gas fee %d", gasAmount, gasBaseFee)
 	}
 	deployNonce := uint64(time.Now().UnixNano())
+	caller, err := contractcommon.ParseEVMAddressHex(callerAddress)
+	if err != nil {
+		return nil, err
+	}
 	contract, err := contractcommon.DeriveEVMCreateContractAddress(p.contractAddressPrefix(), caller, deployNonce)
 	if err != nil {
 		return nil, err
@@ -1482,7 +1486,7 @@ func (p *Manager) EstimateEVMDeployContract(req *ContractDeployRequest) (*Contra
 	return &ContractTxResult{
 		ContractType:    ContractTypeEVM,
 		ContractAddress: contract.EncodeAddress(),
-		Caller:          caller.String(),
+		Caller:          callerAddress,
 		GasAssetAmount:  gasAmount,
 		GasFeeAmount:    gasBaseFee,
 		GasFundAmount:   gasAmount - gasBaseFee,
@@ -1514,7 +1518,7 @@ func (p *Manager) deployEVMContract(req *ContractDeployRequest) (*ContractTxResu
 	tx, contract, err := contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
 		ContractPrefix:  p.contractAddressPrefix(),
 		Type:            contractcommon.ContractTypeEVM,
-		Deployer:        caller.String(),
+		Deployer:        caller,
 		GasLimit:        estimate.GasLimit,
 		DeployNonce:     estimate.Nonce,
 		ContractContent: initCode,
@@ -1536,7 +1540,7 @@ func (p *Manager) deployEVMContract(req *ContractDeployRequest) (*ContractTxResu
 	}
 	estimate.TxID = txid
 	estimate.ContractAddress = contract.EncodeAddress()
-	estimate.Caller = caller.String()
+	estimate.Caller = caller
 	return estimate, nil
 }
 
@@ -1612,7 +1616,7 @@ func (p *Manager) invokeEVMContract(req *ContractInvokeRequest) (*ContractTxResu
 		ContractType:    ContractTypeEVM,
 		TxID:            txid,
 		ContractAddress: req.ContractAddress,
-		Caller:          caller.String(),
+		Caller:          caller,
 		GasAssetAmount:  gasAmount,
 		GasFeeAmount:    gasBaseFee,
 		GasFundAmount:   gasAmount - gasBaseFee,
@@ -1636,7 +1640,7 @@ func (p *Manager) invokeDefaultContract(contractType, contractAddress string, va
 	var inputs []swire.OutPoint
 	var changeOutputs []*swire.TxOut
 	var prevFetcher stxscript.PrevOutputFetcher
-	var caller contractcommon.EVMAddress
+	var caller string
 	var fundingGasAmount int64
 	var gasAmount int64
 	var gasBaseFee int64
@@ -1693,7 +1697,7 @@ func (p *Manager) invokeDefaultContract(contractType, contractAddress string, va
 		ContractType:    contractType,
 		TxID:            txid,
 		ContractAddress: contractAddress,
-		Caller:          caller.String(),
+		Caller:          caller,
 		GasAssetAmount:  gasAmount,
 		GasFeeAmount:    gasBaseFee,
 		GasFundAmount:   fundingGasAmount,
@@ -1701,13 +1705,13 @@ func (p *Manager) invokeDefaultContract(contractType, contractAddress string, va
 	}, nil
 }
 
-func (p *Manager) selectEVMDefaultContractFunding(value int64, assetName string, amount string) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, contractcommon.EVMAddress, error) {
+func (p *Manager) selectEVMDefaultContractFunding(value int64, assetName string, amount string) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, string, error) {
 	if value < 0 {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract value must be non-negative")
+		return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("contract value must be non-negative")
 	}
 	plainRequired := value + DEFAULT_FEE_SATSNET
 	if plainRequired < value {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("plain sats amount overflows int64")
+		return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("plain sats amount overflows int64")
 	}
 	selected := make([]string, 0)
 	var businessName *swire.AssetName
@@ -1716,22 +1720,22 @@ func (p *Manager) selectEVMDefaultContractFunding(value int64, assetName string,
 	if assetName != "" && amount != "" {
 		businessName = swire.NewAssetNameFromString(assetName)
 		if businessName == nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("invalid default invoke asset %s", assetName)
+			return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("invalid default invoke asset %s", assetName)
 		}
 		businessAmt, err = indexer.NewDecimalFromString(amount, MAX_ASSET_DIVISIBILITY)
 		if err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 		assetUtxos, feeUtxos, err := p.GetUtxosWithAssetV2_SatsNet("", plainRequired, businessAmt, businessName, nil)
 		if err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 		selected = append(selected, assetUtxos...)
 		selected = append(selected, feeUtxos...)
 	} else {
 		plainUtxos, _, err := p.GetUtxosWithAssetV2_SatsNet("", plainRequired, indexer.NewDefaultDecimal(0), &ASSET_PLAIN_SAT, nil)
 		if err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 		selected = append(selected, plainUtxos...)
 	}
@@ -1758,11 +1762,11 @@ func (p *Manager) selectEVMDefaultContractFunding(value int64, assetName string,
 		seen[utxo] = true
 		outpoint, err := swire.NewOutPointFromString(utxo)
 		if err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 		output := outputMap[utxo]
 		if output == nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("selected utxo %s is missing from indexer asset lists", utxo)
+			return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("selected utxo %s is missing from indexer asset lists", utxo)
 		}
 		input.Merge(output)
 		inputs = append(inputs, *outpoint)
@@ -1771,29 +1775,29 @@ func (p *Manager) selectEVMDefaultContractFunding(value int64, assetName string,
 	}
 	caller, err := p.evmCallerFromPreviousPkScript(callerPkScript)
 	if err != nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 
 	var fundingAssets swire.TxAssets
 	if businessName != nil && businessAmt != nil && businessAmt.Sign() > 0 {
 		business := swire.AssetInfo{Name: *businessName, Amount: *businessAmt}
 		if err := input.SubAsset(&business); err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 		fundingAssets = swire.TxAssets{business}
 	}
 	if value > 0 {
 		if err := input.SubAsset(&swire.AssetInfo{Name: ASSET_PLAIN_SAT, Amount: *indexer.NewDefaultDecimal(value), BindingSat: 1}); err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 	}
 	feeAsset := swire.AssetInfo{Name: ASSET_PLAIN_SAT, Amount: *indexer.NewDefaultDecimal(DEFAULT_FEE_SATSNET), BindingSat: 1}
 	if err := input.SubAsset(&feeAsset); err != nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 	changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
 	if err != nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 	changeTx := swire.NewMsgTx(swire.TxVersion)
 	SplitChangeAsset(&input, changePkScript, changeTx)
@@ -1830,7 +1834,7 @@ func firstFundingAsset(assets []ContractFundingAsset) (string, string) {
 	return "", ""
 }
 
-func (p *Manager) selectDefaultContractFunding(gasAssetName string, gasAmount int64, fundingGasAmount int64, value int64, assetName string, amount string) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, contractcommon.EVMAddress, error) {
+func (p *Manager) selectDefaultContractFunding(gasAssetName string, gasAmount int64, fundingGasAmount int64, value int64, assetName string, amount string) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, string, error) {
 	var fundingAssets []contractFundingAsset
 	if strings.TrimSpace(assetName) != "" && strings.TrimSpace(amount) != "" {
 		fundingAssets = []contractFundingAsset{{Name: assetName, Amount: amount}}
@@ -1838,22 +1842,22 @@ func (p *Manager) selectDefaultContractFunding(gasAssetName string, gasAmount in
 	return p.selectUnifiedContractFunding(gasAssetName, gasAmount, fundingGasAmount, value, fundingAssets)
 }
 
-func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount int64, fundingGasAmount int64, value int64, businessAssets []contractFundingAsset) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, contractcommon.EVMAddress, error) {
+func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount int64, fundingGasAmount int64, value int64, businessAssets []contractFundingAsset) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, string, error) {
 	if gasAmount < 0 {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("gas asset amount must be non-negative")
+		return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("gas asset amount must be non-negative")
 	}
 	if fundingGasAmount > gasAmount {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract funding gas amount %d exceeds selected gas amount %d", fundingGasAmount, gasAmount)
+		return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("contract funding gas amount %d exceeds selected gas amount %d", fundingGasAmount, gasAmount)
 	}
 	if fundingGasAmount < 0 {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract funding gas amount must be non-negative")
+		return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("contract funding gas amount must be non-negative")
 	}
 	if value < 0 {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract value must be non-negative")
+		return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("contract value must be non-negative")
 	}
 	gasName := swire.NewAssetNameFromString(gasAssetName)
 	if gasName == nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("invalid gas asset %s", gasAssetName)
+		return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("invalid gas asset %s", gasAssetName)
 	}
 
 	fundingValue := value
@@ -1869,29 +1873,29 @@ func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount in
 			continue
 		}
 		if assetName == "" || amount == "" {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract funding asset and amount must be provided together")
+			return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("contract funding asset and amount must be provided together")
 		}
 		if assetName == contractcommon.SatoshiAssetName {
 			assetValue, err := assetAmountStringToInt64("contract funding value", amount)
 			if err != nil {
-				return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+				return swire.TxOut{}, nil, nil, nil, "", err
 			}
 			if fundingValue > math.MaxInt64-assetValue {
-				return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract funding value overflows int64")
+				return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("contract funding value overflows int64")
 			}
 			fundingValue += assetValue
 			continue
 		}
 		name := swire.NewAssetNameFromString(assetName)
 		if name == nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("invalid contract funding asset %s", assetName)
+			return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("invalid contract funding asset %s", assetName)
 		}
 		amt, err := indexer.NewDecimalFromString(amount, MAX_ASSET_DIVISIBILITY)
 		if err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 		if amt.Sign() <= 0 {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("contract funding asset %s amount must be positive", assetName)
+			return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("contract funding asset %s amount must be positive", assetName)
 		}
 		parsedBusinessAssets = append(parsedBusinessAssets, parsedBusinessAsset{Name: name, Amount: amt})
 	}
@@ -1899,14 +1903,14 @@ func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount in
 	gasAmt := indexer.NewDefaultDecimal(gasAmount)
 	assetUtxos, feeUtxos, err := p.GetUtxosWithAssetV2_SatsNet("", fundingValue, gasAmt, gasName, nil)
 	if err != nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 	selected := append([]string{}, assetUtxos...)
 	selected = append(selected, feeUtxos...)
 	for _, asset := range parsedBusinessAssets {
 		assetUtxos, _, err := p.GetUtxosWithAssetV2_SatsNet("", 0, asset.Amount, asset.Name, nil)
 		if err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 		selected = append(selected, assetUtxos...)
 	}
@@ -1944,11 +1948,11 @@ func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount in
 		seen[utxo] = true
 		outpoint, err := swire.NewOutPointFromString(utxo)
 		if err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 		output := outputMap[utxo]
 		if output == nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, fmt.Errorf("selected utxo %s is missing from indexer asset lists", utxo)
+			return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("selected utxo %s is missing from indexer asset lists", utxo)
 		}
 		input.Merge(output)
 		inputs = append(inputs, *outpoint)
@@ -1958,12 +1962,12 @@ func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount in
 
 	caller, err := p.evmCallerFromPreviousPkScript(callerPkScript)
 	if err != nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 
 	gasInputAsset := swire.AssetInfo{Name: *gasName, Amount: *gasAmt}
 	if err := input.SubAsset(&gasInputAsset); err != nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 	var fundingAssets swire.TxAssets
 	if fundingGasAmount > 0 {
@@ -1972,20 +1976,20 @@ func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount in
 	for _, asset := range parsedBusinessAssets {
 		business := swire.AssetInfo{Name: *asset.Name, Amount: *asset.Amount}
 		if err := input.SubAsset(&business); err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 		if err := fundingAssets.Merge(swire.TxAssets{business}); err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 	}
 	if fundingValue > 0 {
 		if err := input.SubAsset(&swire.AssetInfo{Name: ASSET_PLAIN_SAT, Amount: *indexer.NewDefaultDecimal(fundingValue), BindingSat: 1}); err != nil {
-			return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 	}
 	changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
 	if err != nil {
-		return swire.TxOut{}, nil, nil, nil, contractcommon.EVMAddress{}, err
+		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 	changeTx := swire.NewMsgTx(swire.TxVersion)
 	SplitChangeAsset(&input, changePkScript, changeTx)
@@ -1993,10 +1997,9 @@ func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount in
 	return funding, inputs, changeTx.TxOut, prevFetcher, caller, nil
 }
 
-func (p *Manager) evmCallerFromPreviousPkScript(pkScript []byte) (contractcommon.EVMAddress, error) {
-	var caller contractcommon.EVMAddress
+func (p *Manager) evmCallerFromPreviousPkScript(pkScript []byte) (string, error) {
 	if len(pkScript) == 0 {
-		return caller, fmt.Errorf("missing EVM caller previous output script")
+		return "", fmt.Errorf("missing EVM caller previous output script")
 	}
 	params := &chaincfg.MainNetParams
 	if IsTestNet() {
@@ -2004,13 +2007,12 @@ func (p *Manager) evmCallerFromPreviousPkScript(pkScript []byte) (contractcommon
 	}
 	_, addresses, _, err := stxscript.ExtractPkScriptAddrs(pkScript, params)
 	if err != nil {
-		return caller, err
+		return "", err
 	}
 	if len(addresses) == 0 {
-		return caller, fmt.Errorf("missing EVM caller previous output address")
+		return "", fmt.Errorf("missing EVM caller previous output address")
 	}
-	copy(caller[:], btcutil.Hash160([]byte(addresses[0].EncodeAddress())))
-	return caller, nil
+	return "0x" + hex.EncodeToString(btcutil.Hash160([]byte(addresses[0].EncodeAddress()))), nil
 }
 
 func (p *Manager) evmBaseGasFee(baseGas int64) (int64, error) {
@@ -2041,13 +2043,11 @@ func (p *Manager) evmGasAssetAmount(gasLimit int64, needsResult bool, override i
 	return amount, gasAssetName, nil
 }
 
-func (p *Manager) walletEVMAddress() (contractcommon.EVMAddress, error) {
+func (p *Manager) walletEVMAddress() (string, error) {
 	if p.wallet == nil {
-		return contractcommon.EVMAddress{}, fmt.Errorf("wallet is not created/unlocked")
+		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
-	var caller contractcommon.EVMAddress
-	copy(caller[:], btcutil.Hash160([]byte(p.wallet.GetAddress())))
-	return caller, nil
+	return "0x" + hex.EncodeToString(btcutil.Hash160([]byte(p.wallet.GetAddress()))), nil
 }
 
 func (p *Manager) contractAddressPrefix() string {
@@ -2088,11 +2088,9 @@ func decodeHexField(name, s string) ([]byte, error) {
 	return b, nil
 }
 
-func evmAddressFromPublicKey(pubKey []byte) (contractcommon.EVMAddress, error) {
-	var addr contractcommon.EVMAddress
+func evmAddressFromPublicKey(pubKey []byte) (string, error) {
 	if len(pubKey) != 33 && len(pubKey) != 65 {
-		return addr, fmt.Errorf("unsupported public key length %d", len(pubKey))
+		return "", fmt.Errorf("unsupported public key length %d", len(pubKey))
 	}
-	copy(addr[:], btcutil.Hash160(pubKey))
-	return addr, nil
+	return "0x" + hex.EncodeToString(btcutil.Hash160(pubKey)), nil
 }
