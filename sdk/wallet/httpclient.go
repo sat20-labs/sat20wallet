@@ -8,18 +8,17 @@ import (
 	"net/url"
 )
 
-
 type Userinfo struct {
-	Username    string
-	Password    string
+	Username string
+	Password string
 }
 
 type URL struct {
-	Scheme      string
-	User        *Userinfo // username and password information
-	Host        string    // host or host:port (see Hostname and Port methods)
-	Path        string    // path (relative paths may omit leading slash)
-	Query     	map[string]string
+	Scheme string
+	User   *Userinfo // username and password information
+	Host   string    // host or host:port (see Hostname and Port methods)
+	Path   string    // path (relative paths may omit leading slash)
+	Query  map[string]string
 }
 
 func (p *URL) String() string {
@@ -30,8 +29,6 @@ type HttpClient interface {
 	SendGetRequest(url *URL) ([]byte, error)
 	SendPostRequest(url *URL, marshalledJSON []byte) ([]byte, error)
 }
-
-
 
 type NetClient struct {
 	Client *http.Client
@@ -123,7 +120,6 @@ func (p *NetClient) SendPostRequest(u *URL, marshalledJSON []byte) ([]byte, erro
 	httpRequest.Close = true
 	httpRequest.Header.Set("Connection", "close")
 	httpRequest.Header.Set("Content-Type", "application/json")
-	
 
 	httpResponse, err := p.Client.Do(httpRequest)
 	if err != nil {
@@ -165,6 +161,57 @@ func (p *NetClient) SendPostRequest(u *URL, marshalledJSON []byte) ([]byte, erro
 	// 	return nil, resp.Error
 	// }
 	// return resp.Result, nil
+	Log.Tracef("%v response: %s", url, string(respBytes))
+	return respBytes, nil
+}
+
+func (p *NetClient) SendDeleteRequest(u *URL, marshalledJSON []byte) ([]byte, error) {
+	url := url.URL{
+		Scheme: u.Scheme,
+		Host:   u.Host,
+		Path:   u.Path,
+	}
+
+	if len(u.Query) != 0 {
+		q := url.Query()
+		for k, v := range u.Query {
+			q.Set(k, v)
+		}
+		url.RawQuery = q.Encode()
+	}
+
+	httpRequest, err := http.NewRequest("DELETE", url.String(), bytes.NewBuffer(marshalledJSON))
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Close = true
+	httpRequest.Header.Set("Connection", "close")
+	httpRequest.Header.Set("Content-Type", "application/json")
+
+	httpResponse, err := p.Client.Do(httpRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	respBytes, err := io.ReadAll(httpResponse.Body)
+	httpResponse.Body.Close()
+	if err != nil {
+		err = fmt.Errorf("error reading json reply: %v", err)
+		return nil, err
+	}
+
+	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
+		if len(respBytes) == 0 {
+			return nil, fmt.Errorf("%d %s", httpResponse.StatusCode,
+				http.StatusText(httpResponse.StatusCode))
+		}
+		return nil, fmt.Errorf("%s", respBytes)
+	}
+
+	if len(respBytes) == 0 {
+		return nil, fmt.Errorf("server panic: %s", url.String())
+	}
+
 	Log.Tracef("%v response: %s", url, string(respBytes))
 	return respBytes, nil
 }
