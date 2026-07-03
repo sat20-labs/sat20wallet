@@ -1,9 +1,9 @@
 {
   "version": "0.1.35",
-  "buildId": "20260701T064530Z",
-  "commit": "86104e9c5c7a",
-  "releaseNotes": "PWA钱包功能更新",
+  "buildId": "20260703T122816Z",
+  "commit": "95f9014cd3a4",
+  "releaseNotes": "WASM更新缓存修复",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-07-01T06:45:30.846Z"
+  "publishedAt": "2026-07-03T12:28:16.287Z"
 }

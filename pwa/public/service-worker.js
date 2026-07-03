@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sat20-wallet-pwa-v0.1.35-20260701T064530Z'
+const CACHE_NAME = 'sat20-wallet-pwa-v0.1.35-20260703T122816Z'
 const CACHE_PREFIX = 'sat20-wallet-pwa-'
 const APP_BASE = new URL(self.registration.scope).pathname.replace(/\/$/, '')
 const withBase = (path) => `${APP_BASE}${path}`
@@ -75,6 +75,24 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(new Request(event.request, { cache: 'no-store' }))
         .catch(() => caches.match(event.request))
+    )
+    return
+  }
+
+  if (
+    requestUrl.pathname === withBase('/wasm/wasm_exec.js') ||
+    requestUrl.pathname === withBase('/wasm/sat20wallet.wasm')
+  ) {
+    event.respondWith(
+      fetch(new Request(event.request, { cache: 'reload' }))
+        .then((networkResponse) => {
+          const responseClone = networkResponse.clone()
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone)
+          })
+          return networkResponse
+        })
+        .catch(() => caches.match(event.request, { ignoreSearch: true }))
     )
     return
   }
