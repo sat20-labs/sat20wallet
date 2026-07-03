@@ -27,6 +27,7 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
 	github.com/sat20-labs/indexer v0.3.0-20240926
+	github.com/stretchr/testify v1.11.1
 	github.com/tyler-smith/go-bip39 v1.1.0
 	golang.org/x/crypto v0.44.0
 	lukechampine.com/uint128 v1.3.0
@@ -47,6 +48,7 @@ require (
 	github.com/cockroachdb/pebble v1.1.5 // indirect
 	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/getsentry/sentry-go v0.27.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
@@ -58,6 +60,7 @@ require (
 	github.com/lightninglabs/neutrino/cache v1.1.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_golang v1.20.5 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.61.0 // indirect
@@ -68,6 +71,7 @@ require (
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 require (
