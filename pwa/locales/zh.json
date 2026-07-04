@@ -52,6 +52,11 @@
       "contracts": "智能合约",
       "mint": "铸造"
     },
+    "dkvs": {
+      "title": "DKVS",
+      "description": "读取和提交已签名的 DKVS record。",
+      "open": "打开 DKVS"
+    },
     "txConfirm": {
       "title": "确认发起交易",
       "description": "请确认本次操作会构造并签名一笔链上交易。",
@@ -420,6 +425,43 @@
       "invalidName": "名字不能包含空白字符或 /",
       "nameExists": "名字已存在",
       "checkDidBeforeMint": "请先检查 DID 名字，检查通过后再铸造"
+    }
+  },
+  "dkvsTool": {
+    "title": "DKVS",
+    "network": "SatoshiNet {network}",
+    "tabs": {
+      "record": "Record",
+      "prefix": "Prefix",
+      "write": "写入",
+      "checkpoint": "Checkpoint"
+    },
+    "record": {
+      "title": "Record 查询",
+      "key": "Key",
+      "hash": "Hash"
+    },
+    "prefix": {
+      "title": "Prefix records",
+      "prefix": "Prefix",
+      "start": "Start",
+      "limit": "Limit"
+    },
+    "write": {
+      "title": "已签名 record",
+      "recordJson": "Record JSON"
+    },
+    "checkpoint": {
+      "title": "Checkpoint"
+    },
+    "actions": {
+      "load": "加载",
+      "list": "列出",
+      "put": "Put",
+      "tombstone": "Tombstone"
+    },
+    "result": {
+      "title": "结果"
     }
   },
   "unlock": {

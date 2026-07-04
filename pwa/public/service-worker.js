@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sat20-wallet-pwa-v0.1.35-20260703T122816Z'
+const CACHE_NAME = 'sat20-wallet-pwa-v0.1.36-20260704T052028Z'
 const CACHE_PREFIX = 'sat20-wallet-pwa-'
 const APP_BASE = new URL(self.registration.scope).pathname.replace(/\/$/, '')
 const withBase = (path) => `${APP_BASE}${path}`
@@ -19,6 +19,21 @@ const PRECACHE_URLS = [
   withBase('/icon/32.png'),
   withBase('/icon/16.png')
 ]
+
+const cacheNetworkResponse = async (request, response) => {
+  if (!response || !response.ok) {
+    return
+  }
+
+  const cache = await caches.open(CACHE_NAME)
+  await cache.put(request, response.clone())
+}
+
+const fetchAndCache = async (request, cacheKey = request) => {
+  const response = await fetch(new Request(request, { cache: 'reload' }))
+  await cacheNetworkResponse(cacheKey, response)
+  return response
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -62,8 +77,17 @@ self.addEventListener('fetch', (event) => {
 
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(new Request(event.request, { cache: 'no-store' }))
-        .catch(() => caches.match(withBase('/index.html')))
+      caches.match(withBase('/index.html'))
+        .then((cachedResponse) => {
+          if (cachedResponse) {
+            return cachedResponse
+          }
+
+          return fetchAndCache(
+            new Request(event.request, { cache: 'no-store' }),
+            withBase('/index.html')
+          )
+        })
     )
     return
   }
@@ -84,15 +108,8 @@ self.addEventListener('fetch', (event) => {
     requestUrl.pathname === withBase('/wasm/sat20wallet.wasm')
   ) {
     event.respondWith(
-      fetch(new Request(event.request, { cache: 'reload' }))
-        .then((networkResponse) => {
-          const responseClone = networkResponse.clone()
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone)
-          })
-          return networkResponse
-        })
-        .catch(() => caches.match(event.request, { ignoreSearch: true }))
+      caches.match(event.request, { ignoreSearch: true })
+        .then((cachedResponse) => cachedResponse || fetchAndCache(event.request))
     )
     return
   }

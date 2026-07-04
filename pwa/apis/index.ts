@@ -1,5 +1,6 @@
 import ordxApi from './ordx'
 import satnetApi from './satnet'
 import smartContractApi from './smartcontract'
+import dkvsApi from './dkvs'
 
-export { ordxApi, satnetApi, smartContractApi }
+export { dkvsApi, ordxApi, satnetApi, smartContractApi }

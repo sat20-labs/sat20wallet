@@ -52,6 +52,11 @@
       "contracts": "Smart Contracts",
       "mint": "Mint"
     },
+    "dkvs": {
+      "title": "DKVS",
+      "description": "Read and submit signed DKVS records.",
+      "open": "Open DKVS"
+    },
     "txConfirm": {
       "title": "Confirm Transaction",
       "description": "This operation will build and sign an on-chain transaction.",
@@ -420,6 +425,43 @@
       "invalidName": "Name cannot contain whitespace or /",
       "nameExists": "Name already exists",
       "checkDidBeforeMint": "Check the DID name first, then mint after it passes"
+    }
+  },
+  "dkvsTool": {
+    "title": "DKVS",
+    "network": "SatoshiNet {network}",
+    "tabs": {
+      "record": "Record",
+      "prefix": "Prefix",
+      "write": "Write",
+      "checkpoint": "Checkpoint"
+    },
+    "record": {
+      "title": "Record lookup",
+      "key": "Key",
+      "hash": "Hash"
+    },
+    "prefix": {
+      "title": "Prefix records",
+      "prefix": "Prefix",
+      "start": "Start",
+      "limit": "Limit"
+    },
+    "write": {
+      "title": "Signed record",
+      "recordJson": "Record JSON"
+    },
+    "checkpoint": {
+      "title": "Checkpoint"
+    },
+    "actions": {
+      "load": "Load",
+      "list": "List",
+      "put": "Put",
+      "tombstone": "Tombstone"
+    },
+    "result": {
+      "title": "Result"
     }
   },
   "unlock": {

@@ -701,7 +701,7 @@
         </TabsContent>
 
         <TabsContent value="mining" class="mt-4">
-          <Card>
+          <Card class="mb-4">
             <CardHeader>
               <CardTitle class="text-base">BTC Lucky Mining</CardTitle>
               <CardDescription>
@@ -712,6 +712,20 @@
               <Button class="w-full justify-start" @click="router.push('/wallet/btc-lucky-mining')">
                 <Icon icon="lucide:pickaxe" class="h-4 w-4" />
                 打开挖矿
+              </Button>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle class="text-base">{{ t('tools.dkvs.title') }}</CardTitle>
+              <CardDescription>
+                {{ t('tools.dkvs.description') }}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button class="w-full justify-start" @click="router.push('/wallet/dkvs')">
+                <Icon icon="lucide:database-zap" class="h-4 w-4" />
+                {{ t('tools.dkvs.open') }}
               </Button>
             </CardContent>
           </Card>
