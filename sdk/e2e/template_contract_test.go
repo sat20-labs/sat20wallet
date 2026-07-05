@@ -257,6 +257,57 @@ func TestRealSatoshiNetTemplateExchangeGasForSatoshiAndClose(t *testing.T) {
 	f.requireSynced(t)
 }
 
+func TestTemplateAutopayPaysAndCloses(t *testing.T) {
+	const feeAsset = "ordx:f:e2eautopay"
+	f := newTemplateFixture(t, map[string]int64{feeAsset: 1000})
+	gas := contractcommon.GetGasAssetName()
+	deployerAddr := f.A.Address
+	recipientAddr := f.B.Address
+
+	gasBank := f.splitGasBank(t, 3)
+	feeOuts := f.split(t, f.A, f.assetAnchors[feeAsset], feeAsset,
+		[]int64{30, 15}, []int64{10000, 10000}, []*templateActor{f.A, f.C})
+
+	content, err := contractcommon.EncodeTemplateAutopayContent(contractcommon.TemplateAutopayContract{
+		Recipient:    recipientAddr,
+		FeeAssetName: feeAsset,
+		ScheduleMode: contractcommon.AutopayScheduleFixed,
+		BaseAmount:   "10",
+		EndHeight:    0,
+	})
+	require.NoError(t, err)
+	deployAssets := txAsset(gas, 290000)
+	deployAssets = append(deployAssets, txAsset(feeAsset, 30)...)
+	deployTx, contract := buildTemplateDeployFor(t, f.A,
+		contractcommon.TemplateAutopay, content, deployerAddr, []byte("autopay"),
+		[]wire.OutPoint{gasBank.take(t, f.A), feeOuts[0]},
+		wire.TxOut{Value: 10000, Assets: deployAssets})
+	deployBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{deployTx}, 0)
+	requireSingleResultTx(t, deployBlock)
+
+	heartbeatTx := buildTemplateAssetTransfer(t, f.A, gasBank.take(t, f.A), gas, 290000, 9000, f.A)
+	payBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{heartbeatTx}, 0)
+	payResult := requireSingleResultTx(t, payBlock)
+	requireTxOutputAssetAmount(t, payResult, recipientAddr, feeAsset, "10")
+
+	fundTx := buildTemplateDefaultInvokeFor(t, f.C, contract, []wire.OutPoint{feeOuts[1]},
+		wire.TxOut{Value: 10000, Assets: txAsset(feeAsset, 15)})
+	f.Network.sendAndMine(t, fundTx, 0)
+	state := fetchTemplateAutopayView(t, f.Network.Bootstrap, contract.MustEncode())
+	require.Equal(t, templateruntime.AutopayStatusActive, state.Status)
+	require.Equal(t, "25", state.FeeBalance)
+
+	closeTx := buildTemplateInvokeFor(t, f.A, contract, 1, contractcommon.TemplateInvokeAPIClose, nil,
+		[]wire.OutPoint{gasBank.take(t, f.A)},
+		wire.TxOut{Value: 10000, Assets: txAsset(gas, 290000)})
+	closeBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{closeTx}, 0)
+	closeResult := requireSingleResultTx(t, closeBlock)
+	requireTxOutputAssetAmount(t, closeResult, deployerAddr, feeAsset, "25")
+	requireTxOutputAssetPositive(t, closeResult, deployerAddr, gas)
+	state = fetchTemplateAutopayView(t, f.Network.Bootstrap, contract.MustEncode())
+	require.Equal(t, templateruntime.AutopayStatusClosed, state.Status)
+}
+
 func TestTemplateLimitOrderAssetMatrix(t *testing.T) {
 	f := newTemplateFixtureWithProfiles(t, templateProfiles())
 	gas := contractcommon.GetGasAssetName()
@@ -492,6 +543,10 @@ type templateFixture struct {
 }
 
 func newTemplateFixture(t *testing.T, assets map[string]int64) *templateFixture {
+	return newTemplateFixtureWithArgs(t, assets, nil, nil, nil)
+}
+
+func newTemplateFixtureWithArgs(t *testing.T, assets map[string]int64, bootstrapArgs, coreArgs, minerArgs []string) *templateFixture {
 	t.Helper()
 	profiles := make([]templateAssetProfile, 0, len(assets))
 	for _, asset := range sortedAssetNames(assets) {
@@ -502,10 +557,14 @@ func newTemplateFixture(t *testing.T, assets map[string]int64) *templateFixture 
 			Supply:    fmt.Sprintf("%d", assets[asset]),
 		})
 	}
-	return newTemplateFixtureWithProfiles(t, profiles)
+	return newTemplateFixtureWithProfilesAndArgs(t, profiles, bootstrapArgs, coreArgs, minerArgs)
 }
 
 func newTemplateFixtureWithProfiles(t *testing.T, profiles []templateAssetProfile) *templateFixture {
+	return newTemplateFixtureWithProfilesAndArgs(t, profiles, nil, nil, nil)
+}
+
+func newTemplateFixtureWithProfilesAndArgs(t *testing.T, profiles []templateAssetProfile, bootstrapArgs, coreArgs, minerArgs []string) *templateFixture {
 	t.Helper()
 	oldEnableTesting := indexercommon.ENABLE_TESTING
 	indexercommon.ENABLE_TESTING = true
@@ -555,7 +614,7 @@ func newTemplateFixtureWithProfiles(t *testing.T, profiles []templateAssetProfil
 		})
 	}
 	fakeL1 := newFakeL1Indexer(t, hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed()), lockedPkScript, l1Assets)
-	network := newRealSatoshiNet(t, fakeL1)
+	network := newRealSatoshiNetWithArgs(t, fakeL1, bootstrapArgs, coreArgs, minerArgs)
 
 	gasAnchor := buildAnchorTx(t, templateLockedOutPoint("gas", 0), lockedValue,
 		txAsset(gas, 100000000), gas+"-100000000-0-1",
@@ -738,6 +797,17 @@ func buildTemplateDefaultInvokeFor(t *testing.T, actor *templateActor, contract 
 		tx.AddTxIn(wire.NewTxIn(&input, nil, nil))
 	}
 	tx.AddTxOut(&funding)
+	signTaprootInputs(t, tx, actor.Key, actor.RedeemScript, actor.ControlBlock)
+	return tx
+}
+
+func buildTemplateAssetTransfer(t *testing.T, actor *templateActor, input wire.OutPoint,
+	asset string, amount int64, value int64, recipient *templateActor) *wire.MsgTx {
+
+	t.Helper()
+	tx := wire.NewMsgTx(wire.TxVersion)
+	tx.AddTxIn(wire.NewTxIn(&input, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(value, txAsset(asset, amount), recipient.PkScript))
 	signTaprootInputs(t, tx, actor.Key, actor.RedeemScript, actor.ControlBlock)
 	return tx
 }
@@ -935,6 +1005,14 @@ func fetchTemplateAMMView(t *testing.T, node *testHarness, contract string) temp
 	return state
 }
 
+func fetchTemplateAutopayView(t *testing.T, node *testHarness, contract string) templateruntime.AutopayStateView {
+	t.Helper()
+	raw := fetchTemplateStateRaw(t, node, contract)
+	var state templateruntime.AutopayStateView
+	require.NoError(t, json.Unmarshal(raw, &state))
+	return state
+}
+
 func fetchTemplateStateRaw(t *testing.T, node *testHarness, contract string) json.RawMessage {
 	t.Helper()
 	param, err := json.Marshal(contract)
@@ -951,6 +1029,17 @@ func fetchTemplateStateRaw(t *testing.T, node *testHarness, contract string) jso
 	}
 	require.NotEmpty(t, result.State)
 	return result.State
+}
+
+func mineTemplateBlock(t *testing.T, f *templateFixture) *wire.MsgBlock {
+	t.Helper()
+	hashes, err := f.Network.Bootstrap.Client.Generate(1)
+	require.NoError(t, err)
+	require.NotEmpty(t, hashes)
+	require.NoError(t, joinBlocks(f.Network.Nodes))
+	block, err := f.Network.Bootstrap.Client.GetBlock(hashes[0])
+	require.NoError(t, err)
+	return block
 }
 
 func requireSingleResultTx(t *testing.T, block *wire.MsgBlock) *wire.MsgTx {

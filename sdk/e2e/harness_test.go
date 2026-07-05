@@ -92,6 +92,8 @@ type fakeL1Indexer struct {
 	server    *httptest.Server
 	btcLucky  *btclucky.TemplateService
 	btcHeight func() int64
+	namesMu   sync.RWMutex
+	names     map[string]string
 }
 
 func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte, assets []fakeL1Asset) *fakeL1Indexer {
@@ -121,7 +123,7 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 		}
 	}
 
-	fake := &fakeL1Indexer{}
+	fake := &fakeL1Indexer{names: make(map[string]string)}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/testnet/kv/register" {
 			require.NoError(t, json.NewEncoder(w).Encode(indexerwire.RegisterPubKeyResp{
@@ -140,6 +142,31 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 				"code": 0,
 				"msg":  "ok",
 				"data": map[string]int64{"height": height},
+			}))
+			return
+		}
+
+		if strings.HasPrefix(r.URL.Path, "/testnet/ns/name/") {
+			name, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/testnet/ns/name/"))
+			require.NoError(t, err)
+			fake.namesMu.RLock()
+			address, ok := fake.names[name]
+			fake.namesMu.RUnlock()
+			if !ok || address == "" {
+				w.WriteHeader(http.StatusNotFound)
+				require.NoError(t, json.NewEncoder(w).Encode(map[string]interface{}{
+					"code": -1,
+					"msg":  "name not found",
+				}))
+				return
+			}
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]interface{}{
+				"code": 0,
+				"msg":  "ok",
+				"data": map[string]string{
+					"name":    name,
+					"address": address,
+				},
 			}))
 			return
 		}
@@ -239,6 +266,15 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 	return fake
 }
 
+func (f *fakeL1Indexer) setNameOwner(name, address string) {
+	f.namesMu.Lock()
+	defer f.namesMu.Unlock()
+	if f.names == nil {
+		f.names = make(map[string]string)
+	}
+	f.names[name] = address
+}
+
 func (f *fakeL1Indexer) host() string {
 	return strings.TrimPrefix(f.server.URL, "http://")
 }
@@ -248,6 +284,7 @@ type realSatoshiNet struct {
 	Core      *testHarness
 	Miner     *testHarness
 	Nodes     []*testHarness
+	fakeL1    *fakeL1Indexer
 }
 
 func newRealSatoshiNet(t *testing.T, fakeL1 *fakeL1Indexer) *realSatoshiNet {
@@ -272,6 +309,7 @@ func newRealSatoshiNetWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, bootstrapArg
 		Core:      core,
 		Miner:     miner,
 		Nodes:     nodes,
+		fakeL1:    fakeL1,
 	}
 }
 

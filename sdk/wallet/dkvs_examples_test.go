@@ -18,7 +18,7 @@ func ExampleSatsNetDKVSClient_walletRecoveryBackup() {
 		WalletID:        "wallet-1",
 		EncryptedBackup: []byte("ciphertext"),
 	})
-	record, _ := dkvsindexer.NewSignedRecord(priv, key, value, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	record, _ := NewDKVSSignedRecord(exampleDKVSWallet(priv), key, value, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	http := &fakeDKVSHTTPClient{
 		getResp: map[string][]byte{
 			"testnet/v3/dkvs/records": exampleDKVSJSON(map[string]interface{}{"code": 0, "msg": "ok", "data": record}),
@@ -30,9 +30,9 @@ func ExampleSatsNetDKVSClient_walletRecoveryBackup() {
 	}
 	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
 
-	_, _ = client.PutWalletRecoveryBackup(priv, "wallet-1", []byte("ciphertext"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	_, _ = client.PutWalletRecoveryBackup(exampleDKVSWallet(priv), "wallet-1", []byte("ciphertext"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	backup, _, _ := client.GetWalletRecoveryBackup(pubKey, "wallet-1")
-	_, _ = client.RenewWalletRecoveryBackup(priv, "wallet-1", dkvsindexer.RecordOptions{TTL: 120_000, ExpiryHeight: 200})
+	_, _ = client.RenewWalletRecoveryBackup(exampleDKVSWallet(priv), "wallet-1", dkvsindexer.RecordOptions{TTL: 120_000, ExpiryHeight: 200})
 	var renewal swire.DKVSRecord
 	_ = json.Unmarshal(http.lastBody, &renewal)
 
@@ -51,7 +51,7 @@ func ExampleSatsNetDKVSClient_guardianShare() {
 		ShareID:    "share-1",
 		Ciphertext: []byte("share-ciphertext"),
 	})
-	record, _ := dkvsindexer.NewSignedRecord(ownerPriv, key, value, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	record, _ := NewDKVSSignedRecord(exampleDKVSWallet(ownerPriv), key, value, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	http := &fakeDKVSHTTPClient{
 		getResp: map[string][]byte{
 			"testnet/v3/dkvs/records/prefix": exampleDKVSJSON(map[string]interface{}{"code": 0, "msg": "ok", "total": 1, "data": []*swire.DKVSRecord{record}}),
@@ -63,7 +63,7 @@ func ExampleSatsNetDKVSClient_guardianShare() {
 	}
 	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
 
-	_, _ = client.PutGuardianShare(ownerPriv, "recovery-package", "share-1", []byte("share-ciphertext"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	_, _ = client.PutGuardianShare(exampleDKVSWallet(ownerPriv), "recovery-package", "share-1", []byte("share-ciphertext"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	shares, _, total, _ := client.ReadGuardianShares(ownerPubKey, "recovery-package", 0, 10)
 
 	fmt.Println(total, shares[0].PackageID, shares[0].ShareID, string(shares[0].Ciphertext))
@@ -83,7 +83,7 @@ func ExampleSatsNetDKVSClient_offlineMessage() {
 		MessageID:        "msg-1",
 		EncryptedMessage: []byte("message-ciphertext"),
 	})
-	record, _ := dkvsindexer.NewSignedRecord(senderPriv, key, value, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	record, _ := NewDKVSSignedRecord(exampleDKVSWallet(senderPriv), key, value, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	http := &fakeDKVSHTTPClient{
 		getResp: map[string][]byte{
 			"testnet/v3/dkvs/records/prefix": exampleDKVSJSON(map[string]interface{}{"code": 0, "msg": "ok", "total": 1, "data": []*swire.DKVSRecord{record}}),
@@ -95,7 +95,7 @@ func ExampleSatsNetDKVSClient_offlineMessage() {
 	}
 	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
 
-	_, _ = client.SendOfflineMessage(senderPriv, recipientPubKey, "msg-1", []byte("message-ciphertext"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	_, _ = client.SendOfflineMessage(exampleDKVSWallet(senderPriv), recipientPubKey, "msg-1", []byte("message-ciphertext"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	messages, _, total, _ := client.ReadOfflineMessages(recipientPubKey, 0, 10)
 
 	fmt.Println(total, messages[0].MessageID, string(messages[0].EncryptedMessage))
@@ -113,7 +113,7 @@ func ExampleSatsNetDKVSClient_serviceAuthenticity() {
 		ArtifactHash: "sha256:abcd",
 		DownloadURL:  "https://example.invalid/wallet",
 	})
-	record, _ := dkvsindexer.NewSignedRecord(priv, key, value, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	record, _ := NewDKVSSignedRecord(exampleDKVSWallet(priv), key, value, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	http := &fakeDKVSHTTPClient{
 		getResp: map[string][]byte{
 			"testnet/v3/dkvs/records": exampleDKVSJSON(map[string]interface{}{"code": 0, "msg": "ok", "data": record}),
@@ -125,7 +125,7 @@ func ExampleSatsNetDKVSClient_serviceAuthenticity() {
 	}
 	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
 
-	_, _ = client.PublishServiceAuthenticity(priv, "wallet", "desktop", "1.0.0", "sha256:abcd", "https://example.invalid/wallet", nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	_, _ = client.PublishServiceAuthenticity(exampleDKVSWallet(priv), "wallet", "desktop", "1.0.0", "sha256:abcd", "https://example.invalid/wallet", nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	authenticity, _, _ := client.GetServiceAuthenticity("wallet", "desktop", "1.0.0")
 
 	fmt.Println(authenticity.ServiceName, authenticity.AppID, authenticity.Release, authenticity.ArtifactHash)
@@ -135,7 +135,7 @@ func ExampleSatsNetDKVSClient_serviceAuthenticity() {
 func ExampleSatsNetDKVSClient_ResolveNameRecord() {
 	priv := exampleDKVSPriv(6)
 	key, _ := dkvsindexer.NameKey("Alice Name")
-	record, _ := dkvsindexer.NewSignedRecord(priv, key, []byte("profile"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	record, _ := NewDKVSSignedRecord(exampleDKVSWallet(priv), key, []byte("profile"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	http := &fakeDKVSHTTPClient{
 		getResp: map[string][]byte{
 			"testnet/v3/dkvs/records": exampleDKVSJSON(map[string]interface{}{"code": 0, "msg": "ok", "data": record}),
@@ -156,6 +156,14 @@ func exampleDKVSPriv(seed byte) *btcec.PrivateKey {
 	key[31] = seed
 	priv, _ := btcec.PrivKeyFromBytes(key)
 	return priv
+}
+
+func exampleDKVSWallet(priv *btcec.PrivateKey) *InternalWallet {
+	w, _, err := NewInternalWalletWithPrivKey(priv.Serialize(), GetChainParam())
+	if err != nil {
+		panic(err)
+	}
+	return w
 }
 
 func exampleDKVSJSON(value interface{}) []byte {

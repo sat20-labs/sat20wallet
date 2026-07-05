@@ -4,9 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	nethttp "net/http"
 	"strconv"
 
-	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -24,6 +26,11 @@ type DKVSNameResolution struct {
 
 type httpDeleteClient interface {
 	SendDeleteRequest(url *URL, marshalledJSON []byte) ([]byte, error)
+}
+
+type DKVSAutopayOptions struct {
+	AddressParams *chaincfg.Params
+	PoolContract  string
 }
 
 type dkvsBaseResp struct {
@@ -71,6 +78,9 @@ type dkvsPruneResp struct {
 }
 
 func NewSatsNetDKVSClient(scheme, host, proxy string, http HttpClient) *SatsNetDKVSClient {
+	if http == nil {
+		http = &NetClient{Client: nethttp.DefaultClient}
+	}
 	return &SatsNetDKVSClient{RESTClient: NewRESTClient(scheme, host, proxy, http)}
 }
 
@@ -183,62 +193,6 @@ func (p *SatsNetDKVSClient) GetCheckpoint() (*dkvsindexer.Checkpoint, error) {
 	return resp.Data, nil
 }
 
-func (p *SatsNetDKVSClient) GetSignedCheckpointRecord(epoch string) (*swire.DKVSRecord, error) {
-	key, err := dkvsindexer.CheckpointKey(epoch)
-	if err != nil {
-		return nil, err
-	}
-	return p.GetRecord(key)
-}
-
-func (p *SatsNetDKVSClient) GetVerifiedSignedCheckpoint(epoch string, pubKey []byte, opts dkvsindexer.RecordVerificationOptions) (*dkvsindexer.SignedCheckpoint, *swire.DKVSRecord, error) {
-	record, err := p.GetSignedCheckpointRecord(epoch)
-	if err != nil {
-		return nil, nil, err
-	}
-	key, err := dkvsindexer.CheckpointKey(epoch)
-	if err != nil {
-		return nil, nil, err
-	}
-	opts.ExpectedKey = key
-	if err := dkvsindexer.VerifyRecordForClient(record, opts); err != nil {
-		return nil, nil, err
-	}
-	checkpoint, err := dkvsindexer.VerifySignedCheckpointValue(record.Value, pubKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	return checkpoint, record, nil
-}
-
-func (p *SatsNetDKVSClient) GetSignedSnapshotRecord(epoch string) (*swire.DKVSRecord, error) {
-	key, err := dkvsindexer.SnapshotKey(epoch)
-	if err != nil {
-		return nil, err
-	}
-	return p.GetRecord(key)
-}
-
-func (p *SatsNetDKVSClient) GetVerifiedSignedSnapshot(epoch string, pubKey []byte, opts dkvsindexer.RecordVerificationOptions) (*dkvsindexer.SignedSnapshot, *swire.DKVSRecord, error) {
-	record, err := p.GetSignedSnapshotRecord(epoch)
-	if err != nil {
-		return nil, nil, err
-	}
-	key, err := dkvsindexer.SnapshotKey(epoch)
-	if err != nil {
-		return nil, nil, err
-	}
-	opts.ExpectedKey = key
-	if err := dkvsindexer.VerifyRecordForClient(record, opts); err != nil {
-		return nil, nil, err
-	}
-	snapshot, err := dkvsindexer.VerifySignedSnapshotValue(record.Value, pubKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	return snapshot, record, nil
-}
-
 func (p *SatsNetDKVSClient) GetSnapshot() (*dkvsindexer.Snapshot, error) {
 	var resp struct {
 		dkvsBaseResp
@@ -312,39 +266,111 @@ func (p *SatsNetDKVSClient) ListSubscriptions() ([]dkvsindexer.Subscription, err
 	return resp.Subscriptions, nil
 }
 
-func (p *SatsNetDKVSClient) PutSignedRecord(priv *btcec.PrivateKey, key string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	record, err := dkvsindexer.NewSignedRecord(priv, key, value, opts)
+func newSignedRecordWithAutopay(wallet common.Wallet, key string, value []byte,
+	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+
+	params := autopay.AddressParams
+	if params == nil {
+		params = &chaincfg.TestNetParams
+	}
+	poolContract := autopay.PoolContract
+	if poolContract == "" {
+		defaults := dkvsindexer.NetworkDefaultsForParams(params)
+		poolContract = defaults.AutopayContract
+	}
+	if poolContract == "" {
+		return nil, dkvsindexer.ErrInvalidFeeProof
+	}
+	record, err := NewDKVSSignedRecord(wallet, key, value, opts)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := dkvsindexer.ParseKey(key)
+	if err != nil {
+		return nil, err
+	}
+	proof, err := dkvsindexer.NewAutopayFeeProof(key, parsed.Namespace, swire.MaxDKVSRecordSize, record.ExpiryHeight, poolContract, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := AttachDKVSFeeProof(record, proof); err != nil {
+		return nil, err
+	}
+	if err := SignDKVSRecord(wallet, record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+func (p *SatsNetDKVSClient) PutSignedRecord(wallet common.Wallet, key string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	record, err := NewDKVSSignedRecord(wallet, key, value, opts)
 	if err != nil {
 		return nil, err
 	}
 	return p.PutRecord(record)
 }
 
-func (p *SatsNetDKVSClient) TombstoneSigned(priv *btcec.PrivateKey, key string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	record, err := dkvsindexer.NewSignedTombstone(priv, key, opts)
+func (p *SatsNetDKVSClient) PutSignedRecordWithAutopay(wallet common.Wallet, key string, value []byte,
+	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+
+	record, err := newSignedRecordWithAutopay(wallet, key, value, opts, autopay)
+	if err != nil {
+		return nil, err
+	}
+	return p.PutRecord(record)
+}
+
+func (p *SatsNetDKVSClient) TombstoneSigned(wallet common.Wallet, key string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	record, err := NewDKVSSignedTombstone(wallet, key, opts)
 	if err != nil {
 		return nil, err
 	}
 	return p.Tombstone(record)
 }
 
-func (p *SatsNetDKVSClient) RenewRecord(priv *btcec.PrivateKey, existing *swire.DKVSRecord, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	record, err := dkvsindexer.NewSignedRenewalRecord(priv, existing, opts)
+func (p *SatsNetDKVSClient) TombstoneSignedWithAutopay(wallet common.Wallet, key string,
+	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+
+	opts.Flags |= dkvsindexer.FlagTombstone
+	record, err := newSignedRecordWithAutopay(wallet, key, nil, opts, autopay)
+	if err != nil {
+		return nil, err
+	}
+	return p.Tombstone(record)
+}
+
+func (p *SatsNetDKVSClient) RenewRecord(wallet common.Wallet, existing *swire.DKVSRecord, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	record, err := NewDKVSSignedRenewalRecord(wallet, existing, opts)
 	if err != nil {
 		return nil, err
 	}
 	return p.PutRecord(record)
 }
 
-func (p *SatsNetDKVSClient) PutPersonalRecord(priv *btcec.PrivateKey, path string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	if priv == nil {
+func (p *SatsNetDKVSClient) PutPersonalRecord(wallet common.Wallet, path string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	pubKey, err := dkvsWalletPubKey(wallet)
+	if err != nil {
 		return nil, dkvsindexer.ErrInvalidSignature
 	}
-	key, err := dkvsindexer.PersonalKey(priv.PubKey().SerializeCompressed(), path)
+	key, err := dkvsindexer.PersonalKey(pubKey, path)
 	if err != nil {
 		return nil, err
 	}
-	return p.PutSignedRecord(priv, key, value, opts)
+	return p.PutSignedRecord(wallet, key, value, opts)
+}
+
+func (p *SatsNetDKVSClient) PutPersonalRecordWithAutopay(wallet common.Wallet, path string, value []byte,
+	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+
+	pubKey, err := dkvsWalletPubKey(wallet)
+	if err != nil {
+		return nil, dkvsindexer.ErrInvalidSignature
+	}
+	key, err := dkvsindexer.PersonalKey(pubKey, path)
+	if err != nil {
+		return nil, err
+	}
+	return p.PutSignedRecordWithAutopay(wallet, key, value, opts, autopay)
 }
 
 func (p *SatsNetDKVSClient) GetPersonalRecord(pubKey []byte, path string) (*swire.DKVSRecord, error) {
@@ -355,26 +381,42 @@ func (p *SatsNetDKVSClient) GetPersonalRecord(pubKey []byte, path string) (*swir
 	return p.GetRecord(key)
 }
 
-func (p *SatsNetDKVSClient) TombstonePersonalRecord(priv *btcec.PrivateKey, path string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	if priv == nil {
+func (p *SatsNetDKVSClient) TombstonePersonalRecord(wallet common.Wallet, path string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	pubKey, err := dkvsWalletPubKey(wallet)
+	if err != nil {
 		return nil, dkvsindexer.ErrInvalidSignature
 	}
-	key, err := dkvsindexer.PersonalKey(priv.PubKey().SerializeCompressed(), path)
+	key, err := dkvsindexer.PersonalKey(pubKey, path)
 	if err != nil {
 		return nil, err
 	}
-	return p.TombstoneSigned(priv, key, opts)
+	return p.TombstoneSigned(wallet, key, opts)
 }
 
-func (p *SatsNetDKVSClient) RenewPersonalRecord(priv *btcec.PrivateKey, path string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	if priv == nil {
+func (p *SatsNetDKVSClient) TombstonePersonalRecordWithAutopay(wallet common.Wallet, path string,
+	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+
+	pubKey, err := dkvsWalletPubKey(wallet)
+	if err != nil {
 		return nil, dkvsindexer.ErrInvalidSignature
 	}
-	existing, err := p.GetPersonalRecord(priv.PubKey().SerializeCompressed(), path)
+	key, err := dkvsindexer.PersonalKey(pubKey, path)
 	if err != nil {
 		return nil, err
 	}
-	return p.RenewRecord(priv, existing, opts)
+	return p.TombstoneSignedWithAutopay(wallet, key, opts, autopay)
+}
+
+func (p *SatsNetDKVSClient) RenewPersonalRecord(wallet common.Wallet, path string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	pubKey, err := dkvsWalletPubKey(wallet)
+	if err != nil {
+		return nil, dkvsindexer.ErrInvalidSignature
+	}
+	existing, err := p.GetPersonalRecord(pubKey, path)
+	if err != nil {
+		return nil, err
+	}
+	return p.RenewRecord(wallet, existing, opts)
 }
 
 func (p *SatsNetDKVSClient) SubscribeKey(key string) ([]*swire.DKVSRecord, int, error) {
@@ -415,22 +457,22 @@ func (p *SatsNetDKVSClient) PutBlobRecords(manifestRecord *swire.DKVSRecord, chu
 	return err
 }
 
-func (p *SatsNetDKVSClient) PutBlob(priv *btcec.PrivateKey, data []byte, metadata json.RawMessage, opts dkvsindexer.RecordOptions) (string, *swire.DKVSRecord, []*swire.DKVSRecord, error) {
+func (p *SatsNetDKVSClient) PutBlob(wallet common.Wallet, data []byte, metadata json.RawMessage, opts dkvsindexer.RecordOptions) (string, *swire.DKVSRecord, []*swire.DKVSRecord, error) {
 	if len(data) == 0 {
 		return "", nil, nil, dkvsindexer.ErrBlobManifestInvalid
 	}
 	sum := sha256.Sum256(data)
 	objectID := fmt.Sprintf("%x", sum[:])
 	chunks := chunkBlobData(data, dkvsindexer.MaxRecordValueSize)
-	manifestRecord, chunkRecords, err := p.PutChunkedBlob(priv, objectID, chunks, metadata, opts)
+	manifestRecord, chunkRecords, err := p.PutChunkedBlob(wallet, objectID, chunks, metadata, opts)
 	if err != nil {
 		return "", nil, nil, err
 	}
 	return objectID, manifestRecord, chunkRecords, nil
 }
 
-func (p *SatsNetDKVSClient) PutChunkedBlob(priv *btcec.PrivateKey, objectID string, chunks [][]byte, metadata json.RawMessage, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
-	manifestRecord, chunkRecords, err := dkvsindexer.BuildSignedBlobRecords(priv, objectID, chunks, metadata, opts)
+func (p *SatsNetDKVSClient) PutChunkedBlob(wallet common.Wallet, objectID string, chunks [][]byte, metadata json.RawMessage, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
+	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(wallet, objectID, chunks, metadata, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -483,12 +525,12 @@ func (p *SatsNetDKVSClient) SendMailboxMessage(record *swire.DKVSRecord) (*swire
 	return p.PutRecord(record)
 }
 
-func (p *SatsNetDKVSClient) SendSignedMailboxMessage(priv *btcec.PrivateKey, mailboxID, msgID string, encryptedMessage []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+func (p *SatsNetDKVSClient) SendSignedMailboxMessage(wallet common.Wallet, mailboxID, msgID string, encryptedMessage []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
 	key, err := dkvsindexer.MailMsgKey(mailboxID, msgID)
 	if err != nil {
 		return nil, err
 	}
-	record, err := dkvsindexer.NewSignedRecord(priv, key, encryptedMessage, opts)
+	record, err := NewDKVSSignedRecord(wallet, key, encryptedMessage, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -528,12 +570,12 @@ func (p *SatsNetDKVSClient) DeleteMailboxRecord(tombstone *swire.DKVSRecord) (*s
 	return p.Tombstone(tombstone)
 }
 
-func (p *SatsNetDKVSClient) DeleteMessage(priv *btcec.PrivateKey, mailboxID, msgID string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+func (p *SatsNetDKVSClient) DeleteMessage(wallet common.Wallet, mailboxID, msgID string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
 	key, err := dkvsindexer.MailMsgKey(mailboxID, msgID)
 	if err != nil {
 		return nil, err
 	}
-	tombstone, err := dkvsindexer.NewSignedTombstone(priv, key, opts)
+	tombstone, err := NewDKVSSignedTombstone(wallet, key, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -563,12 +605,12 @@ func (p *SatsNetDKVSClient) PutNameRecord(record *swire.DKVSRecord) (*swire.DKVS
 	return p.PutRecord(record)
 }
 
-func (p *SatsNetDKVSClient) PutSignedNameRecord(priv *btcec.PrivateKey, name string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+func (p *SatsNetDKVSClient) PutSignedNameRecord(wallet common.Wallet, name string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
 	key, err := dkvsindexer.NameKey(name)
 	if err != nil {
 		return nil, err
 	}
-	record, err := dkvsindexer.NewSignedRecord(priv, key, value, opts)
+	record, err := NewDKVSSignedRecord(wallet, key, value, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -603,12 +645,12 @@ func (p *SatsNetDKVSClient) PutServiceRecord(record *swire.DKVSRecord) (*swire.D
 	return p.PutRecord(record)
 }
 
-func (p *SatsNetDKVSClient) PutSignedServiceRecord(priv *btcec.PrivateKey, serviceName, path string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+func (p *SatsNetDKVSClient) PutSignedServiceRecord(wallet common.Wallet, serviceName, path string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
 	key, err := dkvsindexer.ServiceKey(serviceName, path)
 	if err != nil {
 		return nil, err
 	}
-	record, err := dkvsindexer.NewSignedRecord(priv, key, value, opts)
+	record, err := NewDKVSSignedRecord(wallet, key, value, opts)
 	if err != nil {
 		return nil, err
 	}

@@ -1291,6 +1291,17 @@ func encodeTemplateContractContent(subtype, jsonContent string) (string, []byte,
 		}
 		return contractcommon.TemplateExchange, content, nil
 	}
+	if name == TEMPLATE_CONTRACT_AUTOPAY {
+		var autopay contractcommon.TemplateAutopayContract
+		if err := json.Unmarshal([]byte(jsonContent), &autopay); err != nil {
+			return "", nil, err
+		}
+		content, err := contractcommon.EncodeTemplateAutopayContent(autopay)
+		if err != nil {
+			return "", nil, err
+		}
+		return contractcommon.TemplateAutopay, content, nil
+	}
 	contract, err := ContractContentUnMarsh(name, jsonContent)
 	if err != nil {
 		return "", nil, err
@@ -2059,7 +2070,7 @@ func (p *Manager) contractAddressPrefix() string {
 
 func normalizeContractType(t string) string {
 	switch strings.ToLower(strings.TrimSpace(t)) {
-	case "", ContractTypeTemplate, "channel", "template:channel", TEMPLATE_CONTRACT_LIMITORDER, TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_AMM, TEMPLATE_CONTRACT_EXCHANGE:
+	case "", ContractTypeTemplate, "channel", "template:channel", TEMPLATE_CONTRACT_LIMITORDER, TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_AMM, TEMPLATE_CONTRACT_EXCHANGE, TEMPLATE_CONTRACT_AUTOPAY:
 		return ContractTypeTemplate
 	case ContractTypeAgent, "agent:prediction":
 		return ContractTypeAgent

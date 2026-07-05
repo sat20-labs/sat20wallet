@@ -10,6 +10,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	templateruntime "github.com/sat20-labs/satoshinet/contract/template"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -133,6 +134,19 @@ func TestUnifiedNativeTemplateTxCoverage(t *testing.T) {
 	exchangeAddr := assertNativeTemplateDeployTx(t, contractcommon.TemplateExchange, exchangeContent, "exchange")
 	assertNativeTemplateInvokeTx(t, exchangeAddr, contractcommon.TemplateInvokeAPIExchange, mustEncodeTemplateParam((&contractcommon.TemplateExchangeInvokeParam{MinOutA: "1"}).Encode()))
 	assertNativeTemplateInvokeTx(t, exchangeAddr, contractcommon.TemplateInvokeAPIClose, nil)
+
+	autopayContent, err := contractcommon.EncodeTemplateAutopayContent(contractcommon.TemplateAutopayContract{
+		Recipient:    "recipient-address",
+		FeeAssetName: unifiedTemplateTestAsset,
+		ScheduleMode: contractcommon.AutopayScheduleFixed,
+		BaseAmount:   "10",
+		EndHeight:    200,
+	})
+	if err != nil {
+		t.Fatalf("EncodeTemplateAutopayContent: %v", err)
+	}
+	autopayAddr := assertNativeTemplateDeployTx(t, contractcommon.TemplateAutopay, autopayContent, "autopay")
+	assertNativeTemplateInvokeTx(t, autopayAddr, contractcommon.TemplateInvokeAPIClose, nil)
 }
 
 func TestBuildNativeTemplateExchangeContract(t *testing.T) {
@@ -161,6 +175,44 @@ func TestBuildNativeTemplateExchangeContract(t *testing.T) {
 	}
 	if len(encoded) == 0 {
 		t.Fatalf("expected encoded exchange content")
+	}
+}
+
+func TestBuildNativeTemplateAutopayContract(t *testing.T) {
+	autopay := contractcommon.TemplateAutopayContract{
+		Recipient:    "recipient-address",
+		FeeAssetName: unifiedTemplateTestAsset,
+		ScheduleMode: contractcommon.AutopayScheduleLinear,
+		BaseAmount:   "10",
+		StepAmount:   "1",
+		EndHeight:    200,
+	}
+	content, err := json.Marshal(autopay)
+	if err != nil {
+		t.Fatalf("Marshal autopay: %v", err)
+	}
+	templateName, encoded, err := encodeTemplateContractContent(TEMPLATE_CONTRACT_AUTOPAY, string(content))
+	if err != nil {
+		t.Fatalf("encodeTemplateContractContent autopay: %v", err)
+	}
+	if templateName != contractcommon.TemplateAutopay {
+		t.Fatalf("template name mismatch: %s", templateName)
+	}
+	var decoded contractcommon.TemplateAutopayContract
+	c := templateruntime.NewAutopayContract("", "", "", "", "", 0)
+	if err := c.Decode(encoded); err != nil {
+		t.Fatalf("Decode autopay: %v", err)
+	}
+	decoded = contractcommon.TemplateAutopayContract{
+		Recipient:    c.Recipient,
+		FeeAssetName: c.FeeAssetName,
+		ScheduleMode: c.ScheduleMode,
+		BaseAmount:   c.BaseAmount,
+		StepAmount:   c.StepAmount,
+		EndHeight:    c.EndHeight,
+	}
+	if decoded != autopay {
+		t.Fatalf("decoded mismatch: %+v != %+v", decoded, autopay)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -107,7 +108,7 @@ func TestSatsNetDKVSClientGetVerifiedRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := dkvsindexer.NewSignedRecord(priv, key, []byte("value"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	record, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, priv), key, []byte("value"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,13 +151,71 @@ func TestSatsNetDKVSClientGetVerifiedRecord(t *testing.T) {
 	}
 }
 
+func TestSatsNetDKVSClientPutSignedRecordWithAutopay(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := dkvsindexer.PersonalKey(priv.PubKey().SerializeCompressed(), "profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	http := &fakeDKVSHTTPClient{
+		getResp: map[string][]byte{},
+		postResp: map[string][]byte{
+			"testnet/v3/dkvs/records":   mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok"}),
+			"testnet/v3/dkvs/tombstone": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok"}),
+		},
+		deleteResp: map[string][]byte{},
+	}
+	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
+	autopay := DKVSAutopayOptions{
+		AddressParams: &chaincfg.TestNetParams,
+		PoolContract:  "tc1ptestautopay",
+	}
+	if _, err := client.PutSignedRecordWithAutopay(dkvsTestWalletFromPriv(t, priv), key, []byte("value"),
+		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}, autopay); err != nil {
+		t.Fatal(err)
+	}
+	var posted swire.DKVSRecord
+	if err := json.Unmarshal(http.lastBody, &posted); err != nil {
+		t.Fatal(err)
+	}
+	if err := dkvsindexer.VerifySignature(&posted); err != nil {
+		t.Fatalf("record signature invalid after fee proof attach: %v", err)
+	}
+	proof, err := dkvsindexer.ParseFeeProof(posted.FeeProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proof.Mode != dkvsindexer.FeeModeAutopay ||
+		proof.PoolContract != autopay.PoolContract {
+		t.Fatalf("bad autopay proof=%+v record=%+v", proof, posted)
+	}
+
+	if _, err := client.TombstonePersonalRecordWithAutopay(dkvsTestWalletFromPriv(t, priv), "profile",
+		dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100}, autopay); err != nil {
+		t.Fatal(err)
+	}
+	var tombstone swire.DKVSRecord
+	if err := json.Unmarshal(http.lastBody, &tombstone); err != nil {
+		t.Fatal(err)
+	}
+	if !dkvsindexer.IsTombstone(tombstone.Flags) || len(tombstone.Value) != 0 {
+		t.Fatalf("bad tombstone flags=%d value=%x", tombstone.Flags, tombstone.Value)
+	}
+	if err := dkvsindexer.VerifySignature(&tombstone); err != nil {
+		t.Fatalf("tombstone signature invalid: %v", err)
+	}
+}
+
 func TestSatsNetDKVSClientListVerifiedRecords(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 	prefix := "/personal/" + dkvsindexer.AccountID(priv.PubKey().SerializeCompressed())
-	record, err := dkvsindexer.NewSignedRecord(priv, prefix+"/profile", []byte("value"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	record, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, priv), prefix+"/profile", []byte("value"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +235,7 @@ func TestSatsNetDKVSClientListVerifiedRecords(t *testing.T) {
 		t.Fatalf("records=%#v total=%d query=%v", records, total, http.lastGet.Query)
 	}
 
-	other, err := dkvsindexer.NewSignedRecord(priv, "/tmp/random", []byte("tmp"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	other, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, priv), "/tmp/random", []byte("tmp"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +251,7 @@ func TestSatsNetDKVSClientSnapshotAndSubscriptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	mailboxID := dkvsindexer.AccountID(priv.PubKey().SerializeCompressed())
-	mailRecord, err := dkvsindexer.NewSignedRecord(priv, "/mail/"+mailboxID+"/msg/msg-1", []byte("message"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	mailRecord, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, priv), "/mail/"+mailboxID+"/msg/msg-1", []byte("message"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,112 +333,6 @@ func TestSatsNetDKVSClientSnapshotAndSubscriptions(t *testing.T) {
 	}
 }
 
-func TestSatsNetDKVSClientSignedCheckpoint(t *testing.T) {
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkpoint := &dkvsindexer.Checkpoint{
-		Height:                10,
-		ActiveRecordCount:     1,
-		ActiveRecordTotalSize: 100,
-		NamespaceRoots:        map[string]string{"tmp": "root"},
-		ActiveRecordRoot:      "root",
-	}
-	record, signed, err := dkvsindexer.BuildSignedCheckpointRecord(priv, checkpoint, "10", "", dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
-	http := &fakeDKVSHTTPClient{
-		getResp: map[string][]byte{
-			"testnet/v3/dkvs/records": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": record}),
-		},
-		postResp:   map[string][]byte{},
-		deleteResp: map[string][]byte{},
-	}
-	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
-
-	gotRecord, err := client.GetSignedCheckpointRecord("10")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotRecord.Key != "/sys/checkpoint/10" || http.lastGet.Query["key"] != "/sys/checkpoint/10" {
-		t.Fatalf("record=%#v query=%v", gotRecord, http.lastGet.Query)
-	}
-	verified, verifiedRecord, err := client.GetVerifiedSignedCheckpoint("10", priv.PubKey().SerializeCompressed(), dkvsindexer.RecordVerificationOptions{Height: 1, Now: record.IssueTime})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if verified.Epoch != signed.Epoch || verified.ActiveRecordRoot != signed.ActiveRecordRoot || verifiedRecord.Key != record.Key {
-		t.Fatalf("verified=%#v record=%#v", verified, verifiedRecord)
-	}
-	badValue := append([]byte{}, record.Value...)
-	badValue[len(badValue)-1] ^= 0x01
-	record.Value = badValue
-	http.getResp["testnet/v3/dkvs/records"] = mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": record})
-	if _, _, err := client.GetVerifiedSignedCheckpoint("10", priv.PubKey().SerializeCompressed(), dkvsindexer.RecordVerificationOptions{Height: 1, Now: record.IssueTime}); err != dkvsindexer.ErrInvalidSignature {
-		t.Fatalf("bad checkpoint err=%v", err)
-	}
-}
-
-func TestSatsNetDKVSClientSignedSnapshot(t *testing.T) {
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	userPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	key, err := dkvsindexer.PersonalKey(userPriv.PubKey().SerializeCompressed(), "profile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	userRecord, err := dkvsindexer.NewSignedRecord(userPriv, key, []byte("value"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkpoint, err := dkvsindexer.CheckpointFromRecords([]*swire.DKVSRecord{userRecord}, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot := &dkvsindexer.Snapshot{Checkpoint: checkpoint, Records: []*swire.DKVSRecord{userRecord}, CreatedAt: 20}
-	record, signed, err := dkvsindexer.BuildSignedSnapshotRecord(priv, snapshot, "10", "", dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
-	http := &fakeDKVSHTTPClient{
-		getResp: map[string][]byte{
-			"testnet/v3/dkvs/records": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": record}),
-		},
-		postResp:   map[string][]byte{},
-		deleteResp: map[string][]byte{},
-	}
-	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
-
-	gotRecord, err := client.GetSignedSnapshotRecord("10")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotRecord.Key != "/sys/snapshot/10" || http.lastGet.Query["key"] != "/sys/snapshot/10" {
-		t.Fatalf("record=%#v query=%v", gotRecord, http.lastGet.Query)
-	}
-	verified, verifiedRecord, err := client.GetVerifiedSignedSnapshot("10", priv.PubKey().SerializeCompressed(), dkvsindexer.RecordVerificationOptions{Height: 1, Now: record.IssueTime})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if verified.Epoch != signed.Epoch || verified.SnapshotHash != signed.SnapshotHash || verifiedRecord.Key != record.Key {
-		t.Fatalf("verified=%#v record=%#v", verified, verifiedRecord)
-	}
-	badValue := append([]byte{}, record.Value...)
-	badValue[len(badValue)-1] ^= 0x01
-	record.Value = badValue
-	http.getResp["testnet/v3/dkvs/records"] = mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": record})
-	if _, _, err := client.GetVerifiedSignedSnapshot("10", priv.PubKey().SerializeCompressed(), dkvsindexer.RecordVerificationOptions{Height: 1, Now: record.IssueTime}); err != dkvsindexer.ErrInvalidSignature {
-		t.Fatalf("bad snapshot err=%v", err)
-	}
-}
-
 func TestSatsNetDKVSClientVerifiedSnapshot(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -389,7 +342,7 @@ func TestSatsNetDKVSClientVerifiedSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := dkvsindexer.NewSignedRecord(priv, key, []byte("value"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	record, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, priv), key, []byte("value"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +399,7 @@ func TestSatsNetDKVSClientSignedPersonalAndSubscriptions(t *testing.T) {
 	}
 	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
 
-	if _, err := client.PutSignedRecord(priv, personalKey, []byte("profile"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}); err != nil {
+	if _, err := client.PutSignedRecord(dkvsTestWalletFromPriv(t, priv), personalKey, []byte("profile"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}
 	var posted swire.DKVSRecord
@@ -459,7 +412,7 @@ func TestSatsNetDKVSClientSignedPersonalAndSubscriptions(t *testing.T) {
 	if err := dkvsindexer.VerifySignature(&posted); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PutPersonalRecord(priv, "profile", []byte("profile2"), dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100}); err != nil {
+	if _, err := client.PutPersonalRecord(dkvsTestWalletFromPriv(t, priv), "profile", []byte("profile2"), dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(http.lastBody, &posted); err != nil {
@@ -475,7 +428,7 @@ func TestSatsNetDKVSClientSignedPersonalAndSubscriptions(t *testing.T) {
 	if got.Key != personalKey || http.lastGet.Query["key"] != personalKey {
 		t.Fatalf("got=%#v query=%v", got, http.lastGet.Query)
 	}
-	if _, err := client.TombstonePersonalRecord(priv, "profile", dkvsindexer.RecordOptions{Seq: 3, TTL: 60_000, ExpiryHeight: 100}); err != nil {
+	if _, err := client.TombstonePersonalRecord(dkvsTestWalletFromPriv(t, priv), "profile", dkvsindexer.RecordOptions{Seq: 3, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(http.lastBody, &posted); err != nil {
@@ -484,11 +437,11 @@ func TestSatsNetDKVSClientSignedPersonalAndSubscriptions(t *testing.T) {
 	if posted.Key != personalKey || posted.Flags&dkvsindexer.FlagTombstone == 0 {
 		t.Fatalf("tombstone posted=%#v", posted)
 	}
-	existingRenewal, err := dkvsindexer.NewSignedRecord(priv, personalKey, []byte("profile2"), dkvsindexer.RecordOptions{Seq: 4, TTL: 60_000, ExpiryHeight: 100})
+	existingRenewal, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, priv), personalKey, []byte("profile2"), dkvsindexer.RecordOptions{Seq: 4, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.RenewRecord(priv, existingRenewal, dkvsindexer.RecordOptions{TTL: 120_000, ExpiryHeight: 200}); err != nil {
+	if _, err := client.RenewRecord(dkvsTestWalletFromPriv(t, priv), existingRenewal, dkvsindexer.RecordOptions{TTL: 120_000, ExpiryHeight: 200}); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(http.lastBody, &posted); err != nil {
@@ -502,7 +455,7 @@ func TestSatsNetDKVSClientSignedPersonalAndSubscriptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	http.getResp["testnet/v3/dkvs/records"] = mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": existingRenewal})
-	if _, err := client.RenewPersonalRecord(priv, "profile", dkvsindexer.RecordOptions{TTL: 180_000, ExpiryHeight: 300}); err != nil {
+	if _, err := client.RenewPersonalRecord(dkvsTestWalletFromPriv(t, priv), "profile", dkvsindexer.RecordOptions{TTL: 180_000, ExpiryHeight: 300}); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(http.lastBody, &posted); err != nil {
@@ -551,7 +504,7 @@ func TestSatsNetDKVSClientBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifestRecord, chunkRecords, err := dkvsindexer.BuildSignedBlobRecords(priv, "object", [][]byte{[]byte("hello"), []byte(" world")}, nil, dkvsindexer.RecordOptions{
+	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(dkvsTestWalletFromPriv(t, priv), "object", [][]byte{[]byte("hello"), []byte(" world")}, nil, dkvsindexer.RecordOptions{
 		Seq:          1,
 		TTL:          60_000,
 		ExpiryHeight: 100,
@@ -587,7 +540,7 @@ func TestSatsNetDKVSClientBlob(t *testing.T) {
 		t.Fatalf("chunk query=%v", http.lastGet.Query)
 	}
 
-	objectID, putManifest, putChunks, err := client.PutBlob(priv, []byte("hello world"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	objectID, putManifest, putChunks, err := client.PutBlob(dkvsTestWalletFromPriv(t, priv), []byte("hello world"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +549,7 @@ func TestSatsNetDKVSClientBlob(t *testing.T) {
 	if objectID != wantObjectID || putManifest.Key != "/blob/"+wantObjectID+"/manifest" || len(putChunks) != 1 {
 		t.Fatalf("object=%s manifest=%s chunks=%d", objectID, putManifest.Key, len(putChunks))
 	}
-	if _, _, err := client.PutChunkedBlob(priv, "object-2", [][]byte{[]byte("a"), []byte("b")}, nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}); err != nil {
+	if _, _, err := client.PutChunkedBlob(dkvsTestWalletFromPriv(t, priv), "object-2", [][]byte{[]byte("a"), []byte("b")}, nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}
 	if _, content, err := client.GetChunkedBlob("object", dkvsindexer.BlobPolicy{}); err != nil || string(content) != "hello world" {
@@ -618,7 +571,7 @@ func TestSatsNetDKVSClientMailbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msgRecord, err := dkvsindexer.NewSignedRecord(senderPriv, msgKey, []byte("hello"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	msgRecord, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, senderPriv), msgKey, []byte("hello"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,11 +579,11 @@ func TestSatsNetDKVSClientMailbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shareRecord, err := dkvsindexer.NewSignedRecord(ownerPriv, shareKey, []byte("share"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	shareRecord, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, ownerPriv), shareKey, []byte("share"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tombstone, err := dkvsindexer.NewSignedTombstone(ownerPriv, msgKey, dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100})
+	tombstone, err := NewDKVSSignedTombstone(dkvsTestWalletFromPriv(t, ownerPriv), msgKey, dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,7 +613,7 @@ func TestSatsNetDKVSClientMailbox(t *testing.T) {
 	if _, err := client.SendMailboxMessage(msgRecord); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.SendSignedMailboxMessage(senderPriv, mailboxID, "msg-2", []byte("encrypted"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}); err != nil {
+	if _, err := client.SendSignedMailboxMessage(dkvsTestWalletFromPriv(t, senderPriv), mailboxID, "msg-2", []byte("encrypted"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}
 	var sent swire.DKVSRecord
@@ -689,7 +642,7 @@ func TestSatsNetDKVSClientMailbox(t *testing.T) {
 	if _, err := client.DeleteMailboxRecord(tombstone); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.DeleteMessage(ownerPriv, mailboxID, "msg-1", dkvsindexer.RecordOptions{Seq: 3, TTL: 60_000, ExpiryHeight: 100}); err != nil {
+	if _, err := client.DeleteMessage(dkvsTestWalletFromPriv(t, ownerPriv), mailboxID, "msg-1", dkvsindexer.RecordOptions{Seq: 3, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}
 	var deleted swire.DKVSRecord
@@ -733,7 +686,7 @@ func TestSatsNetDKVSClientNameAndService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nameRecord, err := dkvsindexer.NewSignedRecord(priv, nameKey, []byte("profile"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	nameRecord, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, priv), nameKey, []byte("profile"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -741,7 +694,7 @@ func TestSatsNetDKVSClientNameAndService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	serviceRecord, err := dkvsindexer.NewSignedRecord(priv, serviceKey, []byte("config"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	serviceRecord, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, priv), serviceKey, []byte("config"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -764,7 +717,7 @@ func TestSatsNetDKVSClientNameAndService(t *testing.T) {
 	if _, err := client.PutNameRecord(nameRecord); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PutSignedNameRecord(priv, "Alice Name", []byte("profile2"), dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100}); err != nil {
+	if _, err := client.PutSignedNameRecord(dkvsTestWalletFromPriv(t, priv), "Alice Name", []byte("profile2"), dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}
 	var signedName swire.DKVSRecord
@@ -797,7 +750,7 @@ func TestSatsNetDKVSClientNameAndService(t *testing.T) {
 	if _, err := client.PutServiceRecord(serviceRecord); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PutSignedServiceRecord(priv, "wallet", "config", []byte("config2"), dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100}); err != nil {
+	if _, err := client.PutSignedServiceRecord(dkvsTestWalletFromPriv(t, priv), "wallet", "config", []byte("config2"), dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}
 	var signedService swire.DKVSRecord
