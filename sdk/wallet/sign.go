@@ -194,6 +194,17 @@ func (p *Manager) PartialSignTx(tx *wire.MsgTx, prevFetcher txscript.PrevOutputF
 	return PartialSignTxWithWallet(p.wallet, tx, prevFetcher, witnessScript, hasSelectingPath, peerPubKey)
 }
 
+func delayedPathWitness(witnessScript []byte, peerPubKey []byte) wire.TxWitness {
+	if peerPubKey == nil {
+		return wire.TxWitness{nil, nil, witnessScript}
+	}
+	return wire.TxWitness{nil, nil, nil, nil, witnessScript}
+}
+
+func delayedPathWitnessSatsNet(witnessScript []byte) swire.TxWitness {
+	return swire.TxWitness{nil, nil, witnessScript}
+}
+
 func PartialSignTxWithWallet(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	witnessScript []byte, hasSelectingPath bool, peerPubKey []byte) ([][]byte, error) {
 	packet, err := CreatePsbt(tx, prevFetcher, witnessScript)
@@ -220,18 +231,7 @@ func PartialSignTxWithWallet(localWallet common.Wallet, tx *wire.MsgTx, prevFetc
 			for _, sig := range input.PartialSigs {
 				if txIn.Witness == nil {
 					if hasSelectingPath {
-						if peerPubKey == nil {
-							// sweep tx for client
-							txIn.Witness = wire.TxWitness{
-								nil,
-								[]byte{}, // empty to choose the delayed path
-								witnessScript}
-						} else {
-							// sweep tx for server
-							txIn.Witness = wire.TxWitness{nil, nil, nil,
-								[]byte{}, // empty to choose the delayed path
-								witnessScript}
-						}
+						txIn.Witness = delayedPathWitness(witnessScript, peerPubKey)
 					} else {
 						// channel redeem
 						txIn.Witness = wire.TxWitness{nil, nil, nil, witnessScript}
@@ -297,9 +297,8 @@ func PartialSignTxWithWallet_SatsNet(localWallet common.Wallet, tx *swire.MsgTx,
 
 					if peerPubKey == nil {
 						// sweep tx for client
-						txIn.Witness = swire.TxWitness{sig.Signature,
-							[]byte{}, // empty to choose the delayed path
-							witnessScript}
+						txIn.Witness = delayedPathWitnessSatsNet(witnessScript)
+						txIn.Witness[0] = sig.Signature
 					} else {
 						// channel redeem script
 						pos := GetCurrSignPosition2(sig.PubKey, peerPubKey)
@@ -365,18 +364,7 @@ func FinalSignTxWithWallet(localWallet common.Wallet, tx *wire.MsgTx, prevFetche
 
 				if txIn.Witness == nil {
 					if hasSelectingPath {
-						if peerPubKey == nil {
-							// sweep tx for client
-							txIn.Witness = wire.TxWitness{
-								nil,
-								[]byte{}, // empty to choose the delayed path
-								witnessScript}
-						} else {
-							// sweep tx for server
-							txIn.Witness = wire.TxWitness{nil, nil, nil,
-								[]byte{}, // empty to choose the delayed path
-								witnessScript}
-						}
+						txIn.Witness = delayedPathWitness(witnessScript, peerPubKey)
 					} else {
 						// channel redeem
 						txIn.Witness = wire.TxWitness{nil, nil, nil, witnessScript}

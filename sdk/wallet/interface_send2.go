@@ -16,12 +16,13 @@ import (
 )
 
 type RemoteSignData struct {
-	Tx           *wire.MsgTx
-	PrevFetcher  txscript.PrevOutputFetcher
-	Tx2          *swire.MsgTx
-	PrevFetcher2 stxscript.PrevOutputFetcher
-	Fee          int64
-	NotSign      bool
+	Tx               *wire.MsgTx
+	PrevFetcher      txscript.PrevOutputFetcher
+	Tx2              *swire.MsgTx
+	PrevFetcher2     stxscript.PrevOutputFetcher
+	Fee              int64
+	NotSign          bool
+	HasSelectingPath bool
 }
 
 func (p *Manager) BatchSendAssetsV3FromAddress(dest []*SendAssetInfo,
@@ -111,7 +112,7 @@ func (p *Manager) CoBatchSendAssetsV3FromAddress(localWallet common.Wallet, dest
 		return "", 0, err
 	}
 	signData, txsSignInfo, txs, err = p.addToSignData(localWallet, tx, prevFetcher, fee, "", nil,
-		witness, peerPubKey, signData, txsSignInfo, txs, false)
+		witness, peerPubKey, signData, txsSignInfo, txs, false, false)
 	if err != nil {
 		return "", 0, err
 	}
@@ -205,7 +206,7 @@ func (p *Manager) CoBatchSendV4(localWallet common.Wallet, dest []*SendAssetInfo
 		return "", 0, err
 	}
 	signData, txsSignInfo, txs, err = p.addToSignData(localWallet, tx, prevFetcher, fee, "", nil,
-		witness, peerPubKey, signData, txsSignInfo, txs, false)
+		witness, peerPubKey, signData, txsSignInfo, txs, false, false)
 	if err != nil {
 		return "", 0, err
 	}
@@ -430,13 +431,13 @@ func (p *Manager) generateSignData(localWallet common.Wallet, inscribes []*Inscr
 		signData, txsSignInfo, txs, err = p.addToSignData(localWallet, insc.CommitTx,
 			insc.GetCommitPrevOutputFetcher(),
 			insc.CommitTxFee+insc.RevealTxFee+330, "commit", more,
-			witness, peerPubKey, signData, txsSignInfo, txs, notSign)
+			witness, peerPubKey, signData, txsSignInfo, txs, notSign, false)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 
 		signData, txsSignInfo, txs, err = p.addToSignData(localWallet, insc.RevealTx, nil,
-			0, "reveal", nil, nil, nil, signData, txsSignInfo, txs, true)
+			0, "reveal", nil, nil, nil, signData, txsSignInfo, txs, true, false)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -453,12 +454,12 @@ func (p *Manager) GenerateSignData(localWallet common.Wallet, inscribes []*Inscr
 func (p *Manager) addToSignData(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
 	fee int64, reason string, more, witness, peerPubKey []byte,
 	signData []*RemoteSignData, txsSignInfo []*wwire.TxSignInfo,
-	txs []*wire.MsgTx, notSign bool) ([]*RemoteSignData, []*wwire.TxSignInfo, []*wire.MsgTx, error) {
+	txs []*wire.MsgTx, notSign bool, hasSelectingPath bool) ([]*RemoteSignData, []*wwire.TxSignInfo, []*wire.MsgTx, error) {
 
 	var sigs [][]byte
 	if prevFetcher != nil {
 		var err error
-		sigs, err = PartialSignTxWithWallet(localWallet, tx, prevFetcher, witness, false, peerPubKey)
+		sigs, err = PartialSignTxWithWallet(localWallet, tx, prevFetcher, witness, hasSelectingPath, peerPubKey)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -476,10 +477,11 @@ func (p *Manager) addToSignData(localWallet common.Wallet, tx *wire.MsgTx, prevF
 		MoreData:  more,
 	})
 	signData = append(signData, &RemoteSignData{
-		Tx:          tx,
-		PrevFetcher: prevFetcher,
-		Fee:         fee,
-		NotSign:     notSign,
+		Tx:               tx,
+		PrevFetcher:      prevFetcher,
+		Fee:              fee,
+		NotSign:          notSign,
+		HasSelectingPath: hasSelectingPath,
 	})
 	txs = append(txs, tx)
 
@@ -490,7 +492,14 @@ func (p *Manager) AddToSignData(localWallet common.Wallet, tx *wire.MsgTx, prevF
 	fee int64, reason string, more, witness, peerPubKey []byte,
 	signData []*RemoteSignData, txsSignInfo []*wwire.TxSignInfo,
 	txs []*wire.MsgTx, notSign bool) ([]*RemoteSignData, []*wwire.TxSignInfo, []*wire.MsgTx, error) {
-	return p.addToSignData(localWallet, tx, prevFetcher, fee, reason, more, witness, peerPubKey, signData, txsSignInfo, txs, notSign)
+	return p.addToSignData(localWallet, tx, prevFetcher, fee, reason, more, witness, peerPubKey, signData, txsSignInfo, txs, notSign, false)
+}
+
+func (p *Manager) AddSweepToSignData(localWallet common.Wallet, tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher,
+	fee int64, reason string, more, witness, peerPubKey []byte,
+	signData []*RemoteSignData, txsSignInfo []*wwire.TxSignInfo,
+	txs []*wire.MsgTx, notSign bool) ([]*RemoteSignData, []*wwire.TxSignInfo, []*wire.MsgTx, error) {
+	return p.addToSignData(localWallet, tx, prevFetcher, fee, reason, more, witness, peerPubKey, signData, txsSignInfo, txs, notSign, true)
 }
 
 func (p *Manager) addToSignData_SatsNet(localWallet common.Wallet, tx *swire.MsgTx, prevFetcher stxscript.PrevOutputFetcher,
@@ -565,7 +574,7 @@ func (p *Manager) reqRemoteSignAndBroadcast(localWallet common.Wallet, witness, 
 			continue
 		}
 		if data.Tx != nil {
-			_, err = FinalSignTxWithWallet(localWallet, data.Tx, data.PrevFetcher, witness, false, peerPubKey, peerSig[i])
+			_, err = FinalSignTxWithWallet(localWallet, data.Tx, data.PrevFetcher, witness, data.HasSelectingPath, peerPubKey, peerSig[i])
 			if err != nil {
 				return nil, 0, err
 			}
