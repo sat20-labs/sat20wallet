@@ -281,6 +281,12 @@
                     :type="inputTypeForField(field)"
                     :placeholder="field.placeholder || field.default || ''"
                   />
+                  <p
+                    v-if="selectedContractSchema?.subtype === 'prediction' && field.name === 'description'"
+                    class="text-xs leading-relaxed text-muted-foreground"
+                  >
+                    {{ t('tools.schemas.predictionDescriptionHint') }}
+                  </p>
                 </div>
               </template>
 

@@ -325,6 +325,7 @@
       "predictionAgent": "预测",
       "title": "标题",
       "description": "描述",
+      "predictionDescriptionHint": "描述会作为 oracle LLM 的判断输入，请完整写清事件、判定规则和每个结果选项的含义。",
       "timeType": "时间类型",
       "blockHeight": "区块高度",
       "eventTime": "事件时间",

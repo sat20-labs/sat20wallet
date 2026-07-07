@@ -325,6 +325,7 @@
       "predictionAgent": "Prediction",
       "title": "Title",
       "description": "Description",
+      "predictionDescriptionHint": "Description is sent to the oracle LLM. Write the full event, resolution rules, and the meaning of each outcome.",
       "timeType": "Time type",
       "blockHeight": "Block height",
       "eventTime": "Event time",
