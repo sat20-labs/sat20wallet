@@ -136,11 +136,10 @@ func TestUnifiedNativeTemplateTxCoverage(t *testing.T) {
 	assertNativeTemplateInvokeTx(t, exchangeAddr, contractcommon.TemplateInvokeAPIClose, nil)
 
 	autopayContent, err := contractcommon.EncodeTemplateAutopayContent(contractcommon.TemplateAutopayContract{
-		Recipient:    "recipient-address",
-		FeeAssetName: unifiedTemplateTestAsset,
-		ScheduleMode: contractcommon.AutopayScheduleFixed,
-		BaseAmount:   "10",
-		EndHeight:    200,
+		ServiceName:       "dkvs",
+		Recipient:         "recipient-address",
+		FeeAssetName:      unifiedTemplateTestAsset,
+		MinAmountPerBlock: "10",
 	})
 	if err != nil {
 		t.Fatalf("EncodeTemplateAutopayContent: %v", err)
@@ -180,12 +179,10 @@ func TestBuildNativeTemplateExchangeContract(t *testing.T) {
 
 func TestBuildNativeTemplateAutopayContract(t *testing.T) {
 	autopay := contractcommon.TemplateAutopayContract{
-		Recipient:    "recipient-address",
-		FeeAssetName: unifiedTemplateTestAsset,
-		ScheduleMode: contractcommon.AutopayScheduleLinear,
-		BaseAmount:   "10",
-		StepAmount:   "1",
-		EndHeight:    200,
+		ServiceName:       "dkvs",
+		Recipient:         "recipient-address",
+		FeeAssetName:      unifiedTemplateTestAsset,
+		MinAmountPerBlock: "10",
 	}
 	content, err := json.Marshal(autopay)
 	if err != nil {
@@ -199,17 +196,15 @@ func TestBuildNativeTemplateAutopayContract(t *testing.T) {
 		t.Fatalf("template name mismatch: %s", templateName)
 	}
 	var decoded contractcommon.TemplateAutopayContract
-	c := templateruntime.NewAutopayContract("", "", "", "", "", 0)
+	c := templateruntime.NewAutopayContract("", "", "", "")
 	if err := c.Decode(encoded); err != nil {
 		t.Fatalf("Decode autopay: %v", err)
 	}
 	decoded = contractcommon.TemplateAutopayContract{
-		Recipient:    c.Recipient,
-		FeeAssetName: c.FeeAssetName,
-		ScheduleMode: c.ScheduleMode,
-		BaseAmount:   c.BaseAmount,
-		StepAmount:   c.StepAmount,
-		EndHeight:    c.EndHeight,
+		ServiceName:       c.ServiceName,
+		Recipient:         c.Recipient,
+		FeeAssetName:      c.FeeAssetName,
+		MinAmountPerBlock: c.MinAmountPerBlock,
 	}
 	if decoded != autopay {
 		t.Fatalf("decoded mismatch: %+v != %+v", decoded, autopay)

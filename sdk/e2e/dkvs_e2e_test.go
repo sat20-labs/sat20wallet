@@ -21,7 +21,7 @@ import (
 
 func TestRealSatoshiNetDKVSAutopayNameSync(t *testing.T) {
 	defaults := dkvsindexer.NetworkDefaultsForParams(&chaincfg.TestNetParams)
-	f := newTemplateFixtureWithArgs(t, map[string]int64{defaults.AutopayFeeAssetName: 1000}, nil, nil, dkvsMinerArgs(t))
+	f := newTemplateFixtureWithArgs(t, map[string]int64{defaults.AutopayFeeAssetName: 20000}, nil, nil, dkvsMinerArgs(t))
 	waitForDKVSPeerReady(t, f.Network)
 	gas := contractcommon.GetGasAssetName()
 	actorA := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
@@ -33,31 +33,37 @@ func TestRealSatoshiNetDKVSAutopayNameSync(t *testing.T) {
 		[]int64{10000, 10000, 10000, 10000},
 		[]*dkvsKeyPathActor{actorA, actorA, actorB, actorB})
 	feeOuts := splitToDKVSKeyPathActors(t, f, f.assetAnchors[defaults.AutopayFeeAssetName], defaults.AutopayFeeAssetName,
-		[]int64{500, 500},
+		[]int64{5000, 5000},
 		[]int64{10000, 10000},
 		[]*dkvsKeyPathActor{actorA, actorB})
 
 	content, err := defaults.AutopayContent()
 	require.NoError(t, err)
 	deployAssets := txAsset(gas, 290000)
-	deployAssets = append(deployAssets, txAsset(defaults.AutopayFeeAssetName, 500)...)
+	deployAssets = append(deployAssets, txAsset(defaults.AutopayFeeAssetName, 5000)...)
 	deployA, contractA := buildDKVSKeyPathTemplateDeploy(t, actorA,
 		contractcommon.TemplateAutopay, content, actorA.Address, defaults.AutopayDeployNonce,
 		[]dkvsPrevOut{gasOuts[0], feeOuts[0]},
 		wire.TxOut{Value: 10000, Assets: deployAssets})
-	deployB, contractB := buildDKVSKeyPathTemplateDeploy(t, actorB,
-		contractcommon.TemplateAutopay, content, actorB.Address, defaults.AutopayDeployNonce,
-		[]dkvsPrevOut{gasOuts[2], feeOuts[1]},
-		wire.TxOut{Value: 10000, Assets: deployAssets})
-	f.Network.sendManyAndMine(t, []*wire.MsgTx{deployA, deployB}, 0)
+	f.Network.sendManyAndMine(t, []*wire.MsgTx{deployA}, 0)
+
+	fundB := buildDKVSKeyPathTemplateDefaultInvoke(t, actorB, contractA,
+		[]dkvsPrevOut{feeOuts[1]},
+		wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 5000)})
+	f.Network.sendManyAndMine(t, []*wire.MsgTx{fundB}, 0)
 
 	heartbeatA := buildDKVSKeyPathAssetTransfer(t, actorA, gasOuts[1], gas, 290000, 9000, actorA)
 	heartbeatB := buildDKVSKeyPathAssetTransfer(t, actorB, gasOuts[3], gas, 290000, 9000, actorB)
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{heartbeatA, heartbeatB}, 0)
 	state := fetchTemplateAutopayView(t, f.Network.Bootstrap, contractA.MustEncode())
 	require.Equal(t, templateruntime.AutopayStatusActive, state.Status)
-	state = fetchTemplateAutopayView(t, f.Network.Bootstrap, contractB.MustEncode())
-	require.Equal(t, templateruntime.AutopayStatusActive, state.Status)
+	require.Contains(t, state.Delegates, actorA.Address)
+	require.Contains(t, state.Delegates, actorB.Address)
+	coreState := fetchTemplateAutopayView(t, f.Network.Core, contractA.MustEncode())
+	require.Equal(t, templateruntime.AutopayStatusActive, coreState.Status)
+	require.Contains(t, coreState.Delegates, actorA.Address)
+	require.Contains(t, coreState.Delegates, actorB.Address)
+	require.Equal(t, templateruntime.AutopayStatusActive, coreState.Delegates[actorB.Address].Status)
 
 	fakeL1 := f.NetworkFakeL1()
 	fakeL1.setNameOwner(dkvsE2EName, actorA.Address)
@@ -78,9 +84,12 @@ func TestRealSatoshiNetDKVSAutopayNameSync(t *testing.T) {
 
 	fakeL1.setNameOwner(dkvsE2EName, actorB.Address)
 	clientB := dkvsClientForNode(t, f.Network.Core)
+	actorBRecordPayer, err := dkvsindexer.P2TRAddressFromPubKeyBytes(actorB.Wallet.GetPubKey().SerializeCompressed(), &chaincfg.TestNetParams)
+	require.NoError(t, err)
+	require.Equal(t, actorB.Address, actorBRecordPayer)
 	autopayB := wallet.DKVSAutopayOptions{
 		AddressParams: &chaincfg.TestNetParams,
-		PoolContract:  contractB.MustEncode(),
+		PoolContract:  contractA.MustEncode(),
 	}
 	if _, err := clientB.PutSignedRecordWithAutopay(actorB.Wallet, nameKey, []byte("owner-b"),
 		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 1000}, autopayB); err != nil {
@@ -228,6 +237,22 @@ func buildDKVSKeyPathTemplateDeploy(t *testing.T, actor *dkvsKeyPathActor, templ
 	require.NoError(t, err)
 	signDKVSKeyPathInputs(t, tx, actor, inputs)
 	return tx, address
+}
+
+func buildDKVSKeyPathTemplateDefaultInvoke(t *testing.T, actor *dkvsKeyPathActor,
+	contract contractcommon.ContractAddress, inputs []dkvsPrevOut, funding wire.TxOut) *wire.MsgTx {
+
+	t.Helper()
+	pkScript, err := contractcommon.ContractPkScript(contract)
+	require.NoError(t, err)
+	funding.PkScript = pkScript
+	tx := wire.NewMsgTx(wire.TxVersion)
+	for _, input := range inputs {
+		tx.AddTxIn(wire.NewTxIn(&input.Point, nil, nil))
+	}
+	tx.AddTxOut(&funding)
+	signDKVSKeyPathInputs(t, tx, actor, inputs)
+	return tx
 }
 
 func buildDKVSKeyPathAssetTransfer(t *testing.T, actor *dkvsKeyPathActor, input dkvsPrevOut,

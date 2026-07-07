@@ -269,11 +269,10 @@ func TestTemplateAutopayPaysAndCloses(t *testing.T) {
 		[]int64{30, 15}, []int64{10000, 10000}, []*templateActor{f.A, f.C})
 
 	content, err := contractcommon.EncodeTemplateAutopayContent(contractcommon.TemplateAutopayContract{
-		Recipient:    recipientAddr,
-		FeeAssetName: feeAsset,
-		ScheduleMode: contractcommon.AutopayScheduleFixed,
-		BaseAmount:   "10",
-		EndHeight:    0,
+		ServiceName:       "dkvs",
+		Recipient:         recipientAddr,
+		FeeAssetName:      feeAsset,
+		MinAmountPerBlock: "10",
 	})
 	require.NoError(t, err)
 	deployAssets := txAsset(gas, 290000)
@@ -295,14 +294,15 @@ func TestTemplateAutopayPaysAndCloses(t *testing.T) {
 	f.Network.sendAndMine(t, fundTx, 0)
 	state := fetchTemplateAutopayView(t, f.Network.Bootstrap, contract.MustEncode())
 	require.Equal(t, templateruntime.AutopayStatusActive, state.Status)
-	require.Equal(t, "25", state.FeeBalance)
+	require.Equal(t, "15", state.FeeBalance)
 
 	closeTx := buildTemplateInvokeFor(t, f.A, contract, 1, contractcommon.TemplateInvokeAPIClose, nil,
 		[]wire.OutPoint{gasBank.take(t, f.A)},
 		wire.TxOut{Value: 10000, Assets: txAsset(gas, 290000)})
 	closeBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{closeTx}, 0)
 	closeResult := requireSingleResultTx(t, closeBlock)
-	requireTxOutputAssetAmount(t, closeResult, deployerAddr, feeAsset, "25")
+	requireTxOutputAssetAmount(t, closeResult, deployerAddr, feeAsset, "10")
+	requireTxOutputAssetAmount(t, closeResult, f.C.Address, feeAsset, "5")
 	requireTxOutputAssetPositive(t, closeResult, deployerAddr, gas)
 	state = fetchTemplateAutopayView(t, f.Network.Bootstrap, contract.MustEncode())
 	require.Equal(t, templateruntime.AutopayStatusClosed, state.Status)
