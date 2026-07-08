@@ -2,7 +2,7 @@
   "name": "sat20-wallet-pwa",
   "description": "SAT20 PWA Wallet - 比特币资产移动钱包和内置 DApp 容器",
   "private": true,
-  "version": "0.1.36",
+  "version": "0.1.37",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -964,7 +964,7 @@ import { Storage } from '@/lib/storage-adapter'
 
 const SMART_CONTRACT_DOC_URL_ZH = 'https://docs.sat20.org/protocol-xie-yi-yu-bai-pi-shu/smart-contracts'
 const SMART_CONTRACT_DOC_URL_EN = 'https://docs.sat20.org/english/protocols-and-whitepapers/smart-contracts'
-const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qrjqyqzlndzkdla6c2wh2p0axv699tm6d9jwdc9fqwshuvnnrt3sqeta4k2'
+const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qazcqhrkm7ceyk7493jlnxhlwl7wx5rgchs4pfc86tf2lluz4y5ss7jw9hr'
 const SUPPORTED_CONTRACTS_CACHE_PREFIX = 'tools:supported_contracts'
 
 const { toast } = useToast()
@@ -1092,6 +1092,21 @@ const contractSubtypeOf = (contract: any) => String(
   || contract?.Name
   || ''
 ).trim()
+const isPredictionAgentContract = (contract: any) => {
+  if (contractTypeOf(contract) !== 'agent') return false
+  const markers = [
+    contractSubtypeOf(contract),
+    contractBaseDisplayName(contract),
+    contractStateName(contract),
+    contract?.state?.subtype,
+    contract?.state?.Subtype,
+    contract?.details?.contract?.subtype,
+    contract?.details?.contract?.Subtype,
+  ].map((value) => String(value || '').trim().toLowerCase())
+  return markers.includes('prediction')
+    || markers.includes('agent:prediction')
+    || Boolean(contract?.details?.prediction || contract?.state?.prediction || contract?.state?.Prediction)
+}
 const contractTypeOf = (contract: any): 'template' | 'agent' | 'evm' | '' => (
   normalizeInvokeContractType(contract?.contractType || contract?.ContractType || contract?.type || contract?.Type)
 )
@@ -4014,7 +4029,8 @@ const loadContracts = async (options: { silent?: boolean } = {}) => {
     isContractLoading.value = true
     const res = await smartContractApi.getContracts({ network: network.value || 'testnet', start: 0, limit: 50 })
     if (res?.code !== 0) throw new Error(res?.msg || t('tools.errors.queryContractListFailed'))
-    contractList.value = await enrichContractListWithState(res.data || [])
+    const enrichedContracts = await enrichContractListWithState(res.data || [])
+    contractList.value = enrichedContracts.filter((contract) => !isPredictionAgentContract(contract))
     if (!options.silent) {
       showSuccess(t('tools.messages.queryComplete'), t('tools.messages.contractsFound', { count: contractList.value.length }))
     }
@@ -4038,8 +4054,21 @@ const loadContract = async () => {
       smartContractApi.getContractState({ network: network.value || 'testnet', contract }),
     ])
     if (summary?.code !== 0) throw new Error(summary?.msg || t('tools.errors.queryContractFailed'))
+    const stateData = state?.code === 0 ? state.data || state.status : state
+    const queriedContract = {
+      ...(summary.data || {}),
+      state: stateData?.state ?? summary.data?.state,
+      details: {
+        ...(summary.data?.details || {}),
+        ...(stateData?.details || {}),
+      },
+    }
+    if (isPredictionAgentContract(queriedContract)) {
+      showError(t('tools.messages.queryFailed'), 'Prediction contracts should be used from L2 Market.')
+      return
+    }
     selectedContract.value = summary.data
-    contractState.value = state?.code === 0 ? state.data || state.status : state
+    contractState.value = stateData
     contractHistory.value = null
     invokeContractAddress.value = contract
     invokeToolPage.value = 'detail'
