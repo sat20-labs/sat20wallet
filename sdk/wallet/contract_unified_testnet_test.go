@@ -504,7 +504,7 @@ func TestUnifiedAgentPredictionDeployBet_testnet(t *testing.T) {
 		SubType:         contractcommon.SubtypePrediction,
 		ContractContent: mustUnifiedContractContent(t, ContractTypeAgent, contractcommon.SubtypePrediction, predictionJSON),
 		ContentEncoding: "base64",
-		GasLimit:        100000,
+		GasLimit:        contractcommon.DeployBaseGas,
 	})
 	if err != nil {
 		t.Fatalf("Deploy agent prediction failed: %v", err)

@@ -727,6 +727,10 @@ func (p *Manager) estimateAgentDeployContract(req *ContractDeployRequest) (*Cont
 	if gasLimit == 0 {
 		gasLimit = contractcommon.DeployBaseGas
 	}
+	if gasLimit < contractcommon.DeployBaseGas {
+		return nil, fmt.Errorf("agent deploy gas limit %d is less than required base gas %d",
+			gasLimit, contractcommon.DeployBaseGas)
+	}
 	deployBaseFee, _, err := p.agentGasAssetAmount(contractcommon.DeployBaseGas, 0)
 	if err != nil {
 		return nil, err
@@ -801,6 +805,10 @@ func (p *Manager) deployAgentContract(req *ContractDeployRequest) (*ContractTxRe
 	gasLimit := req.GasLimit
 	if gasLimit == 0 {
 		gasLimit = contractcommon.DeployBaseGas
+	}
+	if gasLimit < contractcommon.DeployBaseGas {
+		return nil, fmt.Errorf("agent deploy gas limit %d is less than required base gas %d",
+			gasLimit, contractcommon.DeployBaseGas)
 	}
 	deployBaseFee, gasAsset, err := p.agentGasAssetAmount(contractcommon.DeployBaseGas, 0)
 	if err != nil {
@@ -1054,6 +1062,10 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 	gasLimit := req.GasLimit
 	if gasLimit == 0 {
 		gasLimit = contractcommon.DeployBaseGas
+	}
+	if gasLimit < contractcommon.DeployBaseGas {
+		return nil, fmt.Errorf("template deploy gas limit %d is less than required base gas %d",
+			gasLimit, contractcommon.DeployBaseGas)
 	}
 	gasOverride, err := gasOverrideAmount("gas asset amount", req.GasAssetAmount)
 	if err != nil {
