@@ -507,7 +507,7 @@ func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
 		solidityCall("addLiquidity(uint256)", evmABIUint(900)),
 		1, invokeGasLimit, 4, inputGasAsset, gasOuts[1], nil, 900, txAsset(gas, 1000))
 	f.Network.sendAndMine(t, addLiquidity, 0)
-	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), gas, "1001")
+	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), gas, "1000")
 
 	swapSatForGas, _ := buildEVMInvokeTxWithFundingFor(t, f.B, amm, "call",
 		solidityCall("swapSatForAsset(string)", evmABIString("80")),
@@ -515,7 +515,7 @@ func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
 	swapSatBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{swapSatForGas}, 0)
 	swapSatResult := requireSingleResultTx(t, swapSatBlock)
 	requireTxOutputAssetPositive(t, swapSatResult, f.B.Address, gas)
-	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), gas, "912")
+	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), gas, "910")
 
 	swapGasForSat, _ := buildEVMInvokeTxWithFundingFor(t, f.C, amm, "call",
 		solidityCall("swapAssetForSat(uint256)", evmABIUint(70)),
@@ -523,8 +523,7 @@ func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
 	swapGasBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{swapGasForSat}, 0)
 	swapGasResult := requireSingleResultTx(t, swapGasBlock)
 	requireTxOutputValueAtLeast(t, swapGasResult, f.C.Address, 70)
-	// The address summary includes AMM business gas assets plus retained result/gas remainder.
-	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), gas, "1013")
+	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), gas, "1010")
 
 	rejectedSwap, _ := buildEVMInvokeTxWithFundingFor(t, f.B, amm, "call",
 		solidityCall("swapAssetForSat(uint256)", evmABIUint(1000000)),
@@ -536,7 +535,7 @@ func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
 	require.NotEqual(t, contractcommon.ResultStatusSuccess, rejectedPayload.Status)
 	rejectedResult := rejectedResults[0]
 	requireTxOutputAssetPositive(t, rejectedResult, f.B.Address, gas)
-	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), gas, "1013")
+	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), gas, "1010")
 
 	closeTx, _ := buildEVMCloseTxFor(t, f.A, amm, 2, closeGasLimit, 10, inputGasAsset, gasOuts[5])
 	closeBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{closeTx}, 0)

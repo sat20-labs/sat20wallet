@@ -4550,6 +4550,34 @@ func inscribeName(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func validateBitcoinAddress(this js.Value, p []js.Value) interface{} {
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "missing address")
+	}
+
+	address := strings.TrimSpace(p[0].String())
+	if address == "" {
+		return createJsRet(map[string]interface{}{"valid": false}, 0, "ok")
+	}
+
+	_, err := wallet.AddrToPkScript(address, wallet.GetChainParam())
+	return createJsRet(map[string]interface{}{"valid": err == nil}, 0, "ok")
+}
+
+func validateSatsNetAddress(this js.Value, p []js.Value) interface{} {
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "missing address")
+	}
+
+	address := strings.TrimSpace(p[0].String())
+	if address == "" {
+		return createJsRet(map[string]interface{}{"valid": false}, 0, "ok")
+	}
+
+	_, err := wallet.AddrToPkScript_SatsNet(address, wallet.GetChainParam_SatsNet())
+	return createJsRet(map[string]interface{}{"valid": err == nil}, 0, "ok")
+}
+
 func main() {
 	obj := js.Global().Get("Object").New()
 	obj.Set("batchDbTest", js.FuncOf(batchDbTest))
@@ -4581,6 +4609,8 @@ func main() {
 	obj.Set("getMnemonice", js.FuncOf(getMnemonic))
 	// input: account id; return: current wallet p2tr address
 	obj.Set("getWalletAddress", js.FuncOf(getWalletAddress))
+	obj.Set("validateBitcoinAddress", js.FuncOf(validateBitcoinAddress))
+	obj.Set("validateSatsNetAddress", js.FuncOf(validateSatsNetAddress))
 	// input: account id; return: current wallet public key
 	obj.Set("getWalletPubkey", js.FuncOf(getWalletPubkey))
 	obj.Set("startBTCLuckyMining", js.FuncOf(startBTCLuckyMining))

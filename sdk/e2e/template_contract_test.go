@@ -460,8 +460,12 @@ func TestTemplateAMMAssetMatrix(t *testing.T) {
 			dOut := requireTxOutputAssetPositive(t, defaultBuyResult, f.D.Address, profile.Asset)
 			eOut := requireTxOutputAssetPositive(t, defaultBuyResult, f.E.Address, profile.Asset)
 			fOut := requireTxOutputAssetPositive(t, defaultBuyResult, f.F.Address, profile.Asset)
-			require.Equal(t, dOut, eOut)
-			require.Equal(t, dOut, fOut)
+			require.NotEqual(t, dOut, eOut,
+				"same-block swaps must use the pool left by the preceding canonical transaction")
+			require.NotEqual(t, eOut, fOut,
+				"same-block swaps must be repriced after every successful swap")
+			require.NotEqual(t, dOut, fOut,
+				"three sequential swaps must not reuse one block-start quote")
 			requireTxOutputValueAmount(t, defaultBuyResult, f.D.Address, 0)
 			requireTxOutputValueAmount(t, defaultBuyResult, f.E.Address, 0)
 			requireTxOutputValueAmount(t, defaultBuyResult, f.F.Address, 0)

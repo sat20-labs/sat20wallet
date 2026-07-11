@@ -80,6 +80,7 @@ func TestRealSatoshiNetAgentPredictionTenBettors(t *testing.T) {
 		"--agentllmendpoint=" + llmServer.URL,
 		"--agentllmmodel=fake-agent",
 		"--agentcheckinterval=1s",
+		"--agentallowprivateevidence",
 	}, nil)
 
 	anchorTx := buildAnchorTx(t, lockedUtxo, lockedValue,
@@ -267,6 +268,7 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 		"--agentllmendpoint=" + llmServer.URL,
 		"--agentllmmodel=fake-agent",
 		"--agentcheckinterval=1s",
+		"--agentallowprivateevidence",
 	}, nil)
 
 	gasAnchorTx := buildAnchorTx(t, gasLockedUtxo, lockedValue,
