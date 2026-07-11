@@ -101,11 +101,16 @@ func AttachDKVSFeeProof(record *swire.DKVSRecord, proof *dkvsindexer.FeeProof) e
 }
 
 func BuildDKVSSignedBlobRecords(wallet common.Wallet, objectID string, chunks [][]byte, metadata json.RawMessage, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
+	pubKey, err := dkvsWalletPubKey(wallet)
+	if err != nil {
+		return nil, nil, dkvsindexer.ErrInvalidSignature
+	}
+	accountID := dkvsindexer.AccountID(pubKey)
 	manifest, manifestValue, err := dkvsindexer.BuildBlobManifest(chunks, metadata, opts.TTL, opts.ExpiryHeight)
 	if err != nil {
 		return nil, nil, err
 	}
-	manifestKey, err := dkvsindexer.BlobManifestKey(objectID)
+	manifestKey, err := dkvsindexer.BlobManifestKey(accountID, objectID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -115,7 +120,7 @@ func BuildDKVSSignedBlobRecords(wallet common.Wallet, objectID string, chunks []
 	}
 	chunkRecords := make([]*swire.DKVSRecord, 0, manifest.ChunkCount)
 	for n, chunk := range chunks {
-		chunkKey, err := dkvsindexer.BlobChunkKey(objectID, uint32(n))
+		chunkKey, err := dkvsindexer.BlobChunkKey(accountID, objectID, uint32(n))
 		if err != nil {
 			return nil, nil, err
 		}

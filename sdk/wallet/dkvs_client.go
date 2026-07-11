@@ -1,7 +1,6 @@
 package wallet
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	nethttp "net/http"
@@ -448,27 +447,27 @@ func (p *SatsNetDKVSClient) UnsubscribePrefix(prefix string) ([]dkvsindexer.Subs
 }
 
 func (p *SatsNetDKVSClient) PutBlobRecords(manifestRecord *swire.DKVSRecord, chunkRecords []*swire.DKVSRecord) error {
+	if _, err := p.PutRecord(manifestRecord); err != nil {
+		return err
+	}
 	for _, record := range chunkRecords {
 		if _, err := p.PutRecord(record); err != nil {
 			return err
 		}
 	}
-	_, err := p.PutRecord(manifestRecord)
-	return err
+	return nil
 }
 
-func (p *SatsNetDKVSClient) PutBlob(wallet common.Wallet, data []byte, metadata json.RawMessage, opts dkvsindexer.RecordOptions) (string, *swire.DKVSRecord, []*swire.DKVSRecord, error) {
+func (p *SatsNetDKVSClient) PutBlob(wallet common.Wallet, objectID string, data []byte, metadata json.RawMessage, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
 	if len(data) == 0 {
-		return "", nil, nil, dkvsindexer.ErrBlobManifestInvalid
+		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
 	}
-	sum := sha256.Sum256(data)
-	objectID := fmt.Sprintf("%x", sum[:])
 	chunks := chunkBlobData(data, dkvsindexer.MaxRecordValueSize)
 	manifestRecord, chunkRecords, err := p.PutChunkedBlob(wallet, objectID, chunks, metadata, opts)
 	if err != nil {
-		return "", nil, nil, err
+		return nil, nil, err
 	}
-	return objectID, manifestRecord, chunkRecords, nil
+	return manifestRecord, chunkRecords, nil
 }
 
 func (p *SatsNetDKVSClient) PutChunkedBlob(wallet common.Wallet, objectID string, chunks [][]byte, metadata json.RawMessage, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
@@ -482,8 +481,8 @@ func (p *SatsNetDKVSClient) PutChunkedBlob(wallet common.Wallet, objectID string
 	return manifestRecord, chunkRecords, nil
 }
 
-func (p *SatsNetDKVSClient) GetBlob(objectID string, policy dkvsindexer.BlobPolicy) (*dkvsindexer.BlobManifest, []byte, error) {
-	manifestKey, err := dkvsindexer.BlobManifestKey(objectID)
+func (p *SatsNetDKVSClient) GetBlob(accountID, objectID string, policy dkvsindexer.BlobPolicy) (*dkvsindexer.BlobManifest, []byte, error) {
+	manifestKey, err := dkvsindexer.BlobManifestKey(accountID, objectID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -495,7 +494,7 @@ func (p *SatsNetDKVSClient) GetBlob(objectID string, policy dkvsindexer.BlobPoli
 	if err != nil {
 		return nil, nil, err
 	}
-	chunkPrefix := "/blob/" + objectID + "/chunk/"
+	chunkPrefix := "/blob/" + accountID + "/" + objectID + "/chunk/"
 	chunkRecords, total, err := p.ListRecords(chunkPrefix, 0, int(manifest.ChunkCount))
 	if err != nil {
 		return nil, nil, err
@@ -506,8 +505,8 @@ func (p *SatsNetDKVSClient) GetBlob(objectID string, policy dkvsindexer.BlobPoli
 	return dkvsindexer.AssembleBlobFromRecords(manifestRecord, chunkRecords, policy)
 }
 
-func (p *SatsNetDKVSClient) GetChunkedBlob(objectID string, policy dkvsindexer.BlobPolicy) (*dkvsindexer.BlobManifest, []byte, error) {
-	return p.GetBlob(objectID, policy)
+func (p *SatsNetDKVSClient) GetChunkedBlob(accountID, objectID string, policy dkvsindexer.BlobPolicy) (*dkvsindexer.BlobManifest, []byte, error) {
+	return p.GetBlob(accountID, objectID, policy)
 }
 
 func (p *SatsNetDKVSClient) CreateMailbox(pubKey []byte) (string, error) {

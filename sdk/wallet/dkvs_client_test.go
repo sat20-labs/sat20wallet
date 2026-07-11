@@ -1,7 +1,6 @@
 package wallet
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -504,6 +503,7 @@ func TestSatsNetDKVSClientBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	accountID := dkvsindexer.AccountID(priv.PubKey().SerializeCompressed())
 	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(dkvsTestWalletFromPriv(t, priv), "object", [][]byte{[]byte("hello"), []byte(" world")}, nil, dkvsindexer.RecordOptions{
 		Seq:          1,
 		TTL:          60_000,
@@ -529,30 +529,28 @@ func TestSatsNetDKVSClientBlob(t *testing.T) {
 	if http.lastPost.Path != "testnet/v3/dkvs/records" {
 		t.Fatalf("put blob path=%s", http.lastPost.Path)
 	}
-	manifest, content, err := client.GetBlob("object", dkvsindexer.BlobPolicy{})
+	manifest, content, err := client.GetBlob(accountID, "object", dkvsindexer.BlobPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if manifest.ChunkCount != 2 || string(content) != "hello world" {
 		t.Fatalf("manifest=%#v content=%q", manifest, string(content))
 	}
-	if http.lastGet.Query["prefix"] != "/blob/object/chunk/" {
+	if http.lastGet.Query["prefix"] != "/blob/"+accountID+"/object/chunk/" {
 		t.Fatalf("chunk query=%v", http.lastGet.Query)
 	}
 
-	objectID, putManifest, putChunks, err := client.PutBlob(dkvsTestWalletFromPriv(t, priv), []byte("hello world"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	putManifest, putChunks, err := client.PutBlob(dkvsTestWalletFromPriv(t, priv), "recovery-file", []byte("hello world"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256([]byte("hello world"))
-	wantObjectID := fmt.Sprintf("%x", sum[:])
-	if objectID != wantObjectID || putManifest.Key != "/blob/"+wantObjectID+"/manifest" || len(putChunks) != 1 {
-		t.Fatalf("object=%s manifest=%s chunks=%d", objectID, putManifest.Key, len(putChunks))
+	if putManifest.Key != "/blob/"+accountID+"/recovery-file/manifest" || len(putChunks) != 1 {
+		t.Fatalf("manifest=%s chunks=%d", putManifest.Key, len(putChunks))
 	}
 	if _, _, err := client.PutChunkedBlob(dkvsTestWalletFromPriv(t, priv), "object-2", [][]byte{[]byte("a"), []byte("b")}, nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}
-	if _, content, err := client.GetChunkedBlob("object", dkvsindexer.BlobPolicy{}); err != nil || string(content) != "hello world" {
+	if _, content, err := client.GetChunkedBlob(accountID, "object", dkvsindexer.BlobPolicy{}); err != nil || string(content) != "hello world" {
 		t.Fatalf("get chunked content=%q err=%v", content, err)
 	}
 }
