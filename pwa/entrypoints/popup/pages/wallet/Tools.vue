@@ -964,7 +964,7 @@ import { Storage } from '@/lib/storage-adapter'
 
 const SMART_CONTRACT_DOC_URL_ZH = 'https://docs.sat20.org/protocol-xie-yi-yu-bai-pi-shu/smart-contracts'
 const SMART_CONTRACT_DOC_URL_EN = 'https://docs.sat20.org/english/protocols-and-whitepapers/smart-contracts'
-const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qazcqhrkm7ceyk7493jlnxhlwl7wx5rgchs4pfc86tf2lluz4y5ss7jw9hr'
+const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qdzn64m3uj3n55h20xxvacjklw3weszzq38gva4xpk3st93fyu2hqsg5k8e'
 const SUPPORTED_CONTRACTS_CACHE_PREFIX = 'tools:supported_contracts'
 
 const { toast } = useToast()

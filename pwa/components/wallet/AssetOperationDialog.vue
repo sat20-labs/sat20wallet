@@ -278,6 +278,11 @@ const needsAddress = computed(() => {
   return props.operationType === 'send'
 })
 
+const isSatoshiNetSend = computed(() => {
+  const chain = String(props.chain || '').toLowerCase()
+  return chain === 'satoshinet' || chain === 'l2' || chain === 'satnet'
+})
+
 // 判断当前资产是否为BTC
 const isBTCAsset = computed(() => {
   return props.assetType === '*' ||
@@ -316,7 +321,7 @@ const resolveAddress = async (input: string) => {
 
   isResolving.value = true
   try {
-    const result = await validateAndResolveAddress(input, network.value)
+    const result = await validateAndResolveAddress(input, network.value, isSatoshiNetSend.value ? 'satoshinet' : 'bitcoin')
     return result
   } catch (error) {
     console.error('Error resolving address:', error)

@@ -54,6 +54,14 @@ class WalletManager {
     return this._handleRequest('getChannelAddrByPeerPubkey', peerPubkey)
   }
 
+  async validateBitcoinAddress(address: string): Promise<[Error | undefined, { valid: boolean } | undefined]> {
+    return this._handleRequest('validateBitcoinAddress', address)
+  }
+
+  async validateSatsNetAddress(address: string): Promise<[Error | undefined, { valid: boolean } | undefined]> {
+    return this._handleRequest('validateSatsNetAddress', address)
+  }
+
   async getAllWallets(): Promise<
     [Error | undefined, Map<number, number> | undefined]
   > {

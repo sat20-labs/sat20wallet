@@ -51,6 +51,9 @@ declare interface WalletManager {
   // Get wallet address for account
   getWalletAddress(accountId: number): SatsnetResponse<{ address: string }>
 
+  validateBitcoinAddress(address: string): SatsnetResponse<{ valid: boolean }>
+  validateSatsNetAddress(address: string): SatsnetResponse<{ valid: boolean }>
+
   // Get wallet public key for account
   getWalletPubkey(accountId: number): SatsnetResponse<{ pubKey: string }>
 

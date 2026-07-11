@@ -1,6 +1,7 @@
 import { Chain, type Env } from '@/types/index';
 import { Network } from '@/types/index';
 import { ordxApi } from '@/apis';
+import sat20 from '@/utils/sat20';
 export const hideAddress = (
   str?: string | null,
   num: number = 6,
@@ -131,6 +132,30 @@ export function validateBTCAddress(address: string, network: string = 'mainnet')
   }
 }
 
+export type AddressValidationChain = 'bitcoin' | 'satoshinet'
+
+export const validateAddressBySdk = async (
+  address: string,
+  chain: AddressValidationChain = 'bitcoin'
+): Promise<boolean> => {
+  const trimmedAddress = address.trim()
+  if (!trimmedAddress) return false
+
+  try {
+    const [err, result] = chain === 'satoshinet'
+      ? await sat20.validateSatsNetAddress(trimmedAddress)
+      : await sat20.validateBitcoinAddress(trimmedAddress)
+    if (err) {
+      console.warn(`Failed to validate ${chain} address:`, err)
+      return false
+    }
+    return result?.valid === true
+  } catch (error) {
+    console.warn(`Failed to validate ${chain} address:`, error)
+    return false
+  }
+}
+
 export const formatLargeNumber = (num: number): string => {
   const format = (value: number): string => {
     // 对整数部分进行千位分隔，对小数部分保留最多两位小数
@@ -183,7 +208,7 @@ export const resolveDomainName = async (name: string, network: string): Promise<
   }
 }
 
-export const validateAndResolveAddress = async (input: string, network: string): Promise<{
+export const validateAndResolveAddress = async (input: string, network: string, chain: AddressValidationChain = 'bitcoin'): Promise<{
   isDomain: boolean
   resolvedAddress: string | null
   originalInput: string
@@ -191,8 +216,8 @@ export const validateAndResolveAddress = async (input: string, network: string):
 }> => {
   const trimmedInput = input.trim()
 
-  // 如果是比特币地址，直接返回
-  if (validateBTCAddress(trimmedInput, network)) {
+  // 如果是当前链的有效地址，直接返回；L2 会通过 SDK 支持聪网合约地址。
+  if (await validateAddressBySdk(trimmedInput, chain)) {
     return {
       isDomain: false,
       resolvedAddress: trimmedInput,
