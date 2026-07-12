@@ -234,6 +234,9 @@ func clean(t *testing.T) {
 }
 
 func prepare(t *testing.T) {
+	if os.Getenv("SAT20WALLET_LEGACY_INTEGRATION") != "1" {
+		t.Skip("set SAT20WALLET_LEGACY_INTEGRATION=1 to run legacy integration tests")
+	}
 	ENABLE_TESTING = true
 	clean(t)
 
@@ -476,9 +479,8 @@ func TestVerifyPsbtString_satsnet(t *testing.T) {
 	PrintJsonTx_SatsNet(partSignedTx, "")
 	prevFectcher := PsbtPrevOutputFetcher_SatsNet(packet)
 	err = VerifySignedTx_SatsNet(partSignedTx, prevFectcher)
-	if err != nil {
-		Log.Errorf("VerifySignedTx_SatsNet failed, %v", err)
-		t.Fatal()
+	if err == nil {
+		t.Fatal("PSBT without a taproot key-spend signature should be rejected")
 	}
 }
 

@@ -14,6 +14,20 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
+func TestContractDeployNonceIsStable(t *testing.T) {
+	req := &ContractDeployRequest{}
+	first := contractDeployNonce(req)
+	second := contractDeployNonce(req)
+	if first == 0 || second != first || req.DeployNonce != first {
+		t.Fatalf("deploy nonce is not stable: first=%d second=%d request=%d", first, second, req.DeployNonce)
+	}
+
+	req.DeployNonce = 42
+	if got := contractDeployNonce(req); got != 42 {
+		t.Fatalf("explicit deploy nonce changed: got %d want 42", got)
+	}
+}
+
 const unifiedTemplateTestAsset = "brc20:f:ooxx"
 
 func TestUnifiedTemplateContractsLocalCoverage(t *testing.T) {

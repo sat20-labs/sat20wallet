@@ -41,7 +41,7 @@ func TestRealSatoshiNetAgentPredictionTenBettors(t *testing.T) {
 		require.Equal(t, "/v1/chat/completions", r.URL.Path)
 		var req map[string]interface{}
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		content := `{"result_type":"outcome","outcome_id":"home","reason":"Home team won 101-98"}`
+		content := `{"result_type":"outcome","outcome_id":"home","result":"Home 101, Away 98. Final.","evidence_quote":"Home 101, Away 98. Final.","reason":"Home team won 101-98"}`
 		if llmRequestContains(req, "Review this prediction contract") {
 			content = `{"ready":true,"reason":"basketball result is verifiable"}`
 		}
@@ -202,7 +202,7 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 		require.Equal(t, "/v1/chat/completions", r.URL.Path)
 		var req map[string]interface{}
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		content := `{"result_type":"outcome","outcome_id":"home","result":"England 2-1 Croatia","reason":"England won the match"}`
+		content := `{"result_type":"outcome","outcome_id":"home","result":"England 2, Croatia 1. Final.","evidence_quote":"England 2, Croatia 1. Final.","reason":"England won the match"}`
 		if llmRequestContains(req, "Review this prediction contract") {
 			content = `{"ready":true,"reason":"match result is verifiable"}`
 		}

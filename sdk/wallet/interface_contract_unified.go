@@ -65,6 +65,16 @@ type ContractInvokeRequest struct {
 	SkipResultFee   bool
 }
 
+func contractDeployNonce(req *ContractDeployRequest) uint64 {
+	if req == nil {
+		return 0
+	}
+	if req.DeployNonce == 0 {
+		req.DeployNonce = uint64(time.Now().UnixNano())
+	}
+	return req.DeployNonce
+}
+
 type ContractFundingAsset struct {
 	AssetName string
 	Amount    string
@@ -752,7 +762,7 @@ func (p *Manager) estimateAgentDeployContract(req *ContractDeployRequest) (*Cont
 	if gasAmount < deployBaseFee {
 		return nil, fmt.Errorf("agent deploy gas asset amount %d is less than required base gas fee %d", gasAmount, deployBaseFee)
 	}
-	deployNonce := uint64(time.Now().UnixNano())
+	deployNonce := contractDeployNonce(req)
 	contractAddr, _, err := contractcommon.DeriveAgentContractAddress(
 		p.contractAddressPrefix(),
 		subtype,
@@ -841,7 +851,7 @@ func (p *Manager) deployAgentContract(req *ContractDeployRequest) (*ContractTxRe
 	if version == 0 {
 		version = contractcommon.CurrentAgentVersion
 	}
-	deployNonce := uint64(time.Now().UnixNano())
+	deployNonce := contractDeployNonce(req)
 	tx, contractAddr, err := contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
 		ContractPrefix:  p.contractAddressPrefix(),
 		Type:            contractcommon.ContractTypeAgent,
@@ -1019,7 +1029,7 @@ func (p *Manager) estimateTemplateDeployContract(req *ContractDeployRequest) (*C
 	if gasAmount < gasBaseFee {
 		return nil, fmt.Errorf("gas asset amount %d is less than required base gas fee %d", gasAmount, gasBaseFee)
 	}
-	deployNonce := uint64(time.Now().UnixNano())
+	deployNonce := contractDeployNonce(req)
 	contractAddr, _, err := contractcommon.DeriveTemplateContractAddress(
 		p.contractAddressPrefix(),
 		content,
@@ -1091,7 +1101,7 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 	if version == 0 {
 		version = contractcommon.CurrentTemplateVersion
 	}
-	deployNonce := uint64(time.Now().UnixNano())
+	deployNonce := contractDeployNonce(req)
 	tx, contractAddr, err := contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
 		ContractPrefix:  p.contractAddressPrefix(),
 		Type:            contractcommon.ContractTypeTemplate,
@@ -1497,7 +1507,7 @@ func (p *Manager) EstimateEVMDeployContract(req *ContractDeployRequest) (*Contra
 	if gasAmount < gasBaseFee {
 		return nil, fmt.Errorf("gas asset amount %d is less than required base gas fee %d", gasAmount, gasBaseFee)
 	}
-	deployNonce := uint64(time.Now().UnixNano())
+	deployNonce := contractDeployNonce(req)
 	caller, err := contractcommon.ParseEVMAddressHex(callerAddress)
 	if err != nil {
 		return nil, err

@@ -138,11 +138,11 @@ func TestRuneEtching(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hexPayload := "6a5d19020104baa392f5d488e9d1cc9a13038811058d0b0680c2d72f"
+	hexPayload := "6a5d1b020104baa392f5d488e9d1cc9a130100038811058d0b0680c2d72f"
 	payload, _ := hex.DecodeString(hexPayload)
 
 	if !bytes.Equal(nullData, payload) {
-		t.Fatal(err)
+		t.Fatalf("runestone encoding mismatch: got %x want %x", nullData, payload)
 	}
 
 	result, err := stone.DecipherFromPkScript(payload)

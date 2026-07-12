@@ -108,6 +108,13 @@ func waitContractReady(url string, stp *Manager) error {
 	return nil
 }
 
+func requireLegacyContractLiveTest(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SAT20WALLET_LEGACY_INTEGRATION") != "1" {
+		t.Skip("set SAT20WALLET_LEGACY_INTEGRATION=1 to run legacy live contract tests")
+	}
+}
+
 // 主网地址转为测试网地址
 func convertAddr(addr string) (string, error) {
 	address, err := btcutil.DecodeAddress(addr, &chaincfg.MainNetParams)
@@ -132,6 +139,7 @@ func convertAddr(addr string) (string, error) {
 
 // 用导出的交易历史记录，重现整个交易过程。注意需要将remote端的AllowPeerAction直接返回nil，才能正确签名走完流程
 func TestLaunchPoolContract(t *testing.T) {
+	requireLegacyContractLiveTest(t)
 	prepare(t)
 
 	runningData := `{"TotalMinted":{"Precision":0,"Value":15000000},"TotalInvalid":1,"AssetAmtInPool":{"Precision":0,"Value":6000000},"SatsValueInPool":-5,"TotalInputAssets":{"Precision":0,"Value":21000000},"TotalInputSats":16,"TotalOutputAssets":{"Precision":0,"Value":15000000},"TotalOutputSats":1,"IsLaunching":false,"LaunchTxIDs":["6369c367b0be5514425efcb1378ae68462d7e03fa333f25050959b0ae7e3ff87"],"RefundTxIDs":["3b72397d9f077f82b1e9df3cea870c2bf41b7d08596b7b6d25dac30cdd64cc24"],"AmmContractURL":"","AmmResvId":0}`
@@ -353,6 +361,7 @@ func TestLaunchPoolContract(t *testing.T) {
 
 // 用导出的交易历史记录，重现整个交易过程。注意需要将remote端的AllowPeerAction直接返回nil，才能正确签名走完流程
 func TestSwapContract(t *testing.T) {
+	requireLegacyContractLiveTest(t)
 	prepare(t)
 	//prepareChannel(t)
 
@@ -579,6 +588,7 @@ func TestSwapContract(t *testing.T) {
 }
 
 func TestAmmContract(t *testing.T) {
+	requireLegacyContractLiveTest(t)
 	prepare(t)
 
 	// 需要修改资产名称为模拟环境支持的币
@@ -830,6 +840,7 @@ func TestAmmContract(t *testing.T) {
 }
 
 func TestAmmContract_Runes(t *testing.T) {
+	requireLegacyContractLiveTest(t)
 	prepare(t)
 
 	// 需要修改资产名称为模拟环境支持的币

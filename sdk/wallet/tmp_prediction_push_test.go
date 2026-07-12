@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 )
@@ -20,6 +21,9 @@ func useOrdXTestnetIndexers(managers ...*Manager) {
 }
 
 func TestTmpPushPredictionBlocks_TestNet(t *testing.T) {
+	if os.Getenv("SAT20WALLET_CONTRACT_TESTNET") != "1" {
+		t.Skip("set SAT20WALLET_CONTRACT_TESTNET=1 to modify the live SatoshiNet testnet")
+	}
 	prepare_TestNet4(t)
 	defer clean(t)
 	useOrdXTestnetIndexers(_client, _server, _bootstrap)
