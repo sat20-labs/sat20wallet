@@ -482,6 +482,67 @@ func TestRealSatoshiNetEVMStandardApps(t *testing.T) {
 	f.requireSynced(t)
 }
 
+func TestRealSatoshiNetEVMAMMDefaultInvoke(t *testing.T) {
+	const (
+		appAsset       = "ordx:f:e2edefaultamm"
+		wrongAsset     = "ordx:f:e2edefaultwrong"
+		deployGasLimit = int64(10_000_000)
+		invokeGasLimit = int64(1_000_000)
+		inputGasAsset  = int64(2_000_000)
+	)
+	f := newTemplateFixture(t, map[string]int64{appAsset: 5_000, wrongAsset: 100})
+	gas := wallet.GetGasAssetName()
+	gasOuts := f.split(t, f.A, f.gasAnchor, gas,
+		[]int64{inputGasAsset, inputGasAsset, inputGasAsset}, []int64{1000, 1000, 1000},
+		[]*templateActor{f.A, f.A, f.B})
+	assetOuts := f.split(t, f.A, f.assetAnchors[appAsset], appAsset,
+		[]int64{1000, 100}, []int64{1000, 1000},
+		[]*templateActor{f.A, f.B})
+	wrongOuts := f.split(t, f.A, f.assetAnchors[wrongAsset], wrongAsset,
+		[]int64{50}, []int64{1000}, []*templateActor{f.C})
+
+	source := filepath.Join("testdata", "contracts", "StandardApps.sol")
+	artifact, err := CompileSolidityFile(source, "ConstantProductAMM", SolidityCompileOptions{Timeout: 2 * time.Minute})
+	require.NoError(t, err)
+	initCode := appendSolidityConstructorArgs(artifact.Bytecode, evmABIString(appAsset))
+	deployTx, amm, _ := buildEVMDeployTxFor(t, f.A, initCode, 401, deployGasLimit, 2,
+		inputGasAsset, gasOuts[0])
+	f.Network.sendAndMine(t, deployTx, 0)
+
+	addLiquidity, _ := buildEVMInvokeTxWithFundingFor(t, f.A, amm, "call",
+		solidityCall("addLiquidity(uint256)", evmABIUint(1000)),
+		1, invokeGasLimit, 4, inputGasAsset, gasOuts[1], []wire.OutPoint{assetOuts[0]}, 1000,
+		txAssets(templateFunding(t, appAsset, 1000)))
+	f.Network.sendAndMine(t, addLiquidity, 0)
+
+	defaultBuy := buildEVMValueDepositFor(t, f.B, amm, gasOuts[2], 100, inputGasAsset)
+	require.False(t, txHasContractOpReturn(defaultBuy))
+	defaultBuyBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{defaultBuy}, 0)
+	defaultBuyResult := requireSingleResultTx(t, defaultBuyBlock)
+	requireTxOutputAssetAmount(t, defaultBuyResult, f.B.Address, appAsset, "90")
+	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), appAsset, "910")
+
+	defaultSell := buildEVMDefaultInvokeFor(t, f.B, amm, []wire.OutPoint{assetOuts[1]}, wire.TxOut{
+		Assets: txAssets(templateFunding(t, appAsset, 100)),
+	})
+	require.False(t, txHasContractOpReturn(defaultSell))
+	defaultSellBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{defaultSell}, 0)
+	defaultSellResult := requireSingleResultTx(t, defaultSellBlock)
+	requireTxOutputValueAmount(t, defaultSellResult, f.B.Address, 108)
+	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), appAsset, "1010")
+
+	unsupported := buildEVMDefaultInvokeFor(t, f.C, amm, []wire.OutPoint{wrongOuts[0]}, wire.TxOut{
+		Assets: txAssets(templateFunding(t, wrongAsset, 50)),
+	})
+	unsupportedBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{unsupported}, 0)
+	unsupportedResults := contractResultTxs(unsupportedBlock)
+	require.Len(t, unsupportedResults, 1)
+	require.NotEqual(t, contractcommon.ResultStatusSuccess, requireResultPayload(t, unsupportedResults[0]).Status)
+	requireTxOutputAssetAmount(t, unsupportedResults[0], f.C.Address, wrongAsset, "50")
+	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), appAsset, "1010")
+	f.requireSynced(t)
+}
+
 func TestRealSatoshiNetEVMAMMGasAsset(t *testing.T) {
 	const (
 		deployGasLimit = int64(10_000_000)

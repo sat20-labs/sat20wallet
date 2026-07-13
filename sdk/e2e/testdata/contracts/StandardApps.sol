@@ -21,6 +21,14 @@ library StandardAssetTransfer {
         return string(readRawDynamicBytes(ret));
     }
 
+    function fundingAssetCount() internal view returns (uint256) {
+        (bool ok, bytes memory ret) = SATOSHINET_ASSET.staticcall(
+            abi.encodeWithSignature("fundingAssetCount()")
+        );
+        require(ok, "funding asset count failed");
+        return abi.decode(ret, (uint256));
+    }
+
     function claimFundingAsset(string memory assetName, string memory amount) internal {
         require(isPositive(amount), "claim amount required");
         (bool ok, bytes memory ret) = SATOSHINET_ASSET.call(
@@ -229,11 +237,27 @@ contract ConstantProductAMM is SatoshiNetContractInfo {
     }
 
     receive() external payable {
-        revert("default unsupported");
+        _defaultSwap();
     }
 
     fallback() external payable {
-        revert("default unsupported");
+        revert("unsupported calldata");
+    }
+
+    function _defaultSwap() private {
+        uint256 satIn = StandardAssetTransfer.fundingSats();
+        string memory fundedAsset = StandardAssetTransfer.fundingAssetAmount(assetName);
+        bool hasSats = satIn > 0;
+        bool hasAsset = StandardAssetTransfer.isPositive(fundedAsset);
+        uint256 knownFundingCount = (hasSats ? 1 : 0) + (hasAsset ? 1 : 0);
+        require(knownFundingCount == 1, "default input required");
+        require(StandardAssetTransfer.fundingAssetCount() == knownFundingCount, "unsupported default funding");
+
+        if (hasSats) {
+            _swapSatForAsset("0");
+            return;
+        }
+        _swapAssetForSat(0);
     }
 
     function addLiquidity(uint256 minLiquidity) external returns (uint256) {
@@ -394,6 +418,10 @@ contract ConstantProductAMM is SatoshiNetContractInfo {
     }
 
     function swapSatForAsset(string calldata minAssetOut) external returns (string memory assetOut) {
+        return _swapSatForAsset(minAssetOut);
+    }
+
+    function _swapSatForAsset(string memory minAssetOut) private returns (string memory assetOut) {
         string memory recipient = StandardAssetTransfer.callerAddress();
         uint256 satIn = StandardAssetTransfer.fundingSats();
         require(satIn > 0, "input required");
@@ -413,6 +441,10 @@ contract ConstantProductAMM is SatoshiNetContractInfo {
     }
 
     function swapAssetForSat(uint256 minSatOut) external returns (uint256 satOut) {
+        return _swapAssetForSat(minSatOut);
+    }
+
+    function _swapAssetForSat(uint256 minSatOut) private returns (uint256 satOut) {
         string memory recipient = StandardAssetTransfer.callerAddress();
         string memory fundedAsset = StandardAssetTransfer.fundingAssetAmount(assetName);
         uint256 assetIn = StandardAssetTransfer.stringToUintFloor(fundedAsset);
