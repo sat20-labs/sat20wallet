@@ -1,9 +1,9 @@
 {
-  "version": "0.1.37",
-  "buildId": "20260710T062059Z",
-  "commit": "8b57960f3a37",
+  "version": "0.1.38",
+  "buildId": "20260714T015215Z",
+  "commit": "5d120e97af9a",
   "releaseNotes": "WASM更新缓存修复",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-07-10T06:20:59.200Z"
+  "publishedAt": "2026-07-14T01:52:15.528Z"
 }
