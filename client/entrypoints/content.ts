@@ -191,9 +191,17 @@ export default defineContentScript({
       
       if (from === Message.MessageTo.INJECTED) {
         console.log('Content 收到 INJECTED 消息:', event.data)
-        eventData.metadata.from = Message.MessageFrom.CONTENT
+        // 页面可伪造 metadata；origin 必须由 content script 从当前文档重建。
+        const trustedEvent = {
+          ...eventData,
+          metadata: {
+            ...metadata,
+            origin: window.location.origin,
+            from: Message.MessageFrom.CONTENT,
+          },
+        }
         if (to === Message.MessageTo.BACKGROUND) {
-          await sendToBackground(eventData)
+          await sendToBackground(trustedEvent)
         }
       }
     })

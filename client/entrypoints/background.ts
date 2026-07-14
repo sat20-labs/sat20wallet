@@ -99,12 +99,13 @@ class BackgroundService {
 
   private handleContentScriptConnection(port: Runtime.Port) {
     this.portMap.content = port
-    this.approvalManager.setContentPort(port)
 
     port.onDisconnect.addListener(() => {
       console.log("调试: 内容脚本端口已断开。");
-      this.portMap.content = undefined;
-      this.approvalManager.setContentPort(undefined)
+      if (this.portMap.content === port) {
+        this.portMap.content = undefined;
+      }
+      this.approvalManager.handleContentPortDisconnect(port)
     });
 
     port.onMessage.addListener(async (event: any) => {
@@ -178,4 +179,3 @@ export default defineBackground(() => {
   // eslint-disable-next-line no-new
   new BackgroundService()
 })
-

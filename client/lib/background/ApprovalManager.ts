@@ -8,23 +8,15 @@ export class ApprovalManager {
   // 储存待处理的审批请求，用窗口ID作为键
   private approveMap = new Map<
     string,
-    { windowId: number; eventData: any }
+    { windowId: number; eventData: any; contentPort: Runtime.Port }
   >()
-
-  // 持有内容脚本的端口引用，以便发回响应
-  private contentPort: Runtime.Port | undefined
 
   constructor() {
     console.log('调试: ApprovalManager 初始化')
     this.handleWindowRemoved = this.handleWindowRemoved.bind(this)
   }
 
-  public setContentPort(port: Runtime.Port | undefined) {
-    this.contentPort = port
-    console.log(`调试: ApprovalManager 设置 contentPort: ${port ? '可用' : '不可用'}`)
-  }
-
-  public async requestApproval(eventData: any) {
+  public async requestApproval(port: Runtime.Port, eventData: any) {
     console.log('调试: ApprovalManager 收到审批请求', eventData.action)
     const { origin } = eventData.metadata
 
@@ -44,8 +36,7 @@ export class ApprovalManager {
          // 这里我们只记录警告，因为窗口可能已经被用户手动关闭了
         console.warn(`调试: 移除旧窗口 ${winId} 失败, 可能已被关闭:`, error)
       }
-      // 无论成功与否都从map中删除
-      this.approveMap.delete(winId.toString())
+      this.handleResponse(false, winId, null)
     }
 
     const newWindow = await createPopup(
@@ -57,6 +48,7 @@ export class ApprovalManager {
       this.approveMap.set(newWindow.id.toString(), {
         windowId: newWindow.id,
         eventData: eventData,
+        contentPort: port,
       })
     } else {
       console.error('调试: 创建审批窗口失败')
@@ -72,7 +64,7 @@ export class ApprovalManager {
       return
     }
 
-    if (this.contentPort) {
+    if (request.contentPort) {
       const responseEvent = {
         ...request.eventData,
         metadata: {
@@ -84,7 +76,7 @@ export class ApprovalManager {
         error: approved ? null : walletError.userReject,
       }
       console.log(`调试: 发送审批结果到内容脚本 (窗口ID: ${windowId}, 结果: ${approved})`, responseEvent)
-      this.contentPort.postMessage(responseEvent)
+      request.contentPort.postMessage(responseEvent)
     } else {
       console.error('调试: 无法发送审批响应, 内容脚本端口不可用')
     }
@@ -97,6 +89,16 @@ export class ApprovalManager {
     if (this.approveMap.has(windowIdStr)) {
       console.log(`调试: 审批窗口 ${closedWindowId} 被用户关闭, 视为拒绝。`)
       this.handleResponse(false, closedWindowId, null)
+    }
+  }
+
+  public handleContentPortDisconnect(port: Runtime.Port) {
+    for (const [windowId, request] of this.approveMap.entries()) {
+      if (request.contentPort !== port) {
+        continue
+      }
+      this.approveMap.delete(windowId)
+      void browser.windows.remove(request.windowId).catch(() => undefined)
     }
   }
 
@@ -123,4 +125,4 @@ export class ApprovalManager {
       // 窗口可能已经关闭，这是正常现象
     }
   }
-} 
+}

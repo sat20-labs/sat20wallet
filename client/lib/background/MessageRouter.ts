@@ -15,7 +15,45 @@ export async function handleMessage(
 ) {
   const eventData = event
   const { action, type, data } = eventData
-  const { origin } = eventData.metadata
+  const senderURL = port.sender?.url ?? port.sender?.tab?.url
+  let trustedOrigin: string
+  try {
+    if (!senderURL) {
+      throw new Error('missing sender URL')
+    }
+    trustedOrigin = new URL(senderURL).origin
+    if (trustedOrigin === 'null') {
+      throw new Error('sender has no web origin')
+    }
+  } catch (error) {
+    port.postMessage({
+      ...eventData,
+      data: null,
+      error: {
+        code: -32600,
+        message: '无法验证请求来源',
+      },
+    })
+    return
+  }
+
+  const suppliedOrigin = eventData.metadata?.origin
+  if (suppliedOrigin !== trustedOrigin) {
+    port.postMessage({
+      ...eventData,
+      data: null,
+      error: {
+        code: -32600,
+        message: '请求来源与内容脚本上下文不一致',
+      },
+    })
+    return
+  }
+  eventData.metadata = {
+    ...eventData.metadata,
+    origin: trustedOrigin,
+  }
+  const origin = trustedOrigin
 
   eventData.metadata.from = Message.MessageFrom.BACKGROUND
   eventData.metadata.to = Message.MessageTo.INJECTED
@@ -474,7 +512,7 @@ export async function handleMessage(
 
       if (REQUIRES_APPROVAL.includes(action)) {
         try {
-          await approvalManager.requestApproval(event)
+          await approvalManager.requestApproval(port, event)
         } catch (error: any) {
           console.error('创建审批弹窗时出错:', error)
           port.postMessage({
@@ -514,4 +552,4 @@ export async function handleMessage(
       },
     })
   }
-} 
+}
