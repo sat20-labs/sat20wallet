@@ -84,6 +84,9 @@ func (p *WatchTower) HasBroadcastedCommitTx(commitTxId string) bool {
 
 // 只有撤销的commitTx才需要发给watchTower
 func (p *WatchTower) AddCommitTx(channel *Channel, commitTx *wire.MsgTx, signedPunishTx []*wire.MsgTx) error {
+	if len(signedPunishTx) == 0 {
+		return fmt.Errorf("at least one signed punish transaction is required")
+	}
 
 	txId := commitTx.TxID()
 	err := savePunishTx(p.manager.db, channel, txId, signedPunishTx)
@@ -312,6 +315,9 @@ func (p *WatchTower) GetPunishTx(commitTxId string) (string, []*wire.MsgTx, erro
 	txs, err := loadPunishTx(p.manager.db, chanId, commitTxId)
 	if err != nil {
 		return "", nil, err
+	}
+	if len(txs) == 0 {
+		return "", nil, fmt.Errorf("no punish transactions for %s", commitTxId)
 	}
 
 	PrintJsonTx(txs[len(txs)-1], "punishTx")
