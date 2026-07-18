@@ -504,7 +504,7 @@ func TestSatsNetDKVSClientBlob(t *testing.T) {
 		t.Fatal(err)
 	}
 	accountID := dkvsindexer.AccountID(priv.PubKey().SerializeCompressed())
-	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(dkvsTestWalletFromPriv(t, priv), "object", [][]byte{[]byte("hello"), []byte(" world")}, nil, dkvsindexer.RecordOptions{
+	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(dkvsTestWalletFromPriv(t, priv), "object", [][]byte{[]byte("hello "), []byte("world")}, nil, dkvsindexer.RecordOptions{
 		Seq:          1,
 		TTL:          60_000,
 		ExpiryHeight: 100,

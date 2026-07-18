@@ -621,7 +621,7 @@ func newTemplateFixtureWithProfilesAndArgs(t *testing.T, profiles []templateAsse
 	network := newRealSatoshiNetWithArgs(t, fakeL1, bootstrapArgs, coreArgs, minerArgs)
 
 	gasAnchor := buildAnchorTx(t, templateLockedOutPoint("gas", 0), lockedValue,
-		txAsset(gas, 100000000), gas+"-100000000-0-1",
+		txAsset(gas, 100000000), gas+"-100000000-0-0",
 		witnessScript, bootstrapKey, actorA.PkScript)
 	network.sendAndMine(t, gasAnchor, 1)
 
