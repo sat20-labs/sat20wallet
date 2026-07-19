@@ -88,7 +88,7 @@ func (p *Manager) getUtxosForBRC20(fundingAddr, assetAddr string, fundingUtxoMgr
 	}
 	var defaultUtxos []*TxOutput
 	for _, utxo := range preTxInputs {
-		txOut, err := p.l1IndexerClient.GetTxOutput(utxo)
+		txOut, err := p.getL1TxOutput(utxo)
 		if err != nil {
 			Log.Errorf("GetTxOutFromRawTx %s failed, %v", utxo, err)
 			return nil, nil, err

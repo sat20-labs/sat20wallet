@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -12,10 +13,13 @@ import (
 	"strconv"
 	"strings"
 	"syscall/js"
+	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	corerelay "github.com/sat20-labs/rgb11/relay"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sirupsen/logrus"
 )
 
@@ -69,6 +73,25 @@ var createJsRet = func(data any, code int, msg string) map[string]any {
 		"code": code,
 		"msg":  msg,
 	}
+}
+
+func activateRGB11WalletState() map[string]any {
+	result, err := _mgr.ActivateRGB11WalletState(dkvsindexer.RecordVerificationOptions{
+		Now: uint64(time.Now().UnixMilli()),
+	})
+	if err != nil {
+		wallet.Log.Errorf("automatic RGB11 wallet restore failed: %v", err)
+		return map[string]any{"found": false, "restored": false, "auto_backup": false, "error": err.Error()}
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return map[string]any{"found": false, "restored": false, "auto_backup": false, "error": err.Error()}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		return map[string]any{"found": false, "restored": false, "auto_backup": false, "error": err.Error()}
+	}
+	return payload
 }
 
 func parseIndexerConfig(indexer js.Value) (*common.Indexer, error) {
@@ -423,8 +446,9 @@ func createWallet(this js.Value, p []js.Value) any {
 		}
 		wallet.Log.Info("wallet created")
 		return map[string]any{
-			"walletId": fmt.Sprintf("%d", id),
-			"mnemonic": mnemonic,
+			"walletId":        fmt.Sprintf("%d", id),
+			"mnemonic":        mnemonic,
+			"rgb11Activation": activateRGB11WalletState(),
 		}, 0, "ok"
 	})
 
@@ -509,8 +533,9 @@ func importWallet(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{
-			"walletId": fmt.Sprintf("%d", id),
-			"address":  _mgr.GetWallet().GetAddress(),
+			"walletId":        fmt.Sprintf("%d", id),
+			"address":         _mgr.GetWallet().GetAddress(),
+			"rgb11Activation": activateRGB11WalletState(),
 		}, 0, "ok"
 	})
 
@@ -543,8 +568,9 @@ func importWalletWithPrivKey(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{
-			"walletId": fmt.Sprintf("%d", id),
-			"address":  _mgr.GetWallet().GetAddress(),
+			"walletId":        fmt.Sprintf("%d", id),
+			"address":         _mgr.GetWallet().GetAddress(),
+			"rgb11Activation": activateRGB11WalletState(),
 		}, 0, "ok"
 	})
 
@@ -578,7 +604,8 @@ func unlockWallet(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{
-			"walletId": fmt.Sprintf("%d", id),
+			"walletId":        fmt.Sprintf("%d", id),
+			"rgb11Activation": activateRGB11WalletState(),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
@@ -636,7 +663,7 @@ func switchWallet(this js.Value, p []js.Value) any {
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		return nil, 0, "ok"
+		return map[string]any{"rgb11Activation": activateRGB11WalletState()}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
 }
@@ -686,7 +713,7 @@ func switchAccount(this js.Value, p []js.Value) any {
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		_mgr.SwitchAccount(uint32(id))
-		return nil, 0, "ok"
+		return map[string]any{"rgb11Activation": activateRGB11WalletState()}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
 }
@@ -713,7 +740,7 @@ func switchChain(this js.Value, p []js.Value) any {
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		return nil, 0, "ok"
+		return map[string]any{"rgb11Activation": activateRGB11WalletState()}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
 }
@@ -4578,6 +4605,444 @@ func validateSatsNetAddress(this js.Value, p []js.Value) interface{} {
 	return createJsRet(map[string]interface{}{"valid": err == nil}, 0, "ok")
 }
 
+func getRGB11State(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		state, err := _mgr.GetRGB11State()
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(state)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"state": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func createRGB11Invoice(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 invoice request")
+	}
+	var request wallet.RGB11InvoiceRequest
+	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		receive, err := _mgr.CreateRGB11Invoice(request)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(receive)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		var result map[string]any
+		if err := json.Unmarshal(encoded, &result); err != nil {
+			return nil, -1, err.Error()
+		}
+		return result, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func acceptRGB11Consignment(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "missing RGB11 request id or consignment")
+	}
+	requestID, consignment := p[0].String(), p[1].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		receipt, err := _mgr.AcceptRGB11Consignment(context.Background(), requestID, []byte(consignment))
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return receipt, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func importRGB11Contract(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 contract consignment")
+	}
+	raw := p[0].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.ImportRGB11Contract(context.Background(), []byte(raw))
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"result": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func issueRGB11Asset(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 issuance request")
+	}
+	var request wallet.RGB11IssueRequest
+	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.IssueRGB11Asset(context.Background(), request)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"result": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func prepareRGB11Transfer(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 send request")
+	}
+	var request wallet.RGB11SendRequest
+	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.PrepareRGB11Transfer(context.Background(), request)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"transfer": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func buildRGB11RelayRecord(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 transfer id")
+	}
+	transferID := p[0].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		record, err := _mgr.BuildRGB11RelayRecord(transferID, "sat20-pwa")
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"record": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func publishRGB11RelayRecord(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 transfer id")
+	}
+	transferID := p[0].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		record, _, err := _mgr.PublishRGB11RelayRecord(transferID, "sat20-pwa", dkvsindexer.RecordOptions{
+			TTL: uint64((24 * time.Hour) / time.Millisecond),
+		})
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"record": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func acceptRGB11RelayConsignment(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 3 {
+		return createJsRet(nil, -1, "missing RGB11 request id, relay record or consignment")
+	}
+	requestID, recordJSON, consignment := p[0].String(), p[1].String(), p[2].String()
+	var record corerelay.RelayRecord
+	if err := json.Unmarshal([]byte(recordJSON), &record); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		receipt, ack, err := _mgr.AcceptRGB11RelayConsignment(
+			context.Background(), requestID, &record, []byte(consignment),
+		)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		receiptJSON, err := json.Marshal(receipt)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		ackJSON, err := json.Marshal(ack)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"receipt": string(receiptJSON), "ack": string(ackJSON)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func rejectRGB11RelayConsignment(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 2 {
+		return createJsRet(nil, -1, "missing RGB11 request id or relay record")
+	}
+	requestID := p[0].String()
+	var record corerelay.RelayRecord
+	if err := json.Unmarshal([]byte(p[1].String()), &record); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		ack, err := _mgr.RejectRGB11RelayConsignment(requestID, &record)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(ack)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"ack": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func publishRGB11AckRecord(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 2 {
+		return createJsRet(nil, -1, "missing RGB11 ACK key or record")
+	}
+	key := p[0].String()
+	var ack corerelay.AckRecord
+	if err := json.Unmarshal([]byte(p[1].String()), &ack); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		_, err := _mgr.PublishRGB11AckRecord(key, &ack, dkvsindexer.RecordOptions{
+			TTL: uint64((24 * time.Hour) / time.Millisecond),
+		})
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"published": true}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func fetchRGB11AckRecord(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 transfer id")
+	}
+	transferID := p[0].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		ack, _, err := _mgr.FetchRGB11AckRecord(transferID, dkvsindexer.RecordVerificationOptions{
+			Now: uint64(time.Now().UnixMilli()),
+		})
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(ack)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"ack": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func cancelRGB11BatchByNack(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 3 {
+		return createJsRet(nil, -1, "missing RGB11 transfer id, relay record or NACK")
+	}
+	transferID := p[0].String()
+	var record corerelay.RelayRecord
+	if err := json.Unmarshal([]byte(p[1].String()), &record); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	var nack corerelay.AckRecord
+	if err := json.Unmarshal([]byte(p[2].String()), &nack); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		if err := _mgr.CancelRGB11BatchByNack(transferID, &record, &nack); err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"cancelled": true}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func broadcastRGB11Transfer(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 3 {
+		return createJsRet(nil, -1, "missing RGB11 transfer id, relay record or ACK")
+	}
+	transferID := p[0].String()
+	var record corerelay.RelayRecord
+	if err := json.Unmarshal([]byte(p[1].String()), &record); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	var ack corerelay.AckRecord
+	if err := json.Unmarshal([]byte(p[2].String()), &ack); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txID, err := _mgr.BroadcastRGB11Transfer(transferID, &record, &ack)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"txid": txID}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+type rgb11BatchBroadcastRequest struct {
+	TransferIDs  []string                 `json:"transfer_ids"`
+	RelayRecords []*corerelay.RelayRecord `json:"relay_records"`
+	Acks         []*corerelay.AckRecord   `json:"acks"`
+}
+
+func broadcastRGB11Batch(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 batch ACK request")
+	}
+	var request rgb11BatchBroadcastRequest
+	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txID, err := _mgr.BroadcastRGB11Batch(request.TransferIDs, request.RelayRecords, request.Acks)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"txid": txID}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func broadcastRGB11OutOfBand(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 out-of-band transfer ids")
+	}
+	var transferIDs []string
+	if err := json.Unmarshal([]byte(p[0].String()), &transferIDs); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		txID, err := _mgr.BroadcastRGB11OutOfBand(transferIDs)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"txid": txID}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func refreshRGB11State(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.RefreshRGB11State(context.Background())
+		if err != nil && result == nil {
+			return nil, -1, err.Error()
+		}
+		encoded, encodeErr := json.Marshal(result)
+		if encodeErr != nil {
+			return nil, -1, encodeErr.Error()
+		}
+		message := "ok"
+		code := 0
+		if err != nil {
+			message, code = err.Error(), -1
+		}
+		return map[string]any{"result": string(encoded)}, code, message
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+type rgb11BackupRequest struct {
+	WalletID     string `json:"wallet_id"`
+	TTL          uint64 `json:"ttl"`
+	ExpiryHeight uint64 `json:"expiry_height"`
+}
+
+func backupRGB11WalletState(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 backup request")
+	}
+	var request rgb11BackupRequest
+	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	if request.TTL == 0 {
+		request.TTL = uint64((365 * 24 * time.Hour) / time.Millisecond)
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		head, err := _mgr.SyncRGB11WalletState(request.WalletID, dkvsindexer.RecordOptions{
+			TTL: request.TTL, ExpiryHeight: request.ExpiryHeight,
+		})
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(head)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"head": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+type rgb11RestoreRequest struct {
+	WalletID string `json:"wallet_id"`
+	Height   uint64 `json:"height"`
+	Now      uint64 `json:"now"`
+}
+
+func restoreRGB11WalletState(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 restore request")
+	}
+	var request rgb11RestoreRequest
+	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	if request.Now == 0 {
+		request.Now = uint64(time.Now().UnixMilli())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		head, err := _mgr.RestoreLatestRGB11WalletState(request.WalletID, dkvsindexer.RecordVerificationOptions{
+			Height: request.Height, Now: request.Now,
+		})
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(head)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"head": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
 func main() {
 	obj := js.Global().Get("Object").New()
 	obj.Set("batchDbTest", js.FuncOf(batchDbTest))
@@ -4696,6 +5161,25 @@ func main() {
 	obj.Set("getUtxosWithAssetV2_SatsNet", js.FuncOf(getUtxosWithAssetV2_SatsNet))
 	obj.Set("getAssetAmount", js.FuncOf(getAssetAmount))
 	obj.Set("getAssetAmount_SatsNet", js.FuncOf(getAssetAmount_SatsNet))
+	obj.Set("getRGB11State", js.FuncOf(getRGB11State))
+	obj.Set("createRGB11Invoice", js.FuncOf(createRGB11Invoice))
+	obj.Set("acceptRGB11Consignment", js.FuncOf(acceptRGB11Consignment))
+	obj.Set("importRGB11Contract", js.FuncOf(importRGB11Contract))
+	obj.Set("issueRGB11Asset", js.FuncOf(issueRGB11Asset))
+	obj.Set("prepareRGB11Transfer", js.FuncOf(prepareRGB11Transfer))
+	obj.Set("buildRGB11RelayRecord", js.FuncOf(buildRGB11RelayRecord))
+	obj.Set("publishRGB11RelayRecord", js.FuncOf(publishRGB11RelayRecord))
+	obj.Set("acceptRGB11RelayConsignment", js.FuncOf(acceptRGB11RelayConsignment))
+	obj.Set("rejectRGB11RelayConsignment", js.FuncOf(rejectRGB11RelayConsignment))
+	obj.Set("publishRGB11AckRecord", js.FuncOf(publishRGB11AckRecord))
+	obj.Set("fetchRGB11AckRecord", js.FuncOf(fetchRGB11AckRecord))
+	obj.Set("cancelRGB11BatchByNack", js.FuncOf(cancelRGB11BatchByNack))
+	obj.Set("broadcastRGB11Transfer", js.FuncOf(broadcastRGB11Transfer))
+	obj.Set("broadcastRGB11Batch", js.FuncOf(broadcastRGB11Batch))
+	obj.Set("broadcastRGB11OutOfBand", js.FuncOf(broadcastRGB11OutOfBand))
+	obj.Set("refreshRGB11State", js.FuncOf(refreshRGB11State))
+	obj.Set("backupRGB11WalletState", js.FuncOf(backupRGB11WalletState))
+	obj.Set("restoreRGB11WalletState", js.FuncOf(restoreRGB11WalletState))
 
 	obj.Set("queryContract", js.FuncOf(queryContract))
 	obj.Set("buildUnifiedContractContent", js.FuncOf(buildUnifiedContractContent))

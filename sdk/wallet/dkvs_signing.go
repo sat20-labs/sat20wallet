@@ -105,6 +105,11 @@ func BuildDKVSSignedBlobRecords(wallet common.Wallet, objectID string, chunks []
 	if err != nil {
 		return nil, nil, dkvsindexer.ErrInvalidSignature
 	}
+	// A blob is one logical wallet-signed object. Its manifest and every chunk
+	// must share the same issue time or client-side assembly will reject it.
+	if opts.IssueTime == 0 {
+		opts.IssueTime = uint64(time.Now().UnixMilli())
+	}
 	accountID := dkvsindexer.AccountID(pubKey)
 	manifest, manifestValue, err := dkvsindexer.BuildBlobManifest(chunks, metadata, opts.TTL, opts.ExpiryHeight)
 	if err != nil {

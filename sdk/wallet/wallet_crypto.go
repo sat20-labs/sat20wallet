@@ -129,4 +129,3 @@ func (p *InternalWallet) Decrypt(data []byte, pubKeyBytes []byte) ([]byte, error
     }
     return plaintext, nil
 }
-

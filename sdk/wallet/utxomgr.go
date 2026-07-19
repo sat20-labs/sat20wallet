@@ -117,6 +117,7 @@ func (p *UtxoMgr) AddOutput(name *indexer.AssetName, output *indexer.AssetsInUtx
 	}
 }
 
+
 func (p *UtxoMgr) RemoveUtxo(utxo string) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -181,4 +182,3 @@ func (p *UtxoMgr) RemoveUtxosWithTx_SatsNet(tx *swire.MsgTx) {
 		p.removeUtxo(utxo)
 	}
 }
-

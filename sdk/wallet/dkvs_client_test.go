@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -552,6 +553,33 @@ func TestSatsNetDKVSClientBlob(t *testing.T) {
 	}
 	if _, content, err := client.GetChunkedBlob(accountID, "object", dkvsindexer.BlobPolicy{}); err != nil || string(content) != "hello world" {
 		t.Fatalf("get chunked content=%q err=%v", content, err)
+	}
+}
+
+func TestRGB11BlobDefaultChunksFitMaximumWireRecord(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := bytes.Repeat([]byte{0x5a}, swire.MaxDKVSRecordSize*3)
+	chunks := chunkBlobData(data, 0)
+	if len(chunks) < 4 {
+		t.Fatalf("expected conservative DKVS chunking, got %d chunks", len(chunks))
+	}
+	_, records, err := BuildDKVSSignedBlobRecords(
+		dkvsTestWalletFromPriv(t, priv), "rgb11-wallet-snapshot-maximum-size", chunks, nil,
+		dkvsindexer.RecordOptions{
+			Seq: 1, TTL: 60_000, ExpiryHeight: 100,
+			FeeProof: bytes.Repeat([]byte{0x01}, swire.MaxDKVSFeeProofSize),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, record := range records {
+		if size := dkvsindexer.RecordSize(record); size > swire.MaxDKVSRecordSize {
+			t.Fatalf("chunk %d wire size=%d max=%d", index, size, swire.MaxDKVSRecordSize)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -457,6 +458,62 @@ func (p *IndexerRPCClientMgr) GetUtxoSpentTx(utxo string) (string, error) {
 		}
 	}
 	return result, err
+}
+
+func (p *IndexerRPCClientMgr) GetBitcoinUTXOStatus(outpoint string) (*indexerwire.BitcoinUTXOStatus, error) {
+	return withRGB11EvidenceFailover(p, func(client rgb11BitcoinEvidenceRPC) (*indexerwire.BitcoinUTXOStatus, error) {
+		return client.GetBitcoinUTXOStatus(outpoint)
+	})
+}
+
+func (p *IndexerRPCClientMgr) GetBitcoinRawTx(txid string) (*indexerwire.BitcoinRawTx, error) {
+	return withRGB11EvidenceFailover(p, func(client rgb11BitcoinEvidenceRPC) (*indexerwire.BitcoinRawTx, error) {
+		return client.GetBitcoinRawTx(txid)
+	})
+}
+
+func (p *IndexerRPCClientMgr) GetBitcoinTxStatus(txid string) (*indexerwire.BitcoinTxStatus, error) {
+	return withRGB11EvidenceFailover(p, func(client rgb11BitcoinEvidenceRPC) (*indexerwire.BitcoinTxStatus, error) {
+		return client.GetBitcoinTxStatus(txid)
+	})
+}
+
+func (p *IndexerRPCClientMgr) GetBitcoinOutspend(outpoint string) (*indexerwire.BitcoinOutspend, error) {
+	return withRGB11EvidenceFailover(p, func(client rgb11BitcoinEvidenceRPC) (*indexerwire.BitcoinOutspend, error) {
+		return client.GetBitcoinOutspend(outpoint)
+	})
+}
+
+func (p *IndexerRPCClientMgr) GetBitcoinTip() (*indexerwire.BitcoinTip, error) {
+	return withRGB11EvidenceFailover(p, func(client rgb11BitcoinEvidenceRPC) (*indexerwire.BitcoinTip, error) {
+		return client.GetBitcoinTip()
+	})
+}
+
+func (p *IndexerRPCClientMgr) BroadcastBitcoinTx(rawTx []byte) (string, error) {
+	return withRGB11EvidenceFailover(p, func(client rgb11BitcoinEvidenceRPC) (string, error) {
+		return client.BroadcastBitcoinTx(rawTx)
+	})
+}
+
+func withRGB11EvidenceFailover[T any](manager *IndexerRPCClientMgr,
+	call func(rgb11BitcoinEvidenceRPC) (T, error)) (T, error) {
+	var zero T
+	active := manager.getActiveIndexer()
+	client, ok := active.(rgb11BitcoinEvidenceRPC)
+	if !ok {
+		return zero, fmt.Errorf("active Indexer does not support Bitcoin evidence v3")
+	}
+	result, err := call(client)
+	if !shouldSwitchIndexer(err) {
+		return result, err
+	}
+	selected := manager.selector()
+	client, ok = selected.(rgb11BitcoinEvidenceRPC)
+	if !ok {
+		return zero, fmt.Errorf("selected Indexer does not support Bitcoin evidence v3")
+	}
+	return call(client)
 }
 func (p *IndexerRPCClientMgr) GetServiceIncoming(addr string) (int, int64, error) {
 	r1, r2, err := p.getActiveIndexer().GetServiceIncoming(addr)

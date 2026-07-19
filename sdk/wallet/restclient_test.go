@@ -2473,7 +2473,7 @@ func (p *TestIndexerClient) GetUtxoSpentTx(utxo string) (string, error) {
 	if txId != "" {
 		return txId, nil
 	}
-	return "", fmt.Errorf("not spent")
+	return "", nil
 }
 
 func (p *TestIndexerClient) GetServiceIncoming(addr string) (int, int64, error) {

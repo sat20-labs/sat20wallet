@@ -13,6 +13,7 @@ import (
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/sat20-labs/indexer/share/btclucky"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	swire "github.com/sat20-labs/satoshinet/wire"
 	"lukechampine.com/uint128"
@@ -121,6 +122,7 @@ type Manager struct {
 
 	utxoLockerL1 *UtxoLocker
 	utxoLockerL2 *UtxoLocker
+	rgbManager   *RGB11Manager
 	watchTower   *WatchTower
 
 	feeRateL1             int64 // sat/vkb
@@ -655,6 +657,11 @@ func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 		p.mutex.Unlock()
 		return info
 	}
+	// RGB11 metadata is wallet-local and must never be synthesized by the L1
+	// Indexer. Import/issuance registers it after local consignment validation.
+	if name.Protocol == rgb11wallet.Protocol {
+		return nil
+	}
 
 	info = p.l1IndexerClient.GetTickInfo(name)
 	if info == nil {
@@ -1036,6 +1043,16 @@ func (p *Manager) GetAssetAmount_SatsNet(address string, name *swire.AssetName,
 func (p *Manager) GetAssetBalance(address string, name *swire.AssetName) *Decimal {
 	if address == "" {
 		address = p.wallet.GetAddress()
+	}
+	if address == p.wallet.GetAddress() {
+		if name != nil && name.Protocol == rgb11wallet.Protocol {
+			balance, err := p.GetRGB11AssetBalance(name)
+			if err != nil {
+				Log.Errorf("GetRGB11AssetBalance %s failed: %v", name.String(), err)
+				return nil
+			}
+			return balance
+		}
 	}
 
 	assets := p.l1IndexerClient.GetAssetSummaryWithAddress(address)

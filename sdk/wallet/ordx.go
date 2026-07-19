@@ -200,7 +200,7 @@ func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
 	
 	if len(defaultUtxos) != 0 {
 		for _, utxo := range defaultUtxos {
-			txOut, err := p.l1IndexerClient.GetTxOutput(utxo)
+			txOut, err := p.getL1TxOutput(utxo)
 			if err != nil {
 				Log.Errorf("GetTxOutFromRawTx %s failed, %v", utxo, err)
 				return nil, err

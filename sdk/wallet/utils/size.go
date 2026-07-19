@@ -1101,4 +1101,3 @@ func CalcFee_CommitTx(in, out int, feeRate int64) int64 {
 
 	return weightEstimate.Fee(feeRate)
 }
-

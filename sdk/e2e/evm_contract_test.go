@@ -62,7 +62,7 @@ func TestRealSatoshiNetHarnessAscendAndEVMContract(t *testing.T) {
 	spendScript, spendAddress, redeemScript, controlBlock := callerTaprootScript(t, callerKeys[0])
 
 	anchorTx := buildAnchorTx(t, lockedUtxo, lockedValue,
-		txAsset(gasAsset, ascendedGasAsset), fmt.Sprintf("%s-%d-0-1", gasAsset, ascendedGasAsset),
+		txAsset(gasAsset, ascendedGasAsset), fmt.Sprintf("%s-%d-0-0", gasAsset, ascendedGasAsset),
 		witnessScript, bootstrapKey, spendScript)
 	network.sendAndMine(t, anchorTx, 1)
 

@@ -16,10 +16,17 @@ import (
 )
 
 func GetChainParam() *chaincfg.Params {
-	if IsTestNet() {
-		return &chaincfg.TestNet4Params
-	} else {
+	switch _chain {
+	case "mainnet":
 		return &chaincfg.MainNetParams
+	case "regtest":
+		return &chaincfg.RegressionNetParams
+	case "testnet3":
+		return &chaincfg.TestNet3Params
+	case "signet":
+		return &chaincfg.SigNetParams
+	default:
+		return &chaincfg.TestNet4Params
 	}
 }
 

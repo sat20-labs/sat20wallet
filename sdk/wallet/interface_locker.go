@@ -218,7 +218,7 @@ func (p *Manager) GetTxAssetInfoFromPsbt(psbtStr string) (*TxAssetInfo, error) {
 	var input *TxOutput
 	for i, txIn := range tx.TxIn {
 		utxo := txIn.PreviousOutPoint.String()
-		info, err := p.l1IndexerClient.GetTxOutput(utxo)
+		info, err := p.getL1TxOutput(utxo)
 		if err != nil {
 			Log.Errorf("can't find output info for utxo %s", utxo)
 			return nil, err
@@ -333,5 +333,4 @@ func GetTxAssetInfoFromPsbt_SatsNet(psbtStr string) (*TxAssetInfo, error) {
 
 	return &result, nil
 }
-
 

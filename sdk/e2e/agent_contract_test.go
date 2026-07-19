@@ -84,7 +84,7 @@ func TestRealSatoshiNetAgentPredictionTenBettors(t *testing.T) {
 	}, nil)
 
 	anchorTx := buildAnchorTx(t, lockedUtxo, lockedValue,
-		txAsset(gas, 4000000), gas+"-4000000-0-1",
+		txAsset(gas, 4000000), gas+"-4000000-0-0",
 		witnessScript, bootstrapKey, deployer.PkScript)
 	network.sendAndMine(t, anchorTx, 1)
 
@@ -272,11 +272,11 @@ func TestRealSatoshiNetAgentPredictionPayoutByShare(t *testing.T) {
 	}, nil)
 
 	gasAnchorTx := buildAnchorTx(t, gasLockedUtxo, lockedValue,
-		txAsset(gas, 10000000), gas+"-10000000-0-1",
+		txAsset(gas, 10000000), gas+"-10000000-0-0",
 		witnessScript, bootstrapKey, deployer.PkScript)
 	network.sendAndMine(t, gasAnchorTx, 1)
 	betAnchorTx := buildAnchorTx(t, betLockedUtxo, lockedValue,
-		txAsset(betAsset, 1800000), betAsset+"-1800000-0-1",
+		txAsset(betAsset, 1800000), betAsset+"-1800000-0-0",
 		witnessScript, bootstrapKey, deployer.PkScript)
 	network.sendAndMine(t, betAnchorTx, 2)
 

@@ -15,6 +15,8 @@ replace github.com/sat20-labs/satoshinet => ../../satoshinet
 
 replace github.com/sat20-labs/indexer => ../../indexer
 
+replace github.com/sat20-labs/rgb11 => ../../rgb11
+
 require (
 	github.com/andybalholm/brotli v1.1.0
 	github.com/btcsuite/btcd v0.24.2
@@ -27,6 +29,7 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
 	github.com/sat20-labs/indexer v0.3.0-20240926
+	github.com/sat20-labs/rgb11 v0.0.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tyler-smith/go-bip39 v1.1.0
 	golang.org/x/crypto v0.44.0

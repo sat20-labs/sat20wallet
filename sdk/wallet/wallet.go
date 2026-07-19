@@ -115,7 +115,7 @@ type InternalWallet struct {
 	accounts               map[uint64]*hdkeychain.ExtendedKey // key: purpose<<32+account
 	addresses              map[uint32]btcutil.Address         // key: index
 	currentIndex           uint32                             // 当前子账户
-	id    			       int64
+	id                     int64
 
 	subWallets map[uint32]*channelWallet
 
@@ -145,7 +145,7 @@ func NewInternalWalletWithPrivKey(privateKey []byte, param *chaincfg.Params) (*I
 		addresses:              make(map[uint32]btcutil.Address),
 		subWallets:             make(map[uint32]*channelWallet),
 		currentIndex:           0,
-		id: 					time.Now().UnixMicro(),
+		id:                     time.Now().UnixMicro(),
 	}
 
 	// 将提供的私钥作为 index 0 的支付私钥（以及 revocation base）使用
@@ -212,7 +212,7 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 		addresses:              make(map[uint32]btcutil.Address),
 		subWallets:             make(map[uint32]*channelWallet),
 		currentIndex:           0,
-		id: 					time.Now().UnixMicro(),
+		id:                     time.Now().UnixMicro(),
 	}
 }
 
@@ -227,7 +227,7 @@ func (p *InternalWallet) Clone() common.Wallet {
 		addresses:              make(map[uint32]btcutil.Address),
 		subWallets:             make(map[uint32]*channelWallet),
 		currentIndex:           p.currentIndex,
-		id: 					p.id,
+		id:                     p.id,
 	}
 }
 
@@ -253,7 +253,7 @@ func (p *InternalWallet) GetId() int64 {
 
 func (p *InternalWallet) GetWalletId() common.WalletId {
 	return common.WalletId{
-		Id: p.id,
+		Id:           p.id,
 		SubAccountId: p.currentIndex,
 	}
 }
@@ -972,7 +972,6 @@ func (p *InternalWallet) SignMessageWithIndex(msg []byte, index uint32) ([]byte,
 	return p.signMessage(privKey, msg).Serialize(), nil
 }
 
-
 func (p *InternalWallet) signMessage(privKey *secp256k1.PrivateKey, msg []byte) *ecdsa.Signature {
 	// Double hash and sign the data.
 	var msgDigest []byte
@@ -1053,6 +1052,56 @@ func (p *InternalWallet) SignPsbt(packet *psbt.Packet) error {
 	privKey := p.getPaymentPrivKey()
 	p.mutex.Unlock()
 	return p.signPsbt(privKey, packet)
+}
+
+// SignPsbtWithTaprootMerkleRoots signs the ordinary BIP86 inputs plus RGB11
+// Tapret key-spend inputs controlled by the same active subaccount key. The
+// map key is the PSBT input index and the value is that carrier's taproot
+// merkle root.
+func (p *InternalWallet) SignPsbtWithTaprootMerkleRoots(packet *psbt.Packet, roots map[int][]byte) error {
+	return p.SignPsbtWithTaprootMerkleRootsAtIndex(packet, roots, p.GetSubAccount())
+}
+
+// SignPsbtWithTaprootMerkleRootsAtIndex signs Tapret carriers with the same
+// BIP86 derivation index used by their corresponding ordinary P2TR address.
+func (p *InternalWallet) SignPsbtWithTaprootMerkleRootsAtIndex(packet *psbt.Packet, roots map[int][]byte, derivationIndex uint32) error {
+	p.mutex.Lock()
+	privKey := p.getPaymentPrivKeyWithIndex(derivationIndex)
+	p.mutex.Unlock()
+	if privKey == nil {
+		return fmt.Errorf("wallet private key unavailable at BIP86 derivation index %d", derivationIndex)
+	}
+	if err := p.signPsbt(privKey, packet); err != nil {
+		return err
+	}
+	tx := packet.UnsignedTx
+	prevOutputFetcher := PsbtPrevOutputFetcher(packet)
+	sigHashes := txscript.NewTxSigHashes(tx, prevOutputFetcher)
+	for index, root := range roots {
+		if index < 0 || index >= len(packet.Inputs) || len(root) != sha256.Size {
+			return fmt.Errorf("invalid RGB11 Tapret signing root for input %d", index)
+		}
+		input := &packet.Inputs[index]
+		if input.WitnessUtxo == nil {
+			return fmt.Errorf("RGB11 Tapret input %d has no witness UTXO", index)
+		}
+		expectedKey := txscript.ComputeTaprootOutputKey(privKey.PubKey(), root)
+		expectedScript, err := txscript.PayToTaprootScript(expectedKey)
+		if err != nil || !bytes.Equal(expectedScript, input.WitnessUtxo.PkScript) {
+			return fmt.Errorf("RGB11 Tapret input %d is not controlled by BIP86 derivation index %d", index, derivationIndex)
+		}
+		signature, err := txscript.RawTxInTaprootSignature(
+			tx, sigHashes, index, input.WitnessUtxo.Value,
+			input.WitnessUtxo.PkScript, root, input.SighashType, privKey,
+		)
+		if err != nil {
+			return fmt.Errorf("sign RGB11 Tapret input %d: %w", index, err)
+		}
+		input.TaprootInternalKey = schnorr.SerializePubKey(privKey.PubKey())
+		input.TaprootMerkleRoot = append([]byte(nil), root...)
+		input.TaprootKeySpendSig = signature
+	}
+	return nil
 }
 
 func (p *InternalWallet) SignPsbtWithIndex(packet *psbt.Packet, index uint32) error {

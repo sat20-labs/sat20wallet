@@ -134,7 +134,7 @@ func (p *Manager) MintAsset_brc20(destAddr string, assetName *indexer.AssetName,
 
 	var outputs []*TxOutput
 	for _, utxo := range defaultUtxos {
-		txOut, err := p.l1IndexerClient.GetTxOutput(utxo)
+		txOut, err := p.getL1TxOutput(utxo)
 		if err != nil {
 			Log.Errorf("GetTxOutFromRawTx %s failed, %v", utxo, err)
 			return nil, err
@@ -184,7 +184,7 @@ func (p *Manager) MintTransfer_brc20(srcAddr, destAddr string,
 
 	var outputs []*TxOutput
 	for _, utxo := range defaultUtxos {
-		txOut, err := p.l1IndexerClient.GetTxOutput(utxo)
+		txOut, err := p.getL1TxOutput(utxo)
 		if err != nil {
 			Log.Errorf("GetTxOutFromRawTx %s failed, %v", utxo, err)
 			return nil, err

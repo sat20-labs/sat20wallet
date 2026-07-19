@@ -132,6 +132,9 @@ func (p *Manager) BatchUnlockFromChannelV2(channelId string, destAddr []string, 
 	if asset == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
+	if err := rejectRGB11STPAsset(asset); err != nil {
+		return "", 0, err
+	}
 	tickerInfo := p.getTickerInfo(asset)
 	if tickerInfo == nil {
 		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
@@ -235,6 +238,9 @@ func (p *Manager) LockToChannel(channelId string, assetName string, amt string,
 	if asset == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
+	if err := rejectRGB11STPAsset(asset); err != nil {
+		return "", 0, err
+	}
 	tickerInfo := p.getTickerInfo(asset)
 	if tickerInfo == nil {
 		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
@@ -307,6 +313,9 @@ func (p *Manager) LockToChannelWithExpand(channelId string, assetName string, am
 	if asset == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
+	if err := rejectRGB11STPAsset(asset); err != nil {
+		return "", 0, err
+	}
 	tickerInfo := p.getTickerInfo(asset)
 	if tickerInfo == nil {
 		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
@@ -364,6 +373,9 @@ func (p *Manager) SplicingOut(channelId string, destAddr string,
 	if asset == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
+	if err := rejectRGB11STPAsset(asset); err != nil {
+		return "", 0, err
+	}
 	tickerInfo := p.getTickerInfo(asset)
 	if tickerInfo == nil {
 		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
@@ -416,7 +428,7 @@ func (p *Manager) SplicingOut(channelId string, destAddr string,
 		}
 	} else {
 		for _, utxo := range fees {
-			info, err := p.l1IndexerClient.GetTxOutput(utxo)
+			info, err := p.getL1TxOutput(utxo)
 			if err != nil {
 				Log.Errorf("SplicingOut: GetTxOutput %s failed, %v", utxo, err)
 				return "", 0, err
@@ -460,6 +472,9 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 	if asset == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
+	if err := rejectRGB11STPAsset(asset); err != nil {
+		return "", 0, err
+	}
 	tickerInfo := p.getTickerInfo(asset)
 	if tickerInfo == nil {
 		return "", 0, fmt.Errorf("can't get ticker %s info", assetName)
@@ -500,7 +515,7 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 		} else {
 			all := append(utxos, fees...)
 			for _, utxo := range all {
-				info, err := p.l1IndexerClient.GetTxOutput(utxo)
+				info, err := p.getL1TxOutput(utxo)
 				if err != nil {
 					Log.Errorf("SplicingIn: GetTxOutput %s failed, %v", utxo, err)
 					return "", 0, err
@@ -530,7 +545,7 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 			}
 		} else {
 			for _, utxo := range utxos {
-				info, err := p.l1IndexerClient.GetTxOutput(utxo)
+				info, err := p.getL1TxOutput(utxo)
 				if err != nil {
 					Log.Errorf("SplicingIn: GetTxOutput %s failed, %v", utxo, err)
 					return "", 0, err
@@ -547,7 +562,7 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 			}
 		} else {
 			for _, utxo := range fees {
-				info, err := p.l1IndexerClient.GetTxOutput(utxo)
+				info, err := p.getL1TxOutput(utxo)
 				if err != nil {
 					Log.Errorf("SplicingIn: GetTxOutput %s failed, %v", utxo, err)
 					return "", 0, err
@@ -596,6 +611,9 @@ func (p *Manager) ExpandChannel(channelId string, assetName string, utxo string,
 	asset := ParseAssetString(assetName)
 	if asset == nil {
 		return "", "", 0, fmt.Errorf("invalid asset name %s", assetName)
+	}
+	if err := rejectRGB11STPAsset(asset); err != nil {
+		return "", "", 0, err
 	}
 
 	txid, amt, id, err := p.FunderInitExpandingProcess(channel, asset, utxo, reason, memo)
@@ -766,6 +784,12 @@ func (p *Manager) ExpandAsset(channelId string, assetName string) ([]string, str
 			}
 		}
 	} else {
+		if asset == nil {
+			return nil, "", fmt.Errorf("invalid asset name %s", assetName)
+		}
+		if err := rejectRGB11STPAsset(asset); err != nil {
+			return nil, "", err
+		}
 		anchorIds, value, err = p.ExpandAssetInChannel(channel, asset)
 		if value != nil {
 			Log.Infof("expandAsset %s %s", asset.String(), value.String())
@@ -917,7 +941,7 @@ func (p *Manager) RebuildChannelWithUtxo(fundingUtxo string) (string, error) {
 
 	var output *TxOutput
 	if fundingUtxo != "" {
-		output, err = p.l1IndexerClient.GetTxOutput(fundingUtxo)
+		output, err = p.getL1TxOutput(fundingUtxo)
 		if err != nil {
 			return "", err
 		}

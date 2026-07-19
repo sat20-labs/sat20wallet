@@ -2125,7 +2125,7 @@ func (p *Manager) RebuildTxOutput(tx *wire.MsgTx, preFectcher map[string]*TxOutp
 		info, ok := preFectcher[utxo]
 		if !ok {
 			var err error
-			info, err = p.l1IndexerClient.GetTxOutput(utxo)
+			info, err = p.getL1TxOutput(utxo)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -2309,7 +2309,7 @@ func (p *Manager) SelectUtxosForGarbage(
 	// 先选满足条件的主utxo
 	if len(inputs) != 0 {
 		for _, u := range inputs {
-			output, err := p.l1IndexerClient.GetTxOutput(u)
+			output, err := p.getL1TxOutput(u)
 			if err != nil {
 				continue
 			}
@@ -4333,7 +4333,7 @@ func (p *Manager) GetOrGenerateStubs(address string, c int,
 
 	stubs := make([]*TxOutput, 0, c)
 	for _, utxo := range stubUtxos {
-		info, err := p.l1IndexerClient.GetTxOutput(utxo)
+		info, err := p.getL1TxOutput(utxo)
 		if err != nil {
 			// 可能刚广播，直接构造
 			info = indexer.NewTxOutput(330)

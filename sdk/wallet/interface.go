@@ -70,9 +70,22 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 		Log.Errorf("NewKVDB failed")
 		return nil
 	}
-	err := mgr.init()
+	rgbManager, err := newRGB11Manager(db, mgr.utxoLockerL1, newIndexerBitcoinEvidenceProvider(l1IndexerMgr))
+	if err != nil {
+		Log.Errorf("create RGB11 manager failed: %v", err)
+		return nil
+	}
+	mgr.rgbManager = rgbManager
+	err = mgr.init()
 	if err != nil {
 		return nil
+	}
+	if err := mgr.selectRGB11Scope(); err != nil {
+		Log.Errorf("select RGB11 wallet scope failed: %v", err)
+		return nil
+	}
+	if err := mgr.rebuildRGB11Locks(); err != nil {
+		Log.Errorf("rebuild RGB11 locks failed: %v", err)
 	}
 
 	return mgr
@@ -127,6 +140,8 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 	p.wallet = wallet
 	p.status.CurrentWallet = wallet.GetId()
 	p.status.CurrentAccount = 0
+	_ = p.selectRGB11Scope()
+	_ = p.rebuildRGB11Locks()
 	p.saveStatus()
 
 	return p.status.CurrentWallet, mnemonic, nil
@@ -142,6 +157,8 @@ func (p *Manager) CreateMonitorWallet(address string) (int64, error) {
 	p.wallet = wallet
 	p.status.CurrentWallet = wallet.GetId()
 	p.status.CurrentAccount = 0
+	_ = p.selectRGB11Scope()
+	_ = p.rebuildRGB11Locks()
 	p.saveStatus()
 
 	return p.status.CurrentWallet, nil
@@ -173,6 +190,8 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	p.wallet = wallet
 	p.status.CurrentWallet = wallet.GetId()
 	p.status.CurrentAccount = 0
+	_ = p.selectRGB11Scope()
+	_ = p.rebuildRGB11Locks()
 	p.saveStatus()
 
 	return p.status.CurrentWallet, nil
@@ -201,6 +220,8 @@ func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (i
 	p.wallet = wallet
 	p.status.CurrentWallet = wallet.GetId()
 	p.status.CurrentAccount = 0
+	_ = p.selectRGB11Scope()
+	_ = p.rebuildRGB11Locks()
 	p.saveStatus()
 
 	return p.status.CurrentWallet, nil
@@ -295,6 +316,8 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 
 	p.wallet = info.Wallet
 	p.wallet.SetSubAccount(p.status.CurrentAccount)
+	_ = p.selectRGB11Scope()
+	_ = p.rebuildRGB11Locks()
 
 	return p.status.CurrentWallet, nil
 }
@@ -333,6 +356,8 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 	p.status.CurrentAccount = 0
 	p.wallet = w.Wallet
 	p.wallet.SetSubAccount(0)
+	_ = p.selectRGB11Scope()
+	_ = p.rebuildRGB11Locks()
 	p.saveStatus()
 
 	return nil
@@ -436,6 +461,8 @@ func (p *Manager) SwitchAccount(id uint32) {
 
 	p.wallet.SetSubAccount(id)
 	p.status.CurrentAccount = id
+	_ = p.selectRGB11Scope()
+	_ = p.rebuildRGB11Locks()
 	p.saveStatus()
 }
 

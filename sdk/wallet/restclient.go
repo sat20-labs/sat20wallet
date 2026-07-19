@@ -1095,8 +1095,169 @@ func (p *IndexerClient) AllowDeployTick(assetName *swire.AssetName) error {
 }
 
 func (p *IndexerClient) GetUtxoSpentTx(utxo string) (string, error) {
-	// for test
-	return "", fmt.Errorf("not implemented")
+	req := indexerwire.BitcoinOutpointsReq{Outpoints: []string{utxo}}
+	buff, err := json.Marshal(&req)
+	if err != nil {
+		return "", err
+	}
+	url := p.GetUrl("/v3/bitcoin/outspends/batch")
+	rsp, err := p.Http.SendPostRequest(url, buff)
+	if err != nil {
+		return "", err
+	}
+	var result indexerwire.BitcoinOutspendsResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		return "", err
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("%s", result.Msg)
+	}
+	if len(result.Data) != 1 || result.Data[0].Outpoint != utxo {
+		return "", fmt.Errorf("invalid outspend response for %s", utxo)
+	}
+	item := result.Data[0]
+	if item.Error != "" {
+		return "", fmt.Errorf("%s", item.Error)
+	}
+	if !item.Exists {
+		return "", fmt.Errorf("Bitcoin outpoint %s does not exist", utxo)
+	}
+	if !item.Spent {
+		return "", nil
+	}
+	if item.SpendingTx == "" {
+		return "unknown", nil
+	}
+	return item.SpendingTx, nil
+}
+
+func (p *IndexerClient) GetBitcoinUTXOStatus(outpoint string) (*indexerwire.BitcoinUTXOStatus, error) {
+	req := indexerwire.BitcoinOutpointsReq{Outpoints: []string{outpoint}}
+	var result indexerwire.BitcoinUTXOStatusResp
+	if err := p.postBitcoinEvidence("/v3/bitcoin/utxos/status", &req, &result); err != nil {
+		return nil, err
+	}
+	if len(result.Data) != 1 || result.Data[0].Outpoint != outpoint {
+		return nil, fmt.Errorf("invalid Bitcoin UTXO status response for %s", outpoint)
+	}
+	if result.Data[0].Error != "" {
+		return nil, fmt.Errorf("%s", result.Data[0].Error)
+	}
+	return result.Data[0], nil
+}
+
+func (p *IndexerClient) GetBitcoinRawTx(txid string) (*indexerwire.BitcoinRawTx, error) {
+	req := indexerwire.BitcoinTxIDsReq{TxIDs: []string{txid}}
+	var result indexerwire.BitcoinRawTxResp
+	if err := p.postBitcoinEvidence("/v3/bitcoin/rawtx/batch", &req, &result); err != nil {
+		return nil, err
+	}
+	if len(result.Data) != 1 || result.Data[0].TxID != txid {
+		return nil, fmt.Errorf("invalid Bitcoin raw transaction response for %s", txid)
+	}
+	if result.Data[0].Error != "" {
+		return nil, fmt.Errorf("%s", result.Data[0].Error)
+	}
+	return result.Data[0], nil
+}
+
+func (p *IndexerClient) GetBitcoinTxStatus(txid string) (*indexerwire.BitcoinTxStatus, error) {
+	req := indexerwire.BitcoinTxIDsReq{TxIDs: []string{txid}}
+	var result indexerwire.BitcoinTxStatusResp
+	if err := p.postBitcoinEvidence("/v3/bitcoin/tx/status/batch", &req, &result); err != nil {
+		return nil, err
+	}
+	if len(result.Data) != 1 || result.Data[0].TxID != txid {
+		return nil, fmt.Errorf("invalid Bitcoin transaction status response for %s", txid)
+	}
+	// A missing transaction is a lifecycle state, not a transport failure.
+	// The validator will still reject it whenever a witness is required.
+	return result.Data[0], nil
+}
+
+func (p *IndexerClient) GetBitcoinOutspend(outpoint string) (*indexerwire.BitcoinOutspend, error) {
+	req := indexerwire.BitcoinOutpointsReq{Outpoints: []string{outpoint}}
+	var result indexerwire.BitcoinOutspendsResp
+	if err := p.postBitcoinEvidence("/v3/bitcoin/outspends/batch", &req, &result); err != nil {
+		return nil, err
+	}
+	if len(result.Data) != 1 || result.Data[0].Outpoint != outpoint {
+		return nil, fmt.Errorf("invalid Bitcoin outspend response for %s", outpoint)
+	}
+	if result.Data[0].Error != "" {
+		return nil, fmt.Errorf("%s", result.Data[0].Error)
+	}
+	return result.Data[0], nil
+}
+
+func (p *IndexerClient) GetBitcoinTip() (*indexerwire.BitcoinTip, error) {
+	url := p.GetUrl("/v3/bitcoin/tip")
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		return nil, err
+	}
+	var result indexerwire.BitcoinTipResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		return nil, err
+	}
+	if result.Code != 0 || result.Data == nil {
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+	return result.Data, nil
+}
+
+func (p *IndexerClient) BroadcastBitcoinTx(rawTx []byte) (string, error) {
+	req := indexerwire.BitcoinBroadcastReq{RawTx: hex.EncodeToString(rawTx)}
+	var result indexerwire.BitcoinBroadcastResp
+	if err := p.postBitcoinEvidence("/v3/bitcoin/tx/broadcast", &req, &result); err != nil {
+		return "", err
+	}
+	if result.Data == nil || !result.Data.Accepted {
+		if result.Data != nil && result.Data.Error != "" {
+			return "", fmt.Errorf("%s", result.Data.Error)
+		}
+		return "", fmt.Errorf("Bitcoin transaction was not accepted")
+	}
+	return result.Data.TxID, nil
+}
+
+func (p *IndexerClient) postBitcoinEvidence(path string, request, response any) error {
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	rsp, err := p.Http.SendPostRequest(p.GetUrl(path), encoded)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(rsp, response); err != nil {
+		return err
+	}
+	switch value := response.(type) {
+	case *indexerwire.BitcoinUTXOStatusResp:
+		if value.Code != 0 {
+			return fmt.Errorf("%s", value.Msg)
+		}
+	case *indexerwire.BitcoinRawTxResp:
+		if value.Code != 0 {
+			return fmt.Errorf("%s", value.Msg)
+		}
+	case *indexerwire.BitcoinTxStatusResp:
+		if value.Code != 0 {
+			return fmt.Errorf("%s", value.Msg)
+		}
+	case *indexerwire.BitcoinOutspendsResp:
+		if value.Code != 0 {
+			return fmt.Errorf("%s", value.Msg)
+		}
+	case *indexerwire.BitcoinBroadcastResp:
+		if value.Code != 0 {
+			return fmt.Errorf("%s", value.Msg)
+		}
+	default:
+		return fmt.Errorf("unsupported Bitcoin evidence response")
+	}
+	return nil
 }
 
 func (p *IndexerClient) GetServiceIncoming(addr string) (int, int64, error) {

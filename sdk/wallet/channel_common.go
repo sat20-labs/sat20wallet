@@ -296,7 +296,7 @@ func (p *Manager) AllowOpen(feeRate, amt int64, outpoints []string, feeCfg *Chan
 	infos := make([]*TxOutput, 0, len(outpoints))
 	value := int64(0)
 	for _, utxo := range outpoints {
-		info, err := p.l1IndexerClient.GetTxOutput(utxo)
+		info, err := p.getL1TxOutput(utxo)
 		if err != nil {
 			return nil, err
 		}

@@ -2,9 +2,11 @@ package wallet
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	nethttp "net/http"
 	"strconv"
+	"strings"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -12,6 +14,8 @@ import (
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
+
+var ErrDKVSRecordNotFound = errors.New("DKVS record not found")
 
 type SatsNetDKVSClient struct {
 	*RESTClient
@@ -267,7 +271,21 @@ func (p *SatsNetDKVSClient) ListSubscriptions() ([]dkvsindexer.Subscription, err
 
 func newSignedRecordWithAutopay(wallet common.Wallet, key string, value []byte,
 	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+	record, err := NewDKVSSignedRecord(wallet, key, value, opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := attachDKVSAutopayFeeProof(wallet, record, autopay); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
 
+func attachDKVSAutopayFeeProof(wallet common.Wallet, record *swire.DKVSRecord,
+	autopay DKVSAutopayOptions) error {
+	if wallet == nil || record == nil {
+		return dkvsindexer.ErrInvalidFeeProof
+	}
 	params := autopay.AddressParams
 	if params == nil {
 		params = &chaincfg.TestNetParams
@@ -278,27 +296,25 @@ func newSignedRecordWithAutopay(wallet common.Wallet, key string, value []byte,
 		poolContract = defaults.AutopayContract
 	}
 	if poolContract == "" {
-		return nil, dkvsindexer.ErrInvalidFeeProof
+		return dkvsindexer.ErrInvalidFeeProof
 	}
-	record, err := NewDKVSSignedRecord(wallet, key, value, opts)
+	parsed, err := dkvsindexer.ParseKey(record.Key)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	parsed, err := dkvsindexer.ParseKey(key)
+	proof, err := dkvsindexer.NewAutopayFeeProof(
+		record.Key, parsed.Namespace, swire.MaxDKVSRecordSize, record.ExpiryHeight, poolContract, "",
+	)
 	if err != nil {
-		return nil, err
-	}
-	proof, err := dkvsindexer.NewAutopayFeeProof(key, parsed.Namespace, swire.MaxDKVSRecordSize, record.ExpiryHeight, poolContract, "")
-	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := AttachDKVSFeeProof(record, proof); err != nil {
-		return nil, err
+		return err
 	}
 	if err := SignDKVSRecord(wallet, record); err != nil {
-		return nil, err
+		return err
 	}
-	return record, nil
+	return nil
 }
 
 func (p *SatsNetDKVSClient) PutSignedRecord(wallet common.Wallet, key string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
@@ -462,9 +478,33 @@ func (p *SatsNetDKVSClient) PutBlob(wallet common.Wallet, objectID string, data 
 	if len(data) == 0 {
 		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
 	}
-	chunks := chunkBlobData(data, dkvsindexer.MaxRecordValueSize)
+	chunks := chunkBlobData(data, 0)
 	manifestRecord, chunkRecords, err := p.PutChunkedBlob(wallet, objectID, chunks, metadata, opts)
 	if err != nil {
+		return nil, nil, err
+	}
+	return manifestRecord, chunkRecords, nil
+}
+
+// PutBlobWithAutopay attaches a fee proof to the manifest and every chunk,
+// then re-signs each record with the owning wallet before publication.
+func (p *SatsNetDKVSClient) PutBlobWithAutopay(wallet common.Wallet, objectID string, data []byte,
+	metadata json.RawMessage, opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
+	if len(data) == 0 {
+		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
+	}
+	chunks := chunkBlobData(data, 0)
+	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(wallet, objectID, chunks, metadata, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	all := append([]*swire.DKVSRecord{manifestRecord}, chunkRecords...)
+	for _, record := range all {
+		if err := attachDKVSAutopayFeeProof(wallet, record, autopay); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := p.PutBlobRecords(manifestRecord, chunkRecords); err != nil {
 		return nil, nil, err
 	}
 	return manifestRecord, chunkRecords, nil
@@ -482,6 +522,15 @@ func (p *SatsNetDKVSClient) PutChunkedBlob(wallet common.Wallet, objectID string
 }
 
 func (p *SatsNetDKVSClient) GetBlob(accountID, objectID string, policy dkvsindexer.BlobPolicy) (*dkvsindexer.BlobManifest, []byte, error) {
+	if policy.MaxTotalSize == 0 {
+		policy.MaxTotalSize = dkvsindexer.DefaultBlobMaxTotalSize
+	}
+	if policy.MaxChunkSize == 0 {
+		policy.MaxChunkSize = dkvsindexer.DefaultBlobMaxChunkSize
+	}
+	if policy.MaxChunks == 0 {
+		policy.MaxChunks = dkvsindexer.DefaultBlobMaxChunks
+	}
 	manifestKey, err := dkvsindexer.BlobManifestKey(accountID, objectID)
 	if err != nil {
 		return nil, nil, err
@@ -744,6 +793,9 @@ func decodeDKVSResp(url *URL, rsp []byte, out interface{}) error {
 	}
 	if base.Code != 0 {
 		Log.Errorf("%v response message %s", url, base.Msg)
+		if strings.Contains(strings.ToLower(base.Msg), "not found") {
+			return fmt.Errorf("%w: %s", ErrDKVSRecordNotFound, base.Msg)
+		}
 		return fmt.Errorf("%s", base.Msg)
 	}
 	return nil
@@ -807,7 +859,12 @@ func serviceSubscriptionTarget(serviceName string) (string, error) {
 
 func chunkBlobData(data []byte, chunkSize int) [][]byte {
 	if chunkSize <= 0 {
-		chunkSize = dkvsindexer.MaxRecordValueSize
+		// MaxDKVSRecordSize limits the complete wire record, not just Value.
+		// Reserve the maximum key/pubkey/signature/fee-proof sizes plus fixed
+		// and varint fields so signed chunks remain serializable at all allowed
+		// DKVS field sizes.
+		chunkSize = swire.MaxDKVSRecordSize - swire.MaxDKVSKeySize - swire.MaxDKVSPubKeySize -
+			swire.MaxDKVSSignatureSize - swire.MaxDKVSFeeProofSize - 64
 	}
 	chunks := make([][]byte, 0, (len(data)+chunkSize-1)/chunkSize)
 	for len(data) > 0 {
