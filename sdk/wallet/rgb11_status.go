@@ -52,6 +52,15 @@ func (p *Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResult, e
 				state.Status = "pending"
 				result.Pending++
 			}
+			lockReason := rgb11wallet.LockReasonPending
+			if settled {
+				lockReason = rgb11wallet.LockReasonRGB
+			}
+			for _, outpoint := range state.OutputOutPoints {
+				if err := p.utxoLockerL1.SetLockReason(outpoint, lockReason); err != nil {
+					return nil, err
+				}
+			}
 			if err := p.rgbManager.projectionStore.SaveTransferState(state); err != nil {
 				return nil, err
 			}
@@ -97,10 +106,17 @@ func (p *Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResult, e
 			if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
 				return nil, err
 			}
-			if pending.State.Status == "settled" {
+			if pending.State.Status == "settled" &&
+				(!pending.State.AddressMode || pending.State.DeliveryAcknowledged) {
 				transferIDs := pending.State.BatchTransferIDs
 				if len(transferIDs) == 0 {
 					transferIDs = []string{pending.State.TransferID}
+				}
+				if pending.State.AddressMode {
+					pending.State.DeliveryCacheCompacted = true
+					if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+						return nil, err
+					}
 				}
 				if err := p.rgbManager.projectionStore.CompactSettledRecipientConsignments(transferIDs); err != nil {
 					return nil, err
@@ -147,7 +163,7 @@ func (p *Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResult, e
 			} else {
 				proof.Status = "inconsistent"
 				result.Inconsistent = append(result.Inconsistent, proof.OutPoint)
-				_ = p.utxoLockerL1.LockUtxo(proof.OutPoint, rgb11wallet.LockReasonRGB)
+				_ = p.utxoLockerL1.SetLockReason(proof.OutPoint, rgb11wallet.LockReasonRGB)
 			}
 			if err := p.rgbManager.projectionStore.SaveProofState(proof); err != nil {
 				return nil, err
@@ -162,9 +178,15 @@ func (p *Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResult, e
 		if status != nil && status.Confirmed {
 			proof.Status = "settled"
 			proof.Confirmations = status.Confirmations
+			if err := p.utxoLockerL1.SetLockReason(proof.OutPoint, rgb11wallet.LockReasonRGB); err != nil {
+				return nil, err
+			}
 		} else {
 			proof.Status = "valid"
 			proof.Confirmations = 0
+			if err := p.utxoLockerL1.SetLockReason(proof.OutPoint, rgb11wallet.LockReasonPending); err != nil {
+				return nil, err
+			}
 			if wasSettled {
 				result.Reorged++
 			}
