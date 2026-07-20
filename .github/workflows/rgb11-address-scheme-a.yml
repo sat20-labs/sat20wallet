@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   statuses: write
 
 jobs:
@@ -90,18 +90,37 @@ jobs:
         working-directory: sat20wallet/pwa
         run: npm run verify:rgb11-l1
 
-      - name: Commit final integration
+      - name: Package reviewed files
         working-directory: sat20wallet
-        shell: bash
         run: |
-          if git diff --quiet; then
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m 'finish RGB11 address-mode PWA integration'
-          git push origin HEAD:agent/rgb11-dkvs-transfer-a
+          tar -czf /tmp/rgb11-reviewed-files.tgz \
+            sdk/wallet/rgb11_address_api.go \
+            pwa/components/wallet/RGB11SendDialog.vue \
+            pwa/composables/hooks/useRgb11Assets.ts \
+            pwa/composables/hooks/useUnifiedAssets.ts \
+            pwa/locales/en.json \
+            pwa/locales/zh.json \
+            pwa/scripts/verify/rgb11-l1-smoke.mjs \
+            pwa/public/wasm/sat20wallet.wasm
+          git diff --binary -- \
+            sdk/wallet/rgb11_address_api.go \
+            pwa/components/wallet/RGB11SendDialog.vue \
+            pwa/composables/hooks/useRgb11Assets.ts \
+            pwa/composables/hooks/useUnifiedAssets.ts \
+            pwa/locales/en.json \
+            pwa/locales/zh.json \
+            pwa/scripts/verify/rgb11-l1-smoke.mjs \
+            pwa/public/wasm/sat20wallet.wasm \
+            > /tmp/rgb11-reviewed.patch
+
+      - name: Upload reviewed files
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgb11-reviewed-files-${{ github.run_id }}
+          path: |
+            /tmp/rgb11-reviewed-files.tgz
+            /tmp/rgb11-reviewed.patch
+          retention-days: 3
 
       - name: Publish commit status
         if: always()
