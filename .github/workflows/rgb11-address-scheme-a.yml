@@ -1,0 +1,69 @@
+name: RGB11 address transfer scheme A
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wallet-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout wallet
+        uses: actions/checkout@v4
+        with:
+          path: sat20wallet
+
+      - name: Checkout indexer
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/indexer
+          path: indexer
+
+      - name: Checkout RGB11 engine
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/rgb11
+          path: rgb11
+
+      - name: Checkout companion SatoshiNet branch
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/satoshinet
+          ref: agent/rgb11-dkvs-transfer-a
+          path: satoshinet
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sat20wallet/sdk/go.mod
+          cache-dependency-path: |
+            sat20wallet/sdk/go.sum
+            satoshinet/go.sum
+            indexer/go.sum
+            rgb11/go.sum
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          cd sat20wallet
+          files=$(git diff --name-only origin/main...HEAD -- '*.go')
+          if [ -n "$files" ]; then
+            unformatted=$(gofmt -l $files)
+            if [ -n "$unformatted" ]; then
+              echo "Unformatted files:"
+              echo "$unformatted"
+              exit 1
+            fi
+          fi
+
+      - name: Vet wallet package
+        working-directory: sat20wallet/sdk
+        run: go vet ./wallet/...
+
+      - name: Test wallet package
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet/... -count=1
