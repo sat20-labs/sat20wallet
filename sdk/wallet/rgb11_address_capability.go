@@ -43,9 +43,9 @@ type RGB11AddressEndpoint struct {
 	CapabilityFlags      uint8  `json:"capability_flags"`
 	CapabilityRecordKey  string `json:"capability_record_key"`
 	CapabilityRecordHash string `json:"capability_record_hash"`
-	Temporary             bool   `json:"temporary"`
-	ExpiryHeight          uint64 `json:"expiry_height"`
-	TTL                   uint64 `json:"ttl"`
+	Temporary            bool   `json:"temporary"`
+	ExpiryHeight         uint64 `json:"expiry_height"`
+	TTL                  uint64 `json:"ttl"`
 }
 
 func encodeRGB11ReceiveCapability(capability RGB11ReceiveCapability) ([]byte, error) {
@@ -188,16 +188,16 @@ func (p *Manager) ResolveRGB11AddressEndpoint(client *SatsNetDKVSClient, address
 	}
 	recordHash := dkvsindexer.RecordHash(record)
 	return &RGB11AddressEndpoint{
-		AccountID:              accountID,
-		Address:                address,
-		MailboxID:              accountID,
-		CompressedPubKey:       pubKey,
-		PkScript:               pkScript,
-		CapabilityFlags:        capability.Flags,
-		CapabilityRecordKey:    key,
-		CapabilityRecordHash:   hex.EncodeToString(recordHash[:]),
-		Temporary:              len(record.FeeProof) == 0,
-		ExpiryHeight:           record.ExpiryHeight,
-		TTL:                    record.TTL,
+		AccountID:            accountID,
+		Address:              address,
+		MailboxID:            accountID,
+		CompressedPubKey:     pubKey,
+		PkScript:             pkScript,
+		CapabilityFlags:      capability.Flags,
+		CapabilityRecordKey:  key,
+		CapabilityRecordHash: hex.EncodeToString(recordHash[:]),
+		Temporary:            len(record.FeeProof) == 0,
+		ExpiryHeight:         record.ExpiryHeight,
+		TTL:                  record.TTL,
 	}, nil
 }

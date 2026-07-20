@@ -387,11 +387,11 @@ func (p *Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *SatsNet
 		return nil, nil, ErrRGB11AddressMailbox
 	}
 	request, err := p.CreateRGB11Invoice(RGB11InvoiceRequest{
-		Mode:       "witness",
-		ContractID: receipt.ContractID,
-		SchemaID:   receipt.SchemaID,
-		AmountRaw:  strconv.FormatUint(amount, 10),
-		Expiry:     time.Now().Add(24 * time.Hour).Unix(),
+		Mode:        "witness",
+		ContractID:  receipt.ContractID,
+		SchemaID:    receipt.SchemaID,
+		AmountRaw:   strconv.FormatUint(amount, 10),
+		Expiry:      time.Now().Add(24 * time.Hour).Unix(),
 		WitnessVout: vout,
 	})
 	if err != nil {
