@@ -42,8 +42,54 @@ func (s *ProjectionStore) ExportSnapshot() ([]SnapshotRecord, error) {
 		})
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// A recipient Consignment kept only for mailbox redelivery is cache, not
+	// canonical wallet recovery state. Keep local change history, signed tx,
+	// change seals and lifecycle metadata, but strip the address-mode delivery
+	// copy and its unreferenced object record from snapshots.
+	deliveryObjects := make(map[string]struct{})
+	canonicalObjects := make(map[string]struct{})
+	for index := range records {
+		if !strings.HasPrefix(records[index].Key, "pending-") {
+			continue
+		}
+		var pending PendingTransfer
+		if decode(records[index].Value, &pending) != nil || !pending.State.AddressMode {
+			continue
+		}
+		if len(pending.RecipientConsignment) > 0 {
+			hash := sha256.Sum256(pending.RecipientConsignment)
+			deliveryObjects[hex.EncodeToString(hash[:])] = struct{}{}
+		}
+		if len(pending.LocalConsignment) > 0 {
+			hash := sha256.Sum256(pending.LocalConsignment)
+			canonicalObjects[hex.EncodeToString(hash[:])] = struct{}{}
+		}
+		pending.RecipientConsignment = nil
+		encoded, encodeErr := encode(&pending)
+		if encodeErr != nil {
+			return nil, encodeErr
+		}
+		records[index].Value = encoded
+	}
+	filtered := records[:0]
+	for _, record := range records {
+		if strings.HasPrefix(record.Key, "object-") {
+			hash := strings.TrimPrefix(record.Key, "object-")
+			_, delivery := deliveryObjects[hash]
+			_, canonical := canonicalObjects[hash]
+			if delivery && !canonical {
+				continue
+			}
+		}
+		filtered = append(filtered, record)
+	}
+	records = filtered
 	sort.Slice(records, func(i, j int) bool { return records[i].Key < records[j].Key })
-	return records, err
+	return records, nil
 }
 
 func (s *ProjectionStore) ImportSnapshot(records []SnapshotRecord) error {
