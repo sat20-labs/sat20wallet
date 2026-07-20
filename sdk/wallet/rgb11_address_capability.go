@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -131,24 +132,31 @@ func (p *Manager) EnableRGB11AddressReceive(client *SatsNetDKVSClient,
 	if err != nil {
 		return nil, err
 	}
-	mappingOpts, _ := nextRGB11CapabilityRecordOptions(client, mappingKey, mappingValue, options.RecordOptions)
-	if _, err := putRGB11CapabilityRecord(client, wallet, mappingKey, mappingValue, mappingOpts, options.Autopay); err != nil {
+	if _, err := putRGB11CapabilityRecord(
+		client, wallet, mappingKey, mappingValue, options.RecordOptions, options.Autopay,
+	); err != nil {
 		return nil, err
 	}
 	capabilityKey, err := dkvsindexer.PersonalKeyV2(accountID, RGB11ReceiveCapabilityPath)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := putRGB11CapabilityRecord(client, wallet, capabilityKey, value, options.RecordOptions, options.Autopay); err != nil {
+	if _, err := putRGB11CapabilityRecord(
+		client, wallet, capabilityKey, value, options.RecordOptions, options.Autopay,
+	); err != nil {
 		return nil, err
 	}
-	return p.ResolveRGB11AddressEndpoint(client, address, dkvsindexer.RecordVerificationOptions{})
+	verify := dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}
+	return p.ResolveRGB11AddressEndpoint(client, address, verify)
 }
 
 func (p *Manager) ResolveRGB11AddressEndpoint(client *SatsNetDKVSClient, address string,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressEndpoint, error) {
 	if client == nil || address == "" {
 		return nil, ErrRGB11TraditionalReceiveRequired
+	}
+	if verify.Now == 0 {
+		verify.Now = uint64(time.Now().UnixMilli())
 	}
 	accountID, _, err := client.ResolveAccountAddress(GetChainParam().Name, address, verify)
 	if err != nil {
@@ -178,6 +186,7 @@ func (p *Manager) ResolveRGB11AddressEndpoint(client *SatsNetDKVSClient, address
 	if err != nil {
 		return nil, err
 	}
+	recordHash := dkvsindexer.RecordHash(record)
 	return &RGB11AddressEndpoint{
 		AccountID:              accountID,
 		Address:                address,
@@ -186,7 +195,7 @@ func (p *Manager) ResolveRGB11AddressEndpoint(client *SatsNetDKVSClient, address
 		PkScript:               pkScript,
 		CapabilityFlags:        capability.Flags,
 		CapabilityRecordKey:    key,
-		CapabilityRecordHash:   hex.EncodeToString(dkvsindexer.RecordHash(record)[:]),
+		CapabilityRecordHash:   hex.EncodeToString(recordHash[:]),
 		Temporary:              len(record.FeeProof) == 0,
 		ExpiryHeight:           record.ExpiryHeight,
 		TTL:                    record.TTL,
