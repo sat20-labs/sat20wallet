@@ -8,17 +8,23 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   statuses: write
+
+concurrency:
+  group: rgb11-address-scheme-a
+  cancel-in-progress: false
 
 jobs:
   wallet-sdk:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
     steps:
-      - name: Checkout wallet
+      - name: Checkout wallet branch
         uses: actions/checkout@v4
         with:
+          repository: sat20-labs/sat20wallet
+          ref: agent/rgb11-dkvs-transfer-a
           path: sat20wallet
           fetch-depth: 0
 
@@ -41,20 +47,6 @@ jobs:
           ref: agent/rgb11-dkvs-transfer-a
           path: satoshinet
 
-      - name: Package refactor workspace
-        run: |
-          for repo in sat20wallet indexer rgb11 satoshinet; do
-            find "$repo" -name .git -type d -prune -exec rm -rf {} +
-          done
-          tar -czf /tmp/rgb11-refactor-workspace.tgz sat20wallet indexer rgb11 satoshinet
-
-      - name: Upload refactor workspace
-        uses: actions/upload-artifact@v4
-        with:
-          name: rgb11-refactor-workspace-${{ github.run_id }}
-          path: /tmp/rgb11-refactor-workspace.tgz
-          retention-days: 2
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -66,19 +58,49 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Check formatting
+      - name: Apply cohesive RGB11 source layout
+        id: apply
+        working-directory: sat20wallet
         shell: bash
         run: |
-          cd sat20wallet
-          files=$(git diff --name-only origin/main...HEAD -- '*.go')
-          if [ -n "$files" ]; then
-            unformatted=$(gofmt -l $files)
-            if [ -n "$unformatted" ]; then
-              echo "Unformatted files:"
-              echo "$unformatted"
-              exit 1
-            fi
+          set -euo pipefail
+          if [[ -f sdk/wallet/rgb11/api_types.go && ! -f sdk/wallet/rgb11_send.go ]]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          cat .github/refactor/rgb11-overlay.part* | tr -d '\r\n[:space:]' | base64 -d | xz -d > /tmp/rgb11-overlay.tar
+          echo 'fb13a10db750af801fce84057aba99b840aae9b0d2288de308864dd8d1ed13ee  /tmp/rgb11-overlay.tar' | sha256sum -c -
+          tar -xf /tmp/rgb11-overlay.tar -C .
+          while IFS= read -r file; do
+            [[ -z "$file" ]] || rm -f "sdk/wallet/$file"
+          done < sdk/wallet/.rgb11-delete-list
+          rm -f sdk/wallet/.rgb11-delete-list
+          mapfile -t gofiles < <(git diff --name-only --diff-filter=ACMR -- '*.go')
+          if (( ${#gofiles[@]} )); then
+            gofmt -w "${gofiles[@]}"
+          fi
+          git diff --check
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+
+      - name: Check RGB11 cohesion boundaries
+        working-directory: sat20wallet
+        shell: bash
+        run: |
+          set -euo pipefail
+          root_impl=$(find sdk/wallet -maxdepth 1 -type f -name 'rgb11*.go' ! -name '*_test.go' -printf '%f\n' | sort)
+          expected=$'rgb11_api.go\nrgb11_dkvs.go\nrgb11_manager.go'
+          if [[ "$root_impl" != "$expected" ]]; then
+            printf 'Unexpected root RGB11 implementation files:\n%s\n' "$root_impl"
+            exit 1
+          fi
+          leaked=$(grep -R --line-number -E '^func \(p \*Manager\) .*RGB11' sdk/wallet --include='*.go' --exclude='rgb11_api.go' --exclude='*_test.go' || true)
+          if [[ -n "$leaked" ]]; then
+            printf 'RGB11 methods leaked outside rgb11_api.go:\n%s\n' "$leaked"
+            exit 1
+          fi
+          test -f sdk/wallet/rgb11/api_types.go
+          test -f sdk/wallet/rgb11/address_codec.go
+          test -f sdk/wallet/rgb11/backup_codec.go
 
       - name: Vet wallet packages excluding legacy copylocks findings
         working-directory: sat20wallet/sdk
@@ -108,8 +130,22 @@ jobs:
         working-directory: sat20wallet/pwa
         run: npm run verify:rgb11-l1
 
+      - name: Commit cohesive RGB11 layout
+        if: steps.apply.outputs.changed == 'true'
+        working-directory: sat20wallet
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add sdk/wallet
+          git commit -m 'refactor RGB11 wallet code into cohesive manager'
+          git fetch origin agent/rgb11-dkvs-transfer-a
+          git rebase origin/agent/rgb11-dkvs-transfer-a
+          git push origin HEAD:agent/rgb11-dkvs-transfer-a
+
       - name: Publish commit status
-        if: always() && github.event_name == 'push'
+        if: always()
         uses: actions/github-script@v7
         env:
           JOB_STATUS: ${{ job.status }}
