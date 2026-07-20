@@ -173,7 +173,8 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
     assetsStore.setTotalSats(totalSats)
   }
 
-  const snapshotInput = computed(() => currentContext())
+  // Cached L1 state must not be hydrated before the RGB11 mailbox safety gate.
+  const snapshotInput = computed(() => queryEnabled.value ? currentContext() : null)
 
   const persistSnapshot = async (
     context: AssetQueryContext,
