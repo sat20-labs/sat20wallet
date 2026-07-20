@@ -64,25 +64,31 @@ jobs:
             fi
           fi
 
-      - name: Vet wallet package
+      - name: Vet RGB11 subpackage
+        working-directory: sat20wallet/sdk
+        run: go vet ./wallet/rgb11
+
+      - name: Compile wallet root package
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet -run '^$' -count=1
+
+      - name: Test wallet packages
+        id: wallet-tests
         working-directory: sat20wallet/sdk
         shell: bash
         run: |
-          set -o pipefail
-          go vet ./wallet/... 2>&1 | tee /tmp/rgb11-wallet-vet.log
+          set +e
+          go test ./wallet/... -count=1 2>&1 | tee /tmp/rgb11-wallet-tests.log
+          status=${PIPESTATUS[0]}
+          exit $status
 
-      - name: Upload vet diagnostics
-        if: always()
+      - name: Upload wallet test diagnostics
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: rgb11-wallet-vet-${{ github.run_id }}
-          path: /tmp/rgb11-wallet-vet.log
-          if-no-files-found: ignore
+          name: rgb11-wallet-tests-${{ github.run_id }}
+          path: /tmp/rgb11-wallet-tests.log
           retention-days: 3
-
-      - name: Test wallet package
-        working-directory: sat20wallet/sdk
-        run: go test ./wallet/... -count=1
 
       - name: Publish commit status
         if: always() && github.event_name == 'push'
