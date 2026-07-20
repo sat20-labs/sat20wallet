@@ -71,6 +71,7 @@ jobs:
           fi
           ls -l .github/refactor/rgb11-overlay.part*
           wc -c .github/refactor/rgb11-overlay.part*
+          sha256sum .github/refactor/rgb11-overlay.part*
           cat .github/refactor/rgb11-overlay.part* | tr -d '\r\n[:space:]' | base64 -d | xz -d > /tmp/rgb11-overlay.tar
           sha256sum /tmp/rgb11-overlay.tar
           echo 'fb13a10db750af801fce84057aba99b840aae9b0d2288de308864dd8d1ed13ee  /tmp/rgb11-overlay.tar' | sha256sum -c -
@@ -93,7 +94,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rgb11-cohesion-apply-${{ github.run_id }}
-          path: /tmp/rgb11-apply.log
+          path: |
+            /tmp/rgb11-apply.log
+            sat20wallet/.github/refactor/rgb11-overlay.part*
           retention-days: 3
 
       - name: Check RGB11 cohesion boundaries
