@@ -44,8 +44,13 @@ func (p *Manager) GetChannelFromDKVS(channelId string) (*Channel, error) {
 		return nil, err
 	}
 
+	raw, err := DecodeChannelDKVSValue(value.Value)
+	if err != nil {
+		Log.Errorf("DecodeChannelDKVSValue failed. %v", err)
+		return nil, err
+	}
 	var newChannel ChannelInDB
-	if err := DecodeFromBytes(value.Value, &newChannel); err != nil {
+	if err := DecodeFromBytes(raw, &newChannel); err != nil {
 		Log.Errorf("DecodeFromBytes failed. %v", err)
 		return nil, err
 	}

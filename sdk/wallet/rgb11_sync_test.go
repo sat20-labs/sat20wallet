@@ -47,7 +47,7 @@ func TestRGB11WalletHeadUsesOwningWalletDKVSSignature(t *testing.T) {
 	if err := VerifyRGB11WalletHead(head, "wallet-other"); err == nil {
 		t.Fatal("head was accepted for another wallet id")
 	}
-	value, err := json.Marshal(head)
+	value, err := head.StrictEncode()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +81,59 @@ func TestRGB11WalletHeadUsesOwningWalletDKVSSignature(t *testing.T) {
 	}
 	if err := VerifyRGB11WalletHead(next, "wallet-42"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRGB11BackupCodecIsCompactDeterministic(t *testing.T) {
+	snapshot := &RGB11WalletSnapshot{
+		Version: rgb11WalletSnapshotVersion, WalletID: "wallet-42", AccountIndex: 3, EngineBuildID: "rgb11-engine",
+		ProjectionRecords: []rgb11wallet.SnapshotRecord{{Key: "output-test:0", Value: []byte("projected allocation")}},
+		EngineRecords:     []rgb11wallet.SnapshotRecord{{Key: "receive-test", Value: []byte("invoice state")}},
+		TickerInfos:       []*indexer.TickerInfo{{DisplayName: "RGB Test", MaxSupply: "100000", Divisibility: 8}},
+	}
+	first, err := encodeRGB11WalletSnapshotPayload(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := encodeRGB11WalletSnapshotPayload(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) || !bytes.HasPrefix(first, []byte(rgb11SnapshotPayloadMagic)) || bytes.HasPrefix(first, []byte("{")) {
+		t.Fatalf("compact snapshot is not deterministic binary data: %x", first[:min(8, len(first))])
+	}
+	compactSample := &RGB11WalletSnapshot{
+		Version: rgb11WalletSnapshotVersion, WalletID: snapshot.WalletID, EngineBuildID: snapshot.EngineBuildID,
+		ProjectionRecords: []rgb11wallet.SnapshotRecord{{Key: "proof-test", Value: bytes.Repeat([]byte("allocation-proof-"), 512)}},
+	}
+	legacySample, err := json.Marshal(compactSample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactSampleValue, err := encodeRGB11WalletSnapshotPayload(compactSample)
+	if err != nil || len(compactSampleValue) >= len(legacySample) {
+		t.Fatalf("compact snapshot size=%d legacy JSON size=%d err=%v", len(compactSampleValue), len(legacySample), err)
+	}
+	decoded, err := decodeRGB11WalletSnapshotPayload(first)
+	if err != nil || decoded.WalletID != snapshot.WalletID || len(decoded.ProjectionRecords) != 1 ||
+		len(decoded.EngineRecords) != 1 || len(decoded.TickerInfos) != 1 || decoded.TickerInfos[0].DisplayName != "RGB Test" {
+		t.Fatalf("compact snapshot decode=%+v err=%v", decoded, err)
+	}
+	if _, err := decodeRGB11WalletSnapshotPayload([]byte(`{"wallet_id":"wallet-42"}`)); err == nil {
+		t.Fatal("legacy JSON snapshot unexpectedly accepted")
+	}
+
+	operation := [32]byte{9}
+	envelope, err := encodeRGB11EncryptedSnapshot(snapshot.WalletID, operation, []byte("ciphertext"))
+	if err != nil || !bytes.HasPrefix(envelope, []byte(rgb11SnapshotEnvelopeMagic)) {
+		t.Fatalf("compact envelope err=%v value=%x", err, envelope)
+	}
+	walletID, decodedOperation, ciphertext, err := decodeRGB11EncryptedSnapshot(envelope)
+	if err != nil || walletID != snapshot.WalletID || decodedOperation != operation || string(ciphertext) != "ciphertext" {
+		t.Fatalf("compact envelope decode wallet=%s operation=%x ciphertext=%q err=%v", walletID, decodedOperation, ciphertext, err)
+	}
+	if _, _, _, err := decodeRGB11EncryptedSnapshot([]byte(`{"wallet_id":"wallet-42"}`)); err == nil {
+		t.Fatal("legacy JSON envelope unexpectedly accepted")
 	}
 }
 
@@ -220,8 +273,11 @@ func TestRGB11RelayAndAckRoundTripThroughDKVS(t *testing.T) {
 // sequence. Immutable snapshot blobs use unique keys and remain independently
 // retrievable.
 type rgb11MemoryDKVSHTTP struct {
-	mu      sync.Mutex
-	records map[string]*swire.DKVSRecord
+	mu           sync.Mutex
+	records      map[string]*swire.DKVSRecord
+	postGate     <-chan struct{}
+	autopayState *dkvsindexer.AutopayContractState
+	autopayError error
 }
 
 func newRGB11MemoryDKVSHTTP() *rgb11MemoryDKVSHTTP {
@@ -229,6 +285,9 @@ func newRGB11MemoryDKVSHTTP() *rgb11MemoryDKVSHTTP {
 }
 
 func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, error) {
+	if h.postGate != nil {
+		<-h.postGate
+	}
 	if !strings.HasSuffix(url.Path, "/v3/dkvs/records") {
 		return nil, fmt.Errorf("unexpected RGB11 DKVS POST path %s", url.Path)
 	}
@@ -254,6 +313,15 @@ func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, er
 func (h *rgb11MemoryDKVSHTTP) SendGetRequest(url *URL) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if strings.Contains(url.Path, "/v3/contracts/") && strings.HasSuffix(url.Path, "/state") {
+		if h.autopayError != nil {
+			return nil, h.autopayError
+		}
+		if h.autopayState == nil {
+			return rgb11DKVSResponse(1, "contract state not found", nil, 0)
+		}
+		return rgb11DKVSResponse(0, "ok", h.autopayState, 0)
+	}
 	if strings.HasSuffix(url.Path, "/v3/dkvs/records/prefix") {
 		prefix := url.Query["prefix"]
 		records := make([]*swire.DKVSRecord, 0)
@@ -310,6 +378,9 @@ func newRGB11MultiDeviceManager(t *testing.T, priv *btcec.PrivateKey, localWalle
 	if err := manager.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
+	// Automatic DKVS backup is asynchronous. Wait for it before the earlier
+	// database cleanup closes Pebble.
+	t.Cleanup(manager.waitForRGB11AutoBackup)
 	return manager
 }
 
@@ -451,6 +522,7 @@ func TestRGB11ManualFirstBackupEnablesAutomaticBackupAndActivationRestore(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	deviceA.waitForRGB11AutoBackup()
 	head2, _, err := client.GetRGB11WalletHead(priv.PubKey().SerializeCompressed(), walletID, verify)
 	if err != nil {
 		t.Fatal(err)
@@ -459,6 +531,7 @@ func TestRGB11ManualFirstBackupEnablesAutomaticBackupAndActivationRestore(t *tes
 		t.Fatalf("post-enrollment invoice did not auto-backup: head sequence=%d", head2.Seq)
 	}
 	deviceA.autoBackupRGB11AfterMutation()
+	deviceA.waitForRGB11AutoBackup()
 	unchanged, _, err := client.GetRGB11WalletHead(priv.PubKey().SerializeCompressed(), walletID, verify)
 	if err != nil || unchanged.Seq != 2 {
 		t.Fatalf("unchanged automatic backup advanced head: head=%+v err=%v", unchanged, err)
@@ -482,6 +555,7 @@ func TestRGB11ManualFirstBackupEnablesAutomaticBackupAndActivationRestore(t *tes
 	if _, err := deviceB.CreateRGB11Invoice(RGB11InvoiceRequest{AmountRaw: "3", WitnessVout: 1}); err != nil {
 		t.Fatal(err)
 	}
+	deviceB.waitForRGB11AutoBackup()
 	head3, _, err := client.GetRGB11WalletHead(priv.PubKey().SerializeCompressed(), walletID, verify)
 	if err != nil || head3.Seq != 3 {
 		t.Fatalf("restored device did not continue automatic backup: head=%+v err=%v", head3, err)
@@ -496,6 +570,248 @@ func TestRGB11ManualFirstBackupEnablesAutomaticBackupAndActivationRestore(t *tes
 	missing, err := newWallet.ActivateRGB11WalletState(verify)
 	if err != nil || missing.Found || missing.Restored || missing.AutoBackup {
 		t.Fatalf("wallet without a backup should remain manual-first: result=%+v err=%v", missing, err)
+	}
+}
+
+func TestRGB11PaidAutopayEnablesAutomaticBackupOnActivation(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := newRGB11MemoryDKVSHTTP()
+	manager := newRGB11MultiDeviceManager(t, priv, 889)
+	manager.cfg = &sdkcommon.Config{IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"}}
+	manager.http = remote
+	l2 := NewIndexerRPCClientMgr()
+	l2.Set(NewIndexerClient("http", "dkvs.test", "testnet", remote))
+	manager.l2IndexerClient = l2
+
+	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
+	payer := PublicKeyToP2TRAddress_SatsNet(manager.wallet.GetPubKey())
+	remote.autopayState = &dkvsindexer.AutopayContractState{
+		Contract: defaults.AutopayContract, TemplateName: TEMPLATE_CONTRACT_AUTOPAY,
+		ServiceName: defaults.AutopayServiceName, Recipient: defaults.AutopayRecipient,
+		FeeAssetName: defaults.AutopayFeeAssetName, Status: "active",
+		Delegates: map[string]dkvsindexer.AutopayDelegateState{
+			payer: {AmountPerBlock: "100", Balance: "10000", Status: "active"},
+		},
+	}
+
+	activation, err := manager.ActivateRGB11WalletState(dkvsindexer.RecordVerificationOptions{
+		Now: uint64(time.Now().UnixMilli()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !activation.Found || activation.Restored || !activation.AutoBackup || activation.Head == nil || activation.Head.Seq != 1 {
+		t.Fatalf("paid AUTOPAY activation=%+v", activation)
+	}
+	if manager.rgbManager.autoBackup == nil || !manager.rgbManager.autoBackup.Enabled {
+		t.Fatalf("paid AUTOPAY did not enable automatic backup: %+v", manager.rgbManager.autoBackup)
+	}
+	walletID, err := manager.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	head, _, err := client.GetRGB11WalletHead(priv.PubKey().SerializeCompressed(), walletID,
+		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())})
+	if err != nil || head.Seq != 1 {
+		t.Fatalf("automatic first backup head=%+v err=%v", head, err)
+	}
+}
+
+func TestRGB11PaidAutopayFirstBackupRestoresAllocation(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	walletA := dkvsTestWalletFromPriv(t, priv)
+	walletB := dkvsTestWalletFromPriv(t, priv)
+	walletScript, err := AddrToPkScript(walletA.GetAddress(), GetChainParam())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sourceOutpoint = "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
+	evidence := &rgb11FlowEvidence{
+		utxos: map[string]*rgb11wallet.BitcoinUTXO{
+			sourceOutpoint: {OutPoint: sourceOutpoint, Value: 10_000, PkScript: walletScript, Confirmations: 6},
+		},
+		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+	}
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
+	source := indexer.NewTxOutput(10_000)
+	source.OutPointStr = sourceOutpoint
+	source.OutValue.PkScript = walletScript
+	rpc.outputs[sourceOutpoint] = source
+	deviceA := newRGB11FlowManager(t, walletA, rpc, evidence, 11)
+	deviceB := newRGB11FlowManager(t, walletB, rpc, evidence, 99)
+
+	contract, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-example.rgba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := deviceA.ImportRGB11Contract(context.Background(), contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported.Projected != 1 {
+		t.Fatalf("device A projected allocations=%d", imported.Projected)
+	}
+
+	remote := newRGB11MemoryDKVSHTTP()
+	configure := func(manager *Manager) {
+		manager.cfg = &sdkcommon.Config{IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"}}
+		manager.http = remote
+		l2 := NewIndexerRPCClientMgr()
+		l2.Set(NewIndexerClient("http", "dkvs.test", "testnet", remote))
+		manager.l2IndexerClient = l2
+	}
+	configure(deviceA)
+	configure(deviceB)
+	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
+	payer := PublicKeyToP2TRAddress_SatsNet(deviceA.wallet.GetPubKey())
+	remote.autopayState = &dkvsindexer.AutopayContractState{
+		Contract: defaults.AutopayContract, TemplateName: TEMPLATE_CONTRACT_AUTOPAY,
+		ServiceName: defaults.AutopayServiceName, Recipient: defaults.AutopayRecipient,
+		FeeAssetName: defaults.AutopayFeeAssetName, Status: "active",
+		Delegates: map[string]dkvsindexer.AutopayDelegateState{
+			payer: {AmountPerBlock: "100", Balance: "10000", Status: "active"},
+		},
+	}
+	verify := dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}
+	activation, err := deviceA.ActivateRGB11WalletState(verify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !activation.Found || activation.Restored || !activation.AutoBackup || activation.Head == nil {
+		t.Fatalf("paid AUTOPAY activation=%+v", activation)
+	}
+	restored, err := deviceB.ActivateRGB11WalletState(verify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restored.Found || !restored.Restored || !restored.AutoBackup {
+		t.Fatalf("second device activation=%+v", restored)
+	}
+	balance, err := deviceB.GetRGB11AssetBalance(&imported.AssetName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance.Value.String() != "100000" || balance.Precision != 8 {
+		t.Fatalf("restored RGB11 balance=%+v", balance)
+	}
+	locked := deviceB.utxoLockerL1.GetLockedUtxoList()[sourceOutpoint]
+	if locked == nil || locked.Reason != rgb11wallet.LockReasonRGB {
+		t.Fatalf("restored RGB11 carrier lock=%+v", locked)
+	}
+}
+
+func TestRGB11InactiveAutopayRemainsManualFirst(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := newRGB11MemoryDKVSHTTP()
+	manager := newRGB11MultiDeviceManager(t, priv, 890)
+	manager.cfg = &sdkcommon.Config{IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"}}
+	manager.http = remote
+	l2 := NewIndexerRPCClientMgr()
+	l2.Set(NewIndexerClient("http", "dkvs.test", "testnet", remote))
+	manager.l2IndexerClient = l2
+
+	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
+	remote.autopayState = &dkvsindexer.AutopayContractState{
+		Contract: defaults.AutopayContract, TemplateName: TEMPLATE_CONTRACT_AUTOPAY,
+		ServiceName: defaults.AutopayServiceName, Recipient: defaults.AutopayRecipient,
+		FeeAssetName: defaults.AutopayFeeAssetName, Status: "active",
+		Delegates: map[string]dkvsindexer.AutopayDelegateState{},
+	}
+
+	activation, err := manager.ActivateRGB11WalletState(dkvsindexer.RecordVerificationOptions{
+		Now: uint64(time.Now().UnixMilli()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activation.Found || activation.Restored || activation.AutoBackup || activation.Head != nil {
+		t.Fatalf("inactive AUTOPAY activation=%+v", activation)
+	}
+	if manager.rgbManager.autoBackup != nil {
+		t.Fatalf("inactive AUTOPAY enabled automatic backup: %+v", manager.rgbManager.autoBackup)
+	}
+}
+
+func TestRGB11AutopayLookupFailureDoesNotEnableBackup(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := newRGB11MemoryDKVSHTTP()
+	remote.autopayError = errors.New("AUTOPAY state unavailable")
+	manager := newRGB11MultiDeviceManager(t, priv, 891)
+	manager.cfg = &sdkcommon.Config{IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"}}
+	manager.http = remote
+	l2 := NewIndexerRPCClientMgr()
+	l2.Set(NewIndexerClient("http", "dkvs.test", "testnet", remote))
+	manager.l2IndexerClient = l2
+
+	activation, err := manager.ActivateRGB11WalletState(dkvsindexer.RecordVerificationOptions{
+		Now: uint64(time.Now().UnixMilli()),
+	})
+	if err == nil || activation != nil {
+		t.Fatalf("AUTOPAY lookup failure activation=%+v err=%v", activation, err)
+	}
+	if manager.rgbManager.autoBackup != nil {
+		t.Fatalf("AUTOPAY lookup failure enabled automatic backup: %+v", manager.rgbManager.autoBackup)
+	}
+	remote.mu.Lock()
+	recordCount := len(remote.records)
+	remote.mu.Unlock()
+	if recordCount != 0 {
+		t.Fatalf("AUTOPAY lookup failure wrote %d DKVS records", recordCount)
+	}
+}
+
+func TestRGB11AutomaticBackupDoesNotBlockMutation(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := newRGB11MemoryDKVSHTTP()
+	manager := newRGB11MultiDeviceManager(t, priv, 901)
+	manager.cfg = &sdkcommon.Config{IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"}}
+	manager.http = remote
+	options := dkvsindexer.RecordOptions{TTL: uint64((24 * time.Hour) / time.Millisecond)}
+	if _, err := manager.SyncRGB11WalletState("", options); err != nil {
+		t.Fatal(err)
+	}
+
+	gate := make(chan struct{})
+	remote.postGate = gate
+	started := time.Now()
+	if _, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{AmountRaw: "1", WitnessVout: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("mutation waited for automatic backup: %v", elapsed)
+	}
+
+	waited := make(chan struct{})
+	go func() {
+		manager.waitForRGB11AutoBackup()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+		t.Fatal("automatic backup finished while remote writes were blocked")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(gate)
+	select {
+	case <-waited:
+	case <-time.After(time.Second):
+		t.Fatal("automatic backup did not finish after remote writes resumed")
 	}
 }
 

@@ -1,8 +1,6 @@
 package wallet
 
 import (
-	"encoding/json"
-
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -55,7 +53,7 @@ func (p *SatsNetDKVSClient) PutWalletRecoveryBackup(wallet common.Wallet, wallet
 	if walletID == "" || len(encryptedBackup) == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	value, err := json.Marshal(DKVSWalletRecoveryBackup{
+	value, err := encodeDKVSRecoveryBackup(DKVSWalletRecoveryBackup{
 		Version:         dkvsAppValueVersion,
 		WalletID:        walletID,
 		EncryptedBackup: append([]byte{}, encryptedBackup...),
@@ -72,14 +70,14 @@ func (p *SatsNetDKVSClient) GetWalletRecoveryBackup(pubKey []byte, walletID stri
 	if err != nil {
 		return nil, nil, err
 	}
-	var backup DKVSWalletRecoveryBackup
-	if err := json.Unmarshal(record.Value, &backup); err != nil {
+	backup, err := decodeDKVSRecoveryBackup(record.Value)
+	if err != nil {
 		return nil, nil, err
 	}
 	if backup.Version != dkvsAppValueVersion || backup.WalletID != walletID {
 		return nil, nil, dkvsindexer.ErrInvalidRecord
 	}
-	return &backup, record, nil
+	return backup, record, nil
 }
 
 func (p *SatsNetDKVSClient) RenewWalletRecoveryBackup(wallet common.Wallet, walletID string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
@@ -102,7 +100,7 @@ func (p *SatsNetDKVSClient) PutGuardianShare(ownerWallet common.Wallet, packageI
 	if err != nil {
 		return nil, err
 	}
-	value, err := json.Marshal(DKVSGuardianShare{
+	value, err := encodeDKVSGuardianShare(DKVSGuardianShare{
 		Version:    dkvsAppValueVersion,
 		PackageID:  packageID,
 		ShareID:    shareID,
@@ -131,29 +129,50 @@ func (p *SatsNetDKVSClient) ReadGuardianShares(ownerPubKey []byte, packageID str
 	}
 	shares := make([]*DKVSGuardianShare, 0, len(records))
 	for _, record := range records {
-		var share DKVSGuardianShare
-		if err := json.Unmarshal(record.Value, &share); err != nil {
+		share, err := decodeDKVSGuardianShare(record.Value)
+		if err != nil {
 			return nil, nil, 0, err
 		}
 		if share.Version != dkvsAppValueVersion || share.PackageID != packageID {
 			return nil, nil, 0, dkvsindexer.ErrInvalidRecord
 		}
-		shares = append(shares, &share)
+		shares = append(shares, share)
 	}
 	return shares, records, total, nil
 }
 
 func (p *SatsNetDKVSClient) SendOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msgID string, encryptedMessage []byte, metadata map[string]string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	mailboxID, safeMsgID, value, err := buildOfflineMessage(senderWallet, recipientPubKey, msgID, encryptedMessage, metadata)
+	if err != nil {
+		return nil, err
+	}
+	return p.SendSignedMailboxMessage(senderWallet, mailboxID, safeMsgID, value, opts)
+}
+
+func (p *SatsNetDKVSClient) SendOfflineMessageWithAutopay(senderWallet common.Wallet, recipientPubKey []byte,
+	msgID string, encryptedMessage []byte, metadata map[string]string, opts dkvsindexer.RecordOptions,
+	autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+
+	mailboxID, safeMsgID, value, err := buildOfflineMessage(senderWallet, recipientPubKey, msgID, encryptedMessage, metadata)
+	if err != nil {
+		return nil, err
+	}
+	return p.SendSignedMailboxMessageWithAutopay(senderWallet, mailboxID, safeMsgID, value, opts, autopay)
+}
+
+func buildOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msgID string, encryptedMessage []byte,
+	metadata map[string]string) (string, string, []byte, error) {
+
 	senderPubKey, err := dkvsWalletPubKey(senderWallet)
 	if err != nil {
-		return nil, dkvsindexer.ErrInvalidSignature
+		return "", "", nil, dkvsindexer.ErrInvalidSignature
 	}
 	if msgID == "" || len(encryptedMessage) == 0 {
-		return nil, dkvsindexer.ErrInvalidRecord
+		return "", "", nil, dkvsindexer.ErrInvalidRecord
 	}
 	mailboxID := dkvsindexer.AccountID(recipientPubKey)
 	safeMsgID := dkvsindexer.NormalizeNameID(msgID)
-	value, err := json.Marshal(DKVSOfflineMessage{
+	value, err := encodeDKVSOfflineMessage(DKVSOfflineMessage{
 		Version:          dkvsAppValueVersion,
 		FromPubKey:       senderPubKey,
 		ToMailboxID:      mailboxID,
@@ -162,9 +181,9 @@ func (p *SatsNetDKVSClient) SendOfflineMessage(senderWallet common.Wallet, recip
 		Metadata:         cloneStringMap(metadata),
 	})
 	if err != nil {
-		return nil, err
+		return "", "", nil, err
 	}
-	return p.SendSignedMailboxMessage(senderWallet, mailboxID, safeMsgID, value, opts)
+	return mailboxID, safeMsgID, value, nil
 }
 
 func (p *SatsNetDKVSClient) ReadOfflineMessages(recipientPubKey []byte, start, limit int) ([]*DKVSOfflineMessage, []*swire.DKVSRecord, int, error) {
@@ -175,14 +194,14 @@ func (p *SatsNetDKVSClient) ReadOfflineMessages(recipientPubKey []byte, start, l
 	}
 	messages := make([]*DKVSOfflineMessage, 0, len(records))
 	for _, record := range records {
-		var msg DKVSOfflineMessage
-		if err := json.Unmarshal(record.Value, &msg); err != nil {
+		msg, err := decodeDKVSOfflineMessage(record.Value)
+		if err != nil {
 			return nil, nil, 0, err
 		}
 		if msg.Version != dkvsAppValueVersion || msg.ToMailboxID != mailboxID {
 			return nil, nil, 0, dkvsindexer.ErrInvalidRecord
 		}
-		messages = append(messages, &msg)
+		messages = append(messages, msg)
 	}
 	return messages, records, total, nil
 }
@@ -199,7 +218,7 @@ func (p *SatsNetDKVSClient) PublishServiceAuthenticity(wallet common.Wallet, ser
 	if artifactHash == "" {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	value, err := json.Marshal(DKVSServiceAuthenticity{
+	value, err := encodeDKVSServiceAuthenticity(DKVSServiceAuthenticity{
 		Version:      dkvsAppValueVersion,
 		ServiceName:  serviceName,
 		AppID:        appID,
@@ -219,8 +238,8 @@ func (p *SatsNetDKVSClient) GetServiceAuthenticity(serviceName, appID, release s
 	if err != nil {
 		return nil, nil, err
 	}
-	var authenticity DKVSServiceAuthenticity
-	if err := json.Unmarshal(record.Value, &authenticity); err != nil {
+	authenticity, err := decodeDKVSServiceAuthenticity(record.Value)
+	if err != nil {
 		return nil, nil, err
 	}
 	if authenticity.Version != dkvsAppValueVersion ||
@@ -229,7 +248,7 @@ func (p *SatsNetDKVSClient) GetServiceAuthenticity(serviceName, appID, release s
 		authenticity.Release != release {
 		return nil, nil, dkvsindexer.ErrInvalidRecord
 	}
-	return &authenticity, record, nil
+	return authenticity, record, nil
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

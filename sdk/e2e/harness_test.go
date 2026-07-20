@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,34 +48,45 @@ const (
 )
 
 var (
-	satoshinetBuildMu  sync.Mutex
-	satoshinetTestExe  string
-	nextHarnessPort    uint32 = initialHarnessPort()
-	satoshinetTestConf        = []byte(`env: rpctest
+	satoshinetBuildMu       sync.Mutex
+	satoshinetTestArtifacts satoshinetArtifacts
+	nextHarnessPort         uint32 = initialHarnessPort()
+	satoshinetTestConf             = `env: test
 chain: testnet
 mode: local
 log: info
 db: ""
 indexer_layer1:
   scheme: http
-  host: 127.0.0.1:1
+  host: %q
   proxy: testnet
 indexer_layer2:
   scheme: http
-  host: 127.0.0.1:1
+  host: %q
   proxy: testnet
 rpc:
   scheme: http
-  host: 127.0.0.1:1
+  host: %q
   proxy: testnet
+management:
+  listen: %q
 wallet:
   mode: local
   password: rpctest
-`)
+  psfile: wallet.pass
+  mnemonic: %q
+`
 )
 
+type satoshinetArtifacts struct {
+	coreExecutable  string
+	corePlugin      string
+	minerExecutable string
+	minerPlugin     string
+}
+
 func initialHarnessPort() uint32 {
-	return uint32(20000 + (os.Getpid()%5000)*3)
+	return uint32(20000 + (os.Getpid()%5000)*4)
 }
 
 type fakeL1Asset struct {
@@ -142,6 +155,21 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 				"code": 0,
 				"msg":  "ok",
 				"data": map[string]int64{"height": height},
+			}))
+			return
+		}
+
+		if strings.HasPrefix(r.URL.Path, "/testnet/btc/block/blockhash/") {
+			require.NoError(t, json.NewEncoder(w).Encode(indexerwire.BlockHashResp{
+				BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
+				Data:     strings.Repeat("0", 64),
+			}))
+			return
+		}
+
+		if r.URL.Path == "/testnet/btc/tx/test" {
+			require.NoError(t, json.NewEncoder(w).Encode(indexerwire.TestRawTxResp{
+				BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
 			}))
 			return
 		}
@@ -322,7 +350,7 @@ func startSatoshiNetNodeWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, role, mnem
 
 	nodeKey := keyFromMnemonic(t, mnemonic, 0)
 	nodePubKey := hex.EncodeToString(nodeKey.PubKey().SerializeCompressed())
-	p2pAddr, rpcAddr := nextNodeAddresses(t)
+	p2pAddr, rpcAddr, managementAddr := nextNodeAddresses(t)
 	nodeDir := t.TempDir()
 	dataDir := filepath.Join(nodeDir, "data")
 	logDir := filepath.Join(nodeDir, "logs")
@@ -363,7 +391,7 @@ func startSatoshiNetNodeWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, role, mnem
 		}
 	}
 
-	harness := newTestHarness(t, satoshinetExecutable(t), nodeDir, p2pAddr, rpcAddr, args, env)
+	harness := newTestHarness(t, stageSatoshiNetNodeRuntime(t, role, mnemonic, fakeL1.host(), l2IndexerHost(t, rpcAddr), rpcAddr, managementAddr, nodeDir), nodeDir, p2pAddr, rpcAddr, args, env)
 	t.Logf("started %s node: pid=%d rpc=%s p2p=%s log=%s",
 		role, harness.NodePID(), harness.RPCAddress(), harness.P2PAddress(), harness.LogFile())
 	return harness
@@ -506,15 +534,16 @@ func (h *testHarness) TearDown() error {
 	return nil
 }
 
-func nextNodeAddresses(t *testing.T) (string, string) {
+func nextNodeAddresses(t *testing.T) (string, string, string) {
 	t.Helper()
 	for {
-		base := atomic.AddUint32(&nextHarnessPort, 3)
+		base := atomic.AddUint32(&nextHarnessPort, 4)
 		p2p := fmt.Sprintf("127.0.0.1:%d", base)
 		rpc := fmt.Sprintf("127.0.0.1:%d", base+1)
 		indexer := fmt.Sprintf("127.0.0.1:%d", base+2)
-		if portsAvailable(p2p, rpc, indexer) {
-			return p2p, rpc
+		management := fmt.Sprintf("127.0.0.1:%d", base+3)
+		if portsAvailable(p2p, rpc, indexer, management) {
+			return p2p, rpc, management
 		}
 	}
 }
@@ -583,12 +612,12 @@ func joinBlocks(nodes []*testHarness) error {
 	return fmt.Errorf("nodes did not sync to the same best block")
 }
 
-func satoshinetExecutable(t *testing.T) string {
+func satoshinetBuildArtifacts(t *testing.T) satoshinetArtifacts {
 	t.Helper()
 	satoshinetBuildMu.Lock()
 	defer satoshinetBuildMu.Unlock()
-	if satoshinetTestExe != "" {
-		return satoshinetTestExe
+	if satoshinetTestArtifacts.coreExecutable != "" {
+		return satoshinetTestArtifacts
 	}
 
 	_, file, _, ok := runtime.Caller(0)
@@ -596,21 +625,89 @@ func satoshinetExecutable(t *testing.T) string {
 	workspace := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	satoshinetDir := filepath.Join(workspace, "satoshinet")
 	require.FileExists(t, filepath.Join(satoshinetDir, "go.mod"))
+	sdkPluginDir := filepath.Join(workspace, "sat20wallet", "sdk", "plugin")
+	transcendPluginDir := filepath.Join(workspace, "transcend", "plugin")
+	require.FileExists(t, filepath.Join(sdkPluginDir, "main.go"))
+	require.FileExists(t, filepath.Join(transcendPluginDir, "main.go"))
 
 	outputDir := filepath.Join(os.TempDir(), "sat20wallet-satoshinet-rpctest")
 	require.NoError(t, os.MkdirAll(outputDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "conf.yaml"), satoshinetTestConf, 0o600))
 
-	outputPath := filepath.Join(outputDir, "satoshinet-rpctest")
-	if runtime.GOOS == "windows" {
-		outputPath += ".exe"
+	artifacts := satoshinetArtifacts{
+		coreExecutable:  filepath.Join(outputDir, "satoshinet-core-rpctest"),
+		corePlugin:      filepath.Join(outputDir, "stpd.so"),
+		minerExecutable: filepath.Join(outputDir, "satoshinet-miner-rpctest"),
+		minerPlugin:     filepath.Join(outputDir, "wallet.so"),
 	}
-	cmd := exec.Command("go", "build", "-tags=rpctest,wallet_source", "-o", outputPath, "github.com/sat20-labs/satoshinet")
-	cmd.Dir = satoshinetDir
+	if runtime.GOOS == "windows" {
+		artifacts.coreExecutable += ".exe"
+		artifacts.minerExecutable += ".exe"
+	}
+
+	cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.minerPlugin, "main.go")
+	cmd.Dir = sdkPluginDir
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
-	satoshinetTestExe = outputPath
-	return satoshinetTestExe
+
+	cmd = exec.Command("go", "build", "-tags=rpctest,wallet_plugin", "-o", artifacts.minerExecutable, "github.com/sat20-labs/satoshinet")
+	cmd.Dir = satoshinetDir
+	output, err = cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+
+	cmd = exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.corePlugin, "main.go")
+	cmd.Dir = transcendPluginDir
+	output, err = cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+
+	cmd = exec.Command("go", "build", "-tags=rpctest,stp_plugin", "-o", artifacts.coreExecutable, "github.com/sat20-labs/satoshinet")
+	cmd.Dir = satoshinetDir
+	output, err = cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	satoshinetTestArtifacts = artifacts
+	return satoshinetTestArtifacts
+}
+
+func stageSatoshiNetNodeRuntime(t *testing.T, role, mnemonic, l1IndexerHost, l2IndexerHost, rpcHost, managementHost, nodeDir string) string {
+	t.Helper()
+	artifacts := satoshinetBuildArtifacts(t)
+	executable := artifacts.coreExecutable
+	plugin := artifacts.corePlugin
+	pluginName := "stpd.so"
+	if role == "miner" {
+		executable = artifacts.minerExecutable
+		plugin = artifacts.minerPlugin
+		pluginName = "wallet.so"
+	}
+
+	stagedExecutable := filepath.Join(nodeDir, filepath.Base(executable))
+	copySatoshiNetRuntimeFile(t, executable, stagedExecutable)
+	copySatoshiNetRuntimeFile(t, plugin, filepath.Join(nodeDir, pluginName))
+	require.NoError(t, os.WriteFile(filepath.Join(nodeDir, "conf.yaml"), []byte(fmt.Sprintf(satoshinetTestConf, l1IndexerHost, l2IndexerHost, rpcHost, managementHost, mnemonic)), 0o600))
+	return stagedExecutable
+}
+
+func l2IndexerHost(t *testing.T, rpcAddr string) string {
+	t.Helper()
+	host, portText, err := net.SplitHostPort(rpcAddr)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+	return net.JoinHostPort(host, strconv.Itoa(port+1))
+}
+
+func copySatoshiNetRuntimeFile(t *testing.T, source, destination string) {
+	t.Helper()
+	in, err := os.Open(source)
+	require.NoError(t, err)
+	defer in.Close()
+
+	info, err := in.Stat()
+	require.NoError(t, err)
+	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+	require.NoError(t, err)
+	_, err = io.Copy(out, in)
+	require.NoError(t, err)
+	require.NoError(t, out.Close())
 }
 
 func configureFastPOSTimers(t *testing.T) {

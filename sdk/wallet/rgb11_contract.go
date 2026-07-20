@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -113,6 +114,10 @@ type RGB11IssueResult struct {
 // canonical standard-schema genesis, validates it against Bitcoin evidence,
 // and imports its allocations into the native wallet projection.
 func (p *Manager) IssueRGB11Asset(ctx context.Context, request RGB11IssueRequest) (*RGB11IssueResult, error) {
+	started := time.Now()
+	defer func() {
+		Log.Infof("RGB11 issue finished in %v", time.Since(started))
+	}()
 	if p == nil || p.wallet == nil || p.l1IndexerClient == nil || p.rgbManager.evidence == nil || p.utxoLockerL1 == nil {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -134,10 +139,13 @@ func (p *Manager) IssueRGB11Asset(ctx context.Context, request RGB11IssueRequest
 		}
 		amountCount = len(request.Amounts)
 	}
+	phaseStarted := time.Now()
 	selected, err := p.selectRGB11IssueOutpoints(amountCount, request.MinConfirmations)
+	Log.Infof("RGB11 issue UTXO selection finished in %v (selected=%d, err=%v)", time.Since(phaseStarted), len(selected), err)
 	if err != nil {
 		return nil, err
 	}
+	phaseStarted = time.Now()
 	allocations, err := rgb11IssueAllocations(selected[:len(request.Amounts)], request.Amounts)
 	if err != nil {
 		return nil, err
@@ -146,16 +154,21 @@ func (p *Manager) IssueRGB11Asset(ctx context.Context, request RGB11IssueRequest
 	if err != nil {
 		return nil, err
 	}
+	Log.Infof("RGB11 issue allocation build finished in %v", time.Since(phaseStarted))
+	phaseStarted = time.Now()
 	issued, err := coreissuance.Issue(coreissuance.Spec{
 		Kind: kind, Network: rgb11IssuanceNetwork(params),
 		Ticker: request.Ticker, Name: request.Name, Details: request.Details,
 		Precision: request.Precision, Terms: request.Terms,
 		Allocations: allocations, InflationRights: inflation, RejectListURL: request.RejectListURL,
 	})
+	Log.Infof("RGB11 issue contract build finished in %v (err=%v)", time.Since(phaseStarted), err)
 	if err != nil {
 		return nil, err
 	}
+	phaseStarted = time.Now()
 	imported, err := p.ImportRGB11Contract(ctx, []byte(issued.Armor))
+	Log.Infof("RGB11 issue contract import finished in %v (err=%v)", time.Since(phaseStarted), err)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +363,7 @@ func (p *Manager) ImportRGB11Contract(ctx context.Context, raw []byte) (*RGB11Im
 		return nil, err
 	}
 	ext := rgb11wallet.TickerExt{
-		AssetName: assetName, OriginalAssetID: container.ContractID,
+		AssetName: assetName, Ticker: metadata.Ticker, OriginalAssetID: container.ContractID,
 		SchemaID: container.SchemaID, ContractID: container.ContractID,
 		ContractHash: receipt.ConsignmentHash, RejectListURL: metadata.RejectListURL,
 		ControlMode: descriptor.DefaultControlMode,
@@ -374,6 +387,38 @@ func (p *Manager) ImportRGB11Contract(ctx context.Context, raw []byte) (*RGB11Im
 	}
 	p.autoBackupRGB11AfterMutation()
 	return result, nil
+}
+
+func (p *Manager) rgb11TickerSymbol(info *indexer.TickerInfo) string {
+	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || info == nil {
+		return ""
+	}
+	var ext rgb11wallet.TickerExt
+	if json.Unmarshal(info.Content, &ext) != nil {
+		return ""
+	}
+	if ext.Ticker != "" {
+		return ext.Ticker
+	}
+	if ext.ContractHash == "" {
+		return ""
+	}
+	raw, err := p.rgbManager.projectionStore.LoadObject(ext.ContractHash)
+	if err != nil {
+		return ""
+	}
+	container, err := coreconsignment.Decode(raw)
+	if err != nil {
+		return ""
+	}
+	schemaValue, _ := container.Value.Field("schema")
+	typeSystem, _ := container.Value.Field("types")
+	genesisValue, _ := container.Value.Field("genesis")
+	metadata, err := schemas.ExtractGenesisAssetMetadata(schemaValue, typeSystem, genesisValue)
+	if err != nil {
+		return ""
+	}
+	return metadata.Ticker
 }
 
 func allocationOutpointTxID(outpoint string) string {

@@ -53,6 +53,7 @@ func NewAssetInfo(officialAssetID, assetType string, amount *indexer.Decimal) (*
 
 type TickerExt struct {
 	AssetName        indexer.AssetName `json:"asset_name"`
+	Ticker           string            `json:"ticker,omitempty"`
 	OriginalAssetID  string            `json:"original_asset_id"`
 	AssetIDBytes     []byte            `json:"asset_id_bytes"`
 	SchemaID         string            `json:"schema_id"`

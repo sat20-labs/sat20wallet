@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"encoding/hex"
+	"errors"
 	"net/url"
 	"strconv"
 	"strings"
@@ -19,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRealSatoshiNetDKVSAutopayNameSync(t *testing.T) {
+func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 	defaults := dkvsindexer.NetworkDefaultsForParams(&chaincfg.TestNetParams)
 	f := newTemplateFixtureWithArgs(t, map[string]int64{defaults.AutopayFeeAssetName: 20000}, nil, nil, dkvsMinerArgs(t))
 	waitForDKVSPeerReady(t, f.Network)
@@ -79,6 +80,8 @@ func TestRealSatoshiNetDKVSAutopayNameSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireDKVSValue(t, f.Network.Core, nameKey, []byte("owner-a"))
+	_, _, err = dkvsClientForNode(t, f.Network.Miner).SubscribeKey(nameKey)
+	require.NoError(t, err)
 	require.NoError(t, connectNode(f.Network.Miner, f.Network.Core))
 	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-a"))
 
@@ -97,13 +100,35 @@ func TestRealSatoshiNetDKVSAutopayNameSync(t *testing.T) {
 	}
 	requireDKVSValue(t, f.Network.Bootstrap, nameKey, []byte("owner-b"))
 	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-b"))
+
+	mailboxID := dkvsindexer.AccountID(actorB.Wallet.GetPubKey().SerializeCompressed())
+	senderID := dkvsindexer.AccountID(actorA.Wallet.GetPubKey().SerializeCompressed())
+	_, _, err = dkvsClientForNode(t, f.Network.Miner).SubscribeMailbox(mailboxID)
+	require.NoError(t, err)
+	mailKey, err := dkvsindexer.MailMsgKey(mailboxID, senderID, "e2e-message")
+	require.NoError(t, err)
+	if _, err := clientA.SendSignedMailboxMessageWithAutopay(
+		actorA.Wallet, mailboxID, "e2e-message", []byte("sender-paid-message"),
+		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 1000}, autopayA,
+	); err != nil {
+		t.Fatal(err)
+	}
+	requireDKVSValue(t, f.Network.Core, mailKey, []byte("sender-paid-message"))
+	requireDKVSValue(t, f.Network.Miner, mailKey, []byte("sender-paid-message"))
+	if _, err := clientB.DeleteMessage(
+		actorB.Wallet, mailboxID, senderID, "e2e-message",
+		dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 1000},
+	); err != nil {
+		t.Fatal(err)
+	}
+	requireDKVSAbsent(t, f.Network.Bootstrap, mailKey)
+	requireDKVSAbsent(t, f.Network.Miner, mailKey)
 }
 
 func dkvsMinerArgs(t *testing.T) []string {
 	t.Helper()
 	minerKey := keyFromMnemonic(t, minerMnemonic, 0)
 	return []string{
-		"--generate",
 		"--miningpubkey=" + hex.EncodeToString(minerKey.PubKey().SerializeCompressed()),
 	}
 }
@@ -320,4 +345,20 @@ func requireDKVSValue(t *testing.T, node *testHarness, key string, value []byte)
 	record, err := client.GetRecord(key)
 	require.NoError(t, err)
 	require.Equal(t, string(value), string(record.Value))
+}
+
+func requireDKVSAbsent(t *testing.T, node *testHarness, key string) {
+	t.Helper()
+	client := dkvsClientForNode(t, node)
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		_, err := client.GetRecord(key)
+		if errors.Is(err, wallet.ErrDKVSRecordNotFound) {
+			return
+		}
+		lastErr = err
+		time.Sleep(200 * time.Millisecond)
+	}
+	require.ErrorIs(t, lastErr, wallet.ErrDKVSRecordNotFound)
 }

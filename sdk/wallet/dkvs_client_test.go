@@ -251,7 +251,11 @@ func TestSatsNetDKVSClientSnapshotAndSubscriptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	mailboxID := dkvsindexer.AccountID(priv.PubKey().SerializeCompressed())
-	mailRecord, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, priv), "/mail/"+mailboxID+"/msg/msg-1", []byte("message"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	mailKey, err := dkvsindexer.MailMsgKey(mailboxID, mailboxID, "msg-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailRecord, err := NewDKVSSignedRecord(dkvsTestWalletFromPriv(t, priv), mailKey, []byte("message"), dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +597,8 @@ func TestSatsNetDKVSClientMailbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	mailboxID := dkvsindexer.AccountID(ownerPriv.PubKey().SerializeCompressed())
-	msgKey, err := dkvsindexer.MailMsgKey(mailboxID, "msg-1")
+	senderID := dkvsindexer.AccountID(senderPriv.PubKey().SerializeCompressed())
+	msgKey, err := dkvsindexer.MailMsgKey(mailboxID, senderID, "msg-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,8 +651,37 @@ func TestSatsNetDKVSClientMailbox(t *testing.T) {
 	if err := json.Unmarshal(http.lastBody, &sent); err != nil {
 		t.Fatal(err)
 	}
-	if sent.Key != "/mail/"+mailboxID+"/msg/msg-2" {
+	wantSentKey, err := dkvsindexer.MailMsgKey(mailboxID, senderID, "msg-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent.Key != wantSentKey {
 		t.Fatalf("signed message key=%s", sent.Key)
+	}
+	autopay := DKVSAutopayOptions{AddressParams: &chaincfg.TestNetParams, PoolContract: "tc1pmailboxautopay"}
+	if _, err := client.SendSignedMailboxMessageWithAutopay(
+		dkvsTestWalletFromPriv(t, senderPriv), mailboxID, "msg-3", []byte("paid"),
+		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}, autopay,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var paidMessage swire.DKVSRecord
+	if err := json.Unmarshal(http.lastBody, &paidMessage); err != nil {
+		t.Fatal(err)
+	}
+	wantPaidKey, err := dkvsindexer.MailMsgKey(mailboxID, senderID, "msg-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paidMessage.Key != wantPaidKey {
+		t.Fatalf("paid message key=%s want=%s", paidMessage.Key, wantPaidKey)
+	}
+	proof, err := dkvsindexer.ParseFeeProof(paidMessage.FeeProof)
+	if err != nil || proof.Mode != dkvsindexer.FeeModeAutopay || proof.PoolContract != autopay.PoolContract {
+		t.Fatalf("paid message proof=%#v err=%v", proof, err)
+	}
+	if err := dkvsindexer.VerifySignature(&paidMessage); err != nil {
+		t.Fatalf("paid message signature: %v", err)
 	}
 	if _, err := client.PutMailboxShare(shareRecord); err != nil {
 		t.Fatal(err)
@@ -668,7 +702,7 @@ func TestSatsNetDKVSClientMailbox(t *testing.T) {
 	if _, err := client.DeleteMailboxRecord(tombstone); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.DeleteMessage(dkvsTestWalletFromPriv(t, ownerPriv), mailboxID, "msg-1", dkvsindexer.RecordOptions{Seq: 3, TTL: 60_000, ExpiryHeight: 100}); err != nil {
+	if _, err := client.DeleteMessage(dkvsTestWalletFromPriv(t, ownerPriv), mailboxID, senderID, "msg-1", dkvsindexer.RecordOptions{Seq: 3, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}
 	var deleted swire.DKVSRecord

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -136,6 +137,9 @@ func newRGB11FlowManager(t *testing.T, wallet common.Wallet, rpc *rgb11FlowIndex
 	if err := manager.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
+	// Automatic DKVS backup is asynchronous. Wait for it before the earlier
+	// database cleanup closes Pebble.
+	t.Cleanup(manager.waitForRGB11AutoBackup)
 	return manager
 }
 
@@ -533,6 +537,16 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 			}
 			if balance.Value.Uint64() != test.balance {
 				t.Fatalf("balance=%s want=%d", balance.Value, test.balance)
+			}
+			state, err := manager.GetRGB11State()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(state.Assets) == 0 || len(state.Outputs) != test.count {
+				t.Fatalf("unexpected RGB11 state after issuance: assets=%d outputs=%d", len(state.Assets), len(state.Outputs))
+			}
+			if _, err := json.Marshal(state); err != nil {
+				t.Fatalf("RGB11 state is not JSON serializable: %v", err)
 			}
 			locked := manager.utxoLockerL1.GetLockedUtxoList()
 			for _, outpoint := range issued.OutPoints {

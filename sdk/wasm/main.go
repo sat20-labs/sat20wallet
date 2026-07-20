@@ -712,6 +712,10 @@ func switchAccount(this js.Value, p []js.Value) any {
 	// return createJsRet(nil, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		status := _mgr.GetStatus()
+		if status != nil && status.CurrentAccount == uint32(id) {
+			return nil, 0, "ok"
+		}
 		_mgr.SwitchAccount(uint32(id))
 		return map[string]any{"rgb11Activation": activateRGB11WalletState()}, 0, "ok"
 	})

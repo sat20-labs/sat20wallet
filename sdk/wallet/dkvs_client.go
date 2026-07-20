@@ -474,7 +474,7 @@ func (p *SatsNetDKVSClient) PutBlobRecords(manifestRecord *swire.DKVSRecord, chu
 	return nil
 }
 
-func (p *SatsNetDKVSClient) PutBlob(wallet common.Wallet, objectID string, data []byte, metadata json.RawMessage, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
+func (p *SatsNetDKVSClient) PutBlob(wallet common.Wallet, objectID string, data []byte, metadata []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
 	if len(data) == 0 {
 		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
 	}
@@ -489,7 +489,7 @@ func (p *SatsNetDKVSClient) PutBlob(wallet common.Wallet, objectID string, data 
 // PutBlobWithAutopay attaches a fee proof to the manifest and every chunk,
 // then re-signs each record with the owning wallet before publication.
 func (p *SatsNetDKVSClient) PutBlobWithAutopay(wallet common.Wallet, objectID string, data []byte,
-	metadata json.RawMessage, opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
+	metadata []byte, opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
 	if len(data) == 0 {
 		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
 	}
@@ -510,7 +510,7 @@ func (p *SatsNetDKVSClient) PutBlobWithAutopay(wallet common.Wallet, objectID st
 	return manifestRecord, chunkRecords, nil
 }
 
-func (p *SatsNetDKVSClient) PutChunkedBlob(wallet common.Wallet, objectID string, chunks [][]byte, metadata json.RawMessage, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
+func (p *SatsNetDKVSClient) PutChunkedBlob(wallet common.Wallet, objectID string, chunks [][]byte, metadata []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
 	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(wallet, objectID, chunks, metadata, opts)
 	if err != nil {
 		return nil, nil, err
@@ -574,11 +574,33 @@ func (p *SatsNetDKVSClient) SendMailboxMessage(record *swire.DKVSRecord) (*swire
 }
 
 func (p *SatsNetDKVSClient) SendSignedMailboxMessage(wallet common.Wallet, mailboxID, msgID string, encryptedMessage []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	key, err := dkvsindexer.MailMsgKey(mailboxID, msgID)
+	pubKey, err := dkvsWalletPubKey(wallet)
+	if err != nil {
+		return nil, dkvsindexer.ErrInvalidSignature
+	}
+	key, err := dkvsindexer.MailMsgKey(mailboxID, dkvsindexer.AccountID(pubKey), msgID)
 	if err != nil {
 		return nil, err
 	}
 	record, err := NewDKVSSignedRecord(wallet, key, encryptedMessage, opts)
+	if err != nil {
+		return nil, err
+	}
+	return p.SendMailboxMessage(record)
+}
+
+func (p *SatsNetDKVSClient) SendSignedMailboxMessageWithAutopay(wallet common.Wallet, mailboxID, msgID string,
+	encryptedMessage []byte, opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+
+	pubKey, err := dkvsWalletPubKey(wallet)
+	if err != nil {
+		return nil, dkvsindexer.ErrInvalidSignature
+	}
+	key, err := dkvsindexer.MailMsgKey(mailboxID, dkvsindexer.AccountID(pubKey), msgID)
+	if err != nil {
+		return nil, err
+	}
+	record, err := newSignedRecordWithAutopay(wallet, key, encryptedMessage, opts, autopay)
 	if err != nil {
 		return nil, err
 	}
@@ -618,8 +640,8 @@ func (p *SatsNetDKVSClient) DeleteMailboxRecord(tombstone *swire.DKVSRecord) (*s
 	return p.Tombstone(tombstone)
 }
 
-func (p *SatsNetDKVSClient) DeleteMessage(wallet common.Wallet, mailboxID, msgID string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	key, err := dkvsindexer.MailMsgKey(mailboxID, msgID)
+func (p *SatsNetDKVSClient) DeleteMessage(wallet common.Wallet, mailboxID, senderID, msgID string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	key, err := dkvsindexer.MailMsgKey(mailboxID, senderID, msgID)
 	if err != nil {
 		return nil, err
 	}

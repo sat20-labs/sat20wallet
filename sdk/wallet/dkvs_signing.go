@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"bytes"
-	"encoding/json"
 	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
@@ -100,7 +99,7 @@ func AttachDKVSFeeProof(record *swire.DKVSRecord, proof *dkvsindexer.FeeProof) e
 	return nil
 }
 
-func BuildDKVSSignedBlobRecords(wallet common.Wallet, objectID string, chunks [][]byte, metadata json.RawMessage, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
+func BuildDKVSSignedBlobRecords(wallet common.Wallet, objectID string, chunks [][]byte, metadata []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
 	pubKey, err := dkvsWalletPubKey(wallet)
 	if err != nil {
 		return nil, nil, dkvsindexer.ErrInvalidSignature

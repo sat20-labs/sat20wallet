@@ -13,7 +13,7 @@ func ExampleSatsNetDKVSClient_walletRecoveryBackup() {
 	priv := exampleDKVSPriv(1)
 	pubKey := priv.PubKey().SerializeCompressed()
 	key, _ := dkvsindexer.PersonalKey(pubKey, WalletRecoveryPath("wallet-1"))
-	value := exampleDKVSJSON(DKVSWalletRecoveryBackup{
+	value, _ := encodeDKVSRecoveryBackup(DKVSWalletRecoveryBackup{
 		Version:         dkvsAppValueVersion,
 		WalletID:        "wallet-1",
 		EncryptedBackup: []byte("ciphertext"),
@@ -45,7 +45,7 @@ func ExampleSatsNetDKVSClient_guardianShare() {
 	ownerPubKey := ownerPriv.PubKey().SerializeCompressed()
 	mailboxID := dkvsindexer.AccountID(ownerPubKey)
 	key, _ := dkvsindexer.MailShareKey(mailboxID, dkvsindexer.NormalizeNameID("recovery-package"), "share-1")
-	value := exampleDKVSJSON(DKVSGuardianShare{
+	value, _ := encodeDKVSGuardianShare(DKVSGuardianShare{
 		Version:    dkvsAppValueVersion,
 		PackageID:  "recovery-package",
 		ShareID:    "share-1",
@@ -75,8 +75,9 @@ func ExampleSatsNetDKVSClient_offlineMessage() {
 	senderPriv := exampleDKVSPriv(4)
 	recipientPubKey := recipientPriv.PubKey().SerializeCompressed()
 	mailboxID := dkvsindexer.AccountID(recipientPubKey)
-	key, _ := dkvsindexer.MailMsgKey(mailboxID, dkvsindexer.NormalizeNameID("msg-1"))
-	value := exampleDKVSJSON(DKVSOfflineMessage{
+	senderID := dkvsindexer.AccountID(senderPriv.PubKey().SerializeCompressed())
+	key, _ := dkvsindexer.MailMsgKey(mailboxID, senderID, dkvsindexer.NormalizeNameID("msg-1"))
+	value, _ := encodeDKVSOfflineMessage(DKVSOfflineMessage{
 		Version:          dkvsAppValueVersion,
 		FromPubKey:       senderPriv.PubKey().SerializeCompressed(),
 		ToMailboxID:      mailboxID,
@@ -105,7 +106,7 @@ func ExampleSatsNetDKVSClient_offlineMessage() {
 func ExampleSatsNetDKVSClient_serviceAuthenticity() {
 	priv := exampleDKVSPriv(5)
 	key, _ := dkvsindexer.ServiceKey("wallet", ServiceAuthenticityPath("desktop", "1.0.0"))
-	value := exampleDKVSJSON(DKVSServiceAuthenticity{
+	value, _ := encodeDKVSServiceAuthenticity(DKVSServiceAuthenticity{
 		Version:      dkvsAppValueVersion,
 		ServiceName:  "wallet",
 		AppID:        "desktop",

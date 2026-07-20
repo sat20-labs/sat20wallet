@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	corerelay "github.com/sat20-labs/rgb11/relay"
@@ -551,7 +550,7 @@ func (p *SatsNetDKVSClient) PutRGB11RelayRecord(wallet common.Wallet, key string
 	if opts.TTL == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	encoded, err := json.Marshal(value)
+	encoded, err := value.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
@@ -574,14 +573,14 @@ func (p *SatsNetDKVSClient) GetRGB11RelayRecord(key string, expectedSenderPubKey
 	if !bytes.Equal(record.PubKey, expectedSenderPubKey) {
 		return nil, nil, dkvsindexer.ErrPermissionDenied
 	}
-	var value corerelay.RelayRecord
-	if err := json.Unmarshal(record.Value, &value); err != nil {
+	value, err := corerelay.UnmarshalRelayRecord(record.Value)
+	if err != nil {
 		return nil, nil, err
 	}
 	if err := value.Verify(expectedSenderPubKey, time.Now().Unix(), rgb11wallet.VerifyWalletSignature); err != nil {
 		return nil, nil, err
 	}
-	return &value, record, nil
+	return value, record, nil
 }
 
 func (p *SatsNetDKVSClient) PutRGB11AckRecord(wallet common.Wallet, key string, value *corerelay.AckRecord, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
@@ -595,7 +594,7 @@ func (p *SatsNetDKVSClient) PutRGB11AckRecord(wallet common.Wallet, key string, 
 	if opts.TTL == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	encoded, err := json.Marshal(value)
+	encoded, err := value.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
@@ -618,14 +617,14 @@ func (p *SatsNetDKVSClient) GetRGB11AckRecord(key string, expectedRecipientPubKe
 	if !bytes.Equal(record.PubKey, expectedRecipientPubKey) {
 		return nil, nil, dkvsindexer.ErrPermissionDenied
 	}
-	var value corerelay.AckRecord
-	if err := json.Unmarshal(record.Value, &value); err != nil {
+	value, err := corerelay.UnmarshalAckRecord(record.Value)
+	if err != nil {
 		return nil, nil, err
 	}
 	if err := value.Verify(expectedRecipientPubKey, rgb11wallet.VerifyWalletSignature); err != nil {
 		return nil, nil, err
 	}
-	return &value, record, nil
+	return value, record, nil
 }
 
 func (p *SatsNetDKVSClient) SubscribeRGB11Transfer(relayKey, ackKey string) ([]*swire.DKVSRecord, error) {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -20,7 +21,7 @@ func TestSatsNetDKVSClientWalletRecoveryBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := json.Marshal(DKVSWalletRecoveryBackup{
+	value, err := encodeDKVSRecoveryBackup(DKVSWalletRecoveryBackup{
 		Version:         dkvsAppValueVersion,
 		WalletID:        "primary wallet",
 		EncryptedBackup: []byte("ciphertext"),
@@ -54,8 +55,11 @@ func TestSatsNetDKVSClientWalletRecoveryBackup(t *testing.T) {
 	if posted.Key != key {
 		t.Fatalf("backup key=%s want=%s", posted.Key, key)
 	}
-	var postedBackup DKVSWalletRecoveryBackup
-	if err := json.Unmarshal(posted.Value, &postedBackup); err != nil {
+	if len(posted.Value) == 0 || posted.Value[0] == '{' {
+		t.Fatalf("backup was not compact: %q", posted.Value)
+	}
+	postedBackup, err := decodeDKVSRecoveryBackup(posted.Value)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if postedBackup.WalletID != "primary wallet" || string(postedBackup.EncryptedBackup) != "ciphertext" {
@@ -100,7 +104,7 @@ func TestSatsNetDKVSClientGuardianShareAndOfflineMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shareValue, err := json.Marshal(DKVSGuardianShare{
+	shareValue, err := encodeDKVSGuardianShare(DKVSGuardianShare{
 		Version:    dkvsAppValueVersion,
 		PackageID:  "recovery package",
 		ShareID:    "share one",
@@ -113,7 +117,7 @@ func TestSatsNetDKVSClientGuardianShareAndOfflineMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msgValue, err := json.Marshal(DKVSOfflineMessage{
+	msgValue, err := encodeDKVSOfflineMessage(DKVSOfflineMessage{
 		Version:          dkvsAppValueVersion,
 		FromPubKey:       senderPriv.PubKey().SerializeCompressed(),
 		ToMailboxID:      mailboxID,
@@ -123,7 +127,8 @@ func TestSatsNetDKVSClientGuardianShareAndOfflineMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msgKey, err := dkvsindexer.MailMsgKey(mailboxID, dkvsindexer.NormalizeNameID("msg one"))
+	senderID := dkvsindexer.AccountID(senderPriv.PubKey().SerializeCompressed())
+	msgKey, err := dkvsindexer.MailMsgKey(mailboxID, senderID, dkvsindexer.NormalizeNameID("msg one"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,6 +176,27 @@ func TestSatsNetDKVSClientGuardianShareAndOfflineMessage(t *testing.T) {
 	if posted.Key != msgKey {
 		t.Fatalf("message key=%s want=%s", posted.Key, msgKey)
 	}
+	if _, err := client.SendOfflineMessageWithAutopay(
+		dkvsTestWalletFromPriv(t, senderPriv), ownerPubKey, "paid message", []byte("paid ciphertext"), nil,
+		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100},
+		DKVSAutopayOptions{AddressParams: &chaincfg.TestNetParams, PoolContract: "tc1pofflineautopay"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(http.lastBody, &posted); err != nil {
+		t.Fatal(err)
+	}
+	wantPaidMsgKey, err := dkvsindexer.MailMsgKey(mailboxID, senderID, dkvsindexer.NormalizeNameID("paid message"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if posted.Key != wantPaidMsgKey {
+		t.Fatalf("paid offline message key=%s want=%s", posted.Key, wantPaidMsgKey)
+	}
+	proof, err := dkvsindexer.ParseFeeProof(posted.FeeProof)
+	if err != nil || proof.Mode != dkvsindexer.FeeModeAutopay {
+		t.Fatalf("paid offline proof=%#v err=%v", proof, err)
+	}
 	messages, msgRecords, total, err := client.ReadOfflineMessages(ownerPubKey, 0, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +217,7 @@ func TestSatsNetDKVSClientServiceAuthenticity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := json.Marshal(DKVSServiceAuthenticity{
+	value, err := encodeDKVSServiceAuthenticity(DKVSServiceAuthenticity{
 		Version:      dkvsAppValueVersion,
 		ServiceName:  "wallet",
 		AppID:        "desktop app",

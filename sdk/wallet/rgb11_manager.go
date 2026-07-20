@@ -3,7 +3,6 @@ package wallet
 import (
 	"bytes"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -37,6 +36,10 @@ type RGB11Manager struct {
 	head              *coresync.WalletHead
 	autoBackup        *RGB11AutoBackupPolicy
 	backupMutex       sync.Mutex
+	autoBackupMutex   sync.Mutex
+	autoBackupRunning bool
+	autoBackupPending bool
+	autoBackupDone    chan struct{}
 }
 
 func newRGB11Manager(database indexer.KVDB, locker *UtxoLocker,
@@ -73,6 +76,7 @@ func (p *Manager) selectRGB11Scope() error {
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || p.rgbManager.engineStore == nil || p.status == nil {
 		return rgb11wallet.ErrWalletScope
 	}
+	p.waitForRGB11AutoBackup()
 	scope := fmt.Sprintf("wallet-%d-account-%d", p.status.CurrentWallet, p.status.CurrentAccount)
 	if err := p.rgbManager.projectionStore.SetScope(scope); err != nil {
 		return err
@@ -88,15 +92,15 @@ func (p *Manager) selectRGB11Scope() error {
 			return err
 		}
 	} else {
-		var head coresync.WalletHead
 		expectedWalletID := ""
 		if p.wallet != nil && p.wallet.GetPubKey() != nil {
 			expectedWalletID = hex.EncodeToString(p.wallet.GetPubKey().SerializeCompressed())
 		}
-		if json.Unmarshal(encoded, &head) != nil || head.Validate(expectedWalletID) != nil {
+		head, decodeErr := decodeRGB11WalletHead(encoded)
+		if decodeErr != nil || head.Validate(expectedWalletID) != nil {
 			p.rgbManager.dkvsStatus = "conflict"
 		} else {
-			p.rgbManager.head = &head
+			p.rgbManager.head = head
 		}
 	}
 	policy, err := p.loadRGB11AutoBackupPolicy()
@@ -243,18 +247,30 @@ func (p *Manager) RegisterRGB11TickerInfo(info *indexer.TickerInfo) error {
 	return nil
 }
 
-// RGB11State exposes existing SAT20 asset/output models plus RGB-only proof
-// sidecars. Assets is rebuilt from Outputs and is never a second writable
-// balance ledger.
+// RGB11Output is the serializable projection view exposed to UI clients.
+// Internal TxOutput offset maps use structured keys and are intentionally not
+// part of this API.
+type RGB11Output struct {
+	OutPointStr string           `json:"OutPointStr"`
+	Assets      indexer.TxAssets `json:"Assets"`
+}
+
+type RGB11TickerInfo struct {
+	*indexer.TickerInfo
+	Ticker string `json:"ticker"`
+}
+
+// RGB11State exposes existing SAT20 assets plus RGB-only proof sidecars.
+// Assets is rebuilt from Outputs and is never a second writable balance ledger.
 type RGB11State struct {
 	Initialized       bool                           `json:"initialized"`
 	SyncStatus        string                         `json:"sync_status"`
 	ConsistencyStatus string                         `json:"consistency_status"`
 	DKVSStatus        string                         `json:"dkvs_status"`
 	AutoBackupEnabled bool                           `json:"auto_backup_enabled"`
-	TickerInfos       []*indexer.TickerInfo          `json:"ticker_infos"`
+	TickerInfos       []*RGB11TickerInfo             `json:"ticker_infos"`
 	Assets            indexer.TxAssets               `json:"assets"`
-	Outputs           []*indexer.TxOutput            `json:"outputs"`
+	Outputs           []*RGB11Output                 `json:"outputs"`
 	Proofs            []*rgb11wallet.AllocationProof `json:"proofs"`
 	Transfers         []*rgb11wallet.TransferState   `json:"transfers"`
 }
@@ -281,7 +297,12 @@ func (p *Manager) GetRGB11State() (*RGB11State, error) {
 	}
 
 	var assets indexer.TxAssets
+	stateOutputs := make([]*RGB11Output, 0, len(outputs))
 	for _, output := range outputs {
+		stateOutputs = append(stateOutputs, &RGB11Output{
+			OutPointStr: output.OutPointStr,
+			Assets:      output.Assets.Clone(),
+		})
 		for index := range output.Assets {
 			asset := &output.Assets[index]
 			if asset.Name.Protocol != rgb11wallet.Protocol {
@@ -297,10 +318,13 @@ func (p *Manager) GetRGB11State() (*RGB11State, error) {
 	}
 
 	p.mutex.RLock()
-	tickers := make([]*indexer.TickerInfo, 0)
+	tickers := make([]*RGB11TickerInfo, 0)
 	for _, info := range p.tickerInfoMap {
 		if info != nil && info.AssetName.Protocol == rgb11wallet.Protocol {
-			tickers = append(tickers, info)
+			tickers = append(tickers, &RGB11TickerInfo{
+				TickerInfo: info,
+				Ticker:     p.rgb11TickerSymbol(info),
+			})
 		}
 	}
 	p.mutex.RUnlock()
@@ -320,7 +344,7 @@ func (p *Manager) GetRGB11State() (*RGB11State, error) {
 		AutoBackupEnabled: autoBackupEnabled,
 		TickerInfos:       tickers,
 		Assets:            assets,
-		Outputs:           outputs,
+		Outputs:           stateOutputs,
 		Proofs:            proofs,
 		Transfers:         transfers,
 	}, nil
