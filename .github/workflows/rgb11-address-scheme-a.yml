@@ -1,6 +1,8 @@
 name: RGB11 address transfer scheme A
 
 on:
+  push:
+    branches: [agent/rgb11-dkvs-transfer-a]
   pull_request:
     branches: [main]
   workflow_dispatch:
