@@ -3,9 +3,11 @@ package wallet
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -16,6 +18,8 @@ import (
 )
 
 const RGB11AddressTransport = "address-dkvs"
+
+var rgb11AddressMessageDomain = []byte("SAT20-RGB11-ADDRESS-MESSAGE-V1")
 
 type RGB11AddressSendRequest struct {
 	ReceiverAddress  string            `json:"receiver_address"`
@@ -32,6 +36,21 @@ func randomRGB11TmpKey() (string, error) {
 		return "", err
 	}
 	return dkvsindexer.TmpKey(hex.EncodeToString(entropy[:]))
+}
+
+// rgb11AddressMessageID maps the canonical RGB transfer identifier to the
+// fixed-size, lower-case DKVS message segment. The canonical transfer ID remains
+// inside the encrypted Consignment and is never replaced by this transport ID.
+func rgb11AddressMessageID(transferID string) (string, error) {
+	transferID = strings.TrimSpace(transferID)
+	if transferID == "" {
+		return "", ErrRGB11AddressMailbox
+	}
+	input := make([]byte, 0, len(rgb11AddressMessageDomain)+len(transferID))
+	input = append(input, rgb11AddressMessageDomain...)
+	input = append(input, transferID...)
+	sum := sha256.Sum256(input)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func synthesizeRGB11AddressInvoice(endpoint *RGB11AddressEndpoint, asset indexer.AssetName,
@@ -136,21 +155,20 @@ func (p *Manager) PrepareRGB11AddressTransfer(ctx context.Context, client *SatsN
 	if err != nil {
 		return nil, nil, err
 	}
-	// Sender and receiver order already distinguishes delivery from ACK, so the
-	// 64-byte transfer ID is the complete message ID and fits one key segment.
-	deliveryKey, err := dkvsindexer.MailMsgKey(
-		endpoint.AccountID, senderAccountID, pending.State.TransferID,
-	)
+	messageID, err := rgb11AddressMessageID(pending.State.TransferID)
 	if err != nil {
 		return nil, nil, err
 	}
-	ackKey, err := dkvsindexer.MailMsgKey(
-		senderAccountID, endpoint.AccountID, pending.State.TransferID,
-	)
+	deliveryKey, err := dkvsindexer.MailMsgKey(endpoint.AccountID, senderAccountID, messageID)
+	if err != nil {
+		return nil, nil, err
+	}
+	ackKey, err := dkvsindexer.MailMsgKey(senderAccountID, endpoint.AccountID, messageID)
 	if err != nil {
 		return nil, nil, err
 	}
 	pending.State.AddressMode = true
+	pending.State.AddressMessageID = messageID
 	pending.State.TransportMode = RGB11AddressTransport
 	pending.State.SenderAccountID = senderAccountID
 	pending.State.ReceiverAccountID = endpoint.AccountID
