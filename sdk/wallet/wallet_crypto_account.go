@@ -12,6 +12,8 @@ import (
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
+var rgb11AccountPayloadDomain = []byte("SAT20-RGB11-DKVS-MAILBOX-V1")
+
 // normalizedAccountPrivate returns the BIP340 even-y form of a private key.
 // Account IDs are x-only public keys, so ECDH must normalize both sides to the
 // same representative or an odd-y wallet key would derive a different secret.
@@ -38,8 +40,17 @@ func deriveAccountSharedSecret(priv *secp256k1.PrivateKey, accountID string) ([]
 	return deriveSharedSecret(priv, remote)
 }
 
+func accountPayloadKey(shared []byte) [32]byte {
+	hasher := sha256.New()
+	_, _ = hasher.Write(rgb11AccountPayloadDomain)
+	_, _ = hasher.Write(shared)
+	var key [32]byte
+	copy(key[:], hasher.Sum(nil))
+	return key
+}
+
 func encryptAccountPayload(shared, plaintext []byte) ([]byte, error) {
-	key := sha256.Sum256(shared)
+	key := accountPayloadKey(shared)
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return nil, err
@@ -57,7 +68,7 @@ func encryptAccountPayload(shared, plaintext []byte) ([]byte, error) {
 }
 
 func decryptAccountPayload(shared, payload []byte) ([]byte, error) {
-	key := sha256.Sum256(shared)
+	key := accountPayloadKey(shared)
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return nil, err
