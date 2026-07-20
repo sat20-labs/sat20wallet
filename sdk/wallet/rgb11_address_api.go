@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"time"
 
-	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
-const rgb11AddressMailboxPageSize = 256
+const (
+	rgb11AddressMailboxPageSize = 256
+	rgb11AddressTemporaryTTL    = uint64((24 * time.Hour) / time.Millisecond)
+	rgb11AddressAutopayTTL      = uint64((365 * 24 * time.Hour) / time.Millisecond)
+)
 
 type RGB11AddressMailboxSyncResult struct {
 	Scanned      int      `json:"scanned"`
@@ -29,11 +32,35 @@ func (p *Manager) configuredRGB11DKVSClient() (*SatsNetDKVSClient, error) {
 	return p.rgb11DKVSClient()
 }
 
+// configureRGB11AddressRetention selects AUTOPAY for an active DKVS tenant and
+// otherwise applies a temporary TTL. Failure to query the tenant contract does
+// not block an address transfer; it safely falls back to temporary retention,
+// which is surfaced by RGB11AddressDeliveryResult.Temporary.
+func (p *Manager) configureRGB11AddressRetention(record *dkvsindexer.RecordOptions,
+	autopay **DKVSAutopayOptions) {
+	if record == nil || autopay == nil {
+		return
+	}
+	if *autopay == nil {
+		if paid, err := p.hasActiveRGB11Autopay(); err == nil && paid {
+			*autopay = &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet()}
+		}
+	}
+	if record.TTL == 0 && record.ExpiryHeight == 0 {
+		if *autopay != nil {
+			record.TTL = rgb11AddressAutopayTTL
+		} else {
+			record.TTL = rgb11AddressTemporaryTTL
+		}
+	}
+}
+
 func (p *Manager) EnableConfiguredRGB11AddressReceive(options RGB11ReceiveCapabilityOptions) (*RGB11AddressEndpoint, error) {
 	client, err := p.configuredRGB11DKVSClient()
 	if err != nil {
 		return nil, err
 	}
+	p.configureRGB11AddressRetention(&options.RecordOptions, &options.Autopay)
 	return p.EnableRGB11AddressReceive(client, options)
 }
 
@@ -61,6 +88,7 @@ func (p *Manager) DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID s
 	if err != nil {
 		return nil, err
 	}
+	p.configureRGB11AddressRetention(&options.RecordOptions, &options.Autopay)
 	return p.DeliverAndBroadcastRGB11AddressTransfer(client, transferID, options)
 }
 
@@ -101,6 +129,7 @@ func (p *Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	p.configureRGB11AddressRetention(&ackOptions.RecordOptions, &ackOptions.Autopay)
 	accountID, err := dkvsAccountID(p.wallet)
 	if err != nil {
 		return nil, err
@@ -168,5 +197,3 @@ func (p *Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 	}
 	return result, nil
 }
-
-var _ = rgb11wallet.Protocol
