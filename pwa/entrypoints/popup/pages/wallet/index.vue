@@ -77,7 +77,7 @@ import L2Card from '@/components/wallet/L2Card.vue'
 import SubWalletSelector from '@/components/wallet/SubWalletSelector.vue'
 import CopyButton from '@/components/common/CopyButton.vue'
 import { useChannelStore, useWalletStore, useL1Store, useL2Store } from '@/store'
-import { useL1Assets, useL2Assets } from '@/composables'
+import { useUnifiedAssets, useL2Assets } from '@/composables'
 import { useAssetOperations } from '@/composables/useAssetOperations'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from '@/components/ui/toast-new'
@@ -127,7 +127,7 @@ const selectTab = ref(routeTab())
 const isL1AssetsActive = computed(() => selectTab.value === 'l1')
 const isL2AssetsActive = computed(() => selectTab.value === 'l2')
 const isChannelActive = computed(() => selectTab.value === 'channel')
-const { refreshL1Assets } = useL1Assets({ enabled: isL1AssetsActive })
+const { refreshL1Assets } = useUnifiedAssets({ enabled: isL1AssetsActive })
 const { refreshL2Assets } = useL2Assets({ enabled: isL2AssetsActive })
 //const selectedType = ref('BTC')
 const selectedType = ref('ORDX')

@@ -743,6 +743,21 @@
           </p>
           <Card>
             <CardHeader>
+              <CardTitle class="text-base">{{ t('tools.rgb11.deployTitle') }}</CardTitle>
+              <CardDescription>{{ t('tools.rgb11.deployDescription') }}</CardDescription>
+            </CardHeader>
+            <CardContent class="space-y-3">
+              <div class="rounded-sm border border-border bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">
+                {{ t('tools.rgb11.deployNotice') }}
+              </div>
+              <Button class="w-full" @click="showRGB11Issue = true">
+                <Icon icon="lucide:badge-plus" class="h-4 w-4" />
+                {{ t('tools.rgb11.deploy') }}
+              </Button>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
               <CardTitle class="text-base">{{ t('tools.mint.deployTickerTitle') }}</CardTitle>
             </CardHeader>
             <CardContent class="space-y-3">
@@ -879,6 +894,8 @@
       </Tabs>
     </div>
 
+    <RGB11IssueDialog v-model:open="showRGB11Issue" @completed="handleRGB11Issued" />
+
     <Dialog :open="txConfirmOpen" @update:open="handleTxConfirmOpenChange">
       <DialogContent class="max-w-[92vw] rounded-sm border-border bg-background sm:max-w-md">
         <DialogHeader>
@@ -938,6 +955,7 @@ import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import WalletHeader from '@/components/wallet/HomeHeader.vue'
+import RGB11IssueDialog from '@/components/wallet/RGB11IssueDialog.vue'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -961,6 +979,7 @@ import ordxApi from '@/apis/ordx'
 import sat20 from '@/utils/sat20'
 import { useGlobalStore, useWalletStore } from '@/store'
 import { Storage } from '@/lib/storage-adapter'
+import { useQueryClient } from '@tanstack/vue-query'
 
 const SMART_CONTRACT_DOC_URL_ZH = 'https://docs.sat20.org/protocol-xie-yi-yu-bai-pi-shu/smart-contracts'
 const SMART_CONTRACT_DOC_URL_EN = 'https://docs.sat20.org/english/protocols-and-whitepapers/smart-contracts'
@@ -972,11 +991,13 @@ const { t, locale } = useI18n()
 const router = useRouter()
 const walletStore = useWalletStore()
 const globalStore = useGlobalStore()
+const queryClient = useQueryClient()
 const { network } = storeToRefs(walletStore)
 const { env } = storeToRefs(globalStore)
 const smartContractDocUrl = computed(() => String(locale.value).startsWith('en') ? SMART_CONTRACT_DOC_URL_EN : SMART_CONTRACT_DOC_URL_ZH)
 
 const activeTab = ref('faucet')
+const showRGB11Issue = ref(false)
 const contractToolPage = ref<'home' | 'deploy' | 'invoke'>('home')
 const invokeToolPage = ref<'list' | 'detail'>('list')
 
@@ -984,6 +1005,10 @@ const faucetAddress = ref(TEMP_FAUCET_CONTRACT_ADDRESS)
 const faucetAmount = ref('1000')
 const faucetResult = ref('')
 const isFaucetSending = ref(false)
+
+const handleRGB11Issued = () => {
+  queryClient.invalidateQueries({ queryKey: ['rgb11-state'] })
+}
 
 const contractQuery = ref('')
 const contractList = ref<any[]>([])

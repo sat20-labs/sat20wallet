@@ -7,7 +7,10 @@
       @update:model-value="$emit('update:selectedType', $event)"
       @splicing_in="$emit('splicing_in', $event)"
       @send="$emit('send', $event)"
+      @receive="$emit('receive', $event)"
       @refresh="$emit('refresh')"
+      @issue-rgb11="$emit('issue-rgb11')"
+      @import-rgb11="$emit('import-rgb11')"
       @deposit="$emit('deposit', $event)"
     />
   </div>
@@ -21,7 +24,8 @@ interface Asset {
   id: string
   ticker: string
   label: string
-  amount: number
+  amount: number | string
+  precision?: number
   type?: string
 }
 
@@ -54,5 +58,5 @@ watch(() => props.selectedType, (newType) => {
   console.log('L1Card - Selected type changed:', newType)
 })
 
-defineEmits(['update:selectedType', 'splicing_in', 'send', 'deposit', 'refresh'])
+defineEmits(['update:selectedType', 'splicing_in', 'send', 'receive', 'deposit', 'refresh', 'issue-rgb11', 'import-rgb11'])
 </script>

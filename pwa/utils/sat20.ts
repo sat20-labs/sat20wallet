@@ -219,6 +219,144 @@ class WalletManager {
     return this._handleRequest('getVersion')
   }
 
+  async getRGB11State(): Promise<
+    [Error | undefined, { state: string } | undefined]
+  > {
+    return this._handleRequest('getRGB11State')
+  }
+
+  async createRGB11Invoice(request: {
+    mode?: 'blind' | 'witness'
+    contract_id: string
+    schema_id?: string
+    amount_raw: number | string
+    assignment_name?: string
+    expiry?: number
+    witness_vout?: number
+  }): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('createRGB11Invoice', JSON.stringify(request))
+  }
+
+  async importRGB11Contract(consignment: string): Promise<
+    [Error | undefined, { result: string } | undefined]
+  > {
+    return this._handleRequest('importRGB11Contract', consignment)
+  }
+
+  async issueRGB11Asset(request: {
+    schema: 'NIA' | 'IFA' | 'UDA'
+    ticker?: string
+    name: string
+    details?: string
+    precision: number
+    terms?: string
+    amounts: string[]
+    inflation_amounts?: string[]
+    reject_list_url?: string
+    min_confirmations?: number
+  }): Promise<[Error | undefined, { result: string } | undefined]> {
+    return this._handleRequest('issueRGB11Asset', JSON.stringify(request))
+  }
+
+  async prepareRGB11Transfer(request: {
+    invoice?: string
+    invoices?: string[]
+    fee_rate?: number
+    min_confirmations?: number
+  }): Promise<[Error | undefined, { transfer: string } | undefined]> {
+    return this._handleRequest('prepareRGB11Transfer', JSON.stringify(request))
+  }
+
+  async buildRGB11RelayRecord(transferId: string): Promise<
+    [Error | undefined, { record: string } | undefined]
+  > {
+    return this._handleRequest('buildRGB11RelayRecord', transferId)
+  }
+
+  async publishRGB11RelayRecord(transferId: string): Promise<
+    [Error | undefined, { record: string } | undefined]
+  > {
+    return this._handleRequest('publishRGB11RelayRecord', transferId)
+  }
+
+  async acceptRGB11Consignment(requestId: string, consignment: string): Promise<
+    [Error | undefined, any | undefined]
+  > {
+    return this._handleRequest('acceptRGB11Consignment', requestId, consignment)
+  }
+
+  async acceptRGB11RelayConsignment(requestId: string, relayRecord: string, consignment: string): Promise<
+	[Error | undefined, { receipt: string; ack: string } | undefined]
+  > {
+	return this._handleRequest('acceptRGB11RelayConsignment', requestId, relayRecord, consignment)
+  }
+
+  async rejectRGB11RelayConsignment(requestId: string, relayRecord: string): Promise<
+	[Error | undefined, { ack: string } | undefined]
+  > {
+	return this._handleRequest('rejectRGB11RelayConsignment', requestId, relayRecord)
+  }
+
+  async publishRGB11AckRecord(key: string, ack: string): Promise<
+    [Error | undefined, { published: boolean } | undefined]
+  > {
+    return this._handleRequest('publishRGB11AckRecord', key, ack)
+  }
+
+  async fetchRGB11AckRecord(transferId: string): Promise<
+    [Error | undefined, { ack: string } | undefined]
+  > {
+    return this._handleRequest('fetchRGB11AckRecord', transferId)
+  }
+
+  async cancelRGB11BatchByNack(transferId: string, relayRecord: string, nack: string): Promise<
+	[Error | undefined, { cancelled: boolean } | undefined]
+  > {
+	return this._handleRequest('cancelRGB11BatchByNack', transferId, relayRecord, nack)
+  }
+
+  async broadcastRGB11Transfer(transferId: string, relayRecord: string, ack: string): Promise<
+    [Error | undefined, { txid: string } | undefined]
+  > {
+    return this._handleRequest('broadcastRGB11Transfer', transferId, relayRecord, ack)
+  }
+
+  async broadcastRGB11Batch(request: {
+    transfer_ids: string[]
+    relay_records: unknown[]
+    acks: unknown[]
+  }): Promise<[Error | undefined, { txid: string } | undefined]> {
+    return this._handleRequest('broadcastRGB11Batch', JSON.stringify(request))
+  }
+
+  async broadcastRGB11OutOfBand(transferIds: string[]): Promise<
+    [Error | undefined, { txid: string } | undefined]
+  > {
+    return this._handleRequest('broadcastRGB11OutOfBand', JSON.stringify(transferIds))
+  }
+
+  async refreshRGB11State(): Promise<
+    [Error | undefined, { result: string } | undefined]
+  > {
+    return this._handleRequest('refreshRGB11State')
+  }
+
+  async backupRGB11WalletState(request: {
+    wallet_id?: string
+    ttl?: number
+    expiry_height?: number
+  } = {}): Promise<[Error | undefined, { head: string } | undefined]> {
+    return this._handleRequest('backupRGB11WalletState', JSON.stringify(request))
+  }
+
+  async restoreRGB11WalletState(request: {
+    wallet_id?: string
+    height?: number
+    now?: number
+  } = {}): Promise<[Error | undefined, { head: string } | undefined]> {
+    return this._handleRequest('restoreRGB11WalletState', JSON.stringify(request))
+  }
+
   async startBTCLuckyMining(config: {
     jobs: string
     lowPriority: boolean

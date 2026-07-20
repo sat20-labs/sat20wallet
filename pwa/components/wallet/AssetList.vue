@@ -23,7 +23,9 @@
       <TabsContent value="l1">
         <L1Card v-model:selectedType="selectedAssetType" :assets="filteredAssets"
           :mode="transcendingModeStore.selectedTranscendingMode"
-          @splicing_in="handleSplicingIn" @send="handleSend" @deposit="handleDeposit" />
+          @splicing_in="handleSplicingIn" @send="handleSend" @receive="handleRGB11Receive"
+          @issue-rgb11="showRGB11Issue = true"
+          @import-rgb11="showRGB11Import = true" @deposit="handleDeposit" />
       </TabsContent>
 
       <TabsContent v-if="transcendingModeStore.selectedTranscendingMode === 'lightning'" value="channel">
@@ -44,6 +46,10 @@
       :operation-type="operationType" :max-amount="selectedAsset?.amount" :asset-type="selectedAsset?.type"
       :asset-ticker="selectedAsset?.label" :asset-key="selectedAsset?.key" @update:amount="operationAmount = $event"
       @update:address="operationAddress = $event" @confirm="handleOperationConfirm" />
+    <RGB11InvoiceDialog v-model:open="showRGB11Invoice" :asset="rgb11ReceiveAsset" />
+    <RGB11SendDialog v-model:open="showRGB11Send" :asset="rgb11SendAsset" @completed="refreshRGB11Assets" />
+    <RGB11IssueDialog v-model:open="showRGB11Issue" @completed="refreshRGB11Assets" />
+    <RGB11ImportDialog v-model:open="showRGB11Import" @completed="refreshRGB11Assets" />
   </div>
 </template>
 
@@ -58,6 +64,10 @@ import L2Card from '@/components/wallet/L2Card.vue'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import walletManager from '@/utils/sat20'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
+import RGB11InvoiceDialog from '@/components/wallet/RGB11InvoiceDialog.vue'
+import RGB11SendDialog from '@/components/wallet/RGB11SendDialog.vue'
+import RGB11IssueDialog from '@/components/wallet/RGB11IssueDialog.vue'
+import RGB11ImportDialog from '@/components/wallet/RGB11ImportDialog.vue'
 import { useChannelStore, useL1Store, useL2Store, useTranscendingModeStore } from '@/store'
 import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store'
@@ -78,7 +88,7 @@ const {
   lockUtxo,
 } = useAssetActions()
 
-  const props = defineProps({
+const props = defineProps({
   modelValue: {
     type: String,
     required: true,
@@ -100,6 +110,10 @@ const { address, btcFeeRate } = storeToRefs(walletStore)
 const refreshL1Assets = () => {
   queryClient.invalidateQueries({ queryKey: ['summary-l1'] })
   queryClient.invalidateQueries({ queryKey: ['ns-l1'] })
+}
+
+const refreshRGB11Assets = () => {
+  queryClient.invalidateQueries({ queryKey: ['rgb11-state'] })
 }
 
 const refreshL2Assets = () => {
@@ -169,6 +183,11 @@ const filteredAssets = computed(() => {
           ...asset,
           type: 'BRC20',
         }))
+      case 'RGB11':
+        return (l1Store.rgb11List || []).map((asset) => ({
+          ...asset,
+          type: 'RGB11',
+        }))
       default:
         return []
     }
@@ -190,6 +209,12 @@ const operationAmount = ref('')
 const operationAddress = ref('')
 const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
+const showRGB11Invoice = ref(false)
+const rgb11ReceiveAsset = ref<any>(null)
+const showRGB11Send = ref(false)
+const rgb11SendAsset = ref<any>(null)
+const showRGB11Issue = ref(false)
+const showRGB11Import = ref(false)
 
 const { t } = useI18n()
 
@@ -247,11 +272,21 @@ watch(selectedChain, () => {
 })
 
 const handleSend = (asset: any) => {
+  if (asset?.protocol === 'rgb11') {
+    rgb11SendAsset.value = asset
+    showRGB11Send.value = true
+    return
+  }
   // console.log('TranscendingMode - Send:', asset)
   operationType.value = 'send'
   selectedAsset.value = asset
   operationAmount.value = ''
   showDialog.value = true
+}
+
+const handleRGB11Receive = (asset: any) => {
+  rgb11ReceiveAsset.value = asset
+  showRGB11Invoice.value = true
 }
 
 const handleSplicingIn = (asset: any) => {
@@ -459,6 +494,9 @@ const handleOperationConfirm = async () => {
   try {
     switch (operationType.value) {
       case 'send':
+        if (asset?.protocol === 'rgb11') {
+          throw new Error(t('rgb11Invoice.sendUnavailable'))
+        }
         if (selectedChain.value === 'l1') {
           await l1Send({
             toAddress,
