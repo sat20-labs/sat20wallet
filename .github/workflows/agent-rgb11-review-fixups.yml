@@ -10,50 +10,51 @@ permissions:
 jobs:
   fix-and-verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout wallet
+        uses: actions/checkout@v4
         with:
+          path: workspace/sat20wallet
           fetch-depth: 0
 
-      - name: Check out indexer dependency
+      - name: Checkout indexer dependency
         uses: actions/checkout@v4
         with:
           repository: sat20-labs/indexer
-          path: ../indexer
+          path: workspace/indexer
 
-      - name: Check out RGB11 engine
+      - name: Checkout RGB11 engine
         uses: actions/checkout@v4
         with:
           repository: sat20-labs/rgb11
-          path: ../rgb11
+          path: workspace/rgb11
 
-      - name: Check out companion SatoshiNet branch
+      - name: Checkout companion SatoshiNet branch
         uses: actions/checkout@v4
         with:
           repository: sat20-labs/satoshinet
           ref: agent/rgb11-dkvs-transfer-a
-          path: ../satoshinet
+          path: workspace/satoshinet
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: sdk/go.mod
+          go-version-file: workspace/sat20wallet/sdk/go.mod
           cache: false
 
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: pwa/package.json
 
       - name: Apply final review fixes
+        working-directory: workspace/sat20wallet
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import json
           import re
 
-          # Route the address-mode UI through the dedicated typed adapter.
           dialog = Path('pwa/components/wallet/RGB11SendDialog.vue')
           text = dialog.read_text()
           if "import rgb11Address from '@/utils/rgb11Address'" not in text:
@@ -66,8 +67,6 @@ jobs:
           text = text.replace('walletManager.deliverAndBroadcastRGB11AddressTransfer({', 'rgb11Address.deliverAndBroadcast({')
           dialog.write_text(text)
 
-          # Make mailbox processing a hard precondition for the RGB projection,
-          # and expose readiness so ordinary L1 queries can be gated behind it.
           Path('pwa/composables/hooks/useRgb11Assets.ts').write_text(r'''import { computed, watch } from 'vue'
           import { useQuery } from '@tanstack/vue-query'
           import { storeToRefs } from 'pinia'
@@ -158,8 +157,8 @@ jobs:
             const stateQuery = useQuery({
               queryKey: ['rgb11-state', walletId, accountIndex, network, address, env],
               queryFn: async (): Promise<RGB11StateDTO> => {
-                // A DKVS address-capable wallet must process the encrypted mailbox
-                // before ordinary Bitcoin outputs are refreshed or selected.
+                // Process encrypted RGB11 delivery before ordinary Bitcoin UTXOs
+                // are refreshed or exposed to coin selection.
                 const [mailboxError] = await rgb11Address.syncMailbox({})
                 if (mailboxError) throw mailboxError
 
@@ -221,8 +220,7 @@ jobs:
               return enabled?.value ?? true
             })
 
-            // RGB11 mailbox processing is the safety barrier for ordinary L1
-            // refresh: a newly created carrier output must be locked first.
+            // The RGB11 mailbox is the safety barrier for ordinary L1 refresh.
             const rgb11 = useRgb11Assets({ enabled: requestedEnabled })
             const l1Enabled = computed(() => requestedEnabled.value && rgb11.ready.value)
             const l1 = useL1Assets({ enabled: l1Enabled })
@@ -241,8 +239,6 @@ jobs:
           }
           '''.replace('\n          ', '\n').lstrip())
 
-          # A wallet without DKVS configured has no published address capability,
-          # so mailbox preflight is a safe no-op rather than a global BTC blocker.
           api = Path('sdk/wallet/rgb11_address_api.go')
           text = api.read_text()
           old = '''\tif p == nil || p.wallet == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
@@ -257,13 +253,13 @@ jobs:
           \t\treturn result, nil
           \t}
           \tclient, err := p.configuredRGB11DKVSClient()'''.replace('\n          ', '\n')
-          if old not in text:
+          if old in text:
+              text = text.replace(old, new, 1)
+              text = text.replace('\tresult := &RGB11AddressMailboxSyncResult{}\n\tfor start := 0;', '\tfor start := 0;', 1)
+          elif 'if !p.rgb11DKVSConfigured()' not in text:
               raise SystemExit('missing mailbox preflight insertion point')
-          text = text.replace(old, new, 1)
-          text = text.replace('\tresult := &RGB11AddressMailboxSyncResult{}\n\tfor start := 0;', '\tfor start := 0;', 1)
           api.write_text(text)
 
-          # Add only the address-mode strings; avoid duplicating any protocol data.
           translations = {
               'pwa/locales/en.json': {
                   'addressMode': 'Address',
@@ -300,20 +296,20 @@ jobs:
               match = re.search(r'(\s*"rgb11Transfer"\s*:\s*\{\s*\n\s*"sendTitle"\s*:\s*[^\n]+\n)', text)
               if not match:
                   raise SystemExit(f'missing rgb11Transfer/sendTitle in {filename}')
-              indent = '    '
               insertion = ''.join(
-                  f'{indent}"{key}": {__import__("json").dumps(value, ensure_ascii=False)},\n'
+                  f'    "{key}": {json.dumps(value, ensure_ascii=False)},\n'
                   for key, value in values.items()
               )
-              text = text[:match.end()] + insertion + text[match.end():]
-              path.write_text(text)
+              path.write_text(text[:match.end()] + insertion + text[match.end():])
 
-          # Extend the existing source/binary smoke test for scheme A.
           smoke = Path('pwa/scripts/verify/rgb11-l1-smoke.mjs')
           text = smoke.read_text()
           if "'utils/rgb11Address.ts'," not in text:
-              text = text.replace("  'components/wallet/RGB11SendDialog.vue',\n", "  'components/wallet/RGB11SendDialog.vue',\n  'utils/rgb11Address.ts',\n")
-          new_methods = [
+              text = text.replace(
+                  "  'components/wallet/RGB11SendDialog.vue',\n",
+                  "  'components/wallet/RGB11SendDialog.vue',\n  'utils/rgb11Address.ts',\n",
+              )
+          methods = [
               'enableRGB11AddressReceive',
               'resolveRGB11AddressEndpoint',
               'prepareRGB11AddressTransfer',
@@ -321,30 +317,53 @@ jobs:
               'syncRGB11AddressMailbox',
               'getRGB11AddressCarrierWarning',
           ]
-          for method in new_methods:
+          for method in methods:
               marker = f"  '{method}',\n"
               if marker not in text:
                   text = text.replace("  'restoreRGB11WalletState',\n", "  'restoreRGB11WalletState',\n" + marker)
-          text = text.replace("  'prepareRGB11Transfer',\n", "  'prepareRGB11Transfer',\n  'rgb11Address.prepareTransfer',\n") if "'rgb11Address.prepareTransfer'" not in text else text
           if "await requireContains('utils/rgb11Address.ts'" not in text:
-              anchor = "await requireContains('utils/sat20.ts', requiredWasmMethods)\n"
-              extra = """await requireContains('utils/rgb11Address.ts', [
+              text = text.replace(
+                  "await requireContains('utils/sat20.ts', requiredWasmMethods)\n",
+                  """await requireContains('utils/sat20.ts', requiredWasmMethods.filter((method) => ![
           'enableRGB11AddressReceive',
+          'resolveRGB11AddressEndpoint',
           'prepareRGB11AddressTransfer',
           'deliverAndBroadcastRGB11AddressTransfer',
           'syncRGB11AddressMailbox',
+          'getRGB11AddressCarrierWarning',
+          ].includes(method)))
+          await requireContains('utils/rgb11Address.ts', [
+          'enableRGB11AddressReceive',
+          'resolveRGB11AddressEndpoint',
+          'prepareRGB11AddressTransfer',
+          'deliverAndBroadcastRGB11AddressTransfer',
+          'syncRGB11AddressMailbox',
+          'getRGB11AddressCarrierWarning',
           ])
-          """.replace('\n          ', '\n')
-              text = text.replace(anchor, anchor + extra)
-          if "'rgb11Address.prepareTransfer'" not in text[text.find("await requireContains('components/wallet/RGB11SendDialog.vue'"):]:
-              text = text.replace("  'prepareRGB11Transfer',\n  'publishRGB11RelayRecord',", "  'prepareRGB11Transfer',\n  'rgb11Address.prepareTransfer',\n  'rgb11Address.deliverAndBroadcast',\n  'publishRGB11RelayRecord',")
-          if "'rgb11Address.syncMailbox'" not in text:
-              text = text.replace("  'display_name',\n])", "  'display_name',\n  'rgb11Address.syncMailbox',\n])")
+          """.replace('\n          ', '\n'),
+              )
+          dialog_anchor = "await requireContains('components/wallet/RGB11SendDialog.vue', [\n"
+          if dialog_anchor in text:
+              start = text.index(dialog_anchor)
+              end = text.index('])', start)
+              block = text[start:end]
+              additions = ["  'rgb11Address.prepareTransfer',\n", "  'rgb11Address.deliverAndBroadcast',\n"]
+              for addition in additions:
+                  if addition not in block:
+                      block += addition
+              text = text[:start] + block + text[end:]
+          hook_anchor = "await requireContains('composables/hooks/useRgb11Assets.ts', [\n"
+          if hook_anchor in text:
+              start = text.index(hook_anchor)
+              end = text.index('])', start)
+              block = text[start:end]
+              addition = "  'rgb11Address.syncMailbox',\n"
+              if addition not in block:
+                  block += addition
+              text = text[:start] + block + text[end:]
           smoke.write_text(text)
 
-          # Make review CI cover the browser-facing artifacts as well as Go.
-          workflow = Path('.github/workflows/rgb11-address-scheme-a.yml')
-          workflow.write_text(r'''name: RGB11 address transfer scheme A
+          Path('.github/workflows/rgb11-address-scheme-a.yml').write_text(r'''name: RGB11 address transfer scheme A
 
           on:
             push:
@@ -360,7 +379,7 @@ jobs:
           jobs:
             wallet-sdk:
               runs-on: ubuntu-latest
-              timeout-minutes: 40
+              timeout-minutes: 45
               steps:
                 - name: Checkout wallet
                   uses: actions/checkout@v4
@@ -391,18 +410,12 @@ jobs:
                   uses: actions/setup-go@v5
                   with:
                     go-version-file: sat20wallet/sdk/go.mod
-                    cache-dependency-path: |
-                      sat20wallet/sdk/go.sum
-                      satoshinet/go.sum
-                      indexer/go.sum
-                      rgb11/go.sum
+                    cache: false
 
                 - name: Setup Node
                   uses: actions/setup-node@v4
                   with:
                     node-version: '22'
-                    cache: npm
-                    cache-dependency-path: sat20wallet/pwa/package.json
 
                 - name: Check formatting
                   shell: bash
@@ -469,26 +482,27 @@ jobs:
           gofmt -w sdk/wallet/rgb11_address_api.go
 
       - name: Build browser WASM
-        working-directory: sdk
+        working-directory: workspace/sat20wallet/sdk
         run: GOOS=js GOARCH=wasm go build -ldflags='-s -w' -o ../pwa/public/wasm/sat20wallet.wasm ./wasm
 
       - name: Install PWA dependencies
-        working-directory: pwa
+        working-directory: workspace/sat20wallet/pwa
         run: npm install --ignore-scripts --no-audit --no-fund
 
       - name: Type-check PWA
-        working-directory: pwa
+        working-directory: workspace/sat20wallet/pwa
         run: npm run compile
 
       - name: Verify RGB11 PWA integration
-        working-directory: pwa
+        working-directory: workspace/sat20wallet/pwa
         run: npm run verify:rgb11-l1
 
       - name: Run Wallet SDK tests
-        working-directory: sdk
+        working-directory: workspace/sat20wallet/sdk
         run: go test ./wallet/... -count=1
 
       - name: Commit final integration
+        working-directory: workspace/sat20wallet
         shell: bash
         run: |
           if git diff --quiet; then
