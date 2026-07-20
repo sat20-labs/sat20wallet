@@ -117,13 +117,24 @@ func decodeRGB11AddressACK(value []byte) (RGB11AddressACK, error) {
 	return ack, nil
 }
 
-func normalizeRGB11AddressRecordOptions(opts dkvsindexer.RecordOptions) dkvsindexer.RecordOptions {
-	if opts.Seq == 0 {
-		opts.Seq = 1
-	}
+func nextRGB11AddressRecordOptions(client *SatsNetDKVSClient, keys []string, opts dkvsindexer.RecordOptions) dkvsindexer.RecordOptions {
 	if opts.IssueTime == 0 {
 		opts.IssueTime = uint64(time.Now().UnixMilli())
 	}
+	if opts.Seq != 0 {
+		return opts
+	}
+	var maxSeq uint64
+	for _, key := range keys {
+		if key == "" || client == nil {
+			continue
+		}
+		existing, err := client.GetRecord(key)
+		if err == nil && existing != nil && existing.Seq > maxSeq {
+			maxSeq = existing.Seq
+		}
+	}
+	opts.Seq = maxSeq + 1
 	return opts
 }
 
@@ -156,16 +167,24 @@ func (p *Manager) DeliverRGB11AddressTransfer(client *SatsNetDKVSClient, transfe
 	if err != nil {
 		return nil, err
 	}
-	opts := normalizeRGB11AddressRecordOptions(options.RecordOptions)
 	inlineLimit := options.InlineLimit
 	if inlineLimit <= 0 || inlineLimit > rgb11AddressInlineLimit {
 		inlineLimit = rgb11AddressInlineLimit
 	}
 	mode := rgb11AddressEnvelopeInline
 	objectID := ""
+	revisionKeys := []string{pending.State.DeliveryRecordKey}
 	if len(ciphertext)+2 > inlineLimit {
 		mode = rgb11AddressEnvelopeBlob
 		objectID = transferID
+		manifestKey, err := dkvsindexer.BlobManifestKey(pending.State.SenderAccountID, objectID)
+		if err != nil {
+			return nil, err
+		}
+		revisionKeys = append(revisionKeys, manifestKey)
+	}
+	opts := nextRGB11AddressRecordOptions(client, revisionKeys, options.RecordOptions)
+	if mode == rgb11AddressEnvelopeBlob {
 		if _, _, err := client.PutAccountBlob(
 			p.wallet, objectID, ciphertext, nil, opts, options.Autopay,
 		); err != nil {
@@ -373,6 +392,9 @@ func (p *Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *SatsNet
 	if err != nil {
 		return nil, nil, err
 	}
+	if receipt.TransferID == "" || receipt.TransferID != transferID {
+		return nil, nil, ErrRGB11AddressMailbox
+	}
 	allocation, status, err := p.findRGB11AddressAllocation(receipt)
 	if err != nil {
 		return nil, nil, err
@@ -457,7 +479,15 @@ func (p *Manager) SendRGB11AddressACK(client *SatsNetDKVSClient, senderAccountID
 	if err != nil {
 		return nil, err
 	}
-	opts := normalizeRGB11AddressRecordOptions(options.RecordOptions)
+	receiverAccountID, err := dkvsAccountID(p.wallet)
+	if err != nil {
+		return nil, err
+	}
+	key, err := dkvsindexer.MailMsgKey(senderAccountID, receiverAccountID, transferID)
+	if err != nil {
+		return nil, err
+	}
+	opts := nextRGB11AddressRecordOptions(client, []string{key}, options.RecordOptions)
 	return client.SendAccountMailboxMessage(p.wallet, senderAccountID, transferID, value, opts, options.Autopay)
 }
 
