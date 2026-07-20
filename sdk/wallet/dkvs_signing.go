@@ -9,12 +9,30 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-func NewDKVSSignedRecord(wallet common.Wallet, key string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	pubKey, err := dkvsWalletPubKey(wallet)
-	if err != nil {
-		return nil, dkvsindexer.ErrInvalidSignature
+func isDKVSAccountScopedNamespace(namespace string) bool {
+	switch namespace {
+	case "account", "personal", "mail", "blob":
+		return true
+	default:
+		return false
 	}
-	record, err := dkvsindexer.NewRecord(key, value, pubKey, opts)
+}
+
+func NewDKVSSignedRecord(wallet common.Wallet, key string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	parsed, err := dkvsindexer.ParseKey(key)
+	if err != nil {
+		return nil, err
+	}
+	var record *swire.DKVSRecord
+	if isDKVSAccountScopedNamespace(parsed.Namespace) {
+		record, err = dkvsindexer.NewAccountRecord(key, value, opts)
+	} else {
+		pubKey, pubKeyErr := dkvsWalletPubKey(wallet)
+		if pubKeyErr != nil {
+			return nil, dkvsindexer.ErrInvalidSignature
+		}
+		record, err = dkvsindexer.NewRecord(key, value, pubKey, opts)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -37,18 +55,31 @@ func NewDKVSSignedRenewalRecord(wallet common.Wallet, existing *swire.DKVSRecord
 	if dkvsindexer.IsTombstone(existing.Flags) {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	if _, err := dkvsindexer.ParseKey(existing.Key); err != nil {
+	parsed, err := dkvsindexer.ParseKey(existing.Key)
+	if err != nil {
 		return nil, err
 	}
-	if !bytes.Equal(existing.PubKey, pubKey) {
+	if isDKVSAccountScopedNamespace(parsed.Namespace) {
+		if len(existing.PubKey) != 0 {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
+		want, err := dkvsindexer.RecordSignerAccountID(existing, parsed)
+		if err != nil {
+			return nil, err
+		}
+		got, err := dkvsindexer.CanonicalAccountID(pubKey)
+		if err != nil || got != want {
+			return nil, dkvsindexer.ErrPermissionDenied
+		}
+	} else if !bytes.Equal(existing.PubKey, pubKey) {
 		return nil, dkvsindexer.ErrPermissionDenied
 	}
 	if opts.ExpiryHeight <= existing.ExpiryHeight {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	record := *existing
-	record.PubKey = append([]byte{}, existing.PubKey...)
-	record.Value = append([]byte{}, existing.Value...)
+	record.PubKey = append([]byte(nil), existing.PubKey...)
+	record.Value = append([]byte(nil), existing.Value...)
 	record.Signature = nil
 	record.IssueTime = opts.IssueTime
 	if record.IssueTime == 0 {
@@ -59,9 +90,9 @@ func NewDKVSSignedRenewalRecord(wallet common.Wallet, existing *swire.DKVSRecord
 	}
 	record.ExpiryHeight = opts.ExpiryHeight
 	if opts.FeeProof != nil {
-		record.FeeProof = append([]byte{}, opts.FeeProof...)
+		record.FeeProof = append([]byte(nil), opts.FeeProof...)
 	} else {
-		record.FeeProof = append([]byte{}, existing.FeeProof...)
+		record.FeeProof = append([]byte(nil), existing.FeeProof...)
 	}
 	if dkvsindexer.RecordSize(&record) > swire.MaxDKVSRecordSize ||
 		len(record.Value) > dkvsindexer.MaxRecordValueSize {
@@ -74,8 +105,18 @@ func NewDKVSSignedRenewalRecord(wallet common.Wallet, existing *swire.DKVSRecord
 }
 
 func SignDKVSRecord(wallet common.Wallet, record *swire.DKVSRecord) error {
+	if wallet == nil || record == nil {
+		return dkvsindexer.ErrInvalidSignature
+	}
+	parsed, err := dkvsindexer.ParseKey(record.Key)
+	if err != nil {
+		return err
+	}
+	if isDKVSAccountScopedNamespace(parsed.Namespace) {
+		return SignDKVSAccountRecord(wallet, record)
+	}
 	pubKey, err := dkvsWalletPubKey(wallet)
-	if err != nil || record == nil {
+	if err != nil {
 		return dkvsindexer.ErrInvalidSignature
 	}
 	record.PubKey = pubKey
