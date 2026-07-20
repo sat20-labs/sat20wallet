@@ -69,8 +69,22 @@ jobs:
         run: go vet ./wallet/rgb11
 
       - name: Compile wallet root package
+        id: wallet-compile
         working-directory: sat20wallet/sdk
-        run: go test ./wallet -run '^$' -count=1
+        shell: bash
+        run: |
+          set +e
+          go test ./wallet -run '^$' -count=1 2>&1 | tee /tmp/rgb11-wallet-compile.log
+          status=${PIPESTATUS[0]}
+          exit $status
+
+      - name: Upload wallet compile diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgb11-wallet-compile-${{ github.run_id }}
+          path: /tmp/rgb11-wallet-compile.log
+          retention-days: 3
 
       - name: Test wallet packages
         id: wallet-tests
