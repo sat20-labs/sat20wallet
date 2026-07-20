@@ -158,6 +158,14 @@ func (p *Manager) DeliverRGB11AddressTransfer(client *SatsNetDKVSClient, transfe
 		pending.State.Status != "prepared" && pending.State.Status != "delivered" {
 		return nil, ErrRGB11AddressDeliveryRequired
 	}
+	messageID := pending.State.AddressMessageID
+	if messageID == "" {
+		messageID, err = rgb11AddressMessageID(pending.State.TransferID)
+		if err != nil {
+			return nil, err
+		}
+		pending.State.AddressMessageID = messageID
+	}
 	cryptor, ok := p.wallet.(rgb11AccountPayloadCryptor)
 	if !ok {
 		return nil, fmt.Errorf("active wallet does not support RGB11 account encryption")
@@ -177,7 +185,7 @@ func (p *Manager) DeliverRGB11AddressTransfer(client *SatsNetDKVSClient, transfe
 	revisionKeys := []string{pending.State.DeliveryRecordKey}
 	if len(ciphertext)+2 > inlineLimit {
 		mode = rgb11AddressEnvelopeBlob
-		objectID = transferID
+		objectID = messageID
 		manifestKey, err := dkvsindexer.BlobManifestKey(pending.State.SenderAccountID, objectID)
 		if err != nil {
 			return nil, err
@@ -200,7 +208,7 @@ func (p *Manager) DeliverRGB11AddressTransfer(client *SatsNetDKVSClient, transfe
 		mailValue, _ = encodeRGB11AddressEnvelope(mode, nil)
 	}
 	record, err := client.SendAccountMailboxMessage(
-		p.wallet, pending.State.ReceiverAccountID, transferID, mailValue, opts, options.Autopay,
+		p.wallet, pending.State.ReceiverAccountID, messageID, mailValue, opts, options.Autopay,
 	)
 	if err != nil {
 		return nil, err
@@ -286,7 +294,7 @@ func (p *Manager) DeliverAndBroadcastRGB11AddressTransfer(client *SatsNetDKVSCli
 	return result, nil
 }
 
-func parseRGB11AddressMailboxKey(record *swire.DKVSRecord) (receiverID, senderID, transferID string, err error) {
+func parseRGB11AddressMailboxKey(record *swire.DKVSRecord) (receiverID, senderID, messageID string, err error) {
 	if record == nil {
 		return "", "", "", ErrRGB11AddressMailbox
 	}
@@ -295,18 +303,18 @@ func parseRGB11AddressMailboxKey(record *swire.DKVSRecord) (receiverID, senderID
 		parsed.Segments[1] != "msg" {
 		return "", "", "", ErrRGB11AddressMailbox
 	}
-	receiverID, senderID, transferID = parsed.Segments[0], parsed.Segments[2], parsed.Segments[3]
-	if len(transferID) != 64 {
+	receiverID, senderID, messageID = parsed.Segments[0], parsed.Segments[2], parsed.Segments[3]
+	if len(messageID) != 64 {
 		return "", "", "", ErrRGB11AddressMailbox
 	}
-	if decoded, decodeErr := hex.DecodeString(transferID); decodeErr != nil || len(decoded) != 32 {
+	if decoded, decodeErr := hex.DecodeString(messageID); decodeErr != nil || len(decoded) != 32 {
 		return "", "", "", ErrRGB11AddressMailbox
 	}
-	return receiverID, senderID, transferID, nil
+	return receiverID, senderID, messageID, nil
 }
 
 func (p *Manager) readRGB11AddressConsignment(client *SatsNetDKVSClient, record *swire.DKVSRecord,
-	senderID, transferID string, verify dkvsindexer.RecordVerificationOptions) ([]byte, string, error) {
+	senderID, messageID string, verify dkvsindexer.RecordVerificationOptions) ([]byte, string, error) {
 	mode, encrypted, err := decodeRGB11AddressEnvelope(record.Value)
 	if err != nil {
 		return nil, "", err
@@ -314,7 +322,7 @@ func (p *Manager) readRGB11AddressConsignment(client *SatsNetDKVSClient, record 
 	modeName := "inline"
 	if mode == rgb11AddressEnvelopeBlob {
 		modeName = "blob"
-		_, encrypted, err = client.GetAccountBlob(senderID, transferID, dkvsindexer.DefaultBlobPolicy(), verify)
+		_, encrypted, err = client.GetAccountBlob(senderID, messageID, dkvsindexer.DefaultBlobPolicy(), verify)
 		if err != nil {
 			return nil, "", err
 		}
@@ -377,7 +385,7 @@ func (p *Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *SatsNet
 	if err := dkvsindexer.VerifyAccountRecordForClient(record, verify); err != nil {
 		return nil, nil, err
 	}
-	receiverID, senderID, transferID, err := parseRGB11AddressMailboxKey(record)
+	receiverID, senderID, messageID, err := parseRGB11AddressMailboxKey(record)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -385,19 +393,24 @@ func (p *Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *SatsNet
 	if err != nil || receiverID != localID {
 		return nil, nil, ErrRGB11AddressMailbox
 	}
-	raw, mode, err := p.readRGB11AddressConsignment(client, record, senderID, transferID, verify)
+	raw, mode, err := p.readRGB11AddressConsignment(client, record, senderID, messageID, verify)
 	if err != nil {
 		return nil, nil, err
 	}
 	container, err := coreconsignment.Decode(raw)
-	if err != nil || container.Armor.ID == "" || container.Armor.ID != transferID {
+	if err != nil || container.Armor.ID == "" {
+		return nil, nil, ErrRGB11AddressMailbox
+	}
+	canonicalTransferID := container.Armor.ID
+	expectedMessageID, err := rgb11AddressMessageID(canonicalTransferID)
+	if err != nil || expectedMessageID != messageID {
 		return nil, nil, ErrRGB11AddressMailbox
 	}
 	receipt, err := p.ValidateRGB11Consignment(ctx, raw)
 	if err != nil {
 		return nil, nil, err
 	}
-	if receipt.TransferID == "" || receipt.TransferID != transferID {
+	if receipt.TransferID == "" || receipt.TransferID != canonicalTransferID {
 		return nil, nil, ErrRGB11AddressMailbox
 	}
 	allocation, status, err := p.findRGB11AddressAllocation(receipt)
@@ -433,6 +446,7 @@ func (p *Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *SatsNet
 	}
 	recordHash := dkvsindexer.RecordHash(record)
 	state.AddressMode = true
+	state.AddressMessageID = messageID
 	state.TransportMode = RGB11AddressTransport
 	state.SenderAccountID = senderID
 	state.ReceiverAccountID = receiverID
@@ -461,7 +475,7 @@ func (p *Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *SatsNet
 	if err := p.utxoLockerL1.SetLockReason(allocation.OutPoint, lockReason); err != nil {
 		return nil, nil, err
 	}
-	ackRecord, err := p.SendRGB11AddressACK(client, senderID, transferID,
+	ackRecord, err := p.SendRGB11AddressACK(client, senderID, messageID,
 		RGB11AddressACK{Status: RGB11AddressACKAccepted}, ackOptions)
 	if err != nil {
 		return nil, nil, err
@@ -475,9 +489,9 @@ func (p *Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *SatsNet
 	return accepted, ackRecord, nil
 }
 
-func (p *Manager) SendRGB11AddressACK(client *SatsNetDKVSClient, senderAccountID, transferID string,
+func (p *Manager) SendRGB11AddressACK(client *SatsNetDKVSClient, senderAccountID, messageID string,
 	ack RGB11AddressACK, options RGB11AddressDeliveryOptions) (*swire.DKVSRecord, error) {
-	if p == nil || client == nil || senderAccountID == "" || transferID == "" {
+	if p == nil || client == nil || senderAccountID == "" || messageID == "" {
 		return nil, ErrRGB11AddressMailbox
 	}
 	value, err := encodeRGB11AddressACK(ack)
@@ -488,12 +502,12 @@ func (p *Manager) SendRGB11AddressACK(client *SatsNetDKVSClient, senderAccountID
 	if err != nil {
 		return nil, err
 	}
-	key, err := dkvsindexer.MailMsgKey(senderAccountID, receiverAccountID, transferID)
+	key, err := dkvsindexer.MailMsgKey(senderAccountID, receiverAccountID, messageID)
 	if err != nil {
 		return nil, err
 	}
 	opts := nextRGB11AddressRecordOptions(client, []string{key}, options.RecordOptions)
-	return client.SendAccountMailboxMessage(p.wallet, senderAccountID, transferID, value, opts, options.Autopay)
+	return client.SendAccountMailboxMessage(p.wallet, senderAccountID, messageID, value, opts, options.Autopay)
 }
 
 // AcceptRGB11AddressACK records receiver persistence. Delivery cache is only
@@ -509,7 +523,7 @@ func (p *Manager) AcceptRGB11AddressACK(record *swire.DKVSRecord,
 	if err := dkvsindexer.VerifyAccountRecordForClient(record, verify); err != nil {
 		return nil, err
 	}
-	senderID, receiverID, transferID, err := parseRGB11AddressMailboxKey(record)
+	senderID, receiverID, messageID, err := parseRGB11AddressMailboxKey(record)
 	if err != nil {
 		return nil, err
 	}
@@ -521,12 +535,23 @@ func (p *Manager) AcceptRGB11AddressACK(record *swire.DKVSRecord,
 	if err != nil {
 		return nil, err
 	}
-	pending, err := p.rgbManager.projectionStore.LoadPendingTransfer(transferID)
+	states, err := p.rgbManager.projectionStore.ListTransfers()
 	if err != nil {
 		return nil, err
 	}
-	if !pending.State.AddressMode || pending.State.ReceiverAccountID != receiverID ||
-		pending.State.SenderAccountID != senderID {
+	var pending *rgb11wallet.PendingTransfer
+	for _, state := range states {
+		if state == nil || !state.AddressMode || state.AddressMessageID != messageID {
+			continue
+		}
+		pending, err = p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
+		if err != nil {
+			return nil, err
+		}
+		break
+	}
+	if pending == nil || !pending.State.AddressMode || pending.State.AddressMessageID != messageID ||
+		pending.State.ReceiverAccountID != receiverID || pending.State.SenderAccountID != senderID {
 		return nil, ErrRGB11AddressMailbox
 	}
 	if ack.Status != RGB11AddressACKAccepted {

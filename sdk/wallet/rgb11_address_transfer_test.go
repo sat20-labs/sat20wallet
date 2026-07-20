@@ -238,6 +238,9 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		!prepared.State.SyntheticInvoiceRemoved || resolved.AccountID != endpoint.AccountID {
 		t.Fatalf("prepared address transfer=%+v endpoint=%+v", prepared.State, resolved)
 	}
+	if decoded, err := hex.DecodeString(prepared.State.AddressMessageID); err != nil || len(decoded) != 32 {
+		t.Fatalf("address message ID=%q err=%v", prepared.State.AddressMessageID, err)
+	}
 	if _, err := sender.BroadcastRGB11AddressTransfer(prepared.State.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
 		t.Fatalf("broadcast before delivery err=%v", err)
 	}
@@ -328,7 +331,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatal(err)
 	}
 	forgedTransferID := strings.Repeat("a", 64)
-	if forgedTransferID == prepared.State.TransferID {
+	if forgedTransferID == prepared.State.AddressMessageID {
 		forgedTransferID = strings.Repeat("b", 64)
 	}
 	forgedKey, err := dkvsindexer.MailMsgKey(endpoint.AccountID, senderID, forgedTransferID)
@@ -404,7 +407,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updatedACK, err := client.SendAccountMailboxMessage(recipientWallet, senderID, prepared.State.TransferID,
+	updatedACK, err := client.SendAccountMailboxMessage(recipientWallet, senderID, pending.State.AddressMessageID,
 		ackValue, nextRGB11AddressRecordOptions(client, []string{ackKey}, recordOptions), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -413,7 +416,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatalf("ACK seq previous=%d updated=%d", previousACK.Seq, updatedACK.Seq)
 	}
 
-	if _, err := hex.DecodeString(prepared.State.TransferID); err != nil {
-		t.Fatalf("transfer ID is not canonical hex: %v", err)
+	if _, err := hex.DecodeString(prepared.State.AddressMessageID); err != nil {
+		t.Fatalf("address message ID is not canonical hex: %v", err)
 	}
 }

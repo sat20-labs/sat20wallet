@@ -133,6 +133,7 @@ type TransferState struct {
 	// transfer identifier are encoded by the mailbox key, while txid/vout and
 	// asset data are obtained from the encrypted consignment.
 	AddressMode             bool   `json:"address_mode,omitempty"`
+	AddressMessageID        string `json:"address_message_id,omitempty"`
 	SenderAccountID         string `json:"sender_account_id,omitempty"`
 	ReceiverAccountID       string `json:"receiver_account_id,omitempty"`
 	ReceiverAddress         string `json:"receiver_address,omitempty"`
