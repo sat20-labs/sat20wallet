@@ -1,0 +1,53 @@
+name: Export RGB11 refactor workspace
+
+on:
+  push:
+    branches: [agent/rgb11-dkvs-transfer-a]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout wallet branch
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/sat20wallet
+          ref: agent/rgb11-dkvs-transfer-a
+          path: workspace/sat20wallet
+          fetch-depth: 0
+
+      - name: Checkout indexer
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/indexer
+          path: workspace/indexer
+
+      - name: Checkout RGB11 engine
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/rgb11
+          path: workspace/rgb11
+
+      - name: Checkout SatoshiNet branch
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/satoshinet
+          ref: agent/rgb11-dkvs-transfer-a
+          path: workspace/satoshinet
+
+      - name: Package source workspace
+        run: |
+          find workspace -name .git -type d -prune -exec rm -rf {} +
+          tar -czf /tmp/rgb11-refactor-workspace.tgz workspace
+
+      - name: Upload source workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgb11-refactor-workspace-${{ github.run_id }}
+          path: /tmp/rgb11-refactor-workspace.tgz
+          retention-days: 2
