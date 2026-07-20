@@ -41,6 +41,20 @@ jobs:
           ref: agent/rgb11-dkvs-transfer-a
           path: satoshinet
 
+      - name: Package refactor workspace
+        run: |
+          for repo in sat20wallet indexer rgb11 satoshinet; do
+            find "$repo" -name .git -type d -prune -exec rm -rf {} +
+          done
+          tar -czf /tmp/rgb11-refactor-workspace.tgz sat20wallet indexer rgb11 satoshinet
+
+      - name: Upload refactor workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgb11-refactor-workspace-${{ github.run_id }}
+          path: /tmp/rgb11-refactor-workspace.tgz
+          retention-days: 2
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
