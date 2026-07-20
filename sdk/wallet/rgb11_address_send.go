@@ -18,12 +18,12 @@ import (
 const RGB11AddressTransport = "address-dkvs"
 
 type RGB11AddressSendRequest struct {
-	ReceiverAddress string            `json:"receiver_address"`
-	AssetName       indexer.AssetName `json:"asset_name"`
-	AmountRaw       string            `json:"amount_raw"`
-	FeeRate         int64             `json:"fee_rate"`
-	MinConfirmations uint8            `json:"min_confirmations"`
-	Expiry          int64             `json:"expiry,omitempty"`
+	ReceiverAddress  string            `json:"receiver_address"`
+	AssetName        indexer.AssetName `json:"asset_name"`
+	AmountRaw        string            `json:"amount_raw"`
+	FeeRate          int64             `json:"fee_rate"`
+	MinConfirmations uint8             `json:"min_confirmations"`
+	Expiry           int64             `json:"expiry,omitempty"`
 }
 
 func randomRGB11TmpKey() (string, error) {
@@ -136,14 +136,16 @@ func (p *Manager) PrepareRGB11AddressTransfer(ctx context.Context, client *SatsN
 	if err != nil {
 		return nil, nil, err
 	}
+	// Sender and receiver order already distinguishes delivery from ACK, so the
+	// 64-byte transfer ID is the complete message ID and fits one key segment.
 	deliveryKey, err := dkvsindexer.MailMsgKey(
-		endpoint.AccountID, senderAccountID, "r11-"+pending.State.TransferID,
+		endpoint.AccountID, senderAccountID, pending.State.TransferID,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
 	ackKey, err := dkvsindexer.MailMsgKey(
-		senderAccountID, endpoint.AccountID, "r11a-"+pending.State.TransferID,
+		senderAccountID, endpoint.AccountID, pending.State.TransferID,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -165,6 +167,10 @@ func (p *Manager) PrepareRGB11AddressTransfer(ctx context.Context, client *SatsN
 	if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
 		return nil, nil, err
 	}
+	// Snapshot export strips RecipientConsignment for address-mode transfers,
+	// so this synchronization advances canonical state without backing up the
+	// transient delivery cache.
+	p.autoBackupRGB11AfterMutation()
 	prepared.State = &pending.State
 	prepared.States = []*rgb11wallet.TransferState{&pending.State}
 	return prepared, endpoint, nil
