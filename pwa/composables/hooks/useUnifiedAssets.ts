@@ -16,7 +16,13 @@ export const useUnifiedAssets = (options: UseAssetQueryOptions = {}) => {
   // The RGB11 mailbox is the safety barrier for ordinary L1 refresh.
   const rgb11 = useRgb11Assets({ enabled: requestedEnabled })
   const l1Enabled = computed(() => requestedEnabled.value && rgb11.ready.value)
-  const l1 = useL1Assets({ enabled: l1Enabled })
+  const l1 = useL1Assets({
+    enabled: l1Enabled,
+    // The L1 indexer may observe a newly broadcast carrier immediately after
+    // the first mailbox pass. Run the mailbox pass again after the summary is
+    // fetched but before it is committed to the store or exposed to the UI.
+    beforeSummaryCommit: rgb11.refreshRGB11Assets,
+  })
 
   const refreshUnifiedAssets = async (refreshOptions: any = {}) => {
     await rgb11.refreshRGB11Assets()
