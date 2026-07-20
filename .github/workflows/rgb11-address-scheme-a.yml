@@ -66,7 +66,19 @@ jobs:
 
       - name: Vet wallet package
         working-directory: sat20wallet/sdk
-        run: go vet ./wallet/...
+        shell: bash
+        run: |
+          set -o pipefail
+          go vet ./wallet/... 2>&1 | tee /tmp/rgb11-wallet-vet.log
+
+      - name: Upload vet diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgb11-wallet-vet-${{ github.run_id }}
+          path: /tmp/rgb11-wallet-vet.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Test wallet package
         working-directory: sat20wallet/sdk
