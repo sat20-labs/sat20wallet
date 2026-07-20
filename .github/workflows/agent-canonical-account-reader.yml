@@ -1,0 +1,105 @@
+name: Agent canonical account reader
+
+on:
+  push:
+    branches: [agent/rgb11-dkvs-transfer-a]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Migrate RGB11 account record readers
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('sdk/wallet/rgb11_backup.go')
+          text = p.read_text()
+          marker = '''func (p *SatsNetDKVSClient) GetRGB11WalletHead(walletPubKey []byte, walletID string, verifyOpts dkvsindexer.RecordVerificationOptions) (*coresync.WalletHead, *swire.DKVSRecord, error) {'''
+          helper = '''func verifyRGB11DKVSAccountOwner(record *swire.DKVSRecord, walletPubKey []byte) error {
+          \tif record == nil {
+          \t\treturn dkvsindexer.ErrInvalidRecord
+          \t}
+          \texpected, err := dkvsindexer.CanonicalAccountID(walletPubKey)
+          \tif err != nil {
+          \t\treturn dkvsindexer.ErrPermissionDenied
+          \t}
+          \tparsed, err := dkvsindexer.ParseKey(record.Key)
+          \tif err != nil {
+          \t\treturn err
+          \t}
+          \tactual, err := dkvsindexer.RecordSignerAccountID(record, parsed)
+          \tif err != nil || actual != expected {
+          \t\treturn dkvsindexer.ErrPermissionDenied
+          \t}
+          \treturn nil
+          }
+
+          ''' + marker
+          if 'func verifyRGB11DKVSAccountOwner' not in text:
+              if marker not in text:
+                  raise SystemExit('missing wallet head reader marker')
+              text = text.replace(marker, helper, 1)
+          old = '''\tif !bytes.Equal(record.PubKey, walletPubKey) {
+          \t\treturn nil, nil, dkvsindexer.ErrPermissionDenied
+          \t}'''
+          new = '''\tif err := verifyRGB11DKVSAccountOwner(record, walletPubKey); err != nil {
+          \t\treturn nil, nil, err
+          \t}'''
+          count = text.count(old)
+          if count != 2:
+              raise SystemExit(f'expected two PubKey ownership checks, found {count}')
+          text = text.replace(old, new)
+          p.write_text(text)
+
+          p = Path('sdk/wallet/rgb11_sync_test.go')
+          text = p.read_text()
+          old = '''\tif !bytes.Equal(record.PubKey, ownerPriv.PubKey().SerializeCompressed()) {
+          \t\tt.Fatal("head record does not belong to owner")
+          \t}
+          \tif bytes.Equal(record.PubKey, otherPriv.PubKey().SerializeCompressed()) {
+          \t\tt.Fatal("another wallet appears as the head record signer")
+          \t}'''
+          new = '''\tif len(record.PubKey) != 0 {
+          \t\tt.Fatal("account-scoped head record repeated its public key")
+          \t}
+          \tparsed, err := dkvsindexer.ParseKey(record.Key)
+          \tif err != nil {
+          \t\tt.Fatal(err)
+          \t}
+          \tsignerID, err := dkvsindexer.RecordSignerAccountID(record, parsed)
+          \tif err != nil {
+          \t\tt.Fatal(err)
+          \t}
+          \townerID, err := dkvsindexer.CanonicalAccountID(ownerPriv.PubKey().SerializeCompressed())
+          \tif err != nil || signerID != ownerID {
+          \t\tt.Fatalf("head signer=%s owner=%s err=%v", signerID, ownerID, err)
+          \t}
+          \totherID, err := dkvsindexer.CanonicalAccountID(otherPriv.PubKey().SerializeCompressed())
+          \tif err != nil {
+          \t\tt.Fatal(err)
+          \t}
+          \tif signerID == otherID {
+          \t\tt.Fatal("another wallet appears as the head record signer")
+          \t}'''
+          if old not in text:
+              raise SystemExit('missing wallet head test assertion')
+          p.write_text(text.replace(old, new, 1))
+          PY
+          gofmt -w sdk/wallet/rgb11_backup.go sdk/wallet/rgb11_sync_test.go
+          rm .github/workflows/agent-canonical-account-reader.yml
+      - name: Commit migration
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'verify canonical DKVS account owners'
+          git push origin HEAD:agent/rgb11-dkvs-transfer-a
