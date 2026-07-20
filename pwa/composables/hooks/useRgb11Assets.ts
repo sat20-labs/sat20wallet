@@ -87,8 +87,10 @@ export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {
   const stateQuery = useQuery({
     queryKey: ['rgb11-state', walletId, accountIndex, network, address, env],
     queryFn: async (): Promise<RGB11StateDTO> => {
-      // Lifecycle state is reconciled from Bitcoin facts before rendering;
-      // failures remain visible through consistency_status.
+      // DKVS delivery is processed before Bitcoin state reconciliation, so a
+      // newly observed P2TR output cannot be exposed to ordinary coin selection
+      // before its RGB11 allocation has been validated and locked.
+      await walletManager.syncRGB11AddressMailbox({})
       await walletManager.refreshRGB11State()
       const [err, result] = await walletManager.getRGB11State()
       if (err) throw err
