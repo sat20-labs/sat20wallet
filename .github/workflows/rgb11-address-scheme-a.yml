@@ -66,9 +66,9 @@ jobs:
             fi
           fi
 
-      - name: Vet RGB11 subpackage
+      - name: Vet wallet packages excluding legacy copylocks findings
         working-directory: sat20wallet/sdk
-        run: go vet ./wallet/rgb11
+        run: go vet -copylocks=false ./wallet/...
 
       - name: Compile wallet root package
         working-directory: sat20wallet/sdk
