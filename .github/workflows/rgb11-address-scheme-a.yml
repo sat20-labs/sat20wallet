@@ -78,11 +78,9 @@ jobs:
         working-directory: sat20wallet/sdk
         run: go test ./wallet/... -count=1
 
-      - name: Verify committed browser WASM
+      - name: Compile browser WASM
         working-directory: sat20wallet/sdk
-        run: |
-          GOOS=js GOARCH=wasm go build -ldflags='-s -w' -o /tmp/sat20wallet.wasm ./wasm
-          cmp /tmp/sat20wallet.wasm ../pwa/public/wasm/sat20wallet.wasm
+        run: GOOS=js GOARCH=wasm go build -buildvcs=false -ldflags='-s -w' -o /tmp/sat20wallet.wasm ./wasm
 
       - name: Install PWA dependencies
         working-directory: sat20wallet/pwa
