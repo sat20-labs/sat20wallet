@@ -10,6 +10,7 @@ import (
 	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -387,6 +388,10 @@ func (p *Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *SatsNet
 	raw, mode, err := p.readRGB11AddressConsignment(client, record, senderID, transferID, verify)
 	if err != nil {
 		return nil, nil, err
+	}
+	container, err := coreconsignment.Decode(raw)
+	if err != nil || container.Armor.ID == "" || container.Armor.ID != transferID {
+		return nil, nil, ErrRGB11AddressMailbox
 	}
 	receipt, err := p.ValidateRGB11Consignment(ctx, raw)
 	if err != nil {
