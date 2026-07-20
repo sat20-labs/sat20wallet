@@ -324,7 +324,7 @@ func (p *Manager) readRGB11AddressConsignment(client *SatsNetDKVSClient, record 
 		modeName = "blob"
 		_, encrypted, err = client.GetAccountBlob(senderID, messageID, dkvsindexer.DefaultBlobPolicy(), verify)
 		if err != nil {
-			return nil, "", err
+			return nil, "", fmt.Errorf("%w: %v", ErrRGB11AddressMailbox, err)
 		}
 	}
 	cryptor, ok := p.wallet.(rgb11AccountPayloadCryptor)

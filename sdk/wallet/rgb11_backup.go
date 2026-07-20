@@ -297,6 +297,19 @@ func (p *Manager) SyncRGB11WalletState(walletID string, opts dkvsindexer.RecordO
 	return p.syncRGB11WalletState(walletID, opts, true)
 }
 
+func (p *Manager) ensureRGB11AddressReceiveForDKVS(client *SatsNetDKVSClient,
+	opts dkvsindexer.RecordOptions) error {
+	if p == nil || client == nil || p.wallet == nil {
+		return ErrRGB11Inconsistent
+	}
+	autopay := &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet()}
+	_, err := p.EnableRGB11AddressReceive(client, RGB11ReceiveCapabilityOptions{
+		RecordOptions: opts,
+		Autopay:       autopay,
+	})
+	return err
+}
+
 func (p *Manager) syncRGB11WalletState(walletID string, opts dkvsindexer.RecordOptions, enableAuto bool) (*coresync.WalletHead, error) {
 	p.rgbManager.backupMutex.Lock()
 	defer p.rgbManager.backupMutex.Unlock()
@@ -315,6 +328,10 @@ func (p *Manager) syncRGB11WalletState(walletID string, opts dkvsindexer.RecordO
 	}
 	head, _, err := p.BackupRGB11WalletState(client, walletID, p.rgbManager.head, opts)
 	if err != nil {
+		return nil, err
+	}
+	if err := p.ensureRGB11AddressReceiveForDKVS(client, opts); err != nil {
+		p.rgbManager.dkvsStatus = "warning"
 		return nil, err
 	}
 	if enableAuto {
@@ -349,7 +366,12 @@ func (p *Manager) RestoreLatestRGB11WalletState(walletID string,
 	if err != nil {
 		return nil, err
 	}
-	if err := p.enableRGB11AutoBackup(dkvsindexer.RecordOptions{TTL: record.TTL, ExpiryHeight: record.ExpiryHeight}); err != nil {
+	retention := dkvsindexer.RecordOptions{TTL: record.TTL, ExpiryHeight: record.ExpiryHeight}
+	if err := p.ensureRGB11AddressReceiveForDKVS(client, retention); err != nil {
+		p.rgbManager.dkvsStatus = "warning"
+		return nil, err
+	}
+	if err := p.enableRGB11AutoBackup(retention); err != nil {
 		p.rgbManager.dkvsStatus = "warning"
 		return nil, err
 	}
