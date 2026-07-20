@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   statuses: write
 
 jobs:
@@ -16,11 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout wallet branch
+      - name: Checkout wallet
         uses: actions/checkout@v4
         with:
-          repository: sat20-labs/sat20wallet
-          ref: agent/rgb11-dkvs-transfer-a
           path: sat20wallet
           fetch-depth: 0
 
@@ -54,13 +52,19 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Apply final review fixes
-        working-directory: sat20wallet
-        run: python3 .github/scripts/rgb11_review_fixups.py
-
-      - name: Format changed Go files
-        working-directory: sat20wallet
-        run: gofmt -w sdk/wallet/rgb11_address_api.go
+      - name: Check formatting
+        shell: bash
+        run: |
+          cd sat20wallet
+          files=$(git diff --name-only origin/main...HEAD -- '*.go')
+          if [ -n "$files" ]; then
+            unformatted=$(gofmt -l $files)
+            if [ -n "$unformatted" ]; then
+              echo "Unformatted files:"
+              echo "$unformatted"
+              exit 1
+            fi
+          fi
 
       - name: Vet RGB11 subpackage
         working-directory: sat20wallet/sdk
@@ -74,9 +78,11 @@ jobs:
         working-directory: sat20wallet/sdk
         run: go test ./wallet/... -count=1
 
-      - name: Compile browser WASM
+      - name: Verify committed browser WASM
         working-directory: sat20wallet/sdk
-        run: GOOS=js GOARCH=wasm go build -ldflags='-s -w' -o ../pwa/public/wasm/sat20wallet.wasm ./wasm
+        run: |
+          GOOS=js GOARCH=wasm go build -ldflags='-s -w' -o /tmp/sat20wallet.wasm ./wasm
+          cmp /tmp/sat20wallet.wasm ../pwa/public/wasm/sat20wallet.wasm
 
       - name: Install PWA dependencies
         working-directory: sat20wallet/pwa
@@ -90,51 +96,8 @@ jobs:
         working-directory: sat20wallet/pwa
         run: npm run verify:rgb11-l1
 
-      - name: Package reviewed files
-        working-directory: sat20wallet
-        run: |
-          tar -czf /tmp/rgb11-reviewed-files.tgz \
-            sdk/wallet/rgb11_address_api.go \
-            pwa/components/wallet/RGB11SendDialog.vue \
-            pwa/composables/hooks/useRgb11Assets.ts \
-            pwa/composables/hooks/useUnifiedAssets.ts \
-            pwa/locales/en.json \
-            pwa/locales/zh.json \
-            pwa/scripts/verify/rgb11-l1-smoke.mjs \
-            pwa/public/wasm/sat20wallet.wasm
-
-      - name: Upload reviewed files
-        uses: actions/upload-artifact@v4
-        with:
-          name: rgb11-reviewed-files-${{ github.run_id }}
-          path: /tmp/rgb11-reviewed-files.tgz
-          retention-days: 3
-
-      - name: Commit reviewed integration
-        working-directory: sat20wallet
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add \
-            sdk/wallet/rgb11_address_api.go \
-            pwa/components/wallet/RGB11SendDialog.vue \
-            pwa/composables/hooks/useRgb11Assets.ts \
-            pwa/composables/hooks/useUnifiedAssets.ts \
-            pwa/locales/en.json \
-            pwa/locales/zh.json \
-            pwa/scripts/verify/rgb11-l1-smoke.mjs \
-            pwa/public/wasm/sat20wallet.wasm
-          git commit -m 'finish RGB11 address-mode PWA integration'
-          git fetch origin agent/rgb11-dkvs-transfer-a
-          git rebase origin/agent/rgb11-dkvs-transfer-a
-          git push origin HEAD:agent/rgb11-dkvs-transfer-a
-
       - name: Publish commit status
-        if: always()
+        if: always() && github.event_name == 'push'
         uses: actions/github-script@v7
         env:
           JOB_STATUS: ${{ job.status }}
