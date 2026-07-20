@@ -70,7 +70,7 @@ func nextRGB11CapabilityRecordOptions(client *SatsNetDKVSClient, key string, val
 		return opts, nil
 	}
 	existing, err := client.GetRecord(key)
-	if err != nil || existing == nil || existing.Version != dkvsindexer.VersionV2 {
+	if err != nil || existing == nil || existing.Version != dkvsindexer.Version {
 		opts.Seq = 1
 		return opts, nil
 	}
@@ -137,7 +137,7 @@ func (p *Manager) EnableRGB11AddressReceive(client *SatsNetDKVSClient,
 	); err != nil {
 		return nil, err
 	}
-	capabilityKey, err := dkvsindexer.PersonalKeyV2(accountID, RGB11ReceiveCapabilityPath)
+	capabilityKey, err := dkvsindexer.AccountPersonalKey(accountID, RGB11ReceiveCapabilityPath)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +162,7 @@ func (p *Manager) ResolveRGB11AddressEndpoint(client *SatsNetDKVSClient, address
 	if err != nil {
 		return nil, ErrRGB11TraditionalReceiveRequired
 	}
-	key, err := dkvsindexer.PersonalKeyV2(accountID, RGB11ReceiveCapabilityPath)
+	key, err := dkvsindexer.AccountPersonalKey(accountID, RGB11ReceiveCapabilityPath)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func (p *Manager) ResolveRGB11AddressEndpoint(client *SatsNetDKVSClient, address
 	if err != nil {
 		return nil, err
 	}
-	pubKey, err := dkvsindexer.AccountPubKeyV2(accountID)
+	pubKey, err := dkvsindexer.AccountPubKey(accountID)
 	if err != nil {
 		return nil, err
 	}

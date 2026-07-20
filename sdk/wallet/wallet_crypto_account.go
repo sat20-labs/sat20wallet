@@ -31,7 +31,7 @@ func deriveAccountSharedSecret(priv *secp256k1.PrivateKey, accountID string) ([]
 	if priv == nil {
 		return nil, fmt.Errorf("nil private key")
 	}
-	remote, err := dkvsindexer.AccountPubKeyV2(accountID)
+	remote, err := dkvsindexer.AccountPubKey(accountID)
 	if err != nil {
 		return nil, err
 	}

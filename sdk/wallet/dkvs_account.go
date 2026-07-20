@@ -16,7 +16,7 @@ type dkvsAccountSchnorrSigner interface {
 }
 
 // SignSchnorrMessage signs a 32-byte digest with the current SAT20 subaccount
-// payment key using BIP340. The corresponding x-only public key is the DKVS v2
+// payment key using BIP340. The corresponding x-only public key is the DKVS v1
 // account ID.
 func (p *InternalWallet) SignSchnorrMessage(hash []byte) ([]byte, error) {
 	if p == nil || len(hash) != 32 {
@@ -40,11 +40,11 @@ func dkvsAccountID(wallet common.Wallet) (string, error) {
 	if wallet == nil || wallet.GetPubKey() == nil {
 		return "", dkvsindexer.ErrInvalidSignature
 	}
-	return dkvsindexer.AccountIDV2(wallet.GetPubKey().SerializeCompressed())
+	return dkvsindexer.CanonicalAccountID(wallet.GetPubKey().SerializeCompressed())
 }
 
 func SignDKVSAccountRecord(wallet common.Wallet, record *swire.DKVSRecord) error {
-	if wallet == nil || record == nil || record.Version != dkvsindexer.VersionV2 {
+	if wallet == nil || record == nil || record.Version != dkvsindexer.Version {
 		return dkvsindexer.ErrInvalidSignature
 	}
 	signer, ok := wallet.(dkvsAccountSchnorrSigner)
@@ -63,7 +63,7 @@ func SignDKVSAccountRecord(wallet common.Wallet, record *swire.DKVSRecord) error
 
 func NewDKVSAccountSignedRecord(wallet common.Wallet, key string, value []byte,
 	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	record, err := dkvsindexer.NewRecordV2(key, value, opts)
+	record, err := dkvsindexer.NewAccountRecord(key, value, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func NewDKVSAccountSignedRecord(wallet common.Wallet, key string, value []byte,
 
 func newDKVSAccountSignedRecordWithAutopay(wallet common.Wallet, key string, value []byte,
 	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
-	record, err := dkvsindexer.NewRecordV2(key, value, opts)
+	record, err := dkvsindexer.NewAccountRecord(key, value, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +134,7 @@ func (p *SatsNetDKVSClient) PutAccountPersonalRecord(wallet common.Wallet, path 
 	if err != nil {
 		return nil, err
 	}
-	key, err := dkvsindexer.PersonalKeyV2(accountID, path)
+	key, err := dkvsindexer.AccountPersonalKey(accountID, path)
 	if err != nil {
 		return nil, err
 	}
