@@ -88,6 +88,8 @@ export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {
   const stateQuery = useQuery({
     queryKey: ['rgb11-state', walletId, accountIndex, network, address, env],
     queryFn: async (): Promise<RGB11StateDTO> => {
+      // Process encrypted RGB11 delivery before ordinary Bitcoin UTXOs
+      // are refreshed or exposed to coin selection.
       const [mailboxError] = await rgb11Address.syncMailbox({})
       if (mailboxError) throw mailboxError
 

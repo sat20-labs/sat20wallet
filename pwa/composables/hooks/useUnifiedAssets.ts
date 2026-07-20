@@ -13,6 +13,7 @@ export const useUnifiedAssets = (options: UseAssetQueryOptions = {}) => {
     return enabled?.value ?? true
   })
 
+  // The RGB11 mailbox is the safety barrier for ordinary L1 refresh.
   const rgb11 = useRgb11Assets({ enabled: requestedEnabled })
   const l1Enabled = computed(() => requestedEnabled.value && rgb11.ready.value)
   const l1 = useL1Assets({ enabled: l1Enabled })
