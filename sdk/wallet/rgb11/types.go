@@ -127,6 +127,27 @@ type TransferState struct {
 	NetworkBackupRef string            `json:"network_backup_ref,omitempty"`
 	ParentStateHash  string            `json:"parent_state_hash"`
 	DKVSOperationID  string            `json:"dkvs_operation_id"`
+
+	// Address-mode fields are local lifecycle metadata. They are deliberately
+	// not duplicated in DKVS mailbox payloads: sender/receiver accounts and the
+	// transfer identifier are encoded by the mailbox key, while txid/vout and
+	// asset data are obtained from the encrypted consignment.
+	AddressMode             bool   `json:"address_mode,omitempty"`
+	SenderAccountID         string `json:"sender_account_id,omitempty"`
+	ReceiverAccountID       string `json:"receiver_account_id,omitempty"`
+	ReceiverAddress         string `json:"receiver_address,omitempty"`
+	ReceiveCapabilityKey    string `json:"receive_capability_key,omitempty"`
+	ReceiveCapabilityHash   string `json:"receive_capability_hash,omitempty"`
+	DeliveryMode            string `json:"delivery_mode,omitempty"`
+	DeliveryObjectID        string `json:"delivery_object_id,omitempty"`
+	DeliveryRecordKey       string `json:"delivery_record_key,omitempty"`
+	DeliveryRecordHash      string `json:"delivery_record_hash,omitempty"`
+	DeliveryTemporary       bool   `json:"delivery_temporary,omitempty"`
+	DeliveryExpiryHeight    uint64 `json:"delivery_expiry_height,omitempty"`
+	DeliveryTTL             uint64 `json:"delivery_ttl,omitempty"`
+	DeliveryAcknowledged    bool   `json:"delivery_acknowledged,omitempty"`
+	DeliveryCacheCompacted  bool   `json:"delivery_cache_compacted,omitempty"`
+	SyntheticInvoiceRemoved bool   `json:"synthetic_invoice_removed,omitempty"`
 }
 
 // PendingTransfer is private wallet state. Seal reveals and signed transaction
