@@ -125,6 +125,10 @@ func (p *Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 	if p == nil || p.wallet == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
 		return nil, ErrRGB11Inconsistent
 	}
+	result := &RGB11AddressMailboxSyncResult{}
+	if !p.rgb11DKVSConfigured() {
+		return result, nil
+	}
 	client, err := p.configuredRGB11DKVSClient()
 	if err != nil {
 		return nil, err
@@ -141,7 +145,6 @@ func (p *Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 	if verify.Now == 0 {
 		verify.Now = uint64(time.Now().UnixMilli())
 	}
-	result := &RGB11AddressMailboxSyncResult{}
 	for start := 0; ; start += rgb11AddressMailboxPageSize {
 		records, total, err := client.ListRecords(prefix, start, rgb11AddressMailboxPageSize)
 		if err != nil {

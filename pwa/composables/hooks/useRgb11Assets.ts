@@ -2,6 +2,7 @@ import { computed, watch } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
 import { storeToRefs } from 'pinia'
 import walletManager from '@/utils/sat20'
+import rgb11Address from '@/utils/rgb11Address'
 import { useGlobalStore, useL1Store, useRGB11Store, useWalletStore } from '@/store'
 import type { RGB11StateDTO } from '@/store/rgb11'
 
@@ -87,11 +88,12 @@ export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {
   const stateQuery = useQuery({
     queryKey: ['rgb11-state', walletId, accountIndex, network, address, env],
     queryFn: async (): Promise<RGB11StateDTO> => {
-      // DKVS delivery is processed before Bitcoin state reconciliation, so a
-      // newly observed P2TR output cannot be exposed to ordinary coin selection
-      // before its RGB11 allocation has been validated and locked.
-      await walletManager.syncRGB11AddressMailbox({})
-      await walletManager.refreshRGB11State()
+      const [mailboxError] = await rgb11Address.syncMailbox({})
+      if (mailboxError) throw mailboxError
+
+      const [refreshError] = await walletManager.refreshRGB11State()
+      if (refreshError) throw refreshError
+
       const [err, result] = await walletManager.getRGB11State()
       if (err) throw err
       if (!result?.state) throw new Error('RGB11 Wallet state is unavailable')
@@ -122,6 +124,11 @@ export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {
 
   return {
     loading: computed(() => stateQuery.isLoading.value),
-    refreshRGB11Assets: async () => { await stateQuery.refetch() },
+    ready: computed(() => stateQuery.isSuccess.value),
+    error: computed(() => stateQuery.error.value),
+    refreshRGB11Assets: async () => {
+      const result = await stateQuery.refetch()
+      if (result.error) throw result.error
+    },
   }
 }

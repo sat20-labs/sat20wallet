@@ -6,6 +6,7 @@ const requiredFiles = [
   'components/wallet/RGB11ImportDialog.vue',
   'components/wallet/RGB11InvoiceDialog.vue',
   'components/wallet/RGB11SendDialog.vue',
+  'utils/rgb11Address.ts',
   'composables/hooks/useRgb11Assets.ts',
   'composables/hooks/useUnifiedAssets.ts',
   'store/rgb11.ts',
@@ -31,6 +32,12 @@ const requiredWasmMethods = [
   'refreshRGB11State',
   'backupRGB11WalletState',
   'restoreRGB11WalletState',
+  'getRGB11AddressCarrierWarning',
+  'syncRGB11AddressMailbox',
+  'deliverAndBroadcastRGB11AddressTransfer',
+  'prepareRGB11AddressTransfer',
+  'resolveRGB11AddressEndpoint',
+  'enableRGB11AddressReceive',
 ]
 
 const requireContains = async (path, fragments) => {
@@ -53,7 +60,22 @@ for (const method of requiredWasmMethods) {
   if (!wasmText.includes(method)) throw new Error(`wallet WASM is missing RGB11 export ${method}`)
 }
 
-await requireContains('utils/sat20.ts', requiredWasmMethods)
+await requireContains('utils/sat20.ts', requiredWasmMethods.filter((method) => ![
+'enableRGB11AddressReceive',
+'resolveRGB11AddressEndpoint',
+'prepareRGB11AddressTransfer',
+'deliverAndBroadcastRGB11AddressTransfer',
+'syncRGB11AddressMailbox',
+'getRGB11AddressCarrierWarning',
+].includes(method)))
+await requireContains('utils/rgb11Address.ts', [
+'enableRGB11AddressReceive',
+'resolveRGB11AddressEndpoint',
+'prepareRGB11AddressTransfer',
+'deliverAndBroadcastRGB11AddressTransfer',
+'syncRGB11AddressMailbox',
+'getRGB11AddressCarrierWarning',
+])
 await requireContains('components/asset/L1AssetsTabs.vue', [
   "selectedType === 'RGB11'",
   "asset.protocol !== 'rgb11'",
@@ -82,11 +104,14 @@ await requireContains('components/wallet/RGB11SendDialog.vue', [
 	'broadcastRGB11OutOfBand',
 	'invoices',
 	'outOfBand.value ? null : JSON.parse',
+  'rgb11Address.prepareTransfer',
+  'rgb11Address.deliverAndBroadcast',
 ])
 await requireContains('composables/hooks/useRgb11Assets.ts', [
   'tickerInfoFor',
   'officialContractID',
   'display_name',
+  'rgb11Address.syncMailbox',
 ])
 await requireContains('entrypoints/popup/pages/wallet/Tools.vue', [
   'tools.rgb11.deployTitle',
@@ -110,6 +135,7 @@ await requireContains('components/wallet/RGB11IssueDialog.vue', [
 for (const dialog of [
   'components/wallet/RGB11InvoiceDialog.vue',
   'components/wallet/RGB11SendDialog.vue',
+  'utils/rgb11Address.ts',
   'components/wallet/RGB11ImportDialog.vue',
   'components/wallet/RGB11IssueDialog.vue',
 ]) {

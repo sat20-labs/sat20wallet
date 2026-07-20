@@ -125,6 +125,7 @@ import { useClipboard } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 import walletManager from '@/utils/sat20'
+import rgb11Address from '@/utils/rgb11Address'
 import { useWalletStore } from '@/store'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -176,7 +177,7 @@ const assetName = computed(() => {
 const validRawAmount = computed(() => /^[1-9]\d*$/.test(amountRaw.value))
 
 const loadCarrierWarning = async () => {
-  const [, result] = await walletManager.getRGB11AddressCarrierWarning()
+  const [, result] = await rgb11Address.carrierWarning()
   carrierWarning.value = result?.warning || ''
 }
 
@@ -186,7 +187,7 @@ const sendByAddress = async () => {
   success.value = false
   temporaryDelivery.value = false
   try {
-    const [prepareErr, prepareResult] = await walletManager.prepareRGB11AddressTransfer({
+    const [prepareErr, prepareResult] = await rgb11Address.prepareTransfer({
       receiver_address: receiverAddress.value,
       asset_name: assetName.value,
       amount_raw: amountRaw.value,
@@ -205,7 +206,7 @@ const sendByAddress = async () => {
     const id = prepared?.state?.transfer_id
     if (!id) throw new Error(t('rgb11Transfer.prepareFailed'))
 
-    const [sendErr, sendResult] = await walletManager.deliverAndBroadcastRGB11AddressTransfer({
+    const [sendErr, sendResult] = await rgb11Address.deliverAndBroadcast({
       transfer_id: id,
     })
     if (sendErr || !sendResult?.txid) throw sendErr || new Error(t('rgb11Transfer.broadcastFailed'))
