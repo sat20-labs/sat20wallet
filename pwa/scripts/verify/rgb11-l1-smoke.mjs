@@ -8,6 +8,7 @@ const requiredFiles = [
   'components/wallet/RGB11SendDialog.vue',
   'utils/rgb11Address.ts',
   'composables/hooks/useRgb11Assets.ts',
+  'composables/hooks/useL1Assets.ts',
   'composables/hooks/useUnifiedAssets.ts',
   'store/rgb11.ts',
   'entrypoints/popup/pages/wallet/Tools.vue',
@@ -98,12 +99,12 @@ await requireContains('components/wallet/RGB11SendDialog.vue', [
   'prepareRGB11Transfer',
   'publishRGB11RelayRecord',
   'fetchRGB11AckRecord',
-	'cancelRGB11BatchByNack',
+  'cancelRGB11BatchByNack',
   'broadcastRGB11Transfer',
-	'broadcastRGB11Batch',
-	'broadcastRGB11OutOfBand',
-	'invoices',
-	'outOfBand.value ? null : JSON.parse',
+  'broadcastRGB11Batch',
+  'broadcastRGB11OutOfBand',
+  'invoices',
+  'outOfBand.value ? null : JSON.parse',
   'rgb11Address.prepareTransfer',
   'rgb11Address.deliverAndBroadcast',
 ])
@@ -112,6 +113,13 @@ await requireContains('composables/hooks/useRgb11Assets.ts', [
   'officialContractID',
   'display_name',
   'rgb11Address.syncMailbox',
+])
+await requireContains('composables/hooks/useL1Assets.ts', [
+  'beforeSummaryCommit',
+  'await options.beforeSummaryCommit()',
+])
+await requireContains('composables/hooks/useUnifiedAssets.ts', [
+  'beforeSummaryCommit: rgb11.refreshRGB11Assets',
 ])
 await requireContains('entrypoints/popup/pages/wallet/Tools.vue', [
   'tools.rgb11.deployTitle',
