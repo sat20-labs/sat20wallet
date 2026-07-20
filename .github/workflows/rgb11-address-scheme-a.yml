@@ -63,24 +63,38 @@ jobs:
         working-directory: sat20wallet
         shell: bash
         run: |
-          set -euo pipefail
+          exec > >(tee /tmp/rgb11-apply.log) 2>&1
+          set -euxo pipefail
           if [[ -f sdk/wallet/rgb11/api_types.go && ! -f sdk/wallet/rgb11_send.go ]]; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          ls -l .github/refactor/rgb11-overlay.part*
+          wc -c .github/refactor/rgb11-overlay.part*
           cat .github/refactor/rgb11-overlay.part* | tr -d '\r\n[:space:]' | base64 -d | xz -d > /tmp/rgb11-overlay.tar
+          sha256sum /tmp/rgb11-overlay.tar
           echo 'fb13a10db750af801fce84057aba99b840aae9b0d2288de308864dd8d1ed13ee  /tmp/rgb11-overlay.tar' | sha256sum -c -
+          tar -tf /tmp/rgb11-overlay.tar
           tar -xf /tmp/rgb11-overlay.tar -C .
           while IFS= read -r file; do
             [[ -z "$file" ]] || rm -f "sdk/wallet/$file"
           done < sdk/wallet/.rgb11-delete-list
           rm -f sdk/wallet/.rgb11-delete-list
           mapfile -t gofiles < <(git diff --name-only --diff-filter=ACMR -- '*.go')
+          printf 'gofmt files:\n%s\n' "${gofiles[*]}"
           if (( ${#gofiles[@]} )); then
             gofmt -w "${gofiles[@]}"
           fi
           git diff --check
           echo 'changed=true' >> "$GITHUB_OUTPUT"
+
+      - name: Upload apply diagnostics
+        if: failure() && steps.apply.conclusion == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgb11-cohesion-apply-${{ github.run_id }}
+          path: /tmp/rgb11-apply.log
+          retention-days: 3
 
       - name: Check RGB11 cohesion boundaries
         working-directory: sat20wallet
