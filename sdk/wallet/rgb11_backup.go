@@ -649,6 +649,25 @@ func (p *SatsNetDKVSClient) putRGB11WalletHead(wallet common.Wallet, head *cores
 	return active, nil
 }
 
+func verifyRGB11DKVSAccountOwner(record *swire.DKVSRecord, walletPubKey []byte) error {
+	if record == nil {
+		return dkvsindexer.ErrInvalidRecord
+	}
+	expected, err := dkvsindexer.CanonicalAccountID(walletPubKey)
+	if err != nil {
+		return dkvsindexer.ErrPermissionDenied
+	}
+	parsed, err := dkvsindexer.ParseKey(record.Key)
+	if err != nil {
+		return err
+	}
+	actual, err := dkvsindexer.RecordSignerAccountID(record, parsed)
+	if err != nil || actual != expected {
+		return dkvsindexer.ErrPermissionDenied
+	}
+	return nil
+}
+
 func (p *SatsNetDKVSClient) GetRGB11WalletHead(walletPubKey []byte, walletID string, verifyOpts dkvsindexer.RecordVerificationOptions) (*coresync.WalletHead, *swire.DKVSRecord, error) {
 	key, err := dkvsindexer.PersonalKey(walletPubKey, RGB11WalletHeadPath(walletID))
 	if err != nil {
@@ -659,8 +678,8 @@ func (p *SatsNetDKVSClient) GetRGB11WalletHead(walletPubKey []byte, walletID str
 	if err != nil {
 		return nil, nil, err
 	}
-	if !bytes.Equal(record.PubKey, walletPubKey) {
-		return nil, nil, dkvsindexer.ErrPermissionDenied
+	if err := verifyRGB11DKVSAccountOwner(record, walletPubKey); err != nil {
+		return nil, nil, err
 	}
 	head, err := decodeRGB11WalletHead(record.Value)
 	if err != nil {
@@ -724,8 +743,8 @@ func (p *SatsNetDKVSClient) GetRGB11WalletSnapshot(walletPubKey []byte, walletID
 	if err != nil {
 		return nil, nil, err
 	}
-	if !bytes.Equal(record.PubKey, walletPubKey) {
-		return nil, nil, dkvsindexer.ErrPermissionDenied
+	if err := verifyRGB11DKVSAccountOwner(record, walletPubKey); err != nil {
+		return nil, nil, err
 	}
 	_, value, err := p.GetBlob(accountID, objectID, dkvsindexer.BlobPolicy{})
 	if err != nil {

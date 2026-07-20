@@ -63,10 +63,26 @@ func TestRGB11WalletHeadUsesOwningWalletDKVSSignature(t *testing.T) {
 	if err := dkvsindexer.VerifyRecordForClient(record, dkvsindexer.RecordVerificationOptions{ExpectedKey: key, Height: 1, Now: record.IssueTime}); err != nil {
 		t.Fatalf("owner DKVS signature rejected: %v", err)
 	}
-	if !bytes.Equal(record.PubKey, ownerPriv.PubKey().SerializeCompressed()) {
-		t.Fatal("head record does not belong to owner")
+	if len(record.PubKey) != 0 {
+		t.Fatal("account-scoped head record repeated its public key")
 	}
-	if bytes.Equal(record.PubKey, otherPriv.PubKey().SerializeCompressed()) {
+	parsed, err := dkvsindexer.ParseKey(record.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signerID, err := dkvsindexer.RecordSignerAccountID(record, parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerID, err := dkvsindexer.CanonicalAccountID(ownerPriv.PubKey().SerializeCompressed())
+	if err != nil || signerID != ownerID {
+		t.Fatalf("head signer=%s owner=%s err=%v", signerID, ownerID, err)
+	}
+	otherID, err := dkvsindexer.CanonicalAccountID(otherPriv.PubKey().SerializeCompressed())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signerID == otherID {
 		t.Fatal("another wallet appears as the head record signer")
 	}
 
