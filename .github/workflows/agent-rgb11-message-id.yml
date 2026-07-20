@@ -1,0 +1,292 @@
+name: Agent RGB11 mailbox message ID
+
+on:
+  push:
+    branches: [agent/rgb11-dkvs-transfer-a]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Separate canonical transfer and DKVS message IDs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('sdk/wallet/rgb11/types.go')
+          text = p.read_text()
+          old = '\tAddressMode             bool   `json:"address_mode,omitempty"`\n'
+          new = old + '\tAddressMessageID        string `json:"address_message_id,omitempty"`\n'
+          if 'AddressMessageID' not in text:
+              if old not in text:
+                  raise SystemExit('missing AddressMode field')
+              text = text.replace(old, new, 1)
+          p.write_text(text)
+
+          p = Path('sdk/wallet/rgb11_address_delivery.go')
+          text = p.read_text()
+
+          old = '''\tif !pending.State.AddressMode || pending.State.TransportMode != RGB11AddressTransport ||
+          \t\tpending.State.ReceiverAccountID == "" || len(pending.RecipientConsignment) == 0 ||
+          \t\tpending.State.Status != "prepared" && pending.State.Status != "delivered" {
+          \t\treturn nil, ErrRGB11AddressDeliveryRequired
+          \t}
+          \tcryptor, ok := p.wallet.(rgb11AccountPayloadCryptor)'''
+          new = '''\tif !pending.State.AddressMode || pending.State.TransportMode != RGB11AddressTransport ||
+          \t\tpending.State.ReceiverAccountID == "" || len(pending.RecipientConsignment) == 0 ||
+          \t\tpending.State.Status != "prepared" && pending.State.Status != "delivered" {
+          \t\treturn nil, ErrRGB11AddressDeliveryRequired
+          \t}
+          \tmessageID := pending.State.AddressMessageID
+          \tif messageID == "" {
+          \t\tmessageID, err = rgb11AddressMessageID(pending.State.TransferID)
+          \t\tif err != nil {
+          \t\t\treturn nil, err
+          \t\t}
+          \t\tpending.State.AddressMessageID = messageID
+          \t}
+          \tcryptor, ok := p.wallet.(rgb11AccountPayloadCryptor)'''
+          if old not in text:
+              raise SystemExit('missing delivery validation block')
+          text = text.replace(old, new, 1)
+          text = text.replace('\t\tobjectID = transferID\n', '\t\tobjectID = messageID\n', 1)
+          old = '''\trecord, err := client.SendAccountMailboxMessage(
+          \t\tp.wallet, pending.State.ReceiverAccountID, transferID, mailValue, opts, options.Autopay,
+          \t)'''
+          new = '''\trecord, err := client.SendAccountMailboxMessage(
+          \t\tp.wallet, pending.State.ReceiverAccountID, messageID, mailValue, opts, options.Autopay,
+          \t)'''
+          if old not in text:
+              raise SystemExit('missing delivery mailbox send')
+          text = text.replace(old, new, 1)
+
+          pattern = re.compile(r'func parseRGB11AddressMailboxKey\(record \*swire\.DKVSRecord\) \(receiverID, senderID, transferID string, err error\) \{.*?\n\}', re.S)
+          replacement = '''func parseRGB11AddressMailboxKey(record *swire.DKVSRecord) (receiverID, senderID, messageID string, err error) {
+          \tif record == nil {
+          \t\treturn "", "", "", ErrRGB11AddressMailbox
+          \t}
+          \tparsed, err := dkvsindexer.ParseKey(record.Key)
+          \tif err != nil || parsed.Namespace != "mail" || len(parsed.Segments) != 4 ||
+          \t\tparsed.Segments[1] != "msg" {
+          \t\treturn "", "", "", ErrRGB11AddressMailbox
+          \t}
+          \treceiverID, senderID, messageID = parsed.Segments[0], parsed.Segments[2], parsed.Segments[3]
+          \tif len(messageID) != 64 {
+          \t\treturn "", "", "", ErrRGB11AddressMailbox
+          \t}
+          \tif decoded, decodeErr := hex.DecodeString(messageID); decodeErr != nil || len(decoded) != 32 {
+          \t\treturn "", "", "", ErrRGB11AddressMailbox
+          \t}
+          \treturn receiverID, senderID, messageID, nil
+          }'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('missing mailbox key parser')
+
+          text = text.replace(
+              '''func (p *Manager) readRGB11AddressConsignment(client *SatsNetDKVSClient, record *swire.DKVSRecord,
+          \tsenderID, transferID string, verify dkvsindexer.RecordVerificationOptions) ([]byte, string, error) {''',
+              '''func (p *Manager) readRGB11AddressConsignment(client *SatsNetDKVSClient, record *swire.DKVSRecord,
+          \tsenderID, messageID string, verify dkvsindexer.RecordVerificationOptions) ([]byte, string, error) {''',
+              1,
+          )
+          text = text.replace(
+              'client.GetAccountBlob(senderID, transferID, dkvsindexer.DefaultBlobPolicy(), verify)',
+              'client.GetAccountBlob(senderID, messageID, dkvsindexer.DefaultBlobPolicy(), verify)',
+              1,
+          )
+
+          old = '''\treceiverID, senderID, transferID, err := parseRGB11AddressMailboxKey(record)
+          \tif err != nil {
+          \t\treturn nil, nil, err
+          \t}
+          \tlocalID, err := dkvsAccountID(p.wallet)
+          \tif err != nil || receiverID != localID {
+          \t\treturn nil, nil, ErrRGB11AddressMailbox
+          \t}
+          \traw, mode, err := p.readRGB11AddressConsignment(client, record, senderID, transferID, verify)
+          \tif err != nil {
+          \t\treturn nil, nil, err
+          \t}
+          \tcontainer, err := coreconsignment.Decode(raw)
+          \tif err != nil || container.Armor.ID == "" || container.Armor.ID != transferID {
+          \t\treturn nil, nil, ErrRGB11AddressMailbox
+          \t}
+          \treceipt, err := p.ValidateRGB11Consignment(ctx, raw)
+          \tif err != nil {
+          \t\treturn nil, nil, err
+          \t}
+          \tif receipt.TransferID == "" || receipt.TransferID != transferID {
+          \t\treturn nil, nil, ErrRGB11AddressMailbox
+          \t}'''
+          new = '''\treceiverID, senderID, messageID, err := parseRGB11AddressMailboxKey(record)
+          \tif err != nil {
+          \t\treturn nil, nil, err
+          \t}
+          \tlocalID, err := dkvsAccountID(p.wallet)
+          \tif err != nil || receiverID != localID {
+          \t\treturn nil, nil, ErrRGB11AddressMailbox
+          \t}
+          \traw, mode, err := p.readRGB11AddressConsignment(client, record, senderID, messageID, verify)
+          \tif err != nil {
+          \t\treturn nil, nil, err
+          \t}
+          \tcontainer, err := coreconsignment.Decode(raw)
+          \tif err != nil || container.Armor.ID == "" {
+          \t\treturn nil, nil, ErrRGB11AddressMailbox
+          \t}
+          \tcanonicalTransferID := container.Armor.ID
+          \texpectedMessageID, err := rgb11AddressMessageID(canonicalTransferID)
+          \tif err != nil || expectedMessageID != messageID {
+          \t\treturn nil, nil, ErrRGB11AddressMailbox
+          \t}
+          \treceipt, err := p.ValidateRGB11Consignment(ctx, raw)
+          \tif err != nil {
+          \t\treturn nil, nil, err
+          \t}
+          \tif receipt.TransferID == "" || receipt.TransferID != canonicalTransferID {
+          \t\treturn nil, nil, ErrRGB11AddressMailbox
+          \t}'''
+          if old not in text:
+              raise SystemExit('missing mailbox accept binding block')
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              '\tstate.AddressMode = true\n\tstate.TransportMode = RGB11AddressTransport\n',
+              '\tstate.AddressMode = true\n\tstate.AddressMessageID = messageID\n\tstate.TransportMode = RGB11AddressTransport\n',
+              1,
+          )
+          text = text.replace(
+              '''\tackRecord, err := p.SendRGB11AddressACK(client, senderID, transferID,
+          \t\tRGB11AddressACK{Status: RGB11AddressACKAccepted}, ackOptions)''',
+              '''\tackRecord, err := p.SendRGB11AddressACK(client, senderID, messageID,
+          \t\tRGB11AddressACK{Status: RGB11AddressACKAccepted}, ackOptions)''',
+              1,
+          )
+
+          text = text.replace(
+              '''func (p *Manager) SendRGB11AddressACK(client *SatsNetDKVSClient, senderAccountID, transferID string,
+          \tack RGB11AddressACK, options RGB11AddressDeliveryOptions) (*swire.DKVSRecord, error) {
+          \tif p == nil || client == nil || senderAccountID == "" || transferID == "" {''',
+              '''func (p *Manager) SendRGB11AddressACK(client *SatsNetDKVSClient, senderAccountID, messageID string,
+          \tack RGB11AddressACK, options RGB11AddressDeliveryOptions) (*swire.DKVSRecord, error) {
+          \tif p == nil || client == nil || senderAccountID == "" || messageID == "" {''',
+              1,
+          )
+          text = text.replace(
+              'dkvsindexer.MailMsgKey(senderAccountID, receiverAccountID, transferID)',
+              'dkvsindexer.MailMsgKey(senderAccountID, receiverAccountID, messageID)',
+              1,
+          )
+          text = text.replace(
+              'client.SendAccountMailboxMessage(p.wallet, senderAccountID, transferID, value, opts, options.Autopay)',
+              'client.SendAccountMailboxMessage(p.wallet, senderAccountID, messageID, value, opts, options.Autopay)',
+              1,
+          )
+
+          old = '''\tsenderID, receiverID, transferID, err := parseRGB11AddressMailboxKey(record)
+          \tif err != nil {
+          \t\treturn nil, err
+          \t}
+          \tlocalID, err := dkvsAccountID(p.wallet)
+          \tif err != nil || senderID != localID {
+          \t\treturn nil, ErrRGB11AddressMailbox
+          \t}
+          \tack, err := decodeRGB11AddressACK(record.Value)
+          \tif err != nil {
+          \t\treturn nil, err
+          \t}
+          \tpending, err := p.rgbManager.projectionStore.LoadPendingTransfer(transferID)
+          \tif err != nil {
+          \t\treturn nil, err
+          \t}
+          \tif !pending.State.AddressMode || pending.State.ReceiverAccountID != receiverID ||
+          \t\tpending.State.SenderAccountID != senderID {
+          \t\treturn nil, ErrRGB11AddressMailbox
+          \t}'''
+          new = '''\tsenderID, receiverID, messageID, err := parseRGB11AddressMailboxKey(record)
+          \tif err != nil {
+          \t\treturn nil, err
+          \t}
+          \tlocalID, err := dkvsAccountID(p.wallet)
+          \tif err != nil || senderID != localID {
+          \t\treturn nil, ErrRGB11AddressMailbox
+          \t}
+          \tack, err := decodeRGB11AddressACK(record.Value)
+          \tif err != nil {
+          \t\treturn nil, err
+          \t}
+          \tstates, err := p.rgbManager.projectionStore.ListTransfers()
+          \tif err != nil {
+          \t\treturn nil, err
+          \t}
+          \tvar pending *rgb11wallet.PendingTransfer
+          \tfor _, state := range states {
+          \t\tif state == nil || !state.AddressMode || state.AddressMessageID != messageID {
+          \t\t\tcontinue
+          \t\t}
+          \t\tpending, err = p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
+          \t\tif err != nil {
+          \t\t\treturn nil, err
+          \t\t}
+          \t\tbreak
+          \t}
+          \tif pending == nil || !pending.State.AddressMode || pending.State.AddressMessageID != messageID ||
+          \t\tpending.State.ReceiverAccountID != receiverID || pending.State.SenderAccountID != senderID {
+          \t\treturn nil, ErrRGB11AddressMailbox
+          \t}'''
+          if old not in text:
+              raise SystemExit('missing ACK lookup block')
+          text = text.replace(old, new, 1)
+          p.write_text(text)
+
+          p = Path('sdk/wallet/rgb11_address_transfer_test.go')
+          text = p.read_text()
+          text = text.replace(
+              '''\tif prepared.State == nil || !prepared.State.AddressMode || prepared.State.Invoice != "" ||
+          \t\t!prepared.State.SyntheticInvoiceRemoved || resolved.AccountID != endpoint.AccountID {
+          \t\tt.Fatalf("prepared address transfer=%+v endpoint=%+v", prepared.State, resolved)
+          \t}''',
+              '''\tif prepared.State == nil || !prepared.State.AddressMode || prepared.State.Invoice != "" ||
+          \t\t!prepared.State.SyntheticInvoiceRemoved || resolved.AccountID != endpoint.AccountID {
+          \t\tt.Fatalf("prepared address transfer=%+v endpoint=%+v", prepared.State, resolved)
+          \t}
+          \tif decoded, err := hex.DecodeString(prepared.State.AddressMessageID); err != nil || len(decoded) != 32 {
+          \t\tt.Fatalf("address message ID=%q err=%v", prepared.State.AddressMessageID, err)
+          \t}''',
+              1,
+          )
+          text = text.replace('if forgedTransferID == prepared.State.TransferID {', 'if forgedTransferID == prepared.State.AddressMessageID {', 1)
+          text = text.replace(
+              'client.SendAccountMailboxMessage(recipientWallet, senderID, prepared.State.TransferID,',
+              'client.SendAccountMailboxMessage(recipientWallet, senderID, pending.State.AddressMessageID,',
+              1,
+          )
+          text = text.replace(
+              '''\tif _, err := hex.DecodeString(prepared.State.TransferID); err != nil {
+          \t\tt.Fatalf("transfer ID is not canonical hex: %v", err)
+          \t}''',
+              '''\tif _, err := hex.DecodeString(prepared.State.AddressMessageID); err != nil {
+          \t\tt.Fatalf("address message ID is not canonical hex: %v", err)
+          \t}''',
+              1,
+          )
+          p.write_text(text)
+          PY
+          gofmt -w sdk/wallet/rgb11/types.go sdk/wallet/rgb11_address_delivery.go sdk/wallet/rgb11_address_transfer_test.go
+          rm .github/workflows/agent-rgb11-message-id.yml
+      - name: Commit migration
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'separate RGB11 transfer and mailbox message IDs'
+          git push origin HEAD:agent/rgb11-dkvs-transfer-a
