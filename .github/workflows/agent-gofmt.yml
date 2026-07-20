@@ -1,4 +1,4 @@
-name: Agent gofmt
+name: Agent goimports
 
 on:
   push:
@@ -8,18 +8,24 @@ permissions:
   contents: write
 
 jobs:
-  gofmt:
+  goimports:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.13'
+          cache: false
+      - name: Install goimports
+        run: go install golang.org/x/tools/cmd/goimports@latest
       - name: Format changed Go files
         shell: bash
         run: |
           files=$(git diff --name-only origin/main...HEAD -- '*.go')
           if [ -n "$files" ]; then
-            gofmt -w $files
+            goimports -w $files
           fi
       - name: Commit formatting
         shell: bash
@@ -30,5 +36,5 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -- '*.go'
-          git commit -m 'gofmt RGB11 address implementation'
+          git commit -m 'goimports RGB11 address implementation'
           git push origin HEAD:agent/rgb11-dkvs-transfer-a
