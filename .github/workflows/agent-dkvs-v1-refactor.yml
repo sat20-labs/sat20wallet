@@ -1,0 +1,76 @@
+name: Agent wallet DKVS v1 refactor
+
+on:
+  push:
+    branches: [agent/rgb11-dkvs-transfer-a]
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply single-version account API names
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          paths = [
+              Path('sdk/wallet/dkvs_account_v2.go'),
+              Path('sdk/wallet/rgb11_address_capability.go'),
+              Path('sdk/wallet/rgb11_address_delivery.go'),
+              Path('sdk/wallet/rgb11_address_send.go'),
+              Path('sdk/wallet/wallet_crypto_account.go'),
+          ]
+          replacements = [
+              ('VersionV2', 'Version'),
+              ('AccountIDV2', 'CanonicalAccountID'),
+              ('AccountPubKeyV2', 'AccountPubKey'),
+              ('PersonalKeyV2', 'AccountPersonalKey'),
+              ('NewRecordV2', 'NewAccountRecord'),
+              ('version-2', 'version-1'),
+              ('DKVS v2', 'DKVS v1'),
+          ]
+          for path in paths:
+              if not path.exists():
+                  continue
+              text = path.read_text()
+              for old, new in replacements:
+                  text = text.replace(old, new)
+              path.write_text(text)
+
+          old = Path('sdk/wallet/dkvs_account_v2.go')
+          if old.exists():
+              new = Path('sdk/wallet/dkvs_account.go')
+              new.write_text(old.read_text())
+              old.unlink()
+
+          workflow = Path('.github/workflows/rgb11-address-scheme-a.yml')
+          if workflow.exists():
+              workflow.write_text(workflow.read_text().replace('DKVS v2', 'DKVS v1'))
+
+          leftovers = []
+          for path in Path('sdk/wallet').glob('*.go'):
+              text = path.read_text()
+              if any(token in text for token in ('VersionV2', 'AccountIDV2', 'AccountPubKeyV2', 'PersonalKeyV2', 'NewRecordV2')):
+                  leftovers.append(str(path))
+          if leftovers:
+              raise SystemExit('v2 identifiers remain: ' + ', '.join(leftovers))
+          PY
+          gofmt -w sdk/wallet/dkvs_account.go sdk/wallet/rgb11_address_capability.go sdk/wallet/rgb11_address_delivery.go sdk/wallet/rgb11_address_send.go sdk/wallet/wallet_crypto_account.go
+      - name: Commit refactor
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'use the canonical DKVS v1 account API'
+          git push origin HEAD:agent/rgb11-dkvs-transfer-a
