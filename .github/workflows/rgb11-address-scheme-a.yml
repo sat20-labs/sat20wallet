@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: rgb11-address-scheme-a
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   wallet-sdk:
