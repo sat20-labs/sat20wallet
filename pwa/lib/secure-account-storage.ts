@@ -44,5 +44,5 @@ export class SecureAccountStorageUnavailableError extends Error {
 }
 
 export const assertSecureStorageAccountId = (accountId: string): void => {
-  if (!/^[0-9a-f]{64}$/.test(accountId)) throw new Error('accountId must be a lowercase SHA-256 hex string')
+  if (!/^[0-9a-f]{64}$/.test(accountId)) throw new Error('accountId must be a lowercase 32-byte x-only public key hex string')
 }
