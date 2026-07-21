@@ -81,5 +81,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: account-management-dkvs-e2e-${{ github.run_id }}
-          path: /tmp/account-management-dkvs-e2e.log
+          path: |
+            /tmp/account-management-dkvs-e2e.log
+            /tmp/sat20wallet-satoshinet-rpctest-failures/**
+          if-no-files-found: warn
           retention-days: 3
