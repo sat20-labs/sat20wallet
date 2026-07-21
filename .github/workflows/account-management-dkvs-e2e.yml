@@ -70,4 +70,15 @@ jobs:
 
       - name: Run account-management DKVS AUTOPAY e2e
         working-directory: sat20wallet/sdk
-        run: go test ./e2e -run '^TestRealSatoshiNetAccountManagementAutopaySync$' -count=1 -v
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./e2e -run '^TestRealSatoshiNetAccountManagementAutopaySync$' -count=1 -v 2>&1 | tee /tmp/account-management-dkvs-e2e.log
+
+      - name: Upload e2e diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: account-management-dkvs-e2e-${{ github.run_id }}
+          path: /tmp/account-management-dkvs-e2e.log
+          retention-days: 3
