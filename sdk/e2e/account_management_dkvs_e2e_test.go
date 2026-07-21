@@ -47,7 +47,10 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	accountID := dkvsindexer.AccountID(pubKey)
 	prefix, err := dkvsindexer.AccountPersonalKey(accountID, "account/recovery")
 	require.NoError(t, err)
-	_, _, err = dkvsClientForNode(t, fixture.Network.Miner).SubscribePrefix(prefix)
+	minerClient := dkvsClientForNode(t, fixture.Network.Miner)
+	_, _, err = minerClient.SubscribePrefix(prefix)
+	require.NoError(t, err)
+	_, _, err = minerClient.SubscribeMailbox(accountID)
 	require.NoError(t, err)
 	require.NoError(t, connectNode(fixture.Network.Miner, fixture.Network.Core))
 
