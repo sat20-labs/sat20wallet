@@ -26,7 +26,7 @@ public_magic = (
     "\tSnapshotEnvelopeMagic = rgb11SnapshotEnvelopeMagic\n"
     ")\n"
 )
-if "SnapshotPayloadMagic" not in backup_text:
+if "\tSnapshotPayloadMagic  =" not in backup_text:
     marker = ")\n\nfunc EncodeAutoBackupPolicy"
     if marker not in backup_text:
         raise SystemExit("backup_codec.go constant marker not found")
