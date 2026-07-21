@@ -71,6 +71,16 @@ api_test.write_text(api_test_text, encoding="utf-8")
 
 manager_test = Path("sdk/wallet/rgb11_manager_test.go")
 manager_test_text = manager_test.read_text(encoding="utf-8")
+carrier_setup = "\tmanager := &Manager{wallet: wallet}\n"
+carrier_setup_with_component = carrier_setup + "\tmanager.rgbManager = &rgb11Manager{Manager: manager}\n"
+if carrier_setup_with_component not in manager_test_text:
+    if carrier_setup not in manager_test_text:
+        raise SystemExit("rgb11_manager_test.go carrier manager setup marker not found")
+    manager_test_text = manager_test_text.replace(
+        carrier_setup,
+        carrier_setup_with_component,
+        1,
+    )
 for method in ("rgb11CarrierBinding", "ownsRGB11Carrier", "buildRGB11WitnessTx"):
     manager_test_text = manager_test_text.replace(
         f"manager.{method}(",
