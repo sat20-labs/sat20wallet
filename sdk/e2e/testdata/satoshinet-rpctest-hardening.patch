@@ -1,0 +1,43 @@
+diff --git a/ossec/harden.go b/ossec/harden.go
+index 037bb77..db22e63 100644
+--- a/ossec/harden.go
++++ b/ossec/harden.go
+@@ -41,6 +41,10 @@ func prctl(option, arg2, arg3, arg4, arg5 uintptr) error {
+ }
+ 
+ func Init() error {
++	if skipProcessHardening {
++		return nil
++	}
++
+ 	if runtime.GOOS != "linux" {
+ 		return nil
+ 	}
+diff --git a/ossec/production_flag.go b/ossec/production_flag.go
+new file mode 100644
+index 0000000..f486d76
+--- /dev/null
++++ b/ossec/production_flag.go
+@@ -0,0 +1,7 @@
++//go:build !rpctest
++
++package ossec
++
++// Production builds keep all process-hardening checks enabled.
++const skipProcessHardening = false
++
+diff --git a/ossec/rpctest_flag.go b/ossec/rpctest_flag.go
+new file mode 100644
+index 0000000..aab2431
+--- /dev/null
++++ b/ossec/rpctest_flag.go
+@@ -0,0 +1,9 @@
++//go:build rpctest
++
++package ossec
++
++// Hosted CI workers cannot grant the unlimited RLIMIT_MEMLOCK required by
++// mlockall. This compile-time test-only switch allows rpctest binaries to run;
++// production builds continue to execute the full hardening path.
++const skipProcessHardening = true
++

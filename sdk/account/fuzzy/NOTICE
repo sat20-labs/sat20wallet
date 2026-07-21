@@ -1,0 +1,6 @@
+This package is a Go translation of the Decentralized Identity Foundation
+fuzzy-encryption reference implementation at commit
+0d7205c7a444d1c4d17f57e0a706f756c1141dde.
+Original project: https://github.com/decentralized-identity/fuzzy-encryption
+Modifications include Go-native serialization, bounded input validation, and
+integration with SAT20 account-recovery key wrapping.
