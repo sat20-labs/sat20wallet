@@ -2,6 +2,7 @@ from pathlib import Path
 import subprocess
 
 api_types = Path("sdk/wallet/rgb11/api_types.go")
+backup_codec = Path("sdk/wallet/rgb11/backup_codec.go")
 manager = Path("sdk/wallet/rgb11_manager.go")
 
 api_text = api_types.read_text(encoding="utf-8")
@@ -15,6 +16,22 @@ if "var ErrRGB11Rejected" not in api_text:
         raise SystemExit("api_types.go insertion marker not found")
     api_text = api_text.replace(marker, error_decl + marker, 1)
 api_types.write_text(api_text, encoding="utf-8")
+
+backup_text = backup_codec.read_text(encoding="utf-8")
+public_magic = (
+    "\n// SnapshotPayloadMagic and SnapshotEnvelopeMagic identify the stable RGB11 "
+    "wallet recovery codecs.\n"
+    "const (\n"
+    "\tSnapshotPayloadMagic  = rgb11SnapshotPayloadMagic\n"
+    "\tSnapshotEnvelopeMagic = rgb11SnapshotEnvelopeMagic\n"
+    ")\n"
+)
+if "SnapshotPayloadMagic" not in backup_text:
+    marker = ")\n\nfunc EncodeAutoBackupPolicy"
+    if marker not in backup_text:
+        raise SystemExit("backup_codec.go constant marker not found")
+    backup_text = backup_text.replace(marker, ")" + public_magic + "\nfunc EncodeAutoBackupPolicy", 1)
+backup_codec.write_text(backup_text, encoding="utf-8")
 
 manager_text = manager.read_text(encoding="utf-8")
 if '"github.com/btcsuite/btcd/btcec/v2"' not in manager_text:
@@ -73,6 +90,14 @@ for receiver in ("deviceA", "deviceB", "manager", "newWallet"):
             f"{receiver}.{method}(",
             f"{receiver}.rgbManager.{method}(",
         )
+sync_test_text = sync_test_text.replace(
+    "rgb11SnapshotPayloadMagic",
+    "rgb11wallet.SnapshotPayloadMagic",
+)
+sync_test_text = sync_test_text.replace(
+    "rgb11SnapshotEnvelopeMagic",
+    "rgb11wallet.SnapshotEnvelopeMagic",
+)
 sync_test.write_text(sync_test_text, encoding="utf-8")
 
 subprocess.run(
@@ -80,6 +105,7 @@ subprocess.run(
         "gofmt",
         "-w",
         str(api_types),
+        str(backup_codec),
         str(manager),
         str(api_test),
         str(manager_test),
