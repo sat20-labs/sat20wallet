@@ -59,7 +59,9 @@ func (p Params) validate() error {
 	}
 	seen := make(map[int64]struct{}, len(p.Extractor))
 	for _, value := range p.Extractor {
-		if value < 0 || value >= p.Prime {
+		// Zero would collapse the multiplicative extractor key for every set
+		// containing that position, so production parameters exclude it.
+		if value <= 0 || value >= p.Prime {
 			return ErrInvalidParameters
 		}
 		if _, ok := seen[value]; ok {
