@@ -1,0 +1,42 @@
+name: Account secure storage design
+
+on:
+  push:
+    branches: [feat/account-secure-storage-design]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/account-secure-storage.md'
+      - 'pwa/lib/secure-account-storage.ts'
+      - '.github/workflows/account-secure-storage.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: account-secure-storage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pwa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pwa/package-lock.json
+
+      - name: Install PWA dependencies
+        working-directory: pwa
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Type-check PWA
+        working-directory: pwa
+        run: npm run compile
