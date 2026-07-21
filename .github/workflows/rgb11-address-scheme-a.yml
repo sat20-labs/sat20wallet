@@ -119,9 +119,32 @@ jobs:
           test -f sdk/wallet/rgb11/address_codec.go
           test -f sdk/wallet/rgb11/backup_codec.go
 
+      - name: Package transformed RGB11 source
+        working-directory: sat20wallet
+        run: tar -czf /tmp/rgb11-cohesive-source.tgz sdk/wallet sdk/go.mod sdk/go.sum
+
+      - name: Upload transformed RGB11 source
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgb11-cohesive-source-${{ github.run_id }}
+          path: /tmp/rgb11-cohesive-source.tgz
+          retention-days: 3
+
       - name: Vet wallet packages excluding legacy copylocks findings
+        id: vet
         working-directory: sat20wallet/sdk
-        run: go vet -copylocks=false ./wallet/...
+        shell: bash
+        run: |
+          set -o pipefail
+          go vet -copylocks=false ./wallet/... 2>&1 | tee /tmp/rgb11-wallet-vet.log
+
+      - name: Upload vet diagnostics
+        if: failure() && steps.vet.conclusion == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgb11-cohesion-vet-${{ github.run_id }}
+          path: /tmp/rgb11-wallet-vet.log
+          retention-days: 3
 
       - name: Compile wallet root package
         working-directory: sat20wallet/sdk
