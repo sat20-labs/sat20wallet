@@ -16,6 +16,16 @@ if "var ErrRGB11Rejected" not in api_text:
 api_types.write_text(api_text, encoding="utf-8")
 
 manager_text = manager.read_text(encoding="utf-8")
+if '"github.com/btcsuite/btcd/btcec/v2"' not in manager_text:
+    marker = '\t"github.com/btcsuite/btcd/btcutil/psbt"'
+    if marker not in manager_text:
+        raise SystemExit("rgb11_manager.go btcec import marker not found")
+    manager_text = manager_text.replace(
+        marker,
+        '\t"github.com/btcsuite/btcd/btcec/v2"\n' + marker,
+        1,
+    )
+
 old = '\tErrRGB11Rejected              = errors.New("RGB11 allocation rejected by issuer policy")'
 new = '\tErrRGB11Rejected              = rgb11wallet.ErrRGB11Rejected'
 if old in manager_text:
