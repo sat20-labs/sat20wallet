@@ -118,6 +118,11 @@ jobs:
         with:
           repository: sat20-labs/satoshinet
           path: satoshinet
+      - name: Checkout Transcend
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/transcend
+          path: transcend
       - name: Apply rpctest-only SatoshiNet hardening patch
         shell: bash
         run: git -C satoshinet apply ../sat20wallet/sdk/e2e/testdata/satoshinet-rpctest-hardening.patch
