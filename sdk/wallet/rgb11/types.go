@@ -17,7 +17,11 @@ const (
 	LockReasonPending = "pending-rgb"
 )
 
-var ErrInvalidRGB11Asset = errors.New("invalid RGB11 asset")
+var (
+	ErrInvalidRGB11Asset   = errors.New("invalid RGB11 asset")
+	ErrRGB11Inconsistent   = errors.New("RGB11 wallet state is inconsistent")
+	ErrRGB11STPUnavailable = errors.New("RGB11 is L1-only until full STP support is available")
+)
 
 func NewAssetName(officialAssetID, assetType string) (indexer.AssetName, error) {
 	ticker, err := assetid.Ticker(officialAssetID)

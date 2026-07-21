@@ -233,8 +233,9 @@ func TestRGB11CarrierBindingUsesActiveBIP86DerivationIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := &Manager{wallet: wallet}
+	manager.rgbManager = &rgb11Manager{Manager: manager}
 	const outpoint = "1111111111111111111111111111111111111111111111111111111111111111:0"
-	binding, err := manager.rgb11CarrierBinding(rgb11wallet.ValidatedAllocation{
+	binding, err := manager.rgbManager.rgb11CarrierBinding(rgb11wallet.ValidatedAllocation{
 		OutPoint: outpoint, CommitmentMethod: "tapret1st",
 		CarrierInternalKey: internal.SerializeCompressed()[1:], TapretRoot: root[:],
 	}, &rgb11wallet.BitcoinUTXO{OutPoint: outpoint, PkScript: carrierScript})
@@ -247,7 +248,7 @@ func TestRGB11CarrierBindingUsesActiveBIP86DerivationIndex(t *testing.T) {
 	}
 	if binding.DerivationIndex != derivationIndex ||
 		binding.LogicalAddress != wallet.GetAddressByIndex(derivationIndex) ||
-		!manager.ownsRGB11Carrier(binding, walletScript) {
+		!manager.rgbManager.ownsRGB11Carrier(binding, walletScript) {
 		t.Fatalf("Tapret binding does not preserve BIP86 derivation identity: %+v", binding)
 	}
 
@@ -260,14 +261,14 @@ func TestRGB11CarrierBindingUsesActiveBIP86DerivationIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreignBinding, err := manager.rgb11CarrierBinding(rgb11wallet.ValidatedAllocation{
+	foreignBinding, err := manager.rgbManager.rgb11CarrierBinding(rgb11wallet.ValidatedAllocation{
 		OutPoint: outpoint, CommitmentMethod: "tapret1st",
 		CarrierInternalKey: foreignInternal, TapretRoot: root[:],
 	}, &rgb11wallet.BitcoinUTXO{OutPoint: outpoint, PkScript: foreignScript})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manager.ownsRGB11Carrier(foreignBinding, walletScript) {
+	if manager.rgbManager.ownsRGB11Carrier(foreignBinding, walletScript) {
 		t.Fatal("foreign Tapret carrier was assigned to the active BIP86 derivation index")
 	}
 }
@@ -308,12 +309,12 @@ func TestRGB11WitnessBuilderSpendsTapretCarrier(t *testing.T) {
 		ActualOutputKey: outputKey.SerializeCompressed()[1:], InternalPubKey: internalKey,
 		TapretRoot: root[:], CommitmentMethod: "tapret1st",
 	}
-	if !manager.ownsRGB11Carrier(binding, walletScript) {
+	if !manager.rgbManager.ownsRGB11Carrier(binding, walletScript) {
 		t.Fatal("Tapret carrier is not bound to its ordinary BIP86 address derivation index")
 	}
 	wrongBinding := *binding
 	wrongBinding.DerivationIndex--
-	if manager.ownsRGB11Carrier(&wrongBinding, walletScript) {
+	if manager.rgbManager.ownsRGB11Carrier(&wrongBinding, walletScript) {
 		t.Fatal("Tapret carrier accepted with a mismatched derivation index")
 	}
 	selected := []rgb11SpendAllocation{{proof: &rgb11wallet.AllocationProof{
@@ -321,7 +322,7 @@ func TestRGB11WitnessBuilderSpendsTapretCarrier(t *testing.T) {
 		CarrierBinding: binding,
 	}}}
 	mpcCommitment := sha256.Sum256([]byte("SAT20 RGB11 outgoing Opret commitment"))
-	tx, prevFetcher, _, roots, _, err := manager.buildRGB11WitnessTx(
+	tx, prevFetcher, _, roots, _, err := manager.rgbManager.buildRGB11WitnessTx(
 		selected, [][]byte{walletScript}, walletScript, anchors.OpretScript(mpcCommitment), 1,
 	)
 	if err != nil {

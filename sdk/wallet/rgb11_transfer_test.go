@@ -122,24 +122,25 @@ func newRGB11FlowManager(t *testing.T, wallet common.Wallet, rpc *rgb11FlowIndex
 	database := indexerdb.NewKVDB(t.TempDir())
 	t.Cleanup(func() { database.Close() })
 	locker := NewUtxoLocker(database, rpc, L1_NETWORK_BITCOIN)
-	rgbManager, err := newRGB11Manager(database, locker, evidence)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rgbManager.consistencyStatus = "ok"
 	l1 := NewIndexerRPCClientMgr()
 	l1.Set(rpc)
 	manager := &Manager{
 		db: database, wallet: wallet, status: &Status{CurrentWallet: localWalletID, CurrentAccount: 0},
 		tickerInfoMap: make(map[string]*indexer.TickerInfo), utxoLockerL1: locker,
-		l1IndexerClient: l1, rgbManager: rgbManager,
+		l1IndexerClient: l1,
 	}
-	if err := manager.selectRGB11Scope(); err != nil {
+	rgbManager, err := newRGB11Manager(manager, database, locker, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rgbManager.consistencyStatus = "ok"
+	manager.rgbManager = rgbManager
+	if err := manager.rgbManager.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
 	// Automatic DKVS backup is asynchronous. Wait for it before the earlier
 	// database cleanup closes Pebble.
-	t.Cleanup(manager.waitForRGB11AutoBackup)
+	t.Cleanup(manager.rgbManager.waitForRGB11AutoBackup)
 	return manager
 }
 

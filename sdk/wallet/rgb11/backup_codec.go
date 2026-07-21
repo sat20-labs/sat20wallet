@@ -1,4 +1,4 @@
-package wallet
+package rgb11wallet
 
 import (
 	"bytes"
@@ -9,7 +9,6 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	strict "github.com/sat20-labs/rgb11/strict_encoding"
 	coresync "github.com/sat20-labs/rgb11/sync"
-	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
 
 const (
@@ -22,7 +21,13 @@ const (
 	rgb11SnapshotMaxFieldSize  = 1024 * 1024
 )
 
-func encodeRGB11AutoBackupPolicy(policy *RGB11AutoBackupPolicy) ([]byte, error) {
+// SnapshotPayloadMagic and SnapshotEnvelopeMagic identify the stable RGB11 wallet recovery codecs.
+const (
+	SnapshotPayloadMagic  = rgb11SnapshotPayloadMagic
+	SnapshotEnvelopeMagic = rgb11SnapshotEnvelopeMagic
+)
+
+func EncodeAutoBackupPolicy(policy *RGB11AutoBackupPolicy) ([]byte, error) {
 	if policy == nil || policy.Version != 1 || !policy.Enabled || policy.TTL == 0 {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -43,7 +48,7 @@ func encodeRGB11AutoBackupPolicy(policy *RGB11AutoBackupPolicy) ([]byte, error) 
 	return buf.Bytes(), nil
 }
 
-func decodeRGB11AutoBackupPolicy(value []byte) (*RGB11AutoBackupPolicy, error) {
+func DecodeAutoBackupPolicy(value []byte) (*RGB11AutoBackupPolicy, error) {
 	reader := bytes.NewReader(value)
 	decoder := strict.NewDecoder(reader)
 	magic, err := decoder.Raw(uint64(len(rgb11AutoBackupPolicyMagic)))
@@ -70,9 +75,9 @@ func decodeRGB11AutoBackupPolicy(value []byte) (*RGB11AutoBackupPolicy, error) {
 	return policy, nil
 }
 
-// encodeRGB11WalletSnapshotPayload uses a deterministic binary layout and
+// EncodeWalletSnapshotPayload uses a deterministic binary layout and
 // compresses it before encryption.
-func encodeRGB11WalletSnapshotPayload(snapshot *RGB11WalletSnapshot) ([]byte, error) {
+func EncodeWalletSnapshotPayload(snapshot *RGB11WalletSnapshot) ([]byte, error) {
 	encoded, err := encodeCompactRGB11WalletSnapshot(snapshot)
 	if err != nil {
 		return nil, err
@@ -80,7 +85,7 @@ func encodeRGB11WalletSnapshotPayload(snapshot *RGB11WalletSnapshot) ([]byte, er
 	return deflateRGB11Snapshot(encoded)
 }
 
-func decodeRGB11WalletSnapshotPayload(payload []byte) (*RGB11WalletSnapshot, error) {
+func DecodeWalletSnapshotPayload(payload []byte) (*RGB11WalletSnapshot, error) {
 	decoded, err := inflateRGB11Snapshot(payload)
 	if err != nil {
 		return nil, err
@@ -328,7 +333,7 @@ func decodeRGB11Int(decoder *strict.Decoder) (int, error) {
 	return int(value), err
 }
 
-func encodeRGB11SnapshotRecords(encoder *strict.Encoder, records []rgb11wallet.SnapshotRecord) error {
+func encodeRGB11SnapshotRecords(encoder *strict.Encoder, records []SnapshotRecord) error {
 	if len(records) > rgb11SnapshotMaxRecords {
 		return ErrRGB11Inconsistent
 	}
@@ -346,12 +351,12 @@ func encodeRGB11SnapshotRecords(encoder *strict.Encoder, records []rgb11wallet.S
 	return nil
 }
 
-func decodeRGB11SnapshotRecords(decoder *strict.Decoder) ([]rgb11wallet.SnapshotRecord, error) {
+func decodeRGB11SnapshotRecords(decoder *strict.Decoder) ([]SnapshotRecord, error) {
 	count, err := decoder.Length(rgb11SnapshotMaxRecords)
 	if err != nil {
 		return nil, err
 	}
-	records := make([]rgb11wallet.SnapshotRecord, 0, count)
+	records := make([]SnapshotRecord, 0, count)
 	for index := uint64(0); index < count; index++ {
 		key, err := decoder.String(1, 64*1024)
 		if err != nil {
@@ -361,7 +366,7 @@ func decodeRGB11SnapshotRecords(decoder *strict.Decoder) ([]rgb11wallet.Snapshot
 		if err != nil {
 			return nil, err
 		}
-		records = append(records, rgb11wallet.SnapshotRecord{Key: key, Value: value})
+		records = append(records, SnapshotRecord{Key: key, Value: value})
 	}
 	return records, nil
 }
@@ -400,7 +405,7 @@ func inflateRGB11Snapshot(payload []byte) ([]byte, error) {
 	return raw, nil
 }
 
-func encodeRGB11EncryptedSnapshot(walletID string, operationID [32]byte, ciphertext []byte) ([]byte, error) {
+func EncodeEncryptedSnapshot(walletID string, operationID [32]byte, ciphertext []byte) ([]byte, error) {
 	if walletID == "" || len(walletID) > 128 || len(ciphertext) == 0 || len(ciphertext) > rgb11SnapshotMaxRawSize {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -424,7 +429,7 @@ func encodeRGB11EncryptedSnapshot(walletID string, operationID [32]byte, ciphert
 	return buf.Bytes(), nil
 }
 
-func decodeRGB11EncryptedSnapshot(value []byte) (walletID string, operationID [32]byte, ciphertext []byte, err error) {
+func DecodeEncryptedSnapshot(value []byte) (walletID string, operationID [32]byte, ciphertext []byte, err error) {
 	reader := bytes.NewReader(value)
 	decoder := strict.NewDecoder(reader)
 	magic, decodeErr := decoder.Raw(uint64(len(rgb11SnapshotEnvelopeMagic)))
@@ -451,7 +456,7 @@ func decodeRGB11EncryptedSnapshot(value []byte) (walletID string, operationID [3
 	return walletID, operationID, ciphertext, nil
 }
 
-func decodeRGB11WalletHead(value []byte) (*coresync.WalletHead, error) {
+func DecodeWalletHead(value []byte) (*coresync.WalletHead, error) {
 	reader := bytes.NewReader(value)
 	decoder := strict.NewDecoder(reader)
 	version, err := decoder.U32()

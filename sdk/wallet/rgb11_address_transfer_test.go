@@ -48,27 +48,27 @@ func (e *rgb11AddressEvidence) setStatus(txid string, status rgb11wallet.Bitcoin
 }
 
 func TestRGB11AddressCodecsAndAccountEncryption(t *testing.T) {
-	inline, err := encodeRGB11AddressEnvelope(rgb11AddressEnvelopeInline, []byte("ciphertext"))
+	inline, err := rgb11wallet.EncodeAddressEnvelope(rgb11AddressEnvelopeInline, []byte("ciphertext"))
 	if err != nil || len(inline) != 2+len("ciphertext") {
 		t.Fatalf("inline envelope len=%d err=%v", len(inline), err)
 	}
-	mode, payload, err := decodeRGB11AddressEnvelope(inline)
+	mode, payload, err := rgb11wallet.DecodeAddressEnvelope(inline)
 	if err != nil || mode != rgb11AddressEnvelopeInline || string(payload) != "ciphertext" {
 		t.Fatalf("inline decode mode=%d payload=%q err=%v", mode, payload, err)
 	}
-	blob, err := encodeRGB11AddressEnvelope(rgb11AddressEnvelopeBlob, nil)
+	blob, err := rgb11wallet.EncodeAddressEnvelope(rgb11AddressEnvelopeBlob, nil)
 	if err != nil || len(blob) != 2 {
 		t.Fatalf("blob envelope len=%d err=%v", len(blob), err)
 	}
-	if _, _, err := decodeRGB11AddressEnvelope([]byte{9, 9}); err == nil {
+	if _, _, err := rgb11wallet.DecodeAddressEnvelope([]byte{9, 9}); err == nil {
 		t.Fatal("invalid envelope accepted")
 	}
 
-	encodedACK, err := encodeRGB11AddressACK(RGB11AddressACK{Status: RGB11AddressACKAccepted, Code: 7})
+	encodedACK, err := rgb11wallet.EncodeAddressACK(RGB11AddressACK{Status: RGB11AddressACKAccepted, Code: 7})
 	if err != nil || len(encodedACK) != 4 {
 		t.Fatalf("ACK len=%d err=%v", len(encodedACK), err)
 	}
-	decodedACK, err := decodeRGB11AddressACK(encodedACK)
+	decodedACK, err := rgb11wallet.DecodeAddressACK(encodedACK)
 	if err != nil || decodedACK.Status != RGB11AddressACKAccepted || decodedACK.Code != 7 {
 		t.Fatalf("ACK decode=%+v err=%v", decodedACK, err)
 	}
@@ -398,7 +398,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 			len(pending.RecipientConsignment), len(pending.LocalConsignment))
 	}
 
-	ackValue, err := encodeRGB11AddressACK(RGB11AddressACK{Status: RGB11AddressACKNeedResend})
+	ackValue, err := rgb11wallet.EncodeAddressACK(RGB11AddressACK{Status: RGB11AddressACKNeedResend})
 	if err != nil {
 		t.Fatal(err)
 	}
