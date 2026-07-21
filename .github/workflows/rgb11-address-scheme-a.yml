@@ -99,6 +99,13 @@ jobs:
             sat20wallet/.github/refactor/rgb11-overlay.part*
           retention-days: 3
 
+      - name: Apply cohesion compile fixups
+        working-directory: sat20wallet
+        run: |
+          python3 .github/scripts/rgb11_cohesion_fixups.py
+          gofmt -w sdk/wallet/rgb11/api_types.go sdk/wallet/rgb11_manager.go
+          git diff --check
+
       - name: Check RGB11 cohesion boundaries
         working-directory: sat20wallet
         shell: bash
