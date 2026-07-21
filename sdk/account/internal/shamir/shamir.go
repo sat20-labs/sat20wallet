@@ -82,7 +82,7 @@ func mult(a, b byte) byte {
 	var r byte
 	for i := byte(8); i > 0; i-- {
 		bit := i - 1
-		r = (-(b>>bit&1) & a) ^ (-(r>>7) & 0x1B) ^ (r + r)
+		r = (-(b >> bit & 1) & a) ^ (-(r >> 7) & 0x1B) ^ (r + r)
 	}
 	return r
 }

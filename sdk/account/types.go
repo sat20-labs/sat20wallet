@@ -42,10 +42,10 @@ type SubAccount struct {
 }
 
 type WalletBackup struct {
-	Name          string       `json:"name"`
-	Mnemonic      string       `json:"mnemonic"`
-	AccountCount  uint32       `json:"account_count"`
-	SubAccounts   []SubAccount `json:"sub_accounts"`
+	Name         string       `json:"name"`
+	Mnemonic     string       `json:"mnemonic"`
+	AccountCount uint32       `json:"account_count"`
+	SubAccounts  []SubAccount `json:"sub_accounts"`
 }
 
 type Backup struct {
@@ -147,21 +147,21 @@ type Manifest struct {
 }
 
 type RecoveryPackage struct {
-	Envelope          Envelope                `json:"envelope"`
-	Manifest          Manifest                `json:"manifest"`
-	UserShare         RecoveryShare           `json:"user_share"`
-	DKVSShareCapsule  DKVSShareCapsule        `json:"dkvs_share_capsule"`
-	KnowledgeBundle   KnowledgeRecoveryBundle `json:"knowledge_bundle"`
-	GuardianCapsule   *GuardianShareCapsule   `json:"guardian_capsule,omitempty"`
+	Envelope         Envelope                `json:"envelope"`
+	Manifest         Manifest                `json:"manifest"`
+	UserShare        RecoveryShare           `json:"user_share"`
+	DKVSShareCapsule DKVSShareCapsule        `json:"dkvs_share_capsule"`
+	KnowledgeBundle  KnowledgeRecoveryBundle `json:"knowledge_bundle"`
+	GuardianCapsule  *GuardianShareCapsule   `json:"guardian_capsule,omitempty"`
 }
 
 type CreateOptions struct {
-	AccountID          string
-	Backup             Backup
-	RecoveryMode       RecoveryMode
-	Questions          []QuestionAnswer
-	GuardianMailboxID  string
-	GuardianPublicKey  []byte
+	AccountID         string
+	Backup            Backup
+	RecoveryMode      RecoveryMode
+	Questions         []QuestionAnswer
+	GuardianMailboxID string
+	GuardianPublicKey []byte
 }
 
 type AnswerAttempt struct {

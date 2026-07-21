@@ -78,7 +78,10 @@ func TestNewDeviceIsRecoveryRehearsal(t *testing.T) {
 		t.Fatal(err)
 	}
 	confirmed, persisted := false, false
-	summary, err := RestoreOnNewDevice(NewDeviceRecoveryOptions{Envelope: pkg.Envelope, Shares: []RecoveryShare{pkg.UserShare, dkvsShare}, Confirm: func(summary RecoverySummary) (bool, error) { confirmed = true; return len(summary.Wallets) == 1, nil }, Persist: func(secret []byte, backup Backup) error { persisted = len(secret) == 32 && len(backup.Wallets) == 1; return nil }})
+	summary, err := RestoreOnNewDevice(NewDeviceRecoveryOptions{Envelope: pkg.Envelope, Shares: []RecoveryShare{pkg.UserShare, dkvsShare}, Confirm: func(summary RecoverySummary) (bool, error) { confirmed = true; return len(summary.Wallets) == 1, nil }, Persist: func(secret []byte, backup Backup) error {
+		persisted = len(secret) == 32 && len(backup.Wallets) == 1
+		return nil
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}

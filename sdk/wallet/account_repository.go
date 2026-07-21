@@ -43,7 +43,9 @@ func NewReadOnlyAccountDKVSRepository(client *SatsNetDKVSClient, accountID strin
 }
 
 func (r *AccountDKVSRepository) AccountID() string { return r.accountID }
-func accountPath(packageID, name string) string     { return accountRecoveryPath + "/" + packageID + "/" + name }
+func accountPath(packageID, name string) string {
+	return accountRecoveryPath + "/" + packageID + "/" + name
+}
 
 func (r *AccountDKVSRepository) putJSON(path string, value any) error {
 	if r.owner == nil {
@@ -155,8 +157,8 @@ func (r *AccountDKVSRepository) LoadManifest(_ context.Context, locator account.
 }
 
 type AccountWalletMetadata struct {
-	Name            string
-	SubAccountDIDs  map[uint32]string
+	Name           string
+	SubAccountDIDs map[uint32]string
 }
 
 func (p *Manager) ExportAccountBackup(password string, metadata map[int64]AccountWalletMetadata) (account.Backup, error) {

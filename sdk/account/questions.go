@@ -21,9 +21,9 @@ import (
 const (
 	knowledgeQuestionCount     = 3
 	knowledgeQuestionThreshold = 2
-	featureSetSize              = 24
-	featureCorrectThreshold     = 15
-	featureCorpusSize           = 65536
+	featureSetSize             = 24
+	featureCorrectThreshold    = 15
+	featureCorpusSize          = 65536
 )
 
 type rankedFeature struct {

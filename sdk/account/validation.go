@@ -31,7 +31,9 @@ func ValidateLocator(locator Locator) error {
 	return nil
 }
 
-func normalizeSpace(value string) string { return strings.Join(strings.Fields(strings.TrimSpace(value)), " ") }
+func normalizeSpace(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
 
 func NormalizeBackup(value Backup) (Backup, error) {
 	if value.Version != Version || len(value.Wallets) == 0 {
