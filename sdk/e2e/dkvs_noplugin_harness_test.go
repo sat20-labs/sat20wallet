@@ -22,8 +22,8 @@ var (
 )
 
 // dkvsNoPluginBuildArtifacts builds public test binaries that do not depend on
-// the private Transcend STP plugin. DKVS and template AUTOPAY behavior are
-// provided by SatoshiNet itself; only the miner wallet plugin is required.
+// the private Transcend STP plugin. Every generating node still needs a wallet
+// signer, so bootstrap, core and miner all use the public sat20wallet plugin.
 func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 	t.Helper()
 	dkvsNoPluginBuildMu.Lock()
@@ -43,14 +43,14 @@ func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 	outputDir := filepath.Join(os.TempDir(), "sat20wallet-satoshinet-dkvs-rpctest")
 	require.NoError(t, os.MkdirAll(outputDir, 0o755))
 
-	artifacts := satoshinetArtifacts{
-		coreExecutable:  filepath.Join(outputDir, "satoshinet-core-dkvs-rpctest"),
-		minerExecutable: filepath.Join(outputDir, "satoshinet-miner-dkvs-rpctest"),
-		minerPlugin:     filepath.Join(outputDir, "wallet.so"),
-	}
+	nodeExecutable := filepath.Join(outputDir, "satoshinet-wallet-dkvs-rpctest")
 	if runtime.GOOS == "windows" {
-		artifacts.coreExecutable += ".exe"
-		artifacts.minerExecutable += ".exe"
+		nodeExecutable += ".exe"
+	}
+	artifacts := satoshinetArtifacts{
+		coreExecutable:  nodeExecutable,
+		minerExecutable: nodeExecutable,
+		minerPlugin:     filepath.Join(outputDir, "wallet.so"),
 	}
 
 	cmd := exec.Command("go", "build", "-buildmode=plugin", "-o", artifacts.minerPlugin, "main.go")
@@ -58,13 +58,7 @@ func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 
-	cmd = exec.Command("go", "build", "-tags=rpctest,wallet_plugin", "-o", artifacts.minerExecutable,
-		"github.com/sat20-labs/satoshinet")
-	cmd.Dir = satoshinetDir
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, string(output))
-
-	cmd = exec.Command("go", "build", "-tags=rpctest", "-o", artifacts.coreExecutable,
+	cmd = exec.Command("go", "build", "-tags=rpctest,wallet_plugin", "-o", nodeExecutable,
 		"github.com/sat20-labs/satoshinet")
 	cmd.Dir = satoshinetDir
 	output, err = cmd.CombinedOutput()
@@ -81,9 +75,11 @@ func stageDKVSNoPluginNodeRuntime(t *testing.T, role, mnemonic, l1IndexerHost, l
 	executable := artifacts.coreExecutable
 	if role == "miner" {
 		executable = artifacts.minerExecutable
-		copySatoshiNetRuntimeFile(t, artifacts.minerPlugin, filepath.Join(nodeDir, "wallet.so"))
 	}
 
+	// Generating bootstrap/core nodes and the miner all require the public wallet
+	// plugin for STP signing. This keeps the fixture independent of Transcend.
+	copySatoshiNetRuntimeFile(t, artifacts.minerPlugin, filepath.Join(nodeDir, "wallet.so"))
 	stagedExecutable := filepath.Join(nodeDir, filepath.Base(executable))
 	copySatoshiNetRuntimeFile(t, executable, stagedExecutable)
 	require.NoError(t, os.WriteFile(filepath.Join(nodeDir, "conf.yaml"), []byte(fmt.Sprintf(satoshinetTestConf,
