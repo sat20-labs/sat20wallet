@@ -2,7 +2,7 @@ name: Account management
 
 on:
   push:
-    branches: [feat/account-management-complete]
+    branches: [main]
   pull_request:
     branches: [main]
     paths:
