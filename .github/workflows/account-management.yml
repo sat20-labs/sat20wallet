@@ -89,7 +89,7 @@ jobs:
           cache-dependency-path: pwa/package-lock.json
       - name: Install PWA dependencies
         working-directory: pwa
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Type-check PWA
         working-directory: pwa
         run: npm run compile
