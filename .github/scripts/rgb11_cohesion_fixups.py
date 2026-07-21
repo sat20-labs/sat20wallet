@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 api_types = Path("sdk/wallet/rgb11/api_types.go")
 manager = Path("sdk/wallet/rgb11_manager.go")
@@ -73,3 +74,16 @@ for receiver in ("deviceA", "deviceB", "manager", "newWallet"):
             f"{receiver}.rgbManager.{method}(",
         )
 sync_test.write_text(sync_test_text, encoding="utf-8")
+
+subprocess.run(
+    [
+        "gofmt",
+        "-w",
+        str(api_types),
+        str(manager),
+        str(api_test),
+        str(manager_test),
+        str(sync_test),
+    ],
+    check=True,
+)
