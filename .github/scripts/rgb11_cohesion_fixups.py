@@ -113,3 +113,25 @@ subprocess.run(
     ],
     check=True,
 )
+
+# Temporary diagnostics: keep the test log in the transformed-source artifact,
+# but exclude it from git so the final source commit remains clean.
+diagnostic = Path("sdk/wallet/rgb11/.cohesion-tests.log")
+exclude = Path(".git/info/exclude")
+exclude.parent.mkdir(parents=True, exist_ok=True)
+exclude_text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+exclude_rule = "sdk/wallet/rgb11/.cohesion-tests.log"
+if exclude_rule not in exclude_text.splitlines():
+    with exclude.open("a", encoding="utf-8") as stream:
+        if exclude_text and not exclude_text.endswith("\n"):
+            stream.write("\n")
+        stream.write(exclude_rule + "\n")
+with diagnostic.open("wb") as stream:
+    result = subprocess.run(
+        ["go", "test", "./wallet/...", "-count=1"],
+        cwd="sdk",
+        stdout=stream,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+print(f"cohesion diagnostic tests exit={result.returncode}")
