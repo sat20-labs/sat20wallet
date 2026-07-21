@@ -122,7 +122,7 @@ type Manager struct {
 
 	utxoLockerL1 *UtxoLocker
 	utxoLockerL2 *UtxoLocker
-	rgbManager   *RGB11Manager
+	rgbManager   *rgb11Manager
 	watchTower   *WatchTower
 
 	feeRateL1             int64 // sat/vkb

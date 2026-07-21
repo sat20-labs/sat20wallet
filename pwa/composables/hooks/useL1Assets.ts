@@ -30,6 +30,7 @@ interface RefreshOptions {
 
 interface UseAssetQueryOptions {
   enabled?: boolean | { value: boolean }
+  beforeSummaryCommit?: () => Promise<void>
 }
 
 interface AssetQueryContext {
@@ -106,6 +107,12 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
         address: context.address,
         network: context.network,
       })
+      // A newly broadcast RGB11 carrier may become visible during this fetch.
+      // Give the Wallet SDK one last chance to import the Consignment and lock
+      // that outpoint before the response can update stores or coin-selection UI.
+      if (options.beforeSummaryCommit) {
+        await options.beforeSummaryCommit()
+      }
       return { context, response }
     },
     enabled: computed(() => queryEnabled.value && !!address.value && !!network.value),
@@ -166,7 +173,8 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
     assetsStore.setTotalSats(totalSats)
   }
 
-  const snapshotInput = computed(() => currentContext())
+  // Cached L1 state must not be hydrated before the RGB11 mailbox safety gate.
+  const snapshotInput = computed(() => queryEnabled.value ? currentContext() : null)
 
   const persistSnapshot = async (
     context: AssetQueryContext,

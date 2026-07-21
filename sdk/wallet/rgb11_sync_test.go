@@ -63,10 +63,26 @@ func TestRGB11WalletHeadUsesOwningWalletDKVSSignature(t *testing.T) {
 	if err := dkvsindexer.VerifyRecordForClient(record, dkvsindexer.RecordVerificationOptions{ExpectedKey: key, Height: 1, Now: record.IssueTime}); err != nil {
 		t.Fatalf("owner DKVS signature rejected: %v", err)
 	}
-	if !bytes.Equal(record.PubKey, ownerPriv.PubKey().SerializeCompressed()) {
-		t.Fatal("head record does not belong to owner")
+	if len(record.PubKey) != 0 {
+		t.Fatal("account-scoped head record repeated its public key")
 	}
-	if bytes.Equal(record.PubKey, otherPriv.PubKey().SerializeCompressed()) {
+	parsed, err := dkvsindexer.ParseKey(record.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signerID, err := dkvsindexer.RecordSignerAccountID(record, parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerID, err := dkvsindexer.CanonicalAccountID(ownerPriv.PubKey().SerializeCompressed())
+	if err != nil || signerID != ownerID {
+		t.Fatalf("head signer=%s owner=%s err=%v", signerID, ownerID, err)
+	}
+	otherID, err := dkvsindexer.CanonicalAccountID(otherPriv.PubKey().SerializeCompressed())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signerID == otherID {
 		t.Fatal("another wallet appears as the head record signer")
 	}
 
@@ -91,15 +107,15 @@ func TestRGB11BackupCodecIsCompactDeterministic(t *testing.T) {
 		EngineRecords:     []rgb11wallet.SnapshotRecord{{Key: "receive-test", Value: []byte("invoice state")}},
 		TickerInfos:       []*indexer.TickerInfo{{DisplayName: "RGB Test", MaxSupply: "100000", Divisibility: 8}},
 	}
-	first, err := encodeRGB11WalletSnapshotPayload(snapshot)
+	first, err := rgb11wallet.EncodeWalletSnapshotPayload(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := encodeRGB11WalletSnapshotPayload(snapshot)
+	second, err := rgb11wallet.EncodeWalletSnapshotPayload(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(first, second) || !bytes.HasPrefix(first, []byte(rgb11SnapshotPayloadMagic)) || bytes.HasPrefix(first, []byte("{")) {
+	if !bytes.Equal(first, second) || !bytes.HasPrefix(first, []byte(rgb11wallet.SnapshotPayloadMagic)) || bytes.HasPrefix(first, []byte("{")) {
 		t.Fatalf("compact snapshot is not deterministic binary data: %x", first[:min(8, len(first))])
 	}
 	compactSample := &RGB11WalletSnapshot{
@@ -110,29 +126,29 @@ func TestRGB11BackupCodecIsCompactDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compactSampleValue, err := encodeRGB11WalletSnapshotPayload(compactSample)
+	compactSampleValue, err := rgb11wallet.EncodeWalletSnapshotPayload(compactSample)
 	if err != nil || len(compactSampleValue) >= len(legacySample) {
 		t.Fatalf("compact snapshot size=%d legacy JSON size=%d err=%v", len(compactSampleValue), len(legacySample), err)
 	}
-	decoded, err := decodeRGB11WalletSnapshotPayload(first)
+	decoded, err := rgb11wallet.DecodeWalletSnapshotPayload(first)
 	if err != nil || decoded.WalletID != snapshot.WalletID || len(decoded.ProjectionRecords) != 1 ||
 		len(decoded.EngineRecords) != 1 || len(decoded.TickerInfos) != 1 || decoded.TickerInfos[0].DisplayName != "RGB Test" {
 		t.Fatalf("compact snapshot decode=%+v err=%v", decoded, err)
 	}
-	if _, err := decodeRGB11WalletSnapshotPayload([]byte(`{"wallet_id":"wallet-42"}`)); err == nil {
+	if _, err := rgb11wallet.DecodeWalletSnapshotPayload([]byte(`{"wallet_id":"wallet-42"}`)); err == nil {
 		t.Fatal("legacy JSON snapshot unexpectedly accepted")
 	}
 
 	operation := [32]byte{9}
-	envelope, err := encodeRGB11EncryptedSnapshot(snapshot.WalletID, operation, []byte("ciphertext"))
-	if err != nil || !bytes.HasPrefix(envelope, []byte(rgb11SnapshotEnvelopeMagic)) {
+	envelope, err := rgb11wallet.EncodeEncryptedSnapshot(snapshot.WalletID, operation, []byte("ciphertext"))
+	if err != nil || !bytes.HasPrefix(envelope, []byte(rgb11wallet.SnapshotEnvelopeMagic)) {
 		t.Fatalf("compact envelope err=%v value=%x", err, envelope)
 	}
-	walletID, decodedOperation, ciphertext, err := decodeRGB11EncryptedSnapshot(envelope)
+	walletID, decodedOperation, ciphertext, err := rgb11wallet.DecodeEncryptedSnapshot(envelope)
 	if err != nil || walletID != snapshot.WalletID || decodedOperation != operation || string(ciphertext) != "ciphertext" {
 		t.Fatalf("compact envelope decode wallet=%s operation=%x ciphertext=%q err=%v", walletID, decodedOperation, ciphertext, err)
 	}
-	if _, _, _, err := decodeRGB11EncryptedSnapshot([]byte(`{"wallet_id":"wallet-42"}`)); err == nil {
+	if _, _, _, err := rgb11wallet.DecodeEncryptedSnapshot([]byte(`{"wallet_id":"wallet-42"}`)); err == nil {
 		t.Fatal("legacy JSON envelope unexpectedly accepted")
 	}
 }
@@ -364,23 +380,23 @@ func newRGB11MultiDeviceManager(t *testing.T, priv *btcec.PrivateKey, localWalle
 	database := indexerdb.NewKVDB(t.TempDir())
 	t.Cleanup(func() { database.Close() })
 	wallet := dkvsTestWalletFromPriv(t, priv)
-	rgbManager, err := newRGB11Manager(database, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rgbManager.consistencyStatus = "ok"
 	manager := &Manager{
 		db: database, wallet: wallet,
 		status:        &Status{CurrentWallet: localWalletID, CurrentAccount: 0},
 		tickerInfoMap: make(map[string]*indexer.TickerInfo),
-		rgbManager:    rgbManager,
 	}
-	if err := manager.selectRGB11Scope(); err != nil {
+	rgbManager, err := newRGB11Manager(manager, database, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rgbManager.consistencyStatus = "ok"
+	manager.rgbManager = rgbManager
+	if err := manager.rgbManager.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
 	// Automatic DKVS backup is asynchronous. Wait for it before the earlier
 	// database cleanup closes Pebble.
-	t.Cleanup(manager.waitForRGB11AutoBackup)
+	t.Cleanup(manager.rgbManager.waitForRGB11AutoBackup)
 	return manager
 }
 
@@ -447,7 +463,7 @@ func TestRGB11TwoDevicesRestoreLatestAndRejectStaleWriter(t *testing.T) {
 	}
 	deviceA.cfg = &sdkcommon.Config{IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"}}
 	deviceA.http = remote
-	if err := deviceA.requireLatestRGB11WalletState(); !errors.Is(err, coresync.ErrHeadConflict) {
+	if err := deviceA.rgbManager.requireLatestRGB11WalletState(); !errors.Is(err, coresync.ErrHeadConflict) {
 		t.Fatalf("stale device A external-effect guard error=%v", err)
 	}
 
@@ -458,7 +474,7 @@ func TestRGB11TwoDevicesRestoreLatestAndRejectStaleWriter(t *testing.T) {
 	if restored2.Seq != 2 {
 		t.Fatalf("device A latest restored sequence=%d", restored2.Seq)
 	}
-	if err := deviceA.requireLatestRGB11WalletState(); err != nil {
+	if err := deviceA.rgbManager.requireLatestRGB11WalletState(); err != nil {
 		t.Fatalf("restored device A was not accepted as latest: %v", err)
 	}
 	if _, err := deviceA.rgbManager.engine.LoadReceive(requestB); err != nil {
@@ -522,7 +538,7 @@ func TestRGB11ManualFirstBackupEnablesAutomaticBackupAndActivationRestore(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	deviceA.waitForRGB11AutoBackup()
+	deviceA.rgbManager.waitForRGB11AutoBackup()
 	head2, _, err := client.GetRGB11WalletHead(priv.PubKey().SerializeCompressed(), walletID, verify)
 	if err != nil {
 		t.Fatal(err)
@@ -530,8 +546,8 @@ func TestRGB11ManualFirstBackupEnablesAutomaticBackupAndActivationRestore(t *tes
 	if head2.Seq != 2 {
 		t.Fatalf("post-enrollment invoice did not auto-backup: head sequence=%d", head2.Seq)
 	}
-	deviceA.autoBackupRGB11AfterMutation()
-	deviceA.waitForRGB11AutoBackup()
+	deviceA.rgbManager.autoBackupRGB11AfterMutation()
+	deviceA.rgbManager.waitForRGB11AutoBackup()
 	unchanged, _, err := client.GetRGB11WalletHead(priv.PubKey().SerializeCompressed(), walletID, verify)
 	if err != nil || unchanged.Seq != 2 {
 		t.Fatalf("unchanged automatic backup advanced head: head=%+v err=%v", unchanged, err)
@@ -555,7 +571,7 @@ func TestRGB11ManualFirstBackupEnablesAutomaticBackupAndActivationRestore(t *tes
 	if _, err := deviceB.CreateRGB11Invoice(RGB11InvoiceRequest{AmountRaw: "3", WitnessVout: 1}); err != nil {
 		t.Fatal(err)
 	}
-	deviceB.waitForRGB11AutoBackup()
+	deviceB.rgbManager.waitForRGB11AutoBackup()
 	head3, _, err := client.GetRGB11WalletHead(priv.PubKey().SerializeCompressed(), walletID, verify)
 	if err != nil || head3.Seq != 3 {
 		t.Fatalf("restored device did not continue automatic backup: head=%+v err=%v", head3, err)
@@ -799,7 +815,7 @@ func TestRGB11AutomaticBackupDoesNotBlockMutation(t *testing.T) {
 
 	waited := make(chan struct{})
 	go func() {
-		manager.waitForRGB11AutoBackup()
+		manager.rgbManager.waitForRGB11AutoBackup()
 		close(waited)
 	}()
 	select {
