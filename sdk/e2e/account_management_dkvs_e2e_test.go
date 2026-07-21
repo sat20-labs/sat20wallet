@@ -133,5 +133,5 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	require.Equal(t, uint64(len(values)), usage.ActiveRecords)
-	require.Greater(t, usage.ActiveBytes, uint64(0))
+	require.Greater(t, usage.ActiveTotalSize, uint64(0))
 }
