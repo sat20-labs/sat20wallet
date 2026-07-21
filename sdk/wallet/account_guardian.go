@@ -20,7 +20,11 @@ func (p *SatsNetDKVSClient) PutAccountGuardianCapsuleWithAutopay(owner common.Wa
 	if len(encoded) > account.MaxRecoveryObjectSize {
 		return fmt.Errorf("guardian capsule exceeds DKVS value limit")
 	}
-	record, err := NewDKVSMailShareRecord(owner, mailboxID, capsule.PackageID, capsule.ShareID, encoded, options)
+	key, err := dkvsindexer.MailShareKey(mailboxID, capsule.PackageID, capsule.ShareID)
+	if err != nil {
+		return err
+	}
+	record, err := NewDKVSSignedRecord(owner, key, encoded, options)
 	if err != nil {
 		return err
 	}
