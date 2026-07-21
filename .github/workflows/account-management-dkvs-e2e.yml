@@ -49,6 +49,12 @@ jobs:
           ref: main
           path: satoshinet
 
+      - name: Checkout Transcend plugin
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/transcend
+          path: transcend
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
