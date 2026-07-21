@@ -7,6 +7,7 @@ on:
     branches: [main]
     paths:
       - 'sdk/e2e/account_management_dkvs_e2e_test.go'
+      - 'sdk/e2e/dkvs_noplugin_harness_test.go'
       - 'sdk/e2e/dkvs_e2e_test.go'
       - 'sdk/wallet/dkvs_client.go'
       - '.github/workflows/account-management-dkvs-e2e.yml'
@@ -48,12 +49,6 @@ jobs:
           repository: sat20-labs/satoshinet
           ref: main
           path: satoshinet
-
-      - name: Checkout Transcend plugin
-        uses: actions/checkout@v4
-        with:
-          repository: sat20-labs/transcend
-          path: transcend
 
       - name: Setup Go
         uses: actions/setup-go@v5
