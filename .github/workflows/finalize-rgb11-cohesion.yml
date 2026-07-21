@@ -1,0 +1,184 @@
+name: Finalize RGB11 cohesion cleanup
+
+on:
+  push:
+    branches: [agent/rgb11-dkvs-transfer-a]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-rgb11-cohesion
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/sat20wallet
+          ref: agent/rgb11-dkvs-transfer-a
+          fetch-depth: 0
+
+      - name: Replace CI with clean verification workflow
+        shell: bash
+        run: |
+          cat > .github/workflows/rgb11-address-scheme-a.yml <<'YAML'
+          name: RGB11 address transfer scheme A
+
+          on:
+            push:
+              branches: [agent/rgb11-dkvs-transfer-a]
+            pull_request:
+              branches: [main]
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+            statuses: write
+
+          concurrency:
+            group: rgb11-address-scheme-a
+            cancel-in-progress: true
+
+          jobs:
+            wallet-sdk:
+              runs-on: ubuntu-latest
+              timeout-minutes: 45
+              steps:
+                - name: Checkout wallet
+                  uses: actions/checkout@v4
+                  with:
+                    path: sat20wallet
+                    fetch-depth: 0
+
+                - name: Checkout indexer
+                  uses: actions/checkout@v4
+                  with:
+                    repository: sat20-labs/indexer
+                    path: indexer
+
+                - name: Checkout RGB11 engine
+                  uses: actions/checkout@v4
+                  with:
+                    repository: sat20-labs/rgb11
+                    path: rgb11
+
+                - name: Checkout companion SatoshiNet branch
+                  uses: actions/checkout@v4
+                  with:
+                    repository: sat20-labs/satoshinet
+                    ref: agent/rgb11-dkvs-transfer-a
+                    path: satoshinet
+
+                - name: Setup Go
+                  uses: actions/setup-go@v5
+                  with:
+                    go-version-file: sat20wallet/sdk/go.mod
+                    cache: false
+
+                - name: Setup Node
+                  uses: actions/setup-node@v4
+                  with:
+                    node-version: '22'
+
+                - name: Check RGB11 cohesion boundaries
+                  working-directory: sat20wallet
+                  shell: bash
+                  run: |
+                    set -euo pipefail
+                    root_impl=$(find sdk/wallet -maxdepth 1 -type f -name 'rgb11*.go' ! -name '*_test.go' -printf '%f\n' | sort)
+                    expected=$'rgb11_api.go\nrgb11_dkvs.go\nrgb11_manager.go'
+                    if [[ "$root_impl" != "$expected" ]]; then
+                      printf 'Unexpected root RGB11 implementation files:\n%s\n' "$root_impl"
+                      exit 1
+                    fi
+                    leaked=$(grep -R --line-number -E '^func \(p \*Manager\) .*RGB11' sdk/wallet --include='*.go' --exclude='rgb11_api.go' --exclude='*_test.go' || true)
+                    if [[ -n "$leaked" ]]; then
+                      printf 'RGB11 methods leaked outside rgb11_api.go:\n%s\n' "$leaked"
+                      exit 1
+                    fi
+                    test -f sdk/wallet/rgb11/api_types.go
+                    test -f sdk/wallet/rgb11/address_codec.go
+                    test -f sdk/wallet/rgb11/backup_codec.go
+
+                - name: Check Go formatting
+                  working-directory: sat20wallet
+                  shell: bash
+                  run: |
+                    files=$(git diff --name-only origin/main...HEAD -- '*.go')
+                    if [[ -n "$files" ]]; then
+                      unformatted=$(gofmt -l $files)
+                      if [[ -n "$unformatted" ]]; then
+                        printf 'Unformatted files:\n%s\n' "$unformatted"
+                        exit 1
+                      fi
+                    fi
+
+                - name: Vet wallet packages excluding legacy copylocks findings
+                  working-directory: sat20wallet/sdk
+                  run: go vet -copylocks=false ./wallet/...
+
+                - name: Compile wallet root package
+                  working-directory: sat20wallet/sdk
+                  run: go test ./wallet -run '^$' -count=1
+
+                - name: Test wallet packages
+                  working-directory: sat20wallet/sdk
+                  run: go test ./wallet/... -count=1
+
+                - name: Compile browser WASM
+                  working-directory: sat20wallet/sdk
+                  run: GOOS=js GOARCH=wasm go build -buildvcs=false -ldflags='-s -w' -o /tmp/sat20wallet.wasm ./wasm
+
+                - name: Install PWA dependencies
+                  working-directory: sat20wallet/pwa
+                  run: npm install --ignore-scripts --no-audit --no-fund
+
+                - name: Type-check PWA
+                  working-directory: sat20wallet/pwa
+                  run: npm run compile
+
+                - name: Verify RGB11 PWA integration
+                  working-directory: sat20wallet/pwa
+                  run: npm run verify:rgb11-l1
+
+                - name: Publish commit status
+                  if: always() && github.event_name == 'push'
+                  uses: actions/github-script@v7
+                  env:
+                    JOB_STATUS: ${{ job.status }}
+                  with:
+                    script: |
+                      const state = process.env.JOB_STATUS === 'success' ? 'success' : 'failure';
+                      await github.rest.repos.createCommitStatus({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        sha: context.sha,
+                        state,
+                        context: 'rgb11-address-scheme-a',
+                        description: state === 'success' ? 'Wallet SDK and PWA checks passed' : 'Wallet SDK or PWA checks failed',
+                        target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.name}/actions/runs/${context.runId}`
+                      });
+          YAML
+
+      - name: Remove temporary refactor machinery
+        shell: bash
+        run: |
+          rm -f .github/refactor/rgb11-overlay.part*
+          rm -f .github/scripts/rgb11_cohesion_fixups.py
+          rm -f .github/workflows/agent-rgb11-cohesion-refactor.yml
+          rm -f .github/workflows/export-rgb11-refactor-workspace.yml
+          rm -f .github/workflows/finalize-rgb11-cohesion.yml
+
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'finalize cohesive RGB11 wallet layout'
+          git push origin HEAD:agent/rgb11-dkvs-transfer-a
