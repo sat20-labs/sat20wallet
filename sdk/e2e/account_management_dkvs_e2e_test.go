@@ -15,13 +15,13 @@ import (
 )
 
 // TestRealSatoshiNetAccountManagementAutopaySync verifies the network-facing
-// account-management storage contract on top of the real three-node DKVS e2e
+// account-management storage contract on top of a real public three-node DKVS
 // fixture. Cryptographic account-envelope and Shamir reconstruction tests live
 // in wallet-sdk; this test proves that the package-versioned encrypted records
 // are owner-signed, paid through AUTOPAY, propagated, indexed and retrievable.
 func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	defaults := dkvsindexer.NetworkDefaultsForParams(&chaincfg.TestNetParams)
-	f := newTemplateFixtureWithArgs(t,
+	f := newDKVSNoPluginTemplateFixtureWithArgs(t,
 		map[string]int64{defaults.AutopayFeeAssetName: 20000}, nil, nil, dkvsMinerArgs(t))
 	waitForDKVSPeerReady(t, f.Network)
 
