@@ -80,7 +80,7 @@ jobs:
         working-directory: sat20wallet
         shell: bash
         run: |
-          files=$(git diff --name-only origin/main...HEAD -- '*.go')
+          files=$(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- '*.go')
           if [[ -n "$files" ]]; then
             unformatted=$(gofmt -l $files)
             if [[ -n "$unformatted" ]]; then
