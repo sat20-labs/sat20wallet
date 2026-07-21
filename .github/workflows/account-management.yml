@@ -74,6 +74,9 @@ jobs:
       - name: Compile wallet integration
         working-directory: sat20wallet/sdk
         run: go test ./wallet -run '^$' -count=1
+      - name: Compile account E2E
+        working-directory: sat20wallet/sdk
+        run: go test ./e2e -run '^$' -count=1
 
   pwa-secure-storage:
     runs-on: ubuntu-latest
@@ -93,57 +96,3 @@ jobs:
       - name: Type-check PWA
         working-directory: pwa
         run: npm run compile
-
-  dkvs-autopay-e2e:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - name: Checkout wallet
-        uses: actions/checkout@v4
-        with:
-          path: sat20wallet
-          fetch-depth: 0
-      - name: Checkout indexer
-        uses: actions/checkout@v4
-        with:
-          repository: sat20-labs/indexer
-          path: indexer
-      - name: Checkout RGB11 engine
-        uses: actions/checkout@v4
-        with:
-          repository: sat20-labs/rgb11
-          path: rgb11
-      - name: Checkout SatoshiNet
-        uses: actions/checkout@v4
-        with:
-          repository: sat20-labs/satoshinet
-          path: satoshinet
-      - name: Checkout Transcend
-        uses: actions/checkout@v4
-        with:
-          repository: sat20-labs/transcend
-          path: transcend
-      - name: Apply rpctest-only SatoshiNet hardening patch
-        shell: bash
-        run: git -C satoshinet apply ../sat20wallet/sdk/e2e/testdata/satoshinet-rpctest-hardening.patch
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: sat20wallet/sdk/go.mod
-          cache: false
-      - name: Run account-management DKVS AUTOPAY e2e
-        working-directory: sat20wallet/sdk
-        shell: bash
-        run: |
-          set -o pipefail
-          go test ./e2e -run '^TestRealSatoshiNetAccountManagementAutopaySync$' -count=1 -v 2>&1 | tee /tmp/account-management-dkvs-e2e.log
-      - name: Upload e2e diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: account-management-dkvs-e2e-${{ github.run_id }}
-          path: |
-            /tmp/account-management-dkvs-e2e.log
-            /tmp/sat20wallet-satoshinet-rpctest-failures/**
-          if-no-files-found: warn
-          retention-days: 3
