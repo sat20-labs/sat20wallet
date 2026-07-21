@@ -33,3 +33,43 @@ if old in manager_text:
 elif new not in manager_text:
     raise SystemExit("rgb11_manager.go error alias marker not found")
 manager.write_text(manager_text, encoding="utf-8")
+
+# Tests in package wallet should exercise implementation-only helpers through
+# the dedicated rgb11Manager rather than reintroducing private methods on the
+# outer Manager.
+api_test = Path("sdk/wallet/rgb11_address_api_test.go")
+api_test_text = api_test.read_text(encoding="utf-8")
+setup = "\tmanager := &Manager{}\n"
+setup_with_component = setup + "\tmanager.rgbManager = &rgb11Manager{Manager: manager}\n"
+if setup_with_component not in api_test_text:
+    if setup not in api_test_text:
+        raise SystemExit("rgb11_address_api_test.go manager setup marker not found")
+    api_test_text = api_test_text.replace(setup, setup_with_component, 1)
+api_test_text = api_test_text.replace(
+    "manager.configureRGB11AddressRetention(",
+    "manager.rgbManager.configureRGB11AddressRetention(",
+)
+api_test.write_text(api_test_text, encoding="utf-8")
+
+manager_test = Path("sdk/wallet/rgb11_manager_test.go")
+manager_test_text = manager_test.read_text(encoding="utf-8")
+for method in ("rgb11CarrierBinding", "ownsRGB11Carrier", "buildRGB11WitnessTx"):
+    manager_test_text = manager_test_text.replace(
+        f"manager.{method}(",
+        f"manager.rgbManager.{method}(",
+    )
+manager_test.write_text(manager_test_text, encoding="utf-8")
+
+sync_test = Path("sdk/wallet/rgb11_sync_test.go")
+sync_test_text = sync_test.read_text(encoding="utf-8")
+for receiver in ("deviceA", "deviceB", "manager", "newWallet"):
+    for method in (
+        "requireLatestRGB11WalletState",
+        "autoBackupRGB11AfterMutation",
+        "waitForRGB11AutoBackup",
+    ):
+        sync_test_text = sync_test_text.replace(
+            f"{receiver}.{method}(",
+            f"{receiver}.rgbManager.{method}(",
+        )
+sync_test.write_text(sync_test_text, encoding="utf-8")
