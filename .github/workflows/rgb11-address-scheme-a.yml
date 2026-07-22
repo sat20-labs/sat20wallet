@@ -38,11 +38,11 @@ jobs:
           repository: sat20-labs/rgb11
           path: rgb11
 
-      - name: Checkout companion SatoshiNet branch
+      - name: Checkout SatoshiNet
         uses: actions/checkout@v4
         with:
           repository: sat20-labs/satoshinet
-          ref: agent/rgb11-dkvs-transfer-a
+          ref: main
           path: satoshinet
 
       - name: Setup Go
