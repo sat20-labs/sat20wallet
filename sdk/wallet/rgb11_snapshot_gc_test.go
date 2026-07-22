@@ -39,8 +39,7 @@ func TestRGB11PaidBackupPrunesSupersededSnapshot(t *testing.T) {
 
 	pubKey := priv.PubKey().SerializeCompressed()
 	if _, _, err := client.GetRGB11WalletSnapshot(pubKey, walletID, head1.OperationID,
-		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())});
-		!errors.Is(err, ErrDKVSRecordNotFound) {
+		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}); !errors.Is(err, ErrDKVSRecordNotFound) {
 		t.Fatalf("superseded snapshot remained active: %v", err)
 	}
 	if _, _, err := client.GetRGB11WalletSnapshot(pubKey, walletID, head2.OperationID,

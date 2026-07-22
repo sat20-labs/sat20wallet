@@ -304,7 +304,9 @@ func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, er
 	if h.postGate != nil {
 		<-h.postGate
 	}
-	if !strings.HasSuffix(url.Path, "/v3/dkvs/records") {
+	recordPath := strings.HasSuffix(url.Path, "/v3/dkvs/records")
+	tombstonePath := strings.HasSuffix(url.Path, "/v3/dkvs/tombstone")
+	if !recordPath && !tombstonePath {
 		return nil, fmt.Errorf("unexpected RGB11 DKVS POST path %s", url.Path)
 	}
 	var record swire.DKVSRecord
@@ -320,6 +322,10 @@ func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, er
 		// The production endpoint returns the submitted record even when the
 		// selector keeps the existing active record. The client must re-read the
 		// key before treating its candidate as the latest wallet head.
+		return rgb11DKVSResponse(0, "ok", &record, 0)
+	}
+	if tombstonePath {
+		delete(h.records, record.Key)
 		return rgb11DKVSResponse(0, "ok", &record, 0)
 	}
 	h.records[record.Key] = cloneRGB11DKVSRecord(&record)

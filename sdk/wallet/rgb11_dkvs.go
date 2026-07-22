@@ -1155,8 +1155,12 @@ func (p *rgb11Manager) BackupRGB11WalletState(client *SatsNetDKVSClient, walletI
 		p.rgbManager.dkvsStatus = "warning"
 		return nil, nil, err
 	}
-	p.rgbManager.dkvsStatus = "synced"
 	p.rgbManager.head = head
+	if err := client.pruneRGB11WalletSnapshots(p.wallet, walletID, operationID); err != nil {
+		p.rgbManager.dkvsStatus = "warning"
+	} else {
+		p.rgbManager.dkvsStatus = "synced"
+	}
 	return head, record, nil
 }
 
@@ -1739,10 +1743,11 @@ func (p *SatsNetDKVSClient) putRGB11WalletSnapshot(wallet common.Wallet, walletI
 	opts.Seq = 1
 	var manifest *swire.DKVSRecord
 	var err error
+	metadata := rgb11WalletSnapshotMetadata(walletID)
 	if autopay == nil {
-		manifest, _, err = p.PutBlob(wallet, hex.EncodeToString(operationID[:]), value, nil, opts)
+		manifest, _, err = p.PutBlob(wallet, hex.EncodeToString(operationID[:]), value, metadata, opts)
 	} else {
-		manifest, _, err = p.PutBlobWithAutopay(wallet, hex.EncodeToString(operationID[:]), value, nil, opts, *autopay)
+		manifest, _, err = p.PutBlobWithAutopay(wallet, hex.EncodeToString(operationID[:]), value, metadata, opts, *autopay)
 	}
 	return manifest, err
 }
