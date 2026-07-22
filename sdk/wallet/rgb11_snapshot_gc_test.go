@@ -10,6 +10,8 @@ import (
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
+// Continuous AUTOPAY must retain the latest recoverable snapshot without
+// retaining every historical snapshot as a paid record.
 func TestRGB11PaidBackupPrunesSupersededSnapshot(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
