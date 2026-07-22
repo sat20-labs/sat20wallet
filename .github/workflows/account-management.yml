@@ -32,7 +32,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: account-management-${{ github.ref }}
@@ -48,7 +48,6 @@ jobs:
         with:
           path: sat20wallet
           fetch-depth: 0
-          ref: ${{ github.head_ref || github.ref_name }}
       - name: Checkout indexer
         uses: actions/checkout@v4
         with:
@@ -69,7 +68,7 @@ jobs:
         with:
           go-version-file: sat20wallet/sdk/go.mod
           cache: false
-      - name: Format changed Go files
+      - name: Check Go formatting
         working-directory: sat20wallet
         shell: bash
         run: |
@@ -79,30 +78,51 @@ jobs:
             'sdk/wasm/account_management.go' \
             'sdk/e2e/account_management_dkvs_e2e_test.go' 'sdk/e2e/dkvs_noplugin_harness_test.go')
           if [[ -n "$files" ]]; then
-            gofmt -w $files
-            if ! git diff --quiet -- $files; then
-              git config user.name github-actions[bot]
-              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-              git add $files
-              git commit -m 'style: gofmt account management integration'
-              git push origin HEAD:${{ github.head_ref }}
+            unformatted=$(gofmt -l $files)
+            if [[ -n "$unformatted" ]]; then
+              printf 'Unformatted files:\n%s\n' "$unformatted"
+              exit 1
             fi
           fi
       - name: Test account packages
         working-directory: sat20wallet/sdk
-        run: go test ./account/... -count=1
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./account/... -count=1 2>&1 | tee /tmp/account-tests.log
       - name: Compile wallet integration
         working-directory: sat20wallet/sdk
-        run: go test ./wallet -run '^$' -count=1
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./wallet -run '^$' -count=1 2>&1 | tee /tmp/wallet-compile.log
       - name: Compile account E2E
         working-directory: sat20wallet/sdk
-        run: go test ./e2e -run '^$' -count=1
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./e2e -run '^$' -count=1 2>&1 | tee /tmp/e2e-compile.log
       - name: Build account-enabled WASM
         working-directory: sat20wallet/sdk
         env:
           GOOS: js
           GOARCH: wasm
-        run: go build -o /tmp/sat20wallet.wasm ./wasm
+        shell: bash
+        run: |
+          set -o pipefail
+          go build -o /tmp/sat20wallet.wasm ./wasm 2>&1 | tee /tmp/wasm-build.log
+      - name: Upload Go diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: account-management-diagnostics-${{ github.run_id }}
+          path: |
+            /tmp/account-tests.log
+            /tmp/wallet-compile.log
+            /tmp/e2e-compile.log
+            /tmp/wasm-build.log
+          if-no-files-found: ignore
+          retention-days: 1
 
   pwa-account-management:
     runs-on: ubuntu-latest
