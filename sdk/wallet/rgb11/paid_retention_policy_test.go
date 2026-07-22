@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// A zero record lease is valid only when retention is supplied continuously by AUTOPAY.
 func TestAutoBackupPolicySupportsContinuousAutopay(t *testing.T) {
 	policy := &RGB11AutoBackupPolicy{Version: 1, Enabled: true}
 	encoded, err := EncodeAutoBackupPolicy(policy)
