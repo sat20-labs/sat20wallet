@@ -1,39 +1,39 @@
-export type SecureStorageMode = 'native-keystore' | 'webauthn-prf' | 'pin-wrapped'
+export type SecureStorageBackend = 'tee' | 'native-keystore' | 'sdk-vault'
 
 export interface SecureStorageCapabilities {
-  mode: SecureStorageMode
+  backend: SecureStorageBackend
   userPresence: boolean
   hardwareBacked: boolean
   biometricAvailable: boolean
-  recoverableByAccountRecovery: true
+  exportsAccountSecret: false
 }
 
-export interface DeviceKeySlotMetadata {
-  [key: string]: string | number | boolean
-}
-
-export interface DeviceKeySlot {
+/**
+ * Opaque reference returned by the Go SDK or a native TEE/keystore adapter.
+ * PWA business code cannot use this handle to export AccountSecret.
+ */
+export interface DeviceAccountHandle {
   version: 1
   accountId: string
   deviceId: string
-  mode: SecureStorageMode
-  wrappedAccountSecret: string
-  metadata: DeviceKeySlotMetadata
+  backend: SecureStorageBackend
+  handle: string
 }
 
-export interface SealAccountSecretOptions { requireUserPresence?: boolean }
-export interface UnsealAccountSecretOptions { requireUserPresence?: boolean; reason?: string }
+export interface CommitAccountStorageOptions {
+  requireUserPresence?: boolean
+}
 
 /**
- * Platform boundary invoked by the Go/WASM account recovery flow.
- * IndexedDB may persist DeviceKeySlot but never the raw AccountSecret or
- * DeviceWrappingKey.
+ * The PWA passes only a short-lived SDK session ID. AccountSecret,
+ * WrappedAccountSecret and DeviceWrappingKey are never returned to page code
+ * or persisted by the PWA IndexedDB/localStorage layer.
  */
 export interface SecureAccountStorage {
   capabilities(): Promise<SecureStorageCapabilities>
-  seal(accountId: string, accountSecret: Uint8Array, options?: SealAccountSecretOptions): Promise<DeviceKeySlot>
-  unseal(accountId: string, options?: UnsealAccountSecretOptions): Promise<Uint8Array>
-  remove(accountId: string): Promise<void>
+  commit(sessionId: string, options?: CommitAccountStorageOptions): Promise<DeviceAccountHandle>
+  open(handle: DeviceAccountHandle, reason?: string): Promise<string>
+  remove(handle: DeviceAccountHandle): Promise<void>
 }
 
 export class SecureAccountStorageUnavailableError extends Error {
