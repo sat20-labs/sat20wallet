@@ -18,7 +18,7 @@ const (
 	AccountStoragePaid      = "paid"
 
 	accountPaidDefaultFundingBlocks = uint64(1000)
-	accountRequiredRecords          = uint64(5)
+	accountRequiredRecords          = uint64(4)
 )
 
 type AccountIndexerLocation struct {
