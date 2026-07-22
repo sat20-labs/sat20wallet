@@ -18,6 +18,7 @@ on:
       - 'sdk/wasm/account_management.go'
       - 'sdk/e2e/account_management_dkvs_e2e_test.go'
       - 'sdk/e2e/dkvs_noplugin_harness_test.go'
+      - 'sdk/e2e/dkvs_template_invoke_test.go'
       - 'sdk/e2e/testdata/satoshinet-rpctest-hardening.patch'
       - 'pwa/components/account/**'
       - 'pwa/entrypoints/popup/pages/RestoreAccount.vue'
@@ -37,189 +38,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: account-management-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  patch-paid-retention:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-      - name: Apply RGB11 continuous AUTOPAY patch
-        shell: bash
-        run: |
-          if grep -q 'func validAutoBackupPolicy' sdk/wallet/rgb11/backup_codec.go; then
-            echo 'Patch already applied.'
-            exit 0
-          fi
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path: str, old: str, new: str) -> None:
-              p = Path(path)
-              text = p.read_text()
-              if old not in text:
-                  raise SystemExit(f"missing expected block in {path}: {old[:120]!r}")
-              p.write_text(text.replace(old, new, 1))
-
-          codec = "sdk/wallet/rgb11/backup_codec.go"
-          replace_once(codec,
-          '''func EncodeAutoBackupPolicy(policy *RGB11AutoBackupPolicy) ([]byte, error) {
-          \tif policy == nil || policy.Version != 1 || !policy.Enabled || policy.TTL == 0 {
-          \t\treturn nil, ErrRGB11Inconsistent
-          \t}
-          ''',
-          '''func validAutoBackupPolicy(policy *RGB11AutoBackupPolicy) bool {
-          \tif policy == nil || policy.Version != 1 || !policy.Enabled {
-          \t\treturn false
-          \t}
-          \t// TTL=0 and ExpiryHeight=0 denotes continuous AUTOPAY retention.
-          \t// A non-zero TTL denotes bounded temporary retention.
-          \treturn policy.TTL != 0 || policy.ExpiryHeight == 0
-          }
-
-          func EncodeAutoBackupPolicy(policy *RGB11AutoBackupPolicy) ([]byte, error) {
-          \tif !validAutoBackupPolicy(policy) {
-          \t\treturn nil, ErrRGB11Inconsistent
-          \t}
-          ''')
-          replace_once(codec,
-          '''\tif policy.ExpiryHeight, err = decoder.U64(); err != nil || reader.Len() != 0 || policy.Version != 1 || !policy.Enabled || policy.TTL == 0 {
-          \t\treturn nil, ErrRGB11Inconsistent
-          \t}
-          ''',
-          '''\tif policy.ExpiryHeight, err = decoder.U64(); err != nil || reader.Len() != 0 || !validAutoBackupPolicy(policy) {
-          \t\treturn nil, ErrRGB11Inconsistent
-          \t}
-          ''')
-
-          manager = "sdk/wallet/rgb11_dkvs.go"
-          replace_once(manager,
-          '''const (
-          \trgb11AddressMailboxPageSize = 256
-          \trgb11AddressTemporaryTTL    = uint64((24 * time.Hour) / time.Millisecond)
-          \trgb11AddressAutopayTTL      = uint64((365 * 24 * time.Hour) / time.Millisecond)
-          )
-          ''',
-          '''const (
-          \trgb11AddressMailboxPageSize = 256
-          \trgb11AddressTemporaryTTL    = uint64((24 * time.Hour) / time.Millisecond)
-          )
-          ''')
-          replace_once(manager,
-          '''\tif record.TTL == 0 && record.ExpiryHeight == 0 {
-          \t\tif *autopay != nil {
-          \t\t\trecord.TTL = rgb11AddressAutopayTTL
-          \t\t} else {
-          \t\t\trecord.TTL = rgb11AddressTemporaryTTL
-          \t\t}
-          \t}
-          ''',
-          '''\tif *autopay != nil {
-          \t\trecord.TTL = 0
-          \t\trecord.ExpiryHeight = 0
-          \t\treturn
-          \t}
-          \tif record.TTL == 0 && record.ExpiryHeight == 0 {
-          \t\trecord.TTL = rgb11AddressTemporaryTTL
-          \t}
-          ''')
-          replace_once(manager,
-          '''\t\thead, syncErr := p.SyncRGB11WalletState("", dkvsindexer.RecordOptions{
-          \t\t\tTTL: uint64((365 * 24 * time.Hour) / time.Millisecond),
-          \t\t})
-          ''',
-          '''\t\thead, syncErr := p.SyncRGB11WalletState("", dkvsindexer.RecordOptions{})
-          ''')
-          replace_once(manager,
-          '''\tif state == nil || state.TemplateName != TEMPLATE_CONTRACT_AUTOPAY ||
-          \t\t!strings.EqualFold(strings.TrimSpace(state.Status), "active") || state.Closed ||
-          \t\t!strings.EqualFold(strings.TrimSpace(state.ServiceName), defaults.AutopayServiceName) ||
-          ''',
-          '''\tif state == nil || state.TemplateName != TEMPLATE_CONTRACT_AUTOPAY || state.Closed ||
-          \t\tstrings.EqualFold(strings.TrimSpace(state.Status), "closed") ||
-          \t\tstrings.EqualFold(strings.TrimSpace(state.Status), "expired") ||
-          \t\t!strings.EqualFold(strings.TrimSpace(state.ServiceName), defaults.AutopayServiceName) ||
-          ''')
-          replace_once(manager,
-          '''\tdelegate, ok := state.Delegates[payer]
-          \tif !ok || !strings.EqualFold(strings.TrimSpace(delegate.Status), "active") {
-          \t\treturn false, nil
-          \t}
-          \tamount, amountOK := new(big.Rat).SetString(strings.TrimSpace(delegate.AmountPerBlock))
-          \tbalance, balanceOK := new(big.Rat).SetString(strings.TrimSpace(delegate.Balance))
-          \tfullRecordFee, feeOK := new(big.Rat).SetString(strings.TrimSpace(defaults.FullRecordFeePerBlock))
-          \tif !amountOK || !balanceOK || !feeOK || amount.Sign() <= 0 || balance.Sign() < 0 ||
-          \t\tfullRecordFee.Sign() <= 0 || amount.Cmp(fullRecordFee) < 0 {
-          \t\treturn false, nil
-          \t}
-          \treturn balance.Cmp(amount) >= 0, nil
-          ''',
-          '''\tdelegate, ok := state.Delegates[payer]
-          \tif !ok {
-          \t\treturn false, nil
-          \t}
-          \tamount, amountOK := new(big.Rat).SetString(strings.TrimSpace(delegate.AmountPerBlock))
-          \tfullRecordFee, feeOK := new(big.Rat).SetString(strings.TrimSpace(defaults.FullRecordFeePerBlock))
-          \tif !amountOK || !feeOK || amount.Sign() <= 0 || fullRecordFee.Sign() <= 0 ||
-          \t\tamount.Cmp(fullRecordFee) < 0 || state.CurrentBlock <= 0 {
-          \t\treturn false, nil
-          \t}
-          \treturn delegate.LastPayHeight >= state.CurrentBlock, nil
-          ''')
-          replace_once(manager,
-          '''\tif p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || opts.TTL == 0 {
-          ''',
-          '''\tif p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
-          ''')
-          old = '''\tif !policy.Enabled || policy.TTL == 0 {
-          '''
-          text = Path(manager).read_text()
-          if text.count(old) != 2:
-              raise SystemExit(f"expected two auto-backup TTL guards, found {text.count(old)}")
-          Path(manager).write_text(text.replace(old, '''\tif !policy.Enabled {
-          '''))
-
-          Path("sdk/wallet/rgb11/paid_retention_policy_test.go").write_text('''package rgb11wallet
-
-import (
-\t"testing"
-
-\t"github.com/stretchr/testify/require"
-)
-
-func TestAutoBackupPolicySupportsContinuousAutopay(t *testing.T) {
-\tpolicy := &RGB11AutoBackupPolicy{Version: 1, Enabled: true}
-\tencoded, err := EncodeAutoBackupPolicy(policy)
-\trequire.NoError(t, err)
-\tdecoded, err := DecodeAutoBackupPolicy(encoded)
-\trequire.NoError(t, err)
-\trequire.Equal(t, policy, decoded)
-}
-
-func TestAutoBackupPolicyRejectsHeightOnlyLease(t *testing.T) {
-\t_, err := EncodeAutoBackupPolicy(&RGB11AutoBackupPolicy{
-\t\tVersion: 1, Enabled: true, ExpiryHeight: 100,
-\t})
-\trequire.ErrorIs(t, err, ErrRGB11Inconsistent)
-}
-''')
-          PY
-          gofmt -w sdk/wallet/rgb11/backup_codec.go sdk/wallet/rgb11/paid_retention_policy_test.go sdk/wallet/rgb11_dkvs.go
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add sdk/wallet/rgb11/backup_codec.go sdk/wallet/rgb11/paid_retention_policy_test.go sdk/wallet/rgb11_dkvs.go
-          git commit -m 'fix: support continuous RGB11 AUTOPAY retention'
-          git push origin HEAD:${{ github.head_ref }}
-
   go-account:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -260,7 +85,8 @@ func TestAutoBackupPolicyRejectsHeightOnlyLease(t *testing.T) {
             'sdk/wallet/dkvs_signing.go' 'sdk/wallet/dkvs_paid_retention_test.go' \
             'sdk/wallet/rgb11_dkvs.go' 'sdk/wallet/rgb11/backup_codec.go' \
             'sdk/wallet/rgb11/paid_retention_policy_test.go' 'sdk/wasm/account_management.go' \
-            'sdk/e2e/account_management_dkvs_e2e_test.go' 'sdk/e2e/dkvs_noplugin_harness_test.go')
+            'sdk/e2e/account_management_dkvs_e2e_test.go' 'sdk/e2e/dkvs_noplugin_harness_test.go' \
+            'sdk/e2e/dkvs_template_invoke_test.go')
           if [[ -n "$files" ]]; then
             unformatted=$(gofmt -l $files)
             if [[ -n "$unformatted" ]]; then
