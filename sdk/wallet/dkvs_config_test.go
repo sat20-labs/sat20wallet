@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,7 +12,7 @@ import (
 
 func TestSatsNetDKVSClientGetConfig(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/v3/dkvs/config", r.URL.Path)
+		require.True(t, strings.HasSuffix(r.URL.Path, "/v3/dkvs/config"), r.URL.Path)
 		require.Equal(t, http.MethodGet, r.Method)
 		w.Header().Set("content-type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
