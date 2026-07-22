@@ -1,75 +1,136 @@
 name: RGB11 address transfer scheme A
 
 on:
+  push:
+    branches: [agent/rgb11-dkvs-transfer-a]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  statuses: write
 
 concurrency:
   group: rgb11-address-scheme-a
   cancel-in-progress: true
 
 jobs:
-  patch-account-autopay:
-    if: github.event_name == 'pull_request'
+  wallet-sdk:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - name: Checkout PR branch
+      - name: Checkout wallet
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          path: sat20wallet
           fetch-depth: 0
-      - name: Apply account readiness integration
+
+      - name: Checkout indexer
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/indexer
+          path: indexer
+
+      - name: Checkout RGB11 engine
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/rgb11
+          path: rgb11
+
+      - name: Checkout SatoshiNet
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/satoshinet
+          ref: feat/dkvs-paid-retention-p0
+          path: satoshinet
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sat20wallet/sdk/go.mod
+          cache: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check RGB11 cohesion boundaries
+        working-directory: sat20wallet
         shell: bash
         run: |
-          if grep -q 'waitForAccountAutopayReady(defaults, amountPerBlock)' sdk/wallet/account_pwa.go; then
-            echo 'Patch already applied.'
-            exit 0
+          set -euo pipefail
+          root_impl=$(find sdk/wallet -maxdepth 1 -type f -name 'rgb11*.go' ! -name '*_test.go' -printf '%f\n' | sort)
+          expected=$'rgb11_api.go\nrgb11_dkvs.go\nrgb11_manager.go'
+          if [[ "$root_impl" != "$expected" ]]; then
+            printf 'Unexpected root RGB11 implementation files:\n%s\n' "$root_impl"
+            exit 1
           fi
-          python3 - <<'PY'
-          from pathlib import Path
+          leaked=$(grep -R --line-number -E '^func \(p \*Manager\) .*RGB11' sdk/wallet --include='*.go' --exclude='rgb11_api.go' --exclude='*_test.go' || true)
+          if [[ -n "$leaked" ]]; then
+            printf 'RGB11 methods leaked outside rgb11_api.go:\n%s\n' "$leaked"
+            exit 1
+          fi
+          test -f sdk/wallet/rgb11/api_types.go
+          test -f sdk/wallet/rgb11/address_codec.go
+          test -f sdk/wallet/rgb11/backup_codec.go
 
-          path = Path('sdk/wallet/account_pwa.go')
-          text = path.read_text()
+      - name: Check Go formatting
+        working-directory: sat20wallet
+        shell: bash
+        run: |
+          files=$(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- '*.go')
+          if [[ -n "$files" ]]; then
+            unformatted=$(gofmt -l $files)
+            if [[ -n "$unformatted" ]]; then
+              printf 'Unformatted files:\n%s\n' "$unformatted"
+              exit 1
+            fi
+          fi
 
-          old = '\taccountRequiredRecords          = uint64(4)'
-          new = '\taccountRequiredRecords          = uint64(5)'
-          if old not in text:
-              raise SystemExit('missing account record-slot constant')
-          text = text.replace(old, new, 1)
+      - name: Vet wallet packages excluding legacy copylocks findings
+        working-directory: sat20wallet/sdk
+        run: go vet -copylocks=false ./wallet/...
 
-          old = '''\tif err != nil {
-          \t\treturn nil, err
-          \t}
-          \treturn &AccountStorageAuthorization{
-          \t\tID: AccountStoragePaid, Mode: AccountStoragePaid,
-          '''
-          new = '''\tif err != nil {
-          \t\treturn nil, err
-          \t}
-          \tif err := p.waitForAccountAutopayReady(defaults, amountPerBlock); err != nil {
-          \t\treturn nil, err
-          \t}
-          \treturn &AccountStorageAuthorization{
-          \t\tID: AccountStoragePaid, Mode: AccountStoragePaid,
-          '''
-          if old not in text:
-              raise SystemExit('missing account AUTOPAY result block')
-          text = text.replace(old, new, 1)
+      - name: Compile wallet root package
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet -run '^$' -count=1
 
-          old = 'Description: "AUTOPAY 交易已广播；完成首次区块支付后即可保存。",'
-          new = 'Description: "AUTOPAY 首次区块支付已确认。",'
-          if old not in text:
-              raise SystemExit('missing account AUTOPAY summary text')
-          text = text.replace(old, new, 1)
-          path.write_text(text)
-          PY
-          gofmt -w sdk/wallet/account_pwa.go sdk/wallet/account_autopay_ready.go sdk/wallet/account_autopay_ready_test.go
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add sdk/wallet/account_pwa.go sdk/wallet/account_autopay_ready.go sdk/wallet/account_autopay_ready_test.go
-          git commit -m 'fix: wait for first account AUTOPAY payment'
-          git push origin HEAD:${{ github.head_ref }}
+      - name: Test wallet packages
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet/... -count=1
+
+      - name: Compile browser WASM
+        working-directory: sat20wallet/sdk
+        run: GOOS=js GOARCH=wasm go build -buildvcs=false -ldflags='-s -w' -o /tmp/sat20wallet.wasm ./wasm
+
+      - name: Install PWA dependencies
+        working-directory: sat20wallet/pwa
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Type-check PWA
+        working-directory: sat20wallet/pwa
+        run: npm run compile
+
+      - name: Verify RGB11 PWA integration
+        working-directory: sat20wallet/pwa
+        run: npm run verify:rgb11-l1
+
+      - name: Publish commit status
+        if: always() && github.event_name == 'push'
+        uses: actions/github-script@v7
+        env:
+          JOB_STATUS: ${{ job.status }}
+        with:
+          script: |
+            const state = process.env.JOB_STATUS === 'success' ? 'success' : 'failure';
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state,
+              context: 'rgb11-address-scheme-a',
+              description: state === 'success' ? 'Wallet SDK and PWA checks passed' : 'Wallet SDK or PWA checks failed',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
