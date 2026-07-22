@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	locatorEncodingPrefix = "sat20account1:"
+	locatorEncodingPrefix = "sat20locator1:"
 	shareEncodingPrefix   = "sat20share1:"
 )
 
