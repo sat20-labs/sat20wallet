@@ -29,6 +29,7 @@ func accountAutopayReadyFixture() (dkvsindexer.NetworkDefaults, *dkvsindexer.Aut
 	return defaults, state
 }
 
+// A current-block payment is authoritative even if the next block is not funded yet.
 func TestAccountAutopayStateReadyAfterCurrentBlockPayment(t *testing.T) {
 	defaults, state := accountAutopayReadyFixture()
 	require.True(t, accountAutopayStateReady(state, defaults, "payer", "5"))
