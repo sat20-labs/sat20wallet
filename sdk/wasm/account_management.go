@@ -25,11 +25,11 @@ const (
 )
 
 type accountLocatorPayload struct {
-	Version          uint32                             `json:"version"`
-	Network          string                             `json:"network"`
+	Version          uint32                            `json:"version"`
+	Network          string                            `json:"network"`
 	StorageLocation  walletsdk.AccountIndexerLocation  `json:"storage_location"`
 	GuardianLocation *walletsdk.AccountIndexerLocation `json:"guardian_location,omitempty"`
-	Locator          account.Locator                    `json:"locator"`
+	Locator          account.Locator                   `json:"locator"`
 }
 
 type accountStorageSession struct {
@@ -92,36 +92,36 @@ type accountGuardianSetupPayload struct {
 }
 
 type accountGuardianReceipt struct {
-	Version   uint32                            `json:"version"`
+	Version   uint32                           `json:"version"`
 	Location  walletsdk.AccountIndexerLocation `json:"location"`
-	MailboxID string                            `json:"mailbox_id"`
-	PackageID string                            `json:"package_id"`
-	ShareID   string                            `json:"share_id"`
-	Storage   walletsdk.AccountStorageOption    `json:"storage"`
+	MailboxID string                           `json:"mailbox_id"`
+	PackageID string                           `json:"package_id"`
+	ShareID   string                           `json:"share_id"`
+	Storage   walletsdk.AccountStorageOption   `json:"storage"`
 }
 
 type accountGuardianRecoveryRequest struct {
-	Version           uint32                            `json:"version"`
-	Locator           accountLocatorPayload             `json:"locator"`
+	Version           uint32                           `json:"version"`
+	Locator           accountLocatorPayload            `json:"locator"`
 	GuardianLocation  walletsdk.AccountIndexerLocation `json:"guardian_location"`
-	MailboxID         string                            `json:"mailbox_id"`
-	PackageID         string                            `json:"package_id"`
-	ShareID           string                            `json:"share_id"`
-	RecoveryPublicKey string                            `json:"recovery_public_key"`
+	MailboxID         string                           `json:"mailbox_id"`
+	PackageID         string                           `json:"package_id"`
+	ShareID           string                           `json:"share_id"`
+	RecoveryPublicKey string                           `json:"recovery_public_key"`
 }
 
 type accountPreflightRequest struct {
-	Password string                                  `json:"password"`
+	Password string                                 `json:"password"`
 	Wallets  []walletsdk.AccountWalletMetadataInput `json:"wallets"`
 }
 
 type accountCreateRequest struct {
-	Password               string                                  `json:"password"`
+	Password               string                                 `json:"password"`
 	Wallets                []walletsdk.AccountWalletMetadataInput `json:"wallets"`
-	RecoveryMode           account.RecoveryMode                    `json:"recovery_mode"`
-	Questions              []accountQuestionInput                  `json:"questions"`
-	Guardian               *accountGuardianContact                 `json:"guardian,omitempty"`
-	StorageAuthorizationID string                                  `json:"storage_authorization_id"`
+	RecoveryMode           account.RecoveryMode                   `json:"recovery_mode"`
+	Questions              []accountQuestionInput                 `json:"questions"`
+	Guardian               *accountGuardianContact                `json:"guardian,omitempty"`
+	StorageAuthorizationID string                                 `json:"storage_authorization_id"`
 }
 
 type accountAnswersRequest struct {
@@ -368,7 +368,7 @@ func accountCreateRecovery(this js.Value, args []js.Value) any {
 		for index, input := range request.Questions {
 			questions[index] = account.QuestionAnswer{
 				Question: account.KnowledgeQuestion{ID: input.ID, Prompt: input.Prompt, CaseSensitive: input.CaseSensitive, IgnorePunctuation: input.IgnorePunctuation},
-				Answer: input.Answer, Confirmation: input.Confirmation,
+				Answer:   input.Answer, Confirmation: input.Confirmation,
 			}
 		}
 		options := account.CreateOptions{AccountID: accountIDProvider.AccountID(), Backup: backup, RecoveryMode: request.RecoveryMode, Questions: questions}
