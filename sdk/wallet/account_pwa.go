@@ -247,7 +247,8 @@ func (p *Manager) confirmPaidAccountStorage(location AccountIndexerLocation) (*A
 	if err != nil {
 		return nil, err
 	}
-	encodedParam, err := (contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: amountPerBlock}).Encode()
+	param := contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: amountPerBlock}
+	encodedParam, err := param.Encode()
 	if err != nil {
 		return nil, err
 	}
