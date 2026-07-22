@@ -41,7 +41,7 @@ concurrency:
 jobs:
   go-account:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout wallet
         uses: actions/checkout@v4
@@ -102,6 +102,12 @@ jobs:
         run: |
           set -o pipefail
           go test ./wallet -run '^$' -count=1 2>&1 | tee /tmp/wallet-compile.log
+      - name: Test wallet packages
+        working-directory: sat20wallet/sdk
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./wallet/... -count=1 2>&1 | tee /tmp/wallet-tests.log
       - name: Compile account E2E
         working-directory: sat20wallet/sdk
         shell: bash
@@ -126,6 +132,7 @@ jobs:
             /tmp/account-tests.log
             /tmp/wallet-vet.log
             /tmp/wallet-compile.log
+            /tmp/wallet-tests.log
             /tmp/e2e-compile.log
             /tmp/wasm-build.log
           if-no-files-found: ignore
