@@ -31,7 +31,6 @@ import (
 const (
 	rgb11AddressMailboxPageSize = 256
 	rgb11AddressTemporaryTTL    = uint64((24 * time.Hour) / time.Millisecond)
-	rgb11AddressAutopayTTL      = uint64((365 * 24 * time.Hour) / time.Millisecond)
 )
 
 func (p *rgb11Manager) configuredRGB11DKVSClient() (*SatsNetDKVSClient, error) {
@@ -55,12 +54,13 @@ func (p *rgb11Manager) configureRGB11AddressRetention(record *dkvsindexer.Record
 			*autopay = &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet()}
 		}
 	}
+	if *autopay != nil {
+		record.TTL = 0
+		record.ExpiryHeight = 0
+		return
+	}
 	if record.TTL == 0 && record.ExpiryHeight == 0 {
-		if *autopay != nil {
-			record.TTL = rgb11AddressAutopayTTL
-		} else {
-			record.TTL = rgb11AddressTemporaryTTL
-		}
+		record.TTL = rgb11AddressTemporaryTTL
 	}
 }
 
@@ -1407,9 +1407,7 @@ func (p *rgb11Manager) ActivateRGB11WalletState(verifyOpts dkvsindexer.RecordVer
 			p.rgbManager.dkvsStatus = "not_configured"
 			return result, nil
 		}
-		head, syncErr := p.SyncRGB11WalletState("", dkvsindexer.RecordOptions{
-			TTL: uint64((365 * 24 * time.Hour) / time.Millisecond),
-		})
+		head, syncErr := p.SyncRGB11WalletState("", dkvsindexer.RecordOptions{})
 		if syncErr != nil {
 			p.rgbManager.dkvsStatus = "warning"
 			return nil, syncErr
@@ -1452,8 +1450,9 @@ func (p *rgb11Manager) hasActiveRGB11Autopay() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if state == nil || state.TemplateName != TEMPLATE_CONTRACT_AUTOPAY ||
-		!strings.EqualFold(strings.TrimSpace(state.Status), "active") || state.Closed ||
+	if state == nil || state.TemplateName != TEMPLATE_CONTRACT_AUTOPAY || state.Closed ||
+		strings.EqualFold(strings.TrimSpace(state.Status), "closed") ||
+		strings.EqualFold(strings.TrimSpace(state.Status), "expired") ||
 		!strings.EqualFold(strings.TrimSpace(state.ServiceName), defaults.AutopayServiceName) ||
 		!strings.EqualFold(strings.TrimSpace(state.Recipient), defaults.AutopayRecipient) ||
 		strings.TrimSpace(state.FeeAssetName) != defaults.AutopayFeeAssetName {
@@ -1461,21 +1460,20 @@ func (p *rgb11Manager) hasActiveRGB11Autopay() (bool, error) {
 	}
 	payer := PublicKeyToP2TRAddress_SatsNet(p.wallet.GetPubKey())
 	delegate, ok := state.Delegates[payer]
-	if !ok || !strings.EqualFold(strings.TrimSpace(delegate.Status), "active") {
+	if !ok {
 		return false, nil
 	}
 	amount, amountOK := new(big.Rat).SetString(strings.TrimSpace(delegate.AmountPerBlock))
-	balance, balanceOK := new(big.Rat).SetString(strings.TrimSpace(delegate.Balance))
 	fullRecordFee, feeOK := new(big.Rat).SetString(strings.TrimSpace(defaults.FullRecordFeePerBlock))
-	if !amountOK || !balanceOK || !feeOK || amount.Sign() <= 0 || balance.Sign() < 0 ||
-		fullRecordFee.Sign() <= 0 || amount.Cmp(fullRecordFee) < 0 {
+	if !amountOK || !feeOK || amount.Sign() <= 0 || fullRecordFee.Sign() <= 0 ||
+		amount.Cmp(fullRecordFee) < 0 || state.CurrentBlock <= 0 {
 		return false, nil
 	}
-	return balance.Cmp(amount) >= 0, nil
+	return delegate.LastPayHeight >= state.CurrentBlock, nil
 }
 
 func (p *rgb11Manager) enableRGB11AutoBackup(opts dkvsindexer.RecordOptions) error {
-	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || opts.TTL == 0 {
+	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
 		return ErrRGB11Inconsistent
 	}
 	policy := &RGB11AutoBackupPolicy{
@@ -1512,7 +1510,7 @@ func (p *rgb11Manager) autoBackupRGB11AfterMutation() {
 		policy = *p.rgbManager.autoBackup
 	}
 	p.mutex.RUnlock()
-	if !policy.Enabled || policy.TTL == 0 {
+	if !policy.Enabled {
 		return
 	}
 	p.rgbManager.autoBackupMutex.Lock()
@@ -1545,7 +1543,7 @@ func (p *rgb11Manager) runRGB11AutoBackup() {
 			policy = *p.rgbManager.autoBackup
 		}
 		p.mutex.RUnlock()
-		if !policy.Enabled || policy.TTL == 0 {
+		if !policy.Enabled {
 			continue
 		}
 
