@@ -3,8 +3,10 @@ import { useWalletStore } from '@/store'
 import Index from '@/entrypoints/popup/pages/Index.vue'
 import ImportWallet from '@/entrypoints/popup/pages/Import.vue'
 import CreateWallet from '@/entrypoints/popup/pages/Create.vue'
+import RestoreAccount from '@/entrypoints/popup/pages/RestoreAccount.vue'
 import WalletIndex from '@/entrypoints/popup/pages/wallet/index.vue'
 import WalletSetting from '@/entrypoints/popup/pages/wallet/Setting.vue'
+import AccountManagement from '@/entrypoints/popup/pages/wallet/settings/account-management/Index.vue'
 import WalletReceive from '@/entrypoints/popup/pages/wallet/Receive.vue'
 import WalletSettingPhrase from '@/entrypoints/popup/pages/wallet/settings/phrase.vue'
 import WalletSettingPublicKey from '@/entrypoints/popup/pages/wallet/settings/publickey.vue'
@@ -12,7 +14,6 @@ import WalletSettingPassword from '@/entrypoints/popup/pages/wallet/settings/pas
 import WalletSettingReferrer from '@/entrypoints/popup/pages/wallet/settings/referrer/index.vue'
 import WalletSettingReferrerBind from '@/entrypoints/popup/pages/wallet/settings/referrer/bind.vue'
 import NameSelect from '@/entrypoints/popup/pages/wallet/NameSelect.vue'
-
 import WalletSettingNode from '@/entrypoints/popup/pages/wallet/settings/node.vue'
 import WalletManager from '@/components/wallet/WalletManager.vue'
 import SubWalletManager from '@/components/wallet/SubWalletManager.vue'
@@ -31,10 +32,8 @@ const routes = [
   { path: '/', component: Index },
   { path: '/import', component: ImportWallet },
   { path: '/create', component: CreateWallet },
+  { path: '/restore-account', component: RestoreAccount },
   { path: '/unlock', component: Unlock },
-
-
-
   {
     path: '/wallet',
     children: [
@@ -44,38 +43,15 @@ const routes = [
       {
         path: 'setting',
         children: [
-          {
-            path: '',
-            component: WalletSetting,
-          },
-          {
-            path: 'phrase',
-            component: WalletSettingPhrase,
-          },
-          {
-            path: 'publickey',
-            component: WalletSettingPublicKey,
-          },
-          {
-            path: 'password',
-            component: WalletSettingPassword,
-          },
-          {
-            path: 'utxo',
-            component: UtxoManager,
-          },
-          {
-            path: 'node',
-            component: WalletSettingNode,
-          },
-          {
-            path: 'referrer/register',
-            component: WalletSettingReferrer,
-          },
-          {
-            path: 'referrer/bind',
-            component: WalletSettingReferrerBind,
-          },
+          { path: '', component: WalletSetting },
+          { path: 'account-management', component: AccountManagement },
+          { path: 'phrase', component: WalletSettingPhrase },
+          { path: 'publickey', component: WalletSettingPublicKey },
+          { path: 'password', component: WalletSettingPassword },
+          { path: 'utxo', component: UtxoManager },
+          { path: 'node', component: WalletSettingNode },
+          { path: 'referrer/register', component: WalletSettingReferrer },
+          { path: 'referrer/bind', component: WalletSettingReferrerBind },
         ],
       },
       { path: 'receive', component: WalletReceive },
@@ -91,22 +67,14 @@ const routes = [
   },
 ]
 
-const router = createRouter({
-  history: createWebHashHistory(),
-  routes,
-})
-
+const router = createRouter({ history: createWebHashHistory(), routes })
 let wasmWalletUnlocked = false
 
-router.beforeEach(async (to: any,) => {
+router.beforeEach(async (to: any) => {
   const walletStore = useWalletStore()
-
-  // 确保 walletStorage 已经从 localStorage 初始化
   await walletStorage.initializeState()
-
   const hasWallet = walletStorage.getValue('hasWallet')
   const password = walletStore.password
-  // 从 walletStorage 读取最新的锁定状态，确保与存储同步
   const isLocked = walletStorage.getValue('locked') ?? true
 
   if (password && (isLocked || !wasmWalletUnlocked)) {
@@ -119,39 +87,25 @@ router.beforeEach(async (to: any,) => {
       wasmWalletUnlocked = true
       await walletStore.setLocked(false)
     }
-    // if (network) {
-    //   console.log('network', network)
-    //   await walletStore.setNetwork(network)
-    // }
   } else if (hasWallet && !password && !wasmWalletUnlocked) {
     await walletStore.setLocked(true)
   }
 
-  // 重新获取锁定状态，因为可能在 unlockWallet 中被更新
   const currentLocked = walletStorage.getValue('locked') ?? true
-
   if (to.path.startsWith('/wallet')) {
     if (hasWallet) {
-      if (currentLocked) {
-        return { path: '/unlock', query: { redirect: to.fullPath } }
-      }
+      if (currentLocked) return { path: '/unlock', query: { redirect: to.fullPath } }
     } else {
       return '/'
     }
   } else if (to.path === '/unlock') {
-    // 如果用户已经解锁，重定向到钱包主页或指定页面
     if (hasWallet && !currentLocked) {
       const redirectPath = to.query.redirect as string
       return redirectPath || '/wallet'
     }
-  } else {
-    if (hasWallet) {
-      if (currentLocked) {
-        return { path: '/unlock', query: { redirect: to.fullPath } }
-      } else {
-        return '/wallet'
-      }
-    }
+  } else if (hasWallet) {
+    if (currentLocked) return { path: '/unlock', query: { redirect: to.fullPath } }
+    return '/wallet'
   }
 })
 

@@ -8,10 +8,24 @@ on:
     paths:
       - 'sdk/account/**'
       - 'sdk/wallet/account_*.go'
+      - 'sdk/wallet/dkvs_config*.go'
+      - 'sdk/wallet/dkvs_free_local*.go'
+      - 'sdk/wasm/account_management.go'
       - 'sdk/e2e/account_management_dkvs_e2e_test.go'
       - 'sdk/e2e/dkvs_noplugin_harness_test.go'
       - 'sdk/e2e/testdata/satoshinet-rpctest-hardening.patch'
+      - 'pwa/components/account/**'
+      - 'pwa/entrypoints/popup/pages/RestoreAccount.vue'
+      - 'pwa/entrypoints/popup/pages/Index.vue'
+      - 'pwa/entrypoints/popup/pages/wallet/Setting.vue'
+      - 'pwa/entrypoints/popup/pages/wallet/settings/account-management/**'
+      - 'pwa/router/index.ts'
+      - 'pwa/utils/accountManagement.ts'
+      - 'pwa/lib/account-management-state.ts'
       - 'pwa/lib/secure-account-storage.ts'
+      - 'pwa/docs/account-management.md'
+      - 'pwa/package.json'
+      - 'pwa/package-lock.json'
       - 'docs/account-management.md'
       - 'docs/account-secure-storage.md'
       - '.github/workflows/account-management.yml'
@@ -27,7 +41,7 @@ concurrency:
 jobs:
   go-account:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout wallet
         uses: actions/checkout@v4
@@ -60,6 +74,8 @@ jobs:
         run: |
           files=$(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- \
             'sdk/account/**/*.go' 'sdk/account/*.go' 'sdk/wallet/account_*.go' \
+            'sdk/wallet/dkvs_config*.go' 'sdk/wallet/dkvs_free_local*.go' \
+            'sdk/wasm/account_management.go' \
             'sdk/e2e/account_management_dkvs_e2e_test.go' 'sdk/e2e/dkvs_noplugin_harness_test.go')
           if [[ -n "$files" ]]; then
             unformatted=$(gofmt -l $files)
@@ -70,15 +86,59 @@ jobs:
           fi
       - name: Test account packages
         working-directory: sat20wallet/sdk
-        run: go test ./account/... -count=1
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./account/... -count=1 2>&1 | tee /tmp/account-tests.log
+      - name: Vet wallet packages
+        working-directory: sat20wallet/sdk
+        shell: bash
+        run: |
+          set -o pipefail
+          go vet -copylocks=false ./wallet/... 2>&1 | tee /tmp/wallet-vet.log
       - name: Compile wallet integration
         working-directory: sat20wallet/sdk
-        run: go test ./wallet -run '^$' -count=1
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./wallet -run '^$' -count=1 2>&1 | tee /tmp/wallet-compile.log
+      - name: Test wallet packages
+        working-directory: sat20wallet/sdk
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./wallet/... -count=1 2>&1 | tee /tmp/wallet-tests.log
       - name: Compile account E2E
         working-directory: sat20wallet/sdk
-        run: go test ./e2e -run '^$' -count=1
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./e2e -run '^$' -count=1 2>&1 | tee /tmp/e2e-compile.log
+      - name: Build account-enabled WASM
+        working-directory: sat20wallet/sdk
+        env:
+          GOOS: js
+          GOARCH: wasm
+        shell: bash
+        run: |
+          set -o pipefail
+          go build -o /tmp/sat20wallet.wasm ./wasm 2>&1 | tee /tmp/wasm-build.log
+      - name: Upload Go diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: account-management-diagnostics-${{ github.run_id }}
+          path: |
+            /tmp/account-tests.log
+            /tmp/wallet-vet.log
+            /tmp/wallet-compile.log
+            /tmp/wallet-tests.log
+            /tmp/e2e-compile.log
+            /tmp/wasm-build.log
+          if-no-files-found: ignore
+          retention-days: 1
 
-  pwa-secure-storage:
+  pwa-account-management:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
