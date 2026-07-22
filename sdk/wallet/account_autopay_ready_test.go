@@ -48,8 +48,13 @@ func TestAccountAutopayStateRejectsStaleOrInsufficientDelegate(t *testing.T) {
 	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
 }
 
-func TestAccountAutopayStateRejectsWrongService(t *testing.T) {
+func TestAccountAutopayStateRejectsWrongServiceOrClosedContract(t *testing.T) {
 	defaults, state := accountAutopayReadyFixture()
 	state.ServiceName = "other"
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+
+	state.ServiceName = defaults.AutopayServiceName
+	state.Closed = true
+	state.Status = "closed"
 	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
 }
