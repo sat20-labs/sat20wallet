@@ -209,6 +209,54 @@ func TestSatsNetDKVSClientPutSignedRecordWithAutopay(t *testing.T) {
 	}
 }
 
+func TestSatsNetDKVSClientFreeLocalCachePolicyAndWrite(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := dkvsindexer.PersonalKey(priv.PubKey().SerializeCompressed(), "local-cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := dkvsindexer.FreeLocalCachePolicy{
+		Enabled:             true,
+		MaxTTL:              120_000,
+		MaxRecordsPerSigner: 2,
+		MaxBytesPerSigner:   1 << 20,
+		MaxTotalRecords:     10,
+		MaxTotalBytes:       1 << 20,
+	}
+	http := &fakeDKVSHTTPClient{
+		getResp: map[string][]byte{
+			"testnet/v3/dkvs/config": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": policy}),
+		},
+		postResp: map[string][]byte{
+			"testnet/v3/dkvs/records": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok"}),
+		},
+		deleteResp: map[string][]byte{},
+	}
+	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
+	got, err := client.GetFreeLocalCachePolicy()
+	if err != nil || got == nil || got.MaxTTL != policy.MaxTTL || !got.Enabled {
+		t.Fatalf("policy=%#v err=%v", got, err)
+	}
+	if _, err := client.PutSignedRecordFreeLocal(dkvsTestWalletFromPriv(t, priv), key, []byte("value"),
+		dkvsindexer.RecordOptions{Seq: 1, TTL: policy.MaxTTL}); err != nil {
+		t.Fatal(err)
+	}
+	var record swire.DKVSRecord
+	if err := json.Unmarshal(http.lastBody, &record); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := dkvsindexer.ParseFeeProof(record.FeeProof)
+	if err != nil || proof.Mode != dkvsindexer.FeeModeFreeLocal {
+		t.Fatalf("proof=%#v err=%v", proof, err)
+	}
+	if err := dkvsindexer.VerifySignature(&record); err != nil {
+		t.Fatalf("free local signature invalid: %v", err)
+	}
+}
+
 func TestSatsNetDKVSClientListVerifiedRecords(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {

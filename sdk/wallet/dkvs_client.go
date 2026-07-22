@@ -63,6 +63,11 @@ type dkvsUsageResp struct {
 	Data *dkvsindexer.Usage `json:"data,omitempty"`
 }
 
+type dkvsConfigResp struct {
+	dkvsBaseResp
+	Data *dkvsindexer.FreeLocalCachePolicy `json:"data,omitempty"`
+}
+
 type dkvsSubscriptionResp struct {
 	dkvsBaseResp
 	Total         int                        `json:"total"`
@@ -180,6 +185,16 @@ func (p *SatsNetDKVSClient) GetUsage(prefix string) (*dkvsindexer.Usage, error) 
 	url := p.GetUrl("/v3/dkvs/usage")
 	url.Query = map[string]string{"prefix": prefix}
 	if err := p.getJSON(url, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+// GetFreeLocalCachePolicy returns the policy of the node this wallet is
+// connected to. It is node-local capacity information, not a network rule.
+func (p *SatsNetDKVSClient) GetFreeLocalCachePolicy() (*dkvsindexer.FreeLocalCachePolicy, error) {
+	var resp dkvsConfigResp
+	if err := p.getPathJSON("/v3/dkvs/config", &resp); err != nil {
 		return nil, err
 	}
 	return resp.Data, nil
@@ -320,6 +335,43 @@ func attachDKVSAutopayFeeProof(wallet common.Wallet, record *swire.DKVSRecord,
 func (p *SatsNetDKVSClient) PutSignedRecord(wallet common.Wallet, key string, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
 	record, err := NewDKVSSignedRecord(wallet, key, value, opts)
 	if err != nil {
+		return nil, err
+	}
+	return p.PutRecord(record)
+}
+
+// PutSignedRecordFreeLocal writes a bounded, node-local cache record. The
+// record is never relayed through SatoshiNet P2P and remains available only
+// from this connected node until its TTL expires.
+func (p *SatsNetDKVSClient) PutSignedRecordFreeLocal(wallet common.Wallet, key string, value []byte,
+	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	policy, err := p.GetFreeLocalCachePolicy()
+	if err != nil {
+		return nil, err
+	}
+	if policy == nil || !policy.Enabled {
+		return nil, dkvsindexer.ErrFreeLocalDisabled
+	}
+	if opts.TTL == 0 || opts.TTL > policy.MaxTTL {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	record, err := NewDKVSSignedRecord(wallet, key, value, opts)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := dkvsindexer.ParseKey(record.Key)
+	if err != nil {
+		return nil, err
+	}
+	proof, err := dkvsindexer.NewFreeLocalFeeProof(record.Key, parsed.Namespace,
+		swire.MaxDKVSRecordSize, record.ExpiryHeight)
+	if err != nil {
+		return nil, err
+	}
+	if err := AttachDKVSFeeProof(record, proof); err != nil {
+		return nil, err
+	}
+	if err := SignDKVSRecord(wallet, record); err != nil {
 		return nil, err
 	}
 	return p.PutRecord(record)
