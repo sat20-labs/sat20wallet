@@ -7,6 +7,7 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 func (p *SatsNetDKVSClient) PutAccountGuardianCapsuleWithAutopay(owner common.Wallet, mailboxID string, capsule account.GuardianShareCapsule, options dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) error {
@@ -33,4 +34,12 @@ func (p *SatsNetDKVSClient) PutAccountGuardianCapsuleWithAutopay(owner common.Wa
 	}
 	_, err = p.PutMailboxShare(record)
 	return err
+}
+
+func (p *SatsNetDKVSClient) GetMailboxShare(mailboxID, packageID, shareID string) (*swire.DKVSRecord, error) {
+	key, err := dkvsindexer.MailShareKey(mailboxID, packageID, shareID)
+	if err != nil {
+		return nil, err
+	}
+	return p.GetVerifiedRecord(key, dkvsindexer.RecordVerificationOptions{ExpectedKey: key})
 }
