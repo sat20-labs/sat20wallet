@@ -16,6 +16,15 @@ func TestAutoBackupPolicySupportsContinuousAutopay(t *testing.T) {
 	require.Equal(t, policy, decoded)
 }
 
+func TestAutoBackupPolicySupportsTemporaryTTL(t *testing.T) {
+	policy := &RGB11AutoBackupPolicy{Version: 1, Enabled: true, TTL: 60_000}
+	encoded, err := EncodeAutoBackupPolicy(policy)
+	require.NoError(t, err)
+	decoded, err := DecodeAutoBackupPolicy(encoded)
+	require.NoError(t, err)
+	require.Equal(t, policy, decoded)
+}
+
 func TestAutoBackupPolicyRejectsHeightOnlyLease(t *testing.T) {
 	_, err := EncodeAutoBackupPolicy(&RGB11AutoBackupPolicy{
 		Version: 1, Enabled: true, ExpiryHeight: 100,
