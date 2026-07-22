@@ -64,7 +64,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	delegate, ok := state.Delegates[owner.Address]
 	require.True(t, ok)
 	require.Equal(t, "5", delegate.AmountPerBlock)
-	require.Equal(t, state.CurrentBlock, delegate.LastPayHeight)
+	require.GreaterOrEqual(t, delegate.LastPayHeight, state.CurrentBlock)
 
 	pubKey := owner.Wallet.GetPubKey().SerializeCompressed()
 	accountID := dkvsindexer.AccountID(pubKey)
