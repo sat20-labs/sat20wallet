@@ -39,45 +39,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: account-management-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  patch-owner-capacity:
-    if: github.head_ref == 'feat/dkvs-paid-retention-p0'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-      - name: Count only owner recovery records
-        shell: bash
-        run: |
-          set -euo pipefail
-          if grep -q 'accountRequiredRecords          = uint64(4)' sdk/wallet/account_pwa.go; then
-            echo 'Owner capacity already corrected.'
-            exit 0
-          fi
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('sdk/wallet/account_pwa.go')
-          text = path.read_text()
-          old = 'accountRequiredRecords          = uint64(5)'
-          if old not in text:
-              raise SystemExit('account record constant not found')
-          path.write_text(text.replace(old, 'accountRequiredRecords          = uint64(4)', 1))
-          PY
-          gofmt -w sdk/wallet/account_pwa.go
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add sdk/wallet/account_pwa.go
-          git commit -m 'fix: charge account owner for four recovery records'
-          git push origin HEAD:${{ github.head_ref }}
-
   go-account:
     runs-on: ubuntu-latest
     timeout-minutes: 45
