@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	coresync "github.com/sat20-labs/rgb11/sync"
+	"github.com/sat20-labs/satoshinet/btcec"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func TestRGB11PaidBackupPrunesSupersededSnapshot(t *testing.T) {
-	priv, err := newRGB11TestPrivateKey()
+	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,3 @@ func TestRGB11PaidBackupPrunesSupersededSnapshot(t *testing.T) {
 		t.Fatalf("active wallet snapshot manifests=%d", activeManifests)
 	}
 }
-
-// Keep a compile-time assertion that wallet heads continue to use the RGB11
-// synchronization type while snapshot garbage collection remains DKVS-local.
-var _ *coresync.WalletHead
