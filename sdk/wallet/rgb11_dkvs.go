@@ -1100,7 +1100,7 @@ func (p *rgb11Manager) exportRGB11WalletSnapshot(walletID string) (*RGB11WalletS
 // owning wallet through DKVS /personal; there is no system/checkpoint key.
 func (p *rgb11Manager) BackupRGB11WalletState(client *SatsNetDKVSClient, walletID string,
 	previous *coresync.WalletHead, opts dkvsindexer.RecordOptions) (*coresync.WalletHead, *swire.DKVSRecord, error) {
-	if client == nil || opts.TTL == 0 || p == nil || p.wallet == nil {
+	if client == nil || p == nil || p.wallet == nil {
 		return nil, nil, ErrRGB11Inconsistent
 	}
 	stableID, err := p.RGB11WalletID()

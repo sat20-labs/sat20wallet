@@ -607,9 +607,9 @@ func TestRGB11PaidAutopayEnablesAutomaticBackupOnActivation(t *testing.T) {
 	remote.autopayState = &dkvsindexer.AutopayContractState{
 		Contract: defaults.AutopayContract, TemplateName: TEMPLATE_CONTRACT_AUTOPAY,
 		ServiceName: defaults.AutopayServiceName, Recipient: defaults.AutopayRecipient,
-		FeeAssetName: defaults.AutopayFeeAssetName, Status: "active",
+		FeeAssetName: defaults.AutopayFeeAssetName, Status: "funding", CurrentBlock: 100,
 		Delegates: map[string]dkvsindexer.AutopayDelegateState{
-			payer: {AmountPerBlock: "100", Balance: "10000", Status: "active"},
+			payer: {AmountPerBlock: "100", Balance: "0", LastPayHeight: 100, Status: "funding"},
 		},
 	}
 
@@ -690,9 +690,9 @@ func TestRGB11PaidAutopayFirstBackupRestoresAllocation(t *testing.T) {
 	remote.autopayState = &dkvsindexer.AutopayContractState{
 		Contract: defaults.AutopayContract, TemplateName: TEMPLATE_CONTRACT_AUTOPAY,
 		ServiceName: defaults.AutopayServiceName, Recipient: defaults.AutopayRecipient,
-		FeeAssetName: defaults.AutopayFeeAssetName, Status: "active",
+		FeeAssetName: defaults.AutopayFeeAssetName, Status: "funding", CurrentBlock: 100,
 		Delegates: map[string]dkvsindexer.AutopayDelegateState{
-			payer: {AmountPerBlock: "100", Balance: "10000", Status: "active"},
+			payer: {AmountPerBlock: "100", Balance: "0", LastPayHeight: 100, Status: "funding"},
 		},
 	}
 	verify := dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}
