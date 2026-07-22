@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   statuses: write
 
 concurrency:
@@ -16,43 +16,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  fold-snapshot-retention:
-    if: github.head_ref == 'feat/dkvs-paid-retention-p0'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-      - name: Fold snapshot retention into rgb11_dkvs.go
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -f sdk/wallet/dkvs_snapshot_retention.go ]]; then
-            echo 'Snapshot retention already folded.'
-            exit 0
-          fi
-          python3 - <<'PY'
-          from pathlib import Path
-
-          helper_path = Path('sdk/wallet/dkvs_snapshot_retention.go')
-          helper = helper_path.read_text()
-          marker = '\nconst (\n'
-          if marker not in helper:
-              raise SystemExit('snapshot helper body not found')
-          body = 'const (\n' + helper.split(marker, 1)[1]
-          target = Path('sdk/wallet/rgb11_dkvs.go')
-          text = target.read_text().rstrip() + '\n\n' + body
-          target.write_text(text)
-          helper_path.unlink()
-          PY
-          gofmt -w sdk/wallet/rgb11_dkvs.go sdk/wallet/rgb11_snapshot_gc_test.go
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add sdk/wallet/rgb11_dkvs.go sdk/wallet/dkvs_snapshot_retention.go sdk/wallet/rgb11_snapshot_gc_test.go
-          git commit -m 'refactor: fold RGB11 snapshot retention into DKVS manager'
-          git push origin HEAD:${{ github.head_ref }}
-
   wallet-sdk:
     runs-on: ubuntu-latest
     timeout-minutes: 45
