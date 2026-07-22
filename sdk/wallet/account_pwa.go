@@ -18,7 +18,7 @@ const (
 	AccountStoragePaid      = "paid"
 
 	accountPaidDefaultFundingBlocks = uint64(1000)
-	accountRequiredRecords          = uint64(4)
+	accountRequiredRecords          = uint64(5)
 )
 
 type AccountIndexerLocation struct {
@@ -261,12 +261,15 @@ func (p *Manager) confirmPaidAccountStorage(location AccountIndexerLocation) (*A
 	if err != nil {
 		return nil, err
 	}
+	if err := p.waitForAccountAutopayReady(defaults, amountPerBlock); err != nil {
+		return nil, err
+	}
 	return &AccountStorageAuthorization{
 		ID: AccountStoragePaid, Mode: AccountStoragePaid,
 		RecordOptions: dkvsindexer.RecordOptions{Seq: 1},
 		Autopay:       &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet(), PoolContract: defaults.AutopayContract},
 		Summary: AccountStorageOption{ID: AccountStoragePaid, Mode: AccountStoragePaid, Available: true,
-			Title: "付费保存", Description: "AUTOPAY 交易已广播；完成首次区块支付后即可保存。",
+			Title: "付费保存", Description: "AUTOPAY 首次区块支付已确认。",
 			FeeAsset: defaults.AutopayFeeAssetName, EstimatedCost: fundingAmount,
 			RecommendedRetention: "持续支付期间全网保存"},
 		TransactionID: result.TxID, Location: location,

@@ -15,13 +15,13 @@ func accountAutopayReadyFixture() (dkvsindexer.NetworkDefaults, *dkvsindexer.Aut
 		AutopayFeeAssetName: "brc20:f:sgas",
 	}
 	state := &dkvsindexer.AutopayContractState{
-		Contract:      defaults.AutopayContract,
-		TemplateName:  TEMPLATE_CONTRACT_AUTOPAY,
-		CurrentBlock:  100,
-		ServiceName:   defaults.AutopayServiceName,
-		Recipient:     defaults.AutopayRecipient,
-		FeeAssetName:  defaults.AutopayFeeAssetName,
-		Status:        "funding",
+		Contract:     defaults.AutopayContract,
+		TemplateName: TEMPLATE_CONTRACT_AUTOPAY,
+		CurrentBlock: 100,
+		ServiceName:  defaults.AutopayServiceName,
+		Recipient:    defaults.AutopayRecipient,
+		FeeAssetName: defaults.AutopayFeeAssetName,
+		Status:       "funding",
 		Delegates: map[string]dkvsindexer.AutopayDelegateState{
 			"payer": {AmountPerBlock: "5", Balance: "0", LastPayHeight: 100, Status: "funding"},
 		},
