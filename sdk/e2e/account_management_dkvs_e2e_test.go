@@ -44,7 +44,8 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 
 	// This fixture uses the same wallet as account owner and Guardian, so it
 	// needs four personal slots plus one mailbox-share slot.
-	configParam, err := (contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "5"}).Encode()
+	config := &contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "5"}
+	configParam, err := config.Encode()
 	require.NoError(t, err)
 	configTx := buildDKVSKeyPathTemplateInvoke(t, owner, contractAddress, 1,
 		contractcommon.TemplateInvokeAPIConfig, configParam, []dkvsPrevOut{gasOuts[1]},
