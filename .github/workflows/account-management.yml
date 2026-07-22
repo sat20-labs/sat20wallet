@@ -8,8 +8,8 @@ on:
     paths:
       - 'sdk/account/**'
       - 'sdk/wallet/account_*.go'
-      - 'sdk/wallet/dkvs_config.go'
-      - 'sdk/wallet/dkvs_free_local.go'
+      - 'sdk/wallet/dkvs_config*.go'
+      - 'sdk/wallet/dkvs_free_local*.go'
       - 'sdk/wasm/account_management.go'
       - 'sdk/e2e/account_management_dkvs_e2e_test.go'
       - 'sdk/e2e/dkvs_noplugin_harness_test.go'
@@ -32,7 +32,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: account-management-${{ github.ref }}
@@ -48,6 +48,7 @@ jobs:
         with:
           path: sat20wallet
           fetch-depth: 0
+          ref: ${{ github.head_ref || github.ref_name }}
       - name: Checkout indexer
         uses: actions/checkout@v4
         with:
@@ -68,37 +69,25 @@ jobs:
         with:
           go-version-file: sat20wallet/sdk/go.mod
           cache: false
-      - name: Check Go formatting
+      - name: Format changed Go files
         working-directory: sat20wallet
         shell: bash
         run: |
           files=$(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- \
             'sdk/account/**/*.go' 'sdk/account/*.go' 'sdk/wallet/account_*.go' \
-            'sdk/wallet/dkvs_config.go' 'sdk/wallet/dkvs_free_local.go' \
+            'sdk/wallet/dkvs_config*.go' 'sdk/wallet/dkvs_free_local*.go' \
             'sdk/wasm/account_management.go' \
             'sdk/e2e/account_management_dkvs_e2e_test.go' 'sdk/e2e/dkvs_noplugin_harness_test.go')
           if [[ -n "$files" ]]; then
             gofmt -w $files
             if ! git diff --quiet -- $files; then
-              printf 'Go files require gofmt:\n'
-              git diff -- $files
-              exit 1
+              git config user.name github-actions[bot]
+              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+              git add $files
+              git commit -m 'style: gofmt account management integration'
+              git push origin HEAD:${{ github.head_ref }}
             fi
           fi
-      - name: Upload gofmt output
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: account-management-gofmt-${{ github.run_id }}
-          path: |
-            sat20wallet/sdk/account/**/*.go
-            sat20wallet/sdk/account/*.go
-            sat20wallet/sdk/wallet/account_*.go
-            sat20wallet/sdk/wallet/dkvs_config.go
-            sat20wallet/sdk/wallet/dkvs_free_local.go
-            sat20wallet/sdk/wasm/account_management.go
-          if-no-files-found: error
-          retention-days: 1
       - name: Test account packages
         working-directory: sat20wallet/sdk
         run: go test ./account/... -count=1
