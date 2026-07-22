@@ -78,12 +78,27 @@ jobs:
             'sdk/wasm/account_management.go' \
             'sdk/e2e/account_management_dkvs_e2e_test.go' 'sdk/e2e/dkvs_noplugin_harness_test.go')
           if [[ -n "$files" ]]; then
-            unformatted=$(gofmt -l $files)
-            if [[ -n "$unformatted" ]]; then
-              printf 'Unformatted files:\n%s\n' "$unformatted"
+            gofmt -w $files
+            if ! git diff --quiet -- $files; then
+              printf 'Go files require gofmt:\n'
+              git diff -- $files
               exit 1
             fi
           fi
+      - name: Upload gofmt output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: account-management-gofmt-${{ github.run_id }}
+          path: |
+            sat20wallet/sdk/account/**/*.go
+            sat20wallet/sdk/account/*.go
+            sat20wallet/sdk/wallet/account_*.go
+            sat20wallet/sdk/wallet/dkvs_config.go
+            sat20wallet/sdk/wallet/dkvs_free_local.go
+            sat20wallet/sdk/wasm/account_management.go
+          if-no-files-found: error
+          retention-days: 1
       - name: Test account packages
         working-directory: sat20wallet/sdk
         run: go test ./account/... -count=1
