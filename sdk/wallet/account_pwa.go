@@ -45,14 +45,14 @@ type AccountStorageOption struct {
 }
 
 type AccountStorageAuthorization struct {
-	ID            string                            `json:"id"`
-	Mode          string                            `json:"mode"`
-	RecordOptions dkvsindexer.RecordOptions         `json:"record_options"`
-	Autopay       *DKVSAutopayOptions               `json:"-"`
-	Summary       AccountStorageOption              `json:"summary"`
-	TransactionID string                            `json:"transaction_id,omitempty"`
-	Location      AccountIndexerLocation            `json:"location"`
-	Policy        *dkvsindexer.FreeLocalCachePolicy `json:"-"`
+	ID            string                   `json:"id"`
+	Mode          string                   `json:"mode"`
+	RecordOptions dkvsindexer.RecordOptions `json:"record_options"`
+	Autopay       *DKVSAutopayOptions      `json:"-"`
+	Summary       AccountStorageOption     `json:"summary"`
+	TransactionID string                   `json:"transaction_id,omitempty"`
+	Location      AccountIndexerLocation   `json:"location"`
+	Policy        *AccountFreeLocalPolicy  `json:"-"`
 }
 
 type AccountWalletMetadataInput struct {
