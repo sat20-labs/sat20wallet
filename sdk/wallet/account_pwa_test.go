@@ -16,7 +16,7 @@ func TestAccountAmountPerBlockCoversRecoveryRecords(t *testing.T) {
 	}
 	amount, err := accountAmountPerBlock(defaults)
 	require.NoError(t, err)
-	require.Equal(t, "5", amount)
+	require.Equal(t, "4", amount)
 }
 
 func TestAccountAmountPerBlockRespectsNetworkMinimum(t *testing.T) {
@@ -35,11 +35,11 @@ func TestAccountStorageTestnetDefaultsProduceContinuousQuote(t *testing.T) {
 	require.Equal(t, "1", defaults.AutopayMinAmountPerBlock)
 	amount, err := accountAmountPerBlock(defaults)
 	require.NoError(t, err)
-	require.Equal(t, "5", amount)
+	require.Equal(t, "4", amount)
 	cost, err := multiplyDecimal(amount, accountPaidDefaultFundingBlocks)
 	require.NoError(t, err)
-	require.Equal(t, "5000", cost)
+	require.Equal(t, "4000", cost)
 	annual, err := multiplyDecimal(amount, 2_628_000)
 	require.NoError(t, err)
-	require.Equal(t, "13140000", annual)
+	require.Equal(t, "10512000", annual)
 }
