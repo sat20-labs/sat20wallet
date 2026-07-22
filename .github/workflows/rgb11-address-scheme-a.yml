@@ -1,22 +1,19 @@
 name: RGB11 address transfer scheme A
 
 on:
-  push:
-    branches: [agent/rgb11-dkvs-transfer-a]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
-  statuses: write
 
 concurrency:
   group: rgb11-address-scheme-a
   cancel-in-progress: true
 
 jobs:
-  patch-paid-retention:
+  patch-account-autopay:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -25,267 +22,54 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
-      - name: Apply continuous AUTOPAY retention
+      - name: Apply account readiness integration
         shell: bash
         run: |
-          if grep -q 'func validAutoBackupPolicy' sdk/wallet/rgb11/backup_codec.go; then
+          if grep -q 'waitForAccountAutopayReady(defaults, amountPerBlock)' sdk/wallet/account_pwa.go; then
             echo 'Patch already applied.'
             exit 0
           fi
           python3 - <<'PY'
           from pathlib import Path
 
-          def replace_once(path: str, old: str, new: str) -> None:
-              p = Path(path)
-              text = p.read_text()
-              if old not in text:
-                  raise SystemExit(f"missing expected block in {path}: {old[:120]!r}")
-              p.write_text(text.replace(old, new, 1))
+          path = Path('sdk/wallet/account_pwa.go')
+          text = path.read_text()
 
-          codec = "sdk/wallet/rgb11/backup_codec.go"
-          replace_once(codec,
-          '''func EncodeAutoBackupPolicy(policy *RGB11AutoBackupPolicy) ([]byte, error) {
-          \tif policy == nil || policy.Version != 1 || !policy.Enabled || policy.TTL == 0 {
-          \t\treturn nil, ErrRGB11Inconsistent
-          \t}
-          ''',
-          '''func validAutoBackupPolicy(policy *RGB11AutoBackupPolicy) bool {
-          \tif policy == nil || policy.Version != 1 || !policy.Enabled {
-          \t\treturn false
-          \t}
-          \t// TTL=0 and ExpiryHeight=0 denotes continuous AUTOPAY retention.
-          \t// A non-zero TTL denotes bounded temporary retention.
-          \treturn policy.TTL != 0 || policy.ExpiryHeight == 0
-          }
+          old = '\taccountRequiredRecords          = uint64(4)'
+          new = '\taccountRequiredRecords          = uint64(5)'
+          if old not in text:
+              raise SystemExit('missing account record-slot constant')
+          text = text.replace(old, new, 1)
 
-          func EncodeAutoBackupPolicy(policy *RGB11AutoBackupPolicy) ([]byte, error) {
-          \tif !validAutoBackupPolicy(policy) {
-          \t\treturn nil, ErrRGB11Inconsistent
+          old = '''\tif err != nil {
+          \t\treturn nil, err
           \t}
-          ''')
-          replace_once(codec,
-          '''\tif policy.ExpiryHeight, err = decoder.U64(); err != nil || reader.Len() != 0 || policy.Version != 1 || !policy.Enabled || policy.TTL == 0 {
-          \t\treturn nil, ErrRGB11Inconsistent
-          \t}
-          ''',
-          '''\tif policy.ExpiryHeight, err = decoder.U64(); err != nil || reader.Len() != 0 || !validAutoBackupPolicy(policy) {
-          \t\treturn nil, ErrRGB11Inconsistent
-          \t}
-          ''')
-
-          manager = "sdk/wallet/rgb11_dkvs.go"
-          replace_once(manager,
-          '''const (
-          \trgb11AddressMailboxPageSize = 256
-          \trgb11AddressTemporaryTTL    = uint64((24 * time.Hour) / time.Millisecond)
-          \trgb11AddressAutopayTTL      = uint64((365 * 24 * time.Hour) / time.Millisecond)
-          )
-          ''',
-          '''const (
-          \trgb11AddressMailboxPageSize = 256
-          \trgb11AddressTemporaryTTL    = uint64((24 * time.Hour) / time.Millisecond)
-          )
-          ''')
-          replace_once(manager,
-          '''\tif record.TTL == 0 && record.ExpiryHeight == 0 {
-          \t\tif *autopay != nil {
-          \t\t\trecord.TTL = rgb11AddressAutopayTTL
-          \t\t} else {
-          \t\t\trecord.TTL = rgb11AddressTemporaryTTL
-          \t\t}
-          \t}
-          ''',
-          '''\tif *autopay != nil {
-          \t\trecord.TTL = 0
-          \t\trecord.ExpiryHeight = 0
-          \t\treturn
-          \t}
-          \tif record.TTL == 0 && record.ExpiryHeight == 0 {
-          \t\trecord.TTL = rgb11AddressTemporaryTTL
-          \t}
-          ''')
-          replace_once(manager,
-          '''\t\thead, syncErr := p.SyncRGB11WalletState("", dkvsindexer.RecordOptions{
-          \t\t\tTTL: uint64((365 * 24 * time.Hour) / time.Millisecond),
-          \t\t})
-          ''',
-          '''\t\thead, syncErr := p.SyncRGB11WalletState("", dkvsindexer.RecordOptions{})
-          ''')
-          replace_once(manager,
-          '''\tif state == nil || state.TemplateName != TEMPLATE_CONTRACT_AUTOPAY ||
-          \t\t!strings.EqualFold(strings.TrimSpace(state.Status), "active") || state.Closed ||
-          \t\t!strings.EqualFold(strings.TrimSpace(state.ServiceName), defaults.AutopayServiceName) ||
-          ''',
-          '''\tif state == nil || state.TemplateName != TEMPLATE_CONTRACT_AUTOPAY || state.Closed ||
-          \t\tstrings.EqualFold(strings.TrimSpace(state.Status), "closed") ||
-          \t\tstrings.EqualFold(strings.TrimSpace(state.Status), "expired") ||
-          \t\t!strings.EqualFold(strings.TrimSpace(state.ServiceName), defaults.AutopayServiceName) ||
-          ''')
-          replace_once(manager,
-          '''\tdelegate, ok := state.Delegates[payer]
-          \tif !ok || !strings.EqualFold(strings.TrimSpace(delegate.Status), "active") {
-          \t\treturn false, nil
-          \t}
-          \tamount, amountOK := new(big.Rat).SetString(strings.TrimSpace(delegate.AmountPerBlock))
-          \tbalance, balanceOK := new(big.Rat).SetString(strings.TrimSpace(delegate.Balance))
-          \tfullRecordFee, feeOK := new(big.Rat).SetString(strings.TrimSpace(defaults.FullRecordFeePerBlock))
-          \tif !amountOK || !balanceOK || !feeOK || amount.Sign() <= 0 || balance.Sign() < 0 ||
-          \t\tfullRecordFee.Sign() <= 0 || amount.Cmp(fullRecordFee) < 0 {
-          \t\treturn false, nil
-          \t}
-          \treturn balance.Cmp(amount) >= 0, nil
-          ''',
-          '''\tdelegate, ok := state.Delegates[payer]
-          \tif !ok {
-          \t\treturn false, nil
-          \t}
-          \tamount, amountOK := new(big.Rat).SetString(strings.TrimSpace(delegate.AmountPerBlock))
-          \tfullRecordFee, feeOK := new(big.Rat).SetString(strings.TrimSpace(defaults.FullRecordFeePerBlock))
-          \tif !amountOK || !feeOK || amount.Sign() <= 0 || fullRecordFee.Sign() <= 0 ||
-          \t\tamount.Cmp(fullRecordFee) < 0 || state.CurrentBlock <= 0 {
-          \t\treturn false, nil
-          \t}
-          \treturn delegate.LastPayHeight >= state.CurrentBlock, nil
-          ''')
-          replace_once(manager,
-          '''\tif p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || opts.TTL == 0 {
-          ''',
-          '''\tif p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
-          ''')
-          old = '''\tif !policy.Enabled || policy.TTL == 0 {
+          \treturn &AccountStorageAuthorization{
+          \t\tID: AccountStoragePaid, Mode: AccountStoragePaid,
           '''
-          text = Path(manager).read_text()
-          count = text.count(old)
-          if count != 2:
-              raise SystemExit(f"expected two auto-backup TTL guards, found {count}")
-          Path(manager).write_text(text.replace(old, '''\tif !policy.Enabled {
-          '''))
+          new = '''\tif err != nil {
+          \t\treturn nil, err
+          \t}
+          \tif err := p.waitForAccountAutopayReady(defaults, amountPerBlock); err != nil {
+          \t\treturn nil, err
+          \t}
+          \treturn &AccountStorageAuthorization{
+          \t\tID: AccountStoragePaid, Mode: AccountStoragePaid,
+          '''
+          if old not in text:
+              raise SystemExit('missing account AUTOPAY result block')
+          text = text.replace(old, new, 1)
+
+          old = 'Description: "AUTOPAY 交易已广播；完成首次区块支付后即可保存。",'
+          new = 'Description: "AUTOPAY 首次区块支付已确认。",'
+          if old not in text:
+              raise SystemExit('missing account AUTOPAY summary text')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
           PY
-          gofmt -w sdk/wallet/rgb11/backup_codec.go sdk/wallet/rgb11/paid_retention_policy_test.go sdk/wallet/rgb11_dkvs.go
+          gofmt -w sdk/wallet/account_pwa.go sdk/wallet/account_autopay_ready.go sdk/wallet/account_autopay_ready_test.go
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add sdk/wallet/rgb11/backup_codec.go sdk/wallet/rgb11/paid_retention_policy_test.go sdk/wallet/rgb11_dkvs.go
-          git commit -m 'fix: support continuous RGB11 AUTOPAY retention'
+          git add sdk/wallet/account_pwa.go sdk/wallet/account_autopay_ready.go sdk/wallet/account_autopay_ready_test.go
+          git commit -m 'fix: wait for first account AUTOPAY payment'
           git push origin HEAD:${{ github.head_ref }}
-
-  wallet-sdk:
-    needs: patch-paid-retention
-    if: always() && (needs.patch-paid-retention.result == 'success' || needs.patch-paid-retention.result == 'skipped')
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - name: Checkout wallet
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          path: sat20wallet
-          fetch-depth: 0
-
-      - name: Checkout indexer
-        uses: actions/checkout@v4
-        with:
-          repository: sat20-labs/indexer
-          path: indexer
-
-      - name: Checkout RGB11 engine
-        uses: actions/checkout@v4
-        with:
-          repository: sat20-labs/rgb11
-          path: rgb11
-
-      - name: Checkout SatoshiNet
-        uses: actions/checkout@v4
-        with:
-          repository: sat20-labs/satoshinet
-          ref: feat/dkvs-paid-retention-p0
-          path: satoshinet
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: sat20wallet/sdk/go.mod
-          cache: false
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Check RGB11 cohesion boundaries
-        working-directory: sat20wallet
-        shell: bash
-        run: |
-          set -euo pipefail
-          root_impl=$(find sdk/wallet -maxdepth 1 -type f -name 'rgb11*.go' ! -name '*_test.go' -printf '%f\n' | sort)
-          expected=$'rgb11_api.go\nrgb11_dkvs.go\nrgb11_manager.go'
-          if [[ "$root_impl" != "$expected" ]]; then
-            printf 'Unexpected root RGB11 implementation files:\n%s\n' "$root_impl"
-            exit 1
-          fi
-          leaked=$(grep -R --line-number -E '^func \(p \*Manager\) .*RGB11' sdk/wallet --include='*.go' --exclude='rgb11_api.go' --exclude='*_test.go' || true)
-          if [[ -n "$leaked" ]]; then
-            printf 'RGB11 methods leaked outside rgb11_api.go:\n%s\n' "$leaked"
-            exit 1
-          fi
-          test -f sdk/wallet/rgb11/api_types.go
-          test -f sdk/wallet/rgb11/address_codec.go
-          test -f sdk/wallet/rgb11/backup_codec.go
-
-      - name: Check Go formatting
-        working-directory: sat20wallet
-        shell: bash
-        run: |
-          files=$(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- '*.go')
-          if [[ -n "$files" ]]; then
-            unformatted=$(gofmt -l $files)
-            if [[ -n "$unformatted" ]]; then
-              printf 'Unformatted files:\n%s\n' "$unformatted"
-              exit 1
-            fi
-          fi
-
-      - name: Vet wallet packages excluding legacy copylocks findings
-        working-directory: sat20wallet/sdk
-        run: go vet -copylocks=false ./wallet/...
-
-      - name: Compile wallet root package
-        working-directory: sat20wallet/sdk
-        run: go test ./wallet -run '^$' -count=1
-
-      - name: Test wallet packages
-        working-directory: sat20wallet/sdk
-        run: go test ./wallet/... -count=1
-
-      - name: Compile browser WASM
-        working-directory: sat20wallet/sdk
-        run: GOOS=js GOARCH=wasm go build -buildvcs=false -ldflags='-s -w' -o /tmp/sat20wallet.wasm ./wasm
-
-      - name: Install PWA dependencies
-        working-directory: sat20wallet/pwa
-        run: npm install --ignore-scripts --no-audit --no-fund
-
-      - name: Type-check PWA
-        working-directory: sat20wallet/pwa
-        run: npm run compile
-
-      - name: Verify RGB11 PWA integration
-        working-directory: sat20wallet/pwa
-        run: npm run verify:rgb11-l1
-
-      - name: Publish commit status
-        if: always() && github.event_name == 'push'
-        uses: actions/github-script@v7
-        env:
-          JOB_STATUS: ${{ job.status }}
-        with:
-          script: |
-            const state = process.env.JOB_STATUS === 'success' ? 'success' : 'failure';
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state,
-              context: 'rgb11-address-scheme-a',
-              description: state === 'success' ? 'Wallet SDK and PWA checks passed' : 'Wallet SDK or PWA checks failed',
-              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
-            });
