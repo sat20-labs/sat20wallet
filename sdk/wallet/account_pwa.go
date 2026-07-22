@@ -18,7 +18,6 @@ const (
 	AccountStoragePaid      = "paid"
 
 	accountPaidDefaultFundingBlocks = uint64(1000)
-	accountPaidDefaultTTL           = uint64((365 * 24 * time.Hour) / time.Millisecond)
 	accountRequiredRecords          = uint64(4)
 )
 
@@ -187,12 +186,13 @@ func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 			return nil, annualErr
 		}
 		paid.Available = true
-		paid.Description = "通过 AUTOPAY 支付后保存加密账户数据。"
+		paid.Description = "通过 AUTOPAY 按区块持续支付后，全网保存加密账户数据。"
+		paid.Warnings = []string{"余额不足、未继续支付时，数据会停止全网同步并转为节点临时缓存。"}
 		paid.FeeAsset = defaults.AutopayFeeAssetName
 		paid.EstimatedCost = cost
 		paid.EstimatedAnnualCost = annual
-		paid.MinimumRetention = fmt.Sprintf("%d blocks", accountPaidDefaultFundingBlocks)
-		paid.RecommendedRetention = "由当前网络配置决定"
+		paid.MinimumRetention = fmt.Sprintf("initial funding for %d blocks", accountPaidDefaultFundingBlocks)
+		paid.RecommendedRetention = "持续支付期间全网保存"
 	}
 	options = append(options, paid)
 	return options, nil
@@ -261,20 +261,14 @@ func (p *Manager) confirmPaidAccountStorage(location AccountIndexerLocation) (*A
 	if err != nil {
 		return nil, err
 	}
-	currentHeight := uint64(0)
-	if p.l2IndexerClient != nil {
-		if height := p.l2IndexerClient.GetSyncHeight(); height > 0 {
-			currentHeight = uint64(height)
-		}
-	}
-	expiryHeight := currentHeight + accountPaidDefaultFundingBlocks
 	return &AccountStorageAuthorization{
 		ID: AccountStoragePaid, Mode: AccountStoragePaid,
-		RecordOptions: dkvsindexer.RecordOptions{Seq: 1, TTL: accountPaidDefaultTTL, ExpiryHeight: expiryHeight},
+		RecordOptions: dkvsindexer.RecordOptions{Seq: 1},
 		Autopay:       &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet(), PoolContract: defaults.AutopayContract},
 		Summary: AccountStorageOption{ID: AccountStoragePaid, Mode: AccountStoragePaid, Available: true,
-			Title: "付费保存", Description: "AUTOPAY 交易已经广播。", ExpiryHeight: expiryHeight,
-			FeeAsset: defaults.AutopayFeeAssetName, EstimatedCost: fundingAmount},
+			Title: "付费保存", Description: "AUTOPAY 交易已广播；完成首次区块支付后即可保存。",
+			FeeAsset: defaults.AutopayFeeAssetName, EstimatedCost: fundingAmount,
+			RecommendedRetention: "持续支付期间全网保存"},
 		TransactionID: result.TxID, Location: location,
 	}, nil
 }
