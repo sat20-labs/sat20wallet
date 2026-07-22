@@ -90,6 +90,12 @@ jobs:
         run: |
           set -o pipefail
           go test ./account/... -count=1 2>&1 | tee /tmp/account-tests.log
+      - name: Vet wallet packages
+        working-directory: sat20wallet/sdk
+        shell: bash
+        run: |
+          set -o pipefail
+          go vet -copylocks=false ./wallet/... 2>&1 | tee /tmp/wallet-vet.log
       - name: Compile wallet integration
         working-directory: sat20wallet/sdk
         shell: bash
@@ -118,6 +124,7 @@ jobs:
           name: account-management-diagnostics-${{ github.run_id }}
           path: |
             /tmp/account-tests.log
+            /tmp/wallet-vet.log
             /tmp/wallet-compile.log
             /tmp/e2e-compile.log
             /tmp/wasm-build.log
