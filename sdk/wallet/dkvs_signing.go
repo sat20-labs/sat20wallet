@@ -55,6 +55,11 @@ func NewDKVSSignedRenewalRecord(wallet common.Wallet, existing *swire.DKVSRecord
 	if dkvsindexer.IsTombstone(existing.Flags) {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
+	if proof, err := dkvsindexer.ParseFeeProof(existing.FeeProof); err == nil && proof.Mode == dkvsindexer.FeeModeAutopay {
+		// AUTOPAY records have no record-level lease to renew. The payer keeps
+		// them retained by continuing the per-block contract payment.
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
 	parsed, err := dkvsindexer.ParseKey(existing.Key)
 	if err != nil {
 		return nil, err
@@ -131,6 +136,12 @@ func SignDKVSRecord(wallet common.Wallet, record *swire.DKVSRecord) error {
 func AttachDKVSFeeProof(record *swire.DKVSRecord, proof *dkvsindexer.FeeProof) error {
 	if record == nil || proof == nil {
 		return dkvsindexer.ErrInvalidFeeProof
+	}
+	if proof.Mode == dkvsindexer.FeeModeAutopay {
+		// Paid retention is driven by the payer's successful payment in every
+		// block. AUTOPAY records therefore have no record-level TTL or expiry.
+		record.TTL = 0
+		record.ExpiryHeight = 0
 	}
 	encoded, err := dkvsindexer.EncodeFeeProof(proof)
 	if err != nil {
