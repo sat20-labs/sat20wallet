@@ -27,8 +27,17 @@ const (
 	SnapshotEnvelopeMagic = rgb11SnapshotEnvelopeMagic
 )
 
+func validAutoBackupPolicy(policy *RGB11AutoBackupPolicy) bool {
+	if policy == nil || policy.Version != 1 || !policy.Enabled {
+		return false
+	}
+	// TTL=0 and ExpiryHeight=0 denotes continuous AUTOPAY retention.
+	// A non-zero TTL denotes bounded temporary retention.
+	return policy.TTL != 0 || policy.ExpiryHeight == 0
+}
+
 func EncodeAutoBackupPolicy(policy *RGB11AutoBackupPolicy) ([]byte, error) {
-	if policy == nil || policy.Version != 1 || !policy.Enabled || policy.TTL == 0 {
+	if !validAutoBackupPolicy(policy) {
 		return nil, ErrRGB11Inconsistent
 	}
 	var buf bytes.Buffer
@@ -69,7 +78,7 @@ func DecodeAutoBackupPolicy(value []byte) (*RGB11AutoBackupPolicy, error) {
 	if policy.TTL, err = decoder.U64(); err != nil {
 		return nil, err
 	}
-	if policy.ExpiryHeight, err = decoder.U64(); err != nil || reader.Len() != 0 || policy.Version != 1 || !policy.Enabled || policy.TTL == 0 {
+	if policy.ExpiryHeight, err = decoder.U64(); err != nil || reader.Len() != 0 || !validAutoBackupPolicy(policy) {
 		return nil, ErrRGB11Inconsistent
 	}
 	return policy, nil

@@ -31,7 +31,6 @@ import (
 const (
 	rgb11AddressMailboxPageSize = 256
 	rgb11AddressTemporaryTTL    = uint64((24 * time.Hour) / time.Millisecond)
-	rgb11AddressAutopayTTL      = uint64((365 * 24 * time.Hour) / time.Millisecond)
 )
 
 func (p *rgb11Manager) configuredRGB11DKVSClient() (*SatsNetDKVSClient, error) {
@@ -55,12 +54,13 @@ func (p *rgb11Manager) configureRGB11AddressRetention(record *dkvsindexer.Record
 			*autopay = &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet()}
 		}
 	}
+	if *autopay != nil {
+		record.TTL = 0
+		record.ExpiryHeight = 0
+		return
+	}
 	if record.TTL == 0 && record.ExpiryHeight == 0 {
-		if *autopay != nil {
-			record.TTL = rgb11AddressAutopayTTL
-		} else {
-			record.TTL = rgb11AddressTemporaryTTL
-		}
+		record.TTL = rgb11AddressTemporaryTTL
 	}
 }
 
@@ -1100,7 +1100,7 @@ func (p *rgb11Manager) exportRGB11WalletSnapshot(walletID string) (*RGB11WalletS
 // owning wallet through DKVS /personal; there is no system/checkpoint key.
 func (p *rgb11Manager) BackupRGB11WalletState(client *SatsNetDKVSClient, walletID string,
 	previous *coresync.WalletHead, opts dkvsindexer.RecordOptions) (*coresync.WalletHead, *swire.DKVSRecord, error) {
-	if client == nil || opts.TTL == 0 || p == nil || p.wallet == nil {
+	if client == nil || p == nil || p.wallet == nil {
 		return nil, nil, ErrRGB11Inconsistent
 	}
 	stableID, err := p.RGB11WalletID()
@@ -1155,8 +1155,12 @@ func (p *rgb11Manager) BackupRGB11WalletState(client *SatsNetDKVSClient, walletI
 		p.rgbManager.dkvsStatus = "warning"
 		return nil, nil, err
 	}
-	p.rgbManager.dkvsStatus = "synced"
 	p.rgbManager.head = head
+	if err := client.pruneRGB11WalletSnapshots(p.wallet, walletID, operationID); err != nil {
+		p.rgbManager.dkvsStatus = "warning"
+	} else {
+		p.rgbManager.dkvsStatus = "synced"
+	}
 	return head, record, nil
 }
 
@@ -1407,9 +1411,7 @@ func (p *rgb11Manager) ActivateRGB11WalletState(verifyOpts dkvsindexer.RecordVer
 			p.rgbManager.dkvsStatus = "not_configured"
 			return result, nil
 		}
-		head, syncErr := p.SyncRGB11WalletState("", dkvsindexer.RecordOptions{
-			TTL: uint64((365 * 24 * time.Hour) / time.Millisecond),
-		})
+		head, syncErr := p.SyncRGB11WalletState("", dkvsindexer.RecordOptions{})
 		if syncErr != nil {
 			p.rgbManager.dkvsStatus = "warning"
 			return nil, syncErr
@@ -1452,8 +1454,9 @@ func (p *rgb11Manager) hasActiveRGB11Autopay() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if state == nil || state.TemplateName != TEMPLATE_CONTRACT_AUTOPAY ||
-		!strings.EqualFold(strings.TrimSpace(state.Status), "active") || state.Closed ||
+	if state == nil || state.TemplateName != TEMPLATE_CONTRACT_AUTOPAY || state.Closed ||
+		strings.EqualFold(strings.TrimSpace(state.Status), "closed") ||
+		strings.EqualFold(strings.TrimSpace(state.Status), "expired") ||
 		!strings.EqualFold(strings.TrimSpace(state.ServiceName), defaults.AutopayServiceName) ||
 		!strings.EqualFold(strings.TrimSpace(state.Recipient), defaults.AutopayRecipient) ||
 		strings.TrimSpace(state.FeeAssetName) != defaults.AutopayFeeAssetName {
@@ -1461,21 +1464,20 @@ func (p *rgb11Manager) hasActiveRGB11Autopay() (bool, error) {
 	}
 	payer := PublicKeyToP2TRAddress_SatsNet(p.wallet.GetPubKey())
 	delegate, ok := state.Delegates[payer]
-	if !ok || !strings.EqualFold(strings.TrimSpace(delegate.Status), "active") {
+	if !ok {
 		return false, nil
 	}
 	amount, amountOK := new(big.Rat).SetString(strings.TrimSpace(delegate.AmountPerBlock))
-	balance, balanceOK := new(big.Rat).SetString(strings.TrimSpace(delegate.Balance))
 	fullRecordFee, feeOK := new(big.Rat).SetString(strings.TrimSpace(defaults.FullRecordFeePerBlock))
-	if !amountOK || !balanceOK || !feeOK || amount.Sign() <= 0 || balance.Sign() < 0 ||
-		fullRecordFee.Sign() <= 0 || amount.Cmp(fullRecordFee) < 0 {
+	if !amountOK || !feeOK || amount.Sign() <= 0 || fullRecordFee.Sign() <= 0 ||
+		amount.Cmp(fullRecordFee) < 0 || state.CurrentBlock <= 0 {
 		return false, nil
 	}
-	return balance.Cmp(amount) >= 0, nil
+	return delegate.LastPayHeight >= state.CurrentBlock, nil
 }
 
 func (p *rgb11Manager) enableRGB11AutoBackup(opts dkvsindexer.RecordOptions) error {
-	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || opts.TTL == 0 {
+	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
 		return ErrRGB11Inconsistent
 	}
 	policy := &RGB11AutoBackupPolicy{
@@ -1512,7 +1514,7 @@ func (p *rgb11Manager) autoBackupRGB11AfterMutation() {
 		policy = *p.rgbManager.autoBackup
 	}
 	p.mutex.RUnlock()
-	if !policy.Enabled || policy.TTL == 0 {
+	if !policy.Enabled {
 		return
 	}
 	p.rgbManager.autoBackupMutex.Lock()
@@ -1545,7 +1547,7 @@ func (p *rgb11Manager) runRGB11AutoBackup() {
 			policy = *p.rgbManager.autoBackup
 		}
 		p.mutex.RUnlock()
-		if !policy.Enabled || policy.TTL == 0 {
+		if !policy.Enabled {
 			continue
 		}
 
@@ -1741,10 +1743,11 @@ func (p *SatsNetDKVSClient) putRGB11WalletSnapshot(wallet common.Wallet, walletI
 	opts.Seq = 1
 	var manifest *swire.DKVSRecord
 	var err error
+	metadata := rgb11WalletSnapshotMetadata(walletID)
 	if autopay == nil {
-		manifest, _, err = p.PutBlob(wallet, hex.EncodeToString(operationID[:]), value, nil, opts)
+		manifest, _, err = p.PutBlob(wallet, hex.EncodeToString(operationID[:]), value, metadata, opts)
 	} else {
-		manifest, _, err = p.PutBlobWithAutopay(wallet, hex.EncodeToString(operationID[:]), value, nil, opts, *autopay)
+		manifest, _, err = p.PutBlobWithAutopay(wallet, hex.EncodeToString(operationID[:]), value, metadata, opts, *autopay)
 	}
 	return manifest, err
 }
@@ -2403,4 +2406,101 @@ func (p *SatsNetDKVSClient) SubscribeRGB11Transfer(relayKey, ackKey string) ([]*
 		return nil, err
 	}
 	return append(relayRecords, ackRecords...), nil
+}
+
+const (
+	rgb11WalletSnapshotMetadataPrefix = "SAT20-RGB11-WALLET-SNAPSHOT-V1\x00"
+	rgb11SnapshotGCPageSize           = 1000
+)
+
+func rgb11WalletSnapshotMetadata(walletID string) []byte {
+	return []byte(rgb11WalletSnapshotMetadataPrefix + walletID)
+}
+
+// pruneRGB11WalletSnapshots removes superseded immutable snapshot blobs after
+// the new wallet head has become active. Tombstones are fee-free and signed by
+// the same wallet. A failed cleanup does not invalidate the already-published
+// head; the next successful backup retries cleanup across all marked snapshots.
+func (p *SatsNetDKVSClient) pruneRGB11WalletSnapshots(wallet common.Wallet, walletID string,
+	keepOperationID [32]byte) error {
+
+	if p == nil || wallet == nil || walletID == "" {
+		return dkvsindexer.ErrInvalidRecord
+	}
+	pubKey, err := dkvsWalletPubKey(wallet)
+	if err != nil {
+		return err
+	}
+	accountID := dkvsindexer.AccountID(pubKey)
+	if accountID == "" {
+		return dkvsindexer.ErrInvalidSignature
+	}
+	prefix := "/blob/" + accountID
+	records := make([]*swire.DKVSRecord, 0)
+	for start := 0; ; {
+		page, total, err := p.ListRecords(prefix, start, rgb11SnapshotGCPageSize)
+		if err != nil {
+			return err
+		}
+		records = append(records, page...)
+		start += len(page)
+		if len(page) == 0 || start >= total {
+			break
+		}
+	}
+
+	marker := rgb11WalletSnapshotMetadata(walletID)
+	keepObjectID := hex.EncodeToString(keepOperationID[:])
+	removeObjects := make(map[string]struct{})
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		parsed, err := dkvsindexer.ParseKey(record.Key)
+		if err != nil || parsed.Namespace != "blob" || len(parsed.Segments) != 3 ||
+			parsed.Segments[0] != accountID || parsed.Segments[2] != "manifest" {
+			continue
+		}
+		manifest, err := dkvsindexer.ParseBlobManifestValue(record.Value, dkvsindexer.DefaultBlobPolicy())
+		if err != nil || !bytes.Equal(manifest.Metadata, marker) || parsed.Segments[1] == keepObjectID {
+			continue
+		}
+		removeObjects[parsed.Segments[1]] = struct{}{}
+	}
+	if len(removeObjects) == 0 {
+		return nil
+	}
+
+	remove := make([]*swire.DKVSRecord, 0)
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		parsed, err := dkvsindexer.ParseKey(record.Key)
+		if err != nil || parsed.Namespace != "blob" || len(parsed.Segments) < 3 || parsed.Segments[0] != accountID {
+			continue
+		}
+		if _, ok := removeObjects[parsed.Segments[1]]; ok {
+			remove = append(remove, record)
+		}
+	}
+	// Delete chunks first and manifests last. This avoids leaving a live
+	// manifest that advertises already-deleted chunks during partial cleanup.
+	sort.Slice(remove, func(a, b int) bool {
+		parsedA, _ := dkvsindexer.ParseKey(remove[a].Key)
+		parsedB, _ := dkvsindexer.ParseKey(remove[b].Key)
+		manifestA := len(parsedA.Segments) == 3 && parsedA.Segments[2] == "manifest"
+		manifestB := len(parsedB.Segments) == 3 && parsedB.Segments[2] == "manifest"
+		if manifestA != manifestB {
+			return !manifestA
+		}
+		return remove[a].Key < remove[b].Key
+	})
+	for _, record := range remove {
+		_, err := p.TombstoneSigned(wallet, record.Key, dkvsindexer.RecordOptions{Seq: record.Seq + 1})
+		if err != nil && !errors.Is(err, ErrDKVSRecordNotFound) {
+			return err
+		}
+	}
+	return nil
 }

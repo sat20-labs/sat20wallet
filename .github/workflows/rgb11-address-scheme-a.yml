@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: sat20-labs/satoshinet
-          ref: main
+          ref: ${{ github.head_ref == 'feat/dkvs-paid-retention-p0' && 'feat/dkvs-paid-retention-p0' || 'main' }}
           path: satoshinet
 
       - name: Setup Go

@@ -36,10 +36,19 @@ func GenerateParams(setSize, correctThreshold, corpusSize int, random io.Reader)
 	}
 	buf := make([]byte, 4)
 	for i := 0; i < setSize; i++ {
-		if _, err := io.ReadFull(random, buf); err != nil {
-			return nil, fmt.Errorf("generate extractor: %w", err)
+		selected := 0
+		for attempts := 0; ; attempts++ {
+			if attempts >= 128 {
+				return nil, fmt.Errorf("generate extractor: %w", ErrInvalidParameters)
+			}
+			if _, err := io.ReadFull(random, buf); err != nil {
+				return nil, fmt.Errorf("generate extractor: %w", err)
+			}
+			selected = i + int(binary.LittleEndian.Uint32(buf)%uint32(len(candidates)-i))
+			if candidates[selected] != 0 {
+				break
+			}
 		}
-		selected := i + int(binary.LittleEndian.Uint32(buf)%uint32(len(candidates)-i))
 		p.Extractor[i] = candidates[selected]
 		candidates[selected] = candidates[i]
 	}
@@ -160,7 +169,13 @@ func slowSetHash(features []int, salt []byte) ([]byte, error) {
 func extractorKey(v *Vault, features []int) ([]byte, error) {
 	product := int64(1)
 	for i := 0; i < v.SetSize; i++ {
-		product = modMul(product, modMul(int64(features[i]), v.Extractor[i], v.Prime), v.Prime)
+		feature := int64(features[i])
+		if feature == 0 {
+			// Zero is a valid corpus index but cannot be multiplied directly: it
+			// would collapse the extractor product for every set containing it.
+			feature = v.Prime - 1
+		}
+		product = modMul(product, modMul(feature, v.Extractor[i], v.Prime), v.Prime)
 	}
 	pass := []byte("key:")
 	buf := make([]byte, 4)

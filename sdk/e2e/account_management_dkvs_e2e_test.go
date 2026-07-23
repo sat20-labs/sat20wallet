@@ -25,8 +25,11 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	gas := contractcommon.GetGasAssetName()
 	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
 	require.Equal(t, defaults.AutopayDeployer, owner.Address)
+	require.Empty(t, defaults.AutopayRecipient)
+	require.Equal(t, "1", defaults.AutopayMinAmountPerBlock)
 	gasOuts := splitToDKVSKeyPathActors(t, fixture, fixture.gasAnchor, gas,
-		[]int64{300000, 300000}, []int64{10000, 10000}, []*dkvsKeyPathActor{owner, owner})
+		[]int64{300000, 300000, 300000}, []int64{10000, 10000, 10000},
+		[]*dkvsKeyPathActor{owner, owner, owner})
 	feeOuts := splitToDKVSKeyPathActors(t, fixture, fixture.assetAnchors[defaults.AutopayFeeAssetName],
 		defaults.AutopayFeeAssetName, []int64{5000}, []int64{10000}, []*dkvsKeyPathActor{owner})
 
@@ -38,10 +41,30 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 		contractcommon.TemplateAutopay, content, owner.Address, defaults.AutopayDeployNonce,
 		[]dkvsPrevOut{gasOuts[0], feeOuts[0]}, wire.TxOut{Value: 10000, Assets: deployAssets})
 	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{deploy}, 0)
-	heartbeat := buildDKVSKeyPathAssetTransfer(t, owner, gasOuts[1], gas, 290000, 9000, owner)
+
+	// This fixture uses the same wallet as account owner and Guardian, so it
+	// needs four personal slots plus one mailbox-share slot.
+	config := &contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "5"}
+	configParam, err := config.Encode()
+	require.NoError(t, err)
+	configTx := buildDKVSKeyPathTemplateInvoke(t, owner, contractAddress, 1,
+		contractcommon.TemplateInvokeAPIConfig, configParam, []dkvsPrevOut{gasOuts[1]},
+		wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)})
+	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{configTx}, 0)
+
+	// The next block performs the first per-block storage payment. AUTOPAY
+	// records are accepted only after this payment is visible in contract state.
+	heartbeat := buildDKVSKeyPathAssetTransfer(t, owner, gasOuts[2], gas, 290000, 9000, owner)
 	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{heartbeat}, 0)
 	state := fetchTemplateAutopayView(t, fixture.Network.Bootstrap, contractAddress.MustEncode())
 	require.Equal(t, templateruntime.AutopayStatusActive, state.Status)
+	require.Empty(t, state.Recipient)
+	require.Equal(t, "1", state.MinAmountPerBlock)
+	require.GreaterOrEqual(t, state.PaidBlocks, int64(1))
+	delegate, ok := state.Delegates[owner.Address]
+	require.True(t, ok)
+	require.Equal(t, "5", delegate.AmountPerBlock)
+	require.GreaterOrEqual(t, delegate.LastPayHeight, state.CurrentBlock)
 
 	pubKey := owner.Wallet.GetPubKey().SerializeCompressed()
 	accountID := dkvsindexer.AccountID(pubKey)
@@ -67,7 +90,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	}}}
 	client := dkvsClientForNode(t, fixture.Network.Bootstrap)
 	autopay := wallet.DKVSAutopayOptions{AddressParams: &chaincfg.TestNetParams, PoolContract: contractAddress.MustEncode()}
-	recordOptions := dkvsindexer.RecordOptions{Seq: 1, TTL: 60000, ExpiryHeight: 1000}
+	recordOptions := dkvsindexer.RecordOptions{Seq: 1}
 	repository, err := wallet.NewAccountDKVSRepository(client, owner.Wallet, autopay, recordOptions)
 	require.NoError(t, err)
 	manager := account.NewManager(repository)
@@ -109,6 +132,11 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	guardianRecord, err := coreClient.GetMailboxShare(accountID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
 	require.NoError(t, err)
+	require.Zero(t, guardianRecord.TTL)
+	require.Zero(t, guardianRecord.ExpiryHeight)
+	guardianProof, err := dkvsindexer.ParseFeeProof(guardianRecord.FeeProof)
+	require.NoError(t, err)
+	require.Equal(t, dkvsindexer.FeeModeAutopay, guardianProof.Mode)
 	var storedGuardian account.GuardianShareCapsule
 	require.NoError(t, json.Unmarshal(guardianRecord.Value, &storedGuardian))
 	guardianShare, err := account.DecryptGuardianShare(storedGuardian, guardianPrivate)
@@ -132,10 +160,31 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 4, total)
 	require.Len(t, records, 4)
+	for _, record := range records {
+		require.Zero(t, record.TTL)
+		require.Zero(t, record.ExpiryHeight)
+		proof, proofErr := dkvsindexer.ParseFeeProof(record.FeeProof)
+		require.NoError(t, proofErr)
+		require.Equal(t, dkvsindexer.FeeModeAutopay, proof.Mode)
+	}
 	usage, err := coreClient.GetUsage(packagePrefix)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	require.Equal(t, uint64(4), usage.ActiveRecords)
 	require.Greater(t, usage.ActiveTotalSize, uint64(0))
 	require.True(t, strings.HasPrefix(pkg.Manifest.Locator.AccountID, accountID))
+}
+
+func buildDKVSKeyPathTemplateInvoke(t *testing.T, actor *dkvsKeyPathActor,
+	contract contractcommon.ContractAddress, nonce uint64, action string, param []byte,
+	inputs []dkvsPrevOut, funding wire.TxOut) *wire.MsgTx {
+
+	t.Helper()
+	tx, err := contractcommon.BuildInvokeTx(contractcommon.InvokeTxBuildRequest{
+		Contract: contract, GasLimit: contractcommon.InvokeBaseGas, CallNonce: nonce,
+		Action: action, Param: param, Funding: funding, Inputs: dkvsPrevOutPoints(inputs),
+	})
+	require.NoError(t, err)
+	signDKVSKeyPathInputs(t, tx, actor, inputs)
+	return tx
 }
