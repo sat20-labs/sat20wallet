@@ -25,7 +25,8 @@
           :mode="transcendingModeStore.selectedTranscendingMode"
           @splicing_in="handleSplicingIn" @send="handleSend" @receive="handleRGB11Receive"
           @issue-rgb11="showRGB11Issue = true"
-          @import-rgb11="showRGB11Import = true" @deposit="handleDeposit" />
+          @import-rgb11="showRGB11Import = true" @deposit="handleDeposit"
+          @refresh="refreshL1Assets" />
       </TabsContent>
 
       <TabsContent v-if="transcendingModeStore.selectedTranscendingMode === 'lightning'" value="channel">
@@ -112,8 +113,9 @@ const refreshL1Assets = () => {
   queryClient.invalidateQueries({ queryKey: ['ns-l1'] })
 }
 
-const refreshRGB11Assets = () => {
-  queryClient.invalidateQueries({ queryKey: ['rgb11-state'] })
+const refreshRGB11Assets = async () => {
+  await queryClient.invalidateQueries({ queryKey: ['rgb11-state'] })
+  await queryClient.invalidateQueries({ queryKey: ['summary-l1'] })
 }
 
 const refreshL2Assets = () => {

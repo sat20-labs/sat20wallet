@@ -169,6 +169,7 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const lockWallet = async () => {
+    await walletManager.stopDKVSBackgroundSync()
     await setPassword('')
     await setLocked(true)
   }

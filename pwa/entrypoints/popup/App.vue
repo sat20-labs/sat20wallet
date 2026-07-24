@@ -224,6 +224,12 @@ const onAppInstalled = () => {
   showInstallPanel.value = false;
 };
 
+const resumeDKVSSync = () => {
+  if (document.visibilityState === "visible" && walletStore.hasWallet && !walletStore.locked) {
+    void walletManager.restartDKVSBackgroundSync();
+  }
+};
+
 const getWalletStatus = async () => {
   const [err, res] = await walletManager.isWalletExist();
   if (err) {
@@ -265,6 +271,8 @@ onMounted(() => {
     showInstallPanel.value = true;
   }
   window.addEventListener("appinstalled", onAppInstalled);
+  window.addEventListener("pageshow", resumeDKVSSync);
+  document.addEventListener("visibilitychange", resumeDKVSSync);
 
   // 静默检查版本更新（有新版本才提醒）
   setTimeout(() => checkForUpdates(true), 2000);
@@ -279,6 +287,8 @@ onBeforeUnmount(() => {
   clearAutoLockTimer();
   window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
   window.removeEventListener("appinstalled", onAppInstalled);
+  window.removeEventListener("pageshow", resumeDKVSSync);
+  document.removeEventListener("visibilitychange", resumeDKVSSync);
   activityEvents.forEach((eventName) => {
     window.removeEventListener(eventName, resetAutoLockTimer);
   });

@@ -341,6 +341,24 @@ class WalletManager {
     return this._handleRequest('refreshRGB11State')
   }
 
+  async syncLocalRGB11State(): Promise<
+    [Error | undefined, { result: string } | undefined]
+  > {
+    return this._handleRequest('syncLocalRGB11State')
+  }
+
+  async restartDKVSBackgroundSync(): Promise<
+    [Error | undefined, { started: boolean } | undefined]
+  > {
+    return this._handleRequest('restartDKVSBackgroundSync')
+  }
+
+  async stopDKVSBackgroundSync(): Promise<
+    [Error | undefined, { stopped: boolean } | undefined]
+  > {
+    return this._handleRequest('stopDKVSBackgroundSync')
+  }
+
   async backupRGB11WalletState(request: {
     wallet_id?: string
     ttl?: number
@@ -589,6 +607,12 @@ class WalletManager {
     lockedAmt: number
   } | undefined]> {
     return this._handleRequest('getAssetAmount_SatsNet', address, assetName);
+  }
+
+  async getAssetSummary(address: string): Promise<[Error | undefined, {
+    assets: any[]
+  } | undefined]> {
+    return this._handleRequest('getAssetSummary', address)
   }
 
   // --- Contract Methods ---

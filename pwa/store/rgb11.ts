@@ -11,6 +11,8 @@ export interface RGB11StateDTO {
   consistency_status: RGB11ConsistencyStatus
   dkvs_status: RGB11DKVSStatus
   auto_backup_enabled: boolean
+  backup_mode: '' | 'autopay' | 'temporary'
+  backup_ttl_ms: number
   ticker_infos: any[]
   assets: any[]
   outputs: any[]
@@ -24,6 +26,8 @@ const emptyState = (): RGB11StateDTO => ({
   consistency_status: 'warning',
   dkvs_status: 'offline',
   auto_backup_enabled: false,
+  backup_mode: '',
+  backup_ttl_ms: 0,
   ticker_infos: [],
   assets: [],
   outputs: [],

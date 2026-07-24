@@ -15,6 +15,7 @@ const requiredFiles = [
 ]
 
 const requiredWasmMethods = [
+  'getAssetSummary',
   'getRGB11State',
   'issueRGB11Asset',
   'importRGB11Contract',
@@ -31,6 +32,7 @@ const requiredWasmMethods = [
   'broadcastRGB11Batch',
   'broadcastRGB11OutOfBand',
   'refreshRGB11State',
+  'syncLocalRGB11State',
   'backupRGB11WalletState',
   'restoreRGB11WalletState',
   'getRGB11AddressCarrierWarning',
@@ -110,16 +112,19 @@ await requireContains('components/wallet/RGB11SendDialog.vue', [
 ])
 await requireContains('composables/hooks/useRgb11Assets.ts', [
   'tickerInfoFor',
-  'officialContractID',
+  'legacyOfficialContractID',
+  'canonical_name',
+  'contract_id',
   'display_name',
-  'rgb11Address.syncMailbox',
+  'syncLocalRGB11State',
 ])
 await requireContains('composables/hooks/useL1Assets.ts', [
-  'beforeSummaryCommit',
-  'await options.beforeSummaryCommit()',
+  'beforeSummaryFetch',
+  'walletManager.getAssetSummary',
+  'setRGB11List',
 ])
 await requireContains('composables/hooks/useUnifiedAssets.ts', [
-  'beforeSummaryCommit: rgb11.refreshRGB11Assets',
+  'beforeSummaryFetch: rgb11.refreshRGB11Assets',
 ])
 await requireContains('entrypoints/popup/pages/wallet/Tools.vue', [
   'tools.rgb11.deployTitle',

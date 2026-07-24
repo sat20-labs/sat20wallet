@@ -1,34 +1,13 @@
-import { computed, watch } from 'vue'
+import { computed, onScopeDispose, watch } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
 import { storeToRefs } from 'pinia'
 import walletManager from '@/utils/sat20'
-import rgb11Address from '@/utils/rgb11Address'
-import { useGlobalStore, useL1Store, useRGB11Store, useWalletStore } from '@/store'
+import { useGlobalStore, useRGB11Store, useWalletStore } from '@/store'
 import type { RGB11StateDTO } from '@/store/rgb11'
 
 interface UseAssetQueryOptions {
   enabled?: boolean | { value: boolean }
 }
-
-const decimalText = (amount: any): string => {
-  const value = String(amount?.Value ?? amount?.value ?? '0')
-  const precision = Number(amount?.Precision ?? amount?.precision ?? 0)
-  if (!precision) return value
-  const negative = value.startsWith('-')
-  const digits = negative ? value.slice(1) : value
-  const padded = digits.padStart(precision + 1, '0')
-  const split = padded.length - precision
-  const text = `${padded.slice(0, split)}.${padded.slice(split)}`.replace(/\.?0+$/, '')
-  return negative ? `-${text}` : text
-}
-
-const outputHasAsset = (output: any, name: any) => (
-  (output?.Assets || []).some((asset: any) => (
-    asset?.Name?.Protocol === name?.Protocol &&
-    asset?.Name?.Type === name?.Type &&
-    asset?.Name?.Ticker === name?.Ticker
-  ))
-)
 
 const assetNameOf = (value: any) => value?.Name || value?.name || value?.AssetName || {}
 
@@ -41,40 +20,46 @@ const tickerInfoFor = (state: RGB11StateDTO, name: any) => (
   })
 )
 
-const officialContractID = (ticker: unknown) => {
+// Only wallets created before canonical RGB11 naming stored the contract id in
+// AssetName.Ticker. New asset keys are intentionally not reversible.
+const legacyOfficialContractID = (ticker: unknown) => {
   const value = String(ticker || '')
   return value.startsWith('rgb:') ? value : `rgb:${value}`
 }
 
-const toAssetItems = (state: RGB11StateDTO) => (state.assets || []).map((asset: any) => {
-  const name = asset?.Name || {}
+export const decorateRGB11AssetItems = (items: any[], state: RGB11StateDTO) => items.map((item: any) => {
+  const name = {
+    Protocol: item.protocol,
+    Type: item.type,
+    Ticker: item.ticker,
+  }
   const tickerInfo = tickerInfoFor(state, name)
-  const contractId = officialContractID(name.Ticker)
+  const canonicalName = String(tickerInfo?.canonical_name || tickerInfo?.CanonicalName ||
+    `${name.Protocol || 'rgb11'}:${name.Type || 'f'}:${name.Ticker || ''}`)
+  const contractId = String(tickerInfo?.contract_id || tickerInfo?.ContractID ||
+    legacyOfficialContractID(name.Ticker))
   const displayName = String(tickerInfo?.displayname || tickerInfo?.DisplayName || '').trim()
   const symbol = String(tickerInfo?.ticker || tickerInfo?.Ticker || '').trim()
-  const key = `rgb11:${name.Type || 'f'}:${name.Ticker || ''}`
+  const fingerprint = String(tickerInfo?.fingerprint || tickerInfo?.Fingerprint || '').trim()
+  const verified = Boolean(tickerInfo?.verified ?? tickerInfo?.Verified ?? false)
   return {
-    id: contractId,
-    key,
-    protocol: 'rgb11',
-    type: name.Type || 'f',
-    label: symbol || displayName || contractId,
+    ...item,
+    id: canonicalName,
+    key: canonicalName,
+    label: symbol || displayName || canonicalName,
     symbol,
-    ticker: name.Ticker || '',
+    canonical_name: canonicalName,
     contract_id: contractId,
     display_name: displayName,
-    utxos: (state.outputs || [])
-      .filter((output: any) => outputHasAsset(output, name))
-      .map((output: any) => output.OutPointStr),
-    amount: decimalText(asset?.Amount),
-    precision: Number(asset?.Amount?.Precision ?? asset?.Amount?.precision ?? tickerInfo?.divisibility ?? 0),
+    fingerprint,
+    verified,
+    precision: Number(item.precision ?? tickerInfo?.divisibility ?? 0),
   }
 })
 
 export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {
   const walletStore = useWalletStore()
   const globalStore = useGlobalStore()
-  const l1Store = useL1Store()
   const rgb11Store = useRGB11Store()
   const { walletId, accountIndex, network, address } = storeToRefs(walletStore)
   const { env } = storeToRefs(globalStore)
@@ -88,14 +73,6 @@ export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {
   const stateQuery = useQuery({
     queryKey: ['rgb11-state', walletId, accountIndex, network, address, env],
     queryFn: async (): Promise<RGB11StateDTO> => {
-      // Process encrypted RGB11 delivery before ordinary Bitcoin UTXOs
-      // are refreshed or exposed to coin selection.
-      const [mailboxError] = await rgb11Address.syncMailbox({})
-      if (mailboxError) throw mailboxError
-
-      const [refreshError] = await walletManager.refreshRGB11State()
-      if (refreshError) throw refreshError
-
       const [err, result] = await walletManager.getRGB11State()
       if (err) throw err
       if (!result?.state) throw new Error('RGB11 Wallet state is unavailable')
@@ -109,20 +86,19 @@ export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {
     (state) => {
       if (!state) return
       rgb11Store.setState(state)
-      const items = toAssetItems(state)
-      l1Store.setRGB11List(items)
-      l1Store.setAssetList([
-        ...(l1Store.assetList || []).filter((asset: any) => asset?.Name?.Protocol !== 'rgb11'),
-        ...(state.assets || []),
-      ])
-      const withoutRGB11 = (l1Store.uniqueAssetList || []).filter((item: any) => item?.value !== 'rgb11')
-      l1Store.setUniqueAssetList([
-        ...withoutRGB11,
-        ...(items.length ? [{ label: 'RGB11', value: 'rgb11' }] : []),
-      ])
     },
     { deep: true, immediate: true }
   )
+
+  const handleDKVSSynced = () => {
+    if (queryEnabled.value && walletId.value && address.value) {
+      void stateQuery.refetch()
+    }
+  }
+  window.addEventListener('sat20:dkvs-synced', handleDKVSSynced)
+  onScopeDispose(() => {
+    window.removeEventListener('sat20:dkvs-synced', handleDKVSSynced)
+  })
 
   return {
     loading: computed(() => stateQuery.isLoading.value),

@@ -9,6 +9,7 @@ export interface AssetSnapshot {
   runesList: any[]
   brc20List: any[]
   ordList: any[]
+  rgb11List: any[]
   totalSats: number
   updatedAt: number
 }
@@ -18,10 +19,12 @@ interface SnapshotKeyInput {
   network: string
   chain: string
   address: string
+  walletId?: string
+  accountIndex?: number
 }
 
-const snapshotKey = ({ env, network, chain, address }: SnapshotKeyInput) =>
-  `local:wallet_asset_snapshot:${env}:${network}:${chain}:${address}`
+const snapshotKey = ({ env, network, chain, walletId, accountIndex, address }: SnapshotKeyInput) =>
+  `local:wallet_asset_snapshot:${env}:${network}:${chain}:${walletId || ''}:${accountIndex ?? 0}:${address}`
 
 export const loadAssetSnapshot = async (
   input: SnapshotKeyInput
@@ -60,6 +63,7 @@ export const buildAssetSnapshotFromAssets = (
   const sat20List = list.filter((item) => item?.protocol === 'ordx')
   const runesList = list.filter((item) => item?.protocol === 'runes')
   const brc20List = list.filter((item) => item?.protocol === 'brc20')
+  const rgb11List = list.filter((item) => item?.protocol === 'rgb11')
 
   return {
     assetList: assetList || [],
@@ -67,6 +71,7 @@ export const buildAssetSnapshotFromAssets = (
       ...(plainList.length ? [{ label: 'Btc', value: 'btc' }] : []),
       ...(sat20List.length ? [{ label: 'ORDX', value: 'ordx' }] : []),
       ...(runesList.length ? [{ label: 'Runes', value: 'runes' }] : []),
+      ...(rgb11List.length ? [{ label: 'RGB11', value: 'rgb11' }] : []),
     ],
     sat20List,
     plainList,
@@ -74,6 +79,7 @@ export const buildAssetSnapshotFromAssets = (
     runesList,
     brc20List,
     ordList: list.filter((item) => item?.protocol === 'ord'),
+    rgb11List,
     totalSats: Number(totalSats || 0),
     updatedAt: Date.now(),
   }
@@ -89,6 +95,7 @@ export const applyAssetSnapshot = (
     setRunesList: (list: any[]) => void
     setBrc20List: (list: any[]) => void
     setOrdList: (list: any[]) => void
+    setRGB11List?: (list: any[]) => void
     setTotalSats: (total: number) => void
   },
   snapshot: AssetSnapshot
@@ -101,5 +108,6 @@ export const applyAssetSnapshot = (
   store.setRunesList(snapshot.runesList || [])
   store.setBrc20List(snapshot.brc20List || [])
   store.setOrdList(snapshot.ordList || [])
+  store.setRGB11List?.(snapshot.rgb11List || [])
   store.setTotalSats(Number(snapshot.totalSats || 0))
 }

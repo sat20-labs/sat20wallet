@@ -43,6 +43,9 @@
             ? $t('rgb11Transfer.autoBackupEnabled')
             : $t('rgb11Transfer.manualBackupRequired') }}
         </div>
+        <div v-if="rgb11State.backup_mode === 'temporary'" class="mt-1 text-amber-500">
+          {{ $t('rgb11Transfer.temporaryBackupWarning', { duration: formatRetention(rgb11State.backup_ttl_ms) }) }}
+        </div>
         <div class="mt-3 grid grid-cols-2 gap-2">
           <Button size="sm" variant="outline" @click="emit('issue-rgb11')">
             <Icon icon="lucide:badge-plus" class="mr-2 h-4 w-4" />
@@ -113,8 +116,16 @@
                 {{ asset.display_name }}
               </div>
               <div v-if="asset.protocol === 'rgb11'" class="break-all font-mono text-[10px] leading-4 text-zinc-500"
-                :title="asset.contract_id || `rgb:${asset.ticker}`">
-                {{ $t('rgb11Transfer.assetId') }}: {{ asset.contract_id || `rgb:${asset.ticker}` }}
+                :title="asset.canonical_name || `rgb11:${asset.type || 'f'}:${asset.ticker}`">
+                {{ $t('rgb11Transfer.assetId') }}: {{ asset.canonical_name || `rgb11:${asset.type || 'f'}:${asset.ticker}` }}
+              </div>
+              <div v-if="asset.protocol === 'rgb11' && asset.contract_id" class="break-all font-mono text-[10px] leading-4 text-zinc-500"
+                :title="asset.contract_id">
+                {{ $t('rgb11Transfer.contractId') }}: {{ asset.contract_id }}
+              </div>
+              <div v-if="asset.protocol === 'rgb11'" class="text-[10px] leading-4 text-zinc-500">
+                {{ $t('rgb11Transfer.fingerprint') }}: {{ asset.fingerprint || $t('rgb11Transfer.legacyFingerprint') }} ·
+                {{ $t('rgb11Transfer.certification') }}: {{ $t(asset.verified ? 'rgb11Transfer.verified' : 'rgb11Transfer.unverified') }}
               </div>
             </div>
             <div class="shrink-0 text-right text-sm font-semibold text-zinc-300">
@@ -215,9 +226,12 @@ interface Asset {
   precision?: number
   type?: string
   protocol?: string
+  canonical_name?: string
   contract_id?: string
   display_name?: string
   symbol?: string
+  fingerprint?: string
+  verified?: boolean
 }
 
 // Props定义
@@ -245,6 +259,12 @@ const { address, network } = storeToRefs(walletStore)
 const { env, hideBalance } = storeToRefs(globalStore)
 const { state: rgb11State } = storeToRefs(rgb11Store)
 const { t } = useI18n()
+
+const formatRetention = (ttlMs: number) => {
+  const hours = Math.max(1, Math.floor(ttlMs / (60 * 60 * 1000)))
+  if (hours % 24 === 0) return t('rgb11Transfer.retentionDays', { count: hours / 24 })
+  return t('rgb11Transfer.retentionHours', { count: hours })
+}
 
 const mempoolUrl = computed(() => {
   return generateMempoolUrl({

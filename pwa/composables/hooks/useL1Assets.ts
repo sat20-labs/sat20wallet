@@ -2,7 +2,9 @@ import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { ref, computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ordxApi } from '@/apis'
-import { useGlobalStore, useL1Store, useWalletStore } from '@/store'
+import walletManager from '@/utils/sat20'
+import { useGlobalStore, useL1Store, useRGB11Store, useWalletStore } from '@/store'
+import { decorateRGB11AssetItems } from './useRgb11Assets'
 import {
   applyAssetSnapshot,
   buildAssetSnapshotFromAssets,
@@ -17,7 +19,8 @@ interface AssetItem {
   label: string
   ticker: string
   utxos: string[]
-  amount: number
+  amount: number | string
+  precision: number
 }
 
 // 定义刷新选项接口
@@ -30,13 +33,15 @@ interface RefreshOptions {
 
 interface UseAssetQueryOptions {
   enabled?: boolean | { value: boolean }
-  beforeSummaryCommit?: () => Promise<void>
+  beforeSummaryFetch?: () => Promise<void>
 }
 
 interface AssetQueryContext {
   env: string
   network: string
   chain: 'btc'
+  walletId: string
+  accountIndex: number
   address: string
 }
 
@@ -45,13 +50,29 @@ interface SummaryQueryResult {
   response: any
 }
 
-let l1RefreshPromise: Promise<void> | null = null
+const l1RefreshPromises = new Map<string, Promise<void>>()
+
+const decimalText = (amount: any, precisionHint = 0): string => {
+  if (typeof amount === 'string' || typeof amount === 'number') {
+    return String(amount)
+  }
+  const value = String(amount?.Value ?? amount?.value ?? '0')
+  const precision = Number(amount?.Precision ?? amount?.precision ?? precisionHint)
+  if (!precision) return value
+  const negative = value.startsWith('-')
+  const digits = negative ? value.slice(1) : value
+  const padded = digits.padStart(precision + 1, '0')
+  const split = padded.length - precision
+  const text = `${padded.slice(0, split)}.${padded.slice(split)}`.replace(/\.?0+$/, '')
+  return negative ? `-${text}` : text
+}
 
 export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
   const assetsStore = useL1Store()
+  const rgb11Store = useRGB11Store()
   const walletStore = useWalletStore()
   const globalStore = useGlobalStore()
-  const { address, network, chain } = storeToRefs(walletStore)
+  const { address, network, walletId, accountIndex } = storeToRefs(walletStore)
   const { env } = storeToRefs(globalStore)
   const queryClient = useQueryClient()
 
@@ -74,6 +95,8 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
       env: env.value,
       network: network.value,
       chain: 'btc',
+      walletId: walletId.value,
+      accountIndex: accountIndex.value,
       address: address.value,
     }
   }
@@ -81,6 +104,8 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
   const isCurrentContext = (context: AssetQueryContext) => (
     context.env === env.value &&
     context.network === network.value &&
+    context.walletId === walletId.value &&
+    context.accountIndex === accountIndex.value &&
     context.address === address.value
   )
 
@@ -99,21 +124,20 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
   })
 
   const summaryQuery = useQuery({
-    queryKey: ['summary-l1', address, network, env],
+    queryKey: ['summary-l1', address, network, env, walletId, accountIndex],
     queryFn: async (): Promise<SummaryQueryResult | null> => {
       const context = currentContext()
       if (!context) return null
-      const response = await clientApi.value.getAddressSummary({
-        address: context.address,
-        network: context.network,
-      })
-      // A newly broadcast RGB11 carrier may become visible during this fetch.
-      // Give the Wallet SDK one last chance to import the Consignment and lock
-      // that outpoint before the response can update stores or coin-selection UI.
-      if (options.beforeSummaryCommit) {
-        await options.beforeSummaryCommit()
+      if (options.beforeSummaryFetch) {
+        try {
+          await options.beforeSummaryFetch()
+        } catch (error) {
+          console.warn('RGB11 background sync failed; using validated local state:', error)
+        }
       }
-      return { context, response }
+      const [error, result] = await walletManager.getAssetSummary(context.address)
+      if (error) throw error
+      return { context, response: { data: result?.assets || [] } }
     },
     enabled: computed(() => queryEnabled.value && !!address.value && !!network.value),
   })
@@ -122,11 +146,13 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
     const list: AssetItem[] = []
     let totalSats = 0
     for (const item of assets) {
+      const precision = Number(item.Precision ?? item.Amount?.Precision ?? 0)
+      const amountText = decimalText(item.Amount, precision)
       const key = item.Name.Protocol
         ? `${item.Name.Protocol}:${item.Name.Type}:${item.Name.Ticker}`
         : '::'
       if (item.Name.Type === '*') {
-        totalSats = item.Amount
+        totalSats = Number(amountText)
       }
       if (!list.find((v) => v?.key === key)) {
         let label = item.Name.Type === 'e'
@@ -143,7 +169,8 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
           label: label,
           ticker: item.Name.Ticker,
           utxos: [],
-          amount: item.Amount,
+          amount: item.Name.Protocol === 'rgb11' ? amountText : Number(amountText),
+          precision,
         })
       }
     }
@@ -155,6 +182,11 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
     assetsStore.setRunesList(list.filter((item) => item?.protocol === 'runes'))
     assetsStore.setBrc20List(list.filter((item) => item?.protocol === 'brc20'))
     assetsStore.setOrdList(list.filter((item) => item?.protocol === 'ord'))
+    const rgb11 = decorateRGB11AssetItems(
+      list.filter((item) => item?.protocol === 'rgb11'),
+      rgb11Store.state
+    )
+    assetsStore.setRGB11List(rgb11)
 
     const plain = list.filter((item) => item?.protocol === '')
     assetsStore.setPlainList(plain)
@@ -168,12 +200,12 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
       ...(list.some((item) => item?.protocol === 'runes')
         ? [{ label: 'Runes', value: 'runes' }]
         : []),
+      ...(rgb11.length ? [{ label: 'RGB11', value: 'rgb11' }] : []),
     ]
     assetsStore.setUniqueAssetList(uniqueTypes)
     assetsStore.setTotalSats(totalSats)
   }
 
-  // Cached L1 state must not be hydrated before the RGB11 mailbox safety gate.
   const snapshotInput = computed(() => queryEnabled.value ? currentContext() : null)
 
   const persistSnapshot = async (
@@ -206,6 +238,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
           ...(snapshot.runesList || []),
           ...(snapshot.brc20List || []),
           ...(snapshot.ordList || []),
+          ...(snapshot.rgb11List || []),
         ]
       }
     } finally {
@@ -215,6 +248,15 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
 
   // Watchers & Effects
   watch(snapshotInput, hydrateSnapshot, { immediate: true })
+  watch(
+    () => rgb11Store.state,
+    () => {
+      if (allAssetList.value.length) {
+        updateStoreAssets(allAssetList.value, assetsStore.totalSats)
+      }
+    },
+    { deep: true }
+  )
 
   watch(
     () => summaryQuery.data.value,
@@ -223,10 +265,17 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
 
       const rawAssets = payload.response?.data || []
       const { list, totalSats } = parseAssetSummary(rawAssets)
-      allAssetList.value = list
-      updateStoreAssets(list, totalSats)
+      const presented = [
+        ...list.filter((item) => item.protocol !== 'rgb11'),
+        ...decorateRGB11AssetItems(
+          list.filter((item) => item.protocol === 'rgb11'),
+          rgb11Store.state
+        ),
+      ]
+      allAssetList.value = presented
+      updateStoreAssets(presented, totalSats)
       assetsStore.setAssetList(rawAssets)
-      await persistSnapshot(payload.context, rawAssets, list, totalSats)
+      await persistSnapshot(payload.context, rawAssets, presented, totalSats)
     },
     {
       deep: true,
@@ -244,9 +293,13 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
    * @returns {Promise<void>}
    */
   const refreshL1Assets = async (options: RefreshOptions = {}) => {
-    if (l1RefreshPromise) return l1RefreshPromise
+    const context = currentContext()
+    if (!context) return
+    const refreshKey = `${context.env}:${context.network}:${context.walletId}:${context.accountIndex}:${context.address}`
+    const existing = l1RefreshPromises.get(refreshKey)
+    if (existing) return existing
 
-    l1RefreshPromise = (async () => {
+    const refreshPromise = (async () => {
       const {
         resetState = true,
         refreshNs = true,
@@ -280,10 +333,11 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
 
       await Promise.all(refreshPromises)
     })().finally(() => {
-      l1RefreshPromise = null
+      l1RefreshPromises.delete(refreshKey)
     })
 
-    return l1RefreshPromise
+    l1RefreshPromises.set(refreshKey, refreshPromise)
+    return refreshPromise
   }
 
   return {
