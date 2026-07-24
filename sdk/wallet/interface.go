@@ -102,6 +102,7 @@ func (p *Manager) IsReady() bool {
 }
 
 func (p *Manager) Stop() {
+	p.StopDKVSBackgroundSync()
 	if p.btcLuckyMiner != nil {
 		p.btcLuckyMiner.Stop()
 	}

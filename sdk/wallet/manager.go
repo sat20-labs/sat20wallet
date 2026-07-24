@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"strconv"
@@ -124,6 +125,11 @@ type Manager struct {
 	utxoLockerL2 *UtxoLocker
 	rgbManager   *rgb11Manager
 	watchTower   *WatchTower
+	dkvsSyncMu   sync.Mutex
+	dkvsSyncRun  sync.Mutex
+	dkvsSyncStop context.CancelFunc
+	dkvsSyncDone chan struct{}
+	dkvsSyncCB   func()
 
 	feeRateL1             int64 // sat/vkb
 	refreshTimeL1         int64
@@ -948,6 +954,12 @@ func (p *Manager) GetAssetAmount(address string, name *swire.AssetName,
 	if address == "" {
 		address = p.wallet.GetAddress()
 	}
+	if balance, local, err := p.getLocalRGB11AssetBalance(address, name); local {
+		if err != nil || balance == nil {
+			return indexer.NewDefaultDecimal(0), indexer.NewDefaultDecimal(0)
+		}
+		return balance, indexer.NewDefaultDecimal(0)
+	}
 	bPlainAsset := indexer.IsPlainAsset(name)
 
 	var availableSats, lockedSats int64
@@ -1044,15 +1056,12 @@ func (p *Manager) GetAssetBalance(address string, name *swire.AssetName) *Decima
 	if address == "" {
 		address = p.wallet.GetAddress()
 	}
-	if address == p.wallet.GetAddress() {
-		if name != nil && name.Protocol == rgb11wallet.Protocol {
-			balance, err := p.GetRGB11AssetBalance(name)
-			if err != nil {
-				Log.Errorf("GetRGB11AssetBalance %s failed: %v", name.String(), err)
-				return nil
-			}
-			return balance
+	if balance, local, err := p.getLocalRGB11AssetBalance(address, name); local {
+		if err != nil {
+			Log.Errorf("GetRGB11AssetBalance %s failed: %v", name.String(), err)
+			return nil
 		}
+		return balance
 	}
 
 	assets := p.l1IndexerClient.GetAssetSummaryWithAddress(address)

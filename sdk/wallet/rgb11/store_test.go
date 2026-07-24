@@ -1,9 +1,11 @@
 package rgb11wallet
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -112,6 +114,45 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 	restoredBalance, err := restored.Balance(asset.Name)
 	if err != nil || restoredBalance.Cmp(amount) != 0 {
 		t.Fatalf("restored balance %v err=%v", restoredBalance, err)
+	}
+}
+
+func TestValidationReceiptHashUsesStableStrictEncoding(t *testing.T) {
+	amount, err := indexer.NewDecimalFromString("42.50", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := &ValidationReceipt{
+		Version: 1, EngineBuildID: "test-engine", ConsignmentHash: strings.Repeat("a", 64),
+		ContractID: "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E", SchemaID: "schema",
+		StateHash: [32]byte{1}, ValidatedAt: 1, Status: "valid",
+		Allocations: []ValidatedAllocation{{
+			OutPoint:  "0000000000000000000000000000000000000000000000000000000000000001:0",
+			AssetName: indexer.AssetName{Protocol: Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "asset"},
+			Amount:    *amount, OperationID: "op", AssignmentType: 4000, StateClass: "fungible", SealDisclosure: []byte{1},
+		}},
+	}
+	first, err := receipt.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := encode(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(encoded, []byte(rgb11StoreMagic)) {
+		t.Fatalf("receipt was not stored with the strict RGB11 record envelope")
+	}
+	var restored ValidationReceipt
+	if err := decode(encoded, &restored); err != nil {
+		t.Fatal(err)
+	}
+	second, err := restored.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("receipt hash changed after strict storage round trip: %s != %s", first, second)
 	}
 }
 

@@ -289,15 +289,28 @@ func TestRGB11RelayAndAckRoundTripThroughDKVS(t *testing.T) {
 // sequence. Immutable snapshot blobs use unique keys and remain independently
 // retrievable.
 type rgb11MemoryDKVSHTTP struct {
-	mu           sync.Mutex
-	records      map[string]*swire.DKVSRecord
-	postGate     <-chan struct{}
-	autopayState *dkvsindexer.AutopayContractState
-	autopayError error
+	mu                 sync.Mutex
+	records            map[string]*swire.DKVSRecord
+	postGate           <-chan struct{}
+	autopayState       *dkvsindexer.AutopayContractState
+	autopayError       error
+	freeLocal          dkvsindexer.FreeLocalCachePolicy
+	validateBlobChunks bool
+	maxRecords         int
 }
 
 func newRGB11MemoryDKVSHTTP() *rgb11MemoryDKVSHTTP {
-	return &rgb11MemoryDKVSHTTP{records: make(map[string]*swire.DKVSRecord)}
+	return &rgb11MemoryDKVSHTTP{
+		records: make(map[string]*swire.DKVSRecord),
+		freeLocal: dkvsindexer.FreeLocalCachePolicy{
+			Enabled:             true,
+			MaxTTL:              rgb11AddressTemporaryTTL,
+			MaxRecordsPerSigner: 100,
+			MaxBytesPerSigner:   1 << 20,
+			MaxTotalRecords:     100_000,
+			MaxTotalBytes:       1 << 30,
+		},
+	}
 }
 
 func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, error) {
@@ -318,6 +331,25 @@ func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, er
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.validateBlobChunks {
+		parsed, err := dkvsindexer.ParseKey(record.Key)
+		if err != nil {
+			return rgb11DKVSResponse(1, err.Error(), nil, 0)
+		}
+		if parsed.Namespace == "blob" && len(parsed.Segments) == 4 && parsed.Segments[2] == "chunk" {
+			manifestKey := "/blob/" + parsed.Segments[0] + "/" + parsed.Segments[1] + "/manifest"
+			manifest := h.records[manifestKey]
+			if manifest == nil || record.Seq != manifest.Seq ||
+				record.IssueTime != manifest.IssueTime || record.TTL != manifest.TTL ||
+				record.ExpiryHeight != manifest.ExpiryHeight {
+				return rgb11DKVSResponse(1, dkvsindexer.ErrBlobChunkInvalid.Error(), nil, 0)
+			}
+		}
+	}
+	if h.maxRecords > 0 && !tombstonePath && h.records[record.Key] == nil &&
+		len(h.records) >= h.maxRecords {
+		return rgb11DKVSResponse(1, dkvsindexer.ErrFeeCapacityExceeded.Error(), nil, 0)
+	}
 	if current := h.records[record.Key]; current != nil && record.Seq <= current.Seq {
 		// The production endpoint returns the submitted record even when the
 		// selector keeps the existing active record. The client must re-read the
@@ -335,6 +367,9 @@ func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, er
 func (h *rgb11MemoryDKVSHTTP) SendGetRequest(url *URL) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if strings.HasSuffix(url.Path, "/v3/dkvs/config") {
+		return rgb11DKVSResponse(0, "ok", h.freeLocal, 0)
+	}
 	if strings.Contains(url.Path, "/v3/contracts/") && strings.HasSuffix(url.Path, "/state") {
 		if h.autopayError != nil {
 			return nil, h.autopayError
@@ -592,6 +627,62 @@ func TestRGB11ManualFirstBackupEnablesAutomaticBackupAndActivationRestore(t *tes
 	missing, err := newWallet.ActivateRGB11WalletState(verify)
 	if err != nil || missing.Found || missing.Restored || missing.AutoBackup {
 		t.Fatalf("wallet without a backup should remain manual-first: result=%+v err=%v", missing, err)
+	}
+}
+
+func TestRGB11ActivationPublishesHigherUnsyncedLocalState(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := newRGB11MemoryDKVSHTTP()
+	manager := newRGB11MultiDeviceManager(t, priv, 778)
+	manager.cfg = &sdkcommon.Config{IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"}}
+	manager.http = remote
+
+	first, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{AmountRaw: "1", WitnessVout: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := dkvsindexer.RecordOptions{TTL: uint64((24 * time.Hour) / time.Millisecond)}
+	head1, err := manager.SyncRGB11WalletState("", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.rgbManager.autoBackup = nil
+	second, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{AmountRaw: "2", WitnessVout: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	activation, err := manager.ActivateRGB11WalletState(dkvsindexer.RecordVerificationOptions{
+		Now: uint64(time.Now().UnixMilli()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !activation.Found || activation.Restored || !activation.AutoBackup ||
+		activation.Head == nil || activation.Head.Seq != head1.Seq+1 {
+		t.Fatalf("unsynced local activation=%+v", activation)
+	}
+	if _, err := manager.rgbManager.engine.LoadReceive(first.RequestID); err != nil {
+		t.Fatalf("first local state missing after activation: %v", err)
+	}
+	if _, err := manager.rgbManager.engine.LoadReceive(second.RequestID); err != nil {
+		t.Fatalf("newer local state missing after activation: %v", err)
+	}
+
+	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	walletID, err := manager.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, _, err := client.GetRGB11WalletHead(
+		priv.PubKey().SerializeCompressed(), walletID,
+		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())},
+	)
+	if err != nil || active.Seq != head1.Seq+1 {
+		t.Fatalf("remote head was not advanced from local state: head=%+v err=%v", active, err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package rgb11wallet
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/rgb11/consensus"
+	strict "github.com/sat20-labs/rgb11/strict_encoding"
 )
 
 var (
@@ -96,10 +99,10 @@ func (r *ValidationReceipt) validate(expectedHash string) error {
 }
 
 func (r *ValidationReceipt) Hash() (string, error) {
-	encoded, err := encode(r)
-	if err != nil {
+	var buf bytes.Buffer
+	if err := encodeValidationReceipt(strict.NewEncoder(&buf), r); err != nil {
 		return "", err
 	}
-	hash := sha256.Sum256(encoded)
+	hash := consensus.StrictValueHash(buf.Bytes())
 	return hex.EncodeToString(hash[:]), nil
 }

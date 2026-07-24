@@ -258,7 +258,7 @@ func (p *SatsNetDKVSClient) PutAccountBlob(wallet common.Wallet, objectID string
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := p.PutBlobRecords(manifest, records); err != nil {
+	if err := p.putWalletBlobRecords(wallet, manifest, records); err != nil {
 		return nil, nil, err
 	}
 	return manifest, records, nil

@@ -17,7 +17,7 @@ all:
 # else
 # 	echo "Unsupported operating system"
 # endif
-	GOOS=js GOARCH=wasm go build -o html/wasm/sat20wallet.wasm -ldflags="-s -w" main.go
+	GOOS=js GOARCH=wasm go build -o html/wasm/sat20wallet.wasm -ldflags="-s -w" .
 	if command -v wasm-opt > /dev/null; then wasm-opt -Oz html/wasm/sat20wallet.wasm -o html/wasm/sat20wallet.wasm --enable-bulk-memory; fi
 	cp html/wasm/sat20wallet.wasm ~/github/sat20wallet/client/public/wasm/sat20wallet.wasm
 	cp html/wasm/sat20wallet.wasm ~/github/sat20wallet/pwa/public/wasm/sat20wallet.wasm

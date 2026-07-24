@@ -24,7 +24,11 @@ type RGB11Output struct {
 
 type RGB11TickerInfo struct {
 	*indexer.TickerInfo
-	Ticker string `json:"ticker"`
+	Ticker        string `json:"ticker"`
+	CanonicalName string `json:"canonical_name"`
+	ContractID    string `json:"contract_id"`
+	Fingerprint   string `json:"fingerprint,omitempty"`
+	Verified      bool   `json:"verified"`
 }
 
 // RGB11State exposes existing SAT20 assets plus RGB-only proof sidecars.
@@ -35,6 +39,8 @@ type RGB11State struct {
 	ConsistencyStatus string             `json:"consistency_status"`
 	DKVSStatus        string             `json:"dkvs_status"`
 	AutoBackupEnabled bool               `json:"auto_backup_enabled"`
+	BackupMode        string             `json:"backup_mode,omitempty"`
+	BackupTTL         uint64             `json:"backup_ttl_ms,omitempty"`
 	TickerInfos       []*RGB11TickerInfo `json:"ticker_infos"`
 	Assets            indexer.TxAssets   `json:"assets"`
 	Outputs           []*RGB11Output     `json:"outputs"`

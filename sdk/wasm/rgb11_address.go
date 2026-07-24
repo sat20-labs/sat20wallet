@@ -235,24 +235,3 @@ func syncRGB11AddressMailbox(this js.Value, p []js.Value) any {
 func getRGB11AddressCarrierWarning(this js.Value, p []js.Value) any {
 	return createJsRet(map[string]any{"warning": wallet.RGB11AddressCarrierWarning}, 0, "ok")
 }
-
-var rgb11AddressRegisterCallback js.Func
-
-func init() {
-	rgb11AddressRegisterCallback = js.FuncOf(func(this js.Value, args []js.Value) any {
-		obj := js.Global().Get(module)
-		if obj.Type() != js.TypeObject {
-			js.Global().Call("setTimeout", rgb11AddressRegisterCallback, 0)
-			return nil
-		}
-		obj.Set("enableRGB11AddressReceive", js.FuncOf(enableRGB11AddressReceive))
-		obj.Set("resolveRGB11AddressEndpoint", js.FuncOf(resolveRGB11AddressEndpoint))
-		obj.Set("prepareRGB11AddressTransfer", js.FuncOf(prepareRGB11AddressTransfer))
-		obj.Set("deliverAndBroadcastRGB11AddressTransfer", js.FuncOf(deliverAndBroadcastRGB11AddressTransfer))
-		obj.Set("syncRGB11AddressMailbox", js.FuncOf(syncRGB11AddressMailbox))
-		obj.Set("getRGB11AddressCarrierWarning", js.FuncOf(getRGB11AddressCarrierWarning))
-		rgb11AddressRegisterCallback.Release()
-		return nil
-	})
-	js.Global().Call("setTimeout", rgb11AddressRegisterCallback, 0)
-}

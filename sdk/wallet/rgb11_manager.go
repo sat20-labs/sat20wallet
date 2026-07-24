@@ -59,6 +59,8 @@ type rgb11Manager struct {
 	rejectLists       RGB11RejectListProvider
 	consistencyStatus string
 	dkvsStatus        string
+	dkvsBackupMode    string
+	dkvsBackupTTL     uint64
 	head              *coresync.WalletHead
 	autoBackup        *RGB11AutoBackupPolicy
 	backupMutex       sync.Mutex
@@ -104,7 +106,7 @@ func (p *rgb11Manager) selectRGB11Scope() error {
 		return rgb11wallet.ErrWalletScope
 	}
 	p.waitForRGB11AutoBackup()
-	scope := fmt.Sprintf("wallet-%d-account-%d", p.status.CurrentWallet, p.status.CurrentAccount)
+	scope := rgb11StorageScope(p.status.CurrentWallet, p.status.CurrentAccount)
 	if err := p.rgbManager.projectionStore.SetScope(scope); err != nil {
 		return err
 	}
@@ -119,15 +121,19 @@ func (p *rgb11Manager) selectRGB11Scope() error {
 			return err
 		}
 	} else {
-		expectedWalletID := ""
+		// Cold startup intentionally has no decrypted wallet key. Defer head
+		// ownership validation until UnlockWallet selects this scope again.
 		if p.wallet != nil && p.wallet.GetPubKey() != nil {
-			expectedWalletID = hex.EncodeToString(p.wallet.GetPubKey().SerializeCompressed())
-		}
-		head, decodeErr := rgb11wallet.DecodeWalletHead(encoded)
-		if decodeErr != nil || head.Validate(expectedWalletID) != nil {
-			p.rgbManager.dkvsStatus = "conflict"
-		} else {
-			p.rgbManager.head = head
+			expectedWalletID, walletIDErr := p.RGB11WalletID()
+			if walletIDErr != nil {
+				return walletIDErr
+			}
+			head, decodeErr := rgb11wallet.DecodeWalletHead(encoded)
+			if decodeErr != nil || head.Validate(expectedWalletID) != nil {
+				p.rgbManager.dkvsStatus = "conflict"
+			} else {
+				p.rgbManager.head = head
+			}
 		}
 	}
 	policy, err := p.loadRGB11AutoBackupPolicy()
@@ -262,7 +268,7 @@ func (p *rgb11Manager) RegisterRGB11TickerInfo(info *indexer.TickerInfo) error {
 	if info == nil || info.AssetName.Protocol != rgb11wallet.Protocol {
 		return rgb11wallet.ErrInvalidRGB11Asset
 	}
-	if _, err := rgb11wallet.OfficialAssetID(info.AssetName); err != nil {
+	if err := validateRGB11TickerInfoName(info); err != nil {
 		return err
 	}
 	if err := saveTickerInfo(p.db, info); err != nil {
@@ -272,6 +278,39 @@ func (p *rgb11Manager) RegisterRGB11TickerInfo(info *indexer.TickerInfo) error {
 	p.tickerInfoMap[info.AssetName.String()] = info
 	p.mutex.Unlock()
 	return nil
+}
+
+// validateRGB11TickerInfoName binds newly imported RGB11 contract metadata to
+// its canonical SAT20 asset name. The legacy reversible contract-id name is
+// accepted only for already persisted wallets; new imports always use the
+// canonical ticker/fingerprint name generated below.
+func validateRGB11TickerInfoName(info *indexer.TickerInfo) error {
+	var ext rgb11wallet.TickerExt
+	if err := json.Unmarshal(info.Content, &ext); err != nil {
+		return err
+	}
+	contractID := ext.ContractID
+	if contractID == "" {
+		contractID = ext.OriginalAssetID
+	}
+	if contractID == "" {
+		_, err := rgb11wallet.OfficialAssetID(info.AssetName)
+		return err
+	}
+	expected, err := rgb11wallet.NewCanonicalAssetName(contractID, ext.Ticker, info.AssetName.Type)
+	if err != nil {
+		return err
+	}
+	if expected == info.AssetName {
+		return nil
+	}
+	// Existing local RGB11 projections used the encoded contract id as ticker.
+	// Keep them readable and spendable, but never generate that form again.
+	legacyContractID, legacyErr := rgb11wallet.OfficialAssetID(info.AssetName)
+	if legacyErr == nil && legacyContractID == contractID {
+		return nil
+	}
+	return rgb11wallet.ErrInvalidRGB11Asset
 }
 
 // RGB11Output is the serializable projection view exposed to UI clients.
@@ -323,17 +362,22 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 		}
 	}
 
-	p.mutex.RLock()
 	tickers := make([]*RGB11TickerInfo, 0)
-	for _, info := range p.tickerInfoMap {
-		if info != nil && info.AssetName.Protocol == rgb11wallet.Protocol {
-			tickers = append(tickers, &RGB11TickerInfo{
-				TickerInfo: info,
-				Ticker:     p.rgb11TickerSymbol(info),
-			})
+	for index := range assets {
+		info := p.getTickerInfo(&assets[index].Name)
+		if info == nil {
+			continue
 		}
+		ticker, canonicalName, contractID, fingerprint, verified := p.rgb11TickerPresentation(info)
+		tickers = append(tickers, &RGB11TickerInfo{
+			TickerInfo:    info,
+			Ticker:        ticker,
+			CanonicalName: canonicalName,
+			ContractID:    contractID,
+			Fingerprint:   fingerprint,
+			Verified:      verified,
+		})
 	}
-	p.mutex.RUnlock()
 
 	dkvsStatus := p.rgbManager.dkvsStatus
 	if dkvsStatus == "" {
@@ -341,6 +385,8 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 	}
 	p.mutex.RLock()
 	autoBackupEnabled := p.rgbManager.autoBackup != nil && p.rgbManager.autoBackup.Enabled
+	backupMode := p.rgbManager.dkvsBackupMode
+	backupTTL := p.rgbManager.dkvsBackupTTL
 	p.mutex.RUnlock()
 	return &RGB11State{
 		Initialized:       true,
@@ -348,6 +394,8 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 		ConsistencyStatus: p.GetRGB11ConsistencyStatus(),
 		DKVSStatus:        dkvsStatus,
 		AutoBackupEnabled: autoBackupEnabled,
+		BackupMode:        backupMode,
+		BackupTTL:         backupTTL,
 		TickerInfos:       tickers,
 		Assets:            assets,
 		Outputs:           stateOutputs,
@@ -827,10 +875,6 @@ func (p *rgb11Manager) ImportRGB11Contract(ctx context.Context, raw []byte) (*RG
 	if !descriptor.Fungible {
 		assetType = indexer.ASSET_TYPE_NFT
 	}
-	assetName, err := rgb11wallet.NewAssetName(container.ContractID, assetType)
-	if err != nil {
-		return nil, err
-	}
 	schemaValue, _ := container.Value.Field("schema")
 	typeSystem, _ := container.Value.Field("types")
 	genesisValue, _ := container.Value.Field("genesis")
@@ -838,9 +882,20 @@ func (p *rgb11Manager) ImportRGB11Contract(ctx context.Context, raw []byte) (*RG
 	if err != nil {
 		return nil, err
 	}
+	assetName, err := rgb11wallet.NewCanonicalAssetName(container.ContractID, metadata.Ticker, assetType)
+	if err != nil {
+		return nil, err
+	}
+	fingerprint, err := rgb11wallet.ContractFingerprint(container.ContractID, rgb11wallet.DefaultFingerprintLength)
+	if err != nil {
+		return nil, err
+	}
 	ext := rgb11wallet.TickerExt{
-		AssetName: assetName, Ticker: metadata.Ticker, OriginalAssetID: container.ContractID,
-		SchemaID: container.SchemaID, ContractID: container.ContractID,
+		AssetName: assetName, Ticker: metadata.Ticker,
+		CanonicalName: assetName.String(), NormalizedTicker: rgb11wallet.NormalizeTicker(metadata.Ticker),
+		Fingerprint: fingerprint, DisplayTicker: rgb11wallet.DisplayTicker(metadata.Ticker, fingerprint, false),
+		OriginalAssetID: container.ContractID,
+		SchemaID:        container.SchemaID, ContractID: container.ContractID,
 		ContractHash: receipt.ConsignmentHash, RejectListURL: metadata.RejectListURL,
 		ControlMode: descriptor.DefaultControlMode,
 		STPAllowed:  false, ValidationStatus: "valid",
@@ -865,36 +920,95 @@ func (p *rgb11Manager) ImportRGB11Contract(ctx context.Context, raw []byte) (*RG
 	return result, nil
 }
 
-func (p *rgb11Manager) rgb11TickerSymbol(info *indexer.TickerInfo) string {
+func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (ticker, canonicalName, contractID, fingerprint string, verified bool) {
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || info == nil {
-		return ""
+		return "", "", "", "", false
 	}
 	var ext rgb11wallet.TickerExt
 	if json.Unmarshal(info.Content, &ext) != nil {
-		return ""
+		return "", info.AssetName.String(), "", "", false
+	}
+	contractID = ext.ContractID
+	if contractID == "" {
+		contractID = ext.OriginalAssetID
+	}
+	canonicalName = ext.CanonicalName
+	if canonicalName == "" {
+		canonicalName = info.AssetName.String()
+	}
+	fingerprint = ext.Fingerprint
+	verified = ext.PrimaryVerified
+	if ext.DisplayTicker != "" {
+		return ext.DisplayTicker, canonicalName, contractID, fingerprint, verified
 	}
 	if ext.Ticker != "" {
-		return ext.Ticker
+		if fingerprint == "" && contractID != "" {
+			fingerprint, _ = rgb11wallet.ContractFingerprint(contractID, rgb11wallet.DefaultFingerprintLength)
+		}
+		return rgb11wallet.DisplayTicker(ext.Ticker, fingerprint, verified), canonicalName, contractID, fingerprint, verified
 	}
 	if ext.ContractHash == "" {
-		return ""
+		return "", canonicalName, contractID, fingerprint, verified
 	}
 	raw, err := p.rgbManager.projectionStore.LoadObject(ext.ContractHash)
 	if err != nil {
-		return ""
+		return "", canonicalName, contractID, fingerprint, verified
 	}
 	container, err := coreconsignment.Decode(raw)
 	if err != nil {
-		return ""
+		return "", canonicalName, contractID, fingerprint, verified
 	}
 	schemaValue, _ := container.Value.Field("schema")
 	typeSystem, _ := container.Value.Field("types")
 	genesisValue, _ := container.Value.Field("genesis")
 	metadata, err := schemas.ExtractGenesisAssetMetadata(schemaValue, typeSystem, genesisValue)
 	if err != nil {
-		return ""
+		return "", canonicalName, contractID, fingerprint, verified
 	}
-	return metadata.Ticker
+	if fingerprint == "" && contractID != "" {
+		fingerprint, _ = rgb11wallet.ContractFingerprint(contractID, rgb11wallet.DefaultFingerprintLength)
+	}
+	return rgb11wallet.DisplayTicker(metadata.Ticker, fingerprint, verified), canonicalName, contractID, fingerprint, verified
+}
+
+// rgb11ContractIDForAssetName resolves the full RGB contract id via local
+// contract metadata. A canonical SAT20 name deliberately cannot be reversed
+// into a contract id; only historical encoded names use the legacy fallback.
+func (p *rgb11Manager) rgb11ContractIDForAssetName(name indexer.AssetName) (string, error) {
+	if p == nil || name.Protocol != rgb11wallet.Protocol {
+		return "", rgb11wallet.ErrInvalidRGB11Asset
+	}
+	p.mutex.RLock()
+	info := p.tickerInfoMap[name.String()]
+	if info == nil && name.Type == "control" {
+		for _, candidate := range p.tickerInfoMap {
+			if candidate != nil && candidate.AssetName.Protocol == rgb11wallet.Protocol && candidate.AssetName.Ticker == name.Ticker {
+				info = candidate
+				break
+			}
+		}
+	}
+	p.mutex.RUnlock()
+	if info != nil {
+		var ext rgb11wallet.TickerExt
+		if err := json.Unmarshal(info.Content, &ext); err != nil {
+			return "", err
+		}
+		contractID := ext.ContractID
+		if contractID == "" {
+			contractID = ext.OriginalAssetID
+		}
+		if contractID != "" {
+			expected, err := rgb11wallet.NewCanonicalAssetName(contractID, ext.Ticker, name.Type)
+			if err != nil {
+				return "", err
+			}
+			if expected.Ticker == name.Ticker {
+				return contractID, nil
+			}
+		}
+	}
+	return rgb11wallet.OfficialAssetID(name)
 }
 
 func allocationOutpointTxID(outpoint string) string {
@@ -1803,7 +1917,7 @@ func (p *rgb11Manager) selectRGB11AllocationsOnce(contractID string, amount uint
 			continue
 		}
 		byOutpoint[proof.OutPoint] = append(byOutpoint[proof.OutPoint], proof)
-		official, err := rgb11wallet.OfficialAssetID(proof.AssetName)
+		official, err := p.rgb11ContractIDForAssetName(proof.AssetName)
 		if err == nil && official == contractID && proof.AssignmentType == 4000 && proof.AssetName.Type != "control" {
 			targets = append(targets, proof)
 		}
@@ -1828,7 +1942,7 @@ func (p *rgb11Manager) selectRGB11AllocationsOnce(contractID string, amount uint
 		}
 		group := byOutpoint[target.OutPoint]
 		for _, proof := range group {
-			official, err := rgb11wallet.OfficialAssetID(proof.AssetName)
+			official, err := p.rgb11ContractIDForAssetName(proof.AssetName)
 			if err != nil || official != contractID {
 				return nil, "", indexer.AssetName{}, "", 0, 0, ErrRGB11HistoryMerge
 			}

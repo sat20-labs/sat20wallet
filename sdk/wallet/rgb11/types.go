@@ -3,11 +3,14 @@
 package rgb11wallet
 
 import (
+	"crypto/sha256"
+	"encoding/base32"
 	"errors"
 	"strings"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/assetid"
+	"github.com/sat20-labs/rgb11/consensus"
 	"github.com/sat20-labs/rgb11/seals"
 )
 
@@ -15,6 +18,11 @@ const (
 	Protocol          = "rgb11"
 	LockReasonRGB     = "rgb"
 	LockReasonPending = "pending-rgb"
+
+	// DefaultFingerprintLength is the registry's initial collision-resistant
+	// contract suffix. A server-side registry may extend an individual suffix
+	// to 12, 14, or 16 characters on collision without changing its prefix.
+	DefaultFingerprintLength = 10
 )
 
 var (
@@ -37,11 +45,103 @@ func NewAssetName(officialAssetID, assetType string) (indexer.AssetName, error) 
 	return indexer.AssetName{Protocol: Protocol, Type: assetType, Ticker: ticker}, nil
 }
 
+// NormalizeTicker produces the deterministic human-readable portion of a
+// SatoshiNet RGB11 asset name. It intentionally accepts arbitrary issuer
+// metadata, but never lets that metadata become an unqualified asset key.
+func NormalizeTicker(ticker string) string {
+	var normalized strings.Builder
+	lastDash := false
+	for index := 0; index < len(ticker); index++ {
+		char := ticker[index]
+		if char >= 'A' && char <= 'Z' {
+			char += 'a' - 'A'
+		}
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') {
+			normalized.WriteByte(char)
+			lastDash = false
+			continue
+		}
+		if normalized.Len() > 0 && !lastDash {
+			normalized.WriteByte('-')
+			lastDash = true
+		}
+	}
+	result := strings.Trim(normalized.String(), "-")
+	if len(result) > 16 {
+		result = strings.Trim(result[:16], "-")
+	}
+	if result == "" {
+		return "asset"
+	}
+	return result
+}
+
+// ContractFingerprint binds the display-safe name to canonical RGB contract
+// bytes. The raw contract id never becomes the SAT20 AssetName ticker.
+func ContractFingerprint(contractID string, length int) (string, error) {
+	contract, err := consensus.ParseContractID(contractID)
+	if err != nil {
+		return "", err
+	}
+	if length == 0 {
+		length = DefaultFingerprintLength
+	}
+	if length < DefaultFingerprintLength || length > 16 || length%2 != 0 {
+		return "", ErrInvalidRGB11Asset
+	}
+	payload := make([]byte, 0, len("satoshinet:rgb11:")+len(contract))
+	payload = append(payload, "satoshinet:rgb11:"...)
+	payload = append(payload, contract[:]...)
+	sum := sha256.Sum256(payload)
+	encoded := strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:]))
+	return encoded[:length], nil
+}
+
+// NewCanonicalAssetName creates the only asset key used for newly created or
+// imported RGB11 contracts: rgb11:<type>:<normalized ticker>_<fingerprint>.
+func NewCanonicalAssetName(contractID, ticker, assetType string) (indexer.AssetName, error) {
+	if assetType == "" {
+		assetType = indexer.ASSET_TYPE_FT
+	}
+	if strings.Contains(assetType, ":") {
+		return indexer.AssetName{}, ErrInvalidRGB11Asset
+	}
+	fingerprint, err := ContractFingerprint(contractID, DefaultFingerprintLength)
+	if err != nil {
+		return indexer.AssetName{}, err
+	}
+	return indexer.AssetName{
+		Protocol: Protocol,
+		Type:     assetType,
+		Ticker:   NormalizeTicker(ticker) + "_" + fingerprint,
+	}, nil
+}
+
+// DisplayTicker returns the safe UI alias. Until a server-side primary-asset
+// registry has verified an issuer, the fingerprint remains visible.
+func DisplayTicker(ticker, fingerprint string, primaryVerified bool) string {
+	normalized := NormalizeTicker(ticker)
+	if primaryVerified {
+		return normalized
+	}
+	if fingerprint == "" {
+		return normalized
+	}
+	return normalized + "_" + fingerprint
+}
+
 func OfficialAssetID(name indexer.AssetName) (string, error) {
 	if name.Protocol != Protocol || name.Ticker == "" || strings.Contains(name.Ticker, ":") {
 		return "", ErrInvalidRGB11Asset
 	}
-	return assetid.AssetID(name.Ticker)
+	official, err := assetid.AssetID(name.Ticker)
+	if err != nil {
+		return "", err
+	}
+	if _, err := consensus.ParseContractID(official); err != nil {
+		return "", ErrInvalidRGB11Asset
+	}
+	return official, nil
 }
 
 func NewAssetInfo(officialAssetID, assetType string, amount *indexer.Decimal) (*indexer.AssetInfo, error) {
@@ -58,6 +158,11 @@ func NewAssetInfo(officialAssetID, assetType string, amount *indexer.Decimal) (*
 type TickerExt struct {
 	AssetName        indexer.AssetName `json:"asset_name"`
 	Ticker           string            `json:"ticker,omitempty"`
+	CanonicalName    string            `json:"canonical_name,omitempty"`
+	NormalizedTicker string            `json:"normalized_ticker,omitempty"`
+	Fingerprint      string            `json:"fingerprint,omitempty"`
+	DisplayTicker    string            `json:"display_ticker,omitempty"`
+	PrimaryVerified  bool              `json:"primary_verified,omitempty"`
 	OriginalAssetID  string            `json:"original_asset_id"`
 	AssetIDBytes     []byte            `json:"asset_id_bytes"`
 	SchemaID         string            `json:"schema_id"`

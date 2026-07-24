@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/gob"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -60,18 +59,6 @@ func (s *ProjectionStore) scopedPrefix(prefix string) ([]byte, error) {
 
 func NewProjectionStore(db indexer.KVDB, locker Locker) *ProjectionStore {
 	return &ProjectionStore{db: db, locker: locker}
-}
-
-func encode(value any) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(value); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func decode(data []byte, target any) error {
-	return gob.NewDecoder(bytes.NewReader(data)).Decode(target)
 }
 
 func (s *ProjectionStore) outputKey(outpoint string) ([]byte, error) {

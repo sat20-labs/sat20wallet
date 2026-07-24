@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"sort"
 	"strings"
 
@@ -252,8 +251,8 @@ func (s *EngineStore) ImportSnapshot(records []SnapshotRecord) error {
 			return corewallet.ErrInvalidReceive
 		}
 		seen[record.Key] = true
-		var request corewallet.ReceiveRequest
-		if json.Unmarshal(record.Value, &request) != nil || request.Version != corewallet.ReceiveVersion ||
+		request, err := corewallet.DecodeReceiveRequest(record.Value)
+		if err != nil || request.Version != corewallet.ReceiveVersion ||
 			request.RequestID == "" || record.Key != "wallet/receive/"+request.RequestID ||
 			request.RelayKey == request.AckKey {
 			return corewallet.ErrInvalidReceive

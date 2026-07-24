@@ -151,6 +151,63 @@ func TestSatsNetDKVSClientGetVerifiedRecord(t *testing.T) {
 	}
 }
 
+func TestSatsNetDKVSClientFilteredSyncAndWatch(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := dkvsindexer.PersonalKey(priv.PubKey().SerializeCompressed(), "rgb11/test/head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := NewDKVSSignedRecord(
+		dkvsTestWalletFromPriv(t, priv), key, []byte("head"),
+		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := chainhash.DoubleHashH([]byte("root")).String()
+	http := &fakeDKVSHTTPClient{
+		getResp: map[string][]byte{},
+		postResp: map[string][]byte{
+			"testnet/v3/dkvs/sync": mustJSON(t, map[string]interface{}{
+				"code": 0, "msg": "ok", "data": map[string]interface{}{
+					"records": []*swire.DKVSRecord{record}, "done": true, "root": root,
+				},
+			}),
+			"testnet/v3/dkvs/watch": mustJSON(t, map[string]interface{}{
+				"code": 0, "msg": "ok", "data": map[string]interface{}{
+					"changed": false, "root": root,
+				},
+			}),
+		},
+		deleteResp: map[string][]byte{},
+	}
+	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
+	filter := dkvsindexer.Subscription{Type: dkvsindexer.SubscriptionKey, Target: key}
+	records, gotRoot, err := client.SyncFilteredAll(
+		[]dkvsindexer.Subscription{filter},
+		dkvsindexer.RecordVerificationOptions{Height: 1, Now: record.IssueTime},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || gotRoot != root ||
+		dkvsindexer.RecordHash(records[0]) != dkvsindexer.RecordHash(record) {
+		t.Fatalf("records=%#v root=%s", records, gotRoot)
+	}
+	watch, err := client.WatchFiltered(DKVSWatchRequest{
+		Filters: []dkvsindexer.Subscription{filter}, Root: root, TimeoutSeconds: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if watch.Changed || watch.Root != root {
+		t.Fatalf("watch=%#v", watch)
+	}
+}
+
 func TestSatsNetDKVSClientPutSignedRecordWithAutopay(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -593,18 +650,51 @@ func TestSatsNetDKVSClientBlob(t *testing.T) {
 		t.Fatalf("chunk query=%v", http.lastGet.Query)
 	}
 
-	putManifest, putChunks, err := client.PutBlob(dkvsTestWalletFromPriv(t, priv), "recovery-file", []byte("hello world"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	memory := newRGB11MemoryDKVSHTTP()
+	writeClient := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", memory)
+	putManifest, putChunks, err := writeClient.PutBlob(dkvsTestWalletFromPriv(t, priv), "recovery-file", []byte("hello world"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if putManifest.Key != "/blob/"+accountID+"/recovery-file/manifest" || len(putChunks) != 1 {
 		t.Fatalf("manifest=%s chunks=%d", putManifest.Key, len(putChunks))
 	}
-	if _, _, err := client.PutChunkedBlob(dkvsTestWalletFromPriv(t, priv), "object-2", [][]byte{[]byte("a"), []byte("b")}, nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}); err != nil {
+	if _, _, err := writeClient.PutChunkedBlob(dkvsTestWalletFromPriv(t, priv), "object-2", [][]byte{[]byte("a"), []byte("b")}, nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}
 	if _, content, err := client.GetChunkedBlob(accountID, "object", dkvsindexer.BlobPolicy{}); err != nil || string(content) != "hello world" {
 		t.Fatalf("get chunked content=%q err=%v", content, err)
+	}
+}
+
+func TestPutBlobFreeLocalRetriesSameObjectIdempotently(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	http := newRGB11MemoryDKVSHTTP()
+	http.validateBlobChunks = true
+	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", http)
+	testWallet := dkvsTestWalletFromPriv(t, priv)
+	firstOpts := dkvsindexer.RecordOptions{Seq: 1, IssueTime: 1_000, TTL: http.freeLocal.MaxTTL}
+	secondOpts := dkvsindexer.RecordOptions{Seq: 1, IssueTime: 2_000, TTL: http.freeLocal.MaxTTL}
+	data := bytes.Repeat([]byte{0x5a}, 20_000)
+
+	firstManifest, _, err := client.PutBlobFreeLocal(testWallet, "retry-object", data, nil, firstOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondManifest, secondChunks, err := client.PutBlobFreeLocal(testWallet, "retry-object", data, nil, secondOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondManifest.IssueTime == firstManifest.IssueTime {
+		t.Fatal("test did not generate a new candidate manifest issue time")
+	}
+	for index, record := range secondChunks {
+		if record.IssueTime != firstManifest.IssueTime {
+			t.Fatalf("chunk %d issue time=%d want active manifest %d", index, record.IssueTime, firstManifest.IssueTime)
+		}
 	}
 }
 

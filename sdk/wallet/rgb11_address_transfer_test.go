@@ -3,7 +3,6 @@ package wallet
 import (
 	"bytes"
 	"context"
-	"encoding/gob"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -279,8 +278,11 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 			continue
 		}
 		foundPending = true
-		var pending rgb11wallet.PendingTransfer
-		if err := gob.NewDecoder(bytes.NewReader(record.Value)).Decode(&pending); err != nil {
+		if err := sender.rgbManager.projectionStore.ImportSnapshot(snapshot); err != nil {
+			t.Fatal(err)
+		}
+		pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+		if err != nil {
 			t.Fatal(err)
 		}
 		if len(pending.RecipientConsignment) != 0 || len(pending.LocalConsignment) == 0 {

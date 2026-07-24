@@ -1,10 +1,12 @@
 package wallet
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	nethttp "net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -85,11 +87,137 @@ type dkvsPruneResp struct {
 	Pruned int `json:"pruned"`
 }
 
+type DKVSSyncPage struct {
+	Records    []*swire.DKVSRecord `json:"records,omitempty"`
+	NextCursor []byte              `json:"next_cursor,omitempty"`
+	Done       bool                `json:"done"`
+	Root       string              `json:"root"`
+}
+
+type dkvsSyncResp struct {
+	dkvsBaseResp
+	Data *DKVSSyncPage `json:"data,omitempty"`
+}
+
+type DKVSSyncRequest struct {
+	Cursor  []byte                     `json:"cursor,omitempty"`
+	Limit   uint32                     `json:"limit,omitempty"`
+	Filters []dkvsindexer.Subscription `json:"filters"`
+}
+
+type DKVSWatchResult struct {
+	Changed bool   `json:"changed"`
+	Root    string `json:"root"`
+}
+
+type dkvsWatchResp struct {
+	dkvsBaseResp
+	Data *DKVSWatchResult `json:"data,omitempty"`
+}
+
+type DKVSWatchRequest struct {
+	Filters        []dkvsindexer.Subscription `json:"filters"`
+	Root           string                     `json:"root"`
+	TimeoutSeconds int                        `json:"timeout_seconds,omitempty"`
+}
+
 func NewSatsNetDKVSClient(scheme, host, proxy string, http HttpClient) *SatsNetDKVSClient {
 	if http == nil {
 		http = &NetClient{Client: nethttp.DefaultClient}
 	}
 	return &SatsNetDKVSClient{RESTClient: NewRESTClient(scheme, host, proxy, http)}
+}
+
+func (p *SatsNetDKVSClient) SyncFiltered(req DKVSSyncRequest) (*DKVSSyncPage, error) {
+	if len(req.Filters) == 0 {
+		return nil, fmt.Errorf("at least one DKVS sync filter is required")
+	}
+	var resp dkvsSyncResp
+	if err := p.postJSON("/v3/dkvs/sync", req, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Data == nil {
+		return nil, fmt.Errorf("DKVS sync response is missing data")
+	}
+	return resp.Data, nil
+}
+
+func (p *SatsNetDKVSClient) WatchFiltered(req DKVSWatchRequest) (*DKVSWatchResult, error) {
+	if len(req.Filters) == 0 || strings.TrimSpace(req.Root) == "" {
+		return nil, fmt.Errorf("DKVS watch filters and root are required")
+	}
+	var resp dkvsWatchResp
+	if err := p.postJSON("/v3/dkvs/watch", req, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Data == nil {
+		return nil, fmt.Errorf("DKVS watch response is missing data")
+	}
+	return resp.Data, nil
+}
+
+func (p *SatsNetDKVSClient) SyncFilteredAll(filters []dkvsindexer.Subscription,
+	opts dkvsindexer.RecordVerificationOptions) ([]*swire.DKVSRecord, string, error) {
+
+	if len(filters) == 0 {
+		return nil, "", fmt.Errorf("at least one DKVS sync filter is required")
+	}
+	var cursor []byte
+	root := ""
+	recordsByKey := make(map[string]*swire.DKVSRecord)
+	for pageNumber := 0; pageNumber < 10000; pageNumber++ {
+		page, err := p.SyncFiltered(DKVSSyncRequest{
+			Cursor: cursor, Limit: swire.MaxDKVSRecordsPerMsg, Filters: filters,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		if root == "" {
+			root = page.Root
+		} else if root != page.Root {
+			cursor = nil
+			root = ""
+			recordsByKey = make(map[string]*swire.DKVSRecord)
+			continue
+		}
+		for _, record := range page.Records {
+			matched := false
+			for _, filter := range filters {
+				if dkvsindexer.SubscriptionMatchesKey(filter, record.Key) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil, "", dkvsindexer.ErrInvalidKey
+			}
+			if err := dkvsindexer.VerifyRecordForClient(record, opts); err != nil {
+				return nil, "", err
+			}
+			if existing := recordsByKey[record.Key]; existing != nil &&
+				dkvsindexer.RecordHash(existing) != dkvsindexer.RecordHash(record) {
+				return nil, "", fmt.Errorf("conflicting DKVS sync record %s", record.Key)
+			}
+			recordsByKey[record.Key] = record
+		}
+		if page.Done {
+			keys := make([]string, 0, len(recordsByKey))
+			for key := range recordsByKey {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			records := make([]*swire.DKVSRecord, 0, len(keys))
+			for _, key := range keys {
+				records = append(records, recordsByKey[key])
+			}
+			return records, root, nil
+		}
+		if len(page.NextCursor) == 0 || bytes.Equal(page.NextCursor, cursor) {
+			return nil, "", fmt.Errorf("invalid DKVS sync cursor")
+		}
+		cursor = append(cursor[:0], page.NextCursor...)
+	}
+	return nil, "", fmt.Errorf("DKVS sync exceeded page limit")
 }
 
 func (p *SatsNetDKVSClient) PutRecord(record *swire.DKVSRecord) (*swire.DKVSRecord, error) {
@@ -426,6 +554,20 @@ func (p *SatsNetDKVSClient) PutPersonalRecord(wallet common.Wallet, path string,
 	return p.PutSignedRecord(wallet, key, value, opts)
 }
 
+func (p *SatsNetDKVSClient) PutPersonalRecordFreeLocal(wallet common.Wallet, path string, value []byte,
+	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+
+	pubKey, err := dkvsWalletPubKey(wallet)
+	if err != nil {
+		return nil, dkvsindexer.ErrInvalidSignature
+	}
+	key, err := dkvsindexer.PersonalKey(pubKey, path)
+	if err != nil {
+		return nil, err
+	}
+	return p.PutSignedRecordFreeLocal(wallet, key, value, opts)
+}
+
 func (p *SatsNetDKVSClient) PutPersonalRecordWithAutopay(wallet common.Wallet, path string, value []byte,
 	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
 
@@ -526,6 +668,53 @@ func (p *SatsNetDKVSClient) PutBlobRecords(manifestRecord *swire.DKVSRecord, chu
 	return nil
 }
 
+func (p *SatsNetDKVSClient) putWalletBlobRecords(wallet common.Wallet, manifestRecord *swire.DKVSRecord,
+	chunkRecords []*swire.DKVSRecord) error {
+
+	if wallet == nil || manifestRecord == nil {
+		return dkvsindexer.ErrInvalidRecord
+	}
+	if _, err := p.PutRecord(manifestRecord); err != nil {
+		return err
+	}
+	active, err := p.GetRecord(manifestRecord.Key)
+	if err != nil {
+		return err
+	}
+	if active == nil || active.Key != manifestRecord.Key || active.Seq != manifestRecord.Seq ||
+		!bytes.Equal(active.PubKey, manifestRecord.PubKey) ||
+		!bytes.Equal(active.Value, manifestRecord.Value) {
+		return dkvsindexer.ErrBlobManifestInvalid
+	}
+	parsed, err := dkvsindexer.ParseKey(active.Key)
+	if err != nil {
+		return err
+	}
+	if err := dkvsindexer.VerifySignature(active); err != nil {
+		return err
+	}
+	if err := dkvsindexer.ValidateRecordIdentity(active, parsed); err != nil {
+		return err
+	}
+	for _, record := range chunkRecords {
+		if record == nil {
+			return dkvsindexer.ErrInvalidRecord
+		}
+		record.Seq = active.Seq
+		record.IssueTime = active.IssueTime
+		record.TTL = active.TTL
+		record.ExpiryHeight = active.ExpiryHeight
+		record.FeeProof = append(record.FeeProof[:0], active.FeeProof...)
+		if err := SignDKVSRecord(wallet, record); err != nil {
+			return err
+		}
+		if _, err := p.PutRecord(record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *SatsNetDKVSClient) PutBlob(wallet common.Wallet, objectID string, data []byte, metadata []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
 	if len(data) == 0 {
 		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
@@ -556,7 +745,53 @@ func (p *SatsNetDKVSClient) PutBlobWithAutopay(wallet common.Wallet, objectID st
 			return nil, nil, err
 		}
 	}
-	if err := p.PutBlobRecords(manifestRecord, chunkRecords); err != nil {
+	if err := p.putWalletBlobRecords(wallet, manifestRecord, chunkRecords); err != nil {
+		return nil, nil, err
+	}
+	return manifestRecord, chunkRecords, nil
+}
+
+func (p *SatsNetDKVSClient) PutBlobFreeLocal(wallet common.Wallet, objectID string, data []byte,
+	metadata []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
+
+	if len(data) == 0 {
+		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
+	}
+	policy, err := p.GetFreeLocalCachePolicy()
+	if err != nil {
+		return nil, nil, err
+	}
+	if policy == nil || !policy.Enabled {
+		return nil, nil, dkvsindexer.ErrFreeLocalDisabled
+	}
+	if opts.TTL == 0 || opts.TTL > policy.MaxTTL {
+		return nil, nil, dkvsindexer.ErrInvalidRecord
+	}
+	chunks := chunkBlobData(data, 0)
+	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(wallet, objectID, chunks, metadata, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	all := append([]*swire.DKVSRecord{manifestRecord}, chunkRecords...)
+	for _, record := range all {
+		parsed, parseErr := dkvsindexer.ParseKey(record.Key)
+		if parseErr != nil {
+			return nil, nil, parseErr
+		}
+		proof, proofErr := dkvsindexer.NewFreeLocalFeeProof(
+			record.Key, parsed.Namespace, uint32(dkvsindexer.RecordSize(record)), record.ExpiryHeight,
+		)
+		if proofErr != nil {
+			return nil, nil, proofErr
+		}
+		if attachErr := AttachDKVSFeeProof(record, proof); attachErr != nil {
+			return nil, nil, attachErr
+		}
+		if signErr := SignDKVSRecord(wallet, record); signErr != nil {
+			return nil, nil, signErr
+		}
+	}
+	if err := p.putWalletBlobRecords(wallet, manifestRecord, chunkRecords); err != nil {
 		return nil, nil, err
 	}
 	return manifestRecord, chunkRecords, nil
@@ -567,7 +802,7 @@ func (p *SatsNetDKVSClient) PutChunkedBlob(wallet common.Wallet, objectID string
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := p.PutBlobRecords(manifestRecord, chunkRecords); err != nil {
+	if err := p.putWalletBlobRecords(wallet, manifestRecord, chunkRecords); err != nil {
 		return nil, nil, err
 	}
 	return manifestRecord, chunkRecords, nil

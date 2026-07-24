@@ -10,6 +10,7 @@ import (
 
 	"github.com/btcsuite/btcd/wire"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
+	"github.com/sat20-labs/rgb11/schemas"
 )
 
 type nativeVectorEvidence struct {
@@ -61,14 +62,25 @@ func TestNativeValidatorProducesReceiptFromOfficialTransfer(t *testing.T) {
 		t.Fatalf("unexpected native receipt: %+v", receipt)
 	}
 	allocation := receipt.Allocations[0]
-	if allocation.AssetName.Ticker != "k0vsa6zj-CLYfnru-63unuJv-qZ2IVJ5-zlENzlF-MkiJNuw" ||
-		allocation.Amount.Precision != 8 || allocation.Amount.Value.String() != "100000" || allocation.Amount.String() != "0.001" ||
-		allocation.OperationID != "1e986e8714b4d3be6835797190a218be42831629d516cc26ebcf329e25716ad1" {
-		t.Fatalf("unexpected allocation: %+v", allocation)
-	}
 	container, err := coreconsignment.Decode(armored)
 	if err != nil {
 		t.Fatal(err)
+	}
+	schemaValue, _ := container.Value.Field("schema")
+	typeSystem, _ := container.Value.Field("types")
+	genesisValue, _ := container.Value.Field("genesis")
+	metadata, err := schemas.ExtractGenesisAssetMetadata(schemaValue, typeSystem, genesisValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedAssetName, err := NewCanonicalAssetName(receipt.ContractID, metadata.Ticker, "f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocation.AssetName != expectedAssetName ||
+		allocation.Amount.Precision != 8 || allocation.Amount.Value.String() != "100000" || allocation.Amount.String() != "0.001" ||
+		allocation.OperationID != "1e986e8714b4d3be6835797190a218be42831629d516cc26ebcf329e25716ad1" {
+		t.Fatalf("unexpected allocation: %+v", allocation)
 	}
 	binaryReceipt, err := ValidateWith(context.Background(), NewNativeConsensusValidator(), container.Armor.Data, evidence)
 	if err != nil {

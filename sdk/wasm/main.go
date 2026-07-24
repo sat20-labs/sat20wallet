@@ -76,22 +76,15 @@ var createJsRet = func(data any, code int, msg string) map[string]any {
 }
 
 func activateRGB11WalletState() map[string]any {
-	result, err := _mgr.ActivateRGB11WalletState(dkvsindexer.RecordVerificationOptions{
-		Now: uint64(time.Now().UnixMilli()),
+	_mgr.SetDKVSBackgroundSyncCallback(func() {
+		window := js.Global().Get("window")
+		customEvent := js.Global().Get("CustomEvent")
+		if window.Type() == js.TypeObject && customEvent.Type() == js.TypeFunction {
+			window.Call("dispatchEvent", customEvent.New("sat20:dkvs-synced"))
+		}
 	})
-	if err != nil {
-		wallet.Log.Errorf("automatic RGB11 wallet restore failed: %v", err)
-		return map[string]any{"found": false, "restored": false, "auto_backup": false, "error": err.Error()}
-	}
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		return map[string]any{"found": false, "restored": false, "auto_backup": false, "error": err.Error()}
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(encoded, &payload); err != nil {
-		return map[string]any{"found": false, "restored": false, "auto_backup": false, "error": err.Error()}
-	}
-	return payload
+	_mgr.RestartDKVSBackgroundSync()
+	return map[string]any{"pending": true}
 }
 
 func parseIndexerConfig(indexer js.Value) (*common.Indexer, error) {
@@ -3140,6 +3133,44 @@ func getAssetAmount_SatsNet(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func getAssetSummary(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 || p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "address parameter should be a string")
+	}
+	address := strings.TrimSpace(p[0].String())
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		summary, err := _mgr.GetAssetSummary(address)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		assets := make([]*indexer.DisplayAsset, 0, len(summary.Data))
+		for _, asset := range summary.Data {
+			if asset == nil {
+				continue
+			}
+			assets = append(assets, &indexer.DisplayAsset{
+				AssetName:  asset.Name,
+				Amount:     asset.Amount.String(),
+				Precision:  asset.Amount.Precision,
+				BindingSat: int(asset.BindingSat),
+			})
+		}
+		encoded, err := json.Marshal(assets)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		var payload []any
+		if err := json.Unmarshal(encoded, &payload); err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"assets": payload}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
 func contractTxResultForJS(result *wallet.ContractTxResult) map[string]any {
 	if result == nil {
 		return nil
@@ -4981,6 +5012,37 @@ func refreshRGB11State(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func syncLocalRGB11State(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result := _mgr.SyncLocalRGB11State(context.Background())
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"result": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func restartDKVSBackgroundSync(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	activateRGB11WalletState()
+	return createJsRet(map[string]any{"started": true}, 0, "ok")
+}
+
+func stopDKVSBackgroundSync(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	_mgr.StopDKVSBackgroundSync()
+	return createJsRet(map[string]any{"stopped": true}, 0, "ok")
+}
+
 type rgb11BackupRequest struct {
 	WalletID     string `json:"wallet_id"`
 	TTL          uint64 `json:"ttl"`
@@ -5165,6 +5227,7 @@ func main() {
 	obj.Set("getUtxosWithAssetV2_SatsNet", js.FuncOf(getUtxosWithAssetV2_SatsNet))
 	obj.Set("getAssetAmount", js.FuncOf(getAssetAmount))
 	obj.Set("getAssetAmount_SatsNet", js.FuncOf(getAssetAmount_SatsNet))
+	obj.Set("getAssetSummary", js.FuncOf(getAssetSummary))
 	obj.Set("getRGB11State", js.FuncOf(getRGB11State))
 	obj.Set("createRGB11Invoice", js.FuncOf(createRGB11Invoice))
 	obj.Set("acceptRGB11Consignment", js.FuncOf(acceptRGB11Consignment))
@@ -5182,8 +5245,17 @@ func main() {
 	obj.Set("broadcastRGB11Batch", js.FuncOf(broadcastRGB11Batch))
 	obj.Set("broadcastRGB11OutOfBand", js.FuncOf(broadcastRGB11OutOfBand))
 	obj.Set("refreshRGB11State", js.FuncOf(refreshRGB11State))
+	obj.Set("syncLocalRGB11State", js.FuncOf(syncLocalRGB11State))
+	obj.Set("restartDKVSBackgroundSync", js.FuncOf(restartDKVSBackgroundSync))
+	obj.Set("stopDKVSBackgroundSync", js.FuncOf(stopDKVSBackgroundSync))
 	obj.Set("backupRGB11WalletState", js.FuncOf(backupRGB11WalletState))
 	obj.Set("restoreRGB11WalletState", js.FuncOf(restoreRGB11WalletState))
+	obj.Set("enableRGB11AddressReceive", js.FuncOf(enableRGB11AddressReceive))
+	obj.Set("resolveRGB11AddressEndpoint", js.FuncOf(resolveRGB11AddressEndpoint))
+	obj.Set("prepareRGB11AddressTransfer", js.FuncOf(prepareRGB11AddressTransfer))
+	obj.Set("deliverAndBroadcastRGB11AddressTransfer", js.FuncOf(deliverAndBroadcastRGB11AddressTransfer))
+	obj.Set("syncRGB11AddressMailbox", js.FuncOf(syncRGB11AddressMailbox))
+	obj.Set("getRGB11AddressCarrierWarning", js.FuncOf(getRGB11AddressCarrierWarning))
 
 	obj.Set("queryContract", js.FuncOf(queryContract))
 	obj.Set("buildUnifiedContractContent", js.FuncOf(buildUnifiedContractContent))

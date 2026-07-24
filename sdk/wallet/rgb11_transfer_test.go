@@ -25,7 +25,6 @@ import (
 	"github.com/sat20-labs/satoshinet/btcec"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -116,7 +115,7 @@ func (e *rgb11FlowEvidence) Broadcast(raw []byte) (string, error) {
 	return tx.TxHash().String(), nil
 }
 
-func newRGB11FlowManager(t *testing.T, wallet common.Wallet, rpc *rgb11FlowIndexer,
+func newRGB11FlowManager(t *testing.T, wallet common.Wallet, rpc IndexerRPCClient,
 	evidence rgb11wallet.BitcoinEvidenceProvider, localWalletID int64) *Manager {
 	t.Helper()
 	database := indexerdb.NewKVDB(t.TempDir())
@@ -529,8 +528,12 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 			if issued.Projected != test.count || len(issued.OutPoints) != test.count || issued.ContractID == "" || issued.Armor == "" {
 				t.Fatalf("unexpected issuance result: %+v", issued)
 			}
-			if issued.AssetName.Ticker != strings.TrimPrefix(issued.ContractID, "rgb:") {
-				t.Fatalf("asset id was transformed: contract=%s ticker=%s", issued.ContractID, issued.AssetName.Ticker)
+			expectedName, err := rgb11wallet.NewCanonicalAssetName(issued.ContractID, test.request.Ticker, issued.AssetName.Type)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if issued.AssetName != expectedName {
+				t.Fatalf("canonical asset name=%s want=%s", issued.AssetName.String(), expectedName.String())
 			}
 			balance, err := manager.GetRGB11AssetBalance(&issued.AssetName)
 			if err != nil {
@@ -545,6 +548,11 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 			}
 			if len(state.Assets) == 0 || len(state.Outputs) != test.count {
 				t.Fatalf("unexpected RGB11 state after issuance: assets=%d outputs=%d", len(state.Assets), len(state.Outputs))
+			}
+			if len(state.TickerInfos) != 1 || state.TickerInfos[0].CanonicalName != issued.AssetName.String() ||
+				state.TickerInfos[0].ContractID != issued.ContractID || state.TickerInfos[0].Ticker != issued.AssetName.Ticker ||
+				state.TickerInfos[0].Verified {
+				t.Fatalf("unexpected RGB11 naming presentation: %+v", state.TickerInfos)
 			}
 			if _, err := json.Marshal(state); err != nil {
 				t.Fatalf("RGB11 state is not JSON serializable: %v", err)

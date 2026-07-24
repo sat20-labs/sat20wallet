@@ -1,9 +1,9 @@
 package rgb11wallet
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"math/big"
 	"sort"
@@ -11,9 +11,11 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/rgb11/consensus"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/seals"
+	strict "github.com/sat20-labs/rgb11/strict_encoding"
 )
 
 const NativeEngineBuildID = "rgb11-go-0.11.1-rc.11+sat20.1"
@@ -65,7 +67,7 @@ func (v NativeConsensusValidator) ValidateConsignment(ctx context.Context, raw [
 	if !descriptor.Fungible {
 		assetType = indexer.ASSET_TYPE_NFT
 	}
-	assetName, err := NewAssetName(container.ContractID, assetType)
+	assetName, err := NewCanonicalAssetName(container.ContractID, metadata.Ticker, assetType)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +116,10 @@ func (v NativeConsensusValidator) ValidateConsignment(ctx context.Context, raw [
 		}
 		return allocations[i].AssignmentIndex < allocations[j].AssignmentIndex
 	})
-	stateHash := hashAllocations(container.ContractID, container.SchemaID, allocations)
+	stateHash, err := hashAllocations(container.ContractID, container.SchemaID, allocations)
+	if err != nil {
+		return nil, err
+	}
 	consignmentHash := sha256.Sum256(raw)
 	return &ValidationReceipt{
 		Version: 1, EngineBuildID: NativeEngineBuildID,
@@ -198,37 +203,24 @@ func formatOutpoint(outpoint coreconsignment.Outpoint) string {
 	return formatTxID(outpoint.TxID) + ":" + strconv.FormatUint(uint64(outpoint.Vout), 10)
 }
 
-func hashAllocations(contractID, schemaID string, allocations []ValidatedAllocation) [32]byte {
-	h := sha256.New()
-	h.Write([]byte(contractID))
-	h.Write([]byte{0})
-	h.Write([]byte(schemaID))
-	for _, allocation := range allocations {
-		h.Write([]byte(allocation.OutPoint))
-		h.Write([]byte(allocation.AssetName.String()))
-		h.Write([]byte(allocation.OperationID))
-		var numbers [16]byte
-		binary.LittleEndian.PutUint32(numbers[:4], allocation.AssignmentType)
-		binary.LittleEndian.PutUint32(numbers[4:8], allocation.AssignmentIndex)
-		binary.LittleEndian.PutUint64(numbers[8:], allocation.SealBlinding)
-		h.Write(numbers[:])
-		h.Write([]byte(allocation.StateClass))
-		h.Write(allocation.StateData)
-		h.Write(allocation.SealDisclosure)
-		h.Write([]byte(allocation.CommitmentMethod))
-		h.Write(allocation.CarrierInternalKey)
-		h.Write(allocation.TapretRoot)
-		h.Write(allocation.TapretProof)
-		if allocation.WitnessTxPtr {
-			h.Write([]byte{1})
-		} else {
-			h.Write([]byte{0})
-		}
-		h.Write(allocation.Amount.Value.Bytes())
+func hashAllocations(contractID, schemaID string, allocations []ValidatedAllocation) ([32]byte, error) {
+	var buf bytes.Buffer
+	e := strict.NewEncoder(&buf)
+	if err := encodeText(e, contractID); err != nil {
+		return [32]byte{}, err
 	}
-	var result [32]byte
-	copy(result[:], h.Sum(nil))
-	return result
+	if err := encodeText(e, schemaID); err != nil {
+		return [32]byte{}, err
+	}
+	if err := e.Length(uint64(len(allocations)), rgb11StoreMaxRecords); err != nil {
+		return [32]byte{}, err
+	}
+	for index := range allocations {
+		if err := encodeValidatedAllocation(e, &allocations[index]); err != nil {
+			return [32]byte{}, err
+		}
+	}
+	return consensus.StrictValueHash(buf.Bytes()), nil
 }
 
 var _ ConsensusValidator = (*NativeConsensusValidator)(nil)

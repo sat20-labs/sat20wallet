@@ -33,20 +33,20 @@ func TestConfiguredRGB11AddressRetentionDefaults(t *testing.T) {
 	manager.rgbManager = &rgb11Manager{Manager: manager}
 	temporary := dkvsindexer.RecordOptions{}
 	var noAutopay *DKVSAutopayOptions
-	manager.rgbManager.configureRGB11AddressRetention(&temporary, &noAutopay)
+	manager.rgbManager.configureRGB11AddressRetention(nil, &temporary, &noAutopay)
 	if temporary.TTL != rgb11AddressTemporaryTTL || noAutopay != nil {
 		t.Fatalf("temporary retention=%+v autopay=%+v", temporary, noAutopay)
 	}
 
 	persistent := dkvsindexer.RecordOptions{TTL: 12345, ExpiryHeight: 999}
 	explicitAutopay := &DKVSAutopayOptions{}
-	manager.rgbManager.configureRGB11AddressRetention(&persistent, &explicitAutopay)
+	manager.rgbManager.configureRGB11AddressRetention(nil, &persistent, &explicitAutopay)
 	if persistent.TTL != 0 || persistent.ExpiryHeight != 0 || explicitAutopay == nil {
 		t.Fatalf("autopay retention=%+v autopay=%+v", persistent, explicitAutopay)
 	}
 
 	explicit := dkvsindexer.RecordOptions{TTL: 12345}
-	manager.rgbManager.configureRGB11AddressRetention(&explicit, &noAutopay)
+	manager.rgbManager.configureRGB11AddressRetention(nil, &explicit, &noAutopay)
 	if explicit.TTL != 12345 {
 		t.Fatalf("explicit TTL was changed: %+v", explicit)
 	}
