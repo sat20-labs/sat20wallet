@@ -19,12 +19,18 @@ func TestSatsNetDKVSClientGetConfig(t *testing.T) {
 			"code": 0,
 			"msg":  "ok",
 			"data": map[string]any{
-				"enabled":                true,
-				"max_ttl_ms":             60000,
-				"max_records_per_signer": 10,
-				"max_bytes_per_signer":   4096,
-				"max_total_records":      100,
-				"max_total_bytes":        65536,
+				"free_local": map[string]any{
+					"enabled":                true,
+					"max_ttl_ms":             60000,
+					"max_records_per_signer": 10,
+					"max_bytes_per_signer":   4096,
+					"max_total_records":      100,
+					"max_total_bytes":        65536,
+				},
+				"blob": map[string]any{
+					"max_value_size":                 1048576,
+					"max_free_local_keys_per_signer": 1,
+				},
 			},
 		}))
 	}))

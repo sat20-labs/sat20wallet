@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/satoshinet/btcec"
@@ -75,6 +74,8 @@ func NewDKVSAccountSignedRecord(wallet common.Wallet, key string, value []byte,
 
 func newDKVSAccountSignedRecordWithAutopay(wallet common.Wallet, key string, value []byte,
 	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+	opts.TTL = 0
+	opts.ExpiryHeight = 0
 	record, err := dkvsindexer.NewAccountRecord(key, value, opts)
 	if err != nil {
 		return nil, err
@@ -199,92 +200,4 @@ func (p *SatsNetDKVSClient) SendAccountMailboxMessage(wallet common.Wallet, mail
 		return p.PutAccountSignedRecordWithAutopay(wallet, key, value, opts, *autopay)
 	}
 	return p.PutAccountSignedRecord(wallet, key, value, opts)
-}
-
-func BuildDKVSAccountSignedBlobRecords(wallet common.Wallet, objectID string, chunks [][]byte,
-	metadata []byte, opts dkvsindexer.RecordOptions, autopay *DKVSAutopayOptions) (*swire.DKVSRecord,
-	[]*swire.DKVSRecord, error) {
-	if len(chunks) == 0 {
-		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
-	}
-	accountID, err := dkvsAccountID(wallet)
-	if err != nil {
-		return nil, nil, err
-	}
-	if opts.IssueTime == 0 {
-		opts.IssueTime = uint64(time.Now().UnixMilli())
-	}
-	_, manifestValue, err := dkvsindexer.BuildBlobManifest(chunks, metadata, opts.TTL, opts.ExpiryHeight)
-	if err != nil {
-		return nil, nil, err
-	}
-	manifestKey, err := dkvsindexer.BlobManifestKey(accountID, objectID)
-	if err != nil {
-		return nil, nil, err
-	}
-	build := func(key string, value []byte) (*swire.DKVSRecord, error) {
-		if autopay != nil {
-			return newDKVSAccountSignedRecordWithAutopay(wallet, key, value, opts, *autopay)
-		}
-		return NewDKVSAccountSignedRecord(wallet, key, value, opts)
-	}
-	manifestRecord, err := build(manifestKey, manifestValue)
-	if err != nil {
-		return nil, nil, err
-	}
-	chunkRecords := make([]*swire.DKVSRecord, 0, len(chunks))
-	for index, chunk := range chunks {
-		key, err := dkvsindexer.BlobChunkKey(accountID, objectID, uint32(index))
-		if err != nil {
-			return nil, nil, err
-		}
-		record, err := build(key, chunk)
-		if err != nil {
-			return nil, nil, err
-		}
-		chunkRecords = append(chunkRecords, record)
-	}
-	return manifestRecord, chunkRecords, nil
-}
-
-func (p *SatsNetDKVSClient) PutAccountBlob(wallet common.Wallet, objectID string, data []byte,
-	metadata []byte, opts dkvsindexer.RecordOptions, autopay *DKVSAutopayOptions) (*swire.DKVSRecord,
-	[]*swire.DKVSRecord, error) {
-	if len(data) == 0 {
-		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
-	}
-	chunks := chunkBlobData(data, 0)
-	manifest, records, err := BuildDKVSAccountSignedBlobRecords(wallet, objectID, chunks, metadata, opts, autopay)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := p.putWalletBlobRecords(wallet, manifest, records); err != nil {
-		return nil, nil, err
-	}
-	return manifest, records, nil
-}
-
-func (p *SatsNetDKVSClient) GetAccountBlob(accountID, objectID string, policy dkvsindexer.BlobPolicy,
-	opts dkvsindexer.RecordVerificationOptions) (*dkvsindexer.BlobManifest, []byte, error) {
-	manifestKey, err := dkvsindexer.BlobManifestKey(accountID, objectID)
-	if err != nil {
-		return nil, nil, err
-	}
-	manifestRecord, err := p.GetRecord(manifestKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	manifest, err := dkvsindexer.ParseBlobManifestValue(manifestRecord.Value, policy)
-	if err != nil {
-		return nil, nil, err
-	}
-	prefix := "/blob/" + accountID + "/" + objectID + "/chunk/"
-	chunks, total, err := p.ListRecords(prefix, 0, int(manifest.ChunkCount))
-	if err != nil {
-		return nil, nil, err
-	}
-	if total != int(manifest.ChunkCount) || len(chunks) != int(manifest.ChunkCount) {
-		return nil, nil, dkvsindexer.ErrBlobChunkInvalid
-	}
-	return dkvsindexer.AssembleAccountBlobFromRecords(manifestRecord, chunks, policy, opts)
 }

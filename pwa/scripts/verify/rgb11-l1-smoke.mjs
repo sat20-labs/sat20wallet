@@ -116,7 +116,6 @@ await requireContains('composables/hooks/useRgb11Assets.ts', [
   'canonical_name',
   'contract_id',
   'display_name',
-  'syncLocalRGB11State',
 ])
 await requireContains('composables/hooks/useL1Assets.ts', [
   'beforeSummaryFetch',

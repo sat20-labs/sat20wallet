@@ -1,9 +1,9 @@
 package wallet
 
-// AccountFreeLocalPolicy mirrors the public JSON returned by the connected
-// indexer's GET /v3/dkvs/config endpoint. Keeping this transport type in the
-// wallet SDK avoids coupling PWA account management to an indexer-internal Go
-// type while preserving the endpoint contract.
+import dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+
+// AccountFreeLocalPolicy is the wallet-facing projection of the connected
+// node's FREE_LOCAL section from GET /v3/dkvs/config.
 type AccountFreeLocalPolicy struct {
 	Enabled             bool   `json:"enabled"`
 	MaxTTL              uint64 `json:"max_ttl_ms"`
@@ -15,11 +15,10 @@ type AccountFreeLocalPolicy struct {
 
 type accountDKVSConfigResp struct {
 	dkvsBaseResp
-	Data *AccountFreeLocalPolicy `json:"data,omitempty"`
+	Data *dkvsindexer.ClientConfig `json:"data,omitempty"`
 }
 
-// GetConfig reads the cache policy of the node to which this wallet is
-// connected. It is node-local configuration, not a network-wide guarantee.
+// GetConfig reads the FREE_LOCAL cache policy of the connected node.
 func (p *SatsNetDKVSClient) GetConfig() (*AccountFreeLocalPolicy, error) {
 	var resp accountDKVSConfigResp
 	if err := p.getPathJSON("/v3/dkvs/config", &resp); err != nil {
@@ -28,5 +27,13 @@ func (p *SatsNetDKVSClient) GetConfig() (*AccountFreeLocalPolicy, error) {
 	if resp.Data == nil {
 		return nil, ErrDKVSRecordNotFound
 	}
-	return resp.Data, nil
+	policy := resp.Data.FreeLocal
+	return &AccountFreeLocalPolicy{
+		Enabled:             policy.Enabled,
+		MaxTTL:              policy.MaxTTL,
+		MaxRecordsPerSigner: policy.MaxRecordsPerSigner,
+		MaxBytesPerSigner:   policy.MaxBytesPerSigner,
+		MaxTotalRecords:     policy.MaxTotalRecords,
+		MaxTotalBytes:       policy.MaxTotalBytes,
+	}, nil
 }

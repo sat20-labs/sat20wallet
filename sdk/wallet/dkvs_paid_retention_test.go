@@ -20,18 +20,13 @@ func TestAttachAutopayFeeProofClearsRecordLease(t *testing.T) {
 	require.Equal(t, dkvsindexer.FeeModeAutopay, decoded.Mode)
 }
 
-func TestAttachAutopayFeeProofRewritesBlobManifestLease(t *testing.T) {
-	_, value, err := dkvsindexer.BuildBlobManifest([][]byte{[]byte("chunk")}, []byte("meta"), 60_000, 12345)
+func TestAttachAutopayFeeProofClearsBlobLease(t *testing.T) {
+	key, err := dkvsindexer.BlobKey(strings.Repeat("a", 64), "object")
 	require.NoError(t, err)
-	key, err := dkvsindexer.BlobManifestKey(strings.Repeat("a", 64), "object")
-	require.NoError(t, err)
-	record := &swire.DKVSRecord{Key: key, Value: value, TTL: 60_000, ExpiryHeight: 12345}
+	record := &swire.DKVSRecord{Key: key, Value: []byte("blob"), TTL: 60_000, ExpiryHeight: 12345}
 	proof := &dkvsindexer.FeeProof{Mode: dkvsindexer.FeeModeAutopay, PoolContract: "autopay"}
 	require.NoError(t, AttachDKVSFeeProof(record, proof))
-	manifest, err := dkvsindexer.ParseBlobManifestValue(record.Value, dkvsindexer.BlobPolicy{})
-	require.NoError(t, err)
-	require.Zero(t, manifest.TTL)
-	require.Zero(t, manifest.ExpiryHeight)
+	require.Equal(t, []byte("blob"), record.Value)
 	require.Zero(t, record.TTL)
 	require.Zero(t, record.ExpiryHeight)
 }

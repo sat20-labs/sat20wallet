@@ -466,36 +466,83 @@ func (p *rgb11Manager) DeliverRGB11AddressTransfer(client *SatsNetDKVSClient, tr
 	}
 	mode := rgb11AddressEnvelopeInline
 	objectID := ""
-	revisionKeys := []string{pending.State.DeliveryRecordKey}
+	mailKey, err := dkvsindexer.MailMsgKey(
+		pending.State.ReceiverAccountID, pending.State.SenderAccountID, messageID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	revisionKeys := []string{mailKey}
+	var blobKey string
 	if len(ciphertext)+2 > inlineLimit {
 		mode = rgb11AddressEnvelopeBlob
 		objectID = messageID
-		manifestKey, err := dkvsindexer.BlobManifestKey(pending.State.SenderAccountID, objectID)
+		blobKey, err = dkvsindexer.BlobKey(pending.State.SenderAccountID, objectID)
 		if err != nil {
 			return nil, err
 		}
-		revisionKeys = append(revisionKeys, manifestKey)
+		revisionKeys = append(revisionKeys, blobKey)
 	}
 	opts := nextRGB11AddressRecordOptions(client, revisionKeys, options.RecordOptions)
-	if mode == rgb11AddressEnvelopeBlob {
-		if _, _, err := client.PutAccountBlob(
-			p.wallet, objectID, ciphertext, nil, opts, options.Autopay,
-		); err != nil {
-			return nil, err
-		}
-	}
 	mailValue, err := rgb11wallet.EncodeAddressEnvelope(mode, ciphertext)
 	if err != nil {
 		return nil, err
 	}
 	if mode == rgb11AddressEnvelopeBlob {
-		mailValue, _ = rgb11wallet.EncodeAddressEnvelope(mode, nil)
+		mailValue, err = rgb11wallet.EncodeAddressEnvelope(mode, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
-	record, err := client.SendAccountMailboxMessage(
-		p.wallet, pending.State.ReceiverAccountID, messageID, mailValue, opts, options.Autopay,
-	)
+	var mailRecord *swire.DKVSRecord
+	if options.Autopay != nil {
+		mailRecord, err = newDKVSAccountSignedRecordWithAutopay(
+			p.wallet, mailKey, mailValue, opts, *options.Autopay,
+		)
+	} else {
+		mailRecord, err = newDKVSAccountSignedRecordWithFreeLocal(
+			p.wallet, mailKey, mailValue, opts,
+		)
+	}
 	if err != nil {
 		return nil, err
+	}
+	mailPrecondition, _, err := client.dkvsWritePrecondition(mailKey)
+	if err != nil {
+		return nil, err
+	}
+	record := mailRecord
+	if mode == rgb11AddressEnvelopeBlob {
+		var blobRecord *swire.DKVSRecord
+		if options.Autopay != nil {
+			blobRecord, err = BuildDKVSSignedBlobRecord(
+				p.wallet, objectID, ciphertext, nil, opts, *options.Autopay,
+			)
+		} else {
+			blobRecord, err = BuildDKVSSignedBlobRecordFreeLocal(
+				p.wallet, objectID, ciphertext, nil, opts,
+			)
+		}
+		if err != nil {
+			return nil, err
+		}
+		blobPrecondition, _, err := client.dkvsWritePrecondition(blobKey)
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.PutRecordBatchCAS([]dkvsindexer.CASMutation{
+			{Record: blobRecord, Precondition: blobPrecondition},
+			{Record: mailRecord, Precondition: mailPrecondition},
+		})
+		if err != nil {
+			return nil, err
+		}
+		record = result.Records[1]
+	} else {
+		record, err = client.PutRecordCAS(mailRecord, mailPrecondition)
+		if err != nil {
+			return nil, err
+		}
 	}
 	recordHash := dkvsindexer.RecordHash(record)
 	modeName := "inline"
@@ -606,10 +653,11 @@ func (p *rgb11Manager) readRGB11AddressConsignment(client *SatsNetDKVSClient, re
 	modeName := "inline"
 	if mode == rgb11AddressEnvelopeBlob {
 		modeName = "blob"
-		_, encrypted, err = client.GetAccountBlob(senderID, messageID, dkvsindexer.DefaultBlobPolicy(), verify)
-		if err != nil {
-			return nil, "", fmt.Errorf("%w: %v", ErrRGB11AddressMailbox, err)
+		_, blob, blobErr := client.GetBlob(senderID, messageID, verify)
+		if blobErr != nil || blob == nil {
+			return nil, "", fmt.Errorf("%w: %v", ErrRGB11AddressMailbox, blobErr)
 		}
+		encrypted = blob.Data
 	}
 	cryptor, ok := p.wallet.(rgb11AccountPayloadCryptor)
 	if !ok {
@@ -1155,23 +1203,76 @@ func (p *rgb11Manager) BackupRGB11WalletState(client *SatsNetDKVSClient, walletI
 	if err != nil {
 		return nil, nil, err
 	}
-	keepOperationIDs := [][32]byte{operationID}
-	if previous != nil {
-		keepOperationIDs = append(keepOperationIDs, previous.OperationID)
-	}
-	if err := client.pruneRGB11WalletSnapshots(p.wallet, walletID, previous, keepOperationIDs...); err != nil {
+	headKey, err := dkvsindexer.PersonalKey(pubkey, RGB11WalletHeadPath(walletID))
+	if err != nil {
 		return nil, nil, err
 	}
-	paid, _ := p.hasActiveRGB11Autopay()
-	var record *swire.DKVSRecord
+	headPrecondition, activeHeadRecord, err := client.dkvsWritePrecondition(headKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	if previous == nil {
+		if activeHeadRecord != nil {
+			return nil, nil, coresync.ErrHeadConflict
+		}
+	} else {
+		if activeHeadRecord == nil {
+			return nil, nil, coresync.ErrHeadConflict
+		}
+		activeHead, decodeErr := rgb11wallet.DecodeWalletHead(activeHeadRecord.Value)
+		if decodeErr != nil || activeHeadRecord.Seq != activeHead.Seq || *activeHead != *previous {
+			return nil, nil, coresync.ErrHeadConflict
+		}
+	}
+
+	accountID := dkvsindexer.AccountID(pubkey)
+	snapshotName := RGB11WalletSnapshotBlobKey(walletID)
+	snapshotKey, err := dkvsindexer.BlobKey(accountID, snapshotName)
+	if err != nil {
+		return nil, nil, err
+	}
+	snapshotPrecondition, activeSnapshotRecord, err := client.dkvsWritePrecondition(snapshotKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	if previous == nil {
+		if activeSnapshotRecord != nil {
+			return nil, nil, coresync.ErrHeadConflict
+		}
+	} else {
+		if activeSnapshotRecord == nil {
+			return nil, nil, coresync.ErrHeadConflict
+		}
+		if verifyErr := dkvsindexer.VerifyBlobRecordForClient(activeSnapshotRecord,
+			dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}); verifyErr != nil {
+			return nil, nil, verifyErr
+		}
+		activeBlob, decodeErr := DecodeDKVSBlobValue(activeSnapshotRecord.Value)
+		if decodeErr != nil {
+			return nil, nil, decodeErr
+		}
+		activeWalletID, activeOperationID, _, decodeErr := rgb11wallet.DecodeEncryptedSnapshot(activeBlob.Data)
+		if decodeErr != nil || activeWalletID != walletID || activeOperationID != previous.OperationID {
+			return nil, nil, coresync.ErrHeadConflict
+		}
+	}
+
+	paid, err := p.hasActiveRGB11Autopay()
+	if err != nil {
+		return nil, nil, err
+	}
+	opts.Seq = head.Seq
+	var snapshotRecord, headRecord *swire.DKVSRecord
 	if paid {
 		autopay := DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet()}
 		opts.TTL = 0
 		opts.ExpiryHeight = 0
-		if _, err := client.PutRGB11WalletSnapshotWithAutopay(p.wallet, walletID, operationID, envelope, opts, autopay); err != nil {
-			return nil, nil, err
+		snapshotRecord, err = BuildDKVSSignedBlobRecord(
+			p.wallet, snapshotName, envelope, nil, opts, autopay,
+		)
+		if err == nil {
+			headRecord, err = buildRGB11WalletHeadRecord(p.wallet, head, opts, &autopay, false)
 		}
-		record, err = client.PutRGB11WalletHeadWithAutopay(p.wallet, head, opts, autopay)
 		p.setRGB11BackupRetention("autopay", 0)
 	} else {
 		policy, policyErr := client.GetFreeLocalCachePolicy()
@@ -1185,25 +1286,31 @@ func (p *rgb11Manager) BackupRGB11WalletState(client *SatsNetDKVSClient, walletI
 			opts.TTL = policy.MaxTTL
 		}
 		opts.ExpiryHeight = 0
-		if _, err := client.PutRGB11WalletSnapshotFreeLocal(p.wallet, walletID, operationID, envelope, opts); err != nil {
-			return nil, nil, err
+		snapshotRecord, err = BuildDKVSSignedBlobRecordFreeLocal(
+			p.wallet, snapshotName, envelope, nil, opts,
+		)
+		if err == nil {
+			headRecord, err = buildRGB11WalletHeadRecord(p.wallet, head, opts, nil, true)
 		}
-		record, err = client.PutRGB11WalletHeadFreeLocal(p.wallet, head, opts)
 		p.setRGB11BackupRetention("temporary", opts.TTL)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
+	result, err := client.PutRecordBatchCAS([]dkvsindexer.CASMutation{
+		{Record: snapshotRecord, Precondition: snapshotPrecondition},
+		{Record: headRecord, Precondition: headPrecondition},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	record := result.Records[1]
 	if err := p.persistRGB11WalletHead(head); err != nil {
 		p.rgbManager.dkvsStatus = "warning"
 		return nil, nil, err
 	}
 	p.rgbManager.head = head
-	if err := client.pruneRGB11WalletSnapshots(p.wallet, walletID, head, operationID); err != nil {
-		p.rgbManager.dkvsStatus = "warning"
-	} else {
-		p.rgbManager.dkvsStatus = "synced"
-	}
+	p.rgbManager.dkvsStatus = "synced"
 	return head, record, nil
 }
 
@@ -1745,6 +1852,10 @@ func RGB11WalletHeadPath(walletID string) string {
 	return "rgb11/" + dkvsindexer.NormalizeNameID(walletID) + "/head"
 }
 
+func RGB11WalletSnapshotBlobKey(walletID string) string {
+	return dkvsindexer.NormalizeNameID("rgb11-wallet-snapshot:" + walletID)
+}
+
 func (p *SatsNetDKVSClient) PutRGB11WalletHead(wallet common.Wallet, head *coresync.WalletHead, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
 	return p.putRGB11WalletHead(wallet, head, opts, nil, false)
 }
@@ -1759,13 +1870,21 @@ func (p *SatsNetDKVSClient) PutRGB11WalletHeadFreeLocal(wallet common.Wallet, he
 	return p.putRGB11WalletHead(wallet, head, opts, nil, true)
 }
 
-func (p *SatsNetDKVSClient) putRGB11WalletHead(wallet common.Wallet, head *coresync.WalletHead,
-	opts dkvsindexer.RecordOptions, autopay *DKVSAutopayOptions, freeLocal bool) (*swire.DKVSRecord, error) {
+func buildRGB11WalletHeadRecord(wallet common.Wallet, head *coresync.WalletHead,
+	opts dkvsindexer.RecordOptions, autopay *DKVSAutopayOptions,
+	freeLocal bool) (*swire.DKVSRecord, error) {
+	if wallet == nil || head == nil {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	if err := VerifyRGB11WalletHead(head, head.WalletID); err != nil {
+		return nil, err
+	}
 	pubKey, err := dkvsWalletPubKey(wallet)
 	if err != nil {
 		return nil, err
 	}
-	if err := VerifyRGB11WalletHead(head, head.WalletID); err != nil {
+	key, err := dkvsindexer.PersonalKey(pubKey, RGB11WalletHeadPath(head.WalletID))
+	if err != nil {
 		return nil, err
 	}
 	value, err := head.StrictEncode()
@@ -1773,14 +1892,27 @@ func (p *SatsNetDKVSClient) putRGB11WalletHead(wallet common.Wallet, head *cores
 		return nil, err
 	}
 	opts.Seq = head.Seq
-	var posted *swire.DKVSRecord
-	if freeLocal {
-		posted, err = p.PutPersonalRecordFreeLocal(wallet, RGB11WalletHeadPath(head.WalletID), value, opts)
-	} else if autopay == nil {
-		posted, err = p.PutPersonalRecord(wallet, RGB11WalletHeadPath(head.WalletID), value, opts)
-	} else {
-		posted, err = p.PutPersonalRecordWithAutopay(wallet, RGB11WalletHeadPath(head.WalletID), value, opts, *autopay)
+	switch {
+	case freeLocal:
+		return newDKVSAccountSignedRecordWithFreeLocal(wallet, key, value, opts)
+	case autopay != nil:
+		return newDKVSAccountSignedRecordWithAutopay(wallet, key, value, opts, *autopay)
+	default:
+		return NewDKVSAccountSignedRecord(wallet, key, value, opts)
 	}
+}
+
+func (p *SatsNetDKVSClient) putRGB11WalletHead(wallet common.Wallet, head *coresync.WalletHead,
+	opts dkvsindexer.RecordOptions, autopay *DKVSAutopayOptions, freeLocal bool) (*swire.DKVSRecord, error) {
+	pubKey, err := dkvsWalletPubKey(wallet)
+	if err != nil {
+		return nil, err
+	}
+	posted, err := buildRGB11WalletHeadRecord(wallet, head, opts, autopay, freeLocal)
+	if err != nil {
+		return nil, err
+	}
+	posted, err = p.PutRecord(posted)
 	if err != nil {
 		return nil, err
 	}
@@ -1868,44 +2000,65 @@ func (p *SatsNetDKVSClient) PutRGB11WalletSnapshotFreeLocal(wallet common.Wallet
 func (p *SatsNetDKVSClient) putRGB11WalletSnapshot(wallet common.Wallet, walletID string,
 	operationID [32]byte, value []byte, opts dkvsindexer.RecordOptions,
 	autopay *DKVSAutopayOptions, freeLocal bool) (*swire.DKVSRecord, error) {
-	if len(value) == 0 {
+	if len(value) == 0 || walletID == "" {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	opts.Seq = 1
-	var manifest *swire.DKVSRecord
-	var err error
-	metadata := rgb11WalletSnapshotMetadata(walletID)
-	if freeLocal {
-		manifest, _, err = p.PutBlobFreeLocal(wallet, hex.EncodeToString(operationID[:]), value, metadata, opts)
-	} else if autopay == nil {
-		manifest, _, err = p.PutBlob(wallet, hex.EncodeToString(operationID[:]), value, metadata, opts)
-	} else {
-		manifest, _, err = p.PutBlobWithAutopay(wallet, hex.EncodeToString(operationID[:]), value, metadata, opts, *autopay)
+	decodedWalletID, decodedOperationID, _, err := rgb11wallet.DecodeEncryptedSnapshot(value)
+	if err != nil || decodedWalletID != walletID || decodedOperationID != operationID {
+		return nil, ErrRGB11Inconsistent
 	}
-	return manifest, err
+	accountID, err := dkvsAccountID(wallet)
+	if err != nil {
+		return nil, err
+	}
+	blobName := RGB11WalletSnapshotBlobKey(walletID)
+	key, err := dkvsindexer.BlobKey(accountID, blobName)
+	if err != nil {
+		return nil, err
+	}
+	precondition, existing, err := p.dkvsWritePrecondition(key)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Seq == 0 {
+		opts.Seq = 1
+		if existing != nil {
+			opts.Seq = existing.Seq + 1
+		}
+	}
+	var record *swire.DKVSRecord
+	switch {
+	case freeLocal:
+		record, err = BuildDKVSSignedBlobRecordFreeLocal(wallet, blobName, value, nil, opts)
+	case autopay != nil:
+		record, err = BuildDKVSSignedBlobRecord(wallet, blobName, value, nil, opts, *autopay)
+	default:
+		record, err = buildDKVSBlobRecord(wallet, blobName, value, nil, opts)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return p.PutRecordCAS(record, precondition)
 }
 
 func (p *SatsNetDKVSClient) GetRGB11WalletSnapshot(walletPubKey []byte, walletID string,
 	operationID [32]byte, verifyOpts dkvsindexer.RecordVerificationOptions) ([]byte, *swire.DKVSRecord, error) {
 	accountID := dkvsindexer.AccountID(walletPubKey)
-	objectID := hex.EncodeToString(operationID[:])
-	key, err := dkvsindexer.BlobManifestKey(accountID, objectID)
-	if err != nil {
-		return nil, nil, err
+	if accountID == "" {
+		return nil, nil, dkvsindexer.ErrInvalidSignature
 	}
-	verifyOpts.ExpectedKey = key
-	record, err := p.GetVerifiedRecord(key, verifyOpts)
+	record, blob, err := p.GetBlob(accountID, RGB11WalletSnapshotBlobKey(walletID), verifyOpts)
 	if err != nil {
 		return nil, nil, err
 	}
 	if err := verifyRGB11DKVSAccountOwner(record, walletPubKey); err != nil {
 		return nil, nil, err
 	}
-	_, value, err := p.GetBlob(accountID, objectID, dkvsindexer.BlobPolicy{})
-	if err != nil {
-		return nil, nil, err
+	envelopeWalletID, envelopeOperationID, _, err := rgb11wallet.DecodeEncryptedSnapshot(blob.Data)
+	if err != nil || envelopeWalletID != walletID || envelopeOperationID != operationID {
+		return nil, nil, ErrRGB11Inconsistent
 	}
-	return value, record, nil
+	return blob.Data, record, nil
 }
 
 // BuildRGB11RelayRecord builds the signed temporary locator. Consignment
@@ -2539,146 +2692,4 @@ func (p *SatsNetDKVSClient) SubscribeRGB11Transfer(relayKey, ackKey string) ([]*
 		return nil, err
 	}
 	return append(relayRecords, ackRecords...), nil
-}
-
-const (
-	rgb11WalletSnapshotMetadataPrefix = "SAT20-RGB11-WALLET-SNAPSHOT-V1\x00"
-	rgb11SnapshotGCPageSize           = 1000
-)
-
-func rgb11WalletSnapshotMetadata(walletID string) []byte {
-	return []byte(rgb11WalletSnapshotMetadataPrefix + walletID)
-}
-
-// pruneRGB11WalletSnapshots removes superseded immutable snapshot blobs only
-// while the expected wallet head remains active. Tombstones are fee-free and
-// signed by the same wallet.
-func (p *SatsNetDKVSClient) requireRGB11WalletHead(wallet common.Wallet, walletID string,
-	expected *coresync.WalletHead) error {
-
-	pubKey, err := dkvsWalletPubKey(wallet)
-	if err != nil {
-		return err
-	}
-	active, _, err := p.GetRGB11WalletHead(pubKey, walletID, dkvsindexer.RecordVerificationOptions{
-		Now: uint64(time.Now().UnixMilli()),
-	})
-	if expected == nil {
-		if errors.Is(err, ErrDKVSRecordNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		return coresync.ErrHeadConflict
-	}
-	if err != nil {
-		if errors.Is(err, ErrDKVSRecordNotFound) {
-			return coresync.ErrHeadConflict
-		}
-		return err
-	}
-	if active == nil {
-		return coresync.ErrHeadConflict
-	}
-	if *active != *expected {
-		return coresync.ErrHeadConflict
-	}
-	return nil
-}
-
-func (p *SatsNetDKVSClient) pruneRGB11WalletSnapshots(wallet common.Wallet, walletID string,
-	expected *coresync.WalletHead, keepOperationIDs ...[32]byte) error {
-
-	if p == nil || wallet == nil || walletID == "" {
-		return dkvsindexer.ErrInvalidRecord
-	}
-	if err := p.requireRGB11WalletHead(wallet, walletID, expected); err != nil {
-		return err
-	}
-	pubKey, err := dkvsWalletPubKey(wallet)
-	if err != nil {
-		return err
-	}
-	accountID := dkvsindexer.AccountID(pubKey)
-	if accountID == "" {
-		return dkvsindexer.ErrInvalidSignature
-	}
-	prefix := "/blob/" + accountID
-	records := make([]*swire.DKVSRecord, 0)
-	for start := 0; ; {
-		page, total, err := p.ListRecords(prefix, start, rgb11SnapshotGCPageSize)
-		if err != nil {
-			return err
-		}
-		records = append(records, page...)
-		start += len(page)
-		if len(page) == 0 || start >= total {
-			break
-		}
-	}
-
-	marker := rgb11WalletSnapshotMetadata(walletID)
-	keepObjects := make(map[string]struct{}, len(keepOperationIDs))
-	for _, operationID := range keepOperationIDs {
-		keepObjects[hex.EncodeToString(operationID[:])] = struct{}{}
-	}
-	removeObjects := make(map[string]struct{})
-	for _, record := range records {
-		if record == nil {
-			continue
-		}
-		parsed, err := dkvsindexer.ParseKey(record.Key)
-		if err != nil || parsed.Namespace != "blob" || len(parsed.Segments) != 3 ||
-			parsed.Segments[0] != accountID || parsed.Segments[2] != "manifest" {
-			continue
-		}
-		manifest, err := dkvsindexer.ParseBlobManifestValue(record.Value, dkvsindexer.DefaultBlobPolicy())
-		if err != nil || !bytes.Equal(manifest.Metadata, marker) {
-			continue
-		}
-		if _, keep := keepObjects[parsed.Segments[1]]; keep {
-			continue
-		}
-		removeObjects[parsed.Segments[1]] = struct{}{}
-	}
-	if len(removeObjects) == 0 {
-		return nil
-	}
-	if err := p.requireRGB11WalletHead(wallet, walletID, expected); err != nil {
-		return err
-	}
-
-	remove := make([]*swire.DKVSRecord, 0)
-	for _, record := range records {
-		if record == nil {
-			continue
-		}
-		parsed, err := dkvsindexer.ParseKey(record.Key)
-		if err != nil || parsed.Namespace != "blob" || len(parsed.Segments) < 3 || parsed.Segments[0] != accountID {
-			continue
-		}
-		if _, ok := removeObjects[parsed.Segments[1]]; ok {
-			remove = append(remove, record)
-		}
-	}
-	// Delete chunks first and manifests last. This avoids leaving a live
-	// manifest that advertises already-deleted chunks during partial cleanup.
-	sort.Slice(remove, func(a, b int) bool {
-		parsedA, _ := dkvsindexer.ParseKey(remove[a].Key)
-		parsedB, _ := dkvsindexer.ParseKey(remove[b].Key)
-		manifestA := len(parsedA.Segments) == 3 && parsedA.Segments[2] == "manifest"
-		manifestB := len(parsedB.Segments) == 3 && parsedB.Segments[2] == "manifest"
-		if manifestA != manifestB {
-			return !manifestA
-		}
-		return remove[a].Key < remove[b].Key
-	})
-	for _, record := range remove {
-		_, err := p.TombstoneSigned(wallet, record.Key, dkvsindexer.RecordOptions{Seq: record.Seq + 1})
-		if err != nil && !errors.Is(err, ErrDKVSRecordNotFound) {
-			return err
-		}
-	}
-	return nil
 }

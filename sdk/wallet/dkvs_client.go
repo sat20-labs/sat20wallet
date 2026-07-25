@@ -46,6 +46,7 @@ type dkvsBaseResp struct {
 type dkvsRecordResp struct {
 	dkvsBaseResp
 	Data *swire.DKVSRecord `json:"data,omitempty"`
+	Hash string            `json:"hash,omitempty"`
 }
 
 type dkvsRecordsResp struct {
@@ -67,7 +68,7 @@ type dkvsUsageResp struct {
 
 type dkvsConfigResp struct {
 	dkvsBaseResp
-	Data *dkvsindexer.FreeLocalCachePolicy `json:"data,omitempty"`
+	Data *dkvsindexer.ClientConfig `json:"data,omitempty"`
 }
 
 type dkvsSubscriptionResp struct {
@@ -220,12 +221,29 @@ func (p *SatsNetDKVSClient) SyncFilteredAll(filters []dkvsindexer.Subscription,
 	return nil, "", fmt.Errorf("DKVS sync exceeded page limit")
 }
 
+func verifyDKVSWriteEcho(request, echoed *swire.DKVSRecord, hashText string) (*swire.DKVSRecord, error) {
+	if request == nil || echoed == nil {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	want := dkvsindexer.RecordHash(request)
+	if dkvsindexer.RecordHash(echoed) != want {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	if strings.TrimSpace(hashText) != "" {
+		got, err := chainhash.NewHashFromStr(strings.TrimSpace(hashText))
+		if err != nil || *got != want {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
+	}
+	return echoed, nil
+}
+
 func (p *SatsNetDKVSClient) PutRecord(record *swire.DKVSRecord) (*swire.DKVSRecord, error) {
 	var resp dkvsRecordResp
 	if err := p.postJSON("/v3/dkvs/records", record, &resp); err != nil {
 		return nil, err
 	}
-	return resp.Data, nil
+	return verifyDKVSWriteEcho(record, resp.Data, resp.Hash)
 }
 
 func (p *SatsNetDKVSClient) Tombstone(record *swire.DKVSRecord) (*swire.DKVSRecord, error) {
@@ -233,7 +251,7 @@ func (p *SatsNetDKVSClient) Tombstone(record *swire.DKVSRecord) (*swire.DKVSReco
 	if err := p.postJSON("/v3/dkvs/tombstone", record, &resp); err != nil {
 		return nil, err
 	}
-	return resp.Data, nil
+	return verifyDKVSWriteEcho(record, resp.Data, resp.Hash)
 }
 
 func (p *SatsNetDKVSClient) GetRecord(key string) (*swire.DKVSRecord, error) {
@@ -318,14 +336,28 @@ func (p *SatsNetDKVSClient) GetUsage(prefix string) (*dkvsindexer.Usage, error) 
 	return resp.Data, nil
 }
 
-// GetFreeLocalCachePolicy returns the policy of the node this wallet is
-// connected to. It is node-local capacity information, not a network rule.
-func (p *SatsNetDKVSClient) GetFreeLocalCachePolicy() (*dkvsindexer.FreeLocalCachePolicy, error) {
+// GetDKVSClientConfig returns the write and cache policy of the connected
+// node. Applications must treat it as node-local policy, not network consensus.
+func (p *SatsNetDKVSClient) GetDKVSClientConfig() (*dkvsindexer.ClientConfig, error) {
 	var resp dkvsConfigResp
 	if err := p.getPathJSON("/v3/dkvs/config", &resp); err != nil {
 		return nil, err
 	}
+	if resp.Data == nil {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
 	return resp.Data, nil
+}
+
+// GetFreeLocalCachePolicy is retained as a convenience wrapper for callers
+// that only need the FREE_LOCAL portion of the node policy.
+func (p *SatsNetDKVSClient) GetFreeLocalCachePolicy() (*dkvsindexer.FreeLocalCachePolicy, error) {
+	config, err := p.GetDKVSClientConfig()
+	if err != nil {
+		return nil, err
+	}
+	policy := config.FreeLocal
+	return &policy, nil
 }
 
 func (p *SatsNetDKVSClient) GetCheckpoint() (*dkvsindexer.Checkpoint, error) {
@@ -414,6 +446,8 @@ func (p *SatsNetDKVSClient) ListSubscriptions() ([]dkvsindexer.Subscription, err
 
 func newSignedRecordWithAutopay(wallet common.Wallet, key string, value []byte,
 	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+	opts.TTL = 0
+	opts.ExpiryHeight = 0
 	record, err := NewDKVSSignedRecord(wallet, key, value, opts)
 	if err != nil {
 		return nil, err
@@ -654,195 +688,6 @@ func (p *SatsNetDKVSClient) UnsubscribePrefix(prefix string) ([]dkvsindexer.Subs
 		return nil, err
 	}
 	return p.Unsubscribe(dkvsindexer.Subscription{Type: dkvsindexer.SubscriptionPrefix, Target: prefix})
-}
-
-func (p *SatsNetDKVSClient) PutBlobRecords(manifestRecord *swire.DKVSRecord, chunkRecords []*swire.DKVSRecord) error {
-	if _, err := p.PutRecord(manifestRecord); err != nil {
-		return err
-	}
-	for _, record := range chunkRecords {
-		if _, err := p.PutRecord(record); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (p *SatsNetDKVSClient) putWalletBlobRecords(wallet common.Wallet, manifestRecord *swire.DKVSRecord,
-	chunkRecords []*swire.DKVSRecord) error {
-
-	if wallet == nil || manifestRecord == nil {
-		return dkvsindexer.ErrInvalidRecord
-	}
-	if _, err := p.PutRecord(manifestRecord); err != nil {
-		return err
-	}
-	active, err := p.GetRecord(manifestRecord.Key)
-	if err != nil {
-		return err
-	}
-	if active == nil || active.Key != manifestRecord.Key || active.Seq != manifestRecord.Seq ||
-		!bytes.Equal(active.PubKey, manifestRecord.PubKey) ||
-		!bytes.Equal(active.Value, manifestRecord.Value) {
-		return dkvsindexer.ErrBlobManifestInvalid
-	}
-	parsed, err := dkvsindexer.ParseKey(active.Key)
-	if err != nil {
-		return err
-	}
-	if err := dkvsindexer.VerifySignature(active); err != nil {
-		return err
-	}
-	if err := dkvsindexer.ValidateRecordIdentity(active, parsed); err != nil {
-		return err
-	}
-	for _, record := range chunkRecords {
-		if record == nil {
-			return dkvsindexer.ErrInvalidRecord
-		}
-		record.Seq = active.Seq
-		record.IssueTime = active.IssueTime
-		record.TTL = active.TTL
-		record.ExpiryHeight = active.ExpiryHeight
-		record.FeeProof = append(record.FeeProof[:0], active.FeeProof...)
-		if err := SignDKVSRecord(wallet, record); err != nil {
-			return err
-		}
-		if _, err := p.PutRecord(record); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (p *SatsNetDKVSClient) PutBlob(wallet common.Wallet, objectID string, data []byte, metadata []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
-	if len(data) == 0 {
-		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
-	}
-	chunks := chunkBlobData(data, 0)
-	manifestRecord, chunkRecords, err := p.PutChunkedBlob(wallet, objectID, chunks, metadata, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	return manifestRecord, chunkRecords, nil
-}
-
-// PutBlobWithAutopay attaches a fee proof to the manifest and every chunk,
-// then re-signs each record with the owning wallet before publication.
-func (p *SatsNetDKVSClient) PutBlobWithAutopay(wallet common.Wallet, objectID string, data []byte,
-	metadata []byte, opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
-	if len(data) == 0 {
-		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
-	}
-	chunks := chunkBlobData(data, 0)
-	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(wallet, objectID, chunks, metadata, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	all := append([]*swire.DKVSRecord{manifestRecord}, chunkRecords...)
-	for _, record := range all {
-		if err := attachDKVSAutopayFeeProof(wallet, record, autopay); err != nil {
-			return nil, nil, err
-		}
-	}
-	if err := p.putWalletBlobRecords(wallet, manifestRecord, chunkRecords); err != nil {
-		return nil, nil, err
-	}
-	return manifestRecord, chunkRecords, nil
-}
-
-func (p *SatsNetDKVSClient) PutBlobFreeLocal(wallet common.Wallet, objectID string, data []byte,
-	metadata []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
-
-	if len(data) == 0 {
-		return nil, nil, dkvsindexer.ErrBlobManifestInvalid
-	}
-	policy, err := p.GetFreeLocalCachePolicy()
-	if err != nil {
-		return nil, nil, err
-	}
-	if policy == nil || !policy.Enabled {
-		return nil, nil, dkvsindexer.ErrFreeLocalDisabled
-	}
-	if opts.TTL == 0 || opts.TTL > policy.MaxTTL {
-		return nil, nil, dkvsindexer.ErrInvalidRecord
-	}
-	chunks := chunkBlobData(data, 0)
-	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(wallet, objectID, chunks, metadata, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	all := append([]*swire.DKVSRecord{manifestRecord}, chunkRecords...)
-	for _, record := range all {
-		parsed, parseErr := dkvsindexer.ParseKey(record.Key)
-		if parseErr != nil {
-			return nil, nil, parseErr
-		}
-		proof, proofErr := dkvsindexer.NewFreeLocalFeeProof(
-			record.Key, parsed.Namespace, uint32(dkvsindexer.RecordSize(record)), record.ExpiryHeight,
-		)
-		if proofErr != nil {
-			return nil, nil, proofErr
-		}
-		if attachErr := AttachDKVSFeeProof(record, proof); attachErr != nil {
-			return nil, nil, attachErr
-		}
-		if signErr := SignDKVSRecord(wallet, record); signErr != nil {
-			return nil, nil, signErr
-		}
-	}
-	if err := p.putWalletBlobRecords(wallet, manifestRecord, chunkRecords); err != nil {
-		return nil, nil, err
-	}
-	return manifestRecord, chunkRecords, nil
-}
-
-func (p *SatsNetDKVSClient) PutChunkedBlob(wallet common.Wallet, objectID string, chunks [][]byte, metadata []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
-	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(wallet, objectID, chunks, metadata, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := p.putWalletBlobRecords(wallet, manifestRecord, chunkRecords); err != nil {
-		return nil, nil, err
-	}
-	return manifestRecord, chunkRecords, nil
-}
-
-func (p *SatsNetDKVSClient) GetBlob(accountID, objectID string, policy dkvsindexer.BlobPolicy) (*dkvsindexer.BlobManifest, []byte, error) {
-	if policy.MaxTotalSize == 0 {
-		policy.MaxTotalSize = dkvsindexer.DefaultBlobMaxTotalSize
-	}
-	if policy.MaxChunkSize == 0 {
-		policy.MaxChunkSize = dkvsindexer.DefaultBlobMaxChunkSize
-	}
-	if policy.MaxChunks == 0 {
-		policy.MaxChunks = dkvsindexer.DefaultBlobMaxChunks
-	}
-	manifestKey, err := dkvsindexer.BlobManifestKey(accountID, objectID)
-	if err != nil {
-		return nil, nil, err
-	}
-	manifestRecord, err := p.GetRecord(manifestKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	manifest, err := dkvsindexer.ParseBlobManifestValue(manifestRecord.Value, policy)
-	if err != nil {
-		return nil, nil, err
-	}
-	chunkPrefix := "/blob/" + accountID + "/" + objectID + "/chunk/"
-	chunkRecords, total, err := p.ListRecords(chunkPrefix, 0, int(manifest.ChunkCount))
-	if err != nil {
-		return nil, nil, err
-	}
-	if total != int(manifest.ChunkCount) || len(chunkRecords) != int(manifest.ChunkCount) {
-		return nil, nil, dkvsindexer.ErrBlobChunkInvalid
-	}
-	return dkvsindexer.AssembleBlobFromRecords(manifestRecord, chunkRecords, policy)
-}
-
-func (p *SatsNetDKVSClient) GetChunkedBlob(accountID, objectID string, policy dkvsindexer.BlobPolicy) (*dkvsindexer.BlobManifest, []byte, error) {
-	return p.GetBlob(accountID, objectID, policy)
 }
 
 func (p *SatsNetDKVSClient) CreateMailbox(pubKey []byte) (string, error) {
@@ -1164,25 +1009,4 @@ func serviceSubscriptionTarget(serviceName string) (string, error) {
 		return "", err
 	}
 	return target, nil
-}
-
-func chunkBlobData(data []byte, chunkSize int) [][]byte {
-	if chunkSize <= 0 {
-		// MaxDKVSRecordSize limits the complete wire record, not just Value.
-		// Reserve the maximum key/pubkey/signature/fee-proof sizes plus fixed
-		// and varint fields so signed chunks remain serializable at all allowed
-		// DKVS field sizes.
-		chunkSize = swire.MaxDKVSRecordSize - swire.MaxDKVSKeySize - swire.MaxDKVSPubKeySize -
-			swire.MaxDKVSSignatureSize - swire.MaxDKVSFeeProofSize - 64
-	}
-	chunks := make([][]byte, 0, (len(data)+chunkSize-1)/chunkSize)
-	for len(data) > 0 {
-		n := chunkSize
-		if len(data) < n {
-			n = len(data)
-		}
-		chunks = append(chunks, append([]byte{}, data[:n]...))
-		data = data[n:]
-	}
-	return chunks
 }

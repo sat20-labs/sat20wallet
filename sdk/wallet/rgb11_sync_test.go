@@ -16,6 +16,7 @@ import (
 	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 	"os"
@@ -286,17 +287,15 @@ func TestRGB11RelayAndAckRoundTripThroughDKVS(t *testing.T) {
 
 // rgb11MemoryDKVSHTTP models the one property the multi-device protocol relies
 // on from DKVS: a key may advance only to a strictly newer wallet-signed
-// sequence. Immutable snapshot blobs use unique keys and remain independently
-// retrievable.
+// sequence. Related key updates are committed atomically through batch-CAS.
 type rgb11MemoryDKVSHTTP struct {
-	mu                 sync.Mutex
-	records            map[string]*swire.DKVSRecord
-	postGate           <-chan struct{}
-	autopayState       *dkvsindexer.AutopayContractState
-	autopayError       error
-	freeLocal          dkvsindexer.FreeLocalCachePolicy
-	validateBlobChunks bool
-	maxRecords         int
+	mu           sync.Mutex
+	records      map[string]*swire.DKVSRecord
+	postGate     <-chan struct{}
+	autopayState *dkvsindexer.AutopayContractState
+	autopayError error
+	freeLocal    dkvsindexer.FreeLocalCachePolicy
+	maxRecords   int
 }
 
 func newRGB11MemoryDKVSHTTP() *rgb11MemoryDKVSHTTP {
@@ -317,6 +316,61 @@ func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, er
 	if h.postGate != nil {
 		<-h.postGate
 	}
+	switch {
+	case strings.HasSuffix(url.Path, "/v3/dkvs/records/batch-cas"):
+		var req DKVSBatchCASRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return nil, err
+		}
+		return h.applyBatchCAS(req.Mutations)
+	case strings.HasSuffix(url.Path, "/v3/dkvs/records/cas"):
+		var req DKVSCASMutationRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return nil, err
+		}
+		result, err := h.applyBatchCAS([]DKVSCASMutationRequest{req})
+		if err != nil {
+			return nil, err
+		}
+		var batch struct {
+			Code int                 `json:"code"`
+			Msg  string              `json:"msg"`
+			Data *DKVSBatchCASResult `json:"data"`
+		}
+		if err := json.Unmarshal(result, &batch); err != nil {
+			return nil, err
+		}
+		if batch.Code != 0 || batch.Data == nil || len(batch.Data.Records) != 1 {
+			return result, nil
+		}
+		hash := dkvsindexer.RecordHash(batch.Data.Records[0])
+		return json.Marshal(map[string]interface{}{
+			"code": 0, "msg": "ok", "data": batch.Data.Records[0], "hash": hash.String(),
+		})
+	case strings.HasSuffix(url.Path, "/v3/dkvs/sync/directory"):
+		var req DKVSDirectorySyncRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return nil, err
+		}
+		return h.syncDirectory(req)
+	case strings.HasSuffix(url.Path, "/v3/dkvs/watch/directory"):
+		var req DKVSDirectoryWatchRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return nil, err
+		}
+		sync, err := h.syncDirectory(DKVSDirectorySyncRequest{Prefix: req.Prefix})
+		if err != nil {
+			return nil, err
+		}
+		var response dkvsSyncResp
+		if err := json.Unmarshal(sync, &response); err != nil || response.Data == nil {
+			return nil, err
+		}
+		return rgb11DKVSResponse(0, "ok", &DKVSWatchResult{
+			Changed: response.Data.Root != req.Root, Root: response.Data.Root,
+		}, 0)
+	}
+
 	recordPath := strings.HasSuffix(url.Path, "/v3/dkvs/records")
 	tombstonePath := strings.HasSuffix(url.Path, "/v3/dkvs/tombstone")
 	if !recordPath && !tombstonePath {
@@ -331,29 +385,11 @@ func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, er
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.validateBlobChunks {
-		parsed, err := dkvsindexer.ParseKey(record.Key)
-		if err != nil {
-			return rgb11DKVSResponse(1, err.Error(), nil, 0)
-		}
-		if parsed.Namespace == "blob" && len(parsed.Segments) == 4 && parsed.Segments[2] == "chunk" {
-			manifestKey := "/blob/" + parsed.Segments[0] + "/" + parsed.Segments[1] + "/manifest"
-			manifest := h.records[manifestKey]
-			if manifest == nil || record.Seq != manifest.Seq ||
-				record.IssueTime != manifest.IssueTime || record.TTL != manifest.TTL ||
-				record.ExpiryHeight != manifest.ExpiryHeight {
-				return rgb11DKVSResponse(1, dkvsindexer.ErrBlobChunkInvalid.Error(), nil, 0)
-			}
-		}
-	}
 	if h.maxRecords > 0 && !tombstonePath && h.records[record.Key] == nil &&
 		len(h.records) >= h.maxRecords {
 		return rgb11DKVSResponse(1, dkvsindexer.ErrFeeCapacityExceeded.Error(), nil, 0)
 	}
 	if current := h.records[record.Key]; current != nil && record.Seq <= current.Seq {
-		// The production endpoint returns the submitted record even when the
-		// selector keeps the existing active record. The client must re-read the
-		// key before treating its candidate as the latest wallet head.
 		return rgb11DKVSResponse(0, "ok", &record, 0)
 	}
 	if tombstonePath {
@@ -364,11 +400,103 @@ func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, er
 	return rgb11DKVSResponse(0, "ok", &record, 0)
 }
 
+func (h *rgb11MemoryDKVSHTTP) applyBatchCAS(mutations []DKVSCASMutationRequest) ([]byte, error) {
+	if len(mutations) == 0 {
+		return rgb11DKVSResponse(1, dkvsindexer.ErrInvalidRecord.Error(), nil, 0)
+	}
+	for _, mutation := range mutations {
+		if mutation.Record == nil {
+			return rgb11DKVSResponse(1, dkvsindexer.ErrInvalidRecord.Error(), nil, 0)
+		}
+		if err := dkvsindexer.VerifySignature(mutation.Record); err != nil {
+			return rgb11DKVSResponse(1, err.Error(), nil, 0)
+		}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	already := 0
+	for _, mutation := range mutations {
+		current := h.records[mutation.Record.Key]
+		if current != nil && dkvsindexer.RecordHash(current) == dkvsindexer.RecordHash(mutation.Record) {
+			already++
+		}
+	}
+	if already != 0 && already != len(mutations) {
+		return rgb11DKVSResponse(1, dkvsindexer.ErrWriteConflict.Error(), nil, 0)
+	}
+	if already == 0 {
+		for _, mutation := range mutations {
+			current := h.records[mutation.Record.Key]
+			if mutation.ExpectAbsent {
+				if current != nil {
+					return rgb11DKVSResponse(1, dkvsindexer.ErrWriteConflict.Error(), nil, 0)
+				}
+				continue
+			}
+			want, err := chainhash.NewHashFromStr(mutation.ExpectedHash)
+			if err != nil || current == nil || dkvsindexer.RecordHash(current) != *want {
+				return rgb11DKVSResponse(1, dkvsindexer.ErrWriteConflict.Error(), nil, 0)
+			}
+		}
+		projected := len(h.records)
+		for _, mutation := range mutations {
+			_, existed := h.records[mutation.Record.Key]
+			if dkvsindexer.IsTombstone(mutation.Record.Flags) {
+				if existed {
+					projected--
+				}
+			} else if !existed {
+				projected++
+			}
+		}
+		if h.maxRecords > 0 && projected > h.maxRecords {
+			return rgb11DKVSResponse(1, dkvsindexer.ErrFeeCapacityExceeded.Error(), nil, 0)
+		}
+		for _, mutation := range mutations {
+			if dkvsindexer.IsTombstone(mutation.Record.Flags) {
+				delete(h.records, mutation.Record.Key)
+			} else {
+				h.records[mutation.Record.Key] = cloneRGB11DKVSRecord(mutation.Record)
+			}
+		}
+	}
+	records := make([]*swire.DKVSRecord, 0, len(mutations))
+	hashes := make([]string, 0, len(mutations))
+	for _, mutation := range mutations {
+		records = append(records, cloneRGB11DKVSRecord(mutation.Record))
+		hash := dkvsindexer.RecordHash(mutation.Record)
+		hashes = append(hashes, hash.String())
+	}
+	return rgb11DKVSResponse(0, "ok", &DKVSBatchCASResult{
+		Applied: len(mutations) - already, Records: records, Hashes: hashes,
+	}, 0)
+}
+
+func (h *rgb11MemoryDKVSHTTP) syncDirectory(req DKVSDirectorySyncRequest) ([]byte, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	prefix := strings.TrimSuffix(req.Prefix, "/")
+	records := make([]*swire.DKVSRecord, 0)
+	for key, record := range h.records {
+		if key == prefix || strings.HasPrefix(key, prefix+"/") {
+			records = append(records, cloneRGB11DKVSRecord(record))
+		}
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].Key < records[j].Key })
+	root, err := dkvsindexer.DirectoryRootFromRecords(records, 0)
+	if err != nil {
+		return nil, err
+	}
+	return rgb11DKVSResponse(0, "ok", &DKVSSyncPage{
+		Records: records, Done: true, Root: root.String(),
+	}, 0)
+}
+
 func (h *rgb11MemoryDKVSHTTP) SendGetRequest(url *URL) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if strings.HasSuffix(url.Path, "/v3/dkvs/config") {
-		return rgb11DKVSResponse(0, "ok", h.freeLocal, 0)
+		return rgb11DKVSResponse(0, "ok", dkvsindexer.ClientConfig{FreeLocal: h.freeLocal, Blob: dkvsindexer.DefaultBlobPolicy(), MaxBatchMutations: dkvsindexer.MaxBatchCASMutations, MaxBatchBytes: dkvsindexer.MaxBatchCASTotalSize}, 0)
 	}
 	if strings.Contains(url.Path, "/v3/contracts/") && strings.HasSuffix(url.Path, "/state") {
 		if h.autopayError != nil {
@@ -564,9 +692,9 @@ func TestRGB11ManualFirstBackupEnablesAutomaticBackupAndActivationRestore(t *tes
 			continue
 		}
 		proof, err := dkvsindexer.ParseFeeProof(record.FeeProof)
-		if err != nil || proof.Mode != dkvsindexer.FeeModeAutopay || proof.PoolContract == "" {
+		if err != nil || proof.Mode != dkvsindexer.FeeModeFreeLocal {
 			remote.mu.Unlock()
-			t.Fatalf("RGB11 backup record %s has no valid AUTOPAY proof: proof=%+v err=%v", key, proof, err)
+			t.Fatalf("RGB11 backup record %s has no valid FREE_LOCAL proof: proof=%+v err=%v", key, proof, err)
 		}
 		if err := dkvsindexer.VerifySignature(record); err != nil {
 			remote.mu.Unlock()

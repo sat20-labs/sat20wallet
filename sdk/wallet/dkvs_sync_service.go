@@ -15,6 +15,13 @@ const (
 	dkvsSyncRetryDelay      = 5 * time.Second
 )
 
+type dkvsDirectoryState struct {
+	Prefix  string
+	Root    string
+	Scope   string
+	Filters []dkvsindexer.Subscription
+}
+
 func (p *Manager) dkvsReplicaNamespace() string {
 	if p == nil || p.cfg == nil || p.cfg.IndexerL2 == nil {
 		return ""
@@ -25,8 +32,8 @@ func (p *Manager) dkvsReplicaNamespace() string {
 	}, ":")
 }
 
-func (p *Manager) rgb11HeadFilters() ([]dkvsindexer.Subscription, error) {
-	filters := make([]dkvsindexer.Subscription, 0)
+func (p *Manager) rgb11HeadDirectories() ([]string, error) {
+	directories := make([]string, 0)
 	seen := make(map[string]struct{})
 	for _, account := range p.localRGB11Accounts() {
 		manager, err := p.newScopedRGB11Manager(account)
@@ -44,15 +51,14 @@ func (p *Manager) rgb11HeadFilters() ([]dkvsindexer.Subscription, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := seen[key]; ok {
+		prefix := strings.TrimSuffix(key, "/head")
+		if _, ok := seen[prefix]; ok {
 			continue
 		}
-		seen[key] = struct{}{}
-		filters = append(filters, dkvsindexer.Subscription{
-			Type: dkvsindexer.SubscriptionKey, Target: key,
-		})
+		seen[prefix] = struct{}{}
+		directories = append(directories, prefix)
 	}
-	return filters, nil
+	return directories, nil
 }
 
 func (p *Manager) flushDKVSOutbox(client *SatsNetDKVSClient, store *dkvsReplicaStore,
@@ -92,49 +98,56 @@ func (p *Manager) flushDKVSOutbox(client *SatsNetDKVSClient, store *dkvsReplicaS
 	return submitted, nil
 }
 
-func (p *Manager) syncDKVSOnce(ctx context.Context) ([]dkvsindexer.Subscription, string, error) {
+func (p *Manager) syncDKVSOnce(ctx context.Context) ([]dkvsDirectoryState, error) {
 	if p == nil || p.rgbManager == nil {
-		return nil, "", fmt.Errorf("wallet manager is unavailable")
+		return nil, fmt.Errorf("wallet manager is unavailable")
 	}
 	p.dkvsSyncRun.Lock()
 	defer p.dkvsSyncRun.Unlock()
-	filters, err := p.rgb11HeadFilters()
+	directories, err := p.rgb11HeadDirectories()
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	if len(filters) == 0 {
-		return nil, "", nil
+	if len(directories) == 0 {
+		return nil, nil
 	}
 	client, err := p.rgbManager.rgb11DKVSClient()
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	store := newDKVSReplicaStore(p.db)
-	scope := dkvsReplicaScope(p.dkvsReplicaNamespace(), filters)
-	pull := func() (string, error) {
-		records, root, err := client.SyncFilteredAll(filters,
-			dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())})
+	states := make([]dkvsDirectoryState, 0, len(directories))
+	for _, prefix := range directories {
+		filters := []dkvsindexer.Subscription{{Type: dkvsindexer.SubscriptionPrefix, Target: prefix}}
+		scope := dkvsReplicaScope(p.dkvsReplicaNamespace(), filters)
+		pull := func() (string, error) {
+			records, root, err := client.SyncDirectoryAll(prefix,
+				dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())})
+			if err != nil {
+				return "", err
+			}
+			if err := store.applyConfirmed(scope, filters, records, root); err != nil {
+				return "", err
+			}
+			return root, nil
+		}
+		root, err := pull()
 		if err != nil {
-			return "", err
+			return states, err
 		}
-		if err := store.applyConfirmed(scope, filters, records, root); err != nil {
-			return "", err
-		}
-		return root, nil
-	}
-	root, err := pull()
-	if err != nil {
-		return filters, "", err
-	}
-	submitted, err := p.flushDKVSOutbox(client, store, scope)
-	if err != nil {
-		return filters, root, err
-	}
-	if submitted {
-		root, err = pull()
+		submitted, err := p.flushDKVSOutbox(client, store, scope)
 		if err != nil {
-			return filters, "", err
+			return states, err
 		}
+		if submitted {
+			root, err = pull()
+			if err != nil {
+				return states, err
+			}
+		}
+		states = append(states, dkvsDirectoryState{
+			Prefix: prefix, Root: root, Scope: scope, Filters: filters,
+		})
 	}
 	result := p.SyncLocalRGB11State(ctx)
 	for _, account := range result.Accounts {
@@ -149,13 +162,13 @@ func (p *Manager) syncDKVSOnce(ctx context.Context) ([]dkvsindexer.Subscription,
 	if callback != nil {
 		callback()
 	}
-	return filters, root, nil
+	return states, nil
 }
 
 func (p *Manager) runDKVSBackgroundSync(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	for {
-		filters, root, err := p.syncDKVSOnce(ctx)
+		states, err := p.syncDKVSOnce(ctx)
 		if err != nil {
 			Log.Warningf("DKVS background sync failed: %v", err)
 			select {
@@ -165,7 +178,7 @@ func (p *Manager) runDKVSBackgroundSync(ctx context.Context, done chan struct{})
 				continue
 			}
 		}
-		if len(filters) == 0 || root == "" {
+		if len(states) == 0 {
 			select {
 			case <-ctx.Done():
 				return
@@ -177,24 +190,28 @@ func (p *Manager) runDKVSBackgroundSync(ctx context.Context, done chan struct{})
 		if err != nil {
 			continue
 		}
+		watchSeconds := dkvsWatchTimeoutSeconds / len(states)
+		if watchSeconds < 1 {
+			watchSeconds = 1
+		}
 		watchFailed := false
-		for {
-			watch, watchErr := client.WatchFiltered(DKVSWatchRequest{
-				Filters: filters, Root: root, TimeoutSeconds: dkvsWatchTimeoutSeconds,
+		for _, state := range states {
+			watch, watchErr := client.WatchDirectory(DKVSDirectoryWatchRequest{
+				Prefix: state.Prefix, Root: state.Root, TimeoutSeconds: watchSeconds,
 			})
-			if watchErr == nil && watch != nil && !watch.Changed && watch.Root == root {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					continue
-				}
-			}
 			if watchErr != nil {
-				Log.Warningf("DKVS watch failed: %v", watchErr)
+				Log.Warningf("DKVS directory watch failed: %v", watchErr)
 				watchFailed = true
+				break
 			}
-			break
+			if watch == nil || watch.Changed || watch.Root != state.Root {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 		}
 		if watchFailed {
 			select {
@@ -202,11 +219,6 @@ func (p *Manager) runDKVSBackgroundSync(ctx context.Context, done chan struct{})
 				return
 			case <-time.After(dkvsSyncRetryDelay):
 			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		default:
 		}
 	}
 }

@@ -1,7 +1,6 @@
 package wallet
 
 import (
-	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -11,9 +10,9 @@ import (
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
-// Continuous AUTOPAY keeps one active recoverable snapshot generation instead
-// of charging for every historical generation indefinitely.
-func TestRGB11PaidBackupPrunesSupersededSnapshot(t *testing.T) {
+// Continuous retention updates one stable snapshot key and its head in the
+// same batch-CAS transaction.
+func TestRGB11PaidBackupReplacesStableSnapshot(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -42,32 +41,33 @@ func TestRGB11PaidBackupPrunesSupersededSnapshot(t *testing.T) {
 
 	pubKey := priv.PubKey().SerializeCompressed()
 	if _, _, err := client.GetRGB11WalletSnapshot(pubKey, walletID, head1.OperationID,
-		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}); !errors.Is(err, ErrDKVSRecordNotFound) {
-		t.Fatalf("superseded snapshot remained active: %v", err)
+		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}); !errors.Is(err, ErrRGB11Inconsistent) {
+		t.Fatalf("old operation unexpectedly resolved: %v", err)
 	}
 	if _, _, err := client.GetRGB11WalletSnapshot(pubKey, walletID, head2.OperationID,
 		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}); err != nil {
 		t.Fatalf("latest snapshot missing: %v", err)
 	}
 
+	accountID := dkvsindexer.AccountID(pubKey)
+	wantKey, err := dkvsindexer.BlobKey(accountID, RGB11WalletSnapshotBlobKey(walletID))
+	if err != nil {
+		t.Fatal(err)
+	}
 	remote.mu.Lock()
 	defer remote.mu.Unlock()
-	activeManifests := 0
-	for key, record := range remote.records {
-		if record == nil || !strings.HasSuffix(key, "/manifest") {
-			continue
-		}
-		manifest, err := dkvsindexer.ParseBlobManifestValue(record.Value, dkvsindexer.DefaultBlobPolicy())
-		if err == nil && string(manifest.Metadata) == string(rgb11WalletSnapshotMetadata(walletID)) {
-			activeManifests++
+	blobCount := 0
+	for key := range remote.records {
+		if strings.HasPrefix(key, "/blob/"+accountID+"/") {
+			blobCount++
 		}
 	}
-	if activeManifests != 1 {
-		t.Fatalf("active wallet snapshot manifests=%d", activeManifests)
+	if blobCount != 1 || remote.records[wantKey] == nil {
+		t.Fatalf("blob count=%d stable snapshot=%v", blobCount, remote.records[wantKey] != nil)
 	}
 }
 
-func TestRGB11BackupPrunesOrphansBeforeCapacityIsNeeded(t *testing.T) {
+func TestRGB11BackupUpdatesWithinFixedRecordCapacity(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -85,19 +85,9 @@ func TestRGB11BackupPrunesOrphansBeforeCapacityIsNeeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	orphanID := [32]byte{0x7f}
-	if _, _, err := client.PutBlob(
-		manager.wallet,
-		hex.EncodeToString(orphanID[:]),
-		[]byte("orphan"),
-		rgb11WalletSnapshotMetadata(walletID),
-		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000},
-	); err != nil {
-		t.Fatal(err)
-	}
-
 	remote.mu.Lock()
-	remote.maxRecords = len(remote.records)
+	initialRecords := len(remote.records)
+	remote.maxRecords = initialRecords
 	remote.mu.Unlock()
 
 	createRGB11MultiDeviceInvoice(t, manager, "capacity-two")
@@ -105,16 +95,11 @@ func TestRGB11BackupPrunesOrphansBeforeCapacityIsNeeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if head2.Seq != head1.Seq+1 {
-		t.Fatalf("head sequence=%d want=%d", head2.Seq, head1.Seq+1)
-	}
-	if _, _, err := client.GetRGB11WalletSnapshot(
-		priv.PubKey().SerializeCompressed(),
-		walletID,
-		orphanID,
-		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())},
-	); !errors.Is(err, ErrDKVSRecordNotFound) {
-		t.Fatalf("orphan snapshot remained active: %v", err)
+	remote.mu.Lock()
+	finalRecords := len(remote.records)
+	remote.mu.Unlock()
+	if head2.Seq != head1.Seq+1 || finalRecords != initialRecords {
+		t.Fatalf("head sequence=%d records=%d want records=%d", head2.Seq, finalRecords, initialRecords)
 	}
 }
 
