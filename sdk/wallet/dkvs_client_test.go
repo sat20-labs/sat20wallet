@@ -3,7 +3,9 @@ package wallet
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/sat20-labs/satoshinet/btcec"
@@ -38,6 +40,20 @@ func (c *fakeDKVSHTTPClient) SendPostRequest(url *URL, body []byte) ([]byte, err
 	resp, ok := c.postResp[url.Path]
 	if !ok {
 		return nil, fmt.Errorf("missing post response for %s", url.Path)
+	}
+	if strings.HasSuffix(url.Path, "/v3/dkvs/records") ||
+		strings.HasSuffix(url.Path, "/v3/dkvs/tombstone") {
+		var base dkvsBaseResp
+		if json.Unmarshal(resp, &base) == nil && base.Code == 0 {
+			var record swire.DKVSRecord
+			if err := json.Unmarshal(body, &record); err != nil {
+				return nil, err
+			}
+			hash := dkvsindexer.RecordHash(&record)
+			return json.Marshal(map[string]interface{}{
+				"code": 0, "msg": "ok", "data": &record, "hash": hash.String(),
+			})
+		}
 	}
 	return resp, nil
 }
@@ -285,7 +301,7 @@ func TestSatsNetDKVSClientFreeLocalCachePolicyAndWrite(t *testing.T) {
 	}
 	http := &fakeDKVSHTTPClient{
 		getResp: map[string][]byte{
-			"testnet/v3/dkvs/config": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": policy}),
+			"testnet/v3/dkvs/config": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": dkvsindexer.ClientConfig{FreeLocal: policy, Blob: dkvsindexer.DefaultBlobPolicy()}}),
 		},
 		postResp: map[string][]byte{
 			"testnet/v3/dkvs/records": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok"}),
@@ -613,115 +629,54 @@ func TestSatsNetDKVSClientBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wallet := dkvsTestWalletFromPriv(t, priv)
 	accountID := dkvsindexer.AccountID(priv.PubKey().SerializeCompressed())
-	manifestRecord, chunkRecords, err := BuildDKVSSignedBlobRecords(dkvsTestWalletFromPriv(t, priv), "object", [][]byte{[]byte("hello "), []byte("world")}, nil, dkvsindexer.RecordOptions{
-		Seq:          1,
-		TTL:          60_000,
-		ExpiryHeight: 100,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	http := &fakeDKVSHTTPClient{
-		getResp: map[string][]byte{
-			"testnet/v3/dkvs/records":        mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": manifestRecord}),
-			"testnet/v3/dkvs/records/prefix": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "total": len(chunkRecords), "data": chunkRecords}),
-		},
-		postResp: map[string][]byte{
-			"testnet/v3/dkvs/records": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": manifestRecord}),
-		},
-		deleteResp: map[string][]byte{},
-	}
-	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
-	if err := client.PutBlobRecords(manifestRecord, chunkRecords); err != nil {
-		t.Fatal(err)
-	}
-	if http.lastPost.Path != "testnet/v3/dkvs/records" {
-		t.Fatalf("put blob path=%s", http.lastPost.Path)
-	}
-	manifest, content, err := client.GetBlob(accountID, "object", dkvsindexer.BlobPolicy{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if manifest.ChunkCount != 2 || string(content) != "hello world" {
-		t.Fatalf("manifest=%#v content=%q", manifest, string(content))
-	}
-	if http.lastGet.Query["prefix"] != "/blob/"+accountID+"/object/chunk/" {
-		t.Fatalf("chunk query=%v", http.lastGet.Query)
-	}
-
 	memory := newRGB11MemoryDKVSHTTP()
-	writeClient := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", memory)
-	putManifest, putChunks, err := writeClient.PutBlob(dkvsTestWalletFromPriv(t, priv), "recovery-file", []byte("hello world"), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if putManifest.Key != "/blob/"+accountID+"/recovery-file/manifest" || len(putChunks) != 1 {
-		t.Fatalf("manifest=%s chunks=%d", putManifest.Key, len(putChunks))
-	}
-	if _, _, err := writeClient.PutChunkedBlob(dkvsTestWalletFromPriv(t, priv), "object-2", [][]byte{[]byte("a"), []byte("b")}, nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100}); err != nil {
-		t.Fatal(err)
-	}
-	if _, content, err := client.GetChunkedBlob(accountID, "object", dkvsindexer.BlobPolicy{}); err != nil || string(content) != "hello world" {
-		t.Fatalf("get chunked content=%q err=%v", content, err)
-	}
-}
-
-func TestPutBlobFreeLocalRetriesSameObjectIdempotently(t *testing.T) {
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	http := newRGB11MemoryDKVSHTTP()
-	http.validateBlobChunks = true
-	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", http)
-	testWallet := dkvsTestWalletFromPriv(t, priv)
-	firstOpts := dkvsindexer.RecordOptions{Seq: 1, IssueTime: 1_000, TTL: http.freeLocal.MaxTTL}
-	secondOpts := dkvsindexer.RecordOptions{Seq: 1, IssueTime: 2_000, TTL: http.freeLocal.MaxTTL}
+	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", memory)
 	data := bytes.Repeat([]byte{0x5a}, 20_000)
-
-	firstManifest, _, err := client.PutBlobFreeLocal(testWallet, "retry-object", data, nil, firstOpts)
+	metadata := []byte("recovery")
+	record, err := client.PutBlobFreeLocal(wallet, "object", data, metadata,
+		dkvsindexer.RecordOptions{Seq: 1, TTL: memory.freeLocal.MaxTTL})
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondManifest, secondChunks, err := client.PutBlobFreeLocal(testWallet, "retry-object", data, nil, secondOpts)
+	if record.Key != "/blob/"+accountID+"/object" {
+		t.Fatalf("blob key=%s", record.Key)
+	}
+	proof, err := dkvsindexer.ParseFeeProof(record.FeeProof)
+	if err != nil || proof.Mode != dkvsindexer.FeeModeFreeLocal {
+		t.Fatalf("proof=%+v err=%v", proof, err)
+	}
+	fetched, blob, err := client.GetBlob(accountID, "object",
+		dkvsindexer.RecordVerificationOptions{Now: record.IssueTime})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secondManifest.IssueTime == firstManifest.IssueTime {
-		t.Fatal("test did not generate a new candidate manifest issue time")
-	}
-	for index, record := range secondChunks {
-		if record.IssueTime != firstManifest.IssueTime {
-			t.Fatalf("chunk %d issue time=%d want active manifest %d", index, record.IssueTime, firstManifest.IssueTime)
-		}
+	if dkvsindexer.RecordHash(fetched) != dkvsindexer.RecordHash(record) ||
+		!bytes.Equal(blob.Data, data) || !bytes.Equal(blob.Metadata, metadata) {
+		t.Fatal("blob round trip mismatch")
 	}
 }
 
-func TestRGB11BlobDefaultChunksFitMaximumWireRecord(t *testing.T) {
+func TestDKVSBlobMaximumValueBoundary(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := bytes.Repeat([]byte{0x5a}, swire.MaxDKVSRecordSize*3)
-	chunks := chunkBlobData(data, 0)
-	if len(chunks) < 4 {
-		t.Fatalf("expected conservative DKVS chunking, got %d chunks", len(chunks))
-	}
-	_, records, err := BuildDKVSSignedBlobRecords(
-		dkvsTestWalletFromPriv(t, priv), "rgb11-wallet-snapshot-maximum-size", chunks, nil,
-		dkvsindexer.RecordOptions{
-			Seq: 1, TTL: 60_000, ExpiryHeight: 100,
-			FeeProof: bytes.Repeat([]byte{0x01}, swire.MaxDKVSFeeProofSize),
-		},
-	)
+	wallet := dkvsTestWalletFromPriv(t, priv)
+	exact := bytes.Repeat([]byte{0x7a}, swire.MaxDKVSBlobValueSize)
+	record, err := BuildDKVSSignedBlobRecordFreeLocal(wallet, "maximum", exact, nil,
+		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index, record := range records {
-		if size := dkvsindexer.RecordSize(record); size > swire.MaxDKVSRecordSize {
-			t.Fatalf("chunk %d wire size=%d max=%d", index, size, swire.MaxDKVSRecordSize)
-		}
+	if len(record.Value) != swire.MaxDKVSBlobValueSize ||
+		dkvsindexer.RecordSize(record) > swire.MaxDKVSBlobRecordSize {
+		t.Fatalf("blob value=%d record=%d", len(record.Value), dkvsindexer.RecordSize(record))
+	}
+	if _, err := BuildDKVSSignedBlobRecordFreeLocal(wallet, "too-large",
+		append(exact, 0), nil, dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000}); !errors.Is(err, dkvsindexer.ErrRecordTooLarge) {
+		t.Fatalf("oversized blob error=%v", err)
 	}
 }
 

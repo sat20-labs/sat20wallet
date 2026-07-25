@@ -370,8 +370,8 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !pending.State.DeliveryAcknowledged || len(pending.RecipientConsignment) == 0 || pending.State.DeliveryCacheCompacted {
-		t.Fatalf("pre-confirmation sender state=%+v consignment=%d", pending.State, len(pending.RecipientConsignment))
+	if !pending.State.DeliveryAcknowledged || pending.State.DeliveryCacheCompacted {
+		t.Fatalf("pre-confirmation sender state=%+v", pending.State)
 	}
 
 	evidence.setStatus(witnessTxID, rgb11wallet.BitcoinTxStatus{

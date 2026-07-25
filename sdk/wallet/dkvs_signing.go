@@ -140,17 +140,6 @@ func AttachDKVSFeeProof(record *swire.DKVSRecord, proof *dkvsindexer.FeeProof) e
 	if proof.Mode == dkvsindexer.FeeModeAutopay {
 		// Paid retention is driven by the payer's successful payment in every
 		// block. AUTOPAY records therefore have no record-level TTL or expiry.
-		parsed, err := dkvsindexer.ParseKey(record.Key)
-		if err != nil {
-			return err
-		}
-		if parsed.Namespace == "blob" && len(parsed.Segments) == 3 && parsed.Segments[2] == "manifest" {
-			value, err := dkvsindexer.RewriteBlobManifestRetention(record.Value, 0, 0)
-			if err != nil {
-				return err
-			}
-			record.Value = value
-		}
 		record.TTL = 0
 		record.ExpiryHeight = 0
 	}
@@ -160,44 +149,6 @@ func AttachDKVSFeeProof(record *swire.DKVSRecord, proof *dkvsindexer.FeeProof) e
 	}
 	record.FeeProof = encoded
 	return nil
-}
-
-func BuildDKVSSignedBlobRecords(wallet common.Wallet, objectID string, chunks [][]byte, metadata []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, []*swire.DKVSRecord, error) {
-	pubKey, err := dkvsWalletPubKey(wallet)
-	if err != nil {
-		return nil, nil, dkvsindexer.ErrInvalidSignature
-	}
-	// A blob is one logical wallet-signed object. Its manifest and every chunk
-	// must share the same issue time or client-side assembly will reject it.
-	if opts.IssueTime == 0 {
-		opts.IssueTime = uint64(time.Now().UnixMilli())
-	}
-	accountID := dkvsindexer.AccountID(pubKey)
-	manifest, manifestValue, err := dkvsindexer.BuildBlobManifest(chunks, metadata, opts.TTL, opts.ExpiryHeight)
-	if err != nil {
-		return nil, nil, err
-	}
-	manifestKey, err := dkvsindexer.BlobManifestKey(accountID, objectID)
-	if err != nil {
-		return nil, nil, err
-	}
-	manifestRecord, err := NewDKVSSignedRecord(wallet, manifestKey, manifestValue, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	chunkRecords := make([]*swire.DKVSRecord, 0, manifest.ChunkCount)
-	for n, chunk := range chunks {
-		chunkKey, err := dkvsindexer.BlobChunkKey(accountID, objectID, uint32(n))
-		if err != nil {
-			return nil, nil, err
-		}
-		chunkRecord, err := NewDKVSSignedRecord(wallet, chunkKey, chunk, opts)
-		if err != nil {
-			return nil, nil, err
-		}
-		chunkRecords = append(chunkRecords, chunkRecord)
-	}
-	return manifestRecord, chunkRecords, nil
 }
 
 func dkvsWalletPubKey(wallet common.Wallet) ([]byte, error) {
