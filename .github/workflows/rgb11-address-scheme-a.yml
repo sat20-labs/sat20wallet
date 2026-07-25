@@ -110,7 +110,7 @@ jobs:
 
       - name: Compile browser WASM
         working-directory: sat20wallet/sdk
-        run: GOOS=js GOARCH=wasm go build -buildvcs=false -ldflags='-s -w' -o /tmp/sat20wallet.wasm ./wasm
+        run: GOOS=js GOARCH=wasm go build -buildvcs=false -ldflags='-s -w' -o ../pwa/public/wasm/sat20wallet.wasm ./wasm
 
       - name: Install PWA dependencies
         working-directory: sat20wallet/pwa
