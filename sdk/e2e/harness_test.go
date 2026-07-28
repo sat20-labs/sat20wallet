@@ -274,6 +274,18 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 			return
 		}
 
+		const addressAssetPrefix = "/testnet/v3/address/asset/"
+		if strings.HasPrefix(r.URL.Path, addressAssetPrefix) {
+			// The fake L1 only owns the explicitly configured locked UTXOs.
+			// Runtime channel-health checks may query arbitrary addresses for
+			// plain-sat funding, which is a valid empty result in this fixture.
+			require.NoError(t, json.NewEncoder(w).Encode(indexerwire.UtxosWithAssetRespV3{
+				BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
+				Data:     nil,
+			}))
+			return
+		}
+
 		const prefix = "/testnet/v3/utxo/info/"
 		require.True(t, strings.HasPrefix(r.URL.Path, prefix), r.URL.Path)
 		utxo := strings.TrimPrefix(r.URL.Path, prefix)
