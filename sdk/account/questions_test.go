@@ -1,6 +1,7 @@
 package account
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -44,5 +45,29 @@ func TestKnowledgeRecoveryRejectsUnrelatedAnswers(t *testing.T) {
 		{QuestionID: "private-note", Answer: "another completely unrelated private answer"},
 	}); err == nil {
 		t.Fatal("unrelated answers recovered the DKVS share")
+	}
+}
+
+func TestKnowledgeRecoveryAcceptsWASMJSONAnswers(t *testing.T) {
+	manager := NewManager(nil)
+	pkg, err := manager.CreateRecoveryPackage(CreateOptions{
+		AccountID:    strings.Repeat("a", 64),
+		Backup:       testBackup(),
+		RecoveryMode: RecoveryMode2Of2,
+		Questions:    testQuestions(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var answers []AnswerAttempt
+	if err := json.Unmarshal([]byte(`[
+		{"question_id":"book-page","answer":"月光落在安静的旧桥上"},
+		{"question_id":"private-note","answer":"yellow bicycle beside the winter river"}
+	]`), &answers); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, answers); err != nil {
+		t.Fatalf("recover DKVS share from WASM JSON answers: %v", err)
 	}
 }

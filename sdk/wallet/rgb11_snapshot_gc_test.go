@@ -1,10 +1,8 @@
 package wallet
 
 import (
-	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sat20-labs/satoshinet/btcec"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -20,18 +18,20 @@ func TestRGB11PaidBackupReplacesStableSnapshot(t *testing.T) {
 	manager := newRGB11MultiDeviceManager(t, priv, 901)
 	remote := newRGB11MemoryDKVSHTTP()
 	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	configureRGB11DKVSTestManager(manager, remote)
 	walletID, err := manager.RGB11WalletID()
 	if err != nil {
 		t.Fatal(err)
 	}
+	syncRGB11TestManager(t, manager, client, walletID)
 
 	createRGB11MultiDeviceInvoice(t, manager, "snapshot-one")
-	head1, _, err := manager.BackupRGB11WalletState(client, walletID, nil, dkvsindexer.RecordOptions{})
+	head1, err := manager.SyncRGB11WalletState(walletID, dkvsindexer.RecordOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	createRGB11MultiDeviceInvoice(t, manager, "snapshot-two")
-	head2, _, err := manager.BackupRGB11WalletState(client, walletID, head1, dkvsindexer.RecordOptions{})
+	head2, err := manager.SyncRGB11WalletState(walletID, dkvsindexer.RecordOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,13 +40,13 @@ func TestRGB11PaidBackupReplacesStableSnapshot(t *testing.T) {
 	}
 
 	pubKey := priv.PubKey().SerializeCompressed()
-	if _, _, err := client.GetRGB11WalletSnapshot(pubKey, walletID, head1.OperationID,
-		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}); !errors.Is(err, ErrRGB11Inconsistent) {
-		t.Fatalf("old operation unexpectedly resolved: %v", err)
-	}
-	if _, _, err := client.GetRGB11WalletSnapshot(pubKey, walletID, head2.OperationID,
-		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}); err != nil {
+	_, operationID, _, err := getRGB11RemoteSnapshot(remote, pubKey, walletID)
+	if err != nil {
 		t.Fatalf("latest snapshot missing: %v", err)
+	}
+	if operationID == head1.OperationID || operationID != head2.OperationID {
+		t.Fatalf("stable snapshot operation=%x old=%x latest=%x",
+			operationID, head1.OperationID, head2.OperationID)
 	}
 
 	accountID := dkvsindexer.AccountID(pubKey)
@@ -75,13 +75,15 @@ func TestRGB11BackupUpdatesWithinFixedRecordCapacity(t *testing.T) {
 	manager := newRGB11MultiDeviceManager(t, priv, 903)
 	remote := newRGB11MemoryDKVSHTTP()
 	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	configureRGB11DKVSTestManager(manager, remote)
 	walletID, err := manager.RGB11WalletID()
 	if err != nil {
 		t.Fatal(err)
 	}
+	syncRGB11TestManager(t, manager, client, walletID)
 
 	createRGB11MultiDeviceInvoice(t, manager, "capacity-one")
-	head1, _, err := manager.BackupRGB11WalletState(client, walletID, nil, dkvsindexer.RecordOptions{})
+	head1, err := manager.SyncRGB11WalletState(walletID, dkvsindexer.RecordOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +93,7 @@ func TestRGB11BackupUpdatesWithinFixedRecordCapacity(t *testing.T) {
 	remote.mu.Unlock()
 
 	createRGB11MultiDeviceInvoice(t, manager, "capacity-two")
-	head2, _, err := manager.BackupRGB11WalletState(client, walletID, head1, dkvsindexer.RecordOptions{})
+	head2, err := manager.SyncRGB11WalletState(walletID, dkvsindexer.RecordOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,17 +114,29 @@ func TestRGB11FreeLocalBackupUsesNodeTTL(t *testing.T) {
 	remote := newRGB11MemoryDKVSHTTP()
 	remote.freeLocal.MaxTTL = 90_000
 	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	configureRGB11DKVSTestManager(manager, remote)
 
 	walletID, err := manager.RGB11WalletID()
 	if err != nil {
 		t.Fatal(err)
 	}
+	syncRGB11TestManager(t, manager, client, walletID)
 	createRGB11MultiDeviceInvoice(t, manager, "free-local")
-	_, headRecord, err := manager.BackupRGB11WalletState(
-		client, walletID, nil, dkvsindexer.RecordOptions{TTL: 365 * 24 * 60 * 60 * 1000},
+	_, err = manager.SyncRGB11WalletState(
+		walletID, dkvsindexer.RecordOptions{TTL: 365 * 24 * 60 * 60 * 1000},
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	_, headKey, _, err := manager.rgbManager.rgb11StateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	headRecord := cloneRGB11DKVSRecord(remote.records[headKey])
+	remote.mu.Unlock()
+	if headRecord == nil {
+		t.Fatal("head record missing")
 	}
 	if headRecord.TTL != remote.freeLocal.MaxTTL {
 		t.Fatalf("head TTL=%d want=%d", headRecord.TTL, remote.freeLocal.MaxTTL)
@@ -131,9 +145,9 @@ func TestRGB11FreeLocalBackupUsesNodeTTL(t *testing.T) {
 	if err != nil || proof.Mode != dkvsindexer.FeeModeFreeLocal {
 		t.Fatalf("head proof=%+v err=%v", proof, err)
 	}
-	if manager.rgbManager.dkvsBackupMode != "temporary" ||
-		manager.rgbManager.dkvsBackupTTL != remote.freeLocal.MaxTTL {
-		t.Fatalf("backup mode=%q ttl=%d", manager.rgbManager.dkvsBackupMode, manager.rgbManager.dkvsBackupTTL)
+	backupState := manager.rgbManager.rgb11ScopeState()
+	if backupState.Mode != "temporary" || backupState.TTL != remote.freeLocal.MaxTTL {
+		t.Fatalf("backup mode=%q ttl=%d", backupState.Mode, backupState.TTL)
 	}
 
 	remote.mu.Lock()

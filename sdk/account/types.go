@@ -38,6 +38,7 @@ var (
 
 type SubAccount struct {
 	Index uint32 `json:"index"`
+	Name  string `json:"name,omitempty"`
 	DID   string `json:"did"`
 }
 
@@ -165,8 +166,8 @@ type CreateOptions struct {
 }
 
 type AnswerAttempt struct {
-	QuestionID string
-	Answer     string
+	QuestionID string `json:"question_id"`
+	Answer     string `json:"answer"`
 }
 
 type RecoverySummary struct {

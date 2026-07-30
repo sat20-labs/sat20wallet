@@ -19,6 +19,7 @@ const requiredWasmMethods = [
   'getRGB11State',
   'issueRGB11Asset',
   'importRGB11Contract',
+  'importRGB11ContractFile',
   'createRGB11Invoice',
   'prepareRGB11Transfer',
   'buildRGB11RelayRecord',
@@ -31,10 +32,10 @@ const requiredWasmMethods = [
   'broadcastRGB11Transfer',
   'broadcastRGB11Batch',
   'broadcastRGB11OutOfBand',
+  'receiveRGB11ProxyConsignment',
+  'deliverAndBroadcastRGB11ProxyTransfer',
+  'fetchRGB11ProxyAck',
   'refreshRGB11State',
-  'syncLocalRGB11State',
-  'backupRGB11WalletState',
-  'restoreRGB11WalletState',
   'getRGB11AddressCarrierWarning',
   'syncRGB11AddressMailbox',
   'deliverAndBroadcastRGB11AddressTransfer',
@@ -83,16 +84,19 @@ await requireContains('components/asset/L1AssetsTabs.vue', [
   "selectedType === 'RGB11'",
   "asset.protocol !== 'rgb11'",
   "asset.protocol === 'rgb11'",
-  'backupRGB11State',
-  'restoreRGB11State',
+  'backup_status',
+  'backup_enabled',
   'rgb11Transfers',
   'rgb11TransferStatusClass',
+  'rgb11Error',
+  'rgb11Transfer.stateError',
 ])
 await requireContains('components/wallet/RGB11InvoiceDialog.vue', [
   'decimalToRaw',
-  "mode: receiveMode.value",
+  "transport_mode: transportMode.value",
   '<option value="witness">',
-  '<option value="blind">',
+  '<option value="blind" :disabled=',
+  'receiveRGB11ProxyConsignment',
   'acceptRGB11RelayConsignment',
   'rejectRGB11RelayConsignment',
   'publishRGB11AckRecord',
@@ -105,8 +109,12 @@ await requireContains('components/wallet/RGB11SendDialog.vue', [
   'broadcastRGB11Transfer',
   'broadcastRGB11Batch',
   'broadcastRGB11OutOfBand',
+  'deliverAndBroadcastRGB11ProxyTransfer',
+  'fetchRGB11ProxyAck',
   'invoices',
-  'outOfBand.value ? null : JSON.parse',
+  'recipient_consignment_base64',
+  'downloadStandardConsignment',
+  'outOfBand.value || proxyTransport.value ? null : JSON.parse',
   'rgb11Address.prepareTransfer',
   'rgb11Address.deliverAndBroadcast',
 ])
@@ -116,6 +124,11 @@ await requireContains('composables/hooks/useRgb11Assets.ts', [
   'canonical_name',
   'contract_id',
   'display_name',
+  'rgb11Store.setError',
+])
+await requireContains('store/rgb11.ts', [
+  "const error = ref('')",
+  'setError',
 ])
 await requireContains('composables/hooks/useL1Assets.ts', [
   'beforeSummaryFetch',
@@ -132,6 +145,8 @@ await requireContains('entrypoints/popup/pages/wallet/Tools.vue', [
 ])
 await requireContains('components/wallet/RGB11ImportDialog.vue', [
   'importRGB11Contract',
+  'importRGB11ContractFile',
+  'application/octet-stream',
   "t('rgb11Transfer.imported'",
 ])
 await requireContains('components/wallet/RGB11IssueDialog.vue', [
@@ -142,6 +157,8 @@ await requireContains('components/wallet/RGB11IssueDialog.vue', [
   'inflation_amounts',
   'validTicker',
   'copyContract',
+  'contract_consignment_base64',
+  'downloadContract',
   "t('rgb11Transfer.issued'",
 ])
 for (const dialog of [

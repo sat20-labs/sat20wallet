@@ -16,6 +16,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/btcec"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -25,6 +26,38 @@ type rgb11AddressEvidence struct {
 	*rgb11FlowEvidence
 	statusMu sync.Mutex
 	statuses map[string]*rgb11wallet.BitcoinTxStatus
+}
+
+func mustRGB11ConfiguredStore(t *testing.T, manager *Manager) *dkvsStore {
+	t.Helper()
+	store, err := manager.rgbManager.configuredRGB11Store()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func nextRGB11AddressRecordOptions(client *SatsNetDKVSClient, keys []string,
+	opts dkvsindexer.RecordOptions) dkvsindexer.RecordOptions {
+
+	if opts.IssueTime == 0 {
+		opts.IssueTime = uint64(time.Now().UnixMilli())
+	}
+	if opts.Seq != 0 {
+		return opts
+	}
+	var maxSeq uint64
+	for _, key := range keys {
+		if key == "" || client == nil {
+			continue
+		}
+		existing, err := client.GetRecord(key)
+		if err == nil && existing != nil && existing.Seq > maxSeq {
+			maxSeq = existing.Seq
+		}
+	}
+	opts.Seq = maxSeq + 1
+	return opts
 }
 
 func (e *rgb11AddressEvidence) GetTxStatus(txid string) (*rgb11wallet.BitcoinTxStatus, error) {
@@ -199,6 +232,15 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 	remote := newRGB11MemoryDKVSHTTP()
 	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	configure := func(manager *Manager) {
+		manager.cfg = &sdkcommon.Config{
+			Env: "test", Chain: "testnet",
+			IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"},
+		}
+		manager.http = remote
+	}
+	configure(sender)
+	configure(recipient)
 	recordOptions := dkvsindexer.RecordOptions{TTL: uint64((24 * time.Hour) / time.Millisecond)}
 
 	request := RGB11AddressSendRequest{
@@ -208,12 +250,12 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		FeeRate:          2,
 		MinConfirmations: 1,
 	}
-	if _, _, err := sender.PrepareRGB11AddressTransfer(context.Background(), client, request,
+	if _, _, err := sender.PrepareConfiguredRGB11AddressTransfer(context.Background(), request,
 		dkvsindexer.RecordVerificationOptions{}); !errors.Is(err, ErrRGB11TraditionalReceiveRequired) {
 		t.Fatalf("unregistered receiver err=%v", err)
 	}
 
-	endpoint, err := recipient.EnableRGB11AddressReceive(client, RGB11ReceiveCapabilityOptions{
+	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(RGB11ReceiveCapabilityOptions{
 		RecordOptions: recordOptions,
 	})
 	if err != nil {
@@ -228,7 +270,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 
 	request.ReceiverAddress = recipientWallet.GetAddress()
-	prepared, resolved, err := sender.PrepareRGB11AddressTransfer(context.Background(), client, request,
+	prepared, resolved, err := sender.PrepareConfiguredRGB11AddressTransfer(context.Background(), request,
 		dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +287,9 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 
 	deliveryOptions := RGB11AddressDeliveryOptions{RecordOptions: recordOptions, InlineLimit: 1}
-	firstDelivery, err := sender.DeliverRGB11AddressTransfer(client, prepared.State.TransferID, deliveryOptions)
+	firstDelivery, err := sender.rgbManager.deliverRGB11AddressTransferStore(
+		mustRGB11ConfiguredStore(t, sender), prepared.State.TransferID, deliveryOptions,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +300,9 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondDelivery, err := sender.DeliverRGB11AddressTransfer(client, prepared.State.TransferID, deliveryOptions)
+	secondDelivery, err := sender.rgbManager.deliverRGB11AddressTransferStore(
+		mustRGB11ConfiguredStore(t, sender), prepared.State.TransferID, deliveryOptions,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,8 +310,10 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secondRecord.Seq != firstRecord.Seq+1 {
-		t.Fatalf("delivery seq first=%d second=%d", firstRecord.Seq, secondRecord.Seq)
+	if secondRecord.Seq != firstRecord.Seq ||
+		dkvsindexer.RecordHash(secondRecord) != dkvsindexer.RecordHash(firstRecord) {
+		t.Fatalf("idempotent delivery changed record: first=%d second=%d",
+			firstRecord.Seq, secondRecord.Seq)
 	}
 
 	snapshot, err := sender.rgbManager.projectionStore.ExportSnapshot()
@@ -345,13 +393,18 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := recipient.AcceptRGB11AddressMailbox(context.Background(), client, forged,
-		dkvsindexer.RecordVerificationOptions{Now: forged.IssueTime}, deliveryOptions); !errors.Is(err, ErrRGB11AddressMailbox) {
+	recipientStore := mustRGB11ConfiguredStore(t, recipient)
+	if _, _, err := recipient.rgbManager.acceptRGB11AddressMailboxStore(
+		context.Background(), recipientStore, cloneDKVSValue(forged),
+		deliveryOptions,
+	); !errors.Is(err, ErrRGB11AddressMailbox) {
 		t.Fatalf("replayed consignment err=%v", err)
 	}
 
-	receipt, ackRecord, err := recipient.AcceptRGB11AddressMailbox(context.Background(), client, deliveryRecord,
-		dkvsindexer.RecordVerificationOptions{Now: deliveryRecord.IssueTime}, deliveryOptions)
+	receipt, ackRecord, err := recipient.rgbManager.acceptRGB11AddressMailboxStore(
+		context.Background(), recipientStore, cloneDKVSValue(deliveryRecord),
+		deliveryOptions,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,7 +22,7 @@
           <Input v-model="answers[index]" type="password" autocomplete="off" />
         </div>
         <Button class="w-full" :disabled="busy" @click="recoverKnowledge">
-          恢复 DKVS 分片
+          恢复加密分片
         </Button>
       </section>
 

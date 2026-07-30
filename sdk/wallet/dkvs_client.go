@@ -21,6 +21,8 @@ var ErrDKVSRecordNotFound = errors.New("DKVS record not found")
 
 type SatsNetDKVSClient struct {
 	*RESTClient
+	manager          *dkvsManager
+	replicaNamespace string
 }
 
 type DKVSNameResolution struct {
@@ -64,6 +66,11 @@ type dkvsCheckpointResp struct {
 type dkvsUsageResp struct {
 	dkvsBaseResp
 	Data *dkvsindexer.Usage `json:"data,omitempty"`
+}
+
+type dkvsPathMetaResp struct {
+	dkvsBaseResp
+	Data *dkvsindexer.PathMeta `json:"data,omitempty"`
 }
 
 type dkvsConfigResp struct {
@@ -239,27 +246,69 @@ func verifyDKVSWriteEcho(request, echoed *swire.DKVSRecord, hashText string) (*s
 }
 
 func (p *SatsNetDKVSClient) PutRecord(record *swire.DKVSRecord) (*swire.DKVSRecord, error) {
-	var resp dkvsRecordResp
-	if err := p.postJSON("/v3/dkvs/records", record, &resp); err != nil {
+	if record == nil || record.Seq == 0 {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	if p.manager != nil && p.manager.managesKey(record.Key) {
+		return p.manager.putRecord(p, record)
+	}
+	if record.Seq == 1 {
+		return p.PutRecordCAS(record, dkvsindexer.WritePrecondition{ExpectAbsent: true})
+	}
+	precondition, existing, err := p.dkvsWritePrecondition(record.Key)
+	if err != nil {
 		return nil, err
 	}
-	return verifyDKVSWriteEcho(record, resp.Data, resp.Hash)
+	if existing != nil && dkvsindexer.RecordHash(existing) == dkvsindexer.RecordHash(record) {
+		return existing, nil
+	}
+	return p.PutRecordCAS(record, precondition)
 }
 
 func (p *SatsNetDKVSClient) Tombstone(record *swire.DKVSRecord) (*swire.DKVSRecord, error) {
-	var resp dkvsRecordResp
-	if err := p.postJSON("/v3/dkvs/tombstone", record, &resp); err != nil {
+	if record == nil || record.Seq == 0 {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	if p.manager != nil && p.manager.managesKey(record.Key) {
+		return p.manager.putRecord(p, record)
+	}
+	if record.Seq == 1 {
+		return p.PutRecordCAS(record, dkvsindexer.WritePrecondition{ExpectAbsent: true})
+	}
+	precondition, existing, err := p.dkvsWritePrecondition(record.Key)
+	if err != nil {
 		return nil, err
 	}
-	return verifyDKVSWriteEcho(record, resp.Data, resp.Hash)
+	if existing != nil && dkvsindexer.RecordHash(existing) == dkvsindexer.RecordHash(record) {
+		return existing, nil
+	}
+	return p.PutRecordCAS(record, precondition)
 }
 
 func (p *SatsNetDKVSClient) GetRecord(key string) (*swire.DKVSRecord, error) {
+	if p.manager != nil && p.manager.managesKey(key) {
+		if err := p.manager.waitPathsReady(p, []string{key}); err != nil {
+			return nil, err
+		}
+	}
 	var resp dkvsRecordResp
 	url := p.GetUrl("/v3/dkvs/records")
 	url.Query = map[string]string{"key": key}
 	if err := p.getJSON(url, &resp); err != nil {
 		return nil, err
+	}
+	return resp.Data, nil
+}
+
+func (p *SatsNetDKVSClient) GetPathMeta(path string) (*dkvsindexer.PathMeta, error) {
+	var resp dkvsPathMetaResp
+	url := p.GetUrl("/v3/dkvs/path-meta")
+	url.Query = map[string]string{"path": path}
+	if err := p.getJSON(url, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Data == nil || resp.Data.Path != path {
+		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	return resp.Data, nil
 }

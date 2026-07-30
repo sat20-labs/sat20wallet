@@ -24,11 +24,22 @@ func (b *jsBatchWrite) Put(key, value []byte) error {
 	keyStr := string(key)
 	valueData := base64.StdEncoding.EncodeToString(value)
 	b.batch[keyStr] = valueData
+	for i := len(b.deletions) - 1; i >= 0; i-- {
+		if b.deletions[i] == keyStr {
+			b.deletions = append(b.deletions[:i], b.deletions[i+1:]...)
+		}
+	}
 	return nil
 }
 
 func (b *jsBatchWrite) Delete(key []byte) error {
 	keyStr := string(key)
+	delete(b.batch, keyStr)
+	for _, existing := range b.deletions {
+		if existing == keyStr {
+			return nil
+		}
+	}
 	b.deletions = append(b.deletions, keyStr)
 	return nil
 }

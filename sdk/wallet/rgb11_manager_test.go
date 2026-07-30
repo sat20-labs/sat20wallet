@@ -14,6 +14,7 @@ import (
 	"github.com/sat20-labs/rgb11/anchors"
 	"github.com/sat20-labs/rgb11/invoicing"
 	coreissuance "github.com/sat20-labs/rgb11/issuance"
+	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"math/big"
 	"testing"
@@ -96,7 +97,7 @@ func TestRGB11EvidenceUsesBitcoinFactsV3Adapter(t *testing.T) {
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
 	outspend, err := provider.GetOutspend(outpoint)
-	if err != nil || !outspend.Spent || outspend.SpendingTx != "unknown" {
+	if err != nil || !outspend.Spent || outspend.SpendingTx != "" {
 		t.Fatalf("outspend=%#v err=%v", outspend, err)
 	}
 	tip, err := provider.GetTip()
@@ -273,6 +274,201 @@ func TestRGB11CarrierBindingUsesActiveBIP86DerivationIndex(t *testing.T) {
 	}
 }
 
+func TestRGB11WitnessInvoicesUseIndependentReceiveKeys(t *testing.T) {
+	wallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
+	)
+	if wallet == nil {
+		t.Fatal("create test wallet")
+	}
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
+	evidence := &rgb11FlowEvidence{
+		utxos: make(map[string]*rgb11wallet.BitcoinUTXO),
+		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+	}
+	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 70)
+	first, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "witness", AmountRaw: "1", WitnessVout: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "witness", AmountRaw: "1", WitnessVout: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(first.WitnessScript, second.WitnessScript) {
+		t.Fatal("consecutive RGB11 witness invoices reused the same recipient script")
+	}
+	activeScript, err := AddrToPkScript(wallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []*corewallet.ReceiveRequest{first, second} {
+		if bytes.Equal(request.WitnessScript, activeScript) {
+			t.Fatal("RGB11 witness invoice exposed the active account address")
+		}
+		key, err := manager.rgbManager.projectionStore.LoadReceiveKey(request.WitnessScript)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key.RequestID != request.RequestID || key.ScopeIndex != wallet.GetSubAccount() ||
+			key.Change != 1 || key.Index >= rgb11InternalReceiveIndexFlag ||
+			key.LogicalAddress != wallet.GetAddress() {
+			t.Fatalf("unexpected persisted RGB11 receive key: %+v", key)
+		}
+	}
+	projection, err := manager.rgbManager.projectionStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := manager.rgbManager.engineStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredWallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
+	)
+	restored := newRGB11FlowManager(t, restoredWallet, rpc, evidence, 70)
+	if err := restored.rgbManager.projectionStore.ImportSnapshot(projection); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.rgbManager.engineStore.ImportSnapshot(engine); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []*corewallet.ReceiveRequest{first, second} {
+		if _, err := restored.rgbManager.engine.LoadReceive(request.RequestID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := restored.rgbManager.projectionStore.LoadReceiveKey(request.WitnessScript); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRGB11StandardProxyInvoiceUsesBlindedBeneficiary(t *testing.T) {
+	wallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
+	)
+	if wallet == nil {
+		t.Fatal("create test wallet")
+	}
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
+	evidence := &rgb11FlowEvidence{
+		utxos: make(map[string]*rgb11wallet.BitcoinUTXO),
+		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+	}
+	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 71)
+	request, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "blind", TransportMode: RGB11ProxyTransport, AmountRaw: "2", WitnessVout: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := invoicing.Parse(request.Invoice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Beneficiary.Kind != invoicing.BeneficiaryBlindedSeal {
+		t.Fatalf("beneficiary kind = %v", parsed.Beneficiary.Kind)
+	}
+	if len(parsed.Transports) != 1 || parsed.Transports[0].String() != defaultRGB11ProxyTransport {
+		t.Fatalf("unexpected transports: %+v", parsed.Transports)
+	}
+	if len(parsed.UnknownQuery) != 0 {
+		t.Fatalf("standard invoice leaked SAT20 query parameters: %+v", parsed.UnknownQuery)
+	}
+}
+
+func TestRGB11SignsInternalCarrierAndActiveFeeInput(t *testing.T) {
+	wallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
+	)
+	if wallet == nil {
+		t.Fatal("create test wallet")
+	}
+	wallet.SetSubAccount(3)
+	const receiveIndex = uint32(27)
+	internalAddress := wallet.GetAddressByPath(1, receiveIndex)
+	internalScript, err := AddrToPkScript(internalAddress, &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeScript, err := AddrToPkScript(wallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sourceOutpoint = "3333333333333333333333333333333333333333333333333333333333333333:0"
+	const feeOutpoint = "4444444444444444444444444444444444444444444444444444444444444444:0"
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput), plain: []*indexerwire.TxOutputInfo{
+		{OutPoint: feeOutpoint, Value: 10_000, PkScript: activeScript},
+	}}
+	for _, item := range []struct {
+		outpoint string
+		value    int64
+		script   []byte
+	}{
+		{sourceOutpoint, rgb11CarrierValue, internalScript},
+		{feeOutpoint, 10_000, activeScript},
+	} {
+		output := indexer.NewTxOutput(item.value)
+		output.OutPointStr = item.outpoint
+		output.OutValue.PkScript = append([]byte(nil), item.script...)
+		rpc.outputs[item.outpoint] = output
+	}
+	evidence := &rgb11FlowEvidence{
+		utxos: map[string]*rgb11wallet.BitcoinUTXO{
+			sourceOutpoint: {OutPoint: sourceOutpoint, Value: rgb11CarrierValue, PkScript: internalScript, Confirmations: 6},
+			feeOutpoint:    {OutPoint: feeOutpoint, Value: 10_000, PkScript: activeScript, Confirmations: 6},
+		},
+		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+	}
+	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 71)
+	internalPubKey := wallet.GetPubKeyByPath(1, receiveIndex).SerializeCompressed()
+	binding := &rgb11wallet.CarrierBinding{
+		DerivationIndex: rgb11InternalReceiveIndexFlag | receiveIndex,
+		LogicalAddress:  wallet.GetAddress(), OutPoint: sourceOutpoint,
+		ActualPkScript: internalScript, ActualOutputKey: append([]byte(nil), internalScript[2:]...),
+		InternalPubKey: append([]byte(nil), internalPubKey[1:]...), CommitmentMethod: "opret1st",
+	}
+	if !manager.rgbManager.ownsRGB11Carrier(binding, activeScript) {
+		t.Fatal("independent RGB11 receive carrier is not owned by its logical account")
+	}
+	selected := []rgb11SpendAllocation{{proof: &rgb11wallet.AllocationProof{
+		OutPoint: sourceOutpoint, CarrierBinding: binding,
+	}}}
+	mpcCommitment := sha256.Sum256([]byte("SAT20 RGB11 mixed-key transaction"))
+	tx, prevFetcher, _, signingKeys, _, err := manager.rgbManager.buildRGB11WitnessTx(
+		selected, [][]byte{activeScript}, activeScript, anchors.OpretScript(mpcCommitment), 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tx.TxIn) != 2 || len(signingKeys) != 1 ||
+		signingKeys[0].Change != 1 || signingKeys[0].Index != receiveIndex {
+		t.Fatalf("unexpected mixed-key transaction inputs=%d keys=%+v", len(tx.TxIn), signingKeys)
+	}
+	packet, err := CreatePsbt(tx, prevFetcher, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wallet.SignRGB11Psbt(packet, signingKeys); err != nil {
+		t.Fatal(err)
+	}
+	if err := psbt.MaybeFinalizeAll(packet); err != nil {
+		t.Fatal(err)
+	}
+	signed, err := psbt.Extract(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifySignedTx(signed, prevFetcher); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRGB11WitnessBuilderSpendsTapretCarrier(t *testing.T) {
 	wallet := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
@@ -328,14 +524,15 @@ func TestRGB11WitnessBuilderSpendsTapretCarrier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(roots) != 1 || !bytes.Equal(roots[0], root[:]) {
+	if len(roots) != 1 || roots[0].Change != 0 || roots[0].Index != derivationIndex ||
+		!bytes.Equal(roots[0].TaprootMerkleRoot, root[:]) {
 		t.Fatalf("Tapret signing roots=%x", roots)
 	}
 	packet, err := CreatePsbt(tx, prevFetcher, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := wallet.SignPsbtWithTaprootMerkleRootsAtIndex(packet, roots, derivationIndex); err != nil {
+	if err := wallet.SignRGB11Psbt(packet, roots); err != nil {
 		t.Fatal(err)
 	}
 	if err := psbt.MaybeFinalizeAll(packet); err != nil {

@@ -55,18 +55,24 @@ func NormalizeBackup(value Backup) (Backup, error) {
 		seenIndex := map[uint32]struct{}{}
 		seenDID := map[string]struct{}{}
 		for i := range subAccounts {
+			subAccounts[i].Name = normalizeSpace(subAccounts[i].Name)
+			if subAccounts[i].Name == "" {
+				subAccounts[i].Name = fmt.Sprintf("Account %d", subAccounts[i].Index+1)
+			}
 			subAccounts[i].DID = normalizeSpace(subAccounts[i].DID)
-			if subAccounts[i].Index >= wallet.AccountCount || subAccounts[i].DID == "" {
+			if subAccounts[i].Index >= wallet.AccountCount {
 				return Backup{}, ErrInvalidBackup
 			}
 			if _, ok := seenIndex[subAccounts[i].Index]; ok {
 				return Backup{}, ErrInvalidBackup
 			}
-			if _, ok := seenDID[subAccounts[i].DID]; ok {
-				return Backup{}, ErrInvalidBackup
+			if subAccounts[i].DID != "" {
+				if _, ok := seenDID[subAccounts[i].DID]; ok {
+					return Backup{}, ErrInvalidBackup
+				}
+				seenDID[subAccounts[i].DID] = struct{}{}
 			}
 			seenIndex[subAccounts[i].Index] = struct{}{}
-			seenDID[subAccounts[i].DID] = struct{}{}
 		}
 		for i := uint32(0); i < wallet.AccountCount; i++ {
 			if _, ok := seenIndex[i]; !ok {

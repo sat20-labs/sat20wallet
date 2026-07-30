@@ -11,23 +11,24 @@
         </div>
       </div>
 
-      <Alert v-if="savedState">
+      <Alert v-if="savedState?.active">
         <AlertDescription class="space-y-1">
-          <div>当前状态：{{ savedState.status === 'active-paid' ? '付费保存' : '临时缓存' }}</div>
-          <div>恢复模式：{{ savedState.recoveryMode }}</div>
-          <div>上次演练：{{ new Date(savedState.lastRehearsalAt).toLocaleString() }}</div>
+          <div>当前状态：{{ savedState.storage_mode === 'paid' ? '付费保存' : '临时缓存' }}</div>
+          <div>恢复模式：{{ savedState.recovery_mode }}</div>
+          <div v-if="savedState.last_rehearsal_at">上次演练：{{ new Date(savedState.last_rehearsal_at).toLocaleString() }}</div>
+          <div>待同步变更：{{ savedState.pending_changes || 0 }}</div>
         </AlertDescription>
       </Alert>
 
-      <section v-if="step === 1" class="space-y-4">
+      <section v-if="step === 1 && !savedState?.active" class="space-y-4">
         <h2 class="font-medium">1. 确认要备份的钱包</h2>
         <p class="text-sm text-muted-foreground">
-          SDK 只备份助记词、钱包名称、子账户数量和 Ordinals DID。助记词不会返回给页面。
+          SDK 管理全部子钱包、子账户 index 和可选的 Ordinals DID。助记词不会返回给页面。
         </p>
         <div v-for="wallet in drafts" :key="wallet.id" class="rounded-lg border p-3 space-y-3">
           <div class="font-medium">{{ wallet.name }}</div>
           <div v-for="account in wallet.accounts" :key="account.index" class="space-y-1">
-            <label class="text-xs text-muted-foreground">子账户 {{ account.index }} 的 Ordinals DID</label>
+            <label class="text-xs text-muted-foreground">子账户 {{ account.index }} 的 Ordinals DID（可选）</label>
             <Input v-model="account.did" placeholder="例如 alice 或 alice.btc" />
           </div>
         </div>
@@ -58,12 +59,13 @@
             class="w-full text-left rounded-lg border p-3 disabled:opacity-50"
             :class="selectedStorage === option.id ? 'border-primary' : ''"
             :disabled="!option.available"
-            @click="selectedStorage = option.id"
+            @click="selectStorage(option)"
           >
             <div class="font-medium">{{ option.title }}</div>
             <div class="text-sm text-muted-foreground">{{ option.description }}</div>
             <div v-if="option.estimated_cost" class="text-xs mt-1">
-              当前报价：{{ option.estimated_cost }} {{ option.fee_asset }}；年度参考：{{ option.estimated_annual_cost }}
+              {{ option.id === 'paid' ? '默认 100 条报价' : '当前报价' }}：
+              {{ option.estimated_cost }} {{ option.fee_asset }}；年度参考：{{ option.estimated_annual_cost }}
             </div>
             <div v-if="option.estimated_expiry_time" class="text-xs mt-1">
               预计到期：{{ new Date(option.estimated_expiry_time).toLocaleString() }}
@@ -73,7 +75,27 @@
             </ul>
           </button>
         </div>
-        <Button class="w-full" :disabled="busy || !selectedStorage" @click="confirmStorage">
+        <div v-if="selectedStorage === 'paid'" class="space-y-2">
+          <label class="text-sm font-medium" for="autopay-record-count">持久记录条数</label>
+          <Input
+            id="autopay-record-count"
+            v-model.number="recordCount"
+            type="number"
+            inputmode="numeric"
+            min="100"
+            step="1"
+          />
+          <p class="text-xs text-muted-foreground">
+            默认 100 条，最低 100 条。当前费率 {{ paidStorageOption?.full_record_fee_per_block || '-' }}
+            {{ paidStorageOption?.fee_asset || '' }}/条/区块。
+          </p>
+          <p v-if="autopayQuote" class="text-xs text-muted-foreground">
+            每区块约支付 {{ autopayQuote.amountPerBlock }} {{ paidStorageOption?.fee_asset }}；
+            首次充值约 {{ autopayQuote.initialCost }}，可支付 1000 个区块；
+            年度参考 {{ autopayQuote.annualCost }}。
+          </p>
+        </div>
+        <Button class="w-full" :disabled="busy || !selectedStorage || !recordCountValid" @click="confirmStorage">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
           确认存储方式
         </Button>
@@ -173,7 +195,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
@@ -185,18 +207,18 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
 import { useWalletStore } from '@/store'
 import accountSDK, { type AccountStorageOption, type AccountWalletMetadataInput } from '@/utils/accountManagement'
-import { loadAccountManagementState, saveAccountManagementState } from '@/lib/account-management-state'
 
 const router = useRouter()
 const walletStore = useWalletStore()
 const { wallets } = storeToRefs(walletStore)
-const savedState = ref(loadAccountManagementState())
+const savedState = ref<any>(null)
 const busy = ref(false)
 const error = ref('')
 const step = ref(1)
 const recoveryMode = ref<'2of2' | '2of3'>('2of3')
 const storageOptions = ref<AccountStorageOption[]>([])
 const selectedStorage = ref('')
+const recordCount = ref(100)
 const storageAuthorization = ref<any>(null)
 const preflight = ref<any>(null)
 const guardianContact = ref('')
@@ -208,7 +230,7 @@ const rehearsalUserShare = ref('')
 const drafts = ref(wallets.value.map(wallet => ({
   id: wallet.id,
   name: wallet.name,
-  accounts: wallet.accounts.map(account => ({ index: account.index, did: account.name || '' })),
+  accounts: wallet.accounts.map(account => ({ index: account.index, did: account.did || '' })),
 })))
 
 const questions = ref([
@@ -238,14 +260,43 @@ const run = async (task: () => Promise<void>) => {
 
 const runPreflight = () => run(async () => {
   if (!walletStore.password) throw new Error('钱包尚未解锁')
-  if (drafts.value.some(wallet => wallet.accounts.some(account => !account.did.trim()))) throw new Error('请填写所有子账户的 Ordinals DID')
   preflight.value = await accountSDK.preflight(walletStore.password, metadata())
   storageOptions.value = (await accountSDK.getStorageOptions()).options
+  recordCount.value = storageOptions.value.find(option => option.id === 'paid')?.default_record_count || 100
   step.value = 2
 })
 
+const paidStorageOption = computed(() => storageOptions.value.find(option => option.id === 'paid'))
+const normalizedRecordCount = computed(() => Math.floor(Number(recordCount.value)))
+const recordCountValid = computed(() => selectedStorage.value !== 'paid'
+  || (Number.isSafeInteger(normalizedRecordCount.value) && normalizedRecordCount.value >= 100))
+const autopayQuote = computed(() => {
+  const fee = Number(paidStorageOption.value?.full_record_fee_per_block)
+  if (!recordCountValid.value || !Number.isFinite(fee) || fee <= 0) return null
+  const minimum = Number(paidStorageOption.value?.minimum_amount_per_block || 0)
+  const quoted = normalizedRecordCount.value * fee
+  const amountPerBlock = Math.max(quoted, minimum)
+  const format = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 8 })
+  return {
+    amountPerBlock: format(amountPerBlock),
+    initialCost: format(amountPerBlock * 1000),
+    annualCost: format(amountPerBlock * 2_628_000),
+  }
+})
+
+const selectStorage = (option: AccountStorageOption) => {
+  selectedStorage.value = option.id
+  if (option.id === 'paid' && (!Number.isSafeInteger(normalizedRecordCount.value) || normalizedRecordCount.value < 100)) {
+    recordCount.value = option.default_record_count || 100
+  }
+}
+
 const confirmStorage = () => run(async () => {
-  storageAuthorization.value = await accountSDK.confirmStorage(selectedStorage.value)
+  if (!recordCountValid.value) throw new Error('持久记录条数必须是不小于 100 的整数')
+  storageAuthorization.value = await accountSDK.confirmStorage(
+    selectedStorage.value,
+    selectedStorage.value === 'paid' ? normalizedRecordCount.value : undefined,
+  )
   step.value = 3
 })
 
@@ -277,24 +328,13 @@ const verifyGuardian = () => run(async () => {
 
 const rehearse = () => run(async () => {
   const answers = rehearsalAnswers.value.map((answer, index) => ({ question_id: questions.value[index].id, answer })).filter(item => item.answer)
-  const result = await accountSDK.rehearse(creation.value.session_id, answers, rehearsalUserShare.value)
+  const result = await accountSDK.rehearse(
+    creation.value.session_id, answers, rehearsalUserShare.value, walletStore.password
+  )
   if (!result.verified) throw new Error('恢复演练未通过')
-  saveAccountManagementState({
-    version: 1,
-    status: selectedStorage.value === 'paid' ? 'active-paid' : 'active-temporary',
-    accountId: preflight.value.account_id,
-    packageId: result.summary.package_id,
-    recoveryMode: recoveryMode.value,
-    storageMode: selectedStorage.value as 'paid' | 'temporary',
-    storageDescription: storageAuthorization.value.summary?.description,
-    estimatedExpiryTime: storageAuthorization.value.summary?.estimated_expiry_time,
-    guardianStatus: recoveryMode.value === '2of3' ? 'stored' : 'none',
-    publicLocator: creation.value.locator,
-    lastRehearsalAt: Date.now(),
-  })
   rehearsalAnswers.value = ['', '', '']
   rehearsalUserShare.value = ''
-  savedState.value = loadAccountManagementState()
+  savedState.value = await accountSDK.status()
   step.value = 6
 })
 
@@ -317,6 +357,7 @@ const copyText = async (value: string) => {
 }
 
 onMounted(async () => {
+  try { savedState.value = await accountSDK.status() } catch { savedState.value = null }
   try { storageOptions.value = (await accountSDK.getStorageOptions()).options } catch { /* preflight will retry */ }
 })
 </script>

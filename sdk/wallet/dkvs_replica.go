@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,7 +16,7 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-const dkvsReplicaVersion = byte(1)
+const dkvsReplicaVersion = byte(2)
 
 var (
 	dkvsReplicaConfirmedPrefix = []byte("dkvs-replica-confirmed-v1:")
@@ -25,6 +26,12 @@ var (
 
 type dkvsReplicaStore struct {
 	db indexer.KVDB
+}
+
+type dkvsReplicaBaseline struct {
+	DirectoryRoot chainhash.Hash
+	ActiveRoot    chainhash.Hash
+	Generation    uint64
 }
 
 func newDKVSReplicaStore(db indexer.KVDB) *dkvsReplicaStore {
@@ -91,20 +98,30 @@ func (s *dkvsReplicaStore) loadOutbox(scope string) ([]*swire.DKVSRecord, error)
 	return s.loadRecords(dkvsReplicaOutboxPrefix, scope)
 }
 
-func (s *dkvsReplicaStore) loadRoot(scope string) (string, error) {
+func (s *dkvsReplicaStore) loadBaseline(scope string) (*dkvsReplicaBaseline, error) {
 	if s == nil || s.db == nil || scope == "" {
-		return "", fmt.Errorf("DKVS replica store is unavailable")
+		return nil, fmt.Errorf("DKVS replica store is unavailable")
 	}
 	value, err := s.db.Read(append(append([]byte(nil), dkvsReplicaRootPrefix...), scope...))
 	if err != nil {
+		return nil, err
+	}
+	if len(value) != 1+2*chainhash.HashSize+8 || value[0] != dkvsReplicaVersion {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	baseline := &dkvsReplicaBaseline{}
+	copy(baseline.DirectoryRoot[:], value[1:1+chainhash.HashSize])
+	copy(baseline.ActiveRoot[:], value[1+chainhash.HashSize:1+2*chainhash.HashSize])
+	baseline.Generation = binary.LittleEndian.Uint64(value[1+2*chainhash.HashSize:])
+	return baseline, nil
+}
+
+func (s *dkvsReplicaStore) loadRoot(scope string) (string, error) {
+	baseline, err := s.loadBaseline(scope)
+	if err != nil {
 		return "", err
 	}
-	if len(value) != 1+chainhash.HashSize || value[0] != dkvsReplicaVersion {
-		return "", dkvsindexer.ErrInvalidRecord
-	}
-	var root chainhash.Hash
-	copy(root[:], value[1:])
-	return root.String(), nil
+	return baseline.DirectoryRoot.String(), nil
 }
 
 func recordMatchesAnyFilter(record *swire.DKVSRecord, filters []dkvsindexer.Subscription) bool {
@@ -120,12 +137,13 @@ func recordMatchesAnyFilter(record *swire.DKVSRecord, filters []dkvsindexer.Subs
 }
 
 func (s *dkvsReplicaStore) applyConfirmed(scope string, filters []dkvsindexer.Subscription,
-	records []*swire.DKVSRecord, rootText string) error {
+	records []*swire.DKVSRecord, directoryRootText string, activeRoot chainhash.Hash,
+	generation uint64) error {
 
 	if s == nil || s.db == nil || scope == "" || len(filters) == 0 {
 		return fmt.Errorf("invalid DKVS replica mirror")
 	}
-	root, err := chainhash.NewHashFromStr(strings.TrimSpace(rootText))
+	directoryRoot, err := chainhash.NewHashFromStr(strings.TrimSpace(directoryRootText))
 	if err != nil {
 		return dkvsindexer.ErrInvalidCheckpoint
 	}
@@ -165,9 +183,11 @@ func (s *dkvsReplicaStore) applyConfirmed(scope string, filters []dkvsindexer.Su
 			return err
 		}
 	}
-	rootValue := make([]byte, 1+chainhash.HashSize)
+	rootValue := make([]byte, 1+2*chainhash.HashSize+8)
 	rootValue[0] = dkvsReplicaVersion
-	copy(rootValue[1:], root[:])
+	copy(rootValue[1:1+chainhash.HashSize], directoryRoot[:])
+	copy(rootValue[1+chainhash.HashSize:1+2*chainhash.HashSize], activeRoot[:])
+	binary.LittleEndian.PutUint64(rootValue[1+2*chainhash.HashSize:], generation)
 	if err := batch.Put(append(append([]byte(nil), dkvsReplicaRootPrefix...), scope...), rootValue); err != nil {
 		return err
 	}

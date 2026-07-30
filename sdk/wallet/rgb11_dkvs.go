@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -33,19 +32,16 @@ const (
 	rgb11AddressTemporaryTTL    = uint64((24 * time.Hour) / time.Millisecond)
 )
 
-func (p *rgb11Manager) configuredRGB11DKVSClient() (*SatsNetDKVSClient, error) {
-	if p == nil {
+func (p *rgb11Manager) configuredRGB11Store() (*dkvsStore, error) {
+	if p == nil || p.ensureDKVSManager() == nil {
 		return nil, ErrRGB11Inconsistent
 	}
-	return p.rgb11DKVSClient()
+	return p.ensureDKVSManager().primaryStore()
 }
 
-// configureRGB11AddressRetention selects AUTOPAY for an active DKVS tenant and
-// otherwise applies a temporary TTL. Failure to query the tenant contract does
-// not block an address transfer; it safely falls back to temporary retention,
-// which is surfaced by RGB11AddressDeliveryResult.Temporary.
-func (p *rgb11Manager) configureRGB11AddressRetention(client *SatsNetDKVSClient, record *dkvsindexer.RecordOptions,
-	autopay **DKVSAutopayOptions) {
+func (p *rgb11Manager) configureRGB11AddressStoreRetention(store *dkvsStore,
+	record *dkvsindexer.RecordOptions, autopay **DKVSAutopayOptions) {
+
 	if record == nil || autopay == nil {
 		return
 	}
@@ -60,8 +56,8 @@ func (p *rgb11Manager) configureRGB11AddressRetention(client *SatsNetDKVSClient,
 		return
 	}
 	maxTTL := rgb11AddressTemporaryTTL
-	if client != nil {
-		if policy, err := client.GetFreeLocalCachePolicy(); err == nil && policy != nil && policy.Enabled && policy.MaxTTL > 0 {
+	if store != nil {
+		if policy, err := store.Config(); err == nil && policy != nil && policy.Enabled && policy.MaxTTL > 0 {
 			maxTTL = policy.MaxTTL
 		}
 	}
@@ -72,41 +68,66 @@ func (p *rgb11Manager) configureRGB11AddressRetention(client *SatsNetDKVSClient,
 	p.setRGB11BackupRetention("temporary", record.TTL)
 }
 
+func rgb11AddressStoragePolicy(options dkvsindexer.RecordOptions,
+	autopay *DKVSAutopayOptions) dkvsStoragePolicy {
+
+	policy := dkvsStoragePolicy{
+		TTL: options.TTL, ExpiryHeight: options.ExpiryHeight, Autopay: autopay,
+	}
+	if autopay == nil && options.TTL > 0 {
+		policy.FreeLocal = true
+	}
+	return policy
+}
+
 func (p *rgb11Manager) EnableConfiguredRGB11AddressReceive(options RGB11ReceiveCapabilityOptions) (*RGB11AddressEndpoint, error) {
-	client, err := p.configuredRGB11DKVSClient()
+	store, err := p.configuredRGB11Store()
 	if err != nil {
 		return nil, err
 	}
-	p.configureRGB11AddressRetention(client, &options.RecordOptions, &options.Autopay)
-	return p.EnableRGB11AddressReceive(client, options)
+	p.configureRGB11AddressStoreRetention(store, &options.RecordOptions, &options.Autopay)
+	return p.enableRGB11AddressReceiveStore(store, options)
 }
 
 func (p *rgb11Manager) ResolveConfiguredRGB11AddressEndpoint(address string,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressEndpoint, error) {
-	client, err := p.configuredRGB11DKVSClient()
+	store, err := p.configuredRGB11Store()
 	if err != nil {
 		return nil, err
 	}
-	return p.ResolveRGB11AddressEndpoint(client, address, verify)
+	return p.resolveRGB11AddressEndpointStore(store, address, verify)
 }
 
 func (p *rgb11Manager) PrepareConfiguredRGB11AddressTransfer(ctx context.Context, request RGB11AddressSendRequest,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11PreparedTransfer, *RGB11AddressEndpoint, error) {
-	client, err := p.configuredRGB11DKVSClient()
+	store, err := p.configuredRGB11Store()
 	if err != nil {
 		return nil, nil, err
 	}
-	return p.PrepareRGB11AddressTransfer(ctx, client, request, verify)
+	endpoint, err := p.resolveRGB11AddressEndpointStore(store, request.ReceiverAddress, verify)
+	if err != nil {
+		return nil, nil, err
+	}
+	return p.prepareRGB11AddressTransferForEndpoint(ctx, request, endpoint)
 }
 
 func (p *rgb11Manager) DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID string,
 	options RGB11AddressDeliveryOptions) (*RGB11AddressDeliveryResult, error) {
-	client, err := p.configuredRGB11DKVSClient()
+	store, err := p.configuredRGB11Store()
 	if err != nil {
 		return nil, err
 	}
-	p.configureRGB11AddressRetention(client, &options.RecordOptions, &options.Autopay)
-	return p.DeliverAndBroadcastRGB11AddressTransfer(client, transferID, options)
+	p.configureRGB11AddressStoreRetention(store, &options.RecordOptions, &options.Autopay)
+	result, err := p.deliverRGB11AddressTransferStore(store, transferID, options)
+	if err != nil {
+		return nil, err
+	}
+	txID, err := p.BroadcastRGB11AddressTransfer(transferID)
+	if err != nil {
+		return result, err
+	}
+	result.TxID = txID
+	return result, nil
 }
 
 func rgb11AddressProcessedMetadata(kind, messageID string) string {
@@ -146,11 +167,11 @@ func (p *rgb11Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 	if !p.rgb11DKVSConfigured() {
 		return result, nil
 	}
-	client, err := p.configuredRGB11DKVSClient()
+	store, err := p.configuredRGB11Store()
 	if err != nil {
 		return nil, err
 	}
-	p.configureRGB11AddressRetention(client, &ackOptions.RecordOptions, &ackOptions.Autopay)
+	p.configureRGB11AddressStoreRetention(store, &ackOptions.RecordOptions, &ackOptions.Autopay)
 	accountID, err := dkvsAccountID(p.wallet)
 	if err != nil {
 		return nil, err
@@ -162,58 +183,53 @@ func (p *rgb11Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 	if verify.Now == 0 {
 		verify.Now = uint64(time.Now().UnixMilli())
 	}
-	for start := 0; ; start += rgb11AddressMailboxPageSize {
-		records, total, err := client.ListRecords(prefix, start, rgb11AddressMailboxPageSize)
-		if err != nil {
-			return nil, err
+	records, err := store.List(prefix)
+	if err != nil {
+		return nil, err
+	}
+	for _, record := range records {
+		result.Scanned++
+		_, _, messageID, parseErr := parseRGB11AddressMailboxKey(record.record)
+		if parseErr != nil {
+			result.Invalid++
+			result.ErrorDetails = append(result.ErrorDetails, parseErr.Error())
+			continue
 		}
-		for _, record := range records {
-			result.Scanned++
-			_, _, messageID, parseErr := parseRGB11AddressMailboxKey(record)
-			if parseErr != nil {
-				result.Invalid++
-				result.ErrorDetails = append(result.ErrorDetails, parseErr.Error())
-				continue
-			}
-			if len(record.Value) == 4 {
-				if p.rgb11AddressMessageProcessed("ack", messageID) {
-					result.AlreadyDone++
-					continue
-				}
-				if _, err := p.AcceptRGB11AddressACK(record, verify); err != nil {
-					result.Invalid++
-					result.ErrorDetails = append(result.ErrorDetails,
-						fmt.Sprintf("ack %s: %v", messageID, err))
-					continue
-				}
-				if err := p.markRGB11AddressMessageProcessed("ack", messageID); err != nil {
-					return nil, err
-				}
-				result.ACKs++
-				continue
-			}
-			if p.rgb11AddressMessageProcessed("consignment", messageID) {
+		if len(record.Value) == 4 {
+			if p.rgb11AddressMessageProcessed("ack", messageID) {
 				result.AlreadyDone++
 				continue
 			}
-			if _, _, err := p.AcceptRGB11AddressMailbox(ctx, client, record, verify, ackOptions); err != nil {
-				if errors.Is(err, ErrRGB11AddressTxNotSeen) {
-					result.WaitingTx++
-					continue
-				}
+			if _, err := p.AcceptRGB11AddressACK(record.record, verify); err != nil {
 				result.Invalid++
 				result.ErrorDetails = append(result.ErrorDetails,
-					fmt.Sprintf("consignment %s: %v", messageID, err))
+					fmt.Sprintf("ack %s: %v", messageID, err))
 				continue
 			}
-			if err := p.markRGB11AddressMessageProcessed("consignment", messageID); err != nil {
+			if err := p.markRGB11AddressMessageProcessed("ack", messageID); err != nil {
 				return nil, err
 			}
-			result.Received++
+			result.ACKs++
+			continue
 		}
-		if start+len(records) >= total || len(records) == 0 {
-			break
+		if p.rgb11AddressMessageProcessed("consignment", messageID) {
+			result.AlreadyDone++
+			continue
 		}
+		if _, _, err := p.acceptRGB11AddressMailboxStore(ctx, store, record, ackOptions); err != nil {
+			if errors.Is(err, ErrRGB11AddressTxNotSeen) {
+				result.WaitingTx++
+				continue
+			}
+			result.Invalid++
+			result.ErrorDetails = append(result.ErrorDetails,
+				fmt.Sprintf("consignment %s: %v", messageID, err))
+			continue
+		}
+		if err := p.markRGB11AddressMessageProcessed("consignment", messageID); err != nil {
+			return nil, err
+		}
+		result.Received++
 	}
 	return result, nil
 }
@@ -233,46 +249,10 @@ type RGB11ReceiveCapabilityOptions struct {
 	Flags         uint8                     `json:"flags"`
 }
 
-func nextRGB11CapabilityRecordOptions(client *SatsNetDKVSClient, key string, value []byte,
-	opts dkvsindexer.RecordOptions) (dkvsindexer.RecordOptions, *swire.DKVSRecord) {
-	if opts.Seq != 0 || client == nil {
-		return opts, nil
-	}
-	existing, err := client.GetRecord(key)
-	if err != nil || existing == nil || existing.Version != dkvsindexer.Version {
-		opts.Seq = 1
-		return opts, nil
-	}
-	if bytes.Equal(existing.Value, value) {
-		opts.Seq = existing.Seq
-	} else {
-		opts.Seq = existing.Seq + 1
-	}
-	return opts, existing
-}
-
-func putRGB11CapabilityRecord(client *SatsNetDKVSClient, wallet *InternalWallet, key string, value []byte,
-	opts dkvsindexer.RecordOptions, autopay *DKVSAutopayOptions) (*swire.DKVSRecord, error) {
-	opts, existing := nextRGB11CapabilityRecordOptions(client, key, value, opts)
-	if existing != nil && bytes.Equal(existing.Value, value) &&
-		opts.ExpiryHeight <= existing.ExpiryHeight && opts.TTL <= existing.TTL {
-		return existing, nil
-	}
-	if autopay != nil {
-		return client.PutAccountSignedRecordWithAutopay(wallet, key, value, opts, *autopay)
-	}
-	if opts.TTL > 0 {
-		return client.PutAccountSignedRecordWithFreeLocal(wallet, key, value, opts)
-	}
-	return client.PutAccountSignedRecord(wallet, key, value, opts)
-}
-
-// EnableRGB11AddressReceive publishes the public address mapping and the
-// minimal account capability. Callers should invoke this when DKVS wallet
-// communication/storage is enabled for the current SAT20 subaccount.
-func (p *rgb11Manager) EnableRGB11AddressReceive(client *SatsNetDKVSClient,
+func (p *rgb11Manager) enableRGB11AddressReceiveStore(store *dkvsStore,
 	options RGB11ReceiveCapabilityOptions) (*RGB11AddressEndpoint, error) {
-	if p == nil || client == nil || p.wallet == nil {
+
+	if p == nil || store == nil || p.wallet == nil {
 		return nil, ErrRGB11Inconsistent
 	}
 	wallet, ok := p.wallet.(*InternalWallet)
@@ -283,7 +263,7 @@ func (p *rgb11Manager) EnableRGB11AddressReceive(client *SatsNetDKVSClient,
 	if flags == 0 {
 		flags = RGB11ReceiveCapabilityAddress | RGB11ReceiveCapabilityAny
 	}
-	value, err := rgb11wallet.EncodeReceiveCapability(RGB11ReceiveCapability{
+	capabilityValue, err := rgb11wallet.EncodeReceiveCapability(RGB11ReceiveCapability{
 		Version: RGB11ReceiveCapabilityVersion,
 		Flags:   flags,
 	})
@@ -295,8 +275,7 @@ func (p *rgb11Manager) EnableRGB11AddressReceive(client *SatsNetDKVSClient,
 		return nil, err
 	}
 	address := wallet.GetAddress()
-	network := GetChainParam().Name
-	mappingKey, err := dkvsindexer.AccountMappingKey(network, address)
+	mappingKey, err := dkvsindexer.AccountMappingKey(GetChainParam().Name, address)
 	if err != nil {
 		return nil, err
 	}
@@ -304,49 +283,64 @@ func (p *rgb11Manager) EnableRGB11AddressReceive(client *SatsNetDKVSClient,
 	if err != nil {
 		return nil, err
 	}
-	if _, err := putRGB11CapabilityRecord(
-		client, wallet, mappingKey, mappingValue, options.RecordOptions, options.Autopay,
-	); err != nil {
+	capabilityKey, err := dkvsindexer.AccountPersonalKey(accountID, RGB11ReceiveCapabilityPath)
+	if err != nil {
 		return nil, err
+	}
+	values := map[string][]byte{
+		mappingKey: mappingValue, capabilityKey: capabilityValue,
+	}
+	policy := rgb11AddressStoragePolicy(options.RecordOptions, options.Autopay)
+	if _, err := store.Update([]string{mappingKey, capabilityKey},
+		func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
+			mutations := make([]dkvsValueMutation, 0, 2)
+			for _, key := range []string{mappingKey, capabilityKey} {
+				existing := current[key]
+				if existing != nil && bytes.Equal(existing.Value, values[key]) &&
+					options.RecordOptions.ExpiryHeight <= existing.ExpiryHeight &&
+					options.RecordOptions.TTL <= existing.TTL {
+					continue
+				}
+				mutations = append(mutations, dkvsValueMutation{
+					Key: key, Value: values[key], Owner: wallet,
+					Policy: policy, Signature: dkvsSignatureAccount,
+				})
+			}
+			return mutations, nil
+		}); err != nil {
+		return nil, err
+	}
+	return p.resolveRGB11AddressEndpointStore(store, address,
+		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())})
+}
+
+func (p *rgb11Manager) resolveRGB11AddressEndpointStore(store *dkvsStore, address string,
+	_ dkvsindexer.RecordVerificationOptions) (*RGB11AddressEndpoint, error) {
+
+	if store == nil || address == "" {
+		return nil, ErrRGB11TraditionalReceiveRequired
+	}
+	mappingKey, err := dkvsindexer.AccountMappingKey(GetChainParam().Name, address)
+	if err != nil {
+		return nil, ErrRGB11TraditionalReceiveRequired
+	}
+	mapping, err := store.Get(mappingKey)
+	if err != nil {
+		return nil, ErrRGB11TraditionalReceiveRequired
+	}
+	accountID, err := dkvsindexer.DecodeAccountMappingValue(mapping.Value)
+	if err != nil {
+		return nil, ErrRGB11TraditionalReceiveRequired
 	}
 	capabilityKey, err := dkvsindexer.AccountPersonalKey(accountID, RGB11ReceiveCapabilityPath)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := putRGB11CapabilityRecord(
-		client, wallet, capabilityKey, value, options.RecordOptions, options.Autopay,
-	); err != nil {
-		return nil, err
-	}
-	verify := dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}
-	return p.ResolveRGB11AddressEndpoint(client, address, verify)
-}
-
-func (p *rgb11Manager) ResolveRGB11AddressEndpoint(client *SatsNetDKVSClient, address string,
-	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressEndpoint, error) {
-	if client == nil || address == "" {
-		return nil, ErrRGB11TraditionalReceiveRequired
-	}
-	if verify.Now == 0 {
-		verify.Now = uint64(time.Now().UnixMilli())
-	}
-	accountID, _, err := client.ResolveAccountAddress(GetChainParam().Name, address, verify)
+	capabilityValue, err := store.Get(capabilityKey)
 	if err != nil {
 		return nil, ErrRGB11TraditionalReceiveRequired
 	}
-	key, err := dkvsindexer.AccountPersonalKey(accountID, RGB11ReceiveCapabilityPath)
-	if err != nil {
-		return nil, err
-	}
-	record, err := client.GetRecord(key)
-	if err != nil {
-		return nil, ErrRGB11TraditionalReceiveRequired
-	}
-	verify.ExpectedKey = key
-	if err := dkvsindexer.VerifyAccountRecordForClient(record, verify); err != nil {
-		return nil, ErrRGB11TraditionalReceiveRequired
-	}
-	capability, err := rgb11wallet.DecodeReceiveCapability(record.Value)
+	capability, err := rgb11wallet.DecodeReceiveCapability(capabilityValue.Value)
 	if err != nil {
 		return nil, err
 	}
@@ -358,19 +352,14 @@ func (p *rgb11Manager) ResolveRGB11AddressEndpoint(client *SatsNetDKVSClient, ad
 	if err != nil {
 		return nil, err
 	}
-	recordHash := dkvsindexer.RecordHash(record)
 	return &RGB11AddressEndpoint{
-		AccountID:            accountID,
-		Address:              address,
-		MailboxID:            accountID,
-		CompressedPubKey:     pubKey,
-		PkScript:             pkScript,
-		CapabilityFlags:      capability.Flags,
-		CapabilityRecordKey:  key,
-		CapabilityRecordHash: hex.EncodeToString(recordHash[:]),
-		Temporary:            len(record.FeeProof) == 0,
-		ExpiryHeight:         record.ExpiryHeight,
-		TTL:                  record.TTL,
+		AccountID: accountID, Address: address, MailboxID: accountID,
+		CompressedPubKey: pubKey, PkScript: pkScript,
+		CapabilityFlags: capability.Flags, CapabilityRecordKey: capabilityKey,
+		CapabilityRecordHash: capabilityValue.Hash,
+		Temporary:            capabilityValue.TTL > 0,
+		ExpiryHeight:         capabilityValue.ExpiryHeight,
+		TTL:                  capabilityValue.TTL,
 	}, nil
 }
 
@@ -402,34 +391,10 @@ type rgb11AccountPayloadCryptor interface {
 	DecryptFromAccount(accountID string, ciphertext []byte) ([]byte, error)
 }
 
-func nextRGB11AddressRecordOptions(client *SatsNetDKVSClient, keys []string, opts dkvsindexer.RecordOptions) dkvsindexer.RecordOptions {
-	if opts.IssueTime == 0 {
-		opts.IssueTime = uint64(time.Now().UnixMilli())
-	}
-	if opts.Seq != 0 {
-		return opts
-	}
-	var maxSeq uint64
-	for _, key := range keys {
-		if key == "" || client == nil {
-			continue
-		}
-		existing, err := client.GetRecord(key)
-		if err == nil && existing != nil && existing.Seq > maxSeq {
-			maxSeq = existing.Seq
-		}
-	}
-	opts.Seq = maxSeq + 1
-	return opts
-}
-
-// DeliverRGB11AddressTransfer encrypts the recipient Consignment and writes it
-// before any Bitcoin broadcast. Small ciphertexts are carried directly by the
-// mailbox record; larger ones use the native sender-owned DKVS blob and a
-// two-byte mailbox locator.
-func (p *rgb11Manager) DeliverRGB11AddressTransfer(client *SatsNetDKVSClient, transferID string,
+func (p *rgb11Manager) deliverRGB11AddressTransferStore(store *dkvsStore, transferID string,
 	options RGB11AddressDeliveryOptions) (*RGB11AddressDeliveryResult, error) {
-	if p == nil || client == nil || p.wallet == nil || p.rgbManager == nil ||
+
+	if p == nil || store == nil || p.wallet == nil || p.rgbManager == nil ||
 		p.rgbManager.projectionStore == nil || transferID == "" {
 		return nil, ErrRGB11AddressDeliveryRequired
 	}
@@ -472,94 +437,76 @@ func (p *rgb11Manager) DeliverRGB11AddressTransfer(client *SatsNetDKVSClient, tr
 	if err != nil {
 		return nil, err
 	}
-	revisionKeys := []string{mailKey}
-	var blobKey string
-	if len(ciphertext)+2 > inlineLimit {
-		mode = rgb11AddressEnvelopeBlob
-		objectID = messageID
-		blobKey, err = dkvsindexer.BlobKey(pending.State.SenderAccountID, objectID)
-		if err != nil {
-			return nil, err
-		}
-		revisionKeys = append(revisionKeys, blobKey)
-	}
-	opts := nextRGB11AddressRecordOptions(client, revisionKeys, options.RecordOptions)
+	keys := []string{mailKey}
+	values := make(map[string][]byte)
 	mailValue, err := rgb11wallet.EncodeAddressEnvelope(mode, ciphertext)
 	if err != nil {
 		return nil, err
 	}
-	if mode == rgb11AddressEnvelopeBlob {
+	if len(ciphertext)+2 > inlineLimit {
+		mode = rgb11AddressEnvelopeBlob
+		objectID = messageID
+		blobKey, keyErr := dkvsindexer.BlobKey(pending.State.SenderAccountID, objectID)
+		if keyErr != nil {
+			return nil, keyErr
+		}
+		keys = append(keys, blobKey)
+		values[blobKey] = ciphertext
 		mailValue, err = rgb11wallet.EncodeAddressEnvelope(mode, nil)
 		if err != nil {
 			return nil, err
 		}
 	}
-	var mailRecord *swire.DKVSRecord
-	if options.Autopay != nil {
-		mailRecord, err = newDKVSAccountSignedRecordWithAutopay(
-			p.wallet, mailKey, mailValue, opts, *options.Autopay,
-		)
-	} else {
-		mailRecord, err = newDKVSAccountSignedRecordWithFreeLocal(
-			p.wallet, mailKey, mailValue, opts,
-		)
-	}
+	values[mailKey] = mailValue
+	policy := rgb11AddressStoragePolicy(options.RecordOptions, options.Autopay)
+	written, err := store.Update(keys, func(current map[string]*dkvsValue,
+		_ map[string]uint64) ([]dkvsValueMutation, error) {
+		mutations := make([]dkvsValueMutation, 0, len(keys))
+		for _, key := range keys {
+			existing := current[key]
+			if existing != nil && bytes.Equal(existing.Value, values[key]) &&
+				options.RecordOptions.ExpiryHeight <= existing.ExpiryHeight &&
+				options.RecordOptions.TTL <= existing.TTL {
+				continue
+			}
+			mutations = append(mutations, dkvsValueMutation{
+				Key: key, Value: values[key], Owner: p.wallet,
+				Policy: policy, Signature: dkvsSignatureAccount,
+			})
+		}
+		return mutations, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	mailPrecondition, _, err := client.dkvsWritePrecondition(mailKey)
-	if err != nil {
-		return nil, err
+	var mailRecord *dkvsValue
+	for _, value := range written {
+		if value != nil && value.Key == mailKey {
+			mailRecord = value
+			break
+		}
 	}
-	record := mailRecord
-	if mode == rgb11AddressEnvelopeBlob {
-		var blobRecord *swire.DKVSRecord
-		if options.Autopay != nil {
-			blobRecord, err = BuildDKVSSignedBlobRecord(
-				p.wallet, objectID, ciphertext, nil, opts, *options.Autopay,
-			)
-		} else {
-			blobRecord, err = BuildDKVSSignedBlobRecordFreeLocal(
-				p.wallet, objectID, ciphertext, nil, opts,
-			)
-		}
-		if err != nil {
-			return nil, err
-		}
-		blobPrecondition, _, err := client.dkvsWritePrecondition(blobKey)
-		if err != nil {
-			return nil, err
-		}
-		result, err := client.PutRecordBatchCAS([]dkvsindexer.CASMutation{
-			{Record: blobRecord, Precondition: blobPrecondition},
-			{Record: mailRecord, Precondition: mailPrecondition},
-		})
-		if err != nil {
-			return nil, err
-		}
-		record = result.Records[1]
-	} else {
-		record, err = client.PutRecordCAS(mailRecord, mailPrecondition)
+	if mailRecord == nil {
+		mailRecord, err = store.Get(mailKey)
 		if err != nil {
 			return nil, err
 		}
 	}
-	recordHash := dkvsindexer.RecordHash(record)
 	modeName := "inline"
 	if mode == rgb11AddressEnvelopeBlob {
 		modeName = "blob"
 	}
 	pending.State.DeliveryMode = modeName
 	pending.State.DeliveryObjectID = objectID
-	pending.State.DeliveryRecordKey = record.Key
-	pending.State.RelayRecordKey = record.Key
-	pending.State.DeliveryRecordHash = hex.EncodeToString(recordHash[:])
-	pending.State.DeliveryTemporary = options.Autopay == nil
-	pending.State.DeliveryExpiryHeight = record.ExpiryHeight
-	pending.State.DeliveryTTL = record.TTL
-	pending.State.RelayExpiry = int64(record.ExpiryHeight)
+	pending.State.DeliveryRecordKey = mailRecord.Key
+	pending.State.RelayRecordKey = mailRecord.Key
+	pending.State.DeliveryRecordHash = mailRecord.Hash
+	pending.State.DeliveryTemporary = mailRecord.TTL > 0
+	pending.State.DeliveryExpiryHeight = mailRecord.ExpiryHeight
+	pending.State.DeliveryTTL = mailRecord.TTL
+	pending.State.RelayExpiry = int64(mailRecord.ExpiryHeight)
 	pending.State.RelayDurability = "DKVS_PERSISTENT"
-	if options.Autopay == nil {
+	if pending.State.DeliveryTemporary {
 		pending.State.RelayDurability = "DKVS_TEMP"
 	}
 	pending.State.Status = "delivered"
@@ -568,12 +515,9 @@ func (p *rgb11Manager) DeliverRGB11AddressTransfer(client *SatsNetDKVSClient, tr
 	}
 	p.autoBackupRGB11AfterMutation()
 	return &RGB11AddressDeliveryResult{
-		TransferID: transferID,
-		Mode:       modeName,
-		RecordKey:  record.Key,
-		RecordHash: pending.State.DeliveryRecordHash,
-		ObjectID:   objectID,
-		Temporary:  pending.State.DeliveryTemporary,
+		TransferID: transferID, Mode: modeName, RecordKey: mailRecord.Key,
+		RecordHash: mailRecord.Hash, ObjectID: objectID,
+		Temporary: pending.State.DeliveryTemporary,
 	}, nil
 }
 
@@ -611,20 +555,6 @@ func (p *rgb11Manager) BroadcastRGB11AddressTransfer(transferID string) (string,
 	return pending.State.WitnessTxID, nil
 }
 
-func (p *rgb11Manager) DeliverAndBroadcastRGB11AddressTransfer(client *SatsNetDKVSClient, transferID string,
-	options RGB11AddressDeliveryOptions) (*RGB11AddressDeliveryResult, error) {
-	result, err := p.DeliverRGB11AddressTransfer(client, transferID, options)
-	if err != nil {
-		return nil, err
-	}
-	txID, err := p.BroadcastRGB11AddressTransfer(transferID)
-	if err != nil {
-		return result, err
-	}
-	result.TxID = txID
-	return result, nil
-}
-
 func parseRGB11AddressMailboxKey(record *swire.DKVSRecord) (receiverID, senderID, messageID string, err error) {
 	if record == nil {
 		return "", "", "", ErrRGB11AddressMailbox
@@ -644,8 +574,9 @@ func parseRGB11AddressMailboxKey(record *swire.DKVSRecord) (receiverID, senderID
 	return receiverID, senderID, messageID, nil
 }
 
-func (p *rgb11Manager) readRGB11AddressConsignment(client *SatsNetDKVSClient, record *swire.DKVSRecord,
-	senderID, messageID string, verify dkvsindexer.RecordVerificationOptions) ([]byte, string, error) {
+func (p *rgb11Manager) readRGB11AddressConsignmentStore(store *dkvsStore, record *dkvsValue,
+	senderID, messageID string) ([]byte, string, error) {
+
 	mode, encrypted, err := rgb11wallet.DecodeAddressEnvelope(record.Value)
 	if err != nil {
 		return nil, "", err
@@ -653,11 +584,15 @@ func (p *rgb11Manager) readRGB11AddressConsignment(client *SatsNetDKVSClient, re
 	modeName := "inline"
 	if mode == rgb11AddressEnvelopeBlob {
 		modeName = "blob"
-		_, blob, blobErr := client.GetBlob(senderID, messageID, verify)
+		blobKey, keyErr := dkvsindexer.BlobKey(senderID, messageID)
+		if keyErr != nil {
+			return nil, "", keyErr
+		}
+		blob, blobErr := store.Get(blobKey)
 		if blobErr != nil || blob == nil {
 			return nil, "", fmt.Errorf("%w: %v", ErrRGB11AddressMailbox, blobErr)
 		}
-		encrypted = blob.Data
+		encrypted = blob.Value
 	}
 	cryptor, ok := p.wallet.(rgb11AccountPayloadCryptor)
 	if !ok {
@@ -702,20 +637,44 @@ func (p *rgb11Manager) findRGB11AddressAllocation(receipt *rgb11wallet.Validatio
 	return nil, nil, ErrRGB11NoAllocation
 }
 
-// AcceptRGB11AddressMailbox validates an address-mode message after its Bitcoin
-// transaction is visible, projects the receiver allocation, persists state,
-// locks the actual outpoint, and only then emits the minimal ACK.
-func (p *rgb11Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *SatsNetDKVSClient,
-	record *swire.DKVSRecord, verify dkvsindexer.RecordVerificationOptions,
-	ackOptions RGB11AddressDeliveryOptions) (*rgb11wallet.ValidationReceipt, *swire.DKVSRecord, error) {
-	if p == nil || client == nil || p.wallet == nil || p.rgbManager == nil {
+func (p *rgb11Manager) acceptRGB11AddressMailboxStore(ctx context.Context, store *dkvsStore,
+	value *dkvsValue, ackOptions RGB11AddressDeliveryOptions) (
+	*rgb11wallet.ValidationReceipt, *swire.DKVSRecord, error) {
+
+	if p == nil || store == nil || value == nil || value.record == nil {
 		return nil, nil, ErrRGB11AddressMailbox
 	}
-	if verify.Now == 0 {
-		verify.Now = uint64(time.Now().UnixMilli())
+	verify := dkvsindexer.RecordVerificationOptions{
+		ExpectedKey: value.Key, Now: uint64(time.Now().UnixMilli()),
 	}
-	if err := dkvsindexer.VerifyAccountRecordForClient(record, verify); err != nil {
+	if err := dkvsindexer.VerifyAccountRecordForClient(value.record, verify); err != nil {
 		return nil, nil, err
+	}
+	_, senderID, messageID, err := parseRGB11AddressMailboxKey(value.record)
+	if err != nil {
+		return nil, nil, err
+	}
+	raw, mode, err := p.readRGB11AddressConsignmentStore(store, value, senderID, messageID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return p.acceptRGB11AddressMailboxDecoded(ctx, value.record, raw, mode,
+		func(senderID, messageID string, ack RGB11AddressACK) (*swire.DKVSRecord, error) {
+			written, err := p.sendRGB11AddressACKStore(store, senderID, messageID, ack, ackOptions)
+			if err != nil {
+				return nil, err
+			}
+			return written.record, nil
+		})
+}
+
+func (p *rgb11Manager) acceptRGB11AddressMailboxDecoded(ctx context.Context,
+	record *swire.DKVSRecord, raw []byte, mode string,
+	sendACK func(string, string, RGB11AddressACK) (*swire.DKVSRecord, error)) (
+	*rgb11wallet.ValidationReceipt, *swire.DKVSRecord, error) {
+
+	if p == nil || record == nil || sendACK == nil || p.wallet == nil || p.rgbManager == nil {
+		return nil, nil, ErrRGB11AddressMailbox
 	}
 	receiverID, senderID, messageID, err := parseRGB11AddressMailboxKey(record)
 	if err != nil {
@@ -724,10 +683,6 @@ func (p *rgb11Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *Sa
 	localID, err := dkvsAccountID(p.wallet)
 	if err != nil || receiverID != localID {
 		return nil, nil, ErrRGB11AddressMailbox
-	}
-	raw, mode, err := p.readRGB11AddressConsignment(client, record, senderID, messageID, verify)
-	if err != nil {
-		return nil, nil, err
 	}
 	container, err := coreconsignment.Decode(raw)
 	if err != nil || container.Armor.ID == "" {
@@ -807,8 +762,8 @@ func (p *rgb11Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *Sa
 	if err := p.utxoLockerL1.SetLockReason(allocation.OutPoint, lockReason); err != nil {
 		return nil, nil, err
 	}
-	ackRecord, err := p.SendRGB11AddressACK(client, senderID, messageID,
-		RGB11AddressACK{Status: RGB11AddressACKAccepted}, ackOptions)
+	ackRecord, err := sendACK(senderID, messageID,
+		RGB11AddressACK{Status: RGB11AddressACKAccepted})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -821,9 +776,10 @@ func (p *rgb11Manager) AcceptRGB11AddressMailbox(ctx context.Context, client *Sa
 	return accepted, ackRecord, nil
 }
 
-func (p *rgb11Manager) SendRGB11AddressACK(client *SatsNetDKVSClient, senderAccountID, messageID string,
-	ack RGB11AddressACK, options RGB11AddressDeliveryOptions) (*swire.DKVSRecord, error) {
-	if p == nil || client == nil || senderAccountID == "" || messageID == "" {
+func (p *rgb11Manager) sendRGB11AddressACKStore(store *dkvsStore, senderAccountID, messageID string,
+	ack RGB11AddressACK, options RGB11AddressDeliveryOptions) (*dkvsValue, error) {
+
+	if p == nil || store == nil || senderAccountID == "" || messageID == "" {
 		return nil, ErrRGB11AddressMailbox
 	}
 	value, err := rgb11wallet.EncodeAddressACK(ack)
@@ -838,8 +794,11 @@ func (p *rgb11Manager) SendRGB11AddressACK(client *SatsNetDKVSClient, senderAcco
 	if err != nil {
 		return nil, err
 	}
-	opts := nextRGB11AddressRecordOptions(client, []string{key}, options.RecordOptions)
-	return client.SendAccountMailboxMessage(p.wallet, senderAccountID, messageID, value, opts, options.Autopay)
+	return store.Put(dkvsValueMutation{
+		Key: key, Value: value, Owner: p.wallet,
+		Policy:    rgb11AddressStoragePolicy(options.RecordOptions, options.Autopay),
+		Signature: dkvsSignatureAccount,
+	})
 }
 
 // AcceptRGB11AddressACK records receiver persistence. Delivery cache is only
@@ -1017,24 +976,13 @@ func (p *rgb11Manager) synthesizeRGB11AddressInvoice(endpoint *RGB11AddressEndpo
 	return invoice.String(), nil
 }
 
-// PrepareRGB11AddressTransfer resolves the receiver's account capability and
-// synthesizes a private witness invoice solely to reuse the audited RGB11
-// transition builder. The synthesized invoice is removed from persisted public
-// lifecycle state immediately after preparation.
-func (p *rgb11Manager) PrepareRGB11AddressTransfer(ctx context.Context, client *SatsNetDKVSClient,
-	request RGB11AddressSendRequest, verify dkvsindexer.RecordVerificationOptions) (
+func (p *rgb11Manager) prepareRGB11AddressTransferForEndpoint(ctx context.Context,
+	request RGB11AddressSendRequest, endpoint *RGB11AddressEndpoint) (
 	*RGB11PreparedTransfer, *RGB11AddressEndpoint, error,
 ) {
-	if p == nil || client == nil || request.ReceiverAddress == "" ||
+	if p == nil || endpoint == nil || request.ReceiverAddress == "" ||
 		request.AssetName.Protocol != rgb11wallet.Protocol {
 		return nil, nil, ErrRGB11TraditionalReceiveRequired
-	}
-	if verify.Now == 0 {
-		verify.Now = uint64(time.Now().UnixMilli())
-	}
-	endpoint, err := p.ResolveRGB11AddressEndpoint(client, request.ReceiverAddress, verify)
-	if err != nil {
-		return nil, nil, err
 	}
 	if endpoint.CapabilityFlags&RGB11ReceiveCapabilityAny == 0 {
 		return nil, nil, ErrRGB11TraditionalReceiveRequired
@@ -1155,245 +1103,6 @@ func (p *rgb11Manager) exportRGB11WalletSnapshot(walletID string) (*RGB11WalletS
 	return snapshot, encoded, err
 }
 
-// BackupRGB11WalletState publishes an encrypted immutable snapshot and then
-// advances the single latest head record. Both records are signed only by the
-// owning wallet through DKVS /personal; there is no system/checkpoint key.
-func (p *rgb11Manager) BackupRGB11WalletState(client *SatsNetDKVSClient, walletID string,
-	previous *coresync.WalletHead, opts dkvsindexer.RecordOptions) (*coresync.WalletHead, *swire.DKVSRecord, error) {
-	if client == nil || p == nil || p.wallet == nil {
-		return nil, nil, ErrRGB11Inconsistent
-	}
-	stableID, err := p.RGB11WalletID()
-	if err != nil {
-		return nil, nil, err
-	}
-	if walletID == "" {
-		walletID = stableID
-	} else if walletID != stableID {
-		return nil, nil, coresync.ErrHeadWallet
-	}
-	_, plaintext, err := p.exportRGB11WalletSnapshot(walletID)
-	if err != nil {
-		return nil, nil, err
-	}
-	stateHash := sha256.Sum256(plaintext)
-	operationInput := append([]byte("SAT20-RGB11-WALLET-SNAPSHOT-V1"), stateHash[:]...)
-	nextSeq := uint64(1)
-	if previous != nil {
-		nextSeq = previous.Seq + 1
-	}
-	var sequence [8]byte
-	binary.LittleEndian.PutUint64(sequence[:], nextSeq)
-	operationInput = append(operationInput, sequence[:]...)
-	operationID := sha256.Sum256(operationInput)
-	head, err := NewRGB11WalletHead(walletID, stateHash, operationID, previous)
-	if err != nil {
-		return nil, nil, err
-	}
-	cryptor, ok := p.wallet.(rgb11SnapshotCryptor)
-	if !ok {
-		return nil, nil, fmt.Errorf("active wallet does not support RGB11 snapshot encryption")
-	}
-	pubkey := p.wallet.GetPubKey().SerializeCompressed()
-	ciphertext, err := cryptor.EncryptTo(pubkey, plaintext)
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := rgb11wallet.EncodeEncryptedSnapshot(walletID, operationID, ciphertext)
-	if err != nil {
-		return nil, nil, err
-	}
-	headKey, err := dkvsindexer.PersonalKey(pubkey, RGB11WalletHeadPath(walletID))
-	if err != nil {
-		return nil, nil, err
-	}
-	headPrecondition, activeHeadRecord, err := client.dkvsWritePrecondition(headKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	if previous == nil {
-		if activeHeadRecord != nil {
-			return nil, nil, coresync.ErrHeadConflict
-		}
-	} else {
-		if activeHeadRecord == nil {
-			return nil, nil, coresync.ErrHeadConflict
-		}
-		activeHead, decodeErr := rgb11wallet.DecodeWalletHead(activeHeadRecord.Value)
-		if decodeErr != nil || activeHeadRecord.Seq != activeHead.Seq || *activeHead != *previous {
-			return nil, nil, coresync.ErrHeadConflict
-		}
-	}
-
-	accountID := dkvsindexer.AccountID(pubkey)
-	snapshotName := RGB11WalletSnapshotBlobKey(walletID)
-	snapshotKey, err := dkvsindexer.BlobKey(accountID, snapshotName)
-	if err != nil {
-		return nil, nil, err
-	}
-	snapshotPrecondition, activeSnapshotRecord, err := client.dkvsWritePrecondition(snapshotKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	if previous == nil {
-		if activeSnapshotRecord != nil {
-			return nil, nil, coresync.ErrHeadConflict
-		}
-	} else {
-		if activeSnapshotRecord == nil {
-			return nil, nil, coresync.ErrHeadConflict
-		}
-		if verifyErr := dkvsindexer.VerifyBlobRecordForClient(activeSnapshotRecord,
-			dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}); verifyErr != nil {
-			return nil, nil, verifyErr
-		}
-		activeBlob, decodeErr := DecodeDKVSBlobValue(activeSnapshotRecord.Value)
-		if decodeErr != nil {
-			return nil, nil, decodeErr
-		}
-		activeWalletID, activeOperationID, _, decodeErr := rgb11wallet.DecodeEncryptedSnapshot(activeBlob.Data)
-		if decodeErr != nil || activeWalletID != walletID || activeOperationID != previous.OperationID {
-			return nil, nil, coresync.ErrHeadConflict
-		}
-	}
-
-	paid, err := p.hasActiveRGB11Autopay()
-	if err != nil {
-		return nil, nil, err
-	}
-	opts.Seq = head.Seq
-	var snapshotRecord, headRecord *swire.DKVSRecord
-	if paid {
-		autopay := DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet()}
-		opts.TTL = 0
-		opts.ExpiryHeight = 0
-		snapshotRecord, err = BuildDKVSSignedBlobRecord(
-			p.wallet, snapshotName, envelope, nil, opts, autopay,
-		)
-		if err == nil {
-			headRecord, err = buildRGB11WalletHeadRecord(p.wallet, head, opts, &autopay, false)
-		}
-		p.setRGB11BackupRetention("autopay", 0)
-	} else {
-		policy, policyErr := client.GetFreeLocalCachePolicy()
-		if policyErr != nil {
-			return nil, nil, policyErr
-		}
-		if policy == nil || !policy.Enabled || policy.MaxTTL == 0 {
-			return nil, nil, dkvsindexer.ErrFreeLocalDisabled
-		}
-		if opts.TTL == 0 || opts.TTL > policy.MaxTTL {
-			opts.TTL = policy.MaxTTL
-		}
-		opts.ExpiryHeight = 0
-		snapshotRecord, err = BuildDKVSSignedBlobRecordFreeLocal(
-			p.wallet, snapshotName, envelope, nil, opts,
-		)
-		if err == nil {
-			headRecord, err = buildRGB11WalletHeadRecord(p.wallet, head, opts, nil, true)
-		}
-		p.setRGB11BackupRetention("temporary", opts.TTL)
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	result, err := client.PutRecordBatchCAS([]dkvsindexer.CASMutation{
-		{Record: snapshotRecord, Precondition: snapshotPrecondition},
-		{Record: headRecord, Precondition: headPrecondition},
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	record := result.Records[1]
-	if err := p.persistRGB11WalletHead(head); err != nil {
-		p.rgbManager.dkvsStatus = "warning"
-		return nil, nil, err
-	}
-	p.rgbManager.head = head
-	p.rgbManager.dkvsStatus = "synced"
-	return head, record, nil
-}
-
-// RestoreRGB11WalletState resolves the active latest wallet-signed head,
-// decrypts its immutable snapshot and imports it into the current local scope.
-func (p *rgb11Manager) RestoreRGB11WalletState(client *SatsNetDKVSClient, walletID string,
-	verifyOpts dkvsindexer.RecordVerificationOptions) (*coresync.WalletHead, error) {
-	if client == nil || p == nil || p.wallet == nil || p.rgbManager.projectionStore == nil || p.rgbManager.engineStore == nil {
-		return nil, ErrRGB11Inconsistent
-	}
-	stableID, err := p.RGB11WalletID()
-	if err != nil {
-		return nil, err
-	}
-	if walletID == "" {
-		walletID = stableID
-	} else if walletID != stableID {
-		return nil, coresync.ErrHeadWallet
-	}
-	pubkey := p.wallet.GetPubKey().SerializeCompressed()
-	head, _, err := client.GetRGB11WalletHead(pubkey, walletID, verifyOpts)
-	if err != nil {
-		p.rgbManager.dkvsStatus = "offline"
-		return nil, err
-	}
-	raw, _, err := client.GetRGB11WalletSnapshot(pubkey, walletID, head.OperationID, verifyOpts)
-	if err != nil {
-		p.rgbManager.dkvsStatus = "conflict"
-		return nil, err
-	}
-	envelopeWalletID, envelopeOperationID, ciphertext, err := rgb11wallet.DecodeEncryptedSnapshot(raw)
-	if err != nil || envelopeWalletID != walletID || envelopeOperationID != head.OperationID || len(ciphertext) == 0 {
-		p.rgbManager.dkvsStatus = "conflict"
-		return nil, ErrRGB11Inconsistent
-	}
-	cryptor, ok := p.wallet.(rgb11SnapshotCryptor)
-	if !ok {
-		return nil, fmt.Errorf("active wallet does not support RGB11 snapshot decryption")
-	}
-	plaintext, err := cryptor.Decrypt(ciphertext, pubkey)
-	if err != nil || !bytes.Equal(head.StateHash[:], hashBytes(plaintext)) {
-		p.rgbManager.dkvsStatus = "conflict"
-		return nil, ErrRGB11Inconsistent
-	}
-	snapshot, err := rgb11wallet.DecodeWalletSnapshotPayload(plaintext)
-	if err != nil || snapshot.Version != rgb11WalletSnapshotVersion ||
-		snapshot.WalletID != walletID || snapshot.AccountIndex != p.wallet.GetSubAccount() ||
-		snapshot.EngineBuildID != rgb11wallet.NativeEngineBuildID {
-		p.rgbManager.dkvsStatus = "conflict"
-		return nil, ErrRGB11Inconsistent
-	}
-	if err := p.rgbManager.engineStore.ImportSnapshot(snapshot.EngineRecords); err != nil {
-		return nil, err
-	}
-	if err := p.rgbManager.projectionStore.ImportSnapshot(snapshot.ProjectionRecords); err != nil {
-		p.rgbManager.consistencyStatus = "broken"
-		return nil, err
-	}
-	for _, info := range snapshot.TickerInfos {
-		if err := p.RegisterRGB11TickerInfo(info); err != nil {
-			p.rgbManager.consistencyStatus = "broken"
-			return nil, err
-		}
-	}
-	if err := p.rebuildRGB11Locks(); err != nil {
-		return nil, err
-	}
-	if err := p.persistRGB11WalletHead(head); err != nil {
-		p.rgbManager.dkvsStatus = "warning"
-		return nil, err
-	}
-	p.rgbManager.dkvsStatus = "synced"
-	p.rgbManager.head = head
-	return head, nil
-}
-
-func (p *rgb11Manager) rgb11DKVSClient() (*SatsNetDKVSClient, error) {
-	if !p.rgb11DKVSConfigured() {
-		return nil, ErrRGB11Inconsistent
-	}
-	return NewSatsNetDKVSClient(p.cfg.IndexerL2.Scheme, p.cfg.IndexerL2.Host, p.cfg.IndexerL2.Proxy, p.http), nil
-}
-
 func (p *rgb11Manager) rgb11DKVSConfigured() bool {
 	return p != nil && p.cfg != nil && p.http != nil && p.cfg.IndexerL2 != nil && p.cfg.IndexerL2.Host != ""
 }
@@ -1402,254 +1111,146 @@ func (p *rgb11Manager) rgb11DKVSConfigured() bool {
 // external effect. When DKVS is configured, the local state must still match
 // the wallet-signed head currently selected for this wallet.
 func (p *rgb11Manager) requireLatestRGB11WalletState() error {
-	p.waitForRGB11AutoBackup()
 	if !p.rgb11DKVSConfigured() {
 		return nil
 	}
-	if p.rgbManager.head == nil {
-		p.rgbManager.dkvsStatus = "conflict"
-		return coresync.ErrHeadConflict
-	}
-	walletID, err := p.RGB11WalletID()
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return err
 	}
-	_, plaintext, err := p.exportRGB11WalletSnapshot(walletID)
-	if err != nil || sha256.Sum256(plaintext) != p.rgbManager.head.StateHash {
-		p.rgbManager.dkvsStatus = "conflict"
-		return coresync.ErrHeadConflict
-	}
-	client, err := p.rgb11DKVSClient()
+	_, headKey, snapshotKey, err := p.rgb11StateKeys()
 	if err != nil {
 		return err
 	}
-	active, _, err := client.GetRGB11WalletHead(
-		p.wallet.GetPubKey().SerializeCompressed(), walletID,
-		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())},
-	)
-	if err != nil {
-		p.rgbManager.dkvsStatus = "offline"
+	if err := store.WaitReady(headKey, snapshotKey); err != nil {
 		return err
 	}
-	localHash, err := p.rgbManager.head.Hash()
-	if err != nil {
+	if err := p.reconcileRGB11StateFromStore(store); err != nil {
 		return err
 	}
-	activeHash, err := active.Hash()
-	if err != nil || localHash != activeHash {
-		p.rgbManager.dkvsStatus = "conflict"
-		return coresync.ErrHeadConflict
+	needsPersist := p.rgb11ScopeState().Status == "pending"
+	if !needsPersist && p.rgbManager.head == nil {
+		walletID, walletErr := p.RGB11WalletID()
+		if walletErr != nil {
+			return walletErr
+		}
+		snapshot, _, exportErr := p.exportRGB11WalletSnapshot(walletID)
+		if exportErr != nil {
+			return exportErr
+		}
+		needsPersist = rgb11SnapshotHasState(snapshot)
 	}
-	p.rgbManager.dkvsStatus = "synced"
+	if needsPersist {
+		if _, err := p.persistRGB11StateToStore(store); err != nil {
+			return err
+		}
+	}
+	if p.rgb11ScopeState().Status != "synced" {
+		return ErrDKVSPathNotSynced
+	}
+	if err := p.enableRGB11AutoBackupFromStore(store); err != nil {
+		p.setRGB11DKVSStatus("warning")
+		return err
+	}
 	return nil
 }
 
 func (p *rgb11Manager) SyncRGB11WalletState(walletID string, opts dkvsindexer.RecordOptions) (*coresync.WalletHead, error) {
-	return p.syncRGB11WalletState(walletID, opts, true)
-}
-
-func (p *rgb11Manager) ensureRGB11AddressReceiveForDKVS(client *SatsNetDKVSClient,
-	opts dkvsindexer.RecordOptions) error {
-	if p == nil || client == nil || p.wallet == nil {
-		return ErrRGB11Inconsistent
-	}
-	var autopay *DKVSAutopayOptions
-	p.configureRGB11AddressRetention(client, &opts, &autopay)
-	_, err := p.EnableRGB11AddressReceive(client, RGB11ReceiveCapabilityOptions{
-		RecordOptions: opts,
-		Autopay:       autopay,
-	})
-	return err
-}
-
-func (p *rgb11Manager) syncRGB11WalletState(walletID string, opts dkvsindexer.RecordOptions, enableAuto bool) (*coresync.WalletHead, error) {
-	p.rgbManager.backupMutex.Lock()
-	defer p.rgbManager.backupMutex.Unlock()
-	if !enableAuto && p.rgbManager.head != nil {
-		stableID, err := p.RGB11WalletID()
-		if err == nil {
-			_, plaintext, exportErr := p.exportRGB11WalletSnapshot(stableID)
-			if exportErr == nil && sha256.Sum256(plaintext) == p.rgbManager.head.StateHash {
-				return p.rgbManager.head, nil
-			}
-		}
-	}
-	client, err := p.rgb11DKVSClient()
+	stableID, err := p.RGB11WalletID()
 	if err != nil {
 		return nil, err
 	}
-	head, _, err := p.BackupRGB11WalletState(client, walletID, p.rgbManager.head, opts)
+	if walletID != "" && walletID != stableID {
+		return nil, coresync.ErrHeadWallet
+	}
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return nil, err
 	}
-	if err := p.ensureRGB11AddressReceiveForDKVS(client, opts); err != nil {
-		p.rgbManager.dkvsStatus = "warning"
+	head, err := p.persistRGB11StateToStore(store)
+	if err != nil {
 		return nil, err
 	}
-	if enableAuto {
-		if err := p.enableRGB11AutoBackup(opts); err != nil {
-			p.rgbManager.dkvsStatus = "warning"
-			return nil, err
-		}
+	if err := p.enableRGB11AutoBackupFromStore(store); err != nil {
+		p.setRGB11DKVSStatus("warning")
+		return nil, err
 	}
 	return head, nil
 }
 
 func (p *rgb11Manager) RestoreLatestRGB11WalletState(walletID string,
 	verifyOpts dkvsindexer.RecordVerificationOptions) (*coresync.WalletHead, error) {
-	p.rgbManager.backupMutex.Lock()
-	defer p.rgbManager.backupMutex.Unlock()
-	client, err := p.rgb11DKVSClient()
-	if err != nil {
-		return nil, err
-	}
 	stableID, err := p.RGB11WalletID()
 	if err != nil {
 		return nil, err
 	}
-	if walletID == "" {
-		walletID = stableID
+	if walletID != "" && walletID != stableID {
+		return nil, coresync.ErrHeadWallet
 	}
-	_, record, err := client.GetRGB11WalletHead(p.wallet.GetPubKey().SerializeCompressed(), walletID, verifyOpts)
+	store, err := p.ensureDKVSManager().primaryStore()
 	if err != nil {
 		return nil, err
 	}
-	head, err := p.RestoreRGB11WalletState(client, walletID, verifyOpts)
+	_, headKey, snapshotKey, err := p.rgb11StateKeys()
 	if err != nil {
 		return nil, err
 	}
-	retention := dkvsindexer.RecordOptions{TTL: record.TTL, ExpiryHeight: record.ExpiryHeight}
-	if err := p.ensureRGB11AddressReceiveForDKVS(client, retention); err != nil {
-		p.rgbManager.dkvsStatus = "warning"
+	if err := store.WaitReady(headKey, snapshotKey); err != nil {
 		return nil, err
 	}
-	if err := p.enableRGB11AutoBackup(retention); err != nil {
-		p.rgbManager.dkvsStatus = "warning"
+	lock := p.backupLock()
+	lock.Lock()
+	head, err := p.restoreRGB11StateFromStoreLocked(store)
+	lock.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.enableRGB11AutoBackupFromStore(store); err != nil {
+		p.setRGB11DKVSStatus("warning")
 		return nil, err
 	}
 	return head, nil
 }
 
-// ActivateRGB11WalletState is called after a wallet/account becomes active. A
-// missing wallet-signed head means this wallet has never enabled RGB backup;
-// in that case no paid write is attempted and the first backup remains a
-// manual user action. When a head exists, the latest snapshot is restored and
-// its retention policy enables subsequent automatic backups.
+// ActivateRGB11WalletState reconciles the selected local scope with the
+// manager-owned replica. The manager has already synchronized and validated
+// the path before this domain method reads it.
 func (p *rgb11Manager) ActivateRGB11WalletState(verifyOpts dkvsindexer.RecordVerificationOptions) (*RGB11ActivationResult, error) {
 	result := &RGB11ActivationResult{}
-	if !p.rgb11DKVSConfigured() || p.wallet == nil || p.wallet.GetPubKey() == nil {
-		return result, nil
-	}
-	if verifyOpts.Now == 0 {
-		verifyOpts.Now = uint64(time.Now().UnixMilli())
-	}
+	before := p.rgbManager.head
 	walletID, err := p.RGB11WalletID()
 	if err != nil {
 		return nil, err
 	}
-	client, err := p.rgb11DKVSClient()
+	localSnapshot, _, err := p.exportRGB11WalletSnapshot(walletID)
 	if err != nil {
 		return nil, err
 	}
-	active, record, err := client.GetRGB11WalletHead(
-		p.wallet.GetPubKey().SerializeCompressed(), walletID, verifyOpts,
-	)
-	if errors.Is(err, ErrDKVSRecordNotFound) {
-		paid, paidErr := p.hasActiveRGB11Autopay()
-		if paidErr != nil {
-			p.rgbManager.dkvsStatus = "offline"
-			return nil, paidErr
-		}
-		if !paid {
-			policy, policyErr := client.GetFreeLocalCachePolicy()
-			if policyErr == nil && policy != nil && policy.Enabled {
-				p.setRGB11BackupRetention("temporary", policy.MaxTTL)
-			}
-			p.rgbManager.dkvsStatus = "not_configured"
-			return result, nil
-		}
-		head, syncErr := p.SyncRGB11WalletState("", dkvsindexer.RecordOptions{})
-		if syncErr != nil {
-			p.rgbManager.dkvsStatus = "warning"
-			return nil, syncErr
-		}
-		result.Found = true
-		result.AutoBackup = true
-		result.Head = head
-		return result, nil
-	}
-	if err != nil {
-		p.rgbManager.dkvsStatus = "offline"
+	hadLocalState := rgb11SnapshotHasState(localSnapshot)
+	if err := p.loadSynchronizedRGB11State(); err != nil {
+		p.setRGB11DKVSStatus("warning")
 		return nil, err
 	}
-	result.Found = true
-
-	localSnapshot, plaintext, err := p.exportRGB11WalletSnapshot(walletID)
-	if err != nil {
-		return nil, err
-	}
-	localStateHash := sha256.Sum256(plaintext)
-	hasLocalState := len(localSnapshot.ProjectionRecords) > 0 ||
-		len(localSnapshot.EngineRecords) > 0 || len(localSnapshot.TickerInfos) > 0
-	localHead := p.rgbManager.head
-
-	if hasLocalState && localStateHash == active.StateHash {
-		if err := p.persistRGB11WalletHead(active); err != nil {
-			return nil, err
-		}
-		p.rgbManager.head = active
-		p.rgbManager.dkvsStatus = "synced"
-		retention := dkvsindexer.RecordOptions{TTL: record.TTL, ExpiryHeight: record.ExpiryHeight}
-		if err := p.ensureRGB11AddressReceiveForDKVS(client, retention); err != nil {
-			return nil, err
-		}
-		if err := p.enableRGB11AutoBackup(retention); err != nil {
-			return nil, err
-		}
-		result.AutoBackup = true
-		result.Head = active
-		return result, nil
-	}
-
-	if hasLocalState {
-		localSeq := uint64(1)
-		if localHead != nil {
-			localSeq = localHead.Seq
-			if localStateHash != localHead.StateHash {
-				localSeq++
-			}
-		}
-		switch {
-		case localSeq > active.Seq:
-			retention := dkvsindexer.RecordOptions{TTL: record.TTL, ExpiryHeight: record.ExpiryHeight}
-			head, _, backupErr := p.BackupRGB11WalletState(client, walletID, active, retention)
-			if backupErr != nil {
-				p.rgbManager.dkvsStatus = "warning"
-				return nil, backupErr
-			}
-			if err := p.ensureRGB11AddressReceiveForDKVS(client, retention); err != nil {
-				return nil, err
-			}
-			if err := p.enableRGB11AutoBackup(retention); err != nil {
-				return nil, err
-			}
-			result.AutoBackup = true
-			result.Head = head
-			return result, nil
-		case localSeq == active.Seq:
-			p.rgbManager.dkvsStatus = "conflict"
-			return nil, coresync.ErrHeadConflict
-		}
-	}
-
-	head, err := p.RestoreLatestRGB11WalletState(walletID, verifyOpts)
-	if err != nil {
-		return nil, err
-	}
-	result.Restored = true
-	result.AutoBackup = true
-	result.Head = head
+	result.Head = p.rgbManager.head
+	result.Found = result.Head != nil
+	result.Restored = before == nil && !hadLocalState && result.Head != nil
+	policy := p.rgb11AutoBackupPolicy()
+	result.AutoBackup = policy != nil && policy.Enabled
 	return result, nil
+}
+
+func (p *rgb11Manager) enableRGB11AutoBackupFromStore(store *dkvsStore) error {
+	_, headKey, _, err := p.rgb11StateKeys()
+	if err != nil {
+		return err
+	}
+	headValue, err := store.Get(headKey)
+	if err != nil {
+		return err
+	}
+	return p.enableRGB11AutoBackup(dkvsindexer.RecordOptions{
+		TTL: headValue.TTL, ExpiryHeight: headValue.ExpiryHeight,
+	})
 }
 
 // hasActiveRGB11Autopay checks the same active delegate properties required by
@@ -1693,13 +1294,10 @@ func (p *rgb11Manager) hasActiveRGB11Autopay() (bool, error) {
 }
 
 func (p *rgb11Manager) setRGB11BackupRetention(mode string, ttl uint64) {
-	if p == nil || p.rgbManager == nil {
-		return
-	}
-	p.mutex.Lock()
-	p.rgbManager.dkvsBackupMode = mode
-	p.rgbManager.dkvsBackupTTL = ttl
-	p.mutex.Unlock()
+	p.updateRGB11ScopeState(func(state *rgb11ScopeBackupState) {
+		state.Mode = mode
+		state.TTL = ttl
+	})
 }
 
 func (p *rgb11Manager) enableRGB11AutoBackup(opts dkvsindexer.RecordOptions) error {
@@ -1716,9 +1314,9 @@ func (p *rgb11Manager) enableRGB11AutoBackup(opts dkvsindexer.RecordOptions) err
 	if err := p.rgbManager.projectionStore.SaveLocalMetadata(rgb11AutoBackupMetadataName, encoded); err != nil {
 		return err
 	}
-	p.mutex.Lock()
-	p.rgbManager.autoBackup = policy
-	p.mutex.Unlock()
+	p.updateRGB11ScopeState(func(state *rgb11ScopeBackupState) {
+		state.AutoBackup = policy
+	})
 	return nil
 }
 
@@ -1734,81 +1332,42 @@ func (p *rgb11Manager) autoBackupRGB11AfterMutation() {
 	if p == nil || p.rgbManager == nil {
 		return
 	}
-	p.mutex.RLock()
-	var policy RGB11AutoBackupPolicy
-	if p.rgbManager.autoBackup != nil {
-		policy = *p.rgbManager.autoBackup
-	}
-	p.mutex.RUnlock()
-	if !policy.Enabled {
+	policy := p.rgb11AutoBackupPolicy()
+	enabled := policy != nil && policy.Enabled
+	if !enabled {
 		return
 	}
-	p.rgbManager.autoBackupMutex.Lock()
-	p.rgbManager.autoBackupPending = true
-	if p.rgbManager.autoBackupRunning {
-		p.rgbManager.autoBackupMutex.Unlock()
-		return
-	}
-	p.rgbManager.autoBackupRunning = true
-	p.rgbManager.autoBackupDone = make(chan struct{})
-	p.rgbManager.autoBackupMutex.Unlock()
-	go p.runRGB11AutoBackup()
-}
-
-func (p *rgb11Manager) runRGB11AutoBackup() {
-	for {
-		p.rgbManager.autoBackupMutex.Lock()
-		if !p.rgbManager.autoBackupPending {
-			p.rgbManager.autoBackupRunning = false
-			close(p.rgbManager.autoBackupDone)
-			p.rgbManager.autoBackupMutex.Unlock()
-			return
-		}
-		p.rgbManager.autoBackupPending = false
-		p.rgbManager.autoBackupMutex.Unlock()
-
-		p.mutex.RLock()
-		var policy RGB11AutoBackupPolicy
-		if p.rgbManager.autoBackup != nil {
-			policy = *p.rgbManager.autoBackup
-		}
-		p.mutex.RUnlock()
-		if !policy.Enabled {
-			continue
-		}
-
-		started := time.Now()
-		Log.Infof("automatic RGB11 wallet backup started")
-		if _, err := p.syncRGB11WalletState("", dkvsindexer.RecordOptions{
-			TTL: policy.TTL, ExpiryHeight: policy.ExpiryHeight,
-		}, false); err != nil {
-			p.rgbManager.dkvsStatus = "warning"
-			Log.Errorf("automatic RGB11 wallet backup failed after %v: %v", time.Since(started), err)
-			continue
-		}
-		Log.Infof("automatic RGB11 wallet backup finished in %v", time.Since(started))
-	}
-}
-
-func (p *rgb11Manager) waitForRGB11AutoBackup() {
-	if p == nil || p.rgbManager == nil {
-		return
-	}
-	p.rgbManager.autoBackupMutex.Lock()
-	if !p.rgbManager.autoBackupRunning {
-		p.rgbManager.autoBackupMutex.Unlock()
-		return
-	}
-	done := p.rgbManager.autoBackupDone
-	p.rgbManager.autoBackupMutex.Unlock()
-	if done != nil {
-		<-done
-	}
+	p.scheduleRGB11StoreWrite()
 }
 
 func hashBytes(value []byte) []byte {
 	hash := sha256.Sum256(value)
 	return hash[:]
+}
+
+func (p *rgb11Manager) reloadPersistedRGB11WalletHeadLocked() error {
+	if p == nil || p.projectionStore == nil || p.wallet == nil || p.wallet.GetPubKey() == nil {
+		return ErrRGB11Inconsistent
+	}
+	encoded, err := p.projectionStore.LoadLocalMetadata("wallet-head")
+	if errors.Is(err, indexer.ErrKeyNotFound) {
+		p.head = nil
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	walletID, err := p.RGB11WalletID()
+	if err != nil {
+		return err
+	}
+	head, err := rgb11wallet.DecodeWalletHead(encoded)
+	if err != nil || head.Validate(walletID) != nil {
+		p.setRGB11DKVSStatus("conflict")
+		return coresync.ErrHeadConflict
+	}
+	p.head = head
+	return nil
 }
 
 func (p *rgb11Manager) persistRGB11WalletHead(head *coresync.WalletHead) error {
@@ -1822,8 +1381,8 @@ func (p *rgb11Manager) persistRGB11WalletHead(head *coresync.WalletHead) error {
 	return p.rgbManager.projectionStore.SaveLocalMetadata("wallet-head", encoded)
 }
 
-// NewRGB11WalletHead creates the compact head payload. PutRGB11WalletHead
-// applies the owning wallet's signature once, to the enclosing DKVS record.
+// NewRGB11WalletHead creates the compact head payload. dkvsManager applies the
+// owning wallet's signature once, to the enclosing DKVS record.
 func NewRGB11WalletHead(walletID string, stateHash, operationID [32]byte, previous *coresync.WalletHead) (*coresync.WalletHead, error) {
 	head := &coresync.WalletHead{
 		Version:     coresync.HeadVersion,
@@ -1854,211 +1413,6 @@ func RGB11WalletHeadPath(walletID string) string {
 
 func RGB11WalletSnapshotBlobKey(walletID string) string {
 	return dkvsindexer.NormalizeNameID("rgb11-wallet-snapshot:" + walletID)
-}
-
-func (p *SatsNetDKVSClient) PutRGB11WalletHead(wallet common.Wallet, head *coresync.WalletHead, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	return p.putRGB11WalletHead(wallet, head, opts, nil, false)
-}
-
-func (p *SatsNetDKVSClient) PutRGB11WalletHeadWithAutopay(wallet common.Wallet, head *coresync.WalletHead,
-	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
-	return p.putRGB11WalletHead(wallet, head, opts, &autopay, false)
-}
-
-func (p *SatsNetDKVSClient) PutRGB11WalletHeadFreeLocal(wallet common.Wallet, head *coresync.WalletHead,
-	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	return p.putRGB11WalletHead(wallet, head, opts, nil, true)
-}
-
-func buildRGB11WalletHeadRecord(wallet common.Wallet, head *coresync.WalletHead,
-	opts dkvsindexer.RecordOptions, autopay *DKVSAutopayOptions,
-	freeLocal bool) (*swire.DKVSRecord, error) {
-	if wallet == nil || head == nil {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	if err := VerifyRGB11WalletHead(head, head.WalletID); err != nil {
-		return nil, err
-	}
-	pubKey, err := dkvsWalletPubKey(wallet)
-	if err != nil {
-		return nil, err
-	}
-	key, err := dkvsindexer.PersonalKey(pubKey, RGB11WalletHeadPath(head.WalletID))
-	if err != nil {
-		return nil, err
-	}
-	value, err := head.StrictEncode()
-	if err != nil {
-		return nil, err
-	}
-	opts.Seq = head.Seq
-	switch {
-	case freeLocal:
-		return newDKVSAccountSignedRecordWithFreeLocal(wallet, key, value, opts)
-	case autopay != nil:
-		return newDKVSAccountSignedRecordWithAutopay(wallet, key, value, opts, *autopay)
-	default:
-		return NewDKVSAccountSignedRecord(wallet, key, value, opts)
-	}
-}
-
-func (p *SatsNetDKVSClient) putRGB11WalletHead(wallet common.Wallet, head *coresync.WalletHead,
-	opts dkvsindexer.RecordOptions, autopay *DKVSAutopayOptions, freeLocal bool) (*swire.DKVSRecord, error) {
-	pubKey, err := dkvsWalletPubKey(wallet)
-	if err != nil {
-		return nil, err
-	}
-	posted, err := buildRGB11WalletHeadRecord(wallet, head, opts, autopay, freeLocal)
-	if err != nil {
-		return nil, err
-	}
-	posted, err = p.PutRecord(posted)
-	if err != nil {
-		return nil, err
-	}
-	_, active, err := p.GetRGB11WalletHead(pubKey, head.WalletID, dkvsindexer.RecordVerificationOptions{
-		Now: uint64(time.Now().UnixMilli()),
-	})
-	if err != nil {
-		return nil, err
-	}
-	if dkvsindexer.RecordHash(posted) != dkvsindexer.RecordHash(active) {
-		return nil, coresync.ErrHeadConflict
-	}
-	return active, nil
-}
-
-func verifyRGB11DKVSAccountOwner(record *swire.DKVSRecord, walletPubKey []byte) error {
-	if record == nil {
-		return dkvsindexer.ErrInvalidRecord
-	}
-	expected, err := dkvsindexer.CanonicalAccountID(walletPubKey)
-	if err != nil {
-		return dkvsindexer.ErrPermissionDenied
-	}
-	parsed, err := dkvsindexer.ParseKey(record.Key)
-	if err != nil {
-		return err
-	}
-	actual, err := dkvsindexer.RecordSignerAccountID(record, parsed)
-	if err != nil || actual != expected {
-		return dkvsindexer.ErrPermissionDenied
-	}
-	return nil
-}
-
-func (p *SatsNetDKVSClient) GetRGB11WalletHead(walletPubKey []byte, walletID string, verifyOpts dkvsindexer.RecordVerificationOptions) (*coresync.WalletHead, *swire.DKVSRecord, error) {
-	key, err := dkvsindexer.PersonalKey(walletPubKey, RGB11WalletHeadPath(walletID))
-	if err != nil {
-		return nil, nil, err
-	}
-	verifyOpts.ExpectedKey = key
-	record, err := p.GetVerifiedRecord(key, verifyOpts)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := verifyRGB11DKVSAccountOwner(record, walletPubKey); err != nil {
-		return nil, nil, err
-	}
-	head, err := rgb11wallet.DecodeWalletHead(record.Value)
-	if err != nil {
-		return nil, nil, err
-	}
-	if record.Seq != head.Seq {
-		return nil, nil, coresync.ErrHeadSequence
-	}
-	if err := VerifyRGB11WalletHead(head, walletID); err != nil {
-		return nil, nil, err
-	}
-	return head, record, nil
-}
-
-func (p *SatsNetDKVSClient) SubscribeRGB11WalletHead(walletPubKey []byte, walletID string) ([]*swire.DKVSRecord, int, error) {
-	key, err := dkvsindexer.PersonalKey(walletPubKey, RGB11WalletHeadPath(walletID))
-	if err != nil {
-		return nil, 0, err
-	}
-	return p.SubscribeKey(key)
-}
-
-func (p *SatsNetDKVSClient) PutRGB11WalletSnapshot(wallet common.Wallet, walletID string,
-	operationID [32]byte, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	return p.putRGB11WalletSnapshot(wallet, walletID, operationID, value, opts, nil, false)
-}
-
-func (p *SatsNetDKVSClient) PutRGB11WalletSnapshotWithAutopay(wallet common.Wallet, walletID string,
-	operationID [32]byte, value []byte, opts dkvsindexer.RecordOptions,
-	autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
-	return p.putRGB11WalletSnapshot(wallet, walletID, operationID, value, opts, &autopay, false)
-}
-
-func (p *SatsNetDKVSClient) PutRGB11WalletSnapshotFreeLocal(wallet common.Wallet, walletID string,
-	operationID [32]byte, value []byte, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	return p.putRGB11WalletSnapshot(wallet, walletID, operationID, value, opts, nil, true)
-}
-
-func (p *SatsNetDKVSClient) putRGB11WalletSnapshot(wallet common.Wallet, walletID string,
-	operationID [32]byte, value []byte, opts dkvsindexer.RecordOptions,
-	autopay *DKVSAutopayOptions, freeLocal bool) (*swire.DKVSRecord, error) {
-	if len(value) == 0 || walletID == "" {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	decodedWalletID, decodedOperationID, _, err := rgb11wallet.DecodeEncryptedSnapshot(value)
-	if err != nil || decodedWalletID != walletID || decodedOperationID != operationID {
-		return nil, ErrRGB11Inconsistent
-	}
-	accountID, err := dkvsAccountID(wallet)
-	if err != nil {
-		return nil, err
-	}
-	blobName := RGB11WalletSnapshotBlobKey(walletID)
-	key, err := dkvsindexer.BlobKey(accountID, blobName)
-	if err != nil {
-		return nil, err
-	}
-	precondition, existing, err := p.dkvsWritePrecondition(key)
-	if err != nil {
-		return nil, err
-	}
-	if opts.Seq == 0 {
-		opts.Seq = 1
-		if existing != nil {
-			opts.Seq = existing.Seq + 1
-		}
-	}
-	var record *swire.DKVSRecord
-	switch {
-	case freeLocal:
-		record, err = BuildDKVSSignedBlobRecordFreeLocal(wallet, blobName, value, nil, opts)
-	case autopay != nil:
-		record, err = BuildDKVSSignedBlobRecord(wallet, blobName, value, nil, opts, *autopay)
-	default:
-		record, err = buildDKVSBlobRecord(wallet, blobName, value, nil, opts)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return p.PutRecordCAS(record, precondition)
-}
-
-func (p *SatsNetDKVSClient) GetRGB11WalletSnapshot(walletPubKey []byte, walletID string,
-	operationID [32]byte, verifyOpts dkvsindexer.RecordVerificationOptions) ([]byte, *swire.DKVSRecord, error) {
-	accountID := dkvsindexer.AccountID(walletPubKey)
-	if accountID == "" {
-		return nil, nil, dkvsindexer.ErrInvalidSignature
-	}
-	record, blob, err := p.GetBlob(accountID, RGB11WalletSnapshotBlobKey(walletID), verifyOpts)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := verifyRGB11DKVSAccountOwner(record, walletPubKey); err != nil {
-		return nil, nil, err
-	}
-	envelopeWalletID, envelopeOperationID, _, err := rgb11wallet.DecodeEncryptedSnapshot(blob.Data)
-	if err != nil || envelopeWalletID != walletID || envelopeOperationID != operationID {
-		return nil, nil, ErrRGB11Inconsistent
-	}
-	return blob.Data, record, nil
 }
 
 // BuildRGB11RelayRecord builds the signed temporary locator. Consignment
@@ -2095,10 +1449,17 @@ func (p *rgb11Manager) BuildRGB11RelayRecord(transferID, sourcePeerID string) (*
 	return record, nil
 }
 
-func (p *rgb11Manager) RelayRGB11Transfer(client *SatsNetDKVSClient, transferID, sourcePeerID string,
+func (p *rgb11Manager) PublishRGB11RelayRecord(transferID, sourcePeerID string,
 	opts dkvsindexer.RecordOptions) (*corerelay.RelayRecord, *swire.DKVSRecord, error) {
-	if client == nil || opts.TTL == 0 {
-		return nil, nil, fmt.Errorf("RGB11 relay client and TTL are required")
+	if err := p.requireLatestRGB11WalletState(); err != nil {
+		return nil, nil, err
+	}
+	if opts.TTL == 0 {
+		return nil, nil, fmt.Errorf("RGB11 relay TTL is required")
+	}
+	store, err := p.configuredRGB11Store()
+	if err != nil {
+		return nil, nil, err
 	}
 	record, err := p.BuildRGB11RelayRecord(transferID, sourcePeerID)
 	if err != nil {
@@ -2108,7 +1469,24 @@ func (p *rgb11Manager) RelayRGB11Transfer(client *SatsNetDKVSClient, transferID,
 	if err != nil {
 		return nil, nil, err
 	}
-	written, err := client.PutRGB11RelayRecord(p.wallet, pending.State.RelayRecordKey, record, opts)
+	if err := corerelay.ValidateTemporaryKey(pending.State.RelayRecordKey); err != nil {
+		return nil, nil, err
+	}
+	if err := record.Verify(rgb11wallet.WalletPubKey(p.wallet), time.Now().Unix(),
+		rgb11wallet.VerifyWalletSignature); err != nil {
+		return nil, nil, err
+	}
+	encoded, err := record.MarshalBinary()
+	if err != nil {
+		return nil, nil, err
+	}
+	written, err := store.Put(dkvsValueMutation{
+		Key: pending.State.RelayRecordKey, Value: encoded, Owner: p.wallet,
+		Policy: dkvsStoragePolicy{
+			TTL: opts.TTL, ExpiryHeight: opts.ExpiryHeight,
+		},
+		Signature: dkvsSignatureLegacy,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2119,19 +1497,7 @@ func (p *rgb11Manager) RelayRGB11Transfer(client *SatsNetDKVSClient, transferID,
 		return nil, nil, err
 	}
 	p.autoBackupRGB11AfterMutation()
-	return record, written, nil
-}
-
-func (p *rgb11Manager) PublishRGB11RelayRecord(transferID, sourcePeerID string,
-	opts dkvsindexer.RecordOptions) (*corerelay.RelayRecord, *swire.DKVSRecord, error) {
-	if err := p.requireLatestRGB11WalletState(); err != nil {
-		return nil, nil, err
-	}
-	client, err := p.rgb11DKVSClient()
-	if err != nil {
-		return nil, nil, err
-	}
-	return p.RelayRGB11Transfer(client, transferID, sourcePeerID, opts)
+	return record, written.record, nil
 }
 
 // AcceptRGB11RelayConsignment authenticates the relay envelope, validates the
@@ -2254,24 +1620,39 @@ func (p *rgb11Manager) recordRGB11ReceiveRejection(requestID, invoice string,
 	return nil
 }
 
-func (p *rgb11Manager) RelayRGB11Ack(client *SatsNetDKVSClient, key string, ack *corerelay.AckRecord,
-	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	if p == nil || p.wallet == nil || client == nil || opts.TTL == 0 {
-		return nil, ErrRGB11Inconsistent
-	}
-	return client.PutRGB11AckRecord(p.wallet, key, ack, opts)
-}
-
 func (p *rgb11Manager) PublishRGB11AckRecord(key string, ack *corerelay.AckRecord,
 	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
 	if err := p.requireLatestRGB11WalletState(); err != nil {
 		return nil, err
 	}
-	client, err := p.rgb11DKVSClient()
+	if p == nil || p.wallet == nil || ack == nil || opts.TTL == 0 {
+		return nil, ErrRGB11Inconsistent
+	}
+	if err := corerelay.ValidateTemporaryKey(key); err != nil {
+		return nil, err
+	}
+	if err := ack.Verify(rgb11wallet.WalletPubKey(p.wallet), rgb11wallet.VerifyWalletSignature); err != nil {
+		return nil, err
+	}
+	encoded, err := ack.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
-	return p.RelayRGB11Ack(client, key, ack, opts)
+	store, err := p.configuredRGB11Store()
+	if err != nil {
+		return nil, err
+	}
+	written, err := store.Put(dkvsValueMutation{
+		Key: key, Value: encoded, Owner: p.wallet,
+		Policy: dkvsStoragePolicy{
+			TTL: opts.TTL, ExpiryHeight: opts.ExpiryHeight,
+		},
+		Signature: dkvsSignatureLegacy,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return written.record, nil
 }
 
 func (p *rgb11Manager) FetchRGB11AckRecord(transferID string,
@@ -2287,11 +1668,28 @@ func (p *rgb11Manager) FetchRGB11AckRecord(transferID string,
 	if err != nil {
 		return nil, nil, ErrRGB11AckRequired
 	}
-	client, err := p.rgb11DKVSClient()
+	store, err := p.configuredRGB11Store()
 	if err != nil {
 		return nil, nil, err
 	}
-	return client.GetRGB11AckRecord(pending.State.AckRecordKey, recipientPubKey, verifyOpts)
+	if err := corerelay.ValidateTemporaryKey(pending.State.AckRecordKey); err != nil {
+		return nil, nil, err
+	}
+	value, err := store.Get(pending.State.AckRecordKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !bytes.Equal(value.Signer, recipientPubKey) {
+		return nil, nil, dkvsindexer.ErrPermissionDenied
+	}
+	ack, err := corerelay.UnmarshalAckRecord(value.Value)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := ack.Verify(recipientPubKey, rgb11wallet.VerifyWalletSignature); err != nil {
+		return nil, nil, err
+	}
+	return ack, value.record, nil
 }
 
 // BroadcastRGB11Transfer is ACK-gated. The signed witness transaction was
@@ -2583,113 +1981,4 @@ func SignRGB11AckRecord(wallet common.Wallet, record *corerelay.AckRecord) error
 	}
 	record.RecipientPubKey = rgb11wallet.WalletPubKey(wallet)
 	return record.Sign(rgb11wallet.WalletSigner{Wallet: wallet})
-}
-
-func (p *SatsNetDKVSClient) PutRGB11RelayRecord(wallet common.Wallet, key string, value *corerelay.RelayRecord, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	if err := corerelay.ValidateTemporaryKey(key); err != nil {
-		return nil, err
-	}
-	pubKey := rgb11wallet.WalletPubKey(wallet)
-	if err := value.Verify(pubKey, time.Now().Unix(), rgb11wallet.VerifyWalletSignature); err != nil {
-		return nil, err
-	}
-	if opts.TTL == 0 {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	encoded, err := value.MarshalBinary()
-	if err != nil {
-		return nil, err
-	}
-	record, err := NewDKVSSignedRecord(wallet, key, encoded, opts)
-	if err != nil {
-		return nil, err
-	}
-	return p.PutRecord(record)
-}
-
-func (p *SatsNetDKVSClient) GetRGB11RelayRecord(key string, expectedSenderPubKey []byte, verifyOpts dkvsindexer.RecordVerificationOptions) (*corerelay.RelayRecord, *swire.DKVSRecord, error) {
-	if err := corerelay.ValidateTemporaryKey(key); err != nil {
-		return nil, nil, err
-	}
-	verifyOpts.ExpectedKey = key
-	record, err := p.GetVerifiedRecord(key, verifyOpts)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !bytes.Equal(record.PubKey, expectedSenderPubKey) {
-		return nil, nil, dkvsindexer.ErrPermissionDenied
-	}
-	value, err := corerelay.UnmarshalRelayRecord(record.Value)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := value.Verify(expectedSenderPubKey, time.Now().Unix(), rgb11wallet.VerifyWalletSignature); err != nil {
-		return nil, nil, err
-	}
-	return value, record, nil
-}
-
-func (p *SatsNetDKVSClient) PutRGB11AckRecord(wallet common.Wallet, key string, value *corerelay.AckRecord, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	if err := corerelay.ValidateTemporaryKey(key); err != nil {
-		return nil, err
-	}
-	pubKey := rgb11wallet.WalletPubKey(wallet)
-	if err := value.Verify(pubKey, rgb11wallet.VerifyWalletSignature); err != nil {
-		return nil, err
-	}
-	if opts.TTL == 0 {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	encoded, err := value.MarshalBinary()
-	if err != nil {
-		return nil, err
-	}
-	record, err := NewDKVSSignedRecord(wallet, key, encoded, opts)
-	if err != nil {
-		return nil, err
-	}
-	return p.PutRecord(record)
-}
-
-func (p *SatsNetDKVSClient) GetRGB11AckRecord(key string, expectedRecipientPubKey []byte, verifyOpts dkvsindexer.RecordVerificationOptions) (*corerelay.AckRecord, *swire.DKVSRecord, error) {
-	if err := corerelay.ValidateTemporaryKey(key); err != nil {
-		return nil, nil, err
-	}
-	verifyOpts.ExpectedKey = key
-	record, err := p.GetVerifiedRecord(key, verifyOpts)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !bytes.Equal(record.PubKey, expectedRecipientPubKey) {
-		return nil, nil, dkvsindexer.ErrPermissionDenied
-	}
-	value, err := corerelay.UnmarshalAckRecord(record.Value)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := value.Verify(expectedRecipientPubKey, rgb11wallet.VerifyWalletSignature); err != nil {
-		return nil, nil, err
-	}
-	return value, record, nil
-}
-
-func (p *SatsNetDKVSClient) SubscribeRGB11Transfer(relayKey, ackKey string) ([]*swire.DKVSRecord, error) {
-	if relayKey == ackKey {
-		return nil, corerelay.ErrInvalidKey
-	}
-	if err := corerelay.ValidateTemporaryKey(relayKey); err != nil {
-		return nil, err
-	}
-	if err := corerelay.ValidateTemporaryKey(ackKey); err != nil {
-		return nil, err
-	}
-	relayRecords, _, err := p.SubscribeKey(relayKey)
-	if err != nil {
-		return nil, err
-	}
-	ackRecords, _, err := p.SubscribeKey(ackKey)
-	if err != nil {
-		return nil, err
-	}
-	return append(relayRecords, ackRecords...), nil
 }

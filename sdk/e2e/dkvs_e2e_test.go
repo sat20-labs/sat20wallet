@@ -76,7 +76,7 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 		PoolContract:  contractA.MustEncode(),
 	}
 	if _, err := clientA.PutSignedRecordWithAutopay(actorA.Wallet, nameKey, []byte("owner-a"),
-		dkvsindexer.RecordOptions{Seq: 10, TTL: 60_000, ExpiryHeight: 1000}, autopayA); err != nil {
+		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 1000}, autopayA); err != nil {
 		t.Fatal(err)
 	}
 	requireDKVSValue(t, f.Network.Core, nameKey, []byte("owner-a"))
@@ -95,7 +95,7 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 		PoolContract:  contractA.MustEncode(),
 	}
 	if _, err := clientB.PutSignedRecordWithAutopay(actorB.Wallet, nameKey, []byte("owner-b"),
-		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 1000}, autopayB); err != nil {
+		dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 1000}, autopayB); err != nil {
 		t.Fatal(err)
 	}
 	requireDKVSValue(t, f.Network.Bootstrap, nameKey, []byte("owner-b"))

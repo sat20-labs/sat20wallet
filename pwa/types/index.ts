@@ -17,6 +17,7 @@ export type Balance = { confirmed: number; unconfirmed: number; total: number };
 export interface WalletAccount {
   index: number
   name: string
+  did?: string
   address: string
   pubKey: string
 }

@@ -101,11 +101,14 @@ const (
 )
 
 type WalletInDB struct {
-	Id       int64  // 钱包id，也是创建时间
-	Mnemonic []byte // 加密后的数据
-	Salt     []byte
-	Accounts int // 用户启用的子账户数量
-	Type     int // 0: 默认钱包，有助记词；1: 私钥钱包； 2: 观察钱包
+	Id           int64  // 钱包id，也是创建时间
+	Mnemonic     []byte // 加密后的数据
+	Salt         []byte
+	Accounts     int // 用户启用的子账户数量
+	Type         int // 0: 默认钱包，有助记词；1: 私钥钱包； 2: 观察钱包
+	Name         string
+	AccountNames map[uint32]string
+	AccountDIDs  map[uint32]string
 }
 
 func getWalletDBKey(id int64) string {
@@ -152,6 +155,12 @@ func (p *Manager) initDB() error {
 		return err
 	}
 	p.walletInfoMap = wallets
+	if err := p.normalizeWalletCatalogLocked(); err != nil {
+		return err
+	}
+	if err := p.loadAccountManagementProfileLocked(); err != nil {
+		return err
+	}
 
 	loadedResv := LoadAllResvFromDB(p.db, p)
 	for _, resv := range loadedResv {
@@ -537,11 +546,14 @@ func (p *Manager) saveSecret(secret, password string, ty int, w common.Wallet) e
 	salt := key.Marshal()
 
 	wallet := WalletInDB{
-		Id:       w.GetId(),
-		Mnemonic: en,
-		Salt:     salt,
-		Accounts: 1,
-		Type:     ty,
+		Id:           w.GetId(),
+		Mnemonic:     en,
+		Salt:         salt,
+		Accounts:     1,
+		Type:         ty,
+		Name:         defaultWalletName(len(p.walletInfoMap)),
+		AccountNames: map[uint32]string{0: defaultAccountName(0)},
+		AccountDIDs:  make(map[uint32]string),
 	}
 
 	err = saveWallet(p.db, &wallet)

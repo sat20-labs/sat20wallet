@@ -1,0 +1,386 @@
+package wallet
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/rgb11/consensus"
+	coreconsignment "github.com/sat20-labs/rgb11/consignment"
+	"github.com/sat20-labs/rgb11/invoicing"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+)
+
+type rgb11ProxyTestServer struct {
+	mu          sync.Mutex
+	recipientID string
+	txID        string
+	vout        *uint32
+	consignment []byte
+	ack         *bool
+}
+
+func (s *rgb11ProxyTestServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		s.handleMultipart(w, r)
+		return
+	}
+	var request struct {
+		Method string          `json:"method"`
+		ID     string          `json:"id"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if request.ID == "" {
+		http.Error(w, "missing JSON-RPC id", http.StatusBadRequest)
+		return
+	}
+	switch request.Method {
+	case "consignment.get":
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if len(s.consignment) == 0 {
+			_, _ = io.WriteString(w, `{"result":null}`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": rgb11ProxyConsignment{
+			Consignment: base64.StdEncoding.EncodeToString(s.consignment),
+			TxID:        s.txID, Vout: s.vout,
+		}})
+	case "ack.post":
+		var params rgb11ProxyAckParam
+		if err := json.Unmarshal(request.Params, &params); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.ack = new(bool)
+		*s.ack = params.Ack
+		s.mu.Unlock()
+		_, _ = io.WriteString(w, `{"result":true}`)
+	case "ack.get":
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.ack == nil {
+			_, _ = io.WriteString(w, `{"result":null}`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": *s.ack})
+	default:
+		http.Error(w, "unknown method", http.StatusBadRequest)
+	}
+}
+
+func (s *rgb11ProxyTestServer) handleMultipart(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(rgb11ProxyMaxConsignmentLen + 1024); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var params rgb11ProxyPostConsignmentParam
+	if err := json.Unmarshal([]byte(r.FormValue("params")), &params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	s.recipientID = params.RecipientID
+	s.txID = params.TxID
+	s.vout = params.Vout
+	s.consignment = raw
+	s.mu.Unlock()
+	_, _ = io.WriteString(w, `{"result":true}`)
+}
+
+func TestRGB11ReceiveTransportsBuildsStandardInvoiceEndpoint(t *testing.T) {
+	transports, standard, err := rgb11ReceiveTransports(RGB11InvoiceRequest{
+		TransportMode: RGB11ProxyTransport,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !standard || len(transports) != 1 || transports[0].String() != defaultRGB11ProxyTransport {
+		t.Fatalf("unexpected standard transports: standard=%v transports=%+v", standard, transports)
+	}
+	if _, _, err := rgb11ReceiveTransports(RGB11InvoiceRequest{
+		TransportMode:      RGB11ProxyTransport,
+		TransportEndpoints: []string{"rpc://proxy.example.com/0.2/json-rpc"},
+	}); err == nil {
+		t.Fatal("accepted insecure non-loopback JSON-RPC transport")
+	}
+}
+
+func TestRGB11ProxyProtocolRoundTrip(t *testing.T) {
+	state := &rgb11ProxyTestServer{}
+	server := httptest.NewServer(http.HandlerFunc(state.serveHTTP))
+	defer server.Close()
+	endpoint := server.URL
+	recipientID := "tb4:recipient"
+	txID := strings.Repeat("ab", 32)
+	vout := uint32(1)
+	consignment := []byte{1, 2, 3, 4}
+
+	if err := rgb11ProxyPostConsignment(
+		context.Background(), endpoint, recipientID, txID, &vout, consignment,
+	); err != nil {
+		t.Fatal(err)
+	}
+	received, err := rgb11ProxyJSON[rgb11ProxyConsignment](
+		context.Background(), endpoint, "consignment.get",
+		rgb11ProxyRecipientParam{RecipientID: recipientID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(received.Consignment)
+	if err != nil || string(raw) != string(consignment) || received.TxID != txID ||
+		received.Vout == nil || *received.Vout != vout {
+		t.Fatalf("unexpected consignment response: %+v raw=%x err=%v", received, raw, err)
+	}
+	if err := rgb11ProxyPostConsignment(
+		context.Background(), endpoint, recipientID, txID, nil, consignment,
+	); err != nil {
+		t.Fatal(err)
+	}
+	received, err = rgb11ProxyJSON[rgb11ProxyConsignment](
+		context.Background(), endpoint, "consignment.get",
+		rgb11ProxyRecipientParam{RecipientID: recipientID},
+	)
+	if err != nil || received.Vout != nil {
+		t.Fatalf("blinded consignment must omit witness vout: %+v err=%v", received, err)
+	}
+	if err := rgb11ProxyPostAck(context.Background(), endpoint, recipientID, true); err != nil {
+		t.Fatal(err)
+	}
+	ack, err := rgb11ProxyJSON[bool](
+		context.Background(), endpoint, "ack.get",
+		rgb11ProxyRecipientParam{RecipientID: recipientID},
+	)
+	if err != nil || ack == nil || !*ack {
+		t.Fatalf("unexpected ACK: %v, %v", ack, err)
+	}
+}
+
+func TestRGB11ProxyEndpointsAcceptLoopbackRPC(t *testing.T) {
+	transport, err := invoicing.ParseTransport("rpc://127.0.0.1:3000/0.2/json-rpc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := rgb11ProxyEndpointURL(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "http://127.0.0.1:3000/0.2/json-rpc" {
+		t.Fatalf("endpoint = %q", endpoint)
+	}
+}
+
+func TestRGB11ProxyInvoiceAcceptsBlindedBeneficiary(t *testing.T) {
+	invoice := "rgb:~/~/~/tb4:utxob:0p7Vez5g-71fjxwc-cM1U8q8-aPdDoj5-rhHwhlc-7lHZlZy-YcXFX" +
+		"?expiry=1785485187&endpoints=rpcs://proxy.iriswallet.com/0.2/json-rpc"
+	parsed, endpoints, err := rgb11ProxyInvoice(invoice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Beneficiary.Kind != invoicing.BeneficiaryBlindedSeal || len(endpoints) != 1 ||
+		endpoints[0].invoice != defaultRGB11ProxyTransport {
+		t.Fatalf("unexpected blinded proxy invoice: invoice=%+v endpoints=%+v", parsed, endpoints)
+	}
+}
+
+func TestRGB11ProxyDefersNackUntilBitcoinEvidenceIsAvailable(t *testing.T) {
+	state := &rgb11ProxyTestServer{}
+	server := httptest.NewServer(http.HandlerFunc(state.serveHTTP))
+	defer server.Close()
+
+	for _, err := range []error{
+		coreconsignment.ErrWitnessUnresolved,
+		coreconsignment.ErrOutpointUnknown,
+	} {
+		rgb11ProxyPostNackIfTerminal(context.Background(), server.URL, "recipient", err)
+		state.mu.Lock()
+		ack := state.ack
+		state.mu.Unlock()
+		if ack != nil {
+			t.Fatalf("temporary Bitcoin evidence error %v posted ACK=%v", err, *ack)
+		}
+	}
+
+	rgb11ProxyPostNackIfTerminal(
+		context.Background(), server.URL, "recipient", coreconsignment.ErrWitnessMismatch,
+	)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.ack == nil || *state.ack {
+		t.Fatalf("terminal validation error did not post NACK: %v", state.ack)
+	}
+}
+
+func TestRGB11ProxyDeliveryBroadcastsBeforeAck(t *testing.T) {
+	state := &rgb11ProxyTestServer{}
+	server := httptest.NewServer(http.HandlerFunc(state.serveHTTP))
+	defer server.Close()
+
+	testWallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire",
+		"", &chaincfg.TestNet4Params,
+	)
+	if testWallet == nil {
+		t.Fatal("create test wallet")
+	}
+	evidence := &rgb11FlowEvidence{
+		utxos: make(map[string]*rgb11wallet.BitcoinUTXO),
+		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+	}
+	manager := newRGB11FlowManager(t, testWallet, &rgb11FlowIndexer{
+		outputs: make(map[string]*TxOutput),
+	}, evidence, 91)
+
+	script, err := AddrToPkScript(testWallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beneficiary, err := invoicing.NewWitnessBeneficiary(invoicing.BitcoinTestnet4, script, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract, err := consensus.ParseContractID("rgb:eIbQx5Am-XRDjj01-RM~5eo7-rv2nluD-OnBJRAy-S9~Yfts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, err := invoicing.ParseTransport("rpc://" + strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiry := time.Now().Add(time.Hour).Unix()
+	invoice := invoicing.Invoice{
+		Transports:     []invoicing.Transport{transport},
+		Contract:       &contract,
+		AssignmentName: "assetOwner",
+		Assignment:     &invoicing.InvoiceState{Kind: invoicing.StateAmount, Amount: 10},
+		Beneficiary:    beneficiary,
+		Expiry:         &expiry,
+	}
+	if err := invoice.Validate(time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	tx := wire.NewMsgTx(wire.TxVersion)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{}, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(330, script))
+	var signed bytes.Buffer
+	if err := tx.Serialize(&signed); err != nil {
+		t.Fatal(err)
+	}
+	consignment, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-transfer.rgba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	consignmentHash := sha256.Sum256(consignment)
+	transferID := "proxy-transfer"
+	pending := &rgb11wallet.PendingTransfer{
+		State: rgb11wallet.TransferState{
+			TransferID: transferID, BatchTransferIDs: []string{transferID}, BatchSize: 1,
+			RecipientVout: 1, TransportMode: RGB11ProxyTransport, Direction: "send",
+			Asset: indexer.AssetInfo{
+				Name:   indexer.AssetName{Protocol: "rgb11", Type: "f", Ticker: "proxy"},
+				Amount: *indexer.NewDefaultDecimal(10),
+			},
+			RecipientID: beneficiary.String(), Invoice: invoice.String(),
+			Expiry: expiry, ConsignmentHash: hexString(consignmentHash[:]),
+			WitnessTxID: tx.TxHash().String(), AckStatus: "awaiting", Status: "prepared",
+		},
+		RecipientConsignment: consignment,
+		LocalConsignment:     append([]byte(nil), consignment...),
+		SignedTx:             signed.Bytes(), SignedPSBT: []byte{1}, CreatedAt: time.Now().Unix(),
+	}
+	if err := manager.rgbManager.projectionStore.SavePendingTransfer(pending); err != nil {
+		t.Fatal(err)
+	}
+
+	delivered, err := manager.rgbManager.DeliverAndBroadcastRGB11ProxyTransfer(
+		context.Background(), []string{transferID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivered.TxID != tx.TxHash().String() || len(evidence.broadcasted) == 0 {
+		t.Fatalf("delivery did not broadcast: result=%+v", delivered)
+	}
+	state.mu.Lock()
+	postedTxID, postedRecipient := state.txID, state.recipientID
+	postedConsignment := append([]byte(nil), state.consignment...)
+	state.mu.Unlock()
+	if postedTxID != delivered.TxID || postedRecipient != beneficiary.String() {
+		t.Fatalf("unexpected proxy upload txid=%s recipient=%s", postedTxID, postedRecipient)
+	}
+	if !bytes.HasPrefix(postedConsignment, []byte("RGB\x00TFR")) {
+		t.Fatalf("proxy upload is not a standard RGB transfer file: %x", postedConsignment[:min(7, len(postedConsignment))])
+	}
+	if _, err := coreconsignment.DecodeFile(postedConsignment); err != nil {
+		t.Fatalf("proxy upload is not decodable as a standard RGB transfer file: %v", err)
+	}
+	stored, err := manager.rgbManager.projectionStore.LoadPendingTransfer(transferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State.Status != "broadcast" || stored.State.AckStatus != "awaiting" {
+		t.Fatalf("unexpected post-broadcast state: %+v", stored.State)
+	}
+
+	ack, err := manager.rgbManager.FetchRGB11ProxyAck(context.Background(), transferID)
+	if err != nil || ack.Available {
+		t.Fatalf("ACK should still be pending: ack=%+v err=%v", ack, err)
+	}
+	state.mu.Lock()
+	state.ack = new(bool)
+	*state.ack = true
+	state.mu.Unlock()
+	ack, err = manager.rgbManager.FetchRGB11ProxyAck(context.Background(), transferID)
+	if err != nil || !ack.Available || !ack.Accepted {
+		t.Fatalf("accepted ACK not recorded: ack=%+v err=%v", ack, err)
+	}
+	stored, err = manager.rgbManager.projectionStore.LoadPendingTransfer(transferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State.Status != "broadcast" || stored.State.AckStatus != "accepted" {
+		t.Fatalf("ACK changed broadcast lifecycle incorrectly: %+v", stored.State)
+	}
+}
+
+func hexString(value []byte) string {
+	const digits = "0123456789abcdef"
+	result := make([]byte, len(value)*2)
+	for index, item := range value {
+		result[index*2] = digits[item>>4]
+		result[index*2+1] = digits[item&0x0f]
+	}
+	return string(result)
+}

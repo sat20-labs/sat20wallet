@@ -33,18 +33,21 @@
       <div v-if="selectedType === 'RGB11'" class="rounded-lg border border-zinc-700 bg-muted/60 p-3 text-xs text-zinc-400">
         <div class="flex justify-between gap-3">
           <span>{{ $t('rgb11Transfer.consistency') }}: {{ rgb11State.consistency_status }}</span>
-          <span>{{ $t('rgb11Transfer.dkvs') }}: {{ rgb11State.dkvs_status }}</span>
+          <span>{{ $t('rgb11Transfer.backupStatus') }}: {{ rgb11State.backup_status }}</span>
         </div>
         <div v-if="rgb11State.consistency_status !== 'ok'" class="mt-1 text-amber-500">
           {{ $t('rgb11Transfer.inconsistentWarning') }}
         </div>
-        <div class="mt-1" :class="rgb11State.auto_backup_enabled ? 'text-emerald-400' : 'text-amber-500'">
-          {{ rgb11State.auto_backup_enabled
-            ? $t('rgb11Transfer.autoBackupEnabled')
-            : $t('rgb11Transfer.manualBackupRequired') }}
+        <div v-if="rgb11Error" class="mt-1 break-all text-red-400">
+          {{ $t('rgb11Transfer.stateError', { error: rgb11Error }) }}
+        </div>
+        <div class="mt-1" :class="rgb11State.backup_enabled ? 'text-emerald-400' : 'text-amber-500'">
+          {{ rgb11State.backup_enabled
+            ? $t('rgb11Transfer.backupEnabled')
+            : $t('rgb11Transfer.backupUnavailable') }}
         </div>
         <div v-if="rgb11State.backup_mode === 'temporary'" class="mt-1 text-amber-500">
-          {{ $t('rgb11Transfer.temporaryBackupWarning', { duration: formatRetention(rgb11State.backup_ttl_ms) }) }}
+          {{ $t('rgb11Transfer.temporaryBackupWarning', { duration: formatRetention(rgb11State.backup_retention_ms) }) }}
         </div>
         <div class="mt-3 grid grid-cols-2 gap-2">
           <Button size="sm" variant="outline" @click="emit('issue-rgb11')">
@@ -55,17 +58,6 @@
             <Icon icon="lucide:file-input" class="mr-2 h-4 w-4" />
             {{ $t('rgb11Transfer.import') }}
           </Button>
-        </div>
-        <div class="mt-2 grid grid-cols-2 gap-2">
-          <Button size="sm" variant="outline" :disabled="syncing" @click="backupRGB11State">
-            {{ rgb11State.auto_backup_enabled ? $t('rgb11Transfer.backupNow') : $t('rgb11Transfer.enableAutoBackup') }}
-          </Button>
-          <Button size="sm" variant="outline" :disabled="syncing" @click="restoreRGB11State">
-            {{ $t('rgb11Transfer.restore') }}
-          </Button>
-        </div>
-        <div v-if="syncMessage" class="mt-2 break-all" :class="syncError ? 'text-red-400' : 'text-emerald-400'">
-          {{ syncMessage }}
         </div>
         <div class="mt-3 border-t border-zinc-700/70 pt-3">
           <div class="mb-2 flex items-center justify-between">
@@ -130,6 +122,13 @@
             </div>
             <div class="shrink-0 text-right text-sm font-semibold text-zinc-300">
               {{ formatAmount(asset) }}
+              <div v-if="asset.protocol === 'rgb11'" class="mt-1 text-[10px] font-normal text-zinc-500">
+                {{ $t('rgb11Transfer.availableAmount') }}: {{ formatExactAmount(asset.available_amount || '0') }}
+              </div>
+              <div v-if="asset.protocol === 'rgb11' && isPositiveAmount(asset.pending_amount)"
+                class="text-[10px] font-normal text-amber-400">
+                {{ $t('rgb11Transfer.pendingAmount') }}: {{ formatExactAmount(asset.pending_amount || '0') }}
+              </div>
             </div>
           </div>
 
@@ -142,7 +141,9 @@
                 <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
                 {{ $t('l1AssetsTabs.send') }}
               </Button>
-              <Button v-else size="sm" variant="outline" :disabled="rgb11State.consistency_status !== 'ok'" @click="handleSend(asset)"
+              <Button v-else size="sm" variant="outline"
+                :disabled="rgb11State.consistency_status !== 'ok' || !!rgb11Error || !hasAvailableRGB11(asset)"
+                @click="handleSend(asset)"
                 class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
                 <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
                 {{ $t('l1AssetsTabs.send') }}
@@ -165,7 +166,9 @@
                 <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
                 {{ $t('l1AssetsTabs.send') }}
               </Button>
-              <Button v-else size="sm" variant="outline" :disabled="rgb11State.consistency_status !== 'ok'" @click="handleSend(asset)"
+              <Button v-else size="sm" variant="outline"
+                :disabled="rgb11State.consistency_status !== 'ok' || !!rgb11Error || !hasAvailableRGB11(asset)"
+                @click="handleSend(asset)"
                 class="text-zinc-400 border border-zinc-700/50 hover:bg-zinc-700 gap-[1px]">
                 <Icon icon="lucide:send" class="w-4 h-4 mr-1" />
                 {{ $t('l1AssetsTabs.send') }}
@@ -193,7 +196,7 @@
               </div>
               <div v-if="proof.policy_reason" class="break-all">Policy reason: {{ proof.policy_reason }}</div>
               <div class="break-all">Consignment: {{ proof.consignment_hash || 'local-only' }}</div>
-              <div>UTXO lock: reason=rgb</div>
+              <div>UTXO lock: reason={{ rgb11ProofLockReason(proof) }}</div>
             </div>
           </div>
         </div>
@@ -232,6 +235,8 @@ interface Asset {
   symbol?: string
   fingerprint?: string
   verified?: boolean
+  available_amount?: string
+  pending_amount?: string
 }
 
 // Props定义
@@ -257,7 +262,7 @@ const rgb11Store = useRGB11Store()
 const globalStore = useGlobalStore()
 const { address, network } = storeToRefs(walletStore)
 const { env, hideBalance } = storeToRefs(globalStore)
-const { state: rgb11State } = storeToRefs(rgb11Store)
+const { state: rgb11State, error: rgb11Error } = storeToRefs(rgb11Store)
 const { t } = useI18n()
 
 const formatRetention = (ttlMs: number) => {
@@ -317,7 +322,9 @@ const handleDeposit = (asset: any) => {
 }
 
 const rgb11Proofs = (asset: Asset) => (rgb11State.value.proofs || []).filter((proof: any) => (
-  proof?.asset_name?.Protocol === 'rgb11' && proof?.asset_name?.Ticker === asset.ticker
+  proof?.asset_name?.Protocol === 'rgb11' &&
+  proof?.asset_name?.Ticker === asset.ticker &&
+  proof?.status !== 'spending'
 ))
 
 const rgb11Transfers = computed(() => (
@@ -328,31 +335,6 @@ const rgb11TransferStatusClass = (status: string) => {
   if (status === 'settled') return 'text-emerald-400'
   if (status === 'conflicted' || status === 'failed') return 'text-red-400'
   return 'text-amber-400'
-}
-
-const syncing = ref(false)
-const syncMessage = ref('')
-const syncError = ref(false)
-
-const backupRGB11State = async () => {
-  if (!rgb11State.value.auto_backup_enabled && !window.confirm(t('rgb11Transfer.enableAutoBackupConfirm'))) return
-  syncing.value = true
-  syncMessage.value = ''
-  const [err] = await walletManager.backupRGB11WalletState()
-  syncing.value = false
-  syncError.value = !!err
-  syncMessage.value = err?.message || t('rgb11Transfer.backupDone')
-  if (!err) emit('refresh')
-}
-
-const restoreRGB11State = async () => {
-  syncing.value = true
-  syncMessage.value = ''
-  const [err] = await walletManager.restoreRGB11WalletState({ now: Date.now() })
-  syncing.value = false
-  syncError.value = !!err
-  syncMessage.value = err?.message || t('rgb11Transfer.restoreDone')
-  if (!err) emit('refresh')
 }
 
 // 监听资产类型变化
@@ -370,6 +352,17 @@ const formatExactAmount = (amount: number | string) => {
   const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
   return fraction === undefined ? `${sign}${grouped}` : `${sign}${grouped}.${fraction}`
 }
+
+const isPositiveAmount = (amount: number | string | undefined) => {
+  const value = String(amount || '0').trim()
+  return value !== '' && !/^0*(?:\.0*)?$/.test(value)
+}
+
+const hasAvailableRGB11 = (asset: Asset) => isPositiveAmount(asset.available_amount)
+
+const rgb11ProofLockReason = (proof: any) => (
+  proof?.status === 'settled' && Number(proof?.confirmations || 0) > 0 ? 'rgb' : 'pending-rgb'
+)
 
 const formatAmount = (asset: Asset) => {
   if (hideBalance.value) {

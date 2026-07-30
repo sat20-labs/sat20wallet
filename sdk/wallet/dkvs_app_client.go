@@ -20,7 +20,14 @@ type DKVSCASMutationRequest struct {
 }
 
 type DKVSBatchCASRequest struct {
-	Mutations []DKVSCASMutationRequest `json:"mutations"`
+	Mutations         []DKVSCASMutationRequest      `json:"mutations"`
+	PathPreconditions []DKVSPathPreconditionRequest `json:"path_preconditions,omitempty"`
+}
+
+type DKVSPathPreconditionRequest struct {
+	Path               string `json:"path"`
+	ExpectedRoot       string `json:"expected_root"`
+	ExpectedGeneration uint64 `json:"expected_generation"`
 }
 
 type DKVSBatchCASResult struct {
@@ -86,6 +93,15 @@ func casMutationRequest(mutation dkvsindexer.CASMutation) (DKVSCASMutationReques
 func (p *SatsNetDKVSClient) PutRecordCAS(record *swire.DKVSRecord,
 	precondition dkvsindexer.WritePrecondition) (*swire.DKVSRecord, error) {
 
+	if p.manager != nil && record != nil && p.manager.managesKey(record.Key) {
+		result, err := p.manager.putBatchCAS(p, []dkvsindexer.CASMutation{{
+			Record: record, Precondition: precondition,
+		}})
+		if err != nil {
+			return nil, err
+		}
+		return result.Records[0], nil
+	}
 	req, err := casMutationRequest(dkvsindexer.CASMutation{Record: record, Precondition: precondition})
 	if err != nil {
 		return nil, err
@@ -98,6 +114,15 @@ func (p *SatsNetDKVSClient) PutRecordCAS(record *swire.DKVSRecord,
 }
 
 func (p *SatsNetDKVSClient) PutRecordBatchCAS(mutations []dkvsindexer.CASMutation) (*DKVSBatchCASResult, error) {
+	if p.manager != nil && p.manager.managesMutations(mutations) {
+		return p.manager.putBatchCAS(p, mutations)
+	}
+	return p.PutRecordBatchCASWithPaths(mutations, nil)
+}
+
+func (p *SatsNetDKVSClient) PutRecordBatchCASWithPaths(mutations []dkvsindexer.CASMutation,
+	pathConditions []dkvsindexer.PathWritePrecondition) (*DKVSBatchCASResult, error) {
+
 	if len(mutations) == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
@@ -108,6 +133,12 @@ func (p *SatsNetDKVSClient) PutRecordBatchCAS(mutations []dkvsindexer.CASMutatio
 			return nil, err
 		}
 		req.Mutations = append(req.Mutations, encoded)
+	}
+	for _, condition := range pathConditions {
+		req.PathPreconditions = append(req.PathPreconditions, DKVSPathPreconditionRequest{
+			Path: condition.Path, ExpectedRoot: condition.ExpectedRoot.String(),
+			ExpectedGeneration: condition.ExpectedGeneration,
+		})
 	}
 	var resp dkvsBatchCASResp
 	if err := p.postJSON("/v3/dkvs/records/batch-cas", req, &resp); err != nil {

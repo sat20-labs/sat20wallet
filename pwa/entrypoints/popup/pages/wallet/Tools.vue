@@ -721,20 +721,6 @@
               </Button>
             </CardContent>
           </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle class="text-base">{{ t('tools.dkvs.title') }}</CardTitle>
-              <CardDescription>
-                {{ t('tools.dkvs.description') }}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button class="w-full justify-start" @click="router.push('/wallet/dkvs')">
-                <Icon icon="lucide:database-zap" class="h-4 w-4" />
-                {{ t('tools.dkvs.open') }}
-              </Button>
-            </CardContent>
-          </Card>
         </TabsContent>
 
         <TabsContent value="mint" class="mt-4 space-y-4">

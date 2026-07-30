@@ -37,6 +37,20 @@ func (c *fakeDKVSHTTPClient) SendGetRequest(url *URL) ([]byte, error) {
 func (c *fakeDKVSHTTPClient) SendPostRequest(url *URL, body []byte) ([]byte, error) {
 	c.lastPost = url
 	c.lastBody = append([]byte{}, body...)
+	if strings.HasSuffix(url.Path, "/v3/dkvs/records/cas") {
+		var request DKVSCASMutationRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			return nil, err
+		}
+		if request.Record == nil {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
+		c.lastBody, _ = json.Marshal(request.Record)
+		hash := dkvsindexer.RecordHash(request.Record)
+		return json.Marshal(map[string]interface{}{
+			"code": 0, "msg": "ok", "data": request.Record, "hash": hash.String(),
+		})
+	}
 	resp, ok := c.postResp[url.Path]
 	if !ok {
 		return nil, fmt.Errorf("missing post response for %s", url.Path)
@@ -69,7 +83,7 @@ func (c *fakeDKVSHTTPClient) SendDeleteRequest(url *URL, body []byte) ([]byte, e
 }
 
 func TestSatsNetDKVSClientRecords(t *testing.T) {
-	record := &swire.DKVSRecord{Version: 1, Key: "/tmp/test", Value: []byte("value")}
+	record := &swire.DKVSRecord{Version: 1, Key: "/tmp/test", Value: []byte("value"), Seq: 1}
 	http := &fakeDKVSHTTPClient{
 		getResp: map[string][]byte{
 			"testnet/v3/dkvs/records":        mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": record}),
@@ -87,7 +101,7 @@ func TestSatsNetDKVSClientRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if put.Key != record.Key || http.lastPost.Path != "testnet/v3/dkvs/records" {
+	if put.Key != record.Key || http.lastPost.Path != "testnet/v3/dkvs/records/cas" {
 		t.Fatalf("put=%#v path=%s", put, http.lastPost.Path)
 	}
 
@@ -110,7 +124,7 @@ func TestSatsNetDKVSClientRecords(t *testing.T) {
 	if _, err := client.Tombstone(record); err != nil {
 		t.Fatal(err)
 	}
-	if http.lastPost.Path != "testnet/v3/dkvs/tombstone" {
+	if http.lastPost.Path != "testnet/v3/dkvs/records/cas" {
 		t.Fatalf("tombstone path=%s", http.lastPost.Path)
 	}
 }
@@ -265,6 +279,9 @@ func TestSatsNetDKVSClientPutSignedRecordWithAutopay(t *testing.T) {
 		proof.PoolContract != autopay.PoolContract {
 		t.Fatalf("bad autopay proof=%+v record=%+v", proof, posted)
 	}
+	http.getResp["testnet/v3/dkvs/records"] = mustJSON(t, map[string]interface{}{
+		"code": 0, "msg": "ok", "data": &posted,
+	})
 
 	if _, err := client.TombstonePersonalRecordWithAutopay(dkvsTestWalletFromPriv(t, priv), "profile",
 		dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100}, autopay); err != nil {
@@ -792,9 +809,15 @@ func TestSatsNetDKVSClientMailbox(t *testing.T) {
 	if http.lastGet.Query["prefix"] != "/mail/"+mailboxID+"/share" {
 		t.Fatalf("share query=%v", http.lastGet.Query)
 	}
+	http.getResp["testnet/v3/dkvs/records"] = mustJSON(t, map[string]interface{}{
+		"code": 0, "msg": "ok", "data": msgRecord,
+	})
 	if _, err := client.DeleteMailboxRecord(tombstone); err != nil {
 		t.Fatal(err)
 	}
+	http.getResp["testnet/v3/dkvs/records"] = mustJSON(t, map[string]interface{}{
+		"code": 0, "msg": "ok", "data": tombstone,
+	})
 	if _, err := client.DeleteMessage(dkvsTestWalletFromPriv(t, ownerPriv), mailboxID, senderID, "msg-1", dkvsindexer.RecordOptions{Seq: 3, TTL: 60_000, ExpiryHeight: 100}); err != nil {
 		t.Fatal(err)
 	}

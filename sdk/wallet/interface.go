@@ -76,6 +76,8 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 		return nil
 	}
 	mgr.rgbManager = rgbManager
+	mgr.ensureDKVSManager()
+	mgr.registerDKVSDomainObservers()
 	err = mgr.init()
 	if err != nil {
 		return nil
@@ -95,6 +97,7 @@ func (p *Manager) Start() {
 	p.l1IndexerClient.Start()
 	p.l2IndexerClient.Start()
 	p.startActionMonitor()
+	p.ensureDKVSManager().start()
 }
 
 func (p *Manager) IsReady() bool {
@@ -102,7 +105,10 @@ func (p *Manager) IsReady() bool {
 }
 
 func (p *Manager) Stop() {
-	p.StopDKVSBackgroundSync()
+	if p.dkvs != nil {
+		p.dkvs.stopAndWait()
+	}
+	p.clearAccountManagementSession()
 	if p.btcLuckyMiner != nil {
 		p.btcLuckyMiner.Stop()
 	}
@@ -126,15 +132,16 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 	// 	return "", fmt.Errorf("wallet has been created, please unlock it first")
 	// }
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
 
 	wallet, mnemonic, err := NewInteralWallet(GetChainParam())
 	if err != nil {
+		p.mutex.Unlock()
 		return -1, "", err
 	}
 
 	err = p.saveMnemonic(mnemonic, password, wallet)
 	if err != nil {
+		p.mutex.Unlock()
 		return -1, "", err
 	}
 
@@ -144,8 +151,20 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
+	if err := p.queueAccountMutationLocked(accountManagementMutation{
+		Type: accountMutationAddWallet, Fingerprint: walletFingerprint(wallet),
+		WalletID: wallet.GetId(),
+	}); err != nil {
+		Log.Errorf("queue managed wallet creation failed: %v", err)
+	}
+	p.markDKVSStateDirty()
 
-	return p.status.CurrentWallet, mnemonic, nil
+	id := p.status.CurrentWallet
+	p.mutex.Unlock()
+	if err := p.refreshDKVSRegistrations(); err != nil {
+		Log.Warningf("refresh DKVS registrations after wallet creation failed: %v", err)
+	}
+	return id, mnemonic, nil
 }
 
 // TODO 未完成，还没有保存
@@ -161,7 +180,6 @@ func (p *Manager) CreateMonitorWallet(address string) (int64, error) {
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
-
 	return p.status.CurrentWallet, nil
 }
 
@@ -181,10 +199,10 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	}
 
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
 
 	err := p.saveMnemonic(mnemonic, password, wallet)
 	if err != nil {
+		p.mutex.Unlock()
 		return -1, err
 	}
 
@@ -194,8 +212,20 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
+	if err := p.queueAccountMutationLocked(accountManagementMutation{
+		Type: accountMutationAddWallet, Fingerprint: walletFingerprint(wallet),
+		WalletID: wallet.GetId(),
+	}); err != nil {
+		Log.Errorf("queue managed wallet import failed: %v", err)
+	}
+	p.markDKVSStateDirty()
 
-	return p.status.CurrentWallet, nil
+	id := p.status.CurrentWallet
+	p.mutex.Unlock()
+	if err := p.refreshDKVSRegistrations(); err != nil {
+		Log.Warningf("refresh DKVS registrations after wallet import failed: %v", err)
+	}
+	return id, nil
 }
 
 func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (int64, error) {
@@ -211,10 +241,10 @@ func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (i
 	}
 
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
 
 	err = p.saveSecret(privKey, password, WALLET_TYPE_PRIVKEY, wallet)
 	if err != nil {
+		p.mutex.Unlock()
 		return -1, err
 	}
 
@@ -224,8 +254,14 @@ func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (i
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
+	p.markDKVSStateDirty()
 
-	return p.status.CurrentWallet, nil
+	id := p.status.CurrentWallet
+	p.mutex.Unlock()
+	if err := p.refreshDKVSRegistrations(); err != nil {
+		Log.Warningf("refresh DKVS registrations after private key import failed: %v", err)
+	}
+	return id, nil
 }
 
 func (p *Manager) ChangePassword(oldPS, newPS string) error {
@@ -245,15 +281,35 @@ func (p *Manager) ChangePassword(oldPS, newPS string) error {
 			return err
 		}
 	}
+	if p.accountProfile != nil {
+		if len(p.accountSecret) != 32 {
+			return fmt.Errorf("account management is locked")
+		}
+		ciphertext, salt, err := p.encryptAccountManagementSecret(newPS, p.accountSecret)
+		if err != nil {
+			return err
+		}
+		p.accountProfile.SecretCipher = ciphertext
+		p.accountProfile.SecretSalt = salt
+		p.accountPassword = newPS
+		if err := p.saveAccountManagementProfileLocked(); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
 
 func (p *Manager) UnlockWallet(password string) (int64, error) {
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	return p.unlockWallet(password)
+	id, err := p.unlockWallet(password)
+	p.mutex.Unlock()
+	if err == nil {
+		if refreshErr := p.refreshDKVSRegistrations(); refreshErr != nil {
+			Log.Warningf("refresh DKVS registrations after unlock failed: %v", refreshErr)
+		}
+	}
+	return id, err
 }
 
 // 同时解锁所有的钱包
@@ -317,8 +373,12 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 
 	p.wallet = info.Wallet
 	p.wallet.SetSubAccount(p.status.CurrentAccount)
+	if err := p.unlockAccountManagementLocked(password); err != nil {
+		return -1, fmt.Errorf("unlock account management: %w", err)
+	}
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
+	p.markDKVSStateDirty()
 
 	return p.status.CurrentWallet, nil
 }
@@ -337,9 +397,9 @@ func (p *Manager) GetAllWallets() map[int64]int {
 // 不再需要密码
 func (p *Manager) SwitchWallet(id int64, password string) error {
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
 
 	if p.status.CurrentWallet == id {
+		p.mutex.Unlock()
 		return nil
 	}
 	w, ok := p.walletInfoMap[id]
@@ -349,6 +409,7 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 		//p.initDB()
 		//_, ok := p.walletInfoMap[id]
 		//if !ok {
+		p.mutex.Unlock()
 		return fmt.Errorf("can't find wallet %d", id)
 		//}
 	}
@@ -360,7 +421,12 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
+	p.markDKVSStateDirty()
 
+	p.mutex.Unlock()
+	if err := p.refreshDKVSRegistrations(); err != nil {
+		Log.Warningf("refresh DKVS registrations after wallet switch failed: %v", err)
+	}
 	return nil
 }
 
@@ -445,18 +511,30 @@ func (p *Manager) FindWalletByPubKeyWithDepth(pubKey []byte, depth uint32) commo
 
 func (p *Manager) SwitchAccount(id uint32) {
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
 
 	if p.status.CurrentAccount == id {
+		p.mutex.Unlock()
 		return
 	}
 
 	walletInfo, ok := p.walletInfoMap[p.status.CurrentWallet]
 	if ok {
 		// 必须有
-		if walletInfo.Accounts < int(id) {
-			walletInfo.Accounts = int(id)
-			saveWallet(p.db, &walletInfo.WalletInDB)
+		if walletInfo.Accounts <= int(id) {
+			walletInfo.Accounts = int(id) + 1
+			if walletInfo.AccountNames == nil {
+				walletInfo.AccountNames = make(map[uint32]string)
+			}
+			if walletInfo.AccountDIDs == nil {
+				walletInfo.AccountDIDs = make(map[uint32]string)
+			}
+			walletInfo.AccountNames[id] = defaultAccountName(id)
+			if err := saveWallet(p.db, &walletInfo.WalletInDB); err == nil {
+				_ = p.queueAccountMutationLocked(accountManagementMutation{
+					Type: accountMutationEnsureAccount, Fingerprint: walletFingerprint(walletInfo.Wallet),
+					WalletID: walletInfo.Id, Account: id, Name: walletInfo.AccountNames[id],
+				})
+			}
 		}
 	}
 
@@ -465,6 +543,11 @@ func (p *Manager) SwitchAccount(id uint32) {
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
+	p.markDKVSStateDirty()
+	p.mutex.Unlock()
+	if err := p.refreshDKVSRegistrations(); err != nil {
+		Log.Warningf("refresh DKVS registrations after account switch failed: %v", err)
+	}
 }
 
 func (p *Manager) SwitchChain(chain, password string) error {
@@ -485,6 +568,7 @@ func (p *Manager) SwitchChain(chain, password string) error {
 		_, err := p.unlockWallet(password)
 		if err == nil {
 			p.saveStatus()
+			p.markDKVSStateDirty()
 		} else {
 			p.wallet = oldWallet
 		}

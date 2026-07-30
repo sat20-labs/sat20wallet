@@ -59,7 +59,7 @@
                 <Button variant="ghost" size="icon" @click="showMnemonicDialog(wallet)">
                   <Icon icon="lucide:key" class="w-4 h-4" />
                 </Button>
-                <Button v-if="wallet.id !== currentWalletId" variant="ghost" size="icon"
+                <Button v-if="wallet.id !== currentWalletId && wallet.id !== managedRootWalletId" variant="ghost" size="icon"
                   class="text-destructive hover:text-destructive" @click="confirmDeleteWallet(wallet)">
                   <Icon icon="lucide:trash-2" class="w-4 h-4" />
                 </Button>
@@ -331,6 +331,7 @@ import { WalletData } from '@/types'
 import { Message } from '@/types/message'
 import { sendAccountsChangedEvent } from '@/lib/utils'
 import walletManager from '@/utils/sat20'
+import accountSDK from '@/utils/accountManagement'
 import { hideAddress } from '@/utils'
 import { hashPassword } from '@/utils/crypto'
 import { useClipboard, useDebounceFn } from '@vueuse/core'
@@ -363,6 +364,7 @@ const editingName = ref('')
 const mnemonicPassword = ref('')
 const mnemonicPhrase = ref('')
 const showMnemonic = ref(false)
+const managedRootWalletId = ref('')
 
 // Mock NFTs and BTC Domains data
 const nfts = ref([
@@ -379,6 +381,17 @@ const btcDomains = ref([
 
 // 计算属性
 const currentWalletId = computed(() => walletStore.walletId)
+
+onMounted(async () => {
+  try {
+    const status = await accountSDK.status()
+    managedRootWalletId.value = status.active && status.root_wallet_id
+      ? String(status.root_wallet_id)
+      : ''
+  } catch {
+    managedRootWalletId.value = ''
+  }
+})
 
 const walletsWithAddress = ref<any[]>([])
 const isLoadingWallets = ref(false)

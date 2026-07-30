@@ -178,12 +178,15 @@ func (r coreEvidenceResolver) ResolveRGB11Outpoint(outpoint coreconsignment.Outp
 	}
 	result := coreconsignment.OutpointEvidence{Known: true}
 	if outspend.Spent {
-		spending, parseErr := chainhash.NewHashFromStr(outspend.SpendingTx)
-		if parseErr != nil {
-			return coreconsignment.OutpointEvidence{}, parseErr
+		result.Exists, result.Spent = true, true
+		if outspend.SpendingTx != "" {
+			spending, parseErr := chainhash.NewHashFromStr(outspend.SpendingTx)
+			if parseErr != nil {
+				return coreconsignment.OutpointEvidence{}, parseErr
+			}
+			spendingID := [32]byte(*spending)
+			result.SpendingTxID = &spendingID
 		}
-		spendingID := [32]byte(*spending)
-		result.Exists, result.Spent, result.SpendingTxID = true, true, &spendingID
 		return result, nil
 	}
 	utxo, err := r.provider.GetUTXO(text)

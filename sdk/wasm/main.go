@@ -75,16 +75,30 @@ var createJsRet = func(data any, code int, msg string) map[string]any {
 	}
 }
 
+func jsonObject(value any) (map[string]any, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func activateRGB11WalletState() map[string]any {
-	_mgr.SetDKVSBackgroundSyncCallback(func() {
+	return map[string]any{"pending": true}
+}
+
+func registerWalletDataUpdateCallback() {
+	_mgr.SetDKVSUpdateCallback(func() {
 		window := js.Global().Get("window")
 		customEvent := js.Global().Get("CustomEvent")
 		if window.Type() == js.TypeObject && customEvent.Type() == js.TypeFunction {
-			window.Call("dispatchEvent", customEvent.New("sat20:dkvs-synced"))
+			window.Call("dispatchEvent", customEvent.New("sat20:wallet-data-updated"))
 		}
 	})
-	_mgr.RestartDKVSBackgroundSync()
-	return map[string]any{"pending": true}
 }
 
 func parseIndexerConfig(indexer js.Value) (*common.Indexer, error) {
@@ -330,6 +344,7 @@ func initManager(this js.Value, p []js.Value) any {
 		if _mgr == nil {
 			return nil, -1, "NewManager failed"
 		}
+		registerWalletDataUpdateCallback()
 		_mgr.Start()
 		wallet.Log.Info("Manager created")
 		return nil, 0, "ok"
@@ -626,6 +641,103 @@ func getAllWallets(this js.Value, p []js.Value) any {
 		return map[string]any{
 			"walletIds": result,
 		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func getWalletCatalog(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		data := jsSafeData(map[string]any{"wallets": _mgr.GetWalletCatalog()})
+		if message, ok := data["error"].(string); ok {
+			return nil, -1, message
+		}
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func deleteWallet(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 || p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "wallet id must be a string")
+	}
+	id, err := strconv.ParseInt(p[0].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		if err := _mgr.DeleteWallet(id); err != nil {
+			return nil, -1, err.Error()
+		}
+		return jsSafeData(map[string]any{"wallets": _mgr.GetWalletCatalog()}), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func updateWalletName(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 2 || p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "wallet id and name must be strings")
+	}
+	id, err := strconv.ParseInt(p[0].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	name := p[1].String()
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		if err := _mgr.UpdateWalletName(id, name); err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func ensureAccount(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 3 || p[0].Type() != js.TypeString ||
+		p[1].Type() != js.TypeNumber || p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "wallet id, account index and name are required")
+	}
+	id, err := strconv.ParseInt(p[0].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	index := uint32(p[1].Int())
+	name := p[2].String()
+	did := ""
+	if len(p) > 3 && p[3].Type() == js.TypeString {
+		did = p[3].String()
+	}
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		if err := _mgr.EnsureAccount(id, index, name, did); err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func updateAccountMetadata(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 3 || p[0].Type() != js.TypeString ||
+		p[1].Type() != js.TypeNumber || p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "wallet id, account index and name are required")
+	}
+	id, err := strconv.ParseInt(p[0].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	index := uint32(p[1].Int())
+	name := p[2].String()
+	did := ""
+	if len(p) > 3 && p[3].Type() == js.TypeString {
+		did = p[3].String()
+	}
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		if err := _mgr.UpdateAccountMetadata(id, index, name, did); err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
 }
@@ -4700,7 +4812,30 @@ func acceptRGB11Consignment(this js.Value, p []js.Value) any {
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		return receipt, 0, "ok"
+		encoded, err := json.Marshal(receipt)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"receipt": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func receiveRGB11ProxyConsignment(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 request id")
+	}
+	requestID := p[0].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.ReceiveRGB11ProxyConsignment(context.Background(), requestID)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := jsonObject(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
@@ -4712,6 +4847,29 @@ func importRGB11Contract(this js.Value, p []js.Value) any {
 	raw := p[0].String()
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		result, err := _mgr.ImportRGB11Contract(context.Background(), []byte(raw))
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"result": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func importRGB11ContractFile(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 contract file")
+	}
+	encoded := p[0].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		raw, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		result, err := _mgr.ImportRGB11ContractFile(context.Background(), raw)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -4989,6 +5147,47 @@ func broadcastRGB11OutOfBand(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func deliverAndBroadcastRGB11ProxyTransfer(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 proxy transfer ids")
+	}
+	var transferIDs []string
+	if err := json.Unmarshal([]byte(p[0].String()), &transferIDs); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.DeliverAndBroadcastRGB11ProxyTransfer(context.Background(), transferIDs)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := jsonObject(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func fetchRGB11ProxyAck(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 transfer id")
+	}
+	transferID := p[0].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.FetchRGB11ProxyAck(context.Background(), transferID)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := jsonObject(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
 func refreshRGB11State(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -5008,103 +5207,6 @@ func refreshRGB11State(this js.Value, p []js.Value) any {
 			message, code = err.Error(), -1
 		}
 		return map[string]any{"result": string(encoded)}, code, message
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func syncLocalRGB11State(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result := _mgr.SyncLocalRGB11State(context.Background())
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"result": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func restartDKVSBackgroundSync(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	activateRGB11WalletState()
-	return createJsRet(map[string]any{"started": true}, 0, "ok")
-}
-
-func stopDKVSBackgroundSync(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-	_mgr.StopDKVSBackgroundSync()
-	return createJsRet(map[string]any{"stopped": true}, 0, "ok")
-}
-
-type rgb11BackupRequest struct {
-	WalletID     string `json:"wallet_id"`
-	TTL          uint64 `json:"ttl"`
-	ExpiryHeight uint64 `json:"expiry_height"`
-}
-
-func backupRGB11WalletState(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 backup request")
-	}
-	var request rgb11BackupRequest
-	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	if request.TTL == 0 {
-		request.TTL = uint64((365 * 24 * time.Hour) / time.Millisecond)
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		head, err := _mgr.SyncRGB11WalletState(request.WalletID, dkvsindexer.RecordOptions{
-			TTL: request.TTL, ExpiryHeight: request.ExpiryHeight,
-		})
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(head)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"head": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-type rgb11RestoreRequest struct {
-	WalletID string `json:"wallet_id"`
-	Height   uint64 `json:"height"`
-	Now      uint64 `json:"now"`
-}
-
-func restoreRGB11WalletState(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 restore request")
-	}
-	var request rgb11RestoreRequest
-	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	if request.Now == 0 {
-		request.Now = uint64(time.Now().UnixMilli())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		head, err := _mgr.RestoreLatestRGB11WalletState(request.WalletID, dkvsindexer.RecordVerificationOptions{
-			Height: request.Height, Now: request.Now,
-		})
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(head)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"head": string(encoded)}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
@@ -5129,6 +5231,11 @@ func main() {
 	obj.Set("unlockWallet", js.FuncOf(unlockWallet))
 	// input: none; return: list of wallet id and account number
 	obj.Set("getAllWallets", js.FuncOf(getAllWallets))
+	obj.Set("getWalletCatalog", js.FuncOf(getWalletCatalog))
+	obj.Set("deleteWallet", js.FuncOf(deleteWallet))
+	obj.Set("updateWalletName", js.FuncOf(updateWalletName))
+	obj.Set("ensureAccount", js.FuncOf(ensureAccount))
+	obj.Set("updateAccountMetadata", js.FuncOf(updateAccountMetadata))
 	// input: wallet id; return: ok
 	obj.Set("switchWallet", js.FuncOf(switchWallet))
 	obj.Set("changePassword", js.FuncOf(changePassword))
@@ -5231,7 +5338,9 @@ func main() {
 	obj.Set("getRGB11State", js.FuncOf(getRGB11State))
 	obj.Set("createRGB11Invoice", js.FuncOf(createRGB11Invoice))
 	obj.Set("acceptRGB11Consignment", js.FuncOf(acceptRGB11Consignment))
+	obj.Set("receiveRGB11ProxyConsignment", js.FuncOf(receiveRGB11ProxyConsignment))
 	obj.Set("importRGB11Contract", js.FuncOf(importRGB11Contract))
+	obj.Set("importRGB11ContractFile", js.FuncOf(importRGB11ContractFile))
 	obj.Set("issueRGB11Asset", js.FuncOf(issueRGB11Asset))
 	obj.Set("prepareRGB11Transfer", js.FuncOf(prepareRGB11Transfer))
 	obj.Set("buildRGB11RelayRecord", js.FuncOf(buildRGB11RelayRecord))
@@ -5244,12 +5353,9 @@ func main() {
 	obj.Set("broadcastRGB11Transfer", js.FuncOf(broadcastRGB11Transfer))
 	obj.Set("broadcastRGB11Batch", js.FuncOf(broadcastRGB11Batch))
 	obj.Set("broadcastRGB11OutOfBand", js.FuncOf(broadcastRGB11OutOfBand))
+	obj.Set("deliverAndBroadcastRGB11ProxyTransfer", js.FuncOf(deliverAndBroadcastRGB11ProxyTransfer))
+	obj.Set("fetchRGB11ProxyAck", js.FuncOf(fetchRGB11ProxyAck))
 	obj.Set("refreshRGB11State", js.FuncOf(refreshRGB11State))
-	obj.Set("syncLocalRGB11State", js.FuncOf(syncLocalRGB11State))
-	obj.Set("restartDKVSBackgroundSync", js.FuncOf(restartDKVSBackgroundSync))
-	obj.Set("stopDKVSBackgroundSync", js.FuncOf(stopDKVSBackgroundSync))
-	obj.Set("backupRGB11WalletState", js.FuncOf(backupRGB11WalletState))
-	obj.Set("restoreRGB11WalletState", js.FuncOf(restoreRGB11WalletState))
 	obj.Set("enableRGB11AddressReceive", js.FuncOf(enableRGB11AddressReceive))
 	obj.Set("resolveRGB11AddressEndpoint", js.FuncOf(resolveRGB11AddressEndpoint))
 	obj.Set("prepareRGB11AddressTransfer", js.FuncOf(prepareRGB11AddressTransfer))

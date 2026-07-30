@@ -34,7 +34,7 @@ func (e nativeVectorEvidence) GetOutspend(outpoint string) (*BitcoinOutspend, er
 	if strings.HasPrefix(outpoint, e.witnessTxID+":") {
 		return &BitcoinOutspend{}, nil
 	}
-	return &BitcoinOutspend{Spent: true, SpendingTx: e.witnessTxID}, nil
+	return &BitcoinOutspend{Spent: true}, nil
 }
 
 func (e nativeVectorEvidence) GetTip() (*BitcoinTip, error)     { return &BitcoinTip{}, nil }

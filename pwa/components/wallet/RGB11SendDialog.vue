@@ -73,12 +73,28 @@
 
         <template v-else>
           <div class="space-y-2">
+            <Label>{{ $t('rgb11Transfer.amountRaw') }}</Label>
+            <input
+              v-model.trim="amountRaw"
+              type="text"
+              inputmode="numeric"
+              autocomplete="off"
+              class="h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 font-mono text-xs outline-none focus:border-zinc-500"
+              placeholder="1"
+            />
+          </div>
+
+          <div class="space-y-2">
             <Label>{{ $t('rgb11Transfer.invoice') }}</Label>
             <Textarea v-model="invoice" spellcheck="false" class="min-h-28 bg-zinc-900 font-mono text-xs" />
             <p class="text-xs text-zinc-500">{{ $t('rgb11Transfer.batchHint') }}</p>
           </div>
 
-          <Button class="w-full" :disabled="loading || !invoice.trim() || !!transferId" @click="prepareTraditional">
+          <Button
+            class="w-full"
+            :disabled="loading || !invoice.trim() || !traditionalAmountValid || !!transferId"
+            @click="prepareTraditional"
+          >
             {{ loading ? $t('rgb11Transfer.preparing') : $t('rgb11Transfer.prepare') }}
           </Button>
 
@@ -97,14 +113,32 @@
             <p class="text-xs text-amber-500">{{ $t('rgb11Transfer.ackGate') }}</p>
           </div>
 
+          <div v-if="outOfBand && standardConsignmentBase64" class="space-y-2">
+            <Label>{{ $t('rgb11Transfer.standardConsignment') }}</Label>
+            <Button variant="outline" class="w-full" @click="downloadStandardConsignment">
+              {{ $t('rgb11Transfer.downloadConsignment') }}
+            </Button>
+          </div>
+
           <div v-if="transferId" class="space-y-2">
             <Label>{{ $t('rgb11Transfer.ack') }}</Label>
             <p v-if="outOfBand" class="text-xs text-amber-500">{{ $t('rgb11Transfer.outOfBandAck') }}</p>
-            <Button v-if="!outOfBand" variant="outline" class="w-full" :disabled="loading" @click="fetchAck">
+            <p v-if="proxyTransport && proxyBroadcasted" class="text-xs text-zinc-500">
+              {{ $t('rgb11Transfer.proxyAckHelp') }}
+            </p>
+            <Button v-if="proxyTransport && !proxyBroadcasted" variant="outline" class="w-full"
+              :disabled="loading" @click="deliverProxyTransfer">
+              {{ $t('rgb11Transfer.retryProxyDelivery') }}
+            </Button>
+            <Button v-if="proxyTransport && proxyBroadcasted" variant="outline" class="w-full"
+              :disabled="loading" @click="checkProxyAck">
+              {{ $t('rgb11Transfer.checkProxyAck') }}
+            </Button>
+            <Button v-if="!outOfBand && !proxyTransport" variant="outline" class="w-full" :disabled="loading" @click="fetchAck">
               {{ $t('rgb11Transfer.fetchAck') }}
             </Button>
-            <Textarea v-if="!outOfBand" v-model="ack" spellcheck="false" class="min-h-28 bg-zinc-900 font-mono text-xs" />
-            <Button class="w-full" :disabled="loading || (!outOfBand && !ack.trim())" @click="broadcastTraditional">
+            <Textarea v-if="!outOfBand && !proxyTransport" v-model="ack" spellcheck="false" class="min-h-28 bg-zinc-900 font-mono text-xs" />
+            <Button v-if="!proxyTransport" class="w-full" :disabled="loading || (!outOfBand && !ack.trim())" @click="broadcastTraditional">
               {{ loading ? $t('rgb11Transfer.broadcasting') : $t('rgb11Transfer.broadcast') }}
             </Button>
           </div>
@@ -153,12 +187,15 @@ const ack = ref('')
 const transferId = ref('')
 const relayRecord = ref('')
 const transferPackage = ref('')
+const standardConsignmentBase64 = ref('')
 const loading = ref(false)
 const message = ref('')
 const success = ref(false)
 const pendingPrepared = ref<any>(null)
 const batchItems = ref<Array<{ transferId: string; relayRecord: string; transportMode: string }>>([])
 const outOfBand = ref(false)
+const proxyTransport = ref(false)
+const proxyBroadcasted = ref(false)
 const { copy } = useClipboard()
 const { t } = useI18n()
 const walletStore = useWalletStore()
@@ -175,6 +212,8 @@ const assetName = computed(() => {
 })
 
 const validRawAmount = computed(() => /^[1-9]\d*$/.test(amountRaw.value))
+const invoiceCount = computed(() => invoice.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean).length)
+const traditionalAmountValid = computed(() => invoiceCount.value > 1 || validRawAmount.value)
 
 const loadCarrierWarning = async () => {
   const [, result] = await rgb11Address.carrierWarning()
@@ -196,7 +235,7 @@ const sendByAddress = async () => {
     })
     if (prepareErr || !prepareResult?.transfer) {
       const reason = prepareErr?.message || t('rgb11Transfer.prepareFailed')
-      if (/traditional RGB invoice|no RGB11 DKVS address capability/i.test(reason)) {
+      if (/traditional RGB invoice|no RGB11 .*address capability/i.test(reason)) {
         transferMode.value = 'invoice'
         throw new Error(t('rgb11Transfer.addressUnavailable'))
       }
@@ -230,6 +269,10 @@ const prepareTraditional = async () => {
     const invoices = invoice.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)
     const [err, result] = await walletManager.prepareRGB11Transfer({
       ...(invoices.length === 1 ? { invoice: invoices[0] } : { invoices }),
+      ...(invoices.length === 1 ? {
+        contract_id: assetContractID.value,
+        amount_raw: amountRaw.value,
+      } : {}),
       fee_rate: Number(btcFeeRate.value || 1),
       min_confirmations: 1,
     })
@@ -247,8 +290,10 @@ const prepareTraditional = async () => {
     const items: Array<{ transferId: string; relayRecord: string; transportMode: string }> = []
     const packages = []
     for (const state of states) {
-      const transportMode = state.transport_mode || 'sat20-dkvs'
-      if (transportMode === 'out-of-band') {
+      const transportMode = state.transport_mode || 'sat20-managed'
+      if (transportMode === 'rgb-json-rpc') {
+        items.push({ transferId: state.transfer_id, relayRecord: '', transportMode })
+      } else if (transportMode === 'out-of-band') {
         items.push({ transferId: state.transfer_id, relayRecord: '', transportMode })
         packages.push({
           version: 1,
@@ -272,14 +317,84 @@ const prepareTraditional = async () => {
     }
     batchItems.value = items
     outOfBand.value = items.every((item) => item.transportMode === 'out-of-band')
+    proxyTransport.value = items.every((item) => item.transportMode === 'rgb-json-rpc')
     transferId.value = items[0].transferId
     relayRecord.value = items[0].relayRecord
-    transferPackage.value = JSON.stringify(packages.length === 1 ? packages[0] : packages)
+    standardConsignmentBase64.value = outOfBand.value
+      ? (prepared.recipient_consignment_base64 || '')
+      : ''
+    if (outOfBand.value && !standardConsignmentBase64.value) {
+      throw new Error(t('rgb11Transfer.prepareFailed'))
+    }
+    transferPackage.value = proxyTransport.value || outOfBand.value
+      ? ''
+      : JSON.stringify(packages.length === 1 ? packages[0] : packages)
+    if (proxyTransport.value) {
+      await deliverProxyTransfer()
+      return
+    }
     success.value = true
-    message.value = t(outOfBand.value ? 'rgb11Transfer.preparedOutOfBand' : 'rgb11Transfer.prepared')
+    message.value = t(
+      proxyTransport.value
+        ? 'rgb11Transfer.preparedProxy'
+        : (outOfBand.value ? 'rgb11Transfer.preparedOutOfBand' : 'rgb11Transfer.prepared'),
+    )
     pendingPrepared.value = null
   } catch (error: any) {
     message.value = error?.message || t('rgb11Transfer.prepareFailed')
+  } finally {
+    loading.value = false
+  }
+}
+
+const deliverProxyTransfer = async () => {
+  loading.value = true
+  message.value = ''
+  success.value = false
+  try {
+    const [proxyErr, proxyResult] = await walletManager.deliverAndBroadcastRGB11ProxyTransfer(
+      batchItems.value.map((item) => item.transferId),
+    )
+    if (proxyErr || !proxyResult?.txid) throw proxyErr || new Error(t('rgb11Transfer.broadcastFailed'))
+    pendingPrepared.value = null
+    proxyBroadcasted.value = true
+    success.value = true
+    message.value = t('rgb11Transfer.broadcasted', { txid: proxyResult.txid })
+    await walletManager.refreshRGB11State()
+    emit('completed')
+  } catch (error: any) {
+    message.value = error?.message || t('rgb11Transfer.broadcastFailed')
+  } finally {
+    loading.value = false
+  }
+}
+
+const checkProxyAck = async () => {
+  loading.value = true
+  message.value = ''
+  success.value = false
+  try {
+    const decisions = await Promise.all(batchItems.value.map(async (item) => {
+      const [err, result] = await walletManager.fetchRGB11ProxyAck(item.transferId)
+      return { err, result }
+    }))
+    const failed = decisions.find((decision) => decision.err)
+    if (failed?.err) throw failed.err
+    if (decisions.some((decision) => !decision.result?.available)) {
+      throw new Error(t('rgb11Transfer.proxyAckPending'))
+    }
+    if (decisions.some((decision) => !decision.result?.accepted)) {
+      message.value = t('rgb11Transfer.proxyRejected')
+      await walletManager.refreshRGB11State()
+      emit('completed')
+      return
+    }
+    success.value = true
+    message.value = t('rgb11Transfer.proxyAccepted')
+    await walletManager.refreshRGB11State()
+    emit('completed')
+  } catch (error: any) {
+    message.value = error?.message || t('rgb11Transfer.fetchAckFailed')
   } finally {
     loading.value = false
   }
@@ -328,7 +443,7 @@ const broadcastTraditional = async () => {
   message.value = ''
   success.value = false
   try {
-    const parsed = outOfBand.value ? null : JSON.parse(ack.value.trim())
+    const parsed = outOfBand.value || proxyTransport.value ? null : JSON.parse(ack.value.trim())
     let err: Error | undefined
     let result: { txid: string } | undefined
     if (outOfBand.value) {
@@ -371,6 +486,17 @@ const copyText = async (value: string) => {
   success.value = true
 }
 
+const downloadStandardConsignment = () => {
+  if (!standardConsignmentBase64.value) return
+  const bytes = Uint8Array.from(atob(standardConsignmentBase64.value), (value) => value.charCodeAt(0))
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `rgb11-transfer-${transferId.value.slice(0, 24) || 'consignment'}.rgbc`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
 watch(isOpen, (open) => {
   if (open) {
     void loadCarrierWarning()
@@ -386,11 +512,14 @@ watch(isOpen, (open) => {
   transferId.value = ''
   relayRecord.value = ''
   transferPackage.value = ''
+  standardConsignmentBase64.value = ''
   loading.value = false
   message.value = ''
   success.value = false
   pendingPrepared.value = null
   batchItems.value = []
   outOfBand.value = false
+  proxyTransport.value = false
+  proxyBroadcasted.value = false
 })
 </script>

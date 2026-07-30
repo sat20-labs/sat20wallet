@@ -21,6 +21,8 @@ interface AssetItem {
   utxos: string[]
   amount: number | string
   precision: number
+  available_amount?: string
+  pending_amount?: string
 }
 
 // 定义刷新选项接口
@@ -176,6 +178,37 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
     }
     return { list, totalSats }
   }
+
+  const rgb11StateAssets = () => {
+    const total = parseAssetSummary(rgb11Store.state.assets || []).list
+    const available = new Map(
+      parseAssetSummary(rgb11Store.state.available_assets || []).list.map((item) => [item.key, String(item.amount)])
+    )
+    const pending = new Map(
+      parseAssetSummary(rgb11Store.state.pending_assets || []).list.map((item) => [item.key, String(item.amount)])
+    )
+    return total.map((item) => ({
+      ...item,
+      available_amount: available.get(item.key) || '0',
+      pending_amount: pending.get(item.key) || '0',
+    }))
+  }
+
+  const presentAssets = (list: AssetItem[]) => {
+    const stateRGB11 = rgb11StateAssets()
+    const rgb11 = stateRGB11.length
+      ? stateRGB11
+      : list.filter((item) => item.protocol === 'rgb11').map((item) => ({
+          ...item,
+          available_amount: String(item.amount),
+          pending_amount: '0',
+        }))
+    return [
+      ...list.filter((item) => item.protocol !== 'rgb11'),
+      ...decorateRGB11AssetItems(rgb11, rgb11Store.state),
+    ]
+  }
+
   // Store Updates
   const updateStoreAssets = (list: AssetItem[], totalSats: number) => {
     assetsStore.setSat20List(list.filter((item) => item?.protocol === 'ordx'))
@@ -251,9 +284,9 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
   watch(
     () => rgb11Store.state,
     () => {
-      if (allAssetList.value.length) {
-        updateStoreAssets(allAssetList.value, assetsStore.totalSats)
-      }
+      const presented = presentAssets(allAssetList.value)
+      allAssetList.value = presented
+      updateStoreAssets(presented, assetsStore.totalSats)
     },
     { deep: true }
   )
@@ -265,13 +298,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
 
       const rawAssets = payload.response?.data || []
       const { list, totalSats } = parseAssetSummary(rawAssets)
-      const presented = [
-        ...list.filter((item) => item.protocol !== 'rgb11'),
-        ...decorateRGB11AssetItems(
-          list.filter((item) => item.protocol === 'rgb11'),
-          rgb11Store.state
-        ),
-      ]
+      const presented = presentAssets(list)
       allAssetList.value = presented
       updateStoreAssets(presented, totalSats)
       assetsStore.setAssetList(rawAssets)

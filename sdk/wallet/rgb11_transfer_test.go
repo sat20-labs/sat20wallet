@@ -4,15 +4,20 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	"github.com/sat20-labs/rgb11/consensus"
+	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	"github.com/sat20-labs/rgb11/invoicing"
 	coreissuance "github.com/sat20-labs/rgb11/issuance"
 	"github.com/sat20-labs/rgb11/operations"
@@ -25,6 +30,8 @@ import (
 	"github.com/sat20-labs/satoshinet/btcec"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -137,9 +144,6 @@ func newRGB11FlowManager(t *testing.T, wallet common.Wallet, rpc IndexerRPCClien
 	if err := manager.rgbManager.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
-	// Automatic DKVS backup is asynchronous. Wait for it before the earlier
-	// database cleanup closes Pebble.
-	t.Cleanup(manager.rgbManager.waitForRGB11AutoBackup)
 	return manager
 }
 
@@ -316,6 +320,105 @@ func TestRGB11OfficialContractOpretRelayAckSendReceive(t *testing.T) {
 	}
 }
 
+func TestRGB11GenericBlindedProxyInvoiceUsesExplicitAssetAndNoRecipientOutput(t *testing.T) {
+	senderWallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
+	)
+	if senderWallet == nil {
+		t.Fatal("create RGB11 test wallet")
+	}
+	senderScript, err := AddrToPkScript(senderWallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sourceOutpoint = "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
+	const plainOutpoint = "3333333333333333333333333333333333333333333333333333333333333333:0"
+	evidence := &rgb11FlowEvidence{
+		utxos: map[string]*rgb11wallet.BitcoinUTXO{
+			sourceOutpoint: {OutPoint: sourceOutpoint, Value: 10_000, PkScript: senderScript, Confirmations: 6},
+		},
+		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+	}
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
+	sourceOutput := indexer.NewTxOutput(10_000)
+	sourceOutput.OutPointStr, sourceOutput.OutValue.PkScript = sourceOutpoint, senderScript
+	rpc.outputs[sourceOutpoint] = sourceOutput
+	plainOutput := indexer.NewTxOutput(100_000)
+	plainOutput.OutPointStr, plainOutput.OutValue.PkScript = plainOutpoint, senderScript
+	rpc.outputs[plainOutpoint] = plainOutput
+	rpc.plain = []*indexerwire.TxOutputInfo{
+		{OutPoint: sourceOutpoint, Value: 10_000, PkScript: senderScript},
+		{OutPoint: plainOutpoint, Value: 100_000, PkScript: senderScript},
+	}
+	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 34)
+	contract, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-example.rgba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := sender.ImportRGB11Contract(context.Background(), contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	generic, err := invoicing.Parse(
+		"rgb:~/~/~/tb4:utxob:0p7Vez5g-71fjxwc-cM1U8q8-aPdDoj5-rhHwhlc-7lHZlZy-YcXFX" +
+			"?expiry=1785485187&endpoints=rpcs://proxy.iriswallet.com/0.2/json-rpc",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiry := time.Now().Add(time.Hour).Unix()
+	generic.Expiry = &expiry
+	if _, _, _, _, _, _, err := validateRGB11SendInvoice(generic, nil, nil); !errors.Is(err, invoicing.ErrInvalidInvoice) {
+		t.Fatalf("generic invoice without explicit asset should fail: %v", err)
+	}
+	contractID, err := consensus.ParseContractID(imported.ContractID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongContract := contractID
+	wrongContract[0] ^= 1
+	genericWithWrongContract := *generic
+	genericWithWrongContract.Contract = &wrongContract
+	amount := uint64(1_000)
+	if _, _, _, _, _, _, err := validateRGB11SendInvoice(
+		&genericWithWrongContract, &contractID, &amount,
+	); !errors.Is(err, invoicing.ErrInvalidInvoice) {
+		t.Fatalf("conflicting explicit contract should fail: %v", err)
+	}
+
+	prepared, err := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
+		Invoice: generic.String(), ContractID: imported.ContractID, AmountRaw: "1000",
+		FeeRate: 2, MinConfirmations: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness := wire.NewMsgTx(wire.TxVersion)
+	if err := witness.Deserialize(bytes.NewReader(pending.SignedTx)); err != nil {
+		t.Fatal(err)
+	}
+	if len(witness.TxOut) != 2 || len(witness.TxOut[0].PkScript) != 34 || witness.TxOut[0].PkScript[0] != txscript.OP_RETURN {
+		t.Fatalf("generic blinded transfer must contain only OP_RETURN and change outputs: %+v", witness.TxOut)
+	}
+	wantChangeOutpoint := fmt.Sprintf("%s:1", witness.TxHash())
+	if prepared.State.TransportMode != RGB11ProxyTransport || prepared.State.RecipientVout != 0 ||
+		prepared.State.RecipientID != generic.Beneficiary.String() ||
+		!slices.Equal(prepared.State.OutputOutPoints, []string{wantChangeOutpoint}) {
+		t.Fatalf("unexpected generic blinded transfer state: %+v", prepared.State)
+	}
+	if prepared.State.Asset.Amount.Value == nil || prepared.State.Asset.Amount.Value.Uint64() != amount {
+		t.Fatalf("unexpected generic blinded transfer amount: %+v", prepared.State.Asset.Amount)
+	}
+	if _, err := coreconsignment.DecodeArmor(prepared.RecipientConsignment); err != nil {
+		t.Fatalf("generic blinded recipient consignment is invalid: %v", err)
+	}
+}
+
 func TestRGB11WitnessBatchRequiresEveryRecipientAck(t *testing.T) {
 	senderWallet := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
@@ -382,7 +485,8 @@ func TestRGB11WitnessBatchRequiresEveryRecipientAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	officialInvoice.UnknownQuery = nil
-	_, _, externalRecipientID, externalRelay, externalAck, externalMode, err := validateRGB11SendInvoice(officialInvoice)
+	_, _, externalRecipientID, externalRelay, externalAck, externalMode, err :=
+		validateRGB11SendInvoice(officialInvoice, nil, nil)
 	if err != nil || externalMode != "out-of-band" || externalRecipientID != officialInvoice.Beneficiary.String() ||
 		externalRelay != "" || externalAck != "" {
 		t.Fatalf("official out-of-band invoice validation: mode=%s recipient=%s relay=%s ack=%s err=%v",
@@ -525,8 +629,28 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if issued.Projected != test.count || len(issued.OutPoints) != test.count || issued.ContractID == "" || issued.Armor == "" {
+			if issued.Projected != test.count || len(issued.OutPoints) != test.count || issued.ContractID == "" ||
+				issued.Armor == "" || issued.ContractConsignmentBase64 == "" {
 				t.Fatalf("unexpected issuance result: %+v", issued)
+			}
+			contractFile, err := base64.StdEncoding.DecodeString(issued.ContractConsignmentBase64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decodedContract, err := coreconsignment.DecodeFile(contractFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decodedContract.ContractID != issued.ContractID || decodedContract.Armor == nil ||
+				!bytes.HasPrefix(contractFile, []byte("RGB\x00CON")) {
+				t.Fatalf("standard contract export does not match issued contract")
+			}
+			imported, err := manager.ImportRGB11ContractFile(context.Background(), contractFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if imported.ContractID != issued.ContractID {
+				t.Fatalf("standard contract import=%s want=%s", imported.ContractID, issued.ContractID)
 			}
 			expectedName, err := rgb11wallet.NewCanonicalAssetName(issued.ContractID, test.request.Ticker, issued.AssetName.Type)
 			if err != nil {
@@ -649,6 +773,18 @@ func TestRGB11IssuedUDASendReceive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	transferFile, err := base64.StdEncoding.DecodeString(prepared.RecipientConsignmentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedTransfer, err := coreconsignment.DecodeFile(transferFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodedTransfer.Armor == nil || decodedTransfer.Armor.Type != "transfer" ||
+		!bytes.HasPrefix(transferFile, []byte("RGB\x00TFR")) {
+		t.Fatal("standard transfer export does not match prepared consignment")
+	}
 	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
@@ -706,10 +842,6 @@ func TestRGB11IssuedFungibleFirstReleaseSchemasSendReceive(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			recipientScript, err := AddrToPkScript(recipientWallet.GetAddress(), &chaincfg.TestNet4Params)
-			if err != nil {
-				t.Fatal(err)
-			}
 			evidence := &rgb11FlowEvidence{
 				utxos: make(map[string]*rgb11wallet.BitcoinUTXO), rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
 			}
@@ -732,20 +864,9 @@ func TestRGB11IssuedFungibleFirstReleaseSchemasSendReceive(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var witnessScript []byte
-			var internalXOnly *[32]byte
-			if test.receiveMode == corewallet.ReceiveWitness {
-				witnessScript = append([]byte(nil), recipientScript...)
-				compressed := recipientWallet.GetPubKeyByIndex(recipientWallet.GetSubAccount()).SerializeCompressed()
-				var xonly [32]byte
-				copy(xonly[:], compressed[1:])
-				internalXOnly = &xonly
-			}
-			receive, err := recipient.rgbManager.engine.CreateReceive(corewallet.ReceiveParams{
-				Mode:       test.receiveMode,
-				ContractID: issued.ContractID, Network: invoicing.BitcoinTestnet4, Amount: &test.sendAmount,
-				RecipientID: hex.EncodeToString(recipientWallet.GetPubKey().SerializeCompressed()),
-				WitnessVout: 1, WitnessScript: witnessScript, InternalXOnly: internalXOnly,
+			receive, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
+				Mode: string(test.receiveMode), ContractID: issued.ContractID,
+				AmountRaw: fmt.Sprint(test.sendAmount), WitnessVout: 1,
 				Expiry: time.Now().Add(time.Hour).Unix(),
 			})
 			if err != nil {
@@ -774,7 +895,17 @@ func TestRGB11IssuedFungibleFirstReleaseSchemasSendReceive(t *testing.T) {
 			}
 			evidence.utxos[recipientOutpoint] = &rgb11wallet.BitcoinUTXO{
 				OutPoint: recipientOutpoint, Value: witness.TxOut[1].Value,
-				PkScript: append([]byte(nil), recipientScript...), Confirmations: 0,
+				PkScript: append([]byte(nil), witness.TxOut[1].PkScript...), Confirmations: 0,
+			}
+			for _, changeSeal := range pending.ChangeSeals {
+				if int(changeSeal.Vout) >= len(witness.TxOut) {
+					t.Fatalf("RGB11 change vout %d outside witness outputs", changeSeal.Vout)
+				}
+				changeOutpoint := fmt.Sprintf("%s:%d", witnessTxID, changeSeal.Vout)
+				evidence.utxos[changeOutpoint] = &rgb11wallet.BitcoinUTXO{
+					OutPoint: changeOutpoint, Value: witness.TxOut[changeSeal.Vout].Value,
+					PkScript: append([]byte(nil), witness.TxOut[changeSeal.Vout].PkScript...), Confirmations: 0,
+				}
 			}
 			evidence.mu.Unlock()
 			receipt, err := recipient.AcceptRGB11Consignment(context.Background(), receive.RequestID, []byte(prepared.RecipientConsignment))
@@ -795,6 +926,65 @@ func TestRGB11IssuedFungibleFirstReleaseSchemasSendReceive(t *testing.T) {
 			balance, err := recipient.GetRGB11AssetBalance(&issued.AssetName)
 			if err != nil || balance.Value.Uint64() != test.sendAmount {
 				t.Fatalf("recipient %s balance=%+v err=%v", test.name, balance, err)
+			}
+			pending.State.Status = "broadcast"
+			pending.State.AckStatus = "accepted"
+			if err := sender.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+				t.Fatal(err)
+			}
+			refresh, err := sender.RefreshRGB11State(context.Background())
+			if err != nil || refresh.Pending == 0 {
+				t.Fatalf("refresh broadcast %s transfer result=%+v err=%v", test.name, refresh, err)
+			}
+			proofs, err := sender.rgbManager.projectionStore.ListProofs()
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceSpending := false
+			stagedChange := false
+			for _, proof := range proofs {
+				if slices.Contains(pending.State.InputOutPoints, proof.OutPoint) {
+					sourceSpending = sourceSpending || proof.Status == "spending"
+				}
+				if strings.HasPrefix(proof.OutPoint, witnessTxID+":") {
+					stagedChange = stagedChange || proof.Status == "valid" && proof.Confirmations == 0
+				}
+			}
+			if !sourceSpending || !stagedChange {
+				t.Fatalf("%s broadcast projections sourceSpending=%t stagedChange=%t proofs=%+v",
+					test.name, sourceSpending, stagedChange, proofs)
+			}
+
+			evidence.mu.Lock()
+			delete(evidence.rawTx, witnessTxID)
+			for _, input := range pending.State.InputOutPoints {
+				delete(evidence.spendingTx, input)
+			}
+			for output := range evidence.utxos {
+				if strings.HasPrefix(output, witnessTxID+":") {
+					delete(evidence.utxos, output)
+				}
+			}
+			evidence.mu.Unlock()
+			refresh, err = sender.RefreshRGB11State(context.Background())
+			if err != nil || refresh.Reorged != 1 {
+				t.Fatalf("refresh evicted %s transfer result=%+v err=%v", test.name, refresh, err)
+			}
+			proofs, err = sender.rgbManager.projectionStore.ListProofs()
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceRestored := false
+			for _, proof := range proofs {
+				if strings.HasPrefix(proof.OutPoint, witnessTxID+":") {
+					t.Fatalf("%s evicted staged projection retained: %+v", test.name, proof)
+				}
+				if slices.Contains(pending.State.InputOutPoints, proof.OutPoint) {
+					sourceRestored = sourceRestored || proof.Status != "spending"
+				}
+			}
+			if !sourceRestored {
+				t.Fatalf("%s evicted source projection was not restored: %+v", test.name, proofs)
 			}
 		})
 	}
@@ -914,7 +1104,6 @@ func TestRGB11AutomaticRejectListNackDoesNotProjectBalance(t *testing.T) {
 		t.Fatal("create automatic reject wallets")
 	}
 	senderScript, _ := AddrToPkScript(senderWallet.GetAddress(), &chaincfg.TestNet4Params)
-	recipientScript, _ := AddrToPkScript(recipientWallet.GetAddress(), &chaincfg.TestNet4Params)
 	evidence := &rgb11FlowEvidence{
 		utxos: make(map[string]*rgb11wallet.BitcoinUTXO), rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
 	}
@@ -941,15 +1130,9 @@ func TestRGB11AutomaticRejectListNackDoesNotProjectBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	amount := uint64(40)
-	compressed := recipientWallet.GetPubKeyByIndex(recipientWallet.GetSubAccount()).SerializeCompressed()
-	var xonly [32]byte
-	copy(xonly[:], compressed[1:])
-	receive, err := recipient.rgbManager.engine.CreateReceive(corewallet.ReceiveParams{
-		Mode: corewallet.ReceiveWitness, ContractID: issued.ContractID, Network: invoicing.BitcoinTestnet4,
-		Amount: &amount, RecipientID: hex.EncodeToString(recipientWallet.GetPubKey().SerializeCompressed()),
-		WitnessVout: 1, WitnessScript: recipientScript, InternalXOnly: &xonly,
-		Expiry: time.Now().Add(time.Hour).Unix(),
+	receive, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "witness", ContractID: issued.ContractID, AmountRaw: "40",
+		WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -977,7 +1160,7 @@ func TestRGB11AutomaticRejectListNackDoesNotProjectBalance(t *testing.T) {
 	}
 	evidence.utxos[recipientOutpoint] = &rgb11wallet.BitcoinUTXO{
 		OutPoint: recipientOutpoint, Value: witness.TxOut[1].Value,
-		PkScript: append([]byte(nil), recipientScript...), Confirmations: 0,
+		PkScript: append([]byte(nil), witness.TxOut[1].PkScript...), Confirmations: 0,
 	}
 	evidence.mu.Unlock()
 
@@ -1063,30 +1246,42 @@ func (e *rgb11StatusEvidence) GetOutspend(outpoint string) (*rgb11wallet.Bitcoin
 	return &rgb11wallet.BitcoinOutspend{}, nil
 }
 
-func saveRGB11StatusTransfer(t *testing.T, manager *Manager, transferID, witnessTxID, status string) {
+func saveRGB11StatusTransfer(t *testing.T, manager *Manager, transferID, status string) string {
 	t.Helper()
 	recipient := []byte("recipient-consignment-" + transferID)
 	hash := sha256.Sum256(recipient)
+	inputHash := chainhash.DoubleHashH([]byte("input-" + transferID))
+	tx := wire.NewMsgTx(wire.TxVersion)
+	tx.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&inputHash, 0), nil, nil))
+	tx.AddTxOut(wire.NewTxOut(330, []byte{txscript.OP_TRUE}))
+	var signed bytes.Buffer
+	if err := tx.Serialize(&signed); err != nil {
+		t.Fatal(err)
+	}
+	witnessTxID := tx.TxHash().String()
+	inputOutpoint := tx.TxIn[0].PreviousOutPoint.String()
 	pending := &rgb11wallet.PendingTransfer{
 		State: rgb11wallet.TransferState{
 			TransferID: transferID, Direction: "send", Status: status, AckStatus: "accepted",
-			WitnessTxID: witnessTxID, InputOutPoints: []string{"input-" + transferID + ":0"},
+			WitnessTxID: witnessTxID, InputOutPoints: []string{inputOutpoint},
+			OutputOutPoints: []string{fmt.Sprintf("%s:0", witnessTxID)},
 			ConsignmentHash: hex.EncodeToString(hash[:]),
 		},
 		RecipientConsignment: recipient,
 		LocalConsignment:     []byte("local-consignment-" + transferID),
-		SignedTx:             []byte{1},
+		SignedTx:             signed.Bytes(),
 		SignedPSBT:           []byte{2},
 	}
 	if err := manager.rgbManager.projectionStore.SavePendingTransfer(pending); err != nil {
 		t.Fatal(err)
 	}
+	return witnessTxID
 }
 
 func TestRGB11RefreshRollsSettledTransferBackAfterReorg(t *testing.T) {
 	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 51)
 	manager.rgbManager.evidence = &rgb11StatusEvidence{statuses: make(map[string]*rgb11wallet.BitcoinTxStatus), outspends: make(map[string]*rgb11wallet.BitcoinOutspend)}
-	saveRGB11StatusTransfer(t, manager, "reorg", "witness-reorg", "settled")
+	saveRGB11StatusTransfer(t, manager, "reorg", "settled")
 
 	result, err := manager.RefreshRGB11State(context.Background())
 	if err != nil {
@@ -1108,8 +1303,14 @@ func TestRGB11RefreshFailsClosedOnConflictingSpend(t *testing.T) {
 	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 52)
 	evidence := &rgb11StatusEvidence{statuses: make(map[string]*rgb11wallet.BitcoinTxStatus), outspends: make(map[string]*rgb11wallet.BitcoinOutspend)}
 	manager.rgbManager.evidence = evidence
-	saveRGB11StatusTransfer(t, manager, "conflict", "expected-witness", "broadcast")
-	evidence.outspends["input-conflict:0"] = &rgb11wallet.BitcoinOutspend{Spent: true, SpendingTx: "unexpected-witness"}
+	witnessTxID := saveRGB11StatusTransfer(t, manager, "conflict", "broadcast")
+	pending, err := manager.rgbManager.projectionStore.LoadPendingTransfer("conflict")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence.outspends[pending.State.InputOutPoints[0]] = &rgb11wallet.BitcoinOutspend{
+		Spent: true, SpendingTx: witnessTxID + "-conflict",
+	}
 
 	result, err := manager.RefreshRGB11State(context.Background())
 	if !errors.Is(err, ErrRGB11Inconsistent) {
@@ -1118,12 +1319,59 @@ func TestRGB11RefreshFailsClosedOnConflictingSpend(t *testing.T) {
 	if result == nil || result.Conflicted != 1 || len(result.Inconsistent) != 1 || manager.GetRGB11ConsistencyStatus() != "broken" {
 		t.Fatalf("unexpected conflict result=%+v consistency=%s", result, manager.GetRGB11ConsistencyStatus())
 	}
-	pending, err := manager.rgbManager.projectionStore.LoadPendingTransfer("conflict")
+	pending, err = manager.rgbManager.projectionStore.LoadPendingTransfer("conflict")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pending.State.Status != "conflicted" || pending.State.AckStatus != "invalidated" {
 		t.Fatalf("conflicted transfer state=%+v", pending.State)
+	}
+}
+
+func TestRGB11RefreshKeepsUnknownExpectedSpendUnresolved(t *testing.T) {
+	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 54)
+	evidence := &rgb11StatusEvidence{
+		statuses:  make(map[string]*rgb11wallet.BitcoinTxStatus),
+		outspends: make(map[string]*rgb11wallet.BitcoinOutspend),
+	}
+	manager.rgbManager.evidence = evidence
+	saveRGB11StatusTransfer(t, manager, "unresolved", "broadcast")
+	pending, err := manager.rgbManager.projectionStore.LoadPendingTransfer("unresolved")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence.outspends[pending.State.InputOutPoints[0]] = &rgb11wallet.BitcoinOutspend{Spent: true}
+
+	result, err := manager.RefreshRGB11State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Unresolved != 1 || result.Conflicted != 0 || len(result.Inconsistent) != 0 ||
+		manager.GetRGB11ConsistencyStatus() != "warning" {
+		t.Fatalf("unexpected unresolved result=%+v consistency=%s", result, manager.GetRGB11ConsistencyStatus())
+	}
+	stored, err := manager.rgbManager.projectionStore.LoadPendingTransfer("unresolved")
+	if err != nil || stored.State.Status != "broadcast" {
+		t.Fatalf("unresolved transfer state=%+v err=%v", stored, err)
+	}
+}
+
+func TestRGB11LockRebuildDoesNotRequireBitcoinEvidence(t *testing.T) {
+	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 55)
+	manager.utxoLockerL1 = NewUtxoLocker(manager.db, nil, L1_NETWORK_BITCOIN)
+	saveRGB11StatusTransfer(t, manager, "offline-restore", "broadcast")
+	pending, err := manager.rgbManager.projectionStore.LoadPendingTransfer("offline-restore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.rgbManager.evidence = nil
+
+	if err := manager.rgbManager.rebuildRGB11Locks(); err != nil {
+		t.Fatal(err)
+	}
+	lock := manager.utxoLockerL1.GetLockedUtxoList()[pending.State.InputOutPoints[0]]
+	if lock == nil || lock.Reason != rgb11wallet.LockReasonPending {
+		t.Fatalf("offline restored input lock=%+v", lock)
 	}
 }
 

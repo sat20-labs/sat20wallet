@@ -122,6 +122,12 @@ type InternalWallet struct {
 	mutex sync.RWMutex
 }
 
+type RGB11InputSigningKey struct {
+	Change            uint32
+	Index             uint32
+	TaprootMerkleRoot []byte
+}
+
 // 该实例不是 HD 钱包（masterkey 为 nil），任何依赖 masterkey/purposes/accounts 的函数将不可用或会返回错误
 // 也就输说所有通道相关操作，派生子钱包操作都会失败，只能用于该私钥的签名操作
 func NewInternalWalletWithPrivKey(privateKey []byte, param *chaincfg.Params) (*InternalWallet, string, error) {
@@ -217,7 +223,10 @@ func NewInternalWalletWithMnemonic(mnemonic string, password string, param *chai
 }
 
 func (p *InternalWallet) Clone() common.Wallet {
-	return &InternalWallet{
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	cloned := &InternalWallet{
 		masterkey:              p.masterkey,
 		netParamsL1:            p.netParamsL1,
 		paymentPrivKeys:        make(map[uint32]*secp256k1.PrivateKey), // key: index
@@ -229,6 +238,22 @@ func (p *InternalWallet) Clone() common.Wallet {
 		currentIndex:           p.currentIndex,
 		id:                     p.id,
 	}
+	for index, key := range p.paymentPrivKeys {
+		cloned.paymentPrivKeys[index] = key
+	}
+	for index, key := range p.revocationBasePrivKeys {
+		cloned.revocationBasePrivKeys[index] = key
+	}
+	for purpose, key := range p.purposes {
+		cloned.purposes[purpose] = key
+	}
+	for account, key := range p.accounts {
+		cloned.accounts[account] = key
+	}
+	for index, address := range p.addresses {
+		cloned.addresses[index] = address
+	}
+	return cloned
 }
 
 func (p *InternalWallet) CloneByPubKey(pubkey []byte) common.Wallet {
@@ -357,6 +382,23 @@ func (p *InternalWallet) GetPubKeyByIndex(index uint32) *secp256k1.PublicKey {
 	return pubKey
 }
 
+func (p *InternalWallet) GetPubKeyByPath(change, index uint32) *secp256k1.PublicKey {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	if p.masterkey == nil {
+		if change == 0 && index == 0 {
+			return p.paymentPrivKeys[0].PubKey()
+		}
+		return nil
+	}
+	_, pubKey, err := p.getKey("P2TR", change, index)
+	if err != nil {
+		Log.Errorf("GetPubKeyByPath failed. %v", err)
+		return nil
+	}
+	return pubKey
+}
+
 func (p *InternalWallet) GetAddress() string {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -375,6 +417,18 @@ func (p *InternalWallet) GetAddressByIndex(index uint32) string {
 		return ""
 	}
 	return addr.EncodeAddress()
+}
+
+func (p *InternalWallet) GetAddressByPath(change, index uint32) string {
+	pubKey := p.GetPubKeyByPath(change, index)
+	if pubKey == nil {
+		return ""
+	}
+	address, err := getAddressFromPubKey(pubKey, "P2TR", p.netParamsL1)
+	if err != nil {
+		return ""
+	}
+	return address.EncodeAddress()
 }
 
 // 可以直接暴露这个PrivateKey，不影响钱包私钥的安全
@@ -1099,6 +1153,78 @@ func (p *InternalWallet) SignPsbtWithTaprootMerkleRootsAtIndex(packet *psbt.Pack
 		}
 		input.TaprootInternalKey = schnorr.SerializePubKey(privKey.PubKey())
 		input.TaprootMerkleRoot = append([]byte(nil), root...)
+		input.TaprootKeySpendSig = signature
+	}
+	return nil
+}
+
+func (p *InternalWallet) SignRGB11Psbt(packet *psbt.Packet, keys map[int]RGB11InputSigningKey) error {
+	if err := p.SignPsbt(packet); err != nil {
+		return err
+	}
+	paths := make(map[uint64]*secp256k1.PrivateKey)
+	p.mutex.Lock()
+	for _, key := range keys {
+		path := uint64(key.Change)<<32 | uint64(key.Index)
+		if _, ok := paths[path]; ok {
+			continue
+		}
+		var privKey *secp256k1.PrivateKey
+		if key.Change == 0 {
+			privKey = p.getPaymentPrivKeyWithIndex(key.Index)
+		} else if p.masterkey != nil {
+			derived, _, err := p.getKey("P2TR", key.Change, key.Index)
+			if err != nil {
+				p.mutex.Unlock()
+				return err
+			}
+			privKey = derived
+		}
+		if privKey == nil {
+			p.mutex.Unlock()
+			return fmt.Errorf("wallet private key unavailable at BIP86 path change=%d index=%d", key.Change, key.Index)
+		}
+		paths[path] = privKey
+	}
+	p.mutex.Unlock()
+
+	for _, privKey := range paths {
+		if err := p.signPsbt(privKey, packet); err != nil {
+			return err
+		}
+	}
+	tx := packet.UnsignedTx
+	prevOutputFetcher := PsbtPrevOutputFetcher(packet)
+	sigHashes := txscript.NewTxSigHashes(tx, prevOutputFetcher)
+	for inputIndex, key := range keys {
+		if len(key.TaprootMerkleRoot) == 0 {
+			continue
+		}
+		if inputIndex < 0 || inputIndex >= len(packet.Inputs) ||
+			len(key.TaprootMerkleRoot) != sha256.Size {
+			return fmt.Errorf("invalid RGB11 Tapret signing root for input %d", inputIndex)
+		}
+		input := &packet.Inputs[inputIndex]
+		if input.WitnessUtxo == nil {
+			return fmt.Errorf("RGB11 Tapret input %d has no witness UTXO", inputIndex)
+		}
+		privKey := paths[uint64(key.Change)<<32|uint64(key.Index)]
+		expectedKey := txscript.ComputeTaprootOutputKey(privKey.PubKey(), key.TaprootMerkleRoot)
+		expectedScript, err := txscript.PayToTaprootScript(expectedKey)
+		if err != nil || !bytes.Equal(expectedScript, input.WitnessUtxo.PkScript) {
+			return fmt.Errorf("RGB11 Tapret input %d is not controlled by BIP86 path change=%d index=%d",
+				inputIndex, key.Change, key.Index)
+		}
+		signature, err := txscript.RawTxInTaprootSignature(
+			tx, sigHashes, inputIndex, input.WitnessUtxo.Value,
+			input.WitnessUtxo.PkScript, key.TaprootMerkleRoot,
+			input.SighashType, privKey,
+		)
+		if err != nil {
+			return fmt.Errorf("sign RGB11 Tapret input %d: %w", inputIndex, err)
+		}
+		input.TaprootInternalKey = schnorr.SerializePubKey(privKey.PubKey())
+		input.TaprootMerkleRoot = append([]byte(nil), key.TaprootMerkleRoot...)
 		input.TaprootKeySpendSig = signature
 	}
 	return nil

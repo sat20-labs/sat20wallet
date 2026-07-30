@@ -3,10 +3,13 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 
+	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
@@ -88,10 +91,40 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 		Name: "Primary", Mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
 		AccountCount: 2, SubAccounts: []account.SubAccount{{Index: 0, DID: "alice"}, {Index: 1, DID: "alice-work"}},
 	}}}
-	client := dkvsClientForNode(t, fixture.Network.Bootstrap)
 	autopay := wallet.DKVSAutopayOptions{AddressParams: &chaincfg.TestNetParams, PoolContract: contractAddress.MustEncode()}
 	recordOptions := dkvsindexer.RecordOptions{Seq: 1}
-	repository, err := wallet.NewAccountDKVSRepository(client, owner.Wallet, autopay, recordOptions)
+	locationForNode := func(node *testHarness) wallet.AccountIndexerLocation {
+		base, locationErr := node.IndexerURL("testnet")
+		require.NoError(t, locationErr)
+		parsed, locationErr := url.Parse(base)
+		require.NoError(t, locationErr)
+		return wallet.AccountIndexerLocation{
+			Scheme: parsed.Scheme, Host: parsed.Host, Proxy: strings.Trim(parsed.Path, "/"),
+		}
+	}
+	bootstrapLocation := locationForNode(fixture.Network.Bootstrap)
+	coreLocation := locationForNode(fixture.Network.Core)
+	database := indexerdb.NewKVDB(t.TempDir())
+	defer database.Close()
+	walletManager := wallet.NewManager(&sdkcommon.Config{
+		Env: "test", Chain: "testnet",
+		IndexerL1: &sdkcommon.Indexer{
+			Scheme: bootstrapLocation.Scheme, Host: bootstrapLocation.Host, Proxy: bootstrapLocation.Proxy,
+		},
+		IndexerL2: &sdkcommon.Indexer{
+			Scheme: bootstrapLocation.Scheme, Host: bootstrapLocation.Host, Proxy: bootstrapLocation.Proxy,
+		},
+	}, database)
+	require.NotNil(t, walletManager)
+	defer walletManager.Close()
+	_, err = walletManager.ImportWallet(dkvsClientMnemonic, "123456")
+	require.NoError(t, err)
+	require.Equal(t, pubKey, walletManager.GetWallet().GetPubKey().SerializeCompressed())
+	authorization := wallet.AccountStorageAuthorization{
+		ID: wallet.AccountStoragePaid, Mode: wallet.AccountStoragePaid,
+		RecordOptions: recordOptions, Autopay: &autopay, Location: bootstrapLocation,
+	}
+	repository, err := walletManager.NewAccountRepositoryForStorage(authorization)
 	require.NoError(t, err)
 	manager := account.NewManager(repository)
 	pkg, err := manager.CreateRecoveryPackage(account.CreateOptions{AccountID: accountID, Backup: backup,
@@ -99,8 +132,9 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 		GuardianPublicKey: guardianPublic})
 	require.NoError(t, err)
 	require.NoError(t, manager.Publish(context.Background(), *pkg))
-	require.NoError(t, client.PutAccountGuardianCapsuleWithAutopay(owner.Wallet, accountID,
-		*pkg.GuardianCapsule, recordOptions, autopay))
+	require.NoError(t, walletManager.PutGuardianCapsuleForStorage(
+		authorization, accountID, *pkg.GuardianCapsule,
+	))
 
 	values := map[string][]byte{}
 	for name, value := range map[string]interface{}{
@@ -126,11 +160,15 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	}
 
 	coreClient := dkvsClientForNode(t, fixture.Network.Core)
-	readRepository, err := wallet.NewReadOnlyAccountDKVSRepository(coreClient, accountID)
+	loaded, err := walletManager.LoadAccountRecoveryPackage(coreLocation, pkg.Envelope.Locator)
 	require.NoError(t, err)
-	loaded, err := account.NewManager(readRepository).Load(context.Background(), pkg.Envelope.Locator)
+	guardianValue, err := walletManager.LoadAccountGuardianCapsule(
+		coreLocation, accountID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID,
+	)
 	require.NoError(t, err)
-	guardianRecord, err := coreClient.GetMailboxShare(accountID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
+	guardianKey, err = dkvsindexer.MailShareKey(accountID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
+	require.NoError(t, err)
+	guardianRecord, err := coreClient.GetRecord(guardianKey)
 	require.NoError(t, err)
 	require.Zero(t, guardianRecord.TTL)
 	require.Zero(t, guardianRecord.ExpiryHeight)
@@ -138,7 +176,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, dkvsindexer.FeeModeAutopay, guardianProof.Mode)
 	var storedGuardian account.GuardianShareCapsule
-	require.NoError(t, json.Unmarshal(guardianRecord.Value, &storedGuardian))
+	require.NoError(t, json.Unmarshal(guardianValue, &storedGuardian))
 	guardianShare, err := account.DecryptGuardianShare(storedGuardian, guardianPrivate)
 	require.NoError(t, err)
 	dkvsShare, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, loaded.KnowledgeBundle,

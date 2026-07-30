@@ -12,34 +12,41 @@ func TestAccountAmountPerBlockCoversRecoveryRecords(t *testing.T) {
 	defaults := dkvsindexer.NetworkDefaults{
 		Enabled:                  true,
 		AutopayMinAmountPerBlock: "1",
-		FullRecordFeePerBlock:    "1",
+		FullRecordFeePerBlock:    "0.1",
 	}
-	amount, err := accountAmountPerBlock(defaults)
+	amount, err := accountAmountPerBlock(defaults, 100)
 	require.NoError(t, err)
-	require.Equal(t, "4", amount)
+	require.Equal(t, "10", amount)
 }
 
 func TestAccountAmountPerBlockRespectsNetworkMinimum(t *testing.T) {
 	defaults := dkvsindexer.NetworkDefaults{
 		Enabled:                  true,
-		AutopayMinAmountPerBlock: "8",
-		FullRecordFeePerBlock:    "1",
+		AutopayMinAmountPerBlock: "12",
+		FullRecordFeePerBlock:    "0.1",
 	}
-	amount, err := accountAmountPerBlock(defaults)
+	amount, err := accountAmountPerBlock(defaults, 100)
 	require.NoError(t, err)
-	require.Equal(t, "8", amount)
+	require.Equal(t, "12", amount)
 }
 
 func TestAccountStorageTestnetDefaultsProduceContinuousQuote(t *testing.T) {
 	defaults := dkvsindexer.NetworkDefaultsForParams(&chaincfg.TestNetParams)
 	require.Equal(t, "1", defaults.AutopayMinAmountPerBlock)
-	amount, err := accountAmountPerBlock(defaults)
+	require.Equal(t, "0.1", defaults.FullRecordFeePerBlock)
+	amount, err := accountAmountPerBlock(defaults, 0)
 	require.NoError(t, err)
-	require.Equal(t, "4", amount)
+	require.Equal(t, "10", amount)
 	cost, err := multiplyDecimal(amount, accountPaidDefaultFundingBlocks)
 	require.NoError(t, err)
-	require.Equal(t, "4000", cost)
+	require.Equal(t, "10000", cost)
 	annual, err := multiplyDecimal(amount, 2_628_000)
 	require.NoError(t, err)
-	require.Equal(t, "10512000", annual)
+	require.Equal(t, "26280000", annual)
+}
+
+func TestAccountRecordCountRejectsInsufficientCapacity(t *testing.T) {
+	_, err := normalizeAccountRecordCount(accountMinimumRecordCount - 1)
+	require.Error(t, err)
+	require.Less(t, accountRequiredRecords, accountMinimumRecordCount)
 }

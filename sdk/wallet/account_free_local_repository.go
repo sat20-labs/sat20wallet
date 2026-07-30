@@ -11,16 +11,16 @@ import (
 )
 
 type FreeLocalAccountDKVSRepository struct {
-	client        *SatsNetDKVSClient
+	store         *dkvsStore
 	owner         common.Wallet
 	recordOptions dkvsindexer.RecordOptions
 	accountID     string
 }
 
-func NewFreeLocalAccountDKVSRepository(client *SatsNetDKVSClient, owner common.Wallet,
+func NewFreeLocalAccountDKVSRepository(store *dkvsStore, owner common.Wallet,
 	options dkvsindexer.RecordOptions) (*FreeLocalAccountDKVSRepository, error) {
-	if client == nil || owner == nil {
-		return nil, fmt.Errorf("DKVS client and owner wallet are required")
+	if store == nil || owner == nil {
+		return nil, fmt.Errorf("DKVS store and owner wallet are required")
 	}
 	accountID, err := dkvsAccountID(owner)
 	if err != nil {
@@ -30,7 +30,7 @@ func NewFreeLocalAccountDKVSRepository(client *SatsNetDKVSClient, owner common.W
 		return nil, fmt.Errorf("free-local account storage requires a TTL")
 	}
 	return &FreeLocalAccountDKVSRepository{
-		client: client, owner: owner, recordOptions: options, accountID: accountID,
+		store: store, owner: owner, recordOptions: options, accountID: accountID,
 	}, nil
 }
 
@@ -44,7 +44,20 @@ func (r *FreeLocalAccountDKVSRepository) putJSON(path string, value any) error {
 	if len(encoded) > account.MaxRecoveryObjectSize {
 		return fmt.Errorf("account recovery object exceeds DKVS value limit")
 	}
-	_, err = r.client.PutAccountPersonalRecordWithFreeLocal(r.owner, path, encoded, r.recordOptions)
+	pubKey, err := dkvsWalletPubKey(r.owner)
+	if err != nil {
+		return err
+	}
+	key, err := dkvsindexer.PersonalKey(pubKey, path)
+	if err != nil {
+		return err
+	}
+	_, err = r.store.Put(dkvsValueMutation{
+		Key: key, Value: encoded, Owner: r.owner, Signature: dkvsSignatureAccount,
+		Policy: dkvsStoragePolicy{
+			TTL: r.recordOptions.TTL, ExpiryHeight: r.recordOptions.ExpiryHeight, FreeLocal: true,
+		},
+	})
 	return err
 }
 
@@ -57,7 +70,7 @@ func (r *FreeLocalAccountDKVSRepository) getJSON(path string, target any) error 
 	if err != nil {
 		return err
 	}
-	record, err := r.client.GetVerifiedRecord(key, dkvsindexer.RecordVerificationOptions{ExpectedKey: key})
+	record, err := r.store.Get(key)
 	if err != nil {
 		return err
 	}

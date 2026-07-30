@@ -12,6 +12,11 @@ export interface AccountStorageOption {
   estimated_annual_cost?: string
   minimum_retention?: string
   recommended_retention?: string
+  record_count?: number
+  default_record_count?: number
+  full_record_fee_per_block?: string
+  minimum_amount_per_block?: string
+  amount_per_block?: string
 }
 
 export interface AccountWalletMetadataInput {
@@ -79,12 +84,30 @@ class AccountManagementSDK {
     return this.request<any>('preflight', { password, wallets })
   }
 
+  status() {
+    return this.request<{
+      active: boolean
+      account_id?: string
+      package_id?: string
+      recovery_mode?: '2of2' | '2of3'
+      storage_mode?: 'paid' | 'temporary'
+      public_locator?: string
+      root_wallet_id?: number
+      state_seq?: number
+      pending_changes?: number
+      last_rehearsal_at?: number
+    }>('status')
+  }
+
   getStorageOptions() {
     return this.request<{ options: AccountStorageOption[] }>('getStorageOptions')
   }
 
-  confirmStorage(optionId: string) {
-    return this.request<any>('confirmStorage', { option_id: optionId })
+  confirmStorage(optionId: string, recordCount?: number) {
+    return this.request<any>('confirmStorage', {
+      option_id: optionId,
+      record_count: optionId === 'paid' ? recordCount : undefined,
+    })
   }
 
   guardianIdentity(password: string) {
@@ -107,8 +130,8 @@ class AccountManagementSDK {
     return this.request<any>('checkGuardianSetup', { session_id: sessionId, receipt })
   }
 
-  rehearse(sessionId: string, answers: Array<{ question_id: string; answer: string }>, userShare = '') {
-    return this.request<any>('rehearse', { session_id: sessionId, answers, user_share: userShare })
+  rehearse(sessionId: string, answers: Array<{ question_id: string; answer: string }>, userShare = '', password = '') {
+    return this.request<any>('rehearse', { session_id: sessionId, answers, user_share: userShare, password })
   }
 
   loadRecovery(locator: string) {

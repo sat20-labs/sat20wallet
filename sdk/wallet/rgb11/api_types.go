@@ -37,12 +37,14 @@ type RGB11State struct {
 	Initialized       bool               `json:"initialized"`
 	SyncStatus        string             `json:"sync_status"`
 	ConsistencyStatus string             `json:"consistency_status"`
-	DKVSStatus        string             `json:"dkvs_status"`
-	AutoBackupEnabled bool               `json:"auto_backup_enabled"`
+	BackupStatus      string             `json:"backup_status"`
+	BackupEnabled     bool               `json:"backup_enabled"`
 	BackupMode        string             `json:"backup_mode,omitempty"`
-	BackupTTL         uint64             `json:"backup_ttl_ms,omitempty"`
+	BackupRetention   uint64             `json:"backup_retention_ms,omitempty"`
 	TickerInfos       []*RGB11TickerInfo `json:"ticker_infos"`
 	Assets            indexer.TxAssets   `json:"assets"`
+	AvailableAssets   indexer.TxAssets   `json:"available_assets"`
+	PendingAssets     indexer.TxAssets   `json:"pending_assets"`
 	Outputs           []*RGB11Output     `json:"outputs"`
 	Proofs            []*AllocationProof `json:"proofs"`
 	Transfers         []*TransferState   `json:"transfers"`
@@ -118,13 +120,14 @@ func parseRGB11AtomicAmounts(values []json.RawMessage) ([]uint64, error) {
 }
 
 type RGB11IssueResult struct {
-	ContractID string             `json:"contract_id"`
-	SchemaID   string             `json:"schema_id"`
-	AssetName  indexer.AssetName  `json:"asset_name"`
-	Armor      string             `json:"armor"`
-	OutPoints  []string           `json:"outpoints"`
-	Receipt    *ValidationReceipt `json:"receipt"`
-	Projected  int                `json:"projected"`
+	ContractID                string             `json:"contract_id"`
+	SchemaID                  string             `json:"schema_id"`
+	AssetName                 indexer.AssetName  `json:"asset_name"`
+	Armor                     string             `json:"armor"`
+	ContractConsignmentBase64 string             `json:"contract_consignment_base64"`
+	OutPoints                 []string           `json:"outpoints"`
+	Receipt                   *ValidationReceipt `json:"receipt"`
+	Projected                 int                `json:"projected"`
 }
 
 type RGB11ImportResult struct {
@@ -157,28 +160,55 @@ func (e *RGB11RejectListViolation) Error() string {
 func (e *RGB11RejectListViolation) Unwrap() error { return ErrRGB11Rejected }
 
 type RGB11InvoiceRequest struct {
-	Mode           string `json:"mode,omitempty"`
-	ContractID     string `json:"contract_id"`
-	SchemaID       string `json:"schema_id"`
-	AmountRaw      string `json:"amount_raw"`
-	AssignmentName string `json:"assignment_name"`
-	Expiry         int64  `json:"expiry"`
-	WitnessVout    uint32 `json:"witness_vout"`
+	Mode               string   `json:"mode,omitempty"`
+	TransportMode      string   `json:"transport_mode,omitempty"`
+	TransportEndpoints []string `json:"transport_endpoints,omitempty"`
+	ContractID         string   `json:"contract_id"`
+	SchemaID           string   `json:"schema_id"`
+	AmountRaw          string   `json:"amount_raw"`
+	AssignmentName     string   `json:"assignment_name"`
+	Expiry             int64    `json:"expiry"`
+	WitnessVout        uint32   `json:"witness_vout"`
 }
 
 type RGB11SendRequest struct {
 	Invoice          string   `json:"invoice,omitempty"`
 	Invoices         []string `json:"invoices,omitempty"`
+	ContractID       string   `json:"contract_id,omitempty"`
+	AmountRaw        string   `json:"amount_raw,omitempty"`
 	FeeRate          int64    `json:"fee_rate"`
 	MinConfirmations uint8    `json:"min_confirmations"`
 }
 
 type RGB11PreparedTransfer struct {
-	State                *TransferState   `json:"state"`
-	States               []*TransferState `json:"states,omitempty"`
-	RecipientConsignment string           `json:"recipient_consignment"`
-	SignedPSBT           string           `json:"signed_psbt"`
-	TxID                 string           `json:"txid"`
+	State                      *TransferState   `json:"state"`
+	States                     []*TransferState `json:"states,omitempty"`
+	RecipientConsignment       string           `json:"recipient_consignment"`
+	RecipientConsignmentBase64 string           `json:"recipient_consignment_base64"`
+	SignedPSBT                 string           `json:"signed_psbt"`
+	TxID                       string           `json:"txid"`
+}
+
+type RGB11ProxyDeliveryResult struct {
+	TransferIDs []string `json:"transfer_ids"`
+	Endpoints   []string `json:"endpoints"`
+	TxID        string   `json:"txid"`
+}
+
+type RGB11ProxyAckResult struct {
+	TransferID string `json:"transfer_id"`
+	Available  bool   `json:"available"`
+	Accepted   bool   `json:"accepted"`
+	Endpoint   string `json:"endpoint,omitempty"`
+}
+
+type RGB11ProxyReceiveResult struct {
+	RequestID string             `json:"request_id"`
+	Endpoint  string             `json:"endpoint"`
+	TxID      string             `json:"txid"`
+	Vout      *uint32            `json:"vout,omitempty"`
+	Receipt   *ValidationReceipt `json:"receipt"`
+	AckPosted bool               `json:"ack_posted"`
 }
 
 type RGB11RefreshResult struct {
@@ -186,6 +216,7 @@ type RGB11RefreshResult struct {
 	Pending      int      `json:"pending"`
 	Reorged      int      `json:"reorged"`
 	Conflicted   int      `json:"conflicted"`
+	Unresolved   int      `json:"unresolved"`
 	Inconsistent []string `json:"inconsistent,omitempty"`
 }
 type RGB11AddressMailboxSyncResult struct {

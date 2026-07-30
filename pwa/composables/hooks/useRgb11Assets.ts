@@ -90,14 +90,22 @@ export const useRgb11Assets = (options: UseAssetQueryOptions = {}) => {
     { deep: true, immediate: true }
   )
 
-  const handleDKVSSynced = () => {
+  watch(
+    () => stateQuery.error.value,
+    (error) => {
+      rgb11Store.setError(error instanceof Error ? error.message : String(error || ''))
+    },
+    { immediate: true }
+  )
+
+  const handleWalletDataUpdated = () => {
     if (queryEnabled.value && walletId.value && address.value) {
       void stateQuery.refetch()
     }
   }
-  window.addEventListener('sat20:dkvs-synced', handleDKVSSynced)
+  window.addEventListener('sat20:wallet-data-updated', handleWalletDataUpdated)
   onScopeDispose(() => {
-    window.removeEventListener('sat20:dkvs-synced', handleDKVSSynced)
+    window.removeEventListener('sat20:wallet-data-updated', handleWalletDataUpdated)
   })
 
   return {

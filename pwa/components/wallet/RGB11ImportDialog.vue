@@ -6,12 +6,24 @@
         <DialogDescription>{{ $t('rgb11Transfer.importDescription') }}</DialogDescription>
       </DialogHeader>
       <div class="space-y-3">
-        <Textarea v-model="consignment" spellcheck="false" class="min-h-56 bg-zinc-900 font-mono text-xs" />
+        <Textarea v-model="consignment" spellcheck="false" class="min-h-56 bg-zinc-900 font-mono text-xs"
+          :placeholder="$t('rgb11Transfer.importArmorPlaceholder')" @input="selectedFile = null" />
+        <div class="space-y-1">
+          <input id="rgb11-contract-file" type="file" accept=".rgb,.rgbc,application/octet-stream"
+            class="sr-only" @change="selectFile" />
+          <label for="rgb11-contract-file"
+            class="flex h-10 cursor-pointer items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 px-4 text-sm hover:bg-zinc-800">
+            {{ $t('rgb11Transfer.selectContractFile') }}
+          </label>
+          <p v-if="selectedFile" class="break-all text-xs text-zinc-400">
+            {{ $t('rgb11Transfer.selectedContractFile', { name: selectedFile.name }) }}
+          </p>
+        </div>
         <p v-if="message" class="break-all text-xs"
           :class="warning ? 'text-amber-500' : success ? 'text-emerald-400' : 'text-red-400'">
           {{ message }}
         </p>
-        <Button class="w-full" :disabled="loading || !consignment.trim()" @click="runImport">
+        <Button class="w-full" :disabled="loading || (!consignment.trim() && !selectedFile)" @click="runImport">
           {{ loading ? $t('rgb11Transfer.importing') : $t('rgb11Transfer.import') }}
         </Button>
       </div>
@@ -30,18 +42,37 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 const emit = defineEmits<{ (e: 'completed'): void }>()
 const isOpen = defineModel('open', { type: Boolean })
 const consignment = ref('')
+const selectedFile = ref<File | null>(null)
 const loading = ref(false)
 const message = ref('')
 const success = ref(false)
 const warning = ref(false)
 const { t } = useI18n()
 
+const selectFile = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  selectedFile.value = input.files?.[0] || null
+  if (selectedFile.value) consignment.value = ''
+}
+
+const encodeBase64 = (raw: ArrayBuffer) => {
+  const bytes = new Uint8Array(raw)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize))
+  }
+  return btoa(binary)
+}
+
 const runImport = async () => {
   loading.value = true
   message.value = ''
   success.value = false
   warning.value = false
-  const [err, result] = await walletManager.importRGB11Contract(consignment.value.trim())
+  const [err, result] = selectedFile.value
+    ? await walletManager.importRGB11ContractFile(encodeBase64(await selectedFile.value.arrayBuffer()))
+    : await walletManager.importRGB11Contract(consignment.value.trim())
   if (err || !result?.result) {
     loading.value = false
     message.value = err?.message || t('rgb11Transfer.importFailed')
@@ -58,6 +89,7 @@ const runImport = async () => {
 watch(isOpen, (open) => {
   if (!open) {
     consignment.value = ''
+    selectedFile.value = null
     loading.value = false
     message.value = ''
     success.value = false

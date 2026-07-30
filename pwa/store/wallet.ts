@@ -169,7 +169,6 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const lockWallet = async () => {
-    await walletManager.stopDKVSBackgroundSync()
     await setPassword('')
     await setLocked(true)
   }
@@ -181,6 +180,28 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const setFeeRate = (value: number) => {
     feeRate.value = value
+  }
+
+  const syncWalletCatalog = async () => {
+    const [err, result] = await walletManager.getWalletCatalog()
+    if (err || !result) {
+      throw err || new Error('Failed to load wallet catalog')
+    }
+    const catalog: WalletData[] = result.wallets.map(item => ({
+      id: String(item.id),
+      name: item.name,
+      accounts: item.accounts.map(account => ({
+        index: account.index,
+        name: account.name,
+        did: account.did,
+        address: account.address,
+        pubKey: account.pub_key,
+      })),
+    }))
+    wallets.value = catalog
+    await walletStorage.setValue('wallets', toRaw(catalog))
+    await setHasWallet(catalog.length > 0)
+    return catalog
   }
   const switchWallet = async (walletIdToSwitch: string) => {
     // 如果正在切换，直接返回
@@ -198,6 +219,7 @@ export const useWalletStore = defineStore('wallet', () => {
       await setWalletId(walletIdToSwitch);
       await switchToAccount(currentAccount?.index || 0);
       await getWalletInfo()
+      await syncWalletCatalog()
 
       // 发送账户变更事件（非关键操作）
       safeSendAccountsChangedEvent(wallets.value)
@@ -251,6 +273,7 @@ export const useWalletStore = defineStore('wallet', () => {
       wallets.value = _wallets
       await walletStorage.setValue('wallets', _wallets)
     }
+    await syncWalletCatalog()
     return [undefined, _mnemonic]
   }
 
@@ -312,6 +335,7 @@ export const useWalletStore = defineStore('wallet', () => {
     }
     wallets.value = _wallets
     await walletStorage.setValue('wallets', _wallets)
+    await syncWalletCatalog()
     return [undefined, processedMnemonic]
   }
   const getWalletInfo = async () => {
@@ -343,6 +367,7 @@ export const useWalletStore = defineStore('wallet', () => {
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
+      await syncWalletCatalog()
       runStpSyncInBackground('unlockWallet channel start', () => satsnetStp.start())
       await switchToAccount(accountIndex.value)
       refreshChannelsInBackground('unlockWallet')
@@ -353,6 +378,7 @@ export const useWalletStore = defineStore('wallet', () => {
       await getWalletInfo()
       await setLocked(false)
       await setPassword(password)
+      await syncWalletCatalog()
       runStpSyncInBackground('unlockWallet existing channel start', () => satsnetStp.start())
       await switchToAccount(accountIndex.value)
       refreshChannelsInBackground('unlockWallet existing')
@@ -375,36 +401,21 @@ export const useWalletStore = defineStore('wallet', () => {
       }
 
       const isDeletingActiveWallet = walletIdToDelete === walletId.value;
-
-      wallets.value.splice(walletIndexToDelete, 1);
-
-      if (wallets.value.length === 0) {
-        await walletStorage.clear();
-        await setHasWallet(false);
-        await setAddress('');
-        await setPublickey('');
-        await setWalletId('');
-        await setAccountIndex(0);
-        await setPassword('');
-        await setChain(Chain.BTC);
-        await setLocked(true);
-      } else {
-        await walletStorage.setValue('wallets', toRaw(wallets.value));
-
-        if (isDeletingActiveWallet) {
-          const nextWalletIndex = walletIndexToDelete > 0 ? walletIndexToDelete - 1 : 0;
-          const nextWallet = wallets.value[nextWalletIndex];
-
-          if (nextWallet && nextWallet.accounts.length > 0) {
-            const nextAccount = nextWallet.accounts[0];
-            await setWalletId(nextWallet.id);
-            await switchToAccount(nextAccount.index);
-          } else {
-            const errMsg = "Failed to switch wallet: Next wallet or its accounts not found after deletion."
-            console.error(errMsg);
-            return [new Error(errMsg), undefined];
-          }
+      const [deleteError] = await walletManager.deleteWallet(walletIdToDelete)
+      if (deleteError) {
+        return [deleteError, undefined]
+      }
+      const catalog = await syncWalletCatalog()
+      if (isDeletingActiveWallet) {
+        const nextWalletIndex = walletIndexToDelete > 0 ? walletIndexToDelete - 1 : 0
+        const nextWallet = catalog[nextWalletIndex] || catalog[0]
+        if (!nextWallet || nextWallet.accounts.length === 0) {
+          return [new Error('No wallet is available after deletion'), undefined]
         }
+        await setWalletId(nextWallet.id)
+        await walletManager.switchWallet(nextWallet.id, password.value)
+        await switchToAccount(0)
+        await getWalletInfo()
       }
 
       return [undefined, true];
@@ -415,6 +426,8 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const addAccount = async (name: string, accountId: number) => {
+    const [ensureError] = await walletManager.ensureAccount(walletId.value, accountId, name)
+    if (ensureError) throw ensureError
     await walletManager.switchAccount(accountId)
     const [_, addressRes] = await walletManager.getWalletAddress(accountId)
     const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
@@ -436,6 +449,7 @@ export const useWalletStore = defineStore('wallet', () => {
       await setAddress(addressRes.address)
       await setPublickey(pubkeyRes.pubKey)
     }
+    await syncWalletCatalog()
   }
 
   const switchToAccount = async (accountId: number) => {
@@ -468,34 +482,18 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const updateAccountName = async (accountId: number, newName: string) => {
-    if (account) {
-      const wallet = wallets.value.find(w => w.id === walletId.value)
-      const account = wallet?.accounts.find(a => a.index === accountId)
-      if (account) {
-        account.name = newName
-      }
-      await walletStorage.setValue('wallets', toRaw(wallets.value))
-    }
+    const current = wallet.value?.accounts.find(a => a.index === accountId)
+    const [err] = await walletManager.updateAccountMetadata(
+      walletId.value, accountId, newName, current?.did || ''
+    )
+    if (err) throw err
+    await syncWalletCatalog()
   }
 
   const updateWalletName = async (walletId: string, newName: string) => {
-    const wallet = wallets.value.find(w => w.id === walletId)
-    if (wallet) {
-      wallet.name = newName
-      await walletStorage.setValue('wallets', toRaw(wallets.value))
-    }
-  }
-
-  const deleteAccount = async (accountId: number) => {
-    const index = wallet.value?.accounts.findIndex(a => a.index === accountId)
-    if (index && index > -1) {
-      wallet.value?.accounts.splice(index, 1)
-      await walletStorage.setValue('wallets', toRaw(wallets.value))
-      const prevAccount = wallet.value?.accounts[index - 1]
-      if (prevAccount) {
-        await switchToAccount(prevAccount.index)
-      }
-    }
+    const [err] = await walletManager.updateWalletName(walletId, newName)
+    if (err) throw err
+    await syncWalletCatalog()
   }
 
   const signPsbt = async (psbtData: string): Promise<string> => {
@@ -598,7 +596,7 @@ export const useWalletStore = defineStore('wallet', () => {
     switchToAccount,
     updateAccountName,
     updateWalletName,
-    deleteAccount,
+    syncWalletCatalog,
     accounts,
     switchWallet,
     btcFeeRate,

@@ -1,7 +1,9 @@
 package wallet
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"sort"
@@ -18,7 +20,9 @@ const (
 	AccountStoragePaid      = "paid"
 
 	accountPaidDefaultFundingBlocks = uint64(1000)
-	accountRequiredRecords          = uint64(4)
+	accountRequiredRecords          = uint64(5)
+	accountMinimumRecordCount       = uint64(100)
+	accountDefaultRecordCount       = uint64(100)
 )
 
 type AccountIndexerLocation struct {
@@ -28,19 +32,24 @@ type AccountIndexerLocation struct {
 }
 
 type AccountStorageOption struct {
-	ID                   string   `json:"id"`
-	Mode                 string   `json:"mode"`
-	Available            bool     `json:"available"`
-	Title                string   `json:"title"`
-	Description          string   `json:"description"`
-	Warnings             []string `json:"warnings,omitempty"`
-	ExpiryHeight         uint64   `json:"expiry_height,omitempty"`
-	EstimatedExpiryTime  int64    `json:"estimated_expiry_time,omitempty"`
-	FeeAsset             string   `json:"fee_asset,omitempty"`
-	EstimatedCost        string   `json:"estimated_cost,omitempty"`
-	EstimatedAnnualCost  string   `json:"estimated_annual_cost,omitempty"`
-	MinimumRetention     string   `json:"minimum_retention,omitempty"`
-	RecommendedRetention string   `json:"recommended_retention,omitempty"`
+	ID                    string   `json:"id"`
+	Mode                  string   `json:"mode"`
+	Available             bool     `json:"available"`
+	Title                 string   `json:"title"`
+	Description           string   `json:"description"`
+	Warnings              []string `json:"warnings,omitempty"`
+	ExpiryHeight          uint64   `json:"expiry_height,omitempty"`
+	EstimatedExpiryTime   int64    `json:"estimated_expiry_time,omitempty"`
+	FeeAsset              string   `json:"fee_asset,omitempty"`
+	EstimatedCost         string   `json:"estimated_cost,omitempty"`
+	EstimatedAnnualCost   string   `json:"estimated_annual_cost,omitempty"`
+	MinimumRetention      string   `json:"minimum_retention,omitempty"`
+	RecommendedRetention  string   `json:"recommended_retention,omitempty"`
+	RecordCount           uint64   `json:"record_count,omitempty"`
+	DefaultRecordCount    uint64   `json:"default_record_count,omitempty"`
+	FullRecordFee         string   `json:"full_record_fee_per_block,omitempty"`
+	MinimumAmountPerBlock string   `json:"minimum_amount_per_block,omitempty"`
+	AmountPerBlock        string   `json:"amount_per_block,omitempty"`
 }
 
 type AccountStorageAuthorization struct {
@@ -90,12 +99,55 @@ func (p *Manager) AccountIndexerLocation() (AccountIndexerLocation, error) {
 	}, nil
 }
 
-func (p *Manager) accountDKVSClient() (*SatsNetDKVSClient, error) {
-	location, err := p.AccountIndexerLocation()
+func (p *Manager) accountDKVSStore() (*dkvsStore, error) {
+	if p == nil {
+		return nil, fmt.Errorf("DKVS manager is unavailable")
+	}
+	return p.ensureDKVSManager().primaryStore()
+}
+
+func (p *Manager) accountDKVSStoreForLocation(location AccountIndexerLocation) (*dkvsStore, error) {
+	if p == nil {
+		return nil, fmt.Errorf("DKVS manager is unavailable")
+	}
+	return p.ensureDKVSManager().storeFor(
+		location.Scheme, location.Host, location.Proxy, p.http,
+	)
+}
+
+func (p *Manager) LoadAccountGuardianCapsule(location AccountIndexerLocation,
+	mailboxID, packageID, shareID string) ([]byte, error) {
+
+	store, err := p.accountDKVSStoreForLocation(location)
 	if err != nil {
 		return nil, err
 	}
-	return NewSatsNetDKVSClient(location.Scheme, location.Host, location.Proxy, p.http), nil
+	key, err := dkvsindexer.MailShareKey(mailboxID, packageID, shareID)
+	if err != nil {
+		return nil, err
+	}
+	record, err := store.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, fmt.Errorf("guardian capsule is unavailable")
+	}
+	return append([]byte(nil), record.Value...), nil
+}
+
+func (p *Manager) LoadAccountRecoveryPackage(location AccountIndexerLocation,
+	locator account.Locator) (*account.RecoveryPackage, error) {
+
+	store, err := p.accountDKVSStoreForLocation(location)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := newReadOnlyAccountDKVSRepository(store, locator.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	return account.NewManager(repository).Load(context.Background(), locator)
 }
 
 func decimalRat(value string) (*big.Rat, error) {
@@ -125,7 +177,21 @@ func multiplyDecimal(value string, multiplier uint64) (string, error) {
 	return decimalString(amount), nil
 }
 
-func accountAmountPerBlock(defaults dkvsindexer.NetworkDefaults) (string, error) {
+func normalizeAccountRecordCount(recordCount uint64) (uint64, error) {
+	if recordCount == 0 {
+		recordCount = accountDefaultRecordCount
+	}
+	if recordCount < accountMinimumRecordCount {
+		return 0, fmt.Errorf("account storage requires at least %d records", accountMinimumRecordCount)
+	}
+	return recordCount, nil
+}
+
+func accountAmountPerBlock(defaults dkvsindexer.NetworkDefaults, recordCount uint64) (string, error) {
+	recordCount, err := normalizeAccountRecordCount(recordCount)
+	if err != nil {
+		return "", err
+	}
 	minimum, err := decimalRat(defaults.AutopayMinAmountPerBlock)
 	if err != nil {
 		return "", err
@@ -134,7 +200,7 @@ func accountAmountPerBlock(defaults dkvsindexer.NetworkDefaults) (string, error)
 	if err != nil {
 		return "", err
 	}
-	required := new(big.Rat).Mul(perRecord, new(big.Rat).SetInt(new(big.Int).SetUint64(accountRequiredRecords)))
+	required := new(big.Rat).Mul(perRecord, new(big.Rat).SetInt(new(big.Int).SetUint64(recordCount)))
 	if required.Cmp(minimum) > 0 {
 		minimum = required
 	}
@@ -142,12 +208,12 @@ func accountAmountPerBlock(defaults dkvsindexer.NetworkDefaults) (string, error)
 }
 
 func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
-	client, err := p.accountDKVSClient()
+	store, err := p.accountDKVSStore()
 	if err != nil {
 		return nil, err
 	}
 	options := make([]AccountStorageOption, 0, 2)
-	policy, configErr := client.GetConfig()
+	policy, configErr := store.Config()
 	if configErr == nil && policy != nil && policy.Enabled {
 		expires := time.Now().Add(time.Duration(policy.MaxTTL) * time.Millisecond).UnixMilli()
 		options = append(options, AccountStorageOption{
@@ -173,7 +239,7 @@ func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 		paid.Description = "当前网络尚未提供可用的 DKVS 付费保存配置。"
 		paid.Warnings = []string{paid.Description}
 	} else {
-		amountPerBlock, amountErr := accountAmountPerBlock(defaults)
+		amountPerBlock, amountErr := accountAmountPerBlock(defaults, accountDefaultRecordCount)
 		if amountErr != nil {
 			return nil, amountErr
 		}
@@ -191,6 +257,11 @@ func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 		paid.FeeAsset = defaults.AutopayFeeAssetName
 		paid.EstimatedCost = cost
 		paid.EstimatedAnnualCost = annual
+		paid.RecordCount = accountDefaultRecordCount
+		paid.DefaultRecordCount = accountDefaultRecordCount
+		paid.FullRecordFee = defaults.FullRecordFeePerBlock
+		paid.MinimumAmountPerBlock = defaults.AutopayMinAmountPerBlock
+		paid.AmountPerBlock = amountPerBlock
 		paid.MinimumRetention = fmt.Sprintf("initial funding for %d blocks", accountPaidDefaultFundingBlocks)
 		paid.RecommendedRetention = "持续支付期间全网保存"
 	}
@@ -198,7 +269,7 @@ func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 	return options, nil
 }
 
-func (p *Manager) ConfirmAccountStorage(optionID string) (*AccountStorageAuthorization, error) {
+func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*AccountStorageAuthorization, error) {
 	if p == nil || p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -206,13 +277,13 @@ func (p *Manager) ConfirmAccountStorage(optionID string) (*AccountStorageAuthori
 	if err != nil {
 		return nil, err
 	}
-	client, err := p.accountDKVSClient()
+	store, err := p.accountDKVSStore()
 	if err != nil {
 		return nil, err
 	}
 	switch strings.ToLower(strings.TrimSpace(optionID)) {
 	case AccountStorageTemporary:
-		policy, err := client.GetConfig()
+		policy, err := store.Config()
 		if err != nil {
 			return nil, err
 		}
@@ -228,18 +299,40 @@ func (p *Manager) ConfirmAccountStorage(optionID string) (*AccountStorageAuthori
 			Location: location, Policy: policy,
 		}, nil
 	case AccountStoragePaid:
-		return p.confirmPaidAccountStorage(location)
+		return p.confirmPaidAccountStorage(location, recordCount)
 	default:
 		return nil, fmt.Errorf("unsupported account storage option %q", optionID)
 	}
 }
 
-func (p *Manager) confirmPaidAccountStorage(location AccountIndexerLocation) (*AccountStorageAuthorization, error) {
+func (p *Manager) confirmPaidAccountStorage(location AccountIndexerLocation, recordCount uint64) (*AccountStorageAuthorization, error) {
+	root, err := p.accountManagementRootWallet()
+	if err != nil {
+		return nil, err
+	}
+	p.mutex.Lock()
+	previous := p.wallet
+	p.wallet = root
+	p.mutex.Unlock()
+	defer func() {
+		p.mutex.Lock()
+		p.wallet = previous
+		p.mutex.Unlock()
+	}()
+	return p.confirmPaidAccountStorageWithCurrentWallet(location, recordCount)
+}
+
+func (p *Manager) confirmPaidAccountStorageWithCurrentWallet(location AccountIndexerLocation,
+	recordCount uint64) (*AccountStorageAuthorization, error) {
 	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
 	if !defaults.Enabled || defaults.AutopayContract == "" {
 		return nil, fmt.Errorf("paid DKVS storage is not configured for the current network")
 	}
-	amountPerBlock, err := accountAmountPerBlock(defaults)
+	recordCount, err := normalizeAccountRecordCount(recordCount)
+	if err != nil {
+		return nil, err
+	}
+	amountPerBlock, err := accountAmountPerBlock(defaults, recordCount)
 	if err != nil {
 		return nil, err
 	}
@@ -271,24 +364,31 @@ func (p *Manager) confirmPaidAccountStorage(location AccountIndexerLocation) (*A
 		Summary: AccountStorageOption{ID: AccountStoragePaid, Mode: AccountStoragePaid, Available: true,
 			Title: "付费保存", Description: "AUTOPAY 首次区块支付已确认。",
 			FeeAsset: defaults.AutopayFeeAssetName, EstimatedCost: fundingAmount,
+			RecordCount: recordCount, DefaultRecordCount: accountDefaultRecordCount,
+			FullRecordFee:         defaults.FullRecordFeePerBlock,
+			MinimumAmountPerBlock: defaults.AutopayMinAmountPerBlock, AmountPerBlock: amountPerBlock,
 			RecommendedRetention: "持续支付期间全网保存"},
 		TransactionID: result.TxID, Location: location,
 	}, nil
 }
 
 func (p *Manager) NewAccountRepositoryForStorage(auth AccountStorageAuthorization) (account.Repository, error) {
-	client, err := p.accountDKVSClient()
+	store, err := p.accountDKVSStore()
+	if err != nil {
+		return nil, err
+	}
+	root, err := p.accountManagementRootWallet()
 	if err != nil {
 		return nil, err
 	}
 	switch auth.Mode {
 	case AccountStorageTemporary:
-		return NewFreeLocalAccountDKVSRepository(client, p.wallet, auth.RecordOptions)
+		return NewFreeLocalAccountDKVSRepository(store, root, auth.RecordOptions)
 	case AccountStoragePaid:
 		if auth.Autopay == nil {
 			return nil, fmt.Errorf("missing account AUTOPAY authorization")
 		}
-		return NewAccountDKVSRepository(client, p.wallet, *auth.Autopay, auth.RecordOptions)
+		return newAccountDKVSRepository(store, root, *auth.Autopay, auth.RecordOptions)
 	default:
 		return nil, fmt.Errorf("unsupported account storage mode %q", auth.Mode)
 	}
@@ -317,7 +417,11 @@ func (p *Manager) AccountPreflight(password string, metadata []AccountWalletMeta
 		return nil, err
 	}
 	defer clearAccountBackup(&backup)
-	accountID, err := dkvsAccountID(p.wallet)
+	root, err := p.accountManagementRootWallet()
+	if err != nil {
+		return nil, err
+	}
+	accountID, err := dkvsAccountID(root)
 	if err != nil {
 		return nil, err
 	}
@@ -336,21 +440,40 @@ func (p *Manager) ExportAccountBackupForPWA(password string, metadata []AccountW
 
 func (p *Manager) PutGuardianCapsuleForStorage(auth AccountStorageAuthorization, mailboxID string,
 	capsule account.GuardianShareCapsule) error {
-	client, err := p.accountDKVSClient()
+	store, err := p.accountDKVSStore()
 	if err != nil {
 		return err
 	}
+	encoded, err := json.Marshal(capsule)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > account.MaxRecoveryObjectSize {
+		return fmt.Errorf("guardian capsule exceeds DKVS value limit")
+	}
+	key, err := dkvsindexer.MailShareKey(mailboxID, capsule.PackageID, capsule.ShareID)
+	if err != nil {
+		return err
+	}
+	mutation := dkvsValueMutation{
+		Key: key, Value: encoded, Owner: p.wallet, Signature: dkvsSignatureAccount,
+		Policy: dkvsStoragePolicy{
+			TTL: auth.RecordOptions.TTL, ExpiryHeight: auth.RecordOptions.ExpiryHeight,
+		},
+	}
 	switch auth.Mode {
 	case AccountStorageTemporary:
-		return client.PutAccountGuardianCapsuleWithFreeLocal(p.wallet, mailboxID, capsule, auth.RecordOptions)
+		mutation.Policy.FreeLocal = true
 	case AccountStoragePaid:
 		if auth.Autopay == nil {
 			return fmt.Errorf("missing account AUTOPAY authorization")
 		}
-		return client.PutAccountGuardianCapsuleWithAutopay(p.wallet, mailboxID, capsule, auth.RecordOptions, *auth.Autopay)
+		mutation.Policy.Autopay = auth.Autopay
 	default:
 		return fmt.Errorf("unsupported account storage mode %q", auth.Mode)
 	}
+	_, err = store.Put(mutation)
+	return err
 }
 
 func (p *Manager) RestoreAccountBackupWithResult(value account.Backup, password string) ([]RestoredWalletResult, error) {
@@ -373,7 +496,14 @@ func (p *Manager) RestoreAccountBackupWithResult(value account.Backup, password 
 			p.mutex.Unlock()
 			return nil, fmt.Errorf("restored wallet %d was not persisted", id)
 		}
+		info.Name = item.Name
 		info.Accounts = int(item.AccountCount)
+		info.AccountNames = make(map[uint32]string, len(item.SubAccounts))
+		info.AccountDIDs = make(map[uint32]string, len(item.SubAccounts))
+		for _, sub := range item.SubAccounts {
+			info.AccountNames[sub.Index] = sub.Name
+			info.AccountDIDs[sub.Index] = sub.DID
+		}
 		err = saveWallet(p.db, &info.WalletInDB)
 		walletValue := info.Wallet
 		p.mutex.Unlock()

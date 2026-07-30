@@ -90,6 +90,53 @@ func (s *ProjectionStore) transferKey(transferID string) ([]byte, error) {
 	return append(prefix, []byte(transferID)...), err
 }
 
+func (s *ProjectionStore) receiveKeyKey(witnessScript []byte) ([]byte, error) {
+	if len(witnessScript) == 0 {
+		return nil, ErrWalletScope
+	}
+	prefix, err := s.scopedPrefix("receive-key-")
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256(witnessScript)
+	return append(prefix, []byte(hex.EncodeToString(hash[:]))...), nil
+}
+
+func (s *ProjectionStore) SaveReceiveKey(key *ReceiveKey) error {
+	if s == nil || s.db == nil || key == nil {
+		return ErrWalletScope
+	}
+	storageKey, err := s.receiveKeyKey(key.WitnessScript)
+	if err != nil {
+		return err
+	}
+	encoded, err := encode(key)
+	if err != nil {
+		return err
+	}
+	return s.db.Write(storageKey, encoded)
+}
+
+func (s *ProjectionStore) LoadReceiveKey(witnessScript []byte) (*ReceiveKey, error) {
+	if s == nil || s.db == nil {
+		return nil, ErrWalletScope
+	}
+	storageKey, err := s.receiveKeyKey(witnessScript)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := s.db.Read(storageKey)
+	if err != nil {
+		return nil, err
+	}
+	var key ReceiveKey
+	if err := decode(encoded, &key); err != nil ||
+		!bytes.Equal(key.WitnessScript, witnessScript) {
+		return nil, ErrRGB11Inconsistent
+	}
+	return &key, nil
+}
+
 // LocalMetadata is deliberately outside the portable snapshot prefix. It is
 // used for device-local ordering cursors such as the last wallet head and is
 // never treated as RGB contract state.
@@ -681,12 +728,11 @@ func (s *ProjectionStore) SaveProofState(proof *AllocationProof) error {
 	return s.db.Write(key, encoded)
 }
 
-// ReplaceProjections atomically switches consumed carriers to locally
-// validated change allocations. Every replacement is locked and receipt-
-// checked before the write batch can delete any old projection.
-func (s *ProjectionStore) ReplaceProjections(consumedOutpoints []string, replacements []ProjectionReplacement) error {
-	if s == nil || s.db == nil || s.locker == nil || len(consumedOutpoints) == 0 {
-		return ErrProjectionMismatch
+func (s *ProjectionStore) prepareProjectionReplacements(replacements []ProjectionReplacement) (
+	map[string]*indexer.TxOutput, []*AllocationProof, error,
+) {
+	if s == nil || s.db == nil || s.locker == nil || len(replacements) == 0 {
+		return nil, nil, ErrProjectionMismatch
 	}
 	outputs := make(map[string]*indexer.TxOutput)
 	proofs := make([]*AllocationProof, 0, len(replacements))
@@ -695,15 +741,15 @@ func (s *ProjectionStore) ReplaceProjections(consumedOutpoints []string, replace
 			replacement.Output.OutPointStr == "" || replacement.Output.OutPointStr != replacement.Proof.OutPoint ||
 			replacement.Asset.Name != replacement.Proof.AssetName || replacement.Asset.Name.Protocol != Protocol ||
 			(replacement.Proof.Status != "valid" && replacement.Proof.Status != "settled") {
-			return ErrProjectionMismatch
+			return nil, nil, ErrProjectionMismatch
 		}
 		receipt, err := s.LoadValidationReceipt(replacement.Proof.ConsignmentHash)
 		if err != nil {
-			return ErrInvalidProof
+			return nil, nil, ErrInvalidProof
 		}
 		receiptHash, err := receipt.Hash()
 		if err != nil || receiptHash != replacement.Proof.ValidationHash {
-			return ErrInvalidProof
+			return nil, nil, ErrInvalidProof
 		}
 		matched := false
 		for _, allocation := range receipt.Allocations {
@@ -718,10 +764,10 @@ func (s *ProjectionStore) ReplaceProjections(consumedOutpoints []string, replace
 			}
 		}
 		if !matched {
-			return ErrInvalidProof
+			return nil, nil, ErrInvalidProof
 		}
 		if err := s.locker.LockUtxo(replacement.Output.OutPointStr, LockReasonRGB); err != nil {
-			return err
+			return nil, nil, err
 		}
 		projected := outputs[replacement.Output.OutPointStr]
 		if projected == nil {
@@ -730,12 +776,117 @@ func (s *ProjectionStore) ReplaceProjections(consumedOutpoints []string, replace
 			outputs[replacement.Output.OutPointStr] = projected
 		}
 		if projected.GetAsset(&replacement.Asset.Name) != nil {
-			return fmt.Errorf("%w: duplicate replacement asset", ErrProjectionMismatch)
+			return nil, nil, fmt.Errorf("%w: duplicate replacement asset", ErrProjectionMismatch)
 		}
 		if err := projected.Assets.Add(replacement.Asset); err != nil {
-			return err
+			return nil, nil, err
 		}
 		proofs = append(proofs, replacement.Proof)
+	}
+	return outputs, proofs, nil
+}
+
+// StageProjections stores locally validated transaction outputs without
+// deleting the consumed carriers. The consumed proofs remain as rollback data
+// until Bitcoin evidence confirms which transaction state is active.
+func (s *ProjectionStore) StageProjections(replacements []ProjectionReplacement) error {
+	outputs, proofs, err := s.prepareProjectionReplacements(replacements)
+	if err != nil {
+		return err
+	}
+	batch := s.db.NewWriteBatch()
+	if batch == nil {
+		return errors.New("RGB11 KVDB returned nil write batch")
+	}
+	defer batch.Close()
+	for outpoint, output := range outputs {
+		encoded, err := encode(output)
+		if err != nil {
+			return err
+		}
+		key, err := s.outputKey(outpoint)
+		if err != nil {
+			return err
+		}
+		if err := batch.Put(key, encoded); err != nil {
+			return err
+		}
+	}
+	for _, proof := range proofs {
+		encoded, err := encode(proof)
+		if err != nil {
+			return err
+		}
+		key, err := s.proofKey(proof.OutPoint, proof.AssetName)
+		if err != nil {
+			return err
+		}
+		if err := batch.Put(key, encoded); err != nil {
+			return err
+		}
+	}
+	return batch.Flush()
+}
+
+// DeleteProjections removes derived outputs while retaining validation
+// history. It is used to roll a staged mempool transition back after eviction
+// or a chain reorganization.
+func (s *ProjectionStore) DeleteProjections(outpoints []string) error {
+	if s == nil || s.db == nil {
+		return ErrProjectionMismatch
+	}
+	remove := make(map[string]bool, len(outpoints))
+	for _, outpoint := range outpoints {
+		if outpoint != "" {
+			remove[outpoint] = true
+		}
+	}
+	if len(remove) == 0 {
+		return nil
+	}
+	proofs, err := s.ListProofs()
+	if err != nil {
+		return err
+	}
+	batch := s.db.NewWriteBatch()
+	if batch == nil {
+		return errors.New("RGB11 KVDB returned nil write batch")
+	}
+	defer batch.Close()
+	for outpoint := range remove {
+		key, err := s.outputKey(outpoint)
+		if err != nil {
+			return err
+		}
+		if err := batch.Delete(key); err != nil {
+			return err
+		}
+	}
+	for _, proof := range proofs {
+		if !remove[proof.OutPoint] {
+			continue
+		}
+		key, err := s.proofKey(proof.OutPoint, proof.AssetName)
+		if err != nil {
+			return err
+		}
+		if err := batch.Delete(key); err != nil {
+			return err
+		}
+	}
+	return batch.Flush()
+}
+
+// ReplaceProjections atomically switches consumed carriers to locally
+// validated change allocations. Every replacement is locked and receipt-
+// checked before the write batch can delete any old projection.
+func (s *ProjectionStore) ReplaceProjections(consumedOutpoints []string, replacements []ProjectionReplacement) error {
+	if s == nil || s.db == nil || s.locker == nil || len(consumedOutpoints) == 0 {
+		return ErrProjectionMismatch
+	}
+	outputs, proofs, err := s.prepareProjectionReplacements(replacements)
+	if err != nil {
+		return err
 	}
 	oldProofs, err := s.ListProofs()
 	if err != nil {
@@ -842,10 +993,20 @@ func (s *ProjectionStore) Balance(name indexer.AssetName) (*indexer.Decimal, err
 	if err != nil {
 		return nil, err
 	}
+	proofs, err := s.ListProofs()
+	if err != nil {
+		return nil, err
+	}
+	current := make(map[string]bool, len(proofs))
+	for _, proof := range proofs {
+		if proof.Status != "spending" && proof.Status != "inconsistent" {
+			current[proof.OutPoint+"|"+proof.AssetName.String()] = true
+		}
+	}
 	var total *indexer.Decimal
 	for _, output := range outputs {
 		amount := output.GetAsset(&name)
-		if amount == nil {
+		if amount == nil || !current[output.OutPointStr+"|"+name.String()] {
 			continue
 		}
 		if total == nil {

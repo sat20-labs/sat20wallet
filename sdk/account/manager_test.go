@@ -65,6 +65,11 @@ func TestTwoOfTwoRequiresUserShare(t *testing.T) {
 	} else {
 		zero(secret)
 	}
+	if _, secret, err := RecoverAccount(pkg.Envelope, dkvsShare, pkg.UserShare); err != nil {
+		t.Fatalf("reverse share order failed: %v", err)
+	} else {
+		zero(secret)
+	}
 }
 
 func TestNewDeviceIsRecoveryRehearsal(t *testing.T) {

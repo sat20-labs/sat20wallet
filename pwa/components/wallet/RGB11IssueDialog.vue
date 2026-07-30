@@ -95,6 +95,9 @@
         </div>
         <div v-if="armor" class="space-y-2">
           <Textarea :model-value="armor" readonly spellcheck="false" class="min-h-32 bg-zinc-900 font-mono text-[10px]" />
+          <Button v-if="contractConsignmentBase64" variant="outline" class="w-full" @click="downloadContract">
+            {{ $t('rgb11Transfer.downloadContract') }}
+          </Button>
           <Button variant="outline" class="w-full" @click="copyContract">
             {{ $t('rgb11Transfer.copyContract') }}
           </Button>
@@ -141,6 +144,7 @@ const message = ref('')
 const success = ref(false)
 const warning = ref(false)
 const armor = ref('')
+const contractConsignmentBase64 = ref('')
 const issuedSummary = ref<{
   ticker: string
   displayName: string
@@ -245,6 +249,7 @@ const runIssue = async () => {
   success.value = false
   warning.value = false
   armor.value = ''
+  contractConsignmentBase64.value = ''
   issuedSummary.value = null
   const [err, result] = await walletManager.issueRGB11Asset({
     schema: schema.value,
@@ -264,6 +269,7 @@ const runIssue = async () => {
   }
   const issued = JSON.parse(result.result)
   armor.value = issued.armor || ''
+  contractConsignmentBase64.value = issued.contract_consignment_base64 || ''
   issuedSummary.value = {
     ticker: normalizedTicker,
     displayName: normalizedName,
@@ -283,6 +289,18 @@ const copyContract = async () => {
   message.value = t('rgb11Transfer.copied')
   success.value = true
   warning.value = false
+}
+
+const downloadContract = () => {
+  if (!contractConsignmentBase64.value) return
+  const bytes = Uint8Array.from(atob(contractConsignmentBase64.value), (value) => value.charCodeAt(0))
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }))
+  const link = document.createElement('a')
+  const id = issuedSummary.value?.contractId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'contract'
+  link.href = url
+  link.download = `rgb11-contract-${id}.rgb`
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 const copyAssetName = async () => {
@@ -309,6 +327,7 @@ watch(isOpen, (open) => {
     success.value = false
     warning.value = false
     armor.value = ''
+    contractConsignmentBase64.value = ''
     issuedSummary.value = null
   }
 })

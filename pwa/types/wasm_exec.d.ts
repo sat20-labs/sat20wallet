@@ -297,9 +297,6 @@ declare interface WalletManager {
   ): Promise<SatsnetResponse<{ amount: number; value: number }>>
 
   getAssetSummary(address: string): Promise<SatsnetResponse<{ assets: any[] }>>
-  syncLocalRGB11State(): Promise<SatsnetResponse<{ result: string }>>
-  restartDKVSBackgroundSync(): Promise<SatsnetResponse<{ started: boolean }>>
-  stopDKVSBackgroundSync(): Promise<SatsnetResponse<{ stopped: boolean }>>
 
   // --- Contract Methods ---
   deployUnifiedContract(
@@ -508,9 +505,6 @@ interface SatsnetStp {
   ): Promise<SatsnetResponse<{ amount: number; value: number }>>;
 
   getAssetSummary(address: string): Promise<SatsnetResponse<{ assets: any[] }>>;
-  syncLocalRGB11State(): Promise<SatsnetResponse<{ result: string }>>;
-  restartDKVSBackgroundSync(): Promise<SatsnetResponse<{ started: boolean }>>;
-  stopDKVSBackgroundSync(): Promise<SatsnetResponse<{ stopped: boolean }>>;
 
   batchSendAssets_SatsNet(destAddr: string,
     assetName: string, amt: string, n: number): Promise<SatsnetResponse<any>>;

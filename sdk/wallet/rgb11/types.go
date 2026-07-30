@@ -188,6 +188,17 @@ type CarrierBinding struct {
 	CommitmentMethod string `json:"commitment_method"`
 }
 
+type ReceiveKey struct {
+	Version        uint8  `json:"version"`
+	RequestID      string `json:"request_id"`
+	ScopeIndex     uint32 `json:"scope_index"`
+	Change         uint32 `json:"change"`
+	Index          uint32 `json:"index"`
+	LogicalAddress string `json:"logical_address"`
+	WitnessScript  []byte `json:"witness_script"`
+	InternalPubKey []byte `json:"internal_pubkey"`
+}
+
 type AllocationProof struct {
 	OutPoint        string            `json:"outpoint"`
 	AssetName       indexer.AssetName `json:"asset_name"`

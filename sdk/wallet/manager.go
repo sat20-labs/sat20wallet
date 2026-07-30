@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"bytes"
-	"context"
 	"encoding/hex"
 	"fmt"
 	"strconv"
@@ -125,11 +124,12 @@ type Manager struct {
 	utxoLockerL2 *UtxoLocker
 	rgbManager   *rgb11Manager
 	watchTower   *WatchTower
-	dkvsSyncMu   sync.Mutex
-	dkvsSyncRun  sync.Mutex
-	dkvsSyncStop context.CancelFunc
-	dkvsSyncDone chan struct{}
-	dkvsSyncCB   func()
+	dkvsInitMu   sync.Mutex
+	dkvs         *dkvsManager
+
+	accountProfile  *accountManagementProfile
+	accountSecret   []byte
+	accountPassword string
 
 	feeRateL1             int64 // sat/vkb
 	refreshTimeL1         int64

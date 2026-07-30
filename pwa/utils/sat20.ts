@@ -68,6 +68,41 @@ class WalletManager {
     return this._handleRequest('getAllWallets')
   }
 
+  async getWalletCatalog(): Promise<
+    [Error | undefined, {
+      wallets: Array<{
+        id: number
+        name: string
+        fingerprint?: string
+        accounts: Array<{
+          index: number
+          name: string
+          did?: string
+          address: string
+          pub_key: string
+        }>
+      }>
+    } | undefined]
+  > {
+    return this._handleRequest('getWalletCatalog')
+  }
+
+  async deleteWallet(id: string) {
+    return this._handleRequest('deleteWallet', id)
+  }
+
+  async updateWalletName(id: string, name: string) {
+    return this._handleRequest('updateWalletName', id, name)
+  }
+
+  async ensureAccount(id: string, index: number, name: string, did = '') {
+    return this._handleRequest('ensureAccount', id, index, name, did)
+  }
+
+  async updateAccountMetadata(id: string, index: number, name: string, did = '') {
+    return this._handleRequest('updateAccountMetadata', id, index, name, did)
+  }
+
   async switchWallet(
     id: string,
     password: string
@@ -227,6 +262,7 @@ class WalletManager {
 
   async createRGB11Invoice(request: {
     mode?: 'blind' | 'witness'
+    transport_mode?: 'sat20' | 'rgb-json-rpc'
     contract_id: string
     schema_id?: string
     amount_raw: number | string
@@ -241,6 +277,12 @@ class WalletManager {
     [Error | undefined, { result: string } | undefined]
   > {
     return this._handleRequest('importRGB11Contract', consignment)
+  }
+
+  async importRGB11ContractFile(fileBase64: string): Promise<
+    [Error | undefined, { result: string } | undefined]
+  > {
+    return this._handleRequest('importRGB11ContractFile', fileBase64)
   }
 
   async issueRGB11Asset(request: {
@@ -261,6 +303,8 @@ class WalletManager {
   async prepareRGB11Transfer(request: {
     invoice?: string
     invoices?: string[]
+    contract_id?: string
+    amount_raw?: string
     fee_rate?: number
     min_confirmations?: number
   }): Promise<[Error | undefined, { transfer: string } | undefined]> {
@@ -280,9 +324,21 @@ class WalletManager {
   }
 
   async acceptRGB11Consignment(requestId: string, consignment: string): Promise<
-    [Error | undefined, any | undefined]
+    [Error | undefined, { receipt: string } | undefined]
   > {
     return this._handleRequest('acceptRGB11Consignment', requestId, consignment)
+  }
+
+  async receiveRGB11ProxyConsignment(requestId: string): Promise<
+    [Error | undefined, {
+      request_id: string
+      endpoint: string
+      txid: string
+      vout?: number
+      ack_posted: boolean
+    } | undefined]
+  > {
+    return this._handleRequest('receiveRGB11ProxyConsignment', requestId)
   }
 
   async acceptRGB11RelayConsignment(requestId: string, relayRecord: string, consignment: string): Promise<
@@ -335,44 +391,27 @@ class WalletManager {
     return this._handleRequest('broadcastRGB11OutOfBand', JSON.stringify(transferIds))
   }
 
+  async deliverAndBroadcastRGB11ProxyTransfer(transferIds: string[]): Promise<
+    [Error | undefined, { transfer_ids: string[]; endpoints: string[]; txid: string } | undefined]
+  > {
+    return this._handleRequest('deliverAndBroadcastRGB11ProxyTransfer', JSON.stringify(transferIds))
+  }
+
+  async fetchRGB11ProxyAck(transferId: string): Promise<
+    [Error | undefined, {
+      transfer_id: string
+      available: boolean
+      accepted: boolean
+      endpoint?: string
+    } | undefined]
+  > {
+    return this._handleRequest('fetchRGB11ProxyAck', transferId)
+  }
+
   async refreshRGB11State(): Promise<
     [Error | undefined, { result: string } | undefined]
   > {
     return this._handleRequest('refreshRGB11State')
-  }
-
-  async syncLocalRGB11State(): Promise<
-    [Error | undefined, { result: string } | undefined]
-  > {
-    return this._handleRequest('syncLocalRGB11State')
-  }
-
-  async restartDKVSBackgroundSync(): Promise<
-    [Error | undefined, { started: boolean } | undefined]
-  > {
-    return this._handleRequest('restartDKVSBackgroundSync')
-  }
-
-  async stopDKVSBackgroundSync(): Promise<
-    [Error | undefined, { stopped: boolean } | undefined]
-  > {
-    return this._handleRequest('stopDKVSBackgroundSync')
-  }
-
-  async backupRGB11WalletState(request: {
-    wallet_id?: string
-    ttl?: number
-    expiry_height?: number
-  } = {}): Promise<[Error | undefined, { head: string } | undefined]> {
-    return this._handleRequest('backupRGB11WalletState', JSON.stringify(request))
-  }
-
-  async restoreRGB11WalletState(request: {
-    wallet_id?: string
-    height?: number
-    now?: number
-  } = {}): Promise<[Error | undefined, { head: string } | undefined]> {
-    return this._handleRequest('restoreRGB11WalletState', JSON.stringify(request))
   }
 
   async startBTCLuckyMining(config: {

@@ -1,16 +1,13 @@
 package wallet
 
 import (
-	"context"
 	"fmt"
 	"sort"
-	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	walletcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 type localRGB11Account struct {
@@ -18,20 +15,6 @@ type localRGB11Account struct {
 	AccountIndex uint32
 	Address      string
 	Wallet       walletcommon.Wallet
-}
-
-type LocalRGB11SyncAccountResult struct {
-	WalletID     int64  `json:"wallet_id"`
-	AccountIndex uint32 `json:"account_index"`
-	Address      string `json:"address"`
-	Activated    bool   `json:"activated"`
-	Mailbox      bool   `json:"mailbox"`
-	Refreshed    bool   `json:"refreshed"`
-	Error        string `json:"error,omitempty"`
-}
-
-type LocalRGB11SyncResult struct {
-	Accounts []*LocalRGB11SyncAccountResult `json:"accounts"`
 }
 
 func rgb11StorageScope(walletID int64, accountIndex uint32) string {
@@ -101,37 +84,34 @@ func (p *Manager) localRGB11Assets(address string) (indexer.TxAssets, int64, err
 	if !ok {
 		return nil, 0, nil
 	}
-	store, err := p.scopedRGB11ProjectionStore(account)
+	manager, err := p.newScopedRGB11Manager(account)
 	if err != nil {
 		return nil, 0, err
 	}
+	if err := manager.loadSynchronizedRGB11State(); err != nil {
+		return nil, 0, err
+	}
+	store := manager.projectionStore
 	outputs, err := store.ListOutputs()
 	if err != nil {
 		return nil, 0, err
-	}
-	for _, output := range outputs {
-		if output == nil {
-			continue
-		}
-		for index := range output.Assets {
-			if output.Assets[index].Name.Protocol == rgb11wallet.Protocol {
-				if err := p.utxoLockerL1.LockUtxo(output.OutPointStr, rgb11wallet.LockReasonRGB); err != nil {
-					return nil, 0, err
-				}
-				break
-			}
-		}
 	}
 	proofs, err := store.ListProofs()
 	if err != nil {
 		return nil, 0, err
 	}
-	proofIndex := make(map[string]struct{}, len(proofs))
+	proofIndex := make(map[string]*rgb11wallet.AllocationProof, len(proofs))
 	for _, proof := range proofs {
 		if proof != nil {
-			proofIndex[proof.OutPoint+"|"+proof.AssetName.String()] = struct{}{}
+			proofIndex[proof.OutPoint+"|"+proof.AssetName.String()] = proof
 		}
 	}
+	transfers, err := store.ListTransfers()
+	if err != nil {
+		return nil, 0, err
+	}
+	requirements := rgb11ProofConfirmationRequirements(transfers)
+	reservedInputs := rgb11ReservedInputOutpoints(transfers)
 
 	var assets indexer.TxAssets
 	var carrierSats int64
@@ -145,15 +125,21 @@ func (p *Manager) localRGB11Assets(address string) (indexer.TxAssets, int64, err
 			if asset.Name.Protocol != rgb11wallet.Protocol {
 				continue
 			}
-			if _, ok := proofIndex[output.OutPointStr+"|"+asset.Name.String()]; !ok {
+			proof := proofIndex[output.OutPointStr+"|"+asset.Name.String()]
+			if proof == nil {
 				return nil, 0, fmt.Errorf("%w: proof missing for %s %s",
 					ErrRGB11Inconsistent, output.OutPointStr, asset.Name.String())
 			}
 			if err := store.AssertConsistent(output.OutPointStr, asset.Name); err != nil {
 				return nil, 0, fmt.Errorf("%w: %v", ErrRGB11Inconsistent, err)
 			}
-			if err := assets.Add(asset); err != nil {
-				return nil, 0, err
+			if !rgb11ProofIsCurrent(proof) {
+				continue
+			}
+			if !reservedInputs[proof.OutPoint] && rgb11ProofIsAvailable(proof, requirements) {
+				if err := assets.Add(asset); err != nil {
+					return nil, 0, err
+				}
 			}
 			hasRGB11 = true
 		}
@@ -188,15 +174,16 @@ func (p *Manager) GetAssetSummary(address string) (*indexerwire.AssetSummary, er
 		}
 		address = p.wallet.GetAddress()
 	}
-	result := cloneAssetSummary(p.l1IndexerClient.GetAssetSummaryWithAddress(address))
-	if result == nil {
+	base := cloneAssetSummary(p.l1IndexerClient.GetAssetSummaryWithAddress(address))
+	if base == nil {
 		return nil, fmt.Errorf("get L1 asset summary for %s failed", address)
 	}
+	result := cloneAssetSummary(base)
 
 	rgbAssets, carrierSats, err := p.localRGB11Assets(address)
 	if err != nil {
 		Log.Errorf("merge local RGB11 summary for %s failed: %v", address, err)
-		return result, nil
+		return base, nil
 	}
 	if carrierSats > 0 {
 		for _, asset := range result.Data {
@@ -218,7 +205,8 @@ func (p *Manager) GetAssetSummary(address string) (*indexerwire.AssetSummary, er
 		for _, current := range result.Data {
 			if current != nil && current.Name == asset.Name {
 				if err := current.Add(asset); err != nil {
-					return nil, err
+					Log.Errorf("merge local RGB11 asset %s for %s failed: %v", asset.Name.String(), address, err)
+					return base, nil
 				}
 				merged = true
 				break
@@ -243,11 +231,14 @@ func (p *Manager) getLocalRGB11AssetBalance(address string, name *indexer.AssetN
 	if !ok {
 		return nil, false, nil
 	}
-	store, err := p.scopedRGB11ProjectionStore(account)
+	manager, err := p.newScopedRGB11Manager(account)
 	if err != nil {
 		return nil, true, err
 	}
-	balance, err := store.Balance(*name)
+	if err := manager.loadSynchronizedRGB11State(); err != nil {
+		return nil, true, err
+	}
+	balance, err := manager.projectionStore.Balance(*name)
 	return balance, true, err
 }
 
@@ -266,10 +257,15 @@ func (p *Manager) newScopedRGB11Manager(account localRGB11Account) (*rgb11Manage
 		l2IndexerClient: p.l2IndexerClient,
 		utxoLockerL1:    p.utxoLockerL1,
 		utxoLockerL2:    p.utxoLockerL2,
+		dkvs:            p.dkvs,
 	}
 	scoped, err := newRGB11Manager(owner, p.db, p.utxoLockerL1, newIndexerBitcoinEvidenceProvider(p.l1IndexerClient))
 	if err != nil {
 		return nil, err
+	}
+	if p.rgbManager != nil {
+		scoped.backupCoordinator = p.rgbManager.backupLock()
+		scoped.scopeStates = p.rgbManager.scopeStates
 	}
 	owner.rgbManager = scoped
 	if err := scoped.selectRGB11Scope(); err != nil {
@@ -295,75 +291,4 @@ func (p *Manager) newScopedRGB11Manager(account localRGB11Account) (*rgb11Manage
 		}
 	}
 	return scoped, nil
-}
-
-// SyncLocalRGB11State restores, receives and refreshes RGB11 data for every
-// unlocked local wallet/account without changing the active wallet selection.
-func (p *Manager) SyncLocalRGB11State(ctx context.Context) *LocalRGB11SyncResult {
-	result := &LocalRGB11SyncResult{Accounts: make([]*LocalRGB11SyncAccountResult, 0)}
-	currentWalletID := p.GetCurrentWalletId()
-	currentAccount := uint32(0)
-	p.mutex.RLock()
-	if p.status != nil {
-		currentAccount = p.status.CurrentAccount
-	}
-	p.mutex.RUnlock()
-
-	for _, account := range p.localRGB11Accounts() {
-		item := &LocalRGB11SyncAccountResult{
-			WalletID: account.WalletID, AccountIndex: account.AccountIndex, Address: account.Address,
-		}
-		manager, err := p.newScopedRGB11Manager(account)
-		if err != nil {
-			item.Error = err.Error()
-			result.Accounts = append(result.Accounts, item)
-			continue
-		}
-		if _, err := manager.ActivateRGB11WalletState(dkvsindexer.RecordVerificationOptions{
-			Now: uint64(time.Now().UnixMilli()),
-		}); err != nil {
-			item.Error = err.Error()
-		} else {
-			item.Activated = true
-		}
-		if _, err := manager.SyncConfiguredRGB11AddressMailbox(
-			ctx,
-			dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())},
-			RGB11AddressDeliveryOptions{},
-		); err != nil {
-			if item.Error == "" {
-				item.Error = err.Error()
-			}
-		} else {
-			item.Mailbox = true
-		}
-		if _, err := manager.RefreshRGB11State(ctx); err != nil {
-			if item.Error == "" {
-				item.Error = err.Error()
-			}
-		} else {
-			item.Refreshed = true
-		}
-		manager.waitForRGB11AutoBackup()
-		if account.WalletID == currentWalletID && account.AccountIndex == currentAccount {
-			p.mutex.Lock()
-			if p.status == nil ||
-				p.status.CurrentWallet != account.WalletID ||
-				p.status.CurrentAccount != account.AccountIndex ||
-				p.rgbManager == nil {
-				p.mutex.Unlock()
-				result.Accounts = append(result.Accounts, item)
-				continue
-			}
-			p.rgbManager.head = manager.rgbManager.head
-			p.rgbManager.autoBackup = manager.rgbManager.autoBackup
-			p.rgbManager.dkvsStatus = manager.rgbManager.dkvsStatus
-			p.rgbManager.dkvsBackupMode = manager.rgbManager.dkvsBackupMode
-			p.rgbManager.dkvsBackupTTL = manager.rgbManager.dkvsBackupTTL
-			p.rgbManager.consistencyStatus = manager.rgbManager.consistencyStatus
-			p.mutex.Unlock()
-		}
-		result.Accounts = append(result.Accounts, item)
-	}
-	return result
 }

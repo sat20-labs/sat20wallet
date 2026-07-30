@@ -19,11 +19,12 @@ const (
 	rgb11StoreMaxBytes     = 4 * 1024 * 1024
 	rgb11StoreMaxRecords   = 16 * 1024
 
-	rgb11RecordReceipt  = uint8(1)
-	rgb11RecordOutput   = uint8(2)
-	rgb11RecordProof    = uint8(3)
-	rgb11RecordPending  = uint8(4)
-	rgb11RecordTransfer = uint8(5)
+	rgb11RecordReceipt    = uint8(1)
+	rgb11RecordOutput     = uint8(2)
+	rgb11RecordProof      = uint8(3)
+	rgb11RecordPending    = uint8(4)
+	rgb11RecordTransfer   = uint8(5)
+	rgb11RecordReceiveKey = uint8(6)
 )
 
 func encode(value any) ([]byte, error) {
@@ -40,6 +41,8 @@ func encode(value any) ([]byte, error) {
 		kind, write = rgb11RecordPending, func(e *strict.Encoder) error { return encodePendingTransfer(e, item) }
 	case *TransferState:
 		kind, write = rgb11RecordTransfer, func(e *strict.Encoder) error { return encodeTransferState(e, item) }
+	case *ReceiveKey:
+		kind, write = rgb11RecordReceiveKey, func(e *strict.Encoder) error { return encodeReceiveKey(e, item) }
 	default:
 		return nil, fmt.Errorf("unsupported RGB11 storage record %T", value)
 	}
@@ -105,6 +108,11 @@ func decode(data []byte, target any) error {
 			return ErrRGB11Inconsistent
 		}
 		read = func(d *strict.Decoder) error { return decodeTransferState(d, item) }
+	case *ReceiveKey:
+		if kind != rgb11RecordReceiveKey {
+			return ErrRGB11Inconsistent
+		}
+		read = func(d *strict.Decoder) error { return decodeReceiveKey(d, item) }
 	default:
 		return fmt.Errorf("unsupported RGB11 storage target %T", target)
 	}
@@ -765,6 +773,63 @@ func decodeCarrierBinding(d *strict.Decoder) (*CarrierBinding, error) {
 		return nil, nil
 	}
 	return binding, nil
+}
+
+func encodeReceiveKey(e *strict.Encoder, key *ReceiveKey) error {
+	if key == nil || key.Version != 1 || key.RequestID == "" ||
+		key.Change != 1 || key.Index >= 1<<31 || key.LogicalAddress == "" ||
+		len(key.WitnessScript) == 0 || len(key.InternalPubKey) != 32 {
+		return ErrRGB11Inconsistent
+	}
+	for _, write := range []func() error{
+		func() error { return e.U8(key.Version) },
+		func() error { return encodeText(e, key.RequestID) },
+		func() error { return e.U32(key.ScopeIndex) },
+		func() error { return e.U32(key.Change) },
+		func() error { return e.U32(key.Index) },
+		func() error { return encodeText(e, key.LogicalAddress) },
+		func() error { return encodeBlob(e, key.WitnessScript) },
+		func() error { return encodeBlob(e, key.InternalPubKey) },
+	} {
+		if err := write(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decodeReceiveKey(d *strict.Decoder, key *ReceiveKey) error {
+	var err error
+	if key.Version, err = d.U8(); err != nil {
+		return err
+	}
+	if key.RequestID, err = decodeText(d); err != nil {
+		return err
+	}
+	if key.ScopeIndex, err = d.U32(); err != nil {
+		return err
+	}
+	if key.Change, err = d.U32(); err != nil {
+		return err
+	}
+	if key.Index, err = d.U32(); err != nil {
+		return err
+	}
+	if key.LogicalAddress, err = decodeText(d); err != nil {
+		return err
+	}
+	if key.WitnessScript, err = decodeBlob(d); err != nil {
+		return err
+	}
+	if key.InternalPubKey, err = decodeBlob(d); err != nil {
+		return err
+	}
+	if key.Version != 1 || key.RequestID == "" || key.Change != 1 ||
+		key.Index >= 1<<31 || key.LogicalAddress == "" ||
+		len(key.WitnessScript) == 0 || len(key.InternalPubKey) != 32 {
+		return ErrRGB11Inconsistent
+	}
+	return nil
 }
 
 func encodeStringList(e *strict.Encoder, values []string) error {

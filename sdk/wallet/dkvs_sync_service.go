@@ -1,11 +1,13 @@
 package wallet
 
 import (
-	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -16,49 +18,44 @@ const (
 )
 
 type dkvsDirectoryState struct {
-	Prefix  string
-	Root    string
-	Scope   string
-	Filters []dkvsindexer.Subscription
+	Prefix     string
+	Root       string
+	Generation uint64
+	Scope      string
+	Filters    []dkvsindexer.Subscription
 }
+
+var ErrDKVSPathNotSynced = errors.New("DKVS path has not completed initial synchronization")
 
 func (p *Manager) dkvsReplicaNamespace() string {
 	if p == nil || p.cfg == nil || p.cfg.IndexerL2 == nil {
 		return ""
 	}
 	indexer := p.cfg.IndexerL2
+	return p.dkvsReplicaNamespaceFor(indexer.Scheme, indexer.Host, indexer.Proxy)
+}
+
+func (p *Manager) dkvsReplicaNamespaceFor(scheme, host, proxy string) string {
+	if p == nil || p.cfg == nil {
+		return ""
+	}
 	return strings.Join([]string{
-		p.cfg.Env, p.cfg.Chain, indexer.Scheme, indexer.Host, indexer.Proxy,
+		p.cfg.Env, p.cfg.Chain, scheme, host, proxy,
 	}, ":")
 }
 
-func (p *Manager) rgb11HeadDirectories() ([]string, error) {
-	directories := make([]string, 0)
-	seen := make(map[string]struct{})
-	for _, account := range p.localRGB11Accounts() {
-		manager, err := p.newScopedRGB11Manager(account)
-		if err != nil {
-			return nil, err
-		}
-		walletID, err := manager.RGB11WalletID()
-		if err != nil {
-			return nil, err
-		}
-		key, err := dkvsindexer.PersonalKey(
-			account.Wallet.GetPubKey().SerializeCompressed(),
-			RGB11WalletHeadPath(walletID),
-		)
-		if err != nil {
-			return nil, err
-		}
-		prefix := strings.TrimSuffix(key, "/head")
-		if _, ok := seen[prefix]; ok {
-			continue
-		}
-		seen[prefix] = struct{}{}
-		directories = append(directories, prefix)
+func (p *Manager) dkvsManagedDirectories() ([]string, error) {
+	if p == nil || p.dkvs == nil {
+		return nil, nil
 	}
-	return directories, nil
+	return p.dkvs.managedPaths(), nil
+}
+
+func (p *Manager) dkvsManagedExactKeys() ([]string, error) {
+	if p == nil || p.dkvs == nil {
+		return nil, nil
+	}
+	return p.dkvs.managedExactKeys(), nil
 }
 
 func (p *Manager) flushDKVSOutbox(client *SatsNetDKVSClient, store *dkvsReplicaStore,
@@ -98,174 +95,231 @@ func (p *Manager) flushDKVSOutbox(client *SatsNetDKVSClient, store *dkvsReplicaS
 	return submitted, nil
 }
 
-func (p *Manager) syncDKVSOnce(ctx context.Context) ([]dkvsDirectoryState, error) {
-	if p == nil || p.rgbManager == nil {
+func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplicaStore,
+	prefix string) (dkvsDirectoryState, error) {
+
+	filters := []dkvsindexer.Subscription{{Type: dkvsindexer.SubscriptionPrefix, Target: prefix}}
+	scope := dkvsReplicaScope(client.replicaNamespace, filters)
+	for attempt := 0; attempt < 3; attempt++ {
+		before, err := client.GetPathMeta(prefix)
+		if err != nil {
+			return dkvsDirectoryState{}, err
+		}
+		records, root, err := client.SyncDirectoryAll(prefix,
+			dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())})
+		if err != nil {
+			return dkvsDirectoryState{}, err
+		}
+		after, err := client.GetPathMeta(prefix)
+		if err != nil {
+			return dkvsDirectoryState{}, err
+		}
+		if before.Generation != after.Generation || before.ActiveRoot != after.ActiveRoot {
+			continue
+		}
+		if err := store.applyConfirmed(scope, filters, records, root,
+			after.ActiveRoot, after.Generation); err != nil {
+			return dkvsDirectoryState{}, err
+		}
+		state := dkvsDirectoryState{
+			Prefix: prefix, Root: root, Generation: after.Generation, Scope: scope, Filters: filters,
+		}
+		p.ensureDKVSManager().markReady(state.Scope)
+		return state, nil
+	}
+	return dkvsDirectoryState{}, dkvsindexer.ErrConcurrentUpdate
+}
+
+func (p *Manager) syncedPathWritePreconditions(client *SatsNetDKVSClient,
+	keys []string) ([]dkvsindexer.PathWritePrecondition, error) {
+
+	if p == nil || p.db == nil || client == nil {
+		return nil, ErrDKVSPathNotSynced
+	}
+	paths := make(map[string]struct{})
+	for _, key := range keys {
+		path, err := dkvsindexer.CollectionPathForKey(key)
+		if err != nil {
+			if errors.Is(err, dkvsindexer.ErrInvalidKey) {
+				continue
+			}
+			return nil, err
+		}
+		paths[path] = struct{}{}
+	}
+	ordered := make([]string, 0, len(paths))
+	for path := range paths {
+		ordered = append(ordered, path)
+	}
+	sort.Strings(ordered)
+	store := newDKVSReplicaStore(p.db)
+	conditions := make([]dkvsindexer.PathWritePrecondition, 0, len(ordered))
+	for _, path := range ordered {
+		filters := []dkvsindexer.Subscription{{Type: dkvsindexer.SubscriptionPrefix, Target: path}}
+		scope := dkvsReplicaScope(client.replicaNamespace, filters)
+		baseline, err := store.loadBaseline(scope)
+		if err != nil {
+			if errors.Is(err, indexer.ErrKeyNotFound) || errors.Is(err, dkvsindexer.ErrInvalidRecord) {
+				return nil, ErrDKVSPathNotSynced
+			}
+			return nil, err
+		}
+		meta, err := client.GetPathMeta(path)
+		if err != nil {
+			return nil, err
+		}
+		if baseline.Generation != meta.Generation || baseline.ActiveRoot != meta.ActiveRoot {
+			return nil, dkvsindexer.ErrWriteConflict
+		}
+		conditions = append(conditions, dkvsindexer.PathWritePrecondition{
+			Path: path, ExpectedRoot: baseline.ActiveRoot, ExpectedGeneration: baseline.Generation,
+		})
+	}
+	return conditions, nil
+}
+
+func (p *Manager) refreshDKVSPathsAfterWrite(client *SatsNetDKVSClient, keys []string) error {
+	if p == nil || p.db == nil || client == nil {
+		return ErrDKVSPathNotSynced
+	}
+	paths := make(map[string]struct{})
+	exact := make(map[string]struct{})
+	for _, key := range keys {
+		path, err := dkvsindexer.CollectionPathForKey(key)
+		if err != nil {
+			if errors.Is(err, dkvsindexer.ErrInvalidKey) {
+				if _, parseErr := dkvsindexer.ParseKey(key); parseErr != nil {
+					return parseErr
+				}
+				exact[key] = struct{}{}
+				continue
+			}
+			return err
+		}
+		paths[path] = struct{}{}
+	}
+	ordered := make([]string, 0, len(paths))
+	for path := range paths {
+		ordered = append(ordered, path)
+	}
+	sort.Strings(ordered)
+	store := newDKVSReplicaStore(p.db)
+	for _, path := range ordered {
+		if _, err := p.syncDKVSDirectory(client, store, path); err != nil {
+			return err
+		}
+	}
+	orderedKeys := make([]string, 0, len(exact))
+	for key := range exact {
+		orderedKeys = append(orderedKeys, key)
+	}
+	sort.Strings(orderedKeys)
+	for _, key := range orderedKeys {
+		if err := p.ensureDKVSManager().syncExactKey(client, store, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Manager) syncRGB11WalletPaths(client *SatsNetDKVSClient, walletID string) error {
+	if p == nil || p.wallet == nil || p.wallet.GetPubKey() == nil || walletID == "" {
+		return ErrDKVSPathNotSynced
+	}
+	pubkey := p.wallet.GetPubKey().SerializeCompressed()
+	headKey, err := dkvsindexer.PersonalKey(pubkey, RGB11WalletHeadPath(walletID))
+	if err != nil {
+		return err
+	}
+	snapshotKey, err := dkvsindexer.BlobKey(
+		dkvsindexer.AccountID(pubkey), RGB11WalletSnapshotBlobKey(walletID))
+	if err != nil {
+		return err
+	}
+	paths := make(map[string]struct{})
+	for _, key := range []string{headKey, snapshotKey} {
+		path, err := dkvsindexer.CollectionPathForKey(key)
+		if err != nil {
+			return err
+		}
+		paths[path] = struct{}{}
+	}
+	ordered := make([]string, 0, len(paths))
+	for path := range paths {
+		ordered = append(ordered, path)
+	}
+	sort.Strings(ordered)
+	store := newDKVSReplicaStore(p.db)
+	for _, path := range ordered {
+		if _, err := p.syncDKVSDirectory(client, store, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Manager) syncDKVSOnce() ([]dkvsDirectoryState, error) {
+	if p == nil || p.dkvs == nil {
 		return nil, fmt.Errorf("wallet manager is unavailable")
 	}
-	p.dkvsSyncRun.Lock()
-	defer p.dkvsSyncRun.Unlock()
-	directories, err := p.rgb11HeadDirectories()
+	p.dkvs.runMu.Lock()
+	defer p.dkvs.runMu.Unlock()
+	directories, err := p.dkvsManagedDirectories()
 	if err != nil {
 		return nil, err
 	}
-	if len(directories) == 0 {
+	exactKeys, err := p.dkvsManagedExactKeys()
+	if err != nil {
+		return nil, err
+	}
+	if len(directories) == 0 && len(exactKeys) == 0 {
 		return nil, nil
 	}
-	client, err := p.rgbManager.rgb11DKVSClient()
+	client, err := p.dkvs.primaryClient()
 	if err != nil {
 		return nil, err
 	}
 	store := newDKVSReplicaStore(p.db)
 	states := make([]dkvsDirectoryState, 0, len(directories))
 	for _, prefix := range directories {
-		filters := []dkvsindexer.Subscription{{Type: dkvsindexer.SubscriptionPrefix, Target: prefix}}
-		scope := dkvsReplicaScope(p.dkvsReplicaNamespace(), filters)
-		pull := func() (string, error) {
-			records, root, err := client.SyncDirectoryAll(prefix,
-				dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())})
-			if err != nil {
-				return "", err
-			}
-			if err := store.applyConfirmed(scope, filters, records, root); err != nil {
-				return "", err
-			}
-			return root, nil
-		}
-		root, err := pull()
+		state, err := p.syncDKVSDirectory(client, store, prefix)
 		if err != nil {
 			return states, err
 		}
-		submitted, err := p.flushDKVSOutbox(client, store, scope)
+		submitted, err := p.flushDKVSOutbox(client, store, state.Scope)
 		if err != nil {
 			return states, err
 		}
 		if submitted {
-			root, err = pull()
+			state, err = p.syncDKVSDirectory(client, store, prefix)
 			if err != nil {
 				return states, err
 			}
 		}
-		states = append(states, dkvsDirectoryState{
-			Prefix: prefix, Root: root, Scope: scope, Filters: filters,
-		})
+		states = append(states, state)
 	}
-	result := p.SyncLocalRGB11State(ctx)
-	for _, account := range result.Accounts {
-		if account.Error != "" {
-			Log.Warningf("RGB11 DKVS sync wallet=%d account=%d: %s",
-				account.WalletID, account.AccountIndex, account.Error)
+	for _, key := range exactKeys {
+		state, err := p.dkvs.syncExactKeyState(client, store, key)
+		if err != nil {
+			return states, err
 		}
+		states = append(states, state)
 	}
-	p.dkvsSyncMu.Lock()
-	callback := p.dkvsSyncCB
-	p.dkvsSyncMu.Unlock()
-	if callback != nil {
-		callback()
+	managedStore := &dkvsStore{manager: p.dkvs, client: client}
+	if err := p.dkvs.runPendingJobs(managedStore); err != nil {
+		return states, err
 	}
+	paths := make([]string, 0, len(states))
+	for _, state := range states {
+		paths = append(paths, state.Prefix)
+	}
+	p.dkvs.notifyObservers(paths)
+	p.dkvs.notifyCallback()
 	return states, nil
 }
 
-func (p *Manager) runDKVSBackgroundSync(ctx context.Context, done chan struct{}) {
-	defer close(done)
-	for {
-		states, err := p.syncDKVSOnce(ctx)
-		if err != nil {
-			Log.Warningf("DKVS background sync failed: %v", err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(dkvsSyncRetryDelay):
-				continue
-			}
-		}
-		if len(states) == 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(dkvsSyncRetryDelay):
-				continue
-			}
-		}
-		client, err := p.rgbManager.rgb11DKVSClient()
-		if err != nil {
-			continue
-		}
-		watchSeconds := dkvsWatchTimeoutSeconds / len(states)
-		if watchSeconds < 1 {
-			watchSeconds = 1
-		}
-		watchFailed := false
-		for _, state := range states {
-			watch, watchErr := client.WatchDirectory(DKVSDirectoryWatchRequest{
-				Prefix: state.Prefix, Root: state.Root, TimeoutSeconds: watchSeconds,
-			})
-			if watchErr != nil {
-				Log.Warningf("DKVS directory watch failed: %v", watchErr)
-				watchFailed = true
-				break
-			}
-			if watch == nil || watch.Changed || watch.Root != state.Root {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-		}
-		if watchFailed {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(dkvsSyncRetryDelay):
-			}
-		}
-	}
-}
-
-// StartDKVSBackgroundSync returns immediately. Local wallet state remains
-// available while the worker reconciles the signed DKVS replica in background.
-func (p *Manager) StartDKVSBackgroundSync() {
-	if p == nil {
-		return
-	}
-	p.dkvsSyncMu.Lock()
-	if p.dkvsSyncStop != nil {
-		p.dkvsSyncMu.Unlock()
-		return
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	p.dkvsSyncStop = cancel
-	p.dkvsSyncDone = done
-	p.dkvsSyncMu.Unlock()
-	go p.runDKVSBackgroundSync(ctx, done)
-}
-
-func (p *Manager) SetDKVSBackgroundSyncCallback(callback func()) {
-	if p == nil {
-		return
-	}
-	p.dkvsSyncMu.Lock()
-	p.dkvsSyncCB = callback
-	p.dkvsSyncMu.Unlock()
-}
-
-func (p *Manager) RestartDKVSBackgroundSync() {
-	p.StopDKVSBackgroundSync()
-	p.StartDKVSBackgroundSync()
-}
-
-func (p *Manager) StopDKVSBackgroundSync() {
-	if p == nil {
-		return
-	}
-	p.dkvsSyncMu.Lock()
-	cancel := p.dkvsSyncStop
-	p.dkvsSyncStop = nil
-	p.dkvsSyncDone = nil
-	p.dkvsSyncMu.Unlock()
-	if cancel != nil {
-		cancel()
+func (p *Manager) SetDKVSUpdateCallback(callback func()) {
+	if manager := p.ensureDKVSManager(); manager != nil {
+		manager.setCallback(callback)
 	}
 }

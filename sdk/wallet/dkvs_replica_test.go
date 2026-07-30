@@ -45,7 +45,8 @@ func TestDKVSReplicaMirrorDoesNotDeleteOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := chainhash.DoubleHashH([]byte("root"))
-	if err := store.applyConfirmed(scope, []dkvsindexer.Subscription{filter}, nil, root.String()); err != nil {
+	if err := store.applyConfirmed(scope, []dkvsindexer.Subscription{filter}, nil,
+		root.String(), root, 1); err != nil {
 		t.Fatal(err)
 	}
 	outbox, err := store.loadOutbox(scope)
@@ -63,11 +64,13 @@ func TestDKVSReplicaAtomicallyReplacesConfirmed(t *testing.T) {
 	filter := dkvsindexer.Subscription{Type: dkvsindexer.SubscriptionKey, Target: first.Key}
 	scope := dkvsReplicaScope("production:testnet:node", []dkvsindexer.Subscription{filter})
 	root1 := chainhash.DoubleHashH([]byte("root-1"))
-	if err := store.applyConfirmed(scope, []dkvsindexer.Subscription{filter}, []*swire.DKVSRecord{first}, root1.String()); err != nil {
+	if err := store.applyConfirmed(scope, []dkvsindexer.Subscription{filter}, []*swire.DKVSRecord{first},
+		root1.String(), root1, 2); err != nil {
 		t.Fatal(err)
 	}
 	root2 := chainhash.DoubleHashH([]byte("root-2"))
-	if err := store.applyConfirmed(scope, []dkvsindexer.Subscription{filter}, nil, root2.String()); err != nil {
+	if err := store.applyConfirmed(scope, []dkvsindexer.Subscription{filter}, nil,
+		root2.String(), root2, 3); err != nil {
 		t.Fatal(err)
 	}
 	records, err := store.loadConfirmed(scope)

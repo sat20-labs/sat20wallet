@@ -177,6 +177,16 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 				state.TransferID != strings.TrimPrefix(record.Key, "transfer-") {
 				return ErrValidationReceipt
 			}
+		case strings.HasPrefix(record.Key, "receive-key-"):
+			var key ReceiveKey
+			hash := strings.TrimPrefix(record.Key, "receive-key-")
+			if decode(record.Value, &key) != nil || key.RequestID == "" {
+				return ErrValidationReceipt
+			}
+			actual := sha256.Sum256(key.WitnessScript)
+			if hash != hex.EncodeToString(actual[:]) {
+				return ErrValidationReceipt
+			}
 		default:
 			return ErrValidationReceipt
 		}

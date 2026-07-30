@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"strings"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
@@ -14,32 +14,32 @@ import (
 const accountRecoveryPath = "account/recovery"
 
 type AccountDKVSRepository struct {
-	client        *SatsNetDKVSClient
+	store         *dkvsStore
 	owner         common.Wallet
 	autopay       DKVSAutopayOptions
 	recordOptions dkvsindexer.RecordOptions
 	accountID     string
 }
 
-func NewAccountDKVSRepository(client *SatsNetDKVSClient, owner common.Wallet, autopay DKVSAutopayOptions, options dkvsindexer.RecordOptions) (*AccountDKVSRepository, error) {
-	if client == nil || owner == nil {
-		return nil, fmt.Errorf("DKVS client and owner wallet are required")
+func newAccountDKVSRepository(store *dkvsStore, owner common.Wallet, autopay DKVSAutopayOptions, options dkvsindexer.RecordOptions) (*AccountDKVSRepository, error) {
+	if store == nil || owner == nil {
+		return nil, fmt.Errorf("DKVS store and owner wallet are required")
 	}
 	accountID := dkvsindexer.AccountID(owner.GetPubKey().SerializeCompressed())
 	if accountID == "" {
 		return nil, fmt.Errorf("invalid account owner public key")
 	}
-	return &AccountDKVSRepository{client: client, owner: owner, autopay: autopay, recordOptions: options, accountID: accountID}, nil
+	return &AccountDKVSRepository{store: store, owner: owner, autopay: autopay, recordOptions: options, accountID: accountID}, nil
 }
 
-func NewReadOnlyAccountDKVSRepository(client *SatsNetDKVSClient, accountID string) (*AccountDKVSRepository, error) {
-	if client == nil {
-		return nil, fmt.Errorf("DKVS client is required")
+func newReadOnlyAccountDKVSRepository(store *dkvsStore, accountID string) (*AccountDKVSRepository, error) {
+	if store == nil {
+		return nil, fmt.Errorf("DKVS store is required")
 	}
 	if _, err := dkvsindexer.AccountPubKey(accountID); err != nil {
 		return nil, err
 	}
-	return &AccountDKVSRepository{client: client, accountID: accountID}, nil
+	return &AccountDKVSRepository{store: store, accountID: accountID}, nil
 }
 
 func (r *AccountDKVSRepository) AccountID() string { return r.accountID }
@@ -58,7 +58,21 @@ func (r *AccountDKVSRepository) putJSON(path string, value any) error {
 	if len(encoded) > account.MaxRecoveryObjectSize {
 		return fmt.Errorf("account recovery object exceeds DKVS value limit")
 	}
-	_, err = r.client.PutPersonalRecordWithAutopay(r.owner, path, encoded, r.recordOptions, r.autopay)
+	pubKey, err := dkvsWalletPubKey(r.owner)
+	if err != nil {
+		return err
+	}
+	key, err := dkvsindexer.PersonalKey(pubKey, path)
+	if err != nil {
+		return err
+	}
+	_, err = r.store.Put(dkvsValueMutation{
+		Key: key, Value: encoded, Owner: r.owner, Signature: dkvsSignatureAccount,
+		Policy: dkvsStoragePolicy{
+			TTL: r.recordOptions.TTL, ExpiryHeight: r.recordOptions.ExpiryHeight,
+			Autopay: &r.autopay,
+		},
+	})
 	return err
 }
 
@@ -71,7 +85,7 @@ func (r *AccountDKVSRepository) getJSON(path string, target any) error {
 	if err != nil {
 		return err
 	}
-	record, err := r.client.GetVerifiedRecord(key, dkvsindexer.RecordVerificationOptions{ExpectedKey: key})
+	record, err := r.store.Get(key)
 	if err != nil {
 		return err
 	}
@@ -164,14 +178,10 @@ type AccountWalletMetadata struct {
 func (p *Manager) ExportAccountBackup(password string, metadata map[int64]AccountWalletMetadata) (account.Backup, error) {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	ids := make([]int64, 0, len(p.walletInfoMap))
-	for id := range p.walletInfoMap {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	backup := account.Backup{Version: account.Version, Wallets: make([]account.WalletBackup, 0, len(ids))}
-	for _, id := range ids {
-		info := p.walletInfoMap[id]
+	infos := p.canonicalWalletInfosLocked()
+	backup := account.Backup{Version: account.Version, Wallets: make([]account.WalletBackup, 0, len(infos))}
+	for _, info := range infos {
+		id := info.Id
 		if info == nil || info.Type != WALLET_TYPE_MNEMONIC {
 			return account.Backup{}, fmt.Errorf("wallet %d is not a mnemonic wallet", id)
 		}
@@ -182,15 +192,24 @@ func (p *Manager) ExportAccountBackup(password string, metadata map[int64]Accoun
 		meta := metadata[id]
 		name := meta.Name
 		if name == "" {
+			name = strings.TrimSpace(info.Name)
+		}
+		if name == "" {
 			name = fmt.Sprintf("Wallet %d", len(backup.Wallets)+1)
 		}
 		subAccounts := make([]account.SubAccount, info.Accounts)
 		for index := 0; index < info.Accounts; index++ {
 			did := meta.SubAccountDIDs[uint32(index)]
 			if did == "" {
-				return account.Backup{}, fmt.Errorf("wallet %d sub-account %d is missing an Ordinals DID name", id, index)
+				did = info.AccountDIDs[uint32(index)]
 			}
-			subAccounts[index] = account.SubAccount{Index: uint32(index), DID: did}
+			accountName := info.AccountNames[uint32(index)]
+			if strings.TrimSpace(accountName) == "" {
+				accountName = defaultAccountName(uint32(index))
+			}
+			subAccounts[index] = account.SubAccount{
+				Index: uint32(index), Name: accountName, DID: did,
+			}
 		}
 		backup.Wallets = append(backup.Wallets, account.WalletBackup{Name: name, Mnemonic: mnemonic, AccountCount: uint32(info.Accounts), SubAccounts: subAccounts})
 	}
@@ -216,7 +235,14 @@ func (p *Manager) RestoreAccountBackup(value account.Backup, password string) er
 			p.mutex.Unlock()
 			return fmt.Errorf("restored wallet %d was not persisted", id)
 		}
+		info.Name = item.Name
 		info.Accounts = int(item.AccountCount)
+		info.AccountNames = make(map[uint32]string, len(item.SubAccounts))
+		info.AccountDIDs = make(map[uint32]string, len(item.SubAccounts))
+		for _, sub := range item.SubAccounts {
+			info.AccountNames[sub.Index] = sub.Name
+			info.AccountDIDs[sub.Index] = sub.DID
+		}
 		err = saveWallet(p.db, &info.WalletInDB)
 		p.mutex.Unlock()
 		if err != nil {

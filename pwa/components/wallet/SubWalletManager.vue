@@ -41,10 +41,6 @@
                   @click.stop="copyAddress(account.address)" class="hover:text-primary">
                   <Icon icon="lucide:copy" class="w-3 h-3" />
                 </Button>
-                <Button v-if="account.index !== accountIndex" variant="ghost" size="icon"
-                  class="text-destructive hover:text-destructive" @click.stop="confirmDeleteAccount(account)">
-                  <Icon icon="lucide:trash-2" class="w-3 h-3" />
-                </Button>
               </div>
             </div>
           </div>
@@ -90,35 +86,6 @@
       </DialogContent>
     </Dialog>
 
-
-    <!-- Delete Dialog -->
-    <Dialog :open="isDeleteDialogOpen" @update:open="isDeleteDialogOpen = $event">
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{{ $t('subWalletManager.deleteAccount') }}</DialogTitle>
-          <DialogDescription>
-            <hr class="mb-6 mt-1 border-t-1 border-accent">
-            {{ $t('subWalletManager.confirmDeleteAccount') }}
-          </DialogDescription>
-        </DialogHeader>
-        <div class="space-y-4">
-          <Alert variant="destructive">
-            <Icon icon="lucide:alert-triangle" class="w-4 h-4" />
-            <AlertDescription>
-              {{ $t('subWalletManager.backupRecoveryPhrase') }}
-            </AlertDescription>
-          </Alert>
-        </div>
-        <DialogFooter>
-          <Button variant="secondary" @click="isDeleteDialogOpen = false" class="h-12 mb-4">
-            {{ $t('subWalletManager.cancel') }}
-          </Button>
-          <Button variant="default" @click="deleteAccount" :disabled="isDeleting" class="h-12 mb-4">
-            {{ $t('subWalletManager.delete') }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   </LayoutSecond>
 </template>
 
@@ -129,7 +96,6 @@ import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Dialog,
   DialogContent,
@@ -159,17 +125,14 @@ const { getCurrentName } = useNameManager()
 
 // State
 const isCreateAccountDialogOpen = ref(false)
-const isDeleteDialogOpen = ref(false)
 const newAccountName = ref('')
 const isCreating = ref(false)
-const isDeleting = ref(false)
 // 扩展 WalletAccount 类型以包含 displayName
 interface WalletAccountWithDisplay extends WalletAccount {
   address: string
   displayName: string
 }
 
-const accountToDelete = ref<WalletAccountWithDisplay | null>(null)
 const accountsWithAddress = ref<WalletAccountWithDisplay[]>([])
 const isLoadingAccounts = ref(false)
 
@@ -259,41 +222,6 @@ async function createAccount() {
     })
   } finally {
     isCreating.value = false
-  }
-}
-
-function confirmDeleteAccount(account: WalletAccountWithDisplay) {
-  accountToDelete.value = account
-  isDeleteDialogOpen.value = true
-}
-
-async function deleteAccount() {
-  if (!accountToDelete.value) return
-
-  try {
-    isDeleting.value = true
-    await walletStore.deleteAccount(accountToDelete.value.index)
-
-    toast({
-      title: '成功',
-      description: '账户删除成功',
-      variant: 'success'
-    })
-    isDeleteDialogOpen.value = false
-    // 发送 accountsChanged 事件（封装函数）
-    await sendAccountsChangedEvent(accounts.value)
-    setTimeout(() => {
-      router.back()
-    }, 300)
-  } catch (error) {
-    toast({
-      title: '错误',
-      description: '账户删除失败',
-      variant: 'destructive',
-    })
-  } finally {
-    isDeleting.value = false
-    accountToDelete.value = null
   }
 }
 

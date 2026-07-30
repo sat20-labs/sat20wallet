@@ -10,6 +10,16 @@
 
       <div class="space-y-4">
         <div class="space-y-2">
+          <Label>{{ $t('rgb11Invoice.transport') }}</Label>
+          <select v-model="transportMode" class="h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm"
+            :disabled="loading">
+            <option value="rgb-json-rpc">{{ $t('rgb11Invoice.standardTransport') }}</option>
+            <option value="sat20">{{ $t('rgb11Invoice.sat20Transport') }}</option>
+          </select>
+          <p class="text-xs text-zinc-500">{{ $t(`rgb11Invoice.${transportMode === 'rgb-json-rpc' ? 'standardTransportHelp' : 'sat20TransportHelp'}`) }}</p>
+        </div>
+
+        <div class="space-y-2">
           <Label>{{ $t('rgb11Invoice.amount') }}</Label>
           <Input v-model="amount" inputmode="decimal" :placeholder="$t('rgb11Invoice.enterAmount')"
             class="h-12 bg-zinc-800" :disabled="loading" />
@@ -20,7 +30,7 @@
           <Label>{{ $t('rgb11Invoice.receiveMode') }}</Label>
           <select v-model="receiveMode" class="h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm"
             :disabled="loading">
-            <option value="witness">{{ $t('rgb11Invoice.witnessMode') }}</option>
+            <option value="witness" :disabled="transportMode === 'rgb-json-rpc'">{{ $t('rgb11Invoice.witnessMode') }}</option>
             <option value="blind">{{ $t('rgb11Invoice.blindMode') }}</option>
           </select>
           <p class="text-xs text-zinc-500">{{ $t(`rgb11Invoice.${receiveMode}ModeHelp`) }}</p>
@@ -38,7 +48,13 @@
           </Button>
         </div>
 
-        <div v-if="requestId" class="space-y-2 border-t border-zinc-800 pt-3">
+        <div v-if="requestId && transportMode === 'rgb-json-rpc'" class="space-y-2 border-t border-zinc-800 pt-3">
+          <Button variant="outline" class="w-full" :disabled="loading" @click="checkProxyTransfer">
+            {{ loading ? $t('rgb11Invoice.checkingTransfer') : $t('rgb11Invoice.checkTransfer') }}
+          </Button>
+        </div>
+
+        <div v-if="requestId && transportMode === 'sat20'" class="space-y-2 border-t border-zinc-800 pt-3">
           <Label>{{ $t('rgb11Transfer.package') }}</Label>
           <Textarea v-model="transferPackage" spellcheck="false"
             class="min-h-32 bg-zinc-900 font-mono text-xs" />
@@ -101,7 +117,8 @@ interface RGB11Asset {
 const props = defineProps<{ asset: RGB11Asset | null }>()
 const isOpen = defineModel('open', { type: Boolean })
 const amount = ref('')
-const receiveMode = ref<'blind' | 'witness'>('witness')
+const receiveMode = ref<'blind' | 'witness'>('blind')
+const transportMode = ref<'sat20' | 'rgb-json-rpc'>('rgb-json-rpc')
 const invoice = ref('')
 const requestId = ref('')
 const transferPackage = ref('')
@@ -144,6 +161,7 @@ const generateInvoice = async () => {
   errorMessage.value = ''
   const [err, result] = await walletManager.createRGB11Invoice({
     mode: receiveMode.value,
+    transport_mode: transportMode.value,
     contract_id: assetContractID.value,
     amount_raw: amountRaw,
     assignment_name: 'assetOwner',
@@ -157,6 +175,25 @@ const generateInvoice = async () => {
   }
   invoice.value = result.invoice
   requestId.value = result.request_id || result.requestId || ''
+}
+
+const checkProxyTransfer = async () => {
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    const [err, result] = await walletManager.receiveRGB11ProxyConsignment(requestId.value)
+    if (err || !result?.ack_posted) throw err || new Error(t('rgb11Invoice.receiveFailed'))
+    await walletManager.refreshRGB11State()
+    toast({
+      title: t('rgb11Invoice.received', { txid: result.txid }),
+      variant: 'success',
+      duration: 3000,
+    })
+  } catch (error: any) {
+    errorMessage.value = error?.message || t('rgb11Invoice.noTransfer')
+  } finally {
+    loading.value = false
+  }
 }
 
 const copyInvoice = async () => {
@@ -259,7 +296,8 @@ const copyAck = async () => {
 watch(isOpen, (open) => {
   if (!open) {
     amount.value = ''
-    receiveMode.value = 'witness'
+    receiveMode.value = 'blind'
+    transportMode.value = 'rgb-json-rpc'
     invoice.value = ''
     requestId.value = ''
     transferPackage.value = ''
@@ -268,5 +306,9 @@ watch(isOpen, (open) => {
     loading.value = false
     pendingAckValue.value = ''
   }
+})
+
+watch(transportMode, (mode) => {
+  if (mode === 'rgb-json-rpc') receiveMode.value = 'blind'
 })
 </script>
