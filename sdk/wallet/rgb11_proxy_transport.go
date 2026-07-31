@@ -3,6 +3,7 @@ package wallet
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	"github.com/sat20-labs/rgb11/invoicing"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
@@ -349,6 +351,50 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 		}
 		return nil, errors.New("failed to retry RGB11 proxy acknowledgment")
 	}
+	if request.Status == corewallet.ReceiveAcknowledged {
+		raw, loadErr := p.rgbManager.projectionStore.LoadObject(request.ObjectHash)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		receipt, acceptErr := p.acceptRGB11Consignment(ctx, requestID, raw, true)
+		if acceptErr != nil {
+			if !errors.Is(acceptErr, coreconsignment.ErrWitnessUnresolved) &&
+				!errors.Is(acceptErr, coreconsignment.ErrOutpointUnknown) {
+				for _, endpoint := range endpoints {
+					rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, acceptErr)
+				}
+				return nil, p.finishRGB11ProxyTerminal(requestID, raw, acceptErr)
+			}
+			for _, endpoint := range endpoints {
+				if err := rgb11ProxyPostAck(ctx, endpoint.url, recipientID, true); err == nil {
+					state, _ := p.rgbManager.projectionStore.LoadTransferState(request.TransferID)
+					var vout *uint32
+					if state != nil && len(state.OutputOutPoints) > 0 {
+						value, ok := outpointVout(state.OutputOutPoints[0])
+						if ok {
+							vout = &value
+						}
+					}
+					return &RGB11ProxyReceiveResult{
+						RequestID: requestID, Endpoint: endpoint.invoice,
+						TxID: request.WitnessTxID, Vout: vout, AckPosted: true,
+						AwaitingBroadcast: true,
+					}, nil
+				}
+			}
+			return nil, errors.New("failed to retry RGB11 proxy acknowledgment")
+		}
+		actualTxID, actualVout := rgb11ReceivedOutpoint(receipt, request)
+		for _, endpoint := range endpoints {
+			if err := rgb11ProxyPostAck(ctx, endpoint.url, recipientID, true); err == nil {
+				return &RGB11ProxyReceiveResult{
+					RequestID: requestID, Endpoint: endpoint.invoice, TxID: actualTxID,
+					Vout: actualVout, Receipt: receipt, AckPosted: true,
+				}, nil
+			}
+		}
+		return nil, errors.New("failed to retry RGB11 proxy acknowledgment")
+	}
 	var attempts []error
 	for _, endpoint := range endpoints {
 		remote, err := rgb11ProxyJSON[rgb11ProxyConsignment](
@@ -365,23 +411,44 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 		raw, err := base64.StdEncoding.DecodeString(remote.Consignment)
 		if err != nil || len(raw) == 0 || len(raw) > rgb11ProxyMaxConsignmentLen {
 			_ = rgb11ProxyPostAck(ctx, endpoint.url, recipientID, false)
-			return nil, errors.New("RGB11 proxy returned an invalid consignment")
+			validationErr := errors.New("RGB11 proxy returned an invalid consignment")
+			return nil, p.finishRGB11ProxyTerminal(requestID, raw, validationErr)
 		}
 		preflight, err := p.ValidateRGB11Consignment(ctx, raw)
 		if err != nil {
+			if errors.Is(err, coreconsignment.ErrWitnessUnresolved) ||
+				errors.Is(err, coreconsignment.ErrOutpointUnknown) {
+				receipt, preparedErr := p.prepareRGB11Consignment(
+					ctx, requestID, raw, remote.TxID, remote.Vout, true,
+				)
+				if preparedErr != nil {
+					rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, preparedErr)
+					return nil, p.finishRGB11ProxyTerminal(requestID, raw, preparedErr)
+				}
+				actualTxID, actualVout := rgb11ReceivedOutpoint(receipt, request)
+				if err := rgb11ProxyPostAck(ctx, endpoint.url, recipientID, true); err != nil {
+					return nil, err
+				}
+				return &RGB11ProxyReceiveResult{
+					RequestID: requestID, Endpoint: endpoint.invoice, TxID: actualTxID,
+					Vout: actualVout, Receipt: receipt, AckPosted: true,
+					AwaitingBroadcast: true,
+				}, nil
+			}
 			rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, err)
-			return nil, err
+			return nil, p.finishRGB11ProxyTerminal(requestID, raw, err)
 		}
-		actualTxID, actualVout := rgb11ReceivedOutpoint(preflight)
+		actualTxID, actualVout := rgb11ReceivedOutpoint(preflight, request)
 		if !validRGB11TxID(remote.TxID) || actualTxID == "" || remote.TxID != actualTxID ||
 			(remote.Vout != nil && (actualVout == nil || *remote.Vout != *actualVout)) {
 			_ = rgb11ProxyPostAck(ctx, endpoint.url, recipientID, false)
-			return nil, errors.New("RGB11 proxy metadata does not match the accepted consignment")
+			validationErr := errors.New("RGB11 proxy metadata does not match the accepted consignment")
+			return nil, p.finishRGB11ProxyTerminal(requestID, raw, validationErr)
 		}
 		receipt, err := p.acceptRGB11Consignment(ctx, requestID, raw, true)
 		if err != nil {
 			rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, err)
-			return nil, err
+			return nil, p.finishRGB11ProxyTerminal(requestID, raw, err)
 		}
 		if err := rgb11ProxyPostAck(ctx, endpoint.url, recipientID, true); err != nil {
 			return nil, err
@@ -395,6 +462,58 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 		return nil, ErrRGB11ProxyNoConsignment
 	}
 	return nil, errors.Join(attempts...)
+}
+
+func (p *rgb11Manager) finishRGB11ProxyTerminal(requestID string, raw []byte, validationErr error) error {
+	if p == nil || p.rgbManager == nil || p.rgbManager.engine == nil ||
+		p.rgbManager.projectionStore == nil {
+		return validationErr
+	}
+	var cleanupErr error
+	if err := p.releaseRGB11ReceiveReservation(requestID); err != nil {
+		cleanupErr = errors.Join(cleanupErr, err)
+	}
+	request, err := p.rgbManager.engine.LoadReceive(requestID)
+	if err != nil {
+		return errors.Join(validationErr, cleanupErr, err)
+	}
+	transferID := request.TransferID
+	if transferID == "" && len(raw) != 0 {
+		if container, decodeErr := coreconsignment.Decode(raw); decodeErr == nil && container.Armor != nil {
+			transferID = container.Armor.ID
+		}
+	}
+	objectHash := sha256.Sum256(raw)
+	if transferID != "" && len(raw) != 0 {
+		if err := p.rgbManager.engine.MarkRelayRejected(
+			requestID, transferID, hex.EncodeToString(objectHash[:]), "validation-failed",
+		); err != nil && !errors.Is(err, corewallet.ErrReceiveState) {
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+	}
+	if request.TransferID != "" {
+		if state, loadErr := p.rgbManager.projectionStore.LoadTransferState(request.TransferID); loadErr == nil {
+			state.AckStatus = "rejected"
+			state.Status = "rejected"
+			state.RejectReason = "validation-failed"
+			locked := p.utxoLockerL1.GetLockedUtxoList()
+			for _, outpoint := range state.OutputOutPoints {
+				if lock := locked[outpoint]; lock != nil && lock.Reason == rgb11wallet.LockReasonPending {
+					if err := p.utxoLockerL1.UnlockUtxo(outpoint); err != nil {
+						cleanupErr = errors.Join(cleanupErr, err)
+					}
+				}
+			}
+			if err := p.rgbManager.projectionStore.SaveTransferState(state); err != nil {
+				cleanupErr = errors.Join(cleanupErr, err)
+			}
+			if err := p.rgbManager.projectionStore.DeletePreparedReceive(request.TransferID); err != nil &&
+				!errors.Is(err, indexer.ErrKeyNotFound) {
+				cleanupErr = errors.Join(cleanupErr, err)
+			}
+		}
+	}
+	return errors.Join(validationErr, cleanupErr)
 }
 
 func rgb11ProxyPostNackIfTerminal(ctx context.Context, endpoint, recipientID string, err error) {
@@ -584,17 +703,42 @@ func rgb11ProxyInvoice(raw string) (*invoicing.Invoice, []rgb11ProxyEndpoint, er
 	return invoice, endpoints, err
 }
 
-func rgb11ReceivedOutpoint(receipt *rgb11wallet.ValidationReceipt) (string, *uint32) {
-	if receipt == nil {
+func rgb11ReceivedOutpoint(receipt *rgb11wallet.ValidationReceipt,
+	request *corewallet.ReceiveRequest) (string, *uint32) {
+	if receipt == nil || request == nil {
+		return "", nil
+	}
+	invoiceSeal, err := request.Seal.Conceal()
+	if err != nil {
 		return "", nil
 	}
 	for _, allocation := range receipt.Allocations {
-		if allocation.AssignmentType != 4000 || !allocation.WitnessTxPtr {
+		if allocation.AssignmentType != 4000 {
 			continue
 		}
-		txID, voutText, ok := strings.Cut(allocation.OutPoint, ":")
-		if !ok || !validRGB11TxID(txID) {
+		if request.Mode == corewallet.ReceiveBlind {
+			matched, err := rgb11AllocationMatchesBlindSeal(
+				allocation, request.Seal, [32]byte(invoiceSeal),
+			)
+			if err != nil || !matched {
+				continue
+			}
+		} else if !allocation.WitnessTxPtr {
 			continue
+		}
+		txID := allocation.WitnessTxID
+		allocationTxID, voutText, ok := strings.Cut(allocation.OutPoint, ":")
+		if !ok || !validRGB11TxID(allocationTxID) {
+			continue
+		}
+		if !validRGB11TxID(txID) && allocation.WitnessTxPtr {
+			txID = allocationTxID
+		}
+		if !validRGB11TxID(txID) {
+			continue
+		}
+		if !allocation.WitnessTxPtr {
+			return txID, nil
 		}
 		vout, err := strconv.ParseUint(voutText, 10, 32)
 		if err != nil {

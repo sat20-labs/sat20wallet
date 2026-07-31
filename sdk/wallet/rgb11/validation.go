@@ -37,6 +37,7 @@ type ValidatedAllocation struct {
 	CarrierInternalKey []byte            `json:"carrier_internal_key,omitempty"`
 	TapretRoot         []byte            `json:"tapret_root,omitempty"`
 	TapretProof        []byte            `json:"tapret_proof,omitempty"`
+	WitnessTxID        string            `json:"-"`
 }
 
 // ValidationReceipt binds an accepted consignment to the exact allocations
@@ -60,6 +61,17 @@ type ConsensusValidator interface {
 	ValidateConsignment(ctx context.Context, raw []byte, evidence BitcoinEvidenceProvider) (*ValidationReceipt, error)
 }
 
+type PreparedValidation struct {
+	Receipt      *ValidationReceipt
+	Outputs      map[string]*BitcoinUTXO
+	WitnessTxIDs []string
+}
+
+type PreparedConsensusValidator interface {
+	ValidatePreparedConsignment(ctx context.Context, raw []byte,
+		evidence BitcoinEvidenceProvider) (*PreparedValidation, error)
+}
+
 func ValidateWith(ctx context.Context, validator ConsensusValidator, raw []byte, evidence BitcoinEvidenceProvider) (*ValidationReceipt, error) {
 	if validator == nil || evidence == nil {
 		return nil, ErrConsensusValidatorUnavailable
@@ -78,8 +90,32 @@ func ValidateWith(ctx context.Context, validator ConsensusValidator, raw []byte,
 	return receipt, nil
 }
 
+func ValidatePreparedWith(ctx context.Context, validator PreparedConsensusValidator, raw []byte,
+	evidence BitcoinEvidenceProvider) (*PreparedValidation, error) {
+	if validator == nil || evidence == nil || len(raw) == 0 {
+		return nil, ErrConsensusValidatorUnavailable
+	}
+	prepared, err := validator.ValidatePreparedConsignment(ctx, raw, evidence)
+	if err != nil {
+		return nil, err
+	}
+	want := sha256.Sum256(raw)
+	if prepared == nil || prepared.Receipt == nil || prepared.Receipt.Status != "prepared" ||
+		len(prepared.WitnessTxIDs) != 1 {
+		return nil, ErrValidationReceipt
+	}
+	if err := prepared.Receipt.validateStatus(hex.EncodeToString(want[:]), "prepared"); err != nil {
+		return nil, err
+	}
+	return prepared, nil
+}
+
 func (r *ValidationReceipt) validate(expectedHash string) error {
-	if r == nil || r.Version != 1 || r.Status != "valid" || r.EngineBuildID == "" ||
+	return r.validateStatus(expectedHash, "valid")
+}
+
+func (r *ValidationReceipt) validateStatus(expectedHash, expectedStatus string) error {
+	if r == nil || r.Version != 1 || r.Status != expectedStatus || r.EngineBuildID == "" ||
 		r.ConsignmentHash != expectedHash || r.ContractID == "" || r.SchemaID == "" {
 		return ErrValidationReceipt
 	}

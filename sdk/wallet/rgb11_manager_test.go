@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"github.com/btcsuite/btcd/btcutil/psbt"
@@ -18,6 +19,7 @@ import (
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"math/big"
 	"testing"
+	"time"
 )
 
 func TestRejectRGB11STPAsset(t *testing.T) {
@@ -360,6 +362,22 @@ func TestRGB11StandardProxyInvoiceUsesBlindedBeneficiary(t *testing.T) {
 		utxos: make(map[string]*rgb11wallet.BitcoinUTXO),
 		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
 	}
+	script, err := AddrToPkScript(wallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const receiveOutpoint = "7171717171717171717171717171717171717171717171717171717171717171:0"
+	output := indexer.NewTxOutput(100_000)
+	output.OutPointStr = receiveOutpoint
+	output.OutValue.PkScript = append([]byte(nil), script...)
+	rpc.outputs[receiveOutpoint] = output
+	rpc.plain = []*indexerwire.TxOutputInfo{{
+		OutPoint: receiveOutpoint, Value: 100_000, PkScript: append([]byte(nil), script...),
+	}}
+	evidence.utxos[receiveOutpoint] = &rgb11wallet.BitcoinUTXO{
+		OutPoint: receiveOutpoint, Value: 100_000,
+		PkScript: append([]byte(nil), script...), Confirmations: 6,
+	}
 	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 71)
 	request, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "blind", TransportMode: RGB11ProxyTransport, AmountRaw: "2", WitnessVout: 1,
@@ -379,6 +397,34 @@ func TestRGB11StandardProxyInvoiceUsesBlindedBeneficiary(t *testing.T) {
 	}
 	if len(parsed.UnknownQuery) != 0 {
 		t.Fatalf("standard invoice leaked SAT20 query parameters: %+v", parsed.UnknownQuery)
+	}
+	if request.Seal.TxID == nil || request.Seal.Vout != 0 {
+		t.Fatalf("standard blind invoice did not reserve an absolute seal: %+v", request.Seal)
+	}
+	reservations, err := manager.rgbManager.projectionStore.ListReceiveReservations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reservations) != 1 || reservations[0].RequestID != request.RequestID ||
+		reservations[0].OutPoint != receiveOutpoint {
+		t.Fatalf("unexpected receive reservations: %+v", reservations)
+	}
+	if lock := manager.utxoLockerL1.GetLockedUtxoList()[receiveOutpoint]; lock == nil ||
+		lock.Reason != rgb11wallet.LockReasonPending {
+		t.Fatalf("standard blind receive UTXO was not reserved: %+v", lock)
+	}
+	reservations[0].Expiry = time.Now().Add(-time.Second).Unix()
+	if err := manager.rgbManager.projectionStore.SaveReceiveReservation(reservations[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if lock := manager.utxoLockerL1.GetLockedUtxoList()[receiveOutpoint]; lock != nil {
+		t.Fatalf("expired standard blind receive UTXO remains reserved: %+v", lock)
+	}
+	if _, err := manager.rgbManager.projectionStore.LoadReceiveReservation(request.RequestID); !errors.Is(err, indexer.ErrKeyNotFound) {
+		t.Fatalf("expired receive reservation remains stored: %v", err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -16,6 +17,26 @@ import (
 type nativeVectorEvidence struct {
 	raw         []byte
 	witnessTxID string
+}
+
+type nativePreparedEvidence struct {
+	nativeVectorEvidence
+}
+
+func (e nativePreparedEvidence) GetRawTx(string) ([]byte, error) {
+	return nil, errors.New("transaction is not broadcast")
+}
+
+func (e nativePreparedEvidence) GetTxStatus(string) (*BitcoinTxStatus, error) {
+	return nil, errors.New("transaction is not broadcast")
+}
+
+func (e nativePreparedEvidence) GetOutspend(string) (*BitcoinOutspend, error) {
+	return &BitcoinOutspend{}, nil
+}
+
+func (e nativePreparedEvidence) GetUTXO(outpoint string) (*BitcoinUTXO, error) {
+	return &BitcoinUTXO{OutPoint: outpoint, Confirmations: 6}, nil
 }
 
 func (e nativeVectorEvidence) GetUTXO(outpoint string) (*BitcoinUTXO, error) {
@@ -88,5 +109,28 @@ func TestNativeValidatorProducesReceiptFromOfficialTransfer(t *testing.T) {
 	}
 	if binaryReceipt.ContractID != receipt.ContractID || binaryReceipt.StateHash != receipt.StateHash {
 		t.Fatalf("strict-binary receipt mismatch: %+v", binaryReceipt)
+	}
+}
+
+func TestNativePreparedValidatorDoesNotProduceValidReceipt(t *testing.T) {
+	armored, err := os.ReadFile("../../../../rgb11/testvectors/rc11/nia-transfer.rgba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := nativePreparedEvidence{}
+	if _, err := ValidateWith(
+		context.Background(), NewNativeConsensusValidator(), armored, evidence,
+	); !errors.Is(err, coreconsignment.ErrWitnessUnresolved) {
+		t.Fatalf("normal validation accepted an unbroadcast witness: %v", err)
+	}
+	prepared, err := ValidatePreparedWith(
+		context.Background(), NewNativeConsensusValidator(), armored, evidence,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Receipt.Status != "prepared" || len(prepared.Outputs) != 1 ||
+		len(prepared.WitnessTxIDs) != 1 {
+		t.Fatalf("unexpected prepared result: %+v", prepared)
 	}
 }

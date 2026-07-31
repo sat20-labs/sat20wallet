@@ -17,11 +17,13 @@ const SENDER_MNEMONIC = process.env.SAT20_IRIS_SENDER_MNEMONIC
   || 'inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire'
 const SENDER_ADDRESS = process.env.SAT20_IRIS_SENDER_ADDRESS
   || 'tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g'
+const SENDER_WALLET_ID = process.env.SAT20_IRIS_SENDER_WALLET_ID || ''
 const CHECKPOINT_KEY = '__sat20_rgb11_iris_checkpoint'
 
 const browser = await chromium.connectOverCDP(CDP)
 const context = browser.contexts()[0] || await browser.newContext()
-const page = context.pages().find((candidate) => candidate.url().startsWith('http://localhost:5173/'))
+const pwaOrigin = new URL(PWA_URL).origin
+const page = context.pages().find((candidate) => candidate.url().startsWith(`${pwaOrigin}/`))
   || await context.newPage()
 
 page.on('console', (message) => {
@@ -35,7 +37,7 @@ await page.goto(PWA_URL, { waitUntil: 'domcontentloaded' })
 await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__), null, { timeout: 180_000 })
 
 const result = await page.evaluate(async ({
-  action, password, senderMnemonic, senderAddress, irisInvoice, issueAmount, sendAmount, returnAmount,
+  action, password, senderMnemonic, senderAddress, senderWalletId, irisInvoice, issueAmount, sendAmount, returnAmount,
   contractFileBase64, checkpointKey,
 }) => {
   const verify = window.__SAT20_PWA_VERIFY__
@@ -69,6 +71,7 @@ const result = await page.evaluate(async ({
     while (Date.now() < deadline) {
       const [error, response] = await sat20.receiveRGB11ProxyConsignment(requestID)
       if (!error) return response
+      console.error(`[RGB11 Iris] proxy receive retry: ${error.message || String(error)}`)
       if (!/consignment is not available yet|witness is unresolved|outpoint status is unknown/i.test(
         String(error.message || error),
       )) {
@@ -85,7 +88,9 @@ const result = await page.evaluate(async ({
   await walletStorage.setValue('chain', 'btc')
   await wallet.syncWalletCatalog().catch(() => [])
   const hashed = await verify.hashPassword(password)
-  let sender = wallet.wallets.find((item) => item.accounts.some((account) => account.address === senderAddress))
+  let sender = senderWalletId
+    ? wallet.wallets.find((item) => item.id === senderWalletId)
+    : wallet.wallets.find((item) => item.accounts.some((account) => account.address === senderAddress))
   if (!sender) {
     const [importError] = await wallet.importWallet(senderMnemonic, hashed)
     if (importError) throw importError
@@ -329,6 +334,7 @@ const result = await page.evaluate(async ({
   password: PASSWORD,
   senderMnemonic: SENDER_MNEMONIC,
   senderAddress: SENDER_ADDRESS,
+  senderWalletId: SENDER_WALLET_ID,
   irisInvoice: IRIS_INVOICE,
   issueAmount: ISSUE_AMOUNT,
   sendAmount: SEND_AMOUNT,

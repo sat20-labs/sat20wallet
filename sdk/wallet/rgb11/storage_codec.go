@@ -19,12 +19,13 @@ const (
 	rgb11StoreMaxBytes     = 4 * 1024 * 1024
 	rgb11StoreMaxRecords   = 16 * 1024
 
-	rgb11RecordReceipt    = uint8(1)
-	rgb11RecordOutput     = uint8(2)
-	rgb11RecordProof      = uint8(3)
-	rgb11RecordPending    = uint8(4)
-	rgb11RecordTransfer   = uint8(5)
-	rgb11RecordReceiveKey = uint8(6)
+	rgb11RecordReceipt            = uint8(1)
+	rgb11RecordOutput             = uint8(2)
+	rgb11RecordProof              = uint8(3)
+	rgb11RecordPending            = uint8(4)
+	rgb11RecordTransfer           = uint8(5)
+	rgb11RecordReceiveKey         = uint8(6)
+	rgb11RecordReceiveReservation = uint8(7)
 )
 
 func encode(value any) ([]byte, error) {
@@ -43,6 +44,10 @@ func encode(value any) ([]byte, error) {
 		kind, write = rgb11RecordTransfer, func(e *strict.Encoder) error { return encodeTransferState(e, item) }
 	case *ReceiveKey:
 		kind, write = rgb11RecordReceiveKey, func(e *strict.Encoder) error { return encodeReceiveKey(e, item) }
+	case *ReceiveReservation:
+		kind, write = rgb11RecordReceiveReservation, func(e *strict.Encoder) error {
+			return encodeReceiveReservation(e, item)
+		}
 	default:
 		return nil, fmt.Errorf("unsupported RGB11 storage record %T", value)
 	}
@@ -113,6 +118,11 @@ func decode(data []byte, target any) error {
 			return ErrRGB11Inconsistent
 		}
 		read = func(d *strict.Decoder) error { return decodeReceiveKey(d, item) }
+	case *ReceiveReservation:
+		if kind != rgb11RecordReceiveReservation {
+			return ErrRGB11Inconsistent
+		}
+		read = func(d *strict.Decoder) error { return decodeReceiveReservation(d, item) }
 	default:
 		return fmt.Errorf("unsupported RGB11 storage target %T", target)
 	}
@@ -827,6 +837,46 @@ func decodeReceiveKey(d *strict.Decoder, key *ReceiveKey) error {
 	if key.Version != 1 || key.RequestID == "" || key.Change != 1 ||
 		key.Index >= 1<<31 || key.LogicalAddress == "" ||
 		len(key.WitnessScript) == 0 || len(key.InternalPubKey) != 32 {
+		return ErrRGB11Inconsistent
+	}
+	return nil
+}
+
+func encodeReceiveReservation(e *strict.Encoder, reservation *ReceiveReservation) error {
+	if reservation == nil || reservation.Version != 1 || reservation.RequestID == "" ||
+		reservation.OutPoint == "" || reservation.Expiry <= 0 {
+		return ErrRGB11Inconsistent
+	}
+	for _, write := range []func() error{
+		func() error { return e.U8(reservation.Version) },
+		func() error { return encodeText(e, reservation.RequestID) },
+		func() error { return encodeText(e, reservation.OutPoint) },
+		func() error { return e.U64(uint64(reservation.Expiry)) },
+	} {
+		if err := write(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decodeReceiveReservation(d *strict.Decoder, reservation *ReceiveReservation) error {
+	var err error
+	if reservation.Version, err = d.U8(); err != nil || reservation.Version != 1 {
+		return ErrRGB11Inconsistent
+	}
+	if reservation.RequestID, err = decodeText(d); err != nil {
+		return err
+	}
+	if reservation.OutPoint, err = decodeText(d); err != nil {
+		return err
+	}
+	expiry, err := d.U64()
+	if err != nil || expiry > math.MaxInt64 {
+		return ErrRGB11Inconsistent
+	}
+	reservation.Expiry = int64(expiry)
+	if reservation.RequestID == "" || reservation.OutPoint == "" || reservation.Expiry <= 0 {
 		return ErrRGB11Inconsistent
 	}
 	return nil

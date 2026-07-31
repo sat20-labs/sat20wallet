@@ -199,6 +199,13 @@ type ReceiveKey struct {
 	InternalPubKey []byte `json:"internal_pubkey"`
 }
 
+type ReceiveReservation struct {
+	Version   uint8  `json:"version"`
+	RequestID string `json:"request_id"`
+	OutPoint  string `json:"outpoint"`
+	Expiry    int64  `json:"expiry"`
+}
+
 type AllocationProof struct {
 	OutPoint        string            `json:"outpoint"`
 	AssetName       indexer.AssetName `json:"asset_name"`

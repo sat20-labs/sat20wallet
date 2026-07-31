@@ -18,6 +18,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
+	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/rgb11/consensus"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	"github.com/sat20-labs/rgb11/invoicing"
@@ -372,6 +373,161 @@ func TestRGB11ProxyDeliveryBroadcastsBeforeAck(t *testing.T) {
 	}
 	if stored.State.Status != "broadcast" || stored.State.AckStatus != "accepted" {
 		t.Fatalf("ACK changed broadcast lifecycle incorrectly: %+v", stored.State)
+	}
+}
+
+func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
+	proxy := &rgb11ProxyTestServer{}
+	server := httptest.NewServer(http.HandlerFunc(proxy.serveHTTP))
+	defer server.Close()
+
+	senderWallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire",
+		"", &chaincfg.TestNet4Params,
+	)
+	recipientWallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch",
+		"", &chaincfg.TestNet4Params,
+	)
+	if senderWallet == nil || recipientWallet == nil {
+		t.Fatal("create test wallets")
+	}
+	senderScript, err := AddrToPkScript(senderWallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientScript, err := AddrToPkScript(recipientWallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sourceOutpoint = "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
+	const feeOutpoint = "8181818181818181818181818181818181818181818181818181818181818181:0"
+	const receiveOutpoint = "8282828282828282828282828282828282828282828282828282828282828282:0"
+	evidence := &rgb11FlowEvidence{
+		utxos: map[string]*rgb11wallet.BitcoinUTXO{
+			sourceOutpoint: {
+				OutPoint: sourceOutpoint, Value: 10_000,
+				PkScript: append([]byte(nil), senderScript...), Confirmations: 6,
+			},
+			feeOutpoint: {
+				OutPoint: feeOutpoint, Value: 100_000,
+				PkScript: append([]byte(nil), senderScript...), Confirmations: 6,
+			},
+			receiveOutpoint: {
+				OutPoint: receiveOutpoint, Value: 100_000,
+				PkScript: append([]byte(nil), recipientScript...), Confirmations: 6,
+			},
+		},
+		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+	}
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
+	for _, item := range []struct {
+		outpoint string
+		value    int64
+		script   []byte
+	}{
+		{sourceOutpoint, 10_000, senderScript},
+		{feeOutpoint, 100_000, senderScript},
+		{receiveOutpoint, 100_000, recipientScript},
+	} {
+		output := indexer.NewTxOutput(item.value)
+		output.OutPointStr = item.outpoint
+		output.OutValue.PkScript = append([]byte(nil), item.script...)
+		rpc.outputs[item.outpoint] = output
+		rpc.plain = append(rpc.plain, &indexerwire.TxOutputInfo{
+			OutPoint: item.outpoint, Value: item.value,
+			PkScript: append([]byte(nil), item.script...),
+		})
+	}
+	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 92)
+	recipient := newRGB11FlowManager(t, recipientWallet, rpc, evidence, 93)
+	contract, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-example.rgba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := sender.ImportRGB11Contract(context.Background(), contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "rpc://" + strings.TrimPrefix(server.URL, "http://")
+	receive, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "blind", TransportMode: RGB11ProxyTransport,
+		TransportEndpoints: []string{endpoint}, ContractID: imported.ContractID,
+		AmountRaw: "20000", Expiry: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receive.Seal.TxID == nil {
+		t.Fatal("standard blind invoice did not use an absolute receiver UTXO seal")
+	}
+	prepared, err := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
+		Invoice: receive.Invoice, FeeRate: 2, MinConfirmations: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.rgbManager.publishRGB11ProxyConsignment(
+		context.Background(), prepared.State.TransferID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	received, err := recipient.ReceiveRGB11ProxyConsignment(
+		context.Background(), receive.RequestID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !received.AckPosted || !received.AwaitingBroadcast ||
+		received.TxID != prepared.State.WitnessTxID || received.Vout != nil {
+		t.Fatalf("unexpected prepared receive result: %+v", received)
+	}
+	proofs, err := recipient.rgbManager.projectionStore.ListProofs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proofs) != 0 {
+		t.Fatalf("prepared receive projected spendable RGB state: %+v", proofs)
+	}
+	proxy.mu.Lock()
+	ack := proxy.ack
+	proxy.mu.Unlock()
+	if ack == nil || !*ack {
+		t.Fatalf("receiver did not ACK prepared consignment: %v", ack)
+	}
+
+	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence.mu.Lock()
+	evidence.rawTx[pending.State.WitnessTxID] = append([]byte(nil), pending.SignedTx...)
+	for _, outpoint := range pending.State.InputOutPoints {
+		evidence.spendingTx[outpoint] = pending.State.WitnessTxID
+	}
+	evidence.mu.Unlock()
+	received, err = recipient.ReceiveRGB11ProxyConsignment(
+		context.Background(), receive.RequestID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if received.AwaitingBroadcast || received.Receipt == nil ||
+		received.TxID != pending.State.WitnessTxID {
+		t.Fatalf("unexpected accepted receive result: %+v", received)
+	}
+	proofs, err = recipient.rgbManager.projectionStore.ListProofs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proofs) != 1 || proofs[0].OutPoint != receiveOutpoint ||
+		proofs[0].WitnessTxID != pending.State.WitnessTxID ||
+		proofs[0].Status != "valid" {
+		t.Fatalf("unexpected accepted blind allocation: %+v", proofs)
+	}
+	if lock := recipient.utxoLockerL1.GetLockedUtxoList()[receiveOutpoint]; lock == nil ||
+		lock.Reason != rgb11wallet.LockReasonPending {
+		t.Fatalf("accepted blind carrier lock=%+v", lock)
 	}
 }
 

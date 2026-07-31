@@ -203,12 +203,13 @@ type RGB11ProxyAckResult struct {
 }
 
 type RGB11ProxyReceiveResult struct {
-	RequestID string             `json:"request_id"`
-	Endpoint  string             `json:"endpoint"`
-	TxID      string             `json:"txid"`
-	Vout      *uint32            `json:"vout,omitempty"`
-	Receipt   *ValidationReceipt `json:"receipt"`
-	AckPosted bool               `json:"ack_posted"`
+	RequestID         string             `json:"request_id"`
+	Endpoint          string             `json:"endpoint"`
+	TxID              string             `json:"txid"`
+	Vout              *uint32            `json:"vout,omitempty"`
+	Receipt           *ValidationReceipt `json:"receipt"`
+	AckPosted         bool               `json:"ack_posted"`
+	AwaitingBroadcast bool               `json:"awaiting_broadcast"`
 }
 
 type RGB11RefreshResult struct {

@@ -90,6 +90,11 @@ func (s *ProjectionStore) transferKey(transferID string) ([]byte, error) {
 	return append(prefix, []byte(transferID)...), err
 }
 
+func (s *ProjectionStore) preparedReceiveKey(transferID string) ([]byte, error) {
+	prefix, err := s.scopedPrefix("prepared-receive-")
+	return append(prefix, []byte(transferID)...), err
+}
+
 func (s *ProjectionStore) receiveKeyKey(witnessScript []byte) ([]byte, error) {
 	if len(witnessScript) == 0 {
 		return nil, ErrWalletScope
@@ -100,6 +105,14 @@ func (s *ProjectionStore) receiveKeyKey(witnessScript []byte) ([]byte, error) {
 	}
 	hash := sha256.Sum256(witnessScript)
 	return append(prefix, []byte(hex.EncodeToString(hash[:]))...), nil
+}
+
+func (s *ProjectionStore) receiveReservationKey(requestID string) ([]byte, error) {
+	if requestID == "" {
+		return nil, ErrWalletScope
+	}
+	prefix, err := s.scopedPrefix("receive-reservation-")
+	return append(prefix, []byte(requestID)...), err
 }
 
 func (s *ProjectionStore) SaveReceiveKey(key *ReceiveKey) error {
@@ -135,6 +148,71 @@ func (s *ProjectionStore) LoadReceiveKey(witnessScript []byte) (*ReceiveKey, err
 		return nil, ErrRGB11Inconsistent
 	}
 	return &key, nil
+}
+
+func (s *ProjectionStore) SaveReceiveReservation(reservation *ReceiveReservation) error {
+	if s == nil || s.db == nil || reservation == nil {
+		return ErrWalletScope
+	}
+	encoded, err := encode(reservation)
+	if err != nil {
+		return err
+	}
+	key, err := s.receiveReservationKey(reservation.RequestID)
+	if err != nil {
+		return err
+	}
+	return s.db.Write(key, encoded)
+}
+
+func (s *ProjectionStore) LoadReceiveReservation(requestID string) (*ReceiveReservation, error) {
+	if s == nil || s.db == nil {
+		return nil, ErrWalletScope
+	}
+	key, err := s.receiveReservationKey(requestID)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := s.db.Read(key)
+	if err != nil {
+		return nil, err
+	}
+	var reservation ReceiveReservation
+	if err := decode(encoded, &reservation); err != nil ||
+		reservation.RequestID != requestID {
+		return nil, ErrRGB11Inconsistent
+	}
+	return &reservation, nil
+}
+
+func (s *ProjectionStore) DeleteReceiveReservation(requestID string) error {
+	key, err := s.receiveReservationKey(requestID)
+	if err != nil {
+		return err
+	}
+	return s.db.Delete(key)
+}
+
+func (s *ProjectionStore) ListReceiveReservations() ([]*ReceiveReservation, error) {
+	prefix, err := s.scopedPrefix("receive-reservation-")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*ReceiveReservation, 0)
+	err = s.db.BatchRead(prefix, false, func(_, value []byte) error {
+		var reservation ReceiveReservation
+		if err := decode(value, &reservation); err != nil {
+			return err
+		}
+		copy := reservation
+		result = append(result, &copy)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].RequestID < result[j].RequestID })
+	return result, nil
 }
 
 // LocalMetadata is deliberately outside the portable snapshot prefix. It is
@@ -247,6 +325,65 @@ func (s *ProjectionStore) LoadObject(consignmentHash string) ([]byte, error) {
 	}
 	value, err := s.db.Read(key)
 	return append([]byte(nil), value...), err
+}
+
+// SavePreparedObject retains a pre-broadcast consignment without creating a
+// valid receipt. Projection remains impossible until normal validation stores
+// the receipt.
+func (s *ProjectionStore) SavePreparedObject(consignmentHash string, raw []byte) error {
+	decoded, err := hex.DecodeString(consignmentHash)
+	if err != nil || len(decoded) != sha256.Size || len(raw) == 0 {
+		return ErrValidationReceipt
+	}
+	actual := sha256.Sum256(raw)
+	if !bytes.Equal(decoded, actual[:]) {
+		return ErrValidationReceipt
+	}
+	key, err := s.objectKey(consignmentHash)
+	if err != nil {
+		return err
+	}
+	return s.db.Write(key, append([]byte(nil), raw...))
+}
+
+func (s *ProjectionStore) SavePreparedReceive(transferID, requestID string) error {
+	if transferID == "" {
+		return ErrValidationReceipt
+	}
+	decoded, err := hex.DecodeString(requestID)
+	if err != nil || len(decoded) != sha256.Size {
+		return ErrValidationReceipt
+	}
+	key, err := s.preparedReceiveKey(transferID)
+	if err != nil {
+		return err
+	}
+	return s.db.Write(key, []byte(requestID))
+}
+
+func (s *ProjectionStore) LoadPreparedReceive(transferID string) (string, error) {
+	key, err := s.preparedReceiveKey(transferID)
+	if err != nil {
+		return "", err
+	}
+	raw, err := s.db.Read(key)
+	if err != nil {
+		return "", err
+	}
+	requestID := string(raw)
+	decoded, err := hex.DecodeString(requestID)
+	if err != nil || len(decoded) != sha256.Size {
+		return "", ErrValidationReceipt
+	}
+	return requestID, nil
+}
+
+func (s *ProjectionStore) DeletePreparedReceive(transferID string) error {
+	key, err := s.preparedReceiveKey(transferID)
+	if err != nil {
+		return err
+	}
+	return s.db.Delete(key)
 }
 
 // DiscardValidatedObject removes a consignment and its immutable validation
