@@ -18,8 +18,7 @@ type accountDKVSConfigResp struct {
 	Data *dkvsindexer.ClientConfig `json:"data,omitempty"`
 }
 
-// GetConfig reads the FREE_LOCAL cache policy of the connected node.
-func (p *SatsNetDKVSClient) GetConfig() (*AccountFreeLocalPolicy, error) {
+func (p *SatsNetDKVSClient) GetClientConfigV1() (*dkvsindexer.ClientConfig, error) {
 	var resp accountDKVSConfigResp
 	if err := p.getPathJSON("/v3/dkvs/config", &resp); err != nil {
 		return nil, err
@@ -27,7 +26,17 @@ func (p *SatsNetDKVSClient) GetConfig() (*AccountFreeLocalPolicy, error) {
 	if resp.Data == nil {
 		return nil, ErrDKVSRecordNotFound
 	}
-	policy := resp.Data.FreeLocal
+	copyConfig := *resp.Data
+	return &copyConfig, nil
+}
+
+// GetConfig reads the FREE_LOCAL cache policy of the connected node.
+func (p *SatsNetDKVSClient) GetConfig() (*AccountFreeLocalPolicy, error) {
+	config, err := p.GetClientConfigV1()
+	if err != nil {
+		return nil, err
+	}
+	policy := config.FreeLocal
 	return &AccountFreeLocalPolicy{
 		Enabled:             policy.Enabled,
 		MaxTTL:              policy.MaxTTL,

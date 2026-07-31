@@ -15,6 +15,10 @@ type Manager struct {
 	now        func() time.Time
 }
 
+type recoveryPackagePublisher interface {
+	SaveRecoveryPackage(context.Context, RecoveryPackage) error
+}
+
 func NewManager(repository Repository) *Manager {
 	return &Manager{repository: repository, random: rand.Reader, now: time.Now}
 }
@@ -152,6 +156,9 @@ func (m *Manager) Publish(ctx context.Context, value RecoveryPackage) error {
 	}
 	if err := ValidateRecoveryPackage(value); err != nil {
 		return err
+	}
+	if publisher, ok := m.repository.(recoveryPackagePublisher); ok {
+		return publisher.SaveRecoveryPackage(ctx, value)
 	}
 	if err := m.repository.SaveEnvelope(ctx, value.Envelope); err != nil {
 		return err

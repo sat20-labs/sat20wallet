@@ -75,8 +75,8 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 		AddressParams: &chaincfg.TestNetParams,
 		PoolContract:  contractA.MustEncode(),
 	}
-	if _, err := clientA.PutSignedRecordWithAutopay(actorA.Wallet, nameKey, []byte("owner-a"),
-		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 1000}, autopayA); err != nil {
+	if _, err := clientA.PutSignedRecordWithAutopayV1(actorA.Wallet, nameKey, []byte("owner-a"),
+		dkvsindexer.RecordOptions{Seq: 1}, autopayA); err != nil {
 		t.Fatal(err)
 	}
 	requireDKVSValue(t, f.Network.Core, nameKey, []byte("owner-a"))
@@ -94,8 +94,8 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 		AddressParams: &chaincfg.TestNetParams,
 		PoolContract:  contractA.MustEncode(),
 	}
-	if _, err := clientB.PutSignedRecordWithAutopay(actorB.Wallet, nameKey, []byte("owner-b"),
-		dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 1000}, autopayB); err != nil {
+	if _, err := clientB.PutSignedRecordWithAutopayV1(actorB.Wallet, nameKey, []byte("owner-b"),
+		dkvsindexer.RecordOptions{Seq: 2}, autopayB); err != nil {
 		t.Fatal(err)
 	}
 	requireDKVSValue(t, f.Network.Bootstrap, nameKey, []byte("owner-b"))
@@ -107,17 +107,17 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 	require.NoError(t, err)
 	mailKey, err := dkvsindexer.MailMsgKey(mailboxID, senderID, "e2e-message")
 	require.NoError(t, err)
-	if _, err := clientA.SendSignedMailboxMessageWithAutopay(
+	if _, err := clientA.SendSignedMailboxMessageWithAutopayV1(
 		actorA.Wallet, mailboxID, "e2e-message", []byte("sender-paid-message"),
-		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 1000}, autopayA,
+		dkvsindexer.RecordOptions{Seq: 1}, autopayA,
 	); err != nil {
 		t.Fatal(err)
 	}
 	requireDKVSValue(t, f.Network.Core, mailKey, []byte("sender-paid-message"))
 	requireDKVSValue(t, f.Network.Miner, mailKey, []byte("sender-paid-message"))
-	if _, err := clientB.DeleteMessage(
+	if _, err := clientB.DeleteMessageV1(
 		actorB.Wallet, mailboxID, senderID, "e2e-message",
-		dkvsindexer.RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 1000},
+		dkvsindexer.RecordOptions{Seq: 2},
 	); err != nil {
 		t.Fatal(err)
 	}

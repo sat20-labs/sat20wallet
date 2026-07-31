@@ -22,6 +22,7 @@ type DKVSCASMutationRequest struct {
 type DKVSBatchCASRequest struct {
 	Mutations         []DKVSCASMutationRequest      `json:"mutations"`
 	PathPreconditions []DKVSPathPreconditionRequest `json:"path_preconditions,omitempty"`
+	EndpointID        string                        `json:"endpoint_id,omitempty"`
 }
 
 type DKVSPathPreconditionRequest struct {
@@ -123,42 +124,15 @@ func (p *SatsNetDKVSClient) PutRecordBatchCAS(mutations []dkvsindexer.CASMutatio
 func (p *SatsNetDKVSClient) PutRecordBatchCASWithPaths(mutations []dkvsindexer.CASMutation,
 	pathConditions []dkvsindexer.PathWritePrecondition) (*DKVSBatchCASResult, error) {
 
-	if len(mutations) == 0 {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	req := DKVSBatchCASRequest{Mutations: make([]DKVSCASMutationRequest, 0, len(mutations))}
-	for _, mutation := range mutations {
-		encoded, err := casMutationRequest(mutation)
-		if err != nil {
-			return nil, err
-		}
-		req.Mutations = append(req.Mutations, encoded)
-	}
-	for _, condition := range pathConditions {
-		req.PathPreconditions = append(req.PathPreconditions, DKVSPathPreconditionRequest{
-			Path: condition.Path, ExpectedRoot: condition.ExpectedRoot.String(),
-			ExpectedGeneration: condition.ExpectedGeneration,
-		})
-	}
-	var resp dkvsBatchCASResp
-	if err := p.postJSON("/v3/dkvs/records/batch-cas", req, &resp); err != nil {
+	result, err := p.putRecordBatchCASV1Raw(mutations, pathConditions, "")
+	if err != nil {
 		return nil, err
 	}
-	if resp.Data == nil || (resp.Data.Applied != 0 && resp.Data.Applied != len(mutations)) ||
-		len(resp.Data.Records) != len(mutations) || len(resp.Data.Hashes) != len(mutations) {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	for n, mutation := range mutations {
-		want := dkvsindexer.RecordHash(mutation.Record)
-		if resp.Data.Records[n] == nil || dkvsindexer.RecordHash(resp.Data.Records[n]) != want {
-			return nil, dkvsindexer.ErrInvalidRecord
-		}
-		got, err := chainhash.NewHashFromStr(strings.TrimSpace(resp.Data.Hashes[n]))
-		if err != nil || *got != want {
-			return nil, dkvsindexer.ErrInvalidRecord
-		}
-	}
-	return resp.Data, nil
+	return &DKVSBatchCASResult{
+		Applied: result.Applied,
+		Records: result.Records,
+		Hashes:  result.Hashes,
+	}, nil
 }
 
 func (p *SatsNetDKVSClient) SyncDirectory(req DKVSDirectorySyncRequest) (*DKVSSyncPage, error) {

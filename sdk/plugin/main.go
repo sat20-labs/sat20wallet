@@ -12,7 +12,6 @@ import (
 var _mgr *wallet.Manager
 
 func InitWalletMgr(dbPath string) error {
-
 	if _mgr != nil {
 		return nil
 	}
@@ -34,7 +33,6 @@ func InitWalletMgr(dbPath string) error {
 	}
 	wallet.InitLog(lcfg)
 
-	///////
 	db := wallet.NewKVDB(lcfg.DB + "/db/stp/" + lcfg.Chain)
 	if db == nil {
 		wallet.Log.Errorf("NewKVDB %s failed", lcfg.DB)
@@ -47,33 +45,26 @@ func InitWalletMgr(dbPath string) error {
 	}
 	_mgr = mgr
 
-	// 需要提前把钱包解锁，节点需要计算通道地址
 	if lcfg.Wallet.PSFile != "" {
-		pw, err := wallet.LoadPassword(lcfg.DB + "/" + lcfg.Wallet.PSFile)
-		if err == nil {
-			_, err = _mgr.UnlockWallet(pw)
-			if err != nil {
-				wallet.Log.Warnf("UnlockWallet failed, %v", err)
+		pw, loadErr := wallet.LoadPassword(lcfg.DB + "/" + lcfg.Wallet.PSFile)
+		if loadErr == nil {
+			_, unlockErr := _mgr.UnlockWallet(pw)
+			if unlockErr != nil {
+				wallet.Log.Warnf("UnlockWallet failed, %v", unlockErr)
 			}
-		} else {
-			// 检查是否有初始化的助记词
-			if lcfg.Wallet.Mnemonic != "" && lcfg.Wallet.Password != "" {
-				wallet.Log.Info("initiate wallet by configuration wallet")
-				_, err = _mgr.ImportWallet(lcfg.Wallet.Mnemonic, lcfg.Wallet.Password)
-				if err != nil {
-					wallet.Log.Errorf("ImportWallet failed, %v", err)
-				}
+		} else if lcfg.Wallet.Mnemonic != "" && lcfg.Wallet.Password != "" {
+			wallet.Log.Info("initiate wallet by configuration wallet")
+			if _, importErr := _mgr.ImportWallet(lcfg.Wallet.Mnemonic, lcfg.Wallet.Password); importErr != nil {
+				wallet.Log.Errorf("ImportWallet failed, %v", importErr)
 			}
 		}
 	}
 	if _mgr.GetWallet() == nil && lcfg.Wallet.Mnemonic != "" && lcfg.Wallet.Password != "" {
 		wallet.Log.Info("initiate wallet by configuration wallet")
-		_, err = _mgr.ImportWallet(lcfg.Wallet.Mnemonic, lcfg.Wallet.Password)
-		if err != nil {
-			wallet.Log.Errorf("ImportWallet failed, %v", err)
+		if _, importErr := _mgr.ImportWallet(lcfg.Wallet.Mnemonic, lcfg.Wallet.Password); importErr != nil {
+			wallet.Log.Errorf("ImportWallet failed, %v", importErr)
 		}
 	}
-
 	return nil
 }
 
@@ -86,12 +77,10 @@ func firstEnv(names ...string) string {
 	return ""
 }
 
-// 在钱包创建或者解锁后调用
 func StartWalletMgr() error {
 	if _mgr == nil {
 		return fmt.Errorf("STPManager not init")
 	}
-
 	_mgr.Start()
 	return nil
 }
@@ -107,42 +96,30 @@ func SignMsg(msg []byte) ([]byte, error) {
 	if _mgr == nil {
 		return nil, fmt.Errorf("STPManager not init")
 	}
-	wallet := _mgr.GetWallet()
-	if wallet == nil {
+	w := _mgr.GetWallet()
+	if w == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked/connected")
 	}
-	sig, err := wallet.SignMessage(msg)
-	if err != nil {
-		return nil, err
-	}
-
-	return sig, nil
+	return w.SignMessage(msg)
 }
 
 func SignPsbt_SatsNet(packet *spsbt.Packet) error {
 	if _mgr == nil {
 		return fmt.Errorf("STPManager not init")
 	}
-	wallet := _mgr.GetWallet()
-	if wallet == nil {
+	w := _mgr.GetWallet()
+	if w == nil {
 		return fmt.Errorf("wallet is not created/unlocked/connected")
 	}
-	return wallet.SignPsbt_SatsNet(packet)
+	return w.SignPsbt_SatsNet(packet)
 }
 
 func IsWalletExisting() bool {
-	if _mgr == nil {
-		return false
-	}
-	return _mgr.IsWalletExist()
+	return _mgr != nil && _mgr.IsWalletExist()
 }
 
 func IsUnlocked() bool {
-	if _mgr == nil {
-		return false
-	}
-	wallet := _mgr.GetWallet()
-	return wallet != nil
+	return _mgr != nil && _mgr.GetWallet() != nil
 }
 
 func UnlockWallet(pw string) error {
@@ -157,8 +134,8 @@ func CreateWallet(pw string) (string, error) {
 	if _mgr == nil {
 		return "", fmt.Errorf("STPManager not init")
 	}
-	_, mn, err := _mgr.CreateWallet(pw)
-	return mn, err
+	_, mnemonic, err := _mgr.CreateWallet(pw)
+	return mnemonic, err
 }
 
 func ImportWallet(mn, pw string) error {
@@ -173,11 +150,13 @@ func GetPubKey() ([]byte, error) {
 	if _mgr == nil {
 		return nil, fmt.Errorf("STPManager not init")
 	}
-	wallet := _mgr.GetWallet()
-	if wallet == nil {
+	w := _mgr.GetWallet()
+	if w == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked/connected")
 	}
-	pubKey := wallet.GetPaymentPubKey()
-
-	return pubKey.SerializeCompressed(), nil
+	return w.GetPaymentPubKey().SerializeCompressed(), nil
 }
+
+// main is intentionally empty. This package is primarily built as a plugin,
+// but go build ./... must still be able to compile it as a main package.
+func main() {}
