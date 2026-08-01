@@ -1552,7 +1552,7 @@ func TestRGB11InactiveAutopayRemainsManualFirst(t *testing.T) {
 	}
 }
 
-func TestRGB11AutopayLookupFailureDoesNotEnableBackup(t *testing.T) {
+func TestRGB11AutopayLookupFailureFallsBackToTemporaryBackup(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -1569,17 +1569,18 @@ func TestRGB11AutopayLookupFailureDoesNotEnableBackup(t *testing.T) {
 	activation, err := manager.ActivateRGB11WalletState(dkvsindexer.RecordVerificationOptions{
 		Now: uint64(time.Now().UnixMilli()),
 	})
-	if err == nil || activation != nil {
-		t.Fatalf("AUTOPAY lookup failure activation=%+v err=%v", activation, err)
+	if err != nil || activation == nil || !activation.AutoBackup || activation.Found {
+		t.Fatalf("temporary fallback activation=%+v err=%v", activation, err)
 	}
-	if policy := manager.rgbManager.rgb11AutoBackupPolicy(); policy != nil {
-		t.Fatalf("AUTOPAY lookup failure enabled automatic backup: %+v", policy)
+	policy := manager.rgbManager.rgb11AutoBackupPolicy()
+	if policy == nil || !policy.Enabled || policy.TTL == 0 || policy.ExpiryHeight != 0 {
+		t.Fatalf("temporary fallback policy=%+v", policy)
 	}
 	remote.mu.Lock()
 	recordCount := len(remote.records)
 	remote.mu.Unlock()
 	if recordCount != 0 {
-		t.Fatalf("AUTOPAY lookup failure wrote %d DKVS records", recordCount)
+		t.Fatalf("empty RGB11 state wrote %d DKVS records", recordCount)
 	}
 }
 

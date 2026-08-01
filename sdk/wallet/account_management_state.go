@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ const (
 	accountMutationAddWallet     = "add-wallet"
 	accountMutationDeleteWallet  = "delete-wallet"
 	accountMutationEnsureAccount = "ensure-account"
+	accountMutationWalletName    = "wallet-name"
 	accountMutationMetadata      = "metadata"
 )
 
@@ -407,6 +409,81 @@ func accountPendingFingerprints(values []accountManagementMutation) map[string]s
 	return result
 }
 
+func accountPendingInventoryFingerprints(values []accountManagementMutation) map[string]struct{} {
+	result := make(map[string]struct{})
+	for _, value := range values {
+		if value.Fingerprint != "" &&
+			(value.Type == accountMutationAddWallet || value.Type == accountMutationDeleteWallet) {
+			result[value.Fingerprint] = struct{}{}
+		}
+	}
+	return result
+}
+
+func (p *Manager) replayPendingManagedMutationsLocked() error {
+	if p.accountProfile == nil || len(p.accountProfile.Pending) == 0 {
+		return nil
+	}
+	changed := make(map[int64]*WalletInfo)
+	deleted := make(map[string]struct{})
+	for _, mutation := range p.accountProfile.Pending {
+		if mutation.Type == accountMutationDeleteWallet {
+			deleted[mutation.Fingerprint] = struct{}{}
+		}
+	}
+	for _, mutation := range p.accountProfile.Pending {
+		if mutation.Type == accountMutationAddWallet || mutation.Type == accountMutationDeleteWallet {
+			continue
+		}
+		if _, deletedLater := deleted[mutation.Fingerprint]; deletedLater {
+			continue
+		}
+		info := p.walletInfoByFingerprintLocked(mutation.Fingerprint)
+		if info == nil {
+			return fmt.Errorf("managed wallet %s is unavailable", mutation.Fingerprint)
+		}
+		switch mutation.Type {
+		case accountMutationWalletName:
+			name := strings.TrimSpace(mutation.Name)
+			if name == "" {
+				return fmt.Errorf("wallet name is required")
+			}
+			info.Name = name
+		case accountMutationEnsureAccount:
+			normalizeWalletInfoMetadata(info, 0)
+			if info.Accounts <= int(mutation.Account) {
+				info.Accounts = int(mutation.Account) + 1
+			}
+			name := strings.TrimSpace(mutation.Name)
+			if name == "" {
+				name = defaultAccountName(mutation.Account)
+			}
+			info.AccountNames[mutation.Account] = name
+			info.AccountDIDs[mutation.Account] = strings.TrimSpace(mutation.DID)
+		case accountMutationMetadata:
+			if int(mutation.Account) >= info.Accounts {
+				return fmt.Errorf("account index %d is not enabled", mutation.Account)
+			}
+			normalizeWalletInfoMetadata(info, 0)
+			name := strings.TrimSpace(mutation.Name)
+			if name == "" {
+				name = defaultAccountName(mutation.Account)
+			}
+			info.AccountNames[mutation.Account] = name
+			info.AccountDIDs[mutation.Account] = strings.TrimSpace(mutation.DID)
+		default:
+			return fmt.Errorf("unsupported account management mutation %q", mutation.Type)
+		}
+		changed[info.Id] = info
+	}
+	for _, info := range changed {
+		if err := saveWallet(p.db, &info.WalletInDB); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func findManagedWallet(state *account.ManagedState, fingerprint string) *account.ManagedWallet {
 	if state == nil {
 		return nil
@@ -589,7 +666,11 @@ func (p *Manager) applyPendingManagedStateLocked(state *account.ManagedState) er
 	return nil
 }
 
-func (p *Manager) SyncAccountManagementState(_ context.Context) error {
+func (p *Manager) SyncAccountManagementState(ctx context.Context) error {
+	return p.syncAccountManagementState(ctx, 0)
+}
+
+func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int) error {
 	p.mutex.RLock()
 	if p.accountProfile == nil || len(p.accountSecret) != 32 || p.accountPassword == "" {
 		p.mutex.RUnlock()
@@ -611,6 +692,12 @@ func (p *Manager) SyncAccountManagementState(_ context.Context) error {
 	}
 	store, err := p.accountDKVSStore()
 	if err != nil {
+		return err
+	}
+	// An explicit account-management sync is a user-visible convergence
+	// operation. Refresh the selected path before reading the local replica so
+	// another device's latest committed revision is observed immediately.
+	if err := store.Refresh(key); err != nil {
 		return err
 	}
 	var (
@@ -652,8 +739,12 @@ func (p *Manager) SyncAccountManagementState(_ context.Context) error {
 			p.mutex.Unlock()
 			return nil, nil
 		}
-		pendingFingerprints := accountPendingFingerprints(p.accountProfile.Pending)
-		if err := p.applyRemoteManagedStateLocked(state, pendingFingerprints); err != nil {
+		inventoryPending := accountPendingInventoryFingerprints(p.accountProfile.Pending)
+		if err := p.applyRemoteManagedStateLocked(state, inventoryPending); err != nil {
+			p.mutex.Unlock()
+			return nil, err
+		}
+		if err := p.replayPendingManagedMutationsLocked(); err != nil {
 			p.mutex.Unlock()
 			return nil, err
 		}
@@ -686,6 +777,15 @@ func (p *Manager) SyncAccountManagementState(_ context.Context) error {
 		return []dkvsValueMutation{mutation}, nil
 	})
 	if err != nil {
+		if attempt < 2 && (errors.Is(err, dkvsindexer.ErrWriteConflict) ||
+			errors.Is(err, dkvsindexer.ErrStaleGeneration) ||
+			errors.Is(err, dkvsindexer.ErrPathDiverged) ||
+			errors.Is(err, dkvsindexer.ErrInvalidSequence)) {
+			if refreshErr := store.Refresh(key); refreshErr != nil {
+				return refreshErr
+			}
+			return p.syncAccountManagementState(ctx, attempt+1)
+		}
 		return err
 	}
 	if len(finalEnvelope) == 0 || finalSeq == 0 {

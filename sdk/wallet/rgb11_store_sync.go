@@ -46,25 +46,25 @@ func decodeRGB11StoredHead(value *dkvsValue, walletID string) (*coresync.WalletH
 }
 
 func (p *rgb11Manager) rgb11StorePolicy(store *dkvsStore) (dkvsStoragePolicy, error) {
-	paid, err := p.hasActiveRGB11Autopay()
-	if err != nil {
-		return dkvsStoragePolicy{}, err
-	}
-	if paid {
+	paid, autopayErr := p.hasActiveRGB11Autopay()
+	if autopayErr == nil && paid {
 		p.setRGB11BackupRetention("autopay", 0)
 		return dkvsStoragePolicy{Autopay: &DKVSAutopayOptions{
 			AddressParams: GetChainParam_SatsNet(),
 		}}, nil
 	}
-	config, err := store.Config()
-	if err != nil {
-		return dkvsStoragePolicy{}, err
+	config, configErr := store.Config()
+	if configErr == nil && config != nil && config.Enabled && config.MaxTTL != 0 {
+		p.setRGB11BackupRetention("temporary", config.MaxTTL)
+		return dkvsStoragePolicy{TTL: config.MaxTTL, FreeLocal: true}, nil
 	}
-	if config == nil || !config.Enabled || config.MaxTTL == 0 {
-		return dkvsStoragePolicy{}, dkvsindexer.ErrFreeLocalDisabled
+	if autopayErr != nil {
+		return dkvsStoragePolicy{}, autopayErr
 	}
-	p.setRGB11BackupRetention("temporary", config.MaxTTL)
-	return dkvsStoragePolicy{TTL: config.MaxTTL, FreeLocal: true}, nil
+	if configErr != nil {
+		return dkvsStoragePolicy{}, configErr
+	}
+	return dkvsStoragePolicy{}, dkvsindexer.ErrFreeLocalDisabled
 }
 
 // loadSynchronizedRGB11State waits for dkvsManager's current-session baseline
@@ -82,7 +82,7 @@ func (p *rgb11Manager) loadSynchronizedRGB11State() error {
 		return err
 	}
 	if err := store.WaitReady(headKey, snapshotKey); err != nil {
-		return err
+		return fmt.Errorf("prepare RGB11 DKVS replica: %w", err)
 	}
 	if _, err := store.Get(headKey); errors.Is(err, ErrDKVSRecordNotFound) {
 		snapshot, _, exportErr := p.exportRGB11WalletSnapshot(walletID)
@@ -91,13 +91,13 @@ func (p *rgb11Manager) loadSynchronizedRGB11State() error {
 		}
 		if rgb11SnapshotHasState(snapshot) {
 			if _, persistErr := p.persistRGB11StateToStore(store); persistErr != nil {
-				return persistErr
+				return fmt.Errorf("persist initial RGB11 state: %w", persistErr)
 			}
 			return p.enableRGB11AutoBackupFromStore(store)
 		}
 		policy, policyErr := p.rgb11StorePolicy(store)
 		if policyErr != nil {
-			return policyErr
+			return fmt.Errorf("select RGB11 DKVS storage policy: %w", policyErr)
 		}
 		if err := p.enableRGB11AutoBackup(dkvsindexer.RecordOptions{
 			TTL: policy.TTL, ExpiryHeight: policy.ExpiryHeight,
@@ -107,7 +107,7 @@ func (p *rgb11Manager) loadSynchronizedRGB11State() error {
 		p.setRGB11DKVSStatus("synced")
 		return nil
 	} else if err != nil {
-		return err
+		return fmt.Errorf("read RGB11 DKVS head: %w", err)
 	}
 	if err := p.reconcileRGB11StateFromStore(store); err != nil {
 		return err

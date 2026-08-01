@@ -176,7 +176,7 @@ func (p *Manager) UpdateWalletName(id int64, name string) error {
 		return err
 	}
 	return p.queueAccountMutationLocked(accountManagementMutation{
-		Type: accountMutationMetadata, Fingerprint: walletFingerprint(info.Wallet),
+		Type: accountMutationWalletName, Fingerprint: walletFingerprint(info.Wallet),
 		WalletID: id, Name: name,
 	})
 }

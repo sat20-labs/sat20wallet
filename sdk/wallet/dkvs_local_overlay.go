@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -62,7 +63,7 @@ func (p *SatsNetDKVSClient) loadEndpointLocalOverlay(path string,
 					ExpectedKey: record.Key,
 					Now:         serverTimeMS,
 				}); err != nil {
-				return nil, "", err
+				return nil, "", fmt.Errorf("verify endpoint-local DKVS record path=%s key=%s: %w", path, record.Key, err)
 			}
 			local = append(local, record)
 		}
