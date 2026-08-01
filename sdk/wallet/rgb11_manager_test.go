@@ -276,7 +276,7 @@ func TestRGB11CarrierBindingUsesActiveBIP86DerivationIndex(t *testing.T) {
 	}
 }
 
-func TestRGB11WitnessInvoicesUseIndependentReceiveKeys(t *testing.T) {
+func TestRGB11WitnessInvoicesUseCurrentAccountKey(t *testing.T) {
 	wallet := NewInternalWalletWithMnemonic(
 		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
 	)
@@ -296,31 +296,34 @@ func TestRGB11WitnessInvoicesUseIndependentReceiveKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	second, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
-		Mode: "witness", AmountRaw: "1", WitnessVout: 1,
+		Mode: "witness", AmountRaw: "2", WitnessVout: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Equal(first.WitnessScript, second.WitnessScript) {
-		t.Fatal("consecutive RGB11 witness invoices reused the same recipient script")
+	if first.RequestID == second.RequestID {
+		t.Fatal("consecutive RGB11 witness invoices reused one request id")
 	}
 	activeScript, err := AddrToPkScript(wallet.GetAddress(), &chaincfg.TestNet4Params)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, request := range []*corewallet.ReceiveRequest{first, second} {
-		if bytes.Equal(request.WitnessScript, activeScript) {
-			t.Fatal("RGB11 witness invoice exposed the active account address")
+		if !bytes.Equal(request.WitnessScript, activeScript) {
+			t.Fatalf("RGB11 witness invoice script=%x expected=%x", request.WitnessScript, activeScript)
 		}
-		key, err := manager.rgbManager.projectionStore.LoadReceiveKey(request.WitnessScript)
+		invoice, err := invoicing.Parse(request.Invoice)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if key.RequestID != request.RequestID || key.ScopeIndex != wallet.GetSubAccount() ||
-			key.Change != 1 || key.Index >= rgb11InternalReceiveIndexFlag ||
-			key.LogicalAddress != wallet.GetAddress() {
-			t.Fatalf("unexpected persisted RGB11 receive key: %+v", key)
+		invoiceScript, err := invoice.Beneficiary.WitnessScript()
+		if err != nil || !bytes.Equal(invoiceScript, activeScript) {
+			t.Fatalf("RGB11 invoice beneficiary script=%x expected=%x err=%v", invoiceScript, activeScript, err)
 		}
+	}
+	if _, err := manager.rgbManager.projectionStore.LoadReceiveKey(activeScript);
+		!errors.Is(err, indexer.ErrKeyNotFound) {
+		t.Fatalf("fixed-address witness invoice persisted receive-key state: %v", err)
 	}
 	projection, err := manager.rgbManager.projectionStore.ExportSnapshot()
 	if err != nil {
@@ -341,11 +344,12 @@ func TestRGB11WitnessInvoicesUseIndependentReceiveKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, request := range []*corewallet.ReceiveRequest{first, second} {
-		if _, err := restored.rgbManager.engine.LoadReceive(request.RequestID); err != nil {
+		stored, err := restored.rgbManager.engine.LoadReceive(request.RequestID)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := restored.rgbManager.projectionStore.LoadReceiveKey(request.WitnessScript); err != nil {
-			t.Fatal(err)
+		if !bytes.Equal(stored.WitnessScript, activeScript) {
+			t.Fatalf("restored witness script=%x expected=%x", stored.WitnessScript, activeScript)
 		}
 	}
 }

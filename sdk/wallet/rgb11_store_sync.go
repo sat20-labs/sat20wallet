@@ -217,7 +217,10 @@ func (p *rgb11Manager) persistRGB11StateToStore(store *dkvsStore) (*coresync.Wal
 		}, nil
 	})
 	if err != nil {
-		if errors.Is(err, dkvsindexer.ErrWriteConflict) {
+		if errors.Is(err, dkvsindexer.ErrWriteConflict) ||
+			errors.Is(err, dkvsindexer.ErrInvalidSequence) ||
+			errors.Is(err, dkvsindexer.ErrStaleGeneration) ||
+			errors.Is(err, dkvsindexer.ErrPathDiverged) {
 			p.setRGB11DKVSStatus("conflict")
 			return nil, coresync.ErrHeadConflict
 		}

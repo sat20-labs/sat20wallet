@@ -40,6 +40,18 @@ func newDKVSReplicaStore(db indexer.KVDB) *dkvsReplicaStore {
 
 func dkvsReplicaScope(namespace string, filters []dkvsindexer.Subscription) string {
 	normalized := append([]dkvsindexer.Subscription(nil), filters...)
+	for index := range normalized {
+		normalized[index].Target = strings.TrimSpace(normalized[index].Target)
+		// A PathLocalOnly canonical path is also its exact key. Normalize a
+		// prefix registration to the exact-key scope so readiness, confirmed
+		// reads and watches all address the same endpoint-local replica.
+		if normalized[index].Type == dkvsindexer.SubscriptionPrefix {
+			if mode, err := dkvsindexer.PathModeForKey(normalized[index].Target); err == nil &&
+				mode == dkvsindexer.PathLocalOnly {
+				normalized[index].Type = dkvsindexer.SubscriptionKey
+			}
+		}
+	}
 	sort.Slice(normalized, func(i, j int) bool {
 		if normalized[i].Type == normalized[j].Type {
 			return normalized[i].Target < normalized[j].Target
@@ -52,7 +64,7 @@ func dkvsReplicaScope(namespace string, filters []dkvsindexer.Subscription) stri
 		builder.WriteByte(0)
 		builder.WriteString(string(filter.Type))
 		builder.WriteByte(':')
-		builder.WriteString(strings.TrimSpace(filter.Target))
+		builder.WriteString(filter.Target)
 	}
 	hash := sha256.Sum256([]byte(builder.String()))
 	return hex.EncodeToString(hash[:])
@@ -194,7 +206,14 @@ func (s *dkvsReplicaStore) applyConfirmed(scope string, filters []dkvsindexer.Su
 	return batch.Flush()
 }
 
+// queueOutbox retains only pre-v1 migration records. Native v1 writes are
+// persisted as an exact batch in dkvsBatchOutboxEntry, including all CAS/path
+// preconditions and endpoint identity. Storing them here as well would create a
+// second retry state machine and can replay an already superseded generation.
 func (s *dkvsReplicaStore) queueOutbox(scope string, record *swire.DKVSRecord) error {
+	if record != nil && (record.PathGeneration != 0 || dkvsWalletRecordIsFreeLocal(record)) {
+		return nil
+	}
 	if s == nil || s.db == nil || scope == "" {
 		return fmt.Errorf("DKVS replica store is unavailable")
 	}

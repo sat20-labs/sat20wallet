@@ -590,6 +590,16 @@ func (p *rgb11Manager) rgb11CarrierBindingForRequest(allocation rgb11wallet.Vali
 	if request == nil || len(request.WitnessScript) == 0 {
 		return p.rgb11CarrierBinding(allocation, utxo)
 	}
+	walletScript, err := AddrToPkScript(p.wallet.GetAddress(), GetChainParam())
+	if err != nil {
+		return nil, err
+	}
+	// Fixed-address witness invoices do not need a persisted ReceiveKey.
+	// Older independently derived invoices continue through the compatibility
+	// branch below and retain their change=1 signing path.
+	if bytes.Equal(request.WitnessScript, walletScript) {
+		return p.rgb11CarrierBinding(allocation, utxo)
+	}
 	key, err := p.rgbManager.projectionStore.LoadReceiveKey(request.WitnessScript)
 	if err != nil {
 		return nil, err
@@ -618,7 +628,17 @@ func (p *rgb11Manager) rgb11CarrierBindingWithReceiveKey(allocation rgb11wallet.
 			!bytes.Equal(receiveKey.WitnessScript, utxo.PkScript) {
 			return nil, ErrRGB11InvoiceMismatch
 		}
-		derivationIndex = rgb11InternalReceiveIndexFlag | receiveKey.Index
+		switch receiveKey.Change {
+		case 0:
+			if receiveKey.Index != p.wallet.GetSubAccount() {
+				return nil, ErrRGB11InvoiceMismatch
+			}
+			derivationIndex = receiveKey.Index
+		case 1:
+			derivationIndex = rgb11InternalReceiveIndexFlag | receiveKey.Index
+		default:
+			return nil, ErrRGB11InvoiceMismatch
+		}
 		internalPubKey = append([]byte(nil), receiveKey.InternalPubKey...)
 	}
 	if logicalAddress == "" {
@@ -1484,13 +1504,20 @@ func (p *rgb11Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewal
 	var blindSeal *seals.GraphBlindSeal
 	var reservedOutpoint string
 	if mode == corewallet.ReceiveWitness {
-		receiveKey, err = p.newRGB11ReceiveKey()
+		logicalAddress := p.wallet.GetAddress()
+		if logicalAddress == "" {
+			return nil, ErrRGB11WalletLocked
+		}
+		witnessScript, err = AddrToPkScript(logicalAddress, GetChainParam())
 		if err != nil {
 			return nil, err
 		}
-		witnessScript = append([]byte(nil), receiveKey.WitnessScript...)
+		compressed := pubkey.SerializeCompressed()
+		if len(compressed) != 33 {
+			return nil, ErrRGB11WalletLocked
+		}
 		var xonly [32]byte
-		copy(xonly[:], receiveKey.InternalPubKey)
+		copy(xonly[:], compressed[1:])
 		internalXOnly = &xonly
 	} else if mode == corewallet.ReceiveBlind && standardOnly {
 		blindSeal, reservedOutpoint, err = p.newRGB11BlindReceiveSeal()

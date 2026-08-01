@@ -119,7 +119,7 @@ func (p *Manager) flushDKVSOutbox(client *SatsNetDKVSClient, store *dkvsReplicaS
 
 func pathReplicaScope(client *SatsNetDKVSClient, path string) string {
 	return dkvsReplicaScope(client.replicaNamespace, []dkvsindexer.Subscription{{
-		Type: dkvsindexer.SubscriptionPrefix,
+		Type:   dkvsindexer.SubscriptionPrefix,
 		Target: path,
 	}})
 }
@@ -129,6 +129,12 @@ func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplic
 	path = strings.TrimSuffix(strings.TrimSpace(path), "/")
 	if _, err := dkvsindexer.ParsePrefix(path); err != nil {
 		return dkvsDirectoryState{}, err
+	}
+	// PathLocalOnly has no network-comparable PathMeta or PathSnapshot. Its
+	// canonical path is also its exact key, so route it through exact-key sync.
+	if mode, err := dkvsindexer.PathModeForKey(path); err == nil &&
+		mode == dkvsindexer.PathLocalOnly {
+		return p.ensureDKVSManager().syncExactKeyState(client, store, path)
 	}
 	filters := []dkvsindexer.Subscription{{Type: dkvsindexer.SubscriptionPrefix, Target: path}}
 	scope := dkvsReplicaScope(client.replicaNamespace, filters)
@@ -143,6 +149,10 @@ func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplic
 		}
 		if remote.PathMeta.Generation == baseline.Generation &&
 			remote.PathMeta.StateRoot == baseline.ActiveRoot {
+			if err := p.syncDKVSEndpointLocalOverlay(client, store, path, scope,
+				remote.ServerTimeMS); err != nil {
+				return dkvsDirectoryState{}, err
+			}
 			state := dkvsDirectoryState{
 				Prefix: path, Root: remote.PathMeta.StateRoot.String(),
 				Generation: remote.PathMeta.Generation, ViewHeight: remote.PathMeta.ViewHeight,
@@ -167,6 +177,10 @@ func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplic
 		return dkvsDirectoryState{}, dkvsindexer.ErrStaleEndpoint
 	}
 	if err := store.applyPathSnapshot(scope, snapshot); err != nil {
+		return dkvsDirectoryState{}, err
+	}
+	if err := p.syncDKVSEndpointLocalOverlay(client, store, path, scope,
+		snapshot.ServerTimeMS); err != nil {
 		return dkvsDirectoryState{}, err
 	}
 	state := dkvsDirectoryState{
@@ -255,6 +269,14 @@ func (p *Manager) refreshDKVSPathsAfterWrite(client *SatsNetDKVSClient, keys []s
 				continue
 			}
 			return err
+		}
+		mode, modeErr := dkvsindexer.PathModeForKey(key)
+		if modeErr != nil {
+			return modeErr
+		}
+		if mode == dkvsindexer.PathLocalOnly {
+			exact[key] = struct{}{}
+			continue
 		}
 		paths[path] = struct{}{}
 	}

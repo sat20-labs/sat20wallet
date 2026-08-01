@@ -1,3 +1,5 @@
+//go:build live_testnet
+
 package wallet
 
 import (

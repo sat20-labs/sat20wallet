@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -63,6 +64,12 @@ func (r *AccountDKVSRepository) SaveRecoveryPackage(_ context.Context,
 			},
 		})
 	}
+	// PathGeneration is assigned by canonical key order. Preserve that order
+	// in the RPC batch and in the resulting P2P notifications so remote nodes
+	// observe a contiguous generation stream without a transient gap.
+	sort.Slice(mutations, func(i, j int) bool {
+		return mutations[i].Key < mutations[j].Key
+	})
 	values, err := r.store.PutBatch(mutations)
 	if err != nil {
 		return err

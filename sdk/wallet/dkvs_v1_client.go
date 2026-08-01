@@ -78,9 +78,15 @@ func (p *SatsNetDKVSClient) getDKVSV1(path string, query map[string]string, out 
 	if p == nil || p.RESTClient == nil || p.Http == nil {
 		return fmt.Errorf("DKVS client is unavailable")
 	}
-	url := p.GetUrl(path)
-	url.Query = query
-	raw, err := p.Http.SendGetRequest(url)
+	var raw []byte
+	var err error
+	if transport, ok := p.Http.(dkvsV1HTTPTransport); ok {
+		raw, err = transport.SendDKVSV1Get(path, query)
+	} else {
+		url := p.GetUrl(path)
+		url.Query = query
+		raw, err = p.Http.SendGetRequest(url)
+	}
 	if err != nil {
 		return err
 	}
@@ -95,7 +101,12 @@ func (p *SatsNetDKVSClient) postDKVSV1(path string, req interface{}, out interfa
 	if err != nil {
 		return err
 	}
-	raw, err := p.Http.SendPostRequest(p.GetUrl(path), encoded)
+	var raw []byte
+	if transport, ok := p.Http.(dkvsV1HTTPTransport); ok {
+		raw, err = transport.SendDKVSV1Post(path, encoded)
+	} else {
+		raw, err = p.Http.SendPostRequest(p.GetUrl(path), encoded)
+	}
 	if err != nil {
 		return err
 	}
@@ -103,7 +114,7 @@ func (p *SatsNetDKVSClient) postDKVSV1(path string, req interface{}, out interfa
 }
 
 type DKVSPathMetaResult struct {
-	ServerTimeMS uint64                `json:"server_time_ms"`
+	ServerTimeMS uint64                 `json:"server_time_ms"`
 	PathMeta     *dkvsindexer.PathMeta `json:"pathmeta"`
 }
 
@@ -165,8 +176,8 @@ type DKVSPathWatchRequest struct {
 }
 
 type DKVSPathWatchResult struct {
-	Changed      bool                    `json:"changed"`
-	ServerTimeMS uint64                  `json:"server_time_ms"`
+	Changed      bool                   `json:"changed"`
+	ServerTimeMS uint64                 `json:"server_time_ms"`
 	PathMeta     *dkvsindexer.PathMeta `json:"pathmeta"`
 }
 
@@ -206,7 +217,7 @@ func buildDKVSBatchCASRequest(mutations []dkvsindexer.CASMutation,
 		return DKVSBatchCASRequest{}, dkvsindexer.ErrInvalidRecord
 	}
 	req := DKVSBatchCASRequest{
-		Mutations: make([]DKVSCASMutationRequest, 0, len(mutations)),
+		Mutations:  make([]DKVSCASMutationRequest, 0, len(mutations)),
 		EndpointID: endpointID,
 	}
 	for _, mutation := range mutations {

@@ -15,9 +15,9 @@ type Userinfo struct {
 
 type URL struct {
 	Scheme string
-	User   *Userinfo // username and password information
-	Host   string    // host or host:port (see Hostname and Port methods)
-	Path   string    // path (relative paths may omit leading slash)
+	User   *Userinfo
+	Host   string
+	Path   string
 	Query  map[string]string
 }
 
@@ -30,188 +30,126 @@ type HttpClient interface {
 	SendPostRequest(url *URL, marshalledJSON []byte) ([]byte, error)
 }
 
+// HTTPResponseError preserves the response body for callers that use stable
+// machine-readable error contracts, including DKVS error_code. Error keeps the
+// historical body text so existing logs and callers remain readable.
+type HTTPResponseError struct {
+	StatusCode int
+	Body       []byte
+}
+
+func (e *HTTPResponseError) Error() string {
+	if e == nil {
+		return "HTTP request failed"
+	}
+	if len(e.Body) != 0 {
+		return string(e.Body)
+	}
+	return fmt.Sprintf("%d %s", e.StatusCode, http.StatusText(e.StatusCode))
+}
+
+func newHTTPResponseError(status int, body []byte) error {
+	return &HTTPResponseError{StatusCode: status, Body: append([]byte(nil), body...)}
+}
+
 type NetClient struct {
 	Client *http.Client
 }
 
 func (p *NetClient) SendGetRequest(u *URL) ([]byte, error) {
-
-	url := url.URL{
-		Scheme: u.Scheme,
-		Host:   u.Host,
-		Path:   u.Path,
-	}
-
+	requestURL := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}
 	if len(u.Query) != 0 {
-		q := url.Query()
+		q := requestURL.Query()
 		for k, v := range u.Query {
 			q.Set(k, v)
 		}
-		url.RawQuery = q.Encode()
+		requestURL.RawQuery = q.Encode()
 	}
-
-	httpRequest, err := http.NewRequest("GET", url.String(), nil)
+	httpRequest, err := http.NewRequest("GET", requestURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
 	httpRequest.Close = true
 	httpRequest.Header.Set("Connection", "close")
-
 	httpResponse, err := p.Client.Do(httpRequest)
 	if err != nil {
 		return nil, err
 	}
-
-	// Read the raw bytes and close the response.
 	respBytes, err := io.ReadAll(httpResponse.Body)
 	httpResponse.Body.Close()
 	if err != nil {
-		err = fmt.Errorf("error reading json reply: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("error reading json reply: %v", err)
 	}
-
-	// Handle unsuccessful HTTP responses
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
-		// Generate a standard error to return if the server body is
-		// empty.  This should not happen very often, but it's better
-		// than showing nothing in case the target server has a poor
-		// implementation.
-		if len(respBytes) == 0 {
-			return nil, fmt.Errorf("%d %s", httpResponse.StatusCode,
-				http.StatusText(httpResponse.StatusCode))
-		}
-		return nil, fmt.Errorf("%s", respBytes)
+		return nil, newHTTPResponseError(httpResponse.StatusCode, respBytes)
 	}
-
 	if len(respBytes) == 0 {
-		return nil, fmt.Errorf("server panic: %s", url.String())
+		return nil, fmt.Errorf("server panic: %s", requestURL.String())
 	}
-
-	// Unmarshal the response.
-	// var resp btcjson.Response
-	// if err := json.Unmarshal(respBytes, &resp); err != nil {
-	// 	return nil, err
-	// }
-
-	// if resp.Error != nil {
-	// 	return nil, resp.Error
-	// }
-	// return resp.Result, nil
-	Log.Tracef("%v response: %s", url, string(respBytes))
+	Log.Tracef("%v response: %s", requestURL, string(respBytes))
 	return respBytes, nil
 }
 
-// sendPostRequest sends the marshalled JSON command using HTTP-POST mode
-// to the server described in the passed config struct.  It also attempts to
-// unmarshal the response as a JSON response and returns either the result
-// field or the error field depending on whether or not there is an error.
 func (p *NetClient) SendPostRequest(u *URL, marshalledJSON []byte) ([]byte, error) {
-	url := url.URL{
-		Scheme: u.Scheme,
-		Host:   u.Host,
-		Path:   u.Path,
-	}
-
+	requestURL := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}
 	bodyReader := bytes.NewReader(marshalledJSON)
-	httpRequest, err := http.NewRequest("POST", url.String(), bodyReader)
+	httpRequest, err := http.NewRequest("POST", requestURL.String(), bodyReader)
 	if err != nil {
 		return nil, err
 	}
 	httpRequest.Close = true
 	httpRequest.Header.Set("Connection", "close")
 	httpRequest.Header.Set("Content-Type", "application/json")
-
 	httpResponse, err := p.Client.Do(httpRequest)
 	if err != nil {
 		return nil, err
 	}
-
-	// Read the raw bytes and close the response.
 	respBytes, err := io.ReadAll(httpResponse.Body)
 	httpResponse.Body.Close()
 	if err != nil {
-		err = fmt.Errorf("error reading json reply: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("error reading json reply: %v", err)
 	}
-
-	// Handle unsuccessful HTTP responses
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
-		// Generate a standard error to return if the server body is
-		// empty.  This should not happen very often, but it's better
-		// than showing nothing in case the target server has a poor
-		// implementation.
-		if len(respBytes) == 0 {
-			return nil, fmt.Errorf("%d %s", httpResponse.StatusCode,
-				http.StatusText(httpResponse.StatusCode))
-		}
-		return nil, fmt.Errorf("%s", respBytes)
+		return nil, newHTTPResponseError(httpResponse.StatusCode, respBytes)
 	}
-
 	if len(respBytes) == 0 {
-		return nil, fmt.Errorf("server panic: %s", url.String())
+		return nil, fmt.Errorf("server panic: %s", requestURL.String())
 	}
-
-	// Unmarshal the response.
-	// var resp btcjson.Response
-	// if err := json.Unmarshal(respBytes, &resp); err != nil {
-	// 	return nil, err
-	// }
-
-	// if resp.Error != nil {
-	// 	return nil, resp.Error
-	// }
-	// return resp.Result, nil
-	Log.Tracef("%v response: %s", url, string(respBytes))
+	Log.Tracef("%v response: %s", requestURL, string(respBytes))
 	return respBytes, nil
 }
 
 func (p *NetClient) SendDeleteRequest(u *URL, marshalledJSON []byte) ([]byte, error) {
-	url := url.URL{
-		Scheme: u.Scheme,
-		Host:   u.Host,
-		Path:   u.Path,
-	}
-
+	requestURL := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}
 	if len(u.Query) != 0 {
-		q := url.Query()
+		q := requestURL.Query()
 		for k, v := range u.Query {
 			q.Set(k, v)
 		}
-		url.RawQuery = q.Encode()
+		requestURL.RawQuery = q.Encode()
 	}
-
-	httpRequest, err := http.NewRequest("DELETE", url.String(), bytes.NewBuffer(marshalledJSON))
+	httpRequest, err := http.NewRequest("DELETE", requestURL.String(), bytes.NewBuffer(marshalledJSON))
 	if err != nil {
 		return nil, err
 	}
 	httpRequest.Close = true
 	httpRequest.Header.Set("Connection", "close")
 	httpRequest.Header.Set("Content-Type", "application/json")
-
 	httpResponse, err := p.Client.Do(httpRequest)
 	if err != nil {
 		return nil, err
 	}
-
 	respBytes, err := io.ReadAll(httpResponse.Body)
 	httpResponse.Body.Close()
 	if err != nil {
-		err = fmt.Errorf("error reading json reply: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("error reading json reply: %v", err)
 	}
-
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
-		if len(respBytes) == 0 {
-			return nil, fmt.Errorf("%d %s", httpResponse.StatusCode,
-				http.StatusText(httpResponse.StatusCode))
-		}
-		return nil, fmt.Errorf("%s", respBytes)
+		return nil, newHTTPResponseError(httpResponse.StatusCode, respBytes)
 	}
-
 	if len(respBytes) == 0 {
-		return nil, fmt.Errorf("server panic: %s", url.String())
+		return nil, fmt.Errorf("server panic: %s", requestURL.String())
 	}
-
-	Log.Tracef("%v response: %s", url, string(respBytes))
+	Log.Tracef("%v response: %s", requestURL, string(respBytes))
 	return respBytes, nil
 }

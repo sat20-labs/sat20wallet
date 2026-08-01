@@ -608,10 +608,6 @@ func (p *rgb11Manager) findRGB11AddressAllocation(receipt *rgb11wallet.Validatio
 	if receipt == nil || p.rgbManager == nil || p.rgbManager.evidence == nil {
 		return nil, nil, ErrRGB11AddressMailbox
 	}
-	walletScript, err := AddrToPkScript(p.wallet.GetAddress(), GetChainParam())
-	if err != nil {
-		return nil, nil, err
-	}
 	for index := range receipt.Allocations {
 		allocation := &receipt.Allocations[index]
 		if !allocation.WitnessTxPtr || allocation.AssignmentType != 4000 {
@@ -621,7 +617,7 @@ func (p *rgb11Manager) findRGB11AddressAllocation(receipt *rgb11wallet.Validatio
 		if err != nil || utxo == nil {
 			continue
 		}
-		if string(utxo.PkScript) != string(walletScript) {
+		if !rgb11AllocationControlledByWallet(p.wallet, allocation, utxo.PkScript) {
 			continue
 		}
 		txID := allocationOutpointTxID(allocation.OutPoint)
@@ -1483,7 +1479,7 @@ func (p *rgb11Manager) PublishRGB11RelayRecord(transferID, sourcePeerID string,
 	written, err := store.Put(dkvsValueMutation{
 		Key: pending.State.RelayRecordKey, Value: encoded, Owner: p.wallet,
 		Policy: dkvsStoragePolicy{
-			TTL: opts.TTL, ExpiryHeight: opts.ExpiryHeight,
+			TTL: opts.TTL, ExpiryHeight: opts.ExpiryHeight, FreeLocal: true,
 		},
 		Signature: dkvsSignatureLegacy,
 	})
@@ -1645,7 +1641,7 @@ func (p *rgb11Manager) PublishRGB11AckRecord(key string, ack *corerelay.AckRecor
 	written, err := store.Put(dkvsValueMutation{
 		Key: key, Value: encoded, Owner: p.wallet,
 		Policy: dkvsStoragePolicy{
-			TTL: opts.TTL, ExpiryHeight: opts.ExpiryHeight,
+			TTL: opts.TTL, ExpiryHeight: opts.ExpiryHeight, FreeLocal: true,
 		},
 		Signature: dkvsSignatureLegacy,
 	})

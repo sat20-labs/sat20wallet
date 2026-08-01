@@ -19,6 +19,20 @@ type accountDKVSConfigResp struct {
 }
 
 func (p *SatsNetDKVSClient) GetClientConfigV1() (*dkvsindexer.ClientConfig, error) {
+	if p == nil || p.Http == nil {
+		return nil, ErrDKVSPathNotSynced
+	}
+	if provider, ok := p.Http.(dkvsV1ConfigProvider); ok {
+		config, err := provider.DKVSClientConfigV1()
+		if err != nil {
+			return nil, err
+		}
+		if config == nil {
+			return nil, ErrDKVSRecordNotFound
+		}
+		copyConfig := *config
+		return &copyConfig, nil
+	}
 	var resp accountDKVSConfigResp
 	if err := p.getPathJSON("/v3/dkvs/config", &resp); err != nil {
 		return nil, err
