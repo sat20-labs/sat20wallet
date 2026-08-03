@@ -50,3 +50,14 @@ func TestAccountRecordCountRejectsInsufficientCapacity(t *testing.T) {
 	require.Error(t, err)
 	require.Less(t, accountRequiredRecords, accountMinimumRecordCount)
 }
+
+func TestAccountPaidStorageAuthorizationCanReuseActiveDelegate(t *testing.T) {
+	defaults := dkvsindexer.NetworkDefaultsForParams(&chaincfg.TestNetParams)
+	authorization := accountPaidStorageAuthorization(AccountIndexerLocation{
+		Scheme: "https", Host: "indexer.test", Proxy: "satsnet/testnet",
+	}, defaults, 100, "10", "10000", "", true)
+	require.Empty(t, authorization.TransactionID)
+	require.Equal(t, defaults.AutopayContract, authorization.Summary.ContractAddress)
+	require.Contains(t, authorization.Summary.Description, "复用")
+	require.Equal(t, "10", authorization.Summary.AmountPerBlock)
+}

@@ -156,6 +156,24 @@ func (p *Manager) CancelRGB11BatchByNack(transferID string, relayRecord *corerel
 	return manager.CancelRGB11BatchByNack(transferID, relayRecord, nack)
 }
 
+func (p *Manager) CancelRGB11OutOfBandTransfer(transferID string) error {
+	manager, err := p.synchronizedRGB11Manager()
+	if err != nil {
+		return err
+	}
+	return manager.CancelRGB11OutOfBandTransfer(transferID)
+}
+
+func (p *Manager) PrepareRGB11Consignment(ctx context.Context, requestID string,
+	raw []byte) (*rgb11wallet.ValidationReceipt, error) {
+
+	manager, err := p.synchronizedRGB11Manager()
+	if err != nil {
+		return nil, err
+	}
+	return manager.PrepareRGB11Consignment(ctx, requestID, raw)
+}
+
 func (p *Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewallet.ReceiveRequest, error) {
 	manager, err := p.synchronizedRGB11Manager()
 	if err != nil {

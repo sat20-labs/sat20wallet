@@ -792,12 +792,16 @@
     "sat20Transport": "SAT20 钱包传输",
     "standardTransportHelp": "通过标准 RGB JSON-RPC Proxy，在兼容钱包之间交换 Consignment 和 ACK。",
     "sat20TransportHelp": "使用 SAT20 钱包 Relay Record 和 DKVS 同步。",
+    "proxyEndpoint": "RGB JSON-RPC Proxy",
+    "proxyEndpointPlaceholder": "例如 rpcs://proxy.example.com/0.2/json-rpc",
+    "proxyEndpointHelp": "该地址会写入标准 RGB Invoice，并按当前环境和网络保存在本机。发送方将直接使用 Invoice 中的地址。",
+    "proxyEndpointRequired": "请输入第三方钱包使用的 RGB JSON-RPC Proxy 地址。",
     "amount": "金额",
     "enterAmount": "输入接收金额",
     "receiveMode": "收款方式",
     "witnessMode": "Witness 地址收款",
     "blindMode": "Blinded seal 收款",
-    "witnessModeHelp": "使用当前普通 P2TR/BIP86 子账户地址和相同 derivation index，兼容官方 witness invoice。",
+    "witnessModeHelp": "标准传输使用一次性的 change=1 P2TR 收款密钥；SAT20 钱包传输使用当前子账户地址。",
     "blindModeHelp": "使用一次性隐藏 seal，收件人隐私更强。",
     "generate": "生成 Invoice",
     "generating": "生成中...",
@@ -1103,5 +1107,12 @@
     "memo": "备注",
     "feeNote": "网络费用将从您的余额中扣除。",
     "missingData": "缺少资产转账所需的必要数据。"
+  },
+  "accountManagement": {
+    "autopayPurpose": "激活账户恢复数据的 AUTOPAY 持久存储",
+    "recordCount": "记录上限",
+    "perBlock": "每区块费用",
+    "fundingPeriod": "充值周期",
+    "fundingBlocks": "约 {count} 个区块"
   }
 }

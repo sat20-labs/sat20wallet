@@ -1070,6 +1070,12 @@ func encodePendingTransfer(e *strict.Encoder, pending *PendingTransfer) error {
 	if err := encodeTransferState(e, &pending.State); err != nil {
 		return err
 	}
+	if err := encodeText(e, pending.RecipientObjectHash); err != nil {
+		return err
+	}
+	if err := encodeText(e, pending.LocalObjectHash); err != nil {
+		return err
+	}
 	for _, value := range [][]byte{pending.RecipientConsignment, pending.LocalConsignment, pending.SignedTx, pending.SignedPSBT} {
 		if err := encodeBlob(e, value); err != nil {
 			return err
@@ -1098,6 +1104,12 @@ func decodePendingTransfer(d *strict.Decoder, pending *PendingTransfer) error {
 		return err
 	}
 	var err error
+	if pending.RecipientObjectHash, err = decodeText(d); err != nil {
+		return err
+	}
+	if pending.LocalObjectHash, err = decodeText(d); err != nil {
+		return err
+	}
 	for _, target := range []*[]byte{&pending.RecipientConsignment, &pending.LocalConsignment, &pending.SignedTx, &pending.SignedPSBT} {
 		if *target, err = decodeBlob(d); err != nil {
 			return err

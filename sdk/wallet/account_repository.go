@@ -1,8 +1,6 @@
 package wallet
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -43,56 +41,8 @@ func newReadOnlyAccountDKVSRepository(store *dkvsStore, accountID string) (*Acco
 }
 
 func (r *AccountDKVSRepository) AccountID() string { return r.accountID }
-func accountPath(packageID, name string) string {
-	return accountRecoveryPath + "/" + packageID + "/" + name
-}
-
-func (r *AccountDKVSRepository) putJSON(path string, value any) error {
-	if r.owner == nil {
-		return fmt.Errorf("read-only account repository")
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	if len(encoded) > account.MaxRecoveryObjectSize {
-		return fmt.Errorf("account recovery object exceeds DKVS value limit")
-	}
-	pubKey, err := dkvsWalletPubKey(r.owner)
-	if err != nil {
-		return err
-	}
-	key, err := dkvsindexer.PersonalKey(pubKey, path)
-	if err != nil {
-		return err
-	}
-	_, err = r.store.Put(dkvsValueMutation{
-		Key: key, Value: encoded, Owner: r.owner, Signature: dkvsSignatureAccount,
-		Policy: dkvsStoragePolicy{
-			TTL: r.recordOptions.TTL, ExpiryHeight: r.recordOptions.ExpiryHeight,
-			Autopay: &r.autopay,
-		},
-	})
-	return err
-}
-
-func (r *AccountDKVSRepository) getJSON(path string, target any) error {
-	pubKey, err := dkvsindexer.AccountPubKey(r.accountID)
-	if err != nil {
-		return err
-	}
-	key, err := dkvsindexer.PersonalKey(pubKey, path)
-	if err != nil {
-		return err
-	}
-	record, err := r.store.Get(key)
-	if err != nil {
-		return err
-	}
-	if record == nil || len(record.Value) == 0 || len(record.Value) > account.MaxRecoveryObjectSize {
-		return fmt.Errorf("invalid account recovery object")
-	}
-	return json.Unmarshal(record.Value, target)
+func accountPackagePath(packageID string) string {
+	return accountRecoveryPath + "/" + packageID
 }
 
 func (r *AccountDKVSRepository) assertLocator(locator account.Locator) error {
@@ -103,71 +53,6 @@ func (r *AccountDKVSRepository) assertLocator(locator account.Locator) error {
 		return fmt.Errorf("locator does not belong to repository account")
 	}
 	return nil
-}
-
-func (r *AccountDKVSRepository) SaveEnvelope(_ context.Context, value account.Envelope) error {
-	if err := r.assertLocator(value.Locator); err != nil {
-		return err
-	}
-	return r.putJSON(accountPath(value.Locator.PackageID, "envelope"), value)
-}
-func (r *AccountDKVSRepository) SaveDKVSShareCapsule(_ context.Context, locator account.Locator, value account.DKVSShareCapsule) error {
-	if err := r.assertLocator(locator); err != nil {
-		return err
-	}
-	return r.putJSON(accountPath(locator.PackageID, "share/dkvs"), value)
-}
-func (r *AccountDKVSRepository) SaveKnowledgeBundle(_ context.Context, locator account.Locator, value account.KnowledgeRecoveryBundle) error {
-	if err := r.assertLocator(locator); err != nil {
-		return err
-	}
-	return r.putJSON(accountPath(locator.PackageID, "questions"), value)
-}
-func (r *AccountDKVSRepository) SaveManifest(_ context.Context, value account.Manifest) error {
-	if err := r.assertLocator(value.Locator); err != nil {
-		return err
-	}
-	return r.putJSON(accountPath(value.Locator.PackageID, "manifest"), value)
-}
-func (r *AccountDKVSRepository) LoadEnvelope(_ context.Context, locator account.Locator) (*account.Envelope, error) {
-	if err := r.assertLocator(locator); err != nil {
-		return nil, err
-	}
-	var value account.Envelope
-	if err := r.getJSON(accountPath(locator.PackageID, "envelope"), &value); err != nil {
-		return nil, err
-	}
-	return &value, nil
-}
-func (r *AccountDKVSRepository) LoadDKVSShareCapsule(_ context.Context, locator account.Locator) (*account.DKVSShareCapsule, error) {
-	if err := r.assertLocator(locator); err != nil {
-		return nil, err
-	}
-	var value account.DKVSShareCapsule
-	if err := r.getJSON(accountPath(locator.PackageID, "share/dkvs"), &value); err != nil {
-		return nil, err
-	}
-	return &value, nil
-}
-func (r *AccountDKVSRepository) LoadKnowledgeBundle(_ context.Context, locator account.Locator) (*account.KnowledgeRecoveryBundle, error) {
-	if err := r.assertLocator(locator); err != nil {
-		return nil, err
-	}
-	var value account.KnowledgeRecoveryBundle
-	if err := r.getJSON(accountPath(locator.PackageID, "questions"), &value); err != nil {
-		return nil, err
-	}
-	return &value, nil
-}
-func (r *AccountDKVSRepository) LoadManifest(_ context.Context, locator account.Locator) (*account.Manifest, error) {
-	if err := r.assertLocator(locator); err != nil {
-		return nil, err
-	}
-	var value account.Manifest
-	if err := r.getJSON(accountPath(locator.PackageID, "manifest"), &value); err != nil {
-		return nil, err
-	}
-	return &value, nil
 }
 
 type AccountWalletMetadata struct {

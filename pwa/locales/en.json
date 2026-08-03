@@ -791,12 +791,16 @@
     "sat20Transport": "SAT20 Wallet transport",
     "standardTransportHelp": "Compatible wallets exchange the consignment and acknowledgment through a standard RGB JSON-RPC proxy.",
     "sat20TransportHelp": "Uses SAT20 Wallet relay records and DKVS synchronization.",
+    "proxyEndpoint": "RGB JSON-RPC Proxy",
+    "proxyEndpointPlaceholder": "For example, rpcs://proxy.example.com/0.2/json-rpc",
+    "proxyEndpointHelp": "This endpoint is embedded in the standard RGB invoice and saved locally for the current environment and network. The sender uses the endpoint from the invoice.",
+    "proxyEndpointRequired": "Enter the RGB JSON-RPC proxy used by the third-party wallet.",
     "amount": "Amount",
     "enterAmount": "Enter amount to receive",
     "receiveMode": "Receive mode",
     "witnessMode": "Witness address",
     "blindMode": "Blinded seal",
-    "witnessModeHelp": "Uses the active ordinary P2TR/BIP86 account at the same derivation index for official witness-invoice compatibility.",
+    "witnessModeHelp": "Standard transport uses a one-time change=1 P2TR receive key; SAT20 Wallet transport uses the active account address.",
     "blindModeHelp": "Uses a one-time concealed seal for stronger recipient privacy.",
     "generate": "Generate Invoice",
     "generating": "Generating...",
@@ -1102,5 +1106,12 @@
     "memo": "Memo",
     "feeNote": "Network fees will be deducted from your balance.",
     "missingData": "Missing required data for asset transfer."
+  },
+  "accountManagement": {
+    "autopayPurpose": "Enable persistent AUTOPAY storage for account recovery data",
+    "recordCount": "Record limit",
+    "perBlock": "Per-block fee",
+    "fundingPeriod": "Funding period",
+    "fundingBlocks": "About {count} blocks"
   }
 }

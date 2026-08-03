@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 
+	indexer "github.com/sat20-labs/indexer/common"
+	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	coresync "github.com/sat20-labs/rgb11/sync"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -279,18 +282,9 @@ func (p *rgb11Manager) restoreRGB11StateFromStoreLocked(store *dkvsStore) (*core
 		snapshot.EngineBuildID != rgb11wallet.NativeEngineBuildID {
 		return nil, ErrRGB11Inconsistent
 	}
-	if err := p.rgbManager.engineStore.ImportSnapshot(snapshot.EngineRecords); err != nil {
-		return nil, err
-	}
-	if err := p.rgbManager.projectionStore.ImportSnapshot(snapshot.ProjectionRecords); err != nil {
+	if err := p.importRGB11WalletSnapshot(snapshot); err != nil {
 		p.rgbManager.consistencyStatus = "broken"
 		return nil, err
-	}
-	for _, info := range snapshot.TickerInfos {
-		if err := p.RegisterRGB11TickerInfo(info); err != nil {
-			p.rgbManager.consistencyStatus = "broken"
-			return nil, err
-		}
 	}
 	if err := p.rebuildRGB11Locks(); err != nil {
 		return nil, err
@@ -309,7 +303,71 @@ func (p *rgb11Manager) restoreRGB11StateFromStoreLocked(store *dkvsStore) (*core
 
 func rgb11SnapshotHasState(snapshot *RGB11WalletSnapshot) bool {
 	return snapshot != nil && (len(snapshot.ProjectionRecords) != 0 ||
-		len(snapshot.EngineRecords) != 0 || len(snapshot.TickerInfos) != 0)
+		len(snapshot.EngineRecords) != 0)
+}
+
+func (p *rgb11Manager) importRGB11WalletSnapshot(snapshot *RGB11WalletSnapshot) error {
+	if p == nil || snapshot == nil || p.rgbManager == nil ||
+		p.rgbManager.engineStore == nil || p.rgbManager.projectionStore == nil {
+		return ErrRGB11Inconsistent
+	}
+	if err := rgb11wallet.ValidateWalletSnapshot(snapshot); err != nil {
+		return err
+	}
+	tickerInfos, err := p.tickerInfosFromRGB11Snapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	if err := p.rgbManager.engineStore.ImportSnapshot(snapshot.EngineRecords); err != nil {
+		return err
+	}
+	if err := p.rgbManager.projectionStore.ImportSnapshot(snapshot.ProjectionRecords); err != nil {
+		return err
+	}
+	for _, info := range tickerInfos {
+		if err := p.RegisterRGB11TickerInfo(info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *rgb11Manager) tickerInfosFromRGB11Snapshot(snapshot *RGB11WalletSnapshot) ([]*indexer.TickerInfo, error) {
+	if p == nil || snapshot == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	refs, err := rgb11wallet.TickerRefsFromProjectionSnapshot(snapshot.ProjectionRecords)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]*indexer.TickerInfo, 0, len(refs))
+	for _, ref := range refs {
+		name := indexer.NewAssetNameFromString(ref.AssetName)
+		if name.Protocol != rgb11wallet.Protocol || name.String() != ref.AssetName {
+			return nil, ErrRGB11Inconsistent
+		}
+		if info := p.getTickerInfo(name); info != nil {
+			var ext rgb11wallet.TickerExt
+			if json.Unmarshal(info.Content, &ext) != nil || ext.ContractID != ref.ContractID {
+				return nil, ErrRGB11Inconsistent
+			}
+			continue
+		}
+		raw, receipt, err := rgb11wallet.ContractObjectForTickerRef(snapshot.ProjectionRecords, ref)
+		if err != nil {
+			return nil, err
+		}
+		container, err := coreconsignment.Decode(raw)
+		if err != nil || container.ContractID != ref.ContractID {
+			return nil, ErrRGB11Inconsistent
+		}
+		info, err := rgb11TickerInfoFromValidatedContract(container, receipt)
+		if err != nil || info.AssetName.String() != ref.AssetName {
+			return nil, ErrRGB11Inconsistent
+		}
+		infos = append(infos, info)
+	}
+	return infos, nil
 }
 
 func (p *rgb11Manager) reconcileRGB11StateFromStore(store *dkvsStore) error {
@@ -319,6 +377,9 @@ func (p *rgb11Manager) reconcileRGB11StateFromStore(store *dkvsStore) error {
 	lock := p.backupLock()
 	lock.Lock()
 	defer lock.Unlock()
+	if err := p.reloadPersistedRGB11WalletHeadLocked(); err != nil {
+		return err
+	}
 
 	walletID, headKey, _, err := p.rgb11StateKeys()
 	if err != nil {
@@ -358,24 +419,28 @@ func (p *rgb11Manager) reconcileRGB11StateFromStore(store *dkvsStore) error {
 		_, err = p.restoreRGB11StateFromStoreLocked(store)
 		return err
 	}
-	localSeq := uint64(1)
-	if p.rgbManager.head != nil {
-		localSeq = p.rgbManager.head.Seq
-		if localHash != p.rgbManager.head.StateHash {
-			localSeq++
-		}
-	}
-	switch {
-	case localSeq > remoteHead.Seq:
-		p.setRGB11DKVSStatus("pending")
-		p.scheduleRGB11StoreWrite()
-		return nil
-	case localSeq == remoteHead.Seq:
+	localHead := p.rgbManager.head
+	if localHead == nil {
 		p.setRGB11DKVSStatus("conflict")
 		return coresync.ErrHeadConflict
 	}
-	_, err = p.restoreRGB11StateFromStoreLocked(store)
-	return err
+	localDirty := localHash != localHead.StateHash
+	if localDirty {
+		if localHead.Seq == remoteHead.Seq && localHead.StateHash == remoteHead.StateHash &&
+			localHead.OperationID == remoteHead.OperationID {
+			p.setRGB11DKVSStatus("pending")
+			p.scheduleRGB11StoreWrite()
+			return nil
+		}
+		p.setRGB11DKVSStatus("conflict")
+		return coresync.ErrHeadConflict
+	}
+	if remoteHead.Seq > localHead.Seq {
+		_, err = p.restoreRGB11StateFromStoreLocked(store)
+		return err
+	}
+	p.setRGB11DKVSStatus("conflict")
+	return coresync.ErrHeadConflict
 }
 
 func (p *rgb11Manager) scheduleRGB11StoreWrite() {
@@ -413,9 +478,14 @@ func (p *rgb11Manager) scheduleRGB11StoreWrite() {
 		Log.Warningf("create fixed RGB11 backup scope failed: %v", err)
 		return
 	}
-	scope := rgb11StorageScope(account.WalletID, account.AccountIndex)
+	_, headKey, _, err := scoped.rgb11StateKeys()
+	if err != nil {
+		p.setRGB11DKVSStatus("warning")
+		Log.Warningf("derive fixed RGB11 backup key failed: %v", err)
+		return
+	}
 	scoped.setRGB11DKVSStatus("pending")
-	p.ensureDKVSManager().schedule("rgb11:"+scope, func(store *dkvsStore) error {
+	p.ensureDKVSManager().schedule("rgb11:"+headKey, func(store *dkvsStore) error {
 		_, err := scoped.persistRGB11StateToStore(store)
 		return err
 	})

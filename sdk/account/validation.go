@@ -84,6 +84,27 @@ func NormalizeBackup(value Backup) (Backup, error) {
 	return out, nil
 }
 
+// RootBootstrapBackup keeps only the first wallet material needed to decrypt
+// and locate account/state on a new device. The managed state is authoritative
+// for the complete wallet and subaccount inventory.
+func RootBootstrapBackup(value Backup) (Backup, error) {
+	normalized, err := NormalizeBackup(value)
+	if err != nil {
+		return Backup{}, err
+	}
+	root := normalized.Wallets[0]
+	var rootAccount SubAccount
+	for _, subAccount := range root.SubAccounts {
+		if subAccount.Index == 0 {
+			rootAccount = subAccount
+			break
+		}
+	}
+	root.AccountCount = 1
+	root.SubAccounts = []SubAccount{rootAccount}
+	return Backup{Version: Version, Wallets: []WalletBackup{root}}, nil
+}
+
 func validateEncryptedBlob(value EncryptedBlob) error {
 	if value.Algorithm != "aes-256-gcm" || value.Nonce == "" || value.Ciphertext == "" {
 		return ErrInvalidRecoveryPackage

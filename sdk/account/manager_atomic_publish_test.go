@@ -7,39 +7,13 @@ import (
 
 type atomicPublishRepository struct {
 	packageWrites int
-	itemWrites    int
 }
 
 func (r *atomicPublishRepository) SaveRecoveryPackage(_ context.Context, _ RecoveryPackage) error {
 	r.packageWrites++
 	return nil
 }
-func (r *atomicPublishRepository) SaveEnvelope(context.Context, Envelope) error {
-	r.itemWrites++
-	return nil
-}
-func (r *atomicPublishRepository) SaveDKVSShareCapsule(context.Context, Locator, DKVSShareCapsule) error {
-	r.itemWrites++
-	return nil
-}
-func (r *atomicPublishRepository) SaveKnowledgeBundle(context.Context, Locator, KnowledgeRecoveryBundle) error {
-	r.itemWrites++
-	return nil
-}
-func (r *atomicPublishRepository) SaveManifest(context.Context, Manifest) error {
-	r.itemWrites++
-	return nil
-}
-func (*atomicPublishRepository) LoadEnvelope(context.Context, Locator) (*Envelope, error) {
-	return nil, ErrInvalidRecoveryPackage
-}
-func (*atomicPublishRepository) LoadDKVSShareCapsule(context.Context, Locator) (*DKVSShareCapsule, error) {
-	return nil, ErrInvalidRecoveryPackage
-}
-func (*atomicPublishRepository) LoadKnowledgeBundle(context.Context, Locator) (*KnowledgeRecoveryBundle, error) {
-	return nil, ErrInvalidRecoveryPackage
-}
-func (*atomicPublishRepository) LoadManifest(context.Context, Locator) (*Manifest, error) {
+func (*atomicPublishRepository) LoadRecoveryPackage(context.Context, Locator) (*RecoveryPackage, error) {
 	return nil, ErrInvalidRecoveryPackage
 }
 
@@ -58,7 +32,7 @@ func TestManagerPublishUsesAtomicRepositoryCapability(t *testing.T) {
 			AccountCount: 1, SubAccounts: []SubAccount{{Index: 0, DID: "did"}},
 		}}},
 		RecoveryMode: RecoveryMode2Of2,
-		Questions: questions,
+		Questions:    questions,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +40,7 @@ func TestManagerPublishUsesAtomicRepositoryCapability(t *testing.T) {
 	if err := manager.Publish(context.Background(), *value); err != nil {
 		t.Fatal(err)
 	}
-	if repository.packageWrites != 1 || repository.itemWrites != 0 {
-		t.Fatalf("packageWrites=%d itemWrites=%d", repository.packageWrites, repository.itemWrites)
+	if repository.packageWrites != 1 {
+		t.Fatalf("packageWrites=%d", repository.packageWrites)
 	}
 }

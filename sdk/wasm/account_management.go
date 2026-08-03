@@ -44,6 +44,7 @@ type accountStorageSession struct {
 type accountActivationSession struct {
 	Package          *account.RecoveryPackage
 	Secret           []byte
+	Summary          account.RecoverySummary
 	Authorization    walletsdk.AccountStorageAuthorization
 	Locator          accountLocatorPayload
 	GuardianVerified bool
@@ -384,7 +385,11 @@ func accountCreateRecovery(this js.Value, args []js.Value) any {
 				Answer:   input.Answer, Confirmation: input.Confirmation,
 			}
 		}
-		options := account.CreateOptions{AccountID: accountIDProvider.AccountID(), Backup: backup, RecoveryMode: request.RecoveryMode, Questions: questions}
+		bootstrap, err := account.RootBootstrapBackup(backup)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		options := account.CreateOptions{AccountID: accountIDProvider.AccountID(), Backup: bootstrap, RecoveryMode: request.RecoveryMode, Questions: questions}
 		if request.RecoveryMode == account.RecoveryMode2Of3 {
 			if request.Guardian == nil {
 				return nil, -1, "guardian contact is required"
@@ -434,13 +439,14 @@ func accountCreateRecovery(this js.Value, args []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		accountSessions.Lock()
-		accountSessions.activation[sessionID] = &accountActivationSession{Package: pkg, Secret: secret, Authorization: storage.Authorization,
+		summary := account.SummarizeBackup(pkg.Envelope.Locator, backup)
+		accountSessions.activation[sessionID] = &accountActivationSession{Package: pkg, Secret: secret, Summary: summary, Authorization: storage.Authorization,
 			Locator: locator, ExpiresAt: time.Now().Add(accountSessionTTL)}
 		accountSessions.Unlock()
 		published = true
 		result := map[string]any{
 			"session_id": sessionID, "locator": locatorText, "user_share": userShare,
-			"summary": account.SummarizeBackup(pkg.Envelope.Locator, backup), "storage": storage.Authorization.Summary,
+			"summary": summary, "storage": storage.Authorization.Summary,
 		}
 		if pkg.GuardianCapsule != nil && pkg.Manifest.Guardian != nil {
 			setup := accountGuardianSetupPayload{Version: account.Version, Locator: locator,
@@ -609,7 +615,7 @@ func accountRehearse(this js.Value, args []js.Value) any {
 		accountSessions.Lock()
 		delete(accountSessions.activation, request.SessionID)
 		accountSessions.Unlock()
-		data, err := accountStructData(map[string]any{"summary": account.SummarizeBackup(session.Package.Envelope.Locator, backup), "verified": true})
+		data, err := accountStructData(map[string]any{"summary": session.Summary, "verified": true})
 		if err != nil {
 			return nil, -1, err.Error()
 		}

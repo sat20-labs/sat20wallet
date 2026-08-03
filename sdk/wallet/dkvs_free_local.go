@@ -1,7 +1,6 @@
 package wallet
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
@@ -65,7 +64,7 @@ func (p *SatsNetDKVSClient) PutAccountGuardianCapsuleWithFreeLocal(owner common.
 	if owner == nil {
 		return fmt.Errorf("guardian mailbox owner wallet is required")
 	}
-	encoded, err := json.Marshal(capsule)
+	encoded, err := account.EncodeGuardianCapsuleStorage(capsule)
 	if err != nil {
 		return err
 	}

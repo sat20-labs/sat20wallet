@@ -4821,6 +4821,28 @@ func acceptRGB11Consignment(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func prepareRGB11Consignment(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "missing RGB11 request id or consignment")
+	}
+	requestID, consignment := p[0].String(), p[1].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		receipt, err := _mgr.PrepareRGB11Consignment(context.Background(), requestID, []byte(consignment))
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(receipt)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"receipt": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
 func receiveRGB11ProxyConsignment(this js.Value, p []js.Value) any {
 	if _mgr == nil || len(p) < 1 {
 		return createJsRet(nil, -1, "missing RGB11 request id")
@@ -5075,6 +5097,20 @@ func cancelRGB11BatchByNack(this js.Value, p []js.Value) any {
 	}
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		if err := _mgr.CancelRGB11BatchByNack(transferID, &record, &nack); err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"cancelled": true}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func cancelRGB11OutOfBandTransfer(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 transfer id")
+	}
+	transferID := p[0].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		if err := _mgr.CancelRGB11OutOfBandTransfer(transferID); err != nil {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{"cancelled": true}, 0, "ok"
@@ -5337,6 +5373,7 @@ func main() {
 	obj.Set("getAssetSummary", js.FuncOf(getAssetSummary))
 	obj.Set("getRGB11State", js.FuncOf(getRGB11State))
 	obj.Set("createRGB11Invoice", js.FuncOf(createRGB11Invoice))
+	obj.Set("prepareRGB11Consignment", js.FuncOf(prepareRGB11Consignment))
 	obj.Set("acceptRGB11Consignment", js.FuncOf(acceptRGB11Consignment))
 	obj.Set("receiveRGB11ProxyConsignment", js.FuncOf(receiveRGB11ProxyConsignment))
 	obj.Set("importRGB11Contract", js.FuncOf(importRGB11Contract))
@@ -5350,6 +5387,7 @@ func main() {
 	obj.Set("publishRGB11AckRecord", js.FuncOf(publishRGB11AckRecord))
 	obj.Set("fetchRGB11AckRecord", js.FuncOf(fetchRGB11AckRecord))
 	obj.Set("cancelRGB11BatchByNack", js.FuncOf(cancelRGB11BatchByNack))
+	obj.Set("cancelRGB11OutOfBandTransfer", js.FuncOf(cancelRGB11OutOfBandTransfer))
 	obj.Set("broadcastRGB11Transfer", js.FuncOf(broadcastRGB11Transfer))
 	obj.Set("broadcastRGB11Batch", js.FuncOf(broadcastRGB11Batch))
 	obj.Set("broadcastRGB11OutOfBand", js.FuncOf(broadcastRGB11OutOfBand))

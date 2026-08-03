@@ -21,16 +21,15 @@ func accountAutopayReadyFixture() (dkvsindexer.NetworkDefaults, *dkvsindexer.Aut
 		ServiceName:  defaults.AutopayServiceName,
 		Recipient:    defaults.AutopayRecipient,
 		FeeAssetName: defaults.AutopayFeeAssetName,
-		Status:       "funding",
+		Status:       "active",
 		Delegates: map[string]dkvsindexer.AutopayDelegateState{
-			"payer": {AmountPerBlock: "5", Balance: "0", LastPayHeight: 100, Status: "funding"},
+			"payer": {AmountPerBlock: "5", Balance: "5", LastPayHeight: 100, Status: "active"},
 		},
 	}
 	return defaults, state
 }
 
-// A current-block payment is authoritative even if the next block is not funded yet.
-func TestAccountAutopayStateReadyAfterCurrentBlockPayment(t *testing.T) {
+func TestAccountAutopayStateReadyMatchesPaidRetentionVerifier(t *testing.T) {
 	defaults, state := accountAutopayReadyFixture()
 	require.True(t, accountAutopayStateReady(state, defaults, "payer", "5"))
 }
@@ -45,6 +44,21 @@ func TestAccountAutopayStateRejectsStaleOrInsufficientDelegate(t *testing.T) {
 	delegate.LastPayHeight = state.CurrentBlock
 	delegate.AmountPerBlock = "4"
 	state.Delegates["payer"] = delegate
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+
+	delegate.AmountPerBlock = "5"
+	delegate.Balance = "4"
+	state.Delegates["payer"] = delegate
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+
+	delegate.Balance = "5"
+	delegate.Status = "funding"
+	state.Delegates["payer"] = delegate
+	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+
+	delegate.Status = "active"
+	state.Delegates["payer"] = delegate
+	state.Status = "funding"
 	require.False(t, accountAutopayStateReady(state, defaults, "payer", "5"))
 }
 

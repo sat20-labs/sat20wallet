@@ -171,6 +171,9 @@ func (p *Manager) UpdateWalletName(id int64, name string) error {
 	if info == nil {
 		return fmt.Errorf("can't find wallet %d", id)
 	}
+	if strings.TrimSpace(info.Name) == name {
+		return nil
+	}
 	info.Name = name
 	if err := saveWallet(p.db, &info.WalletInDB); err != nil {
 		return err
@@ -188,22 +191,30 @@ func (p *Manager) EnsureAccount(id int64, index uint32, name, did string) error 
 	if info == nil {
 		return fmt.Errorf("can't find wallet %d", id)
 	}
-	normalizeWalletInfoMetadata(info, 0)
+	changed := normalizeWalletInfoMetadata(info, 0)
 	if info.Accounts <= int(index) {
 		info.Accounts = int(index) + 1
+		changed = true
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = defaultAccountName(index)
 	}
-	info.AccountNames[index] = name
-	info.AccountDIDs[index] = strings.TrimSpace(did)
+	did = strings.TrimSpace(did)
+	if info.AccountNames[index] != name || info.AccountDIDs[index] != did {
+		info.AccountNames[index] = name
+		info.AccountDIDs[index] = did
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
 	if err := saveWallet(p.db, &info.WalletInDB); err != nil {
 		return err
 	}
 	return p.queueAccountMutationLocked(accountManagementMutation{
 		Type: accountMutationEnsureAccount, Fingerprint: walletFingerprint(info.Wallet),
-		WalletID: id, Account: index, Name: name, DID: strings.TrimSpace(did),
+		WalletID: id, Account: index, Name: name, DID: did,
 	})
 }
 
@@ -217,19 +228,26 @@ func (p *Manager) UpdateAccountMetadata(id int64, index uint32, name, did string
 	if int(index) >= info.Accounts {
 		return fmt.Errorf("account index %d is not enabled", index)
 	}
-	normalizeWalletInfoMetadata(info, 0)
+	changed := normalizeWalletInfoMetadata(info, 0)
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = defaultAccountName(index)
 	}
-	info.AccountNames[index] = name
-	info.AccountDIDs[index] = strings.TrimSpace(did)
+	did = strings.TrimSpace(did)
+	if info.AccountNames[index] != name || info.AccountDIDs[index] != did {
+		info.AccountNames[index] = name
+		info.AccountDIDs[index] = did
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
 	if err := saveWallet(p.db, &info.WalletInDB); err != nil {
 		return err
 	}
 	return p.queueAccountMutationLocked(accountManagementMutation{
 		Type: accountMutationMetadata, Fingerprint: walletFingerprint(info.Wallet),
-		WalletID: id, Account: index, Name: name, DID: strings.TrimSpace(did),
+		WalletID: id, Account: index, Name: name, DID: did,
 	})
 }
 

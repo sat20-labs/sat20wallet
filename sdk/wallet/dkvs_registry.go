@@ -36,9 +36,6 @@ func (p *Manager) refreshDKVSRegistrations() error {
 			return err
 		}
 		keys = append(keys, headKey, snapshotKey)
-		directories = append(directories,
-			"/mail/"+dkvsindexer.AccountID(pubkey)+"/msg",
-		)
 	}
 
 	p.mutex.RLock()

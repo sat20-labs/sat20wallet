@@ -32,6 +32,7 @@ func (p *Manager) localRGB11Accounts() []localRGB11Account {
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
 	result := make([]localRGB11Account, 0)
+	seenAccounts := make(map[string]struct{})
 	for _, id := range ids {
 		info := p.walletInfoMap[id]
 		if info == nil || info.Wallet == nil {
@@ -44,10 +45,16 @@ func (p *Manager) localRGB11Accounts() []localRGB11Account {
 		for index := 0; index < accountCount; index++ {
 			wallet := info.Wallet.Clone()
 			wallet.SetSubAccount(uint32(index))
+			pubkey := wallet.GetPubKey()
 			address := wallet.GetAddress()
-			if address == "" {
+			if pubkey == nil || address == "" {
 				continue
 			}
+			accountKey := string(pubkey.SerializeCompressed())
+			if _, ok := seenAccounts[accountKey]; ok {
+				continue
+			}
+			seenAccounts[accountKey] = struct{}{}
 			result = append(result, localRGB11Account{
 				WalletID:     id,
 				AccountIndex: uint32(index),

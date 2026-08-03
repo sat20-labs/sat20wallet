@@ -289,14 +289,15 @@ type RGB11ActivationResult struct {
 	Head       *coresync.WalletHead `json:"head,omitempty"`
 }
 
+const WalletSnapshotVersion uint32 = 1
+
 type RGB11WalletSnapshot struct {
-	Version           uint32                `json:"version"`
-	WalletID          string                `json:"wallet_id"`
-	AccountIndex      uint32                `json:"account_index"`
-	EngineBuildID     string                `json:"engine_build_id"`
-	ProjectionRecords []SnapshotRecord      `json:"projection_records"`
-	EngineRecords     []SnapshotRecord      `json:"engine_records"`
-	TickerInfos       []*indexer.TickerInfo `json:"ticker_infos"`
+	Version           uint32           `json:"version"`
+	WalletID          string           `json:"wallet_id"`
+	AccountIndex      uint32           `json:"account_index"`
+	EngineBuildID     string           `json:"engine_build_id"`
+	ProjectionRecords []SnapshotRecord `json:"projection_records"`
+	EngineRecords     []SnapshotRecord `json:"engine_records"`
 }
 
 type RGB11EncryptedSnapshot struct {

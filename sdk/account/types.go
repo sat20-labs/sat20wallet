@@ -191,12 +191,6 @@ type NewDeviceRecoveryOptions struct {
 }
 
 type Repository interface {
-	SaveEnvelope(context.Context, Envelope) error
-	SaveDKVSShareCapsule(context.Context, Locator, DKVSShareCapsule) error
-	SaveKnowledgeBundle(context.Context, Locator, KnowledgeRecoveryBundle) error
-	SaveManifest(context.Context, Manifest) error
-	LoadEnvelope(context.Context, Locator) (*Envelope, error)
-	LoadDKVSShareCapsule(context.Context, Locator) (*DKVSShareCapsule, error)
-	LoadKnowledgeBundle(context.Context, Locator) (*KnowledgeRecoveryBundle, error)
-	LoadManifest(context.Context, Locator) (*Manifest, error)
+	SaveRecoveryPackage(context.Context, RecoveryPackage) error
+	LoadRecoveryPackage(context.Context, Locator) (*RecoveryPackage, error)
 }

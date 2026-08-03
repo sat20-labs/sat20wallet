@@ -19,6 +19,13 @@
           <p class="text-xs text-zinc-500">{{ $t(`rgb11Invoice.${transportMode === 'rgb-json-rpc' ? 'standardTransportHelp' : 'sat20TransportHelp'}`) }}</p>
         </div>
 
+        <div v-if="transportMode === 'rgb-json-rpc'" class="space-y-2">
+          <Label>{{ $t('rgb11Invoice.proxyEndpoint') }}</Label>
+          <Input v-model="proxyEndpoint" inputmode="url" :placeholder="$t('rgb11Invoice.proxyEndpointPlaceholder')"
+            class="h-12 bg-zinc-800 font-mono text-xs" :disabled="loading" />
+          <p class="text-xs text-zinc-500">{{ $t('rgb11Invoice.proxyEndpointHelp') }}</p>
+        </div>
+
         <div class="space-y-2">
           <Label>{{ $t('rgb11Invoice.amount') }}</Label>
           <Input v-model="amount" inputmode="decimal" :placeholder="$t('rgb11Invoice.enterAmount')"
@@ -30,7 +37,7 @@
           <Label>{{ $t('rgb11Invoice.receiveMode') }}</Label>
           <select v-model="receiveMode" class="h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm"
             :disabled="loading">
-            <option value="witness" :disabled="transportMode === 'rgb-json-rpc'">{{ $t('rgb11Invoice.witnessMode') }}</option>
+            <option value="witness">{{ $t('rgb11Invoice.witnessMode') }}</option>
             <option value="blind">{{ $t('rgb11Invoice.blindMode') }}</option>
           </select>
           <p class="text-xs text-zinc-500">{{ $t(`rgb11Invoice.${receiveMode}ModeHelp`) }}</p>
@@ -98,6 +105,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Storage } from '@/lib/storage-adapter'
+import { useGlobalStore } from '@/store/global'
+import { useWalletStore } from '@/store/wallet'
 import {
   Dialog,
   DialogContent,
@@ -117,8 +127,9 @@ interface RGB11Asset {
 const props = defineProps<{ asset: RGB11Asset | null }>()
 const isOpen = defineModel('open', { type: Boolean })
 const amount = ref('')
-const receiveMode = ref<'blind' | 'witness'>('blind')
-const transportMode = ref<'sat20' | 'rgb-json-rpc'>('rgb-json-rpc')
+const receiveMode = ref<'blind' | 'witness'>('witness')
+const transportMode = ref<'sat20' | 'rgb-json-rpc'>('sat20')
+const proxyEndpoint = ref('')
 const invoice = ref('')
 const requestId = ref('')
 const transferPackage = ref('')
@@ -129,12 +140,20 @@ const pendingAckValue = ref('')
 const { t } = useI18n()
 const { toast } = useToast()
 const { copy } = useClipboard()
+const globalStore = useGlobalStore()
+const walletStore = useWalletStore()
 const assetContractID = computed(() => {
   const value = props.asset?.contract_id || props.asset?.ticker || ''
   return value.startsWith('rgb:') ? value : `rgb:${value}`
 })
 
 const maxUint64 = '18446744073709551615'
+const proxyStorageKey = () => `rgb11:proxy:${globalStore.env}:${walletStore.network || 'mainnet'}`
+
+const loadProxyEndpoint = async () => {
+  const { value } = await Storage.get({ key: proxyStorageKey() })
+  proxyEndpoint.value = value || ''
+}
 
 const decimalToRaw = (input: string, precision: number): string | null => {
   const text = input.trim()
@@ -156,12 +175,21 @@ const generateInvoice = async () => {
     errorMessage.value = t('rgb11Invoice.invalidAmount', { precision })
     return
   }
+  const endpoint = proxyEndpoint.value.trim()
+  if (transportMode.value === 'rgb-json-rpc' && !endpoint) {
+    errorMessage.value = t('rgb11Invoice.proxyEndpointRequired')
+    return
+  }
 
   loading.value = true
   errorMessage.value = ''
+  if (transportMode.value === 'rgb-json-rpc') {
+    await Storage.set({ key: proxyStorageKey(), value: endpoint })
+  }
   const [err, result] = await walletManager.createRGB11Invoice({
     mode: receiveMode.value,
     transport_mode: transportMode.value,
+    ...(transportMode.value === 'rgb-json-rpc' ? { transport_endpoints: [endpoint] } : {}),
     contract_id: assetContractID.value,
     amount_raw: amountRaw,
     assignment_name: 'assetOwner',
@@ -294,10 +322,12 @@ const copyAck = async () => {
 }
 
 watch(isOpen, (open) => {
-  if (!open) {
+  if (open) {
+    void loadProxyEndpoint()
+  } else {
     amount.value = ''
-    receiveMode.value = 'blind'
-    transportMode.value = 'rgb-json-rpc'
+    receiveMode.value = 'witness'
+    transportMode.value = 'sat20'
     invoice.value = ''
     requestId.value = ''
     transferPackage.value = ''
@@ -306,9 +336,5 @@ watch(isOpen, (open) => {
     loading.value = false
     pendingAckValue.value = ''
   }
-})
-
-watch(transportMode, (mode) => {
-  if (mode === 'rgb-json-rpc') receiveMode.value = 'blind'
 })
 </script>

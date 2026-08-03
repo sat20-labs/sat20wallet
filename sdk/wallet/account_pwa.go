@@ -50,6 +50,7 @@ type AccountStorageOption struct {
 	FullRecordFee         string   `json:"full_record_fee_per_block,omitempty"`
 	MinimumAmountPerBlock string   `json:"minimum_amount_per_block,omitempty"`
 	AmountPerBlock        string   `json:"amount_per_block,omitempty"`
+	ContractAddress       string   `json:"contract_address,omitempty"`
 }
 
 type AccountStorageAuthorization struct {
@@ -133,7 +134,11 @@ func (p *Manager) LoadAccountGuardianCapsule(location AccountIndexerLocation,
 	if record == nil {
 		return nil, fmt.Errorf("guardian capsule is unavailable")
 	}
-	return append([]byte(nil), record.Value...), nil
+	capsule, err := account.DecodeGuardianCapsuleStorage(record.Value)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(capsule)
 }
 
 func (p *Manager) LoadAccountRecoveryPackage(location AccountIndexerLocation,
@@ -255,6 +260,7 @@ func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 		paid.Description = "通过 AUTOPAY 按区块持续支付后，全网保存加密账户数据。"
 		paid.Warnings = []string{"余额不足、未继续支付时，数据会停止全网同步并转为节点临时缓存。"}
 		paid.FeeAsset = defaults.AutopayFeeAssetName
+		paid.ContractAddress = defaults.AutopayContract
 		paid.EstimatedCost = cost
 		paid.EstimatedAnnualCost = annual
 		paid.RecordCount = accountDefaultRecordCount
@@ -340,6 +346,21 @@ func (p *Manager) confirmPaidAccountStorageWithCurrentWallet(location AccountInd
 	if err != nil {
 		return nil, err
 	}
+	if p.wallet.GetPubKey() == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	payer := PublicKeyToP2TRAddress_SatsNet(p.wallet.GetPubKey())
+	if strings.TrimSpace(payer) == "" {
+		return nil, fmt.Errorf("unable to derive AUTOPAY payer")
+	}
+	ready, err := p.accountAutopayReady(defaults, payer, amountPerBlock)
+	if err != nil {
+		return nil, fmt.Errorf("check existing AUTOPAY storage: %w", err)
+	}
+	if ready {
+		return accountPaidStorageAuthorization(location, defaults, recordCount,
+			amountPerBlock, fundingAmount, "", true), nil
+	}
 	param := contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: amountPerBlock}
 	encodedParam, err := param.Encode()
 	if err != nil {
@@ -357,19 +378,31 @@ func (p *Manager) confirmPaidAccountStorageWithCurrentWallet(location AccountInd
 	if err := p.waitForAccountAutopayReady(defaults, amountPerBlock); err != nil {
 		return nil, err
 	}
+	return accountPaidStorageAuthorization(location, defaults, recordCount,
+		amountPerBlock, fundingAmount, result.TxID, false), nil
+}
+
+func accountPaidStorageAuthorization(location AccountIndexerLocation,
+	defaults dkvsindexer.NetworkDefaults, recordCount uint64, amountPerBlock,
+	fundingAmount, transactionID string, reused bool) *AccountStorageAuthorization {
+
+	description := "AUTOPAY 首次区块支付已确认。"
+	if reused {
+		description = "已复用当前钱包有效的 AUTOPAY 付费存储。"
+	}
 	return &AccountStorageAuthorization{
 		ID: AccountStoragePaid, Mode: AccountStoragePaid,
 		RecordOptions: dkvsindexer.RecordOptions{Seq: 1},
 		Autopay:       &DKVSAutopayOptions{AddressParams: GetChainParam_SatsNet(), PoolContract: defaults.AutopayContract},
 		Summary: AccountStorageOption{ID: AccountStoragePaid, Mode: AccountStoragePaid, Available: true,
-			Title: "付费保存", Description: "AUTOPAY 首次区块支付已确认。",
+			Title: "付费保存", Description: description,
 			FeeAsset: defaults.AutopayFeeAssetName, EstimatedCost: fundingAmount,
 			RecordCount: recordCount, DefaultRecordCount: accountDefaultRecordCount,
 			FullRecordFee:         defaults.FullRecordFeePerBlock,
 			MinimumAmountPerBlock: defaults.AutopayMinAmountPerBlock, AmountPerBlock: amountPerBlock,
-			RecommendedRetention: "持续支付期间全网保存"},
-		TransactionID: result.TxID, Location: location,
-	}, nil
+			RecommendedRetention: "持续支付期间全网保存", ContractAddress: defaults.AutopayContract},
+		TransactionID: transactionID, Location: location,
+	}
 }
 
 func (p *Manager) NewAccountRepositoryForStorage(auth AccountStorageAuthorization) (account.Repository, error) {
@@ -444,7 +477,7 @@ func (p *Manager) PutGuardianCapsuleForStorage(auth AccountStorageAuthorization,
 	if err != nil {
 		return err
 	}
-	encoded, err := json.Marshal(capsule)
+	encoded, err := account.EncodeGuardianCapsuleStorage(capsule)
 	if err != nil {
 		return err
 	}

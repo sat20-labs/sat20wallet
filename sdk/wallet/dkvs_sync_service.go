@@ -345,7 +345,23 @@ func (p *Manager) syncDKVSOnce() ([]dkvsDirectoryState, error) {
 		return nil, fmt.Errorf("wallet manager is unavailable")
 	}
 	p.dkvs.runMu.Lock()
-	defer p.dkvs.runMu.Unlock()
+	states, err := p.syncDKVSOnceLocked()
+	p.dkvs.runMu.Unlock()
+	if err != nil || len(states) == 0 {
+		return states, err
+	}
+	paths := make([]string, 0, len(states))
+	for _, state := range states {
+		paths = append(paths, state.Prefix)
+	}
+	// Domain observers and UI callbacks may re-enter DKVS through Refresh.
+	// Notify them only after releasing the synchronization lifecycle lock.
+	p.dkvs.notifyObservers(paths)
+	p.dkvs.notifyCallback()
+	return states, nil
+}
+
+func (p *Manager) syncDKVSOnceLocked() ([]dkvsDirectoryState, error) {
 	directories, err := p.dkvsManagedDirectories()
 	if err != nil {
 		return nil, err
@@ -393,12 +409,6 @@ func (p *Manager) syncDKVSOnce() ([]dkvsDirectoryState, error) {
 	if err := p.dkvs.runPendingJobs(managedStore); err != nil {
 		return states, err
 	}
-	paths := make([]string, 0, len(states))
-	for _, state := range states {
-		paths = append(paths, state.Prefix)
-	}
-	p.dkvs.notifyObservers(paths)
-	p.dkvs.notifyCallback()
 	return states, nil
 }
 

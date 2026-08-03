@@ -52,10 +52,11 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	asset, err := NewAssetInfo(official, indexer.ASSET_TYPE_FT, amount)
+	assetName, err := NewCanonicalAssetName(official, "snapshot", indexer.ASSET_TYPE_FT)
 	if err != nil {
 		t.Fatal(err)
 	}
+	asset := &indexer.AssetInfo{Name: assetName, Amount: *amount.Clone(), BindingSat: 0}
 	output := indexer.NewTxOutput(1000)
 	output.OutPointStr = "0000000000000000000000000000000000000000000000000000000000000001:0"
 	raw := []byte("consensus-validated-consignment")

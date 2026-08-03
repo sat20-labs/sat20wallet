@@ -15,10 +15,6 @@ type Manager struct {
 	now        func() time.Time
 }
 
-type recoveryPackagePublisher interface {
-	SaveRecoveryPackage(context.Context, RecoveryPackage) error
-}
-
 func NewManager(repository Repository) *Manager {
 	return &Manager{repository: repository, random: rand.Reader, now: time.Now}
 }
@@ -157,19 +153,7 @@ func (m *Manager) Publish(ctx context.Context, value RecoveryPackage) error {
 	if err := ValidateRecoveryPackage(value); err != nil {
 		return err
 	}
-	if publisher, ok := m.repository.(recoveryPackagePublisher); ok {
-		return publisher.SaveRecoveryPackage(ctx, value)
-	}
-	if err := m.repository.SaveEnvelope(ctx, value.Envelope); err != nil {
-		return err
-	}
-	if err := m.repository.SaveDKVSShareCapsule(ctx, value.Envelope.Locator, value.DKVSShareCapsule); err != nil {
-		return err
-	}
-	if err := m.repository.SaveKnowledgeBundle(ctx, value.Envelope.Locator, value.KnowledgeBundle); err != nil {
-		return err
-	}
-	return m.repository.SaveManifest(ctx, value.Manifest)
+	return m.repository.SaveRecoveryPackage(ctx, value)
 }
 
 func (m *Manager) Load(ctx context.Context, locator Locator) (*RecoveryPackage, error) {
@@ -179,28 +163,7 @@ func (m *Manager) Load(ctx context.Context, locator Locator) (*RecoveryPackage, 
 	if err := ValidateLocator(locator); err != nil {
 		return nil, err
 	}
-	envelope, err := m.repository.LoadEnvelope(ctx, locator)
-	if err != nil {
-		return nil, err
-	}
-	capsule, err := m.repository.LoadDKVSShareCapsule(ctx, locator)
-	if err != nil {
-		return nil, err
-	}
-	bundle, err := m.repository.LoadKnowledgeBundle(ctx, locator)
-	if err != nil {
-		return nil, err
-	}
-	manifest, err := m.repository.LoadManifest(ctx, locator)
-	if err != nil {
-		return nil, err
-	}
-	result := &RecoveryPackage{Envelope: *envelope, Manifest: *manifest, DKVSShareCapsule: *capsule, KnowledgeBundle: *bundle}
-	hash, err := HashEnvelope(*envelope)
-	if err != nil || hash != manifest.EnvelopeHash {
-		return nil, ErrInvalidRecoveryPackage
-	}
-	return result, nil
+	return m.repository.LoadRecoveryPackage(ctx, locator)
 }
 
 func RecoverAccount(envelope Envelope, shares ...RecoveryShare) (Backup, []byte, error) {

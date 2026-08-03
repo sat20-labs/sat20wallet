@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 
-	indexer "github.com/sat20-labs/indexer/common"
 	strict "github.com/sat20-labs/rgb11/strict_encoding"
 	coresync "github.com/sat20-labs/rgb11/sync"
 )
@@ -15,7 +14,7 @@ const (
 	rgb11SnapshotPayloadMagic  = "R11S"
 	rgb11SnapshotEnvelopeMagic = "R11E"
 	rgb11AutoBackupPolicyMagic = "R11P"
-	rgb11SnapshotCodecVersion  = uint8(2)
+	rgb11SnapshotCodecVersion  = uint8(1)
 	rgb11SnapshotMaxRawSize    = 4 * 1024 * 1024
 	rgb11SnapshotMaxRecords    = 16 * 1024
 	rgb11SnapshotMaxFieldSize  = 1024 * 1024
@@ -103,7 +102,8 @@ func DecodeWalletSnapshotPayload(payload []byte) (*RGB11WalletSnapshot, error) {
 }
 
 func encodeCompactRGB11WalletSnapshot(snapshot *RGB11WalletSnapshot) ([]byte, error) {
-	if snapshot == nil || snapshot.WalletID == "" || len(snapshot.WalletID) > 128 {
+	if snapshot == nil || snapshot.Version != WalletSnapshotVersion ||
+		snapshot.WalletID == "" || len(snapshot.WalletID) > 128 {
 		return nil, ErrRGB11Inconsistent
 	}
 	var buf bytes.Buffer
@@ -132,20 +132,6 @@ func encodeCompactRGB11WalletSnapshot(snapshot *RGB11WalletSnapshot) ([]byte, er
 	if err := encodeRGB11SnapshotRecords(encoder, snapshot.EngineRecords); err != nil {
 		return nil, err
 	}
-	if len(snapshot.TickerInfos) > rgb11SnapshotMaxRecords {
-		return nil, ErrRGB11Inconsistent
-	}
-	if err := encoder.Length(uint64(len(snapshot.TickerInfos)), rgb11SnapshotMaxRecords); err != nil {
-		return nil, err
-	}
-	for _, info := range snapshot.TickerInfos {
-		if info == nil {
-			return nil, ErrRGB11Inconsistent
-		}
-		if err := encodeRGB11TickerInfo(encoder, info); err != nil {
-			return nil, err
-		}
-	}
 	return buf.Bytes(), nil
 }
 
@@ -161,8 +147,8 @@ func decodeCompactRGB11WalletSnapshot(value []byte) (*RGB11WalletSnapshot, error
 		return nil, ErrRGB11Inconsistent
 	}
 	version, err := decoder.U32()
-	if err != nil {
-		return nil, err
+	if err != nil || version != WalletSnapshotVersion {
+		return nil, ErrRGB11Inconsistent
 	}
 	walletID, err := decoder.String(1, 128)
 	if err != nil {
@@ -184,162 +170,13 @@ func decodeCompactRGB11WalletSnapshot(value []byte) (*RGB11WalletSnapshot, error
 	if err != nil {
 		return nil, err
 	}
-	tickerCount, err := decoder.Length(rgb11SnapshotMaxRecords)
-	if err != nil {
-		return nil, err
-	}
-	tickers := make([]*indexer.TickerInfo, 0, tickerCount)
-	for index := uint64(0); index < tickerCount; index++ {
-		info, err := decodeRGB11TickerInfo(decoder)
-		if err != nil {
-			return nil, err
-		}
-		tickers = append(tickers, info)
-	}
 	if reader.Len() != 0 {
 		return nil, ErrRGB11Inconsistent
 	}
 	return &RGB11WalletSnapshot{
 		Version: version, WalletID: walletID, AccountIndex: accountIndex, EngineBuildID: buildID,
-		ProjectionRecords: projection, EngineRecords: engine, TickerInfos: tickers,
+		ProjectionRecords: projection, EngineRecords: engine,
 	}, nil
-}
-
-func encodeRGB11TickerInfo(encoder *strict.Encoder, info *indexer.TickerInfo) error {
-	if info == nil {
-		return ErrRGB11Inconsistent
-	}
-	for _, encode := range []func() error{
-		func() error { return encoder.String(info.Protocol, 0, 128) },
-		func() error { return encoder.String(info.Type, 0, 128) },
-		func() error { return encoder.String(info.Ticker, 0, rgb11SnapshotMaxFieldSize) },
-		func() error { return encoder.String(info.DisplayName, 0, rgb11SnapshotMaxFieldSize) },
-		func() error { return encoder.U64(uint64(info.Id)) },
-		func() error { return encoder.U64(uint64(int64(info.Divisibility))) },
-		func() error { return encoder.U64(uint64(int64(info.StartBlock))) },
-		func() error { return encoder.U64(uint64(int64(info.EndBlock))) },
-		func() error { return encoder.U64(uint64(int64(info.SelfMint))) },
-		func() error { return encoder.U64(uint64(int64(info.DeployHeight))) },
-		func() error { return encoder.U64(uint64(info.DeployBlocktime)) },
-		func() error { return encoder.String(info.DeployTx, 0, 128) },
-		func() error { return encoder.String(info.Limit, 0, 1024) },
-		func() error { return encoder.U64(uint64(int64(info.N))) },
-		func() error { return encoder.String(info.TotalMinted, 0, 1024) },
-		func() error { return encoder.U64(uint64(info.MintTimes)) },
-		func() error { return encoder.String(info.MaxSupply, 0, 1024) },
-		func() error { return encoder.U64(uint64(int64(info.HoldersCount))) },
-		func() error { return encoder.String(info.InscriptionId, 0, 128) },
-		func() error { return encoder.U64(uint64(info.InscriptionNum)) },
-		func() error { return encoder.String(info.Description, 0, rgb11SnapshotMaxFieldSize) },
-		func() error { return encoder.String(info.Rarity, 0, 1024) },
-		func() error { return encoder.String(info.DeployAddress, 0, 256) },
-		func() error { return encoder.Bytes(info.Content, 0, rgb11SnapshotMaxFieldSize) },
-		func() error { return encoder.String(info.ContentType, 0, 1024) },
-		func() error { return encoder.String(info.Delegate, 0, 256) },
-		func() error { return encoder.U64(uint64(int64(info.Status))) },
-	} {
-		if err := encode(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func decodeRGB11TickerInfo(decoder *strict.Decoder) (*indexer.TickerInfo, error) {
-	info := &indexer.TickerInfo{}
-	var err error
-	if info.Protocol, err = decoder.String(0, 128); err != nil {
-		return nil, err
-	}
-	if info.Type, err = decoder.String(0, 128); err != nil {
-		return nil, err
-	}
-	if info.Ticker, err = decoder.String(0, rgb11SnapshotMaxFieldSize); err != nil {
-		return nil, err
-	}
-	if info.DisplayName, err = decoder.String(0, rgb11SnapshotMaxFieldSize); err != nil {
-		return nil, err
-	}
-	if info.Id, err = decodeRGB11Int64(decoder); err != nil {
-		return nil, err
-	}
-	if info.Divisibility, err = decodeRGB11Int(decoder); err != nil {
-		return nil, err
-	}
-	if info.StartBlock, err = decodeRGB11Int(decoder); err != nil {
-		return nil, err
-	}
-	if info.EndBlock, err = decodeRGB11Int(decoder); err != nil {
-		return nil, err
-	}
-	if info.SelfMint, err = decodeRGB11Int(decoder); err != nil {
-		return nil, err
-	}
-	if info.DeployHeight, err = decodeRGB11Int(decoder); err != nil {
-		return nil, err
-	}
-	if info.DeployBlocktime, err = decodeRGB11Int64(decoder); err != nil {
-		return nil, err
-	}
-	if info.DeployTx, err = decoder.String(0, 128); err != nil {
-		return nil, err
-	}
-	if info.Limit, err = decoder.String(0, 1024); err != nil {
-		return nil, err
-	}
-	if info.N, err = decodeRGB11Int(decoder); err != nil {
-		return nil, err
-	}
-	if info.TotalMinted, err = decoder.String(0, 1024); err != nil {
-		return nil, err
-	}
-	if info.MintTimes, err = decodeRGB11Int64(decoder); err != nil {
-		return nil, err
-	}
-	if info.MaxSupply, err = decoder.String(0, 1024); err != nil {
-		return nil, err
-	}
-	if info.HoldersCount, err = decodeRGB11Int(decoder); err != nil {
-		return nil, err
-	}
-	if info.InscriptionId, err = decoder.String(0, 128); err != nil {
-		return nil, err
-	}
-	if info.InscriptionNum, err = decodeRGB11Int64(decoder); err != nil {
-		return nil, err
-	}
-	if info.Description, err = decoder.String(0, rgb11SnapshotMaxFieldSize); err != nil {
-		return nil, err
-	}
-	if info.Rarity, err = decoder.String(0, 1024); err != nil {
-		return nil, err
-	}
-	if info.DeployAddress, err = decoder.String(0, 256); err != nil {
-		return nil, err
-	}
-	if info.Content, err = decoder.Bytes(0, rgb11SnapshotMaxFieldSize); err != nil {
-		return nil, err
-	}
-	if info.ContentType, err = decoder.String(0, 1024); err != nil {
-		return nil, err
-	}
-	if info.Delegate, err = decoder.String(0, 256); err != nil {
-		return nil, err
-	}
-	if info.Status, err = decodeRGB11Int(decoder); err != nil {
-		return nil, err
-	}
-	return info, nil
-}
-
-func decodeRGB11Int64(decoder *strict.Decoder) (int64, error) {
-	value, err := decoder.U64()
-	return int64(value), err
-}
-
-func decodeRGB11Int(decoder *strict.Decoder) (int, error) {
-	value, err := decodeRGB11Int64(decoder)
-	return int(value), err
 }
 
 func encodeRGB11SnapshotRecords(encoder *strict.Encoder, records []SnapshotRecord) error {

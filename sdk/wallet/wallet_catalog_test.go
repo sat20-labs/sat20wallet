@@ -144,3 +144,28 @@ func TestAccountManagementIgnoresDuplicateWalletFingerprints(t *testing.T) {
 		t.Fatalf("root wallet is not deterministic: got %d, want 1", root.Id)
 	}
 }
+
+func TestLocalRGB11AccountsIgnoreDuplicateWalletFingerprints(t *testing.T) {
+	const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+	first := NewInternalWalletWithMnemonic(mnemonic, "", &chaincfg.TestNet4Params)
+	duplicate := NewInternalWalletWithMnemonic(mnemonic, "", &chaincfg.TestNet4Params)
+	if first == nil || duplicate == nil {
+		t.Fatal("create duplicate test wallets")
+	}
+	first.id = 1
+	duplicate.id = 2
+	manager := &Manager{walletInfoMap: map[int64]*WalletInfo{
+		2: {WalletInDB: WalletInDB{Id: 2, Accounts: 2}, Wallet: duplicate},
+		1: {WalletInDB: WalletInDB{Id: 1, Accounts: 2}, Wallet: first},
+	}}
+
+	accounts := manager.localRGB11Accounts()
+	if len(accounts) != 2 {
+		t.Fatalf("duplicate wallet accounts were not deduplicated: got %d, want 2", len(accounts))
+	}
+	for index, account := range accounts {
+		if account.WalletID != 1 || account.AccountIndex != uint32(index) {
+			t.Fatalf("non-canonical RGB11 account selected: %+v", account)
+		}
+	}
+}

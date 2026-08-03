@@ -257,14 +257,6 @@ func TestRGB11OfficialContractOpretRelayAckSendReceive(t *testing.T) {
 	}
 	witnessTxID := witness.TxHash().String()
 	recipientOutpoint := witnessTxID + ":1"
-	evidence.mu.Lock()
-	evidence.rawTx[witnessTxID] = append([]byte(nil), pending.SignedTx...)
-	evidence.spendingTx[sourceOutpoint] = witnessTxID
-	evidence.utxos[recipientOutpoint] = &rgb11wallet.BitcoinUTXO{
-		OutPoint: recipientOutpoint, Value: witness.TxOut[1].Value,
-		PkScript: append([]byte(nil), witness.TxOut[1].PkScript...), Confirmations: 0,
-	}
-	evidence.mu.Unlock()
 
 	relayOptions := dkvsindexer.RecordOptions{TTL: uint64((24 * time.Hour) / time.Millisecond)}
 	relayRecord, _, err := sender.PublishRGB11RelayRecord(prepared.State.TransferID, "sender-test", relayOptions)
@@ -290,14 +282,32 @@ func TestRGB11OfficialContractOpretRelayAckSendReceive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if balance.Value.Uint64() != amount {
-		t.Fatalf("recipient RGB11 balance=%s", balance.Value)
+	if balance.Sign() != 0 {
+		t.Fatalf("prepared recipient RGB11 balance=%s", balance.Value)
 	}
 	recipientState, err := recipient.GetRGB11State()
 	if err != nil || len(recipientState.Transfers) != 1 || recipientState.Transfers[0].Direction != "receive" ||
-		recipientState.Transfers[0].WitnessTxID != witnessTxID {
+		recipientState.Transfers[0].WitnessTxID != witnessTxID ||
+		recipientState.Transfers[0].Status != "awaiting_broadcast" ||
+		recipientState.Transfers[0].TransportMode != "sat20-dkvs" {
 		t.Fatalf("recipient transfer history=%+v err=%v", recipientState, err)
 	}
+	recipientWalletID, err := recipient.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientSnapshot, _, err := recipient.rgbManager.exportRGB11WalletSnapshot(recipientWalletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredRecipientWallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
+	)
+	restoredRecipient := newRGB11FlowManager(t, restoredRecipientWallet, rpc, evidence, 3)
+	if err := restoredRecipient.rgbManager.importRGB11WalletSnapshot(recipientSnapshot); err != nil {
+		t.Fatalf("restore pre-broadcast recipient snapshot: %v", err)
+	}
+	recipient = restoredRecipient
 	recipient.cfg = &common.Config{IndexerL2: &common.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"}}
 	recipient.http = remote
 	if _, err := recipient.SyncRGB11WalletState("", relayOptions); err != nil {
@@ -317,6 +327,249 @@ func TestRGB11OfficialContractOpretRelayAckSendReceive(t *testing.T) {
 	}
 	if broadcastTxID != witnessTxID || len(evidence.broadcasted) == 0 {
 		t.Fatalf("broadcast txid=%s witness=%s", broadcastTxID, witnessTxID)
+	}
+	evidence.mu.Lock()
+	evidence.rawTx[witnessTxID] = append([]byte(nil), pending.SignedTx...)
+	evidence.spendingTx[sourceOutpoint] = witnessTxID
+	evidence.utxos[recipientOutpoint] = &rgb11wallet.BitcoinUTXO{
+		OutPoint: recipientOutpoint, Value: witness.TxOut[1].Value,
+		PkScript: append([]byte(nil), witness.TxOut[1].PkScript...), Confirmations: 0,
+	}
+	evidence.mu.Unlock()
+	if _, err := recipient.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	balance, err = recipient.GetRGB11AssetBalance(&imported.AssetName)
+	if err != nil || balance.Value.Uint64() != amount {
+		t.Fatalf("recipient RGB11 balance=%v err=%v", balance, err)
+	}
+	recipientState, err = recipient.GetRGB11State()
+	if err != nil || len(recipientState.Transfers) != 1 || recipientState.Transfers[0].Status != "pending" {
+		t.Fatalf("post-broadcast recipient transfer history=%+v err=%v", recipientState, err)
+	}
+}
+
+func TestRGB11StandardOutOfBandPrepareBroadcastAccept(t *testing.T) {
+	senderWallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
+	)
+	recipientWallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
+	)
+	if senderWallet == nil || recipientWallet == nil {
+		t.Fatal("create RGB11 out-of-band wallets")
+	}
+	senderScript, err := AddrToPkScript(senderWallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sourceOutpoint = "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
+	const plainOutpoint = "2222222222222222222222222222222222222222222222222222222222222222:0"
+	evidence := &rgb11FlowEvidence{
+		utxos: map[string]*rgb11wallet.BitcoinUTXO{
+			sourceOutpoint: {OutPoint: sourceOutpoint, Value: 10_000, PkScript: senderScript, Confirmations: 6},
+		},
+		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+	}
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
+	sourceOutput := indexer.NewTxOutput(10_000)
+	sourceOutput.OutPointStr, sourceOutput.OutValue.PkScript = sourceOutpoint, senderScript
+	rpc.outputs[sourceOutpoint] = sourceOutput
+	plainOutput := indexer.NewTxOutput(100_000)
+	plainOutput.OutPointStr, plainOutput.OutValue.PkScript = plainOutpoint, senderScript
+	rpc.outputs[plainOutpoint] = plainOutput
+	rpc.plain = []*indexerwire.TxOutputInfo{
+		{OutPoint: sourceOutpoint, Value: 10_000, PkScript: senderScript},
+		{OutPoint: plainOutpoint, Value: 100_000, PkScript: senderScript},
+	}
+	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 4)
+	recipient := newRGB11FlowManager(t, recipientWallet, rpc, evidence, 5)
+	contract, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-example.rgba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := sender.ImportRGB11Contract(context.Background(), contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const amount = uint64(20_000)
+	request, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "witness", TransportMode: "out-of-band", ContractID: imported.ContractID,
+		AmountRaw: fmt.Sprint(amount), WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsedInvoice, err := invoicing.Parse(request.Invoice)
+	if err != nil || len(parsedInvoice.UnknownQuery) != 0 || len(parsedInvoice.Transports) != 0 {
+		t.Fatalf("out-of-band invoice contains SAT20/proxy transport data: %+v err=%v", parsedInvoice, err)
+	}
+	prepared, err := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
+		Invoice: request.Invoice, FeeRate: 2, MinConfirmations: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.State.TransportMode != "out-of-band" {
+		t.Fatalf("prepared transport=%s", prepared.State.TransportMode)
+	}
+	if _, err := sender.BuildRGB11RelayRecord(prepared.State.TransferID, "cross-transport-test"); !errors.Is(err, ErrRGB11SAT20RelayRequired) {
+		t.Fatalf("SAT20 relay accepted out-of-band transfer: %v", err)
+	}
+	pendingForModeTest, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingForModeTest.State.TransportMode = RGB11ProxyTransport
+	if err := sender.rgbManager.projectionStore.SavePendingTransferState(pendingForModeTest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.BuildRGB11RelayRecord(prepared.State.TransferID, "cross-transport-test"); !errors.Is(err, ErrRGB11SAT20RelayRequired) {
+		t.Fatalf("SAT20 relay accepted standard proxy transfer: %v", err)
+	}
+	pendingForModeTest.State.TransportMode = "out-of-band"
+	if err := sender.rgbManager.projectionStore.SavePendingTransferState(pendingForModeTest); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := recipient.AcceptRGB11RelayConsignment(
+		context.Background(), request.RequestID, &corerelay.RelayRecord{},
+		[]byte(prepared.RecipientConsignment),
+	); !errors.Is(err, ErrRGB11SAT20RelayRequired) {
+		t.Fatalf("SAT20 relay accepted out-of-band receive request: %v", err)
+	}
+	if _, _, err := sender.FetchRGB11AckRecord(prepared.State.TransferID, dkvsindexer.RecordVerificationOptions{}); !errors.Is(err, ErrRGB11SAT20RelayRequired) {
+		t.Fatalf("SAT20 ACK fetch accepted out-of-band transfer: %v", err)
+	}
+	if _, err := sender.BroadcastRGB11Batch(
+		[]string{prepared.State.TransferID}, []*corerelay.RelayRecord{{}}, []*corerelay.AckRecord{{}},
+	); !errors.Is(err, ErrRGB11SAT20RelayRequired) {
+		t.Fatalf("SAT20 ACK broadcast accepted out-of-band transfer: %v", err)
+	}
+	if err := sender.CancelRGB11BatchByNack(
+		prepared.State.TransferID, &corerelay.RelayRecord{}, &corerelay.AckRecord{},
+	); !errors.Is(err, ErrRGB11SAT20RelayRequired) {
+		t.Fatalf("SAT20 NACK accepted out-of-band transfer: %v", err)
+	}
+	if _, err := recipient.PrepareRGB11Consignment(
+		context.Background(), request.RequestID, []byte(prepared.RecipientConsignment),
+	); err != nil {
+		t.Fatal(err)
+	}
+	balance, err := recipient.GetRGB11AssetBalance(&imported.AssetName)
+	if err != nil || balance.Sign() != 0 {
+		t.Fatalf("pre-broadcast balance=%v err=%v", balance, err)
+	}
+	recipientState, err := recipient.GetRGB11State()
+	if err != nil || len(recipientState.Transfers) != 1 ||
+		recipientState.Transfers[0].Status != "awaiting_broadcast" ||
+		recipientState.Transfers[0].RelayDurability != "LOCAL_ONLY" ||
+		recipientState.Transfers[0].TransportMode != "out-of-band" {
+		var transfer any
+		if recipientState != nil && len(recipientState.Transfers) > 0 {
+			transfer = *recipientState.Transfers[0]
+		}
+		t.Fatalf("pre-broadcast transfer=%+v err=%v", transfer, err)
+	}
+	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness := wire.NewMsgTx(wire.TxVersion)
+	if err := witness.Deserialize(bytes.NewReader(pending.SignedTx)); err != nil {
+		t.Fatal(err)
+	}
+	witnessTxID, err := sender.BroadcastRGB11OutOfBand([]string{prepared.State.TransferID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientOutpoint := witnessTxID + ":1"
+	evidence.mu.Lock()
+	evidence.rawTx[witnessTxID] = append([]byte(nil), pending.SignedTx...)
+	evidence.spendingTx[sourceOutpoint] = witnessTxID
+	evidence.utxos[recipientOutpoint] = &rgb11wallet.BitcoinUTXO{
+		OutPoint: recipientOutpoint, Value: witness.TxOut[1].Value,
+		PkScript: append([]byte(nil), witness.TxOut[1].PkScript...), Confirmations: 0,
+	}
+	evidence.mu.Unlock()
+	if _, err := recipient.AcceptRGB11Consignment(
+		context.Background(), request.RequestID, []byte(prepared.RecipientConsignment),
+	); err != nil {
+		t.Fatal(err)
+	}
+	balance, err = recipient.GetRGB11AssetBalance(&imported.AssetName)
+	if err != nil || balance.Value.Uint64() != amount {
+		t.Fatalf("post-broadcast balance=%v err=%v", balance, err)
+	}
+
+	sat20Request, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "witness", TransportMode: "sat20", ContractID: imported.ContractID,
+		AmountRaw: "1", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recipient.PrepareRGB11Consignment(
+		context.Background(), sat20Request.RequestID, []byte(prepared.RecipientConsignment),
+	); !errors.Is(err, ErrRGB11OutOfBandRequired) {
+		t.Fatalf("standard preflight accepted SAT20 invoice: %v", err)
+	}
+}
+
+func TestRGB11CancelPreparedOutOfBandTransfer(t *testing.T) {
+	wallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
+	)
+	evidence := &rgb11FlowEvidence{
+		utxos: make(map[string]*rgb11wallet.BitcoinUTXO), rawTx: make(map[string][]byte),
+		spendingTx: make(map[string]string),
+	}
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
+	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 6)
+	const rgbInput = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:0"
+	const feeInput = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:1"
+	newPending := func(id, txid string) *rgb11wallet.PendingTransfer {
+		recipient := []byte("out-of-band-recipient-" + id)
+		hash := sha256.Sum256(recipient)
+		return &rgb11wallet.PendingTransfer{
+			State: rgb11wallet.TransferState{
+				TransferID: id, BatchTransferIDs: []string{id}, BatchSize: 1,
+				TransportMode: "out-of-band", Direction: "send", Status: "prepared",
+				AckStatus: "awaiting", InputOutPoints: []string{rgbInput, feeInput},
+				ConsignmentHash: hex.EncodeToString(hash[:]), WitnessTxID: txid,
+			},
+			RecipientConsignment: recipient, LocalConsignment: []byte("local-" + id),
+			SignedTx: []byte{1}, SignedPSBT: []byte{2}, CreatedAt: time.Now().Unix(),
+		}
+	}
+	const firstTxID = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	if err := manager.rgbManager.projectionStore.SavePendingTransfer(newPending("cancel-oob", firstTxID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.utxoLockerL1.LockUtxo(rgbInput, rgb11wallet.LockReasonRGB); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.utxoLockerL1.LockUtxo(feeInput, rgb11wallet.LockReasonPending); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.CancelRGB11OutOfBandTransfer("cancel-oob"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := manager.rgbManager.projectionStore.LoadPendingTransfer("cancel-oob")
+	if err != nil || stored.State.Status != "rejected" || len(stored.SignedTx) != 0 {
+		t.Fatalf("cancelled transfer=%+v err=%v", stored, err)
+	}
+	locks := manager.utxoLockerL1.GetLockedUtxoList()
+	if locks[rgbInput] == nil || locks[rgbInput].Reason != rgb11wallet.LockReasonRGB || locks[feeInput] != nil {
+		t.Fatalf("unexpected locks after cancellation: %+v", locks)
+	}
+
+	const visibleTxID = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	if err := manager.rgbManager.projectionStore.SavePendingTransfer(newPending("visible-oob", visibleTxID)); err != nil {
+		t.Fatal(err)
+	}
+	evidence.rawTx[visibleTxID] = []byte{1}
+	if err := manager.CancelRGB11OutOfBandTransfer("visible-oob"); !errors.Is(err, ErrRGB11AlreadyBroadcast) {
+		t.Fatalf("visible transfer cancellation error=%v", err)
 	}
 }
 
@@ -1034,7 +1287,7 @@ func TestRGB11ManualNackCancelsBatchAndReleasesOnlyFeeLocks(t *testing.T) {
 			InputOutPoints: []string{rgbInput, feeInput}, ConsignmentHash: hex.EncodeToString(objectHash[:]),
 			WitnessTxID: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 			AckStatus:   "awaiting", Status: "prepared", RelayRecordKey: request.RelayKey,
-			AckRecordKey: request.AckKey, Expiry: request.Expiry,
+			AckRecordKey: request.AckKey, Expiry: request.Expiry, TransportMode: "sat20-dkvs",
 		},
 		RecipientConsignment: recipientConsignment, LocalConsignment: localConsignment,
 		SignedTx: []byte{1}, SignedPSBT: []byte{2}, CreatedAt: time.Now().Unix(),

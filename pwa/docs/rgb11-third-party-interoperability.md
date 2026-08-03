@@ -96,3 +96,30 @@ invoice 转回 `2`。确认前 Iris 会拒绝发送，提示没有 spendable bal
 
 `f58932783c82eccadfcca27178a37dbcc5b81bc3c71502bd9df8e731b536fbd7`
 是 SAT20 PWA 测试钱包之间的标准 proxy 转移，不计入 Iris 第三方互操作结果。
+
+## 2026-08-03 回滚 3422 后验收
+
+测试网回滚到 `3422` 后，重新部署并激活 AUTOPAY，再清理本地 PWA 钱包数据并
+重新导入两个测试钱包。账户管理、DKVS 同步和 RGB11 两条 PWA 内部转账路径
+均通过。
+
+### SAT20 钱包路径
+
+- 发行 `RSCNUFZB`，规范资产名：`rgb11:f:rscnufzb@cnetsdrz`。
+- 第二个 PWA 钱包通过 SAT20 relay 接收 `10`，广播交易：
+  `4131de3769d2a67cce3e7e93861a68cb47fbd0d19c48278c69a356f63d01495a`。
+- 接收方资产保持 pending，未确认前不能再次花费；余额和 carrier UTXO 锁定行为符合预期。
+
+### 标准 RGB out-of-band 路径
+
+- 发行 `RSCNWKMY`，规范资产名：`rgb11:f:rscnwkmy@dyrpdlqu`。
+- 使用标准 RGB invoice、consignment 和 ack 完成 PWA 到 PWA 转账，广播交易：
+  `66e6f272c9e1f7ee1e0877a50f5003ef40ded90ff7239352b05af78c8b292051`。
+- 接收方保持 pending，未确认前不能花费；两笔交易在本次记录时均未确认。
+
+### Iris 第三方钱包
+
+本次回滚后的测试尚未重新执行：当前测试机没有连接 Android 设备或模拟器，
+也没有固定基线的 Iris APK。2026-07-30 的 PWA 到 Iris 记录仍保留，但属于
+回滚前的历史结果，不计入本轮验收。后续仍使用本文固定的 Iris `0.3.1` / version
+code `73` / `bitcoinTestnet4Debug` 基线完成双向互操作。

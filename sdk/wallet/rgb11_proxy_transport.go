@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +26,6 @@ import (
 
 const (
 	RGB11ProxyTransport         = "rgb-json-rpc"
-	defaultRGB11ProxyTransport  = "rpcs://proxy.iriswallet.com/0.2/json-rpc"
 	rgb11ProxyMaxEndpoints      = 8
 	rgb11ProxyMaxResponseBytes  = 8 * 1024 * 1024
 	rgb11ProxyMaxConsignmentLen = 4 * 1024 * 1024
@@ -46,6 +44,15 @@ type rgb11ProxyEndpoint struct {
 type rgb11ProxyError struct {
 	Code    int64  `json:"code"`
 	Message string `json:"message"`
+}
+
+type rgb11ProxyRPCError struct {
+	Code    int64
+	Message string
+}
+
+func (e *rgb11ProxyRPCError) Error() string {
+	return fmt.Sprintf("RGB11 proxy error %d: %s", e.Code, e.Message)
 }
 
 type rgb11ProxyResponse[T any] struct {
@@ -89,12 +96,18 @@ func rgb11ReceiveTransports(request RGB11InvoiceRequest) ([]invoicing.Transport,
 		}
 		return nil, false, nil
 	}
+	if mode == "out-of-band" {
+		if len(request.TransportEndpoints) != 0 {
+			return nil, false, fmt.Errorf("RGB11 out-of-band transport does not use endpoints")
+		}
+		return nil, true, nil
+	}
 	if mode != RGB11ProxyTransport && mode != "standard" {
 		return nil, false, fmt.Errorf("unsupported RGB11 transport mode %q", request.TransportMode)
 	}
 	values := append([]string(nil), request.TransportEndpoints...)
 	if len(values) == 0 {
-		values = []string{defaultRGB11ProxyTransport}
+		return nil, false, ErrRGB11ProxyNoEndpoint
 	}
 	if len(values) > rgb11ProxyMaxEndpoints {
 		return nil, false, ErrRGB11ProxyNoEndpoint
@@ -202,7 +215,7 @@ func decodeRGB11ProxyResponse[T any](reader io.Reader) (*T, error) {
 		return nil, fmt.Errorf("decode RGB11 proxy response: %w", err)
 	}
 	if response.Error != nil {
-		return nil, fmt.Errorf("RGB11 proxy error %d: %s", response.Error.Code, response.Error.Message)
+		return nil, &rgb11ProxyRPCError{Code: response.Error.Code, Message: response.Error.Message}
 	}
 	return response.Result, nil
 }
@@ -356,7 +369,7 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 		if loadErr != nil {
 			return nil, loadErr
 		}
-		receipt, acceptErr := p.acceptRGB11Consignment(ctx, requestID, raw, true)
+		receipt, acceptErr := p.acceptRGB11Consignment(ctx, requestID, raw, true, request.WitnessTxID, nil)
 		if acceptErr != nil {
 			if !errors.Is(acceptErr, coreconsignment.ErrWitnessUnresolved) &&
 				!errors.Is(acceptErr, coreconsignment.ErrOutpointUnknown) {
@@ -384,7 +397,17 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 			}
 			return nil, errors.New("failed to retry RGB11 proxy acknowledgment")
 		}
-		actualTxID, actualVout := rgb11ReceivedOutpoint(receipt, request)
+		actualTxID := request.WitnessTxID
+		var actualVout *uint32
+		if state, loadErr := p.rgbManager.projectionStore.LoadTransferState(receipt.TransferID); loadErr == nil {
+			actualTxID = state.WitnessTxID
+			if len(state.OutputOutPoints) == 1 {
+				if value, ok := outpointVout(state.OutputOutPoints[0]); ok &&
+					invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout {
+					actualVout = &value
+				}
+			}
+		}
 		for _, endpoint := range endpoints {
 			if err := rgb11ProxyPostAck(ctx, endpoint.url, recipientID, true); err == nil {
 				return &RGB11ProxyReceiveResult{
@@ -425,27 +448,40 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 					rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, preparedErr)
 					return nil, p.finishRGB11ProxyTerminal(requestID, raw, preparedErr)
 				}
-				actualTxID, actualVout := rgb11ReceivedOutpoint(receipt, request)
 				if err := rgb11ProxyPostAck(ctx, endpoint.url, recipientID, true); err != nil {
 					return nil, err
 				}
 				return &RGB11ProxyReceiveResult{
-					RequestID: requestID, Endpoint: endpoint.invoice, TxID: actualTxID,
-					Vout: actualVout, Receipt: receipt, AckPosted: true,
+					RequestID: requestID, Endpoint: endpoint.invoice, TxID: remote.TxID,
+					Vout: remote.Vout, Receipt: receipt, AckPosted: true,
 					AwaitingBroadcast: true,
 				}, nil
 			}
 			rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, err)
 			return nil, p.finishRGB11ProxyTerminal(requestID, raw, err)
 		}
-		actualTxID, actualVout := rgb11ReceivedOutpoint(preflight, request)
-		if !validRGB11TxID(remote.TxID) || actualTxID == "" || remote.TxID != actualTxID ||
-			(remote.Vout != nil && (actualVout == nil || *remote.Vout != *actualVout)) {
+		if !validRGB11TxID(remote.TxID) ||
+			(invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout && remote.Vout == nil) {
 			_ = rgb11ProxyPostAck(ctx, endpoint.url, recipientID, false)
 			validationErr := errors.New("RGB11 proxy metadata does not match the accepted consignment")
 			return nil, p.finishRGB11ProxyTerminal(requestID, raw, validationErr)
 		}
-		receipt, err := p.acceptRGB11Consignment(ctx, requestID, raw, true)
+		matched, err := p.matchRGB11ReceiveAllocation(
+			preflight, request, invoice, nil, remote.TxID, remote.Vout,
+		)
+		if err != nil || matched.TxID != remote.TxID ||
+			(invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout &&
+				(matched.Vout == nil || *matched.Vout != *remote.Vout)) {
+			_ = rgb11ProxyPostAck(ctx, endpoint.url, recipientID, false)
+			validationErr := errors.New("RGB11 proxy metadata does not match the accepted consignment")
+			if err != nil {
+				validationErr = fmt.Errorf("%w: %v", validationErr, err)
+			}
+			return nil, p.finishRGB11ProxyTerminal(requestID, raw, validationErr)
+		}
+		receipt, err := p.acceptRGB11Consignment(
+			ctx, requestID, raw, true, remote.TxID, remote.Vout,
+		)
 		if err != nil {
 			rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, err)
 			return nil, p.finishRGB11ProxyTerminal(requestID, raw, err)
@@ -454,8 +490,8 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 			return nil, err
 		}
 		return &RGB11ProxyReceiveResult{
-			RequestID: requestID, Endpoint: endpoint.invoice, TxID: actualTxID,
-			Vout: actualVout, Receipt: receipt, AckPosted: true,
+			RequestID: requestID, Endpoint: endpoint.invoice, TxID: matched.TxID,
+			Vout: matched.Vout, Receipt: receipt, AckPosted: true,
 		}, nil
 	}
 	if len(attempts) == 0 {
@@ -561,6 +597,14 @@ func (p *rgb11Manager) DeliverAndBroadcastRGB11ProxyTransfer(ctx context.Context
 	for _, transferID := range transferIDs {
 		endpoint, err := p.publishRGB11ProxyConsignment(ctx, transferID)
 		if err != nil {
+			var proxyErr *rgb11ProxyRPCError
+			if errors.As(err, &proxyErr) && proxyErr.Code == -101 {
+				if cancelErr := p.cancelRGB11PendingBatch(
+					pendingList, "proxy-recipient-conflict", nil,
+				); cancelErr != nil {
+					return nil, errors.Join(err, cancelErr)
+				}
+			}
 			return nil, err
 		}
 		endpoints = append(endpoints, endpoint)
@@ -701,53 +745,6 @@ func rgb11ProxyInvoice(raw string) (*invoicing.Invoice, []rgb11ProxyEndpoint, er
 	}
 	endpoints, err := rgb11ProxyEndpoints(invoice)
 	return invoice, endpoints, err
-}
-
-func rgb11ReceivedOutpoint(receipt *rgb11wallet.ValidationReceipt,
-	request *corewallet.ReceiveRequest) (string, *uint32) {
-	if receipt == nil || request == nil {
-		return "", nil
-	}
-	invoiceSeal, err := request.Seal.Conceal()
-	if err != nil {
-		return "", nil
-	}
-	for _, allocation := range receipt.Allocations {
-		if allocation.AssignmentType != 4000 {
-			continue
-		}
-		if request.Mode == corewallet.ReceiveBlind {
-			matched, err := rgb11AllocationMatchesBlindSeal(
-				allocation, request.Seal, [32]byte(invoiceSeal),
-			)
-			if err != nil || !matched {
-				continue
-			}
-		} else if !allocation.WitnessTxPtr {
-			continue
-		}
-		txID := allocation.WitnessTxID
-		allocationTxID, voutText, ok := strings.Cut(allocation.OutPoint, ":")
-		if !ok || !validRGB11TxID(allocationTxID) {
-			continue
-		}
-		if !validRGB11TxID(txID) && allocation.WitnessTxPtr {
-			txID = allocationTxID
-		}
-		if !validRGB11TxID(txID) {
-			continue
-		}
-		if !allocation.WitnessTxPtr {
-			return txID, nil
-		}
-		vout, err := strconv.ParseUint(voutText, 10, 32)
-		if err != nil {
-			continue
-		}
-		value := uint32(vout)
-		return txID, &value
-	}
-	return "", nil
 }
 
 func validRGB11TxID(value string) bool {

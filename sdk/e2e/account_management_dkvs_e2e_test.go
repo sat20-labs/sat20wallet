@@ -45,8 +45,8 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 		[]dkvsPrevOut{gasOuts[0], feeOuts[0]}, wire.TxOut{Value: 10000, Assets: deployAssets})
 	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{deploy}, 0)
 
-	// This fixture uses the same wallet as account owner and Guardian, so it
-	// needs four personal slots plus one mailbox-share slot.
+	// This fixture uses the same wallet as account owner and Guardian. The
+	// compact recovery package uses one personal slot plus one mailbox slot.
 	config := &contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "5"}
 	configParam, err := config.Encode()
 	require.NoError(t, err)
@@ -136,24 +136,18 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 		authorization, accountID, *pkg.GuardianCapsule,
 	))
 
-	values := map[string][]byte{}
-	for name, value := range map[string]interface{}{
-		"envelope": pkg.Envelope, "share/dkvs": pkg.DKVSShareCapsule,
-		"questions": pkg.KnowledgeBundle, "manifest": pkg.Manifest,
-	} {
-		encoded, encodeErr := json.Marshal(value)
-		require.NoError(t, encodeErr)
-		key, keyErr := dkvsindexer.PersonalKey(pubKey,
-			"account/recovery/"+pkg.Envelope.Locator.PackageID+"/"+name)
-		require.NoError(t, keyErr)
-		values[key] = encoded
-	}
-	guardianBytes, err := json.Marshal(pkg.GuardianCapsule)
+	packageBytes, err := account.EncodeRecoveryPackageStorage(*pkg)
+	require.NoError(t, err)
+	packageKey, err := dkvsindexer.PersonalKey(pubKey,
+		"account/recovery/"+pkg.Envelope.Locator.PackageID)
+	require.NoError(t, err)
+	guardianBytes, err := account.EncodeGuardianCapsuleStorage(*pkg.GuardianCapsule)
 	require.NoError(t, err)
 	guardianKey, err := dkvsindexer.MailShareKey(accountID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
 	require.NoError(t, err)
-	values[guardianKey] = guardianBytes
-	for key, value := range values {
+	for key, value := range map[string][]byte{
+		packageKey: packageBytes, guardianKey: guardianBytes,
+	} {
 		requireDKVSValue(t, fixture.Network.Bootstrap, key, value)
 		requireDKVSValue(t, fixture.Network.Core, key, value)
 		requireDKVSValue(t, fixture.Network.Miner, key, value)
@@ -191,13 +185,14 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.Equal(t, backup.Wallets[0].Name, restored.Wallets[0].Name)
 	require.Equal(t, uint32(2), restored.Wallets[0].AccountCount)
 
-	packagePrefix, err := dkvsindexer.AccountPersonalKey(accountID,
-		"account/recovery/"+pkg.Envelope.Locator.PackageID)
+	packagePrefix, err := dkvsindexer.AccountPersonalKey(accountID, "account/recovery")
 	require.NoError(t, err)
 	records, total, err := coreClient.ListRecords(packagePrefix, 0, 10)
 	require.NoError(t, err)
-	require.Equal(t, 4, total)
-	require.Len(t, records, 4)
+	require.Equal(t, 1, total)
+	require.Len(t, records, 1)
+	require.Equal(t, packageKey, records[0].Key)
+	require.Equal(t, packageBytes, records[0].Value)
 	for _, record := range records {
 		require.Zero(t, record.TTL)
 		require.Zero(t, record.ExpiryHeight)
@@ -208,7 +203,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	usage, err := coreClient.GetUsage(packagePrefix)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
-	require.Equal(t, uint64(4), usage.ActiveRecords)
+	require.Equal(t, uint64(1), usage.ActiveRecords)
 	require.Greater(t, usage.ActiveTotalSize, uint64(0))
 	require.True(t, strings.HasPrefix(pkg.Manifest.Locator.AccountID, accountID))
 }

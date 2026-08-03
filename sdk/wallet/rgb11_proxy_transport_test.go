@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -32,7 +33,10 @@ type rgb11ProxyTestServer struct {
 	vout        *uint32
 	consignment []byte
 	ack         *bool
+	postError   *rgb11ProxyError
 }
+
+const testRGB11ProxyTransport = "rpcs://proxy.iriswallet.com/0.2/json-rpc"
 
 func (s *rgb11ProxyTestServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -99,6 +103,13 @@ func (s *rgb11ProxyTestServer) handleMultipart(w http.ResponseWriter, r *http.Re
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.mu.Lock()
+	postError := s.postError
+	s.mu.Unlock()
+	if postError != nil {
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": postError})
+		return
+	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -121,12 +132,25 @@ func (s *rgb11ProxyTestServer) handleMultipart(w http.ResponseWriter, r *http.Re
 
 func TestRGB11ReceiveTransportsBuildsStandardInvoiceEndpoint(t *testing.T) {
 	transports, standard, err := rgb11ReceiveTransports(RGB11InvoiceRequest{
-		TransportMode: RGB11ProxyTransport,
+		TransportMode: "out-of-band",
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || !standard || len(transports) != 0 {
+		t.Fatalf("unexpected out-of-band transport: standard=%v transports=%+v err=%v", standard, transports, err)
 	}
-	if !standard || len(transports) != 1 || transports[0].String() != defaultRGB11ProxyTransport {
+	if _, _, err := rgb11ReceiveTransports(RGB11InvoiceRequest{
+		TransportMode: "out-of-band", TransportEndpoints: []string{testRGB11ProxyTransport},
+	}); err == nil {
+		t.Fatal("out-of-band transport accepted a proxy endpoint")
+	}
+	if _, _, err := rgb11ReceiveTransports(RGB11InvoiceRequest{
+		TransportMode: RGB11ProxyTransport,
+	}); !errors.Is(err, ErrRGB11ProxyNoEndpoint) {
+		t.Fatalf("missing endpoint error = %v", err)
+	}
+	transports, standard, err = rgb11ReceiveTransports(RGB11InvoiceRequest{
+		TransportMode: RGB11ProxyTransport, TransportEndpoints: []string{testRGB11ProxyTransport},
+	})
+	if err != nil || !standard || len(transports) != 1 || transports[0].String() != testRGB11ProxyTransport {
 		t.Fatalf("unexpected standard transports: standard=%v transports=%+v", standard, transports)
 	}
 	if _, _, err := rgb11ReceiveTransports(RGB11InvoiceRequest{
@@ -210,8 +234,83 @@ func TestRGB11ProxyInvoiceAcceptsBlindedBeneficiary(t *testing.T) {
 		t.Fatal(err)
 	}
 	if parsed.Beneficiary.Kind != invoicing.BeneficiaryBlindedSeal || len(endpoints) != 1 ||
-		endpoints[0].invoice != defaultRGB11ProxyTransport {
+		endpoints[0].invoice != testRGB11ProxyTransport {
 		t.Fatalf("unexpected blinded proxy invoice: invoice=%+v endpoints=%+v", parsed, endpoints)
+	}
+}
+
+func TestRGB11WitnessReceiveMatchesExpectedRecipientAfterChange(t *testing.T) {
+	recipientWallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch",
+		"", &chaincfg.TestNet4Params,
+	)
+	if recipientWallet == nil {
+		t.Fatal("create recipient wallet")
+	}
+	evidence := &rgb11FlowEvidence{
+		utxos: make(map[string]*rgb11wallet.BitcoinUTXO),
+		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+	}
+	manager := newRGB11FlowManager(t, recipientWallet, &rgb11FlowIndexer{
+		outputs: make(map[string]*TxOutput),
+	}, evidence, 94)
+	receive, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "witness", TransportMode: RGB11ProxyTransport,
+		TransportEndpoints: []string{testRGB11ProxyTransport},
+		AmountRaw:          "10", WitnessVout: 2, Expiry: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := manager.rgbManager.engine.LoadReceive(receive.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invoice, err := invoicing.Parse(receive.Invoice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txID := strings.Repeat("91", 32)
+	changeOutpoint := txID + ":1"
+	recipientOutpoint := txID + ":2"
+	assetName := indexer.AssetName{Protocol: "rgb11", Type: "f", Ticker: "recipient-match"}
+	receipt := &rgb11wallet.ValidationReceipt{Allocations: []rgb11wallet.ValidatedAllocation{
+		{
+			OutPoint: changeOutpoint, AssetName: assetName,
+			Amount: *indexer.NewDefaultDecimal(90), AssignmentType: 4000,
+			WitnessTxPtr: true, WitnessTxID: txID, CommitmentMethod: "genesis",
+		},
+		{
+			OutPoint: recipientOutpoint, AssetName: assetName,
+			Amount: *indexer.NewDefaultDecimal(10), AssignmentType: 4000,
+			WitnessTxPtr: true, WitnessTxID: txID, CommitmentMethod: "genesis",
+		},
+	}}
+	preparedOutputs := map[string]*rgb11wallet.BitcoinUTXO{
+		changeOutpoint: {
+			OutPoint: changeOutpoint, Value: 1_000, PkScript: []byte{0x51},
+		},
+		recipientOutpoint: {
+			OutPoint: recipientOutpoint, Value: 1_000,
+			PkScript: append([]byte(nil), request.WitnessScript...),
+		},
+	}
+	expectedVout := uint32(2)
+	matched, err := manager.rgbManager.matchRGB11ReceiveAllocation(
+		receipt, request, invoice, preparedOutputs, txID, &expectedVout,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched.Allocation.OutPoint != recipientOutpoint || matched.Vout == nil ||
+		*matched.Vout != expectedVout || matched.SealCommitment != "" {
+		t.Fatalf("unexpected witness allocation match: %+v", matched)
+	}
+	wrongVout := uint32(1)
+	if _, err := manager.rgbManager.matchRGB11ReceiveAllocation(
+		receipt, request, invoice, preparedOutputs, txID, &wrongVout,
+	); !errors.Is(err, ErrRGB11NoAllocation) {
+		t.Fatalf("wrong proxy vout was accepted: %v", err)
 	}
 }
 
@@ -374,6 +473,44 @@ func TestRGB11ProxyDeliveryBroadcastsBeforeAck(t *testing.T) {
 	if stored.State.Status != "broadcast" || stored.State.AckStatus != "accepted" {
 		t.Fatalf("ACK changed broadcast lifecycle incorrectly: %+v", stored.State)
 	}
+
+	conflictID := "proxy-recipient-conflict"
+	inputOutpoint := strings.Repeat("44", 32) + ":0"
+	conflict := *pending
+	conflict.State = pending.State
+	conflict.State.TransferID = conflictID
+	conflict.State.BatchTransferIDs = []string{conflictID}
+	conflict.State.Status = "prepared"
+	conflict.State.AckStatus = "awaiting"
+	conflict.State.InputOutPoints = []string{inputOutpoint}
+	if err := manager.rgbManager.projectionStore.SavePendingTransfer(&conflict); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.utxoLockerL1.SetLockReason(inputOutpoint, rgb11wallet.LockReasonPending); err != nil {
+		t.Fatal(err)
+	}
+	state.mu.Lock()
+	state.postError = &rgb11ProxyError{Code: -101, Message: "Cannot change uploaded file"}
+	state.mu.Unlock()
+	broadcastCount := len(evidence.broadcasted)
+	_, err = manager.rgbManager.DeliverAndBroadcastRGB11ProxyTransfer(
+		context.Background(), []string{conflictID},
+	)
+	var proxyErr *rgb11ProxyRPCError
+	if !errors.As(err, &proxyErr) || proxyErr.Code != -101 {
+		t.Fatalf("terminal proxy error = %v", err)
+	}
+	if len(evidence.broadcasted) != broadcastCount {
+		t.Fatal("terminal proxy conflict broadcast the witness transaction")
+	}
+	rejected, err := manager.rgbManager.projectionStore.LoadPendingTransfer(conflictID)
+	if err != nil || rejected.State.Status != "rejected" ||
+		rejected.State.RejectReason != "proxy-recipient-conflict" {
+		t.Fatalf("terminal proxy conflict state = %+v, err=%v", rejected, err)
+	}
+	if lock := manager.utxoLockerL1.GetLockedUtxoList()[inputOutpoint]; lock != nil {
+		t.Fatalf("terminal proxy conflict left input locked: %+v", lock)
+	}
 }
 
 func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
@@ -522,7 +659,7 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 	}
 	if len(proofs) != 1 || proofs[0].OutPoint != receiveOutpoint ||
 		proofs[0].WitnessTxID != pending.State.WitnessTxID ||
-		proofs[0].Status != "valid" {
+		proofs[0].Status != "valid" || proofs[0].SealCommitment == "" {
 		t.Fatalf("unexpected accepted blind allocation: %+v", proofs)
 	}
 	if lock := recipient.utxoLockerL1.GetLockedUtxoList()[receiveOutpoint]; lock == nil ||

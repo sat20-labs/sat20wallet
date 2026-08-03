@@ -262,7 +262,8 @@ class WalletManager {
 
   async createRGB11Invoice(request: {
     mode?: 'blind' | 'witness'
-    transport_mode?: 'sat20' | 'rgb-json-rpc'
+    transport_mode?: 'sat20' | 'rgb-json-rpc' | 'out-of-band'
+    transport_endpoints?: string[]
     contract_id: string
     schema_id?: string
     amount_raw: number | string
@@ -329,6 +330,12 @@ class WalletManager {
     return this._handleRequest('acceptRGB11Consignment', requestId, consignment)
   }
 
+  async prepareRGB11Consignment(requestId: string, consignment: string): Promise<
+    [Error | undefined, { receipt: string } | undefined]
+  > {
+    return this._handleRequest('prepareRGB11Consignment', requestId, consignment)
+  }
+
   async receiveRGB11ProxyConsignment(requestId: string): Promise<
     [Error | undefined, {
       request_id: string
@@ -368,7 +375,13 @@ class WalletManager {
   async cancelRGB11BatchByNack(transferId: string, relayRecord: string, nack: string): Promise<
 	[Error | undefined, { cancelled: boolean } | undefined]
   > {
-	return this._handleRequest('cancelRGB11BatchByNack', transferId, relayRecord, nack)
+    return this._handleRequest('cancelRGB11BatchByNack', transferId, relayRecord, nack)
+  }
+
+  async cancelRGB11OutOfBandTransfer(transferId: string): Promise<
+    [Error | undefined, { cancelled: boolean } | undefined]
+  > {
+    return this._handleRequest('cancelRGB11OutOfBandTransfer', transferId)
   }
 
   async broadcastRGB11Transfer(transferId: string, relayRecord: string, ack: string): Promise<

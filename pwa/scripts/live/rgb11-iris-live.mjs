@@ -6,9 +6,13 @@ const PWA_URL = process.env.SAT20_PWA_URL || 'http://localhost:5173/#/'
 const PASSWORD = process.env.SAT20_TEST_PASSWORD || '123456'
 const ACTION = process.env.SAT20_IRIS_ACTION || 'status'
 const IRIS_INVOICE = process.env.SAT20_IRIS_INVOICE || ''
+const EXISTING_ASSET_NAME = process.env.SAT20_IRIS_ASSET_NAME || ''
 const SEND_AMOUNT = process.env.SAT20_IRIS_SEND_AMOUNT || '10'
 const RETURN_AMOUNT = process.env.SAT20_IRIS_RETURN_AMOUNT || '2'
 const ISSUE_AMOUNT = process.env.SAT20_IRIS_ISSUE_AMOUNT || '100'
+const IRIS_BTC_ADDRESS = process.env.SAT20_IRIS_BTC_ADDRESS || ''
+const IRIS_BTC_AMOUNT = process.env.SAT20_IRIS_BTC_AMOUNT || '12000'
+const IRIS_PROXY_ENDPOINT = process.env.SAT20_IRIS_PROXY_ENDPOINT || 'rpcs://proxy.iriswallet.com/0.2/json-rpc'
 const CONTRACT_FILE_PATH = process.env.SAT20_RGB11_CONTRACT_FILE || ''
 const CONTRACT_FILE_BASE64 = CONTRACT_FILE_PATH
   ? readFileSync(CONTRACT_FILE_PATH).toString('base64')
@@ -37,7 +41,10 @@ await page.goto(PWA_URL, { waitUntil: 'domcontentloaded' })
 await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__), null, { timeout: 180_000 })
 
 const result = await page.evaluate(async ({
-  action, password, senderMnemonic, senderAddress, senderWalletId, irisInvoice, issueAmount, sendAmount, returnAmount,
+  action, password, senderMnemonic, senderAddress, senderWalletId, irisInvoice, existingAssetName,
+  issueAmount, sendAmount, returnAmount,
+  irisBtcAddress, irisBtcAmount,
+  irisProxyEndpoint,
   contractFileBase64, checkpointKey,
 }) => {
   const verify = window.__SAT20_PWA_VERIFY__
@@ -51,6 +58,10 @@ const result = await page.evaluate(async ({
     const result = await unwrap(await sat20.getRGB11State(), 'getRGB11State')
     return JSON.parse(result.state)
   }
+  const assetName = (name) => `${name?.Protocol || ''}:${name?.Type || ''}:${name?.Ticker || ''}`
+  const assetAmount = (assets, expectedName) => String(
+    (assets || []).find((asset) => assetName(asset?.Name) === expectedName)?.Amount?.Value ?? '0',
+  )
   const readCheckpoint = () => {
     const raw = localStorage.getItem(checkpointKey)
     return raw ? JSON.parse(raw) : {}
@@ -112,6 +123,15 @@ const result = await page.evaluate(async ({
   await unwrap(await sat20.switchAccount(0), 'switchAccount')
   if (!['iris-issued-invoice', 'receive-iris-issued'].includes(action)) {
     await waitForData()
+  }
+
+  if (action === 'fund-btc') {
+    if (!irisBtcAddress.trim()) throw new Error('SAT20_IRIS_BTC_ADDRESS is required for fund-btc')
+    const funded = await unwrap(
+      await sat20.sendAssets(irisBtcAddress, '::', irisBtcAmount, '1'),
+      'sendAssets for Iris Bitcoin funding',
+    )
+    return { action, address: irisBtcAddress, amount: irisBtcAmount, funded }
   }
 
   if (action === 'issue-file') {
@@ -186,11 +206,56 @@ const result = await page.evaluate(async ({
     return { action, checkpoint: completed, state: await parseState() }
   }
 
+  if (action === 'send-existing') {
+    if (!irisInvoice.trim()) throw new Error('SAT20_IRIS_INVOICE is required for send-existing')
+    if (!existingAssetName.trim()) throw new Error('SAT20_IRIS_ASSET_NAME is required for send-existing')
+    const state = await parseState()
+    const info = (state.ticker_infos || []).find((item) => (
+      item.canonical_name === existingAssetName || assetName(item.name) === existingAssetName
+    ))
+    if (!info?.contract_id) throw new Error(`RGB11 asset is not registered: ${existingAssetName}`)
+    const available = assetAmount(state.available_assets, existingAssetName)
+    if (BigInt(available) < BigInt(sendAmount)) {
+      throw new Error(`RGB11 asset ${existingAssetName} available ${available}, requested ${sendAmount}`)
+    }
+    const preparedResponse = await unwrap(await sat20.prepareRGB11Transfer({
+      invoice: irisInvoice,
+      contract_id: info.contract_id,
+      amount_raw: sendAmount,
+      fee_rate: 1,
+      min_confirmations: 1,
+    }), 'prepareRGB11Transfer')
+    const prepared = JSON.parse(preparedResponse.transfer)
+    if (prepared.state?.transport_mode !== 'rgb-json-rpc' || !prepared.state?.transfer_id) {
+      throw new Error(`unexpected prepared transfer ${JSON.stringify(prepared.state)}`)
+    }
+    const checkpoint = {
+      ...readCheckpoint(),
+      version: 1,
+      assetName: existingAssetName,
+      ticker: info.name?.Ticker || existingAssetName.split(':').at(-1),
+      contractId: info.contract_id,
+      schemaId: info.schema_id || '',
+      irisInvoice,
+      sendAmount,
+      transferId: prepared.state.transfer_id,
+    }
+    writeCheckpoint(checkpoint)
+    const broadcast = await unwrap(
+      await sat20.deliverAndBroadcastRGB11ProxyTransfer([prepared.state.transfer_id]),
+      'deliverAndBroadcastRGB11ProxyTransfer',
+    )
+    const completed = { ...checkpoint, txid: broadcast.txid }
+    writeCheckpoint(completed)
+    return { action, checkpoint: completed, state: await parseState() }
+  }
+
   const checkpoint = readCheckpoint()
   if (action === 'generic-invoice') {
     const invoice = await unwrap(await sat20.createRGB11Invoice({
       mode: 'witness',
       transport_mode: 'rgb-json-rpc',
+      transport_endpoints: [irisProxyEndpoint],
       contract_id: '',
       schema_id: '',
       amount_raw: returnAmount,
@@ -235,6 +300,7 @@ const result = await page.evaluate(async ({
     const invoice = await unwrap(await sat20.createRGB11Invoice({
       mode: 'blind',
       transport_mode: 'rgb-json-rpc',
+      transport_endpoints: [irisProxyEndpoint],
       contract_id: checkpoint.irisIssuedContractId,
       schema_id: checkpoint.irisIssuedSchemaId,
       amount_raw: returnAmount,
@@ -305,6 +371,7 @@ const result = await page.evaluate(async ({
     const invoice = await unwrap(await sat20.createRGB11Invoice({
       mode: 'witness',
       transport_mode: 'rgb-json-rpc',
+      transport_endpoints: [irisProxyEndpoint],
       contract_id: checkpoint.contractId,
       schema_id: checkpoint.schemaId,
       amount_raw: returnAmount,
@@ -336,9 +403,13 @@ const result = await page.evaluate(async ({
   senderAddress: SENDER_ADDRESS,
   senderWalletId: SENDER_WALLET_ID,
   irisInvoice: IRIS_INVOICE,
+  existingAssetName: EXISTING_ASSET_NAME,
   issueAmount: ISSUE_AMOUNT,
   sendAmount: SEND_AMOUNT,
   returnAmount: RETURN_AMOUNT,
+  irisBtcAddress: IRIS_BTC_ADDRESS,
+  irisBtcAmount: IRIS_BTC_AMOUNT,
+  irisProxyEndpoint: IRIS_PROXY_ENDPOINT,
   contractFileBase64: CONTRACT_FILE_BASE64,
   checkpointKey: CHECKPOINT_KEY,
 })

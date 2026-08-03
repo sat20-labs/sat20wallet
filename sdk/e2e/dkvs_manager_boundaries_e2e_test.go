@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
@@ -133,19 +132,12 @@ func e2eKnowledgeAnswers() []account.AnswerAttempt {
 
 func recoveryPackageValues(t *testing.T, pubKey []byte, pkg *account.RecoveryPackage) map[string][]byte {
 	t.Helper()
-	result := make(map[string][]byte, 4)
-	for name, value := range map[string]interface{}{
-		"envelope": pkg.Envelope, "share/dkvs": pkg.DKVSShareCapsule,
-		"questions": pkg.KnowledgeBundle, "manifest": pkg.Manifest,
-	} {
-		encoded, err := json.Marshal(value)
-		require.NoError(t, err)
-		key, err := dkvsindexer.PersonalKey(pubKey,
-			"account/recovery/"+pkg.Envelope.Locator.PackageID+"/"+name)
-		require.NoError(t, err)
-		result[key] = encoded
-	}
-	return result
+	encoded, err := account.EncodeRecoveryPackageStorage(*pkg)
+	require.NoError(t, err)
+	key, err := dkvsindexer.PersonalKey(pubKey,
+		"account/recovery/"+pkg.Envelope.Locator.PackageID)
+	require.NoError(t, err)
+	return map[string][]byte{key: encoded}
 }
 
 func clearBytes(value []byte) {

@@ -17,6 +17,7 @@ export interface AccountStorageOption {
   full_record_fee_per_block?: string
   minimum_amount_per_block?: string
   amount_per_block?: string
+  contract_address?: string
 }
 
 export interface AccountWalletMetadataInput {

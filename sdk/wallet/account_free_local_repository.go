@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
@@ -36,48 +35,61 @@ func NewFreeLocalAccountDKVSRepository(store *dkvsStore, owner common.Wallet,
 
 func (r *FreeLocalAccountDKVSRepository) AccountID() string { return r.accountID }
 
-func (r *FreeLocalAccountDKVSRepository) putJSON(path string, value any) error {
-	encoded, err := json.Marshal(value)
-	if err != nil {
+func (r *FreeLocalAccountDKVSRepository) SaveRecoveryPackage(_ context.Context,
+	value account.RecoveryPackage) error {
+
+	if err := r.assertLocator(value.Envelope.Locator); err != nil {
 		return err
 	}
-	if len(encoded) > account.MaxRecoveryObjectSize {
-		return fmt.Errorf("account recovery object exceeds DKVS value limit")
+	encoded, err := account.EncodeRecoveryPackageStorage(value)
+	if err != nil {
+		return err
 	}
 	pubKey, err := dkvsWalletPubKey(r.owner)
 	if err != nil {
 		return err
 	}
-	key, err := dkvsindexer.PersonalKey(pubKey, path)
+	key, err := dkvsindexer.PersonalKey(pubKey,
+		accountPackagePath(value.Envelope.Locator.PackageID))
 	if err != nil {
 		return err
 	}
 	_, err = r.store.Put(dkvsValueMutation{
 		Key: key, Value: encoded, Owner: r.owner, Signature: dkvsSignatureAccount,
 		Policy: dkvsStoragePolicy{
-			TTL: r.recordOptions.TTL, ExpiryHeight: r.recordOptions.ExpiryHeight, FreeLocal: true,
+			TTL: r.recordOptions.TTL, ExpiryHeight: r.recordOptions.ExpiryHeight,
+			FreeLocal: true,
 		},
 	})
 	return err
 }
 
-func (r *FreeLocalAccountDKVSRepository) getJSON(path string, target any) error {
+func (r *FreeLocalAccountDKVSRepository) LoadRecoveryPackage(_ context.Context,
+	locator account.Locator) (*account.RecoveryPackage, error) {
+
+	if err := r.assertLocator(locator); err != nil {
+		return nil, err
+	}
 	pubKey, err := dkvsindexer.AccountPubKey(r.accountID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	key, err := dkvsindexer.PersonalKey(pubKey, path)
+	key, err := dkvsindexer.PersonalKey(pubKey, accountPackagePath(locator.PackageID))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	record, err := r.store.Get(key)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if record == nil || len(record.Value) == 0 || len(record.Value) > account.MaxRecoveryObjectSize {
-		return fmt.Errorf("invalid account recovery object")
+	result, err := account.DecodeRecoveryPackageStorage(record.Value)
+	if err != nil {
+		return nil, err
 	}
-	return json.Unmarshal(record.Value, target)
+	if result.Envelope.Locator != locator {
+		return nil, account.ErrInvalidRecoveryPackage
+	}
+	return result, nil
 }
 
 func (r *FreeLocalAccountDKVSRepository) assertLocator(locator account.Locator) error {
@@ -88,78 +100,4 @@ func (r *FreeLocalAccountDKVSRepository) assertLocator(locator account.Locator) 
 		return fmt.Errorf("locator does not belong to repository account")
 	}
 	return nil
-}
-
-func (r *FreeLocalAccountDKVSRepository) SaveEnvelope(_ context.Context, value account.Envelope) error {
-	if err := r.assertLocator(value.Locator); err != nil {
-		return err
-	}
-	return r.putJSON(accountPath(value.Locator.PackageID, "envelope"), value)
-}
-
-func (r *FreeLocalAccountDKVSRepository) SaveDKVSShareCapsule(_ context.Context, locator account.Locator,
-	value account.DKVSShareCapsule) error {
-	if err := r.assertLocator(locator); err != nil {
-		return err
-	}
-	return r.putJSON(accountPath(locator.PackageID, "share/dkvs"), value)
-}
-
-func (r *FreeLocalAccountDKVSRepository) SaveKnowledgeBundle(_ context.Context, locator account.Locator,
-	value account.KnowledgeRecoveryBundle) error {
-	if err := r.assertLocator(locator); err != nil {
-		return err
-	}
-	return r.putJSON(accountPath(locator.PackageID, "questions"), value)
-}
-
-func (r *FreeLocalAccountDKVSRepository) SaveManifest(_ context.Context, value account.Manifest) error {
-	if err := r.assertLocator(value.Locator); err != nil {
-		return err
-	}
-	return r.putJSON(accountPath(value.Locator.PackageID, "manifest"), value)
-}
-
-func (r *FreeLocalAccountDKVSRepository) LoadEnvelope(_ context.Context, locator account.Locator) (*account.Envelope, error) {
-	if err := r.assertLocator(locator); err != nil {
-		return nil, err
-	}
-	var value account.Envelope
-	if err := r.getJSON(accountPath(locator.PackageID, "envelope"), &value); err != nil {
-		return nil, err
-	}
-	return &value, nil
-}
-
-func (r *FreeLocalAccountDKVSRepository) LoadDKVSShareCapsule(_ context.Context, locator account.Locator) (*account.DKVSShareCapsule, error) {
-	if err := r.assertLocator(locator); err != nil {
-		return nil, err
-	}
-	var value account.DKVSShareCapsule
-	if err := r.getJSON(accountPath(locator.PackageID, "share/dkvs"), &value); err != nil {
-		return nil, err
-	}
-	return &value, nil
-}
-
-func (r *FreeLocalAccountDKVSRepository) LoadKnowledgeBundle(_ context.Context, locator account.Locator) (*account.KnowledgeRecoveryBundle, error) {
-	if err := r.assertLocator(locator); err != nil {
-		return nil, err
-	}
-	var value account.KnowledgeRecoveryBundle
-	if err := r.getJSON(accountPath(locator.PackageID, "questions"), &value); err != nil {
-		return nil, err
-	}
-	return &value, nil
-}
-
-func (r *FreeLocalAccountDKVSRepository) LoadManifest(_ context.Context, locator account.Locator) (*account.Manifest, error) {
-	if err := r.assertLocator(locator); err != nil {
-		return nil, err
-	}
-	var value account.Manifest
-	if err := r.getJSON(accountPath(locator.PackageID, "manifest"), &value); err != nil {
-		return nil, err
-	}
-	return &value, nil
 }

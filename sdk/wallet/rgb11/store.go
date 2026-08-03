@@ -448,6 +448,8 @@ func (s *ProjectionStore) SavePendingTransfers(pendingList []*PendingTransfer) e
 			return ErrValidationReceipt
 		}
 		localHash := sha256.Sum256(pending.LocalConsignment)
+		pending.RecipientObjectHash = hex.EncodeToString(recipientHash[:])
+		pending.LocalObjectHash = hex.EncodeToString(localHash[:])
 		encodedPending, err := encode(pending)
 		if err != nil {
 			return err
@@ -618,6 +620,8 @@ func (s *ProjectionStore) CompactRejectedTransfers(transferIDs []string) error {
 		}
 		pending.RecipientConsignment = nil
 		pending.LocalConsignment = nil
+		pending.RecipientObjectHash = ""
+		pending.LocalObjectHash = ""
 		pending.SignedTx = nil
 		pending.SignedPSBT = nil
 		pending.ChangeSeals = nil

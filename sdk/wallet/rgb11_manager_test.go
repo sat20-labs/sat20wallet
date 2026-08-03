@@ -321,8 +321,7 @@ func TestRGB11WitnessInvoicesUseCurrentAccountKey(t *testing.T) {
 			t.Fatalf("RGB11 invoice beneficiary script=%x expected=%x err=%v", invoiceScript, activeScript, err)
 		}
 	}
-	if _, err := manager.rgbManager.projectionStore.LoadReceiveKey(activeScript);
-		!errors.Is(err, indexer.ErrKeyNotFound) {
+	if _, err := manager.rgbManager.projectionStore.LoadReceiveKey(activeScript); !errors.Is(err, indexer.ErrKeyNotFound) {
 		t.Fatalf("fixed-address witness invoice persisted receive-key state: %v", err)
 	}
 	projection, err := manager.rgbManager.projectionStore.ExportSnapshot()
@@ -350,6 +349,52 @@ func TestRGB11WitnessInvoicesUseCurrentAccountKey(t *testing.T) {
 		}
 		if !bytes.Equal(stored.WitnessScript, activeScript) {
 			t.Fatalf("restored witness script=%x expected=%x", stored.WitnessScript, activeScript)
+		}
+	}
+}
+
+func TestRGB11StandardWitnessInvoicesUseIndependentReceiveKeys(t *testing.T) {
+	wallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
+	)
+	if wallet == nil {
+		t.Fatal("create test wallet")
+	}
+	manager := newRGB11FlowManager(t, wallet, &rgb11FlowIndexer{
+		outputs: make(map[string]*TxOutput),
+	}, &rgb11FlowEvidence{
+		utxos: make(map[string]*rgb11wallet.BitcoinUTXO), rawTx: make(map[string][]byte),
+		spendingTx: make(map[string]string),
+	}, 72)
+	requests := make([]*corewallet.ReceiveRequest, 0, 2)
+	for _, amount := range []string{"1", "2"} {
+		request, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+			Mode: "witness", TransportMode: RGB11ProxyTransport,
+			TransportEndpoints: []string{testRGB11ProxyTransport},
+			AmountRaw:          amount, WitnessVout: 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, request)
+	}
+	if bytes.Equal(requests[0].WitnessScript, requests[1].WitnessScript) {
+		t.Fatal("standard witness invoices reused one receive key")
+	}
+	activeScript, err := AddrToPkScript(wallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range requests {
+		if bytes.Equal(request.WitnessScript, activeScript) {
+			t.Fatal("standard witness invoice reused the active account key")
+		}
+		key, err := manager.rgbManager.projectionStore.LoadReceiveKey(request.WitnessScript)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key.Change != 1 || key.RequestID != request.RequestID {
+			t.Fatalf("unexpected receive key: %+v", key)
 		}
 	}
 }
@@ -384,7 +429,8 @@ func TestRGB11StandardProxyInvoiceUsesBlindedBeneficiary(t *testing.T) {
 	}
 	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 71)
 	request, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
-		Mode: "blind", TransportMode: RGB11ProxyTransport, AmountRaw: "2", WitnessVout: 1,
+		Mode: "blind", TransportMode: RGB11ProxyTransport,
+		TransportEndpoints: []string{testRGB11ProxyTransport}, AmountRaw: "2", WitnessVout: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -396,7 +442,7 @@ func TestRGB11StandardProxyInvoiceUsesBlindedBeneficiary(t *testing.T) {
 	if parsed.Beneficiary.Kind != invoicing.BeneficiaryBlindedSeal {
 		t.Fatalf("beneficiary kind = %v", parsed.Beneficiary.Kind)
 	}
-	if len(parsed.Transports) != 1 || parsed.Transports[0].String() != defaultRGB11ProxyTransport {
+	if len(parsed.Transports) != 1 || parsed.Transports[0].String() != testRGB11ProxyTransport {
 		t.Fatalf("unexpected transports: %+v", parsed.Transports)
 	}
 	if len(parsed.UnknownQuery) != 0 {

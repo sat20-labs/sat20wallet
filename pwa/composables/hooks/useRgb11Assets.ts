@@ -20,13 +20,6 @@ const tickerInfoFor = (state: RGB11StateDTO, name: any) => (
   })
 )
 
-// Only wallets created before canonical RGB11 naming stored the contract id in
-// AssetName.Ticker. New asset keys are intentionally not reversible.
-const legacyOfficialContractID = (ticker: unknown) => {
-  const value = String(ticker || '')
-  return value.startsWith('rgb:') ? value : `rgb:${value}`
-}
-
 export const decorateRGB11AssetItems = (items: any[], state: RGB11StateDTO) => items.map((item: any) => {
   const name = {
     Protocol: item.protocol,
@@ -36,8 +29,7 @@ export const decorateRGB11AssetItems = (items: any[], state: RGB11StateDTO) => i
   const tickerInfo = tickerInfoFor(state, name)
   const canonicalName = String(tickerInfo?.canonical_name || tickerInfo?.CanonicalName ||
     `${name.Protocol || 'rgb11'}:${name.Type || 'f'}:${name.Ticker || ''}`)
-  const contractId = String(tickerInfo?.contract_id || tickerInfo?.ContractID ||
-    legacyOfficialContractID(name.Ticker))
+  const contractId = String(tickerInfo?.contract_id || tickerInfo?.ContractID || '')
   const displayName = String(tickerInfo?.displayname || tickerInfo?.DisplayName || '').trim()
   const symbol = String(tickerInfo?.ticker || tickerInfo?.Ticker || '').trim()
   const fingerprint = String(tickerInfo?.fingerprint || tickerInfo?.Fingerprint || '').trim()

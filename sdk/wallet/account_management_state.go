@@ -391,6 +391,35 @@ func (p *Manager) queueAccountMutationLocked(mutation accountManagementMutation)
 		}
 		mutation.ID = id
 	}
+	for index := len(p.accountProfile.Pending) - 1; index >= 0; index-- {
+		current := &p.accountProfile.Pending[index]
+		if current.Fingerprint != mutation.Fingerprint {
+			continue
+		}
+		if current.Type == accountMutationAddWallet &&
+			mutation.Type != accountMutationDeleteWallet {
+			// The add mutation serializes the latest local wallet metadata.
+			return nil
+		}
+		walletMetadata := mutation.Type == accountMutationWalletName &&
+			current.Type == accountMutationWalletName
+		accountMetadata := mutation.Account == current.Account &&
+			(mutation.Type == accountMutationEnsureAccount || mutation.Type == accountMutationMetadata) &&
+			(current.Type == accountMutationEnsureAccount || current.Type == accountMutationMetadata)
+		if !walletMetadata && !accountMetadata {
+			continue
+		}
+		mutation.ID = current.ID
+		if current.Type == accountMutationEnsureAccount {
+			mutation.Type = accountMutationEnsureAccount
+		}
+		*current = mutation
+		if err := p.saveAccountManagementProfileLocked(); err != nil {
+			return err
+		}
+		p.markDKVSStateDirty()
+		return nil
+	}
 	p.accountProfile.Pending = append(p.accountProfile.Pending, mutation)
 	if err := p.saveAccountManagementProfileLocked(); err != nil {
 		return err

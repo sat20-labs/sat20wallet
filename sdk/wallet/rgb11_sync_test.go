@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,7 +107,6 @@ func TestRGB11BackupCodecIsCompactDeterministic(t *testing.T) {
 		Version: rgb11WalletSnapshotVersion, WalletID: "wallet-42", AccountIndex: 3, EngineBuildID: "rgb11-engine",
 		ProjectionRecords: []rgb11wallet.SnapshotRecord{{Key: "output-test:0", Value: []byte("projected allocation")}},
 		EngineRecords:     []rgb11wallet.SnapshotRecord{{Key: "receive-test", Value: []byte("invoice state")}},
-		TickerInfos:       []*indexer.TickerInfo{{DisplayName: "RGB Test", MaxSupply: "100000", Divisibility: 8}},
 	}
 	first, err := rgb11wallet.EncodeWalletSnapshotPayload(snapshot)
 	if err != nil {
@@ -133,7 +133,7 @@ func TestRGB11BackupCodecIsCompactDeterministic(t *testing.T) {
 	}
 	decoded, err := rgb11wallet.DecodeWalletSnapshotPayload(first)
 	if err != nil || decoded.WalletID != snapshot.WalletID || len(decoded.ProjectionRecords) != 1 ||
-		len(decoded.EngineRecords) != 1 || len(decoded.TickerInfos) != 1 || decoded.TickerInfos[0].DisplayName != "RGB Test" {
+		len(decoded.EngineRecords) != 1 {
 		t.Fatalf("compact snapshot decode=%+v err=%v", decoded, err)
 	}
 	if _, err := rgb11wallet.DecodeWalletSnapshotPayload([]byte(`{"wallet_id":"wallet-42"}`)); err == nil {
@@ -151,6 +151,66 @@ func TestRGB11BackupCodecIsCompactDeterministic(t *testing.T) {
 	}
 	if _, _, _, err := rgb11wallet.DecodeEncryptedSnapshot([]byte(`{"wallet_id":"wallet-42"}`)); err == nil {
 		t.Fatal("legacy JSON envelope unexpectedly accepted")
+	}
+}
+
+func TestRGB11SnapshotDoesNotCopyGlobalTickerCatalog(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newRGB11MultiDeviceManager(t, priv, 42)
+	globalName := indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "global_test"}
+	manager.tickerInfoMap[globalName.String()] = &indexer.TickerInfo{
+		AssetName: globalName, DisplayName: "Global RGB Test",
+	}
+	walletID, err := manager.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWalletID := "rgb11-" + hex.EncodeToString(manager.wallet.GetPubKey().SerializeCompressed())
+	if walletID != wantWalletID {
+		t.Fatalf("RGB11 wallet key contains format version: got=%s want=%s", walletID, wantWalletID)
+	}
+	snapshot, _, err := manager.rgbManager.exportRGB11WalletSnapshot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rgb11SnapshotHasState(snapshot) {
+		t.Fatal("empty wallet inherited global RGB ticker metadata")
+	}
+}
+
+func TestRGB11SnapshotPreflightDoesNotPartiallyImportEngineState(t *testing.T) {
+	sourcePriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := newRGB11MultiDeviceManager(t, sourcePriv, 42)
+	createRGB11MultiDeviceInvoice(t, source, "recipient-preflight")
+	engineRecords, err := source.rgbManager.engineStore.ExportSnapshot()
+	if err != nil || len(engineRecords) != 1 {
+		t.Fatalf("source engine records=%d err=%v", len(engineRecords), err)
+	}
+
+	targetPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := newRGB11MultiDeviceManager(t, targetPriv, 43)
+	snapshot := &RGB11WalletSnapshot{
+		Version: rgb11WalletSnapshotVersion, EngineRecords: engineRecords,
+		ProjectionRecords: []rgb11wallet.SnapshotRecord{{Key: "invalid-record", Value: []byte{1}}},
+	}
+	if err := target.rgbManager.importRGB11WalletSnapshot(snapshot); err == nil {
+		t.Fatal("invalid projection snapshot was accepted")
+	}
+	restoredEngine, err := target.rgbManager.engineStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restoredEngine) != 0 {
+		t.Fatalf("engine state was imported before projection preflight: %+v", restoredEngine)
 	}
 }
 
@@ -780,6 +840,59 @@ func TestDKVSManagerBackgroundSyncRefreshesExactKey(t *testing.T) {
 	}
 }
 
+func TestDKVSManagerObserverCanRefresh(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newRGB11MultiDeviceManager(t, priv, 992)
+	remote := newRGB11MemoryDKVSHTTP()
+	configureRGB11DKVSTestManager(manager, remote)
+	dkvs := manager.ensureDKVSManager()
+	const key = "/tmp/observer-refresh"
+	dkvs.rememberPaths([]string{key})
+
+	record, err := NewDKVSSignedRecord(manager.wallet, key, []byte("value"),
+		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	remote.records[key] = cloneRGB11DKVSRecord(record)
+	remote.mu.Unlock()
+
+	observerDone := make(chan error, 1)
+	dkvs.addObserver(func(_ []string) {
+		store, storeErr := dkvs.primaryStore()
+		if storeErr == nil {
+			storeErr = store.Refresh(key)
+		}
+		observerDone <- storeErr
+	})
+	syncDone := make(chan error, 1)
+	go func() {
+		_, syncErr := manager.syncDKVSOnce()
+		syncDone <- syncErr
+	}()
+
+	select {
+	case err := <-syncDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DKVS synchronization deadlocked while notifying an observer")
+	}
+	select {
+	case err := <-observerDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DKVS observer refresh did not complete")
+	}
+}
+
 func TestDKVSManagerReadinessRequiresCurrentSessionSync(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -1011,6 +1124,14 @@ func TestRGB11TwoDevicesRestoreLatestAndRejectStaleWriter(t *testing.T) {
 	}
 
 	createRGB11MultiDeviceInvoice(t, deviceA, "stale-device-a-recipient")
+	createRGB11MultiDeviceInvoice(t, deviceB, "device-b-newer-recipient")
+	head3, err := deviceB.SyncRGB11WalletState(walletID, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head3.Seq != 3 {
+		t.Fatalf("third head sequence=%d", head3.Seq)
+	}
 	if _, err := deviceA.SyncRGB11WalletState(walletID, opts); !errors.Is(err, coresync.ErrHeadConflict) {
 		t.Fatalf("stale device A write was not rejected: %v", err)
 	}
@@ -1028,7 +1149,7 @@ func TestRGB11TwoDevicesRestoreLatestAndRejectStaleWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored2.Seq != 2 {
+	if restored2.Seq != 3 {
 		t.Fatalf("device A latest restored sequence=%d", restored2.Seq)
 	}
 	if err := deviceA.rgbManager.requireLatestRGB11WalletState(); err != nil {
@@ -1671,6 +1792,15 @@ func TestRGB11SecondDeviceRestoresAllocationBalanceAndLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshot, _, err := deviceA.rgbManager.exportRGB11WalletSnapshot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := rgb11wallet.TickerRefsFromProjectionSnapshot(snapshot.ProjectionRecords)
+	if err != nil || len(refs) != 1 || refs[0].ContractID != imported.ContractID ||
+		refs[0].AssetName != imported.AssetName.String() {
+		t.Fatalf("derived wallet snapshot ticker refs=%+v err=%v", refs, err)
+	}
 	configureRGB11DKVSTestManager(deviceA, remote)
 	configureRGB11DKVSTestManager(deviceB, remote)
 	head, err := deviceA.SyncRGB11WalletState(walletID, options)
@@ -1691,6 +1821,9 @@ func TestRGB11SecondDeviceRestoresAllocationBalanceAndLock(t *testing.T) {
 	}
 	if balance.Value.String() != "100000" || balance.Precision != 8 {
 		t.Fatalf("restored RGB11 balance=%+v", balance)
+	}
+	if info := deviceB.getTickerInfo(&imported.AssetName); info == nil || info.AssetName != imported.AssetName {
+		t.Fatalf("restored global RGB11 ticker metadata=%+v", info)
 	}
 	locked := deviceB.utxoLockerL1.GetLockedUtxoList()[sourceOutpoint]
 	if locked == nil || locked.Reason != rgb11wallet.LockReasonRGB {

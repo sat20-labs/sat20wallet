@@ -21,6 +21,7 @@ const requiredWasmMethods = [
   'importRGB11Contract',
   'importRGB11ContractFile',
   'createRGB11Invoice',
+	'prepareRGB11Consignment',
   'prepareRGB11Transfer',
   'buildRGB11RelayRecord',
   'publishRGB11RelayRecord',
@@ -29,6 +30,7 @@ const requiredWasmMethods = [
   'publishRGB11AckRecord',
   'fetchRGB11AckRecord',
   'cancelRGB11BatchByNack',
+	'cancelRGB11OutOfBandTransfer',
   'broadcastRGB11Transfer',
   'broadcastRGB11Batch',
   'broadcastRGB11OutOfBand',
@@ -94,8 +96,10 @@ await requireContains('components/asset/L1AssetsTabs.vue', [
 await requireContains('components/wallet/RGB11InvoiceDialog.vue', [
   'decimalToRaw',
   "transport_mode: transportMode.value",
+  'transport_endpoints: [endpoint]',
+  'proxyStorageKey',
   '<option value="witness">',
-  '<option value="blind" :disabled=',
+  '<option value="blind">',
   'receiveRGB11ProxyConsignment',
   'acceptRGB11RelayConsignment',
   'rejectRGB11RelayConsignment',
@@ -120,12 +124,15 @@ await requireContains('components/wallet/RGB11SendDialog.vue', [
 ])
 await requireContains('composables/hooks/useRgb11Assets.ts', [
   'tickerInfoFor',
-  'legacyOfficialContractID',
   'canonical_name',
   'contract_id',
   'display_name',
   'rgb11Store.setError',
 ])
+const rgb11AssetHook = await readFile('composables/hooks/useRgb11Assets.ts', 'utf8')
+if (rgb11AssetHook.includes('legacyOfficialContractID')) {
+  throw new Error('RGB11 assets must resolve their contract id from validated metadata')
+}
 await requireContains('store/rgb11.ts', [
   "const error = ref('')",
   'setError',

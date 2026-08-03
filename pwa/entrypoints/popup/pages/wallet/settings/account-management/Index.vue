@@ -191,11 +191,31 @@
 
       <Alert v-if="error" variant="destructive"><AlertDescription>{{ error }}</AlertDescription></Alert>
     </div>
+
+    <Dialog :open="paidConfirmOpen" @update:open="handlePaidConfirmOpenChange">
+      <DialogContent class="max-w-[92vw] rounded-sm border-border bg-background sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ t('tools.txConfirm.title') }}</DialogTitle>
+          <DialogDescription>{{ t('tools.txConfirm.description') }}</DialogDescription>
+        </DialogHeader>
+        <div class="space-y-2 rounded-sm border border-border bg-muted/30 p-3 text-sm">
+          <div v-for="row in paidConfirmRows" :key="row.label" class="grid grid-cols-[88px_1fr] gap-3">
+            <span class="text-muted-foreground">{{ row.label }}</span>
+            <span class="break-all font-medium">{{ row.value }}</span>
+          </div>
+        </div>
+        <DialogFooter class="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+          <Button variant="outline" @click="resolvePaidConfirmation(false)">{{ t('common.cancel') }}</Button>
+          <Button @click="resolvePaidConfirmation(true)">{{ t('common.confirm') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </LayoutScroll>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
@@ -205,10 +225,12 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store'
 import accountSDK, { type AccountStorageOption, type AccountWalletMetadataInput } from '@/utils/accountManagement'
 
 const router = useRouter()
+const { t } = useI18n()
 const walletStore = useWalletStore()
 const { wallets } = storeToRefs(walletStore)
 const savedState = ref<any>(null)
@@ -221,6 +243,8 @@ const selectedStorage = ref('')
 const recordCount = ref(100)
 const storageAuthorization = ref<any>(null)
 const preflight = ref<any>(null)
+const paidConfirmOpen = ref(false)
+let paidConfirmResolver: ((confirmed: boolean) => void) | null = null
 const guardianContact = ref('')
 const creation = ref<any>(null)
 const guardianReceipt = ref('')
@@ -284,6 +308,42 @@ const autopayQuote = computed(() => {
   }
 })
 
+const paidConfirmRows = computed(() => {
+  const option = paidStorageOption.value
+  const quote = autopayQuote.value
+  return [
+    { label: t('tools.txConfirm.purpose'), value: t('accountManagement.autopayPurpose') },
+    { label: t('tools.txConfirm.to'), value: option?.contract_address || '' },
+    { label: t('tools.txConfirm.asset'), value: option?.fee_asset || '' },
+    { label: t('tools.txConfirm.amount'), value: quote?.initialCost || option?.estimated_cost || '' },
+    { label: t('tools.txConfirm.network'), value: `SatoshiNet ${walletStore.network}` },
+    { label: t('accountManagement.recordCount'), value: String(normalizedRecordCount.value) },
+    {
+      label: t('accountManagement.perBlock'),
+      value: quote ? `${quote.amountPerBlock} ${option?.fee_asset || ''}` : '',
+    },
+    { label: t('accountManagement.fundingPeriod'), value: t('accountManagement.fundingBlocks', { count: 1000 }) },
+  ].filter(row => row.value)
+})
+
+const resolvePaidConfirmation = (confirmed: boolean) => {
+  const resolver = paidConfirmResolver
+  paidConfirmResolver = null
+  paidConfirmOpen.value = false
+  if (resolver) resolver(confirmed)
+}
+
+const handlePaidConfirmOpenChange = (open: boolean) => {
+  if (!open) return resolvePaidConfirmation(false)
+  paidConfirmOpen.value = true
+}
+
+const requestPaidConfirmation = () => new Promise<boolean>((resolve) => {
+  if (paidConfirmResolver) paidConfirmResolver(false)
+  paidConfirmResolver = resolve
+  paidConfirmOpen.value = true
+})
+
 const selectStorage = (option: AccountStorageOption) => {
   selectedStorage.value = option.id
   if (option.id === 'paid' && (!Number.isSafeInteger(normalizedRecordCount.value) || normalizedRecordCount.value < 100)) {
@@ -293,6 +353,7 @@ const selectStorage = (option: AccountStorageOption) => {
 
 const confirmStorage = () => run(async () => {
   if (!recordCountValid.value) throw new Error('持久记录条数必须是不小于 100 的整数')
+  if (selectedStorage.value === 'paid' && !await requestPaidConfirmation()) return
   storageAuthorization.value = await accountSDK.confirmStorage(
     selectedStorage.value,
     selectedStorage.value === 'paid' ? normalizedRecordCount.value : undefined,

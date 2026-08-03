@@ -446,10 +446,8 @@ func (p *rgb11Manager) RegisterRGB11TickerInfo(info *indexer.TickerInfo) error {
 	return nil
 }
 
-// validateRGB11TickerInfoName binds newly imported RGB11 contract metadata to
-// its canonical SAT20 asset name. The legacy reversible contract-id name is
-// accepted only for already persisted wallets; new imports always use the
-// canonical ticker/fingerprint name generated below.
+// validateRGB11TickerInfoName binds imported RGB11 contract metadata to its
+// canonical SAT20 asset name, including registry collision extensions.
 func validateRGB11TickerInfoName(info *indexer.TickerInfo) error {
 	var ext rgb11wallet.TickerExt
 	if err := json.Unmarshal(info.Content, &ext); err != nil {
@@ -460,20 +458,9 @@ func validateRGB11TickerInfoName(info *indexer.TickerInfo) error {
 		contractID = ext.OriginalAssetID
 	}
 	if contractID == "" {
-		_, err := rgb11wallet.OfficialAssetID(info.AssetName)
-		return err
+		return rgb11wallet.ErrInvalidRGB11Asset
 	}
-	expected, err := rgb11wallet.NewCanonicalAssetName(contractID, ext.Ticker, info.AssetName.Type)
-	if err != nil {
-		return err
-	}
-	if expected == info.AssetName {
-		return nil
-	}
-	// Existing local RGB11 projections used the encoded contract id as ticker.
-	// Keep them readable and spendable, but never generate that form again.
-	legacyContractID, legacyErr := rgb11wallet.OfficialAssetID(info.AssetName)
-	if legacyErr == nil && legacyContractID == contractID {
+	if rgb11wallet.CanonicalAssetNameMatches(info.AssetName, contractID, ext.Ticker) {
 		return nil
 	}
 	return rgb11wallet.ErrInvalidRGB11Asset
@@ -1127,6 +1114,28 @@ func (p *rgb11Manager) importRGB11Contract(ctx context.Context, raw []byte,
 		projected++
 	}
 
+	info, err := rgb11TickerInfoFromValidatedContract(container, receipt)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.RegisterRGB11TickerInfo(info); err != nil {
+		return nil, err
+	}
+	result := &RGB11ImportResult{
+		ContractID: container.ContractID, SchemaID: container.SchemaID,
+		AssetName: info.AssetName, Receipt: receipt, Projected: projected,
+	}
+	p.autoBackupRGB11AfterMutation()
+	return result, nil
+}
+
+func rgb11TickerInfoFromValidatedContract(container *coreconsignment.Container,
+	receipt *rgb11wallet.ValidationReceipt) (*indexer.TickerInfo, error) {
+
+	if container == nil || receipt == nil || container.ContractID == "" ||
+		container.ContractID != receipt.ContractID || container.SchemaID != receipt.SchemaID {
+		return nil, rgb11wallet.ErrValidationReceipt
+	}
 	descriptor, err := schemas.ByKind(container.GenesisReport.Kind)
 	if err != nil {
 		return nil, err
@@ -1164,20 +1173,11 @@ func (p *rgb11Manager) importRGB11Contract(ctx context.Context, raw []byte,
 	if err != nil {
 		return nil, err
 	}
-	info := &indexer.TickerInfo{
+	return &indexer.TickerInfo{
 		AssetName: assetName, DisplayName: metadata.DisplayName, Divisibility: int(metadata.Precision),
 		DeployTx:    allocationOutpointTxID(firstAllocationOutpoint(receipt.Allocations)),
 		TotalMinted: fmt.Sprintf("%d", metadata.IssuedSupply), MaxSupply: fmt.Sprintf("%d", metadata.MaxSupply), Content: extContent,
-	}
-	if err := p.RegisterRGB11TickerInfo(info); err != nil {
-		return nil, err
-	}
-	result := &RGB11ImportResult{
-		ContractID: container.ContractID, SchemaID: container.SchemaID,
-		AssetName: assetName, Receipt: receipt, Projected: projected,
-	}
-	p.autoBackupRGB11AfterMutation()
-	return result, nil
+	}, nil
 }
 
 func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (ticker, canonicalName, contractID, fingerprint string, verified bool) {
@@ -1233,7 +1233,7 @@ func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (ticker
 
 // rgb11ContractIDForAssetName resolves the full RGB contract id via local
 // contract metadata. A canonical SAT20 name deliberately cannot be reversed
-// into a contract id; only historical encoded names use the legacy fallback.
+// into a contract id.
 func (p *rgb11Manager) rgb11ContractIDForAssetName(name indexer.AssetName) (string, error) {
 	if p == nil || name.Protocol != rgb11wallet.Protocol {
 		return "", rgb11wallet.ErrInvalidRGB11Asset
@@ -1259,16 +1259,12 @@ func (p *rgb11Manager) rgb11ContractIDForAssetName(name indexer.AssetName) (stri
 			contractID = ext.OriginalAssetID
 		}
 		if contractID != "" {
-			expected, err := rgb11wallet.NewCanonicalAssetName(contractID, ext.Ticker, name.Type)
-			if err != nil {
-				return "", err
-			}
-			if expected.Ticker == name.Ticker {
+			if rgb11wallet.CanonicalAssetNameMatches(name, contractID, ext.Ticker) {
 				return contractID, nil
 			}
 		}
 	}
-	return rgb11wallet.OfficialAssetID(name)
+	return "", rgb11wallet.ErrInvalidRGB11Asset
 }
 
 func allocationOutpointTxID(outpoint string) string {
@@ -1504,21 +1500,35 @@ func (p *rgb11Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewal
 	var blindSeal *seals.GraphBlindSeal
 	var reservedOutpoint string
 	if mode == corewallet.ReceiveWitness {
-		logicalAddress := p.wallet.GetAddress()
-		if logicalAddress == "" {
-			return nil, ErrRGB11WalletLocked
+		if standardOnly {
+			receiveKey, err = p.newRGB11ReceiveKey()
+			if err != nil {
+				return nil, err
+			}
+			witnessScript = append([]byte(nil), receiveKey.WitnessScript...)
+			if len(receiveKey.InternalPubKey) != 32 {
+				return nil, errors.New("invalid independent RGB11 receive public key")
+			}
+			var xonly [32]byte
+			copy(xonly[:], receiveKey.InternalPubKey)
+			internalXOnly = &xonly
+		} else {
+			logicalAddress := p.wallet.GetAddress()
+			if logicalAddress == "" {
+				return nil, ErrRGB11WalletLocked
+			}
+			witnessScript, err = AddrToPkScript(logicalAddress, GetChainParam())
+			if err != nil {
+				return nil, err
+			}
+			compressed := pubkey.SerializeCompressed()
+			if len(compressed) != 33 {
+				return nil, ErrRGB11WalletLocked
+			}
+			var xonly [32]byte
+			copy(xonly[:], compressed[1:])
+			internalXOnly = &xonly
 		}
-		witnessScript, err = AddrToPkScript(logicalAddress, GetChainParam())
-		if err != nil {
-			return nil, err
-		}
-		compressed := pubkey.SerializeCompressed()
-		if len(compressed) != 33 {
-			return nil, ErrRGB11WalletLocked
-		}
-		var xonly [32]byte
-		copy(xonly[:], compressed[1:])
-		internalXOnly = &xonly
 	} else if mode == corewallet.ReceiveBlind && standardOnly {
 		blindSeal, reservedOutpoint, err = p.newRGB11BlindReceiveSeal()
 		if err != nil {
@@ -1606,11 +1616,36 @@ func (p *rgb11Manager) ValidateRGB11Consignment(ctx context.Context, raw []byte)
 // projects only the allocation matching the wallet's pre-persisted invoice
 // seal. A valid consignment for another wallet never becomes local balance.
 func (p *rgb11Manager) AcceptRGB11Consignment(ctx context.Context, requestID string, raw []byte) (*rgb11wallet.ValidationReceipt, error) {
-	return p.acceptRGB11Consignment(ctx, requestID, raw, true)
+	return p.acceptRGB11Consignment(ctx, requestID, raw, true, "", nil)
+}
+
+// PrepareRGB11Consignment validates and stages a standard out-of-band
+// consignment before its witness transaction is broadcast. It does not project
+// a spendable balance; AcceptRGB11Consignment finalizes the receive after the
+// witness becomes visible to Bitcoin evidence.
+func (p *rgb11Manager) PrepareRGB11Consignment(ctx context.Context, requestID string,
+	raw []byte) (*rgb11wallet.ValidationReceipt, error) {
+
+	if p == nil || p.rgbManager == nil || p.rgbManager.engine == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	request, err := p.rgbManager.engine.LoadReceive(requestID)
+	if err != nil {
+		return nil, err
+	}
+	invoice, err := invoicing.Parse(request.Invoice)
+	if err != nil {
+		return nil, err
+	}
+	_, _, _, _, _, transport, err := validateRGB11SendInvoice(invoice, nil, nil)
+	if err != nil || transport != "out-of-band" {
+		return nil, ErrRGB11OutOfBandRequired
+	}
+	return p.prepareRGB11Consignment(ctx, requestID, raw, "", nil, true)
 }
 
 func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID string, raw []byte,
-	autoBackup bool) (*rgb11wallet.ValidationReceipt, error) {
+	autoBackup bool, expectedTxID string, expectedVout *uint32) (*rgb11wallet.ValidationReceipt, error) {
 	if p == nil || p.rgbManager == nil || p.rgbManager.engine == nil {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -1625,20 +1660,20 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 	if err := invoice.Validate(time.Now().Unix()); err != nil {
 		return nil, err
 	}
-	var invoiceSeal [32]byte
+	transportMode, err := rgb11InvoiceTransportMode(invoice)
+	if err != nil {
+		return nil, err
+	}
 	var validator rgb11wallet.ConsensusValidator
-	var witnessScript []byte
 	switch invoice.Beneficiary.Kind {
 	case invoicing.BeneficiaryBlindedSeal:
 		concealed, err := request.Seal.Conceal()
 		if err != nil || !bytes.Equal(invoice.Beneficiary.BlindedSeal[:], concealed[:]) {
 			return nil, ErrRGB11InvoiceMismatch
 		}
-		invoiceSeal = [32]byte(concealed)
 		validator = rgb11wallet.NewNativeConsensusValidatorWithReveals(request.Seal)
 	case invoicing.BeneficiaryWitnessVout:
-		var err error
-		witnessScript, err = invoice.Beneficiary.WitnessScript()
+		witnessScript, err := invoice.Beneficiary.WitnessScript()
 		if err != nil || !bytes.Equal(request.WitnessScript, witnessScript) {
 			return nil, ErrRGB11InvoiceMismatch
 		}
@@ -1663,7 +1698,13 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 	if err != nil {
 		return nil, err
 	}
-	checked, err := p.rgb11ReceivedPolicyOpouts(receipt, request, invoice, invoiceSeal, witnessScript, nil)
+	matched, err := p.matchRGB11ReceiveAllocation(
+		receipt, request, invoice, nil, expectedTxID, expectedVout,
+	)
+	if err != nil {
+		return nil, err
+	}
+	checked, err := rgb11ReceivedPolicyOpout(matched.Allocation)
 	if err != nil {
 		return nil, err
 	}
@@ -1674,81 +1715,25 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 	if err != nil {
 		return nil, err
 	}
-	projected := 0
-	witnessTxID, _ := rgb11ReceivedOutpoint(receipt, request)
-	var receivedAsset *indexer.AssetInfo
-	var receivedOutpoint string
-	walletScript, err := AddrToPkScript(p.wallet.GetAddress(), GetChainParam())
-	if err != nil {
+	allocation := matched.Allocation
+	receivedAsset := &indexer.AssetInfo{
+		Name: allocation.AssetName, Amount: *allocation.Amount.Clone(), BindingSat: 0,
+	}
+	proof := &rgb11wallet.AllocationProof{
+		OutPoint: allocation.OutPoint, AssetName: allocation.AssetName,
+		OperationID: allocation.OperationID, AssignmentType: allocation.AssignmentType,
+		AssignmentIndex: allocation.AssignmentIndex, StateClass: allocation.StateClass,
+		StateData:       append([]byte(nil), allocation.StateData...),
+		SealCommitment:  matched.SealCommitment,
+		SealDisclosure:  append([]byte(nil), allocation.SealDisclosure...),
+		ConsignmentHash: receipt.ConsignmentHash, ValidationHash: receiptHash,
+		WitnessTxID: matched.TxID, Status: "valid",
+		CarrierBinding: matched.Binding,
+	}
+	if err := p.ProjectRGB11Allocation(allocation.OutPoint, receivedAsset, proof); err != nil {
 		return nil, err
 	}
-	for _, allocation := range receipt.Allocations {
-		if allocation.AssignmentType != 4000 {
-			continue
-		}
-		if _, ok := outpointVout(allocation.OutPoint); !ok {
-			continue
-		}
-		if invoice.Beneficiary.Kind == invoicing.BeneficiaryBlindedSeal {
-			matched, err := rgb11AllocationMatchesBlindSeal(allocation, request.Seal, invoiceSeal)
-			if err != nil {
-				return nil, err
-			}
-			if !matched {
-				continue
-			}
-		}
-		utxo, err := p.rgbManager.evidence.GetUTXO(allocation.OutPoint)
-		if err != nil {
-			return nil, err
-		}
-		binding, err := p.rgb11CarrierBindingForRequest(allocation, utxo, request)
-		if err != nil || !p.ownsRGB11Carrier(binding, walletScript) ||
-			(invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout && !bytes.Equal(utxo.PkScript, witnessScript)) {
-			if invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout {
-				continue
-			}
-			return nil, ErrRGB11InvoiceMismatch
-		}
-		if invoice.Assignment != nil {
-			switch invoice.Assignment.Kind {
-			case invoicing.StateAmount:
-				if allocation.Amount.Value.Sign() < 0 || !allocation.Amount.Value.IsUint64() ||
-					allocation.Amount.Value.Uint64() != uint64(invoice.Assignment.Amount) {
-					return nil, ErrRGB11InvoiceMismatch
-				}
-			case invoicing.StateAllocation:
-				if allocation.Amount.Value.Cmp(indexer.NewDefaultDecimal(1).Value) != 0 {
-					return nil, ErrRGB11InvoiceMismatch
-				}
-			}
-		}
-		asset := &indexer.AssetInfo{Name: allocation.AssetName, Amount: *allocation.Amount.Clone(), BindingSat: 0}
-		sealCommitment, err := request.Seal.Conceal()
-		if err != nil {
-			return nil, err
-		}
-		proof := &rgb11wallet.AllocationProof{
-			OutPoint: allocation.OutPoint, AssetName: allocation.AssetName,
-			OperationID: allocation.OperationID, AssignmentType: allocation.AssignmentType,
-			AssignmentIndex: allocation.AssignmentIndex, StateClass: allocation.StateClass,
-			StateData:       append([]byte(nil), allocation.StateData...),
-			SealCommitment:  hex.EncodeToString(sealCommitment[:]),
-			SealDisclosure:  append([]byte(nil), allocation.SealDisclosure...),
-			ConsignmentHash: receipt.ConsignmentHash, ValidationHash: receiptHash,
-			WitnessTxID: witnessTxID, Status: "valid",
-			CarrierBinding: binding,
-		}
-		if err := p.ProjectRGB11Allocation(allocation.OutPoint, asset, proof); err != nil {
-			return nil, err
-		}
-		receivedAsset = &indexer.AssetInfo{Name: asset.Name, Amount: *asset.Amount.Clone(), BindingSat: 0}
-		receivedOutpoint = allocation.OutPoint
-		projected++
-	}
-	if projected == 0 {
-		return nil, ErrRGB11NoAllocation
-	}
+	receivedOutpoint := allocation.OutPoint
 	transferID := receipt.TransferID
 	if transferID == "" {
 		transferID = receipt.ConsignmentHash
@@ -1764,9 +1749,10 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 		TransferID: transferID, Direction: "receive", Asset: *receivedAsset,
 		RecipientID: request.RecipientID, Invoice: request.Invoice,
 		OutputOutPoints: []string{receivedOutpoint}, MinConfirmations: 1, Expiry: expiry,
-		ConsignmentHash: receipt.ConsignmentHash, WitnessTxID: witnessTxID,
+		ConsignmentHash: receipt.ConsignmentHash, WitnessTxID: matched.TxID,
 		AckStatus: "accepted", Status: "pending", RelayRecordKey: request.RelayKey,
 		AckRecordKey: request.AckKey, RelayDurability: "LOCAL_ONLY", RelayExpiry: expiry,
+		TransportMode: transportMode,
 	}
 	if request.WitnessTxID != "" {
 		state.WitnessTxID = request.WitnessTxID
@@ -1833,19 +1819,16 @@ func (p *rgb11Manager) prepareRGB11Consignment(ctx context.Context, requestID st
 	if err := invoice.Validate(time.Now().Unix()); err != nil {
 		return nil, err
 	}
-	var invoiceSeal [32]byte
 	var validator *rgb11wallet.NativeConsensusValidator
-	var witnessScript []byte
 	switch invoice.Beneficiary.Kind {
 	case invoicing.BeneficiaryBlindedSeal:
 		concealed, err := request.Seal.Conceal()
 		if err != nil || !bytes.Equal(invoice.Beneficiary.BlindedSeal[:], concealed[:]) {
 			return nil, ErrRGB11InvoiceMismatch
 		}
-		invoiceSeal = [32]byte(concealed)
 		validator = rgb11wallet.NewNativeConsensusValidatorWithReveals(request.Seal)
 	case invoicing.BeneficiaryWitnessVout:
-		witnessScript, err = invoice.Beneficiary.WitnessScript()
+		witnessScript, err := invoice.Beneficiary.WitnessScript()
 		if err != nil || !bytes.Equal(request.WitnessScript, witnessScript) {
 			return nil, ErrRGB11InvoiceMismatch
 		}
@@ -1868,84 +1851,40 @@ func (p *rgb11Manager) prepareRGB11Consignment(ctx context.Context, requestID st
 		}
 	}
 	actualTxID := prepared.WitnessTxIDs[0]
-	_, actualVout := rgb11ReceivedOutpoint(receipt, request)
-	if expectedTxID == "" || actualTxID == "" || expectedTxID != actualTxID ||
-		(expectedVout != nil && (actualVout == nil || *expectedVout != *actualVout)) {
+	if actualTxID == "" || (expectedTxID != "" && expectedTxID != actualTxID) {
 		return nil, errors.New("RGB11 proxy metadata does not match the prepared consignment")
 	}
 	container, err := coreconsignment.Decode(raw)
 	if err != nil {
 		return nil, err
 	}
-	checked, err := p.rgb11ReceivedPolicyOpouts(receipt, request, invoice, invoiceSeal,
-		witnessScript, prepared.Outputs)
+	matchTxID := ""
+	matchVout := (*uint32)(nil)
+	if invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout {
+		matchTxID = actualTxID
+		matchVout = expectedVout
+	}
+	matched, err := p.matchRGB11ReceiveAllocation(
+		receipt, request, invoice, prepared.Outputs, matchTxID, matchVout,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout && matched.TxID != actualTxID {
+		return nil, errors.New("RGB11 proxy metadata does not match the prepared consignment")
+	}
+	checked, err := rgb11ReceivedPolicyOpout(matched.Allocation)
 	if err != nil {
 		return nil, err
 	}
 	if err := p.checkRGB11RejectPolicy(container, checked); err != nil {
 		return nil, err
 	}
-
-	walletScript, err := AddrToPkScript(p.wallet.GetAddress(), GetChainParam())
-	if err != nil {
-		return nil, err
+	allocation := matched.Allocation
+	receivedAsset := &indexer.AssetInfo{
+		Name: allocation.AssetName, Amount: *allocation.Amount.Clone(), BindingSat: 0,
 	}
-	var receivedAsset *indexer.AssetInfo
-	var receivedOutpoint string
-	for _, allocation := range receipt.Allocations {
-		if allocation.AssignmentType != 4000 {
-			continue
-		}
-		if _, ok := outpointVout(allocation.OutPoint); !ok {
-			continue
-		}
-		if invoice.Beneficiary.Kind == invoicing.BeneficiaryBlindedSeal {
-			matched, err := rgb11AllocationMatchesBlindSeal(allocation, request.Seal, invoiceSeal)
-			if err != nil {
-				return nil, err
-			}
-			if !matched {
-				continue
-			}
-		}
-		utxo := prepared.Outputs[allocation.OutPoint]
-		if utxo == nil {
-			utxo, err = p.rgbManager.evidence.GetUTXO(allocation.OutPoint)
-			if err != nil || utxo == nil {
-				continue
-			}
-		}
-		binding, err := p.rgb11CarrierBindingForRequest(allocation, utxo, request)
-		if err != nil || !p.ownsRGB11Carrier(binding, walletScript) ||
-			(invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout &&
-				!bytes.Equal(utxo.PkScript, witnessScript)) {
-			if invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout {
-				continue
-			}
-			return nil, ErrRGB11InvoiceMismatch
-		}
-		if invoice.Assignment != nil {
-			switch invoice.Assignment.Kind {
-			case invoicing.StateAmount:
-				if allocation.Amount.Value.Sign() < 0 || !allocation.Amount.Value.IsUint64() ||
-					allocation.Amount.Value.Uint64() != uint64(invoice.Assignment.Amount) {
-					return nil, ErrRGB11InvoiceMismatch
-				}
-			case invoicing.StateAllocation:
-				if allocation.Amount.Value.Cmp(indexer.NewDefaultDecimal(1).Value) != 0 {
-					return nil, ErrRGB11InvoiceMismatch
-				}
-			}
-		}
-		receivedAsset = &indexer.AssetInfo{
-			Name: allocation.AssetName, Amount: *allocation.Amount.Clone(), BindingSat: 0,
-		}
-		receivedOutpoint = allocation.OutPoint
-		break
-	}
-	if receivedAsset == nil {
-		return nil, ErrRGB11NoAllocation
-	}
+	receivedOutpoint := allocation.OutPoint
 	transferID := receipt.TransferID
 	if transferID == "" {
 		transferID = receipt.ConsignmentHash
@@ -1957,6 +1896,14 @@ func (p *rgb11Manager) prepareRGB11Consignment(ctx context.Context, requestID st
 	if invoice.Expiry != nil {
 		expiry = *invoice.Expiry
 	}
+	receiveTransport, transportErr := rgb11InvoiceTransportMode(invoice)
+	if transportErr != nil {
+		return nil, transportErr
+	}
+	relayDurability := "STANDARD_PROXY"
+	if receiveTransport == "out-of-band" {
+		relayDurability = "LOCAL_ONLY"
+	}
 	state := &rgb11wallet.TransferState{
 		TransferID: transferID, Direction: "receive", Asset: *receivedAsset,
 		RecipientID: request.RecipientID, Invoice: request.Invoice,
@@ -1964,7 +1911,7 @@ func (p *rgb11Manager) prepareRGB11Consignment(ctx context.Context, requestID st
 		ConsignmentHash: receipt.ConsignmentHash, WitnessTxID: actualTxID,
 		AckStatus: "accepted", Status: "awaiting_broadcast",
 		RelayRecordKey: request.RelayKey, AckRecordKey: request.AckKey,
-		RelayDurability: "STANDARD_PROXY", RelayExpiry: expiry,
+		RelayDurability: relayDurability, RelayExpiry: expiry, TransportMode: receiveTransport,
 	}
 	if err := p.rgbManager.projectionStore.SaveTransferState(state); err != nil {
 		return nil, err
@@ -1987,50 +1934,148 @@ func (p *rgb11Manager) prepareRGB11Consignment(ctx context.Context, requestID st
 	return receipt, nil
 }
 
-func (p *rgb11Manager) rgb11ReceivedPolicyOpouts(receipt *rgb11wallet.ValidationReceipt,
-	request *corewallet.ReceiveRequest, invoice *invoicing.Invoice, invoiceSeal [32]byte,
-	witnessScript []byte, preparedOutputs map[string]*rgb11wallet.BitcoinUTXO) ([]operations.Opout, error) {
-	checked := make([]operations.Opout, 0, 1)
+type rgb11ReceiveAllocationMatch struct {
+	Allocation     rgb11wallet.ValidatedAllocation
+	UTXO           *rgb11wallet.BitcoinUTXO
+	Binding        *rgb11wallet.CarrierBinding
+	TxID           string
+	Vout           *uint32
+	SealCommitment string
+}
+
+func (p *rgb11Manager) matchRGB11ReceiveAllocation(receipt *rgb11wallet.ValidationReceipt,
+	request *corewallet.ReceiveRequest, invoice *invoicing.Invoice,
+	preparedOutputs map[string]*rgb11wallet.BitcoinUTXO, expectedTxID string,
+	expectedVout *uint32) (*rgb11ReceiveAllocationMatch, error) {
+	if p == nil || p.rgbManager == nil || p.rgbManager.evidence == nil ||
+		receipt == nil || request == nil || invoice == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	if expectedTxID != "" && !validRGB11TxID(expectedTxID) {
+		return nil, ErrRGB11InvoiceMismatch
+	}
+	walletScript, err := AddrToPkScript(p.wallet.GetAddress(), GetChainParam())
+	if err != nil {
+		return nil, err
+	}
+	var invoiceSeal [32]byte
+	var witnessScript []byte
+	switch invoice.Beneficiary.Kind {
+	case invoicing.BeneficiaryBlindedSeal:
+		concealed, err := request.Seal.Conceal()
+		if err != nil || !bytes.Equal(invoice.Beneficiary.BlindedSeal[:], concealed[:]) {
+			return nil, ErrRGB11InvoiceMismatch
+		}
+		invoiceSeal = [32]byte(concealed)
+	case invoicing.BeneficiaryWitnessVout:
+		witnessScript, err = invoice.Beneficiary.WitnessScript()
+		if err != nil || !bytes.Equal(request.WitnessScript, witnessScript) {
+			return nil, ErrRGB11InvoiceMismatch
+		}
+	default:
+		return nil, ErrRGB11InvoiceMismatch
+	}
+
+	matches := make([]*rgb11ReceiveAllocationMatch, 0, 1)
 	for _, allocation := range receipt.Allocations {
 		if allocation.AssignmentType != 4000 {
 			continue
 		}
-		if _, ok := outpointVout(allocation.OutPoint); !ok {
+		allocationTxID, _, ok := strings.Cut(allocation.OutPoint, ":")
+		vout, validVout := outpointVout(allocation.OutPoint)
+		if !ok || !validVout || !validRGB11TxID(allocationTxID) {
 			continue
 		}
-		candidate := false
+		candidateTxID := allocationTxID
+		candidateVout := (*uint32)(nil)
+		sealCommitment := ""
 		switch invoice.Beneficiary.Kind {
 		case invoicing.BeneficiaryBlindedSeal:
-			var err error
-			candidate, err = rgb11AllocationMatchesBlindSeal(allocation, request.Seal, invoiceSeal)
+			matched, err := rgb11AllocationMatchesBlindSeal(allocation, request.Seal, invoiceSeal)
 			if err != nil {
 				return nil, err
 			}
-		case invoicing.BeneficiaryWitnessVout:
-			utxo := preparedOutputs[allocation.OutPoint]
-			if utxo == nil {
-				var err error
-				utxo, err = p.rgbManager.evidence.GetUTXO(allocation.OutPoint)
-				if err != nil {
-					return nil, err
-				}
+			if !matched {
+				continue
 			}
-			candidate = utxo != nil && bytes.Equal(utxo.PkScript, witnessScript)
+			if validRGB11TxID(allocation.WitnessTxID) {
+				candidateTxID = allocation.WitnessTxID
+			}
+			sealCommitment = hex.EncodeToString(invoiceSeal[:])
+		case invoicing.BeneficiaryWitnessVout:
+			if !allocation.WitnessTxPtr {
+				continue
+			}
+			if allocation.WitnessTxID != "" &&
+				(!validRGB11TxID(allocation.WitnessTxID) || allocation.WitnessTxID != allocationTxID) {
+				continue
+			}
+			if expectedTxID != "" && allocationTxID != expectedTxID {
+				continue
+			}
+			if expectedVout != nil && vout != *expectedVout {
+				continue
+			}
+			value := vout
+			candidateVout = &value
 		}
-		if !candidate {
+		if expectedTxID != "" && candidateTxID != expectedTxID {
 			continue
 		}
-		opout, err := operations.ParseOpout(fmt.Sprintf("%s/%d/%d",
-			allocation.OperationID, allocation.AssignmentType, allocation.AssignmentIndex))
-		if err != nil {
-			return nil, err
+
+		utxo := preparedOutputs[allocation.OutPoint]
+		if utxo == nil {
+			utxo, err = p.rgbManager.evidence.GetUTXO(allocation.OutPoint)
+			if err != nil {
+				return nil, err
+			}
 		}
-		checked = append(checked, opout)
+		if utxo == nil || utxo.OutPoint != allocation.OutPoint ||
+			(invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout &&
+				!bytes.Equal(utxo.PkScript, witnessScript)) {
+			continue
+		}
+		binding, err := p.rgb11CarrierBindingForRequest(allocation, utxo, request)
+		if err != nil || !p.ownsRGB11Carrier(binding, walletScript) {
+			if invoice.Beneficiary.Kind == invoicing.BeneficiaryBlindedSeal && err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if invoice.Assignment != nil {
+			switch invoice.Assignment.Kind {
+			case invoicing.StateAmount:
+				if allocation.Amount.Value.Sign() < 0 || !allocation.Amount.Value.IsUint64() ||
+					allocation.Amount.Value.Uint64() != uint64(invoice.Assignment.Amount) {
+					continue
+				}
+			case invoicing.StateAllocation:
+				if allocation.Amount.Value.Cmp(indexer.NewDefaultDecimal(1).Value) != 0 {
+					continue
+				}
+			}
+		}
+		matches = append(matches, &rgb11ReceiveAllocationMatch{
+			Allocation: allocation, UTXO: utxo, Binding: binding,
+			TxID: candidateTxID, Vout: candidateVout, SealCommitment: sealCommitment,
+		})
 	}
-	if len(checked) == 0 {
+	if len(matches) == 0 {
 		return nil, ErrRGB11NoAllocation
 	}
-	return checked, nil
+	if len(matches) != 1 {
+		return nil, ErrRGB11InvoiceMismatch
+	}
+	return matches[0], nil
+}
+
+func rgb11ReceivedPolicyOpout(allocation rgb11wallet.ValidatedAllocation) ([]operations.Opout, error) {
+	opout, err := operations.ParseOpout(fmt.Sprintf("%s/%d/%d",
+		allocation.OperationID, allocation.AssignmentType, allocation.AssignmentIndex))
+	if err != nil {
+		return nil, err
+	}
+	return []operations.Opout{opout}, nil
 }
 
 func rgb11AllocationMatchesBlindSeal(allocation rgb11wallet.ValidatedAllocation,
@@ -2092,6 +2137,9 @@ var (
 	ErrRGB11HistoryMerge        = errors.New("selected RGB11 allocations require a history merge")
 	ErrRGB11AckRequired         = errors.New("valid recipient ACK is required before broadcast")
 	ErrRGB11BatchAckRequired    = errors.New("all RGB11 batch recipient ACKs are required before broadcast")
+	ErrRGB11SAT20RelayRequired  = errors.New("RGB11 transfer does not use SAT20 relay delivery")
+	ErrRGB11OutOfBandRequired   = errors.New("RGB11 transfer is not a prepared out-of-band transfer")
+	ErrRGB11AlreadyBroadcast    = errors.New("RGB11 transfer witness is already visible on Bitcoin")
 	ErrRGB11AssetPreservation   = errors.New("RGB11 input contains another asset that cannot be preserved")
 )
 
@@ -2569,6 +2617,34 @@ func validateRGB11SendInvoice(invoice *invoicing.Invoice, fallbackContract *cons
 		}
 	}
 	return contract, amount, recipientID, relayKey, ackKey, transport, nil
+}
+
+func rgb11InvoiceTransportMode(invoice *invoicing.Invoice) (string, error) {
+	if invoice == nil {
+		return "", invoicing.ErrInvalidInvoice
+	}
+	values := make(map[string]string, len(invoice.UnknownQuery))
+	for _, param := range invoice.UnknownQuery {
+		values[param.Key] = param.Value
+	}
+	hasSAT20 := values["sat20_recipient"] != "" || values["sat20_relay"] != "" || values["sat20_ack"] != ""
+	if hasSAT20 {
+		if values["sat20_recipient"] == "" || values["sat20_relay"] == "" || values["sat20_ack"] == "" ||
+			len(invoice.Transports) != 0 {
+			return "", invoicing.ErrInvalidInvoice
+		}
+		return "sat20-dkvs", nil
+	}
+	if len(invoice.Transports) != 0 {
+		if _, err := rgb11ProxyEndpoints(invoice); err != nil {
+			return "", err
+		}
+		return RGB11ProxyTransport, nil
+	}
+	if invoice.Beneficiary.Kind != invoicing.BeneficiaryWitnessVout {
+		return "", invoicing.ErrInvalidInvoice
+	}
+	return "out-of-band", nil
 }
 
 func (p *rgb11Manager) selectRGB11Allocations(contractID string, amount uint64, minConfirmations uint8) (
@@ -3148,7 +3224,7 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 				if loadErr != nil {
 					return nil, loadErr
 				}
-				if _, acceptErr := p.acceptRGB11Consignment(ctx, requestID, raw, true); acceptErr != nil {
+				if _, acceptErr := p.acceptRGB11Consignment(ctx, requestID, raw, true, "", nil); acceptErr != nil {
 					if errors.Is(acceptErr, coreconsignment.ErrWitnessUnresolved) ||
 						errors.Is(acceptErr, coreconsignment.ErrOutpointUnknown) {
 						result.Pending++

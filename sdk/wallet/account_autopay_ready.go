@@ -17,8 +17,7 @@ func accountAutopayStateReady(state *dkvsindexer.AutopayContractState, defaults 
 	payer, requiredAmount string) bool {
 
 	if state == nil || state.TemplateName != TEMPLATE_CONTRACT_AUTOPAY || state.Closed ||
-		strings.EqualFold(strings.TrimSpace(state.Status), "closed") ||
-		strings.EqualFold(strings.TrimSpace(state.Status), "expired") ||
+		!strings.EqualFold(strings.TrimSpace(state.Status), "active") ||
 		!strings.EqualFold(strings.TrimSpace(state.ServiceName), defaults.AutopayServiceName) ||
 		!strings.EqualFold(strings.TrimSpace(state.Recipient), defaults.AutopayRecipient) ||
 		strings.TrimSpace(state.FeeAssetName) != defaults.AutopayFeeAssetName ||
@@ -26,7 +25,8 @@ func accountAutopayStateReady(state *dkvsindexer.AutopayContractState, defaults 
 		return false
 	}
 	delegate, ok := state.Delegates[strings.TrimSpace(payer)]
-	if !ok || delegate.LastPayHeight < state.CurrentBlock {
+	if !ok || !strings.EqualFold(strings.TrimSpace(delegate.Status), "active") ||
+		delegate.LastPayHeight < state.CurrentBlock {
 		return false
 	}
 	amount, err := decimalRat(delegate.AmountPerBlock)
@@ -34,7 +34,11 @@ func accountAutopayStateReady(state *dkvsindexer.AutopayContractState, defaults 
 		return false
 	}
 	required, err := decimalRat(requiredAmount)
-	return err == nil && required.Sign() > 0 && amount.Cmp(required) >= 0
+	if err != nil || required.Sign() <= 0 || amount.Cmp(required) < 0 {
+		return false
+	}
+	balance, err := decimalRat(delegate.Balance)
+	return err == nil && balance.Cmp(amount) >= 0
 }
 
 func (p *Manager) accountAutopayReady(defaults dkvsindexer.NetworkDefaults, payer, requiredAmount string) (bool, error) {
