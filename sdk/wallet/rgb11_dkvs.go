@@ -1293,6 +1293,7 @@ func (p *rgb11Manager) RestoreLatestRGB11WalletState(walletID string,
 		p.setRGB11DKVSStatus("warning")
 		return nil, err
 	}
+	p.scheduleRGB11ChainReconciliation()
 	return head, nil
 }
 
@@ -1320,6 +1321,7 @@ func (p *rgb11Manager) ActivateRGB11WalletState(verifyOpts dkvsindexer.RecordVer
 	result.Restored = before == nil && !hadLocalState && result.Head != nil
 	policy := p.rgb11AutoBackupPolicy()
 	result.AutoBackup = policy != nil && policy.Enabled
+	p.scheduleRGB11ChainReconciliation()
 	return result, nil
 }
 
@@ -2120,6 +2122,21 @@ func (p *rgb11Manager) cancelRGB11PendingBatch(pendingList []*rgb11wallet.Pendin
 		if item := locked[outpoint]; item != nil && item.Reason == rgb11wallet.LockReasonPending {
 			if err := p.utxoLockerL1.UnlockUtxo(outpoint); err != nil {
 				return err
+			}
+		}
+	}
+	for _, pending := range pendingList {
+		for _, seal := range pending.ChangeSeals {
+			outpoint := fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout)
+			if _, err := p.rgbManager.projectionStore.LoadOutput(outpoint); err == nil {
+				continue
+			} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+				return err
+			}
+			if item := locked[outpoint]; item != nil && item.Reason == rgb11wallet.LockReasonPending {
+				if err := p.utxoLockerL1.UnlockUtxo(outpoint); err != nil {
+					return err
+				}
 			}
 		}
 	}

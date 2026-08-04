@@ -91,6 +91,41 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 	if projected == nil || projected.Cmp(amount) != 0 {
 		t.Fatalf("bad projected amount %v", projected)
 	}
+	secondOfficial := "rgb:Br4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
+	secondName, err := NewCanonicalAssetName(secondOfficial, "second", indexer.ASSET_TYPE_FT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondAmount, err := indexer.NewDecimalFromString("7", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRaw := []byte("second-consensus-validated-consignment")
+	secondObjectHash := sha256.Sum256(secondRaw)
+	secondReceipt, err := store.ValidateAndStoreConsignment(context.Background(), testValidator{receipt: &ValidationReceipt{
+		Version: 1, EngineBuildID: "test-engine", ConsignmentHash: hex.EncodeToString(secondObjectHash[:]),
+		ContractID: secondOfficial, SchemaID: "schema", StateHash: [32]byte{2}, Status: "valid",
+		Allocations: []ValidatedAllocation{{OutPoint: output.OutPointStr, AssetName: secondName, Amount: *secondAmount.Clone(), OperationID: "op-2", AssignmentType: 4000, StateClass: "fungible", SealDisclosure: []byte{2}}},
+	}}, testEvidence{}, secondRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondReceiptHash, err := secondReceipt.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondAsset := &indexer.AssetInfo{Name: secondName, Amount: *secondAmount.Clone(), BindingSat: 0}
+	secondProof := &AllocationProof{OutPoint: output.OutPointStr, AssetName: secondName, OperationID: "op-2", AssignmentType: 4000, StateClass: "fungible", SealDisclosure: []byte{2}, Status: "valid", ConsignmentHash: secondReceipt.ConsignmentHash, ValidationHash: secondReceiptHash}
+	if err := store.CommitProjection(output, secondAsset, secondProof); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := store.LoadOutput(output.OutPointStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.GetAsset(&asset.Name) == nil || merged.GetAsset(&secondName) == nil {
+		t.Fatalf("same-outpoint RGB11 assets were not merged: %+v", merged.Assets)
+	}
 	balance, err := store.Balance(asset.Name)
 	if err != nil || balance.Cmp(amount) != 0 {
 		t.Fatalf("bad rebuilt balance %v err=%v", balance, err)

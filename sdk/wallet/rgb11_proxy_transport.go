@@ -356,7 +356,7 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 			txID = state.WitnessTxID
 		}
 		for _, endpoint := range endpoints {
-			if err := rgb11ProxyPostAck(ctx, endpoint.url, recipientID, true); err == nil {
+			if err := rgb11ProxyEnsureAck(ctx, endpoint.url, recipientID, true); err == nil {
 				return &RGB11ProxyReceiveResult{
 					RequestID: requestID, Endpoint: endpoint.invoice, TxID: txID, AckPosted: true,
 				}, nil
@@ -379,7 +379,7 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 				return nil, p.finishRGB11ProxyTerminal(requestID, raw, acceptErr)
 			}
 			for _, endpoint := range endpoints {
-				if err := rgb11ProxyPostAck(ctx, endpoint.url, recipientID, true); err == nil {
+				if err := rgb11ProxyEnsureAck(ctx, endpoint.url, recipientID, true); err == nil {
 					state, _ := p.rgbManager.projectionStore.LoadTransferState(request.TransferID)
 					var vout *uint32
 					if state != nil && len(state.OutputOutPoints) > 0 {
@@ -409,7 +409,7 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 			}
 		}
 		for _, endpoint := range endpoints {
-			if err := rgb11ProxyPostAck(ctx, endpoint.url, recipientID, true); err == nil {
+			if err := rgb11ProxyEnsureAck(ctx, endpoint.url, recipientID, true); err == nil {
 				return &RGB11ProxyReceiveResult{
 					RequestID: requestID, Endpoint: endpoint.invoice, TxID: actualTxID,
 					Vout: actualVout, Receipt: receipt, AckPosted: true,
@@ -448,7 +448,7 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 					rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, preparedErr)
 					return nil, p.finishRGB11ProxyTerminal(requestID, raw, preparedErr)
 				}
-				if err := rgb11ProxyPostAck(ctx, endpoint.url, recipientID, true); err != nil {
+				if err := rgb11ProxyEnsureAck(ctx, endpoint.url, recipientID, true); err != nil {
 					return nil, err
 				}
 				return &RGB11ProxyReceiveResult{
@@ -486,7 +486,7 @@ func (p *rgb11Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 			rgb11ProxyPostNackIfTerminal(ctx, endpoint.url, recipientID, err)
 			return nil, p.finishRGB11ProxyTerminal(requestID, raw, err)
 		}
-		if err := rgb11ProxyPostAck(ctx, endpoint.url, recipientID, true); err != nil {
+		if err := rgb11ProxyEnsureAck(ctx, endpoint.url, recipientID, true); err != nil {
 			return nil, err
 		}
 		return &RGB11ProxyReceiveResult{
@@ -569,6 +569,26 @@ func rgb11ProxyPostAck(ctx context.Context, endpoint, recipientID string, accept
 	}
 	if result == nil || !*result {
 		return errors.New("RGB11 proxy rejected acknowledgment")
+	}
+	return nil
+}
+
+func rgb11ProxyEnsureAck(ctx context.Context, endpoint, recipientID string, accepted bool) error {
+	postErr := rgb11ProxyPostAck(ctx, endpoint, recipientID, accepted)
+	if postErr == nil {
+		return nil
+	}
+	decision, getErr := rgb11ProxyJSON[bool](
+		ctx, endpoint, "ack.get", rgb11ProxyRecipientParam{RecipientID: recipientID},
+	)
+	if getErr != nil {
+		return errors.Join(postErr, fmt.Errorf("query RGB11 proxy acknowledgment: %w", getErr))
+	}
+	if decision == nil {
+		return errors.Join(postErr, errors.New("RGB11 proxy acknowledgment is not available"))
+	}
+	if *decision != accepted {
+		return errors.Join(postErr, errors.New("RGB11 proxy acknowledgment conflicts with requested decision"))
 	}
 	return nil
 }

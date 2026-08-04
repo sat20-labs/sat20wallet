@@ -986,6 +986,7 @@ func newRGB11MultiDeviceManager(t *testing.T, priv *btcec.PrivateKey, localWalle
 	if err := manager.rgbManager.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { manager.rgbManager.scopeStates.stopReconciliations() })
 	return manager
 }
 

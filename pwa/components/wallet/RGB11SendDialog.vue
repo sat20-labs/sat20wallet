@@ -252,7 +252,7 @@ const sendByAddress = async () => {
     temporaryDelivery.value = !!sendResult.temporary
     success.value = true
     message.value = t('rgb11Transfer.addressBroadcasted', { txid: sendResult.txid })
-    await walletManager.refreshRGB11State()
+    await refreshRGB11State()
     emit('completed')
   } catch (error: any) {
     message.value = error?.message || t('rgb11Transfer.broadcastFailed')
@@ -360,7 +360,7 @@ const deliverProxyTransfer = async () => {
     proxyBroadcasted.value = true
     success.value = true
     message.value = t('rgb11Transfer.broadcasted', { txid: proxyResult.txid })
-    await walletManager.refreshRGB11State()
+    await refreshRGB11State()
     emit('completed')
   } catch (error: any) {
     message.value = error?.message || t('rgb11Transfer.broadcastFailed')
@@ -385,13 +385,13 @@ const checkProxyAck = async () => {
     }
     if (decisions.some((decision) => !decision.result?.accepted)) {
       message.value = t('rgb11Transfer.proxyRejected')
-      await walletManager.refreshRGB11State()
+      await refreshRGB11State()
       emit('completed')
       return
     }
     success.value = true
     message.value = t('rgb11Transfer.proxyAccepted')
-    await walletManager.refreshRGB11State()
+    await refreshRGB11State()
     emit('completed')
   } catch (error: any) {
     message.value = error?.message || t('rgb11Transfer.fetchAckFailed')
@@ -420,7 +420,7 @@ const fetchAck = async () => {
         if (cancelErr) throw cancelErr
         ack.value = JSON.stringify({ ack: ackRecord })
         message.value = t('rgb11Transfer.senderRejected', { reason: ackRecord.reason_code || 'rejected' })
-        await walletManager.refreshRGB11State()
+        await refreshRGB11State()
         emit('completed')
         return
       }
@@ -471,7 +471,7 @@ const broadcastTraditional = async () => {
     if (err || !result?.txid) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
     success.value = true
     message.value = t('rgb11Transfer.broadcasted', { txid: result.txid })
-    await walletManager.refreshRGB11State()
+    await refreshRGB11State()
     emit('completed')
   } catch (error: any) {
     message.value = error?.message || t('rgb11Transfer.broadcastFailed')
@@ -484,6 +484,11 @@ const copyText = async (value: string) => {
   await copy(value)
   message.value = t('rgb11Transfer.copied')
   success.value = true
+}
+
+const refreshRGB11State = async () => {
+  const [err] = await walletManager.refreshRGB11State()
+  if (err) throw err
 }
 
 const downloadStandardConsignment = () => {

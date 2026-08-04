@@ -211,7 +211,7 @@ const checkProxyTransfer = async () => {
   try {
     const [err, result] = await walletManager.receiveRGB11ProxyConsignment(requestId.value)
     if (err || !result?.ack_posted) throw err || new Error(t('rgb11Invoice.receiveFailed'))
-    await walletManager.refreshRGB11State()
+    await refreshRGB11State()
     toast({
       title: t('rgb11Invoice.received', { txid: result.txid }),
       variant: 'success',
@@ -230,6 +230,11 @@ const copyInvoice = async () => {
   toast({ title: t('rgb11Invoice.copied'), variant: 'success', duration: 1500 })
 }
 
+const refreshRGB11State = async () => {
+  const [err] = await walletManager.refreshRGB11State()
+  if (err) throw err
+}
+
 const acceptPackage = async () => {
   loading.value = true
   errorMessage.value = ''
@@ -246,7 +251,7 @@ const acceptPackage = async () => {
 	  const [err, result] = await walletManager.acceptRGB11Consignment(requestId.value, parsed.consignment)
 	  if (err || !result) throw err || new Error(t('rgb11Transfer.acceptFailed'))
 	  ack.value = JSON.stringify({ accepted: true, transport_mode: 'out-of-band' })
-	  await walletManager.refreshRGB11State()
+      await refreshRGB11State()
 	  toast({ title: t('rgb11Transfer.acceptedOutOfBand'), variant: 'success', duration: 2500 })
 	  return
 	}
@@ -269,7 +274,7 @@ const acceptPackage = async () => {
     ack.value = pendingAckValue.value
     if (publishErr) throw publishErr
     pendingAckValue.value = ''
-    await walletManager.refreshRGB11State()
+    await refreshRGB11State()
     if (ackRecord.accepted === false) {
       toast({ title: t('rgb11Transfer.rejectedByPolicy'), variant: 'destructive', duration: 3000 })
     } else {
@@ -306,7 +311,7 @@ const rejectPackage = async () => {
     if (publishErr) throw publishErr
     ack.value = JSON.stringify({ ack: nack })
 	pendingAckValue.value = ''
-    await walletManager.refreshRGB11State()
+    await refreshRGB11State()
     toast({ title: t('rgb11Transfer.rejected'), variant: 'success', duration: 2000 })
   } catch (error: any) {
     errorMessage.value = error?.message || t('rgb11Transfer.rejectFailed')

@@ -27,13 +27,18 @@ import (
 )
 
 type rgb11ProxyTestServer struct {
-	mu          sync.Mutex
-	recipientID string
-	txID        string
-	vout        *uint32
-	consignment []byte
-	ack         *bool
-	postError   *rgb11ProxyError
+	mu                     sync.Mutex
+	recipientID            string
+	txID                   string
+	vout                   *uint32
+	consignment            []byte
+	ack                    *bool
+	postError              *rgb11ProxyError
+	ackPostHTTPStatus      int
+	ackPostFailBeforeStore bool
+	ackGetHTTPStatus       int
+	ackPostCount           int
+	ackGetCount            int
 }
 
 const testRGB11ProxyTransport = "rpcs://proxy.iriswallet.com/0.2/json-rpc"
@@ -76,18 +81,51 @@ func (s *rgb11ProxyTestServer) serveHTTP(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		s.mu.Lock()
-		s.ack = new(bool)
-		*s.ack = params.Ack
+		s.ackPostCount++
+		status := s.ackPostHTTPStatus
+		failBeforeStore := s.ackPostFailBeforeStore
+		if failBeforeStore {
+			s.mu.Unlock()
+			http.Error(w, "ack post failed", status)
+			return
+		}
+		if s.ack != nil {
+			matches := *s.ack == params.Ack
+			s.mu.Unlock()
+			if matches {
+				_, _ = io.WriteString(w, `{"result":false}`)
+			} else {
+				_, _ = io.WriteString(w, `{"error":{"code":-100,"message":"Cannot change ACK"}}`)
+			}
+			return
+		}
+		ack := params.Ack
+		s.ack = &ack
 		s.mu.Unlock()
+		if status != 0 {
+			http.Error(w, "ack post response failed", status)
+			return
+		}
 		_, _ = io.WriteString(w, `{"result":true}`)
 	case "ack.get":
 		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.ack == nil {
+		s.ackGetCount++
+		status := s.ackGetHTTPStatus
+		var ack *bool
+		if s.ack != nil {
+			value := *s.ack
+			ack = &value
+		}
+		s.mu.Unlock()
+		if status != 0 {
+			http.Error(w, "ack get failed", status)
+			return
+		}
+		if ack == nil {
 			_, _ = io.WriteString(w, `{"result":null}`)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"result": *s.ack})
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": *ack})
 	default:
 		http.Error(w, "unknown method", http.StatusBadRequest)
 	}
@@ -210,6 +248,89 @@ func TestRGB11ProxyProtocolRoundTrip(t *testing.T) {
 	if err != nil || ack == nil || !*ack {
 		t.Fatalf("unexpected ACK: %v, %v", ack, err)
 	}
+}
+
+func TestRGB11ProxyEnsureAck(t *testing.T) {
+	t.Run("first post succeeds", func(t *testing.T) {
+		state := &rgb11ProxyTestServer{}
+		server := httptest.NewServer(http.HandlerFunc(state.serveHTTP))
+		defer server.Close()
+		if err := rgb11ProxyEnsureAck(context.Background(), server.URL, "recipient", true); err != nil {
+			t.Fatal(err)
+		}
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.ack == nil || !*state.ack || state.ackPostCount != 1 || state.ackGetCount != 0 {
+			t.Fatalf("unexpected ACK state: %+v", state)
+		}
+	})
+
+	t.Run("repeated true is idempotent", func(t *testing.T) {
+		value := true
+		state := &rgb11ProxyTestServer{ack: &value}
+		server := httptest.NewServer(http.HandlerFunc(state.serveHTTP))
+		defer server.Close()
+		if err := rgb11ProxyEnsureAck(context.Background(), server.URL, "recipient", true); err != nil {
+			t.Fatal(err)
+		}
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.ackPostCount != 1 || state.ackGetCount != 1 {
+			t.Fatalf("unexpected ACK attempts: post=%d get=%d", state.ackPostCount, state.ackGetCount)
+		}
+	})
+
+	t.Run("failed post response verifies stored true", func(t *testing.T) {
+		state := &rgb11ProxyTestServer{ackPostHTTPStatus: http.StatusBadGateway}
+		server := httptest.NewServer(http.HandlerFunc(state.serveHTTP))
+		defer server.Close()
+		if err := rgb11ProxyEnsureAck(context.Background(), server.URL, "recipient", true); err != nil {
+			t.Fatal(err)
+		}
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.ack == nil || !*state.ack || state.ackPostCount != 1 || state.ackGetCount != 1 {
+			t.Fatalf("unexpected ACK recovery state: %+v", state)
+		}
+	})
+
+	t.Run("opposite remote decision conflicts", func(t *testing.T) {
+		value := false
+		state := &rgb11ProxyTestServer{ack: &value}
+		server := httptest.NewServer(http.HandlerFunc(state.serveHTTP))
+		defer server.Close()
+		err := rgb11ProxyEnsureAck(context.Background(), server.URL, "recipient", true)
+		if err == nil || !strings.Contains(err.Error(), "conflicts with requested decision") {
+			t.Fatalf("unexpected conflict error: %v", err)
+		}
+	})
+
+	t.Run("missing remote decision preserves post error", func(t *testing.T) {
+		state := &rgb11ProxyTestServer{
+			ackPostHTTPStatus: http.StatusBadGateway, ackPostFailBeforeStore: true,
+		}
+		server := httptest.NewServer(http.HandlerFunc(state.serveHTTP))
+		defer server.Close()
+		err := rgb11ProxyEnsureAck(context.Background(), server.URL, "recipient", true)
+		if err == nil || !strings.Contains(err.Error(), "HTTP 502") ||
+			!strings.Contains(err.Error(), "acknowledgment is not available") {
+			t.Fatalf("unexpected missing ACK error: %v", err)
+		}
+	})
+
+	t.Run("post and get failures are both retained", func(t *testing.T) {
+		state := &rgb11ProxyTestServer{
+			ackPostHTTPStatus: http.StatusBadGateway, ackPostFailBeforeStore: true,
+			ackGetHTTPStatus: http.StatusServiceUnavailable,
+		}
+		server := httptest.NewServer(http.HandlerFunc(state.serveHTTP))
+		defer server.Close()
+		err := rgb11ProxyEnsureAck(context.Background(), server.URL, "recipient", true)
+		if err == nil || !strings.Contains(err.Error(), "HTTP 502") ||
+			!strings.Contains(err.Error(), "HTTP 503") {
+			t.Fatalf("unexpected combined ACK error: %v", err)
+		}
+	})
 }
 
 func TestRGB11ProxyEndpointsAcceptLoopbackRPC(t *testing.T) {
@@ -665,6 +786,33 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 	if lock := recipient.utxoLockerL1.GetLockedUtxoList()[receiveOutpoint]; lock == nil ||
 		lock.Reason != rgb11wallet.LockReasonPending {
 		t.Fatalf("accepted blind carrier lock=%+v", lock)
+	}
+	balance, err := recipient.GetRGB11AssetBalance(&imported.AssetName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received, err = recipient.ReceiveRGB11ProxyConsignment(
+		context.Background(), receive.RequestID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !received.AckPosted || received.TxID != pending.State.WitnessTxID {
+		t.Fatalf("unexpected repeated receive result: %+v", received)
+	}
+	repeatedBalance, err := recipient.GetRGB11AssetBalance(&imported.AssetName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeatedBalance.Value.Cmp(balance.Value) != 0 {
+		t.Fatalf("repeated receive changed balance: before=%s after=%s", balance.Value, repeatedBalance.Value)
+	}
+	proofs, err = recipient.rgbManager.projectionStore.ListProofs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proofs) != 1 {
+		t.Fatalf("repeated receive duplicated proofs: %+v", proofs)
 	}
 }
 

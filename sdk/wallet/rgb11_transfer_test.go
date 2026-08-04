@@ -144,6 +144,7 @@ func newRGB11FlowManager(t *testing.T, wallet common.Wallet, rpc IndexerRPCClien
 	if err := manager.rgbManager.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { manager.rgbManager.scopeStates.stopReconciliations() })
 	return manager
 }
 

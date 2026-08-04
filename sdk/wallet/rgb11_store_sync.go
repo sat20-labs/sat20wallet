@@ -450,27 +450,11 @@ func (p *rgb11Manager) scheduleRGB11StoreWrite() {
 	if p.wallet == nil || p.status == nil {
 		return
 	}
-	fixedWallet := p.wallet.Clone()
-	if fixedWallet != nil {
-		fixedWallet.SetSubAccount(p.status.CurrentAccount)
-	}
-	if fixedWallet == nil || fixedWallet.GetPubKey() == nil || fixedWallet.GetAddress() == "" {
-		// Private-key wallets only expose account zero and their Clone currently
-		// has no derivation source. The selected wallet object remains fixed when
-		// switching to another wallet, so retaining it is safe for that scope.
-		if p.wallet.GetSubAccount() != p.status.CurrentAccount ||
-			p.wallet.GetPubKey() == nil || p.wallet.GetAddress() == "" {
-			p.setRGB11DKVSStatus("warning")
-			Log.Warningf("capture fixed RGB11 backup wallet failed")
-			return
-		}
-		fixedWallet = p.wallet
-	}
-	account := localRGB11Account{
-		WalletID:     p.status.CurrentWallet,
-		AccountIndex: p.status.CurrentAccount,
-		Address:      fixedWallet.GetAddress(),
-		Wallet:       fixedWallet,
+	account, err := p.fixedRGB11ScopeAccount()
+	if err != nil {
+		p.setRGB11DKVSStatus("warning")
+		Log.Warningf("capture fixed RGB11 backup wallet failed: %v", err)
+		return
 	}
 	scoped, err := p.newScopedRGB11Manager(account)
 	if err != nil {
@@ -504,7 +488,9 @@ func (p *Manager) handleRGB11ReplicaUpdate(_ []string) {
 		if err := manager.reconcileRGB11StateFromStore(store); err != nil {
 			Log.Warningf("apply RGB11 replica wallet=%d account=%d failed: %v",
 				account.WalletID, account.AccountIndex, err)
+			continue
 		}
+		manager.scheduleRGB11ChainReconciliation()
 	}
 }
 

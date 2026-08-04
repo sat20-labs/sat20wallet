@@ -350,7 +350,9 @@ func (p *Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResult, e
 	if err != nil {
 		return nil, err
 	}
-	return manager.RefreshRGB11State(ctx)
+	result, err := manager.RefreshRGB11State(ctx)
+	manager.wakeRGB11ChainReconciliation()
+	return result, err
 }
 
 func (p *Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,

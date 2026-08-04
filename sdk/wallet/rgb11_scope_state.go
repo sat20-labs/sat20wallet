@@ -1,21 +1,42 @@
 package wallet
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 type rgb11ScopeBackupState struct {
-	Status     string
-	Mode       string
-	TTL        uint64
-	AutoBackup *RGB11AutoBackupPolicy
+	Status              string
+	Mode                string
+	TTL                 uint64
+	AutoBackup          *RGB11AutoBackupPolicy
+	ReconciliationState string
+}
+
+type rgb11ScopeReconciliation struct {
+	running  bool
+	stopped  bool
+	stop     chan struct{}
+	wake     chan struct{}
+	attempts uint64
 }
 
 type rgb11ScopeStateRegistry struct {
-	mu     sync.RWMutex
-	states map[string]rgb11ScopeBackupState
+	mu               sync.RWMutex
+	states           map[string]rgb11ScopeBackupState
+	reconciliations  map[string]*rgb11ScopeReconciliation
+	retryDelay       time.Duration
+	reconciliationWG sync.WaitGroup
+	chainRefresh     sync.Mutex
+	stopping         bool
 }
 
 func newRGB11ScopeStateRegistry() *rgb11ScopeStateRegistry {
-	return &rgb11ScopeStateRegistry{states: make(map[string]rgb11ScopeBackupState)}
+	return &rgb11ScopeStateRegistry{
+		states:          make(map[string]rgb11ScopeBackupState),
+		reconciliations: make(map[string]*rgb11ScopeReconciliation),
+		retryDelay:      rgb11ChainReconciliationRetryDelay,
+	}
 }
 
 func cloneRGB11AutoBackupPolicy(policy *RGB11AutoBackupPolicy) *RGB11AutoBackupPolicy {
@@ -36,6 +57,9 @@ func (r *rgb11ScopeStateRegistry) load(scope string) rgb11ScopeBackupState {
 	if !ok {
 		state.Status = "offline"
 	}
+	if state.ReconciliationState == "" {
+		state.ReconciliationState = "idle"
+	}
 	state.AutoBackup = cloneRGB11AutoBackupPolicy(state.AutoBackup)
 	return state
 }
@@ -48,6 +72,9 @@ func (r *rgb11ScopeStateRegistry) update(scope string, apply func(*rgb11ScopeBac
 	state := r.states[scope]
 	if state.Status == "" {
 		state.Status = "offline"
+	}
+	if state.ReconciliationState == "" {
+		state.ReconciliationState = "idle"
 	}
 	apply(&state)
 	state.AutoBackup = cloneRGB11AutoBackupPolicy(state.AutoBackup)

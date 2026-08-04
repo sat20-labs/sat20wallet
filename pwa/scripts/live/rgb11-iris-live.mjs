@@ -9,6 +9,7 @@ const IRIS_INVOICE = process.env.SAT20_IRIS_INVOICE || ''
 const EXISTING_ASSET_NAME = process.env.SAT20_IRIS_ASSET_NAME || ''
 const SEND_AMOUNT = process.env.SAT20_IRIS_SEND_AMOUNT || '10'
 const RETURN_AMOUNT = process.env.SAT20_IRIS_RETURN_AMOUNT || '2'
+const RETURN_INVOICE_MODE = process.env.SAT20_IRIS_RETURN_MODE || 'witness'
 const ISSUE_AMOUNT = process.env.SAT20_IRIS_ISSUE_AMOUNT || '100'
 const IRIS_BTC_ADDRESS = process.env.SAT20_IRIS_BTC_ADDRESS || ''
 const IRIS_BTC_AMOUNT = process.env.SAT20_IRIS_BTC_AMOUNT || '12000'
@@ -43,6 +44,7 @@ await page.waitForFunction(() => Boolean(window.__SAT20_PWA_VERIFY__), null, { t
 const result = await page.evaluate(async ({
   action, password, senderMnemonic, senderAddress, senderWalletId, irisInvoice, existingAssetName,
   issueAmount, sendAmount, returnAmount,
+  returnInvoiceMode,
   irisBtcAddress, irisBtcAmount,
   irisProxyEndpoint,
   contractFileBase64, checkpointKey,
@@ -369,7 +371,7 @@ const result = await page.evaluate(async ({
   }
   if (action === 'invoice') {
     const invoice = await unwrap(await sat20.createRGB11Invoice({
-      mode: 'witness',
+      mode: returnInvoiceMode,
       transport_mode: 'rgb-json-rpc',
       transport_endpoints: [irisProxyEndpoint],
       contract_id: checkpoint.contractId,
@@ -377,7 +379,7 @@ const result = await page.evaluate(async ({
       amount_raw: returnAmount,
       assignment_name: 'assetOwner',
       expiry: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
-      witness_vout: 1,
+      ...(returnInvoiceMode === 'witness' ? { witness_vout: 1 } : {}),
     }), 'createRGB11Invoice')
     const updated = {
       ...checkpoint,
@@ -407,6 +409,7 @@ const result = await page.evaluate(async ({
   issueAmount: ISSUE_AMOUNT,
   sendAmount: SEND_AMOUNT,
   returnAmount: RETURN_AMOUNT,
+  returnInvoiceMode: RETURN_INVOICE_MODE,
   irisBtcAddress: IRIS_BTC_ADDRESS,
   irisBtcAmount: IRIS_BTC_AMOUNT,
   irisProxyEndpoint: IRIS_PROXY_ENDPOINT,

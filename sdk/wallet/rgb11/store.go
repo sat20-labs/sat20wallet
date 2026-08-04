@@ -777,6 +777,16 @@ func (s *ProjectionStore) CommitProjection(output *indexer.TxOutput, asset *inde
 		return err
 	}
 	projected := output.Clone()
+	if current, err := s.LoadOutput(output.OutPointStr); err == nil {
+		for _, currentAsset := range current.Assets {
+			projected.RemoveAsset(&currentAsset.Name)
+			if err := projected.Assets.Add(&currentAsset); err != nil {
+				return err
+			}
+		}
+	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return err
+	}
 	projected.RemoveAsset(&asset.Name)
 	if err := projected.Assets.Add(asset); err != nil {
 		return err
@@ -877,6 +887,7 @@ func (s *ProjectionStore) prepareProjectionReplacements(replacements []Projectio
 	}
 	outputs := make(map[string]*indexer.TxOutput)
 	proofs := make([]*AllocationProof, 0, len(replacements))
+	seen := make(map[string]bool, len(replacements))
 	for _, replacement := range replacements {
 		if replacement.Output == nil || replacement.Asset == nil || replacement.Proof == nil ||
 			replacement.Output.OutPointStr == "" || replacement.Output.OutPointStr != replacement.Proof.OutPoint ||
@@ -913,12 +924,21 @@ func (s *ProjectionStore) prepareProjectionReplacements(replacements []Projectio
 		projected := outputs[replacement.Output.OutPointStr]
 		if projected == nil {
 			projected = replacement.Output.Clone()
-			projected.Assets = nil
+			if current, err := s.LoadOutput(replacement.Output.OutPointStr); err == nil {
+				projected.Assets = current.Assets.Clone()
+			} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+				return nil, nil, err
+			} else {
+				projected.Assets = nil
+			}
 			outputs[replacement.Output.OutPointStr] = projected
 		}
-		if projected.GetAsset(&replacement.Asset.Name) != nil {
+		projectionID := replacement.Output.OutPointStr + "|" + replacement.Asset.Name.String()
+		if seen[projectionID] {
 			return nil, nil, fmt.Errorf("%w: duplicate replacement asset", ErrProjectionMismatch)
 		}
+		seen[projectionID] = true
+		projected.RemoveAsset(&replacement.Asset.Name)
 		if err := projected.Assets.Add(replacement.Asset); err != nil {
 			return nil, nil, err
 		}

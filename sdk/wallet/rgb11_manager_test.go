@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -15,6 +17,7 @@ import (
 	"github.com/sat20-labs/rgb11/anchors"
 	"github.com/sat20-labs/rgb11/invoicing"
 	coreissuance "github.com/sat20-labs/rgb11/issuance"
+	"github.com/sat20-labs/rgb11/seals"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"math/big"
@@ -475,6 +478,65 @@ func TestRGB11StandardProxyInvoiceUsesBlindedBeneficiary(t *testing.T) {
 	}
 	if _, err := manager.rgbManager.projectionStore.LoadReceiveReservation(request.RequestID); !errors.Is(err, indexer.ErrKeyNotFound) {
 		t.Fatalf("expired receive reservation remains stored: %v", err)
+	}
+}
+
+func TestRGB11PlainSelectionExcludesPendingChangeOutput(t *testing.T) {
+	wallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
+	)
+	if wallet == nil {
+		t.Fatal("create test wallet")
+	}
+	script, err := AddrToPkScript(wallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := wire.NewMsgTx(wire.TxVersion)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: chainhash.Hash{9}, Index: 1}, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(10_000, script))
+	var raw bytes.Buffer
+	if err := tx.Serialize(&raw); err != nil {
+		t.Fatal(err)
+	}
+	pendingOutpoint := fmt.Sprintf("%s:0", tx.TxHash())
+	freeOutpoint := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff:0"
+	rpc := &rgb11FlowIndexer{outputs: map[string]*TxOutput{}, plain: []*indexerwire.TxOutputInfo{
+		{OutPoint: pendingOutpoint, Value: 10_000, PkScript: append([]byte(nil), script...)},
+		{OutPoint: freeOutpoint, Value: 20_000, PkScript: append([]byte(nil), script...)},
+	}}
+	evidence := &rgb11FlowEvidence{utxos: map[string]*rgb11wallet.BitcoinUTXO{
+		pendingOutpoint: {OutPoint: pendingOutpoint, Value: 10_000, PkScript: append([]byte(nil), script...), Confirmations: 2},
+		freeOutpoint:    {OutPoint: freeOutpoint, Value: 20_000, PkScript: append([]byte(nil), script...), Confirmations: 2},
+	}, rawTx: make(map[string][]byte), spendingTx: make(map[string]string)}
+	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 72)
+	recipient := []byte("recipient")
+	recipientHash := sha256.Sum256(recipient)
+	pending := &rgb11wallet.PendingTransfer{
+		State: rgb11wallet.TransferState{
+			TransferID: "pending-change", Direction: "send", Status: "broadcast",
+			WitnessTxID: tx.TxHash().String(), InputOutPoints: []string{tx.TxIn[0].PreviousOutPoint.String()},
+			OutputOutPoints: []string{pendingOutpoint}, ConsignmentHash: hex.EncodeToString(recipientHash[:]),
+		},
+		RecipientConsignment: recipient, LocalConsignment: []byte("local"), SignedTx: raw.Bytes(),
+		SignedPSBT: []byte{1}, ChangeSeals: []seals.GraphBlindSeal{{Vout: 0, Blinding: 1}},
+	}
+	if err := manager.rgbManager.projectionStore.SavePendingTransfer(pending); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := manager.rgbManager.selectRGB11IssueOutpoints(1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 1 || selected[0] != freeOutpoint {
+		t.Fatalf("selected pending RGB11 change output: %v", selected)
+	}
+	if err := manager.rgbManager.rebuildRGB11Locks(); err != nil {
+		t.Fatal(err)
+	}
+	lock := manager.utxoLockerL1.GetLockedUtxoList()[pendingOutpoint]
+	if lock == nil || lock.Reason != rgb11wallet.LockReasonPending {
+		t.Fatalf("pending RGB11 change output was not restored: %+v", lock)
 	}
 }
 

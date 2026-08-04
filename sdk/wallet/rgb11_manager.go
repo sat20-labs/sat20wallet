@@ -222,6 +222,35 @@ func (p *rgb11Manager) rgb11ExpectedInputs() (map[string]string, error) {
 	return expected, nil
 }
 
+func (p *rgb11Manager) rgb11ExpectedChangeOutpoints() (map[string]string, error) {
+	transfers, err := p.rgbManager.projectionStore.ListTransfers()
+	if err != nil {
+		return nil, err
+	}
+	expected := make(map[string]string)
+	for _, state := range transfers {
+		if !rgb11TransferKeepsInputsLocked(state) {
+			continue
+		}
+		pending, err := p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateRGB11PendingTransaction(pending); err != nil {
+			return nil, err
+		}
+		for _, seal := range pending.ChangeSeals {
+			outpoint := fmt.Sprintf("%s:%d", state.WitnessTxID, seal.Vout)
+			if txid := expected[outpoint]; txid != "" && txid != state.WitnessTxID {
+				return nil, fmt.Errorf("%w: RGB11 change output %s is reserved by multiple transactions",
+					ErrRGB11Inconsistent, outpoint)
+			}
+			expected[outpoint] = state.WitnessTxID
+		}
+	}
+	return expected, nil
+}
+
 func rgb11ProofConfirmationRequirements(transfers []*rgb11wallet.TransferState) map[string]int64 {
 	requirements := make(map[string]int64)
 	for _, state := range transfers {
@@ -276,6 +305,17 @@ func (p *rgb11Manager) rebuildRGB11Locks() error {
 		return err
 	}
 	for outpoint := range expectedInputs {
+		if err := p.utxoLockerL1.SetLockReason(outpoint, rgb11wallet.LockReasonPending); err != nil {
+			p.rgbManager.consistencyStatus = "broken"
+			return err
+		}
+	}
+	expectedChanges, err := p.rgb11ExpectedChangeOutpoints()
+	if err != nil {
+		p.rgbManager.consistencyStatus = "broken"
+		return err
+	}
+	for outpoint := range expectedChanges {
 		if err := p.utxoLockerL1.SetLockReason(outpoint, rgb11wallet.LockReasonPending); err != nil {
 			p.rgbManager.consistencyStatus = "broken"
 			return err
@@ -551,7 +591,7 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 	autoBackupEnabled := backupState.AutoBackup != nil && backupState.AutoBackup.Enabled
 	return &RGB11State{
 		Initialized:       true,
-		SyncStatus:        "idle",
+		SyncStatus:        backupState.ReconciliationState,
 		ConsistencyStatus: p.GetRGB11ConsistencyStatus(),
 		BackupStatus:      backupState.Status,
 		BackupEnabled:     autoBackupEnabled || backupState.Status == "pending" || backupState.Status == "synced",
@@ -968,11 +1008,21 @@ func (p *rgb11Manager) selectRGB11IssueOutpoints(count int, minConfirmations int
 	}
 	candidates := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].OutPoint < candidates[j].OutPoint })
+	reservedChanges, err := p.rgb11ExpectedChangeOutpoints()
+	if err != nil {
+		return nil, err
+	}
 	p.utxoLockerL1.Reload(address)
 	selected := make([]string, 0, count)
 	for _, candidate := range candidates {
-		if candidate == nil || candidate.OutPoint == "" || p.utxoLockerL1.IsLocked(candidate.OutPoint) {
+		if candidate == nil || candidate.OutPoint == "" || p.utxoLockerL1.IsLocked(candidate.OutPoint) ||
+			reservedChanges[candidate.OutPoint] != "" {
 			continue
+		}
+		if _, err := p.rgbManager.projectionStore.LoadOutput(candidate.OutPoint); err == nil {
+			continue
+		} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+			return nil, err
 		}
 		evidence, err := p.rgbManager.evidence.GetUTXO(candidate.OutPoint)
 		if err != nil || evidence == nil {
@@ -2527,6 +2577,13 @@ func (p *rgb11Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11Se
 		pendingList = append(pendingList, pending)
 		states = append(states, &pending.State)
 	}
+	for _, seal := range changeSeals {
+		outpoint := fmt.Sprintf("%s:%d", signedTx.TxID(), seal.Vout)
+		if err := p.utxoLockerL1.SetLockReason(outpoint, rgb11wallet.LockReasonPending); err != nil {
+			return nil, err
+		}
+		reserved = append(reserved, outpoint)
+	}
 	if err := p.rgbManager.projectionStore.SavePendingTransfers(pendingList); err != nil {
 		return nil, err
 	}
@@ -3198,6 +3255,11 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || p.rgbManager.evidence == nil {
 		return nil, ErrRGB11Inconsistent
 	}
+	unlock, err := p.lockRGB11ChainRefresh()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	result := &RGB11RefreshResult{}
 	if err := p.releaseExpiredRGB11ReceiveReservations(time.Now().Unix()); err != nil {
 		return nil, err

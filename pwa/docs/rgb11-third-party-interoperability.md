@@ -117,9 +117,51 @@ invoice 转回 `2`。确认前 Iris 会拒绝发送，提示没有 spendable bal
   `66e6f272c9e1f7ee1e0877a50f5003ef40ded90ff7239352b05af78c8b292051`。
 - 接收方保持 pending，未确认前不能花费；两笔交易在本次记录时均未确认。
 
+后续链上复核显示，该标准交易和 SAT20 relay 交易
+`4131de3769d2a67cce3e7e93861a68cb47fbd0d19c48278c69a356f63d01495a`
+均已在 Testnet4 高度 `146782` 确认。
+
 ### Iris 第三方钱包
 
-本次回滚后的测试尚未重新执行：当前测试机没有连接 Android 设备或模拟器，
-也没有固定基线的 Iris APK。2026-07-30 的 PWA 到 Iris 记录仍保留，但属于
-回滚前的历史结果，不计入本轮验收。后续仍使用本文固定的 Iris `0.3.1` / version
-code `73` / `bitcoinTestnet4Debug` 基线完成双向互操作。
+本轮使用 Android 模拟器中的固定 Iris `0.3.1` / version code `73` /
+`bitcoinTestnet4Debug` 基线重新完成标准 RGB 双向互操作：
+
+- PWA 发行 `ISD7LP52`，规范资产名：`rgb11:f:isd7lp52@ot7dnksj`。
+- Iris 导入 PWA 导出的标准 `RGB\0CON` 合约，并通过标准 JSON-RPC proxy
+  接收 `10`；anchor transaction：
+  `c23ed8215de0cc002e0fa0ef504a3093dfa817ff48bb966702192aaae82f3dc3`。
+- Iris 使用 PWA 的标准 witness invoice 转回 `5`；PWA 验证 consignment、
+  返回 acknowledgment 并结算，anchor transaction：
+  `847a874afc1a34f2699ab4fe3e031110ac9c5d32b58475fed6786dad32eaf776`。
+- 最终 Iris 显示 `ISD7LP52` 余额 `5`，PWA 显示可用余额 `5`。
+- Iris 当前 Testnet4 BTC 余额为 `0 sat`，因此本轮未执行 Iris 本地发行后由
+  PWA 导入的反向合约来源测试；按测试约定未额外补充 BTC。
+
+### RGB carrier 复用回归
+
+- 历史标准转移曾将本地 RGB change output `629a5b0a...dcacc7:1` 当作空白聪
+  再次选择，导致两个 RGB 资产落在同一 outpoint。
+- 钱包现在会锁定所有待投影 change output，并在空白聪选择时排除待投影和
+  已有 RGB 投影的 outpoint；恢复后同一 outpoint 上的两个资产投影均完整保留。
+- SDK 回归测试覆盖 pending change 排除、重启后锁恢复和同一 outpoint 多资产
+  投影合并。真实发行验证因当前 PWA 测试钱包没有已确认空白 UTXO 而被正确拒绝，
+  没有退而复用已有 RGB carrier。
+
+## 2026-08-04 Iris 发行资产双向互操作
+
+- Iris 发行 `IR26A804`，contract ID：
+  `rgb:arzzSjEx-hfq_qqb-5sc9MPe-UUBObDu-8bwk0HI-V5DGuz0`；PWA 导入标准
+  `RGB\0CON` 合约成功。
+- Iris 向 PWA 标准 witness invoice 发送 `10`，anchor transaction：
+  `b2f9edc72075f408cdd3065c358505025d884ca39ee92e2724da52fd719f8a25`，
+  确认高度 `146865`。
+- PWA 使用 Iris JSON-RPC proxy 向 Iris 返回 `5`，anchor transaction：
+  `dfcdca1ede743a5b388f76e749ee22ebcb860c0bee0f16c2742c1fae102b8f66`，
+  确认高度 `146907`；重复提交相同 ACK 时通过 `ack.get` 验证既有结果，
+  不重复生成 proof 或余额。
+- 干净 Android PWA profile 从 DKVS 恢复中间快照后，由 SDK 链状态协调器
+  自动将回转交易从 `broadcast` 收敛为 `settled`。PWA 最终余额为
+  `IR26A804=5`、pending `0`；Iris 最终余额为 `IR26A804=95`。
+- 回归资产最终余额保持 PWA `ISD7LP52=5`、Iris `ISD7LP52=5`。
+- 资金交易 `0094e5b8d9d3bbebded11f4ea6074ee356f7f25b2c8e1c35500dbf07a77c1c13`
+  的 PWA `vout=0` 已被回转交易正确消费，其余九个 PWA 10,000 sat 输出未花费。

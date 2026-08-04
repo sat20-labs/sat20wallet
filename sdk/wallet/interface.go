@@ -105,6 +105,9 @@ func (p *Manager) IsReady() bool {
 }
 
 func (p *Manager) Stop() {
+	if p.rgbManager != nil && p.rgbManager.scopeStates != nil {
+		p.rgbManager.scopeStates.stopReconciliations()
+	}
 	if p.dkvs != nil {
 		p.dkvs.stopAndWait()
 	}
@@ -308,6 +311,7 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 		if refreshErr := p.refreshDKVSRegistrations(); refreshErr != nil {
 			Log.Warningf("refresh DKVS registrations after unlock failed: %v", refreshErr)
 		}
+		p.rgbManager.scheduleRGB11ChainReconciliation()
 	}
 	return id, err
 }
@@ -427,6 +431,7 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after wallet switch failed: %v", err)
 	}
+	p.rgbManager.scheduleRGB11ChainReconciliation()
 	return nil
 }
 
@@ -548,6 +553,7 @@ func (p *Manager) SwitchAccount(id uint32) {
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after account switch failed: %v", err)
 	}
+	p.rgbManager.scheduleRGB11ChainReconciliation()
 }
 
 func (p *Manager) SwitchChain(chain, password string) error {
