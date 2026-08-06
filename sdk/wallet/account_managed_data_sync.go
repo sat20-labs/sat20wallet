@@ -11,10 +11,19 @@ import (
 )
 
 type accountManagedDataSnapshot struct {
-	Catalog  AccountManagedDataCatalog
-	Bundle   account.ManagedDataBundle
-	Hash     string
-	Envelope []byte
+	Catalog    AccountManagedDataCatalog
+	Bundle     account.ManagedDataBundle
+	Hash       string
+	Envelope   []byte
+	Compressed bool
+}
+
+func shouldReuseRemoteManagedDataEnvelope(remoteState account.ManagedState, mergedHash string,
+	remote *accountManagedDataSnapshot, compressionBeneficial bool) bool {
+
+	return remote != nil && remoteState.DataRevision != 0 &&
+		remoteState.DataHash == mergedHash && len(remote.Envelope) != 0 &&
+		!(compressionBeneficial && !remote.Compressed)
 }
 
 func (p *Manager) buildAccountManagedDataSnapshot(secret []byte, accountID string,
@@ -28,12 +37,13 @@ func (p *Manager) buildAccountManagedDataSnapshot(secret []byte, accountID strin
 	if err != nil {
 		return nil, err
 	}
-	envelope, err := account.SealManagedDataBundle(secret, accountID, bundle, nil)
+	envelope, info, err := account.SealManagedDataBundleWithInfo(secret, accountID, bundle, nil)
 	if err != nil {
 		return nil, err
 	}
 	return &accountManagedDataSnapshot{
 		Catalog: catalog, Bundle: bundle, Hash: hash, Envelope: envelope,
+		Compressed: info.Compressed,
 	}, nil
 }
 
@@ -70,7 +80,7 @@ func openAccountManagedDataValue(secret []byte, accountID string, value *dkvsVal
 	if err != nil {
 		return nil, err
 	}
-	bundle, err := account.OpenManagedDataBundle(secret, accountID, blob.Data)
+	bundle, info, err := account.OpenManagedDataBundleWithInfo(secret, accountID, blob.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +92,7 @@ func openAccountManagedDataValue(secret []byte, accountID string, value *dkvsVal
 		return nil, err
 	}
 	return &accountManagedDataSnapshot{Bundle: bundle, Hash: hash,
-		Envelope: append([]byte(nil), blob.Data...)}, nil
+		Envelope: append([]byte(nil), blob.Data...), Compressed: info.Compressed}, nil
 }
 
 func (p *Manager) importAccountManagedDataSnapshot(value *accountManagedDataSnapshot) error {
@@ -114,6 +124,23 @@ func accountManagementMutations(profile *accountManagementProfile, root common.W
 		mutations = append(mutations, dataMutation)
 	}
 	return mutations, nil
+}
+
+func configureAccountTemporaryRetention(store *dkvsStore,
+	profile *accountManagementProfile) error {
+
+	if profile == nil {
+		return fmt.Errorf("account management profile is unavailable")
+	}
+	if profile.StorageMode != AccountStorageTemporary {
+		return nil
+	}
+	options := dkvsindexer.RecordOptions{}
+	if _, err := store.ConfigureFreeLocalRetention(&options); err != nil {
+		return err
+	}
+	profile.RecordTTL = options.TTL
+	return nil
 }
 
 func accountRecordMatchesStorage(value *dkvsValue, profile *accountManagementProfile) bool {

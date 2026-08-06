@@ -1,68 +1,22 @@
 package wallet
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	dkvscore "github.com/sat20-labs/sat20wallet/sdk/wallet/dkvs"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-var dkvsBlobEnvelopeMagic = []byte{'D', 'K', 'B', '1'}
+type DKVSBlob = dkvscore.Blob
 
-type DKVSBlob struct {
-	Data     []byte
-	Metadata []byte
-}
-
-// EncodeDKVSBlobValue keeps metadata optional. Raw data is stored without an
-// envelope when metadata is empty, allowing the complete 1 MiB value budget to
-// remain available to ordinary blob users.
 func EncodeDKVSBlobValue(data, metadata []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	if len(metadata) == 0 {
-		if len(data) > swire.MaxDKVSBlobValueSize {
-			return nil, dkvsindexer.ErrRecordTooLarge
-		}
-		return append([]byte(nil), data...), nil
-	}
-	if len(metadata) > int(^uint32(0)) {
-		return nil, dkvsindexer.ErrRecordTooLarge
-	}
-	value := make([]byte, 8+len(metadata)+len(data))
-	copy(value, dkvsBlobEnvelopeMagic)
-	binary.BigEndian.PutUint32(value[4:8], uint32(len(metadata)))
-	copy(value[8:], metadata)
-	copy(value[8+len(metadata):], data)
-	if len(value) > swire.MaxDKVSBlobValueSize {
-		return nil, dkvsindexer.ErrRecordTooLarge
-	}
-	return value, nil
+	return dkvscore.EncodeBlobValue(data, metadata)
 }
 
 func DecodeDKVSBlobValue(value []byte) (*DKVSBlob, error) {
-	if len(value) == 0 {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	blob := &DKVSBlob{}
-	if len(value) < 8 || !bytes.Equal(value[:4], dkvsBlobEnvelopeMagic) {
-		blob.Data = append([]byte(nil), value...)
-		return blob, nil
-	}
-	metadataSize := int(binary.BigEndian.Uint32(value[4:8]))
-	if metadataSize <= 0 || metadataSize > len(value)-8 {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	blob.Metadata = append([]byte(nil), value[8:8+metadataSize]...)
-	blob.Data = append([]byte(nil), value[8+metadataSize:]...)
-	if len(blob.Data) == 0 {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	return blob, nil
+	return dkvscore.DecodeBlobValue(value)
 }
 
 func buildDKVSBlobRecord(wallet common.Wallet, blobKey string, data, metadata []byte,

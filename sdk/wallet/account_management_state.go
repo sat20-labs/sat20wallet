@@ -150,6 +150,9 @@ func accountStateMutation(profile *accountManagementProfile, root common.Wallet,
 	}
 	switch profile.StorageMode {
 	case AccountStorageTemporary:
+		if profile.RecordTTL == 0 {
+			return dkvsValueMutation{}, dkvsindexer.ErrInvalidRecord
+		}
 		mutation.Policy.FreeLocal = true
 	case AccountStoragePaid:
 		mutation.Policy.Autopay = &DKVSAutopayOptions{
@@ -243,7 +246,9 @@ func (p *Manager) initializeAccountManagementLocked(password string) error {
 	profile := &accountManagementProfile{
 		Version: accountManagementProfileVersion, RootFingerprint: rootFingerprint,
 		AccountID: accountID, StorageMode: AccountStorageTemporary, Location: location,
-		RecordTTL:    dkvsindexer.DefaultFreeLocalCachePolicy().MaxTTL,
+		// FREE_LOCAL retention is resolved from the connected service node on
+		// every synchronization. A zero value here means "not resolved yet".
+		RecordTTL:    0,
 		SecretCipher: secretCipher, SecretSalt: secretSalt, DeviceID: deviceID,
 		StateSeq: state.Revision, StateHash: accountStateDigest(envelope),
 		StateEnvelope: envelope, ManagedDataDirty: true, ManagedDataGeneration: 1,
@@ -1190,6 +1195,7 @@ func (p *Manager) commitAccountManagedStateLocked(state account.ManagedState,
 		status.CurrentAccount = 0
 	}
 	profile := *p.accountProfile
+	profile.RecordTTL = snapshot.profile.RecordTTL
 	profile.Pending = remaining
 	profile.StateSeq = state.Revision
 	profile.StateHash = accountStateDigest(envelope)
@@ -1274,6 +1280,9 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int) e
 	}
 	store, err := p.accountDKVSStore()
 	if err != nil {
+		return err
+	}
+	if err := configureAccountTemporaryRetention(store, &snapshot.profile); err != nil {
 		return err
 	}
 	if err := store.Refresh(stateKey, dataKey); err != nil {
@@ -1374,9 +1383,13 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int) e
 	}
 	finalManaged := &accountManagedDataSnapshot{Catalog: targetCatalog,
 		Bundle: mergedBundle, Hash: mergedHash}
+	compressionBeneficial, err := account.ManagedDataBundleCompressionBeneficial(mergedBundle)
+	if err != nil {
+		return err
+	}
 	dataChanged := true
-	if remoteState.DataRevision != 0 && remoteState.DataHash == mergedHash &&
-		len(remoteManaged.Envelope) != 0 {
+	if shouldReuseRemoteManagedDataEnvelope(remoteState, mergedHash,
+		remoteManaged, compressionBeneficial) {
 		mergedBundle.Revision = remoteState.DataRevision
 		mergedBundle, err = account.NormalizeManagedDataBundle(mergedBundle)
 		if err != nil {
@@ -1386,11 +1399,13 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int) e
 		finalManaged.Envelope = append([]byte(nil), remoteManaged.Envelope...)
 		dataChanged = false
 	} else {
-		finalManaged.Envelope, err = account.SealManagedDataBundle(snapshot.secret,
-			snapshot.profile.AccountID, mergedBundle, nil)
+		var envelopeInfo account.ManagedDataEnvelopeInfo
+		finalManaged.Envelope, envelopeInfo, err = account.SealManagedDataBundleWithInfo(
+			snapshot.secret, snapshot.profile.AccountID, mergedBundle, nil)
 		if err != nil {
 			return err
 		}
+		finalManaged.Compressed = envelopeInfo.Compressed
 	}
 	target.DataRevision = finalManaged.Bundle.Revision
 	target.DataHash = finalManaged.Hash

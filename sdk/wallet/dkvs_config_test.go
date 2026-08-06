@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"encoding/json"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,4 +43,40 @@ func TestSatsNetDKVSClientGetConfig(t *testing.T) {
 	require.True(t, policy.Enabled)
 	require.Equal(t, uint64(144), policy.MaxTTL)
 	require.Equal(t, uint64(10), policy.MaxRecordsPerSigner)
+}
+
+func TestConnectedFreeLocalRetentionTracksNodeConfig(t *testing.T) {
+	remote := newRGB11MemoryDKVSHTTP()
+	remote.mu.Lock()
+	remote.freeLocal.MaxTTL = 321
+	remote.mu.Unlock()
+	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+
+	options := dkvsindexer.RecordOptions{TTL: 1}
+	policy, err := client.configureFreeLocalRetention(&options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.MaxTTL != 321 || options.TTL != 321 {
+		t.Fatalf("first node policy=%+v options=%+v", policy, options)
+	}
+
+	remote.mu.Lock()
+	remote.freeLocal.MaxTTL = 654
+	remote.mu.Unlock()
+	options.TTL = 9999
+	policy, err = client.configureFreeLocalRetention(&options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.MaxTTL != 654 || options.TTL != 654 {
+		t.Fatalf("updated node policy=%+v options=%+v", policy, options)
+	}
+
+	remote.mu.Lock()
+	remote.freeLocal.Enabled = false
+	remote.mu.Unlock()
+	if _, err := client.configureFreeLocalRetention(&options); err == nil {
+		t.Fatal("disabled node FREE_LOCAL policy was accepted")
+	}
 }

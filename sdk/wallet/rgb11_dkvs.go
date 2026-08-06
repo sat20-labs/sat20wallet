@@ -24,10 +24,7 @@ import (
 	"time"
 )
 
-const (
-	rgb11AddressMailboxPageSize = 256
-	rgb11AddressTemporaryTTL    = uint64(144)
-)
+const rgb11AddressMailboxPageSize = 256
 
 func (p *rgb11Manager) configuredRGB11Store() (*dkvsStore, error) {
 	if p == nil || p.ensureDKVSManager() == nil {
@@ -37,29 +34,22 @@ func (p *rgb11Manager) configuredRGB11Store() (*dkvsStore, error) {
 }
 
 func (p *rgb11Manager) configureRGB11AddressCapabilityRetention(store *dkvsStore,
-	record *dkvsindexer.RecordOptions) {
+	record *dkvsindexer.RecordOptions) error {
 
-	p.configureRGB11AddressTransientRetention(store, record)
+	return p.configureRGB11AddressTransientRetention(store, record)
 }
 
-// Address capabilities, deliveries and acknowledgments are transient
-// protocol messages. Permanent recovery data is managed only by account
-// management; RGB transport records always use a finite local TTL.
+// Address capabilities, deliveries and acknowledgments are transient protocol
+// messages. Their retention is configured by the connected service node and
+// read through GET /v3/dkvs/config; the wallet embeds no fallback duration.
 func (p *rgb11Manager) configureRGB11AddressTransientRetention(store *dkvsStore,
-	record *dkvsindexer.RecordOptions) {
+	record *dkvsindexer.RecordOptions) error {
 
-	if record == nil {
-		return
+	if store == nil || record == nil {
+		return ErrDKVSPathNotSynced
 	}
-	maxTTL := rgb11AddressTemporaryTTL
-	if store != nil {
-		if policy, err := store.Config(); err == nil && policy != nil && policy.Enabled && policy.MaxTTL > 0 {
-			maxTTL = policy.MaxTTL
-		}
-	}
-	if record.TTL == 0 || record.TTL > maxTTL {
-		record.TTL = maxTTL
-	}
+	_, err := store.ConfigureFreeLocalRetention(record)
+	return err
 }
 
 func rgb11AddressStoragePolicy(options dkvsindexer.RecordOptions) dkvsStoragePolicy {
@@ -71,7 +61,9 @@ func (p *rgb11Manager) EnableConfiguredRGB11AddressReceive(options RGB11ReceiveC
 	if err != nil {
 		return nil, err
 	}
-	p.configureRGB11AddressCapabilityRetention(store, &options.RecordOptions)
+	if err := p.configureRGB11AddressCapabilityRetention(store, &options.RecordOptions); err != nil {
+		return nil, err
+	}
 	return p.enableRGB11AddressReceiveStore(store, options)
 }
 
@@ -103,7 +95,9 @@ func (p *rgb11Manager) DeliverAndBroadcastConfiguredRGB11AddressTransfer(transfe
 	if err != nil {
 		return nil, err
 	}
-	p.configureRGB11AddressTransientRetention(store, &options.RecordOptions)
+	if err := p.configureRGB11AddressTransientRetention(store, &options.RecordOptions); err != nil {
+		return nil, err
+	}
 	result, err := p.deliverRGB11AddressTransferStore(store, transferID, options)
 	if err != nil {
 		return nil, err
@@ -154,7 +148,9 @@ func (p *rgb11Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	p.configureRGB11AddressTransientRetention(store, &ackOptions.RecordOptions)
+	if err := p.configureRGB11AddressTransientRetention(store, &ackOptions.RecordOptions); err != nil {
+		return nil, err
+	}
 	accountID, err := dkvsAccountID(p.wallet)
 	if err != nil {
 		return nil, err
@@ -1212,11 +1208,11 @@ func (p *rgb11Manager) PublishRGB11RelayRecord(transferID, sourcePeerID string,
 	if err := p.requireLatestRGB11WalletState(); err != nil {
 		return nil, nil, err
 	}
-	if opts.TTL == 0 {
-		return nil, nil, fmt.Errorf("RGB11 relay TTL is required")
-	}
 	store, err := p.configuredRGB11Store()
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := p.configureRGB11AddressTransientRetention(store, &opts); err != nil {
 		return nil, nil, err
 	}
 	record, err := p.BuildRGB11RelayRecord(transferID, sourcePeerID)
@@ -1404,7 +1400,7 @@ func (p *rgb11Manager) PublishRGB11AckRecord(key string, ack *corerelay.AckRecor
 	if err := p.requireLatestRGB11WalletState(); err != nil {
 		return nil, err
 	}
-	if p == nil || p.wallet == nil || ack == nil || opts.TTL == 0 {
+	if p == nil || p.wallet == nil || ack == nil {
 		return nil, ErrRGB11Inconsistent
 	}
 	state, err := p.rgbManager.projectionStore.LoadTransferState(ack.TransferID)
@@ -1426,6 +1422,9 @@ func (p *rgb11Manager) PublishRGB11AckRecord(key string, ack *corerelay.AckRecor
 	}
 	store, err := p.configuredRGB11Store()
 	if err != nil {
+		return nil, err
+	}
+	if err := p.configureRGB11AddressTransientRetention(store, &opts); err != nil {
 		return nil, err
 	}
 	written, err := store.Put(dkvsValueMutation{

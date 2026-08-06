@@ -254,7 +254,7 @@ func TestRGB11OfficialContractOpretRelayAckSendReceive(t *testing.T) {
 	witnessTxID := witness.TxHash().String()
 	recipientOutpoint := witnessTxID + ":1"
 
-	relayOptions := dkvsindexer.RecordOptions{TTL: rgb11AddressTemporaryTTL}
+	relayOptions := dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}
 	relayRecord, _, err := sender.PublishRGB11RelayRecord(prepared.State.TransferID, "sender-test", relayOptions)
 	if err != nil {
 		t.Fatal(err)

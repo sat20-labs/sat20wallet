@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	dkvscore "github.com/sat20-labs/sat20wallet/sdk/wallet/dkvs"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -277,6 +278,19 @@ func (s *dkvsStore) Config() (*AccountFreeLocalPolicy, error) {
 		return nil, ErrDKVSPathNotSynced
 	}
 	return s.client.GetConfig()
+}
+
+// ConfigureFreeLocalRetention resolves the current connected service node's
+// policy and makes that policy authoritative for a domain-level local record.
+func (s *dkvsStore) ConfigureFreeLocalRetention(options *dkvsindexer.RecordOptions) (*AccountFreeLocalPolicy, error) {
+	policy, err := s.Config()
+	if err != nil {
+		return nil, err
+	}
+	if err := dkvscore.ApplyFreeLocalRetention(policy, options); err != nil {
+		return nil, err
+	}
+	return policy, nil
 }
 
 func (s *dkvsStore) List(prefix string) ([]*dkvsValue, error) {

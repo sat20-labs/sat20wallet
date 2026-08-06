@@ -2,6 +2,7 @@ package account
 
 import (
 	"bytes"
+	"compress/zlib"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -15,16 +16,19 @@ import (
 )
 
 const (
-	ManagedDataBundleVersion = uint32(1)
-	managedDataMaxItems      = 4096
-	managedDataMaxProvider   = 128
-	managedDataMaxScope      = 1024
-	ManagedDataMaxPayload    = 1 << 20
+	ManagedDataBundleVersion         = uint32(1)
+	managedDataMaxItems              = 4096
+	managedDataMaxProvider           = 128
+	managedDataMaxScope              = 1024
+	ManagedDataMaxPayload            = 1 << 20
+	managedDataCompressionThreshold  = 1024
+	managedDataCompressionMinSavings = 64
 )
 
 var (
-	managedDataPlainMagic    = []byte{'A', 'M', 'D'}
-	managedDataEnvelopeMagic = []byte{'A', 'D', 'E'}
+	managedDataPlainMagic      = []byte{'A', 'M', 'D'}
+	managedDataEnvelopeMagic   = []byte{'A', 'D', 'E'}
+	managedDataCompressedMagic = []byte{'A', 'D', 'C', 1}
 )
 
 // ManagedDataItem is one module-owned, account-managed recovery payload.
@@ -202,69 +206,175 @@ func managedDataAAD(accountID string) []byte {
 	return []byte("sat20-account-managed-data-aad|" + accountID)
 }
 
+// ManagedDataEnvelopeInfo describes the authenticated inner encoding without
+// exposing plaintext bytes to callers.
+type ManagedDataEnvelopeInfo struct {
+	Compressed bool
+}
+
+// prepareManagedDataPlaintext compresses the canonical bundle before
+// encryption only when doing so produces a meaningful size reduction. The
+// marker is encrypted and authenticated together with the compressed bytes.
+func prepareManagedDataPlaintext(value []byte) ([]byte, bool, error) {
+	if len(value) < managedDataCompressionThreshold {
+		return value, false, nil
+	}
+	var buf bytes.Buffer
+	buf.Grow(len(value) / 2)
+	buf.Write(managedDataCompressedMagic)
+	writer, err := zlib.NewWriterLevel(&buf, zlib.BestSpeed)
+	if err != nil {
+		return nil, false, err
+	}
+	if _, err := writer.Write(value); err != nil {
+		_ = writer.Close()
+		zero(buf.Bytes())
+		return nil, false, err
+	}
+	if err := writer.Close(); err != nil {
+		zero(buf.Bytes())
+		return nil, false, err
+	}
+	compressed := buf.Bytes()
+	if len(compressed)+managedDataCompressionMinSavings >= len(value) {
+		zero(compressed)
+		return value, false, nil
+	}
+	return compressed, true, nil
+}
+
+func restoreManagedDataPlaintext(value []byte) ([]byte, bool, error) {
+	if bytes.HasPrefix(value, managedDataPlainMagic) {
+		// Uncompressed envelopes, including records written before compression
+		// support was added, remain canonical input.
+		return value, false, nil
+	}
+	if !bytes.HasPrefix(value, managedDataCompressedMagic) {
+		return nil, false, ErrRecoveryFailed
+	}
+	reader, err := zlib.NewReader(bytes.NewReader(value[len(managedDataCompressedMagic):]))
+	if err != nil {
+		return nil, false, ErrRecoveryFailed
+	}
+	decoded, readErr := io.ReadAll(io.LimitReader(reader, ManagedDataMaxPayload+1))
+	closeErr := reader.Close()
+	if readErr != nil || closeErr != nil || len(decoded) == 0 ||
+		len(decoded) > ManagedDataMaxPayload || !bytes.HasPrefix(decoded, managedDataPlainMagic) {
+		zero(decoded)
+		return nil, false, ErrRecoveryFailed
+	}
+	return decoded, true, nil
+}
+
+// ManagedDataBundleCompressionBeneficial reports whether the canonical bundle
+// would use compressed inner encoding under the current codec policy.
+func ManagedDataBundleCompressionBeneficial(bundle ManagedDataBundle) (bool, error) {
+	plaintext, err := EncodeManagedDataBundle(bundle)
+	if err != nil {
+		return false, err
+	}
+	defer zero(plaintext)
+	prepared, compressed, err := prepareManagedDataPlaintext(plaintext)
+	if compressed {
+		zero(prepared)
+	}
+	return compressed, err
+}
+
 func SealManagedDataBundle(secret []byte, accountID string, bundle ManagedDataBundle,
 	randomSource io.Reader) ([]byte, error) {
 
+	value, _, err := SealManagedDataBundleWithInfo(secret, accountID, bundle, randomSource)
+	return value, err
+}
+
+func SealManagedDataBundleWithInfo(secret []byte, accountID string, bundle ManagedDataBundle,
+	randomSource io.Reader) ([]byte, ManagedDataEnvelopeInfo, error) {
+
 	plaintext, err := EncodeManagedDataBundle(bundle)
 	if err != nil {
-		return nil, err
+		return nil, ManagedDataEnvelopeInfo{}, err
 	}
 	defer zero(plaintext)
+	payload, compressed, err := prepareManagedDataPlaintext(plaintext)
+	if err != nil {
+		return nil, ManagedDataEnvelopeInfo{}, err
+	}
+	if compressed {
+		defer zero(payload)
+	}
 	key, err := managedDataKey(secret, accountID)
 	if err != nil {
-		return nil, err
+		return nil, ManagedDataEnvelopeInfo{}, err
 	}
 	defer zero(key)
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, err
+		return nil, ManagedDataEnvelopeInfo{}, err
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, err
+		return nil, ManagedDataEnvelopeInfo{}, err
 	}
 	if randomSource == nil {
 		randomSource = rand.Reader
 	}
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(randomSource, nonce); err != nil {
-		return nil, err
+		return nil, ManagedDataEnvelopeInfo{}, err
 	}
-	ciphertext := gcm.Seal(nil, nonce, plaintext, managedDataAAD(accountID))
+	ciphertext := gcm.Seal(nil, nonce, payload, managedDataAAD(accountID))
 	result := make([]byte, 0, len(managedDataEnvelopeMagic)+len(nonce)+len(ciphertext))
 	result = append(result, managedDataEnvelopeMagic...)
 	result = append(result, nonce...)
 	result = append(result, ciphertext...)
 	if len(result) > ManagedDataMaxPayload {
-		return nil, fmt.Errorf("encrypted account-managed data exceeds blob limit")
+		return nil, ManagedDataEnvelopeInfo{}, fmt.Errorf("encrypted account-managed data exceeds blob limit")
 	}
-	return result, nil
+	return result, ManagedDataEnvelopeInfo{Compressed: compressed}, nil
 }
 
 func OpenManagedDataBundle(secret []byte, accountID string, value []byte) (ManagedDataBundle, error) {
+	bundle, _, err := OpenManagedDataBundleWithInfo(secret, accountID, value)
+	return bundle, err
+}
+
+func OpenManagedDataBundleWithInfo(secret []byte, accountID string,
+	value []byte) (ManagedDataBundle, ManagedDataEnvelopeInfo, error) {
 	key, err := managedDataKey(secret, accountID)
 	if err != nil {
-		return ManagedDataBundle{}, err
+		return ManagedDataBundle{}, ManagedDataEnvelopeInfo{}, err
 	}
 	defer zero(key)
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return ManagedDataBundle{}, ErrRecoveryFailed
+		return ManagedDataBundle{}, ManagedDataEnvelopeInfo{}, ErrRecoveryFailed
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil || len(value) < len(managedDataEnvelopeMagic)+gcm.NonceSize()+gcm.Overhead() ||
 		!bytes.Equal(value[:len(managedDataEnvelopeMagic)], managedDataEnvelopeMagic) {
-		return ManagedDataBundle{}, ErrRecoveryFailed
+		return ManagedDataBundle{}, ManagedDataEnvelopeInfo{}, ErrRecoveryFailed
 	}
 	offset := len(managedDataEnvelopeMagic)
 	nonce := value[offset : offset+gcm.NonceSize()]
 	ciphertext := value[offset+gcm.NonceSize():]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, managedDataAAD(accountID))
+	payload, err := gcm.Open(nil, nonce, ciphertext, managedDataAAD(accountID))
 	if err != nil {
-		return ManagedDataBundle{}, ErrRecoveryFailed
+		return ManagedDataBundle{}, ManagedDataEnvelopeInfo{}, ErrRecoveryFailed
 	}
-	defer zero(plaintext)
-	return DecodeManagedDataBundle(plaintext)
+	defer zero(payload)
+	plaintext, expanded, err := restoreManagedDataPlaintext(payload)
+	if err != nil {
+		return ManagedDataBundle{}, ManagedDataEnvelopeInfo{}, err
+	}
+	if expanded {
+		defer zero(plaintext)
+	}
+	bundle, err := DecodeManagedDataBundle(plaintext)
+	if err != nil {
+		return ManagedDataBundle{}, ManagedDataEnvelopeInfo{}, err
+	}
+	return bundle, ManagedDataEnvelopeInfo{Compressed: expanded}, nil
 }
 
 // ManagedDataBundleDigest verifies the exact plaintext content referenced by a

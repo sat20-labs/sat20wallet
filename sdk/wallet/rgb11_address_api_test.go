@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -28,28 +29,36 @@ func TestRGB11AddressMessageIDIsBoundedAndDomainSeparated(t *testing.T) {
 	}
 }
 
-func TestConfiguredRGB11AddressRetentionIsAlwaysFiniteLocal(t *testing.T) {
+func TestConfiguredRGB11AddressRetentionUsesServiceNodePolicy(t *testing.T) {
+	remote := newRGB11MemoryDKVSHTTP()
+	remote.freeLocal.MaxTTL = 777
+	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	store := &dkvsStore{client: client}
 	manager := &Manager{}
 	manager.rgbManager = &rgb11Manager{Manager: manager}
-	temporary := dkvsindexer.RecordOptions{}
-	manager.rgbManager.configureRGB11AddressCapabilityRetention(nil, &temporary)
-	if temporary.TTL != rgb11AddressTemporaryTTL {
-		t.Fatalf("temporary retention=%+v", temporary)
-	}
 
-	explicit := dkvsindexer.RecordOptions{TTL: 123}
-	manager.rgbManager.configureRGB11AddressCapabilityRetention(nil, &explicit)
-	if explicit.TTL != 123 {
-		t.Fatalf("explicit finite TTL was changed: %+v", explicit)
+	for _, initial := range []uint64{0, 123, 9999} {
+		options := dkvsindexer.RecordOptions{TTL: initial}
+		if err := manager.rgbManager.configureRGB11AddressCapabilityRetention(store, &options); err != nil {
+			t.Fatal(err)
+		}
+		if options.TTL != remote.freeLocal.MaxTTL {
+			t.Fatalf("initial=%d retention=%d want=%d", initial, options.TTL, remote.freeLocal.MaxTTL)
+		}
 	}
 
 	transient := dkvsindexer.RecordOptions{}
-	manager.rgbManager.configureRGB11AddressTransientRetention(nil, &transient)
-	if transient.TTL != rgb11AddressTemporaryTTL {
-		t.Fatalf("transient retention=%+v", transient)
+	if err := manager.rgbManager.configureRGB11AddressTransientRetention(store, &transient); err != nil {
+		t.Fatal(err)
 	}
 	policy := rgb11AddressStoragePolicy(transient)
-	if !policy.FreeLocal || policy.Autopay != nil || policy.TTL == 0 {
-		t.Fatalf("RGB transport policy is not finite FREE_LOCAL: %+v", policy)
+	if !policy.FreeLocal || policy.Autopay != nil || policy.TTL != remote.freeLocal.MaxTTL {
+		t.Fatalf("RGB transport policy=%+v", policy)
+	}
+
+	remote.freeLocal.Enabled = false
+	if err := manager.rgbManager.configureRGB11AddressTransientRetention(store,
+		&dkvsindexer.RecordOptions{}); !errors.Is(err, dkvsindexer.ErrFreeLocalDisabled) {
+		t.Fatalf("disabled FREE_LOCAL err=%v", err)
 	}
 }

@@ -1,17 +1,13 @@
 package wallet
 
-import dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+import (
+	dkvscore "github.com/sat20-labs/sat20wallet/sdk/wallet/dkvs"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+)
 
-// AccountFreeLocalPolicy is the wallet-facing projection of the connected
-// node's FREE_LOCAL section from GET /v3/dkvs/config.
-type AccountFreeLocalPolicy struct {
-	Enabled             bool   `json:"enabled"`
-	MaxTTL              uint64 `json:"max_ttl_blocks"`
-	MaxRecordsPerSigner uint64 `json:"max_records_per_signer"`
-	MaxBytesPerSigner   uint64 `json:"max_bytes_per_signer"`
-	MaxTotalRecords     uint64 `json:"max_total_records"`
-	MaxTotalBytes       uint64 `json:"max_total_bytes"`
-}
+// AccountFreeLocalPolicy is retained as the wallet-facing alias of the
+// low-level DKVS service-node policy.
+type AccountFreeLocalPolicy = dkvscore.FreeLocalPolicy
 
 type accountDKVSConfigResp struct {
 	dkvsBaseResp
@@ -59,4 +55,17 @@ func (p *SatsNetDKVSClient) GetConfig() (*AccountFreeLocalPolicy, error) {
 		MaxTotalRecords:     policy.MaxTotalRecords,
 		MaxTotalBytes:       policy.MaxTotalBytes,
 	}, nil
+}
+
+func (p *SatsNetDKVSClient) configureFreeLocalRetention(
+	options *dkvsindexer.RecordOptions) (*AccountFreeLocalPolicy, error) {
+
+	policy, err := p.GetConfig()
+	if err != nil {
+		return nil, err
+	}
+	if err := dkvscore.ApplyFreeLocalRetention(policy, options); err != nil {
+		return nil, err
+	}
+	return policy, nil
 }

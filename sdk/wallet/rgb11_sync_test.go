@@ -257,6 +257,8 @@ func TestRGB11RelayAndAckRoundTripThroughDKVS(t *testing.T) {
 // rgb11MemoryDKVSHTTP models the one property the multi-device protocol relies
 // on from DKVS: a key may advance only to a strictly newer wallet-signed
 // sequence. Related key updates are committed atomically through batch-CAS.
+const testRGB11FreeLocalTTL = uint64(144)
+
 type rgb11MemoryDKVSHTTP struct {
 	mu           sync.Mutex
 	records      map[string]*swire.DKVSRecord
@@ -274,7 +276,7 @@ func newRGB11MemoryDKVSHTTP() *rgb11MemoryDKVSHTTP {
 		generations: make(map[string]uint64),
 		freeLocal: dkvsindexer.FreeLocalCachePolicy{
 			Enabled:             true,
-			MaxTTL:              rgb11AddressTemporaryTTL,
+			MaxTTL:              testRGB11FreeLocalTTL,
 			MaxRecordsPerSigner: 100,
 			MaxBytesPerSigner:   1 << 20,
 			MaxTotalRecords:     100_000,

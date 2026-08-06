@@ -10,10 +10,6 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-type dkvsAccountSchnorrSigner interface {
-	SignSchnorrMessage(hash []byte) ([]byte, error)
-}
-
 // SignSchnorrMessage signs a 32-byte digest with the current SAT20 subaccount
 // payment key using BIP340. The corresponding x-only public key is the DKVS v1
 // account ID.
@@ -33,31 +29,6 @@ func (p *InternalWallet) SignSchnorrMessage(hash []byte) ([]byte, error) {
 		return nil, err
 	}
 	return sig.Serialize(), nil
-}
-
-func dkvsAccountID(wallet common.Wallet) (string, error) {
-	if wallet == nil || wallet.GetPubKey() == nil {
-		return "", dkvsindexer.ErrInvalidSignature
-	}
-	return dkvsindexer.CanonicalAccountID(wallet.GetPubKey().SerializeCompressed())
-}
-
-func SignDKVSAccountRecord(wallet common.Wallet, record *swire.DKVSRecord) error {
-	if wallet == nil || record == nil || record.Version != dkvsindexer.Version {
-		return dkvsindexer.ErrInvalidSignature
-	}
-	signer, ok := wallet.(dkvsAccountSchnorrSigner)
-	if !ok {
-		return dkvsindexer.ErrInvalidSignature
-	}
-	hash := dkvsindexer.SigningHash(record)
-	signature, err := signer.SignSchnorrMessage(hash[:])
-	if err != nil {
-		return err
-	}
-	record.PubKey = nil
-	record.Signature = append([]byte(nil), signature...)
-	return nil
 }
 
 func NewDKVSAccountSignedRecord(wallet common.Wallet, key string, value []byte,

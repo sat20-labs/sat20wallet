@@ -241,7 +241,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 	configure(sender)
 	configure(recipient)
-	recordOptions := dkvsindexer.RecordOptions{TTL: rgb11AddressTemporaryTTL}
+	recordOptions := dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}
 
 	request := RGB11AddressSendRequest{
 		ReceiverAddress:  unregisteredWallet.GetAddress(),
