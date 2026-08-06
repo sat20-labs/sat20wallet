@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"strings"
 	"syscall/js"
-	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
@@ -16,10 +15,8 @@ import (
 )
 
 type rgb11AddressReceiveWASMRequest struct {
-	TTL          uint64 `json:"ttl,omitempty"`
-	ExpiryHeight uint64 `json:"expiry_height,omitempty"`
-	Autopay      bool   `json:"autopay,omitempty"`
-	Flags        uint8  `json:"flags,omitempty"`
+	TTL   uint64 `json:"ttl,omitempty"`
+	Flags uint8  `json:"flags,omitempty"`
 }
 
 type rgb11AddressSendWASMRequest struct {
@@ -32,26 +29,14 @@ type rgb11AddressSendWASMRequest struct {
 }
 
 type rgb11AddressDeliveryWASMRequest struct {
-	TransferID   string `json:"transfer_id"`
-	TTL          uint64 `json:"ttl,omitempty"`
-	ExpiryHeight uint64 `json:"expiry_height,omitempty"`
-	Autopay      bool   `json:"autopay,omitempty"`
-	InlineLimit  int    `json:"inline_limit,omitempty"`
+	TransferID  string `json:"transfer_id"`
+	TTL         uint64 `json:"ttl,omitempty"`
+	InlineLimit int    `json:"inline_limit,omitempty"`
 }
 
 type rgb11AddressMailboxWASMRequest struct {
-	Height       uint64 `json:"height,omitempty"`
-	Now          uint64 `json:"now,omitempty"`
-	TTL          uint64 `json:"ttl,omitempty"`
-	ExpiryHeight uint64 `json:"expiry_height,omitempty"`
-	Autopay      bool   `json:"autopay,omitempty"`
-}
-
-func rgb11AddressAutopay(enabled bool) *wallet.DKVSAutopayOptions {
-	if !enabled {
-		return nil
-	}
-	return &wallet.DKVSAutopayOptions{AddressParams: wallet.GetChainParam_SatsNet()}
+	Height uint64 `json:"height,omitempty"`
+	TTL    uint64 `json:"ttl,omitempty"`
 }
 
 func parseRGB11AssetName(value string) (indexer.AssetName, error) {
@@ -80,10 +65,9 @@ func enableRGB11AddressReceive(this js.Value, p []js.Value) any {
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		endpoint, err := _mgr.EnableConfiguredRGB11AddressReceive(wallet.RGB11ReceiveCapabilityOptions{
 			RecordOptions: dkvsindexer.RecordOptions{
-				TTL: request.TTL, ExpiryHeight: request.ExpiryHeight,
+				TTL: request.TTL,
 			},
-			Autopay: rgb11AddressAutopay(request.Autopay),
-			Flags:   request.Flags,
+			Flags: request.Flags,
 		})
 		if err != nil {
 			return nil, -1, err.Error()
@@ -107,7 +91,7 @@ func resolveRGB11AddressEndpoint(this js.Value, p []js.Value) any {
 	address := strings.TrimSpace(p[0].String())
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		endpoint, err := _mgr.ResolveConfiguredRGB11AddressEndpoint(address,
-			dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())})
+			dkvsindexer.RecordVerificationOptions{})
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -141,7 +125,7 @@ func prepareRGB11AddressTransfer(this js.Value, p []js.Value) any {
 				FeeRate:          request.FeeRate,
 				MinConfirmations: request.MinConfirmations,
 				Expiry:           request.Expiry,
-			}, dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())},
+			}, dkvsindexer.RecordVerificationOptions{},
 		)
 		if err != nil {
 			return nil, -1, err.Error()
@@ -174,9 +158,8 @@ func deliverAndBroadcastRGB11AddressTransfer(this js.Value, p []js.Value) any {
 		result, err := _mgr.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
 			request.TransferID, wallet.RGB11AddressDeliveryOptions{
 				RecordOptions: dkvsindexer.RecordOptions{
-					TTL: request.TTL, ExpiryHeight: request.ExpiryHeight,
+					TTL: request.TTL,
 				},
-				Autopay:     rgb11AddressAutopay(request.Autopay),
 				InlineLimit: request.InlineLimit,
 			},
 		)
@@ -206,18 +189,14 @@ func syncRGB11AddressMailbox(this js.Value, p []js.Value) any {
 			return createJsRet(nil, -1, err.Error())
 		}
 	}
-	if request.Now == 0 {
-		request.Now = uint64(time.Now().UnixMilli())
-	}
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		result, err := _mgr.SyncConfiguredRGB11AddressMailbox(
 			context.Background(), dkvsindexer.RecordVerificationOptions{
-				Height: request.Height, Now: request.Now,
+				Height: request.Height,
 			}, wallet.RGB11AddressDeliveryOptions{
 				RecordOptions: dkvsindexer.RecordOptions{
-					TTL: request.TTL, ExpiryHeight: request.ExpiryHeight,
+					TTL: request.TTL,
 				},
-				Autopay: rgb11AddressAutopay(request.Autopay),
 			},
 		)
 		if err != nil {

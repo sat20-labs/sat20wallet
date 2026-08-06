@@ -29,14 +29,18 @@ func (s *EngineStore) SetScope(scope string) error {
 	return nil
 }
 
-func (s *EngineStore) key(key []byte) ([]byte, error) {
-	s.mu.RLock()
-	scope := s.scope
-	s.mu.RUnlock()
+func engineStoreKey(scope string, key []byte) ([]byte, error) {
 	if scope == "" || len(key) == 0 {
 		return nil, ErrWalletScope
 	}
 	return append([]byte("rgb11-engine-"+scope+"-"), key...), nil
+}
+
+func (s *EngineStore) key(key []byte) ([]byte, error) {
+	s.mu.RLock()
+	scope := s.scope
+	s.mu.RUnlock()
+	return engineStoreKey(scope, key)
 }
 
 func (s *EngineStore) Get(key []byte) ([]byte, error) {
@@ -58,15 +62,21 @@ func (s *EngineStore) Begin() (corestorage.Tx, error) {
 	if s == nil || s.db == nil {
 		return nil, ErrWalletScope
 	}
+	s.mu.RLock()
+	scope := s.scope
+	s.mu.RUnlock()
+	if scope == "" {
+		return nil, ErrWalletScope
+	}
 	batch := s.db.NewWriteBatch()
 	if batch == nil {
 		return nil, errors.New("RGB11 KVDB returned nil write batch")
 	}
-	return &engineTx{store: s, batch: batch}, nil
+	return &engineTx{scope: scope, batch: batch}, nil
 }
 
 type engineTx struct {
-	store *EngineStore
+	scope string
 	batch indexer.WriteBatch
 	done  bool
 }
@@ -75,7 +85,7 @@ func (tx *engineTx) Put(key, value []byte) error {
 	if tx.done {
 		return errors.New("RGB11 transaction is closed")
 	}
-	key, err := tx.store.key(key)
+	key, err := engineStoreKey(tx.scope, key)
 	if err != nil {
 		return err
 	}
@@ -86,7 +96,7 @@ func (tx *engineTx) Delete(key []byte) error {
 	if tx.done {
 		return errors.New("RGB11 transaction is closed")
 	}
-	key, err := tx.store.key(key)
+	key, err := engineStoreKey(tx.scope, key)
 	if err != nil {
 		return err
 	}

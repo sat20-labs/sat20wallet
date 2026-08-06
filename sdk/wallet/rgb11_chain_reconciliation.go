@@ -200,24 +200,13 @@ func (p *rgb11Manager) scheduleRGB11ChainReconciliation() {
 
 func (p *rgb11Manager) runRGB11ChainReconciliation(scope string, worker *rgb11ScopeReconciliation) {
 	defer p.scopeStates.finishReconciliation(scope, worker)
-	baselineReady := false
 	for {
 		p.scopeStates.mu.Lock()
 		worker.attempts++
 		p.scopeStates.mu.Unlock()
-		var refreshErr error
-		if !baselineReady {
-			refreshErr = p.loadSynchronizedRGB11State()
-			baselineReady = refreshErr == nil
-		}
-		if baselineReady {
-			_, refreshErr = p.RefreshRGB11State(context.Background())
-		}
+		_, refreshErr := p.RefreshRGB11State(context.Background())
 
 		pending, inspectErr := p.hasPendingRGB11ChainReconciliation()
-		if !baselineReady {
-			pending = true
-		}
 		if inspectErr != nil {
 			refreshErr = errors.Join(refreshErr, inspectErr)
 			pending = true

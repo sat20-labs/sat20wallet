@@ -12,7 +12,6 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func waitRGB11Reconciliation(t *testing.T, manager *Manager,
@@ -52,7 +51,46 @@ func rgb11AssetAmount(assets indexer.TxAssets, name indexer.AssetName) uint64 {
 	return 0
 }
 
-func TestRGB11RestoredBroadcastChainReconciliation(t *testing.T) {
+func exportRGB11RecoveryForTest(t *testing.T, manager *Manager) []byte {
+	t.Helper()
+	walletID, err := manager.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, _, err := manager.rgbManager.exportRGB11WalletSnapshot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := rgb11wallet.RecoveryPackageFromSnapshot(full, time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := rgb11wallet.EncodeRecoveryPackage(recovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func importRGB11RecoveryForTest(t *testing.T, manager *Manager, encoded []byte) {
+	t.Helper()
+	recovery, err := rgb11wallet.DecodeRecoveryPackage(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := recovery.WalletSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.rgbManager.importRGB11WalletSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.rgbManager.rebuildRGB11Locks(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRGB11AccountManagedRecoveryReconcilesBroadcastAfterRestart(t *testing.T) {
 	senderWallet := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
 	)
@@ -125,36 +163,19 @@ func TestRGB11RestoredBroadcastChainReconciliation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	remote := newRGB11MemoryDKVSHTTP()
-	configureRGB11DKVSTestManager(sender, remote)
-	head1, err := sender.SyncRGB11WalletState("", dkvsindexer.RecordOptions{
-		TTL: uint64((24 * time.Hour) / time.Millisecond),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if head1.Seq != 1 {
-		t.Fatalf("broadcast fixture head sequence=%d", head1.Seq)
-	}
+	// Account management persists only the minimum RGB recovery package. A new
+	// device imports it and rebuilds locks/cache before chain reconciliation.
+	broadcastRecovery := exportRGB11RecoveryForTest(t, sender)
 	sender.rgbManager.scopeStates.stopReconciliations()
-
 	restoredWallet := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
 	)
 	restored := newRGB11FlowManager(t, restoredWallet, rpc, evidence, 340)
-	configureRGB11DKVSTestManager(restored, remote)
 	restored.rgbManager.scopeStates.mu.Lock()
 	restored.rgbManager.scopeStates.retryDelay = time.Hour
 	restored.rgbManager.scopeStates.mu.Unlock()
-	activation, err := restored.ActivateRGB11WalletState(dkvsindexer.RecordVerificationOptions{
-		Now: uint64(time.Now().UnixMilli()),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !activation.Restored || activation.Head == nil || activation.Head.Seq != 1 {
-		t.Fatalf("broadcast fixture activation=%+v", activation)
-	}
+	importRGB11RecoveryForTest(t, restored, broadcastRecovery)
+	restored.rgbManager.scheduleRGB11ChainReconciliation()
 	waitRGB11Reconciliation(t, restored, func(running bool, attempts uint64) bool {
 		return running && attempts >= 1
 	})
@@ -198,32 +219,14 @@ func TestRGB11RestoredBroadcastChainReconciliation(t *testing.T) {
 		t.Fatalf("confirmed change balance available=%d pending=%d", available, pendingAmount)
 	}
 
-	flushRGB11Background(t, restored)
-	walletID, err := restored.RGB11WalletID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	head2, _, err := getRGB11RemoteHead(remote, restoredWallet.GetPubKey().SerializeCompressed(), walletID)
-	if err != nil || head2.Seq != head1.Seq+1 {
-		t.Fatalf("chain reconciliation snapshot head=%+v err=%v", head2, err)
-	}
-	restored.rgbManager.scheduleRGB11ChainReconciliation()
-	flushRGB11Background(t, restored)
-	idempotent, _, err := getRGB11RemoteHead(remote, restoredWallet.GetPubKey().SerializeCompressed(), walletID)
-	if err != nil || idempotent.Seq != head2.Seq {
-		t.Fatalf("idempotent reconciliation advanced snapshot: head=%+v err=%v", idempotent, err)
-	}
-
+	// Persist the new minimum recovery state and verify another restart restores
+	// the confirmed allocation without carrying the completed transfer cache.
+	confirmedRecovery := exportRGB11RecoveryForTest(t, restored)
 	restartedWallet := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
 	)
 	restarted := newRGB11FlowManager(t, restartedWallet, rpc, evidence, 341)
-	configureRGB11DKVSTestManager(restarted, remote)
-	if _, err := restarted.ActivateRGB11WalletState(dkvsindexer.RecordVerificationOptions{
-		Now: uint64(time.Now().UnixMilli()),
-	}); err != nil {
-		t.Fatal(err)
-	}
+	importRGB11RecoveryForTest(t, restarted, confirmedRecovery)
 	restartedState, err := restarted.GetRGB11State()
 	if err != nil {
 		t.Fatal(err)
@@ -231,5 +234,9 @@ func TestRGB11RestoredBroadcastChainReconciliation(t *testing.T) {
 	if available := rgb11AssetAmount(restartedState.AvailableAssets, issued.AssetName); available != 5 ||
 		restartedState.SyncStatus != "idle" {
 		t.Fatalf("restart state available=%d sync=%s", available, restartedState.SyncStatus)
+	}
+	transfers, err := restarted.rgbManager.projectionStore.ListTransfers()
+	if err != nil || len(transfers) != 0 {
+		t.Fatalf("completed transfer history leaked into recovery package: transfers=%+v err=%v", transfers, err)
 	}
 }

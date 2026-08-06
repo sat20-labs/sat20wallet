@@ -23,6 +23,12 @@ type StateKey = keyof WalletState
 type StateChangeCallback = (key: StateKey, newValue: any, oldValue: any) => void
 type BatchUpdateData = Partial<WalletState>
 
+interface WalletStateSnapshot {
+  version: 1
+  revision: number
+  state: WalletState
+}
+
 const defaultState: WalletState = {
   env: 'prd',
   language: 'en',
@@ -47,6 +53,7 @@ class WalletStorage {
   private storageType: 'local' | 'session'
   private listeners: Set<StateChangeCallback>
   private updatePromises: Map<StateKey, Promise<void>>
+  private snapshotRevision: number = 0
   private initialized: boolean = false
 
   private constructor({
@@ -75,23 +82,69 @@ class WalletStorage {
     return `${this.storageType}:wallet_${key}`
   }
 
+  private getSnapshotKey(): `${typeof this.storageType}:wallet_${string}` {
+    return this.getStorageKey('state_snapshot_v1')
+  }
+
+  private cloneState(value: WalletState): WalletState {
+    return JSON.parse(JSON.stringify(value)) as WalletState
+  }
+
+  private async persistSnapshot(nextState: WalletState): Promise<void> {
+    const snapshot: WalletStateSnapshot = {
+      version: 1,
+      revision: this.snapshotRevision + 1,
+      state: this.cloneState(nextState),
+    }
+    await Storage.set({
+      key: this.getSnapshotKey(),
+      value: JSON.stringify(snapshot),
+    })
+    this.snapshotRevision = snapshot.revision
+  }
+
+  // Legacy per-key values are compatibility mirrors only. Once the complete
+  // snapshot is committed, mirror failures must not turn a successful atomic
+  // state transition into an apparent rollback.
+  private async persistLegacyMirrors(updates: BatchUpdateData): Promise<void> {
+    const results = await Promise.allSettled(Object.entries(updates).map(([key, value]) => (
+      Storage.set({ key: this.getStorageKey(key), value: JSON.stringify(value) })
+    )))
+    const failures = results.filter((result) => result.status === 'rejected')
+    if (failures.length) {
+      console.warn(`Wallet state snapshot committed, but ${failures.length} compatibility mirror(s) failed`)
+    }
+  }
+
   // 初始化状态
   public async initializeState(): Promise<void> {
-    if (this.initialized) {
-      return // 避免重复初始化
+    if (this.initialized) return
+
+    const { value: snapshotValue } = await Storage.get({ key: this.getSnapshotKey() })
+    if (snapshotValue !== null) {
+      try {
+        const snapshot = JSON.parse(snapshotValue) as WalletStateSnapshot
+        if (snapshot?.version === 1 && snapshot.state && typeof snapshot.revision === 'number') {
+          this.state = { ...this.cloneState(defaultState), ...this.cloneState(snapshot.state) }
+          this.snapshotRevision = snapshot.revision
+          this.initialized = true
+          return
+        }
+      } catch (error) {
+        console.error('Invalid wallet state snapshot; falling back to compatibility keys:', error)
+      }
     }
 
     const loadPromises = Object.keys(defaultState).map(async (key) => {
       const storageKey = key as keyof WalletState
       const { value } = await Storage.get({ key: this.getStorageKey(storageKey) })
-
       if (value !== null) {
-        ; (this.state[storageKey] as any) =
-          JSON.parse(value) as WalletState[typeof storageKey]
+        ;(this.state[storageKey] as any) = JSON.parse(value) as WalletState[typeof storageKey]
       }
     })
-
     await Promise.all(loadPromises)
+    // Migrate a complete legacy state into the authoritative snapshot.
+    await this.persistSnapshot(this.state)
     this.initialized = true
   }
 
@@ -110,22 +163,17 @@ class WalletStorage {
     key: K,
     value: WalletState[K]
   ): Promise<void> {
-
     const oldValue = this.state[key]
-
-
+    if (oldValue === value) return
+    const nextState = this.cloneState(this.state)
+    nextState[key] = value
     try {
-      // 存储到本地
-      await Storage.set({ key: this.getStorageKey(key), value: JSON.stringify(value) })
-
-      // 更新内存中的状态
-      this.state[key] = value
-
-      // 通知监听器
+      await this.persistSnapshot(nextState)
+      this.state = nextState
       this.notifyListeners(key, value, oldValue)
+      await this.persistLegacyMirrors({ [key]: value } as BatchUpdateData)
     } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown error'
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       console.error(`Failed to update ${key}:`, error)
       throw new Error(`Failed to update ${key}: ${errorMessage}`)
     }
@@ -133,32 +181,29 @@ class WalletStorage {
 
   // 批量更新状态
   public async batchUpdate(updates: BatchUpdateData): Promise<void> {
-    const oldState = { ...this.state }
-    const updatePromises: Promise<void>[] = []
+    const oldState = this.cloneState(this.state)
+    const nextState = this.cloneState(this.state)
+    const changedKeys: StateKey[] = []
+    for (const [key, value] of Object.entries(updates)) {
+      const typedKey = key as StateKey
+      if (nextState[typedKey] !== value) {
+        ;(nextState[typedKey] as any) = value
+        changedKeys.push(typedKey)
+      }
+    }
+    if (!changedKeys.length) return
 
     try {
-      // 创建所有更新的Promise
-      for (const [key, value] of Object.entries(updates)) {
-        const typedKey = key as StateKey
-        if (this.state[typedKey] !== value) {
-          const typedValue = value as WalletState[typeof typedKey]
-          updatePromises.push(
-            Storage.set({ key: this.getStorageKey(key), value: JSON.stringify(typedValue) }).then(() => {
-              ; (this.state[typedKey] as any) = typedValue
-              this.notifyListeners(typedKey, typedValue, oldState[typedKey])
-            })
-          )
-        }
+      // This single storage write is the commit point for the entire update.
+      await this.persistSnapshot(nextState)
+      this.state = nextState
+      for (const key of changedKeys) {
+        this.notifyListeners(key, nextState[key], oldState[key])
       }
-
-      // 等待所有更新完成
-      await Promise.all(updatePromises)
+      await this.persistLegacyMirrors(updates)
     } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown error'
-      console.error('Batch update failed:', error)
-      // 回滚状态
-      this.state = oldState
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      console.error('Batch update failed before snapshot commit:', error)
       throw new Error(`Batch update failed: ${errorMessage}`)
     }
   }
@@ -194,7 +239,8 @@ class WalletStorage {
       await Storage.clear()
 
       const oldState = { ...this.state }
-      this.state = JSON.parse(JSON.stringify(defaultState))
+      this.state = this.cloneState(defaultState)
+      this.snapshotRevision = 0
 
       // 通知所有状态的变化
       Object.keys(oldState).forEach((key) => {

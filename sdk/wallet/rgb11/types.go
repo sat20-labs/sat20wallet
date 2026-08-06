@@ -189,10 +189,11 @@ type ReceiveKey struct {
 }
 
 type ReceiveReservation struct {
-	Version   uint8  `json:"version"`
-	RequestID string `json:"request_id"`
-	OutPoint  string `json:"outpoint"`
-	Expiry    int64  `json:"expiry"`
+	Version       uint8  `json:"version"`
+	RequestID     string `json:"request_id"`
+	OutPoint      string `json:"outpoint"`
+	ReservationID string `json:"reservation_id,omitempty"`
+	Expiry        int64  `json:"expiry"`
 }
 
 type AllocationProof struct {
@@ -260,7 +261,7 @@ type TransferState struct {
 	DeliveryRecordKey       string `json:"delivery_record_key,omitempty"`
 	DeliveryRecordHash      string `json:"delivery_record_hash,omitempty"`
 	DeliveryTemporary       bool   `json:"delivery_temporary,omitempty"`
-	DeliveryExpiryHeight    uint64 `json:"delivery_expiry_height,omitempty"`
+	DeliveryIssueHeight     uint64 `json:"delivery_issue_height,omitempty"`
 	DeliveryTTL             uint64 `json:"delivery_ttl,omitempty"`
 	DeliveryAcknowledged    bool   `json:"delivery_acknowledged,omitempty"`
 	DeliveryCacheCompacted  bool   `json:"delivery_cache_compacted,omitempty"`
@@ -278,6 +279,7 @@ type PendingTransfer struct {
 	SignedTx             []byte                 `json:"-"`
 	SignedPSBT           []byte                 `json:"-"`
 	ChangeSeals          []seals.GraphBlindSeal `json:"-"`
+	ReservationID        string                 `json:"reservation_id,omitempty"`
 	CreatedAt            int64                  `json:"created_at"`
 }
 

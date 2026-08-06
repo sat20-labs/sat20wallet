@@ -37,21 +37,21 @@ var (
 )
 
 type dkvsPathReplicaState struct {
-	Version       uint32                 `json:"version"`
-	Path          string                 `json:"path"`
+	Version       uint32                `json:"version"`
+	Path          string                `json:"path"`
 	PathMeta      *dkvsindexer.PathMeta `json:"pathmeta,omitempty"`
-	ServerTimeMS  uint64                 `json:"server_time_ms"`
-	EndpointID    string                 `json:"endpoint_id,omitempty"`
-	HasLocalOnly  bool                   `json:"has_local_only,omitempty"`
-	SessionState  string                 `json:"session_state"`
-	LastErrorCode string                 `json:"last_error_code,omitempty"`
-	UpdatedAtMS   uint64                 `json:"updated_at_ms"`
+	ServerTimeMS  uint64                `json:"server_time_ms"`
+	EndpointID    string                `json:"endpoint_id,omitempty"`
+	HasLocalOnly  bool                  `json:"has_local_only,omitempty"`
+	SessionState  string                `json:"session_state"`
+	LastErrorCode string                `json:"last_error_code,omitempty"`
+	UpdatedAtMS   uint64                `json:"updated_at_ms"`
 }
 
 type dkvsPersistedMutation struct {
-	Record         []byte `json:"record"`
-	ExpectedHash   string `json:"expected_hash,omitempty"`
-	ExpectAbsent   bool   `json:"expect_absent,omitempty"`
+	Record       []byte `json:"record"`
+	ExpectedHash string `json:"expected_hash,omitempty"`
+	ExpectAbsent bool   `json:"expect_absent,omitempty"`
 }
 
 type dkvsPersistedPathPrecondition struct {
@@ -94,7 +94,7 @@ func activeRecordsFromPathSnapshot(snapshot *dkvsindexer.PathSnapshot) []*swire.
 	active := make([]*swire.DKVSRecord, 0, len(snapshot.Records))
 	for _, record := range snapshot.Records {
 		if record == nil || dkvsindexer.IsTombstone(record.Flags) ||
-			dkvsindexer.IsExpired(record, snapshot.PathMeta.ViewHeight, snapshot.ServerTimeMS) {
+			dkvsindexer.IsExpired(record, snapshot.PathMeta.ViewHeight) {
 			continue
 		}
 		active = append(active, record)
@@ -235,7 +235,6 @@ func (s *dkvsReplicaStore) applyPathSnapshot(scope string,
 	}
 	verify := dkvsindexer.RecordVerificationOptions{
 		Height: snapshot.PathMeta.ViewHeight,
-		Now:    snapshot.ServerTimeMS,
 	}
 	if err := dkvsindexer.ValidatePathSnapshotForClient(snapshot, verify); err != nil {
 		return err
@@ -533,7 +532,7 @@ func (s *dkvsReplicaStore) applyWriteResultAndAck(entry *dkvsBatchOutboxEntry,
 	}
 	mutations, _, err := entry.decode()
 	if err != nil {
-		return err
+		return fmt.Errorf("decode DKVS batch outbox: %w", err)
 	}
 	if len(result.Records) != len(mutations) || len(result.Hashes) != len(mutations) ||
 		(result.Applied != 0 && result.Applied != len(mutations)) {
@@ -548,7 +547,7 @@ func (s *dkvsReplicaStore) applyWriteResultAndAck(entry *dkvsBatchOutboxEntry,
 	}
 	groups, err := resultRecordsByPath(result)
 	if err != nil {
-		return err
+		return fmt.Errorf("group DKVS batch result: %w", err)
 	}
 	batch := s.db.NewWriteBatch()
 	defer batch.Close()
@@ -558,7 +557,10 @@ func (s *dkvsReplicaStore) applyWriteResultAndAck(entry *dkvsBatchOutboxEntry,
 		}})
 		byKey, err := s.loadConfirmedByKey(scope)
 		if err != nil {
-			return err
+			if !errors.Is(err, indexer.ErrKeyNotFound) {
+				return fmt.Errorf("load confirmed DKVS path %s: %w", path, err)
+			}
+			byKey = make(map[string]*swire.DKVSRecord)
 		}
 		hasLocalOnly := false
 		for _, record := range changed {
@@ -576,13 +578,13 @@ func (s *dkvsReplicaStore) applyWriteResultAndAck(entry *dkvsBatchOutboxEntry,
 			records = append(records, record)
 		}
 		sort.Slice(records, func(a, b int) bool { return records[a].Key < records[b].Key })
-		verify := dkvsindexer.RecordVerificationOptions{Now: result.ServerTimeMS}
+		verify := dkvsindexer.RecordVerificationOptions{}
 		meta := result.PathMeta[path]
 		if meta != nil {
 			verify.Height = meta.ViewHeight
 		}
 		if err := s.stageConfirmedReplacement(batch, scope, path, records, verify); err != nil {
-			return err
+			return fmt.Errorf("stage confirmed DKVS path %s: %w", path, err)
 		}
 		state, stateErr := s.loadPathState(scope)
 		if stateErr != nil {
@@ -593,7 +595,7 @@ func (s *dkvsReplicaStore) applyWriteResultAndAck(entry *dkvsBatchOutboxEntry,
 		}
 		if meta != nil {
 			if meta.Path != path {
-				return dkvsindexer.ErrInvalidRecord
+				return fmt.Errorf("DKVS path metadata mismatch got=%s want=%s: %w", meta.Path, path, dkvsindexer.ErrInvalidRecord)
 			}
 			if err := putReplicaBaselineBatch(batch, scope, meta); err != nil {
 				return err
@@ -604,7 +606,7 @@ func (s *dkvsReplicaStore) applyWriteResultAndAck(entry *dkvsBatchOutboxEntry,
 		state.HasLocalOnly = state.HasLocalOnly || hasLocalOnly
 		if hasLocalOnly {
 			if result.EndpointID == "" {
-				return dkvsindexer.ErrStaleEndpoint
+				return fmt.Errorf("local-only DKVS batch has no endpoint identity: %w", dkvsindexer.ErrStaleEndpoint)
 			}
 			state.EndpointID = result.EndpointID
 		}
@@ -657,14 +659,6 @@ func (s *dkvsReplicaStore) applyWriteResult(scope, path string,
 	filters := []dkvsindexer.Subscription{{Type: dkvsindexer.SubscriptionPrefix, Target: path}}
 	root := meta.StateRoot
 	return s.applyConfirmed(scope, filters, records, root.String(), root, meta.Generation)
-}
-
-func (s *dkvsReplicaStore) hasPendingOutbox(scope string) (bool, error) {
-	pending, err := s.loadOutbox(scope)
-	if err != nil {
-		return false, err
-	}
-	return len(pending) != 0, nil
 }
 
 func (s *dkvsReplicaStore) hasPendingBatchOutbox(namespace string) (bool, error) {

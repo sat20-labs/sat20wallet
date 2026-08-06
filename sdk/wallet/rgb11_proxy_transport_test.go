@@ -540,6 +540,7 @@ func TestRGB11ProxyDeliveryBroadcastsBeforeAck(t *testing.T) {
 		RecipientConsignment: consignment,
 		LocalConsignment:     append([]byte(nil), consignment...),
 		SignedTx:             signed.Bytes(), SignedPSBT: []byte{1}, CreatedAt: time.Now().Unix(),
+		ReservationID: "proxy-transfer-reservation",
 	}
 	if err := manager.rgbManager.projectionStore.SavePendingTransfer(pending); err != nil {
 		t.Fatal(err)
@@ -604,10 +605,12 @@ func TestRGB11ProxyDeliveryBroadcastsBeforeAck(t *testing.T) {
 	conflict.State.Status = "prepared"
 	conflict.State.AckStatus = "awaiting"
 	conflict.State.InputOutPoints = []string{inputOutpoint}
+	conflict.ReservationID = "proxy-conflict-reservation"
 	if err := manager.rgbManager.projectionStore.SavePendingTransfer(&conflict); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.utxoLockerL1.SetLockReason(inputOutpoint, rgb11wallet.LockReasonPending); err != nil {
+	if err := manager.utxoLockerL1.TryReserve([]string{inputOutpoint},
+		rgb11wallet.LockReasonPending, conflict.ReservationID); err != nil {
 		t.Fatal(err)
 	}
 	state.mu.Lock()

@@ -48,10 +48,21 @@ const message = ref('')
 const success = ref(false)
 const warning = ref(false)
 const { t } = useI18n()
+const MAX_RGB11_CONSIGNMENT_FILE_SIZE = 4 * 1024 * 1024
 
 const selectFile = (event: Event) => {
   const input = event.target as HTMLInputElement
-  selectedFile.value = input.files?.[0] || null
+  const file = input.files?.[0] || null
+  if (file && file.size > MAX_RGB11_CONSIGNMENT_FILE_SIZE) {
+    selectedFile.value = null
+    input.value = ''
+    message.value = t('rgb11Transfer.importFileTooLarge', { size: '4 MiB' })
+    success.value = false
+    warning.value = false
+    return
+  }
+  selectedFile.value = file
+  message.value = ''
   if (selectedFile.value) consignment.value = ''
 }
 
@@ -70,20 +81,23 @@ const runImport = async () => {
   message.value = ''
   success.value = false
   warning.value = false
-  const [err, result] = selectedFile.value
-    ? await walletManager.importRGB11ContractFile(encodeBase64(await selectedFile.value.arrayBuffer()))
-    : await walletManager.importRGB11Contract(consignment.value.trim())
-  if (err || !result?.result) {
+  try {
+    if (selectedFile.value && selectedFile.value.size > MAX_RGB11_CONSIGNMENT_FILE_SIZE) {
+      throw new Error(t('rgb11Transfer.importFileTooLarge', { size: '4 MiB' }))
+    }
+    const [err, result] = selectedFile.value
+      ? await walletManager.importRGB11ContractFile(encodeBase64(await selectedFile.value.arrayBuffer()))
+      : await walletManager.importRGB11Contract(consignment.value.trim())
+    if (err || !result?.result) throw err || new Error(t('rgb11Transfer.importFailed'))
+    const imported = JSON.parse(result.result)
+    success.value = true
+    message.value = t('rgb11Transfer.imported', { count: imported.projected || 0 })
+    emit('completed')
+  } catch (error: any) {
+    message.value = error?.message || t('rgb11Transfer.importFailed')
+  } finally {
     loading.value = false
-    message.value = err?.message || t('rgb11Transfer.importFailed')
-    return
   }
-  const imported = JSON.parse(result.result)
-  loading.value = false
-  success.value = true
-  warning.value = false
-  message.value = t('rgb11Transfer.imported', { count: imported.projected || 0 })
-  emit('completed')
 }
 
 watch(isOpen, (open) => {

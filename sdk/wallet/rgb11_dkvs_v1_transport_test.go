@@ -81,7 +81,7 @@ func (h *rgb11MemoryDKVSHTTP) pathMetaV1Locked(path string, now uint64) *dkvsind
 		Version:    3,
 		Path:       path,
 		Generation: h.generations[path],
-		ViewHeight: 0,
+		ViewHeight: 1,
 	}
 	for _, record := range h.records {
 		if record == nil || !dkvsindexer.RecordRequiresPathPrecondition(record) {
@@ -89,15 +89,15 @@ func (h *rgb11MemoryDKVSHTTP) pathMetaV1Locked(path string, now uint64) *dkvsind
 		}
 		recordPath, err := dkvsindexer.CollectionPathForKey(record.Key)
 		if err != nil || recordPath != path || dkvsindexer.IsTombstone(record.Flags) ||
-			dkvsindexer.IsExpired(record, meta.ViewHeight, now) {
+			dkvsindexer.IsExpired(record, meta.ViewHeight) {
 			continue
 		}
 		meta.ActiveRecords++
 		meta.ActiveTotalSize += uint64(dkvsindexer.RecordSize(record))
 		xorRGB11PathRoot(&meta.StateRoot, record)
-		if record.ExpiryHeight != 0 &&
-			(meta.MinExpiryHeight == 0 || record.ExpiryHeight < meta.MinExpiryHeight) {
-			meta.MinExpiryHeight = record.ExpiryHeight
+		if expiry := dkvsindexer.RecordExpiryHeight(record); expiry != 0 &&
+			(meta.MinExpiryHeight == 0 || expiry < meta.MinExpiryHeight) {
+			meta.MinExpiryHeight = expiry
 		}
 	}
 	meta.ActiveRoot = meta.StateRoot
@@ -222,9 +222,6 @@ func (h *rgb11MemoryDKVSHTTP) applyBatchCASV1(request DKVSBatchCASRequest) ([]by
 			mutationsByPath[path] = append(mutationsByPath[path], mutation.Record)
 		} else {
 			hasLocalOnly = true
-			if mutation.Record.PathGeneration != 0 {
-				return rgb11DKVSV1Error(dkvsindexer.ErrInvalidRecord)
-			}
 		}
 	}
 	if hasLocalOnly && strings.TrimSpace(request.EndpointID) != rgb11MemoryDKVSEndpointID {
@@ -260,12 +257,6 @@ func (h *rgb11MemoryDKVSHTTP) applyBatchCASV1(request DKVSBatchCASRequest) ([]by
 		}
 		records := mutationsByPath[path]
 		sort.Slice(records, func(i, j int) bool { return records[i].Key < records[j].Key })
-		for index, record := range records {
-			expected := meta.Generation + uint64(index) + 1
-			if expected <= meta.Generation || record.PathGeneration != expected {
-				return rgb11DKVSV1Error(dkvsindexer.ErrStaleGeneration)
-			}
-		}
 	}
 
 	exact := 0
@@ -321,13 +312,7 @@ func (h *rgb11MemoryDKVSHTTP) applyBatchCASV1(request DKVSBatchCASRequest) ([]by
 			}
 		}
 		for path, records := range mutationsByPath {
-			var generation uint64
-			for _, record := range records {
-				if record.PathGeneration > generation {
-					generation = record.PathGeneration
-				}
-			}
-			h.generations[path] = generation
+			h.generations[path] += uint64(len(records))
 		}
 	}
 

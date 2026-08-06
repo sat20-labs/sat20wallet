@@ -98,7 +98,8 @@ func (noopChannelBackupHandler) BackupChannel(*Channel, []byte) error {
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet
 type Manager struct {
-	mutex sync.RWMutex
+	mutex          sync.RWMutex
+	rgbOperationMu sync.RWMutex
 
 	cfg                   *common.Config
 	bInited               bool
@@ -130,6 +131,9 @@ type Manager struct {
 	accountProfile  *accountManagementProfile
 	accountSecret   []byte
 	accountPassword string
+
+	managedDataMu        sync.RWMutex
+	managedDataProviders map[string]AccountManagedDataProvider
 
 	feeRateL1             int64 // sat/vkb
 	refreshTimeL1         int64

@@ -33,21 +33,13 @@
       <div v-if="selectedType === 'RGB11'" class="rounded-lg border border-zinc-700 bg-muted/60 p-3 text-xs text-zinc-400">
         <div class="flex justify-between gap-3">
           <span>{{ $t('rgb11Transfer.consistency') }}: {{ rgb11State.consistency_status }}</span>
-          <span>{{ $t('rgb11Transfer.backupStatus') }}: {{ rgb11State.backup_status }}</span>
+          <span>{{ $t('rgb11Transfer.accountManaged') }}</span>
         </div>
         <div v-if="rgb11State.consistency_status !== 'ok'" class="mt-1 text-amber-500">
           {{ $t('rgb11Transfer.inconsistentWarning') }}
         </div>
         <div v-if="rgb11Error" class="mt-1 break-all text-red-400">
           {{ $t('rgb11Transfer.stateError', { error: rgb11Error }) }}
-        </div>
-        <div class="mt-1" :class="rgb11State.backup_enabled ? 'text-emerald-400' : 'text-amber-500'">
-          {{ rgb11State.backup_enabled
-            ? $t('rgb11Transfer.backupEnabled')
-            : $t('rgb11Transfer.backupUnavailable') }}
-        </div>
-        <div v-if="rgb11State.backup_mode === 'temporary'" class="mt-1 text-amber-500">
-          {{ $t('rgb11Transfer.temporaryBackupWarning', { duration: formatRetention(rgb11State.backup_retention_ms) }) }}
         </div>
         <div class="mt-3 grid grid-cols-2 gap-2">
           <Button size="sm" variant="outline" @click="emit('issue-rgb11')">
@@ -58,6 +50,44 @@
             <Icon icon="lucide:file-input" class="mr-2 h-4 w-4" />
             {{ $t('rgb11Transfer.import') }}
           </Button>
+        </div>
+        <div v-if="rgb11PendingTasks.length" class="mt-3 border-t border-zinc-700/70 pt-3">
+          <div class="mb-2 flex items-center justify-between">
+            <span class="font-medium text-amber-300">{{ $t('rgb11Transfer.pendingTasks') }}</span>
+            <span>{{ rgb11PendingTasks.length }}</span>
+          </div>
+          <div class="space-y-2">
+            <div v-for="task in rgb11PendingTasks" :key="task.key"
+              class="rounded border border-amber-800/60 bg-amber-950/20 p-2">
+              <div class="flex items-center justify-between gap-2">
+                <span>{{ task.representative.asset?.Name?.Ticker || 'RGB11' }} · {{ rgb11TaskMode(task) }}</span>
+                <span :class="rgb11TransferStatusClass(task.representative.status)">
+                  {{ task.representative.status }}
+                </span>
+              </div>
+              <div>{{ $t('rgb11Transfer.pendingTaskCount', { count: task.members.length }) }}</div>
+              <div class="break-all">TX: {{ task.representative.witness_txid || task.representative.transfer_id }}</div>
+              <div class="mt-2 grid grid-cols-2 gap-2">
+                <Button size="sm" variant="outline" :disabled="rgb11TaskBusy === task.key"
+                  @click="resumeRGB11Task(task)">
+                  {{ rgb11TaskBusy === task.key ? $t('common.processing') : rgb11TaskActionLabel(task) }}
+                </Button>
+                <Button size="sm" variant="outline" :disabled="rgb11TaskBusy === task.key"
+                  @click="refreshRGB11Task(task)">
+                  {{ $t('rgb11Transfer.refreshTask') }}
+                </Button>
+                <Button v-if="canCancelRGB11Task(task)" size="sm" variant="outline"
+                  class="col-span-2 text-red-400" :disabled="rgb11TaskBusy === task.key"
+                  @click="cancelRGB11Task(task)">
+                  {{ $t('rgb11Transfer.cancelTask') }}
+                </Button>
+              </div>
+              <div v-if="rgb11TaskMessages[task.key]" class="mt-2 break-all"
+                :class="rgb11TaskMessages[task.key].success ? 'text-emerald-400' : 'text-red-400'">
+                {{ rgb11TaskMessages[task.key].text }}
+              </div>
+            </div>
+          </div>
         </div>
         <div class="mt-3 border-t border-zinc-700/70 pt-3">
           <div class="mb-2 flex items-center justify-between">
@@ -219,10 +249,12 @@ import { Chain } from '@/types/index'
 import { generateMempoolUrl, formatLargeNumber } from '@/utils'
 import { useGlobalStore } from '@/store/global'
 import walletManager from '@/utils/sat20'
+import rgb11Address from '@/utils/rgb11Address'
 import { useI18n } from 'vue-i18n'
 // 类型定义
 interface Asset {
   id: string
+  key?: string
   ticker: string
   label: string
   amount: number | string
@@ -264,12 +296,6 @@ const { address, network } = storeToRefs(walletStore)
 const { env, hideBalance } = storeToRefs(globalStore)
 const { state: rgb11State, error: rgb11Error } = storeToRefs(rgb11Store)
 const { t } = useI18n()
-
-const formatRetention = (ttlMs: number) => {
-  const hours = Math.max(1, Math.floor(ttlMs / (60 * 60 * 1000)))
-  if (hours % 24 === 0) return t('rgb11Transfer.retentionDays', { count: hours / 24 })
-  return t('rgb11Transfer.retentionHours', { count: hours })
-}
 
 const mempoolUrl = computed(() => {
   return generateMempoolUrl({
@@ -321,11 +347,51 @@ const handleDeposit = (asset: any) => {
   emit('deposit', asset)
 }
 
-const rgb11Proofs = (asset: Asset) => (rgb11State.value.proofs || []).filter((proof: any) => (
-  proof?.asset_name?.Protocol === 'rgb11' &&
-  proof?.asset_name?.Ticker === asset.ticker &&
-  proof?.status !== 'spending'
-))
+const rgb11AssetIdentity = (value: any) => {
+  const name = value?.asset_name || value?.Name || value?.name || value
+  const protocol = String(name?.Protocol || name?.protocol || '')
+  const type = String(name?.Type || name?.type || '')
+  const ticker = String(name?.Ticker || name?.ticker || '')
+  return protocol && type && ticker ? `${protocol}:${type}:${ticker}` : ''
+}
+
+const rgb11Proofs = (asset: Asset) => {
+  const expected = String(asset.canonical_name || asset.key || asset.id || '')
+  if (!expected.startsWith('rgb11:')) return []
+  return (rgb11State.value.proofs || []).filter((proof: any) => (
+    rgb11AssetIdentity(proof) === expected && proof?.status !== 'spending'
+  ))
+}
+
+type RGB11Task = {
+  key: string
+  members: any[]
+  representative: any
+}
+
+type RGB11TaskMessage = { success: boolean; text: string }
+
+const terminalRGB11Statuses = new Set(['settled', 'rejected', 'conflicted', 'failed', 'cancelled'])
+const rgb11TaskBusy = ref('')
+const rgb11TaskMessages = ref<Record<string, RGB11TaskMessage>>({})
+
+const rgb11PendingTasks = computed<RGB11Task[]>(() => {
+  const groups = new Map<string, any[]>()
+  for (const transfer of rgb11State.value.transfers || []) {
+    if (String(transfer?.direction || '').toLowerCase() !== 'send') continue
+    if (terminalRGB11Statuses.has(String(transfer?.status || '').toLowerCase())) continue
+    const key = String(transfer?.batch_id || transfer?.witness_txid || transfer?.transfer_id || '')
+    if (!key) continue
+    const values = groups.get(key) || []
+    values.push(transfer)
+    groups.set(key, values)
+  }
+  return [...groups.entries()].map(([key, members]) => ({
+    key,
+    members: [...members].sort((left, right) => String(left.transfer_id).localeCompare(String(right.transfer_id))),
+    representative: members[0],
+  })).reverse()
+})
 
 const rgb11Transfers = computed(() => (
   [...(rgb11State.value.transfers || [])].reverse().slice(0, 8)
@@ -335,6 +401,185 @@ const rgb11TransferStatusClass = (status: string) => {
   if (status === 'settled') return 'text-emerald-400'
   if (status === 'conflicted' || status === 'failed') return 'text-red-400'
   return 'text-amber-400'
+}
+
+
+const rgb11TaskTransport = (task: RGB11Task) => String(task.representative?.transport_mode || 'sat20-dkvs')
+const rgb11TaskIsBroadcast = (task: RGB11Task) => task.members.every((item) => (
+  ['broadcast', 'pending', 'settled'].includes(String(item?.status || '').toLowerCase())
+))
+
+const rgb11TaskMode = (task: RGB11Task) => {
+  if (task.representative?.address_mode) return t('rgb11Transfer.addressMode')
+  const transport = rgb11TaskTransport(task)
+  if (transport === 'rgb-json-rpc') return 'RGB JSON-RPC'
+  if (transport === 'out-of-band') return 'out-of-band'
+  return 'SAT20 DKVS'
+}
+
+const rgb11TaskActionLabel = (task: RGB11Task) => {
+  if (rgb11TaskIsBroadcast(task)) return t('rgb11Transfer.refreshTask')
+  if (rgb11TaskTransport(task) === 'out-of-band') return t('rgb11Transfer.confirmOutOfBandBroadcast')
+  if (rgb11TaskTransport(task) === 'sat20-dkvs') return t('rgb11Transfer.continueTask')
+  return t('rgb11Transfer.retryTask')
+}
+
+const canCancelRGB11Task = (task: RGB11Task) => (
+  rgb11TaskTransport(task) === 'out-of-band' && !rgb11TaskIsBroadcast(task)
+)
+
+const setRGB11TaskMessage = (task: RGB11Task, success: boolean, text: string) => {
+  rgb11TaskMessages.value = {
+    ...rgb11TaskMessages.value,
+    [task.key]: { success, text },
+  }
+}
+
+const reloadRGB11TaskState = async () => {
+  const [stateErr, stateResult] = await walletManager.getRGB11State()
+  if (stateErr || !stateResult?.state) {
+    throw stateErr || new Error(t('rgb11Transfer.taskRefreshFailed'))
+  }
+  rgb11Store.setState(JSON.parse(stateResult.state))
+  emit('refresh')
+}
+
+const refreshRGB11TaskState = async () => {
+  const [refreshErr] = await walletManager.refreshRGB11State()
+  if (refreshErr) throw refreshErr
+  await reloadRGB11TaskState()
+}
+
+const completeRGB11TaskBroadcast = async (task: RGB11Task, txid: string) => {
+  try {
+    await refreshRGB11TaskState()
+    setRGB11TaskMessage(task, true, t('rgb11Transfer.taskBroadcasted', { txid }))
+  } catch (error: any) {
+    setRGB11TaskMessage(task, true, t('rgb11Transfer.taskBroadcastedRefreshFailed', {
+      txid,
+      error: error?.message || t('rgb11Transfer.taskRefreshFailed'),
+    }))
+  }
+}
+
+const resumeManagedRGB11Task = async (task: RGB11Task) => {
+  const transferIds: string[] = []
+  const relayRecords: any[] = []
+  const acks: any[] = []
+  for (const member of task.members) {
+    const transferId = String(member.transfer_id || '')
+    if (!transferId) throw new Error(t('rgb11Transfer.taskResumeFailed'))
+    const [recordErr, recordResult] = await walletManager.publishRGB11RelayRecord(transferId)
+    if (recordErr || !recordResult?.record) {
+      throw recordErr || new Error(t('rgb11Transfer.taskResumeFailed'))
+    }
+    const relayRecord = JSON.parse(recordResult.record)
+    const [ackErr, ackResult] = await walletManager.fetchRGB11AckRecord(transferId)
+    if (ackErr || !ackResult?.ack) {
+      throw new Error(t('rgb11Transfer.taskWaitingAck'))
+    }
+    const ack = JSON.parse(ackResult.ack)
+    if (ack?.accepted === false) {
+      const [cancelErr] = await walletManager.cancelRGB11BatchByNack(
+        transferId,
+        JSON.stringify(relayRecord),
+        JSON.stringify(ack),
+      )
+      if (cancelErr) throw cancelErr
+      await reloadRGB11TaskState()
+      setRGB11TaskMessage(task, true, t('rgb11Transfer.taskRejected', { reason: ack.reason_code || 'rejected' }))
+      return
+    }
+    transferIds.push(transferId)
+    relayRecords.push(relayRecord)
+    acks.push(ack)
+  }
+  let broadcastErr: Error | undefined
+  let broadcastResult: { txid: string } | undefined
+  if (transferIds.length === 1) {
+    ;[broadcastErr, broadcastResult] = await walletManager.broadcastRGB11Transfer(
+      transferIds[0], JSON.stringify(relayRecords[0]), JSON.stringify(acks[0]),
+    )
+  } else {
+    ;[broadcastErr, broadcastResult] = await walletManager.broadcastRGB11Batch({
+      transfer_ids: transferIds,
+      relay_records: relayRecords,
+      acks,
+    })
+  }
+  if (broadcastErr || !broadcastResult?.txid) {
+    throw broadcastErr || new Error(t('rgb11Transfer.broadcastFailed'))
+  }
+  await completeRGB11TaskBroadcast(task, broadcastResult.txid)
+}
+
+const resumeRGB11Task = async (task: RGB11Task) => {
+  if (rgb11TaskBusy.value) return
+  rgb11TaskBusy.value = task.key
+  setRGB11TaskMessage(task, true, '')
+  try {
+    if (rgb11TaskIsBroadcast(task)) {
+      await refreshRGB11TaskState()
+      setRGB11TaskMessage(task, true, t('rgb11Transfer.taskRefreshed'))
+      return
+    }
+    const ids = task.members.map((item) => String(item.transfer_id || '')).filter(Boolean)
+    if (!ids.length) throw new Error(t('rgb11Transfer.taskResumeFailed'))
+    if (task.representative?.address_mode) {
+      const [err, result] = await rgb11Address.deliverAndBroadcast({ transfer_id: ids[0] })
+      if (err || !result?.txid) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
+      await completeRGB11TaskBroadcast(task, result.txid)
+      return
+    }
+    const transport = rgb11TaskTransport(task)
+    if (transport === 'rgb-json-rpc') {
+      const [err, result] = await walletManager.deliverAndBroadcastRGB11ProxyTransfer(ids)
+      if (err || !result?.txid) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
+      await completeRGB11TaskBroadcast(task, result.txid)
+      return
+    }
+    if (transport === 'out-of-band') {
+      if (!window.confirm(t('rgb11Transfer.outOfBandBroadcastConfirm'))) return
+      const [err, result] = await walletManager.broadcastRGB11OutOfBand(ids)
+      if (err || !result?.txid) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
+      await completeRGB11TaskBroadcast(task, result.txid)
+      return
+    }
+    await resumeManagedRGB11Task(task)
+  } catch (error: any) {
+    setRGB11TaskMessage(task, false, error?.message || t('rgb11Transfer.taskResumeFailed'))
+  } finally {
+    rgb11TaskBusy.value = ''
+  }
+}
+
+const refreshRGB11Task = async (task: RGB11Task) => {
+  if (rgb11TaskBusy.value) return
+  rgb11TaskBusy.value = task.key
+  try {
+    await refreshRGB11TaskState()
+    setRGB11TaskMessage(task, true, t('rgb11Transfer.taskRefreshed'))
+  } catch (error: any) {
+    setRGB11TaskMessage(task, false, error?.message || t('rgb11Transfer.taskRefreshFailed'))
+  } finally {
+    rgb11TaskBusy.value = ''
+  }
+}
+
+const cancelRGB11Task = async (task: RGB11Task) => {
+  if (rgb11TaskBusy.value || !canCancelRGB11Task(task)) return
+  if (!window.confirm(t('rgb11Transfer.taskCancelConfirm'))) return
+  rgb11TaskBusy.value = task.key
+  try {
+    const [err] = await walletManager.cancelRGB11OutOfBandTransfer(String(task.representative.transfer_id || ''))
+    if (err) throw err
+    await reloadRGB11TaskState()
+    setRGB11TaskMessage(task, true, t('rgb11Transfer.taskCancelled'))
+  } catch (error: any) {
+    setRGB11TaskMessage(task, false, error?.message || t('rgb11Transfer.taskCancelFailed'))
+  } finally {
+    rgb11TaskBusy.value = ''
+  }
 }
 
 // 监听资产类型变化

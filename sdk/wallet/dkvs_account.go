@@ -75,7 +75,6 @@ func NewDKVSAccountSignedRecord(wallet common.Wallet, key string, value []byte,
 func newDKVSAccountSignedRecordWithAutopay(wallet common.Wallet, key string, value []byte,
 	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
 	opts.TTL = 0
-	opts.ExpiryHeight = 0
 	record, err := dkvsindexer.NewAccountRecord(key, value, opts)
 	if err != nil {
 		return nil, err
@@ -97,7 +96,7 @@ func newDKVSAccountSignedRecordWithAutopay(wallet common.Wallet, key string, val
 		return nil, err
 	}
 	proof, err := dkvsindexer.NewAutopayFeeProof(
-		record.Key, parsed.Namespace, swire.MaxDKVSRecordSize, record.ExpiryHeight, poolContract, "",
+		record.Key, parsed.Namespace, swire.MaxDKVSRecordSize, dkvsindexer.RecordExpiryHeight(record), poolContract, "",
 	)
 	if err != nil {
 		return nil, err

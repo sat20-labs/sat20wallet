@@ -23,7 +23,7 @@ func newDKVSAccountSignedRecordWithFreeLocal(owner common.Wallet, key string, va
 		return nil, err
 	}
 	proof, err := dkvsindexer.NewFreeLocalFeeProof(
-		key, parsed.Namespace, uint32(dkvsindexer.RecordSize(record)), record.ExpiryHeight,
+		key, parsed.Namespace, uint32(dkvsindexer.RecordSize(record)), dkvsindexer.RecordExpiryHeight(record),
 	)
 	if err != nil {
 		return nil, err

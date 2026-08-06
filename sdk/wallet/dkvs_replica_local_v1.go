@@ -9,9 +9,8 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-// applyLocalWrite is the compatibility bridge for callers that still submit
-// one FREE_LOCAL write without a batch outbox. The v1 manager path uses
-// applyWriteResultAndAck so replica replacement and acknowledgement are atomic.
+// applyLocalWrite atomically replaces the endpoint-local replica with the
+// records echoed by a successful FREE_LOCAL batch write.
 func (s *dkvsReplicaStore) applyLocalWrite(scope, path string,
 	result *dkvsindexer.WriteResult) error {
 	if s == nil || s.db == nil || scope == "" || path == "" || result == nil ||
@@ -25,6 +24,7 @@ func (s *dkvsReplicaStore) applyLocalWrite(scope, path string,
 		}
 		byKey = make(map[string]*swire.DKVSRecord)
 	}
+	var viewHeight uint64
 	for _, record := range result.Records {
 		if record == nil {
 			return dkvsindexer.ErrInvalidRecord
@@ -32,6 +32,9 @@ func (s *dkvsReplicaStore) applyLocalWrite(scope, path string,
 		recordPath, pathErr := dkvsindexer.CollectionPathForKey(record.Key)
 		if pathErr != nil || recordPath != path {
 			continue
+		}
+		if record.IssueHeight > viewHeight {
+			viewHeight = record.IssueHeight
 		}
 		if dkvsindexer.IsTombstone(record.Flags) {
 			delete(byKey, record.Key)
@@ -41,13 +44,16 @@ func (s *dkvsReplicaStore) applyLocalWrite(scope, path string,
 	}
 	records := make([]*swire.DKVSRecord, 0, len(byKey))
 	for _, record := range byKey {
-		records = append(records, record)
+		if record != nil && !dkvsindexer.IsExpired(record, viewHeight) {
+			records = append(records, record)
+		}
 	}
 	sort.Slice(records, func(a, b int) bool { return records[a].Key < records[b].Key })
+
 	batch := s.db.NewWriteBatch()
 	defer batch.Close()
 	if err := s.stageConfirmedReplacement(batch, scope, path, records,
-		dkvsindexer.RecordVerificationOptions{Now: result.ServerTimeMS}); err != nil {
+		dkvsindexer.RecordVerificationOptions{Height: viewHeight}); err != nil {
 		return err
 	}
 	state, stateErr := s.loadPathState(scope)
@@ -64,15 +70,6 @@ func (s *dkvsReplicaStore) applyLocalWrite(scope, path string,
 	state.LastErrorCode = ""
 	if err := putPathStateBatch(batch, scope, state); err != nil {
 		return err
-	}
-	for _, record := range result.Records {
-		if record == nil {
-			continue
-		}
-		recordPath, pathErr := dkvsindexer.CollectionPathForKey(record.Key)
-		if pathErr == nil && recordPath == path {
-			_ = batch.Delete(dkvsReplicaRecordKey(dkvsReplicaOutboxPrefix, scope, record.Key))
-		}
 	}
 	return batch.Flush()
 }

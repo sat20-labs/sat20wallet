@@ -6,21 +6,25 @@
           <Icon icon="lucide:arrow-left" class="h-5 w-5" />
         </Button>
         <div>
-          <h1 class="text-xl font-semibold">自托管账户恢复</h1>
-          <p class="text-sm text-muted-foreground">加密备份当前钱包，并完成一次真实恢复演练。</p>
+          <h1 class="text-xl font-semibold">账户管理与恢复</h1>
+          <p class="text-sm text-muted-foreground">账户管理从第一个钱包开始生效；可在此配置恢复材料和 AUTOPAY 持久同步。</p>
         </div>
       </div>
 
       <Alert v-if="savedState?.active">
         <AlertDescription class="space-y-1">
-          <div>当前状态：{{ savedState.storage_mode === 'paid' ? '付费保存' : '临时缓存' }}</div>
-          <div>恢复模式：{{ savedState.recovery_mode }}</div>
+          <div>账户管理：已启用</div>
+          <div>数据存储：{{ savedState.storage_mode === 'paid' ? 'AUTOPAY 全网同步' : '服务节点临时缓存' }}</div>
+          <div>恢复配置：{{ savedState.recovery_configured ? '已配置' : '未配置' }}</div>
+          <div v-if="savedState.recovery_configured">恢复模式：{{ savedState.recovery_mode }}</div>
+          <div>托管数据版本：{{ savedState.managed_data_revision || 0 }}</div>
+          <div v-if="savedState.managed_data_dirty" class="text-amber-500">必要数据正在等待同步</div>
           <div v-if="savedState.last_rehearsal_at">上次演练：{{ new Date(savedState.last_rehearsal_at).toLocaleString() }}</div>
           <div>待同步变更：{{ savedState.pending_changes || 0 }}</div>
         </AlertDescription>
       </Alert>
 
-      <section v-if="step === 1 && !savedState?.active" class="space-y-4">
+      <section v-if="step === 1 && !savedState?.recovery_configured" class="space-y-4">
         <h2 class="font-medium">1. 确认要备份的钱包</h2>
         <p class="text-sm text-muted-foreground">
           SDK 管理全部子钱包、子账户 index 和可选的 Ordinals DID。助记词不会返回给页面。
@@ -67,8 +71,9 @@
               {{ option.id === 'paid' ? '默认 100 条报价' : '当前报价' }}：
               {{ option.estimated_cost }} {{ option.fee_asset }}；年度参考：{{ option.estimated_annual_cost }}
             </div>
-            <div v-if="option.estimated_expiry_time" class="text-xs mt-1">
-              预计到期：{{ new Date(option.estimated_expiry_time).toLocaleString() }}
+            <div v-if="option.ttl_blocks" class="text-xs mt-1">
+              保留 {{ option.ttl_blocks }} 个聪网区块
+              <span v-if="option.estimated_expiry_height">；预计到期高度 {{ option.estimated_expiry_height }}</span>
             </div>
             <ul v-if="option.warnings?.length" class="text-xs text-amber-500 mt-1 list-disc pl-4">
               <li v-for="warning in option.warnings" :key="warning">{{ warning }}</li>
@@ -144,7 +149,7 @@
           <Button variant="outline" class="w-full" @click="copyText(creation.guardian_setup)">复制 Guardian setup</Button>
           <Textarea v-model="guardianReceipt" rows="5" placeholder="粘贴 Guardian 返回的 receipt" />
           <Button class="w-full" :disabled="busy || !guardianReceipt" @click="verifyGuardian">
-            验证 Guardian 分片
+            验证 Guardian 密文已保存
           </Button>
         </div>
         <Button v-else class="w-full" @click="step = 5">进入恢复演练</Button>
@@ -152,10 +157,18 @@
 
       <section v-else-if="step === 5 && creation" class="space-y-4">
         <h2 class="font-medium">5. 完成恢复演练</h2>
-        <p class="text-sm text-muted-foreground">请重新输入至少两个问题的答案。2/2 模式还需要重新粘贴用户分片。</p>
+        <p class="text-sm text-muted-foreground">请重新输入至少两个问题的答案。2/2 模式还需要重新粘贴用户分片；2/3 模式必须让 Guardian 实际解密并返回一次性加密响应。</p>
         <Input v-for="(answer, index) in rehearsalAnswers" :key="index" v-model="rehearsalAnswers[index]" type="password" :placeholder="`问题 ${index + 1} 的答案`" autocomplete="off" />
         <Textarea v-if="recoveryMode === '2of2'" v-model="rehearsalUserShare" rows="5" placeholder="重新粘贴用户分片" />
-        <Button class="w-full" :disabled="busy" @click="rehearse">
+        <div v-else class="space-y-2 rounded-lg border p-3">
+          <Button variant="outline" class="w-full" :disabled="busy" @click="createRehearsalGuardianRequest">生成 Guardian 演练请求</Button>
+          <Textarea v-if="rehearsalGuardianRequest" :model-value="rehearsalGuardianRequest" readonly rows="6" />
+          <Button v-if="rehearsalGuardianRequest" variant="ghost" class="w-full" @click="copyText(rehearsalGuardianRequest)">复制演练请求</Button>
+          <Textarea v-model="rehearsalGuardianResponse" rows="6" placeholder="粘贴 Guardian 返回的加密响应" />
+          <Button variant="outline" class="w-full" :disabled="busy || !rehearsalGuardianResponse" @click="acceptRehearsalGuardianResponse">验证 Guardian 响应</Button>
+          <p class="text-xs text-muted-foreground">密文已保存不等于分片可恢复；只有本步骤通过后，才证明 Guardian 私钥和此前生成的 share 实际可用。</p>
+        </div>
+        <Button class="w-full" :disabled="busy || (recoveryMode === '2of3' && !rehearsalGuardianReady)" @click="rehearse">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
           执行恢复演练
         </Button>
@@ -163,8 +176,8 @@
 
       <section v-else-if="step === 6" class="space-y-3 text-center py-8">
         <Icon icon="lucide:badge-check" class="h-14 w-14 text-green-500 mx-auto" />
-        <h2 class="text-xl font-semibold">账户恢复已激活</h2>
-        <p class="text-sm text-muted-foreground">账户备份已重新读取并通过恢复演练。</p>
+        <h2 class="text-xl font-semibold">账户恢复已配置</h2>
+        <p class="text-sm text-muted-foreground">账户托管数据已重新读取，恢复材料和真实演练均已验证。</p>
         <Button @click="router.push('/wallet')">返回钱包</Button>
       </section>
 
@@ -181,6 +194,8 @@
           <option value="">选择托管存储方式</option>
           <option v-for="option in storageOptions.filter(o => o.available)" :key="option.id" :value="option.id">{{ option.title }}</option>
         </select>
+        <p v-if="guardianStorageChoice === 'paid'" class="text-xs text-amber-500">付费托管由当前 Guardian 钱包承担 AUTOPAY 费用，确认前会显示合约、资产、每区块金额和首次充值。</p>
+        <p v-else-if="guardianStorageChoice === 'temporary'" class="text-xs text-amber-500">临时托管只保存在当前连接节点；恢复时必须仍能访问同一节点。</p>
         <Button variant="outline" class="w-full" :disabled="busy || !guardianSetupInput || !guardianStorageChoice" @click="acceptGuardianSetup">接受并保存好友分片</Button>
         <Textarea v-if="guardianReceiptOutput" :model-value="guardianReceiptOutput" readonly rows="5" />
 
@@ -244,12 +259,16 @@ const recordCount = ref(100)
 const storageAuthorization = ref<any>(null)
 const preflight = ref<any>(null)
 const paidConfirmOpen = ref(false)
+const paidConfirmContext = ref<'account' | 'guardian'>('account')
 let paidConfirmResolver: ((confirmed: boolean) => void) | null = null
 const guardianContact = ref('')
 const creation = ref<any>(null)
 const guardianReceipt = ref('')
 const rehearsalAnswers = ref(['', '', ''])
 const rehearsalUserShare = ref('')
+const rehearsalGuardianRequest = ref('')
+const rehearsalGuardianResponse = ref('')
+const rehearsalGuardianReady = ref(false)
 
 const drafts = ref(wallets.value.map(wallet => ({
   id: wallet.id,
@@ -312,7 +331,12 @@ const paidConfirmRows = computed(() => {
   const option = paidStorageOption.value
   const quote = autopayQuote.value
   return [
-    { label: t('tools.txConfirm.purpose'), value: t('accountManagement.autopayPurpose') },
+    {
+      label: t('tools.txConfirm.purpose'),
+      value: paidConfirmContext.value === 'guardian'
+        ? '由当前 Guardian 根钱包支付好友恢复分片的 DKVS 持久存储费用'
+        : t('accountManagement.autopayPurpose'),
+    },
     { label: t('tools.txConfirm.to'), value: option?.contract_address || '' },
     { label: t('tools.txConfirm.asset'), value: option?.fee_asset || '' },
     { label: t('tools.txConfirm.amount'), value: quote?.initialCost || option?.estimated_cost || '' },
@@ -353,6 +377,7 @@ const selectStorage = (option: AccountStorageOption) => {
 
 const confirmStorage = () => run(async () => {
   if (!recordCountValid.value) throw new Error('持久记录条数必须是不小于 100 的整数')
+  paidConfirmContext.value = 'account'
   if (selectedStorage.value === 'paid' && !await requestPaidConfirmation()) return
   storageAuthorization.value = await accountSDK.confirmStorage(
     selectedStorage.value,
@@ -387,6 +412,17 @@ const verifyGuardian = () => run(async () => {
   step.value = 5
 })
 
+const createRehearsalGuardianRequest = () => run(async () => {
+  rehearsalGuardianRequest.value = (await accountSDK.createGuardianRequest(creation.value.session_id)).request
+  rehearsalGuardianResponse.value = ''
+  rehearsalGuardianReady.value = false
+})
+
+const acceptRehearsalGuardianResponse = () => run(async () => {
+  await accountSDK.consumeGuardianResponse(creation.value.session_id, rehearsalGuardianResponse.value.trim())
+  rehearsalGuardianReady.value = true
+})
+
 const rehearse = () => run(async () => {
   const answers = rehearsalAnswers.value.map((answer, index) => ({ question_id: questions.value[index].id, answer })).filter(item => item.answer)
   const result = await accountSDK.rehearse(
@@ -395,6 +431,9 @@ const rehearse = () => run(async () => {
   if (!result.verified) throw new Error('恢复演练未通过')
   rehearsalAnswers.value = ['', '', '']
   rehearsalUserShare.value = ''
+  rehearsalGuardianRequest.value = ''
+  rehearsalGuardianResponse.value = ''
+  rehearsalGuardianReady.value = false
   savedState.value = await accountSDK.status()
   step.value = 6
 })
@@ -405,7 +444,9 @@ const generateGuardianIdentity = () => run(async () => {
 })
 
 const acceptGuardianSetup = () => run(async () => {
-  const authorization = await accountSDK.confirmStorage(guardianStorageChoice.value)
+  paidConfirmContext.value = 'guardian'
+  if (guardianStorageChoice.value === 'paid' && !await requestPaidConfirmation()) return
+  const authorization = await accountSDK.confirmStorage(guardianStorageChoice.value, guardianStorageChoice.value === 'paid' ? 100 : undefined)
   guardianReceiptOutput.value = (await accountSDK.acceptGuardianSetup(walletStore.password, guardianSetupInput.value, authorization.id)).receipt
 })
 

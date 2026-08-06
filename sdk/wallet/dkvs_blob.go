@@ -112,7 +112,7 @@ func BuildDKVSSignedBlobRecordFreeLocal(wallet common.Wallet, blobKey string, da
 		return nil, err
 	}
 	proof, err := dkvsindexer.NewFreeLocalFeeProof(
-		record.Key, "blob", uint32(dkvsindexer.RecordSize(record)), record.ExpiryHeight,
+		record.Key, "blob", uint32(dkvsindexer.RecordSize(record)), dkvsindexer.RecordExpiryHeight(record),
 	)
 	if err != nil {
 		return nil, err

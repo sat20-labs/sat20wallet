@@ -520,6 +520,7 @@ func TestRGB11PlainSelectionExcludesPendingChangeOutput(t *testing.T) {
 		},
 		RecipientConsignment: recipient, LocalConsignment: []byte("local"), SignedTx: raw.Bytes(),
 		SignedPSBT: []byte{1}, ChangeSeals: []seals.GraphBlindSeal{{Vout: 0, Blinding: 1}},
+		ReservationID: "pending-change-reservation",
 	}
 	if err := manager.rgbManager.projectionStore.SavePendingTransfer(pending); err != nil {
 		t.Fatal(err)

@@ -13,19 +13,13 @@ func (p *UtxoLocker) SetLockReason(utxo, reason string) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	p.reload()
-	locked := p.lockmap[utxo]
+	locked := cloneLockedUtxo(p.lockmap[utxo])
 	if locked == nil {
 		locked = &LockedUtxo{LockedTime: time.Now().Unix()}
-		p.lockmap[utxo] = locked
 	}
 	if locked.Reason == reason {
 		return nil
 	}
 	locked.Reason = reason
-	if err := saveLockedUtxo(p.db, p.network, utxo, locked); err != nil {
-		return err
-	}
-	p.refreshTime = time.Now().UnixMilli()
-	saveLastLockTime(p.db, p.network, p.refreshTime)
-	return nil
+	return p.persistReservationChangesLocked(map[string]*LockedUtxo{utxo: locked}, nil)
 }

@@ -31,7 +31,6 @@ import (
 	"github.com/sat20-labs/rgb11/rejectlist"
 	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/seals"
-	coresync "github.com/sat20-labs/rgb11/sync"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
@@ -39,7 +38,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -60,10 +58,8 @@ type rgb11Manager struct {
 	evidence          rgb11wallet.BitcoinEvidenceProvider
 	rejectLists       RGB11RejectListProvider
 	consistencyStatus string
-	head              *coresync.WalletHead
+	accountOwner      *Manager
 	scopeStates       *rgb11ScopeStateRegistry
-	backupMutex       sync.Mutex
-	backupCoordinator *sync.Mutex
 }
 
 func newRGB11Manager(owner *Manager, database indexer.KVDB, locker *UtxoLocker,
@@ -80,15 +76,9 @@ func newRGB11Manager(owner *Manager, database indexer.KVDB, locker *UtxoLocker,
 		engineStore:     engineStore,
 		engine:          engine,
 		evidence:        evidence,
+		accountOwner:    owner,
 		scopeStates:     newRGB11ScopeStateRegistry(),
 	}, nil
-}
-
-func (p *rgb11Manager) backupLock() *sync.Mutex {
-	if p.backupCoordinator != nil {
-		return p.backupCoordinator
-	}
-	return &p.backupMutex
 }
 
 func rejectRGB11STPAsset(asset *indexer.AssetName) error {
@@ -106,48 +96,15 @@ func (p *rgb11Manager) GetRGB11ProjectionStore() *rgb11wallet.ProjectionStore {
 }
 
 func (p *rgb11Manager) selectRGB11Scope() error {
-	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || p.rgbManager.engineStore == nil || p.status == nil {
+	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil ||
+		p.rgbManager.engineStore == nil || p.status == nil {
 		return rgb11wallet.ErrWalletScope
 	}
 	scope := rgb11StorageScope(p.status.CurrentWallet, p.status.CurrentAccount)
 	if err := p.rgbManager.projectionStore.SetScope(scope); err != nil {
 		return err
 	}
-	if err := p.rgbManager.engineStore.SetScope(scope); err != nil {
-		return err
-	}
-	p.rgbManager.head = nil
-	encoded, err := p.rgbManager.projectionStore.LoadLocalMetadata("wallet-head")
-	if err != nil {
-		if !errors.Is(err, indexer.ErrKeyNotFound) {
-			return err
-		}
-	} else {
-		// Cold startup intentionally has no decrypted wallet key. Defer head
-		// ownership validation until UnlockWallet selects this scope again.
-		if p.wallet != nil && p.wallet.GetPubKey() != nil {
-			expectedWalletID, walletIDErr := p.RGB11WalletID()
-			if walletIDErr != nil {
-				return walletIDErr
-			}
-			head, decodeErr := rgb11wallet.DecodeWalletHead(encoded)
-			if decodeErr != nil || head.Validate(expectedWalletID) != nil {
-				p.setRGB11DKVSStatus("conflict")
-			} else {
-				p.rgbManager.head = head
-			}
-		}
-	}
-	policy, err := p.loadRGB11AutoBackupPolicy()
-	if err != nil && !errors.Is(err, indexer.ErrKeyNotFound) {
-		return err
-	}
-	if err == nil {
-		p.updateRGB11ScopeState(func(state *rgb11ScopeBackupState) {
-			state.AutoBackup = policy
-		})
-	}
-	return nil
+	return p.rgbManager.engineStore.SetScope(scope)
 }
 
 func rgb11TransferKeepsInputsLocked(state *rgb11wallet.TransferState) bool {
@@ -298,7 +255,222 @@ func rgb11ProofIsAvailable(proof *rgb11wallet.AllocationProof, requirements map[
 	return proof.Confirmations >= required
 }
 
+type rgb11ActiveReservation struct {
+	outpoints       map[string]struct{}
+	previousReasons map[string]string
+	changeOutpoints map[string]struct{}
+	allSettled      bool
+}
+
+func rgb11PendingChangeOutpoints(pending *rgb11wallet.PendingTransfer) []string {
+	if pending == nil {
+		return nil
+	}
+	result := make([]string, 0, len(pending.ChangeSeals))
+	for _, seal := range pending.ChangeSeals {
+		result = append(result, fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout))
+	}
+	return result
+}
+
+func rgb11PendingReservationOutpoints(pendingList []*rgb11wallet.PendingTransfer) (string, []string, error) {
+	reservationID := ""
+	values := make(map[string]struct{})
+	for _, pending := range pendingList {
+		if pending == nil {
+			continue
+		}
+		if pending.ReservationID != "" {
+			if reservationID != "" && reservationID != pending.ReservationID {
+				return "", nil, fmt.Errorf("%w: pending batch reservation owner mismatch", ErrRGB11Inconsistent)
+			}
+			reservationID = pending.ReservationID
+		}
+		for _, outpoint := range pending.State.InputOutPoints {
+			values[outpoint] = struct{}{}
+		}
+		for _, outpoint := range rgb11PendingChangeOutpoints(pending) {
+			values[outpoint] = struct{}{}
+		}
+	}
+	outpoints := make([]string, 0, len(values))
+	for outpoint := range values {
+		outpoints = append(outpoints, outpoint)
+	}
+	sort.Strings(outpoints)
+	return reservationID, outpoints, nil
+}
+
+func (p *rgb11Manager) releaseRGB11PendingReservation(pendingList []*rgb11wallet.PendingTransfer) error {
+	reservationID, outpoints, err := rgb11PendingReservationOutpoints(pendingList)
+	if err != nil {
+		return err
+	}
+	if reservationID == "" {
+		return fmt.Errorf("%w: pending RGB11 reservation has no owner", ErrRGB11Inconsistent)
+	}
+	return p.utxoLockerL1.ReleaseReservation(outpoints, reservationID)
+}
+
+func (p *rgb11Manager) finalizeRGB11PendingChangeReservation(pending *rgb11wallet.PendingTransfer) error {
+	changes := rgb11PendingChangeOutpoints(pending)
+	if len(changes) == 0 {
+		return nil
+	}
+	if pending.ReservationID == "" {
+		return fmt.Errorf("%w: pending RGB11 reservation has no owner", ErrRGB11Inconsistent)
+	}
+	return p.utxoLockerL1.FinalizeReservation(changes, pending.ReservationID, rgb11wallet.LockReasonRGB)
+}
+
+// reconcileRGB11Reservations reconstructs operation ownership from persisted
+// pending transfers and receive reservations, then removes owner tokens that
+// no longer correspond to an active operation.
+func (p *rgb11Manager) reconcileRGB11Reservations() error {
+	proofs, err := p.rgbManager.projectionStore.ListProofs()
+	if err != nil {
+		return err
+	}
+	proofOutpoints := make(map[string]struct{}, len(proofs))
+	for _, proof := range proofs {
+		if proof != nil {
+			proofOutpoints[proof.OutPoint] = struct{}{}
+		}
+	}
+	transfers, err := p.rgbManager.projectionStore.ListTransfers()
+	if err != nil {
+		return err
+	}
+	groups := make(map[string]*rgb11ActiveReservation)
+	witnessOwners := make(map[string]string)
+	for _, state := range transfers {
+		if !rgb11TransferKeepsInputsLocked(state) {
+			continue
+		}
+		pending, loadErr := p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if pending.ReservationID == "" {
+			continue
+		}
+		if owner := witnessOwners[state.WitnessTxID]; owner != "" && owner != pending.ReservationID {
+			return fmt.Errorf("%w: witness transaction has multiple reservation owners", ErrRGB11Inconsistent)
+		}
+		witnessOwners[state.WitnessTxID] = pending.ReservationID
+		group := groups[pending.ReservationID]
+		if group == nil {
+			group = &rgb11ActiveReservation{
+				outpoints: make(map[string]struct{}), previousReasons: make(map[string]string),
+				changeOutpoints: make(map[string]struct{}), allSettled: true,
+			}
+			groups[pending.ReservationID] = group
+		}
+		if state.Status != "settled" {
+			group.allSettled = false
+		}
+		for _, outpoint := range state.InputOutPoints {
+			group.outpoints[outpoint] = struct{}{}
+			if _, ok := proofOutpoints[outpoint]; ok {
+				group.previousReasons[outpoint] = rgb11wallet.LockReasonRGB
+			}
+		}
+		for _, outpoint := range rgb11PendingChangeOutpoints(pending) {
+			group.changeOutpoints[outpoint] = struct{}{}
+			if state.Status != "settled" {
+				group.outpoints[outpoint] = struct{}{}
+			}
+		}
+	}
+	active := make(map[string]map[string]struct{}, len(groups))
+	for reservationID, group := range groups {
+		outpoints := make([]string, 0, len(group.outpoints))
+		for outpoint := range group.outpoints {
+			outpoints = append(outpoints, outpoint)
+		}
+		if err := p.utxoLockerL1.EnsureReservation(outpoints, rgb11wallet.LockReasonPending,
+			reservationID, group.previousReasons); err != nil {
+			return err
+		}
+		active[reservationID] = group.outpoints
+		if group.allSettled && len(group.changeOutpoints) != 0 {
+			changes := make([]string, 0, len(group.changeOutpoints))
+			for outpoint := range group.changeOutpoints {
+				changes = append(changes, outpoint)
+			}
+			if err := p.utxoLockerL1.FinalizeReservation(changes, reservationID, rgb11wallet.LockReasonRGB); err != nil {
+				return err
+			}
+		}
+	}
+	receiveReservations, err := p.rgbManager.projectionStore.ListReceiveReservations()
+	if err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	for _, reservation := range receiveReservations {
+		if reservation == nil || reservation.ReservationID == "" || reservation.OutPoint == "" ||
+			(reservation.Expiry != 0 && reservation.Expiry <= now) {
+			continue
+		}
+		previous := map[string]string{}
+		if err := p.utxoLockerL1.EnsureReservation([]string{reservation.OutPoint},
+			rgb11wallet.LockReasonPending, reservation.ReservationID, previous); err != nil {
+			return err
+		}
+		active[reservation.ReservationID] = map[string]struct{}{reservation.OutPoint: {}}
+	}
+	stale := make(map[string][]string)
+	for outpoint, lock := range p.utxoLockerL1.GetLockedUtxoList() {
+		if lock == nil || lock.ReservationID == "" {
+			continue
+		}
+		if values := active[lock.ReservationID]; values != nil {
+			if _, ok := values[outpoint]; ok {
+				continue
+			}
+		}
+		stale[lock.ReservationID] = append(stale[lock.ReservationID], outpoint)
+	}
+	for reservationID, outpoints := range stale {
+		if err := p.utxoLockerL1.ReleaseReservation(outpoints, reservationID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *rgb11Manager) rebuildRGB11Locks() error {
+	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
+		return ErrRGB11Inconsistent
+	}
+	if p.utxoLockerL1 == nil {
+		outputs, outputErr := p.rgbManager.projectionStore.ListOutputs()
+		proofs, proofErr := p.rgbManager.projectionStore.ListProofs()
+		transfers, transferErr := p.rgbManager.projectionStore.ListTransfers()
+		reservations, reservationErr := p.rgbManager.projectionStore.ListReceiveReservations()
+		if outputErr != nil || proofErr != nil || transferErr != nil || reservationErr != nil {
+			p.rgbManager.consistencyStatus = "broken"
+			return ErrRGB11Inconsistent
+		}
+		requiresLocker := len(outputs) != 0 || len(proofs) != 0 || len(reservations) != 0
+		for _, state := range transfers {
+			if rgb11TransferKeepsInputsLocked(state) || (state != nil && len(state.OutputOutPoints) != 0) {
+				requiresLocker = true
+				break
+			}
+		}
+		if requiresLocker {
+			p.rgbManager.consistencyStatus = "broken"
+			return fmt.Errorf("%w: RGB11 UTXO locker is unavailable", ErrRGB11Inconsistent)
+		}
+		p.rgbManager.consistencyStatus = "ok"
+		return nil
+	}
+	if err := p.reconcileRGB11Reservations(); err != nil {
+		p.rgbManager.consistencyStatus = "broken"
+		return err
+	}
 	expectedInputs, err := p.rgb11ExpectedInputs()
 	if err != nil {
 		p.rgbManager.consistencyStatus = "broken"
@@ -587,16 +759,10 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 		})
 	}
 
-	backupState := p.rgb11ScopeState()
-	autoBackupEnabled := backupState.AutoBackup != nil && backupState.AutoBackup.Enabled
 	return &RGB11State{
 		Initialized:       true,
-		SyncStatus:        backupState.ReconciliationState,
+		SyncStatus:        p.rgb11ScopeState().ReconciliationState,
 		ConsistencyStatus: p.GetRGB11ConsistencyStatus(),
-		BackupStatus:      backupState.Status,
-		BackupEnabled:     autoBackupEnabled || backupState.Status == "pending" || backupState.Status == "synced",
-		BackupMode:        backupState.Mode,
-		BackupRetention:   backupState.TTL,
 		TickerInfos:       tickers,
 		Assets:            assets,
 		AvailableAssets:   availableAssets,
@@ -1290,14 +1456,6 @@ func (p *rgb11Manager) rgb11ContractIDForAssetName(name indexer.AssetName) (stri
 	}
 	p.mutex.RLock()
 	info := p.tickerInfoMap[name.String()]
-	if info == nil && name.Type == "control" {
-		for _, candidate := range p.tickerInfoMap {
-			if candidate != nil && candidate.AssetName.Protocol == rgb11wallet.Protocol && candidate.AssetName.Ticker == name.Ticker {
-				info = candidate
-				break
-			}
-		}
-	}
 	p.mutex.RUnlock()
 	if info != nil {
 		var ext rgb11wallet.TickerExt
@@ -1484,6 +1642,21 @@ func (p *rgb11Manager) newRGB11BlindReceiveSeal() (*seals.GraphBlindSeal, string
 	return &seal, selected[0], nil
 }
 
+func releaseRGB11ReceiveReservationValue(locker *UtxoLocker,
+	reservation *rgb11wallet.ReceiveReservation, deleteRecord func() error) error {
+
+	if locker == nil || reservation == nil || strings.TrimSpace(reservation.OutPoint) == "" ||
+		strings.TrimSpace(reservation.ReservationID) == "" || deleteRecord == nil {
+		return fmt.Errorf("%w: receive reservation has no owner", ErrRGB11Inconsistent)
+	}
+	if err := locker.ReleaseReservation(
+		[]string{reservation.OutPoint}, reservation.ReservationID,
+	); err != nil {
+		return err
+	}
+	return deleteRecord()
+}
+
 func (p *rgb11Manager) releaseRGB11ReceiveReservation(requestID string) error {
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
 		return ErrRGB11Inconsistent
@@ -1495,13 +1668,9 @@ func (p *rgb11Manager) releaseRGB11ReceiveReservation(requestID string) error {
 	if err != nil {
 		return err
 	}
-	if lock := p.utxoLockerL1.GetLockedUtxoList()[reservation.OutPoint]; lock != nil &&
-		lock.Reason == rgb11wallet.LockReasonPending {
-		if err := p.utxoLockerL1.UnlockUtxo(reservation.OutPoint); err != nil {
-			return err
-		}
-	}
-	return p.rgbManager.projectionStore.DeleteReceiveReservation(requestID)
+	return releaseRGB11ReceiveReservationValue(p.utxoLockerL1, reservation, func() error {
+		return p.rgbManager.projectionStore.DeleteReceiveReservation(requestID)
+	})
 }
 
 func (p *rgb11Manager) releaseExpiredRGB11ReceiveReservations(now int64) error {
@@ -1549,6 +1718,7 @@ func (p *rgb11Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewal
 	var receiveKey *rgb11wallet.ReceiveKey
 	var blindSeal *seals.GraphBlindSeal
 	var reservedOutpoint string
+	var reservationID string
 	if mode == corewallet.ReceiveWitness {
 		if standardOnly {
 			receiveKey, err = p.newRGB11ReceiveKey()
@@ -1584,7 +1754,11 @@ func (p *rgb11Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewal
 		if err != nil {
 			return nil, err
 		}
-		if err := p.utxoLockerL1.SetLockReason(reservedOutpoint, rgb11wallet.LockReasonPending); err != nil {
+		reservationID, err = newRGB11ReservationID(nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := p.utxoLockerL1.TryReserve([]string{reservedOutpoint}, rgb11wallet.LockReasonPending, reservationID); err != nil {
 			return nil, err
 		}
 	}
@@ -1599,17 +1773,17 @@ func (p *rgb11Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewal
 	})
 	if err != nil {
 		if reservedOutpoint != "" {
-			_ = p.utxoLockerL1.UnlockUtxo(reservedOutpoint)
+			_ = p.utxoLockerL1.ReleaseReservation([]string{reservedOutpoint}, reservationID)
 		}
 		return nil, err
 	}
 	if reservedOutpoint != "" {
 		err = p.rgbManager.projectionStore.SaveReceiveReservation(&rgb11wallet.ReceiveReservation{
 			Version: 1, RequestID: receive.RequestID,
-			OutPoint: reservedOutpoint, Expiry: request.Expiry,
+			OutPoint: reservedOutpoint, ReservationID: reservationID, Expiry: request.Expiry,
 		})
 		if err != nil {
-			_ = p.utxoLockerL1.UnlockUtxo(reservedOutpoint)
+			_ = p.utxoLockerL1.ReleaseReservation([]string{reservedOutpoint}, reservationID)
 			return nil, err
 		}
 	}
@@ -2467,26 +2641,20 @@ func (p *rgb11Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11Se
 	if err != nil {
 		return nil, err
 	}
-	reserved := make([]string, 0, len(inputOutpoints))
-	for _, outpoint := range inputOutpoints {
-		if p.utxoLockerL1.IsLocked(outpoint) {
-			continue
-		}
-		if err := p.utxoLockerL1.LockUtxo(outpoint, rgb11wallet.LockReasonPending); err != nil {
-			for _, release := range reserved {
-				_ = p.utxoLockerL1.UnlockUtxo(release)
-			}
-			return nil, err
-		}
-		reserved = append(reserved, outpoint)
+	reservationID, err := newRGB11ReservationID(nil)
+	if err != nil {
+		return nil, err
+	}
+	reserved := append([]string(nil), inputOutpoints...)
+	if err := p.utxoLockerL1.TryReserve(
+		reserved, rgb11wallet.LockReasonPending, reservationID, rgb11wallet.LockReasonRGB,
+	); err != nil {
+		return nil, err
 	}
 	reservationCommitted := false
 	defer func() {
-		if reservationCommitted {
-			return
-		}
-		for _, outpoint := range reserved {
-			_ = p.utxoLockerL1.UnlockUtxo(outpoint)
+		if !reservationCommitted {
+			_ = p.utxoLockerL1.ReleaseReservation(reserved, reservationID)
 		}
 	}()
 	packet, signedTx, signedPSBT, err := p.signRGB11PSBT(
@@ -2572,17 +2740,21 @@ func (p *rgb11Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11Se
 		pending := &rgb11wallet.PendingTransfer{
 			State: state, RecipientConsignment: []byte(recipientArmor), LocalConsignment: []byte(localArmor),
 			SignedTx: append([]byte(nil), signedRaw.Bytes()...), SignedPSBT: append([]byte(nil), signedPSBT...),
-			ChangeSeals: append([]seals.GraphBlindSeal(nil), changeSeals...), CreatedAt: time.Now().Unix(),
+			ChangeSeals:   append([]seals.GraphBlindSeal(nil), changeSeals...),
+			ReservationID: reservationID, CreatedAt: time.Now().Unix(),
 		}
 		pendingList = append(pendingList, pending)
 		states = append(states, &pending.State)
 	}
+	changeOutpoints := make([]string, 0, len(changeSeals))
 	for _, seal := range changeSeals {
-		outpoint := fmt.Sprintf("%s:%d", signedTx.TxID(), seal.Vout)
-		if err := p.utxoLockerL1.SetLockReason(outpoint, rgb11wallet.LockReasonPending); err != nil {
+		changeOutpoints = append(changeOutpoints, fmt.Sprintf("%s:%d", signedTx.TxID(), seal.Vout))
+	}
+	if len(changeOutpoints) != 0 {
+		if err := p.utxoLockerL1.TryReserve(changeOutpoints, rgb11wallet.LockReasonPending, reservationID); err != nil {
 			return nil, err
 		}
-		reserved = append(reserved, outpoint)
+		reserved = append(reserved, changeOutpoints...)
 	}
 	if err := p.rgbManager.projectionStore.SavePendingTransfers(pendingList); err != nil {
 		return nil, err
@@ -3406,6 +3578,11 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 				if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
 					return nil, err
 				}
+				if pending.State.Status == "conflicted" {
+					if err := p.releaseRGB11PendingReservation([]*rgb11wallet.PendingTransfer{pending}); err != nil {
+						return nil, err
+					}
+				}
 				continue
 			}
 		}
@@ -3429,6 +3606,11 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 		}
 		if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
 			return nil, err
+		}
+		if pending.State.Status == "settled" {
+			if err := p.finalizeRGB11PendingChangeReservation(pending); err != nil {
+				return nil, err
+			}
 		}
 		if pending.State.Status == "settled" &&
 			(!pending.State.AddressMode || pending.State.DeliveryAcknowledged) {

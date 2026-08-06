@@ -28,32 +28,28 @@ func TestRGB11AddressMessageIDIsBoundedAndDomainSeparated(t *testing.T) {
 	}
 }
 
-func TestConfiguredRGB11AddressRetentionDefaults(t *testing.T) {
+func TestConfiguredRGB11AddressRetentionIsAlwaysFiniteLocal(t *testing.T) {
 	manager := &Manager{}
 	manager.rgbManager = &rgb11Manager{Manager: manager}
 	temporary := dkvsindexer.RecordOptions{}
-	var noAutopay *DKVSAutopayOptions
-	manager.rgbManager.configureRGB11AddressCapabilityRetention(nil, &temporary, &noAutopay)
-	if temporary.TTL != rgb11AddressTemporaryTTL || noAutopay != nil {
-		t.Fatalf("temporary retention=%+v autopay=%+v", temporary, noAutopay)
+	manager.rgbManager.configureRGB11AddressCapabilityRetention(nil, &temporary)
+	if temporary.TTL != rgb11AddressTemporaryTTL {
+		t.Fatalf("temporary retention=%+v", temporary)
 	}
 
-	persistent := dkvsindexer.RecordOptions{TTL: 12345, ExpiryHeight: 999}
-	explicitAutopay := &DKVSAutopayOptions{}
-	manager.rgbManager.configureRGB11AddressCapabilityRetention(nil, &persistent, &explicitAutopay)
-	if persistent.TTL != 0 || persistent.ExpiryHeight != 0 || explicitAutopay == nil {
-		t.Fatalf("autopay retention=%+v autopay=%+v", persistent, explicitAutopay)
-	}
-
-	explicit := dkvsindexer.RecordOptions{TTL: 12345}
-	manager.rgbManager.configureRGB11AddressCapabilityRetention(nil, &explicit, &noAutopay)
-	if explicit.TTL != 12345 {
-		t.Fatalf("explicit TTL was changed: %+v", explicit)
+	explicit := dkvsindexer.RecordOptions{TTL: 123}
+	manager.rgbManager.configureRGB11AddressCapabilityRetention(nil, &explicit)
+	if explicit.TTL != 123 {
+		t.Fatalf("explicit finite TTL was changed: %+v", explicit)
 	}
 
 	transient := dkvsindexer.RecordOptions{}
 	manager.rgbManager.configureRGB11AddressTransientRetention(nil, &transient)
-	if transient.TTL != rgb11AddressTemporaryTTL || transient.ExpiryHeight != 0 {
+	if transient.TTL != rgb11AddressTemporaryTTL {
 		t.Fatalf("transient retention=%+v", transient)
+	}
+	policy := rgb11AddressStoragePolicy(transient)
+	if !policy.FreeLocal || policy.Autopay != nil || policy.TTL == 0 {
+		t.Fatalf("RGB transport policy is not finite FREE_LOCAL: %+v", policy)
 	}
 }

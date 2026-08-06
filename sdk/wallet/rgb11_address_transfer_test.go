@@ -40,8 +40,8 @@ func mustRGB11ConfiguredStore(t *testing.T, manager *Manager) *dkvsStore {
 func nextRGB11AddressRecordOptions(client *SatsNetDKVSClient, keys []string,
 	opts dkvsindexer.RecordOptions) dkvsindexer.RecordOptions {
 
-	if opts.IssueTime == 0 {
-		opts.IssueTime = uint64(time.Now().UnixMilli())
+	if opts.IssueHeight == 0 {
+		opts.IssueHeight = uint64(time.Now().UnixMilli())
 	}
 	if opts.Seq != 0 {
 		return opts
@@ -241,7 +241,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 	configure(sender)
 	configure(recipient)
-	recordOptions := dkvsindexer.RecordOptions{TTL: uint64((24 * time.Hour) / time.Millisecond)}
+	recordOptions := dkvsindexer.RecordOptions{TTL: rgb11AddressTemporaryTTL}
 
 	request := RGB11AddressSendRequest{
 		ReceiverAddress:  unregisteredWallet.GetAddress(),
@@ -416,7 +416,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatalf("mempool lock=%+v", locked[recipientOutpoint])
 	}
 	if _, err := sender.AcceptRGB11AddressACK(ackRecord,
-		dkvsindexer.RecordVerificationOptions{Now: ackRecord.IssueTime}); err != nil {
+		dkvsindexer.RecordVerificationOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	pending, err = sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)

@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -79,21 +78,19 @@ func NewDKVSSignedRenewalRecord(wallet common.Wallet, existing *swire.DKVSRecord
 	} else if !bytes.Equal(existing.PubKey, pubKey) {
 		return nil, dkvsindexer.ErrPermissionDenied
 	}
-	if opts.ExpiryHeight <= existing.ExpiryHeight {
+	if opts.TTL == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	record := *existing
 	record.PubKey = append([]byte(nil), existing.PubKey...)
 	record.Value = append([]byte(nil), existing.Value...)
 	record.Signature = nil
-	record.IssueTime = opts.IssueTime
-	if record.IssueTime == 0 {
-		record.IssueTime = uint64(time.Now().UnixMilli())
+	record.IssueHeight = opts.IssueHeight
+	record.TTL = opts.TTL
+	if dkvsindexer.RecordExpiryHeight(&record) == 0 ||
+		dkvsindexer.RecordExpiryHeight(&record) <= dkvsindexer.RecordExpiryHeight(existing) {
+		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	if opts.TTL != 0 {
-		record.TTL = opts.TTL
-	}
-	record.ExpiryHeight = opts.ExpiryHeight
 	if opts.FeeProof != nil {
 		record.FeeProof = append([]byte(nil), opts.FeeProof...)
 	} else {
@@ -141,7 +138,6 @@ func AttachDKVSFeeProof(record *swire.DKVSRecord, proof *dkvsindexer.FeeProof) e
 		// Paid retention is driven by the payer's successful payment in every
 		// block. AUTOPAY records therefore have no record-level TTL or expiry.
 		record.TTL = 0
-		record.ExpiryHeight = 0
 	}
 	encoded, err := dkvsindexer.EncodeFeeProof(proof)
 	if err != nil {

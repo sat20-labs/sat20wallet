@@ -7,7 +7,6 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/operations"
 	"github.com/sat20-labs/rgb11/rejectlist"
-	coresync "github.com/sat20-labs/rgb11/sync"
 	"strconv"
 	"strings"
 )
@@ -37,10 +36,6 @@ type RGB11State struct {
 	Initialized       bool               `json:"initialized"`
 	SyncStatus        string             `json:"sync_status"`
 	ConsistencyStatus string             `json:"consistency_status"`
-	BackupStatus      string             `json:"backup_status"`
-	BackupEnabled     bool               `json:"backup_enabled"`
-	BackupMode        string             `json:"backup_mode,omitempty"`
-	BackupRetention   uint64             `json:"backup_retention_ms,omitempty"`
 	TickerInfos       []*RGB11TickerInfo `json:"ticker_infos"`
 	Assets            indexer.TxAssets   `json:"assets"`
 	AvailableAssets   indexer.TxAssets   `json:"available_assets"`
@@ -247,7 +242,7 @@ type RGB11AddressEndpoint struct {
 	CapabilityRecordKey  string `json:"capability_record_key"`
 	CapabilityRecordHash string `json:"capability_record_hash"`
 	Temporary            bool   `json:"temporary"`
-	ExpiryHeight         uint64 `json:"expiry_height"`
+	IssueHeight          uint64 `json:"issue_height"`
 	TTL                  uint64 `json:"ttl"`
 }
 
@@ -275,20 +270,6 @@ type RGB11AddressSendRequest struct {
 	Expiry           int64             `json:"expiry,omitempty"`
 }
 
-type RGB11AutoBackupPolicy struct {
-	Version      uint32 `json:"version"`
-	Enabled      bool   `json:"enabled"`
-	TTL          uint64 `json:"ttl"`
-	ExpiryHeight uint64 `json:"expiry_height,omitempty"`
-}
-
-type RGB11ActivationResult struct {
-	Found      bool                 `json:"found"`
-	Restored   bool                 `json:"restored"`
-	AutoBackup bool                 `json:"auto_backup"`
-	Head       *coresync.WalletHead `json:"head,omitempty"`
-}
-
 const WalletSnapshotVersion uint32 = 1
 
 type RGB11WalletSnapshot struct {
@@ -298,11 +279,4 @@ type RGB11WalletSnapshot struct {
 	EngineBuildID     string           `json:"engine_build_id"`
 	ProjectionRecords []SnapshotRecord `json:"projection_records"`
 	EngineRecords     []SnapshotRecord `json:"engine_records"`
-}
-
-type RGB11EncryptedSnapshot struct {
-	Version     uint32   `json:"version"`
-	WalletID    string   `json:"wallet_id"`
-	OperationID [32]byte `json:"operation_id"`
-	Ciphertext  []byte   `json:"ciphertext"`
 }

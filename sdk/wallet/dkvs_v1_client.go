@@ -114,7 +114,7 @@ func (p *SatsNetDKVSClient) postDKVSV1(path string, req interface{}, out interfa
 }
 
 type DKVSPathMetaResult struct {
-	ServerTimeMS uint64                 `json:"server_time_ms"`
+	ServerTimeMS uint64                `json:"server_time_ms"`
 	PathMeta     *dkvsindexer.PathMeta `json:"pathmeta"`
 }
 
@@ -176,8 +176,8 @@ type DKVSPathWatchRequest struct {
 }
 
 type DKVSPathWatchResult struct {
-	Changed      bool                   `json:"changed"`
-	ServerTimeMS uint64                 `json:"server_time_ms"`
+	Changed      bool                  `json:"changed"`
+	ServerTimeMS uint64                `json:"server_time_ms"`
 	PathMeta     *dkvsindexer.PathMeta `json:"pathmeta"`
 }
 
@@ -238,17 +238,23 @@ func buildDKVSBatchCASRequest(mutations []dkvsindexer.CASMutation,
 
 func verifyDKVSWriteResult(mutations []dkvsindexer.CASMutation,
 	result *dkvsindexer.WriteResult) error {
-	if result == nil || (result.Applied != 0 && result.Applied != len(mutations)) ||
-		len(result.Records) != len(mutations) || len(result.Hashes) != len(mutations) {
-		return dkvsindexer.ErrInvalidRecord
+	if result == nil {
+		return fmt.Errorf("DKVS batch response is nil: %w", dkvsindexer.ErrInvalidRecord)
+	}
+	if result.Applied != 0 && result.Applied != len(mutations) {
+		return fmt.Errorf("DKVS batch applied=%d mutations=%d: %w", result.Applied, len(mutations), dkvsindexer.ErrInvalidRecord)
+	}
+	if len(result.Records) != len(mutations) || len(result.Hashes) != len(mutations) {
+		return fmt.Errorf("DKVS batch echo records=%d hashes=%d mutations=%d: %w",
+			len(result.Records), len(result.Hashes), len(mutations), dkvsindexer.ErrInvalidRecord)
 	}
 	for index, mutation := range mutations {
 		if _, err := verifyDKVSWriteEcho(mutation.Record, result.Records[index], result.Hashes[index]); err != nil {
-			return err
+			return fmt.Errorf("verify DKVS batch echo index=%d key=%s: %w", index, mutation.Record.Key, err)
 		}
 	}
 	if result.PathMeta == nil && !result.LocalOnly {
-		return dkvsindexer.ErrInvalidRecord
+		return fmt.Errorf("DKVS relayable batch response has no path metadata: %w", dkvsindexer.ErrInvalidRecord)
 	}
 	return nil
 }
@@ -266,10 +272,10 @@ func (p *SatsNetDKVSClient) putRecordBatchCASV1Raw(mutations []dkvsindexer.CASMu
 	}
 	var resp dkvsWriteResultClientResp
 	if err := p.postDKVSV1("/v3/dkvs/records/batch-cas", req, &resp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("submit DKVS batch: %w", err)
 	}
 	if err := verifyDKVSWriteResult(mutations, resp.Data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("verify DKVS batch response: %w", err)
 	}
 	return resp.Data, nil
 }
@@ -311,10 +317,10 @@ func (p *SatsNetDKVSClient) PutRecordBatchCASV1(mutations []dkvsindexer.CASMutat
 		return nil, err
 	}
 	if err := store.queueBatchOutbox(entry); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("persist DKVS batch outbox: %w", err)
 	}
 	if err := store.updateBatchOutboxState(entry, dkvsSessionInflight, nil); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mark DKVS batch inflight: %w", err)
 	}
 	result, err := p.putRecordBatchCASV1Raw(mutations, pathConditions, endpointID)
 	if err != nil {
@@ -323,7 +329,7 @@ func (p *SatsNetDKVSClient) PutRecordBatchCASV1(mutations []dkvsindexer.CASMutat
 	}
 	if err := store.applyWriteResultAndAck(entry, result); err != nil {
 		_ = store.markOutboxFailure(entry, err)
-		return nil, err
+		return nil, fmt.Errorf("commit DKVS batch replica: %w", err)
 	}
 	return result, nil
 }

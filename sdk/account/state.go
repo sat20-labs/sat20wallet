@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -39,6 +40,8 @@ type ManagedState struct {
 	Version         uint32
 	RootFingerprint string
 	Revision        uint64
+	DataRevision    uint64
+	DataHash        string
 	Wallets         []ManagedWallet
 }
 
@@ -87,7 +90,20 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 	}
 	out := ManagedState{
 		Version: ManagedStateVersion, RootFingerprint: hex.EncodeToString(root),
-		Revision: value.Revision, Wallets: append([]ManagedWallet(nil), value.Wallets...),
+		Revision: value.Revision, DataRevision: value.DataRevision,
+		DataHash: strings.ToLower(strings.TrimSpace(value.DataHash)),
+		Wallets:  append([]ManagedWallet(nil), value.Wallets...),
+	}
+	if out.DataRevision == 0 {
+		if out.DataHash != "" {
+			return ManagedState{}, ErrInvalidBackup
+		}
+	} else {
+		hash, err := hex.DecodeString(out.DataHash)
+		if err != nil || len(hash) != sha256.Size {
+			return ManagedState{}, ErrInvalidBackup
+		}
+		out.DataHash = hex.EncodeToString(hash)
 	}
 	if len(out.Wallets) == 0 || len(out.Wallets) > managedStateMaxItems {
 		return ManagedState{}, ErrInvalidBackup
@@ -174,6 +190,10 @@ func encodeManagedState(value ManagedState) ([]byte, error) {
 	root, _ := hex.DecodeString(state.RootFingerprint)
 	raw.Write(root)
 	writeStateUvarint(&raw, state.Revision)
+	writeStateUvarint(&raw, state.DataRevision)
+	if err := writeStateString(&raw, state.DataHash); err != nil {
+		return nil, err
+	}
 	writeStateUvarint(&raw, uint64(len(state.Wallets)))
 	for _, wallet := range state.Wallets {
 		fingerprint, _ := hex.DecodeString(wallet.Fingerprint)
@@ -240,13 +260,22 @@ func decodeManagedState(value []byte) (ManagedState, error) {
 	if err != nil {
 		return ManagedState{}, err
 	}
+	dataRevision, err := readStateUvarint(stream)
+	if err != nil {
+		return ManagedState{}, err
+	}
+	dataHash, err := readStateString(stream)
+	if err != nil {
+		return ManagedState{}, err
+	}
 	count, err := readStateUvarint(stream)
 	if err != nil || count == 0 || count > managedStateMaxItems {
 		return ManagedState{}, ErrRecoveryFailed
 	}
 	state := ManagedState{
 		Version: ManagedStateVersion, RootFingerprint: hex.EncodeToString(root),
-		Revision: revision, Wallets: make([]ManagedWallet, 0, count),
+		Revision: revision, DataRevision: dataRevision, DataHash: dataHash,
+		Wallets: make([]ManagedWallet, 0, count),
 	}
 	for index := uint64(0); index < count; index++ {
 		fingerprint := make([]byte, 32)

@@ -5,17 +5,15 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 type dkvsManagerRuntime struct {
-	mu         sync.Mutex
-	pathLocks  map[string]*sync.Mutex
-	affinity   map[string]string
-	serverTime map[string]uint64
+	mu        sync.Mutex
+	pathLocks map[string]*sync.Mutex
+	affinity  map[string]string
 }
 
 var dkvsManagerRuntimes sync.Map
@@ -28,9 +26,8 @@ func runtimeForDKVSManager(manager *dkvsManager) *dkvsManagerRuntime {
 		return value.(*dkvsManagerRuntime)
 	}
 	runtime := &dkvsManagerRuntime{
-		pathLocks:  make(map[string]*sync.Mutex),
-		affinity:   make(map[string]string),
-		serverTime: make(map[string]uint64),
+		pathLocks: make(map[string]*sync.Mutex),
+		affinity:  make(map[string]string),
 	}
 	actual, _ := dkvsManagerRuntimes.LoadOrStore(manager, runtime)
 	return actual.(*dkvsManagerRuntime)
@@ -163,20 +160,17 @@ func (m *dkvsManager) ensureEndpointAffinity(client *SatsNetDKVSClient,
 			runtime.mu.Unlock()
 			continue
 		}
+		pending, err := store.hasPendingBatchOutbox(pinned)
+		if err != nil {
+			return err
+		}
+		if pending {
+			return dkvsindexer.ErrStaleEndpoint
+		}
 		for _, record := range ownerRecords {
 			path, err := dkvsindexer.CollectionPathForKey(record.Key)
 			if err != nil {
 				return err
-			}
-			oldScope := dkvsReplicaScope(pinned, []dkvsindexer.Subscription{{
-				Type: dkvsindexer.SubscriptionPrefix, Target: path,
-			}})
-			pending, err := store.hasPendingOutbox(oldScope)
-			if err != nil {
-				return err
-			}
-			if pending {
-				return dkvsindexer.ErrStaleEndpoint
 			}
 			newScope := pathReplicaScope(client, path)
 			if !m.scopeReady(newScope) {
@@ -191,27 +185,6 @@ func (m *dkvsManager) ensureEndpointAffinity(client *SatsNetDKVSClient,
 		runtime.mu.Unlock()
 	}
 	return nil
-}
-
-func (m *dkvsManager) monotonicIssueTime(path string, serverTimeMS, previousIssueTime uint64) uint64 {
-	if serverTimeMS == 0 {
-		serverTimeMS = uint64(time.Now().UnixMilli())
-	}
-	next := serverTimeMS
-	if previousIssueTime >= next {
-		next = previousIssueTime + 1
-	}
-	runtime := runtimeForDKVSManager(m)
-	if runtime == nil {
-		return next
-	}
-	runtime.mu.Lock()
-	if runtime.serverTime[path] >= next {
-		next = runtime.serverTime[path] + 1
-	}
-	runtime.serverTime[path] = next
-	runtime.mu.Unlock()
-	return next
 }
 
 func releaseDKVSManagerRuntime(manager *dkvsManager) {

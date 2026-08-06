@@ -35,7 +35,7 @@ func (r *AccountDKVSRepository) SaveRecoveryPackage(_ context.Context,
 	_, err = r.store.Put(dkvsValueMutation{
 		Key: key, Value: encoded, Owner: r.owner, Signature: dkvsSignatureAccount,
 		Policy: dkvsStoragePolicy{
-			TTL: r.recordOptions.TTL, ExpiryHeight: r.recordOptions.ExpiryHeight,
+			TTL:     r.recordOptions.TTL,
 			Autopay: &r.autopay,
 		},
 	})

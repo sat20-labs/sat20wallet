@@ -76,6 +76,10 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 		return nil
 	}
 	mgr.rgbManager = rgbManager
+	if err := mgr.RegisterAccountManagedDataProvider(&rgb11AccountManagedDataProvider{owner: mgr}); err != nil {
+		Log.Errorf("register RGB11 account-managed data provider failed: %v", err)
+		return nil
+	}
 	mgr.ensureDKVSManager()
 	mgr.registerDKVSDomainObservers()
 	err = mgr.init()
@@ -97,7 +101,16 @@ func (p *Manager) Start() {
 	p.l1IndexerClient.Start()
 	p.l2IndexerClient.Start()
 	p.startActionMonitor()
-	p.ensureDKVSManager().start()
+	manager := p.ensureDKVSManager()
+	if err := p.refreshDKVSRegistrations(); err != nil {
+		Log.Warningf("register DKVS paths at startup failed: %v", err)
+	}
+	manager.start()
+	if _, err := p.syncDKVSOnce(); err != nil {
+		// The worker keeps retrying. Registered scopes remain not-ready, so
+		// application reads and writes cannot consume a stale persisted replica.
+		Log.Warningf("initial DKVS synchronization failed: %v", err)
+	}
 }
 
 func (p *Manager) IsReady() bool {
@@ -127,6 +140,8 @@ func (p *Manager) Close() {
 
 // 使用内部钱包
 func (p *Manager) CreateWallet(password string) (int64, string, error) {
+	releaseRGB11Scope := p.beginRGB11ScopeChange()
+	defer releaseRGB11Scope()
 	// if p.wallet != nil {
 	// 	return "", fmt.Errorf("wallet has been created, please unlock it first")
 	// }
@@ -154,7 +169,12 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
-	if err := p.queueAccountMutationLocked(accountManagementMutation{
+	if p.accountProfile == nil {
+		if err := p.initializeAccountManagementLocked(password); err != nil {
+			p.mutex.Unlock()
+			return -1, "", fmt.Errorf("initialize account management: %w", err)
+		}
+	} else if err := p.queueAccountMutationLocked(accountManagementMutation{
 		Type: accountMutationAddWallet, Fingerprint: walletFingerprint(wallet),
 		WalletID: wallet.GetId(),
 	}); err != nil {
@@ -172,6 +192,8 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 
 // TODO 未完成，还没有保存
 func (p *Manager) CreateMonitorWallet(address string) (int64, error) {
+	releaseRGB11Scope := p.beginRGB11ScopeChange()
+	defer releaseRGB11Scope()
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -187,6 +209,8 @@ func (p *Manager) CreateMonitorWallet(address string) (int64, error) {
 }
 
 func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) {
+	releaseRGB11Scope := p.beginRGB11ScopeChange()
+	defer releaseRGB11Scope()
 	// Log.Infof("ImportWallet %s %s", mnemonic, password)
 	// if p.wallet != nil {
 	// 	return fmt.Errorf("wallet exists, not allow to import new wallet")
@@ -215,7 +239,12 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
-	if err := p.queueAccountMutationLocked(accountManagementMutation{
+	if p.accountProfile == nil {
+		if err := p.initializeAccountManagementLocked(password); err != nil {
+			p.mutex.Unlock()
+			return -1, fmt.Errorf("initialize account management: %w", err)
+		}
+	} else if err := p.queueAccountMutationLocked(accountManagementMutation{
 		Type: accountMutationAddWallet, Fingerprint: walletFingerprint(wallet),
 		WalletID: wallet.GetId(),
 	}); err != nil {
@@ -232,6 +261,8 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 }
 
 func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (int64, error) {
+	releaseRGB11Scope := p.beginRGB11ScopeChange()
+	defer releaseRGB11Scope()
 
 	privKeyBytes, err := hex.DecodeString(privKey)
 	if err != nil {
@@ -304,6 +335,8 @@ func (p *Manager) ChangePassword(oldPS, newPS string) error {
 }
 
 func (p *Manager) UnlockWallet(password string) (int64, error) {
+	releaseRGB11Scope := p.beginRGB11ScopeChange()
+	defer releaseRGB11Scope()
 	p.mutex.Lock()
 	id, err := p.unlockWallet(password)
 	p.mutex.Unlock()
@@ -400,6 +433,8 @@ func (p *Manager) GetAllWallets() map[int64]int {
 
 // 不再需要密码
 func (p *Manager) SwitchWallet(id int64, password string) error {
+	releaseRGB11Scope := p.beginRGB11ScopeChange()
+	defer releaseRGB11Scope()
 	p.mutex.Lock()
 
 	if p.status.CurrentWallet == id {
@@ -515,6 +550,8 @@ func (p *Manager) FindWalletByPubKeyWithDepth(pubKey []byte, depth uint32) commo
 }
 
 func (p *Manager) SwitchAccount(id uint32) {
+	releaseRGB11Scope := p.beginRGB11ScopeChange()
+	defer releaseRGB11Scope()
 	p.mutex.Lock()
 
 	if p.status.CurrentAccount == id {
@@ -557,6 +594,8 @@ func (p *Manager) SwitchAccount(id uint32) {
 }
 
 func (p *Manager) SwitchChain(chain, password string) error {
+	releaseRGB11Scope := p.beginRGB11ScopeChange()
+	defer releaseRGB11Scope()
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 

@@ -16,24 +16,30 @@ const (
 )
 
 type accountManagementProfile struct {
-	Version         uint32
-	RootFingerprint string
-	AccountID       string
-	PackageID       string
-	RecoveryMode    account.RecoveryMode
-	StorageMode     string
-	Location        AccountIndexerLocation
-	RecordTTL       uint64
-	AutopayContract string
-	PublicLocator   string
-	LastRehearsalAt int64
-	SecretCipher    []byte
-	SecretSalt      []byte
-	DeviceID        []byte
-	StateSeq        uint64
-	StateHash       string
-	StateEnvelope   []byte
-	Pending         []accountManagementMutation
+	Version               uint32
+	RootFingerprint       string
+	AccountID             string
+	PackageID             string
+	RecoveryMode          account.RecoveryMode
+	StorageMode           string
+	Location              AccountIndexerLocation
+	RecordTTL             uint64
+	AutopayContract       string
+	PublicLocator         string
+	LastRehearsalAt       int64
+	SecretCipher          []byte
+	SecretSalt            []byte
+	DeviceID              []byte
+	StateSeq              uint64
+	StateHash             string
+	StateEnvelope         []byte
+	ManagedDataRevision   uint64
+	ManagedDataHash       string
+	ManagedDataEnvelope   []byte
+	ManagedDataDirty      bool
+	ManagedDataGeneration uint64
+	RecoveryConfigured    bool
+	Pending               []accountManagementMutation
 }
 
 type accountManagementMutation struct {

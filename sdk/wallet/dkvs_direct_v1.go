@@ -1,8 +1,6 @@
 package wallet
 
 import (
-	"time"
-
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -10,10 +8,36 @@ import (
 
 type dkvsDirectRecordBuilder func(dkvsindexer.RecordOptions) (*swire.DKVSRecord, error)
 
+func directPathKeyState(snapshot *dkvsindexer.PathSnapshot, key string) (*swire.DKVSRecord, uint64, error) {
+	if snapshot == nil || snapshot.PathMeta == nil || key == "" {
+		return nil, 0, dkvsindexer.ErrInvalidRecord
+	}
+	var existing *swire.DKVSRecord
+	for _, record := range snapshot.Records {
+		if record == nil || record.Key != key {
+			continue
+		}
+		if existing == nil || dkvsindexer.CompareRecords(existing, record) < 0 {
+			existing = record
+		}
+	}
+	var floorSeq uint64
+	for _, floor := range snapshot.DeleteFloors {
+		if floor.Key == key && floor.FloorSeq > floorSeq {
+			floorSeq = floor.FloorSeq
+		}
+	}
+	if existing != nil && existing.Seq > floorSeq {
+		floorSeq = existing.Seq
+	}
+	return existing, floorSeq, nil
+}
+
 // putSignedPathRecordV1 is the explicit low-level V1 write path for callers
 // that intentionally use SatsNetDKVSClient without dkvsManager. It derives the
-// CAS state, generation and server time from one verified path snapshot before
-// signing, avoiding a GET/pathmeta TOCTOU window and HTTP not-found ambiguity.
+// CAS state, generation and trusted block height from one verified path
+// snapshot before signing, avoiding a GET/pathmeta TOCTOU window and HTTP
+// not-found ambiguity.
 func (p *SatsNetDKVSClient) putSignedPathRecordV1(key string,
 	opts dkvsindexer.RecordOptions, build dkvsDirectRecordBuilder) (*swire.DKVSRecord, error) {
 
@@ -33,30 +57,10 @@ func (p *SatsNetDKVSClient) putSignedPathRecordV1(key string,
 		return nil, dkvsindexer.ErrStaleGeneration
 	}
 
-	var existing *swire.DKVSRecord
-	var floorSeq uint64
-	var previousIssue uint64
-	for _, candidate := range snapshot.Records {
-		if candidate == nil || candidate.Key != key {
-			continue
-		}
-		if candidate.Seq > floorSeq {
-			floorSeq = candidate.Seq
-		}
-		if candidate.IssueTime > previousIssue {
-			previousIssue = candidate.IssueTime
-		}
-		if !dkvsindexer.IsTombstone(candidate.Flags) &&
-			!dkvsindexer.IsExpired(candidate, snapshot.PathMeta.ViewHeight, snapshot.ServerTimeMS) {
-			existing = candidate
-		}
+	existing, floorSeq, err := directPathKeyState(snapshot, key)
+	if err != nil {
+		return nil, err
 	}
-	for _, floor := range snapshot.DeleteFloors {
-		if floor.Key == key && floor.FloorSeq > floorSeq {
-			floorSeq = floor.FloorSeq
-		}
-	}
-
 	nextSeq := floorSeq + 1
 	if nextSeq == 0 {
 		return nil, dkvsindexer.ErrInvalidSequence
@@ -71,25 +75,14 @@ func (p *SatsNetDKVSClient) putSignedPathRecordV1(key string,
 	} else if opts.Seq != nextSeq {
 		return nil, dkvsindexer.ErrInvalidSequence
 	}
-	opts.PathGeneration = snapshot.PathMeta.Generation + 1
-	if opts.PathGeneration <= snapshot.PathMeta.Generation {
-		return nil, dkvsindexer.ErrStaleGeneration
-	}
-	serverTime := snapshot.ServerTimeMS
-	if serverTime == 0 {
-		serverTime = uint64(time.Now().UnixMilli())
-	}
-	if serverTime <= previousIssue {
-		serverTime = previousIssue + 1
-	}
-	opts.IssueTime = serverTime
+	opts.IssueHeight = snapshot.PathMeta.ViewHeight
 
 	record, err := build(opts)
 	if err != nil {
 		return nil, err
 	}
 	if record == nil || record.Key != key || record.Seq != opts.Seq ||
-		record.PathGeneration != opts.PathGeneration || record.IssueTime != opts.IssueTime {
+		record.IssueHeight != opts.IssueHeight {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	mutations := []dkvsindexer.CASMutation{{Record: record, Precondition: precondition}}

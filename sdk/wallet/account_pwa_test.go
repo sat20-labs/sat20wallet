@@ -3,6 +3,7 @@ package wallet
 import (
 	"testing"
 
+	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/stretchr/testify/require"
@@ -60,4 +61,63 @@ func TestAccountPaidStorageAuthorizationCanReuseActiveDelegate(t *testing.T) {
 	require.Equal(t, defaults.AutopayContract, authorization.Summary.ContractAddress)
 	require.Contains(t, authorization.Summary.Description, "复用")
 	require.Equal(t, "10", authorization.Summary.AmountPerBlock)
+}
+
+func TestPrepareAccountRestoreRejectsDuplicateIdentityWithoutWriting(t *testing.T) {
+	const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+	database := newMemoryKVDB()
+	manager := &Manager{
+		db: database, status: &Status{SoftwareVer: SOFTWARE_VERSION, DBver: DB_VERSION, CurrentChain: "testnet"},
+		walletInfoMap: make(map[int64]*WalletInfo),
+	}
+	backup := account.Backup{Version: account.Version, Wallets: []account.WalletBackup{
+		{Name: "Root", Mnemonic: mnemonic, AccountCount: 1, SubAccounts: []account.SubAccount{{Index: 0, Name: "Account 1"}}},
+		{Name: "Duplicate", Mnemonic: mnemonic, AccountCount: 1, SubAccounts: []account.SubAccount{{Index: 0, Name: "Account 1"}}},
+	}}
+	manager.mutex.Lock()
+	_, err := manager.prepareAccountRestoreLocked(backup, "password123")
+	manager.mutex.Unlock()
+	if err == nil {
+		t.Fatal("duplicate wallet identity was accepted")
+	}
+	wallets, loadErr := loadAllWalletFromDB(database)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(wallets) != 0 {
+		t.Fatalf("prepare phase wrote partial wallets: %d", len(wallets))
+	}
+}
+
+func TestPersistPreparedAccountRestoreCommitsCatalogAndStatusTogether(t *testing.T) {
+	const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+	database := newMemoryKVDB()
+	manager := &Manager{
+		db: database, status: &Status{SoftwareVer: SOFTWARE_VERSION, DBver: DB_VERSION, CurrentChain: "testnet"},
+		walletInfoMap: make(map[int64]*WalletInfo),
+	}
+	backup := account.Backup{Version: account.Version, Wallets: []account.WalletBackup{{
+		Name: "Root", Mnemonic: mnemonic, AccountCount: 2,
+		SubAccounts: []account.SubAccount{{Index: 0, Name: "Primary", DID: "did:root"}, {Index: 1, Name: "Second", DID: "did:second"}},
+	}}}
+	manager.mutex.Lock()
+	prepared, err := manager.prepareAccountRestoreLocked(backup, "password123")
+	if err == nil {
+		err = manager.persistPreparedAccountRestoreLocked(prepared, nil)
+	}
+	manager.mutex.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wallets, err := loadAllWalletFromDB(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wallets) != 1 || manager.wallet == nil || manager.status.CurrentWallet == 0 {
+		t.Fatalf("restored state is incomplete: wallets=%d status=%+v", len(wallets), manager.status)
+	}
+	encodedStatus, err := database.Read([]byte(DB_KEY_STATUS))
+	if err != nil || len(encodedStatus) == 0 {
+		t.Fatalf("status was not committed with wallets: %v", err)
+	}
 }

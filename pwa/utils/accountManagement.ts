@@ -5,8 +5,8 @@ export interface AccountStorageOption {
   title: string
   description: string
   warnings?: string[]
-  expiry_height?: number
-  estimated_expiry_time?: number
+  ttl_blocks?: number
+  estimated_expiry_height?: number
   fee_asset?: string
   estimated_cost?: string
   estimated_annual_cost?: string
@@ -88,6 +88,9 @@ class AccountManagementSDK {
   status() {
     return this.request<{
       active: boolean
+      recovery_configured: boolean
+      managed_data_revision?: number
+      managed_data_dirty?: boolean
       account_id?: string
       package_id?: string
       recovery_mode?: '2of2' | '2of3'

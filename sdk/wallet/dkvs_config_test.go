@@ -21,7 +21,7 @@ func TestSatsNetDKVSClientGetConfig(t *testing.T) {
 			"data": map[string]any{
 				"free_local": map[string]any{
 					"enabled":                true,
-					"max_ttl_ms":             60000,
+					"max_ttl_blocks":         144,
 					"max_records_per_signer": 10,
 					"max_bytes_per_signer":   4096,
 					"max_total_records":      100,
@@ -40,6 +40,6 @@ func TestSatsNetDKVSClientGetConfig(t *testing.T) {
 	policy, err := client.GetConfig()
 	require.NoError(t, err)
 	require.True(t, policy.Enabled)
-	require.Equal(t, uint64(60000), policy.MaxTTL)
+	require.Equal(t, uint64(144), policy.MaxTTL)
 	require.Equal(t, uint64(10), policy.MaxRecordsPerSigner)
 }

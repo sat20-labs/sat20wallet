@@ -251,36 +251,36 @@ const runIssue = async () => {
   armor.value = ''
   contractConsignmentBase64.value = ''
   issuedSummary.value = null
-  const [err, result] = await walletManager.issueRGB11Asset({
-    schema: schema.value,
-    ticker: normalizedTicker,
-    name: normalizedName,
-    details: normalizedDetails || undefined,
-    precision: issuePrecision,
-    amounts: issueAmounts,
-    inflation_amounts: inflation,
-    reject_list_url: normalizedRejectListURL || undefined,
-    min_confirmations: 1,
-  })
-  if (err || !result?.result) {
+  try {
+    const [err, result] = await walletManager.issueRGB11Asset({
+      schema: schema.value,
+      ticker: normalizedTicker,
+      name: normalizedName,
+      details: normalizedDetails || undefined,
+      precision: issuePrecision,
+      amounts: issueAmounts,
+      inflation_amounts: inflation,
+      reject_list_url: normalizedRejectListURL || undefined,
+      min_confirmations: 1,
+    })
+    if (err || !result?.result) throw err || new Error(t('rgb11Transfer.issueFailed'))
+    const issued = JSON.parse(result.result)
+    armor.value = issued.armor || ''
+    contractConsignmentBase64.value = issued.contract_consignment_base64 || ''
+    issuedSummary.value = {
+      ticker: normalizedTicker,
+      displayName: normalizedName,
+      contractId: issued.contract_id || '',
+      assetName: formatAssetName(issued.asset_name),
+    }
+    success.value = true
+    message.value = t('rgb11Transfer.issued')
+    emit('completed')
+  } catch (error: any) {
+    message.value = error?.message || t('rgb11Transfer.issueFailed')
+  } finally {
     loading.value = false
-    message.value = err?.message || t('rgb11Transfer.issueFailed')
-    return
   }
-  const issued = JSON.parse(result.result)
-  armor.value = issued.armor || ''
-  contractConsignmentBase64.value = issued.contract_consignment_base64 || ''
-  issuedSummary.value = {
-    ticker: normalizedTicker,
-    displayName: normalizedName,
-    contractId: issued.contract_id || '',
-    assetName: formatAssetName(issued.asset_name),
-  }
-  loading.value = false
-  success.value = true
-  warning.value = false
-  message.value = t('rgb11Transfer.issued')
-  emit('completed')
 }
 
 const copyContract = async () => {

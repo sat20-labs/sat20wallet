@@ -250,10 +250,7 @@ const sendByAddress = async () => {
     })
     if (sendErr || !sendResult?.txid) throw sendErr || new Error(t('rgb11Transfer.broadcastFailed'))
     temporaryDelivery.value = !!sendResult.temporary
-    success.value = true
-    message.value = t('rgb11Transfer.addressBroadcasted', { txid: sendResult.txid })
-    await refreshRGB11State()
-    emit('completed')
+    await completeBroadcast(sendResult.txid, 'rgb11Transfer.addressBroadcasted')
   } catch (error: any) {
     message.value = error?.message || t('rgb11Transfer.broadcastFailed')
   } finally {
@@ -358,10 +355,7 @@ const deliverProxyTransfer = async () => {
     if (proxyErr || !proxyResult?.txid) throw proxyErr || new Error(t('rgb11Transfer.broadcastFailed'))
     pendingPrepared.value = null
     proxyBroadcasted.value = true
-    success.value = true
-    message.value = t('rgb11Transfer.broadcasted', { txid: proxyResult.txid })
-    await refreshRGB11State()
-    emit('completed')
+    await completeBroadcast(proxyResult.txid)
   } catch (error: any) {
     message.value = error?.message || t('rgb11Transfer.broadcastFailed')
   } finally {
@@ -469,10 +463,7 @@ const broadcastTraditional = async () => {
       })
     }
     if (err || !result?.txid) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
-    success.value = true
-    message.value = t('rgb11Transfer.broadcasted', { txid: result.txid })
-    await refreshRGB11State()
-    emit('completed')
+    await completeBroadcast(result.txid)
   } catch (error: any) {
     message.value = error?.message || t('rgb11Transfer.broadcastFailed')
   } finally {
@@ -484,6 +475,19 @@ const copyText = async (value: string) => {
   await copy(value)
   message.value = t('rgb11Transfer.copied')
   success.value = true
+}
+
+const completeBroadcast = async (txid: string, messageKey = 'rgb11Transfer.broadcasted') => {
+  success.value = true
+  message.value = t(messageKey, { txid })
+  const [refreshErr] = await walletManager.refreshRGB11State()
+  if (refreshErr) {
+    message.value = t('rgb11Transfer.taskBroadcastedRefreshFailed', {
+      txid,
+      error: refreshErr.message,
+    })
+  }
+  emit('completed')
 }
 
 const refreshRGB11State = async () => {

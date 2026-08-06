@@ -4,11 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -20,7 +18,6 @@ const dkvsReplicaVersion = byte(2)
 
 var (
 	dkvsReplicaConfirmedPrefix = []byte("dkvs-replica-confirmed-v1:")
-	dkvsReplicaOutboxPrefix    = []byte("dkvs-replica-outbox-v1:")
 	dkvsReplicaRootPrefix      = []byte("dkvs-replica-root-v1:")
 )
 
@@ -106,10 +103,6 @@ func (s *dkvsReplicaStore) loadConfirmed(scope string) ([]*swire.DKVSRecord, err
 	return s.loadRecords(dkvsReplicaConfirmedPrefix, scope)
 }
 
-func (s *dkvsReplicaStore) loadOutbox(scope string) ([]*swire.DKVSRecord, error) {
-	return s.loadRecords(dkvsReplicaOutboxPrefix, scope)
-}
-
 func (s *dkvsReplicaStore) loadBaseline(scope string) (*dkvsReplicaBaseline, error) {
 	if s == nil || s.db == nil || scope == "" {
 		return nil, fmt.Errorf("DKVS replica store is unavailable")
@@ -160,13 +153,12 @@ func (s *dkvsReplicaStore) applyConfirmed(scope string, filters []dkvsindexer.Su
 		return dkvsindexer.ErrInvalidCheckpoint
 	}
 	incoming := make(map[string]*swire.DKVSRecord, len(records))
-	now := uint64(time.Now().UnixMilli())
 	for _, record := range records {
 		if !recordMatchesAnyFilter(record, filters) {
 			return dkvsindexer.ErrInvalidKey
 		}
 		if err := dkvsindexer.VerifyRecordForClient(record,
-			dkvsindexer.RecordVerificationOptions{Now: now}); err != nil {
+			dkvsindexer.RecordVerificationOptions{}); err != nil {
 			return err
 		}
 		if previous := incoming[record.Key]; previous != nil &&
@@ -204,45 +196,4 @@ func (s *dkvsReplicaStore) applyConfirmed(scope string, filters []dkvsindexer.Su
 		return err
 	}
 	return batch.Flush()
-}
-
-// queueOutbox retains only pre-v1 migration records. Native v1 writes are
-// persisted as an exact batch in dkvsBatchOutboxEntry, including all CAS/path
-// preconditions and endpoint identity. Storing them here as well would create a
-// second retry state machine and can replay an already superseded generation.
-func (s *dkvsReplicaStore) queueOutbox(scope string, record *swire.DKVSRecord) error {
-	if record != nil && (record.PathGeneration != 0 || dkvsWalletRecordIsFreeLocal(record)) {
-		return nil
-	}
-	if s == nil || s.db == nil || scope == "" {
-		return fmt.Errorf("DKVS replica store is unavailable")
-	}
-	if err := dkvsindexer.VerifyRecordForClient(record,
-		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())}); err != nil {
-		return err
-	}
-	key := dkvsReplicaRecordKey(dkvsReplicaOutboxPrefix, scope, record.Key)
-	if encoded, err := s.db.Read(key); err == nil {
-		existing, decodeErr := dkvsindexer.UnmarshalRecord(encoded)
-		if decodeErr != nil {
-			return decodeErr
-		}
-		if dkvsindexer.CompareRecords(record, existing) <= 0 {
-			return nil
-		}
-	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
-		return err
-	}
-	encoded, err := dkvsindexer.MarshalRecord(record)
-	if err != nil {
-		return err
-	}
-	return s.db.Write(key, encoded)
-}
-
-func (s *dkvsReplicaStore) acknowledgeOutbox(scope string, record *swire.DKVSRecord) error {
-	if s == nil || s.db == nil || scope == "" || record == nil {
-		return fmt.Errorf("invalid DKVS outbox acknowledgement")
-	}
-	return s.db.Delete(dkvsReplicaRecordKey(dkvsReplicaOutboxPrefix, scope, record.Key))
 }

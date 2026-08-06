@@ -3,14 +3,17 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	templateruntime "github.com/sat20-labs/satoshinet/contract/template"
@@ -18,6 +21,35 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
+
+type e2eAccountManagedProvider struct{}
+
+func (*e2eAccountManagedProvider) ID() string { return "e2e.module" }
+
+func (*e2eAccountManagedProvider) Export(catalog wallet.AccountManagedDataCatalog) (
+	[]wallet.AccountManagedDataPayload, error) {
+
+	return []wallet.AccountManagedDataPayload{{
+		Scope:   wallet.AccountManagedDataGlobalScope,
+		Payload: []byte("e2e-module-required-data|" + catalog.AccountID),
+	}}, nil
+}
+
+func (*e2eAccountManagedProvider) Validate(catalog wallet.AccountManagedDataCatalog,
+	payloads []wallet.AccountManagedDataPayload) error {
+
+	if len(payloads) != 1 || payloads[0].Scope != wallet.AccountManagedDataGlobalScope ||
+		string(payloads[0].Payload) != "e2e-module-required-data|"+catalog.AccountID {
+		return fmt.Errorf("invalid e2e account-managed payload")
+	}
+	return nil
+}
+
+func (*e2eAccountManagedProvider) Import(catalog wallet.AccountManagedDataCatalog,
+	payloads []wallet.AccountManagedDataPayload) error {
+
+	return (&e2eAccountManagedProvider{}).Validate(catalog, payloads)
+}
 
 func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	defaults := dkvsindexer.NetworkDefaultsForParams(&chaincfg.TestNetParams)
@@ -74,11 +106,6 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	prefix, err := dkvsindexer.AccountPersonalKey(accountID, "account/recovery")
 	require.NoError(t, err)
 	minerClient := dkvsClientForNode(t, fixture.Network.Miner)
-	_, _, err = minerClient.SubscribePrefix(prefix)
-	require.NoError(t, err)
-	_, _, err = minerClient.SubscribeMailbox(accountID)
-	require.NoError(t, err)
-	require.NoError(t, connectNode(fixture.Network.Miner, fixture.Network.Core))
 
 	guardianPrivate, guardianPublic, err := account.GenerateGuardianKey(nil)
 	require.NoError(t, err)
@@ -117,6 +144,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	}, database)
 	require.NotNil(t, walletManager)
 	defer walletManager.Close()
+	require.NoError(t, walletManager.RegisterAccountManagedDataProvider(&e2eAccountManagedProvider{}))
 	_, err = walletManager.ImportWallet(dkvsClientMnemonic, "123456")
 	require.NoError(t, err)
 	require.Equal(t, pubKey, walletManager.GetWallet().GetPubKey().SerializeCompressed())
@@ -145,11 +173,21 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	guardianKey, err := dkvsindexer.MailShareKey(accountID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
 	require.NoError(t, err)
-	for key, value := range map[string][]byte{
+	writtenAccountValues := map[string][]byte{
 		packageKey: packageBytes, guardianKey: guardianBytes,
-	} {
+	}
+	for key, value := range writtenAccountValues {
 		requireDKVSValue(t, fixture.Network.Bootstrap, key, value)
 		requireDKVSValue(t, fixture.Network.Core, key, value)
+	}
+	// Subscribe only after the records exist, then add the direct core peer.
+	// This provides a deterministic path-repair barrier for the selective miner.
+	_, _, err = minerClient.SubscribePrefix(prefix)
+	require.NoError(t, err)
+	_, _, err = minerClient.SubscribeMailbox(accountID)
+	require.NoError(t, err)
+	require.NoError(t, connectNode(fixture.Network.Miner, fixture.Network.Core))
+	for key, value := range writtenAccountValues {
 		requireDKVSValue(t, fixture.Network.Miner, key, value)
 	}
 
@@ -165,7 +203,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	guardianRecord, err := coreClient.GetRecord(guardianKey)
 	require.NoError(t, err)
 	require.Zero(t, guardianRecord.TTL)
-	require.Zero(t, guardianRecord.ExpiryHeight)
+	require.Zero(t, dkvsindexer.RecordExpiryHeight(guardianRecord))
 	guardianProof, err := dkvsindexer.ParseFeeProof(guardianRecord.FeeProof)
 	require.NoError(t, err)
 	require.Equal(t, dkvsindexer.FeeModeAutopay, guardianProof.Mode)
@@ -179,6 +217,63 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	restored, secret, err := account.RecoverAccount(loaded.Envelope, dkvsShare, guardianShare)
 	require.NoError(t, err)
+	rgbReceive, err := walletManager.CreateRGB11Invoice(wallet.RGB11InvoiceRequest{
+		Mode: "witness", AmountRaw: "1", WitnessVout: 1,
+		Expiry: time.Now().Add(time.Hour).Unix(),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, rgbReceive.RequestID)
+	require.NoError(t, walletManager.ActivateAccountManagement(
+		secret, "123456", authorization, pkg.Envelope.Locator, "sat20account1:e2e",
+	))
+	stateKey, err := dkvsindexer.PersonalKey(pubKey, "account/state")
+	require.NoError(t, err)
+	managedDataKey, err := dkvsindexer.BlobKey(accountID, "account-managed-data")
+	require.NoError(t, err)
+	bootstrapClient := dkvsClientForNode(t, fixture.Network.Bootstrap)
+	stateRecord, err := bootstrapClient.GetRecord(stateKey)
+	require.NoError(t, err)
+	managedDataRecord, err := bootstrapClient.GetRecord(managedDataKey)
+	require.NoError(t, err)
+	for _, record := range []*wire.DKVSRecord{stateRecord, managedDataRecord} {
+		require.Zero(t, record.TTL)
+		proof, proofErr := dkvsindexer.ParseFeeProof(record.FeeProof)
+		require.NoError(t, proofErr)
+		require.Equal(t, dkvsindexer.FeeModeAutopay, proof.Mode)
+		require.Equal(t, contractAddress.MustEncode(), proof.PoolContract)
+	}
+	managedState, err := account.OpenManagedState(secret, accountID, stateRecord.Value)
+	require.NoError(t, err)
+	managedBlob, err := wallet.DecodeDKVSBlobValue(managedDataRecord.Value)
+	require.NoError(t, err)
+	managedBundle, err := account.OpenManagedDataBundle(secret, accountID, managedBlob.Data)
+	require.NoError(t, err)
+	require.Equal(t, managedState.DataRevision, managedBundle.Revision)
+	managedHash, err := account.ManagedDataBundleHash(managedBundle)
+	require.NoError(t, err)
+	require.Equal(t, managedState.DataHash, managedHash)
+	require.Len(t, managedBundle.Items, 2)
+	var rgbItem, moduleItem *account.ManagedDataItem
+	for index := range managedBundle.Items {
+		item := &managedBundle.Items[index]
+		switch item.Provider {
+		case "rgb11":
+			rgbItem = item
+		case "e2e.module":
+			moduleItem = item
+		}
+	}
+	require.NotNil(t, rgbItem)
+	require.NotNil(t, moduleItem)
+	require.Equal(t, wallet.AccountManagedDataGlobalScope, moduleItem.Scope)
+	require.Equal(t, "e2e-module-required-data|"+accountID, string(moduleItem.Payload))
+	rgbPackage, err := rgb11wallet.DecodeRecoveryPackage(rgbItem.Payload)
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), rgbPackage.AccountIndex)
+	require.Len(t, rgbPackage.EngineRecords, 1)
+	require.Empty(t, rgbPackage.ProjectionRecords)
+	requireDKVSValue(t, fixture.Network.Core, stateKey, stateRecord.Value)
+	requireDKVSValue(t, fixture.Network.Core, managedDataKey, managedDataRecord.Value)
 	for index := range secret {
 		secret[index] = 0
 	}
@@ -195,7 +290,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.Equal(t, packageBytes, records[0].Value)
 	for _, record := range records {
 		require.Zero(t, record.TTL)
-		require.Zero(t, record.ExpiryHeight)
+		require.Zero(t, dkvsindexer.RecordExpiryHeight(record))
 		proof, proofErr := dkvsindexer.ParseFeeProof(record.FeeProof)
 		require.NoError(t, proofErr)
 		require.Equal(t, dkvsindexer.FeeModeAutopay, proof.Mode)

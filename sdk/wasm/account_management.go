@@ -20,21 +20,9 @@ import (
 	walletsdk "github.com/sat20-labs/sat20wallet/sdk/wallet"
 )
 
-const (
-	accountLocatorPrefix = "sat20account1:"
-	accountSessionTTL    = 20 * time.Minute
-)
+const accountSessionTTL = 20 * time.Minute
 
-type accountLocatorPayload struct {
-	Version          uint32                            `json:"version"`
-	Network          string                            `json:"network"`
-	StorageLocation  walletsdk.AccountIndexerLocation  `json:"storage_location"`
-	StorageMode      string                            `json:"storage_mode"`
-	RecordTTL        uint64                            `json:"record_ttl,omitempty"`
-	AutopayContract  string                            `json:"autopay_contract,omitempty"`
-	GuardianLocation *walletsdk.AccountIndexerLocation `json:"guardian_location,omitempty"`
-	Locator          account.Locator                   `json:"locator"`
-}
+type accountLocatorPayload = walletsdk.AccountPublicLocator
 
 type accountStorageSession struct {
 	Authorization walletsdk.AccountStorageAuthorization
@@ -48,6 +36,8 @@ type accountActivationSession struct {
 	Authorization    walletsdk.AccountStorageAuthorization
 	Locator          accountLocatorPayload
 	GuardianVerified bool
+	GuardianShare    *account.RecoveryShare
+	RequestPrivate   []byte
 	ExpiresAt        time.Time
 }
 
@@ -200,7 +190,9 @@ func accountCleanupSessions() {
 				session.Package.UserShare = account.RecoveryShare{}
 			}
 			if session != nil {
+				zeroAccountBytes(session.RequestPrivate)
 				zeroAccountBytes(session.Secret)
+				session.GuardianShare = nil
 			}
 			delete(accountSessions.activation, id)
 		}
@@ -217,40 +209,16 @@ func accountCleanupSessions() {
 	}
 }
 
+func accountExpectedNetwork() string {
+	return walletsdk.GetChainParam_SatsNet().Name
+}
+
 func encodeAccountLocator(value accountLocatorPayload) (string, error) {
-	if value.Version != account.Version || value.StorageLocation.Host == "" {
-		return "", account.ErrInvalidRecoveryPackage
-	}
-	if err := account.ValidateLocator(value.Locator); err != nil {
-		return "", err
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return "", err
-	}
-	return accountLocatorPrefix + base64.RawURLEncoding.EncodeToString(encoded), nil
+	return walletsdk.EncodeAccountPublicLocator(value, accountExpectedNetwork())
 }
 
 func decodeAccountLocator(value string) (accountLocatorPayload, error) {
-	var locator accountLocatorPayload
-	value = strings.TrimSpace(value)
-	if !strings.HasPrefix(value, accountLocatorPrefix) {
-		return locator, account.ErrInvalidRecoveryPackage
-	}
-	encoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(value, accountLocatorPrefix))
-	if err != nil || len(encoded) > account.MaxRecoveryObjectSize {
-		return locator, account.ErrInvalidRecoveryPackage
-	}
-	if err := json.Unmarshal(encoded, &locator); err != nil {
-		return locator, account.ErrInvalidRecoveryPackage
-	}
-	if locator.Version != account.Version || locator.StorageLocation.Host == "" {
-		return locator, account.ErrInvalidRecoveryPackage
-	}
-	if err := account.ValidateLocator(locator.Locator); err != nil {
-		return locator, err
-	}
-	return locator, nil
+	return walletsdk.DecodeAccountPublicLocator(value, accountExpectedNetwork())
 }
 
 func accountPreflight(this js.Value, args []js.Value) any {
@@ -426,6 +394,9 @@ func accountCreateRecovery(this js.Value, args []js.Value) any {
 		if storage.Authorization.Autopay != nil {
 			locator.AutopayContract = storage.Authorization.Autopay.PoolContract
 		}
+		if err := _mgr.SignAccountPublicLocator(&locator); err != nil {
+			return nil, -1, err.Error()
+		}
 		locatorText, err := encodeAccountLocator(locator)
 		if err != nil {
 			return nil, -1, err.Error()
@@ -544,6 +515,9 @@ func accountCheckGuardianSetup(this js.Value, args []js.Value) any {
 		}
 		session.GuardianVerified = true
 		session.Locator.GuardianLocation = &receipt.Location
+		if err := _mgr.SignAccountPublicLocator(&session.Locator); err != nil {
+			return nil, -1, err.Error()
+		}
 		locatorText, err := encodeAccountLocator(session.Locator)
 		if err != nil {
 			return nil, -1, err.Error()
@@ -579,8 +553,13 @@ func accountRehearse(this js.Value, args []js.Value) any {
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		companion := session.Package.UserShare
-		if session.Package.Envelope.Locator.RecoveryMode == account.RecoveryMode2Of2 {
+		companion := account.RecoveryShare{}
+		if session.Package.Envelope.Locator.RecoveryMode == account.RecoveryMode2Of3 {
+			if session.GuardianShare == nil {
+				return nil, -1, "guardian recovery response is required for the rehearsal"
+			}
+			companion = *session.GuardianShare
+		} else {
 			supplied, err := account.DecodeRecoveryShare(request.UserShare)
 			if err != nil {
 				return nil, -1, err.Error()
@@ -610,6 +589,9 @@ func accountRehearse(this js.Value, args []js.Value) any {
 			session.Package.Envelope.Locator, publicLocator); err != nil {
 			return nil, -1, err.Error()
 		}
+		zeroAccountBytes(session.RequestPrivate)
+		session.RequestPrivate = nil
+		session.GuardianShare = nil
 		zeroAccountBytes(session.Secret)
 		session.Secret = nil
 		accountSessions.Lock()
@@ -717,21 +699,43 @@ func accountCreateGuardianRequest(this js.Value, args []js.Value) any {
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
 		accountSessions.Lock()
 		accountCleanupSessions()
-		session := accountSessions.recovery[request.SessionID]
+		recoverySession := accountSessions.recovery[request.SessionID]
+		activationSession := accountSessions.activation[request.SessionID]
 		accountSessions.Unlock()
-		if session == nil || session.Package == nil || session.Package.Manifest.Guardian == nil || session.Locator.GuardianLocation == nil {
+		var pkg *account.RecoveryPackage
+		var locator accountLocatorPayload
+		var storeKey func([]byte)
+		switch {
+		case recoverySession != nil:
+			pkg, locator = recoverySession.Package, recoverySession.Locator
+			storeKey = func(value []byte) {
+				zeroAccountBytes(recoverySession.RequestPrivate)
+				recoverySession.RequestPrivate = value
+			}
+		case activationSession != nil:
+			pkg, locator = activationSession.Package, activationSession.Locator
+			if !activationSession.GuardianVerified {
+				return nil, -1, "guardian capsule has not been stored"
+			}
+			storeKey = func(value []byte) {
+				zeroAccountBytes(activationSession.RequestPrivate)
+				activationSession.RequestPrivate = value
+			}
+		default:
+			return nil, -1, "guardian recovery session expired"
+		}
+		if pkg == nil || pkg.Manifest.Guardian == nil || locator.GuardianLocation == nil || pkg.Envelope.Locator.RecoveryMode != account.RecoveryMode2Of3 {
 			return nil, -1, "guardian recovery is unavailable"
 		}
 		privateKey, publicKey, err := account.GenerateGuardianKey(nil)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		zeroAccountBytes(session.RequestPrivate)
-		session.RequestPrivate = privateKey
-		reference := session.Package.Manifest.Guardian
-		payload := accountGuardianRecoveryRequest{Version: account.Version, Locator: session.Locator,
-			GuardianLocation: *session.Locator.GuardianLocation, MailboxID: reference.MailboxID,
-			PackageID: session.Package.Envelope.Locator.PackageID, ShareID: reference.ShareID,
+		storeKey(privateKey)
+		reference := pkg.Manifest.Guardian
+		payload := accountGuardianRecoveryRequest{Version: account.Version, Locator: locator,
+			GuardianLocation: *locator.GuardianLocation, MailboxID: reference.MailboxID,
+			PackageID: pkg.Envelope.Locator.PackageID, ShareID: reference.ShareID,
 			RecoveryPublicKey: base64.RawURLEncoding.EncodeToString(publicKey)}
 		encoded, _ := json.Marshal(payload)
 		return map[string]any{"request": string(encoded)}, 0, "ok"
@@ -763,6 +767,9 @@ func accountCreateGuardianResponse(this js.Value, args []js.Value) any {
 		var stored account.GuardianShareCapsule
 		if err := json.Unmarshal(encodedCapsule, &stored); err != nil {
 			return nil, -1, "invalid guardian capsule"
+		}
+		if stored.PackageID != payload.PackageID || stored.ShareID != payload.ShareID {
+			return nil, -1, "guardian capsule does not match the recovery request"
 		}
 		privateKey, err := _mgr.LoadAccountGuardianPrivateKey(request.Password)
 		if err != nil {
@@ -797,22 +804,47 @@ func accountConsumeGuardianResponse(this js.Value, args []js.Value) any {
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
 		accountSessions.Lock()
 		accountCleanupSessions()
-		session := accountSessions.recovery[request.SessionID]
+		recoverySession := accountSessions.recovery[request.SessionID]
+		activationSession := accountSessions.activation[request.SessionID]
 		accountSessions.Unlock()
-		if session == nil || len(session.RequestPrivate) != 32 {
+		var pkg *account.RecoveryPackage
+		var privateKey []byte
+		var accept func(account.RecoveryShare)
+		switch {
+		case recoverySession != nil:
+			pkg, privateKey = recoverySession.Package, recoverySession.RequestPrivate
+			accept = func(share account.RecoveryShare) {
+				recoverySession.GuardianShare = &share
+				zeroAccountBytes(recoverySession.RequestPrivate)
+				recoverySession.RequestPrivate = nil
+			}
+		case activationSession != nil:
+			pkg, privateKey = activationSession.Package, activationSession.RequestPrivate
+			accept = func(share account.RecoveryShare) {
+				activationSession.GuardianShare = &share
+				zeroAccountBytes(activationSession.RequestPrivate)
+				activationSession.RequestPrivate = nil
+			}
+		default:
+			return nil, -1, "guardian recovery request has expired"
+		}
+		if pkg == nil || pkg.Manifest.Guardian == nil || len(privateKey) != 32 {
 			return nil, -1, "guardian recovery request has expired"
 		}
 		var capsule account.GuardianShareCapsule
 		if err := json.Unmarshal([]byte(request.Response), &capsule); err != nil {
 			return nil, -1, "invalid guardian response"
 		}
-		share, err := account.DecryptGuardianShare(capsule, session.RequestPrivate)
+		share, err := account.DecryptGuardianShare(capsule, privateKey)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		session.GuardianShare = &share
-		zeroAccountBytes(session.RequestPrivate)
-		session.RequestPrivate = nil
+		reference := pkg.Manifest.Guardian
+		if share.PackageID != pkg.Envelope.Locator.PackageID || share.Checksum != reference.ShareID ||
+			share.Role != account.ShareRoleGuardian || share.Threshold != pkg.Manifest.Threshold || share.Total != pkg.Manifest.Total {
+			return nil, -1, "guardian response does not match the recovery package"
+		}
+		accept(share)
 		return map[string]any{"accepted": true}, 0, "ok"
 	}))
 }
@@ -946,7 +978,9 @@ func accountAbortSession(this js.Value, args []js.Value) any {
 	}
 	if session := accountSessions.activation[request.SessionID]; session != nil && session.Package != nil {
 		session.Package.UserShare = account.RecoveryShare{}
+		zeroAccountBytes(session.RequestPrivate)
 		zeroAccountBytes(session.Secret)
+		session.GuardianShare = nil
 	}
 	delete(accountSessions.storage, request.SessionID)
 	delete(accountSessions.activation, request.SessionID)

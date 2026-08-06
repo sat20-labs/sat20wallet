@@ -6,7 +6,7 @@ import dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 // node's FREE_LOCAL section from GET /v3/dkvs/config.
 type AccountFreeLocalPolicy struct {
 	Enabled             bool   `json:"enabled"`
-	MaxTTL              uint64 `json:"max_ttl_ms"`
+	MaxTTL              uint64 `json:"max_ttl_blocks"`
 	MaxRecordsPerSigner uint64 `json:"max_records_per_signer"`
 	MaxBytesPerSigner   uint64 `json:"max_bytes_per_signer"`
 	MaxTotalRecords     uint64 `json:"max_total_records"`

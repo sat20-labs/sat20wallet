@@ -239,11 +239,6 @@ func TestRGB11OfficialContractOpretRelayAckSendReceive(t *testing.T) {
 	remote := newRGB11MemoryDKVSHTTP()
 	sender.cfg = &common.Config{IndexerL2: &common.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"}}
 	sender.http = remote
-	if _, err := sender.SyncRGB11WalletState("", dkvsindexer.RecordOptions{
-		TTL: uint64((24 * time.Hour) / time.Millisecond),
-	}); err != nil {
-		t.Fatal(err)
-	}
 	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
@@ -259,12 +254,9 @@ func TestRGB11OfficialContractOpretRelayAckSendReceive(t *testing.T) {
 	witnessTxID := witness.TxHash().String()
 	recipientOutpoint := witnessTxID + ":1"
 
-	relayOptions := dkvsindexer.RecordOptions{TTL: uint64((24 * time.Hour) / time.Millisecond)}
+	relayOptions := dkvsindexer.RecordOptions{TTL: rgb11AddressTemporaryTTL}
 	relayRecord, _, err := sender.PublishRGB11RelayRecord(prepared.State.TransferID, "sender-test", relayOptions)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sender.SyncRGB11WalletState("", relayOptions); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := sender.BroadcastRGB11Transfer(prepared.State.TransferID, relayRecord, nil); err != ErrRGB11AckRequired {
@@ -293,32 +285,20 @@ func TestRGB11OfficialContractOpretRelayAckSendReceive(t *testing.T) {
 		recipientState.Transfers[0].TransportMode != "sat20-dkvs" {
 		t.Fatalf("recipient transfer history=%+v err=%v", recipientState, err)
 	}
-	recipientWalletID, err := recipient.RGB11WalletID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	recipientSnapshot, _, err := recipient.rgbManager.exportRGB11WalletSnapshot(recipientWalletID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	recipientRecovery := exportRGB11RecoveryForTest(t, recipient)
 	restoredRecipientWallet := NewInternalWalletWithMnemonic(
 		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
 	)
 	restoredRecipient := newRGB11FlowManager(t, restoredRecipientWallet, rpc, evidence, 3)
-	if err := restoredRecipient.rgbManager.importRGB11WalletSnapshot(recipientSnapshot); err != nil {
-		t.Fatalf("restore pre-broadcast recipient snapshot: %v", err)
-	}
+	importRGB11RecoveryForTest(t, restoredRecipient, recipientRecovery)
 	recipient = restoredRecipient
 	recipient.cfg = &common.Config{IndexerL2: &common.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"}}
 	recipient.http = remote
-	if _, err := recipient.SyncRGB11WalletState("", relayOptions); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := recipient.PublishRGB11AckRecord(prepared.State.AckRecordKey, ack, relayOptions); err != nil {
 		t.Fatal(err)
 	}
 	fetchedAck, _, err := sender.FetchRGB11AckRecord(prepared.State.TransferID,
-		dkvsindexer.RecordVerificationOptions{Now: uint64(time.Now().UnixMilli())})
+		dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,16 +520,19 @@ func TestRGB11CancelPreparedOutOfBandTransfer(t *testing.T) {
 			},
 			RecipientConsignment: recipient, LocalConsignment: []byte("local-" + id),
 			SignedTx: []byte{1}, SignedPSBT: []byte{2}, CreatedAt: time.Now().Unix(),
+			ReservationID: id + "-reservation",
 		}
 	}
 	const firstTxID = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	if err := manager.rgbManager.projectionStore.SavePendingTransfer(newPending("cancel-oob", firstTxID)); err != nil {
+	firstPending := newPending("cancel-oob", firstTxID)
+	if err := manager.rgbManager.projectionStore.SavePendingTransfer(firstPending); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.utxoLockerL1.LockUtxo(rgbInput, rgb11wallet.LockReasonRGB); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.utxoLockerL1.LockUtxo(feeInput, rgb11wallet.LockReasonPending); err != nil {
+	if err := manager.utxoLockerL1.TryReserve([]string{rgbInput, feeInput},
+		rgb11wallet.LockReasonPending, firstPending.ReservationID, rgb11wallet.LockReasonRGB); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.CancelRGB11OutOfBandTransfer("cancel-oob"); err != nil {
@@ -565,7 +548,12 @@ func TestRGB11CancelPreparedOutOfBandTransfer(t *testing.T) {
 	}
 
 	const visibleTxID = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	if err := manager.rgbManager.projectionStore.SavePendingTransfer(newPending("visible-oob", visibleTxID)); err != nil {
+	visiblePending := newPending("visible-oob", visibleTxID)
+	if err := manager.rgbManager.projectionStore.SavePendingTransfer(visiblePending); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.utxoLockerL1.TryReserve([]string{rgbInput, feeInput},
+		rgb11wallet.LockReasonPending, visiblePending.ReservationID, rgb11wallet.LockReasonRGB); err != nil {
 		t.Fatal(err)
 	}
 	evidence.rawTx[visibleTxID] = []byte{1}
@@ -1292,6 +1280,7 @@ func TestRGB11ManualNackCancelsBatchAndReleasesOnlyFeeLocks(t *testing.T) {
 		},
 		RecipientConsignment: recipientConsignment, LocalConsignment: localConsignment,
 		SignedTx: []byte{1}, SignedPSBT: []byte{2}, CreatedAt: time.Now().Unix(),
+		ReservationID: "reject-transfer-reservation",
 	}
 	if err := sender.rgbManager.projectionStore.SavePendingTransfer(pending); err != nil {
 		t.Fatal(err)
@@ -1299,7 +1288,8 @@ func TestRGB11ManualNackCancelsBatchAndReleasesOnlyFeeLocks(t *testing.T) {
 	if err := sender.utxoLockerL1.LockUtxo(rgbInput, rgb11wallet.LockReasonRGB); err != nil {
 		t.Fatal(err)
 	}
-	if err := sender.utxoLockerL1.LockUtxo(feeInput, rgb11wallet.LockReasonPending); err != nil {
+	if err := sender.utxoLockerL1.TryReserve([]string{rgbInput, feeInput},
+		rgb11wallet.LockReasonPending, pending.ReservationID, rgb11wallet.LockReasonRGB); err != nil {
 		t.Fatal(err)
 	}
 	record, err := sender.BuildRGB11RelayRecord(transferID, "reject-test")
@@ -1525,8 +1515,13 @@ func saveRGB11StatusTransfer(t *testing.T, manager *Manager, transferID, status 
 		LocalConsignment:     []byte("local-consignment-" + transferID),
 		SignedTx:             signed.Bytes(),
 		SignedPSBT:           []byte{2},
+		ReservationID:        transferID + "-reservation",
 	}
 	if err := manager.rgbManager.projectionStore.SavePendingTransfer(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.utxoLockerL1.TryReserve([]string{inputOutpoint},
+		rgb11wallet.LockReasonPending, pending.ReservationID); err != nil {
 		t.Fatal(err)
 	}
 	return witnessTxID

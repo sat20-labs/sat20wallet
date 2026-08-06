@@ -9,7 +9,6 @@ import (
 
 	indexer "github.com/sat20-labs/indexer/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
-	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
@@ -65,56 +64,9 @@ func (p *Manager) dkvsManagedExactKeys() ([]string, error) {
 }
 
 func (p *Manager) flushDKVSOutbox(client *SatsNetDKVSClient, store *dkvsReplicaStore,
-	scope string) (bool, error) {
-	// Replay v1 atomic batches first. Their successful response already updates
-	// the confirmed replica and removes the exact batch outbox atomically, so
-	// they deliberately do not request a write-after-full-refresh.
-	if _, err := p.flushDKVSBatchOutbox(client, store); err != nil {
-		return false, err
-	}
-
-	// Legacy per-record entries are retained only for migration of pre-v1 local
-	// state. New v1 writes replace these entries with one exact batch outbox.
-	pending, err := store.loadOutbox(scope)
-	if err != nil {
-		return false, err
-	}
-	confirmed, err := store.loadConfirmed(scope)
-	if err != nil {
-		return false, err
-	}
-	confirmedByKey := make(map[string]*swire.DKVSRecord, len(confirmed))
-	for _, record := range confirmed {
-		if record != nil {
-			confirmedByKey[record.Key] = record
-		}
-	}
-	submitted := false
-	for _, record := range pending {
-		if record == nil {
-			return submitted, dkvsindexer.ErrInvalidRecord
-		}
-		active := confirmedByKey[record.Key]
-		if active != nil {
-			if dkvsindexer.RecordHash(active) == dkvsindexer.RecordHash(record) {
-				if err := store.acknowledgeOutbox(scope, record); err != nil {
-					return submitted, err
-				}
-				continue
-			}
-			return submitted, dkvsindexer.ErrWriteConflict
-		}
-		if dkvsindexer.IsTombstone(record.Flags) {
-			_, err = client.Tombstone(record)
-		} else {
-			_, err = client.PutRecord(record)
-		}
-		if err != nil {
-			return submitted, err
-		}
-		submitted = true
-	}
-	return submitted, nil
+	_ string) (bool, error) {
+	_, err := p.flushDKVSBatchOutbox(client, store)
+	return false, err
 }
 
 func pathReplicaScope(client *SatsNetDKVSClient, path string) string {
@@ -138,10 +90,12 @@ func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplic
 	}
 	filters := []dkvsindexer.Subscription{{Type: dkvsindexer.SubscriptionPrefix, Target: path}}
 	scope := dkvsReplicaScope(client.replicaNamespace, filters)
+	p.ensureDKVSManager().markNotReady(scope)
 	remote, err := client.GetPathMetaV1(path)
 	if err != nil {
 		return dkvsDirectoryState{}, err
 	}
+	p.ensureDKVSManager().observeVerificationHeight(remote.PathMeta.ViewHeight, true)
 	baseline, baselineErr := store.loadBaseline(scope)
 	if baselineErr == nil {
 		if remote.PathMeta.Generation < baseline.Generation {
@@ -150,7 +104,7 @@ func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplic
 		if remote.PathMeta.Generation == baseline.Generation &&
 			remote.PathMeta.StateRoot == baseline.ActiveRoot {
 			if err := p.syncDKVSEndpointLocalOverlay(client, store, path, scope,
-				remote.ServerTimeMS); err != nil {
+				remote.PathMeta.ViewHeight, remote.ServerTimeMS); err != nil {
 				return dkvsDirectoryState{}, err
 			}
 			state := dkvsDirectoryState{
@@ -168,7 +122,6 @@ func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplic
 
 	snapshot, err := client.SyncPath(path, dkvsindexer.RecordVerificationOptions{
 		Height: remote.PathMeta.ViewHeight,
-		Now:    remote.ServerTimeMS,
 	})
 	if err != nil {
 		return dkvsDirectoryState{}, err
@@ -180,7 +133,7 @@ func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplic
 		return dkvsDirectoryState{}, err
 	}
 	if err := p.syncDKVSEndpointLocalOverlay(client, store, path, scope,
-		snapshot.ServerTimeMS); err != nil {
+		snapshot.PathMeta.ViewHeight, snapshot.ServerTimeMS); err != nil {
 		return dkvsDirectoryState{}, err
 	}
 	state := dkvsDirectoryState{
@@ -229,7 +182,9 @@ func (p *Manager) syncedPathWriteContext(client *SatsNetDKVSClient,
 			}
 			return nil, err
 		}
-		if state.Path != path || state.PathMeta == nil || state.PathMeta.Path != path {
+		if !p.ensureDKVSManager().scopeReady(scope) || state.Path != path ||
+			state.PathMeta == nil || state.PathMeta.Path != path || state.LastErrorCode != "" ||
+			(state.SessionState != dkvsSessionIdle && state.SessionState != dkvsSessionConfirmed) {
 			return nil, ErrDKVSPathNotSynced
 		}
 		meta := cloneWalletPathMeta(state.PathMeta)
@@ -304,42 +259,6 @@ func (p *Manager) refreshDKVSPathsAfterWrite(client *SatsNetDKVSClient, keys []s
 	return nil
 }
 
-func (p *Manager) syncRGB11WalletPaths(client *SatsNetDKVSClient, walletID string) error {
-	if p == nil || p.wallet == nil || p.wallet.GetPubKey() == nil || walletID == "" {
-		return ErrDKVSPathNotSynced
-	}
-	pubkey := p.wallet.GetPubKey().SerializeCompressed()
-	headKey, err := dkvsindexer.PersonalKey(pubkey, RGB11WalletHeadPath(walletID))
-	if err != nil {
-		return err
-	}
-	snapshotKey, err := dkvsindexer.BlobKey(
-		dkvsindexer.AccountID(pubkey), RGB11WalletSnapshotBlobKey(walletID))
-	if err != nil {
-		return err
-	}
-	paths := make(map[string]struct{})
-	for _, key := range []string{headKey, snapshotKey} {
-		path, err := dkvsindexer.CollectionPathForKey(key)
-		if err != nil {
-			return err
-		}
-		paths[path] = struct{}{}
-	}
-	ordered := make([]string, 0, len(paths))
-	for path := range paths {
-		ordered = append(ordered, path)
-	}
-	sort.Strings(ordered)
-	store := newDKVSReplicaStore(p.db)
-	for _, path := range ordered {
-		if _, err := p.syncDKVSDirectory(client, store, path); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (p *Manager) syncDKVSOnce() ([]dkvsDirectoryState, error) {
 	if p == nil || p.dkvs == nil {
 		return nil, fmt.Errorf("wallet manager is unavailable")
@@ -384,17 +303,9 @@ func (p *Manager) syncDKVSOnceLocked() ([]dkvsDirectoryState, error) {
 		if err != nil {
 			return states, err
 		}
-		submitted, err := p.flushDKVSOutbox(client, store, state.Scope)
+		_, err = p.flushDKVSOutbox(client, store, state.Scope)
 		if err != nil {
 			return states, err
-		}
-		if submitted {
-			// Only legacy per-record migration writes request this refresh. Native
-			// v1 batch writes already applied their write echo atomically.
-			state, err = p.syncDKVSDirectory(client, store, path)
-			if err != nil {
-				return states, err
-			}
 		}
 		states = append(states, state)
 	}

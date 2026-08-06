@@ -139,7 +139,7 @@ func TestWalletSnapshotRejectsReceiveMetadataWithoutEngineRequest(t *testing.T) 
 		t.Fatal(err)
 	}
 	reservation, err := encode(&ReceiveReservation{
-		Version: 1, RequestID: requestID,
+		Version: 1, RequestID: requestID, ReservationID: "orphan-receive-owner",
 		OutPoint: strings.Repeat("02", 32) + ":0", Expiry: time.Now().Add(time.Hour).Unix(),
 	})
 	if err != nil {
@@ -226,7 +226,7 @@ func TestProjectionSnapshotRoundTripsEveryPortableRecordType(t *testing.T) {
 	}
 	reservationID := strings.Repeat("33", 32)
 	if err := source.SaveReceiveReservation(&ReceiveReservation{
-		Version: 1, RequestID: reservationID,
+		Version: 1, RequestID: reservationID, ReservationID: "receive-reservation-owner",
 		OutPoint: strings.Repeat("44", 32) + ":1", Expiry: time.Now().Add(time.Hour).Unix(),
 	}); err != nil {
 		t.Fatal(err)
@@ -248,6 +248,7 @@ func TestProjectionSnapshotRoundTripsEveryPortableRecordType(t *testing.T) {
 		},
 		RecipientConsignment: recipient, LocalConsignment: []byte("local consignment"),
 		SignedTx: []byte("signed tx"), SignedPSBT: []byte("signed psbt"),
+		ReservationID: "pending-transfer-owner",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -290,6 +291,14 @@ func TestProjectionSnapshotRoundTripsEveryPortableRecordType(t *testing.T) {
 	if !reflect.DeepEqual(records, restored) {
 		t.Fatalf("projection snapshot changed after round trip")
 	}
+	restoredReservation, err := target.LoadReceiveReservation(reservationID)
+	if err != nil || restoredReservation.ReservationID != "receive-reservation-owner" {
+		t.Fatalf("receive reservation owner=%q err=%v", restoredReservation.ReservationID, err)
+	}
+	restoredPending, err := target.LoadPendingTransfer("pending-transfer")
+	if err != nil || restoredPending.ReservationID != "pending-transfer-owner" {
+		t.Fatalf("pending reservation owner=%q err=%v", restoredPending.ReservationID, err)
+	}
 }
 
 func TestProjectionSnapshotRejectsInvalidReceiveReservation(t *testing.T) {
@@ -300,7 +309,7 @@ func TestProjectionSnapshotRejectsInvalidReceiveReservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, err := encode(&ReceiveReservation{
-		Version: 1, RequestID: strings.Repeat("55", 32),
+		Version: 1, RequestID: strings.Repeat("55", 32), ReservationID: "invalid-key-owner",
 		OutPoint: strings.Repeat("66", 32) + ":0", Expiry: time.Now().Add(time.Hour).Unix(),
 	})
 	if err != nil {

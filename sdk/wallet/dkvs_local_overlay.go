@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -18,7 +17,7 @@ const dkvsLocalOverlayPageSize = 256
 // connected endpoint. They are deliberately excluded from the network
 // PathSnapshot and are therefore maintained as an endpoint-scoped overlay.
 func (p *SatsNetDKVSClient) loadEndpointLocalOverlay(path string,
-	serverTimeMS uint64) ([]*swire.DKVSRecord, string, error) {
+	viewHeight uint64) ([]*swire.DKVSRecord, string, error) {
 
 	if p == nil {
 		return nil, "", ErrDKVSPathNotSynced
@@ -34,9 +33,6 @@ func (p *SatsNetDKVSClient) loadEndpointLocalOverlay(path string,
 	endpointID := strings.TrimSpace(config.EndpointID)
 	if endpointID == "" {
 		return nil, "", dkvsindexer.ErrStaleEndpoint
-	}
-	if serverTimeMS == 0 {
-		serverTimeMS = uint64(time.Now().UnixMilli())
 	}
 
 	local := make([]*swire.DKVSRecord, 0)
@@ -55,13 +51,12 @@ func (p *SatsNetDKVSClient) loadEndpointLocalOverlay(path string,
 				return nil, "", dkvsindexer.ErrInvalidRecord
 			}
 			if dkvsindexer.IsTombstone(record.Flags) ||
-				dkvsindexer.IsExpired(record, 0, serverTimeMS) {
+				dkvsindexer.IsExpired(record, viewHeight) {
 				continue
 			}
 			if err := dkvsindexer.VerifyRecordForClient(record,
 				dkvsindexer.RecordVerificationOptions{
-					ExpectedKey: record.Key,
-					Now:         serverTimeMS,
+					ExpectedKey: record.Key, Height: viewHeight,
 				}); err != nil {
 				return nil, "", fmt.Errorf("verify endpoint-local DKVS record path=%s key=%s: %w", path, record.Key, err)
 			}
@@ -128,7 +123,7 @@ func (s *dkvsReplicaStore) applyEndpointLocalOverlay(scope, path, endpointID str
 		merged = append(merged, record)
 	}
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Key < merged[j].Key })
-	verify := dkvsindexer.RecordVerificationOptions{Now: serverTimeMS}
+	verify := dkvsindexer.RecordVerificationOptions{}
 	if state.PathMeta != nil {
 		verify.Height = state.PathMeta.ViewHeight
 	}
@@ -149,9 +144,9 @@ func (s *dkvsReplicaStore) applyEndpointLocalOverlay(scope, path, endpointID str
 }
 
 func (p *Manager) syncDKVSEndpointLocalOverlay(client *SatsNetDKVSClient,
-	store *dkvsReplicaStore, path, scope string, serverTimeMS uint64) error {
+	store *dkvsReplicaStore, path, scope string, viewHeight, serverTimeMS uint64) error {
 
-	records, endpointID, err := client.loadEndpointLocalOverlay(path, serverTimeMS)
+	records, endpointID, err := client.loadEndpointLocalOverlay(path, viewHeight)
 	if err != nil {
 		return err
 	}

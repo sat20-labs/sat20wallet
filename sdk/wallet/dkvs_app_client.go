@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -176,9 +175,6 @@ func (p *SatsNetDKVSClient) SyncDirectoryAll(prefix string,
 	prefix, err := normalizeDKVSDirectoryPrefix(prefix)
 	if err != nil {
 		return nil, "", err
-	}
-	if opts.Now == 0 {
-		opts.Now = uint64(time.Now().UnixMilli())
 	}
 	var cursor []byte
 	rootText := ""

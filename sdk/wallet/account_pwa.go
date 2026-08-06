@@ -8,7 +8,6 @@ import (
 	"math/big"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
@@ -38,8 +37,8 @@ type AccountStorageOption struct {
 	Title                 string   `json:"title"`
 	Description           string   `json:"description"`
 	Warnings              []string `json:"warnings,omitempty"`
-	ExpiryHeight          uint64   `json:"expiry_height,omitempty"`
-	EstimatedExpiryTime   int64    `json:"estimated_expiry_time,omitempty"`
+	TTLBlocks             uint64   `json:"ttl_blocks,omitempty"`
+	EstimatedExpiryHeight uint64   `json:"estimated_expiry_height,omitempty"`
 	FeeAsset              string   `json:"fee_asset,omitempty"`
 	EstimatedCost         string   `json:"estimated_cost,omitempty"`
 	EstimatedAnnualCost   string   `json:"estimated_annual_cost,omitempty"`
@@ -212,6 +211,13 @@ func accountAmountPerBlock(defaults dkvsindexer.NetworkDefaults, recordCount uin
 	return decimalString(minimum), nil
 }
 
+func estimatedDKVSExpiryHeight(issueHeight, ttl uint64) uint64 {
+	if ttl == 0 || issueHeight > ^uint64(0)-ttl {
+		return 0
+	}
+	return issueHeight + ttl
+}
+
 func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 	store, err := p.accountDKVSStore()
 	if err != nil {
@@ -220,12 +226,13 @@ func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 	options := make([]AccountStorageOption, 0, 2)
 	policy, configErr := store.Config()
 	if configErr == nil && policy != nil && policy.Enabled {
-		expires := time.Now().Add(time.Duration(policy.MaxTTL) * time.Millisecond).UnixMilli()
+		currentHeight, _ := p.ensureDKVSManager().verificationHeight()
 		options = append(options, AccountStorageOption{
 			ID: "temporary", Mode: AccountStorageTemporary, Available: true,
 			Title: "临时缓存", Description: "由当前连接节点临时保存；到期后数据可能被删除。",
-			Warnings:            []string{"这不是长期账户备份。", "恢复时需要能够访问保存数据的同一节点。"},
-			EstimatedExpiryTime: expires,
+			Warnings:              []string{"这不是长期账户备份。", "恢复时需要能够访问保存数据的同一节点。"},
+			TTLBlocks:             policy.MaxTTL,
+			EstimatedExpiryHeight: estimatedDKVSExpiryHeight(currentHeight, policy.MaxTTL),
 		})
 	} else {
 		warning := "当前连接节点不提供临时 DKVS 缓存。"
@@ -296,12 +303,14 @@ func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*A
 		if policy == nil || !policy.Enabled || policy.MaxTTL == 0 {
 			return nil, fmt.Errorf("current node does not provide temporary DKVS cache")
 		}
+		currentHeight, _ := p.ensureDKVSManager().verificationHeight()
 		return &AccountStorageAuthorization{
 			ID: AccountStorageTemporary, Mode: AccountStorageTemporary,
 			RecordOptions: dkvsindexer.RecordOptions{Seq: 1, TTL: policy.MaxTTL},
 			Summary: AccountStorageOption{ID: AccountStorageTemporary, Mode: AccountStorageTemporary, Available: true,
 				Title: "临时缓存", Description: "由当前连接节点临时保存；到期后数据可能被删除。",
-				EstimatedExpiryTime: time.Now().Add(time.Duration(policy.MaxTTL) * time.Millisecond).UnixMilli()},
+				TTLBlocks:             policy.MaxTTL,
+				EstimatedExpiryHeight: estimatedDKVSExpiryHeight(currentHeight, policy.MaxTTL)},
 			Location: location, Policy: policy,
 		}, nil
 	case AccountStoragePaid:
@@ -312,6 +321,8 @@ func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*A
 }
 
 func (p *Manager) confirmPaidAccountStorage(location AccountIndexerLocation, recordCount uint64) (*AccountStorageAuthorization, error) {
+	releaseRGB11Scope := p.beginRGB11ScopeChange()
+	defer releaseRGB11Scope()
 	root, err := p.accountManagementRootWallet()
 	if err != nil {
 		return nil, err
@@ -444,6 +455,164 @@ func clearAccountBackup(value *account.Backup) {
 	}
 }
 
+type preparedAccountRestore struct {
+	wallets map[int64]*WalletInfo
+	status  *Status
+	results []RestoredWalletResult
+}
+
+func cloneStatusForAccountRestore(value *Status) *Status {
+	if value == nil {
+		return newDefaultStatus()
+	}
+	value.RLock()
+	defer value.RUnlock()
+	return &Status{
+		SoftwareVer: value.SoftwareVer, DBver: value.DBver,
+		TotalWallet: value.TotalWallet, CurrentWallet: value.CurrentWallet,
+		CurrentAccount: value.CurrentAccount, CurrentChain: value.CurrentChain,
+		SyncHeight: value.SyncHeight, SyncHeightL1: value.SyncHeightL1,
+		SyncHeightL2:   value.SyncHeightL2,
+		BlockHashMapL1: cloneIntStringMap(value.BlockHashMapL1),
+		BlockHashMapL2: cloneIntStringMap(value.BlockHashMapL2),
+		MaxFeeRateL1:   value.MaxFeeRateL1, HasStaked: value.HasStaked,
+		ContractSubAccountIndex: value.ContractSubAccountIndex,
+	}
+}
+
+// prepareAccountRestoreLocked performs every fallible wallet operation before
+// touching persistent or live manager state. The caller must hold p.mutex.
+func (p *Manager) prepareAccountRestoreLocked(value account.Backup, password string) (*preparedAccountRestore, error) {
+	backup, err := account.NormalizeBackup(value)
+	if err != nil {
+		return nil, err
+	}
+	if len(p.walletInfoMap) != 0 || p.wallet != nil {
+		return nil, fmt.Errorf("account restore requires an empty wallet database")
+	}
+	prepared := &preparedAccountRestore{
+		wallets: make(map[int64]*WalletInfo, len(backup.Wallets)),
+		results: make([]RestoredWalletResult, 0, len(backup.Wallets)),
+		status:  cloneStatusForAccountRestore(p.status),
+	}
+	fingerprints := make(map[string]struct{}, len(backup.Wallets))
+	for _, item := range backup.Wallets {
+		walletValue := NewInternalWalletWithMnemonic(item.Mnemonic, "", GetChainParam())
+		if walletValue == nil {
+			return nil, fmt.Errorf("restore wallet %q: invalid mnemonic", item.Name)
+		}
+		fingerprint := walletFingerprint(walletValue)
+		if _, exists := fingerprints[fingerprint]; exists {
+			return nil, fmt.Errorf("restore wallet %q: duplicate wallet identity", item.Name)
+		}
+		fingerprints[fingerprint] = struct{}{}
+		id := walletValue.GetId()
+		if _, exists := prepared.wallets[id]; exists {
+			return nil, fmt.Errorf("restore wallet %q: duplicate wallet id", item.Name)
+		}
+		info := &WalletInfo{WalletInDB: WalletInDB{
+			Id: id, Accounts: int(item.AccountCount), Type: WALLET_TYPE_MNEMONIC, Name: item.Name,
+			AccountNames: make(map[uint32]string, len(item.SubAccounts)),
+			AccountDIDs:  make(map[uint32]string, len(item.SubAccounts)),
+		}, Wallet: walletValue}
+		for _, sub := range item.SubAccounts {
+			info.AccountNames[sub.Index] = sub.Name
+			info.AccountDIDs[sub.Index] = sub.DID
+		}
+		key, err := p.newSnaclKey(password)
+		if err != nil {
+			return nil, fmt.Errorf("derive restored wallet key %q: %w", item.Name, err)
+		}
+		ciphertext, err := key.Encrypt([]byte(item.Mnemonic))
+		if err != nil {
+			return nil, fmt.Errorf("encrypt restored wallet %q: %w", item.Name, err)
+		}
+		info.Mnemonic = ciphertext
+		info.Salt = key.Marshal()
+		accounts := make([]RestoredSubAccountResult, 0, len(item.SubAccounts))
+		for _, sub := range item.SubAccounts {
+			pubKey := walletValue.GetPubKeyByIndex(sub.Index)
+			pubKeyHex := ""
+			if pubKey != nil {
+				pubKeyHex = fmt.Sprintf("%x", pubKey.SerializeCompressed())
+			}
+			accounts = append(accounts, RestoredSubAccountResult{
+				Index: sub.Index, DID: sub.DID,
+				Address: walletValue.GetAddressByIndex(sub.Index), PubKey: pubKeyHex,
+			})
+		}
+		prepared.wallets[id] = info
+		prepared.results = append(prepared.results, RestoredWalletResult{ID: id, Name: item.Name, Accounts: accounts})
+	}
+	sort.Slice(prepared.results, func(i, j int) bool { return prepared.results[i].ID < prepared.results[j].ID })
+	if len(prepared.results) == 0 {
+		return nil, fmt.Errorf("account restore produced no wallets")
+	}
+	prepared.status.TotalWallet = len(prepared.wallets)
+	prepared.status.CurrentWallet = prepared.results[0].ID
+	prepared.status.CurrentAccount = 0
+	if prepared.status.SoftwareVer == "" {
+		prepared.status.SoftwareVer = SOFTWARE_VERSION
+	}
+	if prepared.status.DBver == "" {
+		prepared.status.DBver = DB_VERSION
+	}
+	if prepared.status.CurrentChain == "" {
+		prepared.status.CurrentChain = _chain
+	}
+	normalizeStatus(prepared.status)
+	return prepared, nil
+}
+
+// persistPreparedAccountRestoreLocked is the only commit point for account
+// recovery. Wallet records, status and optional management profile become
+// visible together; manager memory is updated only after a successful Flush.
+func (p *Manager) persistPreparedAccountRestoreLocked(prepared *preparedAccountRestore,
+	profile *accountManagementProfile) error {
+	if prepared == nil || len(prepared.wallets) == 0 || prepared.status == nil {
+		return fmt.Errorf("invalid prepared account restore")
+	}
+	batch := p.db.NewWriteBatch()
+	if batch == nil {
+		return fmt.Errorf("create account restore batch")
+	}
+	defer batch.Close()
+	for id, info := range prepared.wallets {
+		encoded, err := EncodeToBytes(&info.WalletInDB)
+		if err != nil {
+			return err
+		}
+		if err := batch.Put([]byte(getWalletDBKey(id)), encoded); err != nil {
+			return err
+		}
+	}
+	statusBytes, err := encodeStatusToBytes(prepared.status)
+	if err != nil {
+		return err
+	}
+	if err := batch.Put([]byte(DB_KEY_STATUS), statusBytes); err != nil {
+		return err
+	}
+	if profile != nil {
+		profileBytes, err := EncodeToBytes(profile)
+		if err != nil {
+			return err
+		}
+		if err := batch.Put(accountManagementProfileKey(), profileBytes); err != nil {
+			return err
+		}
+	}
+	if err := batch.Flush(); err != nil {
+		return err
+	}
+	p.walletInfoMap = prepared.wallets
+	p.status = prepared.status
+	p.wallet = prepared.wallets[prepared.status.CurrentWallet].Wallet
+	p.wallet.SetSubAccount(0)
+	p.accountProfile = profile
+	return nil
+}
+
 func (p *Manager) AccountPreflight(password string, metadata []AccountWalletMetadataInput) (*AccountPreflightResult, error) {
 	backup, err := p.ExportAccountBackup(password, metadataMap(metadata))
 	if err != nil {
@@ -491,7 +660,7 @@ func (p *Manager) PutGuardianCapsuleForStorage(auth AccountStorageAuthorization,
 	mutation := dkvsValueMutation{
 		Key: key, Value: encoded, Owner: p.wallet, Signature: dkvsSignatureAccount,
 		Policy: dkvsStoragePolicy{
-			TTL: auth.RecordOptions.TTL, ExpiryHeight: auth.RecordOptions.ExpiryHeight,
+			TTL: auth.RecordOptions.TTL,
 		},
 	}
 	switch auth.Mode {
@@ -510,52 +679,24 @@ func (p *Manager) PutGuardianCapsuleForStorage(auth AccountStorageAuthorization,
 }
 
 func (p *Manager) RestoreAccountBackupWithResult(value account.Backup, password string) ([]RestoredWalletResult, error) {
-	backup, err := account.NormalizeBackup(value)
+	releaseRGB11Scope := p.beginRGB11ScopeChange()
+	defer releaseRGB11Scope()
+	p.mutex.Lock()
+	prepared, err := p.prepareAccountRestoreLocked(value, password)
 	if err != nil {
+		p.mutex.Unlock()
 		return nil, err
 	}
-	if p.IsWalletExist() {
-		return nil, fmt.Errorf("account restore requires an empty wallet database")
-	}
-	result := make([]RestoredWalletResult, 0, len(backup.Wallets))
-	for _, item := range backup.Wallets {
-		id, err := p.ImportWallet(item.Mnemonic, password)
-		if err != nil {
-			return nil, err
-		}
-		p.mutex.Lock()
-		info := p.walletInfoMap[id]
-		if info == nil {
-			p.mutex.Unlock()
-			return nil, fmt.Errorf("restored wallet %d was not persisted", id)
-		}
-		info.Name = item.Name
-		info.Accounts = int(item.AccountCount)
-		info.AccountNames = make(map[uint32]string, len(item.SubAccounts))
-		info.AccountDIDs = make(map[uint32]string, len(item.SubAccounts))
-		for _, sub := range item.SubAccounts {
-			info.AccountNames[sub.Index] = sub.Name
-			info.AccountDIDs[sub.Index] = sub.DID
-		}
-		err = saveWallet(p.db, &info.WalletInDB)
-		walletValue := info.Wallet
+	if err := p.persistPreparedAccountRestoreLocked(prepared, nil); err != nil {
 		p.mutex.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		accounts := make([]RestoredSubAccountResult, 0, len(item.SubAccounts))
-		for _, sub := range item.SubAccounts {
-			pubKey := walletValue.GetPubKeyByIndex(sub.Index)
-			pubKeyHex := ""
-			if pubKey != nil {
-				pubKeyHex = fmt.Sprintf("%x", pubKey.SerializeCompressed())
-			}
-			accounts = append(accounts, RestoredSubAccountResult{
-				Index: sub.Index, DID: sub.DID, Address: walletValue.GetAddressByIndex(sub.Index), PubKey: pubKeyHex,
-			})
-		}
-		result = append(result, RestoredWalletResult{ID: id, Name: item.Name, Accounts: accounts})
+		return nil, err
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return result, nil
+	_ = p.rgbManager.selectRGB11Scope()
+	_ = p.rgbManager.rebuildRGB11Locks()
+	results := append([]RestoredWalletResult(nil), prepared.results...)
+	p.mutex.Unlock()
+	if err := p.refreshDKVSRegistrations(); err != nil {
+		Log.Warningf("refresh DKVS registrations after account restore failed: %v", err)
+	}
+	return results, nil
 }

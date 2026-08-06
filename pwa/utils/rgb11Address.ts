@@ -21,8 +21,6 @@ const call = async <T>(methodName: string, ...args: unknown[]): Promise<[Error |
 
 export type RGB11AddressReceiveRequest = {
   ttl?: number
-  expiry_height?: number
-  autopay?: boolean
   flags?: number
 }
 
@@ -38,17 +36,12 @@ export type RGB11AddressSendRequest = {
 export type RGB11AddressDeliveryRequest = {
   transfer_id: string
   ttl?: number
-  expiry_height?: number
-  autopay?: boolean
   inline_limit?: number
 }
 
 export type RGB11AddressMailboxRequest = {
   height?: number
-  now?: number
   ttl?: number
-  expiry_height?: number
-  autopay?: boolean
 }
 
 const rgb11Address = {

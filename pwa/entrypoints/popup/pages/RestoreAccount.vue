@@ -150,13 +150,15 @@ const commitRecovery = () => run(async () => {
     })),
   }))
   if (!wallets.length || !wallets[0].accounts.length) throw new Error('恢复结果为空')
-  await walletStorage.setValue('wallets', wallets)
-  await walletStorage.setValue('walletId', wallets[0].id)
-  await walletStorage.setValue('accountIndex', wallets[0].accounts[0].index)
-  await walletStorage.setValue('address', wallets[0].accounts[0].address)
-  await walletStorage.setValue('pubkey', wallets[0].accounts[0].pubKey)
-  await walletStorage.setValue('hasWallet', true)
-  await walletStorage.setValue('locked', true)
+  await walletStorage.batchUpdate({
+    wallets,
+    walletId: wallets[0].id,
+    accountIndex: wallets[0].accounts[0].index,
+    address: wallets[0].accounts[0].address,
+    pubkey: wallets[0].accounts[0].pubKey,
+    hasWallet: true,
+    locked: true,
+  })
   step.value = 5
   setTimeout(() => {
     window.location.hash = '#/unlock'

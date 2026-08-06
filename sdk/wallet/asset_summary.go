@@ -95,9 +95,6 @@ func (p *Manager) localRGB11Assets(address string) (indexer.TxAssets, int64, err
 	if err != nil {
 		return nil, 0, err
 	}
-	if err := manager.loadSynchronizedRGB11State(); err != nil {
-		return nil, 0, err
-	}
 	store := manager.projectionStore
 	outputs, err := store.ListOutputs()
 	if err != nil {
@@ -242,9 +239,6 @@ func (p *Manager) getLocalRGB11AssetBalance(address string, name *indexer.AssetN
 	if err != nil {
 		return nil, true, err
 	}
-	if err := manager.loadSynchronizedRGB11State(); err != nil {
-		return nil, true, err
-	}
 	balance, err := manager.projectionStore.Balance(*name)
 	return balance, true, err
 }
@@ -270,8 +264,8 @@ func (p *Manager) newScopedRGB11Manager(account localRGB11Account) (*rgb11Manage
 	if err != nil {
 		return nil, err
 	}
+	scoped.accountOwner = p
 	if p.rgbManager != nil {
-		scoped.backupCoordinator = p.rgbManager.backupLock()
 		scoped.scopeStates = p.rgbManager.scopeStates
 	}
 	owner.rgbManager = scoped

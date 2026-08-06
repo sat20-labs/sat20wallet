@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall/js"
-	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	corerelay "github.com/sat20-labs/rgb11/relay"
@@ -24,7 +23,8 @@ import (
 )
 
 const (
-	module = "sat20wallet_wasm"
+	module                  = "sat20wallet_wasm"
+	rgb11TransientTTLBlocks = uint64(144)
 )
 
 var _mgr *wallet.Manager
@@ -85,10 +85,6 @@ func jsonObject(value any) (map[string]any, error) {
 		return nil, err
 	}
 	return result, nil
-}
-
-func activateRGB11WalletState() map[string]any {
-	return map[string]any{"pending": true}
 }
 
 func registerWalletDataUpdateCallback() {
@@ -454,9 +450,8 @@ func createWallet(this js.Value, p []js.Value) any {
 		}
 		wallet.Log.Info("wallet created")
 		return map[string]any{
-			"walletId":        fmt.Sprintf("%d", id),
-			"mnemonic":        mnemonic,
-			"rgb11Activation": activateRGB11WalletState(),
+			"walletId": fmt.Sprintf("%d", id),
+			"mnemonic": mnemonic,
 		}, 0, "ok"
 	})
 
@@ -541,9 +536,8 @@ func importWallet(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{
-			"walletId":        fmt.Sprintf("%d", id),
-			"address":         _mgr.GetWallet().GetAddress(),
-			"rgb11Activation": activateRGB11WalletState(),
+			"walletId": fmt.Sprintf("%d", id),
+			"address":  _mgr.GetWallet().GetAddress(),
 		}, 0, "ok"
 	})
 
@@ -576,9 +570,8 @@ func importWalletWithPrivKey(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{
-			"walletId":        fmt.Sprintf("%d", id),
-			"address":         _mgr.GetWallet().GetAddress(),
-			"rgb11Activation": activateRGB11WalletState(),
+			"walletId": fmt.Sprintf("%d", id),
+			"address":  _mgr.GetWallet().GetAddress(),
 		}, 0, "ok"
 	})
 
@@ -612,8 +605,7 @@ func unlockWallet(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{
-			"walletId":        fmt.Sprintf("%d", id),
-			"rgb11Activation": activateRGB11WalletState(),
+			"walletId": fmt.Sprintf("%d", id),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
@@ -768,7 +760,7 @@ func switchWallet(this js.Value, p []js.Value) any {
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		return map[string]any{"rgb11Activation": activateRGB11WalletState()}, 0, "ok"
+		return nil, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
 }
@@ -822,7 +814,7 @@ func switchAccount(this js.Value, p []js.Value) any {
 			return nil, 0, "ok"
 		}
 		_mgr.SwitchAccount(uint32(id))
-		return map[string]any{"rgb11Activation": activateRGB11WalletState()}, 0, "ok"
+		return nil, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
 }
@@ -849,7 +841,7 @@ func switchChain(this js.Value, p []js.Value) any {
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		return map[string]any{"rgb11Activation": activateRGB11WalletState()}, 0, "ok"
+		return nil, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
 }
@@ -4974,7 +4966,7 @@ func publishRGB11RelayRecord(this js.Value, p []js.Value) any {
 	transferID := p[0].String()
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		record, _, err := _mgr.PublishRGB11RelayRecord(transferID, "sat20-pwa", dkvsindexer.RecordOptions{
-			TTL: uint64((24 * time.Hour) / time.Millisecond),
+			TTL: rgb11TransientTTLBlocks,
 		})
 		if err != nil {
 			return nil, -1, err.Error()
@@ -5051,7 +5043,7 @@ func publishRGB11AckRecord(this js.Value, p []js.Value) any {
 	}
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		_, err := _mgr.PublishRGB11AckRecord(key, &ack, dkvsindexer.RecordOptions{
-			TTL: uint64((24 * time.Hour) / time.Millisecond),
+			TTL: rgb11TransientTTLBlocks,
 		})
 		if err != nil {
 			return nil, -1, err.Error()
@@ -5067,9 +5059,7 @@ func fetchRGB11AckRecord(this js.Value, p []js.Value) any {
 	}
 	transferID := p[0].String()
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		ack, _, err := _mgr.FetchRGB11AckRecord(transferID, dkvsindexer.RecordVerificationOptions{
-			Now: uint64(time.Now().UnixMilli()),
-		})
+		ack, _, err := _mgr.FetchRGB11AckRecord(transferID, dkvsindexer.RecordVerificationOptions{})
 		if err != nil {
 			return nil, -1, err.Error()
 		}

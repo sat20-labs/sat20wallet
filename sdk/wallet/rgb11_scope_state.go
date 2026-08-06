@@ -6,10 +6,6 @@ import (
 )
 
 type rgb11ScopeBackupState struct {
-	Status              string
-	Mode                string
-	TTL                 uint64
-	AutoBackup          *RGB11AutoBackupPolicy
 	ReconciliationState string
 }
 
@@ -39,28 +35,16 @@ func newRGB11ScopeStateRegistry() *rgb11ScopeStateRegistry {
 	}
 }
 
-func cloneRGB11AutoBackupPolicy(policy *RGB11AutoBackupPolicy) *RGB11AutoBackupPolicy {
-	if policy == nil {
-		return nil
-	}
-	cloned := *policy
-	return &cloned
-}
-
 func (r *rgb11ScopeStateRegistry) load(scope string) rgb11ScopeBackupState {
 	if r == nil || scope == "" {
-		return rgb11ScopeBackupState{Status: "offline"}
+		return rgb11ScopeBackupState{ReconciliationState: "idle"}
 	}
 	r.mu.RLock()
-	state, ok := r.states[scope]
+	state := r.states[scope]
 	r.mu.RUnlock()
-	if !ok {
-		state.Status = "offline"
-	}
 	if state.ReconciliationState == "" {
 		state.ReconciliationState = "idle"
 	}
-	state.AutoBackup = cloneRGB11AutoBackupPolicy(state.AutoBackup)
 	return state
 }
 
@@ -70,14 +54,10 @@ func (r *rgb11ScopeStateRegistry) update(scope string, apply func(*rgb11ScopeBac
 	}
 	r.mu.Lock()
 	state := r.states[scope]
-	if state.Status == "" {
-		state.Status = "offline"
-	}
 	if state.ReconciliationState == "" {
 		state.ReconciliationState = "idle"
 	}
 	apply(&state)
-	state.AutoBackup = cloneRGB11AutoBackupPolicy(state.AutoBackup)
 	r.states[scope] = state
 	r.mu.Unlock()
 }
@@ -91,7 +71,7 @@ func (p *rgb11Manager) rgb11ScopeKey() string {
 
 func (p *rgb11Manager) rgb11ScopeState() rgb11ScopeBackupState {
 	if p == nil || p.scopeStates == nil {
-		return rgb11ScopeBackupState{Status: "offline"}
+		return rgb11ScopeBackupState{ReconciliationState: "idle"}
 	}
 	return p.scopeStates.load(p.rgb11ScopeKey())
 }
@@ -101,14 +81,4 @@ func (p *rgb11Manager) updateRGB11ScopeState(apply func(*rgb11ScopeBackupState))
 		return
 	}
 	p.scopeStates.update(p.rgb11ScopeKey(), apply)
-}
-
-func (p *rgb11Manager) setRGB11DKVSStatus(status string) {
-	p.updateRGB11ScopeState(func(state *rgb11ScopeBackupState) {
-		state.Status = status
-	})
-}
-
-func (p *rgb11Manager) rgb11AutoBackupPolicy() *RGB11AutoBackupPolicy {
-	return p.rgb11ScopeState().AutoBackup
 }

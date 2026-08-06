@@ -496,7 +496,6 @@ func (p *SatsNetDKVSClient) ListSubscriptions() ([]dkvsindexer.Subscription, err
 func newSignedRecordWithAutopay(wallet common.Wallet, key string, value []byte,
 	opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
 	opts.TTL = 0
-	opts.ExpiryHeight = 0
 	record, err := NewDKVSSignedRecord(wallet, key, value, opts)
 	if err != nil {
 		return nil, err
@@ -529,7 +528,7 @@ func attachDKVSAutopayFeeProof(wallet common.Wallet, record *swire.DKVSRecord,
 		return err
 	}
 	proof, err := dkvsindexer.NewAutopayFeeProof(
-		record.Key, parsed.Namespace, swire.MaxDKVSRecordSize, record.ExpiryHeight, poolContract, "",
+		record.Key, parsed.Namespace, swire.MaxDKVSRecordSize, dkvsindexer.RecordExpiryHeight(record), poolContract, "",
 	)
 	if err != nil {
 		return err
@@ -575,7 +574,7 @@ func (p *SatsNetDKVSClient) PutSignedRecordFreeLocal(wallet common.Wallet, key s
 		return nil, err
 	}
 	proof, err := dkvsindexer.NewFreeLocalFeeProof(record.Key, parsed.Namespace,
-		swire.MaxDKVSRecordSize, record.ExpiryHeight)
+		swire.MaxDKVSRecordSize, dkvsindexer.RecordExpiryHeight(record))
 	if err != nil {
 		return nil, err
 	}

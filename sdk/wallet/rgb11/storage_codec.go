@@ -844,13 +844,14 @@ func decodeReceiveKey(d *strict.Decoder, key *ReceiveKey) error {
 
 func encodeReceiveReservation(e *strict.Encoder, reservation *ReceiveReservation) error {
 	if reservation == nil || reservation.Version != 1 || reservation.RequestID == "" ||
-		reservation.OutPoint == "" || reservation.Expiry <= 0 {
+		reservation.OutPoint == "" || reservation.ReservationID == "" || reservation.Expiry <= 0 {
 		return ErrRGB11Inconsistent
 	}
 	for _, write := range []func() error{
 		func() error { return e.U8(reservation.Version) },
 		func() error { return encodeText(e, reservation.RequestID) },
 		func() error { return encodeText(e, reservation.OutPoint) },
+		func() error { return encodeText(e, reservation.ReservationID) },
 		func() error { return e.U64(uint64(reservation.Expiry)) },
 	} {
 		if err := write(); err != nil {
@@ -871,12 +872,16 @@ func decodeReceiveReservation(d *strict.Decoder, reservation *ReceiveReservation
 	if reservation.OutPoint, err = decodeText(d); err != nil {
 		return err
 	}
+	if reservation.ReservationID, err = decodeText(d); err != nil {
+		return err
+	}
 	expiry, err := d.U64()
 	if err != nil || expiry > math.MaxInt64 {
 		return ErrRGB11Inconsistent
 	}
 	reservation.Expiry = int64(expiry)
-	if reservation.RequestID == "" || reservation.OutPoint == "" || reservation.Expiry <= 0 {
+	if reservation.RequestID == "" || reservation.OutPoint == "" ||
+		reservation.ReservationID == "" || reservation.Expiry <= 0 {
 		return ErrRGB11Inconsistent
 	}
 	return nil
@@ -952,7 +957,7 @@ func encodeTransferState(e *strict.Encoder, state *TransferState) error {
 		func() error { return encodeText(e, state.DeliveryRecordKey) },
 		func() error { return encodeText(e, state.DeliveryRecordHash) },
 		func() error { return e.Bool(state.DeliveryTemporary) },
-		func() error { return e.U64(state.DeliveryExpiryHeight) },
+		func() error { return e.U64(state.DeliveryIssueHeight) },
 		func() error { return e.U64(state.DeliveryTTL) },
 		func() error { return e.Bool(state.DeliveryAcknowledged) },
 		func() error { return e.Bool(state.DeliveryCacheCompacted) },
@@ -1047,7 +1052,7 @@ func decodeTransferState(d *strict.Decoder, state *TransferState) error {
 	if state.DeliveryTemporary, err = d.Bool(); err != nil {
 		return err
 	}
-	if state.DeliveryExpiryHeight, err = d.U64(); err != nil {
+	if state.DeliveryIssueHeight, err = d.U64(); err != nil {
 		return err
 	}
 	if state.DeliveryTTL, err = d.U64(); err != nil {
@@ -1093,6 +1098,9 @@ func encodePendingTransfer(e *strict.Encoder, pending *PendingTransfer) error {
 			return err
 		}
 	}
+	if err := encodeText(e, pending.ReservationID); err != nil {
+		return err
+	}
 	return e.U64(uint64(pending.CreatedAt))
 }
 
@@ -1128,6 +1136,9 @@ func decodePendingTransfer(d *strict.Decoder, pending *PendingTransfer) error {
 		if pending.ChangeSeals[index], err = seals.DecodeGraphBlindSeal(encoded); err != nil {
 			return err
 		}
+	}
+	if pending.ReservationID, err = decodeText(d); err != nil {
+		return err
 	}
 	createdAt, err := d.U64()
 	if err != nil {
