@@ -96,6 +96,7 @@ func TestPersistPreparedAccountRestoreCommitsCatalogAndStatusTogether(t *testing
 		db: database, status: &Status{SoftwareVer: SOFTWARE_VERSION, DBver: DB_VERSION, CurrentChain: "testnet"},
 		walletInfoMap: make(map[int64]*WalletInfo),
 	}
+	originalStatus := manager.status
 	backup := account.Backup{Version: account.Version, Wallets: []account.WalletBackup{{
 		Name: "Root", Mnemonic: mnemonic, AccountCount: 2,
 		SubAccounts: []account.SubAccount{{Index: 0, Name: "Primary", DID: "did:root"}, {Index: 1, Name: "Second", DID: "did:second"}},
@@ -115,6 +116,9 @@ func TestPersistPreparedAccountRestoreCommitsCatalogAndStatusTogether(t *testing
 	}
 	if len(wallets) != 1 || manager.wallet == nil || manager.status.CurrentWallet == 0 {
 		t.Fatalf("restored state is incomplete: wallets=%d status=%+v", len(wallets), manager.status)
+	}
+	if manager.status != originalStatus {
+		t.Fatal("account restore replaced the live status pointer")
 	}
 	encodedStatus, err := database.Read([]byte(DB_KEY_STATUS))
 	if err != nil || len(encodedStatus) == 0 {

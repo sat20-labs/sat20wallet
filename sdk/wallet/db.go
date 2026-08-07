@@ -242,7 +242,9 @@ func (p *Manager) loadStatus() *Status {
 	var loaded bool
 	p.status, loaded = loadStatusWithLegacyMigrationResult(p.db)
 	if !loaded {
-		p.initStatusFromIndexerTips(p.status)
+		if !ENABLE_TESTING {
+			p.initStatusFromIndexerTips(p.status)
+		}
 		if err := saveStatusToDB(p.db, p.status); err != nil {
 			Log.Infof("save initialized status failed. %v", err)
 		}
@@ -429,6 +431,51 @@ func cloneIntStringMap(src map[int]string) map[int]string {
 		dst[k] = v
 	}
 	return dst
+}
+
+// applyStatusSnapshot updates status data without replacing the destination
+// object or copying its embedded mutex. Manager.status is shared with upper
+// layers, so its pointer must remain stable after initialization.
+func applyStatusSnapshot(dst, src *Status) {
+	if dst == nil || src == nil || dst == src {
+		return
+	}
+
+	src.RLock()
+	snapshot := statusOnDisk{
+		SoftwareVer:             src.SoftwareVer,
+		DBver:                   src.DBver,
+		TotalWallet:             src.TotalWallet,
+		CurrentWallet:           src.CurrentWallet,
+		CurrentAccount:          src.CurrentAccount,
+		CurrentChain:            src.CurrentChain,
+		SyncHeight:              src.SyncHeight,
+		SyncHeightL2:            src.SyncHeightL2,
+		SyncHeightL1:            src.SyncHeightL1,
+		BlockHashMapL1:          cloneIntStringMap(src.BlockHashMapL1),
+		BlockHashMapL2:          cloneIntStringMap(src.BlockHashMapL2),
+		MaxFeeRateL1:            src.MaxFeeRateL1,
+		HasStaked:               src.HasStaked,
+		ContractSubAccountIndex: src.ContractSubAccountIndex,
+	}
+	src.RUnlock()
+
+	dst.Lock()
+	dst.SoftwareVer = snapshot.SoftwareVer
+	dst.DBver = snapshot.DBver
+	dst.TotalWallet = snapshot.TotalWallet
+	dst.CurrentWallet = snapshot.CurrentWallet
+	dst.CurrentAccount = snapshot.CurrentAccount
+	dst.CurrentChain = snapshot.CurrentChain
+	dst.SyncHeight = snapshot.SyncHeight
+	dst.SyncHeightL2 = snapshot.SyncHeightL2
+	dst.SyncHeightL1 = snapshot.SyncHeightL1
+	dst.BlockHashMapL1 = snapshot.BlockHashMapL1
+	dst.BlockHashMapL2 = snapshot.BlockHashMapL2
+	dst.MaxFeeRateL1 = snapshot.MaxFeeRateL1
+	dst.HasStaked = snapshot.HasStaked
+	dst.ContractSubAccountIndex = snapshot.ContractSubAccountIndex
+	dst.Unlock()
 }
 
 func (p *Manager) saveStatus() error {

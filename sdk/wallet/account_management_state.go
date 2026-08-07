@@ -1246,9 +1246,15 @@ func (p *Manager) commitAccountManagedStateLocked(state account.ManagedState,
 		return false, false, err
 	}
 
-	p.walletInfoMap, p.status, p.accountProfile = wallets, status, &profile
+	p.walletInfoMap = wallets
+	if p.status == nil {
+		p.status = status
+	} else {
+		applyStatusSnapshot(p.status, status)
+	}
+	p.accountProfile = &profile
 	p.wallet = current.Wallet
-	p.wallet.SetSubAccount(status.CurrentAccount)
+	p.wallet.SetSubAccount(p.status.CurrentAccount)
 	return len(remaining) != 0, sameManagedGeneration, nil
 }
 

@@ -14,6 +14,23 @@ type memoryKVDB struct {
 	data map[string][]byte
 }
 
+type statusTipClient struct {
+	IndexerRPCClient
+	syncHeight     int
+	syncCalls      int
+	blockHashCalls int
+}
+
+func (c *statusTipClient) GetSyncHeight() int {
+	c.syncCalls++
+	return c.syncHeight
+}
+
+func (c *statusTipClient) GetBlockHash(_ int) (string, error) {
+	c.blockHashCalls++
+	return "hash", nil
+}
+
 func newMemoryKVDB() *memoryKVDB {
 	return &memoryKVDB{data: make(map[string][]byte)}
 }
@@ -285,6 +302,40 @@ func TestLoadStatusReportsMissingPersistentStatus(t *testing.T) {
 	if status.SyncHeight != -1 || status.SyncHeightL1 != -1 || status.SyncHeightL2 != -1 {
 		t.Fatalf("default status heights not initialized as missing: got sync=%d l1=%d l2=%d",
 			status.SyncHeight, status.SyncHeightL1, status.SyncHeightL2)
+	}
+}
+
+func TestLoadStatusSkipsIndexerTipsInTestingMode(t *testing.T) {
+	oldTesting := ENABLE_TESTING
+	ENABLE_TESTING = true
+	defer func() { ENABLE_TESTING = oldTesting }()
+
+	l1 := &statusTipClient{syncHeight: 200}
+	l2 := &statusTipClient{syncHeight: 100}
+	l1Manager := NewIndexerRPCClientMgr()
+	l1Manager.Set(l1)
+	l2Manager := NewIndexerRPCClientMgr()
+	l2Manager.Set(l2)
+
+	kv := newMemoryKVDB()
+	manager := &Manager{
+		db:              kv,
+		l1IndexerClient: l1Manager,
+		l2IndexerClient: l2Manager,
+	}
+	status := manager.loadStatus()
+
+	if l1.syncCalls != 0 || l1.blockHashCalls != 0 ||
+		l2.syncCalls != 0 || l2.blockHashCalls != 0 {
+		t.Fatalf("testing mode queried indexer tips: l1 sync=%d hash=%d, l2 sync=%d hash=%d",
+			l1.syncCalls, l1.blockHashCalls, l2.syncCalls, l2.blockHashCalls)
+	}
+	if status.SyncHeight != -1 || status.SyncHeightL1 != -1 || status.SyncHeightL2 != -1 {
+		t.Fatalf("testing mode initialized status heights: sync=%d l1=%d l2=%d",
+			status.SyncHeight, status.SyncHeightL1, status.SyncHeightL2)
+	}
+	if _, loaded := loadStatusWithLegacyMigrationResult(kv); !loaded {
+		t.Fatal("testing-mode default status was not persisted")
 	}
 }
 

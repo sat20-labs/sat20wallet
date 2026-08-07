@@ -128,3 +128,55 @@ func TestBuildAccountManagedStateTargetPreservesRemoteAccountDuringLocalRename(t
 		t.Fatalf("remote account was overwritten by local rename: %+v", target)
 	}
 }
+
+func TestCommitAccountManagedStateKeepsStatusPointerStable(t *testing.T) {
+	const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+	walletValue := NewInternalWalletWithMnemonic(mnemonic, "", GetChainParam())
+	if walletValue == nil {
+		t.Fatal("create test wallet")
+	}
+	fingerprint := walletFingerprint(walletValue)
+	walletID := walletValue.GetId()
+	originalStatus := &Status{
+		SoftwareVer: SOFTWARE_VERSION, DBver: DB_VERSION, CurrentChain: "testnet",
+		CurrentWallet: walletID, CurrentAccount: 0,
+		BlockHashMapL1: map[int]string{1: "l1"}, BlockHashMapL2: map[int]string{2: "l2"},
+	}
+	profile := &accountManagementProfile{
+		AccountID: "test-account", RootFingerprint: fingerprint, ManagedDataGeneration: 1,
+	}
+	manager := &Manager{
+		db: newMemoryKVDB(), status: originalStatus, wallet: walletValue,
+		walletInfoMap: map[int64]*WalletInfo{walletID: {
+			WalletInDB: WalletInDB{
+				Id: walletID, Accounts: 1, Type: WALLET_TYPE_MNEMONIC, Name: "Local",
+				AccountNames: map[uint32]string{0: "Account 1"}, AccountDIDs: map[uint32]string{},
+			},
+			Wallet: walletValue,
+		}},
+		accountProfile: profile,
+	}
+	remoteWallet := syncTestWallet(fingerprint, "Remote")
+	snapshot := &accountManagementSyncSnapshot{
+		profile: *profile,
+		wallets: map[string]account.ManagedWallet{fingerprint: syncTestWallet(fingerprint, "Local")},
+	}
+	state := account.ManagedState{
+		Version: account.ManagedStateVersion, RootFingerprint: fingerprint, Revision: 2,
+		Wallets: []account.ManagedWallet{remoteWallet},
+	}
+
+	manager.mutex.Lock()
+	_, _, err := manager.commitAccountManagedStateLocked(state, snapshot, []byte("state"), nil)
+	manager.mutex.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.status != originalStatus {
+		t.Fatal("account-management sync replaced the live status pointer")
+	}
+	if manager.status.TotalWallet != 1 || manager.walletInfoMap[walletID].Name != "Remote" {
+		t.Fatalf("account-management state was not applied: status=%+v wallet=%+v",
+			manager.status, manager.walletInfoMap[walletID])
+	}
+}

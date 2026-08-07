@@ -221,6 +221,24 @@ func (p *Manager) SetIndexerHttpClient_SatsNet(client IndexerRPCClient) {
 	p.utxoLockerL2.rpcClient = client
 }
 
+// SetDKVSHttpClient replaces only the primary SatoshiNet DKVS transport. It is
+// primarily useful for deterministic in-process environments that already
+// inject a fake L2 indexer client before Manager.Start.
+func (p *Manager) SetDKVSHttpClient(http HttpClient) {
+	if p == nil || http == nil || p.cfg == nil || p.cfg.IndexerL2 == nil {
+		return
+	}
+	manager := p.ensureDKVSManager()
+	config := p.cfg.IndexerL2
+	client := NewSatsNetDKVSClient(config.Scheme, config.Host, config.Proxy, http)
+	client.manager = manager
+	client.replicaNamespace = p.dkvsReplicaNamespace()
+
+	manager.mu.Lock()
+	manager.clients[dkvsEndpointKey(config.Scheme, config.Host, config.Proxy)] = client
+	manager.mu.Unlock()
+}
+
 func (p *Manager) SetServerNodeHttpClient(client NodeRPCClient) {
 	p.serverNode.client = client
 }

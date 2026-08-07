@@ -606,8 +606,12 @@ func (p *Manager) persistPreparedAccountRestoreLocked(prepared *preparedAccountR
 		return err
 	}
 	p.walletInfoMap = prepared.wallets
-	p.status = prepared.status
-	p.wallet = prepared.wallets[prepared.status.CurrentWallet].Wallet
+	if p.status == nil {
+		p.status = prepared.status
+	} else {
+		applyStatusSnapshot(p.status, prepared.status)
+	}
+	p.wallet = prepared.wallets[p.status.CurrentWallet].Wallet
 	p.wallet.SetSubAccount(0)
 	p.accountProfile = profile
 	return nil
