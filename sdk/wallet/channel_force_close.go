@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
@@ -59,6 +60,17 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 		Channel: channel,
 	}
 	resv.InitRuntime()
+	logID := p.beginOperationLogBestEffort(OperationLogCreate{
+		Category: "channel",
+		Action:   "force_close_channel",
+		Title:    "Force close channel",
+		Summary:  "Broadcasting the latest commitment transaction",
+		Parameters: map[string]string{
+			"channel_id": channel.ChannelId,
+			"fee_rate":   strconv.FormatInt(feeRate, 10),
+		},
+	})
+	p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_CLOSE, resv.Id)
 
 	PrintJsonTx_SatsNet(resv.DeAnchorTx, "forcely close deAnchorTx")
 	deAnchorTxId, err := p.BroadcastTx_SatsNet(resv.DeAnchorTx)
@@ -77,17 +89,20 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 		for _, preTx := range channel.LocalCommitment.PrevTxs {
 			if err = BroadcastTxByOtherProvider(preTx); err != nil {
 				Log.Errorf("BroadcastTxByOtherProvider %s failed. %v", preTx.TxID(), err)
+				p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 				return "", "", err
 			}
 			Log.Infof("pre Tx broadcasted: %s", preTx.TxID())
 		}
 		if err = BroadcastTxByOtherProvider(commitTx); err != nil {
 			Log.Errorf("BroadCastTx commitTx %s failed. %v", commitTx.TxID(), err)
+			p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 			return "", "", err
 		}
 		for _, nextTx := range channel.LocalCommitment.NextTxs {
 			if err = BroadcastTxByOtherProvider(nextTx); err != nil {
 				Log.Errorf("BroadcastTxByOtherProvider %s failed. %v", nextTx.TxID(), err)
+				p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 				return "", "", err
 			}
 			Log.Infof("pre Tx broadcasted: %s", nextTx.TxID())
@@ -99,15 +114,30 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 		Log.Warnf("force close %s broadcast result is unknown, keep pending for retry", commitTx.TxID())
 	}
 	Log.Infof("commitTx Tx broadcasted or pending: %s", commitTx.TxID())
+	message := "Commitment transaction broadcast; waiting for confirmation"
+	if !broadcasted {
+		message = "Commitment broadcast result is uncertain; monitoring for confirmation"
+	}
+	p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+		Status:  OperationLogRunning,
+		Message: message,
+		TxID:    commitTx.TxID(),
+		Details: map[string]string{
+			"commit_txid":   commitTx.TxID(),
+			"deanchor_txid": deAnchorTxId,
+		},
+	})
 
 	p.AddResv(resv)
 	p.DisableChannel(channel)
 	channel.Status = CS_CLOSE_FORCELY_BROADCASTED
 	channel.ClosingTx = commitTx
 	if err := p.SaveWalletReservation(resv); err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", "", err
 	}
 	if err := p.SaveChannelToDB(channel); err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", "", err
 	}
 
@@ -195,6 +225,15 @@ func (p *Manager) HandleChannelForceCloseConfirmed(resv *ClosingReservation) err
 		return err
 	}
 	resv.CloseHeight = height
+	p.updateOperationLogByReservationBestEffort(RESV_TYPE_CLOSE, resv.Id, OperationLogUpdate{
+		Status:  OperationLogRunning,
+		Message: "Commitment confirmed; waiting for CSV delay before sweep",
+		Details: map[string]string{
+			"commit_txid": resv.Channel.ClosingTx.TxID(),
+			"close_height": strconv.Itoa(height),
+			"csv_delay":    strconv.Itoa(int(resv.Channel.CsvDelay)),
+		},
+	})
 	return p.SaveWalletReservation(resv)
 }
 
@@ -218,6 +257,10 @@ func (p *Manager) HandleChannelForceCloseWaitToSweep(resv *ClosingReservation, h
 	}
 	if sweepTxPackage == nil || sweepTxPackage.SweepTx == nil {
 		Log.Warningf("output too small to sweep")
+		p.updateOperationLogByReservationBestEffort(RESV_TYPE_CLOSE, resv.Id, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "CSV delay passed; no separate sweep transaction is required",
+		})
 		return p.HandleChannelForceCloseSweepConfirmed(resv)
 	}
 
@@ -232,6 +275,12 @@ func (p *Manager) HandleChannelForceCloseWaitToSweep(resv *ClosingReservation, h
 
 	resv.Channel.ClosingTx = sweepTxPackage.SweepTx
 	resv.Channel.Status = CS_CLOSE_FORCELY_SWEEP_BROADCASTED
+	p.updateOperationLogByReservationBestEffort(RESV_TYPE_CLOSE, resv.Id, OperationLogUpdate{
+		Status:  OperationLogRunning,
+		Message: "CSV delay passed; sweep transaction broadcast",
+		TxID:    sweepTxPackage.SweepTx.TxID(),
+		Details: map[string]string{"sweep_txid": sweepTxPackage.SweepTx.TxID()},
+	})
 	return p.SaveChannelToDB(resv.Channel)
 }
 
@@ -249,5 +298,14 @@ func (p *Manager) HandleChannelForceCloseSweepConfirmed(resv *ClosingReservation
 		return err
 	}
 	p.SendMessageToUpper(MSG_CHANNEL_SWEPT, channel.ClosingTx.TxID())
+	p.updateOperationLogByReservationBestEffort(RESV_TYPE_CLOSE, resv.Id, OperationLogUpdate{
+		Status:  OperationLogSucceeded,
+		Message: "Force close completed; funds are spendable",
+		TxID:    channel.ClosingTx.TxID(),
+		Result: map[string]string{
+			"channel_id": channel.ChannelId,
+			"txid":       channel.ClosingTx.TxID(),
+		},
+	})
 	return nil
 }

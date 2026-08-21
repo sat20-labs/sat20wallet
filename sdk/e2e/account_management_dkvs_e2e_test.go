@@ -7,13 +7,11 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
-	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	templateruntime "github.com/sat20-labs/satoshinet/contract/template"
@@ -217,12 +215,6 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	restored, secret, err := account.RecoverAccount(loaded.Envelope, dkvsShare, guardianShare)
 	require.NoError(t, err)
-	rgbReceive, err := walletManager.CreateRGB11Invoice(wallet.RGB11InvoiceRequest{
-		Mode: "witness", AmountRaw: "1", WitnessVout: 1,
-		Expiry: time.Now().Add(time.Hour).Unix(),
-	})
-	require.NoError(t, err)
-	require.NotEmpty(t, rgbReceive.RequestID)
 	require.NoError(t, walletManager.ActivateAccountManagement(
 		secret, "123456", authorization, pkg.Envelope.Locator, "sat20account1:e2e",
 	))
@@ -252,26 +244,14 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	managedHash, err := account.ManagedDataBundleHash(managedBundle)
 	require.NoError(t, err)
 	require.Equal(t, managedState.DataHash, managedHash)
-	require.Len(t, managedBundle.Items, 2)
-	var rgbItem, moduleItem *account.ManagedDataItem
-	for index := range managedBundle.Items {
-		item := &managedBundle.Items[index]
-		switch item.Provider {
-		case "rgb11":
-			rgbItem = item
-		case "e2e.module":
-			moduleItem = item
-		}
-	}
-	require.NotNil(t, rgbItem)
-	require.NotNil(t, moduleItem)
+	// RGB11 receive requests, pending transaction tasks and other engine state
+	// are intentionally wallet-local. This fixture has no durable RGB11
+	// allocation proof, so the built-in RGB11 provider contributes no item.
+	require.Len(t, managedBundle.Items, 1)
+	moduleItem := managedBundle.Items[0]
+	require.Equal(t, "e2e.module", moduleItem.Provider)
 	require.Equal(t, wallet.AccountManagedDataGlobalScope, moduleItem.Scope)
 	require.Equal(t, "e2e-module-required-data|"+accountID, string(moduleItem.Payload))
-	rgbPackage, err := rgb11wallet.DecodeRecoveryPackage(rgbItem.Payload)
-	require.NoError(t, err)
-	require.Equal(t, uint32(0), rgbPackage.AccountIndex)
-	require.Len(t, rgbPackage.EngineRecords, 1)
-	require.Empty(t, rgbPackage.ProjectionRecords)
 	requireDKVSValue(t, fixture.Network.Core, stateKey, stateRecord.Value)
 	requireDKVSValue(t, fixture.Network.Core, managedDataKey, managedDataRecord.Value)
 	for index := range secret {

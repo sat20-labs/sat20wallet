@@ -14,9 +14,9 @@
           <select v-model="transportMode" class="h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm"
             :disabled="loading">
             <option value="rgb-json-rpc">{{ $t('rgb11Invoice.standardTransport') }}</option>
-            <option value="sat20">{{ $t('rgb11Invoice.sat20Transport') }}</option>
+            <option value="out-of-band">{{ $t('rgb11Invoice.outOfBandTransport') }}</option>
           </select>
-          <p class="text-xs text-zinc-500">{{ $t(`rgb11Invoice.${transportMode === 'rgb-json-rpc' ? 'standardTransportHelp' : 'sat20TransportHelp'}`) }}</p>
+          <p class="text-xs text-zinc-500">{{ $t(`rgb11Invoice.${transportMode === 'rgb-json-rpc' ? 'standardTransportHelp' : 'outOfBandTransportHelp'}`) }}</p>
         </div>
 
         <div v-if="transportMode === 'rgb-json-rpc'" class="space-y-2">
@@ -61,26 +61,12 @@
           </Button>
         </div>
 
-        <div v-if="requestId && transportMode === 'sat20'" class="space-y-2 border-t border-zinc-800 pt-3">
+        <div v-if="requestId && transportMode === 'out-of-band'" class="space-y-2 border-t border-zinc-800 pt-3">
           <Label>{{ $t('rgb11Transfer.package') }}</Label>
           <Textarea v-model="transferPackage" spellcheck="false"
             class="min-h-32 bg-zinc-900 font-mono text-xs" />
           <Button variant="outline" class="w-full" :disabled="loading || !transferPackage.trim()" @click="acceptPackage">
             {{ loading ? $t('rgb11Transfer.accepting') : $t('rgb11Transfer.accept') }}
-          </Button>
-          <Button variant="outline" class="w-full border-red-900 text-red-400 hover:bg-red-950"
-            :disabled="loading || !transferPackage.trim()" @click="rejectPackage">
-            {{ loading ? $t('rgb11Transfer.rejecting') : $t('rgb11Transfer.reject') }}
-          </Button>
-        </div>
-
-        <div v-if="ack" class="space-y-2">
-          <Label>{{ $t('rgb11Transfer.ack') }}</Label>
-          <Textarea :model-value="ack" readonly spellcheck="false"
-            class="min-h-28 bg-zinc-900 font-mono text-xs" />
-          <Button variant="outline" class="w-full" @click="copyAck">
-            <Icon icon="lucide:copy" class="mr-2 h-4 w-4" />
-            {{ $t('rgb11Transfer.copyAck') }}
           </Button>
         </div>
       </div>
@@ -128,15 +114,13 @@ const props = defineProps<{ asset: RGB11Asset | null }>()
 const isOpen = defineModel('open', { type: Boolean })
 const amount = ref('')
 const receiveMode = ref<'blind' | 'witness'>('witness')
-const transportMode = ref<'sat20' | 'rgb-json-rpc'>('sat20')
+const transportMode = ref<'out-of-band' | 'rgb-json-rpc'>('out-of-band')
 const proxyEndpoint = ref('')
 const invoice = ref('')
 const requestId = ref('')
 const transferPackage = ref('')
-const ack = ref('')
 const errorMessage = ref('')
 const loading = ref(false)
-const pendingAckValue = ref('')
 const { t } = useI18n()
 const { toast } = useToast()
 const { copy } = useClipboard()
@@ -246,84 +230,18 @@ const acceptPackage = async () => {
 	} catch {
 	  parsed = { transport_mode: 'out-of-band', consignment: input }
 	}
-	if (parsed?.transport_mode === 'out-of-band' || !parsed?.relay_record) {
-	  if (!parsed?.consignment) throw new Error(t('rgb11Transfer.invalidPackage'))
-	  const [err, result] = await walletManager.acceptRGB11Consignment(requestId.value, parsed.consignment)
-	  if (err || !result) throw err || new Error(t('rgb11Transfer.acceptFailed'))
-	  ack.value = JSON.stringify({ accepted: true, transport_mode: 'out-of-band' })
-      await refreshRGB11State()
-	  toast({ title: t('rgb11Transfer.acceptedOutOfBand'), variant: 'success', duration: 2500 })
-	  return
+	if (parsed?.transport_mode !== 'out-of-band' || !parsed?.consignment) {
+	  throw new Error(t('rgb11Transfer.invalidPackage'))
 	}
-    const relayObject = typeof parsed.relay_record === 'string'
-      ? JSON.parse(parsed.relay_record)
-      : parsed.relay_record
-    const relayRecord = JSON.stringify(relayObject)
-    if (!relayObject?.ack_record_key || !parsed.consignment) throw new Error(t('rgb11Transfer.invalidPackage'))
-    if (!pendingAckValue.value) {
-      const [err, result] = await walletManager.acceptRGB11RelayConsignment(
-        requestId.value, relayRecord, parsed.consignment,
-      )
-      if (err || !result?.ack) throw err || new Error(t('rgb11Transfer.acceptFailed'))
-      pendingAckValue.value = JSON.stringify({ ack: JSON.parse(result.ack) })
-    }
-    const ackRecord = JSON.parse(pendingAckValue.value).ack
-    const [publishErr] = await walletManager.publishRGB11AckRecord(
-      relayObject.ack_record_key, JSON.stringify(ackRecord),
-    )
-    ack.value = pendingAckValue.value
-    if (publishErr) throw publishErr
-    pendingAckValue.value = ''
+	const [err, result] = await walletManager.acceptRGB11Consignment(requestId.value, parsed.consignment)
+	if (err || !result) throw err || new Error(t('rgb11Transfer.acceptFailed'))
     await refreshRGB11State()
-    if (ackRecord.accepted === false) {
-      toast({ title: t('rgb11Transfer.rejectedByPolicy'), variant: 'destructive', duration: 3000 })
-    } else {
-      toast({ title: t('rgb11Transfer.accepted'), variant: 'success', duration: 2000 })
-    }
+	toast({ title: t('rgb11Transfer.acceptedOutOfBand'), variant: 'success', duration: 2500 })
   } catch (error: any) {
     errorMessage.value = error?.message || t('rgb11Transfer.acceptFailed')
   } finally {
     loading.value = false
   }
-}
-
-const rejectPackage = async () => {
-  loading.value = true
-  errorMessage.value = ''
-  try {
-    const parsed = JSON.parse(transferPackage.value.trim())
-    if (!parsed?.relay_record || !parsed?.relay_record?.ack_record_key) {
-      throw new Error(t('rgb11Transfer.rejectRelayOnly'))
-    }
-    const relayObject = typeof parsed.relay_record === 'string'
-      ? JSON.parse(parsed.relay_record)
-      : parsed.relay_record
-    const relayRecord = JSON.stringify(relayObject)
-	if (!pendingAckValue.value) {
-	  const [err, result] = await walletManager.rejectRGB11RelayConsignment(requestId.value, relayRecord)
-	  if (err || !result?.ack) throw err || new Error(t('rgb11Transfer.rejectFailed'))
-	  pendingAckValue.value = JSON.stringify({ ack: JSON.parse(result.ack) })
-	}
-	const nack = JSON.parse(pendingAckValue.value).ack
-    const [publishErr] = await walletManager.publishRGB11AckRecord(
-      relayObject.ack_record_key, JSON.stringify(nack),
-    )
-    if (publishErr) throw publishErr
-    ack.value = JSON.stringify({ ack: nack })
-	pendingAckValue.value = ''
-    await refreshRGB11State()
-    toast({ title: t('rgb11Transfer.rejected'), variant: 'success', duration: 2000 })
-  } catch (error: any) {
-    errorMessage.value = error?.message || t('rgb11Transfer.rejectFailed')
-  } finally {
-    loading.value = false
-  }
-}
-
-const copyAck = async () => {
-  if (!ack.value) return
-  await copy(ack.value)
-  toast({ title: t('rgb11Transfer.copied'), variant: 'success', duration: 1500 })
 }
 
 watch(isOpen, (open) => {
@@ -332,14 +250,12 @@ watch(isOpen, (open) => {
   } else {
     amount.value = ''
     receiveMode.value = 'witness'
-    transportMode.value = 'sat20'
+    transportMode.value = 'out-of-band'
     invoice.value = ''
     requestId.value = ''
     transferPackage.value = ''
-    ack.value = ''
     errorMessage.value = ''
     loading.value = false
-    pendingAckValue.value = ''
   }
 })
 </script>

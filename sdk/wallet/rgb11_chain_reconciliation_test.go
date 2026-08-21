@@ -1,14 +1,12 @@
 package wallet
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
@@ -90,7 +88,7 @@ func importRGB11RecoveryForTest(t *testing.T, manager *Manager, encoded []byte) 
 	}
 }
 
-func TestRGB11AccountManagedRecoveryReconcilesBroadcastAfterRestart(t *testing.T) {
+func TestRGB11AccountManagedRecoveryExcludesBroadcastTaskAfterRestart(t *testing.T) {
 	senderWallet := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
 	)
@@ -150,15 +148,7 @@ func TestRGB11AccountManagedRecoveryReconcilesBroadcastAfterRestart(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	witness := wire.NewMsgTx(wire.TxVersion)
-	if err := witness.Deserialize(bytes.NewReader(pending.SignedTx)); err != nil {
-		t.Fatal(err)
-	}
-	txID, err := sender.BroadcastRGB11OutOfBand([]string{prepared.State.TransferID})
+	_, err = sender.BroadcastRGB11OutOfBand([]string{prepared.State.TransferID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,68 +165,8 @@ func TestRGB11AccountManagedRecoveryReconcilesBroadcastAfterRestart(t *testing.T
 	restored.rgbManager.scopeStates.retryDelay = time.Hour
 	restored.rgbManager.scopeStates.mu.Unlock()
 	importRGB11RecoveryForTest(t, restored, broadcastRecovery)
-	restored.rgbManager.scheduleRGB11ChainReconciliation()
-	waitRGB11Reconciliation(t, restored, func(running bool, attempts uint64) bool {
-		return running && attempts >= 1
-	})
-	state, err := restored.GetRGB11State()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if available, pendingAmount := rgb11AssetAmount(state.AvailableAssets, issued.AssetName),
-		rgb11AssetAmount(state.PendingAssets, issued.AssetName); available != 0 || pendingAmount != 10 {
-		t.Fatalf("invisible evidence balance available=%d pending=%d", available, pendingAmount)
-	}
-
-	evidenceBase.mu.Lock()
-	evidenceBase.rawTx[txID] = append([]byte(nil), pending.SignedTx...)
-	for _, outpoint := range pending.State.InputOutPoints {
-		evidenceBase.spendingTx[outpoint] = txID
-	}
-	for _, outpoint := range pending.State.OutputOutPoints {
-		parsed, parseErr := wire.NewOutPointFromString(outpoint)
-		if parseErr != nil {
-			evidenceBase.mu.Unlock()
-			t.Fatal(parseErr)
-		}
-		evidenceBase.utxos[outpoint] = &rgb11wallet.BitcoinUTXO{
-			OutPoint: outpoint, Value: witness.TxOut[parsed.Index].Value,
-			PkScript: append([]byte(nil), witness.TxOut[parsed.Index].PkScript...), Confirmations: 1,
-		}
-	}
-	evidenceBase.mu.Unlock()
-	evidence.setStatus(txID, rgb11wallet.BitcoinTxStatus{TxID: txID, Confirmed: true, Confirmations: 1})
-	restored.rgbManager.scheduleRGB11ChainReconciliation()
-	waitRGB11Reconciliation(t, restored, func(running bool, attempts uint64) bool {
-		return !running && attempts >= 1
-	})
-	state, err = restored.GetRGB11State()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if available, pendingAmount := rgb11AssetAmount(state.AvailableAssets, issued.AssetName),
-		rgb11AssetAmount(state.PendingAssets, issued.AssetName); available != 5 || pendingAmount != 0 {
-		t.Fatalf("confirmed change balance available=%d pending=%d", available, pendingAmount)
-	}
-
-	// Persist the new minimum recovery state and verify another restart restores
-	// the confirmed allocation without carrying the completed transfer cache.
-	confirmedRecovery := exportRGB11RecoveryForTest(t, restored)
-	restartedWallet := NewInternalWalletWithMnemonic(
-		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
-	)
-	restarted := newRGB11FlowManager(t, restartedWallet, rpc, evidence, 341)
-	importRGB11RecoveryForTest(t, restarted, confirmedRecovery)
-	restartedState, err := restarted.GetRGB11State()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if available := rgb11AssetAmount(restartedState.AvailableAssets, issued.AssetName); available != 5 ||
-		restartedState.SyncStatus != "idle" {
-		t.Fatalf("restart state available=%d sync=%s", available, restartedState.SyncStatus)
-	}
-	transfers, err := restarted.rgbManager.projectionStore.ListTransfers()
+	transfers, err := restored.rgbManager.projectionStore.ListTransfers()
 	if err != nil || len(transfers) != 0 {
-		t.Fatalf("completed transfer history leaked into recovery package: transfers=%+v err=%v", transfers, err)
+		t.Fatalf("wallet-local broadcast task leaked into account recovery: transfers=%+v err=%v", transfers, err)
 	}
 }

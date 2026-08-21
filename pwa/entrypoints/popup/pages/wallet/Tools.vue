@@ -969,7 +969,7 @@ import { useQueryClient } from '@tanstack/vue-query'
 
 const SMART_CONTRACT_DOC_URL_ZH = 'https://docs.sat20.org/protocol-xie-yi-yu-bai-pi-shu/smart-contracts'
 const SMART_CONTRACT_DOC_URL_EN = 'https://docs.sat20.org/english/protocols-and-whitepapers/smart-contracts'
-const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qzgjktxnp5jkf35ca3psqlu3hzesqr76khuwgmdq5lthyvx96y4us4q9kwz'
+const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1q7qdraclpv20httfag9hnah9z83sn7h0yf6r26kpf3qpwg2rlnfesp5wj2n'
 const SUPPORTED_CONTRACTS_CACHE_PREFIX = 'tools:supported_contracts'
 
 const { toast } = useToast()
@@ -1533,9 +1533,10 @@ const sendFaucetSats = async () => {
       network: l2NetworkLabel(),
     })
     if (!confirmed) return
-    const [err, txid] = await sat20.sendAssets_SatsNet(faucetAddress.value.trim(), '::', amount, '')
+    const [err, result] = await sat20.sendAssets_SatsNet(faucetAddress.value.trim(), '::', amount, '')
     if (err) throw err
-    faucetResult.value = txid || ''
+    const txid = result?.txId || ''
+    faucetResult.value = txid
     showSuccess(t('tools.messages.sendSuccess'), txid || t('tools.messages.txSubmitted'))
   } catch (error) {
     showError(t('tools.messages.sendFailed'), error)

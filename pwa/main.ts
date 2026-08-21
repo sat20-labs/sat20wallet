@@ -31,6 +31,7 @@ const i18n = createI18n({
 })
 
 import sat20 from './utils/sat20'
+import rgb11Address from './utils/rgb11Address'
 import { walletStorage } from '@/lib/walletStorage'
 
 const clearDevelopmentServiceWorkerCache = async () => {
@@ -123,7 +124,12 @@ const renderStartupError = (error: unknown) => {
   })
 }
 
-clearDevelopmentServiceWorkerCache().then(loadWasm).then(async () => {
+clearDevelopmentServiceWorkerCache().then(() => {
+  // Registration must not wait for wallet or network initialization. This lets
+  // the browser cache the app shell and WASM as early as possible.
+  registerServiceWorker()
+  return loadWasm()
+}).then(async () => {
   // 在应用启动时初始化存储状态
   await walletStorage.initializeState()
 
@@ -150,6 +156,7 @@ clearDevelopmentServiceWorkerCache().then(loadWasm).then(async () => {
       Chain,
       hashPassword,
       Network,
+      rgb11Address,
       sat20,
       useGlobalStore,
       useApproveStore,
@@ -158,8 +165,6 @@ clearDevelopmentServiceWorkerCache().then(loadWasm).then(async () => {
       walletStorage,
     }
   }
-
-  registerServiceWorker()
 }).catch(renderStartupError);
 
 export const setLanguage = (locale: Language) => {

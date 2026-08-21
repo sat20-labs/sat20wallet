@@ -248,11 +248,16 @@ func CreatePunishmentTx(remoteCommit *ChannelCommitment, revocationPrivKey *btce
 		weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
 		prevFetcher.AddPrevOut(*outPoint, plain.TxOut())
 	}
-	weightEstimate.AddP2TROutput()
-	requiredFee1 := weightEstimate.Fee(feeRate)
-	if feeValue >= requiredFee1+330 {
-		out := wire.NewTxOut(feeValue-requiredFee1, recvPkScript)
-		punishTx.AddTxOut(out)
+	if len(punishTx.TxOut) == 0 {
+		withChange := weightEstimate
+		withChange.AddTxOutput(wire.NewTxOut(0, recvPkScript))
+		if feeValue < withChange.Fee(feeRate)+330 {
+			Log.Errorf("%s output too small to punish", oldCommitTx.TxID())
+			return nil, nil, nil
+		}
+	}
+	if _, err := addSweepFeeChange(punishTx, &weightEstimate, feeValue, feeRate, recvPkScript); err != nil {
+		return nil, nil, err
 	}
 
 	if len(punishTx.TxOut) == 0 {
@@ -276,11 +281,45 @@ func CreatePunishmentTx(remoteCommit *ChannelCommitment, revocationPrivKey *btce
 	return punishTx, prevFetcher, nil
 }
 
+func addSweepFeeChange(tx *wire.MsgTx, weightEstimate *utils.TxWeightEstimator,
+	feeValue, feeRate int64, changePkScript []byte) (int64, error) {
+
+	if tx == nil || weightEstimate == nil || feeRate <= 0 || feeValue < 0 || len(changePkScript) == 0 {
+		return 0, fmt.Errorf("invalid sweep fee parameters")
+	}
+	feeNoChange := weightEstimate.Fee(feeRate)
+	if feeValue < feeNoChange {
+		return 0, fmt.Errorf("no enough plain sats for sweep fee: require %d but %d", feeNoChange, feeValue)
+	}
+
+	withChange := *weightEstimate
+	changeOutput := wire.NewTxOut(0, changePkScript)
+	withChange.AddTxOutput(changeOutput)
+	feeWithChange := withChange.Fee(feeRate)
+	change := feeValue - feeWithChange
+	if change >= 330 {
+		changeOutput.Value = change
+		tx.AddTxOut(changeOutput)
+		*weightEstimate = withChange
+		return feeWithChange, nil
+	}
+
+	// Without a non-dust change output, every remaining plain sat is the
+	// transaction fee. This value is the actual input/output delta.
+	return feeValue, nil
+}
+
 func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 	recvPkScript []byte, scriptType int, csvDelay, currHeight uint32,
 	commitmentScript []byte, feeRate int64) (*wire.MsgTx, txscript.PrevOutputFetcher, int64, error) {
 	// 构建清扫交易。sweep 花费的是自己 commitment 的 delayed output，需要满足
 	// CSV，并用当前高度作为 locktime。
+	if commit == nil || commit.CommitTx == nil || len(outputIndex) == 0 || len(recvPkScript) == 0 {
+		return nil, nil, 0, fmt.Errorf("invalid sweep transaction parameters")
+	}
+	if feeRate <= 0 {
+		return nil, nil, 0, fmt.Errorf("invalid sweep fee rate %d", feeRate)
+	}
 	commitTx := commit.CommitTx
 	localBalance := commit.LocalBalance
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
@@ -299,17 +338,22 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 		}
 	}
 
-	sweepTx.LockTime = uint32(currHeight)
-	txId := commitTx.TxID()
+	sweepTx.LockTime = currHeight
+	txID := commitTx.TxID()
 	hash := commitTx.TxHash()
 	var plainSats []*TxOutput
 	for i, index := range outputIndex {
+		if index < 0 || index >= len(commitTx.TxOut) {
+			return nil, nil, 0, fmt.Errorf("invalid sweep output index %d", index)
+		}
 		txOut := commitTx.TxOut[index]
 		outPoint := wire.NewOutPoint(&hash, uint32(index))
 		if i+1 <= brc20OutputCount {
 			// BRC20 的 commitment output 先按白聪保留，真正的资产转移输出来自
 			// 已经预构造的 reveal tx。
-			plainSats = append(plainSats, &indexer.TxOutput{OutPointStr: fmt.Sprintf("%s:%d", txId, index), OutValue: *txOut})
+			plainSats = append(plainSats, &indexer.TxOutput{
+				OutPointStr: fmt.Sprintf("%s:%d", txID, index), OutValue: *txOut,
+			})
 			continue
 		}
 
@@ -321,9 +365,11 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 
 			out := wire.NewTxOut(txOut.Value, recvPkScript)
 			sweepTx.AddTxOut(out)
-			weightEstimate.AddP2TROutput()
+			weightEstimate.AddTxOutput(out)
 		} else {
-			plainSats = append(plainSats, &indexer.TxOutput{OutPointStr: fmt.Sprintf("%s:%d", txId, index), OutValue: *txOut})
+			plainSats = append(plainSats, &indexer.TxOutput{
+				OutPointStr: fmt.Sprintf("%s:%d", txID, index), OutValue: *txOut,
+			})
 		}
 	}
 
@@ -337,6 +383,9 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 			if i%2 == 0 {
 				continue
 			}
+			if tx == nil || len(tx.TxOut) == 0 {
+				return nil, nil, 0, fmt.Errorf("invalid brc20 sweep predecessor")
+			}
 			hash := tx.TxHash()
 			outPoint := wire.NewOutPoint(&hash, 0)
 			txOut := tx.TxOut[0]
@@ -347,7 +396,7 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 
 			out := wire.NewTxOut(txOut.Value, recvPkScript)
 			sweepTx.AddTxOut(out)
-			weightEstimate.AddP2TROutput()
+			weightEstimate.AddTxOutput(out)
 		}
 		if len(plainSats) == 0 {
 			return nil, nil, 0, fmt.Errorf("no enough plain sats to pay network fee")
@@ -356,7 +405,6 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 
 	var feeValue int64
 	for _, plain := range plainSats {
-		// plain sats 负责支付清扫交易网络费，扣除 fee 后的可用余额再返还。
 		feeValue += plain.Value()
 		outPoint := plain.OutPoint()
 		txIn := &wire.TxIn{PreviousOutPoint: *outPoint, Sequence: csvDelay}
@@ -364,44 +412,75 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 		weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
 		prevFetcher.AddPrevOut(*outPoint, plain.TxOut())
 	}
-	weightEstimate.AddP2TROutput()
-	requiredFee1 := weightEstimate.Fee(feeRate)
-	if feeValue >= requiredFee1+330 {
-		out := wire.NewTxOut(feeValue-requiredFee1, recvPkScript)
-		sweepTx.AddTxOut(out)
+
+	// Preserve the historical behavior for a plain-only commitment output:
+	// do not pull in an unrelated wallet UTXO merely to recover an output that
+	// cannot pay for its own transaction and a non-dust change output.
+	if len(sweepTx.TxOut) == 0 {
+		withChange := weightEstimate
+		withChange.AddTxOutput(wire.NewTxOut(0, recvPkScript))
+		if feeValue < withChange.Fee(feeRate)+330 {
+			Log.Warningf("%s output too small to sweep", commitTx.TxID())
+			return nil, nil, 0, nil
+		}
 	}
 
+	feeNoChange := weightEstimate.Fee(feeRate)
+	var selected []*TxOutput
+	if feeValue < feeNoChange {
+		inChannel := scriptType == SCRIPT_TYPE_CHANNEL || scriptType == SCRIPT_TYPE_SWEEP
+		selected, feeValue, err = p.SelectUtxosForFee(
+			recvAddr, nil, feeValue, feeRate, &weightEstimate, false, inChannel,
+		)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		for _, output := range selected {
+			sweepTx.AddTxIn(output.TxIn())
+			prevFetcher.AddPrevOut(*output.OutPoint(), &output.OutValue)
+		}
+	}
+
+	changePkScript := recvPkScript
+	if len(selected) > 0 {
+		changePkScript = selected[0].OutValue.PkScript
+	}
+	actualFee, err := addSweepFeeChange(sweepTx, &weightEstimate, feeValue, feeRate, changePkScript)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	if len(sweepTx.TxOut) == 0 {
 		Log.Warningf("%s output too small to sweep", commitTx.TxID())
 		return nil, nil, 0, nil
 	}
 
-	fee := weightEstimate.Fee(feeRate)
-	if feeValue < fee {
-		// 通常 channel 内 plain sats 应足够支付清扫 fee；不足时允许额外选择
-		// 钱包白聪补 fee，避免有效资产因为手续费不足而无法 sweep。
-		weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
-		inChannel := scriptType == SCRIPT_TYPE_CHANNEL || scriptType == SCRIPT_TYPE_SWEEP
-		selected, feeValue, err := p.SelectUtxosForFee(recvAddr, nil, feeValue, feeRate, &weightEstimate, false, inChannel)
-		if err == nil {
-			for _, output := range selected {
-				sweepTx.AddTxIn(output.TxIn())
-				prevFetcher.AddPrevOut(*output.OutPoint(), &output.OutValue)
-			}
-			fee = weightEstimate.Fee(feeRate)
-			weightEstimate.AddP2TROutput()
-			fee1 := weightEstimate.Fee(feeRate)
-			feeChange := feeValue - fee
-			if feeChange >= 330 {
-				fee = fee1
-				txOut := &wire.TxOut{PkScript: selected[0].OutValue.PkScript, Value: feeChange}
-				sweepTx.AddTxOut(txOut)
-			}
-		}
-	}
-
 	PrintJsonTx(sweepTx, "sweepTx for "+strconv.Itoa(scriptType))
-	return sweepTx, prevFetcher, fee, nil
+	return sweepTx, prevFetcher, actualFee, nil
+}
+
+func calculateSweepActualFee(tx *wire.MsgTx, prevFetcher txscript.PrevOutputFetcher) (int64, error) {
+	if tx == nil || prevFetcher == nil {
+		return 0, fmt.Errorf("invalid sweep fee calculation")
+	}
+	var inputValue int64
+	for _, input := range tx.TxIn {
+		previous := prevFetcher.FetchPrevOutput(input.PreviousOutPoint)
+		if previous == nil {
+			return 0, fmt.Errorf("missing sweep previous output %s", input.PreviousOutPoint.String())
+		}
+		inputValue += previous.Value
+	}
+	var outputValue int64
+	for _, output := range tx.TxOut {
+		if output == nil || output.Value < 0 {
+			return 0, fmt.Errorf("invalid sweep output")
+		}
+		outputValue += output.Value
+	}
+	if inputValue < outputValue {
+		return 0, fmt.Errorf("sweep outputs exceed inputs")
+	}
+	return inputValue - outputValue, nil
 }
 
 func (p *Manager) CreateSweepTxForClient(commit *ChannelCommitment, outputIndex []int,

@@ -6,35 +6,76 @@ const PWA_URL = process.env.SAT20_PWA_URL || 'http://localhost:5173/';
 const API = process.env.SAT20_L1_API || 'https://apiprd.ordx.market';
 const MNEMONIC = process.env.SAT20_TEST_MNEMONIC || 'inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire';
 const PASSWORD = process.env.SAT20_TEST_PASSWORD || '123456';
-const ALLOW_ORDERBOOK_WRITE = process.env.SAT20_ALLOW_ORDERBOOK_WRITE === '1';
-const ALLOW_BUY_BROADCAST = process.env.SAT20_ALLOW_BUY_BROADCAST === '1';
+const HTTP_TIMEOUT_MS = Number(process.env.SAT20_HTTP_TIMEOUT_MS || 30000);
+const WALLET_HELPER_TIMEOUT_MS = Number(process.env.SAT20_WALLET_HELPER_TIMEOUT_MS || 30000);
+const isEnabled = (value) => ['1', 'true', 'yes'].includes(String(value || '').toLowerCase());
+const BROADCAST_DISABLED = isEnabled(process.env.SAT20_DRY_RUN)
+  || isEnabled(process.env.SAT20_DISABLE_BROADCAST)
+  || process.env.SAT20_ALLOW_ORDERBOOK_WRITE === '0'
+  || process.env.SAT20_ALLOW_BUY_BROADCAST === '0';
+// Real testnet verification broadcasts by default. Set SAT20_DRY_RUN=1 to use the
+// old no-write path; the ALLOW_* variables remain accepted for compatibility.
+const ALLOW_ORDERBOOK_WRITE = !BROADCAST_DISABLED;
+const ALLOW_BUY_BROADCAST = !BROADCAST_DISABLED;
 const EXISTING_DUMMY_TXID = process.env.SAT20_EXISTING_DUMMY_TXID || '';
 const EXISTING_DUMMY_CHANGE = Number(process.env.SAT20_EXISTING_DUMMY_CHANGE || 0);
 
-const SELLER_INDEX = 0;
-const BUYER_INDEX = 1;
+function integerEnv(name, fallback, minimum) {
+  const raw = process.env[name];
+  const value = raw === undefined || raw === '' ? fallback : Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`${name} must be a safe integer >= ${minimum}, got ${raw}`);
+  }
+  return value;
+}
+
+const SELLER_INDEX = integerEnv('SAT20_L1_SELLER_ACCOUNT_INDEX', 0, 0);
+const BUYER_INDEX = integerEnv('SAT20_L1_BUYER_ACCOUNT_INDEX', 1, 0);
 const ASSET_NAME = 'dogcoin';
 const ORDER_ASSET_TYPE = 'ticker';
 const ORDER_ASSET_NAME = 'dogcoin';
-const SELL_AMOUNT = 1000;
+const SELL_AMOUNT = integerEnv('SAT20_L1_SELL_AMOUNT', 1000, 1);
 const UNIT_PRICE = 1;
 const SERVICE_FEE = 10;
 const NETWORK_FEE = 10;
 const DUMMY_UTXO_VALUE = 600;
+const DUMMY_COUNT = 2;
 const DUMMY_SPLIT_FEE = 500;
 const BUY_TX_FEE = 1000;
+const ORDER_PRICE = SELL_AMOUNT * UNIT_PRICE;
+// The final buy consumes the dummy change to fund the seller output, a second
+// set of dummy outputs, and the buy fee. The split source must additionally
+// fund the first set of dummy outputs and the split fee.
+const MIN_DUMMY_CHANGE = ORDER_PRICE + DUMMY_UTXO_VALUE * DUMMY_COUNT + BUY_TX_FEE;
+const MIN_BUYER_SOURCE_UTXO = DUMMY_UTXO_VALUE * DUMMY_COUNT + DUMMY_SPLIT_FEE + MIN_DUMMY_CHANGE;
 const SELL_UTXO_OVERRIDE = process.env.SAT20_L1_SELL_UTXO || '';
+if (EXISTING_DUMMY_TXID && (!Number.isSafeInteger(EXISTING_DUMMY_CHANGE) || EXISTING_DUMMY_CHANGE < MIN_DUMMY_CHANGE)) {
+  throw new Error(`Buyer account ${BUYER_INDEX} requires SAT20_EXISTING_DUMMY_CHANGE >= ${MIN_DUMMY_CHANGE} sats when SAT20_EXISTING_DUMMY_TXID is set, got ${EXISTING_DUMMY_CHANGE}`);
+}
 const SIGHASH_SINGLE_ANYONECANPAY = bitcoin.Transaction.SIGHASH_SINGLE | bitcoin.Transaction.SIGHASH_ANYONECANPAY;
 bitcoin.initEccLib(ecc);
 
 async function api(path, options = {}) {
-  const res = await fetch(API + path, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(API + path, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`HTTP timeout after ${HTTP_TIMEOUT_MS}ms: ${API + path}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
   const text = await res.text();
   let data;
   try {
@@ -50,7 +91,7 @@ async function api(path, options = {}) {
 
 async function signedWalletHeaders(client, accountIndex) {
   const signed = await walletCall(client, `
-    await wallet.switchToAccount(${accountIndex});
+    await withTimeout(wallet.switchToAccount(${accountIndex}), 'switchToAccount(${accountIndex})');
     const [err, res] = await sat20.signMessage('ordx-marketplace');
     if (err) throw err;
     return JSON.stringify({ publicKey: wallet.publicKey, signature: res?.signature || res });
@@ -164,13 +205,11 @@ async function waitForWasm(client) {
 
 async function walletCall(client, body) {
   const raw = await evaluate(client, `(async () => {
-    const walletMod = await import('/store/wallet.ts');
-    const typeMod = await import('/types/index.ts');
-    const sat20Mod = await import('/utils/sat20.ts');
-    const cryptoMod = await import('/utils/crypto.ts');
-    const wallet = walletMod.useWalletStore();
-    const { Chain, Network } = typeMod;
-    const hashed = await cryptoMod.hashPassword(${q(PASSWORD)});
+    const verify = window.__SAT20_PWA_VERIFY__;
+    if (!verify) throw new Error('SAT20 PWA verify helpers are not available');
+    const { Chain, Network, hashPassword, sat20, useWalletStore } = verify;
+    const wallet = useWalletStore();
+    const hashed = await hashPassword(${q(PASSWORD)});
     if (!wallet.hasWallet) {
       const [importErr] = await wallet.importWallet(${q(MNEMONIC)}, hashed);
       if (importErr) throw importErr;
@@ -179,12 +218,22 @@ async function walletCall(client, body) {
       if (unlockErr) throw unlockErr;
     }
     await wallet.setPassword(hashed);
-    await wallet.setNetwork(Network.TESTNET);
+    if (wallet.network !== Network.TESTNET) await wallet.setNetwork(Network.TESTNET);
     await wallet.setChain(Chain.BTC);
-    const sat20 = sat20Mod.default;
     const unwrap = (tuple) => {
       if (tuple?.[0]) throw tuple[0];
       return tuple?.[1];
+    };
+    const withTimeout = (promise, label, ms = ${WALLET_HELPER_TIMEOUT_MS}) => Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(label + ' timed out after ' + ms + 'ms')), ms)),
+    ]);
+    const safe = async (fn) => {
+      try {
+        return await withTimeout(fn(), 'wallet helper call');
+      } catch (error) {
+        return { error: error?.message || String(error) };
+      }
     };
     ${body}
   })()`);
@@ -371,48 +420,59 @@ async function findSubmittedOrder(sellerAddress, sellUtxo) {
 }
 
 async function main() {
+  console.log('[l1-orderbook] locating PWA page');
   const page = await getPage();
   if (!page?.webSocketDebuggerUrl) throw new Error('No debuggable PWA page');
   const client = await connect(page.webSocketDebuggerUrl);
   await client.send('Runtime.enable');
+  console.log('[l1-orderbook] preparing PWA');
   await preparePwa(client, page);
 
-  const accounts = await walletCall(client, `
-    const rows = [];
-    for (const accountIndex of [0, 1]) {
-      await wallet.switchToAccount(accountIndex);
-      rows.push({
-        index: accountIndex,
+  console.log('[l1-orderbook] checking seller and buyer balances');
+  const accounts = [];
+  for (const accountIndex of new Set([SELLER_INDEX, BUYER_INDEX])) {
+    console.log(`[l1-orderbook] account ${accountIndex} balance helper`);
+    accounts.push(await walletCall(client, `
+      await withTimeout(wallet.switchToAccount(${accountIndex}), 'switchToAccount(${accountIndex})');
+      return JSON.stringify({
+        index: ${accountIndex},
         address: wallet.address,
         pubKey: wallet.publicKey,
-        dog: unwrap(await sat20.getAssetAmount(wallet.address, 'ordx:f:dogcoin')),
-        btc: unwrap(await sat20.getAssetAmount(wallet.address, '::')),
+        dog: await safe(async () => unwrap(await sat20.getAssetAmount(wallet.address, 'ordx:f:dogcoin'))),
+        btc: await safe(async () => unwrap(await sat20.getAssetAmount(wallet.address, '::'))),
       });
-    }
-    return JSON.stringify(rows);
-  `);
+    `));
+  }
 
   const seller = accounts.find((account) => account.index === SELLER_INDEX);
   const buyer = accounts.find((account) => account.index === BUYER_INDEX);
-  const totalPay = SELL_AMOUNT * UNIT_PRICE + SERVICE_FEE + NETWORK_FEE;
-  const dummyCount = 2;
+  const totalPay = ORDER_PRICE + SERVICE_FEE + NETWORK_FEE;
+  const dummyCount = DUMMY_COUNT;
 
-  if (!seller || !buyer) throw new Error('Expected seller and buyer accounts');
-  if (Number(seller.dog?.availableAmt || 0) < SELL_AMOUNT) {
-    throw new Error(`Seller has insufficient ${ASSET_NAME}`);
+  if (!seller || !buyer) {
+    throw new Error(`Expected seller account ${SELLER_INDEX} and buyer account ${BUYER_INDEX}`);
   }
-  if (Number(buyer.btc?.availableAmt || 0) < totalPay) {
-    throw new Error(`Buyer has insufficient BTC: need ${totalPay}`);
+  const sellerAvailable = Number(seller.dog?.availableAmt || 0);
+  if (sellerAvailable < SELL_AMOUNT) {
+    throw new Error(`Seller account ${SELLER_INDEX} has insufficient ${ASSET_NAME}: need available >= ${SELL_AMOUNT}, got ${sellerAvailable}`);
+  }
+  const buyerAvailable = Number(buyer.btc?.availableAmt || 0);
+  if (!EXISTING_DUMMY_TXID && buyerAvailable < MIN_BUYER_SOURCE_UTXO) {
+    throw new Error(`Buyer account ${BUYER_INDEX} has insufficient BTC for dummy split and buy: need available >= ${MIN_BUYER_SOURCE_UTXO} sats and one plain UTXO of at least that value, got available ${buyerAvailable}`);
   }
 
   const sellerDogUtxos = await walletCall(client, `
-    await wallet.switchToAccount(${SELLER_INDEX});
-    const selected = unwrap(await sat20.getUtxosWithAsset(wallet.address, ${q(String(SELL_AMOUNT))}, 'ordx:f:dogcoin'));
+    await withTimeout(wallet.switchToAccount(${SELLER_INDEX}), 'switchToAccount(${SELLER_INDEX})');
+    const selected = await safe(async () => unwrap(await sat20.getUtxosWithAsset(wallet.address, ${q(String(SELL_AMOUNT))}, 'ordx:f:dogcoin')));
     return JSON.stringify(selected);
   `);
+  if (sellerDogUtxos?.error) {
+    throw new Error(`Seller asset UTXO helper failed: ${sellerDogUtxos.error}`);
+  }
+  console.log('[l1-orderbook] selecting seller UTXO and signing order');
   const sellUtxo = SELL_UTXO_OVERRIDE || sellerDogUtxos?.utxos?.[0];
   if (!sellUtxo) {
-    throw new Error(`No seller ${ASSET_NAME} UTXO available for amount ${SELL_AMOUNT}: ${JSON.stringify(sellerDogUtxos)}`);
+    throw new Error(`Seller account ${SELLER_INDEX} has no ${ASSET_NAME} UTXO available for required amount ${SELL_AMOUNT}: ${JSON.stringify(sellerDogUtxos)}`);
   }
 
   const sellInfoRes = await api('/btc/testnet/v3/utxo/info/' + sellUtxo);
@@ -421,7 +481,7 @@ async function main() {
   const sellPsbt = buildL1SellOrderPsbt(sellInfo, seller);
 
   const signedOrders = await walletCall(client, `
-    await wallet.switchToAccount(${SELLER_INDEX});
+    await withTimeout(wallet.switchToAccount(${SELLER_INDEX}), 'switchToAccount(${SELLER_INDEX})');
     const signed = unwrap(await sat20.signPsbt(${q(sellPsbt)}, false));
     const signedPsbt = signed?.psbt || signed;
     return JSON.stringify([signedPsbt]);
@@ -440,7 +500,7 @@ async function main() {
     console.log(JSON.stringify({
       ...summary,
       dryRun: true,
-      next: 'Set SAT20_ALLOW_ORDERBOOK_WRITE=1 to submit this order and continue to buy/broadcast.',
+      next: 'Unset SAT20_DRY_RUN/SAT20_DISABLE_BROADCAST (and legacy ALLOW_* = 0) to use the default broadcast path.',
     }, null, 2));
     client.ws.close();
     return;
@@ -457,6 +517,7 @@ async function main() {
       })),
     }),
   });
+  console.log('[l1-orderbook] order submitted; waiting for visibility');
 
   if (submitRes.code !== 200) {
     throw new Error(`SubmitBatchOrders failed: ${JSON.stringify(submitRes)}`);
@@ -482,6 +543,7 @@ async function main() {
     method: 'POST',
     body: JSON.stringify({ address: buyer.address, order_id: [orderId] }),
   });
+  console.log('[l1-orderbook] order locked; entering default broadcast buy path');
   if (lockRes.code !== 200) throw new Error(`LockBulkOrder failed: ${JSON.stringify(lockRes)}`);
   const raw = lockRes?.data?.[0]?.raw || lockRes?.data?.raw || lockRes?.raw;
   if (!raw) throw new Error(`LockBulkOrder did not return raw: ${JSON.stringify(lockRes)}`);
@@ -497,7 +559,7 @@ async function main() {
       unlockRes,
       cancelRes,
       dryRunBuy: true,
-      next: 'Set SAT20_ALLOW_BUY_BROADCAST=1 to sign and broadcast the L1 buy transaction.',
+      next: 'Unset SAT20_DRY_RUN/SAT20_DISABLE_BROADCAST (and legacy ALLOW_* = 0) to sign and broadcast the L1 buy transaction.',
     }, null, 2));
     client.ws.close();
     return;
@@ -514,14 +576,14 @@ async function main() {
 
     if (!dummyTxid) {
       const plainUtxos = await api(`/btc/testnet/utxo/address/${buyer.address}/0`);
-      const sourceUtxo = plainUtxos?.data?.find((utxo) => Number(utxo.value) > DUMMY_UTXO_VALUE * dummyCount + DUMMY_SPLIT_FEE + BUY_TX_FEE);
+      const sourceUtxo = plainUtxos?.data?.find((utxo) => Number(utxo.value) >= MIN_BUYER_SOURCE_UTXO);
       if (!sourceUtxo) {
-        throw new Error(`No buyer BTC UTXO available for dummy split: ${JSON.stringify(plainUtxos)}`);
+        throw new Error(`Buyer account ${BUYER_INDEX} has no plain BTC UTXO >= ${MIN_BUYER_SOURCE_UTXO} sats required for sell amount ${SELL_AMOUNT}: ${JSON.stringify(plainUtxos)}`);
       }
 
       const dummySplit = buildDummySplitPsbt(sourceUtxo, buyer, dummyCount);
       const dummyTx = await walletCall(client, `
-        await wallet.switchToAccount(${BUYER_INDEX});
+        await withTimeout(wallet.switchToAccount(${BUYER_INDEX}), 'switchToAccount(${BUYER_INDEX})');
         const signed = unwrap(await sat20.signPsbt(${q(dummySplit.psbtHex)}, false));
         const signedPsbt = signed?.psbt || signed;
         const extracted = unwrap(await sat20.extractTxFromPsbt(signedPsbt));
@@ -534,8 +596,6 @@ async function main() {
       if (dummyPushRes?.code !== 0) {
         throw new Error(`dummy split broadcast failed: ${JSON.stringify(dummyPushRes)}`);
       }
-    } else if (!dummyChange || dummyChange <= DUMMY_UTXO_VALUE) {
-      throw new Error('SAT20_EXISTING_DUMMY_CHANGE is required when SAT20_EXISTING_DUMMY_TXID is set');
     }
 
     const buyPsbt = buildL1BuyPsbt({
@@ -547,7 +607,7 @@ async function main() {
     });
 
     const buyTx = await walletCall(client, `
-      await wallet.switchToAccount(${BUYER_INDEX});
+      await withTimeout(wallet.switchToAccount(${BUYER_INDEX}), 'switchToAccount(${BUYER_INDEX})');
       const signed = unwrap(await sat20.signPsbt(${q(buyPsbt.psbtHex)}, false));
       const signedPsbt = signed?.psbt || signed;
       const extracted = unwrap(await sat20.extractTxFromPsbt(signedPsbt));
@@ -599,6 +659,7 @@ async function main() {
   }
 
   console.log(JSON.stringify({
+    broadcastMode: BROADCAST_DISABLED ? 'disabled' : 'default-broadcast',
     ...summary,
     orderId,
     lockRawLength: raw.length,

@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,6 +18,11 @@ import (
 
 const accountManagedStatePath = "account/state"
 
+var (
+	ErrAccountManagementSecretConflict    = errors.New("account management secret conflicts with the active profile")
+	ErrAccountManagementWalletUnavailable = errors.New("account management wallet is unavailable")
+)
+
 const (
 	accountMutationAddWallet     = "add-wallet"
 	accountMutationDeleteWallet  = "delete-wallet"
@@ -26,20 +32,23 @@ const (
 )
 
 type AccountManagementStatus struct {
-	Active              bool   `json:"active"`
-	RecoveryConfigured  bool   `json:"recovery_configured"`
-	ManagedDataRevision uint64 `json:"managed_data_revision,omitempty"`
-	ManagedDataDirty    bool   `json:"managed_data_dirty,omitempty"`
-	AccountID           string `json:"account_id,omitempty"`
-	PackageID           string `json:"package_id,omitempty"`
-	RecoveryMode        string `json:"recovery_mode,omitempty"`
-	StorageMode         string `json:"storage_mode,omitempty"`
-	PublicLocator       string `json:"public_locator,omitempty"`
-	RootFingerprint     string `json:"root_fingerprint,omitempty"`
-	RootWalletID        int64  `json:"root_wallet_id,omitempty"`
-	StateSeq            uint64 `json:"state_seq,omitempty"`
-	PendingChanges      int    `json:"pending_changes,omitempty"`
-	LastRehearsalAt     int64  `json:"last_rehearsal_at,omitempty"`
+	Active                bool   `json:"active"`
+	RecoveryConfigured    bool   `json:"recovery_configured"`
+	ManagedDataRevision   uint64 `json:"managed_data_revision,omitempty"`
+	ManagedDataDirty      bool   `json:"managed_data_dirty,omitempty"`
+	AccountID             string `json:"account_id,omitempty"`
+	PackageID             string `json:"package_id,omitempty"`
+	RecoveryMode          string `json:"recovery_mode,omitempty"`
+	StorageMode           string `json:"storage_mode,omitempty"`
+	PublicLocator         string `json:"public_locator,omitempty"`
+	RootFingerprint       string `json:"root_fingerprint,omitempty"`
+	RootWalletID          int64  `json:"root_wallet_id,omitempty"`
+	StateSeq              uint64 `json:"state_seq,omitempty"`
+	PendingChanges        int    `json:"pending_changes,omitempty"`
+	LastRehearsalAt       int64  `json:"last_rehearsal_at,omitempty"`
+	LastDKVSSyncErrorCode string `json:"last_dkvs_sync_error_code,omitempty"`
+	LastDKVSSyncError     string `json:"last_dkvs_sync_error,omitempty"`
+	LastDKVSSyncErrorAt   int64  `json:"last_dkvs_sync_error_at,omitempty"`
 }
 
 type AccountManagementRestoreOptions struct {
@@ -79,6 +88,9 @@ func (p *Manager) GetAccountManagementStatus() AccountManagementStatus {
 	if root, err := p.accountManagementRootWalletLocked(); err == nil {
 		result.RootWalletID = root.Id
 	}
+	if p.dkvs != nil {
+		result.LastDKVSSyncErrorCode, result.LastDKVSSyncError, result.LastDKVSSyncErrorAt = p.dkvs.lastSyncErrorStatus()
+	}
 	return result
 }
 
@@ -89,7 +101,7 @@ func (p *Manager) accountManagementCandidateRootLocked() (*WalletInfo, error) {
 	}
 	clone := root.Wallet.Clone()
 	if clone == nil {
-		return nil, fmt.Errorf("account management wallet is unavailable")
+		return nil, ErrAccountManagementWalletUnavailable
 	}
 	clone.SetSubAccount(0)
 	return root, nil
@@ -121,14 +133,14 @@ func (p *Manager) accountManagementRootWallet() (common.Wallet, error) {
 	}
 	root := cloneWalletAtAccountZero(info.Wallet)
 	if root == nil {
-		return nil, fmt.Errorf("account management wallet is unavailable")
+		return nil, ErrAccountManagementWalletUnavailable
 	}
 	return root, nil
 }
 
 func (p *Manager) accountManagedStateKey(root common.Wallet) (string, error) {
 	if root == nil || root.GetPubKey() == nil {
-		return "", fmt.Errorf("account management wallet is unavailable")
+		return "", ErrAccountManagementWalletUnavailable
 	}
 	return dkvsindexer.PersonalKey(root.GetPubKey().SerializeCompressed(), accountManagedStatePath)
 }
@@ -269,6 +281,26 @@ func (p *Manager) initializeAccountManagementLocked(password string) error {
 	return nil
 }
 
+// InitializeAccountManagement explicitly creates a new managed account around
+// the first unlocked mnemonic wallet. Import intentionally does not call this
+// method: importing a wallet must never mint a second account secret while the
+// caller is trying to discover an existing managed account.
+func (p *Manager) InitializeAccountManagement(password string) error {
+	if p == nil {
+		return fmt.Errorf("wallet manager is unavailable")
+	}
+	p.mutex.Lock()
+	err := p.initializeAccountManagementLocked(password)
+	p.mutex.Unlock()
+	if err != nil {
+		return err
+	}
+	if err := p.refreshDKVSRegistrations(); err != nil {
+		Log.Warningf("refresh DKVS registrations after account initialization failed: %v", err)
+	}
+	return nil
+}
+
 func (p *Manager) ActivateAccountManagement(secret []byte, password string,
 	authorization AccountStorageAuthorization, locator account.Locator, publicLocator string) error {
 
@@ -287,6 +319,10 @@ func (p *Manager) ActivateAccountManagement(secret []byte, password string,
 	defer releaseRGB11Scope()
 
 	p.mutex.Lock()
+	if err := p.validateAccountActivationSecretLocked(secret); err != nil {
+		p.mutex.Unlock()
+		return err
+	}
 	rootInfo, err := p.accountManagementCandidateRootLocked()
 	if err != nil {
 		p.mutex.Unlock()
@@ -411,6 +447,23 @@ func (p *Manager) ActivateAccountManagement(secret []byte, password string,
 	return nil
 }
 
+// validateAccountActivationSecretLocked prevents a recovery-package session
+// from silently replacing the random AccountSecret of an already active local
+// profile. An empty profile is the explicit recovery/bootstrap case and may be
+// activated with the recovered secret.
+func (p *Manager) validateAccountActivationSecretLocked(secret []byte) error {
+	if len(secret) != 32 {
+		return fmt.Errorf("invalid account management secret")
+	}
+	if p.accountProfile == nil {
+		return nil
+	}
+	if len(p.accountSecret) != 32 || !bytes.Equal(p.accountSecret, secret) {
+		return ErrAccountManagementSecretConflict
+	}
+	return nil
+}
+
 func (p *Manager) LoadAccountManagementStateForRecovery(location AccountIndexerLocation, locator account.Locator,
 	secret []byte, rootMnemonic string) (*RecoveredAccountManagementState, error) {
 
@@ -471,6 +524,13 @@ func (p *Manager) LoadAccountManagementStateForRecovery(location AccountIndexerL
 func (p *Manager) RestoreAccountManagementState(value RecoveredAccountManagementState,
 	secret []byte, password string, locator account.Locator,
 	options AccountManagementRestoreOptions) ([]RestoredWalletResult, error) {
+	return p.restoreAccountManagementState(value, secret, password, locator, options, "")
+}
+
+func (p *Manager) restoreAccountManagementState(value RecoveredAccountManagementState,
+	secret []byte, password string, locator account.Locator,
+	options AccountManagementRestoreOptions,
+	allowedImportedRoot string) ([]RestoredWalletResult, error) {
 
 	if len(secret) != 32 || value.State.RootFingerprint == "" || value.Seq == 0 || len(value.Envelope) == 0 {
 		return nil, fmt.Errorf("invalid managed account recovery state")
@@ -489,10 +549,12 @@ func (p *Manager) RestoreAccountManagementState(value RecoveredAccountManagement
 		return nil, err
 	}
 
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
-	prepared, err := p.prepareAccountRestoreLocked(backup, password)
+	prepared, err := p.prepareAccountRestoreWithRootLocked(backup, password, allowedImportedRoot)
 	if err != nil {
 		p.mutex.Unlock()
 		return nil, err
@@ -522,6 +584,7 @@ func (p *Manager) RestoreAccountManagementState(value RecoveredAccountManagement
 	p.accountSecret = append([]byte(nil), secret...)
 	p.accountPassword = password
 	results := append([]RestoredWalletResult(nil), prepared.results...)
+	p.channelIdentityGeneration++
 	p.mutex.Unlock()
 	if err := p.importAccountManagedDataSnapshot(&accountManagedDataSnapshot{
 		Bundle: value.ManagedData, Hash: value.ManagedDataHash,
@@ -532,6 +595,7 @@ func (p *Manager) RestoreAccountManagementState(value RecoveredAccountManagement
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after managed account restore failed: %v", err)
 	}
+	p.wakeChannelHeartbeat()
 	return results, nil
 }
 
@@ -707,6 +771,7 @@ func (p *Manager) walletInfoByFingerprintLocked(fingerprint string) *WalletInfo 
 	return nil
 }
 
+// applyRemoteManagedStateLocked requires channelIdentityMu and mutex to be held.
 func (p *Manager) applyRemoteManagedStateLocked(state account.ManagedState,
 	pending map[string]struct{}) error {
 
@@ -733,6 +798,7 @@ func (p *Manager) applyRemoteManagedStateLocked(state account.ManagedState,
 				p.wallet.SetSubAccount(0)
 				p.status.CurrentWallet = root.Id
 				p.status.CurrentAccount = 0
+				p.channelIdentityGeneration++
 				if err := p.saveStatus(); err != nil {
 					return err
 				}
@@ -1258,12 +1324,47 @@ func (p *Manager) commitAccountManagedStateLocked(state account.ManagedState,
 	return len(remaining) != 0, sameManagedGeneration, nil
 }
 
+func (p *Manager) commitAccountManagedStateForSync(state account.ManagedState,
+	snapshot *accountManagementSyncSnapshot, envelope []byte,
+	managedData *accountManagedDataSnapshot) (bool, bool, error) {
+	p.channelIdentityMu.Lock()
+	releaseRGB11Scope := p.beginRGB11ScopeChange()
+	p.mutex.Lock()
+	previousWalletID := p.status.CurrentWallet
+	previousAccount := p.status.CurrentAccount
+	pendingRemains, importManagedData, err := p.commitAccountManagedStateLocked(
+		state, snapshot, envelope, managedData)
+	identityChanged := err == nil && (p.status.CurrentWallet != previousWalletID ||
+		p.status.CurrentAccount != previousAccount)
+	if identityChanged {
+		p.channelIdentityGeneration++
+	}
+	p.mutex.Unlock()
+	releaseRGB11Scope()
+	p.channelIdentityMu.Unlock()
+	if identityChanged {
+		p.wakeChannelHeartbeat()
+	}
+	return pendingRemains, importManagedData, err
+}
+
 func (p *Manager) SyncAccountManagementState(ctx context.Context) error {
+	if p == nil {
+		return ErrDKVSPathNotSynced
+	}
+	p.accountSyncMu.Lock()
+	defer p.accountSyncMu.Unlock()
 	return p.syncAccountManagementState(ctx, 0)
 }
 
 func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int) error {
-	_ = ctx
+	if ctx != nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+	}
 	p.mutex.Lock()
 	snapshot, err := p.captureAccountManagementSyncSnapshotLocked()
 	p.mutex.Unlock()
@@ -1293,6 +1394,14 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int) e
 	}
 	if err := store.Refresh(stateKey, dataKey); err != nil {
 		return err
+	}
+	outboxPlan, err := p.accountManagedOutboxPlanFor(store, snapshot.profile, stateKey, dataKey)
+	if err != nil {
+		return err
+	}
+	if outboxPlan.Pending {
+		p.markDKVSStateDirty()
+		return ErrDKVSPathNotSynced
 	}
 
 	stateValue, stateErr := store.Get(stateKey)
@@ -1447,7 +1556,7 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int) e
 		capturedDataHash = dataValue.Hash
 	}
 	if needsPublish {
-		_, err = store.Update([]string{stateKey, dataKey}, func(current map[string]*dkvsValue,
+		_, err = store.updateWithOutboxOrigin([]string{stateKey, dataKey}, func(current map[string]*dkvsValue,
 			_ map[string]uint64) ([]dkvsValueMutation, error) {
 			currentStateHash, currentDataHash := "", ""
 			if current[stateKey] != nil {
@@ -1459,9 +1568,14 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int) e
 			if currentStateHash != capturedStateHash || currentDataHash != capturedDataHash {
 				return nil, dkvsindexer.ErrWriteConflict
 			}
-			return accountManagementMutations(&snapshot.profile, root, stateKey,
+			mutations, mutationErr := accountManagementMutations(&snapshot.profile, root, stateKey,
 				finalStateEnvelope, dataKey, finalManaged.Envelope, writeData)
-		})
+			if mutationErr != nil {
+				return nil, mutationErr
+			}
+			return applyAccountManagedOutboxPlan(mutations,
+				snapshot.profile.StorageMode, outboxPlan), nil
+		}, outboxPlan.origin(stateKey, snapshot.profile.ManagedDataGeneration))
 		if err != nil {
 			if attempt < 2 && (errors.Is(err, dkvsindexer.ErrWriteConflict) ||
 				errors.Is(err, dkvsindexer.ErrStaleGeneration) ||
@@ -1469,16 +1583,21 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int) e
 				errors.Is(err, dkvsindexer.ErrInvalidSequence)) {
 				return p.syncAccountManagementState(ctx, attempt+1)
 			}
+			postPlan, terminalErr := p.accountManagedOutboxPlanFor(store,
+				snapshot.profile, stateKey, dataKey)
+			if terminalErr != nil {
+				return terminalErr
+			}
+			if postPlan.Pending {
+				p.markDKVSStateDirty()
+				return ErrDKVSPathNotSynced
+			}
 			return err
 		}
 	}
 
-	releaseRGB11Scope := p.beginRGB11ScopeChange()
-	p.mutex.Lock()
-	pendingRemains, importManagedData, commitErr := p.commitAccountManagedStateLocked(
+	pendingRemains, importManagedData, commitErr := p.commitAccountManagedStateForSync(
 		target, snapshot, finalStateEnvelope, finalManaged)
-	p.mutex.Unlock()
-	releaseRGB11Scope()
 	if commitErr != nil {
 		return commitErr
 	}
@@ -1493,5 +1612,6 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int) e
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after account state sync failed: %v", err)
 	}
+	p.scheduleAccountRootWrapperSync()
 	return nil
 }

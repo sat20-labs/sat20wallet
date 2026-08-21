@@ -74,6 +74,86 @@ func (p *Manager) SelectWalletFundingOutpoints(feeRate, amt int64, feeCfg *Chann
 	return utxos, nil
 }
 
+// PreviewOpenChannel calculates the amount that will be committed to the
+// channel and the L1 input required for it.  It only reads the service
+// configuration and local UTXO/indexer state; it does not reserve, sign, or
+// broadcast anything.
+func (p *Manager) PreviewOpenChannel(feeRate, amt int64) (*wwire.ChannelOpenFeeInfo, error) {
+	if p.wallet == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	if feeRate < 0 {
+		return nil, fmt.Errorf("invalid fee rate %d", feeRate)
+	}
+	if feeRate == 0 {
+		feeRate = p.GetFeeRate()
+	}
+	if amt <= 0 {
+		return nil, fmt.Errorf("invalid channel amount %d", amt)
+	}
+
+	serverInfo, err := p.GetChannelOpenFeeInServer()
+	if err != nil {
+		return nil, err
+	}
+	if serverInfo == nil || serverInfo.OpenFee == nil {
+		return nil, fmt.Errorf("server returned empty channel fee config")
+	}
+	info := *serverInfo
+	info.OpenFee = serverInfo.OpenFee
+	info.Amount = amt
+	info.ChannelCapacity = amt - serverInfo.FeeToDAO
+	info.Valid = false
+
+	if amt < serverInfo.MinCapacity {
+		info.ValidationError = fmt.Sprintf("channel capacity must be at least %d sats", serverInfo.MinCapacity)
+		return &info, nil
+	}
+
+	feeCfg := NewFromOpenChannelFee(serverInfo.OpenFee)
+	outpoints, err := p.SelectWalletFundingOutpoints(feeRate, amt, feeCfg)
+	if err != nil {
+		info.ValidationError = err.Error()
+		return &info, nil
+	}
+
+	var inputValue int64
+	var weightEstimate utils.TxWeightEstimator
+	weightEstimate.AddP2WSHOutput()
+	if feeCfg.FeeToDAO() > 0 {
+		weightEstimate.AddP2WSHOutput()
+	}
+	for _, outpoint := range outpoints {
+		output, err := p.getL1TxOutput(outpoint)
+		if err != nil {
+			return nil, err
+		}
+		if output == nil {
+			return nil, fmt.Errorf("empty funding output %s", outpoint)
+		}
+		inputValue += output.Value()
+		weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+	}
+
+	baseFee := weightEstimate.Fee(feeRate)
+	weightWithChange := weightEstimate
+	weightWithChange.AddP2TROutput()
+	changeFee := weightWithChange.Fee(feeRate)
+	info.EstimatedNetworkFee = baseFee
+	info.RequiredInputSats = amt + baseFee
+	if inputValue >= amt+changeFee && inputValue-(amt+changeFee) >= 330 {
+		info.EstimatedNetworkFee = changeFee
+		info.RequiredInputSats = amt + changeFee
+		info.ChangeSats = inputValue - info.RequiredInputSats
+	}
+	info.SelectedInputSats = inputValue
+	info.Valid = inputValue >= info.RequiredInputSats
+	if !info.Valid {
+		info.ValidationError = fmt.Sprintf("no enough plain sats to pay fee, required %d but only %d", info.RequiredInputSats, inputValue)
+	}
+	return &info, nil
+}
+
 func (p *Manager) InitInitiatorFundingReservation(opts FundingInitOptions) (*FundingReservation, error) {
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")

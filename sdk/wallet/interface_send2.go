@@ -441,7 +441,6 @@ func (p *Manager) generateSignData(localWallet common.Wallet, inscribes []*Inscr
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		txs = append(txs, insc.RevealTx)
 	}
 	return signData, txsSignInfo, txs, nil
 }

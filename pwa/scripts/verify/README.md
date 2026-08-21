@@ -31,6 +31,22 @@ The L1 script uses the built-in test mnemonic and password by default. Override 
 - `SAT20_TEST_PASSWORD`
 - `SAT20_CDP_URL`
 
+The seller, buyer, and order size can be selected without editing the script:
+
+```bash
+SAT20_L1_SELLER_ACCOUNT_INDEX=1 \
+SAT20_L1_BUYER_ACCOUNT_INDEX=0 \
+SAT20_L1_SELL_AMOUNT=1000 \
+npm run verify:l1-orderbook
+```
+
+Defaults remain seller account `0`, buyer account `1`, and `1000` DOGCOIN.
+The seller needs the requested DOGCOIN amount in a spendable asset UTXO. With
+the default sell amount, the buyer needs one plain BTC UTXO of at least `4900`
+sats. In general the minimum source value is `3900 + sell amount` sats because
+the fixed unit price is one sat per DOGCOIN. The script broadcasts on the real
+testnet by default; set `SAT20_DRY_RUN=1` only for a no-broadcast preflight.
+
 ## Wallet Basics
 
 The wallet basics script is a no-broadcast verification path. It imports/unlocks the built-in test wallet, sets production environment plus testnet network, reloads the PWA, checks account/subaccount reads, queries L1/L2 assets and UTXOs through wallet helpers and indexer APIs, signs/extracts a local L1 PSBT without broadcasting it, and validates DApp bridge success/error envelopes.
@@ -47,39 +63,86 @@ Covered bridge cases:
 - request-origin mismatch rejection
 - user rejection propagation for an approval action
 
-Dry run, no orderbook write:
+## Generic L1/L2 Send
+
+The generic send script uses account 0 as the source and account 1 as the
+destination. Real testnet broadcast is the default: it sends 1 sat on
+SatoshiNet and 600 sats on Bitcoin testnet4, then verifies both raw
+transactions.
 
 ```bash
-npm run verify:l1-orderbook
+npm run verify:generic-send
 ```
 
-Allow writing a test order, lock it, then unlock and cancel it without broadcasting a buy transaction:
+Use `SAT20_BATCH_SEND=1` to create two outputs on each chain. Use
+`SAT20_DRY_RUN=1` for a no-broadcast preflight. Already-broadcast transactions
+can be rechecked without spending again:
+
+```bash
+SAT20_EXISTING_L1_TXID=<txid> \
+SAT20_EXISTING_L2_TXID=<txid> \
+npm run verify:generic-send
+```
+
+Use the read-only network round trip and optional endpoint timing trace when
+diagnosing network-switch latency:
+
+```bash
+SAT20_NETWORK_SWITCH_ONLY=1 \
+SAT20_TRACE_NETWORK_SWITCH=1 \
+npm run verify:generic-send
+```
+
+## Prediction Deploy
+
+The prediction deploy script uses the current unified agent request format.
+Dry-run estimate does not broadcast:
+
+```bash
+SAT20_DRY_RUN=1 node scripts/verify/prediction-deploy-flow.mjs
+```
+
+Every run prints and includes a fixed deploy nonce in the request and result.
+Set `SAT20_DEPLOY_NONCE` and `SAT20_PREDICTION_NOW` to reuse a known positive
+JavaScript-safe nonce and identical prediction content for deterministic
+contract-address lookup after an uncertain submission.
+
+The real testnet path is the default: it submits the order, locks it, builds and broadcasts the low-value L1 buy, then verifies the result. Use an explicit dry-run switch when a no-write check is required:
+
+```bash
+SAT20_DRY_RUN=1 npm run verify:l1-orderbook
+```
+
+The legacy write flags are still accepted for compatibility, but are no longer required:
 
 ```bash
 SAT20_ALLOW_ORDERBOOK_WRITE=1 npm run verify:l1-orderbook
 ```
 
-Allow the full write path, including signing and broadcasting the L1 buy transaction:
+To explicitly disable all broadcasts:
 
 ```bash
-SAT20_ALLOW_ORDERBOOK_WRITE=1 SAT20_ALLOW_BUY_BROADCAST=1 npm run verify:l1-orderbook
+SAT20_DISABLE_BROADCAST=1 npm run verify:l1-orderbook
 ```
 
 To avoid spending another buyer UTXO on a dummy split, reuse an already broadcast dummy split:
 
 ```bash
-SAT20_ALLOW_ORDERBOOK_WRITE=1 \
-SAT20_ALLOW_BUY_BROADCAST=1 \
 SAT20_EXISTING_DUMMY_TXID=<txid> \
 SAT20_EXISTING_DUMMY_CHANGE=<change_sats> \
 npm run verify:l1-orderbook
 ```
 
+The existing dummy transaction must belong to the selected buyer account. Its
+change must be at least `2200 + sell amount` sats (`3200` for the default order)
+so the final buy can fund the seller output, replacement dummy outputs, and buy
+fee.
+
 Current known L1 result on `2026-05-25`:
 
 - Standard L1 order PSBT build and PWA signing succeed.
 - `SubmitBatchOrders`, `LockBulkOrder`, `UnlockBulkOrder`, and signed `CancelOrder` succeed.
-- Without `SAT20_ALLOW_BUY_BROADCAST=1`, the script cleans up the test order automatically after lock/raw verification.
+- With `SAT20_DRY_RUN=1` (or `SAT20_DISABLE_BROADCAST=1`), the script does not submit or broadcast and reports the skipped write path.
 - Full L1 buy broadcast succeeds through the standard `BulkBuyOrder` path.
 - Successful test txs:
   - dummy split: `ddff5cb1069adba95fcd51819e99335f4a34a9d2d020b4579ef6cdd90fe6a05d`
@@ -93,16 +156,16 @@ Root cause of the earlier `BulkBuyingThirdOrder` mismatch: that endpoint only ro
 
 The L2 script verifies SatoshiNet contract read paths and wallet-side contract helpers against the production environment plus testnet network.
 
-Read-only run:
+The real testnet path, including a low-value contract invoke, is the default:
 
 ```bash
 npm run verify:l2-contract
 ```
 
-Allow a real low-value contract invoke:
+Explicit read-only/dry-run mode:
 
 ```bash
-SAT20_ALLOW_L2_INVOKE=1 npm run verify:l2-contract
+SAT20_DRY_RUN=1 npm run verify:l2-contract
 ```
 
 Run against a selected contract kind:
@@ -110,13 +173,11 @@ Run against a selected contract kind:
 ```bash
 SAT20_L2_INVOKE_KIND=amm-swap \
 SAT20_L2_CONTRACT_URL=<amm-contract-url> \
-SAT20_ALLOW_L2_INVOKE=1 \
 npm run verify:l2-contract
 
 SAT20_L2_INVOKE_KIND=launchpool-mint \
 SAT20_L2_CONTRACT_URL=<launchpool-contract-url> \
 SAT20_L2_INVOKE_AMOUNT=1 \
-SAT20_ALLOW_L2_INVOKE=1 \
 npm run verify:l2-contract
 ```
 

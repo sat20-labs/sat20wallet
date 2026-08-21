@@ -1,9 +1,13 @@
 package wallet
 
 import (
+	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
 func NewLocalActionPerformData(id int64, action string, actionParam any,
@@ -76,29 +80,51 @@ func (p *Manager) PerformLocalAction(action string, actionParam any,
 		feeRate = p.GetFeeRate()
 	}
 
+	logID := p.beginOperationLogBestEffort(localActionOperationLogCreate(action, actionParam, feeRate))
 	resv, err := NewLocalActionPerformData(p.GenerateNewResvId(), action, actionParam,
 		feeRate, p.wallet.GetPaymentPubKey().SerializeCompressed())
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()},
+		})
 		return "", -1, err
 	}
 	resv.localWallet = p.wallet.Clone()
 	resv.WalletId = p.wallet.GetWalletId()
+	p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_LOCALACTION, resv.Id)
 
 	if action == LOCAL_ACTION_UNSTAKE_MINER {
 		if err := p.localActionUnstakeMinerStart(resv); err != nil {
+			p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+				Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()},
+			})
 			return "", -1, err
 		}
 	} else if action == LOCAL_ACTION_LOCK_WITH_EXPAND {
 		if err := p.localActionLockWithExpandStart(resv); err != nil {
+			p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+				Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()},
+			})
 			return "", -1, err
 		}
 	}
 
 	p.addResv(resv)
 	if err := p.SaveWalletReservation(resv); err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()},
+		})
 		return "", -1, err
 	}
 
+	if resv.TxId != "" && action != LOCAL_ACTION_LOCK_WITH_EXPAND {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Transaction submitted; waiting for confirmation",
+			TxID:    resv.TxId,
+			Details: map[string]string{"txid": resv.TxId},
+		})
+	}
 	return resv.TxId, resv.Id, nil
 }
 
@@ -112,7 +138,55 @@ func (p *Manager) GetLocalAction(id int64) *LocalActionPerformData {
 	return resv
 }
 
+// ResumeLockWithExpandFromL1Tx moves an interrupted lock-with-expand action
+// from its contract-withdraw stage to the existing L1 carrier.  It does not
+// broadcast or create a new withdrawal; the normal monitor will verify the L1
+// confirmation and run ExpandChannel on its next tick.
+func (p *Manager) ResumeLockWithExpandFromL1Tx(id int64, l1TxId string) error {
+	if p.wallet == nil {
+		return fmt.Errorf("wallet is not created/unlocked")
+	}
+	if raw, err := hex.DecodeString(l1TxId); err != nil || len(raw) != 32 {
+		return fmt.Errorf("invalid L1 transaction id %s", l1TxId)
+	}
+
+	resv := p.GetLocalAction(id)
+	if resv == nil {
+		return fmt.Errorf("local action %d not found", id)
+	}
+	resv.Lock()
+	defer resv.Unlock()
+
+	if resv.Action != LOCAL_ACTION_LOCK_WITH_EXPAND {
+		return fmt.Errorf("local action %d is not lock-with-expand", id)
+	}
+	if !p.localActionBelongsToCurrentWallet(resv) {
+		return fmt.Errorf("local action %d belongs to another wallet account", id)
+	}
+	if len(resv.ActionResvs) == 0 || resv.ActionResvs[len(resv.ActionResvs)-1].ActionType != "withdraw" {
+		return fmt.Errorf("local action %d is not waiting for a withdraw carrier", id)
+	}
+
+	resv.TxId = l1TxId
+	resv.IsL1Tx = true
+	resv.Status = RS_PERFORM_ACTION_TX_BROADCASTED
+	p.updateOperationLogByReservationBestEffort(RESV_TYPE_LOCALACTION, resv.Id, OperationLogUpdate{
+		Status:  OperationLogRunning,
+		Message: "Bitcoin carrier transaction attached; waiting for confirmation",
+		TxID:    l1TxId,
+		Details: map[string]string{"txid": l1TxId},
+	})
+	return p.SaveWalletReservation(resv)
+}
+
 func (p *Manager) HandleLocalActionStatus(sendTxInL1 bool) ([]*LocalActionPerformData, []*LocalActionPerformData) {
+	// Local actions can be restored from disk before the wallet is unlocked.
+	// They must remain pending until the runtime wallet and channel identity
+	// are available; otherwise a monitor tick can terminate the WASM process.
+	if p.wallet == nil {
+		return nil, nil
+	}
+
 	p.mutex.RLock()
 	localActionMap := make(map[int64]*LocalActionPerformData, len(p.localActionPerformMap))
 	for id, resv := range p.localActionPerformMap {
@@ -127,6 +201,9 @@ func (p *Manager) HandleLocalActionStatus(sendTxInL1 bool) ([]*LocalActionPerfor
 	failed := make([]*LocalActionPerformData, 0)
 	for _, resv := range localActionMap {
 		if resv == nil || resv.Status <= RS_CLOSED {
+			continue
+		}
+		if !p.localActionBelongsToCurrentWallet(resv) {
 			continue
 		}
 		if err := p.handleLocalActionStatus(resv, sendTxInL1); err != nil {
@@ -160,7 +237,9 @@ func (p *Manager) HandleLocalActionStatus(sendTxInL1 bool) ([]*LocalActionPerfor
 				Log.Errorf("SaveWalletReservation %d failed. %v", resv.Id, err)
 			}
 			p.DelResvWithId(resv.Id)
-		} else if resv.Status < RS_CLOSED {
+		} else if resv.Status < RS_CLOSED &&
+			resv.Status != RS_PERFORM_ACTION_TX_CONFIRMED &&
+			resv.Status != RS_PERFORM_ACTION_RUN_STARTED {
 			failed = append(failed, resv)
 			p.notifyActionStatus(&ActionStatusEvent{
 				Event:      ACTION_STATUS_EVENT_FAILED,
@@ -174,6 +253,23 @@ func (p *Manager) HandleLocalActionStatus(sendTxInL1 bool) ([]*LocalActionPerfor
 	}
 
 	return completed, failed
+}
+
+func (p *Manager) localActionBelongsToCurrentWallet(resv *LocalActionPerformData) bool {
+	if resv == nil || p.wallet == nil {
+		return false
+	}
+	paymentPubKey := p.wallet.GetPaymentPubKey()
+	if len(resv.ReqPubKey) != 0 {
+		// Wallet IDs are local database identities and change when the same
+		// mnemonic is deleted and imported again.  The payment key is the
+		// stable owner identity for a local action and also distinguishes
+		// subaccounts, so prefer it whenever it was persisted.
+		return paymentPubKey != nil && bytes.Equal(paymentPubKey.SerializeCompressed(), resv.ReqPubKey)
+	}
+
+	current := p.wallet.GetWalletId()
+	return resv.WalletId == (common.WalletId{}) || resv.WalletId == current
 }
 
 func (p *Manager) handleLocalActionStatus(resv *LocalActionPerformData, sendTxInL1 bool) error {
@@ -214,6 +310,12 @@ func (p *Manager) HandleLocalActionTxConfirmed(id int64) error {
 	defer resv.Unlock()
 
 	resv.Status = RS_PERFORM_ACTION_TX_CONFIRMED
+	p.updateOperationLogByReservationBestEffort(RESV_TYPE_LOCALACTION, resv.Id, OperationLogUpdate{
+		Status:  OperationLogRunning,
+		Message: "Transaction confirmed; continuing wallet action",
+		TxID:    resv.TxId,
+		Details: map[string]string{"txid": resv.TxId},
+	})
 	switch resv.Action {
 	case LOCAL_ACTION_CONFIRM_TX, LOCAL_ACTION_CONFIRM_TX_L2:
 		status, err := CompleteLocalActionAfterTxConfirmed(resv.Action)
@@ -272,6 +374,34 @@ func (p *Manager) localActionLockWithExpandStart(resv *LocalActionPerformData) e
 			param.AssetName.String(), param.ContractURL, amtToExpand, total.String())
 	}
 
+	// When the peer has no balance for this asset there is nothing to lock
+	// locally.  Start with the contract withdrawal and let the existing
+	// withdraw -> expand state machine continue from there.  Calling
+	// LockToChannel with a zero amount makes AllowLock reject the operation
+	// before the paid expansion can begin.
+	if amtToLock.Sign() == 0 {
+		txId, err := p.withdrawWithContract(channel.ChannelId,
+			param.AssetName.String(), amtToExpand.String(), resv.FeeRate, param.ContractURL)
+		if err != nil {
+			return err
+		}
+		resv.ActionResvs = append(resv.ActionResvs, &SubActionInfo{
+			ActionType: "withdraw",
+			TxId:       txId,
+			MoreData:   amtToExpand,
+		})
+		resv.TxId = txId
+		resv.IsL1Tx = false
+		resv.Status = RS_PERFORM_ACTION_TX_BROADCASTED
+		p.updateOperationLogByReservationBestEffort(RESV_TYPE_LOCALACTION, resv.Id, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Contract withdrawal submitted; waiting for SatoshiNet confirmation",
+			TxID:    txId,
+			Details: map[string]string{"txid": txId, "stage": "withdraw"},
+		})
+		return nil
+	}
+
 	txId, resvId, err := p.LockToChannel(channel.ChannelId,
 		param.AssetName.String(), amtToLock.String(),
 		nil, nil, []byte(LOCAL_ACTION_LOCK_WITH_EXPAND))
@@ -287,6 +417,12 @@ func (p *Manager) localActionLockWithExpandStart(resv *LocalActionPerformData) e
 	resv.TxId = txId
 	resv.IsL1Tx = false
 	resv.Status = RS_PERFORM_ACTION_TX_BROADCASTED
+	p.updateOperationLogByReservationBestEffort(RESV_TYPE_LOCALACTION, resv.Id, OperationLogUpdate{
+		Status:  OperationLogRunning,
+		Message: "Initial channel lock submitted; waiting for SatoshiNet confirmation",
+		TxID:    txId,
+		Details: map[string]string{"txid": txId, "stage": "lock"},
+	})
 	return nil
 }
 
@@ -310,20 +446,62 @@ func (p *Manager) localActionInnerStatusLockWithExpand(resv *LocalActionPerformD
 	if !ok {
 		return fmt.Errorf("invalid parameter LocalActionParam_Expand")
 	}
+
+	currResv := resv.ActionResvs[len(resv.ActionResvs)-1]
+	// A confirmed L2 withdrawal may still be waiting for the contract to
+	// create its L1 output.  This stage does not need a channel runtime yet;
+	// keep polling the item instead of trying to load a locked/stale channel.
+	if currResv.ActionType == "withdraw" && !resv.IsL1Tx {
+		url := param.ContractURL
+		if url == "" {
+			var err error
+			url, err = p.GetTranscendContractWithAssetNameInServer(param.AssetName.String())
+			if err != nil {
+				return err
+			}
+			param.ContractURL = url
+		}
+
+		itemStr, err := p.GetInvokeItemByInUtxoInContract(url, resv.TxId+":0")
+		if err != nil {
+			return err
+		}
+		var item InvokeItem
+		if err := json.Unmarshal([]byte(itemStr), &item); err != nil {
+			return err
+		}
+		if item.OutTxId == "" {
+			return nil
+		}
+
+		resv.TxId = item.OutTxId
+		resv.IsL1Tx = true
+		resv.Status = RS_PERFORM_ACTION_TX_BROADCASTED
+		p.updateOperationLogByReservationBestEffort(RESV_TYPE_LOCALACTION, resv.Id, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Contract withdrawal produced Bitcoin carrier; waiting for confirmation",
+			TxID:    item.OutTxId,
+			Details: map[string]string{"txid": item.OutTxId, "stage": "bitcoin_carrier"},
+		})
+		return nil
+	}
+
 	channel := p.FindChannel(param.ChannelId)
 	if channel == nil {
 		return fmt.Errorf("can't find channel %s", param.ChannelId)
 	}
+	if p.GetChannel(channel.ChannelId) == nil {
+		p.EnableChannel(channel)
+	}
 
-	currResv := resv.ActionResvs[len(resv.ActionResvs)-1]
 	switch currResv.ActionType {
 	case "lock":
 		amtToExpand, err := localActionExpandAmount(currResv.MoreData)
 		if err != nil {
 			return err
 		}
-		txId, err := p.WithdrawWithContract(channel.ChannelId,
-			param.AssetName.String(), amtToExpand.String(), resv.FeeRate)
+		txId, err := p.withdrawWithContract(channel.ChannelId,
+			param.AssetName.String(), amtToExpand.String(), resv.FeeRate, param.ContractURL)
 		if err != nil {
 			return err
 		}
@@ -336,38 +514,15 @@ func (p *Manager) localActionInnerStatusLockWithExpand(resv *LocalActionPerformD
 		resv.TxId = txId
 		resv.IsL1Tx = false
 		resv.Status = RS_PERFORM_ACTION_TX_BROADCASTED
+		p.updateOperationLogByReservationBestEffort(RESV_TYPE_LOCALACTION, resv.Id, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Channel lock confirmed; contract withdrawal submitted",
+			TxID:    txId,
+			Details: map[string]string{"txid": txId, "stage": "withdraw"},
+		})
 		return nil
 
 	case "withdraw":
-		if !resv.IsL1Tx {
-			url := param.ContractURL
-			if url == "" {
-				var err error
-				url, err = p.GetTranscendContractWithAssetNameInServer(param.AssetName.String())
-				if err != nil {
-					return err
-				}
-				param.ContractURL = url
-			}
-
-			itemStr, err := p.GetInvokeItemByInUtxoInContract(url, resv.TxId+":0")
-			if err != nil {
-				return err
-			}
-			var item InvokeItem
-			if err := json.Unmarshal([]byte(itemStr), &item); err != nil {
-				return err
-			}
-			if item.OutTxId == "" {
-				return fmt.Errorf("withdraw invoke is not finished, %s", resv.TxId+":0")
-			}
-
-			resv.TxId = item.OutTxId
-			resv.IsL1Tx = true
-			resv.Status = RS_PERFORM_ACTION_TX_BROADCASTED
-			return nil
-		}
-
 		utxo, err := p.GetUtxoWithAddressFromTx(resv.TxId, channel.Address)
 		if err != nil {
 			return err
@@ -385,6 +540,12 @@ func (p *Manager) localActionInnerStatusLockWithExpand(resv *LocalActionPerformD
 		resv.TxId = txId
 		resv.IsL1Tx = false
 		resv.Status = RS_PERFORM_ACTION_TX_BROADCASTED
+		p.updateOperationLogByReservationBestEffort(RESV_TYPE_LOCALACTION, resv.Id, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Bitcoin carrier confirmed; channel expansion submitted",
+			TxID:    txId,
+			Details: map[string]string{"txid": txId, "stage": "expand"},
+		})
 		return nil
 
 	case "expand":

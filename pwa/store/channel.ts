@@ -97,39 +97,78 @@ export const useChannelStore = defineStore('channel', () => {
   const allAssetList = ref<any[]>([])
   const plainBalance = ref(0)
   const totalSats = ref(0)
-  let getAllChannelsPromise: Promise<void> | null = null
+  let channelRequestGeneration = 0
+  let getCurrentChannelPromise: {
+    generation: number
+    promise: Promise<void>
+  } | null = null
 
-  const getAllChannels = async () => {
-    if (getAllChannelsPromise) return getAllChannelsPromise
+  const clearChannelState = () => {
+    channel.value = null
+    totalSats.value = 0
+    plainBalance.value = 0
+    allAssetList.value = []
+  }
 
-    getAllChannelsPromise = (async () => {
-      await satsnetStp.getAllChannels()
-      const [, currentChannel] = await satsnetStp.getCurrentChannel()
+  const invalidateCurrentChannel = () => {
+    channelRequestGeneration += 1
+    clearChannelState()
+  }
+
+  const isMissingCurrentChannelError = (error: Error) => {
+    const message = error.message.toLowerCase()
+    return message.includes('channel is nil') || message.includes('channel not found')
+  }
+
+  const getCurrentChannel = async () => {
+    const generation = channelRequestGeneration
+    if (getCurrentChannelPromise?.generation === generation) {
+      return getCurrentChannelPromise.promise
+    }
+
+    const promise = (async () => {
+      const [currentError, currentChannel] = await satsnetStp.getCurrentChannel()
       console.log('currentChannel', currentChannel)
+
+      if (currentError) {
+        if (isMissingCurrentChannelError(currentError)) {
+          if (generation === channelRequestGeneration) {
+            clearChannelState()
+          }
+          return
+        }
+        throw currentError
+      }
+
+      if (generation !== channelRequestGeneration) {
+        return
+      }
 
       if (currentChannel?.json) {
         try {
           const c = JSON.parse(currentChannel.json)
+          if (generation !== channelRequestGeneration) {
+            return
+          }
           if (c.localbalanceL1) {
             channel.value = c
           } else {
-            console.log('数据不完整，localbalanceL1 不存在:', c)
-            channel.value = null
+            console.warn('当前通道数据不完整，保留现有通道状态:', c)
           }
         } catch (error) {
-          console.log('解析 JSON 出错:', error)
+          console.warn('解析当前通道 JSON 出错，保留现有通道状态:', error)
         }
       } else {
-        channel.value = null
-        totalSats.value = 0
-        plainBalance.value = 0
-        allAssetList.value = []
+        clearChannelState()
       }
     })().finally(() => {
-      getAllChannelsPromise = null
+      if (getCurrentChannelPromise?.generation === generation) {
+        getCurrentChannelPromise = null
+      }
     })
+    getCurrentChannelPromise = { generation, promise }
 
-    return getAllChannelsPromise
+    return promise
   }
 
   const parseChannel = async () => {
@@ -281,6 +320,7 @@ export const useChannelStore = defineStore('channel', () => {
     plainBalance,
     channel,
     totalSats,
-    getAllChannels,
+    invalidateCurrentChannel,
+    getCurrentChannel,
   }
 })

@@ -1,9 +1,8 @@
 package wallet
 
 import (
-	"crypto/sha256"
+	"bytes"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 
 const (
 	dkvsReplicaStateVersion = uint32(1)
-	dkvsOutboxBatchVersion  = uint32(1)
 )
 
 const (
@@ -29,49 +27,73 @@ const (
 	dkvsSessionConfirmed = "confirmed"
 	dkvsSessionConflict  = "conflict"
 	dkvsSessionError     = "error"
+	dkvsSessionTerminal  = "terminal"
 )
 
 var (
-	dkvsPathStatePrefix   = []byte("dkvs-path-state-v1:")
-	dkvsBatchOutboxPrefix = []byte("dkvs-batch-outbox-v1:")
+	dkvsPathStatePrefix       = []byte("dkvs-path-state:")
+	dkvsLegacyPathStatePrefix = []byte("dkvs-path-state-v1:")
+	dkvsBatchOutboxPrefix     = []byte("dkvs-batch-outbox:")
 )
 
 type dkvsPathReplicaState struct {
-	Version       uint32                `json:"version"`
-	Path          string                `json:"path"`
-	PathMeta      *dkvsindexer.PathMeta `json:"pathmeta,omitempty"`
-	ServerTimeMS  uint64                `json:"server_time_ms"`
-	EndpointID    string                `json:"endpoint_id,omitempty"`
-	HasLocalOnly  bool                  `json:"has_local_only,omitempty"`
-	SessionState  string                `json:"session_state"`
-	LastErrorCode string                `json:"last_error_code,omitempty"`
-	UpdatedAtMS   uint64                `json:"updated_at_ms"`
+	Version      uint32                    `json:"version"`
+	Path         string                    `json:"path"`
+	PathMeta     *dkvsindexer.PathMeta     `json:"pathmeta,omitempty"`
+	DeleteFloors []dkvsindexer.DeleteFloor `json:"delete_floors,omitempty"`
+	// LocalDeleteFloors are endpoint-local tombstone sequence floors. They are
+	// intentionally kept separate from DeleteFloors because FREE_LOCAL state is
+	// excluded from the network path root and must not invalidate it.
+	LocalDeleteFloors []dkvsindexer.DeleteFloor `json:"local_delete_floors,omitempty"`
+	ServerTimeMS      uint64                    `json:"server_time_ms"`
+	EndpointID        string                    `json:"endpoint_id,omitempty"`
+	HasLocalOnly      bool                      `json:"has_local_only,omitempty"`
+	SessionState      string                    `json:"session_state"`
+	LastErrorCode     string                    `json:"last_error_code,omitempty"`
+	UpdatedAtMS       uint64                    `json:"updated_at_ms"`
+}
+
+func cloneDKVSDeleteFloors(floors []dkvsindexer.DeleteFloor) []dkvsindexer.DeleteFloor {
+	cloned := make([]dkvsindexer.DeleteFloor, len(floors))
+	for index := range floors {
+		cloned[index] = floors[index]
+		cloned[index].PubKey = append([]byte(nil), floors[index].PubKey...)
+	}
+	return cloned
 }
 
 type dkvsPersistedMutation struct {
-	Record       []byte `json:"record"`
-	ExpectedHash string `json:"expected_hash,omitempty"`
-	ExpectAbsent bool   `json:"expect_absent,omitempty"`
+	Record       []byte
+	ExpectedHash []byte
+	ExpectAbsent bool
 }
 
 type dkvsPersistedPathPrecondition struct {
-	Path               string `json:"path"`
-	ExpectedRoot       string `json:"expected_root"`
-	ExpectedGeneration uint64 `json:"expected_generation"`
+	Path               string
+	ExpectedRoot       []byte
+	ExpectedGeneration uint64
 }
 
 type dkvsBatchOutboxEntry struct {
-	Version           uint32                          `json:"version"`
-	ID                string                          `json:"id"`
-	Namespace         string                          `json:"namespace"`
-	Mutations         []dkvsPersistedMutation         `json:"mutations"`
-	PathPreconditions []dkvsPersistedPathPrecondition `json:"path_preconditions,omitempty"`
-	EndpointID        string                          `json:"endpoint_id,omitempty"`
-	State             string                          `json:"state"`
-	Attempts          uint32                          `json:"attempts"`
-	LastErrorCode     string                          `json:"last_error_code,omitempty"`
-	CreatedAtMS       uint64                          `json:"created_at_ms"`
-	UpdatedAtMS       uint64                          `json:"updated_at_ms"`
+	Key               string
+	Namespace         string
+	Mutations         []dkvsPersistedMutation
+	PathPreconditions []dkvsPersistedPathPrecondition
+	EndpointID        string
+	State             string
+	Attempts          uint32
+	LastErrorCode     string
+	LastError         string
+	CreatedAtMS       uint64
+	UpdatedAtMS       uint64
+	OriginDomain      string
+	OriginGeneration  uint64
+}
+
+type dkvsOutboxOrigin struct {
+	Key        string
+	Domain     string
+	Generation uint64
 }
 
 type dkvsBatchWriter interface {
@@ -109,22 +131,23 @@ func dkvsPathStateKey(scope string) []byte {
 	return append(key, scope...)
 }
 
-func dkvsOutboxNamespaceScope(namespace string) string {
-	hash := sha256.Sum256([]byte(strings.TrimSpace(namespace)))
-	return hex.EncodeToString(hash[:])
+func dkvsLegacyPathStateKey(scope string) []byte {
+	key := make([]byte, 0, len(dkvsLegacyPathStatePrefix)+len(scope))
+	key = append(key, dkvsLegacyPathStatePrefix...)
+	return append(key, scope...)
 }
 
 func dkvsBatchOutboxNamespacePrefix(namespace string) []byte {
-	scope := dkvsOutboxNamespaceScope(namespace)
-	key := make([]byte, 0, len(dkvsBatchOutboxPrefix)+len(scope)+1)
+	namespace = strings.TrimSpace(namespace)
+	key := make([]byte, 0, len(dkvsBatchOutboxPrefix)+len(namespace)+1)
 	key = append(key, dkvsBatchOutboxPrefix...)
-	key = append(key, scope...)
+	key = append(key, namespace...)
 	return append(key, ':')
 }
 
-func dkvsBatchOutboxKey(namespace, id string) []byte {
+func dkvsBatchOutboxKey(namespace, outboxKey string) []byte {
 	key := dkvsBatchOutboxNamespacePrefix(namespace)
-	return append(key, id...)
+	return append(key, outboxKey...)
 }
 
 func (s *dkvsReplicaStore) loadPathState(scope string) (*dkvsPathReplicaState, error) {
@@ -132,17 +155,28 @@ func (s *dkvsReplicaStore) loadPathState(scope string) (*dkvsPathReplicaState, e
 		return nil, ErrDKVSPathNotSynced
 	}
 	encoded, err := s.db.Read(dkvsPathStateKey(scope))
+	legacy := false
+	if err != nil && errors.Is(err, indexer.ErrKeyNotFound) {
+		encoded, err = s.db.Read(dkvsLegacyPathStateKey(scope))
+		legacy = err == nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	var state dkvsPathReplicaState
-	if err := json.Unmarshal(encoded, &state); err != nil {
-		return nil, dkvsindexer.ErrInvalidRecord
+	if legacy {
+		if err := json.Unmarshal(encoded, &state); err != nil {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
+	} else if err := decodeDKVSPathReplicaState(encoded, &state); err != nil {
+		return nil, err
 	}
 	if state.Version != dkvsReplicaStateVersion || state.Path == "" || state.SessionState == "" {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	state.PathMeta = cloneWalletPathMeta(state.PathMeta)
+	state.DeleteFloors = cloneDKVSDeleteFloors(state.DeleteFloors)
+	state.LocalDeleteFloors = cloneDKVSDeleteFloors(state.LocalDeleteFloors)
 	return &state, nil
 }
 
@@ -153,15 +187,174 @@ func putPathStateBatch(batch dkvsBatchWriter, scope string, state *dkvsPathRepli
 	copyState := *state
 	copyState.Version = dkvsReplicaStateVersion
 	copyState.PathMeta = cloneWalletPathMeta(state.PathMeta)
+	copyState.DeleteFloors = cloneDKVSDeleteFloors(state.DeleteFloors)
+	copyState.LocalDeleteFloors = cloneDKVSDeleteFloors(state.LocalDeleteFloors)
 	if copyState.SessionState == "" {
 		copyState.SessionState = dkvsSessionIdle
 	}
 	copyState.UpdatedAtMS = uint64(time.Now().UnixMilli())
-	encoded, err := json.Marshal(&copyState)
+	encoded, err := encodeDKVSPathReplicaState(&copyState)
 	if err != nil {
 		return err
 	}
-	return batch.Put(dkvsPathStateKey(scope), encoded)
+	if err := batch.Put(dkvsPathStateKey(scope), encoded); err != nil {
+		return err
+	}
+	return batch.Delete(dkvsLegacyPathStateKey(scope))
+}
+
+// validateNetworkReplica compares the materialized network replica with the
+// canonical remote PathMeta. Endpoint-local FREE_LOCAL records are excluded.
+// The canonical root/count/size/expiry calculation remains owned by the
+// SatoshiNet DKVS snapshot validator.
+func (s *dkvsReplicaStore) validateNetworkReplica(scope, path string,
+	meta *dkvsindexer.PathMeta) error {
+
+	if s == nil || s.db == nil || scope == "" || path == "" || meta == nil {
+		return dkvsindexer.ErrInvalidSnapshot
+	}
+	state, err := s.loadPathState(scope)
+	if err != nil {
+		return err
+	}
+	if state.Path != path {
+		return dkvsindexer.ErrInvalidSnapshot
+	}
+	records, err := s.loadConfirmed(scope)
+	if err != nil {
+		return err
+	}
+	network := make([]*swire.DKVSRecord, 0, len(records))
+	for _, record := range records {
+		if record != nil && dkvsindexer.RecordRequiresPathPrecondition(record) {
+			network = append(network, record)
+		}
+	}
+	return dkvsindexer.ValidatePathSnapshotForClient(&dkvsindexer.PathSnapshot{
+		Path: path, PathMeta: cloneWalletPathMeta(meta), Records: network,
+		DeleteFloors: cloneDKVSDeleteFloors(state.DeleteFloors),
+	}, dkvsindexer.RecordVerificationOptions{Height: meta.ViewHeight})
+}
+
+func deleteFloorForDKVSRecord(record *swire.DKVSRecord, pathGeneration uint64) dkvsindexer.DeleteFloor {
+	if record == nil {
+		return dkvsindexer.DeleteFloor{}
+	}
+	return dkvsindexer.DeleteFloor{
+		Key: record.Key, FloorSeq: record.Seq, PathGeneration: pathGeneration,
+		PubKey: append([]byte(nil), record.PubKey...), EffectiveHash: dkvsindexer.RecordHash(record),
+	}
+}
+
+func upsertDKVSDeleteFloor(floors []dkvsindexer.DeleteFloor,
+	floor dkvsindexer.DeleteFloor) []dkvsindexer.DeleteFloor {
+	if floor.Key == "" || floor.FloorSeq == 0 {
+		return floors
+	}
+	for index := range floors {
+		if floors[index].Key != floor.Key {
+			continue
+		}
+		if floors[index].FloorSeq <= floor.FloorSeq {
+			floors[index] = floor
+		}
+		return floors
+	}
+	return append(floors, floor)
+}
+
+func removeDKVSDeleteFloor(floors []dkvsindexer.DeleteFloor, key string) []dkvsindexer.DeleteFloor {
+	if key == "" {
+		return floors
+	}
+	filtered := floors[:0]
+	for _, floor := range floors {
+		if floor.Key != key {
+			filtered = append(filtered, floor)
+		}
+	}
+	return filtered
+}
+
+func maxDKVSDeleteFloorSeq(floors []dkvsindexer.DeleteFloor, key string) uint64 {
+	var max uint64
+	for _, floor := range floors {
+		if floor.Key == key && floor.FloorSeq > max {
+			max = floor.FloorSeq
+		}
+	}
+	return max
+}
+
+// writeResultDeleteFloors derives the authoritative network path generation
+// for tombstones from the same key ordering used by batch-CAS. The API returns
+// the projected PathMeta but not the individual delete-floor list.
+func writeResultDeleteFloors(path string, changed []*swire.DKVSRecord,
+	meta *dkvsindexer.PathMeta) (map[string]dkvsindexer.DeleteFloor, error) {
+	if meta == nil {
+		return nil, nil
+	}
+	relayable := make([]*swire.DKVSRecord, 0, len(changed))
+	for _, record := range changed {
+		if record == nil {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
+		recordPath, err := dkvsindexer.CollectionPathForKey(record.Key)
+		if err != nil {
+			return nil, err
+		}
+		if recordPath == path && dkvsindexer.RecordRequiresPathPrecondition(record) {
+			relayable = append(relayable, record)
+		}
+	}
+	sort.Slice(relayable, func(a, b int) bool { return relayable[a].Key < relayable[b].Key })
+	if uint64(len(relayable)) > meta.Generation {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	floors := make(map[string]dkvsindexer.DeleteFloor)
+	base := meta.Generation - uint64(len(relayable))
+	for index, record := range relayable {
+		if dkvsindexer.IsTombstone(record.Flags) {
+			floors[record.Key] = deleteFloorForDKVSRecord(record, base+uint64(index)+1)
+		}
+	}
+	return floors, nil
+}
+
+func applyWriteResultDeleteFloors(state *dkvsPathReplicaState, path string,
+	changed []*swire.DKVSRecord, meta *dkvsindexer.PathMeta) error {
+	if state == nil || path == "" {
+		return dkvsindexer.ErrInvalidRecord
+	}
+	networkFloors, err := writeResultDeleteFloors(path, changed, meta)
+	if err != nil {
+		return err
+	}
+	for _, record := range changed {
+		if record == nil {
+			return dkvsindexer.ErrInvalidRecord
+		}
+		recordPath, pathErr := dkvsindexer.CollectionPathForKey(record.Key)
+		if pathErr != nil || recordPath != path {
+			continue
+		}
+		state.DeleteFloors = removeDKVSDeleteFloor(state.DeleteFloors, record.Key)
+		state.LocalDeleteFloors = removeDKVSDeleteFloor(state.LocalDeleteFloors, record.Key)
+		if !dkvsindexer.IsTombstone(record.Flags) {
+			continue
+		}
+		if dkvsWalletRecordIsFreeLocal(record) {
+			state.LocalDeleteFloors = upsertDKVSDeleteFloor(state.LocalDeleteFloors,
+				deleteFloorForDKVSRecord(record, 0))
+			continue
+		}
+		floor, ok := networkFloors[record.Key]
+		if !ok {
+			return dkvsindexer.ErrInvalidRecord
+		}
+		state.DeleteFloors = upsertDKVSDeleteFloor(state.DeleteFloors, floor)
+	}
+	return nil
 }
 
 func encodeReplicaBaseline(root chainhash.Hash, generation uint64) []byte {
@@ -248,9 +441,19 @@ func (s *dkvsReplicaStore) applyPathSnapshot(scope string,
 	if err := putReplicaBaselineBatch(batch, scope, snapshot.PathMeta); err != nil {
 		return err
 	}
+	var localDeleteFloors []dkvsindexer.DeleteFloor
+	var endpointID string
+	var hasLocalOnly bool
+	if previous, previousErr := s.loadPathState(scope); previousErr == nil {
+		localDeleteFloors = cloneDKVSDeleteFloors(previous.LocalDeleteFloors)
+		endpointID = previous.EndpointID
+		hasLocalOnly = previous.HasLocalOnly
+	}
 	if err := putPathStateBatch(batch, scope, &dkvsPathReplicaState{
 		Path: snapshot.Path, PathMeta: snapshot.PathMeta,
-		ServerTimeMS: snapshot.ServerTimeMS, SessionState: dkvsSessionIdle,
+		DeleteFloors:      snapshot.DeleteFloors,
+		LocalDeleteFloors: localDeleteFloors, ServerTimeMS: snapshot.ServerTimeMS,
+		EndpointID: endpointID, HasLocalOnly: hasLocalOnly, SessionState: dkvsSessionIdle,
 	}); err != nil {
 		return err
 	}
@@ -281,46 +484,31 @@ func persistedMutationFromCAS(mutation dkvsindexer.CASMutation) (dkvsPersistedMu
 	}
 	stored := dkvsPersistedMutation{Record: encoded, ExpectAbsent: mutation.Precondition.ExpectAbsent}
 	if mutation.Precondition.ExpectedHash != nil {
-		stored.ExpectedHash = mutation.Precondition.ExpectedHash.String()
+		stored.ExpectedHash = append([]byte(nil), mutation.Precondition.ExpectedHash[:]...)
 	}
 	return stored, nil
 }
 
 func persistedPathPrecondition(condition dkvsindexer.PathWritePrecondition) dkvsPersistedPathPrecondition {
 	return dkvsPersistedPathPrecondition{
-		Path: condition.Path, ExpectedRoot: condition.ExpectedRoot.String(),
+		Path: condition.Path, ExpectedRoot: append([]byte(nil), condition.ExpectedRoot[:]...),
 		ExpectedGeneration: condition.ExpectedGeneration,
 	}
 }
 
-func outboxEntryID(mutations []dkvsPersistedMutation,
-	conditions []dkvsPersistedPathPrecondition, endpointID string) string {
-	h := sha256.New()
-	for _, mutation := range mutations {
-		_, _ = h.Write(mutation.Record)
-		_, _ = h.Write([]byte{0})
-		_, _ = h.Write([]byte(mutation.ExpectedHash))
-		if mutation.ExpectAbsent {
-			_, _ = h.Write([]byte{1})
-		} else {
-			_, _ = h.Write([]byte{0})
-		}
-	}
-	for _, condition := range conditions {
-		_, _ = h.Write([]byte(condition.Path))
-		_, _ = h.Write([]byte(condition.ExpectedRoot))
-		var scratch [8]byte
-		binary.BigEndian.PutUint64(scratch[:], condition.ExpectedGeneration)
-		_, _ = h.Write(scratch[:])
-	}
-	_, _ = h.Write([]byte(endpointID))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
 func newDKVSBatchOutboxEntry(namespace string, mutations []dkvsindexer.CASMutation,
-	conditions []dkvsindexer.PathWritePrecondition, endpointID string) (*dkvsBatchOutboxEntry, error) {
+	conditions []dkvsindexer.PathWritePrecondition, endpointID string,
+	origins ...dkvsOutboxOrigin) (*dkvsBatchOutboxEntry, error) {
 	if strings.TrimSpace(namespace) == "" || len(mutations) == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	origin := dkvsOutboxOrigin{}
+	if len(origins) != 0 {
+		origin = origins[0]
+	}
+	origin.Key = strings.TrimSpace(origin.Key)
+	if origin.Key == "" {
+		return nil, fmt.Errorf("DKVS outbox key is required: %w", dkvsindexer.ErrInvalidKey)
 	}
 	storedMutations := make([]dkvsPersistedMutation, 0, len(mutations))
 	for _, mutation := range mutations {
@@ -336,18 +524,22 @@ func newDKVSBatchOutboxEntry(namespace string, mutations []dkvsindexer.CASMutati
 	}
 	now := uint64(time.Now().UnixMilli())
 	entry := &dkvsBatchOutboxEntry{
-		Version: dkvsOutboxBatchVersion, Namespace: namespace,
+		Key: origin.Key, Namespace: strings.TrimSpace(namespace),
 		Mutations: storedMutations, PathPreconditions: storedConditions,
 		EndpointID: endpointID, State: dkvsSessionPrepared,
 		CreatedAtMS: now, UpdatedAtMS: now,
+		OriginDomain:     strings.TrimSpace(origin.Domain),
+		OriginGeneration: origin.Generation,
 	}
-	entry.ID = outboxEntryID(storedMutations, storedConditions, endpointID)
+	if err := verifyOutboxEntryKey(entry); err != nil {
+		return nil, err
+	}
 	return entry, nil
 }
 
 func (entry *dkvsBatchOutboxEntry) decode() ([]dkvsindexer.CASMutation,
 	[]dkvsindexer.PathWritePrecondition, error) {
-	if entry == nil || entry.Version != dkvsOutboxBatchVersion || entry.ID == "" ||
+	if entry == nil || entry.Key == "" ||
 		entry.Namespace == "" || len(entry.Mutations) == 0 {
 		return nil, nil, dkvsindexer.ErrInvalidRecord
 	}
@@ -358,8 +550,11 @@ func (entry *dkvsBatchOutboxEntry) decode() ([]dkvsindexer.CASMutation,
 			return nil, nil, err
 		}
 		condition := dkvsindexer.WritePrecondition{ExpectAbsent: stored.ExpectAbsent}
-		if stored.ExpectedHash != "" {
-			hash, err := chainhash.NewHashFromStr(stored.ExpectedHash)
+		if len(stored.ExpectedHash) != 0 {
+			if len(stored.ExpectedHash) != chainhash.HashSize {
+				return nil, nil, dkvsindexer.ErrInvalidRecord
+			}
+			hash, err := chainhash.NewHash(stored.ExpectedHash)
 			if err != nil {
 				return nil, nil, dkvsindexer.ErrInvalidRecord
 			}
@@ -372,7 +567,10 @@ func (entry *dkvsBatchOutboxEntry) decode() ([]dkvsindexer.CASMutation,
 	}
 	conditions := make([]dkvsindexer.PathWritePrecondition, 0, len(entry.PathPreconditions))
 	for _, stored := range entry.PathPreconditions {
-		root, err := chainhash.NewHashFromStr(stored.ExpectedRoot)
+		if len(stored.ExpectedRoot) != chainhash.HashSize {
+			return nil, nil, dkvsindexer.ErrInvalidRecord
+		}
+		root, err := chainhash.NewHash(stored.ExpectedRoot)
 		if err != nil {
 			return nil, nil, dkvsindexer.ErrInvalidRecord
 		}
@@ -391,11 +589,21 @@ func (s *dkvsReplicaStore) putBatchOutboxEntry(entry *dkvsBatchOutboxEntry) erro
 	if _, _, err := entry.decode(); err != nil {
 		return err
 	}
-	encoded, err := json.Marshal(entry)
+	return s.writeBatchOutboxEntry(entry)
+}
+
+// writeBatchOutboxEntry persists lifecycle diagnostics without rebuilding or
+// re-signing the original mutation.  Callers which create new entries must use
+// putBatchOutboxEntry so malformed records cannot enter the outbox.
+func (s *dkvsReplicaStore) writeBatchOutboxEntry(entry *dkvsBatchOutboxEntry) error {
+	if s == nil || s.db == nil || entry == nil || entry.Namespace == "" || entry.Key == "" {
+		return dkvsindexer.ErrInvalidRecord
+	}
+	encoded, err := encodeDKVSBatchOutboxEntry(entry)
 	if err != nil {
 		return err
 	}
-	return s.db.Write(dkvsBatchOutboxKey(entry.Namespace, entry.ID), encoded)
+	return s.db.Write(dkvsBatchOutboxKey(entry.Namespace, entry.Key), encoded)
 }
 
 func (s *dkvsReplicaStore) updateBatchOutboxState(entry *dkvsBatchOutboxEntry,
@@ -410,10 +618,12 @@ func (s *dkvsReplicaStore) updateBatchOutboxState(entry *dkvsBatchOutboxEntry,
 		copyEntry.Attempts++
 	}
 	copyEntry.LastErrorCode = ""
+	copyEntry.LastError = ""
 	if err != nil {
 		copyEntry.LastErrorCode = string(dkvsindexer.ErrorCodeOf(err))
+		copyEntry.LastError = err.Error()
 	}
-	if writeErr := s.putBatchOutboxEntry(&copyEntry); writeErr != nil {
+	if writeErr := s.writeBatchOutboxEntry(&copyEntry); writeErr != nil {
 		return writeErr
 	}
 	*entry = copyEntry
@@ -426,20 +636,22 @@ func (s *dkvsReplicaStore) loadBatchOutbox(namespace string) ([]*dkvsBatchOutbox
 	}
 	prefix := dkvsBatchOutboxNamespacePrefix(namespace)
 	entries := make([]*dkvsBatchOutboxEntry, 0)
-	err := s.db.BatchRead(prefix, false, func(_, value []byte) error {
-		var entry dkvsBatchOutboxEntry
-		if err := json.Unmarshal(value, &entry); err != nil {
-			return dkvsindexer.ErrInvalidRecord
+	err := s.db.BatchRead(prefix, false, func(key, value []byte) error {
+		entry, err := decodeDKVSBatchOutboxEntry(value)
+		if err != nil {
+			return fmt.Errorf("decode DKVS outbox at %q: %w", string(key), err)
 		}
-		if _, _, err := entry.decode(); err != nil {
-			return err
+		if entry.Namespace != strings.TrimSpace(namespace) ||
+			!bytes.Equal(key, dkvsBatchOutboxKey(namespace, entry.Key)) {
+			return fmt.Errorf("DKVS outbox storage key mismatch at %q: %w",
+				string(key), dkvsindexer.ErrInvalidRecord)
 		}
-		entries = append(entries, &entry)
+		entries = append(entries, entry)
 		return nil
 	})
 	sort.Slice(entries, func(a, b int) bool {
 		if entries[a].CreatedAtMS == entries[b].CreatedAtMS {
-			return entries[a].ID < entries[b].ID
+			return entries[a].Key < entries[b].Key
 		}
 		return entries[a].CreatedAtMS < entries[b].CreatedAtMS
 	})
@@ -478,13 +690,38 @@ func (s *dkvsReplicaStore) queueBatchOutbox(entry *dkvsBatchOutboxEntry) error {
 	if err != nil {
 		return err
 	}
-	encoded, err := json.Marshal(entry)
+	if encodedExisting, readErr := s.db.Read(dkvsBatchOutboxKey(entry.Namespace, entry.Key)); readErr == nil {
+		existing, decodeErr := decodeDKVSBatchOutboxEntry(encodedExisting)
+		if decodeErr != nil {
+			return fmt.Errorf("decode existing DKVS outbox %s: %w", entry.Key, decodeErr)
+		}
+		if existing.Namespace != entry.Namespace || existing.Key != entry.Key {
+			return dkvsindexer.ErrInvalidRecord
+		}
+		if existing.State == dkvsSessionTerminal {
+			return &dkvsTerminalOutboxError{
+				Key: existing.Key, Code: existing.LastErrorCode, Message: existing.LastError,
+			}
+		}
+		if existing.State == dkvsSessionConflict {
+			return fmt.Errorf("DKVS outbox %s requires reconciliation: %w",
+				existing.Key, dkvsindexer.ErrWriteConflict)
+		}
+		if !sameDKVSOutboxRequest(existing, entry) {
+			return fmt.Errorf("DKVS outbox key %s is already occupied: %w",
+				entry.Key, dkvsindexer.ErrWriteConflict)
+		}
+		*entry = *existing
+	} else if !errors.Is(readErr, indexer.ErrKeyNotFound) {
+		return readErr
+	}
+	encoded, err := encodeDKVSBatchOutboxEntry(entry)
 	if err != nil {
 		return err
 	}
 	batch := s.db.NewWriteBatch()
 	defer batch.Close()
-	if err := batch.Put(dkvsBatchOutboxKey(entry.Namespace, entry.ID), encoded); err != nil {
+	if err := batch.Put(dkvsBatchOutboxKey(entry.Namespace, entry.Key), encoded); err != nil {
 		return err
 	}
 	for _, path := range paths {
@@ -602,6 +839,9 @@ func (s *dkvsReplicaStore) applyWriteResultAndAck(entry *dkvsBatchOutboxEntry,
 			}
 			state.PathMeta = meta
 		}
+		if err := applyWriteResultDeleteFloors(state, path, changed, meta); err != nil {
+			return err
+		}
 		state.ServerTimeMS = result.ServerTimeMS
 		state.HasLocalOnly = state.HasLocalOnly || hasLocalOnly
 		if hasLocalOnly {
@@ -616,13 +856,13 @@ func (s *dkvsReplicaStore) applyWriteResultAndAck(entry *dkvsBatchOutboxEntry,
 			return err
 		}
 	}
-	if err := batch.Delete(dkvsBatchOutboxKey(entry.Namespace, entry.ID)); err != nil {
+	if err := batch.Delete(dkvsBatchOutboxKey(entry.Namespace, entry.Key)); err != nil {
 		return err
 	}
 	return batch.Flush()
 }
 
-// applyWriteResult is retained for callers that update one path without a v1
+// applyWriteResult is retained for callers that update one path without the
 // batch outbox. New manager writes use applyWriteResultAndAck.
 func (s *dkvsReplicaStore) applyWriteResult(scope, path string,
 	result *dkvsindexer.WriteResult) error {
@@ -636,6 +876,13 @@ func (s *dkvsReplicaStore) applyWriteResult(scope, path string,
 	byKey, err := s.loadConfirmedByKey(scope)
 	if err != nil {
 		return err
+	}
+	state, stateErr := s.loadPathState(scope)
+	if stateErr != nil {
+		if !errors.Is(stateErr, indexer.ErrKeyNotFound) {
+			return stateErr
+		}
+		state = &dkvsPathReplicaState{Path: path}
 	}
 	for _, record := range result.Records {
 		if record == nil {
@@ -651,6 +898,9 @@ func (s *dkvsReplicaStore) applyWriteResult(scope, path string,
 			byKey[record.Key] = record
 		}
 	}
+	if err := applyWriteResultDeleteFloors(state, path, result.Records, meta); err != nil {
+		return err
+	}
 	records := make([]*swire.DKVSRecord, 0, len(byKey))
 	for _, record := range byKey {
 		records = append(records, record)
@@ -658,7 +908,18 @@ func (s *dkvsReplicaStore) applyWriteResult(scope, path string,
 	sort.Slice(records, func(a, b int) bool { return records[a].Key < records[b].Key })
 	filters := []dkvsindexer.Subscription{{Type: dkvsindexer.SubscriptionPrefix, Target: path}}
 	root := meta.StateRoot
-	return s.applyConfirmed(scope, filters, records, root.String(), root, meta.Generation)
+	if err := s.applyConfirmed(scope, filters, records, root.String(), root, meta.Generation); err != nil {
+		return err
+	}
+	state.Path = path
+	state.PathMeta = meta
+	state.SessionState = dkvsSessionConfirmed
+	batch := s.db.NewWriteBatch()
+	defer batch.Close()
+	if err := putPathStateBatch(batch, scope, state); err != nil {
+		return err
+	}
+	return batch.Flush()
 }
 
 func (s *dkvsReplicaStore) hasPendingBatchOutbox(namespace string) (bool, error) {
@@ -666,7 +927,12 @@ func (s *dkvsReplicaStore) hasPendingBatchOutbox(namespace string) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	return len(entries) != 0, nil
+	for _, entry := range entries {
+		if entry.State != dkvsSessionTerminal && entry.State != dkvsSessionConflict {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *dkvsReplicaStore) markOutboxFailure(entry *dkvsBatchOutboxEntry, err error) error {
@@ -679,13 +945,64 @@ func (s *dkvsReplicaStore) markOutboxFailure(entry *dkvsBatchOutboxEntry, err er
 	return s.updateBatchOutboxState(entry, state, err)
 }
 
-func verifyOutboxEntryIdentity(entry *dkvsBatchOutboxEntry) error {
-	if entry == nil {
+func (s *dkvsReplicaStore) markOutboxTerminal(entry *dkvsBatchOutboxEntry, err error) error {
+	return s.updateBatchOutboxState(entry, dkvsSessionTerminal, err)
+}
+
+func verifyOutboxEntryKey(entry *dkvsBatchOutboxEntry) error {
+	if entry == nil || strings.TrimSpace(entry.Key) == "" || entry.Key != strings.TrimSpace(entry.Key) {
 		return dkvsindexer.ErrInvalidRecord
 	}
-	want := outboxEntryID(entry.Mutations, entry.PathPreconditions, entry.EndpointID)
-	if entry.ID != want {
-		return fmt.Errorf("DKVS outbox identity mismatch: %w", dkvsindexer.ErrInvalidRecord)
+	if _, err := dkvsindexer.ParseKey(entry.Key); err != nil {
+		return fmt.Errorf("invalid DKVS outbox business key %s: %w", entry.Key, err)
+	}
+	mutations, _, err := entry.decode()
+	if err != nil || len(mutations) == 0 {
+		return dkvsindexer.ErrInvalidRecord
+	}
+	return verifyOutboxMutationKeys(mutations)
+}
+
+func verifyOutboxMutationKeys(mutations []dkvsindexer.CASMutation) error {
+	if len(mutations) == 0 {
+		return dkvsindexer.ErrInvalidRecord
+	}
+	seen := make(map[string]struct{}, len(mutations))
+	for _, mutation := range mutations {
+		if mutation.Record == nil {
+			return dkvsindexer.ErrInvalidRecord
+		}
+		if _, duplicate := seen[mutation.Record.Key]; duplicate {
+			return fmt.Errorf("duplicate DKVS outbox mutation key %s: %w",
+				mutation.Record.Key, dkvsindexer.ErrInvalidRecord)
+		}
+		seen[mutation.Record.Key] = struct{}{}
 	}
 	return nil
+}
+
+func sameDKVSOutboxRequest(left, right *dkvsBatchOutboxEntry) bool {
+	if left == nil || right == nil || left.Key != right.Key || left.Namespace != right.Namespace ||
+		left.EndpointID != right.EndpointID || left.OriginDomain != right.OriginDomain ||
+		left.OriginGeneration != right.OriginGeneration ||
+		len(left.Mutations) != len(right.Mutations) ||
+		len(left.PathPreconditions) != len(right.PathPreconditions) {
+		return false
+	}
+	for index := range left.Mutations {
+		if left.Mutations[index].ExpectAbsent != right.Mutations[index].ExpectAbsent ||
+			!bytes.Equal(left.Mutations[index].Record, right.Mutations[index].Record) ||
+			!bytes.Equal(left.Mutations[index].ExpectedHash, right.Mutations[index].ExpectedHash) {
+			return false
+		}
+	}
+	for index := range left.PathPreconditions {
+		if left.PathPreconditions[index].Path != right.PathPreconditions[index].Path ||
+			left.PathPreconditions[index].ExpectedGeneration != right.PathPreconditions[index].ExpectedGeneration ||
+			!bytes.Equal(left.PathPreconditions[index].ExpectedRoot,
+				right.PathPreconditions[index].ExpectedRoot) {
+			return false
+		}
+	}
+	return true
 }

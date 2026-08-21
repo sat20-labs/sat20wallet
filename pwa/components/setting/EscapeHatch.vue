@@ -24,8 +24,13 @@
         </p>
 
         <!-- Broadcast Button -->
-        <div class="mt-4">
-          <Button class="w-full bg-purple-600 text-white" @click="closeChannel">{{ $t('escapeHatch.broadcastTx') }}</Button>
+        <div class="mt-4 grid gap-2">
+          <Button class="w-full bg-purple-600 text-white" :disabled="loading" @click="closeChannel">
+            Cooperative Close
+          </Button>
+          <Button class="w-full" variant="destructive" :disabled="loading" @click="requestForceClose">
+            Force Close
+          </Button>
         </div>
 
         <!-- Current Commitment Transaction -->
@@ -73,7 +78,7 @@
                   <template v-for="(input, index) in parsedInputs" :key="`input-${index}`">
                     <tr>
                       <td class="truncate">
-                        <a :href="generateMempoolUrl({ network: network, path: input.Outpoint })" target="_blank">
+                        <a :href="generateMempoolUrl({ network: network, path: transactionPath(input.Outpoint) })" target="_blank">
                           {{ hideAddress(input.Outpoint) }}
                         </a>
                       </td>
@@ -109,11 +114,11 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <template v-for="(output) in parsedOutputs" :key="`output-${output.index}`">
+                  <template v-for="output in parsedOutputs" :key="`output-${output.Outpoint}`">
                     <tr>
                       <td class="truncate">
-                        <a :href="generateMempoolUrl({ network: network, path: output.Outpoint })" target="_blank">
-                          {{ hideAddress(commitTxData.txId + ':' + output.index) }}
+                        <a :href="generateMempoolUrl({ network: network, path: transactionPath(output.Outpoint) })" target="_blank">
+                          {{ hideAddress(output.Outpoint) }}
                         </a>
                       </td>
                       <td class="truncate">{{ output.Value }}</td>
@@ -141,6 +146,33 @@
         </p>
       </div>
     </div>
+
+    <AlertDialog v-model:open="showForceCloseConfirm">
+      <AlertDialogContent class="w-[350px] rounded-lg bg-zinc-900">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Confirm Force Close</AlertDialogTitle>
+          <AlertDialogDescription>
+            Force close broadcasts the latest commitment transaction and may require waiting for the CSV delay.
+            Continue only if cooperative close is unavailable.
+          </AlertDialogDescription>
+          <div v-if="forceCloseSnapshot" class="space-y-1 rounded border border-zinc-700 p-3 text-xs text-zinc-300">
+            <p>Channel: {{ forceCloseSnapshot.channel_id }}</p>
+            <p>Status: {{ forceCloseSnapshot.status }}</p>
+            <p>Commit height: {{ forceCloseSnapshot.commit_height }}</p>
+            <p>CSV delay: {{ forceCloseSnapshot.csv_delay }}</p>
+            <p>Local commitment: {{ forceCloseSnapshot.local_commitment_txid }}</p>
+            <p>Remote commitment: {{ forceCloseSnapshot.remote_commitment_txid }}</p>
+            <p>Punish coverage: {{ forceCloseSnapshot.punish_coverage?.status }}</p>
+          </div>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel :disabled="loading">Cancel</AlertDialogCancel>
+          <AlertDialogAction :disabled="loading" @click.prevent="forceCloseChannel">
+            {{ loading ? 'Checking safety…' : 'Force Close' }}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>
 </template>
 
@@ -150,17 +182,30 @@ import { storeToRefs } from 'pinia'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { useChannelStore } from '@/store'
-import satsnetStp from '@/utils/stp'
+import satsnetStp, { type CommitTxAssetInfo, type CommitTxAssetUtxo } from '@/utils/stp'
 import { useToast } from '@/components/ui/toast-new'
 import { generateMempoolUrl, hideAddress } from '@/utils'
 import { useWalletStore } from '@/store/wallet'
+import { assessStpValueMovementSafety } from '@/composables/usePwaAgentAdapterSafety'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 const walletStore = useWalletStore()
 const { btcFeeRate, network } = storeToRefs(walletStore)
 
 const loading = ref(false)
 const isExpanded = ref(false)
-const commitTxData = ref<any>(null)
+const showForceCloseConfirm = ref(false)
+const forceCloseSnapshot = ref<any | null>(null)
+const commitTxData = ref<CommitTxAssetInfo | null>(null)
 
 const channelStore = useChannelStore()
 const { channel } = storeToRefs(channelStore)
@@ -169,14 +214,7 @@ const { toast } = useToast()
 const parsedInputs = computed(() => {
   if (!commitTxData.value?.inputs) return [];
   try {
-    const inputsArray = JSON.parse(commitTxData.value.inputs);
-    return inputsArray.map((input: any) => {
-      // 对每个输入项进行反序列化
-      return {
-        ...input,
-        // 这里可以添加其他需要的字段处理
-      };
-    });
+    return JSON.parse(commitTxData.value.inputs) as CommitTxAssetUtxo[];
   } catch (error) {
     console.error("Failed to parse inputs:", error);
     return [];
@@ -186,14 +224,7 @@ const parsedInputs = computed(() => {
 const parsedOutputs = computed(() => {
   if (!commitTxData.value?.outputs) return [];
   try {
-    const outputsArray = JSON.parse(commitTxData.value.outputs);
-    return outputsArray.map((output: any) => {
-      // 对每个输出项进行反序列化
-      return {
-        ...output,
-        // 这里可以添加其他需要的字段处理
-      };
-    });
+    return JSON.parse(commitTxData.value.outputs) as CommitTxAssetUtxo[];
   } catch (error) {
     console.error("Failed to parse outputs:", error);
     return [];
@@ -242,30 +273,101 @@ const channelId = computed(() => {
   return channel.value?.channelId
 })
 
-const closeChannel = async () => {
-  loading.value = true;
-  if (!channelId.value) return
-  // 这里可以添加关闭通道的逻辑
-  const [err] = await satsnetStp.closeChannel(channelId.value, btcFeeRate.value, false);
-  loading.value = false;
+const transactionPath = (outpoint: string) => `tx/${outpoint.split(':', 1)[0]}`
 
-  if (err) {
-    const [forceErr] = await satsnetStp.closeChannel(channelId.value, btcFeeRate.value, true);
+const closeChannel = async () => {
+  const id = channelId.value
+  if (!id) return
+
+  loading.value = true
+  try {
+    const [err] = await satsnetStp.closeChannel(id, btcFeeRate.value, false)
+    if (err) {
+      toast({
+        title: 'Error',
+        description: err.message || 'Failed to close the channel cooperatively.',
+        variant: 'destructive',
+      })
+      return
+    }
+    toast({
+      title: 'Success',
+      description: 'Cooperative channel close initiated.',
+      variant: 'success',
+    })
+  } finally {
+    loading.value = false
+  }
+}
+
+const readSafeForceCloseSnapshot = async (id: string) => {
+  const [snapshotErr, snapshotResult] = await satsnetStp.safetySnapshot(id)
+  if (snapshotErr || !snapshotResult) {
+    throw snapshotErr || new Error('Unable to read the current channel safety snapshot.')
+  }
+
+  const snapshot = typeof snapshotResult.json === 'string'
+    ? JSON.parse(snapshotResult.json)
+    : snapshotResult
+  const safety = assessStpValueMovementSafety(snapshot)
+  if (!safety.allowed) {
+    throw new Error(safety.reason || 'The current channel safety snapshot does not allow force close.')
+  }
+  return snapshot
+}
+
+const requestForceClose = async () => {
+  const id = channelId.value
+  if (!id || loading.value) return
+
+  loading.value = true
+  try {
+    forceCloseSnapshot.value = await readSafeForceCloseSnapshot(id)
+    showForceCloseConfirm.value = true
+  } catch (error) {
+    toast({
+      title: 'Force close blocked',
+      description: error instanceof Error ? error.message : 'Unable to verify channel safety.',
+      variant: 'destructive',
+    })
+  } finally {
+    loading.value = false
+  }
+}
+
+const forceCloseChannel = async () => {
+  const id = channelId.value
+  if (!id) return
+
+  loading.value = true
+  try {
+    forceCloseSnapshot.value = await readSafeForceCloseSnapshot(id)
+
+    const [forceErr] = await satsnetStp.closeChannel(id, btcFeeRate.value, true)
     if (forceErr) {
       toast({
         title: 'Error',
-        description: 'Failed to close the channel.',
+        description: forceErr.message || 'Failed to force close the channel.',
         variant: 'destructive',
-      });
-    } else {
-      toast({
-        title: 'Success',
-        description: 'Channel closed successfully.',
-        variant: 'success'
-      });
+      })
+      return
     }
+    toast({
+      title: 'Success',
+      description: 'Force close initiated.',
+      variant: 'success',
+    })
+  } catch (error) {
+    toast({
+      title: 'Force close blocked',
+      description: error instanceof Error ? error.message : 'Unable to verify channel safety.',
+      variant: 'destructive',
+    })
+  } finally {
+    loading.value = false
+    showForceCloseConfirm.value = false
   }
-};
+}
 
 
 watch(channelId, async () => {
@@ -278,13 +380,13 @@ watch(channelId, async () => {
   if (err) {
     return false
   }
-  commitTxData.value = result
+  commitTxData.value = result ?? null
 }, {
   immediate: true,
 })
 
 onMounted(() => {
-  channelStore.getAllChannels()
+  channelStore.getCurrentChannel()
 })
 </script>
 

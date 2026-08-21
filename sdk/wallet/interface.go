@@ -3,6 +3,7 @@ package wallet
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -18,6 +19,58 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
+
+var (
+	ErrWalletAlreadyExists       = errors.New("wallet already exists")
+	ErrWalletCatalogUnverifiable = errors.New("wallet catalog cannot be verified")
+)
+
+// rejectDuplicateWalletLocked compares the stable node-key fingerprint while
+// holding Manager.mutex. Locked mnemonic/private-key entries are decrypted in
+// memory with the import password; no catalog entry is switched or rewritten.
+func (p *Manager) rejectDuplicateWalletLocked(candidate common.Wallet, password string) error {
+	want := walletFingerprint(candidate)
+	if want == "" {
+		return ErrWalletCatalogUnverifiable
+	}
+	for id, info := range p.walletInfoMap {
+		if info == nil {
+			return fmt.Errorf("%w: wallet %d is nil", ErrWalletCatalogUnverifiable, id)
+		}
+		value := info.Wallet
+		if value == nil {
+			if info.Type == WALLET_TYPE_MONITOR {
+				continue
+			}
+			secret, err := p.loadWalletSecret(info, password)
+			if err != nil {
+				return fmt.Errorf("%w: wallet %d", ErrWalletCatalogUnverifiable, id)
+			}
+			switch info.Type {
+			case WALLET_TYPE_MNEMONIC:
+				value = NewInternalWalletWithMnemonic(secret, "", GetChainParam())
+			case WALLET_TYPE_PRIVKEY:
+				privateKey, decodeErr := hex.DecodeString(secret)
+				if decodeErr == nil {
+					value, _, decodeErr = NewInternalWalletWithPrivKey(privateKey, GetChainParam())
+				}
+				if decodeErr != nil {
+					return fmt.Errorf("%w: wallet %d", ErrWalletCatalogUnverifiable, id)
+				}
+			default:
+				return fmt.Errorf("%w: wallet %d type %d", ErrWalletCatalogUnverifiable, id, info.Type)
+			}
+		}
+		fingerprint := walletFingerprint(value)
+		if fingerprint == "" {
+			return fmt.Errorf("%w: wallet %d", ErrWalletCatalogUnverifiable, id)
+		}
+		if fingerprint == want {
+			return fmt.Errorf("%w: wallet %d", ErrWalletAlreadyExists, id)
+		}
+	}
+	return nil
+}
 
 func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 	Log.Infof("sat20wallet_ver:%s, DB_ver:%s", SOFTWARE_VERSION, DB_VERSION)
@@ -100,17 +153,17 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 func (p *Manager) Start() {
 	p.l1IndexerClient.Start()
 	p.l2IndexerClient.Start()
+	if p.watchTower != nil {
+		p.watchTower.Start()
+	}
+	p.startStatusBootstrap()
 	p.startActionMonitor()
+	p.startChannelHeartbeat()
 	manager := p.ensureDKVSManager()
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("register DKVS paths at startup failed: %v", err)
 	}
 	manager.start()
-	if _, err := p.syncDKVSOnce(); err != nil {
-		// The worker keeps retrying. Registered scopes remain not-ready, so
-		// application reads and writes cannot consume a stale persisted replica.
-		Log.Warningf("initial DKVS synchronization failed: %v", err)
-	}
 }
 
 func (p *Manager) IsReady() bool {
@@ -118,6 +171,12 @@ func (p *Manager) IsReady() bool {
 }
 
 func (p *Manager) Stop() {
+	p.invalidateStatusBootstrap()
+	p.stopChannelHeartbeat()
+	p.stopActionMonitor()
+	if p.watchTower != nil {
+		p.watchTower.Stop()
+	}
 	if p.rgbManager != nil && p.rgbManager.scopeStates != nil {
 		p.rgbManager.scopeStates.stopReconciliations()
 	}
@@ -128,7 +187,6 @@ func (p *Manager) Stop() {
 	if p.btcLuckyMiner != nil {
 		p.btcLuckyMiner.Stop()
 	}
-	p.stopActionMonitor()
 	p.l1IndexerClient.Stop()
 	p.l2IndexerClient.Stop()
 }
@@ -140,6 +198,8 @@ func (p *Manager) Close() {
 
 // 使用内部钱包
 func (p *Manager) CreateWallet(password string) (int64, string, error) {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 	// if p.wallet != nil {
@@ -183,19 +243,22 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 	p.markDKVSStateDirty()
 
 	id := p.status.CurrentWallet
+	p.channelIdentityGeneration++
 	p.mutex.Unlock()
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after wallet creation failed: %v", err)
 	}
+	p.wakeChannelHeartbeat()
 	return id, mnemonic, nil
 }
 
 // TODO 未完成，还没有保存
 func (p *Manager) CreateMonitorWallet(address string) (int64, error) {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
 
 	wallet := NewMonitorWallet(address)
 
@@ -205,10 +268,16 @@ func (p *Manager) CreateMonitorWallet(address string) (int64, error) {
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
-	return p.status.CurrentWallet, nil
+	id := p.status.CurrentWallet
+	p.channelIdentityGeneration++
+	p.mutex.Unlock()
+	p.wakeChannelHeartbeat()
+	return id, nil
 }
 
 func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 	// Log.Infof("ImportWallet %s %s", mnemonic, password)
@@ -226,6 +295,10 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	}
 
 	p.mutex.Lock()
+	if err := p.rejectDuplicateWalletLocked(wallet, password); err != nil {
+		p.mutex.Unlock()
+		return -1, err
+	}
 
 	err := p.saveMnemonic(mnemonic, password, wallet)
 	if err != nil {
@@ -239,28 +312,29 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
-	if p.accountProfile == nil {
-		if err := p.initializeAccountManagementLocked(password); err != nil {
-			p.mutex.Unlock()
-			return -1, fmt.Errorf("initialize account management: %w", err)
+	if p.accountProfile != nil {
+		if err := p.queueAccountMutationLocked(accountManagementMutation{
+			Type: accountMutationAddWallet, Fingerprint: walletFingerprint(wallet),
+			WalletID: wallet.GetId(),
+		}); err != nil {
+			Log.Errorf("queue managed wallet import failed: %v", err)
 		}
-	} else if err := p.queueAccountMutationLocked(accountManagementMutation{
-		Type: accountMutationAddWallet, Fingerprint: walletFingerprint(wallet),
-		WalletID: wallet.GetId(),
-	}); err != nil {
-		Log.Errorf("queue managed wallet import failed: %v", err)
 	}
 	p.markDKVSStateDirty()
 
 	id := p.status.CurrentWallet
+	p.channelIdentityGeneration++
 	p.mutex.Unlock()
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after wallet import failed: %v", err)
 	}
+	p.wakeChannelHeartbeat()
 	return id, nil
 }
 
 func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (int64, error) {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 
@@ -275,6 +349,10 @@ func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (i
 	}
 
 	p.mutex.Lock()
+	if err := p.rejectDuplicateWalletLocked(wallet, password); err != nil {
+		p.mutex.Unlock()
+		return -1, err
+	}
 
 	err = p.saveSecret(privKey, password, WALLET_TYPE_PRIVKEY, wallet)
 	if err != nil {
@@ -291,10 +369,12 @@ func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (i
 	p.markDKVSStateDirty()
 
 	id := p.status.CurrentWallet
+	p.channelIdentityGeneration++
 	p.mutex.Unlock()
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after private key import failed: %v", err)
 	}
+	p.wakeChannelHeartbeat()
 	return id, nil
 }
 
@@ -335,16 +415,21 @@ func (p *Manager) ChangePassword(oldPS, newPS string) error {
 }
 
 func (p *Manager) UnlockWallet(password string) (int64, error) {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
 	id, err := p.unlockWallet(password)
 	p.mutex.Unlock()
 	if err == nil {
+		p.rehydratePendingFundingRuntime()
+		p.channelIdentityGeneration++
 		if refreshErr := p.refreshDKVSRegistrations(); refreshErr != nil {
 			Log.Warningf("refresh DKVS registrations after unlock failed: %v", refreshErr)
 		}
 		p.rgbManager.scheduleRGB11ChainReconciliation()
+		p.wakeChannelHeartbeat()
 	}
 	return id, err
 }
@@ -415,7 +500,6 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 	}
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
-	p.markDKVSStateDirty()
 
 	return p.status.CurrentWallet, nil
 }
@@ -433,12 +517,15 @@ func (p *Manager) GetAllWallets() map[int64]int {
 
 // 不再需要密码
 func (p *Manager) SwitchWallet(id int64, password string) error {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
 
 	if p.status.CurrentWallet == id {
 		p.mutex.Unlock()
+		p.wakeChannelHeartbeat()
 		return nil
 	}
 	w, ok := p.walletInfoMap[id]
@@ -461,12 +548,14 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
 	p.markDKVSStateDirty()
+	p.channelIdentityGeneration++
 
 	p.mutex.Unlock()
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after wallet switch failed: %v", err)
 	}
 	p.rgbManager.scheduleRGB11ChainReconciliation()
+	p.wakeChannelHeartbeat()
 	return nil
 }
 
@@ -520,7 +609,11 @@ func (p *Manager) FindWalletByPubKey(pubKey []byte) common.Wallet {
 	defer p.mutex.RUnlock()
 
 	for _, walletInfo := range p.walletInfoMap {
-		if bytes.Equal(walletInfo.Wallet.GetNodePubKey().SerializeCompressed(), pubKey) {
+		if walletInfo == nil || walletInfo.Wallet == nil {
+			continue
+		}
+		nodePubKey := walletInfo.Wallet.GetNodePubKey()
+		if nodePubKey != nil && bytes.Equal(nodePubKey.SerializeCompressed(), pubKey) {
 			return walletInfo.Wallet
 		}
 	}
@@ -534,13 +627,21 @@ func (p *Manager) FindWalletByPubKeyWithDepth(pubKey []byte, depth uint32) commo
 	defer p.mutex.RUnlock()
 
 	for _, walletInfo := range p.walletInfoMap {
-		if bytes.Equal(walletInfo.Wallet.GetNodePubKey().SerializeCompressed(), pubKey) {
+		if walletInfo == nil || walletInfo.Wallet == nil {
+			continue
+		}
+		nodePubKey := walletInfo.Wallet.GetNodePubKey()
+		if nodePubKey != nil && bytes.Equal(nodePubKey.SerializeCompressed(), pubKey) {
 			return walletInfo.Wallet
 		}
 		w := walletInfo.Wallet.Clone()
+		if w == nil {
+			continue
+		}
 		for i := uint32(1); i <= depth; i++ {
 			w.SetSubAccount(i)
-			if bytes.Equal(w.GetNodePubKey().SerializeCompressed(), pubKey) {
+			paymentPubKey := w.GetPaymentPubKey()
+			if paymentPubKey != nil && bytes.Equal(paymentPubKey.SerializeCompressed(), pubKey) {
 				return w
 			}
 		}
@@ -550,12 +651,15 @@ func (p *Manager) FindWalletByPubKeyWithDepth(pubKey []byte, depth uint32) commo
 }
 
 func (p *Manager) SwitchAccount(id uint32) {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
 
 	if p.status.CurrentAccount == id {
 		p.mutex.Unlock()
+		p.wakeChannelHeartbeat()
 		return
 	}
 
@@ -586,14 +690,18 @@ func (p *Manager) SwitchAccount(id uint32) {
 	_ = p.rgbManager.rebuildRGB11Locks()
 	p.saveStatus()
 	p.markDKVSStateDirty()
+	p.channelIdentityGeneration++
 	p.mutex.Unlock()
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after account switch failed: %v", err)
 	}
 	p.rgbManager.scheduleRGB11ChainReconciliation()
+	p.wakeChannelHeartbeat()
 }
 
 func (p *Manager) SwitchChain(chain, password string) error {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
@@ -603,8 +711,11 @@ func (p *Manager) SwitchChain(chain, password string) error {
 		return nil
 	}
 	if chain == "mainnet" || chain == "testnet" {
+		oldChain := _chain
+		oldStatus := &Status{}
+		applyStatusSnapshot(oldStatus, p.status)
 		_chain = chain
-		p.status.CurrentChain = chain
+		resetStatusChainState(p.status, chain)
 		oldWallet := p.wallet
 		p.wallet = nil
 		for _, walletInfo := range p.walletInfoMap {
@@ -613,8 +724,10 @@ func (p *Manager) SwitchChain(chain, password string) error {
 		_, err := p.unlockWallet(password)
 		if err == nil {
 			p.saveStatus()
-			p.markDKVSStateDirty()
+			p.channelIdentityGeneration++
 		} else {
+			_chain = oldChain
+			applyStatusSnapshot(p.status, oldStatus)
 			p.wallet = oldWallet
 		}
 		return err
@@ -862,14 +975,19 @@ func (p *Manager) SignPsbt_SatsNet(psbtHex string, bExtract bool) (string, error
 
 // 注册回调函数
 func (p *Manager) RegisterCallback(callback NotifyCB) {
+	p.msgCallbackMu.Lock()
+	defer p.msgCallbackMu.Unlock()
 	p.msgCallback = callback
 }
 
 // 发送消息
 func (p *Manager) SendMessageToUpper(eventName string, data interface{}) {
 	Log.Infof("message notified: %s", eventName)
-	if p.msgCallback != nil {
-		p.msgCallback(eventName, data)
+	p.msgCallbackMu.RLock()
+	callback := p.msgCallback
+	p.msgCallbackMu.RUnlock()
+	if callback != nil {
+		callback(eventName, data)
 	}
 }
 

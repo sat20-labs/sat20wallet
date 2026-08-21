@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -41,14 +42,18 @@ func (p *Manager) enableUtxosInChannel(channelId, txId string, needLock bool) {
 }
 
 func (p *Manager) BroadcastTxsIrreversibleL1(txs []*wire.MsgTx, action string) (bool, error) {
-	err := p.BroadcastTxs(txs)
+	return p.BroadcastTxsIrreversibleL1Context(context.Background(), txs, action)
+}
+
+func (p *Manager) BroadcastTxsIrreversibleL1Context(ctx context.Context, txs []*wire.MsgTx, action string) (bool, error) {
+	err := p.BroadcastTxsContext(ctx, txs)
 	if err == nil {
 		return true, nil
 	}
 	if !isBroadcastResultUnknown(err) {
 		return false, err
 	}
-	if p.areL1TxsVisible(txs) {
+	if p.areL1TxsVisibleContext(ctx, txs) {
 		Log.Warnf("%s L1 broadcast returned an unknown network error, but txs are visible. %v", action, err)
 		p.lockL1Txs(txs)
 		return true, nil
@@ -68,11 +73,15 @@ func (p *Manager) lockL1Txs(txs []*wire.MsgTx) {
 }
 
 func (p *Manager) areL1TxsVisible(txs []*wire.MsgTx) bool {
+	return p.areL1TxsVisibleContext(context.Background(), txs)
+}
+
+func (p *Manager) areL1TxsVisibleContext(ctx context.Context, txs []*wire.MsgTx) bool {
 	for _, tx := range txs {
 		if tx == nil {
 			continue
 		}
-		if _, err := p.GetIndexerRPCClient().GetRawTx(tx.TxID()); err != nil {
+		if _, err := getRawTxWithContext(ctx, p.GetIndexerRPCClient(), tx.TxID()); err != nil {
 			Log.Warnf("L1 tx %s is not visible after unknown broadcast result. %v", tx.TxID(), err)
 			return false
 		}

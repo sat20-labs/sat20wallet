@@ -86,8 +86,9 @@ func TestSatsNetDKVSClientRecords(t *testing.T) {
 	record := &swire.DKVSRecord{Version: 1, Key: "/tmp/test", Value: []byte("value"), Seq: 1}
 	http := &fakeDKVSHTTPClient{
 		getResp: map[string][]byte{
-			"testnet/v3/dkvs/records":        mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": record}),
-			"testnet/v3/dkvs/records/prefix": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "start": 2, "total": 1, "data": []*swire.DKVSRecord{record}}),
+			"testnet/v3/dkvs/records":           mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": record}),
+			"testnet/v3/dkvs/records/prefix":    mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "start": 2, "total": 1, "data": []*swire.DKVSRecord{record}}),
+			"testnet/btc/block/bestblockheight": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": 3570}),
 		},
 		postResp: map[string][]byte{
 			"testnet/v3/dkvs/records":   mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": record}),
@@ -96,6 +97,9 @@ func TestSatsNetDKVSClientRecords(t *testing.T) {
 		deleteResp: map[string][]byte{},
 	}
 	client := NewSatsNetDKVSClient("http", "127.0.0.1:8334", "testnet", http)
+	if height, err := client.GetBestHeight(); err != nil || height != 3570 {
+		t.Fatalf("bestheight=%d err=%v", height, err)
+	}
 
 	put, err := client.PutRecord(record)
 	if err != nil {

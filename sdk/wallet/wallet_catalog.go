@@ -265,6 +265,8 @@ func (p *Manager) firstWalletLocked() *WalletInfo {
 }
 
 func (p *Manager) DeleteWallet(id int64) error {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	if len(p.walletInfoMap) <= 1 {
@@ -311,6 +313,8 @@ func (p *Manager) DeleteWallet(id int64) error {
 	if err := p.saveStatus(); err != nil {
 		return err
 	}
+	p.channelIdentityGeneration++
 	p.markDKVSStateDirty()
+	p.wakeChannelHeartbeat()
 	return nil
 }

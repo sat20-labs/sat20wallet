@@ -489,7 +489,7 @@ func validateEngineSnapshot(records []SnapshotRecord) error {
 		request, err := corewallet.DecodeReceiveRequest(record.Value)
 		if err != nil || request.Version != corewallet.ReceiveVersion ||
 			request.RequestID == "" || record.Key != "wallet/receive/"+request.RequestID ||
-			request.RelayKey == request.AckKey {
+			request.RelayKey != "" || request.AckKey != "" {
 			return corewallet.ErrInvalidReceive
 		}
 	}

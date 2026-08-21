@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/txscript"
@@ -129,6 +130,8 @@ func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire
 		return "", 0, err
 	}
 
+	logID := p.beginOperationLogBestEffort(splicingInOperationLogCreate(&resv))
+
 	for {
 		channelID := resv.Channel.ChannelId
 		if channel.PeerRPC == nil {
@@ -141,6 +144,12 @@ func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire
 			break
 		}
 		channel.ResvId = resv.Id
+		p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_SPLICING, resv.Id)
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: peerAcceptedSplicingMessage(&resv, "splice-in"),
+			Details: map[string]string{"reservation_id": strconv.FormatInt(resv.Id, 10)},
+		})
 
 		err = p.FunderProcessAcceptSplicingIn(&resv)
 		if err != nil {
@@ -226,7 +235,16 @@ func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire
 		}
 		splicingTxID = resv.SplicingTx.TxID()
 		Log.Infof("SplicingIn TxId: %s", splicingTxID)
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Splice-in transaction submitted; waiting for confirmation",
+			TxID:    splicingTxID,
+			Details: map[string]string{"txid": splicingTxID},
+		})
 	} else {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()},
+		})
 		_ = p.saveChannelToDB(resv.OldChannel)
 		p.enableChannel(resv.OldChannel)
 		p.DelResvWithId(resv.Id)
@@ -338,6 +356,8 @@ func (p *Manager) FunderInitSplicingOutProcess(channel *Channel, destAddr string
 		return "", 0, err
 	}
 
+	logID := p.beginOperationLogBestEffort(splicingOutOperationLogCreate(&resv))
+
 	for {
 		channelID := resv.Channel.ChannelId
 		if channel.PeerRPC == nil {
@@ -350,6 +370,12 @@ func (p *Manager) FunderInitSplicingOutProcess(channel *Channel, destAddr string
 			break
 		}
 		channel.ResvId = resv.Id
+		p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_SPLICING, resv.Id)
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: peerAcceptedSplicingMessage(&resv, "splice-out"),
+			Details: map[string]string{"reservation_id": strconv.FormatInt(resv.Id, 10)},
+		})
 
 		err = p.FunderProcessSplicingOutAccpted(&resv)
 		if err != nil {
@@ -406,7 +432,16 @@ func (p *Manager) FunderInitSplicingOutProcess(channel *Channel, destAddr string
 		}
 		splicingTxID = resv.SplicingTx.TxID()
 		Log.Infof("SplicingOut TxId: %s", splicingTxID)
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Splice-out transaction submitted; waiting for confirmation",
+			TxID:    splicingTxID,
+			Details: map[string]string{"txid": splicingTxID},
+		})
 	} else {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()},
+		})
 		_ = p.saveChannelToDB(resv.OldChannel)
 		p.enableChannel(resv.OldChannel)
 		p.DelResvWithId(resv.Id)
@@ -577,8 +612,8 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 	if needStub > 0 {
 		for range needStub {
 			weightEstimate.AddP2WSHOutput()
+			feeValue -= int64(needStub) * stubValue
 		}
-		feeValue -= int64(needStub) * stubValue
 	}
 
 	switch assetName.Protocol {

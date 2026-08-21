@@ -11,6 +11,34 @@ interface SatsnetResponse<T = any> {
   msg: string
 }
 
+interface CommitTxAssetUtxo {
+  UtxoId: number
+  Outpoint: string
+  Value: number
+  PkScript: string
+  Assets: Array<{
+    Name: { Ticker: string; [key: string]: unknown }
+    Amount: string
+    [key: string]: unknown
+  }>
+}
+
+interface CommitTxAssetInfo {
+  txId: string
+  txHex: string
+  inputs: string
+  outputs: string
+}
+
+type RootAccountRecoveryResult = {
+  status: 'found' | 'not_found' | 'pending'
+  code:
+    | 'ACCOUNT_ROOT_RECOVERED'
+    | 'ACCOUNT_ROOT_NOT_FOUND'
+    | 'ACCOUNT_ROOT_DISCOVERY_PENDING'
+  walletId?: string
+}
+
 interface Config {
   Chain: string
   Mode: string
@@ -81,6 +109,14 @@ declare interface WalletManager {
     amount: string | number
   ): Promise<SatsnetResponse<{ txId: string }>>
 
+  resumeRGB11PreparedTransfer(
+    transferId: string
+  ): Promise<SatsnetResponse<{ transfer: string }>>
+
+  cancelExpiredRGB11Transfer(
+    transferId: string
+  ): Promise<SatsnetResponse<{ cancelled: boolean }>>
+
   getChannelAddrByPeerPubkey(peerPubkey: string): Promise<SatsnetResponse<{ channelAddr: string, peerAddr }>>
 
   // Creates a new wallet with a password and returns the wallet ID and mnemonic.
@@ -93,6 +129,11 @@ declare interface WalletManager {
     mnemonic: string,
     password: string
   ): Promise<SatsnetResponse<{ walletId: string }>>
+
+  recoverAccountManagementFromRootMnemonic(
+    mnemonic: string,
+    password: string
+  ): Promise<SatsnetResponse<RootAccountRecoveryResult>>
 
   // Unlocks an existing wallet using a password and returns the wallet ID.
   unlockWallet(password: string): Promise<SatsnetResponse<{ walletId: string }>>
@@ -229,13 +270,13 @@ declare interface WalletManager {
   lockUtxo(
     address: string,
     utxo: any,
-    reason?: string
+    reason: string
   ): Promise<SatsnetResponse<any>>
 
   lockUtxo_SatsNet(
     address: string,
     utxo: any,
-    reason?: string
+    reason: string
   ): Promise<SatsnetResponse<any>>
 
   unlockUtxo(
@@ -403,6 +444,10 @@ interface SatsnetStp {
     utxoList: string[],
     memo: string
   ): SatsnetResponse
+  previewOpenChannel(
+    feeRate: string | number,
+    amt: string | number
+  ): SatsnetResponse<any>
   splicingIn(
     chanPoint: string,
     assetName: string,
@@ -439,6 +484,18 @@ interface SatsnetStp {
   getCurrentChannel(): SatsnetResponse
   getChannel(id: string): SatsnetResponse
   getChannelStatus(id: string): SatsnetResponse
+  safetySnapshot(channelId: string): SatsnetResponse
+  commitmentExport(channelId: string): SatsnetResponse
+  punishStatus(channelId: string): SatsnetResponse
+  punishBuild(channelId: string, commitTxId: string): SatsnetResponse
+  punishBroadcast(channelId: string, commitTxId: string): Promise<SatsnetResponse<any>>
+  forceClosePlan(channelId: string): SatsnetResponse
+  sweepBuild(
+    channelId: string,
+    commitTxId?: string,
+    height?: string | number,
+    broadcast?: boolean
+  ): Promise<SatsnetResponse<any>>
   sendUtxos_SatsNet(
     address: string,
     utxos: string[],
@@ -478,8 +535,8 @@ interface SatsnetStp {
 
   getAllLockedUtxo(address: string): Promise<SatsnetResponse<any>>
   getAllLockedUtxo_SatsNet(address: string): Promise<SatsnetResponse<any>>
-  lockUtxo(address: string, utxo: any, reason?: string): Promise<SatsnetResponse<any>>
-  lockUtxo_SatsNet(address: string, utxo: any, reason?: string): Promise<SatsnetResponse<any>>
+  lockUtxo(address: string, utxo: any, reason: string): Promise<SatsnetResponse<any>>
+  lockUtxo_SatsNet(address: string, utxo: any, reason: string): Promise<SatsnetResponse<any>>
   unlockUtxo(address: string, utxo: any): Promise<SatsnetResponse<any>>
   unlockUtxo_SatsNet(address: string, utxo: any): Promise<SatsnetResponse<any>>
 
@@ -492,7 +549,7 @@ interface SatsnetStp {
   getUtxosWithAssetV2_SatsNet(address: string, amt: string | number, assetName: string): Promise<SatsnetResponse<any>> // Add params, replace 'any'
   getCommitTxAssetInfo(
     channelId: string
-  ): Promise<SatsnetResponse<any>>
+  ): Promise<SatsnetResponse<CommitTxAssetInfo>>
   // 新增方法定义
   getAssetAmount(
     address: string,

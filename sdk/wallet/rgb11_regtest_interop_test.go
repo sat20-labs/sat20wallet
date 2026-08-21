@@ -318,6 +318,7 @@ func requiredRegtestEnv(t *testing.T, name string) string {
 }
 
 func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
+	requireWalletLiveNetwork(t)
 	esploraURL := requiredRegtestEnv(t, "RGB11_REGTEST_ESPLORA")
 	officialBin := requiredRegtestEnv(t, "RGB11_REGTEST_OFFICIAL_BIN")
 	officialAlice := requiredRegtestEnv(t, "RGB11_REGTEST_OFFICIAL_ALICE")

@@ -8,8 +8,15 @@ func (p *Manager) EnableChannel(channel *Channel) {
 	p.AddChannelToNode(channel)
 
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
 	p.channelMap[channel.ChannelId] = channel
+	p.mutex.Unlock()
+
+	// The current remote commitment is valid, not revoked. Keep this invariant
+	// inside the SDK so every client, including the PWA, restores the same
+	// watchtower state without relying on an upper STP service callback.
+	if tower := p.GetWatchTower(); tower != nil {
+		tower.CleanCurrentRemoteCommitTx(channel)
+	}
 }
 
 func (p *Manager) disableChannel(channel *Channel) {
@@ -102,13 +109,13 @@ func (p *Manager) GetActiveChannelWithId(channelId string) *Channel {
 	}
 
 	for _, c := range p.GetPaymentReservations() {
-		if c.ChannelId == channelId {
+		if c != nil && c.ChannelId == channelId && c.Channel != nil {
 			return c.Channel
 		}
 	}
 
 	for _, c := range p.GetSplicingReservations() {
-		if c.ChannelId == channelId {
+		if c != nil && c.ChannelId == channelId && c.Channel != nil {
 			return c.Channel
 		}
 	}
@@ -130,7 +137,7 @@ func (p *Manager) GetCurrentChannel() *Channel {
 	}
 
 	for _, c := range p.GetFundingReservations() {
-		if c.ChannelId == channelId {
+		if c != nil && c.ChannelId == channelId && c.Channel != nil {
 			return c.Channel
 		}
 	}
@@ -138,13 +145,18 @@ func (p *Manager) GetCurrentChannel() *Channel {
 }
 
 func (p *Manager) FindChannel(channelId string) *Channel {
+	// A locked manager has only persisted wallet metadata.  Do not load a
+	// channel runtime before the wallet secrets have been hydrated.
+	if p.wallet == nil {
+		return nil
+	}
 	c := p.GetActiveChannelWithId(channelId)
 	if c != nil {
 		return c
 	}
 
 	for _, c := range p.GetFundingReservations() {
-		if c.ChannelId == channelId {
+		if c != nil && c.ChannelId == channelId && c.Channel != nil {
 			return c.Channel
 		}
 	}
@@ -169,9 +181,15 @@ func (p *Manager) GetAllChannels() map[string]*Channel {
 	defer p.mutex.RUnlock()
 	result := make(map[string]*Channel, len(p.channelMap))
 	for _, c := range p.channelMap {
+		if c == nil {
+			continue
+		}
 		result[c.ChannelId] = c
 	}
 	for _, c := range p.fundingChannelMap {
+		if c == nil || c.Channel == nil {
+			continue
+		}
 		result[c.ChannelId] = c.Channel
 	}
 	return result

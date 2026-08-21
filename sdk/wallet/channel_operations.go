@@ -336,6 +336,7 @@ func (p *Manager) LockToChannelWithExpand(channelId string, assetName string, am
 	}
 
 	return p.PerformLocalAction(LOCAL_ACTION_LOCK_WITH_EXPAND, &LocalActionParam_Expand{
+		ChannelId:   channelId,
 		AssetName:   name,
 		Amt:         dAmt,
 		ContractURL: url,

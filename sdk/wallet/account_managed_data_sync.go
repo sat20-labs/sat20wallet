@@ -2,13 +2,121 @@ package wallet
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
+
+const accountManagedDataReadyTimeout = 30 * time.Second
+
+const accountManagedOutboxDomain = "account-managed"
+
+type accountManagedOutboxPlan struct {
+	Pending bool
+}
+
+func (p accountManagedOutboxPlan) origin(key string, generation uint64) dkvsOutboxOrigin {
+	return dkvsOutboxOrigin{
+		Key: key, Domain: accountManagedOutboxDomain, Generation: generation,
+	}
+}
+
+func applyAccountManagedOutboxPlan(mutations []dkvsValueMutation, _ string,
+	_ accountManagedOutboxPlan) []dkvsValueMutation {
+	return mutations
+}
+
+func accountManagedEntryRecords(entry *dkvsBatchOutboxEntry,
+	stateKey, dataKey string) ([]dkvsindexer.CASMutation, bool) {
+	if entry == nil {
+		return nil, false
+	}
+	mutations, _, err := entry.decode()
+	if err != nil || len(mutations) == 0 {
+		return nil, false
+	}
+	seenState := false
+	for _, mutation := range mutations {
+		if mutation.Record == nil ||
+			(mutation.Record.Key != stateKey && mutation.Record.Key != dataKey) {
+			return nil, false
+		}
+		seenState = seenState || mutation.Record.Key == stateKey
+	}
+	return mutations, seenState
+}
+
+func (p *Manager) currentAccountManagedOutboxPlan() (accountManagedOutboxPlan, error) {
+	plan := accountManagedOutboxPlan{}
+	if p == nil {
+		return plan, ErrDKVSPathNotSynced
+	}
+	p.mutex.RLock()
+	if p.accountProfile == nil {
+		p.mutex.RUnlock()
+		return plan, nil
+	}
+	profile := *p.accountProfile
+	p.mutex.RUnlock()
+	root, err := p.accountManagementRootWallet()
+	if err != nil {
+		return plan, err
+	}
+	stateKey, err := p.accountManagedStateKey(root)
+	if err != nil {
+		return plan, err
+	}
+	dataKey, err := p.accountManagedDataBlobKey(root)
+	if err != nil {
+		return plan, err
+	}
+	store, err := p.accountDKVSStore()
+	if err != nil {
+		return plan, err
+	}
+	return p.accountManagedOutboxPlanFor(store, profile, stateKey, dataKey)
+}
+
+func (p *Manager) accountManagedOutboxPlanFor(store *dkvsStore,
+	profile accountManagementProfile, stateKey, dataKey string) (accountManagedOutboxPlan, error) {
+	plan := accountManagedOutboxPlan{}
+	if store == nil || store.client == nil || p == nil || p.db == nil ||
+		strings.TrimSpace(store.client.replicaNamespace) == "" {
+		return plan, nil
+	}
+	entries, err := newDKVSReplicaStore(p.db).loadBatchOutbox(store.client.replicaNamespace)
+	if err != nil {
+		return plan, err
+	}
+	for _, entry := range entries {
+		_, matches := accountManagedEntryRecords(entry, stateKey, dataKey)
+		if !matches {
+			continue
+		}
+		currentGeneration := entry.OriginDomain == accountManagedOutboxDomain &&
+			entry.OriginGeneration == profile.ManagedDataGeneration
+		if currentGeneration && entry.State != dkvsSessionTerminal &&
+			entry.State != dkvsSessionConflict {
+			plan.Pending = true
+			continue
+		}
+		if entry.State != dkvsSessionTerminal {
+			continue
+		}
+		if currentGeneration {
+			return plan, &dkvsTerminalOutboxError{
+				Key: entry.Key, Code: entry.LastErrorCode, Message: entry.LastError,
+			}
+		}
+	}
+	return plan, nil
+}
 
 type accountManagedDataSnapshot struct {
 	Catalog    AccountManagedDataCatalog
@@ -256,4 +364,73 @@ func (p *Manager) requireCurrentAccountManagedData() error {
 		return dkvsindexer.ErrWriteConflict
 	}
 	return nil
+}
+
+// WaitAccountManagedDataReady waits until the account-managed state and blob
+// covering current wallet data are confirmed in DKVS. It never holds an RGB
+// operation lock and always has a bounded, cancellable lifetime.
+func (p *Manager) WaitAccountManagedDataReady(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		err := p.waitAccountManagedDataReadyAttempt(ctx)
+		if err == nil || !errors.Is(err, ErrAccountManagementWalletUnavailable) {
+			return err
+		}
+
+		// Wallet activation/switching is a transient readiness condition.
+		// Preserve the Wait contract and let the caller's context decide how
+		// long to wait instead of returning a terminal-looking error.
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (p *Manager) waitAccountManagedDataReadyAttempt(ctx context.Context) error {
+	if p == nil {
+		return ErrDKVSPathNotSynced
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, accountManagedDataReadyTimeout)
+		defer cancel()
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		err := p.requireCurrentAccountManagedData()
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, ErrDKVSPathNotSynced) &&
+			!errors.Is(err, dkvsindexer.ErrWriteConflict) &&
+			!errors.Is(err, dkvsindexer.ErrStaleGeneration) &&
+			!errors.Is(err, dkvsindexer.ErrPathDiverged) {
+			return err
+		}
+		_, planErr := p.currentAccountManagedOutboxPlan()
+		if planErr != nil && !errors.Is(planErr, ErrAccountManagementWalletUnavailable) {
+			return planErr
+		}
+		p.markDKVSStateDirty()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -15,17 +16,12 @@ import (
 	"syscall/js"
 
 	indexer "github.com/sat20-labs/indexer/common"
-	corerelay "github.com/sat20-labs/rgb11/relay"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sirupsen/logrus"
 )
 
-const (
-	module                  = "sat20wallet_wasm"
-	rgb11TransientTTLBlocks = uint64(144)
-)
+const module = "sat20wallet_wasm"
 
 var _mgr *wallet.Manager
 var _callback interface{}
@@ -544,6 +540,42 @@ func importWallet(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
+func recoverAccountManagementFromRootMnemonic(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) != 2 || p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "expected mnemonic and password")
+	}
+	mnemonic, password := p[0].String(), p[1].String()
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		_, err := _mgr.RecoverAccountManagementFromRootMnemonic(
+			context.Background(), mnemonic, password)
+		switch {
+		case err == nil:
+			walletID := ""
+			if current := _mgr.GetWallet(); current != nil {
+				walletID = fmt.Sprintf("%d", current.GetId())
+			}
+			return map[string]any{
+				"status": "found", "code": wallet.RootAccountRecoveryCodeRecovered,
+				"walletId": walletID,
+			}, 0, "ok"
+		case errors.Is(err, wallet.ErrRootAccountNotFound):
+			return map[string]any{
+				"status": "not_found", "code": wallet.RootAccountRecoveryCodeNotFound,
+			}, 0, "ok"
+		case errors.Is(err, wallet.ErrRootAccountDiscoveryPending):
+			return map[string]any{
+				"status": "pending", "code": wallet.RootAccountRecoveryCodePending,
+			}, 0, "ok"
+		default:
+			return nil, -1, err.Error()
+		}
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
 func importWalletWithPrivKey(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -1003,6 +1035,43 @@ func openChannel(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
+func previewOpenChannel(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected 2 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "feeRate parameter should be a string")
+	}
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "amount parameter should be a string")
+	}
+
+	feeRate, err := strconv.ParseInt(p[0].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	amt, err := strconv.ParseInt(p[1].String(), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		info, err := _mgr.PreviewOpenChannel(feeRate, amt)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := jsonObject(info)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
 func closeChannel(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -1152,6 +1221,26 @@ func reservationStatus(this js.Value, p []js.Value) any {
 	}, 0, "ok")
 }
 
+func resumeLockWithExpandFromL1Tx(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 2 {
+		return createJsRet(nil, -1, "Expected reservation id and L1 transaction id")
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(p[0].String()), 10, 64)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	if p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "L1 transaction id parameter should be a string")
+	}
+	if err := _mgr.ResumeLockWithExpandFromL1Tx(id, strings.TrimSpace(p[1].String())); err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return createJsRet(map[string]interface{}{"reservation_id": id}, 0, "ok")
+}
+
 func allReservations(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -1170,6 +1259,224 @@ func allReservations(this js.Value, p []js.Value) any {
 		items = append(items, item)
 	}
 	return createJsRet(map[string]interface{}{"reservations": items}, 0, "ok")
+}
+
+func safetyJSONData(value any) (map[string]any, error) {
+	buf, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"json": string(buf)}, nil
+}
+
+func safetyChannelIDArg(p []js.Value) (string, error) {
+	if len(p) > 0 && p[0].Type() == js.TypeString {
+		channelID := strings.TrimSpace(p[0].String())
+		if channelID != "" {
+			return channelID, nil
+		}
+	}
+	channel := _mgr.GetCurrentChannel()
+	if channel == nil {
+		return "", fmt.Errorf("expected channel id parameter")
+	}
+	return channel.ChannelId, nil
+}
+
+func safetyCommitTxIDArg(p []js.Value) (string, error) {
+	if len(p) < 2 || p[1].Type() != js.TypeString || strings.TrimSpace(p[1].String()) == "" {
+		return "", fmt.Errorf("expected commit txid parameter")
+	}
+	return strings.TrimSpace(p[1].String()), nil
+}
+
+func safetySnapshot(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	channelID, err := safetyChannelIDArg(p)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	snapshot, err := _mgr.SafetySnapshot(channelID)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	data, err := safetyJSONData(snapshot)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	data["channel_id"] = snapshot.ChannelId
+	data["status"] = snapshot.Status
+	return createJsRet(data, 0, "ok")
+}
+
+func commitmentExport(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	channelID, err := safetyChannelIDArg(p)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	exported, err := _mgr.CommitmentExport(channelID)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	data, err := safetyJSONData(exported)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	data["channel_id"] = exported.ChannelId
+	data["commit_height"] = exported.CommitHeight
+	return createJsRet(data, 0, "ok")
+}
+
+func punishStatus(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	channelID, err := safetyChannelIDArg(p)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	items, err := _mgr.PunishStatus(channelID)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	data, err := safetyJSONData(items)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	data["channel_id"] = channelID
+	return createJsRet(data, 0, "ok")
+}
+
+func punishBuild(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	channelID, err := safetyChannelIDArg(p)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	commitTxID, err := safetyCommitTxIDArg(p)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	info, err := _mgr.BuildPunishTx(channelID, commitTxID)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	data, err := safetyJSONData(info)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	data["channel_id"] = info.ChannelId
+	data["commit_txid"] = info.CommitTxId
+	return createJsRet(data, 0, "ok")
+}
+
+func punishBroadcast(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	channelID, err := safetyChannelIDArg(p)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	commitTxID, err := safetyCommitTxIDArg(p)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.TestBroadcastPunishTx(channelID, commitTxID)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := safetyJSONData(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data["channel_id"] = result.ChannelId
+		data["commit_txid"] = result.CommitTxId
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+func forceClosePlan(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	channelID, err := safetyChannelIDArg(p)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	plan, err := _mgr.ForceClosePlan(channelID)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	data, err := safetyJSONData(plan)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	data["channel_id"] = plan.ChannelId
+	data["commit_txid"] = plan.CommitTxId
+	return createJsRet(data, 0, "ok")
+}
+
+func sweepBuild(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	channelID, err := safetyChannelIDArg(p)
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	expectedCommitTxID := ""
+	if len(p) > 1 && p[1].Type() == js.TypeString {
+		expectedCommitTxID = strings.TrimSpace(p[1].String())
+	}
+	height, broadcast := 0, false
+	if len(p) > 2 {
+		switch p[2].Type() {
+		case js.TypeNumber:
+			height = p[2].Int()
+		case js.TypeString:
+			if raw := strings.TrimSpace(p[2].String()); raw != "" {
+				height, err = strconv.Atoi(raw)
+				if err != nil {
+					return createJsRet(nil, -1, err.Error())
+				}
+			}
+		default:
+			return createJsRet(nil, -1, "height parameter should be a number or string")
+		}
+	}
+	if len(p) > 3 && p[3].Type() == js.TypeBoolean {
+		broadcast = p[3].Bool()
+	}
+	if broadcast {
+		return createJsRet(nil, -1, "sweep broadcasting is owned by the SDK force-close monitor")
+	}
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.BuildSweepTx(channelID, height)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		if expectedCommitTxID != "" && result.CommitTxId != expectedCommitTxID {
+			return nil, -1, fmt.Sprintf("sweep commit txid mismatch: expected %s got %s", expectedCommitTxID, result.CommitTxId)
+		}
+		data, err := safetyJSONData(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data["channel_id"] = result.ChannelId
+		data["sweep_txid"] = result.SweepTxId
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func unlockFromChannel(this js.Value, p []js.Value) any {
@@ -2658,6 +2965,44 @@ func getTxAssetInfoFromPsbt(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 
+		outputs, err := json.Marshal(info.OutputAssets)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+
+		return map[string]any{
+			"txId":    info.TxId,
+			"txHex":   info.TxHex,
+			"inputs":  string(inputs),
+			"outputs": string(outputs),
+		}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func getCommitTxAssetInfo(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 1 {
+		return createJsRet(nil, -1, "Expected 1 parameters")
+	}
+	if p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "channel parameter should be a string")
+	}
+	channelID := p[0].String()
+
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		info, err := _mgr.GetCommitTxAssetInfo(channelID)
+		if err != nil {
+			wallet.Log.Errorf("GetCommitTxAssetInfo error: %v", err)
+			return nil, -1, err.Error()
+		}
+
+		inputs, err := json.Marshal(info.InputAssets)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
 		outputs, err := json.Marshal(info.OutputAssets)
 		if err != nil {
 			return nil, -1, err.Error()
@@ -4940,156 +5285,24 @@ func prepareRGB11Transfer(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-func buildRGB11RelayRecord(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 transfer id")
+func resumeRGB11PreparedTransfer(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	transferID := p[0].String()
+	if len(p) != 1 || p[0].Type() != js.TypeString || strings.TrimSpace(p[0].String()) == "" {
+		return createJsRet(nil, -1, "expected one RGB11 transfer id")
+	}
+	transferID := strings.TrimSpace(p[0].String())
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		record, err := _mgr.BuildRGB11RelayRecord(transferID, "sat20-pwa")
+		result, err := _mgr.ResumeRGB11PreparedTransfer(transferID)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		encoded, err := json.Marshal(record)
+		encoded, err := json.Marshal(result)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		return map[string]any{"record": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func publishRGB11RelayRecord(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 transfer id")
-	}
-	transferID := p[0].String()
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		record, _, err := _mgr.PublishRGB11RelayRecord(transferID, "sat20-pwa", dkvsindexer.RecordOptions{
-			TTL: rgb11TransientTTLBlocks,
-		})
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(record)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"record": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func acceptRGB11RelayConsignment(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 3 {
-		return createJsRet(nil, -1, "missing RGB11 request id, relay record or consignment")
-	}
-	requestID, recordJSON, consignment := p[0].String(), p[1].String(), p[2].String()
-	var record corerelay.RelayRecord
-	if err := json.Unmarshal([]byte(recordJSON), &record); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		receipt, ack, err := _mgr.AcceptRGB11RelayConsignment(
-			context.Background(), requestID, &record, []byte(consignment),
-		)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		receiptJSON, err := json.Marshal(receipt)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		ackJSON, err := json.Marshal(ack)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"receipt": string(receiptJSON), "ack": string(ackJSON)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func rejectRGB11RelayConsignment(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 2 {
-		return createJsRet(nil, -1, "missing RGB11 request id or relay record")
-	}
-	requestID := p[0].String()
-	var record corerelay.RelayRecord
-	if err := json.Unmarshal([]byte(p[1].String()), &record); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		ack, err := _mgr.RejectRGB11RelayConsignment(requestID, &record)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(ack)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"ack": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func publishRGB11AckRecord(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 2 {
-		return createJsRet(nil, -1, "missing RGB11 ACK key or record")
-	}
-	key := p[0].String()
-	var ack corerelay.AckRecord
-	if err := json.Unmarshal([]byte(p[1].String()), &ack); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		_, err := _mgr.PublishRGB11AckRecord(key, &ack, dkvsindexer.RecordOptions{
-			TTL: rgb11TransientTTLBlocks,
-		})
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"published": true}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func fetchRGB11AckRecord(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 transfer id")
-	}
-	transferID := p[0].String()
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		ack, _, err := _mgr.FetchRGB11AckRecord(transferID, dkvsindexer.RecordVerificationOptions{})
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		encoded, err := json.Marshal(ack)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"ack": string(encoded)}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-func cancelRGB11BatchByNack(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 3 {
-		return createJsRet(nil, -1, "missing RGB11 transfer id, relay record or NACK")
-	}
-	transferID := p[0].String()
-	var record corerelay.RelayRecord
-	if err := json.Unmarshal([]byte(p[1].String()), &record); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	var nack corerelay.AckRecord
-	if err := json.Unmarshal([]byte(p[2].String()), &nack); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		if err := _mgr.CancelRGB11BatchByNack(transferID, &record, &nack); err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"cancelled": true}, 0, "ok"
+		return map[string]any{"transfer": string(encoded)}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
@@ -5108,49 +5321,16 @@ func cancelRGB11OutOfBandTransfer(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
-func broadcastRGB11Transfer(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 3 {
-		return createJsRet(nil, -1, "missing RGB11 transfer id, relay record or ACK")
+func cancelExpiredRGB11Transfer(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) != 1 || p[0].Type() != js.TypeString || strings.TrimSpace(p[0].String()) == "" {
+		return createJsRet(nil, -1, "expected one RGB11 transfer id")
 	}
-	transferID := p[0].String()
-	var record corerelay.RelayRecord
-	if err := json.Unmarshal([]byte(p[1].String()), &record); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	var ack corerelay.AckRecord
-	if err := json.Unmarshal([]byte(p[2].String()), &ack); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
+	transferID := strings.TrimSpace(p[0].String())
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		txID, err := _mgr.BroadcastRGB11Transfer(transferID, &record, &ack)
-		if err != nil {
+		if err := _mgr.CancelExpiredRGB11Transfer(transferID); err != nil {
 			return nil, -1, err.Error()
 		}
-		return map[string]any{"txid": txID}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(jsHandler)
-}
-
-type rgb11BatchBroadcastRequest struct {
-	TransferIDs  []string                 `json:"transfer_ids"`
-	RelayRecords []*corerelay.RelayRecord `json:"relay_records"`
-	Acks         []*corerelay.AckRecord   `json:"acks"`
-}
-
-func broadcastRGB11Batch(this js.Value, p []js.Value) any {
-	if _mgr == nil || len(p) < 1 {
-		return createJsRet(nil, -1, "missing RGB11 batch ACK request")
-	}
-	var request rgb11BatchBroadcastRequest
-	if err := json.Unmarshal([]byte(p[0].String()), &request); err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
-		txID, err := _mgr.BroadcastRGB11Batch(request.TransferIDs, request.RelayRecords, request.Acks)
-		if err != nil {
-			return nil, -1, err.Error()
-		}
-		return map[string]any{"txid": txID}, 0, "ok"
+		return map[string]any{"cancelled": true}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
 }
@@ -5252,6 +5432,7 @@ func main() {
 	obj.Set("createMonitorWallet", js.FuncOf(createMonitorWallet))
 	// input: mnemonic, password; return: walletId
 	obj.Set("importWallet", js.FuncOf(importWallet))
+	obj.Set("recoverAccountManagementFromRootMnemonic", js.FuncOf(recoverAccountManagementFromRootMnemonic))
 	obj.Set("importWalletWithPrivKey", js.FuncOf(importWalletWithPrivKey))
 	// input: password; return: current walletId
 	obj.Set("unlockWallet", js.FuncOf(unlockWallet))
@@ -5281,6 +5462,7 @@ func main() {
 	obj.Set("stopBTCLuckyMining", js.FuncOf(stopBTCLuckyMining))
 	obj.Set("getBTCLuckyMiningStatus", js.FuncOf(getBTCLuckyMiningStatus))
 	obj.Set("getChannelAddrByPeerPubkey", js.FuncOf(getChannelAddrByPeerPubkey))
+	obj.Set("previewOpenChannel", js.FuncOf(previewOpenChannel))
 	obj.Set("openChannel", js.FuncOf(openChannel))
 	obj.Set("closeChannel", js.FuncOf(closeChannel))
 	obj.Set("getChannel", js.FuncOf(getChannel))
@@ -5288,7 +5470,15 @@ func main() {
 	obj.Set("getChannelStatus", js.FuncOf(getChannelStatus))
 	obj.Set("getAllChannels", js.FuncOf(getAllChannels))
 	obj.Set("reservationStatus", js.FuncOf(reservationStatus))
+	obj.Set("resumeLockWithExpandFromL1Tx", js.FuncOf(resumeLockWithExpandFromL1Tx))
 	obj.Set("allReservations", js.FuncOf(allReservations))
+	obj.Set("safetySnapshot", js.FuncOf(safetySnapshot))
+	obj.Set("commitmentExport", js.FuncOf(commitmentExport))
+	obj.Set("punishStatus", js.FuncOf(punishStatus))
+	obj.Set("punishBuild", js.FuncOf(punishBuild))
+	obj.Set("punishBroadcast", js.FuncOf(punishBroadcast))
+	obj.Set("forceClosePlan", js.FuncOf(forceClosePlan))
+	obj.Set("sweepBuild", js.FuncOf(sweepBuild))
 	obj.Set("unlockFromChannel", js.FuncOf(unlockFromChannel))
 	obj.Set("lockToChannel", js.FuncOf(lockToChannel))
 	obj.Set("lockToChannelWithExpand", js.FuncOf(lockToChannelWithExpand))
@@ -5322,6 +5512,7 @@ func main() {
 	obj.Set("signPsbts_SatsNet", js.FuncOf(signPsbts_SatsNet))
 	obj.Set("getTxAssetInfoFromPsbt", js.FuncOf(getTxAssetInfoFromPsbt))
 	obj.Set("getTxAssetInfoFromPsbt_SatsNet", js.FuncOf(getTxAssetInfoFromPsbt_SatsNet))
+	obj.Set("getCommitTxAssetInfo", js.FuncOf(getCommitTxAssetInfo))
 
 	obj.Set("getVersion", js.FuncOf(getVersion))
 	obj.Set("registerCallback", js.FuncOf(registerCallbacks))
@@ -5370,16 +5561,9 @@ func main() {
 	obj.Set("importRGB11ContractFile", js.FuncOf(importRGB11ContractFile))
 	obj.Set("issueRGB11Asset", js.FuncOf(issueRGB11Asset))
 	obj.Set("prepareRGB11Transfer", js.FuncOf(prepareRGB11Transfer))
-	obj.Set("buildRGB11RelayRecord", js.FuncOf(buildRGB11RelayRecord))
-	obj.Set("publishRGB11RelayRecord", js.FuncOf(publishRGB11RelayRecord))
-	obj.Set("acceptRGB11RelayConsignment", js.FuncOf(acceptRGB11RelayConsignment))
-	obj.Set("rejectRGB11RelayConsignment", js.FuncOf(rejectRGB11RelayConsignment))
-	obj.Set("publishRGB11AckRecord", js.FuncOf(publishRGB11AckRecord))
-	obj.Set("fetchRGB11AckRecord", js.FuncOf(fetchRGB11AckRecord))
-	obj.Set("cancelRGB11BatchByNack", js.FuncOf(cancelRGB11BatchByNack))
+	obj.Set("resumeRGB11PreparedTransfer", js.FuncOf(resumeRGB11PreparedTransfer))
 	obj.Set("cancelRGB11OutOfBandTransfer", js.FuncOf(cancelRGB11OutOfBandTransfer))
-	obj.Set("broadcastRGB11Transfer", js.FuncOf(broadcastRGB11Transfer))
-	obj.Set("broadcastRGB11Batch", js.FuncOf(broadcastRGB11Batch))
+	obj.Set("cancelExpiredRGB11Transfer", js.FuncOf(cancelExpiredRGB11Transfer))
 	obj.Set("broadcastRGB11OutOfBand", js.FuncOf(broadcastRGB11OutOfBand))
 	obj.Set("deliverAndBroadcastRGB11ProxyTransfer", js.FuncOf(deliverAndBroadcastRGB11ProxyTransfer))
 	obj.Set("fetchRGB11ProxyAck", js.FuncOf(fetchRGB11ProxyAck))

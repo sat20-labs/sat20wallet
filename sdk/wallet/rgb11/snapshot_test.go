@@ -55,7 +55,7 @@ func TestEngineSnapshotRestoresPendingInvoiceAcrossLocalScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Invoice != request.Invoice || restored.Seal != request.Seal || restored.RelayKey != request.RelayKey || restored.AckKey != request.AckKey {
+	if restored.Invoice != request.Invoice || restored.Seal != request.Seal || restored.RelayKey != "" || restored.AckKey != "" {
 		t.Fatalf("restored request differs: %#v", restored)
 	}
 }

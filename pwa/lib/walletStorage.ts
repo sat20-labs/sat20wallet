@@ -1,6 +1,8 @@
 import { Network, Balance, Chain, WalletAccount, WalletData, Language } from '@/types'
 import { Storage } from './storage-adapter'
 
+export type AccountRecoveryState = Pick<RootAccountRecoveryResult, 'status' | 'code'>
+
 interface WalletState {
   env: 'dev' | 'test' | 'prd'
   language: Language
@@ -17,6 +19,7 @@ interface WalletState {
   wallets: WalletData[]
   autoLockTime: string
   hideBalance: boolean
+  accountRecovery: AccountRecoveryState | null
 }
 
 type StateKey = keyof WalletState
@@ -45,6 +48,7 @@ const defaultState: WalletState = {
   wallets: [],
   autoLockTime: '5',
   hideBalance: false,
+  accountRecovery: null,
 }
 
 class WalletStorage {

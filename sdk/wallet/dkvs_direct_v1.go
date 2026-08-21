@@ -112,6 +112,18 @@ func (p *SatsNetDKVSClient) PutSignedRecordWithAutopayV1(owner common.Wallet,
 	})
 }
 
+// TombstoneSignedWithAutopayV1 performs the paid V1 delete path. The delete
+// floor returned by the path snapshot is used by putSignedPathRecordV1, so a
+// later paid rewrite of the same key can resume at the next sequence.
+func (p *SatsNetDKVSClient) TombstoneSignedWithAutopayV1(owner common.Wallet,
+	key string, opts dkvsindexer.RecordOptions,
+	autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+	opts.Flags |= dkvsindexer.FlagTombstone
+	return p.putSignedPathRecordV1(key, opts, func(prepared dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+		return newSignedRecordWithAutopay(owner, key, nil, prepared, autopay)
+	})
+}
+
 func (p *SatsNetDKVSClient) SendSignedMailboxMessageWithAutopayV1(owner common.Wallet,
 	mailboxID, msgID string, encryptedMessage []byte, opts dkvsindexer.RecordOptions,
 	autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {

@@ -2,15 +2,25 @@ const CDP = process.env.SAT20_CDP_URL || 'http://127.0.0.1:9223';
 const PWA_URL = process.env.SAT20_PWA_URL || 'http://127.0.0.1:5173/';
 const MNEMONIC = process.env.SAT20_TEST_MNEMONIC || 'inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire';
 const PASSWORD = process.env.SAT20_TEST_PASSWORD || '123456';
+const DRY_RUN = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAT20_DRY_RUN || '').toLowerCase());
+const NOW = Number(process.env.SAT20_PREDICTION_NOW || Math.floor(Date.now() / 1000));
+const DEPLOY_NONCE = Number(process.env.SAT20_DEPLOY_NONCE || Date.now() * 1000);
+if (!Number.isSafeInteger(NOW) || NOW <= 0) {
+  throw new Error('SAT20_PREDICTION_NOW must be a positive Unix timestamp');
+}
+if (!Number.isSafeInteger(DEPLOY_NONCE) || DEPLOY_NONCE <= 0) {
+  throw new Error('SAT20_DEPLOY_NONCE must be a positive JavaScript safe integer');
+}
 
 const PREDICTION = {
-  title: '2026世界杯',
-  description: '法国vs塞内加尔',
+  subtype: 'prediction',
+  title: `PWA prediction verification ${NOW}`,
+  description: 'Automated testnet prediction lifecycle verification',
   time_base: 'unix',
-  event_time: Math.floor(new Date('2026-06-17T03:00:00+08:00').getTime() / 1000),
-  bet_deadline: Math.floor(new Date('2026-06-17T02:30:00+08:00').getTime() / 1000),
-  confirm_after: Math.floor(new Date('2026-06-17T06:00:00+08:00').getTime() / 1000),
-  source_url: 'https://worldcup.cctv.com/2026/schedule/index.shtml',
+  event_time: NOW + 24 * 60 * 60,
+  bet_deadline: NOW + 12 * 60 * 60,
+  confirm_after: NOW + 25 * 60 * 60,
+  source_url: 'https://sat20.org/',
   bet_asset: '::',
   min_bet_unit: '1000',
   outcomes: [
@@ -171,36 +181,61 @@ async function walletCall(client, body) {
 }
 
 async function main() {
+  console.log(`[prediction] deploy nonce: ${DEPLOY_NONCE}`);
   const page = await getPage();
   if (!page?.webSocketDebuggerUrl) throw new Error('No debuggable PWA page');
   const client = await connect(page.webSocketDebuggerUrl);
   await client.send('Runtime.enable');
   await preparePwa(client, page);
 
-  const req = {
-    ContractType: 'agent',
-    Agent: {
-      Subtype: 'prediction',
-      Prediction: PREDICTION,
-    },
-  };
-
   const result = await walletCall(client, `
     await wallet.switchToAccount(0);
     await wallet.setChain(Chain.SATNET);
-    const req = ${q(req)};
+    const prediction = ${q(PREDICTION)};
+    const built = unwrap(await sat20.buildUnifiedContractContent('agent', 'prediction', JSON.stringify(prediction)));
+    const req = {
+      ContractType: 'agent',
+      SubType: 'prediction',
+      DeployNonce: ${DEPLOY_NONCE},
+      ContractContent: built.content,
+      ContentEncoding: built.contentEncoding,
+    };
     const version = await safe(async () => unwrap(await sat20.getVersion()));
-    const deploy = await safe(async () => unwrap(await sat20.deployUnifiedContract(req)));
+    const deploy = await safe(async () => unwrap(await sat20.${DRY_RUN ? 'estimateDeployUnifiedContract' : 'deployUnifiedContract'}(req)));
     return JSON.stringify({
+      mode: ${q(DRY_RUN ? 'dry-run-estimate' : 'default-broadcast')},
       address: wallet.address,
       network: wallet.network,
       chain: wallet.chain,
       debug,
       version,
-      req,
+      prediction,
+      contentEncoding: built.contentEncoding,
+      contentLength: built.content.length,
+      deployNonce: ${DEPLOY_NONCE},
       deploy,
     }, null, 2);
   `);
+
+  if (result.deploy?.error) {
+    throw new Error(`prediction ${DRY_RUN ? 'estimate' : 'deploy'} failed: ${result.deploy.error}`);
+  }
+  if (!DRY_RUN && result.deploy?.contractAddress) {
+    let indexed = null;
+    for (let i = 0; i < 12; i++) {
+      if (i > 0) await sleep(5000);
+      indexed = await walletCall(client, `
+        const query = await safe(async () => unwrap(await sat20.queryContract({
+          ContractType: 'agent',
+          Query: 'info',
+          Contract: ${q(result.deploy.contractAddress)},
+        })));
+        return JSON.stringify(query);
+      `);
+      if (indexed?.result) break;
+    }
+    result.indexed = indexed;
+  }
 
   console.log(JSON.stringify(result, null, 2));
   client.ws.close();

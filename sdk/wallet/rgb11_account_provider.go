@@ -14,6 +14,41 @@ type rgb11AccountManagedDataProvider struct {
 	owner *Manager
 }
 
+type rgb11AccountImportStep struct {
+	apply    func() error
+	rollback func() error
+	commit   func()
+}
+
+// runRGB11AccountImportSteps provides the transaction boundary that the RGB11
+// provider needs across wallet/account scopes. A failing step may already have
+// replaced its local database before a derived-cache/lock rebuild fails, so the
+// failing step is rolled back as well as every previously applied step.
+func runRGB11AccountImportSteps(steps []rgb11AccountImportStep) error {
+	for i := range steps {
+		if err := steps[i].apply(); err != nil {
+			rollbackFailures := make([]string, 0)
+			for j := i; j >= 0; j-- {
+				if rollbackErr := steps[j].rollback(); rollbackErr != nil {
+					rollbackFailures = append(rollbackFailures,
+						fmt.Sprintf("scope %d: %v", j, rollbackErr))
+				}
+			}
+			if len(rollbackFailures) != 0 {
+				return fmt.Errorf("RGB11 account-managed import failed: %w; rollback failed: %s",
+					err, strings.Join(rollbackFailures, "; "))
+			}
+			return err
+		}
+	}
+	for i := range steps {
+		if steps[i].commit != nil {
+			steps[i].commit()
+		}
+	}
+	return nil
+}
+
 func (p *rgb11AccountManagedDataProvider) ID() string {
 	return rgb11AccountManagedProviderID
 }
@@ -135,10 +170,11 @@ func (p *rgb11AccountManagedDataProvider) Import(catalog AccountManagedDataCatal
 	for _, payload := range payloads {
 		byScope[payload.Scope] = append([]byte(nil), payload.Payload...)
 	}
-	// The account-managed bundle is authoritative for every catalog scope.
-	// Missing payload means that scope has no non-reconstructible RGB state;
-	// clear stale local projections/history and rebuild caches from an empty
-	// minimum snapshot.
+
+	// Prepare every target and its rollback snapshot before changing any local
+	// scope. This keeps both manual recovery and background managed-data sync
+	// all-or-nothing without widening the account-management transaction model.
+	steps := make([]rgb11AccountImportStep, 0, len(catalog.Scopes))
 	for _, scope := range catalog.Scopes {
 		accountValue, ok := accounts[scope.ID()]
 		if !ok {
@@ -152,7 +188,16 @@ func (p *rgb11AccountManagedDataProvider) Import(catalog AccountManagedDataCatal
 		if err != nil {
 			return err
 		}
-		snapshot := &rgb11wallet.RGB11WalletSnapshot{
+		previous, _, err := manager.exportRGB11WalletSnapshot(walletID)
+		if err != nil {
+			return err
+		}
+
+		// The account-managed bundle is authoritative for every catalog scope.
+		// Missing payload means that scope has no non-reconstructible RGB state;
+		// clear stale local projections/history and rebuild caches from an empty
+		// minimum snapshot.
+		target := &rgb11wallet.RGB11WalletSnapshot{
 			Version: rgb11wallet.WalletSnapshotVersion, WalletID: walletID,
 			AccountIndex: scope.AccountIndex, EngineBuildID: rgb11wallet.NativeEngineBuildID,
 		}
@@ -161,20 +206,39 @@ func (p *rgb11AccountManagedDataProvider) Import(catalog AccountManagedDataCatal
 			if err != nil {
 				return err
 			}
-			snapshot, err = packageValue.WalletSnapshot()
+			target, err = packageValue.WalletSnapshot()
 			if err != nil {
 				return err
 			}
 		}
-		if err := manager.importRGB11WalletSnapshot(snapshot); err != nil {
-			return err
-		}
-		if err := manager.rebuildRGB11Locks(); err != nil {
-			return err
-		}
-		// importRGB11WalletSnapshot restores the canonical ticker metadata from
-		// the minimum recovery objects before rebuilding derived caches.
-		manager.scheduleRGB11ChainReconciliation()
+
+		mgr := manager
+		before := previous
+		after := target
+		steps = append(steps, rgb11AccountImportStep{
+			apply: func() error {
+				if err := mgr.importRGB11WalletSnapshot(after); err != nil {
+					return err
+				}
+				return mgr.rebuildRGB11Locks()
+			},
+			rollback: func() error {
+				if err := mgr.importRGB11WalletSnapshot(before); err != nil {
+					return err
+				}
+				if err := mgr.rebuildRGB11Locks(); err != nil {
+					return err
+				}
+				mgr.scheduleRGB11ChainReconciliation()
+				return nil
+			},
+			commit: func() {
+				// importRGB11WalletSnapshot restores canonical ticker metadata from
+				// the minimum recovery objects before rebuilding derived caches.
+				mgr.scheduleRGB11ChainReconciliation()
+			},
+		})
 	}
-	return nil
+
+	return runRGB11AccountImportSteps(steps)
 }

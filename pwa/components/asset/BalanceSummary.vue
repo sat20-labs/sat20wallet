@@ -44,6 +44,10 @@
         :max-amount="maxAmount" :operation-type="operationType" :asset-type="selectedAsset?.type"
         :asset-ticker="selectedAsset?.label" :asset-key="selectedAsset?.key" @update:amount="operationAmount = $event"
         @update:address="operationAddress = $event" @confirm="handleOperationConfirm" />
+      <LockWithExpandConfirmDialog v-if="pendingLockExpand" v-model:open="showLockExpandDialog"
+        :asset-key="pendingLockExpand.assetName" :asset-ticker="pendingLockExpand.assetTicker"
+        :requested-amount="pendingLockExpand.amount" :available-amount="pendingLockExpand.availableAmount"
+        :btc-fee-rate="btcFeeRate" :busy="assetActionLoading" @confirm="confirmLockWithExpand" />
     </div>
 
     <!-- Receive Address Dialog -->
@@ -65,6 +69,7 @@ import { Icon } from '@iconify/vue'
 import { useChannelStore, useL1Store, useL2Store, useWalletStore } from '@/store'
 import { useAssetActions } from '@/composables/useAssetActions'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
+import LockWithExpandConfirmDialog from '@/components/wallet/LockWithExpandConfirmDialog.vue'
 import ReceiveQRcode from '@/components/wallet/ReceiveQRCode.vue'
 import { useToast } from '@/components/ui/toast-new'
 import { Chain } from '@/types/index'
@@ -79,7 +84,7 @@ const l2Store = useL2Store()
 const walletStore = useWalletStore()
 const channelStore = useChannelStore()
 
-const { deposit, withdraw, splicingIn, splicingOut, unlockUtxo, lockUtxo, l1Send, l2Send, handleError } = useAssetActions()
+const { deposit, withdraw, splicingIn, splicingOut, unlockUtxo, lockUtxo, lockUtxoWithExpand, l1Send, l2Send, handleError, loading: assetActionLoading } = useAssetActions()
 
 const showReceiveDialog = ref(false)
 const receiveAddress = ref('') // QRCode address
@@ -96,8 +101,16 @@ const operationAddress = ref('')
 const transcendingModeStore = useTranscendingModeStore()
 const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
+const showLockExpandDialog = ref(false)
+const pendingLockExpand = ref<null | {
+  chanid: string
+  amount: string
+  assetName: string
+  assetTicker?: string
+  availableAmount: string
+}>(null)
 const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
-const { address, network } = storeToRefs(walletStore)
+const { address, network, btcFeeRate } = storeToRefs(walletStore)
 const abailableSats = ref<{
   availableAmt: number,
   lockedAmt: number
@@ -320,7 +333,21 @@ const handleOperationConfirm = async () => {
         await splicingOut({ chanid, toAddress, amt: amount, asset_name: asset.id })
         break
       case 'lock':
-        await lockUtxo({ chanid, amt: amount, asset_name: asset.id })
+        const lockResult = await lockUtxo({ chanid, amt: amount, asset_name: asset.id })
+        if (!lockResult.ok) {
+          if (lockResult.expandRequiredAmount !== undefined && chanid) {
+            pendingLockExpand.value = {
+              chanid,
+              amount,
+              assetName: asset.id,
+              assetTicker: asset.label,
+              availableAmount: lockResult.expandRequiredAmount,
+            }
+            showDialog.value = false
+            showLockExpandDialog.value = true
+          }
+          return
+        }
         break
       case 'unlock':
         await unlockUtxo({ chanid, amt: amount, asset_name: asset.id })
@@ -340,6 +367,28 @@ const handleOperationConfirm = async () => {
     handleError('Operation failed')
   }
 }
+
+const confirmLockWithExpand = async () => {
+  const pending = pendingLockExpand.value
+  if (!pending) return
+  const succeeded = await lockUtxoWithExpand({
+    chanid: pending.chanid,
+    amt: pending.amount,
+    asset_name: pending.assetName,
+    feeRate: btcFeeRate.value,
+  })
+  if (!succeeded?.ok) return
+  showLockExpandDialog.value = false
+  pendingLockExpand.value = null
+  selectedAsset.value = null
+  operationType.value = undefined
+  operationAmount.value = ''
+  operationAddress.value = ''
+}
+
+watch(showLockExpandDialog, (open) => {
+  if (!open && !assetActionLoading.value) pendingLockExpand.value = null
+})
 
 // BTC Balance
 console.log('btcBalance', props.selectedChain);

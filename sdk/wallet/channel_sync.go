@@ -2,54 +2,113 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
 
 func (p *Manager) SyncChannel(reason string, client NodeRPCClient) error {
-	if client == nil {
-		return fmt.Errorf("node client is nil")
-	}
+	p.channelIdentityMu.RLock()
+	p.mutex.RLock()
 	if p.wallet == nil {
+		p.mutex.RUnlock()
+		p.channelIdentityMu.RUnlock()
 		return fmt.Errorf("wallet is not created/unlocked")
 	}
+	localWallet := p.wallet.Clone()
+	identityGeneration := p.channelIdentityGeneration
+	p.mutex.RUnlock()
+	p.channelIdentityMu.RUnlock()
+	return p.syncChannelForIdentity(context.Background(), reason, client, localWallet, identityGeneration)
+}
 
-	req := &wwire.ActionSyncReq{
-		ActionSyncRequest: wwire.ActionSyncRequest{
-			MsgHeader: wwire.NewMsgHeader(),
-			PubKey:    p.wallet.GetPaymentPubKey().SerializeCompressed(),
-			Reason:    reason,
-			NodeId:    p.wallet.GetNodePubKey().SerializeCompressed(),
-		},
-	}
-	msg, err := json.Marshal(req.ActionSyncRequest)
-	if err != nil {
-		return err
-	}
-	req.Sig, err = p.wallet.SignMessageWithIndex(msg, 0)
+func (p *Manager) syncChannelForIdentity(ctx context.Context, reason string, client NodeRPCClient, localWallet common.Wallet,
+	identityGeneration uint64) error {
+	channelData, err := p.requestChannelSync(ctx, reason, client, localWallet)
 	if err != nil {
 		return err
 	}
 
-	resp, err := client.SendActionSyncReq(req)
-	if err != nil {
-		Log.Errorf("SendActionSyncReq failed. %v", err)
-		return err
+	p.channelIdentityMu.RLock()
+	defer p.channelIdentityMu.RUnlock()
+	p.mutex.RLock()
+	identityUnchanged := p.channelIdentityGeneration == identityGeneration && p.wallet != nil &&
+		bytes.Equal(localWallet.GetPaymentPubKey().SerializeCompressed(),
+			p.wallet.GetPaymentPubKey().SerializeCompressed())
+	p.mutex.RUnlock()
+	if !identityUnchanged {
+		return fmt.Errorf("wallet identity changed during channel sync")
 	}
 
-	err = p.RebuildChannelFromPeerChanInfo(resp.ChannelData)
-	if err != nil {
+	if err := p.rebuildChannelFromPeerChanInfoForWallet(channelData, localWallet); err != nil {
 		Log.Errorf("RebuildChannelFromPeerChanInfo failed. %v", err)
 		return err
 	}
 	return nil
 }
 
+func (p *Manager) requestChannelSync(ctx context.Context, reason string, client NodeRPCClient, localWallet common.Wallet) ([]byte, error) {
+	if client == nil {
+		return nil, fmt.Errorf("node client is nil")
+	}
+	if localWallet == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+
+	req := &wwire.ActionSyncReq{
+		ActionSyncRequest: wwire.ActionSyncRequest{
+			MsgHeader: wwire.NewMsgHeader(),
+			PubKey:    localWallet.GetPaymentPubKey().SerializeCompressed(),
+			Reason:    reason,
+			NodeId:    localWallet.GetNodePubKey().SerializeCompressed(),
+		},
+	}
+	msg, err := json.Marshal(req.ActionSyncRequest)
+	if err != nil {
+		return nil, err
+	}
+	req.Sig, err = localWallet.SignMessageWithIndex(msg, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp *wwire.ActionSyncResp
+	if contextClient, ok := client.(interface {
+		SendActionSyncReqContext(context.Context, *wwire.ActionSyncReq) (*wwire.ActionSyncResp, error)
+	}); ok {
+		resp, err = contextClient.SendActionSyncReqContext(ctx, req)
+	} else {
+		resp, err = client.SendActionSyncReq(req)
+	}
+	if err != nil {
+		Log.Errorf("SendActionSyncReq failed. %v", err)
+		return nil, err
+	}
+	return resp.ChannelData, nil
+}
+
 func (p *Manager) RebuildChannelFromPeerChanInfo(peerChannelInDB []byte) error {
+	p.channelIdentityMu.RLock()
+	defer p.channelIdentityMu.RUnlock()
+	p.mutex.RLock()
+	if p.wallet == nil {
+		p.mutex.RUnlock()
+		return fmt.Errorf("wallet is not created/unlocked")
+	}
+	localWallet := p.wallet.Clone()
+	p.mutex.RUnlock()
+	return p.rebuildChannelFromPeerChanInfoForWallet(peerChannelInDB, localWallet)
+}
+
+func (p *Manager) rebuildChannelFromPeerChanInfoForWallet(peerChannelInDB []byte, localWallet common.Wallet) error {
 	Log.Infof("channel data length %d", len(peerChannelInDB))
+	if localWallet == nil {
+		return fmt.Errorf("wallet is not created/unlocked")
+	}
 
 	var channel ChannelInDB
 	err := DecodeFromBytes(peerChannelInDB, &channel)
@@ -63,7 +122,7 @@ func (p *Manager) RebuildChannelFromPeerChanInfo(peerChannelInDB []byte) error {
 		return fmt.Errorf("channel %s CheckMerkleRoot failed, %v", channel.ChannelId, err)
 	}
 
-	if !bytes.Equal(channel.PeerNodeId, p.wallet.GetPaymentPubKey().SerializeCompressed()) {
+	if !bytes.Equal(channel.PeerNodeId, localWallet.GetPaymentPubKey().SerializeCompressed()) {
 		return fmt.Errorf("invalid peer %s", hex.EncodeToString(channel.PeerNodeId))
 	}
 	channel.PeerNodeId = channel.LocalChanCfg.PaymentKey.SerializeCompressed()

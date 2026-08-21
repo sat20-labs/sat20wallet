@@ -8,35 +8,8 @@ const (
 	dkvsCodecVersion        = dkvscore.CodecVersion
 )
 
-type DKVSWalletRecoveryBackup = dkvscore.DKVSWalletRecoveryBackup
-type DKVSGuardianShare = dkvscore.DKVSGuardianShare
 type DKVSOfflineMessage = dkvscore.DKVSOfflineMessage
 type DKVSServiceAuthenticity = dkvscore.DKVSServiceAuthenticity
-
-func encodeDKVSWalletRecoveryBackup(value DKVSWalletRecoveryBackup) ([]byte, error) {
-	return dkvscore.EncodeWalletRecoveryBackup(value)
-}
-
-func decodeDKVSWalletRecoveryBackup(value []byte) (*DKVSWalletRecoveryBackup, error) {
-	return dkvscore.DecodeWalletRecoveryBackup(value)
-}
-
-// Historical package-local names retained for wallet package tests and callers.
-func encodeDKVSRecoveryBackup(value DKVSWalletRecoveryBackup) ([]byte, error) {
-	return encodeDKVSWalletRecoveryBackup(value)
-}
-
-func decodeDKVSRecoveryBackup(value []byte) (*DKVSWalletRecoveryBackup, error) {
-	return decodeDKVSWalletRecoveryBackup(value)
-}
-
-func encodeDKVSGuardianShare(value DKVSGuardianShare) ([]byte, error) {
-	return dkvscore.EncodeGuardianShare(value)
-}
-
-func decodeDKVSGuardianShare(value []byte) (*DKVSGuardianShare, error) {
-	return dkvscore.DecodeGuardianShare(value)
-}
 
 func encodeDKVSOfflineMessage(value DKVSOfflineMessage) ([]byte, error) {
 	return dkvscore.EncodeOfflineMessage(value)

@@ -120,6 +120,12 @@ manifest
 
 Manifest 最后写入，作为应用层 commit marker。账户 record 使用 account owner 签名并由同一 wallet 的 AUTOPAY 支付。
 
+### 编码边界
+
+账户恢复数据只允许通过 Account Management 的 repository 和 codec 读写。旧的通用 DKWA wallet recovery / guardian share（kind 1、kind 2）以及对应的 `PutWalletRecoveryBackup`、`PutGuardianShare` 等接口已删除，不能作为另一套恢复协议使用。Guardian mailbox 仍由 Account Management 的 guardian capsule 流程管理。
+
+Root wrapper 的 envelope 和加密 payload 均使用 deterministic compact binary：固定 magic/codec version、规范字段顺序、字段长度上限和严格 EOF 校验。开发测试阶段不保留旧 JSON 兼容读取；测试网上已有的 JSON record 通过测试工具清理或重写，不把迁移分支带入生产代码。
+
 ## 8. 新设备
 
 添加新设备必须完成一次真实恢复演练：

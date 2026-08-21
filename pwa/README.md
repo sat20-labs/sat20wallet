@@ -51,7 +51,7 @@ The wallet accepts only configured DApp origins, rejects expired or duplicate re
 For local Market validation, point the wallet at the Market route, not the Next.js root:
 
 ```bash
-VITE_SAT20_MARKET_URL=http://localhost:3006/market npm run dev
+VITE_SAT20_MARKET_URL=http://localhost:3006/swap/ npm run dev
 ```
 
 ## Commands

@@ -98,6 +98,8 @@ Guardian 状态
 
 Guardian recovery key 由 Go SDK 使用钱包密码加密保存在钱包数据库中。账户管理 WASM 接口使用独立的无日志调用通道。
 
+Root wrapper 的持久化格式完全由 Go SDK 管理，PWA 不解析其 envelope 或 payload。SDK 直接使用 deterministic compact binary，不保留旧 JSON 格式的兼容分支。
+
 ## DKVS 数据
 
 ```text

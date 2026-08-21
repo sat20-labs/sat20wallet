@@ -1,10 +1,54 @@
 import { tryit } from 'radash'
+import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
 
 // Define the expected response structure from WASM functions
 interface WasmResponse<T = any> {
   code: number;
   msg?: string;
   data?: T;
+}
+
+export interface CommitTxAssetUtxo {
+  UtxoId: number;
+  Outpoint: string;
+  Value: number;
+  PkScript: string;
+  Assets: Array<{
+    Name: { Ticker: string; [key: string]: unknown };
+    Amount: string;
+    [key: string]: unknown;
+  }>;
+}
+
+export interface CommitTxAssetInfo {
+  txId: string;
+  txHex: string;
+  inputs: string;
+  outputs: string;
+}
+
+export interface ChannelOpenFeeInfo {
+  openFee: {
+    manageFee: number
+    mortgageFee: number
+    minReserveSats: number
+    commitmentFee: number
+    commitmentFeeRate: number
+    splicingInFee: number
+    splicingOutFee: number
+  }
+  openFeeTotal: number
+  feeToDao: number
+  minCapacity: number
+  minAvailableValue: number
+  amount?: number
+  channelCapacity?: number
+  estimatedNetworkFee?: number
+  requiredInputSats?: number
+  selectedInputSats?: number
+  changeSats?: number
+  valid: boolean
+  validationError?: string
 }
 
 // Channel/STP methods are now exported by sat20wallet.wasm.
@@ -25,7 +69,7 @@ interface StpWasmModule {
   closeChannel: (...args: any[]) => Promise<WasmResponse>;
   isWalletExisting: (...args: any[]) => Promise<WasmResponse<boolean>>;
   hello: (...args: any[]) => Promise<WasmResponse<string>>;
-  start: (...args: any[]) => Promise<WasmResponse>;
+  previewOpenChannel: (...args: any[]) => Promise<WasmResponse<ChannelOpenFeeInfo>>;
   openChannel: (...args: any[]) => Promise<WasmResponse>;
   release: (...args: any[]) => Promise<WasmResponse>;
   getWallet: (...args: any[]) => Promise<WasmResponse>;
@@ -37,6 +81,7 @@ interface StpWasmModule {
   getChannelStatus: (...args: any[]) => Promise<WasmResponse>;
   reservationStatus: (...args: any[]) => Promise<WasmResponse>;
   allReservations: (...args: any[]) => Promise<WasmResponse>;
+  resumeLockWithExpandFromL1Tx: (...args: any[]) => Promise<WasmResponse>;
   safetySnapshot: (...args: any[]) => Promise<WasmResponse>;
   commitmentExport: (...args: any[]) => Promise<WasmResponse>;
   punishStatus: (...args: any[]) => Promise<WasmResponse>;
@@ -49,7 +94,7 @@ interface StpWasmModule {
   lockToChannel: (...args: any[]) => Promise<WasmResponse>;
   lockToChannelWithExpand: (...args: any[]) => Promise<WasmResponse>;
   unlockFromChannel: (...args: any[]) => Promise<WasmResponse>;
-  getCommitTxAssetInfo: (...args: any[]) => Promise<WasmResponse<any>>;
+  getCommitTxAssetInfo: (...args: any[]) => Promise<WasmResponse<CommitTxAssetInfo>>;
   deployContract_Local: (templateName: string, content: string, feeRate: string | number) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
   deployContract_Remote: (templateName: string, content: string, feeRate: string | number, bol: boolean) => Promise<WasmResponse<{ txId: string; resvId: string }>>;
   stakeToBeMiner: (bCoreNode: boolean, btcFeeRate: string | number) => Promise<WasmResponse<{ txId: string; resvId: string; assetName: string; amt: string }>>;
@@ -60,6 +105,9 @@ interface StpWasmModule {
 }
 
 export const parseLockExpandRequiredAmount = (message: string): string | undefined => {
+  if (message.trim().toLowerCase() === 'not allow lock, no assets') {
+    return '0'
+  }
   const match = message.match(/^not allow lock, only\s+([0-9][0-9,]*(?:\.[0-9]+)?)\s+assets can be used$/i)
   return match?.[1]
 }
@@ -80,6 +128,7 @@ class SatsnetStp {
       console.error(errorMsg)
       return [new Error(errorMsg), undefined]
     }
+    const operation = await beginPwaWalletOperation(String(methodName), args)
     const method = stpModuleTyped[methodName] as (...args: any[]) => Promise<WasmResponse<T>>;
     console.log('sat20wallet channel method', methodName, args);
     const [err, result] = await tryit(method)(...args)
@@ -87,15 +136,19 @@ class SatsnetStp {
 
     if (err) {
       console.error(`sat20wallet channel ${methodName} error: ${err.message}`)
+      await finishPwaOperation(operation, err)
       return [err, undefined]
     }
 
     if (result && typeof result.code === 'number' && result.code !== 0) {
       const errorMsg = result.msg || `sat20wallet channel ${methodName} failed with code ${result.code}`;
       console.error(errorMsg);
-      return [new Error(errorMsg), undefined];
+      const responseError = new Error(errorMsg)
+      await finishPwaOperation(operation, responseError)
+      return [responseError, undefined];
     }
 
+    await finishPwaOperation(operation, null, result?.data)
     // Return data using optional chaining
     return [undefined, result?.data]
   }
@@ -175,8 +228,11 @@ class SatsnetStp {
     return this._handleRequest<string>('hello')
   }
 
-  async start(): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('start')
+  async previewOpenChannel(
+    feeRate: string | number,
+    amt: string | number
+  ): Promise<[Error | undefined, ChannelOpenFeeInfo | undefined]> {
+    return this._handleRequest<ChannelOpenFeeInfo>('previewOpenChannel', String(feeRate), String(amt))
   }
 
   async openChannel(
@@ -253,6 +309,13 @@ class SatsnetStp {
 
   async allReservations(): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('allReservations')
+  }
+
+  async resumeLockWithExpandFromL1Tx(
+    id: string | number,
+    l1TxId: string
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('resumeLockWithExpandFromL1Tx', String(id), l1TxId)
   }
 
   async safetySnapshot(
@@ -390,7 +453,7 @@ class SatsnetStp {
 
   async getCommitTxAssetInfo(
     channelId: string
-  ): Promise<[Error | undefined, any | undefined]> {
+	): Promise<[Error | undefined, CommitTxAssetInfo | undefined]> {
     return this._handleRequest('getCommitTxAssetInfo', channelId)
   }
 

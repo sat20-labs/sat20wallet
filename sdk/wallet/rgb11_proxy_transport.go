@@ -90,13 +90,7 @@ type rgb11ProxyRequest struct {
 
 func rgb11ReceiveTransports(request RGB11InvoiceRequest) ([]invoicing.Transport, bool, error) {
 	mode := strings.ToLower(strings.TrimSpace(request.TransportMode))
-	if mode == "" || mode == "sat20" || mode == "sat20-dkvs" {
-		if len(request.TransportEndpoints) != 0 {
-			return nil, false, fmt.Errorf("RGB11 transport endpoints require %s mode", RGB11ProxyTransport)
-		}
-		return nil, false, nil
-	}
-	if mode == "out-of-band" {
+	if mode == "" || mode == "out-of-band" {
 		if len(request.TransportEndpoints) != 0 {
 			return nil, false, fmt.Errorf("RGB11 out-of-band transport does not use endpoints")
 		}
@@ -303,8 +297,8 @@ func (p *rgb11Manager) publishRGB11ProxyConsignment(ctx context.Context,
 	if err != nil {
 		return "", err
 	}
-	if pending.State.Status == "relayed" || pending.State.Status == "broadcast" ||
-		pending.State.Status == "settled" {
+	if pending.State.Status == "relayed" || pending.State.Status == rgb11StatusBroadcastAttempted ||
+		rgb11BroadcastCompleteStatus(pending.State.Status) {
 		return endpoints[0].invoice, nil
 	}
 	consignment, err := rgb11TransferFile(pending.RecipientConsignment)
@@ -330,7 +324,6 @@ func (p *rgb11Manager) publishRGB11ProxyConsignment(ctx context.Context,
 		if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
 			return "", err
 		}
-		p.autoBackupRGB11AfterMutation()
 		return endpoint.invoice, nil
 	}
 	return "", errors.Join(attempts...)
@@ -600,14 +593,14 @@ func (p *rgb11Manager) DeliverAndBroadcastRGB11ProxyTransfer(ctx context.Context
 		return nil, err
 	}
 	first := pendingList[0]
-	allBroadcast := true
+	allComplete := true
 	for _, pending := range pendingList {
-		if pending.State.Status != "broadcast" && pending.State.Status != "settled" {
-			allBroadcast = false
+		if !rgb11BroadcastCompleteStatus(pending.State.Status) {
+			allComplete = false
 			break
 		}
 	}
-	if allBroadcast {
+	if allComplete {
 		return &RGB11ProxyDeliveryResult{
 			TransferIDs: append([]string(nil), transferIDs...),
 			TxID:        first.State.WitnessTxID,
@@ -629,33 +622,28 @@ func (p *rgb11Manager) DeliverAndBroadcastRGB11ProxyTransfer(ctx context.Context
 		}
 		endpoints = append(endpoints, endpoint)
 	}
-	if err := p.requireLatestRGB11WalletState(); err != nil {
-		return nil, err
-	}
-	txID, err := p.rgbManager.evidence.Broadcast(first.SignedTx)
-	if err != nil {
-		return nil, err
-	}
-	if txID != "" && txID != first.State.WitnessTxID {
-		return nil, fmt.Errorf("RGB11 backend returned witness txid %s, expected %s", txID, first.State.WitnessTxID)
-	}
+	// Publishing advances each recipient to relayed in durable storage. Reload
+	// before writing the irreversible broadcast intent so those transport
+	// fields cannot be overwritten by stale in-memory copies.
 	pendingList, err = p.loadRGB11ProxyPendingBatch(transferIDs)
 	if err != nil {
 		return nil, err
 	}
-	for _, pending := range pendingList {
-		pending.State.Status = "broadcast"
-		pending.State.AckStatus = "awaiting"
-	}
-	if err := p.rgbManager.projectionStore.SavePendingTransferStates(pendingList); err != nil {
-		return nil, err
-	}
-	p.autoBackupRGB11AfterMutation()
-	return &RGB11ProxyDeliveryResult{
+	result := &RGB11ProxyDeliveryResult{
 		TransferIDs: append([]string(nil), transferIDs...),
 		Endpoints:   endpoints,
 		TxID:        first.State.WitnessTxID,
-	}, nil
+	}
+	txID, err := p.broadcastRGB11PendingBatch(
+		pendingList,
+		func(item *rgb11wallet.PendingTransfer) {
+			item.State.AckStatus = "awaiting"
+		},
+	)
+	if txID != "" {
+		result.TxID = txID
+	}
+	return result, err
 }
 
 func (p *rgb11Manager) FetchRGB11ProxyAck(ctx context.Context,
@@ -701,7 +689,6 @@ func (p *rgb11Manager) FetchRGB11ProxyAck(ctx context.Context,
 		if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
 			return nil, err
 		}
-		p.autoBackupRGB11AfterMutation()
 		return result, nil
 	}
 	if len(attempts) == 0 {

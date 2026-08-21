@@ -1,3 +1,5 @@
+import { beginAccountManagementOperation, finishPwaOperation } from '@/utils/accountManagementOperationLog'
+
 export interface AccountStorageOption {
   id: string
   mode: 'temporary' | 'paid'
@@ -59,6 +61,25 @@ export interface RestoredWallet {
   }>
 }
 
+export interface AccountManagementStatus {
+  active: boolean
+  recovery_configured: boolean
+  managed_data_revision?: number
+  managed_data_dirty?: boolean
+  account_id?: string
+  package_id?: string
+  recovery_mode?: '2of2' | '2of3'
+  storage_mode?: 'paid' | 'temporary'
+  public_locator?: string
+  root_wallet_id?: number
+  state_seq?: number
+  pending_changes?: number
+  last_rehearsal_at?: number
+  last_dkvs_sync_error_code?: string
+  last_dkvs_sync_error?: string
+  last_dkvs_sync_error_at?: number
+}
+
 type SDKResponse<T> = { code: number; msg: string; data?: T }
 
 class AccountManagementSDK {
@@ -67,17 +88,23 @@ class AccountManagementSDK {
     const method = api?.[methodName]
     if (typeof method !== 'function') throw new Error('账户管理 SDK 尚未加载')
 
-    // This path deliberately does not log payloads or results. Requests can
-    // contain wallet passwords, private-knowledge answers and recovery shares.
+    // Operation-log policy is deliberately scrubbed: passwords, mnemonics,
+    // recovery answers/shares and setup payloads are never written to logs.
+    const operation = await beginAccountManagementOperation(methodName, payload)
     let response: SDKResponse<T>
     try {
       response = await method(JSON.stringify(payload))
     } catch (error: any) {
-      throw new Error(error?.message || '账户管理调用失败')
+      const requestError = new Error(error?.message || '账户管理调用失败')
+      await finishPwaOperation(operation, requestError)
+      throw requestError
     }
     if (!response || response.code !== 0) {
-      throw new Error(response?.msg || '账户管理调用失败')
+      const responseError = new Error(response?.msg || '账户管理调用失败')
+      await finishPwaOperation(operation, responseError)
+      throw responseError
     }
+    await finishPwaOperation(operation, null, response.data)
     return response.data as T
   }
 
@@ -86,21 +113,7 @@ class AccountManagementSDK {
   }
 
   status() {
-    return this.request<{
-      active: boolean
-      recovery_configured: boolean
-      managed_data_revision?: number
-      managed_data_dirty?: boolean
-      account_id?: string
-      package_id?: string
-      recovery_mode?: '2of2' | '2of3'
-      storage_mode?: 'paid' | 'temporary'
-      public_locator?: string
-      root_wallet_id?: number
-      state_seq?: number
-      pending_changes?: number
-      last_rehearsal_at?: number
-    }>('status')
+    return this.request<AccountManagementStatus>('status')
   }
 
   getStorageOptions() {

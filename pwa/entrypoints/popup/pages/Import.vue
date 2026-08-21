@@ -192,7 +192,13 @@ const onSubmit = form.handleSubmit(async (values) => {
         return
       }
 
-      showToast('success', 'Success', 'Wallet imported successfully')
+      const recovery = walletStore.accountRecovery
+      const message = recovery?.status === 'found'
+        ? 'Managed account and wallets restored successfully'
+        : recovery?.status === 'pending'
+          ? 'Wallet imported. Managed account discovery is pending; retry when the network is available.'
+          : 'Wallet imported successfully'
+      showToast('success', 'Success', message)
       router.push('/wallet')
     }
   }

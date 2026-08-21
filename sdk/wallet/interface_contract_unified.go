@@ -10,6 +10,7 @@ import (
 	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	walletcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
@@ -741,11 +742,7 @@ func (p *Manager) estimateAgentDeployContract(req *ContractDeployRequest) (*Cont
 		return nil, fmt.Errorf("agent deploy gas limit %d is less than required base gas %d",
 			gasLimit, contractcommon.DeployBaseGas)
 	}
-	deployBaseFee, _, err := p.agentGasAssetAmount(contractcommon.DeployBaseGas, 0)
-	if err != nil {
-		return nil, err
-	}
-	invokeBaseFee, _, err := p.agentGasAssetAmount(contractcommon.InvokeBaseGas, 0)
+	deployBaseFee, invokeBaseFee, _, err := p.agentDeployGasAssetAmounts()
 	if err != nil {
 		return nil, err
 	}
@@ -820,11 +817,7 @@ func (p *Manager) deployAgentContract(req *ContractDeployRequest) (*ContractTxRe
 		return nil, fmt.Errorf("agent deploy gas limit %d is less than required base gas %d",
 			gasLimit, contractcommon.DeployBaseGas)
 	}
-	deployBaseFee, gasAsset, err := p.agentGasAssetAmount(contractcommon.DeployBaseGas, 0)
-	if err != nil {
-		return nil, err
-	}
-	invokeBaseFee, _, err := p.agentGasAssetAmount(contractcommon.InvokeBaseGas, 0)
+	deployBaseFee, invokeBaseFee, gasAsset, err := p.agentDeployGasAssetAmounts()
 	if err != nil {
 		return nil, err
 	}
@@ -1140,7 +1133,17 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 }
 
 func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractTxResult, error) {
-	if p.wallet == nil {
+	return p.invokeTemplateContractWithWalletMode(req, p.wallet, true)
+}
+
+func (p *Manager) invokeTemplateContractWithWallet(req *ContractInvokeRequest,
+	localWallet walletcommon.Wallet) (*ContractTxResult, error) {
+	return p.invokeTemplateContractWithWalletMode(req, localWallet, false)
+}
+
+func (p *Manager) invokeTemplateContractWithWalletMode(req *ContractInvokeRequest,
+	localWallet walletcommon.Wallet, allowDefault bool) (*ContractTxResult, error) {
+	if localWallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
 	if req == nil {
@@ -1151,6 +1154,9 @@ func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractT
 		return nil, err
 	}
 	if req.DefaultInvoke {
+		if !allowDefault {
+			return nil, fmt.Errorf("explicit wallet does not support default template invoke")
+		}
 		assetName, amount := firstFundingAsset(req.Assets)
 		return p.invokeDefaultContract(ContractTypeTemplate, req.ContractAddress, req.Value, req.GasLimit, gasOverride, assetName, amount)
 	}
@@ -1188,7 +1194,8 @@ func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractT
 	if callNonce == 0 {
 		callNonce = uint64(time.Now().UnixNano())
 	}
-	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectUnifiedContractFunding(gasAsset, gasAmount, gasAmount-gasBaseFee, req.Value, contractFundingAssets(req.Assets))
+	funding, inputs, changeOutputs, prevFetcher, _, err := p.selectUnifiedContractFundingWithWallet(
+		localWallet, gasAsset, gasAmount, gasAmount-gasBaseFee, req.Value, contractFundingAssets(req.Assets))
 	if err != nil {
 		return nil, err
 	}
@@ -1205,7 +1212,7 @@ func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractT
 	if err != nil {
 		return nil, err
 	}
-	signedTx, err := p.SignContractTx_SatsNet(tx, prevFetcher, gasAsset, gasBaseFee)
+	signedTx, err := SignContractTxWithWallet_SatsNet(localWallet, tx, prevFetcher, gasAsset, gasBaseFee)
 	if err != nil {
 		return nil, err
 	}
@@ -1441,6 +1448,23 @@ func (p *Manager) agentGasAssetAmount(baseGas int64, override int64) (int64, str
 		return 0, "", err
 	}
 	return amount, gasAssetName, nil
+}
+
+// agentDeployGasAssetAmounts calculates both deploy and initial invoke fees
+// from one height snapshot so a deployment does not repeat the same remote
+// best-height lookup or mix fee schedules across adjacent blocks.
+func (p *Manager) agentDeployGasAssetAmounts() (int64, int64, string, error) {
+	gasAssetName := GetGasAssetName()
+	height := uint64(p.satsNetBestHeight())
+	deployBaseFee, err := contractcommon.GasFeeAtHeight(contractcommon.DeployBaseGas, height)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	invokeBaseFee, err := contractcommon.GasFeeAtHeight(contractcommon.InvokeBaseGas, height)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	return deployBaseFee, invokeBaseFee, gasAssetName, nil
 }
 
 func (p *Manager) agentInvokeGasAssetAmount(needsResult bool, override int64) (int64, string, error) {
@@ -1876,6 +1900,17 @@ func (p *Manager) selectDefaultContractFunding(gasAssetName string, gasAmount in
 }
 
 func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount int64, fundingGasAmount int64, value int64, businessAssets []contractFundingAsset) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, string, error) {
+	return p.selectUnifiedContractFundingWithWallet(p.wallet, gasAssetName, gasAmount,
+		fundingGasAmount, value, businessAssets)
+}
+
+func (p *Manager) selectUnifiedContractFundingWithWallet(localWallet walletcommon.Wallet,
+	gasAssetName string, gasAmount int64, fundingGasAmount int64, value int64,
+	businessAssets []contractFundingAsset) (swire.TxOut, []swire.OutPoint, []*swire.TxOut,
+	stxscript.PrevOutputFetcher, string, error) {
+	if localWallet == nil {
+		return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("wallet is not created/unlocked")
+	}
 	if gasAmount < 0 {
 		return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("gas asset amount must be non-negative")
 	}
@@ -1934,14 +1969,15 @@ func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount in
 	}
 
 	gasAmt := indexer.NewDefaultDecimal(gasAmount)
-	assetUtxos, feeUtxos, err := p.GetUtxosWithAssetV2_SatsNet("", fundingValue, gasAmt, gasName, nil)
+	walletAddress := localWallet.GetAddress()
+	assetUtxos, feeUtxos, err := p.GetUtxosWithAssetV2_SatsNet(walletAddress, fundingValue, gasAmt, gasName, nil)
 	if err != nil {
 		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 	selected := append([]string{}, assetUtxos...)
 	selected = append(selected, feeUtxos...)
 	for _, asset := range parsedBusinessAssets {
-		assetUtxos, _, err := p.GetUtxosWithAssetV2_SatsNet("", 0, asset.Amount, asset.Name, nil)
+		assetUtxos, _, err := p.GetUtxosWithAssetV2_SatsNet(walletAddress, 0, asset.Amount, asset.Name, nil)
 		if err != nil {
 			return swire.TxOut{}, nil, nil, nil, "", err
 		}
@@ -1949,7 +1985,7 @@ func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount in
 	}
 
 	outputMap := make(map[string]*TxOutput_SatsNet)
-	address := p.wallet.GetAddress()
+	address := walletAddress
 	outputNames := []*swire.AssetName{gasName, &ASSET_PLAIN_SAT}
 	for _, asset := range parsedBusinessAssets {
 		outputNames = append(outputNames, asset.Name)
@@ -2020,7 +2056,7 @@ func (p *Manager) selectUnifiedContractFunding(gasAssetName string, gasAmount in
 			return swire.TxOut{}, nil, nil, nil, "", err
 		}
 	}
-	changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
+	changePkScript, err := GetP2TRpkScript(localWallet.GetPaymentPubKey())
 	if err != nil {
 		return swire.TxOut{}, nil, nil, nil, "", err
 	}

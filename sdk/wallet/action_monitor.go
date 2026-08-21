@@ -1,6 +1,9 @@
 package wallet
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 const (
 	actionMonitorIntervalL1 = 10 * time.Second
@@ -22,12 +25,14 @@ func (p *Manager) RegisterMonitorTickCallback(callback MonitorTickCallback) {
 }
 
 func (p *Manager) notifyActionStatus(event *ActionStatusEvent) {
+	p.handleOperationLogActionStatusEvent(event)
 	if p.actionCallback != nil {
 		p.actionCallback(event)
 	}
 }
 
 func (p *Manager) notifyChannelStatus(event *ActionStatusEvent) {
+	p.handleOperationLogActionStatusEvent(event)
 	if p.channelStatusCallback != nil {
 		p.channelStatusCallback(event)
 	}
@@ -85,6 +90,12 @@ func (p *Manager) actionMonitorThread(stop <-chan struct{}, sendTxInL1 bool) {
 		}
 		defer unlock()
 
+		if sendTxInL1 {
+			if err := p.handleRGB11L1MonitorTick(context.Background()); err != nil {
+				Log.Warningf("RGB11 L1 monitor tick failed: %v", err)
+			}
+			p.HandleChannelSafetyStatus()
+		}
 		p.HandleChannelReservationStatus(sendTxInL1)
 		p.HandleRemoteActionStatus(sendTxInL1)
 		p.HandleLocalActionStatus(sendTxInL1)

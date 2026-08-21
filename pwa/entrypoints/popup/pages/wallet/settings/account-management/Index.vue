@@ -21,6 +21,16 @@
           <div v-if="savedState.managed_data_dirty" class="text-amber-500">必要数据正在等待同步</div>
           <div v-if="savedState.last_rehearsal_at">上次演练：{{ new Date(savedState.last_rehearsal_at).toLocaleString() }}</div>
           <div>待同步变更：{{ savedState.pending_changes || 0 }}</div>
+          <div
+            v-if="savedState.last_dkvs_sync_error"
+            class="mt-2 rounded-md border border-red-500/40 bg-red-500/10 p-2 text-red-400"
+          >
+            <div class="font-medium">DKVS 同步异常：{{ savedState.last_dkvs_sync_error_code || 'DKVS_SYNC_ERROR' }}</div>
+            <div class="mt-1 break-words">{{ savedState.last_dkvs_sync_error }}</div>
+            <div v-if="savedState.last_dkvs_sync_error_at" class="mt-1 text-red-400/80">
+              最近失败：{{ new Date(savedState.last_dkvs_sync_error_at).toLocaleString() }}
+            </div>
+          </div>
         </AlertDescription>
       </Alert>
 
@@ -242,13 +252,17 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store'
-import accountSDK, { type AccountStorageOption, type AccountWalletMetadataInput } from '@/utils/accountManagement'
+import accountSDK, {
+  type AccountManagementStatus,
+  type AccountStorageOption,
+  type AccountWalletMetadataInput,
+} from '@/utils/accountManagement'
 
 const router = useRouter()
 const { t } = useI18n()
 const walletStore = useWalletStore()
 const { wallets } = storeToRefs(walletStore)
-const savedState = ref<any>(null)
+const savedState = ref<AccountManagementStatus | null>(null)
 const busy = ref(false)
 const error = ref('')
 const step = ref(1)

@@ -15,6 +15,9 @@ func TestGuardianCapsuleRejectsWrongKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if capsule.ShareID != shares[2].Checksum {
+		t.Fatalf("guardian ShareID=%q want checksum=%q", capsule.ShareID, shares[2].Checksum)
+	}
 	if _, err := DecryptGuardianShare(capsule, privateKey); err != nil {
 		t.Fatal(err)
 	}

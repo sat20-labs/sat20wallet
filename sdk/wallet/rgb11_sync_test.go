@@ -1,15 +1,12 @@
 package wallet
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/rgb11/invoicing"
-	corerelay "github.com/sat20-labs/rgb11/relay"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
@@ -24,256 +21,31 @@ import (
 	"time"
 )
 
-func TestRGB11SnapshotDoesNotCopyGlobalTickerCatalog(t *testing.T) {
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager := newRGB11MultiDeviceManager(t, priv, 42)
-	globalName := indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "global_test"}
-	manager.tickerInfoMap[globalName.String()] = &indexer.TickerInfo{
-		AssetName: globalName, DisplayName: "Global RGB Test",
-	}
-	walletID, err := manager.RGB11WalletID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantWalletID := "rgb11-" + hex.EncodeToString(manager.wallet.GetPubKey().SerializeCompressed())
-	if walletID != wantWalletID {
-		t.Fatalf("RGB11 wallet key contains format version: got=%s want=%s", walletID, wantWalletID)
-	}
-	snapshot, _, err := manager.rgbManager.exportRGB11WalletSnapshot(walletID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rgb11SnapshotHasState(snapshot) {
-		t.Fatal("empty wallet inherited global RGB ticker metadata")
-	}
-}
-
-func TestRGB11SnapshotPreflightDoesNotPartiallyImportEngineState(t *testing.T) {
-	sourcePriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := newRGB11MultiDeviceManager(t, sourcePriv, 42)
-	createRGB11MultiDeviceInvoice(t, source, "recipient-preflight")
-	engineRecords, err := source.rgbManager.engineStore.ExportSnapshot()
-	if err != nil || len(engineRecords) != 1 {
-		t.Fatalf("source engine records=%d err=%v", len(engineRecords), err)
-	}
-
-	targetPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	target := newRGB11MultiDeviceManager(t, targetPriv, 43)
-	snapshot := &RGB11WalletSnapshot{
-		Version: rgb11WalletSnapshotVersion, EngineRecords: engineRecords,
-		ProjectionRecords: []rgb11wallet.SnapshotRecord{{Key: "invalid-record", Value: []byte{1}}},
-	}
-	if err := target.rgbManager.importRGB11WalletSnapshot(snapshot); err == nil {
-		t.Fatal("invalid projection snapshot was accepted")
-	}
-	restoredEngine, err := target.rgbManager.engineStore.ExportSnapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(restoredEngine) != 0 {
-		t.Fatalf("engine state was imported before projection preflight: %+v", restoredEngine)
-	}
-}
-
-func TestRGB11RelayAndAckUseTheirRespectiveWalletSigners(t *testing.T) {
-	senderPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	recipientPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	sender := dkvsTestWalletFromPriv(t, senderPriv)
-	recipient := dkvsTestWalletFromPriv(t, recipientPriv)
-	_, ackKey, err := corerelay.NewTemporaryKeys()
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := &corerelay.RelayRecord{
-		Version:      corerelay.RecordVersion,
-		TransferID:   "transfer-1",
-		RecipientID:  "recipient-1",
-		ObjectHash:   sha256.Sum256([]byte("consignment")),
-		ObjectSize:   11,
-		SourcePeerID: "sender-peer",
-		AckRecordKey: ackKey,
-		Expiry:       4_102_444_800,
-	}
-	if err := SignRGB11RelayRecord(sender, record); err != nil {
-		t.Fatal(err)
-	}
-	if err := record.Verify(senderPriv.PubKey().SerializeCompressed(), 1_800_000_000, rgb11wallet.VerifyWalletSignature); err != nil {
-		t.Fatalf("sender signature rejected: %v", err)
-	}
-	if err := record.Verify(recipientPriv.PubKey().SerializeCompressed(), 1_800_000_000, rgb11wallet.VerifyWalletSignature); err == nil {
-		t.Fatal("recipient was accepted as relay sender")
-	}
-	recordHash, err := record.Hash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ack := &corerelay.AckRecord{
-		Version:         corerelay.RecordVersion,
-		TransferID:      record.TransferID,
-		RecipientID:     record.RecipientID,
-		RelayRecordHash: recordHash,
-		ConsignmentHash: record.ObjectHash,
-		Accepted:        true,
-	}
-	if err := SignRGB11AckRecord(recipient, ack); err != nil {
-		t.Fatal(err)
-	}
-	if err := ack.Verify(recipientPriv.PubKey().SerializeCompressed(), rgb11wallet.VerifyWalletSignature); err != nil {
-		t.Fatalf("recipient ACK signature rejected: %v", err)
-	}
-	if err := ack.Verify(senderPriv.PubKey().SerializeCompressed(), rgb11wallet.VerifyWalletSignature); err == nil {
-		t.Fatal("sender was accepted as ACK recipient")
-	}
-}
-
-func TestRGB11RelayAndAckRoundTripThroughDKVS(t *testing.T) {
-	senderPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	recipientPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	sender := dkvsTestWalletFromPriv(t, senderPriv)
-	recipient := dkvsTestWalletFromPriv(t, recipientPriv)
-	relayKey, ackKey, err := corerelay.NewTemporaryKeys()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relay := &corerelay.RelayRecord{
-		Version: corerelay.RecordVersion, TransferID: "transfer-dkvs-roundtrip",
-		RecipientID: "recipient-dkvs-roundtrip", ObjectHash: sha256.Sum256([]byte("consignment")),
-		ObjectSize: 11, SourcePeerID: "sender-peer", AckRecordKey: ackKey, Expiry: 4_102_444_800,
-	}
-	if err := SignRGB11RelayRecord(sender, relay); err != nil {
-		t.Fatal(err)
-	}
-	remote := newRGB11MemoryDKVSHTTP()
-	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
-	options := dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000}
-	relayValue, err := relay.MarshalBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relayRecord, err := NewDKVSSignedRecord(sender, relayKey, relayValue, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	outerRelay, err := client.PutRecord(relayRecord)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(outerRelay.PubKey, senderPriv.PubKey().SerializeCompressed()) {
-		t.Fatal("outer relay DKVS record is not signed by sender wallet")
-	}
-	verifiedRelayRecord, err := client.GetVerifiedRecord(relayKey, dkvsindexer.RecordVerificationOptions{
-		ExpectedKey: relayKey,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(verifiedRelayRecord.PubKey, senderPriv.PubKey().SerializeCompressed()) {
-		t.Fatal("relay DKVS signer does not match sender")
-	}
-	verifiedRelay, err := corerelay.UnmarshalRelayRecord(verifiedRelayRecord.Value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := verifiedRelay.Verify(senderPriv.PubKey().SerializeCompressed(), time.Now().Unix(),
-		rgb11wallet.VerifyWalletSignature); err != nil {
-		t.Fatal(err)
-	}
-	if verifiedRelay.TransferID != relay.TransferID || verifiedRelay.ObjectHash != relay.ObjectHash {
-		t.Fatalf("relay round trip mismatch: %+v", verifiedRelay)
-	}
-	if bytes.Equal(verifiedRelayRecord.PubKey, recipientPriv.PubKey().SerializeCompressed()) {
-		t.Fatal("relay DKVS record accepted with recipient as sender")
-	}
-
-	relayHash, err := relay.Hash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ack := &corerelay.AckRecord{
-		Version: corerelay.RecordVersion, TransferID: relay.TransferID, RecipientID: relay.RecipientID,
-		RelayRecordHash: relayHash, ConsignmentHash: relay.ObjectHash, Accepted: true,
-	}
-	if err := SignRGB11AckRecord(recipient, ack); err != nil {
-		t.Fatal(err)
-	}
-	ackValue, err := ack.MarshalBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ackRecord, err := NewDKVSSignedRecord(recipient, ackKey, ackValue, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	outerAck, err := client.PutRecord(ackRecord)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(outerAck.PubKey, recipientPriv.PubKey().SerializeCompressed()) {
-		t.Fatal("outer ACK DKVS record is not signed by recipient wallet")
-	}
-	verifiedAckRecord, err := client.GetVerifiedRecord(ackKey, dkvsindexer.RecordVerificationOptions{
-		ExpectedKey: ackKey,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(verifiedAckRecord.PubKey, recipientPriv.PubKey().SerializeCompressed()) {
-		t.Fatal("ACK DKVS signer does not match recipient")
-	}
-	verifiedAck, err := corerelay.UnmarshalAckRecord(verifiedAckRecord.Value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := verifiedAck.Verify(recipientPriv.PubKey().SerializeCompressed(),
-		rgb11wallet.VerifyWalletSignature); err != nil {
-		t.Fatal(err)
-	}
-	if !verifiedAck.Accepted || verifiedAck.RelayRecordHash != relayHash {
-		t.Fatalf("ACK round trip mismatch: %+v", verifiedAck)
-	}
-}
-
-// rgb11MemoryDKVSHTTP models the one property the multi-device protocol relies
-// on from DKVS: a key may advance only to a strictly newer wallet-signed
-// sequence. Related key updates are committed atomically through batch-CAS.
+// rgb11MemoryDKVSHTTP is shared by the generic DKVS and RGB11 mailbox tests.
+// It models strictly increasing wallet-signed records and atomic batch CAS.
 const testRGB11FreeLocalTTL = uint64(144)
 
 type rgb11MemoryDKVSHTTP struct {
-	mu           sync.Mutex
-	records      map[string]*swire.DKVSRecord
-	generations  map[string]uint64
-	postGate     <-chan struct{}
-	autopayState *dkvsindexer.AutopayContractState
-	autopayError error
-	freeLocal    dkvsindexer.FreeLocalCachePolicy
-	maxRecords   int
+	mu                sync.Mutex
+	records           map[string]*swire.DKVSRecord
+	deleteFloors      map[string]dkvsindexer.DeleteFloor
+	localDeleteFloors map[string]dkvsindexer.DeleteFloor
+	generations       map[string]uint64
+	pathSyncs         map[string]int
+	postGate          <-chan struct{}
+	autopayState      *dkvsindexer.AutopayContractState
+	autopayError      error
+	freeLocal         dkvsindexer.FreeLocalCachePolicy
+	maxRecords        int
 }
 
 func newRGB11MemoryDKVSHTTP() *rgb11MemoryDKVSHTTP {
 	return &rgb11MemoryDKVSHTTP{
-		records:     make(map[string]*swire.DKVSRecord),
-		generations: make(map[string]uint64),
+		records:           make(map[string]*swire.DKVSRecord),
+		deleteFloors:      make(map[string]dkvsindexer.DeleteFloor),
+		localDeleteFloors: make(map[string]dkvsindexer.DeleteFloor),
+		generations:       make(map[string]uint64),
+		pathSyncs:         make(map[string]int),
 		freeLocal: dkvsindexer.FreeLocalCachePolicy{
 			Enabled:             true,
 			MaxTTL:              testRGB11FreeLocalTTL,
@@ -299,17 +71,17 @@ func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, er
 	}
 	switch {
 	case strings.HasSuffix(url.Path, "/v3/dkvs/records/batch-cas"):
-		var req DKVSBatchCASRequest
-		if err := json.Unmarshal(body, &req); err != nil {
+		var request DKVSBatchCASRequest
+		if err := json.Unmarshal(body, &request); err != nil {
 			return nil, err
 		}
-		return h.applyBatchCAS(req.Mutations, req.PathPreconditions)
+		return h.applyBatchCAS(request.Mutations, request.PathPreconditions)
 	case strings.HasSuffix(url.Path, "/v3/dkvs/records/cas"):
-		var req DKVSCASMutationRequest
-		if err := json.Unmarshal(body, &req); err != nil {
+		var request DKVSCASMutationRequest
+		if err := json.Unmarshal(body, &request); err != nil {
 			return nil, err
 		}
-		result, err := h.applyBatchCAS([]DKVSCASMutationRequest{req}, nil)
+		result, err := h.applyBatchCAS([]DKVSCASMutationRequest{request}, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -329,32 +101,32 @@ func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, er
 			"code": 0, "msg": "ok", "data": batch.Data.Records[0], "hash": hash.String(),
 		})
 	case strings.HasSuffix(url.Path, "/v3/dkvs/sync"):
-		var req DKVSSyncRequest
-		if err := json.Unmarshal(body, &req); err != nil {
+		var request DKVSSyncRequest
+		if err := json.Unmarshal(body, &request); err != nil {
 			return nil, err
 		}
-		return h.syncFiltered(req)
+		return h.syncFiltered(request)
 	case strings.HasSuffix(url.Path, "/v3/dkvs/sync/directory"):
-		var req DKVSDirectorySyncRequest
-		if err := json.Unmarshal(body, &req); err != nil {
+		var request DKVSDirectorySyncRequest
+		if err := json.Unmarshal(body, &request); err != nil {
 			return nil, err
 		}
-		return h.syncDirectory(req)
+		return h.syncDirectory(request)
 	case strings.HasSuffix(url.Path, "/v3/dkvs/watch/directory"):
-		var req DKVSDirectoryWatchRequest
-		if err := json.Unmarshal(body, &req); err != nil {
+		var request DKVSDirectoryWatchRequest
+		if err := json.Unmarshal(body, &request); err != nil {
 			return nil, err
 		}
-		sync, err := h.syncDirectory(DKVSDirectorySyncRequest{Prefix: req.Prefix})
+		syncResult, err := h.syncDirectory(DKVSDirectorySyncRequest{Prefix: request.Prefix})
 		if err != nil {
 			return nil, err
 		}
 		var response dkvsSyncResp
-		if err := json.Unmarshal(sync, &response); err != nil || response.Data == nil {
+		if err := json.Unmarshal(syncResult, &response); err != nil || response.Data == nil {
 			return nil, err
 		}
 		return rgb11DKVSResponse(0, "ok", &DKVSWatchResult{
-			Changed: response.Data.Root != req.Root, Root: response.Data.Root,
+			Changed: response.Data.Root != request.Root, Root: response.Data.Root,
 		}, 0)
 	}
 
@@ -372,8 +144,7 @@ func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, er
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.maxRecords > 0 && !tombstonePath && h.records[record.Key] == nil &&
-		len(h.records) >= h.maxRecords {
+	if h.maxRecords > 0 && !tombstonePath && h.records[record.Key] == nil && len(h.records) >= h.maxRecords {
 		return rgb11DKVSResponse(1, dkvsindexer.ErrFeeCapacityExceeded.Error(), nil, 0)
 	}
 	if current := h.records[record.Key]; current != nil && record.Seq <= current.Seq {
@@ -492,19 +263,19 @@ func (h *rgb11MemoryDKVSHTTP) pathActiveRootLocked(path string) chainhash.Hash {
 		payload = append(payload, key...)
 		payload = append(payload, recordHash[:]...)
 		leaf := chainhash.DoubleHashH(payload)
-		for n := range root {
-			root[n] ^= leaf[n]
+		for index := range root {
+			root[index] ^= leaf[index]
 		}
 	}
 	return root
 }
 
-func (h *rgb11MemoryDKVSHTTP) syncFiltered(req DKVSSyncRequest) ([]byte, error) {
+func (h *rgb11MemoryDKVSHTTP) syncFiltered(request DKVSSyncRequest) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	records := make([]*swire.DKVSRecord, 0)
 	for key, record := range h.records {
-		for _, filter := range req.Filters {
+		for _, filter := range request.Filters {
 			if dkvsindexer.SubscriptionMatchesKey(filter, key) {
 				records = append(records, cloneRGB11DKVSRecord(record))
 				break
@@ -516,15 +287,13 @@ func (h *rgb11MemoryDKVSHTTP) syncFiltered(req DKVSSyncRequest) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	return rgb11DKVSResponse(0, "ok", &DKVSSyncPage{
-		Records: records, Done: true, Root: root.String(),
-	}, 0)
+	return rgb11DKVSResponse(0, "ok", &DKVSSyncPage{Records: records, Done: true, Root: root.String()}, 0)
 }
 
-func (h *rgb11MemoryDKVSHTTP) syncDirectory(req DKVSDirectorySyncRequest) ([]byte, error) {
+func (h *rgb11MemoryDKVSHTTP) syncDirectory(request DKVSDirectorySyncRequest) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	prefix := strings.TrimSuffix(req.Prefix, "/")
+	prefix := strings.TrimSuffix(request.Prefix, "/")
 	records := make([]*swire.DKVSRecord, 0)
 	for key, record := range h.records {
 		if key == prefix || strings.HasPrefix(key, prefix+"/") {
@@ -536,23 +305,23 @@ func (h *rgb11MemoryDKVSHTTP) syncDirectory(req DKVSDirectorySyncRequest) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	return rgb11DKVSResponse(0, "ok", &DKVSSyncPage{
-		Records: records, Done: true, Root: root.String(),
-	}, 0)
+	return rgb11DKVSResponse(0, "ok", &DKVSSyncPage{Records: records, Done: true, Root: root.String()}, 0)
 }
 
 func (h *rgb11MemoryDKVSHTTP) SendGetRequest(url *URL) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if strings.HasSuffix(url.Path, "/v3/dkvs/config") {
-		return rgb11DKVSResponse(0, "ok", dkvsindexer.ClientConfig{FreeLocal: h.freeLocal, Blob: dkvsindexer.DefaultBlobPolicy(), MaxBatchMutations: dkvsindexer.MaxBatchCASMutations, MaxBatchBytes: dkvsindexer.MaxBatchCASTotalSize}, 0)
+		return rgb11DKVSResponse(0, "ok", dkvsindexer.ClientConfig{
+			FreeLocal: h.freeLocal, Blob: dkvsindexer.DefaultBlobPolicy(),
+			MaxBatchMutations: dkvsindexer.MaxBatchCASMutations,
+			MaxBatchBytes:     dkvsindexer.MaxBatchCASTotalSize,
+		}, 0)
 	}
 	if strings.HasSuffix(url.Path, "/v3/dkvs/path-meta") {
 		path := strings.TrimSuffix(url.Query["path"], "/")
 		return rgb11DKVSResponse(0, "ok", &dkvsindexer.PathMeta{
-			Version:    2,
-			Path:       path,
-			Generation: h.generations[path],
+			Version: 2, Path: path, Generation: h.generations[path],
 			ActiveRoot: h.pathActiveRootLocked(path),
 		}, 0)
 	}
@@ -594,12 +363,72 @@ func cloneRGB11DKVSRecord(record *swire.DKVSRecord) *swire.DKVSRecord {
 	if record == nil {
 		return nil
 	}
-	copy := *record
-	copy.Value = append([]byte(nil), record.Value...)
-	copy.PubKey = append([]byte(nil), record.PubKey...)
-	copy.Signature = append([]byte(nil), record.Signature...)
-	copy.FeeProof = append([]byte(nil), record.FeeProof...)
-	return &copy
+	copyValue := *record
+	copyValue.Value = append([]byte(nil), record.Value...)
+	copyValue.PubKey = append([]byte(nil), record.PubKey...)
+	copyValue.Signature = append([]byte(nil), record.Signature...)
+	copyValue.FeeProof = append([]byte(nil), record.FeeProof...)
+	return &copyValue
+}
+
+func TestRGB11SnapshotDoesNotCopyGlobalTickerCatalog(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newRGB11MultiDeviceManager(t, priv, 42)
+	globalName := indexer.AssetName{Protocol: rgb11wallet.Protocol, Type: indexer.ASSET_TYPE_FT, Ticker: "global_test"}
+	manager.tickerInfoMap[globalName.String()] = &indexer.TickerInfo{
+		AssetName: globalName, DisplayName: "Global RGB Test",
+	}
+	walletID, err := manager.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWalletID := "rgb11-" + hex.EncodeToString(manager.wallet.GetPubKey().SerializeCompressed())
+	if walletID != wantWalletID {
+		t.Fatalf("RGB11 wallet key contains format version: got=%s want=%s", walletID, wantWalletID)
+	}
+	snapshot, _, err := manager.rgbManager.exportRGB11WalletSnapshot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rgb11SnapshotHasState(snapshot) {
+		t.Fatal("empty wallet inherited global RGB ticker metadata")
+	}
+}
+
+func TestRGB11SnapshotPreflightDoesNotPartiallyImportEngineState(t *testing.T) {
+	sourcePriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := newRGB11MultiDeviceManager(t, sourcePriv, 42)
+	createRGB11MultiDeviceInvoice(t, source, "recipient-preflight")
+	engineRecords, err := source.rgbManager.engineStore.ExportSnapshot()
+	if err != nil || len(engineRecords) != 1 {
+		t.Fatalf("source engine records=%d err=%v", len(engineRecords), err)
+	}
+
+	targetPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := newRGB11MultiDeviceManager(t, targetPriv, 43)
+	snapshot := &RGB11WalletSnapshot{
+		Version: rgb11WalletSnapshotVersion, EngineRecords: engineRecords,
+		ProjectionRecords: []rgb11wallet.SnapshotRecord{{Key: "invalid-record", Value: []byte{1}}},
+	}
+	if err := target.rgbManager.importRGB11WalletSnapshot(snapshot); err == nil {
+		t.Fatal("invalid projection snapshot was accepted")
+	}
+	restoredEngine, err := target.rgbManager.engineStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restoredEngine) != 0 {
+		t.Fatalf("engine state was imported before projection preflight: %+v", restoredEngine)
+	}
 }
 
 func TestDKVSManagerBackgroundSyncRefreshesExactKey(t *testing.T) {

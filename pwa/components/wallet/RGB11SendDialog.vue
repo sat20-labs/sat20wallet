@@ -98,21 +98,6 @@
             {{ loading ? $t('rgb11Transfer.preparing') : $t('rgb11Transfer.prepare') }}
           </Button>
 
-          <div v-if="transferPackage" class="space-y-2">
-            <Label>{{ $t('rgb11Transfer.package') }}</Label>
-            <Textarea
-              :model-value="transferPackage"
-              readonly
-              spellcheck="false"
-              class="min-h-36 bg-zinc-900 font-mono text-xs"
-            />
-            <Button variant="outline" class="w-full" @click="copyText(transferPackage)">
-              <Icon icon="lucide:copy" class="mr-2 h-4 w-4" />
-              {{ $t('rgb11Transfer.copyPackage') }}
-            </Button>
-            <p class="text-xs text-amber-500">{{ $t('rgb11Transfer.ackGate') }}</p>
-          </div>
-
           <div v-if="outOfBand && standardConsignmentBase64" class="space-y-2">
             <Label>{{ $t('rgb11Transfer.standardConsignment') }}</Label>
             <Button variant="outline" class="w-full" @click="downloadStandardConsignment">
@@ -127,18 +112,14 @@
               {{ $t('rgb11Transfer.proxyAckHelp') }}
             </p>
             <Button v-if="proxyTransport && !proxyBroadcasted" variant="outline" class="w-full"
-              :disabled="loading" @click="deliverProxyTransfer">
+              :disabled="loading" @click="deliverProxyTransfer()">
               {{ $t('rgb11Transfer.retryProxyDelivery') }}
             </Button>
             <Button v-if="proxyTransport && proxyBroadcasted" variant="outline" class="w-full"
               :disabled="loading" @click="checkProxyAck">
               {{ $t('rgb11Transfer.checkProxyAck') }}
             </Button>
-            <Button v-if="!outOfBand && !proxyTransport" variant="outline" class="w-full" :disabled="loading" @click="fetchAck">
-              {{ $t('rgb11Transfer.fetchAck') }}
-            </Button>
-            <Textarea v-if="!outOfBand && !proxyTransport" v-model="ack" spellcheck="false" class="min-h-28 bg-zinc-900 font-mono text-xs" />
-            <Button v-if="!proxyTransport" class="w-full" :disabled="loading || (!outOfBand && !ack.trim())" @click="broadcastTraditional">
+            <Button v-if="outOfBand" class="w-full" :disabled="loading" @click="broadcastTraditional">
               {{ loading ? $t('rgb11Transfer.broadcasting') : $t('rgb11Transfer.broadcast') }}
             </Button>
           </div>
@@ -154,12 +135,12 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Icon } from '@iconify/vue'
-import { useClipboard } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 import walletManager from '@/utils/sat20'
 import rgb11Address from '@/utils/rgb11Address'
+import { beginNamedPwaOperation, finishPwaOperation, type PwaOperationContext } from '@/utils/pwaOperationLog'
+import { updateOperationLog } from '@/utils/operationLog'
 import { useWalletStore } from '@/store'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -183,20 +164,16 @@ const amountRaw = ref('')
 const temporaryDelivery = ref(false)
 const carrierWarning = ref('')
 const invoice = ref('')
-const ack = ref('')
 const transferId = ref('')
-const relayRecord = ref('')
-const transferPackage = ref('')
 const standardConsignmentBase64 = ref('')
 const loading = ref(false)
 const message = ref('')
 const success = ref(false)
 const pendingPrepared = ref<any>(null)
-const batchItems = ref<Array<{ transferId: string; relayRecord: string; transportMode: string }>>([])
+const batchItems = ref<Array<{ transferId: string; transportMode: string }>>([])
 const outOfBand = ref(false)
 const proxyTransport = ref(false)
 const proxyBroadcasted = ref(false)
-const { copy } = useClipboard()
 const { t } = useI18n()
 const walletStore = useWalletStore()
 const { btcFeeRate } = storeToRefs(walletStore)
@@ -225,6 +202,20 @@ const sendByAddress = async () => {
   message.value = ''
   success.value = false
   temporaryDelivery.value = false
+  const operation = await beginNamedPwaOperation({
+    category: 'rgb11',
+    action: 'rgb11_send_address',
+    title: 'Send RGB asset',
+    summary: 'Sending an RGB11 asset to a wallet address',
+    parameters: {
+      contract_id: assetContractID.value,
+      asset: assetName.value,
+      amount_raw: amountRaw.value,
+      destination: receiverAddress.value,
+      fee_rate: String(Number(btcFeeRate.value || 1)),
+    },
+    successMessage: 'RGB address transfer broadcast',
+  })
   try {
     const [prepareErr, prepareResult] = await rgb11Address.prepareTransfer({
       receiver_address: receiverAddress.value,
@@ -244,15 +235,24 @@ const sendByAddress = async () => {
     const prepared = JSON.parse(prepareResult.transfer)
     const id = prepared?.state?.transfer_id
     if (!id) throw new Error(t('rgb11Transfer.prepareFailed'))
+    if (operation) {
+      await updateOperationLog(operation.id, {
+        status: 'running',
+        message: 'RGB transfer prepared',
+        details: { transfer_id: id },
+      })
+    }
 
     const [sendErr, sendResult] = await rgb11Address.deliverAndBroadcast({
       transfer_id: id,
     })
     if (sendErr || !sendResult?.txid) throw sendErr || new Error(t('rgb11Transfer.broadcastFailed'))
     temporaryDelivery.value = !!sendResult.temporary
-    await completeBroadcast(sendResult.txid, 'rgb11Transfer.addressBroadcasted')
+    await completeBroadcast(sendResult.txid, 'rgb11Transfer.addressBroadcasted', operation, id)
   } catch (error: any) {
-    message.value = error?.message || t('rgb11Transfer.broadcastFailed')
+    const sendError = error instanceof Error ? error : new Error(error?.message || t('rgb11Transfer.broadcastFailed'))
+    await finishPwaOperation(operation, sendError)
+    message.value = sendError.message
   } finally {
     loading.value = false
   }
@@ -262,6 +262,19 @@ const prepareTraditional = async () => {
   loading.value = true
   message.value = ''
   success.value = false
+  const operation = await beginNamedPwaOperation({
+    category: 'rgb11',
+    action: 'rgb11_prepare_send',
+    title: 'Prepare RGB transfer',
+    summary: 'Preparing an RGB11 transfer from the send dialog',
+    parameters: {
+      contract_id: assetContractID.value,
+      amount_raw: amountRaw.value,
+      invoice_count: String(invoiceCount.value),
+      fee_rate: String(Number(btcFeeRate.value || 1)),
+    },
+    successMessage: 'RGB transfer prepared',
+  })
   if (!pendingPrepared.value) {
     const invoices = invoice.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)
     const [err, result] = await walletManager.prepareRGB11Transfer({
@@ -275,7 +288,9 @@ const prepareTraditional = async () => {
     })
     if (err || !result?.transfer) {
       loading.value = false
-      message.value = err?.message || t('rgb11Transfer.prepareFailed')
+      const prepareError = err || new Error(t('rgb11Transfer.prepareFailed'))
+      await finishPwaOperation(operation, prepareError)
+      message.value = prepareError.message
       return
     }
     pendingPrepared.value = JSON.parse(result.transfer)
@@ -284,52 +299,43 @@ const prepareTraditional = async () => {
     const prepared = pendingPrepared.value
     const states = Array.isArray(prepared?.states) && prepared.states.length ? prepared.states : [prepared?.state]
     if (!states.length || states.some((state: any) => !state?.transfer_id)) throw new Error(t('rgb11Transfer.prepareFailed'))
-    const items: Array<{ transferId: string; relayRecord: string; transportMode: string }> = []
-    const packages = []
+    const items: Array<{ transferId: string; transportMode: string }> = []
     for (const state of states) {
-      const transportMode = state.transport_mode || 'sat20-managed'
+      const transportMode = state.transport_mode || ''
       if (transportMode === 'rgb-json-rpc') {
-        items.push({ transferId: state.transfer_id, relayRecord: '', transportMode })
+        items.push({ transferId: state.transfer_id, transportMode })
       } else if (transportMode === 'out-of-band') {
-        items.push({ transferId: state.transfer_id, relayRecord: '', transportMode })
-        packages.push({
-          version: 1,
-          transport_mode: transportMode,
-          transfer_id: state.transfer_id,
-          recipient_id: state.recipient_id,
-          consignment: prepared.recipient_consignment,
-        })
+        items.push({ transferId: state.transfer_id, transportMode })
       } else {
-        const [recordErr, recordResult] = await walletManager.publishRGB11RelayRecord(state.transfer_id)
-        if (recordErr || !recordResult?.record) throw recordErr || new Error(t('rgb11Transfer.prepareFailed'))
-        items.push({ transferId: state.transfer_id, relayRecord: recordResult.record, transportMode })
-        packages.push({
-          version: 1,
-          transport_mode: transportMode,
-          transfer_id: state.transfer_id,
-          relay_record: JSON.parse(recordResult.record),
-          consignment: prepared.recipient_consignment,
-        })
+        throw new Error(`unsupported RGB11 invoice transport: ${transportMode || 'missing'}`)
       }
     }
     batchItems.value = items
     outOfBand.value = items.every((item) => item.transportMode === 'out-of-band')
     proxyTransport.value = items.every((item) => item.transportMode === 'rgb-json-rpc')
     transferId.value = items[0].transferId
-    relayRecord.value = items[0].relayRecord
+    if (operation) {
+      await updateOperationLog(operation.id, {
+        status: 'running',
+        message: 'RGB transfer prepared',
+        details: {
+          transfer_id: transferId.value,
+          transport_mode: items[0].transportMode,
+          transfer_count: String(items.length),
+        },
+      })
+    }
     standardConsignmentBase64.value = outOfBand.value
       ? (prepared.recipient_consignment_base64 || '')
       : ''
     if (outOfBand.value && !standardConsignmentBase64.value) {
       throw new Error(t('rgb11Transfer.prepareFailed'))
     }
-    transferPackage.value = proxyTransport.value || outOfBand.value
-      ? ''
-      : JSON.stringify(packages.length === 1 ? packages[0] : packages)
     if (proxyTransport.value) {
-      await deliverProxyTransfer()
+      await deliverProxyTransfer(operation)
       return
     }
+    await finishPwaOperation(operation, null, { transfer_id: transferId.value })
     success.value = true
     message.value = t(
       proxyTransport.value
@@ -338,16 +344,29 @@ const prepareTraditional = async () => {
     )
     pendingPrepared.value = null
   } catch (error: any) {
-    message.value = error?.message || t('rgb11Transfer.prepareFailed')
+    const prepareError = error instanceof Error ? error : new Error(error?.message || t('rgb11Transfer.prepareFailed'))
+    await finishPwaOperation(operation, prepareError)
+    message.value = prepareError.message
   } finally {
     loading.value = false
   }
 }
 
-const deliverProxyTransfer = async () => {
+const deliverProxyTransfer = async (parentOperation: PwaOperationContext | null = null) => {
   loading.value = true
   message.value = ''
   success.value = false
+  const operation = parentOperation || await beginNamedPwaOperation({
+    category: 'rgb11',
+    action: 'rgb11_retry_proxy_delivery',
+    title: 'Retry RGB proxy delivery',
+    summary: 'Retrying delivery and broadcast for an RGB11 proxy transfer',
+    parameters: {
+      transfer_id: transferId.value,
+      transfer_count: String(batchItems.value.length),
+    },
+    successMessage: 'RGB proxy transfer delivered and broadcast',
+  })
   try {
     const [proxyErr, proxyResult] = await walletManager.deliverAndBroadcastRGB11ProxyTransfer(
       batchItems.value.map((item) => item.transferId),
@@ -355,9 +374,19 @@ const deliverProxyTransfer = async () => {
     if (proxyErr || !proxyResult?.txid) throw proxyErr || new Error(t('rgb11Transfer.broadcastFailed'))
     pendingPrepared.value = null
     proxyBroadcasted.value = true
-    await completeBroadcast(proxyResult.txid)
+    if (operation) {
+      await updateOperationLog(operation.id, {
+        status: 'running',
+        message: 'RGB proxy consignment delivered; transaction broadcast',
+        txid: proxyResult.txid,
+        details: { txid: proxyResult.txid },
+      })
+    }
+    await completeBroadcast(proxyResult.txid, 'rgb11Transfer.broadcasted', operation, transferId.value)
   } catch (error: any) {
-    message.value = error?.message || t('rgb11Transfer.broadcastFailed')
+    const deliveryError = error instanceof Error ? error : new Error(error?.message || t('rgb11Transfer.broadcastFailed'))
+    await finishPwaOperation(operation, deliveryError)
+    message.value = deliveryError.message
   } finally {
     loading.value = false
   }
@@ -394,92 +423,49 @@ const checkProxyAck = async () => {
   }
 }
 
-const fetchAck = async () => {
-  loading.value = true
-  message.value = ''
-  success.value = false
-  try {
-    const decisions = await Promise.all(batchItems.value.map(async (item) => {
-      const [err, result] = await walletManager.fetchRGB11AckRecord(item.transferId)
-      return { item, err, result }
-    }))
-    const fetched = []
-    for (const decision of decisions) {
-      if (decision.err || !decision.result?.ack) continue
-      const ackRecord = JSON.parse(decision.result.ack)
-      if (ackRecord.accepted === false) {
-        const [cancelErr] = await walletManager.cancelRGB11BatchByNack(
-          decision.item.transferId, decision.item.relayRecord, JSON.stringify(ackRecord),
-        )
-        if (cancelErr) throw cancelErr
-        ack.value = JSON.stringify({ ack: ackRecord })
-        message.value = t('rgb11Transfer.senderRejected', { reason: ackRecord.reason_code || 'rejected' })
-        await refreshRGB11State()
-        emit('completed')
-        return
-      }
-      fetched.push({ transfer_id: decision.item.transferId, ack: ackRecord })
-    }
-    const unavailable = decisions.find((decision) => decision.err || !decision.result?.ack)
-    if (unavailable) throw unavailable.err || new Error(t('rgb11Transfer.fetchAckFailed'))
-    ack.value = JSON.stringify(fetched.length === 1 ? { ack: fetched[0].ack } : { acks: fetched })
-    success.value = true
-    message.value = t('rgb11Transfer.ackFetched')
-  } catch (error: any) {
-    message.value = error?.message || t('rgb11Transfer.fetchAckFailed')
-  } finally {
-    loading.value = false
-  }
-}
-
 const broadcastTraditional = async () => {
   loading.value = true
   message.value = ''
   success.value = false
+  const operation = await beginNamedPwaOperation({
+    category: 'rgb11',
+    action: 'rgb11_broadcast_out_of_band',
+    title: 'Broadcast RGB transfer',
+    summary: 'Broadcasting a prepared out-of-band RGB11 transfer',
+    parameters: {
+      transfer_id: transferId.value,
+      transfer_count: String(batchItems.value.length),
+    },
+    successMessage: 'RGB transfer transaction broadcast',
+  })
   try {
-    const parsed = outOfBand.value || proxyTransport.value ? null : JSON.parse(ack.value.trim())
-    let err: Error | undefined
-    let result: { txid: string } | undefined
-    if (outOfBand.value) {
-      ;[err, result] = await walletManager.broadcastRGB11OutOfBand(
-        batchItems.value.map((item) => item.transferId),
-      )
-    } else if (batchItems.value.length === 1) {
-      const ackRecord = parsed?.ack || parsed
-      ;[err, result] = await walletManager.broadcastRGB11Transfer(
-        transferId.value,
-        relayRecord.value,
-        JSON.stringify(ackRecord),
-      )
-    } else {
-      const supplied = Array.isArray(parsed?.acks) ? parsed.acks : (Array.isArray(parsed) ? parsed : [])
-      const byTransfer = new Map(supplied.map((item: any) => [item?.transfer_id, item?.ack || item]))
-      const ackRecords = batchItems.value.map((item) => byTransfer.get(item.transferId))
-      if (ackRecords.some((item) => !item)) throw new Error(t('rgb11Transfer.fetchAckFailed'))
-      ;[err, result] = await walletManager.broadcastRGB11Batch({
-        transfer_ids: batchItems.value.map((item) => item.transferId),
-        relay_records: batchItems.value.map((item) => JSON.parse(item.relayRecord)),
-        acks: ackRecords,
-      })
-    }
+    if (!outOfBand.value) throw new Error('prepared transfer is not out-of-band')
+    const [err, result] = await walletManager.broadcastRGB11OutOfBand(
+      batchItems.value.map((item) => item.transferId),
+    )
     if (err || !result?.txid) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
-    await completeBroadcast(result.txid)
+    await completeBroadcast(result.txid, 'rgb11Transfer.broadcasted', operation, transferId.value)
   } catch (error: any) {
-    message.value = error?.message || t('rgb11Transfer.broadcastFailed')
+    const broadcastError = error instanceof Error ? error : new Error(error?.message || t('rgb11Transfer.broadcastFailed'))
+    await finishPwaOperation(operation, broadcastError)
+    message.value = broadcastError.message
   } finally {
     loading.value = false
   }
 }
 
-const copyText = async (value: string) => {
-  await copy(value)
-  message.value = t('rgb11Transfer.copied')
-  success.value = true
-}
-
-const completeBroadcast = async (txid: string, messageKey = 'rgb11Transfer.broadcasted') => {
+const completeBroadcast = async (
+  txid: string,
+  messageKey = 'rgb11Transfer.broadcasted',
+  operation: PwaOperationContext | null = null,
+  completedTransferId = '',
+) => {
   success.value = true
   message.value = t(messageKey, { txid })
+  await finishPwaOperation(operation, null, {
+    txid,
+    transfer_id: completedTransferId || transferId.value,
+  })
   const [refreshErr] = await walletManager.refreshRGB11State()
   if (refreshErr) {
     message.value = t('rgb11Transfer.taskBroadcastedRefreshFailed', {
@@ -517,10 +503,7 @@ watch(isOpen, (open) => {
   temporaryDelivery.value = false
   carrierWarning.value = ''
   invoice.value = ''
-  ack.value = ''
   transferId.value = ''
-  relayRecord.value = ''
-  transferPackage.value = ''
   standardConsignmentBase64.value = ''
   loading.value = false
   message.value = ''

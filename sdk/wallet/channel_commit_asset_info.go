@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strconv"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
@@ -115,6 +116,8 @@ func (p *Manager) GetCommitTxAssetInfo(channelId string) (*TxAssetInfo, error) {
 		if curr == nil {
 			return nil, fmt.Errorf("inputs have no enough asset for output %d", i)
 		}
+		curr.OutPointStr = tx.TxID() + ":" + strconv.Itoa(i)
+		curr.OutValue.PkScript = append([]byte(nil), txOut.PkScript...)
 		result.OutputAssets = append(result.OutputAssets, curr.ToAssetsInUtxo())
 	}
 

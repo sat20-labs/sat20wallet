@@ -1981,6 +1981,29 @@ func (p *DaoContractRunTime) updateContractStatus(item *InvokeItem) {
 	// 整体状态在外部保存
 }
 
+func (p *DaoContractRunTime) DisableItem(input InvokeHistoryItem) {
+	item, ok := input.(*InvokeItem)
+	if !ok {
+		return
+	}
+
+	p.TotalDonateAmt = subtractDecimalNonNegative(p.TotalDonateAmt, item.InAmt)
+	p.TotalInputValue = subtractInt64NonNegative(p.TotalInputValue, item.InValue)
+	p.AssetAmtInPool = subtractDecimalNonNegative(p.AssetAmtInPool, item.InAmt)
+	p.SatsValueInPool = subtractInt64NonNegative(p.SatsValueInPool, item.InValue)
+
+	invoker := p.loadInvokerInfo(item.Address)
+	if removeItemFromInvokerHistory(invoker.History, item.Id) && invoker.InvokeCount > 0 {
+		invoker.InvokeCount--
+	}
+	if item.Reason == INVOKE_REASON_NORMAL {
+		invoker.InvokeAmt = subtractDecimalNonNegative(invoker.InvokeAmt, item.InAmt)
+		invoker.InvokeValue = subtractInt64NonNegative(invoker.InvokeValue, item.InValue)
+	}
+	invoker.UpdateTime = time.Now().Unix()
+	saveContractInvokerStatus(p.stp.GetDB(), p.URL(), invoker)
+}
+
 func (p *DaoContractRunTime) addUnhandledUID_register(item *InvokeItem) {
 	var innerParam RegisterInvokeParam
 	paramBytes, err := base64.StdEncoding.DecodeString(string(item.Padded))

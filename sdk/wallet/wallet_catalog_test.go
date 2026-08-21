@@ -51,6 +51,8 @@ func TestManagedRootWalletCannotBeDeleted(t *testing.T) {
 	if len(manager.walletInfoMap) != 2 {
 		t.Fatal("root deletion changed the wallet catalog")
 	}
+	manager.wallet = childWallet
+	manager.status.CurrentWallet = 2
 	if err := manager.DeleteWallet(2); err != nil {
 		t.Fatal(err)
 	}
@@ -61,6 +63,10 @@ func TestManagedRootWalletCannotBeDeleted(t *testing.T) {
 		manager.accountProfile.Pending[0].Type != accountMutationDeleteWallet ||
 		manager.accountProfile.Pending[0].Fingerprint != walletFingerprint(childWallet) {
 		t.Fatal("non-root wallet deletion was not queued for DKVS")
+	}
+	if manager.wallet != rootWallet || manager.status.CurrentWallet != 1 ||
+		manager.channelIdentityGeneration != 1 {
+		t.Fatal("deleting the current wallet did not advance channel identity")
 	}
 }
 

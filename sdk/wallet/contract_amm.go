@@ -2003,8 +2003,8 @@ func (p *AmmContractRuntime) settle(height int) error {
 }
 
 // 仅用于amm合约
-func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue int64,
-	divisibility int, org *SwapContractRunningData) (*SwapContractRunningData, error) {
+func rebuildAmmRunningData(history []*SwapHistoryItem, poolAmt *Decimal, poolValue int64,
+	divisibility int, org *SwapContractRunningData, verify bool) (*SwapContractRunningData, error) {
 
 	InvokeCount := int64(0)
 	traderInfoMap := make(map[string]*TraderStatus)
@@ -2070,6 +2070,9 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 						runningData.AssetAmtInPool = runningData.AssetAmtInPool.Add(item.InAmt)
 						runningData.SatsValueInPool -= CalcDealValue(item.OutValue)
 					}
+					if item.OutValue > 0 || (item.OutAmt != nil && item.OutAmt.Sign() > 0) {
+						runningData.TotalDealCount++
+					}
 
 					Log.Infof("OnSending %d: Amt: %s-%s-%s Value: %d-%d-%d Price: %s in: %s", item.Id, item.InAmt.String(), item.RemainingAmt.String(), item.OutAmt.String(),
 						item.InValue, item.RemainingValue, item.OutValue, item.UnitPrice.String(), item.InUtxo)
@@ -2117,6 +2120,16 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 
 				if len(refundTxMap) != runningData.TotalRefundTx {
 					Log.Infof("")
+				}
+			}
+			if item.Reason == INVOKE_REASON_NORMAL &&
+				(item.OutValue > 0 || (item.OutAmt != nil && item.OutAmt.Sign() > 0)) && item.UnitPrice != nil {
+				runningData.LastDealPrice = item.UnitPrice.Clone()
+				if runningData.HighestDealPrice == nil || runningData.HighestDealPrice.Cmp(item.UnitPrice) < 0 {
+					runningData.HighestDealPrice = item.UnitPrice.Clone()
+				}
+				if runningData.LowestDealPrice == nil || runningData.LowestDealPrice.Cmp(item.UnitPrice) > 0 {
+					runningData.LowestDealPrice = item.UnitPrice.Clone()
 				}
 			}
 
@@ -2197,6 +2210,9 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 		}
 	}
 	runningData.TotalOutputSats += int64(len(refundTxMap)+len(dealTxMap)) * DEFAULT_FEE_SATSNET
+	if !verify {
+		return &runningData, nil
+	}
 
 	// 对比数据
 	Log.Infof("OnSending: value: %d, amt: %s", onSendingVaue, onSendngAmt.String())
@@ -2280,6 +2296,109 @@ func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue in
 
 	Log.Error(err)
 	return &runningData, fmt.Errorf("%s", err)
+}
+
+func VerifyAmmHistory(history []*SwapHistoryItem, poolAmt *Decimal, poolValue int64,
+	divisibility int, org *SwapContractRunningData) (*SwapContractRunningData, error) {
+	return rebuildAmmRunningData(history, poolAmt, poolValue, divisibility, org, true)
+}
+
+// DisableRollbackItem_SatsNet reverses the AMM swap contribution of an invoke
+// removed by deterministic rollback. It is deliberately separate from the
+// ordinary reorg DisableItem path so an orphan cannot be reversed twice.
+// Retained liquidity state stays in the current runtime; rebuilding the pool
+// from static contract values would lose historical add/remove-liquidity.
+func (p *AmmContractRuntime) DisableRollbackItem_SatsNet(input InvokeHistoryItem) {
+	item, ok := input.(*SwapHistoryItem)
+	if !ok {
+		return
+	}
+	alreadyDisabledByReorg := item.Done == ITEM_STATUS_INIT &&
+		item.Reason == INVOKE_REASON_UTXO_NOT_FOUND_REORG
+	if item.Done == ITEM_STATUS_INIT || item.Done == ITEM_STATUS_DEALT {
+		switch item.OrderType {
+		case ORDERTYPE_BUY:
+			if item.OutAmt != nil && item.OutAmt.Sign() > 0 {
+				tradingValue := item.InValue - item.ServiceFee
+				if tradingValue < 0 {
+					tradingValue = 0
+				}
+				p.AssetAmtInPool = p.AssetAmtInPool.Add(item.OutAmt)
+				p.SatsValueInPool = subtractInt64NonNegative(p.SatsValueInPool, tradingValue)
+				p.TotalDealAssets = subtractDecimalNonNegative(p.TotalDealAssets, item.OutAmt)
+				if p.TotalDealCount > 0 {
+					p.TotalDealCount--
+				}
+			}
+		case ORDERTYPE_SELL:
+			if item.OutValue > 0 {
+				p.AssetAmtInPool = subtractDecimalNonNegative(p.AssetAmtInPool, item.InAmt)
+				p.SatsValueInPool += item.OutValue
+				p.TotalDealSats = subtractInt64NonNegative(p.TotalDealSats, item.OutValue)
+				if p.TotalDealCount > 0 {
+					p.TotalDealCount--
+				}
+			}
+		}
+	}
+	if alreadyDisabledByReorg {
+		return
+	}
+	p.SwapContractRuntime.DisableItem(input)
+}
+
+func (p *AmmContractRuntime) RebuildRollbackState_SatsNet() error {
+	history := LoadContractInvokeHistory(p.stp.GetDB(), p.URL(), false, false)
+	items := make([]*SwapHistoryItem, 0, len(history))
+	for _, value := range history {
+		item, ok := value.(*SwapHistoryItem)
+		if !ok {
+			return fmt.Errorf("unexpected AMM history type %T", value)
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Id < items[j].Id })
+	runningData, err := rebuildAmmRunningData(items, p.originalAmt, p.originalValue,
+		p.Divisibility, &p.SwapContractRunningData, false)
+	if err != nil {
+		return err
+	}
+	// Pool and LP fields are stateful results of liquidity operations. They
+	// have already been preserved and adjusted in-place by DisableItem; the
+	// history calculator is only authoritative for derived aggregates.
+	runningData.AssetAmtInPool = p.AssetAmtInPool
+	runningData.SatsValueInPool = p.SatsValueInPool
+	runningData.TotalProfitAssets = p.TotalProfitAssets
+	runningData.TotalProfitSats = p.TotalProfitSats
+	runningData.TotalProfitTx = p.TotalProfitTx
+	runningData.TotalProfitTxFee = p.TotalProfitTxFee
+	runningData.TotalRetrieveAssets = p.TotalRetrieveAssets
+	runningData.TotalRetrieveSats = p.TotalRetrieveSats
+	runningData.TotalRetrieveTx = p.TotalRetrieveTx
+	runningData.TotalRetrieveTxFee = p.TotalRetrieveTxFee
+	runningData.BaseLptAmt = p.BaseLptAmt
+	runningData.TotalLptAmt = p.TotalLptAmt
+	runningData.TotalAddedLptAmt = p.TotalAddedLptAmt
+	runningData.TotalRemovedLptAmt = p.TotalRemovedLptAmt
+	runningData.TotalFeeLptAmt = p.TotalFeeLptAmt
+	runningData.HighestBuyPrice = nil
+	runningData.LowestSellPrice = nil
+	for _, item := range items {
+		if item.Done != ITEM_STATUS_INIT || item.Reason != INVOKE_REASON_NORMAL || item.UnitPrice == nil {
+			continue
+		}
+		if item.OrderType == ORDERTYPE_BUY &&
+			(runningData.HighestBuyPrice == nil || runningData.HighestBuyPrice.Cmp(item.UnitPrice) < 0) {
+			runningData.HighestBuyPrice = item.UnitPrice.Clone()
+		}
+		if item.OrderType == ORDERTYPE_SELL &&
+			(runningData.LowestSellPrice == nil || runningData.LowestSellPrice.Cmp(item.UnitPrice) > 0) {
+			runningData.LowestSellPrice = item.UnitPrice.Clone()
+		}
+	}
+	p.SwapContractRunningData = *runningData
+	p.k = indexer.DecimalMul(indexer.NewDecimal(p.SatsValueInPool, p.Divisibility+2), p.AssetAmtInPool)
+	return nil
 }
 
 // 仅用于amm合约

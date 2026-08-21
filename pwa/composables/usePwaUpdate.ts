@@ -48,16 +48,39 @@ export function usePwaUpdate() {
     })
   }
 
+  const waitForWaitingWorker = async (registration: ServiceWorkerRegistration) => {
+    if (registration.waiting) {
+      return registration.waiting
+    }
+    const installing = registration.installing
+    if (!installing) {
+      return undefined
+    }
+    await new Promise<void>((resolve) => {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined
+      const finish = () => {
+        installing.removeEventListener('statechange', onStateChange)
+        if (timeoutId) clearTimeout(timeoutId)
+        resolve()
+      }
+      const onStateChange = () => {
+        if (installing.state === 'installed' || installing.state === 'redundant' || installing.state === 'activated') {
+          finish()
+        }
+      }
+      installing.addEventListener('statechange', onStateChange)
+      timeoutId = setTimeout(finish, UPDATE_TIMEOUT_MS)
+    })
+    return registration.waiting
+  }
+
   const activateWaitingWorker = async (registration: ServiceWorkerRegistration) => {
-    const waiting = registration.waiting || registration.installing
+    const waiting = await waitForWaitingWorker(registration)
     if (!waiting) {
       return
     }
-
     const controllerChanged = waitForControllerChange()
-    if (registration.waiting) {
-      registration.waiting.postMessage({ type: 'SKIP_WAITING' })
-    }
+    waiting.postMessage({ type: 'SKIP_WAITING' })
     await controllerChanged
   }
 
@@ -84,7 +107,9 @@ export function usePwaUpdate() {
     } catch (error) {
       console.warn('PWA update failed, falling back to reload:', error)
     } finally {
-      await clearAppShellCache()
+      // Normal upgrades keep the current app cache intact until the waiting
+      // service worker takes control. Full cache clearing is reserved for the
+      // explicit startup-failure recovery path.
       window.location.reload()
     }
   }

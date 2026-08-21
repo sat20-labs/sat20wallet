@@ -13,6 +13,7 @@
     "preview": "vite preview",
     "compile": "vue-tsc --noEmit",
     "verify:wallet-basics": "node scripts/verify/wallet-basics-flow.mjs",
+    "verify:generic-send": "node scripts/verify/generic-send-flow.mjs",
     "verify:l1-orderbook": "node scripts/verify/l1-orderbook-flow.mjs",
     "verify:l2-contract": "node scripts/verify/l2-contract-flow.mjs",
     "verify:channel-management": "node scripts/verify/channel-management-smoke.mjs",

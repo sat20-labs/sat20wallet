@@ -184,6 +184,15 @@ type RGB11PreparedTransfer struct {
 	TxID                       string           `json:"txid"`
 }
 
+// RGB11PreparedTransferPackage is the restart-safe public transport package
+// for an existing prepared transfer. It omits signed PSBT and private seals.
+type RGB11PreparedTransferPackage struct {
+	State                      *TransferState `json:"state"`
+	RecipientConsignment       string         `json:"recipient_consignment"`
+	RecipientConsignmentBase64 string         `json:"recipient_consignment_base64"`
+	TxID                       string         `json:"txid"`
+}
+
 type RGB11ProxyDeliveryResult struct {
 	TransferIDs []string `json:"transfer_ids"`
 	Endpoints   []string `json:"endpoints"`

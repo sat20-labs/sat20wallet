@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -23,6 +24,15 @@ type WatchTower struct {
 	commitMap            map[string]string          // commitTxId->channelId
 	broadcastedCommitMap map[string]bool            // commitTxId
 	utxoMap              map[string]map[string]bool // utxo -> map of commitTxID
+	retryLifecycleMutex  sync.Mutex
+	retryMutex           sync.Mutex
+	retryContext         context.Context
+	retryCancel          context.CancelFunc
+	retryWG              sync.WaitGroup
+	retryRunning         bool
+	retryGeneration      uint64
+	retryWorkers         map[string]uint64
+	retryInterval        time.Duration
 
 	manager *Manager
 }
@@ -41,15 +51,61 @@ func newWatchTower(manager *Manager, autoBroadcast bool) *WatchTower {
 		commitMap:            loadAllCommitTxIdFromDB(manager.db),
 		broadcastedCommitMap: loadAllBroadcastedCommitTxIdFromDB(manager.db),
 		utxoMap:              loadAllUtxoCommitTxIdMap(manager.db),
+		retryWorkers:         make(map[string]uint64),
+		retryInterval:        10 * time.Second,
 	}
-
-	if autoBroadcast {
-		for k := range tower.broadcastedCommitMap {
-			tower.broadcastPunishTx(k)
-		}
-	}
+	_ = autoBroadcast // Retry workers are restored only from Manager.Start.
 
 	return tower
+}
+
+func (p *WatchTower) Start() {
+	if p == nil {
+		return
+	}
+	p.retryLifecycleMutex.Lock()
+	defer p.retryLifecycleMutex.Unlock()
+	p.retryMutex.Lock()
+	if p.retryRunning {
+		p.retryMutex.Unlock()
+		return
+	}
+	p.retryGeneration++
+	p.retryContext, p.retryCancel = context.WithCancel(context.Background())
+	p.retryRunning = true
+	p.retryMutex.Unlock()
+
+	p.mutex.RLock()
+	pending := make([]string, 0, len(p.broadcastedCommitMap))
+	for commitTxID := range p.broadcastedCommitMap {
+		pending = append(pending, commitTxID)
+	}
+	p.mutex.RUnlock()
+	for _, commitTxID := range pending {
+		p.startPunishRetry(commitTxID)
+	}
+}
+
+func (p *WatchTower) Stop() {
+	if p == nil {
+		return
+	}
+	p.retryLifecycleMutex.Lock()
+	defer p.retryLifecycleMutex.Unlock()
+	p.retryMutex.Lock()
+	if !p.retryRunning {
+		p.retryMutex.Unlock()
+		return
+	}
+	cancel := p.retryCancel
+	p.retryContext = nil
+	p.retryCancel = nil
+	p.retryRunning = false
+	if cancel != nil {
+		cancel()
+	}
+	p.retryMutex.Unlock()
+	p.retryWG.Wait()
 }
 
 type PunishTxInfo struct {
@@ -236,8 +292,16 @@ func (p *WatchTower) CleanCurrentRemoteCommitTx(channel *Channel) {
 	p.RemoveCommitTx(channel, commitTxId)
 }
 
-// 只在punishTx广播失败后才进入这里，这里是补救措施
-func (p *WatchTower) SetBroadcastedFlag(commitTxId string) error {
+// markPunishPending persists the retry intent before the channel leaves READY.
+// It deliberately does not start a worker, so the caller may make the first
+// broadcast attempt without racing a background retry.
+func (p *WatchTower) markPunishPending(commitTxId string) error {
+	p.mutex.RLock()
+	alreadyPending := p.broadcastedCommitMap[commitTxId]
+	p.mutex.RUnlock()
+	if alreadyPending {
+		return nil
+	}
 
 	err := saveBroadcastedCommitTx(p.manager.db, commitTxId)
 	if err != nil {
@@ -248,36 +312,93 @@ func (p *WatchTower) SetBroadcastedFlag(commitTxId string) error {
 	p.mutex.Lock()
 	p.broadcastedCommitMap[commitTxId] = true
 	p.mutex.Unlock()
-
-	p.broadcastPunishTx(commitTxId)
-
 	return nil
 }
 
-func (p *WatchTower) broadcastPunishTx(commitTxId string) {
-	chanId, punishTxs, err := p.GetPunishTx(commitTxId)
-	if err != nil {
-		// 不应该出现这种情况
-		Log.Errorf("Panic: can't find punishTx for the unexpectedly commitTx %s!!!!", commitTxId)
+// SetBroadcastedFlag is kept as the retry scheduling entry point for existing
+// callers. New unexpected-close handling calls markPunishPending first.
+func (p *WatchTower) SetBroadcastedFlag(commitTxId string) error {
+	if err := p.markPunishPending(commitTxId); err != nil {
+		return err
+	}
+	p.startPunishRetry(commitTxId)
+	return nil
+}
+
+func (p *WatchTower) startPunishRetry(commitTxId string) {
+	p.retryMutex.Lock()
+	if !p.retryRunning {
+		p.retryMutex.Unlock()
 		return
 	}
+	generation := p.retryGeneration
+	if p.retryWorkers[commitTxId] == generation {
+		p.retryMutex.Unlock()
+		return
+	}
+	ctx := p.retryContext
+	p.retryWorkers[commitTxId] = generation
+	p.retryWG.Add(1)
+	p.retryMutex.Unlock()
+
 	go func() {
-		err := p.manager.BroadcastTxs(punishTxs)
-		for err != nil {
-			time.Sleep(10 * time.Second)
-			err = p.manager.BroadcastTxs(punishTxs)
+		defer p.finishPunishRetry(commitTxId, generation)
+		// A failed/unknown broadcast may already be propagating. Do not issue an
+		// immediate duplicate; let the persisted retry wait for the next window.
+		timer := time.NewTimer(p.retryInterval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+
+			chanId, punishTxs, err := p.GetPunishTx(commitTxId)
+			if err != nil {
+				Log.Errorf("can't load punish tx for pending commitment %s. %v", commitTxId, err)
+				timer.Reset(p.retryInterval)
+				continue
+			}
+			broadcasted, err := p.manager.broadcastPunishPackageContext(ctx, punishTxs, "punish retry")
+			if ctx.Err() != nil {
+				return
+			}
+			if err == nil && broadcasted {
+				punishTxID := lastSafetyTxIdFromTxs(punishTxs)
+				if err := p.manager.completePunishBroadcastState(chanId, commitTxId); err == nil {
+					// Retire this worker before invoking application code. A callback
+					// may synchronously call Manager.Stop, which must not wait for the
+					// worker currently executing that callback.
+					p.notifyPunishRetryCompleted(commitTxId, generation, punishTxID)
+					Log.Infof("punishTx broadcasted. %s", punishTxID)
+					return
+				} else {
+					Log.Errorf("complete punish broadcast for %s failed. %v", commitTxId, err)
+				}
+			}
 			if err != nil {
 				Log.Errorf("BroadCastTx punishTx for commitTx %s failed. %v", commitTxId, err)
 			}
+			timer.Reset(p.retryInterval)
 		}
-		Log.Infof("punishTx broadcasted. %s", punishTxs[len(punishTxs)-1].TxID())
-
-		p.CleanAllCommitTx(chanId)
-		p.mutex.Lock()
-		delete(p.broadcastedCommitMap, commitTxId)
-		p.mutex.Unlock()
-		deleteBroadcastedCommitTx(p.manager.db, commitTxId)
 	}()
+}
+
+func (p *WatchTower) finishPunishRetry(commitTxId string, generation uint64) {
+	p.retryMutex.Lock()
+	if p.retryWorkers[commitTxId] != generation {
+		p.retryMutex.Unlock()
+		return
+	}
+	delete(p.retryWorkers, commitTxId)
+	p.retryMutex.Unlock()
+	p.retryWG.Done()
+}
+
+func (p *WatchTower) notifyPunishRetryCompleted(commitTxId string, generation uint64, punishTxID string) {
+	p.finishPunishRetry(commitTxId, generation)
+	p.manager.SendMessageToUpper(MSG_CHANNEL_PUNISHED, punishTxID)
 }
 
 func (p *WatchTower) CleanAllCommitTx(chanId string) error {
@@ -285,11 +406,13 @@ func (p *WatchTower) CleanAllCommitTx(chanId string) error {
 	commits, err := deleteAllPunishTxWithChannel(p.manager.db, chanId)
 	if err != nil {
 		Log.Errorf("deleteAllPunishTxWithChannel %s failed. %v", chanId, err)
+		return err
 	}
 
 	utxos, err := deleteAllUtxoDataWithChannel(p.manager.db, chanId)
 	if err != nil {
 		Log.Errorf("deleteAllUtxoDataWithChannel %s failed. %v", chanId, err)
+		return err
 	}
 
 	p.mutex.Lock()
@@ -301,6 +424,23 @@ func (p *WatchTower) CleanAllCommitTx(chanId string) error {
 		delete(p.utxoMap, utxo)
 	}
 
+	return nil
+}
+
+func (p *WatchTower) completePunishCleanup(chanId, commitTxId string) error {
+	commits, utxos, err := deleteAllWatchtowerDataWithPending(p.manager.db, chanId, commitTxId)
+	if err != nil {
+		return err
+	}
+	p.mutex.Lock()
+	delete(p.broadcastedCommitMap, commitTxId)
+	for _, txID := range commits {
+		delete(p.commitMap, txID)
+	}
+	for _, utxo := range utxos {
+		delete(p.utxoMap, utxo)
+	}
+	p.mutex.Unlock()
 	return nil
 }
 

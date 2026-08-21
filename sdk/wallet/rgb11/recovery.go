@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
-	corewallet "github.com/sat20-labs/rgb11/wallet"
 )
 
 // RecoveryPackageVersion identifies the minimum cross-device state set. It is
@@ -21,33 +19,6 @@ type RecoveryPackage struct {
 	EngineBuildID     string
 	ProjectionRecords []SnapshotRecord
 	EngineRecords     []SnapshotRecord
-}
-
-func recoverableTransferStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "settled", "rejected", "conflicted":
-		return false
-	default:
-		return true
-	}
-}
-
-func recoverableReceive(request *corewallet.ReceiveRequest, now int64) bool {
-	if request == nil {
-		return false
-	}
-	switch request.Status {
-	case corewallet.ReceiveSettled, corewallet.ReceiveFailed:
-		return false
-	}
-	return request.Expiry == 0 || request.Expiry > now
-}
-
-func activeReceiveForRecovery(request *corewallet.ReceiveRequest) bool {
-	if request == nil {
-		return false
-	}
-	return request.Status != corewallet.ReceiveSettled && request.Status != corewallet.ReceiveFailed
 }
 
 func minimalRecoveryOutput(record SnapshotRecord, assets map[indexer.AssetName]struct{}) (SnapshotRecord, error) {
@@ -79,9 +50,7 @@ func minimalRecoveryOutput(record SnapshotRecord, assets map[indexer.AssetName]s
 // or safely completing ownership. Derived balances, completed history and
 // presentation/index caches are intentionally excluded.
 func RecoveryPackageFromSnapshot(snapshot *RGB11WalletSnapshot, now int64) (*RecoveryPackage, error) {
-	if now == 0 {
-		now = time.Now().Unix()
-	}
+	_ = now // Kept in the API for callers of the version-1 package format.
 	if err := ValidateWalletSnapshot(snapshot); err != nil {
 		return nil, err
 	}
@@ -95,7 +64,6 @@ func RecoveryPackageFromSnapshot(snapshot *RGB11WalletSnapshot, now int64) (*Rec
 			keep["object-"+hash] = struct{}{}
 		}
 	}
-	activeRequests := make(map[string]struct{})
 	requiredOutputAssets := make(map[string]map[indexer.AssetName]struct{})
 
 	// Current allocation proofs and their canonical validation chains are
@@ -131,83 +99,9 @@ func RecoveryPackageFromSnapshot(snapshot *RGB11WalletSnapshot, now int64) (*Rec
 		projection[key] = minimal
 	}
 
-	// Only operations that may still require delivery, cancellation, broadcast,
-	// confirmation or reorg handling are retained.
-	for _, record := range snapshot.ProjectionRecords {
-		if !strings.HasPrefix(record.Key, "pending-") {
-			continue
-		}
-		var pending PendingTransfer
-		if decode(record.Value, &pending) != nil {
-			return nil, ErrValidationReceipt
-		}
-		if !recoverableTransferStatus(pending.State.Status) {
-			continue
-		}
-		keep[record.Key] = struct{}{}
-		keepObject(pending.LocalObjectHash)
-		if pending.State.Status == "prepared" {
-			keepObject(pending.RecipientObjectHash)
-		}
-	}
-	for _, record := range snapshot.ProjectionRecords {
-		if !strings.HasPrefix(record.Key, "transfer-") {
-			continue
-		}
-		var state TransferState
-		if decode(record.Value, &state) != nil {
-			return nil, ErrValidationReceipt
-		}
-		if recoverableTransferStatus(state.Status) {
-			keep[record.Key] = struct{}{}
-			if state.ConsignmentHash != "" {
-				keep["object-"+state.ConsignmentHash] = struct{}{}
-				if _, ok := projection["validation-"+state.ConsignmentHash]; ok {
-					keep["validation-"+state.ConsignmentHash] = struct{}{}
-				}
-			}
-		}
-	}
-
-	engineRecords := make([]SnapshotRecord, 0, len(snapshot.EngineRecords))
-	for _, record := range snapshot.EngineRecords {
-		request, err := corewallet.DecodeReceiveRequest(record.Value)
-		if err != nil {
-			return nil, err
-		}
-		if !recoverableReceive(request, now) {
-			continue
-		}
-		activeRequests[request.RequestID] = struct{}{}
-		engineRecords = append(engineRecords, SnapshotRecord{
-			Key: record.Key, Value: append([]byte(nil), record.Value...),
-		})
-	}
-	for _, record := range snapshot.ProjectionRecords {
-		switch {
-		case strings.HasPrefix(record.Key, "prepared-receive-"):
-			if _, ok := activeRequests[string(record.Value)]; ok {
-				keep[record.Key] = struct{}{}
-			}
-		case strings.HasPrefix(record.Key, "receive-key-"):
-			var key ReceiveKey
-			if decode(record.Value, &key) != nil {
-				return nil, ErrValidationReceipt
-			}
-			if _, ok := activeRequests[key.RequestID]; ok {
-				keep[record.Key] = struct{}{}
-			}
-		case strings.HasPrefix(record.Key, "receive-reservation-"):
-			var reservation ReceiveReservation
-			if decode(record.Value, &reservation) != nil {
-				return nil, ErrValidationReceipt
-			}
-			if _, ok := activeRequests[reservation.RequestID]; ok {
-				keep[record.Key] = struct{}{}
-			}
-		}
-	}
-
+	// Account-managed recovery contains only durable ownership evidence.
+	// Pending sends, receive requests, signed transactions, reservations and
+	// transport state remain in the wallet-local transaction database.
 	projectionRecords := make([]SnapshotRecord, 0, len(keep))
 	for key := range keep {
 		record, ok := projection[key]
@@ -217,11 +111,10 @@ func RecoveryPackageFromSnapshot(snapshot *RGB11WalletSnapshot, now int64) (*Rec
 		projectionRecords = append(projectionRecords, record)
 	}
 	sort.Slice(projectionRecords, func(i, j int) bool { return projectionRecords[i].Key < projectionRecords[j].Key })
-	sort.Slice(engineRecords, func(i, j int) bool { return engineRecords[i].Key < engineRecords[j].Key })
 	packageValue := &RecoveryPackage{
 		Version: RecoveryPackageVersion, WalletID: snapshot.WalletID,
 		AccountIndex: snapshot.AccountIndex, EngineBuildID: snapshot.EngineBuildID,
-		ProjectionRecords: projectionRecords, EngineRecords: engineRecords,
+		ProjectionRecords: projectionRecords,
 	}
 	if err := ValidateRecoveryPackage(packageValue); err != nil {
 		return nil, err
@@ -261,6 +154,9 @@ func ValidateRecoveryPackage(value *RecoveryPackage) error {
 	if err != nil {
 		return err
 	}
+	if len(packageValue.EngineRecords) != 0 {
+		return fmt.Errorf("%w: local RGB11 transaction tasks are not account recovery data", ErrRGB11Inconsistent)
+	}
 	snapshot := &RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: packageValue.WalletID,
 		AccountIndex: packageValue.AccountIndex, EngineBuildID: packageValue.EngineBuildID,
@@ -280,16 +176,7 @@ func ValidateRecoveryPackage(value *RecoveryPackage) error {
 		projection[record.Key] = record
 	}
 	expected := make(map[string]struct{})
-	activeRequests := make(map[string]struct{})
 	proofAssets := make(map[string]map[indexer.AssetName]struct{})
-
-	for _, record := range packageValue.EngineRecords {
-		request, err := corewallet.DecodeReceiveRequest(record.Value)
-		if err != nil || !activeReceiveForRecovery(request) {
-			return ErrRGB11Inconsistent
-		}
-		activeRequests[request.RequestID] = struct{}{}
-	}
 	for _, record := range packageValue.ProjectionRecords {
 		switch {
 		case strings.HasPrefix(record.Key, "proof-"):
@@ -306,52 +193,15 @@ func ValidateRecoveryPackage(value *RecoveryPackage) error {
 			}
 			proofAssets[proof.OutPoint][proof.AssetName] = struct{}{}
 		case strings.HasPrefix(record.Key, "pending-"):
-			var pending PendingTransfer
-			if decode(record.Value, &pending) != nil || !recoverableTransferStatus(pending.State.Status) {
-				return ErrRGB11Inconsistent
-			}
-			expected[record.Key] = struct{}{}
-			if pending.LocalObjectHash != "" {
-				expected["object-"+pending.LocalObjectHash] = struct{}{}
-			}
-			if pending.State.Status == "prepared" && pending.RecipientObjectHash != "" {
-				expected["object-"+pending.RecipientObjectHash] = struct{}{}
-			}
+			return fmt.Errorf("%w: pending transfer is wallet-local", ErrRGB11Inconsistent)
 		case strings.HasPrefix(record.Key, "transfer-"):
-			var state TransferState
-			if decode(record.Value, &state) != nil || !recoverableTransferStatus(state.Status) {
-				return ErrRGB11Inconsistent
-			}
-			expected[record.Key] = struct{}{}
-			if state.ConsignmentHash != "" {
-				expected["object-"+state.ConsignmentHash] = struct{}{}
-				if _, ok := projection["validation-"+state.ConsignmentHash]; ok {
-					expected["validation-"+state.ConsignmentHash] = struct{}{}
-				}
-			}
+			return fmt.Errorf("%w: transfer state is wallet-local", ErrRGB11Inconsistent)
 		case strings.HasPrefix(record.Key, "prepared-receive-"):
-			if _, ok := activeRequests[string(record.Value)]; !ok {
-				return ErrRGB11Inconsistent
-			}
-			expected[record.Key] = struct{}{}
+			return fmt.Errorf("%w: receive task is wallet-local", ErrRGB11Inconsistent)
 		case strings.HasPrefix(record.Key, "receive-key-"):
-			var key ReceiveKey
-			if decode(record.Value, &key) != nil {
-				return ErrRGB11Inconsistent
-			}
-			if _, ok := activeRequests[key.RequestID]; !ok {
-				return ErrRGB11Inconsistent
-			}
-			expected[record.Key] = struct{}{}
+			return fmt.Errorf("%w: receive key is wallet-local", ErrRGB11Inconsistent)
 		case strings.HasPrefix(record.Key, "receive-reservation-"):
-			var reservation ReceiveReservation
-			if decode(record.Value, &reservation) != nil {
-				return ErrRGB11Inconsistent
-			}
-			if _, ok := activeRequests[reservation.RequestID]; !ok {
-				return ErrRGB11Inconsistent
-			}
-			expected[record.Key] = struct{}{}
+			return fmt.Errorf("%w: receive reservation is wallet-local", ErrRGB11Inconsistent)
 		}
 	}
 	for key := range projection {

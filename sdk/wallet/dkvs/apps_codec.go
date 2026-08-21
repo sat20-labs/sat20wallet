@@ -3,16 +3,17 @@ package dkvs
 import (
 	"bytes"
 	"sort"
+	"strconv"
 
 	strict "github.com/sat20-labs/rgb11/strict_encoding"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 const (
-	dkvsAppPayloadMagic     = "DKWA"
-	dkvsAppPayloadVersion   = uint8(1)
-	dkvsRecoveryPayload     = uint8(1)
-	dkvsGuardianPayload     = uint8(2)
+	dkvsAppPayloadMagic   = "DKWA"
+	dkvsAppPayloadVersion = uint8(1)
+	// Kinds 1 and 2 belonged to the removed generic wallet-backup and
+	// guardian-share helpers. Account Management is the only recovery API.
 	dkvsOfflinePayload      = uint8(3)
 	dkvsAuthenticityPayload = uint8(4)
 	dkvsAppMaxText          = 4 * 1024
@@ -115,104 +116,20 @@ func requireDKVSAppEOF(reader *bytes.Reader) error {
 	return nil
 }
 
-func EncodeWalletRecoveryBackup(value DKVSWalletRecoveryBackup) ([]byte, error) {
-	buf, encoder, err := newDKVSAppEncoder(dkvsRecoveryPayload)
-	if err != nil {
-		return nil, err
-	}
-	for _, encode := range []func() error{
-		func() error { return encoder.U32(value.Version) },
-		func() error { return encoder.String(value.WalletID, 1, dkvsAppMaxText) },
-		func() error { return encoder.Bytes(value.EncryptedBackup, 1, dkvsAppMaxCiphertext) },
-		func() error { return encodeDKVSStringMap(encoder, value.Metadata) },
-	} {
-		if err := encode(); err != nil {
-			return nil, err
-		}
-	}
-	return buf.Bytes(), nil
-}
-
-func DecodeWalletRecoveryBackup(data []byte) (*DKVSWalletRecoveryBackup, error) {
-	reader, decoder, err := newDKVSAppDecoder(data, dkvsRecoveryPayload)
-	if err != nil {
-		return nil, err
-	}
-	value := &DKVSWalletRecoveryBackup{}
-	if value.Version, err = decoder.U32(); err != nil {
-		return nil, err
-	}
-	if value.WalletID, err = decoder.String(1, dkvsAppMaxText); err != nil {
-		return nil, err
-	}
-	if value.EncryptedBackup, err = decoder.Bytes(1, dkvsAppMaxCiphertext); err != nil {
-		return nil, err
-	}
-	if value.Metadata, err = decodeDKVSStringMap(decoder); err != nil {
-		return nil, err
-	}
-	if err := requireDKVSAppEOF(reader); err != nil {
-		return nil, err
-	}
-	return value, nil
-}
-
-func EncodeGuardianShare(value DKVSGuardianShare) ([]byte, error) {
-	buf, encoder, err := newDKVSAppEncoder(dkvsGuardianPayload)
-	if err != nil {
-		return nil, err
-	}
-	for _, encode := range []func() error{
-		func() error { return encoder.U32(value.Version) },
-		func() error { return encoder.String(value.PackageID, 1, dkvsAppMaxText) },
-		func() error { return encoder.String(value.ShareID, 1, dkvsAppMaxText) },
-		func() error { return encoder.Bytes(value.Ciphertext, 1, dkvsAppMaxCiphertext) },
-		func() error { return encodeDKVSStringMap(encoder, value.Metadata) },
-	} {
-		if err := encode(); err != nil {
-			return nil, err
-		}
-	}
-	return buf.Bytes(), nil
-}
-
-func DecodeGuardianShare(data []byte) (*DKVSGuardianShare, error) {
-	reader, decoder, err := newDKVSAppDecoder(data, dkvsGuardianPayload)
-	if err != nil {
-		return nil, err
-	}
-	value := &DKVSGuardianShare{}
-	if value.Version, err = decoder.U32(); err != nil {
-		return nil, err
-	}
-	if value.PackageID, err = decoder.String(1, dkvsAppMaxText); err != nil {
-		return nil, err
-	}
-	if value.ShareID, err = decoder.String(1, dkvsAppMaxText); err != nil {
-		return nil, err
-	}
-	if value.Ciphertext, err = decoder.Bytes(1, dkvsAppMaxCiphertext); err != nil {
-		return nil, err
-	}
-	if value.Metadata, err = decodeDKVSStringMap(decoder); err != nil {
-		return nil, err
-	}
-	if err := requireDKVSAppEOF(reader); err != nil {
-		return nil, err
-	}
-	return value, nil
-}
-
 func EncodeOfflineMessage(value DKVSOfflineMessage) ([]byte, error) {
+	if value.MessageID <= 0 {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
 	buf, encoder, err := newDKVSAppEncoder(dkvsOfflinePayload)
 	if err != nil {
 		return nil, err
 	}
+	messageID := strconv.FormatInt(value.MessageID, 10)
 	for _, encode := range []func() error{
 		func() error { return encoder.U32(value.Version) },
 		func() error { return encoder.Bytes(value.FromPubKey, 1, 128) },
 		func() error { return encoder.String(value.ToMailboxID, 1, dkvsAppMaxText) },
-		func() error { return encoder.String(value.MessageID, 1, dkvsAppMaxText) },
+		func() error { return encoder.String(messageID, 1, 32) },
 		func() error { return encoder.Bytes(value.EncryptedMessage, 1, dkvsAppMaxCiphertext) },
 		func() error { return encodeDKVSStringMap(encoder, value.Metadata) },
 	} {
@@ -238,8 +155,13 @@ func DecodeOfflineMessage(data []byte) (*DKVSOfflineMessage, error) {
 	if value.ToMailboxID, err = decoder.String(1, dkvsAppMaxText); err != nil {
 		return nil, err
 	}
-	if value.MessageID, err = decoder.String(1, dkvsAppMaxText); err != nil {
+	messageID, err := decoder.String(1, 32)
+	if err != nil {
 		return nil, err
+	}
+	value.MessageID, err = strconv.ParseInt(messageID, 10, 64)
+	if err != nil || value.MessageID <= 0 {
+		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	if value.EncryptedMessage, err = decoder.Bytes(1, dkvsAppMaxCiphertext); err != nil {
 		return nil, err

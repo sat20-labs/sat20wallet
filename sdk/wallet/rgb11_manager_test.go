@@ -279,7 +279,7 @@ func TestRGB11CarrierBindingUsesActiveBIP86DerivationIndex(t *testing.T) {
 	}
 }
 
-func TestRGB11WitnessInvoicesUseCurrentAccountKey(t *testing.T) {
+func TestRGB11DefaultWitnessInvoicesUseIndependentReceiveKeys(t *testing.T) {
 	wallet := NewInternalWalletWithMnemonic(
 		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
 	)
@@ -311,21 +311,24 @@ func TestRGB11WitnessInvoicesUseCurrentAccountKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if bytes.Equal(first.WitnessScript, second.WitnessScript) {
+		t.Fatal("default witness invoices reused one receive key")
+	}
 	for _, request := range []*corewallet.ReceiveRequest{first, second} {
-		if !bytes.Equal(request.WitnessScript, activeScript) {
-			t.Fatalf("RGB11 witness invoice script=%x expected=%x", request.WitnessScript, activeScript)
+		if bytes.Equal(request.WitnessScript, activeScript) {
+			t.Fatal("default witness invoice reused the active account key")
 		}
 		invoice, err := invoicing.Parse(request.Invoice)
 		if err != nil {
 			t.Fatal(err)
 		}
 		invoiceScript, err := invoice.Beneficiary.WitnessScript()
-		if err != nil || !bytes.Equal(invoiceScript, activeScript) {
-			t.Fatalf("RGB11 invoice beneficiary script=%x expected=%x err=%v", invoiceScript, activeScript, err)
+		if err != nil || !bytes.Equal(invoiceScript, request.WitnessScript) {
+			t.Fatalf("RGB11 invoice beneficiary script=%x expected=%x err=%v", invoiceScript, request.WitnessScript, err)
 		}
-	}
-	if _, err := manager.rgbManager.projectionStore.LoadReceiveKey(activeScript); !errors.Is(err, indexer.ErrKeyNotFound) {
-		t.Fatalf("fixed-address witness invoice persisted receive-key state: %v", err)
+		if _, err := manager.rgbManager.projectionStore.LoadReceiveKey(request.WitnessScript); err != nil {
+			t.Fatal(err)
+		}
 	}
 	projection, err := manager.rgbManager.projectionStore.ExportSnapshot()
 	if err != nil {
@@ -350,8 +353,8 @@ func TestRGB11WitnessInvoicesUseCurrentAccountKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(stored.WitnessScript, activeScript) {
-			t.Fatalf("restored witness script=%x expected=%x", stored.WitnessScript, activeScript)
+		if !bytes.Equal(stored.WitnessScript, request.WitnessScript) {
+			t.Fatalf("restored witness script=%x expected=%x", stored.WitnessScript, request.WitnessScript)
 		}
 	}
 }

@@ -68,17 +68,43 @@
           <Label>Channel Details</Label>
           <div class="rounded-lg border p-3 space-y-2">
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">Amount:</span>
+              <span class="text-muted-foreground">User-selected funding amount:</span>
               <span class="font-medium">{{ confirmAmount }} sats</span>
             </div>
             <div class="flex justify-between text-sm">
-              <span class="text-muted-foreground">Open Channel Fee:</span>
-              <span class="font-medium">3000 sats</span>
+              <span class="text-muted-foreground">Channel capacity:</span>
+              <span class="font-medium">{{ feePreview?.channelCapacity ?? '-' }} sats</span>
+            </div>
+            <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">Service fee paid now:</span>
+              <span class="font-medium">{{ feePreview?.feeToDao ?? '-' }} sats</span>
+            </div>
+            <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">Commitment fee reserve:</span>
+              <span class="font-medium">{{ feePreview?.openFee?.commitmentFee ?? '-' }} sats</span>
+            </div>
+            <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">Minimum channel reserve:</span>
+              <span class="font-medium">{{ feePreview?.openFee?.minReserveSats ?? '-' }} sats</span>
+            </div>
+            <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">Estimated BTC network fee:</span>
+              <span class="font-medium">{{ feePreview?.estimatedNetworkFee ?? '-' }} sats</span>
+            </div>
+            <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">Required wallet input:</span>
+              <span class="font-medium">{{ feePreview?.requiredInputSats ?? '-' }} sats</span>
+            </div>
+            <div v-if="feePreview?.validationError" class="text-sm text-destructive">
+              {{ feePreview.validationError }}
             </div>
             <div class="flex justify-between text-sm">
               <span class="text-muted-foreground">BTC Fee Rate:</span>
               <span class="font-medium">{{ btcFeeRate }} sat/vB</span>
             </div>
+            <p class="text-xs text-muted-foreground">
+              The commitment fee is a protocol budget; the estimated BTC network fee is paid from wallet inputs and is not added to channel capacity.
+            </p>
 
           </div>
         </div>
@@ -88,7 +114,7 @@
           Cancel
         </Button>
         <Button 
-          :disabled="loading" 
+          :disabled="loading || !feePreview?.valid"
           @click="confirmOpenChannel" 
           class="h-11 mt-2"
         >
@@ -121,19 +147,15 @@ import { useChannelStore, useWalletStore } from '@/store'
 import satsnetStp from '@/utils/stp'
 import { useToast } from '@/components/ui/toast-new'
 import { getChannelStatusText } from '@/composables'
-import { useL1Store } from '@/store'
 import ChannelAssetsTabs from '@/components/asset/ChannelAssetsTabs.vue'
 import { sleep } from 'radash'
+import type { ChannelOpenFeeInfo } from '@/utils/stp'
 
 const selectedType = defineModel<string>('selectedType')
 const emit = defineEmits(['splicing_out', 'unlock', 'update:selectedType'])
 
 const walletStore = useWalletStore()
 const { walletId, accountIndex, btcFeeRate } = storeToRefs(walletStore)
-
-const l1Store = useL1Store()
-const { plainUtxos, balance: l1PlainBalance } = storeToRefs(l1Store)
-
 
 const channelStore = useChannelStore()
 
@@ -145,6 +167,7 @@ const showAmt = ref(false)
 const channelAmt = ref('')
 const showConfirmDialog = ref(false)
 const confirmAmount = ref(0)
+const feePreview = ref<ChannelOpenFeeInfo | null>(null)
 
 // 通道状态进度
 const progressValue = computed(() => {
@@ -205,29 +228,45 @@ const clear = () => {
   showAmt.value = false
   channelAmt.value = ''
   showConfirmDialog.value = false
+  feePreview.value = null
 }
 
 const amtConfirm = async () => {
-  const amt = parseInt(channelAmt.value, 10)
+  const amt = Number(channelAmt.value)
 
-  if (amt > l1PlainBalance.value) {
+  if (!Number.isSafeInteger(amt) || amt <= 0) {
     toast({
       title: 'Error',
-      description: 'Balance not enough',
+      description: 'Enter a positive whole-number amount',
       variant: 'destructive',
     })
     return
   }
 
+	loading.value = true
+	const [previewErr, preview] = await satsnetStp.previewOpenChannel(btcFeeRate.value, amt)
+	loading.value = false
+	if (previewErr || !preview) {
+	  toast({
+	    title: 'Error',
+	    description: previewErr?.message || 'Unable to load channel fee configuration',
+	    variant: 'destructive',
+	  })
+	  return
+	}
 
   // 设置确认对话框的数据
   confirmAmount.value = amt
+  feePreview.value = preview
   
   // 显示确认对话框
   showConfirmDialog.value = true
 }
 
 const confirmOpenChannel = async () => {
+	if (!feePreview.value?.valid) {
+	  return
+	}
   loading.value = true
   showConfirmDialog.value = false
 
@@ -245,7 +284,7 @@ const confirmOpenChannel = async () => {
   }
   
   await sleep(1000)
-  channelStore.getAllChannels()
+  channelStore.getCurrentChannel()
   clear()
   loading.value = false
   
@@ -321,15 +360,15 @@ const closeChannel = async (closeHanlder: any, force: boolean = false) => {
   }
   loading.value = false
   // await store.setChannels([])
-  await channelStore.getAllChannels()
+  await channelStore.getCurrentChannel()
   // btcStore.retry()
 }
 onMounted(() => {
-  channelStore.getAllChannels()
+  channelStore.getCurrentChannel()
 })
 
 watch([walletId, accountIndex], async () => {
-  await channelStore.getAllChannels()
+  await channelStore.getCurrentChannel()
 })
 
 

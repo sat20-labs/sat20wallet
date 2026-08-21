@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +29,18 @@ func (p *URL) String() string {
 type HttpClient interface {
 	SendGetRequest(url *URL) ([]byte, error)
 	SendPostRequest(url *URL, marshalledJSON []byte) ([]byte, error)
+}
+
+// ContextHttpClient lets lifecycle-owned callers cancel in-flight requests.
+// HttpClient stays unchanged so existing embedders and deterministic test
+// transports remain source compatible.
+type ContextHttpClient interface {
+	SendGetRequestContext(ctx context.Context, url *URL) ([]byte, error)
+	SendPostRequestContext(ctx context.Context, url *URL, marshalledJSON []byte) ([]byte, error)
+}
+
+type contextHTTPDeleteClient interface {
+	SendDeleteRequestContext(ctx context.Context, url *URL, marshalledJSON []byte) ([]byte, error)
 }
 
 // HTTPResponseError preserves the response body for callers that use stable
@@ -57,6 +70,10 @@ type NetClient struct {
 }
 
 func (p *NetClient) SendGetRequest(u *URL) ([]byte, error) {
+	return p.SendGetRequestContext(context.Background(), u)
+}
+
+func (p *NetClient) SendGetRequestContext(ctx context.Context, u *URL) ([]byte, error) {
 	requestURL := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}
 	if len(u.Query) != 0 {
 		q := requestURL.Query()
@@ -65,7 +82,7 @@ func (p *NetClient) SendGetRequest(u *URL) ([]byte, error) {
 		}
 		requestURL.RawQuery = q.Encode()
 	}
-	httpRequest, err := http.NewRequest("GET", requestURL.String(), nil)
+	httpRequest, err := http.NewRequestWithContext(ctx, "GET", requestURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -91,9 +108,13 @@ func (p *NetClient) SendGetRequest(u *URL) ([]byte, error) {
 }
 
 func (p *NetClient) SendPostRequest(u *URL, marshalledJSON []byte) ([]byte, error) {
+	return p.SendPostRequestContext(context.Background(), u, marshalledJSON)
+}
+
+func (p *NetClient) SendPostRequestContext(ctx context.Context, u *URL, marshalledJSON []byte) ([]byte, error) {
 	requestURL := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}
 	bodyReader := bytes.NewReader(marshalledJSON)
-	httpRequest, err := http.NewRequest("POST", requestURL.String(), bodyReader)
+	httpRequest, err := http.NewRequestWithContext(ctx, "POST", requestURL.String(), bodyReader)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +141,10 @@ func (p *NetClient) SendPostRequest(u *URL, marshalledJSON []byte) ([]byte, erro
 }
 
 func (p *NetClient) SendDeleteRequest(u *URL, marshalledJSON []byte) ([]byte, error) {
+	return p.SendDeleteRequestContext(context.Background(), u, marshalledJSON)
+}
+
+func (p *NetClient) SendDeleteRequestContext(ctx context.Context, u *URL, marshalledJSON []byte) ([]byte, error) {
 	requestURL := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}
 	if len(u.Query) != 0 {
 		q := requestURL.Query()
@@ -128,7 +153,7 @@ func (p *NetClient) SendDeleteRequest(u *URL, marshalledJSON []byte) ([]byte, er
 		}
 		requestURL.RawQuery = q.Encode()
 	}
-	httpRequest, err := http.NewRequest("DELETE", requestURL.String(), bytes.NewBuffer(marshalledJSON))
+	httpRequest, err := http.NewRequestWithContext(ctx, "DELETE", requestURL.String(), bytes.NewBuffer(marshalledJSON))
 	if err != nil {
 		return nil, err
 	}

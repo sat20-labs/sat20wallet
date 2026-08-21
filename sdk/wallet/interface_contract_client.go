@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
 )
@@ -19,6 +20,19 @@ import (
 // templateName->contract content (json)
 func (p *Manager) GetSupportContractInServer() ([]string, error) {
 	return p.serverNode.client.GetSupportedContractsReq()
+}
+
+// GetChannelOpenFeeInServer returns the service node's current channel opening
+// configuration without creating a reservation or changing wallet state.
+func (p *Manager) GetChannelOpenFeeInServer() (*wwire.ChannelOpenFeeInfo, error) {
+	if p.serverNode == nil || p.serverNode.client == nil {
+		return nil, fmt.Errorf("server node is not configured")
+	}
+	client, ok := p.serverNode.client.(ChannelOpenFeeRPCClient)
+	if !ok {
+		return nil, fmt.Errorf("server node does not support channel fee preview")
+	}
+	return client.GetChannelOpenFeeReq()
 }
 
 // 返回服务端已经部署的合约
@@ -62,19 +76,20 @@ func (p *Manager) GetTranscendContractWithAssetNameInServer(assetName string) (s
 	if err != nil {
 		return "", err
 	}
-	var tmp string
+	var generic string
 	for _, url := range urls {
-		if strings.Contains(url, assetName) {
-			if strings.Contains(url, TEMPLATE_CONTRACT_AMM) {
-				return url, nil
-			}
-			if strings.Contains(url, TEMPLATE_CONTRACT_TRANSCEND) {
-				tmp = url
-			}
+		if !strings.HasSuffix(url, TEMPLATE_CONTRACT_TRANSCEND) {
+			continue
+		}
+		if ExtractAssetName(url) == assetName {
+			return url, nil
+		}
+		if ExtractAssetName(url) == "::" {
+			generic = url
 		}
 	}
-	if tmp != "" {
-		return tmp, nil
+	if generic != "" && assetName == indexer.ASSET_PLAIN_SAT.String() {
+		return generic, nil
 	}
 	return "", fmt.Errorf("can't find transcend contract")
 }
@@ -260,10 +275,18 @@ func (p *Manager) QueryFeeForInvokeContract(contractURL string, jsonInvokeParam 
 
 // 发送的TX包含调用该合约所需要的聪
 func (p *Manager) InvokeContract_Satsnet(contractURL string, jsonInvokeParam string,
-	feeRate int64) (string, error) {
+	feeRate int64) (txID string, err error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
+	logID := p.beginContractInvokeOperationLog(contractURL, jsonInvokeParam, "SatoshiNet", "", "")
+	defer func() {
+		if err != nil {
+			p.failContractInvokeOperationLog(logID, err)
+		} else if txID != "" {
+			p.completeContractInvokeOperationLog(logID, txID)
+		}
+	}()
 
 	channelAddr, _, _, err := ParseContractURL(contractURL)
 	if err != nil {
@@ -315,17 +338,26 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, jsonInvokeParam str
 		Log.Errorf("sendAssets_SatsNet %s failed", channelAddr)
 		return "", err
 	}
-	Log.Infof("invoke contract %s with txId %s", contractURL, tx.TxID())
+	txID = tx.TxID()
+	Log.Infof("invoke contract %s with txId %s", contractURL, txID)
 
-	return tx.TxID(), nil
+	return txID, nil
 }
 
 // 调用合约的同时加入资产
 func (p *Manager) InvokeContractV2_Satsnet(contractURL string, jsonInvokeParam string,
-	assetName string, amt string, feeRate int64) (string, error) {
+	assetName string, amt string, feeRate int64) (txID string, err error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
+	logID := p.beginContractInvokeOperationLog(contractURL, jsonInvokeParam, "SatoshiNet", assetName, amt)
+	defer func() {
+		if err != nil {
+			p.failContractInvokeOperationLog(logID, err)
+		} else if txID != "" {
+			p.completeContractInvokeOperationLog(logID, txID)
+		}
+	}()
 
 	channelAddr, _, _, err := ParseContractURL(contractURL)
 	if err != nil {
@@ -373,33 +405,40 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, jsonInvokeParam s
 		return "", err
 	}
 
-	var txId string
 	if amt == "" || amt == "0" { // 不需要携带资产
-		tx, err := p.sendAssets_SatsNet(channelAddr, ASSET_PLAIN_SAT.String(), fmt.Sprintf("%d", fee), nullDataScript, false)
-		if err != nil {
+		tx, sendErr := p.sendAssets_SatsNet(channelAddr, ASSET_PLAIN_SAT.String(), fmt.Sprintf("%d", fee), nullDataScript, false)
+		if sendErr != nil {
 			Log.Errorf("sendAssets_SatsNet %s failed", channelAddr)
-			return "", err
+			return "", sendErr
 		}
-		txId = tx.TxID()
+		txID = tx.TxID()
 	} else {
-		txId, err = p.SendAssetsV3_SatsNet(channelAddr, assetName, amt, fee, nullDataScript)
+		txID, err = p.SendAssetsV3_SatsNet(channelAddr, assetName, amt, fee, nullDataScript)
 		if err != nil {
 			Log.Errorf("SendAssetsV3_SatsNet %s failed", channelAddr)
 			return "", err
 		}
 	}
 
-	Log.Infof("invoke contract %s with txId %s", contractURL, txId)
+	Log.Infof("invoke contract %s with txId %s", contractURL, txID)
 
-	return txId, nil
+	return txID, nil
 }
 
 // 调用合约的同时加入资产
 func (p *Manager) InvokeContractV2(contractURL string, jsonInvokeParam string,
-	assetName string, amt string, feeRate int64) (string, error) {
+	assetName string, amt string, feeRate int64) (txID string, err error) {
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
+	logID := p.beginContractInvokeOperationLog(contractURL, jsonInvokeParam, "Bitcoin", assetName, amt)
+	defer func() {
+		if err != nil {
+			p.failContractInvokeOperationLog(logID, err)
+		} else if txID != "" {
+			p.completeContractInvokeOperationLog(logID, txID)
+		}
+	}()
 
 	channelAddr, _, _, err := ParseContractURL(contractURL)
 	if err != nil {
@@ -476,18 +515,18 @@ func (p *Manager) InvokeContractV2(contractURL string, jsonInvokeParam string,
 	// TODO 等主网支持多个op_return，就必须加上参数
 	// 这是默认行为，在主网只要有交易往这里面转资产，就自动触发穿越行为
 	// 原因：一方面op_return能写入的数据太少，另一方面runes还会占有，而主网只能有一个op_return
-	txId, fee, err := p.BatchSendAssetsV3([]*SendAssetInfo{dest}, assetName, feeRate, nullDataScript, "", false)
+	txID, fee, err = p.BatchSendAssetsV3([]*SendAssetInfo{dest}, assetName, feeRate, nullDataScript, "", false)
 	if err != nil {
 		Log.Errorf("BatchSendAssetsV3 %s failed", channelAddr)
 		return "", err
 	}
-	Log.Infof("invoke contract %s with txId %s %d", contractURL, txId, fee)
+	Log.Infof("invoke contract %s with txId %s %d", contractURL, txID, fee)
 
-	return txId, nil
+	return txID, nil
 }
 
 // 一个特殊的invoke
-func (p *Manager) SendContractEnabledTx(url string, h1, h2 int) (string, error) {
+func (p *Manager) SendContractEnabledTx(url string, h1, h2 int) (txID string, err error) {
 
 	var wrapperParam InvokeParam
 	wrapperParam.Action = INVOKE_API_ENABLE
@@ -500,6 +539,18 @@ func (p *Manager) SendContractEnabledTx(url string, h1, h2 int) (string, error) 
 		return "", err
 	}
 	wrapperParam.Param = base64.StdEncoding.EncodeToString(innerParam)
+	jsonInvokeParam, marshalErr := json.Marshal(wrapperParam)
+	if marshalErr != nil {
+		return "", marshalErr
+	}
+	logID := p.beginContractInvokeOperationLog(url, string(jsonInvokeParam), "SatoshiNet", "", "")
+	defer func() {
+		if err != nil {
+			p.failContractInvokeOperationLog(logID, err)
+		} else if txID != "" {
+			p.completeContractInvokeOperationLog(logID, txID)
+		}
+	}()
 
 	buf, err := wrapperParam.Encode()
 	if err != nil {
@@ -529,13 +580,13 @@ func (p *Manager) SendContractEnabledTx(url string, h1, h2 int) (string, error) 
 		return "", err
 	}
 
-	txId, err := p.SendNullData_SatsNet(nullDataScript)
+	txID, err = p.SendNullData_SatsNet(nullDataScript)
 	if err != nil {
 		Log.Errorf("SendNullData_SatsNet %s failed", url)
 		return "", err
 	}
-	Log.Infof("enable contract %s with txId %s", url, txId)
-	return txId, nil
+	Log.Infof("enable contract %s with txId %s", url, txID)
+	return txID, nil
 }
 
 // 存款（充值）：在主网将资产转入流动性池子，流动性池子在聪网将对应资产转入destAddr
@@ -606,10 +657,19 @@ func (p *Manager) DepositWithContract(destAddr string, assetName string, amt str
 
 // TODO 提取时，需要增加收费，除了固定的  DEFAULT_SERVICE_FEE_WITHDRAW 之外，
 // 还需要支付提取资产的 DEFAULT_FEE_RATIO_WITHDRAW_WITH_CONTRACT
-// 取款（提现）：在聪网将资产转入流动性池子，流动性池子在主网将对应资产转入destAddr
+// 取款（提现）：在聪网将资产转入流动性池子，流动性池子在主网将对应的资产转给destAddr
 // 返回txid
 func (p *Manager) WithdrawWithContract(destAddr string, assetName string, amt string,
 	feeRate int64) (string, error) {
+	return p.withdrawWithContract(destAddr, assetName, amt, feeRate, "")
+}
+
+// withdrawWithContract performs a withdrawal through the selected contract.
+// An empty contractURL preserves the public API's AMM-first selection; callers
+// that already selected a contract (for example channel expansion) must pass
+// it explicitly so a same-asset AMM cannot be selected accidentally.
+func (p *Manager) withdrawWithContract(destAddr string, assetName string, amt string,
+	feeRate int64, contractURL string) (string, error) {
 	Log.Infof("WithdrawWithContract %s %s", assetName, amt)
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -646,14 +706,20 @@ func (p *Manager) WithdrawWithContract(destAddr string, assetName string, amt st
 			assetName, coreChannelId, amt, total.String())
 	}
 
-	url := GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_AMM)
-	r := p.getRemoteDeployedContract(url)
-	if r == nil {
-		url = GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_TRANSCEND)
+	url := contractURL
+	var r ContractRuntime
+	if url != "" {
+		r = p.getRemoteDeployedContract(url)
+	} else {
+		url = GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_AMM)
 		r = p.getRemoteDeployedContract(url)
 		if r == nil {
-			return "", fmt.Errorf("can't find a correct contract")
+			url = GenerateContractURl(coreChannelId, assetName, TEMPLATE_CONTRACT_TRANSCEND)
+			r = p.getRemoteDeployedContract(url)
 		}
+	}
+	if r == nil {
+		return "", fmt.Errorf("can't find a correct contract")
 	}
 	if !r.IsActive() {
 		return "", fmt.Errorf("contract not active")

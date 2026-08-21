@@ -7,11 +7,27 @@ const L1_API = process.env.SAT20_L1_API || 'https://apiprd.ordx.market';
 const SATSNET_INDEXER_API = process.env.SAT20_SATSNET_INDEXER_API || 'https://apiprd.ordx.market/satsnet/testnet';
 const MNEMONIC = process.env.SAT20_TEST_MNEMONIC || 'inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire';
 const PASSWORD = process.env.SAT20_TEST_PASSWORD || '123456';
+const HTTP_TIMEOUT_MS = Number(process.env.SAT20_HTTP_TIMEOUT_MS || 30000);
 
 bitcoin.initEccLib(ecc);
 
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`HTTP timeout after ${HTTP_TIMEOUT_MS}ms: ${url}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function api(baseUrl, path, options = {}) {
-  const res = await fetch(baseUrl + path, {
+  const res = await fetchWithTimeout(baseUrl + path, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -66,7 +82,7 @@ async function connect(wsUrl) {
 }
 
 async function getPage() {
-  const pages = await fetch(`${CDP}/json/list`).then((r) => r.json());
+  const pages = await fetchWithTimeout(`${CDP}/json/list`).then((r) => r.json());
   return pages.find((p) => p.type === 'page' && p.url.startsWith(PWA_URL))
     || pages.find((p) => p.type === 'page' && p.url === 'about:blank')
     || pages.find((p) => p.type === 'page');
@@ -110,6 +126,9 @@ async function waitForWasm(client) {
     resolve(false);
   })`);
   if (!ready) throw new Error('PWA WASM did not load');
+  const hasRootRecovery = await evaluate(client,
+    `typeof globalThis.sat20wallet_wasm?.recoverAccountManagementFromRootMnemonic === 'function'`);
+  if (!hasRootRecovery) throw new Error('root account recovery WASM export is unavailable');
 }
 
 async function walletCall(client, body) {
@@ -127,7 +146,7 @@ async function walletCall(client, body) {
       if (unlockErr) throw unlockErr;
     }
     await wallet.setPassword(hashed);
-    await wallet.setNetwork(Network.TESTNET);
+    if (wallet.network !== Network.TESTNET) await wallet.setNetwork(Network.TESTNET);
     await wallet.setChain(Chain.BTC);
     await walletStorage.setValue('env', 'prd');
     const sat20 = verify.sat20;
@@ -238,8 +257,10 @@ async function findPlainL1Utxo(accounts) {
 
 async function runReceiveUiChecks(client) {
   const chainSetup = await walletCall(client, `
-    await wallet.switchToAccount(0);
-    await wallet.setNetwork(Network.TESTNET);
+    await withTimeout(wallet.switchToAccount(0), 'switchToAccount(0)', 30000);
+    if (wallet.network !== Network.TESTNET) {
+      await withTimeout(wallet.setNetwork(Network.TESTNET), 'setNetwork(TESTNET)', 30000);
+    }
     await wallet.setChain(Chain.BTC);
     const btcAddress = wallet.address;
     await wallet.setChain(Chain.SATNET);
@@ -415,6 +436,9 @@ async function setupBridgeHarness(client) {
     });
 
     const bridge = usePwaDappBridge(() => iframe.contentWindow, () => window.location.href);
+    if (!bridge.isAllowedOrigin(window.location.origin)) {
+      throw new Error('PWA verification origin is not in the DApp allowlist: ' + window.location.origin);
+    }
     bridge.start();
     window.__sat20VerifyBridge = {
       stop() {
@@ -484,9 +508,38 @@ async function getApprovalState(client) {
   return JSON.parse(raw);
 }
 
+async function waitForApprovalOrFailure(client, request, startIndex, label) {
+  for (let i = 0; i < 50; i++) {
+    const approval = await getApprovalState(client);
+    if (approval.visible) return approval;
+    const raw = await evaluate(client, `(() => {
+      const iframe = document.getElementById('sat20-verify-bridge-frame');
+      const response = iframe?.contentWindow?.__sat20VerifyResponses
+        ?.slice(${Number(startIndex)})
+        ?.find((item) => item.requestId === ${q(request.requestId)});
+      return response ? JSON.stringify(response) : '';
+    })()`);
+    if (raw) {
+      const response = JSON.parse(raw);
+      throw new Error(`${label} failed before approval: ${response?.error?.message || JSON.stringify(response)}`);
+    }
+    await sleep(100);
+  }
+  throw new Error(`${label} approval did not become visible`);
+}
+
 async function rejectCurrentApproval(client) {
   await evaluate(client, `(async () => {
     window.__SAT20_PWA_VERIFY__.useApproveStore().reject(new Error('verify rejection'));
+    return true;
+  })()`);
+}
+
+async function confirmAccountsApproval(client) {
+  await evaluate(client, `(async () => {
+    const verify = window.__SAT20_PWA_VERIFY__;
+    const wallet = verify.useWalletStore();
+    verify.useApproveStore().confirm([wallet.address]);
     return true;
   })()`);
 }
@@ -496,6 +549,27 @@ async function runBridgeChecks(client) {
   const origin = await evaluate(client, 'window.location.origin');
   let seq = 0;
   const makeRequest = (action, params, extra) => makeBridgeRequest(origin, ++seq, action, params, extra);
+
+  const requestAccountsRequest = makeRequest('requestAccounts', [], {
+    requestId: 'verify-request-accounts',
+    nonce: 'nonce-request-accounts',
+  });
+  const requestAccountsStartIndex = await postBridgeRequest(client, requestAccountsRequest);
+  const requestAccountsApproval = await waitForApprovalOrFailure(
+    client, requestAccountsRequest, requestAccountsStartIndex, 'requestAccounts');
+  await confirmAccountsApproval(client);
+  const requestAccountsResponse = await waitForBridgeResponse(client, requestAccountsRequest, requestAccountsStartIndex);
+
+  const requestAccountsRejectRequest = makeRequest('requestAccounts', [], {
+    requestId: 'verify-request-accounts-reject',
+    nonce: 'nonce-request-accounts-reject',
+  });
+  const requestAccountsRejectStartIndex = await postBridgeRequest(client, requestAccountsRejectRequest);
+  const requestAccountsRejectApproval = await waitForApprovalOrFailure(
+    client, requestAccountsRejectRequest, requestAccountsRejectStartIndex, 'requestAccounts reject');
+  await rejectCurrentApproval(client);
+  const requestAccountsRejectResponse = await waitForBridgeResponse(
+    client, requestAccountsRejectRequest, requestAccountsRejectStartIndex);
 
   const accountsResponse = await sendBridgeRequest(client, makeRequest('getAccounts'));
   const publicKeyResponse = await sendBridgeRequest(client, makeRequest('getPublicKey'));
@@ -527,20 +601,21 @@ async function runBridgeChecks(client) {
     nonce: 'nonce-reject',
   });
   const signRejectStartIndex = await postBridgeRequest(client, signRejectRequest);
-  let rejectRequest = null;
-  for (let i = 0; i < 50; i++) {
-    const state = await getApprovalState(client);
-    if (state.visible) {
-      rejectRequest = state;
-      break;
-    }
-    await sleep(100);
-  }
-  if (!rejectRequest?.visible) {
-    throw new Error('signMessage approval did not become visible');
-  }
+  const rejectRequest = await waitForApprovalOrFailure(
+    client, signRejectRequest, signRejectStartIndex, 'signMessage');
   await rejectCurrentApproval(client);
   const rejectResponse = await waitForBridgeResponse(client, signRejectRequest, signRejectStartIndex);
+
+  const batchSendRejectRequest = makeRequest('batchSendAssets_SatsNet', ['::', '1', 2], {
+    requestId: 'verify-batch-send-reject',
+    nonce: 'nonce-batch-send-reject',
+  });
+  const batchSendRejectStartIndex = await postBridgeRequest(client, batchSendRejectRequest);
+  const batchSendRejectApproval = await waitForApprovalOrFailure(
+    client, batchSendRejectRequest, batchSendRejectStartIndex, 'batchSendAssets_SatsNet');
+  await rejectCurrentApproval(client);
+  const batchSendRejectResponse = await waitForBridgeResponse(
+    client, batchSendRejectRequest, batchSendRejectStartIndex);
 
   await evaluate(client, `(() => {
     window.__sat20VerifyBridge?.stop?.();
@@ -548,6 +623,10 @@ async function runBridgeChecks(client) {
   })()`);
 
   return {
+    requestAccountsAction: requestAccountsApproval.action,
+    requestAccountsResponse,
+    requestAccountsRejectAction: requestAccountsRejectApproval.action,
+    requestAccountsRejectResponse,
     accountsResponse,
     publicKeyResponse,
     networkResponse,
@@ -558,6 +637,8 @@ async function runBridgeChecks(client) {
     originMismatchResponse,
     rejectAction: rejectRequest.action,
     rejectResponse,
+    batchSendRejectAction: batchSendRejectApproval.action,
+    batchSendRejectResponse,
   };
 }
 
@@ -571,7 +652,7 @@ async function main() {
 
   console.log('[wallet-basics] checking wallet lifecycle');
   const lifecycle = await walletCall(client, `
-    await wallet.switchToAccount(0);
+    await withTimeout(wallet.switchToAccount(0), 'switchToAccount(0)', 30000);
     const before = {
       hasWallet: wallet.hasWallet,
       locked: wallet.locked,
@@ -612,16 +693,17 @@ async function main() {
   await waitForWasm(client);
 
   console.log('[wallet-basics] checking accounts and wallet asset helpers');
-  const accounts = await walletCall(client, `
-    const rows = [];
-    for (const accountIndex of [0, 1]) {
-      await wallet.switchToAccount(accountIndex);
+  const accounts = [];
+  for (const accountIndex of [0, 1]) {
+    console.log(`[wallet-basics] checking account ${accountIndex} asset helpers`);
+    accounts.push(await walletCall(client, `
+      await withTimeout(wallet.switchToAccount(${accountIndex}), 'switchToAccount(${accountIndex})', 30000);
       const btcAddress = wallet.address;
       const btcPubKey = wallet.publicKey;
-      await wallet.setChain(Chain.SATNET);
+      await withTimeout(wallet.setChain(Chain.SATNET), 'setChain(SATNET)', 10000);
       const l2Address = wallet.address;
-      rows.push({
-        index: accountIndex,
+      const row = {
+        index: ${accountIndex},
         btcAddress,
         l2Address,
         pubKey: btcPubKey,
@@ -630,11 +712,11 @@ async function main() {
         l2Sats: await safe(async () => unwrap(await sat20.getAssetAmount_SatsNet(l2Address, '::'))),
         l1UtxosWithBtc: await safe(async () => unwrap(await sat20.getUtxosWithAsset(btcAddress, '1', '::'))),
         l2UtxosWithSats: await safe(async () => unwrap(await sat20.getUtxosWithAsset_SatsNet(l2Address, '1', '::'))),
-      });
-      await wallet.setChain(Chain.BTC);
-    }
-    return JSON.stringify(rows);
-  `);
+      };
+      await withTimeout(wallet.setChain(Chain.BTC), 'setChain(BTC)', 10000);
+      return JSON.stringify(row);
+    `));
+  }
 
   console.log('[wallet-basics] checking direct indexer queries');
   const indexerChecks = [];
@@ -650,9 +732,62 @@ async function main() {
     });
   }
 
+  console.log('[wallet-basics] checking manual UTXO lock/query/unlock');
+  const l1LockAccount = accounts.find((account) => account?.l1UtxosWithBtc?.utxos?.[0]);
+  const l2LockAccount = accounts.find((account) => account?.l2UtxosWithSats?.utxos?.[0]);
+  const l1ManualUtxo = l1LockAccount?.l1UtxosWithBtc?.utxos?.[0] || '';
+  const l2ManualUtxo = l2LockAccount?.l2UtxosWithSats?.utxos?.[0] || '';
+  const manualUtxoLocking = {};
+  const manualLockPlans = [
+    {
+      key: 'l1',
+      account: l1LockAccount,
+      chain: 'BTC',
+      utxo: l1ManualUtxo,
+      lock: 'lockUtxo',
+      list: 'getAllLockedUtxo',
+      unlock: 'unlockUtxo',
+    },
+    {
+      key: 'l2',
+      account: l2LockAccount,
+      chain: 'SATNET',
+      utxo: l2ManualUtxo,
+      lock: 'lockUtxo_SatsNet',
+      list: 'getAllLockedUtxo_SatsNet',
+      unlock: 'unlockUtxo_SatsNet',
+    },
+  ];
+  for (const plan of manualLockPlans) {
+    if (!plan.account || !plan.utxo) {
+      manualUtxoLocking[plan.key] = { skipped: `no available ${plan.key.toUpperCase()} UTXO` };
+      continue;
+    }
+    manualUtxoLocking[plan.key] = await walletCall(client, `
+      await withTimeout(wallet.switchToAccount(${plan.account.index}), 'switchToAccount(${plan.account.index})', 30000);
+      await wallet.setChain(Chain.${plan.chain});
+      const utxo = ${q(plan.utxo)};
+      let locked = false;
+      try {
+        unwrap(await sat20.${plan.lock}(wallet.address, utxo, 'manual'));
+        locked = true;
+        const all = unwrap(await sat20.${plan.list}(wallet.address)) || {};
+        const rawEntry = all[utxo];
+        const entry = typeof rawEntry === 'string' ? JSON.parse(rawEntry) : rawEntry;
+        if (!entry || entry.reason !== 'manual') {
+          throw new Error('manual lock reason was not persisted for ' + utxo);
+        }
+        return JSON.stringify({ accountIndex: ${plan.account.index}, utxo, reason: entry.reason });
+      } finally {
+        if (locked) unwrap(await sat20.${plan.unlock}(wallet.address, utxo));
+        await wallet.setChain(Chain.BTC);
+      }
+    `);
+  }
+
   console.log('[wallet-basics] checking message signing');
   const messageSigning = await walletCall(client, `
-    await wallet.switchToAccount(0);
+    await withTimeout(wallet.switchToAccount(0), 'switchToAccount(0)', 30000);
     await wallet.setChain(Chain.BTC);
     const btcSign = unwrap(await sat20.signMessage('sat20-pwa-verify-btc'));
     await wallet.setChain(Chain.SATNET);
@@ -674,7 +809,7 @@ async function main() {
   if (plainSource) {
     const psbtHex = buildSelfSpendPsbt(plainSource.sourceUtxo, plainSource.account);
     l1PsbtSigning = await walletCall(client, `
-      await wallet.switchToAccount(${plainSource.account.index});
+      await withTimeout(wallet.switchToAccount(${plainSource.account.index}), 'switchToAccount(${plainSource.account.index})', 30000);
       await wallet.setChain(Chain.BTC);
       const signed = unwrap(await sat20.signPsbt(${q(psbtHex)}, false));
       const signedPsbt = signed?.psbt || signed;
@@ -703,6 +838,7 @@ async function main() {
     lifecycle,
     accounts,
     indexerChecks,
+    manualUtxoLocking,
     messageSigning,
     l1PsbtSigning,
     receiveUiChecks,

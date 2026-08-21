@@ -12,6 +12,7 @@ const requiredFiles = [
   'composables/hooks/useUnifiedAssets.ts',
   'store/rgb11.ts',
   'entrypoints/popup/pages/wallet/Tools.vue',
+  'scripts/live/rgb11-pwa-live.mjs',
 ]
 
 const requiredWasmMethods = [
@@ -23,16 +24,9 @@ const requiredWasmMethods = [
   'createRGB11Invoice',
 	'prepareRGB11Consignment',
   'prepareRGB11Transfer',
-  'buildRGB11RelayRecord',
-  'publishRGB11RelayRecord',
-  'acceptRGB11RelayConsignment',
-  'rejectRGB11RelayConsignment',
-  'publishRGB11AckRecord',
-  'fetchRGB11AckRecord',
-  'cancelRGB11BatchByNack',
+  'resumeRGB11PreparedTransfer',
 	'cancelRGB11OutOfBandTransfer',
-  'broadcastRGB11Transfer',
-  'broadcastRGB11Batch',
+  'cancelExpiredRGB11Transfer',
   'broadcastRGB11OutOfBand',
   'receiveRGB11ProxyConsignment',
   'deliverAndBroadcastRGB11ProxyTransfer',
@@ -65,6 +59,13 @@ const wasmText = wasm.toString('latin1')
 for (const method of requiredWasmMethods) {
   if (!wasmText.includes(method)) throw new Error(`wallet WASM is missing RGB11 export ${method}`)
 }
+for (const method of [
+  'buildRGB11RelayRecord', 'publishRGB11RelayRecord', 'acceptRGB11RelayConsignment',
+  'rejectRGB11RelayConsignment', 'publishRGB11AckRecord', 'fetchRGB11AckRecord',
+  'cancelRGB11BatchByNack', 'broadcastRGB11Transfer', 'broadcastRGB11Batch',
+]) {
+  if (wasmText.includes(method)) throw new Error(`wallet WASM still exposes removed RGB11 transport ${method}`)
+}
 
 await requireContains('utils/sat20.ts', requiredWasmMethods.filter((method) => ![
 'enableRGB11AddressReceive',
@@ -86,8 +87,10 @@ await requireContains('components/asset/L1AssetsTabs.vue', [
   "selectedType === 'RGB11'",
   "asset.protocol !== 'rgb11'",
   "asset.protocol === 'rgb11'",
-  'backup_status',
-  'backup_enabled',
+  'rgb11State.consistency_status',
+  'rgb11State.value.proofs',
+  'rgb11State.value.transfers',
+  'accountManaged',
   'rgb11Transfers',
   'rgb11TransferStatusClass',
   'rgb11Error',
@@ -101,26 +104,29 @@ await requireContains('components/wallet/RGB11InvoiceDialog.vue', [
   '<option value="witness">',
   '<option value="blind">',
   'receiveRGB11ProxyConsignment',
-  'acceptRGB11RelayConsignment',
-  'rejectRGB11RelayConsignment',
-  'publishRGB11AckRecord',
+  'acceptRGB11Consignment',
+  '<option value="out-of-band">',
 ])
 await requireContains('components/wallet/RGB11SendDialog.vue', [
   'prepareRGB11Transfer',
-  'publishRGB11RelayRecord',
-  'fetchRGB11AckRecord',
-  'cancelRGB11BatchByNack',
-  'broadcastRGB11Transfer',
-  'broadcastRGB11Batch',
   'broadcastRGB11OutOfBand',
   'deliverAndBroadcastRGB11ProxyTransfer',
   'fetchRGB11ProxyAck',
   'invoices',
   'recipient_consignment_base64',
   'downloadStandardConsignment',
-  'outOfBand.value || proxyTransport.value ? null : JSON.parse',
+  "transportMode === 'out-of-band'",
   'rgb11Address.prepareTransfer',
   'rgb11Address.deliverAndBroadcast',
+])
+await requireContains('scripts/live/rgb11-pwa-live.mjs', [
+  'SAT20_RGB11_RESUME_PENDING',
+  'SAT20_RGB11_INSPECT_PENDING',
+  'resumeRGB11PreparedTransfer',
+  'enableRGB11AddressReceive',
+  'prepareRGB11AddressTransfer',
+  'deliverAndBroadcastRGB11AddressTransfer',
+  'syncRGB11AddressMailbox',
 ])
 await requireContains('composables/hooks/useRgb11Assets.ts', [
   'tickerInfoFor',

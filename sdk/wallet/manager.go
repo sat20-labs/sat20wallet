@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"strconv"
@@ -98,14 +99,17 @@ func (noopChannelBackupHandler) BackupChannel(*Channel, []byte) error {
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet
 type Manager struct {
-	mutex          sync.RWMutex
-	rgbOperationMu sync.RWMutex
+	mutex                     sync.RWMutex
+	rgbOperationMu            sync.RWMutex
+	channelIdentityMu         sync.RWMutex
+	channelIdentityGeneration uint64
 
 	cfg                   *common.Config
 	bInited               bool
 	status                *Status
 	walletInfoMap         map[int64]*WalletInfo
 	wallet                common.Wallet
+	msgCallbackMu         sync.RWMutex
 	msgCallback           NotifyCB
 	actionCallback        ActionStatusCallback
 	channelStatusCallback ActionStatusCallback
@@ -131,6 +135,7 @@ type Manager struct {
 	accountProfile  *accountManagementProfile
 	accountSecret   []byte
 	accountPassword string
+	accountSyncMu   sync.Mutex
 
 	managedDataMu        sync.RWMutex
 	managedDataProviders map[string]AccountManagedDataProvider
@@ -156,12 +161,20 @@ type Manager struct {
 	nodeMap    map[string]string   // key: peer address + local address -> channelId
 	channelMap map[string]*Channel // key: channelId. 活跃的channel，维持状态是最新的
 
-	actionMonitorLock    sync.Mutex
-	actionMonitorL1Lock  sync.Mutex
-	actionMonitorL2Lock  sync.Mutex
-	actionMonitorStop    chan struct{}
-	actionMonitorWG      sync.WaitGroup
-	actionMonitorRunning bool
+	actionMonitorLock         sync.Mutex
+	actionMonitorL1Lock       sync.Mutex
+	actionMonitorL2Lock       sync.Mutex
+	actionMonitorStop         chan struct{}
+	actionMonitorWG           sync.WaitGroup
+	actionMonitorRunning      bool
+	channelHeartbeatMu        sync.Mutex
+	channelHeartbeatStop      chan struct{}
+	channelHeartbeatWake      chan struct{}
+	channelHeartbeatCancel    context.CancelFunc
+	channelHeartbeatWG        sync.WaitGroup
+	channelHeartbeatRunning   bool
+	statusBootstrapMu         sync.Mutex
+	statusBootstrapGeneration uint64
 
 	btcLuckyMiner        *btclucky.Miner
 	btcLuckyLastL1Height int
@@ -1131,11 +1144,15 @@ func (p *Manager) BroadcastTx(tx *wire.MsgTx) (string, error) {
 }
 
 func (p *Manager) BroadcastTxs(txs []*wire.MsgTx) error {
+	return p.BroadcastTxsContext(context.Background(), txs)
+}
+
+func (p *Manager) BroadcastTxsContext(ctx context.Context, txs []*wire.MsgTx) error {
 	if ENABLE_TESTING && NOT_SEND_TX {
 		return nil
 	}
 
-	err := p.l1IndexerClient.BroadCastTxs(txs)
+	err := p.l1IndexerClient.BroadCastTxsContext(ctx, txs)
 	if err != nil {
 		Log.Errorf("BroadCastTxs failed. %v", err)
 		return err

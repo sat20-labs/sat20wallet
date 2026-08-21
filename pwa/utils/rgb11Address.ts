@@ -1,4 +1,5 @@
 import { tryit } from 'radash'
+import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
 
 type WasmResponse<T> = {
   code: number
@@ -7,15 +8,29 @@ type WasmResponse<T> = {
 }
 
 const call = async <T>(methodName: string, ...args: unknown[]): Promise<[Error | undefined, T | undefined]> => {
+  const operation = await beginPwaWalletOperation(methodName, args as any[])
   const method = (globalThis as any).sat20wallet_wasm?.[methodName]
   if (typeof method !== 'function') {
-    return [new Error(`RGB11 WASM method ${methodName} is unavailable`), undefined]
+    const methodError = new Error(`RGB11 WASM method ${methodName} is unavailable`)
+    await finishPwaOperation(operation, methodError)
+    return [methodError, undefined]
   }
   const [invokeError, raw] = await tryit(method)(...args)
-  if (invokeError) return [invokeError, undefined]
+  if (invokeError) {
+    await finishPwaOperation(operation, invokeError)
+    return [invokeError, undefined]
+  }
   const response = raw as WasmResponse<T> | undefined
-  if (!response) return [undefined, undefined]
-  if (response.code !== 0) return [new Error(response.msg), undefined]
+  if (!response) {
+    await finishPwaOperation(operation)
+    return [undefined, undefined]
+  }
+  if (response.code !== 0) {
+    const responseError = new Error(response.msg)
+    await finishPwaOperation(operation, responseError)
+    return [responseError, undefined]
+  }
+  await finishPwaOperation(operation, null, response.data)
   return [undefined, response.data]
 }
 

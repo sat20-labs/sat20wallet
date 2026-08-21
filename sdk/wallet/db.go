@@ -38,7 +38,11 @@ const (
 )
 
 const legacySTPStatusKey = "status"
-const initialStatusBlockHashWindow = 144
+
+const (
+	bitcoinTestnet4InitialBlockHashWindow = 144
+	defaultInitialBlockHashWindow         = 7
+)
 
 var _mode string  //
 var _chain string // mainnet, testnet
@@ -143,12 +147,10 @@ func GetItemsFromDB(prefix []byte, db db.KVDB) (map[string][]byte, error) {
 
 func (p *Manager) initDB() error {
 
-	status := p.loadStatus()
-	if status.DBver != DB_VERSION {
-		// try to update db
-
-		p.status.DBver = DB_VERSION
-	}
+	// Status.DBver is the historical STP database schema version for shared
+	// core/bootstrap databases. Wallet owns the migrated Status object, but it
+	// must not rewrite that version before STP has upgraded channel data.
+	p.loadStatus()
 
 	wallets, err := loadAllWalletFromDB(p.db)
 	if err != nil {
@@ -162,7 +164,9 @@ func (p *Manager) initDB() error {
 		return err
 	}
 
-	loadedResv := LoadAllResvFromDB(p.db, p)
+	// Wallet secrets are still locked here.  Reservation runtime state is
+	// restored only after UnlockWallet has released p.mutex.
+	loadedResv := LoadAllResvFromDB(p.db, nil)
 	for _, resv := range loadedResv {
 		p.addResvLocked(resv)
 	}
@@ -241,15 +245,53 @@ func loadWallet(db db.KVDB, id int64) (*WalletInDB, error) {
 func (p *Manager) loadStatus() *Status {
 	var loaded bool
 	p.status, loaded = loadStatusWithLegacyMigrationResult(p.db)
-	if !loaded {
-		if !ENABLE_TESTING {
-			p.initStatusFromIndexerTips(p.status)
-		}
+	targetChain := _chain
+	if p.cfg != nil && p.cfg.Chain != "" {
+		targetChain = p.cfg.Chain
+	}
+	chainChanged := statusChainChanged(p.status, targetChain)
+	if chainChanged {
+		resetStatusChainState(p.status, targetChain)
+	}
+	needsTips := !loaded || chainChanged || statusChainTipsMissing(p.status)
+	if needsTips {
 		if err := saveStatusToDB(p.db, p.status); err != nil {
 			Log.Infof("save initialized status failed. %v", err)
 		}
 	}
 	return p.status
+}
+
+func statusChainChanged(status *Status, targetChain string) bool {
+	if status == nil || targetChain == "" {
+		return false
+	}
+	status.RLock()
+	defer status.RUnlock()
+	return status.CurrentChain != "" && status.CurrentChain != targetChain
+}
+
+func statusChainTipsMissing(status *Status) bool {
+	if status == nil {
+		return true
+	}
+	status.RLock()
+	defer status.RUnlock()
+	return status.SyncHeightL1 < 0 || status.SyncHeightL2 < 0
+}
+
+func resetStatusChainState(status *Status, chain string) {
+	if status == nil {
+		return
+	}
+	status.Lock()
+	status.CurrentChain = chain
+	status.SyncHeight = -1
+	status.SyncHeightL1 = -1
+	status.SyncHeightL2 = -1
+	status.BlockHashMapL1 = make(map[int]string)
+	status.BlockHashMapL2 = make(map[int]string)
+	status.Unlock()
 }
 
 func loadStatusFromDB(kvdb db.KVDB) *Status {
@@ -272,14 +314,15 @@ func loadStatusWithLegacyMigrationResult(kvdb db.KVDB) (*Status, bool) {
 	status, hasStatus := readStatusFromDB(kvdb, DB_KEY_STATUS)
 	legacyStatus, hasLegacy := readLegacySTPStatusFromDB(kvdb)
 
-	if !hasStatus {
-		if hasLegacy {
-			status = legacyStatus
-		} else {
-			status = newDefaultStatus()
-		}
-	} else if hasLegacy {
-		mergeLegacySTPStatus(status, legacyStatus)
+	// Production core/bootstrap nodes historically persisted the authoritative
+	// runtime and schema state under the STP "status" key. When that key exists,
+	// migrate it wholesale and deliberately ignore any wallet-status value from
+	// intermediate builds. In particular, DBver must remain the STP DB version
+	// until STP completes its channel migration.
+	if hasLegacy {
+		status = legacyStatus
+	} else if !hasStatus {
+		status = newDefaultStatus()
 	}
 	normalizeStatus(status)
 
@@ -523,32 +566,21 @@ func normalizeStatus(status *Status) {
 	}
 }
 
-func (p *Manager) initStatusFromIndexerTips(status *Status) {
-	if status == nil {
-		return
+func initialStatusBlockHashWindow(chain string, l1 bool) int {
+	if l1 && chain == "testnet" {
+		return bitcoinTestnet4InitialBlockHashWindow
 	}
-	if p.l1IndexerClient != nil {
-		if height := p.l1IndexerClient.GetSyncHeight(); height >= 0 {
-			status.SyncHeight = height
-			status.SyncHeightL1 = height
-			fillBlockHashMap(status.BlockHashMapL1, height, p.l1IndexerClient)
-		}
-	}
-	if p.l2IndexerClient != nil {
-		if height := p.l2IndexerClient.GetSyncHeight(); height >= 0 {
-			status.SyncHeightL2 = height
-			fillBlockHashMap(status.BlockHashMapL2, height, p.l2IndexerClient)
-		}
-	}
+	return defaultInitialBlockHashWindow
 }
 
-func fillBlockHashMap(dst map[int]string, height int, client interface {
+func loadBlockHashWindow(height, window int, client interface {
 	GetBlockHash(int) (string, error)
-}) {
-	if dst == nil || client == nil || height < 0 {
-		return
+}) map[int]string {
+	result := make(map[int]string)
+	if client == nil || height < 0 || window <= 0 {
+		return result
 	}
-	start := height - initialStatusBlockHashWindow + 1
+	start := height - window + 1
 	if start < 0 {
 		start = 0
 	}
@@ -557,8 +589,9 @@ func fillBlockHashMap(dst map[int]string, height int, client interface {
 		if err != nil {
 			continue
 		}
-		dst[h] = hash
+		result[h] = hash
 	}
+	return result
 }
 
 func (p *Manager) GetStatus() *Status {
@@ -951,7 +984,7 @@ func ParseResvKey(key string) (string, int64, error) {
 	return parts[0], id, nil
 }
 
-func LoadAllResvFromDB(db db.KVDB, walletMgr *Manager) map[int64]Reservation {
+func LoadAllResvFromDB(db db.KVDB, _ *Manager) map[int64]Reservation {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_RESV)
 	result := make(map[int64]Reservation, 0)
 	invalidKeys := make([]string, 0)
@@ -974,12 +1007,6 @@ func LoadAllResvFromDB(db db.KVDB, walletMgr *Manager) map[int64]Reservation {
 		if value.GetStatus() <= RS_CLOSED {
 			return nil
 		}
-		err = value.InitLocalWallet(walletMgr)
-		if err != nil {
-			invalidKeys = append(invalidKeys, string(k))
-			Log.Errorf("InitLocalWallet %s failed. %v", string(k), err)
-			return nil
-		}
 		result[id] = value
 		Log.Infof("LoadAllResvFromDB loaded. %d %s 0x%x", value.GetId(), value.GetType(), value.GetStatus())
 		return nil
@@ -994,6 +1021,86 @@ func LoadAllResvFromDB(db db.KVDB, walletMgr *Manager) map[int64]Reservation {
 		wb.Flush()
 	}
 	return result
+}
+
+func cloneFundingReservationForRuntime(resv *FundingReservation) *FundingReservation {
+	if resv == nil {
+		return nil
+	}
+	clone := *resv
+	clone.Channel = nil
+	return &clone
+}
+
+// rehydratePendingFundingRuntime restores only restart-safe open-channel
+// reservations.  Other channel operations have additional transient ownership
+// state and require their own recovery state machines.
+func (p *Manager) rehydratePendingFundingRuntime() {
+	p.mutex.RLock()
+	reservations := make(map[int64]*FundingReservation, len(p.fundingChannelMap))
+	for id, resv := range p.fundingChannelMap {
+		reservations[id] = resv
+	}
+	p.mutex.RUnlock()
+
+	channelCache := make(map[string]*Channel)
+	for id, original := range reservations {
+		replacement := cloneFundingReservationForRuntime(original)
+		if replacement == nil {
+			continue
+		}
+		if err := replacement.InitLocalWallet(p); err != nil {
+			Log.Warnf("restore funding reservation %d local wallet failed. %v", id, err)
+			continue
+		}
+		if replacement.WalletId.Id != 0 && replacement.LocalWallet() == nil {
+			Log.Warnf("restore funding reservation %d local wallet %d is unavailable", id, replacement.WalletId.Id)
+			continue
+		}
+
+		channel := channelCache[replacement.ChannelId]
+		if channel == nil {
+			var err error
+			channel, err = p.loadPendingFundingChannel(replacement.ChannelId)
+			if err != nil {
+				Log.Warnf("restore funding reservation %d channel failed. %v", id, err)
+				continue
+			}
+			channelCache[replacement.ChannelId] = channel
+		}
+		replacement.Channel = channel
+
+		p.mutex.Lock()
+		if current, ok := p.fundingChannelMap[id]; ok && current == original {
+			p.addResvLocked(replacement)
+		}
+		p.mutex.Unlock()
+	}
+}
+
+func (p *Manager) loadPendingFundingChannel(channelID string) (*Channel, error) {
+	if channelID == "" {
+		return nil, fmt.Errorf("funding reservation has empty channel id")
+	}
+	stored, err := p.LoadChannelInDB(channelID)
+	if err != nil {
+		return nil, fmt.Errorf("load channel %s: %w", channelID, err)
+	}
+	if !((stored.Status >= CS_FUNDING_BROADCASTED && stored.Status <= CS_ANCHOR_CONFIRMED) ||
+		stored.Status == CS_READY) {
+		return nil, fmt.Errorf("channel %s status %d is not a restart-safe funding state", channelID, stored.Status)
+	}
+	if stored.LocalWalletId != 0 {
+		if p.FindWalletById(stored.LocalWalletId) == nil {
+			return nil, fmt.Errorf("channel %s local wallet %d is unavailable", channelID, stored.LocalWalletId)
+		}
+	} else {
+		probe := &Channel{ChannelInDB: *stored}
+		if p.findWalletByChannelLocalKey(probe) == nil {
+			return nil, fmt.Errorf("channel %s local wallet cannot be recovered from its payment key", channelID)
+		}
+	}
+	return NewChannel(stored, p), nil
 }
 
 func (p *Manager) SaveWalletReservation(resv Reservation) error {
@@ -1476,9 +1583,10 @@ func loadContractInvokeHistoryItemByInUtxo(db db.KVDB, url, inUtxo string) (Invo
 }
 
 func deleteContractInvokeHistoryItem(db db.KVDB, url string, value InvokeHistoryItem) error {
-	db.Delete([]byte(GetContractInvokeHistoryKey(url, value.GetKey())))
-	db.Delete([]byte(GetContractInvokeHistoryKey2(url, value.GetInvokeUtxo())))
-	return nil
+	if err := db.Delete([]byte(GetContractInvokeHistoryKey(url, value.GetKey()))); err != nil {
+		return err
+	}
+	return db.Delete([]byte(GetContractInvokeHistoryKey2(url, value.GetInvokeUtxo())))
 }
 
 func DeleteContractInvokeHistory(db db.KVDB, url string) error {

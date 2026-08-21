@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,17 +39,21 @@ func (p *Manager) PerformRemoteAction(doAction StartRemoteAction, action string,
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
 	}
+	logID := p.beginRemoteActionOperationLog(action, feeRate, sendTxInL1, toBootstrap)
 
 	resv, client, serverPubkey, err := p.newRemoteAction(action, actionParam, more, feeRate, sendTxInL1, toBootstrap)
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", -1, nil, err
 	}
 	msg, err := json.Marshal(resv.req)
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", -1, nil, err
 	}
 	resv.ReqSig, err = p.wallet.SignMessageWithIndex(msg, 0) // node key signs when NodeId is present.
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", -1, nil, err
 	}
 
@@ -58,12 +63,24 @@ func (p *Manager) PerformRemoteAction(doAction StartRemoteAction, action string,
 			Log.Errorf("SendPerformRemoteActionReq failed. %v", err)
 			break
 		}
+		p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_REMOTEACTION, resv.Id)
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Service accepted the request; preparing transaction",
+			Details: map[string]string{"reservation_id": strconv.FormatInt(resv.Id, 10)},
+		})
 
 		err = p.sendFeeTxForRemoteAction(resv, serverPubkey, doAction)
 		if err != nil {
 			Log.Errorf("sendFeeTxForRemoteAction failed. %v", err)
 			break
 		}
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Action transaction broadcast; waiting for confirmation",
+			TxID:    resv.FeeTxId,
+			Details: map[string]string{"txid": resv.FeeTxId},
+		})
 
 		err = client.SendPerformRemoteActionAckReq(resv)
 		if err != nil {
@@ -74,6 +91,11 @@ func (p *Manager) PerformRemoteAction(doAction StartRemoteAction, action string,
 				break
 			}
 		}
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Request acknowledged; waiting for service result",
+			TxID:    resv.FeeTxId,
+		})
 
 		p.addResv(resv)
 		if err = p.SaveWalletReservation(resv); err != nil {
@@ -85,6 +107,7 @@ func (p *Manager) PerformRemoteAction(doAction StartRemoteAction, action string,
 	}
 
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		if resv.Id != 0 {
 			_ = client.SendActionResultNfty(resv.Id, RESV_TYPE_REMOTEACTION, -1, err.Error())
 		}
@@ -185,7 +208,6 @@ func (p *Manager) HandleRemoteActionStatus(sendTxInL1 bool) {
 		if resv == nil || resv.Status <= RS_CLOSED || resv.SendTxInL1 != sendTxInL1 {
 			continue
 		}
-		wasCompleted := resv.Status == RS_PERFORM_ACTION_COMPLETED
 		if err := p.handleRemoteActionStatus(resv); err != nil {
 			Log.Errorf("handleRemoteActionStatus %d failed. %v", resv.Id, err)
 			continue
@@ -201,7 +223,7 @@ func (p *Manager) HandleRemoteActionStatus(sendTxInL1 bool) {
 			})
 			continue
 		}
-		if wasCompleted && resv.Status == RS_CLOSED {
+		if resv.Status == RS_CLOSED {
 			p.notifyActionStatus(&ActionStatusEvent{
 				Event:      ACTION_STATUS_EVENT_COMPLETED,
 				Resv:       resv,
@@ -280,6 +302,12 @@ func (p *Manager) confirmRemoteActionTx(resv *RemoteActionPerformReservation) er
 
 	Log.Infof("remote action tx confirmed: %s", txId)
 	resv.Status = RS_PERFORM_ACTION_TX_CONFIRMED
+	p.updateOperationLogByReservationBestEffort(RESV_TYPE_REMOTEACTION, resv.Id, OperationLogUpdate{
+		Status:  OperationLogRunning,
+		Message: "Action transaction confirmed; waiting for service execution",
+		TxID:    txId,
+		Details: map[string]string{"txid": txId},
+	})
 	return p.SaveWalletReservation(resv)
 }
 

@@ -65,6 +65,9 @@ func (s *dkvsReplicaStore) applyLocalWrite(scope, path string,
 	}
 	state.ServerTimeMS = result.ServerTimeMS
 	state.EndpointID = result.EndpointID
+	if err := applyWriteResultDeleteFloors(state, path, result.Records, state.PathMeta); err != nil {
+		return err
+	}
 	state.HasLocalOnly = true
 	state.SessionState = dkvsSessionConfirmed
 	state.LastErrorCode = ""

@@ -180,3 +180,59 @@ func TestCommitAccountManagedStateKeepsStatusPointerStable(t *testing.T) {
 			manager.status, manager.walletInfoMap[walletID])
 	}
 }
+
+func TestCommitAccountManagedStateAdvancesChannelIdentityWhenCurrentWalletIsDeleted(t *testing.T) {
+	rootWallet := NewInternalWalletWithMnemonic(
+		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+		"", GetChainParam())
+	childWallet := NewInternalWalletWithMnemonic(
+		"legal winner thank year wave sausage worth useful legal winner thank yellow",
+		"", GetChainParam())
+	if rootWallet == nil || childWallet == nil {
+		t.Fatal("create test wallets")
+	}
+	rootID, childID := rootWallet.GetId(), childWallet.GetId()
+	rootFingerprint, childFingerprint := walletFingerprint(rootWallet), walletFingerprint(childWallet)
+	profile := &accountManagementProfile{AccountID: "test-account", RootFingerprint: rootFingerprint}
+	manager := &Manager{
+		db: newMemoryKVDB(), wallet: childWallet,
+		status: &Status{CurrentWallet: childID, CurrentAccount: 0},
+		walletInfoMap: map[int64]*WalletInfo{
+			rootID: {
+				WalletInDB: WalletInDB{Id: rootID, Accounts: 1, Type: WALLET_TYPE_MNEMONIC,
+					Name: "Root", AccountNames: map[uint32]string{0: "Account 1"}, AccountDIDs: map[uint32]string{}},
+				Wallet: rootWallet,
+			},
+			childID: {
+				WalletInDB: WalletInDB{Id: childID, Accounts: 1, Type: WALLET_TYPE_MNEMONIC,
+					Name: "Child", AccountNames: map[uint32]string{0: "Account 1"}, AccountDIDs: map[uint32]string{}},
+				Wallet: childWallet,
+			},
+		},
+		accountProfile: profile,
+	}
+	snapshot := &accountManagementSyncSnapshot{
+		profile: *profile,
+		wallets: map[string]account.ManagedWallet{
+			rootFingerprint:  syncTestWallet(rootFingerprint, "Root"),
+			childFingerprint: syncTestWallet(childFingerprint, "Child"),
+		},
+	}
+	state := account.ManagedState{
+		Version: account.ManagedStateVersion, RootFingerprint: rootFingerprint, Revision: 2,
+		Wallets: []account.ManagedWallet{
+			syncTestWallet(rootFingerprint, "Root"),
+			{Fingerprint: childFingerprint, Revision: 2, Deleted: true},
+		},
+	}
+
+	_, _, err := manager.commitAccountManagedStateForSync(state, snapshot, []byte("state"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.wallet != rootWallet || manager.status.CurrentWallet != rootID ||
+		manager.channelIdentityGeneration != 1 {
+		t.Fatalf("channel identity was not advanced after background wallet switch: wallet=%d generation=%d",
+			manager.status.CurrentWallet, manager.channelIdentityGeneration)
+	}
+}

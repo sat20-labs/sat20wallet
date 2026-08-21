@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
@@ -227,12 +228,30 @@ func (p *Manager) FunderInitFundingProcess(feeRate, amt int64, utxos []string, m
 		feeRate = p.GetFeeRate()
 	}
 	if len(utxos) == 0 {
-		var err error
-		utxos, err = p.SelectWalletFundingOutpoints(feeRate, amt, nil)
+		feeInfo, err := p.GetChannelOpenFeeInServer()
+		if err != nil {
+			return "", err
+		}
+		if feeInfo == nil || feeInfo.OpenFee == nil {
+			return "", fmt.Errorf("server returned empty channel fee config")
+		}
+		utxos, err = p.SelectWalletFundingOutpoints(feeRate, amt, NewFromOpenChannelFee(feeInfo.OpenFee))
 		if err != nil {
 			return "", err
 		}
 	}
+
+	logID := p.beginOperationLogBestEffort(OperationLogCreate{
+		Category: "channel",
+		Action:   "open_channel",
+		Title:    "Open channel",
+		Summary:  "Preparing channel opening",
+		Parameters: map[string]string{
+			"amount":   strconv.FormatInt(amt, 10),
+			"fee_rate": strconv.FormatInt(feeRate, 10),
+			"memo":     memo,
+		},
+	})
 
 	resv, err := p.InitInitiatorFundingReservation(FundingInitOptions{
 		FeeRate:           feeRate,
@@ -243,6 +262,7 @@ func (p *Manager) FunderInitFundingProcess(feeRate, amt int64, utxos []string, m
 		L2DrainTxId:       l2DrainTxId,
 	})
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", err
 	}
 
@@ -250,6 +270,12 @@ func (p *Manager) FunderInitFundingProcess(feeRate, amt int64, utxos []string, m
 		if err = p.serverNode.client.SendOpenChannelReq(resv); err != nil {
 			break
 		}
+		p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_OPEN, resv.Id)
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Peer accepted channel request",
+			Details: map[string]string{"reservation_id": strconv.FormatInt(resv.Id, 10)},
+		})
 		resv.Channel.FeeCfg = NewFromOpenChannelFee(resv.Accept.OpenFee)
 		resv.Channel.Capacity = amt - resv.Channel.FeeCfg.FeeToDAO()
 		resv.FundingUtxos, err = p.AllowOpen(feeRate, amt, utxos, resv.Channel.FeeCfg)
@@ -269,11 +295,19 @@ func (p *Manager) FunderInitFundingProcess(feeRate, amt int64, utxos []string, m
 			break
 		}
 
+		fundingTxID := resv.FundingTx.TxID()
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Funding transaction broadcast; waiting for confirmation",
+			TxID:    fundingTxID,
+			Details: map[string]string{"txid": fundingTxID},
+		})
+
 		resv.Channel.Status = CS_FUNDING_BROADCASTED
 		resv.Status = ResvStatus(resv.Channel.Status)
 		resv.FundingBroadcasted = &wwire.FundingBroadcasted{
 			Id:          resv.Id,
-			FundingTxId: resv.FundingTx.TxID(),
+			FundingTxId: fundingTxID,
 		}
 		resv.Channel.StaticMerkleRoot = resv.Channel.CalcStaticMerkleRoot()
 		resv.Channel.UpdateTime = resv.Id
@@ -291,6 +325,7 @@ func (p *Manager) FunderInitFundingProcess(feeRate, amt int64, utxos []string, m
 	}
 
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		p.DelResvWithId(resv.Id)
 		if resv.Id != 0 && p.serverNode != nil && p.serverNode.client != nil {
 			_ = p.serverNode.client.SendActionResultNfty(resv.Id, RESV_TYPE_OPEN, -1, err.Error())
@@ -317,6 +352,25 @@ func (p *Manager) FunderInitReOpenProcess(amt int64, fundingUtxo *TxOutput, memo
 		}
 	}
 
+	action := "reopen_channel"
+	title := "Reopen channel"
+	if memo == "rebuild" {
+		action = "rebuild_channel"
+		title = "Rebuild channel"
+	}
+	logID := p.beginOperationLogBestEffort(OperationLogCreate{
+		Category: "channel",
+		Action:   action,
+		Title:    title,
+		Summary:  "Preparing channel recovery",
+		Parameters: map[string]string{
+			"amount":              strconv.FormatInt(amt, 10),
+			"fee_rate":            strconv.FormatInt(feeRate, 10),
+			"new_funding_tx":      strconv.FormatBool(needSendFundingTx),
+			"reuse_opening_anchor": strconv.FormatBool(skipOpeningAnchorTx),
+		},
+	})
+
 	resv, err := p.InitInitiatorFundingReservation(FundingInitOptions{
 		FeeRate:             feeRate,
 		Amount:              amt,
@@ -329,6 +383,7 @@ func (p *Manager) FunderInitReOpenProcess(amt int64, fundingUtxo *TxOutput, memo
 		InitialCapacity:     amt,
 	})
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", err
 	}
 
@@ -336,6 +391,12 @@ func (p *Manager) FunderInitReOpenProcess(amt int64, fundingUtxo *TxOutput, memo
 		if err = p.serverNode.client.SendOpenChannelReq(resv); err != nil {
 			break
 		}
+		p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_OPEN, resv.Id)
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Peer accepted channel recovery request",
+			Details: map[string]string{"reservation_id": strconv.FormatInt(resv.Id, 10)},
+		})
 		resv.Channel.FeeCfg = NewFromOpenChannelFee(resv.Accept.OpenFee)
 		if resv.NeedSendFundingTx {
 			resv.Channel.Capacity = amt - resv.Channel.FeeCfg.FeeToDAO()
@@ -369,6 +430,17 @@ func (p *Manager) FunderInitReOpenProcess(amt int64, fundingUtxo *TxOutput, memo
 		} else if fundingUtxo != nil {
 			fundingTxId = fundingUtxo.TxID()
 		}
+		message := "Existing funding output accepted; preparing channel"
+		if resv.NeedSendFundingTx {
+			message = "Funding transaction broadcast; waiting for confirmation"
+		}
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: message,
+			TxID:    fundingTxId,
+			Details: map[string]string{"txid": fundingTxId},
+		})
+
 		resv.FundingBroadcasted = &wwire.FundingBroadcasted{
 			Id:          resv.Id,
 			FundingTxId: fundingTxId,
@@ -389,6 +461,7 @@ func (p *Manager) FunderInitReOpenProcess(amt int64, fundingUtxo *TxOutput, memo
 	}
 
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		p.DelResvWithId(resv.Id)
 		if resv.Id != 0 && p.serverNode != nil && p.serverNode.client != nil {
 			_ = p.serverNode.client.SendActionResultNfty(resv.Id, RESV_TYPE_OPEN, -1, err.Error())

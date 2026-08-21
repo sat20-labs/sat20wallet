@@ -19,6 +19,16 @@
       <div>恢复模式：{{ state.recovery_mode === '2of3' ? '2/3 便捷恢复' : '2/2 增强安全' }}</div>
       <div v-if="state.last_rehearsal_at">上次演练：{{ new Date(state.last_rehearsal_at).toLocaleString() }}</div>
       <div>待同步变更：{{ state.pending_changes || 0 }}</div>
+      <div
+        v-if="state.last_dkvs_sync_error"
+        class="mt-2 rounded-md border border-red-500/40 bg-red-500/10 p-2 text-red-400"
+      >
+        <div class="font-medium">DKVS 同步异常：{{ state.last_dkvs_sync_error_code || 'DKVS_SYNC_ERROR' }}</div>
+        <div class="mt-1 break-words">{{ state.last_dkvs_sync_error }}</div>
+        <div v-if="state.last_dkvs_sync_error_at" class="mt-1 text-red-400/80">
+          最近失败：{{ new Date(state.last_dkvs_sync_error_at).toLocaleString() }}
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -28,10 +38,10 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
-import accountSDK from '@/utils/accountManagement'
+import accountSDK, { type AccountManagementStatus } from '@/utils/accountManagement'
 
 const router = useRouter()
-const state = ref<any>(null)
+const state = ref<AccountManagementStatus | null>(null)
 
 onMounted(async () => {
   try { state.value = await accountSDK.status() } catch { state.value = null }

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { walletStorage } from '@/lib/walletStorage'
+import { walletStorage, type AccountRecoveryState } from '@/lib/walletStorage'
 import { Network, Chain, WalletData, WalletAccount } from '@/types'
 import walletManager from '@/utils/sat20'
 import satsnetStp from '@/utils/stp'
@@ -25,6 +25,7 @@ export const useWalletStore = defineStore('wallet', () => {
   const hasWallet = ref(!!walletStorage.getValue('hasWallet'))
   const localWallets = walletStorage.getValue('wallets');
   const wallets = ref<WalletData[]>(localWallets ? structuredClone(localWallets) : [])
+  const accountRecovery = ref<AccountRecoveryState | null>(walletStorage.getValue('accountRecovery'))
 
   // 添加全局切换状态管理
   const isSwitchingWallet = ref(false)
@@ -76,24 +77,8 @@ export const useWalletStore = defineStore('wallet', () => {
     }
   }
 
-  const runStpSyncInBackground = (label: string, fn: () => Promise<[Error | undefined, any | undefined]>) => {
-    if (import.meta.env.DEV) {
-      console.info(`Skip automatic STP sync during ${label} in development mode`)
-      return
-    }
-    void fn()
-      .then(([err]) => {
-        if (err) {
-          console.warn(`STP sync failed during ${label}:`, err)
-        }
-      })
-      .catch((error) => {
-        console.warn(`STP sync failed during ${label}:`, error)
-      })
-  }
-
-  const refreshChannelsInBackground = (label: string) => {
-    void channelStore.getAllChannels().catch((error) => {
+  const refreshCurrentChannelInBackground = (label: string) => {
+    void channelStore.getCurrentChannel().catch((error) => {
       console.warn(`Channel refresh failed during ${label}:`, error)
     })
   }
@@ -117,6 +102,21 @@ export const useWalletStore = defineStore('wallet', () => {
     await walletStorage.setValue('pubkey', value)
     publicKey.value = value
   }
+
+  const readWalletIdentity = async (index: number) => {
+    const [addressErr, addressRes] = await walletManager.getWalletAddress(index)
+    if (addressErr || !addressRes?.address) {
+      throw addressErr || new Error('Failed to load wallet address')
+    }
+    const [pubkeyErr, pubkeyRes] = await walletManager.getWalletPubkey(index)
+    if (pubkeyErr || !pubkeyRes?.pubKey) {
+      throw pubkeyErr || new Error('Failed to load wallet public key')
+    }
+    return {
+      address: addressRes.address,
+      pubKey: pubkeyRes.pubKey,
+    }
+  }
   const setBtcFeeRate = async (value: number) => {
     btcFeeRate.value = value
   }
@@ -130,24 +130,80 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const setNetwork = async (value: Network) => {
-    const n = value === Network.LIVENET ? 'mainnet' : 'testnet'
-    const [err] = await walletManager.switchChain(n, password.value as string)
+    if (value === network.value) return true
+    const env = walletStorage.getValue('env') || 'test'
+    const previousNetwork = network.value
+    const previousConfig = getConfig(env, previousNetwork)
+    const targetConfig = getConfig(env, value)
 
-    await walletStorage.setValue('network', value)
-    network.value = value
-    const [_, addressRes] = await walletManager.getWalletAddress(accountIndex.value)
-    const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountIndex.value)
-    if (addressRes && pubkeyRes) {
-      const { address } = addressRes
-      await setAddress(address)
-      await setPublickey(pubkeyRes.pubKey)
+    const restorePreviousManager = async () => {
+      await walletManager.release()
+      const [restoreInitErr] = await walletManager.init(previousConfig, logLevel)
+      if (restoreInitErr) throw restoreInitErr
+      const [restoreUnlockErr] = await walletManager.unlockWallet(password.value as string)
+      if (restoreUnlockErr) throw restoreUnlockErr
+      if (walletId.value) {
+        const [restoreWalletErr] = await walletManager.switchWallet(
+          walletId.value,
+          password.value as string,
+        )
+        if (restoreWalletErr) throw restoreWalletErr
+      }
+      const [restoreAccountErr] = await walletManager.switchAccount(
+        Number(accountIndex.value ?? 0),
+      )
+      if (restoreAccountErr) throw restoreAccountErr
     }
 
-    const env = walletStorage.getValue('env') || 'test'
-    const config = getConfig(env, value)
-    await walletManager.release()
-    await walletManager.init(config, logLevel)
-    await channelStore.getAllChannels()
+    channelStore.invalidateCurrentChannel()
+    const [releaseErr] = await walletManager.release()
+    if (releaseErr) throw releaseErr
+
+    const [initErr] = await walletManager.init(targetConfig, logLevel)
+    if (initErr) {
+      await restorePreviousManager()
+      throw initErr
+    }
+    const [unlockErr] = await walletManager.unlockWallet(password.value as string)
+    if (unlockErr) {
+      await restorePreviousManager()
+      throw unlockErr
+    }
+
+    if (walletId.value) {
+      const [selectWalletErr] = await walletManager.switchWallet(
+        walletId.value,
+        password.value as string,
+      )
+      if (selectWalletErr) {
+        await restorePreviousManager()
+        throw selectWalletErr
+      }
+    }
+    const [selectAccountErr] = await walletManager.switchAccount(
+      Number(accountIndex.value ?? 0),
+    )
+    if (selectAccountErr) {
+      await restorePreviousManager()
+      throw selectAccountErr
+    }
+    let identity
+    try {
+      identity = await readWalletIdentity(Number(accountIndex.value ?? 0))
+      await walletStorage.batchUpdate({
+        network: value,
+        address: identity.address,
+        pubkey: identity.pubKey,
+      })
+    } catch (identityError) {
+      await restorePreviousManager()
+      throw identityError
+    }
+    network.value = value
+    address.value = identity.address
+    publicKey.value = identity.pubKey
+
+    refreshCurrentChannelInBackground('network switch')
 
     try {
       console.log(`Sending NETWORK_CHANGED message with payload: ${value}`)
@@ -205,28 +261,77 @@ export const useWalletStore = defineStore('wallet', () => {
   }
   const switchWallet = async (walletIdToSwitch: string) => {
     // 如果正在切换，直接返回
-    if (isSwitchingWallet.value) {
+    if (isSwitchingWallet.value || isSwitchingAccount.value) {
       console.log('Wallet switch already in progress, ignoring...')
       return
     }
+
+    const targetWallet = wallets.value.find(w => w.id === walletIdToSwitch)
+    const targetAccountIndex = targetWallet?.accounts[0]?.index
+    if (!targetWallet || targetAccountIndex === undefined) {
+      throw new Error(`Wallet ${walletIdToSwitch} is not available`)
+    }
+    const previousWalletId = walletId.value
+    const previousAccountIndex = Number(accountIndex.value ?? 0)
+    let managerWalletSwitched = false
+    let managerAccountSwitched = false
 
     try {
       isSwitchingWallet.value = true
       console.log('Starting wallet switch to:', walletIdToSwitch)
 
-      await walletManager.switchWallet(walletIdToSwitch, password.value as string)
-      const currentAccount = wallets.value.find(w => w.id === walletIdToSwitch)?.accounts[0];
-      await setWalletId(walletIdToSwitch);
-      await switchToAccount(currentAccount?.index || 0);
-      await getWalletInfo()
-      await syncWalletCatalog()
+      channelStore.invalidateCurrentChannel()
+      const [walletSwitchErr] = await walletManager.switchWallet(
+        walletIdToSwitch,
+        password.value as string,
+      )
+      if (walletSwitchErr) throw walletSwitchErr
+      managerWalletSwitched = true
 
-      // 发送账户变更事件（非关键操作）
+      const [accountSwitchErr] = await walletManager.switchAccount(targetAccountIndex)
+      if (accountSwitchErr) throw accountSwitchErr
+      managerAccountSwitched = true
+
+      const identity = await readWalletIdentity(targetAccountIndex)
+      await walletStorage.batchUpdate({
+        walletId: walletIdToSwitch,
+        accountIndex: targetAccountIndex,
+        address: identity.address,
+        pubkey: identity.pubKey,
+      })
+      walletId.value = walletIdToSwitch
+      accountIndex.value = targetAccountIndex
+      address.value = identity.address
+      publicKey.value = identity.pubKey
+
+      try {
+        await syncWalletCatalog()
+      } catch (catalogError) {
+        console.warn('Wallet catalog refresh failed after switch:', catalogError)
+      }
       safeSendAccountsChangedEvent(wallets.value)
+      refreshCurrentChannelInBackground('wallet switch')
 
       console.log('Wallet switch completed successfully')
     } catch (error) {
       console.error('Wallet switch failed:', error)
+      try {
+        if (managerWalletSwitched && previousWalletId && previousWalletId !== walletIdToSwitch) {
+          const [restoreWalletErr] = await walletManager.switchWallet(
+            previousWalletId,
+            password.value as string,
+          )
+          if (restoreWalletErr) throw restoreWalletErr
+        }
+        if (managerAccountSwitched && previousAccountIndex !== targetAccountIndex) {
+          const [restoreAccountErr] = await walletManager.switchAccount(previousAccountIndex)
+          if (restoreAccountErr) throw restoreAccountErr
+        }
+        channelStore.invalidateCurrentChannel()
+        refreshCurrentChannelInBackground('wallet switch rollback')
+      } catch (restoreError) {
+        console.warn('Failed to restore wallet manager after switch failure:', restoreError)
+      }
       throw error
     } finally {
       isSwitchingWallet.value = false
@@ -245,8 +350,7 @@ export const useWalletStore = defineStore('wallet', () => {
     await setLocked(false)
     await setChain(Chain.BTC)
     await setPassword(password)
-    runStpSyncInBackground('createWallet channel start', () => satsnetStp.start())
-    refreshChannelsInBackground('createWallet')
+    refreshCurrentChannelInBackground('createWallet')
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
     )
@@ -295,7 +399,32 @@ export const useWalletStore = defineStore('wallet', () => {
 
     const processedMnemonic = cleanMnemonic(mnemonic)
 
-    const [err, res] = await walletManager.importWallet(processedMnemonic, password)
+    let recovered = false
+    let res: { walletId: string } | undefined
+    const shouldDiscoverRoot = !hasWallet.value || accountRecovery.value?.status === 'pending'
+    if (shouldDiscoverRoot) {
+      const [recoveryErr, recovery] = await walletManager.recoverAccountManagementFromRootMnemonic(
+        processedMnemonic,
+        password
+      )
+      if (recoveryErr || !recovery) {
+        return [recoveryErr || new Error('Root account discovery failed'), undefined]
+      }
+      accountRecovery.value = { status: recovery.status, code: recovery.code }
+      await walletStorage.setValue('accountRecovery', accountRecovery.value)
+      if (recovery.status === 'found') {
+        if (!recovery.walletId) {
+          return [new Error('Recovered account has no current wallet'), undefined]
+        }
+        recovered = true
+        res = { walletId: recovery.walletId }
+      }
+    }
+
+    let err: Error | undefined
+    if (!recovered) {
+      ;[err, res] = await walletManager.importWallet(processedMnemonic, password)
+    }
     if (err || !res) {
       console.error(err)
       return [err, undefined]
@@ -308,8 +437,7 @@ export const useWalletStore = defineStore('wallet', () => {
     // await setNetwork(Network.TESTNET)
     await setChain(Chain.BTC)
     await setPassword(password)
-    runStpSyncInBackground('importWallet channel start', () => satsnetStp.start())
-    refreshChannelsInBackground('importWallet')
+    refreshCurrentChannelInBackground('importWallet')
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
     )
@@ -321,17 +449,19 @@ export const useWalletStore = defineStore('wallet', () => {
       const { address } = addressRes
       await setAddress(address)
       await setPublickey(pubkeyRes.pubKey)
-      const walletLen = _wallets.length
-      _wallets.push({
-        id: walletId,
-        name: `Wallet ${walletLen + 1}`,
-        accounts: [{
-          index: 0,
-          name: `Account ${0 + 1}`,
-          address: address,
-          pubKey: pubkeyRes.pubKey
-        }]
-      })
+      if (!recovered) {
+        const walletLen = _wallets.length
+        _wallets.push({
+          id: walletId,
+          name: `Wallet ${walletLen + 1}`,
+          accounts: [{
+            index: 0,
+            name: `Account ${0 + 1}`,
+            address: address,
+            pubKey: pubkeyRes.pubKey
+          }]
+        })
+      }
     }
     wallets.value = _wallets
     await walletStorage.setValue('wallets', _wallets)
@@ -368,9 +498,8 @@ export const useWalletStore = defineStore('wallet', () => {
       await setLocked(false)
       await setPassword(password)
       await syncWalletCatalog()
-      runStpSyncInBackground('unlockWallet channel start', () => satsnetStp.start())
       await switchToAccount(accountIndex.value)
-      refreshChannelsInBackground('unlockWallet')
+      refreshCurrentChannelInBackground('unlockWallet')
       return [undefined, result]
     } else if (isAlreadyUnlocked) {
       // 钱包已经解锁，但前端状态可能是锁定的，需要同步状态
@@ -379,9 +508,8 @@ export const useWalletStore = defineStore('wallet', () => {
       await setLocked(false)
       await setPassword(password)
       await syncWalletCatalog()
-      runStpSyncInBackground('unlockWallet existing channel start', () => satsnetStp.start())
       await switchToAccount(accountIndex.value)
-      refreshChannelsInBackground('unlockWallet existing')
+      refreshCurrentChannelInBackground('unlockWallet existing')
       // 返回成功，不返回错误
       return [undefined, { alreadyUnlocked: true, message: '钱包已解锁，状态已同步' }]
     }
@@ -454,27 +582,47 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const switchToAccount = async (accountId: number) => {
     // 如果正在切换账户，直接返回
-    if (isSwitchingAccount.value) {
+    if (isSwitchingAccount.value || isSwitchingWallet.value) {
       console.log('Account switch already in progress, ignoring...')
       return
     }
+
+    const previousAccountIndex = Number(accountIndex.value ?? 0)
+    let managerAccountSwitched = false
 
     try {
       isSwitchingAccount.value = true
       console.log('Starting account switch to:', accountId)
 
-      await walletManager.switchAccount(accountId)
-      const [_, addressRes] = await walletManager.getWalletAddress(accountId)
-      const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountId)
-      if (addressRes && pubkeyRes) {
-        await setAccountIndex(accountId)
-        await setAddress(addressRes.address)
-        await setPublickey(pubkeyRes.pubKey)
-      }
+      channelStore.invalidateCurrentChannel()
+      const [accountSwitchErr] = await walletManager.switchAccount(accountId)
+      if (accountSwitchErr) throw accountSwitchErr
+      managerAccountSwitched = true
+      const identity = await readWalletIdentity(accountId)
+      await walletStorage.batchUpdate({
+        accountIndex: accountId,
+        address: identity.address,
+        pubkey: identity.pubKey,
+      })
+      accountIndex.value = accountId
+      address.value = identity.address
+      publicKey.value = identity.pubKey
+
+      refreshCurrentChannelInBackground('account switch')
 
       console.log('Account switch completed successfully')
     } catch (error) {
       console.error('Account switch failed:', error)
+      if (managerAccountSwitched && previousAccountIndex !== accountId) {
+        try {
+          const [restoreAccountErr] = await walletManager.switchAccount(previousAccountIndex)
+          if (restoreAccountErr) throw restoreAccountErr
+          channelStore.invalidateCurrentChannel()
+          refreshCurrentChannelInBackground('account switch rollback')
+        } catch (restoreError) {
+          console.warn('Failed to restore account after switch failure:', restoreError)
+        }
+      }
       throw error
     } finally {
       isSwitchingAccount.value = false
@@ -585,6 +733,7 @@ export const useWalletStore = defineStore('wallet', () => {
     setAccountIndex,
     createWallet,
     importWallet,
+    accountRecovery,
     getWalletInfo,
     deleteWallet,
     password,

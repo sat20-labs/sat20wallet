@@ -334,6 +334,11 @@ func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.
 		return "", nil, 0, err
 	}
 
+	logID := ""
+	if !resv.IsInitiator {
+		logID = p.beginOperationLogBestEffort(remoteExpandOperationLogCreate(&resv, utxo))
+	}
+
 	for {
 		channelID := resv.Channel.ChannelId
 		if channel.PeerRPC == nil {
@@ -346,6 +351,12 @@ func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.
 			break
 		}
 		channel.ResvId = resv.Id
+		p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_SPLICING, resv.Id)
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: peerAcceptedSplicingMessage(&resv, "channel expansion"),
+			Details: map[string]string{"reservation_id": fmt.Sprintf("%d", resv.Id)},
+		})
 
 		err = p.FunderProcessAcceptSplicingIn(&resv)
 		if err != nil {
@@ -408,7 +419,16 @@ func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.
 	if err == nil {
 		anchorTxID = resv.AnchorTxId()
 		Log.Infof("expand anchor TxId: %s", anchorTxID)
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Channel expansion submitted; waiting for confirmation",
+			TxID:    anchorTxID,
+			Details: map[string]string{"txid": anchorTxID},
+		})
 	} else {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()},
+		})
 		_ = p.saveChannelToDB(resv.OldChannel)
 		p.enableChannel(resv.OldChannel)
 		p.DelResvWithId(resv.Id)

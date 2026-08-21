@@ -6,9 +6,10 @@ import { useChannelStore } from '@/store/channel'
 import { useL1Store } from '@/store/l1'
 import { useAssetOperations } from '@/composables/useAssetOperations'
 import walletManager from '@/utils/sat20'
-import satsnetStp from '@/utils/stp'
+import satsnetStp, { parseLockExpandRequiredAmount } from '@/utils/stp'
 import { sleep } from 'radash'
 import { useQueryClient } from '@tanstack/vue-query'
+import { useI18n } from 'vue-i18n'
 
 export function useAssetActions() {
   const walletStore = useWalletStore()
@@ -16,6 +17,7 @@ export function useAssetActions() {
   const l1Store = useL1Store()
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const { t } = useI18n()
   const { address, feeRate, btcFeeRate } = storeToRefs(walletStore)
 
   // const { handleAssetOperation } = useAssetOperations()
@@ -60,7 +62,7 @@ export function useAssetActions() {
       return
     }
     refreshL1Assets()
-    await channelStore.getAllChannels()
+    await channelStore.getCurrentChannel()
     toast({
       title: 'Success',
       description: 'Splicing In successful',
@@ -85,7 +87,7 @@ export function useAssetActions() {
       return
     }
     refreshL1Assets()
-    await channelStore.getAllChannels()
+    await channelStore.getCurrentChannel()
     toast({
       title: 'Success',
       description: 'Splicing Out successful',
@@ -124,7 +126,7 @@ export function useAssetActions() {
     }
     loading.value = false
     refreshL1Assets()
-    await channelStore.getAllChannels()
+    await channelStore.getCurrentChannel()
     toast({
       title: 'Success',
       description: 'Deposit successful',
@@ -161,7 +163,7 @@ export function useAssetActions() {
 
     loading.value = false
     refreshL2Assets()
-    await channelStore.getAllChannels()
+    await channelStore.getCurrentChannel()
     toast({
       title: 'Success',
       description: 'Withdraw successful',
@@ -184,7 +186,7 @@ export function useAssetActions() {
       return
     }
     await sleep(1000)
-    await channelStore.getAllChannels()
+    await channelStore.getCurrentChannel()
     refreshL2Assets()
     toast({
       title: 'Success',
@@ -198,11 +200,14 @@ export function useAssetActions() {
     loading.value = true
     const [err] = await satsnetStp.lockToChannel(chanid, asset_name, amt, [], feeUtxos)
     if (err) {
-      handleError(err.message)
+      const expandRequiredAmount = parseLockExpandRequiredAmount(err.message)
+      if (expandRequiredAmount === undefined) {
+        handleError(err.message)
+      }
       loading.value = false
-      return
+      return { ok: false as const, error: err.message, expandRequiredAmount }
     }
-    await channelStore.getAllChannels()
+    await channelStore.getCurrentChannel()
     refreshL2Assets()
     toast({
       title: 'Success',
@@ -210,25 +215,42 @@ export function useAssetActions() {
       duration: 1500,
     })
     loading.value = false
+    return { ok: true as const }
   }
 
   const lockUtxoWithExpand = async ({ chanid, amt, asset_name, feeRate = btcFeeRate.value }: any) => {
     loading.value = true
-    const [err] = await satsnetStp.lockToChannelWithExpand(chanid, asset_name, amt, feeRate)
+    const [err, result] = await satsnetStp.lockToChannelWithExpand(chanid, asset_name, amt, feeRate)
     if (err) {
       handleError(err.message)
       loading.value = false
-      return false
+      return { ok: false as const, error: err.message }
     }
-    await channelStore.getAllChannels()
-    refreshL2Assets()
+
+    const reservationId = result?.id ?? null
+    const lockTxId = result?.lockTxId ?? null
+    try {
+      await channelStore.getCurrentChannel()
+      await refreshL2Assets()
+    } catch (refreshError) {
+      // The WASM call already submitted the operation. A refresh failure must
+      // not turn it into a retryable error and risk a duplicate reservation.
+      console.warn('Channel refresh failed after lock-with-expand submission:', refreshError)
+    }
     toast({
-      title: 'Success',
-      description: 'Lock UTXO successful',
-      duration: 1500,
+      title: t('messages.txSubmitted'),
+      description: reservationId !== null
+        ? t('assetOperationDialog.lockExpandSubmittedWithId', { id: reservationId })
+        : t('assetOperationDialog.lockExpandSubmitted'),
+      duration: 3000,
     })
     loading.value = false
-    return true
+    return {
+      ok: true as const,
+      status: 'pending' as const,
+      reservationId,
+      lockTxId,
+    }
   }
 
 

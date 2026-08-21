@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -134,6 +136,31 @@ func NewSatsNetDKVSClient(scheme, host, proxy string, http HttpClient) *SatsNetD
 		http = &NetClient{Client: nethttp.DefaultClient}
 	}
 	return &SatsNetDKVSClient{RESTClient: NewRESTClient(scheme, host, proxy, http)}
+}
+
+// GetBestHeight returns the best-chain height reported by the same SatoshiNet
+// endpoint that serves DKVS. DKVS record expiry must be checked against this
+// chain tip, not against a wallet's local synchronization progress.
+func (p *SatsNetDKVSClient) GetBestHeight() (uint64, error) {
+	if p == nil || p.RESTClient == nil || p.Http == nil {
+		return 0, fmt.Errorf("DKVS endpoint is not configured")
+	}
+	url := p.GetUrl("/btc/block/bestblockheight")
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		return 0, fmt.Errorf("query DKVS endpoint bestheight: %w", err)
+	}
+	var result indexerwire.BestBlockHeightResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		return 0, fmt.Errorf("decode DKVS endpoint bestheight: %w", err)
+	}
+	if result.Code != 0 {
+		return 0, fmt.Errorf("DKVS endpoint bestheight: %s", result.Msg)
+	}
+	if result.Data < 0 {
+		return 0, fmt.Errorf("DKVS endpoint returned invalid bestheight %d", result.Data)
+	}
+	return uint64(result.Data), nil
 }
 
 func (p *SatsNetDKVSClient) SyncFiltered(req DKVSSyncRequest) (*DKVSSyncPage, error) {
@@ -944,7 +971,7 @@ func (p *SatsNetDKVSClient) getPathJSON(path string, out interface{}) error {
 }
 
 func (p *SatsNetDKVSClient) getJSON(url *URL, out interface{}) error {
-	rsp, err := p.Http.SendGetRequest(url)
+	rsp, err := p.sendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return err
@@ -958,7 +985,7 @@ func (p *SatsNetDKVSClient) postJSON(path string, req interface{}, out interface
 		return err
 	}
 	url := p.GetUrl(path)
-	rsp, err := p.Http.SendPostRequest(url, buff)
+	rsp, err := p.sendPostRequest(url, buff)
 	if err != nil {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
 		return err
@@ -971,17 +998,41 @@ func (p *SatsNetDKVSClient) deleteJSON(path string, req interface{}, out interfa
 	if err != nil {
 		return err
 	}
-	client, ok := p.Http.(httpDeleteClient)
-	if !ok {
+	url := p.GetUrl(path)
+	var rsp []byte
+	if client, ok := p.Http.(contextHTTPDeleteClient); ok {
+		rsp, err = client.SendDeleteRequestContext(p.requestContext(), url, buff)
+	} else if client, ok := p.Http.(httpDeleteClient); ok {
+		rsp, err = client.SendDeleteRequest(url, buff)
+	} else {
 		return fmt.Errorf("http client does not support DELETE")
 	}
-	url := p.GetUrl(path)
-	rsp, err := client.SendDeleteRequest(url, buff)
 	if err != nil {
 		Log.Errorf("SendDeleteRequest %v failed. %v", url, err)
 		return err
 	}
 	return decodeDKVSResp(url, rsp, out)
+}
+
+func (p *SatsNetDKVSClient) requestContext() context.Context {
+	if p != nil && p.manager != nil {
+		return p.manager.requestContext()
+	}
+	return context.Background()
+}
+
+func (p *SatsNetDKVSClient) sendGetRequest(url *URL) ([]byte, error) {
+	if client, ok := p.Http.(ContextHttpClient); ok {
+		return client.SendGetRequestContext(p.requestContext(), url)
+	}
+	return p.Http.SendGetRequest(url)
+}
+
+func (p *SatsNetDKVSClient) sendPostRequest(url *URL, body []byte) ([]byte, error) {
+	if client, ok := p.Http.(ContextHttpClient); ok {
+		return client.SendPostRequestContext(p.requestContext(), url, body)
+	}
+	return p.Http.SendPostRequest(url, body)
 }
 
 func decodeDKVSResp(url *URL, rsp []byte, out interface{}) error {

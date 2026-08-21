@@ -153,7 +153,7 @@ func (p *Manager) accountManagementRootWalletLocked() (*WalletInfo, error) {
 			return info, nil
 		}
 	}
-	return nil, fmt.Errorf("account management wallet is unavailable")
+	return nil, ErrAccountManagementWalletUnavailable
 }
 
 func (p *Manager) newAccountManagementDeviceID() ([]byte, error) {

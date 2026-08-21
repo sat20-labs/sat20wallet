@@ -5,6 +5,7 @@ import { psbt2tx } from '@/utils/btc'
 import sat20Wallet from '@/utils/sat20'
 import { buildL1BatchSellOrder } from '@/lib/l1-orderbook-psbt'
 import { useWalletStore } from '@/store'
+import { beginNamedPwaOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
 
 
 class Service {
@@ -39,32 +40,56 @@ class Service {
   async pushTx(rawtx: string): Promise<[Error | undefined, string | undefined]> {
 
     const network = walletStorage.getValue('network')
+    const operation = await beginNamedPwaOperation({
+      category: 'transaction',
+      action: 'broadcast_raw_tx',
+      title: 'Broadcast transaction',
+      summary: 'Broadcasting a signed transaction',
+      parameters: { network: String(network || '') },
+      successMessage: 'Transaction broadcast',
+    })
     const res = await ordxApi.pushTx({ hex: rawtx, network })
     if (res.code === 0) {
+      await finishPwaOperation(operation, null, { txid: res.data })
       return [undefined, res.data]
     } else {
-      return [new Error(res.msg), undefined]
+      const pushError = new Error(res.msg)
+      await finishPwaOperation(operation, pushError)
+      return [pushError, undefined]
     }
   }
 
   async pushPsbt(psbtHex: string): Promise<[Error | undefined, string | undefined]> {
 
+    const network = walletStorage.getValue('network')
+    const operation = await beginNamedPwaOperation({
+      category: 'transaction',
+      action: 'broadcast_psbt',
+      title: 'Broadcast signed PSBT',
+      summary: 'Extracting and broadcasting a signed PSBT transaction',
+      parameters: { network: String(network || '') },
+      successMessage: 'PSBT transaction broadcast',
+    })
     console.log('pushPsbt', psbtHex)
     const [extractErr, extractRes] = await sat20Wallet.extractTxFromPsbt(psbtHex)
     console.log('extractErr', extractErr)
     console.log('extractRes', extractRes)
 
     if (extractErr || !extractRes) {
-      return [extractErr || new Error('提取交易失败'), undefined]
+      const extractionError = extractErr || new Error('提取交易失败')
+      await finishPwaOperation(operation, extractionError)
+      return [extractionError, undefined]
     }
     const txHex = extractRes.tx
-    const network = walletStorage.getValue('network')
     const res = await ordxApi.pushTx({ hex: txHex, network })
     console.log('res', res)
     if (res.code === 0) {
+      await finishPwaOperation(operation, null, { txid: res.data })
       return [undefined, res.data]
     } else {
-      return [new Error(res.msg), undefined]
+      const pushError = new Error(res.msg)
+      await finishPwaOperation(operation, pushError)
+      return [pushError, undefined]
     }
   }
 
@@ -99,11 +124,20 @@ class Service {
     address: string,
     network: string,
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
+    const operation = await beginNamedPwaOperation({
+      category: 'dex',
+      action: 'build_sell_order_l1',
+      title: 'Create L1 sell order',
+      summary: 'Creating a Bitcoin sell order',
+      parameters: { utxo_count: String(utxos.length), address, network },
+    })
     try {
       const wallet = useWalletStore()
       const result = buildL1BatchSellOrder(utxos, address, network, wallet.publicKey as string)
+      await finishPwaOperation(operation, null)
       return [undefined, result]
     } catch (error) {
+      await finishPwaOperation(operation, error as Error)
       return [error as Error, undefined]
     }
   }
@@ -159,12 +193,12 @@ class Service {
     return sat20Wallet.addOutputsToPsbt(psbtHex, utxos)
   }
 
-  async lockUtxo(address: string, utxo: any, reason?: string): Promise<[Error | undefined, any | undefined]> {
+  async lockUtxo(address: string, utxo: any, reason: string): Promise<[Error | undefined, any | undefined]> {
 
     return sat20Wallet.lockUtxo(address, utxo, reason)
   }
 
-  async lockUtxo_SatsNet(address: string, utxo: any, reason?: string): Promise<[Error | undefined, any | undefined]> {
+  async lockUtxo_SatsNet(address: string, utxo: any, reason: string): Promise<[Error | undefined, any | undefined]> {
 
     return sat20Wallet.lockUtxo_SatsNet(address, utxo, reason)
   }

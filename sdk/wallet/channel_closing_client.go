@@ -3,6 +3,7 @@ package wallet
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/wire"
@@ -162,18 +163,32 @@ func (p *Manager) CloserInitCoopCloseProcess(channelID string, feeRate int64) (s
 	channel.Mutex.Lock()
 	defer channel.Mutex.Unlock()
 
-	if err := p.SaveBackupChannelToDB(&channel.ChannelInDB); err != nil {
-		return "", "", err
-	}
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
 	}
+	logID := p.beginOperationLogBestEffort(OperationLogCreate{
+		Category: "channel",
+		Action:   "close_channel",
+		Title:    "Close channel",
+		Summary:  "Preparing cooperative channel close",
+		Parameters: map[string]string{
+			"channel_id": channelID,
+			"fee_rate":   strconv.FormatInt(feeRate, 10),
+		},
+	})
+
+	if err := p.SaveBackupChannelToDB(&channel.ChannelInDB); err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
+		return "", "", err
+	}
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", "", err
 	}
 
 	resv := ClosingReservation{Channel: channel}
+	resv.ChannelId = channel.ChannelId
 	resv.InitRuntime()
 	resv.Status = RS_INIT
 	resv.IsInitiator = true
@@ -183,6 +198,7 @@ func (p *Manager) CloserInitCoopCloseProcess(channelID string, feeRate int64) (s
 	resv.RevealPrivKey = priv.Serialize()
 
 	if err := p.AllowClose(&resv); err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", "", err
 	}
 
@@ -195,10 +211,12 @@ func (p *Manager) CloserInitCoopCloseProcess(channelID string, feeRate int64) (s
 	}
 	msg, err := json.Marshal(resv.Req)
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", "", err
 	}
 	resv.ReqSig, err = resv.LocalWallet().SignMessage(msg)
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", "", err
 	}
 
@@ -213,6 +231,8 @@ func (p *Manager) CloserInitCoopCloseProcess(channelID string, feeRate int64) (s
 			break
 		}
 		channel.ResvId = resv.Id
+		p.bindOperationLogReservationBestEffort(logID, RESV_TYPE_CLOSE, resv.Id)
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogRunning, Message: "Peer accepted cooperative close request"})
 
 		if _, err = p.FunderProcessClosingSigned(&resv); err != nil {
 			Log.Errorf("funderProcessClosingSigned failed. %v", err)
@@ -249,6 +269,15 @@ func (p *Manager) CloserInitCoopCloseProcess(channelID string, feeRate int64) (s
 			Log.Errorf("BroadCastTx fundingTX failed. %v", err)
 			err = nil
 		}
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "De-anchor transaction broadcast; waiting for confirmation",
+			TxID:    resv.DeAnchorTx.TxID(),
+			Details: map[string]string{
+				"deanchor_txid": resv.DeAnchorTx.TxID(),
+				"close_txid":    resv.CloseTx.TxID(),
+			},
+		})
 
 		p.SendClosingBroadcastedReq(&resv)
 		resv.Channel.Status = CS_CLOSING_DEANCHOR_BROADCASTED
@@ -258,6 +287,7 @@ func (p *Manager) CloserInitCoopCloseProcess(channelID string, feeRate int64) (s
 
 	channel.ResvId = 0
 	if err != nil {
+		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		p.DelResvWithId(resv.Id)
 		if resv.Id != 0 && channel.PeerRPC != nil {
 			_ = channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_CLOSE, -1, err.Error())

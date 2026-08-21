@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"errors"
 	"testing"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -49,7 +50,7 @@ func assertInitialAccountManagementStatus(t *testing.T, manager *Manager, wallet
 	}
 }
 
-func TestImportFirstMnemonicWalletAutomaticallyEnablesAccountManagement(t *testing.T) {
+func TestImportFirstMnemonicWalletDoesNotInitializeAccountManagement(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
@@ -59,6 +60,12 @@ func TestImportFirstMnemonicWalletAutomaticallyEnablesAccountManagement(t *testi
 		"password",
 	)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if status := manager.GetAccountManagementStatus(); status.Active {
+		t.Fatalf("ordinary wallet import initialized account management: %+v", status)
+	}
+	if err := manager.InitializeAccountManagement("password"); err != nil {
 		t.Fatal(err)
 	}
 	assertInitialAccountManagementStatus(t, manager, walletID)
@@ -77,4 +84,46 @@ func TestCreateFirstMnemonicWalletAutomaticallyEnablesAccountManagement(t *testi
 		t.Fatal("created wallet has no mnemonic")
 	}
 	assertInitialAccountManagementStatus(t, manager, walletID)
+}
+
+func TestImportWalletRejectsDuplicateFingerprintFromLockedCatalog(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+	manager := newAccountManagementAutoTestManager(t)
+	if _, err := manager.ImportWallet(mnemonic, "password"); err != nil {
+		t.Fatal(err)
+	}
+	manager.wallet = nil
+	for _, info := range manager.walletInfoMap {
+		info.Wallet = nil
+	}
+	before := len(manager.walletInfoMap)
+	if _, err := manager.ImportWallet(mnemonic, "password"); !errors.Is(err, ErrWalletAlreadyExists) {
+		t.Fatalf("duplicate import error=%v", err)
+	}
+	if len(manager.walletInfoMap) != before || manager.wallet != nil {
+		t.Fatal("duplicate import changed the locked wallet catalog")
+	}
+	if _, err := manager.ImportWallet(
+		"legal winner thank year wave sausage worth useful legal winner thank yellow",
+		"wrong-password",
+	); !errors.Is(err, ErrWalletCatalogUnverifiable) {
+		t.Fatalf("unverifiable catalog error=%v", err)
+	}
+}
+
+func TestImportPrivateKeyRejectsDuplicateFingerprint(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager := newAccountManagementAutoTestManager(t)
+	const privateKey = "1d5da8898fa894a056473e19e18bb2fa907172d25424cea6a0894312b2801bcc"
+	if _, err := manager.ImportWalletWithPrivateKey(privateKey, "password"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ImportWalletWithPrivateKey(privateKey, "password"); !errors.Is(err, ErrWalletAlreadyExists) {
+		t.Fatalf("duplicate private-key import error=%v", err)
+	}
 }

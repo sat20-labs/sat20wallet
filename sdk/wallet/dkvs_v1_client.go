@@ -43,7 +43,7 @@ func (p *SatsNetDKVSClient) getDKVSV1(path string, query map[string]string, out 
 	} else {
 		url := p.GetUrl(path)
 		url.Query = query
-		raw, err = p.Http.SendGetRequest(url)
+		raw, err = p.sendGetRequest(url)
 	}
 	if err != nil {
 		return err
@@ -63,7 +63,7 @@ func (p *SatsNetDKVSClient) postDKVSV1(path string, req interface{}, out interfa
 	if transport, ok := p.Http.(dkvsV1HTTPTransport); ok {
 		raw, err = transport.SendDKVSV1Post(path, encoded)
 	} else {
-		raw, err = p.Http.SendPostRequest(p.GetUrl(path), encoded)
+		raw, err = p.sendPostRequest(p.GetUrl(path), encoded)
 	}
 	if err != nil {
 		return err
@@ -252,6 +252,17 @@ func batchRequiresLocalEndpoint(mutations []dkvsindexer.CASMutation) bool {
 // the outbox entry only after a verified response.
 func (p *SatsNetDKVSClient) PutRecordBatchCASV1(mutations []dkvsindexer.CASMutation,
 	pathConditions []dkvsindexer.PathWritePrecondition) (*dkvsindexer.WriteResult, error) {
+	if len(mutations) == 0 || mutations[0].Record == nil {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	return p.putRecordBatchCASV1WithOrigin(mutations, pathConditions, dkvsOutboxOrigin{
+		Key: mutations[0].Record.Key,
+	})
+}
+
+func (p *SatsNetDKVSClient) putRecordBatchCASV1WithOrigin(mutations []dkvsindexer.CASMutation,
+	pathConditions []dkvsindexer.PathWritePrecondition,
+	origin dkvsOutboxOrigin) (*dkvsindexer.WriteResult, error) {
 
 	endpointID := ""
 	if batchRequiresLocalEndpoint(mutations) {
@@ -270,7 +281,7 @@ func (p *SatsNetDKVSClient) PutRecordBatchCASV1(mutations []dkvsindexer.CASMutat
 	}
 	store := newDKVSReplicaStore(p.manager.owner.db)
 	entry, err := newDKVSBatchOutboxEntry(p.replicaNamespace, mutations,
-		pathConditions, endpointID)
+		pathConditions, endpointID, origin)
 	if err != nil {
 		return nil, err
 	}
@@ -282,11 +293,11 @@ func (p *SatsNetDKVSClient) PutRecordBatchCASV1(mutations []dkvsindexer.CASMutat
 	}
 	result, err := p.putRecordBatchCASV1Raw(mutations, pathConditions, endpointID)
 	if err != nil {
-		_ = store.markOutboxFailure(entry, err)
+		_ = markDKVSOutboxSubmissionFailure(store, entry, err)
 		return nil, err
 	}
 	if err := store.applyWriteResultAndAck(entry, result); err != nil {
-		_ = store.markOutboxFailure(entry, err)
+		_ = markDKVSOutboxSubmissionFailure(store, entry, err)
 		return nil, fmt.Errorf("commit DKVS batch replica: %w", err)
 	}
 	return result, nil

@@ -1094,6 +1094,29 @@ func (p *RecycleContractRunTime) updateContractStatus(item *SwapHistoryItem) {
 	// 整体状态在外部保存
 }
 
+func (p *RecycleContractRunTime) DisableItem(input InvokeHistoryItem) {
+	item, ok := input.(*SwapHistoryItem)
+	if !ok {
+		return
+	}
+
+	p.TotalInputAssets = subtractDecimalNonNegative(p.TotalInputAssets, item.InAmt)
+	p.TotalInputSats = subtractInt64NonNegative(p.TotalInputSats, item.InValue)
+	p.AssetAmtInPool = subtractDecimalNonNegative(p.AssetAmtInPool, item.InAmt)
+	p.SatsValueInPool = subtractInt64NonNegative(p.SatsValueInPool, item.InValue)
+
+	invoker := p.loadInvokerInfo(item.Address)
+	if removeItemFromInvokerHistory(invoker.History, item.Id) && invoker.InvokeCount > 0 {
+		invoker.InvokeCount--
+	}
+	if item.Reason == INVOKE_REASON_NORMAL {
+		invoker.InvokeAmt = subtractDecimalNonNegative(invoker.InvokeAmt, item.InAmt)
+		invoker.InvokeValue = subtractInt64NonNegative(invoker.InvokeValue, item.InValue)
+	}
+	invoker.UpdateTime = time.Now().Unix()
+	saveContractInvokerStatus(p.stp.GetDB(), p.URL(), invoker)
+}
+
 // 不需要写入数据库的缓存数据，不能修改任何需要保存数据库的变量
 func (p *RecycleContractRunTime) addItem(item *SwapHistoryItem) {
 	if item.Reason == INVOKE_REASON_NORMAL {
@@ -1485,7 +1508,10 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 	if len(dealInfo.ItemIDs) != 0 {
 		addrItems := make(map[string][]*InvokeItem)
 		for _, id := range dealInfo.ItemIDs {
-			item := p.loadHistoryRewardItemByID(id)
+			item := p.findRewardItemByID(id)
+			if item == nil {
+				item = p.loadHistoryRewardItemByID(id)
+			}
 			if item == nil || item.Finished() {
 				continue
 			}
@@ -1527,6 +1553,25 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 		}
 	}
 
+	p.pruneFinishedRewardItems()
+
+	p.CheckPoint = dealInfo.InvokeCount
+	p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
+	p.CheckPointBlockL1 = dealInfo.Height
+
+	p.refreshTime = 0
+}
+
+func (p *RecycleContractRunTime) findRewardItemByID(id int64) *InvokeItem {
+	for _, rewardMap := range p.rewardMap {
+		if item, ok := rewardMap[id]; ok {
+			return item
+		}
+	}
+	return nil
+}
+
+func (p *RecycleContractRunTime) pruneFinishedRewardItems() {
 	for address, rewardMap := range p.rewardMap {
 		deleted := make([]int64, 0)
 		for id, item := range rewardMap {
@@ -1541,21 +1586,19 @@ func (p *RecycleContractRunTime) updateWithDealInfo_reward(dealInfo *DealInfo) {
 			delete(p.rewardMap, address)
 		}
 	}
-
-	p.CheckPoint = dealInfo.InvokeCount
-	p.AssetMerkleRoot = dealInfo.RuntimeMerkleRoot
-	p.CheckPointBlockL1 = dealInfo.Height
-
-	p.refreshTime = 0
 }
 
 func (p *RecycleContractRunTime) markRewardItemDealt(item *InvokeItem, txId string) {
+	markRewardItemDealtState(item, txId)
+	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
+}
+
+func markRewardItemDealtState(item *InvokeItem, txId string) {
 	item.Done = ITEM_STATUS_DEALT
 	item.OutTxId = txId
 	item.RemainingAmt = nil
 	item.RemainingValue = 0
 	item.ToL1 = true
-	SaveContractInvokeHistoryItem(p.stp.GetDB(), p.URL(), item)
 }
 
 func (p *RecycleContractRunTime) loadHistoryRewardItemByID(id int64) *InvokeItem {

@@ -72,6 +72,11 @@ func (p *Manager) SignTx_SatsNet(tx *swire.MsgTx,
 
 func (p *Manager) SignContractTx_SatsNet(tx *swire.MsgTx,
 	prevFetcher stxscript.PrevOutputFetcher, gasAssetName string, gasFeeAmount int64) (*swire.MsgTx, error) {
+	return SignContractTxWithWallet_SatsNet(p.wallet, tx, prevFetcher, gasAssetName, gasFeeAmount)
+}
+
+func SignContractTxWithWallet_SatsNet(localWallet common.Wallet, tx *swire.MsgTx,
+	prevFetcher stxscript.PrevOutputFetcher, gasAssetName string, gasFeeAmount int64) (*swire.MsgTx, error) {
 	var allowedBurn swire.TxAssets
 	if gasFeeAmount > 0 {
 		gasName := swire.NewAssetNameFromString(gasAssetName)
@@ -83,7 +88,7 @@ func (p *Manager) SignContractTx_SatsNet(tx *swire.MsgTx,
 			Amount: *indexer.NewDefaultDecimal(gasFeeAmount),
 		}}
 	}
-	return SignTxWithWalletAllowAssetBurn_SatsNet(p.wallet, tx, prevFetcher, allowedBurn)
+	return SignTxWithWalletAllowAssetBurn_SatsNet(localWallet, tx, prevFetcher, allowedBurn)
 }
 
 func SignTxWithWallet_SatsNet(localWallet common.Wallet, tx *swire.MsgTx,

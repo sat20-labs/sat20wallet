@@ -75,14 +75,24 @@ import { SAT20_DAPP_PROTOCOL } from '@/types/sat20-dapp-connect'
 import { addAuthorizedOrigin } from '@/lib/authorized-origins'
 
 const DEFAULT_MARKET_URL = import.meta.env.DEV
-  ? `${window.location.protocol}//${window.location.hostname}:3006`
-  : 'https://satsnet.ordx.market'
+  ? `${window.location.protocol}//${window.location.hostname}:3006/swap/`
+  : 'https://satsnet.ordx.market/swap/'
 
 const router = useRouter()
 const walletStore = useWalletStore()
 
 const resolveMarketUrl = () => {
-  const baseUrl = import.meta.env.VITE_SAT20_MARKET_URL || DEFAULT_MARKET_URL
+  const configuredUrl = import.meta.env.VITE_SAT20_MARKET_URL || DEFAULT_MARKET_URL
+  let baseUrl = configuredUrl
+  try {
+    const url = new URL(configuredUrl)
+    if (url.pathname === '/' || /^\/market\/?$/.test(url.pathname)) {
+      url.pathname = '/swap/'
+    }
+    baseUrl = url.href
+  } catch {
+    // Keep the existing fallback below for a relative/custom URL.
+  }
   const network = walletStore.network === Network.TESTNET ? 'testnet' : 'mainnet'
 
   try {

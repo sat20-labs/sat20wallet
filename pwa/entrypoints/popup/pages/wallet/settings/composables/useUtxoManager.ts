@@ -101,9 +101,9 @@ export function useUtxoManager() {
     let err
 
     if (tab === 'btc') {
-      [err] = await walletManager.lockUtxo(addressStr.value, utxoInput)
+      [err] = await walletManager.lockUtxo(addressStr.value, utxoInput, 'manual')
     } else {
-      [err] = await walletManager.lockUtxo_SatsNet(addressStr.value, utxoInput)
+      [err] = await walletManager.lockUtxo_SatsNet(addressStr.value, utxoInput, 'manual')
     }
 
     lockLoading.value = false

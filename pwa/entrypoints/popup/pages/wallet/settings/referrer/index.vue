@@ -36,7 +36,7 @@
           <Input id="feeRate" v-model="btcFeeRate" type="number" min="0" max="100"
             :placeholder="$t('referrerManagement.gasFeeRatePlaceHolder')" />
         </div>
-        <Button aria-label="{{$t('referrerManagement.registerAsReferrer')}}" @click="onRegister" :loading="isLoading">
+        <Button :aria-label="$t('referrerManagement.registerAsReferrer')" @click="onRegister" :loading="isLoading">
           {{ $t('referrerManagement.registerAsReferrer') }}
         </Button>
         <Alert v-if="resultMsg" :variant="resultSuccess ? 'default' : 'destructive'">

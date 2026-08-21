@@ -7,6 +7,7 @@ import RestoreAccount from '@/entrypoints/popup/pages/RestoreAccount.vue'
 import WalletIndex from '@/entrypoints/popup/pages/wallet/index.vue'
 import WalletSetting from '@/entrypoints/popup/pages/wallet/Setting.vue'
 import AccountManagement from '@/entrypoints/popup/pages/wallet/settings/account-management/Index.vue'
+import OperationLogs from '@/entrypoints/popup/pages/wallet/settings/OperationLogs.vue'
 import WalletReceive from '@/entrypoints/popup/pages/wallet/Receive.vue'
 import WalletSettingPhrase from '@/entrypoints/popup/pages/wallet/settings/phrase.vue'
 import WalletSettingPublicKey from '@/entrypoints/popup/pages/wallet/settings/publickey.vue'
@@ -22,10 +23,14 @@ import Approve from '@/entrypoints/popup/pages/wallet/Approve.vue'
 import UtxoManager from '@/entrypoints/popup/pages/wallet/settings/UtxoManager.vue'
 import SplitAsset from '@/entrypoints/popup/pages/wallet/split.vue'
 import DappMarket from '@/entrypoints/popup/pages/wallet/DappMarket.vue'
-import Tools from '@/entrypoints/popup/pages/wallet/Tools.vue'
 import AgentSignData from '@/entrypoints/popup/pages/wallet/AgentSignData.vue'
 import BTCLuckyMining from '@/entrypoints/popup/pages/wallet/BTCLuckyMining.vue'
 import { walletStorage } from '@/lib/walletStorage'
+
+// Tools contains the contract development UI and ABI helpers. Keep it out of
+// the wallet startup bundle; its Solidity compiler is loaded separately only
+// when the user actually compiles a contract.
+const Tools = () => import('@/entrypoints/popup/pages/wallet/Tools.vue')
 
 const routes = [
   { path: '/', component: Index },
@@ -44,6 +49,7 @@ const routes = [
         children: [
           { path: '', component: WalletSetting },
           { path: 'account-management', component: AccountManagement },
+          { path: 'operation-logs', component: OperationLogs },
           { path: 'phrase', component: WalletSettingPhrase },
           { path: 'publickey', component: WalletSettingPublicKey },
           { path: 'password', component: WalletSettingPassword },

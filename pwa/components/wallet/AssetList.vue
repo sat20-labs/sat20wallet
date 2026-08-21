@@ -47,6 +47,10 @@
       :operation-type="operationType" :max-amount="selectedAsset?.amount" :asset-type="selectedAsset?.type"
       :asset-ticker="selectedAsset?.label" :asset-key="selectedAsset?.key" @update:amount="operationAmount = $event"
       @update:address="operationAddress = $event" @confirm="handleOperationConfirm" />
+    <LockWithExpandConfirmDialog v-if="pendingLockExpand" v-model:open="showLockExpandDialog"
+      :asset-key="pendingLockExpand.assetName" :asset-ticker="pendingLockExpand.assetTicker"
+      :requested-amount="pendingLockExpand.amount" :available-amount="pendingLockExpand.availableAmount"
+      :btc-fee-rate="btcFeeRate" :busy="loading" @confirm="confirmLockWithExpand" />
     <RGB11InvoiceDialog v-model:open="showRGB11Invoice" :asset="rgb11ReceiveAsset" />
     <RGB11SendDialog v-model:open="showRGB11Send" :asset="rgb11SendAsset" @completed="refreshRGB11Assets" />
     <RGB11IssueDialog v-model:open="showRGB11Issue" @completed="refreshRGB11Assets" />
@@ -65,6 +69,7 @@ import L2Card from '@/components/wallet/L2Card.vue'
 import ChannelCard from '@/components/wallet/ChannelCard.vue'
 import walletManager from '@/utils/sat20'
 import AssetOperationDialog from '@/components/wallet/AssetOperationDialog.vue'
+import LockWithExpandConfirmDialog from '@/components/wallet/LockWithExpandConfirmDialog.vue'
 import RGB11InvoiceDialog from '@/components/wallet/RGB11InvoiceDialog.vue'
 import RGB11SendDialog from '@/components/wallet/RGB11SendDialog.vue'
 import RGB11IssueDialog from '@/components/wallet/RGB11IssueDialog.vue'
@@ -87,6 +92,7 @@ const {
   splicingOut: runSplicingOut,
   unlockUtxo,
   lockUtxo,
+  lockUtxoWithExpand,
 } = useAssetActions()
 
 const props = defineProps({
@@ -211,6 +217,14 @@ const operationAmount = ref('')
 const operationAddress = ref('')
 const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
+const showLockExpandDialog = ref(false)
+const pendingLockExpand = ref<null | {
+  chanid: string
+  amount: string
+  assetName: string
+  assetTicker?: string
+  availableAmount: string
+}>(null)
 const showRGB11Invoice = ref(false)
 const rgb11ReceiveAsset = ref<any>(null)
 const showRGB11Send = ref(false)
@@ -547,11 +561,25 @@ const handleOperationConfirm = async () => {
         })
         break
       case 'lock':
-        await lockUtxo({
+        const lockResult = await lockUtxo({
           chanid,
           amt: amount,
           asset_name: asset.key,
         })
+        if (!lockResult.ok) {
+          if (lockResult.expandRequiredAmount !== undefined && chanid) {
+            pendingLockExpand.value = {
+              chanid,
+              amount,
+              assetName: asset.key,
+              assetTicker: asset.label,
+              availableAmount: lockResult.expandRequiredAmount,
+            }
+            showDialog.value = false
+            showLockExpandDialog.value = true
+          }
+          return
+        }
         break
       case 'unlock':
         await unlockUtxo({
@@ -573,6 +601,28 @@ const handleOperationConfirm = async () => {
     handleError('Operation failed')
   }
 }
+
+const confirmLockWithExpand = async () => {
+  const pending = pendingLockExpand.value
+  if (!pending) return
+  const succeeded = await lockUtxoWithExpand({
+    chanid: pending.chanid,
+    amt: pending.amount,
+    asset_name: pending.assetName,
+    feeRate: btcFeeRate.value,
+  })
+  if (!succeeded?.ok) return
+  showLockExpandDialog.value = false
+  pendingLockExpand.value = null
+  selectedAsset.value = null
+  operationType.value = undefined
+  operationAmount.value = ''
+  operationAddress.value = ''
+}
+
+watch(showLockExpandDialog, (open) => {
+  if (!open && !loading.value) pendingLockExpand.value = null
+})
 
 watch(selectedChain, async () => {
   selectedAssetType.value = 'ORDX'

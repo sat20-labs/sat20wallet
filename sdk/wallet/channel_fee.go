@@ -62,6 +62,20 @@ func (p *ChannelFeeConfig) ToOpenChannelFee() *wwire.OpenChannelFee {
 	}
 }
 
+func (p *ChannelFeeConfig) ToOpenChannelFeeInfo() *wwire.ChannelOpenFeeInfo {
+	if p == nil {
+		return nil
+	}
+	return &wwire.ChannelOpenFeeInfo{
+		OpenFee:           p.ToOpenChannelFee(),
+		OpenFeeTotal:      p.OpenFee(),
+		FeeToDAO:          p.FeeToDAO(),
+		MinCapacity:       p.MinCapacity(),
+		MinAvailableValue: MIN_AVAILABLE_VALUE,
+		Valid:             true,
+	}
+}
+
 func (p *ChannelFeeConfig) MinCapacity() int64 {
 	return p.OpenFee() + MIN_AVAILABLE_VALUE
 }

@@ -1,7 +1,12 @@
-const CACHE_NAME = 'sat20-wallet-pwa-v0.1.38-20260801T172657Z'
+const CACHE_NAME = 'sat20-wallet-pwa-v0.1.38-20260817T022709Z'
 const CACHE_PREFIX = 'sat20-wallet-pwa-'
 const APP_BASE = new URL(self.registration.scope).pathname.replace(/\/$/, '')
 const withBase = (path) => `${APP_BASE}${path}`
+
+// Replaced in dist/service-worker.js after Vite emits hashed JS/CSS chunks.
+// Keep this marker stable; the Vite closeBundle hook fails the build if it
+// cannot inject the generated asset list.
+const BUILD_ASSET_PATHS = /* __SAT20_BUILD_ASSETS__ */ []
 
 const PRECACHE_URLS = [
   withBase('/'),
@@ -17,7 +22,8 @@ const PRECACHE_URLS = [
   withBase('/icon/128.png'),
   withBase('/icon/48.png'),
   withBase('/icon/32.png'),
-  withBase('/icon/16.png')
+  withBase('/icon/16.png'),
+  ...BUILD_ASSET_PATHS.map(withBase),
 ]
 
 const cacheNetworkResponse = async (request, response) => {
@@ -41,7 +47,6 @@ self.addEventListener('install', (event) => {
       .then((cache) => cache.addAll(
         PRECACHE_URLS.map((url) => new Request(url, { cache: 'reload' }))
       ))
-      .then(() => self.skipWaiting())
   )
 })
 
@@ -108,7 +113,7 @@ self.addEventListener('fetch', (event) => {
     requestUrl.pathname === withBase('/wasm/sat20wallet.wasm')
   ) {
     event.respondWith(
-      caches.match(event.request, { ignoreSearch: true })
+      caches.match(event.request)
         .then((cachedResponse) => cachedResponse || fetchAndCache(event.request))
     )
     return

@@ -9,15 +9,16 @@ import (
 )
 
 func TestRGB11AddressMessageIDIsBoundedAndDomainSeparated(t *testing.T) {
-	first, err := rgb11AddressMessageID("canonical-rgb-transfer-id")
+	canonicalID := testRGB11ConsignmentID(t, "canonical")
+	first, err := rgb11AddressMessageID(canonicalID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := rgb11AddressMessageID("canonical-rgb-transfer-id")
+	second, err := rgb11AddressMessageID(canonicalID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := rgb11AddressMessageID("other-canonical-rgb-transfer-id")
+	other, err := rgb11AddressMessageID(testRGB11ConsignmentID(t, "other-canonical"))
 	if err != nil {
 		t.Fatal(err)
 	}

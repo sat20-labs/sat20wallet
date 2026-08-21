@@ -75,6 +75,21 @@ func xorRGB11PathRoot(root *chainhash.Hash, record *swire.DKVSRecord) {
 	}
 }
 
+func xorRGB11DeleteFloorRoot(root *chainhash.Hash, floor dkvsindexer.DeleteFloor) {
+	hash := sha256.New()
+	_, _ = hash.Write(rgb11PathLeafDomain)
+	var scratch [8]byte
+	binary.BigEndian.PutUint64(scratch[:], uint64(len(floor.Key)))
+	_, _ = hash.Write(scratch[:])
+	_, _ = hash.Write([]byte(floor.Key))
+	_, _ = hash.Write(floor.EffectiveHash[:])
+	var leaf chainhash.Hash
+	copy(leaf[:], hash.Sum(nil))
+	for index := range root {
+		root[index] ^= leaf[index]
+	}
+}
+
 func (h *rgb11MemoryDKVSHTTP) pathMetaV1Locked(path string, now uint64) *dkvsindexer.PathMeta {
 	path = strings.TrimSuffix(strings.TrimSpace(path), "/")
 	meta := &dkvsindexer.PathMeta{
@@ -100,6 +115,12 @@ func (h *rgb11MemoryDKVSHTTP) pathMetaV1Locked(path string, now uint64) *dkvsind
 			meta.MinExpiryHeight = expiry
 		}
 	}
+	for key, floor := range h.deleteFloors {
+		floorPath, err := dkvsindexer.CollectionPathForKey(key)
+		if err == nil && floorPath == path {
+			xorRGB11DeleteFloorRoot(&meta.StateRoot, floor)
+		}
+	}
 	meta.ActiveRoot = meta.StateRoot
 	return meta
 }
@@ -117,10 +138,20 @@ func (h *rgb11MemoryDKVSHTTP) pathSnapshotV1Locked(path string, now uint64) *dkv
 		}
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Key < records[j].Key })
+	floors := make([]dkvsindexer.DeleteFloor, 0)
+	for key, floor := range h.deleteFloors {
+		floorPath, err := dkvsindexer.CollectionPathForKey(key)
+		if err == nil && floorPath == path {
+			floor.PubKey = append([]byte(nil), floor.PubKey...)
+			floors = append(floors, floor)
+		}
+	}
+	sort.Slice(floors, func(i, j int) bool { return floors[i].Key < floors[j].Key })
 	return &dkvsindexer.PathSnapshot{
 		Path:         path,
 		PathMeta:     h.pathMetaV1Locked(path, now),
 		Records:      records,
+		DeleteFloors: floors,
 		ServerTimeMS: now,
 	}
 }
@@ -158,6 +189,7 @@ func (h *rgb11MemoryDKVSHTTP) SendDKVSV1Post(path string, body []byte) ([]byte, 
 		}
 		now := uint64(time.Now().UnixMilli())
 		h.mu.Lock()
+		h.pathSyncs[request.Path]++
 		snapshot := h.pathSnapshotV1Locked(request.Path, now)
 		h.mu.Unlock()
 		return rgb11DKVSV1Response(snapshot)
@@ -262,7 +294,13 @@ func (h *rgb11MemoryDKVSHTTP) applyBatchCASV1(request DKVSBatchCASRequest) ([]by
 	exact := 0
 	for _, mutation := range request.Mutations {
 		current := h.records[mutation.Record.Key]
-		if current != nil && dkvsindexer.RecordHash(current) == dkvsindexer.RecordHash(mutation.Record) {
+		mutationHash := dkvsindexer.RecordHash(mutation.Record)
+		floor := h.deleteFloors[mutation.Record.Key]
+		if localFloor := h.localDeleteFloors[mutation.Record.Key]; localFloor.FloorSeq > floor.FloorSeq {
+			floor = localFloor
+		}
+		if (current != nil && dkvsindexer.RecordHash(current) == mutationHash) ||
+			(current == nil && floor.FloorSeq != 0 && floor.EffectiveHash == mutationHash) {
 			exact++
 		}
 	}
@@ -275,6 +313,12 @@ func (h *rgb11MemoryDKVSHTTP) applyBatchCASV1(request DKVSBatchCASRequest) ([]by
 			nextSeq := uint64(1)
 			if current != nil {
 				nextSeq = current.Seq + 1
+			}
+			if floor := h.deleteFloors[mutation.Record.Key].FloorSeq; floor >= nextSeq {
+				nextSeq = floor + 1
+			}
+			if floor := h.localDeleteFloors[mutation.Record.Key].FloorSeq; floor >= nextSeq {
+				nextSeq = floor + 1
 			}
 			if mutation.Record.Seq != nextSeq {
 				return rgb11DKVSV1Error(dkvsindexer.ErrInvalidSequence)
@@ -304,15 +348,30 @@ func (h *rgb11MemoryDKVSHTTP) applyBatchCASV1(request DKVSBatchCASRequest) ([]by
 		if h.maxRecords > 0 && projected > h.maxRecords {
 			return rgb11DKVSV1Error(dkvsindexer.ErrFeeCapacityExceeded)
 		}
+		pathGenerationByKey := make(map[string]uint64)
+		for path, records := range mutationsByPath {
+			sort.Slice(records, func(i, j int) bool { return records[i].Key < records[j].Key })
+			generation := h.generations[path]
+			for _, record := range records {
+				generation++
+				pathGenerationByKey[record.Key] = generation
+			}
+			h.generations[path] = generation
+		}
 		for _, mutation := range request.Mutations {
 			if dkvsindexer.IsTombstone(mutation.Record.Flags) {
 				delete(h.records, mutation.Record.Key)
+				floor := deleteFloorForDKVSRecord(mutation.Record, pathGenerationByKey[mutation.Record.Key])
+				if dkvsWalletRecordIsFreeLocal(mutation.Record) {
+					h.localDeleteFloors[mutation.Record.Key] = floor
+				} else {
+					h.deleteFloors[mutation.Record.Key] = floor
+				}
 			} else {
 				h.records[mutation.Record.Key] = cloneRGB11DKVSRecord(mutation.Record)
+				delete(h.deleteFloors, mutation.Record.Key)
+				delete(h.localDeleteFloors, mutation.Record.Key)
 			}
-		}
-		for path, records := range mutationsByPath {
-			h.generations[path] += uint64(len(records))
 		}
 	}
 

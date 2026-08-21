@@ -570,7 +570,11 @@ const importWallet = async () => {
     isImportWalletDialogOpen.value = false
     toast({
       title: 'Success',
-      description: 'Wallet imported successfully',
+      description: walletStore.accountRecovery?.status === 'pending'
+        ? 'Wallet imported. Managed account discovery is pending; retry when the network is available.'
+        : walletStore.accountRecovery?.status === 'found'
+          ? 'Managed account and wallets restored successfully'
+          : 'Wallet imported successfully',
       variant: 'success'
     })
     safeSetTimeout(() => {

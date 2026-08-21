@@ -404,7 +404,7 @@ const rgb11TransferStatusClass = (status: string) => {
 }
 
 
-const rgb11TaskTransport = (task: RGB11Task) => String(task.representative?.transport_mode || 'sat20-dkvs')
+const rgb11TaskTransport = (task: RGB11Task) => String(task.representative?.transport_mode || 'unknown')
 const rgb11TaskIsBroadcast = (task: RGB11Task) => task.members.every((item) => (
   ['broadcast', 'pending', 'settled'].includes(String(item?.status || '').toLowerCase())
 ))
@@ -414,13 +414,12 @@ const rgb11TaskMode = (task: RGB11Task) => {
   const transport = rgb11TaskTransport(task)
   if (transport === 'rgb-json-rpc') return 'RGB JSON-RPC'
   if (transport === 'out-of-band') return 'out-of-band'
-  return 'SAT20 DKVS'
+  return t('rgb11Transfer.legacyTransportUnsupported')
 }
 
 const rgb11TaskActionLabel = (task: RGB11Task) => {
   if (rgb11TaskIsBroadcast(task)) return t('rgb11Transfer.refreshTask')
   if (rgb11TaskTransport(task) === 'out-of-band') return t('rgb11Transfer.confirmOutOfBandBroadcast')
-  if (rgb11TaskTransport(task) === 'sat20-dkvs') return t('rgb11Transfer.continueTask')
   return t('rgb11Transfer.retryTask')
 }
 
@@ -462,57 +461,6 @@ const completeRGB11TaskBroadcast = async (task: RGB11Task, txid: string) => {
   }
 }
 
-const resumeManagedRGB11Task = async (task: RGB11Task) => {
-  const transferIds: string[] = []
-  const relayRecords: any[] = []
-  const acks: any[] = []
-  for (const member of task.members) {
-    const transferId = String(member.transfer_id || '')
-    if (!transferId) throw new Error(t('rgb11Transfer.taskResumeFailed'))
-    const [recordErr, recordResult] = await walletManager.publishRGB11RelayRecord(transferId)
-    if (recordErr || !recordResult?.record) {
-      throw recordErr || new Error(t('rgb11Transfer.taskResumeFailed'))
-    }
-    const relayRecord = JSON.parse(recordResult.record)
-    const [ackErr, ackResult] = await walletManager.fetchRGB11AckRecord(transferId)
-    if (ackErr || !ackResult?.ack) {
-      throw new Error(t('rgb11Transfer.taskWaitingAck'))
-    }
-    const ack = JSON.parse(ackResult.ack)
-    if (ack?.accepted === false) {
-      const [cancelErr] = await walletManager.cancelRGB11BatchByNack(
-        transferId,
-        JSON.stringify(relayRecord),
-        JSON.stringify(ack),
-      )
-      if (cancelErr) throw cancelErr
-      await reloadRGB11TaskState()
-      setRGB11TaskMessage(task, true, t('rgb11Transfer.taskRejected', { reason: ack.reason_code || 'rejected' }))
-      return
-    }
-    transferIds.push(transferId)
-    relayRecords.push(relayRecord)
-    acks.push(ack)
-  }
-  let broadcastErr: Error | undefined
-  let broadcastResult: { txid: string } | undefined
-  if (transferIds.length === 1) {
-    ;[broadcastErr, broadcastResult] = await walletManager.broadcastRGB11Transfer(
-      transferIds[0], JSON.stringify(relayRecords[0]), JSON.stringify(acks[0]),
-    )
-  } else {
-    ;[broadcastErr, broadcastResult] = await walletManager.broadcastRGB11Batch({
-      transfer_ids: transferIds,
-      relay_records: relayRecords,
-      acks,
-    })
-  }
-  if (broadcastErr || !broadcastResult?.txid) {
-    throw broadcastErr || new Error(t('rgb11Transfer.broadcastFailed'))
-  }
-  await completeRGB11TaskBroadcast(task, broadcastResult.txid)
-}
-
 const resumeRGB11Task = async (task: RGB11Task) => {
   if (rgb11TaskBusy.value) return
   rgb11TaskBusy.value = task.key
@@ -545,7 +493,7 @@ const resumeRGB11Task = async (task: RGB11Task) => {
       await completeRGB11TaskBroadcast(task, result.txid)
       return
     }
-    await resumeManagedRGB11Task(task)
+    throw new Error(t('rgb11Transfer.legacyTransportUnsupported'))
   } catch (error: any) {
     setRGB11TaskMessage(task, false, error?.message || t('rgb11Transfer.taskResumeFailed'))
   } finally {

@@ -1,26 +1,33 @@
 import { tryit } from 'radash'
+import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
 class WalletManager {
   private async _handleRequest(
     methodName: string,
     ...args: any[]
   ): Promise<[Error | undefined, any | undefined]> {
+    const operation = await beginPwaWalletOperation(methodName, args)
     const method = (globalThis as any).sat20wallet_wasm[methodName as keyof WalletManager]
     const [err, result] = await tryit(method as any)(...args)
-    console.log(`${methodName} args: `, args)
-    console.log(`${methodName} result: `, result)
+    // Never emit wallet request arguments or results to the browser console.
+    // Both can contain passwords, mnemonics, recovery material or signed data.
     if (err) {
-      console.error(`${methodName} error: ${err.message}`)
+      console.error(`${methodName} failed`)
+      await finishPwaOperation(operation, err)
       return [err, undefined]
     }
 
     if (result) {
       const response = result as SatsnetResponse
       if (response?.code !== 0) {
-        return [new Error(response.msg), undefined]
+        const responseError = new Error(response.msg)
+        await finishPwaOperation(operation, responseError)
+        return [responseError, undefined]
       }
+      await finishPwaOperation(operation, null, response.data)
       return [undefined, response.data]
     }
 
+    await finishPwaOperation(operation)
     return [undefined, undefined]
   }
 
@@ -37,6 +44,17 @@ class WalletManager {
     password: string
   ): Promise<[Error | undefined, { walletId: string } | undefined]> {
     return this._handleRequest('importWallet', mnemonic, password.toString())
+  }
+
+  async recoverAccountManagementFromRootMnemonic(
+    mnemonic: string,
+    password: string
+  ): Promise<[Error | undefined, RootAccountRecoveryResult | undefined]> {
+    return this._handleRequest(
+      'recoverAccountManagementFromRootMnemonic',
+      mnemonic,
+      password.toString()
+    )
   }
   async changePassword(
     oldPassword: string,
@@ -206,7 +224,7 @@ class WalletManager {
     assetName: string,
     amt: string | number,
     memo: string = ""
-  ): Promise<[Error | undefined, string | undefined]> {
+  ): Promise<[Error | undefined, { txId: string } | undefined]> {
     return this._handleRequest('sendAssets_SatsNet', destAddr, assetName, String(amt), String(memo))
   }
 
@@ -312,16 +330,10 @@ class WalletManager {
     return this._handleRequest('prepareRGB11Transfer', JSON.stringify(request))
   }
 
-  async buildRGB11RelayRecord(transferId: string): Promise<
-    [Error | undefined, { record: string } | undefined]
+  async resumeRGB11PreparedTransfer(transferId: string): Promise<
+    [Error | undefined, { transfer: string } | undefined]
   > {
-    return this._handleRequest('buildRGB11RelayRecord', transferId)
-  }
-
-  async publishRGB11RelayRecord(transferId: string): Promise<
-    [Error | undefined, { record: string } | undefined]
-  > {
-    return this._handleRequest('publishRGB11RelayRecord', transferId)
+    return this._handleRequest('resumeRGB11PreparedTransfer', transferId)
   }
 
   async acceptRGB11Consignment(requestId: string, consignment: string): Promise<
@@ -348,54 +360,16 @@ class WalletManager {
     return this._handleRequest('receiveRGB11ProxyConsignment', requestId)
   }
 
-  async acceptRGB11RelayConsignment(requestId: string, relayRecord: string, consignment: string): Promise<
-	[Error | undefined, { receipt: string; ack: string } | undefined]
-  > {
-	return this._handleRequest('acceptRGB11RelayConsignment', requestId, relayRecord, consignment)
-  }
-
-  async rejectRGB11RelayConsignment(requestId: string, relayRecord: string): Promise<
-	[Error | undefined, { ack: string } | undefined]
-  > {
-	return this._handleRequest('rejectRGB11RelayConsignment', requestId, relayRecord)
-  }
-
-  async publishRGB11AckRecord(key: string, ack: string): Promise<
-    [Error | undefined, { published: boolean } | undefined]
-  > {
-    return this._handleRequest('publishRGB11AckRecord', key, ack)
-  }
-
-  async fetchRGB11AckRecord(transferId: string): Promise<
-    [Error | undefined, { ack: string } | undefined]
-  > {
-    return this._handleRequest('fetchRGB11AckRecord', transferId)
-  }
-
-  async cancelRGB11BatchByNack(transferId: string, relayRecord: string, nack: string): Promise<
-	[Error | undefined, { cancelled: boolean } | undefined]
-  > {
-    return this._handleRequest('cancelRGB11BatchByNack', transferId, relayRecord, nack)
-  }
-
   async cancelRGB11OutOfBandTransfer(transferId: string): Promise<
     [Error | undefined, { cancelled: boolean } | undefined]
   > {
     return this._handleRequest('cancelRGB11OutOfBandTransfer', transferId)
   }
 
-  async broadcastRGB11Transfer(transferId: string, relayRecord: string, ack: string): Promise<
-    [Error | undefined, { txid: string } | undefined]
+  async cancelExpiredRGB11Transfer(transferId: string): Promise<
+    [Error | undefined, { cancelled: boolean } | undefined]
   > {
-    return this._handleRequest('broadcastRGB11Transfer', transferId, relayRecord, ack)
-  }
-
-  async broadcastRGB11Batch(request: {
-    transfer_ids: string[]
-    relay_records: unknown[]
-    acks: unknown[]
-  }): Promise<[Error | undefined, { txid: string } | undefined]> {
-    return this._handleRequest('broadcastRGB11Batch', JSON.stringify(request))
+    return this._handleRequest('cancelExpiredRGB11Transfer', transferId)
   }
 
   async broadcastRGB11OutOfBand(transferIds: string[]): Promise<
@@ -566,7 +540,7 @@ class WalletManager {
   async lockUtxo(
     address: string,
     utxo: any,
-    reason?: string
+    reason: string
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('lockUtxo', address, utxo, reason)
   }
@@ -574,7 +548,7 @@ class WalletManager {
   async lockUtxo_SatsNet(
     address: string,
     utxo: any,
-    reason?: string
+    reason: string
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('lockUtxo_SatsNet', address, utxo, reason)
   }

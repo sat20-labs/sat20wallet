@@ -7,7 +7,7 @@ func (p *Manager) refreshDKVSRegistrations() error {
 	if p == nil || p.dkvs == nil {
 		return nil
 	}
-	keys := make([]string, 0, 2)
+	keys := make([]string, 0, 3)
 
 	p.mutex.RLock()
 	accountActive := p.accountProfile != nil && len(p.accountSecret) == 32
@@ -25,7 +25,11 @@ func (p *Manager) refreshDKVSRegistrations() error {
 		if err != nil {
 			return err
 		}
-		keys = append(keys, stateKey, dataKey)
+		wrapperKey, err := accountRootWrapperKey(root)
+		if err != nil {
+			return err
+		}
+		keys = append(keys, stateKey, dataKey, wrapperKey)
 	}
 	p.dkvs.rememberPaths(keys)
 	p.dkvs.rememberDirectories(nil)

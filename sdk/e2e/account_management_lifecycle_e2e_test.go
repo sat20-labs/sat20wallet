@@ -50,7 +50,8 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 		pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID))
 	status := primary.GetAccountManagementStatus()
 	require.True(t, status.Active)
-	require.Equal(t, uint64(2), status.StateSeq)
+	initialSeq := status.StateSeq
+	require.Equal(t, uint64(1), initialSeq)
 	require.Zero(t, status.PendingChanges)
 	require.Equal(t, rootID, status.RootWalletID)
 
@@ -65,7 +66,7 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 	require.GreaterOrEqual(t, primary.GetAccountManagementStatus().PendingChanges, 3)
 	require.NoError(t, primary.SyncAccountManagementState(context.Background()))
 	status = primary.GetAccountManagementStatus()
-	require.Equal(t, uint64(3), status.StateSeq)
+	require.Equal(t, initialSeq+1, status.StateSeq)
 	require.Zero(t, status.PendingChanges)
 
 	// A new device rejects wrong recovery material and restores the latest
@@ -83,7 +84,7 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 	recovered, err := fresh.LoadAccountManagementStateForRecovery(location,
 		pkg.Envelope.Locator, secret, dkvsClientMnemonic)
 	require.NoError(t, err)
-	require.Equal(t, uint64(3), recovered.Seq)
+	require.Equal(t, initialSeq+1, recovered.Seq)
 	_, err = fresh.RestoreAccountManagementState(*recovered, secret, "123456",
 		pkg.Envelope.Locator, wallet.AccountManagementRestoreOptions{
 			Location: location, StorageMode: wallet.AccountStorageTemporary,
@@ -104,12 +105,12 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 	require.NoError(t, primary.UpdateWalletName(rootID, "Primary Vault Renamed"))
 	require.NoError(t, fresh.EnsureAccount(freshRootID, 3, "Travel", "did:root:3"))
 	require.NoError(t, fresh.SyncAccountManagementState(context.Background()))
-	require.Equal(t, uint64(4), fresh.GetAccountManagementStatus().StateSeq)
+	require.Equal(t, initialSeq+2, fresh.GetAccountManagementStatus().StateSeq)
 	require.NoError(t, primary.SyncAccountManagementState(context.Background()))
-	require.Equal(t, uint64(5), primary.GetAccountManagementStatus().StateSeq)
+	require.Equal(t, initialSeq+3, primary.GetAccountManagementStatus().StateSeq)
 	require.NoError(t, fresh.SyncAccountManagementState(context.Background()))
 	freshStatus := fresh.GetAccountManagementStatus()
-	require.Equal(t, uint64(5), freshStatus.StateSeq)
+	require.Equal(t, initialSeq+3, freshStatus.StateSeq)
 	require.Zero(t, freshStatus.PendingChanges)
 
 	finalCatalog := fresh.GetWalletCatalog()

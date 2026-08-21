@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,6 +15,31 @@ import (
 	sindexerwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
+
+type contextIndexerRPCClient interface {
+	GetRawTxContext(context.Context, string) (string, error)
+	BroadCastTxsContext(context.Context, []*wire.MsgTx) error
+}
+
+func getRawTxWithContext(ctx context.Context, client IndexerRPCClient, tx string) (string, error) {
+	if contextClient, ok := client.(contextIndexerRPCClient); ok {
+		return contextClient.GetRawTxContext(ctx, tx)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return client.GetRawTx(tx)
+}
+
+func broadcastTxsWithContext(ctx context.Context, client IndexerRPCClient, txs []*wire.MsgTx) error {
+	if contextClient, ok := client.(contextIndexerRPCClient); ok {
+		return contextClient.BroadCastTxsContext(ctx, txs)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return client.BroadCastTxs(txs)
+}
 
 type IndexerRPCClientMgr struct {
 	indexers []IndexerRPCClient // 默认第一个是master，第二个是slave
@@ -280,11 +306,15 @@ func (p *IndexerRPCClientMgr) GetUtxoId(utxo string) (uint64, error) {
 	return result, err
 }
 func (p *IndexerRPCClientMgr) GetRawTx(tx string) (string, error) {
-	result, err := p.getActiveIndexer().GetRawTx(tx)
+	return p.GetRawTxContext(context.Background(), tx)
+}
+
+func (p *IndexerRPCClientMgr) GetRawTxContext(ctx context.Context, tx string) (string, error) {
+	result, err := getRawTxWithContext(ctx, p.getActiveIndexer(), tx)
 	if shouldSwitchIndexer(err) {
 		indexer := p.selector()
 		if indexer != nil {
-			result, err = indexer.GetRawTx(tx)
+			result, err = getRawTxWithContext(ctx, indexer, tx)
 		}
 	}
 	return result, err
@@ -407,11 +437,15 @@ func (p *IndexerRPCClientMgr) BroadCastTx(tx *wire.MsgTx) (string, error) {
 	return result, err
 }
 func (p *IndexerRPCClientMgr) BroadCastTxs(tx []*wire.MsgTx) error {
-	err := p.getActiveIndexer().BroadCastTxs(tx)
+	return p.BroadCastTxsContext(context.Background(), tx)
+}
+
+func (p *IndexerRPCClientMgr) BroadCastTxsContext(ctx context.Context, tx []*wire.MsgTx) error {
+	err := broadcastTxsWithContext(ctx, p.getActiveIndexer(), tx)
 	if shouldSwitchIndexer(err) {
 		indexer := p.selector()
 		if indexer != nil {
-			err = indexer.BroadCastTxs(tx)
+			err = broadcastTxsWithContext(ctx, indexer, tx)
 		}
 	}
 	return err

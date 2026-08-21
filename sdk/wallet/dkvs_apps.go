@@ -1,6 +1,8 @@
 package wallet
 
 import (
+	"fmt"
+
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -8,136 +10,53 @@ import (
 
 const dkvsAppValueVersion = 1
 
-func WalletRecoveryPath(walletID string) string {
-	return "wallet-recovery/" + dkvsindexer.NormalizeNameID(walletID)
+// offlineMessageKeyID renders a positive int64 timestamp as a fixed-width
+// decimal DKVS segment. Lexicographic key order is therefore identical to
+// chronological order. Callers should use Unix milliseconds.
+func offlineMessageKeyID(messageID int64) (string, error) {
+	if messageID <= 0 {
+		return "", dkvsindexer.ErrInvalidRecord
+	}
+	return fmt.Sprintf("%019d", messageID), nil
 }
 
-func (p *SatsNetDKVSClient) PutWalletRecoveryBackup(wallet common.Wallet, walletID string, encryptedBackup []byte, metadata map[string]string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	if _, err := dkvsWalletPubKey(wallet); err != nil {
-		return nil, dkvsindexer.ErrInvalidSignature
-	}
-	if walletID == "" || len(encryptedBackup) == 0 {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	value, err := encodeDKVSRecoveryBackup(DKVSWalletRecoveryBackup{
-		Version:         dkvsAppValueVersion,
-		WalletID:        walletID,
-		EncryptedBackup: append([]byte{}, encryptedBackup...),
-		Metadata:        cloneStringMap(metadata),
-	})
+func (p *SatsNetDKVSClient) SendOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msgID int64, encryptedMessage []byte, metadata map[string]string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	mailboxID, stableMsgID, value, err := buildOfflineMessage(senderWallet, recipientPubKey, msgID, encryptedMessage, metadata)
 	if err != nil {
 		return nil, err
 	}
-	return p.PutPersonalRecord(wallet, WalletRecoveryPath(walletID), value, opts)
-}
-
-func (p *SatsNetDKVSClient) GetWalletRecoveryBackup(pubKey []byte, walletID string) (*DKVSWalletRecoveryBackup, *swire.DKVSRecord, error) {
-	record, err := p.GetPersonalRecord(pubKey, WalletRecoveryPath(walletID))
-	if err != nil {
-		return nil, nil, err
-	}
-	backup, err := decodeDKVSRecoveryBackup(record.Value)
-	if err != nil {
-		return nil, nil, err
-	}
-	if backup.Version != dkvsAppValueVersion || backup.WalletID != walletID {
-		return nil, nil, dkvsindexer.ErrInvalidRecord
-	}
-	return backup, record, nil
-}
-
-func (p *SatsNetDKVSClient) RenewWalletRecoveryBackup(wallet common.Wallet, walletID string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	if _, err := dkvsWalletPubKey(wallet); err != nil {
-		return nil, dkvsindexer.ErrInvalidSignature
-	}
-	return p.RenewPersonalRecord(wallet, WalletRecoveryPath(walletID), opts)
-}
-
-func (p *SatsNetDKVSClient) PutGuardianShare(ownerWallet common.Wallet, packageID, shareID string, encryptedShare []byte, metadata map[string]string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	ownerPubKey, err := dkvsWalletPubKey(ownerWallet)
-	if err != nil {
-		return nil, dkvsindexer.ErrInvalidSignature
-	}
-	if packageID == "" || shareID == "" || len(encryptedShare) == 0 {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	mailboxID := dkvsindexer.AccountID(ownerPubKey)
-	key, err := dkvsindexer.MailShareKey(mailboxID, dkvsindexer.NormalizeNameID(packageID), dkvsindexer.NormalizeNameID(shareID))
-	if err != nil {
-		return nil, err
-	}
-	value, err := encodeDKVSGuardianShare(DKVSGuardianShare{
-		Version:    dkvsAppValueVersion,
-		PackageID:  packageID,
-		ShareID:    shareID,
-		Ciphertext: append([]byte{}, encryptedShare...),
-		Metadata:   cloneStringMap(metadata),
-	})
-	if err != nil {
-		return nil, err
-	}
-	record, err := NewDKVSSignedRecord(ownerWallet, key, value, opts)
-	if err != nil {
-		return nil, err
-	}
-	return p.PutMailboxShare(record)
-}
-
-func (p *SatsNetDKVSClient) ReadGuardianShares(ownerPubKey []byte, packageID string, start, limit int) ([]*DKVSGuardianShare, []*swire.DKVSRecord, int, error) {
-	mailboxID := dkvsindexer.AccountID(ownerPubKey)
-	prefix := "/mail/" + mailboxID + "/share/" + dkvsindexer.NormalizeNameID(packageID)
-	if _, err := dkvsindexer.ParsePrefix(prefix); err != nil {
-		return nil, nil, 0, err
-	}
-	records, total, err := p.ListRecords(prefix, start, limit)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	shares := make([]*DKVSGuardianShare, 0, len(records))
-	for _, record := range records {
-		share, err := decodeDKVSGuardianShare(record.Value)
-		if err != nil {
-			return nil, nil, 0, err
-		}
-		if share.Version != dkvsAppValueVersion || share.PackageID != packageID {
-			return nil, nil, 0, dkvsindexer.ErrInvalidRecord
-		}
-		shares = append(shares, share)
-	}
-	return shares, records, total, nil
-}
-
-func (p *SatsNetDKVSClient) SendOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msgID string, encryptedMessage []byte, metadata map[string]string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	mailboxID, safeMsgID, value, err := buildOfflineMessage(senderWallet, recipientPubKey, msgID, encryptedMessage, metadata)
-	if err != nil {
-		return nil, err
-	}
-	return p.SendSignedMailboxMessage(senderWallet, mailboxID, safeMsgID, value, opts)
+	return p.SendSignedMailboxMessage(senderWallet, mailboxID, stableMsgID, value, opts)
 }
 
 func (p *SatsNetDKVSClient) SendOfflineMessageWithAutopay(senderWallet common.Wallet, recipientPubKey []byte,
-	msgID string, encryptedMessage []byte, metadata map[string]string, opts dkvsindexer.RecordOptions,
+	msgID int64, encryptedMessage []byte, metadata map[string]string, opts dkvsindexer.RecordOptions,
 	autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
 
-	mailboxID, safeMsgID, value, err := buildOfflineMessage(senderWallet, recipientPubKey, msgID, encryptedMessage, metadata)
+	mailboxID, stableMsgID, value, err := buildOfflineMessage(senderWallet, recipientPubKey, msgID, encryptedMessage, metadata)
 	if err != nil {
 		return nil, err
 	}
-	return p.SendSignedMailboxMessageWithAutopay(senderWallet, mailboxID, safeMsgID, value, opts, autopay)
+	return p.SendSignedMailboxMessageWithAutopay(senderWallet, mailboxID, stableMsgID, value, opts, autopay)
 }
 
-func buildOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msgID string, encryptedMessage []byte,
+func buildOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msgID int64, encryptedMessage []byte,
 	metadata map[string]string) (string, string, []byte, error) {
 
 	senderPubKey, err := dkvsWalletPubKey(senderWallet)
 	if err != nil {
 		return "", "", nil, dkvsindexer.ErrInvalidSignature
 	}
-	if msgID == "" || len(encryptedMessage) == 0 {
+	if len(encryptedMessage) == 0 {
 		return "", "", nil, dkvsindexer.ErrInvalidRecord
 	}
+	stableMsgID, err := offlineMessageKeyID(msgID)
+	if err != nil {
+		return "", "", nil, err
+	}
 	mailboxID := dkvsindexer.AccountID(recipientPubKey)
-	safeMsgID := dkvsindexer.NormalizeNameID(msgID)
+	if _, err := dkvsindexer.MailMsgKey(mailboxID, dkvsindexer.AccountID(senderPubKey), stableMsgID); err != nil {
+		return "", "", nil, err
+	}
 	value, err := encodeDKVSOfflineMessage(DKVSOfflineMessage{
 		Version:          dkvsAppValueVersion,
 		FromPubKey:       senderPubKey,
@@ -149,7 +68,7 @@ func buildOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msg
 	if err != nil {
 		return "", "", nil, err
 	}
-	return mailboxID, safeMsgID, value, nil
+	return mailboxID, stableMsgID, value, nil
 }
 
 func (p *SatsNetDKVSClient) ReadOfflineMessages(recipientPubKey []byte, start, limit int) ([]*DKVSOfflineMessage, []*swire.DKVSRecord, int, error) {
@@ -172,12 +91,12 @@ func (p *SatsNetDKVSClient) ReadOfflineMessages(recipientPubKey []byte, start, l
 	return messages, records, total, nil
 }
 
-func ServiceAuthenticityPath(appID, release string) string {
-	path := "authenticity/" + dkvsindexer.NormalizeNameID(appID)
-	if release != "" {
-		path += "/" + dkvsindexer.NormalizeNameID(release)
-	}
-	return path
+// ServiceAuthenticityPath identifies one stable application/component object.
+// appID is a stable component identifier under a service, for example desktop,
+// pwa, extension, android or ios. Release/version belongs to the value and
+// advances through DKVS Seq; it never becomes part of the logical key.
+func ServiceAuthenticityPath(appID, _ string) string {
+	return "authenticity/" + dkvsindexer.NormalizeNameID(appID)
 }
 
 func (p *SatsNetDKVSClient) PublishServiceAuthenticity(wallet common.Wallet, serviceName, appID, release, artifactHash, downloadURL string, metadata map[string]string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {

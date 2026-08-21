@@ -127,7 +127,8 @@ func (p *rgb11Manager) hasPendingRGB11ChainReconciliation() (bool, error) {
 		if state == nil {
 			continue
 		}
-		if state.Direction == "send" && (state.Status == "broadcast" || state.Status == "pending") {
+		if state.Direction == "send" &&
+			(state.Status == rgb11StatusBroadcastAttempted || state.Status == "broadcast" || state.Status == "pending") {
 			return true, nil
 		}
 		if state.Direction == "receive" &&

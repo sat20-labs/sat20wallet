@@ -42,9 +42,36 @@ import (
 )
 
 var (
-	ErrRGB11Inconsistent   = rgb11wallet.ErrRGB11Inconsistent
-	ErrRGB11STPUnavailable = rgb11wallet.ErrRGB11STPUnavailable
+	ErrRGB11Inconsistent         = rgb11wallet.ErrRGB11Inconsistent
+	ErrRGB11STPUnavailable       = rgb11wallet.ErrRGB11STPUnavailable
+	ErrRGB11BroadcastPersistence = errors.New("RGB11 transaction broadcast succeeded but local state persistence failed")
 )
+
+// RGB11BroadcastPersistenceError means the Bitcoin transaction was already
+// accepted by the broadcast backend. Callers must retain TxID and must not
+// interpret this as a safe signal to broadcast the transaction again.
+type RGB11BroadcastPersistenceError struct {
+	TxID string
+	Err  error
+}
+
+func (e *RGB11BroadcastPersistenceError) Error() string {
+	if e == nil {
+		return ErrRGB11BroadcastPersistence.Error()
+	}
+	return fmt.Sprintf("%s: txid=%s: %v", ErrRGB11BroadcastPersistence, e.TxID, e.Err)
+}
+
+func (e *RGB11BroadcastPersistenceError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *RGB11BroadcastPersistenceError) Is(target error) bool {
+	return target == ErrRGB11BroadcastPersistence
+}
 
 // rgb11Manager owns the wallet-local RGB11 runtime and synchronization state.
 // It embeds the outer wallet Manager only as an infrastructure host; all RGB11
@@ -112,7 +139,7 @@ func rgb11TransferKeepsInputsLocked(state *rgb11wallet.TransferState) bool {
 		return false
 	}
 	switch state.Status {
-	case "prepared", "delivered", "broadcast", "pending", "settled":
+	case "prepared", "delivered", "relayed", rgb11StatusBroadcastAttempted, "broadcast", "pending", "settled":
 		return true
 	default:
 		return false
@@ -1793,7 +1820,6 @@ func (p *rgb11Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewal
 			return nil, err
 		}
 	}
-	p.autoBackupRGB11AfterMutation()
 	return receive, nil
 }
 
@@ -2361,9 +2387,10 @@ var (
 	ErrRGB11HistoryMerge        = errors.New("selected RGB11 allocations require a history merge")
 	ErrRGB11AckRequired         = errors.New("valid recipient ACK is required before broadcast")
 	ErrRGB11BatchAckRequired    = errors.New("all RGB11 batch recipient ACKs are required before broadcast")
-	ErrRGB11SAT20RelayRequired  = errors.New("RGB11 transfer does not use SAT20 relay delivery")
 	ErrRGB11OutOfBandRequired   = errors.New("RGB11 transfer is not a prepared out-of-band transfer")
 	ErrRGB11AlreadyBroadcast    = errors.New("RGB11 transfer witness is already visible on Bitcoin")
+	ErrRGB11ExpiredCancel       = errors.New("RGB11 transfer is not eligible for expired cancellation")
+	ErrRGB11RelayEvidence       = errors.New("RGB11 relay or ACK evidence already exists")
 	ErrRGB11AssetPreservation   = errors.New("RGB11 input contains another asset that cannot be preserved")
 )
 
@@ -2481,11 +2508,6 @@ func (p *rgb11Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11Se
 		var recipientVout uint32
 		if invoice.Beneficiary.Kind == invoicing.BeneficiaryWitnessVout {
 			script, err = invoice.Beneficiary.WitnessScript()
-			recipientVout = nextRecipientVout
-			nextRecipientVout++
-		} else if transport == "sat20-dkvs" {
-			recipientPubKey, _ := hex.DecodeString(recipientID)
-			script, err = HexPubKeyToP2TRPkScript(recipientPubKey)
 			recipientVout = nextRecipientVout
 			nextRecipientVout++
 		}
@@ -2764,7 +2786,6 @@ func (p *rgb11Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11Se
 		return nil, err
 	}
 	reservationCommitted = true
-	p.autoBackupRGB11AfterMutation()
 	return &RGB11PreparedTransfer{
 		State: states[0], States: states, RecipientConsignment: recipientArmor,
 		RecipientConsignmentBase64: base64.StdEncoding.EncodeToString(transferFile),
@@ -2807,27 +2828,11 @@ func validateRGB11SendInvoice(invoice *invoicing.Invoice, fallbackContract *cons
 	if invoice.Beneficiary.Network != wantNetwork || amount == 0 {
 		return consensus.ContractID{}, 0, "", "", "", "", invoicing.ErrInvalidInvoice
 	}
-	values := make(map[string]string, len(invoice.UnknownQuery))
-	for _, param := range invoice.UnknownQuery {
-		values[param.Key] = param.Value
+	if len(invoice.UnknownQuery) != 0 {
+		return consensus.ContractID{}, 0, "", "", "", "", invoicing.ErrInvalidInvoice
 	}
-	hasSAT20 := values["sat20_recipient"] != "" || values["sat20_relay"] != "" || values["sat20_ack"] != ""
-	recipientID, relayKey, ackKey, transport := values["sat20_recipient"], values["sat20_relay"], values["sat20_ack"], "sat20-dkvs"
-	if hasSAT20 {
-		if recipientID == "" || relayKey == "" || ackKey == "" {
-			return consensus.ContractID{}, 0, "", "", "", "", invoicing.ErrInvalidInvoice
-		}
-		if invoice.Beneficiary.Kind == invoicing.BeneficiaryBlindedSeal && values["sat20_vout"] != "1" {
-			return consensus.ContractID{}, 0, "", "", "", "", invoicing.ErrInvalidInvoice
-		}
-		pubkey, err := hex.DecodeString(recipientID)
-		if err != nil || len(pubkey) != 33 {
-			return consensus.ContractID{}, 0, "", "", "", "", invoicing.ErrInvalidInvoice
-		}
-		if _, err := HexPubKeyToP2TRPkScript(pubkey); err != nil {
-			return consensus.ContractID{}, 0, "", "", "", "", err
-		}
-	} else if len(invoice.Transports) > 0 {
+	recipientID, relayKey, ackKey, transport := "", "", "", ""
+	if len(invoice.Transports) > 0 {
 		if _, err := rgb11ProxyEndpoints(invoice); err != nil {
 			return consensus.ContractID{}, 0, "", "", "", "", err
 		}
@@ -2852,17 +2857,8 @@ func rgb11InvoiceTransportMode(invoice *invoicing.Invoice) (string, error) {
 	if invoice == nil {
 		return "", invoicing.ErrInvalidInvoice
 	}
-	values := make(map[string]string, len(invoice.UnknownQuery))
-	for _, param := range invoice.UnknownQuery {
-		values[param.Key] = param.Value
-	}
-	hasSAT20 := values["sat20_recipient"] != "" || values["sat20_relay"] != "" || values["sat20_ack"] != ""
-	if hasSAT20 {
-		if values["sat20_recipient"] == "" || values["sat20_relay"] == "" || values["sat20_ack"] == "" ||
-			len(invoice.Transports) != 0 {
-			return "", invoicing.ErrInvalidInvoice
-		}
-		return "sat20-dkvs", nil
+	if len(invoice.UnknownQuery) != 0 {
+		return "", invoicing.ErrInvalidInvoice
 	}
 	if len(invoice.Transports) != 0 {
 		if _, err := rgb11ProxyEndpoints(invoice); err != nil {
@@ -3420,6 +3416,32 @@ func (p *rgb11Manager) rollbackRGB11LocalChange(pending *rgb11wallet.PendingTran
 	return nil
 }
 
+func (p *rgb11Manager) rgb11RecoveryStateHash() ([32]byte, error) {
+	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || p.rgbManager.engineStore == nil {
+		return [32]byte{}, ErrRGB11Inconsistent
+	}
+	walletID, err := p.RGB11WalletID()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	full, _, err := p.exportRGB11WalletSnapshot(walletID)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	recovery, err := rgb11wallet.RecoveryPackageFromSnapshot(full, 0)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	if len(recovery.ProjectionRecords) == 0 && len(recovery.EngineRecords) == 0 {
+		return sha256.Sum256(nil), nil
+	}
+	encoded, err := rgb11wallet.EncodeRecoveryPackage(recovery)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(encoded), nil
+}
+
 // RefreshRGB11State advances locally restored RGB11 state using the expected
 // signed transaction and Bitcoin facts. It never requires the Indexer to name
 // the spending transaction: unknown spends remain fail-closed and unresolved.
@@ -3432,6 +3454,20 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 		return nil, err
 	}
 	defer unlock()
+	beforeRecoveryHash, beforeRecoveryErr := p.rgb11RecoveryStateHash()
+	defer func() {
+		if beforeRecoveryErr != nil {
+			return
+		}
+		afterRecoveryHash, hashErr := p.rgb11RecoveryStateHash()
+		if hashErr != nil {
+			Log.Warningf("capture RGB11 recovery state after refresh failed: %v", hashErr)
+			return
+		}
+		if afterRecoveryHash != beforeRecoveryHash {
+			p.autoBackupRGB11AfterMutation()
+		}
+	}()
 	result := &RGB11RefreshResult{}
 	if err := p.releaseExpiredRGB11ReceiveReservations(time.Now().Unix()); err != nil {
 		return nil, err
@@ -3515,7 +3551,39 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 			}
 			continue
 		}
-		if state.Status != "broadcast" && state.Status != "pending" && state.Status != "settled" {
+		if state.Status == "rejected" && state.RejectReason == rgb11RejectReasonInvoiceExpired {
+			pending, err := p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
+			if err != nil {
+				return nil, err
+			}
+			_, visible := p.expectedRGB11TransactionStatus(pending)
+			if !visible {
+				for _, outpoint := range state.InputOutPoints {
+					outspend, outspendErr := p.rgbManager.evidence.GetOutspend(outpoint)
+					if outspendErr != nil {
+						return nil, outspendErr
+					}
+					if outspend != nil && outspend.Spent && outspend.SpendingTx == state.WitnessTxID {
+						visible = true
+						break
+					}
+				}
+			}
+			if visible {
+				pending.State.Status = "conflicted"
+				pending.State.AckStatus = "invalidated"
+				if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+					return nil, err
+				}
+				p.rgbManager.consistencyStatus = "broken"
+				result.Conflicted++
+				result.Inconsistent = append(result.Inconsistent, state.InputOutPoints...)
+				return result, fmt.Errorf("%w: expired RGB11 witness %s appeared after cancellation",
+					ErrRGB11Inconsistent, state.WitnessTxID)
+			}
+			continue
+		}
+		if state.Status != rgb11StatusBroadcastAttempted && !rgb11BroadcastCompleteStatus(state.Status) {
 			continue
 		}
 		pending, err := p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
@@ -3723,7 +3791,6 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 	} else {
 		p.rgbManager.consistencyStatus = "ok"
 	}
-	p.autoBackupRGB11AfterMutation()
 	return result, nil
 }
 

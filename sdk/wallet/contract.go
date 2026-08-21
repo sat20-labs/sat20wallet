@@ -275,6 +275,44 @@ type ContractManager interface {
 		fees []string, feeRate int64, deployer string, subAccountIndex int) (string, int64, error)
 }
 
+// ContractRollbackResult describes the local state removed before the caller
+// replays canonical SatoshiNet blocks. It intentionally covers legacy channel
+// contracts only; native contracts such as AUTOPAY use chain replay directly.
+type ContractRollbackResult struct {
+	URL                string `json:"url"`
+	TemplateName       string `json:"templateName"`
+	PreviousHeight     int    `json:"previousHeight"`
+	TargetHeight       int    `json:"targetHeight"`
+	RemovedInvokeCount int    `json:"removedInvokeCount"`
+	InvokeCountBefore  int64  `json:"invokeCountBefore"`
+	InvokeCountAfter   int64  `json:"invokeCountAfter"`
+}
+
+// contractRollbackPlan is an in-memory, contract-specific reconstruction of
+// retained invoke items. Preparing a plan must not mutate runtime or DB state.
+// It lets contracts whose older invoke items are modified by later invokes
+// deterministically rebuild those items without rollback-only persistence.
+type contractRollbackPlan interface {
+	Apply() error
+	RolledBackResultTxIDs() []string
+}
+
+type contractRollbackPlanner interface {
+	PrepareRollback_SatsNet(targetHeight int, history []InvokeHistoryItem) (contractRollbackPlan, error)
+}
+
+type contractRollbackStateRebuilder interface {
+	RebuildRollbackState_SatsNet() error
+}
+
+type contractRollbackItemDisabler interface {
+	DisableRollbackItem_SatsNet(InvokeHistoryItem)
+}
+
+func supportsDeterministicRollbackTemplate(templateName string) bool {
+	return templateName == TEMPLATE_CONTRACT_SWAP || templateName == TEMPLATE_CONTRACT_LIMITORDER
+}
+
 type ActionFunc func(ContractManager, ContractDeployResvIF, any) (any, error)
 
 type ContractDeployAction struct {
@@ -372,6 +410,7 @@ type ContractRuntime interface {
 	InvokeWithBlock(*InvokeDataInBlock) error
 	InvokeCompleted(*InvokeDataInBlock)
 	HandleReorg_SatsNet(int, int) error
+	RollbackToHeight_SatsNet(int) (*ContractRollbackResult, error)
 	HandleReorg(int, int) error                       // 新链起点，新链高点
 	DisableItem(InvokeHistoryItem)                    // 因为reorg导致某个item无效
 	PrepareForReInvoke(height int, bSatsNet bool) int // 重新跑区块，需要重新加载历史数据，只为了处理某些漏掉的invoke
@@ -1635,6 +1674,39 @@ func InsertItemToInvokerHistroy(invoker *InvokerStatusBaseV2, item *InvokeItem) 
 	invoker.UpdateTime = time.Now().Unix()
 }
 
+func removeItemFromInvokerHistory(history map[int][]int64, itemID int64) bool {
+	for bucket, ids := range history {
+		for i, id := range ids {
+			if id != itemID {
+				continue
+			}
+			ids = append(ids[:i], ids[i+1:]...)
+			if len(ids) == 0 {
+				delete(history, bucket)
+			} else {
+				history[bucket] = ids
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func subtractDecimalNonNegative(current, delta *Decimal) *Decimal {
+	result := current.Sub(delta)
+	if result != nil && result.Sign() < 0 {
+		return nil
+	}
+	return result
+}
+
+func subtractInt64NonNegative(current, delta int64) int64 {
+	if delta >= current {
+		return 0
+	}
+	return current - delta
+}
+
 func (p *ContractRuntimeBase) getItemFromBuck(id int64) *InvokeItem {
 	index := getBuckIndex(id)
 	subIndex := getBuckSubIndex(id)
@@ -2432,6 +2504,241 @@ func (p *ContractRuntimeBase) HandleReorg_SatsNet(orgHeight, currHeight int) err
 	return nil
 }
 
+// RollbackToHeight_SatsNet removes L2 invoke items above targetHeight and
+// rewinds the persisted runtime height. The STP manager must hold its
+// contractRunningMutex while calling this method, then replay H+1..tip.
+func (p *ContractRuntimeBase) RollbackToHeight_SatsNet(targetHeight int) (*ContractRollbackResult, error) {
+	if targetHeight < 0 {
+		return nil, fmt.Errorf("invalid rollback height %d", targetHeight)
+	}
+
+	p.mutex.Lock()
+	previousHeight := p.CurrBlock
+	if targetHeight > previousHeight {
+		p.mutex.Unlock()
+		return nil, fmt.Errorf("rollback height %d exceeds contract current height %d", targetHeight, previousHeight)
+	}
+
+	result := &ContractRollbackResult{
+		URL:               p.URL(),
+		TemplateName:      p.runtime.GetTemplateName(),
+		PreviousHeight:    previousHeight,
+		TargetHeight:      targetHeight,
+		InvokeCountBefore: p.InvokeCount,
+	}
+
+	history := LoadContractInvokeHistory(p.db, p.URL(), false, false)
+	historyItems := make([]InvokeHistoryItem, 0, len(history))
+	resolvedUtxoIDs := make(map[InvokeHistoryItem]uint64)
+	orphanedItems := make(map[InvokeHistoryItem]bool)
+	for _, item := range history {
+		historyItems = append(historyItems, item)
+		if !item.FromSatsNet() || item.GetInvokeUtxoId() != REORG_UTXOID {
+			continue
+		}
+		utxoID, found, err := p.resolveCanonicalInvokeUtxoID_SatsNet(item)
+		if err != nil {
+			p.mutex.Unlock()
+			return nil, fmt.Errorf("resolve contract %s invoke %s after reorg: %w", result.URL, item.GetInvokeUtxo(), err)
+		}
+		if !found {
+			orphanedItems[item] = true
+			continue
+		}
+		resolvedUtxoIDs[item] = utxoID
+	}
+	removed := make([]InvokeHistoryItem, 0)
+	for _, item := range history {
+		height := item.GetHeight()
+		if utxoID, ok := resolvedUtxoIDs[item]; ok {
+			height, _, _ = indexer.FromUtxoId(utxoID)
+		}
+		if item.FromSatsNet() && (orphanedItems[item] || height > targetHeight) {
+			removed = append(removed, item)
+		}
+	}
+	sort.Slice(removed, func(i, j int) bool {
+		return removed[i].GetId() > removed[j].GetId()
+	})
+
+	var rollbackPlan contractRollbackPlan
+	if planner, ok := p.runtime.(contractRollbackPlanner); ok &&
+		supportsDeterministicRollbackTemplate(p.runtime.GetTemplateName()) {
+		planHistory := make([]InvokeHistoryItem, 0, len(historyItems))
+		for _, item := range historyItems {
+			if orphanedItems[item] {
+				clone, ok := item.(*InvokeItem)
+				if !ok {
+					p.mutex.Unlock()
+					return nil, fmt.Errorf("prepare contract %s rollback: unsupported orphan invoke type %T", result.URL, item)
+				}
+				clone = clone.Clone()
+				_, _, vout := indexer.FromUtxoId(clone.UtxoId)
+				clone.UtxoId = indexer.ToUtxoId(targetHeight+1, 0, vout)
+				planHistory = append(planHistory, clone)
+				continue
+			}
+			if utxoID, ok := resolvedUtxoIDs[item]; ok {
+				clone := item.(*InvokeItem).Clone()
+				clone.UtxoId = utxoID
+				planHistory = append(planHistory, clone)
+				continue
+			}
+			planHistory = append(planHistory, item)
+		}
+		var err error
+		rollbackPlan, err = planner.PrepareRollback_SatsNet(targetHeight, planHistory)
+		if err != nil {
+			p.mutex.Unlock()
+			return nil, fmt.Errorf("prepare contract %s rollback: %w", result.URL, err)
+		}
+	}
+	for item, utxoID := range resolvedUtxoIDs {
+		if orphanedItems[item] {
+			continue
+		}
+		invokeItem, ok := item.(*InvokeItem)
+		if !ok {
+			p.mutex.Unlock()
+			return nil, fmt.Errorf("save contract %s canonical invoke position: unsupported type %T", result.URL, item)
+		}
+		invokeItem.UtxoId = utxoID
+		if err := SaveContractInvokeHistoryItem(p.db, p.URL(), item); err != nil {
+			p.mutex.Unlock()
+			return nil, err
+		}
+	}
+
+	for _, item := range removed {
+		if rollbackPlan == nil {
+			if disabler, ok := p.runtime.(contractRollbackItemDisabler); ok {
+				disabler.DisableRollbackItem_SatsNet(item)
+			} else {
+				p.runtime.DisableItem(item)
+			}
+		}
+		if err := deleteContractInvokeHistoryItem(p.db, p.URL(), item); err != nil {
+			p.mutex.Unlock()
+			return nil, err
+		}
+		if rollbackPlan == nil {
+			if invokeItem, ok := item.(*InvokeItem); ok && invokeItem.OutTxId != "" {
+				_ = deleteContractInvokeResult(p.db, p.URL(), invokeItem.OutTxId)
+			}
+		}
+		delete(p.history, item.GetInvokeUtxo())
+	}
+	if rollbackPlan != nil {
+		for _, txID := range rollbackPlan.RolledBackResultTxIDs() {
+			_ = deleteContractInvokeResult(p.db, p.URL(), txID)
+		}
+	}
+
+	maxRetainedID := int64(-1)
+	for _, item := range history {
+		if orphanedItems[item] || (item.FromSatsNet() && item.GetHeight() > targetHeight) {
+			continue
+		}
+		if item.GetId() > maxRetainedID {
+			maxRetainedID = item.GetId()
+		}
+	}
+	p.InvokeCount = maxRetainedID + 1
+	p.lastInvokeCount = p.InvokeCount
+	p.CurrBlock = targetHeight
+	if previousHeight > targetHeight && (p.Status < CONTRACT_STATUS_INIT || p.Status >= CONTRACT_STATUS_CLOSING) {
+		p.Status = CONTRACT_STATUS_READY
+		if p.resv != nil {
+			p.resv.SetStatus(RS_DEPLOY_CONTRACT_RUNNING)
+		}
+	}
+	if p.CheckPoint > p.InvokeCount {
+		p.CheckPoint = p.InvokeCount
+	}
+	if p.CheckPointBlock > targetHeight {
+		p.CheckPointBlock = targetHeight
+	}
+	p.AssetMerkleRoot = nil
+	p.CurrAssetMerkleRoot = nil
+	p.assetMerkleRootMap = make(map[int64][]byte)
+	p.responseHistory = make(map[int][]*InvokeItem)
+	result.RemovedInvokeCount = len(removed)
+	result.InvokeCountAfter = p.InvokeCount
+	p.mutex.Unlock()
+
+	if rollbackPlan != nil {
+		if err := rollbackPlan.Apply(); err != nil {
+			return nil, fmt.Errorf("apply contract %s rollback: %w", result.URL, err)
+		}
+	} else {
+		if rebuilder, ok := p.runtime.(contractRollbackStateRebuilder); ok {
+			if err := rebuilder.RebuildRollbackState_SatsNet(); err != nil {
+				return nil, fmt.Errorf("rebuild contract %s rollback state: %w", result.URL, err)
+			}
+		}
+		// Rebuild all non-persisted indexes from the retained history. Concrete
+		// running totals have already been adjusted through DisableItem.
+		if err := p.runtime.InitFromDB(p.stp, p.resv); err != nil {
+			return nil, fmt.Errorf("reinitialize contract %s after rollback: %w", result.URL, err)
+		}
+	}
+
+	p.mutex.Lock()
+	p.CurrAssetMerkleRoot = p.runtime.CalcRuntimeMerkleRoot()
+	p.mutex.Unlock()
+	if err := p.stp.SaveReservationWithLock(p.resv); err != nil {
+		return nil, fmt.Errorf("save contract %s after rollback: %w", result.URL, err)
+	}
+	return result, nil
+}
+
+func (p *ContractRuntimeBase) resolveCanonicalInvokeUtxoID_SatsNet(item InvokeHistoryItem) (uint64, bool, error) {
+	txID, vout, err := indexer.ParseUtxo(item.GetInvokeUtxo())
+	if err != nil {
+		return 0, false, err
+	}
+	client := p.stp.GetIndexerClient_SatsNet()
+	if client == nil {
+		return 0, false, fmt.Errorf("L2 indexer client is unavailable")
+	}
+	height, err := client.GetTxHeight(txID)
+	if err != nil {
+		if rollbackTxNotFound(err) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	if height < 0 {
+		return 0, false, fmt.Errorf("canonical transaction %s is not confirmed", txID)
+	}
+	blockHash, err := client.GetBlockHash(height)
+	if err != nil {
+		return 0, false, err
+	}
+	rawBlock, err := client.GetBlock(blockHash)
+	if err != nil {
+		return 0, false, err
+	}
+	blockBytes, err := hex.DecodeString(rawBlock)
+	if err != nil {
+		return 0, false, fmt.Errorf("decode canonical block %d: %w", height, err)
+	}
+	var block swire.MsgBlock
+	if err := block.Deserialize(bytes.NewReader(blockBytes)); err != nil {
+		return 0, false, fmt.Errorf("decode canonical block %d: %w", height, err)
+	}
+	for txIndex, tx := range block.Transactions {
+		if tx.TxID() != txID {
+			continue
+		}
+		if vout >= len(tx.TxOut) {
+			return 0, false, fmt.Errorf("canonical transaction %s has no output %d", txID, vout)
+		}
+		return indexer.ToUtxoId(height, txIndex, vout), true, nil
+	}
+	return 0, false, fmt.Errorf("canonical block %d does not contain transaction %s", height, txID)
+}
+
 // 输入： 新链起点，新链高点
 // 处理：历史数据中，从orgHeight开始的所有数据，其utxoId都失效，但不修改其处理结果
 func (p *ContractRuntimeBase) HandleReorg(orgHeight, currHeight int) error {
@@ -2544,6 +2851,9 @@ func (p *ContractRuntimeBase) invokeCompleted() {
 		for k, item := range p.history {
 			if item.FromL1 {
 				if item.Finished() {
+					if item.GetInvokeUtxoId() == REORG_UTXOID {
+						continue
+					}
 					h, _, _ := indexer.FromUtxoId(item.UtxoId)
 					if p.CurrBlockL1-6 > h {
 						cleanlist = append(cleanlist, k)
@@ -2551,6 +2861,9 @@ func (p *ContractRuntimeBase) invokeCompleted() {
 				}
 			} else {
 				if item.Finished() {
+					if item.GetInvokeUtxoId() == REORG_UTXOID {
+						continue
+					}
 					h, _, _ := indexer.FromUtxoId(item.UtxoId)
 					if p.CurrBlock-6 > h {
 						cleanlist = append(cleanlist, k)

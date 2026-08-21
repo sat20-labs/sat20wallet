@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -16,6 +17,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
+	"github.com/sat20-labs/satoshinet/btcjson"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -1454,14 +1456,14 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 
 		} else if templateName == TEMPLATE_CONTRACT_FAUCET {
 			// 可以不设置amt
-			
+
 			// unitprice 实际是utxo的聪数量
 			if swapParam.OrderType == ORDERTYPE_BUY {
 				return SWAP_INVOKE_FEE, nil
 			} else {
 				return SWAP_INVOKE_FEE, fmt.Errorf("faucet only support buy")
 			}
-		}else {
+		} else {
 			return 0, fmt.Errorf("invalid template %s", templateName)
 		}
 
@@ -1543,7 +1545,7 @@ func (p *SwapContractRuntime) CheckInvokeParam(param string) (int64, error) {
 		return WITHDRAW_INVOKE_FEE + fee, nil
 
 	case INVOKE_API_ADDLIQUIDITY:
-		if templateName != TEMPLATE_CONTRACT_AMM && templateName != TEMPLATE_CONTRACT_FAUCET{
+		if templateName != TEMPLATE_CONTRACT_AMM && templateName != TEMPLATE_CONTRACT_FAUCET {
 			return 0, fmt.Errorf("unsupport")
 		}
 		var innerParam AddLiqInvokeParam
@@ -2763,6 +2765,483 @@ func (p *SwapContractRuntime) updateContractStatus(item *SwapHistoryItem) {
 	// 整体状态在外部保存
 }
 
+// DisableItem reverses the direct accounting applied when an invoke item was
+// accepted. Result-transaction aggregates are intentionally left for canonical
+// block replay to rebuild where possible.
+func (p *SwapContractRuntime) DisableItem(input InvokeHistoryItem) {
+	item, ok := input.(*SwapHistoryItem)
+	if !ok {
+		return
+	}
+
+	p.TotalInputAssets = subtractDecimalNonNegative(p.TotalInputAssets, item.InAmt)
+	p.TotalInputSats = subtractInt64NonNegative(p.TotalInputSats, item.InValue)
+
+	trader := p.loadTraderInfo(item.Address)
+	if removeItemFromInvokerHistory(trader.History, item.Id) && trader.InvokeCount > 0 {
+		trader.InvokeCount--
+	}
+	if item.Reason == INVOKE_REASON_NORMAL {
+		switch item.OrderType {
+		case ORDERTYPE_BUY:
+			trader.OnBuyValue = subtractInt64NonNegative(trader.OnBuyValue, item.RemainingValue)
+			p.SatsValueInPool = subtractInt64NonNegative(p.SatsValueInPool, item.RemainingValue)
+		case ORDERTYPE_SELL:
+			trader.OnSaleAmt = subtractDecimalNonNegative(trader.OnSaleAmt, item.RemainingAmt)
+			p.AssetAmtInPool = subtractDecimalNonNegative(p.AssetAmtInPool, item.RemainingAmt)
+		}
+	}
+	trader.UpdateTime = time.Now().Unix()
+	saveContractInvokerStatus(p.stp.GetDB(), p.URL(), trader)
+}
+
+type swapRollbackResultEvent struct {
+	txID    string
+	reason  string
+	height  int
+	itemIDs []int64
+}
+
+type swapRollbackPlan struct {
+	runtime               *SwapContractRuntime
+	work                  *SwapContractRuntime
+	items                 []*SwapHistoryItem
+	rolledBackResultTxIDs []string
+}
+
+func (p *swapRollbackPlan) RolledBackResultTxIDs() []string {
+	return append([]string(nil), p.rolledBackResultTxIDs...)
+}
+
+func (p *swapRollbackPlan) Apply() error {
+	runtime := p.runtime
+	work := p.work
+
+	runtime.SwapContractRunningData = work.SwapContractRunningData
+	runtime.buyPool = work.buyPool
+	runtime.sellPool = work.sellPool
+	runtime.traderInfoMap = work.traderInfoMap
+	runtime.swapMap = work.swapMap
+	runtime.refundMap = work.refundMap
+	runtime.depositMap = work.depositMap
+	runtime.withdrawMap = work.withdrawMap
+	runtime.addLiquidityMap = work.addLiquidityMap
+	runtime.removeLiquidityMap = work.removeLiquidityMap
+	runtime.stakeMap = work.stakeMap
+	runtime.unstakeMap = work.unstakeMap
+	runtime.profitMap = work.profitMap
+	runtime.stubFeeMap = make(map[int64]int64)
+	runtime.isSending = false
+	runtime.dealPrice = work.dealPrice
+	runtime.history = make(map[string]*InvokeItem)
+	runtime.responseHistory = make(map[int][]*InvokeItem)
+
+	if err := DeleteAllContractInvokerStatus(runtime.stp.GetDB(), runtime.URL()); err != nil {
+		return err
+	}
+	for _, item := range p.items {
+		if err := SaveContractInvokeHistoryItem(runtime.stp.GetDB(), runtime.URL(), item); err != nil {
+			return err
+		}
+		runtime.insertBuck(item)
+		if !item.Finished() {
+			runtime.history[item.InUtxo] = item
+		}
+	}
+	for _, trader := range runtime.traderInfoMap {
+		if err := saveContractInvokerStatus(runtime.stp.GetDB(), runtime.URL(), trader); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cloneSwapHistoryItem(item *SwapHistoryItem) *SwapHistoryItem {
+	if item == nil {
+		return nil
+	}
+	clone := *item
+	clone.UnitPrice = item.UnitPrice.Clone()
+	clone.ExpectedAmt = item.ExpectedAmt.Clone()
+	clone.InAmt = item.InAmt.Clone()
+	clone.RemainingAmt = item.RemainingAmt.Clone()
+	clone.OutAmt = item.OutAmt.Clone()
+	clone.Padded = append([]byte(nil), item.Padded...)
+	return &clone
+}
+
+func rollbackTxNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	const noTxInfo = "no information available about transaction"
+	var rpcErr *btcjson.RPCError
+	if errors.As(err, &rpcErr) && rpcErr.Code == btcjson.ErrRPCNoTxInfo &&
+		strings.Contains(strings.ToLower(rpcErr.Message), noTxInfo) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, noTxInfo) ||
+		msg == "not found" || msg == "key not found" ||
+		strings.Contains(msg, "transaction not found") ||
+		strings.Contains(msg, "can't find transaction") ||
+		strings.Contains(msg, "cannot find transaction") ||
+		strings.Contains(msg, "no such transaction")
+}
+
+func (p *SwapContractRuntime) rollbackResultHeight(item *SwapHistoryItem) (int, bool, error) {
+	if item.OutTxId == "" {
+		return -1, false, nil
+	}
+	client := p.stp.GetIndexerClient_SatsNet()
+	if item.ToL1 {
+		client = p.stp.GetIndexerClient()
+	}
+	if client == nil {
+		chain := "L2"
+		if item.ToL1 {
+			chain = "L1"
+		}
+		return -1, false, fmt.Errorf("%s indexer client is unavailable", chain)
+	}
+	height, err := client.GetTxHeight(item.OutTxId)
+	if err != nil {
+		if rollbackTxNotFound(err) {
+			return -1, false, nil
+		}
+		return -1, false, err
+	}
+	if height < 0 {
+		return -1, false, nil
+	}
+	return height, true, nil
+}
+
+func initialSwapReason(item *SwapHistoryItem) string {
+	switch item.OrderType {
+	case ORDERTYPE_BUY:
+		if item.UnitPrice == nil || item.UnitPrice.Sign() <= 0 ||
+			item.ExpectedAmt == nil || item.ExpectedAmt.Sign() <= 0 ||
+			item.InValue < item.ServiceFee {
+			return INVOKE_REASON_INVALID
+		}
+		return INVOKE_REASON_NORMAL
+	case ORDERTYPE_SELL:
+		if item.UnitPrice == nil || item.UnitPrice.Sign() <= 0 ||
+			item.ExpectedAmt == nil || item.ExpectedAmt.Sign() <= 0 ||
+			item.InAmt == nil || item.InAmt.Sign() <= 0 ||
+			item.InAmt.Cmp(item.ExpectedAmt) != 0 || item.InValue < SWAP_INVOKE_FEE {
+			return INVOKE_REASON_INVALID
+		}
+		return INVOKE_REASON_NORMAL
+	case ORDERTYPE_REFUND:
+		return INVOKE_REASON_NORMAL
+	default:
+		return item.Reason
+	}
+}
+
+func (p *SwapContractRuntime) resetSwapItemForRollback(item *SwapHistoryItem) error {
+	switch item.OrderType {
+	case ORDERTYPE_BUY, ORDERTYPE_SELL, ORDERTYPE_REFUND:
+	default:
+		return fmt.Errorf("swap rollback does not support order type %d", item.OrderType)
+	}
+	item.Reason = initialSwapReason(item)
+	item.Done = ITEM_STATUS_INIT
+	item.RemainingAmt = item.InAmt.Clone()
+	item.RemainingValue = 0
+	if item.OrderType == ORDERTYPE_BUY {
+		item.RemainingValue = item.InValue - item.ServiceFee
+		if item.RemainingValue < 0 {
+			item.RemainingValue = 0
+		}
+	}
+	item.OutAmt = indexer.NewDecimal(0, p.Divisibility)
+	item.OutValue = 0
+	item.OutTxId = ""
+	return nil
+}
+
+func (p *SwapContractRuntime) addRollbackItem(item *SwapHistoryItem) {
+	work := p
+	work.history[item.InUtxo] = item
+	trader := work.traderInfoMap[item.Address]
+	if trader == nil {
+		trader = NewTraderStatus(item.Address, work.Divisibility)
+		work.traderInfoMap[item.Address] = trader
+	}
+	insertItemToTraderHistroy(&trader.InvokerStatusBase, item)
+	work.TotalInputAssets = work.TotalInputAssets.Add(item.InAmt)
+	work.TotalInputSats += item.InValue
+
+	if item.Reason == INVOKE_REASON_NORMAL {
+		switch item.OrderType {
+		case ORDERTYPE_BUY:
+			trader.OnBuyValue += item.RemainingValue
+			work.SatsValueInPool += item.RemainingValue
+		case ORDERTYPE_SELL:
+			trader.OnSaleAmt = trader.OnSaleAmt.Add(item.RemainingAmt)
+			work.AssetAmtInPool = work.AssetAmtInPool.Add(item.RemainingAmt)
+		case ORDERTYPE_REFUND:
+			work.addRefundItem(item, true)
+		}
+	}
+	work.addItem(item)
+}
+
+func removeRollbackPoolItem(items []*SwapHistoryItem, id int64) []*SwapHistoryItem {
+	for i, item := range items {
+		if item.Id == id {
+			return utils.RemoveIndex(items, i)
+		}
+	}
+	return items
+}
+
+func (p *SwapContractRuntime) applyRollbackDealResult(event *swapRollbackResultEvent) error {
+	for _, id := range event.itemIDs {
+		item := p.getItemFromBuck(id)
+		if item == nil {
+			return fmt.Errorf("deal result %s item %d is missing", event.txID, id)
+		}
+		if item.OrderType == ORDERTYPE_BUY {
+			if item.RemainingValue != 0 {
+				return fmt.Errorf("deal result %s buy item %d is not exhausted", event.txID, id)
+			}
+			p.buyPool = removeRollbackPoolItem(p.buyPool, id)
+			trader := p.traderInfoMap[item.Address]
+			if trader != nil {
+				onBuyValue := item.InValue - item.ServiceFee
+				trader.DealValue += onBuyValue - item.OutValue
+				trader.OnBuyValue -= onBuyValue
+			}
+		} else if item.OrderType == ORDERTYPE_SELL {
+			if item.RemainingAmt.Sign() != 0 {
+				return fmt.Errorf("deal result %s sell item %d is not exhausted", event.txID, id)
+			}
+			p.sellPool = removeRollbackPoolItem(p.sellPool, id)
+			trader := p.traderInfoMap[item.Address]
+			if trader != nil {
+				trader.DealAmt = trader.DealAmt.Add(item.InAmt).Sub(item.OutAmt)
+				trader.OnSaleAmt = trader.OnSaleAmt.Sub(item.InAmt)
+			}
+		} else {
+			return fmt.Errorf("deal result %s has order type %d", event.txID, item.OrderType)
+		}
+		item.OutTxId = event.txID
+		item.Done = ITEM_STATUS_DEALT
+		removeItemFromMap(item, p.swapMap)
+		delete(p.history, item.InUtxo)
+		p.TotalOutputAssets = p.TotalOutputAssets.Add(item.OutAmt)
+		p.TotalOutputSats += item.OutValue
+	}
+	p.TotalDealTx++
+	p.TotalDealTxFee += DEFAULT_FEE_SATSNET
+	p.TotalOutputSats += DEFAULT_FEE_SATSNET
+	return nil
+}
+
+func (p *SwapContractRuntime) applyRollbackRefundResult(event *swapRollbackResultEvent) error {
+	for _, id := range event.itemIDs {
+		item := p.getItemFromBuck(id)
+		if item == nil {
+			return fmt.Errorf("refund result %s item %d is missing", event.txID, id)
+		}
+		if item.OrderType == ORDERTYPE_REFUND {
+			item.Done = ITEM_STATUS_DEALT
+		} else {
+			item.Done = ITEM_STATUS_REFUNDED
+			item.OutAmt = item.OutAmt.Add(item.RemainingAmt)
+			item.OutValue += item.RemainingValue
+			item.RemainingAmt = nil
+			item.RemainingValue = 0
+			p.TotalRefundAssets = p.TotalRefundAssets.Add(item.OutAmt)
+			p.TotalRefundSats += item.OutValue
+			p.TotalOutputAssets = p.TotalOutputAssets.Add(item.OutAmt)
+			p.TotalOutputSats += item.OutValue
+			trader := p.traderInfoMap[item.Address]
+			if trader != nil {
+				trader.RefundAmt = trader.RefundAmt.Add(item.OutAmt)
+				trader.RefundValue += item.OutValue
+			}
+		}
+		item.OutTxId = event.txID
+		removeItemFromMap(item, p.refundMap)
+		delete(p.history, item.InUtxo)
+	}
+	p.TotalRefundTx++
+	p.TotalRefundTxFee += DEFAULT_FEE_SATSNET
+	p.TotalOutputSats += DEFAULT_FEE_SATSNET
+	return nil
+}
+
+func (p *SwapContractRuntime) applyRollbackResult(event *swapRollbackResultEvent) error {
+	switch event.reason {
+	case INVOKE_RESULT_DEAL:
+		return p.applyRollbackDealResult(event)
+	case INVOKE_RESULT_REFUND:
+		return p.applyRollbackRefundResult(event)
+	default:
+		return fmt.Errorf("swap rollback does not support result %s", event.reason)
+	}
+}
+
+func (p *SwapContractRuntime) PrepareRollback_SatsNet(targetHeight int, history []InvokeHistoryItem) (contractRollbackPlan, error) {
+	if !supportsDeterministicRollbackTemplate(p.GetTemplateName()) {
+		return nil, fmt.Errorf("deterministic rollback is only implemented for %s and %s",
+			TEMPLATE_CONTRACT_SWAP, TEMPLATE_CONTRACT_LIMITORDER)
+	}
+
+	items := make([]*SwapHistoryItem, 0, len(history))
+	resultItems := make(map[string][]int64)
+	resultToL1 := make(map[string]bool)
+	resultReason := loadContractAllInvokeResult(p.stp.GetDB(), p.URL())
+	rolledBackResults := make(map[string]bool)
+	preservedResults := make(map[string]*swapRollbackResultEvent)
+
+	for _, baseItem := range history {
+		item, ok := baseItem.(*SwapHistoryItem)
+		if !ok {
+			return nil, fmt.Errorf("unexpected rollback item %T", baseItem)
+		}
+		if item.OutTxId != "" {
+			resultItems[item.OutTxId] = append(resultItems[item.OutTxId], item.Id)
+			if old, exists := resultToL1[item.OutTxId]; exists && old != item.ToL1 {
+				return nil, fmt.Errorf("result %s mixes L1 and L2 items", item.OutTxId)
+			}
+			resultToL1[item.OutTxId] = item.ToL1
+		}
+	}
+
+	for txID, ids := range resultItems {
+		var sample *SwapHistoryItem
+		for _, baseItem := range history {
+			item := baseItem.(*SwapHistoryItem)
+			if item.OutTxId == txID {
+				sample = item
+				break
+			}
+		}
+		height, found, err := p.rollbackResultHeight(sample)
+		if err != nil {
+			return nil, fmt.Errorf("query result %s: %w", txID, err)
+		}
+		preserve := found && (sample.ToL1 || height <= targetHeight)
+		if !preserve {
+			rolledBackResults[txID] = true
+			continue
+		}
+		for _, baseItem := range history {
+			item := baseItem.(*SwapHistoryItem)
+			if item.OutTxId == txID && item.FromSatsNet() && item.GetHeight() > targetHeight {
+				return nil, fmt.Errorf("L2 item %d above rollback height has preserved result %s", item.Id, txID)
+			}
+		}
+		reason := resultReason[txID]
+		if reason == "" {
+			reason = INVOKE_RESULT_DEAL
+			for _, baseItem := range history {
+				item := baseItem.(*SwapHistoryItem)
+				if item.OutTxId == txID && (item.OrderType == ORDERTYPE_REFUND || item.Reason == INVOKE_REASON_REFUND) {
+					reason = INVOKE_RESULT_REFUND
+					break
+				}
+			}
+		}
+		preservedResults[txID] = &swapRollbackResultEvent{
+			txID: txID, reason: reason, height: height, itemIDs: append([]int64(nil), ids...),
+		}
+	}
+
+	for _, baseItem := range history {
+		item := baseItem.(*SwapHistoryItem)
+		if item.FromSatsNet() && item.GetHeight() > targetHeight {
+			continue
+		}
+		clone := cloneSwapHistoryItem(item)
+		if err := p.resetSwapItemForRollback(clone); err != nil {
+			return nil, err
+		}
+		items = append(items, clone)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		hi, _, _ := indexer.FromUtxoId(items[i].UtxoId)
+		hj, _, _ := indexer.FromUtxoId(items[j].UtxoId)
+		if hi != hj {
+			return hi < hj
+		}
+		if items[i].UtxoId != items[j].UtxoId {
+			return items[i].UtxoId < items[j].UtxoId
+		}
+		return items[i].Id < items[j].Id
+	})
+
+	work := NewSwapContractRuntime(p.stp)
+	work.Contract = p.Contract
+	work.Divisibility = p.Divisibility
+	work.N = p.N
+	work.ChannelAddr = p.ChannelAddr
+	work.dealDivisibility = p.dealDivisibility
+	events := make([]*swapRollbackResultEvent, 0, len(preservedResults))
+	for _, event := range preservedResults {
+		sort.Slice(event.itemIDs, func(i, j int) bool { return event.itemIDs[i] < event.itemIDs[j] })
+		events = append(events, event)
+	}
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].height != events[j].height {
+			return events[i].height < events[j].height
+		}
+		return events[i].txID < events[j].txID
+	})
+
+	eventIndex := 0
+	itemIndex := 0
+	for itemIndex < len(items) {
+		height, _, _ := indexer.FromUtxoId(items[itemIndex].UtxoId)
+		for eventIndex < len(events) && events[eventIndex].height < height {
+			if err := work.applyRollbackResult(events[eventIndex]); err != nil {
+				return nil, err
+			}
+			eventIndex++
+		}
+		for itemIndex < len(items) {
+			itemHeight, _, _ := indexer.FromUtxoId(items[itemIndex].UtxoId)
+			if itemHeight != height {
+				break
+			}
+			work.addRollbackItem(items[itemIndex])
+			itemIndex++
+		}
+		if err := work.matchOrders(false); err != nil {
+			return nil, err
+		}
+		for eventIndex < len(events) && events[eventIndex].height == height {
+			if err := work.applyRollbackResult(events[eventIndex]); err != nil {
+				return nil, err
+			}
+			eventIndex++
+		}
+	}
+	for eventIndex < len(events) {
+		if events[eventIndex].height <= targetHeight {
+			if err := work.applyRollbackResult(events[eventIndex]); err != nil {
+				return nil, err
+			}
+		}
+		eventIndex++
+	}
+
+	rolled := make([]string, 0, len(rolledBackResults))
+	for txID := range rolledBackResults {
+		rolled = append(rolled, txID)
+	}
+	sort.Strings(rolled)
+	return &swapRollbackPlan{
+		runtime: p, work: work, items: items, rolledBackResultTxIDs: rolled,
+	}, nil
+}
+
 func addItemToMap(item *SwapHistoryItem, addrMap map[string]map[int64]*SwapHistoryItem) {
 	itemMap, ok := addrMap[item.Address]
 	if !ok {
@@ -2827,7 +3306,7 @@ func (p *SwapContractRuntime) addRefundItem(item *SwapHistoryItem, updatePool bo
 					// buy&sell pool在updateWithDealInfo_refund时统一处理无效的item
 				}
 			}
-			p.swapMap[item.Address] = make(map[int64]*SwapHistoryItem)
+			delete(p.swapMap, item.Address)
 
 		}
 	} else {
@@ -3081,22 +3560,22 @@ func (p *SwapContractRuntime) deal() error {
 			// 发送费用已经从所有参与者扣除，但如果该交易的聪资产太少，就暂时不发送，等下次
 			//if dealInfo.TotalValue+indexer.DecimalMul(dealInfo.TotalAmt, p.dealPrice).Int64() >= _valueLimit ||
 			//	len(dealInfo.SendInfo) >= _addressLimit {
-				txId, err := p.sendTx_SatsNet(dealInfo, INVOKE_RESULT_DEAL)
-				if err != nil {
-					p.isSending = false
-					Log.Errorf("contract %s sendTx_SatsNet %s failed %v", url, INVOKE_RESULT_DEAL, err)
-					// 下个区块再试
-					return err
-				}
-				dealInfo.TxId = txId
-				dealInfo.Fee = DEFAULT_FEE_SATSNET
+			txId, err := p.sendTx_SatsNet(dealInfo, INVOKE_RESULT_DEAL)
+			if err != nil {
+				p.isSending = false
+				Log.Errorf("contract %s sendTx_SatsNet %s failed %v", url, INVOKE_RESULT_DEAL, err)
+				// 下个区块再试
+				return err
+			}
+			dealInfo.TxId = txId
+			dealInfo.Fee = DEFAULT_FEE_SATSNET
 
-				// record
-				//p.updateWithDealInfo(buyInfo, sellInfo, txId, stp.db)
-				p.updateWithDealInfo_swap(dealInfo)
-				// 成功一步记录一步
-				p.stp.SaveReservationWithLock(p.resv)
-				Log.Infof("contract %s swap completed, %s", url, txId)
+			// record
+			//p.updateWithDealInfo(buyInfo, sellInfo, txId, stp.db)
+			p.updateWithDealInfo_swap(dealInfo)
+			// 成功一步记录一步
+			p.stp.SaveReservationWithLock(p.resv)
+			Log.Infof("contract %s swap completed, %s", url, txId)
 			//}
 		}
 
@@ -3248,6 +3727,13 @@ func (p *SwapContractRuntime) updateWithDealInfo_swap(dealInfo *DealInfo) {
 
 // 执行交换，每个区块统一执行一次
 func (p *SwapContractRuntime) swap() error {
+	return p.matchOrders(true)
+}
+
+// matchOrders contains the deterministic order matching state transition.
+// Rollback reconstruction runs it with persist=false so the candidate state
+// can be fully validated before any current state is replaced.
+func (p *SwapContractRuntime) matchOrders(persist bool) error {
 
 	if p.GetTemplateName() != TEMPLATE_CONTRACT_SWAP {
 		return nil
@@ -3386,8 +3872,10 @@ func (p *SwapContractRuntime) swap() error {
 			p.LowestDealPrice = p.LastDealPrice.Clone()
 		}
 
-		SaveContractInvokeHistoryItem(p.stp.GetDB(), url, buy)
-		SaveContractInvokeHistoryItem(p.stp.GetDB(), url, sell)
+		if persist {
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, buy)
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, sell)
+		}
 
 		updated = true
 
@@ -3396,7 +3884,7 @@ func (p *SwapContractRuntime) swap() error {
 	}
 
 	// 交易的结果先保存
-	if updated {
+	if updated && persist {
 		p.stp.SaveReservation(p.resv)
 		// if p.InvokeCount%100 == 0 {
 		// 	p.checkSelf()
@@ -3463,8 +3951,10 @@ func (p *SwapContractRuntime) sendInvokeResultTx() error {
 
 func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
 
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
+	// This function also closes refund entries that have no value to return, so
+	// it needs an exclusive lock rather than a read lock.
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 
 	var totalRefundAmt *Decimal // 资产数量
 	var totalRefundValue int64  // 交易所需的聪数量
@@ -3548,9 +4038,125 @@ func (p *SwapContractRuntime) genRefundInfo(height int) *DealInfo {
 	}
 }
 
+// resolveRefundItemIDsLocked resolves the items covered by a refund result.
+// A non-empty list selects those exact items. An empty list selects every
+// pending refund item at or below the result height.
+func (p *SwapContractRuntime) resolveRefundItemIDsLocked(itemIDs []int64, height int) ([]int64, error) {
+	if len(itemIDs) != 0 {
+		return append([]int64(nil), itemIDs...), nil
+	}
+
+	selectedIDs := make([]int64, 0)
+	for _, itemsByAddress := range p.refundMap {
+		for id, item := range itemsByAddress {
+			if item == nil || item.Finished() {
+				continue
+			}
+			itemHeight, _, _ := indexer.FromUtxoId(item.UtxoId)
+			if itemHeight <= height {
+				selectedIDs = append(selectedIDs, id)
+			}
+		}
+	}
+	sort.Slice(selectedIDs, func(i, j int) bool {
+		return selectedIDs[i] < selectedIDs[j]
+	})
+	if len(selectedIDs) == 0 {
+		return nil, fmt.Errorf("no pending refund items at or below height %d", height)
+	}
+	return selectedIDs, nil
+}
+
+// genRefundInfoForItemIDs rebuilds the expected refund from the selected
+// items. Empty itemIDs means all pending items at or below height.
+func (p *SwapContractRuntime) genRefundInfoForItemIDs(itemIDs []int64, height int) (*DealInfo, error) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	resolvedIDs, err := p.resolveRefundItemIDsLocked(itemIDs, height)
+	if err != nil {
+		return nil, err
+	}
+
+	sendInfoMap := make(map[string]*SendAssetInfo)
+	selectedIDs := make([]int64, 0, len(resolvedIDs))
+	seen := make(map[int64]bool, len(resolvedIDs))
+	var totalRefundAmt *Decimal
+	var totalRefundValue int64
+	maxHeight := 0
+
+	for _, id := range resolvedIDs {
+		if seen[id] {
+			return nil, fmt.Errorf("duplicate refund item ID %d", id)
+		}
+		seen[id] = true
+
+		item := p.getItemFromBuck(id)
+		if item == nil {
+			return nil, fmt.Errorf("can't find refund item %d", id)
+		}
+		if item.Finished() {
+			return nil, fmt.Errorf("refund item %d is already finished", id)
+		}
+		itemsByAddress, ok := p.refundMap[item.Address]
+		if !ok || itemsByAddress[id] == nil {
+			return nil, fmt.Errorf("item %d is not pending refund", id)
+		}
+
+		itemHeight, _, _ := indexer.FromUtxoId(item.UtxoId)
+		if itemHeight > height {
+			return nil, fmt.Errorf("refund item %d height %d exceeds result height %d", id, itemHeight, height)
+		}
+		maxHeight = max(maxHeight, itemHeight)
+		selectedIDs = append(selectedIDs, id)
+
+		if item.OrderType == ORDERTYPE_REFUND ||
+			(item.RemainingAmt.IsZero() && item.RemainingValue == 0) {
+			continue
+		}
+
+		info := sendInfoMap[item.Address]
+		if info == nil {
+			info = &SendAssetInfo{
+				Address:   item.Address,
+				AssetName: p.GetAssetName(),
+			}
+			sendInfoMap[item.Address] = info
+		}
+
+		amt := indexer.DecimalAdd(item.RemainingAmt, item.OutAmt)
+		value := item.RemainingValue + item.OutValue
+		info.AssetAmt = info.AssetAmt.Add(amt)
+		info.Value += value
+		totalRefundAmt = totalRefundAmt.Add(amt)
+		totalRefundValue += value
+	}
+
+	if maxHeight != height {
+		return nil, fmt.Errorf("refund item height %d does not match result height %d", maxHeight, height)
+	}
+
+	return &DealInfo{
+		SendInfo:   sendInfoMap,
+		ItemIDs:    selectedIDs,
+		AssetName:  p.GetAssetName(),
+		TotalAmt:   totalRefundAmt,
+		TotalValue: totalRefundValue,
+		Reason:     INVOKE_RESULT_REFUND,
+		Height:     maxHeight,
+	}, nil
+}
+
 func (p *SwapContractRuntime) updateWithDealInfo_refund(dealInfo *DealInfo) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+
+	itemIDs, err := p.resolveRefundItemIDsLocked(dealInfo.ItemIDs, dealInfo.Height)
+	if err != nil {
+		Log.Errorf("contract %s resolve refund items failed: %v", p.URL(), err)
+		return
+	}
+	dealInfo.ItemIDs = itemIDs
 
 	p.TotalRefundAssets = p.TotalRefundAssets.Add(dealInfo.TotalAmt)
 	p.TotalRefundSats += dealInfo.TotalValue
@@ -3560,75 +4166,52 @@ func (p *SwapContractRuntime) updateWithDealInfo_refund(dealInfo *DealInfo) {
 	p.TotalOutputSats += dealInfo.TotalValue + dealInfo.Fee
 
 	url := p.URL()
-	height := dealInfo.Height
 	txId := dealInfo.TxId
+	itemsByAddress := make(map[string][]*SwapHistoryItem)
+	for _, id := range dealInfo.ItemIDs {
+		item := p.loadHistoryItemByID(id)
+		if item == nil || item.Finished() {
+			continue
+		}
+		pending := p.refundMap[item.Address]
+		if pending == nil || pending[id] == nil {
+			Log.Warningf("contract %s refund item %d is not pending", url, id)
+			continue
+		}
+		itemsByAddress[item.Address] = append(itemsByAddress[item.Address], item)
+	}
 
-	for k, info := range dealInfo.SendInfo {
-		refundMap, ok := p.refundMap[k]
-		if ok {
-			deleted := make([]int64, 0)
-			for _, item := range refundMap {
-				h, _, _ := indexer.FromUtxoId(item.UtxoId)
-				if h > height {
-					continue
+	for address, items := range itemsByAddress {
+		info := dealInfo.SendInfo[address]
+		for _, item := range items {
+			if item.OrderType == ORDERTYPE_REFUND {
+				item.Done = ITEM_STATUS_DEALT
+			} else {
+				item.Done = ITEM_STATUS_REFUNDED
+				if item.RemainingValue != 0 {
+					item.OutValue += item.RemainingValue
+					item.RemainingValue = 0
 				}
-				if item.Done == ITEM_STATUS_INIT {
-					if item.OrderType == ORDERTYPE_REFUND {
-						// 指令
-						item.Done = ITEM_STATUS_DEALT
-					} else {
-						// 数据
-						item.Done = ITEM_STATUS_REFUNDED
-						if item.RemainingValue != 0 {
-							item.OutValue += item.RemainingValue
-							item.RemainingValue = 0
-						}
-						if item.RemainingAmt.Sign() != 0 {
-							item.OutAmt = item.OutAmt.Add(item.RemainingAmt)
-							item.RemainingAmt = nil
-						}
-					}
-					item.OutTxId = txId
-				} // 设置为取消，或者直接关闭的item，也需要保存
-				SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
-				deleted = append(deleted, item.Id)
-				delete(p.history, item.InUtxo)
+				if item.RemainingAmt.Sign() != 0 {
+					item.OutAmt = item.OutAmt.Add(item.RemainingAmt)
+					item.RemainingAmt = nil
+				}
 			}
+			item.OutTxId = txId
+			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
+			delete(p.history, item.InUtxo)
+			delete(p.refundMap[address], item.Id)
+		}
 
-			for _, id := range deleted {
-				delete(refundMap, id)
-			}
-
-			trader := p.loadTraderInfo(k)
-			if trader != nil {
-				trader.RefundAmt = trader.RefundAmt.Add(info.AssetAmt)
-				trader.RefundValue += info.Value
-				saveContractInvokerStatus(p.stp.GetDB(), url, trader)
-			}
+		if len(p.refundMap[address]) == 0 {
+			delete(p.refundMap, address)
 		}
-	}
-
-	// 更新refundMap
-	deletedAddr := make([]string, 0)
-	for k, v := range p.refundMap {
-		deleted := make([]int64, 0)
-		for id, item := range v {
-			h, _, _ := indexer.FromUtxoId(item.UtxoId)
-			if h > height {
-				continue
-			}
-			deleted = append(deleted, id)
-			// item在上面已经更新
+		if info != nil {
+			trader := p.loadTraderInfo(address)
+			trader.RefundAmt = trader.RefundAmt.Add(info.AssetAmt)
+			trader.RefundValue += info.Value
+			saveContractInvokerStatus(p.stp.GetDB(), url, trader)
 		}
-		for _, id := range deleted {
-			delete(v, id)
-		}
-		if len(v) == 0 {
-			deletedAddr = append(deletedAddr, k)
-		}
-	}
-	for _, addr := range deletedAddr {
-		delete(p.refundMap, addr)
 	}
 
 	p.CheckPoint = dealInfo.InvokeCount
@@ -3658,21 +4241,21 @@ func (p *SwapContractRuntime) refund() error {
 		if len(refundInfo.SendInfo) != 0 {
 			// 发送费用已经从所有参与者扣除，但如果该交易的聪资产太少，就暂时不发送，等下次
 			//if refundInfo.TotalValue >= _valueLimit || len(refundInfo.SendInfo) >= _addressLimit {
-				txId, err := p.sendTx_SatsNet(refundInfo, INVOKE_RESULT_REFUND)
-				if err != nil {
-					Log.Errorf("contract %s sendTx_SatsNet %s failed %v", p.URL(), INVOKE_RESULT_REFUND, err)
-					// 下个区块再试
-					return err
-				}
-				refundInfo.TxId = txId
-				refundInfo.Fee = DEFAULT_FEE_SATSNET
+			txId, err := p.sendTx_SatsNet(refundInfo, INVOKE_RESULT_REFUND)
+			if err != nil {
+				Log.Errorf("contract %s sendTx_SatsNet %s failed %v", p.URL(), INVOKE_RESULT_REFUND, err)
+				// 下个区块再试
+				return err
+			}
+			refundInfo.TxId = txId
+			refundInfo.Fee = DEFAULT_FEE_SATSNET
 
-				// record
-				p.updateWithDealInfo_refund(refundInfo)
-				// 成功一步记录一步
-				p.stp.SaveReservationWithLock(p.resv)
+			// record
+			p.updateWithDealInfo_refund(refundInfo)
+			// 成功一步记录一步
+			p.stp.SaveReservationWithLock(p.resv)
 
-				Log.Infof("contract %s refund completed, %s", p.URL(), txId)
+			Log.Infof("contract %s refund completed, %s", p.URL(), txId)
 			//}
 		}
 
@@ -4799,10 +5382,15 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 			expectedSendInfo = info.SendInfo
 
 		case INVOKE_RESULT_REFUND:
-			refundInfo := p.genRefundInfo(dealInfo.Height)
-			if refundInfo != nil {
-				expectedSendInfo = refundInfo.SendInfo
+			refundInfo, err := p.genRefundInfoForItemIDs(dealInfo.ItemIDs, dealInfo.Height)
+			if err != nil {
+				return nil, err
 			}
+			// Freeze an empty-list selection to the concrete item snapshot that
+			// was validated. SetPeerActionResult must settle this same set even if
+			// newer invokes arrive before the signed result is applied.
+			dealInfo.ItemIDs = append([]int64(nil), refundInfo.ItemIDs...)
+			expectedSendInfo = refundInfo.SendInfo
 
 		case INVOKE_RESULT_DEPOSIT:
 			dealInfo.Fee = 0 // anchorTx
@@ -4890,6 +5478,10 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 				return nil, fmt.Errorf("%s not allow send asset amt %s (expected %s) to %s",
 					p.URL(), infoInTx.AssetAmt.String(), infoExpected.AssetAmt.String(), addr)
 			}
+		}
+		if dealInfo.Reason == INVOKE_RESULT_REFUND && len(dealInfo.SendInfo) != len(expectedSendInfo) {
+			return nil, fmt.Errorf("%s refund output count differs: got %d, expected %d",
+				p.URL(), len(dealInfo.SendInfo), len(expectedSendInfo))
 		}
 
 		// 3. 检查其他相关交易的有效性

@@ -174,6 +174,17 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 			return
 		}
 
+		if strings.HasPrefix(r.URL.Path, "/testnet/btc/tx/simpleinfo/") {
+			// Channel safety monitoring may probe commitment transactions that
+			// are not part of this fake L1 fixture. Return a normal indexer
+			// not-found response so the SDK can treat the probe as unresolved;
+			// do not turn the background probe into a test-handler assertion.
+			require.NoError(t, json.NewEncoder(w).Encode(indexerwire.TxSimpleInfoResp{
+				BaseResp: indexerwire.BaseResp{Code: -1, Msg: "tx not found"},
+			}))
+			return
+		}
+
 		if strings.HasPrefix(r.URL.Path, "/testnet/ns/name/") {
 			name, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/testnet/ns/name/"))
 			require.NoError(t, err)
@@ -282,6 +293,18 @@ func newFakeL1Indexer(t *testing.T, indexerPubKey string, lockedPkScript []byte,
 			require.NoError(t, json.NewEncoder(w).Encode(indexerwire.UtxosWithAssetRespV3{
 				BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
 				Data:     nil,
+			}))
+			return
+		}
+
+		if r.URL.Path == "/testnet/v3/utxos/existing" {
+			// Channel safety monitoring may ask whether a persisted outpoint
+			// still exists. This fixture has no L1 indexer state beyond the
+			// explicitly configured UTXO endpoints, so an empty result is the
+			// correct response for those background probes.
+			require.NoError(t, json.NewEncoder(w).Encode(indexerwire.ExistingUtxoResp{
+				BaseResp:      indexerwire.BaseResp{Code: 0, Msg: "ok"},
+				ExistingUtxos: []string{},
 			}))
 			return
 		}

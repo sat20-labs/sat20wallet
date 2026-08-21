@@ -8,6 +8,7 @@ import (
 	"time"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
@@ -63,10 +64,20 @@ func (p *Manager) dkvsManagedExactKeys() ([]string, error) {
 	return p.dkvs.managedExactKeys(), nil
 }
 
+func (p *Manager) dkvsManagedMailboxes() ([]string, error) {
+	if p == nil || p.dkvs == nil {
+		return nil, nil
+	}
+	return p.dkvs.managedMailboxes(), nil
+}
+
 func (p *Manager) flushDKVSOutbox(client *SatsNetDKVSClient, store *dkvsReplicaStore,
-	_ string) (bool, error) {
-	_, err := p.flushDKVSBatchOutbox(client, store)
-	return false, err
+	scope string) (bool, error) {
+	submitted, err := p.flushDKVSBatchOutbox(client, store)
+	if err != nil && p != nil && p.dkvs != nil {
+		p.dkvs.markNotReady(scope)
+	}
+	return submitted, err
 }
 
 func pathReplicaScope(client *SatsNetDKVSClient, path string) string {
@@ -74,6 +85,41 @@ func pathReplicaScope(client *SatsNetDKVSClient, path string) string {
 		Type:   dkvsindexer.SubscriptionPrefix,
 		Target: path,
 	}})
+}
+
+func (m *dkvsManager) syncMailboxState(client *SatsNetDKVSClient, store *dkvsReplicaStore,
+	target string, verify dkvsindexer.RecordVerificationOptions) (dkvsDirectoryState, error) {
+
+	if m == nil || m.owner == nil || client == nil || store == nil {
+		return dkvsDirectoryState{}, ErrDKVSPathNotSynced
+	}
+	mailboxID := strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(target), "/"), "/mail/")
+	normalized, err := mailboxSubscriptionTarget(mailboxID)
+	if err != nil || normalized != target {
+		return dkvsDirectoryState{}, dkvsindexer.ErrInvalidKey
+	}
+	filters := []dkvsindexer.Subscription{{
+		Type: dkvsindexer.SubscriptionMailbox, Target: normalized,
+	}}
+	scope := dkvsReplicaScope(client.replicaNamespace, filters)
+	m.markNotReady(scope)
+	bestHeight, err := m.refreshVerificationBestHeight(client)
+	if err != nil {
+		return dkvsDirectoryState{}, err
+	}
+	verify.Height = bestHeight
+	records, root, err := client.SyncFilteredAll(filters, verify)
+	if err != nil {
+		return dkvsDirectoryState{}, err
+	}
+	if err := store.applyConfirmed(scope, filters, records, root, chainhash.Hash{}, 0); err != nil {
+		return dkvsDirectoryState{}, err
+	}
+	state := dkvsDirectoryState{
+		Prefix: normalized, Root: root, Scope: scope, Filters: filters,
+	}
+	m.markReady(scope)
+	return state, nil
 }
 
 func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplicaStore,
@@ -95,7 +141,7 @@ func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplic
 	if err != nil {
 		return dkvsDirectoryState{}, err
 	}
-	p.ensureDKVSManager().observeVerificationHeight(remote.PathMeta.ViewHeight, true)
+	p.ensureDKVSManager().setEndpointVerificationHeight(remote.PathMeta.ViewHeight, true)
 	baseline, baselineErr := store.loadBaseline(scope)
 	if baselineErr == nil {
 		if remote.PathMeta.Generation < baseline.Generation {
@@ -103,17 +149,22 @@ func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplic
 		}
 		if remote.PathMeta.Generation == baseline.Generation &&
 			remote.PathMeta.StateRoot == baseline.ActiveRoot {
-			if err := p.syncDKVSEndpointLocalOverlay(client, store, path, scope,
-				remote.PathMeta.ViewHeight, remote.ServerTimeMS); err != nil {
-				return dkvsDirectoryState{}, err
+			if replicaErr := store.validateNetworkReplica(scope, path, remote.PathMeta); replicaErr == nil {
+				if err := p.syncDKVSEndpointLocalOverlay(client, store, path, scope,
+					remote.PathMeta.ViewHeight, remote.ServerTimeMS); err != nil {
+					return dkvsDirectoryState{}, err
+				}
+				if err := store.validateNetworkReplica(scope, path, remote.PathMeta); err != nil {
+					return dkvsDirectoryState{}, fmt.Errorf("validate local DKVS path %s after overlay: %w", path, err)
+				}
+				state := dkvsDirectoryState{
+					Prefix: path, Root: remote.PathMeta.StateRoot.String(),
+					Generation: remote.PathMeta.Generation, ViewHeight: remote.PathMeta.ViewHeight,
+					ServerTimeMS: remote.ServerTimeMS, Scope: scope, Filters: filters,
+				}
+				p.ensureDKVSManager().markReady(scope)
+				return state, nil
 			}
-			state := dkvsDirectoryState{
-				Prefix: path, Root: remote.PathMeta.StateRoot.String(),
-				Generation: remote.PathMeta.Generation, ViewHeight: remote.PathMeta.ViewHeight,
-				ServerTimeMS: remote.ServerTimeMS, Scope: scope, Filters: filters,
-			}
-			p.ensureDKVSManager().markReady(scope)
-			return state, nil
 		}
 	} else if !errors.Is(baselineErr, indexer.ErrKeyNotFound) &&
 		!errors.Is(baselineErr, dkvsindexer.ErrInvalidRecord) {
@@ -135,6 +186,9 @@ func (p *Manager) syncDKVSDirectory(client *SatsNetDKVSClient, store *dkvsReplic
 	if err := p.syncDKVSEndpointLocalOverlay(client, store, path, scope,
 		snapshot.PathMeta.ViewHeight, snapshot.ServerTimeMS); err != nil {
 		return dkvsDirectoryState{}, err
+	}
+	if err := store.validateNetworkReplica(scope, path, snapshot.PathMeta); err != nil {
+		return dkvsDirectoryState{}, fmt.Errorf("validate synchronized DKVS path %s: %w", path, err)
 	}
 	state := dkvsDirectoryState{
 		Prefix: path, Root: snapshot.PathMeta.StateRoot.String(),
@@ -266,8 +320,26 @@ func (p *Manager) syncDKVSOnce() ([]dkvsDirectoryState, error) {
 	p.dkvs.runMu.Lock()
 	states, err := p.syncDKVSOnceLocked()
 	p.dkvs.runMu.Unlock()
-	if err != nil || len(states) == 0 {
+	if err != nil {
 		return states, err
+	}
+	// Domain jobs may re-enter DKVS through Refresh or Update. Run them only
+	// after releasing runMu, and before the empty-state return so queued work
+	// cannot be starved when no paths currently require synchronization.
+	p.dkvs.mu.Lock()
+	hasPendingJobs := len(p.dkvs.jobs) != 0
+	p.dkvs.mu.Unlock()
+	if hasPendingJobs {
+		managedStore, storeErr := p.dkvs.primaryStore()
+		if storeErr != nil {
+			return states, storeErr
+		}
+		if err := p.dkvs.runPendingJobs(managedStore); err != nil {
+			return states, err
+		}
+	}
+	if len(states) == 0 {
+		return states, nil
 	}
 	paths := make([]string, 0, len(states))
 	for _, state := range states {
@@ -289,7 +361,11 @@ func (p *Manager) syncDKVSOnceLocked() ([]dkvsDirectoryState, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(directories) == 0 && len(exactKeys) == 0 {
+	mailboxes, err := p.dkvsManagedMailboxes()
+	if err != nil {
+		return nil, err
+	}
+	if len(directories) == 0 && len(exactKeys) == 0 && len(mailboxes) == 0 {
 		return nil, nil
 	}
 	client, err := p.dkvs.primaryClient()
@@ -297,7 +373,7 @@ func (p *Manager) syncDKVSOnceLocked() ([]dkvsDirectoryState, error) {
 		return nil, err
 	}
 	store := newDKVSReplicaStore(p.db)
-	states := make([]dkvsDirectoryState, 0, len(directories)+len(exactKeys))
+	states := make([]dkvsDirectoryState, 0, len(directories)+len(exactKeys)+len(mailboxes))
 	for _, path := range directories {
 		state, err := p.syncDKVSDirectory(client, store, path)
 		if err != nil {
@@ -316,9 +392,13 @@ func (p *Manager) syncDKVSOnceLocked() ([]dkvsDirectoryState, error) {
 		}
 		states = append(states, state)
 	}
-	managedStore := &dkvsStore{manager: p.dkvs, client: client}
-	if err := p.dkvs.runPendingJobs(managedStore); err != nil {
-		return states, err
+	for _, target := range mailboxes {
+		state, err := p.dkvs.syncMailboxState(client, store, target,
+			dkvsindexer.RecordVerificationOptions{})
+		if err != nil {
+			return states, err
+		}
+		states = append(states, state)
 	}
 	return states, nil
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
@@ -321,26 +322,15 @@ func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*A
 }
 
 func (p *Manager) confirmPaidAccountStorage(location AccountIndexerLocation, recordCount uint64) (*AccountStorageAuthorization, error) {
-	releaseRGB11Scope := p.beginRGB11ScopeChange()
-	defer releaseRGB11Scope()
 	root, err := p.accountManagementRootWallet()
 	if err != nil {
 		return nil, err
 	}
-	p.mutex.Lock()
-	previous := p.wallet
-	p.wallet = root
-	p.mutex.Unlock()
-	defer func() {
-		p.mutex.Lock()
-		p.wallet = previous
-		p.mutex.Unlock()
-	}()
-	return p.confirmPaidAccountStorageWithCurrentWallet(location, recordCount)
+	return p.confirmPaidAccountStorageWithWallet(location, recordCount, root)
 }
 
-func (p *Manager) confirmPaidAccountStorageWithCurrentWallet(location AccountIndexerLocation,
-	recordCount uint64) (*AccountStorageAuthorization, error) {
+func (p *Manager) confirmPaidAccountStorageWithWallet(location AccountIndexerLocation,
+	recordCount uint64, payerWallet common.Wallet) (*AccountStorageAuthorization, error) {
 	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
 	if !defaults.Enabled || defaults.AutopayContract == "" {
 		return nil, fmt.Errorf("paid DKVS storage is not configured for the current network")
@@ -357,10 +347,10 @@ func (p *Manager) confirmPaidAccountStorageWithCurrentWallet(location AccountInd
 	if err != nil {
 		return nil, err
 	}
-	if p.wallet.GetPubKey() == nil {
+	if payerWallet == nil || payerWallet.GetPubKey() == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
-	payer := PublicKeyToP2TRAddress_SatsNet(p.wallet.GetPubKey())
+	payer := PublicKeyToP2TRAddress_SatsNet(payerWallet.GetPubKey())
 	if strings.TrimSpace(payer) == "" {
 		return nil, fmt.Errorf("unable to derive AUTOPAY payer")
 	}
@@ -377,12 +367,12 @@ func (p *Manager) confirmPaidAccountStorageWithCurrentWallet(location AccountInd
 	if err != nil {
 		return nil, err
 	}
-	result, err := p.InvokeUnifiedContract(&ContractInvokeRequest{
+	result, err := p.invokeTemplateContractWithWallet(&ContractInvokeRequest{
 		ContractType: ContractTypeTemplate, SubType: contractcommon.TemplateAutopay,
 		ContractAddress: defaults.AutopayContract, Action: contractcommon.TemplateInvokeAPIConfig,
 		Param: base64.StdEncoding.EncodeToString(encodedParam), ParamEncoding: "base64",
 		Assets: []ContractFundingAsset{{AssetName: defaults.AutopayFeeAssetName, Amount: fundingAmount}},
-	})
+	}, payerWallet)
 	if err != nil {
 		return nil, err
 	}
@@ -483,11 +473,26 @@ func cloneStatusForAccountRestore(value *Status) *Status {
 // prepareAccountRestoreLocked performs every fallible wallet operation before
 // touching persistent or live manager state. The caller must hold p.mutex.
 func (p *Manager) prepareAccountRestoreLocked(value account.Backup, password string) (*preparedAccountRestore, error) {
+	return p.prepareAccountRestoreWithRootLocked(value, password, "")
+}
+
+func (p *Manager) prepareAccountRestoreWithRootLocked(value account.Backup, password,
+	allowedRootFingerprint string) (*preparedAccountRestore, error) {
+
 	backup, err := account.NormalizeBackup(value)
 	if err != nil {
 		return nil, err
 	}
-	if len(p.walletInfoMap) != 0 || p.wallet != nil {
+	var importedRoot *WalletInfo
+	if allowedRootFingerprint != "" && p.accountProfile == nil && len(p.walletInfoMap) == 1 {
+		for _, info := range p.walletInfoMap {
+			if info != nil && info.Wallet != nil && info.Type == WALLET_TYPE_MNEMONIC &&
+				walletFingerprint(info.Wallet) == allowedRootFingerprint {
+				importedRoot = info
+			}
+		}
+	}
+	if (len(p.walletInfoMap) != 0 || p.wallet != nil) && importedRoot == nil {
 		return nil, fmt.Errorf("account restore requires an empty wallet database")
 	}
 	prepared := &preparedAccountRestore{
@@ -506,6 +511,9 @@ func (p *Manager) prepareAccountRestoreLocked(value account.Backup, password str
 			return nil, fmt.Errorf("restore wallet %q: duplicate wallet identity", item.Name)
 		}
 		fingerprints[fingerprint] = struct{}{}
+		if importedRoot != nil && fingerprint == allowedRootFingerprint {
+			walletValue.id = importedRoot.Id
+		}
 		id := walletValue.GetId()
 		if _, exists := prepared.wallets[id]; exists {
 			return nil, fmt.Errorf("restore wallet %q: duplicate wallet id", item.Name)
@@ -683,6 +691,8 @@ func (p *Manager) PutGuardianCapsuleForStorage(auth AccountStorageAuthorization,
 }
 
 func (p *Manager) RestoreAccountBackupWithResult(value account.Backup, password string) ([]RestoredWalletResult, error) {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
@@ -698,9 +708,11 @@ func (p *Manager) RestoreAccountBackupWithResult(value account.Backup, password 
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 	results := append([]RestoredWalletResult(nil), prepared.results...)
+	p.channelIdentityGeneration++
 	p.mutex.Unlock()
 	if err := p.refreshDKVSRegistrations(); err != nil {
 		Log.Warningf("refresh DKVS registrations after account restore failed: %v", err)
 	}
+	p.wakeChannelHeartbeat()
 	return results, nil
 }

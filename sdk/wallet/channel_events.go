@@ -3,6 +3,7 @@ package wallet
 const (
 	CHANNEL_IS_BUSY                 = "channel is busy"
 	MSG_CHANNEL_OPENED              = "channelopened"
+	MSG_CHANNEL_RESTORED            = "channelrestored"
 	MSG_CHANNEL_CLOSED              = "channelclosed"
 	MSG_CHANNEL_FORCELY_CLOSED      = "channelclosedforcely"
 	MSG_CHANNEL_UNEXPECTEDLY_CLOSED = "channelclosedunexpectedly"

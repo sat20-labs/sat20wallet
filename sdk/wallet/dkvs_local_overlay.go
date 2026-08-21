@@ -134,7 +134,7 @@ func (s *dkvsReplicaStore) applyEndpointLocalOverlay(scope, path, endpointID str
 	}
 	state.ServerTimeMS = serverTimeMS
 	state.EndpointID = endpointID
-	state.HasLocalOnly = len(records) != 0
+	state.HasLocalOnly = len(records) != 0 || len(state.LocalDeleteFloors) != 0
 	state.SessionState = dkvsSessionIdle
 	state.LastErrorCode = ""
 	if err := putPathStateBatch(batch, scope, state); err != nil {

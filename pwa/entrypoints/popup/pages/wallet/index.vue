@@ -117,9 +117,16 @@ const { channel } = storeToRefs(channelStore)
 const { accountIndex, walletId } = storeToRefs(walletStore)
 const { plainList, sat20List, brc20List, runesList } = storeToRefs(l1Store)
 
-const routeTab = () => {
-  const tab = String(route.query?.tab || 'l1')
+const normalizeTab = (value: unknown) => {
+  const tab = String(value || 'l1')
+  if (tab === 'channel' && selectedTranscendingMode.value !== 'lightning') {
+    return 'l1'
+  }
   return ['l1', 'channel', 'l2'].includes(tab) ? tab : 'l1'
+}
+
+const routeTab = () => {
+  return normalizeTab(route.query?.tab)
 }
 
 // 状态管理
@@ -201,7 +208,7 @@ const refreshActiveWalletView = async (options: { resetState?: boolean; clearCac
     return
   }
   if (isChannelActive.value && selectedTranscendingMode.value === 'lightning') {
-    await channelStore.getAllChannels()
+    await channelStore.getCurrentChannel()
   }
 }
 
@@ -288,7 +295,7 @@ const channelCallback = async (e: any) => {
   console.log('channel callback')
   let msg = ''
   const channelHandler = async () => {
-    await channelStore.getAllChannels()
+    await channelStore.getCurrentChannel()
   }
   switch (e) {
     case 'splicingin':
@@ -296,7 +303,7 @@ const channelCallback = async (e: any) => {
       await channelHandler()
       await refreshL1Assets()
       break
-    case 'expanded"':
+    case 'expanded':
       msg = 'splicing in success'
       await channelHandler()
       await refreshL1Assets()
@@ -310,6 +317,10 @@ const channelCallback = async (e: any) => {
     case 'channelopened':
       msg = 'channel opened'
       await channelHandler()
+      await refreshL1Assets()
+      break
+    case 'channelrestored':
+      await channelStore.getCurrentChannel()
       await refreshL1Assets()
       break
     case 'channelclosed':
@@ -338,23 +349,32 @@ const channelCallback = async (e: any) => {
 // 监听路由变化
 const handleRouteChange = () => {
   console.log('route.query', route.query)
-  if (route.query?.tab) {
-    const tabQuery = String(route.query.tab)
-    const selectedItem = items.find(item => item.value === tabQuery)
-    selectTab.value = selectedItem?.value || 'l1'
+  const tabQuery = route.query?.tab
+  if (tabQuery) {
+    const tab = normalizeTab(tabQuery)
+    selectTab.value = tab
+    if (String(tabQuery) !== tab) {
+      router.replace({ path: '/wallet', query: { tab } })
+    }
   }
 }
 
 watch(() => route.query.tab, handleRouteChange, { immediate: true })
 
+watch(selectedTranscendingMode, () => {
+  const tab = normalizeTab(selectTab.value)
+  if (selectTab.value === tab) return
+  selectTab.value = tab
+  router.replace({ path: '/wallet', query: { tab } })
+})
+
 console.log('Debug2: This is index.vue')
 
 const tabChange = (value: string) => {
   console.log('tabChange', value)
-  const isValidTab = items.some(item => item.value === value)
-  if (!isValidTab) return
-  selectTab.value = value
-  router.replace({ path: '/wallet', query: { tab: value } })
+  const tab = normalizeTab(value)
+  selectTab.value = tab
+  router.replace({ path: '/wallet', query: { tab } })
 }
 
 

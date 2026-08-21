@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	db "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
 type memoryKVDB struct {
@@ -177,6 +178,7 @@ func (b *memoryWriteBatch) Close() {}
 func TestLoadStatusMigratesLegacySTPStatus(t *testing.T) {
 	kv := newMemoryKVDB()
 	legacy := &Status{
+		DBver:                   "0.1.2",
 		SyncHeight:              11,
 		SyncHeightL1:            900001,
 		SyncHeightL2:            3404,
@@ -196,6 +198,9 @@ func TestLoadStatusMigratesLegacySTPStatus(t *testing.T) {
 
 	status := loadStatusWithLegacyMigration(kv)
 	assertMigratedSTPStatus(t, status, legacy)
+	if status.DBver != legacy.DBver {
+		t.Fatalf("legacy STP DB version lost: got %q want %q", status.DBver, legacy.DBver)
+	}
 	if _, err := kv.Read([]byte(DB_KEY_STATUS)); err != nil {
 		t.Fatalf("new status key not written: %v", err)
 	}
@@ -204,15 +209,14 @@ func TestLoadStatusMigratesLegacySTPStatus(t *testing.T) {
 	}
 }
 
-func TestLoadStatusMergesLegacySTPStatusIntoWalletStatus(t *testing.T) {
+func TestLoadStatusLegacySTPStatusOverridesWalletStatus(t *testing.T) {
 	kv := newMemoryKVDB()
 	current := newDefaultStatus()
+	current.DBver = DB_VERSION
 	current.CurrentWallet = 42
 	current.CurrentAccount = 3
-	current.SyncHeightL1 = 0
-	current.SyncHeightL2 = 0
-	current.BlockHashMapL1 = nil
-	current.BlockHashMapL2 = nil
+	current.SyncHeightL1 = 123
+	current.SyncHeightL2 = 456
 	currentBuf, err := encodeStatusToBytes(current)
 	if err != nil {
 		t.Fatal(err)
@@ -222,6 +226,10 @@ func TestLoadStatusMergesLegacySTPStatusIntoWalletStatus(t *testing.T) {
 	}
 
 	legacy := &Status{
+		SoftwareVer:             "0.2.1",
+		DBver:                   "0.1.3",
+		CurrentWallet:           7,
+		CurrentAccount:          2,
 		SyncHeight:              15,
 		SyncHeightL1:            900123,
 		SyncHeightL2:            3500,
@@ -240,13 +248,21 @@ func TestLoadStatusMergesLegacySTPStatusIntoWalletStatus(t *testing.T) {
 	}
 
 	status := loadStatusWithLegacyMigration(kv)
-	if status.CurrentWallet != current.CurrentWallet || status.CurrentAccount != current.CurrentAccount {
-		t.Fatalf("wallet status not preserved: got wallet=%d account=%d",
-			status.CurrentWallet, status.CurrentAccount)
+	if status.DBver != legacy.DBver {
+		t.Fatalf("legacy STP DB version lost: got %q want %q", status.DBver, legacy.DBver)
+	}
+	if status.CurrentWallet != legacy.CurrentWallet || status.CurrentAccount != legacy.CurrentAccount {
+		t.Fatalf("legacy STP status was not authoritative: got wallet=%d account=%d want wallet=%d account=%d",
+			status.CurrentWallet, status.CurrentAccount, legacy.CurrentWallet, legacy.CurrentAccount)
 	}
 	assertMigratedSTPStatus(t, status, legacy)
+
+	persisted, ok := readStatusFromDB(kv, DB_KEY_STATUS)
+	if !ok || persisted.DBver != legacy.DBver || persisted.SyncHeightL1 != legacy.SyncHeightL1 {
+		t.Fatalf("wallet-status did not persist authoritative legacy STP status: %+v", persisted)
+	}
 	if _, err := kv.Read([]byte(legacySTPStatusDBKey())); err == nil {
-		t.Fatal("legacy status key was not deleted")
+		t.Fatal("legacy status key was not deleted after successful migration")
 	}
 }
 
@@ -305,7 +321,7 @@ func TestLoadStatusReportsMissingPersistentStatus(t *testing.T) {
 	}
 }
 
-func TestLoadStatusSkipsIndexerTipsInTestingMode(t *testing.T) {
+func TestLoadStatusNeverQueriesIndexerTips(t *testing.T) {
 	oldTesting := ENABLE_TESTING
 	ENABLE_TESTING = true
 	defer func() { ENABLE_TESTING = oldTesting }()
@@ -327,7 +343,7 @@ func TestLoadStatusSkipsIndexerTipsInTestingMode(t *testing.T) {
 
 	if l1.syncCalls != 0 || l1.blockHashCalls != 0 ||
 		l2.syncCalls != 0 || l2.blockHashCalls != 0 {
-		t.Fatalf("testing mode queried indexer tips: l1 sync=%d hash=%d, l2 sync=%d hash=%d",
+		t.Fatalf("local status load queried indexer tips: l1 sync=%d hash=%d, l2 sync=%d hash=%d",
 			l1.syncCalls, l1.blockHashCalls, l2.syncCalls, l2.blockHashCalls)
 	}
 	if status.SyncHeight != -1 || status.SyncHeightL1 != -1 || status.SyncHeightL2 != -1 {
@@ -335,7 +351,123 @@ func TestLoadStatusSkipsIndexerTipsInTestingMode(t *testing.T) {
 			status.SyncHeight, status.SyncHeightL1, status.SyncHeightL2)
 	}
 	if _, loaded := loadStatusWithLegacyMigrationResult(kv); !loaded {
-		t.Fatal("testing-mode default status was not persisted")
+		t.Fatal("default status was not persisted")
+	}
+}
+
+func TestLoadStatusResetsChainStateWithoutNetwork(t *testing.T) {
+	oldTesting := ENABLE_TESTING
+	oldChain := _chain
+	ENABLE_TESTING = false
+	_chain = "testnet"
+	defer func() {
+		ENABLE_TESTING = oldTesting
+		_chain = oldChain
+	}()
+
+	kv := newMemoryKVDB()
+	mainnetStatus := &Status{
+		CurrentChain:   "mainnet",
+		SyncHeight:     700000,
+		SyncHeightL1:   700000,
+		SyncHeightL2:   39794,
+		BlockHashMapL1: map[int]string{700000: "mainnet-l1"},
+		BlockHashMapL2: map[int]string{39794: "mainnet-l2"},
+	}
+	normalizeStatus(mainnetStatus)
+	if err := saveStatusToDB(kv, mainnetStatus); err != nil {
+		t.Fatal(err)
+	}
+
+	l1 := &statusTipClient{syncHeight: 300}
+	l2 := &statusTipClient{syncHeight: 3445}
+	l1Manager := NewIndexerRPCClientMgr()
+	l1Manager.Set(l1)
+	l2Manager := NewIndexerRPCClientMgr()
+	l2Manager.Set(l2)
+	manager := &Manager{
+		cfg:             &common.Config{Chain: "testnet"},
+		db:              kv,
+		l1IndexerClient: l1Manager,
+		l2IndexerClient: l2Manager,
+	}
+
+	status := manager.loadStatus()
+	if status.CurrentChain != "testnet" || status.SyncHeightL1 != -1 ||
+		status.SyncHeightL2 != -1 || status.SyncHeight != -1 {
+		t.Fatalf("chain status was not reset for background initialization: %+v", status)
+	}
+	if _, ok := status.BlockHashMapL1[700000]; ok {
+		t.Fatalf("mainnet L1 hash survived chain reset: %+v", status.BlockHashMapL1)
+	}
+	if _, ok := status.BlockHashMapL2[39794]; ok {
+		t.Fatalf("mainnet L2 hash survived chain reset: %+v", status.BlockHashMapL2)
+	}
+	if l1.syncCalls != 0 || l1.blockHashCalls != 0 ||
+		l2.syncCalls != 0 || l2.blockHashCalls != 0 {
+		t.Fatalf("chain reset queried indexers synchronously: l1 sync=%d hash=%d, l2 sync=%d hash=%d",
+			l1.syncCalls, l1.blockHashCalls, l2.syncCalls, l2.blockHashCalls)
+	}
+}
+
+func TestInitialStatusBlockHashWindowByChain(t *testing.T) {
+	tests := []struct {
+		name  string
+		chain string
+		l1    bool
+		want  int
+	}{
+		{name: "bitcoin testnet4", chain: "testnet", l1: true, want: 144},
+		{name: "bitcoin mainnet", chain: "mainnet", l1: true, want: 7},
+		{name: "satoshinet testnet", chain: "testnet", l1: false, want: 7},
+		{name: "satoshinet mainnet", chain: "mainnet", l1: false, want: 7},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := initialStatusBlockHashWindow(test.chain, test.l1); got != test.want {
+				t.Fatalf("unexpected block hash window: got %d want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestBootstrapStatusTipsUsesChainSpecificWindows(t *testing.T) {
+	kv := newMemoryKVDB()
+	manager := &Manager{
+		db:     kv,
+		status: newDefaultStatus(),
+	}
+	manager.status.CurrentChain = "testnet"
+	manager.statusBootstrapGeneration = 1
+
+	l1 := &statusTipClient{syncHeight: 300}
+	manager.bootstrapStatusTip(1, "testnet", true, l1)
+	if l1.syncCalls != 1 || l1.blockHashCalls != 144 {
+		t.Fatalf("bitcoin testnet4 bootstrap calls: sync=%d hashes=%d", l1.syncCalls, l1.blockHashCalls)
+	}
+
+	l2 := &statusTipClient{syncHeight: 3445}
+	manager.bootstrapStatusTip(1, "testnet", false, l2)
+	if l2.syncCalls != 1 || l2.blockHashCalls != 7 {
+		t.Fatalf("satoshinet bootstrap calls: sync=%d hashes=%d", l2.syncCalls, l2.blockHashCalls)
+	}
+	if manager.status.SyncHeightL1 != 300 || manager.status.SyncHeightL2 != 3445 {
+		t.Fatalf("background tips were not committed: %+v", manager.status)
+	}
+}
+
+func TestBootstrapStatusTipRejectsStaleGeneration(t *testing.T) {
+	manager := &Manager{
+		db:     newMemoryKVDB(),
+		status: newDefaultStatus(),
+	}
+	manager.status.CurrentChain = "testnet"
+	manager.statusBootstrapGeneration = 2
+
+	client := &statusTipClient{syncHeight: 300}
+	manager.bootstrapStatusTip(1, "testnet", true, client)
+	if manager.status.SyncHeightL1 != -1 || manager.status.SyncHeight != -1 {
+		t.Fatalf("stale bootstrap changed status: %+v", manager.status)
 	}
 }
 

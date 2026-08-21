@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -385,8 +386,18 @@ func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
 
 // btcutil.Tx
 func (p *IndexerClient) GetRawTx(tx string) (string, error) {
+	return p.GetRawTxContext(context.Background(), tx)
+}
+
+func (p *IndexerClient) GetRawTxContext(ctx context.Context, tx string) (string, error) {
 	url := p.GetUrl("/btc/rawtx/" + tx)
-	rsp, err := p.Http.SendGetRequest(url)
+	var rsp []byte
+	var err error
+	if client, ok := p.Http.(ContextHttpClient); ok {
+		rsp, err = client.SendGetRequestContext(ctx, url)
+	} else {
+		rsp, err = p.Http.SendGetRequest(url)
+	}
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
 		return "", err
@@ -879,6 +890,10 @@ func (p *IndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 }
 
 func (p *IndexerClient) BroadCastTxs(txs []*wire.MsgTx) error {
+	return p.BroadCastTxsContext(context.Background(), txs)
+}
+
+func (p *IndexerClient) BroadCastTxsContext(ctx context.Context, txs []*wire.MsgTx) error {
 	if len(txs) == 0 {
 		return nil
 	}
@@ -892,7 +907,7 @@ func (p *IndexerClient) BroadCastTxs(txs []*wire.MsgTx) error {
 		Log.Infof("%d %s", i, str)
 	}
 
-	err := p.broadCastHexTxs(txsHex)
+	err := p.broadCastHexTxsContext(ctx, txsHex)
 	if err != nil {
 		Log.Errorf("BroadCastTxs failed. %v", err)
 		return err
@@ -1016,6 +1031,10 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 }
 
 func (p *IndexerClient) broadCastHexTxs(hexTx []string) error {
+	return p.broadCastHexTxsContext(context.Background(), hexTx)
+}
+
+func (p *IndexerClient) broadCastHexTxsContext(ctx context.Context, hexTx []string) error {
 	req := indexerwire.SendRawTxsReq{
 		SignedTxHex: hexTx,
 		Maxfeerate:  0,
@@ -1027,7 +1046,12 @@ func (p *IndexerClient) broadCastHexTxs(hexTx []string) error {
 	}
 
 	url := p.GetUrl("/btc/txs")
-	rsp, err := p.Http.SendPostRequest(url, buff)
+	var rsp []byte
+	if client, ok := p.Http.(ContextHttpClient); ok {
+		rsp, err = client.SendPostRequestContext(ctx, url, buff)
+	} else {
+		rsp, err = p.Http.SendPostRequest(url, buff)
+	}
 	if err != nil {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
 		return err
@@ -1040,12 +1064,46 @@ func (p *IndexerClient) broadCastHexTxs(hexTx []string) error {
 	}
 
 	if result.Code != 0 {
+		// Package submission is intentionally kept for the channel protocol:
+		// both peers submit the same L1 package.  A package endpoint may reject
+		// the second submission before it exposes a useful per-tx duplicate
+		// reason, so confirm every transaction by txid before returning an error.
+		// This does not turn a partially missing or malformed package into
+		// success; all unique txids must already be visible.
+		if p.allBroadcastedTxsContext(ctx, hexTx) {
+			Log.Infof("broadCastHexTxs package already broadcasted")
+			return nil
+		}
 		Log.Errorf("broadCastHexTxs error message %s", result.Msg)
 		return fmt.Errorf("%s", result.Msg)
 	}
 
 	Log.Infof("broadCastHexTxs return %v", result.Data)
 	return nil
+}
+
+func (p *IndexerClient) allBroadcastedTxsContext(ctx context.Context, hexTx []string) bool {
+	if len(hexTx) == 0 {
+		return true
+	}
+
+	seen := make(map[string]struct{}, len(hexTx))
+	for _, rawTx := range hexTx {
+		tx, err := DecodeMsgTx(rawTx)
+		if err != nil {
+			return false
+		}
+		txid := tx.TxID()
+		if _, ok := seen[txid]; ok {
+			continue
+		}
+		seen[txid] = struct{}{}
+		if _, err := p.GetRawTxContext(ctx, txid); err != nil {
+			return false
+		}
+	}
+
+	return len(seen) != 0
 }
 
 func (p *IndexerClient) GetTickInfo(assetName *swire.AssetName) *indexer.TickerInfo {

@@ -100,6 +100,20 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 	}
 	requireDKVSValue(t, f.Network.Bootstrap, nameKey, []byte("owner-b"))
 	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-b"))
+	deletedName, err := clientB.TombstoneSignedWithAutopayV1(actorB.Wallet, nameKey,
+		dkvsindexer.RecordOptions{}, autopayB)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), deletedName.Seq)
+	require.True(t, dkvsindexer.IsTombstone(deletedName.Flags))
+	requireDKVSAbsent(t, f.Network.Bootstrap, nameKey)
+	requireDKVSAbsent(t, f.Network.Miner, nameKey)
+	rewrittenName, err := clientB.PutSignedRecordWithAutopayV1(actorB.Wallet, nameKey,
+		[]byte("owner-b-rewritten"), dkvsindexer.RecordOptions{}, autopayB)
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), rewrittenName.Seq)
+	requireDKVSValue(t, f.Network.Bootstrap, nameKey, []byte("owner-b-rewritten"))
+	requireDKVSValue(t, f.Network.Core, nameKey, []byte("owner-b-rewritten"))
+	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-b-rewritten"))
 
 	mailboxID := dkvsindexer.AccountID(actorB.Wallet.GetPubKey().SerializeCompressed())
 	senderID := dkvsindexer.AccountID(actorA.Wallet.GetPubKey().SerializeCompressed())

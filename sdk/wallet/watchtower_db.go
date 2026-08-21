@@ -220,6 +220,72 @@ func loadAllBroadcastedCommitTxIdFromDB(db db.KVDB) map[string]bool {
 	return result
 }
 
+// deleteAllWatchtowerDataWithPending removes the retry intent and all channel
+// evidence in one database batch. This prevents a restart from observing a
+// pending flag after its punish transactions were already deleted.
+func deleteAllWatchtowerDataWithPending(kv db.KVDB, channelId, commitTxId string) ([]string, []string, error) {
+	punishPrefix := []byte(GetDBKeyPrefix() + DB_KEY_WT_PUNISHTX + channelId + "-")
+	utxoPrefix := []byte(GetDBKeyPrefix() + DB_KEY_WT_UTXOCMAP + channelId)
+	punishKeys := make([][]byte, 0)
+	utxoKeys := make([][]byte, 0)
+	if err := kv.BatchRead(punishPrefix, false, func(k, _ []byte) error {
+		punishKeys = append(punishKeys, append([]byte(nil), k...))
+		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+	if err := kv.BatchRead(utxoPrefix, false, func(k, _ []byte) error {
+		utxoKeys = append(utxoKeys, append([]byte(nil), k...))
+		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+
+	// Validate every legacy key before mutating the database. If an online
+	// database contains a malformed key, cleanup must leave both DB and memory
+	// untouched so the condition remains diagnosable and retryable.
+	commits := make([]string, 0, len(punishKeys))
+	for _, key := range punishKeys {
+		_, id, err := ParsePunishTxKey(string(key))
+		if err != nil {
+			return nil, nil, err
+		}
+		commits = append(commits, id)
+	}
+	utxos := make([]string, 0, len(utxoKeys))
+	for _, key := range utxoKeys {
+		_, utxo, err := ParseUtxoToCommitTxIdMapKey(string(key))
+		if err != nil {
+			return nil, nil, err
+		}
+		utxos = append(utxos, utxo)
+	}
+
+	batch := kv.NewWriteBatch()
+	if batch == nil {
+		return nil, nil, fmt.Errorf("NewWriteBatch failed")
+	}
+	defer batch.Close()
+	for _, key := range punishKeys {
+		if err := batch.Delete(key); err != nil {
+			return nil, nil, err
+		}
+	}
+	for _, key := range utxoKeys {
+		if err := batch.Delete(key); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := batch.Delete([]byte(GetBroadcastedCommitKey(commitTxId))); err != nil {
+		return nil, nil, err
+	}
+	if err := batch.Flush(); err != nil {
+		return nil, nil, err
+	}
+
+	return commits, utxos, nil
+}
+
 func GetUtxoToCommitTxIdMapKey(channelId, utxo string) string {
 	return GetDBKeyPrefix() + DB_KEY_WT_UTXOCMAP + channelId + "-" + utxo
 }

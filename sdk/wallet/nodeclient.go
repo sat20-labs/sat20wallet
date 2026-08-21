@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -72,6 +73,13 @@ type NodeRPCClient interface {
 	SendSplicingOutRevokeAndAckReq(info *SplicingReservation) error
 }
 
+// ChannelOpenFeeRPCClient is intentionally separate from NodeRPCClient so
+// existing in-process test clients and lightweight peer adapters do not need
+// to implement the optional read-only fee preview endpoint.
+type ChannelOpenFeeRPCClient interface {
+	GetChannelOpenFeeReq() (*wwire.ChannelOpenFeeInfo, error)
+}
+
 type BaseResp struct {
 	Code int    `json:"code" example:"0"`
 	Msg  string `json:"msg" example:"ok"`
@@ -102,6 +110,31 @@ type nodeInfo struct {
 type ContractStatusResp struct {
 	BaseResp
 	Status string `json:"status"`
+}
+
+func (p *NodeClient) GetChannelOpenFeeReq() (*wwire.ChannelOpenFeeInfo, error) {
+	if p == nil || p.RESTClient == nil || p.Http == nil {
+		return nil, fmt.Errorf("node client HTTP transport is not configured")
+	}
+	url := p.GetUrl(wwire.QUERY_INFO_CHANNEL_FEE)
+	rsp, err := p.Http.SendGetRequest(url)
+	if err != nil {
+		Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return nil, err
+	}
+
+	var result wwire.ChannelOpenFeeResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+	if result.Code != 0 {
+		return nil, fmt.Errorf("%s", result.Msg)
+	}
+	if result.Info == nil || result.Info.OpenFee == nil {
+		return nil, fmt.Errorf("empty channel open fee info")
+	}
+	return result.Info, nil
 }
 
 type NodeClient struct {
@@ -527,13 +560,25 @@ func (p *NodeClient) SendActionResultNfty(msgId int64, action string, ret int, r
 }
 
 func (p *NodeClient) SendPingReq(req *wwire.PingReq) (*wwire.PingResp, error) {
+	return p.SendPingReqContext(context.Background(), req)
+}
+
+func (p *NodeClient) SendPingReqContext(ctx context.Context, req *wwire.PingReq) (*wwire.PingResp, error) {
+	if p == nil || p.RESTClient == nil || p.Http == nil {
+		return nil, fmt.Errorf("node HTTP client is not initialized")
+	}
 	buff, err := json.Marshal(&req)
 	if err != nil {
 		return nil, err
 	}
 
 	url := p.GetUrl(wwire.STP_PING)
-	rsp, err := p.Http.SendPostRequest(url, buff)
+	var rsp []byte
+	if contextClient, ok := p.Http.(ContextHttpClient); ok {
+		rsp, err = contextClient.SendPostRequestContext(ctx, url, buff)
+	} else {
+		rsp, err = p.Http.SendPostRequest(url, buff)
+	}
 	if err != nil {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
 		return nil, err
@@ -550,13 +595,25 @@ func (p *NodeClient) SendPingReq(req *wwire.PingReq) (*wwire.PingResp, error) {
 }
 
 func (p *NodeClient) SendActionSyncReq(req *wwire.ActionSyncReq) (*wwire.ActionSyncResp, error) {
+	return p.SendActionSyncReqContext(context.Background(), req)
+}
+
+func (p *NodeClient) SendActionSyncReqContext(ctx context.Context, req *wwire.ActionSyncReq) (*wwire.ActionSyncResp, error) {
+	if p == nil || p.RESTClient == nil || p.Http == nil {
+		return nil, fmt.Errorf("node HTTP client is not initialized")
+	}
 	buff, err := json.Marshal(&req)
 	if err != nil {
 		return nil, err
 	}
 
 	url := p.GetUrl(wwire.STP_ACTION_SYNC)
-	rsp, err := p.Http.SendPostRequest(url, buff)
+	var rsp []byte
+	if contextClient, ok := p.Http.(ContextHttpClient); ok {
+		rsp, err = contextClient.SendPostRequestContext(ctx, url, buff)
+	} else {
+		rsp, err = p.Http.SendPostRequest(url, buff)
+	}
 	if err != nil {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
 		return nil, err

@@ -646,7 +646,10 @@ func (p *LaunchPoolContractRunTime) InitFromDB(stp ContractManager, resv Contrac
 }
 
 func (p *LaunchPoolContractRunTime) IsIdle() bool {
-	return len(p.mintInfoMap) == 0 && len(p.invalidMintMap) == 0
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+
+	return !p.isSending && !p.IsLaunching && p.allResultSettled()
 }
 
 func (p *LaunchPoolContractRunTime) GetAssetAmount() (*Decimal, int64) {
@@ -1748,10 +1751,20 @@ func (p *LaunchPoolContractRunTime) DisableItem(input InvokeHistoryItem) {
 	if !ok {
 		return
 	}
-	p.TotalInputSats -= item.InValue
-	p.SatsValueInPool -= item.InValue
+	p.TotalInputSats = subtractInt64NonNegative(p.TotalInputSats, item.InValue)
+	p.SatsValueInPool = subtractInt64NonNegative(p.SatsValueInPool, item.InValue)
 	if item.OutAmt != nil && item.OutAmt.Sign() > 0 {
-		p.TotalMinted = p.TotalMinted.Sub(item.OutAmt)
+		p.TotalMinted = subtractDecimalNonNegative(p.TotalMinted, item.OutAmt)
+	}
+	if item.OutValue > 0 {
+		p.TotalInvalid = subtractInt64NonNegative(p.TotalInvalid, item.OutValue)
+	}
+	if item.OrderType == ORDERTYPE_CLOSE {
+		p.CloseRequested = false
+		p.CloseInvokeTxID = ""
+		p.CloseAssetTxID = ""
+		p.ReturnToDeployer = false
+		p.IsLaunching = false
 	}
 }
 

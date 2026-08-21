@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -25,6 +26,18 @@ func TestNormalizeDKVSRecordVerificationRequiresTrustedHeight(t *testing.T) {
 	}
 }
 
+func TestDKVSManagerVerificationHeightIgnoresStatusFromAnotherChain(t *testing.T) {
+	manager := &Manager{
+		cfg:    &common.Config{Chain: "testnet"},
+		status: &Status{CurrentChain: "mainnet", SyncHeightL2: 39794},
+	}
+	dkvs := newDKVSManager(manager)
+	dkvs.observeVerificationOptions(dkvsindexer.RecordVerificationOptions{Height: 3445})
+	if height, known := dkvs.verificationHeight(); !known || height != 3445 {
+		t.Fatalf("cross-chain status height was used: %d %v", height, known)
+	}
+}
+
 func TestDKVSManagerVerificationHeightUsesStatusAndExplicitMaximum(t *testing.T) {
 	manager := &Manager{status: &Status{SyncHeightL2: 20}}
 	dkvs := newDKVSManager(manager)
@@ -37,5 +50,18 @@ func TestDKVSManagerVerificationHeightUsesStatusAndExplicitMaximum(t *testing.T)
 	manager.status.Unlock()
 	if height, known := dkvs.verificationHeight(); !known || height != 25 {
 		t.Fatalf("explicit height was not retained: %d %v", height, known)
+	}
+}
+
+func TestDKVSManagerEndpointHeightReplacesCrossNetworkObservation(t *testing.T) {
+	manager := &Manager{
+		cfg:    &common.Config{Chain: "testnet"},
+		status: &Status{CurrentChain: "testnet", SyncHeightL2: 3452},
+	}
+	dkvs := newDKVSManager(manager)
+	dkvs.observeVerificationHeight(39791, true)
+	dkvs.setEndpointVerificationHeight(3452, true)
+	if height, known := dkvs.endpointVerificationHeight(); !known || height != 3452 {
+		t.Fatalf("endpoint height did not replace cross-network observation: %d %v", height, known)
 	}
 }

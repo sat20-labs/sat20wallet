@@ -30,15 +30,18 @@ const SENDER_ACCOUNT_INDEX = Number(process.env.SAT20_RGB11_SENDER_ACCOUNT_INDEX
 const RECEIVER_ACCOUNT_INDEX = Number(process.env.SAT20_RGB11_RECEIVER_ACCOUNT_INDEX || TEST_ACCOUNT_INDEX)
 const DIAGNOSE_ONLY = process.env.SAT20_RGB11_DIAGNOSE_ONLY === '1'
 const ENSURE_TEST_ACCOUNT = process.env.SAT20_ENSURE_TEST_ACCOUNT === '1'
-const TRANSFER_TRANSPORT = process.env.SAT20_RGB11_TRANSFER_TRANSPORT || 'sat20'
+const TRANSFER_TRANSPORT = process.env.SAT20_RGB11_TRANSFER_TRANSPORT || 'address'
 const PROXY_ENDPOINT = process.env.SAT20_RGB11_PROXY_ENDPOINT || ''
-const CANCEL_TRANSFER_ID = process.env.SAT20_RGB11_CANCEL_TRANSFER_ID || ''
-const CANCEL_REQUEST_ID = process.env.SAT20_RGB11_CANCEL_REQUEST_ID || ''
 const CANCEL_OUT_OF_BAND_TRANSFER_ID = process.env.SAT20_RGB11_CANCEL_OUT_OF_BAND_TRANSFER_ID || ''
+const CANCEL_EXPIRED_TRANSFER_ID = process.env.SAT20_RGB11_CANCEL_EXPIRED_TRANSFER_ID || ''
 const REUSE_ASSET_NAME = process.env.SAT20_RGB11_REUSE_ASSET_NAME || ''
 const RESUME_PENDING = process.env.SAT20_RGB11_RESUME_PENDING === '1'
+const INSPECT_PENDING = process.env.SAT20_RGB11_INSPECT_PENDING === '1'
+const SYNC_MAILBOX_ONLY = process.env.SAT20_RGB11_SYNC_MAILBOX_ONLY === '1'
+const SYNC_MAILBOX_WALLET_INDEX = Number(process.env.SAT20_RGB11_SYNC_MAILBOX_WALLET_INDEX || '1')
 const RESUME_PROXY_REQUEST_ID = process.env.SAT20_RGB11_RESUME_PROXY_REQUEST_ID || ''
 const RESET_TEST_STORAGE = process.env.SAT20_RESET_TEST_STORAGE === '1'
+const USE_CHECKPOINT_WALLETS = process.env.SAT20_RGB11_USE_CHECKPOINT_WALLETS === '1'
 
 const acquireProcessLock = () => {
   try {
@@ -97,8 +100,9 @@ const primeTestnetEnvironment = async (page) => {
 }
 
 const summarizeState = (state) => ({
-  consistency: state?.consistency_status,
-  backup: state?.backup_status,
+  initialized: state?.initialized,
+  syncStatus: state?.sync_status,
+  consistencyStatus: state?.consistency_status,
   assets: (state?.assets || []).map((asset) => ({
     name: `${asset?.Name?.Protocol || ''}:${asset?.Name?.Type || ''}:${asset?.Name?.Ticker || ''}`,
     amount: String(asset?.Amount?.Value ?? asset?.Amount?.value ?? '0'),
@@ -120,7 +124,7 @@ const summarizeState = (state) => ({
 })
 
 async function main() {
-  if (!['sat20', 'rgb-json-rpc', 'out-of-band'].includes(TRANSFER_TRANSPORT)) {
+  if (!['address', 'rgb-json-rpc', 'out-of-band'].includes(TRANSFER_TRANSPORT)) {
     throw new Error(`unsupported RGB11 live transfer transport ${TRANSFER_TRANSPORT}`)
   }
   if (TRANSFER_TRANSPORT === 'rgb-json-rpc' && !PROXY_ENDPOINT) {
@@ -169,13 +173,15 @@ async function main() {
   const result = await page.evaluate(async ({
     password, senderMnemonic, receiverMnemonic, senderAddress, receiverAddress,
     issueAmount, transferAmount, accountIndexes, diagnoseOnly, ensureTestAccount,
-    transferTransport, proxyEndpoint, cancelTransferID, cancelRequestID, reuseAssetName,
-    cancelOutOfBandTransferID, resumePending, resumeProxyRequestID,
+    transferTransport, proxyEndpoint, reuseAssetName,
+    cancelOutOfBandTransferID, cancelExpiredTransferID, resumePending, inspectPending,
+    syncMailboxOnly, syncMailboxWalletIndex,
+    resumeProxyRequestID, useCheckpointWallets,
   }) => {
     const verify = window.__SAT20_PWA_VERIFY__
     if (!verify) throw new Error('PWA verification API is unavailable')
     const wallet = verify.useWalletStore()
-    const { Chain, Network, sat20, walletStorage } = verify
+    const { Chain, Network, rgb11Address, sat20, walletStorage } = verify
     const hashed = await verify.hashPassword(password)
     const unwrap = (tuple, operation) => {
       if (tuple?.[0]) throw new Error(`${operation}: ${tuple[0].message || String(tuple[0])}`)
@@ -193,49 +199,75 @@ async function main() {
     }
     const traceState = (label, state) => {
       console.info(`[RGB11 live] ${label}: ${JSON.stringify({
+        initialized: state?.initialized,
+        sync_status: state?.sync_status,
         consistency_status: state?.consistency_status,
-        backup_status: state?.backup_status,
-        backup_enabled: state?.backup_enabled,
-        backup_mode: state?.backup_mode,
-        backup_retention_ms: state?.backup_retention_ms,
         assets: state?.assets,
+        available_assets: state?.available_assets,
+        pending_assets: state?.pending_assets,
+        outputs: state?.outputs,
+        proofs: state?.proofs,
         transfers: state?.transfers,
       })}`)
     }
-    const waitForWalletDataReady = async (label) => {
+    const waitForWalletDataReady = async (label, allowWarningForDiagnosis = false) => {
       const deadline = Date.now() + 120_000
       let state
       let previousStatus = ''
-      let warningSince = 0
       while (Date.now() < deadline) {
         state = await parseState()
-        if (state.backup_status !== previousStatus) {
-          previousStatus = state.backup_status
-          console.info(`[RGB11 live] ${label} wallet data status: ${previousStatus}`)
+        const syncStatus = state?.sync_status
+        const consistencyStatus = state?.consistency_status
+        const status = `${state?.initialized === true ? 'initialized' : 'uninitialized'}/${syncStatus || 'unknown'}/${consistencyStatus || 'unknown'}`
+        if (status !== previousStatus) {
+          previousStatus = status
+          console.info(`[RGB11 live] ${label} RGB11 state: ${status}`)
         }
-        if (['synced', 'not_configured', 'offline'].includes(state.backup_status)) {
+
+        if (syncStatus === 'error') {
+          traceState(`${label} sync error`, state)
+          throw new Error(`${label}: RGB11 synchronization failed`)
+        }
+        if (consistencyStatus === 'broken') {
+          traceState(`${label} consistency broken`, state)
+          throw new Error(`${label}: RGB11 state consistency is broken`)
+        }
+        if (!['idle', 'syncing', 'reorging'].includes(syncStatus)) {
+          traceState(`${label} unknown sync status`, state)
+          throw new Error(`${label}: unknown RGB11 sync status ${syncStatus || 'undefined'}`)
+        }
+        if (!['ok', 'warning'].includes(consistencyStatus)) {
+          traceState(`${label} unknown consistency status`, state)
+          throw new Error(`${label}: unknown RGB11 consistency status ${consistencyStatus || 'undefined'}`)
+        }
+
+        if (state?.initialized === true && syncStatus === 'idle' && consistencyStatus === 'ok') {
           return state
         }
-        if (state.backup_status === 'conflict') {
-          throw new Error(`${label}: wallet data conflict`)
-        }
-        if (state.backup_status === 'warning') {
-          warningSince ||= Date.now()
-          if (Date.now() - warningSince >= 10_000) break
-        } else {
-          warningSince = 0
+        if (state?.initialized === true && syncStatus === 'idle' && consistencyStatus === 'warning') {
+          traceState(`${label} consistency warning`, state)
+          if (allowWarningForDiagnosis) return state
+          throw new Error(`${label}: RGB11 state consistency warning blocks live transactions`)
         }
         await new Promise((resolve) => setTimeout(resolve, 1_000))
       }
+      traceState(`${label} readiness timeout`, state)
       throw new Error(
-        `${label}: timed out waiting for wallet data synchronization (${state?.backup_status || 'unknown'})`,
+        `${label}: timed out waiting for RGB11 readiness (${previousStatus || 'unknown'})`,
       )
     }
     const progress = (phase) => {
       window.localStorage.setItem('__sat20_rgb11_live_progress', phase)
       console.info(`[RGB11 live] ${phase}`)
     }
-    const checkpoint = (value) => {
+    const saveTransferCheckpoint = (value) => {
+      const addressCheckpoint = value?.transferTransport === 'address' && value?.receiverAddress
+      const traditionalCheckpoint = value?.requestId && value?.invoice
+      if (value?.kind !== 'rgb11-prepared-transfer' || value?.version !== 2 ||
+        !value?.transferId || value.transferId !== value.preparedTransferId ||
+        (!addressCheckpoint && !traditionalCheckpoint)) {
+        throw new Error('refusing to save invalid RGB11 prepared-transfer checkpoint')
+      }
       window.localStorage.setItem('__sat20_rgb11_live_checkpoint', JSON.stringify(value))
     }
     const withTimeout = async (promise, operation, timeout = 60_000) => {
@@ -250,6 +282,25 @@ async function main() {
       } finally {
         clearTimeout(timer)
       }
+    }
+    const permanentResumeErrorPattern = /key not found|record not found|invalid transfer|state mismatch|does not match|cannot resume|inconsistent/i
+    const transientResumeErrorPattern = /dkvs path has not completed|dkvs[^\n]*(?:not ready|not synced|initializing)|not available yet|deadline exceeded|timed out|timeout|connection reset|connection refused|temporarily unavailable|network|fetch failed|witness is unresolved|outpoint status is unknown/i
+    const missingRecordPattern = /key not found|record not found/i
+    const retryResumeTuple = async (operation, invoke, attempts = 60) => {
+      let lastError
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        const [error, value] = await invoke()
+        if (!error) return value
+        lastError = error
+        const message = String(error.message || error)
+        if (permanentResumeErrorPattern.test(message) ||
+          !transientResumeErrorPattern.test(message) || attempt === attempts) {
+          throw error
+        }
+        progress(`${operation} retry ${attempt}`)
+        await new Promise((resolve) => setTimeout(resolve, 2_000))
+      }
+      throw lastError
     }
     const acceptWhenBitcoinEvidenceIsReady = async (requestID, consignment) => {
       const timeout = 10 * 60_000
@@ -338,9 +389,66 @@ async function main() {
     await walletStorage.setValue('network', 'testnet')
     await walletStorage.setValue('chain', 'btc')
 
+    await wallet.setPassword(hashed)
+    await wallet.setNetwork(Network.TESTNET)
+    await wallet.setChain(Chain.BTC)
+    const [initialUnlockError] = await wallet.unlockWallet(hashed)
+    if (initialUnlockError && !/no wallet|already.*unlock/i.test(String(initialUnlockError.message || initialUnlockError))) {
+      throw initialUnlockError
+    }
     await wallet.syncWalletCatalog().catch(() => [])
-    const walletIDs = [senderAddress, receiverAddress].map((address) => {
-      return wallet.wallets.find((item) => item.accounts.some((account) => account.address === address))?.id || ''
+    const checkpointRawForWalletSelection = (
+      resumePending || inspectPending || cancelExpiredTransferID || useCheckpointWallets
+    )
+      ? window.localStorage.getItem('__sat20_rgb11_live_checkpoint')
+      : ''
+    if ((resumePending || inspectPending || cancelExpiredTransferID || useCheckpointWallets)
+      && !checkpointRawForWalletSelection) {
+      throw new Error('RGB11 operation requires an existing wallet checkpoint')
+    }
+    const checkpointForWalletSelection = checkpointRawForWalletSelection
+      ? JSON.parse(checkpointRawForWalletSelection)
+      : undefined
+    const checkpointWalletIDs = checkpointForWalletSelection
+      ? [checkpointForWalletSelection.senderWalletId, checkpointForWalletSelection.receiverWalletId]
+      : undefined
+    const checkpointAddresses = checkpointForWalletSelection
+      ? [checkpointForWalletSelection.senderAddress, checkpointForWalletSelection.receiverAddress]
+      : undefined
+    if (checkpointWalletIDs?.some((id) => id === undefined || id === null || String(id) === '')) {
+      throw new Error('RGB11 checkpoint requires senderWalletId and receiverWalletId')
+    }
+
+    const expectedAddresses = [senderAddress, receiverAddress]
+    const walletIDs = expectedAddresses.map((address, index) => {
+      if (checkpointWalletIDs) {
+        const checkpointWalletID = checkpointWalletIDs[index]
+        const checkpointAddress = checkpointAddresses[index]
+        if (!checkpointAddress || checkpointAddress !== address) {
+          throw new Error(
+            `RGB11 checkpoint wallet ${index} address ${checkpointAddress || 'missing'} does not match configured ${address}`,
+          )
+        }
+        const selected = wallet.wallets.find((item) => String(item.id) === String(checkpointWalletID))
+        if (!selected) {
+          throw new Error(`RGB11 checkpoint wallet ${index} id ${checkpointWalletID} no longer exists`)
+        }
+        const selectedAccount = selected.accounts.find((account) => account.index === accountIndexes[index])
+        if (selectedAccount?.address && selectedAccount.address !== checkpointAddress) {
+          throw new Error(
+            `RGB11 checkpoint wallet ${index} id ${checkpointWalletID} catalog address ${selectedAccount.address} does not match ${checkpointAddress}`,
+          )
+        }
+        return selected.id
+      }
+
+      const matches = wallet.wallets.filter((item) => (
+        item.accounts.some((account) => account.address === address)
+      ))
+      if (matches.length > 1) {
+        throw new Error(`wallet ${index} address is ambiguous across IDs ${matches.map((item) => item.id).join(', ')}`)
+      }
+      return matches[0]?.id || ''
     })
     for (const [index, mnemonic] of [senderMnemonic, receiverMnemonic].entries()) {
       if (walletIDs[index]) continue
@@ -348,15 +456,9 @@ async function main() {
       if (error) throw error
       walletIDs[index] = wallet.walletId
     }
+    console.info(`[RGB11 live] selected wallet IDs: sender=${walletIDs[0]}, receiver=${walletIDs[1]}`)
     progress('two test wallets selected')
-    progress('setting in-memory password')
-    await wallet.setPassword(hashed)
-    progress('switching wallet network to testnet')
-    await wallet.setNetwork(Network.TESTNET)
-    progress('switching wallet chain to bitcoin')
-    await wallet.setChain(Chain.BTC)
-    progress('unlocking wallet manager')
-    await unwrap(await wallet.unlockWallet(hashed), 'unlockWallet')
+    progress('wallet manager and catalog normalized before selection')
     if (walletIDs.length !== 2 || walletIDs.some((id) => !id) || walletIDs[0] === walletIDs[1]) {
       throw new Error('failed to identify the two imported test wallets')
     }
@@ -373,14 +475,28 @@ async function main() {
         selected = wallet.wallets.find((item) => item.id === walletIDs[index])
         account = selected?.accounts.find((item) => item.index === testAccountIndex)
       }
-      if (!account?.address) throw new Error(`wallet ${index} has no test account ${testAccountIndex}`)
+      if (!checkpointWalletIDs && !account?.address) {
+        throw new Error(`wallet ${index} has no test account ${testAccountIndex}`)
+      }
       await withTimeout(wallet.switchToAccount(testAccountIndex), `select account wallet ${index}`)
       await withTimeout(wallet.setChain(Chain.BTC), `select bitcoin chain wallet ${index}`)
       await unwrap(
         await withTimeout(sat20.switchAccount(testAccountIndex), `WASM switchAccount wallet ${index}`),
         `switchAccount wallet ${index}`,
       )
-      return account.address
+      const actualAddressResult = await unwrap(
+        await withTimeout(sat20.getWalletAddress(testAccountIndex), `get wallet address ${index}`),
+        `getWalletAddress wallet ${index}`,
+      )
+      const actualAddress = actualAddressResult?.address
+      const expectedAddress = checkpointAddresses?.[index] || expectedAddresses[index]
+      if (!actualAddress || actualAddress !== expectedAddress) {
+        throw new Error(
+          `wallet ${index} id ${walletIDs[index]} derived address ${actualAddress || 'missing'} does not match ${expectedAddress}`,
+        )
+      }
+      console.info(`[RGB11 live] wallet ${index} id ${walletIDs[index]} derived address verified: ${actualAddress}`)
+      return actualAddress
     }
     const addresses = [
       await selectTestAccount(0),
@@ -388,7 +504,7 @@ async function main() {
     ]
     for (let index = 0; index < walletIDs.length; index++) {
       await selectTestAccount(index)
-      await waitForWalletDataReady(`wallet ${index}`)
+      await waitForWalletDataReady(`wallet ${index}`, diagnoseOnly)
     }
     progress('wallet manager unlocked; initial wallet data synchronization completed')
 
@@ -406,39 +522,32 @@ async function main() {
         `switchAccount wallet ${index}`,
       )
       progress(`waiting for wallet data ${index}`)
-      await waitForWalletDataReady(`wallet ${index}`)
+      await waitForWalletDataReady(`wallet ${index}`, diagnoseOnly)
     }
 
-    if (cancelTransferID || cancelRequestID) {
-      if (!cancelTransferID || !cancelRequestID) {
-        throw new Error('both cancel transfer id and request id are required')
+    if (cancelExpiredTransferID) {
+      await switchWallet(0)
+      await unwrap(
+        await sat20.cancelExpiredRGB11Transfer(cancelExpiredTransferID),
+        'cancelExpiredRGB11Transfer',
+      )
+      return { cancelledExpired: cancelExpiredTransferID, sender: await parseState() }
+    }
+
+    if (syncMailboxOnly) {
+      if (!Number.isInteger(syncMailboxWalletIndex) || syncMailboxWalletIndex < 0 || syncMailboxWalletIndex > 1) {
+        throw new Error(`invalid mailbox wallet index ${syncMailboxWalletIndex}`)
       }
-      await switchWallet(0)
-      const relayResult = await unwrap(
-        await sat20.publishRGB11RelayRecord(cancelTransferID),
-        'publishRGB11RelayRecord for cancellation',
+      await switchWallet(syncMailboxWalletIndex)
+      const receiveResult = await unwrap(
+        await rgb11Address.syncMailbox({}),
+        'syncRGB11AddressMailbox',
       )
-      const relayRecord = JSON.parse(relayResult.record)
-      await switchWallet(1)
-      const rejected = await unwrap(
-        await sat20.rejectRGB11RelayConsignment(cancelRequestID, relayResult.record),
-        'rejectRGB11RelayConsignment',
-      )
-      const nack = JSON.parse(rejected.ack)
-      await unwrap(
-        await sat20.publishRGB11AckRecord(relayRecord.ack_record_key, JSON.stringify(nack)),
-        'publishRGB11AckRecord for cancellation',
-      )
-      await switchWallet(0)
-      const fetched = await unwrap(
-        await sat20.fetchRGB11AckRecord(cancelTransferID),
-        'fetchRGB11AckRecord for cancellation',
-      )
-      await unwrap(
-        await sat20.cancelRGB11BatchByNack(cancelTransferID, relayResult.record, fetched.ack),
-        'cancelRGB11BatchByNack',
-      )
-      return { cancelled: cancelTransferID, sender: await parseState() }
+      return {
+        syncedMailboxOnly: true,
+        receiveResult: JSON.parse(receiveResult.result),
+        receiver: await parseState(),
+      }
     }
 
     if (cancelOutOfBandTransferID) {
@@ -461,18 +570,56 @@ async function main() {
     }
 
     if (resumePending) {
+      const parsedCheckpoint = checkpointForWalletSelection
+      const savedCheckpoint = {
+        ...parsedCheckpoint,
+        kind: parsedCheckpoint?.kind || 'rgb11-prepared-transfer',
+        version: 2,
+        preparedTransferId: parsedCheckpoint?.preparedTransferId || parsedCheckpoint?.transferId,
+      }
+      if (savedCheckpoint.transferTransport !== 'address') {
+        throw new Error(`unsupported RGB11 checkpoint transport: ${savedCheckpoint.transferTransport || 'missing'}`)
+      }
+      if (!savedCheckpoint?.transferId || savedCheckpoint.transferId !== savedCheckpoint.preparedTransferId) {
+        throw new Error('RGB11 address resume checkpoint has an invalid transfer id')
+      }
+      await switchWallet(0)
+      const resumedResponse = await retryResumeTuple(
+        'resumeRGB11PreparedTransfer',
+        () => sat20.resumeRGB11PreparedTransfer(savedCheckpoint.transferId),
+      )
+      const resumed = JSON.parse(resumedResponse.transfer)
+      if (!resumed.state?.address_mode || resumed.state?.transport_mode !== 'address-dkvs') {
+        throw new Error('RGB11 checkpoint is not an address mailbox transfer')
+      }
+      const broadcast = await retryResumeTuple(
+        'deliverAndBroadcastRGB11AddressTransfer',
+        () => rgb11Address.deliverAndBroadcast({ transfer_id: savedCheckpoint.transferId }),
+        3,
+      )
+      if (!broadcast?.txid || broadcast.txid !== resumed.txid) {
+        throw new Error('resumed RGB11 address broadcast txid mismatch')
+      }
+      saveTransferCheckpoint({ ...savedCheckpoint, resumePhase: 'broadcast', txid: broadcast.txid })
+      await switchWallet(1)
+      await retryResumeTuple('syncRGB11AddressMailbox', () => rgb11Address.syncMailbox({}), 3)
+      const receiverState = await parseState()
+      await switchWallet(0)
+      return {
+        resumed: true,
+        resumedTransfer: { transferId: savedCheckpoint.transferId, txid: broadcast.txid },
+        wallets: [await parseState(), receiverState],
+      }
+
+    }
+
+    if (inspectPending) {
       const wallets = []
       for (let index = 0; index < walletIDs.length; index++) {
         await switchWallet(index)
-        const [refreshError] = await sat20.refreshRGB11State()
-        if (refreshError && !/witness is unresolved|outpoint status is unknown/i.test(
-          String(refreshError.message || refreshError),
-        )) {
-          throw refreshError
-        }
         wallets.push(await parseState())
       }
-      return { resumed: true, wallets }
+      return { inspectedPending: true, wallets }
     }
 
     if (diagnoseOnly) {
@@ -532,19 +679,26 @@ async function main() {
       const importedResponse = await unwrap(await sat20.importRGB11Contract(issued.armor), 'importRGB11Contract')
       imported = JSON.parse(importedResponse.result)
     }
-    const invoice = await unwrap(await sat20.createRGB11Invoice({
-      mode: 'witness',
-      transport_mode: transferTransport,
-      ...(transferTransport === 'rgb-json-rpc' ? { transport_endpoints: [proxyEndpoint] } : {}),
-      contract_id: issued.contract_id,
-      schema_id: issued.schema_id,
-      amount_raw: transferAmount,
-      assignment_name: 'assetOwner',
-      expiry: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
-      witness_vout: 1,
-    }), 'createRGB11Invoice')
-    const externalInvoice = invoice.invoice
-    progress('receiver imported contract and created invoice')
+    let invoice
+    let externalInvoice = ''
+    if (transferTransport === 'address') {
+      await unwrap(await rgb11Address.enableReceive({}), 'enableRGB11AddressReceive')
+      progress('receiver imported contract and enabled address mailbox receive')
+    } else {
+      invoice = await unwrap(await sat20.createRGB11Invoice({
+        mode: 'witness',
+        transport_mode: transferTransport,
+        ...(transferTransport === 'rgb-json-rpc' ? { transport_endpoints: [proxyEndpoint] } : {}),
+        contract_id: issued.contract_id,
+        schema_id: issued.schema_id,
+        amount_raw: transferAmount,
+        assignment_name: 'assetOwner',
+        expiry: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
+        witness_vout: 1,
+      }), 'createRGB11Invoice')
+      externalInvoice = invoice.invoice
+      progress('receiver imported contract and created standard invoice')
+    }
 
     await switchWallet(0)
     const senderBeforePrepareState = await parseState()
@@ -552,27 +706,49 @@ async function main() {
     if (findAssetAmount(senderBeforePrepareState.available_assets, assetName) !== senderStartAmount) {
       throw new Error('sender RGB11 balance was overwritten before transfer preparation')
     }
-    const preparedResponse = await unwrap(await sat20.prepareRGB11Transfer({
-      invoice: externalInvoice,
-      fee_rate: 1,
-      min_confirmations: 1,
-    }), 'prepareRGB11Transfer')
+    const preparedResponse = transferTransport === 'address'
+      ? await unwrap(await rgb11Address.prepareTransfer({
+        receiver_address: addresses[1],
+        asset_name: assetName,
+        amount_raw: transferAmount,
+        fee_rate: 1,
+        min_confirmations: 1,
+      }), 'prepareRGB11AddressTransfer')
+      : await unwrap(await sat20.prepareRGB11Transfer({
+        invoice: externalInvoice,
+        fee_rate: 1,
+        min_confirmations: 1,
+      }), 'prepareRGB11Transfer')
     const prepared = JSON.parse(preparedResponse.transfer)
     const transferID = prepared.state?.transfer_id
     if (!transferID) throw new Error('prepared transfer has no transfer id')
-    const expectedPreparedTransport = transferTransport === 'sat20' ? 'sat20-dkvs' : transferTransport
+    if (prepared.state?.direction !== 'send' || prepared.state?.status !== 'prepared') {
+      throw new Error(
+        `prepared transfer has invalid state ${prepared.state?.direction || 'unknown'}/${prepared.state?.status || 'unknown'}`,
+      )
+    }
+    if (transferTransport !== 'address' &&
+      (prepared.state?.invoice !== externalInvoice || !prepared.recipient_consignment)) {
+      throw new Error('prepared transfer does not match the requested invoice or has no recipient consignment')
+    }
+    const expectedPreparedTransport = transferTransport === 'address' ? 'address-dkvs' : transferTransport
     if (prepared.state?.transport_mode !== expectedPreparedTransport) {
       throw new Error(`expected ${expectedPreparedTransport} transfer, got ${prepared.state?.transport_mode || 'unknown'}`)
     }
+    if (transferTransport === 'address' && !prepared.state?.address_mode) {
+      throw new Error('prepared address transfer is not marked as address mailbox mode')
+    }
     const transferCheckpoint = {
-      version: 1,
+      kind: 'rgb11-prepared-transfer',
+      version: 2,
       ticker,
       assetName,
       contractId: issued.contract_id,
       schemaId: issued.schema_id,
-      requestId: invoice.request_id || invoice.requestId,
+      requestId: invoice?.request_id || invoice?.requestId || '',
       invoice: externalInvoice,
       transferId: transferID,
+      preparedTransferId: transferID,
       transferTransport,
       senderWalletId: walletIDs[0],
       receiverWalletId: walletIDs[1],
@@ -581,38 +757,27 @@ async function main() {
       issueAmount: senderStartAmount,
       transferAmount,
     }
-    checkpoint(transferCheckpoint)
+    saveTransferCheckpoint(transferCheckpoint)
     progress(`sender prepared ${transferTransport} transfer`)
 
     let broadcast
     let receiveResult
-    if (transferTransport === 'sat20') {
-      const relayResult = await unwrap(
-        await sat20.publishRGB11RelayRecord(transferID),
-        'publishRGB11RelayRecord',
-      )
-      const relayRecord = JSON.parse(relayResult.record)
-      await switchWallet(1)
-      const accepted = await unwrap(
-        await sat20.acceptRGB11RelayConsignment(
-          invoice.request_id || invoice.requestId,
-          relayResult.record,
-          prepared.recipient_consignment,
-        ),
-        'acceptRGB11RelayConsignment',
-      )
-      const ackRecord = JSON.parse(accepted.ack)
-      await unwrap(
-        await sat20.publishRGB11AckRecord(relayRecord.ack_record_key, JSON.stringify(ackRecord)),
-        'publishRGB11AckRecord',
-      )
-      receiveResult = accepted
-      await switchWallet(0)
-      const fetched = await unwrap(await sat20.fetchRGB11AckRecord(transferID), 'fetchRGB11AckRecord')
+    let addressDelivery
+    if (transferTransport === 'address') {
       broadcast = await unwrap(
-        await sat20.broadcastRGB11Transfer(transferID, relayResult.record, fetched.ack),
-        'broadcastRGB11Transfer',
+        await rgb11Address.deliverAndBroadcast({ transfer_id: transferID }),
+        'deliverAndBroadcastRGB11AddressTransfer',
       )
+      addressDelivery = JSON.parse(broadcast.result)
+      if (!addressDelivery.record_key?.startsWith('/mail/')) {
+        throw new Error(`RGB11 address delivery did not use mailbox: ${addressDelivery.record_key || 'missing'}`)
+      }
+      await switchWallet(1)
+      receiveResult = await unwrap(await rgb11Address.syncMailbox({}), 'syncRGB11AddressMailbox')
+      const mailboxSync = JSON.parse(receiveResult.result)
+      if ((mailboxSync.received || 0) + (mailboxSync.already_done || 0) < 1) {
+        throw new Error(`RGB11 mailbox did not process the delivery: ${JSON.stringify(mailboxSync)}`)
+      }
     } else if (transferTransport === 'rgb-json-rpc') {
       broadcast = await deliverProxyWithRetry(transferID)
     } else {
@@ -632,7 +797,7 @@ async function main() {
         prepared.recipient_consignment,
       )
     }
-    checkpoint({ ...transferCheckpoint, txid: broadcast.txid })
+    saveTransferCheckpoint({ ...transferCheckpoint, txid: broadcast.txid })
     const expectedSenderAmount = (BigInt(senderStartAmount) - BigInt(transferAmount)).toString()
     progress(`transfer broadcast ${broadcast.txid}`)
     await switchWallet(0)
@@ -662,11 +827,16 @@ async function main() {
     ))) {
       throw new Error('unconfirmed RGB11 balance leaked into the general available asset summary')
     }
-    const [pendingSendError] = await sat20.prepareRGB11Transfer({
-      invoice: externalInvoice,
-      fee_rate: 1,
-      min_confirmations: 1,
-    })
+    const [pendingSendError] = transferTransport === 'address'
+      ? await rgb11Address.prepareTransfer({
+        receiver_address: addresses[0], asset_name: assetName, amount_raw: transferAmount,
+        fee_rate: 1, min_confirmations: 1,
+      })
+      : await sat20.prepareRGB11Transfer({
+        invoice: externalInvoice,
+        fee_rate: 1,
+        min_confirmations: 1,
+      })
     if (!pendingSendError) {
       throw new Error('unconfirmed RGB11 balance was accepted as a spendable transfer input')
     }
@@ -693,6 +863,7 @@ async function main() {
       transferTransport,
       txid: broadcast.txid,
       receiveResult,
+      addressDelivery,
       proxyAck,
       sender: {
         address: addresses[0],
@@ -721,12 +892,15 @@ async function main() {
     ensureTestAccount: ENSURE_TEST_ACCOUNT,
     transferTransport: TRANSFER_TRANSPORT,
     proxyEndpoint: PROXY_ENDPOINT,
-    cancelTransferID: CANCEL_TRANSFER_ID,
-    cancelRequestID: CANCEL_REQUEST_ID,
     cancelOutOfBandTransferID: CANCEL_OUT_OF_BAND_TRANSFER_ID,
+    cancelExpiredTransferID: CANCEL_EXPIRED_TRANSFER_ID,
     reuseAssetName: REUSE_ASSET_NAME,
     resumePending: RESUME_PENDING,
+    inspectPending: INSPECT_PENDING,
+    syncMailboxOnly: SYNC_MAILBOX_ONLY,
+    syncMailboxWalletIndex: SYNC_MAILBOX_WALLET_INDEX,
     resumeProxyRequestID: RESUME_PROXY_REQUEST_ID,
+    useCheckpointWallets: USE_CHECKPOINT_WALLETS,
   })
 
   if (result.diagnoseOnly) {
@@ -737,10 +911,35 @@ async function main() {
     console.log(JSON.stringify({ cancelled: result.cancelled, sender: summarizeState(result.sender) }, null, 2))
     return
   }
+  if (result.cancelledExpired) {
+    console.log(JSON.stringify({
+      cancelledExpired: result.cancelledExpired,
+      sender: summarizeState(result.sender),
+    }, null, 2))
+    return
+  }
   if (result.resumed) {
     console.log(JSON.stringify({
       resumed: true,
+      alreadyBroadcast: Boolean(result.alreadyBroadcast),
+      receiverAccepted: Boolean(result.receiverAccepted),
+      resumedTransfer: result.resumedTransfer,
       wallets: result.wallets.map((state) => summarizeState(state)),
+    }, null, 2))
+    return
+  }
+  if (result.inspectedPending) {
+    console.log(JSON.stringify({
+      inspectedPending: true,
+      wallets: result.wallets.map((state) => summarizeState(state)),
+    }, null, 2))
+    return
+  }
+  if (result.syncedMailboxOnly) {
+    console.log(JSON.stringify({
+      syncedMailboxOnly: true,
+      receiveResult: result.receiveResult,
+      receiver: summarizeState(result.receiver),
     }, null, 2))
     return
   }

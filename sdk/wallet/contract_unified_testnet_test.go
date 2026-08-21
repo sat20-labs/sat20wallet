@@ -16,11 +16,151 @@ import (
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	sbtcutil "github.com/sat20-labs/satoshinet/btcutil"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 	"github.com/sirupsen/logrus"
 )
 
 const liveTestnetBootstrapAddress = "tb1p62gjhywssq42tp85erlnvnumkt267ypndrl0f3s4sje578cgr79sekhsua"
+
+func TestUnifiedTemplateAutopayDeployFund_testnet(t *testing.T) {
+	if os.Getenv("SAT20WALLET_AUTOPAY_DEPLOY_LIVE") != "1" {
+		t.Skip("set SAT20WALLET_AUTOPAY_DEPLOY_LIVE=1 to deploy and fund the testnet AUTOPAY contract")
+	}
+	manager := newContractTestnetManager(t)
+	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
+	if got := manager.GetWallet().GetAddress(); got != defaults.AutopayDeployer {
+		t.Fatalf("AUTOPAY deployer mismatch: got %s want %s", got, defaults.AutopayDeployer)
+	}
+
+	if _, err := manager.QueryContract(&ContractQueryRequest{
+		Query: ContractQueryState, Contract: defaults.AutopayContract,
+	}); err != nil {
+		content, contentErr := defaults.AutopayContent()
+		if contentErr != nil {
+			t.Fatalf("build AUTOPAY content: %v", contentErr)
+		}
+		startHeight := manager.l2IndexerClient.GetBestHeight()
+		deploy, deployErr := manager.DeployUnifiedContract(&ContractDeployRequest{
+			ContractType: ContractTypeTemplate, SubType: contractcommon.TemplateAutopay,
+			ContractContent: base64.StdEncoding.EncodeToString(content), ContentEncoding: "base64",
+			DeployNonce: defaults.AutopayDeployNonce,
+		})
+		if deployErr != nil {
+			t.Fatalf("deploy AUTOPAY: %v", deployErr)
+		}
+		if deploy.ContractAddress != defaults.AutopayContract {
+			t.Fatalf("AUTOPAY address mismatch: got %s want %s", deploy.ContractAddress, defaults.AutopayContract)
+		}
+		t.Logf("AUTOPAY deploy result: %+v", deploy)
+		if err := waitL2HeightAbove(t, manager, startHeight, 4*time.Minute); err != nil {
+			t.Fatalf("AUTOPAY deploy was not confirmed: %v", err)
+		}
+		if err := waitContractIndexed(t, manager, deploy.ContractAddress, 2*time.Minute); err != nil {
+			t.Fatalf("AUTOPAY was not indexed: %v", err)
+		}
+	} else {
+		t.Logf("AUTOPAY already exists: %s", defaults.AutopayContract)
+	}
+
+	amountPerBlock, err := accountAmountPerBlock(defaults, accountDefaultRecordCount)
+	if err != nil {
+		t.Fatalf("calculate AUTOPAY amount per block: %v", err)
+	}
+	fundingAmount, err := multiplyDecimal(amountPerBlock, accountPaidDefaultFundingBlocks)
+	if err != nil {
+		t.Fatalf("calculate AUTOPAY funding amount: %v", err)
+	}
+	configParam, err := (&contractcommon.TemplateAutopayConfigInvokeParam{
+		AmountPerBlock: amountPerBlock,
+	}).Encode()
+	if err != nil {
+		t.Fatalf("encode AUTOPAY config: %v", err)
+	}
+	fundStartHeight := manager.l2IndexerClient.GetBestHeight()
+	fund, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType: ContractTypeTemplate, SubType: contractcommon.TemplateAutopay,
+		ContractAddress: defaults.AutopayContract, Action: contractcommon.TemplateInvokeAPIConfig,
+		Param: base64.StdEncoding.EncodeToString(configParam), ParamEncoding: "base64",
+		Assets: []ContractFundingAsset{{AssetName: defaults.AutopayFeeAssetName, Amount: fundingAmount}},
+	})
+	if err != nil {
+		t.Fatalf("fund AUTOPAY for account storage: %v", err)
+	}
+	if err := waitL2HeightAbove(t, manager, fundStartHeight, 4*time.Minute); err != nil {
+		t.Fatalf("AUTOPAY funding was not confirmed: %v", err)
+	}
+	if err := manager.waitForAccountAutopayReady(defaults, amountPerBlock); err != nil {
+		t.Fatalf("AUTOPAY was not ready after funding: %v", err)
+	}
+	t.Logf("AUTOPAY funded: contract=%s amount=%s amountPerBlock=%s blocks=%d txid=%s",
+		defaults.AutopayContract, fundingAmount, amountPerBlock,
+		accountPaidDefaultFundingBlocks, fund.TxID)
+}
+
+func TestLegacyFaucetDeployFund_testnet(t *testing.T) {
+	if os.Getenv("SAT20WALLET_FAUCET_DEPLOY_LIVE") != "1" {
+		t.Skip("set SAT20WALLET_FAUCET_DEPLOY_LIVE=1 to deploy and fund the testnet Faucet contract")
+	}
+	manager := newContractTestnetManager(t)
+	faucet := NewFaucetContract()
+	faucet.AssetName = swire.AssetName{Protocol: "brc20", Type: "f", Ticker: "sgas"}
+
+	url := os.Getenv("SAT20WALLET_FAUCET_URL")
+	if url == "" {
+		txID, resvID, deployedURL, err := manager.DeployContract_Remote(
+			faucet.TemplateName, faucet.Content(), 0, false,
+		)
+		if err != nil {
+			t.Fatalf("deploy Faucet: %v", err)
+		}
+		url = deployedURL
+		t.Logf("Faucet deploy accepted: txid=%s resvId=%d url=%s", txID, resvID, url)
+	} else {
+		t.Logf("using already deployed Faucet: url=%s", url)
+	}
+
+	deadline := time.Now().Add(8 * time.Minute)
+	for {
+		status, statusErr := manager.GetContractStatusInServer(url)
+		if statusErr == nil {
+			runtime := NewFaucetContractRuntime(manager)
+			if jsonErr := json.Unmarshal([]byte(status), runtime); jsonErr == nil && runtime.IsActive() {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Faucet did not become active before timeout: %s", url)
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	channelID := ExtractChannelId(url)
+	fundTx, err := manager.SendAssets_SatsNet(channelID, "brc20:f:sgas", "100000000", nil)
+	if err != nil {
+		t.Fatalf("fund Faucet with 100000000 SGAS: %v", err)
+	}
+	t.Logf("Faucet funding broadcast: txid=%s url=%s", fundTx.TxID(), url)
+
+	deadline = time.Now().Add(8 * time.Minute)
+	for {
+		status, statusErr := manager.GetContractStatusInServer(url)
+		if statusErr == nil {
+			runtime := NewFaucetContractRuntime(manager)
+			if jsonErr := json.Unmarshal([]byte(status), runtime); jsonErr == nil &&
+				runtime.AssetAmtInPool != nil && runtime.AssetAmtInPool.String() == "100000000" &&
+				runtime.TotalInputAssets != nil && runtime.TotalInputAssets.String() == "100000000" {
+				t.Logf("Faucet funded and indexed: url=%s AssetAmtInPool=%s TotalInputAssets=%s",
+					url, runtime.AssetAmtInPool, runtime.TotalInputAssets)
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Faucet funding was not indexed before timeout: %s", url)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
 
 func newContractTestnetManager(t *testing.T) *Manager {
 	t.Helper()
@@ -28,10 +168,18 @@ func newContractTestnetManager(t *testing.T) *Manager {
 	if mnemonic == "" {
 		t.Skip("set SAT20WALLET_CONTRACT_TESTNET_MNEMONIC to run live contract tests")
 	}
+	dbPath := os.Getenv("SAT20WALLET_CONTRACT_TESTNET_DB")
+	if dbPath == "" {
+		dbPath = t.TempDir()
+	}
 	cfg := &common.Config{
 		Env:   "prd",
 		Chain: "testnet",
 		Mode:  CLIENT_NODE,
+		Peers: []string{
+			"b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@https://apiprd.sat20.org/stp/testnet",
+			"s@0367f26af23dc40fdad06752c38264fe621b7bbafb1d41ab436b87ded192f1336e@https://apiprd.ordx.market/stp/testnet",
+		},
 		IndexerL1: &common.Indexer{
 			Scheme: "https",
 			Host:   "apiprd.sat20.org",
@@ -43,7 +191,7 @@ func newContractTestnetManager(t *testing.T) *Manager {
 			Proxy:  "satsnet/testnet",
 		},
 		Log: "debug",
-		DB:  t.TempDir(),
+		DB:  dbPath,
 	}
 	db := NewKVDB(cfg.DB)
 	if db == nil {
