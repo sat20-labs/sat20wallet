@@ -1,7 +1,11 @@
 import { Network, Balance, Chain, WalletAccount, WalletData, Language } from '@/types'
 import { Storage } from './storage-adapter'
 
-export type AccountRecoveryState = Pick<RootAccountRecoveryResult, 'status' | 'code'>
+export type AccountRecoveryState = Pick<RootAccountRecoveryResult, 'status' | 'code'> & {
+  env?: 'dev' | 'test' | 'prd'
+  network?: Network
+  rootWalletId?: string
+}
 
 interface WalletState {
   env: 'dev' | 'test' | 'prd'

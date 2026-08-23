@@ -1,6 +1,9 @@
 package wallet
 
-import "strconv"
+import (
+	"bytes"
+	"strconv"
+)
 
 func operationLogCompletionMessage(event *ActionStatusEvent) (string, map[string]string) {
 	details := make(map[string]string)
@@ -117,5 +120,64 @@ func (p *Manager) handleOperationLogActionStatusEvent(event *ActionStatusEvent) 
 			Message: message,
 			Details: details,
 		})
+	}
+}
+
+// reconcileReadyOpenChannelOperationLogs repairs only the display log for an
+// already READY channel. It does not recreate reservations, recheck L1, or
+// rebroadcast transactions.
+func (p *Manager) reconcileReadyOpenChannelOperationLogs() {
+	logs, err := p.GetOperationLogs()
+	if err != nil {
+		Log.Warnf("load operation logs for ready-channel reconciliation failed: %v", err)
+		return
+	}
+	channels, err := p.LoadAllChannelInDBFromDB()
+	if err != nil {
+		Log.Warnf("load channels for operation-log reconciliation failed: %v", err)
+		return
+	}
+
+	p.mutex.RLock()
+	currentWallet := p.wallet
+	p.mutex.RUnlock()
+	if currentWallet == nil || currentWallet.GetPaymentPubKey() == nil {
+		return
+	}
+	currentWalletID := currentWallet.GetWalletId().Id
+	currentPaymentKey := currentWallet.GetPaymentPubKey().SerializeCompressed()
+
+	for _, record := range logs {
+		if record == nil || record.Action != "open_channel" ||
+			(record.Status != OperationLogPending && record.Status != OperationLogRunning) ||
+			record.ReservationType != RESV_TYPE_OPEN || record.ReservationID == 0 {
+			continue
+		}
+		for _, channel := range channels {
+			if channel == nil || channel.Status != CS_READY || channel.FundingTime != record.ReservationID {
+				continue
+			}
+			if channel.LocalWalletId != 0 {
+				if channel.LocalWalletId != currentWalletID {
+					continue
+				}
+			} else if channel.LocalChanCfg.PaymentKey == nil ||
+				!bytes.Equal(channel.LocalChanCfg.PaymentKey.SerializeCompressed(), currentPaymentKey) {
+				continue
+			}
+			p.updateOperationLogBestEffort(record.ID, OperationLogUpdate{
+				Status:  OperationLogSucceeded,
+				Message: "Channel is ready",
+				Details: map[string]string{
+					"reservation_id": strconv.FormatInt(record.ReservationID, 10),
+					"channel_id":     channel.ChannelId,
+				},
+				Result: map[string]string{
+					"reservation_id": strconv.FormatInt(record.ReservationID, 10),
+					"channel_id":     channel.ChannelId,
+				},
+			})
+			break
+		}
 	}
 }

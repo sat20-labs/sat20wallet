@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
@@ -356,6 +357,49 @@ func TestAccountRootDiscoveryOfflineIsPending(t *testing.T) {
 	}
 	if manager.GetAccountManagementStatus().Active {
 		t.Fatal("offline discovery initialized a second managed account")
+	}
+}
+
+func TestFreshMainnetImportContinuesAfterRootMetadataRouteNotFound(t *testing.T) {
+	oldChain := _chain
+	_chain = "mainnet"
+	defer func() { _chain = oldChain }()
+
+	manager := newAccountManagementAutoTestManager(t)
+	store := &memoryAccountRootWrapperStore{
+		records: make(map[string]*dkvsValue),
+		refreshErr: &HTTPResponseError{
+			StatusCode: http.StatusNotFound,
+			Body:       []byte("404 page not found"),
+		},
+	}
+	_, discoveryErr := manager.recoverAccountManagementFromRootMnemonic(
+		context.Background(), accountRootWrapperTestMnemonic, "password", store,
+		AccountIndexerLocation{Scheme: "https", Host: "dkvs.test", Proxy: "satsnet/mainnet"})
+	if !errors.Is(discoveryErr, ErrRootAccountDiscoveryPending) {
+		t.Fatalf("metadata route 404 error=%v", discoveryErr)
+	}
+	if errors.Is(discoveryErr, ErrRootAccountNotFound) {
+		t.Fatalf("metadata route 404 was treated as a missing root record: %v", discoveryErr)
+	}
+
+	walletID, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
+	if err != nil || walletID == 0 {
+		t.Fatalf("ordinary import after pending discovery: wallet=%d err=%v", walletID, err)
+	}
+	if manager.GetAccountManagementStatus().Active {
+		t.Fatal("pending root discovery initialized a new managed account")
+	}
+}
+
+func TestRootDiscoveryRecordNotFoundRemainsDistinctFromRouteNotFound(t *testing.T) {
+	if err := rootDiscoveryError(ErrDKVSRecordNotFound); !errors.Is(err, ErrRootAccountNotFound) ||
+		errors.Is(err, ErrRootAccountDiscoveryPending) {
+		t.Fatalf("record-not-found classification=%v", err)
+	}
+	upstream := &HTTPResponseError{StatusCode: http.StatusBadGateway, Body: []byte("upstream failed")}
+	if err := rootDiscoveryError(upstream); !errors.Is(err, upstream) {
+		t.Fatalf("non-404 HTTP error was reclassified: %v", err)
 	}
 }
 

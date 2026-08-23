@@ -1,4 +1,5 @@
 import { generateMempoolUrl } from '@/utils'
+import { openExternalWindow } from '@/lib/externalNavigation'
 
 /**
  * 浏览器工具类，用于在不同环境中打开链接
@@ -23,24 +24,7 @@ export class BrowserUtil {
       windowFeatures = 'noopener,noreferrer',
     } = options
 
-    try {
-      const newWindow = window.open(url, target, windowFeatures)
-
-      if (!newWindow) {
-        console.warn('无法打开新窗口，可能是由于弹窗阻止器')
-        window.location.href = url
-      }
-    } catch (error) {
-      console.error('打开链接时发生错误:', error)
-
-      // 作为后备，在当前窗口打开
-      try {
-        window.location.href = url
-      } catch (fallbackError) {
-        console.error('无法打开链接:', fallbackError)
-        throw new Error(`无法打开链接: ${url}`)
-      }
-    }
+    openExternalWindow(window.open.bind(window), url, target, windowFeatures)
   }
 
   /**

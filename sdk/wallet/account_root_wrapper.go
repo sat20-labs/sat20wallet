@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
@@ -510,6 +511,13 @@ func rootDiscoveryError(err error) error {
 	if errors.Is(err, ErrDKVSRecordNotFound) {
 		return ErrRootAccountNotFound
 	}
+	var responseErr *HTTPResponseError
+	if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusNotFound {
+		// A transport-level 404 here means the endpoint does not expose the
+		// metadata route used for root discovery.  It is not evidence that the
+		// deterministic root record itself is absent.
+		return fmt.Errorf("%w: %v", ErrRootAccountDiscoveryPending, err)
+	}
 	return err
 }
 
@@ -531,6 +539,32 @@ func (p *Manager) RecoverAccountManagementFromRootMnemonic(ctx context.Context,
 		return nil, err
 	}
 	return p.recoverAccountManagementFromRootMnemonic(ctx, mnemonic, password, store, location)
+}
+
+// RecoverAccountManagementFromCurrentWallet retries root discovery after a
+// network switch without exposing the decrypted mnemonic to the application.
+func (p *Manager) RecoverAccountManagementFromCurrentWallet(ctx context.Context,
+	password string) ([]RestoredWalletResult, error) {
+
+	if p == nil {
+		return nil, fmt.Errorf("wallet manager is unavailable")
+	}
+	p.mutex.Lock()
+	if p.wallet == nil {
+		p.mutex.Unlock()
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	info := p.walletInfoMap[p.wallet.GetId()]
+	if info == nil {
+		p.mutex.Unlock()
+		return nil, fmt.Errorf("current wallet is unavailable")
+	}
+	mnemonic, err := p.loadWalletSecret(info, password)
+	p.mutex.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return p.RecoverAccountManagementFromRootMnemonic(ctx, mnemonic, password)
 }
 
 func (p *Manager) recoverAccountManagementFromRootMnemonic(ctx context.Context,

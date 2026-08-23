@@ -65,7 +65,7 @@ declare interface WalletManager {
   init(config: Config, logLevel: number): Promise<SatsnetResponse<void>>
 
   // Release and cleanup wallet manager resources
-  release(): SatsnetResponse<void>
+  release(): Promise<SatsnetResponse<void>>
 
   // Check if wallet exists
   isWalletExist(): SatsnetResponse<{ exists: boolean }>
@@ -132,6 +132,10 @@ declare interface WalletManager {
 
   recoverAccountManagementFromRootMnemonic(
     mnemonic: string,
+    password: string
+  ): Promise<SatsnetResponse<RootAccountRecoveryResult>>
+
+  recoverAccountManagementFromCurrentWallet(
     password: string
   ): Promise<SatsnetResponse<RootAccountRecoveryResult>>
 
@@ -464,7 +468,7 @@ interface SatsnetStp {
     feeRate: string | number,
     amt: string | number
   ): SatsnetResponse
-  release(): SatsnetResponse
+  release(): Promise<SatsnetResponse>
   getWallet(): SatsnetResponse
   // Switches to the wallet with the specified ID.
   switchWallet(id: number, password: string): Promise<SatsnetResponse<void>>

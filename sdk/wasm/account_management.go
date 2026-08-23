@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -31,7 +30,6 @@ type accountStorageSession struct {
 
 type accountActivationSession struct {
 	Package          *account.RecoveryPackage
-	Secret           []byte
 	Summary          account.RecoverySummary
 	Authorization    walletsdk.AccountStorageAuthorization
 	Locator          accountLocatorPayload
@@ -191,7 +189,6 @@ func accountCleanupSessions() {
 			}
 			if session != nil {
 				zeroAccountBytes(session.RequestPrivate)
-				zeroAccountBytes(session.Secret)
 				session.GuardianShare = nil
 			}
 			delete(accountSessions.activation, id)
@@ -338,6 +335,13 @@ func accountCreateRecovery(this js.Value, args []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		defer clearWASMBackup(&backup)
+		// Import intentionally does not mint an AccountSecret because it may be
+		// discovering an existing account. Explicit recovery setup is the point
+		// where a genuinely new account is initialized; existing profiles are a
+		// no-op here.
+		if err := _mgr.InitializeAccountManagement(request.Password); err != nil {
+			return nil, -1, err.Error()
+		}
 		repository, err := _mgr.NewAccountRepositoryForStorage(storage.Authorization)
 		if err != nil {
 			return nil, -1, err.Error()
@@ -370,16 +374,10 @@ func accountCreateRecovery(this js.Value, args []js.Value) any {
 			options.GuardianPublicKey = guardianPublicKey
 		}
 		manager := account.NewManager(repository)
-		pkg, secret, err := manager.CreateRecoveryPackageWithSecret(options)
+		pkg, err := _mgr.CreateAccountRecoveryPackage(options)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		published := false
-		defer func() {
-			if !published {
-				zeroAccountBytes(secret)
-			}
-		}()
 		if err := manager.Publish(context.Background(), *pkg); err != nil {
 			return nil, -1, err.Error()
 		}
@@ -411,10 +409,9 @@ func accountCreateRecovery(this js.Value, args []js.Value) any {
 		}
 		accountSessions.Lock()
 		summary := account.SummarizeBackup(pkg.Envelope.Locator, backup)
-		accountSessions.activation[sessionID] = &accountActivationSession{Package: pkg, Secret: secret, Summary: summary, Authorization: storage.Authorization,
+		accountSessions.activation[sessionID] = &accountActivationSession{Package: pkg, Summary: summary, Authorization: storage.Authorization,
 			Locator: locator, ExpiresAt: time.Now().Add(accountSessionTTL)}
 		accountSessions.Unlock()
-		published = true
 		result := map[string]any{
 			"session_id": sessionID, "locator": locatorText, "user_share": userShare,
 			"summary": summary, "storage": storage.Authorization.Summary,
@@ -577,9 +574,6 @@ func accountRehearse(this js.Value, args []js.Value) any {
 			return nil, -1, "recovered shares do not match the activation package"
 		}
 		defer zeroAccountBytes(secret)
-		if len(session.Secret) != len(secret) || !bytes.Equal(session.Secret, secret) {
-			return nil, -1, "account recovery rehearsal secret mismatch"
-		}
 		defer clearWASMBackup(&backup)
 		publicLocator, err := encodeAccountLocator(session.Locator)
 		if err != nil {
@@ -592,8 +586,6 @@ func accountRehearse(this js.Value, args []js.Value) any {
 		zeroAccountBytes(session.RequestPrivate)
 		session.RequestPrivate = nil
 		session.GuardianShare = nil
-		zeroAccountBytes(session.Secret)
-		session.Secret = nil
 		accountSessions.Lock()
 		delete(accountSessions.activation, request.SessionID)
 		accountSessions.Unlock()
@@ -979,7 +971,6 @@ func accountAbortSession(this js.Value, args []js.Value) any {
 	if session := accountSessions.activation[request.SessionID]; session != nil && session.Package != nil {
 		session.Package.UserShare = account.RecoveryShare{}
 		zeroAccountBytes(session.RequestPrivate)
-		zeroAccountBytes(session.Secret)
 		session.GuardianShare = nil
 	}
 	delete(accountSessions.storage, request.SessionID)

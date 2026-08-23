@@ -136,7 +136,7 @@ const previewRecovery = () => run(async () => {
 })
 
 const commitRecovery = () => run(async () => {
-  if (password.value.length < 8 || password.value !== confirmPassword.value) throw new Error('密码至少 8 个字符且两次输入必须一致')
+  if (password.value.length < 6 || password.value !== confirmPassword.value) throw new Error('密码至少 6 个字符且两次输入必须一致')
   const hashed = await hashPassword(password.value)
   const result = await accountSDK.commitRecovery(sessionId.value, hashed)
   const wallets = result.wallets.map(wallet => ({

@@ -225,9 +225,8 @@ func (p *Manager) GetAccountStorageOptions() ([]AccountStorageOption, error) {
 		return nil, err
 	}
 	options := make([]AccountStorageOption, 0, 2)
-	policy, configErr := store.Config()
+	policy, currentHeight, _, configErr := store.ConfigWithVerificationHeight()
 	if configErr == nil && policy != nil && policy.Enabled {
-		currentHeight, _ := p.ensureDKVSManager().verificationHeight()
 		options = append(options, AccountStorageOption{
 			ID: "temporary", Mode: AccountStorageTemporary, Available: true,
 			Title: "临时缓存", Description: "由当前连接节点临时保存；到期后数据可能被删除。",
@@ -297,14 +296,13 @@ func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*A
 	}
 	switch strings.ToLower(strings.TrimSpace(optionID)) {
 	case AccountStorageTemporary:
-		policy, err := store.Config()
+		policy, currentHeight, _, err := store.ConfigWithVerificationHeight()
 		if err != nil {
 			return nil, err
 		}
 		if policy == nil || !policy.Enabled || policy.MaxTTL == 0 {
 			return nil, fmt.Errorf("current node does not provide temporary DKVS cache")
 		}
-		currentHeight, _ := p.ensureDKVSManager().verificationHeight()
 		return &AccountStorageAuthorization{
 			ID: AccountStorageTemporary, Mode: AccountStorageTemporary,
 			RecordOptions: dkvsindexer.RecordOptions{Seq: 1, TTL: policy.MaxTTL},
@@ -650,6 +648,28 @@ func (p *Manager) AccountPreflight(password string, metadata []AccountWalletMeta
 
 func (p *Manager) ExportAccountBackupForPWA(password string, metadata []AccountWalletMetadataInput) (account.Backup, error) {
 	return p.ExportAccountBackup(password, metadataMap(metadata))
+}
+
+// CreateAccountRecoveryPackage builds recovery material from the one
+// AccountSecret owned by the active account-management profile. It does not
+// create, replace or expose that secret to callers.
+func (p *Manager) CreateAccountRecoveryPackage(options account.CreateOptions) (*account.RecoveryPackage, error) {
+	if p == nil {
+		return nil, fmt.Errorf("wallet manager is unavailable")
+	}
+	p.mutex.RLock()
+	if p.accountProfile == nil || len(p.accountSecret) != 32 {
+		p.mutex.RUnlock()
+		return nil, fmt.Errorf("account management is not initialized or unlocked")
+	}
+	if options.AccountID != p.accountProfile.AccountID {
+		p.mutex.RUnlock()
+		return nil, fmt.Errorf("recovery package account does not match the active account")
+	}
+	secret := append([]byte(nil), p.accountSecret...)
+	p.mutex.RUnlock()
+	defer zeroBytes(secret)
+	return account.NewManager(nil).CreateRecoveryPackage(options, secret)
 }
 
 func (p *Manager) PutGuardianCapsuleForStorage(auth AccountStorageAuthorization, mailboxID string,

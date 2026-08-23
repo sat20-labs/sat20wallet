@@ -77,12 +77,14 @@ import { useGlobalStore } from '@/store/global'
 import { useI18n } from 'vue-i18n'
 import sat20 from '@/utils/sat20'
 import { useQuery } from '@tanstack/vue-query'
+import { assetContextKey } from '@/lib/assetContext'
 
 const { toast } = useToast()
 const l1Store = useL1Store()
 const l2Store = useL2Store()
 const walletStore = useWalletStore()
 const channelStore = useChannelStore()
+const globalStore = useGlobalStore()
 
 const { deposit, withdraw, splicingIn, splicingOut, unlockUtxo, lockUtxo, lockUtxoWithExpand, l1Send, l2Send, handleError, loading: assetActionLoading } = useAssetActions()
 
@@ -110,7 +112,8 @@ const pendingLockExpand = ref<null | {
   availableAmount: string
 }>(null)
 const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
-const { address, network, btcFeeRate } = storeToRefs(walletStore)
+const { address, network, btcFeeRate, walletId, accountIndex } = storeToRefs(walletStore)
+const { env, hideBalance } = storeToRefs(globalStore)
 const abailableSats = ref<{
   availableAmt: number,
   lockedAmt: number
@@ -143,22 +146,34 @@ const buttons = [
 ]
 
 // 查询方法
+const availableSatsContextKey = computed(() => assetContextKey({
+  env: env.value,
+  network: network.value,
+  chain: props.selectedChain.toLowerCase(),
+  walletId: walletId.value,
+  accountIndex: accountIndex.value,
+  address: address.value || '',
+}))
+
 const fetchAbailableSats = async () => {
-  if (!address.value) {
-    return { availableAmt: 0, lockedAmt: 0 }
-  }
+  const contextKey = availableSatsContextKey.value
+  const queryAddress = address.value
+  if (!queryAddress) throw new Error('Wallet address is unavailable')
   if (props.selectedChain.toLowerCase() === 'channel') {
-    return { availableAmt: channelStore.totalSats, lockedAmt: 0 }
+    return { contextKey, balance: { availableAmt: channelStore.totalSats, lockedAmt: 0 } }
   }
   const handler = props.selectedChain.toLowerCase() === 'bitcoin' ? sat20.getAssetAmount : sat20.getAssetAmount_SatsNet
-  const [err, res] = await handler.bind(sat20)(address.value, '::')
+  const [err, res] = await handler.bind(sat20)(queryAddress, '::')
   console.log('fetchAbailableSats', err, res);
   if (err || !res) {
-    return { availableAmt: 0, lockedAmt: 0 }
+    throw err || new Error('Asset amount response is empty')
   }
   return {
-    availableAmt: res.availableAmt,
-    lockedAmt: res.lockedAmt
+    contextKey,
+    balance: {
+      availableAmt: res.availableAmt,
+      lockedAmt: res.lockedAmt
+    }
   }
 }
 
@@ -166,19 +181,23 @@ const fetchAbailableSats = async () => {
 const { data: abailableSatsQuery, refetch: refetchAbailableSats } = useQuery({
   queryKey: [
     'abailableSats',
-    address,
-    computed(() => props.selectedChain)
+    availableSatsContextKey,
   ],
   queryFn: fetchAbailableSats,
   refetchInterval: 60 * 1000,
   enabled: computed(() => !!address.value),
-  initialData: { availableAmt: 0, lockedAmt: 0 },
 })
 console.log('abailableSatsQuery', abailableSatsQuery);
 
+watch(availableSatsContextKey, () => {
+  abailableSats.value = { availableAmt: 0, lockedAmt: 0 }
+}, { flush: 'sync' })
+
 watch(abailableSatsQuery, (val) => {
   console.log('abailableSatsQuery', val);
-  if (val) abailableSats.value = val
+  if (val?.contextKey === availableSatsContextKey.value) {
+    abailableSats.value = val.balance
+  }
 }, { immediate: true, deep: true })
 
 // balanceMouseEnter 立即刷新
@@ -438,10 +457,6 @@ const showDetails = ref(false)
 //   },
 //   { immediate: true }
 // )
-
-const globalStore = useGlobalStore()
-
-const { env, hideBalance } = storeToRefs(globalStore)
 
 const formatMaybeHidden = (value: string) => {
   return hideBalance.value ? '••••••••' : value

@@ -116,8 +116,24 @@ await assertContains('components/setting/EscapeHatch.vue', [
   'assessStpValueMovementSafety(snapshot)',
   'await satsnetStp.closeChannel(id, btcFeeRate.value, false)',
   'await satsnetStp.closeChannel(id, btcFeeRate.value, true)',
+  'satsnetStp.previewOpenChannel(btcFeeRate.value, 1)',
+  "escapeHatch.closeChannelNoteWithFee",
   'finally',
 ], 'Escape hatch explicit safety-gated force close');
+
+const enLocale = JSON.parse(await readFile(path.join(root, 'locales/en.json'), 'utf8'));
+const zhLocale = JSON.parse(await readFile(path.join(root, 'locales/zh.json'), 'utf8'));
+for (const [locale, messages] of [['en', enLocale], ['zh', zhLocale]]) {
+  const generic = messages.escapeHatch?.closeChannelNote || '';
+  const withFee = messages.escapeHatch?.closeChannelNoteWithFee || '';
+  if (/3[,.]?000/.test(generic) || /3[,.]?000/.test(withFee)) {
+    throw new Error(`${locale} escape hatch close note contains a fixed reopening fee`);
+  }
+  if (!withFee.includes('{fee}')) {
+    throw new Error(`${locale} escape hatch close note does not parameterize feeToDao`);
+  }
+}
+checks.push('Escape hatch reopening fee is authoritative, optional, and localized');
 
 const escapeHatchSource = await readFile(path.join(root, 'components/setting/EscapeHatch.vue'), 'utf8');
 const cooperativeCloseStart = escapeHatchSource.indexOf('const closeChannel = async () =>');

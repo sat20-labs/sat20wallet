@@ -1,10 +1,12 @@
 package wallet
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/account"
 )
 
 func newAccountManagementAutoTestManager(t *testing.T) *Manager {
@@ -84,6 +86,164 @@ func TestCreateFirstMnemonicWalletAutomaticallyEnablesAccountManagement(t *testi
 		t.Fatal("created wallet has no mnemonic")
 	}
 	assertInitialAccountManagementStatus(t, manager, walletID)
+}
+
+func TestAccountRecoveryPackagesReuseActiveAccountSecret(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager := newAccountManagementAutoTestManager(t)
+	if _, _, err := manager.CreateWallet("password"); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := manager.ExportAccountBackup("password", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := account.RootBootstrapBackup(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	questions := []account.QuestionAnswer{
+		{Question: account.KnowledgeQuestion{ID: "one", Prompt: "one"}, Answer: "answer one", Confirmation: "answer one"},
+		{Question: account.KnowledgeQuestion{ID: "two", Prompt: "two"}, Answer: "answer two", Confirmation: "answer two"},
+		{Question: account.KnowledgeQuestion{ID: "three", Prompt: "three"}, Answer: "answer three", Confirmation: "answer three"},
+	}
+	options := account.CreateOptions{AccountID: manager.accountProfile.AccountID,
+		Backup: bootstrap, RecoveryMode: account.RecoveryMode2Of2, Questions: questions}
+	originalSecret := append([]byte(nil), manager.accountSecret...)
+	defer zeroBytes(originalSecret)
+	packageIDs := make(map[string]struct{}, 2)
+	for range 2 {
+		pkg, err := manager.CreateAccountRecoveryPackage(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packageIDs[pkg.Envelope.Locator.PackageID] = struct{}{}
+		dkvsShare, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule,
+			pkg.KnowledgeBundle, []account.AnswerAttempt{{QuestionID: "one", Answer: "answer one"},
+				{QuestionID: "two", Answer: "answer two"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, recovered, err := account.RecoverAccount(pkg.Envelope, pkg.UserShare, dkvsShare)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matches := bytes.Equal(recovered, originalSecret)
+		zeroBytes(recovered)
+		if !matches {
+			t.Fatal("recovery package replaced the active account secret")
+		}
+	}
+	if len(packageIDs) != 2 {
+		t.Fatal("consecutive recovery packages reused a package id")
+	}
+	options.AccountID = "wrong-account"
+	if _, err := manager.CreateAccountRecoveryPackage(options); err == nil {
+		t.Fatal("recovery package accepted a mismatched account id")
+	}
+	manager.clearAccountManagementSession()
+	options.AccountID = manager.accountProfile.AccountID
+	if _, err := manager.CreateAccountRecoveryPackage(options); err == nil {
+		t.Fatal("recovery package accepted a locked account secret")
+	}
+}
+
+func TestChangePasswordReencryptsWalletsAndAccountSecret(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager := newAccountManagementAutoTestManager(t)
+	if _, _, err := manager.CreateWallet("123456"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.CreateWallet("123456"); err != nil {
+		t.Fatal(err)
+	}
+	originalSecret := append([]byte(nil), manager.accountSecret...)
+	defer zeroBytes(originalSecret)
+	if err := manager.ChangePassword("wrong-password", "new-password"); err == nil {
+		t.Fatal("wrong old password was accepted")
+	}
+	if err := manager.ChangePassword("123456", "new-password"); err != nil {
+		t.Fatal(err)
+	}
+	for _, info := range manager.walletInfoMap {
+		if _, err := manager.loadWalletSecret(info, "123456"); err == nil {
+			t.Fatalf("wallet %d still decrypts with old password", info.Id)
+		}
+		if _, err := manager.loadWalletSecret(info, "new-password"); err != nil {
+			t.Fatalf("wallet %d does not decrypt with new password: %v", info.Id, err)
+		}
+	}
+	manager.clearAccountManagementSession()
+	manager.mutex.Lock()
+	oldErr := manager.unlockAccountManagementLocked("123456")
+	newErr := manager.unlockAccountManagementLocked("new-password")
+	secretMatches := bytes.Equal(manager.accountSecret, originalSecret)
+	manager.mutex.Unlock()
+	if oldErr == nil {
+		t.Fatal("account secret still decrypts with old password")
+	}
+	if newErr != nil {
+		t.Fatalf("account secret does not decrypt with new password: %v", newErr)
+	}
+	if !secretMatches {
+		t.Fatal("password change replaced the account secret")
+	}
+}
+
+type passwordChangeFailFlushDB struct{ indexer.KVDB }
+type passwordChangeFailFlushBatch struct{ indexer.WriteBatch }
+
+func (db *passwordChangeFailFlushDB) NewWriteBatch() indexer.WriteBatch {
+	return &passwordChangeFailFlushBatch{WriteBatch: db.KVDB.NewWriteBatch()}
+}
+
+func (*passwordChangeFailFlushBatch) Flush() error {
+	return errors.New("injected password change flush failure")
+}
+
+func TestChangePasswordFailureKeepsOldCredentials(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager := newAccountManagementAutoTestManager(t)
+	if _, _, err := manager.CreateWallet("123456"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.CreateWallet("123456"); err != nil {
+		t.Fatal(err)
+	}
+	originalDB := manager.db
+	manager.db = &passwordChangeFailFlushDB{KVDB: originalDB}
+
+	if err := manager.ChangePassword("123456", "new-password"); err == nil {
+		t.Fatal("password change unexpectedly survived an atomic flush failure")
+	}
+	for _, info := range manager.walletInfoMap {
+		if _, err := manager.loadWalletSecret(info, "123456"); err != nil {
+			t.Fatalf("wallet %d lost its old password after failed change: %v", info.Id, err)
+		}
+		if _, err := manager.loadWalletSecret(info, "new-password"); err == nil {
+			t.Fatalf("wallet %d accepted the uncommitted new password", info.Id)
+		}
+	}
+	manager.clearAccountManagementSession()
+	manager.mutex.Lock()
+	oldErr := manager.unlockAccountManagementLocked("123456")
+	zeroBytes(manager.accountSecret)
+	manager.accountSecret = nil
+	manager.accountPassword = ""
+	newErr := manager.unlockAccountManagementLocked("new-password")
+	manager.mutex.Unlock()
+	if oldErr != nil {
+		t.Fatalf("account secret lost its old password after failed change: %v", oldErr)
+	}
+	if newErr == nil {
+		t.Fatal("account secret accepted the uncommitted new password")
+	}
 }
 
 func TestImportWalletRejectsDuplicateFingerprintFromLockedCatalog(t *testing.T) {

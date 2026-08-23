@@ -82,6 +82,13 @@ func (p *Manager) PreviewOpenChannel(feeRate, amt int64) (*wwire.ChannelOpenFeeI
 	if p.wallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
+	channelID, err := p.GetChannelAddress()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.rejectUnfinishedChannelLifecycle(channelID); err != nil {
+		return nil, err
+	}
 	if feeRate < 0 {
 		return nil, fmt.Errorf("invalid fee rate %d", feeRate)
 	}

@@ -1,5 +1,5 @@
 <template>
-  <LayoutApprove @confirm="confirm" @cancel="cancel" :loading="isLoading">
+  <LayoutApprove @confirm="confirm" @cancel="cancel" :loading="isLoading" :confirm-disabled="feeLoading || feeError">
     <div class="space-y-2 sm:space-y-3 max-w-full">
       <h2 class="text-lg sm:text-xl font-semibold text-center px-2">{{ $t('invokeContractSatsNet.title', '合约调用确认') }}
       </h2>
@@ -49,6 +49,22 @@
               }}</span>
               <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.unitPrice ||
                 '-' }} sats</span>
+            </div>
+          </template>
+
+          <!-- Withdraw Specific Details -->
+          <template v-if="withdrawDetails">
+            <div class="flex items-center justify-between gap-2 py-1">
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.asset', '资产')
+              }}</span>
+              <span class="text-xs sm:text-sm font-medium text-right break-all">{{ withdrawDetails.assetName
+              }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2 py-1">
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.quantity', '数量')
+              }}</span>
+              <span class="text-xs sm:text-sm font-medium text-right break-words">{{ withdrawDetails.quantity
+              }}</span>
             </div>
           </template>
 
@@ -147,7 +163,7 @@ const invokeError = ref('')
 const feeLoading = ref(false)
 const feeError = ref(false)
 const feeErrorMessage = ref('')
-const estimatedFee = ref<string>('10')
+const estimatedFee = ref<string | null>('10')
 
 const formattedInvoke = computed(() => {
   try {
@@ -157,8 +173,46 @@ const formattedInvoke = computed(() => {
   }
 })
 
+const parsedInvoke = computed<Record<string, unknown>>(() => {
+  try {
+    return JSON.parse(props.data?.invoke || '{}')
+  } catch {
+    return {}
+  }
+})
+
+const invokeParam = computed<Record<string, unknown>>(() => {
+  try {
+    if (typeof parsedInvoke.value.param === 'string') {
+      return JSON.parse(parsedInvoke.value.param)
+    }
+    return parsedInvoke.value.param && typeof parsedInvoke.value.param === 'object'
+      ? parsedInvoke.value.param as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+})
+
+const withdrawDetails = computed(() => {
+  const action = parsedInvoke.value.action ?? props.data?.metadata?.action
+  if (String(action).toLowerCase() !== 'withdraw') return null
+
+  const assetName = invokeParam.value.assetName
+    ?? props.data?.metadata?.assetName
+    ?? props.data?.assetName
+  const quantity = invokeParam.value.amt
+    ?? props.data?.metadata?.quantity
+    ?? props.data?.amt
+
+  return {
+    assetName: String(assetName || '-'),
+    quantity: String(quantity || '-'),
+  }
+})
+
 const totalCost = computed(() => {
-  if (!props.data?.metadata?.action || !estimatedFee.value) return '-'
+  if (!props.data?.metadata?.action || estimatedFee.value === null) return '-'
   const { orderType, quantity, unitPrice, networkFee = 10, sats } = props.data.metadata
   let total = 0;
   if (orderType === 2) {
@@ -192,14 +246,14 @@ const getFee = async () => {
     if (err) {
       feeError.value = true
       feeErrorMessage.value = err?.message || err?.toString?.() || '查询失败'
-      estimatedFee.value = '10'
+      estimatedFee.value = null
     } else {
-      estimatedFee.value = res?.fee ? res.fee.toString() : '10'
+      estimatedFee.value = res?.fee != null ? res.fee.toString() : '10'
     }
   } catch (e: any) {
     feeError.value = true
     feeErrorMessage.value = e?.message || e?.toString?.() || '查询失败'
-    estimatedFee.value = '10'
+    estimatedFee.value = null
   } finally {
     feeLoading.value = false
   }
@@ -208,6 +262,9 @@ const getFee = async () => {
 watch(() => [props.data?.url, props.data?.invoke, props.data?.feeRate], getFee, { immediate: true })
 
 const confirm = async () => {
+  if (feeLoading.value || feeError.value || estimatedFee.value === null) {
+    return
+  }
   if (!props.data?.url || !props.data?.invoke || !props.data?.assetName || !props.data?.amt || !props.data?.feeRate) {
     toast.toast({
       title: '参数缺失',

@@ -10,7 +10,7 @@
             <Button variant="outline" @click="$emit('cancel')" :disabled="loading" class="text-sm sm:text-base h-full min-h-[44px] touch-manipulation">
               {{ $t('common.cancel', 'Cancel') }}
             </Button>
-            <Button @click="$emit('confirm')" :disabled="loading" class="text-sm sm:text-base h-full min-h-[44px] touch-manipulation">
+            <Button @click="$emit('confirm')" :disabled="loading || confirmDisabled" class="text-sm sm:text-base h-full min-h-[44px] touch-manipulation">
               {{ $t('common.confirm', 'Confirm') }}
             </Button>
           </div>
@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button'
 
 interface Props {
   loading?: boolean
+  confirmDisabled?: boolean
 }
 
 defineProps<Props>()

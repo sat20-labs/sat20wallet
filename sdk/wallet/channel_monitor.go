@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -13,6 +14,14 @@ func IsTimeout(t1, t2 int64) bool {
 		return t1-t2 > 300*int64(time.Second.Microseconds())
 	}
 	return t1-t2 > 120*int64(time.Second.Microseconds())
+}
+
+// Wall-clock timeouts only apply while peers are still negotiating and no
+// transaction has entered the persistent monitor state.
+func shouldTimeoutChannelNegotiation(now int64, resv Reservation, channel *Channel) bool {
+	return resv != nil && channel != nil && resv.GetStatus() == RS_INIT &&
+		channel.ResvId == resv.GetId() && IsTimeout(now, resv.GetId()) &&
+		!shouldIgnoreFailedChannelActionResult(resv.GetType(), resv, channel)
 }
 
 func (p *Manager) FundingUtxoSpent(channel *Channel, tx *wire.MsgTx) {
@@ -222,7 +231,7 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 			if resv == nil || resv.Channel == nil {
 				continue
 			}
-			if resv.Channel.ResvId == resv.Id && IsTimeout(now, resv.Id) {
+			if shouldTimeoutChannelNegotiation(now, resv, resv.Channel) {
 				Log.Warnf("funding timeout %d", resv.Id)
 				p.handleChannelActionTimeout(resv.Id, RESV_TYPE_OPEN)
 				continue
@@ -243,7 +252,7 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 			if resv == nil || resv.Channel == nil {
 				continue
 			}
-			if resv.Channel.ResvId == resv.Id && IsTimeout(now, resv.Id) {
+			if shouldTimeoutChannelNegotiation(now, resv, resv.Channel) {
 				Log.Warnf("splicing timeout %d", resv.Id)
 				p.handleChannelActionTimeout(resv.Id, RESV_TYPE_SPLICING)
 				continue
@@ -274,7 +283,7 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 			if resv == nil || resv.Channel == nil {
 				continue
 			}
-			if resv.Channel.ResvId == resv.Id && IsTimeout(now, resv.Id) {
+			if shouldTimeoutChannelNegotiation(now, resv, resv.Channel) {
 				Log.Warnf("closing timeout %d", resv.Id)
 				p.handleChannelActionTimeout(resv.Id, RESV_TYPE_CLOSE)
 				continue
@@ -322,7 +331,7 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 		if resv == nil || resv.Channel == nil {
 			continue
 		}
-		if resv.Channel.ResvId == resv.Id && IsTimeout(now, resv.Id) {
+		if shouldTimeoutChannelNegotiation(now, resv, resv.Channel) {
 			Log.Warnf("open timeout %d", resv.Id)
 			p.handleChannelActionTimeout(resv.Id, RESV_TYPE_OPEN)
 			continue
@@ -337,9 +346,9 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 				_, _ = p.BroadcastTx_SatsNet(resv.AnchorTx)
 			}
 		case CS_READY:
-			resv.Status = RS_CLOSED
-			_ = p.SaveWalletReservation(resv)
-			p.DelResvWithId(resv.Id)
+			if err := p.finalizeOpenChannelReady(resv); err != nil {
+				Log.Warnf("finalize ready channel %s failed. %v", resv.ChannelId, err)
+			}
 		}
 	}
 
@@ -347,7 +356,7 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 		if resv == nil || resv.Channel == nil {
 			continue
 		}
-		if resv.Channel.ResvId == resv.Id && IsTimeout(now, resv.Id) {
+		if shouldTimeoutChannelNegotiation(now, resv, resv.Channel) {
 			Log.Warnf("unlock/lock timeout %d", resv.Id)
 			p.handleChannelActionTimeout(resv.Id, RESV_TYPE_PAYMENT)
 			continue
@@ -370,7 +379,7 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 		if resv == nil || resv.Channel == nil {
 			continue
 		}
-		if resv.Channel.ResvId == resv.Id && IsTimeout(now, resv.Id) {
+		if shouldTimeoutChannelNegotiation(now, resv, resv.Channel) {
 			Log.Warnf("splicing timeout %d", resv.Id)
 			p.handleChannelActionTimeout(resv.Id, RESV_TYPE_SPLICING)
 			continue
@@ -404,7 +413,7 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 		if resv == nil || resv.Channel == nil {
 			continue
 		}
-		if resv.Channel.ResvId == resv.Id && IsTimeout(now, resv.Id) {
+		if shouldTimeoutChannelNegotiation(now, resv, resv.Channel) {
 			Log.Warnf("closing timeout %d", resv.Id)
 			p.handleChannelActionTimeout(resv.Id, RESV_TYPE_CLOSE)
 			continue
@@ -453,9 +462,30 @@ func (p *Manager) HandleChannelConfirmed(resv *FundingReservation) error {
 }
 
 func (p *Manager) HandleChannelReady(resv *FundingReservation) error {
+	if resv == nil || resv.Channel == nil {
+		return fmt.Errorf("invalid funding reservation")
+	}
+	Log.Infof("handleChannelReady channel ready: %s", resv.Channel.ChannelId)
+	resv.Channel.Status = CS_READY
+	return p.finalizeOpenChannelReady(resv)
+}
+
+// finalizeOpenChannelReady is the single terminal path for an open-channel
+// reservation. It is intentionally idempotent so a restarted monitor can
+// finish persistence and the user-visible operation log without rebuilding or
+// rebroadcasting the channel transaction.
+func (p *Manager) finalizeOpenChannelReady(resv *FundingReservation) error {
+	if resv == nil || resv.Channel == nil {
+		return fmt.Errorf("invalid funding reservation")
+	}
 	channel := resv.Channel
-	Log.Infof("handleChannelReady channel ready: %s", channel.ChannelId)
-	channel.Status = CS_READY
+	if channel.Status != CS_READY {
+		return fmt.Errorf("channel %s is not ready", channel.ChannelId)
+	}
+	if channel.FundingTime != resv.Id {
+		return fmt.Errorf("channel %s funding generation %d does not match reservation %d",
+			channel.ChannelId, channel.FundingTime, resv.Id)
+	}
 	if err := p.SaveChannelToDB(channel); err != nil {
 		return err
 	}
@@ -468,13 +498,13 @@ func (p *Manager) HandleChannelReady(resv *FundingReservation) error {
 	if err := p.SaveWalletReservation(resv); err != nil {
 		return err
 	}
-	p.DelResvWithId(channel.FundingTime)
 	p.notifyChannelStatus(&ActionStatusEvent{
 		Event:    ACTION_STATUS_EVENT_COMPLETED,
 		Resv:     resv,
 		ResvType: RESV_TYPE_OPEN,
 		Status:   resv.Status,
 	})
+	p.DelResvWithId(resv.Id)
 	return nil
 }
 
@@ -667,10 +697,20 @@ func (p *Manager) HandleClosingConfirmed(resv *ClosingReservation) error {
 }
 
 func (p *Manager) HandleChannelClosed(resv *ClosingReservation) error {
+	if resv == nil || resv.Channel == nil {
+		return fmt.Errorf("invalid closing reservation")
+	}
 	Log.Infof("channel closed: %s", resv.ChannelId)
-	p.DelResvWithId(resv.Id)
+	if resv.Channel.UpdateTime != 0 && resv.Channel.UpdateTime != resv.Id {
+		return fmt.Errorf("stale closing reservation %d for channel generation %d", resv.Id, resv.Channel.UpdateTime)
+	}
 	resv.Channel.Status = CS_CLOSED
+	resv.Channel.ResvId = 0
 	if err := p.SaveChannelToDB(resv.Channel); err != nil {
+		return err
+	}
+	resv.Status = RS_CLOSED
+	if err := p.SaveWalletReservation(resv); err != nil {
 		return err
 	}
 	p.SendMessageToUpper(MSG_CHANNEL_CLOSED, resv.ChannelId)
@@ -683,5 +723,6 @@ func (p *Manager) HandleChannelClosed(resv *ClosingReservation) error {
 		ResvType: RESV_TYPE_CLOSE,
 		Status:   resv.Status,
 	})
+	p.DelResvWithId(resv.Id)
 	return nil
 }

@@ -655,7 +655,8 @@
     "addressOrPkScript": "Address/PkScript",
     "noChannelTitle": "No Channel",
     "noChannelDescription": "You have no channel. Please create a channel first.",
-    "closeChannelNote": "Close Channel: Incurs on-chain gas; reopening costs 3,000 sats again"
+    "closeChannelNote": "Closing incurs an on-chain network fee. The current reopening service fee will be shown in the channel opening preview.",
+    "closeChannelNoteWithFee": "Closing incurs an on-chain network fee. Reopening currently includes a service fee of {fee} sats."
   },
   "networkSetting": {
     "title": "Environment Options",

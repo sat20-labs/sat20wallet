@@ -145,6 +145,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, walletManager.RegisterAccountManagedDataProvider(&e2eAccountManagedProvider{}))
 	_, err = walletManager.ImportWallet(dkvsClientMnemonic, "123456")
 	require.NoError(t, err)
+	require.NoError(t, walletManager.InitializeAccountManagement("123456"))
 	require.Equal(t, pubKey, walletManager.GetWallet().GetPubKey().SerializeCompressed())
 	authorization := wallet.AccountStorageAuthorization{
 		ID: wallet.AccountStoragePaid, Mode: wallet.AccountStoragePaid,
@@ -153,7 +154,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	repository, err := walletManager.NewAccountRepositoryForStorage(authorization)
 	require.NoError(t, err)
 	manager := account.NewManager(repository)
-	pkg, err := manager.CreateRecoveryPackage(account.CreateOptions{AccountID: accountID, Backup: backup,
+	pkg, err := walletManager.CreateAccountRecoveryPackage(account.CreateOptions{AccountID: accountID, Backup: backup,
 		RecoveryMode: account.RecoveryMode2Of3, Questions: questions, GuardianMailboxID: accountID,
 		GuardianPublicKey: guardianPublic})
 	require.NoError(t, err)

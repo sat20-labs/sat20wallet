@@ -18,13 +18,56 @@ func testQuestions() []QuestionAnswer {
 	}
 }
 
+func testAccountSecret() []byte {
+	return []byte(strings.Repeat("s", accountSecretSize))
+}
+
+func TestCreateRecoveryPackageUsesProvidedAccountSecret(t *testing.T) {
+	manager := NewManager(nil)
+	secret := testAccountSecret()
+	original := append([]byte(nil), secret...)
+	pkg, err := manager.CreateRecoveryPackage(CreateOptions{
+		AccountID: strings.Repeat("a", 64), Backup: testBackup(),
+		RecoveryMode: RecoveryMode2Of2, Questions: testQuestions(),
+	}, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(secret, original) {
+		t.Fatal("recovery package creation modified the caller's account secret")
+	}
+	dkvsShare, err := RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle,
+		[]AnswerAttempt{{QuestionID: "book-page", Answer: "月光落在安静的旧桥上"},
+			{QuestionID: "private-note", Answer: "yellow bicycle beside the winter river"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, recovered, err := RecoverAccount(pkg.Envelope, pkg.UserShare, dkvsShare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zero(recovered)
+	if !reflect.DeepEqual(recovered, secret) {
+		t.Fatal("recovery package did not preserve the provided account secret")
+	}
+	if _, err := manager.CreateRecoveryPackage(CreateOptions{
+		AccountID: strings.Repeat("a", 64), Backup: testBackup(),
+		RecoveryMode: RecoveryMode2Of2, Questions: testQuestions(),
+	}, nil); err == nil {
+		t.Fatal("missing account secret was accepted")
+	}
+	if !reflect.DeepEqual(secret, original) {
+		t.Fatal("failed recovery package creation modified the caller's account secret")
+	}
+}
+
 func TestCreateAndRecoverTwoOfThree(t *testing.T) {
 	privateKey, publicKey, err := GenerateGuardianKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager := NewManager(nil)
-	pkg, err := manager.CreateRecoveryPackage(CreateOptions{AccountID: strings.Repeat("a", 64), Backup: testBackup(), RecoveryMode: RecoveryMode2Of3, Questions: testQuestions(), GuardianMailboxID: strings.Repeat("b", 64), GuardianPublicKey: publicKey})
+	pkg, err := manager.CreateRecoveryPackage(CreateOptions{AccountID: strings.Repeat("a", 64), Backup: testBackup(), RecoveryMode: RecoveryMode2Of3, Questions: testQuestions(), GuardianMailboxID: strings.Repeat("b", 64), GuardianPublicKey: publicKey}, testAccountSecret())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +95,7 @@ func TestCreateAndRecoverTwoOfThree(t *testing.T) {
 
 func TestTwoOfTwoRequiresUserShare(t *testing.T) {
 	manager := NewManager(nil)
-	pkg, err := manager.CreateRecoveryPackage(CreateOptions{AccountID: strings.Repeat("c", 64), Backup: testBackup(), RecoveryMode: RecoveryMode2Of2, Questions: testQuestions()})
+	pkg, err := manager.CreateRecoveryPackage(CreateOptions{AccountID: strings.Repeat("c", 64), Backup: testBackup(), RecoveryMode: RecoveryMode2Of2, Questions: testQuestions()}, testAccountSecret())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +117,7 @@ func TestTwoOfTwoRequiresUserShare(t *testing.T) {
 
 func TestNewDeviceIsRecoveryRehearsal(t *testing.T) {
 	manager := NewManager(nil)
-	pkg, err := manager.CreateRecoveryPackage(CreateOptions{AccountID: strings.Repeat("d", 64), Backup: testBackup(), RecoveryMode: RecoveryMode2Of2, Questions: testQuestions()})
+	pkg, err := manager.CreateRecoveryPackage(CreateOptions{AccountID: strings.Repeat("d", 64), Backup: testBackup(), RecoveryMode: RecoveryMode2Of2, Questions: testQuestions()}, testAccountSecret())
 	if err != nil {
 		t.Fatal(err)
 	}

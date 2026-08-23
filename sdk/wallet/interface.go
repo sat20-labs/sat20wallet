@@ -382,35 +382,72 @@ func (p *Manager) ChangePassword(oldPS, newPS string) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
+	if p.accountProfile != nil && len(p.accountSecret) != 32 {
+		return fmt.Errorf("account management is locked")
+	}
+
+	updatedWallets := make(map[int64]*WalletInDB, len(p.walletInfoMap))
 	for id, v := range p.walletInfoMap {
 		mnemonic, err := p.loadWalletSecret(v, oldPS)
 		if err != nil {
 			Log.Errorf("loadMnemonic %d failed, %v", id, err)
 			return err
 		}
-
-		err = p.saveWalletSecretWithPassword(mnemonic, newPS, &v.WalletInDB)
+		updated, err := p.encryptWalletSecretWithPassword(mnemonic, newPS, &v.WalletInDB)
 		if err != nil {
-			Log.Errorf("saveMnemonicWithPassword %d failed, %v", id, err)
+			Log.Errorf("encrypt wallet secret %d failed, %v", id, err)
 			return err
 		}
+		updatedWallets[id] = updated
 	}
+
+	var updatedProfile *accountManagementProfile
 	if p.accountProfile != nil {
-		if len(p.accountSecret) != 32 {
-			return fmt.Errorf("account management is locked")
-		}
 		ciphertext, salt, err := p.encryptAccountManagementSecret(newPS, p.accountSecret)
 		if err != nil {
 			return err
 		}
-		p.accountProfile.SecretCipher = ciphertext
-		p.accountProfile.SecretSalt = salt
-		p.accountPassword = newPS
-		if err := p.saveAccountManagementProfileLocked(); err != nil {
+		profile := *p.accountProfile
+		profile.SecretCipher = ciphertext
+		profile.SecretSalt = salt
+		updatedProfile = &profile
+	}
+
+	batch := p.db.NewWriteBatch()
+	if batch == nil {
+		return fmt.Errorf("create password change batch")
+	}
+	defer batch.Close()
+	for id, wallet := range updatedWallets {
+		encoded, err := EncodeToBytes(wallet)
+		if err != nil {
+			return err
+		}
+		if err := batch.Put([]byte(getWalletDBKey(id)), encoded); err != nil {
 			return err
 		}
 	}
+	if updatedProfile != nil {
+		encoded, err := EncodeToBytes(updatedProfile)
+		if err != nil {
+			return err
+		}
+		if err := batch.Put(accountManagementProfileKey(), encoded); err != nil {
+			return err
+		}
+	}
+	if err := batch.Flush(); err != nil {
+		return err
+	}
 
+	for id, wallet := range updatedWallets {
+		p.walletInfoMap[id].WalletInDB = *wallet
+	}
+	if updatedProfile != nil {
+		p.accountProfile.SecretCipher = append([]byte(nil), updatedProfile.SecretCipher...)
+		p.accountProfile.SecretSalt = append([]byte(nil), updatedProfile.SecretSalt...)
+		p.accountPassword = newPS
+	}
 	return nil
 }
 
@@ -424,6 +461,8 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 	p.mutex.Unlock()
 	if err == nil {
 		p.rehydratePendingFundingRuntime()
+		p.rehydratePendingClosingRuntime()
+		p.reconcileReadyOpenChannelOperationLogs()
 		p.channelIdentityGeneration++
 		if refreshErr := p.refreshDKVSRegistrations(); refreshErr != nil {
 			Log.Warningf("refresh DKVS registrations after unlock failed: %v", refreshErr)

@@ -99,7 +99,6 @@ const verifyPassword = async () => {
     hashedPassword
   )
   loading.value = false
-  console.log('verify password result', err, result)
 
   if (err || !result?.mnemonic) {
     toast({

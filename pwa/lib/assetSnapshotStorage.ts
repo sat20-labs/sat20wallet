@@ -1,4 +1,5 @@
 import { Storage } from './storage-adapter'
+import { assetContextKey, type AssetContext } from './assetContext'
 
 export interface AssetSnapshot {
   assetList: any[]
@@ -14,17 +15,15 @@ export interface AssetSnapshot {
   updatedAt: number
 }
 
-interface SnapshotKeyInput {
-  env: string
-  network: string
-  chain: string
-  address: string
-  walletId?: string
-  accountIndex?: number
-}
+export type SnapshotKeyInput = AssetContext
 
-const snapshotKey = ({ env, network, chain, walletId, accountIndex, address }: SnapshotKeyInput) =>
-  `local:wallet_asset_snapshot:${env}:${network}:${chain}:${walletId || ''}:${accountIndex ?? 0}:${address}`
+const snapshotsInMemory = new Map<string, AssetSnapshot>()
+const snapshotKey = (input: SnapshotKeyInput) =>
+  `local:wallet_asset_snapshot:${assetContextKey(input)}`
+
+export const peekAssetSnapshot = (input: SnapshotKeyInput): AssetSnapshot | null => (
+  snapshotsInMemory.get(snapshotKey(input)) || null
+)
 
 export const loadAssetSnapshot = async (
   input: SnapshotKeyInput
@@ -33,7 +32,9 @@ export const loadAssetSnapshot = async (
   if (!value) return null
 
   try {
-    return JSON.parse(value) as AssetSnapshot
+    const snapshot = JSON.parse(value) as AssetSnapshot
+    snapshotsInMemory.set(snapshotKey(input), snapshot)
+    return snapshot
   } catch (error) {
     console.warn('Failed to parse asset snapshot:', error)
     return null
@@ -44,12 +45,14 @@ export const saveAssetSnapshot = async (
   input: SnapshotKeyInput,
   snapshot: Omit<AssetSnapshot, 'updatedAt'> & { updatedAt?: number }
 ) => {
+  const value = {
+    ...snapshot,
+    updatedAt: snapshot.updatedAt || Date.now(),
+  } as AssetSnapshot
+  snapshotsInMemory.set(snapshotKey(input), value)
   await Storage.set({
     key: snapshotKey(input),
-    value: JSON.stringify({
-      ...snapshot,
-      updatedAt: snapshot.updatedAt || Date.now(),
-    }),
+    value: JSON.stringify(value),
   })
 }
 

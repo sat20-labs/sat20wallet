@@ -531,6 +531,76 @@ func TestDKVSPendingJobTransientFailureIsRetried(t *testing.T) {
 	}
 }
 
+func TestDKVSPendingJobFailureDoesNotStarveObservers(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := newRGB11MultiDeviceManager(t, priv, 993)
+	remote := newRGB11MemoryDKVSHTTP()
+	configureRGB11DKVSTestManager(owner, remote)
+	manager := owner.ensureDKVSManager()
+	const key = "/tmp/pending-job-observer"
+	record, err := NewDKVSSignedRecord(owner.wallet, key, []byte("value"),
+		dkvsindexer.RecordOptions{Seq: 1, TTL: 60_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	remote.records[key] = cloneRGB11DKVSRecord(record)
+	remote.mu.Unlock()
+	manager.rememberPaths([]string{key})
+
+	observed := false
+	manager.addObserver(func(paths []string) {
+		for _, path := range paths {
+			if path == key {
+				observed = true
+			}
+		}
+	})
+	manager.schedule("failure", func(*dkvsStore) error {
+		return context.DeadlineExceeded
+	})
+	if _, err := owner.syncDKVSOnce(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("pending job error=%v", err)
+	}
+	if !observed {
+		t.Fatal("pending job failure starved DKVS observers")
+	}
+}
+
+func TestDKVSPendingJobFailurePreservesUnexecutedJobs(t *testing.T) {
+	owner := &Manager{db: newMemoryKVDB()}
+	configureRGB11DKVSTestManager(owner, newRGB11MemoryDKVSHTTP())
+	manager := owner.ensureDKVSManager()
+	failures := 0
+	nextRuns := 0
+	manager.schedule("a-failure", func(*dkvsStore) error {
+		failures++
+		if failures == 1 {
+			return context.DeadlineExceeded
+		}
+		return nil
+	})
+	manager.schedule("b-next", func(*dkvsStore) error {
+		nextRuns++
+		return nil
+	})
+	if _, err := owner.syncDKVSOnce(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first pending job error=%v", err)
+	}
+	if nextRuns != 0 {
+		t.Fatalf("later pending job ran before retry: %d", nextRuns)
+	}
+	if _, err := owner.syncDKVSOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if failures != 2 || nextRuns != 1 {
+		t.Fatalf("pending jobs after retry: failures=%d next=%d", failures, nextRuns)
+	}
+}
+
 func TestDKVSPendingJobSameIDRunsLatestTask(t *testing.T) {
 	owner := &Manager{db: newMemoryKVDB()}
 	configureRGB11DKVSTestManager(owner, newRGB11MemoryDKVSHTTP())

@@ -9,8 +9,10 @@ import {
   applyAssetSnapshot,
   buildAssetSnapshotFromAssets,
   loadAssetSnapshot,
+  peekAssetSnapshot,
   saveAssetSnapshot,
 } from '@/lib/assetSnapshotStorage'
+import { assetContextKey, isSameAssetContext, type AssetContext } from '@/lib/assetContext'
 interface AssetItem {
   id: string
   key: string
@@ -38,14 +40,7 @@ interface UseAssetQueryOptions {
   beforeSummaryFetch?: () => Promise<void>
 }
 
-interface AssetQueryContext {
-  env: string
-  network: string
-  chain: 'btc'
-  walletId: string
-  accountIndex: number
-  address: string
-}
+type AssetQueryContext = AssetContext & { chain: 'btc' }
 
 interface SummaryQueryResult {
   context: AssetQueryContext
@@ -79,7 +74,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
   const queryClient = useQueryClient()
 
   const allAssetList = ref<AssetItem[]>([])
-  const hydratingSnapshot = ref(false)
+  let successfulResponseGeneration = 0
 
   const clientApi = computed(() => {
     return ordxApi
@@ -103,13 +98,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
     }
   }
 
-  const isCurrentContext = (context: AssetQueryContext) => (
-    context.env === env.value &&
-    context.network === network.value &&
-    context.walletId === walletId.value &&
-    context.accountIndex === accountIndex.value &&
-    context.address === address.value
-  )
+  const isCurrentContext = (context: AssetQueryContext) => isSameAssetContext(context, currentContext())
 
   const nsQuery = useQuery({
     queryKey: ['ns-l1', address, network, env],
@@ -126,7 +115,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
   })
 
   const summaryQuery = useQuery({
-    queryKey: ['summary-l1', address, network, env, walletId, accountIndex],
+    queryKey: ['summary-l1', env, network, computed(() => 'btc'), walletId, accountIndex, address],
     queryFn: async (): Promise<SummaryQueryResult | null> => {
       const context = currentContext()
       if (!context) return null
@@ -247,7 +236,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
     parsedAssets: AssetItem[],
     totalSats: number
   ) => {
-    if (hydratingSnapshot.value || !isCurrentContext(context)) return
+    if (!isCurrentContext(context)) return
     await saveAssetSnapshot(
       context,
       buildAssetSnapshotFromAssets(
@@ -259,24 +248,29 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
   }
 
   const hydrateSnapshot = async (context: AssetQueryContext | null) => {
-    if (!context) return
-    hydratingSnapshot.value = true
-    try {
-      const snapshot = await loadAssetSnapshot(context)
-      if (snapshot && isCurrentContext(context)) {
-        applyAssetSnapshot(assetsStore, snapshot)
-        allAssetList.value = [
-          ...(snapshot.plainList || []),
-          ...(snapshot.sat20List || []),
-          ...(snapshot.runesList || []),
-          ...(snapshot.brc20List || []),
-          ...(snapshot.ordList || []),
-          ...(snapshot.rgb11List || []),
-        ]
-      }
-    } finally {
-      hydratingSnapshot.value = false
+    if (!context) {
+      allAssetList.value = []
+      assetsStore.reset()
+      return
     }
+    const generation = successfulResponseGeneration
+    const cached = peekAssetSnapshot(context)
+    if (!cached && isCurrentContext(context)) {
+      allAssetList.value = []
+      assetsStore.reset()
+    }
+    const snapshot = cached || await loadAssetSnapshot(context)
+    if (!isCurrentContext(context) || generation !== successfulResponseGeneration) return
+    if (!snapshot) return
+    applyAssetSnapshot(assetsStore, snapshot)
+    allAssetList.value = [
+      ...(snapshot.plainList || []),
+      ...(snapshot.sat20List || []),
+      ...(snapshot.runesList || []),
+      ...(snapshot.brc20List || []),
+      ...(snapshot.ordList || []),
+      ...(snapshot.rgb11List || []),
+    ]
   }
 
   // Watchers & Effects
@@ -296,6 +290,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
     async (payload) => {
       if (!payload?.context || !payload.response || !isCurrentContext(payload.context)) return
 
+      successfulResponseGeneration += 1
       const rawAssets = payload.response?.data || []
       const { list, totalSats } = parseAssetSummary(rawAssets)
       const presented = presentAssets(list)
@@ -322,7 +317,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
   const refreshL1Assets = async (options: RefreshOptions = {}) => {
     const context = currentContext()
     if (!context) return
-    const refreshKey = `${context.env}:${context.network}:${context.walletId}:${context.accountIndex}:${context.address}`
+    const refreshKey = assetContextKey(context)
     const existing = l1RefreshPromises.get(refreshKey)
     if (existing) return existing
 
@@ -344,8 +339,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
       }
 
       if (resetState) {
-        allAssetList.value = []
-        assetsStore.reset()
+        await hydrateSnapshot(context)
       }
 
       const refreshPromises = []

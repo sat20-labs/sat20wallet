@@ -20,7 +20,9 @@
 
         <!-- Close Channel Note -->
         <p class="text-sm text-muted-foreground mt-4">
-          {{ $t('escapeHatch.closeChannelNote') }}
+          {{ reopenFeeToDao === null
+            ? $t('escapeHatch.closeChannelNote')
+            : $t('escapeHatch.closeChannelNoteWithFee', { fee: reopenFeeToDao.toLocaleString() }) }}
         </p>
 
         <!-- Broadcast Button -->
@@ -206,6 +208,8 @@ const isExpanded = ref(false)
 const showForceCloseConfirm = ref(false)
 const forceCloseSnapshot = ref<any | null>(null)
 const commitTxData = ref<CommitTxAssetInfo | null>(null)
+const reopenFeeToDao = ref<number | null>(null)
+let reopenFeeRequestGeneration = 0
 
 const channelStore = useChannelStore()
 const { channel } = storeToRefs(channelStore)
@@ -274,6 +278,23 @@ const channelId = computed(() => {
 })
 
 const transactionPath = (outpoint: string) => `tx/${outpoint.split(':', 1)[0]}`
+
+const refreshReopenFee = async () => {
+  const id = channelId.value
+  const generation = ++reopenFeeRequestGeneration
+  reopenFeeToDao.value = null
+  if (!id) return
+
+  // PreviewOpenChannel reads the service node's authoritative fee config before
+  // validating the amount.  Amount 1 deliberately avoids local UTXO selection;
+  // this view only needs feeToDao and never opens or reserves a channel.
+  const [err, preview] = await satsnetStp.previewOpenChannel(btcFeeRate.value, 1)
+  if (generation !== reopenFeeRequestGeneration || id !== channelId.value) return
+  const fee = Number(preview?.feeToDao)
+  if (!err && Number.isFinite(fee) && fee >= 0) {
+    reopenFeeToDao.value = fee
+  }
+}
 
 const closeChannel = async () => {
   const id = channelId.value
@@ -384,6 +405,10 @@ watch(channelId, async () => {
 }, {
   immediate: true,
 })
+
+watch([channelId, btcFeeRate], () => {
+  void refreshReopenFee()
+}, { immediate: true })
 
 onMounted(() => {
   channelStore.getCurrentChannel()

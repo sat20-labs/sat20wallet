@@ -1,8 +1,8 @@
 <template>
   <div>
-    <Button size="xs" variant="outline" @click="isOpen = true" class="px-2 rounded-md">
+    <Button size="xs" variant="outline" :disabled="switching" @click="isOpen = true" class="px-2 rounded-md">
       <!-- <Icon :icon="showNetwork?.icon" :class="showNetwork?.iconColor" />{{ showNetwork?.name }} -->
-      <Icon :icon="showNetwork?.icon || ''" :class="showNetwork?.iconColor" class="w-5 h-5" />
+      <Icon :icon="switching ? 'lucide:loader-2' : (showNetwork?.icon || '')" :class="switching ? 'animate-spin' : showNetwork?.iconColor" class="w-5 h-5" />
       <ChevronDown class="h-4 w-4" />
     </Button>
 
@@ -16,6 +16,7 @@
             v-for="n in networks"
             :key="n.value"
             @click="selectNetwork(n)"
+            :disabled="switching"
             :variant="n.value === network ? 'secondary' : 'outline'"
             class="w-full justify-start h-12"
           >
@@ -43,9 +44,10 @@ import { Icon } from '@iconify/vue'
 import walletManager from '@/utils/sat20'
 import { Network } from '@/types'
 import { useWalletStore } from '@/store'
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { restartApp } from '@/utils/app-restart'
+import { useToast } from '@/components/ui/toast-new'
 
 interface NetworkItem {
   name: string
@@ -71,14 +73,28 @@ const networks: NetworkItem[] = [
 ]
 
 const isOpen = ref(false) // 默认不打开对话框
+const switching = ref(false)
+const { toast } = useToast()
 
-const selectNetwork = async (network: NetworkItem) => {
-  console.log(network);
-  await walletStore.setNetwork(network.value)
-  isOpen.value = false // 选择后关闭对话框
-
-  // 使用重启方法
-  restartApp()
+const selectNetwork = async (item: NetworkItem) => {
+  if (switching.value) return
+  isOpen.value = false
+  if (item.value === network.value) return
+  await nextTick()
+  switching.value = true
+  try {
+    const changed = await walletStore.setNetwork(item.value)
+    if (changed) restartApp()
+  } catch (error) {
+    console.error('Network switch failed:', error)
+    toast({
+      title: 'Error',
+      description: error instanceof Error ? error.message : 'Network switch failed',
+      variant: 'destructive',
+    })
+  } finally {
+    switching.value = false
+  }
 }
 
 const showNetwork = computed(() =>

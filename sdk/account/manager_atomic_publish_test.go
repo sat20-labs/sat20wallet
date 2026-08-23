@@ -33,7 +33,7 @@ func TestManagerPublishUsesAtomicRepositoryCapability(t *testing.T) {
 		}}},
 		RecoveryMode: RecoveryMode2Of2,
 		Questions:    questions,
-	})
+	}, testAccountSecret())
 	if err != nil {
 		t.Fatal(err)
 	}

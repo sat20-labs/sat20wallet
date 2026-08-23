@@ -329,26 +329,29 @@ func (p *Manager) syncDKVSOnce() ([]dkvsDirectoryState, error) {
 	p.dkvs.mu.Lock()
 	hasPendingJobs := len(p.dkvs.jobs) != 0
 	p.dkvs.mu.Unlock()
+	var pendingJobErr error
 	if hasPendingJobs {
 		managedStore, storeErr := p.dkvs.primaryStore()
 		if storeErr != nil {
 			return states, storeErr
 		}
-		if err := p.dkvs.runPendingJobs(managedStore); err != nil {
-			return states, err
+		pendingJobErr = p.dkvs.runPendingJobs(managedStore)
+	}
+	if len(states) != 0 {
+		paths := make([]string, 0, len(states))
+		for _, state := range states {
+			paths = append(paths, state.Prefix)
 		}
+		// Domain observers and UI callbacks may re-enter DKVS through Refresh.
+		// Notify them only after releasing the synchronization lifecycle lock.
+		// A failed pending job must not starve an observer that can reconcile the
+		// state which the failed job is waiting for.
+		p.dkvs.notifyObservers(paths)
+		p.dkvs.notifyCallback()
 	}
-	if len(states) == 0 {
-		return states, nil
+	if pendingJobErr != nil {
+		return states, pendingJobErr
 	}
-	paths := make([]string, 0, len(states))
-	for _, state := range states {
-		paths = append(paths, state.Prefix)
-	}
-	// Domain observers and UI callbacks may re-enter DKVS through Refresh.
-	// Notify them only after releasing the synchronization lifecycle lock.
-	p.dkvs.notifyObservers(paths)
-	p.dkvs.notifyCallback()
 	return states, nil
 }
 

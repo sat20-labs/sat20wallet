@@ -23,11 +23,17 @@ func (p *Manager) SyncChannel(reason string, client NodeRPCClient) error {
 	identityGeneration := p.channelIdentityGeneration
 	p.mutex.RUnlock()
 	p.channelIdentityMu.RUnlock()
+	if err := p.rejectPendingChannelLifecycleSync(localWallet); err != nil {
+		return err
+	}
 	return p.syncChannelForIdentity(context.Background(), reason, client, localWallet, identityGeneration)
 }
 
 func (p *Manager) syncChannelForIdentity(ctx context.Context, reason string, client NodeRPCClient, localWallet common.Wallet,
 	identityGeneration uint64) error {
+	if err := p.rejectPendingChannelLifecycleSync(localWallet); err != nil {
+		return err
+	}
 	channelData, err := p.requestChannelSync(ctx, reason, client, localWallet)
 	if err != nil {
 		return err
@@ -43,10 +49,39 @@ func (p *Manager) syncChannelForIdentity(ctx context.Context, reason string, cli
 	if !identityUnchanged {
 		return fmt.Errorf("wallet identity changed during channel sync")
 	}
+	if err := p.rejectPendingChannelLifecycleSync(localWallet); err != nil {
+		return err
+	}
 
 	if err := p.rebuildChannelFromPeerChanInfoForWallet(channelData, localWallet); err != nil {
 		Log.Errorf("RebuildChannelFromPeerChanInfo failed. %v", err)
 		return err
+	}
+	return nil
+}
+
+func (p *Manager) rejectPendingChannelLifecycleSync(localWallet common.Wallet) error {
+	if localWallet == nil || localWallet.GetPaymentPubKey() == nil {
+		return fmt.Errorf("wallet is not created/unlocked")
+	}
+	p.mutex.RLock()
+	var serverPubKey []byte
+	if p.serverNode != nil && p.serverNode.Pubkey != nil {
+		serverPubKey = append([]byte(nil), p.serverNode.Pubkey.SerializeCompressed()...)
+	}
+	p.mutex.RUnlock()
+	if len(serverPubKey) == 0 {
+		return fmt.Errorf("server node is not initialized")
+	}
+	channelID, err := GetP2WSHaddress(serverPubKey, localWallet.GetPaymentPubKey().SerializeCompressed())
+	if err != nil {
+		return err
+	}
+	if p.hasPendingFundingReservation(channelID, localWallet.GetWalletId()) {
+		return fmt.Errorf("channel funding is pending; peer sync is disabled")
+	}
+	if p.hasPendingClosingReservation(channelID, localWallet.GetWalletId()) {
+		return fmt.Errorf("channel closing is pending; peer sync is disabled")
 	}
 	return nil
 }
@@ -109,6 +144,9 @@ func (p *Manager) rebuildChannelFromPeerChanInfoForWallet(peerChannelInDB []byte
 	if localWallet == nil {
 		return fmt.Errorf("wallet is not created/unlocked")
 	}
+	if err := p.rejectPendingChannelLifecycleSync(localWallet); err != nil {
+		return err
+	}
 
 	var channel ChannelInDB
 	err := DecodeFromBytes(peerChannelInDB, &channel)
@@ -122,14 +160,15 @@ func (p *Manager) rebuildChannelFromPeerChanInfoForWallet(peerChannelInDB []byte
 		return fmt.Errorf("channel %s CheckMerkleRoot failed, %v", channel.ChannelId, err)
 	}
 
-	if !bytes.Equal(channel.PeerNodeId, localWallet.GetPaymentPubKey().SerializeCompressed()) {
-		return fmt.Errorf("invalid peer %s", hex.EncodeToString(channel.PeerNodeId))
+	p.mutex.RLock()
+	var serverNodeID []byte
+	if p.serverNode != nil && p.serverNode.NodeId != nil {
+		serverNodeID = append([]byte(nil), p.serverNode.NodeId.SerializeCompressed()...)
 	}
-	channel.PeerNodeId = channel.LocalChanCfg.PaymentKey.SerializeCompressed()
-	channel.IsInitiator = !channel.IsInitiator
-	channel.LocalChanCfg, channel.RemoteChanCfg = channel.RemoteChanCfg, channel.LocalChanCfg
-	channel.TotalSatSent, channel.TotalSatReceived = channel.TotalSatReceived, channel.TotalSatSent
-	channel.LocalCommitment, channel.RemoteCommitment = channel.RemoteCommitment, channel.LocalCommitment
+	p.mutex.RUnlock()
+	if err := restorePeerChannelPerspective(&channel, localWallet, serverNodeID); err != nil {
+		return err
+	}
 
 	c := NewChannel(&channel, p)
 	if err := p.SignAndVerifyCommitTxV2(c, true); err != nil {
@@ -144,5 +183,25 @@ func (p *Manager) rebuildChannelFromPeerChanInfoForWallet(peerChannelInDB []byte
 	if channel.Status == CS_READY {
 		p.EnableChannel(c)
 	}
+	return nil
+}
+
+func restorePeerChannelPerspective(channel *ChannelInDB, localWallet common.Wallet, serverNodeID []byte) error {
+	if channel == nil || localWallet == nil || localWallet.GetNodePubKey() == nil ||
+		!bytes.Equal(channel.PeerNodeId, localWallet.GetNodePubKey().SerializeCompressed()) {
+		var peerNodeID []byte
+		if channel != nil {
+			peerNodeID = channel.PeerNodeId
+		}
+		return fmt.Errorf("invalid peer %s", hex.EncodeToString(peerNodeID))
+	}
+	if len(serverNodeID) == 0 {
+		return fmt.Errorf("server node id is unavailable")
+	}
+	channel.PeerNodeId = append([]byte(nil), serverNodeID...)
+	channel.IsInitiator = !channel.IsInitiator
+	channel.LocalChanCfg, channel.RemoteChanCfg = channel.RemoteChanCfg, channel.LocalChanCfg
+	channel.TotalSatSent, channel.TotalSatReceived = channel.TotalSatReceived, channel.TotalSatSent
+	channel.LocalCommitment, channel.RemoteCommitment = channel.RemoteCommitment, channel.LocalCommitment
 	return nil
 }

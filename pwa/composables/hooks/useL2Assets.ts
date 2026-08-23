@@ -7,8 +7,10 @@ import {
   applyAssetSnapshot,
   buildAssetSnapshotFromAssets,
   loadAssetSnapshot,
+  peekAssetSnapshot,
   saveAssetSnapshot,
 } from '@/lib/assetSnapshotStorage'
+import { assetContextKey, isSameAssetContext, type AssetContext } from '@/lib/assetContext'
 interface AssetItem {
   id: string
   key: string
@@ -31,25 +33,20 @@ interface UseAssetQueryOptions {
   enabled?: boolean | { value: boolean }
 }
 
-interface AssetQueryContext {
-  env: string
-  network: string
-  chain: 'satnet'
-  address: string
-}
+type AssetQueryContext = AssetContext & { chain: 'satnet' }
 
 interface SummaryQueryResult {
   context: AssetQueryContext
   response: any
 }
 
-let l2RefreshPromise: Promise<void> | null = null
+const l2RefreshPromises = new Map<string, Promise<void>>()
 
 export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
   const assetsStore = useL2Store()
   const walletStore = useWalletStore()
   const globalStore = useGlobalStore()
-  const { address, network, chain } = storeToRefs(walletStore)
+  const { address, network, chain, walletId, accountIndex } = storeToRefs(walletStore)
   const { env } = storeToRefs(globalStore)
   console.log('address.value', address.value)
   console.log('network.value', network.value)
@@ -58,7 +55,7 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
   const queryClient = useQueryClient()
 
   const allAssetList = ref<AssetItem[]>([])
-  const hydratingSnapshot = ref(false)
+  let successfulResponseGeneration = 0
 
   const clientApi = computed(() => {
     return satnetApi
@@ -76,18 +73,16 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
       env: env.value,
       network: network.value,
       chain: 'satnet',
+      walletId: walletId.value,
+      accountIndex: accountIndex.value,
       address: address.value,
     }
   }
 
-  const isCurrentContext = (context: AssetQueryContext) => (
-    context.env === env.value &&
-    context.network === network.value &&
-    context.address === address.value
-  )
+  const isCurrentContext = (context: AssetQueryContext) => isSameAssetContext(context, currentContext())
 
   const summaryQuery = useQuery({
-    queryKey: ['summary-l2', address, network, env],
+    queryKey: ['summary-l2', env, network, computed(() => 'satnet'), walletId, accountIndex, address],
     queryFn: async (): Promise<SummaryQueryResult | null> => {
       const context = currentContext()
       if (!context) return null
@@ -95,6 +90,13 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
         address: context.address,
         network: context.network,
       })
+      const responseCode = Number(response?.code ?? response?.Code ?? -1)
+      if (responseCode !== 0) {
+        throw new Error(response?.msg || response?.Msg || `L2 asset summary failed with code ${responseCode}`)
+      }
+      if (!Array.isArray(response?.data)) {
+        throw new Error('L2 asset summary returned malformed data')
+      }
       return { context, response }
     },
     refetchInterval: computed(() => queryEnabled.value ? 60 * 1000 : false),
@@ -165,7 +167,7 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
     parsedAssets: AssetItem[],
     totalSats: number
   ) => {
-    if (hydratingSnapshot.value || !isCurrentContext(context)) return
+    if (!isCurrentContext(context)) return
     await saveAssetSnapshot(
       context,
       buildAssetSnapshotFromAssets(
@@ -177,23 +179,28 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
   }
 
   const hydrateSnapshot = async (context: AssetQueryContext | null) => {
-    if (!context) return
-    hydratingSnapshot.value = true
-    try {
-      const snapshot = await loadAssetSnapshot(context)
-      if (snapshot && isCurrentContext(context)) {
-        applyAssetSnapshot(assetsStore, snapshot)
-        allAssetList.value = [
-          ...(snapshot.plainList || []),
-          ...(snapshot.sat20List || []),
-          ...(snapshot.runesList || []),
-          ...(snapshot.brc20List || []),
-          ...(snapshot.ordList || []),
-        ]
-      }
-    } finally {
-      hydratingSnapshot.value = false
+    if (!context) {
+      allAssetList.value = []
+      assetsStore.reset()
+      return
     }
+    const generation = successfulResponseGeneration
+    const cached = peekAssetSnapshot(context)
+    if (!cached && isCurrentContext(context)) {
+      allAssetList.value = []
+      assetsStore.reset()
+    }
+    const snapshot = cached || await loadAssetSnapshot(context)
+    if (!isCurrentContext(context) || generation !== successfulResponseGeneration) return
+    if (!snapshot) return
+    applyAssetSnapshot(assetsStore, snapshot)
+    allAssetList.value = [
+      ...(snapshot.plainList || []),
+      ...(snapshot.sat20List || []),
+      ...(snapshot.runesList || []),
+      ...(snapshot.brc20List || []),
+      ...(snapshot.ordList || []),
+    ]
   }
 
   // Watchers & Effects
@@ -204,7 +211,8 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
     async (payload) => {
       if (!payload?.context || !payload.response || !isCurrentContext(payload.context)) return
 
-      const rawAssets = payload.response?.data || []
+      successfulResponseGeneration += 1
+      const rawAssets = payload.response.data
       const { list, totalSats } = parseAssetSummary(rawAssets)
       allAssetList.value = list
       updateStoreAssets(list, totalSats)
@@ -226,9 +234,13 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
    * @returns {Promise<void>}
    */
   const refreshL2Assets = async (options: RefreshOptions = {}) => {
-    if (l2RefreshPromise) return l2RefreshPromise
+    const context = currentContext()
+    if (!context) return
+    const refreshKey = assetContextKey(context)
+    const existing = l2RefreshPromises.get(refreshKey)
+    if (existing) return existing
 
-    l2RefreshPromise = (async () => {
+    const refreshPromise = (async () => {
       const {
         resetState = true,
         refreshSummary = true,
@@ -239,8 +251,7 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
         queryClient.invalidateQueries({ queryKey: ['summary-l2'] })
       }
       if (resetState) {
-        allAssetList.value = []
-        assetsStore.reset()
+        await hydrateSnapshot(context)
       }
       const refreshPromises = []
 
@@ -250,10 +261,11 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
 
       await Promise.all(refreshPromises)
     })().finally(() => {
-      l2RefreshPromise = null
+      l2RefreshPromises.delete(refreshKey)
     })
 
-    return l2RefreshPromise
+    l2RefreshPromises.set(refreshKey, refreshPromise)
+    return refreshPromise
   }
 
   return {

@@ -210,7 +210,11 @@ async function main() {
         transfers: state?.transfers,
       })}`)
     }
-    const waitForWalletDataReady = async (label, allowWarningForDiagnosis = false) => {
+    const waitForWalletDataReady = async (
+      label,
+      allowWarningForDiagnosis = false,
+      allowPending = false,
+    ) => {
       const deadline = Date.now() + 120_000
       let state
       let previousStatus = ''
@@ -241,6 +245,11 @@ async function main() {
           throw new Error(`${label}: unknown RGB11 consistency status ${consistencyStatus || 'undefined'}`)
         }
 
+        if (state?.initialized === true && allowPending &&
+          ['idle', 'syncing'].includes(syncStatus) &&
+          ['ok', 'warning'].includes(consistencyStatus)) {
+          return state
+        }
         if (state?.initialized === true && syncStatus === 'idle' && consistencyStatus === 'ok') {
           return state
         }
@@ -508,7 +517,7 @@ async function main() {
     }
     progress('wallet manager unlocked; initial wallet data synchronization completed')
 
-    const switchWallet = async (index) => {
+    const switchWallet = async (index, allowPending = false) => {
       const testAccountIndex = accountIndexes[index]
       progress(`switching frontend wallet ${index}`)
       await withTimeout(wallet.switchWallet(walletIDs[index]), `switch wallet ${index}`)
@@ -522,7 +531,7 @@ async function main() {
         `switchAccount wallet ${index}`,
       )
       progress(`waiting for wallet data ${index}`)
-      await waitForWalletDataReady(`wallet ${index}`, diagnoseOnly)
+      await waitForWalletDataReady(`wallet ${index}`, diagnoseOnly, allowPending)
     }
 
     if (cancelExpiredTransferID) {
@@ -772,7 +781,7 @@ async function main() {
       if (!addressDelivery.record_key?.startsWith('/mail/')) {
         throw new Error(`RGB11 address delivery did not use mailbox: ${addressDelivery.record_key || 'missing'}`)
       }
-      await switchWallet(1)
+      await switchWallet(1, true)
       receiveResult = await unwrap(await rgb11Address.syncMailbox({}), 'syncRGB11AddressMailbox')
       const mailboxSync = JSON.parse(receiveResult.result)
       if ((mailboxSync.received || 0) + (mailboxSync.already_done || 0) < 1) {
@@ -791,7 +800,7 @@ async function main() {
       )
       await switchWallet(0)
       broadcast = await unwrap(await sat20.broadcastRGB11OutOfBand([transferID]), 'broadcastRGB11OutOfBand')
-      await switchWallet(1)
+      await switchWallet(1, true)
       receiveResult = await acceptWhenBitcoinEvidenceIsReady(
         invoice.request_id || invoice.requestId,
         prepared.recipient_consignment,
@@ -800,11 +809,11 @@ async function main() {
     saveTransferCheckpoint({ ...transferCheckpoint, txid: broadcast.txid })
     const expectedSenderAmount = (BigInt(senderStartAmount) - BigInt(transferAmount)).toString()
     progress(`transfer broadcast ${broadcast.txid}`)
-    await switchWallet(0)
+    await switchWallet(0, true)
     const senderAfter = await waitForSenderChangeProjection(assetName, expectedSenderAmount)
     traceState('sender state after change projection', senderAfter)
 
-    await switchWallet(1)
+    await switchWallet(1, true)
     if (transferTransport === 'rgb-json-rpc') {
       receiveResult = await receiveProxyWhenBitcoinEvidenceIsReady(invoice.request_id || invoice.requestId)
     }
@@ -843,7 +852,7 @@ async function main() {
     progress(`receiver accepted ${transferTransport} consignment`)
     const receiverAfter = await parseState()
 
-    await switchWallet(0)
+    await switchWallet(0, true)
     const proxyAck = transferTransport === 'rgb-json-rpc'
       ? await unwrap(await sat20.fetchRGB11ProxyAck(transferID), 'fetchRGB11ProxyAck')
       : null

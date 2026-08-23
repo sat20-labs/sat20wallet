@@ -32,8 +32,9 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 	accountID := dkvsindexer.AccountID(root.GetPubKey().SerializeCompressed())
 	repository, err := primary.NewAccountRepositoryForStorage(*authorization)
 	require.NoError(t, err)
+	require.NoError(t, primary.InitializeAccountManagement("123456"))
 	accountManager := account.NewManager(repository)
-	pkg, secret, err := accountManager.CreateRecoveryPackageWithSecret(account.CreateOptions{
+	pkg, err := primary.CreateAccountRecoveryPackage(account.CreateOptions{
 		AccountID: accountID,
 		Backup: account.Backup{Version: account.Version, Wallets: []account.WalletBackup{{
 			Name: "Root", Mnemonic: dkvsClientMnemonic, AccountCount: 1,
@@ -42,6 +43,11 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 		RecoveryMode: account.RecoveryMode2Of2,
 		Questions:    e2eKnowledgeQuestions(),
 	})
+	require.NoError(t, err)
+	dkvsShare, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule,
+		pkg.KnowledgeBundle, e2eKnowledgeAnswers())
+	require.NoError(t, err)
+	_, secret, err := account.RecoverAccount(pkg.Envelope, pkg.UserShare, dkvsShare)
 	require.NoError(t, err)
 	defer clearBytes(secret)
 	require.NoError(t, accountManager.Publish(context.Background(), *pkg))

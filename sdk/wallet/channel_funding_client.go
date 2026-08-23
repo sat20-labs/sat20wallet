@@ -220,6 +220,13 @@ func (p *Manager) FunderProcessFundingSigned(resv *FundingReservation) error {
 }
 
 func (p *Manager) FunderInitFundingProcess(feeRate, amt int64, utxos []string, memo string, l2DrainTxId string) (string, error) {
+	channelID, err := p.GetChannelAddress()
+	if err != nil {
+		return "", err
+	}
+	if err := p.rejectUnfinishedChannelLifecycle(channelID); err != nil {
+		return "", err
+	}
 	peerWallet := p.GetServerWalletAddress()
 	if c := p.GetChannelByPeerWallet(peerWallet); c != nil {
 		return "", fmt.Errorf("channel exists")
@@ -305,6 +312,7 @@ func (p *Manager) FunderInitFundingProcess(feeRate, amt int64, utxos []string, m
 
 		resv.Channel.Status = CS_FUNDING_BROADCASTED
 		resv.Status = ResvStatus(resv.Channel.Status)
+		resv.Channel.ResvId = 0
 		resv.FundingBroadcasted = &wwire.FundingBroadcasted{
 			Id:          resv.Id,
 			FundingTxId: fundingTxID,
@@ -337,6 +345,13 @@ func (p *Manager) FunderInitFundingProcess(feeRate, amt int64, utxos []string, m
 
 func (p *Manager) FunderInitReOpenProcess(amt int64, fundingUtxo *TxOutput, memo string, needSendFundingTx bool,
 	skipOpeningAnchorTx bool, fundingFeeCfg *ChannelFeeConfig, l2DrainTxId string) (string, error) {
+	channelID, err := p.GetChannelAddress()
+	if err != nil {
+		return "", err
+	}
+	if err := p.rejectUnfinishedChannelLifecycle(channelID); err != nil {
+		return "", err
+	}
 	peerWallet := p.GetServerWalletAddress()
 	if c := p.GetChannelByPeerWallet(peerWallet); c != nil {
 		return "", fmt.Errorf("channel exists")
@@ -364,9 +379,9 @@ func (p *Manager) FunderInitReOpenProcess(amt int64, fundingUtxo *TxOutput, memo
 		Title:    title,
 		Summary:  "Preparing channel recovery",
 		Parameters: map[string]string{
-			"amount":              strconv.FormatInt(amt, 10),
-			"fee_rate":            strconv.FormatInt(feeRate, 10),
-			"new_funding_tx":      strconv.FormatBool(needSendFundingTx),
+			"amount":               strconv.FormatInt(amt, 10),
+			"fee_rate":             strconv.FormatInt(feeRate, 10),
+			"new_funding_tx":       strconv.FormatBool(needSendFundingTx),
 			"reuse_opening_anchor": strconv.FormatBool(skipOpeningAnchorTx),
 		},
 	})
@@ -423,6 +438,7 @@ func (p *Manager) FunderInitReOpenProcess(amt int64, fundingUtxo *TxOutput, memo
 			resv.Channel.Status = CS_FUNDING_CONFIRMED
 		}
 		resv.Status = ResvStatus(resv.Channel.Status)
+		resv.Channel.ResvId = 0
 
 		fundingTxId := ""
 		if resv.NeedSendFundingTx {

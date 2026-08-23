@@ -31,7 +31,7 @@
         <div class="text-sm text-muted-foreground mb-4">
           {{ $t('networkSetting.networkSwitch') }}
         </div>
-        <Select v-model="network" @update:model-value="(value: any) => walletStore.setNetwork(value)">
+        <Select :model-value="network" :disabled="isSwitchingNetwork" @update:model-value="handleNetworkChange">
           <SelectTrigger class="max-w-[160px] bg-gray-900/30 mb-4">
             <SelectValue :placeholder="$t('networkSetting.selectNetwork')" />
           </SelectTrigger>
@@ -82,7 +82,13 @@ import { restartApp } from '@/utils/app-restart'
 const isExpanded = ref(false)
 const globalStore = useGlobalStore()
 const walletStore = useWalletStore()
-const { network, } = storeToRefs(walletStore)
+const { network, isSwitchingNetwork } = storeToRefs(walletStore)
+
+const handleNetworkChange = async (value: any) => {
+  if (!value || value === network.value || isSwitchingNetwork.value) return
+  const changed = await walletStore.setNetwork(value as Network)
+  if (changed) restartApp()
+}
 
 const computedEnv = computed<Env>({
   get: () => globalStore.env,

@@ -299,7 +299,7 @@ const channelStatusText = computed(() => {
   const status = channel.value?.status
   if (status > 0 && status < 5) {
     return 'Channel is opening'
-  } else if (status > 7 && status < 15) {
+  } else if (status >= 7 && status <= 15) {
     return 'Channel is closing'
   } else if (status === 33) {
     return 'Splicing in'

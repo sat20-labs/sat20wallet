@@ -159,7 +159,15 @@ func (m *dkvsManager) verificationHeight() (uint64, bool) {
 	}
 	m.verifyMu.RLock()
 	height, known := m.verifyHeight, m.verifyHeightKnown
+	fromEndpoint := m.verifyHeightFromEndpoint
 	m.verifyMu.RUnlock()
+	// Once the current DKVS endpoint has supplied a best height, it is the
+	// authority for record expiry.  SyncHeightL2 is wallet progress and may be
+	// stale or belong to an earlier local snapshot, so it is only a fallback
+	// before any endpoint height has been observed.
+	if known && fromEndpoint {
+		return height, true
+	}
 	if m.owner != nil && m.owner.status != nil {
 		m.owner.status.RLock()
 		statusHeight := m.owner.status.SyncHeightL2
@@ -390,6 +398,26 @@ func (s *dkvsStore) Config() (*AccountFreeLocalPolicy, error) {
 		return nil, ErrDKVSPathNotSynced
 	}
 	return s.client.GetConfig()
+}
+
+// ConfigWithVerificationHeight reads the storage policy and refreshes the
+// verification height from the same endpoint. A previously observed endpoint
+// height remains authoritative when a later refresh fails; only an endpoint
+// that has never returned a height may use the manager's same-context local
+// fallback.
+func (s *dkvsStore) ConfigWithVerificationHeight() (*AccountFreeLocalPolicy, uint64, bool, error) {
+	policy, err := s.Config()
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if s.manager == nil {
+		return policy, 0, false, nil
+	}
+	if height, refreshErr := s.manager.refreshVerificationBestHeight(s.client); refreshErr == nil {
+		return policy, height, true, nil
+	}
+	height, known := s.manager.verificationHeight()
+	return policy, height, known, nil
 }
 
 // ConfigureFreeLocalRetention resolves the current connected service node's
@@ -1545,11 +1573,25 @@ func (m *dkvsManager) runPendingJobs(store *dkvsStore) error {
 	jobs := m.jobs
 	m.jobs = make(map[string]func(*dkvsStore) error)
 	m.mu.Unlock()
-	for id, job := range jobs {
+	ids := make([]string, 0, len(jobs))
+	for id := range jobs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		job := jobs[id]
+		delete(jobs, id)
 		if err := job(store); err != nil {
 			m.mu.Lock()
 			if _, replaced := m.jobs[id]; !replaced {
 				m.jobs[id] = job
+			}
+			// Preserve every job that has not run yet. A newly scheduled job with
+			// the same ID is newer and must keep precedence over this snapshot.
+			for pendingID, pendingJob := range jobs {
+				if _, replaced := m.jobs[pendingID]; !replaced {
+					m.jobs[pendingID] = pendingJob
+				}
 			}
 			m.mu.Unlock()
 			return err

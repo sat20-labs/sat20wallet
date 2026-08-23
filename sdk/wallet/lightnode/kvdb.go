@@ -360,6 +360,21 @@ func (p *jsDB) NewWriteBatch() common.WriteBatch {
 	}
 }
 
+func (p *jsDB) Scan(options common.ScanOptions, r func(k, v []byte) error) error {
+	entries := make([]scanEntry, 0)
+	err := p.BatchRead(options.Prefix, false, func(k, v []byte) error {
+		entries = append(entries, scanEntry{
+			key:   append([]byte(nil), k...),
+			value: append([]byte(nil), v...),
+		})
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return scanSnapshot(entries, options, r)
+}
+
 func (p *jsDB) SetReverse(bool) {
 }
 

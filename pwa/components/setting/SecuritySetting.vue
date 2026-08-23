@@ -63,7 +63,7 @@
               variant="outline"
               size="sm"
               @click="handleBiometricToggle(!biometricEnabled)"
-              :disabled="biometricLoading"
+              :disabled="biometricLoading || (!biometricEnabled && biometricExplicitlyUnavailable)"
               class="w-24"
             >
               <Icon v-if="biometricLoading" icon="mdi:loading" class="mr-1 h-4 w-4 animate-spin" />
@@ -98,7 +98,7 @@
             <Button
               v-if="!hasCredentials"
               @click="createBiometricCredential"
-              :disabled="biometricLoading"
+              :disabled="biometricLoading || biometricExplicitlyUnavailable"
               variant="outline"
               class="h-10 w-full"
             >
@@ -153,7 +153,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onActivated, watch } from 'vue'
+import { computed, ref, onMounted, onActivated, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { Label } from '@/components/ui/label'
@@ -197,15 +197,21 @@ const alertDialog = ref({
 const biometricStatus = ref<{
   supported: boolean
   available: boolean
+  availability: 'available' | 'unavailable' | 'inconclusive'
   biometryType?: string
   capabilities?: Record<string, boolean | undefined>
   error?: string
 }>({
   supported: false,
   available: false,
+  availability: 'inconclusive',
   biometryType: '',
   error: ''
 })
+
+const biometricExplicitlyUnavailable = computed(() =>
+  biometricStatus.value.availability === 'unavailable'
+)
 
 // 显示提示对话框
 const showAlert = (message: string, type: 'info' | 'warning' | 'error' | 'success' = 'info') => {
@@ -225,6 +231,7 @@ const markBiometricUnavailable = (message: string) => {
   biometricStatus.value = {
     supported: true,
     available: false,
+    availability: 'unavailable',
     error: message,
   }
   hasCredentials.value = false
@@ -302,6 +309,7 @@ const checkBiometricSupport = async () => {
     biometricStatus.value = {
       supported: false,
       available: false,
+      availability: 'inconclusive',
       error: error instanceof Error ? error.message : '未知错误'
     }
   }
@@ -322,11 +330,16 @@ const checkCredentialStatus = async () => {
 // 处理生物识别开关切换
 const handleBiometricToggle = async (newValue: boolean) => {
   if (newValue) {
+    if (biometricExplicitlyUnavailable.value) {
+      showAlert(biometricStatus.value.error || t('securitySetting.biometricUnavailable'), 'warning')
+      return
+    }
     const originError = getLocalWebAuthnOriginError()
     if (originError) {
       biometricStatus.value = {
         supported: false,
         available: false,
+        availability: 'unavailable',
         error: originError,
       }
       showAlert(originError, 'warning')

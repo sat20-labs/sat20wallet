@@ -413,7 +413,7 @@ class SatsnetStp {
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'lockToChannel',
-      chanPoint.toString(),
+      chanPoint,
       assetName,
       String(amt),
       utxos,
@@ -429,7 +429,7 @@ class SatsnetStp {
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest(
       'lockToChannelWithExpand',
-      chanPoint.toString(),
+      chanPoint,
       assetName,
       String(amt),
       String(feeRate)

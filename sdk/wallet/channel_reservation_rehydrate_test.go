@@ -24,6 +24,7 @@ func savePendingFundingFixture(t *testing.T, database *memoryKVDB, walletValue *
 	stored.ChannelId = channelID
 	stored.Address = channelID
 	stored.Status = CS_FUNDING_BROADCASTED
+	stored.FundingTime = reservationID
 	stored.LocalWalletId = walletValue.GetId()
 	stored.LocalChanCfg.PaymentKey = walletValue.GetPaymentPubKey()
 	stored.LocalChanCfg.RevocationBasePoint = walletValue.GetRevocationBaseKey()
@@ -212,5 +213,147 @@ func TestFundingReservationRecoverySkipsUnavailableWalletWithoutPanic(t *testing
 	manager.rehydratePendingFundingRuntime()
 	if got := manager.GetFundingReservations()[303]; got == nil || got.Channel != nil {
 		t.Fatalf("missing-wallet funding reservation changed unexpectedly: %+v", got)
+	}
+}
+
+func TestFundingReservationRecoveryRejectsMismatchedGeneration(t *testing.T) {
+	database := newMemoryKVDB()
+	walletValue := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire",
+		"", GetChainParam(),
+	)
+	if walletValue == nil {
+		t.Fatal("create wallet")
+	}
+	stored := savePendingFundingFixture(t, database, walletValue, "generationmismatch", 404)
+	stored.FundingTime = 403
+	stored.StaticMerkleRoot = stored.CalcStaticMerkleRoot()
+	if err := SaveChannelInDB(database, stored); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := &Manager{
+		db:                database,
+		wallet:            walletValue,
+		walletInfoMap:     map[int64]*WalletInfo{walletValue.GetId(): {WalletInDB: WalletInDB{Id: walletValue.GetId()}, Wallet: walletValue}},
+		channelMap:        make(map[string]*Channel),
+		fundingChannelMap: make(map[int64]*FundingReservation),
+	}
+	manager.resetResvMapsLocked()
+	for _, resv := range LoadAllResvFromDB(database, nil) {
+		manager.addResv(resv)
+	}
+	manager.rehydratePendingFundingRuntime()
+	if got := manager.GetFundingReservations()[404]; got == nil || got.Channel != nil {
+		t.Fatalf("mismatched generation was rehydrated: %+v", got)
+	}
+	if _, err := LoadReservation(database, manager, RESV_TYPE_OPEN, 404); err != nil {
+		t.Fatalf("pending reservation was deleted after rejected recovery: %v", err)
+	}
+}
+
+func TestClosingReservationRehydratesAndPersistsTerminalState(t *testing.T) {
+	database := newMemoryKVDB()
+	walletValue := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire",
+		"", GetChainParam(),
+	)
+	if walletValue == nil {
+		t.Fatal("create wallet")
+	}
+	const reservationID int64 = 505
+	const channelID = "pendingclosingrehydration"
+	stored := savePendingFundingFixture(t, database, walletValue, channelID, reservationID)
+	if err := DeleteReservation(database, RESV_TYPE_OPEN, reservationID); err != nil {
+		t.Fatal(err)
+	}
+	stored.Status = CS_CLOSING_DEANCHOR_BROADCASTED
+	stored.UpdateTime = reservationID
+	stored.StaticMerkleRoot = stored.CalcStaticMerkleRoot()
+	if err := SaveChannelInDB(database, stored); err != nil {
+		t.Fatal(err)
+	}
+	closing := &ClosingReservation{ClosingDataInDB: ClosingDataInDB{
+		ReservationBase: NewReservationBase(reservationID, true, ResvStatus(CS_CLOSING_DEANCHOR_BROADCASTED), walletValue),
+		ChannelId:       channelID,
+	}}
+	if err := SaveReservation(database, closing); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := &Manager{
+		db:            database,
+		wallet:        walletValue,
+		walletInfoMap: map[int64]*WalletInfo{walletValue.GetId(): {WalletInDB: WalletInDB{Id: walletValue.GetId()}, Wallet: walletValue}},
+		channelMap:    make(map[string]*Channel),
+	}
+	manager.resetResvMapsLocked()
+	for _, resv := range LoadAllResvFromDB(database, nil) {
+		manager.addResv(resv)
+	}
+	original := manager.GetClosingReservations()[reservationID]
+	if original == nil {
+		t.Fatal("closing reservation was not loaded")
+	}
+	originalMutex := original.Mutex()
+	manager.rehydratePendingClosingRuntime()
+	restored := manager.GetClosingReservations()[reservationID]
+	if restored == nil || restored.Channel == nil || restored.Channel.ChannelId != channelID {
+		t.Fatalf("pending close not restored: %+v", restored)
+	}
+	if restored == original || restored.Mutex() == originalMutex {
+		t.Fatal("closing runtime recovery reused the persisted runtime object or mutex")
+	}
+
+	if err := manager.HandleChannelClosed(restored); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := manager.GetClosingReservations()[reservationID]; ok {
+		t.Fatal("terminal closing reservation remained active")
+	}
+	persisted, err := LoadReservation(database, manager, RESV_TYPE_CLOSE, reservationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.GetStatus() != RS_CLOSED {
+		t.Fatalf("persisted closing status=%d, want closed", persisted.GetStatus())
+	}
+	closedChannel, err := manager.LoadChannelInDB(channelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closedChannel.Status != CS_CLOSED {
+		t.Fatalf("persisted channel status=%d, want closed", closedChannel.Status)
+	}
+}
+
+func TestClosingReservationRehydratesAnchorConfirmedState(t *testing.T) {
+	database := newMemoryKVDB()
+	walletValue := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire",
+		"", GetChainParam(),
+	)
+	if walletValue == nil {
+		t.Fatal("create wallet")
+	}
+	const reservationID int64 = 506
+	const channelID = "anchorconfirmedclosingrehydration"
+	stored := savePendingFundingFixture(t, database, walletValue, channelID, reservationID)
+	stored.Status = CS_ANCHOR_CONFIRMED
+	stored.UpdateTime = reservationID
+	stored.StaticMerkleRoot = stored.CalcStaticMerkleRoot()
+	if err := SaveChannelInDB(database, stored); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		db:            database,
+		walletInfoMap: map[int64]*WalletInfo{walletValue.GetId(): {WalletInDB: WalletInDB{Id: walletValue.GetId()}, Wallet: walletValue}},
+	}
+	restored, terminal, err := manager.loadPendingClosingChannel(channelID, reservationID, walletValue.GetWalletId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal || restored == nil || restored.Status != CS_ANCHOR_CONFIRMED {
+		t.Fatalf("anchor-confirmed close restored=%+v terminal=%t", restored, terminal)
 	}
 }

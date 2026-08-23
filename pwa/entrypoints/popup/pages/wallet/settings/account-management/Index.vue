@@ -130,10 +130,12 @@
           <Input v-model="question.confirmation" type="password" placeholder="再次输入答案" autocomplete="off" />
         </div>
         <div v-if="recoveryMode === '2of3'" class="space-y-2">
-          <label class="text-sm font-medium">Guardian 联系信息</label>
+          <label class="text-sm font-medium">好友 Guardian 联系信息</label>
           <Textarea v-model="guardianContact" rows="5" placeholder="粘贴好友钱包生成的 Guardian contact JSON" />
+          <p class="text-xs text-muted-foreground">请粘贴好友钱包生成的 contact JSON，不能使用自己的 Guardian 联系信息。</p>
+          <p v-if="guardianContact.trim() && guardianContactError" class="text-xs text-destructive">{{ guardianContactError }}</p>
         </div>
-        <Button class="w-full" :disabled="busy" @click="createRecovery">
+        <Button class="w-full" :disabled="busy || !guardianContactValid" @click="createRecovery">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
           创建并保存加密账户备份
         </Button>
@@ -196,8 +198,13 @@
       <section class="space-y-3">
         <h2 class="font-medium">Guardian 工具</h2>
         <p class="text-xs text-muted-foreground">以下工具用于你替好友保管分片或响应好友的恢复请求。</p>
-        <Button variant="outline" class="w-full" :disabled="busy" @click="generateGuardianIdentity">生成我的 Guardian 联系信息</Button>
-        <Textarea v-if="guardianIdentity" :model-value="guardianIdentity" readonly rows="5" />
+        <Button variant="outline" class="w-full" :disabled="busy" @click="generateGuardianIdentity">生成我的联系信息并发送给好友</Button>
+        <div v-if="guardianIdentity" class="space-y-2">
+          <Textarea :model-value="guardianIdentity" readonly rows="5" />
+          <Button variant="outline" class="w-full" :disabled="busy" @click="copyGuardianIdentity">
+            {{ guardianIdentityCopied ? '已复制联系信息' : '复制联系信息' }}
+          </Button>
+        </div>
 
         <Textarea v-model="guardianSetupInput" rows="5" placeholder="好友发送的 Guardian setup JSON" />
         <select v-model="guardianStorageChoice" class="w-full rounded-md border bg-background p-2 text-sm">
@@ -297,11 +304,47 @@ const questions = ref([
 ])
 
 const guardianIdentity = ref('')
+const guardianIdentityCopied = ref(false)
 const guardianSetupInput = ref('')
 const guardianStorageChoice = ref('')
 const guardianReceiptOutput = ref('')
 const guardianRecoveryRequest = ref('')
 const guardianResponse = ref('')
+
+type GuardianContact = {
+  network: string
+  mailbox_id: string
+  recovery_public_key: string
+}
+
+const parseGuardianContact = (value: string): GuardianContact | null => {
+  try {
+    const contact = JSON.parse(value)
+    if (!contact || typeof contact !== 'object'
+      || typeof contact.network !== 'string' || !contact.network
+      || typeof contact.mailbox_id !== 'string' || !contact.mailbox_id
+      || typeof contact.recovery_public_key !== 'string' || !contact.recovery_public_key) {
+      return null
+    }
+    return contact as GuardianContact
+  } catch {
+    return null
+  }
+}
+
+const parsedGuardianContact = computed(() => parseGuardianContact(guardianContact.value.trim()))
+const guardianContactError = computed(() => {
+  if (!guardianContact.value.trim()) return '请先粘贴好友钱包生成的 Guardian 联系信息'
+  if (!parsedGuardianContact.value) return 'Guardian 联系信息格式无效'
+  const ownContact = parseGuardianContact(guardianIdentity.value)
+  if (ownContact
+    && ownContact.mailbox_id === parsedGuardianContact.value.mailbox_id
+    && ownContact.recovery_public_key === parsedGuardianContact.value.recovery_public_key) {
+    return '不能使用自己的 Guardian 联系信息'
+  }
+  return ''
+})
+const guardianContactValid = computed(() => recoveryMode.value !== '2of3' || !guardianContactError.value)
 
 const metadata = (): AccountWalletMetadataInput[] => drafts.value.map(wallet => ({
   id: Number(wallet.id),
@@ -406,7 +449,8 @@ const createRecovery = () => run(async () => {
   }
   let guardian: any = undefined
   if (recoveryMode.value === '2of3') {
-    try { guardian = JSON.parse(guardianContact.value) } catch { throw new Error('Guardian 联系信息不是有效 JSON') }
+    if (guardianContactError.value || !parsedGuardianContact.value) throw new Error(guardianContactError.value)
+    guardian = parsedGuardianContact.value
   }
   creation.value = await accountSDK.createRecovery({
     password: walletStore.password,
@@ -455,6 +499,12 @@ const rehearse = () => run(async () => {
 const generateGuardianIdentity = () => run(async () => {
   if (!walletStore.password) throw new Error('钱包尚未解锁')
   guardianIdentity.value = (await accountSDK.guardianIdentity(walletStore.password)).contact
+  guardianIdentityCopied.value = false
+})
+
+const copyGuardianIdentity = () => run(async () => {
+  await copyText(guardianIdentity.value)
+  guardianIdentityCopied.value = true
 })
 
 const acceptGuardianSetup = () => run(async () => {

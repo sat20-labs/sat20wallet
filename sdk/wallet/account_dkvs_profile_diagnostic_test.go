@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -8,8 +9,10 @@ import (
 	"errors"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
@@ -45,7 +48,11 @@ func TestDiagnosticAccountDKVSProfile(t *testing.T) {
 	for index := range encoded {
 		encoded[index] = 0
 	}
-	if snapshot.Origin != "http://localhost:5173" {
+	expectedOrigin := os.Getenv("SAT20_ACCOUNT_DIAG_ORIGIN")
+	if expectedOrigin == "" {
+		expectedOrigin = "http://localhost:5173"
+	}
+	if snapshot.Origin != expectedOrigin {
 		t.Fatalf("unexpected snapshot origin %q", snapshot.Origin)
 	}
 	if snapshot.PasswordHash == "" {
@@ -132,10 +139,13 @@ func TestDiagnosticAccountDKVSProfile(t *testing.T) {
 	var wrapperRecord *swire.DKVSRecord
 	var wrapperListErr error
 	var wrapperSecret []byte
+	var wrapperKey string
 	wrapperOpen := false
 	wrapperValidatesRemote := false
+	wrapperMatchesLocal := false
 	if rootWallet != nil {
-		wrapperKey, keyErr := accountRootWrapperKey(rootWallet)
+		var keyErr error
+		wrapperKey, keyErr = accountRootWrapperKey(rootWallet)
 		if keyErr != nil {
 			wrapperListErr = keyErr
 		} else {
@@ -145,6 +155,7 @@ func TestDiagnosticAccountDKVSProfile(t *testing.T) {
 				if openErr == nil {
 					wrapperOpen = true
 					wrapperSecret = payload.Secret
+					wrapperMatchesLocal = bytes.Equal(wrapperSecret, manager.accountSecret)
 				}
 			}
 		}
@@ -294,6 +305,13 @@ func TestDiagnosticAccountDKVSProfile(t *testing.T) {
 	t.Logf("root wrapper: exists=%t seq=%d issue_height=%d open=%t validates_remote=%t read_error=%t",
 		wrapperRecord != nil, diagnosticRecordSeq(wrapperRecord), diagnosticRecordHeight(wrapperRecord),
 		wrapperOpen, wrapperValidatesRemote, wrapperListErr != nil)
+	if os.Getenv("SAT20_ACCOUNT_DIAG_INSPECT_ROOT_WRAPPER_PATH") == "1" && wrapperKey != "" {
+		diagnosticLogPathSnapshot(t, client, wrapperKey, wrapperRecord)
+	}
+	if os.Getenv("SAT20_ACCOUNT_DIAG_REPAIR_ROOT_WRAPPER") == "1" {
+		repairAccountRootWrapperFromVerifiedSnapshot(t, client, manager, profile, rootWallet,
+			wrapperKey, wrapperRecord, wrapperOpen, wrapperMatchesLocal, decision)
+	}
 	for _, record := range recoveryRecords {
 		if record == nil {
 			continue
@@ -359,6 +377,297 @@ func TestDiagnosticAccountDKVSProfile(t *testing.T) {
 			entry.OriginGeneration, entry.KeyClasses, entry.RecordSeqs)
 	}
 	t.Logf("decision: %s future_terminal_count=%d namespace=%s", decision, len(terminals), namespace)
+}
+
+func repairAccountRootWrapperFromVerifiedSnapshot(t *testing.T, client *SatsNetDKVSClient,
+	manager *Manager, profile accountManagementProfile, rootWallet common.Wallet,
+	wrapperKey string, wrapperRecord *swire.DKVSRecord, wrapperOpen, wrapperMatchesLocal bool,
+	decision string) {
+
+	t.Helper()
+	if decision != "local-and-remote-valid" {
+		t.Fatalf("refusing root-wrapper repair: verified state/blob decision is %s", decision)
+	}
+	if rootWallet == nil || wrapperKey == "" {
+		t.Fatal("refusing root-wrapper repair: root wallet or wrapper key is unavailable")
+	}
+	if wrapperRecord != nil && !wrapperOpen {
+		t.Fatal("refusing root-wrapper repair: current remote wrapper cannot be opened")
+	}
+	if wrapperRecord != nil && wrapperMatchesLocal {
+		t.Log("root-wrapper repair not needed: remote wrapper already contains the local account secret")
+		return
+	}
+	if profile.StorageMode != AccountStoragePaid || profile.AutopayContract == "" {
+		t.Fatalf("refusing root-wrapper repair: storage mode %q has no AUTOPAY contract", profile.StorageMode)
+	}
+	autopay := DKVSAutopayOptions{
+		AddressParams: GetChainParam_SatsNet(),
+		PoolContract:  profile.AutopayContract,
+	}
+	opts := dkvsindexer.RecordOptions{TTL: profile.RecordTTL}
+	var deletedSeq uint64
+	if wrapperRecord != nil {
+		pathSnapshot, pathRecord, pathFloor := diagnosticLogPathSnapshot(t, client, wrapperKey, wrapperRecord)
+		var deleted *swire.DKVSRecord
+		var err error
+		if pathRecord == nil && pathFloor == 0 {
+			deleted, err = diagnosticTombstoneUnindexedAccountRecord(client, rootWallet, wrapperKey,
+				wrapperRecord, pathSnapshot, autopay)
+		} else {
+			deleted, err = retryDiagnosticDKVSWrite(func() (*swire.DKVSRecord, error) {
+				return diagnosticPutAccountRecordWithAutopayV1(client, rootWallet, wrapperKey, nil,
+					opts, autopay, true)
+			})
+		}
+		if err != nil {
+			t.Fatalf("tombstone conflicting root wrapper: %v", err)
+		}
+		if deleted == nil || !dkvsindexer.IsTombstone(deleted.Flags) ||
+			deleted.Seq <= wrapperRecord.Seq {
+			t.Fatalf("invalid root-wrapper tombstone: old_seq=%d new_seq=%d", wrapperRecord.Seq,
+				diagnosticRecordSeq(deleted))
+		}
+		deletedSeq = deleted.Seq
+	}
+
+	encoded, err := sealAccountRootWrapper(rootWallet, _chain, profile.AccountID,
+		rootWrapperPayload(profile, manager.accountSecret), nil)
+	if err != nil {
+		t.Fatalf("seal replacement root wrapper: %v", err)
+	}
+	var rewritten *swire.DKVSRecord
+	if wrapperRecord == nil {
+		resumeFloor, parseErr := strconv.ParseUint(strings.TrimSpace(
+			os.Getenv("SAT20_ACCOUNT_DIAG_RESUME_ROOT_WRAPPER_FLOOR")), 10, 64)
+		if parseErr != nil || resumeFloor == 0 || resumeFloor == ^uint64(0) {
+			t.Fatal("refusing root-wrapper rewrite resume without an explicit verified delete floor")
+		}
+		deletedSeq = resumeFloor
+		raw, rawErr := diagnosticRawPathSnapshot(client, wrapperKey)
+		if rawErr != nil || raw == nil || raw.PathMeta == nil {
+			t.Fatalf("read raw root-wrapper path for rewrite resume: %v", rawErr)
+		}
+		if validationErr := dkvsindexer.ValidatePathSnapshotForClient(raw,
+			dkvsindexer.RecordVerificationOptions{}); !errors.Is(validationErr, dkvsindexer.ErrPathDiverged) {
+			t.Fatalf("refusing rewrite resume from unexpected path state: %v", validationErr)
+		}
+		pathRecord, pathFloor, stateErr := directPathKeyState(raw, wrapperKey)
+		if stateErr != nil || pathRecord != nil || pathFloor != 0 {
+			t.Fatalf("refusing rewrite resume: wrapper unexpectedly visible in raw path record=%t floor=%d err=%v",
+				pathRecord != nil, pathFloor, stateErr)
+		}
+		rewritten, err = diagnosticRewriteFromHiddenDeleteFloor(client, rootWallet, wrapperKey,
+			encoded, opts, autopay, resumeFloor, raw)
+	} else {
+		rewritten, err = retryDiagnosticDKVSWrite(func() (*swire.DKVSRecord, error) {
+			return diagnosticPutAccountRecordWithAutopayV1(client, rootWallet, wrapperKey, encoded,
+				opts, autopay, false)
+		})
+	}
+	for index := range encoded {
+		encoded[index] = 0
+	}
+	if err != nil {
+		t.Fatalf("rewrite root wrapper from verified local profile: %v", err)
+	}
+	if rewritten == nil || dkvsindexer.IsTombstone(rewritten.Flags) || rewritten.Seq <= deletedSeq {
+		t.Fatalf("invalid rewritten root wrapper: tombstone_seq=%d rewrite_seq=%d",
+			deletedSeq, diagnosticRecordSeq(rewritten))
+	}
+	path, pathErr := dkvsindexer.CollectionPathForKey(wrapperKey)
+	if pathErr != nil {
+		t.Fatalf("derive rewritten root-wrapper path: %v", pathErr)
+	}
+	if _, syncErr := client.SyncPath(path, dkvsindexer.RecordVerificationOptions{}); syncErr != nil {
+		t.Fatalf("rewritten root-wrapper path remains invalid: %v", syncErr)
+	}
+	payload, err := openAccountRootWrapper(rootWallet, _chain, profile.AccountID, rewritten.Value)
+	if err != nil {
+		t.Fatalf("open rewritten root wrapper: %v", err)
+	}
+	defer zeroBytes(payload.Secret)
+	if !bytes.Equal(payload.Secret, manager.accountSecret) ||
+		!accountRootWrapperMetadataMatchesProfile(payload, profile) {
+		t.Fatal("rewritten root wrapper does not match the verified local account profile")
+	}
+
+	peerHost := strings.TrimSpace(os.Getenv("SAT20_ACCOUNT_DIAG_PEER_HOST"))
+	if peerHost != "" {
+		peer := NewSatsNetDKVSClient("https", peerHost, "satsnet/testnet", nil)
+		deadline := time.Now().Add(90 * time.Second)
+		for {
+			record, readErr := diagnosticExactRemoteRecord(peer, wrapperKey, wrapperKey)
+			if readErr == nil && record != nil && record.Seq == rewritten.Seq &&
+				dkvsindexer.RecordHash(record) == dkvsindexer.RecordHash(rewritten) {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("rewritten root wrapper did not synchronize to peer %s: %v", peerHost, readErr)
+			}
+			time.Sleep(time.Second)
+		}
+	}
+	t.Logf("root-wrapper repair: deleted_seq=%d rewritten_seq=%d peer=%s",
+		deletedSeq, rewritten.Seq, peerHost)
+}
+
+func diagnosticLogPathSnapshot(t *testing.T, client *SatsNetDKVSClient, key string,
+	listed *swire.DKVSRecord) (*dkvsindexer.PathSnapshot, *swire.DKVSRecord, uint64) {
+
+	t.Helper()
+	path, err := dkvsindexer.CollectionPathForKey(key)
+	if err != nil {
+		t.Fatalf("derive root-wrapper collection path: %v", err)
+	}
+	snapshot, err := client.SyncPath(path, dkvsindexer.RecordVerificationOptions{})
+	if err != nil {
+		diagnosticLogRawPathSnapshot(t, client, path)
+		t.Fatalf("read root-wrapper path snapshot: %v", err)
+	}
+	existing, floorSeq, err := directPathKeyState(snapshot, key)
+	if err != nil {
+		t.Fatalf("read root-wrapper key state: %v", err)
+	}
+	t.Logf("root-wrapper path: path=%s generation=%d view_height=%d root=%s listed_seq=%d listed_hash=%s snapshot_seq=%d snapshot_hash=%s floor_seq=%d records=%d floors=%d",
+		path, snapshot.PathMeta.Generation, snapshot.PathMeta.ViewHeight,
+		snapshot.PathMeta.StateRoot.String(), diagnosticRecordSeq(listed), diagnosticRecordHash(listed),
+		diagnosticRecordSeq(existing), diagnosticRecordHash(existing), floorSeq,
+		len(snapshot.Records), len(snapshot.DeleteFloors))
+	return snapshot, existing, floorSeq
+}
+
+func diagnosticLogRawPathSnapshot(t *testing.T, client *SatsNetDKVSClient, path string) {
+	t.Helper()
+	snapshot, err := diagnosticRawPathSnapshot(client, path)
+	if err != nil {
+		t.Logf("raw root-wrapper path unavailable: %v", err)
+		return
+	}
+	if snapshot == nil || snapshot.PathMeta == nil {
+		t.Log("raw root-wrapper path is empty")
+		return
+	}
+	t.Logf("raw root-wrapper path: generation=%d view_height=%d root=%s active=%d bytes=%d min_expiry=%d records=%d floors=%d validation=%v",
+		snapshot.PathMeta.Generation, snapshot.PathMeta.ViewHeight,
+		snapshot.PathMeta.StateRoot.String(), snapshot.PathMeta.ActiveRecords,
+		snapshot.PathMeta.ActiveTotalSize, snapshot.PathMeta.MinExpiryHeight,
+		len(snapshot.Records), len(snapshot.DeleteFloors),
+		dkvsindexer.ValidatePathSnapshotForClient(snapshot, dkvsindexer.RecordVerificationOptions{}))
+	for _, record := range snapshot.Records {
+		t.Logf("raw root-wrapper record: key=%s seq=%d hash=%s ttl=%d flags=%d",
+			record.Key, record.Seq, dkvsindexer.RecordHash(record).String(), record.TTL, record.Flags)
+	}
+	for _, floor := range snapshot.DeleteFloors {
+		t.Logf("raw root-wrapper floor: key=%s seq=%d generation=%d effective_hash=%s",
+			floor.Key, floor.FloorSeq, floor.PathGeneration, floor.EffectiveHash.String())
+	}
+}
+
+func diagnosticRawPathSnapshot(client *SatsNetDKVSClient, key string) (*dkvsindexer.PathSnapshot, error) {
+	path, err := dkvsindexer.CollectionPathForKey(key)
+	if err != nil {
+		return nil, err
+	}
+	var resp dkvsPathSyncClientResp
+	if err := client.postDKVSV1("/v3/dkvs/sync/path", DKVSPathSyncRequest{Path: path}, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Data == nil || resp.Data.Path != path || resp.Data.PathMeta == nil ||
+		resp.Data.PathMeta.Path != path {
+		return nil, dkvsindexer.ErrInvalidSnapshot
+	}
+	return resp.Data, nil
+}
+
+func diagnosticRewriteFromHiddenDeleteFloor(client *SatsNetDKVSClient, owner common.Wallet,
+	key string, value []byte, opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions,
+	floorSeq uint64, snapshot *dkvsindexer.PathSnapshot) (*swire.DKVSRecord, error) {
+
+	if snapshot == nil || snapshot.PathMeta == nil || floorSeq == ^uint64(0) {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	opts.Seq = floorSeq + 1
+	opts.IssueHeight = snapshot.PathMeta.ViewHeight
+	record, err := newDKVSAccountSignedRecordWithAutopay(owner, key, value, opts, autopay)
+	if err != nil {
+		return nil, err
+	}
+	result, err := client.PutRecordBatchCASV1([]dkvsindexer.CASMutation{{
+		Record: record, Precondition: dkvsindexer.WritePrecondition{ExpectAbsent: true},
+	}}, []dkvsindexer.PathWritePrecondition{{
+		Path: snapshot.PathMeta.Path, ExpectedRoot: snapshot.PathMeta.StateRoot,
+		ExpectedGeneration: snapshot.PathMeta.Generation,
+	}})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || len(result.Records) != 1 {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	return result.Records[0], nil
+}
+
+func diagnosticTombstoneUnindexedAccountRecord(client *SatsNetDKVSClient,
+	owner common.Wallet, key string, existing *swire.DKVSRecord, snapshot *dkvsindexer.PathSnapshot,
+	autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+
+	if existing == nil || existing.Seq == ^uint64(0) || snapshot == nil ||
+		snapshot.PathMeta == nil || snapshot.PathMeta.ViewHeight == 0 {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	opts := dkvsindexer.RecordOptions{
+		Seq: existing.Seq + 1, IssueHeight: snapshot.PathMeta.ViewHeight,
+		Flags: dkvsindexer.FlagTombstone,
+	}
+	record, err := newDKVSAccountSignedRecordWithAutopay(owner, key, nil, opts, autopay)
+	if err != nil {
+		return nil, err
+	}
+	expected := dkvsindexer.RecordHash(existing)
+	result, err := client.PutRecordBatchCASV1([]dkvsindexer.CASMutation{{
+		Record: record, Precondition: dkvsindexer.WritePrecondition{ExpectedHash: &expected},
+	}}, []dkvsindexer.PathWritePrecondition{{
+		Path: snapshot.PathMeta.Path, ExpectedRoot: snapshot.PathMeta.StateRoot,
+		ExpectedGeneration: snapshot.PathMeta.Generation,
+	}})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || len(result.Records) != 1 {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	return result.Records[0], nil
+}
+
+func diagnosticPutAccountRecordWithAutopayV1(client *SatsNetDKVSClient, owner common.Wallet,
+	key string, value []byte, opts dkvsindexer.RecordOptions, autopay DKVSAutopayOptions,
+	tombstone bool) (*swire.DKVSRecord, error) {
+
+	if tombstone {
+		opts.Flags |= dkvsindexer.FlagTombstone
+		value = nil
+	}
+	return client.putSignedPathRecordV1(key, opts,
+		func(prepared dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+			return newDKVSAccountSignedRecordWithAutopay(owner, key, value, prepared, autopay)
+		})
+}
+
+func retryDiagnosticDKVSWrite(write func() (*swire.DKVSRecord, error)) (*swire.DKVSRecord, error) {
+	var lastErr error
+	for attempt := 0; attempt < 10; attempt++ {
+		record, err := write()
+		if err == nil {
+			return record, nil
+		}
+		lastErr = err
+		if !IsDKVSErrorCode(err, dkvsindexer.ErrorCodeWriteConflict) {
+			return nil, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
+	}
+	return nil, lastErr
 }
 
 // TestDiagnosticGuardianPackageMatch checks whether an isolated PWA profile

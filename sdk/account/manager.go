@@ -35,86 +35,75 @@ func randomHex(random io.Reader, size int) (string, error) {
 	return hex.EncodeToString(value), nil
 }
 
-func (m *Manager) CreateRecoveryPackage(options CreateOptions) (*RecoveryPackage, error) {
-	result, secret, err := m.CreateRecoveryPackageWithSecret(options)
-	zero(secret)
-	return result, err
-}
-
-// CreateRecoveryPackageWithSecret is used by the wallet SDK activation flow.
-// The caller must keep the returned secret in protected memory and clear it.
-func (m *Manager) CreateRecoveryPackageWithSecret(options CreateOptions) (*RecoveryPackage, []byte, error) {
+// CreateRecoveryPackage derives a recovery package from the account's existing
+// AccountSecret. AccountSecret creation belongs to wallet account-management
+// initialization; recovery package setup must never create or replace it.
+func (m *Manager) CreateRecoveryPackage(options CreateOptions, accountSecret []byte) (*RecoveryPackage, error) {
 	if m == nil {
-		return nil, nil, ErrInvalidRecoveryPackage
+		return nil, ErrInvalidRecoveryPackage
 	}
 	if !validHex(options.AccountID, 64) {
-		return nil, nil, ErrInvalidAccountID
+		return nil, ErrInvalidAccountID
+	}
+	if len(accountSecret) != accountSecretSize {
+		return nil, fmt.Errorf("account secret must be %d bytes", accountSecretSize)
 	}
 	backup, err := NormalizeBackup(options.Backup)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if options.RecoveryMode != RecoveryMode2Of2 && options.RecoveryMode != RecoveryMode2Of3 {
-		return nil, nil, ErrInvalidRecoveryPackage
+		return nil, ErrInvalidRecoveryPackage
 	}
 	if len(options.Questions) != knowledgeQuestionCount {
-		return nil, nil, fmt.Errorf("three knowledge questions are required")
+		return nil, fmt.Errorf("three knowledge questions are required")
 	}
 	if options.RecoveryMode == RecoveryMode2Of3 && (len(options.GuardianPublicKey) != 32 || !validHex(options.GuardianMailboxID, 64)) {
-		return nil, nil, fmt.Errorf("guardian mailbox and X25519 public key are required")
+		return nil, fmt.Errorf("guardian mailbox and X25519 public key are required")
 	}
 	packageID, err := randomHex(m.random, 16)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	locator := Locator{Version: Version, AccountID: options.AccountID, PackageID: packageID, RecoveryMode: options.RecoveryMode}
-	secret := make([]byte, accountSecretSize)
-	if _, err := io.ReadFull(m.random, secret); err != nil {
-		return nil, nil, err
-	}
+	secret := append([]byte(nil), accountSecret...)
+	defer zero(secret)
 	shares, err := splitSecret(secret, packageID, options.RecoveryMode, m.random)
 	if err != nil {
-		zero(secret)
-		return nil, nil, err
+		return nil, err
 	}
 	encrypted, err := encryptBackup(secret, locator, backup, m.random)
 	if err != nil {
-		zero(secret)
-		return nil, nil, err
+		return nil, err
 	}
 	envelope := Envelope{Version: Version, Locator: locator, EncryptedBackup: encrypted}
 	dkvsCapsule, knowledge, err := createKnowledgeRecovery(packageID, shares[1], options.Questions, m.random)
 	if err != nil {
-		zero(secret)
-		return nil, nil, err
+		return nil, err
 	}
 	envelopeHash, err := HashEnvelope(envelope)
 	if err != nil {
-		zero(secret)
-		return nil, nil, err
+		return nil, err
 	}
 	manifest := Manifest{Version: Version, Locator: locator, Threshold: 2, Total: uint8(len(shares)), EnvelopeHash: envelopeHash, CreatedAt: m.now().UnixMilli()}
 	result := &RecoveryPackage{Envelope: envelope, Manifest: manifest, UserShare: shares[0], DKVSShareCapsule: dkvsCapsule, KnowledgeBundle: knowledge}
 	if options.RecoveryMode == RecoveryMode2Of3 {
 		capsule, err := EncryptGuardianShare(shares[2], options.GuardianPublicKey, m.random)
 		if err != nil {
-			zero(secret)
-			return nil, nil, err
+			return nil, err
 		}
 		hash, err := HashGuardianCapsule(capsule)
 		if err != nil {
-			zero(secret)
-			return nil, nil, err
+			return nil, err
 		}
 		manifest.Guardian = &GuardianReference{MailboxID: options.GuardianMailboxID, ShareID: capsule.ShareID, CapsuleHash: hash}
 		result.Manifest = manifest
 		result.GuardianCapsule = &capsule
 	}
 	if err := ValidateRecoveryPackage(*result); err != nil {
-		zero(secret)
-		return nil, nil, err
+		return nil, err
 	}
-	return result, secret, nil
+	return result, nil
 }
 
 func ValidateRecoveryPackage(value RecoveryPackage) error {

@@ -7,6 +7,7 @@ import { useChannelStore } from './channel'
 import { ref, computed, toRaw } from 'vue'
 import { sendNetworkChangedEvent, sendAccountsChangedEvent } from '@/lib/utils'
 import { getConfig, logLevel } from '@/config/wasm'
+import { awaitAccountChannelRefresh } from '@/lib/accountSwitchChannel'
 
 
 export const useWalletStore = defineStore('wallet', () => {
@@ -30,6 +31,7 @@ export const useWalletStore = defineStore('wallet', () => {
   // 添加全局切换状态管理
   const isSwitchingWallet = ref(false)
   const isSwitchingAccount = ref(false)
+  const isSwitchingNetwork = ref(false)
 
   // 监听 walletStorage 状态变化，同步到 walletStore
   walletStorage.subscribe((key, newValue, oldValue) => {
@@ -117,6 +119,24 @@ export const useWalletStore = defineStore('wallet', () => {
       pubKey: pubkeyRes.pubKey,
     }
   }
+
+  const readWalletCatalog = async (): Promise<WalletData[]> => {
+    const [err, result] = await walletManager.getWalletCatalog()
+    if (err || !result) {
+      throw err || new Error('Failed to load wallet catalog')
+    }
+    return result.wallets.map(item => ({
+      id: String(item.id),
+      name: item.name,
+      accounts: item.accounts.map(account => ({
+        index: account.index,
+        name: account.name,
+        did: account.did,
+        address: account.address,
+        pubKey: account.pub_key,
+      })),
+    }))
+  }
   const setBtcFeeRate = async (value: number) => {
     btcFeeRate.value = value
   }
@@ -131,87 +151,126 @@ export const useWalletStore = defineStore('wallet', () => {
 
   const setNetwork = async (value: Network) => {
     if (value === network.value) return true
+    if (isSwitchingNetwork.value) return false
+    isSwitchingNetwork.value = true
     const env = walletStorage.getValue('env') || 'test'
     const previousNetwork = network.value
     const previousConfig = getConfig(env, previousNetwork)
     const targetConfig = getConfig(env, value)
+    const previousWalletId = walletId.value
+    const previousAccountIndex = Number(accountIndex.value ?? 0)
+    const previousRecovery = accountRecovery.value
+      ? structuredClone(accountRecovery.value)
+      : null
+    let managerTransitioned = false
 
     const restorePreviousManager = async () => {
-      await walletManager.release()
+      const [restoreReleaseErr] = await walletManager.release()
+      if (restoreReleaseErr && !/not initialized/i.test(restoreReleaseErr.message || '')) {
+        throw restoreReleaseErr
+      }
       const [restoreInitErr] = await walletManager.init(previousConfig, logLevel)
       if (restoreInitErr) throw restoreInitErr
       const [restoreUnlockErr] = await walletManager.unlockWallet(password.value as string)
       if (restoreUnlockErr) throw restoreUnlockErr
-      if (walletId.value) {
+      if (previousWalletId) {
         const [restoreWalletErr] = await walletManager.switchWallet(
-          walletId.value,
+          previousWalletId,
           password.value as string,
         )
         if (restoreWalletErr) throw restoreWalletErr
       }
-      const [restoreAccountErr] = await walletManager.switchAccount(
-        Number(accountIndex.value ?? 0),
-      )
+      const [restoreAccountErr] = await walletManager.switchAccount(previousAccountIndex)
       if (restoreAccountErr) throw restoreAccountErr
+      channelStore.invalidateCurrentChannel()
+      refreshCurrentChannelInBackground('network switch rollback')
     }
 
-    channelStore.invalidateCurrentChannel()
-    const [releaseErr] = await walletManager.release()
-    if (releaseErr) throw releaseErr
-
-    const [initErr] = await walletManager.init(targetConfig, logLevel)
-    if (initErr) {
-      await restorePreviousManager()
-      throw initErr
-    }
-    const [unlockErr] = await walletManager.unlockWallet(password.value as string)
-    if (unlockErr) {
-      await restorePreviousManager()
-      throw unlockErr
-    }
-
-    if (walletId.value) {
-      const [selectWalletErr] = await walletManager.switchWallet(
-        walletId.value,
-        password.value as string,
-      )
-      if (selectWalletErr) {
-        await restorePreviousManager()
-        throw selectWalletErr
-      }
-    }
-    const [selectAccountErr] = await walletManager.switchAccount(
-      Number(accountIndex.value ?? 0),
-    )
-    if (selectAccountErr) {
-      await restorePreviousManager()
-      throw selectAccountErr
-    }
-    let identity
     try {
-      identity = await readWalletIdentity(Number(accountIndex.value ?? 0))
+      channelStore.invalidateCurrentChannel()
+      const [releaseErr] = await walletManager.release()
+      if (releaseErr) throw releaseErr
+      managerTransitioned = true
+
+      const [initErr] = await walletManager.init(targetConfig, logLevel)
+      if (initErr) throw initErr
+      const [unlockErr] = await walletManager.unlockWallet(password.value as string)
+      if (unlockErr) throw unlockErr
+
+      if (previousWalletId) {
+        const [selectWalletErr] = await walletManager.switchWallet(
+          previousWalletId,
+          password.value as string,
+        )
+        if (selectWalletErr) throw selectWalletErr
+      }
+      const [selectAccountErr] = await walletManager.switchAccount(previousAccountIndex)
+      if (selectAccountErr) throw selectAccountErr
+
+      let targetWalletId = previousWalletId
+      let targetAccountIndex = previousAccountIndex
+      let targetRecovery = previousRecovery
+      let targetCatalog: WalletData[] | undefined
+      const shouldRetryAccountRecovery = !!previousRecovery?.rootWalletId &&
+        previousRecovery.rootWalletId === previousWalletId &&
+        (previousRecovery.env !== env || previousRecovery.network !== value || previousRecovery.status === 'pending')
+      if (shouldRetryAccountRecovery) {
+        const [recoveryErr, recovery] = await walletManager.recoverAccountManagementFromCurrentWallet(
+          password.value as string,
+        )
+        if (recoveryErr || !recovery) {
+          throw recoveryErr || new Error('Root account discovery failed after network switch')
+        }
+        const recoveredWalletId = recovery.walletId || previousWalletId
+        targetRecovery = {
+          status: recovery.status,
+          code: recovery.code,
+          env,
+          network: value,
+          rootWalletId: recoveredWalletId,
+        }
+        if (recovery.status === 'found') {
+          targetWalletId = recoveredWalletId
+          targetAccountIndex = 0
+          targetCatalog = await readWalletCatalog()
+        }
+      }
+
+      const identity = await readWalletIdentity(targetAccountIndex)
       await walletStorage.batchUpdate({
         network: value,
+        walletId: targetWalletId,
+        accountIndex: targetAccountIndex,
         address: identity.address,
         pubkey: identity.pubKey,
+        accountRecovery: targetRecovery,
+        ...(targetCatalog
+          ? { wallets: toRaw(targetCatalog), hasWallet: targetCatalog.length > 0 }
+          : {}),
       })
-    } catch (identityError) {
-      await restorePreviousManager()
-      throw identityError
-    }
-    network.value = value
-    address.value = identity.address
-    publicKey.value = identity.pubKey
+      accountRecovery.value = targetRecovery
 
-    refreshCurrentChannelInBackground('network switch')
+      refreshCurrentChannelInBackground('network switch')
 
-    try {
-      console.log(`Sending NETWORK_CHANGED message with payload: ${value}`)
-      await sendNetworkChangedEvent(value)
+      try {
+        console.log(`Sending NETWORK_CHANGED message with payload: ${value}`)
+        await sendNetworkChangedEvent(value)
+      } catch (error) {
+        console.error('Failed to send NETWORK_CHANGED message to background:', error)
+      }
+      return true
     } catch (error) {
-      console.error('Failed to send NETWORK_CHANGED message to background:', error)
+      if (managerTransitioned) {
+        try {
+          await restorePreviousManager()
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], 'Network switch and rollback both failed')
+        }
+      }
+      throw error
+    } finally {
+      isSwitchingNetwork.value = false
     }
-    return true;
   }
 
   const setChain = async (value: Chain) => {
@@ -239,21 +298,7 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const syncWalletCatalog = async () => {
-    const [err, result] = await walletManager.getWalletCatalog()
-    if (err || !result) {
-      throw err || new Error('Failed to load wallet catalog')
-    }
-    const catalog: WalletData[] = result.wallets.map(item => ({
-      id: String(item.id),
-      name: item.name,
-      accounts: item.accounts.map(account => ({
-        index: account.index,
-        name: account.name,
-        did: account.did,
-        address: account.address,
-        pubKey: account.pub_key,
-      })),
-    }))
+    const catalog = await readWalletCatalog()
     wallets.value = catalog
     await walletStorage.setValue('wallets', toRaw(catalog))
     await setHasWallet(catalog.length > 0)
@@ -410,7 +455,14 @@ export const useWalletStore = defineStore('wallet', () => {
       if (recoveryErr || !recovery) {
         return [recoveryErr || new Error('Root account discovery failed'), undefined]
       }
-      accountRecovery.value = { status: recovery.status, code: recovery.code }
+      const env = walletStorage.getValue('env') || 'test'
+      accountRecovery.value = {
+        status: recovery.status,
+        code: recovery.code,
+        env,
+        network: network.value,
+        rootWalletId: recovery.walletId,
+      }
       await walletStorage.setValue('accountRecovery', accountRecovery.value)
       if (recovery.status === 'found') {
         if (!recovery.walletId) {
@@ -430,6 +482,13 @@ export const useWalletStore = defineStore('wallet', () => {
       return [err, undefined]
     }
     const { walletId } = res
+    if (accountRecovery.value &&
+      accountRecovery.value.env === (walletStorage.getValue('env') || 'test') &&
+      accountRecovery.value.network === network.value &&
+      !accountRecovery.value.rootWalletId) {
+      accountRecovery.value = { ...accountRecovery.value, rootWalletId: walletId }
+      await walletStorage.setValue('accountRecovery', accountRecovery.value)
+    }
     await setWalletId(walletId)
     await setAccountIndex(0)
     await setHasWallet(true)
@@ -608,7 +667,13 @@ export const useWalletStore = defineStore('wallet', () => {
       address.value = identity.address
       publicKey.value = identity.pubKey
 
-      refreshCurrentChannelInBackground('account switch')
+      // The SDK lookup is local, but waiting here keeps the account identity
+      // and channel view on the same request generation. Failure is contained
+      // because the account switch has already succeeded and must not roll back.
+      await awaitAccountChannelRefresh(
+        () => channelStore.getCurrentChannel(),
+        (channelError) => console.warn('Channel refresh failed during account switch:', channelError),
+      )
 
       console.log('Account switch completed successfully')
     } catch (error) {
@@ -757,5 +822,6 @@ export const useWalletStore = defineStore('wallet', () => {
     getFeeRate,
     isSwitchingWallet,
     isSwitchingAccount,
+    isSwitchingNetwork,
   }
 })

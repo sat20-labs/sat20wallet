@@ -131,7 +131,9 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 	p.AddResv(resv)
 	p.DisableChannel(channel)
 	channel.Status = CS_CLOSE_FORCELY_BROADCASTED
+	channel.UpdateTime = resv.Id
 	channel.ClosingTx = commitTx
+	resv.Status = ResvStatus(channel.Status)
 	if err := p.SaveWalletReservation(resv); err != nil {
 		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		return "", "", err
@@ -219,6 +221,7 @@ func (p *Manager) HandleChannelForceCloseConfirmed(resv *ClosingReservation) err
 	if err := p.SaveChannelToDB(resv.Channel); err != nil {
 		return err
 	}
+	resv.Status = ResvStatus(resv.Channel.Status)
 
 	height, err := p.GetIndexerRPCClient().GetTxHeight(resv.Channel.ClosingTx.TxID())
 	if err != nil {
@@ -229,7 +232,7 @@ func (p *Manager) HandleChannelForceCloseConfirmed(resv *ClosingReservation) err
 		Status:  OperationLogRunning,
 		Message: "Commitment confirmed; waiting for CSV delay before sweep",
 		Details: map[string]string{
-			"commit_txid": resv.Channel.ClosingTx.TxID(),
+			"commit_txid":  resv.Channel.ClosingTx.TxID(),
 			"close_height": strconv.Itoa(height),
 			"csv_delay":    strconv.Itoa(int(resv.Channel.CsvDelay)),
 		},
@@ -275,13 +278,17 @@ func (p *Manager) HandleChannelForceCloseWaitToSweep(resv *ClosingReservation, h
 
 	resv.Channel.ClosingTx = sweepTxPackage.SweepTx
 	resv.Channel.Status = CS_CLOSE_FORCELY_SWEEP_BROADCASTED
+	resv.Status = ResvStatus(resv.Channel.Status)
 	p.updateOperationLogByReservationBestEffort(RESV_TYPE_CLOSE, resv.Id, OperationLogUpdate{
 		Status:  OperationLogRunning,
 		Message: "CSV delay passed; sweep transaction broadcast",
 		TxID:    sweepTxPackage.SweepTx.TxID(),
 		Details: map[string]string{"sweep_txid": sweepTxPackage.SweepTx.TxID()},
 	})
-	return p.SaveChannelToDB(resv.Channel)
+	if err := p.SaveChannelToDB(resv.Channel); err != nil {
+		return err
+	}
+	return p.SaveWalletReservation(resv)
 }
 
 func (p *Manager) HandleChannelForceCloseSweepConfirmed(resv *ClosingReservation) error {
@@ -291,10 +298,16 @@ func (p *Manager) HandleChannelForceCloseSweepConfirmed(resv *ClosingReservation
 
 	Log.Warnf("channel %s forcely close sweep confirmed", resv.Channel.ChannelId)
 	channel := resv.Channel
-	p.DelResvWithId(resv.Id)
-
+	if channel.UpdateTime != 0 && channel.UpdateTime != resv.Id {
+		return fmt.Errorf("stale force-close reservation %d for channel generation %d", resv.Id, channel.UpdateTime)
+	}
 	channel.Status = CS_CLOSED_FORCELY
+	channel.ResvId = 0
 	if err := p.SaveChannelToDB(channel); err != nil {
+		return err
+	}
+	resv.Status = RS_CLOSED
+	if err := p.SaveWalletReservation(resv); err != nil {
 		return err
 	}
 	p.SendMessageToUpper(MSG_CHANNEL_SWEPT, channel.ClosingTx.TxID())
@@ -307,5 +320,6 @@ func (p *Manager) HandleChannelForceCloseSweepConfirmed(resv *ClosingReservation
 			"txid":       channel.ClosingTx.TxID(),
 		},
 	})
+	p.DelResvWithId(resv.Id)
 	return nil
 }

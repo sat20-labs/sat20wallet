@@ -53,12 +53,14 @@ func (p *Manager) startActionMonitor() {
 	}
 
 	stop := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
 	p.actionMonitorStop = stop
+	p.actionMonitorCancel = cancel
 	p.actionMonitorRunning = true
 
 	p.actionMonitorWG.Add(2)
-	go p.actionMonitorThread(stop, true)
-	go p.actionMonitorThread(stop, false)
+	go p.actionMonitorThread(ctx, stop, true)
+	go p.actionMonitorThread(ctx, stop, false)
 }
 
 func (p *Manager) stopActionMonitor() {
@@ -69,21 +71,27 @@ func (p *Manager) stopActionMonitor() {
 	}
 
 	stop := p.actionMonitorStop
+	cancel := p.actionMonitorCancel
 	p.actionMonitorRunning = false
 	p.actionMonitorStop = nil
+	p.actionMonitorCancel = nil
+	cancel()
 	close(stop)
 	p.actionMonitorLock.Unlock()
 
 	p.actionMonitorWG.Wait()
 }
 
-func (p *Manager) actionMonitorThread(stop <-chan struct{}, sendTxInL1 bool) {
+func (p *Manager) actionMonitorThread(ctx context.Context, stop <-chan struct{}, sendTxInL1 bool) {
 	defer p.actionMonitorWG.Done()
 
 	ticker := time.NewTicker(actionMonitorInterval(sendTxInL1))
 	defer ticker.Stop()
 
 	tick := func() {
+		if ctx.Err() != nil {
+			return
+		}
 		unlock, ok := p.tryLockActionMonitorTick(sendTxInL1)
 		if !ok {
 			return
@@ -91,13 +99,25 @@ func (p *Manager) actionMonitorThread(stop <-chan struct{}, sendTxInL1 bool) {
 		defer unlock()
 
 		if sendTxInL1 {
-			if err := p.handleRGB11L1MonitorTick(context.Background()); err != nil {
+			if err := p.handleRGB11L1MonitorTick(ctx); err != nil && ctx.Err() == nil {
 				Log.Warningf("RGB11 L1 monitor tick failed: %v", err)
+			}
+			if ctx.Err() != nil {
+				return
 			}
 			p.HandleChannelSafetyStatus()
 		}
+		if ctx.Err() != nil {
+			return
+		}
 		p.HandleChannelReservationStatus(sendTxInL1)
+		if ctx.Err() != nil {
+			return
+		}
 		p.HandleRemoteActionStatus(sendTxInL1)
+		if ctx.Err() != nil {
+			return
+		}
 		p.HandleLocalActionStatus(sendTxInL1)
 		p.handleBTCLuckyMonitorTick(sendTxInL1)
 		p.notifyMonitorTick(sendTxInL1)
@@ -105,6 +125,8 @@ func (p *Manager) actionMonitorThread(stop <-chan struct{}, sendTxInL1 bool) {
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-stop:
 			return
 		case <-ticker.C:

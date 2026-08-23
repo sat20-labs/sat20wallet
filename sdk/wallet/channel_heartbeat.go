@@ -183,8 +183,12 @@ func (p *Manager) runChannelHeartbeatTick(contexts ...context.Context) {
 			channel.CommitHeight, result.CommitHeight)
 		return
 	}
-	if len(p.GetClosingReservations()) != 0 {
-		Log.Warningf("channel heartbeat skipped sync while a channel is closing")
+	if p.hasPendingClosingReservation(channelID, localWallet.GetWalletId()) {
+		Log.Warningf("channel heartbeat skipped sync while the current channel is closing")
+		return
+	}
+	if p.hasPendingFundingReservation(channelID, localWallet.GetWalletId()) {
+		Log.Warningf("channel heartbeat skipped sync while channel funding is pending")
 		return
 	}
 

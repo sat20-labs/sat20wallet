@@ -649,29 +649,37 @@ func (p *Manager) saveSecret(secret, password string, ty int, w common.Wallet) e
 }
 
 func (p *Manager) saveWalletSecretWithPassword(mn, password string, wallet *WalletInDB) error {
+	updated, err := p.encryptWalletSecretWithPassword(mn, password, wallet)
+	if err != nil {
+		return err
+	}
+	if err := saveWallet(p.db, updated); err != nil {
+		return err
+	}
+	*wallet = *updated
+	return nil
+}
+
+func (p *Manager) encryptWalletSecretWithPassword(mn, password string, wallet *WalletInDB) (*WalletInDB, error) {
+	if wallet == nil {
+		return nil, fmt.Errorf("wallet is unavailable")
+	}
 	key, err := p.newSnaclKey(password)
 	if err != nil {
 		Log.Errorf("NewSecretKey failed. %v", err)
-		return err
+		return nil, err
 	}
 
 	en, err := key.Encrypt([]byte(mn))
 	if err != nil {
 		Log.Errorf("Encrypt failed. %v", err)
-		return err
+		return nil, err
 	}
 
-	salt := key.Marshal()
-
-	wallet.Mnemonic = en
-	wallet.Salt = salt
-
-	err = saveWallet(p.db, wallet)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	updated := *wallet
+	updated.Mnemonic = en
+	updated.Salt = key.Marshal()
+	return &updated, nil
 }
 
 func (p *Manager) loadWalletSecret(w *WalletInfo, password string) (string, error) {
@@ -1061,7 +1069,7 @@ func (p *Manager) rehydratePendingFundingRuntime() {
 		channel := channelCache[replacement.ChannelId]
 		if channel == nil {
 			var err error
-			channel, err = p.loadPendingFundingChannel(replacement.ChannelId)
+			channel, err = p.loadPendingFundingChannel(replacement.ChannelId, replacement.Id, replacement.WalletId)
 			if err != nil {
 				Log.Warnf("restore funding reservation %d channel failed. %v", id, err)
 				continue
@@ -1078,7 +1086,83 @@ func (p *Manager) rehydratePendingFundingRuntime() {
 	}
 }
 
-func (p *Manager) loadPendingFundingChannel(channelID string) (*Channel, error) {
+func (p *Manager) rehydratePendingClosingRuntime() {
+	p.mutex.RLock()
+	reservations := make(map[int64]*ClosingReservation, len(p.closingChannelMap))
+	for id, resv := range p.closingChannelMap {
+		reservations[id] = resv
+	}
+	p.mutex.RUnlock()
+
+	for id, original := range reservations {
+		loaded, err := LoadReservation(p.db, p, RESV_TYPE_CLOSE, id)
+		if err != nil {
+			Log.Warnf("reload closing reservation %d failed. %v", id, err)
+			continue
+		}
+		replacement, ok := loaded.(*ClosingReservation)
+		if !ok || replacement == nil {
+			Log.Warnf("reload closing reservation %d returned %T", id, loaded)
+			continue
+		}
+		if replacement.WalletId.Id != 0 && replacement.LocalWallet() == nil {
+			Log.Warnf("restore closing reservation %d local wallet %d is unavailable", id, replacement.WalletId.Id)
+			continue
+		}
+		channel, terminal, err := p.loadPendingClosingChannel(replacement.ChannelId, replacement.Id, replacement.WalletId)
+		if err != nil {
+			Log.Warnf("restore closing reservation %d channel failed. %v", id, err)
+			continue
+		}
+		if terminal {
+			replacement.Status = RS_CLOSED
+			if err := p.SaveWalletReservation(replacement); err != nil {
+				Log.Warnf("close terminal reservation %d after restart failed. %v", id, err)
+				continue
+			}
+			p.DelResvWithId(id)
+			continue
+		}
+		replacement.Channel = channel
+
+		p.mutex.Lock()
+		if current, ok := p.closingChannelMap[id]; ok && current == original {
+			p.addResvLocked(replacement)
+		}
+		p.mutex.Unlock()
+	}
+}
+
+func (p *Manager) loadPendingClosingChannel(channelID string, reservationID int64, walletID common.WalletId) (*Channel, bool, error) {
+	if channelID == "" {
+		return nil, false, fmt.Errorf("closing reservation has empty channel id")
+	}
+	stored, err := p.LoadChannelInDB(channelID)
+	if err != nil {
+		return nil, false, fmt.Errorf("load channel %s: %w", channelID, err)
+	}
+	if stored.ChannelId != channelID {
+		return nil, false, fmt.Errorf("channel key %s contains channel %s", channelID, stored.ChannelId)
+	}
+	if stored.UpdateTime != 0 && stored.UpdateTime != reservationID {
+		return nil, false, fmt.Errorf("channel %s closing generation %d does not match reservation %d",
+			channelID, stored.UpdateTime, reservationID)
+	}
+	if walletID.Id != 0 && stored.LocalWalletId != 0 && stored.LocalWalletId != walletID.Id {
+		return nil, false, fmt.Errorf("channel %s local wallet %d does not match reservation wallet %d",
+			channelID, stored.LocalWalletId, walletID.Id)
+	}
+	if stored.Status == CS_CLOSED || stored.Status == CS_CLOSED_FORCELY {
+		return nil, true, nil
+	}
+	if stored.Status != CS_ANCHOR_CONFIRMED &&
+		(stored.Status < CS_CLOSING_STARTED || stored.Status > CS_CLOSE_FORCELY_SWEEP_CONFIRMED) {
+		return nil, false, fmt.Errorf("channel %s status %d is not a restart-safe closing state", channelID, stored.Status)
+	}
+	return NewChannel(stored, p), false, nil
+}
+
+func (p *Manager) loadPendingFundingChannel(channelID string, reservationID int64, walletID common.WalletId) (*Channel, error) {
 	if channelID == "" {
 		return nil, fmt.Errorf("funding reservation has empty channel id")
 	}
@@ -1089,6 +1173,17 @@ func (p *Manager) loadPendingFundingChannel(channelID string) (*Channel, error) 
 	if !((stored.Status >= CS_FUNDING_BROADCASTED && stored.Status <= CS_ANCHOR_CONFIRMED) ||
 		stored.Status == CS_READY) {
 		return nil, fmt.Errorf("channel %s status %d is not a restart-safe funding state", channelID, stored.Status)
+	}
+	if stored.ChannelId != channelID {
+		return nil, fmt.Errorf("channel key %s contains channel %s", channelID, stored.ChannelId)
+	}
+	if stored.FundingTime != reservationID {
+		return nil, fmt.Errorf("channel %s funding generation %d does not match reservation %d",
+			channelID, stored.FundingTime, reservationID)
+	}
+	if walletID.Id != 0 && stored.LocalWalletId != 0 && stored.LocalWalletId != walletID.Id {
+		return nil, fmt.Errorf("channel %s local wallet %d does not match reservation wallet %d",
+			channelID, stored.LocalWalletId, walletID.Id)
 	}
 	if stored.LocalWalletId != 0 {
 		if p.FindWalletById(stored.LocalWalletId) == nil {

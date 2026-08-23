@@ -1,5 +1,11 @@
 package wallet
 
+import (
+	"fmt"
+
+	"github.com/sat20-labs/sat20wallet/sdk/common"
+)
+
 func (p *Manager) enableChannel(channel *Channel) {
 	p.EnableChannel(channel)
 }
@@ -140,6 +146,107 @@ func (p *Manager) GetCurrentChannel() *Channel {
 		if c != nil && c.ChannelId == channelId && c.Channel != nil {
 			return c.Channel
 		}
+	}
+	for _, c := range p.GetClosingReservations() {
+		if c != nil && c.ChannelId == channelId && c.Channel != nil {
+			return c.Channel
+		}
+	}
+	return nil
+}
+
+func reservationMatchesChannelContext(resv Reservation, channelID string, walletID common.WalletId) bool {
+	if resv == nil || resv.GetStatus() <= RS_CLOSED || resv.GetStatus() == RS_CONFIRMED {
+		return false
+	}
+	resvWalletID := resv.GetWalletId()
+	if resvWalletID.Id != 0 && resvWalletID != walletID {
+		return false
+	}
+	switch value := resv.(type) {
+	case *FundingReservation:
+		return value.ChannelId == channelID
+	case *ClosingReservation:
+		return value.ChannelId == channelID
+	case *PaymentReservation:
+		return value.ChannelId == channelID
+	case *SplicingReservation:
+		return value.ChannelId == channelID
+	default:
+		return false
+	}
+}
+
+func (p *Manager) hasPendingFundingReservation(channelID string, walletID common.WalletId) bool {
+	for _, resv := range p.GetFundingReservations() {
+		if reservationMatchesChannelContext(resv, channelID, walletID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Manager) hasPendingClosingReservation(channelID string, walletID common.WalletId) bool {
+	for _, resv := range p.GetClosingReservations() {
+		if reservationMatchesChannelContext(resv, channelID, walletID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Manager) hasPendingPaymentReservation(channelID string, walletID common.WalletId) bool {
+	for _, resv := range p.GetPaymentReservations() {
+		if reservationMatchesChannelContext(resv, channelID, walletID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Manager) hasPendingSplicingReservation(channelID string, walletID common.WalletId) bool {
+	for _, resv := range p.GetSplicingReservations() {
+		if reservationMatchesChannelContext(resv, channelID, walletID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Manager) hasPendingLockWithExpand(channelID string) bool {
+	for _, reservation := range p.GetLocalActionReservations() {
+		resv, ok := reservation.(*LocalActionPerformData)
+		if !ok || resv == nil || resv.Status <= RS_CLOSED || resv.Status == RS_PERFORM_ACTION_COMPLETED ||
+			resv.Action != LOCAL_ACTION_LOCK_WITH_EXPAND || !p.localActionBelongsToCurrentWallet(resv) {
+			continue
+		}
+		param, ok := resv.ActionParam.(*LocalActionParam_Expand)
+		if ok && param != nil && param.ChannelId == channelID {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Manager) rejectUnfinishedChannelLifecycle(channelID string) error {
+	if p.wallet == nil {
+		return fmt.Errorf("wallet is not created/unlocked")
+	}
+	walletID := p.wallet.GetWalletId()
+	if p.hasPendingFundingReservation(channelID, walletID) {
+		return fmt.Errorf("channel open is already in progress")
+	}
+	if p.hasPendingClosingReservation(channelID, walletID) {
+		return fmt.Errorf("channel close is already in progress")
+	}
+	if p.hasPendingPaymentReservation(channelID, walletID) {
+		return fmt.Errorf("channel payment is already in progress")
+	}
+	if p.hasPendingSplicingReservation(channelID, walletID) {
+		return fmt.Errorf("channel splicing is already in progress")
+	}
+	if p.hasPendingLockWithExpand(channelID) {
+		return fmt.Errorf("channel lock-with-expand is already in progress")
 	}
 	return nil
 }

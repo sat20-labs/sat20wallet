@@ -21,6 +21,7 @@ export interface BiometricResult {
 }
 
 type WebAuthnCapabilities = Record<string, boolean | undefined>
+export type BiometricAvailability = 'available' | 'unavailable' | 'inconclusive'
 
 const WEBAUTHN_TIMEOUT_MS = 15000
 const INSECURE_WEBAUTHN_ERROR = '生物识别需要没有证书错误的安全 HTTPS 环境。请使用有效证书的 HTTPS 地址，或在本地测试时使用 Chrome 已信任的安全 origin。'
@@ -125,6 +126,7 @@ export class BiometricService {
   public async checkBiometricSupport(): Promise<{
     supported: boolean
     available: boolean
+    availability: BiometricAvailability
     biometryType?: string
     capabilities?: WebAuthnCapabilities
     error?: string
@@ -135,6 +137,7 @@ export class BiometricService {
         return {
           supported: false,
           available: false,
+          availability: 'unavailable',
           error: originError
         }
       }
@@ -143,6 +146,7 @@ export class BiometricService {
         return {
           supported: false,
           available: false,
+          availability: 'unavailable',
           error: 'WebAuthn is not supported in this browser'
         }
       }
@@ -156,6 +160,7 @@ export class BiometricService {
         return {
           supported: true,
           available: false,
+          availability: 'inconclusive',
           capabilities,
           error: 'Platform authenticator availability check is not supported'
         }
@@ -178,6 +183,7 @@ export class BiometricService {
       return {
         supported: true,
         available: effectiveAvailable,
+        availability: effectiveAvailable ? 'available' : 'unavailable',
         biometryType: 'platform',
         capabilities,
         error: effectiveAvailable ? undefined : 'No platform authenticator is available'
@@ -186,6 +192,7 @@ export class BiometricService {
       return {
         supported: false,
         available: false,
+        availability: 'inconclusive',
         error: normalizeWebAuthnError(error)
       }
     }

@@ -13,7 +13,7 @@ func TestKnowledgeRecoveryToleratesSmallAnswerError(t *testing.T) {
 		Backup:       testBackup(),
 		RecoveryMode: RecoveryMode2Of2,
 		Questions:    testQuestions(),
-	})
+	}, testAccountSecret())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestKnowledgeRecoveryRejectsUnrelatedAnswers(t *testing.T) {
 		Backup:       testBackup(),
 		RecoveryMode: RecoveryMode2Of2,
 		Questions:    testQuestions(),
-	})
+	}, testAccountSecret())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestKnowledgeRecoveryAcceptsWASMJSONAnswers(t *testing.T) {
 		Backup:       testBackup(),
 		RecoveryMode: RecoveryMode2Of2,
 		Questions:    testQuestions(),
-	})
+	}, testAccountSecret())
 	if err != nil {
 		t.Fatal(err)
 	}

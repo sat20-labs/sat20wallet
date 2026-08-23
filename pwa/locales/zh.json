@@ -656,7 +656,8 @@
     "addressOrPkScript": "地址/公钥脚本",
     "noChannelTitle": "无通道",
     "noChannelDescription": "您没有通道。请先创建一个通道。",
-    "closeChannelNote": "关闭通道：将收取主网 gas 费，重开需再付 3,000 sats"
+    "closeChannelNote": "关闭通道将产生链上网络费；当前重开服务费请以开通预览为准。",
+    "closeChannelNoteWithFee": "关闭通道将产生链上网络费；当前重开包含 {fee} sats 服务费。"
   },
   "networkSetting": {
     "title": "环境选项",

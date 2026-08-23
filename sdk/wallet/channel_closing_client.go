@@ -24,6 +24,12 @@ func (p *Manager) IsCoreChannel(channel *Channel) bool {
 }
 
 func (p *Manager) AllowClose(resv *ClosingReservation) error {
+	if resv == nil || resv.Channel == nil {
+		return fmt.Errorf("invalid closing reservation")
+	}
+	if err := p.rejectUnfinishedChannelLifecycle(resv.Channel.ChannelId); err != nil {
+		return err
+	}
 	if p.IsCoreChannel(resv.Channel) {
 		return fmt.Errorf("can't close core channel rightnow")
 	}
@@ -251,6 +257,8 @@ func (p *Manager) CloserInitCoopCloseProcess(channelID string, feeRate int64) (s
 			DeAnchorTxId: resv.DeAnchorTx.TxID(),
 		}
 		resv.Channel.Status = CS_CLOSING_STARTED
+		resv.Status = ResvStatus(CS_CLOSING_STARTED)
+		resv.Channel.ResvId = 0
 		resv.Channel.UpdateTime = resv.Id
 		resv.Channel.DeAnchorTx = resv.DeAnchorTx
 		resv.Channel.ClosingTx = resv.CloseTx

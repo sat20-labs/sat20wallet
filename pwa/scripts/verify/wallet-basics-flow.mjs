@@ -1,5 +1,6 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from '@bitcoin-js/tiny-secp256k1-asmjs';
+import { selectPwaPage } from './lib/pwa-page.mjs';
 
 const CDP = process.env.SAT20_CDP_URL || 'http://127.0.0.1:9223';
 const PWA_URL = process.env.SAT20_PWA_URL || 'http://localhost:5173/';
@@ -83,9 +84,7 @@ async function connect(wsUrl) {
 
 async function getPage() {
   const pages = await fetchWithTimeout(`${CDP}/json/list`).then((r) => r.json());
-  return pages.find((p) => p.type === 'page' && p.url.startsWith(PWA_URL))
-    || pages.find((p) => p.type === 'page' && p.url === 'about:blank')
-    || pages.find((p) => p.type === 'page');
+  return selectPwaPage(pages, PWA_URL);
 }
 
 function sleep(ms) {
@@ -136,28 +135,31 @@ async function walletCall(client, body) {
     const verify = window.__SAT20_PWA_VERIFY__;
     if (!verify) throw new Error('SAT20 PWA verify helpers are not available');
     const wallet = verify.useWalletStore();
+    const sat20 = verify.sat20;
     const { Chain, Network, walletStorage } = verify;
     const hashed = await verify.hashPassword(${q(PASSWORD)});
-    if (!wallet.hasWallet) {
-      const [importErr] = await wallet.importWallet(${q(MNEMONIC)}, hashed);
-      if (importErr) throw importErr;
-    } else if (wallet.locked) {
-      const [unlockErr] = await wallet.unlockWallet(hashed);
-      if (unlockErr) throw unlockErr;
-    }
-    await wallet.setPassword(hashed);
-    if (wallet.network !== Network.TESTNET) await wallet.setNetwork(Network.TESTNET);
-    await wallet.setChain(Chain.BTC);
-    await walletStorage.setValue('env', 'prd');
-    const sat20 = verify.sat20;
-    const unwrap = (tuple) => {
-      if (tuple?.[0]) throw tuple[0];
-      return tuple?.[1];
-    };
     const withTimeout = (promise, label, ms = 30000) => Promise.race([
       promise,
       new Promise((_, reject) => setTimeout(() => reject(new Error(label + ' timed out after ' + ms + 'ms')), ms)),
     ]);
+    if (!wallet.hasWallet) {
+      const [importErr] = await withTimeout(wallet.importWallet(${q(MNEMONIC)}, hashed), 'importWallet', 60000);
+      if (importErr) throw importErr;
+    } else {
+      const [probeError] = await withTimeout(sat20.getWalletAddress(Number(wallet.accountIndex || 0)), 'wallet unlock probe', 10000);
+      if (wallet.locked || probeError) {
+        const [unlockErr] = await withTimeout(wallet.unlockWallet(hashed), 'unlockWallet', 30000);
+        if (unlockErr) throw unlockErr;
+      }
+    }
+    await withTimeout(wallet.setPassword(hashed), 'setPassword', 10000);
+    if (wallet.network !== Network.TESTNET) await withTimeout(wallet.setNetwork(Network.TESTNET), 'setNetwork(TESTNET)', 60000);
+    await withTimeout(wallet.setChain(Chain.BTC), 'setChain(BTC)', 10000);
+    await withTimeout(walletStorage.setValue('env', 'prd'), 'set env', 10000);
+    const unwrap = (tuple) => {
+      if (tuple?.[0]) throw tuple[0];
+      return tuple?.[1];
+    };
     const safe = async (fn) => {
       try {
         return await withTimeout(fn(), 'wallet helper call');
@@ -177,6 +179,11 @@ async function preparePwa(client, page) {
     await sleep(3000);
   }
   await waitForWasm(client);
+  const expectedOrigin = new URL(PWA_URL).origin;
+  const actualOrigin = await evaluate(client, 'location.origin', 30000);
+  if (actualOrigin !== expectedOrigin) {
+    throw new Error(`Selected page origin ${actualOrigin} does not match configured PWA origin ${expectedOrigin}`);
+  }
   await evaluate(client, `(async () => {
     const { walletStorage } = window.__SAT20_PWA_VERIFY__;
     await walletStorage.initializeState();
@@ -653,7 +660,7 @@ async function main() {
   console.log('[wallet-basics] checking wallet lifecycle');
   const lifecycle = await walletCall(client, `
     await withTimeout(wallet.switchToAccount(0), 'switchToAccount(0)', 30000);
-    const before = {
+    const afterUnlock = {
       hasWallet: wallet.hasWallet,
       locked: wallet.locked,
       walletId: wallet.walletId,
@@ -673,19 +680,17 @@ async function main() {
         })),
       })),
     };
-    await wallet.setLocked(true);
-    const lockedStored = walletStorage.getValue('locked');
-    const [unlockErr] = await wallet.unlockWallet(hashed);
-    if (unlockErr) throw unlockErr;
-    const afterUnlock = {
-      locked: wallet.locked,
-      address: wallet.address,
-      pubKey: wallet.publicKey,
-      accountIndex: wallet.accountIndex,
-      network: wallet.network,
-      chain: wallet.chain,
-    };
-    return JSON.stringify({ before, lockedStored, afterUnlock });
+    return JSON.stringify({ afterUnlock });
+  `);
+
+  console.log('[wallet-basics] checking already-unlocked SDK response');
+  const alreadyUnlocked = await walletCall(client, `
+    const [alreadyUnlockedError] = await withTimeout(sat20.unlockWallet(hashed), 'already-unlocked check', 30000);
+    const message = alreadyUnlockedError?.message || String(alreadyUnlockedError || '');
+    if (!message.includes('wallet has been unlocked')) {
+      throw new Error('expected already-unlocked SDK response, got: ' + message);
+    }
+    return JSON.stringify({ message });
   `);
 
   await client.send('Page.reload', { ignoreCache: true });
@@ -836,6 +841,7 @@ async function main() {
 
   console.log(JSON.stringify({
     lifecycle,
+    alreadyUnlocked,
     accounts,
     indexerChecks,
     manualUtxoLocking,

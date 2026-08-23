@@ -1,7 +1,7 @@
 <template>
   <Dialog :open="isOpen" @update:open="isOpen = $event">
     <DialogContent class="w-[330px] rounded-lg bg-black">
-      <DialogHeader class="flex flex-row items-center justify-between">
+      <DialogHeader v-if="dialogStage === 'form'" class="flex flex-row items-center justify-between">
         <div>
           <DialogTitle>{{ title }}</DialogTitle>
           <DialogDescription>
@@ -12,7 +12,7 @@
       </DialogHeader>
 
       <!-- 当前操作资产信息 -->
-      <div v-if="props.assetKey || props.assetTicker" class="mb-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
+      <div v-if="dialogStage === 'form' && (props.assetKey || props.assetTicker)" class="mb-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
         <div class="flex items-center gap-3">
           <!-- 资产图标 -->
           <div
@@ -47,7 +47,7 @@
       </div>
 
       <!-- Tabs -->
-      <div v-if="props.operationType === 'send'">
+      <div v-if="dialogStage === 'form' && props.operationType === 'send'">
         <div class="tabs gap-1 border-b-2 border-zinc-700/50">
           <button :class="[
             'w-full py-2 px-1 font-sans font-semibold text-base border border-b-transparent hover:text-primary relative rounded-t-lg',
@@ -70,7 +70,7 @@
       </div>
 
       <!-- Tab Content -->
-      <div class="tab-content">
+      <div v-if="dialogStage === 'form'" class="tab-content">
         <div v-if="selectedTab === 'normal'">
           <!-- 普通发送内容 -->
           <div class="space-y-4">
@@ -104,7 +104,7 @@
         </div>
       </div>
 
-      <DialogFooter v-if="selectedTab === 'normal'">
+      <DialogFooter v-if="dialogStage === 'form' && selectedTab === 'normal'">
         <Button class="w-full h-11 mb-2"
           :disabled="needsAddress && (!address || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress))"
           @click="confirmOperation">
@@ -117,17 +117,14 @@
           {{ $t('assetOperationDialog.domainNotFound', { name: resolvedInfo.domainName }) }}
         </div>
       </DialogFooter>
-    </DialogContent>
-  </Dialog>
 
-  <AlertDialog v-model:open="showAlertDialog">
-    <AlertDialogContent class="w-[330px] rounded-lg bg-zinc-900">
-      <AlertDialogTitle class="gap-2 flex flex-col items-center">
+      <template v-if="dialogStage === 'confirm'">
+      <DialogTitle class="gap-2 flex flex-col items-center">
         <span class="text-lg font-semibold">{{ $t('assetOperationDialog.pleaseConfirm') }}</span>
         <span class="mt-2 w-full">
           <Separator />
         </span>
-      </AlertDialogTitle>
+      </DialogTitle>
       <!-- 域名解析状态显示 -->
       <div v-if="isResolving" class="flex justify-center items-center py-4">
         <div class="text-sm text-blue-400 flex items-center gap-2">
@@ -136,10 +133,10 @@
         </div>
       </div>
 
-      <AlertDialogDesc v-if="!isResolving" class="flex justify-center">
+      <DialogDescription v-if="!isResolving" class="flex justify-center">
         <Icon icon="prime:check-circle" class="w-12 h-12 mr-2 text-green-600" />
         {{ $t('assetOperationDialog.confirmOperation') }}
-      </AlertDialogDesc>
+      </DialogDescription>
 
       <!-- 显示域名和地址信息 -->
       <div v-if="!isResolving && resolvedInfo && resolvedInfo.isDomain && resolvedInfo.resolvedAddress"
@@ -196,16 +193,17 @@
         </div>
       </div>
 
-      <AlertDialogFoot class="my-4 gap-2">
-        <AlertDialogCancel @click="showAlertDialog = false" :disabled="isResolving">{{ $t('assetOperationDialog.cancel')
-        }}</AlertDialogCancel>
-        <AlertDialogAction @click="handleConfirm"
+      <DialogFooter class="my-4 gap-2">
+        <Button variant="outline" @click="dialogStage = 'form'" :disabled="isResolving">{{ $t('assetOperationDialog.cancel')
+        }}</Button>
+        <Button @click="handleConfirm"
           :disabled="isResolving || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress)">
           {{ isResolving ? $t('assetOperationDialog.resolvingDomain') : $t('assetOperationDialog.confirm') }}
-        </AlertDialogAction>
-      </AlertDialogFoot>
-    </AlertDialogContent>
-  </AlertDialog>
+        </Button>
+      </DialogFooter>
+      </template>
+    </DialogContent>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
@@ -216,18 +214,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogTitle,
-  AlertDialogDescription as AlertDialogDesc,
-  AlertDialogFooter as AlertDialogFoot,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogTrigger
-} from '@/components/ui/alert-dialog'
-import { useRouter } from 'vue-router'
-import { Chain } from '@/types/index'
 import { Icon } from '@iconify/vue'
 import SplitSend from '@/entrypoints/popup/pages/wallet/split.vue'
 import { useWalletStore } from '@/store'
@@ -259,7 +245,11 @@ const selectedTab = ref('normal') // 默认选中普通发送
 
 const isOpen = defineModel('open', { type: Boolean })
 
-const showAlertDialog = ref(false)
+const dialogStage = ref<'form' | 'confirm'>('form')
+
+watch(isOpen, (open) => {
+  if (!open) dialogStage.value = 'form'
+})
 
 // 获取钱包 store 中的 btcFeeRate 和 network
 const walletStore = useWalletStore()
@@ -351,17 +341,13 @@ const confirmOperation = async () => {
   }
 
   // 始终显示确认对话框
-  showAlertDialog.value = true
+  dialogStage.value = 'confirm'
 }
 
 const handleConfirm = () => {
   console.log('handleConfirm called'); // 调试日志
   emit('confirm')
-  showAlertDialog.value = false
-  setTimeout(() => {
-    isOpen.value = false
-    document.body.removeAttribute('style')
-  }, 300)
+  isOpen.value = false
 }
 
 // 设置最大值
@@ -438,8 +424,6 @@ const getOperationHint = () => {
   }
   return null
 }
-
-const router = useRouter()
 
 // const goSplitAsset = () => {
 //   router.push(`/wallet/split-asset?assetName=${props.assetKey}`)

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall/js"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -25,10 +26,29 @@ const module = "sat20wallet_wasm"
 
 var _mgr *wallet.Manager
 var _callback interface{}
+var managerLifecycleMu sync.Mutex
+var managerAsyncTasks sync.WaitGroup
+var managerClosing bool
 
 type AsyncTaskFunc func() (interface{}, int, string)
 
 func createAsyncJsHandler(task AsyncTaskFunc) js.Func {
+	managerLifecycleMu.Lock()
+	if managerClosing {
+		managerLifecycleMu.Unlock()
+		return createUntrackedAsyncJsHandler(func() (interface{}, int, string) {
+			return nil, -1, "Manager is closing"
+		})
+	}
+	managerAsyncTasks.Add(1)
+	managerLifecycleMu.Unlock()
+	return createUntrackedAsyncJsHandler(func() (interface{}, int, string) {
+		defer managerAsyncTasks.Done()
+		return task()
+	})
+}
+
+func createUntrackedAsyncJsHandler(task AsyncTaskFunc) js.Func {
 	return js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		resolve := args[0]
 		// reject := args[1]
@@ -290,9 +310,16 @@ func batchDbTest(this js.Value, p []js.Value) any {
 }
 
 func initManager(this js.Value, p []js.Value) any {
+	managerLifecycleMu.Lock()
+	if managerClosing {
+		managerLifecycleMu.Unlock()
+		return createJsRet(nil, -1, "Manager is closing")
+	}
 	if _mgr != nil {
+		managerLifecycleMu.Unlock()
 		return createJsRet(nil, -1, "Manager is initialized")
 	}
+	managerLifecycleMu.Unlock()
 
 	if len(p) < 2 {
 		return createJsRet(nil, -1, "Expected 2 parameters")
@@ -332,12 +359,15 @@ func initManager(this js.Value, p []js.Value) any {
 			wallet.Log.Errorf("NewKVDB failed")
 			return nil, -1, "NewKVDB failed"
 		}
-		_mgr = wallet.NewManager(cfg, db)
-		if _mgr == nil {
+		mgr := wallet.NewManager(cfg, db)
+		if mgr == nil {
 			return nil, -1, "NewManager failed"
 		}
+		managerLifecycleMu.Lock()
+		_mgr = mgr
+		managerLifecycleMu.Unlock()
 		registerWalletDataUpdateCallback()
-		_mgr.Start()
+		mgr.Start()
 		wallet.Log.Info("Manager created")
 		return nil, 0, "ok"
 	})
@@ -346,12 +376,34 @@ func initManager(this js.Value, p []js.Value) any {
 }
 
 func releaseManager(this js.Value, p []js.Value) any {
+	managerLifecycleMu.Lock()
+	if managerClosing {
+		managerLifecycleMu.Unlock()
+		return createJsRet(nil, -1, "Manager is closing")
+	}
 	if _mgr == nil {
+		managerLifecycleMu.Unlock()
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	_mgr.Close()
-	_mgr = nil
-	return createJsRet(nil, 0, "ok")
+	mgr := _mgr
+	managerClosing = true
+	managerLifecycleMu.Unlock()
+	handler := createUntrackedAsyncJsHandler(func() (interface{}, int, string) {
+		managerAsyncTasks.Wait()
+		managerLifecycleMu.Lock()
+		if _mgr == mgr {
+			_mgr = nil
+		}
+		managerLifecycleMu.Unlock()
+		defer func() {
+			managerLifecycleMu.Lock()
+			managerClosing = false
+			managerLifecycleMu.Unlock()
+		}()
+		mgr.Close()
+		return nil, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func startBTCLuckyMining(this js.Value, p []js.Value) any {
@@ -515,8 +567,6 @@ func importWallet(this js.Value, p []js.Value) any {
 	}
 	password := p[1].String()
 
-	wallet.Log.Infof("ImportWallet %s %s", mnemonic, password)
-
 	// id, err := _mgr.ImportWallet(mnemonic, password)
 	// if err != nil {
 	// 	return createJsRet(nil, -1, err.Error())
@@ -576,6 +626,41 @@ func recoverAccountManagementFromRootMnemonic(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
+func recoverAccountManagementFromCurrentWallet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) != 1 || p[0].Type() != js.TypeString {
+		return createJsRet(nil, -1, "expected password")
+	}
+	password := p[0].String()
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		_, err := _mgr.RecoverAccountManagementFromCurrentWallet(context.Background(), password)
+		switch {
+		case err == nil:
+			walletID := ""
+			if current := _mgr.GetWallet(); current != nil {
+				walletID = fmt.Sprintf("%d", current.GetId())
+			}
+			return map[string]any{
+				"status": "found", "code": wallet.RootAccountRecoveryCodeRecovered,
+				"walletId": walletID,
+			}, 0, "ok"
+		case errors.Is(err, wallet.ErrRootAccountNotFound):
+			return map[string]any{
+				"status": "not_found", "code": wallet.RootAccountRecoveryCodeNotFound,
+			}, 0, "ok"
+		case errors.Is(err, wallet.ErrRootAccountDiscoveryPending):
+			return map[string]any{
+				"status": "pending", "code": wallet.RootAccountRecoveryCodePending,
+			}, 0, "ok"
+		default:
+			return nil, -1, err.Error()
+		}
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
 func importWalletWithPrivKey(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -593,8 +678,6 @@ func importWalletWithPrivKey(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "password parameter should be a string")
 	}
 	password := p[1].String()
-
-	wallet.Log.Infof("ImportWallet %s %s", mnemonic, password)
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		id, err := _mgr.ImportWalletWithPrivateKey(mnemonic, password)
@@ -5433,6 +5516,7 @@ func main() {
 	// input: mnemonic, password; return: walletId
 	obj.Set("importWallet", js.FuncOf(importWallet))
 	obj.Set("recoverAccountManagementFromRootMnemonic", js.FuncOf(recoverAccountManagementFromRootMnemonic))
+	obj.Set("recoverAccountManagementFromCurrentWallet", js.FuncOf(recoverAccountManagementFromCurrentWallet))
 	obj.Set("importWalletWithPrivKey", js.FuncOf(importWalletWithPrivKey))
 	// input: password; return: current walletId
 	obj.Set("unlockWallet", js.FuncOf(unlockWallet))

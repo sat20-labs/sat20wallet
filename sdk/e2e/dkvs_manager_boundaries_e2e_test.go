@@ -36,6 +36,7 @@ func TestRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T) {
 	accountID := dkvsindexer.AccountID(root.GetPubKey().SerializeCompressed())
 	repository, err := primary.NewAccountRepositoryForStorage(*authorization)
 	require.NoError(t, err)
+	require.NoError(t, primary.InitializeAccountManagement("123456"))
 
 	questions := e2eKnowledgeQuestions()
 	backup := account.Backup{Version: account.Version, Wallets: []account.WalletBackup{{
@@ -44,10 +45,15 @@ func TestRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T) {
 			{Index: 1, Name: "Savings", DID: "did:free:1"}},
 	}}}
 	accountManager := account.NewManager(repository)
-	pkg, secret, err := accountManager.CreateRecoveryPackageWithSecret(account.CreateOptions{
+	pkg, err := primary.CreateAccountRecoveryPackage(account.CreateOptions{
 		AccountID: accountID, Backup: backup, RecoveryMode: account.RecoveryMode2Of2,
 		Questions: questions,
 	})
+	require.NoError(t, err)
+	dkvsShareForActivation, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule,
+		pkg.KnowledgeBundle, e2eKnowledgeAnswers())
+	require.NoError(t, err)
+	_, secret, err := account.RecoverAccount(pkg.Envelope, pkg.UserShare, dkvsShareForActivation)
 	require.NoError(t, err)
 	defer clearBytes(secret)
 	require.NoError(t, accountManager.Publish(context.Background(), *pkg))

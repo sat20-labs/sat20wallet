@@ -165,6 +165,7 @@ type Manager struct {
 	actionMonitorL1Lock       sync.Mutex
 	actionMonitorL2Lock       sync.Mutex
 	actionMonitorStop         chan struct{}
+	actionMonitorCancel       context.CancelFunc
 	actionMonitorWG           sync.WaitGroup
 	actionMonitorRunning      bool
 	channelHeartbeatMu        sync.Mutex

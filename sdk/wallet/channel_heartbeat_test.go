@@ -136,6 +136,107 @@ func TestChannelHeartbeatCodeOneRequestsExistingSync(t *testing.T) {
 	}
 }
 
+func TestChannelHeartbeatSkipsPeerSyncWhileFundingIsPending(t *testing.T) {
+	client := &channelHeartbeatTestClient{response: &wwire.PingResp{
+		BaseResp: wwire.BaseResp{Code: 1, Msg: "channel existing"},
+		PingResponse: &wwire.PingResponse{
+			NextAction:  wwire.STP_ACTION_SYNC,
+			ActionParam: "restore",
+		},
+	}}
+	manager := newChannelHeartbeatTestManager(t, client)
+	manager.resetResvMapsLocked()
+	channelID, err := manager.GetChannelAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.AddResv(&FundingReservation{FundingDataInDB: FundingDataInDB{
+		ReservationBase: NewReservationBase(701, true, ResvStatus(CS_FUNDING_BROADCASTED), manager.wallet),
+		ChannelId:       channelID,
+	}})
+
+	manager.runChannelHeartbeatTick()
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.pingCalls != 1 || client.syncCalls != 0 {
+		t.Fatalf("ping/sync calls = %d/%d, want 1/0 while funding is pending", client.pingCalls, client.syncCalls)
+	}
+}
+
+func TestChannelHeartbeatClosingReservationScope(t *testing.T) {
+	tests := []struct {
+		name      string
+		channelID func(string) string
+		wallet    func(*Manager) common.Wallet
+		status    ResvStatus
+		wantSync  int
+	}{
+		{
+			name:      "different channel does not block",
+			channelID: func(string) string { return "another-channel" },
+			wallet:    func(manager *Manager) common.Wallet { return manager.wallet },
+			status:    RS_INIT,
+			wantSync:  1,
+		},
+		{
+			name:      "different wallet does not block",
+			channelID: func(current string) string { return current },
+			wallet: func(manager *Manager) common.Wallet {
+				other := manager.wallet.Clone()
+				other.SetSubAccount(1)
+				return other
+			},
+			status:   RS_INIT,
+			wantSync: 1,
+		},
+		{
+			name:      "closed current reservation does not block",
+			channelID: func(current string) string { return current },
+			wallet:    func(manager *Manager) common.Wallet { return manager.wallet },
+			status:    RS_CLOSED,
+			wantSync:  1,
+		},
+		{
+			name:      "active current reservation blocks",
+			channelID: func(current string) string { return current },
+			wallet:    func(manager *Manager) common.Wallet { return manager.wallet },
+			status:    RS_INIT,
+			wantSync:  0,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &channelHeartbeatTestClient{response: &wwire.PingResp{
+				BaseResp: wwire.BaseResp{Code: 1, Msg: "channel existing"},
+				PingResponse: &wwire.PingResponse{
+					NextAction:  wwire.STP_ACTION_SYNC,
+					ActionParam: "restore",
+				},
+			}}
+			manager := newChannelHeartbeatTestManager(t, client)
+			manager.resetResvMapsLocked()
+			currentChannelID, err := manager.GetChannelAddress()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager.AddResv(&ClosingReservation{ClosingDataInDB: ClosingDataInDB{
+				ReservationBase: NewReservationBase(703, true, test.status, test.wallet(manager)),
+				ChannelId:       test.channelID(currentChannelID),
+			}})
+
+			manager.runChannelHeartbeatTick()
+
+			client.mu.Lock()
+			defer client.mu.Unlock()
+			if client.syncCalls != test.wantSync {
+				t.Fatalf("sync calls=%d, want %d", client.syncCalls, test.wantSync)
+			}
+		})
+	}
+}
+
 func TestChannelHeartbeatStopsWhenAccountChangesDuringPing(t *testing.T) {
 	client := &channelHeartbeatTestClient{
 		switchOnPing: true,

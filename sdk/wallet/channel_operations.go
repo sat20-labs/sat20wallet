@@ -26,6 +26,13 @@ func (p *Manager) OpenChannel(feeRate int64, amt int64, utxos []string, memo str
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
+	channelAddr, err := p.GetChannelAddress()
+	if err != nil {
+		return "", err
+	}
+	if err := p.rejectUnfinishedChannelLifecycle(channelAddr); err != nil {
+		return "", err
+	}
 	if !p.IsReady() {
 		return "", fmt.Errorf("not ready")
 	}
@@ -40,10 +47,6 @@ func (p *Manager) OpenChannel(feeRate int64, amt int64, utxos []string, memo str
 		}
 	}
 
-	channelAddr, err := p.GetChannelAddress()
-	if err != nil {
-		return "", err
-	}
 	l2DrainTxId, err := p.DrainChannelL2BeforeOpenIfNeeded(channelAddr)
 	if err != nil {
 		return "", err
@@ -65,6 +68,9 @@ func (p *Manager) CloseChannel(channelId string, feeRate int64, force bool) (str
 	}
 	if force {
 		return p.CloserForcelyClose(channelId, feeRate)
+	}
+	if err := p.rejectUnfinishedChannelLifecycle(channelId); err != nil {
+		return "", "", err
 	}
 
 	tx1, tx2, err := p.CloserInitCoopCloseProcess(channelId, feeRate)
@@ -822,6 +828,9 @@ func (p *Manager) ReopenChannel(expandAll bool) (string, error) {
 		Log.Errorf("GetChannelAddress failed. %v", err)
 		return "", err
 	}
+	if err := p.rejectUnfinishedChannelLifecycle(address); err != nil {
+		return "", err
+	}
 	if p.HasContractInChannel(address) {
 		return "", fmt.Errorf("contract exists, not allow to reopen channel")
 	}
@@ -931,6 +940,9 @@ func (p *Manager) RebuildChannelWithUtxo(fundingUtxo string) (string, error) {
 		Log.Errorf("GetChannelAddress failed. %v", err)
 		return "", err
 	}
+	if err := p.rejectUnfinishedChannelLifecycle(address); err != nil {
+		return "", err
+	}
 	if p.HasContractInChannel(address) {
 		return "", fmt.Errorf("contract exists, not allow to rebuild channel")
 	}
@@ -992,6 +1004,9 @@ func (p *Manager) RebuildChannelWithUtxo(fundingUtxo string) (string, error) {
 
 func (p *Manager) RestoreChannel(channelId string) (*Channel, error) {
 	Log.Infof("RestoreChannel")
+	if err := p.rejectUnfinishedChannelLifecycle(channelId); err != nil {
+		return nil, err
+	}
 	if err := p.CleanChannelData(channelId); err != nil {
 		return nil, err
 	}

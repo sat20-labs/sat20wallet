@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"errors"
 	"sort"
 	"sync"
 	"testing"
@@ -13,6 +14,11 @@ import (
 type memoryKVDB struct {
 	mu   sync.RWMutex
 	data map[string][]byte
+}
+
+type memoryKVPair struct {
+	key   []byte
+	value []byte
 }
 
 type statusTipClient struct {
@@ -82,6 +88,75 @@ func (m *memoryKVDB) Close() error { return nil }
 
 func (m *memoryKVDB) NewWriteBatch() db.WriteBatch {
 	return &memoryWriteBatch{db: m}
+}
+
+func (m *memoryKVDB) Scan(options db.ScanOptions, r func(k, v []byte) error) error {
+	m.mu.RLock()
+	entries := make([]memoryKVPair, 0, len(m.data))
+	for key, value := range m.data {
+		keyBytes := []byte(key)
+		if len(options.Prefix) > 0 && !bytes.HasPrefix(keyBytes, options.Prefix) {
+			continue
+		}
+		entries = append(entries, memoryKVPair{
+			key:   append([]byte(nil), keyBytes...),
+			value: append([]byte(nil), value...),
+		})
+	}
+	m.mu.RUnlock()
+
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].key, entries[j].key) < 0
+	})
+
+	count := 0
+	visit := func(entry memoryKVPair) (bool, error) {
+		if len(options.Start) > 0 {
+			cmp := bytes.Compare(entry.key, options.Start)
+			if (!options.Reverse && (cmp < 0 || (cmp == 0 && !options.StartInclusive))) ||
+				(options.Reverse && (cmp > 0 || (cmp == 0 && !options.StartInclusive))) {
+				return false, nil
+			}
+		}
+
+		key := entry.key
+		if options.CopyKey {
+			key = append([]byte(nil), key...)
+		}
+		var value []byte
+		if !options.KeysOnly {
+			value = entry.value
+			if options.CopyValue {
+				value = append([]byte(nil), value...)
+			}
+		}
+		err := r(key, value)
+		if err != nil {
+			if errors.Is(err, db.ErrStopScan) {
+				return true, nil
+			}
+			return false, err
+		}
+		count++
+		return options.Limit > 0 && count >= options.Limit, nil
+	}
+
+	if options.Reverse {
+		for i := len(entries) - 1; i >= 0; i-- {
+			stop, err := visit(entries[i])
+			if err != nil || stop {
+				return err
+			}
+		}
+		return nil
+	}
+	for i := range entries {
+		stop, err := visit(entries[i])
+		if err != nil || stop {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *memoryKVDB) BatchRead(prefix []byte, reverse bool, r func(k, v []byte) error) error {

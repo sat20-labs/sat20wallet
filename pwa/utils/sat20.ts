@@ -56,6 +56,14 @@ class WalletManager {
       password.toString()
     )
   }
+  async recoverAccountManagementFromCurrentWallet(
+    password: string
+  ): Promise<[Error | undefined, RootAccountRecoveryResult | undefined]> {
+    return this._handleRequest(
+      'recoverAccountManagementFromCurrentWallet',
+      password.toString()
+    )
+  }
   async changePassword(
     oldPassword: string,
     newPassword: string

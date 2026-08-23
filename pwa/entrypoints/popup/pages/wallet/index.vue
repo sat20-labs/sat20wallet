@@ -154,6 +154,8 @@ const selectedChainLabel = computed(() => {
   return selectedItem ? selectedItem.label.toLowerCase() : 'unknown'
 })
 const balanceSummaryKey = computed(() => [
+  env.value || '',
+  network.value || '',
   selectedChainLabel.value,
   walletId.value || '',
   accountIndex.value ?? '',
