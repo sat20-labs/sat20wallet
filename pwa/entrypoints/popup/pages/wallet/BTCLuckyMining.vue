@@ -309,7 +309,7 @@ async function refreshNetworkStats(force = false) {
 
 async function fetchNetworkStats() {
   const errors: string[] = []
-  const mempoolURL = network.value === Network.LIVENET
+  const mempoolURL = network.value === Network.MAINNET
     ? 'https://mempool.space/api/v1/mining/hashrate/3d'
     : 'https://mempool.space/testnet4/api/v1/mining/hashrate/3d'
   try {
@@ -322,7 +322,7 @@ async function fetchNetworkStats() {
     errors.push(`mempool.space: ${error?.message || String(error)}`)
   }
 
-  if (network.value !== Network.LIVENET) {
+  if (network.value !== Network.MAINNET) {
     throw new Error(errors.join('; '))
   }
 

@@ -18,7 +18,7 @@ interface NetworkConfig {
 }
 
 interface EnvConfig {
-  [Network.LIVENET]: NetworkConfig
+  [Network.MAINNET]: NetworkConfig
   [Network.TESTNET]: NetworkConfig
 }
 
@@ -30,7 +30,7 @@ interface Config {
 
 const config: Config = {
   dev: {
-    [Network.LIVENET]: {
+    [Network.MAINNET]: {
       Env: "dev",
       Chain: "mainnet",
       Mode: "client",
@@ -72,7 +72,7 @@ const config: Config = {
     }
   },
   test: {
-    [Network.LIVENET]: {
+    [Network.MAINNET]: {
       Env: "test",
       Chain: "mainnet",
       Mode: "client",
@@ -114,7 +114,7 @@ const config: Config = {
     }
   },
   prd: {
-    [Network.LIVENET]: {
+    [Network.MAINNET]: {
       Env: "prd",
       Chain: "mainnet",
       Mode: "light",
@@ -158,12 +158,8 @@ const config: Config = {
 }
 
 export const logLevel = 2//0: Panic, 1: Fatal, 2: Error, 3: Warning, 4: Info, 5: Debug
-export const getConfig = (env: string, network: Network): NetworkConfig => {
-  const envConfig = config[env as keyof Config]
-  if (!envConfig) {
-    throw new Error(`Invalid env: ${env}`)
-  }
-  const networkConfig = envConfig[network]
+export const getConfig = (_env: string, network: Network): NetworkConfig => {
+  const networkConfig = config.prd[network]
   if (!networkConfig) {
     throw new Error(`Invalid network: ${network}`)
   }

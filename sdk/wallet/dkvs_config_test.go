@@ -2,13 +2,13 @@ package wallet
 
 import (
 	"encoding/json"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func TestSatsNetDKVSClientGetConfig(t *testing.T) {
@@ -17,20 +17,16 @@ func TestSatsNetDKVSClientGetConfig(t *testing.T) {
 		require.Equal(t, http.MethodGet, r.Method)
 		w.Header().Set("content-type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
-			"code": 0,
-			"msg":  "ok",
+			"code": 0, "msg": "ok",
 			"data": map[string]any{
+				"endpoint_id": "endpoint-config-test",
 				"free_local": map[string]any{
-					"enabled":                true,
-					"max_ttl_blocks":         144,
-					"max_records_per_signer": 10,
-					"max_bytes_per_signer":   4096,
-					"max_total_records":      100,
-					"max_total_bytes":        65536,
+					"enabled": true, "max_ttl_blocks": 144,
+					"max_records_per_signer": 10, "max_bytes_per_signer": 4096,
+					"max_total_records": 100, "max_total_bytes": 65536,
 				},
 				"blob": map[string]any{
-					"max_value_size":                 1048576,
-					"max_free_local_keys_per_signer": 1,
+					"max_value_size": 1048576, "max_free_local_keys_per_signer": 1,
 				},
 			},
 		}))
@@ -38,6 +34,9 @@ func TestSatsNetDKVSClientGetConfig(t *testing.T) {
 	defer server.Close()
 
 	client := NewSatsNetDKVSClient("http", server.Listener.Addr().String(), "", nil)
+	config, err := client.GetDKVSClientConfig()
+	require.NoError(t, err)
+	require.Equal(t, "endpoint-config-test", config.EndpointID)
 	policy, err := client.GetConfig()
 	require.NoError(t, err)
 	require.True(t, policy.Enabled)

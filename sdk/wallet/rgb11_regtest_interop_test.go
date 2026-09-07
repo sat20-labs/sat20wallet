@@ -317,6 +317,13 @@ func requiredRegtestEnv(t *testing.T, name string) string {
 	return value
 }
 
+func requireWalletLiveNetwork(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SAT20WALLET_RUN_LIVE_NETWORK_TESTS") != "1" {
+		t.Skip("SAT20WALLET_RUN_LIVE_NETWORK_TESTS=1 is required for live wallet tests")
+	}
+}
+
 func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	requireWalletLiveNetwork(t)
 	esploraURL := requiredRegtestEnv(t, "RGB11_REGTEST_ESPLORA")

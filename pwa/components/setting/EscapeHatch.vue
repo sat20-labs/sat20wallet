@@ -392,12 +392,8 @@ const forceCloseChannel = async () => {
 
 
 watch(channelId, async () => {
-  console.log('channelId', channelId.value)
-
   if (!channelId.value) return
   const [err, result] = await satsnetStp.getCommitTxAssetInfo(channelId.value)
-  console.log('channel result', result)
-  console.log('err', err)
   if (err) {
     return false
   }

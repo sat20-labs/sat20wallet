@@ -8,38 +8,25 @@ import {
 } from '@/types/sat20-dapp-connect'
 import { ApprovalHandler } from '@/composables/webview-bridge/utils/approval-handler'
 import { BrowserManager } from '@/composables/webview-bridge/utils/browser-manager'
-import { isOriginAuthorized } from '@/lib/authorized-origins'
+import { getCurrentDappScope, isDappCapabilityGranted } from '@/lib/authorized-origins'
+import { getAllowedDappOrigins } from '@/lib/dapp-origin-policy'
+import { getDappActionPolicy } from '@/lib/dapp-policy'
+import { normalizeCapabilities } from '@/lib/dapp-grant-model'
+import { DappRequestGuard } from '@/lib/dapp-request-guard'
 import sat20Wallet from '@/utils/sat20'
-
-const DEFAULT_ALLOWED_ORIGINS = [
-  'https://app.ordx.market',
-  'https://satsnet.ordx.market',
-  'https://satsnet.test.ordx.market',
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://127.0.0.1:3001',
-  'http://localhost:3006',
-  'http://127.0.0.1:3006',
-  'http://localhost:3007',
-  'http://127.0.0.1:3007',
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-]
+import { assertWalletIdentityReady } from '@/lib/identity-boundary'
+import { assertNoMnemonicView } from '@/lib/sensitive-session'
+import { buildWalletMessagePayload, walletMessageDigest } from '@/lib/wallet-message-domain'
+import { toAssetAmountString, toBoundedNumber, toDecimalString } from '@/lib/strict-integers'
 
 const getAllowedOrigins = () => {
-  const origins = new Set(
-    (import.meta.env.VITE_SAT20_DAPP_ALLOWED_ORIGINS?.split(',') ?? DEFAULT_ALLOWED_ORIGINS)
-      .map((origin: string) => origin.trim())
-      .filter(Boolean)
-  )
-
-  if (import.meta.env.DEV) {
-    ;[3001, 3006, 3007, 5173].forEach((port) => {
-      origins.add(`${window.location.protocol}//${window.location.hostname}:${port}`)
-    })
-  }
-
-  return origins
+  return getAllowedDappOrigins({
+    configured: import.meta.env.VITE_SAT20_DAPP_ALLOWED_ORIGINS,
+    development: import.meta.env.DEV,
+    test: import.meta.env.MODE === 'test',
+    currentProtocol: window.location.protocol,
+    currentHostname: window.location.hostname,
+  })
 }
 
 const ACTION_ALIASES: Record<string, Message.MessageAction | string> = {
@@ -81,24 +68,6 @@ const ACTION_ALIASES: Record<string, Message.MessageAction | string> = {
   batchSendAssetsV2_SatsNet: Message.MessageAction.BATCH_SEND_ASSETS_V2_SATSNET,
 }
 
-const APPROVAL_ACTIONS = new Set<string>([
-  Message.MessageAction.REQUEST_ACCOUNTS,
-  Message.MessageAction.SWITCH_NETWORK,
-  Message.MessageAction.SIGN_MESSAGE,
-  Message.MessageAction.SIGN_DATA,
-  Message.MessageAction.SIGN_PSBT,
-  Message.MessageAction.DEPLOY_CONTRACT_REMOTE,
-  Message.MessageAction.INVOKE_CONTRACT_SATSNET,
-  Message.MessageAction.INVOKE_UNIFIED_CONTRACT,
-  Message.MessageAction.INVOKE_CONTRACT_V2,
-  Message.MessageAction.INVOKE_CONTRACT_V2_SATSNET,
-  Message.MessageAction.REGISTER_AS_REFERRER,
-  Message.MessageAction.BIND_REFERRER_FOR_SERVER,
-  Message.MessageAction.SEND_ASSETS_SATSNET,
-  Message.MessageAction.BATCH_SEND_ASSETS_SATSNET,
-  Message.MessageAction.BATCH_SEND_ASSETS_V2_SATSNET,
-])
-
 const MESSAGE_ACTION_BY_KEY = Message.MessageAction as unknown as Record<string, Message.MessageAction | string>
 
 const normaliseAction = (action: string) =>
@@ -135,14 +104,14 @@ const asParamsObject = (action: string, params: unknown): Record<string, unknown
         buyerAddress: params[2],
         serverAddress: params[3],
         network: params[4],
-        serviceFee: params[5],
-        networkFee: params[6],
+        serviceFee: toDecimalString(params[5], 'serviceFee'),
+        networkFee: toDecimalString(params[6], 'networkFee'),
       }
     case 'extractTxFromPsbt':
       return { psbtHex: params[0], chain: params[1]?.chain ?? params[1] ?? 'btc' }
     case 'getUtxosWithAsset':
     case 'getUtxosWithAsset_SatsNet':
-      return { address: params[0], assetName: params[1], amt: String(params[2]) }
+      return { address: params[0], assetName: params[1], amt: toAssetAmountString(params[2], 'amount') }
     case 'getAssetAmount':
     case 'getAssetAmount_SatsNet':
       return { address: params[0], assetName: params[1] }
@@ -155,31 +124,37 @@ const asParamsObject = (action: string, params: unknown): Record<string, unknown
     case 'getParamForInvokeContract':
       return { templateName: params[0], action: params[1] }
     case 'registerAsReferrer':
-      return { name: params[0], feeRate: params[1] }
+      return { name: params[0], feeRate: toDecimalString(params[1], 'feeRate') }
     case 'bindReferrerForServer':
       return { referrerName: params[0], serverPubKey: params[1] }
     case 'batchSendAssets_SatsNet':
-      return { assetName: params[0], amt: String(params[1]), n: Number(params[2]) }
+      return { assetName: params[0], amt: toAssetAmountString(params[1], 'amount'), n: toBoundedNumber(params[2], 'count', 1_000) }
     case 'batchSendAssetsV2_SatsNet':
-      return { destAddr: params[0], assetName: params[1], amtList: params[2] }
+      return {
+		destAddr: params[0],
+		assetName: params[1],
+		amtList: Array.isArray(params[2])
+			  ? params[2].map((amount, index) => toAssetAmountString(amount, `amount[${index}]`))
+		  : (() => { throw new Error('amount list must be an array') })(),
+	  }
     case 'getDeployedContractStatus':
       return { url: params[0] }
     case 'deployContract_Remote':
-      return { templateName: params[0], content: params[1], feeRate: params[2], bol: params[3] }
+      return { templateName: params[0], content: params[1], feeRate: toDecimalString(params[2], 'feeRate'), bol: params[3] }
     case 'invokeContract_SatsNet':
-      return { url: params[0], invoke: params[1], feeRate: params[2] }
+      return { url: params[0], invoke: params[1], feeRate: toDecimalString(params[2], 'feeRate') }
     case 'invokeUnifiedContract':
     case 'INVOKE_UNIFIED_CONTRACT':
       return { req: params[0] }
     case 'invokeContractV2_SatsNet':
-      return { url: params[0], invoke: params[1], assetName: params[2], amt: String(params[3]), feeRate: String(params[4]), metadata: params[5] ?? {} }
+      return { url: params[0], invoke: params[1], assetName: params[2], amt: toAssetAmountString(params[3], 'amount'), feeRate: toDecimalString(params[4], 'feeRate'), metadata: params[5] ?? {} }
     case 'invokeContractV2':
       return {
         url: params[0],
         invoke: params[1],
         assetName: params[2],
-        amt: String(params[3]),
-        feeRate: String(params[4]),
+        amt: toAssetAmountString(params[3], 'amount'),
+        feeRate: toDecimalString(params[4], 'feeRate'),
         metadata: params[5] ?? {},
       }
     default:
@@ -199,7 +174,7 @@ export function usePwaDappBridge(iframeWindow: () => Window | null, currentUrl: 
   const isReady = ref(false)
   const lastError = ref<string | null>(null)
   const pendingRequests = ref(0)
-  const handledRequests = new Set<string>()
+  const requestGuard = new DappRequestGuard()
 
   const allowedOrigins = getAllowedOrigins()
 
@@ -212,47 +187,110 @@ export function usePwaDappBridge(iframeWindow: () => Window | null, currentUrl: 
   const isAllowedOrigin = (origin: string) => allowedOrigins.has(origin)
 
   const validateRequest = async (event: MessageEvent, request: Sat20DappRequest) => {
+	assertNoMnemonicView()
+	const identityGeneration = assertWalletIdentityReady()
     if (!isAllowedOrigin(event.origin)) {
       throw new Error(`Origin is not allowed: ${event.origin}`)
     }
     if (event.source !== iframeWindow()) {
       throw new Error('Request source does not match active DApp frame')
     }
-    if (!request.requestId || !request.action || !request.nonce || !request.expiresAt) {
+    if (!request.requestId || !request.action || !request.nonce || !request.timestamp || !request.expiresAt) {
       throw new Error('Invalid SAT20 DApp request envelope')
-    }
-    if (request.expiresAt < Date.now()) {
-      throw new Error('SAT20 DApp request expired')
-    }
-    const requestKey = `${event.origin}:${request.requestId}:${request.nonce}`
-    if (handledRequests.has(requestKey)) {
-      throw new Error('Duplicate SAT20 DApp request')
     }
     if (request.origin && request.origin !== event.origin) {
       throw new Error('Request origin does not match message origin')
     }
 
     const action = normaliseAction(request.action)
-    if (action !== Message.MessageAction.REQUEST_ACCOUNTS) {
-      const authorized = await isOriginAuthorized(event.origin)
-      if (!authorized) {
-        throw new Error('DApp is not connected. Call requestAccounts first.')
+    const actionPolicy = getDappActionPolicy(action)
+    if (!actionPolicy) throw new Error(`Unsupported DApp action: ${action}`)
+    const finish = requestGuard.begin(event.origin, request.requestId, request.nonce, request.expiresAt)
+    try {
+      const scope = await getCurrentDappScope()
+	  assertWalletIdentityReady(identityGeneration)
+      if (request.network && request.network !== scope.network) throw new Error('DApp request network does not match the active wallet')
+      if (action === Message.MessageAction.REQUEST_ACCOUNTS) {
+        const requested = (request.params && typeof request.params === 'object' && !Array.isArray(request.params))
+          ? (request.params as Record<string, unknown>).capabilities
+          : undefined
+        if (requested !== undefined && !normalizeCapabilities(requested)) throw new Error('Invalid DApp capabilities request')
+      } else {
+        if (!actionPolicy.capability || !await isDappCapabilityGranted(event.origin, scope, actionPolicy.capability)) {
+          throw new Error(`DApp capability is not granted for ${action}`)
+        }
+      }
+      return { action, actionPolicy, scope, finish, identityGeneration }
+    } catch (error) {
+      finish()
+      throw error
+    }
+  }
+
+  const executeAction = async (
+    request: Sat20DappRequest,
+    eventOrigin: string,
+    action: string,
+    actionPolicy: NonNullable<ReturnType<typeof getDappActionPolicy>>,
+    scope: Awaited<ReturnType<typeof getCurrentDappScope>>,
+	identityGeneration: number,
+  ) => {
+    const params = asParamsObject(request.action, request.params)
+	if (action === Message.MessageAction.SIGN_DATA) {
+	  throw new Error('Raw DApp signData is disabled; use signMessage with the SAT20 Wallet Message domain')
+	}
+	if (action === Message.MessageAction.SIGN_MESSAGE) {
+	  const message = typeof params.message === 'string' ? params.message : ''
+	  const domainPayload = buildWalletMessagePayload({
+		network: scope.network,
+		origin: eventOrigin,
+		timestamp: request.timestamp,
+		nonce: request.nonce,
+		message,
+	  })
+	  Object.assign(params, {
+		message,
+		domainPayload,
+		digest: await walletMessageDigest(domainPayload),
+		origin: eventOrigin,
+		network: scope.network,
+		timestamp: request.timestamp,
+		nonce: request.nonce,
+	  })
+	}
+    if ([
+      Message.MessageAction.LOCK_UTXO,
+      Message.MessageAction.LOCK_UTXO_SATSNET,
+      Message.MessageAction.UNLOCK_UTXO,
+      Message.MessageAction.UNLOCK_UTXO_SATSNET,
+    ].includes(action as Message.MessageAction)) {
+      params.__dappOwner = {
+        origin: eventOrigin,
+        network: scope.network,
+        wallet_fingerprint: scope.walletFingerprint,
+        account_index: scope.accountIndex,
       }
     }
 
-    handledRequests.add(requestKey)
-  }
+    const context = { origin: eventOrigin, url: currentUrl() || eventOrigin, expiresAt: request.expiresAt, identityGeneration }
 
-  const executeAction = async (request: Sat20DappRequest, eventOrigin: string) => {
-    const action = normaliseAction(request.action)
-    const params = asParamsObject(request.action, request.params)
-
-    if (APPROVAL_ACTIONS.has(action)) {
+    if (actionPolicy.approval === 'fail-closed') {
+      throw new Error(`Wallet approval renderer is unavailable for ${action}`)
+    }
+    if (actionPolicy.approval === 'component') {
       return approvalHandler.handleWalletApproval(
         action as Message.MessageAction,
         params,
         request.requestId,
-        currentUrl() || eventOrigin
+        context,
+      )
+    }
+    if (actionPolicy.approval === 'component-then-direct') {
+      return approvalHandler.handleApprovedDirectRequest(
+        action as Message.MessageAction,
+        params,
+        request.requestId,
+        context,
       )
     }
 
@@ -273,12 +311,14 @@ export function usePwaDappBridge(iframeWindow: () => Window | null, currentUrl: 
       return
     }
 
-    pendingRequests.value += 1
     lastError.value = null
+    let finish: (() => void) | undefined
 
     try {
-      await validateRequest(event, request)
-      const result = await executeAction(request, event.origin)
+      const validated = await validateRequest(event, request)
+      finish = validated.finish
+      pendingRequests.value += 1
+      const result = await executeAction(request, event.origin, validated.action, validated.actionPolicy, validated.scope, validated.identityGeneration)
       postToDapp({
         type: 'SAT20_DAPP_RESPONSE',
         protocol: SAT20_DAPP_PROTOCOL,
@@ -300,7 +340,10 @@ export function usePwaDappBridge(iframeWindow: () => Window | null, currentUrl: 
         },
       }, event.origin)
     } finally {
-      pendingRequests.value = Math.max(0, pendingRequests.value - 1)
+      if (finish) {
+        finish()
+        pendingRequests.value = Math.max(0, pendingRequests.value - 1)
+      }
     }
   }
 

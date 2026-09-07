@@ -34,7 +34,7 @@ if (!page) throw new Error(`PWA page not found for ${ORIGIN}`)
 
 const snapshot = await page.evaluate(async ({ password, origin }) => {
   const verify = window.__SAT20_PWA_VERIFY__
-  if (!verify?.hashPassword) throw new Error('PWA verification API is unavailable')
+	if (!verify) throw new Error('PWA verification API is unavailable')
   const values = {}
   for (let index = 0; index < localStorage.length; index++) {
     const key = localStorage.key(index)
@@ -53,7 +53,7 @@ const snapshot = await page.evaluate(async ({ password, origin }) => {
   }
   return {
     origin,
-    passwordHash: await verify.hashPassword(password),
+		password,
     values,
   }
 }, { password: PASSWORD, origin: ORIGIN })
@@ -92,18 +92,16 @@ try {
       globalThis.sat20wallet_wasm && globalThis.sat20account_wasm), null, { timeout: 180_000 })
     const recovery = await page.evaluate(async ({ password }) => {
     const verify = window.__SAT20_PWA_VERIFY__
-    const passwordHash = await verify.hashPassword(password)
-    await verify.walletStorage.initializeState()
+		await verify.walletStorage.initializeState()
     const wallet = verify.useWalletStore()
     await wallet.syncWalletCatalog()
-    await wallet.setPassword(passwordHash)
-    const [unlockError] = await wallet.unlockWallet(passwordHash)
+		const [unlockError] = await wallet.unlockWallet(password)
     if (unlockError && !/already unlocked/i.test(String(unlockError.message || unlockError))) {
       throw unlockError
     }
     const selectedWalletId = String(wallet.walletId || '')
     if (!selectedWalletId) throw new Error('active PWA wallet id is unavailable')
-    const switchWalletResponse = await globalThis.sat20wallet_wasm.switchWallet(selectedWalletId, passwordHash)
+		const switchWalletResponse = await globalThis.sat20wallet_wasm.switchWallet(selectedWalletId, password)
     if (Number(switchWalletResponse?.code ?? -1) !== 0) {
       throw new Error(String(switchWalletResponse?.msg || 'switch active wallet failed'))
     }
@@ -111,7 +109,7 @@ try {
     if (Number(switchAccountResponse?.code ?? -1) !== 0) {
       throw new Error(String(switchAccountResponse?.msg || 'switch active account failed'))
     }
-    const response = await globalThis.sat20wallet_wasm.recoverAccountManagementFromCurrentWallet(passwordHash)
+		const response = await globalThis.sat20wallet_wasm.recoverAccountManagementFromCurrentWallet(password)
     const statusResponse = await globalThis.sat20account_wasm.status('{}')
     const status = statusResponse?.data || statusResponse
     return {
@@ -142,7 +140,7 @@ try {
     console.log(JSON.stringify({ result: 'PASS', origin: ORIGIN, peerHost: PEER_HOST, ...recovery }, null, 2))
   }
 } finally {
-  snapshot.passwordHash = ''
+	snapshot.password = ''
   snapshot.values = {}
   rmSync(tempDir, { recursive: true, force: true })
   await browser.close().catch(() => {})

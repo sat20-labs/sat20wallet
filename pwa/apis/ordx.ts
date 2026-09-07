@@ -1,9 +1,7 @@
 import { config as configMap } from '@/config'
-import { walletStorage } from '@/lib/walletStorage'
 class OrdxApi {
   generatePath(path: string, network: string) {
-    const env = walletStorage.getValue('env')
-    const config = configMap[env]
+    const config = configMap.prd
     const BASE_URL = config.ordxBaseUrl
     return `${BASE_URL}${
       network === 'testnet' ? '/btc/testnet' : '/btc/mainnet'
@@ -40,7 +38,7 @@ class OrdxApi {
 
   async getRecommendedFees({ network }: any): Promise<any> {
     const url = `https://apiprd.ordx.market/${
-      network === 'livenet' ? '' : 'testnet/'
+      network === 'mainnet' ? '' : 'testnet/'
     }ordx/GetRecommendedFees`
     const response = await fetch(url)
     return response.json()

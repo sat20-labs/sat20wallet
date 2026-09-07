@@ -40,6 +40,12 @@ func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string,
 
 	if len(defaultUtxos) != 0 {
 		for _, utxo := range defaultUtxos {
+			if utxo == nil || p.isL1RGBInputProtected(utxo.OutPointStr) {
+				return nil, fmt.Errorf("inscription input contains protected RGB state")
+			}
+			if utxo.HasAsset() {
+					return nil, fmt.Errorf("inscription input contains asset")
+			}
 			total += utxo.OutValue.Value
 			commitTxPrevOutputList = append(commitTxPrevOutputList, utxo)
 			excludedUtxoMap[utxo.OutPointStr] = true
@@ -59,7 +65,7 @@ func (p *Manager) inscribeV2(srcUtxoMgr *UtxoMgr, destAddr string,
 			}
 
 			for _, u := range utxos {
-				if p.utxoLockerL1.IsLocked(u.OutPoint) {
+				if p.isL1SendInputProtected(u.OutPoint) {
 					continue
 				}
 				_, ok := excludedUtxoMap[u.OutPoint]

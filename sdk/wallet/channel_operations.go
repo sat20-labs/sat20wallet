@@ -1017,8 +1017,12 @@ func (p *Manager) RestoreChannel(channelId string) (*Channel, error) {
 		return nil, err
 	}
 
-	p.SaveChannelToDB(c)
-	p.EnableChannel(c)
+	if err := p.SaveChannelToDB(c); err != nil {
+		return nil, err
+	}
+	if err := p.EnableChannel(c); err != nil {
+		return nil, err
+	}
 	c.PeerRPC = p.GetPeerNodeClient(&c.ChannelInDB)
 	Log.Infof("channel %s %d is restored from dkvs", channelId, c.CommitHeight)
 	return c, nil

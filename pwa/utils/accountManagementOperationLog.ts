@@ -13,6 +13,11 @@ type AccountOperationSpec = {
 }
 
 const accountOperationSpecs: Record<string, AccountOperationSpec> = {
+  fundAutopay: {
+    action: 'account_autopay_fund',
+    title: 'Fund account AUTOPAY',
+    summary: 'Funding AUTOPAY for paid account-management storage',
+  },
   confirmStorage: {
     action: 'account_storage_confirm',
     title: 'Configure account storage',

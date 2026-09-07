@@ -183,6 +183,8 @@
                   <div v-if="evmCompileResult" class="space-y-1 text-xs text-muted-foreground">
                     <div>{{ t('tools.evmDeploy.compiledContract') }}: {{ evmCompileResult.contractName }}</div>
                     <div>{{ t('tools.evmDeploy.abiFunctions') }}: {{ evmCompileResult.functionCount }}</div>
+                    <div>{{ t('tools.evmDeploy.actualCompilerVersion') }}: {{ evmCompileResult.compilerVersion }}</div>
+                    <div class="text-amber-500">{{ t('tools.evmDeploy.preflightUnverified') }}</div>
                   </div>
                 </div>
                 <div v-for="field in selectedContractSchema?.fields || []" :key="field.name" class="space-y-1">
@@ -969,7 +971,7 @@ import { useQueryClient } from '@tanstack/vue-query'
 
 const SMART_CONTRACT_DOC_URL_ZH = 'https://docs.sat20.org/protocol-xie-yi-yu-bai-pi-shu/smart-contracts'
 const SMART_CONTRACT_DOC_URL_EN = 'https://docs.sat20.org/english/protocols-and-whitepapers/smart-contracts'
-const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1q7qdraclpv20httfag9hnah9z83sn7h0yf6r26kpf3qpwg2rlnfesp5wj2n'
+const TEMP_FAUCET_CONTRACT_ADDRESS = 'tb1qlfnhxpgf4p8qcr9vkm0fn6vvlxuge73zq4ursusjr8upe2huvnps0ttdv6'
 const SUPPORTED_CONTRACTS_CACHE_PREFIX = 'tools:supported_contracts'
 
 const { toast } = useToast()
@@ -2371,6 +2373,8 @@ const compileEVMSource = async () => {
     if (!source) throw new Error(t('tools.evmDeploy.sourceRequired'))
     const solcModule = await import('solc')
     const solidityCompiler = (solcModule as any).default || solcModule
+    const actualCompilerVersion = String(solidityCompiler.version?.() || '').trim()
+    if (!actualCompilerVersion) throw new Error('Solidity compiler version is unavailable')
     const sourceName = 'Contract.sol'
     const compilerInput = {
       language: 'Solidity',
@@ -2435,6 +2439,9 @@ const compileEVMSource = async () => {
       initCodeHash: await sha256Hex(initCodeHex),
       runtimeCodeHash: compiled.evm?.deployedBytecode?.object ? await sha256Hex(`0x${compiled.evm.deployedBytecode.object}`) : '',
       functionCount: abi.filter((item: any) => item.type === 'function').length,
+      compilerVersion: actualCompilerVersion,
+      verified: false,
+      verificationStatus: 'unverified-preflight',
     }
   } catch (error) {
     evmCompileError.value = error instanceof Error ? error.message : String(error)
@@ -3866,7 +3873,7 @@ const deploySmartContract = async () => {
     if (!formHasRequiredValues(schema.fields || [])) throw new Error(t('tools.errors.fillRequiredParams'))
     const gasLimit = parseOptionalPositiveInteger(deployContractGasLimit.value, t('tools.contracts.gasLimit'))
     let req: Record<string, unknown>
-    let evmSourceMetadata: Record<string, unknown> | null = null
+    let hasEVMSourcePreflight = false
     if (schema.type === 'template') {
       const subtype = schema.subtype || schema.name
       const jsonContent = buildTemplateContractContent(schema)
@@ -3915,15 +3922,7 @@ const deploySmartContract = async () => {
       }
       const compiled = evmCompileResult.value
       if (compiled && compiled.initCodeHex === initCodeHex && compiled.source) {
-        evmSourceMetadata = {
-          contractName: compiled.contractName,
-          source: compiled.source,
-          abi: compiled.abi,
-          compilerConfig: compiled.compilerConfig,
-          constructorArgs: compiled.constructorArgs,
-          initCodeHash: compiled.initCodeHash,
-          runtimeCodeHash: compiled.runtimeCodeHash,
-        }
+        hasEVMSourcePreflight = true
       }
       await estimateEVMDeployGasLimit(req, gasLimit || 0)
     } else {
@@ -3958,25 +3957,16 @@ const deploySmartContract = async () => {
       deploySmartContractResult.value = JSON.stringify(res ?? null, null, 2)
       throw new Error(t('tools.errors.deployReturnedNoTxid'))
     }
-    let finalResult: any = res
-    if (evmSourceMetadata && res?.contractAddress) {
-      try {
-        const sourceResponse = await smartContractApi.submitEVMSource({
-          network: network.value || 'testnet',
-          contract: res.contractAddress,
-          metadata: {
-            ...evmSourceMetadata,
-            deployTxid: res.txid,
-          },
-        })
-        finalResult = { ...res, sourceMetadata: sourceResponse }
-      } catch (sourceError) {
-        finalResult = {
+    const finalResult: any = hasEVMSourcePreflight
+      ? {
           ...res,
-          sourceMetadataError: sourceError instanceof Error ? sourceError.message : String(sourceError),
+          sourceVerification: {
+            verified: false,
+            status: 'unverified',
+            reason: t('tools.evmDeploy.sourceVerificationUnavailable'),
+          },
         }
-      }
-    }
+      : res
     deploySmartContractResult.value = JSON.stringify(finalResult, null, 2)
     showSuccess(t('tools.messages.deploySubmitted'), res?.txid || res?.contractAddress || t('tools.messages.txBroadcasted'))
   } catch (error) {

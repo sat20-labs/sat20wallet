@@ -40,6 +40,8 @@ type ActionResultNotify struct {
 	Action string `json:"action"` // resv type
 	Result int    `json:"result"`
 	Reason string `json:"reason"`
+	PubKey []byte `json:"pubKey,omitempty"`
+	Sig    []byte `json:"msgSig,omitempty"`
 }
 
 type ActionResultResp struct {
@@ -94,6 +96,7 @@ type PerformActionAckReq struct {
 	Id      int64  `json:"id"`
 	FeeTx   string `json:"tx"`
 	FeeTxId string `json:"txId"`
+	Sig     []byte `json:"msgSig,omitempty"`
 }
 
 type PerformActionAckResp struct {

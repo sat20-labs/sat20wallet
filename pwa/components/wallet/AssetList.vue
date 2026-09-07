@@ -50,7 +50,7 @@
     <LockWithExpandConfirmDialog v-if="pendingLockExpand" v-model:open="showLockExpandDialog"
       :asset-key="pendingLockExpand.assetName" :asset-ticker="pendingLockExpand.assetTicker"
       :requested-amount="pendingLockExpand.amount" :available-amount="pendingLockExpand.availableAmount"
-      :btc-fee-rate="btcFeeRate" :busy="loading" @confirm="confirmLockWithExpand" />
+      :btc-fee-rate="btcFeeRate" :busy="assetActionLoading" @confirm="confirmLockWithExpand" />
     <RGB11InvoiceDialog v-model:open="showRGB11Invoice" :asset="rgb11ReceiveAsset" />
     <RGB11SendDialog v-model:open="showRGB11Send" :asset="rgb11SendAsset" @completed="refreshRGB11Assets" />
     <RGB11IssueDialog v-model:open="showRGB11Issue" @completed="refreshRGB11Assets" />
@@ -93,6 +93,7 @@ const {
   unlockUtxo,
   lockUtxo,
   lockUtxoWithExpand,
+  loading: assetActionLoading,
 } = useAssetActions()
 
 const props = defineProps({
@@ -621,7 +622,7 @@ const confirmLockWithExpand = async () => {
 }
 
 watch(showLockExpandDialog, (open) => {
-  if (!open && !loading.value) pendingLockExpand.value = null
+  if (!open && !assetActionLoading.value) pendingLockExpand.value = null
 })
 
 watch(selectedChain, async () => {

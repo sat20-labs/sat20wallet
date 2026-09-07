@@ -14,7 +14,7 @@ export class AssetHandlers {
    */
   async handleBatchSendAssetsSatsNet(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("📦 Handling BATCH_SEND_ASSETS_SATSNET", { callbackId, data });
+      console.log("📦 Handling BATCH_SEND_ASSETS_SATSNET", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.BATCH_SEND_ASSETS_SATSNET,
         data,
@@ -33,7 +33,7 @@ export class AssetHandlers {
    */
   async handleBatchSendAssetsV2SatsNet(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("📦 Handling BATCH_SEND_ASSETS_V2_SATSNET", { callbackId, data });
+      console.log("📦 Handling BATCH_SEND_ASSETS_V2_SATSNET", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.BATCH_SEND_ASSETS_V2_SATSNET,
         data,
@@ -52,7 +52,7 @@ export class AssetHandlers {
    */
   async handleSendAssetsSatsNet(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("💸 Handling SEND_ASSETS_SATSNET", { callbackId, data });
+      console.log("💸 Handling SEND_ASSETS_SATSNET", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.SEND_ASSETS_SATSNET,
         data,
@@ -71,7 +71,7 @@ export class AssetHandlers {
    */
   async handleSplitAsset(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("✂️ Handling SPLIT_ASSET", { callbackId, data });
+      console.log("✂️ Handling SPLIT_ASSET", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.SPLIT_ASSET,
         data,
@@ -177,10 +177,9 @@ export class AssetHandlers {
    */
   async handleLockUtxo(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("🔒 Handling LOCK_UTXO", { callbackId, data });
-      const result = await this.approvalHandler.handleDirectRequest(
-        Message.MessageAction.LOCK_UTXO,
-        data
+      console.log("🔒 Handling LOCK_UTXO", { callbackId });
+      const result = await this.approvalHandler.handleApprovedDirectRequest(
+        Message.MessageAction.LOCK_UTXO, data, callbackId, this.currentUrl()
       );
       this.responseHandler.sendResponse(callbackId, result, null);
     } catch (error) {
@@ -191,14 +190,35 @@ export class AssetHandlers {
 
   async handleUnlockUtxo(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("🔓 Handling UNLOCK_UTXO", { callbackId, data });
-      const result = await this.approvalHandler.handleDirectRequest(
-        Message.MessageAction.UNLOCK_UTXO,
-        data
+      console.log("🔓 Handling UNLOCK_UTXO", { callbackId });
+      const result = await this.approvalHandler.handleApprovedDirectRequest(
+        Message.MessageAction.UNLOCK_UTXO, data, callbackId, this.currentUrl()
       );
       this.responseHandler.sendResponse(callbackId, result, null);
     } catch (error) {
       console.error("❌ UNLOCK_UTXO error:", error);
+      this.responseHandler.sendResponse(callbackId, null, error as Error);
+    }
+  }
+
+  async handleLockUtxoSatsNet(callbackId: string, data: any): Promise<void> {
+    try {
+      const result = await this.approvalHandler.handleApprovedDirectRequest(
+        Message.MessageAction.LOCK_UTXO_SATSNET, data, callbackId, this.currentUrl()
+      );
+      this.responseHandler.sendResponse(callbackId, result, null);
+    } catch (error) {
+      this.responseHandler.sendResponse(callbackId, null, error as Error);
+    }
+  }
+
+  async handleUnlockUtxoSatsNet(callbackId: string, data: any): Promise<void> {
+    try {
+      const result = await this.approvalHandler.handleApprovedDirectRequest(
+        Message.MessageAction.UNLOCK_UTXO_SATSNET, data, callbackId, this.currentUrl()
+      );
+      this.responseHandler.sendResponse(callbackId, result, null);
+    } catch (error) {
       this.responseHandler.sendResponse(callbackId, null, error as Error);
     }
   }

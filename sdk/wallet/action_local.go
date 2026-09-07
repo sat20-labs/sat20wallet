@@ -273,69 +273,105 @@ func (p *Manager) localActionBelongsToCurrentWallet(resv *LocalActionPerformData
 }
 
 func (p *Manager) handleLocalActionStatus(resv *LocalActionPerformData, sendTxInL1 bool) error {
-	if resv.Status == RS_PERFORM_ACTION_TX_BROADCASTED {
-		if resv.IsL1Tx != sendTxInL1 {
+	resv.Mutex().RLock()
+	expectedStatus := resv.Status
+	expectedTxID := resv.TxId
+	expectedIsL1 := resv.IsL1Tx
+	resv.Mutex().RUnlock()
+
+	if expectedStatus == RS_PERFORM_ACTION_TX_BROADCASTED {
+		if expectedIsL1 != sendTxInL1 {
 			return nil
 		}
-		txId := resv.TxId
-		if txId == "" {
+		if expectedTxID == "" {
 			return nil
 		}
 		confirmed := false
 		if sendTxInL1 {
-			confirmed = p.l1IndexerClient.IsTxConfirmed(txId)
+			confirmed = p.l1IndexerClient.IsTxConfirmed(expectedTxID)
 		} else {
-			confirmed = p.l2IndexerClient.IsTxConfirmed(txId)
+			confirmed = p.l2IndexerClient.IsTxConfirmed(expectedTxID)
 		}
 		if !confirmed {
 			return nil
 		}
-		Log.Infof("local action tx confirmed: %s", txId)
-		return p.HandleLocalActionTxConfirmed(resv.Id)
+		Log.Infof("local action tx confirmed: %s", expectedTxID)
+		_, err := p.handleLocalActionTxConfirmed(resv.Id, expectedStatus,
+			expectedTxID, expectedIsL1)
+		return err
 	}
 
-	if resv.Status >= RS_PERFORM_ACTION_TX_CONFIRMED && resv.Status < RS_PERFORM_ACTION_COMPLETED {
-		return p.HandleLocalActionTxConfirmed(resv.Id)
+	if expectedStatus >= RS_PERFORM_ACTION_TX_CONFIRMED &&
+		expectedStatus < RS_PERFORM_ACTION_COMPLETED {
+		_, err := p.handleLocalActionTxConfirmed(resv.Id, expectedStatus,
+			expectedTxID, expectedIsL1)
+		return err
 	}
 
 	return nil
 }
 
+// HandleLocalActionTxConfirmed preserves the existing direct-call API while
+// still making the transition conditional on one locked state snapshot.
 func (p *Manager) HandleLocalActionTxConfirmed(id int64) error {
 	resv := p.GetLocalAction(id)
 	if resv == nil {
 		return fmt.Errorf("local action %d not found", id)
 	}
+	resv.Mutex().RLock()
+	expectedStatus := resv.Status
+	expectedTxID := resv.TxId
+	expectedIsL1 := resv.IsL1Tx
+	resv.Mutex().RUnlock()
+	_, err := p.handleLocalActionTxConfirmed(id, expectedStatus, expectedTxID, expectedIsL1)
+	return err
+}
+
+// handleLocalActionTxConfirmed advances only the transaction state observed by
+// the monitor. A delayed tick must not confirm a replacement transaction after
+// an action switches chain or starts its next stage.
+func (p *Manager) handleLocalActionTxConfirmed(id int64, expectedStatus ResvStatus,
+	expectedTxID string, expectedIsL1 bool) (bool, error) {
+	resv := p.GetLocalAction(id)
+	if resv == nil {
+		return false, fmt.Errorf("local action %d not found", id)
+	}
 	resv.Lock()
 	defer resv.Unlock()
 
-	resv.Status = RS_PERFORM_ACTION_TX_CONFIRMED
-	p.updateOperationLogByReservationBestEffort(RESV_TYPE_LOCALACTION, resv.Id, OperationLogUpdate{
-		Status:  OperationLogRunning,
-		Message: "Transaction confirmed; continuing wallet action",
-		TxID:    resv.TxId,
-		Details: map[string]string{"txid": resv.TxId},
-	})
+	if resv.Status != expectedStatus || resv.TxId != expectedTxID ||
+		resv.IsL1Tx != expectedIsL1 {
+		return false, nil
+	}
+	if expectedStatus == RS_PERFORM_ACTION_TX_BROADCASTED {
+		resv.Status = RS_PERFORM_ACTION_TX_CONFIRMED
+		p.updateOperationLogByReservationBestEffort(RESV_TYPE_LOCALACTION, resv.Id, OperationLogUpdate{
+			Status:  OperationLogRunning,
+			Message: "Transaction confirmed; continuing wallet action",
+			TxID:    resv.TxId,
+			Details: map[string]string{"txid": resv.TxId},
+		})
+	}
 	switch resv.Action {
 	case LOCAL_ACTION_CONFIRM_TX, LOCAL_ACTION_CONFIRM_TX_L2:
 		status, err := CompleteLocalActionAfterTxConfirmed(resv.Action)
 		if err != nil {
-			return err
+			return true, err
 		}
 		resv.Status = status
-		return p.SaveWalletReservation(resv)
+		return true, p.SaveWalletReservation(resv)
 	case LOCAL_ACTION_UNSTAKE_MINER:
 		if err := p.localActionInnerStatusUnstakeMiner(resv); err != nil {
-			return err
+			return true, err
 		}
-		return p.SaveWalletReservation(resv)
+		return true, p.SaveWalletReservation(resv)
 	case LOCAL_ACTION_LOCK_WITH_EXPAND:
 		if err := p.localActionInnerStatusLockWithExpand(resv); err != nil {
-			return err
+			return true, err
 		}
-		return p.SaveWalletReservation(resv)
+		return true, p.SaveWalletReservation(resv)
 	default:
-		return fmt.Errorf("local action %s requires STP manager", resv.Action)
+		return true, fmt.Errorf("local action %s requires STP manager", resv.Action)
 	}
 }
 
@@ -491,7 +527,9 @@ func (p *Manager) localActionInnerStatusLockWithExpand(resv *LocalActionPerformD
 		return fmt.Errorf("can't find channel %s", param.ChannelId)
 	}
 	if p.GetChannel(channel.ChannelId) == nil {
-		p.EnableChannel(channel)
+		if err := p.EnableChannel(channel); err != nil {
+			return err
+		}
 	}
 
 	switch currResv.ActionType {

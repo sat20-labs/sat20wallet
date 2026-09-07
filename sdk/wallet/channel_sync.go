@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 )
@@ -20,17 +22,17 @@ func (p *Manager) SyncChannel(reason string, client NodeRPCClient) error {
 		return fmt.Errorf("wallet is not created/unlocked")
 	}
 	localWallet := p.wallet.Clone()
-	identityGeneration := p.channelIdentityGeneration
 	p.mutex.RUnlock()
 	p.channelIdentityMu.RUnlock()
 	if err := p.rejectPendingChannelLifecycleSync(localWallet); err != nil {
 		return err
 	}
-	return p.syncChannelForIdentity(context.Background(), reason, client, localWallet, identityGeneration)
+	return p.syncChannelForWallet(context.Background(), reason, client, localWallet)
 }
 
-func (p *Manager) syncChannelForIdentity(ctx context.Context, reason string, client NodeRPCClient, localWallet common.Wallet,
-	identityGeneration uint64) error {
+// The request owns its wallet/account snapshot. Changing the UI selection does
+// not invalidate it; only changes to this channel's lifecycle/state may do so.
+func (p *Manager) syncChannelForWallet(ctx context.Context, reason string, client NodeRPCClient, localWallet common.Wallet) error {
 	if err := p.rejectPendingChannelLifecycleSync(localWallet); err != nil {
 		return err
 	}
@@ -39,15 +41,8 @@ func (p *Manager) syncChannelForIdentity(ctx context.Context, reason string, cli
 		return err
 	}
 
-	p.channelIdentityMu.RLock()
-	defer p.channelIdentityMu.RUnlock()
-	p.mutex.RLock()
-	identityUnchanged := p.channelIdentityGeneration == identityGeneration && p.wallet != nil &&
-		bytes.Equal(localWallet.GetPaymentPubKey().SerializeCompressed(),
-			p.wallet.GetPaymentPubKey().SerializeCompressed())
-	p.mutex.RUnlock()
-	if !identityUnchanged {
-		return fmt.Errorf("wallet identity changed during channel sync")
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := p.rejectPendingChannelLifecycleSync(localWallet); err != nil {
 		return err
@@ -61,8 +56,28 @@ func (p *Manager) syncChannelForIdentity(ctx context.Context, reason string, cli
 }
 
 func (p *Manager) rejectPendingChannelLifecycleSync(localWallet common.Wallet) error {
+	channelID, err := p.channelIDForWallet(localWallet)
+	if err != nil {
+		return err
+	}
+	if err := p.rejectUnfinishedChannelLifecycleForWallet(channelID, localWallet); err != nil {
+		return err
+	}
+	if channel := p.GetChannel(channelID); channel != nil {
+		if !channel.Mutex.TryRLock() {
+			return fmt.Errorf("channel %s is busy; skip sync", channelID)
+		}
+		defer channel.Mutex.RUnlock()
+		if channel.ResvId != 0 || channel.Status != CS_READY {
+			return fmt.Errorf("channel %s is not idle; skip sync", channelID)
+		}
+	}
+	return nil
+}
+
+func (p *Manager) channelIDForWallet(localWallet common.Wallet) (string, error) {
 	if localWallet == nil || localWallet.GetPaymentPubKey() == nil {
-		return fmt.Errorf("wallet is not created/unlocked")
+		return "", fmt.Errorf("wallet is not created/unlocked")
 	}
 	p.mutex.RLock()
 	var serverPubKey []byte
@@ -71,19 +86,13 @@ func (p *Manager) rejectPendingChannelLifecycleSync(localWallet common.Wallet) e
 	}
 	p.mutex.RUnlock()
 	if len(serverPubKey) == 0 {
-		return fmt.Errorf("server node is not initialized")
+		return "", fmt.Errorf("server node is not initialized")
 	}
 	channelID, err := GetP2WSHaddress(serverPubKey, localWallet.GetPaymentPubKey().SerializeCompressed())
 	if err != nil {
-		return err
+		return "", err
 	}
-	if p.hasPendingFundingReservation(channelID, localWallet.GetWalletId()) {
-		return fmt.Errorf("channel funding is pending; peer sync is disabled")
-	}
-	if p.hasPendingClosingReservation(channelID, localWallet.GetWalletId()) {
-		return fmt.Errorf("channel closing is pending; peer sync is disabled")
-	}
-	return nil
+	return channelID, nil
 }
 
 func (p *Manager) requestChannelSync(ctx context.Context, reason string, client NodeRPCClient, localWallet common.Wallet) ([]byte, error) {
@@ -128,14 +137,15 @@ func (p *Manager) requestChannelSync(ctx context.Context, reason string, client 
 
 func (p *Manager) RebuildChannelFromPeerChanInfo(peerChannelInDB []byte) error {
 	p.channelIdentityMu.RLock()
-	defer p.channelIdentityMu.RUnlock()
 	p.mutex.RLock()
 	if p.wallet == nil {
 		p.mutex.RUnlock()
+		p.channelIdentityMu.RUnlock()
 		return fmt.Errorf("wallet is not created/unlocked")
 	}
 	localWallet := p.wallet.Clone()
 	p.mutex.RUnlock()
+	p.channelIdentityMu.RUnlock()
 	return p.rebuildChannelFromPeerChanInfoForWallet(peerChannelInDB, localWallet)
 }
 
@@ -169,19 +179,102 @@ func (p *Manager) rebuildChannelFromPeerChanInfoForWallet(peerChannelInDB []byte
 	if err := restorePeerChannelPerspective(&channel, localWallet, serverNodeID); err != nil {
 		return err
 	}
+	expectedChannelID, err := p.channelIDForWallet(localWallet)
+	if err != nil {
+		return err
+	}
+	if channel.ChannelId != expectedChannelID {
+		return fmt.Errorf("peer snapshot channel %s does not match current channel %s",
+			channel.ChannelId, expectedChannelID)
+	}
 
-	c := NewChannel(&channel, p)
+	if channel.LocalChanCfg.PaymentKey == nil ||
+		!channel.LocalChanCfg.PaymentKey.IsEqual(localWallet.GetPaymentPubKey()) {
+		return fmt.Errorf("peer snapshot local payment key does not match requested wallet")
+	}
+	c := newPeerSnapshotChannel(&channel, p, localWallet)
 	if err := p.SignAndVerifyCommitTxV2(c, true); err != nil {
 		Log.Errorf("RebuildChannelFromPeerChanInfo VerifyCommitTx failed. %v", err)
 		return err
 	}
 
-	if err := p.SaveChannelToDB(c); err != nil {
+	if err := p.replaceChannelFromPeer(c, localWallet); err != nil {
 		return err
 	}
 	Log.Infof("channel %s is restored", channel.ChannelId)
+	return nil
+}
+
+func (p *Manager) replaceChannelFromPeer(channel *Channel, localWallet common.Wallet) error {
+	if channel == nil {
+		return fmt.Errorf("peer channel is nil")
+	}
+	current := p.GetChannel(channel.ChannelId)
+	if current != nil {
+		if !current.Mutex.TryLock() {
+			return fmt.Errorf("channel %s is busy; skip sync", channel.ChannelId)
+		}
+		defer current.Mutex.Unlock()
+	}
+
+	// Use the existing channel/manager locks only for applying the response,
+	// never across the peer request. Normal channel operations own these locks.
+	err := func() error {
+		p.mutex.Lock()
+		defer p.mutex.Unlock()
+		if p.channelMap[channel.ChannelId] != current {
+			return fmt.Errorf("channel changed during sync")
+		}
+		if err := p.rejectUnfinishedChannelLifecycleLocked(channel.ChannelId, localWallet.GetWalletId(),
+			localWallet.GetPaymentPubKey().SerializeCompressed()); err != nil {
+			return fmt.Errorf("peer snapshot rejected: %w", err)
+		}
+		var local *ChannelInDB
+		if current != nil {
+			if current.ResvId != 0 || current.Status != CS_READY {
+				return fmt.Errorf("channel %s is not idle; skip sync", channel.ChannelId)
+			}
+			local = &current.ChannelInDB
+		} else {
+			var err error
+			local, err = p.LoadChannelInDB(channel.ChannelId)
+			if err != nil && !errors.Is(err, indexer.ErrKeyNotFound) {
+				return err
+			}
+		}
+		localHeight := -1 // No local channel: the initial peer height 0 can be restored.
+		if local != nil {
+			localHeight = local.CommitHeight
+		}
+		if channel.CommitHeight <= localHeight {
+			return fmt.Errorf("peer commit height %d must be greater than local %d; skip sync",
+				channel.CommitHeight, localHeight)
+		}
+		if err := p.SaveChannelInDB(&channel.ChannelInDB); err != nil {
+			return err
+		}
+		if channel.Status == CS_READY {
+			if current != nil {
+				// Preserve the runtime pointer for operations already waiting on
+				// its mutex; they must see the new state when they acquire it.
+				current.ChannelInDB = channel.ChannelInDB
+				current.PeerRPC = channel.PeerRPC
+				current.localWallet = channel.localWallet
+				channel = current
+			}
+			p.installChannelLocked(channel)
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
+	}
+
+	p.backupChannel(channel)
 	if channel.Status == CS_READY {
-		p.EnableChannel(c)
+		if tower := p.GetWatchTower(); tower != nil {
+			tower.CleanCurrentRemoteCommitTx(channel)
+		}
 	}
 	return nil
 }

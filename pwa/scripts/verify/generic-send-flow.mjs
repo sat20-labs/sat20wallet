@@ -78,17 +78,18 @@ async function preparePwa(client, page) {
   await evaluate(client, `(async () => {
     const verify = window.__SAT20_PWA_VERIFY__;
     const wallet = verify.useWalletStore();
-    const hashed = await verify.hashPassword(${q(PASSWORD)});
+		const credential = ${q(PASSWORD)};
     if (!wallet.hasWallet) throw new Error('test wallet is not imported');
     if (wallet.locked) {
-      const [error] = await wallet.unlockWallet(hashed);
+			const [error] = await wallet.unlockWallet(credential);
       if (error) throw error;
     }
-    await wallet.setPassword(hashed);
+	const [sessionUnlockErr] = await wallet.unlockWallet(credential);
+	if (sessionUnlockErr) throw sessionUnlockErr;
     await verify.walletStorage.setValue('env', 'prd');
     if (wallet.network === verify.Network.TESTNET &&
         !String(wallet.address || '').startsWith('tb1')) {
-      await wallet.setNetwork(verify.Network.LIVENET);
+      await wallet.setNetwork(verify.Network.MAINNET);
     }
     if (wallet.network !== verify.Network.TESTNET) {
       await wallet.setNetwork(verify.Network.TESTNET);
@@ -215,7 +216,7 @@ async function main() {
       }
       try {
         const startedMainnet = Date.now();
-        await wallet.setNetwork(Network.LIVENET);
+        await wallet.setNetwork(Network.MAINNET);
         const mainnet = {
           network: wallet.network,
           address: wallet.address,

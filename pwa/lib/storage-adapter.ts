@@ -7,6 +7,7 @@ let dbPromise: Promise<IDBDatabase> | null = null
 const shouldUseIndexedDb = (key: string) => {
   return key.startsWith('local:wallet_') ||
     key.startsWith('session:wallet_') ||
+    key.startsWith('local:dapp_') ||
     key.startsWith('local:authorized_origins')
 }
 
@@ -135,7 +136,7 @@ export const Storage = {
       const keysToRemove: string[] = []
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i)
-        if (key && (key.startsWith('local:wallet_') || key.startsWith('session:wallet_') || key.startsWith('authorized_origins') || key.startsWith('node_stake_') || key.startsWith('referrer_'))) {
+        if (key && (key.startsWith('local:wallet_') || key.startsWith('session:wallet_') || key.startsWith('local:dapp_') || key.startsWith('authorized_origins') || key.startsWith('node_stake_') || key.startsWith('referrer_'))) {
           keysToRemove.push(key)
         }
       }

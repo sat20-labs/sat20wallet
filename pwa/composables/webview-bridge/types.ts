@@ -17,10 +17,14 @@ export interface CallbackRecord {
 
 export interface ApprovalMetadata {
   callbackId: string;
+  requestId: string;
   origin: string;
   dAppOrigin: string;
   platform: string;
   url: string;
+  action: Message.MessageAction;
+  expiresAt?: number;
+  identityGeneration: number;
 }
 
 export type InjectionStatus = "idle" | "injecting" | "success" | "failed";

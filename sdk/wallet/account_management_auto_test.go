@@ -2,11 +2,13 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
+	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
 func newAccountManagementAutoTestManager(t *testing.T) *Manager {
@@ -14,12 +16,22 @@ func newAccountManagementAutoTestManager(t *testing.T) *Manager {
 	database := newMemoryKVDB()
 	manager := &Manager{
 		db: database, status: newDefaultStatus(),
+		cfg: &sdkcommon.Config{
+			Env:   "test",
+			Chain: _chain,
+			IndexerL2: &sdkcommon.Indexer{
+				Scheme: "http",
+				Host:   "dkvs.test",
+				Proxy:  _chain,
+			},
+		},
 		walletInfoMap:        make(map[int64]*WalletInfo),
 		tickerInfoMap:        make(map[string]*indexer.TickerInfo),
 		utxoLockerL1:         NewUtxoLocker(database, nil, L1_NETWORK_BITCOIN),
 		utxoLockerL2:         NewUtxoLocker(database, nil, L2_NETWORK_SATOSHI),
 		managedDataProviders: make(map[string]AccountManagedDataProvider),
 	}
+	manager.http = newRGB11MemoryDKVSHTTP()
 	rgbManager, err := newRGB11Manager(manager, database, manager.utxoLockerL1, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +55,7 @@ func assertInitialAccountManagementStatus(t *testing.T, manager *Manager, wallet
 	status := manager.GetAccountManagementStatus()
 	if !status.Active || status.RecoveryConfigured || status.StorageMode != AccountStorageTemporary ||
 		status.AccountID == "" || status.RootFingerprint == "" || status.RootWalletID != walletID ||
-		status.StateSeq == 0 || !status.ManagedDataDirty {
+		status.StateSeq != 1 || status.PendingChanges != 0 || !status.ManagedDataDirty {
 		t.Fatalf("initial account management status=%+v", status)
 	}
 	providers := manager.accountManagedDataProviders()
@@ -52,11 +64,17 @@ func assertInitialAccountManagementStatus(t *testing.T, manager *Manager, wallet
 	}
 }
 
-func TestImportFirstMnemonicWalletDoesNotInitializeAccountManagement(t *testing.T) {
+func TestImportFirstMnemonicWalletAfterAuthoritativeRootNotFoundEnablesAccountManagement(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
 	manager := newAccountManagementAutoTestManager(t)
+	store := &memoryAccountRootWrapperStore{records: make(map[string]*dkvsValue)}
+	if _, err := manager.recoverAccountManagementFromRootMnemonic(context.Background(),
+		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+		"password", store, AccountIndexerLocation{}); !errors.Is(err, ErrRootAccountNotFound) {
+		t.Fatalf("root discovery error=%v", err)
+	}
 	walletID, err := manager.ImportWallet(
 		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
 		"password",
@@ -64,13 +82,61 @@ func TestImportFirstMnemonicWalletDoesNotInitializeAccountManagement(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status := manager.GetAccountManagementStatus(); status.Active {
-		t.Fatalf("ordinary wallet import initialized account management: %+v", status)
+	assertInitialAccountManagementStatus(t, manager, walletID)
+}
+
+func TestImportFirstMnemonicWalletActivationIsAtomic(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager := newAccountManagementAutoTestManager(t)
+	store := &memoryAccountRootWrapperStore{records: make(map[string]*dkvsValue)}
+	if _, err := manager.recoverAccountManagementFromRootMnemonic(context.Background(),
+		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+		"password", store, AccountIndexerLocation{}); !errors.Is(err, ErrRootAccountNotFound) {
+		t.Fatalf("root discovery error=%v", err)
 	}
-	if err := manager.InitializeAccountManagement("password"); err != nil {
+	originalDB := manager.db
+	manager.db = &passwordChangeFailFlushDB{KVDB: originalDB}
+
+	if _, err := manager.ImportWallet(
+		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+		"password",
+	); err == nil {
+		t.Fatal("first mnemonic import unexpectedly survived an atomic flush failure")
+	}
+	if manager.wallet != nil || len(manager.walletInfoMap) != 0 || manager.accountProfile != nil ||
+		len(manager.accountSecret) != 0 || manager.accountPassword != "" {
+		t.Fatal("failed first mnemonic import changed live account state")
+	}
+	if _, err := originalDB.Read(accountManagementProfileKey()); !errors.Is(err, indexer.ErrKeyNotFound) {
+		t.Fatalf("failed import persisted account profile: %v", err)
+	}
+	if wallets, err := loadAllWalletFromDB(originalDB); err != nil || len(wallets) != 0 {
+		t.Fatalf("failed import persisted wallet catalog: wallets=%d err=%v", len(wallets), err)
+	}
+}
+
+func TestImportFirstMnemonicWalletDoesNotReuseAnotherMnemonicAuthorization(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager := newAccountManagementAutoTestManager(t)
+	store := &memoryAccountRootWrapperStore{records: make(map[string]*dkvsValue)}
+	if _, err := manager.recoverAccountManagementFromRootMnemonic(context.Background(),
+		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+		"password", store, AccountIndexerLocation{}); !errors.Is(err, ErrRootAccountNotFound) {
+		t.Fatalf("root discovery error=%v", err)
+	}
+	if _, err := manager.ImportWallet(
+		"legal winner thank year wave sausage worth useful legal winner thank yellow",
+		"password",
+	); err != nil {
 		t.Fatal(err)
 	}
-	assertInitialAccountManagementStatus(t, manager, walletID)
+	if manager.GetAccountManagementStatus().Active || len(manager.accountSecret) != 0 {
+		t.Fatal("another mnemonic reused the root-not-found authorization")
+	}
 }
 
 func TestCreateFirstMnemonicWalletAutomaticallyEnablesAccountManagement(t *testing.T) {

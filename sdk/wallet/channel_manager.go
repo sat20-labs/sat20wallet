@@ -1,20 +1,24 @@
 package wallet
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
 
 func (p *Manager) enableChannel(channel *Channel) {
-	p.EnableChannel(channel)
+	if err := p.EnableChannel(channel); err != nil {
+		Log.Errorf("EnableChannel %s failed. %v", channel.ChannelId, err)
+	}
 }
 
-func (p *Manager) EnableChannel(channel *Channel) {
-	p.AddChannelToNode(channel)
-
+func (p *Manager) EnableChannel(channel *Channel) error {
+	if channel == nil {
+		return fmt.Errorf("channel is nil")
+	}
 	p.mutex.Lock()
-	p.channelMap[channel.ChannelId] = channel
+	p.installChannelLocked(channel)
 	p.mutex.Unlock()
 
 	// The current remote commitment is valid, not revoked. Keep this invariant
@@ -23,6 +27,7 @@ func (p *Manager) EnableChannel(channel *Channel) {
 	if tower := p.GetWatchTower(); tower != nil {
 		tower.CleanCurrentRemoteCommitTx(channel)
 	}
+	return nil
 }
 
 func (p *Manager) disableChannel(channel *Channel) {
@@ -30,11 +35,57 @@ func (p *Manager) disableChannel(channel *Channel) {
 }
 
 func (p *Manager) DisableChannel(channel *Channel) {
-	p.RemoveChannelInNode(getNodeMapKeyWithChannel(channel))
-
+	if channel == nil {
+		return
+	}
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
+	current := p.channelMap[channel.ChannelId]
+	if current != channel {
+		p.mutex.Unlock()
+		Log.Warnf("DisableChannel ignored stale channel %s", channel.ChannelId)
+		return
+	}
+	key := getNodeMapKeyWithChannel(channel)
+	if p.nodeMap[key] == channel.ChannelId {
+		delete(p.nodeMap, key)
+	}
 	delete(p.channelMap, channel.ChannelId)
+	p.mutex.Unlock()
+}
+
+func (p *Manager) installChannelLocked(channel *Channel) {
+	if current := p.channelMap[channel.ChannelId]; current != nil {
+		oldKey := getNodeMapKeyWithChannel(current)
+		if oldKey != getNodeMapKeyWithChannel(channel) && p.nodeMap[oldKey] == channel.ChannelId {
+			delete(p.nodeMap, oldKey)
+		}
+	}
+	p.nodeMap[getNodeMapKeyWithChannel(channel)] = channel.ChannelId
+	p.channelMap[channel.ChannelId] = channel
+	p.rebindReservationChannelsLocked(channel)
+}
+
+func (p *Manager) rebindReservationChannelsLocked(channel *Channel) {
+	for _, resv := range p.fundingChannelMap {
+		if resv != nil && resv.ChannelId == channel.ChannelId {
+			resv.Channel = channel
+		}
+	}
+	for _, resv := range p.closingChannelMap {
+		if resv != nil && resv.ChannelId == channel.ChannelId {
+			resv.Channel = channel
+		}
+	}
+	for _, resv := range p.paymentChannelMap {
+		if resv != nil && resv.ChannelId == channel.ChannelId {
+			resv.Channel = channel
+		}
+	}
+	for _, resv := range p.splicingChannelMap {
+		if resv != nil && resv.ChannelId == channel.ChannelId {
+			resv.Channel = channel
+		}
+	}
 }
 
 func (p *Manager) AddChannelToNode(c *Channel) {
@@ -229,26 +280,67 @@ func (p *Manager) hasPendingLockWithExpand(channelID string) bool {
 }
 
 func (p *Manager) rejectUnfinishedChannelLifecycle(channelID string) error {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 	if p.wallet == nil {
 		return fmt.Errorf("wallet is not created/unlocked")
 	}
-	walletID := p.wallet.GetWalletId()
-	if p.hasPendingFundingReservation(channelID, walletID) {
-		return fmt.Errorf("channel open is already in progress")
+	paymentKey := p.wallet.GetPaymentPubKey()
+	var paymentPubKey []byte
+	if paymentKey != nil {
+		paymentPubKey = paymentKey.SerializeCompressed()
 	}
-	if p.hasPendingClosingReservation(channelID, walletID) {
-		return fmt.Errorf("channel close is already in progress")
+	return p.rejectUnfinishedChannelLifecycleLocked(channelID, p.wallet.GetWalletId(), paymentPubKey)
+}
+
+func (p *Manager) rejectUnfinishedChannelLifecycleLocked(channelID string, walletID common.WalletId,
+	paymentPubKey []byte) error {
+	for _, resv := range p.fundingChannelMap {
+		if reservationMatchesChannelContext(resv, channelID, walletID) {
+			return fmt.Errorf("channel open is already in progress")
+		}
 	}
-	if p.hasPendingPaymentReservation(channelID, walletID) {
-		return fmt.Errorf("channel payment is already in progress")
+	for _, resv := range p.closingChannelMap {
+		if reservationMatchesChannelContext(resv, channelID, walletID) {
+			return fmt.Errorf("channel close is already in progress")
+		}
 	}
-	if p.hasPendingSplicingReservation(channelID, walletID) {
-		return fmt.Errorf("channel splicing is already in progress")
+	for _, resv := range p.paymentChannelMap {
+		if reservationMatchesChannelContext(resv, channelID, walletID) {
+			return fmt.Errorf("channel payment is already in progress")
+		}
 	}
-	if p.hasPendingLockWithExpand(channelID) {
-		return fmt.Errorf("channel lock-with-expand is already in progress")
+	for _, resv := range p.splicingChannelMap {
+		if reservationMatchesChannelContext(resv, channelID, walletID) {
+			return fmt.Errorf("channel splicing is already in progress")
+		}
+	}
+	for _, reservation := range p.localActionPerformMap {
+		resv, ok := reservation.(*LocalActionPerformData)
+		if !ok || resv == nil || resv.Status <= RS_CLOSED || resv.Status == RS_PERFORM_ACTION_COMPLETED ||
+			resv.Action != LOCAL_ACTION_LOCK_WITH_EXPAND {
+			continue
+		}
+		belongsToWallet := resv.WalletId == (common.WalletId{}) || resv.WalletId == walletID
+		if len(resv.ReqPubKey) != 0 {
+			belongsToWallet = len(paymentPubKey) != 0 && bytes.Equal(resv.ReqPubKey, paymentPubKey)
+		}
+		param, ok := resv.ActionParam.(*LocalActionParam_Expand)
+		if belongsToWallet && ok && param != nil && param.ChannelId == channelID {
+			return fmt.Errorf("channel lock-with-expand is already in progress")
+		}
 	}
 	return nil
+}
+
+func (p *Manager) rejectUnfinishedChannelLifecycleForWallet(channelID string, wallet common.Wallet) error {
+	if wallet == nil || wallet.GetPaymentPubKey() == nil {
+		return fmt.Errorf("wallet is not created/unlocked")
+	}
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return p.rejectUnfinishedChannelLifecycleLocked(channelID, wallet.GetWalletId(),
+		wallet.GetPaymentPubKey().SerializeCompressed())
 }
 
 func (p *Manager) FindChannel(channelId string) *Channel {
@@ -323,18 +415,33 @@ func (p *Manager) SetChannelBackupHandler(handler ChannelBackupHandler) {
 }
 
 func (p *Manager) SaveChannelToDB(c *Channel) error {
+	if c == nil {
+		return fmt.Errorf("channel is nil")
+	}
 	if err := p.SaveChannelInDB(&c.ChannelInDB); err != nil {
 		return err
 	}
-	if p.channelBackupHandler == nil {
-		return nil
+	p.backupChannel(c)
+	return nil
+}
+
+// backupChannel is an optional, best-effort service backup. Its failure must
+// not turn a successful local save or peer sync into an operation failure.
+func (p *Manager) backupChannel(c *Channel) {
+	p.mutex.RLock()
+	handler := p.channelBackupHandler
+	p.mutex.RUnlock()
+	if handler == nil {
+		return
 	}
 	buf, err := EncodeToBytes(&c.ChannelInDB)
 	if err != nil {
-		Log.Errorf("SaveChannelToDB EncodeToBytes failed. %v", err)
-		return err
+		Log.Warningf("backup channel %s encoding failed: %v", c.ChannelId, err)
+		return
 	}
-	return p.channelBackupHandler.BackupChannel(c, buf)
+	if err := handler.BackupChannel(c, buf); err != nil {
+		Log.Warningf("backup channel %s failed: %v", c.ChannelId, err)
+	}
 }
 
 func (p *Manager) loadChannel(channelId string) (*Channel, error) {

@@ -171,6 +171,8 @@ func TestRGB11AddressBroadcastUsesDurableIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	pending.State.Status = "delivered"
+	pending.State.AckStatus = "accepted"
+	pending.State.DeliveryAcknowledged = true
 	pending.State.DeliveryRecordHash = "durable-record-hash"
 	pending.State.DeliveryRecordKey = "/mail/test/msg"
 	if err := runtime.projectionStore.SavePendingTransferState(pending); err != nil {

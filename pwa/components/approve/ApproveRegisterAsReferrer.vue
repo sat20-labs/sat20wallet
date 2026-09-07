@@ -42,7 +42,7 @@ import { useReferrerManager } from '@/composables/useReferrerManager'
 interface Props {
   data: {
     name: string;
-    feeRate: number;
+    feeRate: string;
   }
 }
 
@@ -58,7 +58,8 @@ const { address } = storeToRefs(walletStore)
 const { addLocalReferrerName } = useReferrerManager()
 
 const confirm = async () => {
-  if (!props.data?.name || typeof props.data?.feeRate !== 'number') {
+  if (!props.data?.name || typeof props.data?.feeRate !== 'string' ||
+      !/^(0|[1-9][0-9]*)$/.test(props.data.feeRate)) {
     toast.toast({
       title: '参数缺失',
       description: '推荐人名称或费率缺失',

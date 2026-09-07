@@ -150,6 +150,10 @@ export const useChannelStore = defineStore('channel', () => {
           if (generation !== channelRequestGeneration) {
             return
           }
+          if (c.status === 0) {
+            clearChannelState()
+            return
+          }
           if (c.localbalanceL1) {
             channel.value = c
           } else {

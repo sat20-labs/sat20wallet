@@ -650,7 +650,7 @@ func (p *Manager) DepositWithContract(destAddr string, assetName string, amt str
 	// 通知服务端（执行ascend操作）将txId中输出到通道地址的utxo锁定，否则有可能被withdraw或者其他操作用掉 （临时方案）
 	// 如果合约不是该节点的服务端运行，这个就无效。需要方案2: 在withdraw时，不使用当前区块的utxo
 	RESV_TYPE_DEPOSIT := "deposit"
-	p.serverNode.client.SendActionResultNfty(0, RESV_TYPE_DEPOSIT, 0, txId)
+	p.serverNode.client.SendActionResultNfty(p.GetWallet(), 0, RESV_TYPE_DEPOSIT, 0, txId)
 
 	return txId, nil
 }

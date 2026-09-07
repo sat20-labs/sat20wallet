@@ -249,7 +249,7 @@ func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire
 		p.enableChannel(resv.OldChannel)
 		p.DelResvWithId(resv.Id)
 		if resv.Id != 0 && channel.PeerRPC != nil {
-			_ = channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_SPLICING, -1, err.Error())
+			_ = channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_SPLICING, -1, err.Error())
 		}
 		p.GetUtxoLocker().UnlockUtxosWithTx(resv.SplicingTx)
 	}
@@ -446,7 +446,7 @@ func (p *Manager) FunderInitSplicingOutProcess(channel *Channel, destAddr string
 		p.enableChannel(resv.OldChannel)
 		p.DelResvWithId(resv.Id)
 		if resv.Id != 0 && channel.PeerRPC != nil {
-			_ = channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_SPLICING, -1, err.Error())
+			_ = channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_SPLICING, -1, err.Error())
 		}
 		p.GetUtxoLocker().UnlockUtxosWithTx(resv.SplicingTx)
 	}

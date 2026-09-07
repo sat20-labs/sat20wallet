@@ -125,23 +125,6 @@ declare interface WalletManager {
     password: string
   ): Promise<SatsnetResponse<{ mnemonic: string }>>
 
-  // Returns the commit root key for the specified peer.
-  getCommitRootKey(peer: Uint8Array): Promise<SatsnetResponse<Uint8Array>>
-
-  // Returns the commit secret for the specified peer and index.
-  getCommitSecret(
-    peer: Uint8Array,
-    index: number
-  ): Promise<SatsnetResponse<Uint8Array>>
-
-  // Derives a revocation private key from the provided commit secret.
-  deriveRevocationPrivKey(
-    commitSecret: Uint8Array
-  ): Promise<SatsnetResponse<Uint8Array>>
-
-  // Returns the revocation base key.
-  getRevocationBaseKey(): Promise<SatsnetResponse<Uint8Array>>
-
   // Returns the node public key.
   getNodePubKey(): Promise<SatsnetResponse<Uint8Array>>
 

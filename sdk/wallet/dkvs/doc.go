@@ -8,6 +8,6 @@
 //
 // The parent wallet package owns dkvsManager. That manager composes these
 // primitives with wallet keys, endpoint routing, readiness, outbox retry and
-// domain-specific adapters. Compatibility facades in the parent package may
-// delegate here, but must not duplicate the low-level implementation.
+// domain-specific adapters. Narrow integration aliases in the parent package
+// may delegate here, but must not duplicate the low-level implementation.
 package dkvs

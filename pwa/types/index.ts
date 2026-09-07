@@ -1,5 +1,5 @@
 export enum Network {
-  LIVENET = 'livenet',
+  MAINNET = 'mainnet',
   TESTNET = 'testnet',
   // REGTEST = 'regtest',
   // TESTNET4 = 'testnet4',
@@ -20,11 +20,13 @@ export interface WalletAccount {
   did?: string
   address: string
   pubKey: string
+  accountId?: string
 }
 
 export interface WalletData {
   id: string
   name: string
+  fingerprint?: string
   avatar?: string
   accounts: WalletAccount[]
 }

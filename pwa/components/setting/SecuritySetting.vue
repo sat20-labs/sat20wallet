@@ -169,6 +169,7 @@ import {
 } from '@/components/ui/select'
 import { useGlobalStore } from '@/store/global'
 import { useWalletStore } from '@/store/wallet'
+import { withWalletPassword } from '@/lib/walletPasswordPrompt'
 import { storeToRefs } from 'pinia'
 import { biometricService } from '@/utils/biometric'
 import { biometricCredentialManager } from '@/utils/biometricCredentials'
@@ -385,21 +386,14 @@ const createBiometricCredential = async (): Promise<boolean> => {
       return false
     }
 
-    // 获取当前钱包密码（已经是哈希密码）
-    const currentPassword = walletStore.password || ''
-
-    if (!currentPassword) {
-      showAlert(t('securitySetting.passwordRequiredError'), 'error')
-      return false
-    }
-
-    // 创建生物识别凭据（传入哈希密码）
-    const result = await withBiometricTimeout(
+    // Use the confirmed password only for this credential-creation operation.
+    const result = await withWalletPassword(password => withBiometricTimeout(
       biometricCredentialManager.createCredential(
-        currentPassword,
+        password,
         'SAT20 钱包生物识别凭据'
       )
-    )
+    ))
+    if (result === undefined) return false
 
     if (result.success) {
       hasCredentials.value = true

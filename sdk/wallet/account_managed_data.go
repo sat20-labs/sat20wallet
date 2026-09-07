@@ -55,6 +55,17 @@ type AccountManagedDataProvider interface {
 	Import(AccountManagedDataCatalog, []AccountManagedDataPayload) error
 }
 
+// AccountManagedActiveDataProvider is the optional second storage class of an
+// account-managed provider. Durable Export data goes to the replicated account
+// blob; active data goes to the account's own CoreNode mailbox and is never
+// broadcast through the DKVS replica network.
+type AccountManagedActiveDataProvider interface {
+	AccountManagedDataProvider
+	ExportActive(AccountManagedDataCatalog) ([]AccountManagedDataPayload, error)
+	ValidateActive(AccountManagedDataCatalog, []AccountManagedDataPayload) error
+	ImportActive(AccountManagedDataCatalog, []AccountManagedDataPayload) error
+}
+
 func validAccountManagedProviderID(value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" || len(value) > 128 {
@@ -106,6 +117,48 @@ func (p *Manager) accountManagedDataProviders() []AccountManagedDataProvider {
 	}
 	p.managedDataMu.RUnlock()
 	return providers
+}
+
+func (p *Manager) accountManagedActiveDataProvider(id string) AccountManagedActiveDataProvider {
+	if p == nil {
+		return nil
+	}
+	p.managedDataMu.RLock()
+	provider, _ := p.managedDataProviders[strings.TrimSpace(id)].(AccountManagedActiveDataProvider)
+	p.managedDataMu.RUnlock()
+	return provider
+}
+
+func (p *Manager) currentAccountManagedProviderPayloads(providerID string) (
+	map[string]AccountManagedDataPayload, error) {
+	result := make(map[string]AccountManagedDataPayload)
+	if p == nil {
+		return result, nil
+	}
+	p.mutex.RLock()
+	if p.accountProfile == nil || len(p.accountProfile.ManagedDataEnvelope) == 0 ||
+		len(p.accountSecret) == 0 {
+		p.mutex.RUnlock()
+		return result, nil
+	}
+	accountID := p.accountProfile.AccountID
+	envelope := append([]byte(nil), p.accountProfile.ManagedDataEnvelope...)
+	secret := append([]byte(nil), p.accountSecret...)
+	p.mutex.RUnlock()
+	defer zeroBytes(secret)
+	bundle, _, err := account.OpenManagedDataBundleWithInfo(secret, accountID, envelope)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range bundle.Items {
+		if item.Provider != providerID {
+			continue
+		}
+		result[item.Scope] = AccountManagedDataPayload{
+			Scope: item.Scope, Payload: append([]byte(nil), item.Payload...),
+		}
+	}
+	return result, nil
 }
 
 func (p *Manager) accountManagedDataCatalog() (AccountManagedDataCatalog, error) {
@@ -251,10 +304,22 @@ func (p *Manager) importAccountManagedData(catalog AccountManagedDataCatalog,
 }
 
 func (p *Manager) markAccountManagedDataDirty(_ string) {
+	p.markAccountManagedDataDirtyMode(true)
+}
+
+// markAccountManagedDataDirtyDeferred persists the operation marker without
+// starting a PUT. Complex application operations aggregate all of their local
+// mutations and publish one stable snapshot at the operation boundary.
+func (p *Manager) markAccountManagedDataDirtyDeferred(_ string) {
+	p.markAccountManagedDataDirtyMode(false)
+}
+
+func (p *Manager) markAccountManagedDataDirtyMode(schedule bool) {
 	if p == nil {
 		return
 	}
 	p.mutex.Lock()
+	p.bumpAccountGenerationLocked()
 	if p.accountProfile != nil {
 		p.accountProfile.ManagedDataDirty = true
 		p.accountProfile.ManagedDataGeneration++
@@ -262,11 +327,13 @@ func (p *Manager) markAccountManagedDataDirty(_ string) {
 			p.accountProfile.ManagedDataGeneration = 1
 		}
 		if err := p.saveAccountManagementProfileLocked(); err != nil {
-			Log.Warningf("save account-managed data dirty state failed: %v", err)
+			panic(fmt.Errorf("persist account-managed operation marker: %w", err))
 		}
 	}
 	p.mutex.Unlock()
-	p.markDKVSStateDirty()
+	if schedule {
+		p.scheduleAccountManagedStateSync()
+	}
 }
 
 func (p *Manager) accountManagedDataBlobKey(root common.Wallet) (string, error) {

@@ -6,10 +6,8 @@ class WalletManager {
   ): Promise<[Error | undefined, any | undefined]> {
     const method = (globalThis as any).sat20wallet_wasm[methodName as keyof WalletManager]
     const [err, result] = await tryit(method as any)(...args)
-    console.log(`${methodName} args: `, args)
-    console.log(`${methodName} result: `, result)
     if (err) {
-      console.error(`${methodName} error: ${err.message}`)
+		console.error(`${methodName} failed`)
       return [err, undefined]
     }
 
@@ -210,25 +208,6 @@ class WalletManager {
     accountId: number
   ): Promise<[Error | undefined, { pubKey: string } | undefined]> {
     return this._handleRequest('getWalletPubkey', accountId)
-  }
-
-  async getCommitSecret(
-    peer: Uint8Array,
-    index: number
-  ): Promise<[Error | undefined, Uint8Array | undefined]> {
-    return this._handleRequest('getCommitSecret', peer, index)
-  }
-
-  async deriveRevocationPrivKey(
-    commitSecret: Uint8Array
-  ): Promise<[Error | undefined, Uint8Array | undefined]> {
-    return this._handleRequest('deriveRevocationPrivKey', commitSecret)
-  }
-
-  async getRevocationBaseKey(): Promise<
-    [Error | undefined, Uint8Array | undefined]
-  > {
-    return this._handleRequest('getRevocationBaseKey')
   }
 
   async getNodePubKey(): Promise<[Error | undefined, Uint8Array | undefined]> {
@@ -620,18 +599,6 @@ class WalletManager {
     utxos: string[]
   ): Promise<[Error | undefined, { psbt: string } | undefined]> {
     return this._handleRequest('addOutputsToPsbt_SatsNet', psbtHex, utxos)
-  }
-
-  // --- 新增方法 (sat20 wasm 新增,暂无实现细节) ---
-
-  // TODO: 需要补充参数和返回类型
-  async batchDbTest(...args: any[]): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('batchDbTest', ...args)
-  }
-
-  // TODO: 需要补充参数和返回类型
-  async dbTest(...args: any[]): Promise<[Error | undefined, any | undefined]> {
-    return this._handleRequest('dbTest', ...args)
   }
 
   // TODO: 需要补充参数和返回类型

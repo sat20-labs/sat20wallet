@@ -321,7 +321,7 @@ func (p *Manager) DeployTicker_runesWithTerms(destAddr string, ticker string, sy
 	total := int64(0)
 	estimatedFee := int64(0)
 	for _, u := range utxos {
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		total += u.Value
@@ -374,7 +374,7 @@ func (p *Manager) PrepareDeployTicker_runesWithTerms(destAddr string, ticker str
 	total := int64(0)
 	estimatedFee := int64(0)
 	for _, u := range utxos {
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		total += u.Value

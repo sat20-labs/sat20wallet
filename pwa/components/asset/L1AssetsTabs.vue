@@ -475,14 +475,29 @@ const resumeRGB11Task = async (task: RGB11Task) => {
     if (!ids.length) throw new Error(t('rgb11Transfer.taskResumeFailed'))
     if (task.representative?.address_mode) {
       const [err, result] = await rgb11Address.deliverAndBroadcast({ transfer_id: ids[0] })
-      if (err || !result?.txid) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
+	  if (err || !result) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
+	  if (result.awaiting_ack) {
+		setRGB11TaskMessage(task, true, t('rgb11Transfer.addressAckPending'))
+		return
+	  }
+	  if (!result.broadcast || !result.txid) throw new Error(t('rgb11Transfer.broadcastFailed'))
       await completeRGB11TaskBroadcast(task, result.txid)
       return
     }
     const transport = rgb11TaskTransport(task)
     if (transport === 'rgb-json-rpc') {
       const [err, result] = await walletManager.deliverAndBroadcastRGB11ProxyTransfer(ids)
-      if (err || !result?.txid) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
+	  if (err || !result) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
+	  if (result.rejected) {
+		setRGB11TaskMessage(task, false, t('rgb11Transfer.proxyRejected'))
+		await refreshRGB11TaskState()
+		return
+	  }
+	  if (result.awaiting_ack) {
+		setRGB11TaskMessage(task, true, t('rgb11Transfer.proxyAckPending'))
+		return
+	  }
+	  if (!result.broadcast || !result.txid) throw new Error(t('rgb11Transfer.broadcastFailed'))
       await completeRGB11TaskBroadcast(task, result.txid)
       return
     }

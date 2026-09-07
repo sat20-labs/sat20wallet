@@ -14,21 +14,6 @@
     <div v-if="isExpanded" class="space-y-6 px-2 mt-4">
       <div class="flex items-center justify-between border-t border-zinc-900/30 pt-4">
         <div class="text-sm text-muted-foreground mb-4">
-          {{ $t('networkSetting.environmentSwitch') }}
-        </div>
-        <Select v-model="computedEnv">
-          <SelectTrigger class="max-w-[160px] bg-gray-900/30 mb-4">
-            <SelectValue :placeholder="$t('networkSetting.selectEnvironment')" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="dev">{{ $t('networkSetting.development') }}</SelectItem>
-            <SelectItem value="test">{{ $t('networkSetting.test') }}</SelectItem>
-            <SelectItem value="prd">{{ $t('networkSetting.production') }}</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <div class="flex items-center justify-between">
-        <div class="text-sm text-muted-foreground mb-4">
           {{ $t('networkSetting.networkSwitch') }}
         </div>
         <Select :model-value="network" :disabled="isSwitchingNetwork" @update:model-value="handleNetworkChange">
@@ -36,7 +21,7 @@
             <SelectValue :placeholder="$t('networkSetting.selectNetwork')" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem :value="Network.LIVENET">{{ $t('networkSetting.mainnet') }}</SelectItem>
+            <SelectItem :value="Network.MAINNET">{{ $t('networkSetting.mainnet') }}</SelectItem>
             <SelectItem :value="Network.TESTNET">{{ $t('networkSetting.testnet') }}</SelectItem>
           </SelectContent>
         </Select>
@@ -60,7 +45,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setLanguage } from '@/main'
 import type { Language } from '@/types'
@@ -76,11 +61,9 @@ import {
 } from '@/components/ui/select'
 import { useWalletStore } from '@/store/wallet'
 import { storeToRefs } from 'pinia'
-import { useGlobalStore, type Env } from '@/store/global'
 import { restartApp } from '@/utils/app-restart'
 
 const isExpanded = ref(false)
-const globalStore = useGlobalStore()
 const walletStore = useWalletStore()
 const { network, isSwitchingNetwork } = storeToRefs(walletStore)
 
@@ -89,14 +72,6 @@ const handleNetworkChange = async (value: any) => {
   const changed = await walletStore.setNetwork(value as Network)
   if (changed) restartApp()
 }
-
-const computedEnv = computed<Env>({
-  get: () => globalStore.env,
-  set: async (newValue) => {
-    await globalStore.setEnv(newValue)
-    restartApp()
-  }
-})
 
 const { locale } = useI18n()
 const currentLanguage = ref(locale.value)

@@ -98,8 +98,9 @@ func stageDKVSNoPluginNodeRuntime(t *testing.T, role, mnemonic, l1IndexerHost, l
 	stagedExecutable := filepath.Join(nodeDir, filepath.Base(executable))
 	copySatoshiNetRuntimeFile(t, executable, stagedExecutable)
 	copySatoshiNetRuntimeFile(t, plugin, filepath.Join(nodeDir, pluginName))
+	stageSatoshiNetNodeConfig(t, nodeDir)
 	require.NoError(t, os.WriteFile(filepath.Join(nodeDir, "conf.yaml"), []byte(fmt.Sprintf(satoshinetTestConf,
-		l1IndexerHost, l2IndexerHost, rpcHost, managementHost, mnemonic)), 0o600))
+		satoshinetSTPMode(role), l1IndexerHost, l2IndexerHost, rpcHost, managementHost, mnemonic)), 0o600))
 	return stagedExecutable
 }
 
@@ -109,7 +110,7 @@ func startDKVSNoPluginNodeWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, role, mn
 
 	nodeKey := keyFromMnemonic(t, mnemonic, 0)
 	nodePubKey := hex.EncodeToString(nodeKey.PubKey().SerializeCompressed())
-	p2pAddr, rpcAddr, managementAddr := nextNodeAddresses(t)
+	p2pAddr, rpcAddr, stpAddr, managementAddr := nextNodeAddresses(t)
 	nodeDir := t.TempDir()
 	dataDir := filepath.Join(nodeDir, "data")
 	logDir := filepath.Join(nodeDir, "logs")
@@ -148,7 +149,11 @@ func startDKVSNoPluginNodeWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, role, mn
 	}
 
 	harness := newTestHarness(t, stageDKVSNoPluginNodeRuntime(t, role, mnemonic, fakeL1.host(),
-		l2IndexerHost(t, rpcAddr), rpcAddr, managementAddr, nodeDir), nodeDir, p2pAddr, rpcAddr, args, env)
+		l2IndexerHost(t, rpcAddr), stpAddr, managementAddr, nodeDir), nodeDir, p2pAddr, rpcAddr, args, env)
+	harness.role = role
+	harness.nodePubKey = nodePubKey
+	harness.stpAddr = stpAddr
+	harness.managementAddr = managementAddr
 	t.Logf("started public DKVS %s node: pid=%d rpc=%s p2p=%s log=%s", role, harness.NodePID(),
 		harness.RPCAddress(), harness.P2PAddress(), harness.LogFile())
 	return harness

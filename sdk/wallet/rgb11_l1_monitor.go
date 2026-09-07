@@ -201,28 +201,41 @@ func (p *Manager) handleRGB11L1MonitorTick(ctx context.Context) error {
 	if p == nil || p.rgbManager == nil || p.l1IndexerClient == nil {
 		return nil
 	}
-	// Capture a fixed wallet/account scope while account switching is excluded,
-	// then release the global scope lock before any remote chain query. The
-	// scoped manager owns separate projection/engine store instances pinned to
-	// the captured scope, so a concurrent wallet/account switch cannot redirect
-	// this tick's checkpoint or reconciliation writes into the new scope.
+	// Capture the complete local RGB account catalog while account switching is
+	// excluded, then release the scope lock before any remote chain query. DKVS
+	// exposes only the root account, but every child RGB scope still owns its own
+	// projection/checkpoint state and must be reconciled independently.
 	releaseRGB11Operation := p.beginRGB11Operation()
-	if p.wallet == nil || p.rgbManager.projectionStore == nil {
+	if p.wallet == nil {
 		releaseRGB11Operation()
 		return nil
 	}
-	account, err := p.rgbManager.fixedRGB11ScopeAccount()
+	accounts := p.localRGB11Accounts()
+	if len(accounts) == 0 {
+		account, err := p.rgbManager.fixedRGB11ScopeAccount()
+		if err != nil {
+			releaseRGB11Operation()
+			return err
+		}
+		accounts = append(accounts, account)
+	}
 	evidence := p.rgbManager.evidence
 	releaseRGB11Operation()
-	if err != nil {
-		return err
+	var monitorErr error
+	for _, account := range accounts {
+		scoped, err := p.newScopedRGB11Manager(account)
+		if err != nil {
+			monitorErr = errors.Join(monitorErr, fmt.Errorf("open RGB11 monitor scope %d/%d: %w",
+				account.WalletID, account.AccountIndex, err))
+			continue
+		}
+		scoped.evidence = evidence
+		if err := scoped.handleL1MonitorTick(ctx); err != nil {
+			monitorErr = errors.Join(monitorErr, fmt.Errorf("monitor RGB11 scope %d/%d: %w",
+				account.WalletID, account.AccountIndex, err))
+		}
 	}
-	scoped, err := p.newScopedRGB11Manager(account)
-	if err != nil {
-		return err
-	}
-	scoped.evidence = evidence
-	return scoped.handleL1MonitorTick(ctx)
+	return monitorErr
 }
 
 func (p *rgb11Manager) handleL1MonitorTick(ctx context.Context) error {

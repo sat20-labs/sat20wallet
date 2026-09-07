@@ -48,14 +48,13 @@ async function setupWallets(page) {
   return page.evaluate(async ({ password, mnemonics, matches, sgasTopupAmount, sgasTopupThreshold, deployerWalletIndex }) => {
     const walletMod = await import('/store/wallet.ts');
     const typeMod = await import('/types/index.ts');
-    const cryptoMod = await import('/utils/crypto.ts');
     const sat20Mod = await import('/utils/sat20.ts');
     const { walletStorage } = await import('/lib/walletStorage.ts');
 
     const wallet = walletMod.useWalletStore();
     const { Chain, Network } = typeMod;
     const sat20 = sat20Mod.default;
-    const hashed = await cryptoMod.hashPassword(password);
+		const credential = password;
     const unwrap = (tuple) => {
       if (tuple?.[0]) {
         throw tuple[0];
@@ -70,17 +69,15 @@ async function setupWallets(page) {
     await walletStorage.setValue('chain', 'satnet');
 
     for (const mnemonic of mnemonics) {
-      const [err] = await wallet.importWallet(mnemonic, hashed);
+			const [err] = await wallet.importWallet(mnemonic, credential);
       if (err) {
         throw new Error(err.message || String(err));
       }
     }
 
-    await wallet.setPassword(hashed);
+	await unwrap(await wallet.unlockWallet(credential));
     await wallet.setNetwork(Network.TESTNET);
     await wallet.setChain(Chain.SATNET);
-    await unwrap(await wallet.unlockWallet(hashed));
-    await unwrap(await sat20.switchChain('testnet', hashed));
     await wallet.switchWallet(wallet.wallets[0].id);
     await wallet.switchToAccount(0);
     await wallet.setChain(Chain.SATNET);

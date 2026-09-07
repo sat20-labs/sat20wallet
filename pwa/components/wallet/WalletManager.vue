@@ -59,7 +59,7 @@
                 <Button variant="ghost" size="icon" @click="showMnemonicDialog(wallet)">
                   <Icon icon="lucide:key" class="w-4 h-4" />
                 </Button>
-                <Button v-if="wallet.id !== currentWalletId && wallet.id !== managedRootWalletId" variant="ghost" size="icon"
+                <Button v-if="wallet.id !== currentWalletId && !isRootWallet(wallet)" variant="ghost" size="icon"
                   class="text-destructive hover:text-destructive" @click="confirmDeleteWallet(wallet)">
                   <Icon icon="lucide:trash-2" class="w-4 h-4" />
                 </Button>
@@ -230,7 +230,7 @@
     </Dialog>
 
     <!-- Show Mnemonic Dialog -->
-    <Dialog :open="isShowMnemonicDialogOpen" @update:open="isShowMnemonicDialogOpen = $event">
+    <Dialog :open="isShowMnemonicDialogOpen" @update:open="handleMnemonicDialogOpen">
       <DialogContent class="sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle>{{ $t('walletManager.showRecoveryPhrase') }}</DialogTitle>
@@ -292,14 +292,11 @@
                 <Icon v-else icon="lucide:eye" class="h-4 w-4" />
               </Button>
             </div>
-            <div class="flex gap-2">
-              <Button variant="outline" @click="handleCopyMnemonic" class="flex-1">
-                <Icon icon="lucide:copy" class="mr-2 h-4 w-4" />
-                {{ $t('walletManager.copyRecoveryPhrase') }}
-              </Button>
-              <Button variant="default" @click="confirmSavedMnemonic" class="flex-1">
+            <div>
+              <Button variant="default" @click="confirmSavedMnemonic" class="w-full">
                 {{ $t('walletManager.confirmSaved') }}
               </Button>
+			  <p class="mt-2 text-xs text-muted-foreground">Clipboard export is disabled. Record the words in a secure offline location.</p>
             </div>
           </div>
         </div>
@@ -314,7 +311,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { Button } from '@/components/ui/button'
@@ -325,23 +322,26 @@ import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/toast-new'
-import { useWalletStore } from '@/store'
+import { useApproveStore, useWalletStore } from '@/store'
+import { withWalletPassword } from '@/lib/walletPasswordPrompt'
 import { storeToRefs } from 'pinia'
 import { WalletData } from '@/types'
 import { Message } from '@/types/message'
 import { sendAccountsChangedEvent } from '@/lib/utils'
 import walletManager from '@/utils/sat20'
-import accountSDK from '@/utils/accountManagement'
 import { hideAddress } from '@/utils'
-import { hashPassword } from '@/utils/crypto'
-import { useClipboard, useDebounceFn } from '@vueuse/core'
+import { useDebounceFn } from '@vueuse/core'
+import { beginMnemonicView } from '@/lib/sensitive-session'
+import { CredentialAttemptLimiter } from '@/lib/credential-rate-limit'
 
 
 const router = useRouter()
 const walletStore = useWalletStore()
 const { wallets, isSwitchingWallet } = storeToRefs(walletStore)
 const { toast } = useToast()
-const { copy, isSupported } = useClipboard()
+const approveStore = useApproveStore()
+const mnemonicLimiter = new CredentialAttemptLimiter()
+let endMnemonicView: (() => void) | null = null
 
 // State
 const isImportWalletDialogOpen = ref(false)
@@ -364,7 +364,6 @@ const editingName = ref('')
 const mnemonicPassword = ref('')
 const mnemonicPhrase = ref('')
 const showMnemonic = ref(false)
-const managedRootWalletId = ref('')
 
 // Mock NFTs and BTC Domains data
 const nfts = ref([
@@ -381,17 +380,8 @@ const btcDomains = ref([
 
 // 计算属性
 const currentWalletId = computed(() => walletStore.walletId)
-
-onMounted(async () => {
-  try {
-    const status = await accountSDK.status()
-    managedRootWalletId.value = status.active && status.root_wallet_id
-      ? String(status.root_wallet_id)
-      : ''
-  } catch {
-    managedRootWalletId.value = ''
-  }
-})
+const isRootWallet = (wallet: WalletData) => wallet.accounts.some(account =>
+  account.index === 0 && account.accountId === walletStore.rootAccountId)
 
 const walletsWithAddress = ref<any[]>([])
 const isLoadingWallets = ref(false)
@@ -516,17 +506,17 @@ const createWallet = async () => {
 
   try {
     isCreating.value = true
-    const localPassword = walletStore.password
-    if (!localPassword) {
-      throw new Error('No password set')
-    }
-    const [err, result] = await walletStore.createWallet(localPassword)
+    const outcome = await withWalletPassword(password => walletStore.createWallet(password))
+    if (outcome === undefined) return
+    const [err, result] = outcome
 
     if (err || !result) {
       throw err || new Error('Failed to create wallet')
     }
 
     // 创建成功后，显示助记词
+	if (approveStore.isVisible.value) approveStore.hideApprove()
+	endMnemonicView ??= beginMnemonicView()
     mnemonicPhrase.value = result as string
     showMnemonic.value = false
     isShowMnemonicDialogOpen.value = true
@@ -556,12 +546,9 @@ const importWallet = async () => {
       throw new Error('Please enter your recovery phrase')
     }
     isImporting.value = true
-    const localPassword = walletStore.password
-    if (!localPassword) {
-      throw new Error('No password set')
-    }
-
-    const [err] = await walletStore.importWallet(importMnemonic.value, localPassword)
+    const outcome = await withWalletPassword(password => walletStore.importWallet(importMnemonic.value, password))
+    if (outcome === undefined) return
+    const [err] = outcome
     if (err) {
       throw err
     }
@@ -570,11 +557,7 @@ const importWallet = async () => {
     isImportWalletDialogOpen.value = false
     toast({
       title: 'Success',
-      description: walletStore.accountRecovery?.status === 'pending'
-        ? 'Wallet imported. Managed account discovery is pending; retry when the network is available.'
-        : walletStore.accountRecovery?.status === 'found'
-          ? 'Managed account and wallets restored successfully'
-          : 'Wallet imported successfully',
+	  description: 'Wallet imported successfully',
       variant: 'success'
     })
     safeSetTimeout(() => {
@@ -672,19 +655,28 @@ const verifyMnemonicPassword = async () => {
     })
     return
   }
+	try {
+	  mnemonicLimiter.assertAllowed()
+	} catch (error) {
+	  toast({ variant: 'destructive', title: 'Error', description: (error as Error).message })
+	  return
+	}
 
   try {
     isVerifyingMnemonic.value = true
-    const hashedPassword = await hashPassword(mnemonicPassword.value)
-    const [err, result] = await walletManager.getMnemonice(
-      parseInt(editingWallet.value.id),
-      hashedPassword
+		const [err, result] = await walletManager.getMnemonice(
+			parseInt(editingWallet.value.id),
+			mnemonicPassword.value
     )
 
     if (err || !result?.mnemonic) {
+	  mnemonicLimiter.recordFailure()
       throw new Error('Verification failed')
     }
 
+	mnemonicLimiter.reset()
+	if (approveStore.isVisible.value) approveStore.hideApprove()
+	endMnemonicView ??= beginMnemonicView()
     mnemonicPhrase.value = result.mnemonic
     toast({
       title: 'Success',
@@ -703,24 +695,6 @@ const verifyMnemonicPassword = async () => {
 }
 const toggleShowMnemonic = () => {
   showMnemonic.value = !showMnemonic.value
-}
-
-const handleCopyMnemonic = async () => {
-  if (!isSupported.value) {
-    toast({
-      variant: 'destructive',
-      title: 'Copy Failed',
-      description: 'Clipboard not supported in this browser'
-    })
-    return
-  }
-
-  await copy(mnemonicPhrase.value)
-  toast({
-    title: 'Recovery Phrase Copied',
-    description: 'Your recovery phrase has been copied to clipboard. Keep it safe!',
-    variant: 'success'
-  })
 }
 
 const confirmSavedMnemonic = async () => {
@@ -754,6 +728,8 @@ const confirmSavedMnemonic = async () => {
   mnemonicPassword.value = ''
   showMnemonic.value = false
   editingWallet.value = null
+	endMnemonicView?.()
+	endMnemonicView = null
 }
 
 const closeMnemonicDialog = () => {
@@ -762,6 +738,13 @@ const closeMnemonicDialog = () => {
   mnemonicPassword.value = ''
   showMnemonic.value = false
   editingWallet.value = null
+	endMnemonicView?.()
+	endMnemonicView = null
+}
+
+const handleMnemonicDialogOpen = (open: boolean) => {
+	if (open) isShowMnemonicDialogOpen.value = true
+	else closeMnemonicDialog()
 }
 
 // 定时器存储
@@ -783,7 +766,7 @@ const clearAllTimers = () => {
 // 组件卸载时清理资源
 onUnmounted(() => {
   clearAllTimers()
-  console.log('WalletManager 组件资源已清理')
+	closeMnemonicDialog()
 })
 
 // 重构现有的 setTimeout 使用 safeSetTimeout

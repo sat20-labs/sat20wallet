@@ -7,9 +7,10 @@
   "scripts": {
     "dev": "vite",
     "write-version": "node scripts/write-version.cjs",
-    "build": "npm run write-version && vue-tsc --noEmit && vite build",
-    "build:root": "npm run write-version && vue-tsc --noEmit && VITE_PWA_BASE_PATH=/ vite build",
-    "build:skip-check": "vite build",
+    "write-integrity": "node scripts/write-integrity-manifest.cjs",
+    "build": "node scripts/build-with-status.cjs",
+    "build:root": "node scripts/build-with-status.cjs root",
+    "build:skip-check": "node scripts/build-with-status.cjs skip-check",
     "preview": "vite preview",
     "compile": "vue-tsc --noEmit",
     "verify:wallet-basics": "node scripts/verify/wallet-basics-flow.mjs",
@@ -18,7 +19,8 @@
     "verify:l2-contract": "node scripts/verify/l2-contract-flow.mjs",
     "verify:channel-management": "node scripts/verify/channel-management-smoke.mjs",
     "verify:agent-safety": "node scripts/verify/agent-safety-preflight.mjs",
-    "verify:rgb11-l1": "node scripts/verify/rgb11-l1-smoke.mjs"
+    "verify:rgb11-l1": "node scripts/verify/rgb11-l1-smoke.mjs",
+    "verify:rgb11-direct": "node scripts/live/rgb11-direct-roots-pwa-live.mjs"
   },
   "dependencies": {
     "@bitcoin-js/tiny-secp256k1-asmjs": "^2.2.4",

@@ -14,13 +14,24 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 	fixture := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t))
 	waitForDKVSPeerReady(t, fixture.Network)
 
-	primary, location := newWalletManagerForNode(t, fixture.Network.Bootstrap, dkvsClientMnemonic)
+	primary, location := newWalletManagerForNode(t, fixture.Network.Core, dkvsClientMnemonic)
+	// This test exercises the post-initialization multi-device lifecycle, not
+	// root-wrapper discovery. Imported wallets require an explicit initialization
+	// unless a prior authoritative root-not-found discovery authorized automatic
+	// first-wallet activation.
+	require.NoError(t, primary.InitializeAccountManagement("123456"))
 	_, err := primary.ImportWallet(bootstrapMnemonic, "123456")
 	require.NoError(t, err)
 	catalog := primary.GetWalletCatalog()
 	require.Len(t, catalog, 2)
 	rootID := catalog[0].ID
 	secondaryID := catalog[1].ID
+	preActivationStatus := primary.GetAccountManagementStatus()
+	require.True(t, preActivationStatus.Active)
+	require.False(t, preActivationStatus.RecoveryConfigured)
+	require.Equal(t, uint64(1), preActivationStatus.StateSeq)
+	require.Equal(t, 1, preActivationStatus.PendingChanges,
+		"the second wallet import must remain pending until recovery storage is activated")
 	// ImportWallet selects the newly imported wallet. Account management is
 	// rooted in the first canonical wallet, so explicitly restore that context
 	// before generating the locator and repository.
@@ -56,8 +67,10 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 		pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID))
 	status := primary.GetAccountManagementStatus()
 	require.True(t, status.Active)
+	require.True(t, status.RecoveryConfigured)
 	initialSeq := status.StateSeq
-	require.Equal(t, uint64(1), initialSeq)
+	require.Equal(t, preActivationStatus.StateSeq+1, initialSeq,
+		"activation publishes the pending catalog and managed-data reference as one new revision")
 	require.Zero(t, status.PendingChanges)
 	require.Equal(t, rootID, status.RootWalletID)
 
@@ -77,7 +90,7 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 
 	// A new device rejects wrong recovery material and restores the latest
 	// encrypted managed state with the deleted wallet omitted.
-	fresh, _ := newWalletManagerForNode(t, fixture.Network.Bootstrap, "")
+	fresh, _ := newWalletManagerForNode(t, fixture.Network.Core, "")
 	wrongSecret := append([]byte(nil), secret...)
 	wrongSecret[0] ^= 0xff
 	_, err = fresh.LoadAccountManagementStateForRecovery(location, pkg.Envelope.Locator,
@@ -127,7 +140,7 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 	require.Equal(t, "did:root:3", finalCatalog[0].Accounts[3].DID)
 
 	// Recovery from a different endpoint must not expose endpoint-local state.
-	other, otherLocation := newWalletManagerForNode(t, fixture.Network.Core, "")
+	other, otherLocation := newWalletManagerForNode(t, fixture.Network.Bootstrap, "")
 	_, err = other.LoadAccountManagementStateForRecovery(otherLocation,
 		pkg.Envelope.Locator, secret, dkvsClientMnemonic)
 	require.Error(t, err)

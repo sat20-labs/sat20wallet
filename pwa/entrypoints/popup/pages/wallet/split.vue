@@ -197,7 +197,6 @@ watch([assetName, address], () => {
 
 // Form Submission
 const onSubmit = form.handleSubmit(async (values) => {
-  console.log('Submitting form with values:', values);
   errorMessage.value = null;
   loading.value = true;
 
@@ -209,8 +208,6 @@ const onSubmit = form.handleSubmit(async (values) => {
       Number(values.n),
       0
     );
-    console.log('batchSendAssets result:', { err, result });
-
     if (err) {
       let detail = 'L2资产拆分失败。';
       if (err.message) detail = err.message;

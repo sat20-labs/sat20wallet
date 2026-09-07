@@ -20,17 +20,15 @@ const main = async () => {
     const verify = window.__SAT20_PWA_VERIFY__
     const wallet = verify.useWalletStore()
     const sat20 = (await import('/utils/sat20.ts')).default
-    const hashed = await verify.hashPassword(password)
+		const credential = password
     const unwrap = (tuple, operation) => {
       if (tuple?.[0]) throw new Error(`${operation}: ${tuple[0].message || tuple[0]}`)
       return tuple?.[1]
     }
 
-    await wallet.setPassword(hashed)
+	unwrap(await wallet.unlockWallet(credential), 'unlock wallet session')
     await wallet.setNetwork(verify.Network.TESTNET)
     await wallet.setChain(verify.Chain.SATNET)
-    const [unlockError] = await wallet.unlockWallet(hashed)
-    if (unlockError && !/already unlocked/i.test(String(unlockError.message || unlockError))) throw unlockError
     await wallet.syncWalletCatalog()
     const senderWallet = wallet.wallets.find((item) => item.accounts?.[0]?.address === sender)
     if (!senderWallet) throw new Error('sender test wallet is unavailable')

@@ -4,11 +4,31 @@ import (
 	"fmt"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	dkvscore "github.com/sat20-labs/sat20wallet/sdk/wallet/dkvs"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 const dkvsAppValueVersion = 1
+
+type DKVSOfflineMessage = dkvscore.DKVSOfflineMessage
+type DKVSServiceAuthenticity = dkvscore.DKVSServiceAuthenticity
+
+func encodeDKVSOfflineMessage(value DKVSOfflineMessage) ([]byte, error) {
+	return dkvscore.EncodeOfflineMessage(value)
+}
+
+func decodeDKVSOfflineMessage(value []byte) (*DKVSOfflineMessage, error) {
+	return dkvscore.DecodeOfflineMessage(value)
+}
+
+func encodeDKVSServiceAuthenticity(value DKVSServiceAuthenticity) ([]byte, error) {
+	return dkvscore.EncodeServiceAuthenticity(value)
+}
+
+func decodeDKVSServiceAuthenticity(value []byte) (*DKVSServiceAuthenticity, error) {
+	return dkvscore.DecodeServiceAuthenticity(value)
+}
 
 // offlineMessageKeyID renders a positive int64 timestamp as a fixed-width
 // decimal DKVS segment. Lexicographic key order is therefore identical to
@@ -20,23 +40,15 @@ func offlineMessageKeyID(messageID int64) (string, error) {
 	return fmt.Sprintf("%019d", messageID), nil
 }
 
-func (p *SatsNetDKVSClient) SendOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msgID int64, encryptedMessage []byte, metadata map[string]string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	mailboxID, stableMsgID, value, err := buildOfflineMessage(senderWallet, recipientPubKey, msgID, encryptedMessage, metadata)
-	if err != nil {
-		return nil, err
-	}
-	return p.SendSignedMailboxMessage(senderWallet, mailboxID, stableMsgID, value, opts)
+func (p *SatsNetDKVSClient) SendOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msgID int64,
+	encryptedMessage []byte, metadata map[string]string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	return nil, ErrDKVSMessageManagerRequired
 }
 
 func (p *SatsNetDKVSClient) SendOfflineMessageWithAutopay(senderWallet common.Wallet, recipientPubKey []byte,
 	msgID int64, encryptedMessage []byte, metadata map[string]string, opts dkvsindexer.RecordOptions,
 	autopay DKVSAutopayOptions) (*swire.DKVSRecord, error) {
-
-	mailboxID, stableMsgID, value, err := buildOfflineMessage(senderWallet, recipientPubKey, msgID, encryptedMessage, metadata)
-	if err != nil {
-		return nil, err
-	}
-	return p.SendSignedMailboxMessageWithAutopay(senderWallet, mailboxID, stableMsgID, value, opts, autopay)
+	return nil, ErrDKVSMessageManagerRequired
 }
 
 func buildOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msgID int64, encryptedMessage []byte,
@@ -72,23 +84,7 @@ func buildOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msg
 }
 
 func (p *SatsNetDKVSClient) ReadOfflineMessages(recipientPubKey []byte, start, limit int) ([]*DKVSOfflineMessage, []*swire.DKVSRecord, int, error) {
-	mailboxID := dkvsindexer.AccountID(recipientPubKey)
-	records, total, err := p.ReadMailboxMessages(mailboxID, start, limit)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	messages := make([]*DKVSOfflineMessage, 0, len(records))
-	for _, record := range records {
-		msg, err := decodeDKVSOfflineMessage(record.Value)
-		if err != nil {
-			return nil, nil, 0, err
-		}
-		if msg.Version != dkvsAppValueVersion || msg.ToMailboxID != mailboxID {
-			return nil, nil, 0, dkvsindexer.ErrInvalidRecord
-		}
-		messages = append(messages, msg)
-	}
-	return messages, records, total, nil
+	return nil, nil, 0, ErrDKVSMessageManagerRequired
 }
 
 // ServiceAuthenticityPath identifies one stable application/component object.

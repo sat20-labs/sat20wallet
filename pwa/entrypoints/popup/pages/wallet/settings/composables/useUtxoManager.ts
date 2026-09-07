@@ -38,7 +38,7 @@ export function useUtxoManager() {
       try {
         const apiResponse = await ordxApi.getLockedUtxos({
           address: addressStr.value,
-          network: network === 'livenet' ? 'mainnet' : 'testnet'
+          network: network === 'mainnet' ? 'mainnet' : 'testnet'
         }) as LockedUtxosApiResponse
 
         lockedUtxos.value = (apiResponse?.data || []).map((utxo: LockedUtxoApiResponse) => {
@@ -185,7 +185,7 @@ export function useUtxoManager() {
         utxos: selectedOrdinals.value,
         pubKey: pubKeyRes.pubKey, // Use hex string directly
         sig: sigRes.signature, // Use hex string directly
-        network: network === 'livenet' ? 'mainnet' : 'testnet'
+        network: network === 'mainnet' ? 'mainnet' : 'testnet'
       })
 
       if (response.failedUtxos && response.failedUtxos.length > 0) {

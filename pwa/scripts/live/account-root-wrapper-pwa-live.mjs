@@ -215,15 +215,14 @@ const createManagedAccount = async (page) => page.evaluate(async ({ password, sy
     }
   }
   const rawCatalog = async () => unwrap(await sat20.getWalletCatalog(), 'getWalletCatalog').wallets
-  const hashed = verify.hashPassword
-  const passwordHash = await hashed(password)
+	const credential = password
   await verify.walletStorage.initializeState()
   await verify.walletStorage.setValue('env', 'prd')
   await verify.walletStorage.setValue('network', 'testnet')
   await verify.walletStorage.setValue('chain', 'btc')
 
   const rootMnemonic = await withoutSecretConsole(async () => {
-    const [error, mnemonic] = await wallet.createWallet(passwordHash)
+		const [error, mnemonic] = await wallet.createWallet(credential)
     if (error || !mnemonic) throw error || new Error('CreateWallet returned no mnemonic')
     return mnemonic
   })
@@ -232,7 +231,7 @@ const createManagedAccount = async (page) => page.evaluate(async ({ password, sy
   await wallet.addAccount('Root Managed Account 2', 1)
 
   const nonRootMnemonic = await withoutSecretConsole(async () => {
-    const [error, mnemonic] = await wallet.createWallet(passwordHash)
+		const [error, mnemonic] = await wallet.createWallet(credential)
     if (error || !mnemonic) throw error || new Error('secondary CreateWallet returned no mnemonic')
     return mnemonic
   })
@@ -303,15 +302,14 @@ const importRootWithRetry = async (page, rootMnemonic, expectedAccountID) => pag
     }
   }
   const rawCatalog = async () => unwrap(await sat20.getWalletCatalog(), 'getWalletCatalog').wallets
-  const hashed = verify.hashPassword
-  const passwordHash = await hashed(password)
+	const credential = password
   await verify.walletStorage.initializeState()
   const deadline = Date.now() + recoveryTimeout
   const statuses = []
   let attempts = 0
   while (Date.now() < deadline) {
     attempts++
-    const [error] = await withoutSecretConsole(() => wallet.importWallet(mnemonic, passwordHash))
+		const [error] = await withoutSecretConsole(() => wallet.importWallet(mnemonic, credential))
     if (error) throw error
     const recovery = wallet.accountRecovery ? { ...wallet.accountRecovery } : null
     statuses.push(recovery?.status || 'missing')
@@ -382,10 +380,9 @@ const importNonRootControl = async (page, mnemonic) => page.evaluate(async ({ pa
     }
   }
   const rawCatalog = async () => unwrap(await sat20.getWalletCatalog(), 'getWalletCatalog').wallets
-  const hashed = verify.hashPassword
-  const passwordHash = await hashed(password)
+	const credential = password
   await verify.walletStorage.initializeState()
-  const [error] = await withoutSecretConsole(() => wallet.importWallet(mnemonic, passwordHash))
+	const [error] = await withoutSecretConsole(() => wallet.importWallet(mnemonic, credential))
   if (error) throw error
   await wallet.syncWalletCatalog()
   const status = await callAccount('status')
@@ -442,14 +439,21 @@ const main = async () => {
     if (nonRoot.recovery?.status !== 'not_found') {
       throw new Error(`non-root import recovery status is ${nonRoot.recovery?.status || 'missing'}, expected not_found`)
     }
-    if (nonRoot.status?.active) {
-      throw new Error('ordinary non-root import unexpectedly activated account management')
+    const expectedNonRoot = source.catalog.find((wallet) => String(wallet.name).includes('Secondary'))
+    if (!expectedNonRoot) throw new Error('source secondary wallet is missing')
+    if (!nonRoot.status?.active || !nonRoot.status?.account_id) {
+      throw new Error('former non-root import did not activate its fresh account')
+    }
+    if (nonRoot.status.account_id === source.accountID) {
+      throw new Error('former non-root import unexpectedly joined the original managed account')
+    }
+    if (nonRoot.status.root_fingerprint !== expectedNonRoot.fingerprint) {
+      throw new Error('fresh account root fingerprint does not match the imported secondary wallet')
     }
     if (nonRoot.catalog.length !== 1) {
       throw new Error(`ordinary non-root import restored ${nonRoot.catalog.length} wallets, expected 1`)
     }
-    const expectedNonRoot = source.catalog.find((wallet) => String(wallet.name).includes('Secondary'))
-    if (!expectedNonRoot || nonRoot.catalog[0]?.fingerprint !== expectedNonRoot.fingerprint) {
+    if (nonRoot.catalog[0]?.fingerprint !== expectedNonRoot.fingerprint) {
       throw new Error('ordinary non-root import did not restore only its own wallet')
     }
 

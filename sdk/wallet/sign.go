@@ -816,7 +816,7 @@ func (p *Manager) TestAcceptance(txs []*wire.MsgTx) error {
 
 	// 承诺交易不会马上广播，所以提前检查非常重要
 	// 所有前置TX都需要加入一起检查
-	err := p.l1IndexerClient.TestRawTx(txsHex)
+	err := p.l1IndexerClient.TestRawTx_Bitcoin(txsHex)
 	if err != nil {
 		Log.Errorf("TestRawTx failed, %v", err)
 		return err
@@ -844,7 +844,7 @@ func (p *Manager) TestAcceptance_SatsNet(txs []*swire.MsgTx) error {
 	}
 
 	// 所有前置TX都需要加入一起检查
-	err := p.l2IndexerClient.TestRawTx(txsHex)
+	err := p.l2IndexerClient.TestRawTx_SatsNet(txsHex)
 	if err != nil {
 		// parts := strings.Split(err.Error(), ":")
 		// if len(parts) == 2 && parts[0] != "0" && parts[1] == "missing-inputs" {

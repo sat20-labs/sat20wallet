@@ -32,6 +32,45 @@ func accountAutopayReadyFixture() (dkvsindexer.NetworkDefaults, *dkvsindexer.Aut
 func TestAccountAutopayStateReadyMatchesPaidRetentionVerifier(t *testing.T) {
 	defaults, state := accountAutopayReadyFixture()
 	require.True(t, accountAutopayStateReady(state, defaults, "payer", "5"))
+	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	require.True(t, status.Ready)
+	require.False(t, status.NeedsFunding)
+	require.Equal(t, AccountAutopayReasonReady, status.Reason)
+}
+
+func TestAccountAutopayFundingStatusExplainsRechargeReasons(t *testing.T) {
+	defaults, state := accountAutopayReadyFixture()
+	delegate := state.Delegates["payer"]
+
+	delegate.LastPayHeight = state.CurrentBlock - 1
+	state.Delegates["payer"] = delegate
+	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	require.False(t, status.Ready)
+	require.True(t, status.NeedsFunding)
+	require.True(t, status.CanFund)
+	require.Equal(t, AccountAutopayReasonPaymentExpired, status.Reason)
+
+	delegate.LastPayHeight = state.CurrentBlock
+	delegate.Balance = "4"
+	state.Delegates["payer"] = delegate
+	status = accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	require.Equal(t, AccountAutopayReasonBalanceInsufficient, status.Reason)
+	require.True(t, status.CanFund)
+
+	delete(state.Delegates, "payer")
+	status = accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	require.Equal(t, AccountAutopayReasonDelegateMissing, status.Reason)
+	require.True(t, status.CanFund)
+}
+
+func TestAccountAutopayFundingStatusDoesNotOfferFundingForInvalidContract(t *testing.T) {
+	defaults, state := accountAutopayReadyFixture()
+	state.Closed = true
+	state.Status = "closed"
+	status := accountAutopayStateFundingStatus(state, defaults, "payer", "5")
+	require.False(t, status.Ready)
+	require.False(t, status.CanFund)
+	require.Equal(t, AccountAutopayReasonContractInactive, status.Reason)
 }
 
 func TestAccountAutopayStateRejectsStaleOrInsufficientDelegate(t *testing.T) {

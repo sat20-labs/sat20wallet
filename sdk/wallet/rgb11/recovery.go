@@ -66,7 +66,11 @@ func RecoveryPackageFromSnapshot(snapshot *RGB11WalletSnapshot, now int64) (*Rec
 	}
 	requiredOutputAssets := make(map[string]map[indexer.AssetName]struct{})
 
-	// Current allocation proofs and their canonical validation chains are
+	// Only settled current allocation proofs and their canonical validation
+	// chains are permanent recovery data. A valid-but-unconfirmed proof and a
+	// spending proof belong to the active transition package instead: publishing
+	// either here would replace the last known-stable ownership snapshot before
+	// the Bitcoin transition is final.
 	// permanent recovery data. Output projections are reduced to the chain
 	// carrier and the exact live RGB assets required by those proofs.
 	for _, record := range snapshot.ProjectionRecords {
@@ -76,6 +80,9 @@ func RecoveryPackageFromSnapshot(snapshot *RGB11WalletSnapshot, now int64) (*Rec
 		var proof AllocationProof
 		if decode(record.Value, &proof) != nil {
 			return nil, ErrInvalidProof
+		}
+		if proof.Status != "settled" || proof.Confirmations <= 0 {
+			continue
 		}
 		keep[record.Key] = struct{}{}
 		keep["output-"+proof.OutPoint] = struct{}{}
@@ -184,6 +191,9 @@ func ValidateRecoveryPackage(value *RecoveryPackage) error {
 			if decode(record.Value, &proof) != nil {
 				return ErrInvalidProof
 			}
+			if proof.Status != "settled" || proof.Confirmations <= 0 {
+				return fmt.Errorf("%w: recovery proof %s is not settled", ErrRGB11Inconsistent, record.Key)
+			}
 			expected[record.Key] = struct{}{}
 			expected["output-"+proof.OutPoint] = struct{}{}
 			expected["validation-"+proof.ConsignmentHash] = struct{}{}
@@ -248,4 +258,73 @@ func (p *RecoveryPackage) WalletSnapshot() (*RGB11WalletSnapshot, error) {
 		AccountIndex: packageValue.AccountIndex, EngineBuildID: packageValue.EngineBuildID,
 		ProjectionRecords: packageValue.ProjectionRecords, EngineRecords: packageValue.EngineRecords,
 	}, nil
+}
+
+// MergeRecoverySnapshot updates account-managed durable ownership while
+// preserving the device-local transaction database. Recovery snapshots are
+// deliberately incomplete and must never replace pending transfers, transfer
+// history, signed transactions, reservations, or receive tasks.
+func MergeRecoverySnapshot(current, recovery *RGB11WalletSnapshot) (*RGB11WalletSnapshot, error) {
+	if current == nil || recovery == nil || current.WalletID != recovery.WalletID ||
+		current.AccountIndex != recovery.AccountIndex || current.EngineBuildID != recovery.EngineBuildID {
+		return nil, ErrRGB11Inconsistent
+	}
+	if err := ValidateWalletSnapshot(current); err != nil {
+		return nil, err
+	}
+	if len(recovery.EngineRecords) != 0 {
+		return nil, ErrRGB11Inconsistent
+	}
+	if len(recovery.ProjectionRecords) != 0 {
+		if err := ValidateWalletSnapshot(recovery); err != nil {
+			return nil, err
+		}
+	}
+
+	projection := make(map[string]SnapshotRecord, len(current.ProjectionRecords)+len(recovery.ProjectionRecords))
+	for _, record := range current.ProjectionRecords {
+		projection[record.Key] = SnapshotRecord{Key: record.Key, Value: append([]byte(nil), record.Value...)}
+	}
+	for _, record := range recovery.ProjectionRecords {
+		if strings.HasPrefix(record.Key, "output-") {
+			if existing, ok := projection[record.Key]; ok {
+				var localOutput, durableOutput indexer.TxOutput
+				if decode(existing.Value, &localOutput) != nil || decode(record.Value, &durableOutput) != nil ||
+					localOutput.OutPointStr != durableOutput.OutPointStr {
+					return nil, ErrRGB11Inconsistent
+				}
+				for i := range durableOutput.Assets {
+					asset := durableOutput.Assets[i]
+					localOutput.RemoveAsset(&asset.Name)
+					if err := localOutput.Assets.Add(asset.Clone()); err != nil {
+						return nil, err
+					}
+				}
+				encoded, err := encode(&localOutput)
+				if err != nil {
+					return nil, err
+				}
+				projection[record.Key] = SnapshotRecord{Key: record.Key, Value: encoded}
+				continue
+			}
+		}
+		projection[record.Key] = SnapshotRecord{Key: record.Key, Value: append([]byte(nil), record.Value...)}
+	}
+
+	merged := &RGB11WalletSnapshot{
+		Version: current.Version, WalletID: current.WalletID,
+		AccountIndex: current.AccountIndex, EngineBuildID: current.EngineBuildID,
+		EngineRecords:     cloneRecoveryRecords(current.EngineRecords),
+		ProjectionRecords: make([]SnapshotRecord, 0, len(projection)),
+	}
+	for _, record := range projection {
+		merged.ProjectionRecords = append(merged.ProjectionRecords, record)
+	}
+	sort.Slice(merged.ProjectionRecords, func(i, j int) bool {
+		return merged.ProjectionRecords[i].Key < merged.ProjectionRecords[j].Key
+	})
+	if err := ValidateWalletSnapshot(merged); err != nil {
+		return nil, err
+	}
+	return merged, nil
 }

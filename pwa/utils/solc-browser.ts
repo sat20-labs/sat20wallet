@@ -21,10 +21,12 @@ const compileStandard = soljson.cwrap(
   'string',
   ['string', 'number', 'number']
 )
+const compilerVersion = soljson.cwrap('solidity_version', 'string', [])
 
 const compile = (input: string) => compileStandard(input, 0, 0)
+const version = () => compilerVersion()
 
 // Match the subset of solc-js used by Tools.vue. The normal solc wrapper also
 // includes remote-version/network helpers that pull Node http/stream modules
 // into the browser bundle; those helpers are intentionally absent here.
-export default { compile }
+export default { compile, version }

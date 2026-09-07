@@ -76,8 +76,10 @@ const rgb11Address = {
 
   deliverAndBroadcast: (request: RGB11AddressDeliveryRequest) => call<{
     result: string
-    txid: string
+    txid?: string
     temporary: boolean
+	awaiting_ack?: boolean
+	broadcast?: boolean
   }>('deliverAndBroadcastRGB11AddressTransfer', JSON.stringify(request)),
 
   syncMailbox: (request: RGB11AddressMailboxRequest = {}) => call<{ result: string }>(

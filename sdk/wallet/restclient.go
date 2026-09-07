@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -84,7 +85,8 @@ type IndexerRPCClient interface {
 	GetUnusableUtxosWithAddress(address string) ([]*TxOutput, error)
 	GetFeeRate() int64
 	GetExistingUtxos(utxos []string) ([]string, error)
-	TestRawTx(signedTxs []string) error
+	TestRawTx_Bitcoin(signedTxs []string) error
+	TestRawTx_SatsNet(signedTxs []string) error
 	BroadCastTx(tx *wire.MsgTx) (string, error)
 	BroadCastTxs(tx []*wire.MsgTx) error
 	BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
@@ -108,6 +110,13 @@ type IndexerRPCClient interface {
 type IndexerClient struct {
 	*RESTClient
 }
+
+type transactionNetwork uint8
+
+const (
+	transactionNetworkBitcoin transactionNetwork = iota + 1
+	transactionNetworkSatsNet
+)
 
 func NewIndexerClient(scheme, host, proxy string, http HttpClient) *IndexerClient {
 	client := NewRESTClient(scheme, host, proxy, http)
@@ -358,6 +367,9 @@ func (p *IndexerClient) GetMinerInfo(pubkey []byte) (*sindexerwire.MinerInfo, er
 
 // 只有未花费的能拿到id
 func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
+	if _, err := wire.NewOutPointFromString(utxo); err != nil {
+		return INVALID_ID, fmt.Errorf("invalid outpoint: %w", err)
+	}
 	url := p.GetUrl("/v3/utxo/info/" + utxo)
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
@@ -368,7 +380,7 @@ func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
 	// Unmarshal the response.
 	var result indexerwire.TxOutputRespV3
 	if err := json.Unmarshal(rsp, &result); err != nil {
-		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		Log.Errorf("Unmarshal utxo response failed. %v", err)
 		return INVALID_ID, err
 	}
 
@@ -377,7 +389,7 @@ func (p *IndexerClient) GetUtxoId(utxo string) (uint64, error) {
 		return INVALID_ID, fmt.Errorf("%s", result.Msg)
 	}
 
-	if result.Data.UtxoId == INVALID_ID {
+	if result.Data == nil || result.Data.UtxoId == INVALID_ID {
 		return INVALID_ID, fmt.Errorf("can't find utxo %s", utxo)
 	}
 
@@ -390,6 +402,12 @@ func (p *IndexerClient) GetRawTx(tx string) (string, error) {
 }
 
 func (p *IndexerClient) GetRawTxContext(ctx context.Context, tx string) (string, error) {
+	if len(tx) != 64 {
+		return "", fmt.Errorf("invalid transaction id")
+	}
+	if decoded, err := hex.DecodeString(tx); err != nil || len(decoded) != 32 {
+		return "", fmt.Errorf("invalid transaction id")
+	}
 	url := p.GetUrl("/btc/rawtx/" + tx)
 	var rsp []byte
 	var err error
@@ -406,7 +424,7 @@ func (p *IndexerClient) GetRawTxContext(ctx context.Context, tx string) (string,
 	// Unmarshal the response.
 	var result indexerwire.TxResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
-		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		Log.Errorf("Unmarshal raw transaction response failed. %v", err)
 		return "", err
 	}
 
@@ -415,7 +433,11 @@ func (p *IndexerClient) GetRawTxContext(ctx context.Context, tx string) (string,
 		return "", fmt.Errorf("%s", result.Msg)
 	}
 
-	return result.Data.(string), nil
+	raw, ok := result.Data.(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return "", fmt.Errorf("raw transaction response has invalid data")
+	}
+	return raw, nil
 }
 
 // btcutil.Tx
@@ -752,35 +774,45 @@ func (p *IndexerClient) getAllUtxosWithAddress(address string) ([]*indexerwire.P
 
 // sat/vb
 func (p *IndexerClient) GetFeeRate() int64 {
+	feeRate, err := p.GetFeeRateWithError()
+	if err != nil {
+		Log.Errorf("GetFeeRate failed: %v", err)
+		return 0
+	}
+	return feeRate
+}
+
+func (p *IndexerClient) GetFeeRateWithError() (int64, error) {
 	url := p.GetUrl("/btc/fee/summary")
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
-		Log.Errorf("SendGetRequest %v failed. %v", url, err)
-		return 0
+		return 0, err
 	}
 
 	// Unmarshal the response.
 	var result indexerwire.FeeSummaryResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
-		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
-		return 0
+		return 0, err
 	}
 
 	if result.Code != 0 {
-		Log.Errorf("GetFeeRate response message %s", result.Msg)
-		return 0
+		return 0, fmt.Errorf("fee summary rejected: %s", result.Msg)
 	}
-
+	if result.Data == nil || len(result.Data.List) == 0 || result.Data.List[0] == nil {
+		return 0, fmt.Errorf("fee summary is empty")
+	}
 	fr, err := strconv.ParseFloat(result.Data.List[0].FeeRate, 64)
 	if err != nil {
-		Log.Errorf("ParseFloat %s failed. %v", result.Data.List[0].FeeRate, err)
-		return 0
+		return 0, fmt.Errorf("invalid fee rate: %w", err)
+	}
+	if math.IsNaN(fr) || math.IsInf(fr, 0) || fr <= 0 || fr > math.MaxInt64 {
+		return 0, fmt.Errorf("fee rate is outside the supported range")
 	}
 	ir := int64(fr)
 	if ir == 0 {
 		ir = 1
 	}
-	return ir
+	return ir, nil
 }
 
 func (p *IndexerClient) GetExistingUtxos(utxos []string) ([]string, error) {
@@ -814,63 +846,77 @@ func (p *IndexerClient) GetExistingUtxos(utxos []string) ([]string, error) {
 	return result.ExistingUtxos, nil
 }
 
-func (p *IndexerClient) TestRawTx(signedTxs []string) error {
+func (p *IndexerClient) testRawTxRequest(signedTxs []string) (*indexerwire.TestRawTxResp, error) {
 	req := indexerwire.TestRawTxReq{
 		SignedTxs: signedTxs,
 	}
 
 	buff, err := json.Marshal(&req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	url := p.GetUrl("/btc/tx/test")
 	rsp, err := p.Http.SendPostRequest(url, buff)
 	if err != nil {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
-		return err
+		return nil, err
 	}
 
 	var result indexerwire.TestRawTxResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
-		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
+		return nil, err
+	}
+	if result.Code != 0 {
+		return nil, fmt.Errorf("test transaction request rejected with code %d: %s", result.Code, result.Msg)
+	}
+	if len(result.Data) != len(signedTxs) {
+		return nil, fmt.Errorf("test transaction response count %d does not match request %d",
+			len(result.Data), len(signedTxs))
+	}
+	return &result, nil
+}
+
+func (p *IndexerClient) TestRawTx_Bitcoin(signedTxs []string) error {
+	result, err := p.testRawTxRequest(signedTxs)
+	if err != nil {
 		return err
 	}
-	//Log.Infof("TestRawTx return %d", len(result.Data))
-
 	for i, r := range result.Data {
-		Log.Infof("TestRawTx %d: %v", i, r)
+		if r == nil {
+			return fmt.Errorf("test transaction response %d is empty", i)
+		}
 		if !r.Allowed {
-			if strings.Contains(r.RejectReason, "transaction already exists in blockchain") ||
-				strings.Contains(r.RejectReason, "database contains entry for spent tx output") ||
-				strings.Contains(r.RejectReason, "already have transaction in mempool") {
-				Log.Infof("BroadCastTxHex TX has broadcasted. %s", r.RejectReason)
+			txID, decodeErr := bitcoinBroadcastTxID(signedTxs[i])
+			if decodeErr == nil && p.bitcoinTxVisible(context.Background(), txID) {
+				Log.Infof("bitcoin transaction %s is already visible", txID)
 				continue
-			} else if strings.Contains(r.RejectReason, "the locked tx is anchored already in sats net") {
-				// 只有聪网交易才会走到这里
-				parts := strings.Split(r.RejectReason, "the locked tx is anchored already in sats net")
-				if len(parts) != 2 {
-					Log.Errorf("BroadCastTxHex failed, %v", result.Msg)
-					return fmt.Errorf("%s", result.Msg)
-				}
-				tx, _ := DecodeMsgTx_SatsNet(signedTxs[i])
-				if strings.Contains(parts[1], tx.TxID()) {
-					// 聪网的特殊处理，只检查包含该utxo的anchorTx是否已经被广播
-					Log.Infof("BroadCastTxHex TX has anchored. %s", r.RejectReason)
-					continue
-				} else {
-					Log.Errorf("%v", r.RejectReason)
-					return fmt.Errorf("%d:%s", i, r.RejectReason)
-				}
-
 			}
-			Log.Errorf("this raw tx %s is not accepted by mempool, %s", signedTxs[i], r.RejectReason)
 			return fmt.Errorf("%d:%s", i, r.RejectReason)
-		} else {
-			//Log.Debugf("this raw tx %s is accepted by mempool", signedTxs[i])
 		}
 	}
 
+	return nil
+}
+
+func (p *IndexerClient) TestRawTx_SatsNet(signedTxs []string) error {
+	result, err := p.testRawTxRequest(signedTxs)
+	if err != nil {
+		return err
+	}
+	for i, r := range result.Data {
+		if r == nil {
+			return fmt.Errorf("test transaction response %d is empty", i)
+		}
+		if !r.Allowed {
+			txID, decodeErr := satsNetBroadcastTxID(signedTxs[i])
+			if decodeErr == nil && p.satsNetTxVisible(context.Background(), txID) {
+				Log.Infof("satsnet transaction %s is already visible", txID)
+				continue
+			}
+			return fmt.Errorf("%d:%s", i, r.RejectReason)
+		}
+	}
 	return nil
 }
 
@@ -880,7 +926,7 @@ func (p *IndexerClient) BroadCastTx(tx *wire.MsgTx) (string, error) {
 		return "", err
 	}
 
-	err = p.broadCastHexTx(str)
+	err = p.broadCastBitcoinHexTx(str)
 	if err != nil {
 		Log.Errorf("BroadCastTxHex failed. %v", err)
 		return "", err
@@ -898,16 +944,15 @@ func (p *IndexerClient) BroadCastTxsContext(ctx context.Context, txs []*wire.Msg
 		return nil
 	}
 	txsHex := make([]string, 0)
-	for i, tx := range txs {
+	for _, tx := range txs {
 		str, err := EncodeMsgTx(tx)
 		if err != nil {
 			return err
 		}
 		txsHex = append(txsHex, str)
-		Log.Infof("%d %s", i, str)
 	}
 
-	err := p.broadCastHexTxsContext(ctx, txsHex)
+	err := p.broadCastBitcoinHexTxsContext(ctx, txsHex)
 	if err != nil {
 		Log.Errorf("BroadCastTxs failed. %v", err)
 		return err
@@ -922,7 +967,7 @@ func (p *IndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error) {
 		return "", err
 	}
 
-	err = p.broadCastHexTx(str)
+	err = p.broadCastSatsNetHexTx(str)
 	if err != nil {
 		Log.Errorf("BroadCastTxHex failed. %v", err)
 		return "", err
@@ -945,7 +990,7 @@ func (p *IndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) error {
 		txsHex = append(txsHex, str)
 	}
 
-	err := p.broadCastHexTxs(txsHex)
+	err := p.broadCastSatsNetHexTxs(txsHex)
 	if err != nil {
 		Log.Errorf("broadCastHexTxs failed. %v", err)
 		return err
@@ -954,7 +999,23 @@ func (p *IndexerClient) BroadCastTxs_SatsNet(txs []*swire.MsgTx) error {
 	return nil
 }
 
-func (p *IndexerClient) broadCastHexTx(hexTx string) error {
+func (p *IndexerClient) broadCastBitcoinHexTx(hexTx string) error {
+	expectedTxID, err := bitcoinBroadcastTxID(hexTx)
+	if err != nil {
+		return err
+	}
+	return p.broadcastHexTx(hexTx, expectedTxID, transactionNetworkBitcoin)
+}
+
+func (p *IndexerClient) broadCastSatsNetHexTx(hexTx string) error {
+	expectedTxID, err := satsNetBroadcastTxID(hexTx)
+	if err != nil {
+		return err
+	}
+	return p.broadcastHexTx(hexTx, expectedTxID, transactionNetworkSatsNet)
+}
+
+func (p *IndexerClient) broadcastHexTx(hexTx, expectedTxID string, network transactionNetwork) error {
 	req := indexerwire.SendRawTxReq{
 		SignedTxHex: hexTx,
 		Maxfeerate:  0,
@@ -969,12 +1030,15 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 	rsp, err := p.Http.SendPostRequest(url, buff)
 	if err != nil {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
+		if p.txVisible(context.Background(), network, expectedTxID) {
+			Log.Infof("transaction %s is already visible", expectedTxID)
+			return nil
+		}
 		return err
 	}
 
 	var result indexerwire.SendRawTxResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
-		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
 		return err
 	}
 	/*
@@ -986,55 +1050,37 @@ func (p *IndexerClient) broadCastHexTx(hexTx string) error {
 	*/
 
 	if result.Code != 0 {
-		if strings.Contains(result.Msg, "transaction already exists in blockchain") ||
-			strings.Contains(result.Msg, "database contains entry for spent tx output") ||
-			strings.Contains(result.Msg, "already have transaction in mempool") ||
-			strings.Contains(result.Msg, "Transaction outputs already in utxo set") {
-			Log.Infof("BroadCastTxHex TX has broadcasted. %s", result.Msg)
+		if p.txVisible(context.Background(), network, expectedTxID) {
+			Log.Infof("transaction %s is already visible", expectedTxID)
 			return nil
-		} else if strings.Contains(result.Msg, "the locked tx is anchored already in sats net") {
-			// 聪网的特殊处理，只检查包含该utxo的anchorTx是否已经被广播，
-			// 这里检查该anchorTx是否就是我们要广播的TxId，如果是，说明anchorTx已经被广播
-			parts := strings.Split(result.Msg, "the locked tx is anchored already in sats net")
-			if len(parts) != 2 {
-				Log.Errorf("BroadCastTxHex failed, %v", result.Msg)
-				return fmt.Errorf("%s", result.Msg)
-			}
-			tx, _ := DecodeMsgTx_SatsNet(hexTx)
-			if strings.Contains(parts[1], tx.TxID()) {
-				// 聪网的特殊处理，检查包含该utxo的anchorTx是否已经被广播，并且anchorTx相同
-				Log.Infof("BroadCastTxHex TX has broadcasted. %s", tx.TxID())
-				return nil
-			} else {
-				Log.Errorf("BroadCastTxHex failed, %v", result.Msg)
-				return fmt.Errorf("%s", result.Msg)
-			}
-		} else if strings.Contains(result.Msg, "-25: TX rejected: orphan transaction") {
-			// TODO 聪网需要处理这种情况
-			// 特殊情况下，一个聪网的deanchorTx广播会触发这种问题: 看看是否该Tx已经存在聪网上
-			tx, _ := DecodeMsgTx_SatsNet(hexTx)
-			_, err := p.GetRawTx(tx.TxID())
-			if err == nil {
-				Log.Infof("BroadCastTxHex TX has broadcasted. %s", tx.TxID())
-				return nil
-			} else {
-				Log.Errorf("BroadCastTxHex failed, %v", result.Msg)
-				return fmt.Errorf("%s", result.Msg)
-			}
 		}
-		Log.Errorf("BroadCastTxHex error message %s", result.Msg)
-		return fmt.Errorf("%s", result.Msg)
+		return fmt.Errorf("broadcast rejected with code %d: %s", result.Code, result.Msg)
+	}
+	if strings.TrimSpace(result.Data) != expectedTxID {
+		if p.txVisible(context.Background(), network, expectedTxID) {
+			Log.Infof("transaction %s is already visible despite a mismatched broadcast response", expectedTxID)
+			return nil
+		}
+		return fmt.Errorf("broadcast response transaction id does not match request")
 	}
 
-	Log.Infof("BroadCastTxHex return %s", result.Data)
 	return nil
 }
 
-func (p *IndexerClient) broadCastHexTxs(hexTx []string) error {
-	return p.broadCastHexTxsContext(context.Background(), hexTx)
+func (p *IndexerClient) broadCastSatsNetHexTxs(hexTx []string) error {
+	return p.broadCastSatsNetHexTxsContext(context.Background(), hexTx)
 }
 
-func (p *IndexerClient) broadCastHexTxsContext(ctx context.Context, hexTx []string) error {
+func (p *IndexerClient) broadCastBitcoinHexTxsContext(ctx context.Context, hexTx []string) error {
+	return p.broadcastHexTxsContext(ctx, hexTx, transactionNetworkBitcoin)
+}
+
+func (p *IndexerClient) broadCastSatsNetHexTxsContext(ctx context.Context, hexTx []string) error {
+	return p.broadcastHexTxsContext(ctx, hexTx, transactionNetworkSatsNet)
+}
+
+func (p *IndexerClient) broadcastHexTxsContext(ctx context.Context, hexTx []string,
+	network transactionNetwork) error {
 	req := indexerwire.SendRawTxsReq{
 		SignedTxHex: hexTx,
 		Maxfeerate:  0,
@@ -1054,12 +1100,15 @@ func (p *IndexerClient) broadCastHexTxsContext(ctx context.Context, hexTx []stri
 	}
 	if err != nil {
 		Log.Errorf("SendPostRequest %v failed. %v", url, err)
+		if p.allBroadcastedTxsContext(ctx, network, hexTx) {
+			Log.Infof("broadcast package is already visible")
+			return nil
+		}
 		return err
 	}
 
 	var result indexerwire.SendRawTxsResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
-		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
 		return err
 	}
 
@@ -1070,40 +1119,152 @@ func (p *IndexerClient) broadCastHexTxsContext(ctx context.Context, hexTx []stri
 		// reason, so confirm every transaction by txid before returning an error.
 		// This does not turn a partially missing or malformed package into
 		// success; all unique txids must already be visible.
-		if p.allBroadcastedTxsContext(ctx, hexTx) {
+		if p.allBroadcastedTxsContext(ctx, network, hexTx) {
 			Log.Infof("broadCastHexTxs package already broadcasted")
 			return nil
 		}
 		Log.Errorf("broadCastHexTxs error message %s", result.Msg)
 		return fmt.Errorf("%s", result.Msg)
 	}
+	if err := verifyBroadcastTxIDs(network, hexTx, result.Data); err != nil {
+		if p.allBroadcastedTxsContext(ctx, network, hexTx) {
+			Log.Infof("broadcast package is already visible despite a mismatched response")
+			return nil
+		}
+		return err
+	}
 
-	Log.Infof("broadCastHexTxs return %v", result.Data)
 	return nil
 }
 
-func (p *IndexerClient) allBroadcastedTxsContext(ctx context.Context, hexTx []string) bool {
+func (p *IndexerClient) allBroadcastedTxsContext(ctx context.Context, network transactionNetwork,
+	hexTx []string) bool {
 	if len(hexTx) == 0 {
 		return true
 	}
 
 	seen := make(map[string]struct{}, len(hexTx))
 	for _, rawTx := range hexTx {
-		tx, err := DecodeMsgTx(rawTx)
+		txid, err := broadcastTxIDForNetwork(network, rawTx)
 		if err != nil {
 			return false
 		}
-		txid := tx.TxID()
 		if _, ok := seen[txid]; ok {
 			continue
 		}
 		seen[txid] = struct{}{}
-		if _, err := p.GetRawTxContext(ctx, txid); err != nil {
+		if !p.txVisible(ctx, network, txid) {
 			return false
 		}
 	}
 
 	return len(seen) != 0
+}
+
+func bitcoinBroadcastTxID(raw string) (string, error) {
+	tx, err := DecodeMsgTx(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid bitcoin raw transaction: %w", err)
+	}
+	return tx.TxID(), nil
+}
+
+func satsNetBroadcastTxID(raw string) (string, error) {
+	tx, err := DecodeMsgTx_SatsNet(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid satsnet raw transaction: %w", err)
+	}
+	return tx.TxID(), nil
+}
+
+func broadcastTxIDForNetwork(network transactionNetwork, raw string) (string, error) {
+	switch network {
+	case transactionNetworkBitcoin:
+		return bitcoinBroadcastTxID(raw)
+	case transactionNetworkSatsNet:
+		return satsNetBroadcastTxID(raw)
+	default:
+		return "", fmt.Errorf("unknown transaction network %d", network)
+	}
+}
+
+func (p *IndexerClient) bitcoinTxVisible(ctx context.Context, txID string) bool {
+	raw, err := p.GetRawTxContext(ctx, txID)
+	if err != nil {
+		return false
+	}
+	actual, err := bitcoinBroadcastTxID(raw)
+	return err == nil && actual == txID
+}
+
+func (p *IndexerClient) satsNetTxVisible(ctx context.Context, txID string) bool {
+	raw, err := p.GetRawTxContext(ctx, txID)
+	if err != nil {
+		return false
+	}
+	actual, err := satsNetBroadcastTxID(raw)
+	return err == nil && actual == txID
+}
+
+func (p *IndexerClient) txVisible(ctx context.Context, network transactionNetwork, txID string) bool {
+	switch network {
+	case transactionNetworkBitcoin:
+		return p.bitcoinTxVisible(ctx, txID)
+	case transactionNetworkSatsNet:
+		return p.satsNetTxVisible(ctx, txID)
+	default:
+		return false
+	}
+}
+
+func verifyBitcoinBroadcastTxIDs(rawTxs, responseTxIDs []string) error {
+	expected := make(map[string]struct{}, len(rawTxs))
+	for _, raw := range rawTxs {
+		txID, err := bitcoinBroadcastTxID(raw)
+		if err != nil {
+			return err
+		}
+		expected[txID] = struct{}{}
+	}
+	return verifyExpectedBroadcastTxIDs(expected, responseTxIDs)
+}
+
+func verifySatsNetBroadcastTxIDs(rawTxs, responseTxIDs []string) error {
+	expected := make(map[string]struct{}, len(rawTxs))
+	for _, raw := range rawTxs {
+		txID, err := satsNetBroadcastTxID(raw)
+		if err != nil {
+			return err
+		}
+		expected[txID] = struct{}{}
+	}
+	return verifyExpectedBroadcastTxIDs(expected, responseTxIDs)
+}
+
+func verifyBroadcastTxIDs(network transactionNetwork, rawTxs, responseTxIDs []string) error {
+	switch network {
+	case transactionNetworkBitcoin:
+		return verifyBitcoinBroadcastTxIDs(rawTxs, responseTxIDs)
+	case transactionNetworkSatsNet:
+		return verifySatsNetBroadcastTxIDs(rawTxs, responseTxIDs)
+	default:
+		return fmt.Errorf("unknown transaction network %d", network)
+	}
+}
+
+func verifyExpectedBroadcastTxIDs(expected map[string]struct{}, responseTxIDs []string) error {
+	actual := make(map[string]struct{}, len(responseTxIDs))
+	for _, txID := range responseTxIDs {
+		txID = strings.TrimSpace(txID)
+		if _, ok := expected[txID]; !ok {
+			return fmt.Errorf("broadcast package response contains an unexpected transaction id")
+		}
+		actual[txID] = struct{}{}
+	}
+	if len(actual) != len(expected) {
+		return fmt.Errorf("broadcast package response is incomplete")
+	}
+	return nil
 }
 
 func (p *IndexerClient) GetTickInfo(assetName *swire.AssetName) *indexer.TickerInfo {
@@ -1130,18 +1291,21 @@ func (p *IndexerClient) GetTickInfo(assetName *swire.AssetName) *indexer.TickerI
 }
 
 func (p *IndexerClient) AllowDeployTick(assetName *swire.AssetName) error {
+	if assetName == nil || strings.TrimSpace(assetName.String()) == "" {
+		return fmt.Errorf("invalid asset name")
+	}
 	url := p.GetUrl("/deploy/" + assetName.String())
 	rsp, err := p.Http.SendGetRequest(url)
 	if err != nil {
 		Log.Errorf("SendGetRequest %v failed. %v", url, err)
-		return nil
+		return err
 	}
 
 	// Unmarshal the response.
 	var result indexerwire.BaseResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
-		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
-		return nil
+		Log.Errorf("Unmarshal deploy permission response failed. %v", err)
+		return err
 	}
 
 	if result.Code != 0 {

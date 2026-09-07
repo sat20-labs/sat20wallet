@@ -73,8 +73,16 @@ const result = await page.evaluate(async ({
     const deadline = Date.now() + 120_000
     while (Date.now() < deadline) {
       const state = await parseState()
-      if (['synced', 'not_configured', 'offline'].includes(state.backup_status)) return state
-      if (state.backup_status === 'conflict') throw new Error('wallet data conflict')
+      if (state.sync_status === 'error') throw new Error('RGB11 synchronization failed')
+      if (state.consistency_status === 'broken') throw new Error('RGB11 state consistency is broken')
+      if (!['idle', 'syncing', 'reorging'].includes(state.sync_status)) {
+        throw new Error(`unknown RGB11 sync status ${state.sync_status || 'undefined'}`)
+      }
+      if (!['ok', 'warning'].includes(state.consistency_status)) {
+        throw new Error(`unknown RGB11 consistency status ${state.consistency_status || 'undefined'}`)
+      }
+      if (state.initialized === true && state.sync_status === 'idle' &&
+        state.consistency_status === 'ok') return state
       await new Promise((resolve) => setTimeout(resolve, 1_000))
     }
     throw new Error('wallet data synchronization timed out')
@@ -94,28 +102,49 @@ const result = await page.evaluate(async ({
     }
     throw new Error('Iris consignment was not available within 10 minutes')
   }
+	const deliverProxyWhenAcknowledged = async (transferID) => {
+	  const deadline = Date.now() + 10 * 60_000
+	  while (Date.now() < deadline) {
+		const delivery = await unwrap(
+		  await sat20.deliverAndBroadcastRGB11ProxyTransfer([transferID]),
+		  'deliverAndBroadcastRGB11ProxyTransfer',
+		)
+		if (delivery?.rejected) throw new Error('Iris rejected the RGB11 consignment')
+		if (delivery?.broadcast && delivery?.txid) return delivery
+		if (!delivery?.awaiting_ack) {
+		  throw new Error(`unexpected RGB11 proxy delivery state ${JSON.stringify(delivery)}`)
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10_000))
+	  }
+	  throw new Error('Iris did not acknowledge the RGB11 consignment within 10 minutes')
+	}
 
   await walletStorage.initializeState()
   await walletStorage.setValue('env', 'prd')
   await walletStorage.setValue('network', 'testnet')
   await walletStorage.setValue('chain', 'btc')
+  const credential = password
+  const [sessionUnlockError] = await wallet.unlockWallet(credential)
+  if (sessionUnlockError && !/no wallet/i.test(String(
+    sessionUnlockError.message || sessionUnlockError,
+  ))) {
+    throw sessionUnlockError
+  }
   await wallet.syncWalletCatalog().catch(() => [])
-  const hashed = await verify.hashPassword(password)
   let sender = senderWalletId
     ? wallet.wallets.find((item) => item.id === senderWalletId)
     : wallet.wallets.find((item) => item.accounts.some((account) => account.address === senderAddress))
   if (!sender) {
-    const [importError] = await wallet.importWallet(senderMnemonic, hashed)
+		const [importError] = await wallet.importWallet(senderMnemonic, credential)
     if (importError) throw importError
     const importedWalletID = wallet.walletId
     await wallet.syncWalletCatalog()
     sender = wallet.wallets.find((item) => item.id === importedWalletID)
   }
   if (!sender) throw new Error('RGB11 Iris test wallet is not imported')
-  await wallet.setPassword(hashed)
+  await unwrap(await wallet.unlockWallet(credential), 'unlockWallet')
   await wallet.setNetwork(Network.TESTNET)
   await wallet.setChain(Chain.BTC)
-  await unwrap(await wallet.unlockWallet(hashed), 'unlockWallet')
 
   const other = wallet.wallets.find((item) => item.id !== sender.id)
   if (other) await wallet.switchWallet(other.id)
@@ -123,6 +152,9 @@ const result = await page.evaluate(async ({
   await wallet.switchToAccount(0)
   await wallet.setChain(Chain.BTC)
   await unwrap(await sat20.switchAccount(0), 'switchAccount')
+  if (action === 'status') {
+    return { action, checkpoint: readCheckpoint(), state: await parseState() }
+  }
   if (!['iris-issued-invoice', 'receive-iris-issued'].includes(action)) {
     await waitForData()
   }
@@ -199,10 +231,7 @@ const result = await page.evaluate(async ({
       transferId: prepared.state.transfer_id,
     }
     writeCheckpoint(checkpoint)
-    const broadcast = await unwrap(
-      await sat20.deliverAndBroadcastRGB11ProxyTransfer([prepared.state.transfer_id]),
-      'deliverAndBroadcastRGB11ProxyTransfer',
-    )
+	const broadcast = await deliverProxyWhenAcknowledged(prepared.state.transfer_id)
     const completed = { ...checkpoint, txid: broadcast.txid }
     writeCheckpoint(completed)
     return { action, checkpoint: completed, state: await parseState() }
@@ -243,10 +272,7 @@ const result = await page.evaluate(async ({
       transferId: prepared.state.transfer_id,
     }
     writeCheckpoint(checkpoint)
-    const broadcast = await unwrap(
-      await sat20.deliverAndBroadcastRGB11ProxyTransfer([prepared.state.transfer_id]),
-      'deliverAndBroadcastRGB11ProxyTransfer',
-    )
+	const broadcast = await deliverProxyWhenAcknowledged(prepared.state.transfer_id)
     const completed = { ...checkpoint, txid: broadcast.txid }
     writeCheckpoint(completed)
     return { action, checkpoint: completed, state: await parseState() }
@@ -351,10 +377,7 @@ const result = await page.evaluate(async ({
   }
   if (action === 'deliver') {
     if (!checkpoint.transferId) throw new Error('Iris transfer has not been prepared')
-    const broadcast = await unwrap(
-      await sat20.deliverAndBroadcastRGB11ProxyTransfer([checkpoint.transferId]),
-      'deliverAndBroadcastRGB11ProxyTransfer',
-    )
+	const broadcast = await deliverProxyWhenAcknowledged(checkpoint.transferId)
     const updated = { ...checkpoint, txid: broadcast.txid }
     writeCheckpoint(updated)
     return { action, checkpoint: updated, state: await parseState() }
@@ -365,7 +388,10 @@ const result = await page.evaluate(async ({
       await sat20.fetchRGB11ProxyAck(checkpoint.transferId),
       'fetchRGB11ProxyAck',
     )
-    const updated = { ...checkpoint, irisAck: ack }
+	const broadcast = ack.available && ack.accepted
+	  ? await deliverProxyWhenAcknowledged(checkpoint.transferId)
+	  : null
+	const updated = { ...checkpoint, irisAck: ack, ...(broadcast?.txid ? { txid: broadcast.txid } : {}) }
     writeCheckpoint(updated)
     return { action, checkpoint: updated, state: await parseState() }
   }

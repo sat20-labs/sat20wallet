@@ -6,10 +6,8 @@ class WalletManager {
   ): Promise<[Error | undefined, any | undefined]> {
     const method = (globalThis as any).sat20wallet_wasm[methodName as keyof WalletManager]
     const [err, result] = await tryit(method as any)(...args)
-    console.log(`${methodName} args: `, args)
-    console.log(`${methodName} result: `, result)
     if (err) {
-      console.error(`${methodName} error: ${err.message}`)
+		console.error(`${methodName} failed`)
       return [err, undefined]
     }
 
@@ -237,31 +235,6 @@ class WalletManager {
     id: number
   ): Promise<[Error | undefined, Uint8Array | undefined]> {
     return this._handleRequest('getPublicKey', id)
-  }
-
-  async getCommitRootKey(
-    peer: Uint8Array
-  ): Promise<[Error | undefined, Uint8Array | undefined]> {
-    return this._handleRequest('getCommitRootKey', peer)
-  }
-
-  async getCommitSecret(
-    peer: Uint8Array,
-    index: number
-  ): Promise<[Error | undefined, Uint8Array | undefined]> {
-    return this._handleRequest('getCommitSecret', peer, index)
-  }
-
-  async deriveRevocationPrivKey(
-    commitSecret: Uint8Array
-  ): Promise<[Error | undefined, Uint8Array | undefined]> {
-    return this._handleRequest('deriveRevocationPrivKey', commitSecret)
-  }
-
-  async getRevocationBaseKey(): Promise<
-    [Error | undefined, Uint8Array | undefined]
-  > {
-    return this._handleRequest('getRevocationBaseKey')
   }
 
   async getNodePubKey(): Promise<[Error | undefined, Uint8Array | undefined]> {

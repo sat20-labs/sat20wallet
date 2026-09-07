@@ -1,7 +1,7 @@
 <template>
   <TableRow>
     <TableCell v-if="showCheckbox">
-      <Checkbox :model-value="isSelected" @update:model-value="() => handleToggleSelect()" />
+      <Checkbox :checked="isSelected" @update:checked="() => handleToggleSelect()" />
     </TableCell>
     <TableCell class="truncate">
       <a :href="explorerUrl" target="_blank" class="text-blue-400 underline">

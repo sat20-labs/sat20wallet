@@ -177,7 +177,7 @@ async function loadBoundReferrer() {
     }
 
     // 如果本地没有有效绑定，则从服务器获取
-    const networkType = network.value === Network.LIVENET ? 'livenet' : 'testnet'
+    const networkType = network.value === Network.MAINNET ? 'mainnet' : 'testnet'
     console.log('获取绑定推荐人，地址:', address.value, '网络:', networkType)
 
     const response = await satnetApi.getReferrerByAddress({

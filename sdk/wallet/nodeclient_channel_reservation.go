@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"encoding/json"
+	"fmt"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
@@ -9,6 +10,9 @@ import (
 )
 
 func signRPCMessage(localWallet common.Wallet, msg interface{}) ([]byte, error) {
+	if localWallet == nil {
+		return nil, fmt.Errorf("missing protocol message signer")
+	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return nil, err

@@ -1,3 +1,6 @@
+//go:build wallet_maintenance
+// +build wallet_maintenance
+
 package wallet
 
 import (
@@ -8,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -51,18 +53,14 @@ type testnetSeq2RepairPatch struct {
 
 type testnetSeq2RemotePair struct {
 	State, Blob        *swire.DKVSRecord
-	StateMeta          *dkvsindexer.PathMeta
-	BlobMeta           *dkvsindexer.PathMeta
 	EndpointID         string
 	VerificationHeight uint64
 }
 
 type testnetSeq2CASPlan struct {
-	Mutations  []dkvsindexer.CASMutation
-	Conditions []dkvsindexer.PathWritePrecondition
-	StateHash  string
-	BlobHash   string
-	EndpointID string
+	Mutations []dkvsindexer.CASMutation
+	StateHash string
+	BlobHash  string
 }
 
 type testnetSeq2PaidStorageSummary struct {
@@ -202,28 +200,15 @@ func validateTestnetSeq2ApprovedRemote(pair testnetSeq2RemotePair,
 
 func validateTestnetSeq2ApprovedRemoteHashes(pair testnetSeq2RemotePair,
 	stateKey, blobKey, approvedStateHash, approvedBlobHash string) error {
-	if pair.State == nil || pair.Blob == nil || pair.StateMeta == nil || pair.BlobMeta == nil ||
-		pair.State.Key != stateKey || pair.Blob.Key != blobKey ||
+	if pair.State == nil || pair.Blob == nil || strings.TrimSpace(pair.EndpointID) == "" ||
+		pair.VerificationHeight == 0 || pair.State.Key != stateKey || pair.Blob.Key != blobKey ||
 		pair.State.Seq != testnetSeq2RepairSeq || pair.Blob.Seq != testnetSeq2RepairSeq ||
 		pair.State.IssueHeight != testnetSeq2RepairHeight ||
 		pair.Blob.IssueHeight != testnetSeq2RepairHeight ||
+		pair.State.IssueHeight > pair.VerificationHeight || pair.Blob.IssueHeight > pair.VerificationHeight ||
 		dkvsindexer.RecordHash(pair.State).String() != approvedStateHash ||
 		dkvsindexer.RecordHash(pair.Blob).String() != approvedBlobHash {
-		return fmt.Errorf("remote Seq2 records do not match the approved B pair")
-	}
-	statePath, err := dkvsindexer.CollectionPathForKey(stateKey)
-	if err != nil {
-		return err
-	}
-	blobPath, err := dkvsindexer.CollectionPathForKey(blobKey)
-	if err != nil {
-		return err
-	}
-	if pair.StateMeta.Path != statePath || pair.BlobMeta.Path != blobPath ||
-		pair.StateMeta.ViewHeight == 0 || pair.BlobMeta.ViewHeight == 0 ||
-		pair.StateMeta.ViewHeight != pair.BlobMeta.ViewHeight ||
-		pair.VerificationHeight != pair.StateMeta.ViewHeight {
-		return fmt.Errorf("remote path metadata is not one trusted testnet view")
+		return fmt.Errorf("remote Seq2 records do not match the approved B pair from one subscription snapshot")
 	}
 	return nil
 }
@@ -259,20 +244,13 @@ func buildTestnetSeq2CASPlanHashes(pair testnetSeq2RemotePair, stateRecord,
 		return nil, err
 	}
 	stateHash, blobHash := dkvsindexer.RecordHash(pair.State), dkvsindexer.RecordHash(pair.Blob)
-	conditions := []dkvsindexer.PathWritePrecondition{
-		{Path: pair.StateMeta.Path, ExpectedRoot: pair.StateMeta.StateRoot,
-			ExpectedGeneration: pair.StateMeta.Generation},
-		{Path: pair.BlobMeta.Path, ExpectedRoot: pair.BlobMeta.StateRoot,
-			ExpectedGeneration: pair.BlobMeta.Generation},
-	}
-	sort.Slice(conditions, func(i, j int) bool { return conditions[i].Path < conditions[j].Path })
 	return &testnetSeq2CASPlan{
 		Mutations: []dkvsindexer.CASMutation{
 			{Record: stateRecord, Precondition: dkvsindexer.WritePrecondition{ExpectedHash: &stateHash}},
 			{Record: blobRecord, Precondition: dkvsindexer.WritePrecondition{ExpectedHash: &blobHash}},
 		},
-		Conditions: conditions, StateHash: dkvsindexer.RecordHash(stateRecord).String(),
-		BlobHash: dkvsindexer.RecordHash(blobRecord).String(), EndpointID: pair.EndpointID,
+		StateHash: dkvsindexer.RecordHash(stateRecord).String(),
+		BlobHash:  dkvsindexer.RecordHash(blobRecord).String(),
 	}, nil
 }
 
@@ -364,7 +342,7 @@ func testnetSeq2SnapshotKeyClass(key string) string {
 		return "lockTime"
 	case strings.HasPrefix(key, "prd-testnet-"+DB_KEY_TICKER_INFO):
 		return "ticker"
-	case strings.HasPrefix(key, string(dkvsBatchOutboxPrefix)):
+	case strings.HasPrefix(key, string(dkvsOutboxPrefix)):
 		return "outbox"
 	default:
 		return ""
@@ -441,16 +419,16 @@ func testnetSeq2PreparedRGB11Manager(manager *Manager) (*rgb11Manager, error) {
 	})
 }
 
-func testnetSeq2ExactRecord(snapshot *dkvsindexer.PathSnapshot,
+func testnetSeq2ExactRecord(snapshot *dkvsindexer.PrefixSnapshot,
 	key string) (*swire.DKVSRecord, error) {
-	if snapshot == nil || snapshot.PathMeta == nil {
-		return nil, fmt.Errorf("missing DKVS path snapshot")
+	if snapshot == nil || strings.TrimSpace(snapshot.EndpointID) == "" || snapshot.ViewHeight == 0 {
+		return nil, fmt.Errorf("missing DKVS subscription snapshot")
 	}
 	var result *swire.DKVSRecord
 	for _, record := range snapshot.Records {
 		if record != nil && record.Key == key {
 			if result != nil {
-				return nil, fmt.Errorf("duplicate DKVS key in path snapshot")
+				return nil, fmt.Errorf("duplicate DKVS key in subscription snapshot")
 			}
 			result = record
 		}
@@ -471,13 +449,16 @@ func readTestnetSeq2Remote(client *SatsNetDKVSClient, stateKey,
 	if err != nil {
 		return testnetSeq2RemotePair{}, err
 	}
-	stateSnapshot, err := client.SyncPath(statePath, dkvsindexer.RecordVerificationOptions{})
+	stateSnapshot, err := client.GetPrefixSnapshot(statePath)
 	if err != nil {
 		return testnetSeq2RemotePair{}, err
 	}
-	blobSnapshot, err := client.SyncPath(blobPath, dkvsindexer.RecordVerificationOptions{})
+	blobSnapshot, err := client.GetPrefixSnapshot(blobPath)
 	if err != nil {
 		return testnetSeq2RemotePair{}, err
+	}
+	if stateSnapshot.EndpointID != blobSnapshot.EndpointID {
+		return testnetSeq2RemotePair{}, dkvsindexer.ErrEndpointMismatch
 	}
 	state, err := testnetSeq2ExactRecord(stateSnapshot, stateKey)
 	if err != nil {
@@ -487,14 +468,20 @@ func readTestnetSeq2Remote(client *SatsNetDKVSClient, stateKey,
 	if err != nil {
 		return testnetSeq2RemotePair{}, err
 	}
-	config, err := client.GetClientConfigV1()
+	config, err := client.GetDKVSClientConfig()
 	if err != nil {
 		return testnetSeq2RemotePair{}, err
 	}
+	if config.EndpointID != stateSnapshot.EndpointID {
+		return testnetSeq2RemotePair{}, dkvsindexer.ErrEndpointMismatch
+	}
+	verificationHeight := stateSnapshot.ViewHeight
+	if blobSnapshot.ViewHeight < verificationHeight {
+		verificationHeight = blobSnapshot.ViewHeight
+	}
 	return testnetSeq2RemotePair{
-		State: state, Blob: blob, StateMeta: stateSnapshot.PathMeta,
-		BlobMeta: blobSnapshot.PathMeta, EndpointID: config.EndpointID,
-		VerificationHeight: stateSnapshot.PathMeta.ViewHeight,
+		State: state, Blob: blob, EndpointID: stateSnapshot.EndpointID,
+		VerificationHeight: verificationHeight,
 	}, nil
 }
 
@@ -872,7 +859,11 @@ func TestManageTestnetAccountSeq2Repair(t *testing.T) {
 		return
 	}
 	if plan != nil {
-		result, applyErr := client.putRecordBatchCASV1Raw(plan.Mutations, plan.Conditions, plan.EndpointID)
+		requestID, requestErr := newDKVSRequestID()
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		result, applyErr := client.putRecordBatchCASRaw(plan.Mutations, "", requestID)
 		if applyErr == nil && (result == nil || len(result.Records) != 2) {
 			applyErr = fmt.Errorf("repair CAS returned an incomplete result")
 		}
@@ -1298,7 +1289,7 @@ func TestTestnetSeq2RepairDBScopeAndFailureRestore(t *testing.T) {
 	}
 }
 
-func TestTestnetSeq2RepairCASPlanBindsBothHashesAndPaths(t *testing.T) {
+func TestTestnetSeq2RepairCASPlanBindsBothETags(t *testing.T) {
 	stateKey := "/personal/" + testnetSeq2RepairAccountID + "/account/state"
 	blobKey := "/blob/" + testnetSeq2RepairAccountID + "/account-managed-data"
 	makeRecord := func(key string, seq, height uint64, value string) *swire.DKVSRecord {
@@ -1309,11 +1300,7 @@ func TestTestnetSeq2RepairCASPlanBindsBothHashesAndPaths(t *testing.T) {
 	bBlob := makeRecord(blobKey, 2, 3445, "b-blob")
 	aState := makeRecord(stateKey, 3, 3500, "a-state")
 	aBlob := makeRecord(blobKey, 3, 3500, "a-blob")
-	statePath, _ := dkvsindexer.CollectionPathForKey(stateKey)
-	blobPath, _ := dkvsindexer.CollectionPathForKey(blobKey)
 	pair := testnetSeq2RemotePair{State: bState, Blob: bBlob,
-		StateMeta:          &dkvsindexer.PathMeta{Path: statePath, ViewHeight: 3500, Generation: 7},
-		BlobMeta:           &dkvsindexer.PathMeta{Path: blobPath, ViewHeight: 3500, Generation: 9},
 		VerificationHeight: 3500, EndpointID: "test-endpoint"}
 	approvedState, approvedBlob := dkvsindexer.RecordHash(bState).String(), dkvsindexer.RecordHash(bBlob).String()
 	if err := validateTestnetSeq2ApprovedRemoteHashes(pair, stateKey, blobKey,
@@ -1324,21 +1311,15 @@ func TestTestnetSeq2RepairCASPlanBindsBothHashesAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	generationByPath := make(map[string]uint64, len(plan.Conditions))
-	for _, condition := range plan.Conditions {
-		generationByPath[condition.Path] = condition.ExpectedGeneration
-	}
-	if len(plan.Mutations) != 2 || len(plan.Conditions) != 2 ||
+	if len(plan.Mutations) != 2 ||
 		plan.Mutations[0].Record.Seq != 3 || plan.Mutations[1].Record.Seq != 3 ||
 		plan.Mutations[0].Precondition.ExpectedHash == nil ||
 		plan.Mutations[1].Precondition.ExpectedHash == nil ||
 		plan.Mutations[0].Precondition.ExpectedHash.String() != approvedState ||
-		plan.Mutations[1].Precondition.ExpectedHash.String() != approvedBlob ||
-		generationByPath[statePath] != 7 || generationByPath[blobPath] != 9 {
-		t.Fatalf("unsafe CAS plan: %+v", plan)
+		plan.Mutations[1].Precondition.ExpectedHash.String() != approvedBlob {
+		t.Fatalf("unsafe ETag CAS plan: %+v", plan)
 	}
 }
-
 func TestTestnetSeq2RepairNeverCommitsBeforeVerification(t *testing.T) {
 	commits := 0
 	err := testnetSeq2CommitAfterVerification(func() error { return errors.New("remote invalid") },

@@ -1,4 +1,5 @@
 import { tryit } from 'radash'
+import { walletRequestSessionGuard } from '@/lib/walletSession'
 import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
 
 // Define the expected response structure from WASM functions
@@ -117,40 +118,31 @@ class SatsnetStp {
     methodName: keyof StpWasmModule,
     ...args: any[]
   ): Promise<[Error | undefined, T | undefined]> {
-    const globalWallet = (globalThis as any).sat20wallet_wasm;
-
-    const stpModuleTyped = globalWallet
-      ? (globalWallet as unknown as StpWasmModule)
-      : undefined;
-
-    if (!stpModuleTyped || typeof stpModuleTyped[methodName] !== 'function') {
-      const errorMsg = `sat20wallet_wasm or method "${methodName}" not found on globalThis.`
-      console.error(errorMsg)
-      return [new Error(errorMsg), undefined]
-    }
-    const operation = await beginPwaWalletOperation(String(methodName), args)
-    const method = stpModuleTyped[methodName] as (...args: any[]) => Promise<WasmResponse<T>>;
-    console.log('sat20wallet channel method', methodName, args);
-    const [err, result] = await tryit(method)(...args)
-    console.log('sat20wallet channel method', methodName, args, result);
-
-    if (err) {
-      console.error(`sat20wallet channel ${methodName} error: ${err.message}`)
-      await finishPwaOperation(operation, err)
-      return [err, undefined]
-    }
-
-    if (result && typeof result.code === 'number' && result.code !== 0) {
-      const errorMsg = result.msg || `sat20wallet channel ${methodName} failed with code ${result.code}`;
-      console.error(errorMsg);
-      const responseError = new Error(errorMsg)
-      await finishPwaOperation(operation, responseError)
-      return [responseError, undefined];
-    }
-
-    await finishPwaOperation(operation, null, result?.data)
-    // Return data using optional chaining
-    return [undefined, result?.data]
+    return tryit(async () => {
+      const checkSession = walletRequestSessionGuard(methodName)
+      const module = (globalThis as any).sat20wallet_wasm as StpWasmModule | undefined
+      if (!module || typeof module[methodName] !== 'function') {
+        throw new Error(`sat20wallet_wasm or method "${methodName}" not found on globalThis.`)
+      }
+      const operation = await beginPwaWalletOperation(methodName, args)
+      try {
+        checkSession()
+        const method = module[methodName] as (...args: any[]) => Promise<WasmResponse<T>>
+        const response = await method(...args)
+        checkSession()
+        if (response && typeof response.code === 'number' && response.code !== 0) {
+          throw new Error(response.msg || `sat20wallet channel ${methodName} failed with code ${response.code}`)
+        }
+        await finishPwaOperation(operation, null, response?.data)
+        checkSession()
+        return response?.data
+      } catch (error) {
+        console.error(`sat20wallet channel ${methodName} failed`)
+        const failure = error instanceof Error ? error : new Error(String(error))
+        await finishPwaOperation(operation, failure)
+        throw failure
+      }
+    })()
   }
 
   // --- 通道管理相关方法 ---

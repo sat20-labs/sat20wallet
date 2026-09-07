@@ -95,6 +95,13 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		}
 		p.autoBackupRGB11AfterMutation()
 	}
+	// The signed transaction and every transition dependency must be accepted
+	// by the account's CoreNode before the first irreversible backend call.
+	if owner := p.accountManagementOwner(); owner != nil {
+		if err := owner.syncAccountManagedActiveData(rgb11AccountManagedProviderID); err != nil {
+			return "", err
+		}
+	}
 
 	// A retry after an ambiguous response first resolves the locally computed
 	// witness txid. This avoids treating an already accepted transaction as a
@@ -102,7 +109,10 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 	_, visible := p.expectedRGB11TransactionStatus(first)
 	var backendTxID string
 	var broadcastErr error
-	if !visible {
+	if !visible && first.ChannelSend != nil && !first.ChannelSend.Signed {
+		broadcastErr = p.signRGB11ChannelBatch(pendingList)
+	}
+	if !visible && broadcastErr == nil {
 		backendTxID, broadcastErr = p.evidence.Broadcast(first.SignedTx)
 		if broadcastErr == nil && backendTxID != "" && backendTxID != expectedTxID {
 			broadcastErr = fmt.Errorf("RGB11 backend returned witness txid %s, expected %s",
@@ -119,6 +129,11 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 			return expectedTxID, &RGB11BroadcastResultUnknownError{
 				TxID: expectedTxID, Err: broadcastErr,
 			}
+		}
+	}
+	if first.ChannelSend != nil && !first.ChannelSend.Signed {
+		if err := p.recoverRGB11ChannelWitness(pendingList); err != nil {
+			return expectedTxID, &RGB11BroadcastResultUnknownError{TxID: expectedTxID, Err: err}
 		}
 	}
 

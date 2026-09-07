@@ -126,14 +126,6 @@ func isBroadcastResultUnknown(err error) bool {
 	return false
 }
 
-func (p *Manager) isL2TxVisible(txId string) bool {
-	if txId == "" {
-		return false
-	}
-	_, err := p.GetIndexerRPCClient_SatsNet().GetRawTx(txId)
-	return err == nil
-}
-
 func (p *Manager) handleChannelActionTimeout(id int64, action string) {
 	switch action {
 	case RESV_TYPE_OPEN:
@@ -155,8 +147,13 @@ func (p *Manager) handleChannelActionTimeout(id int64, action string) {
 			return
 		}
 		if channel, err := p.LoadBackupChannel(resv.ChannelId); err == nil {
-			_ = p.SaveChannelToDB(channel)
-			p.EnableChannel(channel)
+			if err := p.SaveChannelToDB(channel); err != nil {
+				Log.Errorf("can't persist backup channel %s, %v", resv.ChannelId, err)
+				return
+			}
+			if err := p.EnableChannel(channel); err != nil {
+				return
+			}
 		} else {
 			Log.Errorf("can't restore backup channel %s, %v", resv.ChannelId, err)
 			return
@@ -172,8 +169,13 @@ func (p *Manager) handleChannelActionTimeout(id int64, action string) {
 			return
 		}
 		if channel, err := p.LoadBackupChannel(resv.ChannelId); err == nil {
-			_ = p.SaveChannelToDB(channel)
-			p.EnableChannel(channel)
+			if err := p.SaveChannelToDB(channel); err != nil {
+				Log.Errorf("can't persist backup channel %s, %v", resv.ChannelId, err)
+				return
+			}
+			if err := p.EnableChannel(channel); err != nil {
+				return
+			}
 		} else {
 			Log.Errorf("can't restore backup channel %s, %v", resv.ChannelId, err)
 			return
@@ -189,8 +191,13 @@ func (p *Manager) handleChannelActionTimeout(id int64, action string) {
 			return
 		}
 		if channel, err := p.LoadBackupChannel(resv.ChannelId); err == nil {
-			_ = p.SaveChannelToDB(channel)
-			p.EnableChannel(channel)
+			if err := p.SaveChannelToDB(channel); err != nil {
+				Log.Errorf("can't persist backup channel %s, %v", resv.ChannelId, err)
+				return
+			}
+			if err := p.EnableChannel(channel); err != nil {
+				return
+			}
 		} else {
 			Log.Errorf("can't restore backup channel %s, %v", resv.ChannelId, err)
 			return
@@ -326,7 +333,8 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 		}
 		return
 	}
-
+	// Testnet rollbacks require separate operator handling. Normal monitoring
+	// must not downgrade READY channels based on failed transaction queries.
 	for _, resv := range p.GetFundingReservations() {
 		if resv == nil || resv.Channel == nil {
 			continue
@@ -338,6 +346,9 @@ func (p *Manager) HandleChannelReservationStatus(sendTxInL1 bool) {
 		}
 		switch resv.Channel.Status {
 		case CS_ANCHOR_BROADCASTED:
+			if resv.AnchorTx == nil {
+				continue
+			}
 			txId := resv.AnchorTx.TxID()
 			if p.GetIndexerRPCClient_SatsNet().IsTxConfirmed(txId) {
 				Log.Infof("L2 Tx confirmed: %s", txId)
@@ -466,6 +477,9 @@ func (p *Manager) HandleChannelReady(resv *FundingReservation) error {
 		return fmt.Errorf("invalid funding reservation")
 	}
 	Log.Infof("handleChannelReady channel ready: %s", resv.Channel.ChannelId)
+	if !resv.SkipOpeningAnchorTx && resv.AnchorTx != nil {
+		resv.Channel.EnableUtxo_SatsNet(resv.AnchorTx.TxID())
+	}
 	resv.Channel.Status = CS_READY
 	return p.finalizeOpenChannelReady(resv)
 }
@@ -489,10 +503,12 @@ func (p *Manager) finalizeOpenChannelReady(resv *FundingReservation) error {
 	if err := p.SaveChannelToDB(channel); err != nil {
 		return err
 	}
-	p.EnableChannel(channel)
+	if err := p.EnableChannel(channel); err != nil {
+		return err
+	}
 	p.SendMessageToUpper(MSG_CHANNEL_OPENED, channel.ChannelId)
 	if resv.IsInitiator && p.serverNode != nil && p.serverNode.RPCClient() != nil {
-		_ = p.serverNode.RPCClient().SendActionResultNfty(resv.Id, RESV_TYPE_OPEN, 0, "")
+		_ = p.serverNode.RPCClient().SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_OPEN, 0, "")
 	}
 	resv.Status = RS_CLOSED
 	if err := p.SaveWalletReservation(resv); err != nil {
@@ -530,7 +546,7 @@ func (p *Manager) HandlePaymentFinished(resv *PaymentReservation) error {
 	}
 	p.SendMessageToUpper(MSG_UTXO_UNLOCKED_LOCKED, resv.ChannelId)
 	if resv.IsInitiator && resv.Channel != nil && resv.Channel.PeerRPC != nil {
-		_ = resv.Channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_PAYMENT, 0, "")
+		_ = resv.Channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_PAYMENT, 0, "")
 	}
 	p.DelResvWithId(resv.Id)
 	p.notifyChannelStatus(&ActionStatusEvent{
@@ -608,7 +624,7 @@ func (p *Manager) HandleSplicingInChannelReady(resv *SplicingReservation) error 
 		p.SendMessageToUpper(MSG_EXPANDED, resv.ChannelId)
 	}
 	if resv.IsInitiator && resv.Channel != nil && resv.Channel.PeerRPC != nil {
-		_ = resv.Channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_SPLICING, 0, "")
+		_ = resv.Channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_SPLICING, 0, "")
 	}
 	p.DelResvWithId(resv.Id)
 	p.notifyChannelStatus(&ActionStatusEvent{
@@ -657,7 +673,7 @@ func (p *Manager) HandleSplicingOutChannelReady(resv *SplicingReservation) error
 	}
 	p.SendMessageToUpper(MSG_SPLICING_OUT, resv.ChannelId)
 	if resv.IsInitiator && resv.Channel != nil && resv.Channel.PeerRPC != nil {
-		_ = resv.Channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_SPLICING, 0, "")
+		_ = resv.Channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_SPLICING, 0, "")
 	}
 	p.DelResvWithId(resv.Id)
 	p.notifyChannelStatus(&ActionStatusEvent{
@@ -715,7 +731,7 @@ func (p *Manager) HandleChannelClosed(resv *ClosingReservation) error {
 	}
 	p.SendMessageToUpper(MSG_CHANNEL_CLOSED, resv.ChannelId)
 	if resv.IsInitiator && resv.Channel != nil && resv.Channel.PeerRPC != nil {
-		_ = resv.Channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_CLOSE, 0, "")
+		_ = resv.Channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_CLOSE, 0, "")
 	}
 	p.notifyChannelStatus(&ActionStatusEvent{
 		Event:    ACTION_STATUS_EVENT_COMPLETED,

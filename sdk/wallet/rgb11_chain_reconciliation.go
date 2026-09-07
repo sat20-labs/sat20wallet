@@ -136,6 +136,17 @@ func (p *rgb11Manager) hasPendingRGB11ChainReconciliation() (bool, error) {
 			return true, nil
 		}
 	}
+	proofs, err := p.projectionStore.ListProofs()
+	if err != nil {
+		return false, err
+	}
+	requirements := rgb11ProofConfirmationRequirements(transfers)
+	for _, proof := range proofs {
+		if proof != nil && proof.Status == "valid" &&
+			!rgb11ProofIsAvailable(proof, requirements) {
+			return true, nil
+		}
+	}
 	return false, nil
 }
 

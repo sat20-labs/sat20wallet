@@ -1,8 +1,10 @@
 import { InAppBrowserEvent, HandlerFunction } from "../types";
-import { ACTIONS_REQUIRING_ORIGIN_AUTH, PROVIDER_NOTIFICATION_TYPES, LOG_PREFIXES } from "../constants";
+import { PROVIDER_NOTIFICATION_TYPES, LOG_PREFIXES } from "../constants";
 import { HandlerFactory } from "../handlers/handler-factory";
-import { isOriginAuthorized } from "../../../lib/authorized-origins";
+import { getCurrentDappScope, isDappCapabilityGranted } from "../../../lib/authorized-origins";
 import { ResponseHandler } from "./response-handler";
+import { getDappActionPolicy } from "../../../lib/dapp-policy";
+import { Message } from "../../../types/message";
 
 export class MessageManager {
   private handlers: Record<string, HandlerFunction>;
@@ -19,7 +21,7 @@ export class MessageManager {
    */
   async handleMessage(event: InAppBrowserEvent): Promise<void> {
     try {
-      console.log(`${LOG_PREFIXES.MESSAGE_RECEIVED} Received message from InAppBrowser:`, event);
+      console.log(`${LOG_PREFIXES.MESSAGE_RECEIVED} Received message from InAppBrowser`);
 
       // 解析消息数据
       let messageData;
@@ -31,17 +33,17 @@ export class MessageManager {
 
       const { type, callbackId, data } = messageData;
 
-      console.log("📋 Processing message:", { type, callbackId, data });
+      console.log("📋 Processing message:", { type, callbackId });
 
       // 检查 origin 授权
-      const authorized = await this.checkOriginAuthorization(type);
-      if (!authorized) {
+      const authorization = await this.checkOriginAuthorization(type);
+      if (!authorization.authorized) {
         // 创建一个临时的 response handler 来发送错误响应
         const tempResponseHandler = new ResponseHandler(this.handlerFactory['browserManager']);
         tempResponseHandler.sendResponse(
           callbackId,
           null,
-          new Error("未授权的来源，请先调用 REQUEST_ACCOUNTS 方法")
+          new Error(authorization.error ?? "DApp capability is not granted")
         );
         return;
       }
@@ -50,7 +52,22 @@ export class MessageManager {
       const handler = this.handlers[type];
       if (handler) {
         console.log(`🎯 Delegating to handler: ${type}`);
-        await handler(callbackId, data);
+		let requestOrigin = "";
+		try {
+		  requestOrigin = new URL(this.currentUrl()).origin;
+		} catch {
+		  throw new Error("Invalid DApp request origin");
+		}
+		const scopedData = {
+		  ...(data ?? {}),
+		  ...(authorization.owner ? { __dappOwner: authorization.owner } : {}),
+		  __dappContext: {
+			origin: requestOrigin,
+			timestamp: String(messageData.timestamp ?? ''),
+			nonce: String(callbackId ?? ''),
+		  },
+		};
+        await handler(callbackId, scopedData);
       } else if (this.isProviderNotification(type)) {
         // 处理 provider 注入相关的通知消息，不需要响应
         console.log(`📝 Received provider notification: ${type}`);
@@ -86,28 +103,44 @@ export class MessageManager {
   /**
    * 检查 origin 授权
    */
-  private async checkOriginAuthorization(actionType: string): Promise<boolean> {
-    // 如果不是需要授权的操作，直接通过
-    if (!ACTIONS_REQUIRING_ORIGIN_AUTH.includes(actionType as any)) {
-      return true;
-    }
-
-    let origin = "inappbrowser";
+  private async checkOriginAuthorization(actionType: string): Promise<{
+    authorized: boolean;
+    error?: string;
+    owner?: Record<string, unknown>;
+  }> {
+    const policy = getDappActionPolicy(actionType);
+    if (!policy) return { authorized: false, error: `Unsupported DApp action: ${actionType}` };
+    let origin = "";
     if (this.currentUrl()) {
       try {
         origin = new URL(this.currentUrl()).origin;
-      } catch (error) {
-        console.warn(
-          "⚠️ Failed to parse URL for origin:",
-          this.currentUrl(),
-          error
-        );
-        origin = "inappbrowser";
+      } catch {
+        return { authorized: false, error: "Invalid DApp origin" };
       }
     }
-
-    // 验证 origin 授权
-    return await isOriginAuthorized(origin);
+    if (!origin) return { authorized: false, error: "Missing DApp origin" };
+    if (actionType === Message.MessageAction.REQUEST_ACCOUNTS) return { authorized: true };
+    const scope = await getCurrentDappScope();
+    if (!policy.capability || !await isDappCapabilityGranted(origin, scope, policy.capability)) {
+      return { authorized: false, error: `DApp capability is not granted for ${actionType}` };
+    }
+    if ([
+      Message.MessageAction.LOCK_UTXO,
+      Message.MessageAction.LOCK_UTXO_SATSNET,
+      Message.MessageAction.UNLOCK_UTXO,
+      Message.MessageAction.UNLOCK_UTXO_SATSNET,
+    ].includes(actionType as Message.MessageAction)) {
+      return {
+        authorized: true,
+        owner: {
+          origin,
+          network: scope.network,
+          wallet_fingerprint: scope.walletFingerprint,
+          account_index: scope.accountIndex,
+        },
+      };
+    }
+    return { authorized: true };
   }
 
   /**

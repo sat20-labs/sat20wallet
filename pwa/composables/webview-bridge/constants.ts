@@ -1,43 +1,4 @@
-import { Message } from "../../types/message";
 import { ProviderConfig } from "./types";
-
-// 需要origin授权的操作列表
-export const ACTIONS_REQUIRING_ORIGIN_AUTH = [
-  Message.MessageAction.GET_ACCOUNTS,
-  Message.MessageAction.GET_PUBLIC_KEY,
-  Message.MessageAction.GET_BALANCE,
-  Message.MessageAction.GET_NETWORK,
-  Message.MessageAction.GET_UTXOS,
-  Message.MessageAction.GET_UTXOS_SATSNET,
-  Message.MessageAction.GET_ALL_LOCKED_UTXO,
-  Message.MessageAction.GET_ALL_LOCKED_UTXO_SATSNET,
-  Message.MessageAction.LOCK_UTXO,
-  Message.MessageAction.LOCK_UTXO_SATSNET,
-  Message.MessageAction.UNLOCK_UTXO,
-  Message.MessageAction.UNLOCK_UTXO_SATSNET,
-  Message.MessageAction.GET_CURRENT_NAME,
-  Message.MessageAction.GET_ASSET_AMOUNT,
-  Message.MessageAction.GET_ASSET_AMOUNT_SATSNET,
-  Message.MessageAction.GET_FEE_FOR_DEPLOY_CONTRACT,
-  Message.MessageAction.GET_FEE_FOR_INVOKE_CONTRACT,
-  Message.MessageAction.GET_UTXOS_WITH_ASSET,
-  Message.MessageAction.GET_UTXOS_WITH_ASSET_SATSNET,
-  Message.MessageAction.GET_UTXOS_WITH_ASSET_V2,
-  Message.MessageAction.GET_UTXOS_WITH_ASSET_V2_SATSNET,
-  Message.MessageAction.BUILD_BATCH_SELL_ORDER,
-  Message.MessageAction.SPLIT_BATCH_SIGNED_PSBT_SATSNET,
-  Message.MessageAction.FINALIZE_SELL_ORDER,
-  Message.MessageAction.MERGE_BATCH_SIGNED_PSBT,
-  Message.MessageAction.ADD_INPUTS_TO_PSBT,
-  Message.MessageAction.ADD_OUTPUTS_TO_PSBT,
-  Message.MessageAction.EXTRACT_TX_FROM_PSBT,
-  Message.MessageAction.EXTRACT_TX_FROM_PSBT_SATSNET,
-  Message.MessageAction.PUSH_TX,
-  Message.MessageAction.PUSH_PSBT,
-  Message.MessageAction.GET_INSCRIPTIONS,
-  Message.MessageAction.QUERY_PARAM_FOR_INVOKE_CONTRACT,
-  Message.MessageAction.BIND_REFERRER_FOR_SERVER,
-] as const;
 
 // InAppBrowser 配置
 export const INAPP_BROWSER_CONFIG: ProviderConfig = {

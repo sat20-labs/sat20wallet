@@ -34,7 +34,7 @@
         <!-- Estimated Fee -->
         <div class="flex items-center justify-between gap-2 py-1">
           <span class="text-xs font-semibold text-muted-foreground flex-shrink-0">{{
-            $t('invokeContractSatsNet.estimatedFee',
+            isRefund ? $t('invokeContractSatsNet.callFee', '合约调用费') : $t('invokeContractSatsNet.estimatedFee',
               '铸造费用') }}</span>
           <div class="text-right">
             <span v-if="feeLoading" class="text-xs text-muted-foreground">{{ $t('invokeContractSatsNet.loading',
@@ -100,6 +100,14 @@ const invokeError = ref('')
 const feeLoading = ref(false)
 const feeError = ref(false)
 const estimatedFee = ref<string>('')
+
+const isRefund = computed(() => {
+  try {
+    return JSON.parse(props.data?.invoke || '{}')?.action === 'refund'
+  } catch {
+    return false
+  }
+})
 
 const formattedInvoke = computed(() => {
   try {

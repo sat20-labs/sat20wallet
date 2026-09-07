@@ -12,44 +12,15 @@
       </div>
     </button>
     <div v-if="isExpanded" class="space-y-6 px-2 py-4">
-      <div class="flex items-center justify-between border-t border-zinc-900/30 pt-4">
-        <div class="text-sm text-muted-foreground">
-          {{ $t('otherSetting.environmentSwitch') }}
-        </div>
-        <Select v-model="computedEnv">
-          <SelectTrigger class="w-[180px] bg-gray-900/30 mb-4">
-            <SelectValue :placeholder="$t('otherSetting.selectEnvironment')" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="dev">{{ $t('otherSetting.development') }}</SelectItem>
-            <SelectItem value="test">{{ $t('otherSetting.test') }}</SelectItem>
-            <SelectItem value="prd">{{ $t('otherSetting.production') }}</SelectItem>
-          </SelectContent>
-        </Select>
+      <div class="border-t border-zinc-900/30 pt-4 text-sm text-muted-foreground">
+        {{ $t('otherSetting.production') }}
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { ref } from 'vue'
 import { Icon } from '@iconify/vue'
-import { useGlobalStore, type Env } from '@/store/global'
 const isExpanded = ref(false)
-const globalStore = useGlobalStore()
-
-const computedEnv = computed<Env>({
-  get: () => globalStore.env,
-  set: async (newValue) => {
-    await globalStore.setEnv(newValue)
-    window.location.reload()
-  }
-})
 </script>

@@ -70,10 +70,7 @@ class Service {
       parameters: { network: String(network || '') },
       successMessage: 'PSBT transaction broadcast',
     })
-    console.log('pushPsbt', psbtHex)
     const [extractErr, extractRes] = await sat20Wallet.extractTxFromPsbt(psbtHex)
-    console.log('extractErr', extractErr)
-    console.log('extractRes', extractRes)
 
     if (extractErr || !extractRes) {
       const extractionError = extractErr || new Error('提取交易失败')
@@ -82,7 +79,6 @@ class Service {
     }
     const txHex = extractRes.tx
     const res = await ordxApi.pushTx({ hex: txHex, network })
-    console.log('res', res)
     if (res.code === 0) {
       await finishPwaOperation(operation, null, { txid: res.data })
       return [undefined, res.data]
@@ -198,9 +194,17 @@ class Service {
     return sat20Wallet.lockUtxo(address, utxo, reason)
   }
 
+  async lockUtxoForOwner(address: string, utxo: any, reason: string, owner: Record<string, unknown>): Promise<[Error | undefined, any | undefined]> {
+    return sat20Wallet.lockUtxoForOwner(address, utxo, reason, owner)
+  }
+
   async lockUtxo_SatsNet(address: string, utxo: any, reason: string): Promise<[Error | undefined, any | undefined]> {
 
     return sat20Wallet.lockUtxo_SatsNet(address, utxo, reason)
+  }
+
+  async lockUtxoForOwner_SatsNet(address: string, utxo: any, reason: string, owner: Record<string, unknown>): Promise<[Error | undefined, any | undefined]> {
+    return sat20Wallet.lockUtxoForOwner_SatsNet(address, utxo, reason, owner)
   }
 
   async unlockUtxo(address: string, utxo: any): Promise<[Error | undefined, any | undefined]> {
@@ -208,9 +212,17 @@ class Service {
     return sat20Wallet.unlockUtxo(address, utxo)
   }
 
+  async unlockUtxoForOwner(address: string, utxo: any, owner: Record<string, unknown>): Promise<[Error | undefined, any | undefined]> {
+    return sat20Wallet.unlockUtxoForOwner(address, utxo, owner)
+  }
+
   async unlockUtxo_SatsNet(address: string, utxo: any): Promise<[Error | undefined, any | undefined]> {
 
     return sat20Wallet.unlockUtxo_SatsNet(address, utxo)
+  }
+
+  async unlockUtxoForOwner_SatsNet(address: string, utxo: any, owner: Record<string, unknown>): Promise<[Error | undefined, any | undefined]> {
+    return sat20Wallet.unlockUtxoForOwner_SatsNet(address, utxo, owner)
   }
 
   async getAllLockedUtxo(address: string): Promise<[Error | undefined, any | undefined]> {

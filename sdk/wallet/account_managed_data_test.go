@@ -10,7 +10,7 @@ import (
 )
 
 func TestWaitAccountManagedDataReadyCancelsAndConverges(t *testing.T) {
-	manager := &Manager{accountProfile: &accountManagementProfile{ManagedDataDirty: true}}
+	manager := &Manager{db: newMemoryKVDB(), accountProfile: &accountManagementProfile{ManagedDataDirty: true}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if err := manager.WaitAccountManagedDataReady(ctx); !errors.Is(err, context.DeadlineExceeded) {

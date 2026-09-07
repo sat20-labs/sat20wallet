@@ -205,11 +205,16 @@ export type {
 } from "./webview-bridge/types";
 
 export {
-  ACTIONS_REQUIRING_ORIGIN_AUTH,
   INAPP_BROWSER_CONFIG,
   PROVIDER_NOTIFICATION_TYPES,
   LOG_PREFIXES,
 } from "./webview-bridge/constants";
+
+// The former broad action list was not an authorization decision. Consumers
+// must resolve an action policy and then verify its exact scoped grant; unknown
+// actions and missing capabilities therefore fail closed.
+export { DAPP_ACTION_POLICY, getDappActionPolicy } from "@/lib/dapp-policy";
+export { getCurrentDappScope, isDappCapabilityGranted } from "@/lib/authorized-origins";
 
 // 导出管理器类，供高级用户使用
 export {

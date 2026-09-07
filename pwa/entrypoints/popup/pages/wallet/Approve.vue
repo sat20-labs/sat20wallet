@@ -10,10 +10,11 @@
         <div class="px-2 py-1">
           <component
             :is="componentName"
+            :key="currentRequest?.id"
+            :request-id="currentRequest?.id"
             :data="data"
             :metadata="metadata"
-            @cancel="cancel"
-            @confirm="confirm"
+            v-on="requestHandlers"
           />
         </div>
       </div>
@@ -35,6 +36,7 @@ import ApproveInvokeContractV2 from "@/components/approve/ApproveInvokeContractV
 import ApproveRegisterAsReferrer from "@/components/approve/ApproveRegisterAsReferrer.vue";
 import ApproveSendAssetsSatsNet from "@/components/approve/ApproveSendAssetsSatsNet.vue";
 import ApproveBatchSendAssetsV2SatsNet from "@/components/approve/ApproveBatchSendAssetsV2SatsNet.vue";
+import ApproveDappOperation from "@/components/approve/ApproveDappOperation.vue";
 import { Message } from "@/types/message";
 import { computed } from "vue";
 import { useApproveStore } from "@/store";
@@ -53,7 +55,15 @@ const approveComponentMap: any = {
   [Message.MessageAction.SIGN_MESSAGE]: SignMessage,
   [Message.MessageAction.SIGN_DATA]: SignMessage,
   [Message.MessageAction.SIGN_PSBT]: SignPsbt,
+  [Message.MessageAction.SIGN_PSBTS]: SignPsbt,
+  [Message.MessageAction.LOCK_UTXO]: ApproveDappOperation,
+  [Message.MessageAction.LOCK_UTXO_SATSNET]: ApproveDappOperation,
+  [Message.MessageAction.UNLOCK_UTXO]: ApproveDappOperation,
+  [Message.MessageAction.UNLOCK_UTXO_SATSNET]: ApproveDappOperation,
+  [Message.MessageAction.PUSH_TX]: ApproveDappOperation,
+  [Message.MessageAction.PUSH_PSBT]: ApproveDappOperation,
   [Message.MessageAction.BATCH_SEND_ASSETS_SATSNET]: SplitAsset,
+  [Message.MessageAction.SPLIT_ASSET]: SplitAsset,
   [Message.MessageAction.DEPLOY_CONTRACT_REMOTE]: ApproveDeployContractRemote,
   [Message.MessageAction.INVOKE_CONTRACT_SATSNET]: ApproveInvokeContractSatsNet,
   [Message.MessageAction.INVOKE_UNIFIED_CONTRACT]: ApproveInvokeUnifiedContract,
@@ -94,7 +104,15 @@ const title = computed(() => {
     [Message.MessageAction.SIGN_MESSAGE]: "Sign Message",
     [Message.MessageAction.SIGN_DATA]: "Sign Data",
     [Message.MessageAction.SIGN_PSBT]: "Sign Transaction",
+    [Message.MessageAction.SIGN_PSBTS]: "Sign Transactions",
+    [Message.MessageAction.LOCK_UTXO]: "Lock UTXO",
+    [Message.MessageAction.LOCK_UTXO_SATSNET]: "Lock UTXO",
+    [Message.MessageAction.UNLOCK_UTXO]: "Unlock UTXO",
+    [Message.MessageAction.UNLOCK_UTXO_SATSNET]: "Unlock UTXO",
+    [Message.MessageAction.PUSH_TX]: "Broadcast Transaction",
+    [Message.MessageAction.PUSH_PSBT]: "Broadcast Transaction",
     [Message.MessageAction.BATCH_SEND_ASSETS_SATSNET]: "Send Assets",
+    [Message.MessageAction.SPLIT_ASSET]: "Split Asset",
     [Message.MessageAction.DEPLOY_CONTRACT_REMOTE]: "Deploy Contract",
     [Message.MessageAction.INVOKE_CONTRACT_SATSNET]: "Execute Contract",
     [Message.MessageAction.INVOKE_UNIFIED_CONTRACT]: "Execute Contract",
@@ -107,11 +125,17 @@ const title = computed(() => {
   return actionToTitle[currentRequest.value.action] || "Authorization Request";
 });
 
-const confirm = (result: any) => {
-  approveStore.confirm(result);
-};
-
-const cancel = () => {
-  approveStore.reject();
-};
+// Each rendered component retains callbacks for its own request, including
+// asynchronous events emitted after the queue has advanced.
+const requestHandlers = computed(() => {
+  const id = currentRequest.value?.id;
+  return {
+    confirm: (result: any) => {
+      if (id && currentRequest.value?.id === id) approveStore.confirm(id, result);
+    },
+    cancel: () => {
+      if (id && currentRequest.value?.id === id) approveStore.reject(id);
+    },
+  };
+});
 </script>

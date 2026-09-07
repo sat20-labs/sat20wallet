@@ -15,7 +15,7 @@ export class AccountHandlers {
    */
   async handleRequestAccounts(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("🔐 Handling REQUEST_ACCOUNTS", { callbackId, data });
+      console.log("🔐 Handling REQUEST_ACCOUNTS", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.REQUEST_ACCOUNTS,
         data,
@@ -85,7 +85,7 @@ export class AccountHandlers {
    */
   async handleSwitchNetwork(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("🔄 Handling SWITCH_NETWORK", { callbackId, data });
+      console.log("🔄 Handling SWITCH_NETWORK", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.SWITCH_NETWORK,
         data,

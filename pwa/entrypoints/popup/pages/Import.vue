@@ -130,7 +130,6 @@ import {
 } from '@/components/ui/form'
 import { useWalletStore } from '@/store'
 import { passwordSchema, mnemonicSchema, privateKeySchema } from '@/utils/validation'
-import { hashPassword } from '@/utils/crypto'
 import {KeyRound, Loader2Icon} from 'lucide-vue-next'
 
 const { toast } = useToast()
@@ -178,13 +177,11 @@ const form = useForm({
 const onSubmit = form.handleSubmit(async (values) => {
   loading.value = true
 
-  const hashedPassword = await hashPassword(values.password)
-
-  if (tab.value === 'mnemonic') {
+	if (tab.value === 'mnemonic') {
     if (values.mnemonic) {
       const [err, result] = await walletStore.importWallet(
         values.mnemonic,
-        hashedPassword
+			values.password
       )
       if (err) {
         showToast('destructive', 'Error', err)
@@ -192,13 +189,10 @@ const onSubmit = form.handleSubmit(async (values) => {
         return
       }
 
-      const recovery = walletStore.accountRecovery
-      const message = recovery?.status === 'found'
-        ? 'Managed account and wallets restored successfully'
-        : recovery?.status === 'pending'
-          ? 'Wallet imported. Managed account discovery is pending; retry when the network is available.'
-          : 'Wallet imported successfully'
-      showToast('success', 'Success', message)
+	  const identity = result
+		? `\nAddress: ${result.address}\nFingerprint: ${result.fingerprint}`
+		: ''
+	  showToast('success', 'Success', `Wallet imported successfully${identity}`)
       router.push('/wallet')
     }
   }

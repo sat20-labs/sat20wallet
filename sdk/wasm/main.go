@@ -194,121 +194,6 @@ func parseConfigFromJS(jsConfig js.Value) (*common.Config, error) {
 	return cfg, nil
 }
 
-func dbTest(this js.Value, p []js.Value) any {
-	if len(p) < 2 {
-		const errMsg = "Expected 2 parameters: key, value"
-		wallet.Log.Error(errMsg)
-		return createJsRet(nil, 1, errMsg)
-	}
-
-	if p[0].Type() != js.TypeString {
-		wallet.Log.Error("Second parameter should be a string")
-		return "Error: Second parameter should be a string"
-	}
-	key := p[0].String()
-
-	if p[1].Type() != js.TypeString {
-		wallet.Log.Error("Second parameter should be a string")
-		return "Error: Second parameter should be a string"
-	}
-	value := p[1].String()
-
-	db := wallet.NewKVDB("")
-	err := db.Write([]byte(key), []byte(value))
-	if err != nil {
-		wallet.Log.Errorf("db.Write failed, %v", err)
-		return err
-	}
-
-	value2, err := db.Read([]byte(key))
-	if err != nil {
-		wallet.Log.Errorf("db.Read failed, %v", err)
-		return err
-	}
-	msg := "ok"
-	if value != string(value2) {
-		msg = fmt.Sprintf("input %s, but output %s", value, string(value2))
-	}
-
-	return createJsRet(nil, 0, msg)
-}
-
-func batchDbTest(this js.Value, p []js.Value) any {
-	if len(p) < 4 {
-		const errMsg = "Expected 4 parameters: int, string, bool, and string array"
-		wallet.Log.Error(errMsg)
-		return createJsRet(nil, 1, errMsg)
-	}
-
-	if p[0].Type() != js.TypeNumber {
-		wallet.Log.Error("First parameter should be a number")
-		return "Error: First parameter should be a number"
-	}
-	intValue := p[0].Int()
-
-	if p[1].Type() != js.TypeString {
-		wallet.Log.Error("Second parameter should be a string")
-		return "Error: Second parameter should be a string"
-	}
-	stringValue := p[1].String()
-
-	if p[2].Type() != js.TypeBoolean {
-		wallet.Log.Error("Third parameter should be a boolean")
-		return "Error: Third parameter should be a boolean"
-	}
-	boolValue := p[2].Bool()
-
-	if p[3].Type() != js.TypeObject || !p[3].InstanceOf(js.Global().Get("Array")) {
-		const errMsg = "Fourth parameter should be an array"
-		wallet.Log.Error(errMsg)
-		return createJsRet(nil, 5, errMsg)
-	}
-	arrayValue := p[3]
-	arrayLength := arrayValue.Length()
-
-	stringArray := make([]string, arrayLength)
-	for i := 0; i < arrayLength; i++ {
-		item := arrayValue.Index(i)
-		if item.Type() != js.TypeString {
-			errMsg := fmt.Sprintf("Array item at index %d is not a string", i)
-			wallet.Log.Error(errMsg)
-			return createJsRet(nil, 6, errMsg)
-		}
-		stringArray[i] = item.String()
-	}
-
-	db := wallet.NewKVDB("")
-	batch := db.NewWriteBatch()
-	defer batch.Close()
-	batch.Put([]byte("intValue0"), []byte(strconv.Itoa(intValue)))
-	batch.Put([]byte("intValue1"), []byte(stringValue))
-	batch.Put([]byte("intValue2"), []byte(strconv.FormatBool(boolValue)))
-	batch.Put([]byte("intValue3"), []byte(strings.Join(stringArray, ",")))
-	err := batch.Flush()
-	if err != nil {
-		wallet.Log.Errorf("db.Flush failed")
-		return err
-	}
-
-	err = db.BatchRead([]byte("intValue"), false, func(k, v []byte) error {
-		wallet.Log.Debugf("BatchRead intValue: key: %v, value: %v", string(k), string(v))
-		return nil
-	})
-	if err != nil {
-		wallet.Log.Errorf("db.BatchRead failed")
-		return err
-	}
-
-	wallet.Log.Debugf("Int parameter: %v", intValue)
-	wallet.Log.Debugf("String parameter: %v", stringValue)
-	wallet.Log.Debugf("Bool parameter: %v", boolValue)
-	wallet.Log.Debugf("String array parameter: %v", stringArray)
-
-	code := 0
-	msg := "ok"
-	return createJsRet(nil, code, msg)
-}
-
 func initManager(this js.Value, p []js.Value) any {
 	managerLifecycleMu.Lock()
 	if managerClosing {
@@ -549,6 +434,28 @@ func isWalletExist(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
+func validateMnemonic(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) != 2 || p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "Expected mnemonic and password strings")
+	}
+	raw, password := p[0].String(), p[1].String()
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.ValidateMnemonic(raw, password)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := jsonObject(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
 func importWallet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -599,6 +506,12 @@ func recoverAccountManagementFromRootMnemonic(this js.Value, p []js.Value) any {
 	}
 	mnemonic, password := p[0].String(), p[1].String()
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		// password is the local recovery/storage credential, not a BIP39
+		// passphrase. Account identity must match the wallet restored below.
+		identity, identityErr := _mgr.ValidateMnemonic(mnemonic, "")
+		if identityErr != nil {
+			return nil, -1, identityErr.Error()
+		}
 		_, err := _mgr.RecoverAccountManagementFromRootMnemonic(
 			context.Background(), mnemonic, password)
 		switch {
@@ -609,15 +522,17 @@ func recoverAccountManagementFromRootMnemonic(this js.Value, p []js.Value) any {
 			}
 			return map[string]any{
 				"status": "found", "code": wallet.RootAccountRecoveryCodeRecovered,
-				"walletId": walletID,
+				"walletId": walletID, "accountId": identity.AccountID,
 			}, 0, "ok"
 		case errors.Is(err, wallet.ErrRootAccountNotFound):
 			return map[string]any{
 				"status": "not_found", "code": wallet.RootAccountRecoveryCodeNotFound,
+				"accountId": identity.AccountID,
 			}, 0, "ok"
 		case errors.Is(err, wallet.ErrRootAccountDiscoveryPending):
 			return map[string]any{
 				"status": "pending", "code": wallet.RootAccountRecoveryCodePending,
+				"accountId": identity.AccountID,
 			}, 0, "ok"
 		default:
 			return nil, -1, err.Error()
@@ -635,6 +550,10 @@ func recoverAccountManagementFromCurrentWallet(this js.Value, p []js.Value) any 
 	}
 	password := p[0].String()
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		accountID, identityErr := _mgr.RootAccountID()
+		if identityErr != nil {
+			return nil, -1, identityErr.Error()
+		}
 		_, err := _mgr.RecoverAccountManagementFromCurrentWallet(context.Background(), password)
 		switch {
 		case err == nil:
@@ -644,15 +563,17 @@ func recoverAccountManagementFromCurrentWallet(this js.Value, p []js.Value) any 
 			}
 			return map[string]any{
 				"status": "found", "code": wallet.RootAccountRecoveryCodeRecovered,
-				"walletId": walletID,
+				"walletId": walletID, "accountId": accountID,
 			}, 0, "ok"
 		case errors.Is(err, wallet.ErrRootAccountNotFound):
 			return map[string]any{
 				"status": "not_found", "code": wallet.RootAccountRecoveryCodeNotFound,
+				"accountId": accountID,
 			}, 0, "ok"
 		case errors.Is(err, wallet.ErrRootAccountDiscoveryPending):
 			return map[string]any{
 				"status": "pending", "code": wallet.RootAccountRecoveryCodePending,
+				"accountId": accountID,
 			}, 0, "ok"
 		default:
 			return nil, -1, err.Error()
@@ -2006,108 +1927,6 @@ func splicingOut(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(handler)
 }
 
-func getCommitSecret(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-
-	if len(p) < 2 {
-		return createJsRet(nil, -1, "Expected 2 parameters")
-	}
-
-	// jsBytes := p[0]
-	// goBytes := make([]byte, jsBytes.Length())
-	// js.CopyBytesToGo(goBytes, jsBytes)
-
-	if p[0].Type() != js.TypeString {
-		return createJsRet(nil, -1, "nodeId parameter should be a string")
-	}
-	id, err := hex.DecodeString(p[0].String())
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-
-	if p[1].Type() != js.TypeNumber {
-		return createJsRet(nil, -1, "index parameter should be a number")
-	}
-	index := p[1].Int()
-
-	// result := _mgr.GetCommitSecret(id, index)
-	// // jsBytes = js.Global().Get("Uint8Array").New(len(result))
-	// // js.CopyBytesToJS(jsBytes, result)
-	// data := map[string]any{
-	// 	"commitSecret": hex.EncodeToString(result),
-	// }
-	// return createJsRet(data, 0, "ok")
-
-	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result := _mgr.GetCommitSecret(id, index)
-		return map[string]any{
-			"commitSecret": hex.EncodeToString(result),
-		}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(handler)
-}
-
-func deriveRevocationPrivKey(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-
-	if len(p) < 1 {
-		return createJsRet(nil, -1, "Expected 1 parameters")
-	}
-
-	// jsBytes := p[0]
-	// goBytes := make([]byte, jsBytes.Length())
-	// js.CopyBytesToGo(goBytes, jsBytes)
-	if p[0].Type() != js.TypeString {
-		return createJsRet(nil, -1, "secret parameter should be a string")
-	}
-	secrect, err := hex.DecodeString(p[0].String())
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-
-	// result := _mgr.DeriveRevocationPrivKey(secrect)
-	// // jsBytes = js.Global().Get("Uint8Array").New(len(result))
-	// // js.CopyBytesToJS(jsBytes, result)
-	// data := map[string]any{
-	// 	"revocationPrivKey": hex.EncodeToString(result),
-	// }
-	// return createJsRet(data, 0, "ok")
-
-	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result := _mgr.DeriveRevocationPrivKey(secrect)
-		return map[string]any{
-			"revocationPrivKey": hex.EncodeToString(result),
-		}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(handler)
-}
-
-func getRevocationBaseKey(this js.Value, p []js.Value) any {
-	if _mgr == nil {
-		return createJsRet(nil, -1, "Manager not initialized")
-	}
-
-	// result := _mgr.GetRevocationBaseKey()
-	// // jsBytes := js.Global().Get("Uint8Array").New(len(result))
-	// // js.CopyBytesToJS(jsBytes, result)
-	// data := map[string]any{
-	// 	"revocationBaseKey": hex.EncodeToString(result),
-	// }
-	// return createJsRet(data, 0, "ok")
-
-	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		result := _mgr.GetRevocationBaseKey()
-		return map[string]any{
-			"revocationBaseKey": hex.EncodeToString(result),
-		}, 0, "ok"
-	})
-	return js.Global().Get("Promise").New(handler)
-}
-
 func getNodePubKey(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -2316,13 +2135,11 @@ func signPsbt_SatsNet(this js.Value, p []js.Value) any {
 	// }
 	// return createJsRet(data, 0, "ok")
 
-	wallet.Log.Infof("SignPsbt_SatsNet  input: %s", psbtHex)
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		result, err := _mgr.SignPsbt_SatsNet(psbtHex, extract)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
-		wallet.Log.Infof("SignPsbt_SatsNet output: %s", result)
 		return map[string]any{
 			"psbt": result,
 		}, 0, "ok"
@@ -2493,7 +2310,6 @@ func buildBatchSellOrder_SatsNet(this js.Value, p []js.Value) any {
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	wallet.Log.Infof("BuildBatchSellOrder: %s", result)
 
 	data := map[string]any{
 		"psbt": result,
@@ -2518,12 +2334,10 @@ func splitBatchSignedPsbt_SatsNet(this js.Value, p []js.Value) any {
 	}
 	network := p[1].String()
 
-	wallet.Log.Infof("SplitBatchSignedPsbt_SatsNet %s %s", psbt, network)
 	result, err := wallet.SplitBatchSignedPsbt_SatsNet(psbt, network)
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	wallet.Log.Infof("SplitBatchSignedPsbt_SatsNet: %s", result)
 
 	var str []interface{}
 	for _, r := range result {
@@ -2553,12 +2367,10 @@ func mergeBatchSignedPsbt_SatsNet(this js.Value, p []js.Value) any {
 	}
 	network := p[1].String()
 
-	wallet.Log.Infof("MergeBatchSignedPsbt %s %s", psbtsHex, network)
 	result, err := wallet.MergeBatchSignedPsbt_SatsNet(psbtsHex, network)
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	wallet.Log.Infof("MergeBatchSignedPsbt: %s", result)
 
 	data := map[string]any{
 		"psbt": result,
@@ -2612,7 +2424,6 @@ func finalizeSellOrder_SatsNet(this js.Value, p []js.Value) any {
 	if err != nil {
 		return createJsRet(nil, -1, err.Error())
 	}
-	wallet.Log.Infof("FinalizeSellOrder: %s", result)
 
 	data := map[string]any{
 		"psbt": result,
@@ -2806,6 +2617,15 @@ func sendAssets(this js.Value, p []js.Value) any {
 	}
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		name := indexer.NewAssetNameFromString(assetName)
+		if name != nil && name.Protocol == indexer.PROTOCOL_NAME_ORDX {
+			txID, err := _mgr.SendAssetsV3(destAddress, assetName, amt, feeRate64, nil)
+			if err != nil {
+				wallet.Log.Errorf("SendAssetsV3 error: %v", err)
+				return nil, -1, err.Error()
+			}
+			return map[string]interface{}{"txId": txID}, 0, "ok"
+		}
 		tx, err := _mgr.SendAssets(destAddress, assetName, amt, feeRate64, nil)
 		if err != nil {
 			wallet.Log.Errorf("SendAssets error: %v", err)
@@ -3211,6 +3031,37 @@ func lockUtxo(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func parseUtxoLockOwner(value js.Value) (wallet.UtxoLockOwner, error) {
+	var owner wallet.UtxoLockOwner
+	if value.Type() != js.TypeString {
+		return owner, fmt.Errorf("owner parameter should be a JSON string")
+	}
+	if err := json.Unmarshal([]byte(value.String()), &owner); err != nil {
+		return owner, fmt.Errorf("invalid UTXO lock owner: %w", err)
+	}
+	return owner, nil
+}
+
+func lockUtxoForOwner(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 4 || p[0].Type() != js.TypeString || p[1].Type() != js.TypeString || p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "Expected address, utxo, reason, and owner parameters")
+	}
+	address, utxo, reason := p[0].String(), p[1].String(), p[2].String()
+	owner, err := parseUtxoLockOwner(p[3])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		if err := _mgr.LockUtxoForOwner(address, utxo, reason, owner); err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	}))
+}
+
 func unlockUtxo(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -3236,6 +3087,26 @@ func unlockUtxo(this js.Value, p []js.Value) any {
 		return nil, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func unlockUtxoForOwner(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 3 || p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "Expected address, utxo, and owner parameters")
+	}
+	address, utxo := p[0].String(), p[1].String()
+	owner, err := parseUtxoLockOwner(p[2])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		if err := _mgr.UnlockUtxoForOwner(address, utxo, owner); err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	}))
 }
 
 func isUtxoLocked(this js.Value, p []js.Value) any {
@@ -3329,6 +3200,26 @@ func lockUtxo_SatsNet(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func lockUtxoForOwner_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 4 || p[0].Type() != js.TypeString || p[1].Type() != js.TypeString || p[2].Type() != js.TypeString {
+		return createJsRet(nil, -1, "Expected address, utxo, reason, and owner parameters")
+	}
+	address, utxo, reason := p[0].String(), p[1].String(), p[2].String()
+	owner, err := parseUtxoLockOwner(p[3])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		if err := _mgr.LockUtxoForOwner_SatsNet(address, utxo, reason, owner); err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	}))
+}
+
 func unlockUtxo_SatsNet(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -3355,6 +3246,26 @@ func unlockUtxo_SatsNet(this js.Value, p []js.Value) any {
 		return nil, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)
+}
+
+func unlockUtxoForOwner_SatsNet(this js.Value, p []js.Value) any {
+	if _mgr == nil {
+		return createJsRet(nil, -1, "Manager not initialized")
+	}
+	if len(p) < 3 || p[0].Type() != js.TypeString || p[1].Type() != js.TypeString {
+		return createJsRet(nil, -1, "Expected address, utxo, and owner parameters")
+	}
+	address, utxo := p[0].String(), p[1].String()
+	owner, err := parseUtxoLockOwner(p[2])
+	if err != nil {
+		return createJsRet(nil, -1, err.Error())
+	}
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		if err := _mgr.UnlockUtxoForOwner_SatsNet(address, utxo, owner); err != nil {
+			return nil, -1, err.Error()
+		}
+		return nil, 0, "ok"
+	}))
 }
 
 func isUtxoLocked_SatsNet(this js.Value, p []js.Value) any {
@@ -5502,8 +5413,6 @@ func refreshRGB11State(this js.Value, p []js.Value) any {
 
 func main() {
 	obj := js.Global().Get("Object").New()
-	obj.Set("batchDbTest", js.FuncOf(batchDbTest))
-	obj.Set("dbTest", js.FuncOf(dbTest))
 	// input: cfg, loglevel; return: ok
 	obj.Set("init", js.FuncOf(initManager))
 	// input: none
@@ -5515,6 +5424,7 @@ func main() {
 	obj.Set("createMonitorWallet", js.FuncOf(createMonitorWallet))
 	// input: mnemonic, password; return: walletId
 	obj.Set("importWallet", js.FuncOf(importWallet))
+	obj.Set("validateMnemonic", js.FuncOf(validateMnemonic))
 	obj.Set("recoverAccountManagementFromRootMnemonic", js.FuncOf(recoverAccountManagementFromRootMnemonic))
 	obj.Set("recoverAccountManagementFromCurrentWallet", js.FuncOf(recoverAccountManagementFromCurrentWallet))
 	obj.Set("importWalletWithPrivKey", js.FuncOf(importWalletWithPrivKey))
@@ -5577,12 +5487,6 @@ func main() {
 	obj.Set("restoreChannel", js.FuncOf(restoreChannel))
 	obj.Set("splicingIn", js.FuncOf(splicingIn))
 	obj.Set("splicingOut", js.FuncOf(splicingOut))
-	// input: node pubkey(hex string), index; return: commit secrect (hex string)
-	obj.Set("getCommitSecret", js.FuncOf(getCommitSecret))
-	// input: commit secrect(hex string), index; return: revocation priv key (hex string)
-	obj.Set("deriveRevocationPrivKey", js.FuncOf(deriveRevocationPrivKey))
-	// input: none; return: revocation base key (hex string)
-	obj.Set("getRevocationBaseKey", js.FuncOf(getRevocationBaseKey))
 	// input: none; return: node pubkey (hex string)
 	obj.Set("getNodePubKey", js.FuncOf(getNodePubKey))
 	obj.Set("signData", js.FuncOf(signData))
@@ -5622,10 +5526,14 @@ func main() {
 	obj.Set("getTickerInfo", js.FuncOf(getTickerInfo))
 	obj.Set("lockUtxo", js.FuncOf(lockUtxo))
 	obj.Set("unlockUtxo", js.FuncOf(unlockUtxo))
+	obj.Set("lockUtxoForOwner", js.FuncOf(lockUtxoForOwner))
+	obj.Set("unlockUtxoForOwner", js.FuncOf(unlockUtxoForOwner))
 	obj.Set("isUtxoLocked", js.FuncOf(isUtxoLocked))
 	obj.Set("getAllLockedUtxo", js.FuncOf(getAllLockedUtxo))
 	obj.Set("lockUtxo_SatsNet", js.FuncOf(lockUtxo_SatsNet))
 	obj.Set("unlockUtxo_SatsNet", js.FuncOf(unlockUtxo_SatsNet))
+	obj.Set("lockUtxoForOwner_SatsNet", js.FuncOf(lockUtxoForOwner_SatsNet))
+	obj.Set("unlockUtxoForOwner_SatsNet", js.FuncOf(unlockUtxoForOwner_SatsNet))
 	obj.Set("isUtxoLocked_SatsNet", js.FuncOf(isUtxoLocked_SatsNet))
 	obj.Set("getAllLockedUtxo_SatsNet", js.FuncOf(getAllLockedUtxo_SatsNet))
 

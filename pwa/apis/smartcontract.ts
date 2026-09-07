@@ -123,23 +123,6 @@ class SmartContractApi {
     const response = await fetch(this.generatePath('/evm/compiler-config', network))
     return response.json()
   }
-
-  async submitEVMSource({
-    network,
-    contract,
-    metadata,
-  }: {
-    network: string
-    contract: string
-    metadata: Record<string, unknown>
-  }) {
-    const response = await fetch(this.generatePath(`/${encodeURIComponent(contract)}/evm/source`, network), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(metadata),
-    })
-    return response.json()
-  }
 }
 
 export default new SmartContractApi()

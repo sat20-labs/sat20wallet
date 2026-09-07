@@ -33,11 +33,10 @@ const CONTENT_SETKV_N_BODY string = `{"p":"sns","op":"update","name":"%s""%s"}`
 
 // 不精确，因为 60 这个数稍微大一些，但足够用，也没有考虑输入可能是p2wsh脚本
 func EstimatedInscribeFee(inputLen, bodyLen int, feeRate int64, revealOutValue int64) int64 {
-	commitFee := int64(154 + (inputLen - 1) * 60)
-	revealFee := int64(bodyLen / 4 + 138)
-	return (commitFee + revealFee) * feeRate + revealOutValue
+	commitFee := int64(154 + (inputLen-1)*60)
+	revealFee := int64(bodyLen/4 + 138)
+	return (commitFee+revealFee)*feeRate + revealOutValue
 }
-
 
 // 只适合 CONTENT_DEPLOY_BODY （可以从EstimatedInscribeFee计算得出）
 func EstimatedDeployFee(inputLen int, feeRate int64) int64 {
@@ -111,7 +110,7 @@ func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRat
 	total := int64(0)
 	estimatedFee := int64(0)
 	for _, u := range utxos {
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		total += u.Value
@@ -127,7 +126,7 @@ func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRat
 
 	pubkey := hex.EncodeToString(p.wallet.GetPaymentPubKey().SerializeCompressed())
 	body := fmt.Sprintf(CONTENT_DEPLOY_BODY, ticker, max, lim, n, pubkey)
-	
+
 	req := &InscriptionRequest{
 		CommitTxPrevOutputList: commitTxPrevOutputList,
 		CommitFeeRate:          feeRate,
@@ -197,7 +196,7 @@ func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
 	total := int64(0)
 	included := make(map[string]bool)
 	estimatedFee := EstimatedInscribeFee(1, len(body), feeRate, revealOutValue)
-	
+
 	if len(defaultUtxos) != 0 {
 		for _, utxo := range defaultUtxos {
 			txOut, err := p.getL1TxOutput(utxo)
@@ -210,7 +209,7 @@ func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
 			commitTxPrevOutputList = append(commitTxPrevOutputList, txOut)
 			included[utxo] = true
 
-			estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList), 
+			estimatedFee = EstimatedInscribeFee(len(commitTxPrevOutputList),
 				len(body), feeRate, 330)
 			if total >= estimatedFee {
 				break
@@ -225,7 +224,7 @@ func (p *Manager) MintAsset_ordx(destAddr string, tickInfo *indexer.TickerInfo,
 		}
 		p.utxoLockerL1.Reload(address)
 		for _, u := range utxos {
-			if p.utxoLockerL1.IsLocked(u.OutPoint) {
+			if p.isL1SendInputProtected(u.OutPoint) {
 				continue
 			}
 			_, ok := included[u.OutPoint]
@@ -333,12 +332,10 @@ func (p *Manager) GetOrgAssetName(lpt *AssetName) *AssetName {
 	}
 }
 
-
 func (p *Manager) InscribeKeyValueInName(name string, key string, value string, feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
 	address := wallet.GetAddress()
-
 
 	utxos := p.l1IndexerClient.GetUtxoListWithTicker(address, &indexer.ASSET_PLAIN_SAT)
 	if len(utxos) == 0 {
@@ -357,7 +354,7 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string, 
 	total := int64(0)
 	estimatedFee := int64(0)
 	for _, u := range utxos {
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		total += u.Value
@@ -388,8 +385,7 @@ func (p *Manager) InscribeKeyValueInName(name string, key string, value string, 
 	return p.inscribe(req)
 }
 
-
-func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string, 
+func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string,
 	feeRate int64) (*InscribeResv, error) {
 
 	wallet := p.wallet
@@ -421,7 +417,7 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string,
 	total := int64(0)
 	estimatedFee := int64(0)
 	for _, u := range utxos {
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		total += u.Value
@@ -473,7 +469,7 @@ func (p *Manager) InscribeName(name string, feeRate int64) (*InscribeResv, error
 	total := int64(0)
 	estimatedFee := int64(0)
 	for _, u := range utxos {
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		total += u.Value

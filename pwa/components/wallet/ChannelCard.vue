@@ -76,6 +76,10 @@
               <span class="font-medium">{{ feePreview?.channelCapacity ?? '-' }} sats</span>
             </div>
             <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">Initially spendable by you:</span>
+              <span class="font-medium">{{ initialSpendableSats ?? '-' }} sats</span>
+            </div>
+            <div class="flex justify-between text-sm">
               <span class="text-muted-foreground">Service fee paid now:</span>
               <span class="font-medium">{{ feePreview?.feeToDao ?? '-' }} sats</span>
             </div>
@@ -168,6 +172,11 @@ const channelAmt = ref('')
 const showConfirmDialog = ref(false)
 const confirmAmount = ref(0)
 const feePreview = ref<ChannelOpenFeeInfo | null>(null)
+const initialSpendableSats = computed(() => {
+  const preview = feePreview.value
+  if (!preview || preview.channelCapacity == null) return null
+  return Math.max(0, preview.channelCapacity - preview.openFee.commitmentFee - preview.openFee.minReserveSats)
+})
 
 // 通道状态进度
 const progressValue = computed(() => {
@@ -314,7 +323,6 @@ const checkChannel = async (force: boolean) => {
   const chanid = channel.value!.chanid
 
   const [err, result] = await satsnetStp.getChannelStatus(chanid)
-  console.log(result)
   if (err) {
     return false
   }

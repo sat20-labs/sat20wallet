@@ -53,15 +53,45 @@ const version = await readJson('public/version.json');
 if (!version.version || !version.buildId) {
   throw new Error('public/version.json must contain version and buildId');
 }
-const expectedCacheName = `sat20-wallet-pwa-v${version.version}-${version.buildId}`;
 
 await assertContains('public/service-worker.js', [
-  'wasm/sat20wallet.wasm',
-  expectedCacheName,
-], 'PWA offline precache');
+  '/* __SAT20_BUILD_ASSETS__ */ []',
+  '/* __SAT20_RELEASE_MANIFEST__ */ {}',
+  'SAT20_PAGE_READY',
+], 'PWA service worker template');
+
+await assertFile('dist/service-worker.js', 'Built service worker');
+await assertFile('dist/integrity-manifest.json', 'Built WASM integrity manifest');
+await assertFile('dist/release-manifest.json', 'Built release manifest');
+
+const integrityManifest = await readJson('dist/integrity-manifest.json');
+const releaseManifest = await readJson('dist/release-manifest.json');
+if (!releaseManifest.releaseId || releaseManifest.releaseId !== integrityManifest.releaseId) {
+  throw new Error('Built release and WASM integrity manifests have different release IDs');
+}
+if (releaseManifest.version !== version.version || releaseManifest.buildId !== version.buildId) {
+  throw new Error('Built release manifest does not match public/version.json');
+}
+const walletWasm = integrityManifest.assets?.find((asset) => asset.role === 'wallet-wasm');
+if (!walletWasm?.path || !walletWasm.sha256) {
+  throw new Error('Built WASM integrity manifest has no wallet-wasm asset');
+}
+await assertContains('dist/service-worker.js', [
+  releaseManifest.releaseId,
+  "const CACHE_PREFIX = 'sat20-wallet-pwa-'",
+  `/${walletWasm.path}`,
+  walletWasm.sha256,
+  'SAT20_PAGE_READY',
+], 'Built PWA offline release');
+await assertNotContains('dist/service-worker.js', [
+  '/* __SAT20_BUILD_ASSETS__ */ []',
+  '/* __SAT20_RELEASE_MANIFEST__ */ {}',
+], 'Built service worker has injected release metadata');
 
 await assertContains('utils/wasm.ts', [
-  'wasm/sat20wallet.wasm',
+  'WASM_INTEGRITY_MANIFEST',
+  "item.role === 'wallet-wasm'",
+  'fetchVerifiedAsset',
   'walletManager.init',
 ], 'Wallet wasm loader');
 

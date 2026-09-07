@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -16,6 +17,31 @@ import (
 const accountManagedDataReadyTimeout = 30 * time.Second
 
 const accountManagedOutboxDomain = "account-managed"
+
+var ErrAccountManagedDataImportIncomplete = errors.New("account-managed data import is incomplete; restore the wallet before uploading")
+
+func accountManagedDataImportKey() []byte {
+	return []byte(GetDBKeyPrefix() + "account-managed-data-import-pending")
+}
+
+// This persistent marker is only a crash boundary for a real remote recovery
+// import. Runtime concurrency is excluded by the application sync gate; normal
+// PUT/ACK processing must never create it. Only a fully successful import
+// removes the marker. Its presence after restart blocks uploads until the SDK
+// executes an explicit full recovery again.
+func (p *Manager) checkAccountManagedDataImport() error {
+	if p == nil || p.db == nil {
+		return fmt.Errorf("wallet database is unavailable")
+	}
+	_, err := p.db.Read(accountManagedDataImportKey())
+	if errors.Is(err, indexer.ErrKeyNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return ErrAccountManagedDataImportIncomplete
+}
 
 type accountManagedOutboxPlan struct {
 	Pending bool
@@ -32,12 +58,12 @@ func applyAccountManagedOutboxPlan(mutations []dkvsValueMutation, _ string,
 	return mutations
 }
 
-func accountManagedEntryRecords(entry *dkvsBatchOutboxEntry,
+func accountManagedEntryRecords(entry *DKVSBatchOutboxEntry,
 	stateKey, dataKey string) ([]dkvsindexer.CASMutation, bool) {
 	if entry == nil {
 		return nil, false
 	}
-	mutations, _, err := entry.decode()
+	mutations, err := entry.DecodeMutations()
 	if err != nil || len(mutations) == 0 {
 		return nil, false
 	}
@@ -90,7 +116,7 @@ func (p *Manager) accountManagedOutboxPlanFor(store *dkvsStore,
 		strings.TrimSpace(store.client.replicaNamespace) == "" {
 		return plan, nil
 	}
-	entries, err := newDKVSReplicaStore(p.db).loadBatchOutbox(store.client.replicaNamespace)
+	entries, err := newDKVSReplicaStore(p.db).LoadOutbox(store.client.replicaNamespace)
 	if err != nil {
 		return plan, err
 	}
@@ -101,19 +127,17 @@ func (p *Manager) accountManagedOutboxPlanFor(store *dkvsStore,
 		}
 		currentGeneration := entry.OriginDomain == accountManagedOutboxDomain &&
 			entry.OriginGeneration == profile.ManagedDataGeneration
-		if currentGeneration && entry.State != dkvsSessionTerminal &&
-			entry.State != dkvsSessionConflict {
+		if currentGeneration && entry.State != DKVSOutboxTerminal &&
+			entry.State != DKVSOutboxConflict {
 			plan.Pending = true
 			continue
 		}
-		if entry.State != dkvsSessionTerminal {
+		if entry.State != DKVSOutboxTerminal {
 			continue
 		}
-		if currentGeneration {
-			return plan, &dkvsTerminalOutboxError{
-				Key: entry.Key, Code: entry.LastErrorCode, Message: entry.LastError,
-			}
-		}
+		panic(&dkvsTerminalOutboxError{
+			RequestID: entry.RequestID, Code: entry.LastErrorCode, Message: entry.LastError,
+		})
 	}
 	return plan, nil
 }
@@ -279,9 +303,6 @@ func (p *Manager) verifyAccountManagedStorage(store *dkvsStore,
 	if store == nil || profile == nil {
 		return fmt.Errorf("account-managed storage is unavailable")
 	}
-	if err := store.Refresh(stateKey, dataKey); err != nil {
-		return err
-	}
 	if err := store.WaitReady(stateKey, dataKey); err != nil {
 		return err
 	}
@@ -318,6 +339,16 @@ func (p *Manager) requireCurrentAccountManagedData() error {
 	profile.StateEnvelope = append([]byte(nil), p.accountProfile.StateEnvelope...)
 	profile.ManagedDataEnvelope = append([]byte(nil), p.accountProfile.ManagedDataEnvelope...)
 	p.mutex.RUnlock()
+	// An account transport/import operation still running is a normal wait, not
+	// a failed recovery. Inspect the coordinator state without holding its mutex
+	// while reading the durable marker.
+	if p.accountOperationActive() {
+		return ErrDKVSPathNotSynced
+	}
+	importErr := p.checkAccountManagedDataImport()
+	if importErr != nil {
+		return importErr
+	}
 	if profile.ManagedDataDirty || profile.StateSeq == 0 ||
 		profile.ManagedDataRevision == 0 {
 		return ErrDKVSPathNotSynced
@@ -418,8 +449,8 @@ func (p *Manager) waitAccountManagedDataReadyAttempt(ctx context.Context) error 
 		}
 		if !errors.Is(err, ErrDKVSPathNotSynced) &&
 			!errors.Is(err, dkvsindexer.ErrWriteConflict) &&
-			!errors.Is(err, dkvsindexer.ErrStaleGeneration) &&
-			!errors.Is(err, dkvsindexer.ErrPathDiverged) {
+			!errors.Is(err, dkvsindexer.ErrResetRequired) &&
+			!errors.Is(err, dkvsindexer.ErrEndpointMismatch) {
 			return err
 		}
 		_, planErr := p.currentAccountManagedOutboxPlan()

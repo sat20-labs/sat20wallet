@@ -47,6 +47,10 @@ The wallet accepts only configured DApp origins, rejects expired or duplicate re
 
 - `VITE_SAT20_MARKET_URL`: optional Market URL override.
 - `VITE_SAT20_DAPP_ALLOWED_ORIGINS`: comma-separated allowed origins. Defaults include production/test Market origins and local dev origins.
+- `VITE_CSP_FRAME_SRC`: additional HTTPS frame origins for a production build.
+- `VITE_CSP_CONNECT_SRC`: additional HTTPS/WSS backend origins for a production build.
+
+Production CSP rejects localhost and insecure origins. Development remains a separate Vite policy.
 
 For local Market validation, point the wallet at the Market route, not the Next.js root:
 
@@ -61,3 +65,8 @@ npm run dev
 npm run compile
 npm run build:skip-check
 ```
+
+Production build profiles write durable `RUNNING`/`PASSED`/`FAILED` state and a
+full log under `.build-status/`. Set `SAT20_PWA_BUILD_STATUS_DIR` to store these
+artifacts in a supervisor-managed directory. `write-version` and the WASM
+integrity manifest generator always run before bundling.

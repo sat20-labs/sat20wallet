@@ -45,7 +45,6 @@
 import LayoutSecond from '@/components/layout/LayoutSecond.vue'
 import { ref } from 'vue'
 import { useWalletStore } from '@/store/wallet'
-import { hashPassword } from '@/utils/crypto'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import * as z from 'zod'
@@ -70,7 +69,7 @@ const formSchema = toTypedSchema(z.object({
   path: ['confirmPassword']
 }))
 
-const { handleSubmit } = useForm({
+const { handleSubmit, resetForm } = useForm({
   validationSchema: formSchema
 })
 
@@ -81,18 +80,16 @@ const isLoading = ref(false)
 const onSubmit = handleSubmit(async (values) => {
   isLoading.value = true
   try {
-    const oldHash = await hashPassword(values.oldPassword)
-    const newHash = await hashPassword(values.newPassword)
-    const [err] = await walletManager.changePassword(oldHash, newHash)
+		const [err] = await walletManager.changePassword(values.oldPassword, values.newPassword)
     if (err) {
       toast({ title: '修改失败', description: err.message || '请检查旧密码是否正确', variant: 'destructive' })
       return
     }
-    await walletStore.setPassword(newHash)
     toast({ title: '修改成功', description: '密码已更新', variant: 'success' })
   } catch (err: any) {
     toast({ title: '修改失败', description: err?.message || '请检查旧密码是否正确', variant: 'destructive' })
   } finally {
+    resetForm()
     isLoading.value = false
   }
 })

@@ -73,6 +73,7 @@ func (p *Manager) loadAccountManagementProfileLocked() error {
 		return fmt.Errorf("invalid account management profile")
 	}
 	p.accountProfile = &profile
+	p.bumpAccountGenerationLocked()
 	return nil
 }
 
@@ -103,33 +104,47 @@ func (p *Manager) encryptAccountManagementSecret(password string, secret []byte)
 }
 
 func (p *Manager) unlockAccountManagementLocked(password string) error {
-	if p.accountProfile == nil {
-		return nil
-	}
-	key, err := p.restoreSnaclKey(p.accountProfile.SecretSalt, password)
+	secret, err := p.decryptAccountManagementSecretLocked(password)
 	if err != nil {
 		return err
-	}
-	secret, err := key.Decrypt(p.accountProfile.SecretCipher)
-	if err != nil {
-		return err
-	}
-	if len(secret) != 32 {
-		zeroBytes(secret)
-		return fmt.Errorf("invalid account management secret")
 	}
 	zeroBytes(p.accountSecret)
 	p.accountSecret = secret
 	p.accountPassword = password
+	p.bumpAccountGenerationLocked()
 	return nil
+}
+
+func (p *Manager) decryptAccountManagementSecretLocked(password string) ([]byte, error) {
+	if p.accountProfile == nil {
+		return nil, nil
+	}
+	key, err := p.restoreSnaclKey(p.accountProfile.SecretSalt, password)
+	if err != nil {
+		return nil, err
+	}
+	secret, err := key.Decrypt(p.accountProfile.SecretCipher)
+	if err != nil {
+		return nil, err
+	}
+	if len(secret) != 32 {
+		zeroBytes(secret)
+		return nil, fmt.Errorf("invalid account management secret")
+	}
+	return secret, nil
 }
 
 func (p *Manager) clearAccountManagementSession() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+	p.clearAccountManagementSessionLocked()
+}
+
+func (p *Manager) clearAccountManagementSessionLocked() {
 	zeroBytes(p.accountSecret)
 	p.accountSecret = nil
 	p.accountPassword = ""
+	p.bumpAccountGenerationLocked()
 }
 
 func zeroBytes(value []byte) {

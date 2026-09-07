@@ -66,8 +66,35 @@ type accountRootWrapperPayload struct {
 	RecoveryConfigured bool
 }
 
+type accountRootNotFoundAuthorization struct {
+	RootFingerprint string
+	Env             string
+	Chain           string
+}
+
+func (p *Manager) resetAccountRootNotFoundAuthorization(root common.Wallet, authorize bool) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.accountRootNotFoundAuthorization = nil
+	if authorize && root != nil {
+		p.accountRootNotFoundAuthorization = &accountRootNotFoundAuthorization{
+			RootFingerprint: walletFingerprint(root),
+			Env:             _env,
+			Chain:           _chain,
+		}
+	}
+}
+
+func (p *Manager) consumeAccountRootNotFoundAuthorizationLocked(wallet common.Wallet) bool {
+	authorization := p.accountRootNotFoundAuthorization
+	p.accountRootNotFoundAuthorization = nil
+	return authorization != nil && authorization.RootFingerprint != "" &&
+		authorization.RootFingerprint == walletFingerprint(wallet) &&
+		authorization.Env == _env && authorization.Chain == _chain
+}
+
 type accountRootWrapperStore interface {
-	Refresh(keys ...string) error
+	WaitReady(keys ...string) error
 	Get(key string) (*dkvsValue, error)
 	Update(keys []string, builder dkvsUpdateBuilder) ([]*dkvsValue, error)
 }
@@ -361,66 +388,144 @@ func accountRootWrapperMutation(profile *accountManagementProfile, root common.W
 	return accountStateMutation(profile, root, key, value)
 }
 
+func validateAccountRootWrapperSecret(root common.Wallet, accountID string,
+	secret []byte, current *dkvsValue) error {
+
+	if current == nil || dkvsindexer.IsTombstone(current.Flags) {
+		return nil
+	}
+	existing, err := openAccountRootWrapper(root, _chain, accountID, current.Value)
+	if err != nil {
+		return err
+	}
+	defer zeroBytes(existing.Secret)
+	if !bytes.Equal(existing.Secret, secret) {
+		return fmt.Errorf("%w: remote wrapper contains another account secret",
+			ErrRootAccountWrapperInvalid)
+	}
+	return nil
+}
+
+func verifyAccountRootWrapperStorage(store accountRootWrapperStore,
+	profile *accountManagementProfile, root common.Wallet, secret []byte, key string) error {
+
+	if err := store.WaitReady(key); err != nil {
+		return err
+	}
+	current, err := store.Get(key)
+	if err != nil {
+		return err
+	}
+	if err := validateAccountRootWrapperSecret(root, profile.AccountID, secret, current); err != nil {
+		return err
+	}
+	payload, err := openAccountRootWrapper(root, _chain, profile.AccountID, current.Value)
+	if err != nil {
+		return err
+	}
+	defer zeroBytes(payload.Secret)
+	if !accountRootWrapperMetadataMatchesProfile(payload, *profile) ||
+		!accountRecordMatchesStorage(current, profile) {
+		return fmt.Errorf("account root wrapper remote verification failed")
+	}
+	return nil
+}
+
+func accountActivationMutations(profile *accountManagementProfile, root common.Wallet,
+	secret []byte, wrapperKey string, wrapperEnvelope []byte, stateKey string,
+	stateEnvelope []byte, dataKey string, dataEnvelope []byte,
+	current map[string]*dkvsValue) ([]dkvsValueMutation, error) {
+
+	if err := validateAccountRootWrapperSecret(root, profile.AccountID, secret,
+		current[wrapperKey]); err != nil {
+		return nil, err
+	}
+	mutations, err := accountManagementMutations(profile, root, stateKey, stateEnvelope,
+		dataKey, dataEnvelope, true)
+	if err != nil {
+		return nil, err
+	}
+	wrapperMutation, err := accountRootWrapperMutation(profile, root, wrapperKey, wrapperEnvelope)
+	if err != nil {
+		return nil, err
+	}
+	return append(mutations, wrapperMutation), nil
+}
+
 func (p *Manager) accountManagementVerifiedSnapshot(store accountRootWrapperStore) (
-	accountManagementProfile, []byte, common.Wallet, error) {
+	accountManagementProfile, []byte, common.Wallet, uint64, error) {
 
 	p.mutex.RLock()
 	if p.accountProfile == nil || len(p.accountSecret) != 32 {
 		p.mutex.RUnlock()
-		return accountManagementProfile{}, nil, nil, ErrDKVSPathNotSynced
+		return accountManagementProfile{}, nil, nil, 0, ErrDKVSPathNotSynced
 	}
 	profile := *p.accountProfile
 	secret := append([]byte(nil), p.accountSecret...)
+	generation := p.accountGeneration
 	p.mutex.RUnlock()
 	root, err := p.accountManagementRootWallet()
 	if err != nil {
 		zeroBytes(secret)
-		return accountManagementProfile{}, nil, nil, err
+		return accountManagementProfile{}, nil, nil, 0, err
 	}
 	stateKey, err := p.accountManagedStateKey(root)
 	if err != nil {
 		zeroBytes(secret)
-		return accountManagementProfile{}, nil, nil, err
+		return accountManagementProfile{}, nil, nil, 0, err
 	}
 	dataKey, err := p.accountManagedDataBlobKey(root)
 	if err != nil {
 		zeroBytes(secret)
-		return accountManagementProfile{}, nil, nil, err
+		return accountManagementProfile{}, nil, nil, 0, err
 	}
 	if profile.ManagedDataDirty || profile.StateSeq == 0 || profile.ManagedDataRevision == 0 {
 		zeroBytes(secret)
-		return accountManagementProfile{}, nil, nil, ErrDKVSPathNotSynced
+		return accountManagementProfile{}, nil, nil, 0, ErrDKVSPathNotSynced
 	}
-	if err := store.Refresh(stateKey, dataKey); err != nil {
+	if err := store.WaitReady(stateKey, dataKey); err != nil {
 		zeroBytes(secret)
-		return accountManagementProfile{}, nil, nil, err
+		return accountManagementProfile{}, nil, nil, 0, err
 	}
 	state, err := store.Get(stateKey)
 	if err != nil || state == nil || !bytes.Equal(state.Value, profile.StateEnvelope) {
 		zeroBytes(secret)
 		if err != nil {
-			return accountManagementProfile{}, nil, nil, err
+			return accountManagementProfile{}, nil, nil, 0, err
 		}
-		return accountManagementProfile{}, nil, nil, fmt.Errorf("account-managed state remote verification failed")
+		return accountManagementProfile{}, nil, nil, 0, fmt.Errorf("account-managed state remote verification failed")
 	}
 	data, err := store.Get(dataKey)
 	if err != nil || data == nil {
 		zeroBytes(secret)
 		if err != nil {
-			return accountManagementProfile{}, nil, nil, err
+			return accountManagementProfile{}, nil, nil, 0, err
 		}
-		return accountManagementProfile{}, nil, nil, fmt.Errorf("account-managed data remote verification failed")
+		return accountManagementProfile{}, nil, nil, 0, fmt.Errorf("account-managed data remote verification failed")
 	}
 	blob, err := DecodeDKVSBlobValue(data.Value)
 	if err != nil || !bytes.Equal(blob.Data, profile.ManagedDataEnvelope) {
 		zeroBytes(secret)
-		return accountManagementProfile{}, nil, nil, fmt.Errorf("account-managed data remote verification failed")
+		return accountManagementProfile{}, nil, nil, 0, fmt.Errorf("account-managed data remote verification failed")
 	}
-	return profile, secret, root, nil
+	return profile, secret, root, generation, nil
 }
 
 func (p *Manager) syncAccountRootWrapper(store accountRootWrapperStore) error {
-	profile, secret, root, err := p.accountManagementVerifiedSnapshot(store)
+	if p == nil {
+		return ErrDKVSPathNotSynced
+	}
+	return p.runAccountApplicationSync(nil, func() error {
+		return p.syncAccountRootWrapperAttempt(store, 0)
+	})
+}
+
+// syncAccountRootWrapperLocked shares accountSyncMu with paid activation and
+// managed-state synchronization. A wrapper job may therefore finish before an
+// activation or observe its committed paid profile, but can never publish a
+// stale temporary policy after the paid activation has completed.
+func (p *Manager) syncAccountRootWrapperAttempt(store accountRootWrapperStore, attempt int) error {
+	profile, secret, root, generation, err := p.accountManagementVerifiedSnapshot(store)
 	if err != nil {
 		return err
 	}
@@ -434,7 +539,7 @@ func (p *Manager) syncAccountRootWrapper(store accountRootWrapperStore) error {
 	if err != nil {
 		return err
 	}
-	if err := store.Refresh(key); err != nil {
+	if err := store.WaitReady(key); err != nil {
 		return err
 	}
 	current, getErr := store.Get(key)
@@ -455,6 +560,18 @@ func (p *Manager) syncAccountRootWrapper(store accountRootWrapperStore) error {
 			return nil
 		}
 	}
+	p.mutex.RLock()
+	stale := p.accountGeneration != generation || p.accountProfile == nil ||
+		p.accountProfile.AccountID != profile.AccountID ||
+		p.accountProfile.StorageMode != profile.StorageMode ||
+		p.accountProfile.AutopayContract != profile.AutopayContract
+	p.mutex.RUnlock()
+	if stale {
+		if attempt < 2 {
+			return p.syncAccountRootWrapperAttempt(store, attempt+1)
+		}
+		return errAccountSnapshotChanged
+	}
 	captured := current
 	_, err = store.Update([]string{key}, func(values map[string]*dkvsValue,
 		_ map[string]uint64) ([]dkvsValueMutation, error) {
@@ -470,7 +587,19 @@ func (p *Manager) syncAccountRootWrapper(store accountRootWrapperStore) error {
 		}
 		return []dkvsValueMutation{mutation}, nil
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	p.mutex.RLock()
+	stale = p.accountGeneration != generation
+	p.mutex.RUnlock()
+	if stale && attempt < 2 {
+		return p.syncAccountRootWrapperAttempt(store, attempt+1)
+	}
+	if stale {
+		return errAccountSnapshotChanged
+	}
+	return nil
 }
 
 // SyncAccountRootWrapper upgrades an unlocked profile by wrapping its
@@ -496,7 +625,11 @@ func (p *Manager) scheduleAccountRootWrapperSync() {
 		return
 	}
 	p.dkvs.schedule(accountRootWrapperJobID, func(store *dkvsStore) error {
-		return p.syncAccountRootWrapper(store)
+		err := p.syncAccountRootWrapper(store)
+		if errors.Is(err, ErrDKVSPathNotSynced) {
+			return fmt.Errorf("%w: %v", errDKVSJobDeferred, err)
+		}
+		return err
 	})
 }
 
@@ -530,15 +663,22 @@ func (p *Manager) RecoverAccountManagementFromRootMnemonic(ctx context.Context,
 	if p == nil {
 		return nil, fmt.Errorf("wallet manager is unavailable")
 	}
-	store, err := p.accountDKVSStore()
-	if err != nil {
-		return nil, rootDiscoveryError(err)
-	}
-	location, err := p.AccountIndexerLocation()
-	if err != nil {
-		return nil, err
-	}
-	return p.recoverAccountManagementFromRootMnemonic(ctx, mnemonic, password, store, location)
+	var results []RestoredWalletResult
+	err := p.runAccountApplicationSync(ctx, func() error {
+		store, storeErr := p.accountDKVSStore()
+		if storeErr != nil {
+			return rootDiscoveryError(storeErr)
+		}
+		location, locationErr := p.AccountIndexerLocation()
+		if locationErr != nil {
+			return locationErr
+		}
+		var recoveryErr error
+		results, recoveryErr = p.recoverAccountManagementFromRootMnemonic(
+			ctx, mnemonic, password, store, location)
+		return recoveryErr
+	})
+	return results, err
 }
 
 // RecoverAccountManagementFromCurrentWallet retries root discovery after a
@@ -549,22 +689,37 @@ func (p *Manager) RecoverAccountManagementFromCurrentWallet(ctx context.Context,
 	if p == nil {
 		return nil, fmt.Errorf("wallet manager is unavailable")
 	}
-	p.mutex.Lock()
-	if p.wallet == nil {
+	var results []RestoredWalletResult
+	err := p.runAccountApplicationSync(ctx, func() error {
+		p.mutex.Lock()
+		if p.wallet == nil {
+			p.mutex.Unlock()
+			return fmt.Errorf("wallet is not created/unlocked")
+		}
+		info := p.walletInfoMap[p.wallet.GetId()]
+		if info == nil {
+			p.mutex.Unlock()
+			return fmt.Errorf("current wallet is unavailable")
+		}
+		mnemonic, loadErr := p.loadWalletSecret(info, password)
 		p.mutex.Unlock()
-		return nil, fmt.Errorf("wallet is not created/unlocked")
-	}
-	info := p.walletInfoMap[p.wallet.GetId()]
-	if info == nil {
-		p.mutex.Unlock()
-		return nil, fmt.Errorf("current wallet is unavailable")
-	}
-	mnemonic, err := p.loadWalletSecret(info, password)
-	p.mutex.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	return p.RecoverAccountManagementFromRootMnemonic(ctx, mnemonic, password)
+		if loadErr != nil {
+			return loadErr
+		}
+		store, storeErr := p.accountDKVSStore()
+		if storeErr != nil {
+			return rootDiscoveryError(storeErr)
+		}
+		location, locationErr := p.AccountIndexerLocation()
+		if locationErr != nil {
+			return locationErr
+		}
+		var recoveryErr error
+		results, recoveryErr = p.recoverAccountManagementFromRootMnemonic(
+			ctx, mnemonic, password, store, location)
+		return recoveryErr
+	})
+	return results, err
 }
 
 func (p *Manager) recoverAccountManagementFromRootMnemonic(ctx context.Context,
@@ -576,6 +731,7 @@ func (p *Manager) recoverAccountManagementFromRootMnemonic(ctx context.Context,
 		return nil, fmt.Errorf("invalid account management root wallet")
 	}
 	root.SetSubAccount(0)
+	p.resetAccountRootNotFoundAuthorization(root, false)
 	accountID, err := dkvsAccountID(root)
 	if err != nil {
 		return nil, err
@@ -609,9 +765,13 @@ func (p *Manager) recoverAccountManagementFromRootMnemonic(ctx context.Context,
 	}
 	wrapperValue, err := store.Get(wrapperKey)
 	if err != nil {
+		if errors.Is(err, ErrDKVSRecordNotFound) {
+			p.resetAccountRootNotFoundAuthorization(root, true)
+		}
 		return nil, rootDiscoveryError(err)
 	}
 	if wrapperValue == nil {
+		p.resetAccountRootNotFoundAuthorization(root, true)
 		return nil, ErrRootAccountNotFound
 	}
 	payload, err := openAccountRootWrapper(root, _chain, accountID, wrapperValue.Value)
@@ -621,10 +781,15 @@ func (p *Manager) recoverAccountManagementFromRootMnemonic(ctx context.Context,
 	defer zeroBytes(payload.Secret)
 	stateValue, err := store.Get(stateKey)
 	if err != nil {
+		if errors.Is(err, ErrDKVSRecordNotFound) {
+			return nil, fmt.Errorf("%w: managed state is missing for existing root wrapper",
+				ErrRootAccountDiscoveryPending)
+		}
 		return nil, rootDiscoveryError(err)
 	}
 	if stateValue == nil {
-		return nil, ErrRootAccountNotFound
+		return nil, fmt.Errorf("%w: managed state is missing for existing root wrapper",
+			ErrRootAccountDiscoveryPending)
 	}
 	state, err := account.OpenManagedState(payload.Secret, accountID, stateValue.Value)
 	if err != nil || state.RootFingerprint != walletFingerprint(root) {
@@ -634,6 +799,10 @@ func (p *Manager) recoverAccountManagementFromRootMnemonic(ctx context.Context,
 	if state.DataRevision != 0 {
 		dataValue, err = store.Get(dataKey)
 		if err != nil {
+			if errors.Is(err, ErrDKVSRecordNotFound) {
+				return nil, fmt.Errorf("%w: managed data is missing for existing root wrapper",
+					ErrRootAccountDiscoveryPending)
+			}
 			return nil, rootDiscoveryError(err)
 		}
 	}
@@ -649,7 +818,7 @@ func (p *Manager) recoverAccountManagementFromRootMnemonic(ctx context.Context,
 	}
 	locator := account.Locator{AccountID: accountID, PackageID: payload.PackageID,
 		RecoveryMode: payload.RecoveryMode}
-	results, err := p.restoreAccountManagementState(recovered, payload.Secret, password,
+	results, err := p.restoreAccountManagementStateOperation(recovered, payload.Secret, password,
 		locator, AccountManagementRestoreOptions{
 			Location: location, StorageMode: payload.StorageMode, RecordTTL: payload.RecordTTL,
 			AutopayContract: payload.AutopayContract, PublicLocator: payload.PublicLocator,
@@ -661,6 +830,7 @@ func (p *Manager) recoverAccountManagementFromRootMnemonic(ctx context.Context,
 		p.mutex.Lock()
 		if p.accountProfile != nil && p.accountProfile.AccountID == accountID {
 			p.accountProfile.RecoveryConfigured = false
+			p.bumpAccountGenerationLocked()
 			err = p.saveAccountManagementProfileLocked()
 		}
 		p.mutex.Unlock()

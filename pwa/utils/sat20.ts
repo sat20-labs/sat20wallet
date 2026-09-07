@@ -1,34 +1,40 @@
 import { tryit } from 'radash'
+import { walletRequestSessionGuard } from '@/lib/walletSession'
 import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
+
+export interface MnemonicValidation {
+  normalized: string
+  language: 'english'
+  wordCount: string
+  fingerprint: string
+  accountId: string
+  address: string
+}
 class WalletManager {
   private async _handleRequest(
     methodName: string,
     ...args: any[]
   ): Promise<[Error | undefined, any | undefined]> {
-    const operation = await beginPwaWalletOperation(methodName, args)
-    const method = (globalThis as any).sat20wallet_wasm[methodName as keyof WalletManager]
-    const [err, result] = await tryit(method as any)(...args)
-    // Never emit wallet request arguments or results to the browser console.
-    // Both can contain passwords, mnemonics, recovery material or signed data.
-    if (err) {
-      console.error(`${methodName} failed`)
-      await finishPwaOperation(operation, err)
-      return [err, undefined]
-    }
-
-    if (result) {
-      const response = result as SatsnetResponse
-      if (response?.code !== 0) {
-        const responseError = new Error(response.msg)
-        await finishPwaOperation(operation, responseError)
-        return [responseError, undefined]
+    return tryit(async () => {
+      const checkSession = walletRequestSessionGuard(methodName)
+      const operation = await beginPwaWalletOperation(methodName, args)
+      try {
+        checkSession()
+        const method = (globalThis as any).sat20wallet_wasm[methodName]
+        const response = await method(...args) as SatsnetResponse | undefined
+        checkSession()
+        if (response && response.code !== 0) throw new Error(response.msg)
+        await finishPwaOperation(operation, null, response?.data)
+        checkSession()
+        return response?.data
+      } catch (error) {
+        // Never log arguments/results: they can contain wallet credentials.
+        console.error(`${methodName} failed`)
+        const failure = error instanceof Error ? error : new Error(String(error))
+        await finishPwaOperation(operation, failure)
+        throw failure
       }
-      await finishPwaOperation(operation, null, response.data)
-      return [undefined, response.data]
-    }
-
-    await finishPwaOperation(operation)
-    return [undefined, undefined]
+    })()
   }
 
   async createWallet(
@@ -44,6 +50,13 @@ class WalletManager {
     password: string
   ): Promise<[Error | undefined, { walletId: string } | undefined]> {
     return this._handleRequest('importWallet', mnemonic, password.toString())
+  }
+
+  async validateMnemonic(
+	mnemonic: string,
+	password: string,
+  ): Promise<[Error | undefined, MnemonicValidation | undefined]> {
+    return this._handleRequest('validateMnemonic', mnemonic, password)
   }
 
   async recoverAccountManagementFromRootMnemonic(
@@ -106,6 +119,7 @@ class WalletManager {
           did?: string
           address: string
           pub_key: string
+          account_id?: string
         }>
       }>
     } | undefined]
@@ -130,10 +144,10 @@ class WalletManager {
   }
 
   async switchWallet(
-    id: string,
-    password: string
+    id: string
   ): Promise<[Error | undefined, void | undefined]> {
-    return this._handleRequest('switchWallet', id, password)
+    // The SDK no longer uses this legacy password argument.
+    return this._handleRequest('switchWallet', id, '')
   }
 
   async switchAccount(
@@ -387,7 +401,14 @@ class WalletManager {
   }
 
   async deliverAndBroadcastRGB11ProxyTransfer(transferIds: string[]): Promise<
-    [Error | undefined, { transfer_ids: string[]; endpoints: string[]; txid: string } | undefined]
+	[Error | undefined, {
+	  transfer_ids: string[]
+	  endpoints: string[]
+	  txid?: string
+	  awaiting_ack?: boolean
+	  broadcast?: boolean
+	  rejected?: boolean
+	} | undefined]
   > {
     return this._handleRequest('deliverAndBroadcastRGB11ProxyTransfer', JSON.stringify(transferIds))
   }
@@ -451,31 +472,6 @@ class WalletManager {
     id: number
   ): Promise<[Error | undefined, Uint8Array | undefined]> {
     return this._handleRequest('getPublicKey', id)
-  }
-
-  async getCommitRootKey(
-    peer: Uint8Array
-  ): Promise<[Error | undefined, Uint8Array | undefined]> {
-    return this._handleRequest('getCommitRootKey', peer)
-  }
-
-  async getCommitSecret(
-    peer: Uint8Array,
-    index: number
-  ): Promise<[Error | undefined, Uint8Array | undefined]> {
-    return this._handleRequest('getCommitSecret', peer, index)
-  }
-
-  async deriveRevocationPrivKey(
-    commitSecret: Uint8Array
-  ): Promise<[Error | undefined, Uint8Array | undefined]> {
-    return this._handleRequest('deriveRevocationPrivKey', commitSecret)
-  }
-
-  async getRevocationBaseKey(): Promise<
-    [Error | undefined, Uint8Array | undefined]
-  > {
-    return this._handleRequest('getRevocationBaseKey')
   }
 
   async getNodePubKey(): Promise<[Error | undefined, Uint8Array | undefined]> {
@@ -553,12 +549,30 @@ class WalletManager {
     return this._handleRequest('lockUtxo', address, utxo, reason)
   }
 
+  async lockUtxoForOwner(
+    address: string,
+    utxo: any,
+    reason: string,
+    owner: Record<string, unknown>
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('lockUtxoForOwner', address, utxo, reason, JSON.stringify(owner))
+  }
+
   async lockUtxo_SatsNet(
     address: string,
     utxo: any,
     reason: string
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('lockUtxo_SatsNet', address, utxo, reason)
+  }
+
+  async lockUtxoForOwner_SatsNet(
+    address: string,
+    utxo: any,
+    reason: string,
+    owner: Record<string, unknown>
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('lockUtxoForOwner_SatsNet', address, utxo, reason, JSON.stringify(owner))
   }
 
   async unlockUtxo(
@@ -568,11 +582,27 @@ class WalletManager {
     return this._handleRequest('unlockUtxo', address, utxo)
   }
 
+  async unlockUtxoForOwner(
+    address: string,
+    utxo: any,
+    owner: Record<string, unknown>
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('unlockUtxoForOwner', address, utxo, JSON.stringify(owner))
+  }
+
   async unlockUtxo_SatsNet(
     address: string,
     utxo: any
   ): Promise<[Error | undefined, any | undefined]> {
     return this._handleRequest('unlockUtxo_SatsNet', address, utxo)
+  }
+
+  async unlockUtxoForOwner_SatsNet(
+    address: string,
+    utxo: any,
+    owner: Record<string, unknown>
+  ): Promise<[Error | undefined, any | undefined]> {
+    return this._handleRequest('unlockUtxoForOwner_SatsNet', address, utxo, JSON.stringify(owner))
   }
 
   async getAllLockedUtxo(

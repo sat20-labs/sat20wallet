@@ -35,7 +35,7 @@ export class ResponseHandler {
         console.log(`${LOG_PREFIXES.ERROR} Preparing error response:`, { error: error.message });
         responseScript = this.buildErrorResponse(escapedCallbackId, error.message);
       } else {
-        console.log(`${LOG_PREFIXES.SUCCESS} Preparing success response:`, { result });
+		console.log(`${LOG_PREFIXES.SUCCESS} Preparing success response`);
         responseScript = this.buildSuccessResponse(escapedCallbackId, result);
       }
 
@@ -54,7 +54,6 @@ export class ResponseHandler {
         message: (error as Error).message,
         stack: (error as Error).stack,
         callbackId,
-        result,
         hasError: !!error
       });
     }
@@ -90,7 +89,6 @@ export class ResponseHandler {
         console.log("✅ Found callback, executing resolve");
         const callback = window.sat20Callbacks[${JSON.stringify(callbackId)}];
         const resultData = ${JSON.stringify(result)};
-        console.log("🔍 Resolving with result:", resultData);
         callback.resolve(resultData);
         delete window.sat20Callbacks[${JSON.stringify(callbackId)}];
         console.log("✅ Callback resolved and deleted");

@@ -68,12 +68,15 @@
             </div>
           </template>
 
+          <div v-if="liquidityPrincipal !== null" class="flex items-center justify-between gap-2 py-1">
+            <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.liquidityPrincipal',
+              '流动性本金') }}</span>
+            <span class="text-xs sm:text-sm font-medium text-right break-words">{{ liquidityPrincipal }} sats</span>
+          </div>
           <div class="flex items-center justify-between gap-2 py-1">
             <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.serviceFee', '网络费')
             }}</span>
-            <span class="text-xs sm:text-sm font-medium text-right break-words">{{ props.data?.metadata?.networkFee ||
-              '-' }}
-              sats</span>
+            <span class="text-xs sm:text-sm font-medium text-right break-words">{{ networkFee }} sats</span>
           </div>
           <div class="flex items-center justify-between gap-2 py-1">
             <span class="text-xs text-muted-foreground flex-shrink-0">{{ $t('invokeContractSatsNet.estimatedFee', '服务费')
@@ -84,7 +87,7 @@
               <span v-else-if="feeError" class="text-xs text-destructive break-words">{{ feeErrorMessage ||
                 $t('invokeContractSatsNet.feeError',
                   '查询失败') }}</span>
-              <span v-else class="text-xs sm:text-sm font-medium break-words">{{ estimatedFee || '-' }} sats</span>
+              <span v-else class="text-xs sm:text-sm font-medium break-words">{{ serviceFee ?? '-' }} sats</span>
             </div>
           </div>
 
@@ -211,14 +214,30 @@ const withdrawDetails = computed(() => {
   }
 })
 
+const networkFee = computed(() => props.data?.metadata?.networkFee ?? 10)
+
+const liquidityPrincipal = computed(() => {
+  if (parsedInvoke.value.action !== 'addliq' || Number(invokeParam.value.orderType) !== 9) return null
+  const principal = Number(invokeParam.value.value)
+  const fee = Number(estimatedFee.value)
+  if (estimatedFee.value === null || !Number.isFinite(principal) || principal <= 0
+    || !Number.isFinite(fee) || fee < principal) return null
+  // The SDK addliq quote includes the sats principal; only split it for display.
+  return principal
+})
+
+const serviceFee = computed(() => liquidityPrincipal.value === null
+  ? estimatedFee.value
+  : Number(estimatedFee.value) - liquidityPrincipal.value)
+
 const totalCost = computed(() => {
   if (!props.data?.metadata?.action || estimatedFee.value === null) return '-'
-  const { orderType, quantity, unitPrice, networkFee = 10, sats } = props.data.metadata
+  const { orderType, sats } = props.data.metadata
   let total = 0;
   if (orderType === 2) {
-    total = Math.ceil(Number(sats) + Number(networkFee) + Number(estimatedFee.value))
+    total = Math.ceil(Number(sats) + Number(networkFee.value) + Number(estimatedFee.value))
   } else {
-    total = Math.ceil(Number(estimatedFee.value) + Number(networkFee))
+    total = Math.ceil(Number(estimatedFee.value) + Number(networkFee.value))
   }
   return `${total} sats`
 })

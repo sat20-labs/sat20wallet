@@ -298,7 +298,7 @@ func (p *Manager) CloserInitCoopCloseProcess(channelID string, feeRate int64) (s
 		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		p.DelResvWithId(resv.Id)
 		if resv.Id != 0 && channel.PeerRPC != nil {
-			_ = channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_CLOSE, -1, err.Error())
+			_ = channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_CLOSE, -1, err.Error())
 		}
 		return "", "", err
 	}

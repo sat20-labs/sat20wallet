@@ -174,6 +174,17 @@ func (p *Manager) coBatchSendV3WithMaxConfirmedInputHeight(localWallet common.Wa
 	if channelID == "" {
 		return "", 0, fmt.Errorf("invalid channel address")
 	}
+	if asset.Protocol == "rgb11" {
+		if sendDeAnchorTx {
+			return "", 0, ErrRGB11STPUnavailable
+		}
+		md, err := json.Marshal(wwire.RemoteSignMoreData_Contract{ContractURL: contractURL,
+			InvokeCount: invokeCount, StaticMerkleRoot: static, RuntimeMerkleRoot: runtime, MoreData: memo})
+		if err != nil {
+			return "", 0, err
+		}
+		return p.sendRGB11FromChannelAtHeight(localWallet, dest, assetNameStr, feeRate, channelID, reason, md, payFeeByCurrentAddress, excludeRecentBlock, maxConfirmedInputHeight)
+	}
 
 	var (
 		tx          *wire.MsgTx

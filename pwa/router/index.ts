@@ -1,5 +1,10 @@
 import { createWebHashHistory, createRouter } from 'vue-router'
 import { useWalletStore } from '@/store'
+import {
+  isWalletSessionUnlocked,
+  setWalletSessionUnlocked,
+  isWalletRuntimeUnlocked,
+} from '@/lib/walletSession'
 import Index from '@/entrypoints/popup/pages/Index.vue'
 import ImportWallet from '@/entrypoints/popup/pages/Import.vue'
 import CreateWallet from '@/entrypoints/popup/pages/Create.vue'
@@ -72,26 +77,16 @@ const routes = [
 ]
 
 const router = createRouter({ history: createWebHashHistory(), routes })
-let wasmWalletUnlocked = false
 
 router.beforeEach(async (to: any) => {
   const walletStore = useWalletStore()
   await walletStorage.initializeState()
   const hasWallet = walletStorage.getValue('hasWallet')
-  const password = walletStore.password
   const isLocked = walletStorage.getValue('locked') ?? true
 
-  if (password && (isLocked || !wasmWalletUnlocked)) {
-    const [error] = await walletStore.unlockWallet(password)
-    if (error) {
-      wasmWalletUnlocked = false
-      await walletStore.setPassword('')
-      await walletStore.setLocked(true)
-    } else {
-      wasmWalletUnlocked = true
-      await walletStore.setLocked(false)
-    }
-  } else if (hasWallet && !password && !wasmWalletUnlocked) {
+  // A page reload must authenticate again, even if storage says "unlocked".
+  if (hasWallet && (isLocked || !isWalletSessionUnlocked() || !isWalletRuntimeUnlocked())) {
+    setWalletSessionUnlocked(false)
     await walletStore.setLocked(true)
   }
 

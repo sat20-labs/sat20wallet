@@ -1,6 +1,8 @@
 import { Message } from "../../../types/message";
 import { ApprovalHandler } from "../utils/approval-handler";
 import { ResponseHandler } from "../utils/response-handler";
+import { getCurrentDappScope } from "../../../lib/authorized-origins";
+import { buildWalletMessagePayload, walletMessageDigest } from "../../../lib/wallet-message-domain";
 
 export class TransactionHandlers {
   constructor(
@@ -14,10 +16,26 @@ export class TransactionHandlers {
    */
   async handleSignMessage(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("✍️ Handling SIGN_MESSAGE", { callbackId, data });
+	  const context = data?.__dappContext;
+	  const scope = await getCurrentDappScope();
+	  const domainPayload = buildWalletMessagePayload({
+		network: scope.network,
+		origin: String(context?.origin ?? ''),
+		timestamp: String(context?.timestamp ?? ''),
+		nonce: String(context?.nonce ?? ''),
+		message: String(data?.message ?? ''),
+	  });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.SIGN_MESSAGE,
-        data,
+		{
+		  message: String(data?.message ?? ''),
+		  domainPayload,
+		  digest: await walletMessageDigest(domainPayload),
+		  origin: context.origin,
+		  network: scope.network,
+		  timestamp: context.timestamp,
+		  nonce: context.nonce,
+		},
         callbackId,
         this.currentUrl()
       );
@@ -32,19 +50,11 @@ export class TransactionHandlers {
    * 处理 SIGN_DATA - 签原始协议数据，需要用户授权
    */
   async handleSignData(callbackId: string, data: any): Promise<void> {
-    try {
-      console.log("✍️ Handling SIGN_DATA", { callbackId, data });
-      const result = await this.approvalHandler.handleWalletApproval(
-        Message.MessageAction.SIGN_DATA,
-        { ...data, signData: true },
-        callbackId,
-        this.currentUrl()
-      );
-      this.responseHandler.sendResponse(callbackId, result, null);
-    } catch (error) {
-      console.error("❌ SIGN_DATA error:", error);
-      this.responseHandler.sendResponse(callbackId, null, error as Error);
-    }
+	this.responseHandler.sendResponse(
+	  callbackId,
+	  null,
+	  new Error("Raw DApp signData is disabled; use signMessage with the SAT20 Wallet Message domain"),
+	);
   }
 
   /**
@@ -52,7 +62,7 @@ export class TransactionHandlers {
    */
   async handleSignPsbt(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("📝 Handling SIGN_PSBT", { callbackId, data });
+		console.log("📝 Handling SIGN_PSBT", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.SIGN_PSBT,
         data,
@@ -71,7 +81,7 @@ export class TransactionHandlers {
    */
   async handleSignPsbts(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("📝 Handling SIGN_PSBTS", { callbackId, data });
+		console.log("📝 Handling SIGN_PSBTS", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.SIGN_PSBTS,
         data,
@@ -90,7 +100,7 @@ export class TransactionHandlers {
    */
   async handleSendBitcoin(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("💸 Handling SEND_BITCOIN", { callbackId, data });
+      console.log("💸 Handling SEND_BITCOIN", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.SEND_BITCOIN,
         data,
@@ -109,7 +119,7 @@ export class TransactionHandlers {
    */
   async handleSendInscription(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("📤 Handling SEND_INSCRIPTION", { callbackId, data });
+      console.log("📤 Handling SEND_INSCRIPTION", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.SEND_INSCRIPTION,
         data,
@@ -123,15 +133,12 @@ export class TransactionHandlers {
     }
   }
 
-  /**
-   * 处理 PUSH_TX - 直接请求类型
-   */
+  /** 处理 PUSH_TX - 广播前逐次授权 */
   async handlePushTx(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("📤 Handling PUSH_TX", { callbackId, data });
-      const result = await this.approvalHandler.handleDirectRequest(
-        Message.MessageAction.PUSH_TX,
-        data
+      console.log("📤 Handling PUSH_TX", { callbackId });
+      const result = await this.approvalHandler.handleApprovedDirectRequest(
+        Message.MessageAction.PUSH_TX, data, callbackId, this.currentUrl()
       );
       this.responseHandler.sendResponse(callbackId, result, null);
     } catch (error) {
@@ -140,15 +147,12 @@ export class TransactionHandlers {
     }
   }
 
-  /**
-   * 处理 PUSH_PSBT - 直接请求类型
-   */
+  /** 处理 PUSH_PSBT - 广播前逐次授权 */
   async handlePushPsbt(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("📤 Handling PUSH_PSBT", { callbackId, data });
-      const result = await this.approvalHandler.handleDirectRequest(
-        Message.MessageAction.PUSH_PSBT,
-        data
+		console.log("📤 Handling PUSH_PSBT", { callbackId });
+      const result = await this.approvalHandler.handleApprovedDirectRequest(
+        Message.MessageAction.PUSH_PSBT, data, callbackId, this.currentUrl()
       );
       this.responseHandler.sendResponse(callbackId, result, null);
     } catch (error) {
@@ -162,7 +166,7 @@ export class TransactionHandlers {
    */
   async handleGetInscriptions(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("📜 Handling GET_INSCRIPTIONS", { callbackId, data });
+      console.log("📜 Handling GET_INSCRIPTIONS", { callbackId });
       const result = await this.approvalHandler.handleDirectRequest(
         Message.MessageAction.GET_INSCRIPTIONS,
         data

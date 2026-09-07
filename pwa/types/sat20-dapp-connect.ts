@@ -9,6 +9,7 @@ export interface Sat20DappRequest {
   params?: unknown
   network?: string
   nonce: string
+  timestamp: string
   expiresAt: number
 }
 

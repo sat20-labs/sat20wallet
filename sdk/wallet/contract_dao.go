@@ -2880,7 +2880,7 @@ func (p *DaoContractRunTime) AllowPeerAction(action string, param any) (any, err
 					if err != nil {
 						return nil, err
 					}
-					dealInfo, err = p.genSendInfoFromTx(tx, preOutputs, req.MoreData)
+					dealInfo, err = p.genSendInfoFromTx(tx, preOutputs, req.MoreData, req.RGB11Proof)
 					if err != nil {
 						return nil, err
 					}

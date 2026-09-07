@@ -6,9 +6,6 @@ import (
 )
 
 const (
-	ReceiveCapabilityVersion = uint8(1)
-	ReceiveCapabilityPath    = "rgb11/receive"
-
 	ReceiveCapabilityAddress = uint8(1 << 0)
 	ReceiveCapabilityAny     = uint8(1 << 1)
 
@@ -25,22 +22,6 @@ var (
 	ErrTraditionalReceiveRequired = errors.New("receiver has no RGB11 DKVS address capability; use a traditional RGB invoice")
 	ErrAddressMailbox             = errors.New("invalid RGB11 address mailbox message")
 )
-
-func EncodeReceiveCapability(capability RGB11ReceiveCapability) ([]byte, error) {
-	if capability.Version != ReceiveCapabilityVersion ||
-		capability.Flags&ReceiveCapabilityAddress == 0 {
-		return nil, ErrTraditionalReceiveRequired
-	}
-	return []byte{capability.Version, capability.Flags}, nil
-}
-
-func DecodeReceiveCapability(value []byte) (RGB11ReceiveCapability, error) {
-	if len(value) != 2 || value[0] != ReceiveCapabilityVersion ||
-		value[1]&ReceiveCapabilityAddress == 0 {
-		return RGB11ReceiveCapability{}, ErrTraditionalReceiveRequired
-	}
-	return RGB11ReceiveCapability{Version: value[0], Flags: value[1]}, nil
-}
 
 func EncodeAddressEnvelope(mode uint8, ciphertext []byte) ([]byte, error) {
 	if mode != AddressEnvelopeInline && mode != AddressEnvelopeBlob {

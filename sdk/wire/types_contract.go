@@ -107,6 +107,7 @@ type DeployContractAckReq struct {
 	Status     int    `json:"status"`
 	DeployTxId string `json:"txId"`
 	MoreData   []byte `json:"moreData"`
+	Sig        []byte `json:"msgSig,omitempty"`
 }
 
 type DeployContractAckResp struct {
@@ -117,32 +118,40 @@ type DeployContractAckResp struct {
 	EnableBlockL1 int   `json:"enableBlockL1"`
 }
 
-
 type TxSignInfo struct {
 	Tx        string   `json:"tx"`
 	L1Tx      bool     `json:"l1Tx"`
 	LocalSigs [][]byte `json:"sigs"`
-	Reason	  string   `json:"reason"`
-	NotSign	  bool     `json:"notSign"`
+	Reason    string   `json:"reason"`
+	NotSign   bool     `json:"notSign"`
 	MoreData  []byte   `json:"more"`
 }
 
 // sn -> bn messages
 type RemoteSignMoreData_Contract struct {
-	Tx                []*TxSignInfo `json:"tx1"`
-	Witness           []byte        `json:"witness"`
-	ContractURL       string        `json:"contractURL"`
-	InvokeCount       int64         `json:"invokeCount"`
-	StaticMerkleRoot  []byte        `json:"staticMerkleRoot"`
-	RuntimeMerkleRoot []byte        `json:"runtimeMerkleRoot"`
-	Action            string        `json:"action"`
-	MoreData          []byte        `json:"more"` // 有时候Tx中无法放入足够数据
+	Tx                []*TxSignInfo      `json:"tx1"`
+	Witness           []byte             `json:"witness"`
+	ContractURL       string             `json:"contractURL"`
+	InvokeCount       int64              `json:"invokeCount"`
+	StaticMerkleRoot  []byte             `json:"staticMerkleRoot"`
+	RuntimeMerkleRoot []byte             `json:"runtimeMerkleRoot"`
+	Action            string             `json:"action"`
+	MoreData          []byte             `json:"more"` // 有时候Tx中无法放入足够数据
+	RGB11Proof        *RGB11SigningProof `json:"rgb11,omitempty"`
+}
+
+// RGB11SigningProof is the private proof sidecar of a channel signing request.
+// The peer validates the consignment against Bitcoin before authorizing the
+// asset distribution. It is never an indexer-supplied RGB balance.
+type RGB11SigningProof struct {
+	Consignment []byte   `json:"consignment"`
+	ChangeSeals [][]byte `json:"changeSeals,omitempty"`
 }
 type RemoteSignMoreData struct {
-	Tx                []*TxSignInfo `json:"tx1"`
-	Witness           []byte        `json:"witness"`
-	Action            string        `json:"action"`
-	MoreData          []byte        `json:"more"` // 有时候Tx中无法放入足够数据
+	Tx       []*TxSignInfo `json:"tx1"`
+	Witness  []byte        `json:"witness"`
+	Action   string        `json:"action"`
+	MoreData []byte        `json:"more"` // 有时候Tx中无法放入足够数据
 }
 type RemoteSignMoreData_Sweep = RemoteSignMoreData
 type RemoteSignMoreData_Ascend = RemoteSignMoreData

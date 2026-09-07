@@ -72,6 +72,13 @@ func (p *Manager) CoBatchSendAssetsV3FromAddress(localWallet common.Wallet, dest
 			localWallet = channel.LocalWallet()
 		}
 	}
+	if name.Protocol == "rgb11" {
+		md, err := json.Marshal(wwire.RemoteSignMoreData{Action: action, MoreData: memo})
+		if err != nil {
+			return "", 0, err
+		}
+		return p.SendRGB11FromChannel(localWallet, dest, assetNameStr, feeRate, channelId, reason, md, payFeeByLocalAddress, true)
+	}
 	var tx *wire.MsgTx
 	var prevFetcher *txscript.MultiPrevOutFetcher
 	var fee int64
@@ -166,6 +173,16 @@ func (p *Manager) CoBatchSendV4(localWallet common.Wallet, dest []*SendAssetInfo
 	assetName := GetAssetName(tickerInfo)
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
+	}
+	if asset.Protocol == "rgb11" {
+		if sendDeAnchorTx {
+			return "", 0, ErrRGB11STPUnavailable
+		}
+		md, err := json.Marshal(wwire.RemoteSignMoreData{Action: action, MoreData: memo})
+		if err != nil {
+			return "", 0, err
+		}
+		return p.SendRGB11FromChannel(localWallet, dest, assetNameStr, feeRate, channelId, reason, md, payFeeByCurrentAddress, excludeRecentBlock)
 	}
 
 	excluded := make(map[string]bool)
@@ -262,7 +279,7 @@ func (p *Manager) CoBatchSendV4_SatsNet(localWallet common.Wallet, dest []*SendA
 	if asset == nil {
 		return "", fmt.Errorf("invalid asset name %s", assetName)
 	}
-	if p.getTickerInfo(asset) == nil {
+	if p.getSendTickerInfo_SatsNet(asset) == nil {
 		return "", fmt.Errorf("can't get ticker %s info", assetName)
 	}
 

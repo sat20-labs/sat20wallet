@@ -87,7 +87,7 @@ func TestRGB11AccountManagedProviderExcludesLocalReceiveTasks(t *testing.T) {
 	}
 }
 
-func TestRGB11AccountManagedProviderMissingPayloadClearsStaleScope(t *testing.T) {
+func TestRGB11AccountManagedProviderMissingPayloadPreservesWalletLocalScope(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
@@ -130,8 +130,8 @@ func TestRGB11AccountManagedProviderMissingPayloadClearsStaleScope(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(full.EngineRecords) != 0 || len(full.ProjectionRecords) != 0 {
-		t.Fatalf("stale scope survived authoritative empty import: %+v", full)
+	if len(full.EngineRecords) != 1 || len(full.ProjectionRecords) != 0 {
+		t.Fatalf("wallet-local scope was not preserved by empty durable import: %+v", full)
 	}
 }
 
@@ -283,15 +283,25 @@ func TestRGB11AccountManagedProviderRestoresDurableOwnershipWithoutLocalTasks(t 
 		t.Fatal(err)
 	}
 	targetProvider := &rgb11AccountManagedDataProvider{owner: target}
-	if err := targetProvider.Import(targetCatalog, payloads); err != nil {
-		t.Fatal(err)
-	}
 	targetAccounts, err := targetProvider.accountsByScope()
 	if err != nil {
 		t.Fatal(err)
 	}
 	targetScoped, err := target.newScopedRGB11Manager(targetAccounts[targetCatalog.Scopes[0].ID()])
 	if err != nil {
+		t.Fatal(err)
+	}
+	addRGB11RecoveryReceive(t, target, targetAccounts[targetCatalog.Scopes[0].ID()], "target-local-receive")
+	const localTransferID = "target-local-transfer"
+	if err := targetScoped.rgbManager.projectionStore.SaveTransferState(&rgb11wallet.TransferState{
+		TransferID: localTransferID, Direction: "receive", Status: "pending",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// This unit test verifies import persistence only. Chain reconciliation is
+	// covered with an injected evidence provider in rgb11_chain_reconciliation_test.go.
+	target.rgbManager.scopeStates = nil
+	if err := targetProvider.Import(targetCatalog, payloads); err != nil {
 		t.Fatal(err)
 	}
 	proof, err := targetScoped.rgbManager.projectionStore.LoadProof(outpoint, assetName)
@@ -310,7 +320,11 @@ func TestRGB11AccountManagedProviderRestoresDurableOwnershipWithoutLocalTasks(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(full.EngineRecords) != 0 {
-		t.Fatalf("wallet-local receive task leaked into recovered engine state: %d records", len(full.EngineRecords))
+	if len(full.EngineRecords) != 1 {
+		t.Fatalf("wallet-local receive task was not preserved: %d records", len(full.EngineRecords))
+	}
+	transfer, err := targetScoped.rgbManager.projectionStore.LoadTransferState(localTransferID)
+	if err != nil || transfer == nil || transfer.Status != "pending" {
+		t.Fatalf("wallet-local transfer lifecycle was not preserved: transfer=%+v err=%v", transfer, err)
 	}
 }

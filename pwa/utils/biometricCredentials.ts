@@ -499,7 +499,7 @@ export class BiometricCredentialManager {
   }
 
   public async createCredential(
-    hashedPassword: string,
+		password: string,
     name = 'SAT20 钱包生物识别凭据'
   ): Promise<{ success: boolean; credentialId?: string; error?: string }> {
     try {
@@ -524,7 +524,7 @@ export class BiometricCredentialManager {
         : await this.getPrfOutput(credential)
 
       credential.prfMode = prfResult.mode
-      const encrypted = await encryptPasswordWithPrf(hashedPassword, prfResult.output)
+		const encrypted = await encryptPasswordWithPrf(password, prfResult.output)
 
       credential.iv = encrypted.iv
       credential.encryptedPassword = encrypted.encryptedPassword
@@ -672,8 +672,8 @@ export class BiometricCredentialManager {
 
 export const biometricCredentialManager = new BiometricCredentialManager()
 
-export const createBiometricCredential = (hashedPassword: string, name?: string) =>
-  biometricCredentialManager.createCredential(hashedPassword, name)
+export const createBiometricCredential = (password: string, name?: string) =>
+	biometricCredentialManager.createCredential(password, name)
 export const verifyBiometricCredential = () =>
   biometricCredentialManager.verifyCredential()
 export const getBiometricCredentials = () => biometricCredentialManager.getCredentials()

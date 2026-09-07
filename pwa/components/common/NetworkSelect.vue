@@ -62,7 +62,7 @@ const networks: NetworkItem[] = [
     name: 'Mainnet',
     icon: 'cryptocurrency:btc',
     iconColor: 'text-orange-500',
-    value: Network.LIVENET,
+    value: Network.MAINNET,
   },
   {
     name: 'Testnet',

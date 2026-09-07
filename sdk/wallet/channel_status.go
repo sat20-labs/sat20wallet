@@ -22,6 +22,9 @@ const (
 	CS_FUNDING_CONFIRMED   ChannelStatus = 2
 	CS_ANCHOR_BROADCASTED  ChannelStatus = 3
 	CS_ANCHOR_CONFIRMED    ChannelStatus = 4
+	// CS_ANCHOR_RECOVERABLE is testnet-only: the persisted opening anchor
+	// disappeared after a chain rollback and cannot currently be replayed.
+	CS_ANCHOR_RECOVERABLE ChannelStatus = 5
 
 	// 8-15 closing
 	CS_CLOSING_STARTED              ChannelStatus = 7

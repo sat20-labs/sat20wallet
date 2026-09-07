@@ -1,10 +1,119 @@
 package wallet
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 )
+
+func TestLocalActionConfirmedCallbackIgnoresStaleChainTick(t *testing.T) {
+	manager := &Manager{localActionPerformMap: make(map[int64]Reservation)}
+	resv := &LocalActionPerformData{
+		ReservationBase: newReservationBase(5, RS_PERFORM_ACTION_TX_BROADCASTED, nil),
+		Action:          LOCAL_ACTION_LOCK_WITH_EXPAND,
+		TxId:            "53af8eaf-new-l1-carrier-3d70",
+		IsL1Tx:          true,
+	}
+	manager.localActionPerformMap[resv.Id] = resv
+
+	applied, err := manager.handleLocalActionTxConfirmed(resv.Id,
+		RS_PERFORM_ACTION_TX_BROADCASTED, "old-l2-withdraw", false)
+	if err != nil {
+		t.Fatalf("stale confirmation callback: %v", err)
+	}
+	if applied {
+		t.Fatal("stale L2 confirmation callback was applied")
+	}
+	if resv.Status != RS_PERFORM_ACTION_TX_BROADCASTED || !resv.IsL1Tx ||
+		resv.TxId != "53af8eaf-new-l1-carrier-3d70" {
+		t.Fatalf("stale callback changed replacement transaction: status=%x l1=%v tx=%s",
+			resv.Status, resv.IsL1Tx, resv.TxId)
+	}
+}
+
+func TestLocalActionConfirmedCallbackAppliesOverlappingTickOnce(t *testing.T) {
+	database := newMemoryKVDB()
+	manager := &Manager{db: database, localActionPerformMap: make(map[int64]Reservation)}
+	resv := &LocalActionPerformData{
+		ReservationBase: newReservationBase(6, RS_PERFORM_ACTION_TX_BROADCASTED, nil),
+		Action:          LOCAL_ACTION_CONFIRM_TX_L2,
+		TxId:            "overlapping-l2-tx",
+		IsL1Tx:          false,
+	}
+	manager.localActionPerformMap[resv.Id] = resv
+
+	const ticks = 16
+	var applied atomic.Int32
+	errorsByTick := make(chan error, ticks)
+	var workers sync.WaitGroup
+	for index := 0; index < ticks; index++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			changed, err := manager.handleLocalActionTxConfirmed(resv.Id,
+				RS_PERFORM_ACTION_TX_BROADCASTED, "overlapping-l2-tx", false)
+			if changed {
+				applied.Add(1)
+			}
+			errorsByTick <- err
+		}()
+	}
+	workers.Wait()
+	close(errorsByTick)
+	for err := range errorsByTick {
+		if err != nil {
+			t.Fatalf("overlapping confirmation callback: %v", err)
+		}
+	}
+	if applied.Load() != 1 {
+		t.Fatalf("confirmation applied %d times, want 1", applied.Load())
+	}
+	if resv.Status != RS_PERFORM_ACTION_COMPLETED {
+		t.Fatalf("unexpected final status %x", resv.Status)
+	}
+}
+
+func TestLocalActionConfirmedWaitTickDoesNotRepeatConfirmationLog(t *testing.T) {
+	database := newMemoryKVDB()
+	manager := &Manager{db: database, localActionPerformMap: make(map[int64]Reservation)}
+	resv := &LocalActionPerformData{
+		ReservationBase: newReservationBase(7, RS_PERFORM_ACTION_TX_CONFIRMED, nil),
+		Action:          LOCAL_ACTION_LOCK_WITH_EXPAND,
+		TxId:            "confirmed-l2-withdraw",
+		IsL1Tx:          false,
+	}
+	manager.localActionPerformMap[resv.Id] = resv
+	record, err := manager.BeginOperationLog(OperationLogCreate{
+		Category: "channel", Action: LOCAL_ACTION_LOCK_WITH_EXPAND,
+		Title: "Lock with expand", Summary: "Waiting for carrier",
+	})
+	if err != nil {
+		t.Fatalf("begin operation log: %v", err)
+	}
+	if err := manager.BindOperationLogReservation(record.ID, RESV_TYPE_LOCALACTION, resv.Id); err != nil {
+		t.Fatalf("bind operation log: %v", err)
+	}
+
+	before, err := manager.GetOperationLog(record.ID)
+	if err != nil {
+		t.Fatalf("read operation log before wait tick: %v", err)
+	}
+	applied, callbackErr := manager.handleLocalActionTxConfirmed(resv.Id,
+		RS_PERFORM_ACTION_TX_CONFIRMED, "confirmed-l2-withdraw", false)
+	if !applied || callbackErr == nil {
+		t.Fatalf("wait tick result: applied=%v err=%v", applied, callbackErr)
+	}
+	after, err := manager.GetOperationLog(record.ID)
+	if err != nil {
+		t.Fatalf("read operation log after wait tick: %v", err)
+	}
+	if len(after.History) != len(before.History) {
+		t.Fatalf("confirmed wait tick appended operation log history: before=%d after=%d",
+			len(before.History), len(after.History))
+	}
+}
 
 func TestFindWalletByPubKeySkipsLockedWalletEntries(t *testing.T) {
 	w := NewInternalWalletWithMnemonic(
@@ -139,7 +248,7 @@ func TestResumeLockWithExpandFromL1TxPersistsExistingCarrier(t *testing.T) {
 		t.Fatalf("unexpected resumed state: tx=%s l1=%v status=%x", resv.TxId, resv.IsL1Tx, resv.Status)
 	}
 
-	loaded, ok := LoadAllResvFromDB(database, nil)[resv.Id].(*LocalActionPerformData)
+	loaded, ok := mustLoadAllResv(t, database)[resv.Id].(*LocalActionPerformData)
 	if !ok || loaded.TxId != carrierTxID || !loaded.IsL1Tx || loaded.Status != RS_PERFORM_ACTION_TX_BROADCASTED {
 		t.Fatalf("resumed carrier was not persisted: %+v", loaded)
 	}

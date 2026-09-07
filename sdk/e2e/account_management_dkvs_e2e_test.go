@@ -103,7 +103,6 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	accountID := dkvsindexer.AccountID(pubKey)
 	prefix, err := dkvsindexer.AccountPersonalKey(accountID, "account/recovery")
 	require.NoError(t, err)
-	minerClient := dkvsClientForNode(t, fixture.Network.Miner)
 
 	guardianPrivate, guardianPublic, err := account.GenerateGuardianKey(nil)
 	require.NoError(t, err)
@@ -131,15 +130,17 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	coreLocation := locationForNode(fixture.Network.Core)
 	database := indexerdb.NewKVDB(t.TempDir())
 	defer database.Close()
-	walletManager := wallet.NewManager(&sdkcommon.Config{
+	walletConfig := &sdkcommon.Config{
 		Env: "test", Chain: "testnet",
 		IndexerL1: &sdkcommon.Indexer{
 			Scheme: bootstrapLocation.Scheme, Host: bootstrapLocation.Host, Proxy: bootstrapLocation.Proxy,
 		},
 		IndexerL2: &sdkcommon.Indexer{
-			Scheme: bootstrapLocation.Scheme, Host: bootstrapLocation.Host, Proxy: bootstrapLocation.Proxy,
+			Scheme: coreLocation.Scheme, Host: coreLocation.Host, Proxy: coreLocation.Proxy,
 		},
-	}, database)
+	}
+	walletConfig.Peers = []string{"s@" + fixture.Network.Core.nodePubKey + "@http://" + fixture.Network.Core.stpAddr + "/testnet"}
+	walletManager := wallet.NewManager(walletConfig, database)
 	require.NotNil(t, walletManager)
 	defer walletManager.Close()
 	require.NoError(t, walletManager.RegisterAccountManagedDataProvider(&e2eAccountManagedProvider{}))
@@ -149,7 +150,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.Equal(t, pubKey, walletManager.GetWallet().GetPubKey().SerializeCompressed())
 	authorization := wallet.AccountStorageAuthorization{
 		ID: wallet.AccountStoragePaid, Mode: wallet.AccountStoragePaid,
-		RecordOptions: recordOptions, Autopay: &autopay, Location: bootstrapLocation,
+		RecordOptions: recordOptions, Autopay: &autopay, Location: coreLocation,
 	}
 	repository, err := walletManager.NewAccountRepositoryForStorage(authorization)
 	require.NoError(t, err)
@@ -172,23 +173,26 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	guardianKey, err := dkvsindexer.MailShareKey(accountID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
 	require.NoError(t, err)
-	writtenAccountValues := map[string][]byte{
-		packageKey: packageBytes, guardianKey: guardianBytes,
-	}
-	for key, value := range writtenAccountValues {
-		requireDKVSValue(t, fixture.Network.Bootstrap, key, value)
-		requireDKVSValue(t, fixture.Network.Core, key, value)
-	}
+	// Canonical recovery package data relays normally. The guardian share is
+	// AccountBound mailbox data and remains only on the selected CoreNode even
+	// when another miner subscribes to /mail.
+	requireDKVSValue(t, fixture.Network.Core, packageKey, packageBytes)
+	requireDKVSValue(t, fixture.Network.Bootstrap, packageKey, packageBytes)
+	requireDKVSValue(t, fixture.Network.Core, guardianKey, guardianBytes)
+	requireDKVSAbsent(t, fixture.Network.Bootstrap, guardianKey)
+
 	// Subscribe only after the records exist, then add the direct core peer.
-	// This provides a deterministic path-repair barrier for the selective miner.
-	_, _, err = minerClient.SubscribePrefix(prefix)
-	require.NoError(t, err)
-	_, _, err = minerClient.SubscribeMailbox(accountID)
-	require.NoError(t, err)
+	// Canonical personal data repairs to the selective miner; AccountBound mail
+	// must not enter the ordinary miner replication path.
+	require.NoError(t, subscribeDKVSNodeInternal(t, fixture.Network.Miner, dkvsindexer.Subscription{
+		Type: dkvsindexer.SubscriptionPrefix, Target: prefix,
+	}))
+	require.NoError(t, subscribeDKVSNodeInternal(t, fixture.Network.Miner, dkvsindexer.Subscription{
+		Type: dkvsindexer.SubscriptionMailbox, Target: "/mail/" + accountID,
+	}))
 	require.NoError(t, connectNode(fixture.Network.Miner, fixture.Network.Core))
-	for key, value := range writtenAccountValues {
-		requireDKVSValue(t, fixture.Network.Miner, key, value)
-	}
+	requireDKVSValue(t, fixture.Network.Miner, packageKey, packageBytes)
+	requireDKVSAbsent(t, fixture.Network.Miner, guardianKey)
 
 	coreClient := dkvsClientForNode(t, fixture.Network.Core)
 	loaded, err := walletManager.LoadAccountRecoveryPackage(coreLocation, pkg.Envelope.Locator)

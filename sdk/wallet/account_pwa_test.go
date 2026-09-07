@@ -74,9 +74,7 @@ func TestPrepareAccountRestoreRejectsDuplicateIdentityWithoutWriting(t *testing.
 		{Name: "Root", Mnemonic: mnemonic, AccountCount: 1, SubAccounts: []account.SubAccount{{Index: 0, Name: "Account 1"}}},
 		{Name: "Duplicate", Mnemonic: mnemonic, AccountCount: 1, SubAccounts: []account.SubAccount{{Index: 0, Name: "Account 1"}}},
 	}}
-	manager.mutex.Lock()
 	_, err := manager.prepareAccountRestoreLocked(backup, "password123")
-	manager.mutex.Unlock()
 	if err == nil {
 		t.Fatal("duplicate wallet identity was accepted")
 	}
@@ -101,12 +99,12 @@ func TestPersistPreparedAccountRestoreCommitsCatalogAndStatusTogether(t *testing
 		Name: "Root", Mnemonic: mnemonic, AccountCount: 2,
 		SubAccounts: []account.SubAccount{{Index: 0, Name: "Primary", DID: "did:root"}, {Index: 1, Name: "Second", DID: "did:second"}},
 	}}}
-	manager.mutex.Lock()
 	prepared, err := manager.prepareAccountRestoreLocked(backup, "password123")
 	if err == nil {
+		manager.mutex.Lock()
 		err = manager.persistPreparedAccountRestoreLocked(prepared, nil)
+		manager.mutex.Unlock()
 	}
-	manager.mutex.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,25 +1,20 @@
 <template>
-  <LayoutApprove @confirm="confirm" @cancel="cancel">
-    <div class="p-4">
-      <h2 class="text-2xl font-semibold text-center mb-4">{{ $t('signMessage.title') }}</h2>
-      <p class="text-xs text-gray-400 text-center mb-2">
-        {{ $t('signMessage.warning') }}
-      </p>
-      <p class="text-center text-base mb-2">{{ $t('signMessage.signing') }}</p>
-      <div class="mb-3 rounded-md border p-3 space-y-2 bg-muted/50">
-        <div class="flex items-center justify-between gap-3">
-          <p class="text-xs text-muted-foreground">Signature payload</p>
-          <span class="rounded-sm border px-2 py-0.5 text-xs font-medium">{{ signatureSummary.title }}</span>
-        </div>
-        <p v-if="signatureSummary.warning" class="text-xs text-destructive">{{ signatureSummary.warning }}</p>
-        <div v-for="row in signatureSummary.rows" :key="row.key">
-          <p class="text-xs text-muted-foreground">{{ row.key }}</p>
-          <p class="text-sm font-mono break-all">{{ row.value }}</p>
-        </div>
+  <LayoutApprove :confirm-disabled="!canSign" @confirm="confirm" @cancel="cancel">
+    <div class="p-4 space-y-3">
+      <h2 class="text-2xl font-semibold text-center">Sign SAT20 Wallet Message</h2>
+      <p class="text-xs text-destructive text-center">Verify the requesting origin and digest before signing.</p>
+      <div class="rounded-md border p-3 space-y-2 bg-muted/50 text-sm">
+        <div><p class="text-xs text-muted-foreground">Domain</p><p class="font-mono">SAT20 Wallet Message / v1</p></div>
+        <div><p class="text-xs text-muted-foreground">Origin</p><p class="font-mono break-all">{{ data.origin || 'unknown' }}</p></div>
+        <div><p class="text-xs text-muted-foreground">Network</p><p class="font-mono">{{ data.network || 'unknown' }}</p></div>
+        <div><p class="text-xs text-muted-foreground">Timestamp</p><p class="font-mono">{{ data.timestamp || 'unknown' }}</p></div>
+        <div><p class="text-xs text-muted-foreground">Nonce</p><p class="font-mono break-all">{{ data.nonce || 'unknown' }}</p></div>
+        <div><p class="text-xs text-muted-foreground">SHA-256 digest</p><p class="font-mono break-all">{{ data.digest || 'unknown' }}</p></div>
       </div>
       <Alert>
-        <AlertTitle class="text-center text-base break-all">{{ props.data.message }}</AlertTitle>
+        <AlertTitle class="text-center text-base break-all">{{ data.message }}</AlertTitle>
       </Alert>
+      <p v-if="!canSign" class="text-sm text-destructive text-center">Raw or incomplete DApp signing requests are refused.</p>
     </div>
   </LayoutApprove>
 </template>
@@ -29,33 +24,36 @@ import { computed } from 'vue'
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
 import { Alert, AlertTitle } from '@/components/ui/alert'
 import walletManager from '@/utils/sat20'
-import { summarizeSignaturePayload } from '@/composables/usePwaAgentRiskPolicy'
+import { assertWalletIdentityReady } from '@/lib/identity-boundary'
 
 interface Props {
-  data: any
+  data: {
+    message?: string
+    domainPayload?: string
+    digest?: string
+    origin?: string
+    network?: string
+    timestamp?: string
+    nonce?: string
+  }
+  metadata?: { identityGeneration?: number }
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits(['confirm', 'cancel'])
-
-const signaturePayload = computed(() => props.data.message ?? props.data.data ?? '')
-const signatureSummary = computed(() => summarizeSignaturePayload(signaturePayload.value))
+const canSign = computed(() => Boolean(
+  props.data.domainPayload && /^[0-9a-f]{64}$/.test(props.data.digest ?? '') &&
+  props.metadata?.identityGeneration,
+))
 
 const confirm = async () => {
-  // await walletStore.setNetwork(props.data.network)
-  const message = props.data.message ?? props.data.data ?? ''
-  const [err, res] = props.data.signData
-    ? await walletManager.signData(message)
-    : await walletManager.signMessage(message)
-  console.log(err, res);
-  if (res) {
-    emit('confirm', res)
-  }
+  if (!canSign.value || !props.data.domainPayload) return
+  assertWalletIdentityReady(props.metadata?.identityGeneration)
+  const [error, result] = await walletManager.signMessage(props.data.domainPayload)
+  if (error || !result) throw error || new Error('Wallet did not return a message signature')
+  assertWalletIdentityReady(props.metadata?.identityGeneration)
+  emit('confirm', result)
+}
 
-}
-const cancel = () => {
-  emit('cancel')
-}
+const cancel = () => emit('cancel')
 </script>
-
-<style lang="less" scoped></style>

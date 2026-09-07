@@ -47,6 +47,17 @@ func (s *ProjectionStore) SetScope(scope string) error {
 	return nil
 }
 
+// ClearScope makes every scoped operation fail until a valid unlocked wallet
+// identity is selected again.
+func (s *ProjectionStore) ClearScope() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.scope = ""
+	s.mu.Unlock()
+}
+
 func (s *ProjectionStore) scopedPrefix(prefix string) ([]byte, error) {
 	s.mu.RLock()
 	scope := s.scope

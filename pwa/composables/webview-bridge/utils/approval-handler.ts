@@ -2,12 +2,23 @@ import { useApproveStore } from "../../../store";
 import { Message } from "../../../types/message";
 import { ApprovalMetadata } from "../types";
 import { BrowserManager } from "./browser-manager";
-import { LOG_PREFIXES } from "../constants";
 import { walletStorage } from "@/lib/walletStorage";
 import service from "@/lib/service";
 import sat20Wallet from "@/utils/sat20";
+import { getDappActionPolicy, hasApprovalRenderer } from "@/lib/dapp-policy";
+import { assertWalletIdentityReady } from "@/lib/identity-boundary";
+import { assertNoMnemonicView } from "@/lib/sensitive-session";
+
+export interface ApprovalRequestContext {
+  origin: string;
+  url?: string;
+  expiresAt?: number;
+  identityGeneration?: number;
+}
 
 export class ApprovalHandler {
+  private readonly approvedDirectToken = Symbol("approved-dapp-operation");
+
   constructor(private browserManager: BrowserManager) {}
 
   /**
@@ -17,66 +28,78 @@ export class ApprovalHandler {
     action: Message.MessageAction,
     data: any,
     callbackId: string,
-    currentUrl: string
+    currentUrl: string | ApprovalRequestContext
   ): Promise<T> {
+    const approveStore = useApproveStore();
     try {
-      console.log(`${LOG_PREFIXES.WALLET_APPROVAL} Starting wallet approval for ${action}`, {
-        action,
-        data,
-        callbackId,
-      });
+	  assertNoMnemonicView();
+	  const identityGeneration = assertWalletIdentityReady(
+		  typeof currentUrl === "string" ? undefined : currentUrl.identityGeneration
+	  );
+      if (!hasApprovalRenderer(action)) {
+        throw new Error(`Wallet approval renderer is unavailable for ${action}`);
+      }
 
       // 隐藏InAppBrowser以便显示钱包弹窗
       this.browserManager.hideBrowser();
 
-      const approveStore = useApproveStore();
-
       // 构建完整的metadata，包含必要的origin信息
-      let origin = "inappbrowser";
-      if (currentUrl) {
+      let origin = typeof currentUrl === "string" ? "inappbrowser" : currentUrl.origin;
+      const url = typeof currentUrl === "string" ? currentUrl : (currentUrl.url ?? currentUrl.origin);
+      if (typeof currentUrl === "string" && currentUrl) {
         try {
           origin = new URL(currentUrl).origin;
-        } catch (error) {
-          console.warn(
-            "⚠️ Failed to parse URL for origin:",
-            currentUrl,
-            error
-          );
-          origin = "inappbrowser";
+        } catch {
+          throw new Error("Invalid DApp approval origin");
         }
       }
 
       const metadata: ApprovalMetadata = {
         callbackId,
+        requestId: callbackId,
         origin,
-        dAppOrigin: "inappbrowser",
-        platform: "inappbrowser",
-        url: currentUrl,
+        dAppOrigin: origin,
+        platform: "pwa",
+        url,
+        action,
+        expiresAt: typeof currentUrl === "string" ? undefined : currentUrl.expiresAt,
+		identityGeneration,
       };
-
-      console.log(`📋 Approval metadata:`, metadata);
+      const approvalId = `${origin}\0${callbackId}`;
 
       // 使用全局弹窗显示授权请求
       const result = await approveStore.showApprove({
         action,
-        data: { ...data, callbackId, dAppOrigin: "inappbrowser" },
+        id: approvalId,
+        data: { ...data, callbackId, dAppOrigin: origin },
         metadata,
       });
-
-      console.log(`✅ ${action} approved:`, result);
+	  assertNoMnemonicView();
+	  assertWalletIdentityReady(action === Message.MessageAction.SWITCH_NETWORK ? undefined : identityGeneration);
 
       // 显示InAppBrowser
-      this.browserManager.showBrowser();
+      if (!approveStore.isVisible.value) this.browserManager.showBrowser();
 
       return result as T;
     } catch (error) {
-      console.error(`❌ ${action} rejected:`, error);
-
       // 确保显示InAppBrowser，即使用户拒绝了
-      this.browserManager.showBrowser();
+      if (!approveStore.isVisible.value) this.browserManager.showBrowser();
 
       throw error;
     }
+  }
+
+  async handleApprovedDirectRequest<T>(
+    action: Message.MessageAction,
+    data: any,
+    callbackId: string,
+    context: string | ApprovalRequestContext
+  ): Promise<T> {
+	const identityGeneration = assertWalletIdentityReady(
+		typeof context === "string" ? undefined : context.identityGeneration
+	);
+    await this.handleWalletApproval(action, data, callbackId, context);
+    return this.handleDirectRequest(action, data, this.approvedDirectToken, identityGeneration);
   }
 
   /**
@@ -84,11 +107,18 @@ export class ApprovalHandler {
    */
   async handleDirectRequest<T>(
     action: Message.MessageAction,
-    data: any
+    data: any,
+    approvalToken?: symbol,
+	expectedGeneration?: number
   ): Promise<T> {
     try {
-      console.log(`${LOG_PREFIXES.DIRECT_REQUEST} Handling direct request: ${action}`, { action, data });
-
+	  assertNoMnemonicView();
+	  assertWalletIdentityReady(expectedGeneration);
+      const policy = getDappActionPolicy(action);
+      if (!policy) throw new Error(`Unsupported DApp action: ${action}`);
+      if (policy.approval !== "none" && approvalToken !== this.approvedDirectToken) {
+        throw new Error(`Per-request wallet approval is required for ${action}`);
+      }
       // 确保钱包状态已初始化
       await walletStorage.initializeState();
       const hasWallet = await service.getHasWallet();
@@ -132,22 +162,26 @@ export class ApprovalHandler {
           result = lockedSNRes;
           break;
         case Message.MessageAction.LOCK_UTXO:
-          const [lockErr, lockRes] = await service.lockUtxo(data.address, data.utxo, data.reason);
+          if (!data.__dappOwner) throw new Error("DApp lock owner is required");
+          const [lockErr, lockRes] = await service.lockUtxoForOwner(data.address, data.utxo, data.reason, data.__dappOwner);
           if (lockErr) throw lockErr;
           result = lockRes;
           break;
         case Message.MessageAction.LOCK_UTXO_SATSNET:
-          const [lockSNErr, lockSNRes] = await service.lockUtxo_SatsNet(data.address, data.utxo, data.reason);
+          if (!data.__dappOwner) throw new Error("DApp lock owner is required");
+          const [lockSNErr, lockSNRes] = await service.lockUtxoForOwner_SatsNet(data.address, data.utxo, data.reason, data.__dappOwner);
           if (lockSNErr) throw lockSNErr;
           result = lockSNRes;
           break;
         case Message.MessageAction.UNLOCK_UTXO:
-          const [unlockErr, unlockRes] = await service.unlockUtxo(data.address, data.utxo);
+          if (!data.__dappOwner) throw new Error("DApp lock owner is required");
+          const [unlockErr, unlockRes] = await service.unlockUtxoForOwner(data.address, data.utxo, data.__dappOwner);
           if (unlockErr) throw unlockErr;
           result = unlockRes;
           break;
         case Message.MessageAction.UNLOCK_UTXO_SATSNET:
-          const [unlockSNErr, unlockSNRes] = await service.unlockUtxo_SatsNet(data.address, data.utxo);
+          if (!data.__dappOwner) throw new Error("DApp lock owner is required");
+          const [unlockSNErr, unlockSNRes] = await service.unlockUtxoForOwner_SatsNet(data.address, data.utxo, data.__dappOwner);
           if (unlockSNErr) throw unlockSNErr;
           result = unlockSNRes;
           break;
@@ -340,10 +374,10 @@ export class ApprovalHandler {
           throw new Error(`Unsupported direct request action: ${action}`);
       }
 
-      console.log(`✅ Direct request ${action} completed:`, result);
+	  assertNoMnemonicView();
+	  assertWalletIdentityReady(expectedGeneration);
       return result as T;
     } catch (error) {
-      console.error(`❌ Direct request ${action} failed:`, error);
       throw error;
     }
   }

@@ -15,11 +15,13 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
+	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	sdkcommon "github.com/sat20-labs/sat20wallet/sdk/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/btcec"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 type rgb11AddressEvidence struct {
@@ -145,36 +147,72 @@ func TestRGB11AddressCodecsAndAccountEncryption(t *testing.T) {
 	}
 }
 
-func TestRGB11AddressMailboxSequenceAdvances(t *testing.T) {
-	senderPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	receiverPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	sender := dkvsTestWalletFromPriv(t, senderPriv)
-	receiverID, err := dkvsindexer.CanonicalAccountID(receiverPriv.PubKey().SerializeCompressed())
-	if err != nil {
-		t.Fatal(err)
+func TestRGB11AddressMailboxUsesMessageManagerSenderSequence(t *testing.T) {
+	senderWallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
+	)
+	receiverWallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
+	)
+	if senderWallet == nil || receiverWallet == nil {
+		t.Fatal("create message wallets")
 	}
 	remote := newRGB11MemoryDKVSHTTP()
-	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
-	transferID := strings.Repeat("1", 64)
-	key, err := dkvsindexer.MailMsgKey(receiverID, dkvsindexer.AccountID(senderPriv.PubKey().SerializeCompressed()), transferID)
+	messageClient := newRGB11MessageNodeClient(remote)
+	newManager := func(wallet *InternalWallet) *Manager {
+		database := indexerdb.NewKVDB(t.TempDir())
+		if database == nil {
+			t.Fatal("create test database")
+		}
+		t.Cleanup(func() { _ = database.Close() })
+		manager := &Manager{
+			db: database, wallet: wallet,
+			walletInfoMap: map[int64]*WalletInfo{wallet.GetId(): {
+				WalletInDB: WalletInDB{Id: wallet.GetId(), Accounts: 1, Type: WALLET_TYPE_MNEMONIC}, Wallet: wallet,
+			}},
+			cfg: &sdkcommon.Config{Env: "test", Chain: "testnet", IndexerL2: &sdkcommon.Indexer{
+				Scheme: "http", Host: "dkvs.test", Proxy: "testnet",
+			}},
+			http: remote,
+		}
+		manager.serverNode = NewNode(messageClient, "message.test", SERVER_NODE,
+			messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey())
+		return manager
+	}
+	sender := newManager(senderWallet)
+	receiver := newManager(receiverWallet)
+	receiverID, err := dkvsAccountID(receiverWallet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := nextRGB11AddressRecordOptions(client, []string{key}, dkvsindexer.RecordOptions{TTL: 60_000})
-	first, err := client.SendAccountMailboxMessage(sender, receiverID, transferID, []byte{1}, opts, nil)
-	if err != nil || first.Seq != 1 {
-		t.Fatalf("first seq=%d err=%v", first.Seq, err)
+	if err := receiver.bindAccountToCurrentCoreNode(receiverWallet); err != nil {
+		t.Fatal(err)
 	}
-	opts = nextRGB11AddressRecordOptions(client, []string{key}, dkvsindexer.RecordOptions{TTL: 60_000})
-	second, err := client.SendAccountMailboxMessage(sender, receiverID, transferID, []byte{2}, opts, nil)
-	if err != nil || second.Seq != first.Seq+1 {
-		t.Fatalf("second seq=%d first=%d err=%v", second.Seq, first.Seq, err)
+	first, err := sender.sendWalletDirectMessage(senderWallet, strings.Repeat("1", 64),
+		AccountMessageKindRGB11Consignment, receiverID, []byte("first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := sender.sendWalletDirectMessage(senderWallet, strings.Repeat("2", 64),
+		AccountMessageKindRGB11Consignment, receiverID, []byte("second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SenderMsgID != 0 || second.SenderMsgID != 1 {
+		t.Fatalf("sender sequence first=%d second=%d", first.SenderMsgID, second.SenderMsgID)
+	}
+	firstKey, _ := dkvsindexer.MailMsgKey(receiverID, first.SenderAccount, first.MessageID)
+	secondKey, _ := dkvsindexer.MailMsgKey(receiverID, second.SenderAccount, second.MessageID)
+	firstRecord, err := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote).GetRecord(firstKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRecord, err := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote).GetRecord(secondKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRecord.Seq != 1 || secondRecord.Seq != 1 || firstRecord.Key == secondRecord.Key {
+		t.Fatalf("immutable mailbox records first=%+v second=%+v", firstRecord, secondRecord)
 	}
 }
 
@@ -232,12 +270,17 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 	remote := newRGB11MemoryDKVSHTTP()
 	client := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	messageClient := newRGB11MessageNodeClient(remote)
 	configure := func(manager *Manager) {
 		manager.cfg = &sdkcommon.Config{
 			Env: "test", Chain: "testnet",
 			IndexerL2: &sdkcommon.Indexer{Scheme: "http", Host: "dkvs.test", Proxy: "testnet"},
 		}
 		manager.http = remote
+		manager.serverNode = NewNode(
+			messageClient, "message.test", SERVER_NODE,
+			messageClient.CoreNodePubKey(), messageClient.CoreNodePubKey(),
+		)
 	}
 	configure(sender)
 	configure(recipient)
@@ -261,11 +304,21 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mailboxTarget, err := mailboxSubscriptionTarget(endpoint.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recipient.SubscribeDKVSPrefix(mailboxTarget); err != nil {
+		t.Fatal(err)
+	}
 	capabilityRecord, err := client.GetRecord(endpoint.CapabilityRecordKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(capabilityRecord.Value) != 2 || len(capabilityRecord.PubKey) != 0 || capabilityRecord.Version != dkvsindexer.Version {
+	descriptor, decodeErr := dkvsindexer.DecodeAccountServiceDescriptor(capabilityRecord.Value)
+	if decodeErr != nil || descriptor.AccountID != endpoint.AccountID ||
+		descriptor.Capabilities&dkvsindexer.AccountServiceCapabilityRGB11Direct == 0 ||
+		len(capabilityRecord.PubKey) != 0 || capabilityRecord.Version != dkvsindexer.Version {
 		t.Fatalf("capability value=%x pubkey=%x version=%d", capabilityRecord.Value, capabilityRecord.PubKey, capabilityRecord.Version)
 	}
 
@@ -293,7 +346,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstDelivery.Mode != "blob" || !firstDelivery.Temporary {
+	if firstDelivery.Mode != "direct" || !firstDelivery.Temporary {
 		t.Fatalf("first delivery=%+v", firstDelivery)
 	}
 	firstRecord, err := client.GetRecord(firstDelivery.RecordKey)
@@ -308,7 +361,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 	secondRecord, err := client.GetRecord(secondDelivery.RecordKey)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("second delivery=%+v first=%+v err=%v", secondDelivery, firstDelivery, err)
 	}
 	if secondRecord.Seq != firstRecord.Seq ||
 		dkvsindexer.RecordHash(secondRecord) != dkvsindexer.RecordHash(firstRecord) {
@@ -341,6 +394,73 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatal("address pending transfer absent from snapshot")
 	}
 
+	if _, err := sender.BroadcastRGB11AddressTransfer(prepared.State.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
+		t.Fatalf("address transfer broadcast before ACK: %v", err)
+	}
+
+	deliveryRecord, err := client.GetRecord(secondDelivery.RecordKey)
+	if err != nil {
+		t.Fatalf("post-broadcast delivery=%+v err=%v", secondDelivery, err)
+	}
+	senderID, err := dkvsAccountID(senderWallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedTransferID := strings.Repeat("a", 64)
+	if forgedTransferID == prepared.State.AddressMessageID {
+		forgedTransferID = strings.Repeat("b", 64)
+	}
+	forgedKey, err := dkvsindexer.MailMsgKey(endpoint.AccountID, senderID, forgedTransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged, err := NewDKVSAccountSignedRecord(senderWallet, forgedKey, deliveryRecord.Value,
+		dkvsindexer.RecordOptions{Seq: 1, TTL: recordOptions.TTL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientStore := mustRGB11ConfiguredStore(t, recipient)
+	if _, _, err := recipient.rgbManager.acceptRGB11AddressMailboxStore(
+		context.Background(), recipientStore, cloneDKVSValue(forged),
+		deliveryOptions,
+	); !errors.Is(err, ErrRGB11AddressMailbox) {
+		t.Fatalf("replayed consignment err=%v", err)
+	}
+
+	syncResult, err := recipient.SyncConfiguredRGB11AddressMailbox(
+		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if syncResult.Received != 1 || syncResult.Invalid != 0 || syncResult.ACKs != 0 {
+		t.Fatalf("mailbox sync=%+v", syncResult)
+	}
+	directMessages, err := sender.readWalletDirectMessages(senderWallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ackRecord *swire.DKVSRecord
+	for _, item := range directMessages {
+		if item != nil && item.Payload != nil &&
+			item.Payload.Kind == AccountMessageKindRGB11ACK &&
+			item.Payload.ApplicationID == prepared.State.AddressMessageID {
+			ackRecord = item.Record
+			break
+		}
+	}
+	if ackRecord == nil {
+		t.Fatalf("mailbox sync did not emit ACK: messages=%d", len(directMessages))
+	}
+	preparedOutpoint := fmt.Sprintf("%s:%d", prepared.State.WitnessTxID, prepared.State.RecipientVout)
+	locked := recipient.utxoLockerL1.GetLockedUtxoList()
+	if locked[preparedOutpoint] != nil {
+		t.Fatalf("prepared output was locked before broadcast: %+v", locked[preparedOutpoint])
+	}
+	if _, err := sender.AcceptRGB11AddressACK(ackRecord,
+		dkvsindexer.RecordVerificationOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	witnessTxID, err := sender.BroadcastRGB11AddressTransfer(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
@@ -371,54 +491,6 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 	baseEvidence.mu.Unlock()
 	evidence.setStatus(witnessTxID, rgb11wallet.BitcoinTxStatus{TxID: witnessTxID, InMempool: true})
-
-	deliveryRecord, err := client.GetRecord(secondDelivery.RecordKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	senderID, err := dkvsAccountID(senderWallet)
-	if err != nil {
-		t.Fatal(err)
-	}
-	forgedTransferID := strings.Repeat("a", 64)
-	if forgedTransferID == prepared.State.AddressMessageID {
-		forgedTransferID = strings.Repeat("b", 64)
-	}
-	forgedKey, err := dkvsindexer.MailMsgKey(endpoint.AccountID, senderID, forgedTransferID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	forged, err := NewDKVSAccountSignedRecord(senderWallet, forgedKey, deliveryRecord.Value,
-		dkvsindexer.RecordOptions{Seq: 1, TTL: recordOptions.TTL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	recipientStore := mustRGB11ConfiguredStore(t, recipient)
-	if _, _, err := recipient.rgbManager.acceptRGB11AddressMailboxStore(
-		context.Background(), recipientStore, cloneDKVSValue(forged),
-		deliveryOptions,
-	); !errors.Is(err, ErrRGB11AddressMailbox) {
-		t.Fatalf("replayed consignment err=%v", err)
-	}
-
-	receipt, ackRecord, err := recipient.rgbManager.acceptRGB11AddressMailboxStore(
-		context.Background(), recipientStore, cloneDKVSValue(deliveryRecord),
-		deliveryOptions,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if receipt.TransferID != prepared.State.TransferID || ackRecord == nil {
-		t.Fatalf("receipt=%+v ack=%+v", receipt, ackRecord)
-	}
-	locked := recipient.utxoLockerL1.GetLockedUtxoList()
-	if locked[recipientOutpoint] == nil || locked[recipientOutpoint].Reason != rgb11wallet.LockReasonPending {
-		t.Fatalf("mempool lock=%+v", locked[recipientOutpoint])
-	}
-	if _, err := sender.AcceptRGB11AddressACK(ackRecord,
-		dkvsindexer.RecordVerificationOptions{}); err != nil {
-		t.Fatal(err)
-	}
 	pending, err = sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
@@ -453,25 +525,67 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 			len(pending.RecipientConsignment), len(pending.LocalConsignment))
 	}
 
-	ackValue, err := rgb11wallet.EncodeAddressACK(RGB11AddressACK{Status: RGB11AddressACKNeedResend})
+	// ACK is now a normal MessageManager Direct message. The transport sender
+	// sequence is independent from the RGB11 transfer/application ID.
+	ackDirect, err := verifyAccountDirectRecord(senderID, ackRecord)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ackKey := pending.State.AckRecordKey
-	previousACK, err := client.GetRecord(ackKey)
+	recipientID, err := dkvsAccountID(recipientWallet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	updatedACK, err := client.SendAccountMailboxMessage(recipientWallet, senderID, pending.State.AddressMessageID,
-		ackValue, nextRGB11AddressRecordOptions(client, []string{ackKey}, recordOptions), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updatedACK.Seq != previousACK.Seq+1 {
-		t.Fatalf("ACK seq previous=%d updated=%d", previousACK.Seq, updatedACK.Seq)
+	if ackDirect.SenderAccount != recipientID || ackDirect.RecipientAccount != senderID ||
+		ackDirect.SenderMsgID != 0 {
+		t.Fatalf("unexpected MessageManager ACK envelope: %+v", ackDirect)
 	}
 
 	if _, err := hex.DecodeString(prepared.State.AddressMessageID); err != nil {
 		t.Fatalf("address message ID is not canonical hex: %v", err)
+	}
+}
+
+func TestRGB11AddressNACKCancelsBeforeBroadcast(t *testing.T) {
+	fixture := newExpiredCancelFixture(t, 1)
+	pending, err := fixture.manager.rgbManager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiverWallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch",
+		"", &chaincfg.TestNet4Params,
+	)
+	senderID, err := dkvsAccountID(fixture.manager.wallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiverID, err := dkvsAccountID(receiverWallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messageID := strings.Repeat("ab", 32)
+	pending.State.AddressMode = true
+	pending.State.TransportMode = RGB11AddressTransport
+	pending.State.Status = "delivered"
+	pending.State.AckStatus = "awaiting-persistence"
+	pending.State.SenderAccountID = senderID
+	pending.State.ReceiverAccountID = receiverID
+	pending.State.AddressMessageID = messageID
+	if err := fixture.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+		t.Fatal(err)
+	}
+	ack, err := fixture.manager.rgbManager.acceptRGB11AddressACKDecoded(
+		senderID, receiverID, messageID,
+		RGB11AddressACK{Status: RGB11AddressACKRejected},
+	)
+	if err != nil || ack == nil || ack.Status != RGB11AddressACKRejected {
+		t.Fatalf("reject ACK result=%+v err=%v", ack, err)
+	}
+	stored, err := fixture.manager.rgbManager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
+	if err != nil || stored.State.Status != "rejected" || stored.State.RejectReason != "recipient-rejected" {
+		t.Fatalf("address NACK state=%+v err=%v", stored, err)
+	}
+	if lock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]; lock != nil {
+		t.Fatalf("address NACK left input locked: %+v", lock)
 	}
 }

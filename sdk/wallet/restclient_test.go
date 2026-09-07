@@ -20,6 +20,7 @@ import (
 	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
@@ -1458,7 +1459,11 @@ func insertPkScript(pkScript []byte) int {
 	return len(_pkScripts) - 1
 }
 
-func (p *TestIndexerClient) TestRawTx(signedTxs []string) error {
+func (p *TestIndexerClient) TestRawTx_Bitcoin(signedTxs []string) error {
+	return nil
+}
+
+func (p *TestIndexerClient) TestRawTx_SatsNet(signedTxs []string) error {
 	return nil
 }
 
@@ -2722,7 +2727,7 @@ func (p *TestNodeClient) SendSplicingOutRevokeAndAckReq(info *SplicingReservatio
 	return err
 }
 
-func (p *TestNodeClient) SendActionResultNfty(msgId int64, action string, ret int, reason string) error {
+func (p *TestNodeClient) SendActionResultNfty(localWallet common.Wallet, msgId int64, action string, ret int, reason string) error {
 
 	// req := wwire.ActionResultNotify{
 	// 	Id:     msgId,

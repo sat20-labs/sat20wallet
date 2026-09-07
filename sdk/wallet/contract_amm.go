@@ -1080,7 +1080,7 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 				continue
 			}
 
-			kDivNewIn := indexer.DecimalDiv(p.k, indexer.DecimalAdd(assetAmtInPool, realSwapAmt))
+			kDivNewIn := indexer.DecimalDiv(p.k, assetAmtInPool.AddAlignPrecision(realSwapAmt))
 			outValue := satsValueInPool - kDivNewIn.Ceil()
 
 			if outValue <= 0 { // 不大可能走这里
@@ -1115,7 +1115,6 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 				continue
 			}
 
-			realSwapAmt.SetPrecision(p.dealDivisibility)
 			p.LastDealPrice = indexer.DecimalDiv(
 				indexer.NewDecimal(outValue, p.dealDivisibility+2), realSwapAmt)
 

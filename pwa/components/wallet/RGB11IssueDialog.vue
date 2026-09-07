@@ -66,7 +66,9 @@
           </label>
         </template>
         <p class="text-xs text-zinc-500">
-          {{ $t('rgb11Transfer.utxoUsage', { count: allocationCount }) }}
+          {{ allocationCount > 0
+            ? $t('rgb11Transfer.utxoUsage', { count: allocationCount })
+            : $t('rgb11Transfer.utxoUsagePending') }}
         </p>
         <p v-if="message" class="break-all text-xs"
           :class="warning ? 'text-amber-500' : success ? 'text-emerald-400' : 'text-red-400'">

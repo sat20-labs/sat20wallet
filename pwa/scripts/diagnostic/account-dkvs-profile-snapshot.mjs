@@ -24,7 +24,7 @@ try {
     try {
       snapshot = await page.evaluate(async ({ plainPassword, transferId }) => {
         const verify = window.__SAT20_PWA_VERIFY__
-        if (!verify?.hashPassword) throw new Error('PWA password derivation helper is unavailable')
+		if (!verify) throw new Error('PWA verification API is unavailable')
         const values = {}
         const counts = {
           profile: 0, status: 0, wallet: 0, projection: 0,
@@ -62,7 +62,7 @@ try {
         }
         return {
           origin: location.origin,
-          passwordHash: await verify.hashPassword(plainPassword),
+			password: plainPassword,
           keyClassCounts: counts,
           values,
         }

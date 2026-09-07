@@ -238,7 +238,7 @@ export function useAssetActions() {
       console.warn('Channel refresh failed after lock-with-expand submission:', refreshError)
     }
     toast({
-      title: t('messages.txSubmitted'),
+      title: t('tools.messages.txSubmitted'),
       description: reservationId !== null
         ? t('assetOperationDialog.lockExpandSubmittedWithId', { id: reservationId })
         : t('assetOperationDialog.lockExpandSubmitted'),

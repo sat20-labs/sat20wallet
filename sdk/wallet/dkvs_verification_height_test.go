@@ -9,29 +9,19 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-func dkvsStorageTestPolicy(t *testing.T, ttl uint64) []byte {
+func newAccountStorageHeightTestManager(t *testing.T, ttl uint64, bestHeight int64,
+	bestHeightErr error, syncHeight int) *Manager {
 	t.Helper()
-	return mustJSON(t, map[string]interface{}{
-		"code": 0,
-		"msg":  "ok",
-		"data": map[string]interface{}{
-			"free_local": map[string]interface{}{
-				"enabled":        true,
-				"max_ttl_blocks": ttl,
-			},
-		},
-	})
-}
-
-func newAccountStorageHeightTestManager(t *testing.T, responses map[string][]byte, syncHeight int) *Manager {
-	t.Helper()
-	httpClient := &fakeDKVSHTTPClient{getResp: responses}
+	remote := newRGB11MemoryDKVSHTTP()
+	remote.freeLocal.MaxTTL = ttl
+	remote.bestHeight = bestHeight
+	remote.bestHeightErr = bestHeightErr
 	manager := &Manager{
-		cfg: &common.Config{Chain: "testnet", IndexerL2: &common.Indexer{
+		cfg: &common.Config{Chain: "testnet", Env: "test", IndexerL2: &common.Indexer{
 			Scheme: "https", Host: "dkvs.test", Proxy: "satsnet/testnet",
 		}},
 		status: &Status{CurrentChain: "testnet", SyncHeightL2: syncHeight},
-		http:   httpClient,
+		http:   remote,
 	}
 	manager.dkvs = newDKVSManager(manager)
 	return manager
@@ -66,11 +56,11 @@ func TestDKVSManagerVerificationHeightIgnoresStatusFromAnotherChain(t *testing.T
 	}
 }
 
-func TestDKVSManagerVerificationHeightUsesStatusAndExplicitMaximum(t *testing.T) {
+func TestDKVSManagerVerificationHeightIgnoresStatusAndRetainsExplicitObservation(t *testing.T) {
 	manager := &Manager{status: &Status{SyncHeightL2: 20}}
 	dkvs := newDKVSManager(manager)
-	if height, known := dkvs.verificationHeight(); !known || height != 20 {
-		t.Fatalf("status height unavailable: %d %v", height, known)
+	if height, known := dkvs.verificationHeight(); known || height != 0 {
+		t.Fatalf("wallet sync height became DKVS authority: %d %v", height, known)
 	}
 	dkvs.observeVerificationOptions(dkvsindexer.RecordVerificationOptions{Height: 25})
 	manager.status.Lock()
@@ -101,38 +91,34 @@ func TestDKVSManagerEndpointHeightIsAuthoritativeOverSameChainStatus(t *testing.
 	}
 	dkvs := newDKVSManager(manager)
 	dkvs.setEndpointVerificationHeight(3467, true)
-
 	if height, known := dkvs.verificationHeight(); !known || height != 3467 {
 		t.Fatalf("same-chain status overrode endpoint height: %d %v", height, known)
 	}
 }
 
-func TestDKVSManagerVerificationHeightFallsBackBeforeEndpointSucceeds(t *testing.T) {
+func TestDKVSManagerVerificationHeightRequiresEndpointBeforeEndpointSucceeds(t *testing.T) {
 	manager := &Manager{
 		cfg:    &common.Config{Chain: "testnet"},
 		status: &Status{CurrentChain: "testnet", SyncHeightL2: 39420},
 	}
 	dkvs := newDKVSManager(manager)
-
-	if height, known := dkvs.verificationHeight(); !known || height != 39420 {
-		t.Fatalf("same-context status fallback unavailable: %d %v", height, known)
+	if height, known := dkvs.verificationHeight(); known || height != 0 {
+		t.Fatalf("wallet sync height became pre-endpoint fallback: %d %v", height, known)
 	}
 }
 
 func TestDKVSManagerCachedEndpointHeightSurvivesRefreshFailure(t *testing.T) {
-	manager := &Manager{
-		cfg:    &common.Config{Chain: "testnet"},
-		status: &Status{CurrentChain: "testnet", SyncHeightL2: 39420},
+	manager := newAccountStorageHeightTestManager(t, 7200, 0,
+		errors.New("bestheight unavailable"), 39420)
+	manager.dkvs.setEndpointVerificationHeight(3467, true)
+	client, err := manager.dkvs.primaryClient()
+	if err != nil {
+		t.Fatal(err)
 	}
-	dkvs := newDKVSManager(manager)
-	dkvs.setEndpointVerificationHeight(3467, true)
-	client := NewSatsNetDKVSClient("https", "dkvs.test", "satsnet/testnet",
-		&fakeDKVSHTTPClient{getResp: map[string][]byte{}})
-	if _, err := dkvs.refreshVerificationBestHeight(client); err == nil {
+	if _, err := manager.dkvs.refreshVerificationBestHeight(client); err == nil {
 		t.Fatal("endpoint refresh unexpectedly succeeded")
 	}
-
-	if height, known := dkvs.verificationHeight(); !known || height != 3467 {
+	if height, known := manager.dkvs.verificationHeight(); !known || height != 3467 {
 		t.Fatalf("failed refresh discarded cached endpoint height: %d %v", height, known)
 	}
 }
@@ -148,11 +134,7 @@ func TestDKVSExpiryEstimateUsesEndpointHeightForConfiguredTTL(t *testing.T) {
 }
 
 func TestAccountStorageOptionsRefreshesSameEndpointHeight(t *testing.T) {
-	manager := newAccountStorageHeightTestManager(t, map[string][]byte{
-		"satsnet/testnet/v3/dkvs/config":            dkvsStorageTestPolicy(t, 7200),
-		"satsnet/testnet/btc/block/bestblockheight": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": 3467}),
-	}, 39420)
-
+	manager := newAccountStorageHeightTestManager(t, 7200, 3467, nil, 39420)
 	options, err := manager.GetAccountStorageOptions()
 	if err != nil {
 		t.Fatal(err)
@@ -163,11 +145,9 @@ func TestAccountStorageOptionsRefreshesSameEndpointHeight(t *testing.T) {
 }
 
 func TestAccountStorageOptionsKeepsCachedEndpointHeightOnRefreshFailure(t *testing.T) {
-	manager := newAccountStorageHeightTestManager(t, map[string][]byte{
-		"satsnet/testnet/v3/dkvs/config": dkvsStorageTestPolicy(t, 7200),
-	}, 39420)
+	manager := newAccountStorageHeightTestManager(t, 7200, 0,
+		errors.New("bestheight unavailable"), 39420)
 	manager.dkvs.setEndpointVerificationHeight(3467, true)
-
 	options, err := manager.GetAccountStorageOptions()
 	if err != nil {
 		t.Fatal(err)
@@ -177,30 +157,24 @@ func TestAccountStorageOptionsKeepsCachedEndpointHeightOnRefreshFailure(t *testi
 	}
 }
 
-func TestAccountStorageOptionsFallsBackToSameContextBeforeEndpointSuccess(t *testing.T) {
-	manager := newAccountStorageHeightTestManager(t, map[string][]byte{
-		"satsnet/testnet/v3/dkvs/config": dkvsStorageTestPolicy(t, 7200),
-	}, 39420)
-
+func TestAccountStorageOptionsDoesNotUseWalletSyncHeightBeforeEndpointSuccess(t *testing.T) {
+	manager := newAccountStorageHeightTestManager(t, 7200, 0,
+		errors.New("bestheight unavailable"), 39420)
 	options, err := manager.GetAccountStorageOptions()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := options[0].EstimatedExpiryHeight; got != 46620 {
-		t.Fatalf("temporary expiry=%d, want same-context fallback expiry 46620", got)
+	if got := options[0].EstimatedExpiryHeight; got != 7200 {
+		t.Fatalf("temporary expiry=%d, want TTL-only estimate without endpoint height", got)
 	}
 }
 
 func TestAccountStorageConfirmUsesSharedEndpointHeightEntry(t *testing.T) {
-	manager := newAccountStorageHeightTestManager(t, map[string][]byte{
-		"satsnet/testnet/v3/dkvs/config":            dkvsStorageTestPolicy(t, 7200),
-		"satsnet/testnet/btc/block/bestblockheight": mustJSON(t, map[string]interface{}{"code": 0, "msg": "ok", "data": 3467}),
-	}, 39420)
+	manager := newAccountStorageHeightTestManager(t, 7200, 3467, nil, 39420)
 	manager.wallet = NewInternalWalletWithMnemonic(
 		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
 		"", GetChainParam(),
 	)
-
 	authorization, err := manager.ConfirmAccountStorage(AccountStorageTemporary, 0)
 	if err != nil {
 		t.Fatal(err)

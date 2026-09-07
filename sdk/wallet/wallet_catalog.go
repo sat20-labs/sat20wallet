@@ -7,14 +7,16 @@ import (
 	"strings"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 type WalletCatalogAccount struct {
-	Index   uint32 `json:"index"`
-	Name    string `json:"name"`
-	DID     string `json:"did,omitempty"`
-	Address string `json:"address,omitempty"`
-	PubKey  string `json:"pub_key,omitempty"`
+	Index     uint32 `json:"index"`
+	Name      string `json:"name"`
+	DID       string `json:"did,omitempty"`
+	Address   string `json:"address,omitempty"`
+	PubKey    string `json:"pub_key,omitempty"`
+	AccountID string `json:"account_id,omitempty"`
 }
 
 type WalletCatalogEntry struct {
@@ -150,7 +152,11 @@ func (p *Manager) GetWalletCatalog() []WalletCatalogEntry {
 			if info.Wallet != nil {
 				account.Address = info.Wallet.GetAddressByIndex(index)
 				if pubKey := info.Wallet.GetPubKeyByIndex(index); pubKey != nil {
-					account.PubKey = fmt.Sprintf("%x", pubKey.SerializeCompressed())
+					compressed := pubKey.SerializeCompressed()
+					account.PubKey = fmt.Sprintf("%x", compressed)
+					if accountID, err := dkvsindexer.CanonicalAccountID(compressed); err == nil {
+						account.AccountID = accountID
+					}
 				}
 			}
 			entry.Accounts = append(entry.Accounts, account)
@@ -165,6 +171,8 @@ func (p *Manager) UpdateWalletName(id int64, name string) error {
 	if name == "" {
 		return fmt.Errorf("wallet name is required")
 	}
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	info := p.walletInfoMap[id]
@@ -185,6 +193,8 @@ func (p *Manager) UpdateWalletName(id int64, name string) error {
 }
 
 func (p *Manager) EnsureAccount(id int64, index uint32, name, did string) error {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	info := p.walletInfoMap[id]
@@ -219,6 +229,8 @@ func (p *Manager) EnsureAccount(id int64, index uint32, name, did string) error 
 }
 
 func (p *Manager) UpdateAccountMetadata(id int64, index uint32, name, did string) error {
+	p.channelIdentityMu.Lock()
+	defer p.channelIdentityMu.Unlock()
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	info := p.walletInfoMap[id]
@@ -313,7 +325,6 @@ func (p *Manager) DeleteWallet(id int64) error {
 	if err := p.saveStatus(); err != nil {
 		return err
 	}
-	p.channelIdentityGeneration++
 	p.markDKVSStateDirty()
 	p.wakeChannelHeartbeat()
 	return nil

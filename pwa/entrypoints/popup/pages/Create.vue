@@ -128,7 +128,6 @@ import { Eye, EyeOff, Copy, AlertTriangle, Loader2Icon } from 'lucide-vue-next'
 import walletManager from '@/utils/sat20'
 import { useWalletStore } from '@/store'
 import { createPasswordSchema } from '@/utils/validation'
-import { hashPassword } from '@/utils/crypto'
 
 const { toast } = useToast()
 const loading = ref(false)
@@ -148,8 +147,7 @@ const onSubmit = form.handleSubmit(async (values) => {
   if (loading.value) return
 
   loading.value = true
-  const hashedPassword = await hashPassword(values.password)
-  const [err, result] = await walletStore.createWallet(hashedPassword)
+	const [err, result] = await walletStore.createWallet(values.password)
   loading.value = false
 
   if (!err && result) {

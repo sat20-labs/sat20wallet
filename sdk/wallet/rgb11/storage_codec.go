@@ -26,6 +26,7 @@ const (
 	rgb11RecordTransfer           = uint8(5)
 	rgb11RecordReceiveKey         = uint8(6)
 	rgb11RecordReceiveReservation = uint8(7)
+	rgb11RecordChannelPending     = uint8(8)
 )
 
 func encode(value any) ([]byte, error) {
@@ -40,6 +41,15 @@ func encode(value any) ([]byte, error) {
 		kind, write = rgb11RecordProof, func(e *strict.Encoder) error { return encodeAllocationProof(e, item) }
 	case *PendingTransfer:
 		kind, write = rgb11RecordPending, func(e *strict.Encoder) error { return encodePendingTransfer(e, item) }
+		if item != nil && item.ChannelSend != nil {
+			kind = rgb11RecordChannelPending
+			write = func(e *strict.Encoder) error {
+				if err := encodePendingTransfer(e, item); err != nil {
+					return err
+				}
+				return encodeChannelSend(e, item.ChannelSend)
+			}
+		}
 	case *TransferState:
 		kind, write = rgb11RecordTransfer, func(e *strict.Encoder) error { return encodeTransferState(e, item) }
 	case *ReceiveKey:
@@ -104,10 +114,20 @@ func decode(data []byte, target any) error {
 		}
 		read = func(d *strict.Decoder) error { return decodeAllocationProof(d, item) }
 	case *PendingTransfer:
-		if kind != rgb11RecordPending {
+		if kind != rgb11RecordPending && kind != rgb11RecordChannelPending {
 			return ErrRGB11Inconsistent
 		}
-		read = func(d *strict.Decoder) error { return decodePendingTransfer(d, item) }
+		read = func(d *strict.Decoder) error {
+			item.ChannelSend = nil
+			if err := decodePendingTransfer(d, item); err != nil {
+				return err
+			}
+			if kind == rgb11RecordChannelPending {
+				item.ChannelSend = &ChannelSendData{}
+				return decodeChannelSend(d, item.ChannelSend)
+			}
+			return nil
+		}
 	case *TransferState:
 		if kind != rgb11RecordTransfer {
 			return ErrRGB11Inconsistent

@@ -87,6 +87,7 @@ type rgb11Manager struct {
 	consistencyStatus string
 	accountOwner      *Manager
 	scopeStates       *rgb11ScopeStateRegistry
+	channelSend       *rgb11ChannelSendContext
 }
 
 func newRGB11Manager(owner *Manager, database indexer.KVDB, locker *UtxoLocker,
@@ -124,14 +125,32 @@ func (p *rgb11Manager) GetRGB11ProjectionStore() *rgb11wallet.ProjectionStore {
 
 func (p *rgb11Manager) selectRGB11Scope() error {
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil ||
-		p.rgbManager.engineStore == nil || p.status == nil {
+		p.rgbManager.engineStore == nil {
+		return rgb11wallet.ErrWalletScope
+	}
+	// Clear the previous scope first.  If the new identity is incomplete or
+	// inconsistent, RGB11 operations must fail instead of continuing to write
+	// into the previously selected wallet's local namespace.
+	p.rgbManager.projectionStore.ClearScope()
+	p.rgbManager.engineStore.ClearScope()
+	if p.status == nil || p.wallet == nil || p.status.CurrentWallet == 0 ||
+		p.wallet.GetSubAccount() != p.status.CurrentAccount {
+		return rgb11wallet.ErrWalletScope
+	}
+	info := p.walletInfoMap[p.status.CurrentWallet]
+	if info == nil || info.Id != p.status.CurrentWallet || info.Wallet == nil ||
+		walletFingerprint(info.Wallet) != walletFingerprint(p.wallet) {
 		return rgb11wallet.ErrWalletScope
 	}
 	scope := rgb11StorageScope(p.status.CurrentWallet, p.status.CurrentAccount)
 	if err := p.rgbManager.projectionStore.SetScope(scope); err != nil {
 		return err
 	}
-	return p.rgbManager.engineStore.SetScope(scope)
+	if err := p.rgbManager.engineStore.SetScope(scope); err != nil {
+		p.rgbManager.projectionStore.ClearScope()
+		return err
+	}
+	return nil
 }
 
 func rgb11TransferKeepsInputsLocked(state *rgb11wallet.TransferState) bool {
@@ -634,9 +653,11 @@ func (p *rgb11Manager) getL1TxOutput(outpoint string) (*TxOutput, error) {
 		return base, err
 	}
 	projected, err := p.rgbManager.projectionStore.LoadOutput(outpoint)
-	if err != nil {
-
+	if errors.Is(err, indexer.ErrKeyNotFound) {
 		return base, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: load RGB projection for %s: %v", ErrRGB11Inconsistent, outpoint, err)
 	}
 	result := base.Clone()
 	for _, asset := range projected.Assets {
@@ -769,12 +790,29 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 		}
 	}
 
-	tickers := make([]*RGB11TickerInfo, 0)
+	knownTickers := make(map[string]*indexer.TickerInfo)
 	for index := range assets {
 		info := p.getTickerInfo(&assets[index].Name)
 		if info == nil {
 			continue
 		}
+		knownTickers[info.AssetName.String()] = info
+	}
+	p.mutex.RLock()
+	for name, info := range p.tickerInfoMap {
+		if info != nil && info.AssetName.Protocol == rgb11wallet.Protocol {
+			knownTickers[name] = info
+		}
+	}
+	p.mutex.RUnlock()
+	tickerNames := make([]string, 0, len(knownTickers))
+	for name := range knownTickers {
+		tickerNames = append(tickerNames, name)
+	}
+	sort.Strings(tickerNames)
+	tickers := make([]*RGB11TickerInfo, 0, len(tickerNames))
+	for _, name := range tickerNames {
+		info := knownTickers[name]
 		ticker, canonicalName, contractID, fingerprint, verified := p.rgb11TickerPresentation(info)
 		tickers = append(tickers, &RGB11TickerInfo{
 			TickerInfo:    info,
@@ -900,6 +938,9 @@ func (p *rgb11Manager) ownsRGB11Carrier(binding *rgb11wallet.CarrierBinding, wal
 	}
 	if binding.LogicalAddress == "" || binding.LogicalAddress != p.wallet.GetAddress() {
 		return false
+	}
+	if binding.CommitmentMethod != "tapret1st" && binding.DerivationIndex == p.wallet.GetSubAccount() && p.ownsRGB11ChannelScript(binding.ActualPkScript) {
+		return true
 	}
 	change, index := rgb11CarrierPath(binding.DerivationIndex)
 	var pubkey *secp256k1.PublicKey
@@ -1903,6 +1944,20 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 	if err != nil {
 		return nil, err
 	}
+	if len(request.TransferID) == 64 && request.Mode == corewallet.ReceiveWitness && expectedVout == nil {
+		state, err := p.projectionStore.LoadTransferState(request.TransferID)
+		if err != nil {
+			return nil, err
+		}
+		if state.Direction != "receive" || len(state.OutputOutPoints) != 1 {
+			return nil, ErrRGB11InvoiceMismatch
+		}
+		vout, ok := outpointVout(state.OutputOutPoints[0])
+		if !ok {
+			return nil, ErrRGB11InvoiceMismatch
+		}
+		expectedVout = &vout
+	}
 	invoice, err := invoicing.Parse(request.Invoice)
 	if err != nil {
 		return nil, err
@@ -1988,6 +2043,13 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 	if transferID == "" {
 		transferID = receipt.ConsignmentHash
 	}
+	if request.TransferID != "" && request.TransferID != transferID {
+		if expectedVout == nil || *expectedVout == 0 || request.TransferID != rgb11BatchRecipientID(transferID, *expectedVout-1) {
+			return nil, ErrRGB11InvoiceMismatch
+		}
+		transferID = request.TransferID
+		receipt.TransferID = transferID
+	}
 	if err := p.rgbManager.engine.MarkRelayAccepted(requestID, transferID, receipt.ConsignmentHash); err != nil {
 		return nil, fmt.Errorf("mark RGB11 receive accepted: %w", err)
 	}
@@ -2055,6 +2117,11 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 
 func (p *rgb11Manager) prepareRGB11Consignment(ctx context.Context, requestID string, raw []byte,
 	expectedTxID string, expectedVout *uint32, autoBackup bool) (*rgb11wallet.ValidationReceipt, error) {
+	return p.prepareRGB11ConsignmentWithID(ctx, requestID, raw, expectedTxID, expectedVout, autoBackup, "")
+}
+
+func (p *rgb11Manager) prepareRGB11ConsignmentWithID(ctx context.Context, requestID string, raw []byte,
+	expectedTxID string, expectedVout *uint32, autoBackup bool, localTransferID string) (*rgb11wallet.ValidationReceipt, error) {
 	if p == nil || p.rgbManager == nil || p.rgbManager.engine == nil {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -2138,6 +2205,14 @@ func (p *rgb11Manager) prepareRGB11Consignment(ctx context.Context, requestID st
 	transferID := receipt.TransferID
 	if transferID == "" {
 		transferID = receipt.ConsignmentHash
+	}
+	if localTransferID != "" {
+		if expectedVout == nil || *expectedVout == 0 ||
+			(localTransferID != receipt.TransferID && localTransferID != rgb11BatchRecipientID(receipt.TransferID, *expectedVout-1)) {
+			return nil, ErrRGB11InvoiceMismatch
+		}
+		transferID = localTransferID
+		receipt.TransferID = transferID
 	}
 	if err := p.rgbManager.projectionStore.SavePreparedObject(receipt.ConsignmentHash, raw); err != nil {
 		return nil, err
@@ -2418,6 +2493,10 @@ type rgb11SpendAllocation struct {
 // ACK state remains recipient-specific. It intentionally does not relay or
 // broadcast. RBF replacement is outside the first release scope.
 func (p *rgb11Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11SendRequest) (*RGB11PreparedTransfer, error) {
+	return p.prepareRGB11Transfer(ctx, request, false)
+}
+
+func (p *rgb11Manager) prepareRGB11Transfer(ctx context.Context, request RGB11SendRequest, direct bool) (*RGB11PreparedTransfer, error) {
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || p.rgbManager.evidence == nil || p.wallet == nil {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -2481,7 +2560,7 @@ func (p *rgb11Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11Se
 		if len(invoiceTexts) > 1 && invoice.Beneficiary.Kind != invoicing.BeneficiaryWitnessVout {
 			return nil, fmt.Errorf("RGB11 batch send requires witness invoices")
 		}
-		if _, ok := seenRecipient[recipientID]; ok {
+		if _, ok := seenRecipient[recipientID]; ok && !direct {
 			return nil, fmt.Errorf("RGB11 batch contains duplicate recipient")
 		}
 		if index > 0 && transport != recipients[0].transport {
@@ -2657,6 +2736,9 @@ func (p *rgb11Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11Se
 	if err != nil {
 		return nil, err
 	}
+	if p.channelSend != nil {
+		changeScript = p.channelSend.pkScript
+	}
 	tx, prevFetcher, inputOutpoints, taprootRoots, _, err := p.buildRGB11WitnessTx(
 		selected, recipientScripts, changeScript, anchors.OpretScript(mpcCommitment), request.FeeRate,
 	)
@@ -2686,8 +2768,16 @@ func (p *rgb11Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11Se
 	if err != nil {
 		return nil, err
 	}
-	_ = packet
-	witnessBundle, err := operations.BuildOpretWitnessBundleWithTx(signedTx, bundleValue, mpcProof)
+	// The standard non-donation flow gives recipients the unsigned public
+	// witness needed to validate the assigned output, while the fully signed
+	// transaction remains private to the sender until all ACKs are collected.
+	// A different txid here would make that separation unsafe (for example, an
+	// input that requires a signatureScript), so reject it instead of producing
+	// a consignment anchored to a transaction the sender cannot later broadcast.
+	if packet == nil || packet.UnsignedTx == nil || packet.UnsignedTx.TxID() != signedTx.TxID() {
+		return nil, ErrRGB11Inconsistent
+	}
+	witnessBundle, err := operations.BuildOpretWitnessBundleWithTx(packet.UnsignedTx, bundleValue, mpcProof)
 	if err != nil {
 		return nil, err
 	}
@@ -2731,8 +2821,7 @@ func (p *rgb11Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11Se
 			transferIDs[index] = batchID
 			continue
 		}
-		child := sha256.Sum256([]byte(fmt.Sprintf("SAT20-RGB11-BATCH-RECIPIENT-V1:%s:%d", batchID, index)))
-		transferIDs[index] = hex.EncodeToString(child[:])
+		transferIDs[index] = rgb11BatchRecipientID(batchID, uint32(index))
 	}
 	pendingList := make([]*rgb11wallet.PendingTransfer, 0, len(recipients))
 	states := make([]*rgb11wallet.TransferState, 0, len(recipients))
@@ -2764,6 +2853,10 @@ func (p *rgb11Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11Se
 			SignedTx: append([]byte(nil), signedRaw.Bytes()...), SignedPSBT: append([]byte(nil), signedPSBT...),
 			ChangeSeals:   append([]seals.GraphBlindSeal(nil), changeSeals...),
 			ReservationID: reservationID, CreatedAt: time.Now().Unix(),
+		}
+		if p.channelSend != nil {
+			data := p.channelSend.data
+			pending.ChannelSend = &data
 		}
 		pendingList = append(pendingList, pending)
 		states = append(states, &pending.State)
@@ -2940,10 +3033,12 @@ func (p *rgb11Manager) selectRGB11AllocationsOnce(contractID string, amount uint
 	byOutpoint := make(map[string][]*rgb11wallet.AllocationProof)
 	var targets []*rgb11wallet.AllocationProof
 	for _, proof := range proofs {
+		// Every allocation sharing an input must be preserved, including an
+		// allocation whose current proof status prevents selecting it to send.
+		byOutpoint[proof.OutPoint] = append(byOutpoint[proof.OutPoint], proof)
 		if proof.Status != "valid" && proof.Status != "settled" {
 			continue
 		}
-		byOutpoint[proof.OutPoint] = append(byOutpoint[proof.OutPoint], proof)
 		official, err := p.rgb11ContractIDForAssetName(proof.AssetName)
 		if err == nil && official == contractID && proof.AssignmentType == 4000 && proof.AssetName.Type != "control" {
 			targets = append(targets, proof)
@@ -2971,8 +3066,19 @@ func (p *rgb11Manager) selectRGB11AllocationsOnce(contractID string, amount uint
 		if err != nil || utxo == nil || utxo.Confirmations < int64(minConfirmations) {
 			continue
 		}
+		if p.channelSend != nil {
+			if p.channelSend.excluded[target.OutPoint] || !bytes.Equal(utxo.PkScript, p.channelSend.pkScript) || !p.rgb11ChannelInputWithinHeight(target.OutPoint) {
+				continue
+			}
+		} else if p.ownsRGB11ChannelScript(utxo.PkScript) {
+			continue
+		}
 		group := byOutpoint[target.OutPoint]
 		for _, proof := range group {
+			if proof.Status != "valid" && proof.Status != "settled" {
+				return nil, "", indexer.AssetName{}, "", 0, 0, fmt.Errorf("%w: %s has %s proof status for %s",
+					ErrRGB11AssetPreservation, target.OutPoint, proof.Status, proof.AssetName.String())
+			}
 			official, err := p.rgb11ContractIDForAssetName(proof.AssetName)
 			if err != nil || official != contractID {
 				return nil, "", indexer.AssetName{}, "", 0, 0, ErrRGB11HistoryMerge
@@ -3142,7 +3248,9 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 			return nil, nil, nil, nil, 0, fmt.Errorf("resolve RGB11 carrier %s: %w", allocation.proof.OutPoint, err)
 		}
 		signingKey := RGB11InputSigningKey{Change: 0, Index: p.wallet.GetSubAccount()}
-		if binding := allocation.proof.CarrierBinding; binding != nil && binding.CommitmentMethod == "tapret1st" {
+		if p.channelSend != nil && bytes.Equal(utxo.PkScript, p.channelSend.pkScript) {
+			// The peer signature is deliberately deferred until all RGB ACKs.
+		} else if binding := allocation.proof.CarrierBinding; binding != nil && binding.CommitmentMethod == "tapret1st" {
 			if len(binding.TapretRoot) != sha256.Size || !bytes.Equal(binding.ActualPkScript, utxo.PkScript) ||
 				!p.ownsRGB11Carrier(binding, walletScript) {
 				return nil, nil, nil, nil, 0, fmt.Errorf("RGB11 Tapret carrier %s is not controlled by active wallet", allocation.proof.OutPoint)
@@ -3181,13 +3289,22 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 	changeIndex := len(tx.TxOut) - 1
 	recipientValue := int64(len(recipientScripts)) * rgb11CarrierValue
 
-	plain := p.l1IndexerClient.GetUtxoListWithTicker(p.wallet.GetAddress(), &indexer.ASSET_PLAIN_SAT)
-	p.utxoLockerL1.Reload(p.wallet.GetAddress())
+	feeAddress := p.wallet.GetAddress()
+	feeScript := walletScript
+	if p.channelSend != nil && !p.channelSend.data.PayFeeByLocal {
+		feeAddress, feeScript = p.channelSend.data.ChannelID, p.channelSend.pkScript
+	}
+	plain := p.l1IndexerClient.GetUtxoListWithTicker(feeAddress, &indexer.ASSET_PLAIN_SAT)
+	p.utxoLockerL1.Reload(feeAddress)
 	plainIndex := len(plain) - 1
 	for {
 		var estimate utils.TxWeightEstimator
-		for range tx.TxIn {
-			estimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		for _, input := range tx.TxIn {
+			if txscript.IsPayToWitnessScriptHash(prevFetcher.FetchPrevOutput(input.PreviousOutPoint).PkScript) {
+				estimate.AddWitnessInput(utils.MultiSigWitnessSize)
+			} else {
+				estimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
+			}
 		}
 		for _, output := range tx.TxOut {
 			estimate.AddTxOutput(output)
@@ -3201,8 +3318,31 @@ func (p *rgb11Manager) buildRGB11WitnessTx(selected []rgb11SpendAllocation, reci
 		for plainIndex >= 0 {
 			candidate := plain[plainIndex]
 			plainIndex--
-			if _, used := unique[candidate.OutPoint]; used || p.utxoLockerL1.IsLocked(candidate.OutPoint) ||
-				!bytes.Equal(candidate.PkScript, walletScript) {
+			if _, used := unique[candidate.OutPoint]; used || p.isL1SendInputProtected(candidate.OutPoint) ||
+				!bytes.Equal(candidate.PkScript, feeScript) {
+				continue
+			}
+			if p.channelSend != nil && (p.channelSend.excluded[candidate.OutPoint] || !p.rgb11ChannelInputWithinHeight(candidate.OutPoint)) {
+				continue
+			}
+			// Fee inputs must remain plain in the complete asset view, too.
+			// In particular, a stale plain-UTXO response cannot burn an RGB
+			// carrier or an asset newly visible in the detailed indexer view.
+			view, err := p.getL1TxOutput(candidate.OutPoint)
+			if err != nil {
+				return nil, nil, nil, nil, 0, err
+			}
+			if view == nil {
+				return nil, nil, nil, nil, 0, ErrRGB11Inconsistent
+			}
+			plainOnly := true
+			for _, asset := range view.Assets {
+				if !indexer.IsPlainAsset(&asset.Name) {
+					plainOnly = false
+					break
+				}
+			}
+			if !plainOnly {
 				continue
 			}
 			if _, err := addInput(candidate.OutPoint, candidate.Value, candidate.PkScript); err != nil {
@@ -3292,6 +3432,13 @@ func (p *rgb11Manager) signRGB11PSBT(tx *wire.MsgTx, prevFetcher txscript.PrevOu
 		&psbt.Unknown{Key: opretHostKey, Value: []byte{1}},
 		&psbt.Unknown{Key: opretCommitmentKey, Value: append([]byte(nil), mpcCommitment[:]...)},
 	)
+	if p.channelSend != nil {
+		var encoded bytes.Buffer
+		if err := packet.Serialize(&encoded); err != nil {
+			return nil, nil, nil, err
+		}
+		return packet, tx.Copy(), encoded.Bytes(), nil
+	}
 	if len(signingKeys) == 0 {
 		if err := p.wallet.SignPsbt(packet); err != nil {
 			return nil, nil, nil, err

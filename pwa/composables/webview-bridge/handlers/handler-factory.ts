@@ -64,7 +64,9 @@ export class HandlerFactory {
       GET_ASSET_AMOUNT: (callbackId, data) => this.assetHandlers.handleGetAssetAmount(callbackId, data),
       GET_ASSET_AMOUNT_SATSNET: (callbackId, data) => this.assetHandlers.handleGetAssetAmountSatsNet(callbackId, data),
       LOCK_UTXO: (callbackId, data) => this.assetHandlers.handleLockUtxo(callbackId, data),
+      LOCK_UTXO_SATSNET: (callbackId, data) => this.assetHandlers.handleLockUtxoSatsNet(callbackId, data),
       UNLOCK_UTXO: (callbackId, data) => this.assetHandlers.handleUnlockUtxo(callbackId, data),
+      UNLOCK_UTXO_SATSNET: (callbackId, data) => this.assetHandlers.handleUnlockUtxoSatsNet(callbackId, data),
       GET_ALL_LOCKED_UTXO: (callbackId, data) => this.assetHandlers.handleGetAllLockedUtxo(callbackId, data),
 
       // 合约相关处理器

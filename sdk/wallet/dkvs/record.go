@@ -182,3 +182,22 @@ func AttachFeeProof(record *swire.DKVSRecord, proof *dkvsindexer.FeeProof) error
 	record.FeeProof = encoded
 	return nil
 }
+
+// RecordIsFreeLocal reports whether a record explicitly carries a FREE_LOCAL
+// fee proof. Empty legacy fee proofs are not local-only records.
+func RecordIsFreeLocal(record *swire.DKVSRecord) bool {
+	if record == nil || len(record.FeeProof) == 0 {
+		return false
+	}
+	proof, err := dkvsindexer.ParseFeeProof(record.FeeProof)
+	return err == nil && proof.Mode == dkvsindexer.FeeModeFreeLocal
+}
+
+func BatchContainsFreeLocal(mutations []dkvsindexer.CASMutation) bool {
+	for _, mutation := range mutations {
+		if RecordIsFreeLocal(mutation.Record) {
+			return true
+		}
+	}
+	return false
+}

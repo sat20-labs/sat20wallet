@@ -195,7 +195,7 @@ func (p *Manager) InitUnlockProcess(resv *PaymentReservation, feeUtxos []string)
 		p.enableChannel(resv.OldChannel)
 		p.DelResvWithId(resv.Id)
 		if resv.Id != 0 && channel.PeerRPC != nil {
-			_ = channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_PAYMENT, -1, err.Error())
+			_ = channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_PAYMENT, -1, err.Error())
 		}
 		return "", err
 	}
@@ -380,7 +380,7 @@ func (p *Manager) InitLockProcess(resv *PaymentReservation, utxos, fees []string
 		p.enableChannel(resv.OldChannel)
 		p.DelResvWithId(resv.Id)
 		if resv.Id != 0 && channel.PeerRPC != nil {
-			_ = channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_PAYMENT, -1, err.Error())
+			_ = channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_PAYMENT, -1, err.Error())
 		}
 		return "", err
 	}

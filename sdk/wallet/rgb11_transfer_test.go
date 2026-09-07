@@ -126,8 +126,14 @@ func newRGB11FlowManager(t *testing.T, wallet common.Wallet, rpc IndexerRPCClien
 	locker := NewUtxoLocker(database, rpc, L1_NETWORK_BITCOIN)
 	l1 := NewIndexerRPCClientMgr()
 	l1.Set(rpc)
+	accountIndex := wallet.GetSubAccount()
 	manager := &Manager{
-		db: database, wallet: wallet, status: &Status{CurrentWallet: localWalletID, CurrentAccount: 0},
+		db: database, wallet: wallet,
+		status: &Status{CurrentWallet: localWalletID, CurrentAccount: accountIndex},
+		walletInfoMap: map[int64]*WalletInfo{localWalletID: {
+			WalletInDB: WalletInDB{Id: localWalletID, Accounts: int(accountIndex) + 1, Type: WALLET_TYPE_MNEMONIC},
+			Wallet:     wallet,
+		}},
 		tickerInfoMap: make(map[string]*indexer.TickerInfo), utxoLockerL1: locker,
 		l1IndexerClient: l1,
 	}
@@ -142,6 +148,41 @@ func newRGB11FlowManager(t *testing.T, wallet common.Wallet, rpc IndexerRPCClien
 	}
 	t.Cleanup(func() { manager.rgbManager.scopeStates.stopReconciliations() })
 	return manager
+}
+
+func assertRGB11PreparedConsignmentUsesUnsignedWitness(t *testing.T, raw string) {
+	t.Helper()
+	container, err := coreconsignment.DecodeArmor(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundles, ok := container.Value.Field("bundles")
+	bundles = bundles.Unwrap()
+	if !ok || len(bundles.Items) == 0 {
+		t.Fatal("prepared consignment has no witness bundle")
+	}
+	for _, bundle := range bundles.Items {
+		publicWitness, ok := bundle.Unwrap().Field("pubWitness")
+		publicWitness = publicWitness.Unwrap()
+		if !ok || publicWitness.Name != "tx" || publicWitness.Inner == nil {
+			t.Fatalf("prepared consignment public witness is not an embedded transaction: %+v", publicWitness)
+		}
+		inputs, ok := publicWitness.Inner.Unwrap().Field("inputs")
+		inputs = inputs.Unwrap()
+		if !ok || len(inputs.Items) == 0 {
+			t.Fatal("prepared public witness has no transaction inputs")
+		}
+		for _, item := range inputs.Items {
+			input := item.Unwrap()
+			sigScript, sigOK := input.Field("sigScript")
+			witness, witnessOK := input.Field("witness")
+			sigBytes, bytesOK := sigScript.Bytes()
+			witness = witness.Unwrap()
+			if !sigOK || !witnessOK || !bytesOK || len(sigBytes) != 0 || len(witness.Items) != 0 {
+				t.Fatal("standard acknowledged consignment exposed a signed transaction input")
+			}
+		}
+	}
 }
 
 func TestRGB11StandardOutOfBandPrepareBroadcastAccept(t *testing.T) {
@@ -232,9 +273,20 @@ func TestRGB11StandardOutOfBandPrepareBroadcastAccept(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertRGB11PreparedConsignmentUsesUnsignedWitness(t, prepared.RecipientConsignment)
 	witness := wire.NewMsgTx(wire.TxVersion)
 	if err := witness.Deserialize(bytes.NewReader(pending.SignedTx)); err != nil {
 		t.Fatal(err)
+	}
+	hasSignature := false
+	for _, input := range witness.TxIn {
+		if len(input.SignatureScript) != 0 || len(input.Witness) != 0 {
+			hasSignature = true
+			break
+		}
+	}
+	if !hasSignature {
+		t.Fatal("sender did not retain the signed witness transaction")
 	}
 	witnessTxID, err := sender.BroadcastRGB11OutOfBand([]string{prepared.State.TransferID})
 	if err != nil {
@@ -319,18 +371,24 @@ func TestRGB11CancelPreparedOutOfBandTransfer(t *testing.T) {
 		t.Fatalf("unexpected locks after cancellation: %+v", locks)
 	}
 
-	const visibleTxID = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	visiblePending := newPending("visible-oob", visibleTxID)
-	if err := manager.rgbManager.projectionStore.SavePendingTransfer(visiblePending); err != nil {
+	const localTxID = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	localPending := newPending("local-oob", localTxID)
+	if err := manager.rgbManager.projectionStore.SavePendingTransfer(localPending); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.utxoLockerL1.TryReserve([]string{rgbInput, feeInput},
-		rgb11wallet.LockReasonPending, visiblePending.ReservationID, rgb11wallet.LockReasonRGB); err != nil {
+		rgb11wallet.LockReasonPending, localPending.ReservationID, rgb11wallet.LockReasonRGB); err != nil {
 		t.Fatal(err)
 	}
-	evidence.rawTx[visibleTxID] = []byte{1}
-	if err := manager.CancelRGB11OutOfBandTransfer("visible-oob"); !errors.Is(err, ErrRGB11AlreadyBroadcast) {
-		t.Fatalf("visible transfer cancellation error=%v", err)
+	// Even misleading or stale network evidence must not be consulted for a
+	// locally prepared transfer: the durable broadcast marker is the boundary.
+	evidence.rawTx[localTxID] = []byte{1}
+	if err := manager.CancelRGB11OutOfBandTransfer("local-oob"); err != nil {
+		t.Fatalf("local prepared transfer cancellation error=%v", err)
+	}
+	stored, err = manager.rgbManager.projectionStore.LoadPendingTransfer("local-oob")
+	if err != nil || stored.State.Status != "rejected" {
+		t.Fatalf("locally cancelled transfer=%+v err=%v", stored, err)
 	}
 }
 
@@ -495,6 +553,21 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 			}
 			if imported.ContractID != issued.ContractID {
 				t.Fatalf("standard contract import=%s want=%s", imported.ContractID, issued.ContractID)
+			}
+			viewerWallet := NewInternalWalletWithMnemonic(
+				"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
+			)
+			viewer := newRGB11FlowManager(t, viewerWallet, rpc, evidence, int64(100+testIndex))
+			if _, err := viewer.ImportRGB11ContractFile(context.Background(), contractFile); err != nil {
+				t.Fatal(err)
+			}
+			viewerState, err := viewer.GetRGB11State()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(viewerState.Assets) != 0 || len(viewerState.TickerInfos) != 1 ||
+				viewerState.TickerInfos[0].ContractID != issued.ContractID {
+				t.Fatalf("zero-balance imported contract missing from state: %+v", viewerState)
 			}
 			expectedName, err := rgb11wallet.NewCanonicalAssetName(issued.ContractID, test.request.Ticker, issued.AssetName.Type)
 			if err != nil {

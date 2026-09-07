@@ -4,11 +4,51 @@ import (
 	"fmt"
 
 	"github.com/sat20-labs/sat20wallet/sdk/common"
+	dkvscore "github.com/sat20-labs/sat20wallet/sdk/wallet/dkvs"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
+
+type dkvsAccountSchnorrSigner interface {
+	SignSchnorrMessage(hash []byte) ([]byte, error)
+}
+
+func NewDKVSSignedRecord(wallet common.Wallet, key string, value []byte,
+	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	return dkvscore.NewSignedRecord(wallet, key, value, opts)
+}
+
+func NewDKVSSignedTombstone(wallet common.Wallet, key string,
+	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	return dkvscore.NewSignedTombstone(wallet, key, opts)
+}
+
+func NewDKVSSignedRenewalRecord(wallet common.Wallet, existing *swire.DKVSRecord,
+	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
+	return dkvscore.NewSignedRenewalRecord(wallet, existing, opts)
+}
+
+func SignDKVSRecord(wallet common.Wallet, record *swire.DKVSRecord) error {
+	return dkvscore.SignRecord(wallet, record)
+}
+
+func SignDKVSAccountRecord(wallet common.Wallet, record *swire.DKVSRecord) error {
+	return dkvscore.SignAccountRecord(wallet, record)
+}
+
+func AttachDKVSFeeProof(record *swire.DKVSRecord, proof *dkvsindexer.FeeProof) error {
+	return dkvscore.AttachFeeProof(record, proof)
+}
+
+func dkvsWalletPubKey(wallet common.Wallet) ([]byte, error) {
+	return dkvscore.WalletPubKey(wallet)
+}
+
+func dkvsAccountID(wallet common.Wallet) (string, error) {
+	return dkvscore.AccountID(wallet)
+}
 
 // SignSchnorrMessage signs a 32-byte digest with the current SAT20 subaccount
 // payment key using BIP340. The corresponding x-only public key is the DKVS v1
@@ -115,8 +155,8 @@ func (p *SatsNetDKVSClient) PutAccountPersonalRecord(wallet common.Wallet, path 
 	return p.PutAccountSignedRecord(wallet, key, value, opts)
 }
 
-func (p *SatsNetDKVSClient) PublishAccountAddress(wallet common.Wallet, network, address string,
-	opts dkvsindexer.RecordOptions, autopay *DKVSAutopayOptions) (*swire.DKVSRecord, error) {
+func (p *SatsNetDKVSClient) PublishAccountAddressBinding(wallet common.Wallet, network, address,
+	coreNodeID string, opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
 	accountID, err := dkvsAccountID(wallet)
 	if err != nil {
 		return nil, err
@@ -125,49 +165,40 @@ func (p *SatsNetDKVSClient) PublishAccountAddress(wallet common.Wallet, network,
 	if err != nil {
 		return nil, err
 	}
-	value, err := dkvsindexer.EncodeAccountMappingValue(accountID)
+	value, err := dkvsindexer.EncodeAccountServiceDescriptor(dkvsindexer.AccountServiceDescriptor{
+		AccountID: accountID, CoreNodeID: coreNodeID,
+		Capabilities: dkvsindexer.AccountServiceCapabilityRGB11Direct,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if autopay != nil {
-		return p.PutAccountSignedRecordWithAutopay(wallet, key, value, opts, *autopay)
-	}
+	opts.TTL = 0
+	opts.FeeProof = nil
 	return p.PutAccountSignedRecord(wallet, key, value, opts)
 }
 
-func (p *SatsNetDKVSClient) ResolveAccountAddress(network, address string,
-	opts dkvsindexer.RecordVerificationOptions) (string, *swire.DKVSRecord, error) {
+func (p *SatsNetDKVSClient) ResolveAccountAddressBinding(network, address string,
+	opts dkvsindexer.RecordVerificationOptions) (string, string, *swire.DKVSRecord, error) {
 	key, err := dkvsindexer.AccountMappingKey(network, address)
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	record, err := p.GetRecord(key)
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	opts.ExpectedKey = key
 	if err := dkvsindexer.VerifyAccountRecordForClient(record, opts); err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
-	accountID, err := dkvsindexer.DecodeAccountMappingValue(record.Value)
+	descriptor, err := dkvsindexer.DecodeAccountServiceDescriptor(record.Value)
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
-	return accountID, record, nil
+	return descriptor.AccountID, descriptor.CoreNodeID, record, nil
 }
 
 func (p *SatsNetDKVSClient) SendAccountMailboxMessage(wallet common.Wallet, mailboxID, msgID string,
 	value []byte, opts dkvsindexer.RecordOptions, autopay *DKVSAutopayOptions) (*swire.DKVSRecord, error) {
-	senderID, err := dkvsAccountID(wallet)
-	if err != nil {
-		return nil, err
-	}
-	key, err := dkvsindexer.MailMsgKey(mailboxID, senderID, msgID)
-	if err != nil {
-		return nil, err
-	}
-	if autopay != nil {
-		return p.PutAccountSignedRecordWithAutopay(wallet, key, value, opts, *autopay)
-	}
-	return p.PutAccountSignedRecord(wallet, key, value, opts)
+	return nil, ErrDKVSMessageManagerRequired
 }

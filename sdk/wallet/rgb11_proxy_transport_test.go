@@ -463,7 +463,7 @@ func TestRGB11ProxyDefersNackUntilBitcoinEvidenceIsAvailable(t *testing.T) {
 	}
 }
 
-func TestRGB11ProxyDeliveryBroadcastsBeforeAck(t *testing.T) {
+func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 	state := &rgb11ProxyTestServer{}
 	server := httptest.NewServer(http.HandlerFunc(state.serveHTTP))
 	defer server.Close()
@@ -554,14 +554,14 @@ func TestRGB11ProxyDeliveryBroadcastsBeforeAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if delivered.TxID != tx.TxHash().String() || len(evidence.broadcasted) == 0 {
-		t.Fatalf("delivery did not broadcast: result=%+v", delivered)
+	if !delivered.AwaitingACK || delivered.Broadcast || delivered.TxID != "" || len(evidence.broadcasted) != 0 {
+		t.Fatalf("delivery crossed the ACK boundary: result=%+v", delivered)
 	}
 	state.mu.Lock()
 	postedTxID, postedRecipient := state.txID, state.recipientID
 	postedConsignment := append([]byte(nil), state.consignment...)
 	state.mu.Unlock()
-	if postedTxID != delivered.TxID || postedRecipient != beneficiary.String() {
+	if postedTxID != tx.TxHash().String() || postedRecipient != beneficiary.String() {
 		t.Fatalf("unexpected proxy upload txid=%s recipient=%s", postedTxID, postedRecipient)
 	}
 	if !bytes.HasPrefix(postedConsignment, []byte("RGB\x00TFR")) {
@@ -574,8 +574,8 @@ func TestRGB11ProxyDeliveryBroadcastsBeforeAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State.Status != "broadcast" || stored.State.AckStatus != "awaiting" {
-		t.Fatalf("unexpected post-broadcast state: %+v", stored.State)
+	if stored.State.Status != "relayed" || stored.State.AckStatus != "awaiting" {
+		t.Fatalf("unexpected pre-ACK state: %+v", stored.State)
 	}
 
 	ack, err := manager.rgbManager.FetchRGB11ProxyAck(context.Background(), transferID)
@@ -586,16 +586,58 @@ func TestRGB11ProxyDeliveryBroadcastsBeforeAck(t *testing.T) {
 	state.ack = new(bool)
 	*state.ack = true
 	state.mu.Unlock()
-	ack, err = manager.rgbManager.FetchRGB11ProxyAck(context.Background(), transferID)
-	if err != nil || !ack.Available || !ack.Accepted {
-		t.Fatalf("accepted ACK not recorded: ack=%+v err=%v", ack, err)
+	delivered, err = manager.rgbManager.DeliverAndBroadcastRGB11ProxyTransfer(
+		context.Background(), []string{transferID},
+	)
+	if err != nil || !delivered.Broadcast || delivered.AwaitingACK ||
+		delivered.TxID != tx.TxHash().String() || len(evidence.broadcasted) == 0 {
+		t.Fatalf("accepted transfer was not broadcast: result=%+v err=%v", delivered, err)
 	}
 	stored, err = manager.rgbManager.projectionStore.LoadPendingTransfer(transferID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stored.State.Status != "broadcast" || stored.State.AckStatus != "accepted" {
-		t.Fatalf("ACK changed broadcast lifecycle incorrectly: %+v", stored.State)
+		t.Fatalf("ACK-before-broadcast lifecycle is incorrect: %+v", stored.State)
+	}
+
+	nackID := "proxy-recipient-nack"
+	nackInput := strings.Repeat("33", 32) + ":0"
+	nack := *pending
+	nack.State = pending.State
+	nack.State.TransferID = nackID
+	nack.State.BatchTransferIDs = []string{nackID}
+	nack.State.Status = "prepared"
+	nack.State.AckStatus = "awaiting"
+	nack.State.InputOutPoints = []string{nackInput}
+	nack.ReservationID = "proxy-nack-reservation"
+	if err := manager.rgbManager.projectionStore.SavePendingTransfer(&nack); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.utxoLockerL1.TryReserve([]string{nackInput},
+		rgb11wallet.LockReasonPending, nack.ReservationID); err != nil {
+		t.Fatal(err)
+	}
+	rejectedDecision := false
+	state.mu.Lock()
+	state.consignment = nil
+	state.ack = &rejectedDecision
+	state.mu.Unlock()
+	broadcastCount := len(evidence.broadcasted)
+	rejectedDelivery, err := manager.rgbManager.DeliverAndBroadcastRGB11ProxyTransfer(
+		context.Background(), []string{nackID},
+	)
+	if err != nil || rejectedDelivery == nil || !rejectedDelivery.Rejected ||
+		rejectedDelivery.Broadcast || len(evidence.broadcasted) != broadcastCount {
+		t.Fatalf("NACK crossed the broadcast boundary: result=%+v err=%v", rejectedDelivery, err)
+	}
+	rejected, err := manager.rgbManager.projectionStore.LoadPendingTransfer(nackID)
+	if err != nil || rejected.State.Status != "rejected" ||
+		rejected.State.RejectReason != "recipient-rejected" {
+		t.Fatalf("NACK terminal state=%+v err=%v", rejected, err)
+	}
+	if lock := manager.utxoLockerL1.GetLockedUtxoList()[nackInput]; lock != nil {
+		t.Fatalf("NACK left input locked: %+v", lock)
 	}
 
 	conflictID := "proxy-recipient-conflict"
@@ -617,8 +659,9 @@ func TestRGB11ProxyDeliveryBroadcastsBeforeAck(t *testing.T) {
 	}
 	state.mu.Lock()
 	state.postError = &rgb11ProxyError{Code: -101, Message: "Cannot change uploaded file"}
+	state.ack = nil
 	state.mu.Unlock()
-	broadcastCount := len(evidence.broadcasted)
+	broadcastCount = len(evidence.broadcasted)
 	_, err = manager.rgbManager.DeliverAndBroadcastRGB11ProxyTransfer(
 		context.Background(), []string{conflictID},
 	)
@@ -629,7 +672,7 @@ func TestRGB11ProxyDeliveryBroadcastsBeforeAck(t *testing.T) {
 	if len(evidence.broadcasted) != broadcastCount {
 		t.Fatal("terminal proxy conflict broadcast the witness transaction")
 	}
-	rejected, err := manager.rgbManager.projectionStore.LoadPendingTransfer(conflictID)
+	rejected, err = manager.rgbManager.projectionStore.LoadPendingTransfer(conflictID)
 	if err != nil || rejected.State.Status != "rejected" ||
 		rejected.State.RejectReason != "proxy-recipient-conflict" {
 		t.Fatalf("terminal proxy conflict state = %+v, err=%v", rejected, err)

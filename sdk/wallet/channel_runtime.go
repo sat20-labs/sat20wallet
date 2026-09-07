@@ -19,6 +19,20 @@ type Channel struct {
 	Mutex       sync.RWMutex
 }
 
+func newPeerSnapshotChannel(c *ChannelInDB, mgr *Manager, localWallet common.Wallet) *Channel {
+	// Peer-local wallet IDs are not authoritative here. Keep the wallet/account
+	// captured for the sync request, even if the selected wallet has changed.
+	ch := &Channel{
+		ChannelInDB: *c,
+		PeerRPC:     mgr.GetPeerNodeClient(c),
+		manager:     mgr,
+		localWallet: localWallet,
+	}
+	ch.LocalWalletId = localWallet.GetId()
+	ch.LocalChanCfg.WalletId = localWallet.GetSubAccount()
+	return ch
+}
+
 func NewChannel(c *ChannelInDB, mgr *Manager) *Channel {
 	newC := c
 	if newC == nil {

@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
+	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 type NodeRPCClient interface {
@@ -23,7 +26,7 @@ type NodeRPCClient interface {
 
 	SendSigReq(req *wwire.SignRequest,
 		sig []byte) ([][][]byte, error)
-	SendActionResultNfty(msgId int64, msg string, result int, reason string) error
+	SendActionResultNfty(localWallet common.Wallet, msgId int64, msg string, result int, reason string) error
 	SendPerformRemoteActionReq(info *RemoteActionPerformReservation) error
 	SendPerformRemoteActionAckReq(info *RemoteActionPerformReservation) error
 	SendPingReq(*wwire.PingReq) (*wwire.PingResp, error)
@@ -323,6 +326,11 @@ func (p *NodeClient) SendPerformRemoteActionAckReq(info *RemoteActionPerformRese
 		FeeTx:   info.FeeTx,
 		FeeTxId: info.FeeTxId,
 	}
+	sig, err := signRPCMessage(info.LocalWallet(), req)
+	if err != nil {
+		return err
+	}
+	req.Sig = sig
 
 	buff, err := json.Marshal(&req)
 	if err != nil {
@@ -522,8 +530,7 @@ func (p *NodeClient) SendSigReq(req *wwire.SignRequest,
 	return result.TxSig, nil
 }
 
-// TODO 增加消息发送者的公钥和签名
-func (p *NodeClient) SendActionResultNfty(msgId int64, action string, ret int, reason string) error {
+func (p *NodeClient) SendActionResultNfty(localWallet common.Wallet, msgId int64, action string, ret int, reason string) error {
 
 	req := wwire.ActionResultNotify{
 		MsgHeader: wwire.NewMsgHeader(),
@@ -531,6 +538,17 @@ func (p *NodeClient) SendActionResultNfty(msgId int64, action string, ret int, r
 		Action:    action,
 		Result:    ret,
 		Reason:    reason,
+	}
+	// Only the empty, read-only readiness probe can be sent without a wallet.
+	if localWallet != nil {
+		req.PubKey = localWallet.GetPaymentPubKey().SerializeCompressed()
+		sig, err := signRPCMessage(localWallet, req)
+		if err != nil {
+			return err
+		}
+		req.Sig = sig
+	} else if msgId != 0 || action != "" || ret != 0 || reason != "" {
+		return fmt.Errorf("missing action result signer")
 	}
 
 	buff, err := json.Marshal(&req)
@@ -625,5 +643,40 @@ func (p *NodeClient) SendActionSyncReqContext(ctx context.Context, req *wwire.Ac
 		return nil, err
 	}
 
+	return &result, nil
+}
+
+// MessageServiceRPCClient is optional so in-process channel test doubles do not
+// have to implement the MessageManager transport.
+type MessageServiceRPCClient interface {
+	SendMessageServiceReq(req *swire.MessageServiceRequest) (*swire.MessageServiceResponse, error)
+}
+
+func (p *NodeClient) SendMessageServiceReq(req *swire.MessageServiceRequest) (*swire.MessageServiceResponse, error) {
+	if p == nil || p.RESTClient == nil || p.Http == nil || req == nil {
+		return nil, fmt.Errorf("message service HTTP transport is not configured")
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	url := p.GetUrl(swire.MessageServicePath)
+	rsp, err := p.Http.SendPostRequest(url, body)
+	if err != nil {
+		return nil, err
+	}
+	var result swire.MessageServiceResponse
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		return nil, err
+	}
+	if result.Code != 0 {
+		if result.ErrorCode == "DIRECT_RATE_LIMITED" {
+			return &result, &MessageServiceRateLimitError{RetryAfter: time.Duration(result.RetryAfterMS) * time.Millisecond}
+		}
+		if result.Msg == "" {
+			result.Msg = "message service request failed"
+		}
+		return &result, fmt.Errorf("%s", result.Msg)
+	}
 	return &result, nil
 }

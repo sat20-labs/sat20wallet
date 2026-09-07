@@ -176,11 +176,34 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
     const pending = new Map(
       parseAssetSummary(rgb11Store.state.pending_assets || []).list.map((item) => [item.key, String(item.amount)])
     )
-    return total.map((item) => ({
+    const result = total.map((item) => ({
       ...item,
       available_amount: available.get(item.key) || '0',
       pending_amount: pending.get(item.key) || '0',
     }))
+	const known = new Set(result.map((item) => item.key))
+	for (const info of rgb11Store.state.ticker_infos || []) {
+	  const name = info?.name || info?.Name || info?.AssetName
+	  if (!name || name.Protocol !== 'rgb11') continue
+	  const canonicalName = String(info?.canonical_name || info?.CanonicalName ||
+		`${name.Protocol}:${name.Type || 'f'}:${name.Ticker || ''}`)
+	  if (known.has(canonicalName)) continue
+	  known.add(canonicalName)
+	  result.push({
+		id: canonicalName,
+		key: canonicalName,
+		protocol: name.Protocol,
+		type: name.Type || 'f',
+		label: name.Ticker || canonicalName,
+		ticker: name.Ticker || '',
+		utxos: [],
+		amount: '0',
+		precision: Number(info?.divisibility || 0),
+		available_amount: '0',
+		pending_amount: '0',
+	  })
+	}
+	return result
   }
 
   const presentAssets = (list: AssetItem[]) => {

@@ -1,12 +1,23 @@
 package wallet
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
 )
+
+func mustLoadAllResv(t *testing.T, database indexer.KVDB) map[int64]Reservation {
+	t.Helper()
+	loaded, err := LoadAllResvFromDB(database, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loaded
+}
 
 func minimalPersistedCommitmentTx(tag byte) *wire.MsgTx {
 	var previousHash chainhash.Hash
@@ -56,6 +67,34 @@ func savePendingFundingFixture(t *testing.T, database *memoryKVDB, walletValue *
 	return stored
 }
 
+func savePendingLockWithExpandFixture(t *testing.T, database *memoryKVDB, walletValue *InternalWallet,
+	channelID string, reservationID int64) *LocalActionPerformData {
+	t.Helper()
+	stored := savePendingFundingFixture(t, database, walletValue, channelID, reservationID)
+	if err := DeleteReservation(database, RESV_TYPE_OPEN, reservationID); err != nil {
+		t.Fatal(err)
+	}
+	stored.Status = CS_READY
+	stored.FundingTime = 0
+	stored.StaticMerkleRoot = stored.CalcStaticMerkleRoot()
+	if err := SaveChannelInDB(database, stored); err != nil {
+		t.Fatal(err)
+	}
+
+	resv := &LocalActionPerformData{
+		ReservationBase: NewReservationBase(reservationID, true, RS_PERFORM_ACTION_TX_BROADCASTED, walletValue),
+		Action:          LOCAL_ACTION_LOCK_WITH_EXPAND,
+		ActionParam:     &LocalActionParam_Expand{ChannelId: channelID},
+		ReqPubKey:       walletValue.GetPaymentPubKey().SerializeCompressed(),
+		TxId:            "53af8eaf00000000000000000000000000000000000000000000000000003d70",
+		IsL1Tx:          true,
+	}
+	if err := SaveReservation(database, resv); err != nil {
+		t.Fatal(err)
+	}
+	return resv
+}
+
 func TestFundingReservationRehydratesChannelAfterRestart(t *testing.T) {
 	database := newMemoryKVDB()
 	walletValue := NewInternalWalletWithMnemonic(
@@ -77,7 +116,7 @@ func TestFundingReservationRehydratesChannelAfterRestart(t *testing.T) {
 		fundingChannelMap: make(map[int64]*FundingReservation),
 	}
 	restarted.resetResvMapsLocked()
-	loaded := LoadAllResvFromDB(database, restarted)
+	loaded := mustLoadAllResv(t, database)
 	loadedFunding, ok := loaded[101].(*FundingReservation)
 	if !ok {
 		t.Fatalf("loaded reservation type = %T", loaded[101])
@@ -129,7 +168,7 @@ func TestUnlockWalletRehydratesPendingFundingWithoutManagerLockDeadlock(t *testi
 		info.Wallet = nil
 	}
 	manager.resetResvMapsLocked()
-	for _, resv := range LoadAllResvFromDB(manager.db, nil) {
+	for _, resv := range mustLoadAllResv(t, manager.db) {
 		manager.addResvLocked(resv)
 	}
 	manager.mutex.Unlock()
@@ -156,6 +195,211 @@ func TestUnlockWalletRehydratesPendingFundingWithoutManagerLockDeadlock(t *testi
 	}
 	if walletID != loaded.Channel.LocalWalletId {
 		t.Fatalf("restored channel wallet=%d, want %d", loaded.Channel.LocalWalletId, walletID)
+	}
+}
+
+func TestUnlockWalletRehydratesPendingLockWithExpandChannel(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+
+	manager := newAccountManagementAutoTestManager(t)
+	manager.resetResvMapsLocked()
+	manager.channelMap = make(map[string]*Channel)
+	manager.nodeMap = make(map[string]string)
+	const mnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
+	walletID, err := manager.ImportWallet(mnemonic, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	walletValue := manager.wallet.(*InternalWallet)
+	const channelID = "unlocklockwithexpandrehydration"
+	const reservationID int64 = 203
+	savePendingLockWithExpandFixture(t, manager.db.(*memoryKVDB), walletValue, channelID, reservationID)
+
+	manager.mutex.Lock()
+	manager.wallet = nil
+	for _, info := range manager.walletInfoMap {
+		info.Wallet = nil
+	}
+	manager.resetResvMapsLocked()
+	for _, resv := range mustLoadAllResv(t, manager.db) {
+		manager.addResvLocked(resv)
+	}
+	manager.mutex.Unlock()
+	if got := manager.GetChannel(channelID); got != nil {
+		t.Fatalf("channel restored before unlock: %p", got)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, unlockErr := manager.UnlockWallet("password")
+		done <- unlockErr
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("UnlockWallet failed: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("UnlockWallet deadlocked while restoring lock-with-expand channel")
+	}
+
+	restored := manager.GetChannel(channelID)
+	if restored == nil || restored.LocalWallet() == nil || restored.LocalWallet().GetId() != walletID {
+		t.Fatalf("pending lock-with-expand channel not restored for wallet %d: %+v", walletID, restored)
+	}
+	if got := manager.FindChannel(channelID); got != restored {
+		t.Fatalf("FindChannel returned %p, want runtime channel %p", got, restored)
+	}
+	if err := manager.rehydratePendingLocalActionRuntime(); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.GetChannel(channelID); got != restored {
+		t.Fatalf("second recovery replaced runtime channel %p with %p", restored, got)
+	}
+}
+
+func TestPendingLockWithExpandRecoverySkipsOtherWallet(t *testing.T) {
+	database := newMemoryKVDB()
+	currentWallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", GetChainParam())
+	otherWallet := NewInternalWalletWithMnemonic(
+		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", "", GetChainParam())
+	if currentWallet == nil || otherWallet == nil {
+		t.Fatal("create wallets")
+	}
+	const reservationID int64 = 204
+	const channelID = "otherwalletlockwithexpand"
+	savePendingLockWithExpandFixture(t, database, otherWallet, channelID, reservationID)
+	if err := DeleteReservation(database, RESV_TYPE_LOCALACTION, reservationID); err != nil {
+		t.Fatal(err)
+	}
+	resv := &LocalActionPerformData{
+		ReservationBase: NewReservationBase(reservationID, true, RS_PERFORM_ACTION_TX_BROADCASTED, currentWallet),
+		Action:          LOCAL_ACTION_LOCK_WITH_EXPAND,
+		ActionParam:     &LocalActionParam_Expand{ChannelId: channelID},
+		ReqPubKey:       currentWallet.GetPaymentPubKey().SerializeCompressed(),
+	}
+	if err := SaveReservation(database, resv); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		db:         database,
+		wallet:     currentWallet,
+		channelMap: make(map[string]*Channel),
+		nodeMap:    make(map[string]string),
+		walletInfoMap: map[int64]*WalletInfo{
+			currentWallet.GetId(): {WalletInDB: WalletInDB{Id: currentWallet.GetId()}, Wallet: currentWallet},
+			otherWallet.GetId():   {WalletInDB: WalletInDB{Id: otherWallet.GetId()}, Wallet: otherWallet},
+		},
+	}
+	manager.resetResvMapsLocked()
+	for _, resv := range mustLoadAllResv(t, database) {
+		manager.addResv(resv)
+	}
+	if err := manager.rehydratePendingLocalActionRuntime(); err == nil ||
+		!strings.Contains(err.Error(), "persisted channel belongs to another wallet") {
+		t.Fatalf("ownership recovery error = %v", err)
+	}
+	if got := manager.GetChannel(channelID); got != nil {
+		t.Fatalf("other wallet channel was restored: %p", got)
+	}
+	if _, ok := manager.GetLocalActionReservations()[reservationID]; !ok {
+		t.Fatal("other wallet reservation was removed")
+	}
+}
+
+func TestPendingLockWithExpandRecoveryKeepsReservationOnChannelFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		corrupt bool
+	}{
+		{name: "missing"},
+		{name: "corrupt", corrupt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := newMemoryKVDB()
+			walletValue := NewInternalWalletWithMnemonic(
+				"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", GetChainParam())
+			if walletValue == nil {
+				t.Fatal("create wallet")
+			}
+			const reservationID int64 = 205
+			channelID := "failedlockwithexpand" + tc.name
+			resv := &LocalActionPerformData{
+				ReservationBase: NewReservationBase(reservationID, true, RS_PERFORM_ACTION_TX_BROADCASTED, walletValue),
+				Action:          LOCAL_ACTION_LOCK_WITH_EXPAND,
+				ActionParam:     &LocalActionParam_Expand{ChannelId: channelID},
+				ReqPubKey:       walletValue.GetPaymentPubKey().SerializeCompressed(),
+			}
+			if err := SaveReservation(database, resv); err != nil {
+				t.Fatal(err)
+			}
+			if tc.corrupt {
+				if err := database.Write([]byte(GetChannelKey(channelID)), []byte("not-a-channel")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manager := &Manager{
+				db:            database,
+				wallet:        walletValue,
+				walletInfoMap: map[int64]*WalletInfo{walletValue.GetId(): {WalletInDB: WalletInDB{Id: walletValue.GetId()}, Wallet: walletValue}},
+				channelMap:    make(map[string]*Channel),
+				nodeMap:       make(map[string]string),
+			}
+			manager.resetResvMapsLocked()
+			manager.addResv(resv)
+			err := manager.rehydratePendingLocalActionRuntime()
+			if err == nil || !strings.Contains(err.Error(), "local action 205 channel "+channelID) {
+				t.Fatalf("recovery error = %v", err)
+			}
+			if _, ok := manager.GetLocalActionReservations()[reservationID]; !ok {
+				t.Fatal("failed recovery removed active reservation")
+			}
+			if _, err := LoadReservation(database, manager, RESV_TYPE_LOCALACTION, reservationID); err != nil {
+				t.Fatalf("failed recovery deleted persisted reservation: %v", err)
+			}
+			if got := manager.GetChannel(channelID); got != nil {
+				t.Fatalf("failed recovery installed channel: %p", got)
+			}
+		})
+	}
+}
+
+func TestPendingLockWithExpandRecoveryDoesNotReplaceCurrentChannel(t *testing.T) {
+	database := newMemoryKVDB()
+	walletValue := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", GetChainParam())
+	if walletValue == nil {
+		t.Fatal("create wallet")
+	}
+	const reservationID int64 = 206
+	const channelID = "currentchannellockwithexpand"
+	resv := savePendingLockWithExpandFixture(t, database, walletValue, channelID, reservationID)
+	manager := &Manager{
+		db:            database,
+		wallet:        walletValue,
+		walletInfoMap: map[int64]*WalletInfo{walletValue.GetId(): {WalletInDB: WalletInDB{Id: walletValue.GetId()}, Wallet: walletValue}},
+		channelMap:    make(map[string]*Channel),
+		nodeMap:       make(map[string]string),
+	}
+	manager.resetResvMapsLocked()
+	manager.addResv(resv)
+	stale, err := manager.LoadChannel(channelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := stale.Clone()
+	if err := manager.EnableChannel(current); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.rehydratePendingLocalActionRuntime(); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.GetChannel(channelID); got != current {
+		t.Fatalf("recovery replaced current channel %p with %p", current, got)
 	}
 }
 
@@ -207,7 +451,7 @@ func TestFundingReservationRecoverySkipsUnavailableWalletWithoutPanic(t *testing
 		fundingChannelMap: make(map[int64]*FundingReservation),
 	}
 	manager.resetResvMapsLocked()
-	for _, resv := range LoadAllResvFromDB(database, nil) {
+	for _, resv := range mustLoadAllResv(t, database) {
 		manager.addResv(resv)
 	}
 	manager.rehydratePendingFundingRuntime()
@@ -240,7 +484,7 @@ func TestFundingReservationRecoveryRejectsMismatchedGeneration(t *testing.T) {
 		fundingChannelMap: make(map[int64]*FundingReservation),
 	}
 	manager.resetResvMapsLocked()
-	for _, resv := range LoadAllResvFromDB(database, nil) {
+	for _, resv := range mustLoadAllResv(t, database) {
 		manager.addResv(resv)
 	}
 	manager.rehydratePendingFundingRuntime()
@@ -288,7 +532,7 @@ func TestClosingReservationRehydratesAndPersistsTerminalState(t *testing.T) {
 		channelMap:    make(map[string]*Channel),
 	}
 	manager.resetResvMapsLocked()
-	for _, resv := range LoadAllResvFromDB(database, nil) {
+	for _, resv := range mustLoadAllResv(t, database) {
 		manager.addResv(resv)
 	}
 	original := manager.GetClosingReservations()[reservationID]

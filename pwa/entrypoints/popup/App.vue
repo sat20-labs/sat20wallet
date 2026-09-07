@@ -4,6 +4,7 @@
       <RouterView />
       <!-- 全局 Approve 弹窗 -->
       <Approve />
+      <WalletPasswordDialog />
     </main>
     <div
       v-if="showInstallPanel && !isStandaloneApp()"
@@ -66,6 +67,7 @@ import { Icon } from "@iconify/vue";
 import walletManager from "@/utils/sat20";
 import Toaster from "@/components/ui/toast-new/Toaster.vue";
 import Approve from "@/entrypoints/popup/pages/wallet/Approve.vue";
+import WalletPasswordDialog from "@/components/common/WalletPasswordDialog.vue";
 import { useGlobalStore, useWalletStore } from "@/store";
 import { useAppVersion } from "@/composables/useAppVersion";
 import { storeToRefs } from "pinia";
@@ -85,12 +87,13 @@ const { autoLockTime } = storeToRefs(globalStore);
 let autoLockTimer: ReturnType<typeof setTimeout> | undefined;
 const installPromptEvent = ref<BeforeInstallPromptEvent | undefined>();
 const showInstallPanel = ref(false);
+const walletSetupPaths = ["/", "/import", "/create", "/restore-account"];
 
 const shouldAutoLock = () => {
   const path = router.currentRoute.value.path;
   return walletStore.hasWallet &&
     !walletStore.locked &&
-    !["/", "/unlock", "/import", "/create"].includes(path);
+    !["/unlock", ...walletSetupPaths].includes(path);
 };
 
 const clearAutoLockTimer = () => {
@@ -243,13 +246,13 @@ const getWalletStatus = async () => {
   if (res?.exists) {
     await walletStore.setHasWallet(true);
     const currentPath = router.currentRoute.value.path;
-    if (currentPath === "/" || currentPath === "/import" || currentPath === "/create") {
+    if (walletSetupPaths.includes(currentPath)) {
       router.replace("/unlock");
     }
   } else {
     await walletStore.setHasWallet(false);
     const currentPath = router.currentRoute.value.path;
-    if (currentPath !== "/" && currentPath !== "/import" && currentPath !== "/create") {
+    if (!walletSetupPaths.includes(currentPath)) {
       router.replace("/");
     }
   }

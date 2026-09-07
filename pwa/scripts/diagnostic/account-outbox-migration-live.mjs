@@ -18,10 +18,8 @@ const result = await page.evaluate(async (plainPassword) => {
   const verify = window.__SAT20_PWA_VERIFY__
   await verify.walletStorage.initializeState()
   const wallet = verify.useWalletStore()
-  const hashed = await verify.hashPassword(plainPassword)
-  await wallet.syncWalletCatalog()
-  await wallet.setPassword(hashed)
-  const [unlockError] = await wallet.unlockWallet(hashed)
+	await wallet.syncWalletCatalog()
+	const [unlockError] = await wallet.unlockWallet(plainPassword)
   if (unlockError && !/already unlocked/i.test(String(unlockError.message || unlockError))) {
     throw unlockError
   }

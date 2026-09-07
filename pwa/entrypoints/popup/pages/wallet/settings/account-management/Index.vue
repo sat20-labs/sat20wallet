@@ -15,6 +15,36 @@
         <AlertDescription class="space-y-1">
           <div>账户管理：已启用</div>
           <div>数据存储：{{ savedState.storage_mode === 'paid' ? 'AUTOPAY 全网同步' : '服务节点临时缓存' }}</div>
+          <div
+            v-if="savedState.storage_mode === 'paid' && autopayStatus && !autopayStatus.ready"
+            class="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-amber-400"
+          >
+            <div class="font-medium">AUTOPAY 需要处理</div>
+            <div class="mt-1">{{ autopayStatus.message || 'AUTOPAY 当前无法继续支付。' }}</div>
+            <div v-if="autopayStatus.current_block" class="mt-1 text-amber-400/80">
+              当前高度 {{ autopayStatus.current_block }}
+              <span v-if="autopayStatus.last_pay_height">；最后支付高度 {{ autopayStatus.last_pay_height }}</span>
+            </div>
+            <Button
+              v-if="autopayStatus.can_fund"
+              size="sm"
+              class="mt-2"
+              :disabled="busy"
+              @click="fundAutopay"
+            >
+              <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
+              充值 AUTOPAY
+            </Button>
+          </div>
+          <div
+            v-else-if="savedState.storage_mode === 'paid' && autopayStatus?.ready"
+            class="text-green-500"
+          >
+            AUTOPAY 支付正常
+          </div>
+          <div v-if="autopayFundingResult?.transaction_id" class="mt-1 text-green-500">
+            AUTOPAY 充值已确认：{{ autopayFundingResult.transaction_id }}
+          </div>
           <div>恢复配置：{{ savedState.recovery_configured ? '已配置' : '未配置' }}</div>
           <div v-if="savedState.recovery_configured">恢复模式：{{ savedState.recovery_mode }}</div>
           <div>托管数据版本：{{ savedState.managed_data_revision || 0 }}</div>
@@ -246,7 +276,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, onBeforeUnmount, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
@@ -259,8 +289,11 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useWalletStore } from '@/store'
+import { withWalletPassword } from '@/lib/walletPasswordPrompt'
 import accountSDK, {
   type AccountManagementStatus,
+  type AccountAutopayFundingResult,
+  type AccountAutopayFundingStatus,
   type AccountStorageOption,
   type AccountWalletMetadataInput,
 } from '@/utils/accountManagement'
@@ -270,6 +303,8 @@ const { t } = useI18n()
 const walletStore = useWalletStore()
 const { wallets } = storeToRefs(walletStore)
 const savedState = ref<AccountManagementStatus | null>(null)
+const autopayStatus = ref<AccountAutopayFundingStatus | null>(null)
+const autopayFundingResult = ref<AccountAutopayFundingResult | null>(null)
 const busy = ref(false)
 const error = ref('')
 const step = ref(1)
@@ -280,8 +315,9 @@ const recordCount = ref(100)
 const storageAuthorization = ref<any>(null)
 const preflight = ref<any>(null)
 const paidConfirmOpen = ref(false)
-const paidConfirmContext = ref<'account' | 'guardian'>('account')
+const paidConfirmContext = ref<'account' | 'guardian' | 'funding'>('account')
 let paidConfirmResolver: ((confirmed: boolean) => void) | null = null
+let autopayRefreshTimer: ReturnType<typeof setInterval> | undefined
 const guardianContact = ref('')
 const creation = ref<any>(null)
 const guardianReceipt = ref('')
@@ -358,9 +394,12 @@ const run = async (task: () => Promise<void>) => {
   try { await task() } catch (e: any) { error.value = e?.message || '操作失败' } finally { busy.value = false }
 }
 
-const runPreflight = () => run(async () => {
-  if (!walletStore.password) throw new Error('钱包尚未解锁')
-  preflight.value = await accountSDK.preflight(walletStore.password, metadata())
+const runWithPassword = (task: (password: string) => Promise<void>) => run(async () => {
+  await withWalletPassword(task)
+})
+
+const runPreflight = () => runWithPassword(async password => {
+	preflight.value = await accountSDK.preflight(password, metadata())
   storageOptions.value = (await accountSDK.getStorageOptions()).options
   recordCount.value = storageOptions.value.find(option => option.id === 'paid')?.default_record_count || 100
   step.value = 2
@@ -387,23 +426,33 @@ const autopayQuote = computed(() => {
 const paidConfirmRows = computed(() => {
   const option = paidStorageOption.value
   const quote = autopayQuote.value
+  const funding = paidConfirmContext.value === 'funding'
   return [
     {
       label: t('tools.txConfirm.purpose'),
       value: paidConfirmContext.value === 'guardian'
         ? '由当前 Guardian 根钱包支付好友恢复分片的 DKVS 持久存储费用'
+        : funding
+          ? '为账户管理的 AUTOPAY 付费存储充值'
         : t('accountManagement.autopayPurpose'),
     },
-    { label: t('tools.txConfirm.to'), value: option?.contract_address || '' },
-    { label: t('tools.txConfirm.asset'), value: option?.fee_asset || '' },
-    { label: t('tools.txConfirm.amount'), value: quote?.initialCost || option?.estimated_cost || '' },
+    { label: t('tools.txConfirm.to'), value: funding ? autopayStatus.value?.contract_address || '' : option?.contract_address || '' },
+    { label: t('tools.txConfirm.asset'), value: funding ? autopayStatus.value?.fee_asset || '' : option?.fee_asset || '' },
+    { label: t('tools.txConfirm.amount'), value: funding ? autopayStatus.value?.recommended_funding_amount || '' : quote?.initialCost || option?.estimated_cost || '' },
     { label: t('tools.txConfirm.network'), value: `SatoshiNet ${walletStore.network}` },
-    { label: t('accountManagement.recordCount'), value: String(normalizedRecordCount.value) },
+    { label: t('accountManagement.recordCount'), value: funding ? '' : String(normalizedRecordCount.value) },
     {
       label: t('accountManagement.perBlock'),
-      value: quote ? `${quote.amountPerBlock} ${option?.fee_asset || ''}` : '',
+      value: funding
+        ? `${autopayStatus.value?.amount_per_block || autopayStatus.value?.required_amount_per_block || ''} ${autopayStatus.value?.fee_asset || ''}`.trim()
+        : quote ? `${quote.amountPerBlock} ${option?.fee_asset || ''}` : '',
     },
-    { label: t('accountManagement.fundingPeriod'), value: t('accountManagement.fundingBlocks', { count: 1000 }) },
+    {
+      label: t('accountManagement.fundingPeriod'),
+      value: t('accountManagement.fundingBlocks', {
+        count: funding ? autopayStatus.value?.recommended_funding_blocks || 1000 : 1000,
+      }),
+    },
   ].filter(row => row.value)
 })
 
@@ -443,7 +492,23 @@ const confirmStorage = () => run(async () => {
   step.value = 3
 })
 
-const createRecovery = () => run(async () => {
+const refreshAutopayStatus = async () => {
+  if (savedState.value?.storage_mode !== 'paid') {
+    autopayStatus.value = null
+    return
+  }
+  autopayStatus.value = await accountSDK.autopayStatus()
+}
+
+const fundAutopay = () => run(async () => {
+  if (!autopayStatus.value?.can_fund) throw new Error('AUTOPAY 当前不能充值')
+  paidConfirmContext.value = 'funding'
+  if (!await requestPaidConfirmation()) return
+  autopayFundingResult.value = await accountSDK.fundAutopay()
+  await refreshAutopayStatus()
+})
+
+const createRecovery = () => runWithPassword(async password => {
   for (const q of questions.value) {
     if (!q.prompt.trim() || q.answer.length < 8 || q.answer !== q.confirmation) throw new Error('三个问题都需要至少 8 个字符且两次答案一致')
   }
@@ -452,8 +517,8 @@ const createRecovery = () => run(async () => {
     if (guardianContactError.value || !parsedGuardianContact.value) throw new Error(guardianContactError.value)
     guardian = parsedGuardianContact.value
   }
-  creation.value = await accountSDK.createRecovery({
-    password: walletStore.password,
+	creation.value = await accountSDK.createRecovery({
+	password,
     wallets: metadata(),
     recovery_mode: recoveryMode.value,
     questions: questions.value,
@@ -481,11 +546,11 @@ const acceptRehearsalGuardianResponse = () => run(async () => {
   rehearsalGuardianReady.value = true
 })
 
-const rehearse = () => run(async () => {
+const rehearse = () => runWithPassword(async password => {
   const answers = rehearsalAnswers.value.map((answer, index) => ({ question_id: questions.value[index].id, answer })).filter(item => item.answer)
-  const result = await accountSDK.rehearse(
-    creation.value.session_id, answers, rehearsalUserShare.value, walletStore.password
-  )
+	const result = await accountSDK.rehearse(
+	creation.value.session_id, answers, rehearsalUserShare.value, password
+	)
   if (!result.verified) throw new Error('恢复演练未通过')
   rehearsalAnswers.value = ['', '', '']
   rehearsalUserShare.value = ''
@@ -496,9 +561,8 @@ const rehearse = () => run(async () => {
   step.value = 6
 })
 
-const generateGuardianIdentity = () => run(async () => {
-  if (!walletStore.password) throw new Error('钱包尚未解锁')
-  guardianIdentity.value = (await accountSDK.guardianIdentity(walletStore.password)).contact
+const generateGuardianIdentity = () => runWithPassword(async password => {
+	guardianIdentity.value = (await accountSDK.guardianIdentity(password)).contact
   guardianIdentityCopied.value = false
 })
 
@@ -507,15 +571,15 @@ const copyGuardianIdentity = () => run(async () => {
   guardianIdentityCopied.value = true
 })
 
-const acceptGuardianSetup = () => run(async () => {
+const acceptGuardianSetup = () => runWithPassword(async password => {
   paidConfirmContext.value = 'guardian'
   if (guardianStorageChoice.value === 'paid' && !await requestPaidConfirmation()) return
   const authorization = await accountSDK.confirmStorage(guardianStorageChoice.value, guardianStorageChoice.value === 'paid' ? 100 : undefined)
-  guardianReceiptOutput.value = (await accountSDK.acceptGuardianSetup(walletStore.password, guardianSetupInput.value, authorization.id)).receipt
+	guardianReceiptOutput.value = (await accountSDK.acceptGuardianSetup(password, guardianSetupInput.value, authorization.id)).receipt
 })
 
-const createGuardianResponse = () => run(async () => {
-  guardianResponse.value = (await accountSDK.createGuardianResponse(walletStore.password, guardianRecoveryRequest.value)).response
+const createGuardianResponse = () => runWithPassword(async password => {
+	guardianResponse.value = (await accountSDK.createGuardianResponse(password, guardianRecoveryRequest.value)).response
 })
 
 const copyText = async (value: string) => {
@@ -525,5 +589,12 @@ const copyText = async (value: string) => {
 onMounted(async () => {
   try { savedState.value = await accountSDK.status() } catch { savedState.value = null }
   try { storageOptions.value = (await accountSDK.getStorageOptions()).options } catch { /* preflight will retry */ }
+  try { await refreshAutopayStatus() } catch { autopayStatus.value = null }
+  autopayRefreshTimer = setInterval(() => void refreshAutopayStatus().catch(() => undefined), 30_000)
+})
+
+onBeforeUnmount(() => {
+  if (autopayRefreshTimer) clearInterval(autopayRefreshTimer)
+  if (paidConfirmResolver) paidConfirmResolver(false)
 })
 </script>

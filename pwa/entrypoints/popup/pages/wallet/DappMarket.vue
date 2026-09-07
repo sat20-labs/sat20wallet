@@ -72,28 +72,21 @@ import { usePwaDappBridge } from '@/composables/usePwaDappBridge'
 import { useWalletStore } from '@/store'
 import { Network } from '@/types'
 import { SAT20_DAPP_PROTOCOL } from '@/types/sat20-dapp-connect'
-import { addAuthorizedOrigin } from '@/lib/authorized-origins'
 
 const DEFAULT_MARKET_URL = import.meta.env.DEV
   ? `${window.location.protocol}//${window.location.hostname}:3006/swap/`
   : 'https://satsnet.ordx.market/swap/'
+const DEFAULT_TESTNET_MARKET_URL = import.meta.env.DEV
+  ? DEFAULT_MARKET_URL
+  : 'https://test-satsnet.ordx.market/swap/'
 
 const router = useRouter()
 const walletStore = useWalletStore()
 
 const resolveMarketUrl = () => {
-  const configuredUrl = import.meta.env.VITE_SAT20_MARKET_URL || DEFAULT_MARKET_URL
-  let baseUrl = configuredUrl
-  try {
-    const url = new URL(configuredUrl)
-    if (url.pathname === '/' || /^\/market\/?$/.test(url.pathname)) {
-      url.pathname = '/swap/'
-    }
-    baseUrl = url.href
-  } catch {
-    // Keep the existing fallback below for a relative/custom URL.
-  }
   const network = walletStore.network === Network.TESTNET ? 'testnet' : 'mainnet'
+  const configuredUrl = import.meta.env.VITE_SAT20_MARKET_URL
+  const baseUrl = configuredUrl || (network === 'testnet' ? DEFAULT_TESTNET_MARKET_URL : DEFAULT_MARKET_URL)
 
   try {
     const url = new URL(baseUrl)
@@ -151,24 +144,14 @@ const targetOrigin = () => {
   try {
     return new URL(frameUrl.value).origin
   } catch {
-    return '*'
+    return ''
   }
 }
 
-const authorizeEmbeddedOrigin = async (origin: string) => {
-  if (bridge.isAllowedOrigin(origin)) {
-    await addAuthorizedOrigin(origin)
-  }
-}
-
-const announceWalletReady = async (origin = targetOrigin()) => {
+const announceWalletReady = (origin = targetOrigin()) => {
+  if (!origin || !bridge.isAllowedOrigin(origin)) return
   activeDappOrigin.value = origin
-  await authorizeEmbeddedOrigin(origin)
-  bridge.announceReady(origin, {
-    network: walletStore.network,
-    accounts: walletStore.address ? [walletStore.address] : [],
-    publicKey: walletStore.publicKey,
-  })
+  bridge.announceReady(origin)
 }
 
 const handleDappNavigate = (event: MessageEvent, message: Record<string, unknown>) => {
@@ -203,10 +186,10 @@ const handleDappNavigate = (event: MessageEvent, message: Record<string, unknown
   }
 }
 
-const handleLoad = async () => {
+const handleLoad = () => {
   loading.value = false
   loadError.value = false
-  await announceWalletReady()
+  announceWalletReady()
 }
 
 const handleClientReady = async (event: MessageEvent) => {
@@ -243,7 +226,7 @@ const handleClientReady = async (event: MessageEvent) => {
   } else {
     activeDappUrl.value = event.origin
   }
-  await announceWalletReady(event.origin)
+  announceWalletReady(event.origin)
 }
 
 const handleError = () => {
@@ -283,18 +266,17 @@ const updateOnlineState = () => {
 
 watch(
   () => [walletStore.address, walletStore.publicKey],
-  ([address, publicKey]) => {
-    bridge.announceEvent('accountChanged', activeDappOrigin.value || targetOrigin(), {
-      accounts: address ? [address] : [],
-      publicKey,
-    })
+  () => {
+    const origin = activeDappOrigin.value || targetOrigin()
+    if (origin) bridge.announceEvent('disconnect', origin, { reason: 'wallet_scope_changed' })
   }
 )
 
 watch(
   () => walletStore.network,
-  (network) => {
-    bridge.announceEvent('networkChanged', activeDappOrigin.value || targetOrigin(), { network })
+  () => {
+    const origin = activeDappOrigin.value || targetOrigin()
+    if (origin) bridge.announceEvent('disconnect', origin, { reason: 'wallet_scope_changed' })
   }
 )
 
@@ -302,7 +284,8 @@ watch(
   () => walletStore.locked,
   (locked) => {
     if (locked) {
-      bridge.announceEvent('disconnect', activeDappOrigin.value || targetOrigin(), { reason: 'wallet_locked' })
+      const origin = activeDappOrigin.value || targetOrigin()
+      if (origin) bridge.announceEvent('disconnect', origin, { reason: 'wallet_locked' })
     }
   }
 )

@@ -53,11 +53,13 @@ export interface AccountRecoverySummary {
 export interface RestoredWallet {
   id: number
   name: string
+  fingerprint: string
   accounts: Array<{
     index: number
     did: string
     address: string
     pub_key: string
+    account_id: string
   }>
 }
 
@@ -78,6 +80,35 @@ export interface AccountManagementStatus {
   last_dkvs_sync_error_code?: string
   last_dkvs_sync_error?: string
   last_dkvs_sync_error_at?: number
+}
+
+export interface AccountAutopayFundingStatus {
+  required: boolean
+  ready: boolean
+  needs_funding: boolean
+  can_fund: boolean
+  reason: string
+  message?: string
+  contract_address?: string
+  fee_asset?: string
+  payer?: string
+  current_block?: number
+  last_pay_height?: number
+  amount_per_block?: string
+  balance?: string
+  required_amount_per_block?: string
+  recommended_funding_amount?: string
+  recommended_funding_blocks?: number
+}
+
+export interface AccountAutopayFundingResult {
+  transaction_id?: string
+  contract_address: string
+  fee_asset: string
+  amount_per_block: string
+  funding_amount: string
+  funding_blocks: number
+  reused: boolean
 }
 
 type SDKResponse<T> = { code: number; msg: string; data?: T }
@@ -118,6 +149,14 @@ class AccountManagementSDK {
 
   getStorageOptions() {
     return this.request<{ options: AccountStorageOption[] }>('getStorageOptions')
+  }
+
+  autopayStatus() {
+    return this.request<AccountAutopayFundingStatus>('autopayStatus')
+  }
+
+  fundAutopay() {
+    return this.request<AccountAutopayFundingResult>('fundAutopay')
   }
 
   confirmStorage(optionId: string, recordCount?: number) {
@@ -180,7 +219,7 @@ class AccountManagementSDK {
   }
 
   commitRecovery(sessionId: string, password: string) {
-    return this.request<{ wallets: RestoredWallet[] }>('commitRecovery', { session_id: sessionId, password })
+    return this.request<{ wallets: RestoredWallet[]; root_wallet_id: number; account_id: string }>('commitRecovery', { session_id: sessionId, password })
   }
 
   abortSession(sessionId: string) {

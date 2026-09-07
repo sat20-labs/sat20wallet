@@ -64,9 +64,8 @@ func TestManagedRootWalletCannotBeDeleted(t *testing.T) {
 		manager.accountProfile.Pending[0].Fingerprint != walletFingerprint(childWallet) {
 		t.Fatal("non-root wallet deletion was not queued for DKVS")
 	}
-	if manager.wallet != rootWallet || manager.status.CurrentWallet != 1 ||
-		manager.channelIdentityGeneration != 1 {
-		t.Fatal("deleting the current wallet did not advance channel identity")
+	if manager.wallet != rootWallet || manager.status.CurrentWallet != 1 {
+		t.Fatal("deleting the current wallet did not select the root wallet")
 	}
 }
 
@@ -173,5 +172,41 @@ func TestLocalRGB11AccountsIgnoreDuplicateWalletFingerprints(t *testing.T) {
 		if account.WalletID != 1 || account.AccountIndex != uint32(index) {
 			t.Fatalf("non-canonical RGB11 account selected: %+v", account)
 		}
+	}
+}
+
+func TestWalletCatalogUsesPublicIdentityInsteadOfLocalWalletID(t *testing.T) {
+	const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+	first := NewInternalWalletWithMnemonic(mnemonic, "", &chaincfg.TestNet4Params)
+	second := NewInternalWalletWithMnemonic(mnemonic, "", &chaincfg.TestNet4Params)
+	if first == nil || second == nil {
+		t.Fatal("create test wallets")
+	}
+	first.id = 11
+	second.id = 99
+	makeManager := func(id int64, value *InternalWallet) *Manager {
+		return &Manager{walletInfoMap: map[int64]*WalletInfo{id: {
+			WalletInDB: WalletInDB{Id: id, Accounts: 1, Name: "Root"}, Wallet: value,
+		}}}
+	}
+	firstManager := makeManager(first.id, first)
+	firstCatalog := firstManager.GetWalletCatalog()
+	secondCatalog := makeManager(second.id, second).GetWalletCatalog()
+	if len(firstCatalog) != 1 || len(secondCatalog) != 1 ||
+		len(firstCatalog[0].Accounts) != 1 || len(secondCatalog[0].Accounts) != 1 {
+		t.Fatal("unexpected wallet catalog")
+	}
+	firstIdentity := firstCatalog[0].Accounts[0].AccountID
+	secondIdentity := secondCatalog[0].Accounts[0].AccountID
+	if firstIdentity == "" || firstIdentity != secondIdentity {
+		t.Fatalf("public identity changed with local wallet ID: %q != %q", firstIdentity, secondIdentity)
+	}
+	if firstCatalog[0].ID == secondCatalog[0].ID {
+		t.Fatal("test did not use different local wallet IDs")
+	}
+	first.SetSubAccount(2)
+	rootIdentity, err := firstManager.RootAccountID()
+	if err != nil || rootIdentity != firstIdentity {
+		t.Fatalf("root public identity followed the current subaccount: got %q err=%v", rootIdentity, err)
 	}
 }

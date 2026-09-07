@@ -14,9 +14,9 @@ import type { Language } from '@/types'
 import { Chain, Network } from '@/types'
 import { useGlobalStore, useWalletStore } from '@/store'
 import { usePwaDappBridge } from '@/composables/usePwaDappBridge'
-import { addAuthorizedOrigin } from '@/lib/authorized-origins'
+import { createDappGrant, getCurrentDappScope } from '@/lib/authorized-origins'
+import { DAPP_CAPABILITIES } from '@/lib/dapp-grant-model'
 import { useApproveStore } from '@/store/approve'
-import { hashPassword } from '@/utils/crypto'
 
 const defaultLocale = 'en'
 
@@ -83,6 +83,21 @@ const registerServiceWorker = () => {
   }
 }
 
+const reportPageReadyToServiceWorker = async () => {
+  if (import.meta.env.DEV || !('serviceWorker' in navigator)) {
+    return
+  }
+  try {
+    const registration = await navigator.serviceWorker.ready
+    registration.active?.postMessage({
+      type: 'SAT20_PAGE_READY',
+      releaseId: `${__SAT20_APP_VERSION__}-${__SAT20_BUILD_ID__}`,
+    })
+  } catch (error) {
+    console.warn('Failed to report PWA release readiness:', error)
+  }
+}
+
 const renderStartupError = (error: unknown) => {
   console.error('SAT20 Wallet startup failed:', error)
   const appRoot = document.getElementById('app')
@@ -124,6 +139,10 @@ const renderStartupError = (error: unknown) => {
   })
 }
 
+window.addEventListener('sat20:wasm-runtime-error', (event) => {
+  renderStartupError(event.detail)
+})
+
 clearDevelopmentServiceWorkerCache().then(() => {
   // Registration must not wait for wallet or network initialization. This lets
   // the browser cache the app shell and WASM as early as possible.
@@ -148,13 +167,18 @@ clearDevelopmentServiceWorkerCache().then(() => {
 
   app.mount('#app')
 
+  // A newly activated worker keeps the previous page and cache untouched until
+  // this release has initialized its WASM runtime, storage, router, and Vue UI.
+  void reportPageReadyToServiceWorker()
+
   // 暴露全局对象
   ;(window as any).sat20 = sat20
   if (import.meta.env.DEV) {
     ;(window as any).__SAT20_PWA_VERIFY__ = {
-      addAuthorizedOrigin,
+      createDappGrant,
+      getCurrentDappScope,
+      DAPP_CAPABILITIES,
       Chain,
-      hashPassword,
       Network,
       rgb11Address,
       sat20,

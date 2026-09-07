@@ -3,18 +3,18 @@ import { ref, computed } from 'vue'
 import { config as configMap } from '@/config'
 import { walletStorage } from '@/lib/walletStorage'
 
-export type Env = 'dev' | 'test' | 'prd'
+export type Env = 'prd'
 export const useGlobalStore = defineStore('global', () => {
 
   const loading = ref(false)
   const version = ref(0)
-  const env = ref<Env>(walletStorage.getValue('env') || 'prd')
+  const env = ref<Env>('prd')
   const stpVersion = ref('0.0.0')
   const autoLockTime = ref(walletStorage.getValue('autoLockTime') || '5')
   const hideBalance = ref(Boolean(walletStorage.getValue('hideBalance')))
 
   const config = computed(() => {
-    return configMap[env.value]
+    return configMap.prd
   })
   const setStpVersion = (value: string) => {
     stpVersion.value = value
@@ -24,10 +24,6 @@ export const useGlobalStore = defineStore('global', () => {
   }
   const setLoading = (value: boolean) => {
     loading.value = value
-  }
-  const setEnv = async (value: Env) => {
-    env.value = value
-    await walletStorage.setValue('env', value)
   }
   const setAutoLockTime = async (value: string) => {
     autoLockTime.value = value
@@ -45,7 +41,6 @@ export const useGlobalStore = defineStore('global', () => {
     stpVersion,
     setStpVersion,
     env,
-    setEnv,
     config,
     autoLockTime,
     setAutoLockTime,

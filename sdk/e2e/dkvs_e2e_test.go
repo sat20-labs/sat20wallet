@@ -1,8 +1,12 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -75,13 +79,14 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 		AddressParams: &chaincfg.TestNetParams,
 		PoolContract:  contractA.MustEncode(),
 	}
-	if _, err := clientA.PutSignedRecordWithAutopayV1(actorA.Wallet, nameKey, []byte("owner-a"),
+	if _, err := clientA.PutSignedRecordWithAutopay(actorA.Wallet, nameKey, []byte("owner-a"),
 		dkvsindexer.RecordOptions{Seq: 1}, autopayA); err != nil {
 		t.Fatal(err)
 	}
 	requireDKVSValue(t, f.Network.Core, nameKey, []byte("owner-a"))
-	_, _, err = dkvsClientForNode(t, f.Network.Miner).SubscribeKey(nameKey)
-	require.NoError(t, err)
+	require.NoError(t, subscribeDKVSNodeInternal(t, f.Network.Miner, dkvsindexer.Subscription{
+		Type: dkvsindexer.SubscriptionKey, Target: nameKey,
+	}))
 	require.NoError(t, connectNode(f.Network.Miner, f.Network.Core))
 	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-a"))
 
@@ -94,20 +99,20 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 		AddressParams: &chaincfg.TestNetParams,
 		PoolContract:  contractA.MustEncode(),
 	}
-	if _, err := clientB.PutSignedRecordWithAutopayV1(actorB.Wallet, nameKey, []byte("owner-b"),
+	if _, err := clientB.PutSignedRecordWithAutopay(actorB.Wallet, nameKey, []byte("owner-b"),
 		dkvsindexer.RecordOptions{Seq: 2}, autopayB); err != nil {
 		t.Fatal(err)
 	}
 	requireDKVSValue(t, f.Network.Bootstrap, nameKey, []byte("owner-b"))
 	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-b"))
-	deletedName, err := clientB.TombstoneSignedWithAutopayV1(actorB.Wallet, nameKey,
+	deletedName, err := clientB.TombstoneSignedWithAutopay(actorB.Wallet, nameKey,
 		dkvsindexer.RecordOptions{}, autopayB)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), deletedName.Seq)
 	require.True(t, dkvsindexer.IsTombstone(deletedName.Flags))
 	requireDKVSAbsent(t, f.Network.Bootstrap, nameKey)
 	requireDKVSAbsent(t, f.Network.Miner, nameKey)
-	rewrittenName, err := clientB.PutSignedRecordWithAutopayV1(actorB.Wallet, nameKey,
+	rewrittenName, err := clientB.PutSignedRecordWithAutopay(actorB.Wallet, nameKey,
 		[]byte("owner-b-rewritten"), dkvsindexer.RecordOptions{}, autopayB)
 	require.NoError(t, err)
 	require.Equal(t, uint64(4), rewrittenName.Seq)
@@ -115,28 +120,88 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 	requireDKVSValue(t, f.Network.Core, nameKey, []byte("owner-b-rewritten"))
 	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-b-rewritten"))
 
-	mailboxID := dkvsindexer.AccountID(actorB.Wallet.GetPubKey().SerializeCompressed())
-	senderID := dkvsindexer.AccountID(actorA.Wallet.GetPubKey().SerializeCompressed())
-	_, _, err = dkvsClientForNode(t, f.Network.Miner).SubscribeMailbox(mailboxID)
+	// Message entries are not ordinary DKVS SharedAppend records anymore. Drive
+	// the real SDK -> CoreNode MessageService -> AccountBound mailbox path.
+	senderManager, _ := newWalletManagerForNode(t, f.Network.Core, dkvsClientMnemonic)
+	require.NoError(t, senderManager.InitializeAccountManagement("123456"))
+	recipientManager, _ := newWalletManagerForNode(t, f.Network.Core, bootstrapMnemonic)
+	require.NoError(t, recipientManager.InitializeAccountManagement("123456"))
+	require.NoError(t, recipientManager.BindAccountToCurrentCoreNode())
+	recipientManager.Start()
+	recipientID := dkvsindexer.AccountID(recipientManager.GetWallet().GetPubKey().SerializeCompressed())
+	direct, err := senderManager.SendAccountDirectMessage(
+		"e2e-message", wallet.AccountMessageKindGeneric, recipientID, []byte("sender-paid-message"),
+	)
 	require.NoError(t, err)
-	mailKey, err := dkvsindexer.MailMsgKey(mailboxID, senderID, "e2e-message")
+	require.Equal(t, uint64(0), direct.SenderMsgID)
+	mailKey, err := dkvsindexer.MailMsgKey(recipientID, direct.SenderAccount, direct.MessageID)
 	require.NoError(t, err)
-	if _, err := clientA.SendSignedMailboxMessageWithAutopayV1(
-		actorA.Wallet, mailboxID, "e2e-message", []byte("sender-paid-message"),
-		dkvsindexer.RecordOptions{Seq: 1}, autopayA,
-	); err != nil {
-		t.Fatal(err)
-	}
-	requireDKVSValue(t, f.Network.Core, mailKey, []byte("sender-paid-message"))
-	requireDKVSValue(t, f.Network.Miner, mailKey, []byte("sender-paid-message"))
-	if _, err := clientB.DeleteMessageV1(
-		actorB.Wallet, mailboxID, senderID, "e2e-message",
-		dkvsindexer.RecordOptions{Seq: 2},
-	); err != nil {
-		t.Fatal(err)
-	}
+	requireDKVSValue(t, f.Network.Core, mailKey, mustSerializeDirectForE2E(t, direct))
+	// AccountBound data never mirrors to Bootstrap or selective miners.
 	requireDKVSAbsent(t, f.Network.Bootstrap, mailKey)
 	requireDKVSAbsent(t, f.Network.Miner, mailKey)
+
+	var (
+		messages []*wallet.AccountDirectMessage
+		total    int
+	)
+	require.Eventually(t, func() bool {
+		messages, total, err = recipientManager.ReadAccountDirectMessages(0, 10)
+		return err == nil && total == 1 && len(messages) == 1
+	}, 90*time.Second, time.Second, "periodic managed-prefix sync did not refresh mailbox")
+	require.Equal(t, 1, total)
+	require.Len(t, messages, 1)
+	require.Equal(t, wallet.AccountMessageKindGeneric, messages[0].Payload.Kind)
+	require.Equal(t, "sender-paid-message", string(messages[0].Payload.Body))
+	require.NoError(t, recipientManager.DeleteMailboxMessage(recipientManager.GetWallet(), mailKey))
+	requireDKVSAbsent(t, f.Network.Core, mailKey)
+
+}
+
+func mustSerializeDirectForE2E(t *testing.T, message *wire.DirectMessage) []byte {
+	t.Helper()
+	encoded, err := wire.SerializeDirectMessage(message, true)
+	require.NoError(t, err)
+	return encoded
+}
+
+func subscribeDKVSNodeInternal(t *testing.T, node *testHarness, sub dkvsindexer.Subscription) error {
+	t.Helper()
+	base, err := node.IndexerURL("testnet")
+	if err != nil {
+		return err
+	}
+	target, err := url.Parse(base)
+	if err != nil {
+		return err
+	}
+	target.Path = strings.TrimRight(target.Path, "/") + "/v3/dkvs/subscriptions"
+	body, err := json.Marshal(sub)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, target.String(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("content-type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK || result.Code != 0 {
+		return fmt.Errorf("node-internal DKVS subscription failed status=%d code=%d msg=%s",
+			resp.StatusCode, result.Code, result.Msg)
+	}
+	return nil
 }
 
 func dkvsMinerArgs(t *testing.T) []string {

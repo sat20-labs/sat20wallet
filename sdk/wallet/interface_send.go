@@ -51,7 +51,7 @@ func (p *Manager) BatchSendAssetsV2_SatsNet(destAddr []string,
 	if name == nil {
 		return "", fmt.Errorf("invalid asset name %s", assetName)
 	}
-	tickerInfo := p.getTickerInfo(name)
+	tickerInfo := p.getSendTickerInfo_SatsNet(name)
 	if tickerInfo == nil {
 		return "", fmt.Errorf("can't get ticker %s info", assetName)
 	}
@@ -119,7 +119,7 @@ func (p *Manager) BuildBatchSendTx_SatsNet(localAddress string, destAddr []strin
 		return nil, nil, fmt.Errorf("the lenght of utxos is 0")
 	}
 
-	tickerInfo := p.getTickerInfo(assetName)
+	tickerInfo := p.getSendTickerInfo_SatsNet(assetName)
 	if tickerInfo == nil {
 		return nil, nil, fmt.Errorf("can't get ticker %s info", assetName)
 	}
@@ -217,7 +217,7 @@ func (p *Manager) BatchSendAssetsV3_SatsNet(dest []*SendAssetInfo,
 	if name == nil {
 		return "", fmt.Errorf("invalid asset name %s", assetName)
 	}
-	tickerInfo := p.getTickerInfo(name)
+	tickerInfo := p.getSendTickerInfo_SatsNet(name)
 	if tickerInfo == nil {
 		return "", fmt.Errorf("can't get ticker %s info", assetName)
 	}
@@ -283,7 +283,7 @@ func (p *Manager) BuildBatchSendTxV2_SatsNet(localAddress string, dest []*SendAs
 		destPkScript = append(destPkScript, pkScript)
 	}
 
-	tickerInfo := p.getTickerInfo(assetName)
+	tickerInfo := p.getSendTickerInfo_SatsNet(assetName)
 	if tickerInfo == nil {
 		return nil, nil, fmt.Errorf("can't get ticker %s info", assetName)
 	}
@@ -400,7 +400,7 @@ func (p *Manager) BatchSendAssets_SatsNet(destAddr string,
 	if name == nil {
 		return "", fmt.Errorf("invalid asset name %s", assetName)
 	}
-	tickerInfo := p.getTickerInfo(name)
+	tickerInfo := p.getSendTickerInfo_SatsNet(name)
 	if tickerInfo == nil {
 		return "", fmt.Errorf("can't get ticker %s info", assetName)
 	}
@@ -574,7 +574,7 @@ func (p *Manager) sendAssets_SatsNet(destAddr string,
 	if name == nil {
 		return nil, fmt.Errorf("invalid asset name %s", assetName)
 	}
-	tickerInfo := p.getTickerInfo(name)
+	tickerInfo := p.getSendTickerInfo_SatsNet(name)
 	if tickerInfo == nil {
 		return nil, fmt.Errorf("can't get ticker %s info", assetName)
 	}
@@ -918,7 +918,7 @@ func (p *Manager) SendAssetsV3_SatsNet(destAddr string,
 	if name == nil {
 		return "", fmt.Errorf("invalid asset name %s", assetName)
 	}
-	tickerInfo := p.getTickerInfo(name)
+	tickerInfo := p.getSendTickerInfo_SatsNet(name)
 	if tickerInfo == nil {
 		return "", fmt.Errorf("can't get ticker %s info", assetName)
 	}
@@ -1180,6 +1180,17 @@ func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr 
 	var tx *wire.MsgTx
 	var prevFetcher *txscript.MultiPrevOutFetcher
 	var fee int64
+
+	if name.Protocol == "rgb11" {
+		if n <= 0 || n > 32 {
+			return nil, 0, fmt.Errorf("RGB11 send requires 1 to 32 outputs")
+		}
+		dest := make([]*SendAssetInfo, n)
+		for i := range dest {
+			dest[i] = &SendAssetInfo{Address: destAddr, AssetName: name, AssetAmt: dAmt.Clone()}
+		}
+		return p.sendRGB11Assets(localWallet, dest, name, feeRate, memo)
+	}
 
 	var inscribe *InscribeResv
 	newName := GetAssetName(tickerInfo)
@@ -1798,7 +1809,7 @@ func (p *Manager) selectUtxosForBRC20WithHeight(utxomgr *UtxoMgr, excludedUtxoMa
 		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -1984,6 +1995,33 @@ func (p *Manager) BuildBatchSendTx_brc20(localAddr, destAddr string,
 	}
 
 	return tx, prevFetcher, feeValue - feeChange, inscribe, nil
+}
+
+// SendAssetsV3 delegates ORDX carrier/stub handling and RGB proof delivery
+// to the established batch paths.
+func (p *Manager) SendAssetsV3(destAddr string, assetName string,
+	amt string, feeRate int64, memo []byte) (string, error) {
+	name := ParseAssetString(assetName)
+	if name == nil || (name.Protocol != indexer.PROTOCOL_NAME_ORDX && name.Protocol != "rgb11") {
+		return "", fmt.Errorf("SendAssetsV3 only supports ORDX or RGB11 assets")
+	}
+	tickerInfo := p.getTickerInfo(name)
+	if tickerInfo == nil {
+		return "", fmt.Errorf("can't get ticker %s info", assetName)
+	}
+	dAmt, err := indexer.NewDecimalFromString(amt, tickerInfo.Divisibility)
+	if err != nil {
+		return "", err
+	}
+	if dAmt.Sign() <= 0 {
+		return "", fmt.Errorf("invalid amount %s", amt)
+	}
+	dest := &SendAssetInfo{
+		Address: destAddr, AssetName: name, AssetAmt: dAmt,
+	}
+	txID, _, err := p.BatchSendAssetsV3([]*SendAssetInfo{dest}, assetName,
+		feeRate, memo, "", false)
+	return txID, err
 }
 
 // 发送指定资产
@@ -2309,9 +2347,15 @@ func (p *Manager) SelectUtxosForGarbage(
 	// 先选满足条件的主utxo
 	if len(inputs) != 0 {
 		for _, u := range inputs {
+			if p.isL1SendInputProtected(u) {
+				return nil, nil, 0, 0, 0, fmt.Errorf("send garbage input %s is protected", u)
+			}
 			output, err := p.getL1TxOutput(u)
 			if err != nil {
-				continue
+				return nil, nil, 0, 0, 0, err
+			}
+			if output == nil {
+				return nil, nil, 0, 0, 0, fmt.Errorf("send garbage input %s is unavailable", u)
 			}
 			selected[u] = output
 
@@ -2334,7 +2378,7 @@ func (p *Manager) SelectUtxosForGarbage(
 		requiredValue = total
 	} else {
 		utxos, err := p.l1IndexerClient.GetUnusableUtxosWithAddress(address)
-		if err != nil {
+		if err != nil || len(utxos) == 0 {
 			return nil, nil, 0, 0, 0, fmt.Errorf("no garbage utxo")
 		}
 		changePkScript = utxos[0].OutValue.PkScript
@@ -2342,7 +2386,7 @@ func (p *Manager) SelectUtxosForGarbage(
 			if _, ok := excludedUtxoMap[u.OutPointStr]; ok {
 				continue
 			}
-			if p.utxoLockerL1.IsLocked(u.OutPointStr) {
+			if p.isL1SendInputProtected(u.OutPointStr) {
 				continue
 			}
 			if excludeRecentBlock {
@@ -2387,7 +2431,7 @@ func (p *Manager) SelectUtxosForGarbage(
 		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -2474,7 +2518,7 @@ func (p *Manager) selectUtxosForPlainSatsWithHeight(
 		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -2517,7 +2561,7 @@ func (p *Manager) selectUtxosForPlainSatsWithHeight(
 		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -2570,7 +2614,7 @@ func (p *Manager) selectUtxosForPlainSatsWithHeight(
 		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -2651,7 +2695,7 @@ func (p *Manager) selectUtxosForAssetWithHeight(address string, excludedUtxoMap 
 		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -2697,7 +2741,7 @@ func (p *Manager) selectUtxosForAssetWithHeight(address string, excludedUtxoMap 
 		if _, ok := excludedUtxoMap[u.OutPoint]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -2785,7 +2829,7 @@ func (p *Manager) selectUtxosForFeeV3WithHeight(
 		if _, ok := excludedUtxoMap[out.OutPoint]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(out.OutPoint) {
+		if p.isL1SendInputProtected(out.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -2827,7 +2871,7 @@ func (p *Manager) selectUtxosForFeeV3WithHeight(
 		if _, ok := excludedUtxoMap[out.OutPoint]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(out.OutPoint) {
+		if p.isL1SendInputProtected(out.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -3023,7 +3067,7 @@ func (p *Manager) SelectUtxosForFeeV2(
 		if _, ok := excludedUtxoMap[utxo]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(utxo) {
+		if p.isL1SendInputProtected(utxo) {
 			continue
 		}
 		if u.Value > requiredValue {
@@ -3087,7 +3131,7 @@ func (p *Manager) SelectUtxosForFeeV2WithMgr(
 		if _, ok := excludedUtxoMap[utxo]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(utxo) {
+		if p.isL1SendInputProtected(utxo) {
 			continue
 		}
 		if u.Value > requiredValue {
@@ -3248,7 +3292,7 @@ func (p *Manager) buildSendOrdxTxWithStubWithHeight(srcAddress string, excluded 
 	p.utxoLockerL1.Reload(address)
 	var changePkScript []byte
 	for _, u := range utxos {
-		if p.utxoLockerL1.IsLocked(u.OutPoint) {
+		if p.isL1SendInputProtected(u.OutPoint) {
 			continue
 		}
 		if excludeRecentBlock {
@@ -3546,6 +3590,14 @@ func (p *Manager) BatchSendAssetsV3(dest []*SendAssetInfo,
 	assetName := GetAssetName(tickerInfo)
 	if feeRate == 0 {
 		feeRate = p.GetFeeRate()
+	}
+
+	if name.Protocol == "rgb11" {
+		tx, fee, err := p.sendRGB11Assets(p.wallet, dest, name, feeRate, memo)
+		if tx == nil {
+			return "", fee, err
+		}
+		return tx.TxID(), fee, err
 	}
 
 	var tx *wire.MsgTx

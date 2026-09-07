@@ -26,23 +26,22 @@
 
 <script setup lang="ts">
 import LayoutApprove from '@/components/layout/LayoutApprove.vue'
-import { useWalletStore } from '@/store'
+import { useWalletStore, useApproveStore } from '@/store'
 import { storeToRefs } from 'pinia'
 interface Props {
   data: any
+  requestId: string
 }
 
 const props = defineProps<Props>()
 
 const walletStore = useWalletStore()
+const approveStore = useApproveStore()
 const { network } = storeToRefs(walletStore)
 const emit = defineEmits(['confirm', 'cancel'])
 
-const confirm = async () => {
-  setTimeout(() => {
-    emit('confirm', props.data.network)
-  }, 500);
-  await walletStore.setNetwork(props.data.network)
+const confirm = () => {
+  approveStore.executeNetworkSwitch(props.requestId, walletStore.setNetwork)
 }
 const cancel = () => {
   emit('cancel')

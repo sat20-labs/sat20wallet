@@ -18,8 +18,8 @@
         <TableRow>
           <TableHead v-if="showCheckbox">
             <Checkbox
-              :model-value="isAllSelected"
-              @update:model-value="() => handleToggleSelectAll()"
+              :checked="isAllSelected"
+              @update:checked="() => handleToggleSelectAll()"
             />
           </TableHead>
           <TableHead>UTXO</TableHead>

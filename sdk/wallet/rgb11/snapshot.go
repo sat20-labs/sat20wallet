@@ -73,7 +73,7 @@ func (s *ProjectionStore) ExportSnapshot() ([]SnapshotRecord, error) {
 		}
 		pending.RecipientConsignment = nil
 		pending.LocalConsignment = nil
-		if pending.State.Status != "prepared" {
+		if pending.State.Status != "prepared" && (pending.ChannelSend == nil || pending.ChannelSend.Signed) {
 			pending.SignedPSBT = nil
 		}
 		encoded, encodeErr := encode(&pending)

@@ -3,6 +3,7 @@ package wallet
 import (
 	"bytes"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -166,7 +167,10 @@ func (p *Manager) initDB() error {
 
 	// Wallet secrets are still locked here.  Reservation runtime state is
 	// restored only after UnlockWallet has released p.mutex.
-	loadedResv := LoadAllResvFromDB(p.db, nil)
+	loadedResv, err := LoadAllResvFromDB(p.db, nil)
+	if err != nil {
+		return err
+	}
 	for _, resv := range loadedResv {
 		p.addResvLocked(resv)
 	}
@@ -412,7 +416,12 @@ func mergeLegacySTPStatus(status, legacy *Status) {
 }
 
 func saveStatusToDB(kvdb db.KVDB, status *Status) error {
-	buf, err := encodeStatusToBytes(status)
+	// Keep a normal status save from overwriting a newer monitor checkpoint
+	// after it has released the snapshot's read lock.
+	status.RLock()
+	defer status.RUnlock()
+	onDisk := snapshotStatusLocked(status)
+	buf, err := EncodeToBytes(&onDisk)
 	if err != nil {
 		return err
 	}
@@ -421,7 +430,13 @@ func saveStatusToDB(kvdb db.KVDB, status *Status) error {
 
 func encodeStatusToBytes(status *Status) ([]byte, error) {
 	status.RLock()
-	onDisk := statusOnDisk{
+	onDisk := snapshotStatusLocked(status)
+	status.RUnlock()
+	return EncodeToBytes(&onDisk)
+}
+
+func snapshotStatusLocked(status *Status) statusOnDisk {
+	return statusOnDisk{
 		SoftwareVer:             status.SoftwareVer,
 		DBver:                   status.DBver,
 		TotalWallet:             status.TotalWallet,
@@ -437,8 +452,6 @@ func encodeStatusToBytes(status *Status) ([]byte, error) {
 		HasStaked:               status.HasStaked,
 		ContractSubAccountIndex: status.ContractSubAccountIndex,
 	}
-	status.RUnlock()
-	return EncodeToBytes(&onDisk)
 }
 
 func decodeStatusFromBytes(buf []byte, status *Status) error {
@@ -606,26 +619,78 @@ func (p *Manager) SaveStatus() error {
 	return p.saveStatus()
 }
 
+// SaveBlockMonitorProgress commits only the monitor checkpoint, not contract or
+// locker state. Publish height and hash together only after the status write
+// succeeds, keeping the shared Status object unchanged on failure.
+func (p *Manager) SaveBlockMonitorProgress(l1 bool, height int, hash string, hashWindow int) error {
+	p.status.Lock()
+	defer p.status.Unlock()
+	onDisk := snapshotStatusLocked(p.status)
+	progress, hashes := &onDisk.SyncHeightL2, &onDisk.BlockHashMapL2
+	if l1 {
+		progress, hashes = &onDisk.SyncHeightL1, &onDisk.BlockHashMapL1
+	}
+	*progress = height
+	if hash != "" {
+		if *hashes == nil {
+			*hashes = make(map[int]string)
+		}
+		(*hashes)[height] = hash
+	}
+	if hashWindow > 0 {
+		for h := range *hashes {
+			if h <= height-hashWindow {
+				delete(*hashes, h)
+			}
+		}
+	}
+	buf, err := EncodeToBytes(&onDisk)
+	if err != nil {
+		return err
+	}
+	if err := p.db.Write([]byte(DB_KEY_STATUS), buf); err != nil {
+		return err
+	}
+	if l1 {
+		p.status.SyncHeightL1, p.status.BlockHashMapL1 = *progress, *hashes
+	} else {
+		p.status.SyncHeightL2, p.status.BlockHashMapL2 = *progress, *hashes
+	}
+	return nil
+}
+
 func (p *Manager) saveMnemonic(mn, password string, wallet common.Wallet) error {
 	return p.saveSecret(mn, password, WALLET_TYPE_MNEMONIC, wallet)
 }
 
 func (p *Manager) saveSecret(secret, password string, ty int, w common.Wallet) error {
+	wallet, err := p.prepareWalletSecret(secret, password, ty, w)
+	if err != nil {
+		return err
+	}
+	if err := saveWallet(p.db, wallet); err != nil {
+		return err
+	}
+	p.walletInfoMap[wallet.Id] = &WalletInfo{WalletInDB: *wallet, Wallet: w}
+	return nil
+}
+
+func (p *Manager) prepareWalletSecret(secret, password string, ty int, w common.Wallet) (*WalletInDB, error) {
 	key, err := p.newSnaclKey(password)
 	if err != nil {
 		Log.Errorf("newSnaclKey failed. %v", err)
-		return err
+		return nil, err
 	}
 
 	en, err := key.Encrypt([]byte(secret))
 	if err != nil {
 		Log.Errorf("Encrypt failed. %v", err)
-		return err
+		return nil, err
 	}
 
 	salt := key.Marshal()
 
-	wallet := WalletInDB{
+	wallet := &WalletInDB{
 		Id:           w.GetId(),
 		Mnemonic:     en,
 		Salt:         salt,
@@ -636,16 +701,7 @@ func (p *Manager) saveSecret(secret, password string, ty int, w common.Wallet) e
 		AccountDIDs:  make(map[uint32]string),
 	}
 
-	err = saveWallet(p.db, &wallet)
-	if err != nil {
-		return err
-	}
-
-	p.walletInfoMap[wallet.Id] = &WalletInfo{
-		WalletInDB: wallet,
-		Wallet:     w,
-	}
-	return nil
+	return wallet, nil
 }
 
 func (p *Manager) saveWalletSecretWithPassword(mn, password string, wallet *WalletInDB) error {
@@ -683,19 +739,28 @@ func (p *Manager) encryptWalletSecretWithPassword(mn, password string, wallet *W
 }
 
 func (p *Manager) loadWalletSecret(w *WalletInfo, password string) (string, error) {
+	secret, err := p.loadWalletSecretBytes(w, password)
+	if err != nil {
+		return "", err
+	}
+	defer zeroBytes(secret)
+	return string(secret), nil
+}
+
+func (p *Manager) loadWalletSecretBytes(w *WalletInfo, password string) ([]byte, error) {
 	key, err := p.restoreSnaclKey(w.Salt, password)
 	if err != nil {
 		Log.Errorf("restoreSnaclKey failed. %v", err)
-		return "", err
+		return nil, err
 	}
 
 	mnemonic, err := key.Decrypt(w.Mnemonic)
 	if err != nil {
 		Log.Errorf("Decrypt failed. %v", err)
-		return "", err
+		return nil, err
 	}
 
-	return string(mnemonic), nil
+	return mnemonic, nil
 }
 
 func (p *Manager) restoreSnaclKey(salt []byte, password string) (*snacl.SecretKey, error) {
@@ -875,7 +940,7 @@ func DeleteAllKeysWithPrefix(db db.KVDB, prefix []byte) ([]string, error) {
 	})
 
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 
 	batch := db.NewWriteBatch()
@@ -889,6 +954,7 @@ func DeleteAllKeysWithPrefix(db db.KVDB, prefix []byte) ([]string, error) {
 		err := batch.Delete([]byte(key))
 		if err != nil {
 			Log.Errorf("db.Remove %s failed. %v", key, err)
+			return nil, err
 		}
 	}
 	err = batch.Flush()
@@ -992,25 +1058,30 @@ func ParseResvKey(key string) (string, int64, error) {
 	return parts[0], id, nil
 }
 
-func LoadAllResvFromDB(db db.KVDB, _ *Manager) map[int64]Reservation {
+func LoadAllResvFromDB(db db.KVDB, _ *Manager) (map[int64]Reservation, error) {
 	prefix := []byte(GetDBKeyPrefix() + DB_KEY_RESV)
 	result := make(map[int64]Reservation, 0)
 	invalidKeys := make([]string, 0)
-	db.BatchRead(prefix, false, func(k, v []byte) error {
+	err := db.BatchRead(prefix, false, func(k, v []byte) error {
 		typ, id, err := ParseResvKey(string(k))
 		if err != nil {
 			Log.Errorf("ParseResvKey failed. %v", err)
-			return nil
+			return err
 		}
 		value := newResvFromType(typ)
 		if value == nil {
+			// The wallet SDK shares this reservation namespace with upper
+			// layers such as transcend.  Those layers load their own types.
 			return nil
 		}
 		err = DecodeFromBytes(v, value.GetStructInDB())
 		if err != nil {
 			invalidKeys = append(invalidKeys, string(k))
-			Log.Errorf("DecodeFromBytes %s failed. %v", string(k), err)
-			return nil
+			if isIgnorableLegacyReservationDecodeError(typ, err) {
+				Log.Warnf("ignore legacy reservation %s: %v", string(k), err)
+				return nil
+			}
+			return fmt.Errorf("decode reservation %s: %w", string(k), err)
 		}
 		if value.GetStatus() <= RS_CLOSED {
 			return nil
@@ -1019,6 +1090,9 @@ func LoadAllResvFromDB(db db.KVDB, _ *Manager) map[int64]Reservation {
 		Log.Infof("LoadAllResvFromDB loaded. %d %s 0x%x", value.GetId(), value.GetType(), value.GetStatus())
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	deleteInvalidKey := false
 	if deleteInvalidKey && len(invalidKeys) > 0 {
@@ -1028,7 +1102,16 @@ func LoadAllResvFromDB(db db.KVDB, _ *Manager) map[int64]Reservation {
 		}
 		wb.Flush()
 	}
-	return result
+	return result, nil
+}
+
+func isIgnorableLegacyReservationDecodeError(typ string, err error) bool {
+	if typ != RESV_TYPE_LOCALACTION || err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "wrong type (interface {}) for received field") &&
+		strings.Contains(msg, ".ActionParam")
 }
 
 func cloneFundingReservationForRuntime(resv *FundingReservation) *FundingReservation {
@@ -1038,6 +1121,69 @@ func cloneFundingReservationForRuntime(resv *FundingReservation) *FundingReserva
 	clone := *resv
 	clone.Channel = nil
 	return &clone
+}
+
+// initializeLocalReadyChannels installs persisted idle channels once their
+// wallet keys are available. It does not sync with a peer or rewrite channel
+// data. Existing runtimes and unfinished operations retain their ownership.
+// The caller holds channelIdentityMu while unlocking the wallet catalog.
+func (p *Manager) initializeLocalReadyChannels() error {
+	p.mutex.RLock()
+	initialized := p.localReadyChannelsInitialized
+	p.mutex.RUnlock()
+	if initialized {
+		return nil
+	}
+	channels, err := p.LoadAllChannelInDBFromDB()
+	if err != nil {
+		return err
+	}
+	var initializationErrors []error
+	for id, stored := range channels {
+		if stored.Status != CS_READY || p.GetChannel(id) != nil {
+			continue
+		}
+		wallet := p.FindWalletById(stored.LocalWalletId)
+		if stored.LocalWalletId == 0 {
+			wallet = p.findWalletByChannelLocalKey(&Channel{ChannelInDB: *stored})
+		}
+		if wallet == nil {
+			initializationErrors = append(initializationErrors, fmt.Errorf("channel %s local wallet is unavailable", id))
+			continue
+		}
+		wallet = wallet.Clone()
+		wallet.SetSubAccount(stored.LocalChanCfg.WalletId)
+		if stored.LocalChanCfg.PaymentKey == nil || stored.RemoteChanCfg.PaymentKey == nil ||
+			!stored.LocalChanCfg.PaymentKey.IsEqual(wallet.GetPaymentPubKey()) {
+			initializationErrors = append(initializationErrors, fmt.Errorf("channel %s local wallet key mismatch", id))
+			continue
+		}
+		expectedID, err := GetP2WSHaddress(stored.LocalChanCfg.PaymentKey.SerializeCompressed(),
+			stored.RemoteChanCfg.PaymentKey.SerializeCompressed())
+		if err != nil || expectedID != id {
+			initializationErrors = append(initializationErrors, fmt.Errorf("channel %s payment keys do not match channel id", id))
+			continue
+		}
+		channel := &Channel{ChannelInDB: *stored, manager: p,
+			localWallet: wallet, PeerRPC: p.GetPeerNodeClient(stored)}
+		p.mutex.Lock()
+		if p.channelMap[id] != nil || p.rejectUnfinishedChannelLifecycleLocked(id,
+			wallet.GetWalletId(), wallet.GetPaymentPubKey().SerializeCompressed()) != nil {
+			p.mutex.Unlock()
+			continue
+		}
+		p.installChannelLocked(channel)
+		p.mutex.Unlock()
+		if tower := p.GetWatchTower(); tower != nil {
+			tower.CleanCurrentRemoteCommitTx(channel)
+		}
+	}
+	if len(initializationErrors) == 0 {
+		p.mutex.Lock()
+		p.localReadyChannelsInitialized = true
+		p.mutex.Unlock()
+	}
+	return errors.Join(initializationErrors...)
 }
 
 // rehydratePendingFundingRuntime restores only restart-safe open-channel
@@ -1133,6 +1279,118 @@ func (p *Manager) rehydratePendingClosingRuntime() {
 	}
 }
 
+// rehydratePendingLocalActionRuntime restores the local channel required by an
+// active lock-with-expand action. Peer snapshots remain gated while the action
+// is pending, so restart recovery must use only the wallet's persisted channel.
+func (p *Manager) rehydratePendingLocalActionRuntime() error {
+	p.mutex.RLock()
+	reservations := make(map[int64]*LocalActionPerformData, len(p.localActionPerformMap))
+	for id, reservation := range p.localActionPerformMap {
+		resv, ok := reservation.(*LocalActionPerformData)
+		if ok {
+			reservations[id] = resv
+		}
+	}
+	p.mutex.RUnlock()
+
+	var recoveryErrors []error
+	for id, resv := range reservations {
+		if resv == nil {
+			continue
+		}
+		resv.Mutex().RLock()
+		active := resv.Status > RS_CLOSED &&
+			resv.Status != RS_PERFORM_ACTION_COMPLETED &&
+			resv.Action == LOCAL_ACTION_LOCK_WITH_EXPAND &&
+			p.localActionBelongsToCurrentWallet(resv)
+		param, ok := resv.ActionParam.(*LocalActionParam_Expand)
+		resv.Mutex().RUnlock()
+		if !active {
+			continue
+		}
+		if !ok || param == nil || param.ChannelId == "" {
+			recoveryErrors = append(recoveryErrors,
+				fmt.Errorf("restore local action %d channel: invalid lock-with-expand parameters", id))
+			continue
+		}
+
+		if current := p.GetChannel(param.ChannelId); current != nil {
+			if !localActionChannelOwnedByReservation(current, resv) {
+				recoveryErrors = append(recoveryErrors, fmt.Errorf(
+					"restore local action %d channel %s: channel belongs to another wallet",
+					id, param.ChannelId))
+			}
+			continue
+		}
+		stored, err := p.LoadChannelInDB(param.ChannelId)
+		if err != nil {
+			recoveryErrors = append(recoveryErrors,
+				fmt.Errorf("restore local action %d channel %s: %w", id, param.ChannelId, err))
+			continue
+		}
+		if !localActionStoredChannelOwnedByReservation(stored, resv) {
+			recoveryErrors = append(recoveryErrors, fmt.Errorf(
+				"restore local action %d channel %s: persisted channel belongs to another wallet",
+				id, param.ChannelId))
+			continue
+		}
+		channel, err := p.LoadChannel(param.ChannelId)
+		if err != nil {
+			recoveryErrors = append(recoveryErrors,
+				fmt.Errorf("restore local action %d channel %s: %w", id, param.ChannelId, err))
+			continue
+		}
+		if !localActionChannelOwnedByReservation(channel, resv) {
+			recoveryErrors = append(recoveryErrors, fmt.Errorf(
+				"restore local action %d channel %s: channel belongs to another wallet",
+				id, param.ChannelId))
+			continue
+		}
+
+		p.mutex.RLock()
+		current, stillPending := p.localActionPerformMap[id]
+		stillPending = stillPending && current == resv
+		p.mutex.RUnlock()
+		resv.Mutex().RLock()
+		stillPending = stillPending && resv.Status > RS_CLOSED &&
+			resv.Status != RS_PERFORM_ACTION_COMPLETED
+		resv.Mutex().RUnlock()
+		if !stillPending {
+			continue
+		}
+		if err := p.EnableChannel(channel); err != nil {
+			recoveryErrors = append(recoveryErrors,
+				fmt.Errorf("restore local action %d channel %s: %w", id, param.ChannelId, err))
+		}
+	}
+	return errors.Join(recoveryErrors...)
+}
+
+func localActionStoredChannelOwnedByReservation(channel *ChannelInDB, resv *LocalActionPerformData) bool {
+	if channel == nil || resv == nil {
+		return false
+	}
+	if len(resv.ReqPubKey) != 0 {
+		return channel.LocalChanCfg.PaymentKey != nil && bytes.Equal(
+			channel.LocalChanCfg.PaymentKey.SerializeCompressed(), resv.ReqPubKey)
+	}
+	return resv.WalletId == (common.WalletId{}) ||
+		channel.LocalWalletId == 0 || channel.LocalWalletId == resv.WalletId.Id
+}
+
+func localActionChannelOwnedByReservation(channel *Channel, resv *LocalActionPerformData) bool {
+	if channel == nil || resv == nil || channel.LocalWallet() == nil ||
+		channel.LocalWallet().GetPaymentPubKey() == nil {
+		return false
+	}
+	channelKey := channel.LocalWallet().GetPaymentPubKey().SerializeCompressed()
+	if len(resv.ReqPubKey) != 0 {
+		return bytes.Equal(channelKey, resv.ReqPubKey)
+	}
+	return resv.WalletId == (common.WalletId{}) ||
+		channel.LocalWallet().GetWalletId() == resv.WalletId
+}
+
 func (p *Manager) loadPendingClosingChannel(channelID string, reservationID int64, walletID common.WalletId) (*Channel, bool, error) {
 	if channelID == "" {
 		return nil, false, fmt.Errorf("closing reservation has empty channel id")
@@ -1170,7 +1428,7 @@ func (p *Manager) loadPendingFundingChannel(channelID string, reservationID int6
 	if err != nil {
 		return nil, fmt.Errorf("load channel %s: %w", channelID, err)
 	}
-	if !((stored.Status >= CS_FUNDING_BROADCASTED && stored.Status <= CS_ANCHOR_CONFIRMED) ||
+	if !((stored.Status >= CS_FUNDING_BROADCASTED && stored.Status <= CS_ANCHOR_RECOVERABLE) ||
 		stored.Status == CS_READY) {
 		return nil, fmt.Errorf("channel %s status %d is not a restart-safe funding state", channelID, stored.Status)
 	}
@@ -1628,16 +1886,19 @@ func SaveContractInvokeHistoryItem(db db.KVDB, url string, value InvokeHistoryIt
 		Log.Errorf("saveContractInvokeHistoryItem EncodeToBytes failed. %v", err)
 		return err
 	}
-	err = db.Write([]byte(GetContractInvokeHistoryKey(url, value.GetKey())), buf)
-	if err != nil {
-		Log.Errorf("saveContractInvokeHistoryItem failed. %v", err)
+	batch := db.NewWriteBatch()
+	if batch == nil {
+		return fmt.Errorf("create contract invoke history batch")
+	}
+	defer batch.Close()
+	if err := batch.Put([]byte(GetContractInvokeHistoryKey(url, value.GetKey())), buf); err != nil {
 		return err
 	}
-
-	err = db.Write([]byte(GetContractInvokeHistoryKey2(url, value.GetInvokeUtxo())),
-		[]byte(value.GetKey()))
-	if err != nil {
-		Log.Errorf("saveContractInvokeHistoryItem2 failed. %v", err)
+	if err := batch.Put([]byte(GetContractInvokeHistoryKey2(url, value.GetInvokeUtxo())),
+		[]byte(value.GetKey())); err != nil {
+		return err
+	}
+	if err := batch.Flush(); err != nil {
 		return err
 	}
 
@@ -1678,10 +1939,18 @@ func loadContractInvokeHistoryItemByInUtxo(db db.KVDB, url, inUtxo string) (Invo
 }
 
 func deleteContractInvokeHistoryItem(db db.KVDB, url string, value InvokeHistoryItem) error {
-	if err := db.Delete([]byte(GetContractInvokeHistoryKey(url, value.GetKey()))); err != nil {
+	batch := db.NewWriteBatch()
+	if batch == nil {
+		return fmt.Errorf("create contract invoke history delete batch")
+	}
+	defer batch.Close()
+	if err := batch.Delete([]byte(GetContractInvokeHistoryKey(url, value.GetKey()))); err != nil {
 		return err
 	}
-	return db.Delete([]byte(GetContractInvokeHistoryKey2(url, value.GetInvokeUtxo())))
+	if err := batch.Delete([]byte(GetContractInvokeHistoryKey2(url, value.GetInvokeUtxo()))); err != nil {
+		return err
+	}
+	return batch.Flush()
 }
 
 func DeleteContractInvokeHistory(db db.KVDB, url string) error {
@@ -1863,18 +2132,29 @@ func GetContractInvokeHistoryBackupKey(url, txId string) string {
 
 // 将该记录从invoke history中删除，备份到backup history中
 func backupContractInvokeHistoryItem(db db.KVDB, url string, value InvokeHistoryItem) error {
-
-	deleteContractInvokeHistoryItem(db, url, value)
-
 	key := GetContractInvokeHistoryBackupKey(url, value.GetKey())
 	buf, err := EncodeToBytes(value)
 	if err != nil {
 		Log.Errorf("backupContractInvokeHistoryItem EncodeToBytes failed. %v", err)
 		return err
 	}
-	err = db.Write([]byte(key), buf)
-	if err != nil {
-		Log.Errorf("backupContractInvokeHistoryItem failed. %v", err)
+	batch := db.NewWriteBatch()
+	if batch == nil {
+		return fmt.Errorf("create contract invoke history backup batch")
+	}
+	defer batch.Close()
+	// Write the recoverable backup in the same transaction as deleting both
+	// forward and reverse history keys.
+	if err := batch.Put([]byte(key), buf); err != nil {
+		return err
+	}
+	if err := batch.Delete([]byte(GetContractInvokeHistoryKey(url, value.GetKey()))); err != nil {
+		return err
+	}
+	if err := batch.Delete([]byte(GetContractInvokeHistoryKey2(url, value.GetInvokeUtxo()))); err != nil {
+		return err
+	}
+	if err := batch.Flush(); err != nil {
 		return err
 	}
 	Log.Infof("backupContractInvokeHistoryItem succ. %s", value.GetKey())

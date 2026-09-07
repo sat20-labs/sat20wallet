@@ -1,7 +1,6 @@
 package wallet
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"time"
@@ -99,7 +98,6 @@ func (p *Manager) runChannelHeartbeatTick(contexts ...context.Context) {
 	serverPubKey := p.serverNode.Pubkey
 	client := p.serverNode.RPCClient()
 	mode := ""
-	identityGeneration := p.channelIdentityGeneration
 	if p.cfg != nil {
 		mode = p.cfg.Mode
 	}
@@ -178,10 +176,15 @@ func (p *Manager) runChannelHeartbeatTick(contexts ...context.Context) {
 	if result.NextAction != wwire.STP_ACTION_SYNC {
 		return
 	}
-	if channel != nil && channel.CommitHeight > result.CommitHeight {
-		Log.Errorf("channel heartbeat refused rollback: local commit height %d exceeds remote %d",
-			channel.CommitHeight, result.CommitHeight)
-		return
+	if channel != nil {
+		channel.Mutex.RLock()
+		localHeight := channel.CommitHeight
+		channel.Mutex.RUnlock()
+		if localHeight > result.CommitHeight {
+			Log.Errorf("channel heartbeat refused rollback: local commit height %d exceeds remote %d",
+				localHeight, result.CommitHeight)
+			return
+		}
 	}
 	if p.hasPendingClosingReservation(channelID, localWallet.GetWalletId()) {
 		Log.Warningf("channel heartbeat skipped sync while the current channel is closing")
@@ -192,18 +195,11 @@ func (p *Manager) runChannelHeartbeatTick(contexts ...context.Context) {
 		return
 	}
 
-	p.channelIdentityMu.RLock()
-	p.mutex.RLock()
-	identityUnchanged := p.channelIdentityGeneration == identityGeneration && p.wallet != nil &&
-		bytes.Equal(pubKey, p.wallet.GetPaymentPubKey().SerializeCompressed())
-	p.mutex.RUnlock()
-	p.channelIdentityMu.RUnlock()
-	if !identityUnchanged {
-		Log.Infof("channel heartbeat stopped because wallet identity changed")
+	if ctx.Err() != nil {
 		return
 	}
 
-	if err := p.syncChannelForIdentity(ctx, result.ActionParam, client, localWallet, identityGeneration); err != nil {
+	if err := p.syncChannelForWallet(ctx, result.ActionParam, client, localWallet); err != nil {
 		Log.Errorf("channel heartbeat sync failed: %v", err)
 		return
 	}

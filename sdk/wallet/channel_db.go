@@ -551,6 +551,16 @@ func (p *ChannelInDB) GetAllOutput_SatsNet() []*TxOutput_SatsNet {
 	return result
 }
 
+func (p *ChannelInDB) AddPendingUtxo_SatsNet(tx *swire.MsgTx) {
+	if tx == nil || len(tx.TxOut) == 0 {
+		return
+	}
+	output := sindexer.GenerateTxOutput(tx, 0)
+	delete(p.UtxosL2, output.OutPointStr)
+	p.PendingUtxosL2[tx.TxID()] = output
+	Log.Infof("L2 utxo %s is pending", output.OutPointStr)
+}
+
 func (p *ChannelInDB) AddUtxo_SatsNet(output *TxOutput_SatsNet) {
 	if output == nil {
 		return
@@ -562,9 +572,7 @@ func (p *ChannelInDB) UpdateUtxosByPendingTx_SatsNet(tx *swire.MsgTx) {
 	for _, txIn := range tx.TxIn {
 		delete(p.UtxosL2, txIn.PreviousOutPoint.String())
 	}
-	output := sindexer.GenerateTxOutput(tx, 0)
-	p.PendingUtxosL2[tx.TxID()] = output
-	Log.Infof("L2 utxo %s is pending", output.OutPointStr)
+	p.AddPendingUtxo_SatsNet(tx)
 }
 
 // 调用 UpdateUtxosByPendingTxL2 后需要调用 EnableUtxo_SatsNet
@@ -830,7 +838,9 @@ func (p *ChannelInDB) SetStubUtxoForAsset(output []*TxOutput, name *AssetName) {
 
 func (p *ChannelInDB) UtxosInControl() map[string]bool {
 	utxosInControl := make(map[string]bool)
-	utxosInControl[p.ChanPoint.OutPointStr] = true
+	if p.ChanPoint != nil {
+		utxosInControl[p.ChanPoint.OutPointStr] = true
+	}
 
 	for _, uv := range p.FundingUtxos {
 		for _, u := range uv {

@@ -227,17 +227,18 @@ async function walletCall(client, body) {
   const raw = await evaluate(client, `(async () => {
     const verify = window.__SAT20_PWA_VERIFY__;
     if (!verify) throw new Error('SAT20 PWA verify helpers are not available');
-    const { Chain, Network, hashPassword, sat20, useWalletStore } = verify;
-    const wallet = useWalletStore();
-    const hashed = await hashPassword(${q(PASSWORD)});
+		const { Chain, Network, sat20, useWalletStore } = verify;
+		const wallet = useWalletStore();
+		const credential = ${q(PASSWORD)};
     if (!wallet.hasWallet) {
-      const [importErr] = await wallet.importWallet(${q(MNEMONIC)}, hashed);
+			const [importErr] = await wallet.importWallet(${q(MNEMONIC)}, credential);
       if (importErr) throw importErr;
     } else if (wallet.locked) {
-      const [unlockErr] = await wallet.unlockWallet(hashed);
+			const [unlockErr] = await wallet.unlockWallet(credential);
       if (unlockErr) throw unlockErr;
     }
-    await wallet.setPassword(hashed);
+	const [sessionUnlockErr] = await wallet.unlockWallet(credential);
+	if (sessionUnlockErr) throw sessionUnlockErr;
     if (wallet.network !== Network.TESTNET) await wallet.setNetwork(Network.TESTNET);
     await wallet.setChain(Chain.SATNET);
     const unwrap = (tuple) => {

@@ -122,7 +122,7 @@ func (p *Manager) funderProcessAcceptChannel(resv *FundingReservation) error {
 			return fmt.Errorf("can't generate anchor tx")
 		}
 		resv.AnchorTx = anchorTx
-		resv.Channel.AddUtxo_SatsNet(sindexer.GenerateTxOutput(anchorTx, 0))
+		resv.Channel.AddPendingUtxo_SatsNet(anchorTx)
 	}
 
 	bootstrapKey := p.GetBootstrapNodePaymentPubKey()
@@ -336,7 +336,7 @@ func (p *Manager) FunderInitFundingProcess(feeRate, amt int64, utxos []string, m
 		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		p.DelResvWithId(resv.Id)
 		if resv.Id != 0 && p.serverNode != nil && p.serverNode.client != nil {
-			_ = p.serverNode.client.SendActionResultNfty(resv.Id, RESV_TYPE_OPEN, -1, err.Error())
+			_ = p.serverNode.client.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_OPEN, -1, err.Error())
 		}
 		return "", err
 	}
@@ -480,7 +480,7 @@ func (p *Manager) FunderInitReOpenProcess(amt int64, fundingUtxo *TxOutput, memo
 		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		p.DelResvWithId(resv.Id)
 		if resv.Id != 0 && p.serverNode != nil && p.serverNode.client != nil {
-			_ = p.serverNode.client.SendActionResultNfty(resv.Id, RESV_TYPE_OPEN, -1, err.Error())
+			_ = p.serverNode.client.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_OPEN, -1, err.Error())
 		}
 		return "", err
 	}

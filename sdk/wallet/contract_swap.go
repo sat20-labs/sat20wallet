@@ -5349,7 +5349,7 @@ func (p *SwapContractRuntime) AllowPeerAction(action string, param any) (any, er
 					if err != nil {
 						return nil, err
 					}
-					dealInfo, err = p.genSendInfoFromTx(tx, preOutputs, req.MoreData)
+					dealInfo, err = p.genSendInfoFromTx(tx, preOutputs, req.MoreData, req.RGB11Proof)
 					if err != nil {
 						return nil, err
 					}

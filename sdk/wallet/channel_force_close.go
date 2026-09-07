@@ -144,7 +144,7 @@ func (p *Manager) ForcelyCloseChannel(channel *Channel, feeRate int64) (string, 
 	}
 
 	if channel.IsInitiator && channel.PeerRPC != nil {
-		_ = channel.PeerRPC.SendActionResultNfty(0, RESV_TYPE_CLOSE, 1, channel.ChannelId)
+		_ = channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), 0, RESV_TYPE_CLOSE, 1, channel.ChannelId)
 	}
 
 	return commitTx.TxID(), deAnchorTxId, err

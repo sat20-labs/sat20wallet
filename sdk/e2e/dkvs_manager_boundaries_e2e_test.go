@@ -104,11 +104,15 @@ func newWalletManagerForNode(t *testing.T, node *testHarness, mnemonic string) (
 	}
 	database := indexerdb.NewKVDB(t.TempDir())
 	require.NotNil(t, database)
-	manager := wallet.NewManager(&sdkcommon.Config{
+	config := &sdkcommon.Config{
 		Env: "test", Chain: "testnet",
 		IndexerL1: &sdkcommon.Indexer{Scheme: location.Scheme, Host: location.Host, Proxy: location.Proxy},
 		IndexerL2: &sdkcommon.Indexer{Scheme: location.Scheme, Host: location.Host, Proxy: location.Proxy},
-	}, database)
+	}
+	if node.role == "core" && node.nodePubKey != "" && node.stpAddr != "" {
+		config.Peers = []string{"s@" + node.nodePubKey + "@http://" + node.stpAddr + "/testnet"}
+	}
+	manager := wallet.NewManager(config, database)
 	require.NotNil(t, manager)
 	t.Cleanup(manager.Close)
 	if mnemonic != "" {

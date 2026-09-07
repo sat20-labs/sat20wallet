@@ -416,12 +416,22 @@ func (p *IndexerRPCClientMgr) GetExistingUtxos(utxos []string) ([]string, error)
 	}
 	return result, err
 }
-func (p *IndexerRPCClientMgr) TestRawTx(signedTxs []string) error {
-	err := p.getActiveIndexer().TestRawTx(signedTxs)
+func (p *IndexerRPCClientMgr) TestRawTx_Bitcoin(signedTxs []string) error {
+	err := p.getActiveIndexer().TestRawTx_Bitcoin(signedTxs)
 	if shouldSwitchIndexer(err) {
 		indexer := p.selector()
 		if indexer != nil {
-			err = indexer.TestRawTx(signedTxs)
+			err = indexer.TestRawTx_Bitcoin(signedTxs)
+		}
+	}
+	return err
+}
+func (p *IndexerRPCClientMgr) TestRawTx_SatsNet(signedTxs []string) error {
+	err := p.getActiveIndexer().TestRawTx_SatsNet(signedTxs)
+	if shouldSwitchIndexer(err) {
+		indexer := p.selector()
+		if indexer != nil {
+			err = indexer.TestRawTx_SatsNet(signedTxs)
 		}
 	}
 	return err

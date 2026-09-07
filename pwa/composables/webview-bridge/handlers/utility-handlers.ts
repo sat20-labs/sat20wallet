@@ -14,7 +14,7 @@ export class UtilityHandlers {
    */
   async handleRegisterAsReferrer(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("👥 Handling REGISTER_AS_REFERRER", { callbackId, data });
+      console.log("👥 Handling REGISTER_AS_REFERRER", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.REGISTER_AS_REFERRER,
         data,
@@ -33,7 +33,7 @@ export class UtilityHandlers {
    */
   async handleBindReferrerForServer(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("🔗 Handling BIND_REFERRER_FOR_SERVER", { callbackId, data });
+      console.log("🔗 Handling BIND_REFERRER_FOR_SERVER", { callbackId });
       const result = await this.approvalHandler.handleWalletApproval(
         Message.MessageAction.BIND_REFERRER_FOR_SERVER,
         data,
@@ -66,7 +66,7 @@ export class UtilityHandlers {
 
   async handleSplitBatchSignedPsbtSatsNet(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("✂️ Handling SPLIT_BATCH_SIGNED_PSBT_SATSNET", { callbackId, data });
+		console.log("✂️ Handling SPLIT_BATCH_SIGNED_PSBT_SATSNET", { callbackId });
       const result = await this.approvalHandler.handleDirectRequest(
         Message.MessageAction.SPLIT_BATCH_SIGNED_PSBT_SATSNET,
         data
@@ -94,7 +94,7 @@ export class UtilityHandlers {
 
   async handleMergeBatchSignedPsbt(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("🔗 Handling MERGE_BATCH_SIGNED_PSBT", { callbackId, data });
+		console.log("🔗 Handling MERGE_BATCH_SIGNED_PSBT", { callbackId });
       const result = await this.approvalHandler.handleDirectRequest(
         Message.MessageAction.MERGE_BATCH_SIGNED_PSBT,
         data
@@ -108,7 +108,7 @@ export class UtilityHandlers {
 
   async handleAddInputsToPsbt(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("➕ Handling ADD_INPUTS_TO_PSBT", { callbackId, data });
+		console.log("➕ Handling ADD_INPUTS_TO_PSBT", { callbackId });
       const result = await this.approvalHandler.handleDirectRequest(
         Message.MessageAction.ADD_INPUTS_TO_PSBT,
         data
@@ -122,7 +122,7 @@ export class UtilityHandlers {
 
   async handleAddOutputsToPsbt(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("➕ Handling ADD_OUTPUTS_TO_PSBT", { callbackId, data });
+		console.log("➕ Handling ADD_OUTPUTS_TO_PSBT", { callbackId });
       const result = await this.approvalHandler.handleDirectRequest(
         Message.MessageAction.ADD_OUTPUTS_TO_PSBT,
         data
@@ -136,7 +136,7 @@ export class UtilityHandlers {
 
   async handleExtractTxFromPsbt(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("📤 Handling EXTRACT_TX_FROM_PSBT", { callbackId, data });
+		console.log("📤 Handling EXTRACT_TX_FROM_PSBT", { callbackId });
       const result = await this.approvalHandler.handleDirectRequest(
         Message.MessageAction.EXTRACT_TX_FROM_PSBT,
         data
@@ -150,7 +150,7 @@ export class UtilityHandlers {
 
   async handleExtractTxFromPsbtSatsNet(callbackId: string, data: any): Promise<void> {
     try {
-      console.log("📤 Handling EXTRACT_TX_FROM_PSBT_SATSNET", { callbackId, data });
+		console.log("📤 Handling EXTRACT_TX_FROM_PSBT_SATSNET", { callbackId });
       const result = await this.approvalHandler.handleDirectRequest(
         Message.MessageAction.EXTRACT_TX_FROM_PSBT_SATSNET,
         data

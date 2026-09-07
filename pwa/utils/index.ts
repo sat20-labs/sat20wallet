@@ -35,7 +35,7 @@ export const generateMempoolUrl = ({
   let _network = network;
   if (network === Network.TESTNET) {
     _network = 'testnet';
-  } else if (network === Network.LIVENET) {
+  } else if (network === Network.MAINNET) {
     _network = 'mainnet';
   }
   const btcMempoolUrl = 'https://mempool.space'

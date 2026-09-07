@@ -196,7 +196,10 @@ type RGB11PreparedTransferPackage struct {
 type RGB11ProxyDeliveryResult struct {
 	TransferIDs []string `json:"transfer_ids"`
 	Endpoints   []string `json:"endpoints"`
-	TxID        string   `json:"txid"`
+	TxID        string   `json:"txid,omitempty"`
+	AwaitingACK bool     `json:"awaiting_ack,omitempty"`
+	Broadcast   bool     `json:"broadcast,omitempty"`
+	Rejected    bool     `json:"rejected,omitempty"`
 }
 
 type RGB11ProxyAckResult struct {
@@ -256,13 +259,15 @@ type RGB11AddressEndpoint struct {
 }
 
 type RGB11AddressDeliveryResult struct {
-	TransferID string `json:"transfer_id"`
-	Mode       string `json:"mode"`
-	RecordKey  string `json:"record_key"`
-	RecordHash string `json:"record_hash"`
-	ObjectID   string `json:"object_id,omitempty"`
-	Temporary  bool   `json:"temporary"`
-	TxID       string `json:"txid,omitempty"`
+	TransferID  string `json:"transfer_id"`
+	Mode        string `json:"mode"`
+	RecordKey   string `json:"record_key"`
+	RecordHash  string `json:"record_hash"`
+	ObjectID    string `json:"object_id,omitempty"`
+	Temporary   bool   `json:"temporary"`
+	TxID        string `json:"txid,omitempty"`
+	AwaitingACK bool   `json:"awaiting_ack,omitempty"`
+	Broadcast   bool   `json:"broadcast,omitempty"`
 }
 
 type RGB11AddressACK struct {

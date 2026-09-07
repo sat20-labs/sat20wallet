@@ -2,6 +2,8 @@
   <LayoutHome class="">
     <WalletHeader />
 
+    <AccountAutopayReminder />
+
 
     <!-- 没有名字时的提醒区域 -->
     <div v-if="!currentUserName"
@@ -71,6 +73,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import LayoutHome from '@/components/layout/LayoutHome.vue'
 import WalletHeader from '@/components/wallet/HomeHeader.vue'
+import AccountAutopayReminder from '@/components/account/AccountAutopayReminder.vue'
 import L1Card from '@/components/wallet/L1Card.vue'
 import L2Card from '@/components/wallet/L2Card.vue'
 
@@ -327,6 +330,7 @@ const channelCallback = async (e: any) => {
       break
     case 'channelclosed':
       msg = 'channel closed'
+      channelStore.invalidateCurrentChannel()
       await channelHandler()
       await refreshL1Assets()
       break

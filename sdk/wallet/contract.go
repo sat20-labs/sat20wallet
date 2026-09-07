@@ -1235,10 +1235,9 @@ func (p *ContractRuntimeBase) InitFromContent(content []byte, stp ContractManage
 func (p *ContractRuntimeBase) InitFromDB(stp ContractManager, resv ContractDeployResvIF) error {
 	p.init(stp)
 	p.resv = resv
-
-	resv.SetInitiator(true)
-	stp.SaveReservation(resv)
-
+	// The reservation role is persisted local state. Peer sync already inverts
+	// the remote snapshot once when constructing the local reservation; reload
+	// must not promote a responder to initiator or persist a second inversion.
 	p.isInitiator = resv.LocalIsInitiator()
 	var err error
 	p.localPubKey, err = utils.BytesToPublicKey(p.LocalPubKey)
@@ -3268,14 +3267,26 @@ func (p *ContractRuntimeBase) genSendInfoFromTx_SatsNet(tx *swire.MsgTx, include
 }
 
 func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[string]*TxOutput,
-	moreData []byte) (*DealInfo, error) {
+	moreData []byte, rgbProof ...*wwire.RGB11SigningProof) (*DealInfo, error) {
 
 	dealInfo := &DealInfo{
 		SendInfo: make(map[string]*SendAssetInfo),
 		TxId:     tx.TxID(),
 	}
 
-	inputs, outputs, err := p.stp.GetWalletMgr().RebuildTxOutput(tx, preFectcher)
+	var inputs, outputs []*TxOutput
+	var err error
+	if len(rgbProof) != 0 && rgbProof[0] != nil {
+		if p.runtime.GetAssetName().Protocol != "rgb11" {
+			return nil, fmt.Errorf("RGB11 proof provided for a different contract asset")
+		}
+		inputs, outputs, err = p.stp.GetWalletMgr().RebuildRGB11TxOutput(tx, rgbProof[0])
+	} else {
+		if p.runtime.GetAssetName().Protocol == "rgb11" {
+			return nil, fmt.Errorf("RGB11 channel signing requires a validated proof")
+		}
+		inputs, outputs, err = p.stp.GetWalletMgr().RebuildTxOutput(tx, preFectcher)
+	}
 	if err != nil {
 		Log.Errorf("rebuildTxOutput %s failed, %v", tx.TxID(), err)
 		return nil, err
@@ -3288,11 +3299,29 @@ func (p *ContractRuntimeBase) genSendInfoFromTx(tx *wire.MsgTx, preFectcher map[
 	}
 
 	assetName := p.runtime.GetAssetName()
+	if len(rgbProof) != 0 && rgbProof[0] != nil {
+		found := false
+		for _, output := range outputs {
+			if output.GetAsset(assetName) != nil {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("RGB11 proof does not transfer the contract asset %s", assetName)
+		}
+	}
 	isPlainAsset := indexer.IsPlainAsset(assetName)
 	for i, txOut := range tx.TxOut {
 		out += txOut.Value
 		if sindexer.IsOpReturn(txOut.PkScript) {
-			ctype, data, err := sindexer.ReadDataFromNullDataScript(txOut.PkScript)
+			payload := txOut.PkScript
+			if len(rgbProof) != 0 && rgbProof[0] != nil {
+				// The on-chain OP_RETURN is the RGB commitment. Contract result
+				// metadata stays in the existing authenticated MoreData field.
+				payload = moreData
+			}
+			ctype, data, err := sindexer.ReadDataFromNullDataScript(payload)
 			if err != nil {
 				// 存在符文的情况下，只能传递moreData
 				if len(moreData) != 0 {

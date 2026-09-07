@@ -16,11 +16,13 @@ import (
 
 type rollbackContractManager struct {
 	*Manager
-	l1 IndexerRPCClient
-	l2 IndexerRPCClient
+	l1    IndexerRPCClient
+	l2    IndexerRPCClient
+	saves int
 }
 
 func (m *rollbackContractManager) SaveReservation(ContractDeployResvIF) error {
+	m.saves++
 	return nil
 }
 
@@ -153,6 +155,45 @@ func (r *rollbackContractReservation) SignedDeployContractInvoice() ([]byte, err
 }
 func (r *rollbackContractReservation) SetFeeInputs(value []*TxOutput_SatsNet) {
 	r.feeInputs = value
+}
+
+func TestContractInitFromDBPreservesResponderRole(t *testing.T) {
+	database := NewKVDB(t.TempDir())
+	if database == nil {
+		t.Fatal("NewKVDB failed")
+	}
+	defer database.Close()
+
+	localWallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire",
+		"", &chaincfg.TestNet4Params,
+	)
+	remoteWallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch",
+		"", &chaincfg.TestNet4Params,
+	)
+	manager := &rollbackContractManager{Manager: &Manager{
+		db: database, wallet: localWallet, cfg: &common.Config{Mode: "test"},
+	}}
+	runtime := NewSwapContractRuntime(manager)
+	base := runtime.GetRuntimeBase()
+	base.LocalPubKey = localWallet.GetPubKey().SerializeCompressed()
+	base.RemotePubKey = remoteWallet.GetPubKey().SerializeCompressed()
+	base.CoreNodePubKey = append([]byte(nil), base.RemotePubKey...)
+	reservation := &rollbackContractReservation{
+		contract: runtime, initiator: false, localKey: base.LocalPubKey,
+		remoteKey: base.RemotePubKey, coreKey: base.CoreNodePubKey,
+	}
+
+	if err := runtime.InitFromDB(manager, reservation); err != nil {
+		t.Fatal(err)
+	}
+	if reservation.LocalIsInitiator() || base.IsInitiator() {
+		t.Fatal("responder was promoted to initiator during reload")
+	}
+	if manager.saves != 0 {
+		t.Fatalf("InitFromDB persisted role unexpectedly: saves=%d", manager.saves)
+	}
 }
 
 func TestContractRollbackSatsNetPreservesL1Height(t *testing.T) {

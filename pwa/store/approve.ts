@@ -1,5 +1,9 @@
 import { ref, computed } from 'vue'
 import { Message } from '@/types/message'
+import { Network } from '@/types'
+import { BoundedApprovalQueue } from '@/lib/approval-queue'
+import { assertWalletIdentityReady, subscribeWalletIdentity } from '@/lib/identity-boundary'
+import { walletRequestSessionGuard } from '@/lib/walletSession'
 
 export interface ApproveRequest {
   id: string
@@ -13,60 +17,90 @@ export interface ApproveRequest {
 interface ApproveState {
   currentRequest: ApproveRequest | null
   isVisible: boolean
+  queueSize: number
 }
 
 const state = ref<ApproveState>({
   currentRequest: null,
-  isVisible: false
+  isVisible: false,
+  queueSize: 0,
+})
+
+const queue = new BoundedApprovalQueue<ApproveRequest>({
+  onChange: () => {
+    const current = queue.current
+    state.value.currentRequest = current?.request ?? null
+    state.value.isVisible = Boolean(current)
+    state.value.queueSize = queue.size
+  },
+})
+
+subscribeWalletIdentity((identity) => {
+  if (identity.phase !== 'READY') {
+    queue.rejectAll(new Error('Wallet identity changed; pending approvals were cancelled'))
+  }
 })
 
 export const useApproveStore = () => {
   const currentRequest = computed(() => state.value.currentRequest)
   const isVisible = computed(() => state.value.isVisible)
+  const queueSize = computed(() => state.value.queueSize)
 
-  const showApprove = (request: Omit<ApproveRequest, 'id'> & { id?: string }) => {
-    if (state.value.currentRequest?.reject) {
-      state.value.currentRequest.reject(
-        new Error('Another wallet confirmation request replaced this request')
-      )
+  const showApprove = async (request: Omit<ApproveRequest, 'id'> & { id?: string }) => {
+    walletRequestSessionGuard('approve')()
+    assertWalletIdentityReady(request.metadata?.identityGeneration)
+    const id = request.id || `approve_${Date.now()}_${crypto.randomUUID()}`
+    const origin = String(request.metadata?.origin ?? '')
+    const approvalRequest: ApproveRequest = { ...request, id }
+    return queue.enqueue(id, origin, approvalRequest, request.metadata?.expiresAt)
+  }
+
+  const confirm = (id: string, result: any) => {
+    queue.confirm(id, result)
+  }
+
+  const assertCurrent = (id: string) => {
+    const entry = queue.current
+    if (!entry || entry.id !== id) throw new Error('Approval request is no longer current')
+    assertWalletIdentityReady(entry.request.metadata?.identityGeneration)
+    walletRequestSessionGuard('approve')()
+  }
+
+  const executeNetworkSwitch = (id: string, switchNetwork: (network: Network) => Promise<boolean>) => {
+    const entry = queue.current
+    if (!entry || entry.id !== id || entry.request.action !== Message.MessageAction.SWITCH_NETWORK) {
+      throw new Error('Network switch approval is no longer current')
     }
-
-    const id = request.id || `approve_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-    state.value.currentRequest = { ...request, id }
-    state.value.isVisible = true
-
-    return new Promise<any>((resolve, reject) => {
-      if (state.value.currentRequest) {
-        state.value.currentRequest.resolve = resolve
-        state.value.currentRequest.reject = reject
-      }
+    const target = entry.request.data?.network
+    if (typeof target !== 'string' || !Object.values(Network).includes(target as Network)) throw new Error('Invalid target network')
+    const generation = assertWalletIdentityReady(entry.request.metadata?.identityGeneration)
+    walletRequestSessionGuard('approve')()
+    queue.execute(id, async () => {
+      assertWalletIdentityReady(generation)
+      queue.rejectAll(new Error('Wallet network is changing; pending approvals were cancelled'))
+      if (!await switchNetwork(target as Network)) throw new Error('Wallet network switch did not complete')
+      assertWalletIdentityReady()
+      return target
     })
   }
 
-  const confirm = (result: any) => {
-    if (state.value.currentRequest?.resolve) {
-      state.value.currentRequest.resolve(result)
-    }
-    hideApprove()
-  }
-
-  const reject = (error?: Error) => {
-    if (state.value.currentRequest?.reject) {
-      state.value.currentRequest.reject(error || new Error('User rejected'))
-    }
-    hideApprove()
+  const reject = (id: string, error?: Error) => {
+    queue.reject(id, error)
   }
 
   const hideApprove = () => {
-    state.value.isVisible = false
-    state.value.currentRequest = null
+    const id = state.value.currentRequest?.id
+    if (id) queue.reject(id, new Error('Wallet approval dialog closed'))
   }
 
   return {
     currentRequest,
     isVisible,
+    queueSize,
     showApprove,
     confirm,
+    assertCurrent,
+    executeNetworkSwitch,
     reject,
     hideApprove
   }

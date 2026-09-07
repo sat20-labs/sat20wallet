@@ -603,8 +603,15 @@ func (p *rgb11Manager) DeliverAndBroadcastRGB11ProxyTransfer(ctx context.Context
 	if allComplete {
 		return &RGB11ProxyDeliveryResult{
 			TransferIDs: append([]string(nil), transferIDs...),
-			TxID:        first.State.WitnessTxID,
+			TxID:        first.State.WitnessTxID, Broadcast: true,
 		}, nil
+	}
+	for _, pending := range pendingList {
+		if pending.State.Status == "rejected" {
+			return &RGB11ProxyDeliveryResult{
+				TransferIDs: append([]string(nil), transferIDs...), Rejected: true,
+			}, nil
+		}
 	}
 	endpoints := make([]string, 0, len(transferIDs))
 	for _, transferID := range transferIDs {
@@ -632,17 +639,30 @@ func (p *rgb11Manager) DeliverAndBroadcastRGB11ProxyTransfer(ctx context.Context
 	result := &RGB11ProxyDeliveryResult{
 		TransferIDs: append([]string(nil), transferIDs...),
 		Endpoints:   endpoints,
-		TxID:        first.State.WitnessTxID,
 	}
-	txID, err := p.broadcastRGB11PendingBatch(
-		pendingList,
-		func(item *rgb11wallet.PendingTransfer) {
-			item.State.AckStatus = "awaiting"
-		},
-	)
+	for _, transferID := range transferIDs {
+		ack, ackErr := p.FetchRGB11ProxyAck(ctx, transferID)
+		if ackErr != nil {
+			return result, ackErr
+		}
+		if ack == nil || !ack.Available {
+			result.AwaitingACK = true
+			return result, nil
+		}
+		if !ack.Accepted {
+			result.Rejected = true
+			return result, nil
+		}
+	}
+	pendingList, err = p.loadRGB11ProxyPendingBatch(transferIDs)
+	if err != nil {
+		return result, err
+	}
+	txID, err := p.broadcastRGB11PendingBatch(pendingList, nil)
 	if txID != "" {
 		result.TxID = txID
 	}
+	result.Broadcast = err == nil && txID != ""
 	return result, err
 }
 
@@ -683,11 +703,26 @@ func (p *rgb11Manager) FetchRGB11ProxyAck(ctx context.Context,
 		result.Accepted = *decision
 		if *decision {
 			pending.State.AckStatus = "accepted"
+			if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+				return nil, err
+			}
+		} else if pending.State.Status == "prepared" || pending.State.Status == "relayed" {
+			ids := pending.State.BatchTransferIDs
+			if len(ids) == 0 {
+				ids = []string{pending.State.TransferID}
+			}
+			batch, loadErr := p.loadRGB11ProxyPendingBatch(ids)
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			if cancelErr := p.cancelRGB11PendingBatch(batch, "recipient-rejected", nil); cancelErr != nil {
+				return nil, cancelErr
+			}
 		} else {
 			pending.State.AckStatus = "rejected-after-broadcast"
-		}
-		if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
-			return nil, err
+			if err := p.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+				return nil, err
+			}
 		}
 		return result, nil
 	}

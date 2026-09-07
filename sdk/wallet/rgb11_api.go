@@ -73,113 +73,101 @@ func (p *Manager) synchronizedRGB11Manager() (*rgb11Manager, error) {
 
 func (p *Manager) AcceptRGB11AddressACK(record *swire.DKVSRecord,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressACK, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.AcceptRGB11AddressACK(record, verify)
+	return runRootRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (*RGB11AddressACK, error) {
+			return manager.AcceptRGB11AddressACK(record, verify)
+		})
 }
 
 func (p *Manager) AcceptRGB11Consignment(ctx context.Context, requestID string, raw []byte) (*rgb11wallet.ValidationReceipt, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.AcceptRGB11Consignment(ctx, requestID, raw)
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (*rgb11wallet.ValidationReceipt, error) {
+			return manager.AcceptRGB11Consignment(ctx, requestID, raw)
+		})
 }
 
 func (p *Manager) BroadcastRGB11AddressTransfer(transferID string) (string, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return "", err
-	}
-	return manager.BroadcastRGB11AddressTransfer(transferID)
+	return runRootRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (string, error) {
+			return manager.BroadcastRGB11AddressTransfer(transferID)
+		})
 }
 
 func (p *Manager) BroadcastRGB11OutOfBand(transferIDs []string) (string, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return "", err
-	}
-	return manager.BroadcastRGB11OutOfBand(transferIDs)
+	return runRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (string, error) {
+			return manager.BroadcastRGB11OutOfBand(transferIDs)
+		})
 }
 
 func (p *Manager) DeliverAndBroadcastRGB11ProxyTransfer(ctx context.Context,
 	transferIDs []string) (*RGB11ProxyDeliveryResult, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.DeliverAndBroadcastRGB11ProxyTransfer(ctx, transferIDs)
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (*RGB11ProxyDeliveryResult, error) {
+			return manager.DeliverAndBroadcastRGB11ProxyTransfer(ctx, transferIDs)
+		})
 }
 
 func (p *Manager) CancelRGB11OutOfBandTransfer(transferID string) error {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return err
-	}
-	return manager.CancelRGB11OutOfBandTransfer(transferID)
+	_, err := runRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (struct{}, error) {
+			return struct{}{}, manager.CancelRGB11OutOfBandTransfer(transferID)
+		})
+	return err
 }
 
 func (p *Manager) CancelExpiredRGB11Transfer(transferID string) error {
-	releaseRGB11Operation := p.beginExclusiveRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return err
-	}
-	return manager.CancelExpiredRGB11Transfer(transferID)
+	_, err := runRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (struct{}, error) {
+			return struct{}{}, manager.CancelExpiredRGB11Transfer(transferID)
+		})
+	return err
 }
 
 func (p *Manager) PrepareRGB11Consignment(ctx context.Context, requestID string,
 	raw []byte) (*rgb11wallet.ValidationReceipt, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.PrepareRGB11Consignment(ctx, requestID, raw)
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
+		func(manager *rgb11Manager) (*rgb11wallet.ValidationReceipt, error) {
+			return manager.PrepareRGB11Consignment(ctx, requestID, raw)
+		})
 }
 
 func (p *Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewallet.ReceiveRequest, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.CreateRGB11Invoice(request)
+	return runRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationNew,
+		func(manager *rgb11Manager) (*corewallet.ReceiveRequest, error) {
+			return manager.CreateRGB11Invoice(request)
+		})
 }
 
 func (p *Manager) DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID string,
 	options RGB11AddressDeliveryOptions) (*RGB11AddressDeliveryResult, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID, options)
+	return runRootRGB11ManagedOperation(p, context.Background(), rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (*RGB11AddressDeliveryResult, error) {
+			return manager.DeliverAndBroadcastConfiguredRGB11AddressTransfer(transferID, options)
+		})
 }
 
 func (p *Manager) EnableConfiguredRGB11AddressReceive(options RGB11ReceiveCapabilityOptions) (*RGB11AddressEndpoint, error) {
 	releaseRGB11Operation := p.beginRGB11Operation()
 	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
+	current, err := p.synchronizedRGB11Manager()
+	if err != nil {
+		return nil, err
+	}
+	if !p.rgb11ManagerIsRoot(current) {
+		return nil, ErrRGB11DirectRootRequired
+	}
+	return p.enableRootRGB11AddressReceiveLocked(options)
+}
+
+func (p *Manager) enableRootRGB11AddressReceive(options RGB11ReceiveCapabilityOptions) (*RGB11AddressEndpoint, error) {
+	releaseRGB11Operation := p.beginRGB11Operation()
+	defer releaseRGB11Operation()
+	return p.enableRootRGB11AddressReceiveLocked(options)
+}
+
+func (p *Manager) enableRootRGB11AddressReceiveLocked(options RGB11ReceiveCapabilityOptions) (*RGB11AddressEndpoint, error) {
+	manager, err := p.rootRGB11Manager()
 	if err != nil {
 		return nil, err
 	}
@@ -229,33 +217,24 @@ func (p *Manager) GetRGB11State() (*RGB11State, error) {
 }
 
 func (p *Manager) ImportRGB11Contract(ctx context.Context, raw []byte) (*RGB11ImportResult, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.ImportRGB11Contract(ctx, raw)
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
+		func(manager *rgb11Manager) (*RGB11ImportResult, error) {
+			return manager.ImportRGB11Contract(ctx, raw)
+		})
 }
 
 func (p *Manager) ImportRGB11ContractFile(ctx context.Context, raw []byte) (*RGB11ImportResult, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.ImportRGB11ContractFile(ctx, raw)
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
+		func(manager *rgb11Manager) (*RGB11ImportResult, error) {
+			return manager.ImportRGB11ContractFile(ctx, raw)
+		})
 }
 
 func (p *Manager) IssueRGB11Asset(ctx context.Context, request RGB11IssueRequest) (*RGB11IssueResult, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.IssueRGB11Asset(ctx, request)
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
+		func(manager *rgb11Manager) (*RGB11IssueResult, error) {
+			return manager.IssueRGB11Asset(ctx, request)
+		})
 }
 
 func (p *Manager) ListRGB11Outputs() ([]*TxOutput, error) {
@@ -270,23 +249,26 @@ func (p *Manager) ListRGB11Outputs() ([]*TxOutput, error) {
 
 func (p *Manager) PrepareConfiguredRGB11AddressTransfer(ctx context.Context, request RGB11AddressSendRequest,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11PreparedTransfer, *RGB11AddressEndpoint, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, nil, err
+	type result struct {
+		transfer *RGB11PreparedTransfer
+		endpoint *RGB11AddressEndpoint
 	}
-	return manager.PrepareConfiguredRGB11AddressTransfer(ctx, request, verify)
+	value, err := runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
+		func(manager *rgb11Manager) (result, error) {
+			if !p.rgb11ManagerIsRoot(manager) {
+				return result{}, ErrRGB11TraditionalReceiveRequired
+			}
+			transfer, endpoint, err := manager.PrepareConfiguredRGB11AddressTransfer(ctx, request, verify)
+			return result{transfer: transfer, endpoint: endpoint}, err
+		})
+	return value.transfer, value.endpoint, err
 }
 
 func (p *Manager) PrepareRGB11Transfer(ctx context.Context, request RGB11SendRequest) (*RGB11PreparedTransfer, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.PrepareRGB11Transfer(ctx, request)
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
+		func(manager *rgb11Manager) (*RGB11PreparedTransfer, error) {
+			return manager.PrepareRGB11Transfer(ctx, request)
+		})
 }
 
 func (p *Manager) ProjectRGB11Allocation(outpoint string, asset *indexer.AssetInfo, proof *rgb11wallet.AllocationProof) error {
@@ -313,13 +295,10 @@ func (p *Manager) ResumeRGB11PreparedTransfer(transferID string) (*RGB11Prepared
 
 func (p *Manager) FetchRGB11ProxyAck(ctx context.Context,
 	transferID string) (*RGB11ProxyAckResult, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.FetchRGB11ProxyAck(ctx, transferID)
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (*RGB11ProxyAckResult, error) {
+			return manager.FetchRGB11ProxyAck(ctx, transferID)
+		})
 }
 
 func (p *Manager) RGB11WalletID() (string, error) {
@@ -342,7 +321,7 @@ func (p *Manager) RefreshRGB11AddressACK(record *swire.DKVSRecord,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressACK, error) {
 	releaseRGB11Operation := p.beginRGB11Operation()
 	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
+	manager, err := p.rootRGB11Manager()
 	if err != nil {
 		return nil, err
 	}
@@ -350,26 +329,20 @@ func (p *Manager) RefreshRGB11AddressACK(record *swire.DKVSRecord,
 }
 
 func (p *Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResult, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	result, err := manager.RefreshRGB11State(ctx)
-	manager.wakeRGB11ChainReconciliation()
-	return result, err
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (*RGB11RefreshResult, error) {
+			result, err := manager.RefreshRGB11State(ctx)
+			manager.wakeRGB11ChainReconciliation()
+			return result, err
+		})
 }
 
 func (p *Manager) ReceiveRGB11ProxyConsignment(ctx context.Context,
 	requestID string) (*RGB11ProxyReceiveResult, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.ReceiveRGB11ProxyConsignment(ctx, requestID)
+	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (*RGB11ProxyReceiveResult, error) {
+			return manager.ReceiveRGB11ProxyConsignment(ctx, requestID)
+		})
 }
 
 func (p *Manager) RegisterRGB11TickerInfo(info *indexer.TickerInfo) error {
@@ -386,7 +359,7 @@ func (p *Manager) ResolveConfiguredRGB11AddressEndpoint(address string,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressEndpoint, error) {
 	releaseRGB11Operation := p.beginRGB11Operation()
 	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
+	manager, err := p.rootRGB11Manager()
 	if err != nil {
 		return nil, err
 	}
@@ -396,13 +369,23 @@ func (p *Manager) ResolveConfiguredRGB11AddressEndpoint(address string,
 func (p *Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 	verify dkvsindexer.RecordVerificationOptions,
 	ackOptions RGB11AddressDeliveryOptions) (*RGB11AddressMailboxSyncResult, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
-	manager, err := p.synchronizedRGB11Manager()
+	current, err := p.synchronizedRGB11Manager()
 	if err != nil {
 		return nil, err
 	}
-	return manager.SyncConfiguredRGB11AddressMailbox(ctx, verify, ackOptions)
+	if !p.rgb11ManagerIsRoot(current) {
+		return nil, ErrRGB11DirectRootRequired
+	}
+	return p.syncRootRGB11AddressMailbox(ctx, verify, ackOptions)
+}
+
+func (p *Manager) syncRootRGB11AddressMailbox(ctx context.Context,
+	verify dkvsindexer.RecordVerificationOptions,
+	ackOptions RGB11AddressDeliveryOptions) (*RGB11AddressMailboxSyncResult, error) {
+	return runRootRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
+		func(manager *rgb11Manager) (*RGB11AddressMailboxSyncResult, error) {
+			return manager.SyncConfiguredRGB11AddressMailbox(ctx, verify, ackOptions)
+		})
 }
 
 func (p *Manager) ValidateRGB11Consignment(ctx context.Context, raw []byte) (*rgb11wallet.ValidationReceipt, error) {

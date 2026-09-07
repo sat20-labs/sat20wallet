@@ -139,8 +139,8 @@ async function walletCall(client, body) {
     const verify = window.__SAT20_PWA_VERIFY__;
     if (!verify) throw new Error('__SAT20_PWA_VERIFY__ is not available');
     const wallet = verify.useWalletStore();
-    const { Chain, Network, hashPassword, sat20 } = verify;
-    const hashed = await hashPassword(${q(PASSWORD)});
+		const { Chain, Network, sat20 } = verify;
+		const credential = ${q(PASSWORD)};
     const unwrap = (tuple) => {
       if (tuple?.[0]) throw tuple[0];
       return tuple?.[1];
@@ -156,11 +156,11 @@ async function walletCall(client, body) {
     const wasmExists = await safe(async () => unwrap(await sat20.isWalletExist()));
     debug.wasmExistsBefore = wasmExists;
     if (!wasmExists?.exists) {
-      const [importErr] = await wallet.importWallet(${q(MNEMONIC)}, hashed);
+			const [importErr] = await wallet.importWallet(${q(MNEMONIC)}, credential);
       debug.importErr = importErr?.message || String(importErr || '');
       if (importErr) throw importErr;
     } else {
-      const [unlockErr, unlockRes] = await sat20.unlockWallet(hashed);
+			const [unlockErr, unlockRes] = await sat20.unlockWallet(credential);
       debug.directUnlockErr = unlockErr?.message || String(unlockErr || '');
       debug.directUnlockRes = unlockRes;
       if (unlockErr && !String(unlockErr.message || unlockErr).includes('wallet has been unlocked')) throw unlockErr;
@@ -168,12 +168,13 @@ async function walletCall(client, body) {
     debug.wasmExistsAfter = await safe(async () => unwrap(await sat20.isWalletExist()));
     const activeWalletId = debug.directUnlockRes?.walletId;
     if (activeWalletId) {
-      debug.switchWallet = await safe(async () => unwrap(await sat20.switchWallet(String(activeWalletId), hashed)));
+		debug.switchWallet = await safe(async () => unwrap(await sat20.switchWallet(String(activeWalletId), credential)));
     }
-    debug.switchChain = await safe(async () => unwrap(await sat20.switchChain('testnet', hashed)));
+	debug.switchChain = 'disabled: PWA setNetwork recreates the manager';
     debug.switchAccount = await safe(async () => unwrap(await sat20.switchAccount(0)));
     debug.address0 = await safe(async () => unwrap(await sat20.getWalletAddress(0)));
-    await wallet.setPassword(hashed);
+	const [sessionUnlockErr] = await wallet.unlockWallet(credential);
+	if (sessionUnlockErr) throw sessionUnlockErr;
     await wallet.setChain(Chain.SATNET);
     ${body}
   })()`);

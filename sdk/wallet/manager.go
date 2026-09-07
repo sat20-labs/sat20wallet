@@ -99,10 +99,9 @@ func (noopChannelBackupHandler) BackupChannel(*Channel, []byte) error {
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet
 type Manager struct {
-	mutex                     sync.RWMutex
-	rgbOperationMu            sync.RWMutex
-	channelIdentityMu         sync.RWMutex
-	channelIdentityGeneration uint64
+	mutex             sync.RWMutex
+	rgbOperationMu    sync.RWMutex
+	channelIdentityMu sync.RWMutex
 
 	cfg                   *common.Config
 	bInited               bool
@@ -132,13 +131,25 @@ type Manager struct {
 	dkvsInitMu   sync.Mutex
 	dkvs         *dkvsManager
 
-	accountProfile  *accountManagementProfile
-	accountSecret   []byte
-	accountPassword string
-	accountSyncMu   sync.Mutex
+	accountProfile                   *accountManagementProfile
+	accountSecret                    []byte
+	accountPassword                  string
+	accountSyncMu                    sync.Mutex
+	accountSyncActive                bool
+	accountSyncDone                  chan struct{}
+	accountGeneration                uint64
+	messageSendMu                    sync.Mutex
+	accountRootNotFoundAuthorization *accountRootNotFoundAuthorization
 
-	managedDataMu        sync.RWMutex
-	managedDataProviders map[string]AccountManagedDataProvider
+	managedDataMu             sync.RWMutex
+	managedDataProviders      map[string]AccountManagedDataProvider
+	rgbManagedOperationMu     sync.Mutex
+	rgbManagedOperationActive bool
+	rgbManagedOperationDirty  bool
+	managedActiveSyncMu       sync.Mutex
+	managedActiveStateMu      sync.Mutex
+	managedActiveGen          map[string]uint64
+	managedActiveRunning      map[string]bool
 
 	feeRateL1             int64 // sat/vkb
 	refreshTimeL1         int64
@@ -161,6 +172,8 @@ type Manager struct {
 	nodeMap    map[string]string   // key: peer address + local address -> channelId
 	channelMap map[string]*Channel // key: channelId. 活跃的channel，维持状态是最新的
 
+	localReadyChannelsInitialized bool // local DB initialization after keys become available
+
 	actionMonitorLock         sync.Mutex
 	actionMonitorL1Lock       sync.Mutex
 	actionMonitorL2Lock       sync.Mutex
@@ -180,6 +193,26 @@ type Manager struct {
 	btcLuckyMiner        *btclucky.Miner
 	btcLuckyLastL1Height int
 	btcLuckyRewardAddr   string
+}
+
+// captureWalletIdentity freezes the currently selected signing identity.  A
+// clone is required because SwitchAccount mutates the live Wallet object.
+func (p *Manager) captureWalletIdentity() (common.Wallet, error) {
+	if p == nil {
+		return nil, fmt.Errorf("wallet manager is unavailable")
+	}
+	p.channelIdentityMu.RLock()
+	defer p.channelIdentityMu.RUnlock()
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	if p.wallet == nil || p.status == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	wallet := p.wallet.Clone()
+	if wallet == nil {
+		return nil, fmt.Errorf("wallet identity is unavailable")
+	}
+	return wallet, nil
 }
 
 func (p *Manager) init() error {
@@ -387,7 +420,7 @@ func IsTestNet() bool {
 }
 
 func (p *Manager) checkSuperNodeStatus() bool {
-	err := p.serverNode.client.SendActionResultNfty(0, "", 0, "")
+	err := p.serverNode.client.SendActionResultNfty(nil, 0, "", 0, "")
 	return err == nil
 }
 
@@ -433,7 +466,7 @@ func (p *Manager) HasStaked(pubkey []byte) bool {
 func (p *Manager) IsPeerOnline(_ []byte) bool {
 	now := time.Now().Unix()
 	if now-p.refreshTimeServerNode > 3*60 {
-		err := p.serverNode.client.SendActionResultNfty(0, "", 0, "")
+		err := p.serverNode.client.SendActionResultNfty(nil, 0, "", 0, "")
 		p.serverOnline = err == nil
 		p.refreshTimeServerNode = now
 	}
@@ -846,7 +879,7 @@ func (p *Manager) GetUtxosForStubs(address string, n int, excludedUtxoMap map[st
 		if _, ok := excludedUtxoMap[utxo]; ok {
 			continue
 		}
-		if p.utxoLockerL1.IsLocked(utxo) {
+		if p.isL1SendInputProtected(utxo) {
 			continue
 		}
 		if u.Value > 330 {

@@ -171,9 +171,11 @@ func deliverAndBroadcastRGB11AddressTransfer(this js.Value, p []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		return map[string]any{
-			"result":    string(encoded),
-			"txid":      result.TxID,
-			"temporary": result.Temporary,
+			"result":       string(encoded),
+			"txid":         result.TxID,
+			"temporary":    result.Temporary,
+			"awaiting_ack": result.AwaitingACK,
+			"broadcast":    result.Broadcast,
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(jsHandler)

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/btcec"
 )
@@ -210,5 +211,36 @@ func TestRGB11L1MonitorDoesNotBlockAccountSwitchDuringRemoteQuery(t *testing.T) 
 	manager.SwitchAccount(0)
 	if got := manager.GetCurrentAccountId(); got != 0 {
 		t.Fatalf("current account=%d want=0", got)
+	}
+}
+
+func TestRGB11L1MonitorCoversEveryLocalAccountScope(t *testing.T) {
+	wallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
+	)
+	manager := newRGB11FlowManager(t, wallet, &rgb11FlowIndexer{}, nil, 703)
+	manager.walletInfoMap[703].Accounts = 2
+	chain := &rgb11L1MonitorIndexer{height: 10, hashes: rgb11MonitorHashes("all-", 10)}
+	l1 := NewIndexerRPCClientMgr()
+	l1.Set(chain)
+	manager.l1IndexerClient = l1
+
+	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	accounts := manager.localRGB11Accounts()
+	if len(accounts) != 2 {
+		t.Fatalf("RGB11 account scopes=%d want=2", len(accounts))
+	}
+	for _, account := range accounts {
+		scoped, err := manager.newScopedRGB11Manager(account)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkpoint, err := scoped.loadRGB11L1MonitorCheckpoint()
+		if err != nil || checkpoint == nil || checkpoint.Tip.Height != 10 {
+			t.Fatalf("scope %d/%d checkpoint=%+v err=%v",
+				account.WalletID, account.AccountIndex, checkpoint, err)
+		}
 	}
 }

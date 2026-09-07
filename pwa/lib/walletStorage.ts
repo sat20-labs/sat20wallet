@@ -4,7 +4,7 @@ import { Storage } from './storage-adapter'
 export type AccountRecoveryState = Pick<RootAccountRecoveryResult, 'status' | 'code'> & {
   env?: 'dev' | 'test' | 'prd'
   network?: Network
-  rootWalletId?: string
+  rootAccountId?: string
 }
 
 interface WalletState {
@@ -13,6 +13,7 @@ interface WalletState {
   hasWallet: boolean
   locked: boolean
   walletId: string
+  rootAccountId: string
   accountIndex: number
   address: string | null
   isConnected: boolean
@@ -43,9 +44,10 @@ const defaultState: WalletState = {
   hasWallet: false,
   address: null,
   isConnected: false,
-  network: Network.LIVENET,
+  network: Network.MAINNET,
   chain: Chain.BTC,
   walletId: '',
+  rootAccountId: '',
   accountIndex: 0,
   balance: { confirmed: 0, unconfirmed: 0, total: 0 },
   pubkey: null,
@@ -98,6 +100,19 @@ class WalletStorage {
     return JSON.parse(JSON.stringify(value)) as WalletState
   }
 
+  private migrateNetworkNames(state: WalletState): boolean {
+    let changed = false
+    if ((state.network as string) === 'livenet') {
+      state.network = Network.MAINNET
+      changed = true
+    }
+    if (state.accountRecovery && (state.accountRecovery.network as string) === 'livenet') {
+      state.accountRecovery.network = Network.MAINNET
+      changed = true
+    }
+    return changed
+  }
+
   private async persistSnapshot(nextState: WalletState): Promise<void> {
     const snapshot: WalletStateSnapshot = {
       version: 1,
@@ -135,6 +150,15 @@ class WalletStorage {
         if (snapshot?.version === 1 && snapshot.state && typeof snapshot.revision === 'number') {
           this.state = { ...this.cloneState(defaultState), ...this.cloneState(snapshot.state) }
           this.snapshotRevision = snapshot.revision
+          const migrated = this.migrateNetworkNames(this.state)
+          if (migrated) {
+            await this.persistSnapshot(this.state)
+            await this.persistLegacyMirrors({
+              network: this.state.network,
+              accountRecovery: this.state.accountRecovery,
+              rootAccountId: this.state.rootAccountId,
+            })
+          }
           this.initialized = true
           return
         }
@@ -151,6 +175,7 @@ class WalletStorage {
       }
     })
     await Promise.all(loadPromises)
+    this.migrateNetworkNames(this.state)
     // Migrate a complete legacy state into the authoritative snapshot.
     await this.persistSnapshot(this.state)
     this.initialized = true

@@ -207,7 +207,7 @@ func accountCleanupSessions() {
 }
 
 func accountExpectedNetwork() string {
-	return walletsdk.GetChainParam_SatsNet().Name
+	return _mgr.GetChain()
 }
 
 func encodeAccountLocator(value accountLocatorPayload) (string, error) {
@@ -249,6 +249,40 @@ func accountGetStorageOptions(this js.Value, args []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		data, err := accountStructData(map[string]any{"options": options})
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
+	}))
+}
+
+func accountAutopayStatus(this js.Value, args []js.Value) any {
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		if _mgr == nil {
+			return nil, -1, "Manager not initialized"
+		}
+		status, err := _mgr.GetAccountAutopayFundingStatus()
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := accountStructData(status)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
+	}))
+}
+
+func accountFundAutopay(this js.Value, args []js.Value) any {
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		if _mgr == nil {
+			return nil, -1, "Manager not initialized"
+		}
+		result, err := _mgr.FundAccountAutopay()
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := accountStructData(result)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -385,7 +419,7 @@ func accountCreateRecovery(this js.Value, args []js.Value) any {
 			return nil, -1, fmt.Sprintf("verify published recovery package: %v", err)
 		}
 		locator := accountLocatorPayload{
-			Version: account.Version, Network: walletsdk.GetChainParam_SatsNet().Name,
+			Version: account.Version, Network: accountExpectedNetwork(),
 			StorageLocation: storage.Authorization.Location, StorageMode: storage.Authorization.Mode,
 			RecordTTL: storage.Authorization.RecordOptions.TTL, Locator: pkg.Envelope.Locator,
 		}
@@ -941,13 +975,20 @@ func accountCommitRecovery(this js.Value, args []js.Value) any {
 		if err != nil {
 			return nil, -1, err.Error()
 		}
+		status := _mgr.GetAccountManagementStatus()
+		if !status.Active || status.RootWalletID == 0 || status.AccountID == "" {
+			return nil, -1, "restored account has no explicit root wallet"
+		}
 		clearWASMBackup(session.Backup)
 		zeroAccountBytes(session.RequestPrivate)
 		zeroAccountBytes(session.Secret)
 		accountSessions.Lock()
 		delete(accountSessions.recovery, request.SessionID)
 		accountSessions.Unlock()
-		data, err := accountStructData(map[string]any{"wallets": wallets})
+		data, err := accountStructData(map[string]any{
+			"wallets": wallets, "root_wallet_id": status.RootWalletID,
+			"account_id": status.AccountID,
+		})
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -996,6 +1037,8 @@ func init() {
 	obj.Set("status", js.FuncOf(accountStatus))
 	obj.Set("preflight", js.FuncOf(accountPreflight))
 	obj.Set("getStorageOptions", js.FuncOf(accountGetStorageOptions))
+	obj.Set("autopayStatus", js.FuncOf(accountAutopayStatus))
+	obj.Set("fundAutopay", js.FuncOf(accountFundAutopay))
 	obj.Set("confirmStorage", js.FuncOf(accountConfirmStorage))
 	obj.Set("guardianIdentity", js.FuncOf(accountGuardianIdentity))
 	obj.Set("createRecovery", js.FuncOf(accountCreateRecovery))

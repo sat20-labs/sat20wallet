@@ -45,6 +45,7 @@ const (
 	bootstrapMnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
 	coreMnemonic      = "uniform bulb body vital later special era tourist build chief devote annual"
 	minerMnemonic     = "letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
+	rpcReadyTimeout   = 2 * time.Minute
 )
 
 var (
@@ -53,7 +54,7 @@ var (
 	nextHarnessPort         uint32 = initialHarnessPort()
 	satoshinetTestConf             = `env: test
 chain: testnet
-mode: local
+mode: %s
 log: info
 db: ""
 indexer_layer1:
@@ -385,7 +386,7 @@ func startSatoshiNetNodeWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, role, mnem
 
 	nodeKey := keyFromMnemonic(t, mnemonic, 0)
 	nodePubKey := hex.EncodeToString(nodeKey.PubKey().SerializeCompressed())
-	p2pAddr, rpcAddr, managementAddr := nextNodeAddresses(t)
+	p2pAddr, rpcAddr, stpAddr, managementAddr := nextNodeAddresses(t)
 	nodeDir := t.TempDir()
 	dataDir := filepath.Join(nodeDir, "data")
 	logDir := filepath.Join(nodeDir, "logs")
@@ -426,19 +427,27 @@ func startSatoshiNetNodeWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, role, mnem
 		}
 	}
 
-	harness := newTestHarness(t, stageSatoshiNetNodeRuntime(t, role, mnemonic, fakeL1.host(), l2IndexerHost(t, rpcAddr), rpcAddr, managementAddr, nodeDir), nodeDir, p2pAddr, rpcAddr, args, env)
+	harness := newTestHarness(t, stageSatoshiNetNodeRuntime(t, role, mnemonic, fakeL1.host(), l2IndexerHost(t, rpcAddr), stpAddr, managementAddr, nodeDir), nodeDir, p2pAddr, rpcAddr, args, env)
+	harness.role = role
+	harness.nodePubKey = nodePubKey
+	harness.stpAddr = stpAddr
+	harness.managementAddr = managementAddr
 	t.Logf("started %s node: pid=%d rpc=%s p2p=%s log=%s",
 		role, harness.NodePID(), harness.RPCAddress(), harness.P2PAddress(), harness.LogFile())
 	return harness
 }
 
 type testHarness struct {
-	Client  *rpcclient.Client
-	cmd     *exec.Cmd
-	nodeDir string
-	p2pAddr string
-	rpcAddr string
-	logFile string
+	Client         *rpcclient.Client
+	cmd            *exec.Cmd
+	nodeDir        string
+	p2pAddr        string
+	rpcAddr        string
+	managementAddr string
+	stpAddr        string
+	role           string
+	nodePubKey     string
+	logFile        string
 }
 
 func newTestHarness(t *testing.T, exe, nodeDir, p2pAddr, rpcAddr string, args, env []string) *testHarness {
@@ -506,7 +515,8 @@ func waitForRPCClient(t *testing.T, rpcAddr string) *rpcclient.Client {
 		DisableAutoReconnect: true,
 	}
 	var lastErr error
-	for i := 0; i < 200; i++ {
+	deadline := time.Now().Add(rpcReadyTimeout)
+	for time.Now().Before(deadline) {
 		client, err := rpcclient.New(&conf, &rpcclient.NotificationHandlers{})
 		if err == nil {
 			if _, _, err := client.GetBestBlock(); err == nil {
@@ -569,16 +579,17 @@ func (h *testHarness) TearDown() error {
 	return nil
 }
 
-func nextNodeAddresses(t *testing.T) (string, string, string) {
+func nextNodeAddresses(t *testing.T) (string, string, string, string) {
 	t.Helper()
 	for {
-		base := atomic.AddUint32(&nextHarnessPort, 4)
+		base := atomic.AddUint32(&nextHarnessPort, 5)
 		p2p := fmt.Sprintf("127.0.0.1:%d", base)
 		rpc := fmt.Sprintf("127.0.0.1:%d", base+1)
 		indexer := fmt.Sprintf("127.0.0.1:%d", base+2)
-		management := fmt.Sprintf("127.0.0.1:%d", base+3)
-		if portsAvailable(p2p, rpc, indexer, management) {
-			return p2p, rpc, management
+		stpRPC := fmt.Sprintf("127.0.0.1:%d", base+3)
+		management := fmt.Sprintf("127.0.0.1:%d", base+4)
+		if portsAvailable(p2p, rpc, indexer, stpRPC, management) {
+			return p2p, rpc, stpRPC, management
 		}
 	}
 }
@@ -702,6 +713,17 @@ func satoshinetBuildArtifacts(t *testing.T) satoshinetArtifacts {
 	return satoshinetTestArtifacts
 }
 
+func satoshinetSTPMode(role string) string {
+	switch role {
+	case "core":
+		return "server"
+	case "bootstrap":
+		return "bootstrap"
+	default:
+		return "local"
+	}
+}
+
 func stageSatoshiNetNodeRuntime(t *testing.T, role, mnemonic, l1IndexerHost, l2IndexerHost, rpcHost, managementHost, nodeDir string) string {
 	t.Helper()
 	artifacts := satoshinetBuildArtifacts(t)
@@ -717,7 +739,8 @@ func stageSatoshiNetNodeRuntime(t *testing.T, role, mnemonic, l1IndexerHost, l2I
 	stagedExecutable := filepath.Join(nodeDir, filepath.Base(executable))
 	copySatoshiNetRuntimeFile(t, executable, stagedExecutable)
 	copySatoshiNetRuntimeFile(t, plugin, filepath.Join(nodeDir, pluginName))
-	require.NoError(t, os.WriteFile(filepath.Join(nodeDir, "conf.yaml"), []byte(fmt.Sprintf(satoshinetTestConf, l1IndexerHost, l2IndexerHost, rpcHost, managementHost, mnemonic)), 0o600))
+	stageSatoshiNetNodeConfig(t, nodeDir)
+	require.NoError(t, os.WriteFile(filepath.Join(nodeDir, "conf.yaml"), []byte(fmt.Sprintf(satoshinetTestConf, satoshinetSTPMode(role), l1IndexerHost, l2IndexerHost, rpcHost, managementHost, mnemonic)), 0o600))
 	return stagedExecutable
 }
 
@@ -743,6 +766,29 @@ func copySatoshiNetRuntimeFile(t *testing.T, source, destination string) {
 	_, err = io.Copy(out, in)
 	require.NoError(t, err)
 	require.NoError(t, out.Close())
+}
+
+func stageSatoshiNetNodeConfig(t *testing.T, nodeDir string) {
+	t.Helper()
+	// The harness supplies all node settings through command-line arguments.
+	// Create the default config explicitly so a staged binary does not try to
+	// bootstrap it from a sample file that is intentionally not part of the
+	// isolated runtime directory.
+	require.NoError(t, os.WriteFile(filepath.Join(nodeDir, "satsnet.conf"),
+		[]byte("[Application Options]\n"), 0o600))
+}
+
+func TestStageSatoshiNetNodeConfig(t *testing.T) {
+	nodeDir := t.TempDir()
+	stageSatoshiNetNodeConfig(t, nodeDir)
+
+	path := filepath.Join(nodeDir, "satsnet.conf")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "[Application Options]\n", string(data))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
 func configureFastPOSTimers(t *testing.T) {

@@ -33,9 +33,10 @@ func TestUnifiedTemplateAutopayDeployFund_testnet(t *testing.T) {
 		t.Fatalf("AUTOPAY deployer mismatch: got %s want %s", got, defaults.AutopayDeployer)
 	}
 
-	if _, err := manager.QueryContract(&ContractQueryRequest{
+	stateJSON, stateErr := manager.QueryContract(&ContractQueryRequest{
 		Query: ContractQueryState, Contract: defaults.AutopayContract,
-	}); err != nil {
+	})
+	if stateErr != nil || !liveAutopayContractExists(stateJSON, defaults.AutopayContract) {
 		content, contentErr := defaults.AutopayContent()
 		if contentErr != nil {
 			t.Fatalf("build AUTOPAY content: %v", contentErr)
@@ -96,6 +97,25 @@ func TestUnifiedTemplateAutopayDeployFund_testnet(t *testing.T) {
 	t.Logf("AUTOPAY funded: contract=%s amount=%s amountPerBlock=%s blocks=%d txid=%s",
 		defaults.AutopayContract, fundingAmount, amountPerBlock,
 		accountPaidDefaultFundingBlocks, fund.TxID)
+}
+
+func liveAutopayContractExists(raw, contract string) bool {
+	state, err := dkvsindexer.DecodeAutopayContractState([]byte(raw), contract)
+	return err == nil && state != nil &&
+		contractcommon.NormalizeTemplateName(state.TemplateName) == contractcommon.TemplateAutopay
+}
+
+func TestLiveAutopayContractExists(t *testing.T) {
+	contract := "autopay-contract"
+	if liveAutopayContractExists(`{"details":{"exists":false}}`, contract) {
+		t.Fatal("missing contract was reported as existing")
+	}
+	if liveAutopayContractExists(`{"templateName":"amm.tc","status":"active"}`, contract) {
+		t.Fatal("non-AUTOPAY contract was reported as existing")
+	}
+	if !liveAutopayContractExists(`{"templateName":"autopay.tc","status":"funding"}`, contract) {
+		t.Fatal("AUTOPAY contract was reported as missing")
+	}
 }
 
 func TestLegacyFaucetDeployFund_testnet(t *testing.T) {

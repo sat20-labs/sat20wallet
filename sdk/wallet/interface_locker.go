@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
-	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	indexer "github.com/sat20-labs/indexer/common"
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
 
 // 以下接口，作为不依赖钱包的基础api向上层开放
@@ -33,6 +33,14 @@ func (p *Manager) UnlockUtxo(address, utxo string) error {
 	return p.utxoLockerL1.UnlockUtxo(utxo)
 }
 
+func (p *Manager) LockUtxoForOwner(address, utxo, reason string, owner UtxoLockOwner) error {
+	return p.utxoLockerL1.LockUtxoForOwner(utxo, reason, owner)
+}
+
+func (p *Manager) UnlockUtxoForOwner(address, utxo string, owner UtxoLockOwner) error {
+	return p.utxoLockerL1.UnlockUtxoForOwner(utxo, owner)
+}
+
 func (p *Manager) IsLocked(address, utxo string) bool {
 	p.utxoLockerL1.Reload(address)
 	return p.utxoLockerL1.IsLocked(utxo)
@@ -51,6 +59,14 @@ func (p *Manager) LockUtxo_SatsNet(address, utxo, reason string) error {
 func (p *Manager) UnlockUtxo_SatsNet(address, utxo string) error {
 	p.utxoLockerL2.Reload(address)
 	return p.utxoLockerL2.UnlockUtxo(utxo)
+}
+
+func (p *Manager) LockUtxoForOwner_SatsNet(address, utxo, reason string, owner UtxoLockOwner) error {
+	return p.utxoLockerL2.LockUtxoForOwner(utxo, reason, owner)
+}
+
+func (p *Manager) UnlockUtxoForOwner_SatsNet(address, utxo string, owner UtxoLockOwner) error {
+	return p.utxoLockerL2.UnlockUtxoForOwner(utxo, owner)
 }
 
 func (p *Manager) IsLocked_SatsNet(address, utxo string) bool {
@@ -208,8 +224,8 @@ func (p *Manager) GetTxAssetInfoFromPsbt(psbtStr string) (*TxAssetInfo, error) {
 
 	tx := packet.UnsignedTx
 	result := &TxAssetInfo{
-		TxId: packet.UnsignedTx.TxID(),
-		TxHex: txHex,
+		TxId:         packet.UnsignedTx.TxID(),
+		TxHex:        txHex,
 		InputAssets:  make([]*indexer.AssetsInUtxo, len(tx.TxIn)),
 		OutputAssets: make([]*indexer.AssetsInUtxo, len(tx.TxOut)),
 	}
@@ -224,7 +240,7 @@ func (p *Manager) GetTxAssetInfoFromPsbt(psbtStr string) (*TxAssetInfo, error) {
 			return nil, err
 		}
 		utxoInfo := info.ToAssetsInUtxo()
-		
+
 		if input == nil {
 			input = info
 		} else {
@@ -262,12 +278,10 @@ func (p *Manager) GetTxAssetInfoFromPsbt(psbtStr string) (*TxAssetInfo, error) {
 				Value:    txOut.Value,
 				PkScript: txOut.PkScript,
 			}
-				
+
 			result.OutputAssets[i] = &utxoInfo
 		}
 	}
-
-	
 
 	return result, nil
 }
@@ -287,7 +301,7 @@ func GetTxAssetInfoFromPsbt_SatsNet(psbtStr string) (*TxAssetInfo, error) {
 	}
 
 	result := TxAssetInfo{
-		TxId: packet.UnsignedTx.TxID(),
+		TxId:  packet.UnsignedTx.TxID(),
 		TxHex: txHex,
 	}
 
@@ -317,7 +331,7 @@ func GetTxAssetInfoFromPsbt_SatsNet(psbtStr string) (*TxAssetInfo, error) {
 		utxoInfo := indexer.AssetsInUtxo{
 			OutPoint: fmt.Sprintf("%s:%d", packet.UnsignedTx.TxID(), i),
 		}
-		
+
 		utxoInfo.PkScript = txOut.PkScript
 		utxoInfo.Value = txOut.Value
 		for _, asset := range txOut.Assets {
@@ -327,10 +341,9 @@ func GetTxAssetInfoFromPsbt_SatsNet(psbtStr string) (*TxAssetInfo, error) {
 				BindingSat: int(asset.BindingSat),
 			})
 		}
-		
+
 		result.OutputAssets = append(result.OutputAssets, &utxoInfo)
 	}
 
 	return &result, nil
 }
-

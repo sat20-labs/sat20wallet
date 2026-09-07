@@ -29,6 +29,17 @@ func (s *EngineStore) SetScope(scope string) error {
 	return nil
 }
 
+// ClearScope makes every scoped operation fail until a valid unlocked wallet
+// identity is selected again.
+func (s *EngineStore) ClearScope() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.scope = ""
+	s.mu.Unlock()
+}
+
 func engineStoreKey(scope string, key []byte) ([]byte, error) {
 	if scope == "" || len(key) == 0 {
 		return nil, ErrWalletScope

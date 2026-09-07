@@ -433,7 +433,7 @@ func (p *Manager) FunderInitExpandingProcess(channel *Channel, assetName *swire.
 		p.enableChannel(resv.OldChannel)
 		p.DelResvWithId(resv.Id)
 		if resv.Id != 0 && channel.PeerRPC != nil {
-			_ = channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_SPLICING, -1, err.Error())
+			_ = channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_SPLICING, -1, err.Error())
 		}
 	}
 	return anchorTxID, resv.Amt.Clone(), resv.Id, err
@@ -599,7 +599,7 @@ func (p *Manager) FunderInitExpandingProcessSatsNet(channel *Channel, assetName 
 	if err != nil {
 		p.enableChannel(resv.OldChannel)
 		if resv.Id != 0 && channel.PeerRPC != nil {
-			_ = channel.PeerRPC.SendActionResultNfty(resv.Id, RESV_TYPE_PAYMENT, -1, err.Error())
+			_ = channel.PeerRPC.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_PAYMENT, -1, err.Error())
 		}
 		return nil, err
 	}

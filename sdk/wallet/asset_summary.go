@@ -78,6 +78,43 @@ func (p *Manager) localRGB11AccountForAddress(address string) (localRGB11Account
 	return localRGB11Account{}, false
 }
 
+func (p *Manager) rootRGB11Account() (localRGB11Account, error) {
+	root, err := p.accountManagementRootWallet()
+	if err != nil {
+		return localRGB11Account{}, err
+	}
+	for _, account := range p.localRGB11Accounts() {
+		if account.AccountIndex == 0 && account.Address == root.GetAddress() {
+			return account, nil
+		}
+	}
+	return localRGB11Account{}, ErrRGB11WalletLocked
+}
+
+func (p *Manager) rootRGB11Manager() (*rgb11Manager, error) {
+	account, err := p.rootRGB11Account()
+	if err != nil {
+		return nil, err
+	}
+	return p.newScopedRGB11Manager(account)
+}
+
+func (p *Manager) rgb11ManagerIsRoot(manager *rgb11Manager) bool {
+	if p == nil || manager == nil || manager.wallet == nil {
+		return false
+	}
+	root, err := p.accountManagementRootWallet()
+	if err != nil || manager.wallet.GetSubAccount() != 0 {
+		return false
+	}
+	rootID, err := dkvsAccountID(root)
+	if err != nil {
+		return false
+	}
+	managerID, err := dkvsAccountID(manager.wallet)
+	return err == nil && rootID == managerID
+}
+
 func (p *Manager) scopedRGB11ProjectionStore(account localRGB11Account) (*rgb11wallet.ProjectionStore, error) {
 	store := rgb11wallet.NewProjectionStore(p.db, nil)
 	if err := store.SetScope(rgb11StorageScope(account.WalletID, account.AccountIndex)); err != nil {
@@ -248,9 +285,13 @@ func (p *Manager) newScopedRGB11Manager(account localRGB11Account) (*rgb11Manage
 		return nil, ErrRGB11WalletLocked
 	}
 	owner := &Manager{
-		cfg:             p.cfg,
-		status:          &Status{CurrentWallet: account.WalletID, CurrentAccount: account.AccountIndex},
-		wallet:          account.Wallet,
+		cfg:    p.cfg,
+		status: &Status{CurrentWallet: account.WalletID, CurrentAccount: account.AccountIndex},
+		wallet: account.Wallet,
+		walletInfoMap: map[int64]*WalletInfo{account.WalletID: {
+			WalletInDB: WalletInDB{Id: account.WalletID, Accounts: int(account.AccountIndex) + 1},
+			Wallet:     account.Wallet,
+		}},
 		tickerInfoMap:   make(map[string]*indexer.TickerInfo),
 		db:              p.db,
 		http:            p.http,
@@ -267,6 +308,7 @@ func (p *Manager) newScopedRGB11Manager(account localRGB11Account) (*rgb11Manage
 	scoped.accountOwner = p
 	if p.rgbManager != nil {
 		scoped.scopeStates = p.rgbManager.scopeStates
+		scoped.evidence = p.rgbManager.evidence
 	}
 	owner.rgbManager = scoped
 	if err := scoped.selectRGB11Scope(); err != nil {

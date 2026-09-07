@@ -109,7 +109,7 @@ func (p *Manager) PerformRemoteAction(doAction StartRemoteAction, action string,
 	if err != nil {
 		p.updateOperationLogBestEffort(logID, OperationLogUpdate{Status: OperationLogFailed, Message: err.Error(), Details: map[string]string{"error": err.Error()}})
 		if resv.Id != 0 {
-			_ = client.SendActionResultNfty(resv.Id, RESV_TYPE_REMOTEACTION, -1, err.Error())
+			_ = client.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_REMOTEACTION, -1, err.Error())
 		}
 		return "", resv.Id, nil, err
 	}
@@ -260,7 +260,7 @@ func (p *Manager) handleRemoteActionStatus(resv *RemoteActionPerformReservation)
 	}
 
 	if resv.Status == RS_PERFORM_ACTION_COMPLETED {
-		if err := client.SendActionResultNfty(resv.Id, RESV_TYPE_REMOTEACTION, 0, ""); err != nil {
+		if err := client.SendActionResultNfty(resv.LocalWallet(), resv.Id, RESV_TYPE_REMOTEACTION, 0, ""); err != nil {
 			return err
 		}
 		resv.Status = RS_CLOSED

@@ -137,22 +137,23 @@ async function walletCall(client, body) {
     const wallet = verify.useWalletStore();
     const sat20 = verify.sat20;
     const { Chain, Network, walletStorage } = verify;
-    const hashed = await verify.hashPassword(${q(PASSWORD)});
+		const credential = ${q(PASSWORD)};
     const withTimeout = (promise, label, ms = 30000) => Promise.race([
       promise,
       new Promise((_, reject) => setTimeout(() => reject(new Error(label + ' timed out after ' + ms + 'ms')), ms)),
     ]);
     if (!wallet.hasWallet) {
-      const [importErr] = await withTimeout(wallet.importWallet(${q(MNEMONIC)}, hashed), 'importWallet', 60000);
+			const [importErr] = await withTimeout(wallet.importWallet(${q(MNEMONIC)}, credential), 'importWallet', 60000);
       if (importErr) throw importErr;
     } else {
       const [probeError] = await withTimeout(sat20.getWalletAddress(Number(wallet.accountIndex || 0)), 'wallet unlock probe', 10000);
       if (wallet.locked || probeError) {
-        const [unlockErr] = await withTimeout(wallet.unlockWallet(hashed), 'unlockWallet', 30000);
+				const [unlockErr] = await withTimeout(wallet.unlockWallet(credential), 'unlockWallet', 30000);
         if (unlockErr) throw unlockErr;
       }
     }
-    await withTimeout(wallet.setPassword(hashed), 'setPassword', 10000);
+	const [sessionUnlockErr] = await withTimeout(wallet.unlockWallet(credential), 'unlockWallet session', 30000);
+	if (sessionUnlockErr) throw sessionUnlockErr;
     if (wallet.network !== Network.TESTNET) await withTimeout(wallet.setNetwork(Network.TESTNET), 'setNetwork(TESTNET)', 60000);
     await withTimeout(wallet.setChain(Chain.BTC), 'setChain(BTC)', 10000);
     await withTimeout(walletStorage.setValue('env', 'prd'), 'set env', 10000);
@@ -418,8 +419,16 @@ async function runReceiveUiChecks(client) {
 
 async function setupBridgeHarness(client) {
   await evaluate(client, `(async () => {
-    const { addAuthorizedOrigin, usePwaDappBridge } = window.__SAT20_PWA_VERIFY__;
-    await addAuthorizedOrigin(window.location.origin);
+    const { createDappGrant, getCurrentDappScope, DAPP_CAPABILITIES, usePwaDappBridge } = window.__SAT20_PWA_VERIFY__;
+    const scope = await getCurrentDappScope();
+    await createDappGrant({
+      ...scope,
+      origin: window.location.origin,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      capabilities: [...DAPP_CAPABILITIES],
+      sessionOnly: true,
+    });
 
     if (window.__sat20VerifyBridge?.stop) {
       window.__sat20VerifyBridge.stop();
@@ -459,6 +468,7 @@ async function setupBridgeHarness(client) {
 }
 
 function makeBridgeRequest(origin, seq, action, params = [], extra = {}) {
+  const now = Date.now();
   return {
     type: 'SAT20_DAPP_REQUEST',
     protocol: 'sat20-dapp-connect',
@@ -468,7 +478,8 @@ function makeBridgeRequest(origin, seq, action, params = [], extra = {}) {
     params,
     network: 'testnet',
     nonce: extra.nonce || `nonce-${seq}`,
-    expiresAt: extra.expiresAt || (Date.now() + 60000),
+    timestamp: extra.timestamp || String(now),
+    expiresAt: extra.expiresAt || (now + 60000),
   };
 }
 
@@ -537,7 +548,10 @@ async function waitForApprovalOrFailure(client, request, startIndex, label) {
 
 async function rejectCurrentApproval(client) {
   await evaluate(client, `(async () => {
-    window.__SAT20_PWA_VERIFY__.useApproveStore().reject(new Error('verify rejection'));
+    const approveStore = window.__SAT20_PWA_VERIFY__.useApproveStore();
+    const requestID = approveStore.currentRequest.value?.id;
+    if (!requestID) throw new Error('verify rejection: no visible approval request');
+    approveStore.reject(requestID, new Error('verify rejection'));
     return true;
   })()`);
 }
@@ -546,7 +560,10 @@ async function confirmAccountsApproval(client) {
   await evaluate(client, `(async () => {
     const verify = window.__SAT20_PWA_VERIFY__;
     const wallet = verify.useWalletStore();
-    verify.useApproveStore().confirm([wallet.address]);
+    const approveStore = verify.useApproveStore();
+    const requestID = approveStore.currentRequest.value?.id;
+    if (!requestID) throw new Error('requestAccounts approval: no visible approval request');
+    approveStore.confirm(requestID, [wallet.address]);
     return true;
   })()`);
 }
@@ -605,7 +622,8 @@ async function runBridgeChecks(client) {
 
   const signRejectRequest = makeRequest('signMessage', ['sat20-pwa-verify-reject'], {
     requestId: 'verify-reject',
-    nonce: 'nonce-reject',
+    // Wallet message signing enforces a 16–128 character nonce.
+    nonce: 'nonce-reject-0001',
   });
   const signRejectStartIndex = await postBridgeRequest(client, signRejectRequest);
   const rejectRequest = await waitForApprovalOrFailure(
@@ -683,14 +701,13 @@ async function main() {
     return JSON.stringify({ afterUnlock });
   `);
 
-  console.log('[wallet-basics] checking already-unlocked SDK response');
+  console.log('[wallet-basics] checking running-wallet password verification');
   const alreadyUnlocked = await walletCall(client, `
-    const [alreadyUnlockedError] = await withTimeout(sat20.unlockWallet(hashed), 'already-unlocked check', 30000);
-    const message = alreadyUnlockedError?.message || String(alreadyUnlockedError || '');
-    if (!message.includes('wallet has been unlocked')) {
-      throw new Error('expected already-unlocked SDK response, got: ' + message);
-    }
-    return JSON.stringify({ message });
+		const [alreadyUnlockedError, alreadyUnlockedResult] = await withTimeout(sat20.unlockWallet(credential), 'already-unlocked check', 30000);
+		if (alreadyUnlockedError || !alreadyUnlockedResult?.walletId) {
+			throw new Error('expected password-verified running-wallet success');
+		}
+		return JSON.stringify(alreadyUnlockedResult);
   `);
 
   await client.send('Page.reload', { ignoreCache: true });

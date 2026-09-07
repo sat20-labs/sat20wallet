@@ -102,23 +102,24 @@ export const useWalletStore = defineStore('wallet', () => {
   }
 
   const setNetwork = async (value: Network) => {
-    const n = value === Network.LIVENET ? 'mainnet' : 'testnet'
-    const [err] = await walletManager.switchChain(n, password.value as string)
-
-    await walletStorage.setValue('network', value)
-    network.value = value
-    const [_, addressRes] = await walletManager.getWalletAddress(accountIndex.value)
-    const [__, pubkeyRes] = await walletManager.getWalletPubkey(accountIndex.value)
-    if (addressRes && pubkeyRes) {
-      const { address } = addressRes
-      await setAddress(address)
-      await setPublickey(pubkeyRes.pubKey)
-    }
     const env = walletStorage.getValue('env') || 'test'
     const config = getConfig(env, value)
+	const [releaseError] = await walletManager.release()
+	if (releaseError) throw releaseError
+	const [initError] = await walletManager.init(config, logLevel)
+	if (initError) throw initError
+	const [unlockError] = await walletManager.unlockWallet(password.value as string)
+	if (unlockError) throw unlockError
 
-    await walletManager.release()
-    await walletManager.init(config, logLevel)
+	const [addressError, addressRes] = await walletManager.getWalletAddress(accountIndex.value)
+	const [pubkeyError, pubkeyRes] = await walletManager.getWalletPubkey(accountIndex.value)
+	if (addressError || pubkeyError || !addressRes || !pubkeyRes) {
+		throw addressError || pubkeyError || new Error('Failed to restore wallet identity')
+	}
+	await walletStorage.setValue('network', value)
+	network.value = value
+	await setAddress(addressRes.address)
+	await setPublickey(pubkeyRes.pubKey)
     try {
       console.log(`Sending NETWORK_CHANGED message with payload: ${value}`)
       await sendNetworkChangedEvent(value)

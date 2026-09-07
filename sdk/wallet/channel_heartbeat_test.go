@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -30,6 +31,7 @@ type channelHeartbeatTestClient struct {
 	blockSync       bool
 	syncResponse    *wwire.ActionSyncResp
 	lastPingRequest *wwire.PingReq
+	lastSyncRequest *wwire.ActionSyncReq
 }
 
 func (c *channelHeartbeatTestClient) SendPingReq(req *wwire.PingReq) (*wwire.PingResp, error) {
@@ -39,7 +41,11 @@ func (c *channelHeartbeatTestClient) SendPingReq(req *wwire.PingReq) (*wwire.Pin
 	switchOnPing := c.switchOnPing
 	c.mu.Unlock()
 	if switchOnPing {
+		c.manager.channelIdentityMu.Lock()
+		c.manager.mutex.Lock()
 		c.manager.wallet.SetSubAccount(1)
+		c.manager.mutex.Unlock()
+		c.manager.channelIdentityMu.Unlock()
 	}
 	return c.response, nil
 }
@@ -55,9 +61,10 @@ func (c *channelHeartbeatTestClient) SendPingReqContext(ctx context.Context, req
 	return c.SendPingReq(req)
 }
 
-func (c *channelHeartbeatTestClient) SendActionSyncReq(*wwire.ActionSyncReq) (*wwire.ActionSyncResp, error) {
+func (c *channelHeartbeatTestClient) SendActionSyncReq(req *wwire.ActionSyncReq) (*wwire.ActionSyncResp, error) {
 	c.mu.Lock()
 	c.syncCalls++
+	c.lastSyncRequest = req
 	syncStarted := c.syncStarted
 	syncRelease := c.syncRelease
 	syncResponse := c.syncResponse
@@ -237,7 +244,7 @@ func TestChannelHeartbeatClosingReservationScope(t *testing.T) {
 	}
 }
 
-func TestChannelHeartbeatStopsWhenAccountChangesDuringPing(t *testing.T) {
+func TestChannelHeartbeatKeepsWalletWhenAccountChangesDuringPing(t *testing.T) {
 	client := &channelHeartbeatTestClient{
 		switchOnPing: true,
 		response: &wwire.PingResp{
@@ -249,12 +256,17 @@ func TestChannelHeartbeatStopsWhenAccountChangesDuringPing(t *testing.T) {
 		},
 	}
 	manager := newChannelHeartbeatTestManager(t, client)
+	originalKey := manager.wallet.GetPaymentPubKey().SerializeCompressed()
 	manager.runChannelHeartbeatTick()
 
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if client.pingCalls != 1 || client.syncCalls != 0 {
-		t.Fatalf("ping/sync calls = %d/%d, want 1/0 after account switch", client.pingCalls, client.syncCalls)
+	if client.pingCalls != 1 || client.syncCalls != 1 {
+		t.Fatalf("ping/sync calls = %d/%d, want 1/1 after account switch", client.pingCalls, client.syncCalls)
+	}
+	if !bytes.Equal(client.lastSyncRequest.PubKey, originalKey) ||
+		bytes.Equal(client.lastSyncRequest.PubKey, manager.wallet.GetPaymentPubKey().SerializeCompressed()) {
+		t.Fatal("sync request did not retain the original heartbeat wallet")
 	}
 }
 
@@ -272,39 +284,6 @@ func TestChannelHeartbeatStartStop(t *testing.T) {
 	manager.channelHeartbeatMu.Unlock()
 	if running {
 		t.Fatal("channel heartbeat still running after stop")
-	}
-}
-
-func TestChannelHeartbeatRejectsIdentityChangeDuringActionSync(t *testing.T) {
-	client := &channelHeartbeatTestClient{
-		syncStarted:  make(chan struct{}),
-		syncRelease:  make(chan struct{}),
-		syncResponse: &wwire.ActionSyncResp{ChannelData: []byte("must not be decoded")},
-		response: &wwire.PingResp{
-			BaseResp: wwire.BaseResp{Code: 1, Msg: "channel existing"},
-			PingResponse: &wwire.PingResponse{
-				NextAction:  wwire.STP_ACTION_SYNC,
-				ActionParam: "restore",
-			},
-		},
-	}
-	manager := newChannelHeartbeatTestManager(t, client)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		manager.runChannelHeartbeatTick()
-	}()
-	<-client.syncStarted
-
-	manager.channelIdentityMu.Lock()
-	manager.wallet.SetSubAccount(1)
-	manager.channelIdentityGeneration++
-	manager.channelIdentityMu.Unlock()
-	close(client.syncRelease)
-	<-done
-
-	if channel := manager.GetCurrentChannel(); channel != nil {
-		t.Fatalf("stale identity restored channel %s", channel.ChannelId)
 	}
 }
 
@@ -390,9 +369,6 @@ func TestChannelHeartbeatSkipsMonitorWallet(t *testing.T) {
 	if _, err := manager.CreateMonitorWallet("tb1qmonitor"); err != nil {
 		manager.stopChannelHeartbeat()
 		t.Fatal(err)
-	}
-	if manager.channelIdentityGeneration != 1 {
-		t.Fatalf("monitor wallet identity generation = %d, want 1", manager.channelIdentityGeneration)
 	}
 	time.Sleep(50 * time.Millisecond)
 	manager.stopChannelHeartbeat()

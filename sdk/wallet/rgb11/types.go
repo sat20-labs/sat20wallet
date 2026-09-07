@@ -271,16 +271,32 @@ type TransferState struct {
 // PendingTransfer is private wallet state. Seal reveals and signed transaction
 // bytes never enter the public relay record or wallet head payload.
 type PendingTransfer struct {
-	State                TransferState          `json:"state"`
-	RecipientConsignment []byte                 `json:"-"`
-	LocalConsignment     []byte                 `json:"-"`
-	RecipientObjectHash  string                 `json:"-"`
-	LocalObjectHash      string                 `json:"-"`
-	SignedTx             []byte                 `json:"-"`
-	SignedPSBT           []byte                 `json:"-"`
-	ChangeSeals          []seals.GraphBlindSeal `json:"-"`
-	ReservationID        string                 `json:"reservation_id,omitempty"`
-	CreatedAt            int64                  `json:"created_at"`
+	State                TransferState `json:"state"`
+	RecipientConsignment []byte        `json:"-"`
+	LocalConsignment     []byte        `json:"-"`
+	RecipientObjectHash  string        `json:"-"`
+	LocalObjectHash      string        `json:"-"`
+	// Channel sends retain the fixed unsigned transaction and its PSBT until
+	// ChannelSend.Signed is true; ACK delivery must precede joint signing.
+	SignedTx      []byte                 `json:"-"`
+	SignedPSBT    []byte                 `json:"-"`
+	ChangeSeals   []seals.GraphBlindSeal `json:"-"`
+	ReservationID string                 `json:"reservation_id,omitempty"`
+	CreatedAt     int64                  `json:"created_at"`
+	ChannelSend   *ChannelSendData       `json:"-"`
+}
+
+// ChannelSendData keeps the existing STP signing request private until every
+// recipient has acknowledged the proof. The Bitcoin txid is fixed before the
+// peer is allowed to obtain our signatures.
+type ChannelSendData struct {
+	ChannelID     string
+	WitnessScript []byte
+	PeerPubKey    []byte
+	Reason        string
+	MoreData      []byte
+	PayFeeByLocal bool
+	Signed        bool
 }
 
 type OutputView struct {

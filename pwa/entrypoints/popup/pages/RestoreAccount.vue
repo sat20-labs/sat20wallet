@@ -77,7 +77,6 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import accountSDK, { type AccountRecoverySummary } from '@/utils/accountManagement'
-import { hashPassword } from '@/utils/crypto'
 import { walletStorage } from '@/lib/walletStorage'
 
 const router = useRouter()
@@ -137,25 +136,33 @@ const previewRecovery = () => run(async () => {
 
 const commitRecovery = () => run(async () => {
   if (password.value.length < 6 || password.value !== confirmPassword.value) throw new Error('密码至少 6 个字符且两次输入必须一致')
-  const hashed = await hashPassword(password.value)
-  const result = await accountSDK.commitRecovery(sessionId.value, hashed)
+	const result = await accountSDK.commitRecovery(sessionId.value, password.value)
   const wallets = result.wallets.map(wallet => ({
     id: String(wallet.id),
     name: wallet.name,
+    fingerprint: wallet.fingerprint,
     accounts: wallet.accounts.map(account => ({
       index: account.index,
       name: account.did,
       address: account.address,
       pubKey: account.pub_key,
+      accountId: account.account_id,
     })),
   }))
   if (!wallets.length || !wallets[0].accounts.length) throw new Error('恢复结果为空')
+  const rootWalletId = String(result.root_wallet_id || '')
+  const rootWallet = wallets.find(wallet => wallet.id === rootWalletId)
+  const rootAccountId = String(result.account_id || '')
+  if (!rootWalletId || !rootAccountId || !rootWallet?.accounts.some(account => account.accountId === rootAccountId)) {
+    throw new Error('恢复结果缺少明确的根钱包')
+  }
   await walletStorage.batchUpdate({
     wallets,
-    walletId: wallets[0].id,
-    accountIndex: wallets[0].accounts[0].index,
-    address: wallets[0].accounts[0].address,
-    pubkey: wallets[0].accounts[0].pubKey,
+    rootAccountId,
+    walletId: rootWalletId,
+    accountIndex: rootWallet.accounts[0].index,
+    address: rootWallet.accounts[0].address,
+    pubkey: rootWallet.accounts[0].pubKey,
     hasWallet: true,
     locked: true,
   })

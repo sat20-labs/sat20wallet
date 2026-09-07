@@ -9,11 +9,15 @@
       </DialogHeader>
 
       <div class="space-y-4">
+        <p v-if="!directAddressAvailable" class="rounded-md border border-zinc-700 bg-zinc-900 p-3 text-xs text-zinc-400">
+          {{ $t('rgb11Transfer.directRootOnly') }}
+        </p>
         <div class="grid grid-cols-2 gap-2 rounded-lg bg-zinc-900 p-1">
           <button
             type="button"
             class="rounded-md px-3 py-2 text-xs"
             :class="transferMode === 'address' ? 'bg-zinc-700 text-white' : 'text-zinc-400'"
+            :disabled="!directAddressAvailable"
             @click="transferMode = 'address'"
           >
             {{ $t('rgb11Transfer.addressMode') }}
@@ -178,6 +182,19 @@ const { t } = useI18n()
 const walletStore = useWalletStore()
 const { btcFeeRate } = storeToRefs(walletStore)
 
+const directAddressAvailable = computed(() => (
+  Number(walletStore.accountIndex) === 0 &&
+  walletStore.wallet?.accounts.some((account) => (
+    Number(account.index) === 0 && account.accountId === walletStore.rootAccountId
+  )) === true
+))
+
+watch([isOpen, directAddressAvailable], ([open, available]) => {
+  if (open && !available && transferMode.value === 'address') {
+    transferMode.value = 'invoice'
+  }
+}, { immediate: true })
+
 const assetContractID = computed(() => {
   const value = props.asset?.contract_id || props.asset?.ticker || ''
   return value.startsWith('rgb:') ? value : `rgb:${value}`
@@ -246,8 +263,21 @@ const sendByAddress = async () => {
     const [sendErr, sendResult] = await rgb11Address.deliverAndBroadcast({
       transfer_id: id,
     })
-    if (sendErr || !sendResult?.txid) throw sendErr || new Error(t('rgb11Transfer.broadcastFailed'))
+	if (sendErr || !sendResult) throw sendErr || new Error(t('rgb11Transfer.broadcastFailed'))
     temporaryDelivery.value = !!sendResult.temporary
+	if (sendResult.awaiting_ack) {
+	  if (operation) {
+		await updateOperationLog(operation.id, {
+		  status: 'running',
+		  message: 'RGB address consignment delivered; waiting for recipient ACK',
+		  details: { transfer_id: id },
+		})
+	  }
+	  message.value = t('rgb11Transfer.addressAckPending')
+	  emit('completed')
+	  return
+	}
+	if (!sendResult.broadcast || !sendResult.txid) throw new Error(t('rgb11Transfer.broadcastFailed'))
     await completeBroadcast(sendResult.txid, 'rgb11Transfer.addressBroadcasted', operation, id)
   } catch (error: any) {
     const sendError = error instanceof Error ? error : new Error(error?.message || t('rgb11Transfer.broadcastFailed'))
@@ -371,7 +401,26 @@ const deliverProxyTransfer = async (parentOperation: PwaOperationContext | null 
     const [proxyErr, proxyResult] = await walletManager.deliverAndBroadcastRGB11ProxyTransfer(
       batchItems.value.map((item) => item.transferId),
     )
-    if (proxyErr || !proxyResult?.txid) throw proxyErr || new Error(t('rgb11Transfer.broadcastFailed'))
+	if (proxyErr || !proxyResult) throw proxyErr || new Error(t('rgb11Transfer.broadcastFailed'))
+	if (proxyResult.rejected) {
+	  await finishPwaOperation(operation, new Error(t('rgb11Transfer.proxyRejected')))
+	  message.value = t('rgb11Transfer.proxyRejected')
+	  pendingPrepared.value = null
+	  return
+	}
+	if (proxyResult.awaiting_ack) {
+	  pendingPrepared.value = null
+	  if (operation) {
+		await updateOperationLog(operation.id, {
+		  status: 'running',
+		  message: 'RGB proxy consignment delivered; waiting for recipient ACK',
+		  details: { transfer_id: transferId.value },
+		})
+	  }
+	  message.value = t('rgb11Transfer.proxyAckPending')
+	  return
+	}
+	if (!proxyResult.broadcast || !proxyResult.txid) throw new Error(t('rgb11Transfer.broadcastFailed'))
     pendingPrepared.value = null
     proxyBroadcasted.value = true
     if (operation) {
@@ -412,8 +461,15 @@ const checkProxyAck = async () => {
       emit('completed')
       return
     }
+	const [broadcastErr, broadcast] = await walletManager.deliverAndBroadcastRGB11ProxyTransfer(
+	  batchItems.value.map((item) => item.transferId),
+	)
+	if (broadcastErr || !broadcast?.broadcast || !broadcast.txid) {
+	  throw broadcastErr || new Error(t('rgb11Transfer.broadcastFailed'))
+	}
+	proxyBroadcasted.value = true
     success.value = true
-    message.value = t('rgb11Transfer.proxyAccepted')
+	message.value = t('rgb11Transfer.broadcasted', { txid: broadcast.txid })
     await refreshRGB11State()
     emit('completed')
   } catch (error: any) {

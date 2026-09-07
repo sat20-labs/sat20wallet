@@ -25,12 +25,33 @@ type LockedUtxo struct {
 	ReservationPreviousReason string         `json:"reservation_previous_reason,omitempty"`
 	Value                     int64          `json:"value"`
 	Assets                    swire.TxAssets `json:"assets"`
+	Owner                     *UtxoLockOwner `json:"-"`
+}
+
+// UtxoLockOwner scopes a DApp-created lock to the exact wallet identity that
+// approved it. A nil owner denotes an existing wallet/system lock and remains
+// readable by older databases.
+type UtxoLockOwner struct {
+	Origin            string `json:"origin"`
+	Network           string `json:"network"`
+	WalletFingerprint string `json:"wallet_fingerprint"`
+	AccountIndex      uint32 `json:"account_index"`
 }
 
 var (
 	ErrUtxoReserved         = errors.New("UTXO is already reserved")
 	ErrUtxoReservationOwner = errors.New("UTXO reservation owner mismatch")
+	ErrUtxoLockOwner        = errors.New("UTXO lock owner mismatch")
 )
+
+func (p UtxoLockOwner) valid() bool {
+	return strings.TrimSpace(p.Origin) != "" && strings.TrimSpace(p.Network) != "" &&
+		strings.TrimSpace(p.WalletFingerprint) != ""
+}
+
+func sameUtxoLockOwner(left, right *UtxoLockOwner) bool {
+	return left != nil && right != nil && *left == *right
+}
 
 // 前端钱包在background和worker两个不同线程存在两个不同的stp模块，需要考虑这种情况下的数据同步
 type UtxoLocker struct {
@@ -175,6 +196,45 @@ func (p *UtxoLocker) LockUtxo(utxo, reason string) error {
 	return nil
 }
 
+// LockUtxoForOwner creates a persistent DApp-owned lock. It cannot claim an
+// existing wallet/system lock or a lock belonging to another DApp identity.
+func (p *UtxoLocker) LockUtxoForOwner(utxo, reason string, owner UtxoLockOwner) error {
+	if strings.TrimSpace(utxo) == "" || strings.TrimSpace(reason) == "" || !owner.valid() {
+		return fmt.Errorf("invalid owned UTXO lock")
+	}
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.reload()
+	if current := p.lockmap[utxo]; current != nil {
+		if sameUtxoLockOwner(current.Owner, &owner) {
+			return nil
+		}
+		return fmt.Errorf("%w: %s", ErrUtxoLockOwner, utxo)
+	}
+	lock := &LockedUtxo{LockedTime: time.Now().Unix(), Reason: reason, Owner: &owner}
+	return p.persistReservationChangesLocked(map[string]*LockedUtxo{utxo: lock}, nil)
+}
+
+// UnlockUtxoForOwner refuses ownerless legacy/system locks and locks owned by
+// another DApp. The unrestricted UnlockUtxo remains the explicit local-wallet
+// management path.
+func (p *UtxoLocker) UnlockUtxoForOwner(utxo string, owner UtxoLockOwner) error {
+	if strings.TrimSpace(utxo) == "" || !owner.valid() {
+		return fmt.Errorf("invalid owned UTXO unlock")
+	}
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.reload()
+	current := p.lockmap[utxo]
+	if current == nil {
+		return nil
+	}
+	if !sameUtxoLockOwner(current.Owner, &owner) {
+		return fmt.Errorf("%w: %s", ErrUtxoLockOwner, utxo)
+	}
+	return p.persistReservationChangesLocked(nil, []string{utxo})
+}
+
 func normalizedReservationUtxos(utxos []string) []string {
 	unique := make(map[string]struct{}, len(utxos))
 	for _, utxo := range utxos {
@@ -197,6 +257,10 @@ func cloneLockedUtxo(value *LockedUtxo) *LockedUtxo {
 	}
 	clone := *value
 	clone.Assets = append(swire.TxAssets(nil), value.Assets...)
+	if value.Owner != nil {
+		owner := *value.Owner
+		clone.Owner = &owner
+	}
 	return &clone
 }
 

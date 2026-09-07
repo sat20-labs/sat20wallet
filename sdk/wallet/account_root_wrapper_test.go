@@ -21,7 +21,7 @@ type memoryAccountRootWrapperStore struct {
 	updates    int
 }
 
-func (s *memoryAccountRootWrapperStore) Refresh(_ ...string) error {
+func (s *memoryAccountRootWrapperStore) WaitReady(_ ...string) error {
 	return s.refreshErr
 }
 
@@ -325,6 +325,47 @@ func TestAccountRootWrapperRefusesDifferentSecret(t *testing.T) {
 	}
 }
 
+func TestAccountActivationMutationsRefuseDifferentRootSecret(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager, store, secret := buildRootWrapperSource(t)
+	defer zeroBytes(secret)
+	if err := manager.syncAccountRootWrapper(store); err != nil {
+		t.Fatal(err)
+	}
+	root, _ := manager.accountManagementRootWallet()
+	manager.mutex.RLock()
+	profile := *manager.accountProfile
+	manager.mutex.RUnlock()
+	wrapperKey, _ := accountRootWrapperKey(root)
+	stateKey, _ := manager.accountManagedStateKey(root)
+	dataKey, _ := manager.accountManagedDataBlobKey(root)
+	different := bytes.Repeat([]byte{0x7f}, 32)
+	conflicting, err := sealAccountRootWrapper(root, _chain, profile.AccountID,
+		rootWrapperPayload(profile, different), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := map[string]*dkvsValue{
+		wrapperKey: {Key: wrapperKey, Value: conflicting},
+	}
+	mutations, err := accountActivationMutations(&profile, root, secret, wrapperKey,
+		store.records[wrapperKey].Value, stateKey, profile.StateEnvelope, dataKey,
+		profile.ManagedDataEnvelope, current)
+	if !errors.Is(err, ErrRootAccountWrapperInvalid) || len(mutations) != 0 {
+		t.Fatalf("conflicting activation mutations=%d err=%v", len(mutations), err)
+	}
+
+	current[wrapperKey] = store.records[wrapperKey]
+	mutations, err = accountActivationMutations(&profile, root, secret, wrapperKey,
+		store.records[wrapperKey].Value, stateKey, profile.StateEnvelope, dataKey,
+		profile.ManagedDataEnvelope, current)
+	if err != nil || len(mutations) != 3 {
+		t.Fatalf("matching activation mutations=%d err=%v", len(mutations), err)
+	}
+}
+
 func TestAccountRootWrapperMigrationRequiresVerifiedRemoteState(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
@@ -360,6 +401,39 @@ func TestAccountRootDiscoveryOfflineIsPending(t *testing.T) {
 	}
 }
 
+func TestAccountRootDiscoveryMissingStateDoesNotAuthorizeNewSecret(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	source, store, secret := buildRootWrapperSource(t)
+	defer zeroBytes(secret)
+	if err := source.syncAccountRootWrapper(store); err != nil {
+		t.Fatal(err)
+	}
+	root, err := source.accountManagementRootWallet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateKey, err := source.accountManagedStateKey(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(store.records, stateKey)
+
+	target := newAccountManagementAutoTestManager(t)
+	_, discoveryErr := target.recoverAccountManagementFromRootMnemonic(context.Background(),
+		accountRootWrapperTestMnemonic, "password", store, AccountIndexerLocation{})
+	if !errors.Is(discoveryErr, ErrRootAccountDiscoveryPending) {
+		t.Fatalf("missing-state discovery error=%v", discoveryErr)
+	}
+	if _, err := target.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
+		t.Fatal(err)
+	}
+	if target.GetAccountManagementStatus().Active || len(target.accountSecret) != 0 {
+		t.Fatal("incomplete remote account authorized a new account secret")
+	}
+}
+
 func TestFreshMainnetImportContinuesAfterRootMetadataRouteNotFound(t *testing.T) {
 	oldChain := _chain
 	_chain = "mainnet"
@@ -387,8 +461,8 @@ func TestFreshMainnetImportContinuesAfterRootMetadataRouteNotFound(t *testing.T)
 	if err != nil || walletID == 0 {
 		t.Fatalf("ordinary import after pending discovery: wallet=%d err=%v", walletID, err)
 	}
-	if manager.GetAccountManagementStatus().Active {
-		t.Fatal("pending root discovery initialized a new managed account")
+	if manager.GetAccountManagementStatus().Active || len(manager.accountSecret) != 0 {
+		t.Fatal("pending discovery import created an account secret")
 	}
 }
 
@@ -417,8 +491,8 @@ func TestAccountRootDiscoveryRestoresOriginalAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.GetAccountManagementStatus().Active {
-		t.Fatal("root wallet import created a new managed account before discovery")
+	if target.GetAccountManagementStatus().Active || len(target.accountSecret) != 0 {
+		t.Fatal("import before root recovery created an account secret")
 	}
 	results, err := target.recoverAccountManagementFromRootMnemonic(context.Background(),
 		accountRootWrapperTestMnemonic, "password", store,

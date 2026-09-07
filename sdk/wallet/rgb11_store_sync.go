@@ -46,6 +46,44 @@ func (p *rgb11Manager) importRGB11WalletSnapshot(snapshot *RGB11WalletSnapshot) 
 	return nil
 }
 
+func (p *rgb11Manager) importRGB11AccountRecoverySnapshot(snapshot *RGB11WalletSnapshot) error {
+	if p == nil || snapshot == nil {
+		return ErrRGB11Inconsistent
+	}
+	walletID, err := p.RGB11WalletID()
+	if err != nil {
+		return err
+	}
+	current, _, err := p.exportRGB11WalletSnapshot(walletID)
+	if err != nil {
+		return err
+	}
+	merged, err := rgb11wallet.MergeRecoverySnapshot(current, snapshot)
+	if err != nil {
+		return err
+	}
+	return p.importRGB11WalletSnapshot(merged)
+}
+
+func (p *rgb11Manager) importRGB11ActiveRecoverySnapshot(snapshot *RGB11WalletSnapshot) error {
+	if p == nil || snapshot == nil {
+		return ErrRGB11Inconsistent
+	}
+	walletID, err := p.RGB11WalletID()
+	if err != nil {
+		return err
+	}
+	current, _, err := p.exportRGB11WalletSnapshot(walletID)
+	if err != nil {
+		return err
+	}
+	merged, err := rgb11wallet.MergeActiveRecoverySnapshot(current, snapshot)
+	if err != nil {
+		return err
+	}
+	return p.importRGB11WalletSnapshot(merged)
+}
+
 func (p *rgb11Manager) tickerInfosFromRGB11Snapshot(snapshot *RGB11WalletSnapshot) ([]*indexer.TickerInfo, error) {
 	if p == nil || snapshot == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
 		return nil, ErrRGB11Inconsistent
@@ -88,7 +126,8 @@ func (p *Manager) registerDKVSDomainObservers() {
 	if p == nil || p.dkvs == nil {
 		return
 	}
-	p.dkvs.addObserver(func(_ []string) {
+	p.dkvs.addObserver(func(paths []string) {
+		p.scheduleMailboxRefreshForChanges(paths)
 		if err := p.SyncAccountManagementState(nil); err != nil &&
 			!errors.Is(err, ErrDKVSPathNotSynced) &&
 			!errors.Is(err, ErrDKVSRecordNotFound) {

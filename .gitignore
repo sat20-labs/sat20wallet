@@ -15,6 +15,7 @@ pwa/.nyc_output/
 pwa/.vite/
 pwa/.vite-temp/
 pwa/*.log
+pwa/.build-status/
 
 sdk/db
 sdk/log

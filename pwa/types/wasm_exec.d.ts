@@ -2,7 +2,7 @@
 
 declare class Go {
   importObject: WebAssembly.Imports
-  run(instance: WebAssembly.Instance): void
+  run(instance: WebAssembly.Instance): Promise<void>
   // 根据
 }
 interface SatsnetResponse<T = any> {
@@ -37,6 +37,7 @@ type RootAccountRecoveryResult = {
     | 'ACCOUNT_ROOT_NOT_FOUND'
     | 'ACCOUNT_ROOT_DISCOVERY_PENDING'
   walletId?: string
+  accountId: string
 }
 
 interface Config {
@@ -162,23 +163,13 @@ declare interface WalletManager {
     id: number,
     password: string
   ): Promise<SatsnetResponse<{ mnemonic: string }>>
-
-  // Returns the commit root key for the specified peer.
-  getCommitRootKey(peer: Uint8Array): Promise<SatsnetResponse<Uint8Array>>
-
-  // Returns the commit secret for the specified peer and index.
-  getCommitSecret(
-    peer: Uint8Array,
-    index: number
-  ): Promise<SatsnetResponse<Uint8Array>>
-
-  // Derives a revocation private key from the provided commit secret.
-  deriveRevocationPrivKey(
-    commitSecret: Uint8Array
-  ): Promise<SatsnetResponse<Uint8Array>>
-
-  // Returns the revocation base key.
-  getRevocationBaseKey(): Promise<SatsnetResponse<Uint8Array>>
+  validateMnemonic(mnemonic: string, password: string): Promise<SatsnetResponse<{
+    normalized: string
+    language: 'english'
+    wordCount: string
+    fingerprint: string
+    address: string
+  }>>
 
   // Returns the node public key.
   getNodePubKey(): Promise<SatsnetResponse<Uint8Array>>
@@ -276,22 +267,26 @@ declare interface WalletManager {
     utxo: any,
     reason: string
   ): Promise<SatsnetResponse<any>>
+  lockUtxoForOwner(address: string, utxo: any, reason: string, owner: string): Promise<SatsnetResponse<any>>
 
   lockUtxo_SatsNet(
     address: string,
     utxo: any,
     reason: string
   ): Promise<SatsnetResponse<any>>
+  lockUtxoForOwner_SatsNet(address: string, utxo: any, reason: string, owner: string): Promise<SatsnetResponse<any>>
 
   unlockUtxo(
     address: string,
     utxo: any
   ): Promise<SatsnetResponse<any>>
+  unlockUtxoForOwner(address: string, utxo: any, owner: string): Promise<SatsnetResponse<any>>
 
   unlockUtxo_SatsNet(
     address: string,
     utxo: any
   ): Promise<SatsnetResponse<any>>
+  unlockUtxoForOwner_SatsNet(address: string, utxo: any, owner: string): Promise<SatsnetResponse<any>>
 
   getAllLockedUtxo(
     address: string
@@ -540,9 +535,13 @@ interface SatsnetStp {
   getAllLockedUtxo(address: string): Promise<SatsnetResponse<any>>
   getAllLockedUtxo_SatsNet(address: string): Promise<SatsnetResponse<any>>
   lockUtxo(address: string, utxo: any, reason: string): Promise<SatsnetResponse<any>>
+  lockUtxoForOwner(address: string, utxo: any, reason: string, owner: string): Promise<SatsnetResponse<any>>
   lockUtxo_SatsNet(address: string, utxo: any, reason: string): Promise<SatsnetResponse<any>>
+  lockUtxoForOwner_SatsNet(address: string, utxo: any, reason: string, owner: string): Promise<SatsnetResponse<any>>
   unlockUtxo(address: string, utxo: any): Promise<SatsnetResponse<any>>
+  unlockUtxoForOwner(address: string, utxo: any, owner: string): Promise<SatsnetResponse<any>>
   unlockUtxo_SatsNet(address: string, utxo: any): Promise<SatsnetResponse<any>>
+  unlockUtxoForOwner_SatsNet(address: string, utxo: any, owner: string): Promise<SatsnetResponse<any>>
 
   // --- Added UTXO Getter Methods ---
   getUtxos(): Promise<SatsnetResponse<any>> // Replace 'any' with specific return type if known

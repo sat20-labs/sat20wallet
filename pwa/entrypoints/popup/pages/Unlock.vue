@@ -154,7 +154,6 @@ import {
 import { useWalletStore } from '@/store'
 import walletManager from '@/utils/sat20'
 import { unlockPasswordSchema } from '@/utils/validation'
-import { hashPassword } from '@/utils/crypto'
 import { useI18n } from 'vue-i18n'
 import { biometricService } from '@/utils/biometric'
 import { biometricCredentialManager } from '@/utils/biometricCredentials'
@@ -235,24 +234,18 @@ const performBiometricUnlock = async () => {
     }
 
     // 生物识别成功，使用获取的哈希密码解锁钱包
-    const hashedPassword = credentialResult.password
-    if (!hashedPassword) {
+		const password = credentialResult.password
+		if (!password) {
       showToast('destructive', t('common.error'), t('unlock.cannotGetStoredPassword'))
       showPasswordInput.value = true
       biometricLoading.value = false
       return
     }
 
-    const [err, result] = await walletStore.unlockWallet(hashedPassword)
+		const [err, result] = await walletStore.unlockWallet(password)
 
     if (!err && result) {
-      // 检查是否是"已解锁"状态同步的情况
-      const isAlreadyUnlocked = result && typeof result === 'object' && 'alreadyUnlocked' in result
-      if (isAlreadyUnlocked) {
-        showToast('success', t('unlock.biometricUnlockSuccess'), t('unlock.walletStateSynced'))
-      } else {
-        showToast('success', t('unlock.biometricUnlockSuccess'), t('unlock.biometricVerifySuccess'))
-      }
+      showToast('success', t('unlock.biometricUnlockSuccess'), t('unlock.biometricVerifySuccess'))
 
       const redirectPath = route.query.redirect as string
       router.push(redirectPath || '/wallet')
@@ -292,20 +285,9 @@ const testToast = () => {
 const onSubmit = form.handleSubmit(async (values) => {
   loading.value = true
 
-  // Hash the password using the imported function
-  const hashedPassword = await hashPassword(values.password)
-
-  console.log('开始解锁，使用哈希密码')
-
-  const [err, result] = await walletStore.unlockWallet(hashedPassword)
+	const [err, result] = await walletStore.unlockWallet(values.password)
 
   if (!err && result) {
-    // 检查是否是"已解锁"状态同步的情况
-    const isAlreadyUnlocked = result && typeof result === 'object' && 'alreadyUnlocked' in result
-    if (isAlreadyUnlocked) {
-      showToast('success', t('unlock.unlockSuccess'), t('unlock.walletStateSynced'))
-    }
-
     const redirectPath = route.query.redirect as string
     router.push(redirectPath || '/wallet')
   } else if (err) {
