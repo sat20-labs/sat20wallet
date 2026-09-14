@@ -18,7 +18,7 @@
         </div>
         <div class="flex justify-between">
           <span class="text-sm text-muted-foreground">{{ $t('balanceSummary.unavailable') }}</span>
-          <span class="text-sm text-zinc-400">{{ formatMaybeHidden(formatBalance(btcBalance.total - abailableSats.availableAmt, props.selectedChain, network)) }}</span>
+          <span class="text-sm text-zinc-400">{{ formatMaybeHidden(formatBalance(btcBalance.total - Number(abailableSats.availableAmt), props.selectedChain, network)) }}</span>
 
         </div>
         <div class="flex justify-between">
@@ -42,7 +42,8 @@
       <AssetOperationDialog v-model:open="showDialog" :title="translatedOperationTitle"
         :description="operationDescription" :amount="operationAmount" :address="operationAddress" :chain="selectedChain"
         :max-amount="maxAmount" :operation-type="operationType" :asset-type="selectedAsset?.type"
-        :asset-ticker="selectedAsset?.label" :asset-key="selectedAsset?.key" @update:amount="operationAmount = $event"
+        :asset-ticker="selectedAsset?.label" :asset-key="selectedAsset?.key" :network-fee="sendNetworkFee"
+        :total-spend="sendTotalSpend" @update:amount="operationAmount = $event"
         @update:address="operationAddress = $event" @confirm="handleOperationConfirm" />
       <LockWithExpandConfirmDialog v-if="pendingLockExpand" v-model:open="showLockExpandDialog"
         :asset-key="pendingLockExpand.assetName" :asset-ticker="pendingLockExpand.assetTicker"
@@ -78,6 +79,7 @@ import { useI18n } from 'vue-i18n'
 import sat20 from '@/utils/sat20'
 import { useQuery } from '@tanstack/vue-query'
 import { assetContextKey } from '@/lib/assetContext'
+import { validateSendDispatch } from '@/utils/sendAmount'
 
 const { toast } = useToast()
 const l1Store = useL1Store()
@@ -103,6 +105,7 @@ const operationAddress = ref('')
 const transcendingModeStore = useTranscendingModeStore()
 const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
+const openedSendScope = ref('')
 const showLockExpandDialog = ref(false)
 const pendingLockExpand = ref<null | {
   chanid: string
@@ -115,8 +118,8 @@ const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
 const { address, network, btcFeeRate, walletId, accountIndex } = storeToRefs(walletStore)
 const { env, hideBalance } = storeToRefs(globalStore)
 const abailableSats = ref<{
-  availableAmt: number,
-  lockedAmt: number
+  availableAmt: string | number,
+  lockedAmt: string | number
 }>({
   availableAmt: 0,
   lockedAmt: 0
@@ -154,6 +157,18 @@ const availableSatsContextKey = computed(() => assetContextKey({
   accountIndex: accountIndex.value,
   address: address.value || '',
 }))
+const selectedChain = computed(() => (props.selectedChain || 'bitcoin').toLowerCase())
+const sendScope = () => `${walletStore.rootAccountId}|${availableSatsContextKey.value}`
+// This entry sends native sats only; other assets use AssetList's precision lookup.
+const isNativeSats = (asset: any) => asset?.protocol === '' && asset.key === '::' && asset.id === '::' && asset.type === '*'
+// The current SDK's CalcFee_SatsNet returns DEFAULT_FEE_SATSNET for native sends.
+const SATOSHINET_NATIVE_SEND_FEE_SATS = 10n
+const exactSats = (value: unknown) => {
+  if (typeof value === 'number' && (!Number.isSafeInteger(value) || value < 0)) return undefined
+  return (typeof value === 'string' || typeof value === 'number') && /^\d+$/.test(String(value))
+    ? String(value) : undefined
+}
+const sendBalanceSnapshot = ref<{ scope: string, availableAmt: string } | null>(null)
 
 const fetchAbailableSats = async () => {
   const contextKey = availableSatsContextKey.value
@@ -191,12 +206,17 @@ console.log('abailableSatsQuery', abailableSatsQuery);
 
 watch(availableSatsContextKey, () => {
   abailableSats.value = { availableAmt: 0, lockedAmt: 0 }
+  sendBalanceSnapshot.value = null
 }, { flush: 'sync' })
 
 watch(abailableSatsQuery, (val) => {
   console.log('abailableSatsQuery', val);
   if (val?.contextKey === availableSatsContextKey.value) {
     abailableSats.value = val.balance
+    const availableAmt = exactSats(val.balance.availableAmt)
+    if (availableAmt !== undefined) {
+      sendBalanceSnapshot.value = { scope: sendScope(), availableAmt }
+    }
   }
 }, { immediate: true, deep: true })
 
@@ -207,7 +227,34 @@ const balanceMouseEnter = async () => {
   refetchAbailableSats()
 }
 
-const selectedChain = (props.selectedChain || 'bitcoin').toLowerCase()
+const refreshSendBalance = async () => {
+  const scope = sendScope()
+  const result = await refetchAbailableSats()
+  const payload = result?.data
+  const availableAmt = payload?.contextKey === availableSatsContextKey.value
+    ? exactSats(payload.balance.availableAmt) : undefined
+  if (scope !== sendScope() || availableAmt === undefined) return undefined
+  sendBalanceSnapshot.value = { scope, availableAmt }
+  return availableAmt
+}
+const exactAvailableSendSats = computed(() => {
+  const snapshot = sendBalanceSnapshot.value
+  return snapshot?.scope === sendScope() ? snapshot.availableAmt : undefined
+})
+const availableSendSats = computed(() => {
+  const value = exactAvailableSendSats.value
+  if (value === undefined) return undefined
+  if (selectedChain.value !== 'satoshinet') return value
+  const available = BigInt(value)
+  return available >= SATOSHINET_NATIVE_SEND_FEE_SATS
+    ? String(available - SATOSHINET_NATIVE_SEND_FEE_SATS) : '0'
+})
+const sendNetworkFee = computed(() => operationType.value === 'send' && selectedChain.value === 'satoshinet'
+  ? String(SATOSHINET_NATIVE_SEND_FEE_SATS) : undefined)
+const sendTotalSpend = computed(() => {
+  if (sendNetworkFee.value === undefined || !/^\d+$/.test(operationAmount.value)) return undefined
+  return String(BigInt(operationAmount.value) + SATOSHINET_NATIVE_SEND_FEE_SATS)
+})
 if (!selectedTranscendingMode.value || !props.selectedChain) {
   console.warn('Props missing: selectedTranscendingMode or selectedChain is undefined. Using default values.')
 }
@@ -216,7 +263,7 @@ const filteredButtons = computed(() => {
   return buttons.filter(
     button =>
       button.modes.includes(selectedTranscendingMode.value) &&
-      button.chains.map(chain => chain.toLowerCase()).includes(selectedChain)
+      button.chains.map(chain => chain.toLowerCase()).includes(selectedChain.value)
   )
 })
 
@@ -244,20 +291,21 @@ const translatedOperationTitle = computed(() => {
   }
 })
 const showAddress = computed(() => {
-  if (selectedChain === 'bitcoin') {
+  if (selectedChain.value === 'bitcoin') {
     return address.value
-  } else if (selectedChain === 'channel') {
+  } else if (selectedChain.value === 'channel') {
     return channel.value?.channelId || address.value
-  } else if (selectedChain === 'satoshinet') {
+  } else if (selectedChain.value === 'satoshinet') {
     return address.value
   }
   return address.value // 默认返回空字符串
 })
 const maxAmount = computed(() => {
+  if (operationType.value === 'send') return availableSendSats.value
   if (!selectedAsset.value) return ''
   const asset = selectedAsset.value
   if (asset.type === '*') {
-    return Number(abailableSats.value?.availableAmt).toString()
+    return String(abailableSats.value.availableAmt)
   }
   return Number(asset.amount).toString()
 })
@@ -267,7 +315,7 @@ const operationDescription = computed(() => {
   if (!selectedAsset.value) return ''
   const asset = selectedAsset.value
   if (asset.type === '*') {
-    return `BTC: ${Number(abailableSats.value?.availableAmt).toString()} ${asset.label || 'sats'}`
+    return `BTC: ${String(abailableSats.value.availableAmt)} ${asset.label || 'sats'}`
   }
   const type = asset.type || 'BTC'
   const amount = asset.amount || 0
@@ -298,15 +346,27 @@ const handleAction = async (action: string) => {
     }
     return
   }
-  if (action === 'send' && !asset) {
-    handleError('No asset selected')
+  if (action === 'send' && (!isNativeSats(asset) || !['bitcoin', 'satoshinet'].includes(selectedChain.value))) {
+    handleError('Native sats asset is unavailable')
     return
+  }
+  if (action === 'send' && sendBalanceSnapshot.value?.scope !== sendScope()) {
+    try {
+      if (await refreshSendBalance() === undefined) {
+        handleError(t('assetOperationDialog.amountErrors.unavailable'))
+        return
+      }
+    } catch {
+      handleError(t('assetOperationDialog.amountErrors.unavailable'))
+      return
+    }
   }
   console.log('action', action);
   console.log('action', asset);
 
   selectedAsset.value = asset
   operationType.value = action as OperationType
+  if (action === 'send') openedSendScope.value = sendScope()
 
   operationAmount.value = '' // 重置金额
   operationAddress.value = '' // 重置地址
@@ -325,6 +385,22 @@ const handleOperationConfirm = async () => {
     return
   }
 
+  if (operationType.value === 'send') {
+    try {
+      if (await refreshSendBalance() === undefined) {
+        handleError(t('assetOperationDialog.amountErrors.unavailable'))
+        return
+      }
+    } catch {
+      handleError(t('assetOperationDialog.amountErrors.unavailable'))
+      return
+    }
+    const error = !isNativeSats(selectedAsset.value) || !isNativeSats(btcBalance.value.assets[0])
+      ? 'unavailable'
+      : validateSendDispatch(operationAmount.value, 0, availableSendSats.value, openedSendScope.value, sendScope())
+    if (error) { handleError(t(`assetOperationDialog.amountErrors.${error}`)); return }
+  }
+
   const asset = selectedAsset.value
   const amount = operationAmount.value
   const chanid = channel.value?.channelId
@@ -333,7 +409,7 @@ const handleOperationConfirm = async () => {
   try {
     switch (operationType.value) {
       case 'send':
-        if (props.selectedChain === 'bitcoin') {
+        if (selectedChain.value === 'bitcoin') {
           await l1Send({ toAddress, asset_name: asset.id, amt: amount })
         } else {
           await l2Send({ toAddress, asset_name: asset.id, amt: amount })

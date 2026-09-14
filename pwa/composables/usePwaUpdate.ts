@@ -1,4 +1,5 @@
-import { ref } from 'vue'
+import { computed } from 'vue'
+import { versionPolicy, policyRevision } from '@/utils/pwaVersionPolicy'
 import { useToast } from '@/components/ui/toast-new/use-toast'
 
 const APP_CACHE_PREFIX = 'sat20-wallet-pwa-'
@@ -27,7 +28,7 @@ const showRestartRequiredScreen = () => {
 
 export function usePwaUpdate() {
   const { toast } = useToast()
-  const isUpdating = ref(false)
+  const isUpdating = computed(() => { void policyRevision.value; return versionPolicy.updating })
 
   const clearAppShellCache = async () => {
     if (!('caches' in window)) {
@@ -43,11 +44,11 @@ export function usePwaUpdate() {
   }
 
   const waitForWaitingWorker = async (registration: ServiceWorkerRegistration) => {
-    if (registration.waiting) {
-      return registration.waiting
-    }
     const installing = registration.installing
     if (!installing) {
+      if (registration.waiting) {
+        return registration.waiting
+      }
       throw new Error('No new PWA update worker was found')
     }
     await new Promise<void>((resolve, reject) => {
@@ -97,9 +98,9 @@ export function usePwaUpdate() {
       return
     }
 
-    isUpdating.value = true
-
+    const drained = versionPolicy.waitForUpdate()
     try {
+      await drained
       if (!('serviceWorker' in navigator)) {
         throw new Error('Service Worker is unavailable')
       }
@@ -113,7 +114,7 @@ export function usePwaUpdate() {
       await prepareUpdateForRestart(registration)
       showRestartRequiredScreen()
     } catch (error) {
-      isUpdating.value = false
+      versionPolicy.updateFailed()
       throw error
     }
   }

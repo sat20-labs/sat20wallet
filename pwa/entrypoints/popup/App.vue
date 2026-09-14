@@ -1,10 +1,19 @@
 <template>
   <div>
     <main class="w-full h-screen overflow-hidden" v-if="!loading">
+      <div v-if="isForceUpdate || isUpdating" role="alert" class="fixed top-0 inset-x-0 z-[2000] bg-amber-950 text-white p-2 text-sm">
+        {{ isUpdating ? $t('setting.updateWaitingOperations') : $t('setting.versionWriteBlocked') }}
+        <button v-if="!isUpdating" class="underline ml-2" @click="checkAndUpdate">{{ $t('setting.checkAndUpdate') }}</button>
+      </div>
       <RouterView />
       <!-- 全局 Approve 弹窗 -->
       <Approve />
       <WalletPasswordDialog />
+    </main>
+    <main v-else class="min-h-screen flex flex-col items-center justify-center gap-4 bg-background text-foreground p-6 text-center">
+      <h1 class="text-lg font-semibold">{{ $t('startup.title') }}</h1>
+      <p :role="startupError ? 'alert' : 'status'">{{ $t(startupError ? 'startup.error' : 'startup.loading') }}</p>
+      <Button variant="outline" @click="retryStartup">{{ $t('startup.retry') }}</Button>
     </main>
     <div
       v-if="showInstallPanel && !isStandaloneApp()"
@@ -78,11 +87,13 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 };
 
-const loading = ref(false);
+const loading = ref(true);
+const startupError = ref(false);
+const retryStartup = () => window.location.reload();
 const walletStore = useWalletStore();
 const globalStore = useGlobalStore();
 const router = useRouter();
-const { checkForUpdates } = useAppVersion();
+const { checkForUpdates, isForceUpdate, isUpdating, checkAndUpdate } = useAppVersion();
 const { autoLockTime } = storeToRefs(globalStore);
 let autoLockTimer: ReturnType<typeof setTimeout> | undefined;
 const installPromptEvent = ref<BeforeInstallPromptEvent | undefined>();
@@ -237,11 +248,7 @@ const refreshManagedWalletCatalog = () => {
 
 const getWalletStatus = async () => {
   const [err, res] = await walletManager.isWalletExist();
-  if (err) {
-    console.error(err);
-    router.push("/");
-    return;
-  }
+  if (err) throw err;
 
   if (res?.exists) {
     await walletStore.setHasWallet(true);
@@ -259,9 +266,13 @@ const getWalletStatus = async () => {
 };
 
 onBeforeMount(async () => {
-  loading.value = true;
-  await getWalletStatus();
-  loading.value = false;
+  try {
+    await getWalletStatus();
+    loading.value = false;
+  } catch (error) {
+    console.error("Wallet startup status could not be loaded:", error);
+    startupError.value = true;
+  }
 });
 
 onMounted(() => {

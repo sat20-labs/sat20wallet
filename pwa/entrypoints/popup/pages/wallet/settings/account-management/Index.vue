@@ -427,6 +427,10 @@ const paidConfirmRows = computed(() => {
   const option = paidStorageOption.value
   const quote = autopayQuote.value
   const funding = paidConfirmContext.value === 'funding'
+  // AUTOPAY funding uses the account-management root at account zero, not
+  // necessarily the wallet/sub-account currently selected in the wallet UI.
+  const rootWalletId = savedState.value?.root_wallet_id
+  const rootWallet = wallets.value.find(wallet => String(wallet.id) === String(rootWalletId))
   return [
     {
       label: t('tools.txConfirm.purpose'),
@@ -436,9 +440,17 @@ const paidConfirmRows = computed(() => {
           ? '为账户管理的 AUTOPAY 付费存储充值'
         : t('accountManagement.autopayPurpose'),
     },
+    ...(funding ? [
+      {
+        label: t('accountManagement.fundingSourceWallet'),
+        value: rootWallet ? `${rootWallet.name} (${rootWallet.id})` : String(rootWalletId ?? ''),
+      },
+      { label: t('tools.txConfirm.account'), value: t('accountManagement.fundingSourceAccount') },
+      { label: t('tools.txConfirm.sourceAddress'), value: autopayStatus.value?.payer || '' },
+    ] : []),
     { label: t('tools.txConfirm.to'), value: funding ? autopayStatus.value?.contract_address || '' : option?.contract_address || '' },
     { label: t('tools.txConfirm.asset'), value: funding ? autopayStatus.value?.fee_asset || '' : option?.fee_asset || '' },
-    { label: t('tools.txConfirm.amount'), value: funding ? autopayStatus.value?.recommended_funding_amount || '' : quote?.initialCost || option?.estimated_cost || '' },
+    { label: t(funding ? 'accountManagement.fundingPrincipal' : 'tools.txConfirm.amount'), value: funding ? autopayStatus.value?.recommended_funding_amount || '' : quote?.initialCost || option?.estimated_cost || '' },
     { label: t('tools.txConfirm.network'), value: `SatoshiNet ${walletStore.network}` },
     { label: t('accountManagement.recordCount'), value: funding ? '' : String(normalizedRecordCount.value) },
     {
@@ -453,6 +465,9 @@ const paidConfirmRows = computed(() => {
         count: funding ? autopayStatus.value?.recommended_funding_blocks || 1000 : 1000,
       }),
     },
+    ...(funding ? [
+      { label: t('tools.txConfirm.operatingGas'), value: t('accountManagement.fundingOperatingGas') },
+    ] : []),
   ].filter(row => row.value)
 })
 

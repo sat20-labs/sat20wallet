@@ -1,4 +1,4 @@
-import soljsonModule from 'solc/soljson.js'
+import soljsonModule from 'virtual:sat20-soljson'
 
 type SoljsonModule = {
   cwrap: (

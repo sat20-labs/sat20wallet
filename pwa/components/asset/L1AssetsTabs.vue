@@ -235,12 +235,19 @@
         class="rounded-lg border border-dashed border-zinc-700 px-3 py-8 text-center text-xs text-zinc-500">
         {{ $t('rgb11Transfer.noAssets') }}
       </div>
+      <div v-if="selectedType !== 'RGB11' && !filteredAssets.length" data-testid="asset-empty-state"
+        class="rounded-lg border border-dashed border-zinc-700 px-3 py-8 text-center text-xs text-zinc-500">
+        {{ $t('l1AssetsTabs.noAssets', { type: $t(`l1AssetsTabs.assetType.${selectedType}`), network }) }}
+      </div>
     </div>
+    <RGB11SendDialog v-if="resumeTaskAsset" :key="resumeTaskId" v-model:open="showResumeTask"
+      :asset="resumeTaskAsset" :resume-transfer-id="resumeTaskId" @completed="refreshRGB11TaskState" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import RGB11SendDialog from '@/components/wallet/RGB11SendDialog.vue'
 import { Button } from '@/components/ui/button'
 import { Icon } from '@iconify/vue'
 import { useRGB11Store, useWalletStore } from '@/store'
@@ -250,6 +257,7 @@ import { generateMempoolUrl, formatLargeNumber } from '@/utils'
 import { useGlobalStore } from '@/store/global'
 import walletManager from '@/utils/sat20'
 import rgb11Address from '@/utils/rgb11Address'
+import { rgb11TaskResumeAsset } from '@/utils/rgb11Oob'
 import { useI18n } from 'vue-i18n'
 // 类型定义
 interface Asset {
@@ -373,6 +381,9 @@ type RGB11TaskMessage = { success: boolean; text: string }
 
 const terminalRGB11Statuses = new Set(['settled', 'rejected', 'conflicted', 'failed', 'cancelled'])
 const rgb11TaskBusy = ref('')
+const showResumeTask = ref(false)
+const resumeTaskId = ref('')
+const resumeTaskAsset = ref<any>(null)
 const rgb11TaskMessages = ref<Record<string, RGB11TaskMessage>>({})
 
 const rgb11PendingTasks = computed<RGB11Task[]>(() => {
@@ -419,7 +430,7 @@ const rgb11TaskMode = (task: RGB11Task) => {
 
 const rgb11TaskActionLabel = (task: RGB11Task) => {
   if (rgb11TaskIsBroadcast(task)) return t('rgb11Transfer.refreshTask')
-  if (rgb11TaskTransport(task) === 'out-of-band') return t('rgb11Transfer.confirmOutOfBandBroadcast')
+  if (rgb11TaskTransport(task) === 'out-of-band') return t('rgb11Transfer.matchSummary')
   return t('rgb11Transfer.retryTask')
 }
 
@@ -502,10 +513,11 @@ const resumeRGB11Task = async (task: RGB11Task) => {
       return
     }
     if (transport === 'out-of-band') {
-      if (!window.confirm(t('rgb11Transfer.outOfBandBroadcastConfirm'))) return
-      const [err, result] = await walletManager.broadcastRGB11OutOfBand(ids)
-      if (err || !result?.txid) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
-      await completeRGB11TaskBroadcast(task, result.txid)
+      const asset = rgb11TaskResumeAsset(rgb11State.value, task.representative)
+      if (!asset) throw new Error(t('rgb11Transfer.taskResumeFailed'))
+      resumeTaskAsset.value = asset
+      resumeTaskId.value = ids[0]
+      showResumeTask.value = true
       return
     }
     throw new Error(t('rgb11Transfer.legacyTransportUnsupported'))

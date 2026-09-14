@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	sbtcutil "github.com/sat20-labs/satoshinet/btcutil"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
@@ -26,6 +28,13 @@ const liveTestnetBootstrapAddress = "tb1p62gjhywssq42tp85erlnvnumkt267ypndrl0f3s
 func TestUnifiedTemplateAutopayDeployFund_testnet(t *testing.T) {
 	if os.Getenv("SAT20WALLET_AUTOPAY_DEPLOY_LIVE") != "1" {
 		t.Skip("set SAT20WALLET_AUTOPAY_DEPLOY_LIVE=1 to deploy and fund the testnet AUTOPAY contract")
+	}
+	// Operator funding is a separately approved budget, never inferred from
+	// the delegate's 1000-block business quote or silently broadcast by default.
+	operatorBudget := os.Getenv("SAT20WALLET_AUTOPAY_GAS_FUNDING")
+	budget, budgetErr := strconv.ParseUint(operatorBudget, 10, 63)
+	if budgetErr != nil || budget == 0 {
+		t.Fatal("set SAT20WALLET_AUTOPAY_GAS_FUNDING to the explicitly approved positive SGAS operating budget")
 	}
 	manager := newContractTestnetManager(t)
 	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
@@ -64,6 +73,8 @@ func TestUnifiedTemplateAutopayDeployFund_testnet(t *testing.T) {
 		t.Logf("AUTOPAY already exists: %s", defaults.AutopayContract)
 	}
 
+	fundLiveAutopayOperatingGas(t, manager, defaults.AutopayContract, operatorBudget, budget)
+
 	amountPerBlock, err := accountAmountPerBlock(defaults, accountDefaultRecordCount)
 	if err != nil {
 		t.Fatalf("calculate AUTOPAY amount per block: %v", err)
@@ -97,6 +108,119 @@ func TestUnifiedTemplateAutopayDeployFund_testnet(t *testing.T) {
 	t.Logf("AUTOPAY funded: contract=%s amount=%s amountPerBlock=%s blocks=%d txid=%s",
 		defaults.AutopayContract, fundingAmount, amountPerBlock,
 		accountPaidDefaultFundingBlocks, fund.TxID)
+}
+
+// TestUnifiedTemplateAutopayGasFund_testnet only funds the existing contract's
+// operating reserve. It never deploys or funds an individual delegate.
+func TestUnifiedTemplateAutopayGasFund_testnet(t *testing.T) {
+	if os.Getenv("SAT20WALLET_AUTOPAY_GAS_FUND_LIVE") != "1" {
+		t.Skip("set SAT20WALLET_AUTOPAY_GAS_FUND_LIVE=1 for an approved operator-only funding")
+	}
+	operatorBudget := os.Getenv("SAT20WALLET_AUTOPAY_GAS_FUNDING")
+	budget, err := strconv.ParseUint(operatorBudget, 10, 63)
+	if err != nil || budget == 0 {
+		t.Fatal("explicit positive SAT20WALLET_AUTOPAY_GAS_FUNDING is required")
+	}
+	manager := newContractTestnetManager(t)
+	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
+	if manager.GetWallet().GetAddress() != defaults.AutopayDeployer {
+		t.Fatal("AUTOPAY deployer mismatch")
+	}
+	raw, err := manager.QueryContract(&ContractQueryRequest{Query: ContractQueryState, Contract: defaults.AutopayContract})
+	if err != nil || !liveAutopayContractExists(raw, defaults.AutopayContract) {
+		t.Fatal("existing AUTOPAY contract required; no deployment performed")
+	}
+	fundLiveAutopayOperatingGas(t, manager, defaults.AutopayContract, operatorBudget, budget)
+}
+
+func fundLiveAutopayOperatingGas(t *testing.T, manager *Manager, contractAddress, operatorBudget string, budget uint64) {
+	t.Helper()
+	readState := func() *dkvsindexer.AutopayContractState {
+		t.Helper()
+		raw, err := manager.QueryContract(&ContractQueryRequest{Query: ContractQueryState, Contract: contractAddress})
+		if err != nil {
+			t.Fatalf("read AUTOPAY state: %v", err)
+		}
+		state, err := dkvsindexer.DecodeAutopayContractState([]byte(raw), contractAddress)
+		if err != nil || state == nil {
+			t.Fatalf("decode AUTOPAY state: %v", err)
+		}
+		return state
+	}
+	beforeGas := readState()
+	gasParam, err := (&contractcommon.TemplateAutopayConfigInvokeParam{GasFundingAmount: operatorBudget}).Encode()
+	if err != nil {
+		t.Fatalf("encode AUTOPAY operating gas: %v", err)
+	}
+	gasStartHeight := manager.l2IndexerClient.GetBestHeight()
+	triggerFee, err := contractcommon.GasFeeAtHeight(contractcommon.TriggerBaseGas, uint64(gasStartHeight))
+	if err != nil {
+		t.Fatal(err)
+	}
+	triggerResultFee, err := contractcommon.GasFeeAtHeight(contractcommon.ResultBaseGas, uint64(gasStartHeight))
+	if err != nil {
+		t.Fatal(err)
+	}
+	perSettlementGas := triggerFee + triggerResultFee
+	if budget < uint64(perSettlementGas) {
+		t.Fatal("approved operating budget cannot fund one settlement")
+	}
+	gasFund, err := manager.InvokeUnifiedContract(&ContractInvokeRequest{
+		ContractType: ContractTypeTemplate, SubType: contractcommon.TemplateAutopay,
+		ContractAddress: contractAddress, Action: contractcommon.TemplateInvokeAPIConfig,
+		Param: base64.StdEncoding.EncodeToString(gasParam), ParamEncoding: "base64",
+		Assets: []ContractFundingAsset{{AssetName: GetGasAssetName(), Amount: operatorBudget}},
+	})
+	if err != nil {
+		t.Fatalf("fund AUTOPAY operating gas: %v", err)
+	}
+	if err := waitL2HeightAbove(t, manager, gasStartHeight, 4*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	parseBalance := func(value string) *indexer.Decimal {
+		if value == "" {
+			value = "0"
+		}
+		amount, err := indexer.NewDecimalFromString(value, 0)
+		if err != nil {
+			t.Fatalf("parse AUTOPAY balance: %v", err)
+		}
+		return amount
+	}
+	var afterGas *dkvsindexer.AutopayContractState
+	gasVisible := false
+	for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(time.Second) {
+		afterGas = readState()
+		paidSince := afterGas.PaidBlocks - beforeGas.PaidBlocks
+		if paidSince < 0 {
+			t.Fatal("AUTOPAY paid blocks moved backwards")
+		}
+		expectedGas := parseBalance(beforeGas.GasBalance).AddAlignPrecision(parseBalance(operatorBudget)).
+			SubAlignPrecision(parseBalance(fmt.Sprint(paidSince * perSettlementGas)))
+		if afterGas.CurrentBlock > beforeGas.CurrentBlock && parseBalance(afterGas.GasBalance).Cmp(expectedGas) == 0 {
+			gasVisible = true
+			break
+		}
+	}
+	if !gasVisible || parseBalance(afterGas.GasBalance).Cmp(parseBalance(fmt.Sprint(perSettlementGas))) < 0 {
+		t.Fatal("operating gas not visible or cannot fund next settlement; do not fund delegate")
+	}
+	if len(afterGas.Delegates) != len(beforeGas.Delegates) {
+		t.Fatal("gas-only funding changed delegate membership")
+	}
+	for address, delegate := range afterGas.Delegates {
+		previous, ok := beforeGas.Delegates[address]
+		if !ok || delegate.AmountPerBlock != previous.AmountPerBlock || delegate.BlobKeyLimit != previous.BlobKeyLimit {
+			t.Fatal("gas-only funding created or reconfigured a delegate")
+		}
+		beforePrincipal := parseBalance(previous.Balance).AddAlignPrecision(parseBalance(previous.TotalPaid))
+		afterPrincipal := parseBalance(delegate.Balance).AddAlignPrecision(parseBalance(delegate.TotalPaid))
+		if beforePrincipal.Cmp(afterPrincipal) != 0 {
+			t.Fatal("gas-only funding changed delegate principal beyond recorded business payments")
+		}
+	}
+	t.Logf("AUTOPAY operating gas funded: budget=%s perSettlement=%d txid=%s gasBalance=%s", operatorBudget, perSettlementGas, gasFund.TxID, afterGas.GasBalance)
+
 }
 
 func liveAutopayContractExists(raw, contract string) bool {

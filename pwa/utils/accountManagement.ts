@@ -1,3 +1,4 @@
+import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
 import { beginAccountManagementOperation, finishPwaOperation } from '@/utils/accountManagementOperationLog'
 
 export interface AccountStorageOption {
@@ -122,8 +123,11 @@ class AccountManagementSDK {
     // Operation-log policy is deliberately scrubbed: passwords, mnemonics,
     // recovery answers/shares and setup payloads are never written to logs.
     const operation = await beginAccountManagementOperation(methodName, payload)
+    let finishVersion: (() => void) | undefined
+    try {
     let response: SDKResponse<T>
     try {
+      finishVersion = beginVersionDispatch(methodName, true)
       response = await method(JSON.stringify(payload))
     } catch (error: any) {
       const requestError = new Error(error?.message || '账户管理调用失败')
@@ -137,6 +141,7 @@ class AccountManagementSDK {
     }
     await finishPwaOperation(operation, null, response.data)
     return response.data as T
+    } finally { finishVersion?.() }
   }
 
   preflight(password: string, wallets: AccountWalletMetadataInput[]) {

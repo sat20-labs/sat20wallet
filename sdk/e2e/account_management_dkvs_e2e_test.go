@@ -77,7 +77,9 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 
 	// This fixture uses the same wallet as account owner and Guardian. The
 	// compact recovery package uses one personal slot plus one mailbox slot.
-	config := &contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "5"}
+	// The owner is also the deployer: mark the operator share explicitly,
+	// separately from this delegate's per-block business payment.
+	config := &contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "5", GasFundingAmount: "280000"}
 	configParam, err := config.Encode()
 	require.NoError(t, err)
 	configTx := buildDKVSKeyPathTemplateInvoke(t, owner, contractAddress, 1,
@@ -91,6 +93,8 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{heartbeat}, 0)
 	state := fetchTemplateAutopayView(t, fixture.Network.Bootstrap, contractAddress.MustEncode())
 	require.Equal(t, templateruntime.AutopayStatusActive, state.Status)
+	require.NotEmpty(t, state.GasBalance)
+	require.NotEqual(t, "0", state.GasBalance)
 	require.Empty(t, state.Recipient)
 	require.Equal(t, "1", state.MinAmountPerBlock)
 	require.GreaterOrEqual(t, state.PaidBlocks, int64(1))

@@ -283,6 +283,10 @@ func templateInvokeParamTemplate(templateName, action string) (string, error) {
 		innerParam = map[string]interface{}{
 			"minOutA": "",
 		}
+	case contractcommon.TemplateInvokeAPIConfig:
+		innerParam = map[string]interface{}{
+			"amountPerBlock": "", "blobKeyLimit": 0, "gasFundingAmount": "",
+		}
 	case contractcommon.TemplateInvokeAPIClose:
 		innerParam = nil
 	default:
@@ -371,6 +375,12 @@ func convertTemplateInvokeParam(templateName, jsonInvokeParam string) (*InvokePa
 		innerParam, err = param.Encode()
 	case contractcommon.TemplateInvokeAPIExchange:
 		var param contractcommon.TemplateExchangeInvokeParam
+		if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
+			return nil, err
+		}
+		innerParam, err = param.Encode()
+	case contractcommon.TemplateInvokeAPIConfig:
+		var param contractcommon.TemplateAutopayConfigInvokeParam
 		if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
 			return nil, err
 		}

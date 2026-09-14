@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 
@@ -970,6 +971,39 @@ func RealSwapAmt(amt *Decimal) *Decimal {
 		Div(indexer.NewDecimal(1000, amt.Precision+3))
 }
 
+func ammBuyOutput(inputValue int64, poolAsset *Decimal, poolSats int64) *Decimal {
+	if poolAsset == nil || poolAsset.Value == nil || poolAsset.Sign() <= 0 || poolSats <= 0 || inputValue <= 0 {
+		return indexer.NewDefaultDecimal(0)
+	}
+	effectiveInput := new(big.Int).Mul(big.NewInt(inputValue), big.NewInt(1000-SWAP_SERVICE_FEE_RATIO))
+	numerator := new(big.Int).Mul(new(big.Int).Set(poolAsset.Value), effectiveInput)
+	denominator := new(big.Int).Mul(big.NewInt(poolSats), big.NewInt(1000))
+	denominator.Add(denominator, effectiveInput)
+	return &Decimal{
+		Precision: poolAsset.Precision,
+		Value:     new(big.Int).Quo(numerator, denominator),
+	}
+}
+
+func ammSellOutput(inputAsset, poolAsset *Decimal, poolSats int64) (int64, bool) {
+	if inputAsset == nil || inputAsset.Value == nil || poolAsset == nil || poolAsset.Value == nil ||
+		inputAsset.Sign() <= 0 || poolAsset.Sign() <= 0 || poolSats <= 0 {
+		return 0, false
+	}
+	precision := poolAsset.Precision
+	if inputAsset.Precision > precision {
+		precision = inputAsset.Precision
+	}
+	poolUnits := poolAsset.NewPrecision(precision).Value
+	inputUnits := inputAsset.NewPrecision(precision).Value
+	effectiveInput := new(big.Int).Mul(inputUnits, big.NewInt(1000-SWAP_SERVICE_FEE_RATIO))
+	numerator := new(big.Int).Mul(big.NewInt(poolSats), effectiveInput)
+	denominator := new(big.Int).Mul(poolUnits, big.NewInt(1000))
+	denominator.Add(denominator, effectiveInput)
+	out := new(big.Int).Quo(numerator, denominator)
+	return out.Int64(), out.IsInt64()
+}
+
 // 执行交易，每个区块统一执行一次
 func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64) bool {
 
@@ -1032,8 +1066,7 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 				continue
 			}
 
-			kDivNewIn := indexer.DecimalDiv(p.k, indexer.DecimalAdd(indexer.NewDecimal(satsValueInPool, 3), realswapValue))
-			outAmt := indexer.DecimalSub(assetAmtInPool, kDivNewIn)
+			outAmt := ammBuyOutput(item.RemainingValue, assetAmtInPool, satsValueInPool)
 
 			if outAmt.Sign() <= 0 { // 不大可能会走这里
 				// 兑换失败，池子余额不足或参数异常，直接退款
@@ -1080,8 +1113,13 @@ func (p *AmmContractRuntime) swap(assetAmtInPool *Decimal, satsValueInPool int64
 				continue
 			}
 
-			kDivNewIn := indexer.DecimalDiv(p.k, assetAmtInPool.AddAlignPrecision(realSwapAmt))
-			outValue := satsValueInPool - kDivNewIn.Ceil()
+			outValue, validOutput := ammSellOutput(item.RemainingAmt, assetAmtInPool, satsValueInPool)
+			if !validOutput {
+				Log.Errorf("AMM sell %s: output overflows int64, utxo: %s", INVOKE_REASON_INNER_ERROR, item.InUtxo)
+				item.Reason = INVOKE_REASON_INNER_ERROR
+				refundItems = append(refundItems, item)
+				continue
+			}
 
 			if outValue <= 0 { // 不大可能走这里
 				Log.Errorf("AMM sell %s: in_amt=%s, min_value=%s, real_value=%d, utxo: %s", INVOKE_REASON_INNER_ERROR,

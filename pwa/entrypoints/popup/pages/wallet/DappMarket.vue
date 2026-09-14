@@ -14,6 +14,10 @@
       <Button size="icon" variant="ghost" aria-label="Home" @click="loadHome">
         <Icon icon="lucide:home" class="text-lg" />
       </Button>
+      <Button size="sm" variant="outline" :disabled="disconnecting" aria-label="Disconnect DApp" @click="disconnectDapp">
+        <Icon icon="lucide:unplug" class="mr-1 text-sm" aria-hidden="true" />
+        Disconnect
+      </Button>
     </header>
 
     <div class="relative min-h-0 flex-1">
@@ -71,7 +75,13 @@ import NavFooter from '@/components/layout/NavFooter.vue'
 import { usePwaDappBridge } from '@/composables/usePwaDappBridge'
 import { useWalletStore } from '@/store'
 import { Network } from '@/types'
+import { MarketFrameReady } from '@/utils/marketFrameReady'
 import { SAT20_DAPP_PROTOCOL } from '@/types/sat20-dapp-connect'
+import { getCurrentDappScope, revokeDappGrant } from '@/lib/authorized-origins'
+import {
+  consumePendingDappIdentityDisconnect,
+  registerReadyDappIdentitySink,
+} from '@/lib/dapp-identity-events'
 
 const DEFAULT_MARKET_URL = import.meta.env.DEV
   ? `${window.location.protocol}//${window.location.hostname}:3006/swap/`
@@ -115,6 +125,24 @@ const frameKey = ref(0)
 const frameUrl = ref(resolveMarketUrl())
 const loading = ref(true)
 const loadError = ref(false)
+const readyTimedOut = ref(false)
+const disconnecting = ref(false)
+const readyGate = new MarketFrameReady((state) => {
+  loading.value = state === 'loading'
+  loadError.value = state === 'error' || state === 'timeout'
+  readyTimedOut.value = state === 'timeout'
+})
+let navigationGeneration = 0
+let unregisterIdentitySink: (() => void) | null = null
+const deactivateIdentitySink = () => {
+  unregisterIdentitySink?.()
+  unregisterIdentitySink = null
+}
+const beginNavigation = () => {
+  deactivateIdentitySink()
+  navigationGeneration = readyGate.begin(frameUrl.value)
+}
+watch(frameRef, (frame) => readyGate.bind(navigationGeneration, frame?.contentWindow ?? null), { flush: 'post' })
 const isOnline = ref(navigator.onLine)
 const activeDappOrigin = ref('')
 const activeDappUrl = ref(frameUrl.value)
@@ -129,7 +157,7 @@ const displayUrl = computed(() => {
 
 const errorTitle = computed(() => isOnline.value ? 'Market failed to load' : 'Network unavailable')
 const errorMessage = computed(() => isOnline.value
-  ? 'Check the Market frame policy or try again.'
+  ? (readyTimedOut.value ? 'Could not confirm Market is ready. Try again.' : 'Check the Market frame policy or try again.')
   : 'The wallet is still available offline, but Market needs a network connection.'
 )
 
@@ -155,7 +183,7 @@ const announceWalletReady = (origin = targetOrigin()) => {
 }
 
 const handleDappNavigate = (event: MessageEvent, message: Record<string, unknown>) => {
-  if (event.source !== frameRef.value?.contentWindow) {
+  if (!readyGate.matchesSource(event.source) || event.source !== frameRef.value?.contentWindow) {
     return
   }
   if (!bridge.isAllowedOrigin(event.origin)) {
@@ -178,17 +206,16 @@ const handleDappNavigate = (event: MessageEvent, message: Record<string, unknown
     frameUrl.value = normalizedHref
     activeDappUrl.value = normalizedHref
     activeDappOrigin.value = href.origin
-    loading.value = true
-    loadError.value = false
+    beginNavigation()
     frameKey.value += 1
   } catch (error) {
     console.warn('Ignored invalid DApp navigation request:', error)
   }
 }
 
-const handleLoad = () => {
-  loading.value = false
-  loadError.value = false
+const handleLoad = (event: Event) => {
+  if (event.target !== frameRef.value || !readyGate.matchesSource(frameRef.value?.contentWindow ?? null)) return
+  // DOM load is not application readiness (including browser error documents).
   announceWalletReady()
 }
 
@@ -204,55 +231,34 @@ const handleClientReady = async (event: MessageEvent) => {
   if (message.type !== 'SAT20_DAPP_CLIENT_READY') {
     return
   }
-  if (event.source !== frameRef.value?.contentWindow) {
-    return
-  }
-  if (!bridge.isAllowedOrigin(event.origin)) {
-    return
-  }
-  if (message.origin && message.origin !== event.origin) {
-    return
-  }
-
-  if (typeof message.href === 'string') {
-    try {
-      const href = new URL(message.href)
-      if (href.origin === event.origin) {
-        activeDappUrl.value = href.href
-      }
-    } catch {
-      activeDappUrl.value = event.origin
-    }
-  } else {
-    activeDappUrl.value = event.origin
-  }
+  if (!readyGate.ready(event, bridge.isAllowedOrigin)) return
+  activeDappUrl.value = message.href
   announceWalletReady(event.origin)
+  deactivateIdentitySink()
+  unregisterIdentitySink = registerReadyDappIdentitySink(event.origin, (payload) => {
+    bridge.announceEvent('disconnect', event.origin, payload)
+  })
+  if (consumePendingDappIdentityDisconnect(event.origin)) {
+    bridge.announceEvent('disconnect', event.origin, { reason: 'wallet_scope_changed' })
+  }
 }
 
-const handleError = () => {
-  loading.value = false
-  loadError.value = true
+const handleError = (event: Event) => {
+  if (event.target === frameRef.value && readyGate.matchesSource(frameRef.value?.contentWindow ?? null)) readyGate.error(navigationGeneration)
 }
 
 const reload = () => {
-  loading.value = true
-  loadError.value = false
-  try {
-    frameRef.value?.contentWindow?.location.reload()
-  } catch (error) {
-    console.warn('Failed to reload active DApp frame, reloading active DApp URL:', error)
-    frameUrl.value = activeDappUrl.value || frameUrl.value
-    activeDappOrigin.value = targetOrigin()
-    frameKey.value += 1
-  }
+  frameUrl.value = activeDappUrl.value || frameUrl.value
+  activeDappOrigin.value = targetOrigin()
+  beginNavigation()
+  frameKey.value += 1
 }
 
 const loadHome = () => {
   frameUrl.value = resolveMarketUrl()
   activeDappUrl.value = frameUrl.value
   activeDappOrigin.value = targetOrigin()
-  loading.value = true
-  loadError.value = false
+  beginNavigation()
   frameKey.value += 1
 }
 
@@ -260,37 +266,25 @@ const goBack = () => {
   router.push('/wallet')
 }
 
+const disconnectDapp = async () => {
+  const origin = activeDappOrigin.value || targetOrigin()
+  if (!origin || disconnecting.value) return
+  disconnecting.value = true
+  try {
+    await revokeDappGrant(origin, await getCurrentDappScope())
+    bridge.announceEvent('disconnect', origin, { reason: 'user_disconnected' })
+  } finally {
+    disconnecting.value = false
+  }
+}
+
 const updateOnlineState = () => {
   isOnline.value = navigator.onLine
 }
 
-watch(
-  () => [walletStore.address, walletStore.publicKey],
-  () => {
-    const origin = activeDappOrigin.value || targetOrigin()
-    if (origin) bridge.announceEvent('disconnect', origin, { reason: 'wallet_scope_changed' })
-  }
-)
-
-watch(
-  () => walletStore.network,
-  () => {
-    const origin = activeDappOrigin.value || targetOrigin()
-    if (origin) bridge.announceEvent('disconnect', origin, { reason: 'wallet_scope_changed' })
-  }
-)
-
-watch(
-  () => walletStore.locked,
-  (locked) => {
-    if (locked) {
-      const origin = activeDappOrigin.value || targetOrigin()
-      if (origin) bridge.announceEvent('disconnect', origin, { reason: 'wallet_locked' })
-    }
-  }
-)
-
 onMounted(() => {
+  beginNavigation()
+  readyGate.bind(navigationGeneration, frameRef.value?.contentWindow ?? null)
   activeDappOrigin.value = targetOrigin()
   bridge.start()
   window.addEventListener('message', handleClientReady)
@@ -299,6 +293,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  deactivateIdentitySink()
+  readyGate.dispose()
   bridge.stop()
   window.removeEventListener('message', handleClientReady)
   window.removeEventListener('online', updateOnlineState)

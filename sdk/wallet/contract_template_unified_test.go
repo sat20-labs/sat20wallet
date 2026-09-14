@@ -30,6 +30,36 @@ func TestContractDeployNonceIsStable(t *testing.T) {
 
 const unifiedTemplateTestAsset = "brc20:f:ooxx"
 
+func TestUnifiedAutopayConfigPreservesOperatingGasFunding(t *testing.T) {
+	for _, raw := range []string{
+		`{"amountPerBlock":"10","blobKeyLimit":1}`,
+		`{"gasFundingAmount":"400"}`,
+		`{"amountPerBlock":"10","gasFundingAmount":"400"}`,
+	} {
+		var expected contractcommon.TemplateAutopayConfigInvokeParam
+		if err := json.Unmarshal([]byte(raw), &expected); err != nil {
+			t.Fatal(err)
+		}
+		param, err := convertUnifiedInvokeRequestParam(ContractTypeTemplate, &ContractInvokeRequest{
+			SubType: contractcommon.TemplateAutopay, Action: contractcommon.TemplateInvokeAPIConfig, Param: raw,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := base64.StdEncoding.DecodeString(param.Param)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var actual contractcommon.TemplateAutopayConfigInvokeParam
+		if err := actual.Decode(encoded); err != nil {
+			t.Fatal(err)
+		}
+		if actual != expected {
+			t.Fatalf("config changed: got %+v want %+v", actual, expected)
+		}
+	}
+}
+
 func TestUnifiedTemplateContractsLocalCoverage(t *testing.T) {
 	manager := &Manager{}
 

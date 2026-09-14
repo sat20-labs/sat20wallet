@@ -77,7 +77,7 @@
             <div class="space-y-2">
               <Label>{{ $t('assetOperationDialog.amount') }}</Label>
               <div class="flex items-center gap-2">
-                <Input :model-value="amount" type="number" :placeholder="$t('assetOperationDialog.enterAmount')"
+                <Input :model-value="amount" :type="operationType === 'send' ? 'text' : 'number'" :inputmode="operationType === 'send' ? 'decimal' : undefined" :placeholder="$t('assetOperationDialog.enterAmount')"
                   class="h-12 bg-zinc-800" @update:modelValue="handleAmountUpdate" />
                 <Button variant="outline" class="h-12 px-4 text-sm border border-zinc-600 hover:bg-zinc-700"
                   @click="setMaxAmount">
@@ -85,6 +85,7 @@
                 </Button>
               </div>
             </div>
+            <p v-if="sendAmountError" role="alert" class="text-sm text-red-400">{{ $t(`assetOperationDialog.amountErrors.${sendAmountError}`) }}</p>
             <div v-if="needsAddress" class="space-y-2">
               <Label>{{ $t('assetOperationDialog.address') }}</Label>
               <Input :model-value="address" type="text" :placeholder="$t('assetOperationDialog.enterAddress')"
@@ -106,7 +107,7 @@
 
       <DialogFooter v-if="dialogStage === 'form' && selectedTab === 'normal'">
         <Button class="w-full h-11 mb-2"
-          :disabled="needsAddress && (!address || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress))"
+          :disabled="!!sendAmountError || (needsAddress && (!address || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress)))"
           @click="confirmOperation">
           {{ $t('assetOperationDialog.confirm') }}
         </Button>
@@ -138,6 +139,16 @@
         {{ $t('assetOperationDialog.confirmOperation') }}
       </DialogDescription>
 
+      <dl v-if="review" class="space-y-3 rounded-lg border border-zinc-700 bg-zinc-800 p-3 text-sm">
+        <div><dt class="text-zinc-400">{{ $t('assetOperationDialog.amount') }}</dt><dd class="break-all text-zinc-100">{{ review.amount }} {{ review.unit }}</dd></div>
+        <div><dt class="text-zinc-400">{{ $t('assetOperationDialog.address') }}</dt><dd class="break-all select-text text-zinc-100">{{ review.address }}</dd></div>
+        <div><dt class="text-zinc-400">{{ $t('assetOperationDialog.reviewChain') }}</dt><dd class="text-zinc-100">{{ review.chain }}</dd></div>
+        <div><dt class="text-zinc-400">{{ $t('assetOperationDialog.reviewNetwork') }}</dt><dd class="text-zinc-100">{{ review.network }}</dd></div>
+        <div v-if="review.feeRate !== null"><dt class="text-zinc-400">{{ $t('assetOperationDialog.reviewFeeRate') }}</dt><dd class="text-zinc-100">{{ review.feeRate }} sats/vB</dd></div>
+        <div v-if="review.networkFee !== null"><dt class="text-zinc-400">{{ $t('assetOperationDialog.reviewNetworkFee') }}</dt><dd class="text-zinc-100">{{ review.networkFee }} sats</dd></div>
+        <div v-if="review.totalSpend !== null"><dt class="text-zinc-400">{{ $t('assetOperationDialog.reviewTotalSpend') }}</dt><dd class="text-zinc-100">{{ review.totalSpend }} sats</dd></div>
+      </dl>
+
       <!-- 显示域名和地址信息 -->
       <div v-if="!isResolving && resolvedInfo && resolvedInfo.isDomain && resolvedInfo.resolvedAddress"
         class="mt-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
@@ -163,7 +174,7 @@
       </div>
 
       <!-- 显示 btcFeeRate 信息 -->
-      <div v-if="!isResolving && needsBtcFeeRate" class="mt-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
+      <div v-if="!isResolving && needsBtcFeeRate && !review" class="mt-4 p-3 bg-zinc-800 rounded-lg border border-zinc-700">
         <div class="flex items-center justify-between text-sm">
           <span class="text-zinc-300">BTC Fee Rate:</span>
           <span class="text-primary font-semibold">{{ btcFeeRate }} sats/vB</span>
@@ -194,10 +205,10 @@
       </div>
 
       <DialogFooter class="my-4 gap-2">
-        <Button variant="outline" @click="dialogStage = 'form'" :disabled="isResolving">{{ $t('assetOperationDialog.cancel')
+        <Button variant="outline" @click="cancelReview" :disabled="isResolving">{{ $t('assetOperationDialog.cancel')
         }}</Button>
         <Button @click="handleConfirm"
-          :disabled="isResolving || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress)">
+          :disabled="!!sendAmountError || isResolving || (resolvedInfo && resolvedInfo.isDomain && !resolvedInfo.resolvedAddress)">
           {{ isResolving ? $t('assetOperationDialog.resolvingDomain') : $t('assetOperationDialog.confirm') }}
         </Button>
       </DialogFooter>
@@ -207,7 +218,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, toRefs } from 'vue'
+import { computed, ref, watch, toRefs, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
@@ -215,8 +226,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Icon } from '@iconify/vue'
+import { validateSendAmount } from '@/utils/sendAmount'
 import SplitSend from '@/entrypoints/popup/pages/wallet/split.vue'
 import { useWalletStore } from '@/store'
+import { useGlobalStore } from '@/store/global'
 import { validateAndResolveAddress, hideAddress } from '@/utils'
 
 interface Props {
@@ -224,7 +237,10 @@ interface Props {
   description: string
   amount: string
   address: string
-  maxAmount?: string // 新增的 prop
+  maxAmount?: string | number
+  amountPrecision?: number
+  networkFee?: string
+  totalSpend?: string
   assetType?: string
   assetTicker?: string
   assetKey?: string
@@ -253,7 +269,33 @@ watch(isOpen, (open) => {
 
 // 获取钱包 store 中的 btcFeeRate 和 network
 const walletStore = useWalletStore()
+const globalStore = useGlobalStore()
 const { btcFeeRate, network } = storeToRefs(walletStore)
+const review = ref<Readonly<{
+  fingerprint: string, amount: string, unit: string, address: string,
+  chain: string, network: string, feeRate: string | null,
+  networkFee: string | null, totalSpend: string | null
+}> | null>(null)
+let reviewAttempt = 0
+let submitted = false
+const reviewFingerprint = (address = props.address) => JSON.stringify([
+  props.amount, address, props.assetKey, props.assetType, props.assetTicker,
+  props.amountPrecision, props.operationType, props.chain, network.value, btcFeeRate.value,
+  props.networkFee, props.totalSpend,
+  globalStore.env, walletStore.rootAccountId, walletStore.walletId, walletStore.accountIndex, walletStore.address,
+])
+const cancelReview = () => {
+  reviewAttempt++
+  review.value = null
+  dialogStage.value = 'form'
+}
+watch(reviewFingerprint, () => {
+  if (review.value) cancelReview()
+}, { flush: 'sync' })
+watch(isOpen, () => {
+  cancelReview()
+  submitted = false
+})
 
 // 域名解析相关状态
 const isResolving = ref(false)
@@ -321,15 +363,28 @@ const resolveAddress = async (input: string) => {
   }
 }
 
+// Native amounts are always sats. Unknown token precision remains fail-closed.
+const nativeSats = computed(() => props.assetKey === '::' && props.assetType === '*')
+const sendAmountError = computed(() => props.operationType === 'send' ? validateSendAmount(props.amount, nativeSats.value ? 0 : props.amountPrecision, props.maxAmount) : null)
+
 const confirmOperation = async () => {
+  if (sendAmountError.value || isResolving.value) return
+  const attempt = ++reviewAttempt
+  const fingerprint = reviewFingerprint()
+  if (needsAddress.value && (!props.address || !network.value)) return
   // 在确认时进行域名解析
   if (needsAddress.value && props.address) {
     const result = await resolveAddress(props.address)
+    if (attempt !== reviewAttempt || !isOpen.value || fingerprint !== reviewFingerprint()) return
     resolvedInfo.value = result
+    if (!result?.resolvedAddress) return
 
     // 如果解析成功且是域名，更新地址为解析后的地址
     if (result?.isDomain && result.resolvedAddress) {
+      const resolvedFingerprint = reviewFingerprint(result.resolvedAddress)
       emit('update:address', result.resolvedAddress)
+      await nextTick()
+      if (attempt !== reviewAttempt || !isOpen.value || resolvedFingerprint !== reviewFingerprint()) return
     }
     console.log(result, result?.isDomain && !result.resolvedAddress);
 
@@ -340,11 +395,29 @@ const confirmOperation = async () => {
     }
   }
 
-  // 始终显示确认对话框
+  if (sendAmountError.value) return
+  if (needsAddress.value) {
+    review.value = Object.freeze({
+      fingerprint: reviewFingerprint(), amount: props.amount,
+      unit: nativeSats.value ? 'sats' : (props.assetTicker || props.assetKey || ''),
+      address: props.address,
+      chain: isSatoshiNetSend.value ? 'SatoshiNet' : 'Bitcoin',
+      network: String(network.value),
+      feeRate: needsBtcFeeRate.value ? String(btcFeeRate.value) : null,
+      networkFee: props.networkFee ?? null,
+      totalSpend: props.totalSpend ?? null,
+    })
+  }
   dialogStage.value = 'confirm'
 }
 
 const handleConfirm = () => {
+  if (submitted || dialogStage.value !== 'confirm' || sendAmountError.value) return
+  if (needsAddress.value && (!review.value || review.value.fingerprint !== reviewFingerprint())) {
+    cancelReview()
+    return
+  }
+  submitted = true
   console.log('handleConfirm called'); // 调试日志
   emit('confirm')
   isOpen.value = false
@@ -355,11 +428,11 @@ const setMaxAmount = () => {
   console.log('maxAmount', maxAmount.value);
 
   if (maxAmount.value) {
-    let calculatedAmount = maxAmount.value
+    let calculatedAmount = String(maxAmount.value)
 
     // 如果是 unlock 操作且是BTC资产，需要减去 3000 sats 的预留费用
     if (props.operationType === 'unlock' && isBTCAsset.value) {
-      const maxAmountNum = parseFloat(maxAmount.value)
+      const maxAmountNum = parseFloat(String(maxAmount.value))
       const reservedAmount = 3000
       calculatedAmount = Math.max(0, maxAmountNum - reservedAmount).toString()
     }

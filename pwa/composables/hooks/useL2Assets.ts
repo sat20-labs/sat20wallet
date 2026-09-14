@@ -113,14 +113,18 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
       if (item.Name.Type === '*') {
         totalSats = item.Amount
       }
-      if (!list.find((v) => v?.key === key)) {
+      const existingIndex = list.findIndex((v) => v?.key === key)
+      // The summary contains both plain sats (::) and the native sats total (:*:).
+      // They intentionally share the send asset key, so keep the native total row
+      // deterministically instead of depending on the server's map iteration order.
+      if (existingIndex === -1 || (key === '::' && item.Name.Type === '*')) {
         let label = item.Name.Type === 'e'
           ? `${item.Name.Ticker}（raresats）`
           : item.Name.Ticker;
         if (item.Name.Type === 'n') {
           continue
         }
-        list.push({
+        const asset = {
           id: key,
           key,
           protocol: item.Name.Protocol,
@@ -129,7 +133,9 @@ export const useL2Assets = (options: UseAssetQueryOptions = {}) => {
           ticker: item.Name.Ticker,
           utxos: [],
           amount: item.Amount,
-        })
+        }
+        if (existingIndex === -1) list.push(asset)
+        else list[existingIndex] = asset
       }
     }
     return { list, totalSats }

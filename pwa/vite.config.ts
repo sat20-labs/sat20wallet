@@ -1,4 +1,5 @@
 import { defineConfig, loadEnv } from 'vite'
+import { solcModulePlugin } from './build-plugins/solcModule'
 import vue from '@vitejs/plugin-vue'
 import path from 'path'
 import fs from 'node:fs'
@@ -146,6 +147,9 @@ const productionCspPlugin = (env: Record<string, string>, releaseId: string) => 
   const connectOrigins = configuredOrigins([
     'https://apiprd.sat20.org',
     'https://apiprd.ordx.market',
+    'https://api.iconify.design',
+    'https://api.simplesvg.com',
+    'https://api.unisvg.com',
     env.VITE_SAT20_VERSION_URL,
     env.VITE_CSP_CONNECT_SRC,
   ], 'connect-src')
@@ -225,11 +229,16 @@ export default defineConfig(({ command, mode }) => {
       __SAT20_BUILD_ID__: JSON.stringify(versionInfo.buildId || ''),
     },
     plugins: [
+      solcModulePlugin(),
       solcBrowserNodeShims(),
       vue(),
       ...(productionBuild ? [productionCspPlugin(env, releaseId)] : []),
       releaseBuildPlugin(versionInfo),
     ],
+    worker: {
+      format: 'es',
+      plugins: () => [solcModulePlugin(), solcBrowserNodeShims()],
+    },
     build: {
       sourcemap: false,
     },

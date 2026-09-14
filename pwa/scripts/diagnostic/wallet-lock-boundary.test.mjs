@@ -105,6 +105,7 @@ function walletSessionFixture() {
   const logs = { beginPwaWalletOperation: async () => {}, finishPwaOperation: async () => {} }
   const dependencies = {
     radash: { tryit }, '@/lib/walletSession': session, '@/utils/pwaOperationLog': logs,
+    '@/utils/pwaVersionPolicy': { beginVersionDispatch: () => () => {} },
   }
   const walletManager = loadModule('../../utils/sat20.ts', dependencies, { sat20wallet_wasm: wasm })
   const stp = loadModule('../../utils/stp.ts', dependencies, { sat20wallet_wasm: wasm })
@@ -283,15 +284,28 @@ function passwordDialogFixture(h) {
     .split('<script setup lang="ts">')[1].split('</script>')[0]
   const cleanup = []
   const route = vue.reactive({ fullPath: '/wallet' })
+  const styleValues = new Map()
+  const bodyStyle = {
+    pointerEvents: '', overflow: '',
+    getPropertyValue: (name) => styleValues.get(name) || '',
+    setProperty: (name, value) => styleValues.set(name, value),
+    removeProperty(name) {
+      if (name === 'pointer-events') this.pointerEvents = ''
+      else if (name === 'overflow') this.overflow = ''
+      else styleValues.delete(name)
+    },
+  }
+  let activeOverlay = false
   const dialog = loadSource(`${source}\nexport { open, busy, error, passwordInput, confirm, finish }`, {
     vue: { ...vue, onBeforeUnmount: (fn) => cleanup.push(fn) },
     'vue-router': { useRoute: () => route }, 'vue-i18n': { useI18n: () => ({ t: (key) => key }) },
     '@/lib/walletPasswordPrompt': h.passwordPrompt, '@/lib/identity-boundary': h.identity,
     '@/lib/credential-rate-limit': loadModule('../../lib/credential-rate-limit.ts'),
     '@/utils/sat20': { __esModule: true, default: h.wallet },
-  })
+  }, { document: { body: { style: bodyStyle }, querySelector: () => activeOverlay ? {} : null } })
   dialog.passwordInput.value = { value: '' }
-  return { ...dialog, route, dispose: () => cleanup.forEach(fn => fn()) }
+  return { ...dialog, route, bodyStyle, setActiveOverlay: (value) => { activeOverlay = value },
+    dispose: () => cleanup.forEach(fn => fn()) }
 }
 
 test('session authorization starts locked and never retains a password', async () => {
@@ -329,6 +343,38 @@ test('password dialog verifies once, clears input, and asks again for the next o
       assert.equal(dialog.open.value, false)
     }
     assert.deepEqual(h.calls.map(([name]) => name), Array(4).fill('unlockWallet'))
+  } finally { dialog.dispose() }
+})
+
+test('password dialog releases a stale Radix body lock after close without disturbing another overlay', async () => {
+  const h = walletSessionFixture(), dialog = passwordDialogFixture(h)
+  try {
+    const cancelled = h.passwordPrompt.withWalletPassword(async () => 'unexpected')
+    dialog.bodyStyle.pointerEvents = 'none'
+    dialog.bodyStyle.overflow = 'hidden'
+    dialog.bodyStyle.setProperty('--scrollbar-width', '15px')
+    dialog.finish()
+    assert.equal(await cancelled, undefined)
+    assert.equal(dialog.bodyStyle.pointerEvents, '')
+    assert.equal(dialog.bodyStyle.overflow, '')
+    assert.equal(dialog.bodyStyle.getPropertyValue('--scrollbar-width'), '')
+    // Simulate the late Radix dismissable-layer cleanup restoring the stale
+    // values it captured before the scroll-lock cleanup ran.
+    dialog.bodyStyle.pointerEvents = 'none'
+    dialog.bodyStyle.overflow = 'hidden'
+    await new Promise(resolve => setTimeout(resolve, 350))
+    assert.equal(dialog.bodyStyle.pointerEvents, '')
+    assert.equal(dialog.bodyStyle.overflow, '')
+
+    const guarded = h.passwordPrompt.withWalletPassword(async () => 'unexpected')
+    dialog.bodyStyle.pointerEvents = 'none'
+    dialog.bodyStyle.overflow = 'hidden'
+    dialog.setActiveOverlay(true)
+    dialog.finish()
+    assert.equal(await guarded, undefined)
+    await new Promise(resolve => setTimeout(resolve, 350))
+    assert.equal(dialog.bodyStyle.pointerEvents, 'none')
+    assert.equal(dialog.bodyStyle.overflow, 'hidden')
   } finally { dialog.dispose() }
 })
 
@@ -393,6 +439,22 @@ test('network cancellation leaves the manager intact; switching and rollback sha
     assert.equal(h.state.accountIndex, 0)
     assert.equal(h.session.isWalletSessionUnlocked(), true)
   }
+  dialog.dispose()
+})
+
+test('pending target account discovery does not roll back an otherwise valid network switch', async () => {
+  const h = walletSessionFixture(), dialog = passwordDialogFixture(h)
+  h.handlers.recoverAccountManagementFromCurrentWallet = () => ({
+    code: 0,
+    data: { status: 'pending', code: 'ACCOUNT_ROOT_DISCOVERY_PENDING', accountId: 'root-account' },
+  })
+  const changed = h.store.setNetwork('mainnet')
+  dialog.passwordInput.value.value = 'correct-password'
+  await dialog.confirm()
+  assert.equal(await changed, true)
+  assert.equal(h.state.network, 'mainnet')
+  assert.equal(h.state.accountRecovery.status, 'pending')
+  assert.equal(h.calls.filter(([name]) => name === 'recoverAccountManagementFromCurrentWallet').length, 1)
   dialog.dispose()
 })
 

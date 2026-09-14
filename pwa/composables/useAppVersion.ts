@@ -1,4 +1,6 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
+import { versionPolicy, policyRevision, acceptVersionPolicy, versionUrl } from '@/utils/pwaVersionPolicy'
+import { versionCompare } from '@/utils/versionPolicy'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/components/ui/toast-new/use-toast'
 import { usePwaUpdate } from './usePwaUpdate'
@@ -21,45 +23,34 @@ const getEmbeddedBuildId = () => (
   typeof __SAT20_BUILD_ID__ === 'string' ? __SAT20_BUILD_ID__ : ''
 )
 
-function compareVersions(current: string, remote: string): number {
-  const currentParts = current.replace('v', '').split('.').map(Number)
-  const remoteParts = remote.replace('v', '').split('.').map(Number)
-
-  for (let i = 0; i < Math.max(currentParts.length, remoteParts.length); i++) {
-    const currentNum = currentParts[i] || 0
-    const remoteNum = remoteParts[i] || 0
-
-    if (currentNum !== remoteNum) {
-      return remoteNum > currentNum ? 1 : -1
-    }
-  }
-  return 0
-}
+function compareVersions(current: string, remote: string): number { return -(versionCompare(current, remote) ?? 0) }
+const isChecking = ref(false)
+const lastCheckedRelease = ref<string | null>(null)
+const localVersion = ref(getEmbeddedVersion())
+const localBuildId = ref(getEmbeddedBuildId())
+const remoteVersion = computed(() => { void policyRevision.value; return versionPolicy.remote as RemoteVersionInfo | null })
+const hasUpdate = computed(() => { void policyRevision.value; return !!versionPolicy.remote && versionPolicy.isNew(versionPolicy.remote) })
+const isForceUpdate = computed(() => { void policyRevision.value; return versionPolicy.blocked })
+let fetchGeneration = 0
 
 export function useAppVersion() {
   const { t } = useI18n()
   const { toast } = useToast()
   const { isUpdating, notifyUpdateAvailable, reloadApp } = usePwaUpdate()
-  const isChecking = ref(false)
-  const hasUpdate = ref(false)
-  const remoteVersion = ref<RemoteVersionInfo | null>(null)
-  const isForceUpdate = ref(false)
-  const lastCheckedVersion = ref<string | null>(null)
-  const localVersion = ref(getEmbeddedVersion())
-  const localBuildId = ref(getEmbeddedBuildId())
-  const versionUrl = import.meta.env.VITE_SAT20_VERSION_URL
-    || `${import.meta.env.BASE_URL}version.json`
 
   // 检查是否已经提醒过当前版本（避免重复提醒）
-  const shouldShowNotification = (version: string): boolean => {
+  const releaseKey = (info: RemoteVersionInfo) => info.buildId ? `${info.version}+${info.buildId}` : info.version
+  const shouldShowNotification = (info: RemoteVersionInfo): boolean => {
+    const key = releaseKey(info)
     const skipped = localStorage.getItem('skipVersion')
-    if (skipped === version) {
+    if (skipped === key) {
       return false // 用户选择跳过此版本
     }
-    return lastCheckedVersion.value !== version
+    return lastCheckedRelease.value !== key
   }
 
   const fetchRemoteVersion = async (): Promise<RemoteVersionInfo | null> => {
+    const generation = ++fetchGeneration
     try {
       const timestamp = Date.now()
       const separator = versionUrl.includes('?') ? '&' : '?'
@@ -70,6 +61,7 @@ export function useAppVersion() {
       }
 
       const data = await response.json()
+      if (generation !== fetchGeneration || !acceptVersionPolicy(data)) return null
       return data as RemoteVersionInfo
     } catch (error) {
       console.error('Failed to fetch remote version:', error)
@@ -79,38 +71,24 @@ export function useAppVersion() {
 
   const showUpdateNotification = (info: RemoteVersionInfo) => {
     // 如果用户选择跳过此版本，不再提醒
-    if (!shouldShowNotification(info.version)) {
-      console.log('已跳过版本提醒:', info.version)
+    if (!shouldShowNotification(info)) {
+      console.log('已跳过版本提醒:', releaseKey(info))
       return
     }
 
-    if (info.forceUpdate) {
+    if (isForceUpdate.value) {
       toast({
         variant: 'destructive',
         title: t('setting.forceUpdateTitle'),
         description: t('setting.forceUpdateDescription', { releaseNotes: info.releaseNotes }),
         duration: 10000,
       })
-      lastCheckedVersion.value = info.version
+      lastCheckedRelease.value = releaseKey(info)
     } else {
-      notifyUpdateAvailable(`当前：v${localVersion.value} → 最新：v${info.version}`)
-      lastCheckedVersion.value = info.version
+      const current = localBuildId.value ? `${localVersion.value}+${localBuildId.value}` : localVersion.value
+      notifyUpdateAvailable(`当前：v${current} → 最新：v${releaseKey(info)}`)
+      lastCheckedRelease.value = releaseKey(info)
     }
-  }
-
-  const syncDevelopmentVersion = async () => {
-    if (!import.meta.env.DEV) {
-      return
-    }
-
-    const info = await fetchRemoteVersion()
-    if (!info) {
-      return
-    }
-
-    localVersion.value = info.version
-    localBuildId.value = info.buildId || ''
-    remoteVersion.value = info
   }
 
   const checkForUpdates = async (silent = false): Promise<boolean> => {
@@ -130,14 +108,8 @@ export function useAppVersion() {
         return false
       }
 
-      remoteVersion.value = info
-      const comparison = compareVersions(localVersion.value, info.version)
-      const buildChanged = comparison === 0 && Boolean(info.buildId) && info.buildId !== localBuildId.value
 
-      hasUpdate.value = comparison > 0 || buildChanged
-      isForceUpdate.value = info.forceUpdate
-
-      if (hasUpdate.value) {
+      if (hasUpdate.value || isForceUpdate.value) {
         showUpdateNotification(info)
         return true
       } else {
@@ -184,14 +156,8 @@ export function useAppVersion() {
         return false
       }
 
-      remoteVersion.value = info
-      const comparison = compareVersions(localVersion.value, info.version)
-      const buildChanged = comparison === 0 && Boolean(info.buildId) && info.buildId !== localBuildId.value
 
-      hasUpdate.value = comparison > 0 || buildChanged
-      isForceUpdate.value = info.forceUpdate
-
-      if (!hasUpdate.value) {
+      if (!hasUpdate.value && !isForceUpdate.value) {
         toast({
           variant: 'success',
           title: t('setting.latestVersionTitle'),
@@ -224,7 +190,7 @@ export function useAppVersion() {
     }
   }
 
-  void syncDevelopmentVersion()
+
 
   return {
     isChecking,

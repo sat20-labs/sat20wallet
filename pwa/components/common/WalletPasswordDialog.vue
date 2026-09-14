@@ -21,7 +21,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onBeforeUnmount } from 'vue'
+import { ref, watch, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -39,6 +39,20 @@ const error = ref('')
 const passwordInput = ref<HTMLInputElement | null>(null)
 const limiter = new CredentialAttemptLimiter()
 let resolve: ((password: string | undefined) => void) | undefined
+const radixCloseCleanupDelay = 300
+
+const releaseStaleDialogBodyLock = () => {
+  if (typeof document === 'undefined' || open.value) return
+  if (document.querySelector('[data-dismissable-layer][data-state="open"], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return
+  const style = document.body.style
+  if (style.pointerEvents === 'none') style.removeProperty('pointer-events')
+  if (style.overflow === 'hidden') style.removeProperty('overflow')
+  if (style.getPropertyValue('--scrollbar-width')) {
+    style.removeProperty('--scrollbar-width')
+    style.removeProperty('padding-right')
+    style.removeProperty('margin-right')
+  }
+}
 
 const finish = (password?: string) => {
   if (passwordInput.value) passwordInput.value.value = ''
@@ -46,7 +60,16 @@ const finish = (password?: string) => {
   resolve = undefined
   open.value = false
   error.value = ''
-  done?.(password)
+  // Let Radix unmount its portal before the protected operation can navigate
+  // or replace the component. Reconcile only the known stale lock and never
+  // while another overlay remains open.
+  void nextTick(() => {
+    releaseStaleDialogBodyLock()
+    // Radix keeps closing content mounted for its 200 ms animation. A second
+    // pass runs after its delayed unmount hooks, which may restore stale values.
+    setTimeout(releaseStaleDialogBodyLock, radixCloseCleanupDelay)
+    done?.(password)
+  })
 }
 
 const unregister = registerWalletPasswordPrompt(() => {

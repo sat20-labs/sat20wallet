@@ -57,11 +57,19 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 		wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 5000)})
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{fundB}, 0)
 
-	heartbeatA := buildDKVSKeyPathAssetTransfer(t, actorA, gasOuts[1], gas, 290000, 9000, actorA)
+	// The deployer explicitly funds the contract's operating reserve; no
+	// delegate principal may be borrowed to pay the settlement gas.
+	gasParam, err := (&contractcommon.TemplateAutopayConfigInvokeParam{GasFundingAmount: "289950"}).Encode()
+	require.NoError(t, err)
+	gasFunding := buildDKVSKeyPathTemplateInvoke(t, actorA, contractA, 1,
+		contractcommon.TemplateInvokeAPIConfig, gasParam, []dkvsPrevOut{gasOuts[1]},
+		wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)})
 	heartbeatB := buildDKVSKeyPathAssetTransfer(t, actorB, gasOuts[3], gas, 290000, 9000, actorB)
-	f.Network.sendManyAndMine(t, []*wire.MsgTx{heartbeatA, heartbeatB}, 0)
+	f.Network.sendManyAndMine(t, []*wire.MsgTx{gasFunding, heartbeatB}, 0)
 	state := fetchTemplateAutopayView(t, f.Network.Bootstrap, contractA.MustEncode())
 	require.Equal(t, templateruntime.AutopayStatusActive, state.Status)
+	require.NotEmpty(t, state.GasBalance)
+	require.NotEqual(t, "0", state.GasBalance)
 	require.Contains(t, state.Delegates, actorA.Address)
 	require.Contains(t, state.Delegates, actorB.Address)
 	coreState := fetchTemplateAutopayView(t, f.Network.Core, contractA.MustEncode())

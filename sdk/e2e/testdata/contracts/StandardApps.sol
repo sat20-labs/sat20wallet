@@ -260,7 +260,7 @@ contract ConstantProductAMM is SatoshiNetContractInfo {
         _swapAssetForSat(0);
     }
 
-    function addLiquidity(uint256 minLiquidity) external returns (uint256) {
+    function addLiquidity(uint256 minLiquidity) external payable returns (uint256) {
         string memory fundedAsset = StandardAssetTransfer.fundingAssetAmount(assetName);
         uint256 assetIn = StandardAssetTransfer.stringToUintFloor(fundedAsset);
         uint256 satIn = StandardAssetTransfer.fundingSats();
@@ -417,7 +417,7 @@ contract ConstantProductAMM is SatoshiNetContractInfo {
         }
     }
 
-    function swapSatForAsset(string calldata minAssetOut) external returns (string memory assetOut) {
+    function swapSatForAsset(string calldata minAssetOut) external payable returns (string memory assetOut) {
         return _swapSatForAsset(minAssetOut);
     }
 
@@ -602,7 +602,7 @@ contract LimitOrderBook is SatoshiNetContractInfo {
         string calldata sellAsset,
         string calldata buyAsset,
         string calldata buyAmount
-    ) external returns (uint256 orderId) {
+    ) external payable returns (uint256 orderId) {
         require(!sameAsset(sellAsset, buyAsset), "same asset");
         require(StandardAssetTransfer.isPositive(buyAmount), "buy amount required");
         string memory makerRecipient = StandardAssetTransfer.callerAddress();
@@ -624,7 +624,7 @@ contract LimitOrderBook is SatoshiNetContractInfo {
         emit OrderCreated(orderId, msg.sender, makerRecipient, sellAsset, buyAsset, sellAmount, buyAmount);
     }
 
-    function fillOrder(uint256 orderId) external returns (string memory sellOut, string memory paidIn) {
+    function fillOrder(uint256 orderId) external payable returns (string memory sellOut, string memory paidIn) {
         string memory takerRecipient = StandardAssetTransfer.callerAddress();
         Order storage order = orders[orderId];
         require(order.active, "inactive order");

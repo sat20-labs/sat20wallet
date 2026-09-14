@@ -426,12 +426,21 @@ const loadUpdater = async (registration) => {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   })
   const exports = {}
+  // Use the real B03 policy with an isolated, initially idle release state.
+  const policySource = await readFile(new URL('../../utils/versionPolicy.ts', import.meta.url), 'utf8')
+  const policyExports = {}
+  vm.runInNewContext(ts.transpileModule(policySource, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: policyExports })
+  const policyRevision = { value: 0 }
+  const versionPolicy = new policyExports.VersionPolicy('0.1.38', '20260912T083628Z', () => { policyRevision.value++ })
   const document = { title: '', body: { innerHTML: '' } }
   let closeCalls = 0
   vm.runInNewContext(outputText, {
     exports,
     require: (name) => {
-      if (name === 'vue') return { ref: (value) => ({ value }) }
+      if (name === 'vue') return { ref: (value) => ({ value }), computed: (get) => ({ get value() { return get() } }) }
+      if (name === '@/utils/pwaVersionPolicy') return { versionPolicy, policyRevision }
       if (name === '@/components/ui/toast-new/use-toast') return { useToast: () => ({ toast: () => {} }) }
       throw new Error(`Unexpected import: ${name}`)
     },
@@ -462,6 +471,24 @@ test('update waits for the selected installing worker to activate before showing
   selected.change('activated')
   await updating
   assert.match(ui.document.body.innerHTML, /Update ready/)
+  assert.equal(ui.closeCalls(), 1)
+  assert.equal(selected.listeners.size, 0)
+})
+
+test('update prefers the newly installing worker over an older waiting release', { timeout: 5000 }, async () => {
+  const stale = updateWorker('installed')
+  let staleRequested = false
+  stale.worker.postMessage = () => { staleRequested = true }
+  const selected = updateWorker('installing')
+  const registration = { installing: selected.worker, waiting: stale.worker, update: async () => {} }
+  const ui = await loadUpdater(registration)
+  const updating = ui.updater.reloadApp()
+  await selected.observed.promise
+  selected.change('installed')
+  await selected.requested.promise
+  assert.equal(staleRequested, false)
+  selected.change('activated')
+  await updating
   assert.equal(ui.closeCalls(), 1)
   assert.equal(selected.listeners.size, 0)
 })

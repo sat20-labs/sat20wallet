@@ -1,3 +1,4 @@
+import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
 import { tryit } from 'radash'
 import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
 
@@ -15,7 +16,12 @@ const call = async <T>(methodName: string, ...args: unknown[]): Promise<[Error |
     await finishPwaOperation(operation, methodError)
     return [methodError, undefined]
   }
-  const [invokeError, raw] = await tryit(method)(...args)
+  let finishVersion: (() => void) | undefined
+  try {
+  const [invokeError, raw] = await tryit(async () => {
+    finishVersion = beginVersionDispatch(methodName)
+    return method(...args)
+  })()
   if (invokeError) {
     await finishPwaOperation(operation, invokeError)
     return [invokeError, undefined]
@@ -32,6 +38,7 @@ const call = async <T>(methodName: string, ...args: unknown[]): Promise<[Error |
   }
   await finishPwaOperation(operation, null, response.data)
   return [undefined, response.data]
+  } finally { finishVersion?.() }
 }
 
 export type RGB11AddressReceiveRequest = {

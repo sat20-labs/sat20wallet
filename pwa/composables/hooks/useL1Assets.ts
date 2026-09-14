@@ -160,7 +160,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
           label: label,
           ticker: item.Name.Ticker,
           utxos: [],
-          amount: item.Name.Protocol === 'rgb11' ? amountText : Number(amountText),
+          amount: amountText,
           precision,
         })
       }

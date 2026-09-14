@@ -79,6 +79,10 @@
           </div>
         </div>
       </div>
+      <div v-if="!filteredAssets.length" data-testid="asset-empty-state"
+        class="rounded-lg border border-dashed border-zinc-700 px-3 py-8 text-center text-xs text-zinc-500">
+        {{ $t('l2AssetsTabs.noAssets', { type: $t(`l2AssetsTabs.assetType.${selectedType}`), network }) }}
+      </div>
     </div>
   </div>
 

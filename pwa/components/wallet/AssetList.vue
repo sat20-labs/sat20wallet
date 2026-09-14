@@ -37,14 +37,15 @@
       <TabsContent value="l2">
         <L2Card v-model:selectedType="selectedAssetType" :assets="filteredAssets"
           :mode="transcendingModeStore.selectedTranscendingMode"
-          @lock="handleLock" @send="handleSend" @withdraw="handleWithdraw" />
+          @lock="handleLock" @send="handleSend" @withdraw="handleWithdraw"
+          @refresh="refreshL2Assets" />
       </TabsContent>
     </Tabs>
 
     <!-- Asset Operation Dialog -->
     <AssetOperationDialog v-model:open="showDialog" :title="translatedOperationTitle"
       :description="operationDescription" :amount="operationAmount" :chain="selectedChain" :address="operationAddress"
-      :operation-type="operationType" :max-amount="selectedAsset?.amount" :asset-type="selectedAsset?.type"
+      :operation-type="operationType" :max-amount="operationType === 'send' ? currentSendAsset?.amount : selectedAsset?.amount" :amount-precision="sendPrecision" :asset-type="selectedAsset?.type"
       :asset-ticker="selectedAsset?.label" :asset-key="selectedAsset?.key" @update:amount="operationAmount = $event"
       @update:address="operationAddress = $event" @confirm="handleOperationConfirm" />
     <LockWithExpandConfirmDialog v-if="pendingLockExpand" v-model:open="showLockExpandDialog"
@@ -74,16 +75,18 @@ import RGB11InvoiceDialog from '@/components/wallet/RGB11InvoiceDialog.vue'
 import RGB11SendDialog from '@/components/wallet/RGB11SendDialog.vue'
 import RGB11IssueDialog from '@/components/wallet/RGB11IssueDialog.vue'
 import RGB11ImportDialog from '@/components/wallet/RGB11ImportDialog.vue'
-import { useChannelStore, useL1Store, useL2Store, useTranscendingModeStore } from '@/store'
+import { useChannelStore, useL1Store, useL2Store, useTranscendingModeStore, useGlobalStore } from '@/store'
 import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store'
 import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
+import { validateSendDispatch } from '@/utils/sendAmount'
 import { useAssetActions } from '@/composables/useAssetActions'
 import { useQueryClient } from '@tanstack/vue-query'
 
 const queryClient = useQueryClient()
 const walletStore = useWalletStore()
+const globalStore = useGlobalStore()
 const { toast } = useToast()
 const channelStore = useChannelStore()
 const transcendingModeStore = useTranscendingModeStore()
@@ -218,6 +221,11 @@ const operationAmount = ref('')
 const operationAddress = ref('')
 const operationType = ref<OperationType | undefined>()
 const selectedAsset = ref<any>(null)
+const sendPrecision = ref<number | undefined>()
+const openedSendScope = ref('')
+const sendScope = () => [globalStore.env, walletStore.rootAccountId, walletStore.walletId, walletStore.accountIndex, walletStore.network, selectedChain.value].join('|')
+const currentSendAsset = computed(() => filteredAssets.value.find((item: any) => item.key === selectedAsset.value?.key))
+
 const showLockExpandDialog = ref(false)
 const pendingLockExpand = ref<null | {
   chanid: string
@@ -288,7 +296,7 @@ watch(selectedChain, () => {
   selectedAssetType.value = 'ORDX' // 重置为初始值
 })
 
-const handleSend = (asset: any) => {
+const handleSend = async (asset: any) => {
   if (asset?.protocol === 'rgb11') {
     rgb11SendAsset.value = asset
     showRGB11Send.value = true
@@ -298,7 +306,20 @@ const handleSend = (asset: any) => {
   operationType.value = 'send'
   selectedAsset.value = asset
   operationAmount.value = ''
+  openedSendScope.value = sendScope()
+  sendPrecision.value = asset.protocol === '' || asset.key === '::' ? 0 : undefined
   showDialog.value = true
+  if (sendPrecision.value === undefined) {
+    const scope = openedSendScope.value
+    const [err, result] = await walletManager.getTickerInfo(asset.key)
+    if (err || sendScope() !== scope || selectedAsset.value?.key !== asset.key) return
+    try {
+      const ticker = JSON.parse(result.ticker)
+      // Successful SDK ticker JSON omits divisibility when it is exactly zero.
+      const precision = ticker.divisibility ?? 0
+      if (Number.isInteger(precision) && precision >= 0 && precision <= 64) sendPrecision.value = precision
+    } catch { /* Unknown precision keeps sending disabled. */ }
+  }
 }
 
 const handleRGB11Receive = (asset: any) => {
@@ -502,6 +523,10 @@ const handleOperationConfirm = async () => {
     return
   }
 
+  if (operationType.value === 'send') {
+    const error = validateSendDispatch(operationAmount.value, sendPrecision.value, currentSendAsset.value?.amount, openedSendScope.value, sendScope())
+    if (error) { handleError(t(`assetOperationDialog.amountErrors.${error}`)); return }
+  }
   const asset = selectedAsset.value
   const amount = operationAmount.value
   const chanid = channel.value?.channelId

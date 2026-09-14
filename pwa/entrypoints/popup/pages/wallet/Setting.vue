@@ -47,6 +47,7 @@
             class="h-3.5 w-3.5"
             :class="{ 'animate-spin': isChecking || isUpdating }"
           />
+          {{ isForceUpdate ? $t('setting.versionWriteBlocked') : '' }}
           {{ isChecking ? $t('setting.checking') : (isUpdating ? $t('setting.updating') : $t('setting.checkAndUpdate')) }}
         </Button>
       </div>
@@ -75,7 +76,7 @@ import { useAppVersion } from '@/composables/useAppVersion'
 import sat20 from '@/utils/sat20'
 
 const transcendingModeStore = useTranscendingModeStore()
-const { isChecking, isUpdating, checkAndUpdate, localVersion, localBuildId } = useAppVersion()
+const { isChecking, isUpdating, isForceUpdate, checkAndUpdate, localVersion, localBuildId } = useAppVersion()
 const versionDisplay = computed(() => localBuildId.value ? `${localVersion.value}+${localBuildId.value}` : localVersion.value)
 const sat20WasmVersion = ref('-')
 

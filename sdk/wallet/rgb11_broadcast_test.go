@@ -1,17 +1,21 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
 
 type controlledRGB11BroadcastEvidence struct {
-	*expiredCancelEvidence
+	rgb11wallet.BitcoinEvidenceProvider
 	mu        sync.Mutex
 	txID      string
 	err       error
@@ -71,8 +75,8 @@ func setRGB11BroadcastTestStore(t testing.TB, manager *Manager, db indexer.KVDB)
 func TestRGB11BroadcastUnknownPersistsIrreversibleIntent(t *testing.T) {
 	fixture := newExpiredCancelFixture(t, 1)
 	evidence := &controlledRGB11BroadcastEvidence{
-		expiredCancelEvidence: fixture.evidence,
-		err:                   context.DeadlineExceeded,
+		BitcoinEvidenceProvider: fixture.evidence,
+		err:                     context.DeadlineExceeded,
 	}
 	runtime := fixture.manager.rgbManager
 	runtime.evidence = evidence
@@ -104,23 +108,36 @@ func TestRGB11BroadcastUnknownPersistsIrreversibleIntent(t *testing.T) {
 }
 
 func TestRGB11BroadcastPersistenceFailureRecoversFromBitcoinEvidence(t *testing.T) {
-	fixture := newExpiredCancelFixture(t, 1)
-	evidence := &controlledRGB11BroadcastEvidence{
-		expiredCancelEvidence: fixture.evidence,
-		txID:                  fixture.witnessTxID,
+	sender, recipient, imported, bitcoinEvidence, rpc := newRGB11GenericSendFixture(t)
+	request, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "witness", TransportMode: "out-of-band", ContractID: imported.ContractID,
+		AmountRaw: "20000", WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	runtime := fixture.manager.rgbManager
+	prepared, err := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
+		Invoice: request.Invoice, FeeRate: 2, MinConfirmations: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := &controlledRGB11BroadcastEvidence{
+		BitcoinEvidenceProvider: bitcoinEvidence,
+		txID:                    prepared.TxID,
+	}
+	runtime := sender.rgbManager
 	runtime.evidence = evidence
 	runtime.scopeStates = nil
-	failingDB := &failNthFlushDB{KVDB: fixture.manager.db, failAt: 2}
-	store := setRGB11BroadcastTestStore(t, fixture.manager, failingDB)
-	pending, err := store.LoadPendingTransfer(fixture.transferIDs[0])
+	failingDB := &failNthFlushDB{KVDB: sender.db, failAt: 2}
+	store := setRGB11BroadcastTestStore(t, sender, failingDB)
+	pending, err := store.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	txID, err := runtime.broadcastRGB11PendingBatch([]*rgb11wallet.PendingTransfer{pending}, nil)
-	if !errors.Is(err, ErrRGB11BroadcastPersistence) || txID != fixture.witnessTxID {
+	if !errors.Is(err, ErrRGB11BroadcastPersistence) || txID != prepared.TxID {
 		t.Fatalf("unexpected persistence result: txid=%s err=%v", txID, err)
 	}
 	if evidence.calls() != 1 {
@@ -130,25 +147,45 @@ func TestRGB11BroadcastPersistenceFailureRecoversFromBitcoinEvidence(t *testing.
 	// Re-open the durable projection view as a restarted process would. The
 	// pre-broadcast intent must have survived even though the final state write
 	// failed after the backend accepted the transaction.
-	stableStore := setRGB11BroadcastTestStore(t, fixture.manager, fixture.manager.db)
-	stored, err := stableStore.LoadPendingTransfer(fixture.transferIDs[0])
+	stableStore := setRGB11BroadcastTestStore(t, sender, sender.db)
+	stored, err := stableStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stored.State.Status != rgb11StatusBroadcastAttempted {
 		t.Fatalf("durable intent status=%s, want %s", stored.State.Status, rgb11StatusBroadcastAttempted)
 	}
-	fixture.evidence.mu.Lock()
-	fixture.evidence.status = &rgb11wallet.BitcoinTxStatus{
-		TxID: fixture.witnessTxID, InMempool: true,
+	tx := wire.NewMsgTx(wire.TxVersion)
+	if err := tx.Deserialize(bytes.NewReader(stored.SignedTx)); err != nil {
+		t.Fatal(err)
 	}
-	fixture.evidence.mu.Unlock()
+	bitcoinEvidence.mu.Lock()
+	bitcoinEvidence.rawTx[prepared.TxID] = append([]byte(nil), stored.SignedTx...)
+	for _, input := range tx.TxIn {
+		outpoint := input.PreviousOutPoint.String()
+		bitcoinEvidence.spendingTx[outpoint] = prepared.TxID
+		delete(bitcoinEvidence.utxos, outpoint)
+		delete(rpc.outputs, outpoint)
+	}
+	for vout, output := range tx.TxOut {
+		outpoint := fmt.Sprintf("%s:%d", prepared.TxID, vout)
+		bitcoinEvidence.utxos[outpoint] = &rgb11wallet.BitcoinUTXO{
+			OutPoint: outpoint, Value: output.Value, PkScript: append([]byte(nil), output.PkScript...),
+		}
+		item := indexer.NewTxOutput(output.Value)
+		item.OutPointStr, item.OutValue.PkScript = outpoint, append([]byte(nil), output.PkScript...)
+		rpc.outputs[outpoint] = item
+	}
+	bitcoinEvidence.mu.Unlock()
+	bitcoinEvidence.setStatus(prepared.TxID, rgb11wallet.BitcoinTxStatus{
+		TxID: prepared.TxID, InMempool: true,
+	})
 	runtime.scopeStates = newRGB11ScopeStateRegistry()
 	result, refreshErr := runtime.RefreshRGB11State(context.Background())
 	if refreshErr != nil {
 		t.Fatalf("reconcile durable broadcast intent: result=%+v err=%v", result, refreshErr)
 	}
-	recovered, err := stableStore.LoadPendingTransfer(fixture.transferIDs[0])
+	recovered, err := stableStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,8 +197,8 @@ func TestRGB11BroadcastPersistenceFailureRecoversFromBitcoinEvidence(t *testing.
 func TestRGB11AddressBroadcastUsesDurableIntent(t *testing.T) {
 	fixture := newExpiredCancelFixture(t, 1)
 	evidence := &controlledRGB11BroadcastEvidence{
-		expiredCancelEvidence: fixture.evidence,
-		err:                   context.DeadlineExceeded,
+		BitcoinEvidenceProvider: fixture.evidence,
+		err:                     context.DeadlineExceeded,
 	}
 	runtime := fixture.manager.rgbManager
 	runtime.evidence = evidence

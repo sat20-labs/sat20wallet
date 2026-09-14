@@ -64,3 +64,63 @@ func TestAmmSellPreservesFeeAdjustedPrecision(t *testing.T) {
 		})
 	}
 }
+
+func TestAmmSwapOutputsFloorAtFinalUnit(t *testing.T) {
+	newRuntime := func() *AmmContractRuntime {
+		manager := &rollbackContractManager{Manager: &Manager{
+			db: newMemoryKVDB(), cfg: &common.Config{Mode: "test"},
+		}}
+		runtime := NewAmmContractRuntime(manager)
+		runtime.Status = CONTRACT_STATUS_READY
+		runtime.ChannelAddr = "amm-final-unit"
+		runtime.Divisibility = 0
+		runtime.dealDivisibility = 0
+		runtime.Contract.(*AmmContract).AssetName = swire.AssetName{
+			Protocol: "ordx", Type: "f", Ticker: "qqcom",
+		}
+		runtime.AssetAmtInPool = indexer.NewDecimal(1231, 0)
+		runtime.SatsValueInPool = 4060
+		runtime.k = indexer.DecimalMul(indexer.NewDecimal(4060, 2), runtime.AssetAmtInPool)
+		return runtime
+	}
+
+	t.Run("buy", func(t *testing.T) {
+		runtime := newRuntime()
+		item := &SwapHistoryItem{
+			OrderType: ORDERTYPE_BUY, InUtxo: "buy-final-unit:0", Address: "buyer",
+			InValue: 10, RemainingValue: 10,
+			InAmt: indexer.NewDefaultDecimal(0), RemainingAmt: indexer.NewDefaultDecimal(0),
+			ExpectedAmt: indexer.NewDefaultDecimal(0), UnitPrice: indexer.NewDefaultDecimal(0),
+		}
+		runtime.addItem(item)
+		if !runtime.swap(runtime.AssetAmtInPool.Clone(), runtime.SatsValueInPool) {
+			t.Fatal("buy was refunded instead of dealt")
+		}
+		if item.OutAmt.String() != "3" {
+			t.Fatalf("buy output=%s, want 3", item.OutAmt)
+		}
+		if runtime.AssetAmtInPool.String() != "1228" || runtime.SatsValueInPool != 4070 {
+			t.Fatalf("unexpected buy pool=%s/%d", runtime.AssetAmtInPool, runtime.SatsValueInPool)
+		}
+	})
+
+	t.Run("sell", func(t *testing.T) {
+		runtime := newRuntime()
+		amount := indexer.NewDecimal(79, 0)
+		item := &SwapHistoryItem{
+			OrderType: ORDERTYPE_SELL, InUtxo: "sell-final-unit:0", Address: "seller",
+			InValue: 10, InAmt: amount.Clone(), RemainingAmt: amount.Clone(),
+			ExpectedAmt: indexer.NewDefaultDecimal(0), UnitPrice: indexer.NewDefaultDecimal(0),
+		}
+		runtime.addItem(item)
+		if !runtime.swap(runtime.AssetAmtInPool.Clone(), runtime.SatsValueInPool) {
+			t.Fatal("sell was refunded instead of dealt")
+		}
+		if item.OutValue != 242 {
+			t.Fatalf("sell output=%d, want 242", item.OutValue)
+		}
+		if runtime.AssetAmtInPool.String() != "1310" || runtime.SatsValueInPool != 3818 {
+			t.Fatalf("unexpected sell pool=%s/%d", runtime.AssetAmtInPool, runtime.SatsValueInPool)
+		}
+	})
+}

@@ -73,11 +73,11 @@
             </div>
             <div class="flex justify-between text-sm">
               <span class="text-muted-foreground">Channel capacity:</span>
-              <span class="font-medium">{{ feePreview?.channelCapacity ?? '-' }} sats</span>
+              <span class="font-medium">{{ channelCapacityDisplay }}</span>
             </div>
             <div class="flex justify-between text-sm">
               <span class="text-muted-foreground">Initially spendable by you:</span>
-              <span class="font-medium">{{ initialSpendableSats ?? '-' }} sats</span>
+              <span class="font-medium">{{ initialSpendableDisplay }}</span>
             </div>
             <div class="flex justify-between text-sm">
               <span class="text-muted-foreground">Service fee paid now:</span>
@@ -172,10 +172,23 @@ const channelAmt = ref('')
 const showConfirmDialog = ref(false)
 const confirmAmount = ref(0)
 const feePreview = ref<ChannelOpenFeeInfo | null>(null)
+const amountBelowMinimum = computed(() => Boolean(
+  feePreview.value && !feePreview.value.valid &&
+  /capacity must be at least/i.test(feePreview.value.validationError || '')
+))
 const initialSpendableSats = computed(() => {
   const preview = feePreview.value
-  if (!preview || preview.channelCapacity == null) return null
+  if (!preview || amountBelowMinimum.value || preview.channelCapacity == null) return null
   return Math.max(0, preview.channelCapacity - preview.openFee.commitmentFee - preview.openFee.minReserveSats)
+})
+const channelCapacityDisplay = computed(() => {
+  if (!feePreview.value) return '-'
+  if (amountBelowMinimum.value) return '— (amount below minimum)'
+  return `${feePreview.value.channelCapacity} sats`
+})
+const initialSpendableDisplay = computed(() => {
+  if (amountBelowMinimum.value) return '— (amount below minimum)'
+  return initialSpendableSats.value == null ? '-' : `${initialSpendableSats.value} sats`
 })
 
 // 通道状态进度

@@ -1,10 +1,21 @@
 {
+  "startup": {
+    "title": "SAT20 Wallet",
+    "loading": "Starting the wallet. Wallet data and balances are not ready yet.",
+    "slow": "Startup is taking longer than expected. A required request may be unavailable. Check your connection and retry when ready.",
+    "error": "The wallet could not start. Required resources or services may be unavailable. Check your connection and retry. Your saved wallet data has not been cleared.",
+    "retry": "Reload and retry"
+  },
   "index": {
     "title": "SAT20 Wallet",
     "subtitle": "Secure, simple, and powerful Bitcoin wallet",
     "createWallet": "Create New Wallet",
     "importWallet": "Import Existing Wallet",
     "agreement": "By continuing, you agree to our Terms of Service and Privacy Policy"
+  },
+  "navigation": {
+    "home": "Home",
+    "dapp": "DApp"
   },
   "common": {
     "error": "Error",
@@ -63,6 +74,21 @@
       "deploy": "Deploy RGB11 Asset"
     },
     "txConfirm": {
+      "simulatedGasLimit": "Simulation gas limit",
+      "wallet": "Wallet",
+      "account": "Account index",
+      "sourceAddress": "Source address",
+      "calldata": "Calldata",
+      "arguments": "Arguments",
+      "rawArguments": "Raw calldata; arguments not decoded",
+      "simulatedGasUsed": "Simulated gas used (estimate)",
+      "gasFundingRequired": "GAS funding required",
+      "feeScope": "Fee scope",
+      "gasFundingExplanation": "Contract GAS asset amount, including prepaid execution/result reserves. This is not the final execution fee and excludes business funding shown above.",
+      "contextChanged": "Wallet, account, network or call changed. Review the call again.",
+      "gasFundingUnavailable": "Unable to quote GAS funding. Review the call again.",
+      "operatingGas": "AUTOPAY operating GAS",
+      "autopayOperatingGas": "Recurring trigger/result GAS is paid from the contract operating reserve, not delegate principal. The previously observed 200 GAS is not added to your business funding.",
       "title": "Confirm Transaction",
       "description": "This operation will build and sign an on-chain transaction.",
       "purpose": "Purpose",
@@ -496,6 +522,9 @@
     "savedButton": "I've saved my recovery phrase"
   },
   "setting": {
+    "versionWriteBlocked": "Update required. New wallet operations are paused; reading and unlocking remain available.",
+    "updateWaitingOperations": "Preparing update; waiting for dispatched operations to finish.",
+
     "title": "System Settings",
     "version": "Version",
     "checkUpdate": "Check for Updates",
@@ -552,6 +581,13 @@
     "error": "Error loading transaction details. Please check the console."
   },
   "splitAsset": {
+    "review": "Review split",
+    "sameDestination": "Each output sends the same amount to the destination below. This does not configure different recipients.",
+    "amountPerOutput": "Requested amount per output",
+    "requestedTotal": "Requested output total (excluding fees)",
+    "feeUnavailable": "The network fee and total spend have not been quoted. The amounts above are requested outputs; the current send interface may reduce them if the balance is insufficient.",
+    "invalidFeeRate": "A positive whole-number fee rate is required.",
+    "invalidAddress": "Invalid Bitcoin address for the selected network.",
     "back": "Back",
     "confirmTitle": "Confirm Asset Split",
     "description": "Split your assets into smaller parts.",
@@ -609,7 +645,8 @@
     "sendPending": "Send unavailable",
     "receive": "Receive",
     "splicingIn": "Splicing in",
-    "deposit": "Deposit"
+    "deposit": "Deposit",
+    "noAssets": "No {type} assets for this wallet account on Bitcoin ({network})."
   },
   "l2AssetsTabs": {
     "assetType": {
@@ -620,7 +657,8 @@
     "viewTradeHistory": "View Trade History",
     "send": "Send",
     "lock": "Lock",
-    "withdraw": "Withdraw"
+    "withdraw": "Withdraw",
+    "noAssets": "No {type} assets for this wallet account on SatoshiNet ({network})."
   },
   "btcFeeSelect": {
     "selectFeeRate": "Select Fee Rate",
@@ -846,7 +884,7 @@
 	"addressAckPending": "The consignment was delivered. The transaction will be broadcast only after the recipient persists and acknowledges it.",
     "invoice": "Recipient Invoice",
     "batchHint": "For batch send, paste one witness invoice per line. All invoices must use the same asset and every recipient must ACK before broadcast.",
-    "outOfBandAck": "This is an official out-of-band transfer. Deliver the consignment and confirm the external wallet accepted it before broadcasting; no ACK is synthesized.",
+    "outOfBandAck": "Obtain each receiver’s pre-broadcast validation summary through your external channel. Field matching does not authenticate the sender of that message.",
     "acceptedOutOfBand": "Consignment accepted. Notify the sender through the external channel so it can record the out-of-band ACK.",
     "prepare": "Build and Sign",
     "preparing": "Preparing...",
@@ -883,7 +921,7 @@
     "rejectReason": "Rejection reason",
     "acceptFailed": "RGB11 consignment validation failed",
     "invalidPackage": "Invalid RGB11 transfer package",
-    "broadcast": "Verify ACK and Broadcast",
+    "broadcast": "Confirm receiver validation and broadcast",
     "broadcasting": "Broadcasting...",
     "broadcasted": "Transaction broadcast: {txid}",
     "broadcastFailed": "Failed to broadcast RGB11 transaction",
@@ -976,9 +1014,44 @@
     "taskCancelFailed": "Failed to cancel the task",
     "taskCancelConfirm": "Only an unbroadcast out-of-band task can be cancelled safely. Cancel it and release its UTXO reservations?",
     "importFileTooLarge": "The RGB11 contract file exceeds the {size} limit and was not read.",
-    "accountManaged": "Required RGB recovery data is synchronized by account management"
+    "accountManaged": "Required RGB recovery data is synchronized by account management",
+    "selectArmoredFile": "Select armored consignment (.asc / text)",
+    "reselectOriginal": "Request restored. Reselect the original armored consignment to continue; its SHA-256 must match.",
+    "prepareReceive": "Validate before broadcast",
+    "prebroadcastOnly": "Pre-broadcast validation result. No spendable balance yet. This is a manually exchanged summary, not a signed or standard RGB ACK.",
+    "copySummary": "Copy validation summary",
+    "acceptAfterBroadcast": "Complete receive after broadcast",
+    "wrongOriginal": "This consignment differs from the original validated input. Select the original file.",
+    "scopeChanged": "Wallet context changed. Return to the original wallet and request to continue.",
+    "persistenceFailed": "Unable to save or restore this receive request. Keep this dialog open and preserve the invoice and request handle.",
+    "summaryMismatch": "Validation summary does not match this transfer, recipient, amount or consignment.",
+    "acceptRetry": "Receive completion failed. Keep this request; if the witness is not visible yet, retry after broadcast becomes visible.",
+    "downloadArmored": "Download armored consignment for PWA",
+    "recipientSummary": "Receiver {number}: pre-broadcast validation summary",
+    "matchSummary": "Match summary fields",
+    "summaryMatched": "Fields match this recipient. Confirm the external message before broadcasting.",
+    "manualConfirmation": "I checked with this recipient through our external channel and confirm they validated this exact transfer before broadcast.",
+    "requestExpired": "This receive request has expired. Its original handle is retained; no replacement invoice was generated.",
+    "checkRequestState": "Check receive request status",
+    "sdkRequestState": "SDK receive status: {status}. Pending does not mean spendable.",
+    "newRequestLocalOnly": "Keep the old request metadata and start a new PWA form. This does not cancel the old SDK request, unlock its funds or affect an in-flight transfer.",
+    "startNewRequest": "Keep old record and start a new request"
   },
   "assetOperationDialog": {
+    "reviewChain": "Chain",
+    "reviewNetwork": "Network",
+    "reviewFeeRate": "Fee rate",
+    "reviewNetworkFee": "Network fee",
+    "reviewTotalSpend": "Total spend",
+    "amountErrors": {
+      "required": "Enter an amount.",
+      "decimal": "Use decimal digits without signs or scientific notation.",
+      "precision": "The amount exceeds this asset’s decimal precision.",
+      "positive": "The amount must be greater than zero.",
+      "balance": "The amount exceeds the current balance.",
+      "unavailable": "The exact balance or asset precision is unavailable.",
+      "scope": "The wallet, account or network changed. Open Send again."
+    },
     "normalSend": "Normal",
     "advancedSend": "Advanced",
     "amount": "Amount",
@@ -1052,6 +1125,16 @@
     "lightning": "Lightning"
   },
   "walletManager": {
+    "importPendingHint": "An import is in progress. Do not submit it again. Closing a dialog does not cancel a wallet operation.",
+    "importStages": {
+      "authorizing": "Waiting for password authorization…",
+      "authorizationCancelled": "Authorization was cancelled or the wallet session changed. Import was not started by this request.",
+      "validating": "Validating the recovery phrase…",
+      "recovering": "Checking root account recovery…",
+      "importing": "Starting the wallet import and waiting for its result…",
+      "catalog": "Import returned. Reading and updating the local wallet catalog…",
+      "switching": "Verifying the imported wallet and account…"
+    },
     "title": "Wallet Manager",
     "switch": "Switch",
     "switching": "Switching...",
@@ -1147,6 +1230,10 @@
     "missingData": "Missing required data for asset transfer."
   },
   "accountManagement": {
+    "fundingSourceWallet": "Account-management root wallet",
+    "fundingSourceAccount": "Account 1 (index 0)",
+    "fundingPrincipal": "Your funding principal",
+    "fundingOperatingGas": "The additional 200 GAS for automatic settlement is paid by the AUTOPAY contract operating reserve. It is not part of your funding principal or your expenditure. The funding transaction's own network/invocation fees are separate. The funding period also requires sufficient contract operating reserves.",
     "autopayPurpose": "Enable persistent AUTOPAY storage for account recovery data",
     "recordCount": "Record limit",
     "perBlock": "Per-block fee",

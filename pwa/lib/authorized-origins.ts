@@ -39,6 +39,36 @@ const writePersistentGrants = async (grants: DappGrant[]): Promise<void> => {
 const grantKey = (grant: Pick<DappGrant, 'origin' | 'network' | 'walletFingerprint' | 'accountIndex' | 'identityGeneration'>) =>
   `${grant.origin}\0${grant.network}\0${grant.walletFingerprint}\0${grant.accountIndex}\0${grant.identityGeneration}`
 
+export interface DappGrantTarget {
+  origin: string
+  scope: DappGrantScope
+}
+
+// Called synchronously from the identity transition listener. Copy session
+// grants and wallet state before the transition can clear or replace them.
+export const snapshotCurrentDappGrantTargets = (identityGeneration: number, now = Date.now()): Promise<DappGrantTarget[]> => {
+  const state = walletStorage.getState()
+  const sessionSnapshot = [...sessionGrants.values()]
+  if (state.locked || !state.walletId || !state.pubkey) return Promise.resolve([])
+
+  const network = state.network
+  const accountIndex = Number(state.accountIndex)
+  const persistentSnapshot = readPersistentGrants()
+  return Promise.all([fingerprint(state.walletId, state.pubkey), persistentSnapshot]).then(([walletFingerprint, persistent]) => {
+    const scope = { network, walletFingerprint, accountIndex, identityGeneration }
+    const origins = new Set(
+      [...sessionSnapshot, ...persistent]
+        .filter((grant) => grant.network === scope.network &&
+          grant.walletFingerprint === scope.walletFingerprint &&
+          grant.accountIndex === scope.accountIndex &&
+          grant.identityGeneration === scope.identityGeneration &&
+          (grant.expiresAt === undefined || grant.expiresAt > now))
+        .map((grant) => grant.origin)
+    )
+    return [...origins].map((origin) => ({ origin, scope }))
+  })
+}
+
 export const getCurrentDappScope = async (): Promise<DappGrantScope> => {
 	const identityGeneration = assertWalletIdentityReady()
   await walletStorage.initializeState()

@@ -238,23 +238,19 @@ export const useWalletStore = defineStore('wallet', () => {
 	if (rootWalletErr) throw rootWalletErr
 	const [rootAccountErr] = await walletManager.switchAccount(0)
 	if (rootAccountErr) throw rootAccountErr
-    const deadline = Date.now() + 60_000
-    for (;;) {
-      const [recoveryErr, recovery] = await walletManager.recoverAccountManagementFromCurrentWallet(
-		password,
-      )
-      if (recoveryErr || !recovery) {
-        throw recoveryErr || new Error('Root account discovery failed after network switch')
-      }
-	  if (!recovery.accountId || recovery.accountId !== expectedRootAccountId) {
-		throw new Error('Target network recovery returned a different root account')
-	  }
-      if (recovery.status !== 'pending') return recovery
-      if (Date.now() >= deadline) {
-        throw new Error('Target network account synchronization timed out')
-      }
-      await new Promise(resolve => setTimeout(resolve, 250))
-    }
+    const [recoveryErr, recovery] = await walletManager.recoverAccountManagementFromCurrentWallet(
+	  password,
+    )
+    if (recoveryErr || !recovery) {
+	  throw recoveryErr || new Error('Root account discovery failed after network switch')
+	}
+	if (!recovery.accountId || recovery.accountId !== expectedRootAccountId) {
+	  throw new Error('Target network recovery returned a different root account')
+	}
+    // Pending means the SDK has registered the deterministic DKVS paths and
+    // scheduled background synchronization. It is valid target-network state,
+    // not a reason to hold the wallet switch behind an HTTP retry window.
+    return recovery
   }
 
   const changeNetwork = async (value: Network, password: string) => {
@@ -556,10 +552,12 @@ export const useWalletStore = defineStore('wallet', () => {
   const importWallet = async (
 		mnemonic: string,
 		password: string,
+    onProgress?: (stage: 'validating' | 'recovering' | 'importing' | 'catalog') => void,
   ): Promise<[Error | undefined, MnemonicValidation | undefined]> => {
 		// The password protects local wallet storage; it is not a BIP39
 		// passphrase. Identity derivation must match ImportWallet, which uses an
 		// empty BIP39 passphrase.
+    onProgress?.('validating')
 		const [validationError, mnemonicIdentity] = await walletManager.validateMnemonic(mnemonic, '')
 	if (validationError || !mnemonicIdentity) {
 	  return [validationError || new Error('Mnemonic validation failed'), undefined]
@@ -571,6 +569,7 @@ export const useWalletStore = defineStore('wallet', () => {
 		let discoveredRootAccountId = ''
 		const shouldDiscoverRoot = !rootAccountId.value || !hasWallet.value || accountRecovery.value?.status === 'pending'
 		if (shouldDiscoverRoot) {
+      onProgress?.('recovering')
 		  const [recoveryError, recovery] = await walletManager.recoverAccountManagementFromRootMnemonic(
 			processedMnemonic,
 			password,
@@ -606,12 +605,14 @@ export const useWalletStore = defineStore('wallet', () => {
 
 		let err: Error | undefined
 		if (!recovered) {
+      onProgress?.('importing')
 		  ;[err, res] = await walletManager.importWallet(processedMnemonic, password)
 		}
     if (err || !res) {
       console.error(err)
       return [err || new Error('Wallet import failed'), undefined]
     }
+    onProgress?.('catalog')
     const { walletId } = res
 		if (discoveredRecovery) {
 		  await walletStorage.batchUpdate({

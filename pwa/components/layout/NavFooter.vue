@@ -5,10 +5,12 @@
         v-for="item in navItems"
         :key="item.to"
         type="button"
+        :aria-label="$t(item.label)"
+        :title="$t(item.label)"
         class="inline-flex h-10 w-10 items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
         @click.prevent.stop="setActiveItem(item)"
       >
-        <Icon :icon="item.icon" class="text-lg text-muted-foreground" />
+        <Icon :icon="item.icon" aria-hidden="true" class="text-lg text-muted-foreground" />
       </button>
     </div>
   </nav>
@@ -31,16 +33,16 @@ interface NavItem {
 const router = useRouter();
 
 const navItems: NavItem[] = [
-  { icon: 'lucide:house', label: 'Home', to: '/wallet' },
+  { icon: 'lucide:house', label: 'navigation.home', to: '/wallet' },
   {
     icon: 'lucide:globe',
-    label: 'DApp',
+    label: 'navigation.dapp',
     action: () => {
       router.push('/wallet/dapp');
     }
   },
-  { icon: 'lucide:wrench', label: 'Tools', to: '/wallet/tools' },
-  { icon: 'lucide:settings', label: 'Setting', to: '/wallet/setting' },
+  { icon: 'lucide:wrench', label: 'tools.title', to: '/wallet/tools' },
+  { icon: 'lucide:settings', label: 'setting.title', to: '/wallet/setting' },
 ];
 
 const activeItem = ref(navItems[0]);

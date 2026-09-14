@@ -165,8 +165,10 @@
     </Dialog>
 
     <!-- Import Wallet Dialog -->
-    <Dialog :open="isImportWalletDialogOpen" @update:open="isImportWalletDialogOpen = $event">
-      <DialogContent class="sm:max-w-[425px]">
+    <Dialog :open="isImportWalletDialogOpen" @update:open="value => { if (!isImporting) isImportWalletDialogOpen = value }">
+      <DialogContent class="sm:max-w-[425px]"
+        @escape-key-down="event => { if (isImporting) event.preventDefault() }"
+        @interact-outside="event => { if (isImporting) event.preventDefault() }">
         <DialogHeader>
           <DialogTitle>{{ $t('walletManager.importWallet') }}</DialogTitle>
           <DialogDescription>
@@ -178,15 +180,20 @@
           <div class="space-y-4">
             <div class="space-y-2">
               <Label for="mnemonic">{{ $t('walletManager.recoveryPhrase') }}</Label>
-              <Textarea id="mnemonic" v-model="importMnemonic" :placeholder="$t('walletManager.enterRecoveryPhrase')"
+              <Textarea id="mnemonic" v-model="importMnemonic" :disabled="isImporting" :placeholder="$t('walletManager.enterRecoveryPhrase')"
                 rows="3" />
               <p class="text-xs text-muted-foreground">
                 {{ $t('walletManager.recoveryPhraseHint') }}
               </p>
             </div>
           </div>
+          <p v-if="importStage" role="status" class="text-sm text-muted-foreground">
+            {{ $t(`walletManager.importStages.${importStage}`) }}
+          </p>
+          <p v-if="isImporting" class="text-xs text-muted-foreground">{{ $t('walletManager.importPendingHint') }}</p>
+          <p v-if="importError" role="alert" class="text-sm text-destructive">{{ importError }}</p>
           <DialogFooter>
-            <Button variant="secondary" type="button" @click="isImportWalletDialogOpen = false" class="h-11 mt-2">
+            <Button variant="secondary" type="button" :disabled="isImporting" @click="isImportWalletDialogOpen = false" class="h-11 mt-2">
               {{ $t('walletManager.cancel') }}
             </Button>
             <Button type="submit" :disabled="isImporting" class="h-11 mt-2">
@@ -329,6 +336,7 @@ import { WalletData } from '@/types'
 import { Message } from '@/types/message'
 import { sendAccountsChangedEvent } from '@/lib/utils'
 import walletManager from '@/utils/sat20'
+import { assertWalletWriteAllowed } from '@/utils/pwaVersionPolicy'
 import { hideAddress } from '@/utils'
 import { useDebounceFn } from '@vueuse/core'
 import { beginMnemonicView } from '@/lib/sensitive-session'
@@ -351,6 +359,8 @@ const isAvatarDialogOpen = ref(false)
 const isShowMnemonicDialogOpen = ref(false)
 const isCreating = ref(false)
 const isImporting = ref(false)
+const importStage = ref('')
+const importError = ref('')
 const isDeleting = ref(false)
 const isEditingName = ref(false)
 const isVerifyingMnemonic = ref(false)
@@ -495,6 +505,9 @@ const deleteWallet = async () => {
 
 
 const showImportWalletDialog = () => {
+  if (isImporting.value) return
+  importStage.value = ''
+  importError.value = ''
   importMnemonic.value = ''
   importPassword.value = ''
   importConfirmPassword.value = ''
@@ -540,20 +553,35 @@ const createWallet = async () => {
 const importWallet = async () => {
   if (isImporting.value) return
 
+  let mnemonic = importMnemonic.value
+  importError.value = ''
   try {
 
-    if (!importMnemonic.value) {
+    if (!mnemonic) {
       throw new Error('Please enter your recovery phrase')
     }
+    assertWalletWriteAllowed()
     isImporting.value = true
-    const outcome = await withWalletPassword(password => walletStore.importWallet(importMnemonic.value, password))
-    if (outcome === undefined) return
+    importStage.value = 'authorizing'
+    const outcome = await withWalletPassword(password => {
+      assertWalletWriteAllowed()
+      return walletStore.importWallet(mnemonic, password, stage => {
+        importStage.value = stage
+      })
+    })
+    if (outcome === undefined) {
+      importStage.value = 'authorizationCancelled'
+      return
+    }
     const [err] = outcome
     if (err) {
       throw err
     }
+    importStage.value = 'switching'
     await walletStore.switchWallet(walletStore.walletId)
 
+    importMnemonic.value = ''
+    importStage.value = ''
     isImportWalletDialogOpen.value = false
     toast({
       title: 'Success',
@@ -565,12 +593,14 @@ const importWallet = async () => {
     }, 300)
     sendAccountsChangedEvent(wallets.value)
   } catch (error: any) {
+    importError.value = error.message || 'Wallet import failed'
     toast({
       variant: 'destructive',
       title: 'Error',
       description: error.message
     })
   } finally {
+    mnemonic = ''
     isImporting.value = false
   }
 }

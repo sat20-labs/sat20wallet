@@ -533,9 +533,11 @@ func TestCommitAccountManagedStateSelectsRootWhenCurrentWalletIsDeleted(t *testi
 	rootID, childID := rootWallet.GetId(), childWallet.GetId()
 	rootFingerprint, childFingerprint := walletFingerprint(rootWallet), walletFingerprint(childWallet)
 	profile := &accountManagementProfile{AccountID: "test-account", RootFingerprint: rootFingerprint}
+	database := newMemoryKVDB()
 	manager := &Manager{
-		db: newMemoryKVDB(), wallet: childWallet,
-		status: &Status{CurrentWallet: childID, CurrentAccount: 0},
+		db: database, wallet: childWallet,
+		status:       &Status{CurrentWallet: childID, CurrentAccount: 0},
+		utxoLockerL1: NewUtxoLocker(database, nil, L1_NETWORK_BITCOIN),
 		walletInfoMap: map[int64]*WalletInfo{
 			rootID: {
 				WalletInDB: WalletInDB{Id: rootID, Accounts: 1, Type: WALLET_TYPE_MNEMONIC,
@@ -550,6 +552,11 @@ func TestCommitAccountManagedStateSelectsRootWhenCurrentWalletIsDeleted(t *testi
 		},
 		accountProfile: profile,
 	}
+	rgbManager, err := newRGB11Manager(manager, database, manager.utxoLockerL1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.rgbManager = rgbManager
 	snapshot := &accountManagementSyncSnapshot{
 		profile: *profile,
 		wallets: map[string]account.ManagedWallet{
@@ -565,7 +572,7 @@ func TestCommitAccountManagedStateSelectsRootWhenCurrentWalletIsDeleted(t *testi
 		},
 	}
 
-	_, _, err := manager.commitAccountManagedStateForSync(state, snapshot, []byte("state"), nil)
+	_, _, err = manager.commitAccountManagedStateForSync(state, snapshot, []byte("state"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,8 +4,8 @@
     <span class= "text-zinc-400 text-base">{{ $t('splitAsset.description') }}</span>
   </div>
   <div>
-    <form @submit="onSubmit">
-      <div class="space-y-1">
+    <form v-if="!review" @submit="onSubmit">
+      <fieldset :disabled="loading || validating" class="space-y-1">
         <!-- Asset Name (Hidden) -->
         <FormField v-slot="{ componentField }" name="assetName">
           <FormItem class="hidden">
@@ -87,29 +87,53 @@
         </FormField>
         <!-- Error Message -->
         <p v-if="errorMessage" class="text-sm text-destructive">{{ errorMessage }}</p>
-      </div>
+      </fieldset>
 
       <!-- Submit Button -->
       <div class="mt-6">
         <Button
           class="w-full h-11 mb-2"
           :loading="loading"
-          :disabled="!form.values.amt || loading"
+          :disabled="!form.values.amt || loading || validating"
           type="submit"
         >
-          {{ $t('assetOperationDialog.confirm') }}
+          {{ $t('splitAsset.review') }}
         </Button>
       </div>
     </form>
+    <section v-else class="space-y-3" aria-live="polite">
+      <h3 class="font-medium">{{ $t('splitAsset.confirmTitle') }}</h3>
+      <p class="text-sm text-muted-foreground">{{ $t('splitAsset.sameDestination') }}</p>
+      <dl class="space-y-2 rounded border border-border p-3 text-sm">
+        <div><dt>{{ $t('tools.txConfirm.wallet') }}</dt><dd class="break-all">{{ review.wallet }}</dd></div>
+        <div><dt>{{ $t('tools.txConfirm.account') }}</dt><dd>{{ review.accountIndex }}</dd></div>
+        <div><dt>{{ $t('tools.txConfirm.sourceAddress') }}</dt><dd class="break-all">{{ review.sourceAddress }}</dd></div>
+        <div><dt>{{ $t('tools.txConfirm.network') }}</dt><dd>Bitcoin / {{ review.network }}</dd></div>
+        <div><dt>{{ $t('splitAsset.assetKey') }}</dt><dd>{{ review.assetName === '::' ? 'BTC (sats)' : review.assetName }}</dd></div>
+        <div><dt>{{ $t('splitAsset.amountPerOutput') }}</dt><dd>{{ review.amt }}{{ review.assetName === '::' ? ' sats' : '' }}</dd></div>
+        <div><dt>{{ $t('splitAsset.repeat') }}</dt><dd>{{ review.n }}</dd></div>
+        <div><dt>{{ $t('splitAsset.requestedTotal') }}</dt><dd>{{ review.total }}{{ review.assetName === '::' ? ' sats' : '' }}</dd></div>
+        <div><dt>{{ $t('assetOperationDialog.address') }}</dt><dd class="break-all">{{ review.destAddr }}</dd></div>
+        <div><dt>{{ $t('tools.txConfirm.feeRate') }}</dt><dd>{{ review.feeRate }} sats/vB</dd></div>
+      </dl>
+      <p class="text-sm text-muted-foreground">{{ $t('splitAsset.feeUnavailable') }}</p>
+      <p v-if="errorMessage" role="alert" class="text-sm text-destructive">{{ errorMessage }}</p>
+      <div class="grid grid-cols-2 gap-2">
+        <Button variant="outline" :disabled="loading" @click="cancelReview">{{ $t('common.cancel') }}</Button>
+        <Button :loading="loading" :disabled="loading" @click="confirmSplit">{{ $t('common.confirm') }}</Button>
+      </div>
+    </section>
   </div>
 </template>
 
 <script lang="ts" setup>
-import { ref, onMounted, reactive, computed, watch } from 'vue';
+import { ref, onBeforeUnmount, reactive, computed, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
-import { useWalletStore } from '@/store';
-import { useL2Assets } from '@/composables/hooks/useL2Assets';
+import { useWalletStore, useGlobalStore } from '@/store';
+import { useL1Assets } from '@/composables/hooks/useL1Assets';
+import { assertWalletIdentityReady, subscribeWalletIdentity } from '@/lib/identity-boundary';
 import { useToast } from '@/components/ui/toast-new';
 import walletManager from '@/utils/sat20';
 import { Button } from '@/components/ui/button';
@@ -135,8 +159,11 @@ const loading = ref(false);
 const errorMessage = ref<string | null>(null);
 
 // Store and Hooks
-const { address } = storeToRefs(useWalletStore());
-const { refreshL2Assets } = useL2Assets();
+const walletStore = useWalletStore();
+const globalStore = useGlobalStore();
+const { address } = storeToRefs(walletStore);
+const { refreshL1Assets } = useL1Assets();
+const { t } = useI18n();
 const balance = ref({
   availableAmt: 0,
   lockedAmt: 0,
@@ -147,7 +174,7 @@ const { toast } = useToast();
 const splitSchema = z.object({
   assetName: z.string().min(1, 'Asset name is required'),
   amt: z.preprocess((v) => Number(v), z.number().positive('Amount must be positive')),
-  n: z.preprocess((v) => Number(v), z.number().int().positive('Repeat count must be positive')),
+  n: z.preprocess((v) => Number(v), z.number().int().positive('Repeat count must be positive').max(100)),
   destAddr: z.string().min(1, 'Address is required'),
 });
 
@@ -163,6 +190,8 @@ const formInitialValues = reactive({
 const form = useForm({
   validationSchema: toTypedSchema(splitSchema),
   initialValues: formInitialValues,
+  // Review unmounts the fields; preserve their values for its fingerprint and Cancel.
+  keepValuesOnUnmount: true,
 });
 
 // Fetch Asset Balance
@@ -195,21 +224,79 @@ watch([assetName, address], () => {
   form.setFieldValue('destAddr', address.value || ''); // 确保 destAddr 同步
 }, { immediate: true, deep: true });
 
-// Form Submission
+type SplitReview = Readonly<{
+  fingerprint: string; generation: number; wallet: string; accountIndex: number;
+  sourceAddress: string; network: string; destAddr: string; assetName: string;
+  amt: string; n: number; total: string; feeRate: number;
+}>;
+const review = ref<SplitReview | null>(null);
+const validating = ref(false);
+let reviewRevision = 0;
+let disposed = false;
+const splitFingerprint = () => JSON.stringify([
+  form.values.assetName, form.values.amt, form.values.n, form.values.destAddr,
+  assetName.value, globalStore.env, walletStore.network, walletStore.rootAccountId,
+  walletStore.walletId, walletStore.accountIndex, walletStore.address, walletStore.btcFeeRate,
+]);
+const cancelReview = () => { reviewRevision++; review.value = null; };
+watch(splitFingerprint, cancelReview, { flush: 'sync' });
+const unsubscribeIdentity = subscribeWalletIdentity(cancelReview);
+onBeforeUnmount(() => { disposed = true; cancelReview(); unsubscribeIdentity(); });
+
+// Review validates only; the existing send API is invoked by final Confirm.
 const onSubmit = form.handleSubmit(async (values) => {
+  if (loading.value || validating.value || review.value || disposed) return;
+  errorMessage.value = null;
+  validating.value = true;
+  const revision = ++reviewRevision;
+  const fingerprint = splitFingerprint();
+  try {
+    const generation = assertWalletIdentityReady();
+    const sourceAddress = walletStore.address;
+    if (!sourceAddress) throw new Error(t('tools.txConfirm.contextChanged'));
+    const amt = String(values.amt);
+    if (!/^\d+(?:\.\d+)?$/.test(amt) || (values.assetName === '::' && !Number.isSafeInteger(values.amt))) {
+      throw new Error(t('assetOperationDialog.amountErrors.precision'));
+    }
+    const feeRate = Number(walletStore.btcFeeRate);
+    if (!Number.isSafeInteger(feeRate) || feeRate <= 0) throw new Error(t('splitAsset.invalidFeeRate'));
+    const destAddr = values.destAddr.trim();
+    const [err, valid] = await walletManager.validateBitcoinAddress(destAddr);
+    if (disposed || revision !== reviewRevision || fingerprint !== splitFingerprint()) return;
+    assertWalletIdentityReady(generation);
+    if (err || !valid?.valid) throw err || new Error(t('splitAsset.invalidAddress'));
+    const [whole, fraction = ''] = amt.split('.');
+    const units = (BigInt(whole + fraction) * BigInt(values.n)).toString().padStart(fraction.length + 1, '0');
+    const total = fraction.length ? `${units.slice(0, -fraction.length)}.${units.slice(-fraction.length)}` : units;
+    review.value = Object.freeze({
+      fingerprint, generation, wallet: `${walletStore.wallet?.name || ''} (${walletStore.walletId})`,
+      accountIndex: walletStore.accountIndex, sourceAddress,
+      network: String(walletStore.network), destAddr, assetName: values.assetName,
+      amt, n: Number(values.n), total, feeRate,
+    });
+  } catch (error: any) {
+    if (!disposed && revision === reviewRevision) errorMessage.value = error.message;
+  } finally { validating.value = false; }
+});
+
+const confirmSplit = async () => {
+  if (loading.value || disposed || !review.value) return;
+  const snapshot = review.value;
+  if (snapshot.fingerprint !== splitFingerprint()) { cancelReview(); return; }
   errorMessage.value = null;
   loading.value = true;
 
   try {
+    assertWalletIdentityReady(snapshot.generation);
     const [err, result] = await walletManager.batchSendAssets(
-      values.destAddr,
-      values.assetName,
-      values.amt.toString(),
-      Number(values.n),
-      0
+      snapshot.destAddr,
+      snapshot.assetName,
+      snapshot.amt,
+      snapshot.n,
+      snapshot.feeRate
     );
     if (err) {
-      let detail = 'L2资产拆分失败。';
+      let detail = 'L1资产拆分失败。';
       if (err.message) detail = err.message;
       else if (typeof err === 'string') detail = err;
       throw new Error(detail);
@@ -217,22 +304,23 @@ const onSubmit = form.handleSubmit(async (values) => {
 
     toast({
       title: 'Success',
-      description: `Successfully initiated split: ${values.assetName} : ${values.amt} x ${values.n} `,
+      description: `Successfully initiated split: ${snapshot.assetName} : ${snapshot.amt} x ${snapshot.n} `,
       variant: 'success'
     });
-    await refreshL2Assets();
+    review.value = null;
+    await refreshL1Assets();
 
     form.resetForm();
     isOpen.value = false;
     setTimeout(() => router.back(), 300);
   } catch (error: any) {
-    console.error('L2 Split Error:', error);
+    console.error('L1 Split Error:', error);
     const description = error.message || 'An unknown error occurred during the split.';
     toast({ title: 'Error', description, variant: 'destructive' });
     errorMessage.value = description;
   } finally {
     loading.value = false;
   }
-});
+};
 
 </script>

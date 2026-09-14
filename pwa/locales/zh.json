@@ -1,10 +1,21 @@
 {
+  "startup": {
+    "title": "SAT20 钱包",
+    "loading": "正在启动钱包，钱包数据和余额尚未就绪。",
+    "slow": "启动耗时较长，所需请求可能暂时不可用。请检查网络，准备好后重新加载。",
+    "error": "钱包未能启动，所需资源或服务可能暂时不可用。请检查网络后重试；已保存的钱包数据未被清除。",
+    "retry": "重新加载并重试"
+  },
   "index": {
     "title": "SAT20 Wallet",
     "subtitle": "安全、简单且强大的比特币钱包",
     "createWallet": "创建新钱包",
     "importWallet": "导入现有钱包",
     "agreement": "继续即表示您同意我们的服务条款和隐私政策"
+  },
+  "navigation": {
+    "home": "首页",
+    "dapp": "DApp"
   },
   "common": {
     "error": "错误",
@@ -63,6 +74,21 @@
       "deploy": "部署 RGB11 资产"
     },
     "txConfirm": {
+      "simulatedGasLimit": "本次模拟 gas 上限",
+      "wallet": "钱包",
+      "account": "子账户索引",
+      "sourceAddress": "来源地址",
+      "calldata": "调用数据",
+      "arguments": "函数参数",
+      "rawArguments": "原始调用数据，未解码参数",
+      "simulatedGasUsed": "模拟 gas 消耗（估算）",
+      "gasFundingRequired": "本次 GAS 预付资金需求",
+      "feeScope": "费用口径",
+      "gasFundingExplanation": "以合约 GAS 资产计价，含执行/结果预付储备；并非最终执行手续费，不含上方列出的业务投入。",
+      "contextChanged": "钱包、子账户、网络或调用内容已改变，请重新确认。",
+      "gasFundingUnavailable": "无法查询 GAS 资金需求，请重新确认。",
+      "operatingGas": "AUTOPAY 运营 GAS",
+      "autopayOperatingGas": "周期 trigger/result GAS 由合约运营储备承担，不扣委托用户本金；此前观察到的 200 GAS 不加到本次业务充值。",
       "title": "确认发起交易",
       "description": "请确认本次操作会构造并签名一笔链上交易。",
       "purpose": "目的",
@@ -496,6 +522,9 @@
     "savedButton": "我已保存恢复助记词"
   },
   "setting": {
+    "versionWriteBlocked": "需要升级：已暂停新的钱包写操作，仍可读取和解锁。",
+    "updateWaitingOperations": "准备升级，正在等待已派发操作完成。",
+
     "title": "系统设置",
     "version": "版本",
     "checkUpdate": "检查更新",
@@ -552,6 +581,13 @@
     "error": "加载交易详情时出错。请检查控制台。"
   },
   "splitAsset": {
+    "review": "预览拆分",
+    "sameDestination": "每份输出都向下方同一地址发送相同金额，不用于配置不同收款人。",
+    "amountPerOutput": "每份请求金额",
+    "requestedTotal": "请求输出总额（不含费用）",
+    "feeUnavailable": "网络费与含费总支出尚未报价；以上显示的是请求输出金额，余额不足时当前发送接口可能调低输出金额。",
+    "invalidFeeRate": "费率必须为正整数。",
+    "invalidAddress": "地址不是所选网络的有效 Bitcoin 地址。",
     "back": "返回",
     "confirmTitle": "确认资产拆分",
     "description": "将您的资产拆分为更小的部分。",
@@ -610,7 +646,8 @@
     "sendPending": "发送待启用",
     "receive": "接收",
     "splicingIn": "通道注资",
-    "deposit": "存入"
+    "deposit": "存入",
+    "noAssets": "当前钱包账户在 Bitcoin（{network}）上暂无 {type} 资产。"
   },
   "l2AssetsTabs": {
     "assetType": {
@@ -621,7 +658,8 @@
     "viewTradeHistory": "交易历史",
     "send": "发送",
     "lock": "锁定",
-    "withdraw": "提取"
+    "withdraw": "提取",
+    "noAssets": "当前钱包账户在 SatoshiNet（{network}）上暂无 {type} 资产。"
   },
   "btcFeeSelect": {
     "selectFeeRate": "选择Gas费率",
@@ -845,7 +883,7 @@
 	"addressAckPending": "Consignment 已投递，接收方持久化并确认后才会广播交易。",
     "invoice": "收件人 Invoice",
     "batchHint": "批量发送可每行粘贴一个 witness Invoice；首版限定同一资产，所有接收者 ACK 后统一广播。",
-    "outOfBandAck": "这是官方 out-of-band 传输。请先把 Consignment 交给外部钱包并确认其已接受，再手动确认广播；不会伪造 ACK。",
+    "outOfBandAck": "通过外部渠道取得每位接收方的广播前验证摘要。字段匹配不能认证消息发送者身份。",
     "acceptedOutOfBand": "Consignment 已接受；请通过外部渠道通知发送方执行 out-of-band ACK。",
     "prepare": "构造并签名",
     "preparing": "构造中...",
@@ -882,7 +920,7 @@
     "rejectReason": "拒收原因",
     "acceptFailed": "RGB11 Consignment 验证失败",
     "invalidPackage": "无效的 RGB11 传输包",
-    "broadcast": "验证 ACK 并广播",
+    "broadcast": "确认接收方已验证并广播",
     "broadcasting": "广播中...",
     "broadcasted": "交易已广播：{txid}",
     "broadcastFailed": "RGB11 交易广播失败",
@@ -975,9 +1013,44 @@
     "taskCancelFailed": "任务取消失败",
     "taskCancelConfirm": "仅未广播的 out-of-band 任务可以安全取消。确认取消并释放该批次的 UTXO 预留？",
     "importFileTooLarge": "RGB11 合约文件超过 {size} 上限，未读取文件。",
-    "accountManaged": "RGB 必要恢复数据由账户管理统一同步"
+    "accountManaged": "RGB 必要恢复数据由账户管理统一同步",
+    "selectArmoredFile": "选择文本封装的 consignment（.asc / 文本）",
+    "reselectOriginal": "已恢复原接收请求。请重新选择原文本封装 consignment，SHA-256 一致才能续程。",
+    "prepareReceive": "广播前验证",
+    "prebroadcastOnly": "广播前验证结果，尚无可用余额。这是人工交换的摘要，不是签名或标准 RGB ACK。",
+    "copySummary": "复制验证摘要",
+    "acceptAfterBroadcast": "广播后完成接收",
+    "wrongOriginal": "该 consignment 与原已验证输入不同，请选择原文件。",
+    "scopeChanged": "钱包环境已变化，请回到原钱包和原请求续程。",
+    "persistenceFailed": "无法保存或恢复接收请求。请保持窗口打开并保留 invoice 和请求标识。",
+    "summaryMismatch": "验证摘要与本次转账、收款人、金额或 consignment 不匹配。",
+    "acceptRetry": "接收未完成，请保留原请求；若 witness 尚不可见，请等待广播在链上可见后重试。",
+    "downloadArmored": "下载供 PWA 验证的文本封装 consignment",
+    "recipientSummary": "第 {number} 位收款人：广播前验证摘要",
+    "matchSummary": "核对摘要字段",
+    "summaryMatched": "字段与该收款人匹配，请确认外部消息后再广播。",
+    "manualConfirmation": "我已通过外部渠道与该收款人核实，确认其已在广播前验证本次转账。",
+    "requestExpired": "该接收请求已过期。原请求标识仍保留，未自动生成替代 invoice。",
+    "checkRequestState": "核对接收请求状态",
+    "sdkRequestState": "SDK 接收状态：{status}。pending 不表示余额已可用。",
+    "newRequestLocalOnly": "保留旧请求元数据并填写新的 PWA 请求。此操作不会取消旧 SDK 请求、释放其资金或影响在途转账。",
+    "startNewRequest": "保留旧记录并填写新请求"
   },
   "assetOperationDialog": {
+    "reviewChain": "链",
+    "reviewNetwork": "网络",
+    "reviewFeeRate": "费率",
+    "reviewNetworkFee": "网络费",
+    "reviewTotalSpend": "总支出",
+    "amountErrors": {
+      "required": "请输入金额。",
+      "decimal": "请使用十进制数字，不支持正负号或科学计数法。",
+      "precision": "金额小数位超过该资产精度。",
+      "positive": "金额必须大于零。",
+      "balance": "金额超过当前余额。",
+      "unavailable": "暂时无法确认精确余额或资产精度。",
+      "scope": "钱包、账户或网络已变化，请重新打开发送。"
+    },
     "normalSend": "普通",
     "advancedSend": "高级",
     "amount": "金额",
@@ -1051,6 +1124,16 @@
     "lightning": "Lightning"
   },
   "walletManager": {
+    "importPendingHint": "导入正在进行，请勿重复提交。关闭对话框不会撤销已发起的钱包操作。",
+    "importStages": {
+      "authorizing": "等待密码授权…",
+      "authorizationCancelled": "授权已取消或钱包会话已改变，本次请求未开始导入。",
+      "validating": "正在校验助记词…",
+      "recovering": "正在检查根账户恢复…",
+      "importing": "正在发起钱包导入并等待结果…",
+      "catalog": "导入已返回，正在读回并更新本地钱包目录…",
+      "switching": "正在核对导入的钱包与子账户…"
+    },
     "title": "钱包管理",
     "switch": "切换",
     "switching": "切换中...",
@@ -1146,6 +1229,10 @@
     "missingData": "缺少资产转账所需的必要数据。"
   },
   "accountManagement": {
+    "fundingSourceWallet": "账户管理根钱包",
+    "fundingSourceAccount": "账户 1（索引 0）",
+    "fundingPrincipal": "用户充值本金",
+    "fundingOperatingGas": "自动结算的额外 200 GAS 由 AUTOPAY 合约运营储备支付，不计入用户充值本金或用户支出。充值交易自身的网络/调用费用另计；目标充值周期还需要合约运营储备充足。",
     "autopayPurpose": "激活账户恢复数据的 AUTOPAY 持久存储",
     "recordCount": "记录上限",
     "perBlock": "每区块费用",

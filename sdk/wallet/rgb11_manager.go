@@ -359,7 +359,16 @@ func (p *rgb11Manager) releaseRGB11PendingReservation(pendingList []*rgb11wallet
 }
 
 func (p *rgb11Manager) finalizeRGB11PendingChangeReservation(pending *rgb11wallet.PendingTransfer) error {
-	changes := rgb11PendingChangeOutpoints(pending)
+	return p.finalizeRGB11PendingChangeReservationExcept(pending, nil)
+}
+
+func (p *rgb11Manager) finalizeRGB11PendingChangeReservationExcept(pending *rgb11wallet.PendingTransfer, historicalSpent map[string]bool) error {
+	changes := make([]string, 0)
+	for _, outpoint := range rgb11PendingChangeOutpoints(pending) {
+		if !historicalSpent[outpoint] {
+			changes = append(changes, outpoint)
+		}
+	}
 	if len(changes) == 0 {
 		return nil
 	}
@@ -389,6 +398,8 @@ func (p *rgb11Manager) reconcileRGB11Reservations() error {
 	}
 	groups := make(map[string]*rgb11ActiveReservation)
 	witnessOwners := make(map[string]string)
+	inputOwners := make(map[string]string)
+	inputWitnesses := make(map[string]string)
 	for _, state := range transfers {
 		if !rgb11TransferKeepsInputsLocked(state) {
 			continue
@@ -399,6 +410,9 @@ func (p *rgb11Manager) reconcileRGB11Reservations() error {
 		}
 		if pending.ReservationID == "" {
 			continue
+		}
+		if err := validateRGB11PendingTransaction(pending); err != nil {
+			return err
 		}
 		if owner := witnessOwners[state.WitnessTxID]; owner != "" && owner != pending.ReservationID {
 			return fmt.Errorf("%w: witness transaction has multiple reservation owners", ErrRGB11Inconsistent)
@@ -416,15 +430,90 @@ func (p *rgb11Manager) reconcileRGB11Reservations() error {
 			group.allSettled = false
 		}
 		for _, outpoint := range state.InputOutPoints {
+			if owner := inputOwners[outpoint]; owner != "" &&
+				(owner != pending.ReservationID || inputWitnesses[outpoint] != state.WitnessTxID) {
+				return fmt.Errorf("%w: RGB11 input has multiple reservation owners: %s", ErrRGB11Inconsistent, outpoint)
+			}
+			inputOwners[outpoint] = pending.ReservationID
+			inputWitnesses[outpoint] = state.WitnessTxID
 			group.outpoints[outpoint] = struct{}{}
 			if _, ok := proofOutpoints[outpoint]; ok {
 				group.previousReasons[outpoint] = rgb11wallet.LockReasonRGB
 			}
 		}
 		for _, outpoint := range rgb11PendingChangeOutpoints(pending) {
+			listed := false
+			for _, output := range state.OutputOutPoints {
+				if output == outpoint {
+					listed = true
+					break
+				}
+			}
+			if !listed {
+				return fmt.Errorf("%w: RGB11 change is not a transaction output: %s", ErrRGB11Inconsistent, outpoint)
+			}
 			group.changeOutpoints[outpoint] = struct{}{}
 			if state.Status != "settled" {
 				group.outpoints[outpoint] = struct{}{}
+			}
+		}
+	}
+	// A settled change can already be an input of a later operation. Build the
+	// complete, transaction-bound ownership map before finalizing any old output.
+	for reservationID, group := range groups {
+		if group.allSettled {
+			for outpoint := range group.changeOutpoints {
+				if successor := inputOwners[outpoint]; successor != "" && successor != reservationID {
+					delete(group.changeOutpoints, outpoint)
+				}
+			}
+		}
+	}
+	receiveReservations, err := p.rgbManager.projectionStore.ListReceiveReservations()
+	if err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	// Reject contradictory journals or unknown live owners before EnsureReservation
+	// can persist an earlier group's locks/refresh marker. Locker owner guards
+	// still run again at write time; this is not a replacement for those guards.
+	locked := p.utxoLockerL1.GetLockedUtxoList()
+	plannedOwners := make(map[string]string)
+	checkOwner := func(outpoint, owner, previous string, finalize bool) error {
+		if planned := plannedOwners[outpoint]; planned != "" && planned != owner {
+			return fmt.Errorf("%w: overlapping RGB11 reservation plans: %s", ErrRGB11Inconsistent, outpoint)
+		}
+		plannedOwners[outpoint] = owner
+		if current := locked[outpoint]; current != nil {
+			if current.ReservationID != "" && current.ReservationID != owner {
+				return fmt.Errorf("%w: %s", ErrUtxoReservationOwner, outpoint)
+			}
+			if !finalize && current.ReservationID == "" && current.Reason != rgb11wallet.LockReasonPending &&
+				(previous == "" || current.Reason != previous) {
+				return fmt.Errorf("%w: %s", ErrUtxoReserved, outpoint)
+			}
+		}
+		return nil
+	}
+	for reservationID, group := range groups {
+		for outpoint := range group.outpoints {
+			if err := checkOwner(outpoint, reservationID, group.previousReasons[outpoint], false); err != nil {
+				return err
+			}
+		}
+		if group.allSettled {
+			for outpoint := range group.changeOutpoints {
+				if err := checkOwner(outpoint, reservationID, "", true); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, reservation := range receiveReservations {
+		if reservation != nil && reservation.ReservationID != "" && reservation.OutPoint != "" &&
+			(reservation.Expiry == 0 || reservation.Expiry > now) {
+			if err := checkOwner(reservation.OutPoint, reservation.ReservationID, "", false); err != nil {
+				return err
 			}
 		}
 	}
@@ -449,11 +538,6 @@ func (p *rgb11Manager) reconcileRGB11Reservations() error {
 			}
 		}
 	}
-	receiveReservations, err := p.rgbManager.projectionStore.ListReceiveReservations()
-	if err != nil {
-		return err
-	}
-	now := time.Now().Unix()
 	for _, reservation := range receiveReservations {
 		if reservation == nil || reservation.ReservationID == "" || reservation.OutPoint == "" ||
 			(reservation.Expiry != 0 && reservation.Expiry <= now) {
@@ -3616,6 +3700,8 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 		}
 	}()
 	result := &RGB11RefreshResult{}
+	var refreshErrors []error
+	historyInconsistent := false
 	if err := p.releaseExpiredRGB11ReceiveReservations(time.Now().Unix()); err != nil {
 		return nil, err
 	}
@@ -3742,6 +3828,11 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 			return nil, err
 		}
 		status, visible := p.expectedRGB11TransactionStatus(pending)
+		// Only direct transaction/UTXO evidence can establish a downgrade. The
+		// inferred mempool status below (an input has a known spender) cannot.
+		reliablePending := visible && status != nil && status.TxID == state.WitnessTxID &&
+			((status.InMempool && !status.Confirmed) ||
+				(status.Confirmed && status.Confirmations < max(int64(state.MinConfirmations), 1)))
 		if !visible {
 			knownExpected := false
 			knownConflict := false
@@ -3801,10 +3892,27 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 				continue
 			}
 		}
-		if err := p.applyRGB11LocalChange(ctx, pending, status); err != nil {
-			pending.State.Status = "pending"
-			_ = p.rgbManager.projectionStore.SavePendingTransferState(pending)
-			result.Pending++
+		historicalSpent := make(map[string]bool)
+		if err := p.applyRGB11LocalChange(ctx, pending, status, historicalSpent); err != nil {
+			refreshErrors = append(refreshErrors, fmt.Errorf("RGB11 transfer %s witness %s local change: %w",
+				state.TransferID, state.WitnessTxID, err))
+			historyInconsistent = historyInconsistent || errors.Is(err, ErrRGB11Inconsistent)
+			if reliablePending {
+				if pending.State.Status == "settled" {
+					result.Reorged++
+				}
+				pending.State.Status = "pending"
+				if saveErr := p.rgbManager.projectionStore.SavePendingTransferState(pending); saveErr != nil {
+					return result, errors.Join(append(refreshErrors, fmt.Errorf("save RGB11 transfer %s: %w", state.TransferID, saveErr))...)
+				}
+			} else {
+				// A failed check is not evidence that a settled history became
+				// pending. Preserve its journal and successor-owned spent inputs.
+				result.Unresolved++
+			}
+			if pending.State.Status != "settled" {
+				result.Pending++
+			}
 			continue
 		}
 		if status.Confirmed && status.Confirmations >= max(int64(state.MinConfirmations), 1) {
@@ -3823,7 +3931,7 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 			return nil, err
 		}
 		if pending.State.Status == "settled" {
-			if err := p.finalizeRGB11PendingChangeReservation(pending); err != nil {
+			if err := p.finalizeRGB11PendingChangeReservationExcept(pending, historicalSpent); err != nil {
 				return nil, err
 			}
 		}
@@ -3931,7 +4039,14 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 	}
 	if len(result.Inconsistent) > 0 {
 		p.rgbManager.consistencyStatus = "broken"
-		return result, fmt.Errorf("%w: unknown or conflicting RGB11 spend", ErrRGB11Inconsistent)
+		return result, errors.Join(append(refreshErrors, fmt.Errorf("%w: unknown or conflicting RGB11 spend", ErrRGB11Inconsistent))...)
+	}
+	if len(refreshErrors) > 0 {
+		p.rgbManager.consistencyStatus = "warning"
+		if historyInconsistent {
+			p.rgbManager.consistencyStatus = "broken"
+		}
+		return result, errors.Join(refreshErrors...)
 	}
 	if len(unresolvedInputs) > 0 {
 		p.rgbManager.consistencyStatus = "warning"
@@ -3942,11 +4057,35 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 }
 
 func (p *rgb11Manager) applyRGB11LocalChange(ctx context.Context, pending *rgb11wallet.PendingTransfer,
-	status *rgb11wallet.BitcoinTxStatus) error {
-	validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(pending.ChangeSeals...)
-	receipt, err := p.rgbManager.projectionStore.ValidateAndStoreConsignment(ctx, validator, p.rgbManager.evidence, pending.LocalConsignment)
-	if err != nil {
-		return err
+	status *rgb11wallet.BitcoinTxStatus, historicalSpentOutput ...map[string]bool) error {
+	var receipt *rgb11wallet.ValidationReceipt
+	// A historical consignment's terminal allocation is no longer a current
+	// unspent allocation after a successor consumes it. Retain its original
+	// validation receipt, never falsify the current Bitcoin evidence.
+	if pending.State.Status == "settled" && status != nil && status.Confirmed &&
+		status.Confirmations >= max(int64(pending.State.MinConfirmations), 1) {
+		for _, seal := range pending.ChangeSeals {
+			outpoint := fmt.Sprintf("%s:%d", pending.State.WitnessTxID, seal.Vout)
+			spent, err := p.rgbManager.evidence.GetOutspend(outpoint)
+			if err != nil {
+				return err
+			}
+			if spent != nil && spent.Spent {
+				receipt, err = p.loadRGB11HistoricalReceipt(pending)
+				if err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
+	if receipt == nil {
+		validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(pending.ChangeSeals...)
+		var err error
+		receipt, err = p.rgbManager.projectionStore.ValidateAndStoreConsignment(ctx, validator, p.rgbManager.evidence, pending.LocalConsignment)
+		if err != nil {
+			return err
+		}
 	}
 	receiptHash, err := receipt.Hash()
 	if err != nil {
@@ -3970,6 +4109,27 @@ func (p *rgb11Manager) applyRGB11LocalChange(ctx context.Context, pending *rgb11
 		}
 		if !matched {
 			continue
+		}
+		// Only preserve an already-settled history. Existing erroneous pending
+		// records require the explicit offline repair tool, never this path.
+		if pending.State.Status == "settled" && status != nil && status.Confirmed &&
+			status.Confirmations >= max(int64(pending.State.MinConfirmations), 1) {
+			spent, err := p.rgbManager.evidence.GetOutspend(allocation.OutPoint)
+			if err != nil {
+				return err
+			}
+			if spent != nil && spent.Spent {
+				if err := p.validateRGB11SpentChangeHistory(ctx, pending, receipt, allocation, spent.SpendingTx); err != nil {
+					return err
+				}
+				// Only this fully validated skip may suppress old-owner finalization.
+				for _, output := range historicalSpentOutput {
+					if output != nil {
+						output[allocation.OutPoint] = true
+					}
+				}
+				continue
+			}
 		}
 		utxo, err := p.rgbManager.evidence.GetUTXO(allocation.OutPoint)
 		if err != nil || utxo == nil {

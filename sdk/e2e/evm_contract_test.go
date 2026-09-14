@@ -156,7 +156,7 @@ func TestRealSatoshiNetEVMSignedAssetVault(t *testing.T) {
 		DeployNonce:     1,
 		ContractContent: initCode,
 		Funding: wire.TxOut{
-			Value:  1000,
+			Value:  0,
 			Assets: txAsset(gas, deployPlan.ContractFundingGasAsset),
 		},
 		Inputs:       []wire.OutPoint{gasOuts[0]},
@@ -689,7 +689,8 @@ func TestRealSatoshiNetEVMInternalERC20(t *testing.T) {
 	closeTx, _ := buildEVMCloseTxFor(t, f.A, token, 7, invokeGasLimit, 14, inputGasAsset, gasOuts[12])
 	closeBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{closeTx}, 0)
 	closeResult := requireSingleResultTx(t, closeBlock)
-	requireTxOutputValueAtLeast(t, closeResult, f.A.Address, 6)
+	requireTxOutputValueAmount(t, closeResult, f.A.Address, 0)
+	requireTxOutputAssetPositive(t, closeResult, f.A.Address, gas)
 	f.requireSynced(t)
 }
 
@@ -734,7 +735,7 @@ func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,
 		DeployNonce:     deployNonce,
 		ContractContent: initCode,
 		Funding: wire.TxOut{
-			Value:  1000,
+			Value:  0,
 			Assets: txAsset(wallet.GetGasAssetName(), deployPlan.ContractFundingGasAsset),
 		},
 		Inputs:       []wire.OutPoint{{Hash: anchorTx.TxHash(), Index: 0}},
@@ -787,7 +788,7 @@ func buildEVMDeployTxFor(t *testing.T, actor *templateActor, initCode []byte, no
 		DeployNonce:     nonce,
 		ContractContent: initCode,
 		Funding: wire.TxOut{
-			Value:  1000,
+			Value:  0,
 			Assets: txAsset(wallet.GetGasAssetName(), plan.ContractFundingGasAsset),
 		},
 		Inputs:       []wire.OutPoint{input},

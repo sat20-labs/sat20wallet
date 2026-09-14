@@ -1,3 +1,4 @@
+import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
 import { tryit } from 'radash'
 import { walletRequestSessionGuard } from '@/lib/walletSession'
 import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
@@ -125,9 +126,11 @@ class SatsnetStp {
         throw new Error(`sat20wallet_wasm or method "${methodName}" not found on globalThis.`)
       }
       const operation = await beginPwaWalletOperation(methodName, args)
+      let finishVersion: (() => void) | undefined
       try {
         checkSession()
         const method = module[methodName] as (...args: any[]) => Promise<WasmResponse<T>>
+        finishVersion = beginVersionDispatch(methodName)
         const response = await method(...args)
         checkSession()
         if (response && typeof response.code === 'number' && response.code !== 0) {
@@ -141,7 +144,7 @@ class SatsnetStp {
         const failure = error instanceof Error ? error : new Error(String(error))
         await finishPwaOperation(operation, failure)
         throw failure
-      }
+      } finally { finishVersion?.() }
     })()
   }
 

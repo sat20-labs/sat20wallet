@@ -1,0 +1,26 @@
+<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer">
+<title>RGB11 single-key maintenance</title>
+<h1>RGB11 single-key maintenance</h1>
+<p>Use only in a closed-wallet profile copy, with all other origin tabs closed and its service worker unregistered. This page does not load the wallet. Keep the unchanged profile backup. Files contain private RGB proof material; do not share them.</p>
+<label>Reviewed identity (env|network|rootAccountId|walletId|accountIndex|pubkey)<input id="identity" size="100"></label><br>
+<label>Reviewed RGB key prefix<input id="prefix" size="70"></label><br>
+<button id="export">Export selected RGB records</button><br>
+<label>Verified patch JSON<input id="patch" type="file"></label><br>
+<label>Independently approved patch file SHA256<input id="patchHash" size="70"></label><br>
+<label>Reviewed export fingerprint<input id="fingerprint" size="70"></label><br>
+<button id="apply">Apply exactly one key</button><pre id="status"></pre>
+<script type="module">
+import {capture,hashText,applyPatch} from './repair.mjs';
+const el=id=>document.getElementById(id);
+async function guard(){if((await navigator.serviceWorker.getRegistrations()).length)throw Error('Close wallet, back up profile and unregister service worker in the COPY first');
+ const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('sat20-wallet-pwa');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(Error('public scope unavailable'));r.onupgradeneeded=()=>{r.transaction.abort();reject(Error('existing profile required'));}});
+ try{const raw=await new Promise((resolve,reject)=>{const r=db.transaction('wallet-state','readonly').objectStore('wallet-state').get('local:wallet_state_snapshot_v1');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(Error('scope read failed'));});
+ const v=typeof raw==='string'?JSON.parse(raw):raw;const s=v?.state;if(!s)throw Error('public scope missing');
+ const identity=[s.env,s.network,s.rootAccountId,s.walletId,s.accountIndex,s.pubkey].join('|');
+ if(!s.rootAccountId||!s.pubkey||identity!==el('identity').value)throw Error('reviewed identity differs from current public scope');
+ if(el('prefix').value!==`rgb11-wallet-${s.walletId}-account-${s.accountIndex}-rgb11v2-`)throw Error('prefix differs from selected wallet/account');return identity;
+ }finally{db.close();}}
+function download(text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));a.download='rgb11-scope-private.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
+el('export').onclick=async()=>{try{const identity=await guard();const data=capture(localStorage,identity,el('prefix').value);const text=JSON.stringify(data);download(text);el('status').textContent='Export fingerprint: '+await hashText(text);}catch(e){el('status').textContent=e.message;}};
+el('apply').onclick=async()=>{try{const identity=await guard();const file=el('patch').files[0];if(!file)throw Error('patch required');const raw=await file.text();if(await hashText(raw)!==el('patchHash').value)throw Error('approved patch hash mismatch');const patch=JSON.parse(raw);if(patch.target.prefix!==el('prefix').value)throw Error('patch scope mismatch');el('status').textContent=await applyPatch(localStorage,patch,identity,el('fingerprint').value);}catch(e){el('status').textContent=e.message;}};
+</script>

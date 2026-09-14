@@ -145,48 +145,6 @@
                 <div v-if="selectedContractSchema?.description" class="text-xs text-muted-foreground">
                   {{ selectedContractSchema.description }}
                 </div>
-                <div class="space-y-3 rounded-sm border border-border bg-muted/30 p-3">
-                  <div class="flex items-start justify-between gap-3">
-                    <div>
-                      <div class="text-sm font-medium">{{ t('tools.evmDeploy.compilerConfig') }}</div>
-                      <p class="text-xs text-muted-foreground">{{ t('tools.evmDeploy.compilerConfigHint') }}</p>
-                    </div>
-                    <Button variant="secondary" size="sm" type="button" @click="loadEVMCompilerConfig">
-                      <Icon icon="lucide:refresh-cw" class="h-4 w-4" />
-                    </Button>
-                  </div>
-                  <pre class="max-h-24 overflow-auto rounded-sm bg-zinc-950/60 p-2 text-[11px] leading-5 text-zinc-200">{{ evmCompilerConfig ? JSON.stringify(evmCompilerConfig, null, 2) : '-' }}</pre>
-                  <p v-if="evmCompilerConfigError" class="text-xs text-destructive">{{ evmCompilerConfigError }}</p>
-                  <div class="space-y-1">
-                    <Label>{{ t('tools.evmDeploy.soliditySource') }}</Label>
-                    <Textarea
-                      v-model="evmSoliditySource"
-                      class="min-h-40 font-mono text-xs"
-                      :placeholder="t('tools.evmDeploy.soliditySourcePlaceholder')"
-                    />
-                  </div>
-                  <div class="grid gap-3 sm:grid-cols-2">
-                    <div class="space-y-1">
-                      <Label>{{ t('tools.evmDeploy.contractName') }}</Label>
-                      <Input v-model="evmSolidityContractName" :placeholder="t('tools.evmDeploy.contractNamePlaceholder')" />
-                    </div>
-                    <div class="space-y-1">
-                      <Label>{{ t('tools.evmDeploy.constructorArgs') }}</Label>
-                      <Input v-model="evmConstructorArgsJson" placeholder='["brc20:f:ooxx"]' />
-                    </div>
-                  </div>
-                  <Button variant="secondary" type="button" :disabled="isCompilingEVMSource" @click="compileEVMSource">
-                    <Icon :icon="isCompilingEVMSource ? 'lucide:loader-2' : 'lucide:code-2'" class="h-4 w-4" :class="{ 'animate-spin': isCompilingEVMSource }" />
-                    {{ isCompilingEVMSource ? t('tools.evmDeploy.compiling') : t('tools.evmDeploy.generateInitCode') }}
-                  </Button>
-                  <p v-if="evmCompileError" class="text-xs text-destructive">{{ evmCompileError }}</p>
-                  <div v-if="evmCompileResult" class="space-y-1 text-xs text-muted-foreground">
-                    <div>{{ t('tools.evmDeploy.compiledContract') }}: {{ evmCompileResult.contractName }}</div>
-                    <div>{{ t('tools.evmDeploy.abiFunctions') }}: {{ evmCompileResult.functionCount }}</div>
-                    <div>{{ t('tools.evmDeploy.actualCompilerVersion') }}: {{ evmCompileResult.compilerVersion }}</div>
-                    <div class="text-amber-500">{{ t('tools.evmDeploy.preflightUnverified') }}</div>
-                  </div>
-                </div>
                 <div v-for="field in selectedContractSchema?.fields || []" :key="field.name" class="space-y-1">
                   <Label>{{ field.label }}</Label>
                   <Select
@@ -435,6 +393,48 @@
                 <div v-if="selectedContractSchema?.description" class="text-xs text-muted-foreground">
                   {{ selectedContractSchema.description }}
                 </div>
+                <div class="space-y-3 rounded-sm border border-border bg-muted/30 p-3">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <div class="text-sm font-medium">{{ t('tools.evmDeploy.compilerConfig') }}</div>
+                      <p class="text-xs text-muted-foreground">{{ t('tools.evmDeploy.compilerConfigHint') }}</p>
+                    </div>
+                    <Button variant="secondary" size="sm" type="button" @click="loadEVMCompilerConfig">
+                      <Icon icon="lucide:refresh-cw" class="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <pre class="max-h-24 overflow-auto rounded-sm bg-zinc-950/60 p-2 text-[11px] leading-5 text-zinc-200">{{ evmCompilerConfig ? JSON.stringify(evmCompilerConfig, null, 2) : '-' }}</pre>
+                  <p v-if="evmCompilerConfigError" class="text-xs text-destructive">{{ evmCompilerConfigError }}</p>
+                  <div class="space-y-1">
+                    <Label>{{ t('tools.evmDeploy.soliditySource') }}</Label>
+                    <Textarea
+                      v-model="evmSoliditySource"
+                      class="min-h-40 font-mono text-xs"
+                      :placeholder="t('tools.evmDeploy.soliditySourcePlaceholder')"
+                    />
+                  </div>
+                  <div class="grid gap-3 sm:grid-cols-2">
+                    <div class="space-y-1">
+                      <Label>{{ t('tools.evmDeploy.contractName') }}</Label>
+                      <Input v-model="evmSolidityContractName" :placeholder="t('tools.evmDeploy.contractNamePlaceholder')" />
+                    </div>
+                    <div class="space-y-1">
+                      <Label>{{ t('tools.evmDeploy.constructorArgs') }}</Label>
+                      <Input v-model="evmConstructorArgsJson" placeholder='["brc20:f:ooxx"]' />
+                    </div>
+                  </div>
+                  <Button variant="secondary" type="button" :disabled="isCompilingEVMSource" @click="compileEVMSource">
+                    <Icon :icon="isCompilingEVMSource ? 'lucide:loader-2' : 'lucide:code-2'" class="h-4 w-4" :class="{ 'animate-spin': isCompilingEVMSource }" />
+                    {{ isCompilingEVMSource ? t('tools.evmDeploy.compiling') : t('tools.evmDeploy.generateInitCode') }}
+                  </Button>
+                  <p v-if="evmCompileError" class="text-xs text-destructive">{{ evmCompileError }}</p>
+                  <div v-if="evmCompileResult" class="space-y-1 text-xs text-muted-foreground">
+                    <div>{{ t('tools.evmDeploy.compiledContract') }}: {{ evmCompileResult.contractName }}</div>
+                    <div>{{ t('tools.evmDeploy.abiFunctions') }}: {{ evmCompileResult.functionCount }}</div>
+                    <div>{{ t('tools.evmDeploy.actualCompilerVersion') }}: {{ evmCompileResult.compilerVersion }}</div>
+                    <div class="text-amber-500">{{ t('tools.evmDeploy.preflightUnverified') }}</div>
+                  </div>
+                </div>
                 <div v-for="field in selectedContractSchema?.fields || []" :key="field.name" class="space-y-1">
                   <Label>{{ field.label }}</Label>
                   <Textarea
@@ -474,7 +474,7 @@
               </div>
               <div class="grid grid-cols-2 gap-2">
                 <Button variant="outline" :disabled="isContractLoading" @click="() => loadContracts()">{{ t('tools.contracts.loadList') }}</Button>
-                <Button variant="outline" :disabled="!selectedContractAddress || isContractLoading" @click="loadContractHistory">{{ t('tools.contracts.queryHistory') }}</Button>
+                <Button variant="outline" :disabled="!selectedContractAddress || isContractLoading" @click="() => loadContractHistory(1)">{{ t('tools.contracts.queryHistory') }}</Button>
               </div>
               <div v-if="contractList.length" class="space-y-3">
                 <Label>{{ t('tools.contracts.contractList') }}</Label>
@@ -561,6 +561,22 @@
                     {{ action.label }}
                   </span>
                 </div>
+              </div>
+              <div v-if="contractHistory !== null" class="space-y-2 rounded-sm border border-border bg-muted/30 p-3">
+                <div class="flex items-center justify-between gap-3 text-xs">
+                  <span class="font-medium">{{ t('tools.contracts.queryHistory') }}</span>
+                  <span class="text-muted-foreground">{{ contractHistory.length }} / {{ contractHistoryTotal }}</span>
+                </div>
+                <pre class="max-h-56 overflow-auto rounded-sm bg-zinc-950/60 p-3 text-xs leading-5 text-zinc-200">{{ JSON.stringify(contractHistory, null, 2) }}</pre>
+                <UiPagination
+                  v-if="contractHistoryTotal > CONTRACT_HISTORY_PAGE_SIZE"
+                  :total="contractHistoryTotal"
+                  :items-per-page="CONTRACT_HISTORY_PAGE_SIZE"
+                  :page="contractHistoryPage"
+                  :disabled="isContractLoading"
+                  show-edges
+                  @update:page="loadContractHistory"
+                />
               </div>
               <pre v-if="!contractSummaryRows.length && contractStatusText" class="max-h-56 overflow-auto rounded-sm bg-zinc-950/60 p-3 text-xs leading-5 text-zinc-200">{{ contractStatusText }}</pre>
             </CardContent>
@@ -938,7 +954,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { SolcWorkerClient } from '@/utils/solcWorkerClient'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Icon } from '@iconify/vue'
 import LayoutHome from '@/components/layout/LayoutHome.vue'
@@ -953,6 +970,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
+import UiPagination from '@/components/shadcn/UiPagination.vue'
 import { useToast } from '@/components/ui/toast-new/use-toast'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -1003,6 +1021,9 @@ const contractList = ref<any[]>([])
 const selectedContract = ref<any | null>(null)
 const contractState = ref<any | null>(null)
 const contractHistory = ref<any | null>(null)
+const CONTRACT_HISTORY_PAGE_SIZE = 20
+const contractHistoryPage = ref(1)
+const contractHistoryTotal = ref(0)
 const isContractLoading = ref(false)
 const selectedContractAddress = computed(() => selectedContract.value?.address || selectedContract.value?.Address || contractQuery.value.trim())
 const contractStatusText = computed(() => {
@@ -1229,6 +1250,9 @@ const evmCompilerConfigError = ref('')
 const evmCompileError = ref('')
 const evmCompileResult = ref<Record<string, any> | null>(null)
 const isCompilingEVMSource = ref(false)
+const evmCompiler = new SolcWorkerClient(() => new Worker(new URL('../../../../workers/solc.worker.ts', import.meta.url), { type: 'module' }))
+let compilerPageDisposed = false
+onBeforeUnmount(() => { compilerPageDisposed = true; evmCompiler.dispose() })
 const isLoadingSupportedContracts = ref(false)
 const isDeployingSmartContract = ref(false)
 const dateTimePickerOpen = ref(false)
@@ -2305,6 +2329,7 @@ type EVMCallFunding = { AssetName: string; Amount: string }
 type EVMCallPayload = {
   calldataHex: string
   functionLabel: string
+  argumentsText: string
   satsValue: number
   gasLimit?: number
   fundingAssets: EVMCallFunding[]
@@ -2363,18 +2388,24 @@ const sha256Hex = async (hex: string) => {
 }
 
 const compileEVMSource = async () => {
+  if (isCompilingEVMSource.value || compilerPageDisposed) return
   isCompilingEVMSource.value = true
   evmCompileError.value = ''
   evmCompileResult.value = null
   try {
     if (!evmCompilerConfig.value) await loadEVMCompilerConfig()
+    if (compilerPageDisposed) return
     const cfg = evmCompilerConfig.value || {}
     const source = evmSoliditySource.value.trim()
     if (!source) throw new Error(t('tools.evmDeploy.sourceRequired'))
-    const solcModule = await import('solc')
-    const solidityCompiler = (solcModule as any).default || solcModule
-    const actualCompilerVersion = String(solidityCompiler.version?.() || '').trim()
-    if (!actualCompilerVersion) throw new Error('Solidity compiler version is unavailable')
+    const compilerConfigSnapshot = JSON.stringify(cfg)
+    const compilerNetworkSnapshot = network.value
+    const requestedNameSnapshot = evmSolidityContractName.value.trim()
+    const constructorSnapshot = evmConstructorArgsJson.value.trim() || '[]'
+    const stillCurrent = () => !compilerPageDisposed && compilerNetworkSnapshot === network.value
+      && compilerConfigSnapshot === JSON.stringify(evmCompilerConfig.value || {}) && source === evmSoliditySource.value.trim()
+      && requestedNameSnapshot === evmSolidityContractName.value.trim()
+      && constructorSnapshot === (evmConstructorArgsJson.value.trim() || '[]')
     const sourceName = 'Contract.sol'
     const compilerInput = {
       language: 'Solidity',
@@ -2397,7 +2428,10 @@ const compileEVMSource = async () => {
         },
       },
     }
-    const output = JSON.parse(solidityCompiler.compile(JSON.stringify(compilerInput)))
+    const compiledResult = await evmCompiler.compile(JSON.stringify(compilerInput))
+    if (!stillCurrent()) throw new Error('Solidity input changed; generate init code again')
+    const actualCompilerVersion = compiledResult.version
+    const output = JSON.parse(compiledResult.output)
     const errors = Array.isArray(output.errors) ? output.errors : []
     const fatal = errors.filter((item: any) => item?.severity === 'error')
     if (fatal.length) {
@@ -2427,6 +2461,9 @@ const compileEVMSource = async () => {
     const initCodeHex = constructorItem
       ? AbiConstructor.encode(abi as any, { bytecode: bytecodeHex as `0x${string}`, args: args as any })
       : bytecodeHex
+    const initCodeHash = await sha256Hex(initCodeHex)
+    const runtimeCodeHash = compiled.evm?.deployedBytecode?.object ? await sha256Hex(`0x${compiled.evm.deployedBytecode.object}`) : ''
+    if (!stillCurrent()) throw new Error('Solidity input changed; generate init code again')
     deployContractForm.value.initCodeHex = initCodeHex
     evmSolidityContractName.value = contractName
     evmCompileResult.value = {
@@ -2436,17 +2473,17 @@ const compileEVMSource = async () => {
       compilerConfig: cfg,
       constructorArgs: rawArgsText,
       initCodeHex,
-      initCodeHash: await sha256Hex(initCodeHex),
-      runtimeCodeHash: compiled.evm?.deployedBytecode?.object ? await sha256Hex(`0x${compiled.evm.deployedBytecode.object}`) : '',
+      initCodeHash,
+      runtimeCodeHash,
       functionCount: abi.filter((item: any) => item.type === 'function').length,
       compilerVersion: actualCompilerVersion,
       verified: false,
       verificationStatus: 'unverified-preflight',
     }
   } catch (error) {
-    evmCompileError.value = error instanceof Error ? error.message : String(error)
+    if (!compilerPageDisposed) evmCompileError.value = error instanceof Error ? error.message : String(error)
   } finally {
-    isCompilingEVMSource.value = false
+    if (!compilerPageDisposed) isCompilingEVMSource.value = false
   }
 }
 
@@ -2468,6 +2505,7 @@ const parseEVMCallPayload = (): EVMCallPayload => {
     return {
       calldataHex: normalizeEVMCalldataHex(rawCalldata),
       functionLabel: t('tools.evmInvoke.rawCalldata'),
+      argumentsText: '',
       satsValue,
       gasLimit,
       fundingAssets,
@@ -2483,6 +2521,7 @@ const parseEVMCallPayload = (): EVMCallPayload => {
   return {
     calldataHex: AbiFunction.encodeData(fn, encodedArgs),
     functionLabel: evmFunctionLabel(fn),
+    argumentsText: JSON.stringify(encodedArgs, (_, value) => typeof value === 'bigint' ? value.toString() : value),
     satsValue,
     gasLimit,
     fundingAssets,
@@ -2511,7 +2550,7 @@ const applyEstimatedEVMGasLimit = (payload: EVMCallPayload, gasLimit: number) =>
   evmGeneratedCallJsonText.value = evmCallJsonText.value
 }
 
-const estimateEVMGasForPayload = async (payload: EVMCallPayload) => {
+const estimateEVMGasForPayload = async (payload: EVMCallPayload, updateLimit = true) => {
   const contract = invokeContractAddress.value.trim()
   if (!contract || !payload.calldataHex) return
   const response = await smartContractApi.estimateEVMInvoke({
@@ -2535,9 +2574,10 @@ const estimateEVMGasForPayload = async (payload: EVMCallPayload) => {
     throw new Error(t('tools.evmInvoke.estimateRejected', { reason }))
   }
   const suggested = Number(data.suggestedGasLimit || data.gasLimit || 0)
-  if (Number.isInteger(suggested) && suggested > 0) {
+  if (updateLimit && Number.isInteger(suggested) && suggested > 0) {
     applyEstimatedEVMGasLimit(payload, suggested)
   }
+  return data
 }
 
 const generateEVMCalldata = async () => {
@@ -4073,6 +4113,8 @@ const loadContract = async () => {
     selectedContract.value = summary.data
     contractState.value = stateData
     contractHistory.value = null
+    contractHistoryPage.value = 1
+    contractHistoryTotal.value = 0
     invokeContractAddress.value = contract
     invokeToolPage.value = 'detail'
   } catch (error) {
@@ -4082,7 +4124,7 @@ const loadContract = async () => {
   }
 }
 
-const loadContractHistory = async () => {
+const loadContractHistory = async (page = 1) => {
   const contract = selectedContractAddress.value
   if (!contract) {
     showError(t('tools.messages.parameterError'), t('tools.errors.selectOrEnterContractAddress'))
@@ -4090,9 +4132,19 @@ const loadContractHistory = async () => {
   }
   try {
     isContractLoading.value = true
-    const res = await smartContractApi.getContractHistory({ network: network.value || 'testnet', contract })
+    const safePage = Math.max(1, Number.isSafeInteger(page) ? page : 1)
+    const res = await smartContractApi.getContractHistory({
+      network: network.value || 'testnet',
+      contract,
+      start: (safePage - 1) * CONTRACT_HISTORY_PAGE_SIZE,
+      limit: CONTRACT_HISTORY_PAGE_SIZE,
+    })
     if (res?.code !== 0) throw new Error(res?.msg || t('tools.errors.queryContractHistoryFailed'))
     contractHistory.value = res.data || []
+    contractHistoryTotal.value = Math.max(contractHistory.value.length, Number(res.total) || 0)
+    contractHistoryPage.value = safePage
+    invokeContractAddress.value = contract
+    invokeToolPage.value = 'detail'
   } catch (error) {
     showError(t('tools.messages.queryFailed'), error)
   } finally {
@@ -4117,6 +4169,8 @@ const loadSelectedContractState = async () => {
     }
     contractState.value = state?.code === 0 ? state.data || state.status : state
     contractHistory.value = null
+    contractHistoryPage.value = 1
+    contractHistoryTotal.value = 0
   } catch (error) {
     showError(t('tools.messages.queryFailed'), error)
   } finally {
@@ -4134,7 +4188,30 @@ const selectContract = async (contract: any) => {
   await loadSelectedContractState()
 }
 
+// A revision also catches a change away from and back to the same identity/request.
+const invokeReviewContext = () => {
+  let request: unknown
+  try { request = buildUnifiedInvokeRequest(invokeContractAddress.value.trim()) } catch { request = null }
+  return JSON.stringify([
+    env.value, network.value, walletStore.rootAccountId, walletStore.walletId,
+    walletStore.accountIndex, walletStore.address, invokeContractAddress.value,
+    invokeContractType.value, invokeContractSubtype.value, invokeAction.value,
+    evmCallJsonText.value, request,
+  ])
+}
+let invokeReviewRevision = 0
+let reviewingInvoke = false
+watch(invokeReviewContext, () => {
+  invokeReviewRevision++
+  if (reviewingInvoke) resolveTxConfirm(false)
+}, { flush: 'sync' })
+onBeforeUnmount(() => {
+  invokeReviewRevision++
+  if (reviewingInvoke) resolveTxConfirm(false)
+})
+
 const invokeSmartContract = async () => {
+  if (isInvokingContract.value) return
   try {
     isInvokingContract.value = true
     contractInvokeResult.value = ''
@@ -4142,11 +4219,53 @@ const invokeSmartContract = async () => {
     if (!contract) throw new Error(t('tools.errors.enterContractAddress'))
     if (isInvokeActionDisabled(invokeAction.value)) throw new Error(t('tools.errors.actionUnavailable'))
     const req = buildUnifiedInvokeRequest(contract)
-    if (import.meta.env.DEV) {
-      console.log('[SAT20 Tools] invokeUnifiedContract request', req)
+    const revision = invokeReviewRevision
+    const context = invokeReviewContext()
+    const assertContext = () => {
+      if (compilerPageDisposed || revision !== invokeReviewRevision || context !== invokeReviewContext()) {
+        throw new Error(t('tools.txConfirm.contextChanged'))
+      }
     }
-    const confirmed = await confirmToolTransaction(invokeTransactionSummary(contract, req))
+    const summary = invokeTransactionSummary(contract, req)
+    const activeWallet = walletStore.wallets.find(item => String(item.id) === String(walletStore.walletId))
+    const details = summary.details || []
+    details.unshift(
+      { label: t('tools.txConfirm.wallet'), value: `${activeWallet?.name || ''} (${walletStore.walletId})` },
+      { label: t('tools.txConfirm.account'), value: String(walletStore.accountIndex) },
+      { label: t('tools.txConfirm.sourceAddress'), value: currentWalletAddress() },
+    )
+    if (isEVMCallInvoke.value) {
+      const payload = validatedEVMCallPayloadForSubmit()
+      details.push({ label: t('tools.txConfirm.calldata'), value: payload.calldataHex })
+      details.push({
+        label: t('tools.txConfirm.arguments'),
+        value: payload.argumentsText || t('tools.txConfirm.rawArguments'),
+      })
+      const simulation = await estimateEVMGasForPayload(payload, false)
+      assertContext()
+      details.push({ label: t('tools.txConfirm.simulatedGasUsed'), value: String(simulation?.gasUsed ?? '-') })
+      details.push({ label: t('tools.txConfirm.simulatedGasLimit'), value: String(simulation?.gasLimit ?? '-') })
+    } else {
+      details.push({ label: t('tools.txConfirm.arguments'), value: String(req.Param || '{}') })
+    }
+    const [feeError, feeResult] = await sat20.getFeeForInvokeUnifiedContract(req)
+    assertContext()
+    if (feeError) throw feeError
+    const gasFunding = String(feeResult?.fee ?? '')
+    if (!/^\d+$/.test(gasFunding)) throw new Error(t('tools.txConfirm.gasFundingUnavailable'))
+    details.push({ label: t('tools.txConfirm.gasFundingRequired'), value: gasFunding })
+    details.push({ label: t('tools.txConfirm.feeScope'), value: t('tools.txConfirm.gasFundingExplanation') })
+    if (['autopay', 'autopay.tc'].includes(contractUiSubtype.value) || walkValues(contractLookupPayload(), (_key, value) => (
+      typeof value === 'string' && ['autopay', 'autopay.tc'].includes(value.trim().toLowerCase()) ? 'autopay' : undefined
+    ))) {
+      details.push({ label: t('tools.txConfirm.operatingGas'), value: t('tools.txConfirm.autopayOperatingGas') })
+    }
+    summary.details = details
+    reviewingInvoke = true
+    const confirmed = await confirmToolTransaction(summary)
+    reviewingInvoke = false
     if (!confirmed) return
+    assertContext()
     const [err, res] = await sat20.invokeUnifiedContract(req)
     if (err) throw err
     contractInvokeResult.value = res?.txid || ''
@@ -4154,6 +4273,7 @@ const invokeSmartContract = async () => {
   } catch (error) {
     showError(t('tools.messages.invokeFailed'), error)
   } finally {
+    reviewingInvoke = false
     isInvokingContract.value = false
   }
 }

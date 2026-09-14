@@ -1167,6 +1167,9 @@ func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr 
 	if err != nil {
 		return nil, 0, err
 	}
+	if name.Protocol == "" && dAmt.IsOverflowInt64() {
+		return nil, 0, fmt.Errorf("BTC amount exceeds int64 range")
+	}
 	if dAmt.Sign() <= 0 {
 		return nil, 0, fmt.Errorf("invalid amt")
 	}
