@@ -33,7 +33,7 @@ func TestRealSatoshiNetMessageTopicSDKToCore(t *testing.T) {
 	content, err := defaults.AutopayContent()
 	require.NoError(t, err)
 	deployAssets := txAsset(gas, 290000)
-	deployAssets = append(deployAssets, txAsset(defaults.AutopayFeeAssetName, 5000)...)
+	require.NoError(t, deployAssets.Merge(txAsset(defaults.AutopayFeeAssetName, 5000)))
 	deploy, contractAddress := buildDKVSKeyPathTemplateDeploy(t, ownerActor,
 		contractcommon.TemplateAutopay, content, ownerActor.Address, defaults.AutopayDeployNonce,
 		[]dkvsPrevOut{gasOuts[0], feeOuts[0]}, wire.TxOut{Value: 10000, Assets: deployAssets})
@@ -42,9 +42,17 @@ func TestRealSatoshiNetMessageTopicSDKToCore(t *testing.T) {
 	fundMember := buildDKVSKeyPathTemplateDefaultInvoke(t, memberActor, contractAddress,
 		[]dkvsPrevOut{feeOuts[1]}, wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 5000)})
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{fundMember}, 0)
-	heartbeatOwner := buildDKVSKeyPathAssetTransfer(t, ownerActor, gasOuts[1], gas, 290000, 9000, ownerActor)
+
+	// Delegate principal and operating gas share the same sgas asset on
+	// testnet, so fund the operating reserve explicitly instead of relying on
+	// duplicate asset entries to imply two accounting buckets.
+	gasParam, err := (&contractcommon.TemplateAutopayConfigInvokeParam{GasFundingAmount: "289950"}).Encode()
+	require.NoError(t, err)
+	gasFunding := buildDKVSKeyPathTemplateInvoke(t, ownerActor, contractAddress, 1,
+		contractcommon.TemplateInvokeAPIConfig, gasParam, []dkvsPrevOut{gasOuts[1]},
+		wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)})
 	heartbeatMember := buildDKVSKeyPathAssetTransfer(t, memberActor, gasOuts[3], gas, 290000, 9000, memberActor)
-	f.Network.sendManyAndMine(t, []*wire.MsgTx{heartbeatOwner, heartbeatMember}, 0)
+	f.Network.sendManyAndMine(t, []*wire.MsgTx{gasFunding, heartbeatMember}, 0)
 
 	state := fetchTemplateAutopayView(t, f.Network.Core, contractAddress.MustEncode())
 	require.Equal(t, templateruntime.AutopayStatusActive, state.Status)

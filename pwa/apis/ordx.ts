@@ -51,7 +51,10 @@ class OrdxApi {
   }
 
   async getNsName({ name, network }: any): Promise<any> {
-    const response = await fetch(this.generatePath(`ns/name/${name}`, network))
+    const response = await fetch(this.generatePath(`ns/name/${encodeURIComponent(name)}`, network))
+    if (!response.ok) {
+      throw new Error(`Name check failed with HTTP ${response.status}`)
+    }
     return response.json()
   }
 

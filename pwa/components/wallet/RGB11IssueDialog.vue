@@ -124,6 +124,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useClipboard } from '@vueuse/core'
 import walletManager from '@/utils/sat20'
+import { downloadRGB11ContractFile } from '@/utils/rgb11ContractFile'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -295,14 +296,7 @@ const copyContract = async () => {
 
 const downloadContract = () => {
   if (!contractConsignmentBase64.value) return
-  const bytes = Uint8Array.from(atob(contractConsignmentBase64.value), (value) => value.charCodeAt(0))
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }))
-  const link = document.createElement('a')
-  const id = issuedSummary.value?.contractId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'contract'
-  link.href = url
-  link.download = `rgb11-contract-${id}.rgb`
-  link.click()
-  URL.revokeObjectURL(url)
+  downloadRGB11ContractFile(contractConsignmentBase64.value, issuedSummary.value?.contractId || '')
 }
 
 const copyAssetName = async () => {

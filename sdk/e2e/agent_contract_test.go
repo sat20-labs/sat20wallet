@@ -391,6 +391,8 @@ func buildAgentDeployTx(t *testing.T, contract contractcommon.AgentPredictionCon
 	require.NoError(t, err)
 	deployFee, err := contractcommon.GasFeeAtHeight(contractcommon.DeployBaseGas, 0)
 	require.NoError(t, err)
+	resultFee, err := contractcommon.GasFeeAtHeight(contractcommon.ResultBaseGas, 0)
+	require.NoError(t, err)
 	tx, address, err := contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
 		ContractPrefix:  contractcommon.TestnetContractPrefix,
 		Type:            contractcommon.ContractTypeAgent,
@@ -401,10 +403,13 @@ func buildAgentDeployTx(t *testing.T, contract contractcommon.AgentPredictionCon
 		ContractContent: content,
 		GasLimit:        contractcommon.DeployBaseGas,
 		Inputs:          []wire.OutPoint{input},
+		Funding: wire.TxOut{Assets: txAsset(
+			contractcommon.GetGasAssetName(), int64(resultFee)),
+		},
 		ExtraOutputs: []*wire.TxOut{
 			wire.NewTxOut(inputOut.Value, txAsset(
 				contractcommon.GetGasAssetName(),
-				inputOut.Assets[0].Amount.Int64()-int64(deployFee),
+				inputOut.Assets[0].Amount.Int64()-int64(deployFee)-int64(resultFee),
 			), spendScript),
 		},
 	})

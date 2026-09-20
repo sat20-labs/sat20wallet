@@ -1,14 +1,14 @@
 {
   "version": "0.1.38",
-  "buildId": "20260914T033627Z",
-  "commit": "598de9889423",
+  "buildId": "20260915T144232Z",
+  "commit": "9c80d755b9ff",
   "releaseNotes": "WASM更新缓存修复",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-09-14T03:36:27.280Z",
+  "publishedAt": "2026-09-15T14:42:42.049Z",
   "serviceWorker": {
     "schemaVersion": 1,
-    "releaseId": "0.1.38-20260914T033627Z",
+    "releaseId": "0.1.38-20260915T144232Z",
     "killSwitch": false
   }
 }

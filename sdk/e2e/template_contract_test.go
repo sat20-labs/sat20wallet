@@ -1141,6 +1141,13 @@ func requireTxOutputAssetPositive(t *testing.T, tx *wire.MsgTx, address, assetNa
 	return ""
 }
 
+func txOutputPlainValue(txOut *wire.TxOut) int64 {
+	if txOut == nil {
+		return 0
+	}
+	return txOut.Value - (&txOut.Assets).GetBindingSatAmout()
+}
+
 func requireTxOutputValueAtLeast(t *testing.T, tx *wire.MsgTx, address string, value int64) {
 	t.Helper()
 	var total int64
@@ -1151,7 +1158,7 @@ func requireTxOutputValueAtLeast(t *testing.T, tx *wire.MsgTx, address string, v
 			seen = append(seen, describeTxOutput(txOut))
 		}
 		if gotAddr == address {
-			total += txOut.Value
+			total += txOutputPlainValue(txOut)
 		}
 	}
 	require.GreaterOrEqual(t, total, value, "tx=%s address=%s seen=%v", tx.TxHash(), address, seen)
@@ -1167,7 +1174,7 @@ func requireTxOutputValueAmount(t *testing.T, tx *wire.MsgTx, address string, va
 			seen = append(seen, describeTxOutput(txOut))
 		}
 		if gotAddr == address {
-			total += txOut.Value
+			total += txOutputPlainValue(txOut)
 		}
 	}
 	require.Equal(t, value, total, "tx=%s address=%s seen=%v", tx.TxHash(), address, seen)

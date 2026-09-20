@@ -133,6 +133,14 @@ type RGB11ImportResult struct {
 	Projected  int                `json:"projected"`
 }
 
+type RGB11ContractExportResult struct {
+	ContractID                string `json:"contract_id"`
+	SchemaID                  string `json:"schema_id"`
+	Armor                     string `json:"armor"`
+	ContractConsignmentBase64 string `json:"contract_consignment_base64"`
+	SHA256                    string `json:"sha256"`
+}
+
 // RGB11RejectListProvider makes the network policy injectable for deterministic
 // wallet tests. The default implementation permits plain HTTP only on loopback
 // while the wallet is configured for regtest.

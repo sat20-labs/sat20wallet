@@ -459,8 +459,10 @@
       "enterMintAmount": "Enter mint amount",
       "checkTickerBeforeMint": "Check ticker and mint permission first, then mint after it passes",
       "enterName": "Enter a name",
-      "invalidName": "Name cannot contain whitespace or /",
+      "invalidName": "Name must be valid UTF-8 up to 32 bytes, contain one or two dot-separated parts, and contain no punctuation, separators, or control characters",
       "nameExists": "Name already exists",
+      "nameCheckUnknown": "The indexer did not return an exact name result",
+      "nameMintPending": "This name was already submitted and is waiting for a confirmed result",
       "checkDidBeforeMint": "Check the DID name first, then mint after it passes"
     }
   },
@@ -701,7 +703,20 @@
     "noChannelTitle": "No Channel",
     "noChannelDescription": "You have no channel. Please create a channel first.",
     "closeChannelNote": "Closing incurs an on-chain network fee. The current reopening service fee will be shown in the channel opening preview.",
-    "closeChannelNoteWithFee": "Closing incurs an on-chain network fee. Reopening currently includes a service fee of {fee} sats."
+    "closeChannelNoteWithFee": "Closing incurs an on-chain network fee. Reopening currently includes a service fee of {fee} sats.",
+    "cooperativeClose": "Cooperative Close",
+    "cooperativeCloseConfirmTitle": "Confirm Cooperative Close",
+    "cooperativeCloseConfirmDescription": "Review the current channel details before requesting a cooperative close.",
+    "cooperativeCloseChannel": "Channel",
+    "cooperativeCloseNetwork": "Network",
+    "cooperativeCloseCapacity": "Current capacity",
+    "cooperativeCloseFeeRate": "BTC fee rate",
+    "cooperativeCloseReturnable": "Current returnable balance (before close fee)",
+    "cooperativeCloseType": "Close type",
+    "cooperativeCloseTypeValue": "Cooperative (force = false)",
+    "cooperativeCloseWarning": "Submit once. Closing is an asynchronous wallet operation; do not submit it repeatedly while it is being processed.",
+    "cooperativeCloseConfirm": "Confirm Close",
+    "cooperativeCloseSubmitting": "Submitting…"
   },
   "networkSetting": {
     "title": "Environment Options",
@@ -927,6 +942,8 @@
     "broadcastFailed": "Failed to broadcast RGB11 transaction",
     "copied": "Copied",
     "downloadContract": "Download Standard Contract File (.rgb)",
+    "exportContractSucceeded": "Standard RGB contract file downloaded",
+    "exportContractFailed": "Failed to export RGB contract file",
     "copyContract": "Copy Contract Consignment",
     "issueTitle": "Issue RGB11 Asset",
     "issueDescription": "Issue an official NIA, IFA, or UDA on confirmed plain Bitcoin UTXOs owned by this wallet.",

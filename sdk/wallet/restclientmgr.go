@@ -628,7 +628,7 @@ func (p *IndexerRPCClientMgr) GetNamesWithKey(in1 string, in2 string) ([]*indexe
 	if shouldSwitchIndexer(err) {
 		indexer := p.selector()
 		if indexer != nil {
-			result, err = indexer.GetNamesWithKey(in2, in2)
+			result, err = indexer.GetNamesWithKey(in1, in2)
 		}
 	}
 	return result, err

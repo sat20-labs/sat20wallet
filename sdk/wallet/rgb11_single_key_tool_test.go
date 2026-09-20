@@ -5,6 +5,8 @@ package wallet
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,8 +15,24 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	"github.com/sat20-labs/rgb11/seals"
+	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
+
+type orphanReceiptEvidence struct {
+	rgb11wallet.BitcoinEvidenceProvider
+}
+
+type orphanReceiptValidator struct {
+	receipt rgb11wallet.ValidationReceipt
+}
+
+func (v orphanReceiptValidator) ValidateConsignment(context.Context, []byte,
+	rgb11wallet.BitcoinEvidenceProvider) (*rgb11wallet.ValidationReceipt, error) {
+	receipt := v.receipt
+	return &receipt, nil
+}
 
 // Build two genuine consignments/transactions against the existing in-memory
 // evidence fixture. Confirm each transaction individually before exercising the
@@ -197,5 +215,239 @@ func TestRGB11SingleKeyRepairTool(t *testing.T) {
 				t.Fatal("tool broadcast")
 			}
 		})
+	}
+}
+
+func TestRGB11OrphanSelfReceiveRepairDryRunAndApply(t *testing.T) {
+	database := newMemoryKVDB()
+	projection := rgb11wallet.NewProjectionStore(database, nil)
+	engine := rgb11wallet.NewEngineStore(database)
+	if err := projection.SetScope("repair-account"); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SetScope("repair-account"); err != nil {
+		t.Fatal(err)
+	}
+	requestID := strings.Repeat("11", 32)
+	transferID := strings.Repeat("22", 32)
+	witnessTxID := strings.Repeat("33", 32)
+	consignment := []byte("missing self-receive consignment")
+	consignmentHashBytes := sha256.Sum256(consignment)
+	consignmentHash := hex.EncodeToString(consignmentHashBytes[:])
+	receipt := rgb11wallet.ValidationReceipt{
+		Version: 1, EngineBuildID: "repair-test", ConsignmentHash: consignmentHash,
+		ContractID: "rgb:repair-test", SchemaID: "rgb11", TransferID: transferID,
+		ValidatedAt: 1, Status: "valid",
+	}
+	if _, err := projection.ValidateAndStoreConsignment(context.Background(),
+		orphanReceiptValidator{receipt: receipt}, &orphanReceiptEvidence{}, consignment); err != nil {
+		t.Fatal(err)
+	}
+	receiveRequest := &corewallet.ReceiveRequest{
+		Version: corewallet.ReceiveVersion, Mode: corewallet.ReceiveWitness,
+		RequestID: requestID, RecipientID: "recipient", Seal: seals.NewWitnessBlindSeal(1, 7),
+		WitnessScript: []byte{0x51}, Invoice: "invoice", CreatedAt: 1, Expiry: 2,
+		Status: corewallet.ReceiveAcknowledged, TransferID: transferID,
+		ObjectHash: consignmentHash, WitnessTxID: witnessTxID,
+	}
+	encodedRequest, err := corewallet.EncodeReceiveRequest(receiveRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.ImportSnapshot([]rgb11wallet.SnapshotRecord{{
+		Key: "wallet/receive/" + requestID, Value: encodedRequest,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	pending := &rgb11wallet.PendingTransfer{
+		State: rgb11wallet.TransferState{
+			TransferID: transferID, Direction: "send", Status: "prepared",
+			WitnessTxID: witnessTxID, ConsignmentHash: consignmentHash,
+		},
+		RecipientConsignment: consignment, LocalConsignment: []byte("local consignment"),
+		SignedTx: []byte{1}, SignedPSBT: []byte{2},
+	}
+	if err := projection.SavePendingTransfer(pending); err != nil {
+		t.Fatal(err)
+	}
+	receiveState := &rgb11wallet.TransferState{
+		TransferID: transferID, Direction: "receive", Status: "awaiting_broadcast",
+		WitnessTxID: witnessTxID, ConsignmentHash: consignmentHash,
+	}
+	if err := projection.SaveTransferState(receiveState); err != nil {
+		t.Fatal(err)
+	}
+	if err := projection.SavePreparedReceive(transferID, requestID); err != nil {
+		t.Fatal(err)
+	}
+	pending.State.Status = "rejected"
+	pending.State.RejectReason = "user-rejected"
+	if err := projection.SavePendingTransferState(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := projection.CompactRejectedTransfers([]string{transferID}); err != nil {
+		t.Fatal(err)
+	}
+	projectionRecords, err := projection.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	damaged := make([]rgb11wallet.SnapshotRecord, 0, len(projectionRecords))
+	for _, record := range projectionRecords {
+		if record.Key != "object-"+consignmentHash {
+			damaged = append(damaged, record)
+		}
+	}
+	engineRecords, err := engine.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &rgb11wallet.RGB11WalletSnapshot{
+		Version: rgb11wallet.WalletSnapshotVersion, WalletID: "rgb11-repair-wallet",
+		AccountIndex: 0, EngineBuildID: "test", ProjectionRecords: damaged, EngineRecords: engineRecords,
+	}
+	fingerprint, err := rgb11wallet.HistoricalRepairSnapshotHash(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := rgb11wallet.OrphanReceiveRepairTarget{
+		WalletID: snapshot.WalletID, AccountIndex: 0, SnapshotHash: fingerprint,
+		RequestID: requestID, TransferID: transferID, WitnessTxID: witnessTxID, ConsignmentHash: consignmentHash,
+	}
+	verified := 0
+	verifyAbsent := func(sender *rgb11wallet.PendingTransfer) error {
+		verified++
+		if sender == nil || sender.State.WitnessTxID != witnessTxID {
+			return fmt.Errorf("wrong witness")
+		}
+		return nil
+	}
+	plan, candidate, err := rgb11wallet.PlanOrphanReceiveRepair(snapshot, target, verifyAbsent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.BeforeHash != fingerprint || plan.AfterHash == fingerprint || verified != 1 {
+		t.Fatalf("invalid dry-run plan: %+v verified=%d", plan, verified)
+	}
+	if unchanged, _ := rgb11wallet.HistoricalRepairSnapshotHash(snapshot); unchanged != fingerprint {
+		t.Fatal("dry-run mutated source snapshot")
+	}
+	if err := rgb11wallet.ValidateWalletSnapshot(candidate); err != nil {
+		t.Fatal(err)
+	}
+	requestAfter, err := corewallet.DecodeReceiveRequest(candidate.EngineRecords[0].Value)
+	if err != nil || requestAfter.Status != corewallet.ReceivePrepared || requestAfter.TransferID != "" ||
+		requestAfter.ObjectHash != "" || requestAfter.WitnessTxID != "" {
+		t.Fatalf("request not safely reset: %+v err=%v", requestAfter, err)
+	}
+	for _, record := range candidate.ProjectionRecords {
+		if record.Key == "transfer-"+transferID || record.Key == "prepared-receive-"+transferID ||
+			record.Key == "validation-"+consignmentHash {
+			t.Fatalf("orphan receive record survived: %s", record.Key)
+		}
+	}
+	foundReceiptDelete := false
+	for _, change := range plan.Changes {
+		if change.Store == "projection" && change.Key == "validation-"+consignmentHash && change.Delete {
+			foundReceiptDelete = true
+		}
+	}
+	if !foundReceiptDelete {
+		t.Fatal("orphan validation receipt deletion is missing from the approved plan")
+	}
+	approved, err := rgb11wallet.ApplyOrphanReceiveRepair(snapshot, plan, verifyAbsent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedHash, _ := rgb11wallet.HistoricalRepairSnapshotHash(approved)
+	if approvedHash != plan.AfterHash {
+		t.Fatalf("apply hash=%s want=%s", approvedHash, plan.AfterHash)
+	}
+	tampered := *plan
+	tampered.AfterHash = "tampered"
+	if _, err := rgb11wallet.ApplyOrphanReceiveRepair(snapshot, &tampered, verifyAbsent); err == nil {
+		t.Fatal("tampered approval was accepted")
+	}
+	if _, _, err := rgb11wallet.PlanOrphanReceiveRepair(snapshot, target, func(*rgb11wallet.PendingTransfer) error {
+		return fmt.Errorf("witness lookup unavailable")
+	}); err == nil {
+		t.Fatal("unknown witness state was accepted")
+	}
+	// A rejected sender which still has any broadcast-capable payload is not an
+	// orphan: the repair tool must leave it for normal recovery.
+	pending.RecipientConsignment = nil
+	pending.LocalConsignment = nil
+	pending.RecipientObjectHash = ""
+	pending.LocalObjectHash = ""
+	pending.SignedTx = []byte{1}
+	pending.SignedPSBT = nil
+	if err := projection.SavePendingTransferState(pending); err != nil {
+		t.Fatal(err)
+	}
+	unsafeProjection, err := projection.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsafeSnapshot := &rgb11wallet.RGB11WalletSnapshot{
+		Version: rgb11wallet.WalletSnapshotVersion, WalletID: snapshot.WalletID,
+		AccountIndex: snapshot.AccountIndex, EngineBuildID: snapshot.EngineBuildID,
+		ProjectionRecords: unsafeProjection, EngineRecords: engineRecords,
+	}
+	unsafeHash, err := rgb11wallet.HistoricalRepairSnapshotHash(unsafeSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsafeTarget := target
+	unsafeTarget.SnapshotHash = unsafeHash
+	if _, _, err := rgb11wallet.PlanOrphanReceiveRepair(unsafeSnapshot, unsafeTarget, verifyAbsent); err == nil {
+		t.Fatal("sender payload capable of recovery was accepted")
+	}
+
+	// A receipt at the target key must itself be bound to the missing target
+	// object and transfer. The tool must not hide unrelated receipt corruption by
+	// deleting whatever bytes happen to occupy validation-<target hash>.
+	otherDB := newMemoryKVDB()
+	otherProjection := rgb11wallet.NewProjectionStore(otherDB, nil)
+	if err := otherProjection.SetScope("other-receipt"); err != nil {
+		t.Fatal(err)
+	}
+	otherRaw := []byte("unrelated consignment")
+	otherHashBytes := sha256.Sum256(otherRaw)
+	otherHash := hex.EncodeToString(otherHashBytes[:])
+	otherReceipt := receipt
+	otherReceipt.ConsignmentHash = otherHash
+	otherReceipt.TransferID = strings.Repeat("44", 32)
+	if _, err := otherProjection.ValidateAndStoreConsignment(context.Background(),
+		orphanReceiptValidator{receipt: otherReceipt}, &orphanReceiptEvidence{}, otherRaw); err != nil {
+		t.Fatal(err)
+	}
+	otherRecords, err := otherProjection.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unrelatedReceipt []byte
+	for _, record := range otherRecords {
+		if record.Key == "validation-"+otherHash {
+			unrelatedReceipt = append([]byte(nil), record.Value...)
+		}
+	}
+	if len(unrelatedReceipt) == 0 {
+		t.Fatal("unrelated validation receipt fixture missing")
+	}
+	mismatched := *snapshot
+	mismatched.ProjectionRecords = append([]rgb11wallet.SnapshotRecord(nil), snapshot.ProjectionRecords...)
+	for index := range mismatched.ProjectionRecords {
+		if mismatched.ProjectionRecords[index].Key == "validation-"+consignmentHash {
+			mismatched.ProjectionRecords[index].Value = unrelatedReceipt
+		}
+	}
+	mismatchedHash, err := rgb11wallet.HistoricalRepairSnapshotHash(&mismatched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatchedTarget := target
+	mismatchedTarget.SnapshotHash = mismatchedHash
+	if _, _, err := rgb11wallet.PlanOrphanReceiveRepair(&mismatched, mismatchedTarget, verifyAbsent); err == nil {
+		t.Fatal("validation receipt for another object and transfer was deleted")
 	}
 }

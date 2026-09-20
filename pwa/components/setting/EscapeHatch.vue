@@ -27,8 +27,8 @@
 
         <!-- Broadcast Button -->
         <div class="mt-4 grid gap-2">
-          <Button class="w-full bg-purple-600 text-white" :disabled="loading" @click="closeChannel">
-            Cooperative Close
+          <Button class="w-full bg-purple-600 text-white" :disabled="loading" @click="requestCooperativeClose">
+            {{ $t('escapeHatch.cooperativeClose') }}
           </Button>
           <Button class="w-full" variant="destructive" :disabled="loading" @click="requestForceClose">
             Force Close
@@ -149,6 +149,56 @@
       </div>
     </div>
 
+    <AlertDialog v-model:open="showCooperativeCloseConfirm">
+      <AlertDialogContent class="w-[350px] rounded-lg bg-zinc-900">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{{ $t('escapeHatch.cooperativeCloseConfirmTitle') }}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {{ $t('escapeHatch.cooperativeCloseConfirmDescription') }}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div v-if="cooperativeCloseSnapshot" class="space-y-2 rounded border border-zinc-700 p-3 text-sm text-zinc-300">
+          <div>
+            <p class="text-xs text-zinc-500">{{ $t('escapeHatch.cooperativeCloseChannel') }}</p>
+            <p class="break-all">{{ cooperativeCloseSnapshot.channelId }}</p>
+          </div>
+          <div>
+            <p class="text-xs text-zinc-500">{{ $t('escapeHatch.cooperativeCloseNetwork') }}</p>
+            <p>{{ cooperativeCloseSnapshot.network }}</p>
+          </div>
+          <div>
+            <p class="text-xs text-zinc-500">{{ $t('escapeHatch.cooperativeCloseCapacity') }}</p>
+            <p>{{ cooperativeCloseSnapshot.capacity }} sats</p>
+          </div>
+          <div>
+            <p class="text-xs text-zinc-500">{{ $t('escapeHatch.cooperativeCloseFeeRate') }}</p>
+            <p>{{ cooperativeCloseSnapshot.feeRate }} sats/vB</p>
+          </div>
+          <div>
+            <p class="text-xs text-zinc-500">{{ $t('escapeHatch.cooperativeCloseReturnable') }}</p>
+            <p>{{ cooperativeCloseSnapshot.returnableBalance }}</p>
+          </div>
+          <div>
+            <p class="text-xs text-zinc-500">{{ $t('escapeHatch.cooperativeCloseType') }}</p>
+            <p>{{ $t('escapeHatch.cooperativeCloseTypeValue') }}</p>
+          </div>
+        </div>
+        <p class="rounded border border-yellow-700 bg-yellow-900/20 p-3 text-sm text-yellow-300">
+          {{ $t('escapeHatch.cooperativeCloseWarning') }}
+        </p>
+        <AlertDialogFooter>
+          <AlertDialogCancel :disabled="cooperativeCloseSubmitting">
+            {{ $t('common.cancel') }}
+          </AlertDialogCancel>
+          <AlertDialogAction :disabled="cooperativeCloseSubmitting" @click.prevent="confirmCooperativeClose">
+            {{ cooperativeCloseSubmitting
+              ? $t('escapeHatch.cooperativeCloseSubmitting')
+              : $t('escapeHatch.cooperativeCloseConfirm') }}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
     <AlertDialog v-model:open="showForceCloseConfirm">
       <AlertDialogContent class="w-[350px] rounded-lg bg-zinc-900">
         <AlertDialogHeader>
@@ -205,6 +255,8 @@ const { btcFeeRate, network } = storeToRefs(walletStore)
 
 const loading = ref(false)
 const isExpanded = ref(false)
+const showCooperativeCloseConfirm = ref(false)
+const cooperativeCloseSubmitting = ref(false)
 const showForceCloseConfirm = ref(false)
 const forceCloseSnapshot = ref<any | null>(null)
 const commitTxData = ref<CommitTxAssetInfo | null>(null)
@@ -277,6 +329,34 @@ const channelId = computed(() => {
   return channel.value?.channelId
 })
 
+interface CooperativeCloseSnapshot {
+  channelId: string
+  networkKey: string
+  network: string
+  capacity: string
+  feeRate: string
+  returnableBalance: string
+}
+
+const cooperativeCloseSnapshot = ref<CooperativeCloseSnapshot | null>(null)
+
+const cooperativeCloseNetworkLabel = (networkKey: string) => (
+  networkKey.toLowerCase() === 'mainnet'
+    ? 'Bitcoin mainnet / SatoshiNet mainnet'
+    : 'Bitcoin testnet4 / SatoshiNet testnet'
+)
+
+const formatCooperativeCloseBalance = (balances: any[]) => {
+  if (!Array.isArray(balances) || balances.length === 0) return '0 sats'
+  return balances.map((balance) => {
+    const name = balance?.Name || {}
+    const asset = !name.Protocol && !name.Type && !name.Ticker
+      ? 'sats'
+      : (name.Ticker || [name.Protocol, name.Type].filter(Boolean).join(':') || 'asset')
+    return `${String(balance?.Amount ?? 0)} ${asset}`
+  }).join(', ')
+}
+
 const transactionPath = (outpoint: string) => `tx/${outpoint.split(':', 1)[0]}`
 
 const refreshReopenFee = async () => {
@@ -296,13 +376,42 @@ const refreshReopenFee = async () => {
   }
 }
 
-const closeChannel = async () => {
+const requestCooperativeClose = () => {
   const id = channelId.value
-  if (!id) return
+  if (!id || loading.value) return
 
+  const networkKey = String(network.value || 'testnet')
+  cooperativeCloseSnapshot.value = {
+    channelId: id,
+    networkKey,
+    network: cooperativeCloseNetworkLabel(networkKey),
+    capacity: String(channel.value?.capacity ?? 0),
+    feeRate: String(btcFeeRate.value),
+    returnableBalance: formatCooperativeCloseBalance(channel.value?.localbalanceL1 || []),
+  }
+  showCooperativeCloseConfirm.value = true
+}
+
+const confirmCooperativeClose = async () => {
+  const snapshot = cooperativeCloseSnapshot.value
+  if (!snapshot || cooperativeCloseSubmitting.value) return
+
+  if (snapshot.channelId !== channelId.value ||
+      snapshot.networkKey !== String(network.value || 'testnet') ||
+      snapshot.feeRate !== String(btcFeeRate.value)) {
+    showCooperativeCloseConfirm.value = false
+    toast({
+      title: 'Error',
+      description: 'The channel or network changed. Review the current close details and confirm again.',
+      variant: 'destructive',
+    })
+    return
+  }
+
+  cooperativeCloseSubmitting.value = true
   loading.value = true
   try {
-    const [err] = await satsnetStp.closeChannel(id, btcFeeRate.value, false)
+    const [err] = await satsnetStp.closeChannel(snapshot.channelId, snapshot.feeRate, false)
     if (err) {
       toast({
         title: 'Error',
@@ -317,7 +426,9 @@ const closeChannel = async () => {
       variant: 'success',
     })
   } finally {
+    cooperativeCloseSubmitting.value = false
     loading.value = false
+    showCooperativeCloseConfirm.value = false
   }
 }
 

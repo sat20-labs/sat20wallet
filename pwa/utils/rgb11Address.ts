@@ -8,12 +8,12 @@ type WasmResponse<T> = {
   data?: T
 }
 
-const call = async <T>(methodName: string, ...args: unknown[]): Promise<[Error | undefined, T | undefined]> => {
-  const operation = await beginPwaWalletOperation(methodName, args as any[])
+const invoke = async <T>(methodName: string, args: unknown[], recordOperation: boolean): Promise<[Error | undefined, T | undefined]> => {
+  const operation = recordOperation ? await beginPwaWalletOperation(methodName, args as any[]) : null
   const method = (globalThis as any).sat20wallet_wasm?.[methodName]
   if (typeof method !== 'function') {
     const methodError = new Error(`RGB11 WASM method ${methodName} is unavailable`)
-    await finishPwaOperation(operation, methodError)
+    if (operation) await finishPwaOperation(operation, methodError)
     return [methodError, undefined]
   }
   let finishVersion: (() => void) | undefined
@@ -23,23 +23,31 @@ const call = async <T>(methodName: string, ...args: unknown[]): Promise<[Error |
     return method(...args)
   })()
   if (invokeError) {
-    await finishPwaOperation(operation, invokeError)
+    if (operation) await finishPwaOperation(operation, invokeError)
     return [invokeError, undefined]
   }
   const response = raw as WasmResponse<T> | undefined
   if (!response) {
-    await finishPwaOperation(operation)
+    if (operation) await finishPwaOperation(operation)
     return [undefined, undefined]
   }
   if (response.code !== 0) {
     const responseError = new Error(response.msg)
-    await finishPwaOperation(operation, responseError)
+    if (operation) await finishPwaOperation(operation, responseError)
     return [responseError, undefined]
   }
-  await finishPwaOperation(operation, null, response.data)
+  if (operation) await finishPwaOperation(operation, null, response.data)
   return [undefined, response.data]
   } finally { finishVersion?.() }
 }
+
+const call = async <T>(methodName: string, ...args: unknown[]): Promise<[Error | undefined, T | undefined]> => (
+  invoke<T>(methodName, args, true)
+)
+
+const backgroundCall = async <T>(methodName: string, ...args: unknown[]): Promise<[Error | undefined, T | undefined]> => (
+  invoke<T>(methodName, args, false)
+)
 
 export type RGB11AddressReceiveRequest = {
   ttl?: number
@@ -90,6 +98,10 @@ const rgb11Address = {
   }>('deliverAndBroadcastRGB11AddressTransfer', JSON.stringify(request)),
 
   syncMailbox: (request: RGB11AddressMailboxRequest = {}) => call<{ result: string }>(
+    'syncRGB11AddressMailbox', JSON.stringify(request),
+  ),
+
+  syncMailboxInBackground: (request: RGB11AddressMailboxRequest = {}) => backgroundCall<{ result: string }>(
     'syncRGB11AddressMailbox', JSON.stringify(request),
   ),
 

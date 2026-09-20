@@ -555,6 +555,9 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 		if recoveryErr := p.rehydratePendingLocalActionRuntime(); recoveryErr != nil {
 			Log.Warningf("restore pending local action channels failed: %v", recoveryErr)
 		}
+		if recoveryErr := p.rehydratePendingRemoteActionRuntime(); recoveryErr != nil {
+			Log.Warningf("restore pending remote action signers failed: %v", recoveryErr)
+		}
 		if recoveryErr := p.initializeLocalReadyChannels(); recoveryErr != nil {
 			Log.Warningf("initialize local ready channels failed: %v", recoveryErr)
 		}
@@ -737,16 +740,26 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 }
 
 func (p *Manager) GetCurrentWalletId() int64 {
+	if p == nil {
+		return 0
+	}
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-
+	if p.status == nil {
+		return 0
+	}
 	return p.status.CurrentWallet
 }
 
 func (p *Manager) GetCurrentAccountId() uint32 {
+	if p == nil {
+		return 0
+	}
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-
+	if p.status == nil {
+		return 0
+	}
 	return p.status.CurrentAccount
 }
 

@@ -5235,6 +5235,25 @@ func importRGB11ContractFile(this js.Value, p []js.Value) any {
 	return js.Global().Get("Promise").New(jsHandler)
 }
 
+func exportRGB11Contract(this js.Value, p []js.Value) any {
+	if _mgr == nil || len(p) < 1 {
+		return createJsRet(nil, -1, "missing RGB11 contract id")
+	}
+	contractID := p[0].String()
+	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
+		result, err := _mgr.ExportRGB11Contract(contractID)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"result": string(encoded)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(jsHandler)
+}
+
 func issueRGB11Asset(this js.Value, p []js.Value) any {
 	if _mgr == nil || len(p) < 1 {
 		return createJsRet(nil, -1, "missing RGB11 issuance request")
@@ -5551,6 +5570,7 @@ func main() {
 	obj.Set("receiveRGB11ProxyConsignment", js.FuncOf(receiveRGB11ProxyConsignment))
 	obj.Set("importRGB11Contract", js.FuncOf(importRGB11Contract))
 	obj.Set("importRGB11ContractFile", js.FuncOf(importRGB11ContractFile))
+	obj.Set("exportRGB11Contract", js.FuncOf(exportRGB11Contract))
 	obj.Set("issueRGB11Asset", js.FuncOf(issueRGB11Asset))
 	obj.Set("prepareRGB11Transfer", js.FuncOf(prepareRGB11Transfer))
 	obj.Set("resumeRGB11PreparedTransfer", js.FuncOf(resumeRGB11PreparedTransfer))
@@ -5604,6 +5624,7 @@ func main() {
 	obj.Set("getAllRegisteredReferrerName", js.FuncOf(getAllRegisteredReferrerName))
 	obj.Set("registerAsReferrer", js.FuncOf(registerAsReferrer))
 	obj.Set("bindReferrerForServer", js.FuncOf(bindReferrerForServer))
+	registerRemoteActionRepair(obj)
 
 	js.Global().Set(module, obj)
 	wallet.Log.SetLevel(logrus.DebugLevel)

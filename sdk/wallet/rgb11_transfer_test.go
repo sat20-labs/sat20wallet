@@ -320,6 +320,254 @@ func TestRGB11StandardOutOfBandPrepareBroadcastAccept(t *testing.T) {
 	}
 }
 
+func TestRGB11StandardBlindOutOfBandPrepareWithoutBroadcast(t *testing.T) {
+	senderWallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
+	)
+	recipientWallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
+	)
+	if senderWallet == nil || recipientWallet == nil {
+		t.Fatal("create RGB11 blind out-of-band wallets")
+	}
+	senderScript, err := AddrToPkScript(senderWallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientScript, err := AddrToPkScript(recipientWallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sourceOutpoint = "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
+	const senderFeeOutpoint = "2222222222222222222222222222222222222222222222222222222222222222:0"
+	const recipientSealOutpoint = "3333333333333333333333333333333333333333333333333333333333333333:0"
+	evidence := &rgb11FlowEvidence{
+		utxos: map[string]*rgb11wallet.BitcoinUTXO{
+			sourceOutpoint:        {OutPoint: sourceOutpoint, Value: 10_000, PkScript: senderScript, Confirmations: 6},
+			recipientSealOutpoint: {OutPoint: recipientSealOutpoint, Value: 100_000, PkScript: recipientScript, Confirmations: 6},
+		},
+		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+	}
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
+	for _, output := range []struct {
+		outpoint string
+		value    int64
+		script   []byte
+	}{
+		{sourceOutpoint, 10_000, senderScript},
+		{senderFeeOutpoint, 100_000, senderScript},
+		{recipientSealOutpoint, 100_000, recipientScript},
+	} {
+		view := indexer.NewTxOutput(output.value)
+		view.OutPointStr = output.outpoint
+		view.OutValue.PkScript = append([]byte(nil), output.script...)
+		rpc.outputs[output.outpoint] = view
+		rpc.plain = append(rpc.plain, &indexerwire.TxOutputInfo{
+			OutPoint: output.outpoint, Value: output.value, PkScript: append([]byte(nil), output.script...),
+		})
+	}
+	sender := newRGB11FlowManager(t, senderWallet, rpc, evidence, 107)
+	recipient := newRGB11FlowManager(t, recipientWallet, rpc, evidence, 108)
+	contract, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-example.rgba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := sender.ImportRGB11Contract(context.Background(), contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := recipient.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "blind", TransportMode: "out-of-band", ContractID: imported.ContractID,
+		AmountRaw: "1000", Expiry: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := invoicing.Parse(request.Invoice)
+	if err != nil || parsed.Beneficiary.Kind != invoicing.BeneficiaryBlindedSeal || len(parsed.Transports) != 0 {
+		t.Fatalf("unexpected standard blind invoice: %+v err=%v", parsed, err)
+	}
+	invalid := *parsed
+	invalid.Beneficiary.Kind = 0
+	if _, _, _, _, _, _, err := validateRGB11SendInvoice(&invalid, nil, nil); !errors.Is(err, invoicing.ErrInvalidInvoice) {
+		t.Fatalf("invalid beneficiary accepted: %v", err)
+	}
+	reservations, err := recipient.rgbManager.projectionStore.ListReceiveReservations()
+	if err != nil || len(reservations) != 1 || reservations[0].RequestID != request.RequestID ||
+		reservations[0].OutPoint != recipientSealOutpoint {
+		t.Fatalf("unexpected blind receive reservation: %+v err=%v", reservations, err)
+	}
+
+	if _, err := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
+		Invoices: []string{request.Invoice, request.Invoice}, FeeRate: 2, MinConfirmations: 1,
+	}); err == nil || !strings.Contains(err.Error(), "batch send requires witness invoices") {
+		t.Fatalf("standard blind batch was not rejected: %v", err)
+	}
+	prepared, err := sender.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
+		Invoice: request.Invoice, FeeRate: 2, MinConfirmations: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.State.TransportMode != "out-of-band" || prepared.State.RecipientVout != 0 {
+		t.Fatalf("unexpected standard blind prepared state: %+v", prepared.State)
+	}
+	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness := wire.NewMsgTx(wire.TxVersion)
+	if err := witness.Deserialize(bytes.NewReader(pending.SignedTx)); err != nil {
+		t.Fatal(err)
+	}
+	if len(witness.TxOut) != 2 || len(witness.TxOut[0].PkScript) != 34 || witness.TxOut[0].PkScript[0] != txscript.OP_RETURN {
+		t.Fatalf("standard blind transfer created a recipient witness output: %+v", witness.TxOut)
+	}
+	if len(evidence.broadcasted) != 0 {
+		t.Fatal("prepare unexpectedly broadcast the blind transfer")
+	}
+	receipt, err := recipient.PrepareRGB11Consignment(
+		context.Background(), request.RequestID, []byte(prepared.RecipientConsignment),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched := false
+	for _, allocation := range receipt.Allocations {
+		if allocation.OutPoint == recipientSealOutpoint && allocation.Amount.Value != nil &&
+			allocation.Amount.Value.Uint64() == 1000 {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		t.Fatalf("prepared blind consignment does not target reserved seal: %+v", receipt.Allocations)
+	}
+	state, err := recipient.GetRGB11State()
+	if err != nil || len(state.Transfers) != 1 || state.Transfers[0].Status != "awaiting_broadcast" ||
+		state.Transfers[0].TransportMode != "out-of-band" ||
+		!slices.Equal(state.Transfers[0].OutputOutPoints, []string{recipientSealOutpoint}) {
+		t.Fatalf("unexpected prepared blind receive state: %+v err=%v", state, err)
+	}
+	if len(evidence.broadcasted) != 0 {
+		t.Fatal("recipient prepare unexpectedly broadcast the blind transfer")
+	}
+}
+
+func TestRGB11SelfOutOfBandListsSenderAndReceiverStates(t *testing.T) {
+	wallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
+	)
+	if wallet == nil {
+		t.Fatal("create RGB11 self-transfer wallet")
+	}
+	walletScript, err := AddrToPkScript(wallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sourceOutpoint = "14295d5bb1a191cdb6286dc0944df938421e3dfcbf0811353ccac4100c2068c5:1"
+	const plainOutpoint = "2222222222222222222222222222222222222222222222222222222222222222:0"
+	evidence := &rgb11FlowEvidence{
+		utxos: map[string]*rgb11wallet.BitcoinUTXO{
+			sourceOutpoint: {OutPoint: sourceOutpoint, Value: 10_000, PkScript: walletScript, Confirmations: 6},
+		},
+		rawTx: make(map[string][]byte), spendingTx: make(map[string]string),
+	}
+	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
+	sourceOutput := indexer.NewTxOutput(10_000)
+	sourceOutput.OutPointStr, sourceOutput.OutValue.PkScript = sourceOutpoint, walletScript
+	rpc.outputs[sourceOutpoint] = sourceOutput
+	plainOutput := indexer.NewTxOutput(100_000)
+	plainOutput.OutPointStr, plainOutput.OutValue.PkScript = plainOutpoint, walletScript
+	rpc.outputs[plainOutpoint] = plainOutput
+	rpc.plain = []*indexerwire.TxOutputInfo{
+		{OutPoint: sourceOutpoint, Value: 10_000, PkScript: walletScript},
+		{OutPoint: plainOutpoint, Value: 100_000, PkScript: walletScript},
+	}
+	manager := newRGB11FlowManager(t, wallet, rpc, evidence, 106)
+	contract, err := os.ReadFile("../../../rgb11/testvectors/rc11/nia-example.rgba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := manager.ImportRGB11Contract(context.Background(), contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const amount = uint64(20_000)
+	request, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
+		Mode: "witness", TransportMode: "out-of-band", ContractID: imported.ContractID,
+		AmountRaw: fmt.Sprint(amount), WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := manager.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
+		Invoice: request.Invoice, FeeRate: 2, MinConfirmations: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := manager.PrepareRGB11Consignment(
+		context.Background(), request.RequestID, []byte(prepared.RecipientConsignment),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.TransferID != prepared.State.TransferID {
+		t.Fatalf("self-transfer receipt id=%s sender id=%s", receipt.TransferID, prepared.State.TransferID)
+	}
+
+	state, err := manager.GetRGB11State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Transfers) != 2 {
+		t.Fatalf("self-transfer states=%+v", state.Transfers)
+	}
+	receive, send := state.Transfers[0], state.Transfers[1]
+	if receive.TransferID != send.TransferID || receive.TransferID != prepared.State.TransferID ||
+		receive.Direction != "receive" || send.Direction != "send" {
+		t.Fatalf("self-transfer order or identity receive=%+v send=%+v", receive, send)
+	}
+	if receive.Status != "awaiting_broadcast" || len(receive.OutputOutPoints) != 1 ||
+		receive.OutputOutPoints[0] != fmt.Sprintf("%s:%d", prepared.State.WitnessTxID, prepared.State.RecipientVout) {
+		t.Fatalf("self-transfer receive state=%+v", receive)
+	}
+	if send.Status != "prepared" || len(send.OutputOutPoints) < 2 || send.OutputOutPoints[0] != receive.OutputOutPoints[0] {
+		t.Fatalf("self-transfer send state=%+v", send)
+	}
+	if receive.Invoice != send.Invoice || receive.ConsignmentHash != send.ConsignmentHash ||
+		receive.WitnessTxID != send.WitnessTxID || receive.Asset.Name != send.Asset.Name ||
+		receive.Asset.Amount.Cmp(&send.Asset.Amount) != 0 {
+		t.Fatalf("self-transfer binding receive=%+v send=%+v", receive, send)
+	}
+	if _, err := manager.rgbManager.projectionStore.LoadObject(receive.ConsignmentHash); err != nil {
+		t.Fatalf("load prepared receive object before sender cancellation: %v", err)
+	}
+	if err := manager.CancelRGB11OutOfBandTransfer(send.TransferID); err != nil {
+		t.Fatal(err)
+	}
+	compacted, err := manager.rgbManager.projectionStore.LoadPendingTransfer(send.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compacted.State.Status != "rejected" || compacted.State.RejectReason != RGB11RejectReasonUser ||
+		len(compacted.SignedTx) != 0 || len(compacted.SignedPSBT) != 0 ||
+		len(compacted.RecipientConsignment) != 0 || len(compacted.LocalConsignment) != 0 {
+		t.Fatalf("sender cancellation was not compacted: %+v", compacted)
+	}
+	if _, err := manager.rgbManager.projectionStore.LoadObject(receive.ConsignmentHash); err != nil {
+		t.Fatalf("sender cancellation deleted live receive object: %v", err)
+	}
+	refresh, err := manager.RefreshRGB11State(context.Background())
+	if err != nil {
+		t.Fatalf("refresh live self-receive after sender cancellation: %v", err)
+	}
+	if refresh.Pending != 1 || manager.GetRGB11ConsistencyStatus() != "ok" {
+		t.Fatalf("refresh=%+v consistency=%s", refresh, manager.GetRGB11ConsistencyStatus())
+	}
+}
+
 func TestRGB11CancelPreparedOutOfBandTransfer(t *testing.T) {
 	wallet := NewInternalWalletWithMnemonic(
 		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
@@ -547,6 +795,22 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 				!bytes.HasPrefix(contractFile, []byte("RGB\x00CON")) {
 				t.Fatalf("standard contract export does not match issued contract")
 			}
+			exported, err := manager.ExportRGB11Contract(issued.ContractID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			exportedFile, err := base64.StdEncoding.DecodeString(exported.ContractConsignmentBase64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(exportedFile, contractFile) || !bytes.HasPrefix(exportedFile, []byte("RGB\x00CON")) ||
+				exported.ContractID != issued.ContractID || exported.SchemaID != issued.SchemaID || exported.Armor == "" {
+				t.Fatalf("wallet contract export mismatch: %+v", exported)
+			}
+			digest := sha256.Sum256(exportedFile)
+			if exported.SHA256 != hex.EncodeToString(digest[:]) {
+				t.Fatalf("wallet contract export digest=%s want=%x", exported.SHA256, digest)
+			}
 			imported, err := manager.ImportRGB11ContractFile(context.Background(), contractFile)
 			if err != nil {
 				t.Fatal(err)
@@ -727,6 +991,97 @@ func TestRGB11IssuedUDASendReceive(t *testing.T) {
 	balance, err := recipient.GetRGB11AssetBalance(&issued.AssetName)
 	if err != nil || balance.Value.Uint64() != 1 {
 		t.Fatalf("recipient UDA balance=%+v err=%v", balance, err)
+	}
+	exported, err := recipient.ExportRGB11Contract(issued.ContractID)
+	if err != nil {
+		t.Fatalf("recipient must export the contract from received validated history: %v", err)
+	}
+	exportedFile, err := base64.StdEncoding.DecodeString(exported.ContractConsignmentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exportedContract, err := coreconsignment.DecodeFile(exportedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exportedContract.Armor == nil || exportedContract.Armor.Type != "contract" ||
+		exportedContract.ContractID != issued.ContractID || !bytes.HasPrefix(exportedFile, []byte("RGB\x00CON")) {
+		t.Fatalf("recipient contract export is not canonical: %+v", exported)
+	}
+	issuedFile, err := base64.StdEncoding.DecodeString(issued.ContractConsignmentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(exportedFile, issuedFile) {
+		t.Fatal("recipient export differs from the canonical issued contract")
+	}
+
+	// Stable account recovery deliberately keeps the settled transfer proof and
+	// its transfer object, not presentation/index caches such as contract-object.
+	// A recovered recipient must therefore be able to derive the canonical
+	// contract again from the validated transfer history.
+	proof, err := recipient.rgbManager.projectionStore.LoadProof(
+		receipt.Allocations[0].OutPoint, receipt.Allocations[0].AssetName,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.Status = "settled"
+	proof.Confirmations = 1
+	if err := recipient.rgbManager.projectionStore.SaveProofState(proof); err != nil {
+		t.Fatal(err)
+	}
+	contractObjectHash, err := recipient.rgbManager.projectionStore.LoadContractObjectReference(issued.ContractID)
+	if err != nil || contractObjectHash == "" {
+		t.Fatalf("recipient canonical contract reference missing before recovery: hash=%s err=%v", contractObjectHash, err)
+	}
+	walletID, err := recipient.rgbManager.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullSnapshot, _, err := recipient.rgbManager.exportRGB11WalletSnapshot(walletID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := rgb11wallet.RecoveryPackageFromSnapshot(fullSnapshot, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range recovery.ProjectionRecords {
+		if strings.HasPrefix(record.Key, "contract-object-") || record.Key == "object-"+contractObjectHash {
+			t.Fatalf("stable recovery unexpectedly retained derived contract cache %s", record.Key)
+		}
+	}
+	recoverySnapshot, err := recovery.WalletSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredWallet := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
+	)
+	if recoveredWallet == nil {
+		t.Fatal("create recovered recipient wallet")
+	}
+	recovered := newRGB11FlowManager(t, recoveredWallet, rpc, evidence, 33)
+	if err := recovered.rgbManager.projectionStore.ImportSnapshot(recoverySnapshot.ProjectionRecords); err != nil {
+		t.Fatal(err)
+	}
+	if err := recovered.rgbManager.engineStore.ImportSnapshot(recoverySnapshot.EngineRecords); err != nil {
+		t.Fatal(err)
+	}
+	if ref, err := recovered.rgbManager.projectionStore.LoadContractObjectReference(issued.ContractID); err == nil || ref != "" {
+		t.Fatalf("recovery unexpectedly restored derived contract reference %q", ref)
+	}
+	recoveredExport, err := recovered.ExportRGB11Contract(issued.ContractID)
+	if err != nil {
+		t.Fatalf("recovered transfer-only wallet must export contract: %v", err)
+	}
+	recoveredFile, err := base64.StdEncoding.DecodeString(recoveredExport.ContractConsignmentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(recoveredFile, exportedFile) {
+		t.Fatal("recovered transfer history derived a different canonical contract")
 	}
 }
 

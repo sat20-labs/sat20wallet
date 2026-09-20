@@ -45,7 +45,7 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 	content, err := defaults.AutopayContent()
 	require.NoError(t, err)
 	deployAssets := txAsset(gas, 290000)
-	deployAssets = append(deployAssets, txAsset(defaults.AutopayFeeAssetName, 5000)...)
+	require.NoError(t, deployAssets.Merge(txAsset(defaults.AutopayFeeAssetName, 5000)))
 	deployA, contractA := buildDKVSKeyPathTemplateDeploy(t, actorA,
 		contractcommon.TemplateAutopay, content, actorA.Address, defaults.AutopayDeployNonce,
 		[]dkvsPrevOut{gasOuts[0], feeOuts[0]},
@@ -413,6 +413,26 @@ func dkvsClientForNode(t *testing.T, node *testHarness) *wallet.SatsNetDKVSClien
 	parsed, err := url.Parse(base)
 	require.NoError(t, err)
 	return wallet.NewSatsNetDKVSClient(parsed.Scheme, parsed.Host, strings.Trim(parsed.Path, "/"), nil)
+}
+
+func waitForDKVSRecord(t *testing.T, node *testHarness, key string) *wire.DKVSRecord {
+	t.Helper()
+	client := dkvsClientForNode(t, node)
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		record, err := client.GetRecord(key)
+		if err == nil && record != nil {
+			return record
+		}
+		lastErr = err
+		time.Sleep(200 * time.Millisecond)
+	}
+	require.NoError(t, lastErr)
+	record, err := client.GetRecord(key)
+	require.NoError(t, err)
+	require.NotNil(t, record)
+	return record
 }
 
 func requireDKVSValue(t *testing.T, node *testHarness, key string, value []byte) {

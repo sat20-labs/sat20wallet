@@ -1,6 +1,6 @@
 <!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer">
-<title>RGB11 single-key maintenance</title>
-<h1>RGB11 single-key maintenance</h1>
+<title>RGB11 maintenance</title>
+<h1>RGB11 maintenance</h1>
 <p>Use only in a closed-wallet profile copy, with all other origin tabs closed and its service worker unregistered. This page does not load the wallet. Keep the unchanged profile backup. Files contain private RGB proof material; do not share them.</p>
 <label>Reviewed identity (env|network|rootAccountId|walletId|accountIndex|pubkey)<input id="identity" size="100"></label><br>
 <label>Reviewed RGB key prefix<input id="prefix" size="70"></label><br>
@@ -9,8 +9,21 @@
 <label>Independently approved patch file SHA256<input id="patchHash" size="70"></label><br>
 <label>Reviewed export fingerprint<input id="fingerprint" size="70"></label><br>
 <button id="apply">Apply exactly one key</button><pre id="status"></pre>
+<hr>
+<h2>Approved orphan self-receive repair</h2>
+<p>This path changes only the exact engine request and deletes its receive, prepared-receive and validation records. Dry validation writes nothing. Apply uses a durable journal; after an interruption reopen this same page and press Resume before opening the wallet.</p>
+<label>Source wallet snapshot JSON<input id="orphanSource" type="file"></label>
+<label>Independent source file SHA256<input id="orphanSourceHash" size="70"></label><br>
+<label>CLI repaired candidate snapshot JSON<input id="orphanCandidate" type="file"></label>
+<label>Independent candidate file SHA256<input id="orphanCandidateHash" size="70"></label><br>
+<label>Approved repair plan JSON<input id="orphanPlan" type="file"></label>
+<label>Independent plan file SHA256<input id="orphanPlanHash" size="70"></label><br>
+<button id="orphanDry">Dry validate current storage</button>
+<button id="orphanApply">Apply approved three/four-record repair</button>
+<button id="orphanResume">Resume interrupted repair</button>
+<pre id="orphanStatus"></pre>
 <script type="module">
-import {capture,hashText,applyPatch} from './repair.mjs';
+import {capture,hashText,applyPatch,validateOrphanSnapshotRepair,applyOrphanSnapshotRepair,resumeOrphanSnapshotRepair} from './repair.mjs';
 const el=id=>document.getElementById(id);
 async function guard(){if((await navigator.serviceWorker.getRegistrations()).length)throw Error('Close wallet, back up profile and unregister service worker in the COPY first');
  const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('sat20-wallet-pwa');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(Error('public scope unavailable'));r.onupgradeneeded=()=>{r.transaction.abort();reject(Error('existing profile required'));}});
@@ -23,4 +36,15 @@ async function guard(){if((await navigator.serviceWorker.getRegistrations()).len
 function download(text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));a.download='rgb11-scope-private.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
 el('export').onclick=async()=>{try{const identity=await guard();const data=capture(localStorage,identity,el('prefix').value);const text=JSON.stringify(data);download(text);el('status').textContent='Export fingerprint: '+await hashText(text);}catch(e){el('status').textContent=e.message;}};
 el('apply').onclick=async()=>{try{const identity=await guard();const file=el('patch').files[0];if(!file)throw Error('patch required');const raw=await file.text();if(await hashText(raw)!==el('patchHash').value)throw Error('approved patch hash mismatch');const patch=JSON.parse(raw);if(patch.target.prefix!==el('prefix').value)throw Error('patch scope mismatch');el('status').textContent=await applyPatch(localStorage,patch,identity,el('fingerprint').value);}catch(e){el('status').textContent=e.message;}};
+async function orphanInputs(){
+  const identity=await guard(), sourceFile=el('orphanSource').files[0], candidateFile=el('orphanCandidate').files[0], planFile=el('orphanPlan').files[0];
+  if(!sourceFile||!candidateFile||!planFile)throw Error('source, candidate and approved plan files are required');
+  const [sourceRaw,candidateRaw,planRaw]=await Promise.all([sourceFile.text(),candidateFile.text(),planFile.text()]);
+  const checks=[[sourceRaw,el('orphanSourceHash').value,'source'],[candidateRaw,el('orphanCandidateHash').value,'candidate'],[planRaw,el('orphanPlanHash').value,'plan']];
+  for(const [raw,approved,label] of checks)if(!/^[0-9a-f]{64}$/.test(approved)||await hashText(raw)!==approved)throw Error(`independent ${label} file SHA256 mismatch`);
+  return {source:JSON.parse(sourceRaw),candidate:JSON.parse(candidateRaw),plan:JSON.parse(planRaw),binding:{identity,projectionPrefix:el('prefix').value,exclusive:true}};
+}
+el('orphanDry').onclick=async()=>{try{const x=await orphanInputs(),result=await validateOrphanSnapshotRepair(localStorage,x.source,x.candidate,x.plan,x.binding);el('orphanStatus').textContent=`Dry validation passed. ${result.operationCount} exact operations; request ${result.requestID}; transfer ${result.transferID}; witness ${result.witnessTxID}; before ${result.beforeHash}; after ${result.afterHash}. No storage write performed.`;}catch(e){el('orphanStatus').textContent=e.message;}};
+el('orphanApply').onclick=async()=>{try{const x=await orphanInputs();el('orphanStatus').textContent=await applyOrphanSnapshotRepair(localStorage,x.source,x.candidate,x.plan,x.binding);}catch(e){el('orphanStatus').textContent=e.message;}};
+el('orphanResume').onclick=async()=>{try{const identity=await guard();el('orphanStatus').textContent=await resumeOrphanSnapshotRepair(localStorage,{identity,projectionPrefix:el('prefix').value,exclusive:true});}catch(e){el('orphanStatus').textContent=e.message;}};
 </script>

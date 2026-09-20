@@ -1,8 +1,10 @@
 package wallet
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -243,6 +245,11 @@ func (p *Manager) handleRemoteActionStatus(resv *RemoteActionPerformReservation)
 	if resv.Status <= RS_CLOSED {
 		return nil
 	}
+	if resv.IsInitiator {
+		if err := validateRemoteActionRuntimeSigner(resv); err != nil {
+			return err
+		}
+	}
 
 	if err := p.confirmRemoteActionTx(resv); err != nil {
 		return err
@@ -272,6 +279,26 @@ func (p *Manager) handleRemoteActionStatus(resv *RemoteActionPerformReservation)
 	}
 
 	return p.SaveWalletReservation(resv)
+}
+
+func validateRemoteActionRuntimeSigner(resv *RemoteActionPerformReservation) error {
+	if resv == nil {
+		return errors.New("remote action reservation is unavailable")
+	}
+	resv.Mutex().RLock()
+	defer resv.Mutex().RUnlock()
+	signer := resv.LocalWallet()
+	if signer == nil || signer.GetPaymentPubKey() == nil {
+		return errors.New("remote action signer is unavailable")
+	}
+	if signer.GetWalletId() != resv.WalletId {
+		return fmt.Errorf("remote action signer identity %+v does not match persisted identity %+v",
+			signer.GetWalletId(), resv.WalletId)
+	}
+	if !bytes.Equal(signer.GetPaymentPubKey().SerializeCompressed(), resv.ReqPubKey) {
+		return errors.New("remote action signer does not match persisted request pubkey")
+	}
+	return nil
 }
 
 func (p *Manager) confirmRemoteActionTx(resv *RemoteActionPerformReservation) error {

@@ -9,6 +9,8 @@ export interface OperationLogEvent {
 
 export interface OperationLogRecord {
   id: string
+  wallet_id?: number
+  account_index?: number
   category: string
   action: string
   title: string

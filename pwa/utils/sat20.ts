@@ -338,6 +338,12 @@ class WalletManager {
     return this._handleRequest('importRGB11ContractFile', fileBase64)
   }
 
+  async exportRGB11Contract(contractId: string): Promise<
+    [Error | undefined, { result: string } | undefined]
+  > {
+    return this._handleRequest('exportRGB11Contract', contractId)
+  }
+
   async issueRGB11Asset(request: {
     schema: 'NIA' | 'IFA' | 'UDA'
     ticker?: string

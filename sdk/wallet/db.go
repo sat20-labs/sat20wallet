@@ -1366,6 +1366,122 @@ func (p *Manager) rehydratePendingLocalActionRuntime() error {
 	return errors.Join(recoveryErrors...)
 }
 
+// rehydratePendingRemoteActionRuntime restores only the signer captured by an
+// active initiator reservation. The request payment key is authoritative for
+// signing, while the persisted wallet/account id prevents the same key from
+// being rebound to another catalog identity.
+func (p *Manager) rehydratePendingRemoteActionRuntime() error {
+	p.mutex.RLock()
+	reservations := make(map[int64]*RemoteActionPerformReservation, len(p.remoteActionPerformMap))
+	for id, reservation := range p.remoteActionPerformMap {
+		resv, ok := reservation.(*RemoteActionPerformReservation)
+		if ok {
+			reservations[id] = resv
+		}
+	}
+	p.mutex.RUnlock()
+
+	var recoveryErrors []error
+	for id, resv := range reservations {
+		if resv == nil {
+			continue
+		}
+		resv.Mutex().RLock()
+		active := resv.IsInitiator && resv.Status > RS_CLOSED
+		resv.Mutex().RUnlock()
+		if !active {
+			continue
+		}
+
+		signer, err := p.findRemoteActionSigningWallet(resv)
+		if err != nil {
+			recoveryErrors = append(recoveryErrors,
+				fmt.Errorf("restore remote action %d signer: %w", id, err))
+			continue
+		}
+
+		p.mutex.RLock()
+		current, stillActive := p.remoteActionPerformMap[id]
+		stillActive = stillActive && current == resv
+		p.mutex.RUnlock()
+		resv.Mutex().Lock()
+		stillActive = stillActive && resv.IsInitiator && resv.Status > RS_CLOSED
+		if stillActive {
+			resv.SetLocalWallet(signer)
+		}
+		resv.Mutex().Unlock()
+	}
+	return errors.Join(recoveryErrors...)
+}
+
+func (p *Manager) findRemoteActionSigningWallet(resv *RemoteActionPerformReservation) (common.Wallet, error) {
+	if resv == nil {
+		return nil, errors.New("reservation is unavailable")
+	}
+	resv.Mutex().RLock()
+	expected := resv.WalletId
+	reqPubKey := append([]byte(nil), resv.ReqPubKey...)
+	resv.Mutex().RUnlock()
+	if expected.Id == 0 {
+		return nil, errors.New("persisted wallet id is missing")
+	}
+	if len(reqPubKey) == 0 {
+		return nil, errors.New("persisted request signer is missing")
+	}
+
+	type catalogWallet struct {
+		wallet   common.Wallet
+		accounts int
+	}
+	p.mutex.RLock()
+	catalog := make(map[int64]catalogWallet, len(p.walletInfoMap))
+	for id, info := range p.walletInfoMap {
+		if info == nil || info.Wallet == nil {
+			continue
+		}
+		accounts := info.Accounts
+		if accounts < 1 {
+			accounts = 1
+		}
+		catalog[id] = catalogWallet{wallet: info.Wallet.Clone(), accounts: accounts}
+	}
+	p.mutex.RUnlock()
+
+	expectedRoot, ok := catalog[expected.Id]
+	if !ok || expectedRoot.wallet == nil {
+		return nil, fmt.Errorf("wallet %d is unavailable", expected.Id)
+	}
+	if uint64(expected.SubAccountId) >= uint64(expectedRoot.accounts) {
+		return nil, fmt.Errorf("wallet %d account %d is unavailable", expected.Id, expected.SubAccountId)
+	}
+	expectedSigner := expectedRoot.wallet.Clone()
+	expectedSigner.SetSubAccount(expected.SubAccountId)
+	if expectedSigner.GetPaymentPubKey() == nil ||
+		!bytes.Equal(expectedSigner.GetPaymentPubKey().SerializeCompressed(), reqPubKey) {
+		return nil, fmt.Errorf("wallet %d account %d does not match request signer", expected.Id, expected.SubAccountId)
+	}
+
+	var matched common.Wallet
+	for _, root := range catalog {
+		for account := 0; account < root.accounts; account++ {
+			candidate := root.wallet.Clone()
+			candidate.SetSubAccount(uint32(account))
+			pubKey := candidate.GetPaymentPubKey()
+			if pubKey == nil || !bytes.Equal(pubKey.SerializeCompressed(), reqPubKey) {
+				continue
+			}
+			if matched != nil {
+				return nil, errors.New("request signer matches multiple wallet identities")
+			}
+			matched = candidate
+		}
+	}
+	if matched == nil || matched.GetWalletId() != expected {
+		return nil, fmt.Errorf("request signer does not resolve to wallet %d account %d", expected.Id, expected.SubAccountId)
+	}
+	return matched, nil
+}
+
 func localActionStoredChannelOwnedByReservation(channel *ChannelInDB, resv *LocalActionPerformData) bool {
 	if channel == nil || resv == nil {
 		return false

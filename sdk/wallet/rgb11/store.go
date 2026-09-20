@@ -91,6 +91,19 @@ func (s *ProjectionStore) objectKey(consignmentHash string) ([]byte, error) {
 	return append(prefix, []byte(consignmentHash)...), err
 }
 
+func (s *ProjectionStore) contractObjectKey(contractID string) ([]byte, error) {
+	contractID = strings.TrimSpace(contractID)
+	if contractID == "" {
+		return nil, ErrValidationReceipt
+	}
+	prefix, err := s.scopedPrefix("contract-object-")
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256([]byte(contractID))
+	return append(prefix, []byte(hex.EncodeToString(hash[:]))...), nil
+}
+
 func (s *ProjectionStore) pendingKey(transferID string) ([]byte, error) {
 	prefix, err := s.scopedPrefix("pending-")
 	return append(prefix, []byte(transferID)...), err
@@ -336,6 +349,35 @@ func (s *ProjectionStore) LoadObject(consignmentHash string) ([]byte, error) {
 	}
 	value, err := s.db.Read(key)
 	return append([]byte(nil), value...), err
+}
+
+// SaveContractObjectReference records which validated object contains the full
+// contract consignment. The value only indexes immutable object-* data.
+func (s *ProjectionStore) SaveContractObjectReference(contractID, consignmentHash string) error {
+	if decoded, err := hex.DecodeString(consignmentHash); err != nil || len(decoded) != sha256.Size {
+		return ErrValidationReceipt
+	}
+	key, err := s.contractObjectKey(contractID)
+	if err != nil {
+		return err
+	}
+	return s.db.Write(key, []byte(consignmentHash))
+}
+
+func (s *ProjectionStore) LoadContractObjectReference(contractID string) (string, error) {
+	key, err := s.contractObjectKey(contractID)
+	if err != nil {
+		return "", err
+	}
+	value, err := s.db.Read(key)
+	if err != nil {
+		return "", err
+	}
+	consignmentHash := string(value)
+	if decoded, err := hex.DecodeString(consignmentHash); err != nil || len(decoded) != sha256.Size {
+		return "", ErrValidationReceipt
+	}
+	return consignmentHash, nil
 }
 
 // SavePreparedObject retains a pre-broadcast consignment without creating a
@@ -594,6 +636,13 @@ func (s *ProjectionStore) CompactSettledRecipientConsignments(transferIDs []stri
 			return err
 		}
 	}
+	references, err := s.objectReferences()
+	if err != nil {
+		return err
+	}
+	if _, referenced := references[recipientHash]; referenced {
+		keepObject = true
+	}
 	if !keepObject {
 		key, err := s.objectKey(recipientHash)
 		if err != nil {
@@ -638,6 +687,10 @@ func (s *ProjectionStore) CompactRejectedTransfers(transferIDs []string) error {
 		pending.ChangeSeals = nil
 		pendingList = append(pendingList, pending)
 	}
+	references, err := s.objectReferences()
+	if err != nil {
+		return err
+	}
 	batch := s.db.NewWriteBatch()
 	if batch == nil {
 		return errors.New("RGB11 KVDB returned nil write batch")
@@ -657,6 +710,9 @@ func (s *ProjectionStore) CompactRejectedTransfers(transferIDs []string) error {
 		}
 	}
 	for hash := range objectHashes {
+		if _, referenced := references[hash]; referenced {
+			continue
+		}
 		key, err := s.objectKey(hash)
 		if err != nil {
 			return err
@@ -666,6 +722,79 @@ func (s *ProjectionStore) CompactRejectedTransfers(transferIDs []string) error {
 		}
 	}
 	return batch.Flush()
+}
+
+// objectReferences returns consignment objects which are still part of an
+// active lifecycle or wallet recovery history. Sender compaction must not
+// delete one of these objects: a self-transfer stores its sender state under
+// pending-* and its independent receiver state under transfer-*.
+func (s *ProjectionStore) objectReferences() (map[string]struct{}, error) {
+	references := make(map[string]struct{})
+	transfers, err := s.ListTransfers()
+	if err != nil {
+		return nil, err
+	}
+	receives := make(map[string]*TransferState)
+	for _, state := range transfers {
+		if state == nil {
+			continue
+		}
+		if state.Direction == "receive" {
+			receives[state.TransferID] = state
+		}
+		if state.ConsignmentHash == "" {
+			continue
+		}
+		switch state.Status {
+		case "rejected", "conflicted", "failed", "cancelled", "settled":
+		default:
+			references[state.ConsignmentHash] = struct{}{}
+		}
+	}
+	proofs, err := s.ListProofs()
+	if err != nil {
+		return nil, err
+	}
+	for _, proof := range proofs {
+		if proof != nil && proof.ConsignmentHash != "" {
+			references[proof.ConsignmentHash] = struct{}{}
+		}
+	}
+	contractPrefix, err := s.scopedPrefix("contract-object-")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.db.BatchRead(contractPrefix, false, func(_, value []byte) error {
+		hash := string(value)
+		if decoded, err := hex.DecodeString(hash); err != nil || len(decoded) != sha256.Size {
+			return ErrValidationReceipt
+		}
+		references[hash] = struct{}{}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	prefix, err := s.scopedPrefix("prepared-receive-")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.db.BatchRead(prefix, false, func(key, value []byte) error {
+		transferID := strings.TrimPrefix(string(key), string(prefix))
+		requestID := string(value)
+		decodedRequestID, decodeErr := hex.DecodeString(requestID)
+		if transferID == "" || decodeErr != nil || len(decodedRequestID) != sha256.Size {
+			return ErrValidationReceipt
+		}
+		state := receives[transferID]
+		if state == nil || state.ConsignmentHash == "" {
+			return fmt.Errorf("%w: prepared RGB11 receive %s has no lifecycle state", ErrValidationReceipt, transferID)
+		}
+		references[state.ConsignmentHash] = struct{}{}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return references, nil
 }
 
 // SaveTransferState persists lifecycle history which has no sender-side
@@ -702,7 +831,11 @@ func (s *ProjectionStore) LoadTransferState(transferID string) (*TransferState, 
 }
 
 func (s *ProjectionStore) ListTransfers() ([]*TransferState, error) {
-	byID := make(map[string]*TransferState)
+	type transferKey struct {
+		direction  string
+		transferID string
+	}
+	byID := make(map[transferKey]*TransferState)
 	prefix, err := s.scopedPrefix("pending-")
 	if err != nil {
 		return nil, err
@@ -713,7 +846,7 @@ func (s *ProjectionStore) ListTransfers() ([]*TransferState, error) {
 			return err
 		}
 		state := pending.State
-		byID[state.TransferID] = &state
+		byID[transferKey{direction: state.Direction, transferID: state.TransferID}] = &state
 		return nil
 	})
 	if err != nil {
@@ -728,9 +861,10 @@ func (s *ProjectionStore) ListTransfers() ([]*TransferState, error) {
 		if err := decode(value, &state); err != nil {
 			return err
 		}
-		if _, exists := byID[state.TransferID]; !exists {
+		key := transferKey{direction: state.Direction, transferID: state.TransferID}
+		if _, exists := byID[key]; !exists {
 			copy := state
-			byID[state.TransferID] = &copy
+			byID[key] = &copy
 		}
 		return nil
 	}); err != nil {
@@ -740,7 +874,12 @@ func (s *ProjectionStore) ListTransfers() ([]*TransferState, error) {
 	for _, state := range byID {
 		states = append(states, state)
 	}
-	sort.Slice(states, func(i, j int) bool { return states[i].TransferID < states[j].TransferID })
+	sort.Slice(states, func(i, j int) bool {
+		if states[i].TransferID != states[j].TransferID {
+			return states[i].TransferID < states[j].TransferID
+		}
+		return states[i].Direction < states[j].Direction
+	})
 	return states, nil
 }
 

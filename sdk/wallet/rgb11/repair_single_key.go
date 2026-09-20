@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/wire"
+	corewallet "github.com/sat20-labs/rgb11/wallet"
 )
 
 // RepairExport contains only the selected RGB projection namespace, never
@@ -21,6 +22,210 @@ type RepairExport struct {
 	Prefix   string           `json:"prefix"`
 	Records  []SnapshotRecord `json:"records"`
 }
+
+// OrphanReceiveRepairTarget binds an offline repair to one exact damaged
+// self-receive. The separately supplied verifier must prove the witness is
+// absent from both the configured chain and mempool.
+type OrphanReceiveRepairTarget struct {
+	WalletID        string `json:"wallet_id"`
+	AccountIndex    uint32 `json:"account_index"`
+	SnapshotHash    string `json:"snapshot_hash"`
+	RequestID       string `json:"request_id"`
+	TransferID      string `json:"transfer_id"`
+	WitnessTxID     string `json:"witness_txid"`
+	ConsignmentHash string `json:"consignment_hash"`
+}
+
+type OrphanReceiveRepairPlan struct {
+	Target      OrphanReceiveRepairTarget   `json:"target"`
+	BeforeHash  string                      `json:"before_hash"`
+	AfterHash   string                      `json:"after_hash"`
+	ChangedKeys []string                    `json:"changed_keys"`
+	Changes     []OrphanReceiveRepairChange `json:"changes"`
+}
+
+type OrphanReceiveRepairChange struct {
+	Store        string `json:"store"`
+	Key          string `json:"key"`
+	BeforeSHA256 string `json:"before_sha256"`
+	AfterSHA256  string `json:"after_sha256,omitempty"`
+	Delete       bool   `json:"delete,omitempty"`
+}
+
+// PlanOrphanReceiveRepair is a pure offline transform. It makes an acknowledged
+// request reusable only when its object is absent, the paired sender was
+// explicitly rejected, and independent chain evidence proves no witness exists.
+func PlanOrphanReceiveRepair(snapshot *RGB11WalletSnapshot, target OrphanReceiveRepairTarget,
+	verifyEvidence func(*PendingTransfer) error) (*OrphanReceiveRepairPlan, *RGB11WalletSnapshot, error) {
+	fail := func() (*OrphanReceiveRepairPlan, *RGB11WalletSnapshot, error) {
+		return nil, nil, fmt.Errorf("RGB11 orphan receive repair binding rejected")
+	}
+	if snapshot == nil || verifyEvidence == nil || target.WalletID == "" ||
+		target.RequestID == "" || target.TransferID == "" || target.WitnessTxID == "" ||
+		target.ConsignmentHash == "" || snapshot.WalletID != target.WalletID ||
+		snapshot.AccountIndex != target.AccountIndex {
+		return fail()
+	}
+	before, err := HistoricalRepairSnapshotHash(snapshot)
+	if err != nil || before != target.SnapshotHash {
+		return fail()
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	var candidate RGB11WalletSnapshot
+	if err := json.Unmarshal(raw, &candidate); err != nil {
+		return nil, nil, err
+	}
+	projection := make(map[string]int, len(candidate.ProjectionRecords))
+	for index, record := range candidate.ProjectionRecords {
+		if _, exists := projection[record.Key]; record.Key == "" || len(record.Value) == 0 || exists {
+			return fail()
+		}
+		projection[record.Key] = index
+	}
+	engine := make(map[string]int, len(candidate.EngineRecords))
+	for index, record := range candidate.EngineRecords {
+		if _, exists := engine[record.Key]; record.Key == "" || len(record.Value) == 0 || exists {
+			return fail()
+		}
+		engine[record.Key] = index
+	}
+	requestKey := "wallet/receive/" + target.RequestID
+	requestIndex, ok := engine[requestKey]
+	if !ok {
+		return fail()
+	}
+	request, err := corewallet.DecodeReceiveRequest(candidate.EngineRecords[requestIndex].Value)
+	if err != nil || request.Status != corewallet.ReceiveAcknowledged || request.RequestID != target.RequestID ||
+		request.TransferID != target.TransferID || request.WitnessTxID != target.WitnessTxID ||
+		request.ObjectHash != target.ConsignmentHash {
+		return fail()
+	}
+	requestBefore := append([]byte(nil), candidate.EngineRecords[requestIndex].Value...)
+	transferKey := "transfer-" + target.TransferID
+	transferIndex, ok := projection[transferKey]
+	if !ok {
+		return fail()
+	}
+	var receive TransferState
+	if err := decode(candidate.ProjectionRecords[transferIndex].Value, &receive); err != nil ||
+		receive.Direction != "receive" || receive.Status != "awaiting_broadcast" ||
+		receive.TransferID != target.TransferID || receive.WitnessTxID != target.WitnessTxID ||
+		receive.ConsignmentHash != target.ConsignmentHash {
+		return fail()
+	}
+	preparedKey := "prepared-receive-" + target.TransferID
+	preparedIndex, ok := projection[preparedKey]
+	if !ok || string(candidate.ProjectionRecords[preparedIndex].Value) != target.RequestID {
+		return fail()
+	}
+	if _, exists := projection["object-"+target.ConsignmentHash]; exists {
+		return fail()
+	}
+	validationKey := "validation-" + target.ConsignmentHash
+	validationIndex, hasValidation := projection[validationKey]
+	if hasValidation {
+		var receipt ValidationReceipt
+		if err := decode(candidate.ProjectionRecords[validationIndex].Value, &receipt); err != nil ||
+			receipt.validate(target.ConsignmentHash) != nil ||
+			receipt.TransferID != target.TransferID {
+			return fail()
+		}
+	}
+	if senderIndex, ok := projection["pending-"+target.TransferID]; !ok {
+		return fail()
+	} else {
+		var sender PendingTransfer
+		if err := decode(candidate.ProjectionRecords[senderIndex].Value, &sender); err != nil ||
+			sender.State.Direction != "send" || sender.State.Status != "rejected" ||
+			sender.State.RejectReason != "user-rejected" || sender.State.WitnessTxID != target.WitnessTxID ||
+			len(sender.SignedTx) != 0 || len(sender.SignedPSBT) != 0 ||
+			len(sender.RecipientConsignment) != 0 || len(sender.LocalConsignment) != 0 ||
+			sender.RecipientObjectHash != "" || sender.LocalObjectHash != "" {
+			return fail()
+		}
+		if err := verifyEvidence(&sender); err != nil {
+			return nil, nil, err
+		}
+	}
+	request.Status = corewallet.ReceivePrepared
+	request.TransferID = ""
+	request.ObjectHash = ""
+	request.WitnessTxID = ""
+	request.FailureCode = ""
+	encoded, err := corewallet.EncodeReceiveRequest(request)
+	if err != nil {
+		return nil, nil, err
+	}
+	candidate.EngineRecords[requestIndex].Value = encoded
+	remove := map[int]bool{transferIndex: true, preparedIndex: true}
+	changed := []string{"engine/" + requestKey, "projection/" + transferKey, "projection/" + preparedKey}
+	changes := []OrphanReceiveRepairChange{
+		orphanRepairChange("engine", requestKey, requestBefore, encoded, false),
+		orphanRepairChange("projection", transferKey, snapshot.ProjectionRecords[transferIndex].Value, nil, true),
+		orphanRepairChange("projection", preparedKey, snapshot.ProjectionRecords[preparedIndex].Value, nil, true),
+	}
+	if hasValidation {
+		remove[validationIndex] = true
+		changed = append(changed, "projection/"+validationKey)
+		changes = append(changes, orphanRepairChange("projection", validationKey, snapshot.ProjectionRecords[validationIndex].Value, nil, true))
+	}
+	filtered := make([]SnapshotRecord, 0, len(candidate.ProjectionRecords)-len(remove))
+	for index, record := range candidate.ProjectionRecords {
+		if !remove[index] {
+			filtered = append(filtered, record)
+		}
+	}
+	candidate.ProjectionRecords = filtered
+	if err := ValidateWalletSnapshot(&candidate); err != nil {
+		return nil, nil, err
+	}
+	after, err := HistoricalRepairSnapshotHash(&candidate)
+	if err != nil || after == before {
+		return fail()
+	}
+	plan := &OrphanReceiveRepairPlan{Target: target, BeforeHash: before, AfterHash: after, ChangedKeys: changed, Changes: changes}
+	return plan, &candidate, nil
+}
+
+// ApplyOrphanReceiveRepair revalidates every safety condition and only returns
+// the candidate matching the explicitly approved plan. It has no DB handle.
+func ApplyOrphanReceiveRepair(snapshot *RGB11WalletSnapshot, approved *OrphanReceiveRepairPlan,
+	verifyEvidence func(*PendingTransfer) error) (*RGB11WalletSnapshot, error) {
+	if approved == nil {
+		return nil, fmt.Errorf("RGB11 orphan receive repair approval missing")
+	}
+	plan, candidate, err := PlanOrphanReceiveRepair(snapshot, approved.Target, verifyEvidence)
+	if err != nil {
+		return nil, err
+	}
+	if plan.BeforeHash != approved.BeforeHash || plan.AfterHash != approved.AfterHash ||
+		!bytes.Equal(mustJSON(plan.ChangedKeys), mustJSON(approved.ChangedKeys)) ||
+		!bytes.Equal(mustJSON(plan.Changes), mustJSON(approved.Changes)) {
+		return nil, fmt.Errorf("RGB11 orphan receive repair approved plan changed")
+	}
+	return candidate, nil
+}
+
+func orphanRepairChange(store, key string, before, after []byte, deleted bool) OrphanReceiveRepairChange {
+	beforeHash := sha256.Sum256(before)
+	change := OrphanReceiveRepairChange{
+		Store: store, Key: key, BeforeSHA256: hex.EncodeToString(beforeHash[:]), Delete: deleted,
+	}
+	if !deleted {
+		afterHash := sha256.Sum256(after)
+		change.AfterSHA256 = hex.EncodeToString(afterHash[:])
+	}
+	return change
+}
+
+func mustJSON(value any) []byte {
+	raw, _ := json.Marshal(value)
+	return raw
+}
+
 type SingleKeyRepairTarget struct {
 	Identity    string `json:"identity"`
 	Prefix      string `json:"prefix"`

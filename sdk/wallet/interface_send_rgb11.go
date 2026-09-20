@@ -40,7 +40,7 @@ func (p *Manager) isL1RGBInputProtected(outpoint string) bool {
 		return false
 	}
 	output, err := p.rgbManager.projectionStore.LoadOutput(outpoint)
-	if errors.Is(err, indexer.ErrKeyNotFound) {
+	if errors.Is(err, indexer.ErrKeyNotFound) || errors.Is(err, rgb11wallet.ErrWalletScope) {
 		return false
 	}
 	if err != nil || output == nil {

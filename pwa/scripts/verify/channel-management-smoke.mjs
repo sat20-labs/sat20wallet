@@ -140,11 +140,18 @@ await assertNotContains('entrypoints/popup/pages/wallet/index.vue', [
 
 await assertContains('components/setting/EscapeHatch.vue', [
   ':disabled="loading"',
+  '@click="requestCooperativeClose"',
+  'v-model:open="showCooperativeCloseConfirm"',
+  '@click.prevent="confirmCooperativeClose"',
+  'cooperativeCloseSubmitting.value',
+  "snapshot.channelId !== channelId.value",
+  "snapshot.networkKey !== String(network.value || 'testnet')",
+  "snapshot.feeRate !== String(btcFeeRate.value)",
   '@click="requestForceClose"',
   'v-model:open="showForceCloseConfirm"',
   'await satsnetStp.safetySnapshot(id)',
   'assessStpValueMovementSafety(snapshot)',
-  'await satsnetStp.closeChannel(id, btcFeeRate.value, false)',
+  'await satsnetStp.closeChannel(snapshot.channelId, snapshot.feeRate, false)',
   'await satsnetStp.closeChannel(id, btcFeeRate.value, true)',
   'satsnetStp.previewOpenChannel(btcFeeRate.value, 1)',
   "escapeHatch.closeChannelNoteWithFee",
@@ -162,20 +169,43 @@ for (const [locale, messages] of [['en', enLocale], ['zh', zhLocale]]) {
   if (!withFee.includes('{fee}')) {
     throw new Error(`${locale} escape hatch close note does not parameterize feeToDao`);
   }
+  for (const key of [
+    'cooperativeCloseConfirmTitle',
+    'cooperativeCloseChannel',
+    'cooperativeCloseNetwork',
+    'cooperativeCloseCapacity',
+    'cooperativeCloseFeeRate',
+    'cooperativeCloseReturnable',
+    'cooperativeCloseTypeValue',
+    'cooperativeCloseWarning',
+  ]) {
+    if (!messages.escapeHatch?.[key]) {
+      throw new Error(`${locale} escape hatch is missing ${key}`);
+    }
+  }
 }
-checks.push('Escape hatch reopening fee is authoritative, optional, and localized');
+checks.push('Escape hatch reopening fee and cooperative close review are localized');
 
 const escapeHatchSource = await readFile(path.join(root, 'components/setting/EscapeHatch.vue'), 'utf8');
-const cooperativeCloseStart = escapeHatchSource.indexOf('const closeChannel = async () =>');
+const cooperativeRequestStart = escapeHatchSource.indexOf('const requestCooperativeClose = () =>');
+const cooperativeCloseStart = escapeHatchSource.indexOf('const confirmCooperativeClose = async () =>');
 const cooperativeCloseEnd = escapeHatchSource.indexOf('const readSafeForceCloseSnapshot = async');
-if (cooperativeCloseStart < 0 || cooperativeCloseEnd <= cooperativeCloseStart) {
+if (cooperativeRequestStart < 0 || cooperativeCloseStart <= cooperativeRequestStart || cooperativeCloseEnd <= cooperativeCloseStart) {
   throw new Error('Unable to locate cooperative close function boundaries');
 }
+const cooperativeRequestSource = escapeHatchSource.slice(cooperativeRequestStart, cooperativeCloseStart);
 const cooperativeCloseSource = escapeHatchSource.slice(cooperativeCloseStart, cooperativeCloseEnd);
+if (cooperativeRequestSource.includes('satsnetStp.closeChannel(')) {
+  throw new Error('Opening the cooperative close review must not submit a wallet operation');
+}
 if (cooperativeCloseSource.includes('closeChannel(id, btcFeeRate.value, true)')) {
   throw new Error('Cooperative close must not automatically fall back to force close');
 }
-checks.push('Escape hatch cooperative close has no force-close fallback');
+const cooperativeSubmits = cooperativeCloseSource.match(/satsnetStp\.closeChannel\(/g) || [];
+if (cooperativeSubmits.length !== 1 || !cooperativeCloseSource.includes('snapshot.channelId, snapshot.feeRate, false')) {
+  throw new Error('Cooperative close confirmation must make exactly one non-force close call');
+}
+checks.push('Escape hatch cooperative close is review-first, single-submit, and has no force-close fallback');
 
 await assertNotContains('entrypoints/popup/pages/wallet/index.vue', [
   'channelStore.getAllChannels',

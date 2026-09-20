@@ -459,8 +459,10 @@
       "enterMintAmount": "请输入铸造数量",
       "checkTickerBeforeMint": "请先检查 ticker 和铸造权限，检查通过后再铸造",
       "enterName": "请输入名字",
-      "invalidName": "名字不能包含空白字符或 /",
+      "invalidName": "名字必须为不超过 32 字节的有效 UTF-8，仅含一段或用英文句点分隔的两段，且段内不能包含标点、分隔符或控制字符",
       "nameExists": "名字已存在",
+      "nameCheckUnknown": "索引器没有返回该名字的明确查询结果",
+      "nameMintPending": "该名字已经提交，正在等待明确的确认结果",
       "checkDidBeforeMint": "请先检查 DID 名字，检查通过后再铸造"
     }
   },
@@ -702,7 +704,20 @@
     "noChannelTitle": "无通道",
     "noChannelDescription": "您没有通道。请先创建一个通道。",
     "closeChannelNote": "关闭通道将产生链上网络费；当前重开服务费请以开通预览为准。",
-    "closeChannelNoteWithFee": "关闭通道将产生链上网络费；当前重开包含 {fee} sats 服务费。"
+    "closeChannelNoteWithFee": "关闭通道将产生链上网络费；当前重开包含 {fee} sats 服务费。",
+    "cooperativeClose": "协作关闭",
+    "cooperativeCloseConfirmTitle": "确认协作关闭通道",
+    "cooperativeCloseConfirmDescription": "发起协作关闭前，请核对当前通道信息。",
+    "cooperativeCloseChannel": "通道",
+    "cooperativeCloseNetwork": "网络",
+    "cooperativeCloseCapacity": "当前容量",
+    "cooperativeCloseFeeRate": "BTC 费率",
+    "cooperativeCloseReturnable": "当前可返回余额（未扣关闭网络费）",
+    "cooperativeCloseType": "关闭类型",
+    "cooperativeCloseTypeValue": "协作关闭（force = false）",
+    "cooperativeCloseWarning": "请只提交一次。关闭是异步钱包操作，处理期间不要重复提交。",
+    "cooperativeCloseConfirm": "确认关闭",
+    "cooperativeCloseSubmitting": "提交中…"
   },
   "networkSetting": {
     "title": "环境选项",
@@ -926,6 +941,8 @@
     "broadcastFailed": "RGB11 交易广播失败",
     "copied": "已复制",
     "downloadContract": "下载标准合约文件（.rgb）",
+    "exportContractSucceeded": "标准 RGB 合约文件已下载",
+    "exportContractFailed": "导出 RGB 合约文件失败",
     "copyContract": "复制 Contract Consignment",
     "issueTitle": "发行 RGB11 资产",
     "issueDescription": "使用本钱包已确认的普通 Bitcoin UTXO，发行官方 NIA、IFA 或 UDA 资产。",

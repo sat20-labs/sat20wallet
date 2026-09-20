@@ -6,6 +6,8 @@ const requiredFiles = [
   'components/wallet/RGB11ImportDialog.vue',
   'components/wallet/RGB11InvoiceDialog.vue',
   'components/wallet/RGB11SendDialog.vue',
+  'components/asset/L1AssetsTabs.vue',
+  'utils/rgb11ContractFile.ts',
   'utils/rgb11Address.ts',
   'composables/hooks/useRgb11Assets.ts',
   'composables/hooks/useL1Assets.ts',
@@ -21,6 +23,7 @@ const requiredWasmMethods = [
   'issueRGB11Asset',
   'importRGB11Contract',
   'importRGB11ContractFile',
+  'exportRGB11Contract',
   'createRGB11Invoice',
 	'prepareRGB11Consignment',
   'prepareRGB11Transfer',
@@ -81,6 +84,7 @@ await requireContains('utils/rgb11Address.ts', [
 'prepareRGB11AddressTransfer',
 'deliverAndBroadcastRGB11AddressTransfer',
 'syncRGB11AddressMailbox',
+'syncMailboxInBackground',
 'getRGB11AddressCarrierWarning',
 ])
 await requireContains('components/asset/L1AssetsTabs.vue', [
@@ -95,6 +99,10 @@ await requireContains('components/asset/L1AssetsTabs.vue', [
   'rgb11TransferStatusClass',
   'rgb11Error',
   'rgb11Transfer.stateError',
+  'directMailboxRetryDelays',
+  'rgb11Address.syncMailbox({})',
+  'rgb11Address.syncMailboxInBackground({})',
+  'await syncDirectMailboxOnce(true)',
 ])
 await requireContains('components/wallet/RGB11InvoiceDialog.vue', [
   'decimalToRaw',

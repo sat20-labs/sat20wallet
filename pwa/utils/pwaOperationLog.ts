@@ -1,4 +1,5 @@
 import { beginOperationLog, updateOperationLog } from '@/utils/operationLog'
+import { walletStorage } from '@/lib/walletStorage'
 
 export interface PwaOperationContext {
   id: string
@@ -275,7 +276,7 @@ const operationSpecs: Record<string, OperationSpec> = {
   },
   inscribeName: {
     category: 'name', action: 'inscribe_name', title: 'Inscribe name', summary: 'Inscribing a name on Bitcoin',
-    parameters: args => safeRecord({ name: args[0], fee_rate: args[1] }),
+    parameters: args => safeRecord({ name: args[0], fee_rate: args[1], network: walletStorage.getValue('network') }),
   },
   switchWallet: {
     category: 'wallet', action: 'switch_wallet', title: 'Switch wallet', summary: 'Switching the active wallet',

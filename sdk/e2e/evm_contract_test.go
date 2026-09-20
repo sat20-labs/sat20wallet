@@ -536,9 +536,11 @@ func TestRealSatoshiNetEVMAMMDefaultInvoke(t *testing.T) {
 	})
 	unsupportedBlock := f.Network.sendManyAndMine(t, []*wire.MsgTx{unsupported}, 0)
 	unsupportedResults := contractResultTxs(unsupportedBlock)
-	require.Len(t, unsupportedResults, 1)
-	require.NotEqual(t, contractcommon.ResultStatusSuccess, requireResultPayload(t, unsupportedResults[0]).Status)
-	requireTxOutputAssetAmount(t, unsupportedResults[0], f.C.Address, wrongAsset, "50")
+	require.Empty(t, unsupportedResults, "invalid default invoke without Result gas or 10 plain sats must not create a refund Result")
+	// The work transaction is valid and leaves the unsupported funding at the
+	// contract address as physical-only unmanaged surplus. Existing managed
+	// AMM inventory is unaffected.
+	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), wrongAsset, "50")
 	requireAssetSummaryAmount(t, f.Network.Bootstrap, amm.MustEncode(), appAsset, "1010")
 	f.requireSynced(t)
 }

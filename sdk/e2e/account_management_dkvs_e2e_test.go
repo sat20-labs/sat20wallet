@@ -69,7 +69,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	content, err := defaults.AutopayContent()
 	require.NoError(t, err)
 	deployAssets := txAsset(gas, 290000)
-	deployAssets = append(deployAssets, txAsset(defaults.AutopayFeeAssetName, 5000)...)
+	require.NoError(t, deployAssets.Merge(txAsset(defaults.AutopayFeeAssetName, 5000)))
 	deploy, contractAddress := buildDKVSKeyPathTemplateDeploy(t, owner,
 		contractcommon.TemplateAutopay, content, owner.Address, defaults.AutopayDeployNonce,
 		[]dkvsPrevOut{gasOuts[0], feeOuts[0]}, wire.TxOut{Value: 10000, Assets: deployAssets})
@@ -231,11 +231,8 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	managedDataKey, err := dkvsindexer.BlobKey(accountID, "account-managed-data")
 	require.NoError(t, err)
-	bootstrapClient := dkvsClientForNode(t, fixture.Network.Bootstrap)
-	stateRecord, err := bootstrapClient.GetRecord(stateKey)
-	require.NoError(t, err)
-	managedDataRecord, err := bootstrapClient.GetRecord(managedDataKey)
-	require.NoError(t, err)
+	stateRecord := waitForDKVSRecord(t, fixture.Network.Bootstrap, stateKey)
+	managedDataRecord := waitForDKVSRecord(t, fixture.Network.Bootstrap, managedDataKey)
 	for _, record := range []*wire.DKVSRecord{stateRecord, managedDataRecord} {
 		require.Zero(t, record.TTL)
 		proof, proofErr := dkvsindexer.ParseFeeProof(record.FeeProof)

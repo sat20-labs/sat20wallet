@@ -31,6 +31,7 @@ import (
 	"github.com/sat20-labs/rgb11/rejectlist"
 	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/seals"
+	"github.com/sat20-labs/rgb11/strict_types"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
@@ -1425,6 +1426,168 @@ func (p *rgb11Manager) ImportRGB11ContractFile(ctx context.Context, raw []byte) 
 	return p.importRGB11Contract(ctx, raw, container)
 }
 
+func rgb11StrictValuePointer(value *strict_types.Value, name string) *strict_types.Value {
+	for value != nil && value.Kind == strict_types.ValueTuple && len(value.Items) == 1 {
+		value = &value.Items[0]
+	}
+	if value == nil || value.Kind != strict_types.ValueStruct {
+		return nil
+	}
+	for index := range value.Fields {
+		if value.Fields[index].Name == name {
+			return &value.Fields[index].Value
+		}
+	}
+	return nil
+}
+
+func rgb11StrictUnwrapPointer(value *strict_types.Value) *strict_types.Value {
+	for value != nil && value.Kind == strict_types.ValueTuple && len(value.Items) == 1 {
+		value = &value.Items[0]
+	}
+	return value
+}
+
+// rgb11ContractFromValidatedHistory deterministically derives a contract
+// consignment from an already validated contract or transfer object. Transfers
+// contain the complete static contract data and validated history; only the
+// transfer marker and recipient terminal disclosures are removed.
+func rgb11ContractFromValidatedHistory(raw []byte, contractID string) ([]byte, *coreconsignment.Container, error) {
+	container, err := coreconsignment.Decode(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	if container.ContractID != contractID || container.Armor == nil {
+		return nil, nil, rgb11wallet.ErrValidationReceipt
+	}
+	if container.Armor.Type == "contract" {
+		file, err := coreconsignment.EncodeFile(container)
+		return file, container, err
+	}
+	if container.Armor.Type != "transfer" {
+		return nil, nil, rgb11wallet.ErrValidationReceipt
+	}
+
+	value := container.Value.Clone()
+	transfer := rgb11StrictValuePointer(&value, "transfer")
+	terminals := rgb11StrictValuePointer(&value, "terminals")
+	bundles := rgb11StrictValuePointer(&value, "bundles")
+	if transfer == nil || terminals == nil || bundles == nil {
+		return nil, nil, rgb11wallet.ErrValidationReceipt
+	}
+	*transfer = strict_types.Value{Kind: strict_types.ValueEnum, Name: "false", Text: "false", Tag: 0}
+	terminals = rgb11StrictUnwrapPointer(terminals)
+	bundles = rgb11StrictUnwrapPointer(bundles)
+	if terminals == nil || terminals.Kind != strict_types.ValueMap ||
+		bundles == nil || bundles.Kind != strict_types.ValueList {
+		return nil, nil, rgb11wallet.ErrValidationReceipt
+	}
+	terminals.Entries = nil
+	bundles.Items = nil
+
+	armor, err := coreconsignment.EncodeArmor(value)
+	if err != nil {
+		return nil, nil, err
+	}
+	contract, err := coreconsignment.DecodeArmor(armor)
+	if err != nil {
+		return nil, nil, err
+	}
+	if contract.Armor == nil || contract.Armor.Type != "contract" || contract.ContractID != contractID {
+		return nil, nil, rgb11wallet.ErrValidationReceipt
+	}
+	file, err := coreconsignment.EncodeFile(contract)
+	if err != nil {
+		return nil, nil, err
+	}
+	return file, contract, nil
+}
+
+func (p *rgb11Manager) persistRGB11ContractFromValidatedHistory(contractID string, raw []byte) (string, error) {
+	file, _, err := rgb11ContractFromValidatedHistory(raw, contractID)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(file)
+	objectHash := hex.EncodeToString(digest[:])
+	// The source object already has a validation receipt. This derived immutable
+	// contract object is only an export/recovery representation; importing it in
+	// another wallet still performs normal consensus validation.
+	if err := p.rgbManager.projectionStore.SavePreparedObject(objectHash, file); err != nil {
+		return "", err
+	}
+	if err := p.rgbManager.projectionStore.SaveContractObjectReference(contractID, objectHash); err != nil {
+		return "", err
+	}
+	return objectHash, nil
+}
+
+func (p *rgb11Manager) ExportRGB11Contract(contractID string) (*RGB11ContractExportResult, error) {
+	contractID = strings.TrimSpace(contractID)
+	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || contractID == "" {
+		return nil, ErrRGB11Inconsistent
+	}
+	objectHash, err := p.rgbManager.projectionStore.LoadContractObjectReference(contractID)
+	if err != nil && !errors.Is(err, indexer.ErrKeyNotFound) {
+		return nil, err
+	}
+	if objectHash == "" {
+		proofs, listErr := p.rgbManager.projectionStore.ListProofs()
+		if listErr != nil {
+			return nil, listErr
+		}
+		for _, proof := range proofs {
+			if proof == nil || proof.ConsignmentHash == "" {
+				continue
+			}
+			receipt, receiptErr := p.rgbManager.projectionStore.LoadValidationReceipt(proof.ConsignmentHash)
+			if receiptErr != nil {
+				return nil, receiptErr
+			}
+			if receipt.ContractID != contractID {
+				continue
+			}
+			raw, loadErr := p.rgbManager.projectionStore.LoadObject(proof.ConsignmentHash)
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			objectHash, err = p.persistRGB11ContractFromValidatedHistory(contractID, raw)
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
+	if objectHash == "" {
+		return nil, fmt.Errorf("%w: RGB11 contract %s is not stored", indexer.ErrKeyNotFound, contractID)
+	}
+	raw, err := p.rgbManager.projectionStore.LoadObject(objectHash)
+	if err != nil {
+		return nil, err
+	}
+	container, err := coreconsignment.Decode(raw)
+	if err != nil {
+		return nil, err
+	}
+	if container.Armor == nil || container.Armor.Type != "contract" || container.ContractID != contractID {
+		return nil, rgb11wallet.ErrValidationReceipt
+	}
+	file, err := coreconsignment.EncodeFile(container)
+	if err != nil {
+		return nil, err
+	}
+	armor, err := coreconsignment.EncodeArmor(container.Value)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(file)
+	return &RGB11ContractExportResult{
+		ContractID: contractID, SchemaID: container.SchemaID, Armor: armor,
+		ContractConsignmentBase64: base64.StdEncoding.EncodeToString(file),
+		SHA256:                    hex.EncodeToString(digest[:]),
+	}, nil
+}
+
 func (p *rgb11Manager) importRGB11Contract(ctx context.Context, raw []byte,
 	container *coreconsignment.Container) (*RGB11ImportResult, error) {
 	if container.Armor == nil || container.Armor.Type != "contract" {
@@ -1487,6 +1650,9 @@ func (p *rgb11Manager) importRGB11Contract(ctx context.Context, raw []byte,
 		return nil, err
 	}
 	if err := p.RegisterRGB11TickerInfo(info); err != nil {
+		return nil, err
+	}
+	if err := p.rgbManager.projectionStore.SaveContractObjectReference(container.ContractID, receipt.ConsignmentHash); err != nil {
 		return nil, err
 	}
 	result := &RGB11ImportResult{
@@ -2098,6 +2264,9 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 		return nil, err
 	}
 	if err := p.checkRGB11RejectPolicy(container, checked); err != nil {
+		return nil, err
+	}
+	if _, err := p.persistRGB11ContractFromValidatedHistory(receipt.ContractID, raw); err != nil {
 		return nil, err
 	}
 	receiptHash, err := receipt.Hash()
@@ -3016,9 +3185,6 @@ func validateRGB11SendInvoice(invoice *invoicing.Invoice, fallbackContract *cons
 		recipientID = invoice.Beneficiary.String()
 		transport = RGB11ProxyTransport
 	} else {
-		if invoice.Beneficiary.Kind != invoicing.BeneficiaryWitnessVout {
-			return consensus.ContractID{}, 0, "", "", "", "", fmt.Errorf("RGB11 external send requires an out-of-band witness invoice")
-		}
 		recipientID = invoice.Beneficiary.String()
 		transport = "out-of-band"
 	}
@@ -3043,7 +3209,8 @@ func rgb11InvoiceTransportMode(invoice *invoicing.Invoice) (string, error) {
 		}
 		return RGB11ProxyTransport, nil
 	}
-	if invoice.Beneficiary.Kind != invoicing.BeneficiaryWitnessVout {
+	if invoice.Beneficiary.Kind != invoicing.BeneficiaryBlindedSeal &&
+		invoice.Beneficiary.Kind != invoicing.BeneficiaryWitnessVout {
 		return "", invoicing.ErrInvalidInvoice
 	}
 	return "out-of-band", nil

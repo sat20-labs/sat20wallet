@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 )
 
@@ -150,6 +151,7 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 	outputs := make(map[string]*indexer.TxOutput)
 	proofs := make([]*AllocationProof, 0)
 	pendings := make([]*PendingTransfer, 0)
+	contractObjects := make(map[string]string)
 	seen := make(map[string]bool)
 	for _, record := range records {
 		if record.Key == "" || len(record.Value) == 0 || seen[record.Key] {
@@ -157,6 +159,14 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 		}
 		seen[record.Key] = true
 		switch {
+		case strings.HasPrefix(record.Key, "contract-object-"):
+			contractHash := strings.TrimPrefix(record.Key, "contract-object-")
+			objectHash := string(record.Value)
+			if decoded, err := hex.DecodeString(contractHash); err != nil || len(decoded) != sha256.Size ||
+				!validSnapshotObjectHash(objectHash) {
+				return ErrValidationReceipt
+			}
+			contractObjects[contractHash] = objectHash
 		case strings.HasPrefix(record.Key, "object-"):
 			hash := strings.TrimPrefix(record.Key, "object-")
 			actual := sha256.Sum256(record.Value)
@@ -231,6 +241,20 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 	}
 	for hash := range receipts {
 		if objects[hash] == nil {
+			return ErrValidationReceipt
+		}
+	}
+	for contractHash, objectHash := range contractObjects {
+		raw := objects[objectHash]
+		if raw == nil {
+			return ErrValidationReceipt
+		}
+		container, err := coreconsignment.Decode(raw)
+		if err != nil || container.Armor == nil || container.Armor.Type != "contract" {
+			return ErrValidationReceipt
+		}
+		actual := sha256.Sum256([]byte(container.ContractID))
+		if contractHash != hex.EncodeToString(actual[:]) {
 			return ErrValidationReceipt
 		}
 	}

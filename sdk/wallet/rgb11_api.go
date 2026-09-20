@@ -18,6 +18,7 @@ type (
 	RGB11State                    = rgb11wallet.RGB11State
 	RGB11IssueRequest             = rgb11wallet.RGB11IssueRequest
 	RGB11IssueResult              = rgb11wallet.RGB11IssueResult
+	RGB11ContractExportResult     = rgb11wallet.RGB11ContractExportResult
 	RGB11ImportResult             = rgb11wallet.RGB11ImportResult
 	RGB11RejectListProvider       = rgb11wallet.RGB11RejectListProvider
 	RGB11RejectListViolation      = rgb11wallet.RGB11RejectListViolation
@@ -228,6 +229,18 @@ func (p *Manager) ImportRGB11ContractFile(ctx context.Context, raw []byte) (*RGB
 		func(manager *rgb11Manager) (*RGB11ImportResult, error) {
 			return manager.ImportRGB11ContractFile(ctx, raw)
 		})
+}
+
+// ExportRGB11Contract returns the canonical RGB\0CON file for a contract
+// already validated in the active wallet scope. It does not mutate wallet data.
+func (p *Manager) ExportRGB11Contract(contractID string) (*RGB11ContractExportResult, error) {
+	releaseRGB11Operation := p.beginRGB11Operation()
+	defer releaseRGB11Operation()
+	manager, err := p.synchronizedRGB11Manager()
+	if err != nil {
+		return nil, err
+	}
+	return manager.ExportRGB11Contract(contractID)
 }
 
 func (p *Manager) IssueRGB11Asset(ctx context.Context, request RGB11IssueRequest) (*RGB11IssueResult, error) {

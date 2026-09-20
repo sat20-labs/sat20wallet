@@ -40,6 +40,8 @@ type OperationLogEvent struct {
 // persistence never generates log content automatically.
 type OperationLogRecord struct {
 	ID              string              `json:"id"`
+	WalletID        int64               `json:"wallet_id,omitempty"`
+	AccountIndex    uint32              `json:"account_index,omitempty"`
 	Category        string              `json:"category"`
 	Action          string              `json:"action"`
 	Title           string              `json:"title"`
@@ -56,11 +58,13 @@ type OperationLogRecord struct {
 }
 
 type OperationLogCreate struct {
-	Category   string
-	Action     string
-	Title      string
-	Summary    string
-	Parameters map[string]string
+	WalletID     int64
+	AccountIndex uint32
+	Category     string
+	Action       string
+	Title        string
+	Summary      string
+	Parameters   map[string]string
 }
 
 type OperationLogUpdate struct {
@@ -158,15 +162,17 @@ func (m *OperationLogManager) Create(input OperationLogCreate) (*OperationLogRec
 		summary = input.Title
 	}
 	record := &OperationLogRecord{
-		ID:         id,
-		Category:   strings.TrimSpace(input.Category),
-		Action:     input.Action,
-		Title:      input.Title,
-		Summary:    summary,
-		Status:     OperationLogRunning,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		Parameters: cloneOperationLogStringMap(input.Parameters),
+		ID:           id,
+		WalletID:     input.WalletID,
+		AccountIndex: input.AccountIndex,
+		Category:     strings.TrimSpace(input.Category),
+		Action:       input.Action,
+		Title:        input.Title,
+		Summary:      summary,
+		Status:       OperationLogRunning,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Parameters:   cloneOperationLogStringMap(input.Parameters),
 		History: []OperationLogEvent{{
 			Timestamp: now,
 			Status:    OperationLogRunning,
@@ -267,6 +273,14 @@ func (m *OperationLogManager) Get(id string) (*OperationLogRecord, error) {
 }
 
 func (m *OperationLogManager) List() ([]*OperationLogRecord, error) {
+	return m.listForIdentity(0, 0, false)
+}
+
+func (m *OperationLogManager) ListForIdentity(walletID int64, accountIndex uint32) ([]*OperationLogRecord, error) {
+	return m.listForIdentity(walletID, accountIndex, true)
+}
+
+func (m *OperationLogManager) listForIdentity(walletID int64, accountIndex uint32, filter bool) ([]*OperationLogRecord, error) {
 	if m == nil || m.db == nil {
 		return nil, nil
 	}
@@ -278,6 +292,9 @@ func (m *OperationLogManager) List() ([]*OperationLogRecord, error) {
 		var record OperationLogRecord
 		if err := DecodeFromBytes(value, &record); err != nil {
 			Log.Warnf("skip invalid operation log: %v", err)
+			return nil
+		}
+		if filter && (record.WalletID != walletID || record.AccountIndex != accountIndex) {
 			return nil
 		}
 		result = append(result, cloneOperationLogRecord(&record))
@@ -293,6 +310,49 @@ func (m *OperationLogManager) List() ([]*OperationLogRecord, error) {
 		return result[i].UpdatedAt > result[j].UpdatedAt
 	})
 	return result, nil
+}
+
+func (m *OperationLogManager) DeleteIdentity(walletID int64, accountIndex uint32) error {
+	if m == nil || m.db == nil {
+		return nil
+	}
+	operationLogMu.Lock()
+	defer operationLogMu.Unlock()
+	ids := make(map[string]struct{})
+	recordKeys := make([][]byte, 0)
+	if err := m.db.BatchRead(operationLogRecordPrefix(), false, func(key, value []byte) error {
+		var record OperationLogRecord
+		if err := DecodeFromBytes(value, &record); err != nil {
+			return nil
+		}
+		if record.WalletID == walletID && record.AccountIndex == accountIndex {
+			ids[record.ID] = struct{}{}
+			recordKeys = append(recordKeys, append([]byte(nil), key...))
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	relationKeys := make([][]byte, 0)
+	if err := m.db.BatchRead(operationLogRelationPrefix(), false, func(key, value []byte) error {
+		if _, ok := ids[string(value)]; ok {
+			relationKeys = append(relationKeys, append([]byte(nil), key...))
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	batch := m.db.NewWriteBatch()
+	if batch == nil {
+		return fmt.Errorf("operation log database returned nil write batch")
+	}
+	defer batch.Close()
+	for _, key := range append(recordKeys, relationKeys...) {
+		if err := batch.Delete(key); err != nil {
+			return err
+		}
+	}
+	return batch.Flush()
 }
 
 func (m *OperationLogManager) DeleteAll() error {
@@ -324,6 +384,8 @@ func (p *Manager) BeginOperationLog(input OperationLogCreate) (*OperationLogReco
 	if manager == nil {
 		return nil, fmt.Errorf("operation log manager is unavailable")
 	}
+	input.WalletID = p.GetCurrentWalletId()
+	input.AccountIndex = p.GetCurrentAccountId()
 	return manager.Create(input)
 }
 
@@ -356,7 +418,7 @@ func (p *Manager) GetOperationLogs() ([]*OperationLogRecord, error) {
 	if manager == nil {
 		return nil, nil
 	}
-	return manager.List()
+	return manager.ListForIdentity(p.GetCurrentWalletId(), p.GetCurrentAccountId())
 }
 
 func (p *Manager) GetOperationLog(id string) (*OperationLogRecord, error) {
@@ -364,7 +426,14 @@ func (p *Manager) GetOperationLog(id string) (*OperationLogRecord, error) {
 	if manager == nil {
 		return nil, nil
 	}
-	return manager.Get(id)
+	record, err := manager.Get(id)
+	if err != nil || record == nil {
+		return record, err
+	}
+	if record.WalletID != p.GetCurrentWalletId() || record.AccountIndex != p.GetCurrentAccountId() {
+		return nil, nil
+	}
+	return record, nil
 }
 
 func (p *Manager) DeleteAllOperationLogs() error {
@@ -372,7 +441,7 @@ func (p *Manager) DeleteAllOperationLogs() error {
 	if manager == nil {
 		return nil
 	}
-	return manager.DeleteAll()
+	return manager.DeleteIdentity(p.GetCurrentWalletId(), p.GetCurrentAccountId())
 }
 
 func (p *Manager) beginOperationLogBestEffort(input OperationLogCreate) string {

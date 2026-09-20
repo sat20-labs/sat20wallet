@@ -983,6 +983,7 @@ import type { AbiParameter } from 'abitype'
 import { smartContractApi } from '@/apis'
 import ordxApi from '@/apis/ordx'
 import sat20 from '@/utils/sat20'
+import { getOperationLogs, type OperationLogRecord } from '@/utils/operationLog'
 import { useGlobalStore, useWalletStore } from '@/store'
 import { Storage } from '@/lib/storage-adapter'
 import { useQueryClient } from '@tanstack/vue-query'
@@ -1307,6 +1308,7 @@ const didCanMint = ref(false)
 const didCheckKey = ref('')
 const didMintResult = ref('')
 const isMintingDid = ref(false)
+const didSubmittedNames = ref(new Set<string>())
 
 type ToolTxConfirmRow = {
   label: string
@@ -1491,10 +1493,50 @@ const currentMintCheckKey = computed(() => [
   mintProtocol.value === 'runes' ? '' : String(mintAmount.value || ''),
   walletStore.address || '',
 ].join(':'))
-const currentDidCheckKey = computed(() => didName.value.trim().toLowerCase())
+const currentDidName = computed(() => didName.value.trim().toLowerCase())
+const currentDidCheckKey = computed(() => `${network.value}:${currentDidName.value}`)
 const isDeployTickerReady = computed(() => deployCanDeploy.value && deployCheckKey.value === currentDeployCheckKey.value)
 const isMintAssetReady = computed(() => mintCanMint.value && mintCheckKey.value === currentMintCheckKey.value)
 const isMintDidReady = computed(() => didCanMint.value && didCheckKey.value === currentDidCheckKey.value)
+
+const isValidSnsName = (name: string) => {
+  if (!name || new TextEncoder().encode(name).length > 32) return false
+  const parts = name.split('.')
+  if (parts.length < 1 || parts.length > 2 || parts.some((part) => !part)) return false
+  return parts.every((part) => !/[\p{P}\p{Z}\p{C}]/u.test(part))
+}
+
+const setDidSubmitted = (name: string, submitted: boolean) => {
+  const next = new Set(didSubmittedNames.value)
+  if (submitted) next.add(name)
+  else next.delete(name)
+  didSubmittedNames.value = next
+}
+
+const restoreDidSubmittedNames = async () => {
+  const [error, logs] = await getOperationLogs()
+  if (error) {
+    console.warn('Unable to restore submitted DID names from operation logs:', error)
+    return
+  }
+  const latest = new Map<string, OperationLogRecord>()
+  for (const log of logs) {
+    if (log.action !== 'inscribe_name') continue
+    const name = String(log.parameters?.name || '').trim().toLowerCase()
+    const submittedNetwork = String(log.parameters?.network || '').trim()
+    // Historical records did not include a network. Do not guess and risk
+    // carrying a testnet submission gate into mainnet, or vice versa.
+    if (!name || !submittedNetwork) continue
+    const key = `${submittedNetwork}:${name}`
+    const previous = latest.get(key)
+    if (!previous || log.updated_at > previous.updated_at) latest.set(key, log)
+  }
+  didSubmittedNames.value = new Set(
+    Array.from(latest.entries())
+      .filter(([, log]) => ['pending', 'running', 'succeeded'].includes(log.status))
+      .map(([key]) => key),
+  )
+}
 watch(deployProtocol, (protocol) => {
   if (protocol === 'runes') deployTicker.value = normalizeTicker(deployTicker.value, protocol)
   deployDecimals.value = protocol === 'brc20' ? '18' : '0'
@@ -1522,6 +1564,7 @@ watch([env, network], () => {
 
 onMounted(() => {
   void restoreSupportedContractsCache()
+  void restoreDidSubmittedNames()
 })
 const normalizeDecimalForCompare = (value: unknown) => {
   const text = String(value ?? '').trim()
@@ -4487,28 +4530,39 @@ const mintAssetAction = async () => {
 }
 
 const checkDidNameAvailability = async (showAvailableToast = true) => {
-  const name = didName.value.trim().toLowerCase()
+  const name = currentDidName.value
+  const nameKey = `${network.value}:${name}`
   didCanMint.value = false
   didCheckKey.value = ''
   if (!name) {
     showError(t('tools.messages.parameterError'), t('tools.errors.enterName'))
     return false
   }
-  if (/\s|\//.test(name)) {
+  if (!isValidSnsName(name)) {
     showError(t('tools.messages.parameterError'), t('tools.errors.invalidName'))
     return false
   }
   try {
     const res = await ordxApi.getNsName({ name, network: network.value })
     if (res?.code === 0 && res?.data) {
+      setDidSubmitted(nameKey, false)
       showError(t('tools.messages.cannotMint'), t('tools.errors.nameExists'))
+      return false
+    }
+    const exactNotFound = res?.code === -1
+      && res?.data == null
+      && String(res?.msg || '').trim() === `can't find name ${name}`
+    if (!exactNotFound) {
+      showError(t('tools.messages.checkFailed'), res?.msg || t('tools.errors.nameCheckUnknown'))
+      return false
+    }
+    if (didSubmittedNames.value.has(nameKey)) {
+      showError(t('tools.messages.cannotMint'), t('tools.errors.nameMintPending'))
       return false
     }
     didCanMint.value = true
     didCheckKey.value = currentDidCheckKey.value
-    if (showAvailableToast) {
-      showSuccess(t('tools.messages.canMint'), t('tools.messages.nameAvailable', { name }))
-    }
+    if (showAvailableToast) showSuccess(t('tools.messages.canMint'), t('tools.messages.nameAvailable', { name }))
     return true
   } catch (error) {
     showError(t('tools.messages.checkFailed'), error)
@@ -4543,6 +4597,9 @@ const mintDidAction = async () => {
     const [err, res] = await sat20.inscribeName(name, mintFeeRate.value)
     if (err) throw err
     didMintResult.value = res?.txId || ''
+    setDidSubmitted(`${network.value}:${name}`, true)
+    didCanMint.value = false
+    didCheckKey.value = ''
     showSuccess(t('tools.messages.didMintSubmitted'), didMintResult.value || t('tools.messages.txBroadcasted'))
   } catch (error) {
     showError(t('tools.messages.didMintFailed'), error)

@@ -170,3 +170,68 @@ func TestOperationLogPersistenceDetailAndDeleteAll(t *testing.T) {
 		t.Fatalf("reservation relation survived delete all: %s", logID)
 	}
 }
+
+func TestOperationLogIdentityIsolationDeleteAndGlobalRelationUpdate(t *testing.T) {
+	kv := newMemoryKVDB()
+	logs := NewOperationLogManager(kv)
+	legacy, err := logs.Create(OperationLogCreate{Action: "legacy", Title: "Legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := logs.Create(OperationLogCreate{
+		WalletID: 11, AccountIndex: 0, Action: "first", Title: "First",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := logs.Create(OperationLogCreate{
+		WalletID: 11, AccountIndex: 1, Action: "second", Title: "Second",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logs.BindReservation(first.ID, RESV_TYPE_OPEN, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := logs.BindReservation(second.ID, RESV_TYPE_PAYMENT, 1002); err != nil {
+		t.Fatal(err)
+	}
+	items, err := logs.ListForIdentity(11, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != first.ID || items[0].WalletID != 11 || items[0].AccountIndex != 0 {
+		t.Fatalf("account 0 logs leaked or lost: %+v", items)
+	}
+	if _, err := logs.UpdateByReservation(RESV_TYPE_PAYMENT, 1002, OperationLogUpdate{
+		Status: OperationLogSucceeded, Message: "updated outside current list",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := logs.Get(second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated == nil || updated.WalletID != 11 || updated.AccountIndex != 1 || updated.Status != OperationLogSucceeded {
+		t.Fatalf("relation update changed identity or failed: %+v", updated)
+	}
+	if err := logs.DeleteIdentity(11, 0); err != nil {
+		t.Fatal(err)
+	}
+	if item, err := logs.Get(first.ID); err != nil || item != nil {
+		t.Fatalf("deleted identity record survived: item=%+v err=%v", item, err)
+	}
+	if relation, err := logs.findRelation(RESV_TYPE_OPEN, 1001); err != nil || relation != "" {
+		t.Fatalf("deleted identity relation survived: relation=%q err=%v", relation, err)
+	}
+	all, err := logs.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || all[0].ID != second.ID && all[1].ID != second.ID {
+		t.Fatalf("delete identity removed neighboring or legacy logs: %+v", all)
+	}
+	if legacy == nil {
+		t.Fatal("legacy setup failed")
+	}
+}
