@@ -18,10 +18,20 @@ import (
 	strict "github.com/sat20-labs/rgb11/strict_encoding"
 )
 
-const NativeEngineBuildID = "rgb11-go-0.11.1-rc.11+sat20.1"
+const (
+	NativeEngineBuildID     = "rgb11-go-0.11.1+sat20.1"
+	legacyRC11EngineBuildID = "rgb11-go-0.11.1-rc.11+sat20.1"
+)
 
-// NativeConsensusValidator is the production Go validator frozen against the
-// official 0.11.1-rc.11 Rust vectors.
+// CompatibleEngineBuildID permits recovery of rc.11 snapshots whose strict
+// protocol vectors match the official 0.11.1 release. New writes use the
+// stable build ID; unrelated engine builds remain incompatible.
+func CompatibleEngineBuildID(buildID string) bool {
+	return buildID == NativeEngineBuildID || buildID == legacyRC11EngineBuildID
+}
+
+// NativeConsensusValidator is the production Go validator checked against the
+// official 0.11.1 Rust vectors.
 type NativeConsensusValidator struct {
 	Reveals []seals.GraphBlindSeal
 }

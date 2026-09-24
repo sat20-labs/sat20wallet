@@ -143,7 +143,7 @@ func normalizeRecoveryPackage(value *RecoveryPackage) (*RecoveryPackage, error) 
 		return nil, fmt.Errorf("%w: recovery package is nil", ErrRGB11Inconsistent)
 	}
 	if value.Version != RecoveryPackageVersion || value.WalletID == "" ||
-		value.EngineBuildID != NativeEngineBuildID {
+		!CompatibleEngineBuildID(value.EngineBuildID) {
 		return nil, fmt.Errorf("%w: header version=%d wallet=%q engine=%q want_engine=%q",
 			ErrRGB11Inconsistent, value.Version, value.WalletID, value.EngineBuildID, NativeEngineBuildID)
 	}
@@ -266,7 +266,8 @@ func (p *RecoveryPackage) WalletSnapshot() (*RGB11WalletSnapshot, error) {
 // history, signed transactions, reservations, or receive tasks.
 func MergeRecoverySnapshot(current, recovery *RGB11WalletSnapshot) (*RGB11WalletSnapshot, error) {
 	if current == nil || recovery == nil || current.WalletID != recovery.WalletID ||
-		current.AccountIndex != recovery.AccountIndex || current.EngineBuildID != recovery.EngineBuildID {
+		current.AccountIndex != recovery.AccountIndex ||
+		!CompatibleEngineBuildID(current.EngineBuildID) || !CompatibleEngineBuildID(recovery.EngineBuildID) {
 		return nil, ErrRGB11Inconsistent
 	}
 	if err := ValidateWalletSnapshot(current); err != nil {
@@ -313,7 +314,7 @@ func MergeRecoverySnapshot(current, recovery *RGB11WalletSnapshot) (*RGB11Wallet
 
 	merged := &RGB11WalletSnapshot{
 		Version: current.Version, WalletID: current.WalletID,
-		AccountIndex: current.AccountIndex, EngineBuildID: current.EngineBuildID,
+		AccountIndex: current.AccountIndex, EngineBuildID: NativeEngineBuildID,
 		EngineRecords:     cloneRecoveryRecords(current.EngineRecords),
 		ProjectionRecords: make([]SnapshotRecord, 0, len(projection)),
 	}

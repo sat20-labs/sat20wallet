@@ -1250,17 +1250,24 @@ func TestRGB11IssuedFungibleFirstReleaseSchemasSendReceive(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			sourceRestored := false
+			reservedInputs := make(map[string]bool, len(pending.State.InputOutPoints))
 			for _, proof := range proofs {
 				if strings.HasPrefix(proof.OutPoint, witnessTxID+":") {
 					t.Fatalf("%s evicted staged projection retained: %+v", test.name, proof)
 				}
 				if slices.Contains(pending.State.InputOutPoints, proof.OutPoint) {
-					sourceRestored = sourceRestored || proof.Status != "spending"
+					if proof.Status != "spending" {
+						t.Fatalf("%s evicted signed transfer released source proof %+v", test.name, proof)
+					}
+					reservedInputs[proof.OutPoint] = true
 				}
 			}
-			if !sourceRestored {
-				t.Fatalf("%s evicted source projection was not restored: %+v", test.name, proofs)
+			for _, input := range pending.State.InputOutPoints {
+				lock := sender.utxoLockerL1.GetLockedUtxoList()[input]
+				if !reservedInputs[input] || lock == nil || lock.Reason != rgb11wallet.LockReasonPending {
+					t.Fatalf("%s evicted signed transfer lost input reservation %s: proof=%t lock=%+v",
+						test.name, input, reservedInputs[input], lock)
+				}
 			}
 		})
 	}

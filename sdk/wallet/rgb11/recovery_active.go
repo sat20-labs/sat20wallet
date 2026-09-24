@@ -158,7 +158,7 @@ func ActiveRecoveryPackageFromSnapshot(snapshot *RGB11WalletSnapshot) (*ActiveRe
 
 func ValidateActiveRecoveryPackage(value *ActiveRecoveryPackage) error {
 	if value == nil || value.Version != ActiveRecoveryPackageVersion || value.WalletID == "" ||
-		value.EngineBuildID != NativeEngineBuildID {
+		!CompatibleEngineBuildID(value.EngineBuildID) {
 		return ErrRGB11Inconsistent
 	}
 	snapshot := &RGB11WalletSnapshot{
@@ -220,7 +220,8 @@ func (p *ActiveRecoveryPackage) WalletSnapshot() (*RGB11WalletSnapshot, error) {
 // on the stable/local snapshot without deleting unrelated local history.
 func MergeActiveRecoverySnapshot(current, active *RGB11WalletSnapshot) (*RGB11WalletSnapshot, error) {
 	if current == nil || active == nil || current.WalletID != active.WalletID ||
-		current.AccountIndex != active.AccountIndex || current.EngineBuildID != active.EngineBuildID {
+		current.AccountIndex != active.AccountIndex ||
+		!CompatibleEngineBuildID(current.EngineBuildID) || !CompatibleEngineBuildID(active.EngineBuildID) {
 		return nil, ErrRGB11Inconsistent
 	}
 	if err := ValidateWalletSnapshot(current); err != nil {
@@ -247,7 +248,7 @@ func MergeActiveRecoverySnapshot(current, active *RGB11WalletSnapshot) (*RGB11Wa
 	}
 	merged := &RGB11WalletSnapshot{
 		Version: WalletSnapshotVersion, WalletID: current.WalletID,
-		AccountIndex: current.AccountIndex, EngineBuildID: current.EngineBuildID,
+		AccountIndex: current.AccountIndex, EngineBuildID: NativeEngineBuildID,
 	}
 	for _, record := range projection {
 		merged.ProjectionRecords = append(merged.ProjectionRecords, record)

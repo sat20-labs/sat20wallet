@@ -235,7 +235,7 @@ func (p *rgb11AccountManagedDataProvider) Validate(catalog AccountManagedDataCat
 		walletID, err := manager.RGB11WalletID()
 		if err != nil || packageValue.WalletID != walletID ||
 			packageValue.AccountIndex != accountValue.AccountIndex ||
-			packageValue.EngineBuildID != rgb11wallet.NativeEngineBuildID {
+			!rgb11wallet.CompatibleEngineBuildID(packageValue.EngineBuildID) {
 			return ErrRGB11Inconsistent
 		}
 	}
@@ -278,7 +278,7 @@ func (p *rgb11AccountManagedDataProvider) ValidateActive(catalog AccountManagedD
 		walletID, err := manager.RGB11WalletID()
 		if err != nil || packageValue.WalletID != walletID ||
 			packageValue.AccountIndex != accountValue.AccountIndex ||
-			packageValue.EngineBuildID != rgb11wallet.NativeEngineBuildID {
+			!rgb11wallet.CompatibleEngineBuildID(packageValue.EngineBuildID) {
 			return ErrRGB11Inconsistent
 		}
 	}
