@@ -81,8 +81,8 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 				t.Fatalf("invalid settled fixture: %v", err)
 			}
 			lock := manager.utxoLockerL1.GetLockedUtxoList()[spentChange]
-			if lock == nil || lock.ReservationID != second.ReservationID {
-				t.Fatal("fixture does not bind old change to successor")
+			if lock != nil {
+				t.Fatalf("settled successor fixture retained active input lock: %+v", lock)
 			}
 			sentinel := errors.New("historical outspend evidence temporarily unavailable")
 			fault := &historicalErrorEvidence{BitcoinEvidenceProvider: evidence, outpoint: spentChange, failure: sentinel, successor: second.State.WitnessTxID}
@@ -156,8 +156,10 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 				t.Fatal("error lost transfer/witness context")
 			}
 			wantConsistency := "warning"
-			if kind == "invalid_binding" {
+			if kind == "invalid_binding" || kind == "reliable_mempool_downgrade" {
 				wantConsistency = "broken"
+			}
+			if kind == "invalid_binding" {
 				if proofFault.hits == 0 || !errors.Is(refreshErr, ErrRGB11Inconsistent) {
 					t.Fatalf("binding classification: hits=%d err=%v", proofFault.hits, refreshErr)
 				}
@@ -169,8 +171,8 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 				t.Fatal("failed check changed historical journal or hid unresolved result")
 			}
 			currentLock := manager.utxoLockerL1.GetLockedUtxoList()[spentChange]
-			if !reflect.DeepEqual(lock, currentLock) {
-				t.Fatal("failed check changed successor lock")
+			if currentLock != nil {
+				t.Fatalf("failed check revived settled successor lock: %+v", currentLock)
 			}
 			if !reflect.DeepEqual(beforeLocks, manager.utxoLockerL1.GetLockedUtxoList()) {
 				t.Fatal("failed check changed lock set")

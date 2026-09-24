@@ -426,6 +426,34 @@ func (p *UtxoLocker) FinalizeReservation(utxos []string, reservationID, reason s
 	return p.persistReservationChangesLocked(puts, nil)
 }
 
+// ConsumeReservation removes inputs that were spent by the reservation. It is
+// idempotent for missing locks and rejects the whole batch before writing when
+// any existing lock belongs to another owner.
+func (p *UtxoLocker) ConsumeReservation(utxos []string, reservationID string) error {
+	if p == nil || strings.TrimSpace(reservationID) == "" {
+		return fmt.Errorf("invalid UTXO reservation owner")
+	}
+	utxos = normalizedReservationUtxos(utxos)
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.reload()
+	deletes := make([]string, 0, len(utxos))
+	for _, utxo := range utxos {
+		current := p.lockmap[utxo]
+		if current == nil {
+			continue
+		}
+		if current.ReservationID != reservationID {
+			return fmt.Errorf("%w: %s", ErrUtxoReservationOwner, utxo)
+		}
+		deletes = append(deletes, utxo)
+	}
+	if len(deletes) == 0 {
+		return nil
+	}
+	return p.persistReservationChangesLocked(nil, deletes)
+}
+
 // ReleaseReservation releases only locks owned by reservationID. Claimed RGB
 // locks are restored to their previous reason instead of being deleted.
 func (p *UtxoLocker) ReleaseReservation(utxos []string, reservationID string) error {

@@ -238,6 +238,67 @@ func TestCancelExpiredRGB11TransferSuccessBatchAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestRGB11SettledConsumesLock(t *testing.T) {
+	fixture := newExpiredCancelFixture(t, 1)
+	pending, err := fixture.manager.rgbManager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending.State.Status = "settled"
+	pending.State.AckStatus = "accepted"
+	if err := fixture.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := fixture.manager.rgbManager.rebuildRGB11Locks(); err != nil {
+		t.Fatal(err)
+	}
+	expectedSpends, err := fixture.manager.rgbManager.rgb11ExpectedInputs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expectedSpends[fixture.input] != fixture.witnessTxID {
+		t.Fatalf("settled historical spend=%q want witness %q",
+			expectedSpends[fixture.input], fixture.witnessTxID)
+	}
+	if lock := fixture.manager.utxoLockerL1.GetLockedUtxoList()[fixture.input]; lock != nil {
+		t.Fatalf("settled spent input kept an active reservation: %+v", lock)
+	}
+
+	// A restart/rebuild must retain the expected-spend history without reviving
+	// the operation lock that protected the input before settlement.
+	restartedLocker := NewUtxoLocker(fixture.manager.db, nil, L1_NETWORK_BITCOIN)
+	restartedLocker.Init()
+	fixture.manager.utxoLockerL1 = restartedLocker
+	fixture.manager.rgbManager.utxoLockerL1 = restartedLocker
+	if err := fixture.manager.rgbManager.rebuildRGB11Locks(); err != nil {
+		t.Fatal(err)
+	}
+	if lock := restartedLocker.GetLockedUtxoList()[fixture.input]; lock != nil {
+		t.Fatalf("restart revived settled spent-input reservation: %+v", lock)
+	}
+
+	// If chain reconciliation later rolls the transfer back to pending, the
+	// active reservation must be reconstructed before ordinary selection can use
+	// the restored carrier.
+	pending, err = fixture.manager.rgbManager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending.State.Status = "pending"
+	if err := fixture.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.manager.rgbManager.rebuildRGB11Locks(); err != nil {
+		t.Fatal(err)
+	}
+	lock := restartedLocker.GetLockedUtxoList()[fixture.input]
+	if lock == nil || lock.Reason != rgb11wallet.LockReasonPending ||
+		lock.ReservationID != pending.ReservationID {
+		t.Fatalf("reorg did not restore fail-closed input reservation: %+v", lock)
+	}
+}
+
 func TestCancelExpiredRGB11TransferRejectsUnsafeStateAndEvidence(t *testing.T) {
 	tests := []struct {
 		name   string

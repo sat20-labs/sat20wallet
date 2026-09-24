@@ -147,6 +147,7 @@ const productionCspPlugin = (env: Record<string, string>, releaseId: string) => 
   const connectOrigins = configuredOrigins([
     'https://apiprd.sat20.org',
     'https://apiprd.ordx.market',
+    'https://proxy.iriswallet.com',
     'https://api.iconify.design',
     'https://api.simplesvg.com',
     'https://api.unisvg.com',

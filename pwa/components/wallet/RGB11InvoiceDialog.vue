@@ -160,8 +160,8 @@ const { copy } = useClipboard()
 const globalStore = useGlobalStore()
 const walletStore = useWalletStore()
 const assetContractID = computed(() => {
-  const value = props.asset?.contract_id || props.asset?.ticker || ''
-  return value.startsWith('rgb:') ? value : `rgb:${value}`
+  const value = props.asset?.contract_id?.trim() || ''
+  return !value || value.startsWith('rgb:') ? value : `rgb:${value}`
 })
 
 // Persist only the receive handle and minimal matching metadata. Never persist
@@ -265,6 +265,10 @@ const decimalToRaw = (input: string, precision: number): string | null => {
 
 const generateInvoice = async () => {
   if (restoring.value || restoreFailed.value || !scopeKey.value || requestId.value) return
+  if (!assetContractID.value) {
+    errorMessage.value = t('rgb11Invoice.contractIdMissing')
+    return
+  }
   const key = scopeKey.value
   const precision = Math.max(0, Number(props.asset?.precision || 0))
   const amountRaw = decimalToRaw(amount.value, precision)

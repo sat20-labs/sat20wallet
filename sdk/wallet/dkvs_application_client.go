@@ -261,6 +261,30 @@ func (p *SatsNetDKVSClient) GetPrefixSnapshot(prefix string) (*dkvsindexer.Prefi
 	return resp.Data, nil
 }
 
+type dkvsPrefixDeltaData struct {
+	dkvsApplicationBaseResp
+	Data *dkvsindexer.PrefixDeltaResult `json:"data,omitempty"`
+}
+
+func (p *SatsNetDKVSClient) GetPrefixDelta(prefix, endpointID string, after uint64) (*dkvsindexer.PrefixDeltaResult, error) {
+	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), "/")
+	if prefix == "" || strings.TrimSpace(endpointID) == "" {
+		return nil, dkvsindexer.ErrInvalidKey
+	}
+	var resp dkvsPrefixDeltaData
+	if err := p.postDKVSApplication("/v3/dkvs/prefixes/delta", struct {
+		Prefix          string `json:"prefix"`
+		EndpointID      string `json:"endpoint_id"`
+		AfterGeneration uint64 `json:"after_generation"`
+	}{Prefix: prefix, EndpointID: endpointID, AfterGeneration: after}, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Data == nil || resp.Data.Prefix != prefix || resp.Data.EndpointID != endpointID || resp.Data.Generation < after {
+		return nil, dkvsindexer.ErrInvalidSnapshot
+	}
+	return resp.Data, nil
+}
+
 type dkvsPrefixReadData struct {
 	dkvsApplicationBaseResp
 	Data *dkvsindexer.PrefixReadResult `json:"data,omitempty"`

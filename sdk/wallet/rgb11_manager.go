@@ -154,7 +154,7 @@ func (p *rgb11Manager) selectRGB11Scope() error {
 	return nil
 }
 
-func rgb11TransferKeepsInputsLocked(state *rgb11wallet.TransferState) bool {
+func rgb11TransferHasExpectedSpend(state *rgb11wallet.TransferState) bool {
 	if state == nil || state.Direction != "send" {
 		return false
 	}
@@ -166,8 +166,12 @@ func rgb11TransferKeepsInputsLocked(state *rgb11wallet.TransferState) bool {
 	}
 }
 
+func rgb11TransferKeepsInputsLocked(state *rgb11wallet.TransferState) bool {
+	return rgb11TransferHasExpectedSpend(state) && state.Status != "settled"
+}
+
 func validateRGB11PendingTransaction(pending *rgb11wallet.PendingTransfer) error {
-	if pending == nil || !rgb11TransferKeepsInputsLocked(&pending.State) ||
+	if pending == nil || !rgb11TransferHasExpectedSpend(&pending.State) ||
 		pending.State.WitnessTxID == "" || len(pending.SignedTx) == 0 ||
 		len(pending.State.InputOutPoints) == 0 {
 		return ErrRGB11Inconsistent
@@ -205,7 +209,7 @@ func (p *rgb11Manager) rgb11ExpectedInputs() (map[string]string, error) {
 	}
 	expected := make(map[string]string)
 	for _, state := range transfers {
-		if !rgb11TransferKeepsInputsLocked(state) {
+		if !rgb11TransferHasExpectedSpend(state) {
 			continue
 		}
 		pending, err := p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
@@ -364,11 +368,21 @@ func (p *rgb11Manager) finalizeRGB11PendingChangeReservation(pending *rgb11walle
 }
 
 func (p *rgb11Manager) finalizeRGB11PendingChangeReservationExcept(pending *rgb11wallet.PendingTransfer, historicalSpent map[string]bool) error {
+	activeOwners, err := p.rgb11ActiveInputOwners(pending.State.TransferID)
+	if err != nil {
+		return err
+	}
+	locks := p.utxoLockerL1.GetLockedUtxoList()
 	changes := make([]string, 0)
 	for _, outpoint := range rgb11PendingChangeOutpoints(pending) {
-		if !historicalSpent[outpoint] {
-			changes = append(changes, outpoint)
+		if historicalSpent[outpoint] {
+			continue
 		}
+		if lock := locks[outpoint]; lock != nil && lock.ReservationID != "" &&
+			lock.ReservationID != pending.ReservationID && activeOwners[outpoint] == lock.ReservationID {
+			continue
+		}
+		changes = append(changes, outpoint)
 	}
 	if len(changes) == 0 {
 		return nil
@@ -377,6 +391,37 @@ func (p *rgb11Manager) finalizeRGB11PendingChangeReservationExcept(pending *rgb1
 		return fmt.Errorf("%w: pending RGB11 reservation has no owner", ErrRGB11Inconsistent)
 	}
 	return p.utxoLockerL1.FinalizeReservation(changes, pending.ReservationID, rgb11wallet.LockReasonRGB)
+}
+
+func (p *rgb11Manager) rgb11ActiveInputOwners(exclude string) (map[string]string, error) {
+	transfers, err := p.rgbManager.projectionStore.ListTransfers()
+	if err != nil {
+		return nil, err
+	}
+	owners := make(map[string]string)
+	for _, state := range transfers {
+		if state == nil || state.TransferID == exclude || !rgb11TransferKeepsInputsLocked(state) {
+			continue
+		}
+		pending, err := p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
+		if err != nil {
+			return nil, err
+		}
+		if pending.ReservationID == "" {
+			continue
+		}
+		if err := validateRGB11PendingTransaction(pending); err != nil {
+			return nil, err
+		}
+		for _, outpoint := range state.InputOutPoints {
+			if owner := owners[outpoint]; owner != "" && owner != pending.ReservationID {
+				return nil, fmt.Errorf("%w: RGB11 input has multiple reservation owners: %s",
+					ErrRGB11Inconsistent, outpoint)
+			}
+			owners[outpoint] = pending.ReservationID
+		}
+	}
+	return owners, nil
 }
 
 // reconcileRGB11Reservations reconstructs operation ownership from persisted
@@ -402,7 +447,7 @@ func (p *rgb11Manager) reconcileRGB11Reservations() error {
 	inputOwners := make(map[string]string)
 	inputWitnesses := make(map[string]string)
 	for _, state := range transfers {
-		if !rgb11TransferKeepsInputsLocked(state) {
+		if !rgb11TransferHasExpectedSpend(state) {
 			continue
 		}
 		pending, loadErr := p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
@@ -524,11 +569,17 @@ func (p *rgb11Manager) reconcileRGB11Reservations() error {
 		for outpoint := range group.outpoints {
 			outpoints = append(outpoints, outpoint)
 		}
-		if err := p.utxoLockerL1.EnsureReservation(outpoints, rgb11wallet.LockReasonPending,
-			reservationID, group.previousReasons); err != nil {
-			return err
+		if group.allSettled {
+			if err := p.utxoLockerL1.ConsumeReservation(outpoints, reservationID); err != nil {
+				return err
+			}
+		} else {
+			if err := p.utxoLockerL1.EnsureReservation(outpoints, rgb11wallet.LockReasonPending,
+				reservationID, group.previousReasons); err != nil {
+				return err
+			}
+			active[reservationID] = group.outpoints
 		}
-		active[reservationID] = group.outpoints
 		if group.allSettled && len(group.changeOutpoints) != 0 {
 			changes := make([]string, 0, len(group.changeOutpoints))
 			for outpoint := range group.changeOutpoints {
@@ -607,7 +658,13 @@ func (p *rgb11Manager) rebuildRGB11Locks() error {
 		p.rgbManager.consistencyStatus = "broken"
 		return err
 	}
-	for outpoint := range expectedInputs {
+	transfers, err := p.rgbManager.projectionStore.ListTransfers()
+	if err != nil {
+		p.rgbManager.consistencyStatus = "broken"
+		return err
+	}
+	activeInputs := rgb11ReservedInputOutpoints(transfers)
+	for outpoint := range activeInputs {
 		if err := p.utxoLockerL1.SetLockReason(outpoint, rgb11wallet.LockReasonPending); err != nil {
 			p.rgbManager.consistencyStatus = "broken"
 			return err
@@ -638,11 +695,6 @@ func (p *rgb11Manager) rebuildRGB11Locks() error {
 	for _, proof := range proofs {
 		proofIndex[proof.OutPoint+"|"+proof.AssetName.String()] = proof
 	}
-	transfers, err := p.rgbManager.projectionStore.ListTransfers()
-	if err != nil {
-		p.rgbManager.consistencyStatus = "broken"
-		return err
-	}
 	requirements := rgb11ProofConfirmationRequirements(transfers)
 	for _, output := range outputs {
 		for _, asset := range output.Assets {
@@ -667,8 +719,12 @@ func (p *rgb11Manager) rebuildRGB11Locks() error {
 				return fmt.Errorf("%w: RGB11 carrier %s is inconsistent",
 					ErrRGB11Inconsistent, output.OutPointStr)
 			}
+			if _, historicalSpend := expectedInputs[output.OutPointStr]; historicalSpend &&
+				proof.Status == "spending" && !activeInputs[output.OutPointStr] {
+				continue
+			}
 			reason := rgb11wallet.LockReasonPending
-			if _, spending := expectedInputs[output.OutPointStr]; !spending &&
+			if !activeInputs[output.OutPointStr] &&
 				rgb11ProofIsAvailable(proof, requirements) {
 				reason = rgb11wallet.LockReasonRGB
 			}
@@ -2194,7 +2250,8 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 	if err != nil {
 		return nil, err
 	}
-	if len(request.TransferID) == 64 && request.Mode == corewallet.ReceiveWitness && expectedVout == nil {
+	var previousState *rgb11wallet.TransferState
+	if request.TransferID != "" && request.Mode == corewallet.ReceiveWitness && expectedVout == nil {
 		state, err := p.projectionStore.LoadTransferState(request.TransferID)
 		if err != nil {
 			return nil, err
@@ -2207,6 +2264,7 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 			return nil, ErrRGB11InvoiceMismatch
 		}
 		expectedVout = &vout
+		previousState = state
 	}
 	invoice, err := invoicing.Parse(request.Invoice)
 	if err != nil {
@@ -2291,6 +2349,13 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 	if err := p.ProjectRGB11Allocation(allocation.OutPoint, receivedAsset, proof); err != nil {
 		return nil, err
 	}
+	info, err := rgb11TickerInfoFromValidatedContract(container, receipt)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.RegisterRGB11TickerInfo(info); err != nil {
+		return nil, err
+	}
 	receivedOutpoint := allocation.OutPoint
 	transferID := receipt.TransferID
 	if transferID == "" {
@@ -2318,6 +2383,37 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 		AckStatus: "accepted", Status: "pending", RelayRecordKey: request.RelayKey,
 		AckRecordKey: request.AckKey, RelayDurability: "LOCAL_ONLY", RelayExpiry: expiry,
 		TransportMode: transportMode,
+	}
+	if previousState != nil && previousState.AddressMode {
+		if previousState.TransferID != state.TransferID || previousState.Direction != state.Direction ||
+			previousState.ConsignmentHash != state.ConsignmentHash ||
+			previousState.WitnessTxID != state.WitnessTxID {
+			return nil, ErrRGB11InvoiceMismatch
+		}
+		state.TransportMode = previousState.TransportMode
+		state.Invoice = previousState.Invoice
+		state.AckStatus = previousState.AckStatus
+		state.RelayRecordKey = previousState.RelayRecordKey
+		state.AckRecordKey = previousState.AckRecordKey
+		state.RelayDurability = previousState.RelayDurability
+		state.RelayExpiry = previousState.RelayExpiry
+		state.AddressMode = true
+		state.AddressMessageID = previousState.AddressMessageID
+		state.SenderAccountID = previousState.SenderAccountID
+		state.ReceiverAccountID = previousState.ReceiverAccountID
+		state.ReceiverAddress = previousState.ReceiverAddress
+		state.ReceiveCapabilityKey = previousState.ReceiveCapabilityKey
+		state.ReceiveCapabilityHash = previousState.ReceiveCapabilityHash
+		state.DeliveryMode = previousState.DeliveryMode
+		state.DeliveryObjectID = previousState.DeliveryObjectID
+		state.DeliveryRecordKey = previousState.DeliveryRecordKey
+		state.DeliveryRecordHash = previousState.DeliveryRecordHash
+		state.DeliveryTemporary = previousState.DeliveryTemporary
+		state.DeliveryIssueHeight = previousState.DeliveryIssueHeight
+		state.DeliveryTTL = previousState.DeliveryTTL
+		state.DeliveryAcknowledged = previousState.DeliveryAcknowledged
+		state.DeliveryCacheCompacted = previousState.DeliveryCacheCompacted
+		state.SyntheticInvoiceRemoved = previousState.SyntheticInvoiceRemoved
 	}
 	if request.WitnessTxID != "" {
 		state.WitnessTxID = request.WitnessTxID
@@ -3847,7 +3943,7 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || p.rgbManager.evidence == nil {
 		return nil, ErrRGB11Inconsistent
 	}
-	unlock, err := p.lockRGB11ChainRefresh()
+	unlock, err := p.lockRGB11ChainRefresh(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -3883,8 +3979,32 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 	}
 	conflictedInputs := make(map[string]bool)
 	unresolvedInputs := make(map[string]bool)
+	unavailableProofs := make(map[string]bool)
 	for _, state := range transfers {
 		if state.Direction == "receive" {
+			if state.Status == "rejected" {
+				status, statusErr := p.rgbManager.evidence.GetTxStatus(state.WitnessTxID)
+				if statusErr != nil {
+					result.Unresolved++
+					refreshErrors = append(refreshErrors, fmt.Errorf(
+						"RGB11 rejected receive %s witness %s evidence unavailable: %w",
+						state.TransferID, state.WitnessTxID, statusErr,
+					))
+					continue
+				}
+				if status != nil && (status.InMempool || status.Confirmed) {
+					inconsistent := state.OutputOutPoints
+					if len(inconsistent) == 0 {
+						inconsistent = []string{state.TransferID}
+					}
+					result.Inconsistent = append(result.Inconsistent, inconsistent...)
+					refreshErrors = append(refreshErrors, fmt.Errorf(
+						"%w: rejected RGB11 receive %s witness %s is visible",
+						ErrRGB11Inconsistent, state.TransferID, state.WitnessTxID,
+					))
+				}
+				continue
+			}
 			if state.Status == "awaiting_broadcast" {
 				raw, loadErr := p.rgbManager.projectionStore.LoadObject(state.ConsignmentHash)
 				if loadErr != nil {
@@ -3909,18 +4029,37 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 				}
 				state = updated
 			}
-			status, err := p.rgbManager.evidence.GetTxStatus(state.WitnessTxID)
-			if err != nil {
-				status = &rgb11wallet.BitcoinTxStatus{TxID: state.WitnessTxID}
+			status, statusErr := p.rgbManager.evidence.GetTxStatus(state.WitnessTxID)
+			if statusErr != nil {
+				status = nil
+				var fallbackErrors []error
 				for _, outpoint := range state.OutputOutPoints {
 					if allocationOutpointTxID(outpoint) == state.WitnessTxID {
 						if utxo, utxoErr := p.rgbManager.evidence.GetUTXO(outpoint); utxoErr == nil && utxo != nil {
-							status.InMempool = utxo.Confirmations == 0
-							status.Confirmed = utxo.Confirmations > 0
-							status.Confirmations = utxo.Confirmations
+							status = &rgb11wallet.BitcoinTxStatus{
+								TxID: state.WitnessTxID, InMempool: utxo.Confirmations == 0,
+								Confirmed: utxo.Confirmations > 0, Confirmations: utxo.Confirmations,
+							}
 							break
+						} else if utxoErr != nil {
+							fallbackErrors = append(fallbackErrors, utxoErr)
 						}
 					}
+				}
+				if status == nil && len(fallbackErrors) > 0 {
+					for _, outpoint := range state.OutputOutPoints {
+						unavailableProofs[outpoint] = true
+					}
+					result.Unresolved++
+					refreshErrors = append(refreshErrors, fmt.Errorf(
+						"RGB11 receive %s witness %s evidence unavailable: %w",
+						state.TransferID, state.WitnessTxID,
+						errors.Join(append([]error{statusErr}, fallbackErrors...)...),
+					))
+					continue
+				}
+				if status == nil {
+					status = &rgb11wallet.BitcoinTxStatus{TxID: state.WitnessTxID}
 				}
 			}
 			settled := status != nil && status.Confirmed &&
@@ -4018,8 +4157,15 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 				case state.WitnessTxID:
 					knownExpected = true
 				case "", "unknown":
-					unknownSpent = true
-					unresolvedInputs[outpoint] = true
+					if verified, ok := verifyRGB11ExpectedSpend(
+						p.rgbManager.evidence, outpoint, state.WitnessTxID,
+					); ok {
+						status = verified
+						knownExpected = true
+					} else {
+						unknownSpent = true
+						unresolvedInputs[outpoint] = true
+					}
 				default:
 					knownConflict = true
 					conflictedInputs[outpoint] = true
@@ -4027,7 +4173,10 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 				}
 			}
 			if knownExpected {
-				status = &rgb11wallet.BitcoinTxStatus{TxID: state.WitnessTxID, InMempool: true}
+				if status == nil || status.TxID != state.WitnessTxID ||
+					(!status.Confirmed && !status.InMempool) {
+					status = &rgb11wallet.BitcoinTxStatus{TxID: state.WitnessTxID, InMempool: true}
+				}
 				visible = true
 			} else if knownConflict {
 				pending.State.Status = "conflicted"
@@ -4120,12 +4269,25 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 		}
 	}
 
+	if err := p.reconcileRGB11Reservations(); err != nil {
+		p.rgbManager.consistencyStatus = "broken"
+		refreshErrors = append(refreshErrors, fmt.Errorf("reconcile RGB11 reservations: %w", err))
+		return result, errors.Join(refreshErrors...)
+	}
+	transfers, err = p.rgbManager.projectionStore.ListTransfers()
+	if err != nil {
+		return nil, err
+	}
+	activeInputs := rgb11ReservedInputOutpoints(transfers)
 	proofs, err := p.rgbManager.projectionStore.ListProofs()
 	if err != nil {
 		return nil, err
 	}
 	requirements := rgb11ProofConfirmationRequirements(transfers)
 	for _, proof := range proofs {
+		if unavailableProofs[proof.OutPoint] {
+			continue
+		}
 		if conflictedInputs[proof.OutPoint] {
 			proof.Status = "inconsistent"
 			if err := p.rgbManager.projectionStore.SaveProofState(proof); err != nil {
@@ -4134,8 +4296,17 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 			_ = p.utxoLockerL1.SetLockReason(proof.OutPoint, rgb11wallet.LockReasonRGB)
 			continue
 		}
+		if activeInputs[proof.OutPoint] {
+			proof.Status = "spending"
+			if err := p.rgbManager.projectionStore.SaveProofState(proof); err != nil {
+				return nil, err
+			}
+			if err := p.utxoLockerL1.SetLockReason(proof.OutPoint, rgb11wallet.LockReasonPending); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if _, expected := expectedSpends[proof.OutPoint]; expected && proof.Status == "spending" {
-			_ = p.utxoLockerL1.SetLockReason(proof.OutPoint, rgb11wallet.LockReasonPending)
 			continue
 		}
 		outspend, err := p.rgbManager.evidence.GetOutspend(proof.OutPoint)
@@ -4148,7 +4319,9 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 				if outspend.SpendingTx == "" || outspend.SpendingTx == "unknown" {
 					unresolvedInputs[proof.OutPoint] = true
 				}
-				_ = p.utxoLockerL1.SetLockReason(proof.OutPoint, rgb11wallet.LockReasonPending)
+				if activeInputs[proof.OutPoint] {
+					_ = p.utxoLockerL1.SetLockReason(proof.OutPoint, rgb11wallet.LockReasonPending)
+				}
 			} else {
 				proof.Status = "inconsistent"
 				result.Inconsistent = append(result.Inconsistent, proof.OutPoint)
@@ -4161,13 +4334,25 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 		}
 		status, statusErr := p.rgbManager.evidence.GetTxStatus(proof.WitnessTxID)
 		if statusErr != nil || status == nil {
+			var fallbackErr error
 			if allocationOutpointTxID(proof.OutPoint) == proof.WitnessTxID {
 				if utxo, utxoErr := p.rgbManager.evidence.GetUTXO(proof.OutPoint); utxoErr == nil && utxo != nil {
 					status = &rgb11wallet.BitcoinTxStatus{
 						TxID: proof.WitnessTxID, InMempool: utxo.Confirmations == 0,
 						Confirmed: utxo.Confirmations > 0, Confirmations: utxo.Confirmations,
 					}
+				} else {
+					fallbackErr = utxoErr
 				}
+			}
+			if status == nil && statusErr != nil && fallbackErr != nil {
+				unavailableProofs[proof.OutPoint] = true
+				result.Unresolved++
+				refreshErrors = append(refreshErrors, fmt.Errorf(
+					"RGB11 proof %s witness %s evidence unavailable: %w",
+					proof.OutPoint, proof.WitnessTxID, errors.Join(statusErr, fallbackErr),
+				))
+				continue
 			}
 			if status == nil {
 				status = &rgb11wallet.BitcoinTxStatus{

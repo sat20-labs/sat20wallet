@@ -5625,6 +5625,7 @@ func main() {
 	obj.Set("registerAsReferrer", js.FuncOf(registerAsReferrer))
 	obj.Set("bindReferrerForServer", js.FuncOf(bindReferrerForServer))
 	registerRemoteActionRepair(obj)
+	registerRGB11Discard(obj)
 
 	js.Global().Set(module, obj)
 	wallet.Log.SetLevel(logrus.DebugLevel)

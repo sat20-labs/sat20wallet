@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/satoshinet/btcec"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
@@ -142,9 +143,9 @@ func TestConfiguredRGB11MailboxSyncUsesGenerationBeforeReplicaRead(t *testing.T)
 	}
 	remote.seedInternalMailboxRecord(record)
 	remote.mu.Lock()
-	remote.generations[mailboxPrefix]++
 	initialSnapshots := remote.snapshotCalls
 	initialStatus := remote.statusCalls
+	initialDeltas := remote.deltaCalls
 	remote.mu.Unlock()
 
 	result, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(),
@@ -156,10 +157,10 @@ func TestConfiguredRGB11MailboxSyncUsesGenerationBeforeReplicaRead(t *testing.T)
 		t.Fatalf("mailbox result=%+v", result)
 	}
 	remote.mu.Lock()
-	if remote.statusCalls <= initialStatus || remote.snapshotCalls != initialSnapshots+1 {
+	if remote.statusCalls <= initialStatus || remote.snapshotCalls != initialSnapshots || remote.deltaCalls != initialDeltas+1 {
 		remote.mu.Unlock()
-		t.Fatalf("changed mailbox status=%d snapshot=%d initial_status=%d initial_snapshot=%d",
-			remote.statusCalls, remote.snapshotCalls, initialStatus, initialSnapshots)
+		t.Fatalf("changed mailbox status=%d snapshot=%d delta=%d initial_status=%d initial_snapshot=%d initial_delta=%d",
+			remote.statusCalls, remote.snapshotCalls, remote.deltaCalls, initialStatus, initialSnapshots, initialDeltas)
 	}
 	unchangedSnapshots := remote.snapshotCalls
 	remote.mu.Unlock()
@@ -174,4 +175,69 @@ func TestConfiguredRGB11MailboxSyncUsesGenerationBeforeReplicaRead(t *testing.T)
 		t.Fatalf("unchanged mailbox downloaded snapshot: before=%d after=%d",
 			unchangedSnapshots, remote.snapshotCalls)
 	}
+}
+
+func TestRGB11DirectRejectsInvalid(t *testing.T) {
+	senderKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := newRGB11MultiDeviceManager(t, senderKey, 720)
+	recipient := newRGB11MultiDeviceManager(t, recipientKey, 721)
+	remote := newRGB11MemoryDKVSHTTP()
+	configure := func(manager *Manager) {
+		configureRGB11DKVSTestManager(manager, remote)
+		client := newRGB11MessageNodeClient(remote)
+		manager.serverNode = NewNode(client, "message.test", SERVER_NODE,
+			client.CoreNodePubKey(), client.CoreNodePubKey())
+	}
+	configure(sender)
+	configure(recipient)
+	endpoint, err := recipient.EnableConfiguredRGB11AddressReceive(
+		RGB11ReceiveCapabilityOptions{RecordOptions: dkvsindexer.RecordOptions{TTL: testRGB11FreeLocalTTL}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailbox, err := mailboxSubscriptionTarget(endpoint.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recipient.SubscribeDKVSPrefix(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	const applicationID = "invalid-rgb11-direct"
+	if _, err := sender.sendWalletDirectMessage(sender.wallet, applicationID,
+		AccountMessageKindRGB11Consignment, endpoint.AccountID, []byte("invalid")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(),
+		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Invalid != 1 {
+		t.Fatalf("invalid Direct result=%+v", result)
+	}
+	messages, err := sender.readWalletDirectMessages(sender.wallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range messages {
+		if message == nil || message.Payload == nil ||
+			message.Payload.Kind != AccountMessageKindRGB11ACK ||
+			message.Payload.ApplicationID != applicationID {
+			continue
+		}
+		ack, err := rgb11wallet.DecodeAddressACK(message.Payload.Body)
+		if err != nil || ack.Status != RGB11AddressACKRejected {
+			t.Fatalf("invalid Direct ACK=%+v err=%v", ack, err)
+		}
+		return
+	}
+	t.Fatal("invalid Direct did not emit a rejected ACK")
 }

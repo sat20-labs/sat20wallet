@@ -139,6 +139,7 @@ func (m *dkvsManager) syncManagedPrefixes(client *SatsNetDKVSClient,
 	}
 	resetEndpoint := stateErr != nil || state.EndpointID != config.EndpointID
 	needSnapshot := make([]string, 0, len(prefixes))
+	needDelta := make(map[string]uint64)
 	if force || resetEndpoint || !sameStringList(state.Prefixes, prefixes) {
 		needSnapshot = append(needSnapshot, prefixes...)
 	} else {
@@ -158,7 +159,11 @@ func (m *dkvsManager) syncManagedPrefixes(client *SatsNetDKVSClient,
 			}
 			m.setEndpointVerificationHeight(status.ViewHeight, true)
 			for _, changed := range status.Changed {
-				needSnapshot = append(needSnapshot, changed.Prefix)
+				generation, ok := state.Generations[changed.Prefix]
+				if !ok {
+					return nil, dkvsindexer.ErrInvalidSnapshot
+				}
+				needDelta[changed.Prefix] = generation
 			}
 		}
 	}
@@ -166,7 +171,7 @@ func (m *dkvsManager) syncManagedPrefixes(client *SatsNetDKVSClient,
 	if err != nil {
 		return nil, err
 	}
-	if len(needSnapshot) != 0 || state.Status != DKVSSubscriptionReady || resetEndpoint {
+	if len(needSnapshot) != 0 || len(needDelta) != 0 || state.Status != DKVSSubscriptionReady || resetEndpoint {
 		if err := store.PreparePrefixSync(client.replicaNamespace, config.EndpointID,
 			prefixes, resetEndpoint); err != nil {
 			return nil, err
@@ -178,6 +183,35 @@ func (m *dkvsManager) syncManagedPrefixes(client *SatsNetDKVSClient,
 		if snapshotErr != nil {
 			return changedKeys, snapshotErr
 		}
+		changedKeys = append(changedKeys, changed...)
+	}
+	deltaPrefixes := make([]string, 0, len(needDelta))
+	for prefix := range needDelta {
+		deltaPrefixes = append(deltaPrefixes, prefix)
+	}
+	sort.Strings(deltaPrefixes)
+	for _, prefix := range deltaPrefixes {
+		after := needDelta[prefix]
+		delta, deltaErr := client.GetPrefixDelta(prefix, config.EndpointID, after)
+		var httpErr *HTTPResponseError
+		olderEndpoint := errors.As(deltaErr, &httpErr) && (httpErr.StatusCode == 404 || httpErr.StatusCode == 405)
+		if errors.Is(deltaErr, dkvsindexer.ErrStaleGeneration) || olderEndpoint {
+			changed, snapshotErr := m.installPrefixSnapshot(client, store, prefix, config.EndpointID)
+			if snapshotErr != nil {
+				return changedKeys, snapshotErr
+			}
+			changedKeys = append(changedKeys, changed...)
+			continue
+		}
+		if deltaErr != nil {
+			return changedKeys, deltaErr
+		}
+		if delta.Generation <= after { return changedKeys, dkvsindexer.ErrInvalidSnapshot }
+		changed, applyErr := store.ApplyPrefixDelta(client.replicaNamespace, after, delta)
+		if applyErr != nil {
+			return changedKeys, applyErr
+		}
+		m.setEndpointVerificationHeight(delta.ViewHeight, true)
 		changedKeys = append(changedKeys, changed...)
 	}
 	if err := store.CompletePrefixSync(client.replicaNamespace, config.EndpointID, prefixes); err != nil {

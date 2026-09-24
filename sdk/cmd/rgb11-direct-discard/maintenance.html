@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RGB11 exact Direct discard</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; max-width: 960px; margin: 24px auto; padding: 0 16px; }
+    textarea, input { box-sizing: border-box; width: 100%; margin: 6px 0 14px; font: 12px ui-monospace, monospace; }
+    textarea { min-height: 150px; }
+    button { margin: 0 8px 12px 0; padding: 8px 12px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid #ccc; padding: 12px; }
+    .danger { color: #9b1c1c; }
+  </style>
+</head>
+<body>
+  <h1>RGB11 exact Direct discard</h1>
+  <p>This maintenance page must run at the original C PWA origin and browser profile. It does not start monitors.</p>
+
+  <label for="config">Exact PWA testnet config JSON</label>
+  <textarea id="config" spellcheck="false"></textarea>
+  <label for="password">Wallet password (memory only)</label>
+  <input id="password" type="password" autocomplete="off">
+  <label for="target">Approved exact target JSON</label>
+  <textarea id="target" spellcheck="false"></textarea>
+
+  <button id="init">1. Initialize</button>
+  <button id="plan">2. Dry-run plan</button>
+  <button id="save" disabled>Save plan</button>
+
+  <label for="approved">Reviewed plan JSON (paste the saved file; never auto-filled)</label>
+  <textarea id="approved" spellcheck="false"></textarea>
+  <button id="apply" class="danger">3. Apply reviewed plan</button>
+
+  <h2>Exact stale 69fa RGB lock</h2>
+  <label for="lock-target">Approved exact stale-lock target JSON</label>
+  <textarea id="lock-target" spellcheck="false"></textarea>
+  <button id="lock-diagnose">Read-only lock diagnosis</button>
+  <button id="consistency-diagnose">Read-only consistency diagnosis</button>
+  <button id="lock-plan">Dry-run stale-lock plan</button>
+  <button id="lock-save" disabled>Save stale-lock plan</button>
+  <label for="lock-approved">Reviewed stale-lock plan JSON (never auto-filled)</label>
+  <textarea id="lock-approved" spellcheck="false"></textarea>
+  <button id="lock-apply" class="danger">Apply reviewed stale-lock plan</button>
+
+  <h2>Exact stale 4Dmrd reservation owner</h2>
+  <p>This uses the same fixed C/4Dmrd/69fa/976 target above. It keeps the settled journal and only clears its stale reservation owner metadata.</p>
+  <button id="owner-plan">Dry-run stale-owner plan</button>
+  <button id="owner-save" disabled>Save stale-owner plan</button>
+  <label for="owner-approved">Reviewed stale-owner plan JSON (never auto-filled)</label>
+  <textarea id="owner-approved" spellcheck="false"></textarea>
+  <button id="owner-apply" class="danger">Apply reviewed stale-owner plan</button>
+  <button id="release">Release manager</button>
+
+  <h2>Result</h2>
+  <pre id="result">Not started.</pre>
+
+  <script src="wasm_exec.js"></script>
+  <script>
+    'use strict'
+    let wasmReady = false
+    let savedPlan = null
+    let savedLockPlan = null
+    let savedOwnerPlan = null
+
+    function show(value) {
+      document.getElementById('result').textContent = JSON.stringify(value, null, 2)
+    }
+
+    function parseField(id) {
+      return JSON.parse(document.getElementById(id).value)
+    }
+
+    async function loadWasm() {
+      if (wasmReady) return
+      const go = new Go()
+      const response = await fetch('./sat20wallet.wasm', { cache: 'no-store' })
+      if (!response.ok) throw new Error(`WASM HTTP ${response.status}`)
+      const result = await WebAssembly.instantiate(await response.arrayBuffer(), go.importObject)
+      go.run(result.instance)
+      wasmReady = true
+      if (typeof globalThis.sat20wallet_wasm?.initRGB11Discard !== 'function') {
+        throw new Error('maintenance export is absent; wrong WASM build')
+      }
+    }
+
+    async function runAction(action) {
+      try {
+        await loadWasm()
+        const response = await action()
+        show(response)
+        return response
+      } catch (error) {
+        const response = { code: -1, msg: String(error?.message || error) }
+        show(response)
+        return response
+      }
+    }
+
+    fetch('./target-c-172d.json', { cache: 'no-store' })
+      .then(response => response.text())
+      .then(text => { document.getElementById('target').value = text })
+      .catch(error => show({ code: -1, msg: `load target: ${error}` }))
+
+    fetch('./target-c-69fa-lock.json', { cache: 'no-store' })
+      .then(response => response.text())
+      .then(text => { document.getElementById('lock-target').value = text })
+      .catch(error => show({ code: -1, msg: `load stale-lock target: ${error}` }))
+
+    document.getElementById('init').onclick = () => runAction(async () => {
+      const config = parseField('config')
+      return globalThis.sat20wallet_wasm.initRGB11Discard(config, 2)
+    })
+
+    document.getElementById('plan').onclick = () => runAction(async () => {
+      const password = document.getElementById('password').value
+      const target = JSON.stringify(parseField('target'))
+      const response = await globalThis.sat20wallet_wasm.planRGB11Discard(password, target)
+      savedPlan = response?.code === 0 ? response.data : null
+      document.getElementById('save').disabled = !savedPlan
+      return response
+    })
+
+    document.getElementById('save').onclick = () => {
+      if (!savedPlan) return
+      const blob = new Blob([`${JSON.stringify(savedPlan, null, 2)}\n`], { type: 'application/json' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = 'rgb11-c-172d-plan.json'
+      link.click()
+      URL.revokeObjectURL(link.href)
+    }
+
+    document.getElementById('apply').onclick = () => runAction(async () => {
+      const password = document.getElementById('password').value
+      const target = JSON.stringify(parseField('target'))
+      const approved = JSON.stringify(parseField('approved'))
+      return globalThis.sat20wallet_wasm.applyRGB11Discard(password, target, approved)
+    })
+
+    document.getElementById('lock-plan').onclick = () => runAction(async () => {
+      const password = document.getElementById('password').value
+      const target = JSON.stringify(parseField('lock-target'))
+      const response = await globalThis.sat20wallet_wasm.planRGB11StaleLock(password, target)
+      savedLockPlan = response?.code === 0 ? response.data : null
+      document.getElementById('lock-save').disabled = !savedLockPlan
+      return response
+    })
+
+    document.getElementById('lock-diagnose').onclick = () => runAction(async () => {
+      const target = parseField('lock-target')
+      return globalThis.sat20wallet_wasm.diagnoseRGB11Lock(target.outpoint)
+    })
+
+    document.getElementById('consistency-diagnose').onclick = () => runAction(async () => {
+      const password = document.getElementById('password').value
+      return globalThis.sat20wallet_wasm.diagnoseRGB11Consistency(password)
+    })
+
+    document.getElementById('lock-save').onclick = () => {
+      if (!savedLockPlan) return
+      const blob = new Blob([`${JSON.stringify(savedLockPlan, null, 2)}\n`], { type: 'application/json' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = 'rgb11-c-69fa-lock-plan.json'
+      link.click()
+      URL.revokeObjectURL(link.href)
+    }
+
+    document.getElementById('lock-apply').onclick = () => runAction(async () => {
+      const password = document.getElementById('password').value
+      const target = JSON.stringify(parseField('lock-target'))
+      const approved = JSON.stringify(parseField('lock-approved'))
+      return globalThis.sat20wallet_wasm.applyRGB11StaleLock(password, target, approved)
+    })
+
+    document.getElementById('owner-plan').onclick = () => runAction(async () => {
+      const password = document.getElementById('password').value
+      const target = JSON.stringify(parseField('lock-target'))
+      const response = await globalThis.sat20wallet_wasm.planRGB11StaleOwner(password, target)
+      savedOwnerPlan = response?.code === 0 ? response.data : null
+      document.getElementById('owner-save').disabled = !savedOwnerPlan
+      return response
+    })
+
+    document.getElementById('owner-save').onclick = () => {
+      if (!savedOwnerPlan) return
+      const blob = new Blob([`${JSON.stringify(savedOwnerPlan, null, 2)}\n`], { type: 'application/json' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = 'rgb11-c-4dmrd-owner-plan.json'
+      link.click()
+      URL.revokeObjectURL(link.href)
+    }
+
+    document.getElementById('owner-apply').onclick = () => runAction(async () => {
+      const password = document.getElementById('password').value
+      const target = JSON.stringify(parseField('lock-target'))
+      const approved = JSON.stringify(parseField('owner-approved'))
+      return globalThis.sat20wallet_wasm.applyRGB11StaleOwner(password, target, approved)
+    })
+
+    document.getElementById('release').onclick = () => runAction(async () => {
+      if (typeof globalThis.sat20wallet_wasm?.release !== 'function') {
+        throw new Error('release export is absent')
+      }
+      return globalThis.sat20wallet_wasm.release()
+    })
+  </script>
+</body>
+</html>

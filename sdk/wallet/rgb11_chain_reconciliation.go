@@ -273,10 +273,20 @@ func (p *rgb11Manager) wakeRGB11ChainReconciliation() {
 	}
 }
 
-func (p *rgb11Manager) lockRGB11ChainRefresh() (func(), error) {
+func (p *rgb11Manager) lockRGB11ChainRefresh(ctx context.Context) (func(), error) {
 	if p == nil || p.scopeStates == nil {
 		return nil, fmt.Errorf("%w: RGB11 scope registry unavailable", ErrRGB11Inconsistent)
 	}
-	p.scopeStates.chainRefresh.Lock()
-	return p.scopeStates.chainRefresh.Unlock, nil
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if p.scopeStates.chainRefresh.TryLock() {
+			return p.scopeStates.chainRefresh.Unlock, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }

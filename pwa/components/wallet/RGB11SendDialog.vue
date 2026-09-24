@@ -41,6 +41,7 @@
             <Label>{{ $t('rgb11Transfer.receiverAddress') }}</Label>
             <input
               v-model.trim="receiverAddress"
+              :disabled="loading || !!transferId"
               type="text"
               spellcheck="false"
               autocomplete="off"
@@ -261,24 +262,28 @@ const sendByAddress = async () => {
     successMessage: 'RGB address transfer broadcast',
   })
   try {
-    const [prepareErr, prepareResult] = await rgb11Address.prepareTransfer({
-      receiver_address: receiverAddress.value,
-      asset_name: assetName.value,
-      amount_raw: amountRaw.value,
-      fee_rate: Number(btcFeeRate.value || 1),
-      min_confirmations: 1,
-    })
-    if (prepareErr || !prepareResult?.transfer) {
-      const reason = prepareErr?.message || t('rgb11Transfer.prepareFailed')
-      if (/traditional RGB invoice|no RGB11 .*address capability/i.test(reason)) {
-        transferMode.value = 'invoice'
-        throw new Error(t('rgb11Transfer.addressUnavailable'))
+    let id = transferId.value
+    if (!id) {
+      const [prepareErr, prepareResult] = await rgb11Address.prepareTransfer({
+        receiver_address: receiverAddress.value,
+        asset_name: assetName.value,
+        amount_raw: amountRaw.value,
+        fee_rate: Number(btcFeeRate.value || 1),
+        min_confirmations: 1,
+      })
+      if (prepareErr || !prepareResult?.transfer) {
+        const reason = prepareErr?.message || t('rgb11Transfer.prepareFailed')
+        if (/traditional RGB invoice|no RGB11 .*address capability/i.test(reason)) {
+          transferMode.value = 'invoice'
+          throw new Error(t('rgb11Transfer.addressUnavailable'))
+        }
+        throw prepareErr || new Error(reason)
       }
-      throw prepareErr || new Error(reason)
+      const prepared = JSON.parse(prepareResult.transfer)
+      id = prepared?.state?.transfer_id || ''
+      if (!id) throw new Error(t('rgb11Transfer.prepareFailed'))
+      transferId.value = id
     }
-    const prepared = JSON.parse(prepareResult.transfer)
-    const id = prepared?.state?.transfer_id
-    if (!id) throw new Error(t('rgb11Transfer.prepareFailed'))
     if (operation) {
       await updateOperationLog(operation.id, {
         status: 'running',
@@ -305,6 +310,9 @@ const sendByAddress = async () => {
 	  return
 	}
 	if (!sendResult.broadcast || !sendResult.txid) throw new Error(t('rgb11Transfer.broadcastFailed'))
+    transferId.value = ''
+    receiverAddress.value = ''
+    amountRaw.value = ''
     await completeBroadcast(sendResult.txid, 'rgb11Transfer.addressBroadcasted', operation, id)
   } catch (error: any) {
     const sendError = error instanceof Error ? error : new Error(error?.message || t('rgb11Transfer.broadcastFailed'))

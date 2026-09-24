@@ -251,18 +251,38 @@ func rgb11ProxyPostConsignment(ctx context.Context, endpoint, recipientID, txID 
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	response, err := rgb11ProxyHTTPClient().Do(request)
 	if err != nil {
-		return err
+		return rgb11ProxyRecoverPost(ctx, endpoint, recipientID, txID, vout, consignment, err)
 	}
-	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("RGB11 proxy returned HTTP %d", response.StatusCode)
+		postErr := fmt.Errorf("RGB11 proxy returned HTTP %d", response.StatusCode)
+		_ = response.Body.Close()
+		return rgb11ProxyRecoverPost(ctx, endpoint, recipientID, txID, vout, consignment, postErr)
 	}
 	result, err := decodeRGB11ProxyResponse[bool](response.Body)
+	_ = response.Body.Close()
 	if err != nil {
-		return err
+		return rgb11ProxyRecoverPost(ctx, endpoint, recipientID, txID, vout, consignment, err)
 	}
 	if result == nil || !*result {
-		return errors.New("RGB11 proxy rejected consignment")
+		return rgb11ProxyRecoverPost(ctx, endpoint, recipientID, txID, vout, consignment,
+			errors.New("RGB11 proxy rejected consignment"))
+	}
+	return nil
+}
+
+func rgb11ProxyRecoverPost(ctx context.Context, endpoint, recipientID, txID string,
+	vout *uint32, consignment []byte, postErr error) error {
+	remote, err := rgb11ProxyJSON[rgb11ProxyConsignment](
+		ctx, endpoint, "consignment.get", rgb11ProxyRecipientParam{RecipientID: recipientID},
+	)
+	if err != nil || remote == nil || remote.TxID != txID ||
+		(remote.Vout == nil) != (vout == nil) ||
+		(remote.Vout != nil && *remote.Vout != *vout) {
+		return postErr
+	}
+	raw, err := base64.StdEncoding.DecodeString(remote.Consignment)
+	if err != nil || !bytes.Equal(raw, consignment) {
+		return postErr
 	}
 	return nil
 }
@@ -290,15 +310,20 @@ func (p *rgb11Manager) publishRGB11ProxyConsignment(ctx context.Context,
 	if err != nil {
 		return "", err
 	}
-	if pending.State.TransportMode != RGB11ProxyTransport || pending.State.Expiry <= time.Now().Unix() {
+	if pending.State.TransportMode != RGB11ProxyTransport {
 		return "", ErrRGB11ProxyNoEndpoint
 	}
 	invoice, endpoints, err := rgb11ProxyInvoice(pending.State.Invoice)
 	if err != nil {
 		return "", err
 	}
-	if pending.State.Status == "relayed" || pending.State.Status == rgb11StatusBroadcastAttempted ||
-		rgb11BroadcastCompleteStatus(pending.State.Status) {
+	if rgb11BroadcastCompleteStatus(pending.State.Status) {
+		return endpoints[0].invoice, nil
+	}
+	if pending.State.Expiry <= time.Now().Unix() {
+		return "", ErrRGB11ProxyNoEndpoint
+	}
+	if pending.State.Status == "relayed" || pending.State.Status == rgb11StatusBroadcastAttempted {
 		return endpoints[0].invoice, nil
 	}
 	consignment, err := rgb11TransferFile(pending.RecipientConsignment)
@@ -547,7 +572,8 @@ func (p *rgb11Manager) finishRGB11ProxyTerminal(requestID string, raw []byte, va
 
 func rgb11ProxyPostNackIfTerminal(ctx context.Context, endpoint, recipientID string, err error) {
 	if errors.Is(err, coreconsignment.ErrWitnessUnresolved) ||
-		errors.Is(err, coreconsignment.ErrOutpointUnknown) {
+		errors.Is(err, coreconsignment.ErrOutpointUnknown) ||
+		errors.Is(err, rgb11wallet.ErrWalletScope) {
 		return
 	}
 	_ = rgb11ProxyPostAck(ctx, endpoint, recipientID, false)
@@ -683,6 +709,7 @@ func (p *rgb11Manager) FetchRGB11ProxyAck(ctx context.Context,
 		return nil, err
 	}
 	var attempts []error
+	var unavailable *RGB11ProxyAckResult
 	for _, endpoint := range endpoints {
 		decision, err := rgb11ProxyJSON[bool](
 			ctx, endpoint.url, "ack.get",
@@ -698,7 +725,10 @@ func (p *rgb11Manager) FetchRGB11ProxyAck(ctx context.Context,
 			Endpoint:   endpoint.invoice,
 		}
 		if decision == nil {
-			return result, nil
+			if unavailable == nil {
+				unavailable = result
+			}
+			continue
 		}
 		result.Accepted = *decision
 		if *decision {
@@ -725,6 +755,9 @@ func (p *rgb11Manager) FetchRGB11ProxyAck(ctx context.Context,
 			}
 		}
 		return result, nil
+	}
+	if unavailable != nil {
+		return unavailable, nil
 	}
 	if len(attempts) == 0 {
 		return &RGB11ProxyAckResult{TransferID: transferID}, nil
@@ -766,7 +799,8 @@ func (p *rgb11Manager) loadRGB11ProxyPendingBatch(
 	}
 	for _, pending := range pendingList {
 		if pending.State.TransportMode != RGB11ProxyTransport ||
-			pending.State.Expiry <= time.Now().Unix() ||
+			(pending.State.Expiry <= time.Now().Unix() &&
+				!rgb11BroadcastCompleteStatus(pending.State.Status)) ||
 			pending.State.WitnessTxID != first.State.WitnessTxID ||
 			pending.State.BatchID != first.State.BatchID ||
 			!bytes.Equal(pending.SignedTx, first.SignedTx) {

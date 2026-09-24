@@ -857,6 +857,7 @@
     "proxyEndpointPlaceholder": "例如 rpcs://proxy.example.com/0.2/json-rpc",
     "proxyEndpointHelp": "该地址会写入标准 RGB Invoice，并按当前环境和网络保存在本机。发送方将直接使用 Invoice 中的地址。",
     "proxyEndpointRequired": "请输入第三方钱包使用的 RGB JSON-RPC Proxy 地址。",
+    "contractIdMissing": "该资产缺少 RGB 合约 ID，请刷新钱包状态后再生成 Invoice。",
     "amount": "金额",
     "enterAmount": "输入接收金额",
     "receiveMode": "收款方式",

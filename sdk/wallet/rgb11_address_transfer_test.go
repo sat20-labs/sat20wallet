@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +31,26 @@ type rgb11AddressEvidence struct {
 	statuses map[string]*rgb11wallet.BitcoinTxStatus
 }
 
+type rgb11ReadFault struct {
+	rgb11wallet.BitcoinEvidenceProvider
+	txid, outpoint string
+	err            error
+}
+
+func (e *rgb11ReadFault) GetTxStatus(txid string) (*rgb11wallet.BitcoinTxStatus, error) {
+	if txid == e.txid {
+		return nil, e.err
+	}
+	return e.BitcoinEvidenceProvider.GetTxStatus(txid)
+}
+
+func (e *rgb11ReadFault) GetUTXO(outpoint string) (*rgb11wallet.BitcoinUTXO, error) {
+	if outpoint == e.outpoint {
+		return nil, e.err
+	}
+	return e.BitcoinEvidenceProvider.GetUTXO(outpoint)
+}
+
 func mustRGB11ConfiguredStore(t *testing.T, manager *Manager) *dkvsStore {
 	t.Helper()
 	store, err := manager.rgbManager.configuredRGB11Store()
@@ -37,6 +58,21 @@ func mustRGB11ConfiguredStore(t *testing.T, manager *Manager) *dkvsStore {
 		t.Fatal(err)
 	}
 	return store
+}
+
+func countRGB11Receives(t *testing.T, db indexer.KVDB) int {
+	t.Helper()
+	count := 0
+	err := db.BatchRead([]byte("rgb11-engine-"), false, func(key, _ []byte) error {
+		if bytes.Contains(key, []byte("-wallet/receive/")) {
+			count++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
 }
 
 func nextRGB11AddressRecordOptions(client *SatsNetDKVSClient, keys []string,
@@ -339,6 +375,33 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatalf("broadcast before delivery err=%v", err)
 	}
 
+	senderID, err := dkvsAccountID(senderWallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < rgb11AddressMailboxPageSize; i++ {
+		messageID := fmt.Sprintf("%064x", i)
+		key, err := dkvsindexer.MailMsgKey(endpoint.AccountID, senderID, messageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record := &swire.DKVSRecord{
+			Version: dkvsindexer.Version, Key: key, Value: []byte("invalid"),
+			Seq: 1, IssueHeight: 1, TTL: testRGB11FreeLocalTTL,
+		}
+		proof, err := dkvsindexer.NewFreeLocalFeeProof(
+			record.Key, "mail", uint32(dkvsindexer.RecordSize(record)),
+			record.IssueHeight+record.TTL,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record.FeeProof, err = dkvsindexer.EncodeFeeProof(proof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		remote.seedInternalMailboxRecord(record)
+	}
 	deliveryOptions := RGB11AddressDeliveryOptions{RecordOptions: recordOptions, InlineLimit: 1}
 	firstDelivery, err := sender.rgbManager.deliverRGB11AddressTransferStore(
 		mustRGB11ConfiguredStore(t, sender), prepared.State.TransferID, deliveryOptions,
@@ -397,14 +460,9 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if _, err := sender.BroadcastRGB11AddressTransfer(prepared.State.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
 		t.Fatalf("address transfer broadcast before ACK: %v", err)
 	}
-
 	deliveryRecord, err := client.GetRecord(secondDelivery.RecordKey)
 	if err != nil {
 		t.Fatalf("post-broadcast delivery=%+v err=%v", secondDelivery, err)
-	}
-	senderID, err := dkvsAccountID(senderWallet)
-	if err != nil {
-		t.Fatal(err)
 	}
 	forgedTransferID := strings.Repeat("a", 64)
 	if forgedTransferID == prepared.State.AddressMessageID {
@@ -427,14 +485,66 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatalf("replayed consignment err=%v", err)
 	}
 
+	firstSync, err := recipient.SyncConfiguredRGB11AddressMailbox(
+		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSync.Scanned != rgb11AddressMailboxPageSize || firstSync.Received != 0 ||
+		firstSync.Invalid != rgb11AddressMailboxPageSize {
+		t.Fatalf("first mailbox page=%+v", firstSync)
+	}
+	savedNode := recipient.serverNode
+	recipient.serverNode = nil
+	failedSync, err := recipient.SyncConfiguredRGB11AddressMailbox(
+		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
+	)
+	recipient.serverNode = savedNode
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failedSync.Received != 0 || failedSync.Invalid == 0 {
+		t.Fatalf("failed ACK sync=%+v", failedSync)
+	}
+	receivesBeforeRetry := countRGB11Receives(t, recipient.db)
+	if receivesBeforeRetry != 1 {
+		t.Fatalf("receive records after failed ACK=%d", receivesBeforeRetry)
+	}
 	syncResult, err := recipient.SyncConfiguredRGB11AddressMailbox(
 		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if syncResult.Received != 1 || syncResult.Invalid != 0 || syncResult.ACKs != 0 {
+	if syncResult.Received != 1 || syncResult.ACKs != 0 {
 		t.Fatalf("mailbox sync=%+v", syncResult)
+	}
+	if receivesAfterRetry := countRGB11Receives(t, recipient.db); receivesAfterRetry != receivesBeforeRetry {
+		t.Fatalf("retry created receive records: before=%d after=%d", receivesBeforeRetry, receivesAfterRetry)
+	}
+	stagedReceive, err := recipient.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stagedReceive.TransferID) == 64 || stagedReceive.Status != "awaiting_broadcast" ||
+		stagedReceive.AckStatus != "ack-sent" || !stagedReceive.AddressMode ||
+		!stagedReceive.DeliveryAcknowledged || stagedReceive.Invoice != "" ||
+		!stagedReceive.SyntheticInvoiceRemoved || len(stagedReceive.OutputOutPoints) != 1 {
+		t.Fatalf("invalid staged Direct receive: %+v", stagedReceive)
+	}
+	requestID, err := recipient.rgbManager.projectionStore.LoadPreparedReceive(stagedReceive.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateReceive, err := recipient.rgbManager.engine.LoadReceive(requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if privateReceive.TransferID != stagedReceive.TransferID || privateReceive.Invoice == "" ||
+		privateReceive.ObjectHash != stagedReceive.ConsignmentHash ||
+		privateReceive.WitnessTxID != stagedReceive.WitnessTxID {
+		t.Fatalf("invalid private Direct receive: %+v", privateReceive)
 	}
 	directMessages, err := sender.readWalletDirectMessages(senderWallet)
 	if err != nil {
@@ -509,8 +619,26 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if _, err := recipient.RefreshRGB11State(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	received, err := recipient.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !received.AddressMode || received.TransportMode != RGB11AddressTransport ||
+		received.AddressMessageID != prepared.State.AddressMessageID ||
+		received.SenderAccountID != senderID || received.ReceiverAccountID != endpoint.AccountID ||
+		!received.SyntheticInvoiceRemoved {
+		t.Fatalf("receiver identity lost after promotion: %+v", received)
+	}
 	if _, err := sender.RefreshRGB11State(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if lock := sender.utxoLockerL1.GetLockedUtxoList()[sourceOutpoint]; lock != nil {
+		t.Fatalf("settled address transfer retained spent-input lock: %+v", lock)
+	}
+	expectedSpends, err := sender.rgbManager.rgb11ExpectedInputs()
+	if err != nil || expectedSpends[sourceOutpoint] != witnessTxID {
+		t.Fatalf("settled address transfer lost expected spend: txid=%q err=%v",
+			expectedSpends[sourceOutpoint], err)
 	}
 	locked = recipient.utxoLockerL1.GetLockedUtxoList()
 	if locked[recipientOutpoint] == nil || locked[recipientOutpoint].Reason != rgb11wallet.LockReasonRGB {
@@ -523,6 +651,90 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if !pending.State.DeliveryCacheCompacted || len(pending.RecipientConsignment) != 0 || len(pending.LocalConsignment) == 0 {
 		t.Fatalf("final sender state=%+v recipient=%d local=%d", pending.State,
 			len(pending.RecipientConsignment), len(pending.LocalConsignment))
+	}
+
+	replayRemote := newRGB11MemoryDKVSHTTP()
+	for key, record := range remote.records {
+		if strings.HasPrefix(key, "/account/") {
+			replayRemote.records[key] = cloneRGB11DKVSRecord(record)
+			continue
+		}
+		direct, decodeErr := decodeWalletDirectRecord(recipientWallet, record)
+		if decodeErr == nil && direct.Payload.Kind == AccountMessageKindRGB11Consignment &&
+			direct.Payload.ApplicationID == prepared.State.AddressMessageID {
+			replayRemote.records[key] = cloneRGB11DKVSRecord(record)
+		}
+	}
+	mailboxRecords := 0
+	for key := range replayRemote.records {
+		if strings.HasPrefix(key, "/mail/") {
+			mailboxRecords++
+		}
+	}
+	if mailboxRecords != 1 {
+		t.Fatalf("replay mailbox records=%d", mailboxRecords)
+	}
+	restoredRecipient := newRGB11FlowManager(t, recipientWallet.Clone(), rpc, evidence, 103)
+	configureRGB11DKVSTestManager(restoredRecipient, replayRemote)
+	replayClient := newRGB11MessageNodeClient(replayRemote)
+	restoredRecipient.serverNode = NewNode(
+		replayClient, "message.test", SERVER_NODE,
+		replayClient.CoreNodePubKey(), replayClient.CoreNodePubKey(),
+	)
+	if err := restoredRecipient.bindAccountToCurrentCoreNode(restoredRecipient.wallet); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoredRecipient.SubscribeDKVSPrefix(mailboxTarget); err != nil {
+		t.Fatal(err)
+	}
+	recoveryResult, err := restoredRecipient.SyncConfiguredRGB11AddressMailbox(
+		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveryResult.Received != 1 {
+		t.Fatalf("mnemonic replay result=%+v", recoveryResult)
+	}
+	if _, err := restoredRecipient.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	recoveredState, err := restoredRecipient.rgbManager.projectionStore.LoadTransferState(
+		prepared.State.TransferID)
+	if err != nil || recoveredState.Status != "settled" {
+		t.Fatalf("mnemonic replay state=%+v err=%v", recoveredState, err)
+	}
+
+	beforeState, err := recipient.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeProof, err := recipient.rgbManager.projectionStore.LoadProof(recipientOutpoint, imported.AssetName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeLock := recipient.utxoLockerL1.GetLockedUtxoList()[recipientOutpoint]
+	readErr := errors.New("RGB11 evidence unavailable")
+	recipient.rgbManager.evidence = &rgb11ReadFault{
+		BitcoinEvidenceProvider: evidence, txid: witnessTxID, outpoint: recipientOutpoint, err: readErr,
+	}
+	result, refreshErr := recipient.RefreshRGB11State(context.Background())
+	recipient.rgbManager.evidence = evidence
+	if !errors.Is(refreshErr, readErr) || result == nil || result.Reorged != 0 || result.Unresolved == 0 {
+		t.Fatalf("read fault result=%+v err=%v", result, refreshErr)
+	}
+	afterState, err := recipient.rgbManager.projectionStore.LoadTransferState(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterProof, err := recipient.rgbManager.projectionStore.LoadProof(recipientOutpoint, imported.AssetName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterLock := recipient.utxoLockerL1.GetLockedUtxoList()[recipientOutpoint]
+	if !reflect.DeepEqual(beforeState, afterState) || !reflect.DeepEqual(beforeProof, afterProof) ||
+		!reflect.DeepEqual(beforeLock, afterLock) {
+		t.Fatal("read fault changed settled receive state")
 	}
 
 	// ACK is now a normal MessageManager Direct message. The transport sender

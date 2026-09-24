@@ -21,6 +21,7 @@ type rgb11MemoryDKVSHTTP struct {
 	records       map[string]*swire.DKVSRecord
 	deleted       map[string]dkvsindexer.DKVSKeyState
 	generations   map[string]uint64
+	changedAt     map[string]uint64
 	endpointID    string
 	freeLocal     dkvsindexer.FreeLocalCachePolicy
 	maxRecords    int
@@ -31,9 +32,11 @@ type rgb11MemoryDKVSHTTP struct {
 	bestHeight    int64
 	bestHeightErr error
 
-	statusCalls   int
-	snapshotCalls int
-	readCalls     int
+	statusCalls      int
+	snapshotCalls    int
+	deltaCalls       int
+	deltaUnavailable bool
+	readCalls        int
 }
 
 func newRGB11MemoryDKVSHTTP() *rgb11MemoryDKVSHTTP {
@@ -41,6 +44,7 @@ func newRGB11MemoryDKVSHTTP() *rgb11MemoryDKVSHTTP {
 		records:     make(map[string]*swire.DKVSRecord),
 		deleted:     make(map[string]dkvsindexer.DKVSKeyState),
 		generations: make(map[string]uint64),
+		changedAt:   make(map[string]uint64),
 		endpointID:  "test-endpoint",
 		bestHeight:  1,
 		freeLocal: dkvsindexer.FreeLocalCachePolicy{
@@ -250,6 +254,7 @@ func (h *rgb11MemoryDKVSHTTP) applyBatchCAS(request DKVSBatchCASRequest) ([]byte
 			hash := dkvsindexer.RecordHash(record).String()
 			if dkvsindexer.IsTombstone(record.Flags) {
 				delete(h.records, record.Key)
+				delete(h.changedAt, record.Key)
 				h.deleted[record.Key] = dkvsindexer.DKVSKeyState{
 					Key: record.Key, Status: dkvsindexer.KeyStateDeleted, Seq: record.Seq, ETag: hash,
 				}
@@ -259,6 +264,9 @@ func (h *rgb11MemoryDKVSHTTP) applyBatchCAS(request DKVSBatchCASRequest) ([]byte
 			}
 			if prefix, err := dkvsindexer.CollectionPathForKey(record.Key); err == nil {
 				h.generations[prefix]++
+				if !dkvsindexer.IsTombstone(record.Flags) {
+					h.changedAt[record.Key] = h.generations[prefix]
+				}
 			}
 		}
 	}
@@ -337,6 +345,36 @@ func (h *rgb11MemoryDKVSHTTP) prefixSnapshot(prefix string) ([]byte, error) {
 	}, "", 0)
 }
 
+func (h *rgb11MemoryDKVSHTTP) prefixDelta(prefix, endpointID string, after uint64) ([]byte, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.deltaCalls++
+	if h.deltaUnavailable {
+		return nil, &HTTPResponseError{StatusCode: 404}
+	}
+	if endpointID != h.endpointID {
+		return rgb11DKVSResponse(-1, dkvsindexer.ErrEndpointMismatch.Error(), nil,
+			string(dkvsindexer.ErrorCodeEndpointMismatch), 0)
+	}
+	if after > h.generations[prefix] {
+		return rgb11DKVSResponse(-1, dkvsindexer.ErrStaleGeneration.Error(), nil,
+			string(dkvsindexer.ErrorCodeStaleGeneration), 0)
+	}
+	allRecords, allStates := h.prefixRecordsLocked(prefix)
+	records := make([]*swire.DKVSRecord, 0)
+	states := make([]dkvsindexer.DKVSKeyState, 0)
+	for index, record := range allRecords {
+		if h.changedAt[record.Key] > after {
+			records = append(records, record)
+			states = append(states, allStates[index])
+		}
+	}
+	return rgb11DKVSResponse(0, "ok", &dkvsindexer.PrefixDeltaResult{
+		EndpointID: h.endpointID, Prefix: prefix, Generation: h.generations[prefix], ViewHeight: 1,
+		Records: records, KeyStates: states,
+	}, "", 0)
+}
+
 func (h *rgb11MemoryDKVSHTTP) prefixStatus(endpointID string, known []dkvsindexer.PrefixGeneration) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -382,6 +420,16 @@ func (h *rgb11MemoryDKVSHTTP) SendDKVSPost(path string, body []byte) ([]byte, er
 			return nil, err
 		}
 		return h.prefixSnapshot(request.Prefix)
+	case "/v3/dkvs/prefixes/delta":
+		var request struct {
+			Prefix          string `json:"prefix"`
+			EndpointID      string `json:"endpoint_id"`
+			AfterGeneration uint64 `json:"after_generation"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			return nil, err
+		}
+		return h.prefixDelta(request.Prefix, request.EndpointID, request.AfterGeneration)
 	case "/v3/dkvs/prefixes/status":
 		var request struct {
 			EndpointID string                         `json:"endpoint_id"`
@@ -468,4 +516,8 @@ func (h *rgb11MemoryDKVSHTTP) seedInternalMailboxRecord(record *swire.DKVSRecord
 	copyRecord := cloneRGB11DKVSRecord(record)
 	h.records[copyRecord.Key] = copyRecord
 	delete(h.deleted, copyRecord.Key)
+	if prefix, err := dkvsindexer.CollectionPathForKey(copyRecord.Key); err == nil {
+		h.generations[prefix]++
+		h.changedAt[copyRecord.Key] = h.generations[prefix]
+	}
 }

@@ -34,6 +34,8 @@ type rgb11ProxyTestServer struct {
 	consignment            []byte
 	ack                    *bool
 	postError              *rgb11ProxyError
+	postHTTPStatus         int
+	postFailBeforeStore    bool
 	ackPostHTTPStatus      int
 	ackPostFailBeforeStore bool
 	ackGetHTTPStatus       int
@@ -143,9 +145,15 @@ func (s *rgb11ProxyTestServer) handleMultipart(w http.ResponseWriter, r *http.Re
 	}
 	s.mu.Lock()
 	postError := s.postError
+	status := s.postHTTPStatus
+	failBeforeStore := s.postFailBeforeStore
 	s.mu.Unlock()
 	if postError != nil {
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": postError})
+		return
+	}
+	if failBeforeStore {
+		http.Error(w, "consignment post failed", status)
 		return
 	}
 	file, _, err := r.FormFile("file")
@@ -165,6 +173,10 @@ func (s *rgb11ProxyTestServer) handleMultipart(w http.ResponseWriter, r *http.Re
 	s.vout = params.Vout
 	s.consignment = raw
 	s.mu.Unlock()
+	if status != 0 {
+		http.Error(w, "consignment post response failed", status)
+		return
+	}
 	_, _ = io.WriteString(w, `{"result":true}`)
 }
 
@@ -238,6 +250,34 @@ func TestRGB11ProxyProtocolRoundTrip(t *testing.T) {
 	if err != nil || received.Vout != nil {
 		t.Fatalf("blinded consignment must omit witness vout: %+v err=%v", received, err)
 	}
+	state.mu.Lock()
+	state.postHTTPStatus = http.StatusBadGateway
+	state.mu.Unlock()
+	if err := rgb11ProxyPostConsignment(
+		context.Background(), endpoint, recipientID, txID, nil, consignment,
+	); err != nil {
+		t.Fatalf("stored consignment was not recovered after response loss: %v", err)
+	}
+	state.mu.Lock()
+	state.postHTTPStatus = 0
+	state.postError = &rgb11ProxyError{Code: -101, Message: "Cannot change uploaded file"}
+	state.mu.Unlock()
+	if err := rgb11ProxyPostConsignment(
+		context.Background(), endpoint, recipientID, txID, nil, consignment,
+	); err != nil {
+		t.Fatalf("identical existing consignment was treated as conflict: %v", err)
+	}
+	state.mu.Lock()
+	state.consignment = []byte("different")
+	state.mu.Unlock()
+	if err := rgb11ProxyPostConsignment(
+		context.Background(), endpoint, recipientID, txID, nil, consignment,
+	); err == nil {
+		t.Fatal("different existing consignment was accepted")
+	}
+	state.mu.Lock()
+	state.postError = nil
+	state.mu.Unlock()
 	if err := rgb11ProxyPostAck(context.Background(), endpoint, recipientID, true); err != nil {
 		t.Fatal(err)
 	}
@@ -331,6 +371,62 @@ func TestRGB11ProxyEnsureAck(t *testing.T) {
 			t.Fatalf("unexpected combined ACK error: %v", err)
 		}
 	})
+}
+
+func TestRGB11ProxyAckSkipsMissing(t *testing.T) {
+	first := &rgb11ProxyTestServer{}
+	firstServer := httptest.NewServer(http.HandlerFunc(first.serveHTTP))
+	defer firstServer.Close()
+	accepted := true
+	second := &rgb11ProxyTestServer{ack: &accepted}
+	secondServer := httptest.NewServer(http.HandlerFunc(second.serveHTTP))
+	defer secondServer.Close()
+
+	wallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire",
+		"", &chaincfg.TestNet4Params,
+	)
+	manager := newRGB11FlowManager(t, wallet, &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)},
+		&rgb11FlowEvidence{utxos: make(map[string]*rgb11wallet.BitcoinUTXO),
+			rawTx: make(map[string][]byte), spendingTx: make(map[string]string)}, 93)
+	script, err := AddrToPkScript(wallet.GetAddress(), &chaincfg.TestNet4Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beneficiary, err := invoicing.NewWitnessBeneficiary(invoicing.BitcoinTestnet4, script, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTransport, err := invoicing.ParseTransport("rpc://" + strings.TrimPrefix(firstServer.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondTransport, err := invoicing.ParseTransport("rpc://" + strings.TrimPrefix(secondServer.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiry := time.Now().Add(time.Hour).Unix()
+	invoice := invoicing.Invoice{
+		Transports:  []invoicing.Transport{firstTransport, secondTransport},
+		Beneficiary: beneficiary, Expiry: &expiry,
+	}
+	const transferID = "proxy-multi-endpoint"
+	consignment := []byte("proxy-multi-endpoint-consignment")
+	consignmentHash := sha256.Sum256(consignment)
+	pending := &rgb11wallet.PendingTransfer{State: rgb11wallet.TransferState{
+		TransferID: transferID, TransportMode: RGB11ProxyTransport, Direction: "send",
+		RecipientID: beneficiary.String(), Invoice: invoice.String(), Expiry: expiry,
+		Status: "relayed", ConsignmentHash: hexString(consignmentHash[:]),
+	}, RecipientConsignment: consignment, LocalConsignment: append([]byte(nil), consignment...),
+		SignedTx: []byte{1}, SignedPSBT: []byte{1}}
+	if err := manager.rgbManager.projectionStore.SavePendingTransfer(pending); err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.rgbManager.FetchRGB11ProxyAck(context.Background(), transferID)
+	if err != nil || result == nil || !result.Available || !result.Accepted ||
+		result.Endpoint != secondTransport.String() {
+		t.Fatalf("multi endpoint ACK=%+v err=%v", result, err)
+	}
 }
 
 func TestRGB11ProxyEndpointsAcceptLoopbackRPC(t *testing.T) {
@@ -443,13 +539,14 @@ func TestRGB11ProxyDefersNackUntilBitcoinEvidenceIsAvailable(t *testing.T) {
 	for _, err := range []error{
 		coreconsignment.ErrWitnessUnresolved,
 		coreconsignment.ErrOutpointUnknown,
+		rgb11wallet.ErrWalletScope,
 	} {
 		rgb11ProxyPostNackIfTerminal(context.Background(), server.URL, "recipient", err)
 		state.mu.Lock()
 		ack := state.ack
 		state.mu.Unlock()
 		if ack != nil {
-			t.Fatalf("temporary Bitcoin evidence error %v posted ACK=%v", err, *ack)
+			t.Fatalf("retryable receive error %v posted ACK=%v", err, *ack)
 		}
 	}
 
@@ -600,6 +697,18 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 	if stored.State.Status != "broadcast" || stored.State.AckStatus != "accepted" {
 		t.Fatalf("ACK-before-broadcast lifecycle is incorrect: %+v", stored.State)
 	}
+	stored.State.Expiry = time.Now().Add(-time.Hour).Unix()
+	if err := manager.rgbManager.projectionStore.SavePendingTransferState(stored); err != nil {
+		t.Fatal(err)
+	}
+	broadcastCount := len(evidence.broadcasted)
+	repeated, err := manager.rgbManager.DeliverAndBroadcastRGB11ProxyTransfer(
+		context.Background(), []string{transferID},
+	)
+	if err != nil || repeated == nil || !repeated.Broadcast ||
+		repeated.TxID != tx.TxHash().String() || len(evidence.broadcasted) != broadcastCount {
+		t.Fatalf("expired completed transfer was not idempotent: result=%+v err=%v", repeated, err)
+	}
 
 	nackID := "proxy-recipient-nack"
 	nackInput := strings.Repeat("33", 32) + ":0"
@@ -623,7 +732,7 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 	state.consignment = nil
 	state.ack = &rejectedDecision
 	state.mu.Unlock()
-	broadcastCount := len(evidence.broadcasted)
+	broadcastCount = len(evidence.broadcasted)
 	rejectedDelivery, err := manager.rgbManager.DeliverAndBroadcastRGB11ProxyTransfer(
 		context.Background(), []string{nackID},
 	)
@@ -659,6 +768,7 @@ func TestRGB11ProxyDeliveryWaitsForAckBeforeBroadcast(t *testing.T) {
 	}
 	state.mu.Lock()
 	state.postError = &rgb11ProxyError{Code: -101, Message: "Cannot change uploaded file"}
+	state.consignment = []byte("different-existing-consignment")
 	state.ack = nil
 	state.mu.Unlock()
 	broadcastCount = len(evidence.broadcasted)

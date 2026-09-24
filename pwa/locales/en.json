@@ -858,6 +858,7 @@
     "proxyEndpointPlaceholder": "For example, rpcs://proxy.example.com/0.2/json-rpc",
     "proxyEndpointHelp": "This endpoint is embedded in the standard RGB invoice and saved locally for the current environment and network. The sender uses the endpoint from the invoice.",
     "proxyEndpointRequired": "Enter the RGB JSON-RPC proxy used by the third-party wallet.",
+    "contractIdMissing": "This asset is missing its RGB contract ID. Refresh the wallet state before generating an invoice.",
     "amount": "Amount",
     "enterAmount": "Enter amount to receive",
     "receiveMode": "Receive mode",

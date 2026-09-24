@@ -4232,25 +4232,30 @@ const selectContract = async (contract: any) => {
 }
 
 // A revision also catches a change away from and back to the same identity/request.
-const invokeReviewContext = () => {
+const invokeReviewKey = () => {
   let request: unknown
   try { request = buildUnifiedInvokeRequest(invokeContractAddress.value.trim()) } catch { request = null }
   return JSON.stringify([
     env.value, network.value, walletStore.rootAccountId, walletStore.walletId,
-    walletStore.accountIndex, walletStore.address, invokeContractAddress.value,
-    invokeContractType.value, invokeContractSubtype.value, invokeAction.value,
-    evmCallJsonText.value, request,
+    walletStore.accountIndex, walletStore.address, request,
   ])
 }
 let invokeReviewRevision = 0
 let reviewingInvoke = false
-watch(invokeReviewContext, () => {
+let invokeReviewInvalid = false
+watch(invokeReviewKey, () => {
   invokeReviewRevision++
-  if (reviewingInvoke) resolveTxConfirm(false)
+  if (reviewingInvoke) {
+    invokeReviewInvalid = true
+    resolveTxConfirm(false)
+  }
 }, { flush: 'sync' })
 onBeforeUnmount(() => {
   invokeReviewRevision++
-  if (reviewingInvoke) resolveTxConfirm(false)
+  if (reviewingInvoke) {
+    invokeReviewInvalid = true
+    resolveTxConfirm(false)
+  }
 })
 
 const invokeSmartContract = async () => {
@@ -4263,9 +4268,9 @@ const invokeSmartContract = async () => {
     if (isInvokeActionDisabled(invokeAction.value)) throw new Error(t('tools.errors.actionUnavailable'))
     const req = buildUnifiedInvokeRequest(contract)
     const revision = invokeReviewRevision
-    const context = invokeReviewContext()
+    const context = invokeReviewKey()
     const assertContext = () => {
-      if (compilerPageDisposed || revision !== invokeReviewRevision || context !== invokeReviewContext()) {
+      if (compilerPageDisposed || revision !== invokeReviewRevision || context !== invokeReviewKey()) {
         throw new Error(t('tools.txConfirm.contextChanged'))
       }
     }
@@ -4304,10 +4309,14 @@ const invokeSmartContract = async () => {
       details.push({ label: t('tools.txConfirm.operatingGas'), value: t('tools.txConfirm.autopayOperatingGas') })
     }
     summary.details = details
+    invokeReviewInvalid = false
     reviewingInvoke = true
     const confirmed = await confirmToolTransaction(summary)
     reviewingInvoke = false
-    if (!confirmed) return
+    if (!confirmed) {
+      if (invokeReviewInvalid) throw new Error(t('tools.txConfirm.contextChanged'))
+      return
+    }
     assertContext()
     const [err, res] = await sat20.invokeUnifiedContract(req)
     if (err) throw err

@@ -210,6 +210,7 @@ func (c *rgb11MessageNodeClient) SendMessageServiceReq(req *swire.MessageService
 		if c.remote.records[key] == nil {
 			if prefix, err := dkvsindexer.CollectionPathForKey(key); err == nil {
 				c.remote.generations[prefix]++
+				c.remote.changedAt[key] = c.remote.generations[prefix]
 			}
 		}
 		c.remote.records[key] = cloneRGB11DKVSRecord(record)
@@ -236,6 +237,10 @@ func (c *rgb11MessageNodeClient) SendMessageServiceReq(req *swire.MessageService
 			return nil, fmt.Errorf("stale mailbox tombstone")
 		}
 		delete(c.remote.records, req.Record.Key)
+		delete(c.remote.changedAt, req.Record.Key)
+		if prefix, err := dkvsindexer.CollectionPathForKey(req.Record.Key); err == nil {
+			c.remote.generations[prefix]++
+		}
 		c.remote.mu.Unlock()
 		return &swire.MessageServiceResponse{}, nil
 	default:

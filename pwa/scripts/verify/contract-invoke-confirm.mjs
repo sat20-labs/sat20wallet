@@ -6,7 +6,7 @@ import { computed, reactive, ref, watch } from 'vue'
 
 // Execute the actual confirmation orchestration with read/write boundaries mocked.
 const source = readFileSync('entrypoints/popup/pages/wallet/Tools.vue', 'utf8')
-const start = source.indexOf('const invokeReviewContext =')
+const start = source.indexOf('const invokeReviewKey =')
 const end = source.indexOf('\nconst checkDeployTicker', start)
 assert.ok(start > 0 && end > start)
 const code = ts.transpileModule(source.slice(start, end) + '\nglobalThis.run = invokeSmartContract;', {
@@ -45,7 +45,7 @@ function fixture({ fee = '150', feeError, simulation, autopay = false } = {}) {
   return { context, req, calls, errors, summaries, confirm: value => resolveConfirm(value) }
 }
 const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve() }
-for (const action of ['confirm', 'cancel', 'identity', 'request']) {
+for (const action of ['confirm', 'cancel', 'identity', 'request', 'raw-format', 'redundant-ui']) {
   const f = fixture(); const pending = f.context.run(); await settle()
   const rows = f.summaries[0].details
   for (const value of ['Wallet 1 (w1)', '0', 'source', '[]', '0xd09de08a', '23100', '150']) {
@@ -54,9 +54,23 @@ for (const action of ['confirm', 'cancel', 'identity', 'request']) {
   assert.equal(f.calls.length, 0)
   if (action === 'identity') f.context.walletStore.accountIndex++
   else if (action === 'request') f.req.value.GasLimit++
+  else if (action === 'raw-format') {
+    f.context.evmCallJsonText.value = '{\n  "formatting": "only"\n}'
+    f.confirm(true)
+  } else if (action === 'redundant-ui') {
+    f.context.invokeContractType.value = 'template'
+    f.context.invokeContractSubtype.value = 'unused.tc'
+    f.context.invokeAction.value = 'default'
+    f.confirm(true)
+  }
   else f.confirm(action === 'confirm')
   await pending
-  assert.equal(f.calls.length, action === 'confirm' ? 1 : 0)
+  const shouldInvoke = ['confirm', 'raw-format', 'redundant-ui'].includes(action)
+  assert.equal(f.calls.length, shouldInvoke ? 1 : 0)
+  assert.deepEqual(
+    f.errors,
+    ['identity', 'request'].includes(action) ? ['tools.txConfirm.contextChanged'] : [],
+  )
 }
 for (const fee of ['', 'NaN', '-1']) {
   const f = fixture({ fee }); await f.context.run()
@@ -74,4 +88,4 @@ const autopay = fixture({ autopay: true }); const autopayRun = autopay.context.r
 assert.ok(autopay.summaries[0].details.some(row => row.value === 'tools.txConfirm.autopayOperatingGas'))
 assert.ok(autopay.summaries[0].details.some(row => row.value === '150'))
 autopay.confirm(false); await autopayRun
-console.log('contract invoke confirmation: PASS (preview fields, cancel, context invalidation, stale simulation, fee failures, AUTOPAY payer)')
+console.log('contract invoke confirmation: PASS (canonical review key, visible invalidation, cancel, stale simulation, fee failures, AUTOPAY payer)')

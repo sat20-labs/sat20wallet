@@ -23,6 +23,12 @@ type accountManagedActiveEnvelope struct {
 	Payload     []byte
 }
 
+type managedActiveReceipt struct {
+	provider string
+	scope    string
+	hash     string
+}
+
 const accountManagedActiveMagic = "AMA1"
 
 func accountManagedActiveApplicationID(provider, scope, contentHash string) string {
@@ -180,6 +186,13 @@ func (p *Manager) syncAccountManagedActiveDataMode(providerID string, pruneAbsen
 	if err := provider.ValidateActive(catalog, payloads); err != nil {
 		return fmt.Errorf("validate %s active account data: %w", providerID, err)
 	}
+	accepted := make(map[string]managedActiveReceipt)
+	if len(payloads) != 0 {
+		accepted, err = p.acceptedManagedActive(root, catalog.AccountID)
+		if err != nil {
+			return fmt.Errorf("read accepted %s active account data: %w", providerID, err)
+		}
+	}
 	allowed := accountManagedScopeSet(catalog)
 	keep := make(map[string]struct{}, len(payloads))
 	for _, payload := range payloads {
@@ -192,9 +205,18 @@ func (p *Manager) syncAccountManagedActiveDataMode(providerID string, pruneAbsen
 		}
 		applicationID := accountManagedActiveApplicationID(providerID, payload.Scope, hash)
 		keep[applicationID] = struct{}{}
-		if _, err := p.sendWalletDirectMessage(root, applicationID,
-			AccountMessageKindManagedActive, catalog.AccountID, body); err != nil {
-			return fmt.Errorf("persist %s active account data: %w", providerID, err)
+		receipt, alreadyAccepted := accepted[applicationID]
+		exact := alreadyAccepted && receipt.provider == providerID &&
+			receipt.scope == strings.TrimSpace(payload.Scope) && receipt.hash == hash
+		if exact {
+			if err := p.deleteWalletMessageOutbox(catalog.AccountID, applicationID); err != nil {
+				return fmt.Errorf("clear accepted %s active account data outbox: %w", providerID, err)
+			}
+		} else {
+			if _, err := p.sendWalletDirectMessage(root, applicationID,
+				AccountMessageKindManagedActive, catalog.AccountID, body); err != nil {
+				return fmt.Errorf("persist %s active account data: %w", providerID, err)
+			}
 		}
 		if err := p.deleteSupersededAccountManagedActive(root, providerID, payload.Scope, applicationID); err != nil {
 			return err
@@ -224,6 +246,66 @@ func (p *Manager) syncAccountManagedActiveDataMode(providerID string, pruneAbsen
 		}
 	}
 	return nil
+}
+
+func (p *Manager) acceptedManagedActive(root common.Wallet,
+	accountID string) (map[string]managedActiveReceipt, error) {
+
+	messages, err := p.freshDirectMessages(root)
+	if err != nil {
+		return nil, err
+	}
+	accepted := make(map[string]managedActiveReceipt)
+	for _, item := range messages {
+		if item == nil || item.Payload == nil || item.Direct == nil ||
+			item.Payload.Kind != AccountMessageKindManagedActive ||
+			item.Direct.SenderAccount != accountID || item.Direct.RecipientAccount != accountID {
+			continue
+		}
+		envelope, decodeErr := decodeAccountManagedActiveEnvelope(item.Payload.Body)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		expectedID := accountManagedActiveApplicationID(
+			envelope.Provider, envelope.Scope, envelope.ContentHash)
+		if item.Payload.ApplicationID != expectedID {
+			return nil, fmt.Errorf("account-managed active application id mismatch")
+		}
+		accepted[expectedID] = managedActiveReceipt{
+			provider: envelope.Provider, scope: envelope.Scope, hash: envelope.ContentHash,
+		}
+	}
+	return accepted, nil
+}
+
+func (p *Manager) freshDirectMessages(wallet common.Wallet) ([]*AccountDirectMessage, error) {
+	accountID, err := dkvsAccountID(wallet)
+	if err != nil {
+		return nil, err
+	}
+	store, err := p.accountDKVSStore()
+	if err != nil {
+		return nil, err
+	}
+	prefix, err := mailboxPrefix(accountID, "msg")
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(store.client.requestContext(), dkvsUnmanagedReadTimeout)
+	result, err := store.client.ReadPrefixContext(ctx, prefix)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	messages := make([]*AccountDirectMessage, 0, len(result.Records))
+	for _, record := range result.Records {
+		decoded, decodeErr := decodeWalletDirectRecord(wallet, record)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		messages = append(messages, decoded)
+	}
+	return messages, nil
 }
 
 func (p *Manager) deleteSupersededAccountManagedActive(root common.Wallet,

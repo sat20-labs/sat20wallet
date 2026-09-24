@@ -123,8 +123,8 @@ func TestDKVSFinalManagedPrefixesPollGenerations(t *testing.T) {
 		t.Fatalf("delta value=%+v err=%v", value, err)
 	}
 	remote.mu.Lock()
-	if remote.statusCalls != 1 || remote.snapshotCalls != 3 {
-		t.Fatalf("poll status calls=%d snapshot calls=%d", remote.statusCalls, remote.snapshotCalls)
+	if remote.statusCalls != 1 || remote.snapshotCalls != 2 || remote.deltaCalls != 1 {
+		t.Fatalf("poll status calls=%d snapshot calls=%d delta calls=%d", remote.statusCalls, remote.snapshotCalls, remote.deltaCalls)
 	}
 	remote.mu.Unlock()
 
@@ -139,6 +139,173 @@ func TestDKVSFinalManagedPrefixesPollGenerations(t *testing.T) {
 	prefixes, err := manager.ListSubscribedDKVSPrefixes()
 	if err != nil || len(prefixes) != 2 {
 		t.Fatalf("prefixes=%v err=%v", prefixes, err)
+	}
+}
+
+func TestDKVSFullResyncKeepsLocallyCachedRemovedKey(t *testing.T) {
+	manager, remote := finalDKVSTestManager(t)
+	client, err := manager.ensureDKVSManager().primaryClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := accountTestKey(t, manager, "wallet/first")
+	history := accountTestKey(t, manager, "wallet/history")
+	prefix, _, err := dkvsManagedPathForKey(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	for _, key := range []string{first, history} {
+		if _, err := seed.PutRecord(canonicalTestRecord(t, manager, key, 1, key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manager.SubscribeDKVSPrefix(prefix); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.dkvs.forceCurrentPrefixes(client, []string{prefix}); err != nil {
+		t.Fatal(err)
+	}
+	store := newDKVSReplicaStore(manager.db)
+	if _, err := store.LoadSubscriptionRecord(client.replicaNamespace, history); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	delete(remote.records, history)
+	delete(remote.changedAt, history)
+	remote.generations[prefix]++
+	remote.mu.Unlock()
+	if err := manager.dkvs.forceCurrentPrefixes(client, []string{prefix}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadSubscriptionRecord(client.replicaNamespace, history); err != nil {
+		t.Fatalf("full resync discarded local history: %v", err)
+	}
+}
+
+func TestDKVSDeltaKeepsLocallyCachedRemovedKey(t *testing.T) {
+	manager, remote := finalDKVSTestManager(t)
+	client, err := manager.ensureDKVSManager().primaryClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := accountTestKey(t, manager, "wallet/history")
+	prefix, _, err := dkvsManagedPathForKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	if _, err := seed.PutRecord(canonicalTestRecord(t, manager, key, 1, "history")); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SubscribeDKVSPrefix(prefix); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.dkvs.forceCurrentPrefixes(client, []string{prefix}); err != nil {
+		t.Fatal(err)
+	}
+	store := newDKVSReplicaStore(manager.db)
+	before, err := store.LoadSubscriptionState(client.replicaNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	delete(remote.records, key)
+	delete(remote.changedAt, key)
+	remote.generations[prefix]++
+	remote.mu.Unlock()
+	if _, err := manager.syncDKVSOnce(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.LoadSubscriptionState(client.replicaNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Generations[prefix] <= before.Generations[prefix] {
+		t.Fatalf("generation did not advance: before=%+v after=%+v", before, after)
+	}
+	if record, err := store.LoadSubscriptionRecord(client.replicaNamespace, key); err != nil || string(record.Value) != "history" {
+		t.Fatalf("delta discarded local history: record=%+v err=%v", record, err)
+	}
+}
+
+func TestDKVSDeltaFallsBackToSnapshotOnOlderEndpoint(t *testing.T) {
+	manager, remote := finalDKVSTestManager(t)
+	client, err := manager.ensureDKVSManager().primaryClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := accountTestKey(t, manager, "wallet/first")
+	second := accountTestKey(t, manager, "wallet/second")
+	prefix, _, err := dkvsManagedPathForKey(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	if _, err := seed.PutRecord(canonicalTestRecord(t, manager, first, 1, "first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SubscribeDKVSPrefix(prefix); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.dkvs.forceCurrentPrefixes(client, []string{prefix}); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	beforeSnapshots := remote.snapshotCalls
+	remote.deltaUnavailable = true
+	remote.mu.Unlock()
+	if _, err := seed.PutRecord(canonicalTestRecord(t, manager, second, 1, "second")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.syncDKVSOnce(); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	snapshots, deltas := remote.snapshotCalls, remote.deltaCalls
+	remote.mu.Unlock()
+	if snapshots != beforeSnapshots+1 || deltas == 0 {
+		t.Fatalf("older endpoint fallback snapshots=%d before=%d deltas=%d", snapshots, beforeSnapshots, deltas)
+	}
+	store := newDKVSReplicaStore(manager.db)
+	if record, err := store.LoadSubscriptionRecord(client.replicaNamespace, second); err != nil || string(record.Value) != "second" {
+		t.Fatalf("fallback did not install record: record=%+v err=%v", record, err)
+	}
+}
+
+func TestDKVSDeltaFallsBackToSnapshotOnStaleGeneration(t *testing.T) {
+	manager, remote := finalDKVSTestManager(t)
+	client, err := manager.ensureDKVSManager().primaryClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := accountTestKey(t, manager, "wallet/state")
+	prefix, _, err := dkvsManagedPathForKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", remote)
+	if _, err := seed.PutRecord(canonicalTestRecord(t, manager, key, 1, "value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SubscribeDKVSPrefix(prefix); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.dkvs.forceCurrentPrefixes(client, []string{prefix}); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	beforeSnapshots := remote.snapshotCalls
+	remote.generations[prefix] = 0
+	remote.mu.Unlock()
+	if _, err := manager.syncDKVSOnce(); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	snapshots, deltas := remote.snapshotCalls, remote.deltaCalls
+	remote.mu.Unlock()
+	if snapshots != beforeSnapshots+1 || deltas == 0 {
+		t.Fatalf("stale generation fallback snapshots=%d before=%d deltas=%d", snapshots, beforeSnapshots, deltas)
 	}
 }
 
@@ -196,10 +363,11 @@ func TestDKVSFinalLocalPutAdvancesTokenWithoutSnapshotDownload(t *testing.T) {
 	}
 	remote.mu.Lock()
 	statusCalls, snapshotCalls = remote.statusCalls, remote.snapshotCalls
+	deltaCalls := remote.deltaCalls
 	remote.mu.Unlock()
-	if statusCalls != 2 || snapshotCalls != 2 {
-		t.Fatalf("remote change was not synchronized selectively: status=%d snapshot=%d",
-			statusCalls, snapshotCalls)
+	if statusCalls != 2 || snapshotCalls != 1 || deltaCalls != 1 {
+		t.Fatalf("remote change was not synchronized selectively: status=%d snapshot=%d delta=%d",
+			statusCalls, snapshotCalls, deltaCalls)
 	}
 	current, err := store.Get(key)
 	if err != nil || current.Seq != 2 || string(current.Value) != "remote-v2" {
@@ -570,9 +738,6 @@ func TestDKVSFinalManagedMailboxPollsPrefixGeneration(t *testing.T) {
 		Version: dkvsindexer.Version, Key: key, Value: []byte("message-manager-inner"),
 		Seq: 1, IssueHeight: 1, TTL: 100,
 	})
-	remote.mu.Lock()
-	remote.generations[prefix]++
-	remote.mu.Unlock()
 	if _, err := manager.syncDKVSOnce(); err != nil {
 		t.Fatal(err)
 	}

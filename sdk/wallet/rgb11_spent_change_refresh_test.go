@@ -125,10 +125,26 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 				assertRGB11HistoricalRepairDryRun(t, sender, first, second, spentChange)
 			}
 			spentLock := sender.utxoLockerL1.GetLockedUtxoList()[spentChange]
-			if spentLock == nil || spentLock.ReservationID != second.ReservationID {
-				t.Fatalf("spent input is not owned by successor: %+v", spentLock)
+			if originalStatus == "settled" {
+				if err := sender.rgbManager.rebuildRGB11Locks(); err != nil {
+					t.Fatal(err)
+				}
+				spentLock = sender.utxoLockerL1.GetLockedUtxoList()[spentChange]
+				if spentLock != nil {
+					t.Fatalf("settled successor retained active input lock: %+v", spentLock)
+				}
+				expected, err := sender.rgbManager.rgb11ExpectedInputs()
+				if err != nil || expected[spentChange] != second.State.WitnessTxID {
+					t.Fatalf("settled successor lost expected spend: txid=%q err=%v",
+						expected[spentChange], err)
+				}
+			} else if spentLock == nil || spentLock.ReservationID != second.ReservationID {
+				t.Fatalf("pending history lost successor ownership: %+v", spentLock)
 			}
-			wantOwner, wantReason := spentLock.ReservationID, spentLock.Reason
+			wantOwner, wantReason := "", ""
+			if spentLock != nil {
+				wantOwner, wantReason = spentLock.ReservationID, spentLock.Reason
+			}
 			if originalStatus == "settled" {
 				t.Run("refresh_error_classification", func(t *testing.T) {
 					testRGB11RefreshHistoricalErrors(t, sender, evidence, first, second, spentChange)
@@ -165,9 +181,8 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 							}
 						}
 						lock := manager.utxoLockerL1.GetLockedUtxoList()[spentChange]
-						if lock == nil || lock.ReservationID != wantOwner || lock.Reason != wantReason ||
-							lock.ReservationPreviousReason != spentLock.ReservationPreviousReason {
-							t.Fatalf("rebuild changed successor input owner: %+v", lock)
+						if lock != nil {
+							t.Fatalf("rebuild revived settled successor input lock: %+v", lock)
 						}
 						for _, outpoint := range rgb11PendingChangeOutpoints(second) {
 							current := manager.utxoLockerL1.GetLockedUtxoList()[outpoint]
@@ -213,10 +228,10 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 							}
 							oldLocks := sender.utxoLockerL1.GetLockedUtxoList()
 							oldConsistency := sender.rgbManager.consistencyStatus
-							writeLocks := func(locks map[string]*LockedUtxo) {
+							writeLocks := func(locks map[string]*LockedUtxo, deletes ...string) {
 								t.Helper()
 								sender.utxoLockerL1.mutex.Lock()
-								err := sender.utxoLockerL1.persistReservationChangesLocked(locks, nil)
+								err := sender.utxoLockerL1.persistReservationChangesLocked(locks, deletes)
 								sender.utxoLockerL1.mutex.Unlock()
 								if err != nil {
 									t.Fatal(err)
@@ -226,7 +241,7 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 								if err := sender.rgbManager.projectionStore.SavePendingTransferStates([]*rgb11wallet.PendingTransfer{originalFirst, originalSecond}); err != nil {
 									t.Fatal(err)
 								}
-								writeLocks(oldLocks)
+								writeLocks(oldLocks, spentChange)
 								sender.rgbManager.consistencyStatus = oldConsistency
 							})
 							bad, err := sender.rgbManager.projectionStore.LoadPendingTransfer(second.State.TransferID)
@@ -235,9 +250,10 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 							}
 							switch kind {
 							case "unknown_owner":
-								lock := cloneLockedUtxo(oldLocks[spentChange])
-								lock.ReservationID = "unknown-owner"
-								writeLocks(map[string]*LockedUtxo{spentChange: lock})
+								writeLocks(map[string]*LockedUtxo{spentChange: {
+									LockedTime: time.Now().Unix(), Reason: rgb11wallet.LockReasonPending,
+									ReservationID: "unknown-owner",
+								}})
 							case "multiple_owners":
 								// Two distinct syntactically bound transactions now claim the
 								// same input; reject the journals before touching any lock.
@@ -338,8 +354,12 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 						t.Error("spent change history disappeared")
 					}
 					lock := sender.utxoLockerL1.GetLockedUtxoList()[spentChange]
-					if lock == nil || lock.ReservationID != wantOwner || lock.Reason != wantReason {
-						t.Fatalf("refresh changed successor ownership: before=%s/%s after=%+v", wantOwner, wantReason, lock)
+					if originalStatus == "settled" {
+						if lock != nil {
+							t.Fatalf("refresh revived settled successor input lock: %+v", lock)
+						}
+					} else if lock == nil || lock.ReservationID != wantOwner || lock.Reason != wantReason {
+						t.Fatalf("refresh changed pending successor ownership: before=%s/%s after=%+v", wantOwner, wantReason, lock)
 					}
 					if len(evidence.broadcasted) != 0 {
 						t.Fatal("refresh broadcast a transaction")

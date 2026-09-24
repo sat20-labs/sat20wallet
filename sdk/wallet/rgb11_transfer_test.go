@@ -985,6 +985,13 @@ func TestRGB11IssuedUDASendReceive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recipientState, err := recipient.GetRGB11State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recipientState.TickerInfos) != 1 || recipientState.TickerInfos[0].ContractID != issued.ContractID {
+		t.Fatalf("received contract metadata missing: %+v", recipientState.TickerInfos)
+	}
 	if receipt.ContractID != issued.ContractID || len(receipt.Allocations) != 1 || receipt.Allocations[0].StateClass != "structured" {
 		t.Fatalf("unexpected UDA receipt: %+v", receipt)
 	}
@@ -1476,6 +1483,40 @@ func TestRGB11RefreshTracksIncomingTransferConfirmationAndReorg(t *testing.T) {
 	stored, err = manager.rgbManager.projectionStore.LoadTransferState(state.TransferID)
 	if err != nil || stored.Status != "pending" {
 		t.Fatalf("incoming reorged state=%+v err=%v", stored, err)
+	}
+}
+
+func TestRGB11RejectedStaysTerminal(t *testing.T) {
+	manager := newRGB11MultiDeviceManager(t, newRGB11StatusPrivateKey(t), 56)
+	evidence := &rgb11StatusEvidence{
+		statuses:  make(map[string]*rgb11wallet.BitcoinTxStatus),
+		outspends: make(map[string]*rgb11wallet.BitcoinOutspend),
+	}
+	manager.rgbManager.evidence = evidence
+	state := &rgb11wallet.TransferState{
+		TransferID: "rejected-receive", Direction: "receive", Status: "rejected",
+		AckStatus: "rejected", RejectReason: "validation-failed",
+		WitnessTxID: "rejected-witness", OutputOutPoints: []string{"rejected-witness:1"},
+		MinConfirmations: 1,
+	}
+	if err := manager.rgbManager.projectionStore.SaveTransferState(state); err != nil {
+		t.Fatal(err)
+	}
+	evidence.statuses[state.WitnessTxID] = &rgb11wallet.BitcoinTxStatus{
+		TxID: state.WitnessTxID, Confirmed: true, Confirmations: 2,
+	}
+
+	result, err := manager.RefreshRGB11State(context.Background())
+	if !errors.Is(err, ErrRGB11Inconsistent) || result == nil || len(result.Inconsistent) != 1 {
+		t.Fatalf("terminal witness result=%+v err=%v", result, err)
+	}
+	stored, loadErr := manager.rgbManager.projectionStore.LoadTransferState(state.TransferID)
+	if loadErr != nil || stored.Status != "rejected" || stored.AckStatus != "rejected" ||
+		stored.RejectReason != "validation-failed" || stored.WitnessTxID != state.WitnessTxID {
+		t.Fatalf("rejected receive revived: state=%+v err=%v", stored, loadErr)
+	}
+	if lock := manager.utxoLockerL1.GetLockedUtxoList()[state.OutputOutPoints[0]]; lock != nil {
+		t.Fatalf("rejected receive relocked output: %+v", lock)
 	}
 }
 

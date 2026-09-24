@@ -1,0 +1,10 @@
+{
+  "receiver_account_id": "91cc8c5390f67915dc16bfd3e3ec0cb492e9736252081f6c047bf64b9fb0cf6f",
+  "sender_account_id": "148cbe135aea8ee9b72f18ca6ddf0efc052e54b6d723cc473a0cc6011766d776",
+  "application_id": "172d6960e7b91018952f590dfa83cfed62d6f6494ac7d640e7474843e6184e3f",
+  "direct_message_id": "00065c102d719ec8c329515259e04904",
+  "transfer_id": "rgb:csg:Fy1pYOe5-EBiVL1k-N_oPP7W-LW9klKx-9ZA50dI-Q_YYTj8#magnum-race-lake",
+  "witness_txid": "0bbc6051be126edb43d04bd390967c19a9f95b4aa8fb67edf12bca1f64d3dfe6",
+  "outpoint": "0bbc6051be126edb43d04bd390967c19a9f95b4aa8fb67edf12bca1f64d3dfe6:1",
+  "spending_txid": "976bb0c68ccb546fc06125e61a5979314393fd79231c70156462ebb9202578d1"
+}

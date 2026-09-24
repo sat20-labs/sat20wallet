@@ -65,4 +65,27 @@ func TestUtxoReservationIsAtomicAndOwnerBound(t *testing.T) {
 	if err := locker.TryReserve([]string{"change:0"}, "pending-rgb", "op-next", "rgb"); err != nil {
 		t.Fatalf("finalized RGB change cannot be reused: %v", err)
 	}
+	if err := locker.TryReserve([]string{"spent:0", "spent:1"}, "pending-rgb", "op-spent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := locker.TryReserve([]string{"other:0"}, "pending-rgb", "op-other"); err != nil {
+		t.Fatal(err)
+	}
+	if err := locker.ConsumeReservation([]string{"spent:0", "other:0"}, "op-spent"); !errors.Is(err, ErrUtxoReservationOwner) {
+		t.Fatalf("wrong owner consumed reservation: %v", err)
+	}
+	locks = locker.GetLockedUtxoList()
+	if locks["spent:0"] == nil || locks["other:0"] == nil {
+		t.Fatal("failed consume was not atomic")
+	}
+	if err := locker.ConsumeReservation([]string{"spent:0", "spent:1"}, "op-spent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := locker.ConsumeReservation([]string{"spent:0", "spent:1"}, "op-spent"); err != nil {
+		t.Fatalf("idempotent consume failed: %v", err)
+	}
+	locks = locker.GetLockedUtxoList()
+	if locks["spent:0"] != nil || locks["spent:1"] != nil || locks["other:0"] == nil {
+		t.Fatalf("consume removed the wrong locks: %+v", locks)
+	}
 }

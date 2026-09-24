@@ -15,12 +15,16 @@ import (
 )
 
 type satoshinetDKVSTestTransport struct {
-	indexer *dkvsindexer.Indexer
-	height  uint64
+	indexer          *dkvsindexer.Indexer
+	height           uint64
+	snapshotCalls    int
+	deltaCalls       int
+	lastDeltaRecords int
 }
 
 func newSatoshiNetDKVSTestTransport() *satoshinetDKVSTestTransport {
 	db := newMemoryKVDB()
+	transport := &satoshinetDKVSTestTransport{height: 1}
 	indexer := dkvsindexer.New(db, dkvsindexer.Config{
 		EndpointID:     "test-core-node",
 		AllowFreeLocal: true,
@@ -29,9 +33,10 @@ func newSatoshiNetDKVSTestTransport() *satoshinetDKVSTestTransport {
 			MaxRecordsPerSigner: 100, MaxBytesPerSigner: 1 << 20,
 			MaxTotalRecords: 10000, MaxTotalBytes: 64 << 20,
 		},
-		CurrentHeight: func() uint64 { return 1 },
+		CurrentHeight: func() uint64 { return transport.height },
 	})
-	return &satoshinetDKVSTestTransport{indexer: indexer, height: 1}
+	transport.indexer = indexer
+	return transport
 }
 
 func (t *satoshinetDKVSTestTransport) DKVSClientConfig() (*dkvsindexer.ClientConfig, error) {
@@ -109,6 +114,7 @@ func (t *satoshinetDKVSTestTransport) SendDKVSPost(path string, body []byte) ([]
 		})
 		return satoshinetTestResponse(result, err)
 	case "/v3/dkvs/prefixes/snapshot":
+		t.snapshotCalls++
 		var request struct {
 			Prefix string `json:"prefix"`
 		}
@@ -126,6 +132,21 @@ func (t *satoshinetDKVSTestTransport) SendDKVSPost(path string, body []byte) ([]
 			return nil, err
 		}
 		result, err := t.indexer.PrefixStatus(request.EndpointID, request.Prefixes)
+		return satoshinetTestResponse(result, err)
+	case "/v3/dkvs/prefixes/delta":
+		t.deltaCalls++
+		var request struct {
+			Prefix          string `json:"prefix"`
+			EndpointID      string `json:"endpoint_id"`
+			AfterGeneration uint64 `json:"after_generation"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			return nil, err
+		}
+		result, err := t.indexer.PrefixDelta(request.Prefix, request.EndpointID, request.AfterGeneration)
+		if result != nil {
+			t.lastDeltaRecords = len(result.Records)
+		}
 		return satoshinetTestResponse(result, err)
 	case "/v3/dkvs/prefixes/read":
 		var request struct {
@@ -216,6 +237,65 @@ func TestDKVSFinalWalletToSatoshiNetIntegration(t *testing.T) {
 	state, err := transport.indexer.GetKeyState(key)
 	if err != nil || state.Status != dkvsindexer.KeyStateActive || state.Seq != 1 {
 		t.Fatalf("server key state=%+v err=%v", state, err)
+	}
+}
+
+func TestDKVSIncrementalSyncLateAcceptedRecordEndToEnd(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newRGB11MultiDeviceManager(t, priv, 901)
+	transport := newSatoshiNetDKVSTestTransport()
+	transport.height = 100
+	configureRGB11DKVSTestManager(manager, transport)
+	client, err := manager.ensureDKVSManager().primaryClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstKey := accountTestKey(t, manager, "wallet/first")
+	lateKey := accountTestKey(t, manager, "wallet/late")
+	prefix, _, err := dkvsManagedPathForKey(firstKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeRecord := func(key, value string) *dkvsindexer.Record {
+		record, signErr := newDKVSAccountSignedRecordWithFreeLocal(manager.wallet, key, []byte(value),
+			dkvsindexer.RecordOptions{Seq: 1, IssueHeight: 100, TTL: 1000})
+		if signErr != nil {
+			t.Fatal(signErr)
+		}
+		return record
+	}
+	late := makeRecord(lateKey, "late") // signed before the client synchronizes
+	if _, err := client.PutRecord(makeRecord(firstKey, "first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SubscribeDKVSPrefix(prefix); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.dkvs.forceCurrentPrefixes(client, []string{prefix}); err != nil {
+		t.Fatal(err)
+	}
+	initialSnapshots := transport.snapshotCalls
+	transport.height = 105
+	seed := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", transport)
+	if _, err := seed.PutRecord(late); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.syncDKVSOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if transport.snapshotCalls != initialSnapshots || transport.deltaCalls == 0 || transport.lastDeltaRecords != 1 {
+		t.Fatalf("sync used snapshots=%d initial=%d deltas=%d delta records=%d",
+			transport.snapshotCalls, initialSnapshots, transport.deltaCalls, transport.lastDeltaRecords)
+	}
+	store := &dkvsStore{manager: manager.dkvs, client: client}
+	for key, want := range map[string]string{firstKey: "first", lateKey: "late"} {
+		value, getErr := store.Get(key)
+		if getErr != nil || string(value.Value) != want {
+			t.Fatalf("key=%s value=%+v err=%v", key, value, getErr)
+		}
 	}
 }
 
