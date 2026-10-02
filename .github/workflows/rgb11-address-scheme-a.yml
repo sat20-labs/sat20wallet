@@ -61,12 +61,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          root_impl=$(find sdk/wallet -maxdepth 1 -type f -name 'rgb11*.go' ! -name '*_test.go' -printf '%f\n' | sort)
-          expected=$'rgb11_api.go\nrgb11_dkvs.go\nrgb11_manager.go'
-          if [[ "$root_impl" != "$expected" ]]; then
-            printf 'Unexpected root RGB11 implementation files:\n%s\n' "$root_impl"
-            exit 1
-          fi
+          # RGB11 has been split into multiple root-package lifecycle files.
+          # Enforce the stable public facade and API-boundary rule instead of
+          # pinning an obsolete exact implementation-file count.
+          test -f sdk/wallet/rgb11_api.go
+          test -f sdk/wallet/rgb11_dkvs.go
+          test -f sdk/wallet/rgb11_manager.go
           leaked=""
           while IFS= read -r file; do
             [[ -z "$file" || "$file" == "sdk/wallet/rgb11_api.go" ]] && continue
