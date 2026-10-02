@@ -227,6 +227,7 @@ func newDKVSNoPluginTemplateFixtureWithProfilesAndArgs(t *testing.T, profiles []
 		lockedPkScript, l1Assets)
 	primaryDIDOwner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
 	fakeL1.setNameOwner("alice", primaryDIDOwner.Address)
+	fakeL1.setNameOwner("company", primaryDIDOwner.Address)
 	network := newDKVSNoPluginNetworkWithArgs(t, fakeL1, bootstrapArgs, coreArgs, minerArgs)
 
 	gasAnchor := buildAnchorTx(t, templateLockedOutPoint("gas", 0), lockedValue,
