@@ -34,6 +34,7 @@ import (
 	"github.com/sat20-labs/rgb11/strict_types"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	"math/big"
 	"sort"
@@ -1888,11 +1889,38 @@ func (p *rgb11Manager) RGB11TranscendRegistrationDescriptor(contractID string) (
 	if ext.ContractID != contractID || ext.Ticker == "" || ext.GenesisAddress == "" || ext.GenesisOutpoint == "" {
 		return nil, rgb11wallet.ErrNamingOriginUnavailable
 	}
-	descriptor := &rgb11wallet.TranscendRegistrationDescriptor{
-		ContractID: contractID, BaseTicker: ext.Ticker,
-		GenesisOutpoint: ext.GenesisOutpoint, GenesisAddress: ext.GenesisAddress,
+	wallet := p.Manager.GetWallet()
+	if wallet == nil || wallet.GetPubKey() == nil {
+		return nil, ErrRGB11Inconsistent
 	}
-	if err := rgb11wallet.ValidateTranscendRegistrationDescriptor(descriptor, GetChainParam()); err != nil {
+	client, err := p.Manager.ensureDKVSManager().primaryClient()
+	if err != nil {
+		return nil, err
+	}
+	primaryRecord, err := client.GetPersonalRecord(
+		wallet.GetPubKey().SerializeCompressed(), dkvsindexer.PrimaryDIDPersonalPath,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read primary DID: %w", err)
+	}
+	providerDID := string(primaryRecord.Value)
+	if err := rgb11wallet.ValidatePrimaryDIDName(providerDID); err != nil {
+		return nil, err
+	}
+	nameInfo, err := p.Manager.l1IndexerClient.GetNameInfo(providerDID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve primary DID %s: %w", providerDID, err)
+	}
+	if nameInfo == nil {
+		return nil, rgb11wallet.ErrProviderOwnerMismatch
+	}
+	if err := rgb11wallet.ValidateProviderBinding(ext.GenesisAddress, nameInfo.Address, providerDID); err != nil {
+		return nil, err
+	}
+	descriptor := &rgb11wallet.TranscendRegistrationDescriptor{
+		BaseTicker: ext.Ticker, GenesisOutpoint: ext.GenesisOutpoint, ProviderDID: providerDID,
+	}
+	if err := rgb11wallet.ValidateTranscendRegistrationDescriptor(descriptor); err != nil {
 		return nil, err
 	}
 	return descriptor, nil
