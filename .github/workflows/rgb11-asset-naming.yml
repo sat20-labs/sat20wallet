@@ -45,7 +45,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: sat20-labs/satoshinet
-          ref: e6521c11cd0adbe318133cd9f930db960ee80163
+          ref: feat/rgb11-naming-indexer
           path: satoshinet
           persist-credentials: false
       - name: Setup Go
