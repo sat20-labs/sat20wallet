@@ -1,0 +1,48 @@
+name: RGB11 checked PR refactor
+
+on:
+  push:
+    branches: [feat/rgb11-provider-asset-names]
+    paths:
+      - '.github/rgb11-naming-apply.py'
+      - '.github/workflows/rgb11-naming-apply.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    if: github.repository == 'sat20-labs/sat20wallet' && github.ref == 'refs/heads/feat/rgb11-provider-asset-names'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feat/rgb11-provider-asset-names
+          fetch-depth: 1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.24.13'
+          cache: false
+      - name: Apply exact checked edits
+        run: python3 .github/rgb11-naming-apply.py
+      - name: Commit only the reviewed SDK source paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t paths < .github/rgb11-naming-paths.txt
+          for path in "${paths[@]}"; do
+            [[ "$path" == sdk/wallet/*.go ]] || { echo "Unexpected source path: $path"; exit 1; }
+          done
+          git diff --check
+          git add -- "${paths[@]}"
+          if git diff --cached --quiet; then
+            echo 'No source changes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(rgb11): separate immutable ContractID keys from mutable local asset names'
+          git push origin HEAD:refs/heads/feat/rgb11-provider-asset-names
