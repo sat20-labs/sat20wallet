@@ -53,10 +53,14 @@ func (p *TranscendContract) CheckContent() error {
 		return err
 	}
 	if p.AssetName.Protocol == rgb11wallet.Protocol {
-		if p.RGB11Registration == nil || p.RGB11Registration.ContractID != p.AssetName.Ticker {
-			return fmt.Errorf("RGB11 transcend contract is missing matching registration descriptor")
+		if p.RGB11Registration == nil {
+			return fmt.Errorf("RGB11 transcend contract is missing registration descriptor")
 		}
-		if err := rgb11wallet.ValidateTranscendRegistrationDescriptor(p.RGB11Registration, GetChainParam()); err != nil {
+		expected, err := rgb11wallet.NewContractAssetKey(p.AssetName.Ticker, p.AssetName.Type)
+		if err != nil || expected != p.AssetName {
+			return fmt.Errorf("RGB11 transcend contract has invalid ContractID asset identity")
+		}
+		if err := rgb11wallet.ValidateTranscendRegistrationDescriptor(p.RGB11Registration); err != nil {
 			return err
 		}
 	} else if p.RGB11Registration != nil {
@@ -112,7 +116,7 @@ func (p *TranscendContract) Encode() ([]byte, error) {
 	if p.RGB11Registration == nil {
 		return nil, fmt.Errorf("RGB11 transcend contract is missing registration descriptor")
 	}
-	suffix, err := rgb11wallet.EncodeTranscendRegistrationDescriptor(p.RGB11Registration, GetChainParam())
+	suffix, err := rgb11wallet.EncodeTranscendRegistrationDescriptor(p.RGB11Registration)
 	if err != nil {
 		return nil, err
 	}
@@ -123,13 +127,13 @@ func (p *TranscendContract) Decode(data []byte) error {
 	if err := p.SwapContract.Decode(data); err != nil {
 		return err
 	}
-	descriptor, err := rgb11wallet.DecodeTranscendRegistrationDescriptor(data, GetChainParam())
+	descriptor, err := rgb11wallet.DecodeTranscendRegistrationDescriptor(data)
 	if err != nil {
 		return err
 	}
 	if p.AssetName.Protocol == rgb11wallet.Protocol {
-		if descriptor == nil || descriptor.ContractID != p.AssetName.Ticker {
-			return fmt.Errorf("RGB11 transcend registration descriptor mismatch")
+		if descriptor == nil {
+			return fmt.Errorf("RGB11 transcend registration descriptor missing")
 		}
 		p.RGB11Registration = descriptor
 	} else {
