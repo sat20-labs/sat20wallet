@@ -1859,7 +1859,7 @@ func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (*RGB11
 	}, nil
 }
 
-func (p *rgb11Manager) RGB11TranscendRegistrationDescriptor(contractID string) (*rgb11wallet.TranscendRegistrationDescriptor, error) {
+func (p *rgb11Manager) RegisterRGB11AssetName(contractID string) (*dkvsindexer.RGB11Registration, error) {
 	if p == nil || p.Manager == nil {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -1886,7 +1886,7 @@ func (p *rgb11Manager) RGB11TranscendRegistrationDescriptor(contractID string) (
 	if ext.ContractID == "" {
 		ext.ContractID = ext.OriginalAssetID
 	}
-	if ext.ContractID != contractID || ext.Ticker == "" || ext.GenesisAddress == "" || ext.GenesisOutpoint == "" {
+	if ext.ContractID != contractID || ext.Ticker == "" || ext.GenesisAddress == "" {
 		return nil, rgb11wallet.ErrNamingOriginUnavailable
 	}
 	wallet := p.Manager.GetWallet()
@@ -1897,15 +1897,9 @@ func (p *rgb11Manager) RGB11TranscendRegistrationDescriptor(contractID string) (
 	if err != nil {
 		return nil, err
 	}
-	primaryRecord, err := client.GetPersonalRecord(
-		wallet.GetPubKey().SerializeCompressed(), dkvsindexer.PrimaryDIDPersonalPath,
-	)
+	providerDID, _, err := client.GetPrimaryDID(wallet.GetPubKey().SerializeCompressed())
 	if err != nil {
 		return nil, fmt.Errorf("read primary DID: %w", err)
-	}
-	providerDID := string(primaryRecord.Value)
-	if err := rgb11wallet.ValidatePrimaryDIDName(providerDID); err != nil {
-		return nil, err
 	}
 	nameInfo, err := p.Manager.l1IndexerClient.GetNameInfo(providerDID)
 	if err != nil {
@@ -1917,13 +1911,7 @@ func (p *rgb11Manager) RGB11TranscendRegistrationDescriptor(contractID string) (
 	if err := rgb11wallet.ValidateProviderBinding(ext.GenesisAddress, nameInfo.Address, providerDID); err != nil {
 		return nil, err
 	}
-	descriptor := &rgb11wallet.TranscendRegistrationDescriptor{
-		BaseTicker: ext.Ticker, GenesisOutpoint: ext.GenesisOutpoint, ProviderDID: providerDID,
-	}
-	if err := rgb11wallet.ValidateTranscendRegistrationDescriptor(descriptor); err != nil {
-		return nil, err
-	}
-	return descriptor, nil
+	return client.RegisterRGB11Contract(wallet, providerDID, ext.Ticker, contractID)
 }
 
 func (p *rgb11Manager) SetRGB11LocalAssetName(contractID, name string) error {
