@@ -54,7 +54,7 @@ func TestProviderBindingRequiresSameGenesisAddress(t *testing.T) {
 func TestRegisteredAssetNamesKeepTypeAndUseOrdinal(t *testing.T) {
 	for _, tc := range []struct {
 		ordinal uint64
-		want string
+		want    string
 	}{
 		{1, "rgb11:f:usdt@alice"},
 		{2, "rgb11:f:usdt_2@alice"},

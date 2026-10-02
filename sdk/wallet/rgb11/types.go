@@ -3,8 +3,7 @@
 package rgb11wallet
 
 import (
-	"crypto/sha256"
-	"encoding/base32"
+	"encoding/hex"
 	"errors"
 	"strings"
 
@@ -17,12 +16,6 @@ const (
 	Protocol          = "rgb11"
 	LockReasonRGB     = "rgb"
 	LockReasonPending = "pending-rgb"
-
-	// DefaultFingerprintLength is the registry's initial collision-resistant
-	// contract suffix. A server-side registry may extend an individual suffix
-	// to 10, 12, 14, or 16 characters on collision without changing its prefix.
-	DefaultFingerprintLength = 8
-	MaxFingerprintLength     = 16
 )
 
 var (
@@ -59,89 +52,26 @@ func NormalizeTicker(ticker string) string {
 	return result
 }
 
-// ContractFingerprint binds the display-safe name to canonical RGB contract
-// bytes. The raw contract id never becomes the SAT20 AssetName ticker.
-func ContractFingerprint(contractID string, length int) (string, error) {
+// NewContractAssetKey is the immutable SDK projection identity. Its ticker is
+// the complete 32-byte ContractID in lossless hex form, NOT a readable name or
+// a digest prefix. Local aliases and SatoshiNet names are separate metadata.
+func NewContractAssetKey(contractID, assetType string) (indexer.AssetName, error) {
 	contract, err := consensus.ParseContractID(contractID)
-	if err != nil {
-		return "", err
-	}
-	if length == 0 {
-		length = DefaultFingerprintLength
-	}
-	if length < DefaultFingerprintLength || length > MaxFingerprintLength || length%2 != 0 {
-		return "", ErrInvalidRGB11Asset
-	}
-	payload := make([]byte, 0, len("satoshinet:rgb11:")+len(contract))
-	payload = append(payload, "satoshinet:rgb11:"...)
-	payload = append(payload, contract[:]...)
-	sum := sha256.Sum256(payload)
-	encoded := strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:]))
-	return encoded[:length], nil
-}
-
-// NewCanonicalAssetName creates the default asset key for a newly created or
-// imported RGB11 contract: rgb11:<type>:<normalized ticker>@<fingerprint>.
-func NewCanonicalAssetName(contractID, ticker, assetType string) (indexer.AssetName, error) {
-	return NewCanonicalAssetNameWithFingerprintLength(
-		contractID, ticker, assetType, DefaultFingerprintLength,
-	)
-}
-
-// NewCanonicalAssetNameWithFingerprintLength lets the finalized registry
-// extend only colliding fingerprint prefixes while preserving the canonical
-// ticker and contract-derived prefix.
-func NewCanonicalAssetNameWithFingerprintLength(contractID, ticker, assetType string,
-	fingerprintLength int) (indexer.AssetName, error) {
-
-	if assetType == "" {
-		assetType = indexer.ASSET_TYPE_FT
-	}
-	if strings.Contains(assetType, ":") {
-		return indexer.AssetName{}, ErrInvalidRGB11Asset
-	}
-	fingerprint, err := ContractFingerprint(contractID, fingerprintLength)
 	if err != nil {
 		return indexer.AssetName{}, err
 	}
-	return indexer.AssetName{
-		Protocol: Protocol,
-		Type:     assetType,
-		Ticker:   NormalizeTicker(ticker) + "@" + fingerprint,
-	}, nil
+	if assetType == "" {
+		assetType = indexer.ASSET_TYPE_FT
+	}
+	if assetType != indexer.ASSET_TYPE_FT && assetType != indexer.ASSET_TYPE_NFT && assetType != "control" {
+		return indexer.AssetName{}, ErrInvalidRGB11Asset
+	}
+	return indexer.AssetName{Protocol: Protocol, Type: assetType, Ticker: hex.EncodeToString(contract[:])}, nil
 }
 
-// CanonicalAssetNameMatches accepts every collision-extension length allowed
-// by the RGB11 registry design and rejects names not derived from contractID.
-func CanonicalAssetNameMatches(name indexer.AssetName, contractID, ticker string) bool {
-	for length := DefaultFingerprintLength; length <= MaxFingerprintLength; length += 2 {
-		expected, err := NewCanonicalAssetNameWithFingerprintLength(
-			contractID, ticker, name.Type, length,
-		)
-		if err != nil {
-			return false
-		}
-		if expected == name {
-			return true
-		}
-	}
-	return false
-}
-
-// DisplayTicker returns the safe UI alias. Until a server-side primary-asset
-// registry has verified an issuer, the fingerprint remains visible.
-func DisplayTicker(ticker, fingerprint string, primaryVerified bool) string {
-	normalized := NormalizeTicker(ticker)
-	if primaryVerified {
-		if display := strings.TrimSpace(ticker); display != "" {
-			return display
-		}
-		return normalized
-	}
-	if fingerprint == "" {
-		return normalized
-	}
-	return normalized + "@" + fingerprint
+func ContractAssetKeyMatches(name indexer.AssetName, contractID string) bool {
+	expected, err := NewContractAssetKey(contractID, name.Type)
+	return err == nil && name == expected
 }
 
 type TickerExt struct {
@@ -149,9 +79,9 @@ type TickerExt struct {
 	Ticker           string            `json:"ticker,omitempty"`
 	CanonicalName    string            `json:"canonical_name,omitempty"`
 	NormalizedTicker string            `json:"normalized_ticker,omitempty"`
-	Fingerprint      string            `json:"fingerprint,omitempty"`
+	GenesisAddress   string            `json:"genesis_address,omitempty"`
+	NamingStatus     string            `json:"naming_status,omitempty"`
 	DisplayTicker    string            `json:"display_ticker,omitempty"`
-	PrimaryVerified  bool              `json:"primary_verified,omitempty"`
 	OriginalAssetID  string            `json:"original_asset_id"`
 	AssetIDBytes     []byte            `json:"asset_id_bytes"`
 	SchemaID         string            `json:"schema_id"`

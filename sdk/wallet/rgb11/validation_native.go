@@ -118,7 +118,7 @@ func (v NativeConsensusValidator) validateConsignment(ctx context.Context, raw [
 	if !descriptor.Fungible {
 		assetType = indexer.ASSET_TYPE_NFT
 	}
-	assetName, err := NewCanonicalAssetName(container.ContractID, metadata.Ticker, assetType)
+	assetName, err := NewContractAssetKey(container.ContractID, assetType)
 	if err != nil {
 		return nil, nil, nil, err
 	}

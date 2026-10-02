@@ -424,3 +424,18 @@ func (p *Manager) ValidateRGB11Consignment(ctx context.Context, raw []byte) (*rg
 func (p *Manager) getL1TxOutput(outpoint string) (*TxOutput, error) {
 	return p.rgbManager.getL1TxOutput(outpoint)
 }
+
+// SetRGB11LocalAssetName changes SDK-local metadata only. Contract identity,
+// balances, transfer proofs and SatoshiNet registered names are never renamed.
+func (p *Manager) SetRGB11LocalAssetName(contractID, name string) error {
+	if p == nil {
+		return ErrRGB11Inconsistent
+	}
+	release := p.beginRGB11Operation()
+	defer release()
+	manager, err := p.synchronizedRGB11Manager()
+	if err != nil {
+		return err
+	}
+	return manager.SetRGB11LocalAssetName(contractID, name)
+}

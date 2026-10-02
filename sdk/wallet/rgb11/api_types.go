@@ -23,11 +23,13 @@ type RGB11Output struct {
 
 type RGB11TickerInfo struct {
 	*indexer.TickerInfo
-	Ticker        string `json:"ticker"`
-	CanonicalName string `json:"canonical_name"`
-	ContractID    string `json:"contract_id"`
-	Fingerprint   string `json:"fingerprint,omitempty"`
-	Verified      bool   `json:"verified"`
+	Ticker         string `json:"ticker"`
+	AssetKey       string `json:"asset_key"`
+	CanonicalName  string `json:"canonical_name,omitempty"`
+	ContractID     string `json:"contract_id"`
+	GenesisAddress string `json:"genesis_address,omitempty"`
+	NamingStatus   string `json:"naming_status"`
+	Verified       bool   `json:"verified"`
 }
 
 // RGB11State exposes existing SAT20 assets plus RGB-only proof sidecars.

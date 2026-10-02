@@ -13,15 +13,15 @@ import (
 )
 
 const (
-	MaxPrimaryDIDLength = 10
+	MaxPrimaryDIDLength      = 10
 	LocalAddressSuffixLength = 12
 )
 
 var (
-	ErrInvalidProviderDID = errors.New("invalid RGB11 provider DID")
-	ErrProviderOwnerMismatch = errors.New("RGB11 provider owner does not match genesis address")
-	ErrReservedTickerSuffix = errors.New("RGB11 ticker uses a reserved ordinal suffix")
-	ErrRegisteredNameFrozen = errors.New("registered RGB11 asset name is immutable")
+	ErrInvalidProviderDID      = errors.New("invalid RGB11 provider DID")
+	ErrProviderOwnerMismatch   = errors.New("RGB11 provider owner does not match genesis address")
+	ErrReservedTickerSuffix    = errors.New("RGB11 ticker uses a reserved ordinal suffix")
+	ErrRegisteredNameFrozen    = errors.New("registered RGB11 asset name is immutable")
 	ErrNamingOriginUnavailable = errors.New("RGB11 genesis naming origin is unavailable")
 )
 
@@ -140,8 +140,8 @@ func BuildLocalDisplayName(ticker, genesisAddress, qualifiedProvider string) (st
 // RegisteredName is populated only from an authenticated SatoshiNet registry.
 // An ordinary SDK rename cannot turn a local alias into a registered name.
 type LocalNameMetadata struct {
-	ContractID string `json:"contract_id"`
-	LocalName string `json:"local_name"`
+	ContractID     string `json:"contract_id"`
+	LocalName      string `json:"local_name"`
 	RegisteredName string `json:"registered_name,omitempty"`
 }
 

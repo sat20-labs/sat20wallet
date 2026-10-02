@@ -14,9 +14,9 @@ import (
 )
 
 type namingOriginEvidence struct {
-	raw map[string][]byte
-	utxos map[string]*BitcoinUTXO
-	rawCalls int
+	raw       map[string][]byte
+	utxos     map[string]*BitcoinUTXO
+	rawCalls  int
 	utxoCalls int
 }
 
@@ -47,7 +47,7 @@ func namingGenesisFixture(outpoints ...wire.OutPoint) strict_types.Value {
 	}
 	list := strict_types.Value{Kind: strict_types.ValueList, Items: items}
 	assignments := strict_types.Value{Kind: strict_types.ValueMap, Entries: []strict_types.Entry{{
-		Key: strict_types.Value{Kind: strict_types.ValueNumber, Unsigned: &kind},
+		Key:   strict_types.Value{Kind: strict_types.ValueNumber, Unsigned: &kind},
 		Value: strict_types.Value{Kind: strict_types.ValueUnion, Name: "fungible", Inner: &list},
 	}}}
 	return strict_types.Value{Kind: strict_types.ValueStruct, Fields: []strict_types.Field{{Name: "assignments", Value: assignments}}}

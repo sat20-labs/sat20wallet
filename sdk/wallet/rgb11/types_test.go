@@ -49,8 +49,8 @@ func TestContractAssetKeyUsesCompleteIdentity(t *testing.T) {
 
 func TestNormalizeTicker(t *testing.T) {
 	for input, want := range map[string]string{
-		" USDT  2026 ": "usdt-2026",
-		"----": "asset",
+		" USDT  2026 ":         "usdt-2026",
+		"----":                 "asset",
 		"ABCDEFGHIJKLMNOPQRST": "abcdefghijklmnopqrst",
 	} {
 		if got := NormalizeTicker(input); got != want {
