@@ -199,7 +199,7 @@ func (p *TranscendContractRuntime) InitFromDB(stp ContractManager, resv Contract
 	if err != nil {
 		return err
 	}
-	p.runtime = p	// 关键是设置这个
+	p.runtime = p // 关键是设置这个
 	return nil
 }
 
