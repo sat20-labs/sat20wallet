@@ -13,31 +13,31 @@ import (
 // Wallet SDK surface without duplicating protocol-specific data structures in
 // the outer wallet package.
 type (
-	RGB11Output                          = rgb11wallet.RGB11Output
-	RGB11TickerInfo                      = rgb11wallet.RGB11TickerInfo
-	RGB11State                           = rgb11wallet.RGB11State
-	RGB11IssueRequest                    = rgb11wallet.RGB11IssueRequest
-	RGB11IssueResult                     = rgb11wallet.RGB11IssueResult
-	RGB11ContractExportResult            = rgb11wallet.RGB11ContractExportResult
-	RGB11NameRegistration                = dkvsindexer.RGB11Registration
-	RGB11ImportResult                    = rgb11wallet.RGB11ImportResult
-	RGB11RejectListProvider              = rgb11wallet.RGB11RejectListProvider
-	RGB11RejectListViolation             = rgb11wallet.RGB11RejectListViolation
-	RGB11InvoiceRequest                  = rgb11wallet.RGB11InvoiceRequest
-	RGB11SendRequest                     = rgb11wallet.RGB11SendRequest
-	RGB11PreparedTransfer                = rgb11wallet.RGB11PreparedTransfer
-	RGB11PreparedTransferPackage         = rgb11wallet.RGB11PreparedTransferPackage
-	RGB11ProxyDeliveryResult             = rgb11wallet.RGB11ProxyDeliveryResult
-	RGB11ProxyAckResult                  = rgb11wallet.RGB11ProxyAckResult
-	RGB11ProxyReceiveResult              = rgb11wallet.RGB11ProxyReceiveResult
-	RGB11RefreshResult                   = rgb11wallet.RGB11RefreshResult
-	RGB11AddressMailboxSyncResult        = rgb11wallet.RGB11AddressMailboxSyncResult
-	RGB11ReceiveCapability               = rgb11wallet.RGB11ReceiveCapability
-	RGB11AddressEndpoint                 = rgb11wallet.RGB11AddressEndpoint
-	RGB11AddressDeliveryResult           = rgb11wallet.RGB11AddressDeliveryResult
-	RGB11AddressACK                      = rgb11wallet.RGB11AddressACK
-	RGB11AddressSendRequest              = rgb11wallet.RGB11AddressSendRequest
-	RGB11WalletSnapshot                  = rgb11wallet.RGB11WalletSnapshot
+	RGB11Output                   = rgb11wallet.RGB11Output
+	RGB11TickerInfo               = rgb11wallet.RGB11TickerInfo
+	RGB11State                    = rgb11wallet.RGB11State
+	RGB11IssueRequest             = rgb11wallet.RGB11IssueRequest
+	RGB11IssueResult              = rgb11wallet.RGB11IssueResult
+	RGB11ContractExportResult     = rgb11wallet.RGB11ContractExportResult
+	RGB11NameRegistration         = dkvsindexer.RGB11Registration
+	RGB11ImportResult             = rgb11wallet.RGB11ImportResult
+	RGB11RejectListProvider       = rgb11wallet.RGB11RejectListProvider
+	RGB11RejectListViolation      = rgb11wallet.RGB11RejectListViolation
+	RGB11InvoiceRequest           = rgb11wallet.RGB11InvoiceRequest
+	RGB11SendRequest              = rgb11wallet.RGB11SendRequest
+	RGB11PreparedTransfer         = rgb11wallet.RGB11PreparedTransfer
+	RGB11PreparedTransferPackage  = rgb11wallet.RGB11PreparedTransferPackage
+	RGB11ProxyDeliveryResult      = rgb11wallet.RGB11ProxyDeliveryResult
+	RGB11ProxyAckResult           = rgb11wallet.RGB11ProxyAckResult
+	RGB11ProxyReceiveResult       = rgb11wallet.RGB11ProxyReceiveResult
+	RGB11RefreshResult            = rgb11wallet.RGB11RefreshResult
+	RGB11AddressMailboxSyncResult = rgb11wallet.RGB11AddressMailboxSyncResult
+	RGB11ReceiveCapability        = rgb11wallet.RGB11ReceiveCapability
+	RGB11AddressEndpoint          = rgb11wallet.RGB11AddressEndpoint
+	RGB11AddressDeliveryResult    = rgb11wallet.RGB11AddressDeliveryResult
+	RGB11AddressACK               = rgb11wallet.RGB11AddressACK
+	RGB11AddressSendRequest       = rgb11wallet.RGB11AddressSendRequest
+	RGB11WalletSnapshot           = rgb11wallet.RGB11WalletSnapshot
 )
 
 // This file is the public RGB11 surface of wallet.Manager. All behavior is
