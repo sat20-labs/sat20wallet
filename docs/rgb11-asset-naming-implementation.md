@@ -62,3 +62,19 @@ GitHub Actions 工作流：`.github/workflows/rgb11-asset-naming.yml`。
 ## 合并条件
 
 在要求完整执行原设计的情况下，本 PR 不应作为已完成版本合并。需要补齐协议端 Bind/注册/授权和映射消费，并完成跨模块测试。当前变更可作为 SDK 命名与身份分离的可审查实现基础。
+
+
+## Transcend registration descriptor
+
+For RGB11 `transcend.tc` deployment, the SDK keeps a local descriptor object containing ContractID, base ticker, Genesis outpoint, and Genesis address. The on-chain binary suffix intentionally omits a second copy of ContractID: the signed contract's AssetName already contains the full ContractID as `rgb11:<type>:<ContractID>`.
+
+The serialized suffix contains only:
+
+```text
+rgb11-reg-v1
+baseTicker
+genesisOutpoint
+genesisAddress
+```
+
+Decoding recovers ContractID from the signed AssetName and validates the remaining descriptor fields. This avoids redundant bytes and keeps the signed channel-contract deployment within SatoshiNet's OP_RETURN payload limit.
