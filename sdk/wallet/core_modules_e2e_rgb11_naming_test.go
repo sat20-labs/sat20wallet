@@ -53,7 +53,7 @@ func coreRGB11NamingE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 
 	// The same DID ownership fact is exposed to the Wallet L1 client and to the
 	// real SatoshiNet nodes by the parent e2e harness.
-	chain.setNameOwner("alice", manager.GetWallet().GetAddress())
+	coreSetRGB11NameOwner(chain, "alice", manager.GetWallet().GetAddress())
 	client, err := manager.ensureDKVSManager().primaryClient()
 	coreRequire(t, "create DKVS client for primary DID", err)
 	_, err = client.PutPrimaryDID(
