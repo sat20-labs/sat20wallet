@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	indexer "github.com/sat20-labs/indexer/common"
-	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 )
 
 /*
@@ -30,7 +29,6 @@ func init() {
 
 type TranscendContract struct {
 	SwapContract
-	RGB11Registration *rgb11wallet.TranscendRegistrationDescriptor `json:"rgb11Registration,omitempty"`
 }
 
 func NewTranscendContract() *TranscendContract {
@@ -43,29 +41,14 @@ func NewTranscendContract() *TranscendContract {
 
 func (p *TranscendContract) CheckContent() error {
 	if indexer.IsPlainAsset(&p.AssetName) {
-		if p.RGB11Registration != nil {
-			return fmt.Errorf("plain asset cannot carry RGB11 registration")
-		}
 		return nil
 	}
 
-	if err := p.SwapContract.CheckContent(); err != nil {
+	err := p.SwapContract.CheckContent()
+	if err != nil {
 		return err
 	}
-	if p.AssetName.Protocol == rgb11wallet.Protocol {
-		if p.RGB11Registration == nil {
-			return fmt.Errorf("RGB11 transcend contract is missing registration descriptor")
-		}
-		expected, err := rgb11wallet.NewContractAssetKey(p.AssetName.Ticker, p.AssetName.Type)
-		if err != nil || expected != p.AssetName {
-			return fmt.Errorf("RGB11 transcend contract has invalid ContractID asset identity")
-		}
-		if err := rgb11wallet.ValidateTranscendRegistrationDescriptor(p.RGB11Registration); err != nil {
-			return err
-		}
-	} else if p.RGB11Registration != nil {
-		return fmt.Errorf("non-RGB11 transcend contract carries RGB11 registration")
-	}
+
 	return nil
 }
 
@@ -106,43 +89,11 @@ func (p *TranscendContract) InvokeParam(action string) string {
 }
 
 func (p *TranscendContract) Encode() ([]byte, error) {
-	base, err := p.SwapContract.Encode()
-	if err != nil {
-		return nil, err
-	}
-	if p.AssetName.Protocol != rgb11wallet.Protocol {
-		return base, nil
-	}
-	if p.RGB11Registration == nil {
-		return nil, fmt.Errorf("RGB11 transcend contract is missing registration descriptor")
-	}
-	suffix, err := rgb11wallet.EncodeTranscendRegistrationDescriptor(p.RGB11Registration)
-	if err != nil {
-		return nil, err
-	}
-	return append(base, suffix...), nil
+	return p.SwapContract.Encode()
 }
 
 func (p *TranscendContract) Decode(data []byte) error {
-	if err := p.SwapContract.Decode(data); err != nil {
-		return err
-	}
-	descriptor, err := rgb11wallet.DecodeTranscendRegistrationDescriptor(data)
-	if err != nil {
-		return err
-	}
-	if p.AssetName.Protocol == rgb11wallet.Protocol {
-		if descriptor == nil {
-			return fmt.Errorf("RGB11 transcend registration descriptor missing")
-		}
-		p.RGB11Registration = descriptor
-	} else {
-		if descriptor != nil {
-			return fmt.Errorf("non-RGB11 transcend contract carries RGB11 registration")
-		}
-		p.RGB11Registration = nil
-	}
-	return nil
+	return p.SwapContract.Decode(data)
 }
 
 func (p *TranscendContract) Content() string {
@@ -203,7 +154,7 @@ func (p *TranscendContractRuntime) InitFromDB(stp ContractManager, resv Contract
 	if err != nil {
 		return err
 	}
-	p.runtime = p // 关键是设置这个
+	p.runtime = p	// 关键是设置这个
 	return nil
 }
 
