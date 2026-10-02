@@ -6,6 +6,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/consensus"
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
 )
@@ -58,7 +59,6 @@ func EncodeTranscendRegistrationDescriptor(d *TranscendRegistrationDescriptor, p
 	}
 	return stxscript.NewScriptBuilder().
 		AddData([]byte(TranscendRegistrationDescriptorMagic)).
-		AddData([]byte(d.ContractID)).
 		AddData([]byte(d.BaseTicker)).
 		AddData([]byte(d.GenesisOutpoint)).
 		AddData([]byte(d.GenesisAddress)).
@@ -71,7 +71,17 @@ func EncodeTranscendRegistrationDescriptor(d *TranscendRegistrationDescriptor, p
 // transcend contract with no extension.
 func DecodeTranscendRegistrationDescriptor(content []byte, params *chaincfg.Params) (*TranscendRegistrationDescriptor, error) {
 	tokenizer := stxscript.MakeScriptTokenizer(0, content)
-	for i := 0; i < 4; i++ {
+	if !tokenizer.Next() || tokenizer.Err() != nil { // template
+		return nil, ErrInvalidRGB11Asset
+	}
+	if !tokenizer.Next() || tokenizer.Err() != nil || tokenizer.Data() == nil { // asset
+		return nil, ErrInvalidRGB11Asset
+	}
+	asset := indexer.NewAssetNameFromString(string(tokenizer.Data()))
+	if asset == nil {
+		return nil, ErrInvalidRGB11Asset
+	}
+	for i := 0; i < 2; i++ { // start/end block
 		if !tokenizer.Next() || tokenizer.Err() != nil {
 			return nil, ErrInvalidRGB11Asset
 		}
@@ -91,20 +101,27 @@ func DecodeTranscendRegistrationDescriptor(content []byte, params *chaincfg.Para
 		}
 		return string(tokenizer.Data()), nil
 	}
-	contractID, err := next()
-	if err != nil { return nil, err }
 	ticker, err := next()
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	outpoint, err := next()
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	address, err := next()
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	if tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, ErrInvalidRGB11Asset
 	}
 	d := &TranscendRegistrationDescriptor{
-		ContractID: contractID, BaseTicker: ticker,
+		ContractID: asset.Ticker, BaseTicker: ticker,
 		GenesisOutpoint: outpoint, GenesisAddress: address,
+	}
+	if asset.Protocol != Protocol || d.ContractID == "" {
+		return nil, ErrInvalidRGB11Asset
 	}
 	if err := ValidateTranscendRegistrationDescriptor(d, params); err != nil {
 		return nil, err
