@@ -80,6 +80,7 @@ type TickerExt struct {
 	CanonicalName    string            `json:"canonical_name,omitempty"`
 	NormalizedTicker string            `json:"normalized_ticker,omitempty"`
 	GenesisAddress   string            `json:"genesis_address,omitempty"`
+	GenesisOutpoint  string            `json:"genesis_outpoint,omitempty"`
 	NamingStatus     string            `json:"naming_status,omitempty"`
 	DisplayTicker    string            `json:"display_ticker,omitempty"`
 	OriginalAssetID  string            `json:"original_asset_id"`
