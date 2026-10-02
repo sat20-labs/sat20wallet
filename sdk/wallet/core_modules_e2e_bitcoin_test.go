@@ -25,10 +25,12 @@ type coreE2EChain struct {
  status map[string]rgb11wallet.BitcoinTxStatus
  spent map[string]string
  broadcasts int
+ names map[string]string
 }
 func newCoreE2EChain() *coreE2EChain {
- return &coreE2EChain{outputs:map[string]*TxOutput{},raw:map[string][]byte{},status:map[string]rgb11wallet.BitcoinTxStatus{},spent:map[string]string{}}
+ return &coreE2EChain{outputs:map[string]*TxOutput{},raw:map[string][]byte{},status:map[string]rgb11wallet.BitcoinTxStatus{},spent:map[string]string{},names:map[string]string{}}
 }
+func (c *coreE2EChain) setNameOwner(name,address string) {c.mu.Lock();defer c.mu.Unlock();c.names[name]=address}
 func (c *coreE2EChain) fund(t *testing.T,address string,count int) {
  t.Helper()
  script,err:=AddrToPkScript(address,GetChainParam()); coreRequire(t,"fund controlled Bitcoin output",err)
@@ -117,5 +119,11 @@ func (p *coreE2EL1Indexer) GetUtxoListWithTicker(address string,_ *indexer.Asset
  }
  sort.Slice(result,func(i,j int)bool{return result[i].OutPoint<result[j].OutPoint})
  return result
+}
+func (p *coreE2EL1Indexer) GetNameInfo(name string)(*indexerwire.OrdinalsName,error) {
+ p.chain.mu.Lock();defer p.chain.mu.Unlock()
+ address:=p.chain.names[name]
+ if address=="" {return nil,fmt.Errorf("controlled name not found")}
+ return &indexerwire.OrdinalsName{NftItem:indexerwire.NftItem{Name:name,Address:address}},nil
 }
 func (*coreE2EL1Indexer) GetSyncHeight()int{return 100}
