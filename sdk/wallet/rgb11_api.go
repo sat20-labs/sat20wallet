@@ -19,7 +19,7 @@ type (
 	RGB11IssueRequest                    = rgb11wallet.RGB11IssueRequest
 	RGB11IssueResult                     = rgb11wallet.RGB11IssueResult
 	RGB11ContractExportResult            = rgb11wallet.RGB11ContractExportResult
-	RGB11TranscendRegistrationDescriptor = rgb11wallet.TranscendRegistrationDescriptor
+	RGB11NameRegistration                = dkvsindexer.RGB11Registration
 	RGB11ImportResult                    = rgb11wallet.RGB11ImportResult
 	RGB11RejectListProvider              = rgb11wallet.RGB11RejectListProvider
 	RGB11RejectListViolation             = rgb11wallet.RGB11RejectListViolation
@@ -253,18 +253,20 @@ func (p *Manager) ExportRGB11Contract(contractID string) (*RGB11ContractExportRe
 	return manager.ExportRGB11Contract(contractID)
 }
 
-// BuildRGB11TranscendRegistrationDescriptor returns the immutable RGB facts
-// embedded in a transcend.tc deployment. Provider DID and ordinal are
-// intentionally absent; SatoshiNet derives those from Primary DID Bind and L2
-// registration order.
-func (p *Manager) BuildRGB11TranscendRegistrationDescriptor(contractID string) (*RGB11TranscendRegistrationDescriptor, error) {
-	releaseRGB11Observation := p.beginRGB11ReadObservation()
-	defer releaseRGB11Observation()
+// RegisterRGB11AssetName writes the canonical provider/ticker registry to
+// DKVS. The returned SatoshiNet name is immutable; RGB balances and proof
+// identity continue to use the full ContractID internally.
+func (p *Manager) RegisterRGB11AssetName(contractID string) (*RGB11NameRegistration, error) {
+	if p == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	release := p.beginRGB11Operation()
+	defer release()
 	manager, err := p.synchronizedRGB11Manager()
 	if err != nil {
 		return nil, err
 	}
-	return manager.RGB11TranscendRegistrationDescriptor(contractID)
+	return manager.RegisterRGB11AssetName(contractID)
 }
 
 func (p *Manager) IssueRGB11Asset(ctx context.Context, request RGB11IssueRequest) (*RGB11IssueResult, error) {
