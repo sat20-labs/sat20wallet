@@ -238,6 +238,16 @@ func TestManagedDataRecoveryReturnsErrorsAndKeepsProtection(t *testing.T) {
 				target.db = &managedImportFaultDB{KVDB: database, deleteErr: failure}
 			}
 			err := restoreManagedImportTestWallet(t, target, source)
+			if point == "registrations" {
+				if err != nil {
+					t.Fatalf("retryable post-restore registration failure became a restore failure: %v", err)
+				}
+				target.db = database
+				if err := target.checkAccountManagedDataImport(); err != nil {
+					t.Fatalf("retryable registration failure retained recovery marker: %v", err)
+				}
+				return
+			}
 			if err == nil || (point != "core-flush" && !errors.Is(err, failure)) {
 				t.Fatalf("%s error not propagated: %v", point, err)
 			}
@@ -251,12 +261,6 @@ func TestManagedDataRecoveryReturnsErrorsAndKeepsProtection(t *testing.T) {
 				}
 				if _, err := database.Read(accountManagementProfileKey()); !errors.Is(err, indexer.ErrKeyNotFound) {
 					t.Fatalf("marker write failure persisted profile: %v", err)
-				}
-				return
-			}
-			if point == "registrations" {
-				if err := target.checkAccountManagedDataImport(); err != nil {
-					t.Fatalf("retryable registration failure retained recovery marker: %v", err)
 				}
 				return
 			}

@@ -14,6 +14,7 @@ export interface RGB11StateDTO {
   outputs: any[]
   proofs: any[]
   transfers: any[]
+  reservations: any[]
 }
 
 const emptyState = (): RGB11StateDTO => ({
@@ -27,6 +28,7 @@ const emptyState = (): RGB11StateDTO => ({
   outputs: [],
   proofs: [],
   transfers: [],
+  reservations: [],
 })
 
 export const useRGB11Store = defineStore('rgb11', () => {
@@ -44,6 +46,7 @@ export const useRGB11Store = defineStore('rgb11', () => {
       outputs: next.outputs || [],
       proofs: next.proofs || [],
       transfers: next.transfers || [],
+      reservations: next.reservations || [],
     }
     error.value = ''
   }

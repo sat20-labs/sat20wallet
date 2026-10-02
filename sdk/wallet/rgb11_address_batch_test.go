@@ -139,7 +139,18 @@ func TestRGB11DirectBatchRequiresEveryOutputACK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sender.rgbManager.projectionStore.ImportSnapshot(snapshot); err != nil {
+	engineSnapshot, err := sender.rgbManager.engineStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	walletID, err := sender.rgbManager.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.rgbManager.importRGB11WalletSnapshot(&RGB11WalletSnapshot{
+		Version: rgb11wallet.WalletSnapshotVersion, WalletID: walletID,
+		ProjectionRecords: snapshot, EngineRecords: engineSnapshot,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -184,6 +195,7 @@ func TestRGB11DirectBatchRequiresEveryOutputACK(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	assertRGB11FrameworkRecovery(t, sender, recipient)
 }
 
 func TestGenericBatchSendAssetsRGB11(t *testing.T) {
@@ -374,5 +386,93 @@ func TestRGB11SendPreservesOtherContractOnSameCarrier(t *testing.T) {
 	evidence.mu.Unlock()
 	if sent {
 		t.Fatal("shared carrier was broadcast")
+	}
+}
+
+
+func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
+	sender, recipient, imported, evidence, _ := newRGB11GenericSendFixture(t)
+	request := RGB11AddressSendRequest{
+		ReceiverAddress: recipient.wallet.GetAddress(),
+		AssetName: imported.AssetName,
+		AmountRaw: "20000",
+		FeeRate: 2,
+		MinConfirmations: 1,
+	}
+	prepared, _, err := sender.PrepareConfiguredRGB11AddressTransfer(
+		context.Background(), request, dkvsindexer.RecordVerificationOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.State == nil || !prepared.State.AddressMode {
+		t.Fatalf("prepared Direct state=%+v", prepared.State)
+	}
+	delivery, err := sender.DeliverAndBroadcastConfiguredRGB11AddressTransfer(
+		prepared.State.TransferID, RGB11AddressDeliveryOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !delivery.AwaitingACK || delivery.Broadcast {
+		t.Fatalf("Direct transfer crossed broadcast boundary before ACK: %+v", delivery)
+	}
+	if _, err := recipient.SyncConfiguredRGB11AddressMailbox(
+		context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the RGB SDK module being recreated while keeping only durable DB,
+	// reservation, wallet and transport state. Stop the old module's background
+	// workers first, just as a real runtime shutdown must do before DB teardown.
+	oldRGB := sender.rgbManager
+	oldRGB.scopeStates.stopReconciliations()
+	restarted, err := newRGB11Manager(sender, sender.db, sender.utxoLockerL1, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender.rgbManager = restarted
+	if err := restarted.selectRGB11Scope(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.SyncConfiguredRGB11AddressMailbox(
+		context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := restarted.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rgb11BroadcastCompleteStatus(pending.State.Status) ||
+		!pending.State.DeliveryAcknowledged || pending.State.AckStatus != "accepted" {
+		t.Fatalf("durable Direct reservation did not resume: %+v", pending.State)
+	}
+	reservations, err := restarted.loadRGB11Reservations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, reservation := range reservations {
+		if reservation.State != nil && reservation.State.TransferID == prepared.State.TransferID {
+			found = true
+			if reservation.State.Status != pending.State.Status ||
+				reservation.State.AckStatus != pending.State.AckStatus {
+				t.Fatalf("framework reservation diverged from Direct transfer: resv=%+v pending=%+v",
+					reservation.State, pending.State)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Direct transfer has no framework reservation after restart")
+	}
+	evidence.mu.Lock()
+	broadcastCount := evidence.broadcastCount
+	broadcasted := append([]byte(nil), evidence.broadcasted...)
+	evidence.mu.Unlock()
+	if broadcastCount != 1 || len(broadcasted) == 0 {
+		t.Fatalf("Direct transfer broadcast count=%d bytes=%d", broadcastCount, len(broadcasted))
 	}
 }

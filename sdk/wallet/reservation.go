@@ -7,6 +7,7 @@ import (
 )
 
 const (
+	RESV_TYPE_RGB11        = "rgb11"
 	RESV_TYPE_OPEN         = "open"
 	RESV_TYPE_CLOSE        = "close"
 	RESV_TYPE_PAYMENT      = "pay"
@@ -137,6 +138,8 @@ func NewReservationBase(id int64, isInitiator bool, status ResvStatus, wallet co
 
 func newResvFromType(typ string) Reservation {
 	switch typ {
+	case RESV_TYPE_RGB11:
+		return &RGB11TransferReservation{ReservationBase: ReservationBase{mutex: new(sync.RWMutex)}}
 	case RESV_TYPE_OPEN:
 		return &FundingReservation{
 			FundingDataInDB: FundingDataInDB{ReservationBase: ReservationBase{mutex: new(sync.RWMutex)}},

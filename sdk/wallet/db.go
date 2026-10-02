@@ -165,6 +165,7 @@ func (p *Manager) initDB() error {
 		return err
 	}
 
+
 	// Wallet secrets are still locked here.  Reservation runtime state is
 	// restored only after UnlockWallet has released p.mutex.
 	loadedResv, err := LoadAllResvFromDB(p.db, nil)

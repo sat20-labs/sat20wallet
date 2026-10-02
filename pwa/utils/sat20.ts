@@ -3,6 +3,7 @@ import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
 import { tryit } from 'radash'
 import { walletRequestSessionGuard } from '@/lib/walletSession'
 import { beginPwaWalletOperation, finishPwaOperation } from '@/utils/pwaOperationLog'
+import { noteWasmOperation } from '@/utils/wasmRuntimeDiagnostics'
 
 export interface MnemonicValidation {
   normalized: string
@@ -20,6 +21,7 @@ class WalletManager {
     return tryit(async () => {
       const checkSession = walletRequestSessionGuard(methodName)
       const trace = beginWalletAwaitTrace(methodName)
+      noteWasmOperation(methodName, 'request-start')
       trace('begin-log')
       const operation = await beginPwaWalletOperation(methodName, args)
       let finishVersion: (() => void) | undefined
@@ -28,18 +30,22 @@ class WalletManager {
         const method = (globalThis as any).sat20wallet_wasm[methodName]
         finishVersion = beginVersionDispatch(methodName)
         trace('dispatch')
+        noteWasmOperation(methodName, 'dispatch')
         const response = await method(...args) as SatsnetResponse | undefined
+        noteWasmOperation(methodName, 'returned')
         trace('returned')
         checkSession()
         if (response && response.code !== 0) throw new Error(response.msg)
         trace('finish-log')
         await finishPwaOperation(operation, null, response?.data)
         trace('finished')
+        noteWasmOperation(methodName, 'finished')
         checkSession()
         return response?.data
       } catch (error) {
         // Never log arguments/results: they can contain wallet credentials.
         console.error(`${methodName} failed`)
+        noteWasmOperation(methodName, 'failed')
         const failure = error instanceof Error ? error : new Error(String(error))
         trace('failure-log')
         await finishPwaOperation(operation, failure)

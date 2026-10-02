@@ -436,15 +436,26 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	engineSnapshot, err := sender.rgbManager.engineStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	walletID, err := sender.rgbManager.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.rgbManager.importRGB11WalletSnapshot(&RGB11WalletSnapshot{
+		Version: rgb11wallet.WalletSnapshotVersion, WalletID: walletID,
+		ProjectionRecords: snapshot, EngineRecords: engineSnapshot,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	foundPending := false
 	for _, record := range snapshot {
 		if record.Key != "pending-"+prepared.State.TransferID {
 			continue
 		}
 		foundPending = true
-		if err := sender.rgbManager.projectionStore.ImportSnapshot(snapshot); err != nil {
-			t.Fatal(err)
-		}
 		pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 		if err != nil {
 			t.Fatal(err)
@@ -546,38 +557,29 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		privateReceive.WitnessTxID != stagedReceive.WitnessTxID {
 		t.Fatalf("invalid private Direct receive: %+v", privateReceive)
 	}
-	directMessages, err := sender.readWalletDirectMessages(senderWallet)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ackRecord *swire.DKVSRecord
-	for _, item := range directMessages {
-		if item != nil && item.Payload != nil &&
-			item.Payload.Kind == AccountMessageKindRGB11ACK &&
-			item.Payload.ApplicationID == prepared.State.AddressMessageID {
-			ackRecord = item.Record
-			break
-		}
-	}
-	if ackRecord == nil {
-		t.Fatalf("mailbox sync did not emit ACK: messages=%d", len(directMessages))
-	}
 	preparedOutpoint := fmt.Sprintf("%s:%d", prepared.State.WitnessTxID, prepared.State.RecipientVout)
 	locked := recipient.utxoLockerL1.GetLockedUtxoList()
 	if locked[preparedOutpoint] != nil {
 		t.Fatalf("prepared output was locked before broadcast: %+v", locked[preparedOutpoint])
 	}
-	if _, err := sender.AcceptRGB11AddressACK(ackRecord,
-		dkvsindexer.RecordVerificationOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	witnessTxID, err := sender.BroadcastRGB11AddressTransfer(prepared.State.TransferID)
+	// Sender mailbox sync consumes the durable ACK and advances the Direct
+	// reservation itself. No PWA-side "already tried" state is required.
+	senderSync, err := sender.SyncConfiguredRGB11AddressMailbox(
+		context.Background(), dkvsindexer.RecordVerificationOptions{}, deliveryOptions,
+	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if senderSync.ACKs != 1 {
+		t.Fatalf("sender mailbox ACK sync=%+v", senderSync)
 	}
 	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	witnessTxID := pending.State.WitnessTxID
+	if !rgb11BroadcastCompleteStatus(pending.State.Status) {
+		t.Fatalf("SDK reservation did not resume Direct broadcast: %+v", pending.State)
 	}
 	witness := wire.NewMsgTx(wire.TxVersion)
 	if err := witness.Deserialize(bytes.NewReader(pending.SignedTx)); err != nil {
@@ -737,8 +739,24 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 		t.Fatal("read fault changed settled receive state")
 	}
 
-	// ACK is now a normal MessageManager Direct message. The transport sender
-	// sequence is independent from the RGB11 transfer/application ID.
+	// ACK is now a normal MessageManager Direct message. Reload the durable
+	// mailbox record instead of carrying a UI/test-local handle across the flow.
+	directMessages, err := sender.readWalletDirectMessages(senderWallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ackRecord *swire.DKVSRecord
+	for _, item := range directMessages {
+		if item != nil && item.Payload != nil &&
+			item.Payload.Kind == AccountMessageKindRGB11ACK &&
+			item.Payload.ApplicationID == prepared.State.AddressMessageID {
+			ackRecord = item.Record
+			break
+		}
+	}
+	if ackRecord == nil {
+		t.Fatal("durable Direct ACK record is unavailable")
+	}
 	ackDirect, err := verifyAccountDirectRecord(senderID, ackRecord)
 	if err != nil {
 		t.Fatal(err)

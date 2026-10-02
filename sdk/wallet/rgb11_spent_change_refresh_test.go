@@ -146,6 +146,23 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 				wantOwner, wantReason = spentLock.ReservationID, spentLock.Reason
 			}
 			if originalStatus == "settled" {
+				t.Run("unknown_spender_with_confirmed_local_successor", func(t *testing.T) {
+					// Public outspend evidence can report spent without a spender ID.
+					// A confirmed raw transaction still proves its exact input spend.
+					fault := &historicalErrorEvidence{BitcoinEvidenceProvider: evidence, outpoint: spentChange, unknown: true}
+					if _, ok := verifyRGB11ExpectedSpend(fault, spentChange, second.State.WitnessTxID); !ok {
+						t.Fatal("fixture lacks independently verified successor spend")
+					}
+					sender.rgbManager.evidence = fault
+					defer func() { sender.rgbManager.evidence = evidence }()
+					result, err := sender.rgbManager.RefreshRGB11State(ctx)
+					if err != nil || sender.GetRGB11ConsistencyStatus() != "ok" {
+						t.Fatalf("confirmed local successor left history unresolved: result=%+v consistency=%s err=%v", result, sender.GetRGB11ConsistencyStatus(), err)
+					}
+				})
+				t.Run("unknown_successor_boundaries", func(t *testing.T) {
+					testRGB11UnknownHistoricalSuccessor(t, sender, rpc, evidence, first, second, spentChange)
+				})
 				t.Run("refresh_error_classification", func(t *testing.T) {
 					testRGB11RefreshHistoricalErrors(t, sender, evidence, first, second, spentChange)
 				})
@@ -281,6 +298,15 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 							}
 							if kind != "unknown_owner" {
 								if err := sender.rgbManager.projectionStore.SavePendingTransferState(bad); err != nil {
+									// A framework resv now rejects rebinding an existing transfer to
+									// another tx before a corrupt ownership journal can be persisted.
+									if kind == "multiple_owners" && errors.Is(err, ErrRGB11InvoiceMismatch) {
+										stored, loadErr := sender.rgbManager.projectionStore.LoadPendingTransfer(originalFirst.State.TransferID)
+										if loadErr != nil || stored.State.WitnessTxID != originalFirst.State.WitnessTxID {
+											t.Fatal("failed rebind changed original transfer")
+										}
+										return
+									}
 									t.Fatal(err)
 								}
 							}
@@ -388,11 +414,20 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 					if err := check(second.State.WitnessTxID); err != nil {
 						t.Fatalf("valid history: %v", err)
 					}
-					for _, wrong := range []string{"", "unknown", first.State.WitnessTxID, fmt.Sprintf("%064x", 99)} {
+					for _, wrong := range []string{first.State.WitnessTxID, fmt.Sprintf("%064x", 99)} {
 						if err := check(wrong); err == nil {
 							t.Errorf("accepted wrong spender %q", wrong)
 						}
 					}
+					// Missing spender remains unsafe when the confirmed raw successor
+					// cannot independently establish the exact input relationship.
+					sender.rgbManager.evidence = &historicalErrorEvidence{BitcoinEvidenceProvider: evidence, successor: second.State.WitnessTxID, rawUnavailable: true}
+					for _, unknown := range []string{"", "unknown"} {
+						if err := check(unknown); err == nil {
+							t.Errorf("accepted unverified spender %q", unknown)
+						}
+					}
+					sender.rgbManager.evidence = evidence
 					second.State.Status = "pending"
 					if err := sender.rgbManager.projectionStore.SavePendingTransferState(second); err != nil {
 						t.Fatal(err)
@@ -435,6 +470,10 @@ func TestRGB11RefreshSpentChangeHistory(t *testing.T) {
 							t.Fatal("helper accepted allocation not bound to historical proof")
 						}
 					})
+				})
+				t.Run("three_hop_confirmed_history_unknown_spenders", func(t *testing.T) {
+					third := makeConfirmed("1000")
+					testRGB11ThreeHopHistory(t, sender, evidence, first, second, third)
 				})
 			}
 		})

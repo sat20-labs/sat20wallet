@@ -330,7 +330,7 @@ const operationSpecs: Record<string, OperationSpec> = {
 function extractTxID(data: any): string {
   if (typeof data === 'string' && /^[0-9a-fA-F]{64}$/.test(data)) return data
   if (!data || typeof data !== 'object') return ''
-  for (const key of ['txId', 'txid', 'tx_id', 'commitTxId', 'revealTxId']) {
+  for (const key of ['txId', 'txid', 'tx_id', 'transaction_id', 'commitTxId', 'revealTxId']) {
     const value = text(data[key]).trim()
     if (value) return value
   }
@@ -341,7 +341,7 @@ function extractSafeResult(data: any): Record<string, string> | undefined {
   if (!data || typeof data !== 'object') return undefined
   const result: Record<string, unknown> = {}
   for (const key of [
-    'walletId', 'txId', 'txid', 'commitTxId', 'revealTxId', 'resvId', 'reservationId',
+    'walletId', 'txId', 'txid', 'transaction_id', 'commitTxId', 'revealTxId', 'resvId', 'reservationId',
     'transfer_id', 'transfer_ids', 'request_id', 'contractAddress', 'contractType', 'orderId',
   ]) {
     const value = data[key]

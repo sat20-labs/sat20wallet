@@ -25,10 +25,11 @@ type Locker interface {
 }
 
 type ProjectionStore struct {
-	db     indexer.KVDB
-	locker Locker
-	mu     sync.RWMutex
-	scope  string
+	reservations ReservationPersistence
+	db           indexer.KVDB
+	locker       Locker
+	mu           sync.RWMutex
+	scope        string
 }
 
 type ProjectionReplacement struct {
@@ -186,7 +187,7 @@ func (s *ProjectionStore) SaveReceiveReservation(reservation *ReceiveReservation
 	if err != nil {
 		return err
 	}
-	return s.db.Write(key, encoded)
+	return s.writeReservationRecord(key, encoded)
 }
 
 func (s *ProjectionStore) LoadReceiveReservation(requestID string) (*ReceiveReservation, error) {
@@ -481,7 +482,7 @@ func (s *ProjectionStore) SavePendingTransfers(pendingList []*PendingTransfer) e
 	if len(pendingList) == 0 {
 		return ErrValidationReceipt
 	}
-	batch := s.db.NewWriteBatch()
+	batch := s.newWriteBatch()
 	if batch == nil {
 		return errors.New("RGB11 KVDB returned nil write batch")
 	}
@@ -545,6 +546,11 @@ func (s *ProjectionStore) LoadPendingTransfer(transferID string) (*PendingTransf
 	if err := decode(raw, &pending); err != nil {
 		return nil, err
 	}
+	state, err := s.reservationState(&pending.State)
+	if err != nil {
+		return nil, err
+	}
+	pending.State = *state
 	return &pending, nil
 }
 
@@ -558,7 +564,7 @@ func (s *ProjectionStore) SavePendingTransferStates(pendingList []*PendingTransf
 	if len(pendingList) == 0 {
 		return ErrValidationReceipt
 	}
-	batch := s.db.NewWriteBatch()
+	batch := s.newWriteBatch()
 	if batch == nil {
 		return errors.New("RGB11 KVDB returned nil write batch")
 	}
@@ -618,7 +624,7 @@ func (s *ProjectionStore) CompactSettledRecipientConsignments(transferIDs []stri
 		pending.RecipientConsignment = nil
 		pendingList = append(pendingList, pending)
 	}
-	batch := s.db.NewWriteBatch()
+	batch := s.newWriteBatch()
 	if batch == nil {
 		return errors.New("RGB11 KVDB returned nil write batch")
 	}
@@ -811,7 +817,7 @@ func (s *ProjectionStore) SaveTransferState(state *TransferState) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Write(key, encoded)
+	return s.writeReservationRecord(key, encoded)
 }
 
 func (s *ProjectionStore) LoadTransferState(transferID string) (*TransferState, error) {
@@ -827,7 +833,7 @@ func (s *ProjectionStore) LoadTransferState(transferID string) (*TransferState, 
 	if err := decode(raw, &state); err != nil {
 		return nil, err
 	}
-	return &state, nil
+	return s.reservationState(&state)
 }
 
 func (s *ProjectionStore) ListTransfers() ([]*TransferState, error) {
@@ -870,10 +876,30 @@ func (s *ProjectionStore) ListTransfers() ([]*TransferState, error) {
 	}); err != nil {
 		return nil, err
 	}
+	var authoritative map[string]*TransferState
+	_, reservationAuthoritative := s.reservations.(ReservationStateReader)
+	if reservationAuthoritative {
+		reader := s.reservations.(ReservationStateReader)
+		s.mu.RLock()
+		scope := s.scope
+		s.mu.RUnlock()
+		authoritative, err = reader.LoadReservationStates(scope)
+		if err != nil {
+			return nil, err
+		}
+	}
 	states := make([]*TransferState, 0, len(byID))
 	for _, state := range byID {
+		if reservationAuthoritative {
+			current := authoritative[state.Direction+":"+state.TransferID]
+			if current == nil {
+				return nil, ErrRGB11Inconsistent
+			}
+			state = current
+		}
 		states = append(states, state)
 	}
+
 	sort.Slice(states, func(i, j int) bool {
 		if states[i].TransferID != states[j].TransferID {
 			return states[i].TransferID < states[j].TransferID

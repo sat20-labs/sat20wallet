@@ -972,6 +972,7 @@ func TestRGB11ProxyBlindReceiveAcknowledgesBeforeBroadcast(t *testing.T) {
 	if len(proofs) != 1 {
 		t.Fatalf("repeated receive duplicated proofs: %+v", proofs)
 	}
+	assertRGB11FrameworkRecovery(t, sender, recipient)
 }
 
 func hexString(value []byte) string {

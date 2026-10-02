@@ -160,73 +160,86 @@ func (p *Manager) messageServiceClient() (MessageServiceRPCClient, string, error
 // mapping/binding KV. The connected CoreNode is the only party allowed to
 // accept that globally visible record as a local service binding.
 func (p *Manager) bindAccountToCurrentCoreNode(root common.Wallet) error {
+	store, err := p.accountDKVSStore()
+	if err != nil {
+		return err
+	}
+	bind, err := p.prepareAccountCoreNodeBinding(root, store)
+	if err != nil {
+		return err
+	}
+	return bind()
+}
+
+// Capture the selected CoreNode and store before network I/O. Activation calls
+// this under its short local scope gate and invokes the result after releasing
+// it, so a later selection change cannot redirect an in-flight binding.
+func (p *Manager) prepareAccountCoreNodeBinding(root common.Wallet, store *dkvsStore) (func() error, error) {
 	if p == nil || root == nil {
-		return ErrMessageServiceUnavailable
+		return nil, ErrMessageServiceUnavailable
 	}
 	client, coreID, err := p.messageServiceClient()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	accountID, err := dkvsAccountID(root)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	address := root.GetAddress()
 	key, err := dkvsindexer.AccountMappingKey(GetChainParam().Name, address)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	initialValue, err := dkvsindexer.EncodeAccountServiceDescriptor(dkvsindexer.AccountServiceDescriptor{
 		AccountID: accountID, CoreNodeID: coreID,
 		Capabilities: dkvsindexer.AccountServiceCapabilityRGB11Direct,
 	})
 	if err != nil {
-		return err
-	}
-	store, err := p.accountDKVSStore()
-	if err != nil {
-		return err
+		return nil, err
 	}
 	prefix, _, err := dkvsManagedPathForKey(key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := p.SubscribeDKVSPrefix(prefix); err != nil {
-		return err
+		return nil, err
 	}
-	values, err := store.Update([]string{key},
-		func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
-			value := initialValue
-			if existing := current[key]; existing != nil && existing.record != nil {
-				_, _, descriptor, verifyErr := dkvsindexer.ValidateAccountMappingBindingRecord(existing.record)
-				if verifyErr != nil || descriptor.AccountID != accountID {
-					return nil, dkvsindexer.ErrInvalidRecord
+	return func() error {
+		values, err := store.Update([]string{key},
+			func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
+				value := initialValue
+				if existing := current[key]; existing != nil && existing.record != nil {
+					_, _, descriptor, verifyErr := dkvsindexer.ValidateAccountMappingBindingRecord(existing.record)
+					if verifyErr != nil || descriptor.AccountID != accountID {
+						return nil, dkvsindexer.ErrInvalidRecord
+					}
+					descriptor.CoreNodeID = coreID
+					descriptor.Capabilities |= dkvsindexer.AccountServiceCapabilityRGB11Direct
+					value, verifyErr = dkvsindexer.EncodeAccountServiceDescriptor(*descriptor)
+					if verifyErr != nil {
+						return nil, verifyErr
+					}
+					if bytes.Equal(existing.Value, value) {
+						return nil, nil
+					}
 				}
-				descriptor.CoreNodeID = coreID
-				descriptor.Capabilities |= dkvsindexer.AccountServiceCapabilityRGB11Direct
-				value, verifyErr = dkvsindexer.EncodeAccountServiceDescriptor(*descriptor)
-				if verifyErr != nil {
-					return nil, verifyErr
-				}
-				if bytes.Equal(existing.Value, value) {
-					return nil, nil
-				}
-			}
-			return []dkvsValueMutation{{
-				Key: key, Value: value, Owner: root,
-				Signature: dkvsSignatureAccount,
-			}}, nil
+				return []dkvsValueMutation{{
+					Key: key, Value: value, Owner: root,
+					Signature: dkvsSignatureAccount,
+				}}, nil
+			})
+		if err != nil {
+			return err
+		}
+		if len(values) != 1 || values[0] == nil || values[0].record == nil {
+			return dkvsindexer.ErrInvalidRecord
+		}
+		_, err = client.SendMessageServiceReq(&swire.MessageServiceRequest{
+			Action: swire.MessageServiceActionBindAccount, Record: values[0].record,
 		})
-	if err != nil {
 		return err
-	}
-	if len(values) != 1 || values[0] == nil || values[0].record == nil {
-		return dkvsindexer.ErrInvalidRecord
-	}
-	_, err = client.SendMessageServiceReq(&swire.MessageServiceRequest{
-		Action: swire.MessageServiceActionBindAccount, Record: values[0].record,
-	})
-	return err
+	}, nil
 }
 
 func (p *Manager) BindAccountToCurrentCoreNode() error {

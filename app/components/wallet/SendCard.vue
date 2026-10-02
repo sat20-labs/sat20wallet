@@ -34,7 +34,5 @@ import { Label } from '@/components/ui/label'
 const modelAddress = defineModel<string | number>('address', {
   default: '',
 })
-const modelAmount = defineModel<string | number>('amount', {
-  default: undefined,
-})
+const modelAmount = defineModel<string | number>('amount')
 </script>

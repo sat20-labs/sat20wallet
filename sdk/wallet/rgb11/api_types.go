@@ -32,17 +32,47 @@ type RGB11TickerInfo struct {
 
 // RGB11State exposes existing SAT20 assets plus RGB-only proof sidecars.
 // Assets is rebuilt from Outputs and is never a second writable balance ledger.
+// RGB11Reservation is the public view of the common wallet resv. It never
+// contains a seal reveal, signing material, PSBT, or private consignment.
+type RGB11ReservationTransfer struct {
+	TransferID       string            `json:"transfer_id"`
+	BatchID          string            `json:"batch_id,omitempty"`
+	BatchTransferIDs []string          `json:"batch_transfer_ids,omitempty"`
+	Status           string            `json:"status"`
+	AckStatus        string            `json:"ack_status"`
+	WitnessTxID      string            `json:"witness_txid"`
+	ConsignmentHash  string            `json:"consignment_hash"`
+	Asset            indexer.AssetInfo `json:"asset"`
+	OutputOutPoints  []string          `json:"output_outpoints"`
+}
+
+type RGB11Reservation struct {
+	ID            string                    `json:"id"`
+	RequestID     string                    `json:"request_id,omitempty"`
+	Direction     string                    `json:"direction"`
+	Status        string                    `json:"status"`
+	Invoice       string                    `json:"invoice,omitempty"`
+	Mode          string                    `json:"mode,omitempty"`
+	TransportMode string                    `json:"transport_mode,omitempty"`
+	ContractID    string                    `json:"contract_id,omitempty"`
+	AmountRaw     string                    `json:"amount_raw,omitempty"`
+	CreatedAt     int64                     `json:"created_at"`
+	Expiry        int64                     `json:"expiry"`
+	Transfer      *RGB11ReservationTransfer `json:"transfer,omitempty"`
+}
+
 type RGB11State struct {
-	Initialized       bool               `json:"initialized"`
-	SyncStatus        string             `json:"sync_status"`
-	ConsistencyStatus string             `json:"consistency_status"`
-	TickerInfos       []*RGB11TickerInfo `json:"ticker_infos"`
-	Assets            indexer.TxAssets   `json:"assets"`
-	AvailableAssets   indexer.TxAssets   `json:"available_assets"`
-	PendingAssets     indexer.TxAssets   `json:"pending_assets"`
-	Outputs           []*RGB11Output     `json:"outputs"`
-	Proofs            []*AllocationProof `json:"proofs"`
-	Transfers         []*TransferState   `json:"transfers"`
+	Reservations      []*RGB11Reservation `json:"reservations"`
+	Initialized       bool                `json:"initialized"`
+	SyncStatus        string              `json:"sync_status"`
+	ConsistencyStatus string              `json:"consistency_status"`
+	TickerInfos       []*RGB11TickerInfo  `json:"ticker_infos"`
+	Assets            indexer.TxAssets    `json:"assets"`
+	AvailableAssets   indexer.TxAssets    `json:"available_assets"`
+	PendingAssets     indexer.TxAssets    `json:"pending_assets"`
+	Outputs           []*RGB11Output      `json:"outputs"`
+	Proofs            []*AllocationProof  `json:"proofs"`
+	Transfers         []*TransferState    `json:"transfers"`
 }
 
 type RGB11IssueRequest struct {

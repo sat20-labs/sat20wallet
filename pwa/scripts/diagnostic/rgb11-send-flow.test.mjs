@@ -55,6 +55,48 @@ test('Direct retry keeps transfer ID', async () => {
   assert.equal(transferId.value, 'transfer-1')
 })
 
+// Automatic continuation belongs to the durable-task scheduler. The complete
+// single-user-action assertion is in rgb11-direct-chain.test.mjs, including ACK
+// mailbox sync, Pinia/query state, timer dispatch and the original witness.
+test('Direct awaiting ACK preserves the original transfer and notifies the task view', async () => {
+  let prepares = 0
+  let deliveries = 0
+  const completed = []
+  const events = []
+  const transferId = { value: '' }
+  const loading = { value: false }
+  const message = { value: '' }
+  const send = await loadSend({
+    loading, message, success: { value: false },
+    temporaryDelivery: { value: false }, transferId,
+    assetContractID: { value: 'rgb:contract' }, assetName: { value: 'rgb11:f:test' },
+    amountRaw: { value: '1' }, receiverAddress: { value: 'tb1qreceiver' }, btcFeeRate: { value: 2 },
+    beginNamedPwaOperation: async () => null,
+    updateOperationLog: async () => {}, finishPwaOperation: async () => {},
+    completeBroadcast: async (...args) => { completed.push(args) },
+    emit: (event) => events.push(event), t: (key) => key,
+    rgb11Address: {
+      prepareTransfer: async () => {
+        prepares++
+        return [null, { transfer: JSON.stringify({ state: { transfer_id: 'transfer-1' } }) }]
+      },
+      deliverAndBroadcast: async ({ transfer_id }) => {
+        assert.equal(transfer_id, 'transfer-1')
+        deliveries++
+        return [null, { awaiting_ack: true }]
+      },
+    },
+  })
+  await send()
+  assert.equal(prepares, 1)
+  assert.equal(deliveries, 1, 'the dialog leaves ACK continuation to the task scheduler')
+  assert.equal(transferId.value, 'transfer-1')
+  assert.equal(message.value, 'rgb11Transfer.addressAckPending')
+  assert.equal(loading.value, false)
+  assert.deepEqual(events, ['completed'], 'the durable task view must be refreshed')
+  assert.deepEqual(completed, [], 'waiting for ACK is not a broadcast result')
+})
+
 test('A completed Direct send starts a fresh transfer for the same asset', async () => {
   let prepares = 0
   const delivered = []

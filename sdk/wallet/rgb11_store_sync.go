@@ -31,12 +31,10 @@ func (p *rgb11Manager) importRGB11WalletSnapshot(snapshot *RGB11WalletSnapshot) 
 	if err != nil {
 		return err
 	}
-	if err := p.rgbManager.engineStore.ImportSnapshot(snapshot.EngineRecords); err != nil {
+	if err := p.importRGB11ReservationSnapshot(snapshot); err != nil {
 		return err
 	}
-	if err := p.rgbManager.projectionStore.ImportSnapshot(snapshot.ProjectionRecords); err != nil {
-		return err
-	}
+
 	for _, info := range tickerInfos {
 		if err := p.RegisterRGB11TickerInfo(info); err != nil {
 			return err

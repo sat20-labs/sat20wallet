@@ -114,7 +114,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Storage } from '@/lib/storage-adapter'
-import { sha256Text, rgb11Amount, rgb11ReceivePackages, rgb11ResumeConsignment, type RGB11PrebroadcastSummary } from '@/utils/rgb11Oob'
+import { sha256Text, rgb11Amount, rgb11Schema, rgb11ReceivePackages, rgb11ResumeConsignment, type RGB11PrebroadcastSummary } from '@/utils/rgb11Oob'
 import { useGlobalStore } from '@/store/global'
 import { useWalletStore } from '@/store/wallet'
 import {
@@ -164,21 +164,41 @@ const assetContractID = computed(() => {
   return !value || value.startsWith('rgb:') ? value : `rgb:${value}`
 })
 
-// Persist only the receive handle and minimal matching metadata. Never persist
-// consignment contents, receipt allocations, seal disclosures or blinding data.
+// Persist only the UI selection. The SDK reservation owns invoice and lifecycle data.
 const scopeKey = computed(() => {
   if (!walletStore.rootAccountId || !walletStore.walletId || walletStore.accountIndex == null || walletStore.locked ||
       walletStore.isSwitchingWallet || walletStore.isSwitchingAccount || walletStore.isSwitchingNetwork) return ''
   return `rgb11:receive:v1:${JSON.stringify([globalStore.env, walletStore.network, walletStore.rootAccountId,
     walletStore.walletId, walletStore.accountIndex, assetContractID.value])}`
 })
-const requestMetadata = () => ({ version: 1, requestId: requestId.value, invoice: invoice.value,
-  amount: amount.value, receiveMode: receiveMode.value, transportMode: transportMode.value,
-  phase: phase.value, summary: summary.value, packageHash: packageHash.value, expiresAt: expiresAt.value,
-  sdkTerminalStatus: sdkTerminalStatus.value })
 const persistRequest = async (key = scopeKey.value) => {
-  if (!key || !requestId.value) return
-  await Storage.set({ key, value: JSON.stringify(requestMetadata()) })
+  if (!key) return
+  await Storage.set({ key: `${key}:selection`, value: requestId.value })
+}
+
+type RGB11FreshSelection = {
+  version: 2
+  kind: 'fresh'
+  requestIds: string[]
+}
+
+const freshSelectionMarker = (requestIds: string[]) => JSON.stringify({
+  version: 2,
+  kind: 'fresh',
+  requestIds: [...new Set(requestIds.filter(Boolean))].sort(),
+} satisfies RGB11FreshSelection)
+
+const parseFreshSelectionMarker = (value: string | null | undefined): RGB11FreshSelection | null => {
+  if (!value || value[0] !== '{') return null
+  try {
+    const marker = JSON.parse(value)
+    if (marker?.version !== 2 || marker?.kind !== 'fresh' || !Array.isArray(marker.requestIds)) return null
+    const requestIds = marker.requestIds.filter((id: unknown): id is string => typeof id === 'string' && !!id)
+    if (requestIds.length !== marker.requestIds.length) return null
+    return { version: 2, kind: 'fresh', requestIds: [...new Set<string>(requestIds)].sort() }
+  } catch {
+    return null
+  }
 }
 const ensureScope = (key: string) => {
   if (!key || key !== scopeKey.value) throw new Error(t('rgb11Transfer.scopeChanged'))
@@ -220,13 +240,19 @@ const startNewRequest = async () => {
   loading.value = true
   errorMessage.value = ''
   try {
-    const metadata = requestMetadata()
-    // Archive first: failures leave the active request intact. This changes
-    // only the PWA selection, never SDK cancellation, UTXO locks or chain state.
-    await Storage.set({ key: `${key}:history:${encodeURIComponent(metadata.requestId)}`,
-      value: JSON.stringify({ ...metadata, archivedAt: Date.now(), localReason: expired.value ? 'invoice-expired' : 'receive-completed' }) })
+    // Record the exact set of currently visible SDK requests before clearing the
+    // UI. If native creation later succeeds but its return is lost to a lock or
+    // identity transition, recovery can select only a request created after
+    // this marker without reviving the previous request.
+    const [stateErr, stateResult] = await walletManager.getRGB11State()
+    if (stateErr || !stateResult?.state) throw stateErr || new Error(t('rgb11Transfer.persistenceFailed'))
     ensureScope(key)
-    await Storage.remove({ key })
+    const state = JSON.parse(stateResult.state)
+    const existingRequestIds = (state.reservations || [])
+      .filter((item: any) => item.direction === 'receive' && item.request_id &&
+        item.contract_id === assetContractID.value)
+      .map((item: any) => String(item.request_id))
+    await Storage.set({ key: `${key}:selection`, value: freshSelectionMarker(existingRequestIds) })
     ensureScope(key)
     rgb11ReceivePackages.delete(key)
     requestId.value = ''
@@ -288,7 +314,6 @@ const generateInvoice = async () => {
     await Storage.set({ key: proxyStorageKey(), value: endpoint })
   }
   const expiry = Math.floor(Date.now() / 1000) + 24 * 60 * 60
-  const draft = { amount: amount.value, receiveMode: receiveMode.value, transportMode: transportMode.value, expiresAt: expiry }
   const [err, result] = await walletManager.createRGB11Invoice({
     mode: receiveMode.value,
     transport_mode: transportMode.value,
@@ -304,9 +329,7 @@ const generateInvoice = async () => {
     errorMessage.value = err?.message || t('rgb11Invoice.generateFailed')
     return
   }
-  const savedRequest = { version: 1, ...draft, requestId: result.request_id || result.requestId || '',
-    invoice: result.invoice, phase: 'created', summary: null, packageHash: '' }
-  try { await Storage.set({ key, value: JSON.stringify(savedRequest) }) }
+  try { await Storage.set({ key: `${key}:selection`, value: result.request_id || result.requestId || '' }) }
   catch { if (key === scopeKey.value) errorMessage.value = t('rgb11Transfer.persistenceFailed') }
   if (key !== scopeKey.value) return
   phase.value = 'created'
@@ -449,20 +472,59 @@ watch(scopeKey, async (key) => {
   if (!key) return
   restoring.value = true
   try {
-    const { value } = await Storage.get({ key })
-    if (key !== scopeKey.value || !value) return
-    const saved = JSON.parse(value)
-    if (saved.version !== 1 || typeof saved.requestId !== 'string' || !saved.requestId || typeof saved.invoice !== 'string') throw new Error('Invalid saved receive request')
-    requestId.value = saved.requestId
+    const [{ value: selected }, [err, result]] = await Promise.all([
+      Storage.get({ key: `${key}:selection` }), walletManager.getRGB11State(),
+    ])
+    if (err || !result?.state) throw err || new Error('Unable to load SDK reservations')
+    if (key !== scopeKey.value) return
+    const state = JSON.parse(result.state)
+    const requests = (state.reservations || []).filter((r: any) =>
+      r.direction === 'receive' && r.request_id && r.contract_id === assetContractID.value)
+    // Legacy empty markers still mean "do not revive an older request". New
+    // markers additionally remember the baseline request IDs, so a request
+    // durably created after that marker can be recovered after a session change.
+    const freshSelection = parseFreshSelectionMarker(selected)
+    if (selected === '') return
+    let saved
+    if (freshSelection) {
+      const ignored = new Set(freshSelection.requestIds)
+      saved = [...requests]
+        .filter((r: any) => !ignored.has(String(r.request_id)))
+        .sort((left: any, right: any) => {
+          const byCreated = Number(right.created_at || 0) - Number(left.created_at || 0)
+          return byCreated || String(right.request_id).localeCompare(String(left.request_id))
+        })[0]
+    } else {
+      saved = requests.find((r: any) => r.request_id === selected) || requests[0]
+    }
+    if (!saved) return
+    requestId.value = saved.request_id
+    if (freshSelection) {
+      await Storage.set({ key: `${key}:selection`, value: saved.request_id })
+      if (key !== scopeKey.value) return
+    }
     invoice.value = saved.invoice
-    amount.value = saved.amount || ''
-    receiveMode.value = saved.receiveMode === 'blind' ? 'blind' : 'witness'
-    transportMode.value = saved.transportMode === 'rgb-json-rpc' ? 'rgb-json-rpc' : 'out-of-band'
-    phase.value = ['prepared', 'accepted'].includes(saved.phase) ? saved.phase : 'created'
-    summary.value = saved.summary || null
-    packageHash.value = saved.packageHash || ''
-    expiresAt.value = Number(saved.expiresAt) || 0
-    sdkTerminalStatus.value = ['pending', 'settled', 'rejected'].includes(saved.sdkTerminalStatus) ? saved.sdkTerminalStatus : ''
+    const precision = Math.max(0, Number(props.asset?.precision || 0))
+    const digits = String(saved.amount_raw || '0').padStart(precision + 1, '0')
+    amount.value = precision ? `${digits.slice(0, -precision)}.${digits.slice(-precision)}` : digits
+    receiveMode.value = saved.mode === 'blind' ? 'blind' : 'witness'
+    transportMode.value = saved.transport_mode === 'rgb-json-rpc' ? 'rgb-json-rpc' : 'out-of-band'
+    phase.value = saved.status === 'awaiting_broadcast' ? 'prepared' : ['pending', 'settled'].includes(saved.status) ? 'accepted' : 'created'
+    expiresAt.value = Number(saved.expiry) || 0
+    sdkTerminalStatus.value = ['pending', 'settled', 'rejected', 'expired'].includes(saved.status) ? saved.status : ''
+    const transfer = saved.transfer
+    if (phase.value === 'prepared' && transfer) {
+      const invoiceHash = await sha256Text(saved.invoice)
+      if (key !== scopeKey.value) return
+      summary.value = { version: 1, stage: 'validated-awaiting-broadcast', contract_id: saved.contract_id,
+        schema_id: rgb11Schema(state, saved.contract_id), consignment_hash: transfer.consignment_hash,
+        transfer_id: transfer.transfer_id, witness_txid: transfer.witness_txid,
+        invoice_hash: invoiceHash, ...rgb11Amount(transfer), recipient_outpoint: transfer.output_outpoints[0] }
+      packageHash.value = transfer.consignment_hash
+    }
+    // Old front-end business records are obsolete once the SDK view is loaded.
+    await Storage.remove({ key })
+    if (key !== scopeKey.value) return
     transferPackage.value = rgb11ReceivePackages.get(key) || ''
   } catch { if (key === scopeKey.value) { restoreFailed.value = true; errorMessage.value = t('rgb11Transfer.persistenceFailed') } }
   finally { if (key === scopeKey.value) restoring.value = false }

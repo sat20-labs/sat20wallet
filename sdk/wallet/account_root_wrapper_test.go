@@ -295,6 +295,77 @@ func TestAccountRootWrapperUpdatesFormalRecoveryAndStorageMetadataOnce(t *testin
 	}
 }
 
+func TestTemporaryAccountAdoptsVerifiedRemotePaidPolicy(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager, store, secret := buildRootWrapperSource(t)
+	defer zeroBytes(secret)
+	if err := manager.syncAccountRootWrapper(store); err != nil {
+		t.Fatal(err)
+	}
+	root, err := manager.accountManagementRootWallet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mutex.RLock()
+	paid := *manager.accountProfile
+	manager.mutex.RUnlock()
+	paid.PackageID = "paid-package"
+	paid.RecoveryMode = account.RecoveryMode2Of2
+	paid.StorageMode = AccountStoragePaid
+	paid.RecordTTL = 0
+	paid.AutopayContract = "paid-autopay"
+	paid.PublicLocator = "paid-locator"
+	paid.RecoveryConfigured = true
+
+	wrapperKey, _ := accountRootWrapperKey(root)
+	stateKey, _ := manager.accountManagedStateKey(root)
+	dataKey, _ := manager.accountManagedDataBlobKey(root)
+	wrapperEnvelope, err := sealAccountRootWrapper(root, _chain, paid.AccountID,
+		rootWrapperPayload(paid, secret), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Update([]string{wrapperKey, stateKey, dataKey},
+		func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
+			return accountActivationMutations(&paid, root, secret, wrapperKey, wrapperEnvelope,
+				stateKey, paid.StateEnvelope, dataKey, paid.ManagedDataEnvelope, current)
+		}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := manager.captureAccountManagementSyncSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zeroBytes(snapshot.secret)
+	stateValue, err := store.Get(stateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataValue, err := store.Get(dataKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adopted, err := manager.adoptRemotePaidAccountStoragePolicy(
+		store, root, snapshot, stateValue, dataValue, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !adopted {
+		t.Fatal("verified remote paid policy was not adopted")
+	}
+	manager.mutex.RLock()
+	got := *manager.accountProfile
+	manager.mutex.RUnlock()
+	if got.StorageMode != AccountStoragePaid || got.AutopayContract != paid.AutopayContract ||
+		got.PackageID != paid.PackageID || got.PublicLocator != paid.PublicLocator ||
+		!got.RecoveryConfigured {
+		t.Fatalf("adopted profile=%+v", got)
+	}
+}
+
 func TestAccountRootWrapperRefusesDifferentSecret(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
@@ -515,5 +586,85 @@ func TestAccountRootDiscoveryRestoresOriginalAccount(t *testing.T) {
 		status.RecoveryConfigured || !bytes.Equal(restoredSecret, originalSecret) {
 		t.Fatalf("restored status=%+v secretMatches=%v", status,
 			bytes.Equal(restoredSecret, originalSecret))
+	}
+}
+
+
+func TestAccountRootDiscoveryMnemonicIgnoresCurrentWalletSelection(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+
+	manager := newAccountManagementAutoTestManager(t)
+	rootID, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	childID, err := manager.ImportWallet(
+		"legal winner thank year wave sausage worth useful legal winner thank yellow",
+		"password",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childID == rootID {
+		t.Fatal("fixture did not create a second wallet")
+	}
+	if err := manager.SwitchWallet(childID, "password"); err != nil {
+		t.Fatal(err)
+	}
+
+	mnemonic, err := manager.accountManagementRootMnemonic("password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mnemonic != accountRootWrapperTestMnemonic {
+		t.Fatal("root discovery followed current wallet selection")
+	}
+	if manager.status.CurrentWallet != childID {
+		t.Fatal("reading the root mnemonic changed current wallet selection")
+	}
+}
+
+
+func TestAccountGuardianIdentityIsRootBoundNotSelectionBound(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+
+	manager := newAccountManagementAutoTestManager(t)
+	rootID, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	childID, err := manager.ImportWallet(
+		"legal winner thank year wave sausage worth useful legal winner thank yellow",
+		"password",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SwitchWallet(rootID, "password"); err != nil {
+		t.Fatal(err)
+	}
+	rootIdentity, err := manager.GetOrCreateAccountGuardianIdentity("password")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.SwitchWallet(childID, "password"); err != nil {
+		t.Fatal(err)
+	}
+	childSelectedIdentity, err := manager.GetOrCreateAccountGuardianIdentity("password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childSelectedIdentity.MailboxID != rootIdentity.MailboxID ||
+		childSelectedIdentity.PublicKey != rootIdentity.PublicKey {
+		t.Fatalf("guardian identity followed current wallet: root=%+v selected=%+v",
+			rootIdentity, childSelectedIdentity)
+	}
+	if manager.status.CurrentWallet != childID {
+		t.Fatal("guardian identity lookup changed current wallet selection")
 	}
 }

@@ -79,7 +79,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	// compact recovery package uses one personal slot plus one mailbox slot.
 	// The owner is also the deployer: mark the operator share explicitly,
 	// separately from this delegate's per-block business payment.
-	config := &contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "5", GasFundingAmount: "280000"}
+	config := &contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "10", GasFundingAmount: "280000"}
 	configParam, err := config.Encode()
 	require.NoError(t, err)
 	configTx := buildDKVSKeyPathTemplateInvoke(t, owner, contractAddress, 1,
@@ -100,7 +100,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.GreaterOrEqual(t, state.PaidBlocks, int64(1))
 	delegate, ok := state.Delegates[owner.Address]
 	require.True(t, ok)
-	require.Equal(t, "5", delegate.AmountPerBlock)
+	require.Equal(t, "10", delegate.AmountPerBlock)
 	require.GreaterOrEqual(t, delegate.LastPayHeight, state.CurrentBlock)
 
 	pubKey := owner.Wallet.GetPubKey().SerializeCompressed()
@@ -152,6 +152,16 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, walletManager.InitializeAccountManagement("123456"))
 	require.Equal(t, pubKey, walletManager.GetWallet().GetPubKey().SerializeCompressed())
+
+	// A resumed paid-storage setup must only reuse an already-ready delegate.
+	// This path queries the real local SatoshiNet contract/indexer but must never
+	// broadcast another funding transaction.
+	reusedAuthorization, err := walletManager.ReusePaidAccountStorage(100)
+	require.NoError(t, err)
+	require.Equal(t, wallet.AccountStoragePaid, reusedAuthorization.Mode)
+	require.Empty(t, reusedAuthorization.TransactionID)
+	require.Equal(t, uint64(100), reusedAuthorization.Summary.RecordCount)
+
 	authorization := wallet.AccountStorageAuthorization{
 		ID: wallet.AccountStoragePaid, Mode: wallet.AccountStoragePaid,
 		RecordOptions: recordOptions, Autopay: &autopay, Location: coreLocation,

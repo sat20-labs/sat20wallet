@@ -47,6 +47,25 @@ func (v NativeConsensusValidator) ValidateConsignment(ctx context.Context, raw [
 	return receipt, err
 }
 
+// ValidateHistoricalConsignment rechecks consensus history against fresh chain
+// witnesses without treating its former terminal as a currently owned output.
+// It cannot produce a receipt or allocations usable by the projection store.
+func (v NativeConsensusValidator) ValidateHistoricalConsignment(ctx context.Context, raw []byte, evidence BitcoinEvidenceProvider) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	container, err := coreconsignment.Decode(raw)
+	if err != nil {
+		return err
+	}
+	if len(v.Reveals) > 0 {
+		if _, err := container.RevealGraphSeals(v.Reveals); err != nil {
+			return err
+		}
+	}
+	return container.ValidateHistory(coreEvidenceResolver{ctx: ctx, provider: evidence})
+}
+
 func (v NativeConsensusValidator) ValidatePreparedConsignment(ctx context.Context, raw []byte,
 	evidence BitcoinEvidenceProvider) (*PreparedValidation, error) {
 	receipt, outputs, witnessTxIDs, err := v.validateConsignment(ctx, raw, evidence, true)

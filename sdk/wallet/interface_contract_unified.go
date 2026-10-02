@@ -153,6 +153,9 @@ func (p *Manager) DeployUnifiedContract(req *ContractDeployRequest) (*ContractTx
 	if req == nil {
 		return nil, fmt.Errorf("missing contract deploy request")
 	}
+	if err := validateContractDeployRequest(req); err != nil {
+		return nil, err
+	}
 	switch normalizeContractType(req.ContractType) {
 	case ContractTypeEVM:
 		return p.deployEVMContract(req)
@@ -169,6 +172,9 @@ func (p *Manager) EstimateDeployUnifiedContract(req *ContractDeployRequest) (*Co
 	if req == nil {
 		return nil, fmt.Errorf("missing contract deploy request")
 	}
+	if err := validateContractDeployRequest(req); err != nil {
+		return nil, err
+	}
 	switch normalizeContractType(req.ContractType) {
 	case ContractTypeEVM:
 		return p.EstimateEVMDeployContract(req)
@@ -184,6 +190,9 @@ func (p *Manager) EstimateDeployUnifiedContract(req *ContractDeployRequest) (*Co
 func (p *Manager) InvokeUnifiedContract(req *ContractInvokeRequest) (*ContractTxResult, error) {
 	if req == nil {
 		return nil, fmt.Errorf("missing contract invoke request")
+	}
+	if err := validateContractInvokeRequest(req); err != nil {
+		return nil, err
 	}
 	switch normalizeContractType(req.ContractType) {
 	case ContractTypeEVM:
@@ -231,6 +240,9 @@ func (p *Manager) QueryParamForInvokeUnifiedContract(contractType, subtype, acti
 func (p *Manager) QueryFeeForInvokeUnifiedContract(req *ContractInvokeRequest) (int64, error) {
 	if req == nil {
 		return 0, fmt.Errorf("missing contract invoke fee request")
+	}
+	if err := validateContractInvokeRequest(req); err != nil {
+		return 0, err
 	}
 	switch normalizeContractType(req.ContractType) {
 	case ContractTypeTemplate:
@@ -287,7 +299,7 @@ func templateInvokeParamTemplate(templateName, action string) (string, error) {
 		innerParam = map[string]interface{}{
 			"amountPerBlock": "", "blobKeyLimit": 0, "gasFundingAmount": "",
 		}
-	case contractcommon.TemplateInvokeAPIClose:
+	case contractcommon.TemplateInvokeAPIClose, contractcommon.TemplateInvokeAPICancel:
 		innerParam = nil
 	default:
 		return "", fmt.Errorf("template contract %s does not support %s", templateName, action)
@@ -385,7 +397,7 @@ func convertTemplateInvokeParam(templateName, jsonInvokeParam string) (*InvokePa
 			return nil, err
 		}
 		innerParam, err = param.Encode()
-	case contractcommon.TemplateInvokeAPIClose:
+	case contractcommon.TemplateInvokeAPIClose, contractcommon.TemplateInvokeAPICancel:
 		param := contractcommon.TemplateCloseInvokeParam{}
 		if strings.TrimSpace(wrapperParam.Param) != "" {
 			if err = json.Unmarshal([]byte(wrapperParam.Param), &param); err != nil {
@@ -656,7 +668,8 @@ func (p *Manager) queryAgentInvokeFee(req *ContractInvokeRequest) (int64, error)
 	if err != nil {
 		return 0, err
 	}
-	if converted.Action == contractcommon.AgentInvokeAPIBet {
+	// A native-satoshi bet is funded by Value, not by a synthetic :: asset.
+	if converted.Action == contractcommon.AgentInvokeAPIBet && req.Value == 0 {
 		if len(req.Assets) == 0 || strings.TrimSpace(req.Assets[0].AssetName) == "" {
 			return 0, fmt.Errorf("agent bet asset is required")
 		}
@@ -859,9 +872,9 @@ func (p *Manager) deployAgentContract(req *ContractDeployRequest) (*ContractTxRe
 		ContractPrefix:  p.contractAddressPrefix(),
 		Type:            contractcommon.ContractTypeAgent,
 		SubType:         subtype,
-		Version:         version,
-		Deployer:        p.wallet.GetAddress(),
-		DeployNonce:     deployNonce,
+		Version:        version,
+		Deployer:       p.wallet.GetAddress(),
+		DeployNonce:    deployNonce,
 		ContractContent: content,
 		GasLimit:        gasLimit,
 		Funding:         funding,
@@ -937,7 +950,8 @@ func (p *Manager) invokeAgentContract(req *ContractInvokeRequest) (*ContractTxRe
 		return nil, err
 	}
 	fundingAssets := contractFundingAssets(req.Assets)
-	if converted.Action == contractcommon.AgentInvokeAPIBet {
+	// Keep the construction path consistent with the native-value fee quote.
+	if converted.Action == contractcommon.AgentInvokeAPIBet && req.Value == 0 {
 		if len(fundingAssets) == 0 || strings.TrimSpace(fundingAssets[0].Name) == "" {
 			return nil, fmt.Errorf("agent bet asset is required")
 		}
@@ -1158,6 +1172,9 @@ func (p *Manager) invokeTemplateContractWithWalletMode(req *ContractInvokeReques
 	}
 	if req == nil {
 		return nil, fmt.Errorf("missing template invoke request")
+	}
+	if err := validateContractInvokeRequest(req); err != nil {
+		return nil, err
 	}
 	gasOverride, err := gasOverrideAmount("gas asset amount", req.GasAssetAmount)
 	if err != nil {
@@ -1514,6 +1531,9 @@ func (p *Manager) EstimateEVMDeployContract(req *ContractDeployRequest) (*Contra
 	if req == nil {
 		return nil, fmt.Errorf("missing evm deploy request")
 	}
+	if err := validateContractDeployRequest(req); err != nil {
+		return nil, err
+	}
 	gasLimit := req.GasLimit
 	if gasLimit == 0 {
 		gasLimit = contractcommon.DeployBaseGas
@@ -1773,8 +1793,8 @@ func (p *Manager) invokeDefaultContract(contractType, contractAddress string, va
 }
 
 func (p *Manager) selectEVMDefaultContractFunding(value int64, assetName string, amount string) (swire.TxOut, []swire.OutPoint, []*swire.TxOut, stxscript.PrevOutputFetcher, string, error) {
-	if value < 0 {
-		return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("contract value must be non-negative")
+	if err := validateContractFundingRequest(value, []ContractFundingAsset{{AssetName: assetName, Amount: amount}}); err != nil {
+		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 	plainRequired := value + DEFAULT_FEE_SATSNET
 	if plainRequired < value {
@@ -1835,7 +1855,9 @@ func (p *Manager) selectEVMDefaultContractFunding(value int64, assetName string,
 		if output == nil {
 			return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("selected utxo %s is missing from indexer asset lists", utxo)
 		}
-		input.Merge(output)
+		if err := mergeContractFundingInput(&input, output); err != nil {
+			return swire.TxOut{}, nil, nil, nil, "", err
+		}
 		inputs = append(inputs, *outpoint)
 		prevFetcher.AddPrevOut(*outpoint, &output.OutValue)
 		callerPkScript = output.OutValue.PkScript
@@ -1845,21 +1867,9 @@ func (p *Manager) selectEVMDefaultContractFunding(value int64, assetName string,
 		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 
-	var fundingAssets swire.TxAssets
-	if businessName != nil && businessAmt != nil && businessAmt.Sign() > 0 {
-		business := swire.AssetInfo{Name: *businessName, Amount: *businessAmt}
-		if err := input.SubAsset(&business); err != nil {
-			return swire.TxOut{}, nil, nil, nil, "", err
-		}
-		fundingAssets = swire.TxAssets{business}
-	}
-	if value > 0 {
-		if err := input.SubAsset(&swire.AssetInfo{Name: ASSET_PLAIN_SAT, Amount: *indexer.NewDefaultDecimal(value), BindingSat: 1}); err != nil {
-			return swire.TxOut{}, nil, nil, nil, "", err
-		}
-	}
-	feeAsset := swire.AssetInfo{Name: ASSET_PLAIN_SAT, Amount: *indexer.NewDefaultDecimal(DEFAULT_FEE_SATSNET), BindingSat: 1}
-	if err := input.SubAsset(&feeAsset); err != nil {
+	funding, change, err := contractFundingOutputs(input.OutValue, nil, 0, 0, value, DEFAULT_FEE_SATSNET,
+		[]contractFundingAsset{{Name: assetName, Amount: amount}})
+	if err != nil {
 		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 	changePkScript, err := GetP2TRpkScript(p.wallet.GetPaymentPubKey())
@@ -1867,8 +1877,7 @@ func (p *Manager) selectEVMDefaultContractFunding(value int64, assetName string,
 		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 	changeTx := swire.NewMsgTx(swire.TxVersion)
-	SplitChangeAsset(&input, changePkScript, changeTx)
-	funding := *swire.NewTxOut(value, fundingAssets, nil)
+	SplitChangeAsset(change, changePkScript, changeTx)
 	return funding, inputs, changeTx.TxOut, prevFetcher, caller, nil
 }
 
@@ -1954,15 +1963,7 @@ func (p *Manager) selectUnifiedContractFundingWithWallet(localWallet walletcommo
 			return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("contract funding asset and amount must be provided together")
 		}
 		if assetName == contractcommon.SatoshiAssetName {
-			assetValue, err := assetAmountStringToInt64("contract funding value", amount)
-			if err != nil {
-				return swire.TxOut{}, nil, nil, nil, "", err
-			}
-			if fundingValue > math.MaxInt64-assetValue {
-				return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("contract funding value overflows int64")
-			}
-			fundingValue += assetValue
-			continue
+			return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("satoshi (::) funding must use value, not Assets")
 		}
 		name := swire.NewAssetNameFromString(assetName)
 		if name == nil {
@@ -2033,7 +2034,9 @@ func (p *Manager) selectUnifiedContractFundingWithWallet(localWallet walletcommo
 		if output == nil {
 			return swire.TxOut{}, nil, nil, nil, "", fmt.Errorf("selected utxo %s is missing from indexer asset lists", utxo)
 		}
-		input.Merge(output)
+		if err := mergeContractFundingInput(&input, output); err != nil {
+			return swire.TxOut{}, nil, nil, nil, "", err
+		}
 		inputs = append(inputs, *outpoint)
 		prevFetcher.AddPrevOut(*outpoint, &output.OutValue)
 		callerPkScript = output.OutValue.PkScript
@@ -2044,35 +2047,16 @@ func (p *Manager) selectUnifiedContractFundingWithWallet(localWallet walletcommo
 		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 
-	gasInputAsset := swire.AssetInfo{Name: *gasName, Amount: *gasAmt}
-	if err := input.SubAsset(&gasInputAsset); err != nil {
+	funding, change, err := contractFundingOutputs(input.OutValue, gasName, gasAmount, fundingGasAmount, value, 0, businessAssets)
+	if err != nil {
 		return swire.TxOut{}, nil, nil, nil, "", err
-	}
-	var fundingAssets swire.TxAssets
-	if fundingGasAmount > 0 {
-		fundingAssets = swire.TxAssets{{Name: *gasName, Amount: *indexer.NewDefaultDecimal(fundingGasAmount)}}
-	}
-	for _, asset := range parsedBusinessAssets {
-		business := swire.AssetInfo{Name: *asset.Name, Amount: *asset.Amount}
-		if err := input.SubAsset(&business); err != nil {
-			return swire.TxOut{}, nil, nil, nil, "", err
-		}
-		if err := fundingAssets.Merge(swire.TxAssets{business}); err != nil {
-			return swire.TxOut{}, nil, nil, nil, "", err
-		}
-	}
-	if fundingValue > 0 {
-		if err := input.SubAsset(&swire.AssetInfo{Name: ASSET_PLAIN_SAT, Amount: *indexer.NewDefaultDecimal(fundingValue), BindingSat: 1}); err != nil {
-			return swire.TxOut{}, nil, nil, nil, "", err
-		}
 	}
 	changePkScript, err := GetP2TRpkScript(localWallet.GetPaymentPubKey())
 	if err != nil {
 		return swire.TxOut{}, nil, nil, nil, "", err
 	}
 	changeTx := swire.NewMsgTx(swire.TxVersion)
-	SplitChangeAsset(&input, changePkScript, changeTx)
-	funding := *swire.NewTxOut(fundingValue, fundingAssets, nil)
+	SplitChangeAsset(change, changePkScript, changeTx)
 	return funding, inputs, changeTx.TxOut, prevFetcher, caller, nil
 }
 
@@ -2101,7 +2085,10 @@ func (p *Manager) evmBaseGasFee(baseGas int64) (int64, error) {
 
 func (p *Manager) evmGasAssetAmount(gasLimit int64, needsResult bool, override int64) (int64, string, error) {
 	gasAssetName := GetGasAssetName()
-	if override != 0 {
+	if override < 0 {
+		return 0, "", fmt.Errorf("gas asset amount must be non-negative")
+	}
+	if override != 0 && !needsResult {
 		return override, gasAssetName, nil
 	}
 	height := p.satsNetBestHeight()
@@ -2118,6 +2105,12 @@ func (p *Manager) evmGasAssetAmount(gasLimit int64, needsResult bool, override i
 			return 0, "", fmt.Errorf("gas asset amount overflows int64")
 		}
 		amount += resultFee
+	}
+	if override != 0 {
+		if override < amount {
+			return 0, "", fmt.Errorf("gas asset amount %d is below required execution and Result budget %d", override, amount)
+		}
+		return override, gasAssetName, nil
 	}
 	return amount, gasAssetName, nil
 }

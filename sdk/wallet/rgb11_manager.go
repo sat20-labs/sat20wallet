@@ -99,7 +99,7 @@ func newRGB11Manager(owner *Manager, database indexer.KVDB, locker *UtxoLocker,
 	if err != nil {
 		return nil, err
 	}
-	return &rgb11Manager{
+	manager := &rgb11Manager{
 		Manager:         owner,
 		projectionStore: projectionStore,
 		engineStore:     engineStore,
@@ -107,7 +107,10 @@ func newRGB11Manager(owner *Manager, database indexer.KVDB, locker *UtxoLocker,
 		evidence:        evidence,
 		accountOwner:    owner,
 		scopeStates:     newRGB11ScopeStateRegistry(),
-	}, nil
+	}
+	projectionStore.SetReservationPersistence(manager)
+	engineStore.SetReservationPersistence(manager)
+	return manager, nil
 }
 
 func rejectRGB11STPAsset(asset *indexer.AssetName) error {
@@ -151,6 +154,7 @@ func (p *rgb11Manager) selectRGB11Scope() error {
 		p.rgbManager.projectionStore.ClearScope()
 		return err
 	}
+
 	return nil
 }
 
@@ -878,6 +882,10 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
 		return nil, ErrRGB11Inconsistent
 	}
+	reservations, err := p.rgb11ReservationViews()
+	if err != nil {
+		return nil, err
+	}
 	outputs, err := p.rgbManager.projectionStore.ListOutputs()
 	if err != nil {
 		return nil, err
@@ -976,6 +984,7 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 		Outputs:           stateOutputs,
 		Proofs:            proofs,
 		Transfers:         transfers,
+		Reservations:      reservations,
 	}, nil
 }
 
@@ -993,9 +1002,9 @@ func (p *rgb11Manager) rgb11CarrierBindingForRequest(allocation rgb11wallet.Vali
 	if err != nil {
 		return nil, err
 	}
-	// Fixed-address witness invoices do not need a persisted ReceiveKey.
-	// Older independently derived invoices continue through the compatibility
-	// branch below and retain their change=1 signing path.
+	// Fixed-address witness invoices use the current account key directly.
+	// Standard-only witness invoices use the persisted independent ReceiveKey
+	// path below.
 	if bytes.Equal(request.WitnessScript, walletScript) {
 		return p.rgb11CarrierBinding(allocation, utxo)
 	}
@@ -2056,9 +2065,38 @@ func (p *rgb11Manager) releaseExpiredRGB11ReceiveReservations(now int64) error {
 		if reservation.Expiry > now {
 			continue
 		}
+		used, err := p.rgb11ReceiveReservationUsed(reservation.RequestID)
+		if err != nil {
+			return err
+		}
+		if used {
+			continue
+		}
 		if err := p.releaseRGB11ReceiveReservation(reservation.RequestID); err != nil {
 			return err
 		}
+	}
+	// Witness invoices also have a resv even though they reserve no existing UTXO.
+	resvs, err := p.loadRGB11Reservations()
+	if err != nil {
+		return err
+	}
+	for _, r := range resvs {
+		if r.RequestID == "" || r.State != nil || r.Status == RS_CLOSED || r.Expiry == 0 || r.Expiry > now {
+			continue
+		}
+		used, err := p.rgb11ReceiveReservationUsed(r.RequestID)
+		if err != nil {
+			return err
+		}
+		if used {
+			continue
+		}
+		r.Status = RS_CLOSED
+		if err := SaveReservation(p.db, r); err != nil {
+			return err
+		}
+		p.AddResv(r)
 	}
 	return nil
 }
@@ -2158,13 +2196,13 @@ func (p *rgb11Manager) CreateRGB11Invoice(request RGB11InvoiceRequest) (*corewal
 		})
 		if err != nil {
 			_ = p.utxoLockerL1.ReleaseReservation([]string{reservedOutpoint}, reservationID)
-			return nil, err
+			return nil, errors.Join(err, p.discardUnpublishedRGB11Receive(receive.RequestID))
 		}
 	}
 	if receiveKey != nil {
 		receiveKey.RequestID = receive.RequestID
 		if err := p.rgbManager.projectionStore.SaveReceiveKey(receiveKey); err != nil {
-			return nil, err
+			return nil, errors.Join(err, p.discardUnpublishedRGB11Receive(receive.RequestID))
 		}
 	}
 	return receive, nil
@@ -4081,6 +4119,10 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 				lockReason = rgb11wallet.LockReasonRGB
 			}
 			for _, outpoint := range state.OutputOutPoints {
+				if _, isSendInput := expectedSpends[outpoint]; isSendInput {
+					// A validated successor send owns this input's lock lifecycle.
+					continue
+				}
 				if err := p.utxoLockerL1.SetLockReason(outpoint, lockReason); err != nil {
 					return nil, err
 				}

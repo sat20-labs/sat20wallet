@@ -44,10 +44,19 @@ type (
 // implementation out of the outer wallet manager.
 
 // beginRGB11Operation freezes the selected wallet/account scope for the full
-// duration of a public RGB11 operation. Wallet/account switches take the write
-// side of this lock, so mutable scoped stores and the signing wallet cannot
-// drift halfway through an operation.
+// duration of a public RGB11 operation and serializes it against managed RGB
+// state machines. This preserves lifecycle/cancellation exclusivity without
+// forcing read-only UI observation to wait for managed network I/O.
 func (p *Manager) beginRGB11Operation() func() {
+	p.rgbManagedExecutionMu.Lock()
+	p.rgbOperationMu.RLock()
+	return func() {
+		p.rgbOperationMu.RUnlock()
+		p.rgbManagedExecutionMu.Unlock()
+	}
+}
+
+func (p *Manager) beginRGB11ReadObservation() func() {
 	p.rgbOperationMu.RLock()
 	return p.rgbOperationMu.RUnlock
 }
@@ -176,8 +185,8 @@ func (p *Manager) enableRootRGB11AddressReceiveLocked(options RGB11ReceiveCapabi
 }
 
 func (p *Manager) GetRGB11AssetBalance(name *indexer.AssetName) (*Decimal, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
+	releaseRGB11Observation := p.beginRGB11ReadObservation()
+	defer releaseRGB11Observation()
 	manager, err := p.synchronizedRGB11Manager()
 	if err != nil {
 		return nil, err
@@ -186,20 +195,20 @@ func (p *Manager) GetRGB11AssetBalance(name *indexer.AssetName) (*Decimal, error
 }
 
 func (p *Manager) GetRGB11ConsistencyStatus() string {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
+	releaseRGB11Observation := p.beginRGB11ReadObservation()
+	defer releaseRGB11Observation()
 	return p.rgbManager.GetRGB11ConsistencyStatus()
 }
 
 func (p *Manager) GetRGB11ProjectionStore() *rgb11wallet.ProjectionStore {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
+	releaseRGB11Observation := p.beginRGB11ReadObservation()
+	defer releaseRGB11Observation()
 	return p.rgbManager.GetRGB11ProjectionStore()
 }
 
 func (p *Manager) GetRGB11ReceiveRequest(requestID string) (*corewallet.ReceiveRequest, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
+	releaseRGB11Observation := p.beginRGB11ReadObservation()
+	defer releaseRGB11Observation()
 	manager, err := p.synchronizedRGB11Manager()
 	if err != nil {
 		return nil, err
@@ -208,8 +217,8 @@ func (p *Manager) GetRGB11ReceiveRequest(requestID string) (*corewallet.ReceiveR
 }
 
 func (p *Manager) GetRGB11State() (*RGB11State, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
+	releaseRGB11Observation := p.beginRGB11ReadObservation()
+	defer releaseRGB11Observation()
 	manager, err := p.synchronizedRGB11Manager()
 	if err != nil {
 		return nil, err
@@ -234,8 +243,8 @@ func (p *Manager) ImportRGB11ContractFile(ctx context.Context, raw []byte) (*RGB
 // ExportRGB11Contract returns the canonical RGB\0CON file for a contract
 // already validated in the active wallet scope. It does not mutate wallet data.
 func (p *Manager) ExportRGB11Contract(contractID string) (*RGB11ContractExportResult, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
+	releaseRGB11Observation := p.beginRGB11ReadObservation()
+	defer releaseRGB11Observation()
 	manager, err := p.synchronizedRGB11Manager()
 	if err != nil {
 		return nil, err
@@ -251,8 +260,8 @@ func (p *Manager) IssueRGB11Asset(ctx context.Context, request RGB11IssueRequest
 }
 
 func (p *Manager) ListRGB11Outputs() ([]*TxOutput, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
+	releaseRGB11Observation := p.beginRGB11ReadObservation()
+	defer releaseRGB11Observation()
 	manager, err := p.synchronizedRGB11Manager()
 	if err != nil {
 		return nil, err
@@ -297,8 +306,8 @@ func (p *Manager) ProjectRGB11Allocation(outpoint string, asset *indexer.AssetIn
 // ResumeRGB11PreparedTransfer reloads an existing transfer package without
 // preparing, signing, reserving or mutating it.
 func (p *Manager) ResumeRGB11PreparedTransfer(transferID string) (*RGB11PreparedTransferPackage, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
+	releaseRGB11Observation := p.beginRGB11ReadObservation()
+	defer releaseRGB11Observation()
 	manager, err := p.synchronizedRGB11Manager()
 	if err != nil {
 		return nil, err
@@ -315,8 +324,8 @@ func (p *Manager) FetchRGB11ProxyAck(ctx context.Context,
 }
 
 func (p *Manager) RGB11WalletID() (string, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
+	releaseRGB11Observation := p.beginRGB11ReadObservation()
+	defer releaseRGB11Observation()
 	return p.rgbManager.RGB11WalletID()
 }
 
@@ -370,8 +379,8 @@ func (p *Manager) RegisterRGB11TickerInfo(info *indexer.TickerInfo) error {
 
 func (p *Manager) ResolveConfiguredRGB11AddressEndpoint(address string,
 	verify dkvsindexer.RecordVerificationOptions) (*RGB11AddressEndpoint, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
+	releaseRGB11Observation := p.beginRGB11ReadObservation()
+	defer releaseRGB11Observation()
 	manager, err := p.rootRGB11Manager()
 	if err != nil {
 		return nil, err
@@ -402,8 +411,8 @@ func (p *Manager) syncRootRGB11AddressMailbox(ctx context.Context,
 }
 
 func (p *Manager) ValidateRGB11Consignment(ctx context.Context, raw []byte) (*rgb11wallet.ValidationReceipt, error) {
-	releaseRGB11Operation := p.beginRGB11Operation()
-	defer releaseRGB11Operation()
+	releaseRGB11Observation := p.beginRGB11ReadObservation()
+	defer releaseRGB11Observation()
 	manager, err := p.synchronizedRGB11Manager()
 	if err != nil {
 		return nil, err

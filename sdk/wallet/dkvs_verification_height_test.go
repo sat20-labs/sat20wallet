@@ -175,6 +175,12 @@ func TestAccountStorageConfirmUsesSharedEndpointHeightEntry(t *testing.T) {
 		"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
 		"", GetChainParam(),
 	)
+	manager.status.CurrentWallet = 1
+	manager.status.CurrentAccount = 0
+	manager.walletInfoMap = map[int64]*WalletInfo{1: {
+		WalletInDB: WalletInDB{Id: 1, Accounts: 1, Type: WALLET_TYPE_MNEMONIC},
+		Wallet: manager.wallet,
+	}}
 	authorization, err := manager.ConfirmAccountStorage(AccountStorageTemporary, 0)
 	if err != nil {
 		t.Fatal(err)

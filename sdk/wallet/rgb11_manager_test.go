@@ -342,10 +342,14 @@ func TestRGB11DefaultWitnessInvoicesUseIndependentReceiveKeys(t *testing.T) {
 		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
 	)
 	restored := newRGB11FlowManager(t, restoredWallet, rpc, evidence, 70)
-	if err := restored.rgbManager.projectionStore.ImportSnapshot(projection); err != nil {
+	walletID, err := restored.rgbManager.RGB11WalletID()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := restored.rgbManager.engineStore.ImportSnapshot(engine); err != nil {
+	if err := restored.rgbManager.importRGB11WalletSnapshot(&RGB11WalletSnapshot{
+		Version: rgb11wallet.WalletSnapshotVersion, WalletID: walletID,
+		ProjectionRecords: projection, EngineRecords: engine,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	for _, request := range []*corewallet.ReceiveRequest{first, second} {

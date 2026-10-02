@@ -399,7 +399,7 @@ func newRGB11ChannelSendCase(t *testing.T) *rgb11ChannelSendCase {
 	}
 }
 
-func acknowledgeRGB11ChannelSend(t *testing.T, c *rgb11ChannelSendCase) {
+func acknowledgeRGB11ChannelSend(t *testing.T, c *rgb11ChannelSendCase) error {
 	t.Helper()
 	sender, recipient, prepared, peer := c.sender, c.recipient, c.prepared, c.peer
 	if _, err := sender.BroadcastRGB11AddressTransfer(prepared.State.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
@@ -426,7 +426,7 @@ func acknowledgeRGB11ChannelSend(t *testing.T, c *rgb11ChannelSendCase) {
 		if _, err := sender.SyncConfiguredRGB11AddressMailbox(
 			context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
 		); err != nil {
-			t.Fatal(err)
+			return err
 		}
 		if i == 0 {
 			if _, err := sender.BroadcastRGB11AddressTransfer(state.TransferID); !errors.Is(err, ErrRGB11AddressDeliveryRequired) {
@@ -439,22 +439,33 @@ func acknowledgeRGB11ChannelSend(t *testing.T, c *rgb11ChannelSendCase) {
 			peer.mu.Unlock()
 		}
 	}
+	return nil
 }
 
 func TestRGB11ChannelSendRequiresACKAndCoSignsRealP2WSH(t *testing.T) {
 	c := newRGB11ChannelSendCase(t)
 	sender, prepared, peer, evidence := c.sender, c.prepared, c.peer, c.evidence
 	witness := c.witness
-	acknowledgeRGB11ChannelSend(t, c)
 
-	// Delivery snapshots retain the channel PSBT until the deferred peer
-	// signature is complete. Importing the snapshot must therefore preserve the
-	// exact transaction needed by the post-ACK signing boundary.
+	// Persist and reload the pre-ACK wallet snapshot while the deferred channel
+	// PSBT is still needed. ACK processing must not be required for recovery of
+	// the exact transaction that will later cross the co-sign boundary.
 	snapshot, err := sender.rgbManager.projectionStore.ExportSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sender.rgbManager.projectionStore.ImportSnapshot(snapshot); err != nil {
+	engineSnapshot, err := sender.rgbManager.engineStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	walletID, err := sender.rgbManager.RGB11WalletID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.rgbManager.importRGB11WalletSnapshot(&RGB11WalletSnapshot{
+		Version: rgb11wallet.WalletSnapshotVersion, WalletID: walletID,
+		ProjectionRecords: snapshot, EngineRecords: engineSnapshot,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	pending, err := sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
@@ -465,11 +476,10 @@ func TestRGB11ChannelSendRequiresACKAndCoSignsRealP2WSH(t *testing.T) {
 		t.Fatalf("channel pending state lost deferred PSBT: channel=%+v psbt=%d", pending.ChannelSend, len(pending.SignedPSBT))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	txID, fee, err := sender.ResumeRGB11Send(ctx, prepared.State.TransferID)
-	if err != nil || txID != prepared.TxID || fee <= 0 {
-		t.Fatalf("resume tx=%s fee=%d err=%v", txID, fee, err)
+	// The final sender mailbox ACK is now the SDK transition boundary. It
+	// automatically co-signs and broadcasts from durable reservation state.
+	if err := acknowledgeRGB11ChannelSend(t, c); err != nil {
+		t.Fatal(err)
 	}
 	peer.mu.Lock()
 	if peer.signRequests != 1 || peer.lastRequest == nil {
@@ -487,8 +497,8 @@ func TestRGB11ChannelSendRequiresACKAndCoSignsRealP2WSH(t *testing.T) {
 	if err := finalTx.Deserialize(bytes.NewReader(pending.SignedTx)); err != nil {
 		t.Fatal(err)
 	}
-	if finalTx.TxID() != txID {
-		t.Fatalf("final channel transaction txid=%s expected=%s", finalTx.TxID(), txID)
+	if finalTx.TxID() != prepared.TxID {
+		t.Fatalf("final channel transaction txid=%s expected=%s", finalTx.TxID(), prepared.TxID)
 	}
 	if err := VerifySignedTx(finalTx, peer.prev); err != nil {
 		t.Fatalf("verify final channel transaction: %v", err)
@@ -520,12 +530,14 @@ func TestRGB11ChannelSendRecoversAfterPeerResponseLoss(t *testing.T) {
 		}
 	}
 	peer.responseErr = errors.New("simulated peer connection interruption after broadcast")
-	acknowledgeRGB11ChannelSend(t, c)
-
-	txID, err := sender.BroadcastRGB11AddressTransfer(prepared.State.TransferID)
+	err := acknowledgeRGB11ChannelSend(t, c)
 	var unknown *RGB11BroadcastResultUnknownError
-	if txID != prepared.TxID || !errors.As(err, &unknown) {
-		t.Fatalf("lost peer response tx=%s err=%v", txID, err)
+	if !errors.As(err, &unknown) {
+		t.Fatalf("lost peer response err=%v", err)
+	}
+	txID := unknown.TxID
+	if txID != prepared.TxID {
+		t.Fatalf("lost peer response txid=%s expected=%s", txID, prepared.TxID)
 	}
 	if unknown.TxID != prepared.TxID {
 		t.Fatalf("unknown response txid=%s expected=%s", unknown.TxID, prepared.TxID)

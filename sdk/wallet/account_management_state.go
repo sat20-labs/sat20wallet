@@ -84,6 +84,21 @@ func (p *Manager) runAccountApplicationSync(ctx context.Context, operation func(
 	})
 }
 
+// withAccountLocalState protects only local snapshot/apply work. Background
+// transport must run outside this gate; managed RGB callers already own it.
+func (p *Manager) withAccountLocalState(alreadyLocked bool, operation func() error) error {
+	if alreadyLocked {
+		return operation()
+	}
+	p.channelIdentityMu.Lock()
+	release := p.beginRGB11ScopeChange()
+	defer func() {
+		release()
+		p.channelIdentityMu.Unlock()
+	}()
+	return operation()
+}
+
 func (p *Manager) executeAccountOperation(done chan struct{}, operation func() error) (err error) {
 	defer func() {
 		p.accountSyncMu.Lock()
@@ -438,14 +453,15 @@ func (p *Manager) InitializeAccountManagement(password string) error {
 
 func (p *Manager) ActivateAccountManagement(secret []byte, password string,
 	authorization AccountStorageAuthorization, locator account.Locator, publicLocator string) error {
-	return p.runAccountApplicationSync(nil, func() error {
-		return p.activateAccountManagement(secret, password, authorization, locator, publicLocator, 0)
+	immutableSecret := append([]byte(nil), secret...)
+	defer zeroBytes(immutableSecret)
+	return p.runAccountOperation(nil, func() error {
+		return p.activateAccountManagement(immutableSecret, password, authorization, locator, publicLocator)
 	})
 }
 
 func (p *Manager) activateAccountManagement(secret []byte, password string,
-	authorization AccountStorageAuthorization, locator account.Locator, publicLocator string,
-	attempt int) error {
+	authorization AccountStorageAuthorization, locator account.Locator, publicLocator string) error {
 
 	if len(secret) != 32 {
 		return fmt.Errorf("invalid account management secret")
@@ -458,65 +474,133 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 		return fmt.Errorf("paid account management requires AUTOPAY")
 	}
 
-	if err := p.checkAccountManagedDataImport(); err != nil {
-		return err
-	}
-	p.mutex.RLock()
-	downgrade := p.accountProfile != nil &&
-		p.accountProfile.StorageMode == AccountStoragePaid &&
-		authorization.Mode == AccountStorageTemporary
-	p.mutex.RUnlock()
-	if downgrade {
-		return ErrAccountStorageModeDowngrade
-	}
-
-	p.mutex.Lock()
-	if err := p.validateAccountActivationSecretLocked(secret); err != nil {
-		p.mutex.Unlock()
-		return err
-	}
-	rootInfo, err := p.accountManagementCandidateRootLocked()
-	if err != nil {
-		p.mutex.Unlock()
-		return err
-	}
-	root := cloneWalletAtAccountZero(rootInfo.Wallet)
-	rootFingerprint := walletFingerprint(root)
-	accountID, err := dkvsAccountID(root)
-	if err != nil || accountID != locator.AccountID {
-		p.mutex.Unlock()
-		return fmt.Errorf("recovery package does not belong to the first wallet")
-	}
-	if p.accountProfile != nil && (p.accountProfile.RootFingerprint != rootFingerprint ||
-		p.accountProfile.AccountID != accountID) {
-		p.mutex.Unlock()
-		return fmt.Errorf("existing account management root is inconsistent")
-	}
-	infos := p.canonicalWalletInfosLocked()
-	clonedInfos := make([]*WalletInfo, 0, len(infos))
-	for _, info := range infos {
-		clonedInfos = append(clonedInfos, cloneWalletInfoForAccountSync(info))
-	}
-	generation := p.accountGeneration
-	stateRevision := uint64(1)
-	dataRevision := uint64(1)
+	var root common.Wallet
+	var rootFingerprint, accountID, network string
+	var generation uint64
+	var previous accountManagementProfile
+	var hadProfile bool
+	var clonedInfos []*WalletInfo
+	stateRevision, dataRevision := uint64(1), uint64(1)
 	var deviceID []byte
-	if p.accountProfile != nil {
-		stateRevision = p.accountProfile.StateSeq + 1
-		if stateRevision == 0 {
-			p.mutex.Unlock()
-			return fmt.Errorf("account management state revision overflow")
+	var managedData *accountManagedDataSnapshot
+	var store *dkvsStore
+	var bindCoreNode func() error
+	var err error
+	err = p.withAccountLocalState(false, func() error {
+		if err := p.checkAccountManagedDataImport(); err != nil {
+			return err
 		}
-		if p.accountProfile.ManagedDataRevision != 0 {
-			dataRevision = p.accountProfile.ManagedDataRevision + 1
-			if dataRevision == 0 {
+		p.mutex.RLock()
+		downgrade := p.accountProfile != nil &&
+			p.accountProfile.StorageMode == AccountStoragePaid &&
+			authorization.Mode == AccountStorageTemporary
+		p.mutex.RUnlock()
+		if downgrade {
+			return ErrAccountStorageModeDowngrade
+		}
+
+		p.mutex.Lock()
+		if err := p.validateAccountActivationSecretLocked(secret); err != nil {
+			p.mutex.Unlock()
+			return err
+		}
+		rootInfo, err := p.accountManagementCandidateRootLocked()
+		if err != nil {
+			p.mutex.Unlock()
+			return err
+		}
+		root = cloneWalletAtAccountZero(rootInfo.Wallet)
+		rootFingerprint = walletFingerprint(root)
+		accountID, err = dkvsAccountID(root)
+		if err != nil || accountID != locator.AccountID {
+			p.mutex.Unlock()
+			return fmt.Errorf("recovery package does not belong to the first wallet")
+		}
+		if p.accountProfile != nil && (p.accountProfile.RootFingerprint != rootFingerprint ||
+			p.accountProfile.AccountID != accountID) {
+			p.mutex.Unlock()
+			return fmt.Errorf("existing account management root is inconsistent")
+		}
+		infos := p.canonicalWalletInfosLocked()
+		clonedInfos = make([]*WalletInfo, 0, len(infos))
+		for _, info := range infos {
+			clonedInfos = append(clonedInfos, cloneWalletInfoForAccountSync(info))
+		}
+		generation = p.accountGeneration
+		network = _chain
+		if p.accountProfile != nil {
+			previous = *p.accountProfile
+			previous.Pending = append([]accountManagementMutation(nil), previous.Pending...)
+			hadProfile = true
+		}
+		if p.accountProfile != nil {
+			stateRevision = p.accountProfile.StateSeq + 1
+			if stateRevision == 0 {
 				p.mutex.Unlock()
-				return fmt.Errorf("account-managed data revision overflow")
+				return fmt.Errorf("account management state revision overflow")
+			}
+			if p.accountProfile.ManagedDataRevision != 0 {
+				dataRevision = p.accountProfile.ManagedDataRevision + 1
+				if dataRevision == 0 {
+					p.mutex.Unlock()
+					return fmt.Errorf("account-managed data revision overflow")
+				}
+			}
+			deviceID = append([]byte(nil), p.accountProfile.DeviceID...)
+		}
+		p.mutex.Unlock()
+
+		managedData, err = p.buildAccountManagedDataSnapshot(secret, accountID, dataRevision)
+		if err != nil {
+			return err
+		}
+		store, err = p.accountDKVSStore()
+		if err != nil {
+			return err
+		}
+		bindCoreNode, err = p.prepareAccountCoreNodeBinding(root, store)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	// Before publication the local snapshot must be unchanged. After a verified
+	// ACK only identity/configuration must match: newer same-scope edits survive.
+	checkCurrentLocked := func(beforePublish bool) error {
+		if _chain != network || (p.accountProfile != nil) != hadProfile {
+			return errAccountSnapshotChanged
+		}
+		if p.accountGeneration != generation && (beforePublish || !hadProfile ||
+			p.accountProfile.ManagedDataGeneration == previous.ManagedDataGeneration) {
+			return errAccountSnapshotChanged
+		}
+		if hadProfile {
+			live := p.accountProfile
+			if live.AccountID != accountID || live.RootFingerprint != rootFingerprint || !bytes.Equal(p.accountSecret, secret) ||
+				live.StorageMode != previous.StorageMode || live.PackageID != previous.PackageID ||
+				live.AutopayContract != previous.AutopayContract || live.RecordTTL != previous.RecordTTL ||
+				live.Location != previous.Location || live.RecoveryMode != previous.RecoveryMode || live.PublicLocator != previous.PublicLocator ||
+				!bytes.Equal(live.SecretCipher, previous.SecretCipher) || !bytes.Equal(live.SecretSalt, previous.SecretSalt) ||
+				live.RecoveryConfigured != previous.RecoveryConfigured || live.StateSeq != previous.StateSeq ||
+				live.ManagedDataRevision != previous.ManagedDataRevision {
+				return errAccountSnapshotChanged
+			}
+			if beforePublish && live.ManagedDataGeneration != previous.ManagedDataGeneration {
+				return errAccountSnapshotChanged
 			}
 		}
-		deviceID = append([]byte(nil), p.accountProfile.DeviceID...)
+		return nil
 	}
-	p.mutex.Unlock()
+	checkCurrent := func(beforePublish bool) error {
+		return p.withAccountLocalState(false, func() error {
+			if err := p.checkAccountManagedDataImport(); err != nil {
+				return err
+			}
+			p.mutex.RLock()
+			defer p.mutex.RUnlock()
+			return checkCurrentLocked(beforePublish)
+		})
+	}
 	state, err := p.buildInitialManagedStateFromInfosLocked(password, rootFingerprint, clonedInfos)
 	if err != nil {
 		return err
@@ -526,10 +610,6 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 		state.Wallets[index].Revision = stateRevision
 	}
 
-	managedData, err := p.buildAccountManagedDataSnapshot(secret, accountID, dataRevision)
-	if err != nil {
-		return err
-	}
 	state.DataRevision = managedData.Bundle.Revision
 	state.DataHash = managedData.Hash
 	stateEnvelope, err := account.SealManagedState(secret, accountID, state, nil)
@@ -562,10 +642,6 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 		profile.AutopayContract = authorization.Autopay.PoolContract
 	}
 
-	store, err := p.accountDKVSStore()
-	if err != nil {
-		return err
-	}
 	stateKey, err := p.accountManagedStateKey(root)
 	if err != nil {
 		return err
@@ -578,7 +654,7 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 	if err != nil {
 		return err
 	}
-	if err := store.WaitReady(wrapperKey); err != nil {
+	if err := store.WaitReady(wrapperKey, stateKey, dataKey); err != nil {
 		return rootDiscoveryError(err)
 	}
 	currentWrapper, getErr := store.Get(wrapperKey)
@@ -596,8 +672,32 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 	if err != nil {
 		return err
 	}
+	// Bind the CAS to all three captured records. A transport retry must not
+	// overwrite a concurrent recovery/storage configuration from another device.
+	captured := make(map[string]string, 3)
+	for _, key := range []string{wrapperKey, stateKey, dataKey} {
+		value, err := store.Get(key)
+		if err != nil && !errors.Is(err, ErrDKVSRecordNotFound) {
+			return err
+		}
+		if value != nil {
+			captured[key] = value.Hash
+		}
+	}
+	if err := checkCurrent(true); err != nil {
+		return err
+	}
 	_, err = store.Update([]string{wrapperKey, stateKey, dataKey}, func(values map[string]*dkvsValue,
 		_ map[string]uint64) ([]dkvsValueMutation, error) {
+		for _, key := range []string{wrapperKey, stateKey, dataKey} {
+			hash := ""
+			if values[key] != nil {
+				hash = values[key].Hash
+			}
+			if hash != captured[key] {
+				return nil, dkvsindexer.ErrWriteConflict
+			}
+		}
 		return accountActivationMutations(profile, root, secret, wrapperKey, wrapperEnvelope,
 			stateKey, stateEnvelope, dataKey, managedData.Envelope, values)
 	})
@@ -611,43 +711,43 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 	if err := verifyAccountRootWrapperStorage(store, profile, root, secret, wrapperKey); err != nil {
 		return err
 	}
-	p.mutex.RLock()
-	stale := p.accountGeneration != generation || p.accountProfile != nil &&
-		(p.accountProfile.RootFingerprint != rootFingerprint || p.accountProfile.AccountID != accountID ||
-			p.accountProfile.StorageMode == AccountStoragePaid && authorization.Mode == AccountStorageTemporary)
-	p.mutex.RUnlock()
-	if stale {
-		if attempt < 2 {
-			return p.activateAccountManagement(secret, password, authorization, locator, publicLocator, attempt+1)
-		}
-		return errAccountSnapshotChanged
-	}
-	if err := p.bindAccountToCurrentCoreNode(root); err != nil {
-		return fmt.Errorf("bind account to current CoreNode: %w", err)
-	}
-
-	p.mutex.Lock()
-	if p.accountGeneration != generation {
-		p.mutex.Unlock()
-		if attempt < 2 {
-			return p.activateAccountManagement(secret, password, authorization, locator, publicLocator, attempt+1)
-		}
-		return errAccountSnapshotChanged
-	}
-	p.accountProfile = profile
-	zeroBytes(p.accountSecret)
-	p.accountSecret = append([]byte(nil), secret...)
-	p.accountPassword = password
-	p.bumpAccountGenerationLocked()
-	if err := p.saveAccountManagementProfileLocked(); err != nil {
-		p.accountProfile = nil
-		zeroBytes(p.accountSecret)
-		p.accountSecret = nil
-		p.accountPassword = ""
-		p.mutex.Unlock()
+	if err := checkCurrent(false); err != nil {
 		return err
 	}
-	p.mutex.Unlock()
+	if err := bindCoreNode(); err != nil {
+		return fmt.Errorf("bind account to current CoreNode: %w", err)
+	}
+	err = p.withAccountLocalState(false, func() error {
+		if err := p.checkAccountManagedDataImport(); err != nil {
+			return err
+		}
+		p.mutex.Lock()
+		defer p.mutex.Unlock()
+		if err := checkCurrentLocked(false); err != nil {
+			return err
+		}
+		if hadProfile {
+			profile.Pending = pendingAfterCommittedSnapshot(p.accountProfile.Pending, previous.Pending)
+			profile.ManagedDataGeneration = p.accountProfile.ManagedDataGeneration
+			profile.ManagedDataDirty = len(profile.Pending) != 0 || profile.ManagedDataGeneration != previous.ManagedDataGeneration
+		}
+		encoded, err := EncodeToBytes(profile)
+		if err != nil {
+			return err
+		}
+		if err := p.db.Write(accountManagementProfileKey(), encoded); err != nil {
+			return err
+		}
+		p.accountProfile = profile
+		zeroBytes(p.accountSecret)
+		p.accountSecret = append([]byte(nil), secret...)
+		p.accountPassword = password
+		p.bumpAccountGenerationLocked()
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 	p.markDKVSStateDirty()
 	return nil
 }
@@ -729,7 +829,12 @@ func (p *Manager) LoadAccountManagementStateForRecovery(location AccountIndexerL
 func (p *Manager) RestoreAccountManagementState(value RecoveredAccountManagementState,
 	secret []byte, password string, locator account.Locator,
 	options AccountManagementRestoreOptions) ([]RestoredWalletResult, error) {
-	return p.restoreAccountManagementState(value, secret, password, locator, options, "")
+	results, err := p.restoreAccountManagementState(value, secret, password, locator, options, "")
+	if err != nil {
+		return results, err
+	}
+	p.finishAccountManagementRestorePostSync()
+	return results, nil
 }
 
 func (p *Manager) restoreAccountManagementState(value RecoveredAccountManagementState,
@@ -797,7 +902,9 @@ func (p *Manager) restoreAccountManagementStateOperation(value RecoveredAccountM
 			p.mutex.Unlock()
 			continue
 		}
-		if err := p.db.Write(accountManagedDataImportKey(), []byte{1}); err != nil {
+		marker := accountManagedImportMarkerForProfile(
+			accountManagedImportOriginRestore, accountManagedImportStageLocalCommit, profile)
+		if err := p.writeAccountManagedDataImportMarker(marker); err != nil {
 			p.mutex.Unlock()
 			return nil, err
 		}
@@ -818,6 +925,9 @@ func (p *Manager) restoreAccountManagementStateOperation(value RecoveredAccountM
 	if len(results) == 0 {
 		return nil, errAccountSnapshotChanged
 	}
+	if err := p.updateAccountManagedDataImportStage(accountManagedImportStageProviderImport); err != nil {
+		return nil, err
+	}
 	if err := p.importAccountManagedDataSnapshot(&accountManagedDataSnapshot{
 		Bundle: value.ManagedData, Hash: value.ManagedDataHash,
 		Envelope: append([]byte(nil), value.ManagedDataEnvelope...),
@@ -827,6 +937,9 @@ func (p *Manager) restoreAccountManagementStateOperation(value RecoveredAccountM
 	// The restored catalog and Status now contain the real process-local wallet
 	// ID.  Bind the long-lived RGB11 manager before closing the crash boundary;
 	// otherwise later operations could keep using a pre-recovery placeholder.
+	if err := p.updateAccountManagedDataImportStage(accountManagedImportStageScopeRebuild); err != nil {
+		return nil, err
+	}
 	if err := p.rgbManager.selectRGB11Scope(); err != nil {
 		return nil, fmt.Errorf("select restored RGB11 wallet scope: %w", err)
 	}
@@ -837,17 +950,31 @@ func (p *Manager) restoreAccountManagementStateOperation(value RecoveredAccountM
 	// and every stable provider have been committed locally. Registration and
 	// mailbox refreshes are retryable network work and must not extend the crash
 	// boundary: a transient transport failure must never strand this marker.
+	if err := p.updateAccountManagedDataImportStage(accountManagedImportStageMarkerDelete); err != nil {
+		return nil, err
+	}
 	if err := p.db.Delete(accountManagedDataImportKey()); err != nil {
 		return nil, err
 	}
+	return results, nil
+}
+
+func (p *Manager) finishAccountManagementRestorePostSync() {
+	// Core wallet/profile/provider recovery is already durable and its crash
+	// marker is closed. Registration and active-mailbox refresh are retryable
+	// network maintenance: a transport failure must not turn a completed local
+	// restore into an API failure which cannot safely be retried from an empty DB.
 	if err := p.refreshDKVSRegistrations(); err != nil {
-		return nil, err
+		Log.Warningf("post-restore DKVS registration refresh failed: %v", err)
+		p.scheduleAccountManagedStateSync()
+		p.wakeChannelHeartbeat()
+		return
 	}
-	if err := p.importAccountManagedActiveData(); err != nil {
-		return nil, err
+	if err := p.importAccountManagedActiveDataForSync(false); err != nil {
+		Log.Warningf("post-restore active account data refresh failed: %v", err)
+		p.scheduleAccountManagedStateSync()
 	}
 	p.wakeChannelHeartbeat()
-	return results, nil
 }
 
 func randomAccountMutationID() (string, error) {
@@ -887,20 +1014,25 @@ func (p *Manager) queueAccountMutationLocked(mutation accountManagementMutation)
 		}
 		if current.Type == accountMutationAddWallet &&
 			mutation.Type != accountMutationDeleteWallet {
-			// The add mutation serializes the latest local wallet metadata.
-			return nil
-		}
-		walletMetadata := mutation.Type == accountMutationWalletName &&
-			current.Type == accountMutationWalletName
-		accountMetadata := mutation.Account == current.Account &&
-			(mutation.Type == accountMutationEnsureAccount || mutation.Type == accountMutationMetadata) &&
-			(current.Type == accountMutationEnsureAccount || current.Type == accountMutationMetadata)
-		if !walletMetadata && !accountMetadata {
-			continue
-		}
-		mutation.ID = current.ID
-		if current.Type == accountMutationEnsureAccount {
-			mutation.Type = accountMutationEnsureAccount
+			// An in-flight PUT may contain the previous add snapshot. Keep one
+			// add, but give the updated wallet a new overlay identity so its old
+			// ACK cannot clear metadata edited during transport.
+			id := mutation.ID
+			mutation = *current
+			mutation.ID = id
+		} else {
+			walletMetadata := mutation.Type == accountMutationWalletName &&
+				current.Type == accountMutationWalletName
+			accountMetadata := mutation.Account == current.Account &&
+				(mutation.Type == accountMutationEnsureAccount || mutation.Type == accountMutationMetadata) &&
+				(current.Type == accountMutationEnsureAccount || current.Type == accountMutationMetadata)
+			if !walletMetadata && !accountMetadata {
+				continue
+			}
+			mutation.ID = current.ID
+			if current.Type == accountMutationEnsureAccount {
+				mutation.Type = accountMutationEnsureAccount
+			}
 		}
 		*current = mutation
 		p.accountProfile.ManagedDataDirty = true
@@ -1203,6 +1335,17 @@ type accountManagementSyncSnapshot struct {
 	root       common.Wallet
 	wallets    map[string]account.ManagedWallet
 	pending    []accountManagementMutation
+	network    string
+}
+
+// Account management is anchored to the root wallet/account, not the wallet or
+// subaccount currently selected by the UI. Only root identity/configuration and
+// network changes invalidate an in-flight account synchronization snapshot.
+func (p *Manager) accountSyncSnapshotCurrentLocked(snapshot *accountManagementSyncSnapshot) bool {
+	return snapshot != nil && p.accountProfile != nil &&
+		p.accountProfile.AccountID == snapshot.profile.AccountID &&
+		p.accountProfile.RootFingerprint == snapshot.profile.RootFingerprint &&
+		p.accountGeneration == snapshot.generation && _chain == snapshot.network
 }
 
 func cloneManagedWallet(value account.ManagedWallet) account.ManagedWallet {
@@ -1253,6 +1396,7 @@ func (p *Manager) captureAccountManagementSyncSnapshotBaseLocked() (
 		password:   p.accountPassword,
 		wallets:    make(map[string]account.ManagedWallet),
 		pending:    append([]accountManagementMutation(nil), p.accountProfile.Pending...),
+		network:    _chain,
 	}
 	rootInfo, err := p.accountManagementRootWalletLocked()
 	if err != nil {
@@ -1518,9 +1662,8 @@ func accountManagedACKValue(values []*dkvsValue, key string) *dkvsValue {
 // catalog and provider data are already the source of that publication and
 // must never be replaced by the older snapshot captured before the request.
 //
-// Application-level synchronization keeps wallet/provider operations behind
-// the in-flight PUT. Once the ACK baseline is committed, those operations may
-// run and enqueue the next serialized PUT.
+// Account operations serialize PUTs. Local edits and UI wallet/account selection
+// changes may proceed during transport; only root identity/configuration matters.
 func (p *Manager) finalizePublishedAccountManagedState(state account.ManagedState,
 	snapshot *accountManagementSyncSnapshot, envelope []byte,
 	managedData *accountManagedDataSnapshot) (bool, error) {
@@ -1532,7 +1675,10 @@ func (p *Manager) finalizePublishedAccountManagedState(state account.ManagedStat
 	defer p.mutex.Unlock()
 	if p.accountProfile == nil ||
 		p.accountProfile.AccountID != snapshot.profile.AccountID ||
-		p.accountProfile.RootFingerprint != snapshot.profile.RootFingerprint {
+		p.accountProfile.RootFingerprint != snapshot.profile.RootFingerprint ||
+		!bytes.Equal(p.accountSecret, snapshot.secret) || _chain != snapshot.network ||
+		p.accountProfile.StateSeq > state.Revision ||
+		p.accountProfile.ManagedDataRevision > managedData.Bundle.Revision {
 		return false, errAccountSnapshotChanged
 	}
 
@@ -1545,10 +1691,8 @@ func (p *Manager) finalizePublishedAccountManagedState(state account.ManagedStat
 	profile.ManagedDataRevision = managedData.Bundle.Revision
 	profile.ManagedDataHash = managedData.Hash
 	profile.ManagedDataEnvelope = append([]byte(nil), managedData.Envelope...)
-	// The server ACK confirms exactly the immutable request snapshot. Identity
-	// and RGB11 application gates prevent wallet/provider mutations from
-	// changing that snapshot while the PUT is in flight. Only work queued after
-	// the snapshot remains pending; ACK handling never imports its own payload.
+	// The server ACK confirms exactly the immutable request snapshot. Preserve
+	// newer local mutations and dirty generations; never import our own payload.
 	profile.Pending = pendingAfterCommittedSnapshot(profile.Pending, snapshot.pending)
 	profile.ManagedDataDirty = len(profile.Pending) != 0 ||
 		profile.ManagedDataGeneration != snapshot.profile.ManagedDataGeneration
@@ -1576,18 +1720,14 @@ type accountManagedStateCommit struct {
 	profile           accountManagementProfile
 	puts              map[int64][]byte
 	deletes           map[int64]struct{}
-	statusBytes       []byte
 	profileBytes      []byte
-	currentWallet     int64
 	pendingRemains    bool
 	importManagedData bool
 }
 
 func (p *Manager) captureAccountManagedCommitBaseLocked(
 	snapshot *accountManagementSyncSnapshot) (*accountManagedCommitBase, error) {
-	if p.accountProfile == nil || snapshot == nil ||
-		p.accountProfile.AccountID != snapshot.profile.AccountID ||
-		p.accountGeneration != snapshot.generation {
+	if !p.accountSyncSnapshotCurrentLocked(snapshot) {
 		return nil, errAccountSnapshotChanged
 	}
 	base := &accountManagedCommitBase{
@@ -1687,17 +1827,13 @@ func (p *Manager) prepareAccountManagedStateCommit(state account.ManagedState,
 		}
 		encodedPuts[id] = encoded
 	}
-	statusBytes, err := encodeStatusToBytes(status)
-	if err != nil {
-		return nil, err
-	}
 	profileBytes, err := EncodeToBytes(&profile)
 	if err != nil {
 		return nil, err
 	}
 	return &accountManagedStateCommit{
 		wallets: wallets, status: status, profile: profile, puts: encodedPuts, deletes: deletes,
-		statusBytes: statusBytes, profileBytes: profileBytes, currentWallet: current.Id,
+		profileBytes: profileBytes,
 		pendingRemains: len(remaining) != 0, importManagedData: sameManagedGeneration,
 	}, nil
 }
@@ -1707,19 +1843,46 @@ func (p *Manager) prepareAccountManagedStateCommit(state account.ManagedState,
 // in this section.
 func (p *Manager) commitPreparedAccountManagedStateLocked(commit *accountManagedStateCommit,
 	snapshot *accountManagementSyncSnapshot, markImport bool) (bool, bool, error) {
-	if commit == nil || p.accountProfile == nil || snapshot == nil ||
-		p.accountProfile.AccountID != snapshot.profile.AccountID ||
-		p.accountGeneration != snapshot.generation {
+	if commit == nil || !p.accountSyncSnapshotCurrentLocked(snapshot) {
 		return false, false, errAccountSnapshotChanged
 	}
 	// The application sync gate has already excluded wallet/RGB operations and
 	// the final snapshot check above has passed. Only now may a persistent
 	// crash marker be created. It is never a normal synchronization lock.
 	if markImport {
-		if err := p.db.Write(accountManagedDataImportKey(), []byte{1}); err != nil {
+		marker := accountManagedImportMarkerForProfile(
+			accountManagedImportOriginRemoteApply, accountManagedImportStageLocalCommit, &commit.profile)
+		if err := p.writeAccountManagedDataImportMarker(marker); err != nil {
 			return false, false, err
 		}
 	}
+	// Preserve the user's live wallet/account selection. Account management owns
+	// the root identity and wallet catalog, but the current UI selection is local
+	// runtime state and is not part of a remote account snapshot.
+	status := cloneStatusForAccountRestore(p.status)
+	if status == nil {
+		status = cloneStatusForAccountRestore(commit.status)
+	}
+	if status == nil {
+		return false, false, errAccountSnapshotChanged
+	}
+	status.TotalWallet = len(commit.wallets)
+	current := commit.wallets[status.CurrentWallet]
+	if current == nil {
+		root := walletInfoByFingerprintInMap(commit.wallets, snapshot.profile.RootFingerprint)
+		if root == nil {
+			return false, false, ErrAccountManagementWalletUnavailable
+		}
+		status.CurrentWallet, status.CurrentAccount = root.Id, 0
+		current = root
+	} else if status.CurrentAccount >= uint32(current.Accounts) {
+		status.CurrentAccount = 0
+	}
+	statusBytes, err := encodeStatusToBytes(status)
+	if err != nil {
+		return false, false, err
+	}
+
 	batch := p.db.NewWriteBatch()
 	if batch == nil {
 		return false, false, fmt.Errorf("create managed state batch")
@@ -1735,7 +1898,7 @@ func (p *Manager) commitPreparedAccountManagedStateLocked(commit *accountManaged
 			return false, false, err
 		}
 	}
-	if err := batch.Put([]byte(DB_KEY_STATUS), commit.statusBytes); err != nil {
+	if err := batch.Put([]byte(DB_KEY_STATUS), statusBytes); err != nil {
 		return false, false, err
 	}
 	if err := batch.Put(accountManagementProfileKey(), commit.profileBytes); err != nil {
@@ -1747,13 +1910,13 @@ func (p *Manager) commitPreparedAccountManagedStateLocked(commit *accountManaged
 
 	p.walletInfoMap = commit.wallets
 	if p.status == nil {
-		p.status = commit.status
+		p.status = status
 	} else {
-		applyStatusSnapshot(p.status, commit.status)
+		applyStatusSnapshot(p.status, status)
 	}
 	p.accountProfile = &commit.profile
 	p.bumpAccountGenerationLocked()
-	p.wallet = commit.wallets[commit.currentWallet].Wallet
+	p.wallet = current.Wallet
 	p.wallet.SetSubAccount(p.status.CurrentAccount)
 	return commit.pendingRemains, commit.importManagedData, nil
 }
@@ -1778,16 +1941,27 @@ func (p *Manager) commitAccountManagedStateLocked(state account.ManagedState,
 func (p *Manager) commitAccountManagedStateForSync(state account.ManagedState,
 	snapshot *accountManagementSyncSnapshot, envelope []byte,
 	managedData *accountManagedDataSnapshot) (bool, bool, error) {
+	commit, err := p.prepareAccountManagedCommitForSync(state, snapshot, envelope, managedData)
+	if err != nil {
+		return false, false, err
+	}
+	return p.applyAccountManagedCommitForSync(commit, snapshot)
+}
+
+func (p *Manager) prepareAccountManagedCommitForSync(state account.ManagedState,
+	snapshot *accountManagementSyncSnapshot, envelope []byte,
+	managedData *accountManagedDataSnapshot) (*accountManagedStateCommit, error) {
 	p.mutex.Lock()
 	base, err := p.captureAccountManagedCommitBaseLocked(snapshot)
 	p.mutex.Unlock()
 	if err != nil {
-		return false, false, err
+		return nil, err
 	}
-	commit, err := p.prepareAccountManagedStateCommit(state, snapshot, envelope, managedData, base)
-	if err != nil {
-		return false, false, err
-	}
+	return p.prepareAccountManagedStateCommit(state, snapshot, envelope, managedData, base)
+}
+
+func (p *Manager) applyAccountManagedCommitForSync(commit *accountManagedStateCommit,
+	snapshot *accountManagementSyncSnapshot) (bool, bool, error) {
 	p.mutex.Lock()
 	previousWalletID := p.status.CurrentWallet
 	previousAccount := p.status.CurrentAccount
@@ -1797,6 +1971,9 @@ func (p *Manager) commitAccountManagedStateForSync(state account.ManagedState,
 		p.status.CurrentAccount != previousAccount)
 	p.mutex.Unlock()
 	if identityChanged {
+		if stageErr := p.updateAccountManagedDataImportStage(accountManagedImportStageScopeRebuild); stageErr != nil {
+			return pendingRemains, importManagedData, stageErr
+		}
 		if scopeErr := p.rgbManager.selectRGB11Scope(); scopeErr != nil {
 			return pendingRemains, importManagedData,
 				fmt.Errorf("select synchronized RGB11 wallet scope: %w", scopeErr)
@@ -1816,8 +1993,8 @@ func (p *Manager) SyncAccountManagementState(ctx context.Context) error {
 	if p == nil {
 		return ErrDKVSPathNotSynced
 	}
-	err := p.runAccountApplicationSync(ctx, func() error {
-		return p.syncAccountManagementState(ctx, 0, false)
+	err := p.runAccountOperation(ctx, func() error {
+		return p.syncAccountManagementStateMode(ctx, 0, false, false)
 	})
 	if err == nil {
 		p.cleanupAccountManagedActiveDataAfterDurable(rgb11AccountManagedProviderID)
@@ -1827,6 +2004,11 @@ func (p *Manager) SyncAccountManagementState(ctx context.Context) error {
 
 func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int,
 	authoritativeRebase bool) error {
+	return p.syncAccountManagementStateMode(ctx, attempt, authoritativeRebase, true)
+}
+
+func (p *Manager) syncAccountManagementStateMode(ctx context.Context, attempt int,
+	authoritativeRebase, applicationLocked bool) error {
 	if ctx != nil {
 		select {
 		case <-ctx.Done():
@@ -1834,27 +2016,49 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int,
 		default:
 		}
 	}
-	if err := p.checkAccountManagedDataImport(); err != nil {
-		return err
-	}
-	if p.accountManagedRecoveryConfigured() {
-		activeRGB11, err := p.hasAccountManagedRGB11Transition()
+	var snapshot *accountManagementSyncSnapshot
+	var walletInfos []*WalletInfo
+	var localBundle account.ManagedDataBundle
+	err := p.withAccountLocalState(applicationLocked, func() error {
+		if err := p.checkAccountManagedDataImport(); err != nil {
+			return err
+		}
+		if p.accountManagedRecoveryConfigured() {
+			activeRGB11, err := p.hasAccountManagedRGB11Transition()
+			if err != nil {
+				return err
+			}
+			if activeRGB11 {
+				// A partial stable export would either omit the scope or reuse its old
+				// payload and could then clear the local dirty generation without ever
+				// publishing the transition. Active recovery is authoritative until the
+				// business operation settles; ordinary account PUTs are blocked here.
+				return ErrRGB11ManagedOperationActive
+			}
+		}
+		var err error
+		p.mutex.Lock()
+		snapshot, walletInfos, err = p.captureAccountManagementSyncSnapshotBaseLocked()
+		p.mutex.Unlock()
+		if err != nil || snapshot == nil {
+			return err
+		}
+		localCatalog, err := p.accountManagedDataCatalog()
 		if err != nil {
 			return err
 		}
-		if activeRGB11 {
-			// A partial stable export would either omit the scope or reuse its old
-			// payload and could then clear the local dirty generation without ever
-			// publishing the transition. Active recovery is authoritative until the
-			// business operation settles; ordinary account PUTs are blocked here.
-			return ErrRGB11ManagedOperationActive
-		}
+		localBundle, _, err = p.exportAccountManagedData(localCatalog, 1)
+		return err
+	})
+	if snapshot != nil {
+		defer zeroBytes(snapshot.secret)
 	}
-	snapshot, err := p.captureAccountManagementSyncSnapshot()
 	if err != nil || snapshot == nil {
 		return err
 	}
-	defer zeroBytes(snapshot.secret)
+	if _, err := p.populateAccountManagementSyncSnapshot(snapshot, walletInfos); err != nil {
+		return err
+	}
 
 	root := snapshot.root
 	stateKey, err := p.accountManagedStateKey(root)
@@ -1939,6 +2143,19 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int,
 			return err
 		}
 	}
+	if !usingLocalState && stateValue != nil && dataValue != nil &&
+		snapshot.profile.StorageMode == AccountStorageTemporary {
+		adopted, adoptErr := p.adoptRemotePaidAccountStoragePolicy(
+			store, root, snapshot, stateValue, dataValue, applicationLocked)
+		if adoptErr != nil {
+			return adoptErr
+		}
+		if adopted {
+			// Re-capture the snapshot with the verified paid policy before any
+			// merge/publish decision can use the provisional temporary policy.
+			return p.syncAccountManagementStateMode(ctx, attempt, authoritativeRebase, applicationLocked)
+		}
+	}
 	baseBundle, err := openProfileManagedDataBundle(snapshot.profile, snapshot.secret)
 	if err != nil {
 		return err
@@ -1960,15 +2177,7 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int,
 	if err != nil {
 		return err
 	}
-	localCatalog, err := p.accountManagedDataCatalog()
-	if err != nil {
-		return err
-	}
-	localBundle, _, err := p.exportAccountManagedData(localCatalog, 1)
-	if err != nil {
-		return err
-	}
-	targetCatalog := accountManagedDataCatalogFromState(snapshot.profile.AccountID, _chain, target)
+	targetCatalog := accountManagedDataCatalogFromState(snapshot.profile.AccountID, snapshot.network, target)
 	maxDataRevision := snapshot.profile.ManagedDataRevision
 	if remoteState.DataRevision > maxDataRevision {
 		maxDataRevision = remoteState.DataRevision
@@ -2048,6 +2257,33 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int,
 	if dataValue != nil {
 		capturedDataHash = dataValue.Hash
 	}
+	p.mutex.RLock()
+	currentSnapshot := p.accountSyncSnapshotCurrentLocked(snapshot)
+	p.mutex.RUnlock()
+	if !currentSnapshot {
+		if attempt < 2 {
+			return p.syncAccountManagementStateMode(ctx, attempt+1, false, applicationLocked)
+		}
+		return errAccountSnapshotChanged
+	}
+	if needsPublish && remoteBaselineChanged {
+		// A mixed remote/local publication is not sourced solely from the live
+		// wallet. Apply its remote increments with the local overlays first,
+		// retaining the confirmed remote baseline and all unacknowledged edits.
+		// A fresh capture can then use the normal own-ACK path without losing
+		// remote data or importing an old request over edits made during I/O.
+		if attempt >= 2 {
+			return errAccountSnapshotChanged
+		}
+		if err := p.applyAccountManagedRebaseForSync(remoteState, target, snapshot,
+			remoteStateEnvelope, remoteManaged, finalManaged, applicationLocked); err != nil {
+			if errors.Is(err, errAccountSnapshotChanged) {
+				return p.syncAccountManagementStateMode(ctx, attempt+1, false, applicationLocked)
+			}
+			return err
+		}
+		return p.syncAccountManagementStateMode(ctx, attempt+1, authoritativeRebase, applicationLocked)
+	}
 	if needsPublish {
 		origin := outboxPlan.origin(stateKey, snapshot.profile.ManagedDataGeneration)
 		origin.PreservePrefixGenerations = authoritativeRebase
@@ -2067,6 +2303,9 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int,
 			if currentStateHash != capturedStateHash || currentDataHash != capturedDataHash {
 				return nil, dkvsindexer.ErrWriteConflict
 			}
+			if err := rejectAccountRecordStorageDowngrade(&snapshot.profile, current[stateKey], current[dataKey]); err != nil {
+				return nil, err
+			}
 			mutations, mutationErr := accountManagementMutations(&snapshot.profile, root, stateKey,
 				finalStateEnvelope, dataKey, finalManaged.Envelope, writeData)
 			if mutationErr != nil {
@@ -2079,7 +2318,7 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int,
 		if err != nil {
 			if attempt < 2 && (errors.Is(err, dkvsindexer.ErrWriteConflict) ||
 				errors.Is(err, dkvsindexer.ErrInvalidSequence)) {
-				return p.syncAccountManagementState(ctx, attempt+1, true)
+				return p.syncAccountManagementStateMode(ctx, attempt+1, true, applicationLocked)
 			}
 			postPlan, terminalErr := p.accountManagedOutboxPlanFor(store,
 				snapshot.profile, stateKey, dataKey)
@@ -2131,27 +2370,36 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int,
 	}
 
 	if remoteBaselineChanged {
-		pendingRemains, importManagedData, commitErr := p.commitAccountManagedStateForSync(
+		commit, commitErr := p.prepareAccountManagedCommitForSync(
 			target, snapshot, finalStateEnvelope, finalManaged)
+		if commitErr == nil {
+			commitErr = p.withAccountLocalState(applicationLocked, func() error {
+				pendingRemains, importManagedData, err := p.applyAccountManagedCommitForSync(commit, snapshot)
+				if err != nil {
+					return err
+				}
+				if importManagedData {
+					if err := p.updateAccountManagedDataImportStage(accountManagedImportStageProviderImport); err != nil {
+						return err
+					}
+					if err := p.importAccountManagedDataSnapshot(finalManaged); err != nil {
+						return err
+					}
+				}
+				if pendingRemains || !importManagedData {
+					p.markDKVSStateDirty()
+				}
+				if err := p.updateAccountManagedDataImportStage(accountManagedImportStageMarkerDelete); err != nil {
+					return err
+				}
+				return p.db.Delete(accountManagedDataImportKey())
+			})
+		}
 		if commitErr != nil {
 			if attempt < 2 && errors.Is(commitErr, errAccountSnapshotChanged) {
-				return p.syncAccountManagementState(ctx, attempt+1, false)
+				return p.syncAccountManagementStateMode(ctx, attempt+1, false, applicationLocked)
 			}
 			return commitErr
-		}
-		if importManagedData {
-			if err := p.importAccountManagedDataSnapshot(finalManaged); err != nil {
-				return err
-			}
-		}
-		if pendingRemains || !importManagedData {
-			p.markDKVSStateDirty()
-		}
-		// The crash marker protects only the non-atomic local import above. All
-		// following work is retryable transport/cache maintenance and therefore
-		// runs after the durable recovery boundary has closed.
-		if err := p.db.Delete(accountManagedDataImportKey()); err != nil {
-			return err
 		}
 	}
 	if err := p.refreshDKVSRegistrations(); err != nil {
@@ -2160,7 +2408,7 @@ func (p *Manager) syncAccountManagementState(ctx context.Context, attempt int,
 	// The mailbox is a normal periodically refreshed account prefix. Import its
 	// newest provider transition only after the stable account snapshot and
 	// local registrations are ready.
-	if err := p.importAccountManagedActiveData(); err != nil {
+	if err := p.importAccountManagedActiveDataForSync(applicationLocked); err != nil {
 		return err
 	}
 	p.scheduleAccountRootWrapperSync()

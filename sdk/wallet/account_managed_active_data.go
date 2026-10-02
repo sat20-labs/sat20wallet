@@ -336,9 +336,56 @@ func (p *Manager) importAccountManagedActiveData() error {
 	if err != nil || !configured {
 		return err
 	}
-	messages, err := p.readWalletDirectMessages(root)
+	apply, err := p.prepareAccountManagedActiveDataImport(root, catalog)
 	if err != nil {
 		return err
+	}
+	return apply()
+}
+
+// Background synchronization reads the mailbox without holding wallet scope
+// locks. Its captured catalog must still be current before any provider import.
+func (p *Manager) importAccountManagedActiveDataForSync(applicationLocked bool) error {
+	var root common.Wallet
+	var catalog AccountManagedDataCatalog
+	var snapshot *accountManagementSyncSnapshot
+	var configured bool
+	err := p.withAccountLocalState(applicationLocked, func() error {
+		var err error
+		root, catalog, configured, err = p.accountManagedActiveRoot()
+		if err != nil || !configured {
+			return err
+		}
+		p.mutex.RLock()
+		snapshot = &accountManagementSyncSnapshot{
+			profile: *p.accountProfile, generation: p.accountGeneration, network: _chain,
+		}
+		p.mutex.RUnlock()
+		return nil
+	})
+	if err != nil || !configured {
+		return err
+	}
+	apply, err := p.prepareAccountManagedActiveDataImport(root, catalog)
+	if err != nil {
+		return err
+	}
+	return p.withAccountLocalState(applicationLocked, func() error {
+		p.mutex.RLock()
+		current := p.accountSyncSnapshotCurrentLocked(snapshot)
+		p.mutex.RUnlock()
+		if !current {
+			return errAccountSnapshotChanged
+		}
+		return apply()
+	})
+}
+
+func (p *Manager) prepareAccountManagedActiveDataImport(root common.Wallet,
+	catalog AccountManagedDataCatalog) (func() error, error) {
+	messages, err := p.readWalletDirectMessages(root)
+	if err != nil {
+		return nil, err
 	}
 	type candidate struct {
 		messageID string
@@ -355,7 +402,7 @@ func (p *Manager) importAccountManagedActiveData() error {
 		}
 		envelope, err := decodeAccountManagedActiveEnvelope(item.Payload.Body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if _, currentScope := allowed[strings.TrimSpace(envelope.Scope)]; !currentScope {
 			if item.Record != nil && strings.TrimSpace(item.Record.Key) != "" {
@@ -375,24 +422,26 @@ func (p *Manager) importAccountManagedActiveData() error {
 		providerID := strings.SplitN(key, "\x00", 2)[0]
 		byProvider[providerID] = append(byProvider[providerID], item.payload)
 	}
-	for providerID, payloads := range byProvider {
-		provider := p.accountManagedActiveDataProvider(providerID)
-		if provider == nil {
-			return fmt.Errorf("account-managed active provider %q is unavailable", providerID)
+	return func() error {
+		for providerID, payloads := range byProvider {
+			provider := p.accountManagedActiveDataProvider(providerID)
+			if provider == nil {
+				return fmt.Errorf("account-managed active provider %q is unavailable", providerID)
+			}
+			if err := provider.ValidateActive(catalog, payloads); err != nil {
+				return fmt.Errorf("validate imported %s active account data: %w", providerID, err)
+			}
+			if err := provider.ImportActive(catalog, payloads); err != nil {
+				return fmt.Errorf("import %s active account data: %w", providerID, err)
+			}
 		}
-		if err := provider.ValidateActive(catalog, payloads); err != nil {
-			return fmt.Errorf("validate imported %s active account data: %w", providerID, err)
-		}
-		if err := provider.ImportActive(catalog, payloads); err != nil {
-			return fmt.Errorf("import %s active account data: %w", providerID, err)
-		}
-	}
-	// A deleted wallet/account removes its scope from the authoritative
-	// catalog. Historical FREE_LOCAL mailbox entries for that scope are cache
-	// debris, not recovery input. Ignore them synchronously and prune them after
-	// the recovery barrier so they can never make a valid restore fail.
-	p.pruneStaleAccountManagedActive(root, staleKeys)
-	return nil
+		// A deleted wallet/account removes its scope from the authoritative
+		// catalog. Historical FREE_LOCAL mailbox entries for that scope are cache
+		// debris, not recovery input. Ignore them synchronously and prune them after
+		// the recovery barrier so they can never make a valid restore fail.
+		p.pruneStaleAccountManagedActive(root, staleKeys)
+		return nil
+	}, nil
 }
 
 func (p *Manager) pruneStaleAccountManagedActive(root common.Wallet, keys []string) {

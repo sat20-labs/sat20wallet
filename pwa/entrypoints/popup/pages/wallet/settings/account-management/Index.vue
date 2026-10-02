@@ -144,6 +144,15 @@
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
           确认存储方式
         </Button>
+        <Button
+          v-if="selectedStorage === 'paid'"
+          variant="outline"
+          class="w-full"
+          :disabled="busy || !recordCountValid"
+          @click="reusePaidStorage"
+        >
+          仅复用现有 AUTOPAY 授权（不充值）
+        </Button>
       </section>
 
       <section v-else-if="step === 3" class="space-y-4">
@@ -168,6 +177,9 @@
         <Button class="w-full" :disabled="busy || !guardianContactValid" @click="createRecovery">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
           创建并保存加密账户备份
+        </Button>
+        <Button variant="outline" class="w-full" :disabled="busy" @click="cancelStorageSetup">
+          取消本次设置
         </Button>
       </section>
 
@@ -312,7 +324,6 @@ const recoveryMode = ref<'2of2' | '2of3'>('2of3')
 const storageOptions = ref<AccountStorageOption[]>([])
 const selectedStorage = ref('')
 const recordCount = ref(100)
-const storageAuthorization = ref<any>(null)
 const preflight = ref<any>(null)
 const paidConfirmOpen = ref(false)
 const paidConfirmContext = ref<'account' | 'guardian' | 'funding'>('account')
@@ -500,11 +511,27 @@ const confirmStorage = () => run(async () => {
   if (!recordCountValid.value) throw new Error('持久记录条数必须是不小于 100 的整数')
   paidConfirmContext.value = 'account'
   if (selectedStorage.value === 'paid' && !await requestPaidConfirmation()) return
-  storageAuthorization.value = await accountSDK.confirmStorage(
+  await accountSDK.confirmStorage(
     selectedStorage.value,
     selectedStorage.value === 'paid' ? normalizedRecordCount.value : undefined,
   )
   step.value = 3
+})
+
+const reusePaidStorage = () => run(async () => {
+  if (!recordCountValid.value) throw new Error('持久记录条数必须是不小于 100 的整数')
+  await accountSDK.reusePaidStorage(normalizedRecordCount.value)
+  selectedStorage.value = 'paid'
+  step.value = 3
+})
+
+const cancelStorageSetup = () => run(async () => {
+  await accountSDK.cancelPendingStorageAuthorization()
+  questions.value.forEach(question => {
+    question.answer = ''
+    question.confirmation = ''
+  })
+  step.value = 2
 })
 
 const refreshAutopayStatus = async () => {
@@ -538,7 +565,6 @@ const createRecovery = () => runWithPassword(async password => {
     recovery_mode: recoveryMode.value,
     questions: questions.value,
     guardian,
-    storage_authorization_id: storageAuthorization.value.id,
   })
   questions.value.forEach(q => { q.answer = ''; q.confirmation = '' })
   step.value = 4
@@ -589,8 +615,8 @@ const copyGuardianIdentity = () => run(async () => {
 const acceptGuardianSetup = () => runWithPassword(async password => {
   paidConfirmContext.value = 'guardian'
   if (guardianStorageChoice.value === 'paid' && !await requestPaidConfirmation()) return
-  const authorization = await accountSDK.confirmStorage(guardianStorageChoice.value, guardianStorageChoice.value === 'paid' ? 100 : undefined)
-	guardianReceiptOutput.value = (await accountSDK.acceptGuardianSetup(password, guardianSetupInput.value, authorization.id)).receipt
+  await accountSDK.confirmStorage(guardianStorageChoice.value, guardianStorageChoice.value === 'paid' ? 100 : undefined)
+	guardianReceiptOutput.value = (await accountSDK.acceptGuardianSetup(password, guardianSetupInput.value)).receipt
 })
 
 const createGuardianResponse = () => runWithPassword(async password => {
@@ -604,6 +630,16 @@ const copyText = async (value: string) => {
 onMounted(async () => {
   try { savedState.value = await accountSDK.status() } catch { savedState.value = null }
   try { storageOptions.value = (await accountSDK.getStorageOptions()).options } catch { /* preflight will retry */ }
+  if (!savedState.value?.recovery_configured) {
+    try {
+      const resumed = await accountSDK.resumePendingStorageAuthorization()
+      if (resumed?.id) {
+        selectedStorage.value = resumed.mode || resumed.summary?.mode || ''
+        if (resumed.summary?.record_count) recordCount.value = Number(resumed.summary.record_count)
+        step.value = 3
+      }
+    } catch { /* expired or identity-mismatched authorization is intentionally ignored */ }
+  }
   try { await refreshAutopayStatus() } catch { autopayStatus.value = null }
   autopayRefreshTimer = setInterval(() => void refreshAutopayStatus().catch(() => undefined), 30_000)
 })

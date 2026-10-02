@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -24,21 +25,149 @@ func accountManagedDataImportKey() []byte {
 	return []byte(GetDBKeyPrefix() + "account-managed-data-import-pending")
 }
 
+const (
+	accountManagedImportMarkerVersion = 1
+
+	accountManagedImportOriginUnknown     = "unknown"
+	accountManagedImportOriginRestore     = "restore"
+	accountManagedImportOriginRemoteApply = "remote-apply"
+
+	accountManagedImportStageUnknown        = "unknown"
+	accountManagedImportStageLocalCommit    = "local-commit"
+	accountManagedImportStageProviderImport = "provider-import"
+	accountManagedImportStageScopeRebuild   = "scope-rebuild"
+	accountManagedImportStageMarkerDelete   = "marker-delete"
+)
+
+type accountManagedDataImportMarker struct {
+	Version            uint32 `json:"version"`
+	Origin             string `json:"origin"`
+	Stage              string `json:"stage"`
+	TargetStateRevision uint64 `json:"target_state_revision,omitempty"`
+	TargetStateHash     string `json:"target_state_hash,omitempty"`
+	TargetDataRevision  uint64 `json:"target_data_revision,omitempty"`
+	TargetDataHash      string `json:"target_data_hash,omitempty"`
+	CreatedAtUnix       int64  `json:"created_at_unix,omitempty"`
+	UpdatedAtUnix       int64  `json:"updated_at_unix,omitempty"`
+}
+
+func accountManagedImportMarkerForProfile(origin, stage string,
+	profile *accountManagementProfile) accountManagedDataImportMarker {
+
+	now := time.Now().Unix()
+	marker := accountManagedDataImportMarker{
+		Version: accountManagedImportMarkerVersion,
+		Origin: strings.TrimSpace(origin), Stage: strings.TrimSpace(stage),
+		CreatedAtUnix: now, UpdatedAtUnix: now,
+	}
+	if marker.Origin == "" {
+		marker.Origin = accountManagedImportOriginUnknown
+	}
+	if marker.Stage == "" {
+		marker.Stage = accountManagedImportStageUnknown
+	}
+	if profile != nil {
+		marker.TargetStateRevision = profile.StateSeq
+		marker.TargetStateHash = profile.StateHash
+		marker.TargetDataRevision = profile.ManagedDataRevision
+		marker.TargetDataHash = profile.ManagedDataHash
+	}
+	return marker
+}
+
+func (p *Manager) writeAccountManagedDataImportMarker(marker accountManagedDataImportMarker) error {
+	if p == nil || p.db == nil {
+		return fmt.Errorf("wallet database is unavailable")
+	}
+	if marker.Version == 0 {
+		marker.Version = accountManagedImportMarkerVersion
+	}
+	if strings.TrimSpace(marker.Origin) == "" {
+		marker.Origin = accountManagedImportOriginUnknown
+	}
+	if strings.TrimSpace(marker.Stage) == "" {
+		marker.Stage = accountManagedImportStageUnknown
+	}
+	now := time.Now().Unix()
+	if marker.CreatedAtUnix == 0 {
+		marker.CreatedAtUnix = now
+	}
+	marker.UpdatedAtUnix = now
+	encoded, err := json.Marshal(marker)
+	if err != nil {
+		return err
+	}
+	return p.db.Write(accountManagedDataImportKey(), encoded)
+}
+
+func (p *Manager) updateAccountManagedDataImportStage(stage string) error {
+	marker, err := p.readAccountManagedDataImportMarker()
+	if err != nil {
+		return err
+	}
+	if marker == nil {
+		return ErrAccountManagedDataImportIncomplete
+	}
+	marker.Stage = strings.TrimSpace(stage)
+	if marker.Stage == "" {
+		marker.Stage = accountManagedImportStageUnknown
+	}
+	return p.writeAccountManagedDataImportMarker(*marker)
+}
+
+func (p *Manager) readAccountManagedDataImportMarker() (*accountManagedDataImportMarker, error) {
+	if p == nil || p.db == nil {
+		return nil, fmt.Errorf("wallet database is unavailable")
+	}
+	encoded, err := p.db.Read(accountManagedDataImportKey())
+	if errors.Is(err, indexer.ErrKeyNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	// v0 markers were the one-byte value {1}. Preserve fail-closed behavior and
+	// surface their provenance as unknown instead of pretending they are a
+	// structured marker from a newer SDK.
+	if len(encoded) == 1 && encoded[0] == 1 {
+		marker := accountManagedDataImportMarker{
+			Version: 0, Origin: accountManagedImportOriginUnknown,
+			Stage: accountManagedImportStageUnknown,
+		}
+		return &marker, nil
+	}
+	var marker accountManagedDataImportMarker
+	if err := json.Unmarshal(encoded, &marker); err != nil ||
+		marker.Version != accountManagedImportMarkerVersion {
+		// A malformed marker is still an incomplete-import barrier. Diagnostics
+		// may be unavailable, but corruption must never turn into permission to
+		// upload or activate.
+		return &accountManagedDataImportMarker{
+			Version: 0, Origin: accountManagedImportOriginUnknown,
+			Stage: accountManagedImportStageUnknown,
+		}, nil
+	}
+	if strings.TrimSpace(marker.Origin) == "" {
+		marker.Origin = accountManagedImportOriginUnknown
+	}
+	if strings.TrimSpace(marker.Stage) == "" {
+		marker.Stage = accountManagedImportStageUnknown
+	}
+	return &marker, nil
+}
+
 // This persistent marker is only a crash boundary for a real remote recovery
 // import. Runtime concurrency is excluded by the application sync gate; normal
 // PUT/ACK processing must never create it. Only a fully successful import
 // removes the marker. Its presence after restart blocks uploads until the SDK
 // executes an explicit full recovery again.
 func (p *Manager) checkAccountManagedDataImport() error {
-	if p == nil || p.db == nil {
-		return fmt.Errorf("wallet database is unavailable")
-	}
-	_, err := p.db.Read(accountManagedDataImportKey())
-	if errors.Is(err, indexer.ErrKeyNotFound) {
-		return nil
-	}
+	marker, err := p.readAccountManagedDataImportMarker()
 	if err != nil {
 		return err
+	}
+	if marker == nil {
+		return nil
 	}
 	return ErrAccountManagedDataImportIncomplete
 }
@@ -275,6 +404,28 @@ func configureAccountTemporaryRetention(store *dkvsStore,
 	return nil
 }
 
+// A verified paid ACK can outlive a local activation whose scope changed.
+// Refuse a stale temporary profile before creating an outbox submission; do
+// not promote the local profile or overwrite the newer remote configuration.
+func rejectAccountRecordStorageDowngrade(profile *accountManagementProfile, values ...*dkvsValue) error {
+	if profile == nil || profile.StorageMode != AccountStorageTemporary {
+		return nil
+	}
+	for _, value := range values {
+		if value == nil || value.record == nil {
+			continue
+		}
+		proof, err := dkvsindexer.ParseFeeProof(value.record.FeeProof)
+		if err != nil {
+			return err
+		}
+		if proof.Mode == dkvsindexer.FeeModeAutopay {
+			return ErrAccountStorageModeDowngrade
+		}
+	}
+	return nil
+}
+
 func accountRecordMatchesStorage(value *dkvsValue, profile *accountManagementProfile) bool {
 	if value == nil || value.record == nil || profile == nil {
 		return false
@@ -338,7 +489,9 @@ func (p *Manager) requireCurrentAccountManagedData() error {
 	profile := *p.accountProfile
 	profile.StateEnvelope = append([]byte(nil), p.accountProfile.StateEnvelope...)
 	profile.ManagedDataEnvelope = append([]byte(nil), p.accountProfile.ManagedDataEnvelope...)
+	secret := append([]byte(nil), p.accountSecret...)
 	p.mutex.RUnlock()
+	defer zeroBytes(secret)
 	// An account transport/import operation still running is a normal wait, not
 	// a failed recovery. Inspect the coordinator state without holding its mutex
 	// while reading the durable marker.
@@ -388,7 +541,7 @@ func (p *Manager) requireCurrentAccountManagedData() error {
 	if err != nil || !bytes.Equal(blob.Data, profile.ManagedDataEnvelope) {
 		return dkvsindexer.ErrWriteConflict
 	}
-	state, err := account.OpenManagedState(p.accountSecret, profile.AccountID,
+	state, err := account.OpenManagedState(secret, profile.AccountID,
 		stateValue.Value)
 	if err != nil || state.DataRevision != profile.ManagedDataRevision ||
 		state.DataHash != profile.ManagedDataHash {

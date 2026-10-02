@@ -34,9 +34,6 @@ func (p *rgb11Manager) validateRGB11SpentChangeHistory(ctx context.Context,
 	if spender == original.State.WitnessTxID {
 		return fmt.Errorf("%w: RGB11 spent change names its own transaction as successor", ErrRGB11Inconsistent)
 	}
-	if spender == "" || spender == "unknown" {
-		return fmt.Errorf("RGB11 spent change has no distinct known successor")
-	}
 	receiptHash, err := receipt.Hash()
 	if err != nil {
 		return err
@@ -62,6 +59,31 @@ func (p *rgb11Manager) validateRGB11SpentChangeHistory(ctx context.Context,
 	transfers, err := p.rgbManager.projectionStore.ListTransfers()
 	if err != nil {
 		return err
+	}
+	if spender == "" || spender == "unknown" {
+		// An outspend response may omit the spender. Require one local settled
+		// transaction and independently prove its exact input from Bitcoin facts.
+		// Multiple recipients sharing a batch witness are one candidate.
+		candidate := ""
+		for _, state := range transfers {
+			if state.Direction != "send" || state.Status != "settled" ||
+				state.WitnessTxID == "" || state.WitnessTxID == original.State.WitnessTxID {
+				continue
+			}
+			for _, input := range state.InputOutPoints {
+				if input != allocation.OutPoint {
+					continue
+				}
+				if candidate != "" && candidate != state.WitnessTxID {
+					return fmt.Errorf("RGB11 spent change has ambiguous local successors")
+				}
+				candidate = state.WitnessTxID
+			}
+		}
+		if _, verified := verifyRGB11ExpectedSpend(p.rgbManager.evidence, allocation.OutPoint, candidate); !verified {
+			return fmt.Errorf("RGB11 spent change has no independently verified successor")
+		}
+		spender = candidate
 	}
 	for _, state := range transfers {
 		if state.Direction != "send" || state.Status != "settled" || state.WitnessTxID != spender {
@@ -91,7 +113,9 @@ func (p *rgb11Manager) validateRGB11SpentChangeHistory(ctx context.Context,
 			return fmt.Errorf("RGB11 spent change successor is not confirmed")
 		}
 		validator := rgb11wallet.NewNativeConsensusValidatorWithReveals(successor.ChangeSeals...)
-		if _, err := rgb11wallet.ValidateWith(ctx, validator, successor.LocalConsignment, p.rgbManager.evidence); err != nil {
+		// The successor may itself have become history. Revalidate its entire
+		// operation ancestry and witnesses, not its former spendable projection.
+		if err := validator.ValidateHistoricalConsignment(ctx, successor.LocalConsignment, p.rgbManager.evidence); err != nil {
 			return err
 		}
 		return nil

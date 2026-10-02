@@ -6,7 +6,10 @@ import (
 	"fmt"
 )
 
-var ErrRGB11ManagedOperationActive = errors.New("an RGB11 recovery operation is already active")
+var (
+	ErrRGB11ManagedOperationActive = errors.New("an RGB11 recovery operation is already active")
+	ErrRGB11OperationScopeChanged  = errors.New("RGB11 operation source changed during account synchronization")
+)
 
 type rgb11ManagedOperationMode uint8
 
@@ -81,7 +84,9 @@ func (p *Manager) accountManagedRecoveryConfigured() bool {
 //  3. let broadcast/ACK paths synchronously persist active recovery data;
 //  4. publish one stable snapshot after the transition becomes stable.
 //
-// The RGB scope write lock is an application-state gate. The manager data lock
+// Managed RGB operations are serialized separately from the scope lock. A read
+// scope lease freezes wallet/account identity while allowing read-only RGB UI
+// calls to inspect durable progress during network waits. The manager data lock
 // is never held across the network calls made by account synchronization.
 func runRGB11ManagedOperation[T any](p *Manager, ctx context.Context,
 	mode rgb11ManagedOperationMode,
@@ -109,11 +114,17 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 	var result T
 	var stableConfirmed bool
 	err := p.runAccountOperation(ctx, func() error {
-		p.channelIdentityMu.Lock()
-		p.rgbOperationMu.Lock()
+		// Serialize managed RGB state machines without taking the exclusive RGB
+		// scope lock. The read side still freezes wallet/account scope changes,
+		// while read-only RGB UI calls can observe prepared/active progress during
+		// network waits instead of stalling behind an unrelated write lock.
+		p.rgbManagedExecutionMu.Lock()
+		defer p.rgbManagedExecutionMu.Unlock()
+		p.channelIdentityMu.RLock()
+		p.rgbOperationMu.RLock()
 		defer func() {
-			p.rgbOperationMu.Unlock()
-			p.channelIdentityMu.Unlock()
+			p.rgbOperationMu.RUnlock()
+			p.channelIdentityMu.RUnlock()
 		}()
 
 		manager, err := selectManager()
@@ -124,6 +135,12 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 			result, err = operation(manager)
 			return err
 		}
+		if manager == nil || manager.wallet == nil {
+			return ErrRGB11Inconsistent
+		}
+		requestedScope := manager.rgb11ScopeKey()
+		requestedFingerprint := walletFingerprint(manager.wallet)
+		requestedNetwork := _chain
 		activeBefore, err := p.hasAccountManagedRGB11Transition()
 		if err != nil {
 			return err
@@ -134,6 +151,33 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 		if !activeBefore {
 			if err := p.syncAccountManagementState(ctx, 0, false); err != nil {
 				return fmt.Errorf("confirm RGB11 account-managed baseline: %w", err)
+			}
+			// Baseline synchronization can apply a remote catalog deletion or an
+			// active recovery journal. Neither the captured manager nor the old
+			// transition check remains a valid authorization to start business
+			// work. Re-select fixed-root callers too, without making account
+			// management depend on the UI's selected wallet.
+			manager, err = selectManager()
+			if err != nil {
+				return err
+			}
+			if manager == nil || manager.wallet == nil || _chain != requestedNetwork ||
+				manager.rgb11ScopeKey() != requestedScope ||
+				walletFingerprint(manager.wallet) != requestedFingerprint {
+				return ErrRGB11OperationScopeChanged
+			}
+			// A successful own-PUT returns before the ordinary sync path imports
+			// active mail. Confirm that recovery layer here as well: a stable PUT
+			// must not authorize new work over a remotely pending transition.
+			if err := p.importAccountManagedActiveDataForSync(true); err != nil {
+				return fmt.Errorf("confirm RGB11 active account recovery: %w", err)
+			}
+			active, err := p.hasAccountManagedRGB11Transition()
+			if err != nil {
+				return err
+			}
+			if active && mode == rgb11ManagedOperationNew {
+				return ErrRGB11ManagedOperationActive
 			}
 		}
 

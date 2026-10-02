@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -35,11 +36,14 @@ func (p *rgb11L1MonitorIndexer) GetBlockHash(height int) (string, error) {
 }
 
 type rgb11L1MonitorEvidence struct {
-	statuses map[string]*rgb11wallet.BitcoinTxStatus
+	statuses    map[string]*rgb11wallet.BitcoinTxStatus
+	statusCalls int
+	statusError error
+	utxoError   error
 }
 
 func (p *rgb11L1MonitorEvidence) GetUTXO(string) (*rgb11wallet.BitcoinUTXO, error) {
-	return nil, nil
+	return nil, p.utxoError
 }
 
 func (p *rgb11L1MonitorEvidence) GetRawTx(string) ([]byte, error) {
@@ -47,6 +51,10 @@ func (p *rgb11L1MonitorEvidence) GetRawTx(string) ([]byte, error) {
 }
 
 func (p *rgb11L1MonitorEvidence) GetTxStatus(txid string) (*rgb11wallet.BitcoinTxStatus, error) {
+	p.statusCalls++
+	if p.statusError != nil {
+		return nil, p.statusError
+	}
 	if status := p.statuses[txid]; status != nil {
 		copy := *status
 		return &copy, nil
@@ -138,9 +146,15 @@ func TestRGB11L1MonitorReconcilesSettledReceiveOnReorg(t *testing.T) {
 	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if evidence.statusCalls != 0 {
+		t.Fatalf("initial checkpoint unexpectedly refreshed RGB11 evidence %d times", evidence.statusCalls)
+	}
 	chain.height = 11
 	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if evidence.statusCalls != 0 {
+		t.Fatalf("normal tip extension unexpectedly refreshed RGB11 evidence %d times", evidence.statusCalls)
 	}
 	stored, err := manager.rgbManager.projectionStore.LoadTransferState(state.TransferID)
 	if err != nil || stored.Status != "settled" {
@@ -159,6 +173,75 @@ func TestRGB11L1MonitorReconcilesSettledReceiveOnReorg(t *testing.T) {
 	checkpoint, err := manager.rgbManager.loadRGB11L1MonitorCheckpoint()
 	if err != nil || checkpoint.Tip.Hash != "fork-11" || len(checkpoint.Blocks) != 7 {
 		t.Fatalf("reorg checkpoint=%+v err=%v", checkpoint, err)
+	}
+	resvs, err := manager.rgbManager.loadRGB11Reservations()
+	if err != nil || len(resvs) != 1 || resvs[0].Status != RS_RGB11_BROADCAST || resvs[0].State.Status != "pending" {
+		t.Fatalf("reorg did not advance common resv: %+v err=%v", resvs, err)
+	}
+
+}
+
+func TestRGB11L1MonitorRetriesSameForkOnlyUntilRefreshSucceeds(t *testing.T) {
+	privateKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newRGB11MultiDeviceManager(t, privateKey, 704)
+	evidence := &rgb11L1MonitorEvidence{statuses: map[string]*rgb11wallet.BitcoinTxStatus{
+		"fork-witness": {TxID: "fork-witness", Confirmed: true, Confirmations: 2},
+	}}
+	manager.rgbManager.evidence = evidence
+	chain := &rgb11L1MonitorIndexer{height: 10, hashes: rgb11MonitorHashes("main-", 10)}
+	l1 := NewIndexerRPCClientMgr()
+	l1.Set(chain)
+	manager.l1IndexerClient = l1
+	state := &rgb11wallet.TransferState{
+		TransferID: "fork-retry", Direction: "receive", Status: "settled",
+		WitnessTxID: "fork-witness", OutputOutPoints: []string{"fork-witness:0"},
+		MinConfirmations: 1,
+	}
+	if err := manager.rgbManager.projectionStore.SaveTransferState(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	chain.hashes[10] = "fork-10"
+	sentinel := errors.New("synthetic Bitcoin evidence unavailable")
+	evidence.statusError, evidence.utxoError = sentinel, sentinel
+	for attempt := 1; attempt <= 2; attempt++ {
+		beforeCalls := evidence.statusCalls
+		if err := manager.handleRGB11L1MonitorTick(context.Background()); !errors.Is(err, sentinel) {
+			t.Fatalf("fork attempt %d error=%v, want sentinel", attempt, err)
+		}
+		if evidence.statusCalls <= beforeCalls {
+			t.Fatalf("fork attempt %d did not retry RGB11 evidence", attempt)
+		}
+		if got := manager.rgbManager.rgb11ScopeState().ReconciliationState; got != "error" {
+			t.Fatalf("fork attempt %d sync state=%s, want error", attempt, got)
+		}
+		checkpoint, err := manager.rgbManager.loadRGB11L1MonitorCheckpoint()
+		if err != nil || checkpoint.Tip.Hash == chain.hashes[10] {
+			t.Fatalf("fork attempt %d advanced checkpoint despite failure: checkpoint=%+v err=%v", attempt, checkpoint, err)
+		}
+	}
+	evidence.statusError, evidence.utxoError = nil, nil
+	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
+		t.Fatalf("fork retry after evidence recovery: %v", err)
+	}
+	checkpoint, err := manager.rgbManager.loadRGB11L1MonitorCheckpoint()
+	if err != nil || checkpoint.Tip.Hash != chain.hashes[10] {
+		t.Fatalf("successful fork retry did not advance checkpoint: checkpoint=%+v err=%v", checkpoint, err)
+	}
+	if got := manager.rgbManager.rgb11ScopeState().ReconciliationState; got != "idle" {
+		t.Fatalf("successful fork retry sync state=%s, want idle", got)
+	}
+	beforeCalls := evidence.statusCalls
+	if err := manager.handleRGB11L1MonitorTick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if evidence.statusCalls != beforeCalls {
+		t.Fatalf("settled checkpoint retriggered Refresh: before=%d after=%d", beforeCalls, evidence.statusCalls)
 	}
 }
 

@@ -3,12 +3,34 @@ import { getConfig, logLevel } from '@/config/wasm'
 import { Network } from '@/types'
 import { walletStorage } from '@/lib/walletStorage'
 import { WASM_INTEGRITY_MANIFEST } from '@/generated/wasm-integrity'
+import { noteWasmOperation, snapshotWasmRuntimeDiagnostics } from '@/utils/wasmRuntimeDiagnostics'
 
 type IntegrityAsset = (typeof WASM_INTEGRITY_MANIFEST.assets)[number]
 
 const runtimeError = (message: string, cause?: unknown) => {
   const error = new Error(message)
   if (cause !== undefined) error.cause = cause
+  return error
+}
+
+const wasmRuntimeError = (
+  kind: 'go-runtime-exit' | 'host-runtime-failure',
+  message: string,
+  cause?: unknown,
+  exitCode?: number | null,
+) => {
+  const error = runtimeError(message, cause) as Error & {
+    wasmDiagnostics?: {
+      kind: string
+      exitCode?: number
+      recentOperations: ReturnType<typeof snapshotWasmRuntimeDiagnostics>
+    }
+  }
+  error.wasmDiagnostics = {
+    kind,
+    ...(typeof exitCode === 'number' ? { exitCode } : {}),
+    recentOperations: snapshotWasmRuntimeDiagnostics(),
+  }
   return error
 }
 
@@ -95,19 +117,38 @@ const instantiateGoWasm = async () => {
   const asset = WASM_INTEGRITY_MANIFEST.assets.find((item) => item.role === 'wallet-wasm')
   if (!asset) throw runtimeError('Wallet WASM is missing from the integrity manifest')
   const bytes = await fetchVerifiedAsset(asset)
-  const go = new Go()
+  const go = new Go() as any
+  let exitCode: number | null = null
+  const originalExit = go.exit.bind(go)
+  go.exit = (code: number) => {
+    exitCode = Number(code)
+    noteWasmOperation('__runtime__', `go-exit-${exitCode}`)
+    originalExit(code)
+  }
+
   let wasmModule: WebAssembly.WebAssemblyInstantiatedSource
   try {
     wasmModule = await WebAssembly.instantiate(bytes, go.importObject)
   } catch (error) {
-    throw runtimeError('Wallet WASM instantiation failed', error)
+    throw wasmRuntimeError('host-runtime-failure', 'Wallet WASM instantiation failed', error)
   }
 
+  noteWasmOperation('__runtime__', 'run-start')
   const runtimeFailure = Promise.resolve()
     .then(() => go.run(wasmModule.instance))
     .then(
-      () => Promise.reject(runtimeError('Wallet WASM runtime exited unexpectedly')),
-      (error) => Promise.reject(runtimeError('Wallet WASM runtime failed', error))
+      () => Promise.reject(wasmRuntimeError(
+        'go-runtime-exit',
+        `Wallet WASM runtime exited unexpectedly${exitCode === null ? '' : ` (exit code ${exitCode})`}`,
+        undefined,
+        exitCode,
+      )),
+      (error) => Promise.reject(wasmRuntimeError(
+        'host-runtime-failure',
+        'Wallet WASM runtime failed',
+        error,
+        exitCode,
+      ))
     )
 
   void runtimeFailure.catch((error) => {

@@ -382,6 +382,133 @@ func accountRootWrapperMetadataMatchesProfile(value accountRootWrapperPayload,
 		value.RecoveryConfigured == profile.RecoveryConfigured
 }
 
+func accountAutopayPoolFromValue(value *dkvsValue) (string, bool, error) {
+	if value == nil || value.record == nil {
+		return "", false, nil
+	}
+	proof, err := dkvsindexer.ParseFeeProof(value.record.FeeProof)
+	if err != nil {
+		return "", false, err
+	}
+	if proof.Mode != dkvsindexer.FeeModeAutopay {
+		return "", false, nil
+	}
+	pool := strings.TrimSpace(proof.PoolContract)
+	if pool == "" {
+		return "", false, dkvsindexer.ErrInvalidRecord
+	}
+	return pool, true, nil
+}
+
+// adoptRemotePaidAccountStoragePolicy resolves the only allowed storage-policy
+// direction during synchronization: a provisional local temporary profile may
+// converge to a verified paid policy already committed for the same root
+// account. Current UI wallet/account selection is irrelevant.
+func (p *Manager) adoptRemotePaidAccountStoragePolicy(store accountRootWrapperStore,
+	root common.Wallet, snapshot *accountManagementSyncSnapshot,
+	stateValue, dataValue *dkvsValue, applicationLocked bool) (bool, error) {
+
+	if p == nil || store == nil || root == nil || snapshot == nil ||
+		snapshot.profile.StorageMode != AccountStorageTemporary {
+		return false, nil
+	}
+	statePool, statePaid, err := accountAutopayPoolFromValue(stateValue)
+	if err != nil {
+		return false, err
+	}
+	dataPool, dataPaid, err := accountAutopayPoolFromValue(dataValue)
+	if err != nil {
+		return false, err
+	}
+	if !statePaid && !dataPaid {
+		return false, nil
+	}
+	if !statePaid || !dataPaid || statePool != dataPool {
+		return false, ErrAccountStorageModeDowngrade
+	}
+
+	wrapperKey, err := accountRootWrapperKey(root)
+	if err != nil {
+		return false, err
+	}
+	if concrete, ok := store.(*dkvsStore); ok && concrete != nil && concrete.manager != nil {
+		concrete.manager.rememberPaths([]string{wrapperKey})
+		concrete.manager.wakeSync()
+	}
+	if err := store.WaitReady(wrapperKey); err != nil {
+		return false, err
+	}
+	wrapperValue, err := store.Get(wrapperKey)
+	if err != nil || wrapperValue == nil {
+		if err == nil {
+			err = ErrAccountStorageModeDowngrade
+		}
+		return false, err
+	}
+	payload, err := openAccountRootWrapper(root, snapshot.network,
+		snapshot.profile.AccountID, wrapperValue.Value)
+	if err != nil {
+		return false, err
+	}
+	defer zeroBytes(payload.Secret)
+	if !bytes.Equal(payload.Secret, snapshot.secret) ||
+		payload.StorageMode != AccountStoragePaid ||
+		strings.TrimSpace(payload.AutopayContract) == "" ||
+		!strings.EqualFold(strings.TrimSpace(payload.AutopayContract), statePool) {
+		return false, ErrAccountStorageModeDowngrade
+	}
+
+	candidate := snapshot.profile
+	candidate.PackageID = payload.PackageID
+	candidate.RecoveryMode = payload.RecoveryMode
+	candidate.StorageMode = payload.StorageMode
+	candidate.RecordTTL = payload.RecordTTL
+	candidate.AutopayContract = payload.AutopayContract
+	candidate.PublicLocator = payload.PublicLocator
+	candidate.RecoveryConfigured = payload.RecoveryConfigured
+	if !accountRootWrapperMetadataMatchesProfile(payload, candidate) ||
+		!accountRecordMatchesStorage(wrapperValue, &candidate) ||
+		!accountRecordMatchesStorage(stateValue, &candidate) ||
+		!accountRecordMatchesStorage(dataValue, &candidate) {
+		return false, ErrAccountStorageModeDowngrade
+	}
+
+	adopted := false
+	err = p.withAccountLocalState(applicationLocked, func() error {
+		p.mutex.Lock()
+		defer p.mutex.Unlock()
+		if !p.accountSyncSnapshotCurrentLocked(snapshot) {
+			return errAccountSnapshotChanged
+		}
+		if p.accountProfile.StorageMode == AccountStoragePaid {
+			return nil
+		}
+		if p.accountProfile.StorageMode != AccountStorageTemporary {
+			return ErrAccountStorageModeDowngrade
+		}
+		updated := *p.accountProfile
+		updated.PackageID = candidate.PackageID
+		updated.RecoveryMode = candidate.RecoveryMode
+		updated.StorageMode = candidate.StorageMode
+		updated.RecordTTL = candidate.RecordTTL
+		updated.AutopayContract = candidate.AutopayContract
+		updated.PublicLocator = candidate.PublicLocator
+		updated.RecoveryConfigured = candidate.RecoveryConfigured
+		encoded, encodeErr := EncodeToBytes(&updated)
+		if encodeErr != nil {
+			return encodeErr
+		}
+		if writeErr := p.db.Write(accountManagementProfileKey(), encoded); writeErr != nil {
+			return writeErr
+		}
+		p.accountProfile = &updated
+		p.bumpAccountGenerationLocked()
+		adopted = true
+		return nil
+	})
+	return adopted, err
+}
+
 func accountRootWrapperMutation(profile *accountManagementProfile, root common.Wallet,
 	key string, value []byte) (dkvsValueMutation, error) {
 
@@ -440,6 +567,9 @@ func accountActivationMutations(profile *accountManagementProfile, root common.W
 		current[wrapperKey]); err != nil {
 		return nil, err
 	}
+	if err := rejectAccountRecordStorageDowngrade(profile, current[wrapperKey], current[stateKey], current[dataKey]); err != nil {
+		return nil, err
+	}
 	mutations, err := accountManagementMutations(profile, root, stateKey, stateEnvelope,
 		dataKey, dataEnvelope, true)
 	if err != nil {
@@ -463,10 +593,17 @@ func (p *Manager) accountManagementVerifiedSnapshot(store accountRootWrapperStor
 	profile := *p.accountProfile
 	secret := append([]byte(nil), p.accountSecret...)
 	generation := p.accountGeneration
+	rootInfo, err := p.accountManagementRootWalletLocked()
+	var root common.Wallet
+	if err == nil {
+		root = cloneWalletAtAccountZero(rootInfo.Wallet)
+	}
 	p.mutex.RUnlock()
-	root, err := p.accountManagementRootWallet()
-	if err != nil {
+	if err != nil || root == nil {
 		zeroBytes(secret)
+		if err == nil {
+			err = ErrAccountManagementWalletUnavailable
+		}
 		return accountManagementProfile{}, nil, nil, 0, err
 	}
 	stateKey, err := p.accountManagedStateKey(root)
@@ -515,12 +652,12 @@ func (p *Manager) syncAccountRootWrapper(store accountRootWrapperStore) error {
 	if p == nil {
 		return ErrDKVSPathNotSynced
 	}
-	return p.runAccountApplicationSync(nil, func() error {
+	return p.runAccountOperation(nil, func() error {
 		return p.syncAccountRootWrapperAttempt(store, 0)
 	})
 }
 
-// syncAccountRootWrapperLocked shares accountSyncMu with paid activation and
+// syncAccountRootWrapperAttempt shares the account operation gate with paid activation and
 // managed-state synchronization. A wrapper job may therefore finish before an
 // activation or observe its committed paid profile, but can never publish a
 // stale temporary policy after the paid activation has completed.
@@ -530,11 +667,12 @@ func (p *Manager) syncAccountRootWrapperAttempt(store accountRootWrapperStore, a
 		return err
 	}
 	defer zeroBytes(secret)
+	network := _chain
 	key, err := accountRootWrapperKey(root)
 	if err != nil {
 		return err
 	}
-	encoded, err := sealAccountRootWrapper(root, _chain, profile.AccountID,
+	encoded, err := sealAccountRootWrapper(root, network, profile.AccountID,
 		rootWrapperPayload(profile, secret), nil)
 	if err != nil {
 		return err
@@ -546,8 +684,9 @@ func (p *Manager) syncAccountRootWrapperAttempt(store accountRootWrapperStore, a
 	if getErr != nil && !errors.Is(getErr, ErrDKVSRecordNotFound) {
 		return getErr
 	}
+	metadataMatches := false
 	if current != nil {
-		existing, openErr := openAccountRootWrapper(root, _chain, profile.AccountID, current.Value)
+		existing, openErr := openAccountRootWrapper(root, network, profile.AccountID, current.Value)
 		if openErr != nil {
 			return openErr
 		}
@@ -555,14 +694,17 @@ func (p *Manager) syncAccountRootWrapperAttempt(store accountRootWrapperStore, a
 		if !bytes.Equal(existing.Secret, secret) {
 			return fmt.Errorf("%w: remote wrapper contains another account secret", ErrRootAccountWrapperInvalid)
 		}
-		if accountRootWrapperMetadataMatchesProfile(existing, profile) &&
-			accountRecordMatchesStorage(current, &profile) {
-			return nil
+		if profile.StorageMode == AccountStorageTemporary && existing.StorageMode == AccountStoragePaid {
+			return ErrAccountStorageModeDowngrade
 		}
+		metadataMatches = accountRootWrapperMetadataMatchesProfile(existing, profile) &&
+			accountRecordMatchesStorage(current, &profile)
 	}
 	p.mutex.RLock()
 	stale := p.accountGeneration != generation || p.accountProfile == nil ||
 		p.accountProfile.AccountID != profile.AccountID ||
+		p.accountProfile.RootFingerprint != profile.RootFingerprint ||
+		!bytes.Equal(p.accountSecret, secret) || _chain != network ||
 		p.accountProfile.StorageMode != profile.StorageMode ||
 		p.accountProfile.AutopayContract != profile.AutopayContract
 	p.mutex.RUnlock()
@@ -571,6 +713,9 @@ func (p *Manager) syncAccountRootWrapperAttempt(store accountRootWrapperStore, a
 			return p.syncAccountRootWrapperAttempt(store, attempt+1)
 		}
 		return errAccountSnapshotChanged
+	}
+	if metadataMatches {
+		return nil
 	}
 	captured := current
 	_, err = store.Update([]string{key}, func(values map[string]*dkvsValue,
@@ -678,11 +823,41 @@ func (p *Manager) RecoverAccountManagementFromRootMnemonic(ctx context.Context,
 			ctx, mnemonic, password, store, location)
 		return recoveryErr
 	})
-	return results, err
+	if err != nil {
+		return results, err
+	}
+	p.finishAccountManagementRestorePostSync()
+	return results, nil
+}
+
+func (p *Manager) accountManagementRootMnemonic(password string) (string, error) {
+	if p == nil {
+		return "", fmt.Errorf("wallet manager is unavailable")
+	}
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	var info *WalletInfo
+	var err error
+	if p.accountProfile != nil {
+		info, err = p.accountManagementRootWalletLocked()
+	} else {
+		info, err = p.accountManagementCandidateRootLocked()
+	}
+	if err != nil || info == nil {
+		if err == nil {
+			err = ErrAccountManagementWalletUnavailable
+		}
+		return "", err
+	}
+	return p.loadWalletSecret(info, password)
 }
 
 // RecoverAccountManagementFromCurrentWallet retries root discovery after a
 // network switch without exposing the decrypted mnemonic to the application.
+// "CurrentWallet" is retained in the API name for compatibility; discovery is
+// always anchored to the account-management root wallet/account 0 and never to
+// the UI-selected wallet or subaccount.
 func (p *Manager) RecoverAccountManagementFromCurrentWallet(ctx context.Context,
 	password string) ([]RestoredWalletResult, error) {
 
@@ -691,18 +866,7 @@ func (p *Manager) RecoverAccountManagementFromCurrentWallet(ctx context.Context,
 	}
 	var results []RestoredWalletResult
 	err := p.runAccountApplicationSync(ctx, func() error {
-		p.mutex.Lock()
-		if p.wallet == nil {
-			p.mutex.Unlock()
-			return fmt.Errorf("wallet is not created/unlocked")
-		}
-		info := p.walletInfoMap[p.wallet.GetId()]
-		if info == nil {
-			p.mutex.Unlock()
-			return fmt.Errorf("current wallet is unavailable")
-		}
-		mnemonic, loadErr := p.loadWalletSecret(info, password)
-		p.mutex.Unlock()
+		mnemonic, loadErr := p.accountManagementRootMnemonic(password)
 		if loadErr != nil {
 			return loadErr
 		}
@@ -719,7 +883,11 @@ func (p *Manager) RecoverAccountManagementFromCurrentWallet(ctx context.Context,
 			ctx, mnemonic, password, store, location)
 		return recoveryErr
 	})
-	return results, err
+	if err != nil {
+		return results, err
+	}
+	p.finishAccountManagementRestorePostSync()
+	return results, nil
 }
 
 func (p *Manager) recoverAccountManagementFromRootMnemonic(ctx context.Context,

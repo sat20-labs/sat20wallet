@@ -1,5 +1,6 @@
 import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
 import { beginAccountManagementOperation, finishPwaOperation } from '@/utils/accountManagementOperationLog'
+import { noteWasmOperation } from '@/utils/wasmRuntimeDiagnostics'
 
 export interface AccountStorageOption {
   id: string
@@ -116,6 +117,8 @@ type SDKResponse<T> = { code: number; msg: string; data?: T }
 
 class AccountManagementSDK {
   private async request<T>(methodName: string, payload: unknown = {}): Promise<T> {
+    const diagnosticMethod = `account.${methodName}`
+    noteWasmOperation(diagnosticMethod, 'request-start')
     const api = (globalThis as any).sat20account_wasm
     const method = api?.[methodName]
     if (typeof method !== 'function') throw new Error('账户管理 SDK 尚未加载')
@@ -128,18 +131,23 @@ class AccountManagementSDK {
     let response: SDKResponse<T>
     try {
       finishVersion = beginVersionDispatch(methodName, true)
+      noteWasmOperation(diagnosticMethod, 'dispatch')
       response = await method(JSON.stringify(payload))
+      noteWasmOperation(diagnosticMethod, 'returned')
     } catch (error: any) {
+      noteWasmOperation(diagnosticMethod, 'failed')
       const requestError = new Error(error?.message || '账户管理调用失败')
       await finishPwaOperation(operation, requestError)
       throw requestError
     }
     if (!response || response.code !== 0) {
+      noteWasmOperation(diagnosticMethod, 'failed')
       const responseError = new Error(response?.msg || '账户管理调用失败')
       await finishPwaOperation(operation, responseError)
       throw responseError
     }
     await finishPwaOperation(operation, null, response.data)
+    noteWasmOperation(diagnosticMethod, 'finished')
     return response.data as T
     } finally { finishVersion?.() }
   }
@@ -171,6 +179,24 @@ class AccountManagementSDK {
     })
   }
 
+  async resumePendingStorageAuthorization() {
+    try {
+      return await this.request<any>('resumeStorageAuthorization')
+    } catch {
+      return null
+    }
+  }
+
+  cancelPendingStorageAuthorization() {
+    return this.request<any>('cancelStorageAuthorization')
+  }
+
+  reusePaidStorage(recordCount?: number) {
+    return this.request<any>('reusePaidStorage', {
+      record_count: recordCount,
+    })
+  }
+
   guardianIdentity(password: string) {
     return this.request<any>('guardianIdentity', { password })
   }
@@ -179,11 +205,10 @@ class AccountManagementSDK {
     return this.request<any>('createRecovery', request)
   }
 
-  acceptGuardianSetup(password: string, setupPayload: string, storageAuthorizationId: string) {
+  acceptGuardianSetup(password: string, setupPayload: string) {
     return this.request<{ receipt: string }>('acceptGuardianSetup', {
       password,
       setup_payload: setupPayload,
-      storage_authorization_id: storageAuthorizationId,
     })
   }
 

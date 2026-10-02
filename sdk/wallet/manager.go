@@ -99,9 +99,11 @@ func (noopChannelBackupHandler) BackupChannel(*Channel, []byte) error {
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet
 type Manager struct {
-	mutex             sync.RWMutex
-	rgbOperationMu    sync.RWMutex
-	channelIdentityMu sync.RWMutex
+	mutex                sync.RWMutex
+	rgbOperationMu       sync.RWMutex
+	channelIdentityMu    sync.RWMutex
+	// Shared by all RGB scope views of this manager; never held for network I/O.
+	rgbReservationMu     sync.RWMutex
 
 	cfg                   *common.Config
 	bInited               bool
@@ -140,9 +142,12 @@ type Manager struct {
 	accountGeneration                uint64
 	messageSendMu                    sync.Mutex
 	accountRootNotFoundAuthorization *accountRootNotFoundAuthorization
+	accountStorageMu                 sync.Mutex
+	accountStorageAuthorization      *accountStorageAuthorizationSession
 
 	managedDataMu             sync.RWMutex
 	managedDataProviders      map[string]AccountManagedDataProvider
+	rgbManagedExecutionMu     sync.Mutex
 	rgbManagedOperationMu     sync.Mutex
 	rgbManagedOperationActive bool
 	rgbManagedOperationDirty  bool
@@ -740,7 +745,7 @@ func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 
 	info = p.l1IndexerClient.GetTickInfo(name)
 	if info == nil {
-		Log.Errorf("GetTickInfo %s failed", name)
+		Log.Errorf("GetTickInfo %s failed", name.String())
 		return nil
 	}
 	saveTickerInfo(p.db, info)
@@ -748,7 +753,7 @@ func (p *Manager) getTickerInfo(name *swire.AssetName) *indexer.TickerInfo {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	p.tickerInfoMap[info.AssetName.String()] = info
-	if name.Protocol == indexer.PROTOCOL_NAME_RUNES {
+	if info.AssetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
 		p.tickerInfoMap[info.DisplayName] = info
 	}
 	return info

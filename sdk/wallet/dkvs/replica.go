@@ -288,12 +288,12 @@ func putLocalKeyStateBatch(batch batchWriter, namespace string, state LocalKeySt
 	return batch.Put(dkvsSubscriptionKeyStateKey(namespace, state.Key), encoded)
 }
 
-// ReplacePrefixSnapshot atomically installs the current records of one managed
-// path. Keys absent on the endpoint remain in the local cache as history.
-// Other managed paths in the same wallet replica are left untouched.
+// ReplacePrefixSnapshot atomically installs active values and explicit delete
+// floors. Mere endpoint-cache absence still preserves local history; an
+// explicit deleted KeyState removes the stale live value, not its sequence.
 func (s *ReplicaStore) ReplacePrefixSnapshot(namespace string,
 	snapshot *dkvsindexer.PrefixSnapshot) ([]string, error) {
-	if s == nil || s.db == nil || snapshot == nil || strings.TrimSpace(snapshot.EndpointID) == "" {
+	if s == nil || s.db == nil || snapshot == nil || strings.TrimSpace(namespace) == "" || strings.TrimSpace(snapshot.EndpointID) == "" {
 		return nil, dkvsindexer.ErrInvalidSnapshot
 	}
 	prefixes, err := NormalizeSubscriptionPrefixes([]string{snapshot.Prefix})
@@ -301,65 +301,15 @@ func (s *ReplicaStore) ReplacePrefixSnapshot(namespace string,
 		return nil, dkvsindexer.ErrInvalidSnapshot
 	}
 	prefix := prefixes[0]
-	statesByKey := make(map[string]dkvsindexer.DKVSKeyState, len(snapshot.KeyStates))
-	for _, state := range snapshot.KeyStates {
-		if state.Key == "" || !walletSubscriptionMatches(prefix, state.Key) {
-			return nil, dkvsindexer.ErrInvalidSnapshot
-		}
-		statesByKey[state.Key] = state
-	}
-	for _, record := range snapshot.Records {
-		if record == nil || !walletSubscriptionMatches(prefix, record.Key) {
-			return nil, dkvsindexer.ErrInvalidSnapshot
-		}
-		if err := dkvsindexer.VerifyRecordForClient(record, dkvsindexer.RecordVerificationOptions{
-			ExpectedKey: record.Key, Height: snapshot.ViewHeight,
-		}); err != nil {
-			return nil, err
-		}
-		state, ok := statesByKey[record.Key]
-		if !ok || state.Status != dkvsindexer.KeyStateActive || state.Seq != record.Seq ||
-			state.ETag != dkvsindexer.RecordHash(record).String() {
-			return nil, dkvsindexer.ErrInvalidSnapshot
-		}
-	}
-
-	oldRecords, err := s.ListSubscriptionRecords(namespace)
+	records, err := validatePrefixPayload(prefix, snapshot.ViewHeight, snapshot.Records, snapshot.KeyStates)
 	if err != nil {
 		return nil, err
 	}
-	oldHashes := make(map[string]string)
-	for _, record := range oldRecords {
-		if record != nil && walletSubscriptionMatches(prefix, record.Key) {
-			oldHashes[record.Key] = dkvsindexer.RecordHash(record).String()
-		}
-	}
-	changed := make(map[string]struct{})
-	for _, record := range snapshot.Records {
-		hash := dkvsindexer.RecordHash(record).String()
-		if oldHashes[record.Key] != hash {
-			changed[record.Key] = struct{}{}
-		}
-	}
-
 	batch := s.db.NewWriteBatch()
 	defer batch.Close()
-	for _, record := range snapshot.Records {
-		encoded, err := dkvsindexer.MarshalRecord(record)
-		if err != nil {
-			return nil, err
-		}
-		if err := batch.Put(dkvsSubscriptionRecordKey(namespace, record.Key), encoded); err != nil {
-			return nil, err
-		}
-	}
-	for _, serverState := range snapshot.KeyStates {
-		if serverState.Seq == 0 || serverState.ETag == "" {
-			continue
-		}
-		if err := putLocalKeyStateBatch(batch, namespace, localStateFromServer(serverState)); err != nil {
-			return nil, err
-		}
+	changed, err := s.stagePrefixPayload(batch, namespace, records, snapshot.KeyStates)
+	if err != nil {
+		return nil, err
 	}
 	state, stateErr := s.LoadSubscriptionState(namespace)
 	if stateErr != nil {
@@ -387,20 +337,14 @@ func (s *ReplicaStore) ReplacePrefixSnapshot(namespace string,
 	if err := batch.Flush(); err != nil {
 		return nil, err
 	}
-	changedKeys := make([]string, 0, len(changed))
-	for key := range changed {
-		changedKeys = append(changedKeys, key)
-	}
-	sort.Strings(changedKeys)
-	return changedKeys, nil
+	return changed, nil
 }
 
-// ApplyPrefixDelta advances one existing endpoint-local prefix without
-// replacing unrelated or unchanged cached records. An absent server record is
-// retained locally, as required for mailbox history and other local caches.
+// ApplyPrefixDelta advances the endpoint cursor in the same batch as both
+// value updates and explicit deletions. Unrelated cached records are untouched.
 func (s *ReplicaStore) ApplyPrefixDelta(namespace string, after uint64,
 	delta *dkvsindexer.PrefixDeltaResult) ([]string, error) {
-	if s == nil || s.db == nil || delta == nil || delta.EndpointID == "" || delta.Generation < after {
+	if s == nil || s.db == nil || delta == nil || strings.TrimSpace(namespace) == "" || delta.EndpointID == "" || delta.Generation < after {
 		return nil, dkvsindexer.ErrInvalidSnapshot
 	}
 	prefixes, err := NormalizeSubscriptionPrefixes([]string{delta.Prefix})
@@ -418,58 +362,15 @@ func (s *ReplicaStore) ApplyPrefixDelta(namespace string, after uint64,
 	if !known || knownGeneration != after {
 		return nil, dkvsindexer.ErrStaleGeneration
 	}
-	statesByKey := make(map[string]dkvsindexer.DKVSKeyState, len(delta.KeyStates))
-	for _, keyState := range delta.KeyStates {
-		if !walletSubscriptionMatches(delta.Prefix, keyState.Key) {
-			return nil, dkvsindexer.ErrInvalidSnapshot
-		}
-		if _, duplicate := statesByKey[keyState.Key]; duplicate {
-			return nil, dkvsindexer.ErrInvalidSnapshot
-		}
-		statesByKey[keyState.Key] = keyState
-	}
-	if len(statesByKey) != len(delta.Records) {
-		return nil, dkvsindexer.ErrInvalidSnapshot
+	records, err := validatePrefixPayload(delta.Prefix, delta.ViewHeight, delta.Records, delta.KeyStates)
+	if err != nil {
+		return nil, err
 	}
 	batch := s.db.NewWriteBatch()
 	defer batch.Close()
-	changed := make([]string, 0, len(delta.Records))
-	seen := make(map[string]struct{}, len(delta.Records))
-	for _, record := range delta.Records {
-		if record == nil || !walletSubscriptionMatches(delta.Prefix, record.Key) {
-			return nil, dkvsindexer.ErrInvalidSnapshot
-		}
-		if _, duplicate := seen[record.Key]; duplicate {
-			return nil, dkvsindexer.ErrInvalidSnapshot
-		}
-		seen[record.Key] = struct{}{}
-		if err := dkvsindexer.VerifyRecordForClient(record, dkvsindexer.RecordVerificationOptions{
-			ExpectedKey: record.Key, Height: delta.ViewHeight,
-		}); err != nil {
-			return nil, err
-		}
-		keyState, ok := statesByKey[record.Key]
-		hash := dkvsindexer.RecordHash(record).String()
-		if !ok || keyState.Status != dkvsindexer.KeyStateActive || keyState.Seq != record.Seq || keyState.ETag != hash {
-			return nil, dkvsindexer.ErrInvalidSnapshot
-		}
-		old, readErr := s.LoadSubscriptionRecord(namespace, record.Key)
-		if readErr != nil && !errors.Is(readErr, indexercommon.ErrKeyNotFound) {
-			return nil, readErr
-		}
-		if old == nil || dkvsindexer.RecordHash(old).String() != hash {
-			changed = append(changed, record.Key)
-		}
-		encoded, marshalErr := dkvsindexer.MarshalRecord(record)
-		if marshalErr != nil {
-			return nil, marshalErr
-		}
-		if err := batch.Put(dkvsSubscriptionRecordKey(namespace, record.Key), encoded); err != nil {
-			return nil, err
-		}
-		if err := putLocalKeyStateBatch(batch, namespace, localStateFromServer(keyState)); err != nil {
-			return nil, err
-		}
+	changed, err := s.stagePrefixPayload(batch, namespace, records, delta.KeyStates)
+	if err != nil {
+		return nil, err
 	}
 	state.Generations[delta.Prefix] = delta.Generation
 	if delta.ViewHeight > state.ViewHeight {
@@ -483,7 +384,6 @@ func (s *ReplicaStore) ApplyPrefixDelta(namespace string, after uint64,
 	if err := batch.Flush(); err != nil {
 		return nil, err
 	}
-	sort.Strings(changed)
 	return changed, nil
 }
 

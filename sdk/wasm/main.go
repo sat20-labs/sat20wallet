@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,6 +60,11 @@ func createUntrackedAsyncJsHandler(task AsyncTaskFunc) js.Func {
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
+						// Stack frames contain function/file/line information but no
+						// wallet arguments or payloads. Keep the caller-facing error
+						// compact while emitting enough context to distinguish an
+						// exported-call panic from a whole-runtime exit.
+						wallet.Log.Errorf("wasm async panic: %v\n%s", r, debug.Stack())
 						result := createJsRet(nil, -1, fmt.Sprintf("wasm panic: %v", r))
 						jsResult := js.Global().Get("Object").New()
 						for key, value := range result {
@@ -1213,16 +1219,22 @@ func reservationStatus(this js.Value, p []js.Value) any {
 	if resv == nil {
 		return createJsRet(nil, -1, "reservation not found")
 	}
-	buf, err := json.Marshal(resv.GetStructInDB())
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	return createJsRet(map[string]interface{}{
+	data := map[string]interface{}{
 		"reservation_id": resv.GetId(),
 		"type":           resv.GetType(),
 		"status":         int(resv.GetStatus()),
-		"json":           string(buf),
-	}, 0, "ok")
+	}
+	// RGB11 reservation details are exposed only through the redacted RGB11 state API.
+	// The common reservation record contains internal transport/lifecycle fields
+	// that must not be surfaced to JavaScript as a raw persistence object.
+	if resv.GetType() != wallet.RESV_TYPE_RGB11 {
+		buf, err := json.Marshal(resv.GetStructInDB())
+		if err != nil {
+			return createJsRet(nil, -1, err.Error())
+		}
+		data["json"] = string(buf)
+	}
+	return createJsRet(data, 0, "ok")
 }
 
 func resumeLockWithExpandFromL1Tx(this js.Value, p []js.Value) any {
@@ -1257,8 +1269,10 @@ func allReservations(this js.Value, p []js.Value) any {
 			"type":           resv.GetType(),
 			"status":         int(resv.GetStatus()),
 		}
-		if buf, err := json.Marshal(resv.GetStructInDB()); err == nil {
-			item["json"] = string(buf)
+		if resv.GetType() != wallet.RESV_TYPE_RGB11 {
+			if buf, err := json.Marshal(resv.GetStructInDB()); err == nil {
+				item["json"] = string(buf)
+			}
 		}
 		items = append(items, item)
 	}

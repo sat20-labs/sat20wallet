@@ -268,6 +268,8 @@ import { generateMempoolUrl, formatLargeNumber } from '@/utils'
 import { useGlobalStore } from '@/store/global'
 import walletManager from '@/utils/sat20'
 import rgb11Address from '@/utils/rgb11Address'
+import { walletRequestSessionGuard } from '@/lib/walletSession'
+import { assertWalletIdentityReady, subscribeWalletIdentity } from '@/lib/identity-boundary'
 import { rgb11TaskResumeAsset } from '@/utils/rgb11Oob'
 import { downloadRGB11ContractFile } from '@/utils/rgb11ContractFile'
 import { useI18n } from 'vue-i18n'
@@ -403,6 +405,29 @@ const directMailboxRetryDelays = [0, 1_000, 2_000, 4_000, 8_000, 16_000]
 let directMailboxTimer: ReturnType<typeof setTimeout> | undefined
 let directMailboxGeneration = 0
 let directMailboxSync: Promise<void> | undefined
+let directContextGeneration = 0
+let directAlive = true
+let directStateInvalid = false
+const directScope = computed(() => JSON.stringify([globalStore.env, walletStore.rootAccountId,
+  walletStore.walletId, walletStore.accountIndex, walletStore.network, walletStore.address]))
+const directAllowed = computed(() => selectedType.value === 'RGB11' && !walletStore.locked &&
+  !walletStore.isSwitchingWallet && !walletStore.isSwitchingAccount && !walletStore.isSwitchingNetwork)
+
+const guardDirectTask = () => {
+  const scope = directScope.value
+  const context = directContextGeneration
+  const identity = assertWalletIdentityReady()
+  const checkSession = walletRequestSessionGuard('deliverAndBroadcastRGB11AddressTransfer')
+  const check = () => {
+    checkSession()
+    assertWalletIdentityReady(identity)
+    if (!directAlive || !directAllowed.value || scope !== directScope.value || context !== directContextGeneration) {
+      throw new Error(t('rgb11Transfer.scopeChanged'))
+    }
+  }
+  check()
+  return check
+}
 
 const exportRGB11Contract = async (asset: Asset) => {
   const contractId = String(asset.contract_id || '').trim()
@@ -504,16 +529,17 @@ const setRGB11TaskMessage = (task: RGB11Task, success: boolean, text: string) =>
   }
 }
 
-const reloadRGB11TaskState = async () => {
+const reloadRGB11TaskState = async (check?: () => void) => {
   const [stateErr, stateResult] = await walletManager.getRGB11State()
   if (stateErr || !stateResult?.state) {
     throw stateErr || new Error(t('rgb11Transfer.taskRefreshFailed'))
   }
+  check?.()
   rgb11Store.setState(JSON.parse(stateResult.state))
   emit('refresh')
 }
 
-const updateRGB11StateAfterMailboxSync = async (encodedResult?: string) => {
+const applyDirectMailboxState = async (encodedResult: string | undefined, check: () => void) => {
   let activity = 0
   try {
     const result = JSON.parse(encodedResult || '{}')
@@ -524,18 +550,21 @@ const updateRGB11StateAfterMailboxSync = async (encodedResult?: string) => {
   if (!activity) return
   const [stateErr, stateResult] = await walletManager.getRGB11State()
   if (stateErr || !stateResult?.state) throw stateErr || new Error(t('rgb11Transfer.taskRefreshFailed'))
+  check()
   rgb11Store.setState(JSON.parse(stateResult.state))
   emit('refresh')
 }
 
 const syncDirectMailboxOnce = async (recordOperation: boolean) => {
   if (directMailboxSync) return directMailboxSync
+  const check = guardDirectTask()
   directMailboxSync = (async () => {
     const [error, result] = recordOperation
       ? await rgb11Address.syncMailbox({})
       : await rgb11Address.syncMailboxInBackground({})
     if (error) throw error
-    await updateRGB11StateAfterMailboxSync(result?.result)
+    check()
+    await applyDirectMailboxState(result?.result, check)
   })()
   try {
     await directMailboxSync
@@ -552,12 +581,23 @@ const stopDirectMailboxRetry = () => {
 
 const startDirectMailboxRetry = (discoveryWindow = false) => {
   stopDirectMailboxRetry()
-  if (selectedType.value !== 'RGB11') return
+  if (!directAlive || !directAllowed.value) return
+  let check: () => void
+  try { check = guardDirectTask() } catch { return }
   const generation = directMailboxGeneration
   const run = async (attempt: number) => {
     if (generation !== directMailboxGeneration || selectedType.value !== 'RGB11') return
     try {
+      check()
       await syncDirectMailboxOnce(false)
+      check()
+      if (generation !== directMailboxGeneration) return
+      // SDK mailbox sync owns Direct ACK -> broadcast progression using the
+      // durable reservation state. The page only refreshes presentation state.
+      if (directStateInvalid) {
+        await reloadRGB11TaskState(check)
+        directStateInvalid = false
+      }
     } catch {
       // The exact Direct outbox remains durable. Retry only inside this bounded window.
     }
@@ -569,17 +609,19 @@ const startDirectMailboxRetry = (discoveryWindow = false) => {
   directMailboxTimer = setTimeout(() => void run(0), directMailboxRetryDelays[0])
 }
 
-const refreshRGB11TaskState = async () => {
+const refreshRGB11TaskState = async (check?: () => void) => {
   const [refreshErr] = await walletManager.refreshRGB11State()
   if (refreshErr) throw refreshErr
-  await reloadRGB11TaskState()
+  check?.()
+  await reloadRGB11TaskState(check)
 }
 
-const completeRGB11TaskBroadcast = async (task: RGB11Task, txid: string) => {
+const completeRGB11TaskBroadcast = async (task: RGB11Task, txid: string, check?: () => void) => {
   try {
-    await refreshRGB11TaskState()
+    await refreshRGB11TaskState(check)
     setRGB11TaskMessage(task, true, t('rgb11Transfer.taskBroadcasted', { txid }))
   } catch (error: any) {
+    check?.()
     setRGB11TaskMessage(task, true, t('rgb11Transfer.taskBroadcastedRefreshFailed', {
       txid,
       error: error?.message || t('rgb11Transfer.taskRefreshFailed'),
@@ -591,9 +633,11 @@ const resumeRGB11Task = async (task: RGB11Task) => {
   if (rgb11TaskBusy.value) return
   rgb11TaskBusy.value = task.key
   setRGB11TaskMessage(task, true, '')
+  let check: (() => void) | undefined
   try {
+    if (task.representative?.address_mode) check = guardDirectTask()
     if (rgb11TaskIsBroadcast(task)) {
-      await refreshRGB11TaskState()
+      await refreshRGB11TaskState(check)
       setRGB11TaskMessage(task, true, t('rgb11Transfer.taskRefreshed'))
       return
     }
@@ -601,14 +645,16 @@ const resumeRGB11Task = async (task: RGB11Task) => {
     if (!ids.length) throw new Error(t('rgb11Transfer.taskResumeFailed'))
     if (task.representative?.address_mode) {
       await syncDirectMailboxOnce(true)
+      check!()
       const [err, result] = await rgb11Address.deliverAndBroadcast({ transfer_id: ids[0] })
+      check!()
 	  if (err || !result) throw err || new Error(t('rgb11Transfer.broadcastFailed'))
 	  if (result.awaiting_ack) {
 		setRGB11TaskMessage(task, true, t('rgb11Transfer.addressAckPending'))
 		return
 	  }
 	  if (!result.broadcast || !result.txid) throw new Error(t('rgb11Transfer.broadcastFailed'))
-      await completeRGB11TaskBroadcast(task, result.txid)
+      await completeRGB11TaskBroadcast(task, result.txid, check)
       return
     }
     const transport = rgb11TaskTransport(task)
@@ -638,6 +684,14 @@ const resumeRGB11Task = async (task: RGB11Task) => {
     }
     throw new Error(t('rgb11Transfer.legacyTransportUnsupported'))
   } catch (error: any) {
+    if (task.representative?.address_mode) {
+      if (!check) return
+      try { check() } catch { return }
+      // In particular, publish the SDK's durable broadcast-attempted state;
+      // an ambiguous result must not cause automatic blind redispatch.
+      try { await reloadRGB11TaskState(check) } catch { /* Preserve the original error. */ }
+      try { check() } catch { return }
+    }
     setRGB11TaskMessage(task, false, error?.message || t('rgb11Transfer.taskResumeFailed'))
   } finally {
     rgb11TaskBusy.value = ''
@@ -677,15 +731,33 @@ const cancelRGB11Task = async (task: RGB11Task) => {
 watch(selectedType, (newType) => {
   // console.log('L1AssetsTabs - Selected Type Changed:', newType)
   emit('update:modelValue', newType)
+  directContextGeneration++
   if (newType === 'RGB11') startDirectMailboxRetry(true)
   else stopDirectMailboxRetry()
 }, { immediate: true })
 
 watch(directMailboxFingerprint, () => {
-  if (selectedType.value === 'RGB11' && directMailboxNeedsSync.value) startDirectMailboxRetry(false)
+  if (directAllowed.value && directMailboxNeedsSync.value) startDirectMailboxRetry(false)
 })
 
-onUnmounted(stopDirectMailboxRetry)
+watch([directScope, directAllowed], () => {
+  directContextGeneration++
+  directStateInvalid = true
+  stopDirectMailboxRetry()
+  if (directAllowed.value) startDirectMailboxRetry(true)
+}, { flush: 'sync' })
+const stopDirectIdentity = subscribeWalletIdentity((state) => {
+  directContextGeneration++
+  directStateInvalid = true
+  stopDirectMailboxRetry()
+  if (state.phase === 'READY' && directAllowed.value) startDirectMailboxRetry(true)
+})
+onUnmounted(() => {
+  directAlive = false
+  directContextGeneration++
+  stopDirectMailboxRetry()
+  stopDirectIdentity()
+})
 
 // 格式化金额显示
 const formatExactAmount = (amount: number | string) => {

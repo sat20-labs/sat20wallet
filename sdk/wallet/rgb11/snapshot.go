@@ -104,6 +104,23 @@ func (s *ProjectionStore) ExportSnapshot() ([]SnapshotRecord, error) {
 }
 
 func (s *ProjectionStore) ImportSnapshot(records []SnapshotRecord) error {
+	if s == nil || s.reservations != nil {
+		return ErrRGB11Inconsistent
+	}
+	batch := s.db.NewWriteBatch()
+	if batch == nil {
+		return ErrValidationReceipt
+	}
+	defer batch.Close()
+	if err := s.StageSnapshotImport(batch, records); err != nil {
+		return err
+	}
+	return batch.Flush()
+}
+
+// StageSnapshotImport validates and stages a scope replacement in the caller's
+// shared wallet transaction. The caller owns Flush and Close.
+func (s *ProjectionStore) StageSnapshotImport(batch indexer.WriteBatch, records []SnapshotRecord) error {
 	if err := s.ValidateSnapshot(records); err != nil {
 		return err
 	}
@@ -122,11 +139,6 @@ func (s *ProjectionStore) ImportSnapshot(records []SnapshotRecord) error {
 	}); err != nil {
 		return err
 	}
-	batch := s.db.NewWriteBatch()
-	if batch == nil {
-		return ErrValidationReceipt
-	}
-	defer batch.Close()
 	for _, key := range existing {
 		if err := batch.Delete(key); err != nil {
 			return err
@@ -138,7 +150,7 @@ func (s *ProjectionStore) ImportSnapshot(records []SnapshotRecord) error {
 			return err
 		}
 	}
-	return batch.Flush()
+	return nil
 }
 
 func (s *ProjectionStore) ValidateSnapshot(records []SnapshotRecord) error {
@@ -355,9 +367,16 @@ type SnapshotTickerRef struct {
 	AssetName  string
 }
 
-// TickerRefsFromProjectionSnapshot derives contract metadata references from
-// validation receipts. The refs are never serialized into the wallet snapshot.
+// TickerRefsFromProjectionSnapshot derives one contract presentation identity
+// from each receipt's committed genesis. Control allocations retain their own
+// asset type in the proof ledger and are not merged into transferable amounts.
 func TickerRefsFromProjectionSnapshot(records []SnapshotRecord) ([]SnapshotTickerRef, error) {
+	objects := make(map[string][]byte)
+	for _, record := range records {
+		if strings.HasPrefix(record.Key, "object-") {
+			objects[strings.TrimPrefix(record.Key, "object-")] = record.Value
+		}
+	}
 	refs := make(map[string]SnapshotTickerRef)
 	for _, record := range records {
 		if !strings.HasPrefix(record.Key, "validation-") {
@@ -365,16 +384,13 @@ func TickerRefsFromProjectionSnapshot(records []SnapshotRecord) ([]SnapshotTicke
 		}
 		hash := strings.TrimPrefix(record.Key, "validation-")
 		var receipt ValidationReceipt
-		if decode(record.Value, &receipt) != nil || receipt.validate(hash) != nil || len(receipt.Allocations) == 0 {
+		if decode(record.Value, &receipt) != nil || receipt.validate(hash) != nil {
 			return nil, ErrValidationReceipt
 		}
-		assetName := receipt.Allocations[0].AssetName.String()
-		for _, allocation := range receipt.Allocations[1:] {
-			if allocation.AssetName.String() != assetName {
-				return nil, ErrValidationReceipt
-			}
+		ref, err := snapshotTickerRef(objects, &receipt)
+		if err != nil {
+			return nil, err
 		}
-		ref := SnapshotTickerRef{ContractID: receipt.ContractID, AssetName: assetName}
 		if existing, ok := refs[receipt.ContractID]; ok && existing != ref {
 			return nil, ErrValidationReceipt
 		}
@@ -407,25 +423,14 @@ func ContractObjectForTickerRef(records []SnapshotRecord, ref SnapshotTickerRef)
 		if receipt.ContractID != ref.ContractID {
 			continue
 		}
-		matched := false
-		for _, allocation := range receipt.Allocations {
-			if allocation.AssetName.String() == ref.AssetName {
-				matched = true
-				break
-			}
+		derived, err := snapshotTickerRef(objects, &receipt)
+		if err != nil {
+			return nil, nil, err
 		}
-		if !matched {
+		if derived != ref {
 			continue
 		}
-		raw := objects[receipt.ConsignmentHash]
-		if len(raw) == 0 {
-			return nil, nil, ErrValidationReceipt
-		}
-		actual := sha256.Sum256(raw)
-		if receipt.ConsignmentHash != hex.EncodeToString(actual[:]) {
-			return nil, nil, ErrValidationReceipt
-		}
-		return append([]byte(nil), raw...), &receipt, nil
+		return append([]byte(nil), objects[receipt.ConsignmentHash]...), &receipt, nil
 	}
 	return nil, nil, ErrValidationReceipt
 }
@@ -466,6 +471,22 @@ func (s *EngineStore) ExportSnapshot() ([]SnapshotRecord, error) {
 }
 
 func (s *EngineStore) ImportSnapshot(records []SnapshotRecord) error {
+	if s == nil || s.reservations != nil {
+		return ErrRGB11Inconsistent
+	}
+	batch := s.db.NewWriteBatch()
+	if batch == nil {
+		return ErrWalletScope
+	}
+	defer batch.Close()
+	if err := s.StageSnapshotImport(batch, records); err != nil {
+		return err
+	}
+	return batch.Flush()
+}
+
+// StageSnapshotImport joins the engine records to a caller-owned transaction.
+func (s *EngineStore) StageSnapshotImport(batch indexer.WriteBatch, records []SnapshotRecord) error {
 	if err := s.ValidateSnapshot(records); err != nil {
 		return err
 	}
@@ -480,11 +501,6 @@ func (s *EngineStore) ImportSnapshot(records []SnapshotRecord) error {
 	}); err != nil {
 		return err
 	}
-	batch := s.db.NewWriteBatch()
-	if batch == nil {
-		return ErrWalletScope
-	}
-	defer batch.Close()
 	for _, key := range existing {
 		if err := batch.Delete(key); err != nil {
 			return err
@@ -496,7 +512,7 @@ func (s *EngineStore) ImportSnapshot(records []SnapshotRecord) error {
 			return err
 		}
 	}
-	return batch.Flush()
+	return nil
 }
 
 func (s *EngineStore) ValidateSnapshot(records []SnapshotRecord) error {

@@ -112,14 +112,14 @@ func TestUnifiedTemplateContractsLocalCoverage(t *testing.T) {
 
 func TestEVMDeployRejectsLowGas(t *testing.T) {
 	manager := &Manager{}
-	_, err := manager.EstimateEVMDeployContract(&ContractDeployRequest{
+	result, err := manager.EstimateEVMDeployContract(&ContractDeployRequest{
 		ContractType:    ContractTypeEVM,
 		ContractContent: "00",
 		ContentEncoding: "hex",
 		GasLimit:        contractcommon.TriggerBaseGas,
 	})
-	if err == nil || !strings.Contains(err.Error(), "less than required base gas") {
-		t.Fatalf("expected low gas error, got %v", err)
+	if err == nil || result != nil || !strings.Contains(err.Error(), "base gas") {
+		t.Fatalf("expected low gas rejection without an estimate, got result=%v err=%v", result, err)
 	}
 }
 
@@ -481,7 +481,7 @@ func TestQueryAgentInvokeFeeIncludesResultFeeButNotBetAmount(t *testing.T) {
 		ContractType: ContractTypeAgent,
 		Action:       contractcommon.AgentInvokeAPIBet,
 		Param:        mustInvokeInnerParam(t, invokeJSON),
-		Assets:       []ContractFundingAsset{{AssetName: contractcommon.SatoshiAssetName, Amount: "1000"}},
+		Value:        1000,
 	})
 	if err != nil {
 		t.Fatalf("QueryFeeForInvokeUnifiedContract(agent bet): %v", err)

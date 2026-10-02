@@ -312,9 +312,31 @@ func TestCancelExpiredRGB11TransferRejectsUnsafeStateAndEvidence(t *testing.T) {
 			}
 		}},
 		{"witness-txid-mismatch", func(t *testing.T, f *expiredCancelFixture) {
-			pending, _ := f.manager.rgbManager.projectionStore.LoadPendingTransfer(f.transferIDs[0])
+			pending, err := f.manager.rgbManager.projectionStore.LoadPendingTransfer(f.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
 			pending.State.WitnessTxID = chainhash.Hash{9}.String()
-			if err := f.manager.rgbManager.projectionStore.SavePendingTransferState(pending); err != nil {
+			if err := f.manager.rgbManager.projectionStore.SavePendingTransferState(pending); !errors.Is(err, ErrRGB11InvoiceMismatch) {
+				t.Fatalf("rebinding witness: got %v, want immutable reservation rejection", err)
+			}
+			unchanged, err := f.manager.rgbManager.projectionStore.LoadPendingTransfer(f.transferIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unchanged.State.WitnessTxID != f.witnessTxID {
+				t.Fatal("rejected write changed the witness binding")
+			}
+			// Normal lifecycle writes reject rebinding. Inject corrupted persisted
+			// authority directly so cancellation still exercises its tx check.
+			id := rgb11TransferResvID(f.manager.rgbManager.rgb11ScopeKey(), "send:"+f.transferIDs[0])
+			stored, err := LoadReservation(f.manager.db, nil, RESV_TYPE_RGB11, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resv := stored.(*RGB11TransferReservation)
+			resv.State.WitnessTxID = pending.State.WitnessTxID
+			if err := SaveReservation(f.manager.db, resv); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -375,8 +397,12 @@ func TestCancelExpiredRGB11TransferRejectsUnsafeStateAndEvidence(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newExpiredCancelFixture(t, 1)
 			test.mutate(t, fixture)
-			if err := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0]); err == nil {
+			cancelErr := fixture.manager.CancelExpiredRGB11Transfer(fixture.transferIDs[0])
+			if cancelErr == nil {
 				t.Fatal("unsafe cancellation succeeded")
+			}
+			if test.name == "witness-txid-mismatch" && cancelErr.Error() != fmt.Sprintf("%v: pending transaction id mismatch", ErrRGB11Inconsistent) {
+				t.Fatalf("corrupt witness cancellation: got %v, want pending transaction id mismatch", cancelErr)
 			}
 			pending, err := fixture.manager.rgbManager.projectionStore.LoadPendingTransfer(fixture.transferIDs[0])
 			if err != nil {

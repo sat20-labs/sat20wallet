@@ -216,11 +216,18 @@ func (p *rgb11Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 	if owner == nil || owner.ensureDKVSManager() == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
-	if err := owner.ensureDKVSManager().ensureCurrentSubscription(store.client); err != nil {
-		return nil, err
-	}
 	accountID, err := dkvsAccountID(p.wallet)
 	if err != nil {
+		return nil, err
+	}
+	mailboxTarget, err := mailboxSubscriptionTarget(accountID)
+	if err != nil {
+		return nil, err
+	}
+	if err := owner.SubscribeDKVSPrefix(mailboxTarget); err != nil {
+		return nil, err
+	}
+	if err := owner.ensureDKVSManager().ensureCurrentSubscription(store.client); err != nil {
 		return nil, err
 	}
 	values, err := store.ListMailboxVerified(accountID, verify)
@@ -321,7 +328,73 @@ func (p *rgb11Manager) SyncConfiguredRGB11AddressMailbox(ctx context.Context,
 			return nil, err
 		}
 	}
+	// Direct send progression is owned by the durable RGB reservation state.
+	// A restarted UI does not need to remember whether it already tried to
+	// broadcast: accepted ACKs and broadcast-attempted are persisted before this
+	// helper crosses the irreversible boundary.
+	if err := p.resumeReadyRGB11AddressTransfers(); err != nil {
+		return result, err
+	}
 	return result, nil
+}
+
+func (p *rgb11Manager) resumeReadyRGB11AddressTransfers() error {
+	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil {
+		return ErrRGB11Inconsistent
+	}
+	states, err := p.rgbManager.projectionStore.ListTransfers()
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]struct{})
+	for _, state := range states {
+		if state == nil || state.Direction != "send" || !state.AddressMode ||
+			state.TransferID == "" || rgb11BroadcastCompleteStatus(state.Status) {
+			continue
+		}
+		pending, err := p.rgbManager.projectionStore.LoadPendingTransfer(state.TransferID)
+		if err != nil {
+			return err
+		}
+		key := pending.State.WitnessTxID
+		if key == "" {
+			key = pending.State.BatchID
+		}
+		if key == "" {
+			key = pending.State.TransferID
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		batch, err := p.loadRGB11AddressBatch(pending)
+		if err != nil {
+			return err
+		}
+		ready := true
+		for _, item := range batch {
+			if item == nil || !item.State.AddressMode || item.State.Direction != "send" {
+				return ErrRGB11Inconsistent
+			}
+			if rgb11BroadcastCompleteStatus(item.State.Status) ||
+				item.State.Status == rgb11StatusBroadcastAttempted {
+				continue
+			}
+			if item.State.Status != "delivered" || !item.State.DeliveryAcknowledged ||
+				item.State.AckStatus != "accepted" || item.State.DeliveryRecordKey == "" ||
+				item.State.DeliveryRecordHash == "" {
+				ready = false
+				break
+			}
+		}
+		if !ready {
+			continue
+		}
+		if _, err := p.BroadcastRGB11AddressTransfer(pending.State.TransferID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const (

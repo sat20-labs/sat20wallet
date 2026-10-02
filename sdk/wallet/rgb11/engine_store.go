@@ -12,9 +12,10 @@ import (
 // EngineStore adapts the existing Wallet SDK KVDB to the standalone RGB11
 // engine storage contract and isolates every wallet/account scope.
 type EngineStore struct {
-	db    indexer.KVDB
-	mu    sync.RWMutex
-	scope string
+	reservations ReservationPersistence
+	db           indexer.KVDB
+	mu           sync.RWMutex
+	scope        string
 }
 
 func NewEngineStore(db indexer.KVDB) *EngineStore { return &EngineStore{db: db} }
@@ -79,7 +80,7 @@ func (s *EngineStore) Begin() (corestorage.Tx, error) {
 	if scope == "" {
 		return nil, ErrWalletScope
 	}
-	batch := s.db.NewWriteBatch()
+	batch := NewReservationWriteBatch(s.db, scope, s.reservations)
 	if batch == nil {
 		return nil, errors.New("RGB11 KVDB returned nil write batch")
 	}

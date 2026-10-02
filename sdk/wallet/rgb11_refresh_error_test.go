@@ -15,13 +15,14 @@ import (
 
 type historicalErrorEvidence struct {
 	rgb11wallet.BitcoinEvidenceProvider
-	outpoint    string
-	failure     error
-	hits        int
-	unknown     bool
-	unconfirmed string
-	successor   string
-	broadcasts  int
+	outpoint       string
+	failure        error
+	hits           int
+	unknown        bool
+	unconfirmed    string
+	successor      string
+	broadcasts     int
+	rawUnavailable bool
 }
 
 func (e *historicalErrorEvidence) GetOutspend(outpoint string) (*rgb11wallet.BitcoinOutspend, error) {
@@ -43,6 +44,13 @@ func (e *historicalErrorEvidence) GetTxStatus(txid string) (*rgb11wallet.Bitcoin
 		return &rgb11wallet.BitcoinTxStatus{TxID: txid, Confirmed: true, Confirmations: 12}, nil
 	}
 	return e.BitcoinEvidenceProvider.GetTxStatus(txid)
+}
+
+func (e *historicalErrorEvidence) GetRawTx(txid string) ([]byte, error) {
+	if e.rawUnavailable && txid == e.successor {
+		return nil, errors.New("successor raw transaction unavailable")
+	}
+	return e.BitcoinEvidenceProvider.GetRawTx(txid)
 }
 
 func (e *historicalErrorEvidence) Broadcast(raw []byte) (string, error) {
@@ -88,6 +96,7 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 			fault := &historicalErrorEvidence{BitcoinEvidenceProvider: evidence, outpoint: spentChange, failure: sentinel, successor: second.State.WitnessTxID}
 			if kind == "unknown_spender" {
 				fault.unknown = true
+				fault.rawUnavailable = true // No independent evidence can identify the spender.
 			}
 			if kind == "reliable_mempool_downgrade" {
 				fault.unconfirmed = first.State.WitnessTxID
@@ -196,7 +205,7 @@ func testRGB11RefreshHistoricalErrors(t *testing.T, manager *Manager, evidence r
 					successorAdvanced = true
 				}
 			}
-			if !successorAdvanced {
+			if !successorAdvanced && kind != "unknown_spender" {
 				t.Fatal("historical failure starved independent successor refresh")
 			}
 			if fault.broadcasts != 0 {

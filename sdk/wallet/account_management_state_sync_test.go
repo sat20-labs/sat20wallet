@@ -294,7 +294,24 @@ func TestFinalizePublishedAccountManagedStateClearsACKedMutationAndKeepsProvider
 	}
 }
 
-func TestAccountManagedApplicationGateQueuesChangesUntilPutAck(t *testing.T) {
+func TestFinalizePublishedAccountManagedStateRejectsOlderACK(t *testing.T) {
+	profile := &accountManagementProfile{AccountID: "account", RootFingerprint: "root",
+		StateSeq: 9, ManagedDataRevision: 8, ManagedDataDirty: true,
+		Pending: []accountManagementMutation{{ID: "new", Type: accountMutationAddWallet}}}
+	manager := &Manager{db: newMemoryKVDB(), accountProfile: profile}
+	snapshot := &accountManagementSyncSnapshot{profile: *profile, pending: append([]accountManagementMutation(nil), profile.Pending...)}
+	_, err := manager.finalizePublishedAccountManagedState(account.ManagedState{Revision: 7},
+		snapshot, []byte("old"), &accountManagedDataSnapshot{Bundle: account.ManagedDataBundle{Revision: 6}})
+	if !errors.Is(err, errAccountSnapshotChanged) {
+		t.Fatalf("older ACK: %v", err)
+	}
+	if manager.accountProfile != profile || profile.StateSeq != 9 || profile.ManagedDataRevision != 8 ||
+		!profile.ManagedDataDirty || len(profile.Pending) != 1 {
+		t.Fatal("older ACK replaced current baseline or pending data")
+	}
+}
+
+func TestAccountManagedPutAckPreservesChangesDuringNetworkWait(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
@@ -311,6 +328,7 @@ func TestAccountManagedApplicationGateQueuesChangesUntilPutAck(t *testing.T) {
 	if err := manager.SyncAccountManagementState(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	rootWalletID := manager.status.CurrentWallet
 	walletID, _, err := manager.CreateWallet("password")
 	if err != nil {
 		t.Fatal(err)
@@ -318,6 +336,8 @@ func TestAccountManagedApplicationGateQueuesChangesUntilPutAck(t *testing.T) {
 	if len(manager.accountProfile.Pending) != 1 {
 		t.Fatalf("wallet creation did not queue one mutation: %+v", manager.accountProfile)
 	}
+	oldMutationID := manager.accountProfile.Pending[0].ID
+	oldDataGeneration := manager.accountProfile.ManagedDataGeneration
 	fingerprint := walletFingerprint(manager.walletInfoMap[walletID].Wallet)
 	gate := make(chan struct{})
 	remote.mu.Lock()
@@ -333,7 +353,9 @@ func TestAccountManagedApplicationGateQueuesChangesUntilPutAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := newDKVSReplicaStore(manager.db)
-	deadline := time.Now().Add(3 * time.Second)
+	// Signing/snapshot preparation is slower under -race; this bound waits
+	// for the fixture gate, not for the network response.
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		select {
 		case syncErr := <-done:
@@ -362,25 +384,69 @@ func TestAccountManagedApplicationGateQueuesChangesUntilPutAck(t *testing.T) {
 	}()
 	select {
 	case ensureErr := <-ensureDone:
-		t.Fatalf("wallet mutation bypassed the application sync gate: %v", ensureErr)
-	case <-time.After(50 * time.Millisecond):
+		if ensureErr != nil {
+			t.Fatal(ensureErr)
+		}
+	case <-time.After(2 * time.Second):
+		close(gate)
+		<-done
+		t.Fatal("local wallet mutation blocked behind remote PUT")
 	}
-	if manager.walletInfoMap[walletID].Accounts != 1 {
-		t.Fatalf("wallet changed before PUT ACK: %+v", manager.walletInfoMap[walletID])
+	if len(manager.accountProfile.Pending) != 1 || manager.accountProfile.Pending[0].ID == oldMutationID ||
+		manager.accountProfile.ManagedDataGeneration <= oldDataGeneration {
+		t.Fatal("concurrent edit did not version the pending add and dirty generation")
 	}
+	selectionDone := make(chan error, 1)
+	go func() {
+		if err := manager.SwitchWallet(rootWalletID, "password"); err != nil {
+			selectionDone <- err
+			return
+		}
+		if err := manager.SwitchWallet(walletID, "password"); err != nil {
+			selectionDone <- err
+			return
+		}
+		manager.SwitchAccount(1)
+		selectionDone <- nil
+	}()
+	select {
+	case err := <-selectionDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		close(gate)
+		<-done
+		t.Fatal("wallet/account selection blocked behind remote PUT")
+	}
+	manager.markAccountManagedDataDirtyDeferred(rgb11AccountManagedProviderID)
+	newDataGeneration := manager.accountProfile.ManagedDataGeneration
 	close(gate)
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if err := <-ensureDone; err != nil {
-		t.Fatal(err)
-	}
 	if manager.walletInfoMap[walletID].Accounts != 2 ||
 		manager.walletInfoMap[walletID].AccountNames[1] != "Savings" {
-		t.Fatalf("queued wallet mutation was not applied after ACK: %+v", manager.walletInfoMap[walletID])
+		t.Fatalf("PUT ACK overwrote the concurrent wallet mutation: %+v", manager.walletInfoMap[walletID])
 	}
 	if len(manager.accountProfile.Pending) != 1 || !manager.accountProfile.ManagedDataDirty {
 		t.Fatalf("PUT ACK cleared the concurrent overlay: %+v", manager.accountProfile)
+	}
+	if manager.status.CurrentWallet != walletID || manager.status.CurrentAccount != 1 ||
+		manager.accountProfile.ManagedDataGeneration != newDataGeneration {
+		t.Fatal("PUT ACK overwrote current selection or provider generation")
+	}
+	var stored accountManagementProfile
+	raw, err := manager.db.Read(accountManagementProfileKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := DecodeFromBytes(raw, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Pending) != 1 || stored.Pending[0].ID != manager.accountProfile.Pending[0].ID ||
+		!stored.ManagedDataDirty || stored.ManagedDataGeneration != newDataGeneration {
+		t.Fatal("ACK persisted a different pending overlay or data generation")
 	}
 	if _, err := manager.db.Read(accountManagedDataImportKey()); err == nil {
 		t.Fatal("own PUT ACK created an import marker")

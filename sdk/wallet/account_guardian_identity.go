@@ -34,10 +34,14 @@ func accountGuardianIdentityKey(accountID string) []byte {
 }
 
 func (p *Manager) GetOrCreateAccountGuardianIdentity(password string) (*AccountGuardianIdentity, error) {
-	if p == nil || p.wallet == nil || p.db == nil {
+	if p == nil || p.db == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
-	accountID, err := dkvsAccountID(p.wallet)
+	root, err := p.accountManagementRootWallet()
+	if err != nil {
+		return nil, err
+	}
+	accountID, err := dkvsAccountID(root)
 	if err != nil {
 		return nil, err
 	}
@@ -109,10 +113,14 @@ func (p *Manager) loadAccountGuardianPrivateKey(password, accountID string) ([]b
 }
 
 func (p *Manager) LoadAccountGuardianPrivateKey(password string) ([]byte, error) {
-	if p == nil || p.wallet == nil || p.db == nil {
+	if p == nil || p.db == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
-	accountID, err := dkvsAccountID(p.wallet)
+	root, err := p.accountManagementRootWallet()
+	if err != nil {
+		return nil, err
+	}
+	accountID, err := dkvsAccountID(root)
 	if err != nil {
 		return nil, err
 	}

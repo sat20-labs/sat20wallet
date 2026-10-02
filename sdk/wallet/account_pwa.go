@@ -2,13 +2,16 @@ package wallet
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
@@ -24,6 +27,12 @@ const (
 	accountRequiredRecords          = uint64(5)
 	accountMinimumRecordCount       = uint64(100)
 	accountDefaultRecordCount       = uint64(100)
+	accountStorageAuthorizationTTL   = 20 * time.Minute
+)
+
+var (
+	ErrAccountPaidStorageNotReusable      = errors.New("paid account storage is not ready for reuse")
+	ErrAccountStorageAuthorizationMissing = errors.New("account storage authorization is unavailable")
 )
 
 type AccountIndexerLocation struct {
@@ -63,6 +72,80 @@ type AccountStorageAuthorization struct {
 	TransactionID string                    `json:"transaction_id,omitempty"`
 	Location      AccountIndexerLocation    `json:"location"`
 	Policy        *AccountFreeLocalPolicy   `json:"-"`
+}
+
+type accountStorageAuthorizationSession struct {
+	Authorization AccountStorageAuthorization
+	AccountID     string
+	Network       string
+	ExpiresAt     time.Time
+	Preparing     bool
+	InUse         bool
+	Purpose       AccountStoragePurpose
+}
+
+func cloneAccountStorageAuthorization(value AccountStorageAuthorization) AccountStorageAuthorization {
+	result := value
+	result.Summary.Warnings = append([]string(nil), value.Summary.Warnings...)
+	if value.Autopay != nil {
+		autopay := *value.Autopay
+		result.Autopay = &autopay
+	}
+	if value.Policy != nil {
+		policy := *value.Policy
+		result.Policy = &policy
+	}
+	return result
+}
+
+func newAccountStorageAuthorizationID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+func (p *Manager) rememberAccountStorageAuthorization(value *AccountStorageAuthorization) (*AccountStorageAuthorization, error) {
+	if p == nil || value == nil {
+		return nil, ErrAccountStorageAuthorizationMissing
+	}
+	session, err := p.beginAccountStoragePreparation()
+	if err != nil {
+		return nil, err
+	}
+	defer p.abandonAccountStoragePreparation(session)
+	return p.finishAccountStoragePreparation(session, value)
+}
+
+// PendingAccountStorageAuthorization is an observation, not a claim. Setup
+// work must use UseAccountStorageAuthorization so duplicate consumers cannot
+// receive the same grant. No authorization identifier is supplied by the UI.
+func (p *Manager) PendingAccountStorageAuthorization() (*AccountStorageAuthorization, error) {
+	binding, release, err := p.lockAccountStorageState()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	session := p.accountStorageAuthorization
+	if !session.matches(binding) {
+		p.accountStorageAuthorization = nil
+		return nil, ErrAccountStorageAuthorizationMissing
+	}
+	if session.Preparing {
+		return nil, ErrAccountStorageAuthorizationMissing
+	}
+	value := cloneAccountStorageAuthorization(session.Authorization)
+	return &value, nil
+}
+
+func (p *Manager) CancelPendingAccountStorageAuthorization() {
+	if p == nil {
+		return
+	}
+	p.accountStorageMu.Lock()
+	p.accountStorageAuthorization = nil
+	p.accountStorageMu.Unlock()
 }
 
 type AccountAutopayFundingResult struct {
@@ -367,18 +450,13 @@ func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus
 }
 
 func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*AccountStorageAuthorization, error) {
-	if p == nil || p.wallet == nil {
+	if p == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
-	location, err := p.AccountIndexerLocation()
-	if err != nil {
-		return nil, err
-	}
-	store, err := p.accountDKVSStore()
-	if err != nil {
-		return nil, err
-	}
 	mode := strings.ToLower(strings.TrimSpace(optionID))
+	if mode != AccountStorageTemporary && mode != AccountStoragePaid {
+		return nil, fmt.Errorf("unsupported account storage option %q", optionID)
+	}
 	p.mutex.RLock()
 	downgrade := p.accountProfile != nil && p.accountProfile.StorageMode == AccountStoragePaid &&
 		mode == AccountStorageTemporary
@@ -386,6 +464,17 @@ func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*A
 	if downgrade {
 		return nil, ErrAccountStorageModeDowngrade
 	}
+	session, err := p.beginAccountStoragePreparation()
+	if err != nil {
+		return nil, err
+	}
+	defer p.abandonAccountStoragePreparation(session)
+	location := session.Authorization.Location
+	store, err := p.accountDKVSStoreForLocation(location)
+	if err != nil {
+		return nil, err
+	}
+	var authorization *AccountStorageAuthorization
 	switch mode {
 	case AccountStorageTemporary:
 		policy, currentHeight, _, err := store.ConfigWithVerificationHeight()
@@ -395,20 +484,22 @@ func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*A
 		if policy == nil || !policy.Enabled || policy.MaxTTL == 0 {
 			return nil, fmt.Errorf("current node does not provide temporary DKVS cache")
 		}
-		return &AccountStorageAuthorization{
-			ID: AccountStorageTemporary, Mode: AccountStorageTemporary,
+		authorization = &AccountStorageAuthorization{
+			Mode: AccountStorageTemporary,
 			RecordOptions: dkvsindexer.RecordOptions{Seq: 1, TTL: policy.MaxTTL},
 			Summary: AccountStorageOption{ID: AccountStorageTemporary, Mode: AccountStorageTemporary, Available: true,
 				Title: "临时缓存", Description: "由当前连接节点临时保存；到期后数据可能被删除。",
 				TTLBlocks:             policy.MaxTTL,
 				EstimatedExpiryHeight: estimatedDKVSExpiryHeight(currentHeight, policy.MaxTTL)},
 			Location: location, Policy: policy,
-		}, nil
+		}
 	case AccountStoragePaid:
-		return p.confirmPaidAccountStorage(location, recordCount)
-	default:
-		return nil, fmt.Errorf("unsupported account storage option %q", optionID)
+		authorization, err = p.confirmPaidAccountStorage(location, recordCount)
+		if err != nil {
+			return nil, err
+		}
 	}
+	return p.finishAccountStoragePreparation(session, authorization)
 }
 
 func (p *Manager) confirmPaidAccountStorage(location AccountIndexerLocation, recordCount uint64) (*AccountStorageAuthorization, error) {
@@ -551,6 +642,69 @@ func accountPaidStorageAuthorization(location AccountIndexerLocation,
 			RecommendedRetention: "持续支付期间全网保存", ContractAddress: defaults.AutopayContract},
 		TransactionID: transactionID, Location: location,
 	}
+}
+
+func accountPaidStorageAuthorizationFromState(location AccountIndexerLocation,
+	defaults dkvsindexer.NetworkDefaults, recordCount uint64, payer string,
+	state *dkvsindexer.AutopayContractState) (*AccountStorageAuthorization, error) {
+
+	recordCount, err := normalizeAccountRecordCount(recordCount)
+	if err != nil {
+		return nil, err
+	}
+	amountPerBlock, err := accountAmountPerBlock(defaults, recordCount)
+	if err != nil {
+		return nil, err
+	}
+	if !accountAutopayStateReady(state, defaults, payer, amountPerBlock) {
+		return nil, ErrAccountPaidStorageNotReusable
+	}
+	fundingAmount, err := multiplyDecimal(amountPerBlock, accountPaidDefaultFundingBlocks)
+	if err != nil {
+		return nil, err
+	}
+	return accountPaidStorageAuthorization(location, defaults, recordCount,
+		amountPerBlock, fundingAmount, "", true), nil
+}
+
+// ReusePaidAccountStorage is intentionally non-funding. It may rebuild an
+// in-memory authorization only when the existing AUTOPAY delegate already
+// satisfies the requested record capacity. Callers that need funding must go
+// through ConfirmAccountStorage after a fresh explicit user confirmation.
+func (p *Manager) ReusePaidAccountStorage(recordCount uint64) (*AccountStorageAuthorization, error) {
+	if p == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	session, err := p.beginAccountStoragePreparation()
+	if err != nil {
+		return nil, err
+	}
+	defer p.abandonAccountStoragePreparation(session)
+	location := session.Authorization.Location
+	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
+	if !defaults.Enabled || strings.TrimSpace(defaults.AutopayContract) == "" {
+		return nil, ErrAccountPaidStorageNotReusable
+	}
+	root, err := p.accountManagementRootWallet()
+	if err != nil {
+		return nil, err
+	}
+	if root == nil || root.GetPubKey() == nil {
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	payer := PublicKeyToP2TRAddress_SatsNet(root.GetPubKey())
+	if strings.TrimSpace(payer) == "" {
+		return nil, fmt.Errorf("unable to derive AUTOPAY payer")
+	}
+	state, err := p.accountAutopayState(defaults)
+	if err != nil {
+		return nil, err
+	}
+	authorization, err := accountPaidStorageAuthorizationFromState(location, defaults, recordCount, payer, state)
+	if err != nil {
+		return nil, err
+	}
+	return p.finishAccountStoragePreparation(session, authorization)
 }
 
 func (p *Manager) NewAccountRepositoryForStorage(auth AccountStorageAuthorization) (account.Repository, error) {
@@ -836,17 +990,25 @@ func (p *Manager) CreateAccountRecoveryPackage(options account.CreateOptions) (*
 	if p == nil {
 		return nil, fmt.Errorf("wallet manager is unavailable")
 	}
-	p.mutex.RLock()
-	if p.accountProfile == nil || len(p.accountSecret) != 32 {
-		p.mutex.RUnlock()
-		return nil, fmt.Errorf("account management is not initialized or unlocked")
+	var secret []byte
+	err := p.withAccountLocalState(false, func() error {
+		if err := p.checkAccountManagedDataImport(); err != nil {
+			return err
+		}
+		p.mutex.RLock()
+		defer p.mutex.RUnlock()
+		if p.accountProfile == nil || len(p.accountSecret) != 32 {
+			return fmt.Errorf("account management is not initialized or unlocked")
+		}
+		if options.AccountID != p.accountProfile.AccountID {
+			return fmt.Errorf("recovery package account does not match the active account")
+		}
+		secret = append([]byte(nil), p.accountSecret...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	if options.AccountID != p.accountProfile.AccountID {
-		p.mutex.RUnlock()
-		return nil, fmt.Errorf("recovery package account does not match the active account")
-	}
-	secret := append([]byte(nil), p.accountSecret...)
-	p.mutex.RUnlock()
 	defer zeroBytes(secret)
 	return account.NewManager(nil).CreateRecoveryPackage(options, secret)
 }
@@ -868,8 +1030,12 @@ func (p *Manager) PutGuardianCapsuleForStorage(auth AccountStorageAuthorization,
 	if err != nil {
 		return err
 	}
+	root, err := p.accountManagementRootWallet()
+	if err != nil {
+		return err
+	}
 	mutation := dkvsValueMutation{
-		Key: key, Value: encoded, Owner: p.wallet, Signature: dkvsSignatureAccount,
+		Key: key, Value: encoded, Owner: root, Signature: dkvsSignatureAccount,
 		Policy: dkvsStoragePolicy{
 			TTL: auth.RecordOptions.TTL,
 		},

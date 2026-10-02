@@ -62,7 +62,8 @@ type rgb11FlowEvidence struct {
 	utxos       map[string]*rgb11wallet.BitcoinUTXO
 	rawTx       map[string][]byte
 	spendingTx  map[string]string
-	broadcasted []byte
+	broadcasted   []byte
+	broadcastCount int
 }
 
 func (e *rgb11FlowEvidence) GetUTXO(outpoint string) (*rgb11wallet.BitcoinUTXO, error) {
@@ -114,6 +115,7 @@ func (e *rgb11FlowEvidence) Broadcast(raw []byte) (string, error) {
 	}
 	e.mu.Lock()
 	e.broadcasted = append([]byte(nil), raw...)
+	e.broadcastCount++
 	e.mu.Unlock()
 	return tx.TxHash().String(), nil
 }
@@ -146,7 +148,18 @@ func newRGB11FlowManager(t *testing.T, wallet common.Wallet, rpc IndexerRPCClien
 	if err := manager.rgbManager.selectRGB11Scope(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { manager.rgbManager.scopeStates.stopReconciliations() })
+	initialRGBManager := rgbManager
+	t.Cleanup(func() {
+		// Tests may replace manager.rgbManager to simulate an SDK restart. Stop
+		// both the original runtime and the final runtime before the DB cleanup.
+		if initialRGBManager != nil && initialRGBManager.scopeStates != nil {
+			initialRGBManager.scopeStates.stopReconciliations()
+		}
+		if current := manager.rgbManager; current != nil && current != initialRGBManager &&
+			current.scopeStates != nil {
+			current.scopeStates.stopReconciliations()
+		}
+	})
 	return manager
 }
 
@@ -318,6 +331,7 @@ func TestRGB11StandardOutOfBandPrepareBroadcastAccept(t *testing.T) {
 	if err == nil {
 		t.Fatal("unsupported invoice transport was accepted")
 	}
+	assertRGB11FrameworkRecovery(t, sender, recipient)
 }
 
 func TestRGB11StandardBlindOutOfBandPrepareWithoutBroadcast(t *testing.T) {
@@ -452,6 +466,7 @@ func TestRGB11StandardBlindOutOfBandPrepareWithoutBroadcast(t *testing.T) {
 	if len(evidence.broadcasted) != 0 {
 		t.Fatal("recipient prepare unexpectedly broadcast the blind transfer")
 	}
+	assertRGB11FrameworkRecovery(t, sender, recipient)
 }
 
 func TestRGB11SelfOutOfBandListsSenderAndReceiverStates(t *testing.T) {
@@ -1070,10 +1085,7 @@ func TestRGB11IssuedUDASendReceive(t *testing.T) {
 		t.Fatal("create recovered recipient wallet")
 	}
 	recovered := newRGB11FlowManager(t, recoveredWallet, rpc, evidence, 33)
-	if err := recovered.rgbManager.projectionStore.ImportSnapshot(recoverySnapshot.ProjectionRecords); err != nil {
-		t.Fatal(err)
-	}
-	if err := recovered.rgbManager.engineStore.ImportSnapshot(recoverySnapshot.EngineRecords); err != nil {
+	if err := recovered.rgbManager.importRGB11WalletSnapshot(recoverySnapshot); err != nil {
 		t.Fatal(err)
 	}
 	if ref, err := recovered.rgbManager.projectionStore.LoadContractObjectReference(issued.ContractID); err == nil || ref != "" {
