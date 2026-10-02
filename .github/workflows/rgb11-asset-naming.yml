@@ -19,7 +19,7 @@ concurrency:
 jobs:
   naming:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 35
     steps:
       - name: Checkout wallet
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -53,21 +53,60 @@ jobs:
         with:
           go-version-file: sat20wallet/sdk/go.mod
           cache: false
+      - name: Check changed Go formatting
+        working-directory: sat20wallet
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- 'sdk/**/*.go')
+          if (( ${#files[@]} )); then
+            unformatted=$(gofmt -l "${files[@]}")
+            test -z "$unformatted" || { printf '%s\n' "$unformatted"; exit 1; }
+          fi
       - name: Contract identity rename regression
+        if: '!cancelled()'
         working-directory: sat20wallet/sdk
         run: go test ./wallet/rgb11 -run '^TestRGB11NamingIdentitySurvivesLocalRename$' -count=1 -timeout=10m -v
       - name: Test RGB11 packages
         if: '!cancelled()'
         working-directory: sat20wallet/sdk
-        run: go test ./wallet/rgb11/... -count=1 -timeout=15m
+        run: go test ./wallet/rgb11/... -count=1 -timeout=10m
       - name: Test wallet naming integration
         if: '!cancelled()'
         working-directory: sat20wallet/sdk
-        run: go test ./wallet -run '^TestRGB11NamingIssueRenameAndReceiverOrigin$' -count=1 -timeout=10m -v
+        run: go test ./wallet -run '^TestRGB11NamingIssueRenameAndReceiverOrigin$' -count=1 -timeout=5m -v
       - name: Test complete wallet suite
         if: '!cancelled()'
         working-directory: sat20wallet/sdk
-        run: go test ./wallet/... -count=1 -timeout=15m
+        shell: bash
+        run: |
+          set +e
+          go test ./wallet/... -count=1 -timeout=8m -json > "$RUNNER_TEMP/rgb11-wallet-tests.jsonl" 2>&1
+          status=$?
+          python3 - <<'PY'
+          import collections, json, os
+          from pathlib import Path
+          lines = Path(os.environ['RUNNER_TEMP'], 'rgb11-wallet-tests.jsonl').read_text().splitlines()
+          output = collections.defaultdict(list)
+          totals = collections.Counter()
+          for line in lines:
+              try:
+                  event = json.loads(line)
+              except ValueError:
+                  print(line)
+                  continue
+              key = (event.get('Package', ''), event.get('Test', ''))
+              if event.get('Action') == 'output':
+                  output[key].append(event.get('Output', ''))
+              action = event.get('Action')
+              if event.get('Test') and action in ('pass', 'fail', 'skip'):
+                  totals[action] += 1
+              if action == 'fail':
+                  print('FAILED:', *key)
+                  print(''.join(output[key][-35:]))
+          print('Test event totals:', dict(totals))
+          PY
+          exit "$status"
       - name: Vet wallet packages
         if: '!cancelled()'
         working-directory: sat20wallet/sdk
@@ -76,3 +115,31 @@ jobs:
         if: '!cancelled()'
         working-directory: sat20wallet/sdk
         run: GOOS=js GOARCH=wasm go build -buildvcs=false -o /tmp/rgb11-naming.wasm ./wasm
+
+  pwa-naming:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout wallet
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install PWA dependencies
+        working-directory: pwa
+        run: |
+          if test -f package-lock.json; then
+            npm ci --ignore-scripts --no-audit --no-fund
+          else
+            npm install --ignore-scripts --no-audit --no-fund
+          fi
+      - name: Test actual PWA naming decorator
+        working-directory: pwa
+        run: node --test scripts/verify/rgb11-asset-naming.test.mjs
+      - name: Type-check PWA
+        if: '!cancelled()'
+        working-directory: pwa
+        run: npm run compile
