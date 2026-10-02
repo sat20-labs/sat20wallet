@@ -1858,6 +1858,46 @@ func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (*RGB11
 	}, nil
 }
 
+func (p *rgb11Manager) RGB11TranscendRegistrationDescriptor(contractID string) (*rgb11wallet.TranscendRegistrationDescriptor, error) {
+	if p == nil || p.Manager == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	var info *indexer.TickerInfo
+	for _, assetType := range []string{indexer.ASSET_TYPE_FT, indexer.ASSET_TYPE_NFT} {
+		key, err := rgb11wallet.NewContractAssetKey(contractID, assetType)
+		if err != nil {
+			return nil, err
+		}
+		p.mutex.RLock()
+		info = p.tickerInfoMap[key.String()]
+		p.mutex.RUnlock()
+		if info != nil {
+			break
+		}
+	}
+	if info == nil {
+		return nil, rgb11wallet.ErrInvalidRGB11Asset
+	}
+	var ext rgb11wallet.TickerExt
+	if err := json.Unmarshal(info.Content, &ext); err != nil {
+		return nil, err
+	}
+	if ext.ContractID == "" {
+		ext.ContractID = ext.OriginalAssetID
+	}
+	if ext.ContractID != contractID || ext.Ticker == "" || ext.GenesisAddress == "" || ext.GenesisOutpoint == "" {
+		return nil, rgb11wallet.ErrNamingOriginUnavailable
+	}
+	descriptor := &rgb11wallet.TranscendRegistrationDescriptor{
+		ContractID: contractID, BaseTicker: ext.Ticker,
+		GenesisOutpoint: ext.GenesisOutpoint, GenesisAddress: ext.GenesisAddress,
+	}
+	if err := rgb11wallet.ValidateTranscendRegistrationDescriptor(descriptor, GetChainParam()); err != nil {
+		return nil, err
+	}
+	return descriptor, nil
+}
+
 func (p *rgb11Manager) SetRGB11LocalAssetName(contractID, name string) error {
 	if p == nil || p.Manager == nil || p.projectionStore == nil {
 		return ErrRGB11Inconsistent
