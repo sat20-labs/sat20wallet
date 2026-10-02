@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-
 	indexer "github.com/sat20-labs/indexer/common"
 )
 
