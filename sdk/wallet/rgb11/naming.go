@@ -47,11 +47,16 @@ func canonicalNamingAddress(address string) (string, error) {
 	if address == "" || address != strings.TrimSpace(address) {
 		return "", ErrNamingOriginUnavailable
 	}
-	decoded, err := btcutil.DecodeAddress(address, &chaincfg.MainNetParams)
-	if err != nil {
-		return "", ErrNamingOriginUnavailable
+	for _, params := range []*chaincfg.Params{
+		&chaincfg.MainNetParams, &chaincfg.TestNet3Params,
+		&chaincfg.RegressionNetParams, &chaincfg.SimNetParams,
+	} {
+		decoded, err := btcutil.DecodeAddress(address, params)
+		if err == nil && decoded.IsForNet(params) {
+			return decoded.EncodeAddress(), nil
+		}
 	}
-	return decoded.EncodeAddress(), nil
+	return "", ErrNamingOriginUnavailable
 }
 
 // ValidateProviderBinding requires both addresses to come from verified chain
