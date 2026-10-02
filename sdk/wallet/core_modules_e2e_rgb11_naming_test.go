@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	indexer "github.com/sat20-labs/indexer/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
@@ -28,13 +27,17 @@ func coreRGB11NamingE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 		}
 	}
 	coreAssert(t, before != nil, "issued RGB11 ticker missing from state")
-	coreAssert(t, before.AssetKey == issued.AssetName.String(), "human-readable name leaked into immutable asset key")
-	coreAssert(t, before.NamingStatus == "local-address", "issued RGB11 asset did not resolve genesis address")
-	coreAssert(t, strings.HasPrefix(before.Ticker, "e2en@"), "default local RGB11 name is not ticker@address-suffix")
+	coreAssert(t, before.AssetKey == issued.AssetName.String(),
+		"human-readable name leaked into immutable asset key")
+	coreAssert(t, before.NamingStatus == "local-address",
+		"issued RGB11 asset did not resolve genesis address")
+	coreAssert(t, strings.HasPrefix(before.Ticker, "e2en@"),
+		"default local RGB11 name is not ticker@address-suffix")
 
 	balanceBefore, err := manager.GetRGB11AssetBalance(&issued.AssetName)
 	coreRequire(t, "RGB11 naming balance before rename", err)
-	coreRequire(t, "rename unregistered RGB11 asset", manager.SetRGB11LocalAssetName(issued.ContractID, "my-local-rgb-name"))
+	coreRequire(t, "rename unregistered RGB11 asset",
+		manager.SetRGB11LocalAssetName(issued.ContractID, "my-local-rgb-name"))
 
 	state, err = manager.GetRGB11State()
 	coreRequire(t, "read renamed RGB11 state", err)
@@ -45,74 +48,66 @@ func coreRGB11NamingE2E(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain,
 			break
 		}
 	}
-	coreAssert(t, renamed != nil && renamed.Ticker == "my-local-rgb-name", "SDK local RGB11 rename not visible")
-	coreAssert(t, renamed.AssetKey == issued.AssetName.String(), "SDK local rename changed immutable asset key")
+	coreAssert(t, renamed != nil && renamed.Ticker == "my-local-rgb-name",
+		"SDK local RGB11 rename not visible")
+	coreAssert(t, renamed.AssetKey == issued.AssetName.String(),
+		"SDK local rename changed immutable asset key")
+	coreAssert(t, renamed.CanonicalName == "" && !renamed.Verified,
+		"unregistered local name was marked canonical")
 	balanceAfter, err := manager.GetRGB11AssetBalance(&issued.AssetName)
 	coreRequire(t, "RGB11 naming balance after rename", err)
-	coreAssert(t, balanceAfter.Cmp(balanceBefore) == 0, "SDK local rename changed RGB11 balance")
+	coreAssert(t, balanceAfter.Cmp(balanceBefore) == 0,
+		"SDK local rename changed RGB11 balance")
 
-	// The same DID ownership fact is exposed to the Wallet L1 client and to the
-	// real SatoshiNet nodes by the parent e2e harness.
-	coreSetRGB11NameOwner(chain, "alice", manager.GetWallet().GetAddress())
 	client, err := manager.ensureDKVSManager().primaryClient()
 	coreRequire(t, "create DKVS client for primary DID", err)
+	autopay := &DKVSAutopayOptions{
+		AddressParams: GetChainParam_SatsNet(),
+		PoolContract:  material.auth.Autopay.PoolContract,
+	}
+
 	_, err = client.PutPrimaryDID(
-		manager.GetWallet(), "alice", dkvsindexer.RecordOptions{},
-		&DKVSAutopayOptions{
-			AddressParams: GetChainParam_SatsNet(),
-			PoolContract:  material.auth.Autopay.PoolContract,
-		},
+		manager.GetWallet(), "alice", dkvsindexer.RecordOptions{}, autopay,
 	)
 	coreRequire(t, "write primary DID through real DKVS", err)
-
 	primary, _, err := client.GetPrimaryDID(manager.GetWallet().GetPubKey().SerializeCompressed())
 	coreRequire(t, "read primary DID through real DKVS", err)
 	coreAssert(t, primary == "alice", "primary DID round-trip mismatch")
 
-	registration, err := manager.RegisterRGB11AssetName(issued.ContractID)
-	coreRequire(t, "register RGB11 canonical name in DKVS", err)
-	coreAssert(t, registration.ContractID == issued.ContractID, "registered ContractID mismatch")
-	coreAssert(t, registration.AssetName == "rgb11:f:e2en@alice", "unexpected first canonical RGB11 name")
-	coreAssert(t, registration.Ordinal == 1, "unexpected first RGB11 ordinal")
+	if _, err := client.PutPrimaryDID(
+		manager.GetWallet(), "abcdefghijk", dkvsindexer.RecordOptions{}, autopay,
+	); err == nil {
+		t.Fatal("core-e2e: 11-character primary DID unexpectedly accepted")
+	}
+	if _, err := client.PutPrimaryDID(
+		manager.GetWallet(), "notowned", dkvsindexer.RecordOptions{}, autopay,
+	); err == nil {
+		t.Fatal("core-e2e: unowned primary DID unexpectedly accepted")
+	}
 
-	again, err := manager.RegisterRGB11AssetName(issued.ContractID)
-	coreRequire(t, "repeat RGB11 canonical registration", err)
-	coreAssert(t, *again == *registration, "repeat registration changed immutable mapping")
+	_, err = client.PutPrimaryDID(
+		manager.GetWallet(), "company", dkvsindexer.RecordOptions{}, autopay,
+	)
+	coreRequire(t, "replace primary DID through real DKVS", err)
+	primary, _, err = client.GetPrimaryDID(manager.GetWallet().GetPubKey().SerializeCompressed())
+	coreRequire(t, "read replaced primary DID", err)
+	coreAssert(t, primary == "company", "primary DID replacement mismatch")
 
+	coreRequire(t, "rename remains mutable before SatoshiNet registration",
+		manager.SetRGB11LocalAssetName(issued.ContractID, "still-local-before-stp"))
 	state, err = manager.GetRGB11State()
-	coreRequire(t, "read registered RGB11 state", err)
-	var registered *RGB11TickerInfo
+	coreRequire(t, "read RGB11 state after primary DID replacement", err)
 	for _, info := range state.TickerInfos {
 		if info != nil && info.ContractID == issued.ContractID {
-			registered = info
-			break
+			coreAssert(t, info.Ticker == "still-local-before-stp",
+				"primary DID change incorrectly froze local RGB11 name")
+			coreAssert(t, info.CanonicalName == "" && !info.Verified,
+				"primary DID alone incorrectly created a canonical RGB11 registration")
 		}
 	}
-	coreAssert(t, registered != nil, "registered RGB11 ticker missing")
-	coreAssert(t, registered.Ticker == registration.AssetName, "registered name not used for presentation")
-	coreAssert(t, registered.CanonicalName == registration.AssetName && registered.Verified,
-		"registered DKVS name not marked canonical")
-	coreAssert(t, manager.SetRGB11LocalAssetName(issued.ContractID, "must-not-change") != nil,
-		"registered RGB11 name remained locally mutable")
 
-	// Transcend content itself carries no naming descriptor. Later STP work only
-	// needs to consume the already-registered canonical AssetName.
-	contract := NewTranscendContract()
-	contract.GetContractBase().AssetName = *mustRGB11CanonicalAssetName(t, registration.AssetName)
-	encoded, err := contract.Encode()
-	coreRequire(t, "encode RGB11 transcend contract with canonical name", err)
-	decoded := NewTranscendContract()
-	coreRequire(t, "decode RGB11 transcend contract with canonical name", decoded.Decode(encoded))
-	coreRequire(t, "validate decoded RGB11 transcend contract", decoded.CheckContent())
-	coreAssert(t, decoded.GetAssetName().String() == registration.AssetName,
-		"transcend contract changed registered RGB11 asset name")
-
-	coreCheckpoint(t, "02_rgb11_dkvs_registered_name", manager, cfg, chain, material)
-}
-
-func mustRGB11CanonicalAssetName(t *testing.T, value string) *indexer.AssetName {
-	t.Helper()
-	name := indexer.NewAssetNameFromString(value)
-	coreAssert(t, name != nil, "invalid canonical RGB11 AssetName")
-	return name
+	// /rgb11 registration is intentionally not performed by the Wallet SDK.
+	// The CoreNode processing the later transcend.tc deployment owns that
+	// internal DKVS write and will return/propagate the canonical mapping.
+	coreCheckpoint(t, "02_rgb11_primary_did_and_local_name", manager, cfg, chain, material)
 }
