@@ -65,7 +65,6 @@ func EncodeTranscendRegistrationDescriptor(d *TranscendRegistrationDescriptor, p
 		Script()
 }
 
-
 // DecodeTranscendRegistrationDescriptor reads the optional descriptor appended
 // after the four ContractBase fields. A nil descriptor means a non-RGB legacy
 // transcend contract with no extension.
