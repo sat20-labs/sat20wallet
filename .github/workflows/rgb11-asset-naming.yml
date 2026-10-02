@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'sdk/**'
+      - 'pwa/**'
       - '.github/workflows/rgb11-asset-naming.yml'
   workflow_dispatch:
 
@@ -18,52 +19,60 @@ concurrency:
 jobs:
   naming:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout wallet
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           path: sat20wallet
           fetch-depth: 0
           persist-credentials: false
       - name: Checkout indexer
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: sat20-labs/indexer
           ref: 1d259d64ee3603bbf1ff8189dc1bbada76e2f8b3
           path: indexer
           persist-credentials: false
       - name: Checkout RGB11 engine
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: sat20-labs/rgb11
           ref: 76eab6762fcc75ad2213a6e1cdcf896e483bf0ab
           path: rgb11
           persist-credentials: false
       - name: Checkout SatoshiNet
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: sat20-labs/satoshinet
           ref: e6521c11cd0adbe318133cd9f930db960ee80163
           path: satoshinet
           persist-credentials: false
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: sat20wallet/sdk/go.mod
           cache: false
       - name: Contract identity rename regression
         working-directory: sat20wallet/sdk
-        shell: bash
-        run: |
-          set -euo pipefail
-          go test ./wallet/rgb11 -run '^TestRGB11NamingIdentitySurvivesLocalRename$' -count=1 -timeout=10m -v
+        run: go test ./wallet/rgb11 -run '^TestRGB11NamingIdentitySurvivesLocalRename$' -count=1 -timeout=10m -v
       - name: Test RGB11 packages
+        if: '!cancelled()'
         working-directory: sat20wallet/sdk
         run: go test ./wallet/rgb11/... -count=1 -timeout=15m
-      - name: Compile wallet integration
+      - name: Test wallet naming integration
+        if: '!cancelled()'
         working-directory: sat20wallet/sdk
-        run: go test ./wallet -run '^$' -count=1 -timeout=10m
+        run: go test ./wallet -run '^TestRGB11NamingIssueRenameAndReceiverOrigin$' -count=1 -timeout=10m -v
+      - name: Test complete wallet suite
+        if: '!cancelled()'
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet/... -count=1 -timeout=15m
+      - name: Vet wallet packages
+        if: '!cancelled()'
+        working-directory: sat20wallet/sdk
+        run: go vet -copylocks=false ./wallet/...
       - name: Compile browser WASM
+        if: '!cancelled()'
         working-directory: sat20wallet/sdk
         run: GOOS=js GOARCH=wasm go build -buildvcs=false -o /tmp/rgb11-naming.wasm ./wasm
