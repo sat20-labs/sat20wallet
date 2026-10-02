@@ -5,7 +5,6 @@ on:
     branches: [feat/rgb11-provider-asset-names]
     paths:
       - '.github/rgb11-naming-apply.py'
-      - '.github/workflows/rgb11-naming-apply.yml'
 
 permissions:
   contents: read
@@ -28,13 +27,16 @@ jobs:
           cache: false
       - name: Apply exact checked edits
         run: python3 .github/rgb11-naming-apply.py
-      - name: Commit only the reviewed SDK source paths
+      - name: Commit only the reviewed paths
         shell: bash
         run: |
           set -euo pipefail
           mapfile -t paths < .github/rgb11-naming-paths.txt
           for path in "${paths[@]}"; do
-            [[ "$path" == sdk/wallet/*.go ]] || { echo "Unexpected source path: $path"; exit 1; }
+            case "$path" in
+              sdk/wallet/rgb11_transfer_test.go|sdk/wallet/rgb11_naming_test.go|pwa/composables/hooks/useL1Assets.ts|pwa/scripts/verify/rgb11-asset-naming.test.mjs) ;;
+              *) echo "Unexpected source path: $path"; exit 1 ;;
+            esac
           done
           git diff --check
           git add -- "${paths[@]}"
@@ -44,5 +46,5 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'feat(rgb11): separate immutable ContractID keys from mutable local asset names'
+          git commit -m 'fix(rgb11): align issuance assertions and zero-balance views with separate names and identities'
           git push origin HEAD:refs/heads/feat/rgb11-provider-asset-names
