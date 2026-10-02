@@ -1846,7 +1846,13 @@ func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (*RGB11
 	if label == "" {
 		label, status = contractID, "origin-unavailable"
 	}
-	if local, err := p.projectionStore.LoadLocalAssetName(contractID); err == nil {
+	canonicalName := ""
+	verified := false
+	if registered, err := p.projectionStore.LoadRegisteredAssetName(contractID); err == nil {
+		label, status, canonicalName, verified = registered, "satoshinet-registered", registered, true
+	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return nil, err
+	} else if local, err := p.projectionStore.LoadLocalAssetName(contractID); err == nil {
 		label, status = local, "local-custom"
 	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
 		return nil, err
@@ -1854,8 +1860,7 @@ func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (*RGB11
 	return &RGB11TickerInfo{
 		TickerInfo: info, Ticker: label, AssetKey: info.AssetName.String(),
 		ContractID: contractID, GenesisAddress: ext.GenesisAddress, NamingStatus: status,
-		// A local alias is never an authenticated SatoshiNet registration.
-		CanonicalName: "", Verified: false,
+		CanonicalName: canonicalName, Verified: verified,
 	}, nil
 }
 
@@ -1911,7 +1916,14 @@ func (p *rgb11Manager) RegisterRGB11AssetName(contractID string) (*dkvsindexer.R
 	if err := rgb11wallet.ValidateProviderBinding(ext.GenesisAddress, nameInfo.Address, providerDID); err != nil {
 		return nil, err
 	}
-	return client.RegisterRGB11Contract(wallet, providerDID, ext.Ticker, contractID)
+	registration, err := client.RegisterRGB11Contract(wallet, providerDID, ext.Ticker, contractID)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.projectionStore.SaveRegisteredAssetName(contractID, registration.AssetName); err != nil {
+		return nil, err
+	}
+	return registration, nil
 }
 
 func (p *rgb11Manager) SetRGB11LocalAssetName(contractID, name string) error {
@@ -1933,6 +1945,11 @@ func (p *rgb11Manager) SetRGB11LocalAssetName(contractID, name string) error {
 	}
 	if info == nil {
 		return rgb11wallet.ErrInvalidRGB11Asset
+	}
+	if _, err := p.projectionStore.LoadRegisteredAssetName(contractID); err == nil {
+		return rgb11wallet.ErrRegisteredNameFrozen
+	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return err
 	}
 	var ext rgb11wallet.TickerExt
 	if err := json.Unmarshal(info.Content, &ext); err != nil {
