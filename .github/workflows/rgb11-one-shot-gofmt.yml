@@ -1,0 +1,38 @@
+name: RGB11 one-shot gofmt
+
+on:
+  push:
+    branches:
+      - feat/rgb11-provider-asset-names
+
+permissions:
+  contents: write
+
+jobs:
+  gofmt:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/rgb11-provider-asset-names
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk/go.mod
+          cache: false
+      - name: Format touched RGB11 files
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w             sdk/wallet/contract_transcend.go             sdk/wallet/contract_transcend_rgb11_naming_test.go             sdk/wallet/rgb11_api.go             sdk/wallet/rgb11/transcend_registration.go
+          if git diff --quiet; then
+            echo "Already formatted"
+            exit 0
+          fi
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add             sdk/wallet/contract_transcend.go             sdk/wallet/contract_transcend_rgb11_naming_test.go             sdk/wallet/rgb11_api.go             sdk/wallet/rgb11/transcend_registration.go
+          git commit -m "style(rgb11): gofmt naming integration"
+          git push origin HEAD:feat/rgb11-provider-asset-names
