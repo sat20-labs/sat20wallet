@@ -32,7 +32,6 @@ func TestSDKCoreModulesE2E(t *testing.T) {
   map[string]int64{defaults.AutopayFeeAssetName: 200000}, nil, nil, dkvsMinerArgs(t))
  waitForDKVSPeerReady(t, f.Network)
  owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
- f.NetworkFakeL1().setNameOwner("alice", owner.Address)
  receiver := newDKVSKeyPathActor(t, keyFromMnemonic(t,
   "comfort very add tuition senior run eight snap burst appear exile dutch", 0))
  require.Equal(t, defaults.AutopayDeployer, owner.Address)
