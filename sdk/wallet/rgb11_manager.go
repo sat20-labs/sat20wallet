@@ -35,7 +35,6 @@ import (
 	corewallet "github.com/sat20-labs/rgb11/wallet"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
-	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"math/big"
 	"sort"
 	"strconv"
@@ -1862,68 +1861,6 @@ func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (*RGB11
 		ContractID: contractID, GenesisAddress: ext.GenesisAddress, NamingStatus: status,
 		CanonicalName: canonicalName, Verified: verified,
 	}, nil
-}
-
-func (p *rgb11Manager) RegisterRGB11AssetName(contractID string) (*dkvsindexer.RGB11Registration, error) {
-	if p == nil || p.Manager == nil {
-		return nil, ErrRGB11Inconsistent
-	}
-	var info *indexer.TickerInfo
-	for _, assetType := range []string{indexer.ASSET_TYPE_FT, indexer.ASSET_TYPE_NFT} {
-		key, err := rgb11wallet.NewContractAssetKey(contractID, assetType)
-		if err != nil {
-			return nil, err
-		}
-		p.mutex.RLock()
-		info = p.tickerInfoMap[key.String()]
-		p.mutex.RUnlock()
-		if info != nil {
-			break
-		}
-	}
-	if info == nil {
-		return nil, rgb11wallet.ErrInvalidRGB11Asset
-	}
-	var ext rgb11wallet.TickerExt
-	if err := json.Unmarshal(info.Content, &ext); err != nil {
-		return nil, err
-	}
-	if ext.ContractID == "" {
-		ext.ContractID = ext.OriginalAssetID
-	}
-	if ext.ContractID != contractID || ext.Ticker == "" || ext.GenesisAddress == "" {
-		return nil, rgb11wallet.ErrNamingOriginUnavailable
-	}
-	wallet := p.Manager.GetWallet()
-	if wallet == nil || wallet.GetPubKey() == nil {
-		return nil, ErrRGB11Inconsistent
-	}
-	client, err := p.Manager.ensureDKVSManager().primaryClient()
-	if err != nil {
-		return nil, err
-	}
-	providerDID, _, err := client.GetPrimaryDID(wallet.GetPubKey().SerializeCompressed())
-	if err != nil {
-		return nil, fmt.Errorf("read primary DID: %w", err)
-	}
-	nameInfo, err := p.Manager.l1IndexerClient.GetNameInfo(providerDID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve primary DID %s: %w", providerDID, err)
-	}
-	if nameInfo == nil {
-		return nil, rgb11wallet.ErrProviderOwnerMismatch
-	}
-	if err := rgb11wallet.ValidateProviderBinding(ext.GenesisAddress, nameInfo.Address, providerDID); err != nil {
-		return nil, err
-	}
-	registration, err := client.RegisterRGB11Contract(wallet, providerDID, ext.Ticker, contractID)
-	if err != nil {
-		return nil, err
-	}
-	if err := p.projectionStore.SaveRegisteredAssetName(contractID, registration.AssetName); err != nil {
-		return nil, err
-	}
-	return registration, nil
 }
 
 func (p *rgb11Manager) SetRGB11LocalAssetName(contractID, name string) error {
