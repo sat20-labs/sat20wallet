@@ -1,10 +1,6 @@
 package rgb11wallet
 
 import (
-	"strings"
-
-	"github.com/btcsuite/btcd/btcutil"
-	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/rgb11/consensus"
@@ -13,18 +9,18 @@ import (
 
 const TranscendRegistrationDescriptorMagic = "rgb11-reg-v1"
 
+// TranscendRegistrationDescriptor contains only facts that cannot be recovered
+// from the existing transcend contract asset identity or immutable Bitcoin
+// history. ContractID/type come from AssetName; GenesisAddress comes from the
+// GenesisOutpoint; Primary DID ownership is checked before deployment.
 type TranscendRegistrationDescriptor struct {
-	ContractID      string `json:"contractId"`
 	BaseTicker      string `json:"baseTicker"`
 	GenesisOutpoint string `json:"genesisOutpoint"`
-	GenesisAddress  string `json:"genesisAddress"`
+	ProviderDID     string `json:"providerDid"`
 }
 
-func ValidateTranscendRegistrationDescriptor(d *TranscendRegistrationDescriptor, params *chaincfg.Params) error {
-	if d == nil || params == nil {
-		return ErrInvalidRGB11Asset
-	}
-	if _, err := consensus.ParseContractID(d.ContractID); err != nil {
+func ValidateTranscendRegistrationDescriptor(d *TranscendRegistrationDescriptor) error {
+	if d == nil {
 		return ErrInvalidRGB11Asset
 	}
 	base, err := namingBaseTicker(d.BaseTicker)
@@ -35,40 +31,28 @@ func ValidateTranscendRegistrationDescriptor(d *TranscendRegistrationDescriptor,
 	if err != nil || outpoint.String() != d.GenesisOutpoint {
 		return ErrInvalidRGB11Asset
 	}
-	address, err := canonicalNamingAddressForParams(d.GenesisAddress, params)
-	if err != nil || address != d.GenesisAddress {
-		return ErrInvalidRGB11Asset
+	if err := ValidatePrimaryDIDName(d.ProviderDID); err != nil {
+		return err
 	}
 	return nil
 }
 
-func canonicalNamingAddressForParams(address string, params *chaincfg.Params) (string, error) {
-	if params == nil || strings.TrimSpace(address) != address || address == "" {
-		return "", ErrNamingOriginUnavailable
-	}
-	decoded, err := btcutil.DecodeAddress(address, params)
-	if err != nil || !decoded.IsForNet(params) {
-		return "", ErrNamingOriginUnavailable
-	}
-	return decoded.EncodeAddress(), nil
-}
-
-func EncodeTranscendRegistrationDescriptor(d *TranscendRegistrationDescriptor, params *chaincfg.Params) ([]byte, error) {
-	if err := ValidateTranscendRegistrationDescriptor(d, params); err != nil {
+func EncodeTranscendRegistrationDescriptor(d *TranscendRegistrationDescriptor) ([]byte, error) {
+	if err := ValidateTranscendRegistrationDescriptor(d); err != nil {
 		return nil, err
 	}
 	return stxscript.NewScriptBuilder().
 		AddData([]byte(TranscendRegistrationDescriptorMagic)).
 		AddData([]byte(d.BaseTicker)).
 		AddData([]byte(d.GenesisOutpoint)).
-		AddData([]byte(d.GenesisAddress)).
+		AddData([]byte(d.ProviderDID)).
 		Script()
 }
 
 // DecodeTranscendRegistrationDescriptor reads the optional descriptor appended
-// after the four ContractBase fields. A nil descriptor means a non-RGB legacy
-// transcend contract with no extension.
-func DecodeTranscendRegistrationDescriptor(content []byte, params *chaincfg.Params) (*TranscendRegistrationDescriptor, error) {
+// after the four ContractBase fields. ContractID is validated from the existing
+// RGB11 AssetName and is deliberately not duplicated in the descriptor.
+func DecodeTranscendRegistrationDescriptor(content []byte) (*TranscendRegistrationDescriptor, error) {
 	tokenizer := stxscript.MakeScriptTokenizer(0, content)
 	if !tokenizer.Next() || tokenizer.Err() != nil { // template
 		return nil, ErrInvalidRGB11Asset
@@ -77,7 +61,10 @@ func DecodeTranscendRegistrationDescriptor(content []byte, params *chaincfg.Para
 		return nil, ErrInvalidRGB11Asset
 	}
 	asset := indexer.NewAssetNameFromString(string(tokenizer.Data()))
-	if asset == nil {
+	if asset == nil || asset.Protocol != Protocol {
+		return nil, ErrInvalidRGB11Asset
+	}
+	if _, err := consensus.ParseContractID(asset.Ticker); err != nil {
 		return nil, ErrInvalidRGB11Asset
 	}
 	for i := 0; i < 2; i++ { // start/end block
@@ -108,7 +95,7 @@ func DecodeTranscendRegistrationDescriptor(content []byte, params *chaincfg.Para
 	if err != nil {
 		return nil, err
 	}
-	address, err := next()
+	provider, err := next()
 	if err != nil {
 		return nil, err
 	}
@@ -116,13 +103,9 @@ func DecodeTranscendRegistrationDescriptor(content []byte, params *chaincfg.Para
 		return nil, ErrInvalidRGB11Asset
 	}
 	d := &TranscendRegistrationDescriptor{
-		ContractID: asset.Ticker, BaseTicker: ticker,
-		GenesisOutpoint: outpoint, GenesisAddress: address,
+		BaseTicker: ticker, GenesisOutpoint: outpoint, ProviderDID: provider,
 	}
-	if asset.Protocol != Protocol || d.ContractID == "" {
-		return nil, ErrInvalidRGB11Asset
-	}
-	if err := ValidateTranscendRegistrationDescriptor(d, params); err != nil {
+	if err := ValidateTranscendRegistrationDescriptor(d); err != nil {
 		return nil, err
 	}
 	return d, nil
