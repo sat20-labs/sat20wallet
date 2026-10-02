@@ -253,22 +253,6 @@ func (p *Manager) ExportRGB11Contract(contractID string) (*RGB11ContractExportRe
 	return manager.ExportRGB11Contract(contractID)
 }
 
-// RegisterRGB11AssetName writes the canonical provider/ticker registry to
-// DKVS. The returned SatoshiNet name is immutable; RGB balances and proof
-// identity continue to use the full ContractID internally.
-func (p *Manager) RegisterRGB11AssetName(contractID string) (*RGB11NameRegistration, error) {
-	if p == nil {
-		return nil, ErrRGB11Inconsistent
-	}
-	release := p.beginRGB11Operation()
-	defer release()
-	manager, err := p.synchronizedRGB11Manager()
-	if err != nil {
-		return nil, err
-	}
-	return manager.RegisterRGB11AssetName(contractID)
-}
-
 func (p *Manager) IssueRGB11Asset(ctx context.Context, request RGB11IssueRequest) (*RGB11IssueResult, error) {
 	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationNew,
 		func(manager *rgb11Manager) (*RGB11IssueResult, error) {
