@@ -7,8 +7,7 @@ import ts from 'typescript'
 // Execute the actual production decorator. Reactive/UI dependencies are not
 // invoked by the pure mapping function, so no browser, wallet, or network is
 // started by these tests.
-const source = await readFile(new URL('../../composables/hooks/useRgb11Assets.ts', import.meta.url).href.replace('/scripts/composables/', '/composables/'), 'utf8').catch(async () =>
-  readFile(new URL('../../composables/hooks/useRgb11Assets.ts', new URL('../', import.meta.url)), 'utf8'))
+const source = await readFile(new URL('../../composables/hooks/useRgb11Assets.ts', import.meta.url), 'utf8')
 const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   fileName: 'useRgb11Assets.ts',

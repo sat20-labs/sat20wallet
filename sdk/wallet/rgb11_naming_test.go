@@ -59,7 +59,7 @@ func TestRGB11NamingIssueRenameAndReceiverOrigin(t *testing.T) {
 	output.OutPointStr, output.OutValue.PkScript = origin, script
 	rpc := &rgb11FlowIndexer{
 		outputs: map[string]*TxOutput{origin: output},
-		plain: []*indexerwire.TxOutputInfo{{OutPoint: origin, Value: 10000, PkScript: script}},
+		plain:   []*indexerwire.TxOutputInfo{{OutPoint: origin, Value: 10000, PkScript: script}},
 	}
 	manager := newRGB11FlowManager(t, issuerWallet, rpc, evidence, 41)
 	issued, err := manager.rgbManager.IssueRGB11Asset(context.Background(), RGB11IssueRequest{
