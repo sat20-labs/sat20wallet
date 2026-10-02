@@ -1795,6 +1795,7 @@ func (p *rgb11Manager) withRGB11NamingOrigin(info *indexer.TickerInfo) (*indexer
 		ext.ContractID = ext.OriginalAssetID
 	}
 	ext.GenesisAddress = ""
+	ext.GenesisOutpoint = ""
 	ext.DisplayTicker = ext.ContractID
 	ext.NamingStatus = "origin-unavailable"
 	if p.projectionStore != nil && p.evidence != nil && ext.ContractHash != "" {
@@ -1802,9 +1803,12 @@ func (p *rgb11Manager) withRGB11NamingOrigin(info *indexer.TickerInfo) (*indexer
 			if container, err := coreconsignment.Decode(raw); err == nil &&
 				rgb11wallet.ContractAssetKeyMatches(info.AssetName, container.ContractID) {
 				if genesis, ok := container.Value.Field("genesis"); ok {
-					if address, err := rgb11wallet.ResolveGenesisNamingAddress(context.Background(), genesis, p.evidence, GetChainParam()); err == nil {
+					outpoints, outpointErr := rgb11wallet.GenesisNamingOutpoints(genesis)
+					address, addressErr := rgb11wallet.ResolveGenesisNamingAddress(context.Background(), genesis, p.evidence, GetChainParam())
+					if outpointErr == nil && len(outpoints) > 0 && addressErr == nil {
 						if local, err := rgb11wallet.BuildLocalDisplayName(ext.Ticker, address, ""); err == nil {
 							ext.GenesisAddress = address
+							ext.GenesisOutpoint = outpoints[0].String()
 							ext.DisplayTicker = local
 							ext.NamingStatus = "local-address"
 						}
