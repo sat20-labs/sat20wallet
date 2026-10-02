@@ -1,6 +1,8 @@
 package wallet
 
 import (
+	"errors"
+
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
@@ -10,13 +12,22 @@ import (
 func (p *SatsNetDKVSClient) GetRGB11Registration(providerDID, ticker,
 	contractID string) (*dkvsindexer.RGB11Registration, error) {
 
-	key, err := dkvsindexer.RGB11RegistryKey(providerDID, ticker)
+	prefix, err := dkvsindexer.RGB11RegistryPrefix(providerDID, ticker)
 	if err != nil {
 		return nil, err
 	}
-	record, err := p.GetRecord(key)
+	records, _, err := p.ListRecords(prefix, 0, 0)
 	if err != nil {
 		return nil, err
 	}
-	return dkvsindexer.RGB11RegistrationFromRecord(record, contractID)
+	for _, record := range records {
+		registration, err := dkvsindexer.RGB11RegistrationFromRecord(record)
+		if err != nil {
+			return nil, err
+		}
+		if registration.ContractID == contractID {
+			return registration, nil
+		}
+	}
+	return nil, errors.New("RGB11 registration not found")
 }
