@@ -13,7 +13,6 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
-	"github.com/sat20-labs/satoshinet/btcec"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -210,11 +209,15 @@ func rgb11RegistryHTTPValidationE2E(t *testing.T) {
 	if registration, err := cleanClient.GetRGB11Registration("alice", "USD", contractID); err != nil || registration == nil {
 		t.Fatalf("valid-response control failed: registration=%+v err=%v", registration, err)
 	}
-	attacker, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
+	// Public independent test wallet; signing uses the SDK API, not a helper
+	// defined only in the dependency package's own _test.go files.
+	attacker := NewInternalWalletWithMnemonic(
+		"comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params,
+	)
+	if attacker == nil || attacker.GetPubKey() == nil {
+		t.Fatal("create untrusted test wallet")
 	}
-	untrusted, err := dkvsindexer.NewSignedRecord(attacker, authorized.Key, authorized.Value,
+	untrusted, err := NewDKVSSignedRecord(attacker, authorized.Key, authorized.Value,
 		dkvsindexer.RecordOptions{Seq: 1, IssueHeight: 100})
 	if err != nil {
 		t.Fatal(err)
