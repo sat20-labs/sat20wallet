@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
