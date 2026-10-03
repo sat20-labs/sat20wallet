@@ -104,32 +104,46 @@ func (p *rgb11Manager) stageRGB11Reservation(batch indexer.WriteBatch, scope str
 	default:
 		return nil, ErrRGB11Inconsistent
 	}
-	if state != nil && state.Direction == "receive" && state.Invoice != "" {
-		match := func(candidate *corewallet.ReceiveRequest) error {
-			if candidate.Invoice == state.Invoice {
-				if request != nil && request.RequestID != candidate.RequestID {
-					return ErrRGB11Inconsistent
-				}
-				request = candidate
+	if state != nil && state.Direction == "receive" {
+		if state.ReceiveRequestID != "" {
+			candidate, err := p.engine.LoadReceive(state.ReceiveRequestID)
+			if err != nil {
+				return nil, err
 			}
-			return nil
-		}
-		if snapshot != nil {
-			for _, candidate := range snapshot.requests {
-				if err := match(candidate); err != nil {
+			if state.Invoice != "" && candidate.Invoice != state.Invoice {
+				return nil, ErrRGB11Inconsistent
+			}
+			request = candidate
+		} else if state.Invoice != "" {
+			// Compatibility fallback for states written before ReceiveRequestID
+			// was persisted. Invoice matching is inherently ambiguous for
+			// address-mode batch outputs, so new states must use the exact ID.
+			match := func(candidate *corewallet.ReceiveRequest) error {
+				if candidate.Invoice == state.Invoice {
+					if request != nil && request.RequestID != candidate.RequestID {
+						return ErrRGB11Inconsistent
+					}
+					request = candidate
+				}
+				return nil
+			}
+			if snapshot != nil {
+				for _, candidate := range snapshot.requests {
+					if err := match(candidate); err != nil {
+						return nil, err
+					}
+				}
+			} else {
+				prefix := []byte("rgb11-engine-" + scope + "-wallet/receive/")
+				if err := p.db.BatchRead(prefix, false, func(_, raw []byte) error {
+					candidate, err := corewallet.DecodeReceiveRequest(raw)
+					if err != nil {
+						return err
+					}
+					return match(candidate)
+				}); err != nil {
 					return nil, err
 				}
-			}
-		} else {
-			prefix := []byte("rgb11-engine-" + scope + "-wallet/receive/")
-			if err := p.db.BatchRead(prefix, false, func(_, raw []byte) error {
-				candidate, err := corewallet.DecodeReceiveRequest(raw)
-				if err != nil {
-					return err
-				}
-				return match(candidate)
-			}); err != nil {
-				return nil, err
 			}
 		}
 	}
