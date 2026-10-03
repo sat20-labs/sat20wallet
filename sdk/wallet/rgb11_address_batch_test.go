@@ -140,10 +140,10 @@ func TestRGB11FullContractProjectionIdentityThroughBatchPrepare(t *testing.T) {
 	sender, recipient, imported, _, _ := newRGB11GenericSendFixture(t)
 	assertRGB11ProjectionProofIdentity(t, sender, "after-import")
 	request := RGB11AddressSendRequest{
-		ReceiverAddress: recipient.wallet.GetAddress(),
-		AssetName: imported.AssetName,
-		AmountRaw: "20000",
-		FeeRate: 2,
+		ReceiverAddress:  recipient.wallet.GetAddress(),
+		AssetName:        imported.AssetName,
+		AmountRaw:        "20000",
+		FeeRate:          2,
 		MinConfirmations: 1,
 	}
 	if _, err := runRGB11ManagedOperation(sender, context.Background(), rgb11ManagedOperationNew,
