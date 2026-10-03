@@ -37,7 +37,7 @@ RGB11 canonical registry 由 SatoshiNet DKVS 保存：
 
     /rgb11/<providerDID>/<baseTicker>/<ordinal>
 
-value 为最小 33-byte 编码：1 byte 原资产类型（`f`/`n`）+ 32-byte ContractID。类型只用于恢复完整 SatoshiNet AssetName，不参与 ordinal namespace。
+value 为最小 33-byte 编码：1 byte 原资产类型（FT 为 `f`，NFT 为 `o`）+ 32-byte ContractID。使用共享 Indexer 的 `ASSET_TYPE_FT` / `ASSET_TYPE_NFT` 常量；`n` 是名称资产类型，不是 NFT，不作为 RGB11 类型兼容。类型只用于恢复完整 SatoshiNet AssetName，不参与 ordinal namespace。
 
 例如：
 
@@ -49,7 +49,13 @@ value 为最小 33-byte 编码：1 byte 原资产类型（`f`/`n`）+ 32-byte Co
     rgb11:f:usdt@tether
     rgb11:f:usdt_2@tether
 
-Wallet SDK 只读取该 registry，不直接创建 /rgb11 记录。GetRGB11Registration(providerDID, ticker, contractID) 通过普通 DKVS read API 查询已同步的 canonical registration。
+NFT 示例为 `rgb11:o:art@artist`。
+
+Wallet SDK 只读取该 registry，不直接创建 /rgb11 记录。GetRGB11Registration(providerDID, ticker, contractID) 通过普通 DKVS read API 查询已同步的 canonical registration，并在本地验证整个响应：记录签名、可信注册权威、provider/ticker 范围、完整 ContractID、永久记录约束以及重复 key/ContractID。
+
+默认可信根与节点一致，来自本地网络配置的 bootstrap/default CoreNode 公钥，而不是 HTTP 响应。GetRGB11RegistrationWithVerifier(...) 支持显式指定可信注册策略；该策略只能来自可信本地配置，nil 策略直接拒绝。测试使用独立测试权威，不把测试公钥加入生产可信根。
+
+注册记录要求 Seq=1、TTL=0、无 tombstone、无 FeeProof。即使某条匹配记录合法，也不能提前返回并忽略同一响应中的其他非法记录。签名认证不证明服务端没有遗漏记录，也不替代后续 STP 对 Genesis/provider 所有权的验证。
 
 ## Transcend/STP 边界
 
@@ -83,15 +89,17 @@ RGB11 canonical naming 是 DKVS 状态，不属于 SatoshiNet block index state�
 - Primary DID DKVS helper；
 - DID <= 10 校验；
 - provider / ticker / ordinal 名称构造与解析测试；
-- SDK 可读取 SatoshiNet DKVS 中已有 RGB11 registration；
+- SDK 可认证读取 SatoshiNet DKVS 中已有 RGB11 registration；
 - PWA 资产选择、去重和转账继续使用稳定 asset key，而不是本地显示名称。
 
 ## SDK e2e
 
-SDK 测试现在覆盖两层：
+SDK 测试覆盖两个层次；测试代码存在不等同于所有 connected core 场景已执行，执行结果以对应提交的 CI/验收记录为准。
 
 1. connected core e2e：真实发行 RGB11、默认本地名称、修改本地名称、balance/key 不变、真实 DKVS Primary DID 写入/读取、11 位 DID 与非 owner DID 拒绝、Primary DID 修改后本地名称仍可修改；
-2. SDK-DKVS registry e2e：CoreNode 测试钱包签名并写入真实 SatoshiNet DKVS Indexer 的 /rgb11 record，SatsNetDKVSClient 再通过正常 read API 读取 ordinal 1/2，并验证 canonical AssetName。
+2. SDK-DKVS registry e2e：本地 HTTP 测试适配器连接真实 SatoshiNet DKVS Indexer，真实 SatsNetDKVSClient 发出请求并验证结果，不依赖公网、真实钱包或私有测试开关。
+
+第二层包括 ordinal 1–12、幂等注册、FT/NFT 共享编码、路径和全量快照恢复、Index­er 实例重建后读取，以及未签名、陌生签名者、类型篡改、错误 provider/ticker、重复身份、合法匹配后的恶意尾记录、可信签名下非法 TTL/Seq 的拒绝。Index­er 重建使用同一内存数据库，不宣称磁盘崩溃恢复或完整生产 RPC 验收。
 
 STP/Transcend RGB deposit/withdraw e2e 留到对应功能实现时补充。
 
