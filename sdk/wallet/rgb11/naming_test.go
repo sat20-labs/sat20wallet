@@ -22,12 +22,12 @@ func namingTestAddress(t *testing.T, network *chaincfg.Params, value byte) strin
 }
 
 func TestPrimaryDIDNameLengthBoundary(t *testing.T) {
-	for _, name := range []string{"a", "alice", "abcdefghij", strings.Repeat("聪", 10)} {
+	for _, name := range []string{"a", "alice", "abcdefghij", "alice.did", "alice-1", "alice_1"} {
 		if err := ValidatePrimaryDIDName(name); err != nil {
 			t.Errorf("valid canonical DID %q: %v", name, err)
 		}
 	}
-	for _, name := range []string{"", "abcdefghijk", strings.Repeat("聪", 11), "Alice", "alice ", " alice", "ali ce", "a@b", "a:b", "a/b", "a\\b", "a\nb", "a\x00b", "a\u200bb", string([]byte{0xff})} {
+	for _, name := range []string{"", "abcdefghijk", "聪", strings.Repeat("聪", 10), "Alice", "alice ", " alice", "ali ce", "a@b", "a:b", "a/b", "a\\b", "a\nb", "a\x00b", "a\u200bb", string([]byte{0xff})} {
 		if err := ValidatePrimaryDIDName(name); !errors.Is(err, ErrInvalidProviderDID) {
 			t.Errorf("invalid DID %q accepted: %v", name, err)
 		}
