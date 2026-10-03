@@ -96,7 +96,6 @@ func newRGB11GenericSendFixture(t *testing.T) (*Manager, *Manager, *RGB11ImportR
 	return sender, recipient, imported, evidence, rpc
 }
 
-
 func assertRGB11ProjectionProofIdentity(t *testing.T, manager *Manager, stage string) {
 	t.Helper()
 	outputs, err := manager.rgbManager.projectionStore.ListOutputs()
