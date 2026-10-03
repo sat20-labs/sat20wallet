@@ -421,7 +421,11 @@ func acknowledgeRGB11ChannelSend(t *testing.T, c *rgb11ChannelSendCase) error {
 			context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
 		)
 		if err != nil || syncResult.Received != 1 || syncResult.Invalid != 0 {
-			t.Fatalf("output %d mailbox sync=%+v err=%v", i, syncResult, err)
+			transfers, transferErr := recipient.rgbManager.projectionStore.ListTransfers()
+			reservations, reservationErr := recipient.rgbManager.loadRGB11Reservations()
+			engineRecords, engineErr := recipient.rgbManager.engineStore.ExportSnapshot()
+			t.Fatalf("output %d mailbox sync=%+v err=%v state=%+v transferErr=%v reservations=%+v reservationErr=%v engineRecords=%+v engineErr=%v preparedStates=%+v",
+				i, syncResult, err, transfers, transferErr, reservations, reservationErr, engineRecords, engineErr, prepared.States)
 		}
 		if _, err := sender.SyncConfiguredRGB11AddressMailbox(
 			context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},

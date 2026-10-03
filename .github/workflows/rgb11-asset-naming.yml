@@ -1,0 +1,148 @@
+name: RGB11 asset naming
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sdk/**'
+      - 'pwa/**'
+      - '.github/workflows/rgb11-asset-naming.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rgb11-asset-naming-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  naming:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout wallet
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: sat20wallet
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout indexer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: sat20-labs/indexer
+          ref: 1d259d64ee3603bbf1ff8189dc1bbada76e2f8b3
+          path: indexer
+          persist-credentials: false
+
+      - name: Checkout RGB11 engine
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: sat20-labs/rgb11
+          ref: 76eab6762fcc75ad2213a6e1cdcf896e483bf0ab
+          path: rgb11
+          persist-credentials: false
+
+      - name: Checkout SatoshiNet
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: sat20-labs/satoshinet
+          ref: feat/rgb11-naming-indexer
+          path: satoshinet
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: sat20wallet/sdk/go.mod
+          cache: false
+
+      - name: Check changed Go formatting
+        working-directory: sat20wallet
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- 'sdk/**/*.go')
+          if (( ${#files[@]} )); then
+            unformatted=$(gofmt -l "${files[@]}")
+            if [[ -n "$unformatted" ]]; then
+              printf 'Unformatted files:\n%s\n' "$unformatted"
+              gofmt -d "${files[@]}"
+              exit 1
+            fi
+          fi
+          git diff --check origin/main...HEAD
+
+      - name: Contract identity rename regression
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet/rgb11 -run '^TestRGB11NamingIdentitySurvivesLocalRename$' -count=1 -timeout=10m -v
+
+      - name: Test RGB11 packages
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet/rgb11/... -count=1 -timeout=10m
+
+      - name: Test wallet naming integration
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet -run '^TestRGB11NamingIssueRenameAndReceiverOrigin$' -count=1 -timeout=10m -v
+
+      - name: Test SDK to SatoshiNet RGB11 registry e2e
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet -run '^TestRGB11RegistrySDKDKVSE2E$' -count=1 -timeout=10m -v
+
+      - name: Isolate RGB11 transfer regressions
+        working-directory: sat20wallet/sdk
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_name in \
+            TestRGB11FullContractProjectionIdentityThroughBatchPrepare \
+            TestGenericBatchSendAssetsRGB11 \
+            TestRGB11DirectBatchRequiresEveryOutputACK \
+            TestRGB11ChannelSendRecoversAfterPeerResponseLoss
+          do
+            go test ./wallet -run "^${test_name}$" -count=1 -timeout=10m -v
+          done
+
+      - name: Test complete wallet suite
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet/... -count=1 -timeout=15m
+
+      - name: Vet wallet packages
+        working-directory: sat20wallet/sdk
+        run: go vet -copylocks=false ./wallet/...
+
+      - name: Compile browser WASM
+        working-directory: sat20wallet/sdk
+        run: GOOS=js GOARCH=wasm go build -buildvcs=false -o /tmp/rgb11-naming.wasm ./wasm
+
+  pwa-naming:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout wallet
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Install PWA dependencies
+        working-directory: pwa
+        run: |
+          if test -f package-lock.json; then
+            npm ci --ignore-scripts --no-audit --no-fund
+          else
+            npm install --ignore-scripts --no-audit --no-fund
+          fi
+
+      - name: Test actual PWA naming decorator
+        working-directory: pwa
+        run: node --test scripts/verify/rgb11-asset-naming.test.mjs
+
+      - name: Type-check PWA
+        working-directory: pwa
+        run: npm run compile
