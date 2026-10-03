@@ -92,7 +92,17 @@ jobs:
 
       - name: Isolate RGB11 transfer regressions
         working-directory: sat20wallet/sdk
-        run: go test ./wallet -run '^(TestRGB11FullContractProjectionIdentityThroughBatchPrepare|TestGenericBatchSendAssetsRGB11|TestRGB11DirectBatchRequiresEveryOutputACK|TestRGB11ChannelSendRecoversAfterPeerResponseLoss)$' -count=1 -timeout=10m -v
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_name in \
+            TestRGB11FullContractProjectionIdentityThroughBatchPrepare \
+            TestGenericBatchSendAssetsRGB11 \
+            TestRGB11DirectBatchRequiresEveryOutputACK \
+            TestRGB11ChannelSendRecoversAfterPeerResponseLoss
+          do
+            go test ./wallet -run "^${test_name}$" -count=1 -timeout=10m -v
+          done
 
       - name: Test complete wallet suite
         working-directory: sat20wallet/sdk
