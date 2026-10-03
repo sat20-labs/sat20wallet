@@ -1,5 +1,7 @@
 name: RGB11 asset naming
 
+# Paired SatoshiNet branch is required for RGB11 DKVS registry tests.
+
 on:
   pull_request:
     branches: [main]
