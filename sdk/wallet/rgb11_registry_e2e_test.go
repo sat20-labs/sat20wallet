@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
+	indexer "github.com/sat20-labs/indexer/common"
 	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
@@ -22,6 +23,7 @@ import (
 // loopback adapter exposes only the read route; it is not a full node/STP test.
 func TestRGB11RegistrySDKDKVSE2E(t *testing.T) {
 	t.Run("HTTPRoundTripAndSnapshotRecovery", rgb11RegistryHTTPRoundTripE2E)
+	t.Run("SDKAssetTypeCompatibility", rgb11RegistrySDKAssetTypesE2E)
 	t.Run("RejectUntrustedHTTPResponses", rgb11RegistryHTTPValidationE2E)
 }
 
@@ -112,10 +114,7 @@ func rgb11RegistryHTTPRoundTripE2E(t *testing.T) {
 	client, reads := newRGB11RegistryE2EHTTPClient(t, source, nil)
 	var last *swire.DKVSRecord
 	for ordinal := uint64(1); ordinal <= 12; ordinal++ {
-		assetType := "f"
-		if ordinal%2 == 0 {
-			assetType = "n"
-		}
+		assetType := indexer.ASSET_TYPE_FT
 		contractID := fmt.Sprintf("%064x", 400+ordinal)
 		last = makeRecord("alice", "USD", assetType, ordinal, contractID)
 		if updated, err := source.indexer.PutInternalRGB11Registry(last); err != nil || !updated {
@@ -126,14 +125,11 @@ func rgb11RegistryHTTPRoundTripE2E(t *testing.T) {
 		t.Fatalf("retry must be idempotent: updated=%v err=%v", updated, err)
 	}
 	if count, err := source.indexer.RGB11RegistryCount("alice", "USD"); err != nil || count != 12 {
-		t.Fatalf("FT/NFT must share one ordinal namespace: count=%d err=%v", count, err)
+		t.Fatalf("ordinal count changed after retry: count=%d err=%v", count, err)
 	}
 	for ordinal := uint64(1); ordinal <= 12; ordinal++ {
 		contractID := fmt.Sprintf("%064x", 400+ordinal)
-		assetType := "f"
-		if ordinal%2 == 0 {
-			assetType = "n"
-		}
+		assetType := indexer.ASSET_TYPE_FT
 		expected, err := rgb11wallet.BuildRegisteredAssetName("USD", assetType, "alice", ordinal)
 		if err != nil {
 			t.Fatal(err)
@@ -170,7 +166,7 @@ func rgb11RegistryHTTPRoundTripE2E(t *testing.T) {
 	}
 	recoveredClient, _ := newRGB11RegistryE2EHTTPClient(t, target, nil)
 	registration, err := recoveredClient.GetRGB11Registration("alice", "USD", fmt.Sprintf("%064x", 412))
-	if err != nil || registration == nil || registration.AssetName != "rgb11:n:usd_12@alice" {
+	if err != nil || registration == nil || registration.AssetName != "rgb11:f:usd_12@alice" {
 		t.Fatalf("SDK read after DKVS recovery: registration=%+v err=%v", registration, err)
 	}
 	thirteenth := makeRecord("alice", "USD", "f", 13, fmt.Sprintf("%064x", 413))
@@ -195,6 +191,39 @@ func rgb11RegistryHTTPRoundTripE2E(t *testing.T) {
 		if err != nil || registration == nil || registration.AssetName != item.name {
 			t.Fatalf("immutable mapping after append/stale snapshot: registration=%+v err=%v", registration, err)
 		}
+	}
+}
+
+// Use the shared SDK asset constants, not an independently invented wire enum.
+// This isolates NFT type compatibility from the ordinary HTTP/recovery path.
+func rgb11RegistrySDKAssetTypesE2E(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		assetType string
+	}{{"FT", indexer.ASSET_TYPE_FT}, {"NFT", indexer.ASSET_TYPE_NFT}} {
+		t.Run(tc.name, func(t *testing.T) {
+			source, makeRecord := newRGB11RegistryE2ESource(t)
+			contractID := fmt.Sprintf("%064x", 800)
+			expected, err := rgb11wallet.BuildRegisteredAssetName("USD", tc.assetType, "alice", 1)
+			if err != nil {
+				t.Fatalf("SDK must accept its existing asset type %q: %v", tc.assetType, err)
+			}
+			value, err := dkvsindexer.EncodeRGB11RegistryValue(tc.assetType, contractID)
+			if err != nil {
+				t.Fatalf("registry rejected existing SDK asset type %q: %v", tc.assetType, err)
+			}
+			if len(value) != 33 || string(value[:1]) != tc.assetType {
+				t.Fatalf("registry changed asset type %q: %x", tc.assetType, value)
+			}
+			if _, err := source.indexer.PutInternalRGB11Registry(makeRecord("alice", "USD", tc.assetType, 1, contractID)); err != nil {
+				t.Fatal(err)
+			}
+			client, _ := newRGB11RegistryE2EHTTPClient(t, source, nil)
+			registration, err := client.GetRGB11Registration("alice", "USD", contractID)
+			if err != nil || registration == nil || registration.AssetName != expected.String() || registration.AssetType != tc.assetType {
+				t.Fatalf("SDK/registry asset type mismatch: expected=%s registration=%+v err=%v", expected.String(), registration, err)
+			}
+		})
 	}
 }
 
