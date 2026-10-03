@@ -29,7 +29,7 @@ func TestRGB11RegistrySDKDKVSE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := dkvsindexer.EncodeRGB11ContractID(contractID)
+	value, err := dkvsindexer.EncodeRGB11RegistryValue("f", contractID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestRGB11RegistrySDKDKVSE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondValue, err := dkvsindexer.EncodeRGB11ContractID(secondID)
+	secondValue, err := dkvsindexer.EncodeRGB11RegistryValue("f", secondID)
 	if err != nil {
 		t.Fatal(err)
 	}
