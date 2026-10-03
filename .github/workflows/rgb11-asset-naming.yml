@@ -96,7 +96,51 @@ jobs:
 
       - name: Isolate RGB11 transfer regressions
         working-directory: sat20wallet/sdk
-        run: go test ./wallet -run '^(TestGenericBatchSendAssetsRGB11|TestRGB11DirectBatchRequiresEveryOutputACK|TestRGB11ChannelSendRecoversAfterPeerResponseLoss)$' -count=1 -timeout=10m -v
+        run: go test ./wallet -run '^(TestRGB11FullContractProjectionIdentityThroughBatchPrepare|TestGenericBatchSendAssetsRGB11|TestRGB11DirectBatchRequiresEveryOutputACK|TestRGB11ChannelSendRecoversAfterPeerResponseLoss)
+
+      - name: Test complete wallet suite
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet/... -count=1 -timeout=15m
+
+      - name: Vet wallet packages
+        working-directory: sat20wallet/sdk
+        run: go vet -copylocks=false ./wallet/...
+
+      - name: Compile browser WASM
+        working-directory: sat20wallet/sdk
+        run: GOOS=js GOARCH=wasm go build -buildvcs=false -o /tmp/rgb11-naming.wasm ./wasm
+
+  pwa-naming:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout wallet
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: Install PWA dependencies
+        working-directory: pwa
+        run: |
+          if test -f package-lock.json; then
+            npm ci --ignore-scripts --no-audit --no-fund
+          else
+            npm install --ignore-scripts --no-audit --no-fund
+          fi
+
+      - name: Test actual PWA naming decorator
+        working-directory: pwa
+        run: node --test scripts/verify/rgb11-asset-naming.test.mjs
+
+      - name: Type-check PWA
+        working-directory: pwa
+        run: npm run compile
+ -count=1 -timeout=10m -v
 
       - name: Test complete wallet suite
         working-directory: sat20wallet/sdk
