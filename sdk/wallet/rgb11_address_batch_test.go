@@ -304,7 +304,11 @@ func TestGenericBatchSendAssetsRGB11(t *testing.T) {
 		case <-tick.C:
 			syncResult, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
 			if err != nil || syncResult.Invalid != 0 {
-				t.Fatalf("receive=%+v err=%v", syncResult, err)
+				transfers, transferErr := recipient.rgbManager.projectionStore.ListTransfers()
+				reservations, reservationErr := recipient.rgbManager.loadRGB11Reservations()
+				engineRecords, engineErr := recipient.rgbManager.engineStore.ExportSnapshot()
+				t.Fatalf("receive=%+v err=%v state=%+v transferErr=%v reservations=%+v reservationErr=%v engineRecords=%+v engineErr=%v",
+					syncResult, err, transfers, transferErr, reservations, reservationErr, engineRecords, engineErr)
 			}
 		}
 	}
