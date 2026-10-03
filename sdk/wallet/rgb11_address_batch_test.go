@@ -448,14 +448,13 @@ func TestRGB11SendPreservesOtherContractOnSameCarrier(t *testing.T) {
 	}
 }
 
-
 func TestRGB11DirectReservationResumesAfterSDKRestart(t *testing.T) {
 	sender, recipient, imported, evidence, _ := newRGB11GenericSendFixture(t)
 	request := RGB11AddressSendRequest{
-		ReceiverAddress: recipient.wallet.GetAddress(),
-		AssetName: imported.AssetName,
-		AmountRaw: "20000",
-		FeeRate: 2,
+		ReceiverAddress:  recipient.wallet.GetAddress(),
+		AssetName:        imported.AssetName,
+		AmountRaw:        "20000",
+		FeeRate:          2,
 		MinConfirmations: 1,
 	}
 	prepared, _, err := sender.PrepareConfiguredRGB11AddressTransfer(
