@@ -2683,7 +2683,7 @@ func (p *rgb11Manager) prepareRGB11ConsignmentWithID(ctx context.Context, reques
 	}
 	state := &rgb11wallet.TransferState{
 		TransferID: transferID, Direction: "receive", Asset: *receivedAsset,
-		RecipientID: request.RecipientID, Invoice: request.Invoice,
+		RecipientID: request.RecipientID, ReceiveRequestID: requestID, Invoice: request.Invoice,
 		OutputOutPoints: []string{receivedOutpoint}, MinConfirmations: 1, Expiry: expiry,
 		ConsignmentHash: receipt.ConsignmentHash, WitnessTxID: actualTxID,
 		AckStatus: "accepted", Status: "awaiting_broadcast",
