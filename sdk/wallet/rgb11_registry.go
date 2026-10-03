@@ -5,8 +5,8 @@ import (
 )
 
 // GetRGB11Registration reads an existing SatoshiNet RGB11 registry entry.
-// Wallet code never creates /rgb11 records; the CoreNode processing the
-// corresponding transcend.tc deployment owns that write path.
+// Wallet code never creates /rgb11 records. The trusted SatoshiNet/STP
+// registration path persists the canonical mapping before RGB11 ingress.
 func (p *SatsNetDKVSClient) GetRGB11Registration(providerDID, ticker,
 	contractID string) (*dkvsindexer.RGB11Registration, error) {
 
