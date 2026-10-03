@@ -157,6 +157,7 @@ type TransferState struct {
 	Direction        string            `json:"direction"`
 	Asset            indexer.AssetInfo `json:"asset"`
 	RecipientID      string            `json:"recipient_id"`
+	ReceiveRequestID string            `json:"receive_request_id,omitempty"`
 	Invoice          string            `json:"invoice"`
 	InputOutPoints   []string          `json:"input_outpoints"`
 	OutputOutPoints  []string          `json:"output_outpoints"`
