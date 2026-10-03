@@ -174,7 +174,11 @@ func TestRGB11DirectBatchRequiresEveryOutputACK(t *testing.T) {
 		}
 		syncResult, err := recipient.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
 		if err != nil || syncResult.Invalid != 0 || syncResult.Received != 1 {
-			t.Fatalf("output %d receive=%+v err=%v", i, syncResult, err)
+			transfers, transferErr := recipient.rgbManager.projectionStore.ListTransfers()
+			reservations, reservationErr := recipient.rgbManager.loadRGB11Reservations()
+			engineRecords, engineErr := recipient.rgbManager.engineStore.ExportSnapshot()
+			t.Fatalf("output %d receive=%+v err=%v state=%+v transferErr=%v reservations=%+v reservationErr=%v engineRecords=%+v engineErr=%v preparedStates=%+v",
+				i, syncResult, err, transfers, transferErr, reservations, reservationErr, engineRecords, engineErr, prepared.States)
 		}
 		_, err = sender.SyncConfiguredRGB11AddressMailbox(context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{})
 		if err != nil {
