@@ -24,7 +24,7 @@ SDK helper 为 PutPrimaryDID(...) 和 GetPrimaryDID(...)。
 
 规则：
 
-- DID 最多 10 个 Unicode code points；
+- 可 Bind DID 限定为 1–10 位小写 ASCII `a-z0-9._-`，这是 Ordinals DID 的 DKVS-safe 子集；
 - 不截断、不做 fingerprint；
 - 不保存 inscription_id、owner address、owner UTXO 等 L1 Indexer 已可查询的信息；
 - SatoshiNet DKVS 写入端通过 L1 DID resolver 校验当前 ownership；
@@ -37,7 +37,7 @@ RGB11 canonical registry 由 SatoshiNet DKVS 保存：
 
     /rgb11/<providerDID>/<baseTicker>/<ordinal>
 
-value 只有原始 32-byte ContractID。
+value 为最小 33-byte 编码：1 byte 原资产类型（`f`/`n`）+ 32-byte ContractID。类型只用于恢复完整 SatoshiNet AssetName，不参与 ordinal namespace。
 
 例如：
 
