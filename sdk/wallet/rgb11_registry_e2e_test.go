@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ func TestRGB11RegistrySDKDKVSE2E(t *testing.T) {
 	t.Run("HTTPRoundTripAndSnapshotRecovery", rgb11RegistryHTTPRoundTripE2E)
 	t.Run("SDKAssetTypeCompatibility", rgb11RegistrySDKAssetTypesE2E)
 	t.Run("RejectUntrustedHTTPResponses", rgb11RegistryHTTPValidationE2E)
+	t.Run("AuthorityPolicyFailsClosed", rgb11RegistryAuthorityPolicyE2E)
 }
 
 type rgb11RegistryE2ERecordFactory func(provider, ticker, assetType string, ordinal uint64, contractID string) *swire.DKVSRecord
@@ -63,9 +65,28 @@ func newRGB11RegistryE2ESource(t *testing.T) (*satoshinetDKVSTestTransport, rgb1
 	return transport, makeRecord
 }
 
+// Test-network policy is supplied out of band, never learned from HTTP data.
+// This wrapper only selects the verifier; all lookup/validation logic remains
+// the real SDK implementation, also used by the default public entrypoint.
+type rgb11RegistryE2EClient struct {
+	*SatsNetDKVSClient
+	verifier dkvsindexer.SystemVerifier
+}
+
+func (c *rgb11RegistryE2EClient) GetRGB11Registration(provider, ticker, contractID string) (*dkvsindexer.RGB11Registration, error) {
+	return c.SatsNetDKVSClient.GetRGB11RegistrationWithVerifier(provider, ticker, contractID, c.verifier)
+}
+
 func newRGB11RegistryE2EHTTPClient(t *testing.T, transport *satoshinetDKVSTestTransport,
-	mutate func(*dkvsindexer.PrefixReadResult)) (*SatsNetDKVSClient, *atomic.Int64) {
+	mutate func(*dkvsindexer.PrefixReadResult)) (*rgb11RegistryE2EClient, *atomic.Int64) {
 	t.Helper()
+	coreWallet := NewInternalWalletWithMnemonic(
+		"inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire", "", &chaincfg.TestNet4Params,
+	)
+	if coreWallet == nil || coreWallet.GetPubKey() == nil {
+		t.Fatal("create locally configured test authority")
+	}
+	verifier := dkvsindexer.StaticSystemVerifier{Keys: [][]byte{coreWallet.GetPubKey().SerializeCompressed()}}
 	reads := new(atomic.Int64)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/testnet/v3/dkvs/prefixes/read" {
@@ -106,7 +127,7 @@ func newRGB11RegistryE2EHTTPClient(t *testing.T, transport *satoshinetDKVSTestTr
 	httpClient := server.Client()
 	httpClient.Timeout = 5 * time.Second
 	client := NewSatsNetDKVSClient("http", strings.TrimPrefix(server.URL, "http://"), "testnet", &NetClient{Client: httpClient})
-	return client, reads
+	return &rgb11RegistryE2EClient{SatsNetDKVSClient: client, verifier: verifier}, reads
 }
 
 func rgb11RegistryHTTPRoundTripE2E(t *testing.T) {
@@ -259,6 +280,13 @@ func rgb11RegistryHTTPValidationE2E(t *testing.T) {
 	}
 	wrongProvider := makeRecord("company", "USD", "f", 1, contractID)
 	wrongTicker := makeRecord("alice", "EUR", "f", 1, contractID)
+	duplicateContract := makeRecord("alice", "USD", "f", 2, contractID)
+	tail := makeRecord("alice", "USD", "f", 2, fmt.Sprintf("%064x", 902))
+	untrustedTail, err := NewDKVSSignedRecord(attacker, tail.Key, tail.Value,
+		dkvsindexer.RecordOptions{Seq: 1, IssueHeight: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name   string
 		mutate func(*dkvsindexer.PrefixReadResult)
@@ -270,7 +298,7 @@ func rgb11RegistryHTTPValidationE2E(t *testing.T) {
 			result.Records = []*swire.DKVSRecord{untrusted}
 		}},
 		{"tampered_type", func(result *dkvsindexer.PrefixReadResult) {
-			result.Records[0].Value[0] = 'n'
+			result.Records[0].Value[0] = indexer.ASSET_TYPE_NFT[0]
 		}},
 		{"wrong_provider", func(result *dkvsindexer.PrefixReadResult) {
 			result.Records = []*swire.DKVSRecord{wrongProvider}
@@ -280,6 +308,15 @@ func rgb11RegistryHTTPValidationE2E(t *testing.T) {
 		}},
 		{"truncated_value", func(result *dkvsindexer.PrefixReadResult) {
 			result.Records[0].Value = []byte{'f'}
+		}},
+		{"valid_match_before_untrusted_tail", func(result *dkvsindexer.PrefixReadResult) {
+			result.Records = []*swire.DKVSRecord{authorized, untrustedTail}
+		}},
+		{"duplicate_key", func(result *dkvsindexer.PrefixReadResult) {
+			result.Records = []*swire.DKVSRecord{authorized, authorized}
+		}},
+		{"duplicate_contract", func(result *dkvsindexer.PrefixReadResult) {
+			result.Records = []*swire.DKVSRecord{authorized, duplicateContract}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -297,5 +334,45 @@ func rgb11RegistryHTTPValidationE2E(t *testing.T) {
 	stored, err := source.indexer.Get(authorized.Key)
 	if err != nil || stored == nil || dkvsindexer.RecordHash(stored) != dkvsindexer.RecordHash(authorized) {
 		t.Fatalf("response injection mutated server state: record=%+v err=%v", stored, err)
+	}
+}
+
+func rgb11RegistryAuthorityPolicyE2E(t *testing.T) {
+	source, makeRecord := newRGB11RegistryE2ESource(t)
+	id := fmt.Sprintf("%064x", 950)
+	record := makeRecord("alice", "USD", indexer.ASSET_TYPE_FT, 1, id)
+	if _, err := source.indexer.PutInternalRGB11Registry(record); err != nil {
+		t.Fatal(err)
+	}
+	client, reads := newRGB11RegistryE2EHTTPClient(t, source, nil)
+	if got, err := client.GetRGB11Registration("alice", "USD", id); err != nil || got == nil {
+		t.Fatalf("explicit local authority positive control: got=%+v err=%v", got, err)
+	}
+	if err := (rgb11NetworkRegistryVerifier{}).CanWriteSystem(record.Key, record.PubKey); !errors.Is(err, dkvsindexer.ErrPermissionDenied) {
+		t.Fatalf("fixture must not be a production network authority: %v", err)
+	}
+	if got, err := client.SatsNetDKVSClient.GetRGB11Registration("alice", "USD", id); !errors.Is(err, dkvsindexer.ErrPermissionDenied) || got != nil {
+		t.Fatalf("default API trusted an endpoint-selected authority: got=%+v err=%v", got, err)
+	}
+	if reads.Load() != 2 {
+		t.Fatalf("authority rejection must follow real HTTP: reads=%d", reads.Load())
+	}
+	if got, err := client.GetRGB11RegistrationWithVerifier("alice", "USD", id, nil); !errors.Is(err, dkvsindexer.ErrPermissionDenied) || got != nil {
+		t.Fatalf("nil policy must fail closed: got=%+v err=%v", got, err)
+	}
+	if reads.Load() != 2 {
+		t.Fatal("nil verifier issued an unnecessary HTTP request")
+	}
+	for _, keyHex := range []string{indexer.GetBootstrapPubKey(), indexer.GetCoreNodePubKey()} {
+		key, err := hex.DecodeString(keyHex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := (rgb11NetworkRegistryVerifier{}).CanWriteSystem(record.Key, key); err != nil {
+			t.Fatalf("default policy diverged from node network roots: %v", err)
+		}
+		if err := (rgb11NetworkRegistryVerifier{}).CanWriteSystem("/personal/alice/primary_did", key); !errors.Is(err, dkvsindexer.ErrPermissionDenied) {
+			t.Fatalf("registry policy authorized another namespace: %v", err)
+		}
 	}
 }
