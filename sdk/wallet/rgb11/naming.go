@@ -26,19 +26,21 @@ var (
 )
 
 // ValidatePrimaryDIDName is the additional SatoshiNet bind restriction, not
-// proof of DID existence or ownership. The caller must use the canonical DID
-// supplied by the Ordinals resolver; no truncation or silent renaming is done.
-// Length means Unicode code points, not UTF-8 bytes.
+// proof of DID existence or ownership. Bindable DIDs are a deterministic
+// DKVS-safe subset of Ordinals names: 1-10 lowercase ASCII characters from
+// a-z, 0-9, '.', '_' and '-'. No truncation or silent renaming is performed.
 func ValidatePrimaryDIDName(name string) error {
-	if !utf8.ValidString(name) || name == "" || utf8.RuneCountInString(name) > MaxPrimaryDIDLength ||
-		name != strings.ToLower(name) {
+	if !utf8.ValidString(name) || name == "" || len(name) > MaxPrimaryDIDLength ||
+		name != strings.ToLower(name) || name != strings.TrimSpace(name) {
 		return ErrInvalidProviderDID
 	}
-	for _, r := range name {
-		if unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) ||
-			strings.ContainsRune("@:/\\", r) {
-			return ErrInvalidProviderDID
+	for index := 0; index < len(name); index++ {
+		char := name[index]
+		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' ||
+			char == '.' || char == '_' || char == '-' {
+			continue
 		}
+		return ErrInvalidProviderDID
 	}
 	return nil
 }
