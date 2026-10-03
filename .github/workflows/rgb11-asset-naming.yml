@@ -52,14 +52,6 @@ jobs:
           path: satoshinet
           persist-credentials: false
 
-      - name: Checkout Transcend
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          repository: sat20-labs/transcend
-          ref: main
-          path: transcend
-          persist-credentials: false
-
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
@@ -97,10 +89,6 @@ jobs:
       - name: Isolate RGB11 transfer regressions
         working-directory: sat20wallet/sdk
         run: go test ./wallet -run '^(TestRGB11FullContractProjectionIdentityThroughBatchPrepare|TestGenericBatchSendAssetsRGB11|TestRGB11DirectBatchRequiresEveryOutputACK|TestRGB11ChannelSendRecoversAfterPeerResponseLoss)$' -count=1 -timeout=10m -v
-
-      - name: Run isolated SDK RGB11 naming E2E
-        working-directory: sat20wallet/sdk
-        run: go test ./wallet -run '^TestSDKCoreModulesValidation$' -count=1 -timeout=15m -v
 
       - name: Test complete wallet suite
         working-directory: sat20wallet/sdk
