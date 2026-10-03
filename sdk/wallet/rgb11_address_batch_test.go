@@ -96,6 +96,66 @@ func newRGB11GenericSendFixture(t *testing.T) (*Manager, *Manager, *RGB11ImportR
 	return sender, recipient, imported, evidence, rpc
 }
 
+
+func assertRGB11ProjectionProofIdentity(t *testing.T, manager *Manager, stage string) {
+	t.Helper()
+	outputs, err := manager.rgbManager.projectionStore.ListOutputs()
+	if err != nil {
+		t.Fatalf("%s list outputs: %v", stage, err)
+	}
+	proofs, err := manager.rgbManager.projectionStore.ListProofs()
+	if err != nil {
+		t.Fatalf("%s list proofs: %v", stage, err)
+	}
+	proofIndex := make(map[string]bool, len(proofs))
+	for _, proof := range proofs {
+		if proof != nil {
+			proofIndex[proof.OutPoint+"|"+proof.AssetName.String()] = true
+		}
+	}
+	for _, output := range outputs {
+		if output == nil {
+			continue
+		}
+		for _, asset := range output.Assets {
+			if asset.Name.Protocol != rgb11wallet.Protocol {
+				continue
+			}
+			key := output.OutPointStr + "|" + asset.Name.String()
+			if !proofIndex[key] {
+				names := make([]string, 0, len(proofs))
+				for _, proof := range proofs {
+					if proof != nil && proof.OutPoint == output.OutPointStr {
+						names = append(names, proof.AssetName.String())
+					}
+				}
+				t.Fatalf("%s projection missing proof: output=%s asset=%s proofs_at_outpoint=%v",
+					stage, output.OutPointStr, asset.Name.String(), names)
+			}
+		}
+	}
+}
+
+func TestRGB11FullContractProjectionIdentityThroughBatchPrepare(t *testing.T) {
+	sender, recipient, imported, _, _ := newRGB11GenericSendFixture(t)
+	assertRGB11ProjectionProofIdentity(t, sender, "after-import")
+	request := RGB11AddressSendRequest{
+		ReceiverAddress: recipient.wallet.GetAddress(),
+		AssetName: imported.AssetName,
+		AmountRaw: "20000",
+		FeeRate: 2,
+		MinConfirmations: 1,
+	}
+	if _, err := runRGB11ManagedOperation(sender, context.Background(), rgb11ManagedOperationNew,
+		func(m *rgb11Manager) (*RGB11PreparedTransfer, error) {
+			return m.prepareRGB11AddressBatch(context.Background(),
+				[]RGB11AddressSendRequest{request, request}, dkvsindexer.RecordVerificationOptions{})
+		}); err != nil {
+		t.Fatal(err)
+	}
+	assertRGB11ProjectionProofIdentity(t, sender, "after-prepare")
+}
+
 func TestRGB11DirectBatchRequiresEveryOutputACK(t *testing.T) {
 	sender, recipient, imported, evidence, _ := newRGB11GenericSendFixture(t)
 	request := RGB11AddressSendRequest{ReceiverAddress: recipient.wallet.GetAddress(), AssetName: imported.AssetName, AmountRaw: "20000", FeeRate: 2, MinConfirmations: 1}
