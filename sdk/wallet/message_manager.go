@@ -1,7 +1,6 @@
 package wallet
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -26,9 +25,8 @@ const (
 	AccountMessageKindRGB11Consignment = "RGB11_CONSIGNMENT"
 	AccountMessageKindRGB11ACK         = "RGB11_ACK"
 	AccountMessageKindManagedActive    = "ACCOUNT_MANAGED_ACTIVE"
-
-	accountMessageOutboxPrefix  = "message-outbox-v1/"
-	accountMessageOutboxVersion = uint32(2)
+	accountMessageOutboxPrefix         = "message-outbox-v1/"
+	accountMessageOutboxVersion        = uint32(2)
 )
 
 var ErrMessageServiceUnavailable = errors.New("CoreNode message service is unavailable")
@@ -41,9 +39,7 @@ func signMessageServiceQuery(wallet common.Wallet, request *swire.MessageService
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return err
 	}
-	request.Auth = &swire.MessageServiceAuth{
-		Nonce: hex.EncodeToString(nonce[:]), ExpiresAtMS: uint64(time.Now().Add(time.Minute).UnixMilli()),
-	}
+	request.Auth = &swire.MessageServiceAuth{Nonce: hex.EncodeToString(nonce[:]), ExpiresAtMS: uint64(time.Now().Add(time.Minute).UnixMilli())}
 	hash, err := swire.MessageServiceQuerySigningHash(request)
 	if err != nil {
 		return err
@@ -56,9 +52,7 @@ func signMessageServiceQuery(wallet common.Wallet, request *swire.MessageService
 	return err
 }
 
-type MessageServiceRateLimitError struct {
-	RetryAfter time.Duration
-}
+type MessageServiceRateLimitError struct{ RetryAfter time.Duration }
 
 func (e *MessageServiceRateLimitError) Error() string {
 	if e == nil || e.RetryAfter <= 0 {
@@ -67,9 +61,7 @@ func (e *MessageServiceRateLimitError) Error() string {
 	return fmt.Sprintf("CoreNode temporarily rejected Direct messages; retry after %s", e.RetryAfter)
 }
 
-// newAccountMessageID creates the stable identity signed into a message. The
-// first eight bytes are Unix microseconds for time ordering and the remaining
-// eight bytes are cryptographic entropy so concurrent senders cannot collide.
+// The first eight bytes are Unix microseconds; the remainder is entropy.
 func newAccountMessageID() (string, error) {
 	var raw [swire.MessageIDHexSize / 2]byte
 	now := time.Now().UnixMicro()
@@ -89,13 +81,11 @@ type AccountMessagePayload struct {
 	ApplicationID string `json:"application_id"`
 	Body          []byte `json:"body"`
 }
-
 type AccountDirectMessage struct {
 	Payload *AccountMessagePayload
 	Direct  *swire.DirectMessage
 	Record  *swire.DKVSRecord
 }
-
 type accountMessageOutboxRecord struct {
 	Version        uint32
 	ApplicationID  string
@@ -111,18 +101,15 @@ func validMessageApplicationID(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') &&
-			r != '.' && r != '_' && r != ':' && r != '-' {
+		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '.' && r != '_' && r != ':' && r != '-' {
 			return false
 		}
 	}
 	return true
 }
-
 func accountMessageOutboxKey(applicationID string) []byte {
 	return []byte(GetDBKeyPrefix() + accountMessageOutboxPrefix + applicationID)
 }
-
 func encodeAccountMessagePayload(kind, applicationID string, body []byte) ([]byte, error) {
 	kind = strings.TrimSpace(kind)
 	if kind == "" || !validMessageApplicationID(applicationID) || len(body) == 0 {
@@ -130,24 +117,32 @@ func encodeAccountMessagePayload(kind, applicationID string, body []byte) ([]byt
 	}
 	return json.Marshal(AccountMessagePayload{Version: AccountMessagePayloadVersion, Kind: kind, ApplicationID: applicationID, Body: append([]byte(nil), body...)})
 }
-
 func decodeAccountMessagePayload(encoded []byte) (*AccountMessagePayload, error) {
 	var payload AccountMessagePayload
-	if len(encoded) == 0 || json.Unmarshal(encoded, &payload) != nil || payload.Version != AccountMessagePayloadVersion ||
-		strings.TrimSpace(payload.Kind) == "" || !validMessageApplicationID(payload.ApplicationID) || len(payload.Body) == 0 {
+	if len(encoded) == 0 || json.Unmarshal(encoded, &payload) != nil || payload.Version != AccountMessagePayloadVersion || strings.TrimSpace(payload.Kind) == "" || !validMessageApplicationID(payload.ApplicationID) || len(payload.Body) == 0 {
 		return nil, fmt.Errorf("invalid account message payload")
 	}
 	payload.Body = append([]byte(nil), payload.Body...)
 	return &payload, nil
 }
 
-func (p *Manager) messageServiceClient() (MessageServiceRPCClient, string, error) {
-	if p == nil || p.serverNode == nil || p.serverNode.NodeId == nil || p.serverNode.client == nil {
-		return nil, "", ErrMessageServiceUnavailable
+func (p *Manager) currentCoreNodeID() (string, error) {
+	if p == nil || p.serverNode == nil || p.serverNode.NodeId == nil {
+		return "", ErrMessageServiceUnavailable
 	}
-	coreID := hex.EncodeToString(p.serverNode.NodeId.SerializeCompressed())
 	if p.ServerIsBootstrapNode() {
-		return nil, "", fmt.Errorf("%w: bootstrap node is not an account service CoreNode", ErrMessageServiceUnavailable)
+		return "", fmt.Errorf("%w: bootstrap node is not an account service CoreNode", ErrMessageServiceUnavailable)
+	}
+	return hex.EncodeToString(p.serverNode.NodeId.SerializeCompressed()), nil
+}
+
+func (p *Manager) messageServiceClient() (MessageServiceRPCClient, string, error) {
+	coreID, err := p.currentCoreNodeID()
+	if err != nil {
+		return nil, "", err
+	}
+	if p.serverNode.client == nil {
+		return nil, "", ErrMessageServiceUnavailable
 	}
 	client, ok := p.serverNode.client.(MessageServiceRPCClient)
 	if !ok {
@@ -156,9 +151,8 @@ func (p *Manager) messageServiceClient() (MessageServiceRPCClient, string, error
 	return client, coreID, nil
 }
 
-// bindAccountToCurrentCoreNode creates or reuses the root account's one free
-// mapping/binding KV. The connected CoreNode is the only party allowed to
-// accept that globally visible record as a local service binding.
+// The connected CoreNode must explicitly accept the root's signed binding
+// before any generic wallet KV write is permitted.
 func (p *Manager) bindAccountToCurrentCoreNode(root common.Wallet) error {
 	store, err := p.accountDKVSStore()
 	if err != nil {
@@ -171,29 +165,34 @@ func (p *Manager) bindAccountToCurrentCoreNode(root common.Wallet) error {
 	return bind()
 }
 
-// Capture the selected CoreNode and store before network I/O. Activation calls
-// this under its short local scope gate and invokes the result after releasing
-// it, so a later selection change cannot redirect an in-flight binding.
+// Capture the selected CoreNode before network I/O. Activation invokes the
+// closure after releasing its short local scope gate. Binding itself uses the
+// wallet KV RPC bootstrap exception; it does not depend on MessageService.
 func (p *Manager) prepareAccountCoreNodeBinding(root common.Wallet, store *dkvsStore) (func() error, error) {
-	if p == nil || root == nil {
+	if p == nil || root == nil || store == nil || store.client == nil {
 		return nil, ErrMessageServiceUnavailable
 	}
-	client, coreID, err := p.messageServiceClient()
+	coreID, err := p.currentCoreNodeID()
 	if err != nil {
 		return nil, err
+	}
+	config, err := store.client.GetDKVSClientConfig()
+	if err != nil {
+		return nil, err
+	}
+	if config == nil || strings.TrimSpace(config.EndpointID) != coreID {
+		return nil, dkvsindexer.ErrEndpointMismatch
 	}
 	accountID, err := dkvsAccountID(root)
 	if err != nil {
 		return nil, err
 	}
-	address := root.GetAddress()
-	key, err := dkvsindexer.AccountMappingKey(GetChainParam().Name, address)
+	key, err := dkvsindexer.AccountMappingKey(GetChainParam().Name, root.GetAddress())
 	if err != nil {
 		return nil, err
 	}
-	initialValue, err := dkvsindexer.EncodeAccountServiceDescriptor(dkvsindexer.AccountServiceDescriptor{
-		AccountID: accountID, CoreNodeID: coreID,
-		Capabilities: dkvsindexer.AccountServiceCapabilityRGB11Direct,
+	value, err := dkvsindexer.EncodeAccountServiceDescriptor(dkvsindexer.AccountServiceDescriptor{
+		AccountID: accountID, CoreNodeID: coreID, Capabilities: dkvsindexer.AccountServiceCapabilityRGB11Direct,
 	})
 	if err != nil {
 		return nil, err
@@ -206,39 +205,7 @@ func (p *Manager) prepareAccountCoreNodeBinding(root common.Wallet, store *dkvsS
 		return nil, err
 	}
 	return func() error {
-		values, err := store.Update([]string{key},
-			func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
-				value := initialValue
-				if existing := current[key]; existing != nil && existing.record != nil {
-					_, _, descriptor, verifyErr := dkvsindexer.ValidateAccountMappingBindingRecord(existing.record)
-					if verifyErr != nil || descriptor.AccountID != accountID {
-						return nil, dkvsindexer.ErrInvalidRecord
-					}
-					descriptor.CoreNodeID = coreID
-					descriptor.Capabilities |= dkvsindexer.AccountServiceCapabilityRGB11Direct
-					value, verifyErr = dkvsindexer.EncodeAccountServiceDescriptor(*descriptor)
-					if verifyErr != nil {
-						return nil, verifyErr
-					}
-					if bytes.Equal(existing.Value, value) {
-						return nil, nil
-					}
-				}
-				return []dkvsValueMutation{{
-					Key: key, Value: value, Owner: root,
-					Signature: dkvsSignatureAccount,
-				}}, nil
-			})
-		if err != nil {
-			return err
-		}
-		if len(values) != 1 || values[0] == nil || values[0].record == nil {
-			return dkvsindexer.ErrInvalidRecord
-		}
-		_, err = client.SendMessageServiceReq(&swire.MessageServiceRequest{
-			Action: swire.MessageServiceActionBindAccount, Record: values[0].record,
-		})
-		return err
+		return p.commitAccountCoreBinding(root, store, key, coreID, prefix, value)
 	}, nil
 }
 
@@ -286,7 +253,6 @@ func (p *Manager) deleteMessageOutbox(applicationID string) error {
 	}
 	return p.db.Delete(accountMessageOutboxKey(applicationID))
 }
-
 func (p *Manager) sendPersistedAccountMessage(outbox *accountMessageOutboxRecord) (*swire.DirectMessage, error) {
 	client, coreID, err := p.messageServiceClient()
 	if err != nil {
@@ -301,17 +267,12 @@ func (p *Manager) sendPersistedAccountMessage(outbox *accountMessageOutboxRecord
 		return &message, err
 	}
 	if err := p.deleteMessageOutbox(outbox.ApplicationID); err != nil {
-		// CoreNode acceptance is already durable. A stale local outbox is safe:
-		// retry replays the exact same signed MessageID and is idempotent server-side.
 		Log.Warnf("delete accepted message outbox %s failed: %v", outbox.ApplicationID, err)
 	}
 	return &message, nil
 }
 
-// SendAccountDirectMessage encrypts a versioned application payload, obtains
-// the next sender sequence from the bound CoreNode, persists the exact signed
-// Direct message locally, then submits it. Retrying the same application ID
-// always resends the same signed MessageID until CoreNode acceptance succeeds.
+// Retries keep the same signed MessageID until CoreNode acceptance succeeds.
 func (p *Manager) SendAccountDirectMessage(applicationID, kind, recipientAccount string, body []byte) (*swire.DirectMessage, error) {
 	if !validMessageApplicationID(applicationID) || strings.TrimSpace(kind) == "" || len(body) == 0 {
 		return nil, fmt.Errorf("invalid account message")
@@ -387,7 +348,6 @@ func (p *Manager) SendAccountDirectMessage(applicationID, kind, recipientAccount
 	}
 	return p.sendPersistedAccountMessage(outbox)
 }
-
 func (p *Manager) RetryAccountDirectMessage(applicationID string) (*swire.DirectMessage, error) {
 	p.messageSendMu.Lock()
 	defer p.messageSendMu.Unlock()
@@ -399,8 +359,7 @@ func (p *Manager) RetryAccountDirectMessage(applicationID string) (*swire.Direct
 }
 
 func verifyAccountDirectRecord(localAccount string, record *swire.DKVSRecord) (*swire.DirectMessage, error) {
-	if record == nil || record.Version != dkvsindexer.Version || record.Seq != 1 || len(record.Value) == 0 ||
-		len(record.PubKey) != 0 || len(record.Signature) != 0 || record.Flags != 0 {
+	if record == nil || record.Version != dkvsindexer.Version || record.Seq != 1 || len(record.Value) == 0 || len(record.PubKey) != 0 || len(record.Signature) != 0 || record.Flags != 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	if record.TTL == 0 {
@@ -486,7 +445,6 @@ func (p *Manager) ReadAccountDirectMessages(start, limit int) ([]*AccountDirectM
 func accountMessageOutboxKeyForSender(senderAccount, applicationID string) []byte {
 	return []byte(GetDBKeyPrefix() + accountMessageOutboxPrefix + senderAccount + "/" + applicationID)
 }
-
 func (p *Manager) loadWalletMessageOutbox(senderAccount, applicationID string) (*accountMessageOutboxRecord, error) {
 	if p == nil || p.db == nil || !validMessageApplicationID(applicationID) || len(senderAccount) != 64 {
 		return nil, ErrMessageServiceUnavailable
@@ -507,7 +465,6 @@ func (p *Manager) loadWalletMessageOutbox(senderAccount, applicationID string) (
 	}
 	return &value, nil
 }
-
 func (p *Manager) saveWalletMessageOutbox(senderAccount string, value *accountMessageOutboxRecord) error {
 	if p == nil || p.db == nil || value == nil || !validMessageApplicationID(value.ApplicationID) || len(senderAccount) != 64 {
 		return ErrMessageServiceUnavailable
@@ -518,14 +475,12 @@ func (p *Manager) saveWalletMessageOutbox(senderAccount string, value *accountMe
 	}
 	return p.db.Write(accountMessageOutboxKeyForSender(senderAccount, value.ApplicationID), encoded)
 }
-
 func (p *Manager) deleteWalletMessageOutbox(senderAccount, applicationID string) error {
 	if p == nil || p.db == nil {
 		return nil
 	}
 	return p.db.Delete(accountMessageOutboxKeyForSender(senderAccount, applicationID))
 }
-
 func (p *Manager) sendPersistedWalletMessage(senderAccount string, outbox *accountMessageOutboxRecord) (*swire.DirectMessage, error) {
 	client, coreID, err := p.messageServiceClient()
 	if err != nil {
@@ -545,9 +500,7 @@ func (p *Manager) sendPersistedWalletMessage(senderAccount string, outbox *accou
 	return &message, nil
 }
 
-// sendWalletDirectMessage is the common transport for account-management,
-// RGB11 and future wallet protocols. The sender wallet identity is also the
-// mailbox AccountID and must be bound to the current CoreNode.
+// Account-management, RGB11 and other wallet protocols share this transport.
 func (p *Manager) sendWalletDirectMessage(sender common.Wallet, applicationID, kind, recipientAccount string, body []byte) (*swire.DirectMessage, error) {
 	if p == nil || sender == nil || !validMessageApplicationID(applicationID) || strings.TrimSpace(kind) == "" || len(body) == 0 {
 		return nil, fmt.Errorf("invalid wallet direct message")
@@ -656,7 +609,6 @@ func decodeWalletDirectRecord(wallet common.Wallet, record *swire.DKVSRecord) (*
 	}
 	return &AccountDirectMessage{Payload: payload, Direct: message, Record: record}, nil
 }
-
 func (p *Manager) readWalletDirectMessages(wallet common.Wallet) ([]*AccountDirectMessage, error) {
 	if p == nil || wallet == nil {
 		return nil, ErrMessageServiceUnavailable
@@ -683,7 +635,6 @@ func (p *Manager) readWalletDirectMessages(wallet common.Wallet) ([]*AccountDire
 	}
 	return result, nil
 }
-
 func directMailboxRecord(message *swire.DirectMessage) (*swire.DKVSRecord, error) {
 	if message == nil {
 		return nil, dkvsindexer.ErrInvalidRecord
@@ -698,9 +649,7 @@ func directMailboxRecord(message *swire.DirectMessage) (*swire.DKVSRecord, error
 	}
 	return &swire.DKVSRecord{Version: dkvsindexer.Version, Key: key, Value: encoded, Seq: 1}, nil
 }
-
-func (p *Manager) SendOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msgID int64,
-	encryptedMessage []byte, metadata map[string]string) (*swire.DKVSRecord, error) {
+func (p *Manager) SendOfflineMessage(senderWallet common.Wallet, recipientPubKey []byte, msgID int64, encryptedMessage []byte, metadata map[string]string) (*swire.DKVSRecord, error) {
 	mailboxID, stableMsgID, value, err := buildOfflineMessage(senderWallet, recipientPubKey, msgID, encryptedMessage, metadata)
 	if err != nil {
 		return nil, err
@@ -711,7 +660,6 @@ func (p *Manager) SendOfflineMessage(senderWallet common.Wallet, recipientPubKey
 	}
 	return directMailboxRecord(message)
 }
-
 func (p *Manager) ReadOfflineMessages(recipientWallet common.Wallet, start, limit int) ([]*DKVSOfflineMessage, []*swire.DKVSRecord, int, error) {
 	if p == nil || recipientWallet == nil {
 		return nil, nil, 0, ErrMessageServiceUnavailable
@@ -759,9 +707,9 @@ func (p *Manager) ReadOfflineMessages(recipientWallet common.Wallet, start, limi
 	return messages, matchedRecords, total, nil
 }
 
-// DeleteMailboxMessage deletes one entry owned by mailboxWallet. It signs a
-// tombstone for the exact immutable mailbox key and submits it to the bound
-// CoreNode MessageManager; arbitrary senders cannot delete recipient history.
+// DeleteMailboxMessage signs the exact CURRENT mailbox record hash. The
+// command exists only in flight; already absent is an idempotent result and
+// no deleted-key floor is required. A re-created value has a different target.
 func (p *Manager) DeleteMailboxMessage(mailboxWallet common.Wallet, key string) error {
 	if p == nil || mailboxWallet == nil || strings.TrimSpace(key) == "" {
 		return ErrMessageServiceUnavailable
@@ -792,27 +740,32 @@ func (p *Manager) DeleteMailboxMessage(mailboxWallet common.Wallet, key string) 
 	if err != nil {
 		return err
 	}
-	state, err := store.client.GetKeyState(key)
+	client, coreID, err := p.messageServiceClient()
 	if err != nil {
 		return err
 	}
-	if state.Status == dkvsindexer.KeyStateDeleted {
+	config, err := store.client.GetDKVSClientConfig()
+	if err != nil {
+		return err
+	}
+	if config.EndpointID != coreID {
+		return dkvsindexer.ErrEndpointMismatch
+	}
+	current, err := store.client.GetRecordDirect(key)
+	if errors.Is(err, ErrDKVSRecordNotFound) {
 		return nil
 	}
-	if state.Status != dkvsindexer.KeyStateActive || state.Seq == ^uint64(0) {
-		return ErrDKVSRecordNotFound
-	}
-	tombstone, err := NewDKVSSignedTombstone(mailboxWallet, key,
-		dkvsindexer.RecordOptions{Seq: state.Seq + 1})
 	if err != nil {
 		return err
 	}
-	client, _, err := p.messageServiceClient()
+	height, err := store.client.GetBestHeight()
 	if err != nil {
 		return err
 	}
-	_, err = client.SendMessageServiceReq(&swire.MessageServiceRequest{
-		Action: swire.MessageServiceActionDeleteMailbox, Record: tombstone,
-	})
+	command, err := NewDKVSDeleteCommand(mailboxWallet, current, height)
+	if err != nil {
+		return err
+	}
+	_, err = client.SendMessageServiceReq(&swire.MessageServiceRequest{Action: swire.MessageServiceActionDeleteMailbox, Record: command})
 	return err
 }

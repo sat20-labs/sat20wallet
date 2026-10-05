@@ -15,13 +15,14 @@ const (
 
 var (
 	ErrAccountStorageAuthorizationBusy = errors.New("account storage authorization is already in use")
-	ErrAccountStoragePurposeMismatch = errors.New("account storage authorization belongs to another operation purpose")
+	ErrAccountStoragePurposeMismatch   = errors.New("account storage authorization belongs to another operation purpose")
+	ErrAccountStorageRuntimeStopped    = errors.New("account storage runtime is stopped")
 )
 
 type accountStorageBinding struct {
 	accountID string
-	network string
-	location AccountIndexerLocation
+	network   string
+	location  AccountIndexerLocation
 }
 
 // Always acquire the manager lock before the storage lock. Cancellation needs
@@ -56,6 +57,11 @@ func (p *Manager) lockAccountStorageState() (accountStorageBinding, func(), erro
 	}
 	binding := accountStorageBinding{accountID: accountID, network: _chain, location: location}
 	p.accountStorageMu.Lock()
+	if p.accountStorageStopped {
+		p.accountStorageMu.Unlock()
+		p.mutex.RUnlock()
+		return accountStorageBinding{}, nil, ErrAccountStorageRuntimeStopped
+	}
 	return binding, func() {
 		p.accountStorageMu.Unlock()
 		p.mutex.RUnlock()
@@ -66,6 +72,25 @@ func (s *accountStorageAuthorizationSession) matches(binding accountStorageBindi
 	return s != nil && !time.Now().After(s.ExpiresAt) &&
 		s.AccountID == binding.accountID && s.Network == binding.network &&
 		s.Authorization.Location == binding.location
+}
+
+func (p *Manager) stopAccountStorageRuntime() {
+	if p == nil {
+		return
+	}
+	p.accountStorageMu.Lock()
+	p.accountStorageStopped = true
+	p.accountStorageAuthorization = nil
+	p.accountStorageMu.Unlock()
+}
+
+func (p *Manager) resumeAccountStorageRuntime() {
+	if p == nil {
+		return
+	}
+	p.accountStorageMu.Lock()
+	p.accountStorageStopped = false
+	p.accountStorageMu.Unlock()
 }
 
 // Reserve the slot before any asynchronous policy/funding work. A late result
@@ -88,7 +113,7 @@ func (p *Manager) beginAccountStoragePreparation() (*accountStorageAuthorization
 	}
 	session := &accountStorageAuthorizationSession{
 		Authorization: AccountStorageAuthorization{ID: id, Location: binding.location},
-		AccountID: binding.accountID, Network: binding.network,
+		AccountID:     binding.accountID, Network: binding.network,
 		ExpiresAt: time.Now().Add(accountStorageAuthorizationTTL), Preparing: true,
 	}
 	p.accountStorageAuthorization = session

@@ -153,11 +153,10 @@ func (p *Manager) accountAutopayReady(defaults dkvsindexer.NetworkDefaults, paye
 	return accountAutopayStateReady(state, defaults, payer, requiredAmount), nil
 }
 
-func (p *Manager) waitForAccountAutopayReady(defaults dkvsindexer.NetworkDefaults, requiredAmount string) error {
-	if p == nil || p.wallet == nil || p.wallet.GetPubKey() == nil {
+func (p *Manager) waitForAccountAutopayReady(defaults dkvsindexer.NetworkDefaults, requiredAmount, payer string) error {
+	if p == nil {
 		return fmt.Errorf("wallet is not created/unlocked")
 	}
-	payer := PublicKeyToP2TRAddress_SatsNet(p.wallet.GetPubKey())
 	if strings.TrimSpace(payer) == "" {
 		return fmt.Errorf("unable to derive AUTOPAY payer")
 	}

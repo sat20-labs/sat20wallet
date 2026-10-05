@@ -31,11 +31,6 @@ func TestDiscardExactReplica(t *testing.T) {
 	if err := batch.Put(dkvsSubscriptionRecordKey(namespace, key), encoded); err != nil {
 		t.Fatal(err)
 	}
-	if err := putLocalKeyStateBatch(batch, namespace, LocalKeyState{
-		Key: key, Seq: 1, ETag: hash, Deleted: false,
-	}); err != nil {
-		t.Fatal(err)
-	}
 	if err := batch.Flush(); err != nil {
 		t.Fatal(err)
 	}

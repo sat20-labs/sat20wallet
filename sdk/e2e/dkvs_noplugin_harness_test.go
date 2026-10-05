@@ -87,17 +87,11 @@ func stageDKVSNoPluginNodeRuntime(t *testing.T, role, mnemonic, l1IndexerHost, l
 	t.Helper()
 	artifacts := dkvsNoPluginBuildArtifacts(t)
 	executable := artifacts.coreExecutable
-	plugin := artifacts.corePlugin
-	pluginName := "stpd.so"
 	if role == "miner" {
 		executable = artifacts.minerExecutable
-		plugin = artifacts.minerPlugin
-		pluginName = "wallet.so"
 	}
 
 	stagedExecutable := filepath.Join(nodeDir, filepath.Base(executable))
-	copySatoshiNetRuntimeFile(t, executable, stagedExecutable)
-	copySatoshiNetRuntimeFile(t, plugin, filepath.Join(nodeDir, pluginName))
 	stageSatoshiNetNodeConfig(t, nodeDir)
 	require.NoError(t, os.WriteFile(filepath.Join(nodeDir, "conf.yaml"), []byte(fmt.Sprintf(satoshinetTestConf,
 		satoshinetSTPMode(role), l1IndexerHost, l2IndexerHost, rpcHost, managementHost, mnemonic)), 0o600))
@@ -111,7 +105,7 @@ func startDKVSNoPluginNodeWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, role, mn
 	nodeKey := keyFromMnemonic(t, mnemonic, 0)
 	nodePubKey := hex.EncodeToString(nodeKey.PubKey().SerializeCompressed())
 	p2pAddr, rpcAddr, stpAddr, managementAddr := nextNodeAddresses(t)
-	nodeDir := t.TempDir()
+	nodeDir := prepareSatoshiNetNodeDir(t, dkvsNoPluginBuildArtifacts(t), role)
 	dataDir := filepath.Join(nodeDir, "data")
 	logDir := filepath.Join(nodeDir, "logs")
 	args := []string{

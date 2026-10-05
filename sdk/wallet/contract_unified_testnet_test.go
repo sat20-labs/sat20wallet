@@ -102,7 +102,8 @@ func TestUnifiedTemplateAutopayDeployFund_testnet(t *testing.T) {
 	if err := waitL2HeightAbove(t, manager, fundStartHeight, 4*time.Minute); err != nil {
 		t.Fatalf("AUTOPAY funding was not confirmed: %v", err)
 	}
-	if err := manager.waitForAccountAutopayReady(defaults, amountPerBlock); err != nil {
+	if err := manager.waitForAccountAutopayReady(defaults, amountPerBlock,
+		PublicKeyToP2TRAddress_SatsNet(manager.GetWallet().GetPubKey())); err != nil {
 		t.Fatalf("AUTOPAY was not ready after funding: %v", err)
 	}
 	t.Logf("AUTOPAY funded: contract=%s amount=%s amountPerBlock=%s blocks=%d txid=%s",

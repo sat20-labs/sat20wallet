@@ -61,6 +61,8 @@ func (e *DKVSError) Unwrap() error {
 		return nil
 	}
 	switch e.Code {
+	case dkvsindexer.ErrorCodeExpiredRecord:
+		return dkvsindexer.ErrExpiredRecord
 	case dkvsindexer.ErrorCodeWriteConflict:
 		return dkvsindexer.ErrWriteConflict
 	case dkvsindexer.ErrorCodeStaleGeneration:

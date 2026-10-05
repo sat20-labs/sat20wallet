@@ -59,12 +59,43 @@ func TestDKVSOutboxRetriesTransientServiceFailures(t *testing.T) {
 	for _, err := range []error{
 		errors.New("unknown failure"),
 		dkvsindexer.ErrInvalidRecord,
-		dkvsindexer.ErrStorageModeDowngrade,
 		&HTTPResponseError{StatusCode: 400, Body: []byte("invalid request")},
 	} {
 		if got := classifyDKVSOutboxError(err); got != dkvsOutboxPermanent {
 			t.Fatalf("permanent error %v class=%d", err, got)
 		}
+	}
+}
+
+func TestDKVSOutboxBusinessRefusalStopsOriginalSubmission(t *testing.T) {
+	for _, rejection := range []error{
+		dkvsindexer.ErrStorageModeDowngrade,
+		dkvsindexer.ErrFreeLocalQuotaExceeded,
+		dkvsindexer.ErrFeeCapacityExceeded,
+		&DKVSError{Code: dkvsindexer.ErrorCodeInvalidRecord},
+		&DKVSError{Code: dkvsindexer.ErrorCodeRecordNotFound},
+	} {
+		t.Run(rejection.Error(), func(t *testing.T) {
+			_, _, store, entry := testDKVSOutboxEntry(t)
+			if got := classifyDKVSOutboxError(rejection); got != dkvsOutboxConflict {
+				t.Fatalf("business rejection class=%d", got)
+			}
+			if err := markDKVSOutboxSubmissionFailure(store, entry, rejection); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := store.LoadOutbox(entry.Namespace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].State != DKVSOutboxConflict ||
+				entries[0].RequestID != entry.RequestID || entries[0].LastError == "" {
+				t.Fatalf("business rejection lost its original request or error: %+v", entries)
+			}
+		})
+	}
+	quota429 := &HTTPResponseError{StatusCode: 429, Body: []byte(`{"code":-1,"error_code":"DKVS_QUOTA_EXCEEDED"}`)}
+	if got := classifyDKVSOutboxError(quota429); got != dkvsOutboxTransient {
+		t.Fatalf("HTTP 429 quota rejection lost transient classification: %d", got)
 	}
 }
 
@@ -99,7 +130,7 @@ func TestDKVSOutboxPermanentFailurePanicsWithoutCreatingTerminal(t *testing.T) {
 	_, _, store, entry := testDKVSOutboxEntry(t)
 	if recovered := captureDKVSOutboxPanic(func() {
 		_ = markDKVSOutboxSubmissionFailure(store, entry,
-			dkvsindexer.ErrStorageModeDowngrade)
+			errors.New("fixture internal failure"))
 	}); recovered == nil {
 		t.Fatal("permanent DKVS outbox failure did not panic")
 	}

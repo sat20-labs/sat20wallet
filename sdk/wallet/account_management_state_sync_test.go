@@ -60,6 +60,38 @@ func TestBuildAccountManagedStateTargetUsesPendingLocalMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildAccountManagedStateTargetAlreadyCommittedPendingIsNoop(t *testing.T) {
+	root, child := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	for _, mutationType := range []string{
+		accountMutationAddWallet, accountMutationWalletName, accountMutationEnsureAccount,
+		accountMutationMetadata, accountMutationDeleteWallet,
+	} {
+		t.Run(mutationType, func(t *testing.T) {
+			remoteWallet := syncTestWallet(child, "Committed")
+			wallets := map[string]account.ManagedWallet{root: syncTestWallet(root, "Root")}
+			if mutationType == accountMutationDeleteWallet {
+				remoteWallet = account.ManagedWallet{Fingerprint: child, Revision: 4, Deleted: true}
+			} else {
+				wallets[child] = remoteWallet
+			}
+			remote := account.ManagedState{Version: account.ManagedStateVersion,
+				RootFingerprint: root, Revision: 4,
+				Wallets: []account.ManagedWallet{wallets[root], remoteWallet}}
+			snapshot := &accountManagementSyncSnapshot{
+				profile: accountManagementProfile{RootFingerprint: root}, wallets: wallets,
+				pending: []accountManagementMutation{{ID: "lost-ack", Type: mutationType, Fingerprint: child}},
+			}
+			target, changed, err := buildAccountManagedStateTarget(remote, snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed || target.Revision != remote.Revision {
+				t.Fatalf("already committed mutation created another revision: %+v", target)
+			}
+		})
+	}
+}
+
 func TestBuildAccountManagedStateTargetDoesNotResurrectRemoteDeletion(t *testing.T) {
 	root, child := strings.Repeat("a", 64), strings.Repeat("b", 64)
 	snapshot := &accountManagementSyncSnapshot{

@@ -99,11 +99,11 @@ func (noopChannelBackupHandler) BackupChannel(*Channel, []byte) error {
 
 // 密码只有一个，助记词可以有多组，对应不同的wallet
 type Manager struct {
-	mutex                sync.RWMutex
-	rgbOperationMu       sync.RWMutex
-	channelIdentityMu    sync.RWMutex
+	mutex             sync.RWMutex
+	rgbOperationMu    sync.RWMutex
+	channelIdentityMu sync.RWMutex
 	// Shared by all RGB scope views of this manager; never held for network I/O.
-	rgbReservationMu     sync.RWMutex
+	rgbReservationMu sync.RWMutex
 
 	cfg                   *common.Config
 	bInited               bool
@@ -144,6 +144,7 @@ type Manager struct {
 	accountRootNotFoundAuthorization *accountRootNotFoundAuthorization
 	accountStorageMu                 sync.Mutex
 	accountStorageAuthorization      *accountStorageAuthorizationSession
+	accountStorageStopped            bool
 
 	managedDataMu             sync.RWMutex
 	managedDataProviders      map[string]AccountManagedDataProvider
@@ -155,6 +156,10 @@ type Manager struct {
 	managedActiveStateMu      sync.Mutex
 	managedActiveGen          map[string]uint64
 	managedActiveRunning      map[string]bool
+	accountBackgroundMu       sync.Mutex
+	accountBackgroundStop     chan struct{}
+	accountBackgroundWG       sync.WaitGroup
+	accountBackgroundStopped  bool
 
 	feeRateL1             int64 // sat/vkb
 	refreshTimeL1         int64

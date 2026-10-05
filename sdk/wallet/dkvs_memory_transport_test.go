@@ -13,25 +13,25 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-// rgb11MemoryDKVSHTTP is a deterministic final-protocol endpoint used by DKVS,
-// account-management and RGB11 tests. It deliberately exposes no path-meta,
-// directory-sync, overlay, promote or epoch API.
+// Deterministic current-state endpoint used by DKVS, account and RGB11 unit
+// tests. Current KV and one latest-generation entry per key are the only state.
 type rgb11MemoryDKVSHTTP struct {
-	mu            sync.Mutex
-	records       map[string]*swire.DKVSRecord
-	deleted       map[string]dkvsindexer.DKVSKeyState
-	generations   map[string]uint64
-	changedAt     map[string]uint64
-	endpointID    string
-	freeLocal     dkvsindexer.FreeLocalCachePolicy
-	maxRecords    int
-	postGate      <-chan struct{}
-	postCommitErr error
-	autopayState  *dkvsindexer.AutopayContractState
-	autopayError  error
-	bestHeight    int64
-	bestHeightErr error
-
+	mu      sync.Mutex
+	records map[string]*swire.DKVSRecord
+	// Retained only for negative fixtures that inject obsolete payloads. The
+	// current-state endpoint neither populates nor consumes this map.
+	deleted          map[string]dkvsindexer.DKVSKeyState
+	generations      map[string]uint64
+	changedAt        map[string]uint64
+	endpointID       string
+	freeLocal        dkvsindexer.FreeLocalCachePolicy
+	maxRecords       int
+	postGate         <-chan struct{}
+	postCommitErr    error
+	autopayState     *dkvsindexer.AutopayContractState
+	autopayError     error
+	bestHeight       int64
+	bestHeightErr    error
 	statusCalls      int
 	snapshotCalls    int
 	deltaCalls       int
@@ -41,17 +41,11 @@ type rgb11MemoryDKVSHTTP struct {
 
 func newRGB11MemoryDKVSHTTP() *rgb11MemoryDKVSHTTP {
 	return &rgb11MemoryDKVSHTTP{
-		records:     make(map[string]*swire.DKVSRecord),
-		deleted:     make(map[string]dkvsindexer.DKVSKeyState),
-		generations: make(map[string]uint64),
-		changedAt:   make(map[string]uint64),
-		endpointID:  "test-endpoint",
-		bestHeight:  1,
-		freeLocal: dkvsindexer.FreeLocalCachePolicy{
-			Enabled: true, MaxTTL: testRGB11FreeLocalTTL,
-			MaxRecordsPerSigner: 100, MaxBytesPerSigner: 1 << 20,
-			MaxTotalRecords: 100_000, MaxTotalBytes: 1 << 30,
-		},
+		records: make(map[string]*swire.DKVSRecord), deleted: make(map[string]dkvsindexer.DKVSKeyState),
+		generations: make(map[string]uint64), changedAt: make(map[string]uint64),
+		endpointID: "test-endpoint", bestHeight: 1,
+		freeLocal: dkvsindexer.FreeLocalCachePolicy{Enabled: true, MaxTTL: testRGB11FreeLocalTTL,
+			MaxRecordsPerSigner: 100, MaxBytesPerSigner: 1 << 20, MaxTotalRecords: 100_000, MaxTotalBytes: 1 << 30},
 	}
 }
 
@@ -60,10 +54,8 @@ func (h *rgb11MemoryDKVSHTTP) DKVSClientConfig() (*dkvsindexer.ClientConfig, err
 	defer h.mu.Unlock()
 	return &dkvsindexer.ClientConfig{
 		FreeLocal: h.freeLocal, Blob: dkvsindexer.BlobPolicy{MaxValueSize: swire.MaxDKVSBlobValueSize, MaxFreeLocalKeysPerSigner: 1},
-		MaxBatchMutations:      dkvsindexer.MaxBatchCASMutations,
-		MaxBatchBytes:          dkvsindexer.MaxBatchCASTotalSize,
-		MaxPrefixesPerTerminal: dkvsindexer.MaxPrefixesPerTerminal,
-		EndpointID:             h.endpointID,
+		MaxBatchMutations: dkvsindexer.MaxBatchCASMutations, MaxBatchBytes: dkvsindexer.MaxBatchCASTotalSize,
+		MaxPrefixesPerTerminal: dkvsindexer.MaxPrefixesPerTerminal, EndpointID: h.endpointID,
 	}, nil
 }
 
@@ -85,14 +77,12 @@ func (h *rgb11MemoryDKVSHTTP) SendGetRequest(url *URL) ([]byte, error) {
 			return nil, h.autopayError
 		}
 		if h.autopayState == nil {
-			return rgb11DKVSResponse(-1, "contract state not found", nil,
-				string(dkvsindexer.ErrorCodeRecordNotFound), 0)
+			return rgb11DKVSResponse(-1, "contract state not found", nil, string(dkvsindexer.ErrorCodeRecordNotFound), 0)
 		}
 		return rgb11DKVSResponse(0, "ok", h.autopayState, "", 0)
 	}
 	return nil, fmt.Errorf("unexpected GET path %s", url.Path)
 }
-
 func (h *rgb11MemoryDKVSHTTP) SendPostRequest(url *URL, body []byte) ([]byte, error) {
 	return nil, fmt.Errorf("unexpected generic POST path %s", url.Path)
 }
@@ -104,31 +94,21 @@ func (h *rgb11MemoryDKVSHTTP) SendDKVSGet(path string, query map[string]string) 
 	case "/v3/dkvs/config":
 		config := &dkvsindexer.ClientConfig{
 			FreeLocal: h.freeLocal, Blob: dkvsindexer.BlobPolicy{MaxValueSize: swire.MaxDKVSBlobValueSize, MaxFreeLocalKeysPerSigner: 1},
-			MaxBatchMutations:      dkvsindexer.MaxBatchCASMutations,
-			MaxBatchBytes:          dkvsindexer.MaxBatchCASTotalSize,
-			MaxPrefixesPerTerminal: dkvsindexer.MaxPrefixesPerTerminal,
-			EndpointID:             h.endpointID,
+			MaxBatchMutations: dkvsindexer.MaxBatchCASMutations, MaxBatchBytes: dkvsindexer.MaxBatchCASTotalSize,
+			MaxPrefixesPerTerminal: dkvsindexer.MaxPrefixesPerTerminal, EndpointID: h.endpointID,
 		}
 		return rgb11DKVSResponse(0, "ok", config, "", 0)
 	case "/v3/dkvs/record":
-		key := query["key"]
-		record := h.records[key]
+		record := h.records[query["key"]]
 		if record == nil {
-			return rgb11DKVSResponse(-1, "DKVS record not found", nil,
-				string(dkvsindexer.ErrorCodeRecordNotFound), 0)
+			return rgb11DKVSResponse(-1, "DKVS record not found", nil, string(dkvsindexer.ErrorCodeRecordNotFound), 0)
 		}
-		return json.Marshal(map[string]interface{}{
-			"code": 0, "msg": "ok", "data": cloneRGB11DKVSRecord(record),
-			"etag": dkvsindexer.RecordHash(record).String(),
-		})
+		return json.Marshal(map[string]interface{}{"code": 0, "msg": "ok", "data": cloneRGB11DKVSRecord(record), "etag": dkvsindexer.RecordHash(record).String()})
 	case "/v3/dkvs/key-state":
 		key := query["key"]
 		if record := h.records[key]; record != nil {
-			state := dkvsindexer.DKVSKeyState{
-				Key: key, Status: dkvsindexer.KeyStateActive, Seq: record.Seq,
-				ETag:         dkvsindexer.RecordHash(record).String(),
-				ExpiryHeight: dkvsindexer.RecordExpiryHeight(record), Record: cloneRGB11DKVSRecord(record),
-			}
+			state := dkvsindexer.DKVSKeyState{Key: key, Status: dkvsindexer.KeyStateActive, Seq: record.Seq,
+				ETag: dkvsindexer.RecordHash(record).String(), ExpiryHeight: dkvsindexer.RecordExpiryHeight(record), Record: cloneRGB11DKVSRecord(record)}
 			if proof, err := dkvsindexer.ParseFeeProof(record.FeeProof); err == nil {
 				switch proof.Mode {
 				case dkvsindexer.FeeModeFreeLocal:
@@ -141,13 +121,7 @@ func (h *rgb11MemoryDKVSHTTP) SendDKVSGet(path string, query map[string]string) 
 			}
 			return rgb11DKVSResponse(0, "ok", &state, "", 0)
 		}
-		if state, ok := h.deleted[key]; ok {
-			copyState := state
-			return rgb11DKVSResponse(0, "ok", &copyState, "", 0)
-		}
-		return rgb11DKVSResponse(0, "ok", &dkvsindexer.DKVSKeyState{
-			Key: key, Status: dkvsindexer.KeyStateNeverSeen,
-		}, "", 0)
+		return rgb11DKVSResponse(0, "ok", &dkvsindexer.DKVSKeyState{Key: key, Status: dkvsindexer.KeyStateNeverSeen}, "", 0)
 	default:
 		return nil, fmt.Errorf("unexpected DKVS GET path %s", path)
 	}
@@ -156,9 +130,6 @@ func (h *rgb11MemoryDKVSHTTP) SendDKVSGet(path string, query map[string]string) 
 func (h *rgb11MemoryDKVSHTTP) recordFloorLocked(key string) uint64 {
 	if record := h.records[key]; record != nil {
 		return record.Seq
-	}
-	if deleted, ok := h.deleted[key]; ok {
-		return deleted.Seq
 	}
 	return 0
 }
@@ -169,64 +140,55 @@ func (h *rgb11MemoryDKVSHTTP) applyBatchCAS(request DKVSBatchCASRequest) ([]byte
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if len(request.Mutations) == 0 {
-		return rgb11DKVSResponse(-1, dkvsindexer.ErrInvalidRecord.Error(), nil,
-			string(dkvsindexer.ErrorCodeInvalidRecord), 0)
+	fail := func(err error) ([]byte, error) {
+		return rgb11DKVSResponse(-1, err.Error(), nil, string(dkvsindexer.ErrorCodeOf(err)), 0)
 	}
-	localOnly := false
-	already := 0
+	if len(request.Mutations) == 0 {
+		return fail(dkvsindexer.ErrInvalidRecord)
+	}
+	localOnly, already := false, 0
 	for _, mutation := range request.Mutations {
-		if mutation.Record == nil || dkvsindexer.VerifySignature(mutation.Record) != nil {
-			return rgb11DKVSResponse(-1, dkvsindexer.ErrInvalidSignature.Error(), nil,
-				string(dkvsindexer.ErrorCodeInvalidRecord), 0)
+		record := mutation.Record
+		if record == nil || dkvsindexer.VerifySignature(record) != nil {
+			return fail(dkvsindexer.ErrInvalidSignature)
 		}
-		if dkvsWalletRecordIsFreeLocal(mutation.Record) {
+		current := h.records[record.Key]
+		if dkvsWalletRecordIsFreeLocal(record) || (dkvsindexer.IsTombstone(record.Flags) && current != nil && dkvsWalletRecordIsFreeLocal(current)) {
 			localOnly = true
 		}
-		if current := h.records[mutation.Record.Key]; current != nil &&
-			dkvsindexer.RecordHash(current) == dkvsindexer.RecordHash(mutation.Record) {
-			already++
-		} else if deleted, ok := h.deleted[mutation.Record.Key]; ok &&
-			dkvsindexer.IsTombstone(mutation.Record.Flags) && deleted.ETag == dkvsindexer.RecordHash(mutation.Record).String() {
+		if dkvsindexer.IsTombstone(record.Flags) {
+			target, err := dkvsindexer.DeleteTargetHash(record)
+			if err != nil || target.String() != mutation.ExpectedETag {
+				return fail(dkvsindexer.ErrInvalidRecord)
+			}
+			if current == nil {
+				already++
+			}
+		} else if current != nil && dkvsindexer.RecordHash(current) == dkvsindexer.RecordHash(record) {
 			already++
 		}
 	}
 	if localOnly && request.EndpointID != h.endpointID {
-		return rgb11DKVSResponse(-1, dkvsindexer.ErrLocalOnlyEndpointMismatch.Error(), nil,
-			string(dkvsindexer.ErrorCodeLocalOnlyEndpointMismatch), 0)
+		return fail(dkvsindexer.ErrLocalOnlyEndpointMismatch)
 	}
 	if already != 0 && already != len(request.Mutations) {
-		return rgb11DKVSResponse(-1, dkvsindexer.ErrWriteConflict.Error(), nil,
-			string(dkvsindexer.ErrorCodeWriteConflict), 0)
+		return fail(dkvsindexer.ErrWriteConflict)
 	}
 	if already == 0 {
 		for _, mutation := range request.Mutations {
-			floor := h.recordFloorLocked(mutation.Record.Key)
-			if mutation.Record.Seq != floor+1 {
-				return rgb11DKVSResponse(-1, dkvsindexer.ErrInvalidSequence.Error(), nil,
-					string(dkvsindexer.ErrorCodeInvalidSequence), 0)
-			}
+			current := h.records[mutation.Record.Key]
 			if mutation.ExpectAbsent {
-				if floor != 0 {
-					return rgb11DKVSResponse(-1, dkvsindexer.ErrWriteConflict.Error(), nil,
-						string(dkvsindexer.ErrorCodeWriteConflict), 0)
+				if current != nil {
+					return fail(dkvsindexer.ErrWriteConflict)
 				}
-			} else {
-				var currentETag string
-				if current := h.records[mutation.Record.Key]; current != nil {
-					currentETag = dkvsindexer.RecordHash(current).String()
-				} else if deleted, ok := h.deleted[mutation.Record.Key]; ok {
-					currentETag = deleted.ETag
-				}
-				if mutation.ExpectedETag == "" || mutation.ExpectedETag != currentETag {
-					return rgb11DKVSResponse(-1, dkvsindexer.ErrWriteConflict.Error(), nil,
-						string(dkvsindexer.ErrorCodeWriteConflict), 0)
-				}
+			} else if current == nil || mutation.ExpectedETag == "" || mutation.ExpectedETag != dkvsindexer.RecordHash(current).String() {
+				return fail(dkvsindexer.ErrWriteConflict)
 			}
-			if current := h.records[mutation.Record.Key]; current != nil &&
-				!dkvsWalletRecordIsFreeLocal(current) && dkvsWalletRecordIsFreeLocal(mutation.Record) {
-				return rgb11DKVSResponse(-1, dkvsindexer.ErrStorageModeDowngrade.Error(), nil,
-					string(dkvsindexer.ErrorCodeStorageModeDowngrade), 0)
+			if mutation.Record.Seq != h.recordFloorLocked(mutation.Record.Key)+1 {
+				return fail(dkvsindexer.ErrInvalidSequence)
+			}
+			if current != nil && !dkvsindexer.IsTombstone(mutation.Record.Flags) && !dkvsWalletRecordIsFreeLocal(current) && dkvsWalletRecordIsFreeLocal(mutation.Record) {
+				return fail(dkvsindexer.ErrStorageModeDowngrade)
 			}
 		}
 		projected := len(h.records)
@@ -241,61 +203,55 @@ func (h *rgb11MemoryDKVSHTTP) applyBatchCAS(request DKVSBatchCASRequest) ([]byte
 			}
 		}
 		if h.maxRecords > 0 && projected > h.maxRecords {
-			return rgb11DKVSResponse(-1, dkvsindexer.ErrFeeCapacityExceeded.Error(), nil,
-				string(dkvsindexer.ErrorCodeQuotaExceeded), 0)
+			return fail(dkvsindexer.ErrFeeCapacityExceeded)
 		}
 	}
-
-	records := make([]*swire.DKVSRecord, 0, len(request.Mutations))
-	hashes := make([]string, 0, len(request.Mutations))
 	if already == 0 {
+		paths := make(map[string]uint64)
+		for _, mutation := range request.Mutations {
+			prefix, err := dkvsindexer.CollectionPathForKey(mutation.Record.Key)
+			if err == nil {
+				if _, exists := paths[prefix]; !exists {
+					h.generations[prefix]++
+					paths[prefix] = h.generations[prefix]
+				}
+			}
+		}
 		for _, mutation := range request.Mutations {
 			record := cloneRGB11DKVSRecord(mutation.Record)
-			hash := dkvsindexer.RecordHash(record).String()
 			if dkvsindexer.IsTombstone(record.Flags) {
 				delete(h.records, record.Key)
 				delete(h.changedAt, record.Key)
-				h.deleted[record.Key] = dkvsindexer.DKVSKeyState{
-					Key: record.Key, Status: dkvsindexer.KeyStateDeleted, Seq: record.Seq, ETag: hash,
-				}
 			} else {
 				h.records[record.Key] = record
-				delete(h.deleted, record.Key)
-			}
-			if prefix, err := dkvsindexer.CollectionPathForKey(record.Key); err == nil {
-				h.generations[prefix]++
-				if !dkvsindexer.IsTombstone(record.Flags) {
-					h.changedAt[record.Key] = h.generations[prefix]
+				if prefix, err := dkvsindexer.CollectionPathForKey(record.Key); err == nil {
+					h.changedAt[record.Key] = paths[prefix]
 				}
 			}
 		}
 	}
+	records := make([]*swire.DKVSRecord, 0, len(request.Mutations))
+	hashes := make([]string, 0, len(request.Mutations))
+	prefixSet := make(map[string]struct{})
 	for _, mutation := range request.Mutations {
 		records = append(records, cloneRGB11DKVSRecord(mutation.Record))
 		hashes = append(hashes, dkvsindexer.RecordHash(mutation.Record).String())
-	}
-	prefixSet := make(map[string]struct{})
-	for _, mutation := range request.Mutations {
-		prefix, err := dkvsindexer.CollectionPathForKey(mutation.Record.Key)
-		if err == nil {
+		if prefix, err := dkvsindexer.CollectionPathForKey(mutation.Record.Key); err == nil {
 			prefixSet[prefix] = struct{}{}
 		}
 	}
 	prefixStates := make([]dkvsindexer.PrefixGeneration, 0, len(prefixSet))
 	for prefix := range prefixSet {
-		prefixStates = append(prefixStates, dkvsindexer.PrefixGeneration{
-			Prefix: prefix, Generation: h.generations[prefix],
-		})
+		prefixStates = append(prefixStates, dkvsindexer.PrefixGeneration{Prefix: prefix, Generation: h.generations[prefix]})
 	}
-	sort.Slice(prefixStates, func(a, b int) bool {
-		return prefixStates[a].Prefix < prefixStates[b].Prefix
-	})
-	result := &dkvsindexer.WriteResult{
-		Applied: len(request.Mutations) - already, Records: records, Hashes: hashes,
-		ViewHeight: 1, ServerTimeMS: uint64(time.Now().UnixMilli()),
-		LocalOnly: localOnly, EndpointID: h.endpointID, RequestID: request.RequestID,
-		PrefixStates: prefixStates,
+	sort.Slice(prefixStates, func(a, b int) bool { return prefixStates[a].Prefix < prefixStates[b].Prefix })
+	height := uint64(1)
+	if h.bestHeight > 0 {
+		height = uint64(h.bestHeight)
 	}
+	result := &dkvsindexer.WriteResult{Applied: len(request.Mutations) - already, Records: records, Hashes: hashes,
+		ViewHeight: height, ServerTimeMS: uint64(time.Now().UnixMilli()), LocalOnly: localOnly, EndpointID: h.endpointID,
+		RequestID: request.RequestID, PrefixStates: prefixStates}
 	if h.postCommitErr != nil {
 		err := h.postCommitErr
 		h.postCommitErr = nil
@@ -313,7 +269,6 @@ func matchesAnyPrefix(key string, prefixes []string) bool {
 	}
 	return false
 }
-
 func (h *rgb11MemoryDKVSHTTP) prefixRecordsLocked(prefix string) ([]*swire.DKVSRecord, []dkvsindexer.DKVSKeyState) {
 	records := make([]*swire.DKVSRecord, 0)
 	states := make([]dkvsindexer.DKVSKeyState, 0)
@@ -323,122 +278,30 @@ func (h *rgb11MemoryDKVSHTTP) prefixRecordsLocked(prefix string) ([]*swire.DKVSR
 		}
 		copyRecord := cloneRGB11DKVSRecord(record)
 		records = append(records, copyRecord)
-		states = append(states, dkvsindexer.DKVSKeyState{
-			Key: key, Status: dkvsindexer.KeyStateActive, Seq: record.Seq,
-			ETag: dkvsindexer.RecordHash(record).String(), ExpiryHeight: dkvsindexer.RecordExpiryHeight(record),
-			Record: copyRecord,
-		})
+		states = append(states, dkvsindexer.DKVSKeyState{Key: key, Status: dkvsindexer.KeyStateActive, Seq: record.Seq,
+			ETag: dkvsindexer.RecordHash(record).String(), ExpiryHeight: dkvsindexer.RecordExpiryHeight(record), Record: copyRecord})
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Key < records[j].Key })
 	sort.Slice(states, func(i, j int) bool { return states[i].Key < states[j].Key })
 	return records, states
 }
-
-func (h *rgb11MemoryDKVSHTTP) prefixSnapshot(prefix string) ([]byte, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.snapshotCalls++
-	records, states := h.prefixRecordsLocked(prefix)
-	return rgb11DKVSResponse(0, "ok", &dkvsindexer.PrefixSnapshot{
-		EndpointID: h.endpointID, Prefix: prefix, Generation: h.generations[prefix], ViewHeight: 1,
-		Records: records, KeyStates: states,
-	}, "", 0)
-}
-
-func (h *rgb11MemoryDKVSHTTP) prefixDelta(prefix, endpointID string, after uint64) ([]byte, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.deltaCalls++
-	if h.deltaUnavailable {
-		return nil, &HTTPResponseError{StatusCode: 404}
-	}
-	if endpointID != h.endpointID {
-		return rgb11DKVSResponse(-1, dkvsindexer.ErrEndpointMismatch.Error(), nil,
-			string(dkvsindexer.ErrorCodeEndpointMismatch), 0)
-	}
-	if after > h.generations[prefix] {
-		return rgb11DKVSResponse(-1, dkvsindexer.ErrStaleGeneration.Error(), nil,
-			string(dkvsindexer.ErrorCodeStaleGeneration), 0)
-	}
-	allRecords, allStates := h.prefixRecordsLocked(prefix)
-	records := make([]*swire.DKVSRecord, 0)
-	states := make([]dkvsindexer.DKVSKeyState, 0)
-	for index, record := range allRecords {
-		if h.changedAt[record.Key] > after {
-			records = append(records, record)
-			states = append(states, allStates[index])
-		}
-	}
-	return rgb11DKVSResponse(0, "ok", &dkvsindexer.PrefixDeltaResult{
-		EndpointID: h.endpointID, Prefix: prefix, Generation: h.generations[prefix], ViewHeight: 1,
-		Records: records, KeyStates: states,
-	}, "", 0)
-}
-
-func (h *rgb11MemoryDKVSHTTP) prefixStatus(endpointID string, known []dkvsindexer.PrefixGeneration) ([]byte, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.statusCalls++
-	if endpointID != h.endpointID {
-		return rgb11DKVSResponse(-1, dkvsindexer.ErrEndpointMismatch.Error(), nil,
-			string(dkvsindexer.ErrorCodeEndpointMismatch), 0)
-	}
-	changed := make([]dkvsindexer.PrefixGeneration, 0)
-	for _, item := range known {
-		if generation := h.generations[item.Prefix]; generation != item.Generation {
-			changed = append(changed, dkvsindexer.PrefixGeneration{Prefix: item.Prefix, Generation: generation})
-		}
-	}
-	return rgb11DKVSResponse(0, "ok", &dkvsindexer.PrefixStatusResult{
-		EndpointID: h.endpointID, ViewHeight: 1, Changed: changed,
-	}, "", 0)
-}
-
 func (h *rgb11MemoryDKVSHTTP) prefixRead(prefix string) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.readCalls++
 	records, states := h.prefixRecordsLocked(prefix)
-	return rgb11DKVSResponse(0, "ok", &dkvsindexer.PrefixReadResult{
-		EndpointID: h.endpointID, Prefix: prefix, ViewHeight: 1, Records: records, KeyStates: states,
-	}, "", 0)
+	return rgb11DKVSResponse(0, "ok", &dkvsindexer.PrefixReadResult{EndpointID: h.endpointID, Prefix: prefix, ViewHeight: 1, Records: records, KeyStates: states}, "", 0)
 }
-
 func (h *rgb11MemoryDKVSHTTP) SendDKVSPost(path string, body []byte) ([]byte, error) {
 	switch path {
+	case "/v3/dkvs/active/sync", "/v3/dkvs/active/watch":
+		return h.sendActiveRequest(context.Background(), path, body)
 	case "/v3/dkvs/records/batch-cas":
 		var request DKVSBatchCASRequest
 		if err := json.Unmarshal(body, &request); err != nil {
 			return nil, err
 		}
 		return h.applyBatchCAS(request)
-	case "/v3/dkvs/prefixes/snapshot":
-		var request struct {
-			Prefix string `json:"prefix"`
-		}
-		if err := json.Unmarshal(body, &request); err != nil {
-			return nil, err
-		}
-		return h.prefixSnapshot(request.Prefix)
-	case "/v3/dkvs/prefixes/delta":
-		var request struct {
-			Prefix          string `json:"prefix"`
-			EndpointID      string `json:"endpoint_id"`
-			AfterGeneration uint64 `json:"after_generation"`
-		}
-		if err := json.Unmarshal(body, &request); err != nil {
-			return nil, err
-		}
-		return h.prefixDelta(request.Prefix, request.EndpointID, request.AfterGeneration)
-	case "/v3/dkvs/prefixes/status":
-		var request struct {
-			EndpointID string                         `json:"endpoint_id"`
-			Prefixes   []dkvsindexer.PrefixGeneration `json:"prefixes"`
-		}
-		if err := json.Unmarshal(body, &request); err != nil {
-			return nil, err
-		}
-		return h.prefixStatus(request.EndpointID, request.Prefixes)
 	case "/v3/dkvs/prefixes/read":
 		var request struct {
 			Prefix string `json:"prefix"`
@@ -451,50 +314,36 @@ func (h *rgb11MemoryDKVSHTTP) SendDKVSPost(path string, body []byte) ([]byte, er
 		return nil, fmt.Errorf("unexpected DKVS POST path %s", path)
 	}
 }
-
 func (h *rgb11MemoryDKVSHTTP) SendGetRequestContext(ctx context.Context, url *URL) ([]byte, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-		return h.SendGetRequest(url)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	return h.SendGetRequest(url)
 }
-
-func (h *rgb11MemoryDKVSHTTP) SendDKVSGetContext(ctx context.Context, path string,
-	query map[string]string) ([]byte, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-		return h.SendDKVSGet(path, query)
+func (h *rgb11MemoryDKVSHTTP) SendDKVSGetContext(ctx context.Context, path string, query map[string]string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	return h.SendDKVSGet(path, query)
 }
-
 func (h *rgb11MemoryDKVSHTTP) SendDKVSPostContext(ctx context.Context, path string, body []byte) ([]byte, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-		return h.SendDKVSPost(path, body)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	if path == "/v3/dkvs/active/sync" || path == "/v3/dkvs/active/watch" {
+		return h.sendActiveRequest(ctx, path, body)
+	}
+	return h.SendDKVSPost(path, body)
 }
-
 func (h *rgb11MemoryDKVSHTTP) SendPostRequestContext(ctx context.Context, url *URL, body []byte) ([]byte, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-		return h.SendPostRequest(url, body)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	return h.SendPostRequest(url, body)
 }
-
 func rgb11DKVSResponse(code int, msg string, data interface{}, errorCode string, total int) ([]byte, error) {
-	return json.Marshal(map[string]interface{}{
-		"code": code, "msg": msg, "data": data, "error_code": errorCode, "total": total,
-	})
+	return json.Marshal(map[string]interface{}{"code": code, "msg": msg, "data": data, "error_code": errorCode, "total": total})
 }
-
 func cloneRGB11DKVSRecord(record *swire.DKVSRecord) *swire.DKVSRecord {
 	if record == nil {
 		return nil
@@ -506,7 +355,6 @@ func cloneRGB11DKVSRecord(record *swire.DKVSRecord) *swire.DKVSRecord {
 	copyValue.FeeProof = append([]byte(nil), record.FeeProof...)
 	return &copyValue
 }
-
 func (h *rgb11MemoryDKVSHTTP) seedInternalMailboxRecord(record *swire.DKVSRecord) {
 	if h == nil || record == nil {
 		return
@@ -515,7 +363,6 @@ func (h *rgb11MemoryDKVSHTTP) seedInternalMailboxRecord(record *swire.DKVSRecord
 	defer h.mu.Unlock()
 	copyRecord := cloneRGB11DKVSRecord(record)
 	h.records[copyRecord.Key] = copyRecord
-	delete(h.deleted, copyRecord.Key)
 	if prefix, err := dkvsindexer.CollectionPathForKey(copyRecord.Key); err == nil {
 		h.generations[prefix]++
 		h.changedAt[copyRecord.Key] = h.generations[prefix]

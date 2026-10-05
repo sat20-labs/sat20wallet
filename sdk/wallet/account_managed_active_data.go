@@ -448,10 +448,20 @@ func (p *Manager) pruneStaleAccountManagedActive(root common.Wallet, keys []stri
 	if p == nil || root == nil || len(keys) == 0 {
 		return
 	}
+	stop, ok := p.beginAccountBackgroundTask()
+	if !ok {
+		return
+	}
 	mailboxRoot := cloneWalletAtAccountZero(root)
 	staleKeys := append([]string(nil), keys...)
 	go func() {
+		defer p.finishAccountBackgroundTask()
 		for _, key := range staleKeys {
+			select {
+			case <-stop:
+				return
+			default:
+			}
 			if err := p.DeleteMailboxMessage(mailboxRoot, key); err != nil &&
 				!errors.Is(err, ErrDKVSRecordNotFound) {
 				Log.Warningf("prune stale account-managed active message failed: %v", err)
@@ -461,11 +471,32 @@ func (p *Manager) pruneStaleAccountManagedActive(root common.Wallet, keys []stri
 }
 
 func (p *Manager) cleanupAccountManagedActiveDataAfterDurable(providerID string) {
+	stop, ok := p.beginAccountBackgroundTask()
+	if !ok {
+		return
+	}
 	go func() {
+		defer p.finishAccountBackgroundTask()
 		ctx, cancel := context.WithTimeout(context.Background(), accountManagedDataReadyTimeout)
-		defer cancel()
+		cancelRelayDone := make(chan struct{})
+		go func() {
+			select {
+			case <-stop:
+				cancel()
+			case <-cancelRelayDone:
+			}
+		}()
+		defer func() {
+			close(cancelRelayDone)
+			cancel()
+		}()
 		if err := p.WaitAccountManagedDataReady(ctx); err != nil {
 			return
+		}
+		select {
+		case <-stop:
+			return
+		default:
 		}
 		_ = p.syncAccountManagedActiveDataMode(providerID, true)
 	}()

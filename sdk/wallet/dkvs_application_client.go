@@ -23,17 +23,14 @@ func (p *SatsNetDKVSClient) dkvsWritePrecondition(key string) (dkvsindexer.Write
 	switch state.Status {
 	case dkvsindexer.KeyStateNeverSeen:
 		return dkvsindexer.WritePrecondition{ExpectAbsent: true}, nil, nil
-	case dkvsindexer.KeyStateActive, dkvsindexer.KeyStateDeleted:
+	case dkvsindexer.KeyStateActive:
 		etag, err := chainhash.NewHashFromStr(strings.TrimSpace(state.ETag))
 		if err != nil {
 			return dkvsindexer.WritePrecondition{}, nil, dkvsindexer.ErrInvalidRecord
 		}
-		var record *swire.DKVSRecord
-		if state.Status == dkvsindexer.KeyStateActive {
-			record, err = p.GetRecordDirect(key)
-			if err != nil {
-				return dkvsindexer.WritePrecondition{}, nil, err
-			}
+		record, err := p.GetRecordDirect(key)
+		if err != nil {
+			return dkvsindexer.WritePrecondition{}, nil, err
 		}
 		return dkvsindexer.WritePrecondition{ExpectedHash: etag}, record, nil
 	default:
@@ -41,8 +38,7 @@ func (p *SatsNetDKVSClient) dkvsWritePrecondition(key string) (dkvsindexer.Write
 	}
 }
 
-func (p *SatsNetDKVSClient) PutRecordCAS(record *swire.DKVSRecord,
-	precondition dkvsindexer.WritePrecondition) (*swire.DKVSRecord, error) {
+func (p *SatsNetDKVSClient) PutRecordCAS(record *swire.DKVSRecord, precondition dkvsindexer.WritePrecondition) (*swire.DKVSRecord, error) {
 	if record == nil {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
@@ -57,7 +53,7 @@ func (p *SatsNetDKVSClient) PutRecordCAS(record *swire.DKVSRecord,
 }
 
 func (p *SatsNetDKVSClient) PutRecordBatchCAS(mutations []dkvsindexer.CASMutation) (*DKVSBatchCASResult, error) {
-	if len(mutations) == 0 {
+	if p == nil || len(mutations) == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	if p.manager != nil {
@@ -88,18 +84,12 @@ type dkvsHTTPTransport interface {
 	SendDKVSGet(path string, query map[string]string) ([]byte, error)
 	SendDKVSPost(path string, body []byte) ([]byte, error)
 }
-
-// Context transports are optional. Production NetClient uses the generic
-// ContextHttpClient path below; deterministic transports may implement these
-// interfaces so direct reads and prefix synchronization honor cancellation.
 type dkvsHTTPGetContextTransport interface {
 	SendDKVSGetContext(ctx context.Context, path string, query map[string]string) ([]byte, error)
 }
-
 type dkvsHTTPPostContextTransport interface {
 	SendDKVSPostContext(ctx context.Context, path string, body []byte) ([]byte, error)
 }
-
 type dkvsConfigProvider interface {
 	DKVSClientConfig() (*dkvsindexer.ClientConfig, error)
 }
@@ -107,13 +97,10 @@ type dkvsConfigProvider interface {
 func decodeDKVSApplicationResponse(raw []byte, out interface{}) error {
 	return dkvscore.DecodeApplicationResponse(raw, out)
 }
-
 func (p *SatsNetDKVSClient) getDKVSApplication(path string, query map[string]string, out interface{}) error {
 	return p.getDKVSApplicationContext(p.requestContext(), path, query, out)
 }
-
-func (p *SatsNetDKVSClient) getDKVSApplicationContext(ctx context.Context, path string,
-	query map[string]string, out interface{}) error {
+func (p *SatsNetDKVSClient) getDKVSApplicationContext(ctx context.Context, path string, query map[string]string, out interface{}) error {
 	if p == nil || p.RESTClient == nil || p.Http == nil {
 		return fmt.Errorf("DKVS client is unavailable")
 	}
@@ -140,13 +127,10 @@ func (p *SatsNetDKVSClient) getDKVSApplicationContext(ctx context.Context, path 
 	}
 	return decodeDKVSApplicationResponse(raw, out)
 }
-
 func (p *SatsNetDKVSClient) postDKVSApplication(path string, req interface{}, out interface{}) error {
 	return p.postDKVSApplicationContext(p.requestContext(), path, req, out)
 }
-
-func (p *SatsNetDKVSClient) postDKVSApplicationContext(ctx context.Context, path string,
-	req interface{}, out interface{}) error {
+func (p *SatsNetDKVSClient) postDKVSApplicationContext(ctx context.Context, path string, req interface{}, out interface{}) error {
 	if p == nil || p.RESTClient == nil || p.Http == nil {
 		return fmt.Errorf("DKVS client is unavailable")
 	}
@@ -182,7 +166,6 @@ type dkvsApplicationRecordData struct {
 func (p *SatsNetDKVSClient) GetRecordDirect(key string) (*swire.DKVSRecord, error) {
 	return p.GetRecordDirectContext(p.requestContext(), key)
 }
-
 func (p *SatsNetDKVSClient) GetRecordDirectContext(ctx context.Context, key string) (*swire.DKVSRecord, error) {
 	if _, err := dkvsindexer.ParseKey(key); err != nil {
 		return nil, err
@@ -194,6 +177,10 @@ func (p *SatsNetDKVSClient) GetRecordDirectContext(ctx context.Context, key stri
 	if resp.Data == nil || resp.Data.Key != key || resp.ETag != dkvsindexer.RecordHash(resp.Data).String() {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
+	// ETag is not a substitute for author-signature verification.
+	if err := dkvsindexer.VerifyRecordForClient(resp.Data, dkvsindexer.RecordVerificationOptions{ExpectedKey: key}); err != nil {
+		return nil, err
+	}
 	return resp.Data, nil
 }
 
@@ -203,86 +190,48 @@ type dkvsKeyStateData struct {
 }
 
 func (p *SatsNetDKVSClient) GetKeyState(key string) (*dkvsindexer.DKVSKeyState, error) {
+	return p.getKeyStateContext(p.requestContext(), key)
+}
+func (p *SatsNetDKVSClient) getKeyStateContext(ctx context.Context, key string) (*dkvsindexer.DKVSKeyState, error) {
 	if _, err := dkvsindexer.ParseKey(key); err != nil {
 		return nil, err
 	}
 	var resp dkvsKeyStateData
-	if err := p.getDKVSApplication("/v3/dkvs/key-state", map[string]string{"key": key}, &resp); err != nil {
+	if err := p.getDKVSApplicationContext(ctx, "/v3/dkvs/key-state", map[string]string{"key": key}, &resp); err != nil {
 		return nil, err
 	}
-	if resp.Data == nil || resp.Data.Key != key {
+	state := resp.Data
+	if state == nil || state.Key != key {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	return resp.Data, nil
-}
-
-type dkvsPrefixStatusData struct {
-	dkvsApplicationBaseResp
-	Data *dkvsindexer.PrefixStatusResult `json:"data,omitempty"`
-}
-
-func (p *SatsNetDKVSClient) GetPrefixStatus(endpointID string,
-	prefixes []dkvsindexer.PrefixGeneration) (*dkvsindexer.PrefixStatusResult, error) {
-	if strings.TrimSpace(endpointID) == "" || len(prefixes) == 0 {
+	switch state.Status {
+	case dkvsindexer.KeyStateNeverSeen:
+		if state.Seq != 0 || state.ETag != "" || state.Record != nil || state.ExpiryHeight != 0 || state.StorageMode != "" {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
+	case dkvsindexer.KeyStateActive:
+		if state.Seq == 0 || len(state.ETag) != 64 {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
+		if _, err := chainhash.NewHashFromStr(state.ETag); err != nil {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
+		if state.Record != nil && (state.Record.Key != key || state.Record.Seq != state.Seq ||
+			dkvsindexer.IsTombstone(state.Record.Flags) || dkvsindexer.RecordHash(state.Record).String() != state.ETag) {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
+	default:
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	var resp dkvsPrefixStatusData
-	if err := p.postDKVSApplication("/v3/dkvs/prefixes/status", struct {
-		EndpointID string                         `json:"endpoint_id"`
-		Prefixes   []dkvsindexer.PrefixGeneration `json:"prefixes"`
-	}{EndpointID: strings.TrimSpace(endpointID), Prefixes: prefixes}, &resp); err != nil {
-		return nil, err
+	if state.Record != nil {
+		if err := dkvsindexer.VerifyRecordForClient(state.Record, dkvsindexer.RecordVerificationOptions{ExpectedKey: key}); err != nil {
+			return nil, err
+		}
+		if state.ExpiryHeight != dkvsindexer.RecordExpiryHeight(state.Record) {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
 	}
-	if resp.Data == nil || resp.Data.EndpointID != strings.TrimSpace(endpointID) {
-		return nil, dkvsindexer.ErrInvalidRecord
-	}
-	return resp.Data, nil
-}
-
-type dkvsPrefixSnapshotData struct {
-	dkvsApplicationBaseResp
-	Data *dkvsindexer.PrefixSnapshot `json:"data,omitempty"`
-}
-
-func (p *SatsNetDKVSClient) GetPrefixSnapshot(prefix string) (*dkvsindexer.PrefixSnapshot, error) {
-	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), "/")
-	if prefix == "" {
-		return nil, dkvsindexer.ErrInvalidKey
-	}
-	var resp dkvsPrefixSnapshotData
-	if err := p.postDKVSApplication("/v3/dkvs/prefixes/snapshot", struct {
-		Prefix string `json:"prefix"`
-	}{Prefix: prefix}, &resp); err != nil {
-		return nil, err
-	}
-	if resp.Data == nil || resp.Data.Prefix != prefix || strings.TrimSpace(resp.Data.EndpointID) == "" {
-		return nil, dkvsindexer.ErrInvalidSnapshot
-	}
-	return resp.Data, nil
-}
-
-type dkvsPrefixDeltaData struct {
-	dkvsApplicationBaseResp
-	Data *dkvsindexer.PrefixDeltaResult `json:"data,omitempty"`
-}
-
-func (p *SatsNetDKVSClient) GetPrefixDelta(prefix, endpointID string, after uint64) (*dkvsindexer.PrefixDeltaResult, error) {
-	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), "/")
-	if prefix == "" || strings.TrimSpace(endpointID) == "" {
-		return nil, dkvsindexer.ErrInvalidKey
-	}
-	var resp dkvsPrefixDeltaData
-	if err := p.postDKVSApplication("/v3/dkvs/prefixes/delta", struct {
-		Prefix          string `json:"prefix"`
-		EndpointID      string `json:"endpoint_id"`
-		AfterGeneration uint64 `json:"after_generation"`
-	}{Prefix: prefix, EndpointID: endpointID, AfterGeneration: after}, &resp); err != nil {
-		return nil, err
-	}
-	if resp.Data == nil || resp.Data.Prefix != prefix || resp.Data.EndpointID != endpointID || resp.Data.Generation < after {
-		return nil, dkvsindexer.ErrInvalidSnapshot
-	}
-	return resp.Data, nil
+	return state, nil
 }
 
 type dkvsPrefixReadData struct {
@@ -290,8 +239,7 @@ type dkvsPrefixReadData struct {
 	Data *dkvsindexer.PrefixReadResult `json:"data,omitempty"`
 }
 
-func (p *SatsNetDKVSClient) ReadPrefixContext(ctx context.Context,
-	prefix string) (*dkvsindexer.PrefixReadResult, error) {
+func (p *SatsNetDKVSClient) ReadPrefixContext(ctx context.Context, prefix string) (*dkvsindexer.PrefixReadResult, error) {
 	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), "/")
 	if _, err := dkvsindexer.ParsePrefix(prefix); err != nil {
 		return nil, err
@@ -308,6 +256,9 @@ func (p *SatsNetDKVSClient) ReadPrefixContext(ctx context.Context,
 	if resp.Data == nil || resp.Data.Prefix != prefix || strings.TrimSpace(resp.Data.EndpointID) == "" {
 		return nil, dkvsindexer.ErrInvalidSnapshot
 	}
+	if err := dkvscore.VerifyPrefixPayload(prefix, resp.Data.ViewHeight, resp.Data.Records, resp.Data.KeyStates); err != nil {
+		return nil, err
+	}
 	return resp.Data, nil
 }
 
@@ -316,12 +267,31 @@ type dkvsWriteResultData struct {
 	Data *dkvsindexer.WriteResult `json:"data,omitempty"`
 }
 
-func (p *SatsNetDKVSClient) putRecordBatchCASRaw(mutations []dkvsindexer.CASMutation,
-	endpointID, requestID string) (*dkvsindexer.WriteResult, error) {
+// Passing an explicit authorization (including nil for the binding exception)
+// is a retry of a captured request. No fresh context is fetched in that case.
+func (p *SatsNetDKVSClient) putRecordBatchCASRaw(mutations []dkvsindexer.CASMutation, endpointID, requestID string,
+	authorizations ...*dkvsindexer.WalletWriteAuthorization) (*dkvsindexer.WriteResult, error) {
 	req, err := dkvscore.BuildBatchCASRequest(mutations, endpointID, requestID)
 	if err != nil {
 		return nil, err
 	}
+	if len(authorizations) > 1 {
+		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	if len(authorizations) == 1 {
+		req.Authorization = dkvsindexer.CloneWalletWriteAuthorization(authorizations[0])
+	} else {
+		// Manager-attached clients resolve the pinned account-management root
+		// inside prepareWriteAuthorization; request-scoped clones may instead
+		// carry an explicit signer. The account-mapping bootstrap exception
+		// intentionally returns nil authorization.
+		req.Authorization, err = p.prepareWriteAuthorization(mutations, endpointID, requestID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// A raw client has neither a manager-owned root nor an explicit signer, so
+	// prepareWriteAuthorization fails before any unauthenticated business write.
 	var resp dkvsWriteResultData
 	if err := p.postDKVSApplication("/v3/dkvs/records/batch-cas", req, &resp); err != nil {
 		return nil, fmt.Errorf("submit DKVS batch: %w", err)
@@ -332,24 +302,19 @@ func (p *SatsNetDKVSClient) putRecordBatchCASRaw(mutations []dkvsindexer.CASMuta
 	return resp.Data, nil
 }
 
-func (p *SatsNetDKVSClient) putRecordBatchCASWithOrigin(mutations []dkvsindexer.CASMutation,
-	origin dkvsOutboxOrigin) (*dkvsindexer.WriteResult, error) {
-	if len(mutations) == 0 {
+func (p *SatsNetDKVSClient) putRecordBatchCASWithOrigin(mutations []dkvsindexer.CASMutation, origin dkvsOutboxOrigin) (*dkvsindexer.WriteResult, error) {
+	if p == nil || len(mutations) == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	config, err := p.GetDKVSClientConfig()
 	if err != nil {
 		return nil, err
 	}
-	// Every durable outbox entry is pinned to the connected CoreNode, not just
-	// FREE_LOCAL data. CoreNode switching is an explicit unsupported operation;
-	// retrying a signed request through a different service fails immediately.
 	endpointID := strings.TrimSpace(config.EndpointID)
 	if endpointID == "" {
 		return nil, dkvsindexer.ErrStaleEndpoint
 	}
-	if p == nil || p.manager == nil || p.manager.owner == nil || p.manager.owner.db == nil ||
-		strings.TrimSpace(p.replicaNamespace) == "" {
+	if p.manager == nil || p.manager.owner == nil || p.manager.owner.db == nil || strings.TrimSpace(p.replicaNamespace) == "" {
 		requestID, err := newDKVSRequestID()
 		if err != nil {
 			return nil, err
@@ -363,13 +328,17 @@ func (p *SatsNetDKVSClient) putRecordBatchCASWithOrigin(mutations []dkvsindexer.
 	}
 	var result *dkvsindexer.WriteResult
 	err = p.manager.runTransport(func() error {
+		entry.Authorization, err = p.prepareWriteAuthorization(mutations, endpointID, entry.RequestID)
+		if err != nil {
+			return err
+		}
 		if queueErr := store.QueueOutbox(entry); queueErr != nil {
 			return fmt.Errorf("persist DKVS batch outbox: %w", queueErr)
 		}
 		if inflightErr := store.UpdateOutboxState(entry, DKVSOutboxInflight, nil); inflightErr != nil {
 			return fmt.Errorf("mark DKVS batch inflight: %w", inflightErr)
 		}
-		result, err = p.putRecordBatchCASRaw(mutations, endpointID, entry.RequestID)
+		result, err = p.putRecordBatchCASRaw(mutations, endpointID, entry.RequestID, entry.Authorization)
 		if err != nil {
 			if p.manager.owner != nil {
 				err = p.manager.owner.accountAutopaySubmissionFailure(mutations, err)
@@ -381,9 +350,9 @@ func (p *SatsNetDKVSClient) putRecordBatchCASWithOrigin(mutations []dkvsindexer.
 			_ = markDKVSOutboxSubmissionFailure(store, entry, err)
 			return err
 		}
-		if applyErr := store.ApplyWriteResultAndAck(entry, result); applyErr != nil {
-			_ = markDKVSOutboxSubmissionFailure(store, entry, applyErr)
-			return fmt.Errorf("commit DKVS batch replica: %w", applyErr)
+		if ackErr := store.ApplyWriteResultAndAck(entry, result); ackErr != nil {
+			_ = markDKVSOutboxSubmissionFailure(store, entry, ackErr)
+			return fmt.Errorf("complete DKVS request: %w", ackErr)
 		}
 		return nil
 	})

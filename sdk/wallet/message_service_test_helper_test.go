@@ -35,7 +35,15 @@ func newRGB11MessageNodeClient(remote *rgb11MemoryDKVSHTTP) *rgb11MessageNodeCli
 			state = existing.(*rgb11MessageServiceState)
 		}
 	}
-	return &rgb11MessageNodeClient{remote: remote, state: state}
+	client := &rgb11MessageNodeClient{remote: remote, state: state}
+	if remote != nil {
+		// The HTTP and message RPC surfaces model the SAME CoreNode. Pair their
+		// identity before a wallet reads config or establishes any sync cursor.
+		remote.mu.Lock()
+		remote.endpointID = client.CoreNodeID()
+		remote.mu.Unlock()
+	}
+	return client
 }
 
 func rgb11MessageCorePrivateKey() *secp256k1.PrivateKey {
@@ -126,22 +134,6 @@ func (c *rgb11MessageNodeClient) SendMessageServiceReq(req *swire.MessageService
 		return nil, fmt.Errorf("message service unavailable")
 	}
 	switch req.Action {
-	case swire.MessageServiceActionBindAccount:
-		_, _, descriptor, err := dkvsindexer.ValidateAccountMappingBindingRecord(req.Record)
-		if err != nil || descriptor.CoreNodeID != c.CoreNodeID() {
-			return nil, fmt.Errorf("invalid account binding")
-		}
-		key := req.Record.Key
-		c.remote.mu.Lock()
-		current := c.remote.records[key]
-		if current != nil && req.Record.Seq < current.Seq {
-			c.remote.mu.Unlock()
-			return nil, fmt.Errorf("stale account binding")
-		}
-		c.remote.records[key] = cloneRGB11DKVSRecord(req.Record)
-		c.remote.mu.Unlock()
-		return &swire.MessageServiceResponse{}, nil
-
 	case swire.MessageServiceActionNextMessage:
 		if verifyMessageServiceTestQuery(req) != nil || !c.accountBound(req.AccountID) {
 			return nil, fmt.Errorf("sender not bound")
@@ -205,8 +197,6 @@ func (c *rgb11MessageNodeClient) SendMessageServiceReq(req *swire.MessageService
 			c.remote.mu.Unlock()
 			return nil, fmt.Errorf("mailbox direct record conflict")
 		}
-		// Match the core's collection generation update so an already synced
-		// receiver observes subsequent direct messages, including batch ACKs.
 		if c.remote.records[key] == nil {
 			if prefix, err := dkvsindexer.CollectionPathForKey(key); err == nil {
 				c.remote.generations[prefix]++
@@ -219,7 +209,7 @@ func (c *rgb11MessageNodeClient) SendMessageServiceReq(req *swire.MessageService
 
 	case swire.MessageServiceActionDeleteMailbox:
 		if req.Record == nil {
-			return nil, fmt.Errorf("missing mailbox tombstone")
+			return nil, fmt.Errorf("missing mailbox delete command")
 		}
 		parsed, err := dkvsindexer.ParseKey(req.Record.Key)
 		if err != nil || parsed.Namespace != "mail" || len(parsed.Segments) == 0 ||
@@ -230,18 +220,24 @@ func (c *rgb11MessageNodeClient) SendMessageServiceReq(req *swire.MessageService
 			dkvsindexer.RecordVerificationOptions{ExpectedKey: req.Record.Key}); err != nil {
 			return nil, err
 		}
+		target, err := dkvsindexer.DeleteTargetHash(req.Record)
+		if err != nil {
+			return nil, err
+		}
 		c.remote.mu.Lock()
+		defer c.remote.mu.Unlock()
 		current := c.remote.records[req.Record.Key]
-		if current == nil || current.Seq == ^uint64(0) || req.Record.Seq != current.Seq+1 {
-			c.remote.mu.Unlock()
-			return nil, fmt.Errorf("stale mailbox tombstone")
+		if current == nil {
+			return &swire.MessageServiceResponse{}, nil
+		}
+		if current.Seq == ^uint64(0) || req.Record.Seq != current.Seq+1 || target != dkvsindexer.RecordHash(current) {
+			return nil, dkvsindexer.ErrWriteConflict
 		}
 		delete(c.remote.records, req.Record.Key)
 		delete(c.remote.changedAt, req.Record.Key)
 		if prefix, err := dkvsindexer.CollectionPathForKey(req.Record.Key); err == nil {
 			c.remote.generations[prefix]++
 		}
-		c.remote.mu.Unlock()
 		return &swire.MessageServiceResponse{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported message action %s", req.Action)

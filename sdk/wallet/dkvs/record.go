@@ -102,12 +102,6 @@ func NewSignedRecord(wallet common.Wallet, key string, value []byte,
 	return record, nil
 }
 
-func NewSignedTombstone(wallet common.Wallet, key string,
-	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	opts.Flags |= dkvsindexer.FlagTombstone
-	return NewSignedRecord(wallet, key, nil, opts)
-}
-
 func NewSignedRenewalRecord(wallet common.Wallet, existing *swire.DKVSRecord,
 	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
 	pubKey, err := WalletPubKey(wallet)
@@ -117,8 +111,9 @@ func NewSignedRenewalRecord(wallet common.Wallet, existing *swire.DKVSRecord,
 	if dkvsindexer.IsTombstone(existing.Flags) {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	if proof, err := dkvsindexer.ParseFeeProof(existing.FeeProof); err == nil &&
-		proof.Mode == dkvsindexer.FeeModeAutopay {
+	proof, err := dkvsindexer.ParseFeeProof(existing.FeeProof)
+	if err != nil || proof.Mode != dkvsindexer.FeeModeFreeLocal {
+		// Record-level renewal is defined only for expiring FREE_LOCAL data.
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	parsed, err := dkvsindexer.ParseKey(existing.Key)
@@ -143,20 +138,33 @@ func NewSignedRenewalRecord(wallet common.Wallet, existing *swire.DKVSRecord,
 	if opts.TTL == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
+	if existing.Seq == ^uint64(0) {
+		return nil, dkvsindexer.ErrInvalidSequence
+	}
 	record := *existing
 	record.PubKey = append([]byte(nil), existing.PubKey...)
 	record.Value = append([]byte(nil), existing.Value...)
 	record.Signature = nil
+	record.Seq = existing.Seq + 1
 	record.IssueHeight = opts.IssueHeight
 	record.TTL = opts.TTL
 	if dkvsindexer.RecordExpiryHeight(&record) == 0 ||
 		dkvsindexer.RecordExpiryHeight(&record) <= dkvsindexer.RecordExpiryHeight(existing) {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	if opts.FeeProof != nil {
-		record.FeeProof = append([]byte(nil), opts.FeeProof...)
-	} else {
-		record.FeeProof = append([]byte(nil), existing.FeeProof...)
+	// FREE_LOCAL uses a compact mode proof. The new expiry is carried by the
+	// signed record and is supplied separately to fee verification, so renewal
+	// rebuilds the proof classification and, critically, re-signs the new
+	// sequence/IssueHeight/TTL instead of copying the previous authorization.
+	newProof, err := dkvsindexer.NewFreeLocalFeeProof(
+		record.Key, parsed.Namespace, swire.MaxDKVSRecordSize,
+		dkvsindexer.RecordExpiryHeight(&record),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := AttachFeeProof(&record, newProof); err != nil {
+		return nil, err
 	}
 	if dkvsindexer.RecordSize(&record) > swire.MaxDKVSRecordSize ||
 		len(record.Value) > dkvsindexer.MaxRecordValueSize {
@@ -184,7 +192,7 @@ func AttachFeeProof(record *swire.DKVSRecord, proof *dkvsindexer.FeeProof) error
 }
 
 // RecordIsFreeLocal reports whether a record explicitly carries a FREE_LOCAL
-// fee proof. Empty legacy fee proofs are not local-only records.
+// fee proof. An absent proof does not imply endpoint-local placement.
 func RecordIsFreeLocal(record *swire.DKVSRecord) bool {
 	if record == nil || len(record.FeeProof) == 0 {
 		return false

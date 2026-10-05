@@ -4,7 +4,8 @@ These scripts exercise the SAT20 PWA wallet against the test networks.
 
 ## Prerequisites
 
-Start the PWA dev server, then launch a Chromium-based browser with remote debugging:
+The local account E2E starts its own server and browser; follow its dedicated section below.
+For the other scripts, start the PWA dev server, then launch a Chromium-based browser with remote debugging:
 
 ```bash
 npm run dev
@@ -46,6 +47,66 @@ the default sell amount, the buyer needs one plain BTC UTXO of at least `4900`
 sats. In general the minimum source value is `3900 + sell amount` sats because
 the fixed unit price is one sat per DOGCOIN. The script broadcasts on the real
 testnet by default; set `SAT20_DRY_RUN=1` only for a no-broadcast preflight.
+
+## 本地账户管理 E2E
+
+账户管理测试使用 SDK 现有的临时 SatoshiNet 夹具：真实 Bootstrap/CoreNode/miner、真实
+WASM、真实 PWA 和每台设备独立的浏览器 IndexedDB。只将 PWA 的端点配置指向临时节点，
+不替换账户、密码学、存储或 RPC 实现。浏览器阻止访问外部地址。
+
+前提是完整本地工作空间：`sat20wallet` 同级存在 `indexer`、`satoshinet`、`transcend` 和 SDK 当前引用的 `rgb11`，
+保留各模块的本地 `replace`，并安装满足各 `go.mod` 的 Go，以及 Node/npm。
+
+准备依赖和当前版本的 WASM：
+
+```bash
+cd /Users/yingfeng/github/sat20wallet/pwa
+npm ci
+
+cd ../sdk/wasm
+make
+
+cd ../../pwa
+npm run write-integrity
+```
+
+已安装 Microsoft Edge 或 Google Chrome 时直接使用其无头模式；其他系统可以使用
+Playwright Chromium：
+
+```bash
+npx playwright install chromium
+```
+
+运行 SDK 账户门禁和浏览器账户门禁：
+
+```bash
+cd /Users/yingfeng/github/sat20wallet/sdk
+go test ./e2e -run 'Test(SDKAccount|RealSatoshiNetAccountManagement)' -count=1 -timeout=20m
+
+SAT20_RUN_PWA_E2E=1 go test ./e2e \
+  -run '^TestSDKAccountPWAConnectedBrowser$' -v -count=1 -timeout=20m
+
+# 一次运行全部 SDK 账户用例及 PWA 浏览器用例
+SAT20_RUN_PWA_E2E=1 go test ./e2e \
+  -run 'Test(SDKAccount|RealSatoshiNetAccountManagement)' -v -count=1 -timeout=30m
+```
+
+第二条命令自动启动并关闭 Vite、隔离浏览器和本地节点，不需要另开开发服务器或 CDP
+端口。首次运行或 SDK 代码变动后会编译节点与插件，耗时明显长于复用缓存的运行。可通过
+`SAT20_BROWSER_EXECUTABLE=/absolute/path/to/chromium` 指定浏览器。
+
+未设置 `SAT20_RUN_PWA_E2E=1` 时，普通 Go E2E 会明确跳过浏览器用例；不能把该跳过
+算作 PWA 验证通过。浏览器用例逐项输出 JSON verdict，任意失败返回非零退出码。
+
+当前浏览器门禁覆盖首次创建、根助记词自动发现与导入、账户预检、临时存储授权恢复/取消、2of2 设置与恢复、
+子账户改名、根钱包删除保护、独立 Guardian 的 setup/receipt/请求/响应、2of3 恢复、
+会话取消/重复提交、密码修改后刷新解锁、节点 API 不可达时刷新并用新密码解锁，以及网络切换密码错误/取消。
+离线刷新验证实际 IndexedDB 持久化的钱包目录、账户身份和恢复配置；确认 DKVS 副本的离线读取另由 SDK 回归覆盖。
+恢复页面另外通过真实按钮完成恢复码、知识问题、用户分片、预览和新密码步骤。账户同步、响应丢失重试、
+实际付费充值与复用验证由 SDK 的真实节点 E2E 覆盖。
+
+其他流程以公开 PWA Store/接口驱动业务，暂不将全部设置页的逐按钮交互、真实 mainnet/testnet
+双网络成功切换或临时记录到期纳入已完成的浏览器覆盖。
 
 ## Wallet Basics
 

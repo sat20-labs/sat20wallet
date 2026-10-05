@@ -28,42 +28,35 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 	defaults := dkvsindexer.NetworkDefaultsForParams(&chaincfg.TestNetParams)
 	f := newTemplateFixtureWithArgs(t, map[string]int64{defaults.AutopayFeeAssetName: 20000}, nil, nil, dkvsMinerArgs(t))
 	waitForDKVSPeerReady(t, f.Network)
+	senderManager := bindDKVSReviewWallet(t, f.Network.Core, dkvsClientMnemonic)
+	recipientManager := bindDKVSReviewWallet(t, f.Network.Core, bootstrapMnemonic)
 	gas := contractcommon.GetGasAssetName()
 	actorA := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
-	actorB := newDKVSKeyPathActor(t, keyFromMnemonic(t, bootstrapMnemonic, 2))
+	actorB := newDKVSKeyPathActor(t, keyFromMnemonic(t, bootstrapMnemonic, 0))
 	require.Equal(t, defaults.AutopayDeployer, actorA.Address)
 
 	gasOuts := splitToDKVSKeyPathActors(t, f, f.gasAnchor, gas,
-		[]int64{300000, 300000, 300000, 300000},
-		[]int64{10000, 10000, 10000, 10000},
+		[]int64{300000, 300000, 300000, 300000}, []int64{10000, 10000, 10000, 10000},
 		[]*dkvsKeyPathActor{actorA, actorA, actorB, actorB})
 	feeOuts := splitToDKVSKeyPathActors(t, f, f.assetAnchors[defaults.AutopayFeeAssetName], defaults.AutopayFeeAssetName,
-		[]int64{5000, 5000},
-		[]int64{10000, 10000},
-		[]*dkvsKeyPathActor{actorA, actorB})
-
+		[]int64{5000, 5000}, []int64{10000, 10000}, []*dkvsKeyPathActor{actorA, actorB})
 	content, err := defaults.AutopayContent()
 	require.NoError(t, err)
 	deployAssets := txAsset(gas, 290000)
 	require.NoError(t, deployAssets.Merge(txAsset(defaults.AutopayFeeAssetName, 5000)))
-	deployA, contractA := buildDKVSKeyPathTemplateDeploy(t, actorA,
-		contractcommon.TemplateAutopay, content, actorA.Address, defaults.AutopayDeployNonce,
-		[]dkvsPrevOut{gasOuts[0], feeOuts[0]},
+	deployA, contractA := buildDKVSKeyPathTemplateDeploy(t, actorA, contractcommon.TemplateAutopay,
+		content, actorA.Address, defaults.AutopayDeployNonce, []dkvsPrevOut{gasOuts[0], feeOuts[0]},
 		wire.TxOut{Value: 10000, Assets: deployAssets})
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{deployA}, 0)
-
-	fundB := buildDKVSKeyPathTemplateDefaultInvoke(t, actorB, contractA,
-		[]dkvsPrevOut{feeOuts[1]},
+	fundB := buildDKVSKeyPathTemplateDefaultInvoke(t, actorB, contractA, []dkvsPrevOut{feeOuts[1]},
 		wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 5000)})
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{fundB}, 0)
 
-	// The deployer explicitly funds the contract's operating reserve; no
-	// delegate principal may be borrowed to pay the settlement gas.
+	// Operating gas is funded explicitly, never borrowed from delegate funds.
 	gasParam, err := (&contractcommon.TemplateAutopayConfigInvokeParam{GasFundingAmount: "289950"}).Encode()
 	require.NoError(t, err)
-	gasFunding := buildDKVSKeyPathTemplateInvoke(t, actorA, contractA, 1,
-		contractcommon.TemplateInvokeAPIConfig, gasParam, []dkvsPrevOut{gasOuts[1]},
-		wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)})
+	gasFunding := buildDKVSKeyPathTemplateInvoke(t, actorA, contractA, 1, contractcommon.TemplateInvokeAPIConfig,
+		gasParam, []dkvsPrevOut{gasOuts[1]}, wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)})
 	heartbeatB := buildDKVSKeyPathAssetTransfer(t, actorB, gasOuts[3], gas, 290000, 9000, actorB)
 	f.Network.sendManyAndMine(t, []*wire.MsgTx{gasFunding, heartbeatB}, 0)
 	state := fetchTemplateAutopayView(t, f.Network.Bootstrap, contractA.MustEncode())
@@ -80,21 +73,14 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 
 	fakeL1 := f.NetworkFakeL1()
 	fakeL1.setNameOwner(dkvsE2EName, actorA.Address)
-	clientA := dkvsClientForNode(t, f.Network.Bootstrap)
+	clientA := dkvsClientForNode(t, f.Network.Core)
 	nameKey, err := dkvsindexer.NameKey(dkvsE2EName)
 	require.NoError(t, err)
-	autopayA := wallet.DKVSAutopayOptions{
-		AddressParams: &chaincfg.TestNetParams,
-		PoolContract:  contractA.MustEncode(),
-	}
-	if _, err := clientA.PutSignedRecordWithAutopay(actorA.Wallet, nameKey, []byte("owner-a"),
-		dkvsindexer.RecordOptions{Seq: 1}, autopayA); err != nil {
-		t.Fatal(err)
-	}
-	requireDKVSValue(t, f.Network.Core, nameKey, []byte("owner-a"))
-	require.NoError(t, subscribeDKVSNodeInternal(t, f.Network.Miner, dkvsindexer.Subscription{
-		Type: dkvsindexer.SubscriptionKey, Target: nameKey,
-	}))
+	autopayA := wallet.DKVSAutopayOptions{AddressParams: &chaincfg.TestNetParams, PoolContract: contractA.MustEncode()}
+	_, err = clientA.PutSignedRecordWithAutopay(actorA.Wallet, nameKey, []byte("owner-a"), dkvsindexer.RecordOptions{Seq: 1}, autopayA)
+	require.NoError(t, err)
+	requireDKVSValue(t, f.Network.Bootstrap, nameKey, []byte("owner-a"))
+	require.NoError(t, subscribeDKVSNodeInternal(t, f.Network.Miner, dkvsindexer.Subscription{Type: dkvsindexer.SubscriptionKey, Target: nameKey}))
 	require.NoError(t, connectNode(f.Network.Miner, f.Network.Core))
 	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-a"))
 
@@ -103,67 +89,52 @@ func TestRealSatoshiNetDKVSAutopayNameAndMailboxSync(t *testing.T) {
 	actorBRecordPayer, err := dkvsindexer.P2TRAddressFromPubKeyBytes(actorB.Wallet.GetPubKey().SerializeCompressed(), &chaincfg.TestNetParams)
 	require.NoError(t, err)
 	require.Equal(t, actorB.Address, actorBRecordPayer)
-	autopayB := wallet.DKVSAutopayOptions{
-		AddressParams: &chaincfg.TestNetParams,
-		PoolContract:  contractA.MustEncode(),
-	}
-	if _, err := clientB.PutSignedRecordWithAutopay(actorB.Wallet, nameKey, []byte("owner-b"),
-		dkvsindexer.RecordOptions{Seq: 2}, autopayB); err != nil {
-		t.Fatal(err)
-	}
+	autopayB := wallet.DKVSAutopayOptions{AddressParams: &chaincfg.TestNetParams, PoolContract: contractA.MustEncode()}
+	_, err = clientB.PutSignedRecordWithAutopay(actorB.Wallet, nameKey, []byte("owner-b"), dkvsindexer.RecordOptions{Seq: 2}, autopayB)
+	require.NoError(t, err)
 	requireDKVSValue(t, f.Network.Bootstrap, nameKey, []byte("owner-b"))
 	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-b"))
-	deletedName, err := clientB.TombstoneSignedWithAutopay(actorB.Wallet, nameKey,
-		dkvsindexer.RecordOptions{}, autopayB)
+	deletedName, err := clientB.DeleteCurrentRecord(actorB.Wallet, nameKey, 0)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), deletedName.Seq)
-	require.True(t, dkvsindexer.IsTombstone(deletedName.Flags))
 	requireDKVSAbsent(t, f.Network.Bootstrap, nameKey)
 	requireDKVSAbsent(t, f.Network.Miner, nameKey)
+	absent, err := clientB.GetKeyState(nameKey)
+	require.NoError(t, err)
+	require.Equal(t, dkvsindexer.KeyStateNeverSeen, absent.Status)
 	rewrittenName, err := clientB.PutSignedRecordWithAutopay(actorB.Wallet, nameKey,
 		[]byte("owner-b-rewritten"), dkvsindexer.RecordOptions{}, autopayB)
 	require.NoError(t, err)
-	require.Equal(t, uint64(4), rewrittenName.Seq)
-	requireDKVSValue(t, f.Network.Bootstrap, nameKey, []byte("owner-b-rewritten"))
-	requireDKVSValue(t, f.Network.Core, nameKey, []byte("owner-b-rewritten"))
-	requireDKVSValue(t, f.Network.Miner, nameKey, []byte("owner-b-rewritten"))
+	require.Equal(t, uint64(1), rewrittenName.Seq)
+	requireDKVSValue(t, f.Network.Bootstrap, nameKey, rewrittenName.Value)
+	requireDKVSValue(t, f.Network.Core, nameKey, rewrittenName.Value)
+	requireDKVSValue(t, f.Network.Miner, nameKey, rewrittenName.Value)
 
-	// Message entries are not ordinary DKVS SharedAppend records anymore. Drive
-	// the real SDK -> CoreNode MessageService -> AccountBound mailbox path.
-	senderManager, _ := newWalletManagerForNode(t, f.Network.Core, dkvsClientMnemonic)
-	require.NoError(t, senderManager.InitializeAccountManagement("123456"))
-	recipientManager, _ := newWalletManagerForNode(t, f.Network.Core, bootstrapMnemonic)
-	require.NoError(t, recipientManager.InitializeAccountManagement("123456"))
-	require.NoError(t, recipientManager.BindAccountToCurrentCoreNode())
+	// Message entries use MessageService -> AccountBound mailbox, not generic
+	// KV admission. Both wallet accounts were explicitly bound at setup.
 	recipientManager.Start()
 	recipientID := dkvsindexer.AccountID(recipientManager.GetWallet().GetPubKey().SerializeCompressed())
-	direct, err := senderManager.SendAccountDirectMessage(
-		"e2e-message", wallet.AccountMessageKindGeneric, recipientID, []byte("sender-paid-message"),
-	)
+	direct, err := senderManager.SendAccountDirectMessage("e2e-message", wallet.AccountMessageKindGeneric,
+		recipientID, []byte("sender-paid-message"))
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), direct.SenderMsgID)
 	mailKey, err := dkvsindexer.MailMsgKey(recipientID, direct.SenderAccount, direct.MessageID)
 	require.NoError(t, err)
 	requireDKVSValue(t, f.Network.Core, mailKey, mustSerializeDirectForE2E(t, direct))
-	// AccountBound data never mirrors to Bootstrap or selective miners.
 	requireDKVSAbsent(t, f.Network.Bootstrap, mailKey)
 	requireDKVSAbsent(t, f.Network.Miner, mailKey)
-
-	var (
-		messages []*wallet.AccountDirectMessage
-		total    int
-	)
+	var messages []*wallet.AccountDirectMessage
+	var total int
 	require.Eventually(t, func() bool {
 		messages, total, err = recipientManager.ReadAccountDirectMessages(0, 10)
 		return err == nil && total == 1 && len(messages) == 1
-	}, 90*time.Second, time.Second, "periodic managed-prefix sync did not refresh mailbox")
+	}, 30*time.Second, 100*time.Millisecond, "managed current-state subscription did not refresh mailbox")
 	require.Equal(t, 1, total)
 	require.Len(t, messages, 1)
 	require.Equal(t, wallet.AccountMessageKindGeneric, messages[0].Payload.Kind)
 	require.Equal(t, "sender-paid-message", string(messages[0].Payload.Body))
 	require.NoError(t, recipientManager.DeleteMailboxMessage(recipientManager.GetWallet(), mailKey))
 	requireDKVSAbsent(t, f.Network.Core, mailKey)
-
 }
 
 func mustSerializeDirectForE2E(t *testing.T, message *wire.DirectMessage) []byte {
@@ -206,8 +177,7 @@ func subscribeDKVSNodeInternal(t *testing.T, node *testHarness, sub dkvsindexer.
 		return err
 	}
 	if resp.StatusCode != http.StatusOK || result.Code != 0 {
-		return fmt.Errorf("node-internal DKVS subscription failed status=%d code=%d msg=%s",
-			resp.StatusCode, result.Code, result.Msg)
+		return fmt.Errorf("node-internal DKVS subscription failed status=%d code=%d msg=%s", resp.StatusCode, result.Code, result.Msg)
 	}
 	return nil
 }
@@ -215,9 +185,7 @@ func subscribeDKVSNodeInternal(t *testing.T, node *testHarness, sub dkvsindexer.
 func dkvsMinerArgs(t *testing.T) []string {
 	t.Helper()
 	minerKey := keyFromMnemonic(t, minerMnemonic, 0)
-	return []string{
-		"--miningpubkey=" + hex.EncodeToString(minerKey.PubKey().SerializeCompressed()),
-	}
+	return []string{"--miningpubkey=" + hex.EncodeToString(minerKey.PubKey().SerializeCompressed())}
 }
 
 const dkvsClientMnemonic = "inflict resource march liquid pigeon salad ankle miracle badge twelve smart wire"
@@ -244,15 +212,11 @@ func waitForDKVSPeerReady(t *testing.T, network *realSatoshiNet) {
 		bootstrapCount, errBootstrap := network.Bootstrap.Client.GetConnectionCount()
 		coreCount, errCore := network.Core.Client.GetConnectionCount()
 		minerCount, errMiner := network.Miner.Client.GetConnectionCount()
-		if errBootstrap == nil && errCore == nil && errMiner == nil &&
-			bootstrapCount >= 2 && coreCount >= 1 && minerCount >= 1 {
+		if errBootstrap == nil && errCore == nil && errMiner == nil && bootstrapCount >= 2 && coreCount >= 1 && minerCount >= 1 {
 			return
 		}
-		last = strings.Join([]string{
-			connectionCountStatus("bootstrap", bootstrapCount, errBootstrap),
-			connectionCountStatus("core", coreCount, errCore),
-			connectionCountStatus("miner", minerCount, errMiner),
-		}, " ")
+		last = strings.Join([]string{connectionCountStatus("bootstrap", bootstrapCount, errBootstrap),
+			connectionCountStatus("core", coreCount, errCore), connectionCountStatus("miner", minerCount, errMiner)}, " ")
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("satoshinet peers were not ready for dkvs broadcast: %s", last)
@@ -276,17 +240,11 @@ func newDKVSKeyPathActor(t *testing.T, key *btcec.PrivateKey) *dkvsKeyPathActor 
 	require.Equal(t, payer, address)
 	w, _, err := wallet.NewInternalWalletWithPrivKey(key.Serialize(), wallet.GetChainParam())
 	require.NoError(t, err)
-	return &dkvsKeyPathActor{
-		Key:      key,
-		Wallet:   w,
-		PkScript: pkScript,
-		Address:  address,
-	}
+	return &dkvsKeyPathActor{Key: key, Wallet: w, PkScript: pkScript, Address: address}
 }
 
 func splitToDKVSKeyPathActors(t *testing.T, f *templateFixture, tx *wire.MsgTx, asset string,
 	amounts []int64, values []int64, recipients []*dkvsKeyPathActor) []dkvsPrevOut {
-
 	t.Helper()
 	require.Len(t, values, len(amounts))
 	require.Len(t, recipients, len(amounts))
@@ -313,10 +271,7 @@ func collectDKVSPrevOuts(t *testing.T, tx *wire.MsgTx, outputs []*wire.TxOut) []
 	for _, point := range points {
 		require.Equal(t, txHash, point.Hash)
 		require.Less(t, int(point.Index), len(tx.TxOut))
-		prevs = append(prevs, dkvsPrevOut{
-			Point:  point,
-			Output: cloneDKVSTxOut(tx.TxOut[point.Index]),
-		})
+		prevs = append(prevs, dkvsPrevOut{Point: point, Output: cloneDKVSTxOut(tx.TxOut[point.Index])})
 	}
 	return prevs
 }
@@ -325,26 +280,17 @@ func cloneDKVSTxOut(out *wire.TxOut) *wire.TxOut {
 	if out == nil {
 		return nil
 	}
-	assets := out.Assets.Clone()
-	pkScript := append([]byte(nil), out.PkScript...)
-	return wire.NewTxOut(out.Value, assets, pkScript)
+	return wire.NewTxOut(out.Value, out.Assets.Clone(), append([]byte(nil), out.PkScript...))
 }
 
 func buildDKVSKeyPathTemplateDeploy(t *testing.T, actor *dkvsKeyPathActor, templateName string, content []byte,
 	deployer string, nonce uint64, inputs []dkvsPrevOut, funding wire.TxOut) (*wire.MsgTx, contractcommon.ContractAddress) {
-
 	t.Helper()
 	tx, address, err := contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
-		ContractPrefix:  contractcommon.TestnetContractPrefix,
-		Type:            contractcommon.ContractTypeTemplate,
-		SubType:         templateName,
-		Version:         contractcommon.CurrentTemplateVersion,
-		ContractContent: content,
-		Deployer:        deployer,
-		DeployNonce:     nonce,
-		GasLimit:        contractcommon.DeployBaseGas,
-		Funding:         funding,
-		Inputs:          dkvsPrevOutPoints(inputs),
+		ContractPrefix: contractcommon.TestnetContractPrefix, Type: contractcommon.ContractTypeTemplate,
+		SubType: templateName, Version: contractcommon.CurrentTemplateVersion, ContractContent: content,
+		Deployer: deployer, DeployNonce: nonce, GasLimit: contractcommon.DeployBaseGas,
+		Funding: funding, Inputs: dkvsPrevOutPoints(inputs),
 	})
 	require.NoError(t, err)
 	signDKVSKeyPathInputs(t, tx, actor, inputs)
@@ -353,7 +299,6 @@ func buildDKVSKeyPathTemplateDeploy(t *testing.T, actor *dkvsKeyPathActor, templ
 
 func buildDKVSKeyPathTemplateDefaultInvoke(t *testing.T, actor *dkvsKeyPathActor,
 	contract contractcommon.ContractAddress, inputs []dkvsPrevOut, funding wire.TxOut) *wire.MsgTx {
-
 	t.Helper()
 	pkScript, err := contractcommon.ContractPkScript(contract)
 	require.NoError(t, err)
@@ -369,7 +314,6 @@ func buildDKVSKeyPathTemplateDefaultInvoke(t *testing.T, actor *dkvsKeyPathActor
 
 func buildDKVSKeyPathAssetTransfer(t *testing.T, actor *dkvsKeyPathActor, input dkvsPrevOut,
 	asset string, amount int64, value int64, recipient *dkvsKeyPathActor) *wire.MsgTx {
-
 	t.Helper()
 	tx := wire.NewMsgTx(wire.TxVersion)
 	tx.AddTxIn(wire.NewTxIn(&input.Point, nil, nil))
@@ -442,7 +386,7 @@ func requireDKVSValue(t *testing.T, node *testHarness, key string, value []byte)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		record, err := client.GetRecord(key)
-		if err == nil && record != nil && string(record.Value) == string(value) {
+		if err == nil && record != nil && bytes.Equal(record.Value, value) {
 			return
 		}
 		lastErr = err

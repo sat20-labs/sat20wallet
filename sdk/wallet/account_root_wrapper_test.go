@@ -510,30 +510,40 @@ func TestFreshMainnetImportContinuesAfterRootMetadataRouteNotFound(t *testing.T)
 	_chain = "mainnet"
 	defer func() { _chain = oldChain }()
 
-	manager := newAccountManagementAutoTestManager(t)
-	store := &memoryAccountRootWrapperStore{
-		records: make(map[string]*dkvsValue),
-		refreshErr: &HTTPResponseError{
-			StatusCode: http.StatusNotFound,
-			Body:       []byte("404 page not found"),
-		},
-	}
-	_, discoveryErr := manager.recoverAccountManagementFromRootMnemonic(
-		context.Background(), accountRootWrapperTestMnemonic, "password", store,
-		AccountIndexerLocation{Scheme: "https", Host: "dkvs.test", Proxy: "satsnet/mainnet"})
-	if !errors.Is(discoveryErr, ErrRootAccountDiscoveryPending) {
-		t.Fatalf("metadata route 404 error=%v", discoveryErr)
-	}
-	if errors.Is(discoveryErr, ErrRootAccountNotFound) {
-		t.Fatalf("metadata route 404 was treated as a missing root record: %v", discoveryErr)
-	}
+	for _, scenario := range []struct {
+		name   string
+		status int
+	}{
+		{"missing-route", http.StatusNotFound},
+		{"upstream-unavailable", http.StatusBadGateway},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			manager := newAccountManagementAutoTestManager(t)
+			store := &memoryAccountRootWrapperStore{
+				records: make(map[string]*dkvsValue),
+				refreshErr: &HTTPResponseError{
+					StatusCode: scenario.status,
+					Body:       []byte("discovery unavailable"),
+				},
+			}
+			_, discoveryErr := manager.recoverAccountManagementFromRootMnemonic(
+				context.Background(), accountRootWrapperTestMnemonic, "password", store,
+				AccountIndexerLocation{Scheme: "https", Host: "dkvs.test", Proxy: "satsnet/mainnet"})
+			if !errors.Is(discoveryErr, ErrRootAccountDiscoveryPending) {
+				t.Fatalf("unavailable discovery error=%v", discoveryErr)
+			}
+			if errors.Is(discoveryErr, ErrRootAccountNotFound) {
+				t.Fatalf("unavailable discovery was treated as a missing root record: %v", discoveryErr)
+			}
 
-	walletID, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
-	if err != nil || walletID == 0 {
-		t.Fatalf("ordinary import after pending discovery: wallet=%d err=%v", walletID, err)
-	}
-	if manager.GetAccountManagementStatus().Active || len(manager.accountSecret) != 0 {
-		t.Fatal("pending discovery import created an account secret")
+			walletID, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
+			if err != nil || walletID == 0 {
+				t.Fatalf("ordinary import after pending discovery: wallet=%d err=%v", walletID, err)
+			}
+			if manager.GetAccountManagementStatus().Active || len(manager.accountSecret) != 0 {
+				t.Fatal("pending discovery import created an account secret")
+			}
+		})
 	}
 }
 
@@ -543,8 +553,12 @@ func TestRootDiscoveryRecordNotFoundRemainsDistinctFromRouteNotFound(t *testing.
 		t.Fatalf("record-not-found classification=%v", err)
 	}
 	upstream := &HTTPResponseError{StatusCode: http.StatusBadGateway, Body: []byte("upstream failed")}
-	if err := rootDiscoveryError(upstream); !errors.Is(err, upstream) {
-		t.Fatalf("non-404 HTTP error was reclassified: %v", err)
+	if err := rootDiscoveryError(upstream); !errors.Is(err, ErrRootAccountDiscoveryPending) || errors.Is(err, ErrRootAccountNotFound) {
+		t.Fatalf("unavailable upstream authorized a missing root: %v", err)
+	}
+	refused := &HTTPResponseError{StatusCode: http.StatusForbidden, Body: []byte("forbidden")}
+	if err := rootDiscoveryError(refused); !errors.Is(err, refused) {
+		t.Fatalf("definite HTTP refusal was reclassified: %v", err)
 	}
 }
 
@@ -589,7 +603,6 @@ func TestAccountRootDiscoveryRestoresOriginalAccount(t *testing.T) {
 	}
 }
 
-
 func TestAccountRootDiscoveryMnemonicIgnoresCurrentWalletSelection(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
@@ -625,7 +638,6 @@ func TestAccountRootDiscoveryMnemonicIgnoresCurrentWalletSelection(t *testing.T)
 		t.Fatal("reading the root mnemonic changed current wallet selection")
 	}
 }
-
 
 func TestAccountGuardianIdentityIsRootBoundNotSelectionBound(t *testing.T) {
 	oldChain := _chain

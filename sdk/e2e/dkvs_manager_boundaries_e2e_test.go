@@ -19,13 +19,15 @@ func TestRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T) {
 	fixture := newDKVSNoPluginTemplateFixtureWithArgs(t, map[string]int64{}, nil, nil, dkvsMinerArgs(t))
 	waitForDKVSPeerReady(t, fixture.Network)
 
-	primary, primaryLocation := newWalletManagerForNode(t, fixture.Network.Bootstrap, dkvsClientMnemonic)
+	primary, primaryLocation := newWalletManagerForNode(t, fixture.Network.Core, dkvsClientMnemonic)
+	require.NoError(t, primary.InitializeAccountManagement("123456"))
+	require.NoError(t, primary.BindAccountToCurrentCoreNode())
 	authorization, err := primary.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
 	require.NoError(t, err)
 	require.Equal(t, wallet.AccountStorageTemporary, authorization.Mode)
 	require.Greater(t, authorization.RecordOptions.TTL, uint64(0))
 
-	// Boundary checks must fail before any state-changing network operation.
+	// Boundary checks must fail before any recovery-state write.
 	_, err = primary.ConfirmAccountStorage("unknown", 0)
 	require.Error(t, err)
 	_, err = primary.ConfirmAccountStorage(wallet.AccountStoragePaid, 99)
@@ -36,7 +38,6 @@ func TestRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T) {
 	accountID := dkvsindexer.AccountID(root.GetPubKey().SerializeCompressed())
 	repository, err := primary.NewAccountRepositoryForStorage(*authorization)
 	require.NoError(t, err)
-	require.NoError(t, primary.InitializeAccountManagement("123456"))
 
 	questions := e2eKnowledgeQuestions()
 	backup := account.Backup{Version: account.Version, Wallets: []account.WalletBackup{{
@@ -60,14 +61,14 @@ func TestRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T) {
 
 	values := recoveryPackageValues(t, root.GetPubKey().SerializeCompressed(), pkg)
 	for key, expected := range values {
-		requireDKVSValue(t, fixture.Network.Bootstrap, key, expected)
-		requireDKVSAbsent(t, fixture.Network.Core, key)
+		requireDKVSValue(t, fixture.Network.Core, key, expected)
+		requireDKVSAbsent(t, fixture.Network.Bootstrap, key)
 		requireDKVSAbsent(t, fixture.Network.Miner, key)
 	}
 
-	// A fresh SDK manager connected to the same endpoint must rebuild its local
-	// replica and recover the complete atomic package.
-	sameEndpoint, _ := newWalletManagerForNode(t, fixture.Network.Bootstrap, dkvsClientMnemonic)
+	// A fresh SDK manager connected to the bound CoreNode must reconstruct the
+	// confirmed replica and recover the complete atomic package.
+	sameEndpoint, _ := newWalletManagerForNode(t, fixture.Network.Core, dkvsClientMnemonic)
 	loaded, err := sameEndpoint.LoadAccountRecoveryPackage(primaryLocation, pkg.Envelope.Locator)
 	require.NoError(t, err)
 	dkvsShare, err := account.RecoverDKVSShare(loaded.DKVSShareCapsule, loaded.KnowledgeBundle,
@@ -84,10 +85,9 @@ func TestRealSatoshiNetDKVSManagerFreeLocalIsolationAndRecovery(t *testing.T) {
 			{QuestionID: "note", Answer: "also wrong"}})
 	require.Error(t, err)
 
-	// The same account and locator on a different endpoint must not expose the
-	// endpoint-local FREE_LOCAL package.
-	otherEndpoint, coreLocation := newWalletManagerForNode(t, fixture.Network.Core, dkvsClientMnemonic)
-	_, err = otherEndpoint.LoadAccountRecoveryPackage(coreLocation, pkg.Envelope.Locator)
+	// Identity and locator do not make endpoint-local data available on a peer.
+	otherEndpoint, otherLocation := newWalletManagerForNode(t, fixture.Network.Bootstrap, dkvsClientMnemonic)
+	_, err = otherEndpoint.LoadAccountRecoveryPackage(otherLocation, pkg.Envelope.Locator)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, wallet.ErrDKVSRecordNotFound) ||
 		errors.Is(err, wallet.ErrDKVSPathNotSynced), "unexpected cross-endpoint error: %v", err)
@@ -120,6 +120,17 @@ func newWalletManagerForNode(t *testing.T, node *testHarness, mnemonic string) (
 		require.NoError(t, err)
 	}
 	return manager, location
+}
+
+// Positive business scenarios explicitly bind; negative admission tests keep
+// using newWalletManagerForNode so unbound callers are not silently authorized.
+func bindDKVSReviewWallet(t *testing.T, node *testHarness, mnemonic string) *wallet.Manager {
+	t.Helper()
+	require.Equal(t, "core", node.role)
+	manager, _ := newWalletManagerForNode(t, node, mnemonic)
+	require.NoError(t, manager.InitializeAccountManagement("123456"))
+	require.NoError(t, manager.BindAccountToCurrentCoreNode())
+	return manager
 }
 
 func e2eKnowledgeQuestions() []account.QuestionAnswer {

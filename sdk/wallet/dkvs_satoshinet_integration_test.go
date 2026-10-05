@@ -26,11 +26,9 @@ func newSatoshiNetDKVSTestTransport() *satoshinetDKVSTestTransport {
 	db := newMemoryKVDB()
 	transport := &satoshinetDKVSTestTransport{height: 1}
 	indexer := dkvsindexer.New(db, dkvsindexer.Config{
-		EndpointID:     "test-core-node",
-		AllowFreeLocal: true,
+		EndpointID: "test-core-node", AllowFreeLocal: true,
 		FreeLocalCache: dkvsindexer.FreeLocalCachePolicy{
-			Enabled: true, MaxTTL: 1000,
-			MaxRecordsPerSigner: 100, MaxBytesPerSigner: 1 << 20,
+			Enabled: true, MaxTTL: 1000, MaxRecordsPerSigner: 100, MaxBytesPerSigner: 1 << 20,
 			MaxTotalRecords: 10000, MaxTotalBytes: 64 << 20,
 		},
 		CurrentHeight: func() uint64 { return transport.height },
@@ -38,30 +36,25 @@ func newSatoshiNetDKVSTestTransport() *satoshinetDKVSTestTransport {
 	transport.indexer = indexer
 	return transport
 }
-
 func (t *satoshinetDKVSTestTransport) DKVSClientConfig() (*dkvsindexer.ClientConfig, error) {
 	config := t.indexer.ClientConfig()
 	return &config, nil
 }
-
 func (t *satoshinetDKVSTestTransport) SendGetRequest(url *URL) ([]byte, error) {
 	if strings.HasSuffix(url.Path, "/btc/block/bestblockheight") {
 		return rgb11DKVSResponse(0, "ok", int64(t.height), "", 0)
 	}
 	return nil, fmt.Errorf("unexpected generic GET %s", url.Path)
 }
-
 func (t *satoshinetDKVSTestTransport) SendPostRequest(url *URL, _ []byte) ([]byte, error) {
 	return nil, fmt.Errorf("unexpected generic POST %s", url.Path)
 }
-
 func satoshinetTestResponse(data interface{}, err error) ([]byte, error) {
 	if err == nil {
 		return rgb11DKVSResponse(0, "ok", data, "", 0)
 	}
 	return rgb11DKVSResponse(-1, err.Error(), data, string(dkvsindexer.ErrorCodeOf(err)), 0)
 }
-
 func (t *satoshinetDKVSTestTransport) SendDKVSGet(path string, query map[string]string) ([]byte, error) {
 	switch path {
 	case "/v3/dkvs/config":
@@ -72,10 +65,7 @@ func (t *satoshinetDKVSTestTransport) SendDKVSGet(path string, query map[string]
 		if err != nil {
 			return satoshinetTestResponse(nil, err)
 		}
-		return json.Marshal(map[string]interface{}{
-			"code": 0, "msg": "ok", "data": record,
-			"etag": dkvsindexer.RecordHash(record).String(),
-		})
+		return json.Marshal(map[string]interface{}{"code": 0, "msg": "ok", "data": record, "etag": dkvsindexer.RecordHash(record).String()})
 	case "/v3/dkvs/key-state":
 		state, err := t.indexer.GetKeyState(query["key"])
 		if err != nil {
@@ -87,8 +77,42 @@ func (t *satoshinetDKVSTestTransport) SendDKVSGet(path string, query map[string]
 	}
 }
 
+// Dispatch only: the real Indexer performs generation filtering, paging,
+// current-state roots and notification waits. Binding admission has separate
+// production HTTP E2Es; this unit transport supplies a fixture write context.
+func (t *satoshinetDKVSTestTransport) sendActive(ctx context.Context, path string, body []byte) ([]byte, error) {
+	if path == "/v3/dkvs/active/watch" {
+		var request dkvsindexer.ActiveWatchRequest
+		if err := json.Unmarshal(body, &request); err != nil {
+			return nil, err
+		}
+		result, err := t.indexer.WatchActive(ctx, request)
+		// Match a canceled HTTP request: the caller receives the context
+		// error, rather than a JSON application error from the handler.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return satoshinetTestResponse(result, err)
+	}
+	var request dkvsindexer.ActiveSyncRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		return nil, err
+	}
+	if request.Full {
+		t.snapshotCalls++
+	} else {
+		t.deltaCalls++
+	}
+	result, err := t.indexer.ActiveSyncPage(ctx, request)
+	if result != nil && !request.Full {
+		t.lastDeltaRecords = len(result.Records)
+	}
+	return satoshinetTestResponse(result, err)
+}
 func (t *satoshinetDKVSTestTransport) SendDKVSPost(path string, body []byte) ([]byte, error) {
 	switch path {
+	case "/v3/dkvs/active/sync", "/v3/dkvs/active/watch":
+		return t.sendActive(context.Background(), path, body)
 	case "/v3/dkvs/records/batch-cas":
 		var request DKVSBatchCASRequest
 		if err := json.Unmarshal(body, &request); err != nil {
@@ -109,44 +133,7 @@ func (t *satoshinetDKVSTestTransport) SendDKVSPost(path string, body []byte) ([]
 		if err := t.indexer.ValidateBatchEndpointID(mutations, request.EndpointID); err != nil {
 			return satoshinetTestResponse(nil, err)
 		}
-		result, err := t.indexer.PutLocalBatchCASResultWithOptions(mutations, dkvsindexer.BatchCASOptions{
-			EndpointID: request.EndpointID, RequestID: request.RequestID,
-		})
-		return satoshinetTestResponse(result, err)
-	case "/v3/dkvs/prefixes/snapshot":
-		t.snapshotCalls++
-		var request struct {
-			Prefix string `json:"prefix"`
-		}
-		if err := json.Unmarshal(body, &request); err != nil {
-			return nil, err
-		}
-		result, err := t.indexer.PrefixSnapshot(request.Prefix)
-		return satoshinetTestResponse(result, err)
-	case "/v3/dkvs/prefixes/status":
-		var request struct {
-			EndpointID string                         `json:"endpoint_id"`
-			Prefixes   []dkvsindexer.PrefixGeneration `json:"prefixes"`
-		}
-		if err := json.Unmarshal(body, &request); err != nil {
-			return nil, err
-		}
-		result, err := t.indexer.PrefixStatus(request.EndpointID, request.Prefixes)
-		return satoshinetTestResponse(result, err)
-	case "/v3/dkvs/prefixes/delta":
-		t.deltaCalls++
-		var request struct {
-			Prefix          string `json:"prefix"`
-			EndpointID      string `json:"endpoint_id"`
-			AfterGeneration uint64 `json:"after_generation"`
-		}
-		if err := json.Unmarshal(body, &request); err != nil {
-			return nil, err
-		}
-		result, err := t.indexer.PrefixDelta(request.Prefix, request.EndpointID, request.AfterGeneration)
-		if result != nil {
-			t.lastDeltaRecords = len(result.Records)
-		}
+		result, err := t.indexer.PutLocalBatchCASResultWithOptions(mutations, dkvsindexer.BatchCASOptions{EndpointID: request.EndpointID, RequestID: request.RequestID})
 		return satoshinetTestResponse(result, err)
 	case "/v3/dkvs/prefixes/read":
 		var request struct {
@@ -161,42 +148,32 @@ func (t *satoshinetDKVSTestTransport) SendDKVSPost(path string, body []byte) ([]
 		return nil, fmt.Errorf("unexpected DKVS POST %s", path)
 	}
 }
-
 func (t *satoshinetDKVSTestTransport) SendGetRequestContext(ctx context.Context, url *URL) ([]byte, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-		return t.SendGetRequest(url)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	return t.SendGetRequest(url)
 }
-
-func (t *satoshinetDKVSTestTransport) SendDKVSGetContext(ctx context.Context, path string,
-	query map[string]string) ([]byte, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-		return t.SendDKVSGet(path, query)
+func (t *satoshinetDKVSTestTransport) SendDKVSGetContext(ctx context.Context, path string, query map[string]string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	return t.SendDKVSGet(path, query)
 }
-
 func (t *satoshinetDKVSTestTransport) SendDKVSPostContext(ctx context.Context, path string, body []byte) ([]byte, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-		return t.SendDKVSPost(path, body)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	if path == "/v3/dkvs/active/sync" || path == "/v3/dkvs/active/watch" {
+		return t.sendActive(ctx, path, body)
+	}
+	return t.SendDKVSPost(path, body)
 }
-
 func (t *satoshinetDKVSTestTransport) SendPostRequestContext(ctx context.Context, url *URL, body []byte) ([]byte, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-		return t.SendPostRequest(url, body)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	return t.SendPostRequest(url, body)
 }
 
 func TestDKVSFinalWalletToSatoshiNetIntegration(t *testing.T) {
@@ -240,6 +217,44 @@ func TestDKVSFinalWalletToSatoshiNetIntegration(t *testing.T) {
 	}
 }
 
+func TestDKVSFreeLocalRenewalWalletToSatoshiNetIntegration(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newRGB11MultiDeviceManager(t, priv, 901)
+	transport := newSatoshiNetDKVSTestTransport()
+	transport.height = 100
+	configureRGB11DKVSTestManager(manager, transport)
+	client, err := manager.ensureDKVSManager().primaryClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := accountTestKey(t, manager, "wallet/renew-integration")
+	original, err := client.PutSignedRecordFreeLocal(manager.wallet, key, []byte("lease"), dkvsindexer.RecordOptions{IssueHeight: 100, TTL: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldExpiry := dkvsindexer.RecordExpiryHeight(original)
+	transport.height = 110
+	renewed, err := client.RenewPersonalRecord(manager.wallet, "wallet/renew-integration", dkvsindexer.RecordOptions{IssueHeight: 110, TTL: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.Seq != original.Seq+1 || dkvsindexer.RecordExpiryHeight(renewed) <= oldExpiry {
+		t.Fatalf("renewed record=%+v old_expiry=%d", renewed, oldExpiry)
+	}
+	transport.height = oldExpiry + 1
+	actual, err := client.GetRecordDirect(key)
+	if err != nil || dkvsindexer.RecordHash(actual) != dkvsindexer.RecordHash(renewed) {
+		t.Fatalf("renewed did not survive old expiry: actual=%+v err=%v", actual, err)
+	}
+	transport.height = dkvsindexer.RecordExpiryHeight(renewed)
+	if _, err := client.GetRecordDirect(key); !errors.Is(err, dkvsindexer.ErrRecordNotFound) {
+		t.Fatalf("renewed active at new expiry: %v", err)
+	}
+}
+
 func TestDKVSIncrementalSyncLateAcceptedRecordEndToEnd(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -260,14 +275,13 @@ func TestDKVSIncrementalSyncLateAcceptedRecordEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	makeRecord := func(key, value string) *dkvsindexer.Record {
-		record, signErr := newDKVSAccountSignedRecordWithFreeLocal(manager.wallet, key, []byte(value),
-			dkvsindexer.RecordOptions{Seq: 1, IssueHeight: 100, TTL: 1000})
+		record, signErr := newDKVSAccountSignedRecordWithFreeLocal(manager.wallet, key, []byte(value), dkvsindexer.RecordOptions{Seq: 1, IssueHeight: 100, TTL: 1000})
 		if signErr != nil {
 			t.Fatal(signErr)
 		}
 		return record
 	}
-	late := makeRecord(lateKey, "late") // signed before the client synchronizes
+	late := makeRecord(lateKey, "late")
 	if _, err := client.PutRecord(makeRecord(firstKey, "first")); err != nil {
 		t.Fatal(err)
 	}
@@ -279,22 +293,22 @@ func TestDKVSIncrementalSyncLateAcceptedRecordEndToEnd(t *testing.T) {
 	}
 	initialSnapshots := transport.snapshotCalls
 	transport.height = 105
-	seed := NewSatsNetDKVSClient("http", "dkvs.test", "testnet", transport)
-	if _, err := seed.PutRecord(late); err != nil {
+	// This fixture models replication of an old, still valid record. The
+	// wallet RPC height window is separately enforced by the real HTTP tests.
+	if _, err := transport.indexer.PutLocalCAS(late, dkvsindexer.WritePrecondition{ExpectAbsent: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := manager.syncDKVSOnce(); err != nil {
 		t.Fatal(err)
 	}
 	if transport.snapshotCalls != initialSnapshots || transport.deltaCalls == 0 || transport.lastDeltaRecords != 1 {
-		t.Fatalf("sync used snapshots=%d initial=%d deltas=%d delta records=%d",
-			transport.snapshotCalls, initialSnapshots, transport.deltaCalls, transport.lastDeltaRecords)
+		t.Fatalf("snapshots=%d initial=%d deltas=%d records=%d", transport.snapshotCalls, initialSnapshots, transport.deltaCalls, transport.lastDeltaRecords)
 	}
 	store := &dkvsStore{manager: manager.dkvs, client: client}
 	for key, want := range map[string]string{firstKey: "first", lateKey: "late"} {
-		value, getErr := store.Get(key)
-		if getErr != nil || string(value.Value) != want {
-			t.Fatalf("key=%s value=%+v err=%v", key, value, getErr)
+		value, err := store.Get(key)
+		if err != nil || string(value.Value) != want {
+			t.Fatalf("key=%s value=%+v err=%v", key, value, err)
 		}
 	}
 }
@@ -309,44 +323,33 @@ func TestDKVSFinalSatoshiNetRejectsMailboxDeleteSignedBySender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	message := &swire.DKVSRecord{
-		Version: dkvsindexer.Version, Key: key, Value: []byte("ciphertext"),
-		Seq: 1, IssueHeight: 1, TTL: 100,
-	}
-	message.FeeProof, err = dkvsindexer.EncodeFeeProof(&dkvsindexer.FeeProof{
-		Mode: dkvsindexer.FeeModeFreeLocal,
-	})
+	message := &swire.DKVSRecord{Version: dkvsindexer.Version, Key: key, Value: []byte("ciphertext"), Seq: 1, IssueHeight: 1, TTL: 100}
+	message.FeeProof, err = dkvsindexer.EncodeFeeProof(&dkvsindexer.FeeProof{Mode: dkvsindexer.FeeModeFreeLocal})
 	if err != nil {
 		t.Fatal(err)
 	}
 	parsed, err := dkvsindexer.ParseKey(message.Key)
 	if err != nil || parsed.Namespace != "mail" || len(parsed.Segments) != 4 {
-		t.Fatalf("invalid mailbox fixture key: parsed=%+v err=%v", parsed, err)
+		t.Fatalf("mailbox fixture: parsed=%+v err=%v", parsed, err)
 	}
 	proof, err := dkvsindexer.ParseFeeProof(message.FeeProof)
 	if err != nil || proof.Mode != dkvsindexer.FeeModeFreeLocal {
-		t.Fatalf("invalid mailbox fixture fee proof: proof=%+v err=%v", proof, err)
+		t.Fatalf("mailbox proof=%+v err=%v", proof, err)
 	}
 	if dkvsindexer.IsExpired(message, 1) {
-		t.Fatal("mailbox fixture is already expired")
+		t.Fatal("mailbox fixture already expired")
 	}
 	if _, err := transport.indexer.PutInternalMailbox(message); err != nil {
-		t.Fatalf("internal mailbox append rejected: %v", err)
+		t.Fatalf("internal append: %v", err)
 	}
-
-	// A mailbox tombstone is owned by the recipient account. Signing it with
-	// the original sender must fail against the recipient-derived account key.
-	tombstone, err := dkvsindexer.NewAccountRecord(key, nil, dkvsindexer.RecordOptions{
-		Seq: 2, IssueHeight: 1, TTL: 100, Flags: dkvsindexer.FlagTombstone,
-	})
+	command, err := dkvsindexer.DeleteCommand(message, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SignDKVSRecord(dkvsTestWalletFromPriv(t, sender), tombstone); err != nil {
+	if err := SignDKVSRecord(dkvsTestWalletFromPriv(t, sender), command); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := transport.indexer.DeleteInternalMailbox(tombstone); err == nil ||
-		(!errors.Is(err, dkvsindexer.ErrInvalidSignature) && !errors.Is(err, dkvsindexer.ErrPermissionDenied)) {
-		t.Fatalf("sender-signed mailbox delete err=%v", err)
+	if _, err := transport.indexer.DeleteInternalMailbox(command); err == nil || (!errors.Is(err, dkvsindexer.ErrInvalidSignature) && !errors.Is(err, dkvsindexer.ErrPermissionDenied)) {
+		t.Fatalf("sender-signed delete err=%v", err)
 	}
 }

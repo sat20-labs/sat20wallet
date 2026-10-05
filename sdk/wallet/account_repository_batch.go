@@ -59,7 +59,9 @@ func (r *AccountDKVSRepository) LoadRecoveryPackage(_ context.Context,
 	if err != nil {
 		return nil, err
 	}
-	record, err := r.store.Get(key)
+	// Recovery reads verify the selected source, also immediately after a
+	// publication. The local active replica may not have caught up with its ACK.
+	record, err := r.store.GetAuthoritative(key)
 	if err != nil {
 		return nil, err
 	}

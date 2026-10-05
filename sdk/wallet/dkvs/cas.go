@@ -17,9 +17,10 @@ type CASMutationRequest struct {
 }
 
 type BatchCASRequest struct {
-	RequestID  string               `json:"request_id,omitempty"`
-	Mutations  []CASMutationRequest `json:"mutations"`
-	EndpointID string               `json:"endpoint_id,omitempty"`
+	RequestID     string                                `json:"request_id,omitempty"`
+	Mutations     []CASMutationRequest                  `json:"mutations"`
+	EndpointID    string                                `json:"endpoint_id,omitempty"`
+	Authorization *dkvsindexer.WalletWriteAuthorization `json:"authorization,omitempty"`
 }
 
 type BatchCASResult struct {
@@ -36,25 +37,19 @@ func MutationRequest(mutation dkvsindexer.CASMutation) (CASMutationRequest, erro
 	if mutation.Record == nil || !mutation.Precondition.Valid() {
 		return CASMutationRequest{}, dkvsindexer.ErrInvalidRecord
 	}
-	request := CASMutationRequest{
-		Record: mutation.Record, ExpectAbsent: mutation.Precondition.ExpectAbsent,
-	}
+	request := CASMutationRequest{Record: mutation.Record, ExpectAbsent: mutation.Precondition.ExpectAbsent}
 	if mutation.Precondition.ExpectedHash != nil {
 		request.ExpectedETag = mutation.Precondition.ExpectedHash.String()
 	}
 	return request, nil
 }
 
-func BuildBatchCASRequest(mutations []dkvsindexer.CASMutation,
-	endpointID, requestID string) (BatchCASRequest, error) {
-
+func BuildBatchCASRequest(mutations []dkvsindexer.CASMutation, endpointID, requestID string) (BatchCASRequest, error) {
 	if len(mutations) == 0 || len(mutations) > dkvsindexer.MaxBatchCASMutations {
 		return BatchCASRequest{}, dkvsindexer.ErrInvalidRecord
 	}
-	request := BatchCASRequest{
-		RequestID: strings.TrimSpace(requestID), EndpointID: strings.TrimSpace(endpointID),
-		Mutations: make([]CASMutationRequest, 0, len(mutations)),
-	}
+	request := BatchCASRequest{RequestID: strings.TrimSpace(requestID), EndpointID: strings.TrimSpace(endpointID),
+		Mutations: make([]CASMutationRequest, 0, len(mutations))}
 	for _, mutation := range mutations {
 		item, err := MutationRequest(mutation)
 		if err != nil {
@@ -82,9 +77,7 @@ func VerifyWriteEcho(request, echoed *swire.DKVSRecord, hashText string) (*swire
 	return echoed, nil
 }
 
-func VerifyWriteResult(mutations []dkvsindexer.CASMutation, requestID string,
-	result *dkvsindexer.WriteResult) error {
-
+func VerifyWriteResult(mutations []dkvsindexer.CASMutation, requestID string, result *dkvsindexer.WriteResult) error {
 	if result == nil {
 		return fmt.Errorf("DKVS batch response is nil: %w", dkvsindexer.ErrInvalidRecord)
 	}
@@ -92,17 +85,14 @@ func VerifyWriteResult(mutations []dkvsindexer.CASMutation, requestID string,
 		return dkvsindexer.ErrInvalidRecord
 	}
 	if result.Applied != 0 && result.Applied != len(mutations) {
-		return fmt.Errorf("DKVS batch applied=%d mutations=%d: %w",
-			result.Applied, len(mutations), dkvsindexer.ErrInvalidRecord)
+		return fmt.Errorf("DKVS batch applied=%d mutations=%d: %w", result.Applied, len(mutations), dkvsindexer.ErrInvalidRecord)
 	}
 	if len(result.Records) != len(mutations) || len(result.Hashes) != len(mutations) {
-		return fmt.Errorf("DKVS batch echo records=%d hashes=%d mutations=%d: %w",
-			len(result.Records), len(result.Hashes), len(mutations), dkvsindexer.ErrInvalidRecord)
+		return fmt.Errorf("DKVS batch echo records=%d hashes=%d mutations=%d: %w", len(result.Records), len(result.Hashes), len(mutations), dkvsindexer.ErrInvalidRecord)
 	}
 	for index, mutation := range mutations {
 		if _, err := VerifyWriteEcho(mutation.Record, result.Records[index], result.Hashes[index]); err != nil {
-			return fmt.Errorf("verify DKVS batch echo index=%d key=%s: %w",
-				index, mutation.Record.Key, err)
+			return fmt.Errorf("verify DKVS batch echo index=%d key=%s: %w", index, mutation.Record.Key, err)
 		}
 	}
 	return nil
@@ -112,12 +102,8 @@ func BatchResult(result *dkvsindexer.WriteResult) *BatchCASResult {
 	if result == nil {
 		return nil
 	}
-	return &BatchCASResult{
-		Applied: result.Applied, Records: result.Records, Hashes: result.Hashes,
-		PrefixStates: result.PrefixStates,
-		ViewHeight:   result.ViewHeight, EndpointID: result.EndpointID,
-		RequestID: result.RequestID,
-	}
+	return &BatchCASResult{Applied: result.Applied, Records: result.Records, Hashes: result.Hashes,
+		PrefixStates: result.PrefixStates, ViewHeight: result.ViewHeight, EndpointID: result.EndpointID, RequestID: result.RequestID}
 }
 
 func IsErrorCode(err error, code dkvsindexer.ErrorCode) bool {

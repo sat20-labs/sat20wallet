@@ -49,10 +49,13 @@ const (
 )
 
 var (
-	satoshinetBuildMu       sync.Mutex
-	satoshinetTestArtifacts satoshinetArtifacts
-	nextHarnessPort         uint32 = initialHarnessPort()
-	satoshinetTestConf             = `env: test
+	satoshinetBuildMu        sync.Mutex
+	satoshinetTestArtifacts  satoshinetArtifacts
+	satoshinetNodeDirsMu     sync.Mutex
+	activeSatoshiNetNodeDirs = make(map[string]bool)
+	satoshinetRuntimeLock    *os.File
+	nextHarnessPort          uint32 = initialHarnessPort()
+	satoshinetTestConf              = `env: test
 chain: testnet
 mode: %s
 log: info
@@ -387,7 +390,7 @@ func startSatoshiNetNodeWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, role, mnem
 	nodeKey := keyFromMnemonic(t, mnemonic, 0)
 	nodePubKey := hex.EncodeToString(nodeKey.PubKey().SerializeCompressed())
 	p2pAddr, rpcAddr, stpAddr, managementAddr := nextNodeAddresses(t)
-	nodeDir := t.TempDir()
+	nodeDir := prepareSatoshiNetNodeDir(t, satoshinetBuildArtifacts(t), role)
 	dataDir := filepath.Join(nodeDir, "data")
 	logDir := filepath.Join(nodeDir, "logs")
 	args := []string{
@@ -448,6 +451,7 @@ type testHarness struct {
 	role           string
 	nodePubKey     string
 	logFile        string
+	extraLogFiles  []*os.File
 }
 
 func newTestHarness(t *testing.T, exe, nodeDir, p2pAddr, rpcAddr string, args, env []string) *testHarness {
@@ -459,6 +463,9 @@ func newTestHarness(t *testing.T, exe, nodeDir, p2pAddr, rpcAddr string, args, e
 
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = nodeDir
+	if satoshinetRuntimeLock != nil {
+		cmd.ExtraFiles = []*os.File{satoshinetRuntimeLock}
+	}
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -570,13 +577,46 @@ func (h *testHarness) LogFile() string {
 func (h *testHarness) TearDown() error {
 	if h.Client != nil {
 		h.Client.Shutdown()
+		h.Client = nil
 	}
-	if h.cmd == nil || h.cmd.Process == nil {
-		return nil
+	if h.cmd != nil && h.cmd.Process != nil {
+		_ = h.cmd.Process.Kill()
+		_, _ = h.cmd.Process.Wait()
 	}
-	_ = h.cmd.Process.Kill()
-	_, _ = h.cmd.Process.Wait()
+	h.cmd = nil
+	for _, file := range h.extraLogFiles {
+		if file != nil {
+			_ = file.Close()
+		}
+	}
+	h.extraLogFiles = nil
 	return nil
+}
+
+func restartTestHarness(t *testing.T, h *testHarness) {
+	t.Helper()
+	require.NotNil(t, h)
+	require.NotNil(t, h.cmd)
+	exe := h.cmd.Path
+	args := append([]string(nil), h.cmd.Args[1:]...)
+	env := append([]string(nil), h.cmd.Env...)
+	dir := h.cmd.Dir
+	require.NoError(t, h.TearDown())
+
+	logFile, err := os.OpenFile(h.logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	require.NoError(t, err)
+	cmd := exec.Command(exe, args...)
+	cmd.Dir = dir
+	if satoshinetRuntimeLock != nil {
+		cmd.ExtraFiles = []*os.File{satoshinetRuntimeLock}
+	}
+	cmd.Env = env
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	require.NoError(t, cmd.Start())
+	h.cmd = cmd
+	h.extraLogFiles = append(h.extraLogFiles, logFile)
+	h.Client = waitForRPCClient(t, h.rpcAddr)
 }
 
 func nextNodeAddresses(t *testing.T) (string, string, string, string) {
@@ -724,21 +764,55 @@ func satoshinetSTPMode(role string) string {
 	}
 }
 
+// Each live node owns one stable slot. Its cleanup runs after newTestHarness
+// has stopped and waited for the node, so the next case can safely reset state.
+// Restarts do not call this function and therefore retain their configuration
+// and databases. The two build variants have separate artifact roots.
+func prepareSatoshiNetNodeDir(t *testing.T, artifacts satoshinetArtifacts, role string) string {
+	t.Helper()
+	require.Contains(t, []string{"bootstrap", "core", "miner"}, role)
+	executable, plugin := artifacts.coreExecutable, artifacts.corePlugin
+	if role == "miner" {
+		executable, plugin = artifacts.minerExecutable, artifacts.minerPlugin
+	}
+	satoshinetNodeDirsMu.Lock()
+	defer satoshinetNodeDirsMu.Unlock()
+	var nodeDir string
+	for slot := 1; ; slot++ {
+		nodeDir = filepath.Join(filepath.Dir(executable), "nodes", fmt.Sprintf("%s-%d", role, slot))
+		if !activeSatoshiNetNodeDirs[nodeDir] {
+			activeSatoshiNetNodeDirs[nodeDir] = true
+			break
+		}
+	}
+	t.Cleanup(func() {
+		satoshinetNodeDirsMu.Lock()
+		delete(activeSatoshiNetNodeDirs, nodeDir)
+		satoshinetNodeDirsMu.Unlock()
+	})
+	require.NoError(t, os.MkdirAll(nodeDir, 0o700))
+	entries, err := os.ReadDir(nodeDir)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if entry.Name() == filepath.Base(executable) || entry.Name() == filepath.Base(plugin) {
+			continue
+		}
+		require.NoError(t, os.RemoveAll(filepath.Join(nodeDir, entry.Name())))
+	}
+	copySatoshiNetRuntimeFile(t, executable, filepath.Join(nodeDir, filepath.Base(executable)))
+	copySatoshiNetRuntimeFile(t, plugin, filepath.Join(nodeDir, filepath.Base(plugin)))
+	return nodeDir
+}
+
 func stageSatoshiNetNodeRuntime(t *testing.T, role, mnemonic, l1IndexerHost, l2IndexerHost, rpcHost, managementHost, nodeDir string) string {
 	t.Helper()
 	artifacts := satoshinetBuildArtifacts(t)
 	executable := artifacts.coreExecutable
-	plugin := artifacts.corePlugin
-	pluginName := "stpd.so"
 	if role == "miner" {
 		executable = artifacts.minerExecutable
-		plugin = artifacts.minerPlugin
-		pluginName = "wallet.so"
 	}
 
 	stagedExecutable := filepath.Join(nodeDir, filepath.Base(executable))
-	copySatoshiNetRuntimeFile(t, executable, stagedExecutable)
-	copySatoshiNetRuntimeFile(t, plugin, filepath.Join(nodeDir, pluginName))
 	stageSatoshiNetNodeConfig(t, nodeDir)
 	require.NoError(t, os.WriteFile(filepath.Join(nodeDir, "conf.yaml"), []byte(fmt.Sprintf(satoshinetTestConf, satoshinetSTPMode(role), l1IndexerHost, l2IndexerHost, rpcHost, managementHost, mnemonic)), 0o600))
 	return stagedExecutable
@@ -761,11 +835,37 @@ func copySatoshiNetRuntimeFile(t *testing.T, source, destination string) {
 
 	info, err := in.Stat()
 	require.NoError(t, err)
-	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+	// Preserve the verified file's inode and timestamps when the build has not
+	// changed. Re-copying identical binaries triggers macOS verification again.
+	existing, err := os.Open(destination)
+	if err == nil {
+		defer existing.Close()
+		previous, err := existing.Stat()
+		require.NoError(t, err)
+		if previous.Size() == info.Size() && previous.Mode().Perm() == info.Mode().Perm() {
+			sourceHash, destinationHash := sha256.New(), sha256.New()
+			_, err = io.Copy(sourceHash, in)
+			require.NoError(t, err)
+			_, err = io.Copy(destinationHash, existing)
+			require.NoError(t, err)
+			if bytes.Equal(sourceHash.Sum(nil), destinationHash.Sum(nil)) {
+				return
+			}
+			_, err = in.Seek(0, io.SeekStart)
+			require.NoError(t, err)
+		}
+	} else {
+		require.True(t, os.IsNotExist(err), "open runtime destination: %v", err)
+	}
+	out, err := os.CreateTemp(filepath.Dir(destination), ".runtime-*")
 	require.NoError(t, err)
+	defer os.Remove(out.Name())
+	defer out.Close()
+	require.NoError(t, out.Chmod(info.Mode().Perm()))
 	_, err = io.Copy(out, in)
 	require.NoError(t, err)
 	require.NoError(t, out.Close())
+	require.NoError(t, os.Rename(out.Name(), destination))
 }
 
 func stageSatoshiNetNodeConfig(t *testing.T, nodeDir string) {

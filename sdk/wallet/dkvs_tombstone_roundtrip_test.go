@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -10,86 +11,175 @@ import (
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
-// Real server index + SDK replica. Structural fee policy isolates deletion;
-// TestSDKCoreModulesE2E separately verifies real AUTOPAY settlement.
-func TestDKVSTombstoneRoundTrip(t *testing.T) {
+// Real server index and SDK replica, with current-state deletion semantics.
+// Network AUTOPAY settlement is covered separately by the SDK E2E package.
+func TestDKVSPhysicalDeleteRoundTrip(t *testing.T) {
 	serverDB := indexerdb.NewKVDB(t.TempDir())
+	if serverDB == nil {
+		t.Fatal("create server database")
+	}
 	t.Cleanup(func() { _ = serverDB.Close() })
 	server := dkvsindexer.New(serverDB, dkvsindexer.Config{
-		EndpointID: "tombstone-regression", AllowFreeLocal: true,
-		FeeVerifier: dkvsindexer.JSONFeeVerifier{AllowFreeLocal: true},
+		EndpointID: "physical-delete-regression", AllowFreeLocal: true,
+		FeeVerifier:   dkvsindexer.JSONFeeVerifier{AllowFreeLocal: true},
 		CurrentHeight: func() uint64 { return 100 },
 	})
 	key, err := btcec.NewPrivateKey()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	signer := dkvsTestWalletFromPriv(t, key)
 	prefix, err := dkvsindexer.PersonalKey(signer.GetPubKey().SerializeCompressed(), "delete-regression")
-	if err != nil { t.Fatal(err) }
-	removed, keep := prefix+"/removed", prefix+"/keep"
-	put := func(path string, seq uint64) {
-		t.Helper()
-		record, err := NewDKVSSignedRecord(signer, path, []byte("live"), dkvsindexer.RecordOptions{Seq: seq, IssueHeight: 100, TTL: 100})
-		if err != nil { t.Fatal(err) }
-		if _, err = server.PutLocal(record); err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
 	}
-	put(removed, 1)
-	put(keep, 1)
-	before, err := server.PrefixSnapshot(prefix)
-	if err != nil { t.Fatal(err) }
-	tombstone, err := NewDKVSSignedTombstone(signer, removed, dkvsindexer.RecordOptions{Seq: 2, IssueHeight: 100})
-	if err != nil { t.Fatal(err) }
-	if _, err = server.PutLocal(tombstone); err != nil { t.Fatal(err) }
+	removed, keep := prefix+"/removed", prefix+"/keep"
+	put := func(path, value string, seq uint64) {
+		t.Helper()
+		record, err := NewDKVSSignedRecord(signer, path, []byte(value), dkvsindexer.RecordOptions{Seq: seq, IssueHeight: 100, TTL: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = server.PutLocal(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(removed, "old-lifetime", 1)
+	put(keep, "keep", 1)
+	before, err := server.ActiveSyncPage(context.Background(), dkvsindexer.ActiveSyncRequest{Scope: dkvsindexer.ActiveScope{Prefix: prefix}, EndpointID: server.EndpointID(), Full: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := dkvsindexer.ActiveScope{Prefix: prefix}
+	beforeMeta, err := server.ActiveMetadata(context.Background(), scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := server.Get(removed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := NewDKVSDeleteCommand(signer, original, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = server.PutLocal(command); err != nil {
+		t.Fatal(err)
+	}
 	direct, err := server.GetKeyState(removed)
-	if err != nil { t.Fatal(err) }
-	if direct.Status != dkvsindexer.KeyStateDeleted || direct.Seq != 2 || direct.ETag != dkvsindexer.RecordHash(tombstone).String() || direct.Record != nil {
-		t.Fatal("direct key state lost the deletion, sequence floor or tombstone hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if direct.Status != dkvsindexer.KeyStateNeverSeen || direct.Seq != 0 || direct.ETag != "" || direct.Record != nil {
+		t.Fatalf("deleted key retained history: %+v", direct)
+	}
+	afterMeta, err := server.ActiveMetadata(context.Background(), scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := server.ActiveSyncPage(context.Background(), dkvsindexer.ActiveSyncRequest{Scope: dkvsindexer.ActiveScope{Prefix: prefix}, EndpointID: server.EndpointID(), Full: true})
+	if err != nil {
+		t.Fatal(err)
 	}
 	newReplica := func(t *testing.T) *dkvsReplicaStore {
 		t.Helper()
 		db := indexerdb.NewKVDB(t.TempDir())
+		if db == nil {
+			t.Fatal("create replica database")
+		}
 		t.Cleanup(func() { _ = db.Close() })
 		replica := newDKVSReplicaStore(db)
-		if _, err := replica.ReplacePrefixSnapshot("replica", before); err != nil { t.Fatal(err) }
+		baseline, err := replica.ActiveBaseline("replica", scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := replica.InstallActiveState("replica", baseline, beforeMeta, before.Records, true); err != nil {
+			t.Fatal(err)
+		}
 		return replica
 	}
 	assertDeleted := func(t *testing.T, replica *dkvsReplicaStore) {
 		t.Helper()
-		record, err := replica.LoadSubscriptionRecord("replica", removed)
-		if record != nil || !errors.Is(err, indexercommon.ErrKeyNotFound) {
-			t.Errorf("deleted record remains live in local replica: present=%t err=%v", record != nil, err)
+		if _, err := replica.LoadSubscriptionRecord("replica", removed); !errors.Is(err, indexercommon.ErrKeyNotFound) {
+			t.Fatalf("deleted record remains in replica: %v", err)
 		}
-		state, err := replica.LoadLocalKeyState("replica", removed)
-		if err != nil || state == nil || !state.Deleted || state.Seq != 2 || state.ETag != direct.ETag {
-			t.Errorf("local replica lost deleted key state/sequence floor: state=%+v err=%v", state, err)
+		if _, err := replica.LoadLocalKeyState("replica", removed); !errors.Is(err, indexercommon.ErrKeyNotFound) {
+			t.Fatalf("replica retained deleted-key state: %v", err)
 		}
-		if record, err := replica.LoadSubscriptionRecord("replica", keep); err != nil || record == nil { t.Fatal("deletion removed unrelated record") }
+		if record, err := replica.LoadSubscriptionRecord("replica", keep); err != nil || record == nil {
+			t.Fatal("deletion removed sibling")
+		}
+		meta, err := replica.LoadActiveMeta("replica", scope)
+		if err != nil || meta.Generation != afterMeta.Generation || meta.Root != afterMeta.Root {
+			t.Fatalf("confirmed cursor=%+v err=%v", meta, err)
+		}
 	}
-	t.Run("delta_notifies_deletion", func(t *testing.T) {
+	t.Run("delta_root_mismatch_requires_full_current_set", func(t *testing.T) {
 		replica := newReplica(t)
-		delta, err := server.PrefixDelta(prefix, before.EndpointID, before.Generation)
-		if err != nil { t.Fatal(err) }
-		found := false
-		for _, state := range delta.KeyStates { found = found || state.Key == removed && state.Status == dkvsindexer.KeyStateDeleted && state.Seq == 2 }
-		if !found { t.Error("server advanced generation without reporting deleted key") }
-		if _, err := replica.ApplyPrefixDelta("replica", before.Generation, delta); err != nil { t.Fatal(err) }
+		baseline, err := replica.ActiveBaseline("replica", scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Current-key deltas cannot carry a removed key. A root mismatch must
+		// not advance the cursor or partially modify the old confirmed replica.
+		if _, err := replica.InstallActiveState("replica", baseline, afterMeta, nil, false); !errors.Is(err, dkvsindexer.ErrPathDiverged) {
+			t.Fatalf("incomplete delta err=%v", err)
+		}
+		unchanged, err := replica.ActiveBaseline("replica", scope)
+		if err != nil || unchanged != baseline {
+			t.Fatal("incomplete delta changed confirmed data/cursor")
+		}
+		if _, err := replica.InstallActiveState("replica", baseline, afterMeta, after.Records, true); err != nil {
+			t.Fatal(err)
+		}
 		assertDeleted(t, replica)
 	})
-	t.Run("snapshot_carries_deletion_floor", func(t *testing.T) {
+	t.Run("complete_snapshot_removes_omitted_record", func(t *testing.T) {
 		replica := newReplica(t)
-		after, err := server.PrefixSnapshot(prefix)
-		if err != nil { t.Fatal(err) }
-		if _, err := replica.ReplacePrefixSnapshot("replica", after); err != nil { t.Fatal(err) }
+		baseline, err := replica.ActiveBaseline("replica", scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed, err := replica.InstallActiveState("replica", baseline, afterMeta, after.Records, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(changed) != 1 || changed[0] != removed {
+			t.Fatalf("changed keys=%v", changed)
+		}
 		assertDeleted(t, replica)
 	})
-	t.Run("recreation_supersedes_deletion", func(t *testing.T) {
-		put(removed, 3)
-		after, err := server.PrefixSnapshot(prefix)
-		if err != nil { t.Fatal(err) }
+	t.Run("recreation_starts_new_lifetime_without_floor", func(t *testing.T) {
 		replica := newReplica(t)
-		if _, err := replica.ReplacePrefixSnapshot("replica", after); err != nil { t.Fatal(err) }
+		baseline, err := replica.ActiveBaseline("replica", scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := replica.InstallActiveState("replica", baseline, afterMeta, after.Records, true); err != nil {
+			t.Fatal(err)
+		}
+		put(removed, "new-lifetime", 1)
+		latest, err := server.ActiveSyncPage(context.Background(), dkvsindexer.ActiveSyncRequest{Scope: dkvsindexer.ActiveScope{Prefix: prefix}, EndpointID: server.EndpointID(), Full: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		meta, err := server.ActiveMetadata(context.Background(), scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		baseline, err = replica.ActiveBaseline("replica", scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := replica.InstallActiveState("replica", baseline, meta, latest.Records, true); err != nil {
+			t.Fatal(err)
+		}
 		record, err := replica.LoadSubscriptionRecord("replica", removed)
-		if err != nil || record == nil || record.Seq != 3 { t.Fatal("recreated record is not live at sequence 3") }
-		state, err := replica.LoadLocalKeyState("replica", removed)
-		if err != nil || state == nil || state.Deleted || state.Seq != 3 { t.Fatal("recreated key retained stale deletion") }
+		if err != nil || record == nil || record.Seq != 1 || string(record.Value) != "new-lifetime" {
+			t.Fatal("new incarnation not installed")
+		}
+		if _, err := server.PutLocal(command); !errors.Is(err, dkvsindexer.ErrWriteConflict) {
+			t.Fatalf("delayed delete affected new lifetime: %v", err)
+		}
 	})
 }

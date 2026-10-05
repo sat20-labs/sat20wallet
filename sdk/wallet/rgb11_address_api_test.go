@@ -146,6 +146,7 @@ func TestConfiguredRGB11MailboxSyncUsesGenerationBeforeReplicaRead(t *testing.T)
 	initialSnapshots := remote.snapshotCalls
 	initialStatus := remote.statusCalls
 	initialDeltas := remote.deltaCalls
+	generation := remote.generations[mailboxPrefix]
 	remote.mu.Unlock()
 
 	result, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(),
@@ -157,13 +158,24 @@ func TestConfiguredRGB11MailboxSyncUsesGenerationBeforeReplicaRead(t *testing.T)
 		t.Fatalf("mailbox result=%+v", result)
 	}
 	remote.mu.Lock()
-	if remote.statusCalls <= initialStatus || remote.snapshotCalls != initialSnapshots || remote.deltaCalls != initialDeltas+1 {
-		remote.mu.Unlock()
-		t.Fatalf("changed mailbox status=%d snapshot=%d delta=%d initial_status=%d initial_snapshot=%d initial_delta=%d",
-			remote.statusCalls, remote.snapshotCalls, remote.deltaCalls, initialStatus, initialSnapshots, initialDeltas)
-	}
-	unchangedSnapshots := remote.snapshotCalls
+	statusCalls, snapshots, deltas := remote.statusCalls, remote.snapshotCalls, remote.deltaCalls
 	remote.mu.Unlock()
+	// Active sync returns metadata and current values together. The old
+	// status-then-delta round trip must not be reintroduced by RGB consumers.
+	if statusCalls != initialStatus || snapshots != initialSnapshots || deltas != initialDeltas+1 {
+		t.Fatalf("changed mailbox status=%d snapshot=%d delta=%d initial_status=%d initial_snapshot=%d initial_delta=%d",
+			statusCalls, snapshots, deltas, initialStatus, initialSnapshots, initialDeltas)
+	}
+	replica := newDKVSReplicaStore(manager.db)
+	namespace := client.replicaNamespace
+	meta, err := replica.LoadActiveMeta(namespace, dkvsindexer.ActiveScope{Prefix: mailboxPrefix})
+	if err != nil || meta.Generation != generation {
+		t.Fatalf("mailbox consumed before source cursor committed: meta=%+v err=%v", meta, err)
+	}
+	confirmed, err := replica.LoadSubscriptionRecord(namespace, key)
+	if err != nil || dkvsindexer.RecordHash(confirmed) != dkvsindexer.RecordHash(record) {
+		t.Fatalf("current mailbox value was not installed before consumption: %v", err)
+	}
 
 	if _, err := manager.SyncConfiguredRGB11AddressMailbox(context.Background(),
 		dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{}); err != nil {
@@ -171,9 +183,8 @@ func TestConfiguredRGB11MailboxSyncUsesGenerationBeforeReplicaRead(t *testing.T)
 	}
 	remote.mu.Lock()
 	defer remote.mu.Unlock()
-	if remote.snapshotCalls != unchangedSnapshots {
-		t.Fatalf("unchanged mailbox downloaded snapshot: before=%d after=%d",
-			unchangedSnapshots, remote.snapshotCalls)
+	if remote.snapshotCalls != snapshots || remote.statusCalls != initialStatus {
+		t.Fatalf("unchanged mailbox used obsolete/full synchronization: status=%d snapshots=%d", remote.statusCalls, remote.snapshotCalls)
 	}
 }
 

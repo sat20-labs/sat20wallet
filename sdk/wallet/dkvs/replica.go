@@ -21,28 +21,25 @@ const (
 	DKVSSubscriptionOfflineReady  = "OFFLINE_READY"
 	DKVSSubscriptionResetRequired = "RESET_REQUIRED"
 	DKVSSubscriptionError         = "ERROR"
-
-	DKVSOutboxPending  = "pending"
-	DKVSOutboxInflight = "inflight"
-	DKVSOutboxConflict = "conflict"
-	DKVSOutboxTerminal = "terminal"
+	DKVSOutboxPending             = "pending"
+	DKVSOutboxInflight            = "inflight"
+	DKVSOutboxConflict            = "conflict"
+	DKVSOutboxTerminal            = "terminal"
 )
 
 var (
-	dkvsSubscriptionStatePrefix    = []byte("dkvs:subscription-state:")
-	dkvsSubscriptionPrefixPrefix   = []byte("dkvs:subscription-prefix:")
-	dkvsSubscriptionRecordPrefix   = []byte("dkvs:subscription-record:")
-	dkvsSubscriptionKeyStatePrefix = []byte("dkvs:subscription-key-state:")
-	dkvsOutboxPrefix               = []byte("dkvs:outbox:")
+	dkvsSubscriptionStatePrefix  = []byte("dkvs:subscription-state:")
+	dkvsSubscriptionPrefixPrefix = []byte("dkvs:subscription-prefix:")
+	dkvsSubscriptionRecordPrefix = []byte("dkvs:subscription-record:")
+	dkvsOutboxPrefix             = []byte("dkvs:outbox:")
 )
 
-func OutboxPrefix() []byte {
-	return append([]byte(nil), dkvsOutboxPrefix...)
-}
+func OutboxPrefix() []byte { return append([]byte(nil), dkvsOutboxPrefix...) }
 
 type SubscriptionState struct {
-	EndpointID    string            `json:"endpoint_id"`
-	Prefixes      []string          `json:"prefixes"`
+	EndpointID string   `json:"endpoint_id"`
+	Prefixes   []string `json:"prefixes"`
+	// Generations is derived from ActiveMeta when loaded; it is not persisted here.
 	Generations   map[string]uint64 `json:"generations,omitempty"`
 	ViewHeight    uint64            `json:"view_height"`
 	LastSyncAtMS  uint64            `json:"last_sync_at_ms"`
@@ -79,54 +76,34 @@ type BatchOutboxEntry struct {
 	OriginKey        string              `json:"origin_key,omitempty"`
 	OriginDomain     string              `json:"origin_domain,omitempty"`
 	OriginGeneration uint64              `json:"origin_generation,omitempty"`
-	// PreservePrefixGenerations is set only after an authoritative conflict
-	// rebase. The acknowledged records are materialized, but the old prefix
-	// generation is retained so a later status check cannot miss unrelated
-	// remote changes in the same collection.
-	PreservePrefixGenerations bool `json:"preserve_prefix_generations,omitempty"`
+	// Persist the exact signed operation context BEFORE the first send. A
+	// retry must not silently obtain a new generation and authorize an old
+	// operation again after another device has changed or deleted the data.
+	Authorization *dkvsindexer.WalletWriteAuthorization `json:"authorization,omitempty"`
 }
 
 func dkvsNamespacedKey(prefix []byte, namespace string) []byte {
-	key := append([]byte(nil), prefix...)
-	return append(key, strings.TrimSpace(namespace)...)
+	return append(append([]byte(nil), prefix...), strings.TrimSpace(namespace)...)
 }
-
 func dkvsNamespacedPrefix(prefix []byte, namespace string) []byte {
-	key := dkvsNamespacedKey(prefix, namespace)
-	return append(key, ':')
+	return append(dkvsNamespacedKey(prefix, namespace), ':')
 }
-
 func dkvsSubscriptionStateKey(namespace string) []byte {
 	return dkvsNamespacedKey(dkvsSubscriptionStatePrefix, namespace)
 }
-
 func dkvsSubscriptionPrefixKey(namespace, prefix string) []byte {
-	key := dkvsNamespacedPrefix(dkvsSubscriptionPrefixPrefix, namespace)
-	return append(key, prefix...)
+	return append(dkvsNamespacedPrefix(dkvsSubscriptionPrefixPrefix, namespace), prefix...)
 }
-
 func dkvsSubscriptionRecordKey(namespace, key string) []byte {
-	storage := dkvsNamespacedPrefix(dkvsSubscriptionRecordPrefix, namespace)
-	return append(storage, key...)
+	return append(dkvsNamespacedPrefix(dkvsSubscriptionRecordPrefix, namespace), key...)
 }
-
-func dkvsSubscriptionKeyStateKey(namespace, key string) []byte {
-	storage := dkvsNamespacedPrefix(dkvsSubscriptionKeyStatePrefix, namespace)
-	return append(storage, key...)
-}
-
 func dkvsOutboxNamespacePrefix(namespace string) []byte {
 	return dkvsNamespacedPrefix(dkvsOutboxPrefix, namespace)
 }
-
 func dkvsOutboxKey(namespace, requestID string) []byte {
-	key := dkvsOutboxNamespacePrefix(namespace)
-	return append(key, requestID...)
+	return append(dkvsOutboxNamespacePrefix(namespace), requestID...)
 }
-
-func OutboxKey(namespace, requestID string) []byte {
-	return dkvsOutboxKey(namespace, requestID)
-}
+func OutboxKey(namespace, requestID string) []byte { return dkvsOutboxKey(namespace, requestID) }
 
 func NormalizeSubscriptionPrefixes(prefixes []string) ([]string, error) {
 	if len(prefixes) > dkvsindexer.MaxPrefixesPerTerminal {
@@ -150,15 +127,10 @@ func NormalizeSubscriptionPrefixes(prefixes []string) ([]string, error) {
 	sort.Strings(result)
 	return result, nil
 }
-
 func walletSubscriptionMatches(prefix, key string) bool {
 	return key == prefix || strings.HasPrefix(key, prefix+"/")
 }
-
-func SubscriptionMatches(prefix, key string) bool {
-	return walletSubscriptionMatches(prefix, key)
-}
-
+func SubscriptionMatches(prefix, key string) bool { return walletSubscriptionMatches(prefix, key) }
 func KeyCoveredByPrefixes(key string, prefixes []string) bool {
 	for _, prefix := range prefixes {
 		if walletSubscriptionMatches(prefix, key) {
@@ -167,7 +139,6 @@ func KeyCoveredByPrefixes(key string, prefixes []string) bool {
 	}
 	return false
 }
-
 func NewRequestID() (string, error) {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
@@ -180,14 +151,13 @@ func (s *ReplicaStore) collectStorageKeys(prefix []byte) ([][]byte, error) {
 	if s == nil || s.db == nil {
 		return nil, ErrReplicaNotReady
 	}
-	keys := make([][]byte, 0)
+	var keys [][]byte
 	err := s.db.BatchRead(prefix, false, func(key, _ []byte) error {
 		keys = append(keys, append([]byte(nil), key...))
 		return nil
 	})
 	return keys, err
 }
-
 func (s *ReplicaStore) LoadSubscriptionState(namespace string) (*SubscriptionState, error) {
 	if s == nil || s.db == nil || strings.TrimSpace(namespace) == "" {
 		return nil, ErrReplicaNotReady
@@ -196,9 +166,25 @@ func (s *ReplicaStore) LoadSubscriptionState(namespace string) (*SubscriptionSta
 	if err != nil {
 		return nil, err
 	}
-	return decodeDKVSSubscriptionState(encoded)
+	state, err := decodeDKVSSubscriptionState(encoded)
+	if err != nil {
+		return nil, err
+	}
+	state.Generations = make(map[string]uint64, len(state.Prefixes))
+	for _, prefix := range state.Prefixes {
+		meta, err := s.LoadActiveMeta(namespace, dkvsindexer.ActiveScope{Prefix: prefix})
+		if errors.Is(err, indexercommon.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if meta.EndpointID == state.EndpointID {
+			state.Generations[prefix] = meta.Generation
+		}
+	}
+	return state, nil
 }
-
 func putSubscriptionStateBatch(batch batchWriter, namespace string, state *SubscriptionState) error {
 	if batch == nil || strings.TrimSpace(namespace) == "" || state == nil {
 		return dkvsindexer.ErrInvalidRecord
@@ -209,17 +195,12 @@ func putSubscriptionStateBatch(batch batchWriter, namespace string, state *Subsc
 	}
 	copyState := *state
 	copyState.Prefixes = prefixes
-	copyState.Generations = make(map[string]uint64, len(state.Generations))
-	for prefix, generation := range state.Generations {
-		copyState.Generations[prefix] = generation
-	}
 	encoded, err := encodeDKVSSubscriptionState(&copyState)
 	if err != nil {
 		return err
 	}
 	return batch.Put(dkvsSubscriptionStateKey(namespace), encoded)
 }
-
 func (s *ReplicaStore) replacePrefixRegistryBatch(batch batchWriter, namespace string, prefixes []string) error {
 	if batch == nil {
 		return dkvsindexer.ErrInvalidRecord
@@ -240,24 +221,12 @@ func (s *ReplicaStore) replacePrefixRegistryBatch(batch batchWriter, namespace s
 	}
 	return nil
 }
-
-func localStateFromServer(state dkvsindexer.DKVSKeyState) LocalKeyState {
-	return LocalKeyState{
-		Key: state.Key, Seq: state.Seq, ETag: state.ETag,
-		Deleted:      state.Status != dkvsindexer.KeyStateActive,
-		ExpiryHeight: state.ExpiryHeight, StorageMode: state.StorageMode,
-	}
-}
-
 func localStateFromRecord(record *swire.DKVSRecord) (LocalKeyState, error) {
 	if record == nil {
 		return LocalKeyState{}, dkvsindexer.ErrInvalidRecord
 	}
-	state := LocalKeyState{
-		Key: record.Key, Seq: record.Seq, ETag: dkvsindexer.RecordHash(record).String(),
-		Deleted:      dkvsindexer.IsTombstone(record.Flags),
-		ExpiryHeight: dkvsindexer.RecordExpiryHeight(record),
-	}
+	state := LocalKeyState{Key: record.Key, Seq: record.Seq, ETag: dkvsindexer.RecordHash(record).String(),
+		Deleted: dkvsindexer.IsTombstone(record.Flags), ExpiryHeight: dkvsindexer.RecordExpiryHeight(record)}
 	if len(record.FeeProof) != 0 {
 		proof, err := dkvsindexer.ParseFeeProof(record.FeeProof)
 		if err != nil && !state.Deleted {
@@ -276,117 +245,6 @@ func localStateFromRecord(record *swire.DKVSRecord) (LocalKeyState, error) {
 	}
 	return state, nil
 }
-
-func putLocalKeyStateBatch(batch batchWriter, namespace string, state LocalKeyState) error {
-	if batch == nil || state.Key == "" || state.Seq == 0 || state.ETag == "" {
-		return dkvsindexer.ErrInvalidRecord
-	}
-	encoded, err := encodeDKVSLocalKeyState(state)
-	if err != nil {
-		return err
-	}
-	return batch.Put(dkvsSubscriptionKeyStateKey(namespace, state.Key), encoded)
-}
-
-// ReplacePrefixSnapshot atomically installs active values and explicit delete
-// floors. Mere endpoint-cache absence still preserves local history; an
-// explicit deleted KeyState removes the stale live value, not its sequence.
-func (s *ReplicaStore) ReplacePrefixSnapshot(namespace string,
-	snapshot *dkvsindexer.PrefixSnapshot) ([]string, error) {
-	if s == nil || s.db == nil || snapshot == nil || strings.TrimSpace(namespace) == "" || strings.TrimSpace(snapshot.EndpointID) == "" {
-		return nil, dkvsindexer.ErrInvalidSnapshot
-	}
-	prefixes, err := NormalizeSubscriptionPrefixes([]string{snapshot.Prefix})
-	if err != nil || len(prefixes) != 1 || prefixes[0] != snapshot.Prefix {
-		return nil, dkvsindexer.ErrInvalidSnapshot
-	}
-	prefix := prefixes[0]
-	records, err := validatePrefixPayload(prefix, snapshot.ViewHeight, snapshot.Records, snapshot.KeyStates)
-	if err != nil {
-		return nil, err
-	}
-	batch := s.db.NewWriteBatch()
-	defer batch.Close()
-	changed, err := s.stagePrefixPayload(batch, namespace, records, snapshot.KeyStates)
-	if err != nil {
-		return nil, err
-	}
-	state, stateErr := s.LoadSubscriptionState(namespace)
-	if stateErr != nil {
-		if !errors.Is(stateErr, indexercommon.ErrKeyNotFound) {
-			return nil, stateErr
-		}
-		state = &SubscriptionState{Prefixes: []string{prefix}}
-	}
-	if state.Generations == nil {
-		state.Generations = make(map[string]uint64)
-	}
-	state.EndpointID = snapshot.EndpointID
-	state.Generations[prefix] = snapshot.Generation
-	if snapshot.ViewHeight > state.ViewHeight {
-		state.ViewHeight = snapshot.ViewHeight
-	}
-	state.LastSyncAtMS = uint64(time.Now().UnixMilli())
-	if state.Status == "" {
-		state.Status = DKVSSubscriptionSyncing
-	}
-	state.LastErrorCode = ""
-	if err := putSubscriptionStateBatch(batch, namespace, state); err != nil {
-		return nil, err
-	}
-	if err := batch.Flush(); err != nil {
-		return nil, err
-	}
-	return changed, nil
-}
-
-// ApplyPrefixDelta advances the endpoint cursor in the same batch as both
-// value updates and explicit deletions. Unrelated cached records are untouched.
-func (s *ReplicaStore) ApplyPrefixDelta(namespace string, after uint64,
-	delta *dkvsindexer.PrefixDeltaResult) ([]string, error) {
-	if s == nil || s.db == nil || delta == nil || strings.TrimSpace(namespace) == "" || delta.EndpointID == "" || delta.Generation < after {
-		return nil, dkvsindexer.ErrInvalidSnapshot
-	}
-	prefixes, err := NormalizeSubscriptionPrefixes([]string{delta.Prefix})
-	if err != nil || len(prefixes) != 1 || prefixes[0] != delta.Prefix {
-		return nil, dkvsindexer.ErrInvalidSnapshot
-	}
-	state, err := s.LoadSubscriptionState(namespace)
-	if err != nil {
-		return nil, err
-	}
-	if state.EndpointID != delta.EndpointID {
-		return nil, dkvsindexer.ErrEndpointMismatch
-	}
-	knownGeneration, known := state.Generations[delta.Prefix]
-	if !known || knownGeneration != after {
-		return nil, dkvsindexer.ErrStaleGeneration
-	}
-	records, err := validatePrefixPayload(delta.Prefix, delta.ViewHeight, delta.Records, delta.KeyStates)
-	if err != nil {
-		return nil, err
-	}
-	batch := s.db.NewWriteBatch()
-	defer batch.Close()
-	changed, err := s.stagePrefixPayload(batch, namespace, records, delta.KeyStates)
-	if err != nil {
-		return nil, err
-	}
-	state.Generations[delta.Prefix] = delta.Generation
-	if delta.ViewHeight > state.ViewHeight {
-		state.ViewHeight = delta.ViewHeight
-	}
-	state.LastSyncAtMS = uint64(time.Now().UnixMilli())
-	state.LastErrorCode = ""
-	if err := putSubscriptionStateBatch(batch, namespace, state); err != nil {
-		return nil, err
-	}
-	if err := batch.Flush(); err != nil {
-		return nil, err
-	}
-	return changed, nil
-}
-
 func (s *ReplicaStore) LoadSubscriptionRecord(namespace, key string) (*swire.DKVSRecord, error) {
 	encoded, err := s.db.Read(dkvsSubscriptionRecordKey(namespace, key))
 	if err != nil {
@@ -394,18 +252,17 @@ func (s *ReplicaStore) LoadSubscriptionRecord(namespace, key string) (*swire.DKV
 	}
 	return dkvsindexer.UnmarshalRecord(encoded)
 }
-
 func (s *ReplicaStore) LoadLocalKeyState(namespace, key string) (*LocalKeyState, error) {
-	encoded, err := s.db.Read(dkvsSubscriptionKeyStateKey(namespace, key))
+	record, err := s.LoadSubscriptionRecord(namespace, key)
 	if err != nil {
 		return nil, err
 	}
-	return decodeDKVSLocalKeyState(encoded, key)
+	state, err := localStateFromRecord(record)
+	return &state, err
 }
-
 func (s *ReplicaStore) ListSubscriptionRecords(namespace string) ([]*swire.DKVSRecord, error) {
 	prefix := dkvsNamespacedPrefix(dkvsSubscriptionRecordPrefix, namespace)
-	records := make([]*swire.DKVSRecord, 0)
+	var records []*swire.DKVSRecord
 	err := s.db.BatchRead(prefix, false, func(_, value []byte) error {
 		record, err := dkvsindexer.UnmarshalRecord(value)
 		if err != nil {
@@ -417,7 +274,6 @@ func (s *ReplicaStore) ListSubscriptionRecords(namespace string) ([]*swire.DKVSR
 	sort.Slice(records, func(a, b int) bool { return records[a].Key < records[b].Key })
 	return records, err
 }
-
 func persistedMutationFromCASFinal(mutation dkvsindexer.CASMutation) (PersistedMutation, error) {
 	if mutation.Record == nil || !mutation.Precondition.Valid() {
 		return PersistedMutation{}, dkvsindexer.ErrInvalidRecord
@@ -432,7 +288,6 @@ func persistedMutationFromCASFinal(mutation dkvsindexer.CASMutation) (PersistedM
 	}
 	return stored, nil
 }
-
 func (entry *BatchOutboxEntry) DecodeMutations() ([]dkvsindexer.CASMutation, error) {
 	if entry == nil || entry.RequestID == "" || entry.Namespace == "" || len(entry.Mutations) == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
@@ -458,9 +313,7 @@ func (entry *BatchOutboxEntry) DecodeMutations() ([]dkvsindexer.CASMutation, err
 	}
 	return mutations, nil
 }
-
-func NewBatchOutboxEntry(namespace string, mutations []dkvsindexer.CASMutation,
-	endpointID string, origin OutboxOrigin) (*BatchOutboxEntry, error) {
+func NewBatchOutboxEntry(namespace string, mutations []dkvsindexer.CASMutation, endpointID string, origin OutboxOrigin) (*BatchOutboxEntry, error) {
 	if strings.TrimSpace(namespace) == "" || len(mutations) == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
@@ -468,8 +321,7 @@ func NewBatchOutboxEntry(namespace string, mutations []dkvsindexer.CASMutation,
 	if err != nil {
 		return nil, err
 	}
-	stored := make([]PersistedMutation, 0, len(mutations))
-	seen := make(map[string]struct{}, len(mutations))
+	stored, seen := make([]PersistedMutation, 0, len(mutations)), make(map[string]struct{}, len(mutations))
 	for _, mutation := range mutations {
 		if mutation.Record == nil {
 			return nil, dkvsindexer.ErrInvalidRecord
@@ -485,15 +337,10 @@ func NewBatchOutboxEntry(namespace string, mutations []dkvsindexer.CASMutation,
 		stored = append(stored, item)
 	}
 	now := uint64(time.Now().UnixMilli())
-	return &BatchOutboxEntry{
-		RequestID: requestID, Namespace: strings.TrimSpace(namespace), EndpointID: strings.TrimSpace(endpointID),
+	return &BatchOutboxEntry{RequestID: requestID, Namespace: strings.TrimSpace(namespace), EndpointID: strings.TrimSpace(endpointID),
 		Mutations: stored, State: DKVSOutboxPending, CreatedAtMS: now, UpdatedAtMS: now,
-		OriginKey: strings.TrimSpace(origin.Key), OriginDomain: strings.TrimSpace(origin.Domain),
-		OriginGeneration:          origin.Generation,
-		PreservePrefixGenerations: origin.PreservePrefixGenerations,
-	}, nil
+		OriginKey: strings.TrimSpace(origin.Key), OriginDomain: strings.TrimSpace(origin.Domain), OriginGeneration: origin.Generation}, nil
 }
-
 func (s *ReplicaStore) writeOutboxEntry(entry *BatchOutboxEntry) error {
 	if s == nil || s.db == nil || entry == nil || entry.RequestID == "" || entry.Namespace == "" {
 		return dkvsindexer.ErrInvalidRecord
@@ -507,9 +354,8 @@ func (s *ReplicaStore) writeOutboxEntry(entry *BatchOutboxEntry) error {
 	}
 	return s.db.Write(dkvsOutboxKey(entry.Namespace, entry.RequestID), encoded)
 }
-
 func (s *ReplicaStore) QueueOutbox(entry *BatchOutboxEntry) error {
-	if entry == nil {
+	if s == nil || s.db == nil || entry == nil {
 		return dkvsindexer.ErrInvalidRecord
 	}
 	_, err := s.db.Read(dkvsOutboxKey(entry.Namespace, entry.RequestID))
@@ -521,10 +367,9 @@ func (s *ReplicaStore) QueueOutbox(entry *BatchOutboxEntry) error {
 	}
 	return s.writeOutboxEntry(entry)
 }
-
 func (s *ReplicaStore) LoadOutbox(namespace string) ([]*BatchOutboxEntry, error) {
 	prefix := dkvsOutboxNamespacePrefix(namespace)
-	entries := make([]*BatchOutboxEntry, 0)
+	var entries []*BatchOutboxEntry
 	err := s.db.BatchRead(prefix, false, func(key, value []byte) error {
 		requestID := strings.TrimPrefix(string(key), string(prefix))
 		entry, err := decodeDKVSOutboxEntry(value, strings.TrimSpace(namespace), requestID)
@@ -545,21 +390,18 @@ func (s *ReplicaStore) LoadOutbox(namespace string) ([]*BatchOutboxEntry, error)
 	})
 	return entries, err
 }
-
 func (s *ReplicaStore) UpdateOutboxState(entry *BatchOutboxEntry, state string, cause error) error {
 	if entry == nil {
 		return dkvsindexer.ErrInvalidRecord
 	}
 	copyEntry := *entry
-	copyEntry.State = state
-	copyEntry.UpdatedAtMS = uint64(time.Now().UnixMilli())
+	copyEntry.State, copyEntry.UpdatedAtMS = state, uint64(time.Now().UnixMilli())
 	if state == DKVSOutboxInflight {
 		copyEntry.Attempts++
 	}
 	copyEntry.LastErrorCode, copyEntry.LastError = "", ""
 	if cause != nil {
-		copyEntry.LastErrorCode = string(dkvsindexer.ErrorCodeOf(cause))
-		copyEntry.LastError = cause.Error()
+		copyEntry.LastErrorCode, copyEntry.LastError = string(dkvsindexer.ErrorCodeOf(cause)), cause.Error()
 	}
 	if err := s.writeOutboxEntry(&copyEntry); err != nil {
 		return err
@@ -568,9 +410,8 @@ func (s *ReplicaStore) UpdateOutboxState(entry *BatchOutboxEntry, state string, 
 	return nil
 }
 
-// DiscardOutbox removes exactly one request after the server has definitively
-// rejected its CAS basis. Network failures must never use this path because
-// they require replaying the identical signed request.
+// A rejected request can be discarded. Unknown delivery retains its signed
+// authorization; reconnect never creates a fresh authorization for it.
 func (s *ReplicaStore) DiscardOutbox(entry *BatchOutboxEntry) error {
 	if s == nil || s.db == nil || entry == nil || entry.Namespace == "" || entry.RequestID == "" {
 		return dkvsindexer.ErrInvalidRecord
@@ -578,132 +419,72 @@ func (s *ReplicaStore) DiscardOutbox(entry *BatchOutboxEntry) error {
 	return s.db.Delete(dkvsOutboxKey(entry.Namespace, entry.RequestID))
 }
 
-func (s *ReplicaStore) ApplyWriteResultAndAck(entry *BatchOutboxEntry,
-	result *dkvsindexer.WriteResult) error {
+// ApplyWriteResultAndAck confirms REQUEST completion only. It never creates,
+// overwrites or deletes a confirmed KV, even if the ACK arrived before the
+// subscription update. InstallActiveState is the single replica commit path.
+func (s *ReplicaStore) ApplyWriteResultAndAck(entry *BatchOutboxEntry, result *dkvsindexer.WriteResult) error {
 	if s == nil || s.db == nil || entry == nil || result == nil {
 		return dkvsindexer.ErrInvalidRecord
 	}
+	unlock := lockActiveReplica(entry.Namespace)
+	defer unlock()
 	mutations, err := entry.DecodeMutations()
 	if err != nil {
 		return err
 	}
-	if result.RequestID != "" && result.RequestID != entry.RequestID {
+	if err := VerifyWriteResult(mutations, entry.RequestID, result); err != nil {
+		return err
+	}
+	if result.EndpointID == "" {
 		return dkvsindexer.ErrInvalidRecord
 	}
-	if len(result.Records) != len(mutations) || len(result.Hashes) != len(mutations) ||
-		(result.Applied != 0 && result.Applied != len(mutations)) {
-		return dkvsindexer.ErrInvalidRecord
+	if entry.EndpointID != "" && entry.EndpointID != result.EndpointID {
+		return dkvsindexer.ErrEndpointMismatch
 	}
 	expectedPrefixes := make(map[string]struct{})
 	for _, mutation := range mutations {
-		if mutation.Record == nil {
-			return dkvsindexer.ErrInvalidRecord
-		}
 		prefix, err := dkvsindexer.CollectionPathForKey(mutation.Record.Key)
-		if err != nil || strings.TrimSpace(prefix) == "" {
+		if err != nil || prefix == "" {
 			return dkvsindexer.ErrInvalidRecord
 		}
 		expectedPrefixes[prefix] = struct{}{}
-	}
-	if strings.TrimSpace(result.EndpointID) == "" {
-		return dkvsindexer.ErrInvalidRecord
 	}
 	registered, err := s.LoadRegisteredPrefixes(entry.Namespace)
 	if err != nil {
 		return err
 	}
-	managedPrefixes := make(map[string]struct{})
-	for prefix := range expectedPrefixes {
-		if KeyCoveredByPrefixes(prefix, registered) {
-			managedPrefixes[prefix] = struct{}{}
-		}
-	}
 	generations := make(map[string]uint64, len(result.PrefixStates))
-	for _, prefixState := range result.PrefixStates {
-		prefix := strings.TrimSuffix(strings.TrimSpace(prefixState.Prefix), "/")
-		if _, ok := expectedPrefixes[prefix]; !ok || prefixState.Generation == 0 {
+	for _, item := range result.PrefixStates {
+		prefix := strings.TrimSuffix(strings.TrimSpace(item.Prefix), "/")
+		if _, exists := expectedPrefixes[prefix]; !exists {
 			return dkvsindexer.ErrInvalidRecord
 		}
 		if _, duplicate := generations[prefix]; duplicate {
 			return dkvsindexer.ErrInvalidRecord
 		}
-		generations[prefix] = prefixState.Generation
-	}
-	for prefix := range managedPrefixes {
-		if _, ok := generations[prefix]; !ok {
+		if item.Generation == 0 && result.Applied != 0 {
 			return dkvsindexer.ErrInvalidRecord
 		}
+		generations[prefix] = item.Generation
 	}
-	if entry.EndpointID != "" && entry.EndpointID != result.EndpointID {
-		return dkvsindexer.ErrEndpointMismatch
-	}
-	var state *SubscriptionState
-	if len(managedPrefixes) != 0 {
-		state, err = s.LoadSubscriptionState(entry.Namespace)
-		if err != nil || state.EndpointID != result.EndpointID ||
-			(state.Status != DKVSSubscriptionReady && state.Status != DKVSSubscriptionOfflineReady) {
-			return dkvsindexer.ErrEndpointMismatch
-		}
-		if state.Generations == nil {
-			state.Generations = make(map[string]uint64)
-		}
-	}
-	for prefix, generation := range generations {
-		if _, managed := managedPrefixes[prefix]; !managed {
+	for prefix := range expectedPrefixes {
+		if !KeyCoveredByPrefixes(prefix, registered) {
 			continue
 		}
-		if !KeyCoveredByPrefixes(prefix, state.Prefixes) {
+		if _, exists := generations[prefix]; !exists {
+			return dkvsindexer.ErrInvalidRecord
+		}
+		state, err := s.LoadSubscriptionState(entry.Namespace)
+		if err != nil || state.EndpointID != result.EndpointID || !KeyCoveredByPrefixes(prefix, state.Prefixes) {
 			return dkvsindexer.ErrEndpointMismatch
 		}
-		if !entry.PreservePrefixGenerations {
-			state.Generations[prefix] = generation
-		}
-	}
-	if state != nil {
-		if result.ViewHeight > state.ViewHeight {
-			state.ViewHeight = result.ViewHeight
-		}
-		state.LastSyncAtMS = uint64(time.Now().UnixMilli())
-		state.Status = DKVSSubscriptionReady
-		state.LastErrorCode = ""
 	}
 	batch := s.db.NewWriteBatch()
 	defer batch.Close()
-	for index, mutation := range mutations {
-		record := result.Records[index]
-		if record == nil || dkvsindexer.RecordHash(record) != dkvsindexer.RecordHash(mutation.Record) ||
-			result.Hashes[index] != dkvsindexer.RecordHash(mutation.Record).String() {
-			return dkvsindexer.ErrInvalidRecord
-		}
-		if !KeyCoveredByPrefixes(record.Key, registered) {
-			continue
-		}
-		local, err := localStateFromRecord(record)
-		if err != nil {
-			return err
-		}
-		if dkvsindexer.IsTombstone(record.Flags) {
-			if err := batch.Delete(dkvsSubscriptionRecordKey(entry.Namespace, record.Key)); err != nil {
-				return err
-			}
-			local.Deleted = true
-		} else {
-			encoded, err := dkvsindexer.MarshalRecord(record)
-			if err != nil {
-				return err
-			}
-			if err := batch.Put(dkvsSubscriptionRecordKey(entry.Namespace, record.Key), encoded); err != nil {
-				return err
-			}
-		}
-		if err := putLocalKeyStateBatch(batch, entry.Namespace, local); err != nil {
-			return err
-		}
-	}
-	if state != nil {
-		if err := putSubscriptionStateBatch(batch, entry.Namespace, state); err != nil {
-			return err
-		}
+	// This request-completion bound only invalidates an older in-flight full
+	// view. It is not a completed sync cursor and does not materialize values.
+	if err := s.NoteActiveAckBatch(batch, entry.Namespace, result); err != nil {
+		return err
 	}
 	if err := batch.Delete(dkvsOutboxKey(entry.Namespace, entry.RequestID)); err != nil {
 		return err
@@ -723,7 +504,6 @@ func (s *ReplicaStore) HasPendingOutbox(namespace string) (bool, error) {
 	}
 	return false, nil
 }
-
 func (s *ReplicaStore) SetSubscriptionError(namespace, status, code string) error {
 	state, err := s.LoadSubscriptionState(namespace)
 	if err != nil {
@@ -733,9 +513,7 @@ func (s *ReplicaStore) SetSubscriptionError(namespace, status, code string) erro
 			return err
 		}
 	}
-	state.Status = status
-	state.LastErrorCode = code
-	state.LastSyncAtMS = uint64(time.Now().UnixMilli())
+	state.Status, state.LastErrorCode, state.LastSyncAtMS = status, code, uint64(time.Now().UnixMilli())
 	batch := s.db.NewWriteBatch()
 	defer batch.Close()
 	if err := putSubscriptionStateBatch(batch, namespace, state); err != nil {
@@ -743,15 +521,15 @@ func (s *ReplicaStore) SetSubscriptionError(namespace, status, code string) erro
 	}
 	return batch.Flush()
 }
-
 func (s *ReplicaStore) MarkOfflineReady(namespace string) error {
 	state, err := s.LoadSubscriptionState(namespace)
 	if err != nil {
 		return err
 	}
-	if state.Status == DKVSSubscriptionReady || state.Status == DKVSSubscriptionSyncing {
-		state.Status = DKVSSubscriptionOfflineReady
+	if state.Status != DKVSSubscriptionReady && state.Status != DKVSSubscriptionOfflineReady {
+		return ErrReplicaNotReady
 	}
+	state.Status = DKVSSubscriptionOfflineReady
 	batch := s.db.NewWriteBatch()
 	defer batch.Close()
 	if err := putSubscriptionStateBatch(batch, namespace, state); err != nil {
@@ -759,7 +537,6 @@ func (s *ReplicaStore) MarkOfflineReady(namespace string) error {
 	}
 	return batch.Flush()
 }
-
 func (s *ReplicaStore) SubscriptionKeyStateOrNotFound(namespace, key string) (*LocalKeyState, error) {
 	state, err := s.LoadLocalKeyState(namespace, key)
 	if errors.Is(err, indexercommon.ErrKeyNotFound) {
@@ -767,7 +544,6 @@ func (s *ReplicaStore) SubscriptionKeyStateOrNotFound(namespace, key string) (*L
 	}
 	return state, err
 }
-
 func (s *ReplicaStore) ValidateStorage() error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("DKVS replica store is unavailable")

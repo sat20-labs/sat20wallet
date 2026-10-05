@@ -17,60 +17,41 @@ import (
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
-// dkvsManager is the SDK's only DKVS coordination layer. paths are explicit
-// managed collection prefixes, including active-account mailboxes. Ordinary
-// reads never add a prefix implicitly.
+// dkvsManager is the only coordination layer for domain data, the confirmed
+// subscription replica, and the durable client outbox. Reads never subscribe
+// implicitly; background transport does not own business-state mutexes.
 type dkvsManager struct {
-	owner *Manager
-
-	mu                 sync.Mutex
-	runMu              sync.Mutex
-	runActive          bool
-	runDone            chan struct{}
-	stop               chan struct{}
-	done               chan struct{}
-	wake               chan struct{}
-	requestCtx         context.Context
-	cancelRequests     context.CancelFunc
-	stopping           bool
-	callback           func()
-	observers          []func([]string)
-	pendingNotifies    map[string]struct{}
-	notifyQueued       bool
-	jobs               map[string]func(*dkvsStore) error
-	clients            map[string]*SatsNetDKVSClient
-	paths              map[string]struct{}
-	exactKeys          map[string]struct{}
-	ready              map[string]struct{}
-	lastSyncErrorCode  string
-	lastSyncError      string
-	lastSyncErrorAt    int64
-	readCacheMu        sync.Mutex
-	readCache          map[string]dkvsReadCacheEntry
-	prefixReadCache    map[string]dkvsPrefixReadCacheEntry
-	mailboxPollAt      time.Time
-	mailboxPollAccount string
-
+	owner                    *Manager
+	mu                       sync.Mutex
+	runMu                    sync.Mutex
+	runActive                bool
+	runDone                  chan struct{}
+	stop                     chan struct{}
+	done                     chan struct{}
+	wake                     chan struct{}
+	requestCtx               context.Context
+	cancelRequests           context.CancelFunc
+	stopping                 bool
+	callback                 func()
+	observers                []func([]string)
+	pendingNotifies          map[string]struct{}
+	notifyQueued             bool
+	jobs                     map[string]func(*dkvsStore) error
+	clients                  map[string]*SatsNetDKVSClient
+	paths                    map[string]struct{}
+	ready                    map[string]struct{}
+	lastSyncErrorCode        string
+	lastSyncError            string
+	lastSyncErrorAt          int64
+	mailboxPollAt            time.Time
+	mailboxPollAccount       string
 	verifyMu                 sync.RWMutex
 	verifyHeight             uint64
 	verifyHeightKnown        bool
 	verifyHeightFromEndpoint bool
 }
 
-type dkvsReadCacheEntry struct {
-	record    *swire.DKVSRecord
-	fetchedAt time.Time
-}
-
-type dkvsPrefixReadCacheEntry struct {
-	records   []*swire.DKVSRecord
-	fetchedAt time.Time
-}
-
-const (
-	dkvsUnmanagedReadCacheTTL = time.Minute
-	dkvsUnmanagedReadTimeout  = 5 * time.Second
-)
+const dkvsUnmanagedReadTimeout = 5 * time.Second
 
 type dkvsSignatureMode uint8
 
@@ -84,7 +65,6 @@ type dkvsStoragePolicy struct {
 	FreeLocal bool
 	Autopay   *DKVSAutopayOptions
 }
-
 type dkvsValue struct {
 	Key         string
 	Value       []byte
@@ -96,7 +76,6 @@ type dkvsValue struct {
 	Signer      []byte
 	record      *swire.DKVSRecord
 }
-
 type dkvsValueMutation struct {
 	Key         string
 	Value       []byte
@@ -107,56 +86,67 @@ type dkvsValueMutation struct {
 	Tombstone   bool
 	IssueHeight uint64
 }
-
-type dkvsUpdateBuilder func(current map[string]*dkvsValue,
-	nextSequence map[string]uint64) ([]dkvsValueMutation, error)
-
+type dkvsUpdateBuilder func(current map[string]*dkvsValue, nextSequence map[string]uint64) ([]dkvsValueMutation, error)
 type dkvsStore struct {
 	manager *dkvsManager
 	client  *SatsNetDKVSClient
 }
 
-var ErrDKVSVerificationHeightRequired = errors.New(
-	"DKVS record verification requires a trusted L2 height")
+var ErrDKVSVerificationHeightRequired = errors.New("DKVS record verification requires a trusted L2 height")
 
 func (m *dkvsManager) observeVerificationHeight(height uint64, known bool) {
 	if m == nil || !known {
 		return
 	}
 	m.verifyMu.Lock()
+	defer m.verifyMu.Unlock()
 	if !m.verifyHeightFromEndpoint && (!m.verifyHeightKnown || height > m.verifyHeight) {
 		m.verifyHeight = height
 	}
 	if !m.verifyHeightFromEndpoint {
 		m.verifyHeightKnown = true
 	}
-	m.verifyMu.Unlock()
 }
-
 func (m *dkvsManager) setEndpointVerificationHeight(height uint64, known bool) {
 	if m == nil || !known {
 		return
 	}
 	m.verifyMu.Lock()
-	m.verifyHeight = height
-	m.verifyHeightKnown = true
-	m.verifyHeightFromEndpoint = true
+	m.verifyHeight, m.verifyHeightKnown, m.verifyHeightFromEndpoint = height, true, true
 	m.verifyMu.Unlock()
 }
 
+// A collection view is an observation, not a current-chain-height query.
+// Only an authoritative best-height refresh may lower the endpoint height.
+func (m *dkvsManager) observeEndpointVerificationHeight(height uint64) {
+	if m == nil {
+		return
+	}
+	m.verifyMu.Lock()
+	defer m.verifyMu.Unlock()
+	if !m.verifyHeightFromEndpoint || !m.verifyHeightKnown || height > m.verifyHeight {
+		m.verifyHeight = height
+	}
+	m.verifyHeightKnown, m.verifyHeightFromEndpoint = true, true
+}
 func (m *dkvsManager) endpointVerificationHeight() (uint64, bool) {
 	if m == nil {
 		return 0, false
 	}
 	m.verifyMu.RLock()
-	height, known := m.verifyHeight, m.verifyHeightKnown && m.verifyHeightFromEndpoint
-	m.verifyMu.RUnlock()
-	return height, known
+	defer m.verifyMu.RUnlock()
+	return m.verifyHeight, m.verifyHeightKnown && m.verifyHeightFromEndpoint
 }
-
 func (m *dkvsManager) refreshVerificationBestHeight(client *SatsNetDKVSClient) (uint64, error) {
 	if m == nil || client == nil {
 		return 0, ErrDKVSPathNotSynced
+	}
+	config, err := m.subscriptionEndpointConfig(client)
+	if err != nil {
+		return 0, err
+	}
+	if err := m.validateVerificationEndpoint(client, config.EndpointID); err != nil {
+		return 0, err
 	}
 	height, err := client.GetBestHeight()
 	if err != nil {
@@ -165,26 +155,34 @@ func (m *dkvsManager) refreshVerificationBestHeight(client *SatsNetDKVSClient) (
 	m.setEndpointVerificationHeight(height, true)
 	return height, nil
 }
-
+func (m *dkvsManager) validateVerificationEndpoint(client *SatsNetDKVSClient, endpointID string) error {
+	if m.owner == nil || m.owner.db == nil || client.replicaNamespace == "" {
+		return nil
+	}
+	state, err := m.subscriptionStateForClient(client)
+	if errors.Is(err, indexercommon.ErrKeyNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return validateDKVSSubscriptionEndpoint(state, endpointID)
+}
 func (m *dkvsManager) observeVerificationOptions(options dkvsindexer.RecordVerificationOptions) {
 	if options.Height != 0 {
 		m.observeVerificationHeight(options.Height, true)
 	}
 }
-
 func (m *dkvsManager) verificationHeight() (uint64, bool) {
 	if m == nil {
 		return 0, false
 	}
 	m.verifyMu.RLock()
-	height, known := m.verifyHeight, m.verifyHeightKnown
-	m.verifyMu.RUnlock()
-	return height, known
+	defer m.verifyMu.RUnlock()
+	return m.verifyHeight, m.verifyHeightKnown
 }
-
-func normalizeDKVSRecordVerification(record *swire.DKVSRecord, key string,
-	options dkvsindexer.RecordVerificationOptions, fallbackHeight uint64, heightKnown bool) (
-	dkvsindexer.RecordVerificationOptions, error) {
+func normalizeDKVSRecordVerification(record *swire.DKVSRecord, key string, options dkvsindexer.RecordVerificationOptions,
+	fallbackHeight uint64, heightKnown bool) (dkvsindexer.RecordVerificationOptions, error) {
 	options.ExpectedKey = key
 	if options.Height != 0 {
 		fallbackHeight, heightKnown = options.Height, true
@@ -203,15 +201,12 @@ func normalizeDKVSRecordVerification(record *swire.DKVSRecord, key string,
 	}
 	return options, nil
 }
-
 func (s *dkvsStore) ObserveVerificationOptions(options dkvsindexer.RecordVerificationOptions) {
 	if s != nil && s.manager != nil {
 		s.manager.observeVerificationOptions(options)
 	}
 }
-
-func (s *dkvsStore) verificationOptions(record *swire.DKVSRecord, key string,
-	options dkvsindexer.RecordVerificationOptions) (dkvsindexer.RecordVerificationOptions, error) {
+func (s *dkvsStore) verificationOptions(record *swire.DKVSRecord, key string, options dkvsindexer.RecordVerificationOptions) (dkvsindexer.RecordVerificationOptions, error) {
 	if s == nil || s.manager == nil {
 		return options, ErrDKVSPathNotSynced
 	}
@@ -219,24 +214,15 @@ func (s *dkvsStore) verificationOptions(record *swire.DKVSRecord, key string,
 	height, known := s.manager.verificationHeight()
 	return normalizeDKVSRecordVerification(record, key, options, height, known)
 }
-
 func cloneDKVSValue(record *swire.DKVSRecord) *dkvsValue {
 	if record == nil {
 		return nil
 	}
-	recordCopy := *record
-	recordCopy.Value = append([]byte(nil), record.Value...)
-	recordCopy.PubKey = append([]byte(nil), record.PubKey...)
-	recordCopy.Signature = append([]byte(nil), record.Signature...)
-	recordCopy.FeeProof = append([]byte(nil), record.FeeProof...)
-	return &dkvsValue{
-		Key: record.Key, Value: append([]byte(nil), record.Value...),
-		Seq: record.Seq, IssueHeight: record.IssueHeight, TTL: record.TTL,
-		Flags: record.Flags, Hash: dkvsindexer.RecordHash(record).String(),
-		Signer: append([]byte(nil), record.PubKey...), record: &recordCopy,
-	}
+	copyRecord := cloneDKVSRecord(record)
+	return &dkvsValue{Key: record.Key, Value: append([]byte(nil), record.Value...), Seq: record.Seq,
+		IssueHeight: record.IssueHeight, TTL: record.TTL, Flags: record.Flags,
+		Hash: dkvsindexer.RecordHash(record).String(), Signer: append([]byte(nil), record.PubKey...), record: copyRecord}
 }
-
 func cloneDKVSRecord(record *swire.DKVSRecord) *swire.DKVSRecord {
 	if record == nil {
 		return nil
@@ -248,91 +234,6 @@ func cloneDKVSRecord(record *swire.DKVSRecord) *swire.DKVSRecord {
 	copyRecord.FeeProof = append([]byte(nil), record.FeeProof...)
 	return &copyRecord
 }
-
-func (m *dkvsManager) cachedUnmanagedRecord(namespace, key string) (*swire.DKVSRecord, bool) {
-	if m == nil {
-		return nil, false
-	}
-	cacheKey := namespace + "\x00" + key
-	m.readCacheMu.Lock()
-	defer m.readCacheMu.Unlock()
-	entry, ok := m.readCache[cacheKey]
-	if !ok || time.Since(entry.fetchedAt) >= dkvsUnmanagedReadCacheTTL {
-		delete(m.readCache, cacheKey)
-		return nil, false
-	}
-	return cloneDKVSRecord(entry.record), true
-}
-
-func (m *dkvsManager) cacheUnmanagedRecord(namespace string, record *swire.DKVSRecord) {
-	if m == nil || record == nil {
-		return
-	}
-	m.readCacheMu.Lock()
-	m.readCache[namespace+"\x00"+record.Key] = dkvsReadCacheEntry{
-		record: cloneDKVSRecord(record), fetchedAt: time.Now(),
-	}
-	m.readCacheMu.Unlock()
-}
-
-func (m *dkvsManager) invalidateUnmanagedRecords(namespace string, keys []string) {
-	if m == nil || len(keys) == 0 {
-		return
-	}
-	m.readCacheMu.Lock()
-	for _, key := range keys {
-		delete(m.readCache, namespace+"\x00"+key)
-		for cacheKey, entry := range m.prefixReadCache {
-			if !strings.HasPrefix(cacheKey, namespace+"\x00") {
-				continue
-			}
-			for _, record := range entry.records {
-				if record != nil && record.Key == key {
-					delete(m.prefixReadCache, cacheKey)
-					break
-				}
-			}
-		}
-	}
-	m.readCacheMu.Unlock()
-}
-
-func cloneDKVSRecords(records []*swire.DKVSRecord) []*swire.DKVSRecord {
-	result := make([]*swire.DKVSRecord, 0, len(records))
-	for _, record := range records {
-		if record != nil {
-			result = append(result, cloneDKVSRecord(record))
-		}
-	}
-	return result
-}
-
-func (m *dkvsManager) cachedPrefixRead(namespace, prefix string) ([]*swire.DKVSRecord, bool) {
-	if m == nil {
-		return nil, false
-	}
-	cacheKey := namespace + "\x00" + prefix
-	m.readCacheMu.Lock()
-	defer m.readCacheMu.Unlock()
-	entry, ok := m.prefixReadCache[cacheKey]
-	if !ok || time.Since(entry.fetchedAt) >= dkvsUnmanagedReadCacheTTL {
-		delete(m.prefixReadCache, cacheKey)
-		return nil, false
-	}
-	return cloneDKVSRecords(entry.records), true
-}
-
-func (m *dkvsManager) cachePrefixRead(namespace, prefix string, records []*swire.DKVSRecord) {
-	if m == nil {
-		return
-	}
-	m.readCacheMu.Lock()
-	m.prefixReadCache[namespace+"\x00"+prefix] = dkvsPrefixReadCacheEntry{
-		records: cloneDKVSRecords(records), fetchedAt: time.Now(),
-	}
-	m.readCacheMu.Unlock()
-}
-
 func dkvsManagedPathForKey(key string) (string, bool, error) {
 	if _, err := dkvsindexer.ParseKey(key); err != nil {
 		return "", false, err
@@ -346,12 +247,10 @@ func dkvsManagedPathForKey(key string) (string, bool, error) {
 	}
 	return key, true, nil
 }
-
 func (m *dkvsManager) managesKey(key string) bool {
 	_, _, err := dkvsManagedPathForKey(key)
 	return err == nil
 }
-
 func (m *dkvsManager) managesMutations(mutations []dkvsindexer.CASMutation) bool {
 	if len(mutations) == 0 {
 		return false
@@ -363,7 +262,6 @@ func (m *dkvsManager) managesMutations(mutations []dkvsindexer.CASMutation) bool
 	}
 	return true
 }
-
 func (m *dkvsManager) desiredPrefixContainsKey(client *SatsNetDKVSClient, key string) bool {
 	if m == nil || client == nil || m.owner == nil || m.owner.db == nil {
 		return false
@@ -381,7 +279,6 @@ func (m *dkvsManager) desiredPrefixContainsKey(client *SatsNetDKVSClient, key st
 	}
 	return false
 }
-
 func (m *dkvsManager) subscriptionStateForClient(client *SatsNetDKVSClient) (*DKVSSubscriptionState, error) {
 	if m == nil || m.owner == nil || m.owner.db == nil || client == nil {
 		return nil, ErrDKVSPathNotSynced
@@ -389,30 +286,78 @@ func (m *dkvsManager) subscriptionStateForClient(client *SatsNetDKVSClient) (*DK
 	return newDKVSReplicaStore(m.owner.db).LoadSubscriptionState(client.replicaNamespace)
 }
 
+// Confirmed reads share the synchronization source and completeness boundary.
+// An unknown client identity can read the last confirmed offline view, but an
+// observed different identity cannot claim that view as its own.
+func (m *dkvsManager) requirePathsReady(client *SatsNetDKVSClient, keys []string) error {
+	if m == nil || client == nil || len(keys) == 0 {
+		return ErrDKVSPathNotSynced
+	}
+	state, err := m.subscriptionStateForClient(client)
+	if errors.Is(err, indexercommon.ErrKeyNotFound) {
+		return ErrDKVSPathNotSynced
+	}
+	if err != nil {
+		return err
+	}
+	client.endpointMu.RLock()
+	endpointID := client.endpointID
+	client.endpointMu.RUnlock()
+	if endpointID != "" {
+		if err := validateDKVSSubscriptionEndpoint(state, endpointID); err != nil {
+			return err
+		}
+	}
+	registered, err := newDKVSReplicaStore(m.owner.db).LoadRegisteredPrefixes(client.replicaNamespace)
+	if err != nil {
+		return err
+	}
+	prefixes, err := mergeSubscriptionPrefixes(registered, m.managedPaths())
+	if err != nil {
+		return err
+	}
+	if !prefixStateReady(state, prefixes) {
+		return ErrDKVSPathNotSynced
+	}
+	for _, key := range keys {
+		covered := false
+		for _, prefix := range prefixes {
+			if walletSubscriptionMatches(prefix, key) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return ErrDKVSPathNotSynced
+		}
+	}
+	// Restore only an eligible persisted view, including height zero. A newer
+	// online observation (or an authoritative reorg height) takes precedence.
+	m.verifyMu.Lock()
+	if !m.verifyHeightKnown {
+		m.verifyHeight, m.verifyHeightKnown, m.verifyHeightFromEndpoint = state.ViewHeight, true, true
+	}
+	m.verifyMu.Unlock()
+	return nil
+}
 func (m *dkvsManager) pathsReady(client *SatsNetDKVSClient, keys []string) bool {
 	if m == nil || client == nil || len(keys) == 0 {
 		return false
 	}
-	needsReplica := false
+	var managed []string
 	for _, key := range keys {
 		if m.desiredPrefixContainsKey(client, key) {
-			needsReplica = true
+			managed = append(managed, key)
 		}
 	}
-	if !needsReplica {
+	if len(managed) == 0 {
 		return true
 	}
-	state, err := m.subscriptionStateForClient(client)
-	if err != nil {
-		return false
-	}
-	return state.Status == DKVSSubscriptionReady || state.Status == DKVSSubscriptionOfflineReady
+	return m.requirePathsReady(client, managed) == nil
 }
-
 func (s *dkvsStore) IsReady(keys ...string) bool {
 	return s != nil && s.manager != nil && s.client != nil && s.manager.pathsReady(s.client, keys)
 }
-
 func (m *dkvsManager) waitPathsReady(client *SatsNetDKVSClient, keys []string) error {
 	if m == nil || client == nil || len(keys) == 0 {
 		return ErrDKVSPathNotSynced
@@ -422,23 +367,24 @@ func (m *dkvsManager) waitPathsReady(client *SatsNetDKVSClient, keys []string) e
 			return ErrDKVSPathNotSynced
 		}
 	}
-	if m.pathsReady(client, keys) {
+	err := m.requirePathsReady(client, keys)
+	if err == nil {
 		return nil
 	}
-	return m.ensureCurrentSubscription(client)
+	if !errors.Is(err, ErrDKVSPathNotSynced) {
+		return err
+	}
+	if err := m.ensureCurrentSubscription(client); err != nil {
+		return err
+	}
+	return m.requirePathsReady(client, keys)
 }
-
 func (s *dkvsStore) WaitReady(keys ...string) error {
 	if s == nil || s.manager == nil || s.client == nil {
 		return ErrDKVSPathNotSynced
 	}
 	return s.manager.waitPathsReady(s.client, keys)
 }
-
-// SyncCurrent performs a non-forced freshness check for managed keys. A
-// current prefix costs only a status request; a snapshot is downloaded only
-// when the server's PathMeta generation differs from the acknowledged local
-// generation.
 func (s *dkvsStore) SyncCurrent(keys ...string) error {
 	if s == nil || s.manager == nil || s.client == nil || len(keys) == 0 {
 		return ErrDKVSPathNotSynced
@@ -450,10 +396,8 @@ func (s *dkvsStore) SyncCurrent(keys ...string) error {
 	}
 	return s.manager.ensureCurrentSubscription(s.client)
 }
-
 func (s *dkvsStore) hasLocalRecordEvidence(keys ...string) (bool, error) {
-	if s == nil || s.manager == nil || s.manager.owner == nil ||
-		s.manager.owner.db == nil || s.client == nil {
+	if s == nil || s.manager == nil || s.manager.owner == nil || s.manager.owner.db == nil || s.client == nil {
 		return false, ErrDKVSPathNotSynced
 	}
 	store := newDKVSReplicaStore(s.manager.owner.db)
@@ -489,7 +433,6 @@ func (s *dkvsStore) hasLocalRecordEvidence(keys ...string) (bool, error) {
 	}
 	return false, nil
 }
-
 func (m *dkvsManager) primaryStore() (*dkvsStore, error) {
 	client, err := m.primaryClient()
 	if err != nil {
@@ -497,7 +440,6 @@ func (m *dkvsManager) primaryStore() (*dkvsStore, error) {
 	}
 	return &dkvsStore{manager: m, client: client}, nil
 }
-
 func (m *dkvsManager) storeFor(scheme, host, proxy string, http HttpClient) (*dkvsStore, error) {
 	client, err := m.clientFor(scheme, host, proxy, http)
 	if err != nil {
@@ -507,49 +449,64 @@ func (m *dkvsManager) storeFor(scheme, host, proxy string, http HttpClient) (*dk
 	client.replicaNamespace = m.owner.dkvsReplicaNamespaceFor(scheme, host, proxy)
 	return &dkvsStore{manager: m, client: client}, nil
 }
-
 func (s *dkvsStore) Get(key string) (*dkvsValue, error) {
 	return s.GetVerified(key, dkvsindexer.RecordVerificationOptions{})
 }
-
 func (s *dkvsStore) GetVerified(key string, options dkvsindexer.RecordVerificationOptions) (*dkvsValue, error) {
 	if s == nil || s.manager == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
-	var record *swire.DKVSRecord
-	var err error
 	if s.manager.desiredPrefixContainsKey(s.client, key) {
-		if err = s.WaitReady(key); err != nil {
+		if err := s.WaitReady(key); err != nil {
 			return nil, err
 		}
-		record, err = newDKVSReplicaStore(s.manager.owner.db).LoadSubscriptionRecord(s.client.replicaNamespace, key)
-		if errors.Is(err, indexercommon.ErrKeyNotFound) {
-			return nil, ErrDKVSRecordNotFound
-		}
-	} else {
-		if cached, ok := s.manager.cachedUnmanagedRecord(s.client.unmanagedReadCacheNamespace(), key); ok {
-			record = cached
-		} else {
-			ctx, cancel := context.WithTimeout(s.client.requestContext(), dkvsUnmanagedReadTimeout)
-			record, err = s.client.GetRecordDirectContext(ctx, key)
-			cancel()
-			if err == nil {
-				s.manager.cacheUnmanagedRecord(s.client.unmanagedReadCacheNamespace(), record)
-			}
-		}
-		if err == nil && record != nil && dkvsindexer.RecordExpiryHeight(record) != 0 {
-			if _, heightErr := s.manager.refreshVerificationBestHeight(s.client); heightErr != nil {
-				return nil, heightErr
-			}
-		}
+		return s.getConfirmedVerified(key, options)
+	}
+	ctx, cancel := context.WithTimeout(s.client.requestContext(), dkvsUnmanagedReadTimeout)
+	defer cancel()
+	record, err := s.client.GetRecordDirectContext(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	height, err := s.client.getBestHeightContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return verifiedDKVSValueAtHeight(record, key, options, height, true)
+}
+
+// Local readiness checks must never fall through to on-demand HTTP or wait on
+// the shared transport. Recheck eligibility even if subscriptions changed.
+func (s *dkvsStore) getConfirmedVerified(key string, options dkvsindexer.RecordVerificationOptions) (*dkvsValue, error) {
+	if s == nil || s.manager == nil || s.client == nil {
+		return nil, ErrDKVSPathNotSynced
+	}
+	if err := s.manager.requirePathsReady(s.client, []string{key}); err != nil {
+		return nil, err
+	}
+	record, err := newDKVSReplicaStore(s.manager.owner.db).LoadSubscriptionRecord(s.client.replicaNamespace, key)
+	if errors.Is(err, indexercommon.ErrKeyNotFound) {
+		return nil, ErrDKVSRecordNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	return s.verifiedValue(record, key, options)
+}
+func (s *dkvsStore) verifiedValue(record *swire.DKVSRecord, key string, options dkvsindexer.RecordVerificationOptions) (*dkvsValue, error) {
+	s.ObserveVerificationOptions(options)
+	height, known := s.manager.verificationHeight()
+	return verifiedDKVSValueAtHeight(record, key, options, height, known)
+}
+
+// A direct read's height belongs to its selected source and this request. It
+// cannot update the manager's confirmed-replica verification authority.
+func verifiedDKVSValueAtHeight(record *swire.DKVSRecord, key string, options dkvsindexer.RecordVerificationOptions,
+	height uint64, known bool) (*dkvsValue, error) {
 	if record == nil {
 		return nil, ErrDKVSRecordNotFound
 	}
-	options, err = s.verificationOptions(record, key, options)
+	options, err := normalizeDKVSRecordVerification(record, key, options, height, known)
 	if err != nil {
 		return nil, err
 	}
@@ -559,11 +516,8 @@ func (s *dkvsStore) GetVerified(key string, options dkvsindexer.RecordVerificati
 	return cloneDKVSValue(record), nil
 }
 
-// GetAuthoritativeVerified reads one key directly from the trusted CoreNode.
-// It is intentionally not written into the materialized prefix replica: a
-// single-key read cannot prove that no other key in the prefix changed.
-func (s *dkvsStore) GetAuthoritativeVerified(key string,
-	options dkvsindexer.RecordVerificationOptions) (*dkvsValue, error) {
+// A direct authoritative read does not advance or replace an entire prefix.
+func (s *dkvsStore) GetAuthoritativeVerified(key string, options dkvsindexer.RecordVerificationOptions) (*dkvsValue, error) {
 	if s == nil || s.manager == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
@@ -576,11 +530,9 @@ func (s *dkvsStore) GetAuthoritativeVerified(key string,
 	}
 	return cloneDKVSValue(record), nil
 }
-
 func (s *dkvsStore) GetAuthoritative(key string) (*dkvsValue, error) {
 	return s.GetAuthoritativeVerified(key, dkvsindexer.RecordVerificationOptions{})
 }
-
 func (s *dkvsStore) Put(mutation dkvsValueMutation) (*dkvsValue, error) {
 	values, err := s.PutBatch([]dkvsValueMutation{mutation})
 	if err != nil {
@@ -591,44 +543,36 @@ func (s *dkvsStore) Put(mutation dkvsValueMutation) (*dkvsValue, error) {
 	}
 	return values[0], nil
 }
-
 func (s *dkvsStore) PutBatch(mutations []dkvsValueMutation) ([]*dkvsValue, error) {
 	if s == nil || s.manager == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
 	return s.manager.putValues(s.client, mutations)
 }
-
 func (s *dkvsStore) Update(keys []string, builder dkvsUpdateBuilder) ([]*dkvsValue, error) {
 	if s == nil || s.manager == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
 	return s.manager.updateValues(s.client, keys, builder)
 }
-
-func (s *dkvsStore) updateWithOutboxOrigin(keys []string, builder dkvsUpdateBuilder,
-	origin dkvsOutboxOrigin) ([]*dkvsValue, error) {
+func (s *dkvsStore) updateWithOutboxOrigin(keys []string, builder dkvsUpdateBuilder, origin dkvsOutboxOrigin) ([]*dkvsValue, error) {
 	if s == nil || s.manager == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
 	return s.manager.updateValuesWithOrigin(s.client, keys, builder, origin, false)
 }
-
-func (s *dkvsStore) updateAuthoritativeWithOutboxOrigin(keys []string,
-	builder dkvsUpdateBuilder, origin dkvsOutboxOrigin) ([]*dkvsValue, error) {
+func (s *dkvsStore) updateAuthoritativeWithOutboxOrigin(keys []string, builder dkvsUpdateBuilder, origin dkvsOutboxOrigin) ([]*dkvsValue, error) {
 	if s == nil || s.manager == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
 	return s.manager.updateValuesWithOrigin(s.client, keys, builder, origin, true)
 }
-
 func (s *dkvsStore) Config() (*AccountFreeLocalPolicy, error) {
 	if s == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
 	return s.client.GetConfig()
 }
-
 func (s *dkvsStore) ConfigWithVerificationHeight() (*AccountFreeLocalPolicy, uint64, bool, error) {
 	policy, err := s.Config()
 	if err != nil {
@@ -637,13 +581,22 @@ func (s *dkvsStore) ConfigWithVerificationHeight() (*AccountFreeLocalPolicy, uin
 	if s.manager == nil {
 		return policy, 0, false, nil
 	}
-	if height, refreshErr := s.manager.refreshVerificationBestHeight(s.client); refreshErr == nil {
+	// Config has already identified the policy's source. Check it before a
+	// transient refresh failure can fall back to the replica's trusted height.
+	s.client.endpointMu.RLock()
+	endpointID := s.client.endpointID
+	s.client.endpointMu.RUnlock()
+	if err := s.manager.validateVerificationEndpoint(s.client, endpointID); err != nil {
+		return nil, 0, false, err
+	}
+	if height, err := s.manager.refreshVerificationBestHeight(s.client); err == nil {
 		return policy, height, true, nil
+	} else if errors.Is(err, dkvsindexer.ErrEndpointMismatch) {
+		return nil, 0, false, err
 	}
 	height, known := s.manager.verificationHeight()
 	return policy, height, known, nil
 }
-
 func (s *dkvsStore) ConfigureFreeLocalRetention(options *dkvsindexer.RecordOptions) (*AccountFreeLocalPolicy, error) {
 	policy, err := s.Config()
 	if err != nil {
@@ -654,11 +607,9 @@ func (s *dkvsStore) ConfigureFreeLocalRetention(options *dkvsindexer.RecordOptio
 	}
 	return policy, nil
 }
-
 func (s *dkvsStore) List(prefix string) ([]*dkvsValue, error) {
 	return s.ListVerified(prefix, dkvsindexer.RecordVerificationOptions{})
 }
-
 func (s *dkvsStore) ListVerified(prefix string, options dkvsindexer.RecordVerificationOptions) ([]*dkvsValue, error) {
 	if s == nil || s.manager == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
@@ -682,25 +633,23 @@ func (s *dkvsStore) ListVerified(prefix string, options dkvsindexer.RecordVerifi
 		if record == nil || !walletSubscriptionMatches(prefix, record.Key) {
 			continue
 		}
-		verify, verifyErr := s.verificationOptions(record, record.Key, options)
-		if errors.Is(verifyErr, dkvsindexer.ErrExpiredRecord) {
+		verify, err := s.verificationOptions(record, record.Key, options)
+		if errors.Is(err, dkvsindexer.ErrExpiredRecord) {
 			continue
 		}
-		if verifyErr != nil {
-			return nil, verifyErr
+		if err != nil {
+			return nil, err
 		}
-		if verifyErr = dkvsindexer.VerifyRecordForClient(record, verify); errors.Is(verifyErr, dkvsindexer.ErrExpiredRecord) {
+		if err := dkvsindexer.VerifyRecordForClient(record, verify); errors.Is(err, dkvsindexer.ErrExpiredRecord) {
 			continue
-		} else if verifyErr != nil {
-			return nil, verifyErr
+		} else if err != nil {
+			return nil, err
 		}
 		values = append(values, cloneDKVSValue(record))
 	}
 	return values, nil
 }
-
-func (s *dkvsStore) ListMailboxVerified(accountID string,
-	options dkvsindexer.RecordVerificationOptions) ([]*dkvsValue, error) {
+func (s *dkvsStore) ListMailboxVerified(accountID string, options dkvsindexer.RecordVerificationOptions) ([]*dkvsValue, error) {
 	if s == nil || s.manager == nil || s.client == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
@@ -712,23 +661,20 @@ func (s *dkvsStore) ListMailboxVerified(accountID string,
 	if err != nil {
 		return nil, err
 	}
-	messagePrefix := target + "/msg/"
 	filtered := values[:0]
 	for _, value := range values {
-		if value != nil && strings.HasPrefix(value.Key, messagePrefix) {
+		if value != nil && strings.HasPrefix(value.Key, target+"/msg/") {
 			filtered = append(filtered, value)
 		}
 	}
 	return filtered, nil
 }
-
 func (s *dkvsStore) Refresh(keys ...string) error {
 	if s == nil || s.manager == nil || s.client == nil {
 		return ErrDKVSPathNotSynced
 	}
 	return s.manager.refreshPaths(s.client, keys)
 }
-
 func statePrecondition(state *dkvsindexer.DKVSKeyState) (dkvsindexer.WritePrecondition, error) {
 	if state == nil || state.Status == dkvsindexer.KeyStateNeverSeen {
 		return dkvsindexer.WritePrecondition{ExpectAbsent: true}, nil
@@ -742,30 +688,24 @@ func statePrecondition(state *dkvsindexer.DKVSKeyState) (dkvsindexer.WritePrecon
 	}
 	return dkvsindexer.WritePrecondition{ExpectedHash: hash}, nil
 }
-
-func (m *dkvsManager) currentKeyState(client *SatsNetDKVSClient,
-	key string) (*dkvsindexer.DKVSKeyState, *swire.DKVSRecord, error) {
+func (m *dkvsManager) currentKeyState(client *SatsNetDKVSClient, key string) (*dkvsindexer.DKVSKeyState, *swire.DKVSRecord, error) {
 	if m == nil || m.owner == nil || m.owner.db == nil || client == nil {
 		return nil, nil, ErrDKVSPathNotSynced
 	}
 	store := newDKVSReplicaStore(m.owner.db)
 	if m.desiredPrefixContainsKey(client, key) {
 		if local, err := store.LoadLocalKeyState(client.replicaNamespace, key); err == nil {
-			state := &dkvsindexer.DKVSKeyState{
-				Key: key, Seq: local.Seq, ETag: local.ETag,
-				ExpiryHeight: local.ExpiryHeight, StorageMode: local.StorageMode,
+			height, known := m.verificationHeight()
+			if !local.Deleted && (!known || local.ExpiryHeight == 0 || local.ExpiryHeight > height) {
+				record, err := store.LoadSubscriptionRecord(client.replicaNamespace, key)
+				if err != nil {
+					return nil, nil, err
+				}
+				return &dkvsindexer.DKVSKeyState{Key: key, Seq: local.Seq, ETag: local.ETag,
+					ExpiryHeight: local.ExpiryHeight, StorageMode: local.StorageMode, Status: dkvsindexer.KeyStateActive, Record: record}, record, nil
 			}
-			if local.Deleted {
-				state.Status = dkvsindexer.KeyStateDeleted
-				return state, nil, nil
-			}
-			state.Status = dkvsindexer.KeyStateActive
-			record, readErr := store.LoadSubscriptionRecord(client.replicaNamespace, key)
-			if readErr != nil {
-				return nil, nil, readErr
-			}
-			state.Record = record
-			return state, record, nil
+			// A local expired value is history, not a permanent CAS floor. Ask
+			// the source for the current lifetime before building a new write.
 		} else if !errors.Is(err, indexercommon.ErrKeyNotFound) {
 			return nil, nil, err
 		}
@@ -786,14 +726,13 @@ func (m *dkvsManager) currentKeyState(client *SatsNetDKVSClient,
 	}
 	return state, record, nil
 }
-
-func (m *dkvsManager) authoritativeKeyState(client *SatsNetDKVSClient, key string,
-	options dkvsindexer.RecordVerificationOptions) (*dkvsindexer.DKVSKeyState,
-	*swire.DKVSRecord, error) {
+func (m *dkvsManager) authoritativeKeyState(client *SatsNetDKVSClient, key string, options dkvsindexer.RecordVerificationOptions) (*dkvsindexer.DKVSKeyState, *swire.DKVSRecord, error) {
 	if m == nil || client == nil {
 		return nil, nil, ErrDKVSPathNotSynced
 	}
-	state, err := client.GetKeyState(key)
+	ctx, cancel := context.WithTimeout(client.requestContext(), dkvsUnmanagedReadTimeout)
+	defer cancel()
+	state, err := client.getKeyStateContext(ctx, key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -801,31 +740,26 @@ func (m *dkvsManager) authoritativeKeyState(client *SatsNetDKVSClient, key strin
 		return nil, nil, dkvsindexer.ErrInvalidRecord
 	}
 	if state.Status != dkvsindexer.KeyStateActive {
-		if state.Status != dkvsindexer.KeyStateDeleted &&
-			state.Status != dkvsindexer.KeyStateNeverSeen {
+		if state.Status != dkvsindexer.KeyStateNeverSeen {
 			return nil, nil, dkvsindexer.ErrInvalidRecord
 		}
 		return state, nil, nil
 	}
 	record := state.Record
 	if record == nil {
-		record, err = client.GetRecordDirect(key)
+		record, err = client.GetRecordDirectContext(ctx, key)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
-	if record == nil || record.Key != key || record.Seq != state.Seq ||
-		strings.TrimSpace(state.ETag) == "" ||
-		dkvsindexer.RecordHash(record).String() != state.ETag {
+	if record == nil || record.Key != key || record.Seq != state.Seq || state.ETag == "" || dkvsindexer.RecordHash(record).String() != state.ETag {
 		return nil, nil, dkvsindexer.ErrInvalidRecord
 	}
-	if dkvsindexer.RecordExpiryHeight(record) != 0 {
-		if _, err := m.refreshVerificationBestHeight(client); err != nil {
-			return nil, nil, err
-		}
+	height, err := client.getBestHeightContext(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
-	store := &dkvsStore{manager: m, client: client}
-	options, err = store.verificationOptions(record, key, options)
+	options, err = normalizeDKVSRecordVerification(record, key, options, height, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -834,20 +768,16 @@ func (m *dkvsManager) authoritativeKeyState(client *SatsNetDKVSClient, key strin
 	}
 	return state, record, nil
 }
-
-func nextDKVSRecordSequence(existing *swire.DKVSRecord, floorSeq uint64) (uint64, error) {
-	current := floorSeq
-	if existing != nil && existing.Seq > current {
-		current = existing.Seq
+func nextDKVSRecordSequence(existing *swire.DKVSRecord, currentSeq uint64) (uint64, error) {
+	if existing != nil && existing.Seq > currentSeq {
+		currentSeq = existing.Seq
 	}
-	if current == ^uint64(0) {
+	if currentSeq == ^uint64(0) {
 		return 0, dkvsindexer.ErrInvalidSequence
 	}
-	return current + 1, nil
+	return currentSeq + 1, nil
 }
-
-func (m *dkvsManager) confirmedRecordState(client *SatsNetDKVSClient,
-	key string) (*swire.DKVSRecord, uint64, error) {
+func (m *dkvsManager) confirmedRecordState(client *SatsNetDKVSClient, key string) (*swire.DKVSRecord, uint64, error) {
 	state, record, err := m.currentKeyState(client, key)
 	if err != nil {
 		return nil, 0, err
@@ -857,14 +787,11 @@ func (m *dkvsManager) confirmedRecordState(client *SatsNetDKVSClient,
 	}
 	return record, state.Seq, nil
 }
-
 func (m *dkvsManager) confirmedRecord(client *SatsNetDKVSClient, key string) (*swire.DKVSRecord, error) {
 	record, _, err := m.confirmedRecordState(client, key)
 	return record, err
 }
-
-func (m *dkvsManager) putRecord(client *SatsNetDKVSClient,
-	record *swire.DKVSRecord) (*swire.DKVSRecord, error) {
+func (m *dkvsManager) putRecord(client *SatsNetDKVSClient, record *swire.DKVSRecord) (*swire.DKVSRecord, error) {
 	if m == nil || record == nil || client == nil {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
@@ -880,18 +807,13 @@ func (m *dkvsManager) putRecord(client *SatsNetDKVSClient,
 	if existing != nil && dkvsindexer.RecordHash(existing) == dkvsindexer.RecordHash(record) {
 		return existing, nil
 	}
-	prepared := *record
-	prepared.Value = append([]byte(nil), record.Value...)
-	prepared.PubKey = append([]byte(nil), record.PubKey...)
-	prepared.FeeProof = append([]byte(nil), record.FeeProof...)
-	prepared.Signature = append([]byte(nil), record.Signature...)
+	prepared := cloneDKVSRecord(record)
 	if prepared.IssueHeight == 0 {
-		height, heightErr := m.refreshVerificationBestHeight(client)
-		if heightErr != nil {
-			return nil, heightErr
+		height, err := m.refreshVerificationBestHeight(client)
+		if err != nil {
+			return nil, err
 		}
-		prepared.IssueHeight = height
-		prepared.Signature = nil
+		prepared.IssueHeight, prepared.Signature = height, nil
 		if m.owner == nil {
 			return nil, dkvsindexer.ErrInvalidSignature
 		}
@@ -904,7 +826,7 @@ func (m *dkvsManager) putRecord(client *SatsNetDKVSClient,
 		if signer == nil {
 			return nil, dkvsindexer.ErrInvalidSignature
 		}
-		if err := SignDKVSRecord(signer, &prepared); err != nil {
+		if err := SignDKVSRecord(signer, prepared); err != nil {
 			return nil, err
 		}
 	}
@@ -922,9 +844,7 @@ func (m *dkvsManager) putRecord(client *SatsNetDKVSClient,
 	if err != nil {
 		return nil, err
 	}
-	result, err := m.putBatchCASLocked(client, []dkvsindexer.CASMutation{{
-		Record: &prepared, Precondition: precondition,
-	}})
+	result, err := m.putBatchCASLocked(client, []dkvsindexer.CASMutation{{Record: prepared, Precondition: precondition}})
 	if err != nil {
 		return nil, err
 	}
@@ -933,9 +853,7 @@ func (m *dkvsManager) putRecord(client *SatsNetDKVSClient,
 	}
 	return result.Records[0], nil
 }
-
-func (m *dkvsManager) putBatchCAS(client *SatsNetDKVSClient,
-	mutations []dkvsindexer.CASMutation) (*DKVSBatchCASResult, error) {
+func (m *dkvsManager) putBatchCAS(client *SatsNetDKVSClient, mutations []dkvsindexer.CASMutation) (*DKVSBatchCASResult, error) {
 	if m == nil || client == nil || len(mutations) == 0 {
 		return nil, fmt.Errorf("DKVS manager write is unavailable")
 	}
@@ -953,38 +871,36 @@ func (m *dkvsManager) putBatchCAS(client *SatsNetDKVSClient,
 	defer unlock()
 	return m.putBatchCASLocked(client, mutations)
 }
-
-func (m *dkvsManager) putBatchCASLocked(client *SatsNetDKVSClient,
-	mutations []dkvsindexer.CASMutation) (*DKVSBatchCASResult, error) {
+func (m *dkvsManager) putBatchCASLocked(client *SatsNetDKVSClient, mutations []dkvsindexer.CASMutation) (*DKVSBatchCASResult, error) {
 	if len(mutations) == 0 || mutations[0].Record == nil {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
 	return m.putBatchCASLockedWithOrigin(client, mutations, dkvsOutboxOrigin{Key: mutations[0].Record.Key})
 }
-
-func (m *dkvsManager) putBatchCASLockedWithOrigin(client *SatsNetDKVSClient,
-	mutations []dkvsindexer.CASMutation, origin dkvsOutboxOrigin) (*DKVSBatchCASResult, error) {
+func (m *dkvsManager) putBatchCASLockedWithOrigin(client *SatsNetDKVSClient, mutations []dkvsindexer.CASMutation, origin dkvsOutboxOrigin) (*DKVSBatchCASResult, error) {
 	if m == nil || client == nil || len(mutations) == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
 	}
-	writeResult, err := client.putRecordBatchCASWithOrigin(mutations, origin)
+	result, err := client.putRecordBatchCASWithOrigin(mutations, origin)
 	if err != nil {
 		return nil, err
 	}
-	keys := make([]string, 0, len(mutations))
-	for _, mutation := range mutations {
-		if mutation.Record != nil {
-			keys = append(keys, mutation.Record.Key)
-		}
-	}
-	m.invalidateUnmanagedRecords(client.unmanagedReadCacheNamespace(), keys)
 	m.wakeSync()
-	return writeResultToBatchResult(writeResult), nil
+	return writeResultToBatchResult(result), nil
 }
 
 func (m *dkvsManager) buildValueRecord(mutation dkvsValueMutation, seq uint64) (*swire.DKVSRecord, error) {
 	if mutation.Owner == nil || mutation.Key == "" || seq == 0 {
 		return nil, dkvsindexer.ErrInvalidRecord
+	}
+	if mutation.Tombstone {
+		// The caller supplies the captured current record hash. Deletion is a
+		// signed target-bound operation, without storage TTL or a fee proof.
+		if len(mutation.Value) != chainhash.HashSize {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
+		return NewDKVSSignedRecord(mutation.Owner, mutation.Key, mutation.Value,
+			dkvsindexer.RecordOptions{Seq: seq, IssueHeight: mutation.IssueHeight, Flags: dkvsindexer.FlagTombstone})
 	}
 	value := append([]byte(nil), mutation.Value...)
 	if mutation.BuildValue != nil {
@@ -995,10 +911,6 @@ func (m *dkvsManager) buildValueRecord(mutation dkvsValueMutation, seq uint64) (
 		}
 	}
 	options := dkvsindexer.RecordOptions{Seq: seq, IssueHeight: mutation.IssueHeight, TTL: mutation.Policy.TTL}
-	if mutation.Tombstone {
-		options.Flags |= dkvsindexer.FlagTombstone
-		value = nil
-	}
 	switch mutation.Signature {
 	case dkvsSignatureAccount:
 		switch {
@@ -1020,8 +932,7 @@ func (m *dkvsManager) buildValueRecord(mutation dkvsValueMutation, seq uint64) (
 			if err != nil {
 				return nil, err
 			}
-			proof, err := dkvsindexer.NewFreeLocalFeeProof(record.Key, parsed.Namespace,
-				uint32(dkvsindexer.RecordSize(record)), dkvsindexer.RecordExpiryHeight(record))
+			proof, err := dkvsindexer.NewFreeLocalFeeProof(record.Key, parsed.Namespace, uint32(dkvsindexer.RecordSize(record)), dkvsindexer.RecordExpiryHeight(record))
 			if err != nil {
 				return nil, err
 			}
@@ -1035,18 +946,13 @@ func (m *dkvsManager) buildValueRecord(mutation dkvsValueMutation, seq uint64) (
 		case mutation.Policy.Autopay != nil:
 			return newSignedRecordWithAutopay(mutation.Owner, mutation.Key, value, options, *mutation.Policy.Autopay)
 		default:
-			if mutation.Tombstone {
-				return NewDKVSSignedTombstone(mutation.Owner, mutation.Key, options)
-			}
 			return NewDKVSSignedRecord(mutation.Owner, mutation.Key, value, options)
 		}
 	default:
 		return nil, dkvsindexer.ErrInvalidSignature
 	}
 }
-
-func (m *dkvsManager) putValues(client *SatsNetDKVSClient,
-	values []dkvsValueMutation) ([]*dkvsValue, error) {
+func (m *dkvsManager) putValues(client *SatsNetDKVSClient, values []dkvsValueMutation) ([]*dkvsValue, error) {
 	if m == nil || client == nil || len(values) == 0 {
 		return nil, ErrDKVSPathNotSynced
 	}
@@ -1057,22 +963,15 @@ func (m *dkvsManager) putValues(client *SatsNetDKVSClient,
 		}
 		keys = append(keys, value.Key)
 	}
-	return m.updateValues(client, keys, func(_ map[string]*dkvsValue,
-		_ map[string]uint64) ([]dkvsValueMutation, error) {
-		return values, nil
-	})
+	return m.updateValues(client, keys, func(_ map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) { return values, nil })
 }
-
-func (m *dkvsManager) updateValues(client *SatsNetDKVSClient, keys []string,
-	builder dkvsUpdateBuilder) ([]*dkvsValue, error) {
+func (m *dkvsManager) updateValues(client *SatsNetDKVSClient, keys []string, builder dkvsUpdateBuilder) ([]*dkvsValue, error) {
 	if len(keys) == 0 {
 		return nil, ErrDKVSPathNotSynced
 	}
 	return m.updateValuesWithOrigin(client, keys, builder, dkvsOutboxOrigin{Key: keys[0]}, false)
 }
-
-func (m *dkvsManager) updateValuesWithOrigin(client *SatsNetDKVSClient, keys []string,
-	builder dkvsUpdateBuilder, origin dkvsOutboxOrigin, authoritativeFirst bool) ([]*dkvsValue, error) {
+func (m *dkvsManager) updateValuesWithOrigin(client *SatsNetDKVSClient, keys []string, builder dkvsUpdateBuilder, origin dkvsOutboxOrigin, authoritativeFirst bool) ([]*dkvsValue, error) {
 	if m == nil || client == nil || len(keys) == 0 || builder == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
@@ -1103,18 +1002,16 @@ func (m *dkvsManager) updateValuesWithOrigin(client *SatsNetDKVSClient, keys []s
 		for _, key := range keys {
 			var state *dkvsindexer.DKVSKeyState
 			var record *swire.DKVSRecord
-			var loadErr error
+			var err error
 			if attempt == 0 && !authoritativeFirst {
-				state, record, loadErr = m.currentKeyState(client, key)
+				state, record, err = m.currentKeyState(client, key)
 			} else {
-				state, record, loadErr = m.authoritativeKeyState(client, key,
-					dkvsindexer.RecordVerificationOptions{})
+				state, record, err = m.authoritativeKeyState(client, key, dkvsindexer.RecordVerificationOptions{})
 			}
-			if loadErr != nil {
-				return nil, loadErr
+			if err != nil {
+				return nil, err
 			}
-			states[key] = state
-			current[key] = cloneDKVSValue(record)
+			states[key], current[key] = state, cloneDKVSValue(record)
 			if state == nil || state.Status == dkvsindexer.KeyStateNeverSeen {
 				nextSequence[key] = 1
 			} else {
@@ -1158,22 +1055,46 @@ func (m *dkvsManager) updateValuesWithOrigin(client *SatsNetDKVSClient, keys []s
 			if value.IssueHeight == 0 {
 				value.IssueHeight = writeHeight
 			}
-			record, buildErr := m.buildValueRecord(value, seq)
-			if buildErr != nil {
-				return nil, buildErr
+			if value.Tombstone {
+				if current[value.Key] == nil || current[value.Key].record == nil {
+					return nil, dkvsindexer.ErrRecordNotFound
+				}
+				target := dkvsindexer.RecordHash(current[value.Key].record)
+				value.Value = append([]byte(nil), target[:]...)
 			}
-			precondition, conditionErr := statePrecondition(states[value.Key])
-			if conditionErr != nil {
-				return nil, conditionErr
+			record, err := m.buildValueRecord(value, seq)
+			if err != nil {
+				return nil, err
+			}
+			precondition, err := statePrecondition(states[value.Key])
+			if err != nil {
+				return nil, err
 			}
 			cas = append(cas, dkvsindexer.CASMutation{Record: record, Precondition: precondition})
 		}
-		result, submitErr := m.putBatchCASLockedWithOrigin(client, cas, origin)
-		if submitErr != nil {
-			if attempt < 2 && isDKVSRebaseError(submitErr) {
+		result, err := m.putBatchCASLockedWithOrigin(client, cas, origin)
+		if err != nil {
+			if attempt < 2 && isDKVSRebaseError(err) {
+				if (errors.Is(err, dkvsindexer.ErrStaleGeneration) || IsDKVSErrorCode(err, dkvsindexer.ErrorCodeStaleGeneration)) && len(managedKeys) != 0 {
+					prefixes := make([]string, 0, len(managedKeys))
+					for _, key := range managedKeys {
+						prefix, _, pathErr := dkvsManagedPathForKey(key)
+						if pathErr != nil {
+							return nil, pathErr
+						}
+						prefixes = append(prefixes, prefix)
+					}
+					prefixes, pathErr := normalizeWalletSubscriptionPrefixes(prefixes)
+					if pathErr != nil {
+						return nil, pathErr
+					}
+					if pathErr = m.forceCurrentPrefixes(client, prefixes); pathErr != nil {
+						return nil, pathErr
+					}
+				}
 				continue
 			}
-			return nil, submitErr
+			return nil, err
 		}
 		output := make([]*dkvsValue, 0, len(result.Records))
 		for _, record := range result.Records {
@@ -1183,9 +1104,7 @@ func (m *dkvsManager) updateValuesWithOrigin(client *SatsNetDKVSClient, keys []s
 	}
 	return nil, dkvsindexer.ErrWriteConflict
 }
-
-func (m *dkvsManager) registerDirectoriesLocked(client *SatsNetDKVSClient,
-	store *dkvsReplicaStore, directories []string) error {
+func (m *dkvsManager) registerDirectoriesLocked(client *SatsNetDKVSClient, store *dkvsReplicaStore, directories []string) error {
 	if m == nil || client == nil || store == nil {
 		return ErrDKVSPathNotSynced
 	}
@@ -1207,9 +1126,7 @@ func (m *dkvsManager) registerDirectoriesLocked(client *SatsNetDKVSClient,
 	}
 	return m.forceCurrentPrefixes(client, desired)
 }
-
-func (m *dkvsManager) registerKeysLocked(client *SatsNetDKVSClient,
-	store *dkvsReplicaStore, keys []string) error {
+func (m *dkvsManager) registerKeysLocked(client *SatsNetDKVSClient, store *dkvsReplicaStore, keys []string) error {
 	prefixes := make([]string, 0, len(keys))
 	for _, key := range keys {
 		prefix, _, err := dkvsManagedPathForKey(key)
@@ -1220,79 +1137,22 @@ func (m *dkvsManager) registerKeysLocked(client *SatsNetDKVSClient,
 	}
 	return m.registerDirectoriesLocked(client, store, prefixes)
 }
-
 func (m *dkvsManager) refreshPaths(client *SatsNetDKVSClient, keys []string) error {
 	if m == nil || m.owner == nil || m.owner.db == nil || client == nil {
 		return ErrDKVSPathNotSynced
 	}
 	return m.registerKeysLocked(client, newDKVSReplicaStore(m.owner.db), keys)
 }
-
-func (m *dkvsManager) directoriesReady(client *SatsNetDKVSClient, directories []string) bool {
-	if m == nil || client == nil || len(directories) == 0 {
-		return false
-	}
-	state, err := m.subscriptionStateForClient(client)
-	if err != nil || (state.Status != DKVSSubscriptionReady && state.Status != DKVSSubscriptionOfflineReady) {
-		return false
-	}
-	for _, directory := range directories {
-		if _, found := state.Generations[directory]; !found {
-			return false
-		}
-	}
-	return true
-}
-
-// coveringManagedDirectories resolves read-only child prefixes to the
-// registered managed prefixes whose snapshots contain them. Only registered
-// canonical prefixes own a server PathMeta generation; query prefixes such as
-// /mail/<account>/msg are filters over that local snapshot and must not be
-// treated as independent synchronization roots.
-func (m *dkvsManager) coveringManagedDirectories(client *SatsNetDKVSClient,
-	directories []string) ([]string, error) {
-
-	if m == nil || m.owner == nil || m.owner.db == nil || client == nil || len(directories) == 0 {
-		return nil, ErrDKVSPathNotSynced
-	}
-	desired, err := m.desiredPrefixes(newDKVSReplicaStore(m.owner.db), client.replicaNamespace)
-	if err != nil {
-		return nil, err
-	}
-	covered := make([]string, 0, len(directories))
-	for _, directory := range directories {
-		directory = strings.TrimSuffix(strings.TrimSpace(directory), "/")
-		if _, err := dkvsindexer.ParsePrefix(directory); err != nil {
-			return nil, err
-		}
-		covering := ""
-		for _, prefix := range desired {
-			if walletSubscriptionMatches(prefix, directory) && len(prefix) > len(covering) {
-				covering = prefix
-			}
-		}
-		if covering == "" {
-			return nil, ErrDKVSPathNotSynced
-		}
-		covered = append(covered, covering)
-	}
-	return normalizeWalletSubscriptionPrefixes(covered)
-}
-
 func (m *dkvsManager) waitDirectoriesReady(client *SatsNetDKVSClient, directories []string) error {
-	if m == nil || m.owner == nil || m.owner.db == nil || client == nil || len(directories) == 0 {
-		return ErrDKVSPathNotSynced
+	for _, directory := range directories {
+		if _, err := dkvsindexer.ParsePrefix(directory); err != nil {
+			return err
+		}
 	}
-	managed, err := m.coveringManagedDirectories(client, directories)
-	if err != nil {
-		return err
-	}
-	if m.directoriesReady(client, managed) {
-		return nil
-	}
-	return m.ensureCurrentSubscription(client)
+	// Child prefixes filter their registered collection; they do not own a
+	// separate generation. Keys and directories use the same readiness gate.
+	return m.waitPathsReady(client, directories)
 }
-
 func (m *dkvsManager) rememberDirectories(directories []string) {
 	if m == nil {
 		return
@@ -1306,12 +1166,11 @@ func (m *dkvsManager) rememberDirectories(directories []string) {
 		}
 	}
 }
-
 func (m *dkvsManager) rememberPaths(keys []string) {
 	if m == nil {
 		return
 	}
-	prefixes := make([]string, 0, len(keys))
+	var prefixes []string
 	for _, key := range keys {
 		if prefix, _, err := dkvsManagedPathForKey(key); err == nil {
 			prefixes = append(prefixes, prefix)
@@ -1319,7 +1178,6 @@ func (m *dkvsManager) rememberPaths(keys []string) {
 	}
 	m.rememberDirectories(prefixes)
 }
-
 func (m *dkvsManager) managedPaths() []string {
 	if m == nil {
 		return nil
@@ -1334,10 +1192,6 @@ func (m *dkvsManager) managedPaths() []string {
 	return result
 }
 
-func (m *dkvsManager) managedExactKeys() []string {
-	return nil
-}
-
 const dkvsBackgroundSyncErrorCode = "DKVS_SYNC_ERROR"
 
 func dkvsSyncErrorCode(err error) string {
@@ -1349,18 +1203,14 @@ func dkvsSyncErrorCode(err error) string {
 		return string(code)
 	}
 	switch {
-	case errors.Is(err, dkvsindexer.ErrInvalidRecord),
-		errors.Is(err, dkvsindexer.ErrInvalidKey),
-		errors.Is(err, dkvsindexer.ErrInvalidNamespace),
-		errors.Is(err, dkvsindexer.ErrInvalidSignature),
-		errors.Is(err, dkvsindexer.ErrInvalidCheckpoint),
-		errors.Is(err, dkvsindexer.ErrInvalidSnapshot):
+	case errors.Is(err, dkvsindexer.ErrInvalidRecord), errors.Is(err, dkvsindexer.ErrInvalidKey),
+		errors.Is(err, dkvsindexer.ErrInvalidNamespace), errors.Is(err, dkvsindexer.ErrInvalidSignature),
+		errors.Is(err, dkvsindexer.ErrInvalidCheckpoint), errors.Is(err, dkvsindexer.ErrInvalidSnapshot):
 		return string(code)
 	default:
 		return dkvsBackgroundSyncErrorCode
 	}
 }
-
 func (m *dkvsManager) setLastSyncError(err error) {
 	if m == nil {
 		return
@@ -1371,11 +1221,8 @@ func (m *dkvsManager) setLastSyncError(err error) {
 		m.lastSyncErrorCode, m.lastSyncError, m.lastSyncErrorAt = "", "", 0
 		return
 	}
-	m.lastSyncErrorCode = dkvsSyncErrorCode(err)
-	m.lastSyncError = err.Error()
-	m.lastSyncErrorAt = time.Now().UnixMilli()
+	m.lastSyncErrorCode, m.lastSyncError, m.lastSyncErrorAt = dkvsSyncErrorCode(err), err.Error(), time.Now().UnixMilli()
 }
-
 func (m *dkvsManager) lastSyncErrorStatus() (string, string, int64) {
 	if m == nil {
 		return "", "", 0
@@ -1384,7 +1231,6 @@ func (m *dkvsManager) lastSyncErrorStatus() (string, string, int64) {
 	defer m.mu.Unlock()
 	return m.lastSyncErrorCode, m.lastSyncError, m.lastSyncErrorAt
 }
-
 func (m *dkvsManager) markReady(scope string) {
 	if m == nil || scope == "" {
 		return
@@ -1393,7 +1239,6 @@ func (m *dkvsManager) markReady(scope string) {
 	m.ready[scope] = struct{}{}
 	m.mu.Unlock()
 }
-
 func (m *dkvsManager) markNotReady(scope string) {
 	if m == nil || scope == "" {
 		return
@@ -1402,7 +1247,6 @@ func (m *dkvsManager) markNotReady(scope string) {
 	delete(m.ready, scope)
 	m.mu.Unlock()
 }
-
 func (m *dkvsManager) scopeReady(scope string) bool {
 	if m == nil || scope == "" {
 		return false
@@ -1412,22 +1256,16 @@ func (m *dkvsManager) scopeReady(scope string) bool {
 	m.mu.Unlock()
 	return ok
 }
-
 func newDKVSManager(owner *Manager) *dkvsManager {
-	manager := &dkvsManager{
-		owner: owner, clients: make(map[string]*SatsNetDKVSClient),
-		paths: make(map[string]struct{}), exactKeys: make(map[string]struct{}),
+	manager := &dkvsManager{owner: owner, clients: make(map[string]*SatsNetDKVSClient), paths: make(map[string]struct{}),
 		jobs: make(map[string]func(*dkvsStore) error), ready: make(map[string]struct{}),
-		pendingNotifies: make(map[string]struct{}),
-		readCache:       make(map[string]dkvsReadCacheEntry), prefixReadCache: make(map[string]dkvsPrefixReadCacheEntry),
-	}
+		pendingNotifies: make(map[string]struct{})}
 	runtimeForDKVSManager(manager)
 	return manager
 }
 
-// runTransport serializes replica/outbox operations without holding a mutex
-// while HTTP, verification, or Pebble work is in progress. Waiters sleep on the
-// completed operation's channel, so local state locks remain available.
+// Only the coordinator slot is held across transport operations. Data-state
+// mutexes remain available to the UI, cancellation, and domain callbacks.
 func (m *dkvsManager) runTransport(operation func() error) error {
 	if m == nil || operation == nil {
 		return ErrDKVSPathNotSynced
@@ -1435,20 +1273,18 @@ func (m *dkvsManager) runTransport(operation func() error) error {
 	for {
 		m.runMu.Lock()
 		if !m.runActive {
-			m.runActive = true
-			m.runDone = make(chan struct{})
+			m.runActive, m.runDone = true, make(chan struct{})
 			done := m.runDone
 			m.runMu.Unlock()
-
-			err := operation()
-			m.runMu.Lock()
-			if m.runDone == done {
-				m.runActive = false
-				m.runDone = nil
-				close(done)
-			}
-			m.runMu.Unlock()
-			return err
+			defer func() {
+				m.runMu.Lock()
+				defer m.runMu.Unlock()
+				if m.runDone == done {
+					m.runActive, m.runDone = false, nil
+					close(done)
+				}
+			}()
+			return operation()
 		}
 		done := m.runDone
 		m.runMu.Unlock()
@@ -1462,7 +1298,6 @@ func (m *dkvsManager) runTransport(operation func() error) error {
 		}
 	}
 }
-
 func (p *Manager) ensureDKVSManager() *dkvsManager {
 	if p == nil {
 		return nil
@@ -1474,11 +1309,9 @@ func (p *Manager) ensureDKVSManager() *dkvsManager {
 	}
 	return p.dkvs
 }
-
 func dkvsEndpointKey(scheme, host, proxy string) string {
 	return strings.Join([]string{strings.TrimSpace(scheme), strings.TrimSpace(host), strings.TrimSpace(proxy)}, "\x00")
 }
-
 func (m *dkvsManager) clientFor(scheme, host, proxy string, http HttpClient) (*SatsNetDKVSClient, error) {
 	if m == nil || strings.TrimSpace(host) == "" {
 		return nil, fmt.Errorf("DKVS endpoint is not configured")
@@ -1490,12 +1323,10 @@ func (m *dkvsManager) clientFor(scheme, host, proxy string, http HttpClient) (*S
 		return client, nil
 	}
 	client := NewSatsNetDKVSClient(scheme, host, proxy, http)
-	client.manager = m
-	client.replicaNamespace = m.owner.dkvsReplicaNamespaceFor(scheme, host, proxy)
+	client.manager, client.replicaNamespace = m, m.owner.dkvsReplicaNamespaceFor(scheme, host, proxy)
 	m.clients[key] = client
 	return client, nil
 }
-
 func (m *dkvsManager) primaryClient() (*SatsNetDKVSClient, error) {
 	if m == nil || m.owner == nil || m.owner.cfg == nil || m.owner.cfg.IndexerL2 == nil {
 		return nil, fmt.Errorf("SatoshiNet DKVS indexer is not configured")
@@ -1510,22 +1341,18 @@ func (m *dkvsManager) primaryClient() (*SatsNetDKVSClient, error) {
 	client := m.clients[key]
 	if client == nil {
 		client = NewSatsNetDKVSClient(config.Scheme, config.Host, config.Proxy, m.owner.http)
-		client.manager = m
-		client.replicaNamespace = m.owner.dkvsReplicaNamespace()
+		client.manager, client.replicaNamespace = m, m.owner.dkvsReplicaNamespace()
 		m.clients[key] = client
 	}
 	return client, nil
 }
-
 func (m *dkvsManager) setCallback(callback func()) {
-	if m == nil {
-		return
+	if m != nil {
+		m.mu.Lock()
+		m.callback = callback
+		m.mu.Unlock()
 	}
-	m.mu.Lock()
-	m.callback = callback
-	m.mu.Unlock()
 }
-
 func (m *dkvsManager) notifyCallback() {
 	if m == nil {
 		return
@@ -1537,7 +1364,6 @@ func (m *dkvsManager) notifyCallback() {
 		callback()
 	}
 }
-
 func (m *dkvsManager) addObserver(observer func([]string)) {
 	if m == nil || observer == nil {
 		return
@@ -1546,7 +1372,6 @@ func (m *dkvsManager) addObserver(observer func([]string)) {
 	m.observers = append(m.observers, observer)
 	m.mu.Unlock()
 }
-
 func (m *dkvsManager) notifyObservers(paths []string) {
 	if m == nil || len(paths) == 0 {
 		return
@@ -1563,9 +1388,6 @@ const dkvsNotificationJobID = "dkvs-notifications"
 
 var errDKVSJobDeferred = errors.New("DKVS job dependency is not ready")
 
-// enqueueNotifications reliably coalesces replica changes behind the DKVS
-// worker. Neither domain observers nor the application callback run on a
-// foreground Refresh stack or while an internal coordination mutex is held.
 func (m *dkvsManager) enqueueNotifications(changes []string) {
 	if m == nil {
 		return
@@ -1580,15 +1402,11 @@ func (m *dkvsManager) enqueueNotifications(changes []string) {
 	}
 	if !m.notifyQueued {
 		m.notifyQueued = true
-		m.jobs[dkvsNotificationJobID] = func(*dkvsStore) error {
-			m.deliverNotifications()
-			return nil
-		}
+		m.jobs[dkvsNotificationJobID] = func(*dkvsStore) error { m.deliverNotifications(); return nil }
 	}
 	m.mu.Unlock()
 	m.wakeSync()
 }
-
 func (m *dkvsManager) deliverNotifications() {
 	if m == nil {
 		return
@@ -1598,12 +1416,9 @@ func (m *dkvsManager) deliverNotifications() {
 	for path := range m.pendingNotifies {
 		paths = append(paths, path)
 	}
-	m.pendingNotifies = make(map[string]struct{})
-	m.notifyQueued = false
-	observers := append([]func([]string){}, m.observers...)
-	callback := m.callback
+	m.pendingNotifies, m.notifyQueued = make(map[string]struct{}), false
+	observers, callback := append([]func([]string){}, m.observers...), m.callback
 	m.mu.Unlock()
-
 	sort.Strings(paths)
 	for _, observer := range observers {
 		observer(append([]string(nil), paths...))
@@ -1612,7 +1427,6 @@ func (m *dkvsManager) deliverNotifications() {
 		callback()
 	}
 }
-
 func (m *dkvsManager) schedule(id string, job func(*dkvsStore) error) {
 	if m == nil || strings.TrimSpace(id) == "" || job == nil {
 		return
@@ -1622,7 +1436,6 @@ func (m *dkvsManager) schedule(id string, job func(*dkvsStore) error) {
 	m.mu.Unlock()
 	m.wakeSync()
 }
-
 func (m *dkvsManager) runPendingJobs(store *dkvsStore) error {
 	if m == nil || store == nil {
 		return nil
@@ -1636,32 +1449,25 @@ func (m *dkvsManager) runPendingJobs(store *dkvsStore) error {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	var jobErr error
 	for _, id := range ids {
 		job := jobs[id]
-		delete(jobs, id)
 		if err := job(store); err != nil {
 			deferred := errors.Is(err, errDKVSJobDeferred)
 			m.mu.Lock()
 			if _, replaced := m.jobs[id]; !replaced {
 				m.jobs[id] = job
 			}
-			if !deferred {
-				for pendingID, pendingJob := range jobs {
-					if _, replaced := m.jobs[pendingID]; !replaced {
-						m.jobs[pendingID] = pendingJob
-					}
-				}
-			}
 			m.mu.Unlock()
-			if deferred {
-				continue
+			if !deferred {
+				jobErr = errors.Join(jobErr, err)
 			}
-			return err
+			// Keep the failed task, but let independent tasks (especially
+			// confirmed-change notifications) finish this round.
 		}
 	}
-	return nil
+	return jobErr
 }
-
 func (m *dkvsManager) start() {
 	if m == nil {
 		return
@@ -1671,26 +1477,19 @@ func (m *dkvsManager) start() {
 		m.mu.Unlock()
 		return
 	}
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	wake := make(chan struct{}, 1)
+	stop, done, wake := make(chan struct{}), make(chan struct{}), make(chan struct{}, 1)
 	requestCtx, cancelRequests := context.WithCancel(context.Background())
 	m.ready = make(map[string]struct{})
-	m.stop, m.done, m.wake = stop, done, wake
-	m.requestCtx, m.cancelRequests = requestCtx, cancelRequests
-	m.stopping = false
+	m.stop, m.done, m.wake, m.requestCtx, m.cancelRequests, m.stopping = stop, done, wake, requestCtx, cancelRequests, false
 	m.mu.Unlock()
 	go m.run(stop, done, wake)
 }
-
 func (m *dkvsManager) stopAndWait() {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
-	stop := m.stop
-	done := m.done
-	cancelRequests := m.cancelRequests
+	stop, done, cancelRequests := m.stop, m.done, m.cancelRequests
 	if stop == nil {
 		m.mu.Unlock()
 		return
@@ -1706,21 +1505,17 @@ func (m *dkvsManager) stopAndWait() {
 	<-done
 	m.mu.Lock()
 	if m.done == done {
-		m.stop, m.done, m.wake = nil, nil, nil
-		m.requestCtx, m.cancelRequests = nil, nil
-		m.stopping = false
+		m.stop, m.done, m.wake, m.requestCtx, m.cancelRequests, m.stopping = nil, nil, nil, nil, nil, false
 	}
 	m.mu.Unlock()
 	releaseDKVSManagerRuntime(m)
 }
-
 func (m *dkvsManager) wakeSync() {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
-	wake := m.wake
-	stopping := m.stopping
+	wake, stopping := m.wake, m.stopping
 	m.mu.Unlock()
 	if wake == nil || stopping {
 		return
@@ -1730,7 +1525,6 @@ func (m *dkvsManager) wakeSync() {
 	default:
 	}
 }
-
 func (m *dkvsManager) requestContext() context.Context {
 	if m == nil {
 		return context.Background()
@@ -1743,7 +1537,6 @@ func (m *dkvsManager) requestContext() context.Context {
 	}
 	return ctx
 }
-
 func (p *Manager) markDKVSStateDirty() {
 	if manager := p.ensureDKVSManager(); manager != nil {
 		manager.wakeSync()

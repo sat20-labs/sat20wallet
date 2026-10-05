@@ -303,12 +303,11 @@ func TestRGB11DiscardRemoteAck(t *testing.T) {
 	ops := rgb11DiscardApplyOps{
 		plan: func() (*RGB11DiscardPlan, error) { copy := approved; return &copy, nil },
 		delete: func(string) error {
-			tombstone, err := NewDKVSSignedTombstone(dkvsTestWalletFromPriv(t, recipient), key,
-				dkvsindexer.RecordOptions{Seq: 2})
+			command, err := NewDKVSDeleteCommand(dkvsTestWalletFromPriv(t, recipient), record, 1)
 			if err != nil {
 				return err
 			}
-			_, err = transport.indexer.DeleteInternalMailbox(tombstone)
+			_, err = transport.indexer.DeleteInternalMailbox(command)
 			return err
 		},
 		confirm: func(string) error {

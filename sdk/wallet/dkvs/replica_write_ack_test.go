@@ -10,16 +10,14 @@ import (
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
-func TestApplyWriteResultAndAckAdvancesPrefixTokenAtomically(t *testing.T) {
+func TestApplyWriteResultAndAckDoesNotMaterializeOrAdvancePrefixToken(t *testing.T) {
 	database := indexerdb.NewKVDB(t.TempDir())
 	if database == nil {
 		t.Fatal("NewKVDB returned nil")
 	}
 	defer database.Close()
 	store := NewReplicaStore(database)
-	namespace := "testnet:account"
-	endpointID := "core-1"
-
+	namespace, endpointID := "testnet:account", "core-1"
 	privateKey, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -36,51 +34,47 @@ func TestApplyWriteResultAndAckAdvancesPrefixTokenAtomically(t *testing.T) {
 	if err := store.PersistRegisteredPrefixes(namespace, []string{prefix}); err != nil {
 		t.Fatal(err)
 	}
-
-	batch := database.NewWriteBatch()
-	state := &SubscriptionState{
-		EndpointID: endpointID, Prefixes: []string{prefix},
-		Generations: map[string]uint64{prefix: 7}, Status: DKVSSubscriptionReady,
-	}
-	if err := putSubscriptionStateBatch(batch, namespace, state); err != nil {
-		batch.Close()
+	if err := store.PreparePrefixSync(namespace, endpointID, []string{prefix}, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := batch.Flush(); err != nil {
-		batch.Close()
-		t.Fatal(err)
-	}
-	batch.Close()
-
-	record, err := dkvsindexer.NewRecord(key, []byte("state-v1"), publicKey,
-		dkvsindexer.RecordOptions{Seq: 1, IssueHeight: 100})
+	scope := dkvsindexer.ActiveScope{Prefix: prefix}
+	baseline, err := store.ActiveBaseline(namespace, scope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry, err := NewBatchOutboxEntry(namespace, []dkvsindexer.CASMutation{{
-		Record: record, Precondition: dkvsindexer.WritePrecondition{ExpectAbsent: true},
-	}}, endpointID, OutboxOrigin{})
+	_, err = store.InstallActiveState(namespace, baseline, dkvsindexer.ActiveMeta{EndpointID: endpointID, Scope: scope, Generation: 7}, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompletePrefixSync(namespace, endpointID, []string{prefix}); err != nil {
+		t.Fatal(err)
+	}
+	record, err := dkvsindexer.NewRecord(key, []byte("state-v1"), publicKey, dkvsindexer.RecordOptions{Seq: 1, IssueHeight: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := NewBatchOutboxEntry(namespace, []dkvsindexer.CASMutation{{Record: record, Precondition: dkvsindexer.WritePrecondition{ExpectAbsent: true}}}, endpointID, OutboxOrigin{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.QueueOutbox(entry); err != nil {
 		t.Fatal(err)
 	}
-
 	hash := dkvsindexer.RecordHash(record).String()
-	invalid := &dkvsindexer.WriteResult{
-		Applied: 1, Records: []*dkvsindexer.Record{record}, Hashes: []string{hash},
-		EndpointID: endpointID, RequestID: entry.RequestID, ViewHeight: 101,
-	}
+	invalid := &dkvsindexer.WriteResult{Applied: 1, Records: []*dkvsindexer.Record{record}, Hashes: []string{hash}, EndpointID: endpointID, RequestID: entry.RequestID, ViewHeight: 101}
 	if err := store.ApplyWriteResultAndAck(entry, invalid); !errors.Is(err, dkvsindexer.ErrInvalidRecord) {
 		t.Fatalf("missing prefix state err=%v", err)
 	}
 	unchanged, err := store.LoadSubscriptionState(namespace)
 	if err != nil || unchanged.Generations[prefix] != 7 {
-		t.Fatalf("state changed after rejected ACK state=%#v err=%v", unchanged, err)
+		t.Fatalf("rejected ACK changed state=%#v err=%v", unchanged, err)
 	}
 	if _, err := store.LoadSubscriptionRecord(namespace, key); !errors.Is(err, indexercommon.ErrKeyNotFound) {
-		t.Fatalf("record was applied before a valid ACK err=%v", err)
+		t.Fatalf("invalid ACK installed record: %v", err)
+	}
+	pending, err := store.HasPendingOutbox(namespace)
+	if err != nil || !pending {
+		t.Fatalf("invalid ACK removed outbox: pending=%v err=%v", pending, err)
 	}
 
 	valid := *invalid
@@ -92,40 +86,36 @@ func TestApplyWriteResultAndAckAdvancesPrefixTokenAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Generations[prefix] != 8 || updated.ViewHeight != 101 ||
-		updated.Status != DKVSSubscriptionReady {
-		t.Fatalf("updated subscription state=%#v", updated)
+	if updated.Generations[prefix] != 7 || updated.ViewHeight != 0 || updated.Status != DKVSSubscriptionReady {
+		t.Fatalf("ACK advanced subscription=%#v", updated)
 	}
-	stored, err := store.LoadSubscriptionRecord(namespace, key)
-	if err != nil || dkvsindexer.RecordHash(stored) != dkvsindexer.RecordHash(record) {
-		t.Fatalf("stored record=%#v err=%v", stored, err)
+	if _, err := store.LoadSubscriptionRecord(namespace, key); !errors.Is(err, indexercommon.ErrKeyNotFound) {
+		t.Fatalf("ACK materialized confirmed record: %v", err)
 	}
-	pending, err := store.HasPendingOutbox(namespace)
+	if _, err := store.LoadLocalKeyState(namespace, key); !errors.Is(err, indexercommon.ErrKeyNotFound) {
+		t.Fatalf("ACK materialized local key state: %v", err)
+	}
+	pending, err = store.HasPendingOutbox(namespace)
 	if err != nil || pending {
 		t.Fatalf("outbox pending=%v err=%v", pending, err)
 	}
 
-	rebasedRecord, err := dkvsindexer.NewRecord(key, []byte("state-v2"), publicKey,
-		dkvsindexer.RecordOptions{Seq: 2, IssueHeight: 101})
+	// A subsequent server-accepted update also completes only its request.
+	// Until the sync installer runs, neither ACK supplies confirmed KV data.
+	rebasedRecord, err := dkvsindexer.NewRecord(key, []byte("state-v2"), publicKey, dkvsindexer.RecordOptions{Seq: 2, IssueHeight: 101})
 	if err != nil {
 		t.Fatal(err)
 	}
 	previousHash := dkvsindexer.RecordHash(record)
-	rebasedEntry, err := NewBatchOutboxEntry(namespace, []dkvsindexer.CASMutation{{
-		Record: rebasedRecord, Precondition: dkvsindexer.WritePrecondition{ExpectedHash: &previousHash},
-	}}, endpointID, OutboxOrigin{PreservePrefixGenerations: true})
+	rebasedEntry, err := NewBatchOutboxEntry(namespace, []dkvsindexer.CASMutation{{Record: rebasedRecord, Precondition: dkvsindexer.WritePrecondition{ExpectedHash: &previousHash}}}, endpointID, OutboxOrigin{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.QueueOutbox(rebasedEntry); err != nil {
 		t.Fatal(err)
 	}
-	rebasedHash := dkvsindexer.RecordHash(rebasedRecord).String()
-	rebasedResult := &dkvsindexer.WriteResult{
-		Applied: 1, Records: []*dkvsindexer.Record{rebasedRecord}, Hashes: []string{rebasedHash},
-		EndpointID: endpointID, RequestID: rebasedEntry.RequestID, ViewHeight: 102,
-		PrefixStates: []dkvsindexer.PrefixGeneration{{Prefix: prefix, Generation: 9}},
-	}
+	rebasedResult := &dkvsindexer.WriteResult{Applied: 1, Records: []*dkvsindexer.Record{rebasedRecord}, Hashes: []string{dkvsindexer.RecordHash(rebasedRecord).String()},
+		EndpointID: endpointID, RequestID: rebasedEntry.RequestID, ViewHeight: 102, PrefixStates: []dkvsindexer.PrefixGeneration{{Prefix: prefix, Generation: 9}}}
 	if err := store.ApplyWriteResultAndAck(rebasedEntry, rebasedResult); err != nil {
 		t.Fatal(err)
 	}
@@ -133,13 +123,18 @@ func TestApplyWriteResultAndAckAdvancesPrefixTokenAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rebasedState.Generations[prefix] != 8 {
-		t.Fatalf("conflict rebase hid unrelated prefix changes: generation=%d",
-			rebasedState.Generations[prefix])
+	if rebasedState.Generations[prefix] != 7 || rebasedState.ViewHeight != 0 {
+		t.Fatalf("update ACK advanced cursor/view: %#v", rebasedState)
 	}
-	rebasedStored, err := store.LoadSubscriptionRecord(namespace, key)
-	if err != nil || dkvsindexer.RecordHash(rebasedStored) != dkvsindexer.RecordHash(rebasedRecord) {
-		t.Fatalf("rebased record=%#v err=%v", rebasedStored, err)
+	if _, err := store.LoadSubscriptionRecord(namespace, key); !errors.Is(err, indexercommon.ErrKeyNotFound) {
+		t.Fatalf("update ACK materialized record: %v", err)
+	}
+	if _, err := store.LoadLocalKeyState(namespace, key); !errors.Is(err, indexercommon.ErrKeyNotFound) {
+		t.Fatalf("update ACK materialized state: %v", err)
+	}
+	pending, err = store.HasPendingOutbox(namespace)
+	if err != nil || pending {
+		t.Fatalf("update ACK failed to complete outbox: pending=%v err=%v", pending, err)
 	}
 }
 
@@ -160,25 +155,18 @@ func TestApplyWriteResultAndAckUnmanagedWriteDoesNotRequireReplica(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := dkvsindexer.NewRecord(key, []byte("recovery"), publicKey,
-		dkvsindexer.RecordOptions{Seq: 1, IssueHeight: 100})
+	record, err := dkvsindexer.NewRecord(key, []byte("recovery"), publicKey, dkvsindexer.RecordOptions{Seq: 1, IssueHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry, err := NewBatchOutboxEntry(namespace, []dkvsindexer.CASMutation{{
-		Record: record, Precondition: dkvsindexer.WritePrecondition{ExpectAbsent: true},
-	}}, "core-a", OutboxOrigin{})
+	entry, err := NewBatchOutboxEntry(namespace, []dkvsindexer.CASMutation{{Record: record, Precondition: dkvsindexer.WritePrecondition{ExpectAbsent: true}}}, "core-a", OutboxOrigin{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.QueueOutbox(entry); err != nil {
 		t.Fatal(err)
 	}
-	hash := dkvsindexer.RecordHash(record).String()
-	result := &dkvsindexer.WriteResult{
-		Applied: 1, Records: []*dkvsindexer.Record{record}, Hashes: []string{hash},
-		EndpointID: "core-b", RequestID: entry.RequestID,
-	}
+	result := &dkvsindexer.WriteResult{Applied: 1, Records: []*dkvsindexer.Record{record}, Hashes: []string{dkvsindexer.RecordHash(record).String()}, EndpointID: "core-b", RequestID: entry.RequestID}
 	if err := store.ApplyWriteResultAndAck(entry, result); !errors.Is(err, dkvsindexer.ErrEndpointMismatch) {
 		t.Fatalf("unpinned endpoint err=%v", err)
 	}
@@ -187,10 +175,10 @@ func TestApplyWriteResultAndAckUnmanagedWriteDoesNotRequireReplica(t *testing.T)
 		t.Fatal(err)
 	}
 	if _, err := store.LoadSubscriptionState(namespace); !errors.Is(err, indexercommon.ErrKeyNotFound) {
-		t.Fatalf("unmanaged write created subscription state err=%v", err)
+		t.Fatalf("unmanaged ACK created subscription: %v", err)
 	}
 	if _, err := store.LoadSubscriptionRecord(namespace, key); !errors.Is(err, indexercommon.ErrKeyNotFound) {
-		t.Fatalf("unmanaged write persisted replica record err=%v", err)
+		t.Fatalf("unmanaged ACK created record: %v", err)
 	}
 	pending, err := store.HasPendingOutbox(namespace)
 	if err != nil || pending {

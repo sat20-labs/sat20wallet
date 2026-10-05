@@ -27,7 +27,7 @@ const (
 	accountRequiredRecords          = uint64(5)
 	accountMinimumRecordCount       = uint64(100)
 	accountDefaultRecordCount       = uint64(100)
-	accountStorageAuthorizationTTL   = 20 * time.Minute
+	accountStorageAuthorizationTTL  = 20 * time.Minute
 )
 
 var (
@@ -223,7 +223,7 @@ func (p *Manager) LoadAccountGuardianCapsule(location AccountIndexerLocation,
 	if err != nil {
 		return nil, err
 	}
-	record, err := store.Get(key)
+	record, err := store.GetAuthoritative(key)
 	if err != nil {
 		return nil, err
 	}
@@ -485,7 +485,7 @@ func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*A
 			return nil, fmt.Errorf("current node does not provide temporary DKVS cache")
 		}
 		authorization = &AccountStorageAuthorization{
-			Mode: AccountStorageTemporary,
+			Mode:          AccountStorageTemporary,
 			RecordOptions: dkvsindexer.RecordOptions{Seq: 1, TTL: policy.MaxTTL},
 			Summary: AccountStorageOption{ID: AccountStorageTemporary, Mode: AccountStorageTemporary, Available: true,
 				Title: "临时缓存", Description: "由当前连接节点临时保存；到期后数据可能被删除。",
@@ -615,7 +615,8 @@ func (p *Manager) fundAccountAutopayWithWallet(defaults dkvsindexer.NetworkDefau
 	if err != nil {
 		return "", err
 	}
-	if err := p.waitForAccountAutopayReady(defaults, amountPerBlock); err != nil {
+	payer := PublicKeyToP2TRAddress_SatsNet(payerWallet.GetPubKey())
+	if err := p.waitForAccountAutopayReady(defaults, amountPerBlock, payer); err != nil {
 		return "", err
 	}
 	return result.TxID, nil

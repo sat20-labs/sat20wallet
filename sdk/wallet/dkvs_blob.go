@@ -87,7 +87,7 @@ func (p *SatsNetDKVSClient) PutBlobWithAutopay(wallet common.Wallet, blobKey str
 	if err != nil {
 		return nil, err
 	}
-	return p.PutRecord(record)
+	return p.WithWriteSigner(wallet).PutRecord(record)
 }
 
 func (p *SatsNetDKVSClient) PutBlobFreeLocal(wallet common.Wallet, blobKey string, data,
@@ -114,7 +114,7 @@ func (p *SatsNetDKVSClient) PutBlobFreeLocal(wallet common.Wallet, blobKey strin
 	if err != nil {
 		return nil, err
 	}
-	return p.PutRecord(record)
+	return p.WithWriteSigner(wallet).PutRecord(record)
 }
 
 func (p *SatsNetDKVSClient) GetBlob(accountID, blobKey string,

@@ -65,14 +65,7 @@ func (s *ReplicaStore) PersistRegisteredPrefixes(namespace string, prefixes []st
 		state = &SubscriptionState{Status: DKVSSubscriptionSyncing}
 	}
 	if !SameStringList(state.Prefixes, prefixes) {
-		previous := state.Generations
 		state.Prefixes = prefixes
-		state.Generations = make(map[string]uint64, len(prefixes))
-		for _, prefix := range prefixes {
-			if generation, ok := previous[prefix]; ok {
-				state.Generations[prefix] = generation
-			}
-		}
 		// Preserve the old EndpointID until the replacement snapshot succeeds.
 		// If configuration switched endpoints, this lets the sync worker reject
 		// the switch while active FREE_LOCAL state or outbox entries still exist.
@@ -99,22 +92,20 @@ func (s *ReplicaStore) PreparePrefixSync(namespace, endpointID string,
 		}
 		state = &SubscriptionState{}
 	}
-	previous := state.Generations
 	state.EndpointID = endpointID
 	state.Prefixes = prefixes
-	state.Generations = make(map[string]uint64, len(prefixes))
-	if !resetGenerations {
-		for _, prefix := range prefixes {
-			if generation, ok := previous[prefix]; ok {
-				state.Generations[prefix] = generation
-			}
-		}
-	}
 	state.Status = DKVSSubscriptionSyncing
 	state.LastErrorCode = ""
 	state.LastSyncAtMS = uint64(time.Now().UnixMilli())
 	batch := s.db.NewWriteBatch()
 	defer batch.Close()
+	if resetGenerations {
+		for _, prefix := range prefixes {
+			if err := batch.Delete(activeMetaKey(namespace, dkvsindexer.ActiveScope{Prefix: prefix})); err != nil {
+				return err
+			}
+		}
+	}
 	if err := putSubscriptionStateBatch(batch, namespace, state); err != nil {
 		return err
 	}
@@ -196,19 +187,14 @@ func (s *ReplicaStore) HasActiveFreeLocal(namespace string) (bool, error) {
 	if s == nil || s.db == nil {
 		return false, ErrReplicaNotReady
 	}
-	base := dkvsNamespacedPrefix(dkvsSubscriptionKeyStatePrefix, namespace)
+	base := dkvsNamespacedPrefix(dkvsSubscriptionRecordPrefix, namespace)
 	found := false
-	baseText := string(base)
-	err := s.db.BatchRead(base, false, func(storageKey, value []byte) error {
-		key := strings.TrimPrefix(string(storageKey), baseText)
-		if key == "" || string(storageKey) == key {
-			return dkvsindexer.ErrInvalidRecord
-		}
-		state, err := decodeDKVSLocalKeyState(value, key)
+	err := s.db.BatchRead(base, false, func(_, value []byte) error {
+		record, err := dkvsindexer.UnmarshalRecord(value)
 		if err != nil {
 			return err
 		}
-		if !state.Deleted && state.StorageMode == dkvsindexer.StorageModeFreeLocal {
+		if RecordIsFreeLocal(record) {
 			found = true
 		}
 		return nil
@@ -241,7 +227,7 @@ func (s *ReplicaStore) PruneToPrefixes(namespace string, prefixes []string) erro
 	if err != nil {
 		return err
 	}
-	for _, base := range [][]byte{dkvsSubscriptionRecordPrefix, dkvsSubscriptionKeyStatePrefix} {
+	for _, base := range [][]byte{dkvsSubscriptionRecordPrefix} {
 		storagePrefix := dkvsNamespacedPrefix(base, namespace)
 		keys := make([][]byte, 0)
 		if err := s.db.BatchRead(storagePrefix, false, func(key, _ []byte) error {

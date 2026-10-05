@@ -27,10 +27,9 @@ func (e *dkvsTerminalOutboxError) Error() string {
 	return fmt.Sprintf("DKVS outbox %s is terminal (%s)", e.RequestID, e.Code)
 }
 
-// flushDKVSBatchOutbox replays exact signed requests only through the CoreNode
-// recorded when the entry was created.
-func (p *Manager) flushDKVSBatchOutbox(client *SatsNetDKVSClient,
-	store *dkvsReplicaStore) (bool, error) {
+// Replay the exact signed operation context. Reconnecting is not consent to
+// obtain a new prefix generation and reauthorize a historical operation.
+func (p *Manager) flushDKVSBatchOutbox(client *SatsNetDKVSClient, store *dkvsReplicaStore) (bool, error) {
 	if p == nil || client == nil || store == nil || client.replicaNamespace == "" {
 		return false, ErrDKVSPathNotSynced
 	}
@@ -45,21 +44,18 @@ func (p *Manager) flushDKVSBatchOutbox(client *SatsNetDKVSClient,
 		}
 		switch entry.State {
 		case DKVSOutboxTerminal:
-			panic(&dkvsTerminalOutboxError{
-				RequestID: entry.RequestID, Code: entry.LastErrorCode, Message: entry.LastError,
-			})
+			panic(&dkvsTerminalOutboxError{RequestID: entry.RequestID, Code: entry.LastErrorCode, Message: entry.LastError})
 		case DKVSOutboxConflict:
-			return false, fmt.Errorf("DKVS outbox %s requires reconciliation: %w",
-				entry.RequestID, dkvsindexer.ErrWriteConflict)
+			return false, fmt.Errorf("DKVS outbox %s requires reconciliation: %w", entry.RequestID, dkvsindexer.ErrWriteConflict)
 		}
 		if entry.EndpointID != "" {
 			if endpointID == "" {
-				config, configErr := client.GetDKVSClientConfig()
-				if configErr != nil {
-					if classifyDKVSOutboxError(configErr) == dkvsOutboxPermanent {
-						panic(permanentDKVSOutboxError(entry, configErr))
+				config, err := client.GetDKVSClientConfig()
+				if err != nil {
+					if classifyDKVSOutboxError(err) == dkvsOutboxPermanent {
+						panic(permanentDKVSOutboxError(entry, err))
 					}
-					return false, configErr
+					return false, err
 				}
 				endpointID = config.EndpointID
 			}
@@ -76,10 +72,17 @@ func (p *Manager) flushDKVSBatchOutbox(client *SatsNetDKVSClient,
 		if err != nil {
 			panic(permanentDKVSOutboxError(entry, err))
 		}
+		if entry.Authorization == nil && !(len(mutations) == 1 && dkvsindexer.IsAccountMappingBindingKey(mutations[0].Record.Key)) {
+			// An unsigned draft has never been authorized for network submission.
+			// Keep it separate from confirmed KV until its owner explicitly signs.
+			err := dkvsindexer.ErrPermissionDenied
+			_ = store.UpdateOutboxState(entry, DKVSOutboxConflict, err)
+			return submitted, err
+		}
 		if err := store.UpdateOutboxState(entry, DKVSOutboxInflight, nil); err != nil {
 			panic(permanentDKVSOutboxError(entry, err))
 		}
-		result, err := client.putRecordBatchCASRaw(mutations, entry.EndpointID, entry.RequestID)
+		result, err := client.putRecordBatchCASRaw(mutations, entry.EndpointID, entry.RequestID, entry.Authorization)
 		if err != nil {
 			err = p.accountAutopaySubmissionFailure(mutations, err)
 			if errors.Is(err, ErrAccountAutopayFundingRequired) {
@@ -91,6 +94,9 @@ func (p *Manager) flushDKVSBatchOutbox(client *SatsNetDKVSClient,
 				if isDKVSRebaseError(err) {
 					if discardErr := store.DiscardOutbox(entry); discardErr != nil {
 						return submitted, errors.Join(err, discardErr)
+					}
+					if p.dkvs != nil {
+						p.dkvs.wakeSync()
 					}
 					return submitted, err
 				}
@@ -126,25 +132,17 @@ func batchContainsAutopay(mutations []dkvsindexer.CASMutation) bool {
 	return false
 }
 
-// accountAutopaySubmissionFailure turns only a live, independently verified
-// payment expiry into a paused outbox. An invalid paid record with a healthy
-// AUTOPAY delegate remains a permanent invariant failure and still panics.
-func (p *Manager) accountAutopaySubmissionFailure(mutations []dkvsindexer.CASMutation,
-	submissionErr error) error {
-
+func (p *Manager) accountAutopaySubmissionFailure(mutations []dkvsindexer.CASMutation, submissionErr error) error {
 	if p == nil || !batchContainsAutopay(mutations) ||
-		(!IsDKVSErrorCode(submissionErr, dkvsindexer.ErrorCodeInvalidRecord) &&
-			!IsDKVSErrorCode(submissionErr, dkvsindexer.ErrorCodeQuotaExceeded) &&
-			!errors.Is(submissionErr, dkvsindexer.ErrInvalidFeeProof) &&
-			!errors.Is(submissionErr, dkvsindexer.ErrFeeCapacityExceeded)) {
+		(!IsDKVSErrorCode(submissionErr, dkvsindexer.ErrorCodeInvalidRecord) && !IsDKVSErrorCode(submissionErr, dkvsindexer.ErrorCodeQuotaExceeded) &&
+			!errors.Is(submissionErr, dkvsindexer.ErrInvalidFeeProof) && !errors.Is(submissionErr, dkvsindexer.ErrFeeCapacityExceeded)) {
 		return submissionErr
 	}
 	status, err := p.GetAccountAutopayFundingStatus()
 	return accountAutopaySubmissionDecision(submissionErr, status, err)
 }
 
-func accountAutopaySubmissionDecision(submissionErr error,
-	status *AccountAutopayFundingStatus, statusErr error) error {
+func accountAutopaySubmissionDecision(submissionErr error, status *AccountAutopayFundingStatus, statusErr error) error {
 	if statusErr != nil {
 		if isDKVSNetworkFailure(statusErr) {
 			return statusErr
@@ -169,19 +167,31 @@ func classifyDKVSOutboxError(err error) dkvsOutboxErrorClass {
 	if err == nil {
 		return dkvsOutboxTransient
 	}
-	if isDKVSConflictError(err) || errors.Is(err, dkvsindexer.ErrInvalidSequence) ||
-		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeInvalidSequence) {
+	if isDKVSConflictError(err) || isDKVSRebaseError(err) {
 		return dkvsOutboxConflict
 	}
 	if isDKVSNetworkFailure(err) {
 		return dkvsOutboxTransient
 	}
+	// A definite business refusal stops this intent, but is not an internal
+	// failure. Keep HTTP 429/5xx ahead of this branch for original-request retry.
+	if errors.Is(err, dkvsindexer.ErrStorageModeDowngrade) ||
+		errors.Is(err, dkvsindexer.ErrFreeLocalQuotaExceeded) ||
+		errors.Is(err, dkvsindexer.ErrFeeCapacityExceeded) || errors.Is(err, dkvsindexer.ErrMailboxFull) ||
+		errors.Is(err, dkvsindexer.ErrRecordNotFound) {
+		return dkvsOutboxConflict
+	}
+	var rejection *DKVSError
+	if errors.As(err, &rejection) && rejection != nil {
+		switch rejection.Code {
+		case dkvsindexer.ErrorCodeInvalidRecord, dkvsindexer.ErrorCodeRecordNotFound,
+			dkvsindexer.ErrorCodeStorageModeDowngrade, dkvsindexer.ErrorCodeQuotaExceeded:
+			return dkvsOutboxConflict
+		}
+	}
 	return dkvsOutboxPermanent
 }
-
 func isDKVSNetworkFailure(err error) bool {
-	// An HTTP response can still represent a transient transport/service failure.
-	// Keep the exact signed outbox request for retry instead of killing its host.
 	var response *HTTPResponseError
 	if errors.As(err, &response) && response != nil {
 		if response.StatusCode == 408 || response.StatusCode == 425 || response.StatusCode == 429 ||
@@ -195,7 +205,6 @@ func isDKVSNetworkFailure(err error) bool {
 	var networkError net.Error
 	return errors.As(err, &networkError)
 }
-
 func permanentDKVSOutboxError(entry *DKVSBatchOutboxEntry, err error) error {
 	requestID := "unknown"
 	if entry != nil && entry.RequestID != "" {
@@ -203,9 +212,7 @@ func permanentDKVSOutboxError(entry *DKVSBatchOutboxEntry, err error) error {
 	}
 	return fmt.Errorf("DKVS permanent outbox failure request=%s: %w", requestID, err)
 }
-
-func markDKVSOutboxSubmissionFailure(store *dkvsReplicaStore,
-	entry *DKVSBatchOutboxEntry, err error) error {
+func markDKVSOutboxSubmissionFailure(store *dkvsReplicaStore, entry *DKVSBatchOutboxEntry, err error) error {
 	switch classifyDKVSOutboxError(err) {
 	case dkvsOutboxPermanent:
 		panic(permanentDKVSOutboxError(entry, err))
@@ -218,21 +225,20 @@ func markDKVSOutboxSubmissionFailure(store *dkvsReplicaStore,
 		return store.UpdateOutboxState(entry, DKVSOutboxPending, err)
 	}
 }
-
 func isDKVSRebaseError(err error) bool {
-	return errors.Is(err, dkvsindexer.ErrWriteConflict) ||
-		errors.Is(err, dkvsindexer.ErrInvalidSequence) ||
+	return errors.Is(err, dkvsindexer.ErrWriteConflict) || errors.Is(err, dkvsindexer.ErrInvalidSequence) ||
+		errors.Is(err, dkvsindexer.ErrStaleGeneration) || errors.Is(err, dkvsindexer.ErrExpiredRecord) ||
 		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeWriteConflict) ||
-		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeInvalidSequence)
+		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeInvalidSequence) ||
+		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeStaleGeneration) || IsDKVSErrorCode(err, dkvsindexer.ErrorCodeExpiredRecord)
 }
-
 func isDKVSConflictError(err error) bool {
-	return errors.Is(err, dkvsindexer.ErrWriteConflict) ||
-		errors.Is(err, dkvsindexer.ErrEndpointMismatch) ||
-		errors.Is(err, dkvsindexer.ErrResetRequired) ||
-		errors.Is(err, dkvsindexer.ErrLocalOnlyEndpointMismatch) ||
-		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeWriteConflict) ||
-		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeEndpointMismatch) ||
-		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeResetRequired) ||
-		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeLocalOnlyEndpointMismatch)
+	return errors.Is(err, dkvsindexer.ErrWriteConflict) || errors.Is(err, dkvsindexer.ErrEndpointMismatch) ||
+		errors.Is(err, dkvsindexer.ErrStaleEndpoint) || errors.Is(err, dkvsindexer.ErrStaleGeneration) ||
+		errors.Is(err, dkvsindexer.ErrPermissionDenied) ||
+		errors.Is(err, dkvsindexer.ErrResetRequired) || errors.Is(err, dkvsindexer.ErrLocalOnlyEndpointMismatch) ||
+		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeWriteConflict) || IsDKVSErrorCode(err, dkvsindexer.ErrorCodeEndpointMismatch) ||
+		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeStaleEndpoint) || IsDKVSErrorCode(err, dkvsindexer.ErrorCodeStaleGeneration) ||
+		IsDKVSErrorCode(err, dkvsindexer.ErrorCodePermissionDenied) ||
+		IsDKVSErrorCode(err, dkvsindexer.ErrorCodeResetRequired) || IsDKVSErrorCode(err, dkvsindexer.ErrorCodeLocalOnlyEndpointMismatch)
 }

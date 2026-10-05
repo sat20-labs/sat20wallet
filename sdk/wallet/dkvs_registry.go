@@ -1,10 +1,32 @@
 package wallet
 
 import (
+	"errors"
 	"strings"
 
+	indexercommon "github.com/sat20-labs/indexer/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
+
+// Registering the same root-owned prefix is a local no-op. In particular a
+// wallet/account selection refresh must not queue behind an unrelated remote
+// PUT holding the DKVS transport coordinator. Genuine registration changes
+// still go through the normal serialized subscription operation.
+func (p *Manager) ensureOwnedDKVSPrefix(prefix string) error {
+	if p == nil || p.db == nil {
+		return ErrDKVSPathNotSynced
+	}
+	registered, err := newDKVSReplicaStore(p.db).LoadRegisteredPrefixes(p.dkvsReplicaNamespace())
+	if err != nil && !errors.Is(err, indexercommon.ErrKeyNotFound) {
+		return err
+	}
+	for _, current := range registered {
+		if current == prefix {
+			return nil
+		}
+	}
+	return p.SubscribeDKVSPrefix(prefix)
+}
 
 // refreshDKVSRegistrations explicitly registers account-management-owned
 // prefixes in the durable Wallet prefix registry. Ordinary Get/Put operations
@@ -57,7 +79,7 @@ func (p *Manager) refreshDKVSRegistrations() error {
 			continue
 		}
 		seen[prefix] = struct{}{}
-		if err := p.SubscribeDKVSPrefix(prefix); err != nil {
+		if err := p.ensureOwnedDKVSPrefix(prefix); err != nil {
 			return err
 		}
 	}
@@ -66,7 +88,7 @@ func (p *Manager) refreshDKVSRegistrations() error {
 		if err != nil {
 			return err
 		}
-		if err := p.SubscribeDKVSPrefix(mailboxPrefix); err != nil {
+		if err := p.ensureOwnedDKVSPrefix(mailboxPrefix); err != nil {
 			return err
 		}
 		// The one root-owned account service record carries both the public
@@ -82,7 +104,7 @@ func (p *Manager) refreshDKVSRegistrations() error {
 			}
 			if _, exists := seen[prefix]; !exists {
 				seen[prefix] = struct{}{}
-				if err := p.SubscribeDKVSPrefix(prefix); err != nil {
+				if err := p.ensureOwnedDKVSPrefix(prefix); err != nil {
 					return err
 				}
 			}

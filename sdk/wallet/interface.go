@@ -148,6 +148,8 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 }
 
 func (p *Manager) Start() {
+	p.resumeAccountStorageRuntime()
+	p.resumeAccountBackgroundTasks()
 	p.l1IndexerClient.Start()
 	p.l2IndexerClient.Start()
 	if p.watchTower != nil {
@@ -170,6 +172,10 @@ func (p *Manager) IsReady() bool {
 // Stop shuts down the runtime, including channel safety workers and the miner.
 // UI inactivity locking must leave this runtime running.
 func (p *Manager) Stop() {
+	// A stopped runtime must reject account-storage session work and must not
+	// retain a user-approved grant. UI inactivity locking does not call Stop.
+	p.stopAccountStorageRuntime()
+	p.stopAccountBackgroundTasks()
 	p.invalidateStatusBootstrap()
 	p.stopChannelHeartbeat()
 	p.stopActionMonitor()
@@ -186,8 +192,12 @@ func (p *Manager) Stop() {
 	if p.btcLuckyMiner != nil {
 		p.btcLuckyMiner.Stop()
 	}
-	p.l1IndexerClient.Stop()
-	p.l2IndexerClient.Stop()
+	if p.l1IndexerClient != nil {
+		p.l1IndexerClient.Stop()
+	}
+	if p.l2IndexerClient != nil {
+		p.l2IndexerClient.Stop()
+	}
 }
 
 func (p *Manager) Close() {

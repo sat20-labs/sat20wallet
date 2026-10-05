@@ -11,8 +11,8 @@ func TestBlobCodecPreservesOpaqueBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(encoded, data) {
-		t.Fatalf("opaque blob was transformed")
+	if len(encoded) != len(data)+8 || !bytes.Equal(encoded[8:], data) {
+		t.Fatalf("opaque bytes were not preserved inside the fixed envelope")
 	}
 	decoded, err := DecodeBlobValue(encoded)
 	if err != nil {

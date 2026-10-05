@@ -13,6 +13,9 @@ import (
 func reviewAccountDevices(t *testing.T) (*Manager, *Manager, *rgb11MemoryDKVSHTTP) {
 	t.Helper()
 	remote := newRGB11MemoryDKVSHTTP()
+	// Establish the paired CoreNode identity before either device caches HTTP
+	// configuration. Adding a message service later must not switch endpoints.
+	newRGB11MessageNodeClient(remote)
 	first := newAccountManagementAutoTestManager(t)
 	configureRGB11DKVSTestManager(first, remote)
 	if _, err := first.ImportWallet(accountRootWrapperTestMnemonic, "password"); err != nil {
@@ -78,7 +81,7 @@ type reviewDurableProvider struct {
 	db indexer.KVDB
 }
 
-func (p *reviewDurableProvider) ID() string { return p.id }
+func (p *reviewDurableProvider) ID() string  { return p.id }
 func (p *reviewDurableProvider) key() []byte { return []byte("review-provider-" + p.id) }
 func (p *reviewDurableProvider) Export(AccountManagedDataCatalog) ([]AccountManagedDataPayload, error) {
 	value, err := p.db.Read(p.key())

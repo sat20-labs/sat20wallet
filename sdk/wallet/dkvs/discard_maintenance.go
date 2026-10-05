@@ -24,12 +24,7 @@ func (s *ReplicaStore) DiscardExactReplica(namespace, key, wantHash string) erro
 	} else if !errors.Is(recordErr, indexercommon.ErrKeyNotFound) {
 		return recordErr
 	}
-	_, stateErr := s.LoadLocalKeyState(namespace, key)
-	if stateErr != nil && !errors.Is(stateErr, indexercommon.ErrKeyNotFound) {
-		return stateErr
-	}
-	if errors.Is(recordErr, indexercommon.ErrKeyNotFound) &&
-		errors.Is(stateErr, indexercommon.ErrKeyNotFound) {
+	if errors.Is(recordErr, indexercommon.ErrKeyNotFound) {
 		return nil
 	}
 	batch := s.db.NewWriteBatch()
@@ -37,8 +32,6 @@ func (s *ReplicaStore) DiscardExactReplica(namespace, key, wantHash string) erro
 	if err := batch.Delete(dkvsSubscriptionRecordKey(namespace, key)); err != nil {
 		return err
 	}
-	if err := batch.Delete(dkvsSubscriptionKeyStateKey(namespace, key)); err != nil {
-		return err
-	}
+
 	return batch.Flush()
 }

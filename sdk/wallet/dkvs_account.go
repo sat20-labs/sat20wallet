@@ -20,11 +20,6 @@ func NewDKVSSignedRecord(wallet common.Wallet, key string, value []byte,
 	return dkvscore.NewSignedRecord(wallet, key, value, opts)
 }
 
-func NewDKVSSignedTombstone(wallet common.Wallet, key string,
-	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
-	return dkvscore.NewSignedTombstone(wallet, key, opts)
-}
-
 func NewDKVSSignedRenewalRecord(wallet common.Wallet, existing *swire.DKVSRecord,
 	opts dkvsindexer.RecordOptions) (*swire.DKVSRecord, error) {
 	return dkvscore.NewSignedRenewalRecord(wallet, existing, opts)

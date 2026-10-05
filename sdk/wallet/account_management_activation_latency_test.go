@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"runtime"
 	"strings"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
-	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 // The gate pauses real activation at its transport boundary; it does not replace
@@ -42,10 +42,23 @@ type accountActivationGateHTTP struct {
 
 func (h *accountActivationGateHTTP) SendDKVSPost(path string, body []byte) ([]byte, error) {
 	switch path {
-	case "/v3/dkvs/prefixes/snapshot":
-		h.gate.wait("WaitReady")
+	case "/v3/dkvs/active/sync":
+		// WaitReady now uses the shared active-state protocol. Binding and
+		// explicit refresh use that protocol too; pause only readiness here.
+		stack := make([]byte, 16<<10)
+		if strings.Contains(string(stack[:runtime.Stack(stack, false)]), ".WaitReady(") {
+			h.gate.wait("WaitReady")
+		}
 	case "/v3/dkvs/records/batch-cas":
-		h.gate.wait("CAS")
+		var req DKVSBatchCASRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return nil, err
+		}
+		if len(req.Mutations) == 1 && req.Mutations[0].Record != nil && dkvsindexer.IsAccountMappingBindingKey(req.Mutations[0].Record.Key) {
+			h.gate.wait("BindingCAS")
+		} else {
+			h.gate.wait("CAS")
+		}
 	}
 	return h.rgb11MemoryDKVSHTTP.SendDKVSPost(path, body)
 }
@@ -57,23 +70,11 @@ func (h *accountActivationGateHTTP) SendDKVSPostContext(ctx context.Context, pat
 	return h.SendDKVSPost(path, body)
 }
 
-type accountActivationGateNode struct {
-	*rgb11MessageNodeClient
-	gate *accountActivationNetworkGate
-}
-
-func (n *accountActivationGateNode) SendMessageServiceReq(req *swire.MessageServiceRequest) (*swire.MessageServiceResponse, error) {
-	if req.Action == swire.MessageServiceActionBindAccount {
-		n.gate.wait("RPC")
-	}
-	return n.rgb11MessageNodeClient.SendMessageServiceReq(req)
-}
-
 func TestAccountPaidActivationNetworkWaitDoesNotBlockLocalState(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	for _, phase := range []string{"WaitReady", "CAS", "RPC"} {
+	for _, phase := range []string{"WaitReady", "CAS"} {
 		t.Run(phase, func(t *testing.T) {
 			manager, _, secret := buildRootWrapperSource(t)
 			defer zeroBytes(secret)
@@ -86,7 +87,7 @@ func TestAccountPaidActivationNetworkWaitDoesNotBlockLocalState(t *testing.T) {
 			manager.dkvs.mu.Lock()
 			manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
 			manager.dkvs.mu.Unlock()
-			client := &accountActivationGateNode{rgb11MessageNodeClient: newRGB11MessageNodeClient(remote.rgb11MemoryDKVSHTTP), gate: gate}
+			client := newRGB11MessageNodeClient(remote.rgb11MemoryDKVSHTTP)
 			manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
 			defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
 			authorization := AccountStorageAuthorization{Mode: AccountStoragePaid,
@@ -100,7 +101,7 @@ func TestAccountPaidActivationNetworkWaitDoesNotBlockLocalState(t *testing.T) {
 			case <-gate.started:
 			case err := <-activationDone:
 				t.Fatalf("activation ended before %s transport: %v", phase, err)
-			case <-time.After(10 * time.Second):
+			case <-time.After(time.Minute):
 				t.Fatalf("activation did not reach %s transport", phase)
 			}
 			if !strings.Contains(gate.stack, "activateAccountManagement") ||
@@ -126,7 +127,7 @@ func TestAccountPaidActivationNetworkWaitDoesNotBlockLocalState(t *testing.T) {
 				if err != nil {
 					t.Errorf("activation after releasing transport: %v", err)
 				}
-			case <-time.After(10 * time.Second):
+			case <-time.After(time.Minute):
 				t.Fatal("activation did not finish after transport release")
 			}
 			if !stateCompleted {
@@ -148,6 +149,8 @@ func TestAccountPaidActivationNetworkWaitDoesNotBlockLocalState(t *testing.T) {
 }
 
 // No live wallet or network: use the same signed DKVS transport as activation.
+// Gate setup includes password KDF/encryption, which is much slower under -race.
+// The one-second local-state latency assertions above remain independent.
 func startGatedPaidActivation(t *testing.T, manager *Manager, secret []byte, phase string) (*accountActivationGateHTTP, <-chan error, func()) {
 	t.Helper()
 	gate := &accountActivationNetworkGate{phase: phase, started: make(chan struct{}), release: make(chan struct{})}
@@ -159,7 +162,7 @@ func startGatedPaidActivation(t *testing.T, manager *Manager, secret []byte, pha
 	manager.dkvs.mu.Lock()
 	manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
 	manager.dkvs.mu.Unlock()
-	client := &accountActivationGateNode{rgb11MessageNodeClient: newRGB11MessageNodeClient(remote.rgb11MemoryDKVSHTTP), gate: gate}
+	client := newRGB11MessageNodeClient(remote.rgb11MemoryDKVSHTTP)
 	manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
 	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
 	authorization := AccountStorageAuthorization{Mode: AccountStoragePaid,
@@ -171,7 +174,7 @@ func startGatedPaidActivation(t *testing.T, manager *Manager, secret []byte, pha
 	case <-gate.started:
 	case err := <-done:
 		t.Fatalf("activation ended before gate: %v", err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("activation did not reach gate")
 	}
 	return remote, done, release
@@ -181,7 +184,7 @@ func TestAccountPaidActivationPreservesConcurrentLocalChanges(t *testing.T) {
 	oldChain := _chain
 	_chain = "testnet"
 	defer func() { _chain = oldChain }()
-	for _, phase := range []string{"WaitReady", "CAS", "RPC"} {
+	for _, phase := range []string{"WaitReady", "CAS", "BindingCAS"} {
 		t.Run(phase, func(t *testing.T) {
 			manager, _, secret := buildRootWrapperSource(t)
 			defer zeroBytes(secret)
@@ -245,7 +248,7 @@ func TestAccountPaidActivationSelectionChangeDoesNotChangeRootIdentity(t *testin
 				}
 			}
 
-			_, done, release := startGatedPaidActivation(t, manager, secret, "RPC")
+			_, done, release := startGatedPaidActivation(t, manager, secret, "CAS")
 			switch change {
 			case "account":
 				manager.SwitchAccount(1)
@@ -275,7 +278,7 @@ func TestAccountPaidActivationRejectsChangedRootConfiguration(t *testing.T) {
 	defer func() { _chain = oldChain }()
 	manager, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
-	_, done, release := startGatedPaidActivation(t, manager, secret, "RPC")
+	_, done, release := startGatedPaidActivation(t, manager, secret, "CAS")
 	manager.mutex.Lock()
 	manager.bumpAccountGenerationLocked()
 	manager.mutex.Unlock()

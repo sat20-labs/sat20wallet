@@ -20,6 +20,10 @@ func TestRealSatoshiNetAccountManagementLifecycleAndConcurrentDevices(t *testing
 	// unless a prior authoritative root-not-found discovery authorized automatic
 	// first-wallet activation.
 	require.NoError(t, primary.InitializeAccountManagement("123456"))
+	// Establish the root wallet's accepted CoreNode binding through the public
+	// SDK before any recovery or managed-state KV write. Importing another
+	// wallet below must not redirect this account-management binding.
+	require.NoError(t, primary.BindAccountToCurrentCoreNode())
 	_, err := primary.ImportWallet(bootstrapMnemonic, "123456")
 	require.NoError(t, err)
 	catalog := primary.GetWalletCatalog()

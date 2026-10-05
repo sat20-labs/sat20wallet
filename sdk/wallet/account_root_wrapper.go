@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 
@@ -97,6 +98,17 @@ type accountRootWrapperStore interface {
 	WaitReady(keys ...string) error
 	Get(key string) (*dkvsValue, error)
 	Update(keys []string, builder dkvsUpdateBuilder) ([]*dkvsValue, error)
+}
+
+type accountRootWrapperAuthoritativeReader interface {
+	GetAuthoritative(key string) (*dkvsValue, error)
+}
+
+func accountRootWrapperVerificationRead(store accountRootWrapperStore, key string) (*dkvsValue, error) {
+	if authoritative, ok := store.(accountRootWrapperAuthoritativeReader); ok {
+		return authoritative.GetAuthoritative(key)
+	}
+	return store.Get(key)
 }
 
 func accountRootWrapperKey(root common.Wallet) (string, error) {
@@ -539,7 +551,10 @@ func verifyAccountRootWrapperStorage(store accountRootWrapperStore,
 	if err := store.WaitReady(key); err != nil {
 		return err
 	}
-	current, err := store.Get(key)
+	// The ACK does not install values in the replica. Prefer an authoritative
+	// signed read for immediate post-write verification when the store supports
+	// it; lightweight test stores keep the legacy Get fallback.
+	current, err := accountRootWrapperVerificationRead(store, key)
 	if err != nil {
 		return err
 	}
@@ -624,7 +639,10 @@ func (p *Manager) accountManagementVerifiedSnapshot(store accountRootWrapperStor
 		zeroBytes(secret)
 		return accountManagementProfile{}, nil, nil, 0, err
 	}
-	state, err := store.Get(stateKey)
+	// A successful PUT ACK does not materialize confirmed replica data. Verify
+	// the published state directly from the service node; the background sync
+	// remains the only path that commits it into the local replica.
+	state, err := accountRootWrapperVerificationRead(store, stateKey)
 	if err != nil || state == nil || !bytes.Equal(state.Value, profile.StateEnvelope) {
 		zeroBytes(secret)
 		if err != nil {
@@ -632,7 +650,7 @@ func (p *Manager) accountManagementVerifiedSnapshot(store accountRootWrapperStor
 		}
 		return accountManagementProfile{}, nil, nil, 0, fmt.Errorf("account-managed state remote verification failed")
 	}
-	data, err := store.Get(dataKey)
+	data, err := accountRootWrapperVerificationRead(store, dataKey)
 	if err != nil || data == nil {
 		zeroBytes(secret)
 		if err != nil {
@@ -789,8 +807,12 @@ func rootDiscoveryError(err error) error {
 	if errors.Is(err, ErrDKVSRecordNotFound) {
 		return ErrRootAccountNotFound
 	}
+	var transportErr net.Error
+	if errors.As(err, &transportErr) {
+		return fmt.Errorf("%w: %v", ErrRootAccountDiscoveryPending, err)
+	}
 	var responseErr *HTTPResponseError
-	if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusNotFound {
+	if errors.As(err, &responseErr) && (responseErr.StatusCode == http.StatusNotFound || responseErr.StatusCode >= 500) {
 		// A transport-level 404 here means the endpoint does not expose the
 		// metadata route used for root discovery.  It is not evidence that the
 		// deterministic root record itself is absent.
@@ -977,6 +999,34 @@ func (p *Manager) recoverAccountManagementFromRootMnemonic(ctx context.Context,
 	managedData, err := openAccountManagedDataValue(payload.Secret, accountID, dataValue, state)
 	if err != nil {
 		return nil, err
+	}
+	// A PWA can repeat discovery after resuming or rebuilding its Manager.
+	// An existing managed account must merge through ordinary synchronization;
+	// the empty-database restore path would reject it or discard local changes.
+	p.mutex.RLock()
+	existing := p.accountProfile != nil && !p.replaceableImportedRootProfileLocked(state.RootFingerprint)
+	matches := existing && p.accountProfile.AccountID == accountID &&
+		p.accountProfile.RootFingerprint == state.RootFingerprint &&
+		bytes.Equal(p.accountSecret, payload.Secret) && p.accountPassword == password
+	p.mutex.RUnlock()
+	if existing {
+		if !matches {
+			return nil, ErrRootAccountWrapperInvalid
+		}
+		if err := p.syncAccountManagementState(ctx, 0, false); err != nil {
+			return nil, err
+		}
+		var results []RestoredWalletResult
+		for _, entry := range p.GetWalletCatalog() {
+			result := RestoredWalletResult{ID: entry.ID, Name: entry.Name, Fingerprint: entry.Fingerprint}
+			for _, sub := range entry.Accounts {
+				result.Accounts = append(result.Accounts, RestoredSubAccountResult{
+					Index: sub.Index, DID: sub.DID, Address: sub.Address, PubKey: sub.PubKey, AccountID: sub.AccountID,
+				})
+			}
+			results = append(results, result)
+		}
+		return results, nil
 	}
 	recovered := RecoveredAccountManagementState{
 		State: state, Seq: state.Revision, Hash: accountStateDigest(stateValue.Value),

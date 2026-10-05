@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
@@ -23,6 +22,7 @@ func TestDKVSSubscriptionStateCompactCodec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	state.Generations["/account/a/path"] = 999
 	again, err := encodeDKVSSubscriptionState(state)
 	if err != nil {
 		t.Fatal(err)
@@ -35,6 +35,7 @@ func TestDKVSSubscriptionStateCompactCodec(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := *state
+	want.Generations = nil
 	want.Prefixes = []string{"/account/a/path", "/account/z/path"}
 	if !reflect.DeepEqual(*decoded, want) {
 		t.Fatalf("decoded=%+v want=%+v", decoded, want)
@@ -46,28 +47,13 @@ func TestDKVSSubscriptionStateCompactCodec(t *testing.T) {
 	if len(encoded) >= len(jsonEncoded) {
 		t.Fatalf("compact=%d json=%d", len(encoded), len(jsonEncoded))
 	}
+	oldVersion := append([]byte(nil), encoded...)
+	oldVersion[len(dkvsSubscriptionStateMagic)] = 3
+	if _, err := decodeDKVSSubscriptionState(oldVersion); !errors.Is(err, dkvsindexer.ErrInvalidRecord) {
+		t.Fatalf("obsolete state format accepted: %v", err)
+	}
 	if _, err := decodeDKVSSubscriptionState(jsonEncoded); !errors.Is(err, dkvsindexer.ErrInvalidRecord) {
 		t.Fatalf("legacy JSON accepted err=%v", err)
-	}
-}
-
-func TestDKVSLocalKeyStateCompactCodec(t *testing.T) {
-	etag := chainhash.DoubleHashH([]byte("etag")).String()
-	state := LocalKeyState{Key: "codec/item", Seq: 9, ETag: etag, ExpiryHeight: 999,
-		StorageMode: dkvsindexer.StorageModeAutopay}
-	encoded, err := encodeDKVSLocalKeyState(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := decodeDKVSLocalKeyState(encoded, state.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(*decoded, state) {
-		t.Fatalf("decoded=%+v want=%+v", decoded, state)
-	}
-	if _, err := decodeDKVSLocalKeyState(append(encoded, 0), state.Key); !errors.Is(err, dkvsindexer.ErrInvalidRecord) {
-		t.Fatalf("trailing data err=%v", err)
 	}
 }
 
@@ -82,7 +68,6 @@ func TestDKVSOutboxCompactCodec(t *testing.T) {
 		Mutations: []PersistedMutation{{Record: recordBytes, ExpectAbsent: true}},
 		State:     DKVSOutboxPending, Attempts: 2, CreatedAtMS: 10, UpdatedAtMS: 20,
 		OriginKey: record.Key, OriginDomain: "account", OriginGeneration: 3,
-		PreservePrefixGenerations: true,
 	}
 	encoded, err := encodeDKVSOutboxEntry(entry)
 	if err != nil {

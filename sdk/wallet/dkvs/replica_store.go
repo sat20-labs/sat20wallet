@@ -8,8 +8,8 @@ import (
 
 var ErrReplicaNotReady = errors.New("DKVS subscription has not completed initial synchronization")
 
-// ReplicaStore owns the final Wallet materialized subscription replica and
-// RequestID-keyed durable outbox. There is no path-root/generation replica.
+// ReplicaStore owns confirmed current records, source-local ActiveMeta and
+// the RequestID-keyed durable outbox. It stores no deletion history.
 type ReplicaStore struct {
 	db indexer.KVDB
 }
@@ -20,10 +20,9 @@ type batchWriter interface {
 }
 
 type OutboxOrigin struct {
-	Key                       string
-	Domain                    string
-	Generation                uint64
-	PreservePrefixGenerations bool
+	Key        string
+	Domain     string
+	Generation uint64
 }
 
 func NewReplicaStore(db indexer.KVDB) *ReplicaStore {

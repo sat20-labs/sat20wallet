@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -180,6 +181,60 @@ type RecoveredAccountManagementState struct {
 	ManagedData         account.ManagedDataBundle
 	ManagedDataHash     string
 	ManagedDataEnvelope []byte
+}
+
+func validateRecoveredAccountManagementState(value RecoveredAccountManagementState,
+	secret []byte, locator account.Locator) (RecoveredAccountManagementState, error) {
+
+	if len(secret) != 32 || strings.TrimSpace(locator.AccountID) == "" || len(value.Envelope) == 0 {
+		return RecoveredAccountManagementState{}, fmt.Errorf("invalid managed account recovery state")
+	}
+	state, err := account.OpenManagedState(secret, locator.AccountID, value.Envelope)
+	if err != nil {
+		return RecoveredAccountManagementState{}, fmt.Errorf("verify managed account state: %w", err)
+	}
+	hash := accountStateDigest(value.Envelope)
+	if value.Seq != state.Revision || value.Hash != hash || !reflect.DeepEqual(value.State, state) {
+		return RecoveredAccountManagementState{}, fmt.Errorf("managed account recovery state does not match authenticated envelope")
+	}
+
+	result := value
+	result.State = state
+	result.Seq = state.Revision
+	result.Hash = hash
+
+	if state.DataRevision == 0 {
+		empty := emptyAccountManagedDataBundle(1)
+		if state.DataHash != "" || value.ManagedDataHash != "" || len(value.ManagedDataEnvelope) != 0 ||
+			!reflect.DeepEqual(value.ManagedData, empty) {
+			return RecoveredAccountManagementState{}, fmt.Errorf("managed account recovery data is inconsistent")
+		}
+		result.ManagedData = empty
+		result.ManagedDataHash = ""
+		result.ManagedDataEnvelope = nil
+		return result, nil
+	}
+	if len(value.ManagedDataEnvelope) == 0 {
+		return RecoveredAccountManagementState{}, fmt.Errorf("managed account recovery data envelope is missing")
+	}
+	bundle, err := account.OpenManagedDataBundle(secret, locator.AccountID, value.ManagedDataEnvelope)
+	if err != nil {
+		return RecoveredAccountManagementState{}, fmt.Errorf("verify account-managed data: %w", err)
+	}
+	dataHash, err := accountManagedDataContentHash(bundle.Items)
+	if err != nil {
+		return RecoveredAccountManagementState{}, err
+	}
+	if err := verifyAccountManagedDataReference(state, bundle, dataHash); err != nil {
+		return RecoveredAccountManagementState{}, err
+	}
+	if value.ManagedDataHash != dataHash || !reflect.DeepEqual(value.ManagedData, bundle) {
+		return RecoveredAccountManagementState{}, fmt.Errorf("account-managed recovery data does not match authenticated envelope")
+	}
+	result.ManagedData = bundle
+	result.ManagedDataHash = dataHash
+	result.ManagedDataEnvelope = append([]byte(nil), value.ManagedDataEnvelope...)
+	return result, nil
 }
 
 func (p *Manager) GetAccountManagementStatus() AccountManagementStatus {
@@ -488,7 +543,7 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 	var err error
 	err = p.withAccountLocalState(false, func() error {
 		if err := p.checkAccountManagedDataImport(); err != nil {
-			return err
+			return fmt.Errorf("check account-managed data import before activation: %w", err)
 		}
 		p.mutex.RLock()
 		downgrade := p.accountProfile != nil &&
@@ -552,14 +607,17 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 
 		managedData, err = p.buildAccountManagedDataSnapshot(secret, accountID, dataRevision)
 		if err != nil {
-			return err
+			return fmt.Errorf("build account-managed data snapshot for activation: %w", err)
 		}
 		store, err = p.accountDKVSStore()
 		if err != nil {
-			return err
+			return fmt.Errorf("open account DKVS store for activation: %w", err)
 		}
 		bindCoreNode, err = p.prepareAccountCoreNodeBinding(root, store)
-		return err
+		if err != nil {
+			return fmt.Errorf("prepare account CoreNode binding: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -603,7 +661,7 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 	}
 	state, err := p.buildInitialManagedStateFromInfosLocked(password, rootFingerprint, clonedInfos)
 	if err != nil {
-		return err
+		return fmt.Errorf("build initial managed state for activation: %w", err)
 	}
 	state.Revision = stateRevision
 	for index := range state.Wallets {
@@ -614,11 +672,11 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 	state.DataHash = managedData.Hash
 	stateEnvelope, err := account.SealManagedState(secret, accountID, state, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("seal managed state for activation: %w", err)
 	}
 	secretCipher, secretSalt, err := p.encryptAccountManagementSecret(password, secret)
 	if err != nil {
-		return err
+		return fmt.Errorf("encrypt account management secret for activation: %w", err)
 	}
 	if len(deviceID) == 0 {
 		deviceID, err = p.newAccountManagementDeviceID()
@@ -644,33 +702,33 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 
 	stateKey, err := p.accountManagedStateKey(root)
 	if err != nil {
-		return err
+		return fmt.Errorf("derive account managed state key: %w", err)
 	}
 	dataKey, err := p.accountManagedDataBlobKey(root)
 	if err != nil {
-		return err
+		return fmt.Errorf("derive account managed data key: %w", err)
 	}
 	wrapperKey, err := accountRootWrapperKey(root)
 	if err != nil {
-		return err
+		return fmt.Errorf("derive account root wrapper key: %w", err)
 	}
 	if err := store.WaitReady(wrapperKey, stateKey, dataKey); err != nil {
-		return rootDiscoveryError(err)
+		return fmt.Errorf("prepare account activation DKVS baseline: %w", rootDiscoveryError(err))
 	}
 	currentWrapper, getErr := store.Get(wrapperKey)
 	if getErr != nil && !errors.Is(getErr, ErrDKVSRecordNotFound) {
-		return rootDiscoveryError(getErr)
+		return fmt.Errorf("read account root wrapper baseline: %w", rootDiscoveryError(getErr))
 	}
 	if errors.Is(getErr, ErrDKVSRecordNotFound) {
 		currentWrapper = nil
 	}
 	if err := validateAccountRootWrapperSecret(root, accountID, secret, currentWrapper); err != nil {
-		return err
+		return fmt.Errorf("validate account root wrapper before activation: %w", err)
 	}
 	wrapperEnvelope, err := sealAccountRootWrapper(root, _chain, accountID,
 		rootWrapperPayload(*profile, secret), nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("seal account root wrapper for activation: %w", err)
 	}
 	// Bind the CAS to all three captured records. A transport retry must not
 	// overwrite a concurrent recovery/storage configuration from another device.
@@ -678,7 +736,7 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 	for _, key := range []string{wrapperKey, stateKey, dataKey} {
 		value, err := store.Get(key)
 		if err != nil && !errors.Is(err, ErrDKVSRecordNotFound) {
-			return err
+			return fmt.Errorf("capture account activation baseline %s: %w", key, err)
 		}
 		if value != nil {
 			captured[key] = value.Hash
@@ -686,6 +744,12 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 	}
 	if err := checkCurrent(true); err != nil {
 		return err
+	}
+	// Publish the standalone /account mapping through the wallet KV bootstrap
+	// exception before any business writes. The current signed mapping is the
+	// sole binding fact and is relayed by the DKVS P2P path.
+	if err := bindCoreNode(); err != nil {
+		return fmt.Errorf("bind account to current CoreNode: %w", err)
 	}
 	_, err = store.Update([]string{wrapperKey, stateKey, dataKey}, func(values map[string]*dkvsValue,
 		_ map[string]uint64) ([]dkvsValueMutation, error) {
@@ -702,20 +766,17 @@ func (p *Manager) activateAccountManagement(secret []byte, password string,
 			stateKey, stateEnvelope, dataKey, managedData.Envelope, values)
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("publish account activation state: %w", err)
 	}
 	if err := p.verifyAccountManagedStorage(store, profile, stateKey, dataKey,
 		stateEnvelope, managedData.Envelope); err != nil {
-		return err
+		return fmt.Errorf("verify account activation managed storage: %w", err)
 	}
 	if err := verifyAccountRootWrapperStorage(store, profile, root, secret, wrapperKey); err != nil {
-		return err
+		return fmt.Errorf("verify account activation root wrapper: %w", err)
 	}
 	if err := checkCurrent(false); err != nil {
-		return err
-	}
-	if err := bindCoreNode(); err != nil {
-		return fmt.Errorf("bind account to current CoreNode: %w", err)
+		return fmt.Errorf("revalidate account activation snapshot after publication: %w", err)
 	}
 	err = p.withAccountLocalState(false, func() error {
 		if err := p.checkAccountManagedDataImport(); err != nil {
@@ -856,9 +917,11 @@ func (p *Manager) restoreAccountManagementStateOperation(value RecoveredAccountM
 	options AccountManagementRestoreOptions,
 	allowedImportedRoot string) ([]RestoredWalletResult, error) {
 
-	if len(secret) != 32 || value.State.RootFingerprint == "" || value.Seq == 0 || len(value.Envelope) == 0 {
-		return nil, fmt.Errorf("invalid managed account recovery state")
+	validated, err := validateRecoveredAccountManagementState(value, secret, locator)
+	if err != nil {
+		return nil, err
 	}
+	value = validated
 	backup, err := account.BackupFromManagedState(value.State)
 	if err != nil {
 		return nil, err
@@ -1488,8 +1551,13 @@ func buildAccountManagedStateTarget(remote account.ManagedState,
 		if mutation.Fingerprint == "" {
 			continue
 		}
-		changed[mutation.Fingerprint] = struct{}{}
 		if mutation.Type == accountMutationDeleteWallet || deleteRequested[mutation.Fingerprint] {
+			if mutation.Fingerprint == snapshot.profile.RootFingerprint {
+				return account.ManagedState{}, false, fmt.Errorf("the account management wallet cannot be deleted")
+			}
+			if remoteWallet := findManagedWallet(&target, mutation.Fingerprint); remoteWallet == nil || !remoteWallet.Deleted {
+				changed[mutation.Fingerprint] = struct{}{}
+			}
 			continue
 		}
 		local, ok := snapshot.wallets[mutation.Fingerprint]
@@ -1541,6 +1609,9 @@ func buildAccountManagedStateTarget(remote account.ManagedState,
 		}
 	}
 	for fingerprint, wallet := range effective {
+		if deleteRequested[fingerprint] {
+			continue
+		}
 		remoteWallet := findManagedWallet(&target, fingerprint)
 		if remoteWallet == nil || !managedWalletContentMatches(wallet, remoteWallet) {
 			changed[fingerprint] = struct{}{}
@@ -1833,7 +1904,7 @@ func (p *Manager) prepareAccountManagedStateCommit(state account.ManagedState,
 	}
 	return &accountManagedStateCommit{
 		wallets: wallets, status: status, profile: profile, puts: encodedPuts, deletes: deletes,
-		profileBytes: profileBytes,
+		profileBytes:   profileBytes,
 		pendingRemains: len(remaining) != 0, importManagedData: sameManagedGeneration,
 	}, nil
 }
@@ -2286,7 +2357,6 @@ func (p *Manager) syncAccountManagementStateMode(ctx context.Context, attempt in
 	}
 	if needsPublish {
 		origin := outboxPlan.origin(stateKey, snapshot.profile.ManagedDataGeneration)
-		origin.PreservePrefixGenerations = authoritativeRebase
 		update := store.updateWithOutboxOrigin
 		if authoritativeRebase {
 			update = store.updateAuthoritativeWithOutboxOrigin

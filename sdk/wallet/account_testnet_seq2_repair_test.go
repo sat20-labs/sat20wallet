@@ -4,6 +4,7 @@
 package wallet
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -419,9 +420,9 @@ func testnetSeq2PreparedRGB11Manager(manager *Manager) (*rgb11Manager, error) {
 	})
 }
 
-func testnetSeq2ExactRecord(snapshot *dkvsindexer.PrefixSnapshot,
+func testnetSeq2ExactRecord(snapshot *dkvsindexer.ActivePage,
 	key string) (*swire.DKVSRecord, error) {
-	if snapshot == nil || strings.TrimSpace(snapshot.EndpointID) == "" || snapshot.ViewHeight == 0 {
+	if snapshot == nil || strings.TrimSpace(snapshot.Meta.EndpointID) == "" || snapshot.Meta.ViewHeight == 0 {
 		return nil, fmt.Errorf("missing DKVS subscription snapshot")
 	}
 	var result *swire.DKVSRecord
@@ -449,15 +450,19 @@ func readTestnetSeq2Remote(client *SatsNetDKVSClient, stateKey,
 	if err != nil {
 		return testnetSeq2RemotePair{}, err
 	}
-	stateSnapshot, err := client.GetPrefixSnapshot(statePath)
+	config, err := client.GetDKVSClientConfig()
 	if err != nil {
 		return testnetSeq2RemotePair{}, err
 	}
-	blobSnapshot, err := client.GetPrefixSnapshot(blobPath)
+	stateSnapshot, err := client.GetActivePage(context.Background(), dkvsindexer.ActiveSyncRequest{Scope: dkvsindexer.ActiveScope{Prefix: statePath, Keys: []string{stateKey}}, EndpointID: config.EndpointID, Full: true})
 	if err != nil {
 		return testnetSeq2RemotePair{}, err
 	}
-	if stateSnapshot.EndpointID != blobSnapshot.EndpointID {
+	blobSnapshot, err := client.GetActivePage(context.Background(), dkvsindexer.ActiveSyncRequest{Scope: dkvsindexer.ActiveScope{Prefix: blobPath, Keys: []string{blobKey}}, EndpointID: config.EndpointID, Full: true})
+	if err != nil {
+		return testnetSeq2RemotePair{}, err
+	}
+	if stateSnapshot.Meta.EndpointID != blobSnapshot.Meta.EndpointID {
 		return testnetSeq2RemotePair{}, dkvsindexer.ErrEndpointMismatch
 	}
 	state, err := testnetSeq2ExactRecord(stateSnapshot, stateKey)
@@ -472,15 +477,15 @@ func readTestnetSeq2Remote(client *SatsNetDKVSClient, stateKey,
 	if err != nil {
 		return testnetSeq2RemotePair{}, err
 	}
-	if config.EndpointID != stateSnapshot.EndpointID {
+	if config.EndpointID != stateSnapshot.Meta.EndpointID {
 		return testnetSeq2RemotePair{}, dkvsindexer.ErrEndpointMismatch
 	}
-	verificationHeight := stateSnapshot.ViewHeight
-	if blobSnapshot.ViewHeight < verificationHeight {
-		verificationHeight = blobSnapshot.ViewHeight
+	verificationHeight := stateSnapshot.Meta.ViewHeight
+	if blobSnapshot.Meta.ViewHeight < verificationHeight {
+		verificationHeight = blobSnapshot.Meta.ViewHeight
 	}
 	return testnetSeq2RemotePair{
-		State: state, Blob: blob, EndpointID: stateSnapshot.EndpointID,
+		State: state, Blob: blob, EndpointID: stateSnapshot.Meta.EndpointID,
 		VerificationHeight: verificationHeight,
 	}, nil
 }

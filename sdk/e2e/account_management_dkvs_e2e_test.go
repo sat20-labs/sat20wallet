@@ -133,6 +133,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	bootstrapLocation := locationForNode(fixture.Network.Bootstrap)
 	coreLocation := locationForNode(fixture.Network.Core)
 	database := indexerdb.NewKVDB(t.TempDir())
+	require.NotNil(t, database)
 	defer database.Close()
 	walletConfig := &sdkcommon.Config{
 		Env: "test", Chain: "testnet",
@@ -152,6 +153,17 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, walletManager.InitializeAccountManagement("123456"))
 	require.Equal(t, pubKey, walletManager.GetWallet().GetPubKey().SerializeCompressed())
+	// Recovery publication is a generic KV write too. Establish and verify the
+	// real CoreNode binding through the public SDK before constructing outbox
+	// operations; neither AUTOPAY payment nor loopback grants RPC admission.
+	require.NoError(t, walletManager.BindAccountToCurrentCoreNode())
+	bindingKey, err := dkvsindexer.AccountMappingKey("testnet", owner.Address)
+	require.NoError(t, err)
+	binding, err := dkvsClientForNode(t, fixture.Network.Core).GetRecordDirect(bindingKey)
+	require.NoError(t, err)
+	_, _, bindingDescriptor, err := dkvsindexer.ValidateAccountMappingBindingRecord(binding)
+	require.NoError(t, err)
+	require.Equal(t, fixture.Network.Core.nodePubKey, bindingDescriptor.CoreNodeID)
 
 	// A resumed paid-storage setup must only reuse an already-ready delegate.
 	// This path queries the real local SatoshiNet contract/indexer but must never
@@ -210,6 +222,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 
 	coreClient := dkvsClientForNode(t, fixture.Network.Core)
 	loaded, err := walletManager.LoadAccountRecoveryPackage(coreLocation, pkg.Envelope.Locator)
+	t.Logf("account-e2e: load_recovery_package_error=%v", err)
 	require.NoError(t, err)
 	guardianValue, err := walletManager.LoadAccountGuardianCapsule(
 		coreLocation, accountID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID,
@@ -237,6 +250,24 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, walletManager.ActivateAccountManagement(
 		secret, "123456", authorization, pkg.Envelope.Locator, "sat20account1:e2e",
 	))
+	t.Run("PWAReadyPaidStorageDoesNotFundTwiceOrDowngrade", func(t *testing.T) {
+		confirmed, err := walletManager.ConfirmAccountStorage(wallet.AccountStoragePaid, 100)
+		require.NoError(t, err)
+		require.Empty(t, confirmed.TransactionID)
+		status, err := walletManager.GetAccountAutopayFundingStatus()
+		require.NoError(t, err)
+		require.True(t, status.Required)
+		require.True(t, status.Ready)
+		funding, err := walletManager.FundAccountAutopay()
+		require.NoError(t, err)
+		require.True(t, funding.Reused)
+		require.Empty(t, funding.TransactionID)
+		options, err := walletManager.GetAccountStorageOptions()
+		require.NoError(t, err)
+		for _, option := range options { require.NotEqual(t, wallet.AccountStorageTemporary, option.Mode) }
+		_, err = walletManager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
+		require.ErrorIs(t, err, wallet.ErrAccountStorageModeDowngrade)
+	})
 	stateKey, err := dkvsindexer.PersonalKey(pubKey, "account/state")
 	require.NoError(t, err)
 	managedDataKey, err := dkvsindexer.BlobKey(accountID, "account-managed-data")

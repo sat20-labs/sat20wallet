@@ -32,7 +32,7 @@ func (c *topicSDKMessageClient) SendMessageServiceReq(req *swire.MessageServiceR
 		return nil, fmt.Errorf("nil message request")
 	}
 	switch req.Action {
-	case swire.MessageServiceActionBindAccount, swire.MessageServiceActionNextMessage, swire.MessageServiceActionSendDirect:
+	case swire.MessageServiceActionNextMessage, swire.MessageServiceActionSendDirect:
 		return c.rgb11MessageNodeClient.SendMessageServiceReq(req)
 	case swire.MessageServiceActionCreateTopic:
 		var create swire.TopicCreateRequest

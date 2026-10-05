@@ -78,7 +78,9 @@ func (r *FreeLocalAccountDKVSRepository) LoadRecoveryPackage(_ context.Context,
 	if err != nil {
 		return nil, err
 	}
-	record, err := r.store.Get(key)
+	// Loading immutable recovery material is an explicit source verification,
+	// including immediately after publication before the replica catches up.
+	record, err := r.store.GetAuthoritative(key)
 	if err != nil {
 		return nil, err
 	}

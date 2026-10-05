@@ -3,8 +3,8 @@ package wallet
 import (
 	"bytes"
 	"context"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -40,9 +40,9 @@ const (
 )
 
 type accountManagedDataImportMarker struct {
-	Version            uint32 `json:"version"`
-	Origin             string `json:"origin"`
-	Stage              string `json:"stage"`
+	Version             uint32 `json:"version"`
+	Origin              string `json:"origin"`
+	Stage               string `json:"stage"`
 	TargetStateRevision uint64 `json:"target_state_revision,omitempty"`
 	TargetStateHash     string `json:"target_state_hash,omitempty"`
 	TargetDataRevision  uint64 `json:"target_data_revision,omitempty"`
@@ -57,7 +57,7 @@ func accountManagedImportMarkerForProfile(origin, stage string,
 	now := time.Now().Unix()
 	marker := accountManagedDataImportMarker{
 		Version: accountManagedImportMarkerVersion,
-		Origin: strings.TrimSpace(origin), Stage: strings.TrimSpace(stage),
+		Origin:  strings.TrimSpace(origin), Stage: strings.TrimSpace(stage),
 		CreatedAtUnix: now, UpdatedAtUnix: now,
 	}
 	if marker.Origin == "" {
@@ -457,11 +457,15 @@ func (p *Manager) verifyAccountManagedStorage(store *dkvsStore,
 	if err := store.WaitReady(stateKey, dataKey); err != nil {
 		return err
 	}
-	stateValue, err := store.Get(stateKey)
+	// A write ACK confirms request completion but deliberately does not
+	// materialize the echoed values into the local replica. Immediate post-write
+	// verification therefore reads the authoritative source and re-verifies each
+	// signed record; background active sync remains the sole replica commit path.
+	stateValue, err := store.GetAuthoritative(stateKey)
 	if err != nil {
 		return err
 	}
-	dataValue, err := store.Get(dataKey)
+	dataValue, err := store.GetAuthoritative(dataKey)
 	if err != nil {
 		return err
 	}
@@ -522,14 +526,14 @@ func (p *Manager) requireCurrentAccountManagedData() error {
 	if err != nil {
 		return err
 	}
-	if err := store.WaitReady(stateKey, dataKey); err != nil {
+	if err := store.manager.requirePathsReady(store.client, []string{stateKey, dataKey}); err != nil {
 		return err
 	}
-	stateValue, err := store.Get(stateKey)
+	stateValue, err := store.getConfirmedVerified(stateKey, dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		return err
 	}
-	dataValue, err := store.Get(dataKey)
+	dataValue, err := store.getConfirmedVerified(dataKey, dkvsindexer.RecordVerificationOptions{})
 	if err != nil {
 		return err
 	}
@@ -557,7 +561,15 @@ func (p *Manager) WaitAccountManagedDataReady(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, accountManagedDataReadyTimeout)
+		defer cancel()
+	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		err := p.waitAccountManagedDataReadyAttempt(ctx)
 		if err == nil || !errors.Is(err, ErrAccountManagementWalletUnavailable) {
 			return err
@@ -585,17 +597,12 @@ func (p *Manager) waitAccountManagedDataReadyAttempt(ctx context.Context) error 
 	if p == nil {
 		return ErrDKVSPathNotSynced
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, accountManagedDataReadyTimeout)
-		defer cancel()
-	}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		err := p.requireCurrentAccountManagedData()
 		if err == nil {
 			return nil

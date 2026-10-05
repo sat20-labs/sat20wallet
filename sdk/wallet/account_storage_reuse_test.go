@@ -120,7 +120,9 @@ func TestReviewStorageAuthorizationRejectsForeignEndpoint(t *testing.T) {
 	manager, _, secret := buildRootWrapperSource(t)
 	defer zeroBytes(secret)
 	location, err := manager.AccountIndexerLocation()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	location.Host = "another-indexer.test"
 	grant, err := manager.rememberAccountStorageAuthorization(&AccountStorageAuthorization{
 		Mode: AccountStorageTemporary, Location: location,
@@ -131,5 +133,37 @@ func TestReviewStorageAuthorizationRejectsForeignEndpoint(t *testing.T) {
 	}
 	if pending, err := manager.PendingAccountStorageAuthorization(); pending != nil || !errors.Is(err, ErrAccountStorageAuthorizationMissing) {
 		t.Fatalf("failed endpoint validation left a usable authorization: pending=%+v err=%v", pending, err)
+	}
+}
+
+func TestAccountStorageRuntimeStopRejectsAuthorizationWork(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+
+	manager, _, secret := buildRootWrapperSource(t)
+	defer zeroBytes(secret)
+	if _, err := manager.ConfirmAccountStorage(AccountStorageTemporary, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.Stop()
+
+	if pending, err := manager.PendingAccountStorageAuthorization(); pending != nil ||
+		!errors.Is(err, ErrAccountStorageRuntimeStopped) {
+		t.Fatalf("stopped runtime exposed authorization: pending=%+v err=%v", pending, err)
+	}
+	called := false
+	err := manager.UseAccountStorageAuthorization(AccountStoragePurposeRecovery,
+		func(*AccountStorageAuthorization) error {
+			called = true
+			return nil
+		})
+	if !errors.Is(err, ErrAccountStorageRuntimeStopped) || called {
+		t.Fatalf("stopped runtime used authorization: called=%v err=%v", called, err)
+	}
+	if grant, err := manager.ConfirmAccountStorage(AccountStorageTemporary, 0); grant != nil ||
+		!errors.Is(err, ErrAccountStorageRuntimeStopped) {
+		t.Fatalf("stopped runtime minted authorization: grant=%+v err=%v", grant, err)
 	}
 }
