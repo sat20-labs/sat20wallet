@@ -2,10 +2,12 @@ package wallet
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,4 +88,30 @@ func TestDKVSPrelaunchReadContextIncludesConfiguration(t *testing.T) {
 			assert.ErrorIs(t, result, wanted, "the caller's deadline/cancellation must cover config and all subsequent pages")
 		})
 	}
+}
+
+func TestDKVSActiveSyncCanceledBeforeConfiguration(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if !strings.HasSuffix(r.URL.Path, "/v3/dkvs/config") {
+			t.Errorf("canceled operation reached %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"code": 0, "data": &dkvs.ClientConfig{EndpointID: "cancel-core"},
+		})
+	}))
+	defer server.Close()
+	client := NewSatsNetDKVSClient("http", strings.TrimPrefix(server.URL, "http://"), "",
+		&NetClient{Client: server.Client()})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := client.SyncActiveScope(ctx, core.NewReplicaStore(newMemoryKVDB()),
+		"cancel-before-config", dkvs.ActiveScope{Prefix: "/svc/review"}, true)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, calls.Load(), "an already canceled operation must not start configuration I/O")
+	client.endpointMu.RLock()
+	endpoint := client.endpointID
+	client.endpointMu.RUnlock()
+	assert.Empty(t, endpoint, "a canceled operation must not publish configuration")
 }

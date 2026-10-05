@@ -163,11 +163,14 @@ func (p *SatsNetDKVSClient) syncActiveScope(ctx context.Context, store *dkvscore
 	if store == nil {
 		return nil, dkvs.ErrInvalidRecord
 	}
+	if ctx == nil {
+		ctx = p.requestContext()
+	}
 	scope, err := dkvs.NormalizeActiveScope(scope)
 	if err != nil {
 		return nil, err
 	}
-	config, err := p.GetDKVSClientConfig()
+	config, err := p.getDKVSClientConfigContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -202,6 +205,9 @@ func (p *SatsNetDKVSClient) syncActiveScope(ctx context.Context, store *dkvscore
 		if err != nil {
 			return nil, err
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		changed, err := store.InstallActiveState(namespace, baseline, meta, records, request.Full)
 		if usingWatchPage && errors.Is(err, dkvs.ErrStaleEndpoint) {
 			// A completed Watch can arrive after a foreground ACK. Reject that
@@ -213,6 +219,9 @@ func (p *SatsNetDKVSClient) syncActiveScope(ctx context.Context, store *dkvscore
 			request.Full, request.Cursor = true, nil
 			meta, records, err = p.collectActivePages(ctx, request, nil)
 			if err == nil {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				changed, err = store.InstallActiveState(namespace, baseline, meta, records, true)
 			}
 		}

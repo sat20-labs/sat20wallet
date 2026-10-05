@@ -153,11 +153,23 @@ func (p *SatsNetDKVSClient) getBestHeightContext(ctx context.Context) (uint64, e
 	return uint64(result.Data), nil
 }
 func (p *SatsNetDKVSClient) GetDKVSClientConfig() (*dkvsindexer.ClientConfig, error) {
+	return p.getDKVSClientConfigContext(p.requestContext())
+}
+func (p *SatsNetDKVSClient) getDKVSClientConfigContext(ctx context.Context) (*dkvsindexer.ClientConfig, error) {
 	if p == nil || p.Http == nil {
 		return nil, ErrDKVSPathNotSynced
 	}
+	if ctx == nil {
+		ctx = p.requestContext()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if provider, ok := p.Http.(dkvsConfigProvider); ok {
 		config, err := provider.DKVSClientConfig()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -172,7 +184,11 @@ func (p *SatsNetDKVSClient) GetDKVSClientConfig() (*dkvsindexer.ClientConfig, er
 		dkvsApplicationBaseResp
 		Data *dkvsindexer.ClientConfig `json:"data,omitempty"`
 	}
-	if err := p.getDKVSApplication("/v3/dkvs/config", nil, &resp); err != nil {
+	err := p.getDKVSApplicationContext(ctx, "/v3/dkvs/config", nil, &resp)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err != nil {
 		return nil, err
 	}
 	if resp.Data == nil || strings.TrimSpace(resp.Data.EndpointID) == "" {
@@ -291,6 +307,9 @@ func sliceRecords(records []*swire.DKVSRecord, start, limit int) ([]*swire.DKVSR
 }
 
 func (p *SatsNetDKVSClient) readCurrentDirectory(ctx context.Context, prefix string) ([]*swire.DKVSRecord, error) {
+	if ctx == nil {
+		ctx = p.requestContext()
+	}
 	scope, scopeErr := dkvsindexer.NormalizeActiveScope(dkvsindexer.ActiveScope{Prefix: prefix})
 	if scopeErr != nil {
 		result, err := p.ReadPrefixContext(ctx, prefix)
@@ -299,7 +318,7 @@ func (p *SatsNetDKVSClient) readCurrentDirectory(ctx context.Context, prefix str
 		}
 		return result.Records, nil
 	}
-	config, err := p.GetDKVSClientConfig()
+	config, err := p.getDKVSClientConfigContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -317,6 +336,9 @@ func (p *SatsNetDKVSClient) readCurrentDirectory(ctx context.Context, prefix str
 		}
 		if root != meta.Root {
 			return nil, dkvsindexer.ErrPathDiverged
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		return records, nil
 	}
