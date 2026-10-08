@@ -2215,7 +2215,7 @@ func (p *TestIndexerClient) BroadCastTx_SatsNet(tx *swire.MsgTx) (string, error)
 	for _, txIn := range tx.TxIn {
 		utxo := txIn.PreviousOutPoint.String()
 		if txIn.PreviousOutPoint.Index == swire.AnchorTxOutIndex {
-			anchorData, _, err = CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
+			anchorData, _, err = CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, false)
 			if err == nil {
 				p.network.ascendMap[anchorData.Utxo] = tx.TxID()
 			}

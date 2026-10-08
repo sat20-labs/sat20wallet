@@ -128,6 +128,12 @@
             </Button>
           </div>
         </form>
+        <Button type="button" variant="link" class="w-full" @click="router.push('/restore-account')">
+          继续账户恢复
+        </Button>
+        <Button type="button" variant="link" class="w-full" @click="router.push('/import')">
+          继续助记词恢复
+        </Button>
       </div>
     </div>
   </div>

@@ -1020,7 +1020,9 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxDecoded(ctx context.Context,
 		if err := p.rgbManager.projectionStore.SaveTransferState(state); err != nil {
 			return nil, nil, err
 		}
-		p.autoBackupRGB11AfterMutation()
+		if err := p.autoBackupRGB11AfterMutation(); err != nil {
+			return nil, nil, err
+		}
 		return receipt, ackRecord, nil
 	} else if !errors.Is(loadErr, indexer.ErrKeyNotFound) {
 		return nil, nil, loadErr
@@ -1096,7 +1098,9 @@ func (p *rgb11Manager) acceptRGB11AddressMailboxDecoded(ctx context.Context,
 	if err := p.rgbManager.projectionStore.SaveTransferState(state); err != nil {
 		return nil, nil, err
 	}
-	p.autoBackupRGB11AfterMutation()
+	if err := p.autoBackupRGB11AfterMutation(); err != nil {
+		return nil, nil, err
+	}
 	return accepted, ackRecord, nil
 }
 
@@ -1476,25 +1480,25 @@ func (p *rgb11Manager) hasActiveRGB11Transition() (bool, error) {
 // autoBackupRGB11AfterMutation never overwrites the last stable account blob
 // with an unfinished transition. Active transition state is handled by the
 // synchronous CoreNode-mailbox barriers at delivery, broadcast and ACK.
-func (p *rgb11Manager) autoBackupRGB11AfterMutation() {
+func (p *rgb11Manager) autoBackupRGB11AfterMutation() error {
 	if owner := p.accountManagementOwner(); owner != nil {
 		if inOperation, firstMutation := owner.noteRGB11ManagedOperationMutation(); inOperation {
 			if firstMutation {
-				owner.markAccountManagedDataDirtyDeferred(rgb11AccountManagedProviderID)
+				return owner.markAccountManagedDataDirtyDeferred(rgb11AccountManagedProviderID)
 			}
-			return
+			return nil
 		}
 		active, err := p.hasActiveRGB11Transition()
 		if err != nil {
-			Log.Warningf("inspect RGB11 active recovery state failed: %v", err)
-			return
+			return fmt.Errorf("inspect RGB11 active recovery state: %w", err)
 		}
 		if active {
 			owner.scheduleAccountManagedActiveDataSync(rgb11AccountManagedProviderID)
-			return
+			return nil
 		}
-		owner.markAccountManagedDataDirty(rgb11AccountManagedProviderID)
+		return owner.markAccountManagedDataDirty(rgb11AccountManagedProviderID)
 	}
+	return nil
 }
 
 func (p *rgb11Manager) ResumeRGB11PreparedTransfer(transferID string) (*RGB11PreparedTransferPackage, error) {

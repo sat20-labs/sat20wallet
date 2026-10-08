@@ -156,6 +156,7 @@ type AccountAutopayFundingResult struct {
 	FundingAmount   string `json:"funding_amount"`
 	FundingBlocks   uint64 `json:"funding_blocks"`
 	Reused          bool   `json:"reused"`
+	Pending         bool   `json:"pending"`
 }
 
 type AccountWalletMetadataInput struct {
@@ -404,48 +405,103 @@ func (p *Manager) GetAccountAutopayFundingStatus() (*AccountAutopayFundingStatus
 	}
 	p.mutex.RLock()
 	paidActive := p.accountProfile != nil && p.accountProfile.StorageMode == AccountStoragePaid
-	p.mutex.RUnlock()
-	if !paidActive {
-		return &AccountAutopayFundingStatus{
-			Ready: true, Reason: AccountAutopayReasonNotRequired,
-			Message: "当前账户未使用 AUTOPAY 付费存储。",
-		}, nil
+	var info *WalletInfo
+	var err error
+	if p.accountProfile == nil {
+		info, err = p.accountManagementCandidateRootLocked()
+	} else {
+		info, err = p.accountManagementRootWalletLocked()
 	}
-
+	var root common.Wallet
+	if err == nil && info != nil {
+		root = cloneWalletAtAccountZero(info.Wallet)
+	}
+	p.mutex.RUnlock()
+	notRequired := &AccountAutopayFundingStatus{Ready: true, Reason: AccountAutopayReasonNotRequired,
+		Message: "当前账户未使用 AUTOPAY 付费存储。"}
+	if root == nil {
+		if !paidActive {
+			return notRequired, nil
+		}
+		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
 	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
-	if !defaults.Enabled || strings.TrimSpace(defaults.AutopayContract) == "" {
+	payer := PublicKeyToP2TRAddress_SatsNet(root.GetPubKey())
+	record, err := p.accountAutopayFundingRecord(defaults, payer)
+	if err != nil {
+		return nil, err
+	}
+	pending := accountAutopayLogPending(record)
+	if !defaults.Enabled || defaults.AutopayContract == "" {
+		if !paidActive && record == nil {
+			return notRequired, nil
+		}
 		return nil, fmt.Errorf("paid DKVS storage is not configured for the current network")
 	}
 	requiredAmount, err := accountAmountPerBlock(defaults, accountDefaultRecordCount)
 	if err != nil {
 		return nil, err
 	}
-	root, err := p.accountManagementRootWallet()
-	if err != nil {
-		return nil, err
+	if pending {
+		requiredAmount, err = maximumDecimal(requiredAmount, record.Parameters["amount_per_block"])
+		if err != nil {
+			return nil, err
+		}
 	}
-	if root == nil || root.GetPubKey() == nil {
-		return nil, fmt.Errorf("wallet is not created/unlocked")
+	state, queryErr := p.accountAutopayState(defaults)
+	if queryErr != nil && record == nil {
+		return nil, queryErr
 	}
-	payer := PublicKeyToP2TRAddress_SatsNet(root.GetPubKey())
-	if strings.TrimSpace(payer) == "" {
-		return nil, fmt.Errorf("unable to derive AUTOPAY payer")
+	// Guardian hosting uses the root's delegate without changing its own
+	// backup mode. Discover that existing service from the contract, including
+	// after a cold start where no local funding receipt exists.
+	usesAutopay := paidActive || pending || (record != nil && record.Status == OperationLogSucceeded)
+	if state != nil {
+		_, hasDelegate := state.Delegates[payer]
+		usesAutopay = usesAutopay || hasDelegate
 	}
-	state, err := p.accountAutopayState(defaults)
-	if err != nil {
-		return nil, err
+	if !usesAutopay {
+		return notRequired, nil
 	}
 	status := accountAutopayStateFundingStatus(state, defaults, payer, requiredAmount)
+	status.Required = usesAutopay
+	if record != nil {
+		status.FundingTransactionID = record.TxID
+		if record.Status == OperationLogFailed {
+			status.FundingError = record.Summary
+		}
+	}
+	if pending {
+		waiting, receiptErr := p.reconcileAccountAutopayReceipt(record, status.Ready)
+		if receiptErr != nil && waiting {
+			return nil, receiptErr
+		}
+		if receiptErr != nil {
+			status.FundingError = receiptErr.Error()
+		}
+		if waiting {
+			status.FundingPending = true
+			_, validationErr := accountAutopaySignedTransaction(record, defaults, payer)
+			status.FundingCanResume = validationErr == nil
+			status.CanFund = false
+			status.Reason = "funding_pending"
+			status.Message = "原充值交易等待提交或合约确认；可查询或继续提交同一笔交易。"
+			if queryErr != nil {
+				status.Message += " 当前合约查询暂不可用。"
+			}
+		}
+	}
 	fundingRate := requiredAmount
-	if strings.TrimSpace(status.AmountPerBlock) != "" {
+	if status.AmountPerBlock != "" {
 		if fundingRate, err = maximumDecimal(status.AmountPerBlock, requiredAmount); err != nil {
-			fundingRate = requiredAmount
+			return nil, err
 		}
 	}
 	status.RecommendedFundingAmount, err = multiplyDecimal(fundingRate, accountPaidDefaultFundingBlocks)
 	if err != nil {
 		return nil, err
 	}
+	status.EffectiveAmountPerBlock = fundingRate
 	return &status, nil
 }
 
@@ -463,6 +519,13 @@ func (p *Manager) ConfirmAccountStorage(optionID string, recordCount uint64) (*A
 	p.mutex.RUnlock()
 	if downgrade {
 		return nil, ErrAccountStorageModeDowngrade
+	}
+	if mode == AccountStoragePaid {
+		finish, err := p.beginAccountAutopayFunding()
+		if err != nil {
+			return nil, err
+		}
+		defer finish()
 	}
 	session, err := p.beginAccountStoragePreparation()
 	if err != nil {
@@ -535,10 +598,29 @@ func (p *Manager) confirmPaidAccountStorageWithWallet(location AccountIndexerLoc
 	if strings.TrimSpace(payer) == "" {
 		return nil, fmt.Errorf("unable to derive AUTOPAY payer")
 	}
-	ready, err := p.accountAutopayReady(defaults, payer, amountPerBlock)
+	previous, err := p.accountAutopayFundingRecord(defaults, payer)
 	if err != nil {
+		return nil, err
+	}
+	state, err := p.accountAutopayState(defaults)
+	if err != nil {
+		if accountAutopayLogPending(previous) {
+			return nil, &AccountAutopayPendingError{TransactionID: previous.TxID, Cause: err}
+		}
 		return nil, fmt.Errorf("check existing AUTOPAY storage: %w", err)
 	}
+	if accountAutopayLogPending(previous) {
+		previousReady := accountAutopayStateReady(state, defaults, payer, previous.Parameters["amount_per_block"])
+		waiting, receiptErr := p.reconcileAccountAutopayReceipt(previous, previousReady)
+		if receiptErr != nil {
+			return nil, receiptErr
+		}
+		if waiting {
+			_, err := p.resumeAccountAutopayTransaction(previous, defaults, payer)
+			return nil, err
+		}
+	}
+	ready := accountAutopayStateReady(state, defaults, payer, amountPerBlock)
 	if ready {
 		return accountPaidStorageAuthorization(location, defaults, recordCount,
 			amountPerBlock, fundingAmount, "", true), nil
@@ -551,24 +633,49 @@ func (p *Manager) confirmPaidAccountStorageWithWallet(location AccountIndexerLoc
 		amountPerBlock, fundingAmount, transactionID, false), nil
 }
 
-func (p *Manager) FundAccountAutopay() (*AccountAutopayFundingResult, error) {
+func (p *Manager) FundAccountAutopay(confirmed AccountAutopayFundingStatus) (*AccountAutopayFundingResult, error) {
+	// Exclude paid setup/recharge before the first lookup, including preparation
+	// without a transaction ID. Preserve any separately confirmed storage grant.
+	finish, err := p.beginAccountAutopayFunding()
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
 	status, err := p.GetAccountAutopayFundingStatus()
 	if err != nil {
 		return nil, err
 	}
-	if !status.Required {
-		return nil, fmt.Errorf("current account does not use paid DKVS storage")
-	}
 	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
-	amountPerBlock := status.RequiredAmountPerBlock
-	if strings.TrimSpace(status.AmountPerBlock) != "" {
-		if amountPerBlock, err = maximumDecimal(status.AmountPerBlock, amountPerBlock); err != nil {
+	amountPerBlock := status.EffectiveAmountPerBlock
+	fundingAmount := status.RecommendedFundingAmount
+	if status.FundingPending {
+		if confirmed.FundingTransactionID != status.FundingTransactionID {
+			return nil, ErrAccountAutopayFundingQuoteChanged
+		}
+		root, err := p.accountManagementRootWallet()
+		if err != nil {
 			return nil, err
 		}
+		payer := PublicKeyToP2TRAddress_SatsNet(root.GetPubKey())
+		record, err := p.accountAutopayFundingRecord(defaults, payer)
+		if err != nil {
+			return nil, err
+		}
+		if !accountAutopayLogPending(record) || record.TxID != confirmed.FundingTransactionID {
+			return nil, ErrAccountAutopayFundingQuoteChanged
+		}
+		txid, resumeErr := p.resumeAccountAutopayTransaction(record, defaults, payer)
+		var pending *AccountAutopayPendingError
+		if !errors.As(resumeErr, &pending) {
+			return nil, resumeErr
+		}
+		return &AccountAutopayFundingResult{TransactionID: txid,
+			ContractAddress: defaults.AutopayContract, FeeAsset: defaults.AutopayFeeAssetName,
+			AmountPerBlock: record.Parameters["amount_per_block"], FundingAmount: record.Parameters["amount"],
+			FundingBlocks: accountPaidDefaultFundingBlocks, Pending: true}, nil
 	}
-	fundingAmount, err := multiplyDecimal(amountPerBlock, accountPaidDefaultFundingBlocks)
-	if err != nil {
-		return nil, err
+	if !status.Required {
+		return nil, fmt.Errorf("current account does not use paid DKVS storage")
 	}
 	if status.Ready {
 		return &AccountAutopayFundingResult{
@@ -580,12 +687,20 @@ func (p *Manager) FundAccountAutopay() (*AccountAutopayFundingResult, error) {
 	if !status.CanFund {
 		return nil, fmt.Errorf("AUTOPAY cannot be funded: %s", status.Message)
 	}
+	// Re-read the contract, then use exactly the economic parameters the user
+	// confirmed. Height/balance changes alone do not invalidate the quotation.
+	if confirmed.Payer != status.Payer || confirmed.ContractAddress != status.ContractAddress ||
+		confirmed.FeeAsset != status.FeeAsset || confirmed.EffectiveAmountPerBlock != amountPerBlock ||
+		confirmed.RecommendedFundingAmount != fundingAmount || confirmed.RecommendedFundingBlocks != status.RecommendedFundingBlocks {
+		return nil, ErrAccountAutopayFundingQuoteChanged
+	}
 	root, err := p.accountManagementRootWallet()
 	if err != nil {
 		return nil, err
 	}
 	transactionID, err := p.fundAccountAutopayWithWallet(defaults, amountPerBlock, fundingAmount, root)
-	if err != nil {
+	var pending *AccountAutopayPendingError
+	if err != nil && !errors.As(err, &pending) {
 		return nil, err
 	}
 	if p.dkvs != nil {
@@ -594,30 +709,70 @@ func (p *Manager) FundAccountAutopay() (*AccountAutopayFundingResult, error) {
 	return &AccountAutopayFundingResult{
 		TransactionID: transactionID, ContractAddress: defaults.AutopayContract,
 		FeeAsset: defaults.AutopayFeeAssetName, AmountPerBlock: amountPerBlock,
-		FundingAmount: fundingAmount, FundingBlocks: accountPaidDefaultFundingBlocks,
+		FundingAmount: fundingAmount, FundingBlocks: accountPaidDefaultFundingBlocks, Pending: pending != nil,
 	}, nil
 }
 
 func (p *Manager) fundAccountAutopayWithWallet(defaults dkvsindexer.NetworkDefaults,
 	amountPerBlock, fundingAmount string, payerWallet common.Wallet) (string, error) {
-
+	payer := PublicKeyToP2TRAddress_SatsNet(payerWallet.GetPubKey())
+	existing, err := p.accountAutopayFundingRecord(defaults, payer)
+	if err != nil {
+		return "", err
+	}
+	if accountAutopayLogPending(existing) {
+		state, err := p.accountAutopayState(defaults)
+		if err != nil {
+			return existing.TxID, &AccountAutopayPendingError{TransactionID: existing.TxID, Cause: err}
+		}
+		oldReady := accountAutopayStateReady(state, defaults, payer, existing.Parameters["amount_per_block"])
+		waiting, err := p.reconcileAccountAutopayReceipt(existing, oldReady)
+		if err != nil {
+			return existing.TxID, err
+		}
+		if waiting {
+			return existing.TxID, &AccountAutopayPendingError{TransactionID: existing.TxID}
+		}
+		if accountAutopayStateReady(state, defaults, payer, amountPerBlock) {
+			return existing.TxID, nil
+		}
+	}
 	param := contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: amountPerBlock}
 	encodedParam, err := param.Encode()
 	if err != nil {
 		return "", err
+	}
+	record, err := p.BeginOperationLog(OperationLogCreate{
+		Category: "account", Action: "account_autopay_fund", Title: "充值 AUTOPAY",
+		Summary: "准备充值账户存储 AUTOPAY",
+		Parameters: map[string]string{"network": _chain, "payer": payer,
+			"contract": defaults.AutopayContract, "asset": defaults.AutopayFeeAssetName,
+			"amount_per_block": amountPerBlock, "amount": fundingAmount},
+	})
+	if err != nil {
+		return "", fmt.Errorf("record AUTOPAY funding before submission: %w", err)
 	}
 	result, err := p.invokeTemplateContractWithWallet(&ContractInvokeRequest{
 		ContractType: ContractTypeTemplate, SubType: contractcommon.TemplateAutopay,
 		ContractAddress: defaults.AutopayContract, Action: contractcommon.TemplateInvokeAPIConfig,
 		Param: base64.StdEncoding.EncodeToString(encodedParam), ParamEncoding: "base64",
 		Assets: []ContractFundingAsset{{AssetName: defaults.AutopayFeeAssetName, Amount: fundingAmount}},
-	}, payerWallet)
+	}, payerWallet, record.ID)
 	if err != nil {
-		return "", err
+		if result != nil && result.TxID != "" {
+			return result.TxID, &AccountAutopayPendingError{TransactionID: result.TxID, Cause: err}
+		}
+		_, logErr := p.UpdateOperationLog(record.ID, OperationLogUpdate{Status: OperationLogFailed,
+			Message: "AUTOPAY 充值未提交", Details: map[string]string{"error": err.Error()}})
+		return "", errors.Join(err, logErr)
 	}
-	payer := PublicKeyToP2TRAddress_SatsNet(payerWallet.GetPubKey())
 	if err := p.waitForAccountAutopayReady(defaults, amountPerBlock, payer); err != nil {
-		return "", err
+		return result.TxID, &AccountAutopayPendingError{TransactionID: result.TxID, Cause: err}
+	}
+	if _, err := p.UpdateOperationLog(record.ID, OperationLogUpdate{
+		Status: OperationLogSucceeded, Message: "合约查询确认 AUTOPAY 支付已就绪",
+	}); err != nil {
+		return result.TxID, &AccountAutopayPendingError{TransactionID: result.TxID, Cause: err}
 	}
 	return result.TxID, nil
 }
@@ -708,12 +863,85 @@ func (p *Manager) ReusePaidAccountStorage(recordCount uint64) (*AccountStorageAu
 	return p.finishAccountStoragePreparation(session, authorization)
 }
 
-func (p *Manager) NewAccountRepositoryForStorage(auth AccountStorageAuthorization) (account.Repository, error) {
-	store, err := p.accountDKVSStore()
+// Capture the authorized root and endpoint under the existing local scope gate,
+// then establish its binding without holding that gate across network work.
+func (p *Manager) boundAccountStorageWriter(auth AccountStorageAuthorization) (*dkvsStore, common.Wallet, error) {
+	var store *dkvsStore
+	var root common.Wallet
+	var accountID string
+	var coreID string
+	err := p.withAccountLocalState(false, func() error {
+		location, err := p.AccountIndexerLocation()
+		if err != nil {
+			return err
+		}
+		if location != auth.Location {
+			return dkvsindexer.ErrEndpointMismatch
+		}
+		if err := p.checkAccountManagedDataImport(); err != nil {
+			return err
+		}
+		root, err = p.accountManagementRootWallet()
+		if err != nil {
+			return err
+		}
+		accountID, err = dkvsAccountID(root)
+		if err != nil {
+			return err
+		}
+		coreID, err = p.currentCoreNodeID()
+		if err != nil {
+			return err
+		}
+		store, err = p.accountDKVSStoreForLocation(location)
+		return err
+	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	root, err := p.accountManagementRootWallet()
+	bind, err := p.prepareAccountCoreNodeBinding(root, store)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := bind(); err != nil {
+		return nil, nil, err
+	}
+	err = p.withAccountLocalState(false, func() error {
+		location, err := p.AccountIndexerLocation()
+		if err != nil {
+			return err
+		}
+		if location != auth.Location {
+			return dkvsindexer.ErrEndpointMismatch
+		}
+		current, err := p.accountManagementRootWallet()
+		if err != nil {
+			return err
+		}
+		currentID, err := dkvsAccountID(current)
+		if err != nil {
+			return err
+		}
+		if currentID != accountID {
+			return errAccountSnapshotChanged
+		}
+		currentCore, err := p.currentCoreNodeID()
+		if err != nil {
+			return err
+		}
+		if currentCore != coreID {
+			return dkvsindexer.ErrEndpointMismatch
+		}
+		return p.checkAccountManagedDataImport()
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, root, nil
+}
+
+func (p *Manager) NewAccountRepositoryForStorage(auth AccountStorageAuthorization) (account.Repository, error) {
+	store, root, err := p.boundAccountStorageWriter(auth)
 	if err != nil {
 		return nil, err
 	}
@@ -933,6 +1161,15 @@ func (p *Manager) persistPreparedAccountRestoreLocked(prepared *preparedAccountR
 		return err
 	}
 	if profile != nil {
+		marker := accountManagedImportMarkerForProfile(
+			accountManagedImportOriginRestore, accountManagedImportStageLocalCommit, profile)
+		encodedMarker, err := json.Marshal(marker)
+		if err != nil {
+			return err
+		}
+		if err := batch.Put(accountManagedDataImportKey(), encodedMarker); err != nil {
+			return err
+		}
 		profileBytes, err := EncodeToBytes(profile)
 		if err != nil {
 			return err
@@ -1004,6 +1241,9 @@ func (p *Manager) CreateAccountRecoveryPackage(options account.CreateOptions) (*
 		if options.AccountID != p.accountProfile.AccountID {
 			return fmt.Errorf("recovery package account does not match the active account")
 		}
+		if options.RecoveryMode == account.RecoveryMode2Of3 && strings.EqualFold(options.GuardianMailboxID, p.accountProfile.AccountID) {
+			return fmt.Errorf("guardian must belong to an independent account")
+		}
 		secret = append([]byte(nil), p.accountSecret...)
 		return nil
 	})
@@ -1016,10 +1256,6 @@ func (p *Manager) CreateAccountRecoveryPackage(options account.CreateOptions) (*
 
 func (p *Manager) PutGuardianCapsuleForStorage(auth AccountStorageAuthorization, mailboxID string,
 	capsule account.GuardianShareCapsule) error {
-	store, err := p.accountDKVSStore()
-	if err != nil {
-		return err
-	}
 	encoded, err := account.EncodeGuardianCapsuleStorage(capsule)
 	if err != nil {
 		return err
@@ -1031,7 +1267,7 @@ func (p *Manager) PutGuardianCapsuleForStorage(auth AccountStorageAuthorization,
 	if err != nil {
 		return err
 	}
-	root, err := p.accountManagementRootWallet()
+	store, root, err := p.boundAccountStorageWriter(auth)
 	if err != nil {
 		return err
 	}

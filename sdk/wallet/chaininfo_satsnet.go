@@ -133,13 +133,18 @@ func ParseStandardAnchorScript(script []byte) (*AnchorData, error) {
 	return &data, err
 }
 
-func CheckAnchorPkScript(anchorPkScript []byte) (*AnchorData, []byte, error) {
+func CheckAnchorPkScript(anchorPkScript []byte, outputs []*wire.TxOut, bindOutputs bool) (*AnchorData, []byte, error) {
+	if bindOutputs {
+		if err := sindexer.CheckAnchorScriptEncoding(anchorPkScript); err != nil {
+			return nil, nil, err
+		}
+	}
 	data, err := ParseStandardAnchorScript(anchorPkScript)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	invoice, err := StandardAnchorScript(data.Utxo, data.WitnessScript, data.Value, data.Assets)
+	invoice, err := sindexer.StandardAnchorInvoice(data.Utxo, data.WitnessScript, data.Value, data.Assets, outputs, bindOutputs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -190,6 +195,61 @@ func CheckAnchorPkScript(anchorPkScript []byte) (*AnchorData, []byte, error) {
 		}
 	}
 	return data, pubkey, nil
+}
+
+// AnchorOutputsActive selects the invoice for the next block. A failed height
+// lookup must not silently issue a legacy signature after scheduled activation.
+func (p *Manager) AnchorOutputsActive() (bool, error) {
+	params := GetChainParam_SatsNet()
+	if params.POSV2Height <= 0 {
+		return false, nil
+	}
+	if p.l2IndexerClient == nil {
+		return false, fmt.Errorf("L2 indexer is not configured")
+	}
+	height := p.l2IndexerClient.GetBestHeight()
+	if height < 0 || height >= int64(^uint32(0)>>1) {
+		return false, fmt.Errorf("cannot determine Anchor target height: %d", height)
+	}
+	return params.POSV2Active(int32(height + 1)), nil
+}
+
+func (p *Manager) AnchorInvoice(tx *wire.MsgTx) ([]byte, error) {
+	bindOutputs, err := p.AnchorOutputsActive()
+	if err != nil {
+		return nil, err
+	}
+	return sindexer.AnchorInvoice(tx, bindOutputs)
+}
+
+// SignAnchorTx is called only after all outputs have been constructed. The
+// existing Anchor script carries the signature; the outputs are not duplicated.
+func (p *Manager) SignAnchorTx(tx *wire.MsgTx, sign func([]byte) ([]byte, error)) ([]byte, error) {
+	bindOutputs, err := p.AnchorOutputsActive()
+	if err != nil {
+		return nil, err
+	}
+	invoice, err := sindexer.AnchorInvoice(tx, bindOutputs)
+	if err != nil {
+		return nil, err
+	}
+	sig, err := sign(invoice)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ParseStandardAnchorScript(tx.TxIn[0].SignatureScript)
+	if err != nil {
+		return nil, err
+	}
+	script, err := sindexer.StandardAnchorScriptWithSig(data.Utxo, data.WitnessScript, data.Value, data.Assets, sig)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err := CheckAnchorPkScript(script, tx.TxOut, bindOutputs); err != nil {
+		return nil, err
+	}
+	tx.TxIn[0].SignatureScript = script
+	return sig, nil
 }
 
 func DecodeSatsMsgTx(txHex string) (*wire.MsgTx, error) {

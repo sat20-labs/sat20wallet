@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -16,6 +15,7 @@ import (
 
 	db "github.com/sat20-labs/indexer/common"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/sat20wallet/sdk/account"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
@@ -219,6 +219,10 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 	// 	return "", fmt.Errorf("wallet has been created, please unlock it first")
 	// }
 	p.mutex.Lock()
+	if err := p.checkAccountManagedDataImport(); err != nil {
+		p.mutex.Unlock()
+		return -1, "", err
+	}
 
 	wallet, mnemonic, err := NewInteralWallet(GetChainParam())
 	if err != nil {
@@ -232,24 +236,9 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 			return -1, "", err
 		}
 	} else {
-		err = p.saveMnemonic(mnemonic, password, wallet)
-		if err != nil {
+		if err := p.commitMnemonicWalletLocked(wallet, mnemonic, password); err != nil {
 			p.mutex.Unlock()
 			return -1, "", err
-		}
-
-		p.wallet = wallet
-		p.status.CurrentWallet = wallet.GetId()
-		p.status.CurrentAccount = 0
-		if err := p.saveStatus(); err != nil {
-			p.mutex.Unlock()
-			return -1, "", err
-		}
-		if err := p.queueAccountMutationLocked(accountManagementMutation{
-			Type: accountMutationAddWallet, Fingerprint: walletFingerprint(wallet),
-			WalletID: wallet.GetId(),
-		}); err != nil {
-			Log.Errorf("queue managed wallet creation failed: %v", err)
 		}
 	}
 	_ = p.rgbManager.selectRGB11Scope()
@@ -307,6 +296,11 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	}
 
 	p.mutex.Lock()
+	if err := p.checkAccountManagedDataImport(); err != nil {
+		p.mutex.Unlock()
+		return -1, err
+	}
+
 	if err := p.rejectDuplicateWalletLocked(wallet, password); err != nil {
 		p.mutex.Unlock()
 		return -1, err
@@ -319,23 +313,9 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 			return -1, err
 		}
 	} else {
-		err := p.saveMnemonic(mnemonic, password, wallet)
-		if err != nil {
+		if err := p.commitMnemonicWalletLocked(wallet, mnemonic, password); err != nil {
 			p.mutex.Unlock()
 			return -1, err
-		}
-		p.wallet = wallet
-		p.status.CurrentWallet = wallet.GetId()
-		p.status.CurrentAccount = 0
-		if err := p.saveStatus(); err != nil {
-			p.mutex.Unlock()
-			return -1, err
-		}
-		if err := p.queueAccountMutationLocked(accountManagementMutation{
-			Type: accountMutationAddWallet, Fingerprint: walletFingerprint(wallet),
-			WalletID: wallet.GetId(),
-		}); err != nil {
-			Log.Errorf("queue managed wallet import failed: %v", err)
 		}
 	}
 	_ = p.rgbManager.selectRGB11Scope()
@@ -349,6 +329,29 @@ func (p *Manager) ImportWallet(mnemonic string, password string) (int64, error) 
 	}
 	p.wakeChannelHeartbeat()
 	return id, nil
+}
+
+// commitMnemonicWalletLocked adds a wallet, selects it and queues its sync
+// mutation in one transaction. The first-wallet activation uses its own batch.
+func (p *Manager) commitMnemonicWalletLocked(wallet common.Wallet, mnemonic, password string) error {
+	record, err := p.prepareWalletSecret(mnemonic, password, WALLET_TYPE_MNEMONIC, wallet)
+	if err != nil {
+		return err
+	}
+	candidate := &WalletInfo{WalletInDB: *record, Wallet: wallet}
+	if err := p.validateWalletCatalogChangeLocked(candidate); err != nil {
+		return err
+	}
+	status := cloneStatusForAccountRestore(p.status)
+	status.CurrentWallet, status.CurrentAccount = wallet.GetId(), 0
+	status.TotalWallet = len(p.walletInfoMap) + 1
+	if err := p.commitWalletCatalogMutationLocked(candidate, status, accountManagementMutation{
+		Type: accountMutationAddWallet, Fingerprint: walletFingerprint(wallet), WalletID: wallet.GetId(),
+	}); err != nil {
+		return err
+	}
+	p.wallet = wallet
+	return nil
 }
 
 // activateFirstMnemonicWalletLocked persists the first mnemonic wallet,
@@ -410,6 +413,7 @@ func (p *Manager) activateFirstMnemonicWalletLocked(wallet common.Wallet, mnemon
 	p.accountPassword = password
 	p.bumpAccountGenerationLocked()
 	p.markDKVSStateDirty()
+	p.scheduleAccountManagedStateSync()
 	return nil
 }
 
@@ -430,6 +434,10 @@ func (p *Manager) ImportWalletWithPrivateKey(privKey string, password string) (i
 	}
 
 	p.mutex.Lock()
+	if p.accountProfile != nil {
+		p.mutex.Unlock()
+		return -1, fmt.Errorf("private-key wallets cannot be added to a managed mnemonic account")
+	}
 	if err := p.rejectDuplicateWalletLocked(wallet, password); err != nil {
 		p.mutex.Unlock()
 		return -1, err
@@ -473,7 +481,11 @@ func (p *Manager) ChangePassword(oldPS, newPS string) error {
 			Log.Errorf("loadMnemonic %d failed, %v", id, err)
 			return err
 		}
-		updated, err := p.encryptWalletSecretWithPassword(mnemonic, newPS, &v.WalletInDB)
+		stored, err := loadWallet(p.db, id)
+		if err != nil {
+			return err
+		}
+		updated, err := p.encryptWalletSecretWithPassword(mnemonic, newPS, stored)
 		if err != nil {
 			Log.Errorf("encrypt wallet secret %d failed, %v", id, err)
 			return err
@@ -483,11 +495,23 @@ func (p *Manager) ChangePassword(oldPS, newPS string) error {
 
 	var updatedProfile *accountManagementProfile
 	if p.accountProfile != nil {
-		ciphertext, salt, err := p.encryptAccountManagementSecret(newPS, p.accountSecret)
+		secret, err := p.decryptAccountManagementSecretLocked(oldPS)
 		if err != nil {
 			return err
 		}
-		profile := *p.accountProfile
+		defer zeroBytes(secret)
+		ciphertext, salt, err := p.encryptAccountManagementSecret(newPS, secret)
+		if err != nil {
+			return err
+		}
+		encoded, err := p.db.Read(accountManagementProfileKey())
+		if err != nil {
+			return err
+		}
+		var profile accountManagementProfile
+		if err := DecodeFromBytes(encoded, &profile); err != nil {
+			return err
+		}
 		profile.SecretCipher = ciphertext
 		profile.SecretSalt = salt
 		updatedProfile = &profile
@@ -535,29 +559,55 @@ func (p *Manager) ChangePassword(oldPS, newPS string) error {
 func (p *Manager) UnlockWallet(password string) (int64, error) {
 	p.channelIdentityMu.Lock()
 	defer p.channelIdentityMu.Unlock()
+	marker, err := p.readAccountManagedDataImportMarker()
+	if err != nil {
+		return -1, err
+	}
+	if marker != nil && marker.Origin != accountManagedImportOriginRemoteApply {
+		return -1, ErrAccountManagedDataImportIncomplete
+	}
 	// UI locking does not stop the runtime wallet. Re-authenticate without
 	// replacing keys, rebuilding reservations or disturbing background workers.
-	p.mutex.RLock()
+	p.mutex.Lock()
 	if p.wallet != nil {
 		id := p.status.CurrentWallet
 		info := p.walletInfoMap[id]
 		if info == nil {
-			p.mutex.RUnlock()
+			p.mutex.Unlock()
 			return -1, fmt.Errorf("wallet %d is unavailable", id)
 		}
 		secret, err := p.loadWalletSecretBytes(info, password)
 		zeroBytes(secret)
-		p.mutex.RUnlock()
 		if err != nil {
+			p.mutex.Unlock()
 			return -1, fmt.Errorf("password is incorrect")
+		}
+		if err := p.unlockAccountManagementLocked(password); err != nil {
+			p.mutex.Unlock()
+			return -1, fmt.Errorf("unlock account management: %w", err)
+		}
+		if err := p.refreshWalletCredentialCacheLocked(password); err != nil {
+			p.mutex.Unlock()
+			return -1, err
+		}
+		pendingAccountSync := p.accountProfile != nil &&
+			(p.accountProfile.ManagedDataDirty || len(p.accountProfile.Pending) != 0)
+		p.mutex.Unlock()
+		if pendingAccountSync || marker != nil {
+			p.scheduleAccountManagedStateSync()
+		}
+		if marker != nil {
+			return id, ErrAccountManagedDataImportIncomplete
 		}
 		return id, nil
 	}
-	p.mutex.RUnlock()
+	p.mutex.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
 	id, err := p.unlockWallet(password)
+	pendingAccountSync := err == nil && p.accountProfile != nil &&
+		(p.accountProfile.ManagedDataDirty || len(p.accountProfile.Pending) != 0)
 	p.mutex.Unlock()
 	if err == nil {
 		p.rehydratePendingFundingRuntime()
@@ -578,6 +628,18 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 		p.rgbManager.scheduleRGB11ChainReconciliation()
 		p.wakeChannelHeartbeat()
 	}
+	if err == nil && (pendingAccountSync || marker != nil) {
+		// Runtime jobs disappear on a PWA reload. Requeue persisted work only
+		// after authentication, using the existing account synchronization job.
+		p.scheduleAccountManagedStateSync()
+	}
+	if err == nil && marker != nil {
+		// Cold authentication must also restore the device's persisted channel
+		// runtime: the next UI unlock only verifies the already installed keys.
+		// Account/provider operations remain guarded by the durable marker, and
+		// the PWA stays locked until the existing remote-apply retry finishes.
+		return id, ErrAccountManagedDataImportIncomplete
+	}
 	return id, err
 }
 
@@ -589,6 +651,29 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 	}
 	if len(p.walletInfoMap) == 0 {
 		return -1, fmt.Errorf("no wallet")
+	}
+	// Another Manager may have committed a different selection after this
+	// instance initialized. Authentication adopts that selection without writing
+	// a stale status snapshot back to the shared database.
+	encodedStatus, err := p.db.Read([]byte(DB_KEY_STATUS))
+	if err != nil {
+		return -1, fmt.Errorf("read current wallet selection: %w", err)
+	}
+	var selectedStatus Status
+	if err := decodeStatusFromBytes(encodedStatus, &selectedStatus); err != nil {
+		return -1, fmt.Errorf("decode current wallet selection: %w", err)
+	}
+	targetChain := _chain
+	if p.cfg != nil && p.cfg.Chain != "" {
+		targetChain = p.cfg.Chain
+	}
+	if selectedStatus.CurrentChain != targetChain {
+		return -1, fmt.Errorf("current wallet selection belongs to a different chain")
+	}
+	selectedWalletID, selectedAccount := selectedStatus.CurrentWallet, selectedStatus.CurrentAccount
+	selectedInfo := p.walletInfoMap[selectedWalletID]
+	if selectedInfo == nil || selectedAccount >= account.MaxManagedStateItems || int(selectedAccount) >= selectedInfo.Accounts {
+		return -1, fmt.Errorf("current wallet selection is unavailable; reload the wallet")
 	}
 
 	decryptedSecrets := make(map[int64][]byte, len(p.walletInfoMap))
@@ -612,6 +697,9 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 		return -1, fmt.Errorf("unlock account management: %w", err)
 	}
 	defer func() { zeroBytes(accountSecret) }()
+	if err := p.refreshWalletCredentialCacheLocked(password); err != nil {
+		return -1, err
+	}
 
 	preparedWallets := make(map[int64]common.Wallet, len(p.walletInfoMap))
 	for id, walletInfo := range p.walletInfoMap {
@@ -640,32 +728,11 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 		preparedWallets[id] = prepared
 	}
 
-	selectedWalletID := p.status.CurrentWallet
-	info, ok := p.walletInfoMap[selectedWalletID]
-	if !ok {
-		// reset to first wallet
-		min := int64(math.MaxInt64)
-		for id := range p.walletInfoMap {
-			if id < min {
-				min = id
-			}
-		}
-		selectedWalletID = min
-		info = p.walletInfoMap[selectedWalletID]
-		if info == nil {
-			return -1, fmt.Errorf("can't unlock any wallet")
-		}
-	}
 	prepared := preparedWallets[selectedWalletID]
 	if prepared == nil {
 		return -1, fmt.Errorf("can't unlock wallet %d", selectedWalletID)
 	}
-	selectedAccount := p.status.CurrentAccount
-	if selectedWalletID != p.status.CurrentWallet {
-		selectedAccount = 0
-	}
 	prepared.SetSubAccount(selectedAccount)
-	oldWalletID, oldAccount := p.status.CurrentWallet, p.status.CurrentAccount
 	for id, walletInfo := range p.walletInfoMap {
 		walletInfo.Wallet = preparedWallets[id]
 	}
@@ -677,18 +744,6 @@ func (p *Manager) unlockWallet(password string) (int64, error) {
 	accountSecret = nil
 	p.accountPassword = password
 	p.bumpAccountGenerationLocked()
-	if selectedWalletID != oldWalletID {
-		if err := p.saveStatus(); err != nil {
-			for _, walletInfo := range p.walletInfoMap {
-				walletInfo.Wallet = nil
-			}
-			p.wallet = nil
-			p.status.CurrentWallet = oldWalletID
-			p.status.CurrentAccount = oldAccount
-			p.clearAccountManagementSessionLocked()
-			return -1, err
-		}
-	}
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
 
@@ -731,13 +786,22 @@ func (p *Manager) SwitchWallet(id int64, password string) error {
 		//}
 	}
 
-	p.status.CurrentWallet = id
-	p.status.CurrentAccount = 0
+	if err := p.checkAccountManagedDataImport(); err != nil {
+		p.mutex.Unlock()
+		return err
+	}
+	if w.Wallet == nil {
+		p.mutex.Unlock()
+		return ErrAccountManagementWalletUnavailable
+	}
+	if err := p.saveAccountSelectionLocked(id, 0); err != nil {
+		p.mutex.Unlock()
+		return err
+	}
 	p.wallet = w.Wallet
 	p.wallet.SetSubAccount(0)
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
-	p.saveStatus()
 	p.markDKVSStateDirty()
 
 	p.mutex.Unlock()
@@ -850,37 +914,59 @@ func (p *Manager) FindWalletByPubKeyWithDepth(pubKey []byte, depth uint32) commo
 	return nil
 }
 
-func (p *Manager) SwitchAccount(id uint32) {
+func (p *Manager) SwitchAccount(id uint32) error {
+	if id >= account.MaxManagedStateItems {
+		return fmt.Errorf("account index exceeds recovery limit")
+	}
 	p.channelIdentityMu.Lock()
 	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
 	defer releaseRGB11Scope()
 	p.mutex.Lock()
 
+	if err := p.checkAccountManagedDataImport(); err != nil {
+		p.mutex.Unlock()
+		return err
+	}
 	if p.status.CurrentAccount == id {
 		p.mutex.Unlock()
 		p.wakeChannelHeartbeat()
-		return
+		return nil
 	}
 
+	statusSaved := false
 	walletInfo, ok := p.walletInfoMap[p.status.CurrentWallet]
+	if !ok || walletInfo == nil || walletInfo.Wallet == nil || p.wallet == nil {
+		p.mutex.Unlock()
+		return ErrAccountManagementWalletUnavailable
+	}
 	if ok {
 		// 必须有
 		if walletInfo.Accounts <= int(id) {
-			walletInfo.Accounts = int(id) + 1
-			if walletInfo.AccountNames == nil {
-				walletInfo.AccountNames = make(map[uint32]string)
+			candidate := cloneWalletInfoForAccountSync(walletInfo)
+			normalizeWalletInfoMetadata(candidate, 0)
+			candidate.Accounts = int(id) + 1
+			candidate.AccountNames[id] = defaultAccountName(id)
+			if err := p.validateWalletCatalogChangeLocked(candidate); err != nil {
+				p.mutex.Unlock()
+				return err
 			}
-			if walletInfo.AccountDIDs == nil {
-				walletInfo.AccountDIDs = make(map[uint32]string)
+			status := cloneStatusForAccountRestore(p.status)
+			status.CurrentAccount = id
+			if err := p.commitWalletCatalogMutationLocked(candidate, status, accountManagementMutation{
+				Type: accountMutationEnsureAccount, Fingerprint: walletFingerprint(walletInfo.Wallet),
+				WalletID: walletInfo.Id, Account: id, Name: candidate.AccountNames[id],
+			}); err != nil {
+				p.mutex.Unlock()
+				return err
 			}
-			walletInfo.AccountNames[id] = defaultAccountName(id)
-			if err := saveWallet(p.db, &walletInfo.WalletInDB); err == nil {
-				_ = p.queueAccountMutationLocked(accountManagementMutation{
-					Type: accountMutationEnsureAccount, Fingerprint: walletFingerprint(walletInfo.Wallet),
-					WalletID: walletInfo.Id, Account: id, Name: walletInfo.AccountNames[id],
-				})
-			}
+			statusSaved = true
+		}
+	}
+	if !statusSaved {
+		if err := p.saveAccountSelectionLocked(p.status.CurrentWallet, id); err != nil {
+			p.mutex.Unlock()
+			return err
 		}
 	}
 
@@ -888,7 +974,6 @@ func (p *Manager) SwitchAccount(id uint32) {
 	p.status.CurrentAccount = id
 	_ = p.rgbManager.selectRGB11Scope()
 	_ = p.rgbManager.rebuildRGB11Locks()
-	p.saveStatus()
 	p.markDKVSStateDirty()
 	p.mutex.Unlock()
 	if err := p.refreshDKVSRegistrations(); err != nil {
@@ -896,6 +981,7 @@ func (p *Manager) SwitchAccount(id uint32) {
 	}
 	p.rgbManager.scheduleRGB11ChainReconciliation()
 	p.wakeChannelHeartbeat()
+	return nil
 }
 
 // SwitchChain is retained for source compatibility and always fails closed.

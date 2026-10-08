@@ -92,10 +92,11 @@
         <Button variant="outline" type="button" class="w-full">
           <RouterLink to="/">{{ $t('create.cancelButton') }}</RouterLink>
         </Button>
-        <Button v-if="step === 1" type="submit" class="w-full">
+        <Button v-if="step === 1" type="submit" :disabled="loading" class="w-full">
           <Loader2Icon v-if="loading" class="mr-2 h-4 w-4 animate-spin" />
           {{ loading ? $t('create.creatingButton') : $t('create.continueButton') }}
         </Button>
+        <Button v-else-if="committedReadError" type="button" @click="reloadCommittedWallet">I saved my phrase, reload wallet</Button>
         <Button v-else @click="handleConfirmSaved" as-child>
           <RouterLink to="/wallet">{{ $t('create.savedButton') }}</RouterLink>
         </Button>
@@ -134,6 +135,8 @@ const loading = ref(false)
 const step = ref(1)
 const walletStore = useWalletStore()
 const mnemonic = ref('')
+const committedReadError = ref(false)
+const reloadCommittedWallet = () => { window.location.hash = '#/unlock'; window.location.reload() }
 const showMnemonic = ref(false)
 const { copy, isSupported } = useClipboard()
 
@@ -147,17 +150,18 @@ const onSubmit = form.handleSubmit(async (values) => {
   if (loading.value) return
 
   loading.value = true
-	const [err, result] = await walletStore.createWallet(values.password)
-  loading.value = false
-
-  if (!err && result) {
+  try {
+  const [err, result] = await walletStore.createWallet(values.password)
+  if (result) {
+    committedReadError.value = Boolean(err)
     mnemonic.value = result as string
     step.value = 2
     // 添加创建成功的提示
     toast({
-      variant: 'success',
+      variant: err ? 'info' : 'success',
       title: 'Wallet Created Successfully',
-      description: 'Your wallet has been created. Please save your recovery phrase.',
+      description: err ? 'Wallet saved. Please save your recovery phrase, then reload to unlock the wallet.'
+        : 'Your wallet has been created. Please save your recovery phrase.',
     })
     return
   }
@@ -167,6 +171,11 @@ const onSubmit = form.handleSubmit(async (values) => {
     title: 'Error',
     description: err instanceof Error ? err.message : 'Failed to create wallet',
   })
+  } catch (error: any) {
+    toast({ variant: 'destructive', title: 'Error', description: error?.message || 'Failed to create wallet' })
+  } finally {
+    loading.value = false
+  }
 })
 
 const handleCopyMnemonic = async () => {

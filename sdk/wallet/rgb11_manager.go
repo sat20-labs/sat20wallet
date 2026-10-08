@@ -1724,7 +1724,9 @@ func (p *rgb11Manager) importRGB11Contract(ctx context.Context, raw []byte,
 		ContractID: container.ContractID, SchemaID: container.SchemaID,
 		AssetName: info.AssetName, Receipt: receipt, Projected: projected,
 	}
-	p.autoBackupRGB11AfterMutation()
+	if err := p.autoBackupRGB11AfterMutation(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -2497,7 +2499,9 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 		return nil, err
 	}
 	if autoBackup {
-		p.autoBackupRGB11AfterMutation()
+		if err := p.autoBackupRGB11AfterMutation(); err != nil {
+			return nil, err
+		}
 	}
 	return receipt, nil
 }
@@ -2641,7 +2645,9 @@ func (p *rgb11Manager) prepareRGB11ConsignmentWithID(ctx context.Context, reques
 		return nil, err
 	}
 	if autoBackup {
-		p.autoBackupRGB11AfterMutation()
+		if err := p.autoBackupRGB11AfterMutation(); err != nil {
+			return nil, err
+		}
 	}
 	return receipt, nil
 }
@@ -3977,7 +3983,7 @@ func (p *rgb11Manager) rgb11RecoveryStateHash() ([32]byte, error) {
 // RefreshRGB11State advances locally restored RGB11 state using the expected
 // signed transaction and Bitcoin facts. It never requires the Indexer to name
 // the spending transaction: unknown spends remain fail-closed and unresolved.
-func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResult, error) {
+func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (result *RGB11RefreshResult, err error) {
 	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || p.rgbManager.evidence == nil {
 		return nil, ErrRGB11Inconsistent
 	}
@@ -3997,10 +4003,10 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResu
 			return
 		}
 		if afterRecoveryHash != beforeRecoveryHash {
-			p.autoBackupRGB11AfterMutation()
+			err = errors.Join(err, p.autoBackupRGB11AfterMutation())
 		}
 	}()
-	result := &RGB11RefreshResult{}
+	result = &RGB11RefreshResult{}
 	var refreshErrors []error
 	historyInconsistent := false
 	if err := p.releaseExpiredRGB11ReceiveReservations(time.Now().Unix()); err != nil {

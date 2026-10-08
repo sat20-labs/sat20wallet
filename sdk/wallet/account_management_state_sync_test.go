@@ -5,11 +5,15 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAccountManagedCommitRejectsStaleLocalGeneration(t *testing.T) {
@@ -81,6 +85,11 @@ func TestBuildAccountManagedStateTargetAlreadyCommittedPendingIsNoop(t *testing.
 				profile: accountManagementProfile{RootFingerprint: root}, wallets: wallets,
 				pending: []accountManagementMutation{{ID: "lost-ack", Type: mutationType, Fingerprint: child}},
 			}
+			snapshot.secret = bytes.Repeat([]byte{1}, 32)
+			snapshot.profile.AccountID = strings.Repeat("c", 64)
+			var sealErr error
+			snapshot.profile.StateEnvelope, sealErr = account.SealManagedState(snapshot.secret, snapshot.profile.AccountID, remote, nil)
+			require.NoError(t, sealErr)
 			target, changed, err := buildAccountManagedStateTarget(remote, snapshot)
 			if err != nil {
 				t.Fatal(err)
@@ -108,6 +117,51 @@ func TestBuildAccountManagedStateTargetDoesNotResurrectRemoteDeletion(t *testing
 	}
 	if changed || !findManagedWallet(&target, child).Deleted {
 		t.Fatalf("remote deletion was incorrectly resurrected: %+v", target)
+	}
+}
+
+func TestAccountRemoteDeletionWinsOfflineMetadata(t *testing.T) {
+	root, child := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	for _, kind := range []string{accountMutationWalletName, accountMutationEnsureAccount, accountMutationMetadata} {
+		t.Run(kind, func(t *testing.T) {
+			remote := account.ManagedState{Version: account.ManagedStateVersion, RootFingerprint: root, Revision: 3,
+				Wallets: []account.ManagedWallet{syncTestWallet(root, "Root"), {Fingerprint: child, Revision: 3, Deleted: true}}}
+			snapshot := &accountManagementSyncSnapshot{profile: accountManagementProfile{RootFingerprint: root},
+				wallets: map[string]account.ManagedWallet{root: syncTestWallet(root, "Unrelated edit"), child: syncTestWallet(child, "Offline edit")},
+				pending: []accountManagementMutation{{ID: "deleted-edit", Type: kind, Fingerprint: child},
+					{ID: "root-edit", Type: accountMutationWalletName, Fingerprint: root}}}
+			for retry := 0; retry < 2; retry++ {
+				target, _, err := buildAccountManagedStateTarget(remote, snapshot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !findManagedWallet(&target, child).Deleted || findManagedWallet(&target, root).Name != "Unrelated edit" {
+					t.Fatal("deleted edit resurrected a wallet or blocked an unrelated edit")
+				}
+				// A rebase has already removed the wallet from the local catalog,
+				// but its unacknowledged metadata can still be in Pending.
+				delete(snapshot.wallets, child)
+				remote = target
+			}
+		})
+	}
+}
+
+func TestAccountDeletionMergeKeepsExplicitImportAndRejectsUnknownWallet(t *testing.T) {
+	root, child := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	remote := account.ManagedState{Version: account.ManagedStateVersion, RootFingerprint: root, Revision: 3,
+		Wallets: []account.ManagedWallet{syncTestWallet(root, "Root"), {Fingerprint: child, Revision: 3, Deleted: true}}}
+	snapshot := &accountManagementSyncSnapshot{profile: accountManagementProfile{RootFingerprint: root},
+		wallets: map[string]account.ManagedWallet{root: syncTestWallet(root, "Root"), child: syncTestWallet(child, "Imported")},
+		pending: []accountManagementMutation{{ID: "add", Type: accountMutationAddWallet, Fingerprint: child},
+			{ID: "name", Type: accountMutationWalletName, Fingerprint: child}}}
+	target, changed, err := buildAccountManagedStateTarget(remote, snapshot)
+	if err != nil || !changed || findManagedWallet(&target, child).Deleted {
+		t.Fatalf("explicit re-import rejected: changed=%v err=%v", changed, err)
+	}
+	snapshot.pending = []accountManagementMutation{{ID: "unknown", Type: accountMutationMetadata, Fingerprint: strings.Repeat("c", 64)}}
+	if _, _, err := buildAccountManagedStateTarget(remote, snapshot); err == nil {
+		t.Fatal("unknown wallet metadata was silently discarded")
 	}
 }
 
@@ -677,5 +731,331 @@ func TestCommitAccountManagedStateSelectsRootWhenCurrentWalletIsDeleted(t *testi
 	if manager.wallet != rootWallet || manager.status.CurrentWallet != rootID {
 		t.Fatalf("background wallet switch did not select root wallet: wallet=%d",
 			manager.status.CurrentWallet)
+	}
+}
+
+// Public SDK operations and the existing signed-record transport fixture.
+func accountTTLNoopFixture(t *testing.T) (*Manager, *rgb11MemoryDKVSHTTP, *dkvsStore, []string) {
+	t.Helper()
+	remote := newRGB11MemoryDKVSHTTP()
+	manager := newAccountManagementAutoTestManager(t)
+	configureRGB11DKVSTestManager(manager, remote)
+	client := newRGB11MessageNodeClient(remote)
+	manager.serverNode = NewNode(client, "message.test", SERVER_NODE, client.CoreNodePubKey(), client.CoreNodePubKey())
+	_, err := manager.ImportWallet(accountRootWrapperTestMnemonic, "password")
+	require.NoError(t, err)
+	require.NoError(t, manager.InitializeAccountManagement("password"))
+	id := manager.GetCurrentWalletId()
+	require.NoError(t, manager.UpdateWalletName(id, "A"))
+	require.NoError(t, manager.UpdateAccountMetadata(id, 0, "A", "did:A"))
+	pkg, auth, secret := rereviewRecoveryPackage(t, manager)
+	require.NoError(t, manager.ActivateAccountManagement(secret, "password", *auth, pkg.Envelope.Locator, "account://"+pkg.Envelope.Locator.PackageID))
+	store, err := manager.accountDKVSStore()
+	require.NoError(t, err)
+	root, err := manager.accountManagementRootWallet()
+	require.NoError(t, err)
+	stateKey, err := manager.accountManagedStateKey(root)
+	require.NoError(t, err)
+	dataKey, err := manager.accountManagedDataBlobKey(root)
+	require.NoError(t, err)
+	wrapperKey, err := accountRootWrapperKey(root)
+	require.NoError(t, err)
+	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+	return manager, remote, store, []string{stateKey, dataKey, wrapperKey}
+}
+
+type accountProfileWriteCountDB struct {
+	indexercommon.KVDB
+	writes atomic.Int32
+}
+
+func (d *accountProfileWriteCountDB) Write(key, value []byte) error {
+	if bytes.Equal(key, accountManagementProfileKey()) {
+		d.writes.Add(1)
+	}
+	return d.KVDB.Write(key, value)
+}
+func TestAccountTemporaryTTLPolicyChangeConverges(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager, remote, store, keys := accountTTLNoopFixture(t)
+	locator := manager.GetAccountManagementStatus().PublicLocator
+	counter := &accountProfileWriteCountDB{KVDB: manager.db}
+	manager.db = counter
+	remote.mu.Lock()
+	remote.freeLocal.MaxTTL *= 2
+	ttl := remote.freeLocal.MaxTTL
+	remote.mu.Unlock()
+	require.NoError(t, manager.UpdateWalletName(manager.GetCurrentWalletId(), "After TTL change"))
+	counter.writes.Store(0)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, manager.SyncAccountManagementState(ctx))
+	require.LessOrEqual(t, counter.writes.Load(), int32(2), "same configuration repeatedly persisted")
+	require.Equal(t, ttl, manager.accountProfile.RecordTTL)
+	require.Empty(t, manager.accountProfile.Pending)
+	require.False(t, manager.accountProfile.ManagedDataDirty)
+	var leaseMutations []dkvsindexer.CASMutation
+	for _, key := range keys {
+		value, err := store.GetAuthoritative(key)
+		require.NoError(t, err)
+		require.Equal(t, ttl, value.record.TTL)
+		leaseMutations = append(leaseMutations, dkvsindexer.CASMutation{Record: value.record, Precondition: dkvsindexer.WritePrecondition{ExpectAbsent: true}})
+	}
+	// The existing account outbox guard must recognize the atomic three-key
+	// lease request, but must not claim another account's wrapper or wrapper-only jobs.
+	entry, err := newDKVSBatchOutboxEntryFinal("test", leaseMutations, remote.endpointID, dkvsOutboxOrigin{})
+	require.NoError(t, err)
+	_, matches := accountManagedEntryRecords(entry, keys[0], keys[1])
+	require.True(t, matches)
+	wrapperOnly, err := newDKVSBatchOutboxEntryFinal("test", leaseMutations[2:], remote.endpointID, dkvsOutboxOrigin{})
+	require.NoError(t, err)
+	_, matches = accountManagedEntryRecords(wrapperOnly, keys[0], keys[1])
+	require.False(t, matches)
+	foreign := freeLocalRecord(t, manager, accountTestKey(t, manager, "other/root-key-wrapper/current"), 1, "other wrapper")
+	leaseMutations[2].Record = foreign
+	entry, err = newDKVSBatchOutboxEntryFinal("test", leaseMutations, remote.endpointID, dkvsOutboxOrigin{})
+	require.NoError(t, err)
+	_, matches = accountManagedEntryRecords(entry, keys[0], keys[1])
+	require.False(t, matches)
+	require.Equal(t, locator, manager.GetAccountManagementStatus().PublicLocator)
+	require.NoError(t, manager.SyncAccountRootWrapper(context.Background()))
+	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+	require.Equal(t, ttl, manager.accountProfile.RecordTTL)
+}
+
+func TestAccountRevertedMetadataClearsPending(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	for _, kind := range []string{"wallet-name", "account-name", "DID"} {
+		t.Run(kind, func(t *testing.T) {
+			manager, _, store, keys := accountTTLNoopFixture(t)
+			id := manager.GetCurrentWalletId()
+			mutate := func(value string) error {
+				switch kind {
+				case "wallet-name":
+					return manager.UpdateWalletName(id, value)
+				case "account-name":
+					return manager.UpdateAccountMetadata(id, 0, value, "did:A")
+				default:
+					return manager.UpdateAccountMetadata(id, 0, "A", "did:"+value)
+				}
+			}
+			before := map[string]*dkvsValue{}
+			for _, key := range keys {
+				value, err := store.GetAuthoritative(key)
+				require.NoError(t, err)
+				before[key] = value
+			}
+			require.NoError(t, mutate("B"))
+			require.NoError(t, mutate("A"))
+			require.NotEmpty(t, manager.accountProfile.Pending)
+			require.True(t, manager.accountProfile.ManagedDataDirty)
+			require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+			require.Empty(t, manager.accountProfile.Pending)
+			require.False(t, manager.accountProfile.ManagedDataDirty)
+			for key, value := range before {
+				after, err := store.GetAuthoritative(key)
+				require.NoError(t, err)
+				require.Equal(t, value.Hash, after.Hash)
+				require.Equal(t, value.Seq, after.Seq)
+				require.Equal(t, value.Value, after.Value)
+			}
+			reopened := newAccountManagementAutoTestManager(t)
+			reopened.db = manager.db
+			require.NoError(t, reopened.initDB())
+			_, err := reopened.UnlockWallet("password")
+			require.NoError(t, err)
+			require.Empty(t, reopened.accountProfile.Pending)
+			require.False(t, reopened.accountProfile.ManagedDataDirty)
+			catalog := reopened.GetWalletCatalog()
+			require.Equal(t, "A", catalog[0].Name)
+			require.Equal(t, "A", catalog[0].Accounts[0].Name)
+			require.Equal(t, "did:A", catalog[0].Accounts[0].DID)
+		})
+	}
+}
+
+type accountNoopReadHookHTTP struct {
+	*rgb11MemoryDKVSHTTP
+	key  string
+	once sync.Once
+	hook func()
+}
+
+func (h *accountNoopReadHookHTTP) SendDKVSGet(path string, query map[string]string) ([]byte, error) {
+	raw, err := h.rgb11MemoryDKVSHTTP.SendDKVSGet(path, query)
+	if err == nil && path == "/v3/dkvs/key-state" && query["key"] == h.key {
+		h.once.Do(h.hook)
+	}
+	return raw, err
+}
+func (h *accountNoopReadHookHTTP) SendDKVSGetContext(ctx context.Context, path string, query map[string]string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return h.SendDKVSGet(path, query)
+}
+func TestAccountNoopCompletionPreservesNewEdit(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager, remote, _, keys := accountTTLNoopFixture(t)
+	id := manager.GetCurrentWalletId()
+	require.NoError(t, manager.UpdateWalletName(id, "B"))
+	require.NoError(t, manager.UpdateWalletName(id, "A"))
+	hits := 0
+	hooked := &accountNoopReadHookHTTP{rgb11MemoryDKVSHTTP: remote, key: keys[2], hook: func() { hits++; require.NoError(t, manager.UpdateWalletName(id, "C")) }}
+	manager.SetDKVSHttpClient(hooked)
+	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+	require.Equal(t, 1, hits, "read fault did not reach snapshot completion")
+	require.Equal(t, "C", manager.GetWalletCatalog()[0].Name)
+	require.Empty(t, manager.accountProfile.Pending)
+	require.False(t, manager.accountProfile.ManagedDataDirty)
+	state, err := account.OpenManagedState(manager.accountSecret, manager.accountProfile.AccountID, manager.accountProfile.StateEnvelope)
+	require.NoError(t, err)
+	require.Equal(t, "C", state.Wallets[0].Name)
+}
+
+func TestAccountNoopProfileFailureCanRetry(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager, _, store, keys := accountTTLNoopFixture(t)
+	id := manager.GetCurrentWalletId()
+	require.NoError(t, manager.UpdateWalletName(id, "B"))
+	require.NoError(t, manager.UpdateWalletName(id, "A"))
+	before, err := manager.db.Read(accountManagementProfileKey())
+	require.NoError(t, err)
+	baseline, err := store.GetAuthoritative(keys[0])
+	require.NoError(t, err)
+	fault := &accountPersistenceReviewDB{KVDB: manager.db, profileKey: accountManagementProfileKey()}
+	fault.armed.Store(true)
+	manager.db = fault
+	require.ErrorIs(t, manager.SyncAccountManagementState(context.Background()), errAccountPersistenceReview)
+	require.Equal(t, int32(1), fault.hits.Load())
+	require.NotEmpty(t, manager.accountProfile.Pending)
+	require.True(t, manager.accountProfile.ManagedDataDirty)
+	after, err := fault.KVDB.Read(accountManagementProfileKey())
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	fault.armed.Store(false)
+	require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+	require.Empty(t, manager.accountProfile.Pending)
+	require.False(t, manager.accountProfile.ManagedDataDirty)
+	remote, err := store.GetAuthoritative(keys[0])
+	require.NoError(t, err)
+	require.Equal(t, baseline.Hash, remote.Hash)
+}
+
+func TestAccountNoopFinalizationWindowPreservesUpdates(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	for _, kind := range []string{"metadata", "provider-generation"} {
+		t.Run(kind, func(t *testing.T) {
+			manager, _, _, _ := accountTTLNoopFixture(t)
+			id := manager.GetCurrentWalletId()
+			require.NoError(t, manager.UpdateWalletName(id, "B"))
+			require.NoError(t, manager.UpdateWalletName(id, "A"))
+			snapshot, err := manager.captureAccountManagementSyncSnapshot()
+			require.NoError(t, err)
+			defer zeroBytes(snapshot.secret)
+			state, err := account.OpenManagedState(snapshot.secret, snapshot.profile.AccountID, snapshot.profile.StateEnvelope)
+			require.NoError(t, err)
+			bundle, err := openProfileManagedDataBundle(snapshot.profile, snapshot.secret)
+			require.NoError(t, err)
+			// Arrange the exact finalization input, then use public local edits
+			// in the last window before the completion helper takes its lock.
+			if kind == "metadata" {
+				require.NoError(t, manager.UpdateWalletName(id, "C"))
+			} else {
+				require.NoError(t, manager.markAccountManagedDataDirtyDeferred(rgb11AccountManagedProviderID))
+			}
+			followUp, err := manager.finalizePublishedAccountManagedState(state, snapshot, snapshot.profile.StateEnvelope,
+				&accountManagedDataSnapshot{Bundle: bundle, Hash: snapshot.profile.ManagedDataHash, Envelope: snapshot.profile.ManagedDataEnvelope})
+			require.NoError(t, err)
+			require.True(t, followUp)
+			require.True(t, manager.accountProfile.ManagedDataDirty)
+			if kind == "metadata" {
+				require.Equal(t, "C", manager.GetWalletCatalog()[0].Name)
+				require.Len(t, manager.accountProfile.Pending, 1)
+			} else {
+				require.Empty(t, manager.accountProfile.Pending)
+				require.Greater(t, manager.accountProfile.ManagedDataGeneration, snapshot.profile.ManagedDataGeneration)
+			}
+			require.NoError(t, manager.SyncAccountManagementState(context.Background()))
+			require.False(t, manager.accountProfile.ManagedDataDirty)
+		})
+	}
+}
+
+func TestAccountTTLCommittedLostACKColdRetry(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	manager, remote, store, keys := accountTTLNoopFixture(t)
+	remote.mu.Lock()
+	remote.freeLocal.MaxTTL *= 2
+	ttl := remote.freeLocal.MaxTTL
+	remote.mu.Unlock()
+	require.NoError(t, manager.UpdateWalletName(manager.GetCurrentWalletId(), "After lost ACK"))
+	hits := 0
+	transport := &reviewAcceptanceHTTP{rgb11MemoryDKVSHTTP: remote, post: func(ctx context.Context, path string, body []byte) ([]byte, error) {
+		raw, err := remote.SendDKVSPostContext(ctx, path, body)
+		if path == "/v3/dkvs/records/batch-cas" && err == nil {
+			hits++
+			return nil, &HTTPResponseError{StatusCode: 503}
+		}
+		return raw, err
+	}}
+	manager.SetDKVSHttpClient(transport)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.Error(t, manager.SyncAccountManagementState(ctx))
+	require.Positive(t, hits, "lost ACK was not injected after a real fixture commit")
+	committedHashes := map[string]string{}
+	for _, key := range keys {
+		value, err := store.GetAuthoritative(key)
+		require.NoError(t, err)
+		require.Equal(t, ttl, value.record.TTL)
+		committedHashes[key] = value.Hash
+	}
+	entries, err := newDKVSReplicaStore(manager.db).LoadOutbox(store.client.replicaNamespace)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	mutations, matches := accountManagedEntryRecords(entries[0], keys[0], keys[1])
+	require.True(t, matches)
+	require.Len(t, mutations, 3)
+	reopened := newAccountManagementAutoTestManager(t)
+	reopened.db = manager.db
+	configureRGB11DKVSTestManager(reopened, remote)
+	reopened.serverNode = manager.serverNode
+	require.NoError(t, reopened.initDB())
+	_, err = reopened.UnlockWallet("password")
+	require.NoError(t, err)
+	// PWA starts the existing DKVS worker after rebuilding its Manager. The
+	// account sync consumer waits for that worker to reconcile the saved outbox.
+	reopened.ensureDKVSManager().start()
+	defer reopened.dkvs.stopAndWait()
+	require.Eventually(t, func() bool {
+		err := reopened.SyncAccountManagementState(context.Background())
+		if err != nil {
+			require.ErrorIs(t, err, ErrDKVSPathNotSynced)
+		}
+		return err == nil
+	}, 5*time.Second, 20*time.Millisecond)
+	require.Equal(t, "After lost ACK", reopened.GetWalletCatalog()[0].Name)
+	require.Empty(t, reopened.accountProfile.Pending)
+	require.False(t, reopened.accountProfile.ManagedDataDirty)
+	entries, err = newDKVSReplicaStore(reopened.db).LoadOutbox(store.client.replicaNamespace)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	for _, key := range keys {
+		value, err := store.GetAuthoritative(key)
+		require.NoError(t, err)
+		require.Equal(t, committedHashes[key], value.Hash, "cold receipt reconciliation republished the committed lease")
 	}
 }

@@ -289,6 +289,26 @@ func (s *ProjectionStore) ValidateAndStoreConsignment(ctx context.Context, valid
 	if err != nil {
 		return nil, err
 	}
+	previous, loadErr := s.LoadValidationReceipt(receipt.ConsignmentHash)
+	if loadErr == nil {
+		// Proofs bind the complete receipt hash, including its first validation
+		// time. Revalidation must still run above, but cannot rewrite that
+		// evidence while other outputs reference it.
+		receipt.ValidatedAt = previous.ValidatedAt
+		previousBytes, err := encode(previous)
+		if err != nil {
+			return nil, err
+		}
+		revalidatedBytes, err := encode(receipt)
+		if err != nil {
+			return nil, err
+		}
+		if !bytes.Equal(previousBytes, revalidatedBytes) {
+			return nil, fmt.Errorf("%w: immutable consignment receipt changed", ErrValidationReceipt)
+		}
+	} else if !errors.Is(loadErr, indexer.ErrKeyNotFound) {
+		return nil, loadErr
+	}
 	encodedReceipt, err := encode(receipt)
 	if err != nil {
 		return nil, err

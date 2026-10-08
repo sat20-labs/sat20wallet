@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -11,7 +12,9 @@ import (
 	"testing"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/btcec"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -83,7 +86,7 @@ func dkvsNoPluginBuildArtifacts(t *testing.T) satoshinetArtifacts {
 }
 
 func stageDKVSNoPluginNodeRuntime(t *testing.T, role, mnemonic, l1IndexerHost, l2IndexerHost, rpcHost,
-	managementHost, nodeDir string) string {
+	managementHost, nodeDir string, extraConfig string) string {
 	t.Helper()
 	artifacts := dkvsNoPluginBuildArtifacts(t)
 	executable := artifacts.coreExecutable
@@ -94,12 +97,12 @@ func stageDKVSNoPluginNodeRuntime(t *testing.T, role, mnemonic, l1IndexerHost, l
 	stagedExecutable := filepath.Join(nodeDir, filepath.Base(executable))
 	stageSatoshiNetNodeConfig(t, nodeDir)
 	require.NoError(t, os.WriteFile(filepath.Join(nodeDir, "conf.yaml"), []byte(fmt.Sprintf(satoshinetTestConf,
-		satoshinetSTPMode(role), l1IndexerHost, l2IndexerHost, rpcHost, managementHost, mnemonic)), 0o600))
+		satoshinetSTPMode(role), l1IndexerHost, l2IndexerHost, rpcHost, managementHost, mnemonic)+extraConfig), 0o600))
 	return stagedExecutable
 }
 
 func startDKVSNoPluginNodeWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, role, mnemonic string,
-	extraArgs []string) *testHarness {
+	extraArgs []string, configure ...func(publicRPC string) string) *testHarness {
 	t.Helper()
 
 	nodeKey := keyFromMnemonic(t, mnemonic, 0)
@@ -142,8 +145,15 @@ func startDKVSNoPluginNodeWithArgs(t *testing.T, fakeL1 *fakeL1Indexer, role, mn
 		}
 	}
 
+	// PWA fixtures must configure their allocated STP endpoints and exact browser
+	// origin before startup; existing non-browser callers keep their configuration.
+	require.LessOrEqual(t, len(configure), 1)
+	extraConfig := ""
+	if len(configure) == 1 {
+		extraConfig = configure[0](stpAddr)
+	}
 	harness := newTestHarness(t, stageDKVSNoPluginNodeRuntime(t, role, mnemonic, fakeL1.host(),
-		l2IndexerHost(t, rpcAddr), stpAddr, managementAddr, nodeDir), nodeDir, p2pAddr, rpcAddr, args, env)
+		l2IndexerHost(t, rpcAddr), stpAddr, managementAddr, nodeDir, extraConfig), nodeDir, p2pAddr, rpcAddr, args, env)
 	harness.role = role
 	harness.nodePubKey = nodePubKey
 	harness.stpAddr = stpAddr
@@ -222,18 +232,47 @@ func newDKVSNoPluginTemplateFixtureWithProfilesAndArgs(t *testing.T, profiles []
 	network := newDKVSNoPluginNetworkWithArgs(t, fakeL1, bootstrapArgs, coreArgs, minerArgs)
 
 	gasAnchor := buildAnchorTx(t, templateLockedOutPoint("gas", 0), lockedValue,
-		txAsset(gas, 100000000), gas+"-100000000-0-0", witnessScript, bootstrapKey, actorA.PkScript)
+		txAsset(gas, 100000000), gas+"-100000000-0-0", witnessScript, bootstrapKey, lockedPkScript)
 	network.sendAndMine(t, gasAnchor, 1)
+	gasAnchor = fundDKVSActorFromChannel(t, network, gasAnchor, witnessScript, bootstrapKey, coreKey, actorA.PkScript)
 
 	assetAnchors := make(map[string]*wire.MsgTx)
 	for i, profile := range sortedProfiles(profiles) {
 		anchor := buildAnchorTx(t, templateLockedOutPoint(profile.Asset, i+1), lockedValue,
 			txAssetProfile(t, profile, profile.Supply), fmt.Sprintf("%s-%s-%d-%d", profile.Asset,
-				profile.Supply, profile.Precision, profile.BindingSat), witnessScript, bootstrapKey, actorA.PkScript)
+				profile.Supply, profile.Precision, profile.BindingSat), witnessScript, bootstrapKey, lockedPkScript)
 		network.sendAndMine(t, anchor, 1)
+		anchor = fundDKVSActorFromChannel(t, network, anchor, witnessScript, bootstrapKey, coreKey, actorA.PkScript)
 		assetAnchors[profile.Asset] = anchor
 	}
 
 	return &templateFixture{Network: network, A: actorA, B: actorB, C: actorC, D: actorD, E: actorE,
 		F: actorF, gasAnchor: gasAnchor, assetAnchors: assetAnchors, profiles: profileMap}
+}
+
+// Anchors pay the signed channel. Fund the test actor with an ordinary,
+// fully signed channel spend instead of redirecting the anchor invoice.
+func fundDKVSActorFromChannel(t *testing.T, network *realSatoshiNet, anchor *wire.MsgTx,
+	witnessScript []byte, first, second *btcec.PrivateKey, recipient []byte) *wire.MsgTx {
+	t.Helper()
+	output := anchor.TxOut[0]
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: anchor.TxHash(), Index: 0}})
+	tx.AddTxOut(wire.NewTxOut(output.Value-1000, output.Assets.Clone(), recipient))
+	fetcher := txscript.NewCannedPrevOutputFetcher(output.PkScript, output.Value, output.Assets)
+	hashes := txscript.NewTxSigHashes(tx, fetcher)
+	if bytes.Compare(first.PubKey().SerializeCompressed(), second.PubKey().SerializeCompressed()) > 0 {
+		first, second = second, first
+	}
+	a, err := txscript.RawTxInWitnessSignature(tx, hashes, 0, output.Value, output.Assets, witnessScript, txscript.SigHashAll, first)
+	require.NoError(t, err)
+	b, err := txscript.RawTxInWitnessSignature(tx, hashes, 0, output.Value, output.Assets, witnessScript, txscript.SigHashAll, second)
+	require.NoError(t, err)
+	tx.TxIn[0].Witness = wire.TxWitness{nil, a, b, witnessScript}
+	engine, err := txscript.NewEngine(output.PkScript, tx, 0, txscript.StandardVerifyFlags, nil, hashes,
+		output.Value, output.Assets, fetcher)
+	require.NoError(t, err)
+	require.NoError(t, engine.Execute())
+	network.sendAndMine(t, tx, 1)
+	return tx
 }

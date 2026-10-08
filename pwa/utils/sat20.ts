@@ -127,6 +127,9 @@ class WalletManager {
 
   async getWalletCatalog(): Promise<
     [Error | undefined, {
+      current_wallet_id: string
+      current_account_index: number
+      root_account_id: string
       wallets: Array<{
         id: number
         name: string

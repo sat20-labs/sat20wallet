@@ -540,6 +540,10 @@ func ParseInscribeMoreData(more []byte) (destAddr string, assetName *indexer.Ass
 		err = fmt.Errorf("missing fee rate")
 		return
 	}
+	if len(tokenizer.Data()) > 8 {
+		err = fmt.Errorf("fee rate exceeds eight bytes")
+		return
+	}
 	feeRate = tokenizer.ExtractInt64()
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {

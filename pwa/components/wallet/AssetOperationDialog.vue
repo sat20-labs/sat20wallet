@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="isOpen" @update:open="isOpen = $event">
-    <DialogContent class="w-[330px] rounded-lg bg-black">
+    <DialogContent class="w-[330px] max-h-[90dvh] overflow-y-auto rounded-lg bg-black">
       <DialogHeader v-if="dialogStage === 'form'" class="flex flex-row items-center justify-between">
         <div>
           <DialogTitle>{{ title }}</DialogTitle>
@@ -62,7 +62,7 @@
             selectedTab === 'advanced'
               ? 'bg-zinc-700/30 text-primary/80 border-zinc-600'
               : 'bg-transparent text-muted-foreground  border-zinc-700/50 hover:bg-zinc-700/50'
-          ]" :disabled="props.chain !== 'bitcoin' || props.assetKey?.includes('runes')"
+          ]" :disabled="!isBitcoinChain || props.assetKey?.includes('runes')"
             @click="selectedTab = 'advanced'">
             {{ $t('assetOperationDialog.advancedSend') }}
           </button>
@@ -315,6 +315,8 @@ const isSatoshiNetSend = computed(() => {
   return chain === 'satoshinet' || chain === 'l2' || chain === 'satnet'
 })
 
+const isBitcoinChain = computed(() => ['bitcoin', 'l1'].includes(String(props.chain || '').toLowerCase()))
+
 // 判断当前资产是否为BTC
 const isBTCAsset = computed(() => {
   return props.assetType === '*' ||
@@ -325,7 +327,7 @@ const isBTCAsset = computed(() => {
 // 判断哪些操作需要显示 btcFeeRate
 const needsBtcFeeRate = computed(() => {
   const operationsNeedingBtcFeeRate = ['send', 'deposit', 'withdraw', 'splicing_in', 'splicing_out']
-  return (props.chain === 'bitcoin' || props.chain === 'channel') && operationsNeedingBtcFeeRate.includes(props.operationType || '')
+  return (isBitcoinChain.value || props.chain === 'channel') && operationsNeedingBtcFeeRate.includes(props.operationType || '')
 })
 
 const emit = defineEmits<{

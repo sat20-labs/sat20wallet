@@ -133,32 +133,43 @@ func TestManagedDataImportFailureCannotOverwriteServer(t *testing.T) {
 			if mode == "background-sync" && string(provider.payloads[0].Payload) != "A" {
 				t.Fatal("test did not retain old local provider data")
 			}
-			// Even after transient provider errors disappear, retrying sync must
-			// not reinterpret the old/empty local data as a deliberate deletion.
+			// Remote apply retries its authenticated committed target before any
+			// export. Recovery-origin markers still require explicit restoration.
 			provider.importErr = nil
-			for attempt := 0; attempt < 2; attempt++ {
-				if err := target.SyncAccountManagementState(context.Background()); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-					t.Fatalf("unsafe sync was not blocked: %v", err)
+			if mode == "background-sync" {
+				for attempt := 0; attempt < 2; attempt++ {
+					if err := target.SyncAccountManagementState(context.Background()); err != nil {
+						t.Fatalf("remote import retry: %v", err)
+					}
 				}
-			}
-			if err := target.ActivateAccountManagement(source.accountSecret, "password",
-				AccountStorageAuthorization{Mode: AccountStorageTemporary}, account.Locator{}, ""); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-				t.Fatalf("activation bypassed import protection: %v", err)
-			}
-			if err := target.WaitAccountManagedDataReady(context.Background()); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-				t.Fatalf("incomplete import reported ready: %v", err)
-			}
-			// New Manager, same persisted database: no in-memory failure flag.
-			restarted, _ := managedImportTestManager(t, remote)
-			restarted.db = target.db
-			if err := restarted.loadAccountManagementProfileLocked(); err != nil {
-				t.Fatal(err)
-			}
-			if err := restarted.unlockAccountManagementLocked("password"); err != nil {
-				t.Fatal(err)
-			}
-			if err := restarted.SyncAccountManagementState(context.Background()); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
-				t.Fatalf("restart lost import protection: %v", err)
+				if len(provider.payloads) != 1 || string(provider.payloads[0].Payload) != "B" {
+					t.Fatal("retry exported stale data instead of importing the committed target")
+				}
+			} else {
+				for attempt := 0; attempt < 2; attempt++ {
+					if err := target.SyncAccountManagementState(context.Background()); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
+						t.Fatalf("unsafe sync was not blocked: %v", err)
+					}
+				}
+				if err := target.ActivateAccountManagement(source.accountSecret, "password",
+					AccountStorageAuthorization{Mode: AccountStorageTemporary}, account.Locator{}, ""); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
+					t.Fatalf("activation bypassed import protection: %v", err)
+				}
+				if err := target.WaitAccountManagedDataReady(context.Background()); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
+					t.Fatalf("incomplete import reported ready: %v", err)
+				}
+				// New Manager, same persisted database: no in-memory failure flag.
+				restarted, _ := managedImportTestManager(t, remote)
+				restarted.db = target.db
+				if err := restarted.loadAccountManagementProfileLocked(); err != nil {
+					t.Fatal(err)
+				}
+				if err := restarted.unlockAccountManagementLocked("password"); err != nil {
+					t.Fatal(err)
+				}
+				if err := restarted.SyncAccountManagementState(context.Background()); !errors.Is(err, ErrAccountManagedDataImportIncomplete) {
+					t.Fatalf("restart lost import protection: %v", err)
+				}
 			}
 			if len(remote.records) != len(before) {
 				t.Fatal("failed import added remote records")
@@ -222,7 +233,10 @@ func TestManagedDataRecoveryReturnsErrorsAndKeepsProtection(t *testing.T) {
 			failure := errors.New("injected " + point + " failure")
 			switch point {
 			case "marker-write":
-				target.db = &managedImportFaultDB{KVDB: database, writeErr: failure}
+				fault := &accountPersistenceReviewDB{KVDB: database, profileKey: accountManagedDataImportKey()}
+				fault.armed.Store(true)
+				target.db = fault
+				failure = errAccountPersistenceReview
 			case "core-flush":
 				target.db = &passwordChangeFailFlushDB{KVDB: database}
 			case "validation":
@@ -255,12 +269,18 @@ func TestManagedDataRecoveryReturnsErrorsAndKeepsProtection(t *testing.T) {
 				t.Fatal("test did not reach a partially imported provider set")
 			}
 			target.db = database
-			if point == "marker-write" {
+			if point == "marker-write" || point == "core-flush" {
 				if target.accountProfile != nil || target.wallet != nil || provider.imports != 0 {
-					t.Fatal("marker write failure did not stop recovery before mutation")
+					t.Fatal("atomic local commit failure did not stop recovery before mutation")
 				}
 				if _, err := database.Read(accountManagementProfileKey()); !errors.Is(err, indexer.ErrKeyNotFound) {
-					t.Fatalf("marker write failure persisted profile: %v", err)
+					t.Fatalf("atomic local commit failure persisted profile: %v", err)
+				}
+				if marker, err := target.readAccountManagedDataImportMarker(); err != nil || marker != nil {
+					t.Fatalf("failed atomic local commit left import marker: %v", err)
+				}
+				if err := restoreManagedImportTestWallet(t, target, source); err != nil {
+					t.Fatalf("healthy retry after failed atomic local commit: %v", err)
 				}
 				return
 			}

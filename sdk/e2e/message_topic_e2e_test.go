@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
@@ -74,6 +75,27 @@ func TestRealSatoshiNetMessageTopicSDKToCore(t *testing.T) {
 	require.Equal(t, uint64(1), snapshot.State.KeySeq)
 	require.Equal(t, uint32(1), snapshot.State.MemberCount)
 
+	// A second device starts with an empty database, importing only the same
+	// user root. Recreating the existing epoch-1 topic must derive the same key.
+	ownerCrypto, err := wallet.NewTopicCryptoManager(owner, owner.GetWallet().(*wallet.InternalWallet))
+	require.NoError(t, err)
+	initialKey, err := ownerCrypto.LoadTopicKey("developers", 1)
+	require.NoError(t, err)
+	defer clearBytes(initialKey)
+	coldOwner, _ := newWalletManagerForNode(t, f.Network.Core, dkvsClientMnemonic)
+	require.NoError(t, coldOwner.InitializeAccountManagement("123456"))
+	coldCrypto, err := wallet.NewTopicCryptoManager(coldOwner, coldOwner.GetWallet().(*wallet.InternalWallet))
+	require.NoError(t, err)
+	_, err = coldCrypto.LoadTopicKey("developers", 1)
+	require.Error(t, err)
+	_, err = coldOwner.CreateMessageTopic("developers", "Developers", 16)
+	require.NoError(t, err)
+	recreated, err := coldCrypto.LoadTopicKey("developers", 1)
+	require.NoError(t, err)
+	defer clearBytes(recreated)
+	require.True(t, bytes.Equal(initialKey, recreated), "owner root, topic and epoch must recreate the same key")
+	coldOwner.Close()
+
 	require.NoError(t, member.RequestMessageTopicJoin("developers", snapshot.Meta.ServiceCoreNode))
 	pending, err := owner.GetMessageTopicState("developers")
 	require.NoError(t, err)
@@ -82,6 +104,11 @@ func TestRealSatoshiNetMessageTopicSDKToCore(t *testing.T) {
 	commit, err := owner.ApproveMessageTopicJoin("developers", memberID)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), commit.NewKeySeq)
+
+	rotatedKey, err := ownerCrypto.LoadTopicKey("developers", commit.NewKeySeq)
+	require.NoError(t, err)
+	defer clearBytes(rotatedKey)
+	require.False(t, bytes.Equal(initialKey, rotatedKey), "rotation must derive a new group key")
 	joined, err := owner.GetMessageTopicState("developers")
 	require.NoError(t, err)
 	require.Equal(t, uint32(2), joined.State.MemberCount)

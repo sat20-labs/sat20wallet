@@ -1,11 +1,8 @@
-import { ref, computed, readonly } from 'vue'
+import { computed, readonly } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
 import { storeToRefs } from 'pinia'
 import ordxApi from '@/apis/ordx'
 import { useWalletStore } from '@/store'
-
-// 获取名字存储的 key
-const getNameStorageKey = (address: string) => `user_name_${address}`
 
 // 名字管理 composable
 export const useNameManager = () => {
@@ -13,7 +10,9 @@ export const useNameManager = () => {
   const { network, address } = storeToRefs(walletStore)
 
   // 当前选择的名字
-  const currentName = ref<string>('')
+  const currentName = computed(() => walletStore.wallet?.accounts.find(
+    account => account.index === Number(walletStore.accountIndex),
+  )?.did || '')
 
   // 获取指定地址的所有名字列表
   const getNsListByAddress = async (address: string) => {
@@ -49,69 +48,28 @@ export const useNameManager = () => {
     enabled: computed(() => !!address.value),
   })
 
-  // 获取当前地址保存的名字
-  const getCurrentName = async (address: string): Promise<string> => {
-    try {
-      const savedName = localStorage.getItem(getNameStorageKey(address))
-      return savedName || ''
-    } catch (error) {
-      console.error('Failed to get current name:', error)
-      return ''
+  // The SDK catalog is the only persisted source of address DID metadata.
+  const getCurrentName = async (targetAddress: string): Promise<string> => {
+    if (targetAddress === address.value) return currentName.value
+    for (const wallet of walletStore.wallets) {
+      const account = wallet.accounts.find(account => account.address === targetAddress)
+      if (account) return account.did || ''
     }
+    return ''
   }
 
-  // 设置当前地址的名字
   const setCurrentName = async (targetAddress: string, name: string): Promise<void> => {
-    try {
-      localStorage.setItem(getNameStorageKey(targetAddress), name)
-      if (targetAddress === address.value) {
-        currentName.value = name
-      }
-    } catch (error) {
-      console.error('Failed to set current name:', error)
-      throw error
-    }
+    if (!targetAddress || targetAddress !== address.value) throw new Error('当前钱包地址已变化，请重新打开 DID 设置')
+    await walletStore.updateAccountDID(Number(walletStore.accountIndex), name.trim())
   }
+  const clearName = (targetAddress: string) => setCurrentName(targetAddress, '')
 
-  // 清空当前地址的名字
-  const clearName = async (targetAddress: string): Promise<void> => {
-    try {
-      localStorage.setItem(getNameStorageKey(targetAddress), '')
-      if (targetAddress === address.value) {
-        currentName.value = ''
-      }
-    } catch (error) {
-      console.error('Failed to clear name:', error)
-      throw error
-    }
-  }
-
-  // 校验名字是否有效（是否在名字列表中）
-  const validateName = async (address: string): Promise<boolean> => {
-    try {
-      const savedName = await getCurrentName(address)
-      if (!savedName) return true // 没有保存名字也算有效
-
-      const names = await getNsListByAddress(address)
-      return names.some(item => item.name === savedName)
-    } catch (error) {
-      console.error('Failed to validate name:', error)
-      return false
-    }
-  }
-
-  // 设置当前地址并加载相关数据
-  const setCurrentAddress = async (address: string) => {
-    const savedName = await getCurrentName(address)
-    currentName.value = savedName
-  }
-
-  // 自动校验并清理无效名字
-  const validateAndCleanName = async (address: string): Promise<void> => {
-    const isValid = await validateName(address)
-    if (!isValid) {
-      await clearName(address)
-    }
+  // Name ownership queries are advisory; a failed/offline query must never
+  // clear a user-confirmed account attribute.
+  const validateName = async (targetAddress: string): Promise<boolean> => {
+    const savedName = await getCurrentName(targetAddress)
+    if (!savedName) return true
+    return (await getNsListByAddress(targetAddress)).some(item => item.name === savedName)
   }
 
   return {
@@ -126,8 +84,6 @@ export const useNameManager = () => {
     setCurrentName,
     clearName,
     validateName,
-    setCurrentAddress,
-    validateAndCleanName,
     refetchNames,
   }
 }

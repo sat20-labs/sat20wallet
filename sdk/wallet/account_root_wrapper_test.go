@@ -260,13 +260,28 @@ func TestAccountRootWrapperUpdatesFormalRecoveryAndStorageMetadataOnce(t *testin
 	manager.accountProfile.RecoveryConfigured = true
 	manager.mutex.Unlock()
 
+	root, _ := manager.accountManagementRootWallet()
+	wrapperKey, _ := accountRootWrapperKey(root)
+	stateKey, _ := manager.accountManagedStateKey(root)
+	dataKey, _ := manager.accountManagedDataBlobKey(root)
+	profile := *manager.accountProfile
+	encoded, err := sealAccountRootWrapper(root, _chain, profile.AccountID, rootWrapperPayload(profile, secret), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Update([]string{wrapperKey, stateKey, dataKey}, func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
+		return accountActivationMutations(&profile, root, secret, wrapperKey, encoded, stateKey, profile.StateEnvelope, dataKey, profile.ManagedDataEnvelope, current)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if err := manager.syncAccountRootWrapper(store); err != nil {
 		t.Fatal(err)
 	}
 	if store.updates != 2 {
 		t.Fatalf("metadata upgrade updates=%d, want 2", store.updates)
 	}
-	root, _ := manager.accountManagementRootWallet()
 	key, _ := accountRootWrapperKey(root)
 	value, err := store.Get(key)
 	if err != nil {
@@ -285,7 +300,7 @@ func TestAccountRootWrapperUpdatesFormalRecoveryAndStorageMetadataOnce(t *testin
 		t.Fatalf("updated wrapper payload=%+v seq=%d", payload, value.Seq)
 	}
 	manager.mutex.RLock()
-	profile := *manager.accountProfile
+	profile = *manager.accountProfile
 	manager.mutex.RUnlock()
 	if !accountRecordMatchesStorage(value, &profile) {
 		t.Fatal("updated wrapper did not use the current paid storage policy")
@@ -348,7 +363,7 @@ func TestTemporaryAccountAdoptsVerifiedRemotePaidPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adopted, err := manager.adoptRemotePaidAccountStoragePolicy(
+	adopted, err := manager.adoptRemoteAccountConfiguration(
 		store, root, snapshot, stateValue, dataValue, false)
 	if err != nil {
 		t.Fatal(err)
@@ -678,5 +693,68 @@ func TestAccountGuardianIdentityIsRootBoundNotSelectionBound(t *testing.T) {
 	}
 	if manager.status.CurrentWallet != childID {
 		t.Fatal("guardian identity lookup changed current wallet selection")
+	}
+}
+
+// Ordinary synchronization adopts confirmed configuration; only activation
+// is allowed to replace current, including within the same storage mode.
+func TestSameModeReconfigurationDoesNotRollBackRootWrapper(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() { _chain = oldChain }()
+	for _, mode := range []string{AccountStorageTemporary, AccountStoragePaid} {
+		t.Run(mode, func(t *testing.T) {
+			manager, store, secret := buildRootWrapperSource(t)
+			defer zeroBytes(secret)
+			root, err := manager.accountManagementRootWallet()
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile := *manager.accountProfile
+			profile.PackageID = "old-package"
+			profile.PublicLocator = "old-locator"
+			profile.RecoveryConfigured = true
+			profile.RecoveryMode = account.RecoveryMode2Of2
+			profile.StorageMode = mode
+			if mode == AccountStoragePaid {
+				profile.RecordTTL = 0
+				profile.AutopayContract = "autopay"
+			}
+			manager.accountProfile = &profile
+			wrapperKey, _ := accountRootWrapperKey(root)
+			stateKey, _ := manager.accountManagedStateKey(root)
+			dataKey, _ := manager.accountManagedDataBlobKey(root)
+			publish := func(value accountManagementProfile) {
+				encoded, err := sealAccountRootWrapper(root, _chain, value.AccountID, rootWrapperPayload(value, secret), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = store.Update([]string{wrapperKey, stateKey, dataKey}, func(current map[string]*dkvsValue, _ map[string]uint64) ([]dkvsValueMutation, error) {
+					return accountActivationMutations(&value, root, secret, wrapperKey, encoded, stateKey, value.StateEnvelope, dataKey, value.ManagedDataEnvelope, current)
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			publish(profile)
+			current := profile
+			current.PackageID = "new-package"
+			current.PublicLocator = "new-locator"
+			current.RecoveryMode = account.RecoveryMode2Of3
+			publish(current)
+			updates := store.updates
+			seq := store.records[wrapperKey].Seq
+			for round := 0; round < 3; round++ {
+				if err := manager.syncAccountRootWrapper(store); err != nil {
+					t.Fatal(err)
+				}
+				if !accountRootWrapperMetadataMatchesProfile(rootWrapperPayload(current, secret), *manager.accountProfile) {
+					t.Fatal("old profile did not adopt confirmed configuration")
+				}
+				if store.updates != updates || store.records[wrapperKey].Seq != seq {
+					t.Fatal("ordinary sync rewrote current wrapper")
+				}
+			}
+		})
 	}
 }

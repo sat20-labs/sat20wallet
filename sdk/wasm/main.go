@@ -281,6 +281,7 @@ func releaseManager(this js.Value, p []js.Value) any {
 	managerLifecycleMu.Unlock()
 	handler := createUntrackedAsyncJsHandler(func() (interface{}, int, string) {
 		managerAsyncTasks.Wait()
+		clearAccountSessions()
 		managerLifecycleMu.Lock()
 		if _mgr == mgr {
 			_mgr = nil
@@ -684,7 +685,13 @@ func getWalletCatalog(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		data := jsSafeData(map[string]any{"wallets": _mgr.GetWalletCatalog()})
+		snapshot, err := _mgr.GetWalletCatalogSnapshot()
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data := jsSafeData(map[string]any{"wallets": snapshot.Wallets,
+			"current_wallet_id":     fmt.Sprintf("%d", snapshot.CurrentWalletID),
+			"current_account_index": snapshot.CurrentAccountIndex, "root_account_id": snapshot.RootAccountID})
 		if message, ok := data["error"].(string); ok {
 			return nil, -1, message
 		}
@@ -738,6 +745,9 @@ func ensureAccount(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	index := uint32(p[1].Int())
+	if p[1].Float() != float64(index) {
+		return createJsRet(nil, -1, "account index must be an unsigned integer")
+	}
 	name := p[2].String()
 	did := ""
 	if len(p) > 3 && p[3].Type() == js.TypeString {
@@ -762,6 +772,9 @@ func updateAccountMetadata(this js.Value, p []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	index := uint32(p[1].Int())
+	if p[1].Float() != float64(index) {
+		return createJsRet(nil, -1, "account index must be an unsigned integer")
+	}
 	name := p[2].String()
 	did := ""
 	if len(p) > 3 && p[3].Type() == js.TypeString {
@@ -855,7 +868,9 @@ func switchAccount(this js.Value, p []js.Value) any {
 		if status != nil && status.CurrentAccount == uint32(id) {
 			return nil, 0, "ok"
 		}
-		_mgr.SwitchAccount(uint32(id))
+		if err := _mgr.SwitchAccount(uint32(id)); err != nil {
+			return nil, -1, err.Error()
+		}
 		return nil, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
@@ -1146,22 +1161,31 @@ func getChannel(this js.Value, p []js.Value) any {
 	if p[0].Type() != js.TypeString {
 		return createJsRet(nil, -1, "channel parameter should be a string")
 	}
-	data, err := channelData(_mgr.FindChannel(p[0].String()))
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	return createJsRet(data, 0, "ok")
+	channelID := p[0].String()
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		data, err := channelData(_mgr.FindChannel(channelID))
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getCurrentChannel(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	data, err := channelData(_mgr.GetCurrentChannel())
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	return createJsRet(data, 0, "ok")
+	// Channel writers may hold the lock while awaiting IndexedDB callbacks.
+	// Yield the JavaScript event loop before waiting for that lock.
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		data, err := channelData(_mgr.GetCurrentChannel())
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getChannelStatus(this js.Value, p []js.Value) any {
@@ -1181,16 +1205,19 @@ func getAllChannels(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	channels := _mgr.GetAllChannels()
-	result := make([]*wallet.ChannelInfo, 0, len(channels))
-	for _, c := range channels {
-		result = append(result, wallet.ConvertChannel(c))
-	}
-	channelsJSON, err := json.Marshal(result)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	return createJsRet(map[string]any{"channels": string(channelsJSON)}, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		channels := _mgr.GetAllChannels()
+		result := make([]*wallet.ChannelInfo, 0, len(channels))
+		for _, c := range channels {
+			result = append(result, wallet.ConvertChannel(c))
+		}
+		channelsJSON, err := json.Marshal(result)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return map[string]any{"channels": string(channelsJSON)}, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func reservationStatus(this js.Value, p []js.Value) any {

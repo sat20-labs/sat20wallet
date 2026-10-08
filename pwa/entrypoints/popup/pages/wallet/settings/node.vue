@@ -25,11 +25,11 @@
         </CardHeader>
         <CardContent>
           <div class="flex flex-col gap-4">
-            <Button aria-label="become Core Node" @click="onStake(true)" :loading="isLoading && isCore">
+            <Button aria-label="become Core Node" @click="onStake(true)" :disabled="isLoading" :loading="isLoading && isCore">
               {{ $t('nodeSetting.becomeCoreNode') }}
             </Button>
             <Button variant="secondary" aria-label="become Miner" @click="onStake(false)"
-              :loading="isLoading && !isCore">
+              :disabled="isLoading" :loading="isLoading && !isCore">
               {{ $t('nodeSetting.becomeMiner') }}
             </Button>
 
@@ -40,7 +40,7 @@
             <!-- <AlertTitle>{{ resultSuccess ? 'Operate Successfull' : 'Operation Fail' }}</AlertTitle> -->
             <AlertDescription>{{ resultMsg }}</AlertDescription>
             <div v-if="resultSuccess" class="mt-2 text-xs text-gray-500">Node Type: <span class="text-zinc-400 ml-1">{{
-              isCore ? 'Core Node' : 'Mining Node' }}</span></div>
+              resultCore ? 'Core Node' : 'Mining Node' }}</span></div>
             <div v-if="txId" class="mt-2 text-xs text-gray-500">Transaction ID:<span class="text-zinc-400 ml-1">
                 <a :href="generateMempoolUrl({ network: network, path: `tx/${txId}` })" target="_blank"
                   class="text-sky-500 hover:text-sky-400 underline cursor-pointer">
@@ -78,7 +78,7 @@
           </DialogHeader>
           <DialogFooter>
             <div class="flex justify-end gap-3">
-              <Button @click="confirmStake" :loading="isLoading" class="w-36">{{ $t('nodeSetting.confirm') }}</Button>
+              <Button @click="confirmStake" :disabled="isLoading" :loading="isLoading" class="w-36">{{ $t('nodeSetting.confirm') }}</Button>
               <Button variant="secondary" @click="showConfirm = false" class="w-36">{{ $t('nodeSetting.cancel')
               }}</Button>
             </div>
@@ -129,6 +129,7 @@ const walletStore = useWalletStore()
 const { btcFeeRate, network, publicKey } = storeToRefs(walletStore)
 const isLoading = ref(false)
 const isCore = ref(false)
+const resultCore = ref(false)
 const showConfirm = ref(false)
 const resultMsg = ref('')
 const resultSuccess = ref(false)
@@ -141,17 +142,21 @@ let pendingCore = false
 const guideUrl = "https://github.com/sat20-labs/satoshinet/blob/main/install/guide.md"
 
 function onStake(core: boolean) {
+  if (isLoading.value) return
   isCore.value = core
   pendingCore = core
   showConfirm.value = true
 }
 
 async function confirmStake() {
+  if (isLoading.value) return
+  const submittedCore = pendingCore
+  const submittedPubKey = publicKey.value
   isLoading.value = true
   resultMsg.value = ''
   showConfirm.value = false
   try {
-    const [err, res] = await walletManager.stakeToBeMiner(pendingCore, btcFeeRate.value.toString())
+    const [err, res] = await walletManager.stakeToBeMiner(submittedCore, btcFeeRate.value.toString())
     console.log('res', res);
 
     if (err) {
@@ -164,20 +169,21 @@ async function confirmStake() {
     } else {
       resultMsg.value = '操作成功，节点质押已提交！'
       resultSuccess.value = true
+      resultCore.value = submittedCore
       txId.value = res && res.txId ? res.txId : ''
       resvId.value = res && res.resvId ? res.resvId : ''
       assetName.value = res && res.assetName ? res.assetName : ''
       amt.value = res && res.amt ? res.amt : ''
 
       // 保存节点质押数据到本地存储
-      if (res && publicKey.value) {
+      if (res && submittedPubKey) {
         try {
-          await nodeStakeStorage.saveNodeStakeData(publicKey.value, {
+          await nodeStakeStorage.saveNodeStakeData(submittedPubKey, {
             txId: res.txId || '',
             resvId: res.resvId || '',
             assetName: res.assetName || '',
             amt: res.amt || '',
-            isCore: pendingCore
+            isCore: submittedCore
           })
           console.log('Node stake data saved successfully')
         } catch (storageError) {

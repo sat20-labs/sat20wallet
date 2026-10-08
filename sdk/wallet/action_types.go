@@ -218,9 +218,15 @@ func DecodeRemoteDeployRunesParam(script []byte) (*RemoteDeployRunesParam, error
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("parameter is missing symbol")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return nil, fmt.Errorf("symbol exceeds eight bytes")
+	}
 	symbol := int32(tokenizer.ExtractInt64())
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("parameter is missing max supply")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return nil, fmt.Errorf("max supply exceeds eight bytes")
 	}
 	maxSupply := tokenizer.ExtractInt64()
 
@@ -230,9 +236,15 @@ func DecodeRemoteDeployRunesParam(script []byte) (*RemoteDeployRunesParam, error
 		return nil, fmt.Errorf("parameter is missing dest address")
 	}
 	if !tokenizer.Done() {
+		if len(tokenizer.Data()) > 8 {
+			return nil, fmt.Errorf("limit exceeds eight bytes")
+		}
 		limit = tokenizer.ExtractInt64()
 		if !tokenizer.Next() || tokenizer.Err() != nil {
 			return nil, fmt.Errorf("parameter is missing selfmint")
+		}
+		if len(tokenizer.Data()) > 8 {
+			return nil, fmt.Errorf("self mint exceeds eight bytes")
 		}
 		selfMint = tokenizer.ExtractInt64() != 0
 		if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -244,6 +256,9 @@ func DecodeRemoteDeployRunesParam(script []byte) (*RemoteDeployRunesParam, error
 	if !tokenizer.Done() {
 		if !tokenizer.Next() || tokenizer.Err() != nil {
 			return nil, fmt.Errorf("parameter is missing divisibility")
+		}
+		if len(tokenizer.Data()) > 8 {
+			return nil, fmt.Errorf("divisibility exceeds eight bytes")
 		}
 		divisibility = tokenizer.ExtractInt64()
 	}

@@ -42,7 +42,11 @@ func TestTopicCryptoKeyPackagesMessagesAndHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	key1 := bytes.Repeat([]byte{0x11}, topicKeySize)
+	key1, err := deriveTopicGroupKey(ownerWallet, GetChainParam_SatsNet().Name, "developers", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zeroWalletBytes(key1)
 	if err := ownerCrypto.StoreTopicKey("developers", 1, key1); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +82,14 @@ func TestTopicCryptoKeyPackagesMessagesAndHistory(t *testing.T) {
 		t.Fatalf("decrypt=%q err=%v", plaintext, err)
 	}
 
-	key2 := bytes.Repeat([]byte{0x22}, topicKeySize)
+	key2, err := deriveTopicGroupKey(ownerWallet, GetChainParam_SatsNet().Name, "developers", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zeroWalletBytes(key2)
+	if bytes.Equal(key1, key2) {
+		t.Fatal("rotation reused the previous topic key")
+	}
 	packages2, err := ownerCrypto.CreateKeyPackages("developers", 2, key2, []string{ownerID, memberID})
 	if err != nil {
 		t.Fatal(err)

@@ -49,6 +49,11 @@ type accountManagedDataImportMarker struct {
 	TargetDataHash      string `json:"target_data_hash,omitempty"`
 	CreatedAtUnix       int64  `json:"created_at_unix,omitempty"`
 	UpdatedAtUnix       int64  `json:"updated_at_unix,omitempty"`
+	// Only a rebase needs these: the profile retains the confirmed remote
+	// baseline, while the authenticated merge must survive a partial import.
+	ConfirmedStateHash  string `json:"confirmed_state_hash,omitempty"`
+	ReplayStateEnvelope []byte `json:"replay_state_envelope,omitempty"`
+	ReplayDataEnvelope  []byte `json:"replay_data_envelope,omitempty"`
 }
 
 func accountManagedImportMarkerForProfile(origin, stage string,
@@ -159,8 +164,8 @@ func (p *Manager) readAccountManagedDataImportMarker() (*accountManagedDataImpor
 // This persistent marker is only a crash boundary for a real remote recovery
 // import. Runtime concurrency is excluded by the application sync gate; normal
 // PUT/ACK processing must never create it. Only a fully successful import
-// removes the marker. Its presence after restart blocks uploads until the SDK
-// executes an explicit full recovery again.
+// removes the marker. Remote apply resumes its authenticated committed target
+// before any export; restore-origin markers require the same explicit recovery.
 func (p *Manager) checkAccountManagedDataImport() error {
 	marker, err := p.readAccountManagedDataImportMarker()
 	if err != nil {
@@ -196,10 +201,14 @@ func accountManagedEntryRecords(entry *DKVSBatchOutboxEntry,
 	if err != nil || len(mutations) == 0 {
 		return nil, false
 	}
+	wrapperKey := ""
+	if strings.HasSuffix(stateKey, "/"+accountManagedStatePath) {
+		wrapperKey = strings.TrimSuffix(stateKey, accountManagedStatePath) + accountRootWrapperPath
+	}
 	seenState := false
 	for _, mutation := range mutations {
 		if mutation.Record == nil ||
-			(mutation.Record.Key != stateKey && mutation.Record.Key != dataKey) {
+			(mutation.Record.Key != stateKey && mutation.Record.Key != dataKey && (wrapperKey == "" || mutation.Record.Key != wrapperKey)) {
 			return nil, false
 		}
 		seenState = seenState || mutation.Record.Key == stateKey

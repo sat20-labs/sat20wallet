@@ -17,6 +17,8 @@
       <Separator />
       <AccountManagementSetting />
       <Separator />
+      <Button variant="secondary" class="w-full" @click="$router.push('/wallet/name-select')">设置地址 DID</Button>
+      <Separator />
       <NodeSetting />
       <Separator />
       <ReferrerSetting />

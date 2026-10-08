@@ -102,9 +102,10 @@ const walletSetupPaths = ["/", "/import", "/create", "/restore-account"];
 
 const shouldAutoLock = () => {
   const path = router.currentRoute.value.path;
+  const maintenanceRehearsal = path === '/restore-account' && router.currentRoute.value.query.mode === 'rehearsal';
   return walletStore.hasWallet &&
     !walletStore.locked &&
-    !["/unlock", ...walletSetupPaths].includes(path);
+    (maintenanceRehearsal || !["/unlock", ...walletSetupPaths].includes(path));
 };
 
 const clearAutoLockTimer = () => {
@@ -239,7 +240,8 @@ const onAppInstalled = () => {
 };
 
 const refreshManagedWalletCatalog = () => {
-  if (walletStore.hasWallet && !walletStore.locked) {
+  if (walletStore.hasWallet && !walletStore.locked && !walletStore.isSwitchingWallet &&
+      !walletStore.isSwitchingAccount && !walletStore.isSwitchingNetwork) {
     void walletStore.syncWalletCatalog().catch((error) => {
       console.warn("Failed to refresh managed wallet catalog:", error);
     });
@@ -253,7 +255,10 @@ const getWalletStatus = async () => {
   if (res?.exists) {
     await walletStore.setHasWallet(true);
     const currentPath = router.currentRoute.value.path;
-    if (walletSetupPaths.includes(currentPath)) {
+    // An interrupted module import has already installed the wallet catalog.
+    // Keep recovery reachable; the SDK only resumes the matching snapshot and
+    // rejects replacement of an existing, unrelated wallet database.
+    if (walletSetupPaths.includes(currentPath) && !['/restore-account', '/import'].includes(currentPath)) {
       router.replace("/unlock");
     }
   } else {
@@ -294,7 +299,7 @@ onMounted(() => {
 });
 
 watch(
-  () => [autoLockTime.value, walletStore.locked, walletStore.hasWallet, router.currentRoute.value.path],
+  () => [autoLockTime.value, walletStore.locked, walletStore.hasWallet, router.currentRoute.value.fullPath],
   resetAutoLockTimer
 );
 

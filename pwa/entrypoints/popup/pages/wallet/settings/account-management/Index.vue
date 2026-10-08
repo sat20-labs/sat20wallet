@@ -11,12 +11,12 @@
         </div>
       </div>
 
-      <Alert v-if="savedState?.active">
+      <Alert v-if="savedState?.active" aria-label="账户备份状态">
         <AlertDescription class="space-y-1">
           <div>账户管理：已启用</div>
           <div>数据存储：{{ savedState.storage_mode === 'paid' ? 'AUTOPAY 全网同步' : '服务节点临时缓存' }}</div>
           <div
-            v-if="savedState.storage_mode === 'paid' && autopayStatus && !autopayStatus.ready"
+            v-if="autopayStatus?.required && !autopayStatus.ready"
             class="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-amber-400"
           >
             <div class="font-medium">AUTOPAY 需要处理</div>
@@ -37,14 +37,12 @@
             </Button>
           </div>
           <div
-            v-else-if="savedState.storage_mode === 'paid' && autopayStatus?.ready"
+            v-else-if="autopayStatus?.required && autopayStatus.ready"
             class="text-green-500"
           >
             AUTOPAY 支付正常
           </div>
-          <div v-if="autopayFundingResult?.transaction_id" class="mt-1 text-green-500">
-            AUTOPAY 充值已确认：{{ autopayFundingResult.transaction_id }}
-          </div>
+
           <div>恢复配置：{{ savedState.recovery_configured ? '已配置' : '未配置' }}</div>
           <div v-if="savedState.recovery_configured">恢复模式：{{ savedState.recovery_mode }}</div>
           <div>托管数据版本：{{ savedState.managed_data_revision || 0 }}</div>
@@ -63,19 +61,44 @@
           </div>
         </AlertDescription>
       </Alert>
+      <p v-if="statusReadError" class="text-sm text-destructive" role="status">{{ statusReadError }}</p>
+      <Button v-if="statusReadError" variant="outline" :disabled="busy" @click="refreshAccountStatus">重试读取备份状态</Button>
 
-      <section v-if="step === 1 && !savedState?.recovery_configured" class="space-y-4">
+      <section v-if="step === 1 && savedState?.recovery_configured && !reconfiguring" class="space-y-3">
+        <h2 class="font-medium">维护恢复配置</h2>
+        <Textarea v-if="savedState.public_locator" :model-value="savedState.public_locator" readonly rows="5" aria-label="当前公开恢复码" />
+        <Button variant="outline" class="w-full" :disabled="busy || !savedState.public_locator" @click="run(async () => { await copyText(savedState!.public_locator || '') })">复制当前公开恢复码</Button>
+        <Button variant="outline" class="w-full" :disabled="busy || !savedState.public_locator" @click="router.push('/restore-account?mode=rehearsal')">只读恢复演练</Button>
+        <p class="text-xs text-muted-foreground">演练只验证恢复材料并预览备份，不覆盖当前钱包。请核对预览中的钱包和子账户。</p>
+        <Button class="w-full" :disabled="busy" @click="reconfiguring = true">重新配置恢复或升级存储</Button>
+      </section>
+
+      <section v-if="autopayStatus?.funding_transaction_id || autopayFundingResult?.transaction_id" aria-label="AUTOPAY 充值追踪" class="rounded-lg border p-3 space-y-2 text-sm">
+        <p>{{ autopayStatus?.funding_error || (autopayStatus?.ready && !autopayStatus?.funding_pending ? '合约查询确认 AUTOPAY 支付已就绪' : (autopayStatus?.funding_pending ?? autopayFundingResult?.pending) ? '原充值交易等待提交或合约确认' : '已记录充值交易，AUTOPAY 当前未就绪') }}</p>
+        <p class="break-all">交易号：{{ autopayStatus?.funding_transaction_id || autopayFundingResult?.transaction_id }}</p>
+        <p v-if="autopayStatus?.funding_pending" class="text-xs text-muted-foreground">请查询原交易，不需要再次充值。</p>
+        <Button variant="outline" :disabled="busy" @click="run(refreshAutopayStatus)">查询充值状态</Button>
+        <Button v-if="autopayStatus?.funding_pending && autopayStatus?.funding_can_resume" variant="outline" :disabled="busy" @click="resumeAutopay">继续提交原交易</Button>
+      </section>
+
+      <Alert v-if="reconfiguring">
+        <AlertDescription>重新配置后请保存新的公开恢复码和用户分片，并完成演练。旧恢复材料不会自动失效；旧备份仍按原存储期限保留。</AlertDescription>
+      </Alert>
+      <Button v-if="reconfiguring && step < 4" variant="ghost" class="w-full" :disabled="busy" @click="cancelReconfiguration">返回当前配置</Button>
+
+      <section v-if="step === 1 && (!savedState?.recovery_configured || reconfiguring)" class="space-y-4">
         <h2 class="font-medium">1. 确认要备份的钱包</h2>
         <p class="text-sm text-muted-foreground">
-          SDK 管理全部子钱包、子账户 index 和可选的 Ordinals DID。助记词不会返回给页面。
+          SDK 管理全部子钱包、子账户 index 和已保存的地址 DID。助记词不会返回给页面。
         </p>
-        <div v-for="wallet in drafts" :key="wallet.id" class="rounded-lg border p-3 space-y-3">
+        <div v-for="wallet in wallets" :key="wallet.id" class="rounded-lg border p-3 space-y-3">
           <div class="font-medium">{{ wallet.name }}</div>
           <div v-for="account in wallet.accounts" :key="account.index" class="space-y-1">
-            <label class="text-xs text-muted-foreground">子账户 {{ account.index }} 的 Ordinals DID（可选）</label>
-            <Input v-model="account.did" placeholder="例如 alice 或 alice.btc" />
+            <label class="text-xs text-muted-foreground">子账户 {{ account.index }} 的地址 DID</label>
+            <Input :model-value="account.did || ''" readonly :aria-label="`子账户 ${account.index} 的已保存 DID`" />
           </div>
         </div>
+        <Button variant="outline" class="w-full" :disabled="busy" @click="router.push('/wallet/name-select')">设置当前地址 DID</Button>
         <Button class="w-full" :disabled="busy" @click="runPreflight">
           <Icon v-if="busy" icon="lucide:loader-2" class="mr-2 h-4 w-4 animate-spin" />
           检查账户
@@ -185,28 +208,29 @@
 
       <section v-else-if="step === 4 && creation" class="space-y-4">
         <h2 class="font-medium">4. 保存恢复材料</h2>
-        <div class="space-y-2">
+        <div v-if="recoveryMode === '2of2' || guardianSetupVerified" class="space-y-2">
           <label class="text-sm font-medium">公开账户恢复码</label>
-          <Textarea :model-value="creation.locator" readonly rows="5" />
+          <Textarea :model-value="creation.locator" readonly rows="5" aria-label="最终公开恢复码" />
           <Button variant="outline" class="w-full" @click="copyText(creation.locator)">复制恢复码</Button>
         </div>
         <div class="space-y-2">
           <label class="text-sm font-medium">秘密用户分片</label>
-          <Textarea :model-value="creation.user_share" readonly rows="5" />
+          <Textarea :model-value="creation.user_share" readonly rows="5" aria-label="秘密用户分片" />
           <Button variant="outline" class="w-full" @click="copyText(creation.user_share)">复制用户分片</Button>
           <p class="text-xs text-muted-foreground">用户分片是秘密材料，不要与公开恢复码保存在同一位置。</p>
         </div>
 
-        <div v-if="recoveryMode === '2of3'" class="space-y-2 rounded-lg border p-3">
+        <div v-if="recoveryMode === '2of3' && !guardianSetupVerified" class="space-y-2 rounded-lg border p-3">
           <label class="text-sm font-medium">请让 Guardian 接受托管</label>
-          <Textarea :model-value="creation.guardian_setup" readonly rows="7" />
+          <p class="text-xs text-muted-foreground">验证 Guardian receipt 后会生成最终公开恢复码，请届时保存。</p>
+          <Textarea :model-value="creation.guardian_setup" readonly rows="7" aria-label="Guardian setup" />
           <Button variant="outline" class="w-full" @click="copyText(creation.guardian_setup)">复制 Guardian setup</Button>
           <Textarea v-model="guardianReceipt" rows="5" placeholder="粘贴 Guardian 返回的 receipt" />
           <Button class="w-full" :disabled="busy || !guardianReceipt" @click="verifyGuardian">
             验证 Guardian 密文已保存
           </Button>
         </div>
-        <Button v-else class="w-full" @click="step = 5">进入恢复演练</Button>
+        <Button v-else class="w-full" @click="step = 5">{{ recoveryMode === '2of3' ? '我已保存最终恢复码，进入演练' : '进入恢复演练' }}</Button>
       </section>
 
       <section v-else-if="step === 5 && creation" class="space-y-4">
@@ -215,6 +239,7 @@
         <Input v-for="(answer, index) in rehearsalAnswers" :key="index" v-model="rehearsalAnswers[index]" type="password" :placeholder="`问题 ${index + 1} 的答案`" autocomplete="off" />
         <Textarea v-if="recoveryMode === '2of2'" v-model="rehearsalUserShare" rows="5" placeholder="重新粘贴用户分片" />
         <div v-else class="space-y-2 rounded-lg border p-3">
+          <Textarea v-model="rehearsalLocator" rows="5" placeholder="重新粘贴已保存的最终恢复码" />
           <Button variant="outline" class="w-full" :disabled="busy" @click="createRehearsalGuardianRequest">生成 Guardian 演练请求</Button>
           <Textarea v-if="rehearsalGuardianRequest" :model-value="rehearsalGuardianRequest" readonly rows="6" />
           <Button v-if="rehearsalGuardianRequest" variant="ghost" class="w-full" @click="copyText(rehearsalGuardianRequest)">复制演练请求</Button>
@@ -231,7 +256,9 @@
       <section v-else-if="step === 6" class="space-y-3 text-center py-8">
         <Icon icon="lucide:badge-check" class="h-14 w-14 text-green-500 mx-auto" />
         <h2 class="text-xl font-semibold">账户恢复已配置</h2>
-        <p class="text-sm text-muted-foreground">账户托管数据已重新读取，恢复材料和真实演练均已验证。</p>
+        <p class="text-sm text-muted-foreground">恢复配置已保存，恢复材料和真实演练均已验证。</p>
+        <Textarea :model-value="creation?.locator || savedState?.public_locator || ''" readonly rows="5" aria-label="当前公开恢复码" />
+        <Button variant="outline" :disabled="busy || !creation?.locator && !savedState?.public_locator" @click="run(async () => { await copyText(creation?.locator || savedState?.public_locator || '') })">复制当前公开恢复码</Button>
         <Button @click="router.push('/wallet')">返回钱包</Button>
       </section>
 
@@ -267,7 +294,7 @@
     </div>
 
     <Dialog :open="paidConfirmOpen" @update:open="handlePaidConfirmOpenChange">
-      <DialogContent class="max-w-[92vw] rounded-sm border-border bg-background sm:max-w-md">
+      <DialogContent class="max-h-[90vh] max-w-[92vw] overflow-y-auto rounded-sm border-border bg-background sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{{ t('tools.txConfirm.title') }}</DialogTitle>
           <DialogDescription>{{ t('tools.txConfirm.description') }}</DialogDescription>
@@ -305,6 +332,7 @@ import { withWalletPassword } from '@/lib/walletPasswordPrompt'
 import accountSDK, {
   type AccountManagementStatus,
   type AccountAutopayFundingResult,
+  AccountAutopayPendingError,
   type AccountAutopayFundingStatus,
   type AccountStorageOption,
   type AccountWalletMetadataInput,
@@ -315,11 +343,13 @@ const { t } = useI18n()
 const walletStore = useWalletStore()
 const { wallets } = storeToRefs(walletStore)
 const savedState = ref<AccountManagementStatus | null>(null)
+const statusReadError = ref('')
 const autopayStatus = ref<AccountAutopayFundingStatus | null>(null)
 const autopayFundingResult = ref<AccountAutopayFundingResult | null>(null)
 const busy = ref(false)
 const error = ref('')
 const step = ref(1)
+const reconfiguring = ref(false)
 const recoveryMode = ref<'2of2' | '2of3'>('2of3')
 const storageOptions = ref<AccountStorageOption[]>([])
 const selectedStorage = ref('')
@@ -327,22 +357,20 @@ const recordCount = ref(100)
 const preflight = ref<any>(null)
 const paidConfirmOpen = ref(false)
 const paidConfirmContext = ref<'account' | 'guardian' | 'funding'>('account')
+const fundingConfirmation = ref<AccountAutopayFundingStatus | null>(null)
 let paidConfirmResolver: ((confirmed: boolean) => void) | null = null
 let autopayRefreshTimer: ReturnType<typeof setInterval> | undefined
+let disposed = false
 const guardianContact = ref('')
 const creation = ref<any>(null)
 const guardianReceipt = ref('')
+const guardianSetupVerified = ref(false)
+const rehearsalLocator = ref('')
 const rehearsalAnswers = ref(['', '', ''])
 const rehearsalUserShare = ref('')
 const rehearsalGuardianRequest = ref('')
 const rehearsalGuardianResponse = ref('')
 const rehearsalGuardianReady = ref(false)
-
-const drafts = ref(wallets.value.map(wallet => ({
-  id: wallet.id,
-  name: wallet.name,
-  accounts: wallet.accounts.map(account => ({ index: account.index, did: account.did || '' })),
-})))
 
 const questions = ref([
   { id: 'book-page', prompt: '你指定版本的一本书，第十页最后十个字是什么？', answer: '', confirmation: '', ignore_punctuation: true },
@@ -383,26 +411,27 @@ const parsedGuardianContact = computed(() => parseGuardianContact(guardianContac
 const guardianContactError = computed(() => {
   if (!guardianContact.value.trim()) return '请先粘贴好友钱包生成的 Guardian 联系信息'
   if (!parsedGuardianContact.value) return 'Guardian 联系信息格式无效'
-  const ownContact = parseGuardianContact(guardianIdentity.value)
-  if (ownContact
-    && ownContact.mailbox_id === parsedGuardianContact.value.mailbox_id
-    && ownContact.recovery_public_key === parsedGuardianContact.value.recovery_public_key) {
+  const rootAccountId = preflight.value?.account_id || savedState.value?.account_id || walletStore.rootAccountId
+  if (rootAccountId && rootAccountId.toLowerCase() === parsedGuardianContact.value.mailbox_id.toLowerCase()) {
     return '不能使用自己的 Guardian 联系信息'
   }
   return ''
 })
 const guardianContactValid = computed(() => recoveryMode.value !== '2of3' || !guardianContactError.value)
 
-const metadata = (): AccountWalletMetadataInput[] => drafts.value.map(wallet => ({
-  id: Number(wallet.id),
-  name: wallet.name,
-  sub_accounts: Object.fromEntries(wallet.accounts.map(account => [account.index, account.did.trim()])),
-}))
+// The recovery wizard never supplies draft overrides. Both preflight and
+// recovery export read the authoritative SDK catalog.
+const metadata = (): AccountWalletMetadataInput[] => []
 
 const run = async (task: () => Promise<void>) => {
   busy.value = true
   error.value = ''
-  try { await task() } catch (e: any) { error.value = e?.message || '操作失败' } finally { busy.value = false }
+  try { await task() } catch (e: any) {
+    if (e instanceof AccountAutopayPendingError) {
+      autopayFundingResult.value = e.data as AccountAutopayFundingResult
+      try { await refreshAutopayStatus() } catch { /* preserve the known transaction receipt */ }
+    } else { error.value = e?.message || '操作失败' }
+  } finally { busy.value = false }
 }
 
 const runWithPassword = (task: (password: string) => Promise<void>) => run(async () => {
@@ -417,14 +446,14 @@ const runPreflight = () => runWithPassword(async password => {
 })
 
 const paidStorageOption = computed(() => storageOptions.value.find(option => option.id === 'paid'))
-const normalizedRecordCount = computed(() => Math.floor(Number(recordCount.value)))
+const normalizedRecordCount = computed(() => Number(recordCount.value))
 const recordCountValid = computed(() => selectedStorage.value !== 'paid'
   || (Number.isSafeInteger(normalizedRecordCount.value) && normalizedRecordCount.value >= 100))
-const autopayQuote = computed(() => {
+const quoteForRecordCount = (count: number) => {
   const fee = Number(paidStorageOption.value?.full_record_fee_per_block)
-  if (!recordCountValid.value || !Number.isFinite(fee) || fee <= 0) return null
+  if (!Number.isSafeInteger(count) || count < 100 || !Number.isFinite(fee) || fee <= 0) return null
   const minimum = Number(paidStorageOption.value?.minimum_amount_per_block || 0)
-  const quoted = normalizedRecordCount.value * fee
+  const quoted = count * fee
   const amountPerBlock = Math.max(quoted, minimum)
   const format = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 8 })
   return {
@@ -432,12 +461,15 @@ const autopayQuote = computed(() => {
     initialCost: format(amountPerBlock * 1000),
     annualCost: format(amountPerBlock * 2_628_000),
   }
-})
+}
+const autopayQuote = computed(() => quoteForRecordCount(normalizedRecordCount.value))
 
 const paidConfirmRows = computed(() => {
   const option = paidStorageOption.value
-  const quote = autopayQuote.value
+  const confirmationCount = paidConfirmContext.value === 'guardian' ? 100 : normalizedRecordCount.value
+  const quote = quoteForRecordCount(confirmationCount)
   const funding = paidConfirmContext.value === 'funding'
+  const fundingQuote = fundingConfirmation.value
   // AUTOPAY funding uses the account-management root at account zero, not
   // necessarily the wallet/sub-account currently selected in the wallet UI.
   const rootWalletId = savedState.value?.root_wallet_id
@@ -451,29 +483,30 @@ const paidConfirmRows = computed(() => {
           ? '为账户管理的 AUTOPAY 付费存储充值'
         : t('accountManagement.autopayPurpose'),
     },
-    ...(funding ? [
+    ...[
       {
         label: t('accountManagement.fundingSourceWallet'),
         value: rootWallet ? `${rootWallet.name} (${rootWallet.id})` : String(rootWalletId ?? ''),
       },
       { label: t('tools.txConfirm.account'), value: t('accountManagement.fundingSourceAccount') },
-      { label: t('tools.txConfirm.sourceAddress'), value: autopayStatus.value?.payer || '' },
-    ] : []),
-    { label: t('tools.txConfirm.to'), value: funding ? autopayStatus.value?.contract_address || '' : option?.contract_address || '' },
-    { label: t('tools.txConfirm.asset'), value: funding ? autopayStatus.value?.fee_asset || '' : option?.fee_asset || '' },
-    { label: t(funding ? 'accountManagement.fundingPrincipal' : 'tools.txConfirm.amount'), value: funding ? autopayStatus.value?.recommended_funding_amount || '' : quote?.initialCost || option?.estimated_cost || '' },
+      { label: '根账户身份', value: preflight.value?.account_id || savedState.value?.account_id || walletStore.rootAccountId },
+      { label: t('tools.txConfirm.sourceAddress'), value: funding ? fundingQuote?.payer || '' : '' },
+    ],
+    { label: t('tools.txConfirm.to'), value: funding ? fundingQuote?.contract_address || '' : option?.contract_address || '' },
+    { label: t('tools.txConfirm.asset'), value: funding ? fundingQuote?.fee_asset || '' : option?.fee_asset || '' },
+    { label: t(funding ? 'accountManagement.fundingPrincipal' : 'tools.txConfirm.amount'), value: funding ? fundingQuote?.recommended_funding_amount || '' : quote?.initialCost || option?.estimated_cost || '' },
     { label: t('tools.txConfirm.network'), value: `SatoshiNet ${walletStore.network}` },
-    { label: t('accountManagement.recordCount'), value: funding ? '' : String(normalizedRecordCount.value) },
+    { label: t('accountManagement.recordCount'), value: funding ? '' : String(confirmationCount) },
     {
       label: t('accountManagement.perBlock'),
       value: funding
-        ? `${autopayStatus.value?.amount_per_block || autopayStatus.value?.required_amount_per_block || ''} ${autopayStatus.value?.fee_asset || ''}`.trim()
+        ? `${fundingQuote?.effective_amount_per_block || ''} ${fundingQuote?.fee_asset || ''}`.trim()
         : quote ? `${quote.amountPerBlock} ${option?.fee_asset || ''}` : '',
     },
     {
       label: t('accountManagement.fundingPeriod'),
       value: t('accountManagement.fundingBlocks', {
-        count: funding ? autopayStatus.value?.recommended_funding_blocks || 1000 : 1000,
+        count: funding ? fundingQuote?.recommended_funding_blocks || 1000 : 1000,
       }),
     },
     ...(funding ? [
@@ -534,20 +567,62 @@ const cancelStorageSetup = () => run(async () => {
   step.value = 2
 })
 
+const cancelReconfiguration = () => run(async () => {
+  await accountSDK.cancelPendingStorageAuthorization()
+  questions.value.forEach(question => { question.answer = ''; question.confirmation = '' })
+  guardianContact.value = ''
+  selectedStorage.value = ''
+  preflight.value = null
+  step.value = 1
+  reconfiguring.value = false
+})
+
 const refreshAutopayStatus = async () => {
-  if (savedState.value?.storage_mode !== 'paid') {
-    autopayStatus.value = null
-    return
-  }
-  autopayStatus.value = await accountSDK.autopayStatus()
+  const status = await accountSDK.autopayStatus()
+  if (!disposed) autopayStatus.value = status
 }
 
+const refreshAccountStatus = async () => {
+  try {
+    const status = await accountSDK.status()
+    if (disposed) return
+    savedState.value = status
+    statusReadError.value = ''
+  } catch (e: any) {
+    if (!disposed) statusReadError.value = e?.message || '读取账户备份状态失败'
+  }
+}
+
+const refreshVisibleStatus = async () => {
+  if (disposed || document.visibilityState !== 'visible') return
+  await refreshAccountStatus()
+  try { await refreshAutopayStatus() } catch { /* preserve the last known status */ }
+}
+const onVisibilityChange = () => { void refreshVisibleStatus() }
+
 const fundAutopay = () => run(async () => {
-  if (!autopayStatus.value?.can_fund) throw new Error('AUTOPAY 当前不能充值')
-  paidConfirmContext.value = 'funding'
-  if (!await requestPaidConfirmation()) return
-  autopayFundingResult.value = await accountSDK.fundAutopay()
   await refreshAutopayStatus()
+  if (!autopayStatus.value?.can_fund) throw new Error('AUTOPAY 当前不能充值')
+  const confirmed = { ...autopayStatus.value }
+  fundingConfirmation.value = confirmed
+  paidConfirmContext.value = 'funding'
+  try {
+    if (!await requestPaidConfirmation()) return
+    autopayFundingResult.value = await accountSDK.fundAutopay(confirmed)
+  } finally {
+    fundingConfirmation.value = null
+    try { await refreshAutopayStatus() } catch { /* keep the receipt or submission error */ }
+  }
+})
+
+const resumeAutopay = () => run(async () => {
+  await refreshAutopayStatus()
+  if (!autopayStatus.value?.funding_pending || !autopayStatus.value.funding_can_resume) return
+  try {
+    autopayFundingResult.value = await accountSDK.fundAutopay({ ...autopayStatus.value })
+  } finally {
+    try { await refreshAutopayStatus() } catch { /* keep the original receipt */ }
+  }
 })
 
 const createRecovery = () => runWithPassword(async password => {
@@ -559,13 +634,21 @@ const createRecovery = () => runWithPassword(async password => {
     if (guardianContactError.value || !parsedGuardianContact.value) throw new Error(guardianContactError.value)
     guardian = parsedGuardianContact.value
   }
-	creation.value = await accountSDK.createRecovery({
+	const result = await accountSDK.createRecovery({
 	password,
     wallets: metadata(),
     recovery_mode: recoveryMode.value,
     questions: questions.value,
     guardian,
   })
+  if (disposed) {
+    await accountSDK.abortSession(result.session_id)
+    return
+  }
+  creation.value = result
+  guardianSetupVerified.value = false
+  guardianReceipt.value = ''
+  rehearsalLocator.value = ''
   questions.value.forEach(q => { q.answer = ''; q.confirmation = '' })
   step.value = 4
 })
@@ -573,10 +656,17 @@ const createRecovery = () => runWithPassword(async password => {
 const verifyGuardian = () => run(async () => {
   const result = await accountSDK.checkGuardianSetup(creation.value.session_id, guardianReceipt.value)
   creation.value.locator = result.locator
-  step.value = 5
+  guardianSetupVerified.value = true
 })
 
+const verifySavedLocator = () => {
+  if (recoveryMode.value === '2of3' && (!guardianSetupVerified.value || rehearsalLocator.value.trim() !== creation.value?.locator)) {
+    throw new Error('请粘贴本次保存的最终恢复码')
+  }
+}
+
 const createRehearsalGuardianRequest = () => run(async () => {
+  verifySavedLocator()
   rehearsalGuardianRequest.value = (await accountSDK.createGuardianRequest(creation.value.session_id)).request
   rehearsalGuardianResponse.value = ''
   rehearsalGuardianReady.value = false
@@ -588,6 +678,7 @@ const acceptRehearsalGuardianResponse = () => run(async () => {
 })
 
 const rehearse = () => runWithPassword(async password => {
+  verifySavedLocator()
   const answers = rehearsalAnswers.value.map((answer, index) => ({ question_id: questions.value[index].id, answer })).filter(item => item.answer)
 	const result = await accountSDK.rehearse(
 	creation.value.session_id, answers, rehearsalUserShare.value, password
@@ -595,11 +686,13 @@ const rehearse = () => runWithPassword(async password => {
   if (!result.verified) throw new Error('恢复演练未通过')
   rehearsalAnswers.value = ['', '', '']
   rehearsalUserShare.value = ''
+  rehearsalLocator.value = ''
   rehearsalGuardianRequest.value = ''
   rehearsalGuardianResponse.value = ''
   rehearsalGuardianReady.value = false
-  savedState.value = await accountSDK.status()
+  reconfiguring.value = false
   step.value = 6
+  await refreshAccountStatus()
 })
 
 const generateGuardianIdentity = () => runWithPassword(async password => {
@@ -628,7 +721,7 @@ const copyText = async (value: string) => {
 }
 
 onMounted(async () => {
-  try { savedState.value = await accountSDK.status() } catch { savedState.value = null }
+  await refreshAccountStatus()
   try { storageOptions.value = (await accountSDK.getStorageOptions()).options } catch { /* preflight will retry */ }
   if (!savedState.value?.recovery_configured) {
     try {
@@ -641,11 +734,20 @@ onMounted(async () => {
     } catch { /* expired or identity-mismatched authorization is intentionally ignored */ }
   }
   try { await refreshAutopayStatus() } catch { autopayStatus.value = null }
-  autopayRefreshTimer = setInterval(() => void refreshAutopayStatus().catch(() => undefined), 30_000)
+  if (disposed) return
+  autopayRefreshTimer = setInterval(() => void refreshVisibleStatus(), 30_000)
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
 onBeforeUnmount(() => {
+  disposed = true
   if (autopayRefreshTimer) clearInterval(autopayRefreshTimer)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   if (paidConfirmResolver) paidConfirmResolver(false)
+  if (creation.value?.session_id) void accountSDK.abortSession(creation.value.session_id).catch(() => undefined)
+  questions.value.forEach(question => { question.answer = ''; question.confirmation = '' })
+  creation.value = null
+  rehearsalAnswers.value = []
+  rehearsalUserShare.value = guardianResponse.value = ''
 })
 </script>

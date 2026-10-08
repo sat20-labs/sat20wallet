@@ -19,8 +19,8 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 	})
 	sender := coreNewE2EManager(t, cfg, chain, coreE2ESenderMnemonic)
 	receiver := coreNewE2EManager(t, cfg, chain, coreE2EReceiverMnemonic)
-	senderMaterial := coreActivateE2E(t, sender, account.RecoveryMode2Of2)
-	receiverMaterial := coreActivateE2E(t, receiver, account.RecoveryMode2Of2)
+	senderMaterial := coreActivateE2E(t, sender, account.RecoveryMode2Of2, nil)
+	receiverMaterial := coreActivateE2E(t, receiver, account.RecoveryMode2Of2, nil)
 	rootID := sender.GetAccountManagementStatus().RootWalletID
 	chain.fund(t, sender.GetWallet().GetAddress(), 16)
 	chain.fund(t, receiver.GetWallet().GetAddress(), 6)
@@ -73,8 +73,22 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 		coreCheckpoint(t, "IFA_multiwallet_DKVS_recovery", sender, cfg, chain, senderMaterial)
 	})
 
+	t.Run("RGB11_account_recovery_failure_boundaries", func(t *testing.T) {
+		coreRGBRecoveryFailuresE2E(t, sender, cfg, chain, senderMaterial)
+	})
+
+	t.Run("PWA_RGB11_nonempty_recovery_and_failure_retry", func(t *testing.T) {
+		coreRGBBrowserE2E(t, sender, cfg, chain, senderMaterial)
+		// The browser peer legitimately published R+1. Adopt it through the
+		// normal SDK path before the next case reconfigures the backup.
+		coreRequire(t, "sync independent browser update before reconfiguration", sender.SyncAccountManagementState(context.Background()))
+		coreAssert(t, sender.GetWalletCatalog()[0].Name == "Independent device newer state", "native sender did not adopt browser peer update")
+	})
+
 	t.Run("guardian_two_of_three_and_wrong_knowledge", func(t *testing.T) {
-		material := coreActivateE2E(t, sender, account.RecoveryMode2Of3)
+		// The browser may have advanced the shared account even if its gate failed.
+		coreRequire(t, "sync current account before guardian reconfiguration", sender.SyncAccountManagementState(context.Background()))
+		material := coreActivateE2E(t, sender, account.RecoveryMode2Of3, receiver)
 		coreCheckpoint(t, "guardian_and_knowledge_restore_catalog_and_RGB", sender, cfg, chain, material)
 		blank := coreNewE2EManager(t, cfg, chain, "")
 		pkg, err := blank.LoadAccountRecoveryPackage(material.auth.Location, material.locator)

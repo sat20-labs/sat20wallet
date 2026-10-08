@@ -92,12 +92,17 @@ func (p *Manager) funderProcessAcceptChannel(resv *FundingReservation) error {
 	resv.Channel.LocalChanCfg.InitialBalance = resv.Channel.Capacity - msg.OpenFee.MinReserveSats
 	resv.Channel.RemoteChanCfg.InitialBalance = msg.OpenFee.MinReserveSats
 
-	invoice, err := sindexer.StandardAnchorScript(
-		chanPoint.OutPointStr,
-		redeemScript,
-		chanPoint.Value(),
-		chanPoint.Assets,
-	)
+	bindOutputs, err := p.AnchorOutputsActive()
+	if err != nil {
+		return err
+	}
+	anchorTx := CreateOpeningAnchorTx(resv.Channel, chanPoint,
+		resv.Channel.LocalChanCfg.InitialBalance, resv.Channel.RemoteChanCfg.InitialBalance,
+		msg.InvoiceSig, daoPkScript, bindOutputs)
+	if anchorTx == nil {
+		return fmt.Errorf("can't generate anchor tx")
+	}
+	invoice, err := sindexer.AnchorInvoice(anchorTx, bindOutputs)
 	if err != nil {
 		return err
 	}
@@ -110,17 +115,6 @@ func (p *Manager) funderProcessAcceptChannel(resv *FundingReservation) error {
 			return err
 		}
 	} else {
-		anchorTx := CreateOpeningAnchorTx(
-			resv.Channel,
-			resv.Channel.ChanPoint,
-			resv.Channel.LocalChanCfg.InitialBalance,
-			resv.Channel.RemoteChanCfg.InitialBalance,
-			msg.InvoiceSig,
-			daoPkScript,
-		)
-		if anchorTx == nil {
-			return fmt.Errorf("can't generate anchor tx")
-		}
 		resv.AnchorTx = anchorTx
 		resv.Channel.AddPendingUtxo_SatsNet(anchorTx)
 	}

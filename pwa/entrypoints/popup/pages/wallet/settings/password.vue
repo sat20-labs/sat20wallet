@@ -59,6 +59,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/toast-new'
 import walletManager from '@/utils/sat20'
+import { biometricCredentialManager } from '@/utils/biometricCredentials'
 
 const formSchema = toTypedSchema(z.object({
   oldPassword: z.string().min(1, '请输入旧密码'),
@@ -85,7 +86,11 @@ const onSubmit = handleSubmit(async (values) => {
       toast({ title: '修改失败', description: err.message || '请检查旧密码是否正确', variant: 'destructive' })
       return
     }
-    toast({ title: '修改成功', description: '密码已更新', variant: 'success' })
+    const cleared = await biometricCredentialManager.clearAllCredentials()
+    toast({ title: '修改成功', description: cleared.success
+      ? '密码已更新；如需生物识别解锁，请重新启用。'
+      : `密码已更新，但旧生物识别绑定清除失败：${cleared.error}。请在安全设置中删除绑定后重新启用。`,
+      variant: cleared.success ? 'success' : 'info' })
   } catch (err: any) {
     toast({ title: '修改失败', description: err?.message || '请检查旧密码是否正确', variant: 'destructive' })
   } finally {

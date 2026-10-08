@@ -93,7 +93,9 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 			// sufficient and the caller may safely retry after repairing storage.
 			return "", err
 		}
-		p.autoBackupRGB11AfterMutation()
+		if err := p.autoBackupRGB11AfterMutation(); err != nil {
+			return "", err
+		}
 	}
 	// The signed transaction and every transition dependency must be accepted
 	// by the account's CoreNode before the first irreversible backend call.
@@ -124,10 +126,10 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		// transaction. Resolve immediately when evidence already sees it;
 		// otherwise retain the durable ambiguous state for reconciliation.
 		if _, visible = p.expectedRGB11TransactionStatus(first); !visible {
-			p.autoBackupRGB11AfterMutation()
+			backupErr := p.autoBackupRGB11AfterMutation()
 			p.scheduleRGB11ChainReconciliation()
 			return expectedTxID, &RGB11BroadcastResultUnknownError{
-				TxID: expectedTxID, Err: broadcastErr,
+				TxID: expectedTxID, Err: errors.Join(broadcastErr, backupErr),
 			}
 		}
 	}
@@ -146,11 +148,14 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		}
 	}
 	if err := p.projectionStore.SavePendingTransferStates(pendingList); err != nil {
-		p.autoBackupRGB11AfterMutation()
+		backupErr := p.autoBackupRGB11AfterMutation()
 		p.scheduleRGB11ChainReconciliation()
-		return expectedTxID, &RGB11BroadcastPersistenceError{TxID: expectedTxID, Err: err}
+		return expectedTxID, &RGB11BroadcastPersistenceError{TxID: expectedTxID, Err: errors.Join(err, backupErr)}
 	}
-	p.autoBackupRGB11AfterMutation()
+	backupErr := p.autoBackupRGB11AfterMutation()
 	p.scheduleRGB11ChainReconciliation()
+	if backupErr != nil {
+		return expectedTxID, &RGB11BroadcastPersistenceError{TxID: expectedTxID, Err: backupErr}
+	}
 	return expectedTxID, nil
 }

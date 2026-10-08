@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/chaincfg"
-	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	indexerdb "github.com/sat20-labs/indexer/indexer/db"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -54,7 +54,11 @@ func TestTopicControlOutboxRetainsKeyUntilConfirmedCommit(t *testing.T) {
 	}
 	coreID := manager.serverNode.NodeId.SerializeCompressed()
 	serviceCore := fmt.Sprintf("%x", coreID)
-	newKey := bytes.Repeat([]byte{0x42}, topicKeySize)
+	newKey, err := deriveTopicGroupKey(wallet, GetChainParam_SatsNet().Name, "developers", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zeroWalletBytes(newKey)
 	wrapped, err := wallet.EncryptToAccount(accountID, newKey)
 	if err != nil {
 		t.Fatal(err)

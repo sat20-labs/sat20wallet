@@ -102,7 +102,7 @@ router.beforeEach(async (to: any) => {
       const redirectPath = to.query.redirect as string
       return redirectPath || '/wallet'
     }
-  } else if (hasWallet) {
+  } else if (hasWallet && !['/restore-account', '/import'].includes(to.path)) {
     if (currentLocked) return { path: '/unlock', query: { redirect: to.fullPath } }
     return '/wallet'
   }

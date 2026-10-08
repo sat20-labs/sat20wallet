@@ -183,8 +183,11 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 
 		p.beginRGB11ManagedOperationState()
 		var operationErr error
-		result, operationErr = operation(manager)
-		dirty := p.endRGB11ManagedOperationState()
+		var dirty bool
+		func() {
+			defer func() { dirty = p.endRGB11ManagedOperationState() }()
+			result, operationErr = operation(manager)
+		}()
 		if !dirty {
 			return operationErr
 		}

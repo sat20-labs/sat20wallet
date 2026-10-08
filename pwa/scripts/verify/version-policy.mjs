@@ -32,6 +32,7 @@ const helpers=`const {beginVersionDispatch}=globalThis.fixturePolicy;
 const tryit=fn=>async(...args)=>{try{return [undefined,await fn(...args)]}catch(e){return [e,undefined]}};
 const walletRequestSessionGuard=()=>()=>{};
 const beginWalletAwaitTrace=()=>()=>{};
+const noteWasmOperation=()=>{};
 const beginPwaWalletOperation=async()=>{if(globalThis.pauseLog)await globalThis.pauseLog;return {}};
 const beginAccountManagementOperation=beginPwaWalletOperation;
 const finishPwaOperation=async()=>{if(globalThis.finishLog)await globalThis.finishLog};\n`

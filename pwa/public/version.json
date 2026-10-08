@@ -1,14 +1,14 @@
 {
   "version": "0.1.46",
-  "buildId": "20260930T095420Z",
-  "commit": "b5c0c84dca3e",
+  "buildId": "20261008T083728Z",
+  "commit": "e859a208a943",
   "releaseNotes": "RGB11 official 0.11.1 history validation",
   "forceUpdate": false,
   "minVersion": "0.1.0",
-  "publishedAt": "2026-09-30T09:54:20.215Z",
+  "publishedAt": "2026-10-08T08:37:28.372Z",
   "serviceWorker": {
     "schemaVersion": 1,
-    "releaseId": "0.1.46-20260930T095420Z",
+    "releaseId": "0.1.46-20261008T083728Z",
     "killSwitch": false
   }
 }

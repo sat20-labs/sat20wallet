@@ -149,7 +149,7 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
         let label = item.Name.Type === 'e'
         ? `${item.Name.Ticker}（raresats）`
         : item.Name.Ticker;
-        if (item.Name.Type === 'n') {
+        if (item.Name.Protocol === 'ordx' && item.Name.Type === 'n') {
           continue
         }
         list.push({

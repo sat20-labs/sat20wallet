@@ -2,7 +2,9 @@ package wallet
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -104,6 +106,157 @@ v2: （还没实现）
 每个通道根据用途划分子通道(subId)，默认情况下subId为0
 这样一个钱包下的每一个子账户(index)都可以跟节点建立通道，每个通道可以根据需要建立子通道。
 */
+
+// 确定性派生规则（SDK 的统一约束）：
+//  1. 一次性密钥可以使用安全随机数；需要持续管理、换机恢复或轮转的密钥，
+//     必须从用户密钥确定性派生，不另建依赖单设备随机数的长期私钥。
+//  2. 按用途分离 BIP32 路径或 HKDF domain；明确绑定网络、账户，以及必要的
+//     业务对象和版本。同一输入必须得到同一密钥，不同用途不得复用裸私钥。
+//  3. 账户级身份固定使用根钱包的子账户 0，不依赖当前选择、本地密码、设备 ID、
+//     备份套餐或恢复材料重配置。取密钥前必须完成现有密码与账户身份校验。
+//  4. 首次创建钱包的助记词熵不属于派生密钥；此时尚不存在用户根密钥。
+//     AEAD nonce、KDF 盐、Shamir 系数、盲化因子和请求 ID 也不是长期私钥，
+//     继续使用安全随机数，不能因本规则重复 nonce 或削弱阈值恢复/隐私。
+//  5. 尚无用户密钥的新设备恢复请求及一次性 ECDH 加密使用临时密钥，
+//     不用公开恢复码派生秘密，不把临时密钥作为持久 Guardian 身份。
+//     每个恢复包的 kDKVS 封装密钥、单次铭文/通道操作的 reveal 私钥也可随机；
+//     原操作续跑复用原材料，下一次独立操作不复用上一次密钥。
+//  6. 新增/改变派生规则必须在这里登记用途、来源、上下文与版本，并补充
+//     换机、改密、用途隔离和错误凭据回归。不得为未发布功能增加随机旧密钥兼容。
+//
+// 已登记：
+//   - 付款：m/86'/0'/0'/0/index（既有 BIP32 规则）。
+//   - 通道 revocation 等：上方 KeyFamily 和既有 m/1017' 路径。
+//   - account root wrapper：m/1018'/0'/0'/0'/0'，HKDF domain
+//     sat20/account/root-key-wrapper/aead；network + accountID 为上下文。
+//   - Guardian 身份：根付款私钥 m/86'/0'/0'/0/0，HKDF-SHA256 domain
+//     sat20/account/guardian/x25519/v1；network + accountID 为上下文，输出 32 字节。
+//   - AccountSecret：同一根付款私钥，HKDF domain sat20/account/backup-secret/v1；
+//     network + accountID 为上下文；改密及恢复包重配置不更换该密钥。
+//   - Topic 群密钥：签发者根付款私钥，HKDF domain sat20/topic/group-key/v1；
+//     network + accountID + 规范化 Topic 名称 + 现有 KeySeq 为上下文。
+//     成员使用已有加密分发流程取得签发者的群密钥，不能用自己的根密钥代替。
+const (
+	accountRootWrapperPurpose = uint32(1018)
+	accountRootWrapperDomain  = "sat20/account/root-key-wrapper"
+)
+
+const (
+	accountGuardianKeyDomain = "sat20/account/guardian/x25519/v1"
+	accountBackupKeyDomain   = "sat20/account/backup-secret/v1"
+	topicGroupKeyDomain      = "sat20/topic/group-key/v1"
+)
+
+func hkdfSHA256(ikm, salt, info []byte, size int) []byte {
+	extract := hmac.New(sha256.New, salt)
+	_, _ = extract.Write(ikm)
+	prk := extract.Sum(nil)
+	result := make([]byte, 0, size)
+	previous := []byte(nil)
+	for counter := byte(1); len(result) < size; counter++ {
+		expand := hmac.New(sha256.New, prk)
+		_, _ = expand.Write(previous)
+		_, _ = expand.Write(info)
+		_, _ = expand.Write([]byte{counter})
+		previous = expand.Sum(nil)
+		result = append(result, previous...)
+	}
+	zeroBytes(prk)
+	zeroBytes(previous)
+	return result[:size]
+}
+
+func deriveAccountRootWrapperKey(root common.Wallet, network, accountID string) ([]byte, error) {
+	internal, ok := root.(*InternalWallet)
+	if !ok || internal == nil {
+		return nil, fmt.Errorf("account root wrapper requires a mnemonic wallet")
+	}
+	internal.mutex.RLock()
+	master := internal.masterkey
+	internal.mutex.RUnlock()
+	if master == nil {
+		return nil, fmt.Errorf("account root wrapper requires a mnemonic wallet")
+	}
+	key := master
+	// m/1018'/0'/0'/0'/0' is exclusively reserved for wrapping the account
+	// AccountSecret. It does not reuse the wallet's payment or DKVS signing key.
+	for _, child := range []uint32{
+		hdkeychain.HardenedKeyStart + accountRootWrapperPurpose,
+		hdkeychain.HardenedKeyStart,
+		hdkeychain.HardenedKeyStart,
+		hdkeychain.HardenedKeyStart,
+		hdkeychain.HardenedKeyStart,
+	} {
+		derived, err := key.Derive(child)
+		if err != nil {
+			return nil, err
+		}
+		key = derived
+	}
+	privateKey, err := key.ECPrivKey()
+	if err != nil {
+		return nil, err
+	}
+	ikm := privateKey.Serialize()
+	defer zeroBytes(ikm)
+	salt := sha256.Sum256(accountRootWrapperAAD(network, accountID))
+	return hkdfSHA256(ikm, salt[:], []byte(accountRootWrapperDomain+"/aead"), 32), nil
+}
+
+// Stable account/business keys share the authenticated root signing key as
+// input, with distinct purposes. Never depend on the selected wallet or password.
+func deriveRootBusinessKey(root common.Wallet, network, accountID, domain string, context []byte) ([]byte, error) {
+	internal, ok := root.(*InternalWallet)
+	if !ok || internal == nil || network == "" || accountID == "" || domain == "" {
+		return nil, fmt.Errorf("business key requires an unlocked account root and context")
+	}
+	internal.mutex.Lock()
+	if internal.masterkey == nil {
+		internal.mutex.Unlock()
+		return nil, fmt.Errorf("business key requires a mnemonic account root")
+	}
+	privateKey, _, err := internal.getKey("P2TR", 0, 0)
+	internal.mutex.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	defer privateKey.Zero()
+	secret := privateKey.Serialize()
+	defer zeroWalletBytes(secret)
+	salt := sha256.Sum256([]byte(domain + "\x00" + network + "\x00" + accountID))
+	info := []byte(domain)
+	if len(context) != 0 {
+		info = append(append(info, 0), context...)
+	}
+	return hkdfSHA256(secret, salt[:], info, 32), nil
+}
+
+func deriveAccountGuardianPrivateKey(root common.Wallet, network, accountID string) ([]byte, error) {
+	return deriveRootBusinessKey(root, network, accountID, accountGuardianKeyDomain, nil)
+}
+
+func deriveAccountBackupSecret(root common.Wallet, network, accountID string) ([]byte, error) {
+	return deriveRootBusinessKey(root, network, accountID, accountBackupKeyDomain, nil)
+}
+
+func deriveTopicGroupKey(root common.Wallet, network, topicName string, keySeq uint64) ([]byte, error) {
+	topicName, err := normalizeTopicID(topicName)
+	if err != nil {
+		return nil, err
+	}
+	if root == nil || keySeq == 0 {
+		return nil, fmt.Errorf("invalid topic key version")
+	}
+	accountID, err := dkvsAccountID(cloneWalletAtAccountZero(root))
+	if err != nil {
+		return nil, err
+	}
+	context := append([]byte(topicName), 0)
+	var sequence [8]byte
+	binary.BigEndian.PutUint64(sequence[:], keySeq)
+	context = append(context, sequence[:]...)
+	return deriveRootBusinessKey(root, network, accountID, topicGroupKeyDomain, context)
+}
 
 // 可以支持其他类型，但为了方便，默认只支持p2tr地址类型。
 type InternalWallet struct {
@@ -1348,7 +1501,11 @@ func (p *InternalWallet) SignPsbtWithIndex_SatsNet(packet *spsbt.Packet, index u
 }
 
 func (p *InternalWallet) signPsbt_SatsNet(privKey *secp256k1.PrivateKey, packet *spsbt.Packet) error {
-	err := spsbt.InputsReadyToSign(packet)
+	prevOutputFetcher, err := checkedSatsNetPSBTPrevouts(packet)
+	if err != nil {
+		return err
+	}
+	err = spsbt.InputsReadyToSign(packet)
 	if err != nil {
 		return err
 	}
@@ -1361,11 +1518,11 @@ func (p *InternalWallet) signPsbt_SatsNet(privKey *secp256k1.PrivateKey, packet 
 	}
 
 	tx := packet.UnsignedTx
-	prevOutputFetcher := PsbtPrevOutputFetcher_SatsNet(packet)
 	sigHashes := stxscript.NewTxSigHashes(tx, prevOutputFetcher)
 	for i := range tx.TxIn {
 		in := &packet.Inputs[i]
-		if in.WitnessUtxo == nil {
+		prev := prevOutputFetcher.FetchPrevOutput(tx.TxIn[i].PreviousOutPoint)
+		if prev == nil {
 			continue
 		}
 
@@ -1374,10 +1531,10 @@ func (p *InternalWallet) signPsbt_SatsNet(privKey *secp256k1.PrivateKey, packet 
 			continue
 		}
 
-		if bytes.Equal(in.WitnessUtxo.PkScript, p2trPkScript) {
+		if bytes.Equal(prev.PkScript, p2trPkScript) {
 			// 单签，目前只支持p2tr
 			witness, err := stxscript.TaprootWitnessSignature(tx, sigHashes, i,
-				in.WitnessUtxo.Value, in.WitnessUtxo.Assets, in.WitnessUtxo.PkScript,
+				prev.Value, prev.Assets, prev.PkScript,
 				in.SighashType, privKey)
 			if err != nil {
 				Log.Errorf("TaprootWitnessSignature failed. %v", err)
@@ -1401,10 +1558,10 @@ func (p *InternalWallet) signPsbt_SatsNet(privKey *secp256k1.PrivateKey, packet 
 		if err != nil {
 			return err
 		}
-		if bytes.Equal(in.WitnessUtxo.PkScript, mulpkScript) {
+		if bytes.Equal(prev.PkScript, mulpkScript) {
 			// 如何区分是多签脚本和单签脚本？
 
-			sig, err := stxscript.RawTxInWitnessSignature(tx, sigHashes, i, in.WitnessUtxo.Value, in.WitnessUtxo.Assets,
+			sig, err := stxscript.RawTxInWitnessSignature(tx, sigHashes, i, prev.Value, prev.Assets,
 				script, in.SighashType, privKey)
 			if err != nil {
 				return err

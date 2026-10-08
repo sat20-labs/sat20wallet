@@ -109,8 +109,6 @@ const route = useRoute()
 // 名字管理
 const {
   currentName,
-  setCurrentAddress,
-  validateAndCleanName,
 } = useNameManager()
 
 const { selectedTranscendingMode } = storeToRefs(transcendingModeStore)
@@ -390,10 +388,5 @@ onMounted(async () => {
   walletManager.registerCallback(channelCallback)
   satsnetStp.registerCallback(channelCallback)
 
-  // 设置当前地址并校验名字
-  if (address.value) {
-    await setCurrentAddress(address.value)
-    await validateAndCleanName(address.value)
-  }
 })
 </script>

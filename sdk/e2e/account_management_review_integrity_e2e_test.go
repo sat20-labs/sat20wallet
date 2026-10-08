@@ -2,7 +2,10 @@ package e2e
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
@@ -12,8 +15,10 @@ import (
 )
 
 type accountReviewTamperTransport struct {
-	inner wallet.HttpClient
-	mode  string
+	inner     wallet.HttpClient
+	mode      string
+	targetKey string
+	hits      atomic.Int64
 }
 
 func (p *accountReviewTamperTransport) SendGetRequest(u *wallet.URL) ([]byte, error) {
@@ -32,12 +37,31 @@ func (p *accountReviewTamperTransport) SendPostRequest(u *wallet.URL, body []byt
 	return p.tamper(u.Path, raw)
 }
 
-func accountReviewCorruptRecord(record *wire.DKVSRecord) {
+func (p *accountReviewTamperTransport) corrupt(record *wire.DKVSRecord) error {
 	if record == nil || len(record.Signature) == 0 {
-		return
+		return fmt.Errorf("tamper fixture has no signed record")
+	}
+	if p.targetKey != "" && record.Key != p.targetKey {
+		return fmt.Errorf("tamper fixture missed target key")
+	}
+	if err := dkvs.VerifySignature(record); err != nil {
+		return fmt.Errorf("tamper precondition: %w", err)
 	}
 	record.Signature = append([]byte(nil), record.Signature...)
-	record.Signature[0] ^= 0x01
+	record.Signature[len(record.Signature)-1] ^= 1
+	if !errors.Is(dkvs.VerifySignature(record), dkvs.ErrInvalidSignature) {
+		return fmt.Errorf("tamper did not produce the intended signature failure")
+	}
+	p.hits.Add(1)
+	return nil
+}
+func (p *accountReviewTamperTransport) target(records []*wire.DKVSRecord) *wire.DKVSRecord {
+	for _, record := range records {
+		if record != nil && (p.targetKey == "" || record.Key == p.targetKey) {
+			return record
+		}
+	}
+	return nil
 }
 
 func (p *accountReviewTamperTransport) tamper(path string, raw []byte) ([]byte, error) {
@@ -54,7 +78,9 @@ func (p *accountReviewTamperTransport) tamper(path string, raw []byte) ([]byte, 
 		if json.Unmarshal(response["data"], &record) != nil {
 			return raw, nil
 		}
-		accountReviewCorruptRecord(&record)
+		if err := p.corrupt(&record); err != nil {
+			return nil, err
+		}
 		encoded, _ := json.Marshal(&record)
 		response["data"] = encoded
 		etag, _ := json.Marshal(dkvs.RecordHash(&record).String())
@@ -67,7 +93,9 @@ func (p *accountReviewTamperTransport) tamper(path string, raw []byte) ([]byte, 
 		if json.Unmarshal(response["data"], &state) != nil || state.Record == nil {
 			return raw, nil
 		}
-		accountReviewCorruptRecord(state.Record)
+		if err := p.corrupt(state.Record); err != nil {
+			return nil, err
+		}
 		state.ETag = dkvs.RecordHash(state.Record).String()
 		encoded, _ := json.Marshal(&state)
 		response["data"] = encoded
@@ -79,11 +107,17 @@ func (p *accountReviewTamperTransport) tamper(path string, raw []byte) ([]byte, 
 		if json.Unmarshal(response["data"], &result) != nil || len(result.Records) == 0 {
 			return raw, nil
 		}
-		accountReviewCorruptRecord(result.Records[0])
+		target := p.target(result.Records)
+		if target == nil {
+			return raw, nil
+		}
+		if err := p.corrupt(target); err != nil {
+			return nil, err
+		}
 		for index := range result.KeyStates {
-			if result.KeyStates[index].Key == result.Records[0].Key {
-				result.KeyStates[index].ETag = dkvs.RecordHash(result.Records[0]).String()
-				result.KeyStates[index].Record = result.Records[0]
+			if result.KeyStates[index].Key == target.Key {
+				result.KeyStates[index].ETag = dkvs.RecordHash(target).String()
+				result.KeyStates[index].Record = target
 			}
 		}
 		encoded, _ := json.Marshal(&result)
@@ -96,7 +130,13 @@ func (p *accountReviewTamperTransport) tamper(path string, raw []byte) ([]byte, 
 		if json.Unmarshal(response["data"], &page) != nil || len(page.Records) == 0 {
 			return raw, nil
 		}
-		accountReviewCorruptRecord(page.Records[0])
+		target := p.target(page.Records)
+		if target == nil {
+			return raw, nil
+		}
+		if err := p.corrupt(target); err != nil {
+			return nil, err
+		}
 		encoded, _ := json.Marshal(&page)
 		response["data"] = encoded
 	default:
@@ -142,11 +182,22 @@ func TestSDKAccountReviewServerSignatureVerification(t *testing.T) {
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			device, _ := accountReviewDevice(t, network, "")
-			device.SetDKVSHttpClient(&accountReviewTamperTransport{inner: wallet.NewHTTPClient(), mode: scenario.mode})
 			client, err := device.GetDKVSClient()
 			require.NoError(t, err)
-			err = scenario.read(client)
-			require.Error(t, err, "SDK must reject a server record whose author signature was changed even when hashes/ETags are recomputed")
+			require.NoError(t, scenario.read(client), "same endpoint must be healthy before injection")
+			before := device.GetWalletCatalog()
+			transport := &accountReviewTamperTransport{inner: wallet.NewHTTPClient(), mode: scenario.mode, targetKey: stateKey}
+			device.SetDKVSHttpClient(transport)
+			client, err = device.GetDKVSClient()
+			require.NoError(t, err)
+			require.ErrorIs(t, scenario.read(client), dkvs.ErrInvalidSignature)
+			require.Greater(t, transport.hits.Load(), int64(0), "target signature was not modified")
+			require.Equal(t, before, device.GetWalletCatalog())
+			require.False(t, device.GetAccountManagementStatus().Active)
+			device.SetDKVSHttpClient(wallet.NewHTTPClient())
+			client, err = device.GetDKVSClient()
+			require.NoError(t, err)
+			require.NoError(t, scenario.read(client), "same device must recover after fault removal")
 		})
 	}
 }

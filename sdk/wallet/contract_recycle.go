@@ -203,35 +203,56 @@ func (p *RecycleContract) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing NumberOfLastDigits")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("number of last digits exceeds eight bytes")
+	}
 	p.NumberOfLastDigits = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing SpecPrizeMatchCount")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("spec prize match count exceeds eight bytes")
 	}
 	p.SpecPrizeMatchCount = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing FirstPrizeMatchCount")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("first prize match count exceeds eight bytes")
+	}
 	p.FirstPrizeMatchCount = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing SecondPrizeMatchCount")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("second prize match count exceeds eight bytes")
 	}
 	p.SecondPrizeMatchCount = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing ThirdPrizeMatchCount")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("third prize match count exceeds eight bytes")
+	}
 	p.ThirdPrizeMatchCount = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing FourthPrizeMatchCount")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("fourth prize match count exceeds eight bytes")
+	}
 	p.FourthPrizeMatchCount = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing SpecPrize")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("spec prize exceeds eight bytes")
 	}
 	p.SpecPrize = int(tokenizer.ExtractInt64())
 
@@ -2143,7 +2164,11 @@ func (p *RecycleContractRunTime) genRewardInfoFromReq(req *wwire.RemoteSignMoreD
 		if err != nil {
 			return nil, err
 		}
-		anchorData, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
+		bindOutputs, err := p.stp.GetWalletMgr().AnchorOutputsActive()
+		if err != nil {
+			return nil, err
+		}
+		anchorData, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, bindOutputs)
 		if err != nil {
 			Log.Errorf("CheckAnchorPkScript %s failed", tx.TxID())
 			return nil, err

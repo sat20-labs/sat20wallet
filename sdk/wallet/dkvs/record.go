@@ -61,7 +61,7 @@ func SignRecord(wallet common.Wallet, record *swire.DKVSRecord) error {
 	if err != nil {
 		return err
 	}
-	if isAccountScopedNamespace(parsed.Namespace) {
+	if isAccountScopedNamespace(parsed.Namespace) && !dkvsindexer.IsEVMSourceKey(parsed) {
 		return SignAccountRecord(wallet, record)
 	}
 	pubKey, err := WalletPubKey(wallet)
@@ -84,7 +84,7 @@ func NewSignedRecord(wallet common.Wallet, key string, value []byte,
 		return nil, err
 	}
 	var record *swire.DKVSRecord
-	if isAccountScopedNamespace(parsed.Namespace) {
+	if isAccountScopedNamespace(parsed.Namespace) && !dkvsindexer.IsEVMSourceKey(parsed) {
 		record, err = dkvsindexer.NewAccountRecord(key, value, opts)
 	} else {
 		pubKey, pubKeyErr := WalletPubKey(wallet)

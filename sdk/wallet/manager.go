@@ -145,6 +145,7 @@ type Manager struct {
 	accountStorageMu                 sync.Mutex
 	accountStorageAuthorization      *accountStorageAuthorizationSession
 	accountStorageStopped            bool
+	accountAutopayFundingActive      bool
 
 	managedDataMu             sync.RWMutex
 	managedDataProviders      map[string]AccountManagedDataProvider
@@ -217,6 +218,11 @@ func (p *Manager) captureWalletIdentity() (common.Wallet, error) {
 	defer p.mutex.RUnlock()
 	if p.wallet == nil || p.status == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
+	}
+	if p.db != nil {
+		if err := p.checkAccountManagedDataImport(); err != nil {
+			return nil, err
+		}
 	}
 	wallet := p.wallet.Clone()
 	if wallet == nil {
@@ -1173,6 +1179,11 @@ func (p *Manager) GetAssetBalance_SatsNet(address string, name *swire.AssetName)
 }
 
 func (p *Manager) BroadcastTx(tx *wire.MsgTx) (string, error) {
+	if p.db != nil {
+		if err := p.checkAccountManagedDataImport(); err != nil {
+			return "", err
+		}
+	}
 	if ENABLE_TESTING && NOT_SEND_TX {
 		return tx.TxID(), nil
 	}
@@ -1192,6 +1203,11 @@ func (p *Manager) BroadcastTxs(txs []*wire.MsgTx) error {
 }
 
 func (p *Manager) BroadcastTxsContext(ctx context.Context, txs []*wire.MsgTx) error {
+	if p.db != nil {
+		if err := p.checkAccountManagedDataImport(); err != nil {
+			return err
+		}
+	}
 	if ENABLE_TESTING && NOT_SEND_TX {
 		return nil
 	}

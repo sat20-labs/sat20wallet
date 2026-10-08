@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -57,14 +58,16 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 
 	gas := contractcommon.GetGasAssetName()
 	owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, dkvsClientMnemonic, 0))
+	guardianMnemonic := accountSyncMnemonic(t, 241)
+	guardianActor := newDKVSKeyPathActor(t, keyFromMnemonic(t, guardianMnemonic, 0))
 	require.Equal(t, defaults.AutopayDeployer, owner.Address)
 	require.Empty(t, defaults.AutopayRecipient)
 	require.Equal(t, "1", defaults.AutopayMinAmountPerBlock)
 	gasOuts := splitToDKVSKeyPathActors(t, fixture, fixture.gasAnchor, gas,
-		[]int64{300000, 300000, 300000}, []int64{10000, 10000, 10000},
-		[]*dkvsKeyPathActor{owner, owner, owner})
+		[]int64{300000, 300000, 300000, 300000}, []int64{10000, 10000, 10000, 10000},
+		[]*dkvsKeyPathActor{owner, owner, guardianActor, owner})
 	feeOuts := splitToDKVSKeyPathActors(t, fixture, fixture.assetAnchors[defaults.AutopayFeeAssetName],
-		defaults.AutopayFeeAssetName, []int64{5000}, []int64{10000}, []*dkvsKeyPathActor{owner})
+		defaults.AutopayFeeAssetName, []int64{5000, 10000}, []int64{10000, 10000}, []*dkvsKeyPathActor{owner, guardianActor})
 
 	content, err := defaults.AutopayContent()
 	require.NoError(t, err)
@@ -75,8 +78,8 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 		[]dkvsPrevOut{gasOuts[0], feeOuts[0]}, wire.TxOut{Value: 10000, Assets: deployAssets})
 	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{deploy}, 0)
 
-	// This fixture uses the same wallet as account owner and Guardian. The
-	// compact recovery package uses one personal slot plus one mailbox slot.
+	// The owner and Guardian each pay for their own signed records. The compact
+	// recovery package uses one personal slot plus one independent mailbox slot.
 	// The owner is also the deployer: mark the operator share explicitly,
 	// separately from this delegate's per-block business payment.
 	config := &contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "10", GasFundingAmount: "280000"}
@@ -86,10 +89,19 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 		contractcommon.TemplateInvokeAPIConfig, configParam, []dkvsPrevOut{gasOuts[1]},
 		wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)})
 	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{configTx}, 0)
+	guardianFunding := buildDKVSKeyPathTemplateDefaultInvoke(t, guardianActor, contractAddress,
+		[]dkvsPrevOut{feeOuts[1]}, wire.TxOut{Value: 10000, Assets: txAsset(defaults.AutopayFeeAssetName, 10000)})
+	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{guardianFunding}, 0)
+	guardianConfig, err := (&contractcommon.TemplateAutopayConfigInvokeParam{AmountPerBlock: "10"}).Encode()
+	require.NoError(t, err)
+	guardianConfigTx := buildDKVSKeyPathTemplateInvoke(t, guardianActor, contractAddress, 1,
+		contractcommon.TemplateInvokeAPIConfig, guardianConfig, []dkvsPrevOut{gasOuts[2]},
+		wire.TxOut{Value: 9000, Assets: txAsset(gas, 290000)})
+	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{guardianConfigTx}, 0)
 
 	// The next block performs the first per-block storage payment. AUTOPAY
 	// records are accepted only after this payment is visible in contract state.
-	heartbeat := buildDKVSKeyPathAssetTransfer(t, owner, gasOuts[2], gas, 290000, 9000, owner)
+	heartbeat := buildDKVSKeyPathAssetTransfer(t, owner, gasOuts[3], gas, 290000, 9000, owner)
 	fixture.Network.sendManyAndMine(t, []*wire.MsgTx{heartbeat}, 0)
 	state := fetchTemplateAutopayView(t, fixture.Network.Bootstrap, contractAddress.MustEncode())
 	require.Equal(t, templateruntime.AutopayStatusActive, state.Status)
@@ -108,8 +120,17 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	prefix, err := dkvsindexer.AccountPersonalKey(accountID, "account/recovery")
 	require.NoError(t, err)
 
-	guardianPrivate, guardianPublic, err := account.GenerateGuardianKey(nil)
+	guardianManager, guardianLocation := accountReviewDevice(t, fixture.Network, guardianMnemonic)
+	require.NoError(t, guardianManager.InitializeAccountManagement(accountReviewPassword))
+	guardianIdentity, err := guardianManager.GetOrCreateAccountGuardianIdentity(accountReviewPassword)
 	require.NoError(t, err)
+	guardianPublic, err := base64.RawURLEncoding.DecodeString(guardianIdentity.PublicKey)
+	require.NoError(t, err)
+	guardianPrivate, err := guardianManager.LoadAccountGuardianPrivateKey(accountReviewPassword)
+	require.NoError(t, err)
+	defer clearBytes(guardianPrivate)
+	guardianID := guardianIdentity.MailboxID
+	require.NotEqual(t, accountID, guardianID)
 	questions := []account.QuestionAnswer{
 		{Question: account.KnowledgeQuestion{ID: "book", Prompt: "指定版本书籍第十页最后十个字", IgnorePunctuation: true}, Answer: "月光落在安静的旧桥上", Confirmation: "月光落在安静的旧桥上"},
 		{Question: account.KnowledgeQuestion{ID: "note", Prompt: "私人纸条中的指定句子", IgnorePunctuation: true}, Answer: "yellow bicycle beside the winter river", Confirmation: "yellow bicycle beside the winter river"},
@@ -182,12 +203,14 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	manager := account.NewManager(repository)
 	pkg, err := walletManager.CreateAccountRecoveryPackage(account.CreateOptions{AccountID: accountID, Backup: backup,
-		RecoveryMode: account.RecoveryMode2Of3, Questions: questions, GuardianMailboxID: accountID,
+		RecoveryMode: account.RecoveryMode2Of3, Questions: questions, GuardianMailboxID: guardianID,
 		GuardianPublicKey: guardianPublic})
 	require.NoError(t, err)
 	require.NoError(t, manager.Publish(context.Background(), *pkg))
-	require.NoError(t, walletManager.PutGuardianCapsuleForStorage(
-		authorization, accountID, *pkg.GuardianCapsule,
+	guardianAuthorization, err := guardianManager.ReusePaidAccountStorage(100)
+	require.NoError(t, err)
+	require.NoError(t, guardianManager.PutGuardianCapsuleForStorage(
+		*guardianAuthorization, guardianID, *pkg.GuardianCapsule,
 	))
 
 	packageBytes, err := account.EncodeRecoveryPackageStorage(*pkg)
@@ -197,7 +220,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	require.NoError(t, err)
 	guardianBytes, err := account.EncodeGuardianCapsuleStorage(*pkg.GuardianCapsule)
 	require.NoError(t, err)
-	guardianKey, err := dkvsindexer.MailShareKey(accountID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
+	guardianKey, err := dkvsindexer.MailShareKey(guardianID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
 	require.NoError(t, err)
 	// Canonical recovery package data relays normally. The guardian share is
 	// AccountBound mailbox data and remains only on the selected CoreNode even
@@ -214,7 +237,7 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 		Type: dkvsindexer.SubscriptionPrefix, Target: prefix,
 	}))
 	require.NoError(t, subscribeDKVSNodeInternal(t, fixture.Network.Miner, dkvsindexer.Subscription{
-		Type: dkvsindexer.SubscriptionMailbox, Target: "/mail/" + accountID,
+		Type: dkvsindexer.SubscriptionMailbox, Target: "/mail/" + guardianID,
 	}))
 	require.NoError(t, connectNode(fixture.Network.Miner, fixture.Network.Core))
 	requireDKVSValue(t, fixture.Network.Miner, packageKey, packageBytes)
@@ -224,11 +247,11 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 	loaded, err := walletManager.LoadAccountRecoveryPackage(coreLocation, pkg.Envelope.Locator)
 	t.Logf("account-e2e: load_recovery_package_error=%v", err)
 	require.NoError(t, err)
-	guardianValue, err := walletManager.LoadAccountGuardianCapsule(
-		coreLocation, accountID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID,
+	guardianValue, err := guardianManager.LoadAccountGuardianCapsule(
+		guardianLocation, guardianID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID,
 	)
 	require.NoError(t, err)
-	guardianKey, err = dkvsindexer.MailShareKey(accountID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
+	guardianKey, err = dkvsindexer.MailShareKey(guardianID, pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
 	require.NoError(t, err)
 	guardianRecord, err := coreClient.GetRecord(guardianKey)
 	require.NoError(t, err)
@@ -258,13 +281,15 @@ func TestRealSatoshiNetAccountManagementAutopaySync(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, status.Required)
 		require.True(t, status.Ready)
-		funding, err := walletManager.FundAccountAutopay()
+		funding, err := walletManager.FundAccountAutopay(*status)
 		require.NoError(t, err)
 		require.True(t, funding.Reused)
 		require.Empty(t, funding.TransactionID)
 		options, err := walletManager.GetAccountStorageOptions()
 		require.NoError(t, err)
-		for _, option := range options { require.NotEqual(t, wallet.AccountStorageTemporary, option.Mode) }
+		for _, option := range options {
+			require.NotEqual(t, wallet.AccountStorageTemporary, option.Mode)
+		}
 		_, err = walletManager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
 		require.ErrorIs(t, err, wallet.ErrAccountStorageModeDowngrade)
 	})

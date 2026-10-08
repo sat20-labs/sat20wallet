@@ -8,6 +8,7 @@ import (
 	"time"
 
 	db "github.com/sat20-labs/indexer/common"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 const (
@@ -55,6 +56,9 @@ type OperationLogRecord struct {
 	Parameters      map[string]string   `json:"parameters,omitempty"`
 	Result          map[string]string   `json:"result,omitempty"`
 	History         []OperationLogEvent `json:"history"`
+	// Only AUTOPAY uses this internal continuation payload. Gob persists it;
+	// public operation-log JSON never exposes signed transaction bytes.
+	PreparedTransaction []byte `json:"-"`
 }
 
 type OperationLogCreate struct {
@@ -104,6 +108,7 @@ func cloneOperationLogRecord(src *OperationLogRecord) *OperationLogRecord {
 		return nil
 	}
 	clone := *src
+	clone.PreparedTransaction = append([]byte(nil), src.PreparedTransaction...)
 	clone.Parameters = cloneOperationLogStringMap(src.Parameters)
 	clone.Result = cloneOperationLogStringMap(src.Result)
 	clone.History = make([]OperationLogEvent, len(src.History))
@@ -232,6 +237,29 @@ func (m *OperationLogManager) Update(id string, update OperationLogUpdate) (*Ope
 	return cloneOperationLogRecord(record), nil
 }
 
+func (m *OperationLogManager) prepareAccountAutopayTransaction(id, txid string, raw []byte) error {
+	operationLogMu.Lock()
+	defer operationLogMu.Unlock()
+	record, err := m.getLocked(id)
+	if err != nil {
+		return err
+	}
+	if record == nil || record.Action != "account_autopay_fund" || record.TxID != "" || record.Status != OperationLogRunning {
+		return fmt.Errorf("AUTOPAY funding intent is not available for preparation")
+	}
+	record.TxID = txid
+	record.PreparedTransaction = append([]byte(nil), raw...)
+	defaults := dkvsindexer.NetworkDefaultsForParams(GetChainParam_SatsNet())
+	if _, err := accountAutopaySignedTransaction(record, defaults, record.Parameters["payer"]); err != nil {
+		return err
+	}
+	record.Status = OperationLogPending
+	record.Summary = "AUTOPAY 充值交易已签名，等待提交或合约确认"
+	record.UpdatedAt = nextOperationLogTime(record.UpdatedAt)
+	record.History = append(record.History, OperationLogEvent{Timestamp: record.UpdatedAt, Status: record.Status, Message: record.Summary})
+	return m.saveLocked(record)
+}
+
 func (m *OperationLogManager) BindReservation(id, reservationType string, reservationID int64) error {
 	if reservationID == 0 || strings.TrimSpace(reservationType) == "" {
 		return fmt.Errorf("invalid reservation relation")
@@ -326,6 +354,9 @@ func (m *OperationLogManager) DeleteIdentity(walletID int64, accountIndex uint32
 			return nil
 		}
 		if record.WalletID == walletID && record.AccountIndex == accountIndex {
+			if accountAutopayLogPending(&record) {
+				return fmt.Errorf("AUTOPAY 充值尚待确认，不能清空操作日志")
+			}
 			ids[record.ID] = struct{}{}
 			recordKeys = append(recordKeys, append([]byte(nil), key...))
 		}
@@ -361,6 +392,18 @@ func (m *OperationLogManager) DeleteAll() error {
 	}
 	operationLogMu.Lock()
 	defer operationLogMu.Unlock()
+	if err := m.db.BatchRead(operationLogRecordPrefix(), false, func(_, value []byte) error {
+		var record OperationLogRecord
+		if err := DecodeFromBytes(value, &record); err != nil {
+			return err
+		}
+		if accountAutopayLogPending(&record) {
+			return fmt.Errorf("AUTOPAY 充值尚待确认，不能清空操作日志")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	if _, err := DeleteAllKeysWithPrefix(m.db, operationLogRecordPrefix()); err != nil {
 		return err
 	}

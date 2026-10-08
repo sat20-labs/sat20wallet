@@ -62,13 +62,13 @@ func accountReviewConfig(t *testing.T, network *realSatoshiNet) (*sdkcommon.Conf
 }
 
 type accountReviewFixture struct {
-	network *realSatoshiNet
-	manager *wallet.Manager
-	location wallet.AccountIndexerLocation
+	network       *realSatoshiNet
+	manager       *wallet.Manager
+	location      wallet.AccountIndexerLocation
 	authorization *wallet.AccountStorageAuthorization
-	pkg *account.RecoveryPackage
-	secret []byte
-	rootMnemonic string
+	pkg           *account.RecoveryPackage
+	secret        []byte
+	rootMnemonic  string
 }
 
 func prepareAccountReview(t *testing.T, network *realSatoshiNet, bound bool) *accountReviewFixture {
@@ -79,18 +79,25 @@ func prepareAccountReview(t *testing.T, network *realSatoshiNet, bound bool) *ac
 func prepareAccountReviewWithMnemonic(t *testing.T, network *realSatoshiNet, mnemonic string, bound bool) *accountReviewFixture {
 	t.Helper()
 	manager, location := accountReviewDevice(t, network, mnemonic)
+	if mnemonic == "" {
+		_, createdMnemonic, err := manager.CreateWallet(accountReviewPassword)
+		require.NoError(t, err)
+		mnemonic = createdMnemonic
+	}
 	require.NoError(t, manager.InitializeAccountManagement(accountReviewPassword))
 	root := manager.GetWalletCatalog()[0]
 	require.NoError(t, manager.UpdateWalletName(root.ID, "Review Root"))
 	require.NoError(t, manager.EnsureAccount(root.ID, 2, "Savings", "did:review:2"))
-	if bound { require.NoError(t, manager.BindAccountToCurrentCoreNode()) }
+	if bound {
+		require.NoError(t, manager.BindAccountToCurrentCoreNode())
+	}
 	auth, err := manager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
 	require.NoError(t, err)
 	backup, err := manager.ExportAccountBackupForPWA(accountReviewPassword, nil)
 	require.NoError(t, err)
 	pkg, err := manager.CreateAccountRecoveryPackage(account.CreateOptions{
 		AccountID: manager.GetAccountManagementStatus().AccountID,
-		Backup: backup, RecoveryMode: account.RecoveryMode2Of2, Questions: e2eKnowledgeQuestions(),
+		Backup:    backup, RecoveryMode: account.RecoveryMode2Of2, Questions: e2eKnowledgeQuestions(),
 	})
 	require.NoError(t, err)
 	share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, e2eKnowledgeAnswers())
@@ -106,10 +113,14 @@ func (f *accountReviewFixture) activate(t *testing.T) {
 	require.NoError(t, f.manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery,
 		func(auth *wallet.AccountStorageAuthorization) error {
 			repository, err := f.manager.NewAccountRepositoryForStorage(*auth)
-			if err != nil { return err }
-			if err := account.NewManager(repository).Publish(context.Background(), *f.pkg); err != nil { return err }
+			if err != nil {
+				return err
+			}
+			if err := account.NewManager(repository).Publish(context.Background(), *f.pkg); err != nil {
+				return err
+			}
 			return f.manager.ActivateAccountManagement(f.secret, accountReviewPassword, *auth,
-				f.pkg.Envelope.Locator, "account://" + f.pkg.Envelope.Locator.PackageID)
+				f.pkg.Envelope.Locator, "account://"+f.pkg.Envelope.Locator.PackageID)
 		}))
 }
 
@@ -177,7 +188,9 @@ func TestSDKAccountReviewLifecycle(t *testing.T) {
 
 	t.Run("NoOpSyncDoesNotCreateRevision", func(t *testing.T) {
 		before := f.manager.GetAccountManagementStatus()
-		for i := 0; i < 3; i++ { require.NoError(t, f.manager.SyncAccountManagementState(context.Background())) }
+		for i := 0; i < 3; i++ {
+			require.NoError(t, f.manager.SyncAccountManagementState(context.Background()))
+		}
 		after := f.manager.GetAccountManagementStatus()
 		require.Equal(t, before.StateSeq, after.StateSeq)
 		require.Equal(t, before.ManagedDataRevision, after.ManagedDataRevision)
@@ -219,15 +232,23 @@ func TestSDKAccountReviewRestoreValidation(t *testing.T) {
 	f.activate(t)
 	_, original := f.recover(t)
 	tests := []struct {
-		name string
+		name   string
 		mutate func(*wallet.RecoveredAccountManagementState, []byte, *account.Locator)
 	}{
 		{"WrongSecret", func(_ *wallet.RecoveredAccountManagementState, secret []byte, _ *account.Locator) { secret[0] ^= 1 }},
-		{"CorruptCiphertext", func(v *wallet.RecoveredAccountManagementState, _ []byte, _ *account.Locator) { v.Envelope[len(v.Envelope)-1] ^= 1 }},
-		{"PlaintextNotMatchingCiphertext", func(v *wallet.RecoveredAccountManagementState, _ []byte, _ *account.Locator) { v.State.Wallets[0].Name = "not-authenticated" }},
-		{"DifferentAccountLocator", func(_ *wallet.RecoveredAccountManagementState, _ []byte, locator *account.Locator) { locator.AccountID = strings.Repeat("0", 64) }},
+		{"CorruptCiphertext", func(v *wallet.RecoveredAccountManagementState, _ []byte, _ *account.Locator) {
+			v.Envelope[len(v.Envelope)-1] ^= 1
+		}},
+		{"PlaintextNotMatchingCiphertext", func(v *wallet.RecoveredAccountManagementState, _ []byte, _ *account.Locator) {
+			v.State.Wallets[0].Name = "not-authenticated"
+		}},
+		{"DifferentAccountLocator", func(_ *wallet.RecoveredAccountManagementState, _ []byte, locator *account.Locator) {
+			locator.AccountID = strings.Repeat("0", 64)
+		}},
 		{"MismatchedRevision", func(v *wallet.RecoveredAccountManagementState, _ []byte, _ *account.Locator) { v.Seq++ }},
-		{"CorruptManagedDataCiphertext", func(v *wallet.RecoveredAccountManagementState, _ []byte, _ *account.Locator) { v.ManagedDataEnvelope[len(v.ManagedDataEnvelope)-1] ^= 1 }},
+		{"CorruptManagedDataCiphertext", func(v *wallet.RecoveredAccountManagementState, _ []byte, _ *account.Locator) {
+			v.ManagedDataEnvelope[len(v.ManagedDataEnvelope)-1] ^= 1
+		}},
 	}
 	for _, scenario := range tests {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -248,7 +269,6 @@ func TestSDKAccountReviewRestoreValidation(t *testing.T) {
 	}
 }
 
-
 func accountReviewLogDKVS(t *testing.T, node *testHarness) {
 	t.Helper()
 	if raw, err := os.ReadFile(node.LogFile()); err == nil {
@@ -260,7 +280,9 @@ func accountReviewLogDKVS(t *testing.T, node *testHarness) {
 				selected = append(selected, line)
 			}
 		}
-		if len(selected) > 80 { selected = selected[len(selected)-80:] }
+		if len(selected) > 80 {
+			selected = selected[len(selected)-80:]
+		}
 		t.Logf("account-review: %s DKVS log tail:\n%s", node.role, strings.Join(selected, "\n"))
 	}
 }
@@ -274,7 +296,9 @@ func accountReviewRequireBindingPropagation(t *testing.T, node *testHarness, key
 		lastErr = err
 		return err == nil && record != nil && string(record.Value) == string(expected)
 	}, 15*time.Second, 200*time.Millisecond, "binding did not propagate to %s: %v", node.role, lastErr)
-	if !ok { accountReviewLogDKVS(t, node) }
+	if !ok {
+		accountReviewLogDKVS(t, node)
+	}
 }
 
 func TestSDKAccountReviewActivationWithoutPrebinding(t *testing.T) {
@@ -291,7 +315,7 @@ func TestSDKAccountReviewActivationWithoutPrebinding(t *testing.T) {
 		err = f.manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery,
 			func(auth *wallet.AccountStorageAuthorization) error {
 				activationErr = f.manager.ActivateAccountManagement(f.secret, accountReviewPassword, *auth,
-					f.pkg.Envelope.Locator, "account://" + f.pkg.Envelope.Locator.PackageID)
+					f.pkg.Envelope.Locator, "account://"+f.pkg.Envelope.Locator.PackageID)
 				return activationErr
 			})
 	}, "activation must bind before generic KV writes, and must not panic on admission rejection")

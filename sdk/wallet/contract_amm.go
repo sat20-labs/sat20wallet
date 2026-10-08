@@ -208,6 +208,9 @@ func (p *AmmContract) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing sat value")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("sat value exceeds eight bytes")
+	}
 	p.SatValue = tokenizer.ExtractInt64()
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -219,6 +222,9 @@ func (p *AmmContract) Decode(data []byte) error {
 		// 老版本没有该字段
 		p.SettlePeriod = DEFAULT_SETTLEMENT_PERIOD
 	} else {
+		if len(tokenizer.Data()) > 8 {
+			return fmt.Errorf("settle period exceeds eight bytes")
+		}
 		p.SettlePeriod = int(tokenizer.ExtractInt64())
 	}
 
@@ -255,6 +261,9 @@ func (p *DepositInvokeParam) Decode(data []byte) error {
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
 	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 
@@ -306,6 +315,9 @@ func (p *WithdrawInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
+	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -322,6 +334,9 @@ func (p *WithdrawInvokeParam) Decode(data []byte) error {
 		Log.Infof("missing fee rate")
 		p.FeeRate = 0
 	} else {
+		if len(tokenizer.Data()) > 8 {
+			return fmt.Errorf("fee rate exceeds eight bytes")
+		}
 		p.FeeRate = tokenizer.ExtractInt64()
 	}
 
@@ -366,6 +381,9 @@ func (p *AddLiqInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
+	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -380,6 +398,9 @@ func (p *AddLiqInvokeParam) Decode(data []byte) error {
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing sats value")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("value exceeds eight bytes")
 	}
 	p.Value = (tokenizer.ExtractInt64())
 
@@ -413,6 +434,9 @@ func (p *RemoveLiqInvokeParam) Decode(data []byte) error {
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
 	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 
@@ -469,6 +493,9 @@ func (p *StakeInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
+	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -483,6 +510,9 @@ func (p *StakeInvokeParam) Decode(data []byte) error {
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing sats value")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("value exceeds eight bytes")
 	}
 	p.Value = (tokenizer.ExtractInt64())
 
@@ -520,6 +550,9 @@ func (p *UnstakeInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
+	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -534,6 +567,9 @@ func (p *UnstakeInvokeParam) Decode(data []byte) error {
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing sats value")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("value exceeds eight bytes")
 	}
 	p.Value = (tokenizer.ExtractInt64())
 
@@ -561,6 +597,9 @@ func (p *ProfitInvokeParam) Decode(data []byte) error {
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
 	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 

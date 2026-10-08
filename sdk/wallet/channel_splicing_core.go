@@ -15,7 +15,7 @@ import (
 )
 
 func CreateSplicingInAnchorTx(resv *SplicingReservation, toDAOPkScript []byte,
-	tickerInfo *indexer.TickerInfo, memo []byte) *swire.MsgTx {
+	tickerInfo *indexer.TickerInfo, memo []byte, bindOutputs bool) *swire.MsgTx {
 	channel := resv.Channel
 	splicingOutput := resv.SplicingOutput
 	assetName := resv.AssetName
@@ -56,10 +56,6 @@ func CreateSplicingInAnchorTx(resv *SplicingReservation, toDAOPkScript []byte,
 		Log.Errorf("StandardAnchorScript failed, %v", err)
 		return nil
 	}
-	if _, _, err = CheckAnchorPkScript(anchorScript); err != nil {
-		Log.Errorf("CheckAnchorPkScript failed, %v", err)
-		return nil
-	}
 
 	tx := swire.NewMsgTx(swire.TxVersion)
 	tx.AddTxIn(&swire.TxIn{
@@ -95,6 +91,12 @@ func CreateSplicingInAnchorTx(resv *SplicingReservation, toDAOPkScript []byte,
 		tx.AddTxOut(swire.NewTxOut(0, nil, memo))
 	}
 
+	if resv.InvoiceSig != nil {
+		if _, _, err := CheckAnchorPkScript(anchorScript, tx.TxOut, bindOutputs); err != nil {
+			Log.Errorf("CheckAnchorPkScript failed, %v", err)
+			return nil
+		}
+	}
 	PrintJsonTx_SatsNet(tx, "splicing-in anchor")
 	return tx
 }
@@ -564,14 +566,15 @@ func (p *Manager) FunderProcessAcceptSplicingIn(resv *SplicingReservation) error
 		resv.SplicingOutput = output
 	}
 
-	value := int64(0)
-	if IsPlainAsset(resv.AssetName) {
-		value = resv.SplicingOutput.Value()
-	} else if IsBindingSat(resv.AssetName) {
-		value = indexer.GetBindingSatNum(resv.Amt, uint32(resv.AssetName.N))
+	bindOutputs, err := p.AnchorOutputsActive()
+	if err != nil {
+		return err
 	}
-	resv.Invoice, err = sindexer.StandardAnchorScript(resv.SplicingOutput.OutPointStr,
-		resv.Channel.RedeemScript, value, resv.SplicingOutput.Assets)
+	anchorTx := CreateSplicingInAnchorTx(resv, p.GetDAOPkScript(resv.Channel), resv.TickerInfo, resv.Memo, bindOutputs)
+	if anchorTx == nil {
+		return fmt.Errorf("can't generate anchor TX")
+	}
+	resv.Invoice, err = sindexer.AnchorInvoice(anchorTx, bindOutputs)
 	if err != nil {
 		return err
 	}
@@ -584,10 +587,6 @@ func (p *Manager) FunderProcessAcceptSplicingIn(resv *SplicingReservation) error
 			return err
 		}
 	} else {
-		anchorTx := CreateSplicingInAnchorTx(resv, p.GetDAOPkScript(resv.Channel), resv.TickerInfo, resv.Memo)
-		if anchorTx == nil {
-			return fmt.Errorf("can't generate anchor TX")
-		}
 		resv.AnchorTx = anchorTx
 		localOutput := sindexer.GenerateTxOutput(anchorTx, 0)
 		if resv.NeedSendSplicingTx {

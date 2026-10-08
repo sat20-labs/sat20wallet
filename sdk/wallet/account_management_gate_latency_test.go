@@ -129,6 +129,69 @@ func TestAccountRemoteCommitRejectsChangedManagedDataGeneration(t *testing.T) {
 	}
 }
 
+// PWA screen locking leaves the SDK runtime running. Reopening that screen
+// must not invalidate work fetched while password authentication was pending.
+func TestAccountRemoteCommitSurvivesPWAReauthentication(t *testing.T) {
+	for _, restoreSession := range []bool{false, true} {
+		name := "running-session"
+		if restoreSession {
+			name = "cleared-session"
+		}
+		t.Run(name, func(t *testing.T) {
+			manager, _, secret := buildRootWrapperSource(t)
+			defer zeroBytes(secret)
+			snapshot, err := manager.captureAccountManagementSyncSnapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer zeroBytes(snapshot.secret)
+			state, err := account.OpenManagedState(snapshot.secret, snapshot.profile.AccountID, snapshot.profile.StateEnvelope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, _, err := buildAccountManagedStateTarget(state, snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			envelope, err := account.SealManagedState(snapshot.secret, snapshot.profile.AccountID, target, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			commit, err := manager.prepareAccountManagedCommitForSync(target, snapshot, envelope, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manager.UnlockWallet("incorrect-password"); err == nil {
+				t.Fatal("incorrect password authenticated")
+			}
+			if !manager.accountSyncSnapshotCurrentLocked(snapshot) {
+				t.Fatal("failed authentication invalidated the running session")
+			}
+			wallet := manager.wallet
+			if restoreSession {
+				manager.clearAccountManagementSession()
+			}
+			if _, err := manager.UnlockWallet("password"); err != nil {
+				t.Fatal(err)
+			}
+			if manager.wallet != wallet {
+				t.Fatal("screen reauthentication replaced the wallet runtime")
+			}
+			err = manager.withAccountLocalState(false, func() error {
+				_, _, err := manager.applyAccountManagedCommitForSync(commit, snapshot)
+				return err
+			})
+			if restoreSession {
+				if !errors.Is(err, errAccountSnapshotChanged) {
+					t.Fatalf("cleared session accepted an old remote commit: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("PWA screen reauthentication rejected a valid remote commit: %v", err)
+			}
+		})
+	}
+}
+
 func (h *blockedAccountConfigHTTP) DKVSClientConfig() (*dkvsindexer.ClientConfig, error) {
 	h.once.Do(func() { close(h.started) })
 	<-h.release
@@ -170,6 +233,40 @@ func TestAccountActiveMailboxReadRejectsChangedCatalog(t *testing.T) {
 	case err := <-done:
 		if !errors.Is(err, errAccountSnapshotChanged) {
 			t.Fatalf("changed mailbox catalog: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("mailbox import did not finish")
+	}
+}
+
+func TestAccountActiveMailboxReadSurvivesPWAReauthentication(t *testing.T) {
+	manager, _, secret := buildRootWrapperSource(t)
+	defer zeroBytes(secret)
+	remote := &blockedAccountConfigHTTP{rgb11MemoryDKVSHTTP: newRGB11MemoryDKVSHTTP(),
+		started: make(chan struct{}), release: make(chan struct{}), continueAfterRelease: true}
+	var release sync.Once
+	defer release.Do(func() { close(remote.release) })
+	manager.http = remote
+	manager.dkvs.mu.Lock()
+	manager.dkvs.clients = make(map[string]*SatsNetDKVSClient)
+	manager.dkvs.mu.Unlock()
+	manager.accountProfile.RecoveryConfigured = true
+	done := make(chan error, 1)
+	go func() { done <- manager.importAccountManagedActiveDataForSync(false) }()
+	select {
+	case <-remote.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("mailbox read did not reach network")
+	}
+	assertAccountNetworkReleasedScopeLocks(t, manager)
+	if _, err := manager.UnlockWallet("password"); err != nil {
+		t.Fatal(err)
+	}
+	release.Do(func() { close(remote.release) })
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PWA screen reauthentication interrupted mailbox sync: %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("mailbox import did not finish")

@@ -303,37 +303,44 @@ func (p *Manager) importAccountManagedData(catalog AccountManagedDataCatalog,
 	return nil
 }
 
-func (p *Manager) markAccountManagedDataDirty(_ string) {
-	p.markAccountManagedDataDirtyMode(true)
+func (p *Manager) markAccountManagedDataDirty(_ string) error {
+	return p.markAccountManagedDataDirtyMode(true)
 }
 
 // markAccountManagedDataDirtyDeferred persists the operation marker without
 // starting a PUT. Complex application operations aggregate all of their local
 // mutations and publish one stable snapshot at the operation boundary.
-func (p *Manager) markAccountManagedDataDirtyDeferred(_ string) {
-	p.markAccountManagedDataDirtyMode(false)
+func (p *Manager) markAccountManagedDataDirtyDeferred(_ string) error {
+	return p.markAccountManagedDataDirtyMode(false)
 }
 
-func (p *Manager) markAccountManagedDataDirtyMode(schedule bool) {
+func (p *Manager) markAccountManagedDataDirtyMode(schedule bool) error {
 	if p == nil {
-		return
+		return nil
 	}
-	p.mutex.Lock()
-	p.bumpAccountGenerationLocked()
-	if p.accountProfile != nil {
-		p.accountProfile.ManagedDataDirty = true
-		p.accountProfile.ManagedDataGeneration++
-		if p.accountProfile.ManagedDataGeneration == 0 {
-			p.accountProfile.ManagedDataGeneration = 1
+	err := func() error {
+		p.mutex.Lock()
+		defer p.mutex.Unlock()
+		p.bumpAccountGenerationLocked()
+		if p.accountProfile != nil {
+			p.accountProfile.ManagedDataDirty = true
+			p.accountProfile.ManagedDataGeneration++
+			if p.accountProfile.ManagedDataGeneration == 0 {
+				p.accountProfile.ManagedDataGeneration = 1
+			}
+			if err := p.saveAccountManagementProfileLocked(); err != nil {
+				return fmt.Errorf("persist account-managed operation marker: %w", err)
+			}
 		}
-		if err := p.saveAccountManagementProfileLocked(); err != nil {
-			panic(fmt.Errorf("persist account-managed operation marker: %w", err))
-		}
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
-	p.mutex.Unlock()
 	if schedule {
 		p.scheduleAccountManagedStateSync()
 	}
+	return nil
 }
 
 func (p *Manager) accountManagedDataBlobKey(root common.Wallet) (string, error) {

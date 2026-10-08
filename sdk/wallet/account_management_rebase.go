@@ -43,6 +43,18 @@ func (p *Manager) applyAccountManagedRebaseForSync(
 	commit.profile.ManagedDataEnvelope = append([]byte(nil), remoteData.Envelope...)
 	commit.profile.ManagedDataDirty = true
 	commit.pendingRemains = len(commit.profile.Pending) != 0
+	marker := accountManagedImportMarkerForProfile(accountManagedImportOriginRemoteApply,
+		accountManagedImportStageLocalCommit, &commit.profile)
+	marker.ConfirmedStateHash = commit.profile.StateHash
+	marker.ReplayStateEnvelope, err = account.SealManagedState(snapshot.secret,
+		snapshot.profile.AccountID, merged, nil)
+	if err != nil {
+		return err
+	}
+	marker.ReplayDataEnvelope = append([]byte(nil), mergedData.Envelope...)
+	marker.TargetStateRevision, marker.TargetStateHash = merged.Revision, accountStateDigest(marker.ReplayStateEnvelope)
+	marker.TargetDataRevision, marker.TargetDataHash = merged.DataRevision, merged.DataHash
+	commit.importMarker = &marker
 	commit.profileBytes, err = EncodeToBytes(&commit.profile)
 	if err != nil {
 		return err
@@ -62,10 +74,7 @@ func (p *Manager) applyAccountManagedRebaseForSync(
 		if err := p.importAccountManagedDataSnapshot(mergedData); err != nil {
 			return err
 		}
-		if err := p.updateAccountManagedDataImportStage(accountManagedImportStageMarkerDelete); err != nil {
-			return err
-		}
-		if err := p.db.Delete(accountManagedDataImportKey()); err != nil {
+		if err := p.finishAccountManagedRemoteImport(); err != nil {
 			return err
 		}
 		p.markDKVSStateDirty()

@@ -30,6 +30,13 @@ func (p *Manager) isL1SendInputProtected(outpoint string) bool {
 // Explicit inputs may legitimately carry a non-RGB reservation (for example
 // a channel sweep), but may never be used to inscribe over RGB state.
 func (p *Manager) isL1RGBInputProtected(outpoint string) bool {
+	// Until every provider is restored, absence of a projection is not evidence
+	// that an input is plain BTC. Protect all inputs, including explicit ones.
+	if p.db != nil {
+		if err := p.checkAccountManagedDataImport(); err != nil {
+			return true
+		}
+	}
 	if p.utxoLockerL1.IsLocked(outpoint) {
 		lock := p.utxoLockerL1.GetLockedUtxoList()[outpoint]
 		if lock != nil && (lock.Reason == rgb11wallet.LockReasonRGB || lock.Reason == rgb11wallet.LockReasonPending) {

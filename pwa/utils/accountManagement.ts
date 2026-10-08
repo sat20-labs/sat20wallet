@@ -1,4 +1,5 @@
 import { beginVersionDispatch } from '@/utils/pwaVersionPolicy'
+import { walletRequestSessionGuard } from '@/lib/walletSession'
 import { beginAccountManagementOperation, finishPwaOperation } from '@/utils/accountManagementOperationLog'
 import { noteWasmOperation } from '@/utils/wasmRuntimeDiagnostics'
 
@@ -85,6 +86,10 @@ export interface AccountManagementStatus {
 }
 
 export interface AccountAutopayFundingStatus {
+  funding_transaction_id?: string
+  funding_error?: string
+  funding_pending?: boolean
+  funding_can_resume?: boolean
   required: boolean
   ready: boolean
   needs_funding: boolean
@@ -99,6 +104,7 @@ export interface AccountAutopayFundingStatus {
   amount_per_block?: string
   balance?: string
   required_amount_per_block?: string
+  effective_amount_per_block?: string
   recommended_funding_amount?: string
   recommended_funding_blocks?: number
 }
@@ -111,6 +117,11 @@ export interface AccountAutopayFundingResult {
   funding_amount: string
   funding_blocks: number
   reused: boolean
+  pending?: boolean
+}
+
+export class AccountAutopayPendingError extends Error {
+  constructor(message: string, public data: { transaction_id: string; pending: true }) { super(message) }
 }
 
 type SDKResponse<T> = { code: number; msg: string; data?: T }
@@ -118,6 +129,7 @@ type SDKResponse<T> = { code: number; msg: string; data?: T }
 class AccountManagementSDK {
   private async request<T>(methodName: string, payload: unknown = {}): Promise<T> {
     const diagnosticMethod = `account.${methodName}`
+    const checkSession = walletRequestSessionGuard(diagnosticMethod)
     noteWasmOperation(diagnosticMethod, 'request-start')
     const api = (globalThis as any).sat20account_wasm
     const method = api?.[methodName]
@@ -130,9 +142,17 @@ class AccountManagementSDK {
     try {
     let response: SDKResponse<T>
     try {
+      checkSession()
       finishVersion = beginVersionDispatch(methodName, true)
       noteWasmOperation(diagnosticMethod, 'dispatch')
       response = await method(JSON.stringify(payload))
+      try {
+        checkSession()
+      } catch (error) {
+        const sessionId = (response?.data as any)?.session_id
+        if (sessionId) await this.abortSession(sessionId).catch(() => undefined)
+        throw error
+      }
       noteWasmOperation(diagnosticMethod, 'returned')
     } catch (error: any) {
       noteWasmOperation(diagnosticMethod, 'failed')
@@ -142,11 +162,15 @@ class AccountManagementSDK {
     }
     if (!response || response.code !== 0) {
       noteWasmOperation(diagnosticMethod, 'failed')
-      const responseError = new Error(response?.msg || '账户管理调用失败')
+      const pending = response?.data as any
+      const responseError = pending?.pending && pending?.transaction_id
+        ? new AccountAutopayPendingError(response.msg, pending)
+        : new Error(response?.msg || '账户管理调用失败')
       await finishPwaOperation(operation, responseError)
       throw responseError
     }
     await finishPwaOperation(operation, null, response.data)
+    checkSession()
     noteWasmOperation(diagnosticMethod, 'finished')
     return response.data as T
     } finally { finishVersion?.() }
@@ -168,8 +192,8 @@ class AccountManagementSDK {
     return this.request<AccountAutopayFundingStatus>('autopayStatus')
   }
 
-  fundAutopay() {
-    return this.request<AccountAutopayFundingResult>('fundAutopay')
+  fundAutopay(confirmed: AccountAutopayFundingStatus) {
+    return this.request<AccountAutopayFundingResult>('fundAutopay', confirmed)
   }
 
   confirmStorage(optionId: string, recordCount?: number) {

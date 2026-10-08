@@ -92,14 +92,6 @@ func topicCurrentDBKey(accountID, topicName string) []byte {
 	return []byte(GetDBKeyPrefix() + topicCryptoDBPrefix + accountID + "/" + topicName + "/current")
 }
 
-func generateTopicKey() ([]byte, error) {
-	key := make([]byte, topicKeySize)
-	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		return nil, err
-	}
-	return key, nil
-}
-
 func (m *TopicCryptoManager) StoreTopicKey(topicName string, keySeq uint64, topicKey []byte) error {
 	if m == nil || m.manager == nil || m.manager.db == nil || keySeq == 0 || len(topicKey) != topicKeySize {
 		return fmt.Errorf("invalid topic key")

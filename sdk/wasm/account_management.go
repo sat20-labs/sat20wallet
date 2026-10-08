@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -105,11 +106,11 @@ type accountPreflightRequest struct {
 }
 
 type accountCreateRequest struct {
-	Password               string                                 `json:"password"`
-	Wallets                []walletsdk.AccountWalletMetadataInput `json:"wallets"`
-	RecoveryMode           account.RecoveryMode                   `json:"recovery_mode"`
-	Questions              []accountQuestionInput                 `json:"questions"`
-	Guardian               *accountGuardianContact                `json:"guardian,omitempty"`
+	Password     string                                 `json:"password"`
+	Wallets      []walletsdk.AccountWalletMetadataInput `json:"wallets"`
+	RecoveryMode account.RecoveryMode                   `json:"recovery_mode"`
+	Questions    []accountQuestionInput                 `json:"questions"`
+	Guardian     *accountGuardianContact                `json:"guardian,omitempty"`
 }
 
 type accountAnswersRequest struct {
@@ -167,27 +168,81 @@ func accountParseJSON(args []js.Value, target any) error {
 	return nil
 }
 
+func clearAccountActivationSession(session *accountActivationSession) {
+	if session == nil {
+		return
+	}
+	if session.Package != nil {
+		session.Package.UserShare = account.RecoveryShare{}
+	}
+	zeroAccountBytes(session.RequestPrivate)
+	if session.GuardianShare != nil {
+		*session.GuardianShare = account.RecoveryShare{}
+	}
+	session.RequestPrivate, session.GuardianShare = nil, nil
+}
+
+func clearAccountRecoverySession(session *accountRecoverySession) {
+	if session == nil {
+		return
+	}
+	zeroAccountBytes(session.RequestPrivate)
+	zeroAccountBytes(session.Secret)
+	clearWASMBackup(session.Backup)
+	for _, share := range []*account.RecoveryShare{session.DKVSShare, session.UserShare, session.GuardianShare} {
+		if share != nil {
+			*share = account.RecoveryShare{}
+		}
+	}
+	if session.ManagedState != nil {
+		for index := range session.ManagedState.State.Wallets {
+			session.ManagedState.State.Wallets[index].Mnemonic = ""
+		}
+		for _, item := range session.ManagedState.ManagedData.Items {
+			zeroAccountBytes(item.Payload)
+		}
+	}
+	session.Secret, session.RequestPrivate, session.Backup, session.ManagedState = nil, nil, nil, nil
+	session.DKVSShare, session.UserShare, session.GuardianShare = nil, nil, nil
+}
+
+func snapshotAccountRecoveryForCommit(session *accountRecoverySession) (*accountRecoverySession, error) {
+	managed := *session.ManagedState
+	managed.State.Wallets = append([]account.ManagedWallet(nil), managed.State.Wallets...)
+	for index := range managed.State.Wallets {
+		managed.State.Wallets[index].SubAccounts = append([]account.SubAccount(nil), managed.State.Wallets[index].SubAccounts...)
+	}
+	snapshot := &accountRecoverySession{Locator: session.Locator,
+		Secret: append([]byte(nil), session.Secret...), ManagedState: &managed}
+	var err error
+	managed.ManagedData, err = account.NormalizeManagedDataBundle(managed.ManagedData)
+	return snapshot, err
+}
+
+func clearAccountSessions() {
+	accountSessions.Lock()
+	defer accountSessions.Unlock()
+	for id, session := range accountSessions.activation {
+		clearAccountActivationSession(session)
+		delete(accountSessions.activation, id)
+	}
+	for id, session := range accountSessions.recovery {
+		clearAccountRecoverySession(session)
+		delete(accountSessions.recovery, id)
+	}
+}
+
 func accountCleanupSessions() {
 	now := time.Now()
 	for id, session := range accountSessions.activation {
 		if session == nil || now.After(session.ExpiresAt) {
-			if session != nil && session.Package != nil {
-				session.Package.UserShare = account.RecoveryShare{}
-			}
-			if session != nil {
-				zeroAccountBytes(session.RequestPrivate)
-				session.GuardianShare = nil
-			}
+			clearAccountActivationSession(session)
 			delete(accountSessions.activation, id)
 		}
 	}
 	for id, session := range accountSessions.recovery {
 		if session == nil || now.After(session.ExpiresAt) {
-			if session != nil {
-				zeroAccountBytes(session.RequestPrivate)
-				zeroAccountBytes(session.Secret)
-				clearWASMBackup(session.Backup)
-			}
+			clearAccountRecoverySession(session)
 			delete(accountSessions.recovery, id)
 		}
 	}
@@ -261,11 +316,15 @@ func accountAutopayStatus(this js.Value, args []js.Value) any {
 }
 
 func accountFundAutopay(this js.Value, args []js.Value) any {
+	var confirmed walletsdk.AccountAutopayFundingStatus
+	if err := accountParseJSON(args, &confirmed); err != nil {
+		return js.Global().Get("Promise").Call("resolve", createJsRet(nil, -1, err.Error()))
+	}
 	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
 		if _mgr == nil {
 			return nil, -1, "Manager not initialized"
 		}
-		result, err := _mgr.FundAccountAutopay()
+		result, err := _mgr.FundAccountAutopay(confirmed)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
@@ -291,6 +350,10 @@ func accountConfirmStorage(this js.Value, args []js.Value) any {
 		}
 		authorization, err := _mgr.ConfirmAccountStorage(request.OptionID, request.RecordCount)
 		if err != nil {
+			var pending *walletsdk.AccountAutopayPendingError
+			if errors.As(err, &pending) {
+				return map[string]any{"transaction_id": pending.TransactionID, "pending": true}, -1, err.Error()
+			}
 			return nil, -1, err.Error()
 		}
 		data, err := accountStructData(authorization)
@@ -412,7 +475,7 @@ func accountCreateRecovery(this js.Value, args []js.Value) any {
 				for index, input := range request.Questions {
 					questions[index] = account.QuestionAnswer{
 						Question: account.KnowledgeQuestion{ID: input.ID, Prompt: input.Prompt, CaseSensitive: input.CaseSensitive, IgnorePunctuation: input.IgnorePunctuation},
-						Answer: input.Answer, Confirmation: input.Confirmation,
+						Answer:   input.Answer, Confirmation: input.Confirmation,
 					}
 				}
 				bootstrap, err := account.RootBootstrapBackup(backup)
@@ -423,6 +486,9 @@ func accountCreateRecovery(this js.Value, args []js.Value) any {
 				if request.RecoveryMode == account.RecoveryMode2Of3 {
 					if request.Guardian == nil {
 						return fmt.Errorf("guardian contact is required")
+					}
+					if request.Guardian.Network != manager.GetChain() {
+						return fmt.Errorf("guardian network does not match the account")
 					}
 					guardianPublicKey, err := base64.RawURLEncoding.DecodeString(request.Guardian.PublicKey)
 					if err != nil || len(guardianPublicKey) != 32 {
@@ -960,12 +1026,22 @@ func accountPreviewRecovery(this js.Value, args []js.Value) any {
 			return nil, -1, err.Error()
 		}
 		clearWASMBackup(&backup)
+		accountSessions.Lock()
+		accountCleanupSessions()
+		if accountSessions.recovery[request.SessionID] != session {
+			accountSessions.Unlock()
+			zeroAccountBytes(secret)
+			clearWASMBackup(&latestBackup)
+			clearAccountRecoverySession(&accountRecoverySession{ManagedState: managed})
+			return nil, -1, "recovery session expired"
+		}
 		clearWASMBackup(session.Backup)
 		zeroAccountBytes(session.Secret)
 		session.Secret = secret
 		session.Backup = &latestBackup
 		session.ManagedState = managed
 		session.ExpiresAt = time.Now().Add(accountSessionTTL)
+		accountSessions.Unlock()
 		data, err := accountStructData(map[string]any{"summary": account.SummarizeBackup(session.Package.Envelope.Locator, latestBackup)})
 		if err != nil {
 			return nil, -1, err.Error()
@@ -989,22 +1065,32 @@ func accountCommitRecovery(this js.Value, args []js.Value) any {
 		accountSessions.Lock()
 		accountCleanupSessions()
 		session := accountSessions.recovery[request.SessionID]
-		accountSessions.Unlock()
 		if session == nil || session.Backup == nil {
+			accountSessions.Unlock()
 			return nil, -1, "account recovery preview is required"
 		}
 		if session.ManagedState == nil || len(session.Secret) != 32 {
+			accountSessions.Unlock()
 			return nil, -1, "latest managed account state is unavailable"
 		}
-		publicLocator, err := encodeAccountLocator(session.Locator)
+		// Once the user confirms restore, it owns an independent snapshot.
+		// Aborting/expiring the preview must not zero buffers used by its commit.
+		snapshot, err := snapshotAccountRecoveryForCommit(session)
+		accountSessions.Unlock()
+		defer clearAccountRecoverySession(snapshot)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		locator := snapshot.Locator
+		publicLocator, err := encodeAccountLocator(locator)
 		if err != nil {
 			return nil, -1, err.Error()
 		}
 		wallets, err := _mgr.RestoreAccountManagementState(
-			*session.ManagedState, session.Secret, request.Password, session.Locator.Locator,
+			*snapshot.ManagedState, snapshot.Secret, request.Password, locator.Locator,
 			walletsdk.AccountManagementRestoreOptions{
-				Location: session.Locator.StorageLocation, StorageMode: session.Locator.StorageMode,
-				RecordTTL: session.Locator.RecordTTL, AutopayContract: session.Locator.AutopayContract,
+				Location: locator.StorageLocation, StorageMode: locator.StorageMode,
+				RecordTTL: locator.RecordTTL, AutopayContract: locator.AutopayContract,
 				PublicLocator: publicLocator,
 			})
 		if err != nil {
@@ -1014,10 +1100,8 @@ func accountCommitRecovery(this js.Value, args []js.Value) any {
 		if !status.Active || status.RootWalletID == 0 || status.AccountID == "" {
 			return nil, -1, "restored account has no explicit root wallet"
 		}
-		clearWASMBackup(session.Backup)
-		zeroAccountBytes(session.RequestPrivate)
-		zeroAccountBytes(session.Secret)
 		accountSessions.Lock()
+		clearAccountRecoverySession(session)
 		delete(accountSessions.recovery, request.SessionID)
 		accountSessions.Unlock()
 		data, err := accountStructData(map[string]any{
@@ -1039,16 +1123,8 @@ func accountAbortSession(this js.Value, args []js.Value) any {
 		return createJsRet(nil, -1, err.Error())
 	}
 	accountSessions.Lock()
-	if session := accountSessions.recovery[request.SessionID]; session != nil {
-		zeroAccountBytes(session.RequestPrivate)
-		zeroAccountBytes(session.Secret)
-		clearWASMBackup(session.Backup)
-	}
-	if session := accountSessions.activation[request.SessionID]; session != nil && session.Package != nil {
-		session.Package.UserShare = account.RecoveryShare{}
-		zeroAccountBytes(session.RequestPrivate)
-		session.GuardianShare = nil
-	}
+	clearAccountRecoverySession(accountSessions.recovery[request.SessionID])
+	clearAccountActivationSession(accountSessions.activation[request.SessionID])
 	delete(accountSessions.activation, request.SessionID)
 	delete(accountSessions.recovery, request.SessionID)
 	accountSessions.Unlock()

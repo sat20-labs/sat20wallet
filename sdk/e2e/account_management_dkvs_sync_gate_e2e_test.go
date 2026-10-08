@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/url"
 	"strings"
@@ -84,6 +85,17 @@ func TestSDKAccountDKVSSyncGate(t *testing.T) {
 		require.Equal(t, state.DataRevision, bundle.Revision)
 		require.Equal(t, state.DataHash, hash)
 		require.Equal(t, root.Fingerprint, state.RootFingerprint)
+		recovered, _ := accountReviewDevice(t, network, "")
+		_, err = recovered.RecoverAccountManagementFromRootMnemonic(context.Background(), f.rootMnemonic, accountReviewPassword)
+		require.NoError(t, err)
+		require.Len(t, recovered.GetWalletCatalog(), len(f.manager.GetWalletCatalog()))
+		for _, expected := range f.manager.GetWalletCatalog() {
+			actual := accountReviewFind(t, recovered, expected.Fingerprint)
+			require.Equal(t, expected.Name, actual.Name)
+			require.Equal(t, expected.Accounts, actual.Accounts)
+		}
+		require.Equal(t, f.manager.GetAccountManagementStatus().PackageID, recovered.GetAccountManagementStatus().PackageID)
+		require.Equal(t, f.manager.GetAccountManagementStatus().PublicLocator, recovered.GetAccountManagementStatus().PublicLocator)
 	})
 
 	t.Run("03_DeviceAChangeReachesDeviceB", func(t *testing.T) {
@@ -219,7 +231,7 @@ func TestSDKAccountDKVSSyncGate(t *testing.T) {
 		require.Equal(t, "After Core Restart", accountReviewFind(t, device, rootFingerprint).Name)
 	})
 
-	t.Run("08_EndpointSwitchFailsClosedAndFreshSourceReplicaRecovers", func(t *testing.T) {
+	t.Run("08_TemporaryEndpointMismatchAndFreshSourceRecovery", func(t *testing.T) {
 		f := prepareAccountReviewWithMnemonic(t, network, accountSyncMnemonic(t, 8), true)
 		f.activate(t)
 		bootstrapLocation := accountSyncLocation(t, network.Bootstrap)
@@ -246,7 +258,7 @@ func TestSDKAccountDKVSSyncGate(t *testing.T) {
 		require.Equal(t, f.manager.GetAccountManagementStatus().StateSeq, recovered.Seq)
 	})
 
-	t.Run("09_WriteAckDoesNotBecomeConfirmedReplica", func(t *testing.T) {
+	t.Run("09_PrimitiveWriteAckDoesNotInstallReplica", func(t *testing.T) {
 		fixture := newBoundRPCFixture(t)
 		owner := newDKVSKeyPathActor(t, keyFromMnemonic(t, accountSyncMnemonic(t, 9), 0))
 		fixture.bind(t, owner, fixture.coreID)
@@ -296,12 +308,20 @@ func TestSDKAccountDKVSSyncGate(t *testing.T) {
 		require.NoError(t, err)
 		backup, err := manager.ExportAccountBackupForPWA(accountReviewPassword, nil)
 		require.NoError(t, err)
-		guardianPrivate, guardianPublic, err := account.GenerateGuardianKey(nil)
+		guardianManager, guardianLocation := accountReviewDevice(t, network, accountSyncMnemonic(t, 240))
+		require.NoError(t, guardianManager.InitializeAccountManagement(accountReviewPassword))
+		identity, err := guardianManager.GetOrCreateAccountGuardianIdentity(accountReviewPassword)
 		require.NoError(t, err)
+		guardianPublic, err := base64.RawURLEncoding.DecodeString(identity.PublicKey)
+		require.NoError(t, err)
+		guardianPrivate, err := guardianManager.LoadAccountGuardianPrivateKey(accountReviewPassword)
+		require.NoError(t, err)
+		defer clearBytes(guardianPrivate)
 		accountID := manager.GetAccountManagementStatus().AccountID
+		require.NotEqual(t, accountID, identity.MailboxID)
 		pkg, err := manager.CreateAccountRecoveryPackage(account.CreateOptions{
 			AccountID: accountID, Backup: backup, RecoveryMode: account.RecoveryMode2Of3,
-			Questions: e2eKnowledgeQuestions(), GuardianMailboxID: accountID,
+			Questions: e2eKnowledgeQuestions(), GuardianMailboxID: identity.MailboxID,
 			GuardianPublicKey: guardianPublic,
 		})
 		require.NoError(t, err)
@@ -309,11 +329,16 @@ func TestSDKAccountDKVSSyncGate(t *testing.T) {
 		repository, err := manager.NewAccountRepositoryForStorage(*auth)
 		require.NoError(t, err)
 		require.NoError(t, account.NewManager(repository).Publish(context.Background(), *pkg))
-		require.NoError(t, manager.PutGuardianCapsuleForStorage(*auth, accountID, *pkg.GuardianCapsule))
+		_, err = guardianManager.ConfirmAccountStorage(wallet.AccountStorageTemporary, 0)
+		require.NoError(t, err)
+		require.NoError(t, guardianManager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeGuardian,
+			func(authorization *wallet.AccountStorageAuthorization) error {
+				return guardianManager.PutGuardianCapsuleForStorage(*authorization, identity.MailboxID, *pkg.GuardianCapsule)
+			}))
 
 		loaded, err := manager.LoadAccountRecoveryPackage(location, pkg.Envelope.Locator)
 		require.NoError(t, err, "recovery read must not wait for the local active replica")
-		guardianRaw, err := manager.LoadAccountGuardianCapsule(location, accountID,
+		guardianRaw, err := guardianManager.LoadAccountGuardianCapsule(guardianLocation, identity.MailboxID,
 			pkg.GuardianCapsule.PackageID, pkg.GuardianCapsule.ShareID)
 		require.NoError(t, err, "guardian read must not wait for the local active replica")
 
@@ -330,7 +355,7 @@ func TestSDKAccountDKVSSyncGate(t *testing.T) {
 		require.Equal(t, backup.Wallets, restored.Wallets)
 	})
 
-	t.Run("11_BindingReplicatesButAdmissionRemainsLocal", func(t *testing.T) {
+	t.Run("11_ReplicatedBindingDoesNotAdmitBootstrapWrites", func(t *testing.T) {
 		mnemonic := accountSyncMnemonic(t, 11)
 		f := prepareAccountReviewWithMnemonic(t, network, mnemonic, false)
 		require.NoError(t, f.manager.UseAccountStorageAuthorization(wallet.AccountStoragePurposeRecovery,
@@ -363,13 +388,21 @@ func TestSDKAccountDKVSSyncGate(t *testing.T) {
 		f := prepareAccountReviewWithMnemonic(t, network, accountSyncMnemonic(t, 12), true)
 		f.activate(t)
 		device, _ := accountReviewDevice(t, network, "")
-		device.SetDKVSHttpClient(&accountReviewTamperTransport{inner: wallet.NewHTTPClient(), mode: "active-sync"})
-
-		_, err := device.LoadAccountManagementStateForRecovery(f.location,
+		_, err := device.LoadAccountManagementStateForRecovery(f.location, f.pkg.Envelope.Locator, f.secret, f.rootMnemonic)
+		require.NoError(t, err, "same endpoint must load healthy recovery before injection")
+		stateKey, err := dkvs.PersonalKey(f.manager.GetWallet().GetPubKey().SerializeCompressed(), "account/state")
+		require.NoError(t, err)
+		transport := &accountReviewTamperTransport{inner: wallet.NewHTTPClient(), mode: "active-sync", targetKey: stateKey}
+		device.SetDKVSHttpClient(transport)
+		_, err = device.LoadAccountManagementStateForRecovery(f.location,
 			f.pkg.Envelope.Locator, f.secret, f.rootMnemonic)
-		require.Error(t, err, "signed account data corrupted in active sync must never enter recovery state")
+		require.ErrorIs(t, err, dkvs.ErrInvalidSignature)
+		require.Greater(t, transport.hits.Load(), int64(0))
 		require.Empty(t, device.GetWalletCatalog())
 		require.False(t, device.GetAccountManagementStatus().Active)
+		device.SetDKVSHttpClient(wallet.NewHTTPClient())
+		_, err = device.LoadAccountManagementStateForRecovery(f.location, f.pkg.Envelope.Locator, f.secret, f.rootMnemonic)
+		require.NoError(t, err, "same device must load after removing fault")
 	})
 }
 

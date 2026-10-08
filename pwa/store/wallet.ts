@@ -144,12 +144,12 @@ export const useWalletStore = defineStore('wallet', () => {
     }
   }
 
-  const readWalletCatalog = async (): Promise<WalletData[]> => {
+  const readWalletCatalogState = async () => {
     const [err, result] = await walletManager.getWalletCatalog()
     if (err || !result) {
       throw err || new Error('Failed to load wallet catalog')
     }
-    return result.wallets.map(item => ({
+    const catalog: WalletData[] = result.wallets.map(item => ({
       id: String(item.id),
       name: item.name,
       fingerprint: item.fingerprint,
@@ -162,7 +162,9 @@ export const useWalletStore = defineStore('wallet', () => {
         accountId: account.account_id,
       })),
     }))
+    return { catalog, walletId: result.current_wallet_id, accountIndex: result.current_account_index, rootAccountId: result.root_account_id }
   }
+  const readWalletCatalog = async (): Promise<WalletData[]> => (await readWalletCatalogState()).catalog
   const walletTopologySignature = (catalog: WalletData[]) => JSON.stringify(
     catalog.map(item => ({
       fingerprint: item.fingerprint || '',
@@ -410,13 +412,44 @@ export const useWalletStore = defineStore('wallet', () => {
     feeRate.value = value
   }
 
-  const syncWalletCatalog = async () => {
-    const catalog = await readWalletCatalog()
-    wallets.value = catalog
-    await walletStorage.setValue('wallets', toRaw(catalog))
-    await setHasWallet(catalog.length > 0)
-    return catalog
+  const syncWalletCatalog = async (_selectedWalletId?: string) => {
+    const readGeneration = getWalletIdentityState().generation
+    const snapshot = await readWalletCatalogState()
+    // A user switch supersedes an earlier asynchronous catalog read. The
+    // switch itself publishes its verified selection; discard the stale read.
+    if (getWalletIdentityState().generation !== readGeneration) return wallets.value
+    const selected = snapshot.catalog.find(item => item.id === snapshot.walletId)
+    const selectedAccount = selected?.accounts.find(item => item.index === snapshot.accountIndex)
+    const selectionChanged = walletId.value !== snapshot.walletId || accountIndex.value !== snapshot.accountIndex
+    if (selectionChanged && (isSwitchingWallet.value || isSwitchingAccount.value || isSwitchingNetwork.value)) {
+      return wallets.value
+    }
+    const generation = selectionChanged && isWalletSessionUnlocked() ? beginWalletIdentityTransition() : undefined
+    try {
+      if (snapshot.catalog.length && !selectedAccount) throw new Error('SDK selection is missing from wallet catalog')
+      // Addresses/public keys were derived inside the same SDK catalog read.
+      const identity = selectedAccount
+        ? { address: selectedAccount.address, pubKey: selectedAccount.pubKey } : undefined
+      if (selectedAccount && (!identity?.address || !identity.pubKey)) throw new Error('SDK wallet identity is unavailable')
+      await walletStorage.batchUpdate({
+        wallets: snapshot.catalog, hasWallet: snapshot.catalog.length > 0,
+        walletId: snapshot.walletId, accountIndex: snapshot.accountIndex,
+        rootAccountId: snapshot.rootAccountId,
+        address: identity?.address ?? null, pubkey: identity?.pubKey ?? null,
+      })
+      if (selectionChanged) {
+        channelStore.invalidateCurrentChannel()
+        if (generation !== undefined) completeWalletIdentityTransition(generation)
+        safeSendAccountsChangedEvent(snapshot.catalog)
+        refreshCurrentChannelInBackground('SDK wallet selection')
+      }
+      return snapshot.catalog
+    } catch (error) {
+      await lockWallet()
+      throw error
+    }
   }
+
   const switchWallet = async (walletIdToSwitch: string) => {
     // 如果正在切换，直接返回
     if (isSwitchingWallet.value || isSwitchingAccount.value) {
@@ -498,55 +531,20 @@ export const useWalletStore = defineStore('wallet', () => {
       isSwitchingWallet.value = false
     }
   }
-  const createWallet = async (password: string) => {
-    const createsRootWallet = wallets.value.length === 0 && !rootAccountId.value
+  const createWallet = async (password: string): Promise<[Error | undefined, string | undefined]> => {
     const [err, res] = await walletManager.createWallet(password)
-    if (err || !res) {
-      console.error(err)
-      return [err, undefined]
+    if (err || !res) return [err || new Error('Wallet creation failed'), undefined]
+    // Core persistence is complete. Always deliver the recovery phrase even
+    // if the following local read cannot refresh the page.
+    try {
+      await syncWalletCatalog()
+      await setLocked(false)
+      openWalletSession()
+      refreshCurrentChannelInBackground('createWallet')
+      return [undefined, res.mnemonic]
+    } catch (error) {
+      return [error instanceof Error ? error : new Error(String(error)), res.mnemonic]
     }
-    const { walletId, mnemonic: _mnemonic } = res
-    await setWalletId(walletId)
-    await setAccountIndex(0)
-    await setHasWallet(true)
-    await setLocked(false)
-    await setChain(Chain.BTC)
-    openWalletSession()
-    refreshCurrentChannelInBackground('createWallet')
-    const [_e, addressRes] = await walletManager.getWalletAddress(
-      accountIndex.value
-    )
-    const [_j, pubkeyRes] = await walletManager.getWalletPubkey(
-      accountIndex.value
-    )
-
-    if (addressRes && pubkeyRes) {
-      const { address } = addressRes
-      await setAddress(address)
-      await setPublickey(pubkeyRes.pubKey)
-      const _wallets = structuredClone(walletStorage.getValue('wallets'))
-      const walletLen = _wallets.length
-      _wallets.push({
-        id: walletId,
-        name: `Wallet ${walletLen + 1}`,
-        accounts: [{
-          index: 0,
-          name: `Account ${0 + 1}`,
-          address: address,
-          pubKey: pubkeyRes.pubKey
-        }]
-      })
-      wallets.value = _wallets
-      await walletStorage.setValue('wallets', _wallets)
-    }
-    const catalog = await syncWalletCatalog()
-    if (createsRootWallet) {
-      const created = catalog.find(item => item.id === walletId)
-      const createdRootAccountId = created?.accounts.find(account => account.index === 0)?.accountId
-      if (!createdRootAccountId) return [new Error('Created root account has no stable public identity'), undefined]
-      await setRootAccountId(createdRootAccountId)
-    }
-    return [undefined, _mnemonic]
   }
 
   const importWallet = async (
@@ -612,69 +610,24 @@ export const useWalletStore = defineStore('wallet', () => {
       console.error(err)
       return [err || new Error('Wallet import failed'), undefined]
     }
+    try {
     onProgress?.('catalog')
-    const { walletId } = res
-		if (discoveredRecovery) {
-		  await walletStorage.batchUpdate({
-			accountRecovery: discoveredRecovery,
-			rootAccountId: discoveredRootAccountId,
-		  })
-		  accountRecovery.value = discoveredRecovery
-		  rootAccountId.value = discoveredRootAccountId
-		}
-		if (accountRecovery.value &&
-		  accountRecovery.value.env === 'prd' &&
-		  accountRecovery.value.network === network.value &&
-		  !accountRecovery.value.rootAccountId && rootAccountId.value) {
-		  accountRecovery.value = { ...accountRecovery.value, rootAccountId: rootAccountId.value }
-		  await walletStorage.setValue('accountRecovery', accountRecovery.value)
-		}
-    await setWalletId(walletId)
-    await setAccountIndex(0)
-    await setHasWallet(true)
+    if (discoveredRecovery) {
+      await walletStorage.batchUpdate({ accountRecovery: discoveredRecovery, rootAccountId: discoveredRootAccountId })
+      accountRecovery.value = discoveredRecovery
+    }
+    await syncWalletCatalog()
     await setLocked(false)
-    // await setNetwork(Network.TESTNET)
-    await setChain(Chain.BTC)
     openWalletSession()
     refreshCurrentChannelInBackground('importWallet')
-    const [_e, addressRes] = await walletManager.getWalletAddress(
-      accountIndex.value
-    )
-    const [_j, pubkeyRes] = await walletManager.getWalletPubkey(
-      accountIndex.value
-    )
-		const _wallets = recovered
-		  ? await readWalletCatalog()
-		  : structuredClone(walletStorage.getValue('wallets'))
-    if (addressRes && pubkeyRes) {
-      const { address } = addressRes
-      await setAddress(address)
-      await setPublickey(pubkeyRes.pubKey)
-		  if (!recovered) {
-			const walletLen = _wallets.length
-			_wallets.push({
-			  id: walletId,
-			  name: `Wallet ${walletLen + 1}`,
-			  accounts: [{
-				index: 0,
-				name: `Account ${0 + 1}`,
-				address: address,
-				pubKey: pubkeyRes.pubKey
-			  }]
-			})
-		  }
+    return [undefined, mnemonicIdentity]
+    } catch (error) {
+      // An identity alongside the error proves the SDK import committed.
+      // The caller may reload its view, but must not import again.
+      return [error instanceof Error ? error : new Error(String(error)), mnemonicIdentity]
     }
-    wallets.value = _wallets
-    await walletStorage.setValue('wallets', _wallets)
-		const catalog = await syncWalletCatalog()
-		if (!rootAccountId.value) {
-		  const imported = catalog.find(item => item.id === walletId)
-		  const importedRootAccountId = imported?.accounts.find(account => account.index === 0)?.accountId
-		  if (!importedRootAccountId) return [new Error('Imported root account has no stable public identity'), undefined]
-		  await setRootAccountId(importedRootAccountId)
-		}
-	return [undefined, mnemonicIdentity]
   }
+
   const getWalletInfo = async () => {
     const [_e, addressRes] = await walletManager.getWalletAddress(
       accountIndex.value
@@ -697,13 +650,11 @@ export const useWalletStore = defineStore('wallet', () => {
 
     if (!err && result) {
       try {
-        if (!runtimeRunning) {
-          await getWalletInfo()
-          const catalog = await syncWalletCatalog()
-          await backfillTrustedRootAccountId(catalog)
-		} else if (!rootAccountId.value) {
-		  await backfillTrustedRootAccountId(wallets.value)
-        }
+        if (!runtimeRunning) await getWalletInfo()
+        // The SDK keeps syncing while the UI is locked. Reconcile its local
+        // catalog before authorizing the displayed identity, including offline.
+        const catalog = await syncWalletCatalog(String(result.walletId))
+        await backfillTrustedRootAccountId(catalog)
         checkSession()
         await setLocked(false)
         checkSession()
@@ -713,7 +664,7 @@ export const useWalletStore = defineStore('wallet', () => {
         if (runtimeRunning) {
           completeWalletIdentityTransition(getWalletIdentityState().generation)
         } else {
-          await switchToAccount(accountIndex.value)
+          completeWalletIdentityTransition(getWalletIdentityState().generation)
         }
         refreshCurrentChannelInBackground('unlockWallet')
         return [undefined, result]
@@ -855,6 +806,16 @@ export const useWalletStore = defineStore('wallet', () => {
     await syncWalletCatalog()
   }
 
+  const updateAccountDID = async (accountId: number, did: string) => {
+    const current = wallet.value?.accounts.find(a => a.index === accountId)
+    if (!current) throw new Error('当前子账户不可用')
+    const [err] = await walletManager.updateAccountMetadata(
+      walletId.value, accountId, current.name, did.trim(),
+    )
+    if (err) throw err
+    await syncWalletCatalog()
+  }
+
   const updateWalletName = async (walletId: string, newName: string) => {
     const [err] = await walletManager.updateWalletName(walletId, newName)
     if (err) throw err
@@ -961,6 +922,7 @@ export const useWalletStore = defineStore('wallet', () => {
     addAccount,
     switchToAccount,
     updateAccountName,
+    updateAccountDID,
     updateWalletName,
     syncWalletCatalog,
     accounts,

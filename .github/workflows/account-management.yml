@@ -8,25 +8,40 @@ on:
     paths:
       - 'sdk/account/**'
       - 'sdk/wallet/account_*.go'
-      - 'sdk/wallet/dkvs_config*.go'
-      - 'sdk/wallet/dkvs_free_local*.go'
-      - 'sdk/wallet/dkvs_signing.go'
-      - 'sdk/wallet/dkvs_paid_retention_test.go'
+      - 'sdk/wallet/wallet_catalog*.go'
+      - 'sdk/wallet/db.go'
+      - 'sdk/wallet/interface.go'
+      - 'sdk/wallet/lightnode/**'
+      - 'sdk/wallet/dkvs*.go'
+      - 'sdk/wallet/dkvs/**'
       - 'sdk/wallet/rgb11_dkvs.go'
+      - 'sdk/wallet/rgb11_account_provider*.go'
       - 'sdk/wallet/rgb11/backup_codec.go'
       - 'sdk/wallet/rgb11/paid_retention_policy_test.go'
       - 'sdk/wallet/rgb11_snapshot_gc_test.go'
-      - 'sdk/wasm/account_management.go'
-      - 'sdk/e2e/account_management_dkvs_e2e_test.go'
+      - 'sdk/wallet/rgb11/store.go'
+      - 'sdk/wallet/rgb11/store_test.go'
+      - 'sdk/wasm/account_management*.go'
+      - 'sdk/wasm/main.go'
+      - 'sdk/e2e/account_management*.go'
+      - 'sdk/e2e/core_modules*.go'
+      - 'sdk/wallet/core_modules*.go'
       - 'sdk/e2e/dkvs_noplugin_harness_test.go'
       - 'sdk/e2e/testdata/satoshinet-rpctest-hardening.patch'
       - 'pwa/components/account/**'
       - 'pwa/entrypoints/popup/pages/RestoreAccount.vue'
+      - 'pwa/entrypoints/popup/pages/Unlock.vue'
+      - 'pwa/entrypoints/popup/App.vue'
       - 'pwa/entrypoints/popup/pages/Index.vue'
       - 'pwa/entrypoints/popup/pages/wallet/Setting.vue'
       - 'pwa/entrypoints/popup/pages/wallet/settings/account-management/**'
       - 'pwa/router/index.ts'
       - 'pwa/utils/accountManagement.ts'
+      - 'pwa/store/wallet.ts'
+      - 'pwa/lib/walletSession.ts'
+      - 'pwa/lib/storage-adapter.ts'
+      - 'pwa/lib/walletStorage.ts'
+      - 'pwa/scripts/verify/account-management*.mjs'
       - 'pwa/lib/account-management-state.ts'
       - 'pwa/lib/secure-account-storage.ts'
       - 'pwa/docs/account-management.md'
@@ -47,7 +62,7 @@ concurrency:
 jobs:
   go-account:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - name: Checkout wallet
         uses: actions/checkout@v4
@@ -70,6 +85,11 @@ jobs:
           repository: sat20-labs/satoshinet
           ref: ${{ github.head_ref == 'agent/dkvs-blob-sync-hardening' && 'agent/dkvs-blob-sync-hardening' || github.head_ref == 'feat/dkvs-paid-retention-p0' && 'feat/dkvs-paid-retention-p0' || 'main' }}
           path: satoshinet
+      - name: Checkout STP
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/transcend
+          path: transcend
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -81,11 +101,14 @@ jobs:
         run: |
           files=$(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- \
             'sdk/account/**/*.go' 'sdk/account/*.go' 'sdk/wallet/account_*.go' \
-            'sdk/wallet/dkvs_config*.go' 'sdk/wallet/dkvs_free_local*.go' \
-            'sdk/wallet/dkvs_signing.go' 'sdk/wallet/dkvs_paid_retention_test.go' \
+            'sdk/wallet/wallet_catalog*.go' 'sdk/wallet/db.go' 'sdk/wallet/interface.go' \
+            'sdk/wallet/lightnode/*.go' \
+            'sdk/wallet/core_modules*.go' \
+            'sdk/wallet/dkvs*.go' 'sdk/wallet/dkvs/**/*.go' \
             'sdk/wallet/rgb11_dkvs.go' 'sdk/wallet/rgb11/backup_codec.go' \
+            'sdk/wallet/rgb11_account_provider*.go' \
             'sdk/wallet/rgb11/paid_retention_policy_test.go' 'sdk/wallet/rgb11_snapshot_gc_test.go' \
-            'sdk/wasm/account_management.go' 'sdk/e2e/account_management_dkvs_e2e_test.go' \
+            'sdk/wasm/account_management*.go' 'sdk/wasm/main.go' 'sdk/e2e/account_management*.go' 'sdk/e2e/core_modules*.go' \
             'sdk/e2e/dkvs_noplugin_harness_test.go')
           if [[ -n "$files" ]]; then
             unformatted=$(gofmt -l $files)
@@ -124,6 +147,17 @@ jobs:
         run: |
           set -o pipefail
           go test ./e2e -run '^$' -count=1 2>&1 | tee /tmp/e2e-compile.log
+      - name: Setup browser runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: sat20wallet/pwa/package-lock.json
+      - name: Install browser dependencies
+        working-directory: sat20wallet/pwa
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
       - name: Build account-enabled WASM
         working-directory: sat20wallet/sdk
         env:
@@ -132,7 +166,33 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          go build -o /tmp/sat20wallet.wasm ./wasm 2>&1 | tee /tmp/wasm-build.log
+          go build -ldflags='-s -w' -o ../pwa/public/wasm/sat20wallet.wasm ./wasm 2>&1 | tee /tmp/wasm-build.log
+      - name: Refresh browser integrity manifest
+        working-directory: sat20wallet/pwa
+        run: npm run write-integrity
+      - name: Test WASM recovery session cleanup
+        working-directory: sat20wallet/sdk
+        env:
+          GOOS: js
+          GOARCH: wasm
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -exec="$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./wasm -run 'Test(AccountSessionCleanup|AbortingPreview)' -count=1 -timeout=3m 2>&1 | tee /tmp/wasm-session-tests.log
+      - name: Test all account E2E and real PWA against temporary nodes
+        id: pwa_account
+        working-directory: sat20wallet/sdk
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./e2e -run 'Test(SDKAccount|RealSatoshiNetAccountManagement)' -v -count=1 -timeout=65m 2>&1 | tee /tmp/account-e2e.log
+      - name: Test RGB11 account backup and recovery
+        if: ${{ !cancelled() && (steps.pwa_account.outcome == 'success' || steps.pwa_account.outcome == 'failure') }}
+        working-directory: sat20wallet/sdk
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./e2e -run '^TestSDKCoreModulesE2E$' -v -count=1 -timeout=35m 2>&1 | tee /tmp/rgb11-account-e2e.log
       - name: Upload Go diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -145,6 +205,10 @@ jobs:
             /tmp/wallet-tests.log
             /tmp/e2e-compile.log
             /tmp/wasm-build.log
+            /tmp/account-e2e.log
+            /tmp/rgb11-account-e2e.log
+            /tmp/wasm-session-tests.log
+            sat20wallet/sdk/review-evidence/core-modules-e2e-latest.json
           if-no-files-found: ignore
           retention-days: 1
 

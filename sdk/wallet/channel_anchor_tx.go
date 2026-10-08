@@ -13,8 +13,10 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
+// A nil invoiceSig builds an unsigned candidate; a supplied signature is
+// checked against the completed outputs under the caller's activation rule.
 func CreateOpeningAnchorTx(channel *Channel, fundingUtxo *TxOutput,
-	localValue, remoteValue int64, invoiceSig []byte, daoPkScript []byte) *wire.MsgTx {
+	localValue, remoteValue int64, invoiceSig []byte, daoPkScript []byte, bindOutputs bool) *wire.MsgTx {
 
 	redeemScript, pkScript, err := GetP2WSHscriptFromChannel(channel)
 	if err != nil {
@@ -25,10 +27,6 @@ func CreateOpeningAnchorTx(channel *Channel, fundingUtxo *TxOutput,
 		fundingUtxo.Value(), fundingUtxo.Assets, invoiceSig)
 	if err != nil {
 		Log.Errorf("StandardAnchorScript failed, %v", err)
-		return nil
-	}
-	if _, _, err = CheckAnchorPkScript(anchorScript); err != nil {
-		Log.Errorf("CheckAnchorPkScript failed, %v", err)
 		return nil
 	}
 
@@ -64,6 +62,12 @@ func CreateOpeningAnchorTx(channel *Channel, fundingUtxo *TxOutput,
 	}
 	tx.AddTxOut(wire.NewTxOut(0, nil, nullDataScript))
 
+	if invoiceSig != nil {
+		if _, _, err := CheckAnchorPkScript(anchorScript, tx.TxOut, bindOutputs); err != nil {
+			Log.Errorf("CheckAnchorPkScript failed, %v", err)
+			return nil
+		}
+	}
 	PrintJsonTx_SatsNet(tx, "anchor")
 	return tx
 }
@@ -127,7 +131,7 @@ func getReturnedChannelVouts(tx *bwire.MsgTx, channelAddr string) ([]uint32, err
 }
 
 func CreateAnchorTx(splicingOutput *indexer.TxOutput, assetName *AssetName, tickerInfo *indexer.TickerInfo,
-	redeemScript, invoiceSig []byte, memo []byte) (*wire.MsgTx, error) {
+	redeemScript, invoiceSig []byte, memo []byte, bindOutputs bool) (*wire.MsgTx, error) {
 	var localAsset *wire.AssetInfo
 	if len(splicingOutput.Assets) > 0 && !indexer.IsPlainAsset(&assetName.AssetName) {
 		amt, _ := splicingOutput.GetAssetV2(&assetName.AssetName)
@@ -165,10 +169,6 @@ func CreateAnchorTx(splicingOutput *indexer.TxOutput, assetName *AssetName, tick
 		Log.Errorf("StandardAnchorScript failed, %v", err)
 		return nil, err
 	}
-	if _, _, err = CheckAnchorPkScript(anchorScript); err != nil {
-		Log.Errorf("CheckAnchorPkScript failed, %v", err)
-		return nil, err
-	}
 
 	tx := wire.NewMsgTx(wire.TxVersion)
 	tx.AddTxIn(&wire.TxIn{
@@ -203,6 +203,11 @@ func CreateAnchorTx(splicingOutput *indexer.TxOutput, assetName *AssetName, tick
 		tx.AddTxOut(wire.NewTxOut(0, nil, memo))
 	}
 
+	if invoiceSig != nil {
+		if _, _, err := CheckAnchorPkScript(anchorScript, tx.TxOut, bindOutputs); err != nil {
+			return nil, err
+		}
+	}
 	PrintJsonTx_SatsNet(tx, "single anchor")
 	return tx, nil
 }

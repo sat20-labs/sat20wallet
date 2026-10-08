@@ -96,12 +96,16 @@
           <Button variant="outline" type="button" class="w-full h-11">
             <RouterLink to="/">{{ $t('import.cancelButton') }}</RouterLink>
           </Button>
-          <Button type="submit" :disabled="loading" class="w-full h-11">
+          <Button type="submit" :disabled="loading || importCommitted" class="w-full h-11">
             <Loader2Icon v-if="loading" class="mr-2 h-4 w-4 animate-spin" />
             {{ $t('import.importButton') }}
           </Button>
         </div>
       </form>
+      <Alert v-if="importCommitted && committedReadError" class="mt-4" role="status">
+        <AlertDescription>Wallet imported successfully. Reload to unlock the saved wallet.</AlertDescription>
+        <Button type="button" variant="outline" class="mt-2" @click="reloadCommittedWallet">Reload wallet</Button>
+      </Alert>
     </div>
   </LayoutScroll>
 </template>
@@ -136,9 +140,12 @@ const { toast } = useToast()
 const router = useRouter()
 const walletStore = useWalletStore()
 const tab = ref<any>('mnemonic')
+const importCommitted = ref(false)
+const committedReadError = ref(false)
+const reloadCommittedWallet = () => { window.location.hash = '#/unlock'; window.location.reload() }
 const loading = ref(false)
 
-const showToast = (variant: 'default' | 'destructive' | 'success', title: string, description: string | Error) => {
+const showToast = (variant: 'default' | 'destructive' | 'success' | 'info', title: string, description: string | Error) => {
   toast({
     variant,
     title,
@@ -175,14 +182,21 @@ const form = useForm({
 })
 
 const onSubmit = form.handleSubmit(async (values) => {
+  if (loading.value || importCommitted.value) return
   loading.value = true
-
+  try {
 	if (tab.value === 'mnemonic') {
     if (values.mnemonic) {
       const [err, result] = await walletStore.importWallet(
         values.mnemonic,
 			values.password
       )
+      if (result) importCommitted.value = true
+      if (err && result) {
+        committedReadError.value = true
+        showToast('info', 'Wallet Imported', 'Wallet saved. Reload to unlock the wallet.')
+        return
+      }
       if (err) {
         showToast('destructive', 'Error', err)
         loading.value = false
@@ -197,6 +211,10 @@ const onSubmit = form.handleSubmit(async (values) => {
     }
   }
 
-  loading.value = false
+  } catch (error: any) {
+    showToast('destructive', 'Error', error?.message || 'Failed to import wallet')
+  } finally {
+    loading.value = false
+  }
 })
 </script>

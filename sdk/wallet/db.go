@@ -151,7 +151,9 @@ func (p *Manager) initDB() error {
 	// Status.DBver is the historical STP database schema version for shared
 	// core/bootstrap databases. Wallet owns the migrated Status object, but it
 	// must not rewrite that version before STP has upgraded channel data.
-	p.loadStatus()
+	if _, err := p.loadStatus(); err != nil {
+		return err
+	}
 
 	wallets, err := loadAllWalletFromDB(p.db)
 	if err != nil {
@@ -164,7 +166,6 @@ func (p *Manager) initDB() error {
 	if err := p.loadAccountManagementProfileLocked(); err != nil {
 		return err
 	}
-
 
 	// Wallet secrets are still locked here.  Reservation runtime state is
 	// restored only after UnlockWallet has released p.mutex.
@@ -247,24 +248,36 @@ func loadWallet(db db.KVDB, id int64) (*WalletInDB, error) {
 	return &result, nil
 }
 
-func (p *Manager) loadStatus() *Status {
-	var loaded bool
-	p.status, loaded = loadStatusWithLegacyMigrationResult(p.db)
+func (p *Manager) loadStatus() (*Status, error) {
+	status, loaded, err := loadStatusWithLegacyMigrationResult(p.db)
+	if err != nil {
+		return nil, err
+	}
+	if !loaded {
+		wallets, err := loadAllWalletFromDB(p.db)
+		if err != nil {
+			return nil, err
+		}
+		if len(wallets) != 0 {
+			return nil, fmt.Errorf("wallet selection is missing for an existing wallet")
+		}
+	}
 	targetChain := _chain
 	if p.cfg != nil && p.cfg.Chain != "" {
 		targetChain = p.cfg.Chain
 	}
-	chainChanged := statusChainChanged(p.status, targetChain)
+	chainChanged := statusChainChanged(status, targetChain)
 	if chainChanged {
-		resetStatusChainState(p.status, targetChain)
+		resetStatusChainState(status, targetChain)
 	}
-	needsTips := !loaded || chainChanged || statusChainTipsMissing(p.status)
+	needsTips := !loaded || chainChanged || statusChainTipsMissing(status)
 	if needsTips {
-		if err := saveStatusToDB(p.db, p.status); err != nil {
-			Log.Infof("save initialized status failed. %v", err)
+		if err := saveStatusToDB(p.db, status); err != nil {
+			return nil, fmt.Errorf("save initialized wallet status: %w", err)
 		}
 	}
-	return p.status
+	p.status = status
+	return status, nil
 }
 
 func statusChainChanged(status *Status, targetChain string) bool {
@@ -301,23 +314,33 @@ func resetStatusChainState(status *Status, chain string) {
 
 func loadStatusFromDB(kvdb db.KVDB) *Status {
 	result := newDefaultStatus()
-	if status, ok := readStatusFromDB(kvdb, DB_KEY_STATUS); ok {
+	if status, ok, _ := readStatusFromDB(kvdb, DB_KEY_STATUS); ok {
 		return status
 	}
-	if status, ok := readLegacySTPStatusFromDB(kvdb); ok {
+	if status, ok, _ := readLegacySTPStatusFromDB(kvdb); ok {
 		return status
 	}
 	return result
 }
 
 func loadStatusWithLegacyMigration(kvdb db.KVDB) *Status {
-	status, _ := loadStatusWithLegacyMigrationResult(kvdb)
+	status, _, _ := loadStatusWithLegacyMigrationResult(kvdb)
 	return status
 }
 
-func loadStatusWithLegacyMigrationResult(kvdb db.KVDB) (*Status, bool) {
-	status, hasStatus := readStatusFromDB(kvdb, DB_KEY_STATUS)
-	legacyStatus, hasLegacy := readLegacySTPStatusFromDB(kvdb)
+func loadStatusWithLegacyMigrationResult(kvdb db.KVDB) (*Status, bool, error) {
+	legacyStatus, hasLegacy, err := readLegacySTPStatusFromDB(kvdb)
+	if err != nil {
+		return nil, false, err
+	}
+	var status *Status
+	var hasStatus bool
+	if !hasLegacy {
+		status, hasStatus, err = readStatusFromDB(kvdb, DB_KEY_STATUS)
+		if err != nil {
+			return nil, false, err
+		}
+	}
 
 	// Production core/bootstrap nodes historically persisted the authoritative
 	// runtime and schema state under the STP "status" key. When that key exists,
@@ -333,15 +356,15 @@ func loadStatusWithLegacyMigrationResult(kvdb db.KVDB) (*Status, bool) {
 
 	if hasLegacy {
 		if err := saveStatusToDB(kvdb, status); err != nil {
-			Log.Infof("migrate legacy status failed. %v", err)
+			return nil, false, fmt.Errorf("migrate legacy status: %w", err)
 		} else if err := kvdb.Delete([]byte(legacySTPStatusDBKey())); err != nil {
-			Log.Infof("delete legacy status failed. %v", err)
+			return nil, false, fmt.Errorf("delete migrated legacy status: %w", err)
 		} else {
 			Log.Infof("legacy status migrated")
 		}
 	}
 
-	return status, hasStatus || hasLegacy
+	return status, hasStatus || hasLegacy, nil
 }
 
 func newDefaultStatus() *Status {
@@ -356,26 +379,27 @@ func newDefaultStatus() *Status {
 	return result
 }
 
-func readStatusFromDB(kvdb db.KVDB, key string) (*Status, bool) {
+func readStatusFromDB(kvdb db.KVDB, key string) (*Status, bool, error) {
 	buf, err := kvdb.Read([]byte(key))
 	if err != nil {
-		Log.Infof("Read %s failed. %v", key, err)
-		return nil, false
+		if errors.Is(err, db.ErrKeyNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("read %s: %w", key, err)
 	}
 
 	status := &Status{}
 	if err := decodeStatusFromBytes(buf, status); err != nil {
-		Log.Errorf("DecodeFromBytes %s failed. %v", key, err)
-		return nil, false
+		return nil, false, fmt.Errorf("decode %s: %w", key, err)
 	}
 	normalizeStatus(status)
-	return status, true
+	return status, true, nil
 }
 
-func readLegacySTPStatusFromDB(kvdb db.KVDB) (*Status, bool) {
+func readLegacySTPStatusFromDB(kvdb db.KVDB) (*Status, bool, error) {
 	key := legacySTPStatusDBKey()
 	if key == DB_KEY_STATUS {
-		return nil, false
+		return nil, false, nil
 	}
 	return readStatusFromDB(kvdb, key)
 }
@@ -427,6 +451,24 @@ func saveStatusToDB(kvdb db.KVDB, status *Status) error {
 		return err
 	}
 	return kvdb.Write([]byte(DB_KEY_STATUS), buf)
+}
+
+// Caller owns Manager.mutex. Keep checkpoint writers excluded until the new
+// selection is durable, then publish just the two selection fields.
+func (p *Manager) saveAccountSelectionLocked(walletID int64, accountID uint32) error {
+	p.status.Lock()
+	defer p.status.Unlock()
+	candidate := snapshotStatusLocked(p.status)
+	candidate.CurrentWallet, candidate.CurrentAccount = walletID, accountID
+	encoded, err := EncodeToBytes(&candidate)
+	if err != nil {
+		return err
+	}
+	if err := p.db.Write([]byte(DB_KEY_STATUS), encoded); err != nil {
+		return err
+	}
+	p.status.CurrentWallet, p.status.CurrentAccount = walletID, accountID
+	return nil
 }
 
 func encodeStatusToBytes(status *Status) ([]byte, error) {
@@ -617,6 +659,10 @@ func LoadStatusFromDB(kvdb db.KVDB) *Status {
 }
 
 func (p *Manager) SaveStatus() error {
+	// Catalog batches own mutex until their durable selection is also live.
+	// Never persist an earlier Status snapshot in that publication window.
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 	return p.saveStatus()
 }
 
@@ -624,6 +670,8 @@ func (p *Manager) SaveStatus() error {
 // locker state. Publish height and hash together only after the status write
 // succeeds, keeping the shared Status object unchanged on failure.
 func (p *Manager) SaveBlockMonitorProgress(l1 bool, height int, hash string, hashWindow int) error {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 	p.status.Lock()
 	defer p.status.Unlock()
 	onDisk := snapshotStatusLocked(p.status)
@@ -669,6 +717,11 @@ func (p *Manager) saveSecret(secret, password string, ty int, w common.Wallet) e
 	if err != nil {
 		return err
 	}
+	if ty == WALLET_TYPE_MNEMONIC {
+		if err := p.validateWalletCatalogChangeLocked(&WalletInfo{WalletInDB: *wallet, Wallet: w}); err != nil {
+			return err
+		}
+	}
 	if err := saveWallet(p.db, wallet); err != nil {
 		return err
 	}
@@ -700,6 +753,26 @@ func (p *Manager) prepareWalletSecret(secret, password string, ty int, w common.
 		Name:         defaultWalletName(len(p.walletInfoMap)),
 		AccountNames: map[uint32]string{0: defaultAccountName(0)},
 		AccountDIDs:  make(map[uint32]string),
+	}
+	// Deletions and user renames can leave the next numbered name occupied.
+	for position := len(p.walletInfoMap); ; position++ {
+		name := defaultWalletName(position)
+		if p.accountProfile != nil {
+			// The wallet identity is already unique across devices. A derived
+			// suffix avoids coordinating independently allocated default names.
+			name += " " + walletFingerprint(w)
+		}
+		used := false
+		for _, existing := range p.walletInfoMap {
+			if strings.Join(strings.Fields(existing.Name), " ") == name {
+				used = true
+				break
+			}
+		}
+		if !used {
+			wallet.Name = name
+			break
+		}
 	}
 
 	return wallet, nil
@@ -749,6 +822,46 @@ func (p *Manager) loadWalletSecret(w *WalletInfo, password string) (string, erro
 }
 
 func (p *Manager) loadWalletSecretBytes(w *WalletInfo, password string) ([]byte, error) {
+	if w == nil {
+		return nil, fmt.Errorf("wallet is unavailable")
+	}
+	stored, err := loadWallet(p.db, w.Id)
+	if err != nil {
+		return nil, err
+	}
+	if stored.Id != w.Id || stored.Type != w.Type {
+		return nil, fmt.Errorf("persisted wallet identity changed")
+	}
+	return p.decryptWalletSecretBytes(stored, password)
+}
+
+func (p *Manager) refreshWalletCredentialCacheLocked(password string) error {
+	stored := make(map[int64]*WalletInDB, len(p.walletInfoMap))
+	for id, info := range p.walletInfoMap {
+		value, err := loadWallet(p.db, id)
+		if err != nil {
+			return err
+		}
+		if info == nil || value.Id != id || value.Type != info.Type {
+			return fmt.Errorf("persisted wallet identity changed")
+		}
+		secret, err := p.decryptWalletSecretBytes(value, password)
+		zeroBytes(secret)
+		if err != nil {
+			return err
+		}
+		stored[id] = value
+	}
+	for id, value := range stored {
+		p.walletInfoMap[id].Mnemonic = append([]byte(nil), value.Mnemonic...)
+		p.walletInfoMap[id].Salt = append([]byte(nil), value.Salt...)
+	}
+	return nil
+}
+
+// Prepared catalog entries have not been committed yet. Only those snapshot
+// builders decrypt supplied ciphertext; password authentication reads the DB.
+func (p *Manager) decryptWalletSecretBytes(w *WalletInDB, password string) ([]byte, error) {
 	key, err := p.restoreSnaclKey(w.Salt, password)
 	if err != nil {
 		Log.Errorf("restoreSnaclKey failed. %v", err)

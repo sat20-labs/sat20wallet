@@ -1151,6 +1151,11 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 // 发送资产到一个地址上，拆分n个输出
 func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr string, assetName string,
 	amt string, n int, feeRate int64, memo []byte) (*wire.MsgTx, int64, error) {
+	if p.db != nil {
+		if err := p.checkAccountManagedDataImport(); err != nil {
+			return nil, 0, err
+		}
+	}
 
 	if localWallet == nil {
 		localWallet = p.wallet

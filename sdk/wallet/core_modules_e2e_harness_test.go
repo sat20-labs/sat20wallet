@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/url"
@@ -20,11 +21,12 @@ const coreE2EChildMnemonic = "legal winner thank year wave sausage worth useful 
 const coreE2EPassword = "core-e2e-only-password"
 
 type coreE2EConfig struct {
-	Core AccountIndexerLocation `json:"core"`
-	Bootstrap AccountIndexerLocation `json:"bootstrap"`
-	CorePeer string `json:"core_peer"`
-	BootstrapPeer string `json:"bootstrap_peer"`
-	Contract string `json:"contract"`
+	Core                AccountIndexerLocation `json:"core"`
+	Bootstrap           AccountIndexerLocation `json:"bootstrap"`
+	CorePeer            string                 `json:"core_peer"`
+	BootstrapPeer       string                 `json:"bootstrap_peer"`
+	Contract            string                 `json:"contract"`
+	MaintenanceMnemonic string                 `json:"maintenance_mnemonic"`
 }
 
 func coreRequire(t *testing.T, phase string, err error) {
@@ -75,7 +77,7 @@ func coreNewE2EManager(t *testing.T, cfg coreE2EConfig, chain *coreE2EChain, mne
 	config := &sdkcommon.Config{Env: "test", Chain: "testnet",
 		IndexerL1: &sdkcommon.Indexer{Scheme: cfg.Core.Scheme, Host: cfg.Core.Host, Proxy: cfg.Core.Proxy},
 		IndexerL2: &sdkcommon.Indexer{Scheme: cfg.Core.Scheme, Host: cfg.Core.Host, Proxy: cfg.Core.Proxy},
-		Peers: []string{cfg.BootstrapPeer, cfg.CorePeer},
+		Peers:     []string{cfg.BootstrapPeer, cfg.CorePeer},
 	}
 	manager := NewManager(config, db)
 	coreAssert(t, manager != nil, "construct SDK manager")
@@ -111,13 +113,13 @@ func coreAnswers() []account.AnswerAttempt {
 }
 
 type coreRecoveryMaterial struct {
-	locator account.Locator
-	userShare account.RecoveryShare
+	locator         account.Locator
+	userShare       account.RecoveryShare
 	guardianPrivate []byte
-	auth AccountStorageAuthorization
+	auth            AccountStorageAuthorization
 }
 
-func coreActivateE2E(t *testing.T, manager *Manager, mode account.RecoveryMode) *coreRecoveryMaterial {
+func coreActivateE2E(t *testing.T, manager *Manager, mode account.RecoveryMode, guardian *Manager) *coreRecoveryMaterial {
 	t.Helper()
 	coreRequire(t, "initialize managed account", manager.InitializeAccountManagement(coreE2EPassword))
 	auth, err := manager.ReusePaidAccountStorage(100)
@@ -133,26 +135,48 @@ func coreActivateE2E(t *testing.T, manager *Manager, mode account.RecoveryMode) 
 	options := account.CreateOptions{AccountID: id, Backup: bootstrap, RecoveryMode: mode, Questions: coreQuestions()}
 	material := &coreRecoveryMaterial{auth: *auth}
 	if mode == account.RecoveryMode2Of3 {
-		private, public, err := account.GenerateGuardianKey(nil)
-		coreRequire(t, "generate synthetic guardian", err)
+		coreAssert(t, guardian != nil && guardian != manager, "Guardian must be an independent wallet")
+		identity, err := guardian.GetOrCreateAccountGuardianIdentity(coreE2EPassword)
+		coreRequire(t, "read independent Guardian identity", err)
+		coreAssert(t, identity.MailboxID != id, "Guardian must have an independent root identity")
+		private, err := guardian.LoadAccountGuardianPrivateKey(coreE2EPassword)
+		coreRequire(t, "authenticate independent Guardian key", err)
+		public, err := base64.RawURLEncoding.DecodeString(identity.PublicKey)
+		coreRequire(t, "decode independent Guardian contact", err)
 		material.guardianPrivate = private
 		options.GuardianPublicKey = public
-		options.GuardianMailboxID = id
+		options.GuardianMailboxID = identity.MailboxID
+		_, err = guardian.ReusePaidAccountStorage(100)
+		coreRequire(t, "reuse independent Guardian paid storage", err)
 		t.Cleanup(func() { zeroBytes(private) })
 	}
 	err = manager.UseAccountStorageAuthorization(AccountStoragePurposeRecovery, func(storage *AccountStorageAuthorization) error {
 		pkg, err := manager.CreateAccountRecoveryPackage(options)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		repo, err := manager.NewAccountRepositoryForStorage(*storage)
-		if err != nil { return err }
-		if err := account.NewManager(repo).Publish(context.Background(), *pkg); err != nil { return err }
+		if err != nil {
+			return err
+		}
+		if err := account.NewManager(repo).Publish(context.Background(), *pkg); err != nil {
+			return err
+		}
 		if pkg.GuardianCapsule != nil {
-			if err := manager.PutGuardianCapsuleForStorage(*storage, id, *pkg.GuardianCapsule); err != nil { return err }
+			if err := guardian.UseAccountStorageAuthorization(AccountStoragePurposeGuardian, func(auth *AccountStorageAuthorization) error {
+				return guardian.PutGuardianCapsuleForStorage(*auth, options.GuardianMailboxID, *pkg.GuardianCapsule)
+			}); err != nil {
+				return err
+			}
 		}
 		share, err := account.RecoverDKVSShare(pkg.DKVSShareCapsule, pkg.KnowledgeBundle, coreAnswers())
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		recovered, secret, err := account.RecoverAccount(pkg.Envelope, pkg.UserShare, share)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		defer zeroBytes(secret)
 		defer clearAccountBackup(&recovered)
 		material.locator, material.userShare = pkg.Envelope.Locator, pkg.UserShare

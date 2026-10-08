@@ -210,25 +210,40 @@ func (p *DaoContract) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing SatValue")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("sat value exceeds eight bytes")
+	}
 	p.SatValue = tokenizer.ExtractInt64()
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing ValidatorNum")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("validator num exceeds eight bytes")
 	}
 	p.ValidatorNum = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing RegisterFee")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("register fee exceeds eight bytes")
+	}
 	p.RegisterFee = tokenizer.ExtractInt64()
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing RegisterTimeOut")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("register time out exceeds eight bytes")
+	}
 	p.RegisterTimeOut = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing OnlyRegisterSelf")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("only register self exceeds eight bytes")
 	}
 	OnlyRegisterSelf := (tokenizer.ExtractInt64())
 	if OnlyRegisterSelf > 0 {
@@ -260,10 +275,16 @@ func (p *DaoContract) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing AirDropTimeOut")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("air drop time out exceeds eight bytes")
+	}
 	p.AirDropTimeOut = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing ReferralRatio")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("referral ratio exceeds eight bytes")
 	}
 	p.ReferralRatio = int(tokenizer.ExtractInt64())
 
@@ -438,6 +459,9 @@ func (p *DonateInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing value")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("value exceeds eight bytes")
+	}
 	p.Value = (tokenizer.ExtractInt64())
 
 	return nil
@@ -547,10 +571,16 @@ func (p *ValidateInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
+	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing result")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("result exceeds eight bytes")
 	}
 	p.Result = int(tokenizer.ExtractInt64())
 

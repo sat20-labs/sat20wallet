@@ -634,8 +634,8 @@ export class BiometricCredentialManager {
   public async clearAllCredentials(): Promise<{ success: boolean; error?: string }> {
     try {
       await this.ensureLoaded()
-      this.credentials.clear()
       await Storage.remove({ key: CREDENTIALS_STORAGE_KEY })
+      this.credentials.clear()
       return { success: true }
     } catch (error) {
       console.error('清除所有凭据失败:', error)

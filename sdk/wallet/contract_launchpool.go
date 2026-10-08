@@ -241,36 +241,57 @@ func (p *LaunchPoolContract) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("invalid asset symbol: %v", err)
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("asset symbol exceeds eight bytes")
+	}
 	p.AssetSymbol = int32(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("invalid bindingSat: %v", err)
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("binding sat exceeds eight bytes")
 	}
 	p.BindingSat = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("invalid mintAmtPerSat: %v", err)
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("mint amt per sat exceeds eight bytes")
+	}
 	p.MintAmtPerSat = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("invalid limit: %v", err)
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("limit exceeds eight bytes")
 	}
 	p.Limit = (tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("invalid maxSupply: %v", err)
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("max supply exceeds eight bytes")
+	}
 	p.MaxSupply = (tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("invalid ratio: %v", err)
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("launch ratio exceeds eight bytes")
 	}
 	p.LaunchRatio = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		p.ReserveRatio = 0
 	} else {
+		if len(tokenizer.Data()) > 8 {
+			return fmt.Errorf("reserve ratio exceeds eight bytes")
+		}
 		p.ReserveRatio = int(tokenizer.ExtractInt64())
 	}
 

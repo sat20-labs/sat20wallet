@@ -332,7 +332,10 @@ func TestLoadStatusLegacySTPStatusOverridesWalletStatus(t *testing.T) {
 	}
 	assertMigratedSTPStatus(t, status, legacy)
 
-	persisted, ok := readStatusFromDB(kv, DB_KEY_STATUS)
+	persisted, ok, err := readStatusFromDB(kv, DB_KEY_STATUS)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok || persisted.DBver != legacy.DBver || persisted.SyncHeightL1 != legacy.SyncHeightL1 {
 		t.Fatalf("wallet-status did not persist authoritative legacy STP status: %+v", persisted)
 	}
@@ -386,7 +389,10 @@ func TestLoadStatusNormalizesEmptyWalletStatusHeights(t *testing.T) {
 }
 
 func TestLoadStatusReportsMissingPersistentStatus(t *testing.T) {
-	status, loaded := loadStatusWithLegacyMigrationResult(newMemoryKVDB())
+	status, loaded, err := loadStatusWithLegacyMigrationResult(newMemoryKVDB())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if loaded {
 		t.Fatal("empty database reported persistent status")
 	}
@@ -414,7 +420,10 @@ func TestLoadStatusNeverQueriesIndexerTips(t *testing.T) {
 		l1IndexerClient: l1Manager,
 		l2IndexerClient: l2Manager,
 	}
-	status := manager.loadStatus()
+	status, err := manager.loadStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if l1.syncCalls != 0 || l1.blockHashCalls != 0 ||
 		l2.syncCalls != 0 || l2.blockHashCalls != 0 {
@@ -425,7 +434,7 @@ func TestLoadStatusNeverQueriesIndexerTips(t *testing.T) {
 		t.Fatalf("testing mode initialized status heights: sync=%d l1=%d l2=%d",
 			status.SyncHeight, status.SyncHeightL1, status.SyncHeightL2)
 	}
-	if _, loaded := loadStatusWithLegacyMigrationResult(kv); !loaded {
+	if _, loaded, err := loadStatusWithLegacyMigrationResult(kv); err != nil || !loaded {
 		t.Fatal("default status was not persisted")
 	}
 }
@@ -467,7 +476,10 @@ func TestLoadStatusResetsChainStateWithoutNetwork(t *testing.T) {
 		l2IndexerClient: l2Manager,
 	}
 
-	status := manager.loadStatus()
+	status, err := manager.loadStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if status.CurrentChain != "testnet" || status.SyncHeightL1 != -1 ||
 		status.SyncHeightL2 != -1 || status.SyncHeight != -1 {
 		t.Fatalf("chain status was not reset for background initialization: %+v", status)

@@ -155,6 +155,9 @@ func (p *SwapInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
+	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -5741,7 +5744,8 @@ func (p *SwapContractRuntime) SetPeerActionResult(action string, param any) {
 }
 
 func (p *SwapContractRuntime) genDepositInfoFromResultTx(tx *swire.MsgTx, details *InvokeResultMore) (*DealInfo, error) {
-	data, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
+	bindOutputs := GetChainParam_SatsNet().POSV2Active(int32(p.CurrBlock))
+	data, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, bindOutputs)
 	if err != nil {
 		return nil, err
 	}
@@ -5828,7 +5832,11 @@ func (p *SwapContractRuntime) genDepositInfoFromAnchorTxs(req *wwire.RemoteSignM
 		if err != nil {
 			return nil, err
 		}
-		anchorData, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript)
+		bindOutputs, err := p.stp.GetWalletMgr().AnchorOutputsActive()
+		if err != nil {
+			return nil, err
+		}
+		anchorData, _, err := CheckAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, bindOutputs)
 		if err != nil {
 			Log.Errorf("CheckAnchorPkScript %s failed", tx.TxID())
 			return nil, err

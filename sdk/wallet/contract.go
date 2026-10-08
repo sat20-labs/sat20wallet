@@ -710,10 +710,16 @@ func (p *EnableInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing heightL1")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("height l1 exceeds eight bytes")
+	}
 	p.HeightL1 = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing heightL2")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("height l2 exceeds eight bytes")
 	}
 	p.HeightL2 = int(tokenizer.ExtractInt64())
 
@@ -949,10 +955,16 @@ func (p *ContractBase) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing contract start block")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("start block exceeds eight bytes")
+	}
 	p.StartBlock = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing contract end block")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("end block exceeds eight bytes")
 	}
 	p.EndBlock = int(tokenizer.ExtractInt64())
 	return nil

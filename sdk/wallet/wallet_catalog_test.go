@@ -101,6 +101,69 @@ func TestEnsureAccountOnlyExtendsAccountIndexes(t *testing.T) {
 	}
 }
 
+func TestWalletCatalogRejectsUnrecoverableMetadataBeforeSaving(t *testing.T) {
+	database := newMemoryKVDB()
+	root := &WalletInfo{WalletInDB: WalletInDB{Id: 1, Name: "Root", Accounts: 1,
+		AccountNames: map[uint32]string{0: "Account 1"}, AccountDIDs: map[uint32]string{}}}
+	child := &WalletInfo{WalletInDB: WalletInDB{Id: 2, Name: "Child", Accounts: 1,
+		AccountNames: map[uint32]string{0: "Account 1"}, AccountDIDs: map[uint32]string{}}}
+	manager := &Manager{db: database, walletInfoMap: map[int64]*WalletInfo{1: root, 2: child}}
+	for _, scenario := range []struct {
+		name   string
+		change func() error
+	}{
+		{"duplicate_name", func() error { return manager.UpdateWalletName(2, " Root ") }},
+		{"normalized_duplicate_name", func() error {
+			root.Name = "Root wallet"
+			return manager.UpdateWalletName(2, "Root  wallet")
+		}},
+		{"too_many_accounts", func() error { return manager.EnsureAccount(2, 1024, "A", "") }},
+		{"wrapped_index", func() error { return manager.UpdateAccountMetadata(2, ^uint32(0), "A", "") }},
+		{"too_long_name", func() error { return manager.UpdateAccountMetadata(2, 0, strings.Repeat("a", 4097), "") }},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			if err := scenario.change(); err == nil {
+				t.Fatal("accepted unrecoverable metadata")
+			}
+			if child.Name != "Child" || child.Accounts != 1 || child.AccountNames[0] != "Account 1" {
+				t.Fatal("rejected operation modified the live catalog")
+			}
+		})
+	}
+}
+
+func TestWalletCatalogRejectsPlaintextOverflowBeforeSaving(t *testing.T) {
+	const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+	const password = "test-password"
+	database := newMemoryKVDB()
+	wallet := NewInternalWalletWithMnemonic(mnemonic, "", &chaincfg.TestNet4Params)
+	wallet.id = 1
+	manager := &Manager{db: database, walletInfoMap: make(map[int64]*WalletInfo)}
+	if err := manager.saveMnemonic(mnemonic, password, wallet); err != nil {
+		t.Fatal(err)
+	}
+	info := manager.walletInfoMap[1]
+	info.Accounts = 12
+	for index := uint32(0); index < 12; index++ {
+		info.AccountNames[index] = strings.Repeat("a", 750)
+	}
+	if err := saveWallet(database, &info.WalletInDB); err != nil {
+		t.Fatal(err)
+	}
+	manager.accountPassword = password
+	manager.accountProfile = &accountManagementProfile{RootFingerprint: walletFingerprint(wallet)}
+	if err := manager.UpdateAccountMetadata(1, 0, strings.Repeat("b", 3000), ""); err == nil {
+		t.Fatal("accepted metadata exceeding the decompressed recovery limit")
+	}
+	if info.AccountNames[0] != strings.Repeat("a", 750) || len(manager.accountProfile.Pending) != 0 {
+		t.Fatal("rejected metadata changed the catalog or pending sync")
+	}
+	persisted, err := loadWallet(database, 1)
+	if err != nil || persisted.AccountNames[0] != info.AccountNames[0] {
+		t.Fatal("rejected metadata changed persistent storage")
+	}
+}
+
 func TestAccountManagementIgnoresDuplicateWalletFingerprints(t *testing.T) {
 	const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 	const password = "test-password"

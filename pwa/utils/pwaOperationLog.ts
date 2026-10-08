@@ -410,6 +410,11 @@ export async function finishPwaOperation(
   if (!context) return
   try {
     if (error) {
+      const pending = (error as any).data
+      if (pending?.pending && pending?.transaction_id) {
+        await updateOperationLog(context.id, { status: 'pending', message: error.message, txid: pending.transaction_id })
+        return
+      }
       await updateOperationLog(context.id, {
         status: 'failed',
         message: `${context.title} failed`,

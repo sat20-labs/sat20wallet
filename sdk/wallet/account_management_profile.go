@@ -1,10 +1,14 @@
 package wallet
 
 import (
+	"bytes"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
+
+	indexercommon "github.com/sat20-labs/indexer/common"
 
 	"github.com/sat20-labs/sat20wallet/sdk/account"
 )
@@ -57,10 +61,16 @@ func accountManagementProfileKey() []byte {
 }
 
 func (p *Manager) loadAccountManagementProfileLocked() error {
-	p.accountProfile = nil
 	encoded, err := p.db.Read(accountManagementProfileKey())
-	if err != nil || len(encoded) == 0 {
+	if errors.Is(err, indexercommon.ErrKeyNotFound) {
+		p.accountProfile = nil
 		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if len(encoded) == 0 {
+		return fmt.Errorf("empty account management profile")
 	}
 	var profile accountManagementProfile
 	if err := DecodeFromBytes(encoded, &profile); err != nil {
@@ -108,6 +118,12 @@ func (p *Manager) unlockAccountManagementLocked(password string) error {
 	if err != nil {
 		return err
 	}
+	// PWA screen unlock authenticates a running session. Its unchanged keys
+	// must not invalidate account sync already waiting on the network.
+	if p.accountPassword == password && bytes.Equal(p.accountSecret, secret) {
+		zeroBytes(secret)
+		return nil
+	}
 	zeroBytes(p.accountSecret)
 	p.accountSecret = secret
 	p.accountPassword = password
@@ -119,11 +135,23 @@ func (p *Manager) decryptAccountManagementSecretLocked(password string) ([]byte,
 	if p.accountProfile == nil {
 		return nil, nil
 	}
-	key, err := p.restoreSnaclKey(p.accountProfile.SecretSalt, password)
+	encoded, err := p.db.Read(accountManagementProfileKey())
 	if err != nil {
 		return nil, err
 	}
-	secret, err := key.Decrypt(p.accountProfile.SecretCipher)
+	var profile accountManagementProfile
+	if err := DecodeFromBytes(encoded, &profile); err != nil {
+		return nil, err
+	}
+	if profile.Version != accountManagementProfileVersion ||
+		profile.AccountID != p.accountProfile.AccountID || profile.RootFingerprint != p.accountProfile.RootFingerprint {
+		return nil, fmt.Errorf("persisted account management identity changed")
+	}
+	key, err := p.restoreSnaclKey(profile.SecretSalt, password)
+	if err != nil {
+		return nil, err
+	}
+	secret, err := key.Decrypt(profile.SecretCipher)
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +159,10 @@ func (p *Manager) decryptAccountManagementSecretLocked(password string) ([]byte,
 		zeroBytes(secret)
 		return nil, fmt.Errorf("invalid account management secret")
 	}
+	// Keep only credential fields current; a password check must not replace
+	// this Manager's pending catalog/sync state with another Manager's metadata.
+	p.accountProfile.SecretCipher = append([]byte(nil), profile.SecretCipher...)
+	p.accountProfile.SecretSalt = append([]byte(nil), profile.SecretSalt...)
 	return secret, nil
 }
 

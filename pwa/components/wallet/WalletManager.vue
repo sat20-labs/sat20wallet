@@ -300,7 +300,8 @@
               </Button>
             </div>
             <div>
-              <Button variant="default" @click="confirmSavedMnemonic" class="w-full">
+              <Button v-if="createdReadError" @click="reloadCreatedWallet" class="w-full">I saved my phrase, reload wallet</Button>
+              <Button v-else variant="default" @click="confirmSavedMnemonic" class="w-full">
                 {{ $t('walletManager.confirmSaved') }}
               </Button>
 			  <p class="mt-2 text-xs text-muted-foreground">Clipboard export is disabled. Record the words in a secure offline location.</p>
@@ -374,6 +375,8 @@ const editingName = ref('')
 const mnemonicPassword = ref('')
 const mnemonicPhrase = ref('')
 const showMnemonic = ref(false)
+const createdReadError = ref(false)
+const reloadCreatedWallet = () => { window.location.hash = '#/unlock'; window.location.reload() }
 
 // Mock NFTs and BTC Domains data
 const nfts = ref([
@@ -523,21 +526,23 @@ const createWallet = async () => {
     if (outcome === undefined) return
     const [err, result] = outcome
 
-    if (err || !result) {
+    if (!result) {
       throw err || new Error('Failed to create wallet')
     }
 
     // 创建成功后，显示助记词
 	if (approveStore.isVisible.value) approveStore.hideApprove()
 	endMnemonicView ??= beginMnemonicView()
+    createdReadError.value = Boolean(err)
     mnemonicPhrase.value = result as string
     showMnemonic.value = false
     isShowMnemonicDialogOpen.value = true
 
     toast({
       title: 'Wallet Created Successfully',
-      description: 'Your wallet has been created. Please save your recovery phrase.',
-      variant: 'success'
+      description: err ? 'Wallet saved. Please save your recovery phrase, then reload to unlock the wallet.'
+        : 'Your wallet has been created. Please save your recovery phrase.',
+      variant: err ? 'info' : 'success'
     })
   } catch (error: any) {
     toast({
@@ -669,6 +674,7 @@ const mnemonicWords = computed(() =>
 )
 
 const showMnemonicDialog = (wallet: WalletData) => {
+  createdReadError.value = false
   editingWallet.value = wallet
   mnemonicPhrase.value = ''
   mnemonicPassword.value = ''

@@ -4446,8 +4446,8 @@ const checkMintTickerAvailability = async (showAvailableToast = true) => {
   let tickerInfo: any = null
   try {
     tickerInfo = typeof res?.ticker === 'string' ? JSON.parse(res.ticker) : res
-    mintAmount.value = tickerInfo?.limit || tickerInfo?.Limit || mintAmount.value
     mintLimit = String(tickerInfo?.limit || tickerInfo?.Limit || '')
+    if (!String(mintAmount.value || '').trim()) mintAmount.value = mintLimit
   } catch {
     // Keep manual input when the response shape is unknown.
   }

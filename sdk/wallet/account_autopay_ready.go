@@ -1,12 +1,15 @@
 package wallet
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
+
+var ErrAccountAutopayFundingQuoteChanged = errors.New("AUTOPAY 充值参数已变化，请重新确认")
 
 const (
 	accountAutopayReadyTimeout      = 2 * time.Minute
@@ -27,6 +30,10 @@ const (
 // AUTOPAY delegate. It is intentionally separate from account storage mode:
 // an expired paid delegate remains paid and must be funded again.
 type AccountAutopayFundingStatus struct {
+	FundingTransactionID     string `json:"funding_transaction_id,omitempty"`
+	FundingError             string `json:"funding_error,omitempty"`
+	FundingPending           bool   `json:"funding_pending,omitempty"`
+	FundingCanResume         bool   `json:"funding_can_resume,omitempty"`
 	Required                 bool   `json:"required"`
 	Ready                    bool   `json:"ready"`
 	NeedsFunding             bool   `json:"needs_funding"`
@@ -41,6 +48,7 @@ type AccountAutopayFundingStatus struct {
 	AmountPerBlock           string `json:"amount_per_block,omitempty"`
 	Balance                  string `json:"balance,omitempty"`
 	RequiredAmountPerBlock   string `json:"required_amount_per_block,omitempty"`
+	EffectiveAmountPerBlock  string `json:"effective_amount_per_block,omitempty"`
 	RecommendedFundingAmount string `json:"recommended_funding_amount,omitempty"`
 	RecommendedFundingBlocks uint64 `json:"recommended_funding_blocks,omitempty"`
 }
@@ -61,7 +69,8 @@ func accountAutopayStateFundingStatus(state *dkvsindexer.AutopayContractState,
 	}
 	result.CurrentBlock = state.CurrentBlock
 	if state.TemplateName != TEMPLATE_CONTRACT_AUTOPAY || state.Closed ||
-		!strings.EqualFold(strings.TrimSpace(state.Status), "active") ||
+		(!strings.EqualFold(strings.TrimSpace(state.Status), "active") &&
+			!strings.EqualFold(strings.TrimSpace(state.Status), "funding")) ||
 		!strings.EqualFold(strings.TrimSpace(state.ServiceName), defaults.AutopayServiceName) ||
 		!strings.EqualFold(strings.TrimSpace(state.Recipient), defaults.AutopayRecipient) ||
 		strings.TrimSpace(state.FeeAssetName) != defaults.AutopayFeeAssetName ||
@@ -121,6 +130,13 @@ func accountAutopayStateFundingStatus(state *dkvsindexer.AutopayContractState,
 		result.CanFund = true
 		result.Reason = AccountAutopayReasonBalanceInsufficient
 		result.Message = "账户 AUTOPAY 余额不足，请充值以继续付费同步。"
+		return result
+	}
+	// A contract awaiting funding can accept a missing/stopped/underfunded
+	// delegate above, but an active delegate alone does not prove payment.
+	if !strings.EqualFold(strings.TrimSpace(state.Status), "active") {
+		result.Reason = AccountAutopayReasonContractInactive
+		result.Message = "AUTOPAY 合约尚未恢复支付，请检查网络或联系节点维护者。"
 		return result
 	}
 	result.Ready = true

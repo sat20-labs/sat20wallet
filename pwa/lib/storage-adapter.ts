@@ -11,9 +11,9 @@ const shouldUseIndexedDb = (key: string) => {
     key.startsWith('local:authorized_origins')
 }
 
-const openDatabase = () => {
+const openDatabase = (): Promise<IDBDatabase> => {
   if (!dbPromise) {
-    dbPromise = new Promise((resolve, reject) => {
+    dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION)
 
       request.onupgradeneeded = () => {
@@ -23,12 +23,17 @@ const openDatabase = () => {
         }
       }
 
-      request.onsuccess = () => resolve(request.result)
+      request.onsuccess = () => {
+        const db = request.result
+        db.onversionchange = () => { db.close(); dbPromise = null }
+        db.onclose = () => { dbPromise = null }
+        resolve(db)
+      }
       request.onerror = () => reject(request.error)
-    })
+    }).catch(error => { dbPromise = null; throw error })
   }
 
-  return dbPromise
+  return dbPromise!
 }
 
 const readIndexedDb = async (key: string): Promise<string | null> => {
@@ -50,10 +55,33 @@ const writeIndexedDb = async (key: string, value: string): Promise<void> => {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite')
     const store = transaction.objectStore(STORE_NAME)
-    const request = store.put(value, key)
+    transaction.oncomplete = () => resolve()
+    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB write aborted'))
+    store.put(value, key)
+  })
+}
 
-    request.onsuccess = () => resolve()
-    request.onerror = () => reject(request.error)
+// Read and merge under the same transaction so another tab's committed fields
+// cannot be replaced by this tab's cached snapshot.
+const updateIndexedDb = async (key: string, update: (value: string | null) => string): Promise<string> => {
+  const db = await openDatabase()
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite')
+    const store = transaction.objectStore(STORE_NAME)
+    let value: string
+    let failure: unknown
+    transaction.oncomplete = () => resolve(value)
+    transaction.onabort = () => reject(failure ?? transaction.error ?? new Error('IndexedDB update aborted'))
+    const request = store.get(key)
+    request.onsuccess = () => {
+      try {
+        value = update(request.result ?? null)
+        if (value !== request.result) store.put(value, key)
+      } catch (error) {
+        failure = error
+        transaction.abort()
+      }
+    }
   })
 }
 
@@ -63,10 +91,9 @@ const removeIndexedDb = async (key: string): Promise<void> => {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite')
     const store = transaction.objectStore(STORE_NAME)
-    const request = store.delete(key)
-
-    request.onsuccess = () => resolve()
-    request.onerror = () => reject(request.error)
+    transaction.oncomplete = () => resolve()
+    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB delete aborted'))
+    store.delete(key)
   })
 }
 
@@ -76,17 +103,16 @@ const clearIndexedDb = async (): Promise<void> => {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite')
     const store = transaction.objectStore(STORE_NAME)
-    const request = store.clear()
-
-    request.onsuccess = () => resolve()
-    request.onerror = () => reject(request.error)
+    transaction.oncomplete = () => resolve()
+    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB clear aborted'))
+    store.clear()
   })
 }
 
 /**
- * PWA storage adapter. Wallet state and DApp authorization live in IndexedDB so
- * they survive standalone PWA restarts; direct localStorage writes remain for UI
- * preferences and non-core cached data.
+ * PWA preferences, DApp authorization and biometric bindings use IndexedDB.
+ * Wallet catalog, selection and identity are persisted by the SDK. Other
+ * non-core cached data can still use localStorage.
  */
 export const Storage = {
   async get({ key }: { key: string }): Promise<{ value: string | null }> {
@@ -97,9 +123,14 @@ export const Storage = {
       const value = localStorage.getItem(key)
       return { value }
     } catch (error) {
-      console.error('localStorage.getItem error:', error)
-      return { value: null }
+      console.error('PWA storage read failed:', error)
+      throw error
     }
+  },
+
+  async update({ key, update }: { key: string; update: (value: string | null) => string }): Promise<string> {
+    if (!shouldUseIndexedDb(key)) throw new Error('Transactional updates require IndexedDB')
+    return updateIndexedDb(key, update)
   },
 
   async set({ key, value }: { key: string; value: string }): Promise<void> {
@@ -110,7 +141,7 @@ export const Storage = {
       }
       localStorage.setItem(key, value)
     } catch (error) {
-      console.error('localStorage.setItem error:', error)
+      console.error('PWA storage write failed:', error)
       throw error
     }
   },

@@ -56,6 +56,10 @@ func (p *Manager) bootstrapStatusTip(generation uint64, targetChain string, l1 b
 	}
 	hashes := loadBlockHashWindow(height, initialStatusBlockHashWindow(targetChain, l1), client)
 
+	// Reuse the catalog publication gate only for the local status update.
+	// Indexer requests above must remain outside Manager.mutex.
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 	p.statusBootstrapMu.Lock()
 	defer p.statusBootstrapMu.Unlock()
 	if generation != p.statusBootstrapGeneration || p.status == nil {

@@ -83,6 +83,36 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 	if err := store.AssertConsistent(output.OutPointStr, asset.Name); err != nil {
 		t.Fatal(err)
 	}
+	// Batch recipients can revalidate the same consignment seconds apart.
+	// The second validation must not invalidate proofs referencing the first.
+	revalidated := *receipt
+	revalidated.ValidatedAt++
+	repeated, err := store.ValidateAndStoreConsignment(context.Background(), testValidator{receipt: &revalidated}, testEvidence{}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeatedHash, err := repeated.Hash(); err != nil || repeatedHash != receiptHash {
+		t.Fatalf("repeat validation changed the referenced receipt hash: %v", err)
+	}
+	if err := store.AssertConsistent(output.OutPointStr, asset.Name); err != nil {
+		t.Fatalf("repeat validation invalidated the existing proof: %v", err)
+	}
+	// Reusing an immutable receipt still requires current consensus validation,
+	// and a changed result must never replace the evidence of existing proofs.
+	for _, change := range []func(*ValidationReceipt){
+		func(value *ValidationReceipt) { value.Status = "invalid" },
+		func(value *ValidationReceipt) { value.StateHash[0]++ },
+		func(value *ValidationReceipt) { value.EngineBuildID = "different-engine" },
+	} {
+		changed := revalidated
+		change(&changed)
+		if _, err := store.ValidateAndStoreConsignment(context.Background(), testValidator{receipt: &changed}, testEvidence{}, raw); err == nil {
+			t.Fatal("changed consensus receipt was accepted")
+		}
+		if err := store.AssertConsistent(output.OutPointStr, asset.Name); err != nil {
+			t.Fatalf("rejected validation changed the existing proof: %v", err)
+		}
+	}
 	loaded, err := store.LoadOutput(output.OutPointStr)
 	if err != nil {
 		t.Fatal(err)

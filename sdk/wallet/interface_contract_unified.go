@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -872,9 +873,9 @@ func (p *Manager) deployAgentContract(req *ContractDeployRequest) (*ContractTxRe
 		ContractPrefix:  p.contractAddressPrefix(),
 		Type:            contractcommon.ContractTypeAgent,
 		SubType:         subtype,
-		Version:        version,
-		Deployer:       p.wallet.GetAddress(),
-		DeployNonce:    deployNonce,
+		Version:         version,
+		Deployer:        p.wallet.GetAddress(),
+		DeployNonce:     deployNonce,
 		ContractContent: content,
 		GasLimit:        gasLimit,
 		Funding:         funding,
@@ -1157,16 +1158,16 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 }
 
 func (p *Manager) invokeTemplateContract(req *ContractInvokeRequest) (*ContractTxResult, error) {
-	return p.invokeTemplateContractWithWalletMode(req, p.wallet, true)
+	return p.invokeTemplateContractWithWalletMode(req, p.wallet, true, "")
 }
 
 func (p *Manager) invokeTemplateContractWithWallet(req *ContractInvokeRequest,
-	localWallet walletcommon.Wallet) (*ContractTxResult, error) {
-	return p.invokeTemplateContractWithWalletMode(req, localWallet, false)
+	localWallet walletcommon.Wallet, operationID string) (*ContractTxResult, error) {
+	return p.invokeTemplateContractWithWalletMode(req, localWallet, false, operationID)
 }
 
 func (p *Manager) invokeTemplateContractWithWalletMode(req *ContractInvokeRequest,
-	localWallet walletcommon.Wallet, allowDefault bool) (*ContractTxResult, error) {
+	localWallet walletcommon.Wallet, allowDefault bool, operationID string) (*ContractTxResult, error) {
 	if localWallet == nil {
 		return nil, fmt.Errorf("wallet is not created/unlocked")
 	}
@@ -1243,9 +1244,23 @@ func (p *Manager) invokeTemplateContractWithWalletMode(req *ContractInvokeReques
 	if err != nil {
 		return nil, err
 	}
+	// Account AUTOPAY uses its existing operation log as the durable receipt.
+	// Persist the exact signed bytes with their ID before the broadcast boundary.
+	if operationID != "" {
+		var encoded bytes.Buffer
+		if err := signedTx.Serialize(&encoded); err != nil {
+			return nil, err
+		}
+		if err := p.operationLogManager().prepareAccountAutopayTransaction(operationID, signedTx.TxID(), encoded.Bytes()); err != nil {
+			return nil, fmt.Errorf("persist AUTOPAY transaction before broadcast: %w", err)
+		}
+	}
 	PrintJsonTx_SatsNet(signedTx, "InvokeTemplateContract")
 	txid, err := p.BroadcastTx_SatsNet(signedTx)
 	if err != nil {
+		if operationID != "" {
+			return &ContractTxResult{TxID: signedTx.TxID()}, err
+		}
 		return nil, err
 	}
 	return &ContractTxResult{

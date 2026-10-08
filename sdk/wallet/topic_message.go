@@ -105,10 +105,11 @@ func (p *Manager) CreateMessageTopic(topicName, displayName string, maxMembers u
 		if !errors.Is(err, indexer.ErrKeyNotFound) {
 			return nil, err
 		}
-		topicKey, keyErr := generateTopicKey()
+		topicKey, keyErr := deriveTopicGroupKey(wallet, GetChainParam_SatsNet().Name, topicName, 1)
 		if keyErr != nil {
 			return nil, keyErr
 		}
+		defer zeroWalletBytes(topicKey)
 		// Persist before the service call. If the HTTP response is lost after a
 		// successful create, retry reuses the exact same local epoch-1 key. A
 		// failed create may leave an unreachable local key, which is harmless.
@@ -461,15 +462,16 @@ func (p *Manager) commitMessageTopicChange(topicName, changeType, targetAccount 
 	if len(holders) == 0 {
 		return nil, fmt.Errorf("topic would have no key holders")
 	}
-	newKey, err := generateTopicKey()
+	newKeySeq := snapshot.State.KeySeq + 1
+	newKey, err := deriveTopicGroupKey(wallet, GetChainParam_SatsNet().Name, snapshot.Meta.TopicName, newKeySeq)
 	if err != nil {
 		return nil, err
 	}
+	defer zeroWalletBytes(newKey)
 	cryptoManager, err := NewTopicCryptoManager(p, wallet)
 	if err != nil {
 		return nil, err
 	}
-	newKeySeq := snapshot.State.KeySeq + 1
 	packages, err := cryptoManager.CreateKeyPackages(snapshot.Meta.TopicName, newKeySeq, newKey, holders)
 	if err != nil {
 		return nil, err

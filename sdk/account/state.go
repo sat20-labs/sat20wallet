@@ -17,8 +17,8 @@ import (
 
 const (
 	ManagedStateVersion   = uint32(2)
-	managedStateMaxItems  = 1024
-	managedStateMaxString = 4096
+	MaxManagedStateItems  = 1024
+	MaxManagedStateString = 4096
 )
 
 var (
@@ -52,7 +52,7 @@ func writeStateUvarint(buf *bytes.Buffer, value uint64) {
 }
 
 func writeStateString(buf *bytes.Buffer, value string) error {
-	if len(value) > managedStateMaxString {
+	if len(value) > MaxManagedStateString {
 		return ErrInvalidBackup
 	}
 	writeStateUvarint(buf, uint64(len(value)))
@@ -70,7 +70,7 @@ func readStateUvarint(reader *bytes.Reader) (uint64, error) {
 
 func readStateString(reader *bytes.Reader) (string, error) {
 	size, err := readStateUvarint(reader)
-	if err != nil || size > managedStateMaxString || size > uint64(reader.Len()) {
+	if err != nil || size > MaxManagedStateString || size > uint64(reader.Len()) {
 		return "", ErrRecoveryFailed
 	}
 	value := make([]byte, int(size))
@@ -105,7 +105,7 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 		}
 		out.DataHash = hex.EncodeToString(hash)
 	}
-	if len(out.Wallets) == 0 || len(out.Wallets) > managedStateMaxItems {
+	if len(out.Wallets) == 0 || len(out.Wallets) > MaxManagedStateItems {
 		return ManagedState{}, ErrInvalidBackup
 	}
 	sort.Slice(out.Wallets, func(i, j int) bool {
@@ -118,6 +118,7 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 		return out.Wallets[i].Fingerprint < out.Wallets[j].Fingerprint
 	})
 	seen := make(map[string]struct{}, len(out.Wallets))
+	names := make(map[string]struct{}, len(out.Wallets))
 	rootPresent := false
 	for index := range out.Wallets {
 		item := &out.Wallets[index]
@@ -140,6 +141,9 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 			item.SubAccounts = nil
 			continue
 		}
+		if item.AccountCount > MaxManagedStateItems {
+			return ManagedState{}, ErrInvalidBackup
+		}
 		backup, err := NormalizeBackup(Backup{Version: Version, Wallets: []WalletBackup{{
 			Name: item.Name, Mnemonic: item.Mnemonic, AccountCount: item.AccountCount,
 			SubAccounts: item.SubAccounts,
@@ -148,6 +152,10 @@ func normalizedManagedState(value ManagedState) (ManagedState, error) {
 			return ManagedState{}, err
 		}
 		item.Name = backup.Wallets[0].Name
+		if _, duplicate := names[item.Name]; duplicate {
+			return ManagedState{}, fmt.Errorf("%w: duplicate wallet name", ErrInvalidBackup)
+		}
+		names[item.Name] = struct{}{}
 		item.Mnemonic = backup.Wallets[0].Mnemonic
 		item.AccountCount = backup.Wallets[0].AccountCount
 		item.SubAccounts = backup.Wallets[0].SubAccounts
@@ -221,6 +229,9 @@ func encodeManagedState(value ManagedState) ([]byte, error) {
 			}
 		}
 	}
+	if raw.Len() > MaxRecoveryObjectSize {
+		return nil, fmt.Errorf("managed account state exceeds recovery plaintext limit")
+	}
 	var compressed bytes.Buffer
 	writer, err := flate.NewWriter(&compressed, flate.BestCompression)
 	if err != nil {
@@ -234,6 +245,19 @@ func encodeManagedState(value ManagedState) ([]byte, error) {
 		return nil, err
 	}
 	return compressed.Bytes(), nil
+}
+
+// ValidateManagedState checks a candidate catalog with the recovery codec.
+// The envelope adds its magic, a 12-byte GCM nonce and a 16-byte tag.
+func ValidateManagedState(value ManagedState) error {
+	encoded, err := encodeManagedState(value)
+	if err != nil {
+		return err
+	}
+	if len(encoded)+len(managedStateEnvelopeMagic)+12+16 > MaxRecoveryObjectSize {
+		return fmt.Errorf("managed account state exceeds DKVS value limit")
+	}
+	return nil
 }
 
 func decodeManagedState(value []byte) (ManagedState, error) {
@@ -269,7 +293,7 @@ func decodeManagedState(value []byte) (ManagedState, error) {
 		return ManagedState{}, err
 	}
 	count, err := readStateUvarint(stream)
-	if err != nil || count == 0 || count > managedStateMaxItems {
+	if err != nil || count == 0 || count > MaxManagedStateItems {
 		return ManagedState{}, ErrRecoveryFailed
 	}
 	state := ManagedState{
@@ -303,7 +327,7 @@ func decodeManagedState(value []byte) (ManagedState, error) {
 				return ManagedState{}, err
 			}
 			accountCount, err := readStateUvarint(stream)
-			if err != nil || accountCount == 0 || accountCount > managedStateMaxItems {
+			if err != nil || accountCount == 0 || accountCount > MaxManagedStateItems {
 				return ManagedState{}, ErrRecoveryFailed
 			}
 			item.AccountCount = uint32(accountCount)

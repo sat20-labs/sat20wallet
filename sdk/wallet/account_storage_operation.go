@@ -93,6 +93,27 @@ func (p *Manager) resumeAccountStorageRuntime() {
 	p.accountStorageMu.Unlock()
 }
 
+// Paid setup and recharge share the storage coordinator without replacing a
+// consumable grant. Cancellation/expiry of that grant cannot release live
+// funding. These locks protect only the flag, never network work.
+func (p *Manager) beginAccountAutopayFunding() (func(), error) {
+	_, release, err := p.lockAccountStorageState()
+	if err != nil {
+		return nil, err
+	}
+	if p.accountAutopayFundingActive {
+		release()
+		return nil, ErrAccountStorageAuthorizationBusy
+	}
+	p.accountAutopayFundingActive = true
+	release()
+	return func() {
+		p.accountStorageMu.Lock()
+		p.accountAutopayFundingActive = false
+		p.accountStorageMu.Unlock()
+	}, nil
+}
+
 // Reserve the slot before any asynchronous policy/funding work. A late result
 // can fill only this exact session; Cancel removes it and cannot be undone by
 // that result. An in-use authorization cannot be silently replaced by Confirm

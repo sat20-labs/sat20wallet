@@ -83,3 +83,28 @@ func TestManagedStateRejectsDeletedRoot(t *testing.T) {
 		t.Fatal("managed state accepted a deleted root wallet")
 	}
 }
+
+func TestManagedStateRejectsUnrecoverableCatalog(t *testing.T) {
+	for _, scenario := range []string{"duplicate_names", "too_many_accounts", "decompressed_size"} {
+		t.Run(scenario, func(t *testing.T) {
+			state := managedStateFixture()
+			switch scenario {
+			case "duplicate_names":
+				state.Wallets[0].Name = " Root "
+			case "too_many_accounts", "decompressed_size":
+				count, name := 1025, "A"
+				if scenario == "decompressed_size" {
+					count, name = 16, strings.Repeat("a", 800)
+				}
+				state.Wallets[1].AccountCount = uint32(count)
+				state.Wallets[1].SubAccounts = make([]SubAccount, count)
+				for index := range state.Wallets[1].SubAccounts {
+					state.Wallets[1].SubAccounts[index] = SubAccount{Index: uint32(index), Name: name}
+				}
+			}
+			if _, err := SealManagedState(bytes.Repeat([]byte{7}, 32), strings.Repeat("a", 64), state, nil); err == nil {
+				t.Fatal("published a catalog that recovery cannot read")
+			}
+		})
+	}
+}
