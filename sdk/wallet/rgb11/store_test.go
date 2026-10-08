@@ -52,7 +52,7 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assetName, err := NewCanonicalAssetName(official, "snapshot", indexer.ASSET_TYPE_FT)
+	assetName, err := NewContractAssetKey(official, indexer.ASSET_TYPE_FT)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestProjectionAndProofAreStoredTogether(t *testing.T) {
 		t.Fatalf("bad projected amount %v", projected)
 	}
 	secondOfficial := "rgb:Br4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
-	secondName, err := NewCanonicalAssetName(secondOfficial, "second", indexer.ASSET_TYPE_FT)
+	secondName, err := NewContractAssetKey(secondOfficial, indexer.ASSET_TYPE_FT)
 	if err != nil {
 		t.Fatal(err)
 	}

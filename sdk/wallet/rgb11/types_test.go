@@ -1,52 +1,60 @@
 package rgb11wallet
 
 import (
-	"strings"
+	"encoding/hex"
 	"testing"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/rgb11/consensus"
 )
 
-func TestCanonicalAssetNameNormalizesTickerAndBindsContract(t *testing.T) {
-	contractA := "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
-	contractB := "rgb:k0vsa6zj-CLYfnru-63unuJv-qZ2IVJ5-zlENzlF-MkiJNuw"
-	nameA, err := NewCanonicalAssetName(contractA, "  USD T!! Coin ", indexer.ASSET_TYPE_FT)
+func TestContractAssetKeyUsesCompleteIdentity(t *testing.T) {
+	const contractA = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E"
+	const contractB = "rgb:k0vsa6zj-CLYfnru-63unuJv-qZ2IVJ5-zlENzlF-MkiJNuw"
+	nameA, err := NewContractAssetKey(contractA, indexer.ASSET_TYPE_FT)
 	if err != nil {
 		t.Fatal(err)
 	}
-	nameB, err := NewCanonicalAssetName(contractB, "USD T!! Coin", indexer.ASSET_TYPE_FT)
+	id, err := consensus.ParseContractID(contractA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(nameA.Ticker, "usd-t-coin@") || len(nameA.Ticker) != len("usd-t-coin@")+DefaultFingerprintLength {
-		t.Fatalf("unexpected canonical ticker %q", nameA.Ticker)
+	if nameA.Protocol != Protocol || nameA.Type != indexer.ASSET_TYPE_FT || nameA.Ticker != hex.EncodeToString(id[:]) {
+		t.Fatalf("not the full contract identity: %+v", nameA)
 	}
-	if nameA.Ticker == nameB.Ticker {
-		t.Fatalf("same issuer ticker must not share a SAT20 asset key: %q", nameA.Ticker)
+	nameB, err := NewContractAssetKey(contractB, indexer.ASSET_TYPE_FT)
+	if err != nil || nameA == nameB {
+		t.Fatalf("different contracts collided: %+v %+v %v", nameA, nameB, err)
 	}
-	if got := DisplayTicker("USD T!! Coin", strings.TrimPrefix(nameA.Ticker, "usd-t-coin@"), false); got != nameA.Ticker {
-		t.Fatalf("unverified display=%q want=%q", got, nameA.Ticker)
+	if !ContractAssetKeyMatches(nameA, contractA) || ContractAssetKeyMatches(nameA, contractB) {
+		t.Fatal("contract-key verification accepted a different contract")
 	}
-	if got := DisplayTicker("USDT", "abcdefgh", true); got != "USDT" {
-		t.Fatalf("verified display=%q", got)
+	forged := nameA
+	forged.Ticker = "usdt@alice"
+	if ContractAssetKeyMatches(forged, contractA) {
+		t.Fatal("a readable alias was accepted as a contract identity")
 	}
-	extended, err := NewCanonicalAssetNameWithFingerprintLength(
-		contractA, "USD T!! Coin", indexer.ASSET_TYPE_FT, 10,
-	)
-	if err != nil || !strings.HasPrefix(extended.Ticker, nameA.Ticker) ||
-		!CanonicalAssetNameMatches(extended, contractA, "USD T!! Coin") {
-		t.Fatalf("extended canonical name=%q err=%v", extended.Ticker, err)
+	forged = nameA
+	forged.Protocol = "other"
+	if ContractAssetKeyMatches(forged, contractA) {
+		t.Fatal("wrong protocol accepted")
+	}
+	if _, err := NewContractAssetKey("not-a-contract", "f"); err == nil {
+		t.Fatal("invalid ContractID accepted")
+	}
+	if _, err := NewContractAssetKey(contractA, "alice"); err == nil {
+		t.Fatal("provider was accepted as an asset type")
 	}
 }
 
 func TestNormalizeTicker(t *testing.T) {
-	for input, expected := range map[string]string{
+	for input, want := range map[string]string{
 		" USDT  2026 ":         "usdt-2026",
 		"----":                 "asset",
 		"ABCDEFGHIJKLMNOPQRST": "abcdefghijklmnopqrst",
 	} {
-		if actual := NormalizeTicker(input); actual != expected {
-			t.Errorf("NormalizeTicker(%q)=%q want=%q", input, actual, expected)
+		if got := NormalizeTicker(input); got != want {
+			t.Errorf("NormalizeTicker(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

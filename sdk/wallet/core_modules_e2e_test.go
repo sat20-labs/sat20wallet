@@ -50,6 +50,10 @@ func TestSDKCoreModulesConnectedE2E(t *testing.T) {
 		coreDirectTransferE2E(t, cfg, chain, sender, receiver, senderMaterial, receiverMaterial)
 	})
 
+	t.Run("RGB11_asset_name_and_transcend_registration_descriptor", func(t *testing.T) {
+		coreRGB11NamingE2E(t, cfg, chain, sender, senderMaterial)
+	})
+
 	t.Run("RGB_issuance_in_multiple_subaccounts", func(t *testing.T) {
 		coreAssert(t, childID != 0, "child wallet fixture did not initialize")
 		coreRequire(t, "select child wallet", sender.SwitchWallet(childID, coreE2EPassword))

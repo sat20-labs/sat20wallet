@@ -19,6 +19,7 @@ type (
 	RGB11IssueRequest             = rgb11wallet.RGB11IssueRequest
 	RGB11IssueResult              = rgb11wallet.RGB11IssueResult
 	RGB11ContractExportResult     = rgb11wallet.RGB11ContractExportResult
+	RGB11NameRegistration         = dkvsindexer.RGB11Registration
 	RGB11ImportResult             = rgb11wallet.RGB11ImportResult
 	RGB11RejectListProvider       = rgb11wallet.RGB11RejectListProvider
 	RGB11RejectListViolation      = rgb11wallet.RGB11RejectListViolation
@@ -423,4 +424,19 @@ func (p *Manager) ValidateRGB11Consignment(ctx context.Context, raw []byte) (*rg
 // getL1TxOutput is the single non-RGB transaction-builder integration point.
 func (p *Manager) getL1TxOutput(outpoint string) (*TxOutput, error) {
 	return p.rgbManager.getL1TxOutput(outpoint)
+}
+
+// SetRGB11LocalAssetName changes SDK-local metadata only. Contract identity,
+// balances, transfer proofs and SatoshiNet registered names are never renamed.
+func (p *Manager) SetRGB11LocalAssetName(contractID, name string) error {
+	if p == nil {
+		return ErrRGB11Inconsistent
+	}
+	release := p.beginRGB11Operation()
+	defer release()
+	manager, err := p.synchronizedRGB11Manager()
+	if err != nil {
+		return err
+	}
+	return manager.SetRGB11LocalAssetName(contractID, name)
 }

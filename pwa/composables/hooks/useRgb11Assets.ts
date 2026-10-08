@@ -27,23 +27,26 @@ export const decorateRGB11AssetItems = (items: any[], state: RGB11StateDTO) => i
     Ticker: item.ticker,
   }
   const tickerInfo = tickerInfoFor(state, name)
-  const canonicalName = String(tickerInfo?.canonical_name || tickerInfo?.CanonicalName ||
-    `${name.Protocol || 'rgb11'}:${name.Type || 'f'}:${name.Ticker || ''}`)
+  // Balance keys contain the complete ContractID. Neither an editable SDK
+  // label nor a registered display name may change selection/transfer identity.
+  const assetKey = `${name.Protocol || 'rgb11'}:${name.Type || 'f'}:${name.Ticker || ''}`
+  const canonicalName = String(tickerInfo?.canonical_name || tickerInfo?.CanonicalName || '')
   const contractId = String(tickerInfo?.contract_id || tickerInfo?.ContractID || '')
   const displayName = String(tickerInfo?.displayname || tickerInfo?.DisplayName || '').trim()
   const symbol = String(tickerInfo?.ticker || tickerInfo?.Ticker || '').trim()
-  const fingerprint = String(tickerInfo?.fingerprint || tickerInfo?.Fingerprint || '').trim()
-  const verified = Boolean(tickerInfo?.verified ?? tickerInfo?.Verified ?? false)
+  const verified = canonicalName !== '' && Boolean(tickerInfo?.verified ?? tickerInfo?.Verified ?? false)
   return {
     ...item,
-    id: canonicalName,
-    key: canonicalName,
-    label: symbol || displayName || canonicalName,
+    id: assetKey,
+    key: assetKey,
+    label: symbol || canonicalName || contractId || displayName || assetKey,
     symbol,
+    asset_key: assetKey,
     canonical_name: canonicalName,
     contract_id: contractId,
     display_name: displayName,
-    fingerprint,
+    genesis_address: String(tickerInfo?.genesis_address || ''),
+    naming_status: String(tickerInfo?.naming_status || 'origin-unavailable'),
     verified,
     precision: Number(item.precision ?? tickerInfo?.divisibility ?? 0),
   }

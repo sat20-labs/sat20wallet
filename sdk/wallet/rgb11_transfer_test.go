@@ -58,11 +58,11 @@ func (f *rgb11FlowIndexer) GetUtxoListWithTicker(string, *indexer.AssetName) []*
 }
 
 type rgb11FlowEvidence struct {
-	mu          sync.Mutex
-	utxos       map[string]*rgb11wallet.BitcoinUTXO
-	rawTx       map[string][]byte
-	spendingTx  map[string]string
-	broadcasted   []byte
+	mu             sync.Mutex
+	utxos          map[string]*rgb11wallet.BitcoinUTXO
+	rawTx          map[string][]byte
+	spendingTx     map[string]string
+	broadcasted    []byte
 	broadcastCount int
 }
 
@@ -848,7 +848,7 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 				viewerState.TickerInfos[0].ContractID != issued.ContractID {
 				t.Fatalf("zero-balance imported contract missing from state: %+v", viewerState)
 			}
-			expectedName, err := rgb11wallet.NewCanonicalAssetName(issued.ContractID, test.request.Ticker, issued.AssetName.Type)
+			expectedName, err := rgb11wallet.NewContractAssetKey(issued.ContractID, issued.AssetName.Type)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -869,9 +869,13 @@ func TestRGB11IssueFirstReleaseSchemas(t *testing.T) {
 			if len(state.Assets) == 0 || len(state.Outputs) != test.count {
 				t.Fatalf("unexpected RGB11 state after issuance: assets=%d outputs=%d", len(state.Assets), len(state.Outputs))
 			}
-			if len(state.TickerInfos) != 1 || state.TickerInfos[0].CanonicalName != issued.AssetName.String() ||
-				state.TickerInfos[0].ContractID != issued.ContractID || state.TickerInfos[0].Ticker != issued.AssetName.Ticker ||
-				state.TickerInfos[0].Verified {
+			expectedLabel, err := rgb11wallet.BuildLocalDisplayName(test.request.Ticker, wallet.GetAddress(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(state.TickerInfos) != 1 || state.TickerInfos[0].AssetKey != issued.AssetName.String() ||
+				state.TickerInfos[0].ContractID != issued.ContractID || state.TickerInfos[0].Ticker != expectedLabel ||
+				state.TickerInfos[0].CanonicalName != "" || state.TickerInfos[0].Verified {
 				t.Fatalf("unexpected RGB11 naming presentation: %+v", state.TickerInfos)
 			}
 			if _, err := json.Marshal(state); err != nil {
