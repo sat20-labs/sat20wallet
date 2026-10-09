@@ -7,6 +7,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	indexer "github.com/sat20-labs/indexer/common"
+	rgb11wallet "github.com/sat20-labs/sat20wallet/sdk/wallet/rgb11"
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
 
@@ -20,7 +21,13 @@ func (p *Manager) GetTickerInfoV2(assetName string) *indexer.TickerInfo {
 		return nil
 	}
 
-	return p.getTickerInfo(asset)
+	// Public queries include changing mint totals. Internal construction keeps
+	// its metadata cache; RGB11 remains locally validated rather than indexed.
+	if asset.Protocol == rgb11wallet.Protocol || asset.String() == ASSET_PLAIN_SAT.String() ||
+		asset.String() == indexer.ASSET_ALL_SAT.String() {
+		return p.getTickerInfo(asset)
+	}
+	return p.l1IndexerClient.GetTickInfo(asset)
 }
 
 func (p *Manager) LockUtxo(address, utxo, reason string) error {

@@ -185,16 +185,15 @@ export const useL1Assets = (options: UseAssetQueryOptions = {}) => {
 	for (const info of rgb11Store.state.ticker_infos || []) {
 	  const name = info?.name || info?.Name || info?.AssetName
 	  if (!name || name.Protocol !== 'rgb11') continue
-	  const canonicalName = String(info?.canonical_name || info?.CanonicalName ||
-		`${name.Protocol}:${name.Type || 'f'}:${name.Ticker || ''}`)
-	  if (known.has(canonicalName)) continue
-	  known.add(canonicalName)
+	  const assetKey = `${name.Protocol}:${name.Type || 'f'}:${name.Ticker || ''}`
+	  if (known.has(assetKey)) continue
+	  known.add(assetKey)
 	  result.push({
-		id: canonicalName,
-		key: canonicalName,
+		id: assetKey,
+		key: assetKey,
 		protocol: name.Protocol,
 		type: name.Type || 'f',
-		label: name.Ticker || canonicalName,
+		label: name.Ticker || assetKey,
 		ticker: name.Ticker || '',
 		utxos: [],
 		amount: '0',

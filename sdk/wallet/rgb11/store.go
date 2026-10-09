@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/rgb11/schemas"
 )
 
 var (
@@ -358,6 +359,48 @@ func (s *ProjectionStore) LoadValidationReceipt(consignmentHash string) (*Valida
 		return nil, err
 	}
 	return &receipt, nil
+}
+
+// ListKnownAssetNames derives the active scope's contract catalog from its
+// existing validation receipts, including contracts with no owned outputs.
+func (s *ProjectionStore) ListKnownAssetNames() ([]indexer.AssetName, error) {
+	prefix, err := s.scopedPrefix("validation-")
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[string]indexer.AssetName)
+	err = s.db.BatchRead(prefix, false, func(key, value []byte) error {
+		var receipt ValidationReceipt
+		if err := decode(value, &receipt); err != nil {
+			return err
+		}
+		if err := receipt.validate(string(key[len(prefix):])); err != nil {
+			return err
+		}
+		descriptor, err := schemas.ByID(receipt.SchemaID)
+		if err != nil {
+			return err
+		}
+		assetType := indexer.ASSET_TYPE_FT
+		if !descriptor.Fungible {
+			assetType = indexer.ASSET_TYPE_NFT
+		}
+		name, err := NewContractAssetKey(receipt.ContractID, assetType)
+		if err != nil {
+			return err
+		}
+		names[name.String()] = name
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]indexer.AssetName, 0, len(names))
+	for _, name := range names {
+		result = append(result, name)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].String() < result[j].String() })
+	return result, nil
 }
 
 func (s *ProjectionStore) LoadObject(consignmentHash string) ([]byte, error) {

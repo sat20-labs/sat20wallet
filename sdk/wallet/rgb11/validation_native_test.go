@@ -90,11 +90,11 @@ func TestNativeValidatorProducesReceiptFromOfficialTransfer(t *testing.T) {
 	schemaValue, _ := container.Value.Field("schema")
 	typeSystem, _ := container.Value.Field("types")
 	genesisValue, _ := container.Value.Field("genesis")
-	metadata, err := schemas.ExtractGenesisAssetMetadata(schemaValue, typeSystem, genesisValue)
+	_, err = schemas.ExtractGenesisAssetMetadata(schemaValue, typeSystem, genesisValue)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectedAssetName, err := NewCanonicalAssetName(receipt.ContractID, metadata.Ticker, "f")
+	expectedAssetName, err := NewContractAssetKey(receipt.ContractID, "f")
 	if err != nil {
 		t.Fatal(err)
 	}

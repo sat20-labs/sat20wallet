@@ -1,5 +1,9 @@
 # PWA 钱包基本功能验收
 
+## 当前代码清单（2026-10-09）
+
+钱包功能组现为 **90 项**（原 82 项加 Tools 2、真实 Mint/DID 3、Node 3）；独立强退/CSV 另有 **1 项**及两个既有前置，已接入 `verify:release-gate`。SDK 直接 WASM 为 **29 项**。编码结束时新增/增强代码全部未运行，历史记录保留原计数，不能外推为当前通过结果。用户随后授权仅运行新增例子，范围和结果见 [PWA cases](../../../docs/pwa-e2e-test-cases.md) 与 [SDK cases](../../../docs/sdk-e2e-test-cases.md)；编码阶段没有执行测试、编译、浏览器或服务。
+
 ## 运行入口
 
 从 PWA 目录运行账户、恢复、RGB 持久化和本次新增的钱包功能验收：
@@ -22,6 +26,10 @@ npm run verify:wallet-e2e:functional
 | `TestSDKWalletPWAConnectedBrowser` | 当前钱包基本功能、资金/POS、工具、DApp、RGB 业务、挖矿和质押 |
 | `TestSDKAccountPWAConnectedBrowser` | 账户目录、子钱包、账户安全、2of2/2of3、Guardian、恢复、密码、离线和失败边界 |
 | `TestSDKCoreModulesE2E` | SDK 核心模块、真实 RGB provider、非空数据备份和 PWA 恢复 |
+| `TestSDKAccountGuardianIdentitySurvivesAccountRecovery` | Guardian 自身通过根助记词或恢复材料换机，身份不变且旧好友分片仍可用于两种 Guardian 恢复组合 |
+| `TestSDKAccountGuardianPaidPWABatchReview` | 自身 temporary 的 Guardian 续费 paid 托管，及原 AUTOPAY 交易在广播前退出／回执丢失后的续传 |
+
+2026-10-08 已移除 9 个重复的定向浏览器回归入口（钱包组 6 个、账户组 3 个）。它们选择的业务用例全部保留在上述完整入口中，业务断言与必跑清单不变。Guardian 自身换机、付费托管和原 AUTOPAY 交易续传已纳入 `verify:wallet-e2e` 最终入口；登记不表示已执行或通过。
 
 普通 `go test ./e2e` 也会发现这些测试。没有额外 build tag，没有默认跳过浏览器、POS 或 RGB 的开关。
 依赖缺失时应明确失败。所需环境仍是现有 SDK 工作空间：同级的 `indexer`、`satoshinet`、`transcend`、
@@ -71,7 +79,8 @@ npm run verify:wallet-e2e:functional
 | 协议数据签名 | 完整消息预览、取消、确认 | 使用独立 ECDSA 校验确认签名绑定当前公钥及精确 payload | `wallet-basic-e2e.mjs` |
 | 操作日志 | 查看真实操作、打开详情、清空 | 日志存在、不含密码/助记词，清空后钱包仍在 | `wallet-basic-e2e.mjs` |
 | Bitcoin Send | BTC、ORDX 转账；BTC 高级多输出 | 真实签名原始交易、正确收款脚本、精确资产增量、确认和费用 | `pos-pwa-e2e.mjs` |
-| ORDX 高级拆分 | 从资产行进入 Advanced 并提交两个输出 | 应能正常启用；核对两个真实资产输出。当前入口问题保留红测 | `pos-pwa-e2e.mjs` |
+| BRC20 / Runes Send | 已有 transfer 铭文发送、从余额创建 transfer 后发送、带精度 Rune 部分发送 | 真实页面提交；实际铭文/Runestone、引用关系、独立预期余额、费用、取消及冷重载 | `wallet-l1-assets-e2e.mjs` |
+| ORDX 高级拆分 | 从资产行进入 Advanced 并提交两个输出 | 应能正常启用；核对两个真实资产输出、确认费率与实际费用 | `pos-pwa-e2e.mjs` |
 | SatoshiNet Send | BTC、ORDX 转账 | 正常签名、真实节点确认、收款方余额增量及发送方扣款 | `pos-pwa-e2e.mjs` |
 | 私有通道开通 | 预览、确认、L1 等待时刷新 | 实际 L1 funding、合法 Anchor、PWA 状态恢复和预签 outpoint | `pos-pwa-e2e.mjs` |
 | 私有通道扩容 | BTC、ORDX splicing-in，等待时关闭/重开页面 | 预签引用、资产数量、Anchor 身份和两端索引一致 | `pos-pwa-e2e.mjs` |
@@ -86,10 +95,12 @@ npm run verify:wallet-e2e:functional
 | Core / Miner 质押 | 两个独立钱包分别确认质押，等待时刷新 | 正确 L1 资产/通道输出、真实 Anchor、节点角色/父节点/数量和 UI 索引 | `wallet-node-e2e.mjs` |
 | DApp 连接 | 未授权拒绝、连接取消、明确授权、读取账户信息 | 真实跨 origin/source 消息、能力授权和 SDK 身份 | `wallet-integrations-e2e.mjs` |
 | DApp 签名与撤权 | 无能力拒绝、签名取消、确认、断开 | 独立验证带 origin/network/nonce 的消息签名；撤权后拒绝访问 | `wallet-integrations-e2e.mjs` |
+| DApp PSBT 与广播 | Bitcoin PSBT 预览、取消、签名，独立授权广播 | 独立验证 Taproot 签名、精确输出、500 sats 费用；签名不广播，坏签名拒绝，同字节重播不重复支付 | `wallet-integrations-e2e.mjs` |
 | RGB 发行 | NIA、IFA、UDA | 真实 provider 生成合约、供应量/通胀权、载体和锁定 | `wallet-rgb-e2e.mjs` |
 | RGB 合约文件 | 导出标准文件、另一设备导入 | 真正下载/导入；导入元数据不制造收款方余额 | `wallet-rgb-e2e.mjs` |
 | RGB 收发 | OOB invoice、准备、收方验证、签名、恢复、广播、接收 | 真实包摘要、原始 witness tx、L1 确认、供应守恒及持久化证明 | `wallet-rgb-e2e.mjs` |
 | RGB 取消 | 未广播 transfer 取消 | 释放 reservation，保留原资产载体保护，不广播 | `wallet-rgb-e2e.mjs` |
+| UDA 转移 | 独立设备 invoice、接收方校验、发送方确认、广播和确认 | `rgb11:o:` 同一合约；错误摘要拒绝；原载体消耗，发送方 0／接收方 1，证明、锁与冷重载 | `wallet-rgb-e2e.mjs` |
 | 模板合约 | Exchange 部署、供给 SGAS、查询状态/历史、关闭 | 真实签名 Work 及 canonical Result；库存进入合约、关闭归还部署者 | `wallet-tools-e2e.mjs` |
 | Faucet | 支付确认取消、确认兑换 | 真实合约向收款脚本输出 GAS，实际余额增量与 Result 对齐 | `wallet-tools-e2e.mjs` |
 | EVM 合约 | 浏览器编译当前 SDK probe、部署、生成 calldata、调用 | 真实 solc 字节、链上 Result 成功、counter 从 0 到 1、页面状态查询和历史 | `wallet-tools-e2e.mjs` |
@@ -115,6 +126,49 @@ npm run verify:wallet-e2e:functional
 | BTC 全网算力、真实中奖和收益分成 | 仅验证本地真实 worker 和假 L1 job/提交；不使用公网算力接口，不把低难度测试工作量当成真实 Bitcoin 网络收益 |
 | 所有协议、所有模板与所有参数组合 | 基本验收选代表业务路径；协议特有转账、所有模板分支和参数矩阵仍需对应专项 SDK/PWA 测试 |
 
+## 2026-10-08 功能验收补充评估与新增用例
+
+共享 fake indexer 增加协议能力，并不等于已经覆盖 SDK WASM 或 PWA 的对应业务。
+`TestPOSPWAL1IndexerSharedBRC20AndRunes` 使用独立构造和签名的 Bitcoin 交易验证 HTTP 夹具，
+没有经过 SDK 钱包选币、WASM、PWA 确认与提交。该用例也不在 `verify:wallet-e2e` 的名称过滤范围内。
+下列 6 条已实现并加入现有完整门禁的必跑清单，不代表运行通过。
+
+新增 **6 条**，复用现有资金、DApp、RGB 组与共享 fake，不增加 Go 浏览器入口：
+
+| 建议 case | 当前缺口 | 必须验证的业务结果 |
+| --- | --- | --- |
+| BRC20 使用已有 transfer 铭文发送 | 现有浏览器 Send 只覆盖 BTC/ORDX；HTTP 夹具测试不能替代钱包发送 | 从资产卡选择并确认发送；真实签名与收款脚本、精确余额、费用、已消费铭文不可再转移；冷重载一致 |
+| BRC20 无现成 transfer 铭文时发送 | SDK 会构造 transfer 的 commit/reveal，再发送，当前夹具回归只使用预置可转移载体 | 从已有余额创建真实 transfer；核对 inscription payload、交易引用、接收金额及发送方扣款；必要步骤失败不得制造到账或重复花费 |
+| Runes 部分发送与找零 | 当前只有原生 HTTP 的整数分配验证 | 使用非零 divisibility 与带 spacer 的名称；确认数量与真实 Runestone、收款/找零原子量一致；精度非法或取消不广播 |
+| DApp PSBT 签名 | 此前 DApp 组只覆盖连接、消息签名、撤权 | 独立构造 Bitcoin PSBT，页面授权后核验实际 Taproot 签名和精确输入/输出；签名不广播；无权限、取消、畸形 PSBT 拒绝。SatoshiNet PSBT 的成功分支仍未纳入本次 6 条 |
+| DApp 原交易广播 | 当前没有交易广播的用户授权成功路径 | 单独取得广播权限并逐次确认；广播签名 case 的同一交易；独立金额预期、TXID、确认及收款一致；取消不广播、重播不重复记账 |
+| UDA 实际转移 | 此前 UDA 用例验证发行、`rgb11:o:` 名称和余额 1；NIA 收发不能证明 NFT 转移 | 通过现有 invoice 收发把唯一 UDA 转给另一设备；发送方 0、接收方 1、合约不变、实际载体/证明及锁正确、冷重载一致；数量错误的接收摘要不能取得广播资格 |
+
+另有以下使用路径需要保留为待验收，不能凭原生测试或预览取消关闭：
+
+| 使用路径 | 已有证据与补充边界 |
+| --- | --- |
+| RGB 地址发送、ACK 与重开后继续 | `TestSDKCoreModulesE2E` 已覆盖原生真实节点直传、ACK 后广播、资产守恒及恢复；浏览器尚未覆盖地址模式和 pending 任务重开。应补正常完成、等待 ACK 重开两条。当前 `enableRGB11AddressReceive` 在 PWA 只有包装与验证脚本调用，未找到正常页面启用入口；需先明确用户收款入口，不能测试中直接启用后声称完整页面流程已通过。无 ACK/拒绝 ACK 不得广播，续跑应使用同一 transfer/TXID |
+| L1 铸造/部署成功 | 现有 Mint/DID 停在资格检查、预览、取消，部分/尾额 Mint 也未真正提交。优先选一条合法部分/尾额 Mint 和一条 BRC20 commit/reveal 正常路径，核对实际 payload、确认及索引结果。共享 fake 仍是 Transcend 原有协议子集；现有 `PWAMINT` 权限响应是固定夹具，不是发行索引证明，不能手工补 ticker/到账冒充成功 |
+| RGB proxy 收发 | 原生 HTTP/provider 测试覆盖 transport/ACK，浏览器当前只覆盖 OOB。应使用现有 proxy 测试能力或明确的本地服务，验证真实页面交付、ACK、接收与冷重载；L1 fake 不能充当 proxy。复用方式确认前不新增独立服务框架 |
+| 通道强退后取回资金 | 现有页面只覆盖安全快照、确认和取消；合作关闭不能替代强退。需要独立通道完成真实 commitment 广播、CSV 等待和最终资金回收，预期来自操作前权益与费用；放在独立验收组，不能挤入已有资金组而改变后续状态 |
+
+Guardian 已纳入最终清单。当前账户浏览器脚本已使用用户从页面复制的最终恢复码与用户分片，
+关闭原设备，再在新 context 完成 knowledge+Guardian、share+Guardian 恢复；无需再增加等价重复用例。
+Guardian 自身换机与 temporary 自身备份下的 paid 托管续费，仍按上方已登记的专门入口验收。
+
+新增独立业务使用各自的页面、钱包身份和初始余额，复用同一节点及控制器；
+同一业务内的准备→签名→广播→确认保留真实依赖，前序失败后后续标记 `not-run`。
+不得依靠失败 case 的成功收尾恢复下一独立 case 所需的余额或合约状态。
+最终断言使用提交前已知数量、精度、协议费用和钱包权益，不能从实际到账反推全部预期。
+
+当前钱包组静态登记共 **82 条**：原 76 条加本次 6 条（L1 协议 3、DApp 2、UDA 转移 1）。
+新的 BRC20/Runes、DApp、UDA 分别使用独立资金身份；UDA 使用独立 context，并且原 RGB 组失败不会阻止其开始。
+新增用例复用现有 `--wallet-cases` 精确选择、`not-run` 记录和同一 Go 浏览器入口。
+本轮已通过 JavaScript 语法检查及 SDK E2E 包编译，没有修改生产代码。
+业务用例尚未执行：准备启动时，共享运行锁由另一轮 `TestSDKCoreModulesE2E` 持有，因而没有启动第二轮浏览器运行等待该锁。
+下方既有运行记录保留其历史清单和分母，不计入本次 6 条的验证结果。
+
 ## 失败判定与排查
 
 每个 case 输出 `running`、`pass` 或 `fail`。有依赖的前序失败后，后续必需 case 会明确输出 `not-run`。
@@ -134,12 +188,11 @@ npm run verify:wallet-e2e:functional
 链上结果需要组合检查：实际 txid/raw bytes、确认、资金脚本/数量、Anchor funding outpoint、各节点 AIDX 和钱包状态。
 节点 `/bestheight` 只是 API 暴露的链 tip，不是独立数据库 flush 高度；真正的 Anchor 索引就绪由逐节点 AIDX 记录验证。
 
-目前源码可见的资产行 Advanced 问题保留为普通必需用例：资产行传 `chain='l1'`，而 Advanced 的可用条件比较 `chain==='bitcoin'`。
-测试应要求用户能从 Bitcoin 资产行正常拆分并看到真实输出；不能改成断言按钮禁用后算通过，也不能为了测试绿色在本轮改生产实现。
-
-另一处源码可见的 RGB UDA 显示问题也保留为普通必需用例：UDA 的资产类型是 `rgb11:n:`，
-当前 L1 列表筛选会过滤 NFT 后通过 ticker 元数据回填零余额。用例要求真实发行的 1 个 UDA 在页面也显示为 1。
-以上两点是源码核对发现。本次实际 SDK 整包运行未执行到新增钱包入口，尚无这两项的浏览器运行结论，不能将它们写成已经复现的测试失败。
+早期静态核对发现的资产行 Advanced 与 RGB UDA 余额问题继续保留为普通必需回归用例。
+2026-10-08 再次核对源码：Advanced 与费率判断已统一接受 `bitcoin`/`l1`；资产列表的 `n` 过滤已限定到 ORDX。
+UDA 的 NFT 资产类型应为 `rgb11:o:`，当前浏览器发行用例也要求该类型与真实可用余额 1。
+测试仍需验证用户可拆分并得到正确输出、UDA 页面显示真实余额，不能把禁用或零余额当作通过。
+这些源码修正不代表本次已重新执行浏览器回归；下方保留旧次运行记录。
 
 新增组覆盖的是正常运行和可控激活，不扩展历史 Anchor 跨 H 迁移或深度 reorg 的假设。
 

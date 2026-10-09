@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -858,17 +859,20 @@ func switchAccount(this js.Value, p []js.Value) any {
 	if p[0].Type() != js.TypeNumber {
 		return createJsRet(nil, -1, "Id parameter should be a number")
 	}
-	id := p[0].Int()
+	id := uint32(p[0].Int())
+	if p[0].Float() != float64(id) {
+		return createJsRet(nil, -1, "account index must be an unsigned integer")
+	}
 
 	// _mgr.SwitchAccount(uint32(id))
 	// return createJsRet(nil, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
 		status := _mgr.GetStatus()
-		if status != nil && status.CurrentAccount == uint32(id) {
+		if status != nil && status.CurrentAccount == id {
 			return nil, 0, "ok"
 		}
-		if err := _mgr.SwitchAccount(uint32(id)); err != nil {
+		if err := _mgr.SwitchAccount(id); err != nil {
 			return nil, -1, err.Error()
 		}
 		return nil, 0, "ok"
@@ -943,7 +947,10 @@ func getWalletAddress(this js.Value, p []js.Value) any {
 	if p[0].Type() != js.TypeNumber {
 		return createJsRet(nil, -1, "Id parameter should be a number")
 	}
-	id := p[0].Int()
+	id := uint32(p[0].Int())
+	if p[0].Float() != float64(id) {
+		return createJsRet(nil, -1, "account index must be an unsigned integer")
+	}
 
 	// wallet := _mgr.GetWallet()
 	// if wallet == nil {
@@ -960,7 +967,7 @@ func getWalletAddress(this js.Value, p []js.Value) any {
 			return nil, -1, "wallet is nil"
 		}
 		return map[string]any{
-			"address": wallet.GetAddressByIndex(uint32(id)),
+			"address": wallet.GetAddressByIndex(id),
 		}, 0, "ok"
 	})
 	return js.Global().Get("Promise").New(handler)
@@ -976,7 +983,10 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 	if p[0].Type() != js.TypeNumber {
 		return createJsRet(nil, -1, "Id parameter should be a number")
 	}
-	id := p[0].Int()
+	id := uint32(p[0].Int())
+	if p[0].Float() != float64(id) {
+		return createJsRet(nil, -1, "account index must be an unsigned integer")
+	}
 
 	// pubkey := _mgr.GetPublicKey(uint32(id))
 	// data := map[string]any{
@@ -985,7 +995,7 @@ func getWalletPubkey(this js.Value, p []js.Value) any {
 	// return createJsRet(data, 0, "ok")
 
 	handler := createAsyncJsHandler(func() (interface{}, int, string) {
-		pubkey := _mgr.GetPublicKey(uint32(id))
+		pubkey := _mgr.GetPublicKey(id)
 		return map[string]any{
 			"pubKey": hex.EncodeToString(pubkey),
 		}, 0, "ok"
@@ -1198,7 +1208,11 @@ func getChannelStatus(this js.Value, p []js.Value) any {
 	if p[0].Type() != js.TypeString {
 		return createJsRet(nil, -1, "channel parameter should be a string")
 	}
-	return createJsRet(_mgr.GetChannelStatus(p[0].String()), 0, "ok")
+	channelID := p[0].String()
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		return _mgr.GetChannelStatus(channelID), 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func getAllChannels(this js.Value, p []js.Value) any {
@@ -1339,87 +1353,99 @@ func safetySnapshot(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	channelID, err := safetyChannelIDArg(p)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	snapshot, err := _mgr.SafetySnapshot(channelID)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data, err := safetyJSONData(snapshot)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data["channel_id"] = snapshot.ChannelId
-	data["status"] = snapshot.Status
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		channelID, err := safetyChannelIDArg(p)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		snapshot, err := _mgr.SafetySnapshot(channelID)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := safetyJSONData(snapshot)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data["channel_id"] = snapshot.ChannelId
+		data["status"] = snapshot.Status
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func commitmentExport(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	channelID, err := safetyChannelIDArg(p)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	exported, err := _mgr.CommitmentExport(channelID)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data, err := safetyJSONData(exported)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data["channel_id"] = exported.ChannelId
-	data["commit_height"] = exported.CommitHeight
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		channelID, err := safetyChannelIDArg(p)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		exported, err := _mgr.CommitmentExport(channelID)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := safetyJSONData(exported)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data["channel_id"] = exported.ChannelId
+		data["commit_height"] = exported.CommitHeight
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func punishStatus(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	channelID, err := safetyChannelIDArg(p)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	items, err := _mgr.PunishStatus(channelID)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data, err := safetyJSONData(items)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data["channel_id"] = channelID
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		channelID, err := safetyChannelIDArg(p)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		items, err := _mgr.PunishStatus(channelID)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := safetyJSONData(items)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data["channel_id"] = channelID
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func punishBuild(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	channelID, err := safetyChannelIDArg(p)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	commitTxID, err := safetyCommitTxIDArg(p)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	info, err := _mgr.BuildPunishTx(channelID, commitTxID)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data, err := safetyJSONData(info)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data["channel_id"] = info.ChannelId
-	data["commit_txid"] = info.CommitTxId
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		channelID, err := safetyChannelIDArg(p)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		commitTxID, err := safetyCommitTxIDArg(p)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		info, err := _mgr.BuildPunishTx(channelID, commitTxID)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := safetyJSONData(info)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data["channel_id"] = info.ChannelId
+		data["commit_txid"] = info.CommitTxId
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func punishBroadcast(this js.Value, p []js.Value) any {
@@ -1454,21 +1480,24 @@ func forceClosePlan(this js.Value, p []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	channelID, err := safetyChannelIDArg(p)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	plan, err := _mgr.ForceClosePlan(channelID)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data, err := safetyJSONData(plan)
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	data["channel_id"] = plan.ChannelId
-	data["commit_txid"] = plan.CommitTxId
-	return createJsRet(data, 0, "ok")
+	handler := createAsyncJsHandler(func() (interface{}, int, string) {
+		channelID, err := safetyChannelIDArg(p)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		plan, err := _mgr.ForceClosePlan(channelID)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data, err := safetyJSONData(plan)
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		data["channel_id"] = plan.ChannelId
+		data["commit_txid"] = plan.CommitTxId
+		return data, 0, "ok"
+	})
+	return js.Global().Get("Promise").New(handler)
 }
 
 func sweepBuild(this js.Value, p []js.Value) any {
@@ -2545,8 +2574,8 @@ func callbackFunc(event string, data interface{}) {
 func registerCallbacks(this js.Value, args []js.Value) interface{} {
 	code := 0
 	msg := "ok"
-	if len(args) != 1 {
-		return nil
+	if len(args) != 1 || args[0].Type() != js.TypeFunction {
+		return createJsRet(nil, -1, "expected one callback function")
 	}
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
@@ -2766,7 +2795,11 @@ func batchSendAssets_SatsNet(this js.Value, p []js.Value) any {
 	if pn.Type() != js.TypeNumber {
 		return createJsRet(nil, -1, "n parameter should be a int")
 	}
-	n := pn.Int()
+	count := pn.Float()
+	if count < 1 || count > math.MaxInt32 || math.Trunc(count) != count {
+		return createJsRet(nil, -1, "n must be a positive integer within int32 range")
+	}
+	n := int(count)
 
 	jsHandler := createAsyncJsHandler(func() (interface{}, int, string) {
 		txid, err := _mgr.BatchSendAssets_SatsNet(destAddress, assetName, amt, n)
@@ -2815,7 +2848,11 @@ func batchSendAssets(this js.Value, p []js.Value) any {
 	if pn.Type() != js.TypeNumber {
 		return createJsRet(nil, -1, "n parameter should be a int")
 	}
-	n := pn.Int()
+	count := pn.Float()
+	if count < 1 || count > math.MaxInt32 || math.Trunc(count) != count {
+		return createJsRet(nil, -1, "n must be a positive integer within int32 range")
+	}
+	n := int(count)
 
 	pn = p[4]
 	if pn.Type() != js.TypeString {

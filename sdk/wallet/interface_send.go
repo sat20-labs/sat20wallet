@@ -392,6 +392,9 @@ func SplitChangeAsset(input *TxOutput_SatsNet, changePkScript []byte, tx *swire.
 // 发送资产到一个地址上，拆分n个输出
 func (p *Manager) BatchSendAssets_SatsNet(destAddr string,
 	assetName string, amt string, n int) (string, error) {
+	if n <= 0 {
+		return "", fmt.Errorf("batch output count must be positive")
+	}
 
 	if p.wallet == nil {
 		return "", fmt.Errorf("wallet is not created/unlocked")
@@ -1151,6 +1154,9 @@ func (p *Manager) BatchSendAssets(destAddr string, assetName string,
 // 发送资产到一个地址上，拆分n个输出
 func (p *Manager) BatchSendAssetsWithWallet(localWallet common.Wallet, destAddr string, assetName string,
 	amt string, n int, feeRate int64, memo []byte) (*wire.MsgTx, int64, error) {
+	if n <= 0 {
+		return nil, 0, fmt.Errorf("batch output count must be positive")
+	}
 	if p.db != nil {
 		if err := p.checkAccountManagedDataImport(); err != nil {
 			return nil, 0, err
@@ -1486,8 +1492,8 @@ func (p *Manager) BuildBatchSendTx_ordx(localAddr, destAddr string,
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	var prefix, suffix int64
-	selected, prefix, suffix = AdjustInputsForSplicingIn(selected, name)
+	var prefix int64
+	selected, prefix, _ = AdjustInputsForSplicingIn(selected, name)
 	prevFetcher := txscript.NewMultiPrevOutFetcher(nil)
 	allInput := indexer.NewTxOutput(0)
 	tx := wire.NewMsgTx(wire.TxVersion)
@@ -1542,7 +1548,7 @@ func (p *Manager) BuildBatchSendTx_ordx(localAddr, destAddr string,
 		assetChange := indexer.DecimalSub(totalAsset, requiredAmt)
 
 		var output *TxOutput
-		output, _, err = remainingOutput.Split(&name.AssetName, 0, assetChange)
+		output, remainingOutput, err = remainingOutput.Split(&name.AssetName, 0, assetChange)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -1559,10 +1565,18 @@ func (p *Manager) BuildBatchSendTx_ordx(localAddr, destAddr string,
 		}
 	}
 
-	// 剩下的都是白聪
+	// Split may include trailing plain sats in the 330-sat asset change.
+	// Only the actual remaining output can fund fees; it must carry no assets.
+	var remainingPlain int64
+	if remainingOutput != nil {
+		if len(remainingOutput.Assets) != 0 {
+			return nil, nil, 0, fmt.Errorf("asset remains in batch fee output")
+		}
+		remainingPlain = remainingOutput.Value()
+	}
 	feeValue := total - totalOutputSats
-	if feeValue != suffix {
-		return nil, nil, 0, fmt.Errorf("something wrong, %d != %d", feeValue, suffix)
+	if feeValue < 0 || feeValue != remainingPlain {
+		return nil, nil, 0, fmt.Errorf("batch fee remainder mismatch: %d != %d", feeValue, remainingPlain)
 	}
 
 	// TODO 选择合适的白聪utxo

@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/psbt"
+	"github.com/btcsuite/btcd/txscript"
 
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
@@ -256,6 +258,18 @@ func (p *Manager) CreateWallet(password string) (int64, string, error) {
 
 // TODO 未完成，还没有保存
 func (p *Manager) CreateMonitorWallet(address string) (int64, error) {
+	address = strings.TrimSpace(address)
+	params := GetChainParam()
+	decoded, err := btcutil.DecodeAddress(address, params)
+	if err != nil {
+		return -1, fmt.Errorf("invalid monitor address: %w", err)
+	}
+	if !decoded.IsForNet(params) {
+		return -1, fmt.Errorf("monitor address belongs to a different network")
+	}
+	if _, err := txscript.PayToAddrScript(decoded); err != nil {
+		return -1, fmt.Errorf("invalid monitor address script: %w", err)
+	}
 	p.channelIdentityMu.Lock()
 	defer p.channelIdentityMu.Unlock()
 	releaseRGB11Scope := p.beginRGB11ScopeChange()
@@ -612,6 +626,9 @@ func (p *Manager) UnlockWallet(password string) (int64, error) {
 	if err == nil {
 		p.rehydratePendingFundingRuntime()
 		p.rehydratePendingClosingRuntime()
+		if recoveryErr := p.rehydratePendingSplicingRuntime(); recoveryErr != nil {
+			Log.Warningf("restore pending splicing channels failed: %v", recoveryErr)
+		}
 		if recoveryErr := p.rehydratePendingLocalActionRuntime(); recoveryErr != nil {
 			Log.Warningf("restore pending local action channels failed: %v", recoveryErr)
 		}

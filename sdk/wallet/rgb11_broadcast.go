@@ -85,6 +85,11 @@ func (p *rgb11Manager) broadcastRGB11PendingBatch(
 		}
 	}
 	if allComplete {
+		if first.ChannelSend != nil && !first.ChannelSend.Signed {
+			if err := p.recoverRGB11ChannelWitness(pendingList); err != nil {
+				return expectedTxID, &RGB11BroadcastResultUnknownError{TxID: expectedTxID, Err: err}
+			}
+		}
 		return expectedTxID, nil
 	}
 	if intentChanged {

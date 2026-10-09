@@ -605,6 +605,7 @@
   },
   "txDetail": {
     "outpoint": "Outpoint",
+    "addressOrScript": "Address / script",
     "value": "Value",
     "assets": "Assets",
     "noAssets": "No assets in this {title}."

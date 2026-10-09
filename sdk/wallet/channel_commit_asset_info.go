@@ -60,18 +60,25 @@ func (p *Manager) GetCommitTxAssetInfo(channelId string) (*TxAssetInfo, error) {
 
 	prevFetcher := make(map[string]*TxOutput)
 	for _, tx := range channel.LocalCommitment.PrevTxs {
-		output := indexer.GenerateTxOutput(tx, 0)
-		prevFetcher[output.OutPointStr] = output
-		if len(tx.TxOut) == 2 {
-			output2 := indexer.GenerateTxOutput(tx, 1)
-			prevFetcher[output2.OutPointStr] = output2
+		for n := range tx.TxOut {
+			output := indexer.GenerateTxOutput(tx, n)
+			prevFetcher[output.OutPointStr] = output
 		}
 	}
+	plainStubs := channel.GetStubUtxoList()
 
 	var input *TxOutput
 	for _, txIn := range tx.TxIn {
 		utxo := txIn.PreviousOutPoint.String()
 		fundingOutput := channel.GetFundingOutput(utxo)
+		if fundingOutput == nil {
+			for _, stub := range plainStubs {
+				if stub.OutPointStr == utxo {
+					fundingOutput = stub.Clone()
+					break
+				}
+			}
+		}
 		if fundingOutput == nil {
 			var ok bool
 			fundingOutput, ok = prevFetcher[utxo]

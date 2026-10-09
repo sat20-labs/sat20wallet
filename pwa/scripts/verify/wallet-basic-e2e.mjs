@@ -100,7 +100,7 @@ export async function runPwaWalletBasicCases(t, fixture) {
     await check(requiredPwaWalletBasicCases[1], async () => {
       page = await fresh()
       await visit(page, '/import')
-      await page.getByLabel('Recovery Phrase', { exact: true }).fill(actor.mnemonic)
+      await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(actor.mnemonic)
       await page.getByLabel('New Wallet Password', { exact: true }).fill(actor.password)
       await page.getByLabel('Confirm Password', { exact: true }).fill(actor.password)
       await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()

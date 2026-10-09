@@ -2,10 +2,18 @@
 
 These scripts exercise the SAT20 PWA wallet against the test networks.
 
+## 2026-10-09 测试代码更新
+
+编码阶段按用户要求只补代码，未运行测试、构建、浏览器或节点服务。SDK 直接 WASM 清单为 **29 项**，钱包功能清单为 **90 项**，另有独立强退/CSV **1 项**及两个必要前置；账户、RGB 恢复、生产发布态和 Guardian 入口继续保留。新增代码与静态检查不能当作运行通过。用户随后授权仅运行新增/增强用例和必要前置，结果见两份 case 文档。
+
+完整清单、剩余覆盖边界与历史运行快照分别见 [SDK E2E cases](../../../docs/sdk-e2e-test-cases.md) 和 [PWA E2E cases](../../../docs/pwa-e2e-test-cases.md)。正式发布入口为 `npm run verify:release-gate`，独立强退入口为 `npm run verify:wallet-e2e:force-close`；编码阶段未执行这些命令，后续定向验证也不启动完整发布门禁。
+
 ## 本地钱包基本功能验收
 
 完整验收入口复用 SDK 的真实临时 Bootstrap、Core、Miner 和真实 SatoshiNet Indexer；只有 L1 Indexer 受控。
-测试使用真实 PWA、当次编译的 SDK WASM、STP、合约、签名、RGB provider 和浏览器 IndexedDB。
+测试使用真实 PWA、当次编译的 SDK WASM、STP、合约、签名、RGB provider 和浏览器 IndexedDB。完整命令也包含 Guardian 自身换机恢复、temporary 账户的 paid 好友托管续费，以及原 AUTOPAY 交易续传。
+
+L1 HTTP 夹具与 Transcend 的虚拟网络共用 SDK 的 `testutil/fakeindexer` 资产模型，复用 ORDX、BRC20 和 Runes 模拟能力；SDK HTTP 层继续校验真实签名并显式确认交易。模型与边界说明见 [共享 fake indexer](../../../sdk/testutil/fakeindexer/README.md)。迁移后只完成编译检查，尚未重新运行浏览器业务验收。
 
 ```bash
 cd /Users/yingfeng/github/sat20wallet/pwa

@@ -162,7 +162,7 @@ func (p *SatsNetDKVSClient) PublishAccountAddressBinding(wallet common.Wallet, n
 	}
 	value, err := dkvsindexer.EncodeAccountServiceDescriptor(dkvsindexer.AccountServiceDescriptor{
 		AccountID: accountID, CoreNodeID: coreNodeID,
-		Capabilities: dkvsindexer.AccountServiceCapabilityRGB11Direct,
+		Capabilities: accountServiceCapabilityRGB11Direct,
 	})
 	if err != nil {
 		return nil, err

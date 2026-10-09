@@ -421,7 +421,11 @@ func acknowledgeRGB11ChannelSend(t *testing.T, c *rgb11ChannelSendCase) error {
 			context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
 		)
 		if err != nil || syncResult.Received != 1 || syncResult.Invalid != 0 {
-			t.Fatalf("output %d mailbox sync=%+v err=%v", i, syncResult, err)
+			transfers, transferErr := recipient.rgbManager.projectionStore.ListTransfers()
+			reservations, reservationErr := recipient.rgbManager.loadRGB11Reservations()
+			engineRecords, engineErr := recipient.rgbManager.engineStore.ExportSnapshot()
+			t.Fatalf("output %d mailbox sync=%+v err=%v state=%+v transferErr=%v reservations=%+v reservationErr=%v engineRecords=%+v engineErr=%v preparedStates=%+v",
+				i, syncResult, err, transfers, transferErr, reservations, reservationErr, engineRecords, engineErr, prepared.States)
 		}
 		if _, err := sender.SyncConfiguredRGB11AddressMailbox(
 			context.Background(), dkvsindexer.RecordVerificationOptions{}, RGB11AddressDeliveryOptions{},
@@ -517,6 +521,15 @@ func TestRGB11ChannelSendRequiresACKAndCoSignsRealP2WSH(t *testing.T) {
 }
 
 func TestRGB11ChannelSendRecoversAfterPeerResponseLoss(t *testing.T) {
+	testRGB11ChannelSendRecoversAfterPeerResponseLoss(t, false)
+}
+
+func TestRGB11ChannelSendRecoversAfterObservedPeerBroadcast(t *testing.T) {
+	testRGB11ChannelSendRecoversAfterPeerResponseLoss(t, true)
+}
+
+func testRGB11ChannelSendRecoversAfterPeerResponseLoss(t *testing.T, observedBeforeResume bool) {
+	t.Helper()
 	c := newRGB11ChannelSendCase(t)
 	sender, prepared, peer := c.sender, c.prepared, c.peer
 	recoveryEvidence := &rgb11ChannelRecoveryEvidence{
@@ -568,11 +581,28 @@ func TestRGB11ChannelSendRecoversAfterPeerResponseLoss(t *testing.T) {
 	}
 	peer.mu.Unlock()
 
+	if observedBeforeResume {
+		// Reconciliation may observe the accepted transaction before Resume,
+		// while the lost peer response still leaves the durable witness unsigned.
+		batch, err := sender.rgbManager.loadRGB11AddressBatch(pending)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range batch {
+			item.State.Status = "pending"
+		}
+		if err := sender.rgbManager.projectionStore.SavePendingTransferStates(batch); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	recoveredTxID, fee, err := sender.ResumeRGB11Send(ctx, prepared.State.TransferID)
-	if err != nil || recoveredTxID != prepared.TxID || fee <= 0 {
-		t.Fatalf("resume after lost response tx=%s fee=%d err=%v", recoveredTxID, fee, err)
+	recoveredTx, fee, err := sender.resumeRGB11Send(ctx, prepared.State.TransferID)
+	if err != nil || recoveredTx == nil || recoveredTx.TxID() != prepared.TxID || fee <= 0 {
+		t.Fatalf("resume after lost response tx=%v fee=%d err=%v", recoveredTx, fee, err)
+	}
+	if err := VerifySignedTx(recoveredTx, peer.prev); err != nil {
+		t.Fatalf("returned transaction is missing the recovered peer witness: %v", err)
 	}
 	pending, err = sender.rgbManager.projectionStore.LoadPendingTransfer(prepared.State.TransferID)
 	if err != nil {

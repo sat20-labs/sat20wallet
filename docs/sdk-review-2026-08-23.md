@@ -477,7 +477,7 @@ SDK 修复必须与以下协议变化同步：
 SDK/PWA不再直接把 source metadata写入 contract indexer。提交路径改为：
 
 ```text
-/blob/evm/source/<contract_address>
+/contract/evm/source/<contract_address>
 ```
 
 节点端必须执行 exact init-code比较和准确上下文 runtime replay。SDK只负责提交 versioned source package和展示节点验证结果，不能自行声明 verified。

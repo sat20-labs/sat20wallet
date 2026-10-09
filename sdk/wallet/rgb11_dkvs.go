@@ -451,7 +451,7 @@ func (p *rgb11Manager) resolveRGB11AddressEndpointStore(store *dkvsStore, addres
 	if err != nil {
 		return nil, ErrRGB11TraditionalReceiveRequired
 	}
-	if descriptor.Capabilities&dkvsindexer.AccountServiceCapabilityRGB11Direct == 0 {
+	if descriptor.Capabilities&accountServiceCapabilityRGB11Direct == 0 {
 		return nil, ErrRGB11TraditionalReceiveRequired
 	}
 	accountID := descriptor.AccountID
@@ -482,6 +482,10 @@ const (
 
 	rgb11AddressInlineLimit = 10 * 1024
 )
+
+// Direct RGB transfers advertise this bit in the otherwise opaque account
+// service capability bitmap. Its meaning belongs to the Wallet SDK.
+const accountServiceCapabilityRGB11Direct = uint64(1 << 0)
 
 var (
 	ErrRGB11AddressDeliveryRequired = errors.New("RGB11 address consignment must be delivered before broadcast")
@@ -662,6 +666,16 @@ func (p *rgb11Manager) BroadcastRGB11AddressTransfer(transferID string) (string,
 		return "", err
 	}
 	if rgb11BroadcastCompleteStatus(pending.State.Status) {
+		// Chain reconciliation can observe a peer broadcast before the lost
+		// signing response is recovered. A visible txid alone does not supply
+		// the complete channel witness needed by the caller.
+		if pending.ChannelSend != nil && !pending.ChannelSend.Signed {
+			batch, err := p.loadRGB11AddressBatch(pending)
+			if err != nil {
+				return "", err
+			}
+			return p.broadcastRGB11PendingBatch(batch, nil)
+		}
 		return pending.State.WitnessTxID, nil
 	}
 	batch, err := p.loadRGB11AddressBatch(pending)

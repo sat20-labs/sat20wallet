@@ -591,16 +591,6 @@ func (p *IndexerRPCClientMgr) PutKVs(req *indexerwire.PutKValueReq) error {
 	}
 	return err
 }
-func (p *IndexerRPCClientMgr) DelKVs(req *indexerwire.DelKValueReq) error {
-	err := p.getActiveIndexer().DelKVs(req)
-	if shouldSwitchIndexer(err) {
-		indexer := p.selector()
-		if indexer != nil {
-			err = indexer.DelKVs(req)
-		}
-	}
-	return err
-}
 func (p *IndexerRPCClientMgr) GetKV(pubkey []byte, key string) (*indexerwire.KeyValue, error) {
 	result, err := p.getActiveIndexer().GetKV(pubkey, key)
 	if shouldSwitchIndexer(err) {

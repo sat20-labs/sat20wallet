@@ -10,6 +10,9 @@
           <span class="font-semibold">{{ $t('txDetail.outpoint') }}:</span> {{ item.Outpoint }}
         </p>
         <p class="text-sm font-medium break-all mb-1">
+          <span class="font-semibold">{{ $t('txDetail.addressOrScript') }}:</span> {{ item.destination }}
+        </p>
+        <p class="text-sm font-medium break-all mb-1">
           <span class="font-semibold">{{ $t('txDetail.value') }}:</span> {{ item.Value }}
         </p>
         <div v-if="item.Assets && item.Assets.length > 0" :class="cn('mt-2 pl-2 border-l-2', borderColorClass)">
@@ -32,6 +35,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { computed } from 'vue'
 import { cn } from '@/lib/utils' // Assuming you have the cn utility from shadcn
+import { Buffer } from 'buffer'
+import { bitcoin } from '@/lib/bitcoinjs'
+import { useWalletStore } from '@/store'
 // --- Type Definitions (Copied from SignPsbt.vue) ---
 interface AssetName {
   Protocol: string;
@@ -65,10 +71,22 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const walletStore = useWalletStore()
+
+const destination = (item: TxDetailItem) => {
+  const script = Buffer.from(item.PkScript, 'base64')
+  const network = walletStore.network === 'mainnet' ? bitcoin.networks.bitcoin : bitcoin.networks.testnet
+  try {
+    return bitcoin.address.fromOutputScript(script, network)
+  } catch {
+    return `0x${script.toString('hex')}`
+  }
+}
 
 const parsedAssetInputs = computed(() =>
   (props.items || []).map((item) => ({
     ...item,
+    destination: destination(item),
     Assets: item.Assets?.map((asset) => ({
       ...asset,
       label: asset.Name?.Ticker || '',

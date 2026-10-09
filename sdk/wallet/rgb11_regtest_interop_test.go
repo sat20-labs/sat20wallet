@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
@@ -160,10 +162,13 @@ func (e *regtestEsplora) GetRawTx(txid string) ([]byte, error) {
 }
 
 func (e *regtestEsplora) GetTxStatus(txid string) (*rgb11wallet.BitcoinTxStatus, error) {
-	var status regtestTxStatus
-	if err := e.request(http.MethodGet, "/tx/"+txid+"/status", "", &status); err != nil {
+	// Esplora's /status returns confirmed=false even for an unknown txid.
+	// Transaction info must exist before it can be classified as mempool-visible.
+	tx, err := e.tx(txid)
+	if err != nil {
 		return nil, err
 	}
+	status := tx.Status
 	confirmations := int64(0)
 	if status.Confirmed {
 		tip, err := e.tipHeight()
@@ -176,6 +181,30 @@ func (e *regtestEsplora) GetTxStatus(txid string) (*rgb11wallet.BitcoinTxStatus,
 		TxID: txid, InMempool: !status.Confirmed, Confirmed: status.Confirmed,
 		BlockHeight: status.BlockHeight, BlockHash: status.BlockHash, Confirmations: confirmations,
 	}, nil
+}
+
+func TestRegtestEsploraTransactionPresence(t *testing.T) {
+	known, unknown := strings.Repeat("1", 64), strings.Repeat("0", 64)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/status") {
+			fmt.Fprint(w, `{"confirmed":false}`)
+			return
+		}
+		if r.URL.Path == "/tx/"+known {
+			fmt.Fprintf(w, `{"txid":%q,"status":{"confirmed":false},"vout":[]}`, known)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	esplora := newRegtestEsplora(server.URL)
+	if status, err := esplora.GetTxStatus(unknown); err == nil || status != nil {
+		t.Fatalf("nonexistent transaction treated as visible: status=%+v err=%v", status, err)
+	}
+	if status, err := esplora.GetTxStatus(known); err != nil || status == nil || !status.InMempool || status.Confirmed {
+		t.Fatalf("known unconfirmed transaction not recognized: status=%+v err=%v", status, err)
+	}
 }
 
 func (e *regtestEsplora) GetOutspend(outpoint string) (*rgb11wallet.BitcoinOutspend, error) {
@@ -228,31 +257,36 @@ func (e *regtestEsplora) addressUTXOs(address string) ([]regtestAddressUTXO, err
 	return items, err
 }
 
-func populateRegtestIndexer(e *regtestEsplora, rpc *rgb11FlowIndexer, address string) error {
-	items, err := e.addressUTXOs(address)
-	if err != nil {
-		return err
-	}
-	rpc.outputs = make(map[string]*TxOutput, len(items))
-	rpc.plain = make([]*indexerwire.TxOutputInfo, 0, len(items))
-	for _, item := range items {
-		outpoint := fmt.Sprintf("%s:%d", item.TxID, item.Vout)
-		utxo, err := e.GetUTXO(outpoint)
+func populateRegtestIndexer(e *regtestEsplora, rpc *rgb11FlowIndexer, addresses ...string) error {
+	rpc.outputs = make(map[string]*TxOutput)
+	rpc.plain = nil
+	for _, address := range addresses {
+		items, err := e.addressUTXOs(address)
 		if err != nil {
 			return err
 		}
-		output := indexer.NewTxOutput(utxo.Value)
-		output.OutPointStr = outpoint
-		output.OutValue.PkScript = append([]byte(nil), utxo.PkScript...)
-		rpc.outputs[outpoint] = output
-		// Direct regtest funding uses coinbase outputs. Keep immature outputs
-		// available as Bitcoin evidence, but never offer them as fee inputs.
-		if utxo.Confirmations < 101 {
-			continue
+		for _, item := range items {
+			outpoint := fmt.Sprintf("%s:%d", item.TxID, item.Vout)
+			if rpc.outputs[outpoint] != nil {
+				continue
+			}
+			utxo, err := e.GetUTXO(outpoint)
+			if err != nil {
+				return err
+			}
+			output := indexer.NewTxOutput(utxo.Value)
+			output.OutPointStr = outpoint
+			output.OutValue.PkScript = append([]byte(nil), utxo.PkScript...)
+			rpc.outputs[outpoint] = output
+			// Direct regtest funding uses coinbase outputs. Keep immature outputs
+			// available as Bitcoin evidence, but never offer them as fee inputs.
+			if utxo.Confirmations < 101 {
+				continue
+			}
+			rpc.plain = append(rpc.plain, &indexerwire.TxOutputInfo{
+				OutPoint: outpoint, Value: utxo.Value, PkScript: append([]byte(nil), utxo.PkScript...),
+			})
 		}
-		rpc.plain = append(rpc.plain, &indexerwire.TxOutputInfo{
-			OutPoint: outpoint, Value: utxo.Value, PkScript: append([]byte(nil), utxo.PkScript...),
-		})
 	}
 	return nil
 }
@@ -270,6 +304,12 @@ func runRegtestCommand(t *testing.T, dir, name string, args ...string) []byte {
 
 func mineRegtest(t *testing.T, composeDir, address string, blocks int) {
 	t.Helper()
+	if binary := os.Getenv("RGB11_REGTEST_BITCOIN_CLI"); binary != "" {
+		dataDir := requiredRegtestEnv(t, "RGB11_REGTEST_BITCOIN_DATADIR")
+		runRegtestCommand(t, "", binary, "-datadir="+dataDir, "-regtest", "-rpcport="+requiredRegtestEnv(t, "RGB11_REGTEST_BITCOIN_RPC_PORT"),
+			"generatetoaddress", strconv.Itoa(blocks), address)
+		return
+	}
 	runRegtestCommand(t, composeDir, "docker", "compose", "exec", "-T", "bitcoin-core",
 		"bitcoin-cli", "-regtest", "generatetoaddress", strconv.Itoa(blocks), address)
 }
@@ -312,7 +352,7 @@ func requiredRegtestEnv(t *testing.T, name string) string {
 	t.Helper()
 	value := os.Getenv(name)
 	if value == "" {
-		t.Skipf("%s is required for the live regtest interop test", name)
+		t.Fatalf("%s is required for the requested live regtest interop test", name)
 	}
 	return value
 }
@@ -330,8 +370,18 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	officialBin := requiredRegtestEnv(t, "RGB11_REGTEST_OFFICIAL_BIN")
 	officialAlice := requiredRegtestEnv(t, "RGB11_REGTEST_OFFICIAL_ALICE")
 	officialBob := requiredRegtestEnv(t, "RGB11_REGTEST_OFFICIAL_BOB")
-	composeDir := requiredRegtestEnv(t, "RGB11_REGTEST_COMPOSE_DIR")
+	composeDir := os.Getenv("RGB11_REGTEST_COMPOSE_DIR")
+	if os.Getenv("RGB11_REGTEST_BITCOIN_CLI") == "" && composeDir == "" {
+		t.Fatal("a local Bitcoin CLI or disposable compose directory is required")
+	}
 	assetID := requiredRegtestEnv(t, "RGB11_REGTEST_ASSET_ID")
+	schema := os.Getenv("RGB11_REGTEST_SCHEMA")
+	if schema == "" {
+		schema = "NIA"
+	}
+	if schema != "NIA" && schema != "IFA" && schema != "UDA" {
+		t.Fatalf("unsupported live schema %s", schema)
+	}
 	artifactDir := os.Getenv("RGB11_REGTEST_EVIDENCE_DIR")
 	if artifactDir == "" {
 		artifactDir = t.TempDir()
@@ -344,13 +394,21 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	_chain = "regtest"
 	t.Cleanup(func() { _chain = previousChain })
 
-	goWallet, _, err := NewInteralWallet(&chaincfg.RegressionNetParams)
+	goWallet, mnemonic, err := NewInteralWallet(&chaincfg.RegressionNetParams)
 	if err != nil || goWallet == nil {
 		t.Fatalf("create Go regtest wallet: %v", err)
 	}
 	esplora := newRegtestEsplora(esploraURL)
+	var genesisHash string
+	if err := esplora.request(http.MethodGet, "/block-height/0", "", &genesisHash); err != nil {
+		t.Fatal(err)
+	}
+	if genesisHash != chaincfg.RegressionNetParams.GenesisHash.String() {
+		t.Fatalf("live environment is not Bitcoin regtest: genesis=%s", genesisHash)
+	}
 	rpc := &rgb11FlowIndexer{outputs: make(map[string]*TxOutput)}
-	manager := newRGB11FlowManager(t, goWallet, rpc, esplora, 1103)
+	dbPath := filepath.Join(artifactDir, "go-wallet-db")
+	manager := newRGB11FlowManagerAt(t, goWallet, rpc, esplora, 1103, dbPath)
 
 	// Give the Go wallet confirmed ordinary fee UTXOs before any RGB allocation
 	// is projected. The isolated chain is disposable and the coinbase outputs
@@ -376,7 +434,16 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const officialToGo = uint64(50)
+	officialToGo, goToOfficial := uint64(50), uint64(20)
+	assignment, receiveAssignment := "fungible", "fungible"
+	if schema == "UDA" {
+		officialToGo, goToOfficial, assignment, receiveAssignment = 1, 1, "uda", "any"
+	}
+	aliceBefore := officialJSON(t, officialBin, "balance", officialAlice, assetID)
+	aliceInitial, ok := aliceBefore["settled"].(float64)
+	if !ok || aliceInitial < float64(officialToGo) {
+		t.Fatalf("official Alice initial balance=%v", aliceBefore)
+	}
 	goReceive, err := manager.CreateRGB11Invoice(RGB11InvoiceRequest{
 		Mode: "witness", ContractID: assetID, AmountRaw: strconv.FormatUint(officialToGo, 10),
 		WitnessVout: 1, Expiry: time.Now().Add(time.Hour).Unix(),
@@ -384,17 +451,26 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, receiveAddresses, _, err := txscript.ExtractPkScriptAddrs(goReceive.WitnessScript, &chaincfg.RegressionNetParams)
+	if err != nil || len(receiveAddresses) != 1 {
+		t.Fatalf("resolve actual witness receive address: %v", err)
+	}
+	receiveAddress := receiveAddresses[0].EncodeAddress()
 	parsedGoInvoice, err := invoicing.Parse(goReceive.Invoice)
 	if err != nil {
 		t.Fatal(err)
 	}
 	officialSend := officialJSON(t, officialBin, "send", officialAlice, esploraURL, assetID,
-		parsedGoInvoice.Beneficiary.String(), strconv.FormatUint(officialToGo, 10), "true")
+		parsedGoInvoice.Beneficiary.String(), strconv.FormatUint(officialToGo, 10), "true", assignment)
 	officialTxID, _ := officialSend["txid"].(string)
 	binaryConsignment, _ := officialSend["consignment"].(string)
 	if officialTxID == "" || binaryConsignment == "" {
 		t.Fatalf("unexpected official send output: %+v", officialSend)
 	}
+	waitRegtest(t, "official transfer Bitcoin witness", func() bool {
+		status, err := esplora.GetTxStatus(officialTxID)
+		return err == nil && (status.InMempool || status.Confirmed)
+	})
 	officialStrictFile, err := os.ReadFile(binaryConsignment)
 	if err != nil {
 		t.Fatal(err)
@@ -407,21 +483,56 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	if receipt.ContractID != assetID {
 		t.Fatalf("official transfer contract=%s, want %s", receipt.ContractID, assetID)
 	}
+	if len(receipt.Allocations) == 0 {
+		t.Fatal("official receive produced no allocation")
+	}
+	var receivedAllocation *rgb11wallet.ValidatedAllocation
+	for i := range receipt.Allocations {
+		allocation := &receipt.Allocations[i]
+		if allocation.AssignmentType != 4000 || !strings.HasPrefix(allocation.OutPoint, officialTxID+":") {
+			continue
+		}
+		utxo, err := esplora.GetUTXO(allocation.OutPoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Equal(utxo.PkScript, goReceive.WitnessScript) {
+			receivedAllocation = allocation
+			break
+		}
+	}
+	if receivedAllocation == nil || receivedAllocation.Amount.Value.Uint64() != officialToGo {
+		t.Fatalf("actual recipient asset allocation missing or wrong: %+v", receipt.Allocations)
+	}
+	if schema == "UDA" && (receivedAllocation.StateClass != "structured" || len(receivedAllocation.StateData) != 12) {
+		t.Fatalf("UDA token assignment not preserved: %+v", receivedAllocation)
+	}
 	mineRegtest(t, composeDir, goWallet.GetAddress(), 1)
 	waitRegtest(t, "official-to-Go confirmation", func() bool {
 		status, err := esplora.GetTxStatus(officialTxID)
 		return err == nil && status.Confirmed
 	})
 	officialJSON(t, officialBin, "refresh", officialAlice, esploraURL, assetID)
-	if err := populateRegtestIndexer(esplora, rpc, goWallet.GetAddress()); err != nil {
+	if err := populateRegtestIndexer(esplora, rpc, goWallet.GetAddress(), receiveAddress); err != nil {
 		t.Fatal(err)
 	}
-	goBalance, err := manager.GetRGB11AssetBalance(&receipt.Allocations[0].AssetName)
-	if err != nil || goBalance.Value.Uint64() < officialToGo {
+	confirmedReceive, err := manager.rgbManager.projectionStore.LoadTransferState(receipt.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("receive status before confirmed-chain refresh: %s", confirmedReceive.Status)
+	if _, err := manager.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	confirmedReceive, err = manager.rgbManager.projectionStore.LoadTransferState(receipt.TransferID)
+	if err != nil || confirmedReceive == nil || confirmedReceive.Status != "settled" {
+		t.Fatalf("confirmed receive not settled: receive=%+v err=%v", confirmedReceive, err)
+	}
+	goBalance, err := manager.GetRGB11AssetBalance(&receivedAllocation.AssetName)
+	if err != nil || goBalance == nil || goBalance.Value.Uint64() != officialToGo {
 		t.Fatalf("Go receive balance=%v err=%v", goBalance, err)
 	}
 
-	const goToOfficial = uint64(20)
 	bobSettledBefore := float64(0)
 	if bobBalanceBefore, balanceErr := optionalOfficialJSON(officialBin, "balance", officialBob, assetID); balanceErr == nil {
 		var ok bool
@@ -433,7 +544,7 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 		t.Fatal(balanceErr)
 	}
 	officialReceive := officialJSON(t, officialBin, "receive-witness", officialBob, "-",
-		strconv.FormatUint(goToOfficial, 10))
+		strconv.FormatUint(goToOfficial, 10), receiveAssignment)
 	officialInvoice, _ := officialReceive["invoice"].(string)
 	if officialInvoice == "" {
 		t.Fatalf("unexpected official receive output: %+v", officialReceive)
@@ -449,7 +560,7 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 	parsedOfficialInvoice.Contract = &contractID
 	officialInvoice = parsedOfficialInvoice.String()
 	prepared, err := manager.PrepareRGB11Transfer(context.Background(), RGB11SendRequest{
-		Invoice: officialInvoice, FeeRate: 2, MinConfirmations: 1,
+		Invoice: officialInvoice, ContractID: assetID, AmountRaw: strconv.FormatUint(goToOfficial, 10), FeeRate: 2, MinConfirmations: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -494,15 +605,104 @@ func TestRGB11RegtestOfficialBidirectional(t *testing.T) {
 		t.Fatalf("settled Go transfer was not compacted: status=%s recipient_bytes=%d",
 			pending.State.Status, len(pending.RecipientConsignment))
 	}
+	// Every CLI invocation reloads the official on-disk wallet. Check the actual
+	// receive assignment and final state, rather than inferring them from balance.
+	transfersRaw := runRegtestCommand(t, "", officialBin, "transfers", officialBob, assetID)
+	var transfers []struct {
+		Status      string            `json:"status"`
+		TxID        string            `json:"txid"`
+		Assignments []json.RawMessage `json:"assignments"`
+	}
+	if err := json.Unmarshal(transfersRaw, &transfers); err != nil {
+		t.Fatal(err)
+	}
+	settledReceive := false
+	for _, transfer := range transfers {
+		if transfer.TxID != prepared.TxID || transfer.Status != "Settled" {
+			continue
+		}
+		if len(transfer.Assignments) != 1 {
+			t.Fatalf("official assignments=%s", transfersRaw)
+		}
+		want := fmt.Sprintf(`{"Fungible":%d}`, goToOfficial)
+		if schema == "UDA" {
+			want = `"NonFungible"`
+		}
+		if string(transfer.Assignments[0]) != want {
+			t.Fatalf("official assignment=%s want=%s", transfer.Assignments[0], want)
+		}
+		settledReceive = true
+	}
+	if !settledReceive {
+		t.Fatalf("official receive not Settled: %s", transfersRaw)
+	}
+	beforeRestart, err := manager.GetRGB11State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.rgbManager.scopeStates.stopReconciliations()
+	if err := manager.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager.db = nil
+	goWallet = NewInternalWalletWithMnemonic(mnemonic, "", &chaincfg.RegressionNetParams)
+	manager = newRGB11FlowManagerAt(t, goWallet, rpc, esplora, 1103, dbPath)
+	if _, err := manager.RefreshRGB11State(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := manager.GetRGB11AssetBalance(&receivedAllocation.AssetName)
+	remainingAmount, remainingText := uint64(0), "0"
+	if remaining != nil {
+		remainingAmount, remainingText = remaining.Value.Uint64(), remaining.Value.String()
+	}
+	// The SDK returns nil when no allocation remains, including a UDA sent in full.
+	if err != nil || remainingAmount != officialToGo-goToOfficial {
+		t.Fatalf("reopened Go balance=%v err=%v", remaining, err)
+	}
+	afterRestart, err := manager.GetRGB11State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beforeRestart.Proofs) != len(afterRestart.Proofs) {
+		t.Fatalf("reopened proof count=%d want=%d", len(afterRestart.Proofs), len(beforeRestart.Proofs))
+	}
+	beforeProofs := make(map[string]*rgb11wallet.AllocationProof, len(beforeRestart.Proofs))
+	for _, proof := range beforeRestart.Proofs {
+		beforeProofs[proof.OutPoint] = proof
+	}
+	for _, proof := range afterRestart.Proofs {
+		before := beforeProofs[proof.OutPoint]
+		if before == nil || before.AssetName != proof.AssetName {
+			t.Fatalf("reopened proof identity mismatch: %+v", proof)
+		}
+		if before.OperationID != proof.OperationID || before.Status != proof.Status || before.StateClass != proof.StateClass ||
+			!bytes.Equal(before.StateData, proof.StateData) || !bytes.Equal(before.SealDisclosure, proof.SealDisclosure) ||
+			before.SealCommitment != proof.SealCommitment || before.ConsignmentHash != proof.ConsignmentHash {
+			t.Fatalf("reopened proof changed: %s", proof.OutPoint)
+		}
+	}
+	bobReopened := officialJSON(t, officialBin, "balance", officialBob, assetID)
+	if bobReopened["settled"] != settled {
+		t.Fatalf("reopened official balance=%v want=%v", bobReopened["settled"], settled)
+	}
+	aliceReopened := officialJSON(t, officialBin, "balance", officialAlice, assetID)
+	if aliceReopened["settled"] != aliceInitial-float64(officialToGo) {
+		t.Fatalf("reopened Alice balance=%v want=%v", aliceReopened["settled"], aliceInitial-float64(officialToGo))
+	}
 	for _, path := range []string{binaryConsignment, goArmor, goBinary} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
 	}
 	summary := map[string]any{
-		"network":                 "regtest",
-		"official_rgb_lib_commit": "538f2abaa67d7ce96be32d94092e8f1b9e3ea38e",
-		"asset_id":                assetID,
+		"network":                     "regtest",
+		"official_rgb_lib_commit":     "538f2abaa67d7ce96be32d94092e8f1b9e3ea38e",
+		"asset_id":                    assetID,
+		"schema":                      schema,
+		"official_receive_settled":    settledReceive,
+		"wallet_restart_verified":     true,
+		"go_balance_after_restart":    remainingText,
+		"alice_balance_after_restart": aliceReopened["settled"],
 		"official_to_go": map[string]any{
 			"txid": officialTxID, "amount": officialToGo,
 			"consignment_sha256": hex.EncodeToString(officialConsignmentHash[:]),

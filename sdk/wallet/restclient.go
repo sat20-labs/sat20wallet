@@ -99,7 +99,6 @@ type IndexerRPCClient interface {
 	// for dkvs
 	GetNonce(pubKey []byte) ([]byte, error)
 	PutKVs(req *indexerwire.PutKValueReq) error
-	DelKVs(req *indexerwire.DelKValueReq) error
 	GetKV(pubkey []byte, key string) (*indexerwire.KeyValue, error)
 
 	// for names
@@ -1564,34 +1563,7 @@ func (p *IndexerClient) PutKVs(req *indexerwire.PutKValueReq) error {
 	return nil
 }
 
-func (p *IndexerClient) DelKVs(req *indexerwire.DelKValueReq) error {
-	buff, err := json.Marshal(&req)
-	if err != nil {
-		return err
-	}
-
-	url := p.GetUrl("/kv/del")
-	rsp, err := p.Http.SendPostRequest(url, buff)
-	if err != nil {
-		Log.Warningf("SendPostRequest %v failed. %v", url, err)
-		return err
-	}
-
-	var result indexerwire.DelKValueResp
-	if err := json.Unmarshal(rsp, &result); err != nil {
-		Log.Errorf("Unmarshal failed. %v\n%s", err, string(rsp))
-		return err
-	}
-
-	if result.Code != 0 {
-		Log.Errorf("%v response message %s", url, result.Msg)
-		return fmt.Errorf("%s", result.Msg)
-	}
-
-	return nil
-}
-
-// 绑定在公钥的kv，只有一些支付费用的节点才能上传kv到indexer
+// 读取绑定在公钥上的KV记录；写入仅接受与indexer服务公钥一致的签名。
 func (p *IndexerClient) GetKV(pubkey []byte, key string) (*indexerwire.KeyValue, error) {
 
 	path := fmt.Sprintf("/kv/get/%s/%s", hex.EncodeToString(pubkey), key)

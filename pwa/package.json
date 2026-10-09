@@ -21,8 +21,15 @@
     "verify:agent-safety": "node scripts/verify/agent-safety-preflight.mjs",
     "verify:rgb11-l1": "node scripts/verify/rgb11-l1-smoke.mjs",
     "verify:rgb11-direct": "node scripts/live/rgb11-direct-roots-pwa-live.mjs",
-    "verify:wallet-e2e": "cd ../sdk && go test -p=1 -parallel=1 ./e2e -run '^(TestSDKWalletPWAConnectedBrowser|TestSDKAccountPWAConnectedBrowser|TestSDKCoreModulesE2E)$' -count=1 -timeout=100m -v",
-    "verify:wallet-e2e:functional": "cd ../sdk && go test -p=1 -parallel=1 ./e2e -run '^TestSDKWalletPWAConnectedBrowser$' -count=1 -timeout=55m -v"
+    "verify:wallet-e2e": "cd ../sdk && go test -p=1 -parallel=1 ./e2e -run '^(TestSDKWalletPWAConnectedBrowser|TestSDKAccountPWAConnectedBrowser|TestSDKCoreModulesE2E|TestSDKAccountGuardianIdentitySurvivesAccountRecovery|TestSDKAccountGuardianPaidPWABatchReview)$' -count=1 -timeout=100m -v",
+    "verify:wallet-e2e:functional": "cd ../sdk && go test -p=1 -parallel=1 ./e2e -run '^TestSDKWalletPWAConnectedBrowser$' -count=1 -timeout=55m -v",
+    "verify:wallet-e2e:force-close": "cd ../sdk && go test -p=1 -parallel=1 ./e2e -run '^TestSDKWalletPWAForceCloseCSV$' -count=1 -timeout=30m -v",
+    "verify:sdk-wasm-e2e": "cd ../sdk && go test -p=1 -parallel=1 ./e2e -run '^TestSDKWASMInterfacesE2E$' -count=1 -timeout=30m -v",
+    "verify:pwa-release-e2e": "cd ../sdk && go test -p=1 -parallel=1 ./e2e -run '^TestPWAProductionReleaseE2E$' -count=1 -timeout=25m -v",
+    "verify:account-e2e": "cd ../sdk && go test -p=1 -parallel=1 ./e2e -run '^TestSDKAccountPWAConnectedBrowser$' -count=1 -timeout=55m -v",
+    "verify:core-modules-e2e": "cd ../sdk && go test -p=1 -parallel=1 ./e2e -run '^TestSDKCoreModulesE2E$' -count=1 -timeout=40m -v",
+    "verify:guardian-e2e": "cd ../sdk && go test -p=1 -parallel=1 ./e2e -run '^(TestSDKAccountGuardianIdentitySurvivesAccountRecovery|TestSDKAccountGuardianPaidPWABatchReview)$' -count=1 -timeout=60m -v",
+    "verify:release-gate": "npm run verify:sdk-wasm-e2e && npm run verify:pwa-release-e2e && npm run verify:wallet-e2e:functional && npm run verify:wallet-e2e:force-close && npm run verify:account-e2e && npm run verify:core-modules-e2e && npm run verify:guardian-e2e"
   },
   "dependencies": {
     "@bitcoin-js/tiny-secp256k1-asmjs": "^2.2.4",
@@ -76,4 +83,3 @@
     "vue-tsc": "^2.2.12"
   }
 }
-

@@ -483,12 +483,12 @@ interface SatsnetStp {
   getCurrentChannel(): SatsnetResponse
   getChannel(id: string): SatsnetResponse
   getChannelStatus(id: string): SatsnetResponse
-  safetySnapshot(channelId: string): SatsnetResponse
-  commitmentExport(channelId: string): SatsnetResponse
-  punishStatus(channelId: string): SatsnetResponse
-  punishBuild(channelId: string, commitTxId: string): SatsnetResponse
+  safetySnapshot(channelId: string): Promise<SatsnetResponse>
+  commitmentExport(channelId: string): Promise<SatsnetResponse>
+  punishStatus(channelId: string): Promise<SatsnetResponse>
+  punishBuild(channelId: string, commitTxId: string): Promise<SatsnetResponse>
   punishBroadcast(channelId: string, commitTxId: string): Promise<SatsnetResponse<any>>
-  forceClosePlan(channelId: string): SatsnetResponse
+  forceClosePlan(channelId: string): Promise<SatsnetResponse>
   sweepBuild(
     channelId: string,
     commitTxId?: string,

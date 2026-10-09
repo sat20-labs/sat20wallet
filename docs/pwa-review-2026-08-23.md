@@ -411,7 +411,7 @@ PWA bundle使用的 solc版本与节点当前规范配置可能不同。页面�
 按照 SatoshiNet已确认设计：
 
 ```text
-/blob/evm/source/<contract_address>
+/contract/evm/source/<contract_address>
 ```
 
 只有节点端完成以下验证后才能写入：

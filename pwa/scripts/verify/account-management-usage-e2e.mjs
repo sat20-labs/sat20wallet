@@ -399,6 +399,9 @@ export async function runPwaUsageCases(t) {
   }))
 
   await scenario('usage: committed creation and import pages recover from a catalog read failure without replay', async () => {
+    // Use the preceding creation's real phrase. The shared root already has a
+    // remote recovery package and would bypass the ordinary import under test.
+    let committedCreateMnemonic = ''
     for (const entry of ['create', 'import', 'manager']) {
       const page = entry === 'manager' ? await fresh() : await device()
       try {
@@ -427,7 +430,8 @@ export async function runPwaUsageCases(t) {
           location.hash = entry === 'manager' ? '#/wallet/manager' : `#/${entry}`
         }, entry)
         if (entry === 'import') {
-          await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(importMnemonic)
+          assert.ok(committedCreateMnemonic)
+          await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(committedCreateMnemonic)
           await page.getByLabel('New Wallet Password', { exact: true }).fill(password)
           await page.getByLabel('Confirm Password', { exact: true }).fill(password)
           await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
@@ -445,7 +449,8 @@ export async function runPwaUsageCases(t) {
         const committed = await catalog(page)
         const added = committed.filter(wallet => !before.some(old => String(old.id) === String(wallet.id)))
         assert.equal(added.length, 1)
-        const mnemonic = entry === 'import' ? importMnemonic : (await page.locator('.grid.grid-cols-3 .blur-sm').allTextContents()).map(word => word.trim()).join(' ')
+        const mnemonic = entry === 'import' ? committedCreateMnemonic : (await page.locator('.grid.grid-cols-3 .blur-sm').allTextContents()).map(word => word.trim()).join(' ')
+        if (entry === 'create') committedCreateMnemonic = mnemonic
         assert.equal((await walletCall(page, 'validateMnemonic', mnemonic, '')).fingerprint, added[0].fingerprint)
         assert.equal(await page.evaluate(() => window.committedPageFaults), 1)
         assert.equal(await page.evaluate(() => window.committedPageSubmissions), 1)
@@ -455,6 +460,12 @@ export async function runPwaUsageCases(t) {
         await page.locator('form button[type="submit"]').click()
         await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: 90000 })
         assert.deepEqual(await catalog(page), committed)
+      } catch (error) {
+        const observation = await page.evaluate(() => ({
+          submissions: window.committedPageSubmissions, catalogFaults: window.committedPageFaults,
+        })).catch(() => null)
+        console.error(JSON.stringify({ committedPageFailure: { entry, route: new URL(page.url()).hash, observation } }))
+        throw error
       } finally { await page.context().close() }
     }
   })
@@ -1851,8 +1862,24 @@ export async function runRgbPaidCases(t, fixture) {
       await accountCall(paidPage, 'confirmStorage', 'temporary')
       const temporary = await accountCall(paidPage, 'createRecovery', { password: fixture.password,
         wallets: [], recovery_mode: '2of2', questions })
-      await accountCall(paidPage, 'rehearse', temporary.session_id,
-        questions.slice(0, 2).map(({ id, answer }) => ({ question_id: id, answer })), temporary.user_share, fixture.password)
+      // Prepare the same temporary recovery session using the existing page's
+      // bounded user retry after a safe CAS refusal. Do not replace material.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          const result = await accountCall(paidPage, 'rehearse', temporary.session_id,
+            questions.slice(0, 2).map(({ id, answer }) => ({ question_id: id, answer })), temporary.user_share, fixture.password)
+          assert.equal(result.verified, true)
+          break
+        } catch (error) {
+          if (!/publish account activation state: dkvs write conflict/.test(error.message) || attempt === 3) throw error
+          assert.equal((await accountCall(paidPage, 'status')).recovery_configured, false, 'CAS refusal falsely configured recovery')
+          console.log(JSON.stringify({ activationUserRetry: attempt + 1, outcome: 'conflict', entry: 'RGB paid setup' }))
+          await expect.poll(async () => {
+            const status = await accountCall(paidPage, 'status')
+            return !status.pending_changes && !status.managed_data_dirty
+          }, { timeout: 90000 }).toBe(true)
+        }
+      }
       const configured = await accountCall(paidPage, 'status')
       assert.equal(configured.active, true)
       assert.equal(configured.recovery_configured, true)

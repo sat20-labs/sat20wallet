@@ -10,6 +10,8 @@ export const requiredPwaToolsCases = [
   'Tools PWA: bundled Solidity compiler deploys the current SDK probe on chain',
   'Tools PWA: EVM call changes canonical state and appears in page history',
   'Tools PWA: Agent configuration rejects an unsafe source before signing',
+  'Tools PWA: direct WASM reconciles Exchange index queries and deployed service status',
+  'Tools PWA: direct WASM rejects an unknown template and invoke without broadcasting',
 ]
 
 const poll = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
@@ -67,11 +69,11 @@ export async function runPwaToolsCases(t, fixture) {
     const target = await device()
     pages.push(target)
     await visit(target, '/import')
-    await target.getByLabel('Recovery Phrase', { exact: true }).fill(identity.mnemonic)
+    await target.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(identity.mnemonic)
     await target.getByLabel('New Wallet Password', { exact: true }).fill(identity.password)
     await target.getByLabel('Confirm Password', { exact: true }).fill(identity.password)
     await target.getByRole('button', { name: 'Import Wallet', exact: true }).click()
-    await expect(target.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible()
+    await expect(target.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: 90000 })
     await expect.poll(() => target.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().address), poll).toBe(identity.address)
     return target
   }
@@ -94,6 +96,8 @@ export async function runPwaToolsCases(t, fixture) {
     await visit(page, '/wallet')
     await toolsTab('Smart Contracts')
     await panel().getByRole('button', { name: /^Deploy Smart Contract/ }).click()
+    await panel().getByRole('button', { name: 'Load', exact: true }).click()
+    await expect(panel().getByRole('button', { name: 'Load', exact: true })).toBeEnabled()
     await select(field('Contract type').getByRole('combobox'), type)
     await expect(panel().getByRole('combobox').nth(1)).toBeVisible()
     await select(panel().getByRole('combobox').nth(1), schema)
@@ -106,7 +110,18 @@ export async function runPwaToolsCases(t, fixture) {
   }
   const confirmTools = async requiredText => {
     const dialog = page.getByRole('dialog')
-    await expect(dialog).toBeVisible()
+    try { await expect(dialog).toBeVisible() } catch (error) {
+      const failures = (await panel().locator('pre').allTextContents()).flatMap(text => {
+        try { const value = JSON.parse(text); return value.stage === 'error' ? [value] : [] }
+        catch { return [] }
+      })
+      const runtime = await page.evaluate(async () => {
+        const { snapshotWasmRuntimeDiagnostics } = await import('/utils/wasmRuntimeDiagnostics.ts')
+        return { route: location.hash, breadcrumbs: snapshotWasmRuntimeDiagnostics() }
+      }).catch(() => null)
+      error.message += `; tools_review_errors=${JSON.stringify(failures)}; tools_runtime=${JSON.stringify(runtime)}`
+      throw error
+    }
     for (const text of requiredText) await expect(dialog).toContainText(text)
     await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
     await expect(dialog).toBeHidden()
@@ -160,6 +175,14 @@ export async function runPwaToolsCases(t, fixture) {
     assert.equal(result.code, 0, result.msg)
     return result.data
   }
+  const contractQuery = async request => {
+    const result = await walletCall(page, 'queryContract', request)
+    const response = JSON.parse(result.result)
+    // The SDK unwraps info/state data; list/history retain the REST envelope.
+    if (request.Query === 'info' || request.Query === 'state') return response
+    assert.equal(response.code, 0, response.msg)
+    return response.data
+  }
   const amount = async (target, address, key) => {
     const result = await walletCall(target, 'getAssetAmount_SatsNet', address, key)
     return integer(result.availableAmt) + integer(result.lockedAmt)
@@ -202,12 +225,19 @@ export async function runPwaToolsCases(t, fixture) {
     const txid = (await receipt.textContent()).trim().slice(6)
     return confirmedWork(txid)
   }
-  const historyThroughUI = async (address, txid) => {
+  const historyThroughUI = async (address, txid, kind) => {
     await panel().getByRole('button', { name: 'Back to Contracts', exact: true }).click()
     await panel().getByRole('button', { name: 'Query History', exact: true }).click()
-    await expect(panel().locator('pre').filter({ hasText: txid })).toHaveCount(1)
+    const historyView = panel().locator('span').filter({ hasText: /^Query History$/ }).locator('../..').locator('pre')
+    await expect(historyView).toHaveCount(1)
+    await expect(historyView).toContainText(txid)
     const history = await contractRead('getContractHistory', address)
-    assert.ok(JSON.stringify(history).includes(txid), 'independent canonical history lacks this work txid')
+    const record = history.find(item => item.txid === txid && item.contract === address)
+    assert.ok(record, 'independent canonical history lacks this transaction')
+    if (kind) {
+      assert.equal(record.kind, kind)
+      if (kind === 'result') assert.equal(record.status, 'success')
+    }
   }
   const sendGasThroughUI = async (address, quantity) => {
     await visit(page, '/wallet')
@@ -245,6 +275,18 @@ export async function runPwaToolsCases(t, fixture) {
     const response = await page.evaluate(() => window.sat20wallet_operation_log.getOperationLogs())
     assert.equal(response.code, 0, response.msg)
     return JSON.parse(response.data.logs)
+  }
+  const ensureExchange = async (fresh = false) => {
+    if (!page) page = await importWallet(actor)
+    if (exchange && !fresh) return
+    await deployForm('Template', 'Exchange')
+    await assetField('Asset A', gas)
+    await assetField('Asset B', '::')
+    await select(field('Price mode').getByRole('combobox'), 'By sold Asset A')
+    if (await field('Threshold').count() === 0) await panel().getByRole('button', { name: 'Add Price steps', exact: true }).click()
+    await fill('Threshold', '0')
+    await fill('Asset B per Asset A', '0.001')
+    exchange = await submitDeploy('Exchange')
   }
 
   try {
@@ -305,7 +347,13 @@ export async function runPwaToolsCases(t, fixture) {
       exchangeInventory -= 990000n
       await expect.poll(() => amount(page, exchange.contractAddress, gas), poll).toBe(exchangeInventory)
       await openContract(exchange.contractAddress)
-      await historyThroughUI(exchange.contractAddress, work.txid)
+      // Plain-sats funding has no explicit invoke op. Mainline indexes its
+      // canonical Result; confirmedWork already proves it consumes this work.
+      assert.equal((work.contractOps || []).filter(op => op.kind === 'invoke').length, 0)
+      for (const result of work.results) {
+        await historyThroughUI(exchange.contractAddress, result.txid, 'result')
+        await openContract(exchange.contractAddress)
+      }
       page = deployerPage
     })
 
@@ -405,6 +453,134 @@ export async function runPwaToolsCases(t, fixture) {
       assert.deepEqual(deployments, [], 'invalid source reached a signing/broadcast operation')
       const after = await control('snapshot')
       assert.deepEqual(after.l1.broadcast_count, snapshot.l1.broadcast_count)
+    })
+    } catch (error) { failures.push(error) }
+
+    try {
+    await check(requiredPwaToolsCases[6], async () => {
+      // The earlier close case consumed its Exchange. Deploy a fresh one
+      // through the real form for both full and focused query acceptance.
+      await ensureExchange(true)
+
+      const before = await control('snapshot')
+      const supported = await walletCall(page, 'getSupportedContracts')
+      assert.ok(Array.isArray(supported.contractContents) && supported.contractContents.length)
+      const serverQuery = async path => {
+        const response = await fetch(`${fixture.coreSTPURL}${path}`)
+        assert.equal(response.ok, true, `Core STP ${path}: HTTP ${response.status}`)
+        const data = await response.json()
+        assert.equal(data.code, 0, data.msg)
+        return data
+      }
+      assert.deepEqual(supported.contractContents, (await serverQuery('/info/contracts/support')).contracts,
+        'WASM service catalog must match the actual Core STP catalog')
+
+      const exchangeContent = await walletCall(page, 'buildUnifiedContractContent', 'template', 'exchange.tc', JSON.stringify({
+        assetAName: gas,
+        assetBName: '::',
+        priceMode: 'sold_a',
+        steps: [{ threshold: '0', bPerA: '0.001' }],
+      }))
+      assert.equal(exchangeContent.contentEncoding, 'base64')
+      const estimateRequest = {
+        ContractType: 'template', SubType: 'exchange.tc', DeployNonce: 987654321,
+        ContractContent: exchangeContent.content, ContentEncoding: exchangeContent.contentEncoding,
+      }
+      const estimate = await walletCall(page, 'estimateDeployUnifiedContract', estimateRequest)
+      const repeatedEstimate = await walletCall(page, 'estimateDeployUnifiedContract', estimateRequest)
+      assert.deepEqual(repeatedEstimate, estimate, 'same deployment request did not produce a stable estimate')
+      assert.equal(estimate.contractType, 'template')
+      assert.equal(estimate.caller, actor.address)
+      assert.match(estimate.contractAddress, /^\w+$/)
+      assert.ok(BigInt(estimate.gasAssetAmount) >= BigInt(estimate.gasFeeAmount))
+      assert.equal(estimate.txid, '', 'estimate must not broadcast a transaction')
+
+      const invokeParams = await walletCall(page, 'getParamForInvokeUnifiedContract', 'template', 'exchange.tc', 'exchange')
+      const invokeTemplate = JSON.parse(invokeParams.parameter)
+      assert.equal(invokeTemplate.action, 'exchange')
+      assert.equal(JSON.parse(invokeTemplate.param).minOutA, '')
+      const feeRequest = { ContractType: 'template', SubType: 'exchange.tc',
+        ContractAddress: exchange.contractAddress, Action: 'exchange', Param: JSON.stringify({ minOutA: '0' }) }
+      const invokeFee = await walletCall(page, 'getFeeForInvokeUnifiedContract', feeRequest)
+      assert.ok(BigInt(invokeFee.fee) > 0n)
+      assert.deepEqual(await walletCall(page, 'getFeeForInvokeUnifiedContract', feeRequest), invokeFee)
+
+      const directList = await contractQuery({ ContractType: 'template', Query: 'list', Start: 0, Limit: 100 })
+      const restListResponse = await page.evaluate(async () => {
+        const api = (await import('/apis/smartcontract.ts')).default
+        return api.getContracts({ network: 'testnet', start: 0, limit: 100 })
+      })
+      assert.equal(restListResponse.code, 0, restListResponse.msg)
+      assert.deepEqual(directList, restListResponse.data, 'WASM contract list disagrees with canonical indexer API')
+      assert.ok(JSON.stringify(directList).includes(exchange.contractAddress), 'deployed Exchange is absent from direct WASM list query')
+
+      const directInfo = await contractQuery({ ContractType: 'template', Query: 'info', Contract: exchange.contractAddress })
+      assert.deepEqual(directInfo, await contractRead('getContract', exchange.contractAddress))
+      const directState = await contractQuery({ ContractType: 'template', Query: 'state', Contract: exchange.contractAddress })
+      assert.deepEqual(directState, await contractRead('getContractState', exchange.contractAddress))
+      const directHistory = await contractQuery({
+        ContractType: 'template', Query: 'history', Contract: exchange.contractAddress, Start: 0, Limit: 100,
+      })
+      const restHistory = await contractRead('getContractHistory', exchange.contractAddress)
+      assert.deepEqual(directHistory, restHistory, 'WASM history disagrees with canonical indexer history')
+      assert.ok(JSON.stringify(directHistory).includes(exchange.txid), 'deployment transaction is absent from contract history')
+
+      const serverContracts = await walletCall(page, 'getDeployedContractsInServer')
+      assert.ok(Array.isArray(serverContracts.contractURLs) && serverContracts.contractURLs.length,
+        'Core has no deployed service contract to inspect')
+      const serverURL = fixture.publicContracts['::']
+      assert.ok(serverURL && serverContracts.contractURLs.includes(serverURL), 'the confirmed fixture service contract is missing')
+      const status = await walletCall(page, 'getDeployedContractStatus', serverURL)
+      assert.ok(typeof status.contractStatus === 'string' && status.contractStatus.length > 0)
+      const parsedStatus = JSON.parse(status.contractStatus)
+      assert.ok(parsedStatus && typeof parsedStatus === 'object', 'Core contract status is not valid JSON')
+      assert.deepEqual(parsedStatus, JSON.parse((await serverQuery(`/info/contract/${encodeURIComponent(serverURL)}`)).status))
+      const serverHistory = await walletCall(page, 'getContractInvokeHistoryInServer', serverURL, 0, 100)
+      assert.ok(typeof serverHistory.history === 'string' && serverHistory.history.length > 0)
+      const history = JSON.parse(serverHistory.history)
+      assert.deepEqual(history, JSON.parse((await serverQuery(`/info/contract/history/${encodeURIComponent(serverURL)}?start=0&limit=100`)).status))
+      const addressHistory = await walletCall(page, 'getContractInvokeHistoryByAddressInServer', serverURL, actor.address, 0, 100)
+      assert.deepEqual(JSON.parse(addressHistory.history), JSON.parse((await serverQuery(`/info/contract/userhistory/${encodeURIComponent(serverURL)}/${actor.address}?start=0&limit=100`)).status))
+      // Analytics is a public WASM export without a PWA convenience wrapper.
+      const analytics = await page.evaluate(async url => {
+        const response = await window.sat20wallet_wasm.getDeployedContractAnalytics(url)
+        if (response.code !== 0) throw new Error(response.msg)
+        return response.data
+      }, serverURL)
+      assert.deepEqual(JSON.parse(analytics.Analytics), JSON.parse((await serverQuery(`/info/contract/analytics/${encodeURIComponent(serverURL)}`)).status))
+      const addresses = await walletCall(page, 'getAllAddressInContract', serverURL, 0, 100)
+      assert.equal(addresses.addresses, (await serverQuery(`/info/contract/alluser/${encodeURIComponent(serverURL)}?start=0&limit=100`)).status)
+      const addressStatus = await walletCall(page, 'getAddressStatusInContract', serverURL, actor.address)
+      assert.deepEqual(JSON.parse(addressStatus.status), JSON.parse((await serverQuery(`/info/contract/user/${encodeURIComponent(serverURL)}/${actor.address}`)).status))
+
+      const after = await control('snapshot')
+      assert.deepEqual(after.l1.broadcast_count, before.l1.broadcast_count, 'read/estimate APIs broadcast to L1')
+      assert.deepEqual(after.l1.pending_txids.filter(txid => !before.l1.pending_txids.includes(txid)), [])
+      assert.deepEqual(after.mempool_txids.filter(txid => !before.mempool_txids.includes(txid)), [],
+        'read/estimate APIs broadcast to SatoshiNet')
+    })
+    } catch (error) { failures.push(error) }
+
+    try {
+    await check(requiredPwaToolsCases[7], async () => {
+      await ensureExchange()
+      const before = await control('snapshot')
+      await assert.rejects(walletCall(page, 'estimateDeployUnifiedContract', {
+        ContractType: 'template', SubType: 'not-a-template.tc', DeployNonce: 987654322,
+        ContractContent: 'e30=', ContentEncoding: 'base64',
+      }), /template|contract|unknown|unsupported/i)
+      await assert.rejects(walletCall(page, 'getParamForInvokeUnifiedContract', 'template', 'not-a-template.tc', 'exchange'),
+        /template|contract|unknown|unsupported/i)
+      await assert.rejects(walletCall(page, 'invokeUnifiedContract', {
+        ContractType: 'template', SubType: 'exchange.tc', ContractAddress: exchange.contractAddress,
+        Action: 'not-a-supported-action',
+      }), /action|template|contract|unsupported/i)
+      await assert.rejects(walletCall(page, 'queryContract', { Query: 'unsupported' }), /unsupported contract query/i)
+      const after = await control('snapshot')
+      assert.deepEqual(after.l1.broadcast_count, before.l1.broadcast_count)
+      assert.deepEqual(after.l1.pending_txids.filter(txid => !before.l1.pending_txids.includes(txid)), [])
+      assert.deepEqual(after.mempool_txids.filter(txid => !before.mempool_txids.includes(txid)), [],
+        'invalid contract requests broadcast to SatoshiNet')
     })
     } catch (error) { failures.push(error) }
     if (failures.length) throw new AggregateError(failures, 'Tools acceptance groups failed')

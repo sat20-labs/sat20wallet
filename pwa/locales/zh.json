@@ -606,6 +606,7 @@
   },
   "txDetail": {
     "outpoint": "输出点",
+    "addressOrScript": "地址 / 脚本",
     "value": "金额",
     "assets": "资产",
     "noAssets": "当前无资产。"

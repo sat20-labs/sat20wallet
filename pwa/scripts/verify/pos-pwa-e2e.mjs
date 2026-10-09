@@ -34,6 +34,11 @@ export const requiredPwaPosCases = [
   'Escape PWA: cooperative close returns confirmed BTC and ORDX to Bitcoin',
   'Funds PWA: Bitcoin advanced ORDX Send creates two reviewed asset outputs',
 ]
+// Destructive channel closure uses the same fixture in a separate selected
+// run, since cooperative-close and force-close cannot share one channel.
+export const optionalPwaEscapeCases = [
+  'Escape PWA: confirmed force close waits for CSV and returns exact wallet funds after reload',
+]
 
 const pollOptions = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
 const txidPattern = /^[0-9a-f]{64}$/
@@ -94,7 +99,7 @@ export async function runPwaPosCases(t, fixture) {
   }
   const stpRead = async (method, ...args) => {
     assert.ok(['getCurrentChannel', 'getChannelStatus', 'previewOpenChannel', 'allReservations',
-      'safetySnapshot', 'getCommitTxAssetInfo'].includes(method), 'test may only read STP state')
+      'safetySnapshot', 'getCommitTxAssetInfo', 'commitmentExport', 'forceClosePlan', 'sweepBuild', 'punishStatus'].includes(method), 'test may only read STP state')
     const read = page.evaluate(async ({ method, args }) => {
       const stp = (await import('/utils/stp.ts')).default
       const [error, result] = await stp[method](...args)
@@ -295,7 +300,11 @@ export async function runPwaPosCases(t, fixture) {
     assert.ok(outputs.length, 'public-channel Anchor has no output to the PWA wallet')
     const credited = token
       ? outputs.flatMap(output => output.assets || []).filter(asset => assetKey(asset.Name) === key)
-        .reduce((sum, asset) => sum + asInteger(asset.Amount), 0n)
+        .reduce((sum, asset) => {
+          assert.equal(asset.Amount?.Precision, 0, 'fixture Anchor asset precision must be zero')
+          assert.equal(typeof asset.Amount.Value, 'string', 'Anchor asset value must be an exact string')
+          return sum + asInteger(asset.Amount.Value)
+        }, 0n)
       : outputs.filter(output => !(output.assets || []).length).reduce((sum, output) => sum + asInteger(output.value), 0n)
     const expectedCredit = asInteger(token ? amounts.deposit_asset : amounts.deposit_btc)
     assert.equal(credited, expectedCredit, 'deposit credit must equal the user-confirmed amount; deposit service fee is zero')
@@ -599,7 +608,7 @@ export async function runPwaPosCases(t, fixture) {
     assert.deepEqual(channelBalances(after), channelBalances(current))
     assert.deepEqual(deanchorInputs(after), deanchorInputs(current))
     const snapshot = await control('snapshot')
-    assert.equal(snapshot.l1.broadcast_count, before.l1.broadcast_count)
+    assert.deepEqual(snapshot.l1.broadcast_count, before.l1.broadcast_count)
     assert.deepEqual(snapshot.l1.pending_txids, before.l1.pending_txids)
     assert.deepEqual(snapshot.l1.confirmed_txids, before.l1.confirmed_txids)
   }
@@ -651,23 +660,90 @@ export async function runPwaPosCases(t, fixture) {
     })
 
     await check(requiredPwaPosCases[1], async () => {
-      const prior = await readChannel()
-      const before = await control('snapshot')
-      await clickAssetOperation('Splicing in', amounts.splicing_btc, false)
-      const funding = await pendingFunding(before)
-      await showTab('Channel')
-      await expect(activePanel().getByText('Splicing in', { exact: true })).toBeVisible()
-      const signed = deanchorInputs(await readChannel())
-      await reopen(true)
-      await showTab('Channel')
-      await expect(activePanel().getByText('Splicing in', { exact: true })).toBeVisible()
-      assert.equal((await readChannel()).channelId, channelId)
-      assert.deepEqual(deanchorInputs(await readChannel()), signed)
-      await assertSamePending(funding)
-      const { anchor } = await confirmFunding(funding)
-      const channel = await readyChannelUI()
-      assert.equal(channelAmount(channel, '::') - channelAmount(prior, '::'), asInteger(amounts.splicing_btc))
-      assertSignedAnchor(signed, anchor, channel)
+      let stage = 'peer-ready'
+      const setStage = value => {
+        stage = value
+        console.log(JSON.stringify({ splicingInStage: stage }))
+      }
+      setStage(stage)
+      try {
+        const prior = await readChannel()
+        // The controlled Anchor confirmation waits for chain/indexer state;
+        // Core's STP monitor can finish opening on its next tick. Establish
+        // that independent prerequisite before testing pending-page recovery.
+        const corePeer = fixture.config.Peers.find(peer => peer.startsWith('s@'))
+        assert.ok(corePeer, 'fixture must identify its Core STP peer')
+        const coreURL = new URL(corePeer.slice(corePeer.lastIndexOf('@') + 1) + '/')
+        assert.equal(coreURL.protocol, 'http:')
+        assert.equal(coreURL.hostname, '127.0.0.1', 'Core read must stay in the isolated network')
+        await expect.poll(async () => {
+          const response = await fetch(new URL(`info/channel/${encodeURIComponent(channelId)}`, coreURL), {
+            signal: AbortSignal.timeout(10000),
+          })
+          assert.ok(response.ok, `Core channel read: HTTP ${response.status}`)
+          const result = await response.json()
+          if (result.code !== 0) return false
+          assert.equal(result.channel?.channelId, channelId)
+          return result.channel.status === 16
+        }, pollOptions).toBe(true)
+        setStage('submit')
+        const before = await control('snapshot')
+        await clickAssetOperation('Splicing in', amounts.splicing_btc, false)
+        setStage('submitted')
+        const funding = await pendingFunding(before)
+        setStage('funding-pending')
+        await showTab('Channel')
+        await expect(activePanel().getByText('Splicing in', { exact: true })).toBeVisible()
+        setStage('pending-visible')
+        const signed = deanchorInputs(await readChannel())
+        setStage('reopen')
+        await reopen(true)
+        setStage('reopened')
+        await showTab('Channel')
+        await expect(activePanel().getByText('Splicing in', { exact: true })).toBeVisible()
+        assert.equal((await readChannel()).channelId, channelId)
+        assert.deepEqual(deanchorInputs(await readChannel()), signed)
+        await assertSamePending(funding)
+        const { anchor } = await confirmFunding(funding)
+        const channel = await readyChannelUI()
+        assert.equal(channelAmount(channel, '::') - channelAmount(prior, '::'), asInteger(amounts.splicing_btc))
+        assertSignedAnchor(signed, anchor, channel)
+      } catch (error) {
+        console.error(JSON.stringify({ splicingInFailureStarted: { stage, message: error.message } }))
+        let sdkReadError
+        const sdkChannel = await readChannel().catch(error => {
+          sdkReadError = error.message
+          return null
+        })
+        const reservations = await stpRead('allReservations').then(result => result.reservations
+          .filter(item => item.type === 'splicing').map(item => {
+            const stored = JSON.parse(item.json)
+            return { id: item.reservation_id, status: item.status, channelId: stored.ChannelId,
+              walletId: stored.WalletId, hasSplicingTx: Boolean(stored.SplicingTx),
+              hasAnchorTx: Boolean(stored.AnchorTx) }
+          })).catch(error => ({ error: error.message }))
+        let displayTimeout
+        const displayRead = page.evaluate(async () => {
+          const store = (await import('/store/channel.ts')).useChannelStore()
+          const wallet = window.__SAT20_PWA_VERIFY__.useWalletStore()
+          return { status: store.channel?.status, channelId: store.channel?.channelId,
+            pendingSplicing: store.channel?.pendingSplicing, locked: wallet.locked,
+            walletId: String(wallet.walletId), accountIndex: wallet.accountIndex, address: wallet.address,
+            activeTab: document.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
+            panel: document.querySelector('[role="tabpanel"][data-state="active"]')?.textContent }
+        })
+        let display
+        try {
+          display = await Promise.race([displayRead, new Promise((_, reject) => {
+            displayTimeout = setTimeout(() => reject(new Error('display read timed out after 10s')), 10000)
+          })]).catch(error => ({ error: error.message }))
+        } finally {
+          clearTimeout(displayTimeout)
+        }
+        console.error(JSON.stringify({ splicingInFailure: { stage, sdkReadError,
+          sdkStatus: sdkChannel?.status, reservations, display } }))
+        throw error
+      }
     })
 
     await check(requiredPwaPosCases[2], async () => {
@@ -701,6 +777,18 @@ export async function runPwaPosCases(t, fixture) {
 
     await check(requiredPwaPosCases[4], async () => {
       await deposit(true)
+      // A returning user must see the same confirmed credit. Reopen uses the
+      // normal PWA unlock and refresh paths, never an injected balance.
+      const expected = latestDeposit.amount
+      const total = await readL2Total()
+      const broadcasts = (await control('snapshot')).l1.broadcast_count
+      await reopen(true)
+      await selectMode('poolswap')
+      await showTab('SatoshiNet')
+      await expect.poll(() => readL2Amount(fixture.asset.key), pollOptions).toBe(expected)
+      await expect.poll(readL2Total, pollOptions).toBe(total)
+      await assertAssetVisible(expected)
+      assert.deepEqual((await control('snapshot')).l1.broadcast_count, broadcasts, 'Deposit reload must not replay its L1 broadcast')
     })
     await check(requiredPwaPosCases[5], async () => { await deposit(false) })
 
@@ -805,19 +893,162 @@ export async function runPwaPosCases(t, fixture) {
       await expect(dialog).toBeHidden()
       await assertCloseCancelled(before, current)
     })
+    if (t.selectedCases?.includes(optionalPwaEscapeCases[0])) await check(optionalPwaEscapeCases[0], async () => {
+      await openEscape()
+      const current = await readChannel()
+      const before = await control('snapshot')
+      const beforeAmount = await addressAmount('Bitcoin', fixture.address, '::')
+      const planValue = await stpRead('forceClosePlan', channelId)
+      const plan = JSON.parse(planValue.json)
+      assert.equal(plan.channel_id, channelId)
+      assert.equal(plan.commit_height, current.commitHeight)
+      assert.ok(Number.isInteger(plan.csv_delay) && plan.csv_delay >= 2 && plan.csv_delay <= 256)
+      const commit = Transaction.fromHex(plan.commit_tx_hex)
+      assert.equal(commit.getId(), plan.commit_txid)
+      assert.ok((current.localbalanceL1 || []).every(asset => assetKey(asset.Name) === '::' || asInteger(asset.Amount) === 0n),
+        'this independent CSV drill requires its opening/BTC-only channel')
+      const endpoint = fixture.config.IndexerL1
+      const rawL1 = async id => {
+        const response = await fetch(`${endpoint.Scheme}://${endpoint.Host}/${endpoint.Proxy}/btc/rawtx/${id}`)
+        assert.equal(response.ok, true)
+        const raw = await response.json(); assert.equal(raw.code, 0, raw.msg)
+        return Transaction.fromHex(raw.data)
+      }
+      let expectedGross = channelAmount(current, '::')
+      for (const point of current.stubUtxos || []) {
+        const [id, index] = point.split(':')
+        expectedGross += asInteger((await rawL1(id)).outs[Number(index)].value)
+      }
+      let commitInputs = 0n
+      for (const input of commit.ins) {
+        commitInputs += asInteger((await rawL1(Buffer.from(input.hash).reverse().toString('hex'))).outs[input.index].value)
+      }
+      const commitFee = commitInputs - commit.outs.reduce((sum, output) => sum + asInteger(output.value), 0n)
+      assert.ok(commitFee > 0n)
+      const packageTxs = [...(plan.prev_tx_hex || []), plan.commit_tx_hex, ...(plan.next_tx_hex || [])].map(raw => Transaction.fromHex(raw))
+      const expectedIDs = packageTxs.map(tx => tx.getId())
+      assert.equal(new Set(expectedIDs).size, expectedIDs.length)
+      // Observe a real SDK channel event, never invoke a callback in the test.
+      await page.evaluate(() => {
+        window.__channelE2EEvents = []
+        const ret = window.sat20wallet_wasm.registerCallback((event, value) => window.__channelE2EEvents.push({ event, value }))
+        if (ret.code !== 0) throw new Error(ret.msg)
+      })
+      await page.getByRole('button', { name: 'Force Close', exact: true }).click()
+      const dialog = page.getByRole('alertdialog')
+      await expect(dialog.getByRole('heading', { name: 'Confirm Force Close', exact: true })).toBeVisible()
+      await expect(dialog.getByText(`Local commitment: ${plan.commit_txid}`, { exact: true })).toBeVisible()
+      await dialog.getByRole('button', { name: 'Force Close', exact: true }).click()
+      await expect(dialog).toBeHidden()
+      await expect.poll(async () => (await control('snapshot')).l1.pending_txids.includes(plan.commit_txid), pollOptions).toBe(true)
+      const pending = await control('snapshot')
+      for (const id of expectedIDs) assert.ok(pending.l1.pending_txids.includes(id) || before.l1.confirmed_txids.includes(id))
+      await reopen(true)
+      await expect.poll(() => stpRead('getChannelStatus', channelId), pollOptions).toBe(12)
+      await page.evaluate(() => {
+        window.__channelE2EEvents = []
+        const ret = window.sat20wallet_wasm.registerCallback((event, value) => window.__channelE2EEvents.push({ event, value }))
+        if (ret.code !== 0) throw new Error(ret.msg)
+      })
+      const released = await page.evaluate(async () => await window.sat20wallet_wasm.release())
+      assert.equal(released.code, 0, released.msg)
+      const oldEvents = await page.evaluate(() => window.__channelE2EEvents)
+      const confirmed = await control('confirm-l1', { wait_anchors: false })
+      const closeHeight = confirmed.l1.height
+      await control('mine')
+      assert.deepEqual(await page.evaluate(() => window.__channelE2EEvents), oldEvents,
+        'the released manager must not dispatch a channel callback after chain confirmation')
+      const initialized = await page.evaluate(async config => await window.sat20wallet_wasm.init(config, 2), fixture.config)
+      assert.equal(initialized.code, 0, initialized.msg)
+      await page.evaluate(() => {
+        window.__channelE2EEvents = []
+        const ret = window.sat20wallet_wasm.registerCallback((event, value) => window.__channelE2EEvents.push({ event, value }))
+        if (ret.code !== 0) throw new Error(ret.msg)
+      })
+      const unlocked = await page.evaluate(async password => await window.sat20wallet_wasm.unlockWallet(password), fixture.password)
+      assert.equal(unlocked.code, 0, unlocked.msg)
+      await expect.poll(() => stpRead('getChannelStatus', channelId), pollOptions).toBe(13)
+      assert.equal(await addressAmount('Bitcoin', fixture.address, '::'), beforeAmount, 'CSV funds must remain unavailable after commitment confirmation')
+      await expect.poll(() => page.evaluate(txid => window.__channelE2EEvents.some(item => item.event === 'channelclosedforcely' && item.value === txid), plan.commit_txid), pollOptions).toBe(true)
+      const premature = JSON.parse((await stpRead('sweepBuild', channelId, plan.commit_txid, closeHeight, false)).json)
+      assert.equal(premature.signed, true); assert.equal(premature.verified, true)
+      const l1Endpoint = fixture.config.IndexerL1
+      const testSweep = async raw => {
+        const dryRun = await fetch(`${l1Endpoint.Scheme}://${l1Endpoint.Host}/${l1Endpoint.Proxy}/btc/tx/test`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ signedTxs: [raw] }),
+        })
+        assert.equal(dryRun.ok, true)
+        const admission = await dryRun.json(); assert.equal(admission.code, 0, admission.msg)
+        assert.equal(admission.data.length, 1)
+        return admission.data[0]
+      }
+      const refused = await testSweep(premature.sweep_tx_hex)
+      assert.equal(refused.allowed, false, 'an otherwise signed premature sweep must fail relative block maturity')
+      assert.match(refused['reject-reason'], /non-BIP68-final/)
+      const broadcasts = (await control('snapshot')).l1.broadcast_count
+      const directBroadcast = await page.evaluate(async ({ channelId, txid, height }) =>
+        await window.sat20wallet_wasm.sweepBuild(channelId, txid, height, true), { channelId, txid: plan.commit_txid, height: closeHeight })
+      assert.notEqual(directBroadcast.code, 0, 'only the existing monitor owns sweep broadcasting')
+      assert.deepEqual((await control('snapshot')).l1.broadcast_count, broadcasts)
+      // At this tip the next candidate block is exactly the BIP68 boundary.
+      // Preflight may admit it, while the SDK monitor retains its own later
+      // automatic broadcast threshold. Neither read may mutate the ledger.
+      const boundary = await control('confirm-l1', { wait_anchors: false, empty_blocks: plan.csv_delay - 1 })
+      assert.equal(boundary.l1.height + 1, closeHeight + plan.csv_delay)
+      const boundarySweep = JSON.parse((await stpRead('sweepBuild', channelId, plan.commit_txid, boundary.l1.height, false)).json)
+      assert.equal((await testSweep(boundarySweep.sweep_tx_hex)).allowed, true, 'the exact relative block boundary must be admissible')
+      assert.equal(await stpRead('getChannelStatus', channelId), 13)
+      assert.deepEqual((await control('snapshot')).l1.broadcast_count, broadcasts)
+      const mature = await control('confirm-l1', { wait_anchors: false, empty_blocks: 2 })
+      assert.equal(mature.l1.height, closeHeight + plan.csv_delay + 1)
+      await expect.poll(() => stpRead('getChannelStatus', channelId), pollOptions).toBe(14)
+      const sweepValue = await stpRead('sweepBuild', channelId, plan.commit_txid, mature.l1.height, false)
+      const sweep = JSON.parse(sweepValue.json)
+      assert.equal(sweep.signed, true); assert.equal(sweep.verified, true); assert.equal(sweep.broadcastable, true)
+      assert.equal(sweep.commit_txid, plan.commit_txid)
+      const tx = Transaction.fromHex(sweep.sweep_tx_hex)
+      assert.equal(tx.getId(), sweep.sweep_txid)
+      assert.ok(tx.ins.some(input => Buffer.from(input.hash).reverse().toString('hex') === plan.commit_txid))
+      assert.ok(tx.ins.every(input => input.witness.length > 0))
+      let inputSats = 0n
+      for (const input of tx.ins) {
+        const id = Buffer.from(input.hash).reverse().toString('hex')
+        assert.equal(id, plan.commit_txid, 'this funded BTC sweep must not debit unrelated wallet inputs')
+        inputSats += asInteger((await rawL1(id)).outs[input.index].value)
+      }
+      const outputSats = tx.outs.reduce((sum, output) => sum + asInteger(output.value), 0n)
+      assert.equal(inputSats - outputSats, asInteger(sweep.fee), 'signed sweep fee must equal independently decoded inputs minus outputs')
+      const credit = tx.outs.filter(output => output.script.toString('hex') === walletScript).reduce((sum, output) => sum + asInteger(output.value), 0n)
+      assert.ok(credit > 0n)
+      assert.equal(credit, expectedGross - commitFee - asInteger(sweep.fee),
+        'final return must preserve the pre-close wallet entitlement after exact commitment and sweep fees')
+      const feeRate = asInteger(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().btcFeeRate))
+      assert.ok(asInteger(sweep.fee) >= BigInt(tx.virtualSize()) * feeRate)
+      await control('confirm-l1', { wait_anchors: false })
+      await expect.poll(() => stpRead('getChannelStatus', channelId), pollOptions).toBe(-1)
+      await expect.poll(() => page.evaluate(txid => window.__channelE2EEvents.some(item => item.event === 'channelswept' && item.value === txid), sweep.sweep_txid), pollOptions).toBe(true)
+      await expect.poll(() => addressAmount('Bitcoin', fixture.address, '::'), pollOptions).toBe(beforeAmount + credit)
+      const finalBroadcasts = (await control('snapshot')).l1.broadcast_count
+      await reopen(true)
+      assert.equal(await addressAmount('Bitcoin', fixture.address, '::'), beforeAmount + credit)
+      assert.deepEqual((await control('snapshot')).l1.broadcast_count, finalBroadcasts, 'completed force close must not replay after reload')
+      await assertWalletBalanceUI('Bitcoin')
+    })
     await check(requiredPwaPosCases[23], async () => {
       await openEscape()
       const current = await readChannel()
       const feeRate = asInteger(await page.evaluate(() => window.__SAT20_PWA_VERIFY__.useWalletStore().btcFeeRate))
-      let expectedGross = channelAmount(current, '::')
-      for (const allocation of current.localbalanceL1) {
-        if (assetKey(allocation.Name) === '::' || !allocation.BindingSat) continue
-        const binding = asInteger(allocation.BindingSat)
-        expectedGross += (asInteger(allocation.Amount) + binding - 1n) / binding
-      }
+      assert.ok(Array.isArray(current.remotebalanceL1))
+      assert.ok(current.remotebalanceL1.every(allocation => asInteger(allocation.Amount) === 0n),
+        'this round-trip fixture must restore all channel equity to its initiator before close')
       const endpoint = fixture.config.IndexerL1
       const l1 = `${endpoint.Scheme}://${endpoint.Host}/${String(endpoint.Proxy || 'testnet').replace(/^\/+|\/+$/g, '')}`
-      for (const point of current.stubUtxos || []) {
+      // Read the complete pool before signing: token carriers can also hold
+      // plain sats above the amount bound to tokens, including dust padding.
+      const poolPoints = [current.chanPoint, ...current.fundingUtxos, ...current.stubUtxos]
+      assert.equal(new Set(poolPoints).size, poolPoints.length)
+      let expectedGross = 0n
+      for (const point of poolPoints) {
         const response = await fetch(`${l1}/v3/utxo/info/${point}`)
         assert.equal(response.ok, true)
         const output = await response.json()
@@ -835,7 +1066,8 @@ export async function runPwaPosCases(t, fixture) {
       const closing = await pendingFunding(before)
       const tx = await confirmL1Payment(closing)
       const spent = new Set(tx.ins.map(input => Buffer.from(input.hash).reverse().toString('hex') + ':' + input.index))
-      assert.ok(current.fundingUtxos.some(outpoint => spent.has(outpoint)), 'close transaction did not spend this channel funding')
+      assert.equal(spent.size, tx.ins.length, 'close transaction repeats an input')
+      assert.deepEqual([...spent].sort(), [...poolPoints].sort(), 'close must spend exactly the independently valued channel pool')
       const returned = tx.outs.filter(output => output.script.toString('hex') === walletScript)
       assert.ok(returned.length, 'cooperative close has no return output to the wallet')
       const returnedSats = returned.reduce((sum, output) => sum + asInteger(output.value), 0n)

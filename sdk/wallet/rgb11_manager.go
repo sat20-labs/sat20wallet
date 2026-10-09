@@ -842,6 +842,10 @@ func (p *rgb11Manager) RegisterRGB11TickerInfo(info *indexer.TickerInfo) error {
 	if err := validateRGB11TickerInfoName(info); err != nil {
 		return err
 	}
+	info, err := p.withRGB11NamingOrigin(info)
+	if err != nil {
+		return err
+	}
 	if err := saveTickerInfo(p.db, info); err != nil {
 		return err
 	}
@@ -852,7 +856,7 @@ func (p *rgb11Manager) RegisterRGB11TickerInfo(info *indexer.TickerInfo) error {
 }
 
 // validateRGB11TickerInfoName binds imported RGB11 contract metadata to its
-// canonical SAT20 asset name, including registry collision extensions.
+// immutable full-ContractID projection key; local labels are not identity.
 func validateRGB11TickerInfoName(info *indexer.TickerInfo) error {
 	var ext rgb11wallet.TickerExt
 	if err := json.Unmarshal(info.Content, &ext); err != nil {
@@ -860,12 +864,14 @@ func validateRGB11TickerInfoName(info *indexer.TickerInfo) error {
 	}
 	contractID := ext.ContractID
 	if contractID == "" {
-		contractID = ext.OriginalAssetID
-	}
-	if contractID == "" {
 		return rgb11wallet.ErrInvalidRGB11Asset
 	}
-	if rgb11wallet.CanonicalAssetNameMatches(info.AssetName, contractID, ext.Ticker) {
+	// This SDK is still L1-only. An imported metadata string must never
+	// impersonate an authenticated SatoshiNet registry assignment.
+	if ext.CanonicalName != "" {
+		return rgb11wallet.ErrRGB11STPUnavailable
+	}
+	if rgb11wallet.ContractAssetKeyMatches(info.AssetName, contractID) {
 		return nil
 	}
 	return rgb11wallet.ErrInvalidRGB11Asset
@@ -947,13 +953,20 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 		}
 		knownTickers[info.AssetName.String()] = info
 	}
-	p.mutex.RLock()
-	for name, info := range p.tickerInfoMap {
-		if info != nil && info.AssetName.Protocol == rgb11wallet.Protocol {
-			knownTickers[name] = info
-		}
+	// The ticker cache is shared by wallet scopes and disappears on restart.
+	// Enumerate the selected scope's durable receipts instead so zero-balance
+	// imports survive reload and another wallet's cache cannot leak into this UI.
+	knownNames, err := p.rgbManager.projectionStore.ListKnownAssetNames()
+	if err != nil {
+		return nil, err
 	}
-	p.mutex.RUnlock()
+	for index := range knownNames {
+		info := p.getTickerInfo(&knownNames[index])
+		if info == nil {
+			return nil, fmt.Errorf("%w: ticker missing for %s", ErrRGB11Inconsistent, knownNames[index].String())
+		}
+		knownTickers[info.AssetName.String()] = info
+	}
 	tickerNames := make([]string, 0, len(knownTickers))
 	for name := range knownTickers {
 		tickerNames = append(tickerNames, name)
@@ -962,15 +975,11 @@ func (p *rgb11Manager) GetRGB11State() (*RGB11State, error) {
 	tickers := make([]*RGB11TickerInfo, 0, len(tickerNames))
 	for _, name := range tickerNames {
 		info := knownTickers[name]
-		ticker, canonicalName, contractID, fingerprint, verified := p.rgb11TickerPresentation(info)
-		tickers = append(tickers, &RGB11TickerInfo{
-			TickerInfo:    info,
-			Ticker:        ticker,
-			CanonicalName: canonicalName,
-			ContractID:    contractID,
-			Fingerprint:   fingerprint,
-			Verified:      verified,
-		})
+		presentation, err := p.rgb11TickerPresentation(info)
+		if err != nil {
+			return nil, err
+		}
+		tickers = append(tickers, presentation)
 	}
 
 	return &RGB11State{
@@ -1752,18 +1761,14 @@ func rgb11TickerInfoFromValidatedContract(container *coreconsignment.Container,
 	if err != nil {
 		return nil, err
 	}
-	assetName, err := rgb11wallet.NewCanonicalAssetName(container.ContractID, metadata.Ticker, assetType)
-	if err != nil {
-		return nil, err
-	}
-	fingerprint, err := rgb11wallet.ContractFingerprint(container.ContractID, rgb11wallet.DefaultFingerprintLength)
+	assetName, err := rgb11wallet.NewContractAssetKey(container.ContractID, assetType)
 	if err != nil {
 		return nil, err
 	}
 	ext := rgb11wallet.TickerExt{
 		AssetName: assetName, Ticker: metadata.Ticker,
-		CanonicalName: assetName.String(), NormalizedTicker: rgb11wallet.NormalizeTicker(metadata.Ticker),
-		Fingerprint: fingerprint, DisplayTicker: rgb11wallet.DisplayTicker(metadata.Ticker, fingerprint, false),
+		NormalizedTicker: rgb11wallet.NormalizeTicker(metadata.Ticker),
+		DisplayTicker:    container.ContractID, NamingStatus: "origin-unavailable",
 		OriginalAssetID: container.ContractID,
 		SchemaID:        container.SchemaID, ContractID: container.ContractID,
 		ContractHash: receipt.ConsignmentHash, RejectListURL: metadata.RejectListURL,
@@ -1781,60 +1786,128 @@ func rgb11TickerInfoFromValidatedContract(container *coreconsignment.Container,
 	}, nil
 }
 
-func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (ticker, canonicalName, contractID, fingerprint string, verified bool) {
-	if p == nil || p.rgbManager == nil || p.rgbManager.projectionStore == nil || info == nil {
-		return "", "", "", "", false
+// withRGB11NamingOrigin runs on import/registration, never in UI observation.
+// Failure to obtain a naming origin does not make a valid RGB contract invalid:
+// the safe fallback is its complete ContractID, not an invented issuer/address.
+func (p *rgb11Manager) withRGB11NamingOrigin(info *indexer.TickerInfo) (*indexer.TickerInfo, error) {
+	if p == nil || p.Manager == nil || info == nil {
+		return nil, ErrRGB11Inconsistent
 	}
 	var ext rgb11wallet.TickerExt
-	if json.Unmarshal(info.Content, &ext) != nil {
-		return "", info.AssetName.String(), "", "", false
+	if err := json.Unmarshal(info.Content, &ext); err != nil {
+		return nil, err
 	}
-	contractID = ext.ContractID
-	if contractID == "" {
-		contractID = ext.OriginalAssetID
-	}
-	canonicalName = ext.CanonicalName
-	if canonicalName == "" {
-		canonicalName = info.AssetName.String()
-	}
-	fingerprint = ext.Fingerprint
-	verified = ext.PrimaryVerified
-	if ext.DisplayTicker != "" {
-		return ext.DisplayTicker, canonicalName, contractID, fingerprint, verified
-	}
-	if ext.Ticker != "" {
-		if fingerprint == "" && contractID != "" {
-			fingerprint, _ = rgb11wallet.ContractFingerprint(contractID, rgb11wallet.DefaultFingerprintLength)
+	ext.GenesisAddress = ""
+	ext.GenesisOutpoint = ""
+	ext.DisplayTicker = ext.ContractID
+	ext.NamingStatus = "origin-unavailable"
+	if p.projectionStore != nil && p.evidence != nil && ext.ContractHash != "" {
+		if raw, err := p.projectionStore.LoadObject(ext.ContractHash); err == nil {
+			if container, err := coreconsignment.Decode(raw); err == nil &&
+				rgb11wallet.ContractAssetKeyMatches(info.AssetName, container.ContractID) {
+				if genesis, ok := container.Value.Field("genesis"); ok {
+					outpoints, outpointErr := rgb11wallet.GenesisNamingOutpoints(genesis)
+					address, addressErr := rgb11wallet.ResolveGenesisNamingAddress(context.Background(), genesis, p.evidence, GetChainParam())
+					if outpointErr == nil && len(outpoints) > 0 && addressErr == nil {
+						if local, err := rgb11wallet.BuildLocalDisplayName(ext.Ticker, address, ""); err == nil {
+							ext.GenesisAddress = address
+							ext.GenesisOutpoint = outpoints[0].String()
+							ext.DisplayTicker = local
+							ext.NamingStatus = "local-address"
+						}
+					}
+				}
+			}
 		}
-		return rgb11wallet.DisplayTicker(ext.Ticker, fingerprint, verified), canonicalName, contractID, fingerprint, verified
 	}
-	if ext.ContractHash == "" {
-		return "", canonicalName, contractID, fingerprint, verified
-	}
-	raw, err := p.rgbManager.projectionStore.LoadObject(ext.ContractHash)
+	content, err := json.Marshal(ext)
 	if err != nil {
-		return "", canonicalName, contractID, fingerprint, verified
+		return nil, err
 	}
-	container, err := coreconsignment.Decode(raw)
-	if err != nil {
-		return "", canonicalName, contractID, fingerprint, verified
-	}
-	schemaValue, _ := container.Value.Field("schema")
-	typeSystem, _ := container.Value.Field("types")
-	genesisValue, _ := container.Value.Field("genesis")
-	metadata, err := schemas.ExtractGenesisAssetMetadata(schemaValue, typeSystem, genesisValue)
-	if err != nil {
-		return "", canonicalName, contractID, fingerprint, verified
-	}
-	if fingerprint == "" && contractID != "" {
-		fingerprint, _ = rgb11wallet.ContractFingerprint(contractID, rgb11wallet.DefaultFingerprintLength)
-	}
-	return rgb11wallet.DisplayTicker(metadata.Ticker, fingerprint, verified), canonicalName, contractID, fingerprint, verified
+	copy := *info
+	copy.Content = content
+	return &copy, nil
 }
 
-// rgb11ContractIDForAssetName resolves the full RGB contract id via local
-// contract metadata. A canonical SAT20 name deliberately cannot be reversed
-// into a contract id.
+func (p *rgb11Manager) rgb11TickerPresentation(info *indexer.TickerInfo) (*RGB11TickerInfo, error) {
+	if info == nil || p.projectionStore == nil {
+		return nil, ErrRGB11Inconsistent
+	}
+	if err := validateRGB11TickerInfoName(info); err != nil {
+		return nil, err
+	}
+	var ext rgb11wallet.TickerExt
+	if err := json.Unmarshal(info.Content, &ext); err != nil {
+		return nil, err
+	}
+	contractID := ext.ContractID
+	label, status := ext.DisplayTicker, ext.NamingStatus
+	if label == "" {
+		label, status = contractID, "origin-unavailable"
+	}
+	canonicalName := ""
+	verified := false
+	if registered, err := p.projectionStore.LoadRegisteredAssetName(contractID); err == nil {
+		label, status, canonicalName, verified = registered, "satoshinet-registered", registered, true
+	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return nil, err
+	} else if local, err := p.projectionStore.LoadLocalAssetName(contractID); err == nil {
+		label, status = local, "local-custom"
+	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return nil, err
+	}
+	return &RGB11TickerInfo{
+		TickerInfo: info, Ticker: label, AssetKey: info.AssetName.String(),
+		ContractID: contractID, GenesisAddress: ext.GenesisAddress, NamingStatus: status,
+		CanonicalName: canonicalName, Verified: verified,
+	}, nil
+}
+
+func (p *rgb11Manager) SetRGB11LocalAssetName(contractID, name string) error {
+	if p == nil || p.Manager == nil || p.projectionStore == nil {
+		return ErrRGB11Inconsistent
+	}
+	var info *indexer.TickerInfo
+	for _, assetType := range []string{indexer.ASSET_TYPE_FT, indexer.ASSET_TYPE_NFT} {
+		key, err := rgb11wallet.NewContractAssetKey(contractID, assetType)
+		if err != nil {
+			return err
+		}
+		info = p.getTickerInfo(&key)
+		if info != nil {
+			break
+		}
+	}
+	if info == nil {
+		return rgb11wallet.ErrInvalidRGB11Asset
+	}
+	var ext rgb11wallet.TickerExt
+	if err := json.Unmarshal(info.Content, &ext); err != nil {
+		return err
+	}
+	if !rgb11wallet.ContractAssetKeyMatches(info.AssetName, ext.ContractID) {
+		return rgb11wallet.ErrInvalidRGB11Asset
+	}
+	if _, err := p.projectionStore.LoadContractObjectReference(ext.ContractID); err != nil {
+		if errors.Is(err, indexer.ErrKeyNotFound) {
+			return rgb11wallet.ErrInvalidRGB11Asset
+		}
+		return err
+	}
+	if _, err := p.projectionStore.LoadRegisteredAssetName(contractID); err == nil {
+		return rgb11wallet.ErrRegisteredNameFrozen
+	} else if !errors.Is(err, indexer.ErrKeyNotFound) {
+		return err
+	}
+	if ext.CanonicalName != "" {
+		return rgb11wallet.ErrRegisteredNameFrozen
+	}
+	if err := p.projectionStore.SaveLocalAssetName(contractID, name); err != nil {
+		return err
+	}
+	return p.autoBackupRGB11AfterMutation()
+}
+
 func (p *rgb11Manager) rgb11ContractIDForAssetName(name indexer.AssetName) (string, error) {
 	if p == nil || name.Protocol != rgb11wallet.Protocol {
 		return "", rgb11wallet.ErrInvalidRGB11Asset
@@ -1848,11 +1921,8 @@ func (p *rgb11Manager) rgb11ContractIDForAssetName(name indexer.AssetName) (stri
 			return "", err
 		}
 		contractID := ext.ContractID
-		if contractID == "" {
-			contractID = ext.OriginalAssetID
-		}
 		if contractID != "" {
-			if rgb11wallet.CanonicalAssetNameMatches(name, contractID, ext.Ticker) {
+			if rgb11wallet.ContractAssetKeyMatches(name, contractID) {
 				return contractID, nil
 			}
 		}
@@ -2417,7 +2487,7 @@ func (p *rgb11Manager) acceptRGB11Consignment(ctx context.Context, requestID str
 	}
 	state := &rgb11wallet.TransferState{
 		TransferID: transferID, Direction: "receive", Asset: *receivedAsset,
-		RecipientID: request.RecipientID, Invoice: request.Invoice,
+		RecipientID: request.RecipientID, ReceiveRequestID: requestID, Invoice: request.Invoice,
 		OutputOutPoints: []string{receivedOutpoint}, MinConfirmations: 1, Expiry: expiry,
 		ConsignmentHash: receipt.ConsignmentHash, WitnessTxID: matched.TxID,
 		AckStatus: "accepted", Status: "pending", RelayRecordKey: request.RelayKey,
@@ -2622,7 +2692,7 @@ func (p *rgb11Manager) prepareRGB11ConsignmentWithID(ctx context.Context, reques
 	}
 	state := &rgb11wallet.TransferState{
 		TransferID: transferID, Direction: "receive", Asset: *receivedAsset,
-		RecipientID: request.RecipientID, Invoice: request.Invoice,
+		RecipientID: request.RecipientID, ReceiveRequestID: requestID, Invoice: request.Invoice,
 		OutputOutPoints: []string{receivedOutpoint}, MinConfirmations: 1, Expiry: expiry,
 		ConsignmentHash: receipt.ConsignmentHash, WitnessTxID: actualTxID,
 		AckStatus: "accepted", Status: "awaiting_broadcast",

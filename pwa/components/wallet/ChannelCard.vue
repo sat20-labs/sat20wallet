@@ -23,7 +23,7 @@
     <!-- <div class="relative" v-if="channel"></div> -->
     <div
       class="absolute w-full h-full z-10 flex justify-center items-center bg-gray-900 bg-opacity-95 left-0 top-0"
-      v-if="channel.status !== 16"
+      v-if="channel.status !== 16 || channel.pendingSplicing"
     >
       <p>{{ channelStatusText }}</p>
     </div>
@@ -319,14 +319,16 @@ const confirmOpenChannel = async () => {
 const channelStatusText = computed(() => {
   if (!channel.value) return ''
   const status = channel.value?.status
+  if (status === 16 && channel.value.pendingSplicing === 'in') {
+    return 'Splicing in'
+  }
+  if (status === 16 && channel.value.pendingSplicing === 'out') {
+    return 'Splicing out'
+  }
   if (status > 0 && status < 5) {
     return 'Channel is opening'
   } else if (status >= 7 && status <= 15) {
     return 'Channel is closing'
-  } else if (status === 33) {
-    return 'Splicing in'
-  } else if (status === 51) {
-    return 'Splicing out'
   } else {
     return getChannelStatusText(status)
   }

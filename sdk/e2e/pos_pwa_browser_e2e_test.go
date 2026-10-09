@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -32,6 +33,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
 	"github.com/sat20-labs/satoshinet/btcjson"
 	"github.com/sat20-labs/satoshinet/btcutil"
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
@@ -52,64 +54,24 @@ func TestSDKWalletPWAConnectedBrowser(t *testing.T) {
 	runSDKWalletPWABrowser(t)
 }
 
-func TestSDKWalletPWAReviewRegression(t *testing.T) {
-	runSDKWalletPWABrowser(t,
-		"POS PWA: opening confirms the signed Anchor after pending reload",
-		"POS PWA: v2 asset splicing-in preserves quantities and signed outpoints",
-		"POS PWA: v2 BTC deposit reaches the wallet through the public channel",
-		"Funds PWA: public BTC withdrawal returns confirmed Bitcoin funds",
-		"Escape PWA: cooperative close returns confirmed BTC and ORDX to Bitcoin",
-		"Funds PWA: Bitcoin advanced ORDX Send creates two reviewed asset outputs",
-		"Wallet PWA: create through the page and unlock the same identity after reload",
-		"Mint PWA: partial and remainder amounts survive rechecks and reach review",
-		"Mining PWA: real WASM worker submits independently verified fake-L1 proof of work",
-		"Mining PWA: stopping halts the worker and reload preserves its configuration",
-		"Node PWA: Core stake signs real L1 funding and appears in real node indexing",
-		"Node PWA: Miner stake signs real L1 funding and appears in real node indexing",
-		"RGB PWA: issue a real IFA with separately committed inflation rights",
-		"RGB PWA: issue a real indivisible UDA")
-}
-
-func TestSDKWalletPWAReviewDirectRegression(t *testing.T) {
-	runSDKWalletPWABrowser(t,
-		"Funds PWA: Bitcoin advanced ORDX Send creates two reviewed asset outputs",
-		"Wallet PWA: create through the page and unlock the same identity after reload",
-		"Mint PWA: partial and remainder amounts survive rechecks and reach review",
-		"Mining PWA: real WASM worker submits independently verified fake-L1 proof of work",
-		"Mining PWA: stopping halts the worker and reload preserves its configuration",
-		"Node PWA: Core stake signs real L1 funding and appears in real node indexing",
-		"Node PWA: Miner stake signs real L1 funding and appears in real node indexing",
-		"RGB PWA: issue a real IFA with separately committed inflation rights",
-		"RGB PWA: issue a real indivisible UDA")
-}
-
-func TestSDKWalletPWAMintReviewRegression(t *testing.T) {
-	runSDKWalletPWABrowser(t, "Mint PWA: partial and remainder amounts survive rechecks and reach review")
-}
-
-func TestSDKWalletPWAChannelReadRegression(t *testing.T) {
-	// Only the hung splicing case and its real opening/activation prerequisites.
-	runSDKWalletPWABrowser(t,
-		"POS PWA: opening confirms the signed Anchor after pending reload",
-		"POS PWA: a drained activation preserves the existing private channel",
-		"POS PWA: v2 asset splicing-in preserves quantities and signed outpoints")
-}
-
-func TestSDKWalletPWAReviewRemainingRegression(t *testing.T) {
-	// Opening, activation and asset splicing establish the real channel needed
-	// by the three funds cases. The other five cases are the review checks.
-	runSDKWalletPWABrowser(t,
-		"POS PWA: opening confirms the signed Anchor after pending reload",
-		"POS PWA: a drained activation preserves the existing private channel",
-		"POS PWA: v2 asset splicing-in preserves quantities and signed outpoints",
-		"POS PWA: v2 BTC deposit reaches the wallet through the public channel",
-		"Funds PWA: public BTC withdrawal returns confirmed Bitcoin funds",
-		"Escape PWA: cooperative close returns confirmed BTC and ORDX to Bitcoin",
-		"Node PWA: Core stake signs real L1 funding and appears in real node indexing",
-		"Node PWA: Miner stake signs real L1 funding and appears in real node indexing")
-}
-
 func runSDKWalletPWABrowser(t *testing.T, cases ...string) {
+	runSDKWalletBrowserMode(t, false, cases...)
+}
+
+// Direct WASM calls share the existing real-node/browser fixture. No second
+// server, node topology or exported production API is introduced.
+func TestSDKWASMInterfacesE2E(t *testing.T) {
+	runSDKWalletBrowserMode(t, true)
+}
+
+func TestSDKWalletPWAForceCloseCSV(t *testing.T) {
+	runSDKWalletPWABrowser(t,
+		"POS PWA: opening confirms the signed Anchor after pending reload",
+		"POS PWA: BTC splicing-in survives closing and reopening the page",
+		"Escape PWA: confirmed force close waits for CSV and returns exact wallet funds after reload")
+}
+
+func runSDKWalletBrowserMode(t *testing.T, sdkWASM bool, cases ...string) {
 	t.Helper()
 	t.Setenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT", strconv.Itoa(int(posPWAActivationHeight)))
 	if os.Getenv("SATOSHINET_POS_MINER_INTERVAL") == "" {
@@ -159,7 +121,46 @@ func runSDKWalletPWABrowser(t *testing.T, cases ...string) {
 			"pk_script": hex.EncodeToString(actor.PkScript), "password": "pwa-local-" + label}
 	}
 	owner, recipient, basic := identity("pos-owner"), identity("recipient"), identity("basic-wallet")
+	// Independent protocol actors keep failures from spending the next case's
+	// funds. These are initial holdings, never fabricated operation results.
+	protocolWallets := make(map[string]map[string]any)
+	for _, spec := range []struct {
+		id, name, balance, send, label string
+		precision                      int
+		invalid                        bool
+	}{
+		{"brc_transfer", "brc20:f:pwbt", "250", "250", "BRC20", 0, false},
+		{"brc_balance", "brc20:f:pwbb", "1000", "125", "BRC20", 0, true},
+		{"runes", "runes:f:PWA•ACCEPTANCE", "100", "12.34", "Runes", 2, false},
+	} {
+		from, to := identity(spec.id+"-sender"), identity(spec.id+"-receiver")
+		for _, actor := range []map[string]string{from, to} {
+			for i := 0; i < 8; i++ {
+				l1.FundAddress(t, actor["address"], 1_000_000, nil)
+			}
+		}
+		allocation := displayAssetWithMeta(spec.name, spec.balance, spec.precision, 0)
+		if spec.label == "BRC20" {
+			allocation.Offsets = indexercommon.AssetOffsets{{Start: 0, End: 1}}
+			allocation.OffsetToAmts = []*indexercommon.OffsetToAmount{{Offset: 0, Amount: spec.balance}}
+			allocation.Invalid = spec.invalid
+		}
+		point := l1.FundAddress(t, from["address"], 10_000, []*indexercommon.DisplayAsset{allocation})
+		protocolWallets[spec.id] = map[string]any{"sender": from, "recipient": to,
+			"asset": spec.name, "balance": spec.balance, "amount": spec.send,
+			"precision": spec.precision, "label": spec.label, "seed_outpoint": point}
+	}
+	dappWallet, dappRecipient := identity("dapp-transactions"), identity("dapp-transactions-recipient")
+	udaSender, udaRecipient := identity("uda-transfer-sender"), identity("uda-transfer-recipient")
+	for _, actor := range []map[string]string{dappWallet, dappRecipient, udaSender, udaRecipient} {
+		for i := 0; i < 8; i++ {
+			l1.FundAddress(t, actor["address"], 1_000_000, nil)
+		}
+	}
 	coreStakeWallet, minerStakeWallet := identity("core-stake-wallet"), identity("miner-stake-wallet")
+	coreNodeActor := newDKVSKeyPathActor(t, coreKey)
+	coreNodeWallet := map[string]string{"mnemonic": coreMnemonic, "address": coreNodeActor.Address,
+		"pk_script": hex.EncodeToString(coreNodeActor.PkScript), "password": "pwa-local-core-node-guard"}
 	stakeL1 := indexercommon.GetStakeAssetName(int(l1.Snapshot().Height))
 	stakeL1Amount := indexercommon.GetStakeAssetAmt(int(l1.Snapshot().Height))
 	for _, actor := range []map[string]string{coreStakeWallet, minerStakeWallet} {
@@ -207,7 +208,10 @@ func runSDKWalletPWABrowser(t *testing.T, cases ...string) {
 			}
 			encoded, err := json.Marshal(peers)
 			require.NoError(t, err)
-			return fmt.Sprintf("\npeers: %s\npublic_rpc:\n  browser_allowed_origins: [%q]\n", encoded, browserOrigin)
+			// Admission only: the candidate still needs real signed stake funding
+			// and its confirmed Anchor before the indexer recognizes a Core node.
+			return fmt.Sprintf("\npeers: %s\ncorenodes: [%q, %q]\npublic_rpc:\n  browser_allowed_origins: [%q]\n",
+				encoded, pub(coreKey), pub(key(coreStakeWallet["mnemonic"])), browserOrigin)
 		}
 	}
 	boot := startDKVSNoPluginNodeWithArgs(t, l1.NodeFixture(), "bootstrap", bootstrapMnemonic, nil, stpConfig())
@@ -229,8 +233,15 @@ func runSDKWalletPWABrowser(t *testing.T, cases ...string) {
 			binding = 1
 			assets[0].BindingSat = 1
 		}
+		fundingAsset := displayAssetWithMeta(name, fmt.Sprint(amount), 0, binding)
+		if fundingAsset.Protocol == indexercommon.PROTOCOL_NAME_BRC20 {
+			// The confirmed fixture BRC20 transfer inscription occupies the
+			// first sat; its amount is not bound across the whole output.
+			fundingAsset.Offsets = indexercommon.AssetOffsets{{Start: 0, End: 1}}
+			fundingAsset.OffsetToAmts = []*indexercommon.OffsetToAmount{{Offset: 0, Amount: fmt.Sprint(amount)}}
+		}
 		l1.SeedUTXO(t, &indexercommon.AssetsInUtxo{OutPoint: funding, Value: value, PkScript: script,
-			Assets: []*indexercommon.DisplayAsset{displayAssetWithMeta(name, fmt.Sprint(amount), 0, binding)}})
+			Assets: []*indexercommon.DisplayAsset{fundingAsset}})
 		tx := buildAnchorTx(t, funding, value, assets,
 			fmt.Sprintf("%s-%d-0-%d", name, amount, binding), witness, first, script)
 		network.sendAndMine(t, tx, 1)
@@ -262,7 +273,14 @@ func runSDKWalletPWABrowser(t *testing.T, cases ...string) {
 	for _, identity := range []map[string]string{basic, recipient} {
 		script, err := hex.DecodeString(identity["pk_script"])
 		require.NoError(t, err)
-		seedL2.AddTxOut(wire.NewTxOut(1_000_000, txAsset(gas, 25_000_000), script))
+		if sdkWASM && identity["address"] == basic["address"] {
+			// Two ordinary confirmed outputs let the existing WASM gate cover
+			// multi-input orders without introducing synthetic signing prevouts.
+			seedL2.AddTxOut(wire.NewTxOut(500_000, txAsset(gas, 12_500_000), script))
+			seedL2.AddTxOut(wire.NewTxOut(500_000, txAsset(gas, 12_500_000), script))
+		} else {
+			seedL2.AddTxOut(wire.NewTxOut(1_000_000, txAsset(gas, 25_000_000), script))
+		}
 	}
 	// STP's public Transcend contracts have a real two-party deployment fee
 	// transaction. Fund Core's signing key from the same legitimate Anchor.
@@ -302,9 +320,10 @@ func runSDKWalletPWABrowser(t *testing.T, cases ...string) {
 		require.Equal(t, browserOrigin, response.Header.Get("Access-Control-Allow-Origin"))
 	}
 	publicContracts := map[string]string{}
-	needsPublic := len(cases) == 0
+	needsPublic := !sdkWASM && len(cases) == 0
 	for _, name := range cases {
 		needsPublic = needsPublic || strings.HasPrefix(name, "POS PWA:") ||
+			name == "Tools PWA: direct WASM reconciles Exchange index queries and deployed service status" ||
 			name == "Funds PWA: public BTC withdrawal returns confirmed Bitcoin funds" ||
 			name == "Escape PWA: cooperative close returns confirmed BTC and ORDX to Bitcoin"
 	}
@@ -322,20 +341,29 @@ func runSDKWalletPWABrowser(t *testing.T, cases ...string) {
 		"config":      config, "control_url": server.URL, "activation_height": posPWAActivationHeight,
 		"mnemonic": owner["mnemonic"], "password": owner["password"], "address": owner["address"], "pk_script": owner["pk_script"],
 		"recipient": recipient, "basicWallet": basic,
-		"coreStakeWallet": coreStakeWallet, "minerStakeWallet": minerStakeWallet,
+		"protocolWallets": protocolWallets, "dappWallet": dappWallet, "dappRecipient": dappRecipient,
+		"udaWallets":      map[string]any{"sender": udaSender, "recipient": udaRecipient},
+		"coreStakeWallet": coreStakeWallet, "minerStakeWallet": minerStakeWallet, "coreNodeWallet": coreNodeWallet,
 		"stake":           map[string]string{"asset": stakeL1, "amount": fmt.Sprint(stakeL1Amount)},
 		"publicContracts": publicContracts,
+		"coreSTPURL":      "http://" + core.stpAddr + "/testnet",
 		"tools":           map[string]string{"evmSource": string(evmSource), "evmContractName": "SDKReviewProbe", "gasAsset": gas},
 		"asset":           map[string]string{"key": asset, "type": "ORDX", "ticker": "pwapos"},
 		"amounts": map[string]string{"opening": "1000000", "splicing_btc": "100000", "splicing_asset": "700",
 			"deposit_btc": "10000", "deposit_asset": "600"},
 		"wasmPath": wasmPath, "wasmRuntimePath": wasmRuntimePath,
 	}
+	if sdkWASM {
+		fixture["sdkPSBT"] = posPWASDKPSBTFixture(t, seedL2, basic, recipient, gas)
+	}
 	encoded, err := json.Marshal(fixture)
 	require.NoError(t, err)
 	fixturePath := filepath.Join(artifactDir, "pwa-fixture.json")
 	require.NoError(t, os.WriteFile(fixturePath, encoded, 0600))
 	args := []string{"scripts/verify/account-management-e2e.mjs", "--pos-fixture", fixturePath}
+	if sdkWASM {
+		args = append(args, "--sdk-wasm")
+	}
 	if len(cases) > 0 {
 		args = append(args, "--wallet-cases")
 		args = append(args, cases...)
@@ -350,7 +378,7 @@ func runSDKWalletPWABrowser(t *testing.T, cases ...string) {
 	control.mu.Lock()
 	defer control.mu.Unlock()
 	require.Empty(t, control.failures, "node-side acceptance checks failed")
-	if len(cases) > 0 {
+	if sdkWASM || len(cases) > 0 {
 		return
 	}
 	require.True(t, control.activationChecked, "H-1/H/H+1 activation scenario was not run")
@@ -516,6 +544,24 @@ func (f *posPWAControl) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	var err error
 	switch r.URL.Path {
+	case "/inspect-psbt":
+		// Independent Go decoding and script execution validate the exact bytes
+		// signed by WASM. This endpoint neither signs nor broadcasts a tx.
+		var request struct {
+			PSBT   string `json:"psbt"`
+			Verify bool   `json:"verify"`
+		}
+		if decodeErr := json.NewDecoder(io.LimitReader(r.Body, 2<<20)).Decode(&request); decodeErr != nil {
+			http.Error(w, decodeErr.Error(), http.StatusBadRequest)
+			return
+		}
+		result, inspectErr := posPWAInspectPSBT(request.PSBT, request.Verify)
+		if inspectErr != nil {
+			http.Error(w, inspectErr.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(result)
+		return
 	case "/transaction":
 		var request struct {
 			TxID string `json:"txid"`
@@ -537,10 +583,29 @@ func (f *posPWAControl) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": lookupErr.Error()})
 			return
 		}
+		raw, decodeErr := hex.DecodeString(transaction.Hex)
+		if decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		var decoded wire.MsgTx
+		if decodeErr = decoded.Deserialize(bytes.NewReader(raw)); decodeErr != nil {
+			err = decodeErr
+			break
+		}
+		if decoded.TxHash() != *hash {
+			err = fmt.Errorf("node raw transaction does not match requested txid")
+			break
+		}
+		outputSats := make([]int64, len(decoded.TxOut))
+		for i, output := range decoded.TxOut {
+			outputSats[i] = output.Value
+		}
 		result := struct {
 			*btcjson.TxRawResult
-			Results []*btcjson.TxRawResult `json:"results"`
-		}{TxRawResult: transaction, Results: []*btcjson.TxRawResult{}}
+			OutputSats []int64                `json:"output_sats"`
+			Results    []*btcjson.TxRawResult `json:"results"`
+		}{TxRawResult: transaction, OutputSats: outputSats, Results: []*btcjson.TxRawResult{}}
 		if transaction.BlockHash != "" {
 			blockHash, parseErr := chainhash.NewHashFromStr(transaction.BlockHash)
 			if parseErr != nil {
@@ -581,6 +646,7 @@ func (f *posPWAControl) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/confirm-l1":
 		options := struct {
 			WaitAnchors *bool `json:"wait_anchors"`
+			EmptyBlocks int   `json:"empty_blocks"`
 		}{}
 		if r.Body != nil {
 			decodeErr := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&options)
@@ -589,6 +655,10 @@ func (f *posPWAControl) serveHTTP(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
+		if options.EmptyBlocks < 0 || options.EmptyBlocks > 257 {
+			err = fmt.Errorf("empty_blocks must be between 0 and 257")
+			break
+		}
 		txids := f.l1.ConfirmPending()
 		if options.WaitAnchors == nil || *options.WaitAnchors {
 			if len(txids) == 0 {
@@ -596,6 +666,9 @@ func (f *posPWAControl) serveHTTP(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			err = f.waitAnchors(ctx, txids)
+		}
+		if err == nil && options.EmptyBlocks > 0 {
+			f.l1.mineEmptyBlocks(options.EmptyBlocks)
 		}
 	case "/activate":
 		err = f.activate(ctx)
@@ -643,6 +716,138 @@ func (f *posPWAControl) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(snapshot)
+}
+
+func posPWAInspectPSBT(encoded string, verify bool) (map[string]any, error) {
+	raw, err := hex.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	packet, err := spsbt.NewFromRawBytes(bytes.NewReader(raw), false)
+	if err != nil {
+		return nil, err
+	}
+	unsigned, err := wallet.EncodeMsgTx_SatsNet(packet.UnsignedTx)
+	if err != nil {
+		return nil, err
+	}
+	inputs := make([]map[string]any, 0, len(packet.Inputs))
+	outputs := make([]map[string]any, 0, len(packet.UnsignedTx.TxOut))
+	fetcher := txscript.NewMultiPrevOutFetcher(nil)
+	for i, input := range packet.Inputs {
+		if i >= len(packet.UnsignedTx.TxIn) || input.WitnessUtxo == nil {
+			return nil, fmt.Errorf("PSBT input %d has no witness prevout", i)
+		}
+		point := packet.UnsignedTx.TxIn[i].PreviousOutPoint
+		prev := input.WitnessUtxo
+		fetcher.AddPrevOut(point, prev)
+		inputs = append(inputs, map[string]any{"outpoint": point.String(), "value": prev.Value,
+			"assets": prev.Assets, "pk_script": hex.EncodeToString(prev.PkScript)})
+	}
+	for _, output := range packet.UnsignedTx.TxOut {
+		outputs = append(outputs, map[string]any{"value": output.Value, "assets": output.Assets,
+			"pk_script": hex.EncodeToString(output.PkScript)})
+	}
+	result := map[string]any{"unsigned_tx": unsigned, "inputs": inputs, "outputs": outputs, "signatures_verified": false}
+	if verify {
+		if err := spsbt.MaybeFinalizeAll(packet); err != nil {
+			return nil, err
+		}
+		tx, err := spsbt.Extract(packet)
+		if err != nil {
+			return nil, err
+		}
+		hashes := txscript.NewTxSigHashes(tx, fetcher)
+		for i, input := range tx.TxIn {
+			prev := fetcher.FetchPrevOutput(input.PreviousOutPoint)
+			vm, err := txscript.NewEngine(prev.PkScript, tx, i, txscript.StandardVerifyFlags,
+				nil, hashes, prev.Value, prev.Assets, fetcher)
+			if err != nil {
+				return nil, err
+			}
+			if err := vm.Execute(); err != nil {
+				return nil, fmt.Errorf("PSBT signature %d: %w", i, err)
+			}
+		}
+		encodedTx, err := wallet.EncodeMsgTx_SatsNet(tx)
+		if err != nil {
+			return nil, err
+		}
+		result["tx"], result["txid"], result["signatures_verified"] = encodedTx, tx.TxID(), true
+	}
+	return result, nil
+}
+
+func posPWASDKPSBTFixture(t *testing.T, seed *wire.MsgTx, owner, recipient map[string]string, asset string) map[string]any {
+	t.Helper()
+	ownerScript, err := hex.DecodeString(owner["pk_script"])
+	require.NoError(t, err)
+	recipientScript, err := hex.DecodeString(recipient["pk_script"])
+	require.NoError(t, err)
+	var indexes []uint32
+	for i, output := range seed.TxOut {
+		if bytes.Equal(output.PkScript, ownerScript) {
+			indexes = append(indexes, uint32(i))
+		}
+	}
+	require.Len(t, indexes, 2)
+	tx := wire.NewMsgTx(wire.TxVersion)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: seed.TxHash(), Index: indexes[0]}, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(2000, txAsset(asset, 700), recipientScript))
+	tx.AddTxOut(wire.NewTxOut(seed.TxOut[indexes[0]].Value-2500, txAsset(asset, 12_500_000-700), ownerScript))
+	packet, err := spsbt.NewFromUnsignedTx(tx)
+	require.NoError(t, err)
+	packet.Inputs[0].NonWitnessUtxo = seed.Copy()
+	packet.Inputs[0].WitnessUtxo = seed.Copy().TxOut[indexes[0]]
+	encode := func(p *spsbt.Packet) string {
+		var buf bytes.Buffer
+		require.NoError(t, p.Serialize(&buf))
+		return hex.EncodeToString(buf.Bytes())
+	}
+	encoded := encode(packet)
+	observed, err := posPWAInspectPSBT(encoded, false)
+	require.NoError(t, err)
+	var orders []string
+	var points []string
+	var infos []*indexercommon.AssetsInUtxo
+	for i, index := range indexes {
+		prev := seed.TxOut[index]
+		point := fmt.Sprintf("%s:%d", seed.TxID(), index)
+		info := &indexercommon.AssetsInUtxo{OutPoint: point, Value: prev.Value, PkScript: prev.PkScript,
+			Assets: []*indexercommon.DisplayAsset{displayAssetWithMeta(asset, "12500000", 0, 0)}}
+		order := &wallet.UtxoInfo{AssetsInUtxo: *info, Price: int64((i + 1) * 1000)}
+		orders = append(orders, sdkReviewJSON(t, order))
+		points = append(points, point)
+		infos = append(infos, info)
+	}
+	var buyerOrder *wallet.UtxoInfo
+	for i, prev := range seed.TxOut {
+		if bytes.Equal(prev.PkScript, recipientScript) {
+			buyerOrder = &wallet.UtxoInfo{AssetsInUtxo: indexercommon.AssetsInUtxo{
+				OutPoint: fmt.Sprintf("%s:%d", seed.TxID(), i), Value: prev.Value, PkScript: prev.PkScript,
+				Assets: []*indexercommon.DisplayAsset{displayAssetWithMeta(asset, "25000000", 0, 0)},
+			}}
+		}
+	}
+	require.NotNil(t, buyerOrder)
+	// NonWitnessUtxo anchors the witness metadata. Altered value/asset copies
+	// must be rejected before WASM signing, even though the outpoint is valid.
+	packet.Inputs[0].WitnessUtxo.Value++
+	badValue := encode(packet)
+	packet.Inputs[0].WitnessUtxo = seed.Copy().TxOut[indexes[0]]
+	packet.Inputs[0].WitnessUtxo.Assets[0].Amount = *indexercommon.NewDecimal(12_500_001, 0)
+	badAsset := encode(packet)
+	exchangeContent, err := contractcommon.EncodeTemplateExchangeContent(contractcommon.TemplateExchangeContract{
+		AssetAName: asset, AssetBName: "::", PriceMode: contractcommon.ExchangePriceModeHeight,
+		Steps: []contractcommon.TemplateExchangePriceStep{{Threshold: "0", BPerA: "0.001"}},
+	})
+	require.NoError(t, err)
+	return map[string]any{"psbt": encoded, "unsignedTx": observed["unsigned_tx"], "inputs": observed["inputs"],
+		"outputs": observed["outputs"], "orders": orders, "orderOutpoints": points,
+		"additionalInput": sdkReviewJSON(t, infos[1]), "additionalOutput": sdkReviewJSON(t, infos[1]),
+		"additionalValue": infos[1].Value, "tampered": []string{badValue, badAsset},
+		"buyerOrder": sdkReviewJSON(t, buyerOrder), "buyerValue": buyerOrder.Value,
+		"exchangeContent": base64.StdEncoding.EncodeToString(exchangeContent), "l2BatchFee": wallet.DEFAULT_FEE_SATSNET}
 }
 
 func (f *posPWAControl) onlineNodes() []*testHarness {

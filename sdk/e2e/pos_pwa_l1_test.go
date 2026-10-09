@@ -23,14 +23,16 @@ import (
 	btcwire "github.com/btcsuite/btcd/wire"
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	"github.com/sat20-labs/sat20wallet/sdk/testutil/fakeindexer"
 	sdkwallet "github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/stretchr/testify/require"
 )
 
 // Only the L1 Indexer is simulated. Browser/WASM/STP requests use these normal
 // HTTP endpoints; every non-seed transaction is decoded and signature-checked.
-// Bound assets follow the actual input/output sat order through the Indexer's
-// production Append/Cut operations. No wallet result or balance is injected.
+// Asset indexing reuses Transcend's shared fake model from testutil/fakeindexer.
+// Bitcoin validity and explicit confirmation stay here; no wallet result or
+// balance is injected.
 type posPWAL1Indexer struct {
 	mu               sync.Mutex
 	nodeFixture      *fakeL1Indexer
@@ -42,7 +44,8 @@ type posPWAL1Indexer struct {
 	transactions     map[string]*posPWAL1Transaction
 	spent            map[string]posPWAL1Spend
 	pending          []string
-	tickers          map[string]*indexercommon.TickerInfo
+	assets           *fakeindexer.Client
+	confirmedAssets  *fakeindexer.Network
 	unknownRequests  []string
 	checkpointHeight int64
 	blocks           map[int64]*btcwire.MsgBlock
@@ -76,7 +79,7 @@ func newPOSPWAL1Indexer(t *testing.T, bootstrapPub string, parentByPub map[strin
 		bootstrapPub: bootstrapPub, parentByPub: make(map[string]string), height: 100_000,
 		outputs:      make(map[string]*indexercommon.TxOutput),
 		transactions: make(map[string]*posPWAL1Transaction), spent: make(map[string]posPWAL1Spend),
-		tickers:          make(map[string]*indexercommon.TickerInfo),
+		assets:           fakeindexer.NewClient(fakeindexer.NewNetwork("bitcoin", 100_001)),
 		checkpointHeight: 99_000, blocks: make(map[int64]*btcwire.MsgBlock), blocksByHash: make(map[string]*btcwire.MsgBlock),
 		lucky: newPOSPWALuckyL1(),
 	}
@@ -85,8 +88,9 @@ func newPOSPWAL1Indexer(t *testing.T, bootstrapPub string, parentByPub map[strin
 	}
 	// Read-only issuance eligibility used by the partial/remainder mint UI
 	// case. The fixture does not claim to index a successful inscription.
-	f.tickers["ordx:f:PWAMINT"] = fakeTickerInfo("ordx:f:PWAMINT", "10000", 0, 1)
-	f.tickers["ordx:f:PWAMINT"].Limit = "1000"
+	f.assets.Network.State.Tickers["ordx:f:PWAMINT"] = fakeTickerInfo("ordx:f:PWAMINT", "10000", 0, 1)
+	f.assets.Network.State.Tickers["ordx:f:PWAMINT"].Limit = "1000"
+	f.confirmedAssets = f.assets.Network.Clone()
 	server := httptest.NewServer(http.HandlerFunc(f.serveHTTP))
 	f.nodeFixture = &fakeL1Indexer{server: server, names: make(map[string]string)}
 	t.Cleanup(server.Close)
@@ -120,8 +124,10 @@ func (f *posPWAL1Indexer) SeedUTXO(t *testing.T, output *indexercommon.AssetsInU
 	require.NotContains(t, f.outputs, output.OutPoint)
 	f.seedSequence++
 	copy.UtxoId = indexercommon.ToUtxoId(int(f.height)-6, f.seedSequence, int(point.Index))
+	require.NoError(t, f.assets.Network.SeedOutput(copy))
 	f.outputs[output.OutPoint] = copy
 	f.addTickerMetadata(copy)
+	f.confirmedAssets = f.assets.Network.Clone()
 }
 
 // FundAddress creates an initial, confirmed test coinbase with real serialized
@@ -157,9 +163,13 @@ func (f *posPWAL1Indexer) FundAddress(t *testing.T, address string, value int64,
 func (f *posPWAL1Indexer) addTickerMetadata(output *indexercommon.TxOutput) {
 	for _, asset := range output.Assets {
 		name := asset.Name.String()
-		info := f.tickers[name]
+		info := f.assets.Network.State.Tickers[name]
 		if info == nil {
-			f.tickers[name] = fakeTickerInfo(name, asset.Amount.String(), asset.Amount.Precision, int(asset.BindingSat))
+			f.assets.Network.State.Tickers[name] = fakeTickerInfo(name, asset.Amount.String(), asset.Amount.Precision, int(asset.BindingSat))
+			if asset.Name.Protocol == indexercommon.PROTOCOL_NAME_RUNES {
+				height, txIndex, _ := indexercommon.FromUtxoId(output.UtxoId)
+				f.assets.Network.State.Tickers[name].DisplayName = fmt.Sprintf("%d:%d", height, txIndex)
+			}
 			continue
 		}
 		amount, err := indexercommon.NewDecimalFromString(info.TotalMinted, info.Divisibility)
@@ -231,8 +241,26 @@ func (f *posPWAL1Indexer) ConfirmPending() []string {
 	}
 	block := posPWAL1Block(f.height, previous, transactions)
 	f.blocks[f.height], f.blocksByHash[block.BlockHash().String()] = block, block
+	f.assets.Network.Height = int(f.height) + 1
+	f.confirmedAssets = f.assets.Network.Clone()
 	f.pending = nil
 	return ids
+}
+
+// Reuse the fixture's canonical block history for the independent CSV drill.
+// These blocks contain no invented transactions, assets or wallet results.
+func (f *posPWAL1Indexer) mineEmptyBlocks(count int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	previous := f.blockLocked(f.height).BlockHash()
+	for i := 0; i < count; i++ {
+		f.height++
+		block := posPWAL1Block(f.height, previous, nil)
+		f.blocks[f.height], f.blocksByHash[block.BlockHash().String()] = block, block
+		previous = block.BlockHash()
+	}
+	f.assets.Network.Height = int(f.height) + 1
+	f.confirmedAssets = f.assets.Network.Clone()
 }
 
 func decodePOSPWAL1Tx(raw string) (*btcwire.MsgTx, error) {
@@ -254,64 +282,88 @@ func decodePOSPWAL1Tx(raw string) (*btcwire.MsgTx, error) {
 	return tx, nil
 }
 
-func posPWAL1Outputs(tx *btcwire.MsgTx, outputs map[string]*indexercommon.TxOutput, spent map[string]posPWAL1Spend) (map[string]*indexercommon.TxOutput, error) {
+func validatePOSPWAL1Tx(tx *btcwire.MsgTx, outputs map[string]*indexercommon.TxOutput, spent map[string]posPWAL1Spend) error {
 	inputs := indexercommon.NewTxOutput(0)
 	prev := make(map[btcwire.OutPoint]*btcwire.TxOut)
 	for _, in := range tx.TxIn {
 		point := in.PreviousOutPoint.String()
 		output := outputs[point]
 		if output == nil || spent[point].txid != "" {
-			return nil, fmt.Errorf("input %s missing or spent", point)
+			return fmt.Errorf("input %s missing or spent", point)
 		}
 		if _, exists := prev[in.PreviousOutPoint]; exists {
-			return nil, fmt.Errorf("duplicate input %s", point)
+			return fmt.Errorf("duplicate input %s", point)
 		}
+		binding := output.Clone()
+		binding.Assets = nil
 		for _, asset := range output.Assets {
-			// This fixture transfers ordinary BTC and binding-sat assets. RGB11
-			// ownership stays in the real provider and needs no Indexer asset.
-			if asset.BindingSat == 0 || len(output.Offsets[asset.Name]) == 0 {
-				return nil, fmt.Errorf("L1 fixture cannot infer non-binding transfer %s", asset.Name.String())
+			if asset.Name.Protocol == indexercommon.PROTOCOL_NAME_BRC20 || asset.Name.Protocol == indexercommon.PROTOCOL_NAME_RUNES {
+				delete(binding.Offsets, asset.Name)
+				continue // Allocated only by the shared inscription/Runestone model.
 			}
+			if asset.BindingSat == 0 || len(output.Offsets[asset.Name]) == 0 {
+				return fmt.Errorf("L1 fixture cannot infer non-binding transfer %s", asset.Name.String())
+			}
+			binding.Assets = append(binding.Assets, asset)
 		}
+		binding.SatBindingMap = nil
 		value := output.OutValue
 		prev[in.PreviousOutPoint] = &value
-		if err := inputs.Append(output); err != nil {
-			return nil, err
+		if err := inputs.Append(binding); err != nil {
+			return err
 		}
 	}
 	var totalOut int64
 	for _, out := range tx.TxOut {
 		if out.Value < 0 || out.Value > btcutil.MaxSatoshi || totalOut > btcutil.MaxSatoshi-out.Value {
-			return nil, fmt.Errorf("invalid output value")
+			return fmt.Errorf("invalid output value")
 		}
 		totalOut += out.Value
 	}
 	if totalOut > inputs.Value() {
-		return nil, fmt.Errorf("transaction creates Bitcoin value")
+		return fmt.Errorf("transaction creates Bitcoin value")
 	}
 	if err := sdkwallet.VerifySignedTx(tx, btctxscript.NewMultiPrevOutFetcher(prev)); err != nil {
-		return nil, fmt.Errorf("verify actual L1 signatures: %w", err)
+		return fmt.Errorf("verify actual L1 signatures: %w", err)
 	}
-	result := make(map[string]*indexercommon.TxOutput, len(tx.TxOut))
 	rest := inputs
 	for i, out := range tx.TxOut {
-		part, next, err := rest.Cut(out.Value)
+		_, next, err := rest.Cut(out.Value)
 		if err != nil {
-			return nil, fmt.Errorf("allocate output %d: %w", i, err)
+			return fmt.Errorf("allocate output %d: %w", i, err)
 		}
-		part.OutPointStr = fmt.Sprintf("%s:%d", tx.TxID(), i)
-		part.OutValue.PkScript = append([]byte(nil), out.PkScript...)
-		part.UtxoId = indexercommon.INVALID_ID
-		result[part.OutPointStr] = part
 		rest = next
 		if rest == nil {
 			rest = indexercommon.NewTxOutput(0)
 		}
 	}
 	if rest.HasAsset() {
-		return nil, fmt.Errorf("transaction places an indexed asset in the miner fee")
+		return fmt.Errorf("transaction places an indexed asset in the miner fee")
 	}
-	return result, nil
+	return nil
+}
+
+// Apply on a detached model. A rejected inscription/Runestone cannot mutate
+// balances, ticker metadata or prior accepted transactions during preflight.
+func applyPOSPWAL1Tx(tx *btcwire.MsgTx, assets *fakeindexer.Client, outputs map[string]*indexercommon.TxOutput, spent map[string]posPWAL1Spend) (*fakeindexer.Client, map[string]*indexercommon.TxOutput, error) {
+	if err := validatePOSPWAL1Tx(tx, outputs, spent); err != nil {
+		return nil, nil, err
+	}
+	candidate := fakeindexer.NewClient(assets.Network.Clone())
+	if _, err := candidate.BroadCastTx(tx); err != nil {
+		return nil, nil, err
+	}
+	created := make(map[string]*indexercommon.TxOutput, len(tx.TxOut))
+	for i := range tx.TxOut {
+		point := fmt.Sprintf("%s:%d", tx.TxID(), i)
+		output, err := candidate.GetTxOutput(point)
+		if err != nil {
+			return nil, nil, err
+		}
+		output.UtxoId = indexercommon.INVALID_ID
+		created[point] = output
+	}
+	return candidate, created, nil
 }
 
 func (f *posPWAL1Indexer) submit(raws []string, commit bool) ([]*indexerwire.TxTestResult, error) {
@@ -325,6 +377,7 @@ func (f *posPWAL1Indexer) submit(raws []string, commit bool) ([]*indexerwire.TxT
 	for point, spend := range f.spent {
 		spent[point] = spend
 	}
+	assets := f.assets
 	results := make([]*indexerwire.TxTestResult, 0, len(raws))
 	for _, raw := range raws {
 		tx, err := decodePOSPWAL1Tx(raw)
@@ -343,7 +396,16 @@ func (f *posPWAL1Indexer) submit(raws []string, commit bool) ([]*indexerwire.TxT
 			results = append(results, result)
 			continue
 		}
-		created, err := posPWAL1Outputs(tx, outputs, spent)
+		sequenceErr := f.checkHeightSequenceLocks(tx)
+		if sequenceErr != nil {
+			result.Allowed, result.RejectReason = false, sequenceErr.Error()
+			results = append(results, result)
+			if commit {
+				return results, sequenceErr
+			}
+			continue
+		}
+		candidate, created, err := applyPOSPWAL1Tx(tx, assets, outputs, spent)
 		if err != nil {
 			result.Allowed, result.RejectReason = false, err.Error()
 			results = append(results, result)
@@ -351,6 +413,10 @@ func (f *posPWAL1Indexer) submit(raws []string, commit bool) ([]*indexerwire.TxT
 				return results, err
 			}
 			continue
+		}
+		assets = candidate
+		if commit {
+			f.assets = assets
 		}
 		for i, in := range tx.TxIn {
 			point := in.PreviousOutPoint.String()
@@ -372,6 +438,36 @@ func (f *posPWAL1Indexer) submit(raws []string, commit bool) ([]*indexerwire.TxT
 		results = append(results, result)
 	}
 	return results, nil
+}
+
+// The existing fixture verifies script CSV through the Bitcoin VM. Enforce
+// relative block maturity as well, so a signed premature sweep cannot be
+// accepted merely because its witness and sequence agree with the script.
+func (f *posPWAL1Indexer) checkHeightSequenceLocks(tx *btcwire.MsgTx) error {
+	if tx.Version < 2 {
+		return nil
+	}
+	for _, input := range tx.TxIn {
+		sequence := input.Sequence
+		if sequence&btcwire.SequenceLockTimeDisabled != 0 {
+			continue
+		}
+		if sequence&btcwire.SequenceLockTimeIsSeconds != 0 {
+			return fmt.Errorf("time-based sequence locks are outside this block-height fixture")
+		}
+		previous := f.transactions[input.PreviousOutPoint.Hash.String()]
+		if previous == nil {
+			return fmt.Errorf("sequence lock has no known previous transaction")
+		}
+		height := previous.height
+		if height < 0 {
+			height = f.height + 1
+		}
+		if f.height+1 < height+int64(sequence&btcwire.SequenceLockTimeMask) {
+			return fmt.Errorf("non-BIP68-final: relative block delay is not mature")
+		}
+	}
+	return nil
 }
 
 // This fake Indexer starts from one explicit checkpoint. It exposes a short,
@@ -483,7 +579,7 @@ func (f *posPWAL1Indexer) txStatusLocked(id string) *indexerwire.BitcoinTxStatus
 	return status
 }
 
-func (f *posPWAL1Indexer) addressOutputsLocked(address, asset string) []*indexercommon.AssetsInUtxo {
+func (f *posPWAL1Indexer) addressOutputsLocked(address, asset string, includeInvalid ...bool) []*indexercommon.AssetsInUtxo {
 	result := make([]*indexercommon.AssetsInUtxo, 0)
 	addr, err := btcutil.DecodeAddress(address, &btcchaincfg.TestNet4Params)
 	if err != nil {
@@ -503,7 +599,8 @@ func (f *posPWAL1Indexer) addressOutputsLocked(address, asset string) []*indexer
 		}
 		for _, item := range output.Assets {
 			if item.Name.String() == asset {
-				include = true
+				invalid := len(includeInvalid) != 0 && includeInvalid[0]
+				include = output.Invalids[item.Name] == invalid
 			}
 		}
 		if include {
@@ -523,10 +620,22 @@ func (f *posPWAL1Indexer) summaryLocked(address string) []*indexercommon.Display
 		total += parsed.Value()
 		plain += parsed.GetPlainSat()
 		for _, asset := range parsed.Assets {
+			if asset.Name.Protocol == indexercommon.PROTOCOL_NAME_BRC20 || parsed.Invalids[asset.Name] {
+				continue
+			}
 			if existing := assets[asset.Name]; existing != nil {
 				existing.Amount = *existing.Amount.Add(&asset.Amount)
 			} else {
 				assets[asset.Name] = asset.Clone()
+			}
+		}
+	}
+	script, err := sdkwallet.AddrToPkScript(address, &btcchaincfg.TestNet4Params)
+	if err == nil {
+		// BRC20 is an address ledger, not the sum of inscription carriers.
+		for name, amount := range f.confirmedAssets.AddrAssetMap[hex.EncodeToString(script)] {
+			if !amount.IsZero() {
+				assets[name] = &indexercommon.AssetInfo{Name: name, Amount: *amount.Clone()}
 			}
 		}
 	}
@@ -552,6 +661,101 @@ func posPWAL1Error(w http.ResponseWriter, err error) {
 
 func posPWAL1Decode(r *http.Request, dst any) error {
 	return json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(dst)
+}
+
+// New unrestricted integer issuances are indexed by the shared witness parser.
+// Supply is observed from confirmed unspent asset outputs, never preset by a
+// browser test. BRC20 uses its confirmed address ledger rather than carriers.
+// This fixture does not model burns or restricted ORDX minting.
+func (f *posPWAL1Indexer) confirmedAssetSupplyLocked(name indexercommon.AssetName) int64 {
+	minted := int64(0)
+	if name.Protocol == indexercommon.PROTOCOL_NAME_BRC20 {
+		for _, assets := range f.confirmedAssets.AddrAssetMap {
+			if amount := assets[name]; amount != nil {
+				minted += amount.Int64()
+			}
+		}
+		return minted
+	}
+	for point, index := range f.confirmedAssets.UtxoIndex {
+		if f.confirmedAssets.UtxoUsed[point] != "" {
+			continue
+		}
+		for _, asset := range f.confirmedAssets.UtxoAssets[index] {
+			if asset.Name == name {
+				minted += asset.Amount.Int64()
+			}
+		}
+	}
+	return minted
+}
+
+// Project DID ownership from the shared parser's confirmed name allocation
+// and the original inscription bytes. No extra name state is seeded or saved.
+func (f *posPWAL1Indexer) confirmedNameLocked(name string) *indexerwire.OrdinalsName {
+	assetName := indexercommon.AssetName{Protocol: indexercommon.PROTOCOL_NAME_ORDX,
+		Type: indexercommon.ASSET_TYPE_NS, Ticker: name}
+	if f.confirmedAssets.State.Tickers[assetName.String()] == nil {
+		return nil
+	}
+	inscriptionID := ""
+	inscriptionAddress := ""
+	var inscriptionHeight int64
+	for txid, record := range f.transactions {
+		if record.height < 0 {
+			continue
+		}
+		inscriptionIndex := 0
+		for _, input := range record.tx.TxIn {
+			inscriptions, _, err := indexercommon.ParseInscription(input.Witness)
+			if err != nil {
+				continue
+			}
+			for _, inscription := range inscriptions {
+				protocol, _ := indexercommon.GetProtocol(inscription)
+				content := inscription[indexercommon.FIELD_CONTENT]
+				candidateID := fmt.Sprintf("%si%d", txid, inscriptionIndex)
+				if protocol == "" && string(content) == name && (inscriptionID == "" || record.height < inscriptionHeight ||
+					(record.height == inscriptionHeight && candidateID < inscriptionID)) {
+					inscriptionID, inscriptionHeight = candidateID, record.height
+					if len(record.tx.TxOut) > 0 {
+						_, addresses, _, err := btctxscript.ExtractPkScriptAddrs(record.tx.TxOut[0].PkScript, &btcchaincfg.TestNet4Params)
+						if err == nil && len(addresses) == 1 {
+							inscriptionAddress = addresses[0].EncodeAddress()
+						}
+					}
+				}
+				inscriptionIndex++
+			}
+		}
+	}
+	if inscriptionID == "" {
+		return nil
+	}
+	for point, index := range f.confirmedAssets.UtxoIndex {
+		if f.confirmedAssets.UtxoUsed[point] != "" {
+			continue
+		}
+		for _, asset := range f.confirmedAssets.UtxoAssets[index] {
+			if asset.Name != assetName || asset.Amount.Int64() != 1 {
+				continue
+			}
+			output := f.outputs[point]
+			if output == nil {
+				continue
+			}
+			_, addresses, _, err := btctxscript.ExtractPkScriptAddrs(output.OutValue.PkScript, &btcchaincfg.TestNet4Params)
+			if err != nil || len(addresses) != 1 {
+				continue
+			}
+			return &indexerwire.OrdinalsName{NftItem: indexerwire.NftItem{
+				Name: name, Address: addresses[0].EncodeAddress(), InscriptionId: inscriptionID,
+				Utxo: point, Output: output.UtxoId, Value: output.Value(), BlockHeight: int(inscriptionHeight),
+				BlockTime: f.blockLocked(inscriptionHeight).Header.Timestamp.Unix(), InscriptionAddress: inscriptionAddress,
+			}, KVItemList: []*indexerwire.KVItem{}}
+		}
+	}
+	return nil
 }
 
 func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -632,6 +836,52 @@ func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasPrefix(path, "/mint/permission/PWAMINT/"):
 		posPWAL1JSON(w, map[string]any{"code": 0, "data": map[string]string{"amount": "200"}})
+	case strings.HasPrefix(path, "/mint/permission/"):
+		parts := strings.Split(strings.TrimPrefix(path, "/mint/permission/"), "/")
+		if len(parts) != 2 {
+			posPWAL1Error(w, fmt.Errorf("expected ticker and address"))
+			return
+		}
+		if _, err := btcutil.DecodeAddress(parts[1], &btcchaincfg.TestNet4Params); err != nil {
+			posPWAL1Error(w, err)
+			return
+		}
+		protocol := r.URL.Query().Get("protocol")
+		if protocol == "" {
+			protocol = indexercommon.PROTOCOL_NAME_ORDX
+		}
+		if protocol != indexercommon.PROTOCOL_NAME_ORDX && protocol != indexercommon.PROTOCOL_NAME_BRC20 {
+			posPWAL1Error(w, fmt.Errorf("unsupported mint protocol %s", protocol))
+			return
+		}
+		name := indexercommon.AssetName{Protocol: protocol, Type: "f", Ticker: parts[0]}
+		info := f.confirmedAssets.State.Tickers[name.String()]
+		// This fixture supports unrestricted integer ORDX/BRC20 deployments. Read
+		// actual confirmed inscriptions and unspent assets; never seed a mint
+		// balance or make an unknown ticker eligible for minting.
+		if info == nil || info.Divisibility != 0 ||
+			(protocol == indexercommon.PROTOCOL_NAME_ORDX && info.N != 1) ||
+			(protocol == indexercommon.PROTOCOL_NAME_BRC20 && (len(parts[0]) != 4 || info.SelfMint != 0)) {
+			posPWAL1Error(w, fmt.Errorf("unknown or unsupported confirmed ticker %s", name.String()))
+			return
+		}
+		max, maxErr := strconv.ParseInt(info.MaxSupply, 10, 64)
+		limit, limitErr := strconv.ParseInt(info.Limit, 10, 64)
+		if maxErr != nil || limitErr != nil || max <= 0 || limit <= 0 {
+			posPWAL1Error(w, fmt.Errorf("invalid confirmed mint limit"))
+			return
+		}
+		minted := f.confirmedAssetSupplyLocked(name)
+		remaining := max - minted
+		if remaining <= 0 {
+			posPWAL1Error(w, fmt.Errorf("confirmed mint cap reached"))
+			return
+		}
+		if limit > remaining {
+			limit = remaining
+		}
+		posPWAL1JSON(w, indexerwire.MintPermissionResp{BaseResp: ok, Data: &indexerwire.MintPermissionInfo{
+			Ticker: parts[0], Address: parts[1], Amount: strconv.FormatInt(limit, 10)}})
 	case path == "/kv/register":
 		var req indexerwire.RegisterPubKeyReq
 		if err := posPWAL1Decode(r, &req); err != nil {
@@ -722,7 +972,7 @@ func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			posPWAL1Error(w, fmt.Errorf("asset path must contain address and asset"))
 			return
 		}
-		outputs := f.addressOutputsLocked(parts[0], parts[1])
+		outputs := f.addressOutputsLocked(parts[0], parts[1], r.URL.Query().Get("invalid") == "true")
 		posPWAL1JSON(w, indexerwire.UtxosWithAssetRespV3{BaseResp: ok, ListResp: indexerwire.ListResp{Total: uint64(len(outputs))}, Data: outputs})
 	case strings.HasPrefix(path, "/v3/address/utxos/"):
 		outputs := f.addressOutputsLocked(strings.TrimPrefix(path, "/v3/address/utxos/"), "")
@@ -745,7 +995,7 @@ func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			height, index, vout := indexercommon.FromUtxoId(output.UtxoId)
 			item := &indexerwire.PlainUtxo{Height: height, Index: index, Txid: point.Hash.String(), Vout: vout, Value: output.Value}
-			if len(output.Assets) == 0 {
+			if !output.ToTxOutput().HasAsset() {
 				plain = append(plain, item)
 			} else {
 				other = append(other, item)
@@ -758,19 +1008,36 @@ func (f *posPWAL1Indexer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case strings.HasPrefix(path, "/v3/tick/info/"):
 		name := strings.TrimPrefix(path, "/v3/tick/info/")
-		info := f.tickers[name]
+		info := f.assets.Network.State.Tickers[name]
 		if info == nil {
 			posPWAL1Error(w, fmt.Errorf("ticker not found: %s", name))
 			return
 		}
 		copy := *info
+		if info.Divisibility == 0 && info.TotalMinted == "0" &&
+			((info.AssetName.Protocol == "ordx" && info.N == 1) || info.AssetName.Protocol == "brc20") {
+			copy.TotalMinted = strconv.FormatInt(f.confirmedAssetSupplyLocked(info.AssetName), 10)
+		}
 		posPWAL1JSON(w, indexerwire.TickerInfoResp{BaseResp: ok, Data: &copy})
 	case strings.HasPrefix(path, "/ns/address/"):
-		// No DID is issued in this fixture; account/DKVS application state is
-		// supplied only by the real L2 services, never fabricated here.
-		posPWAL1JSON(w, indexerwire.NamesWithAddressResp{BaseResp: ok, Data: &indexerwire.NamesWithAddressData{Address: strings.TrimPrefix(path, "/ns/address/"), Names: []*indexerwire.OrdinalsName{}}})
+		address := strings.TrimPrefix(path, "/ns/address/")
+		names := []*indexerwire.OrdinalsName{}
+		for _, ticker := range f.confirmedAssets.State.Tickers {
+			if ticker.AssetName.Type != indexercommon.ASSET_TYPE_NS {
+				continue
+			}
+			if name := f.confirmedNameLocked(ticker.AssetName.Ticker); name != nil && name.Address == address {
+				names = append(names, name)
+			}
+		}
+		sort.Slice(names, func(i, j int) bool { return names[i].Name < names[j].Name })
+		posPWAL1JSON(w, indexerwire.NamesWithAddressResp{BaseResp: ok, Data: &indexerwire.NamesWithAddressData{Address: address, Total: len(names), Names: names}})
 	case strings.HasPrefix(path, "/ns/name/"):
 		name := strings.TrimPrefix(path, "/ns/name/")
+		if confirmed := f.confirmedNameLocked(name); confirmed != nil {
+			posPWAL1JSON(w, indexerwire.NamePropertiesResp{BaseResp: ok, Data: confirmed})
+			return
+		}
 		f.nodeFixture.namesMu.RLock()
 		address, exists := f.nodeFixture.names[name]
 		f.nodeFixture.namesMu.RUnlock()

@@ -13,6 +13,41 @@ import (
 	"time"
 )
 
+func TestRGB11ReceiveReservationUsesExactRequestID(t *testing.T) {
+	w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
+	source := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 815)
+	req, err := source.CreateRGB11Invoice(RGB11InvoiceRequest{Mode: "witness", TransportMode: "out-of-band", AmountRaw: "2", Expiry: time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &rgb11wallet.TransferState{TransferID: "exact-request", Direction: "receive", Status: "pending", Invoice: req.Invoice}
+	t.Run("no invoice lookup compatibility", func(t *testing.T) {
+		if err := source.rgbManager.projectionStore.SaveTransferState(state); !errors.Is(err, ErrRGB11Inconsistent) {
+			t.Fatalf("receive state without request ID accepted: %v", err)
+		}
+	})
+	state.ReceiveRequestID = req.RequestID
+	if err := source.rgbManager.projectionStore.SaveTransferState(state); err != nil {
+		t.Fatal(err)
+	}
+	engineRecords, err := source.rgbManager.engineStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectionRecords, err := source.rgbManager.projectionStore.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 816)
+	if err := target.rgbManager.importRGB11ReservationSnapshot(&RGB11WalletSnapshot{EngineRecords: engineRecords, ProjectionRecords: projectionRecords}); err != nil {
+		t.Fatalf("fresh scope must bind the incoming snapshot request, not the old local engine: %v", err)
+	}
+	reservations, err := target.rgbManager.loadRGB11Reservations()
+	if err != nil || len(reservations) != 1 || reservations[0].RequestID != req.RequestID || reservations[0].State == nil || reservations[0].State.TransferID != state.TransferID {
+		t.Fatalf("snapshot lost exact receive binding: %+v %v", reservations, err)
+	}
+}
+
 func TestRGB11InvoiceUsesReservationFramework(t *testing.T) {
 	w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)
 	mgr := newRGB11FlowManager(t, w, &rgb11FlowIndexer{}, &rgb11FlowEvidence{}, 810)
@@ -52,7 +87,7 @@ func TestRGB11ReservationExpiryProtectsKnownTransfer(t *testing.T) {
 			}
 			if used {
 				// Crash boundary: validated tx is durable before engine ACK is persisted.
-				if err := mgr.rgbManager.projectionStore.SaveTransferState(&rgb11wallet.TransferState{TransferID: "transfer", Direction: "receive", Status: "awaiting_broadcast", AckStatus: "accepted", Invoice: req.Invoice, WitnessTxID: strings.Repeat("cd", 32)}); err != nil {
+				if err := mgr.rgbManager.projectionStore.SaveTransferState(&rgb11wallet.TransferState{TransferID: "transfer", Direction: "receive", Status: "awaiting_broadcast", AckStatus: "accepted", Invoice: req.Invoice, ReceiveRequestID: req.RequestID, WitnessTxID: strings.Repeat("cd", 32)}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -207,7 +242,7 @@ func TestRGB11ReservationPublicViewIsReadOnlyAndRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := &rgb11wallet.TransferState{Invoice: req.Invoice, Asset: indexer.AssetInfo{Amount: *indexer.NewDefaultDecimal(2)}, TransferID: "imported-transfer", Direction: "receive", Status: "pending", WitnessTxID: "tx", ReceiveCapabilityKey: "SECRET-capability", RelayRecordKey: "SECRET-relay", AckRecordKey: "SECRET-ack", DKVSOperationID: "SECRET-operation"}
+	state := &rgb11wallet.TransferState{Invoice: req.Invoice, ReceiveRequestID: req.RequestID, Asset: indexer.AssetInfo{Amount: *indexer.NewDefaultDecimal(2)}, TransferID: "imported-transfer", Direction: "receive", Status: "pending", WitnessTxID: "tx", ReceiveCapabilityKey: "SECRET-capability", RelayRecordKey: "SECRET-relay", AckRecordKey: "SECRET-ack", DKVSOperationID: "SECRET-operation"}
 	if err := mgr.rgbManager.projectionStore.SaveTransferState(state); err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +339,6 @@ func TestRGB11ReservationInvoicePostCreateFailureRollsBack(t *testing.T) {
 		t.Fatal("unpublished invoice survived auxiliary write failure")
 	}
 }
-
 
 func TestRGB11FrameworkRejectsPartialStoreSnapshotImport(t *testing.T) {
 	w := NewInternalWalletWithMnemonic("comfort very add tuition senior run eight snap burst appear exile dutch", "", &chaincfg.TestNet4Params)

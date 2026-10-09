@@ -14,6 +14,7 @@ export const requiredPwaRgbCases = [
   'RGB PWA: cancelling an unbroadcast transfer releases its reservations and preserves carrier protection',
   'RGB PWA: issue a real IFA with separately committed inflation rights',
   'RGB PWA: issue a real indivisible UDA',
+  'RGB PWA: transfer the unique UDA to another wallet and persist its carrier proof',
 ]
 
 const poll = { timeout: 180000, intervals: [250, 500, 1000, 2000] }
@@ -28,9 +29,18 @@ const sameTxIDs = (before, after) => assert.deepEqual(after.l1.broadcast_count, 
   'an operation that must remain unbroadcast submitted an L1 transaction')
 
 export async function runPwaRgbCases(t, fixture) {
+  const failures = []
+  for (const [udaOnly, names] of [[false, requiredPwaRgbCases.slice(0, 10)], [true, requiredPwaRgbCases.slice(10)]]) {
+    if (t.selectedCases && !names.some(name => t.selectedCases.includes(name))) continue
+    try { await runPwaRgbCaseGroup(t, fixture, udaOnly) } catch (error) { failures.push(error) }
+  }
+  if (failures.length) throw new AggregateError(failures, failures.map(error => error.message).join('\n'))
+}
+
+async function runPwaRgbCaseGroup(t, fixture, udaOnly) {
   const { check, device, ready, walletCall } = t
-  const senderActor = fixture.basicWallet
-  const receiverActor = fixture.recipient
+  const senderActor = udaOnly ? fixture.udaWallets.sender : fixture.basicWallet
+  const receiverActor = udaOnly ? fixture.udaWallets.recipient : fixture.recipient
   for (const actor of [senderActor, receiverActor]) assert.ok(actor?.mnemonic && actor.address && actor.password)
   assert.notEqual(senderActor.address, receiverActor.address)
   const endpoint = fixture.config.IndexerL1
@@ -80,12 +90,31 @@ export async function runPwaRgbCases(t, fixture) {
   const fresh = async actor => {
     const page = await device()
     contexts.push(page.context())
+    page.on('console', message => {
+      let value = message.text()
+      if (!/^(?:fatal error:|panic:|goroutine \d|TypeError:|\[Vue warn\]|\s*(?:runtime\.|sync\.|github\.com\/sat20-labs\/|\/Users\/.*\.go:))/.test(value)) return
+      for (const fixtureActor of [senderActor, receiverActor]) {
+        for (const secret of [fixtureActor.mnemonic, fixtureActor.password]) value = value.replaceAll(secret, '[redacted]')
+      }
+      console.error(`[RGB runtime] ${value}`)
+    })
     await page.evaluate(() => { location.hash = '#/import' })
     await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(actor.mnemonic)
     await page.getByLabel('New Wallet Password', { exact: true }).fill(actor.password)
     await page.getByLabel('Confirm Password', { exact: true }).fill(actor.password)
+    const started = Date.now()
     await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
-    await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible()
+    try { await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: 90000 }) } catch (error) {
+      const diagnostic = await page.evaluate(async () => {
+        const { snapshotWasmRuntimeDiagnostics } = await import('/utils/wasmRuntimeDiagnostics.ts')
+        return { route: location.hash, visibility: document.visibilityState,
+          breadcrumbs: snapshotWasmRuntimeDiagnostics(),
+          tabs: [...document.querySelectorAll('[role="tab"]')].map(element => element.textContent),
+          dialogs: [...document.querySelectorAll('[role="dialog"]')].map(element => element.getAttribute('data-state')) }
+      })
+      error.message += `; import_start=${started}; startup=${JSON.stringify(diagnostic)}`
+      throw error
+    }
     assert.equal((await walletCall(page, 'getWalletAddress', 0)).address, actor.address)
     await visitRGB(page)
     return page
@@ -95,8 +124,31 @@ export async function runPwaRgbCases(t, fixture) {
     await ready(page)
     await expect.poll(() => new URL(page.url()).hash.startsWith('#/unlock'), poll).toBe(true)
     await page.locator('form input[type="password"]').fill(actor.password)
+    await page.evaluate(async () => {
+      const { resetWasmRuntimeDiagnostics } = await import('/utils/wasmRuntimeDiagnostics.ts')
+      resetWasmRuntimeDiagnostics()
+    })
+    const started = Date.now()
     await page.locator('form button[type="submit"]').click()
-    await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible()
+    try { await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: 90000 }) } catch (error) {
+      const diagnostic = await page.evaluate(async () => {
+        const { snapshotWasmRuntimeDiagnostics } = await import('/utils/wasmRuntimeDiagnostics.ts')
+        return { route: location.hash, breadcrumbs: snapshotWasmRuntimeDiagnostics(),
+          tabs: [...document.querySelectorAll('[role="tab"]')].map(element => ({
+            label: element.textContent, hidden: !!element.closest('[aria-hidden="true"], [inert]'),
+            display: getComputedStyle(element).display, boxes: element.getClientRects().length,
+          })), dialogs: [...document.querySelectorAll('[role="dialog"]')].map(element => ({
+            state: element.getAttribute('data-state'), open: getComputedStyle(element).display !== 'none',
+          })) }
+      })
+      error.message += `; reload_start=${started}; startup=${JSON.stringify(diagnostic)}`
+      throw error
+    }
+    console.log(`[RGB startup timing] ${JSON.stringify({ elapsed_ms: Date.now() - started,
+      breadcrumbs: await page.evaluate(async () => {
+        const { snapshotWasmRuntimeDiagnostics } = await import('/utils/wasmRuntimeDiagnostics.ts')
+        return snapshotWasmRuntimeDiagnostics()
+      }) })}`)
     assert.equal((await walletCall(page, 'getWalletAddress', 0)).address, actor.address)
     await visitRGB(page)
   }
@@ -129,7 +181,7 @@ export async function runPwaRgbCases(t, fixture) {
     const id = (await form.getByText('RGB Contract ID', { exact: true }).locator('..').locator('p').last().textContent()).trim()
     const key = (await form.getByText('Full asset name', { exact: true }).locator('..').locator('p').last().textContent()).trim()
     assert.match(id, /^rgb:/)
-    assert.match(key, schema === 'UDA' ? /^rgb11:o:/ : /^rgb11:f:/)
+    assert.match(key, schema === 'UDA' ? /^rgb11:o:[0-9a-f]{64}$/ : /^rgb11:f:[0-9a-f]{64}$/)
     const contractArmor = await form.locator('textarea[readonly]').inputValue()
     assert.match(contractArmor, /-----BEGIN RGB CONSIGNMENT-----/)
     const standard = await downloadBytes(sender, form.getByRole('button', { name: 'Download Standard Contract File (.rgb)', exact: true }))
@@ -137,7 +189,12 @@ export async function runPwaRgbCases(t, fixture) {
     const issued = await state(sender)
     assert.equal(issued.consistency_status, 'ok')
     assert.equal(sum(issued.available_assets, key), BigInt(schema === 'UDA' ? '1' : supply))
-    assert.ok(issued.ticker_infos.some(info => info.contract_id === id && info.canonical_name === key))
+    const info = issued.ticker_infos.find(info => info.contract_id === id)
+    assert.ok(info)
+    assert.equal(info.asset_key, key)
+    assert.equal(info.canonical_name ?? '', '')
+    assert.equal(info.verified, false)
+    assert.equal(info.ticker, `${ticker.toLowerCase()}@${info.genesis_address.slice(-12)}`)
     await form.getByRole('button', { name: 'Close', exact: true }).first().click()
     await expect(assetCard(sender, id)).toBeVisible()
     return { id, key, contractArmor, standard, issued }
@@ -149,6 +206,7 @@ export async function runPwaRgbCases(t, fixture) {
     return receive
   }
   const prepareSend = async (invoiceText, amount) => {
+    await sender.bringToFront()
     await assetCard(sender).getByRole('button', { name: 'Send', exact: true }).click()
     const send = dialog(sender, 'Send RGB11 Asset')
     await send.getByRole('button', { name: 'Invoice', exact: true }).click()
@@ -160,6 +218,115 @@ export async function runPwaRgbCases(t, fixture) {
   }
 
   try {
+    if (udaOnly) {
+      await check(requiredPwaRgbCases[10], async () => {
+        const unique = await issue('UDA', 'PWAUDAT', '1')
+        contractId = unique.id; canonicalName = unique.key
+        assert.match(canonicalName, /^rgb11:o:[0-9a-f]{64}$/)
+        const originalProofs = unique.issued.proofs.filter(proof => assetKey(proof.asset_name) === canonicalName)
+        assert.ok(originalProofs.length)
+        receiver = await fresh(receiverActor)
+        await receiver.getByRole('button', { name: 'Import RGB11 Contract', exact: true }).click()
+        const form = dialog(receiver, 'Import RGB11 Contract')
+        await form.locator('#rgb11-contract-file').setInputFiles({ name: unique.standard.filename,
+          mimeType: 'application/octet-stream', buffer: unique.standard.bytes })
+        await form.getByRole('button', { name: 'Import RGB11 Contract', exact: true }).click()
+        await expect(form.getByText('Imported; 0 wallet allocation(s) projected.', { exact: true })).toBeVisible({ timeout: 180000 })
+        await form.getByRole('button', { name: 'Close', exact: true }).click()
+        assert.equal(sum((await state(receiver)).assets, canonicalName), 0n)
+        const receive = await openReceive()
+        await receive.locator('select').nth(0).selectOption('out-of-band')
+        await receive.locator('select').nth(1).selectOption('witness')
+        await receive.getByPlaceholder('Enter amount to receive', { exact: true }).fill('1')
+        // Observe the real UI-created request; standard witness invoices use an
+        // independent receive key rather than the wallet's primary address script.
+        await receiver.evaluate(async () => {
+          const { default: manager } = await import('/utils/sat20.ts')
+          const create = manager.createRGB11Invoice.bind(manager)
+          manager.createRGB11Invoice = async (...args) => {
+            const result = await create(...args)
+            if (!result[0]) window.__rgbUDAReceiveRequest = result[1]
+            return result
+          }
+        })
+        await receive.getByRole('button', { name: 'Generate Invoice', exact: true }).click()
+        await expect(receive.locator('textarea[readonly]')).toBeVisible({ timeout: 180000 })
+        const uniqueInvoice = await receive.locator('textarea[readonly]').inputValue()
+        const uniqueRequest = await receiver.evaluate(() => window.__rgbUDAReceiveRequest)
+        assert.equal(uniqueRequest?.invoice, uniqueInvoice)
+        const uniqueReservation = (await state(receiver)).reservations.find(item => item.invoice === uniqueInvoice)
+        assert.equal(uniqueReservation?.contract_id, unique.id)
+        assert.equal(uniqueRequest.request_id, uniqueReservation?.request_id)
+        const requestedScript = Buffer.from(uniqueRequest.witness_script, 'base64').toString('hex')
+        assert.match(requestedScript, /^5120[0-9a-f]{64}$/)
+        assert.notEqual(requestedScript, receiverActor.pk_script)
+        beforePrepare = await control('snapshot')
+        const send = await prepareSend(uniqueInvoice, '1')
+        const transfer = (await state(sender)).transfers.find(item => item.direction === 'send' && item.invoice === uniqueInvoice)
+        assert.ok(transfer?.transfer_id)
+        const packageFile = await downloadBytes(sender, send.getByRole('button', { name: 'Download armored consignment for PWA', exact: true }))
+        assert.equal(sha256(packageFile.bytes), transfer.consignment_hash)
+        await expect(send.getByRole('button', { name: 'Confirm receiver validation and broadcast', exact: true })).toBeDisabled()
+        sameTxIDs(beforePrepare, await control('snapshot'))
+        await receive.locator('#rgb11-consignment-file').setInputFiles({ name: 'pwa-uda.asc',
+          mimeType: 'text/plain', buffer: packageFile.bytes })
+        await receive.getByRole('button', { name: 'Validate before broadcast', exact: true }).click()
+        await expect(receive.locator('textarea[readonly]')).toHaveCount(2, { timeout: 180000 })
+        const recipientSummary = JSON.parse(await receive.locator('textarea[readonly]').nth(1).inputValue())
+        assert.equal(recipientSummary.contract_id, unique.id)
+        assert.equal(recipientSummary.amount_raw, '1'); assert.equal(recipientSummary.precision, 0)
+        assert.equal(recipientSummary.witness_txid, transfer.witness_txid)
+        assert.equal(recipientSummary.consignment_hash, transfer.consignment_hash)
+        assert.equal(recipientSummary.invoice_hash, sha256(uniqueInvoice))
+        assert.equal(sum((await state(receiver)).available_assets, canonicalName), 0n)
+        const broadcast = send.getByRole('button', { name: 'Confirm receiver validation and broadcast', exact: true })
+        await send.locator('#rgb-summary-0').fill(JSON.stringify({ ...recipientSummary, amount_raw: '2' }))
+        await send.getByRole('button', { name: 'Match summary fields', exact: true }).click()
+        await expect(send.getByText('Validation summary does not match this transfer, recipient, amount or consignment.', { exact: true })).toBeVisible()
+        await expect(send.locator('input[type="checkbox"]')).toBeDisabled()
+        await expect(broadcast).toBeDisabled()
+        sameTxIDs(beforePrepare, await control('snapshot'))
+        await send.locator('#rgb-summary-0').fill(JSON.stringify(recipientSummary))
+        await send.getByRole('button', { name: 'Match summary fields', exact: true }).click()
+        await send.locator('input[type="checkbox"]').check()
+        await broadcast.click()
+        await expect(send.getByText(`Transaction broadcast: ${transfer.witness_txid}`, { exact: true })).toBeVisible({ timeout: 180000 })
+        const submitted = await control('snapshot')
+        assert.equal(submitted.l1.broadcast_count[transfer.witness_txid], 1)
+        const actual = Transaction.fromHex(await evidence(`/btc/rawtx/${transfer.witness_txid}`))
+        assert.equal(actual.getId(), transfer.witness_txid)
+        assert.ok(actual.ins.every(input => input.witness.length))
+        const actualInputs = actual.ins.map(input => `${Buffer.from(input.hash).reverse().toString('hex')}:${input.index}`)
+        assert.deepEqual([...actualInputs].sort(), [...transfer.input_outpoints].sort())
+        assert.ok(originalProofs.some(proof => actualInputs.includes(proof.outpoint)), 'UDA transfer did not consume its original carrier')
+        const [recipientTxid, recipientIndex] = recipientSummary.recipient_outpoint.split(':')
+        assert.equal(recipientTxid, actual.getId())
+        assert.equal(actual.outs[Number(recipientIndex)].script.toString('hex'), requestedScript)
+        await control('confirm-l1', { wait_anchors: false })
+        await receive.getByRole('button', { name: 'Complete receive after broadcast', exact: true }).click()
+        await expect(receive.getByText('Consignment accepted. Notify the sender through the external channel so it can record the out-of-band ACK.', { exact: true }))
+          .toBeVisible({ timeout: 180000 })
+        await sender.keyboard.press('Escape'); await receiver.keyboard.press('Escape')
+        await refreshRGB(sender)
+        await expect.poll(async () => sum((await state(receiver)).available_assets, canonicalName), poll).toBe(1n)
+        await expect.poll(async () => sum((await state(sender)).assets, canonicalName), poll).toBe(0n)
+        const proof = (await state(receiver)).proofs.find(item => item.outpoint === recipientSummary.recipient_outpoint && assetKey(item.asset_name) === canonicalName)
+        assert.equal(proof?.status, 'settled'); assert.ok(proof.confirmations >= 1)
+        assert.equal((await locks(receiver, receiverActor))[proof.outpoint]?.reason, 'rgb')
+        const [status] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
+        assert.ok(status.exists && status.unspent && status.confirmations >= 1)
+        await reload(sender, senderActor); await reload(receiver, receiverActor)
+        assert.equal(sum((await state(sender)).assets, canonicalName), 0n)
+        assert.equal(sum((await state(receiver)).available_assets, canonicalName), 1n)
+        assert.ok((await state(receiver)).proofs.some(saved => saved.outpoint === proof.outpoint && saved.validation_hash === proof.validation_hash))
+        assert.equal((await locks(receiver, receiverActor))[proof.outpoint]?.reason, 'rgb')
+        await expect(assetCard(receiver)).toContainText('Available: 1')
+        await expect(assetCard(receiver).getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+        const sentState = await state(sender), receivedState = await state(receiver)
+        assert.equal(sum(sentState.assets, canonicalName) + sum(receivedState.assets, canonicalName), 1n)
+      })
+      return
+    }
     await check(requiredPwaRgbCases[0], async () => {
       sender = await fresh(senderActor)
       const issued = await issue('NIA', 'PWARGB', '1000')
@@ -177,6 +344,27 @@ export async function runPwaRgbCases(t, fixture) {
         assert.equal(raw.getId(), txid)
         assert.equal(raw.outs[Number(vout)].script.toString('hex'), status.pk_script)
       }
+      // Garbage selection must honor the same carrier protection as normal
+      // sends, including when the caller explicitly names the carrier input.
+      const before = await control('snapshot')
+      const beforeAmount = await walletCall(sender, 'getAssetAmount', senderActor.address, '::')
+      for (const proof of ownProofs) {
+        const refused = await sender.evaluate(async ({ address, point }) =>
+          window.sat20wallet_wasm.sendGarbage(address, [point], 0, '1'),
+        { address: receiverActor.address, point: proof.outpoint })
+        assert.ok(refused && typeof refused.code === 'number', 'carrier refusal must return a WASM envelope')
+        assert.notEqual(refused.code, 0, 'garbage send accepted a confirmed RGB carrier')
+      }
+      const after = await control('snapshot')
+      sameTxIDs(before, after)
+      assert.deepEqual(after.l1.pending_txids, before.l1.pending_txids)
+      assert.deepEqual(await walletCall(sender, 'getAssetAmount', senderActor.address, '::'), beforeAmount)
+      assert.deepEqual(await locks(sender, senderActor), locked)
+      assert.equal(sum((await state(sender)).available_assets, canonicalName), 1000n)
+      for (const proof of ownProofs) {
+        const [status] = await evidence('/v3/bitcoin/utxos/status', { outpoints: [proof.outpoint] })
+        assert.equal(status.unspent, true, 'refused garbage send spent a protected carrier')
+      }
     })
 
     await check(requiredPwaRgbCases[1], async () => {
@@ -187,10 +375,16 @@ export async function runPwaRgbCases(t, fixture) {
         mimeType: 'application/octet-stream', buffer: contractFile.bytes })
       await form.getByRole('button', { name: 'Import RGB11 Contract', exact: true }).click()
       await expect(form.getByText('Imported; 0 wallet allocation(s) projected.', { exact: true })).toBeVisible({ timeout: 180000 })
-      await receiver.keyboard.press('Escape')
+      await receiver.bringToFront()
+      await form.getByRole('button', { name: 'Close', exact: true }).click()
       await expect(form).toBeHidden()
       const received = await state(receiver)
-      assert.ok(received.ticker_infos.some(info => info.contract_id === contractId && info.canonical_name === canonicalName))
+      const info = received.ticker_infos.find(info => info.contract_id === contractId)
+      assert.ok(info)
+      assert.equal(info.asset_key, canonicalName)
+      assert.equal(info.canonical_name ?? '', '')
+      assert.equal(info.verified, false)
+      assert.equal(info.ticker, `pwargb@${info.genesis_address.slice(-12)}`)
       assert.equal(sum(received.assets, canonicalName), 0n)
       assert.equal(sum(received.available_assets, canonicalName), 0n)
       await expect(assetCard(receiver)).toContainText('Available: 0')
@@ -325,8 +519,14 @@ export async function runPwaRgbCases(t, fixture) {
       const before = await control('snapshot')
       const lockedBefore = await locks(sender, senderActor)
       let receive = await openReceive()
-      await receive.getByRole('button', { name: 'Check receive request status', exact: true }).click()
-      await receive.getByRole('button', { name: 'Keep old record and start a new request', exact: true }).click()
+      // Settled receives remain in transfer history, while the resumable request
+      // list is empty. The next invoice starts from the actual fresh UI form.
+      const prior = (await state(receiver)).transfers.find(item => item.invoice === invoice && item.direction === 'receive')
+      assert.equal(prior?.status, 'settled')
+      assert.ok(!(await state(receiver)).reservations.some(item => item.request_id === requestId))
+      await expect(receive.locator('textarea[readonly]')).toHaveCount(0)
+      await receive.locator('select').nth(0).selectOption('out-of-band')
+      await receive.locator('select').nth(1).selectOption('witness')
       await receive.getByPlaceholder('Enter amount to receive', { exact: true }).fill('5')
       await receive.getByRole('button', { name: 'Generate Invoice', exact: true }).click()
       await expect(receive.locator('textarea[readonly]')).toBeVisible({ timeout: 180000 })
@@ -345,7 +545,8 @@ export async function runPwaRgbCases(t, fixture) {
         await dialog.accept()
       })
       await sender.getByRole('button', { name: 'Cancel and release reservation', exact: true }).click()
-      await expect.poll(async () => (await state(sender)).transfers.find(item => item.transfer_id === prepared.transfer_id)?.status, poll).toBe('cancelled')
+      await expect.poll(async () => (await state(sender)).transfers.find(item => item.transfer_id === prepared.transfer_id)?.status, poll).toBe('rejected')
+      assert.equal((await state(sender)).transfers.find(item => item.transfer_id === prepared.transfer_id)?.reject_reason, 'user-rejected')
       assert.equal(sum((await state(sender)).available_assets, canonicalName), 975n)
       const lockedAfter = await locks(sender, senderActor)
       for (const point of prepared.input_outpoints) {

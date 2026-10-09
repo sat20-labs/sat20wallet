@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -295,6 +296,10 @@ func (p *Manager) CoBatchSendV4_SatsNet(localWallet common.Wallet, dest []*SendA
 	if err != nil {
 		return "", err
 	}
+	peer, err := p.configuredSigningPeer(peerPubKey)
+	if err != nil {
+		return "", err
+	}
 
 	utxos, fees, err := p.GetUtxosWithAssetV2_SatsNet(channelId, totalValue, totalAmt, asset, nil)
 	if err != nil {
@@ -348,7 +353,7 @@ func (p *Manager) CoBatchSendV4_SatsNet(localWallet common.Wallet, dest []*SendA
 	if err != nil {
 		return "", err
 	}
-	peerSig, err := p.serverNode.client.SendSigReq(&req, sig)
+	peerSig, err := peer.client.SendSigReq(&req, sig)
 	if err != nil {
 		return "", err
 	}
@@ -559,6 +564,10 @@ func (p *Manager) AddToSignDataSatsNet(localWallet common.Wallet, tx *swire.MsgT
 func (p *Manager) reqRemoteSignAndBroadcast(localWallet common.Wallet, witness, peerPubKey []byte,
 	reason, channelId string, signData []*RemoteSignData, txsSignInfo []*wwire.TxSignInfo,
 	txs []*wire.MsgTx, txs2 []*swire.MsgTx, md []byte) (*wire.MsgTx, int64, error) {
+	peer, err := p.configuredSigningPeer(peerPubKey)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	localKey := localWallet.GetPaymentPubKey().SerializeCompressed()
 	req := wwire.SignRequest{
@@ -578,7 +587,7 @@ func (p *Manager) reqRemoteSignAndBroadcast(localWallet common.Wallet, witness, 
 	if err != nil {
 		return nil, 0, err
 	}
-	peerSig, err := p.serverNode.client.SendSigReq(&req, sig)
+	peerSig, err := peer.client.SendSigReq(&req, sig)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -627,23 +636,38 @@ func (p *Manager) ReqRemoteSignAndBroadcast(localWallet common.Wallet, witness, 
 }
 
 func (p *Manager) channelWitness(localWallet common.Wallet, channelId string) ([]byte, []byte, error) {
-	if p.serverNode == nil || p.serverNode.Pubkey == nil || p.serverNode.client == nil {
-		return nil, nil, fmt.Errorf("server node is not ready")
+	if localWallet == nil {
+		return nil, nil, fmt.Errorf("wallet is not created/unlocked")
 	}
 	localKey := localWallet.GetPaymentPubKey().SerializeCompressed()
-	peerPubKey := p.serverNode.Pubkey.SerializeCompressed()
-	witness, pkScript, err := GetP2WSHscript(localKey, peerPubKey)
-	if err != nil {
-		return nil, nil, err
+	for _, peer := range append([]*Node{p.serverNode}, p.bootstrapNode...) {
+		if peer == nil || peer.Pubkey == nil || peer.client == nil {
+			continue
+		}
+		peerPubKey := peer.Pubkey.SerializeCompressed()
+		witness, pkScript, err := GetP2WSHscript(localKey, peerPubKey)
+		if err != nil {
+			return nil, nil, err
+		}
+		derived, err := GetP2WSHaddressFromScript(pkScript)
+		if err != nil {
+			return nil, nil, err
+		}
+		if derived == channelId {
+			return witness, peerPubKey, nil
+		}
 	}
-	channelId2, err := GetP2WSHaddressFromScript(pkScript)
-	if err != nil {
-		return nil, nil, err
+	return nil, nil, fmt.Errorf("invalid channel %s", channelId)
+}
+
+func (p *Manager) configuredSigningPeer(peerPubKey []byte) (*Node, error) {
+	for _, peer := range append([]*Node{p.serverNode}, p.bootstrapNode...) {
+		if peer != nil && peer.Pubkey != nil && peer.client != nil &&
+			bytes.Equal(peer.Pubkey.SerializeCompressed(), peerPubKey) {
+			return peer, nil
+		}
 	}
-	if channelId2 != channelId {
-		return nil, nil, fmt.Errorf("invalid channel %s", channelId)
-	}
-	return witness, peerPubKey, nil
+	return nil, fmt.Errorf("channel signing peer is not configured")
 }
 
 func (p *Manager) ChannelWitness(localWallet common.Wallet, channelId string) ([]byte, []byte, error) {

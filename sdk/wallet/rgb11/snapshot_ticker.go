@@ -72,7 +72,7 @@ func snapshotPrimaryAssetFromGenesis(raw []byte, receipt *ValidationReceipt) (in
 	if !schemaOK || !typesOK || !genesisOK {
 		return indexer.AssetName{}, ErrValidationReceipt
 	}
-	metadata, err := schemas.ExtractGenesisAssetMetadata(schema, types, genesis)
+	_, err = schemas.ExtractGenesisAssetMetadata(schema, types, genesis)
 	if err != nil {
 		return indexer.AssetName{}, err
 	}
@@ -80,5 +80,5 @@ func snapshotPrimaryAssetFromGenesis(raw []byte, receipt *ValidationReceipt) (in
 	if !descriptor.Fungible {
 		assetType = indexer.ASSET_TYPE_NFT
 	}
-	return NewCanonicalAssetName(receipt.ContractID, metadata.Ticker, assetType)
+	return NewContractAssetKey(receipt.ContractID, assetType)
 }

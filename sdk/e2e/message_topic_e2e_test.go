@@ -2,7 +2,9 @@ package e2e
 
 import (
 	"bytes"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/sat20-labs/sat20wallet/sdk/wallet"
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -66,6 +68,18 @@ func TestRealSatoshiNetMessageTopicSDKToCore(t *testing.T) {
 	require.NoError(t, member.InitializeAccountManagement("123456"))
 	require.NoError(t, owner.BindAccountToCurrentCoreNode())
 	require.NoError(t, member.BindAccountToCurrentCoreNode())
+
+	// Peer connectivity and DKVS binding precede STP RPC readiness. Wait for
+	// the existing health gate before exercising the message service itself.
+	client := &http.Client{Timeout: time.Second}
+	require.Eventually(t, func() bool {
+		response, err := client.Get("http://" + f.Network.Core.stpAddr + "/health")
+		if err != nil {
+			return false
+		}
+		defer response.Body.Close()
+		return response.StatusCode == http.StatusOK
+	}, 15*time.Second, 100*time.Millisecond, "CoreNode STP message service must be ready")
 
 	ownerID := dkvsindexer.AccountID(owner.GetWallet().GetPubKey().SerializeCompressed())
 	memberID := dkvsindexer.AccountID(member.GetWallet().GetPubKey().SerializeCompressed())

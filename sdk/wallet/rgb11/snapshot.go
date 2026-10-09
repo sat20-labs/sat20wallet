@@ -10,6 +10,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	coreconsignment "github.com/sat20-labs/rgb11/consignment"
 	corewallet "github.com/sat20-labs/rgb11/wallet"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 type SnapshotRecord struct {
@@ -165,12 +166,32 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 	pendings := make([]*PendingTransfer, 0)
 	contractObjects := make(map[string]string)
 	seen := make(map[string]bool)
+	namingContracts := make(map[string]bool)
 	for _, record := range records {
 		if record.Key == "" || len(record.Value) == 0 || seen[record.Key] {
 			return ErrValidationReceipt
 		}
 		seen[record.Key] = true
 		switch {
+		case strings.HasPrefix(record.Key, "local-name-"):
+			id := strings.TrimPrefix(record.Key, "local-name-")
+			if raw, err := hex.DecodeString(id); err != nil || len(raw) != 32 || id != strings.ToLower(id) {
+				return ErrValidationReceipt
+			}
+			if _, err := (LocalNameMetadata{}).Rename(string(record.Value)); err != nil {
+				return ErrValidationReceipt
+			}
+			namingContracts[id] = true
+		case strings.HasPrefix(record.Key, "registered-name-"):
+			id := strings.TrimPrefix(record.Key, "registered-name-")
+			signed, err := dkvsindexer.UnmarshalRecord(record.Value)
+			if err != nil {
+				return ErrValidationReceipt
+			}
+			if _, err := VerifyRGB11RegistrationForClient(signed, id, rgb11RegistryAuthority()); err != nil {
+				return ErrValidationReceipt
+			}
+			namingContracts[id] = true
 		case strings.HasPrefix(record.Key, "contract-object-"):
 			contractHash := strings.TrimPrefix(record.Key, "contract-object-")
 			objectHash := string(record.Value)
@@ -248,6 +269,20 @@ func validateProjectionSnapshot(records []SnapshotRecord) error {
 				return ErrValidationReceipt
 			}
 		default:
+			return ErrValidationReceipt
+		}
+	}
+	// Alias referential checks apply only to snapshots that contain aliases.
+	// Ordinary ownership snapshots retain the existing receipt validation below.
+	if len(namingContracts) != 0 {
+		for _, receipt := range receipts {
+			identity, err := NewContractAssetKey(receipt.ContractID, indexer.ASSET_TYPE_FT)
+			if err != nil {
+				return ErrValidationReceipt
+			}
+			delete(namingContracts, identity.Ticker)
+		}
+		if len(namingContracts) != 0 {
 			return ErrValidationReceipt
 		}
 	}

@@ -1135,11 +1135,15 @@ func accountStatus(this js.Value, args []js.Value) any {
 	if _mgr == nil {
 		return createJsRet(nil, -1, "Manager not initialized")
 	}
-	data, err := accountStructData(_mgr.GetAccountManagementStatus())
-	if err != nil {
-		return createJsRet(nil, -1, err.Error())
-	}
-	return createJsRet(data, 0, "ok")
+	// A managed mutation can hold the wallet lock while awaiting IndexedDB.
+	// Yield the JS callback so the transaction can finish before reading status.
+	return js.Global().Get("Promise").New(createAsyncJsHandler(func() (interface{}, int, string) {
+		data, err := accountStructData(_mgr.GetAccountManagementStatus())
+		if err != nil {
+			return nil, -1, err.Error()
+		}
+		return data, 0, "ok"
+	}))
 }
 
 func init() {

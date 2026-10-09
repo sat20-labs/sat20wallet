@@ -1346,6 +1346,121 @@ func (p *Manager) rehydratePendingFundingRuntime() {
 	}
 }
 
+// rehydratePendingSplicingRuntime restores the persisted post-negotiation
+// channel without signing, broadcasting or rewriting either database record.
+// The caller holds channelIdentityMu after unlocking the wallet catalog.
+func (p *Manager) rehydratePendingSplicingRuntime() error {
+	reservations := p.GetSplicingReservations()
+	var recoveryErrors []error
+	for id, original := range reservations {
+		if original == nil || original.Channel != nil || p.GetChannel(original.ChannelId) != nil {
+			continue
+		}
+		in := original.Status >= RS_SPLICINGIN_STARTED && original.Status <= RS_SPLICINGIN_ANCHOR_BROADCASTED
+		out := original.Status >= RS_SPLICINGOUT_STARTED && original.Status <= RS_SPLICINGOUT_BROADCASTED
+		if !in && !out {
+			continue
+		}
+		loaded, err := LoadReservation(p.db, p, RESV_TYPE_SPLICING, id)
+		if err != nil {
+			recoveryErrors = append(recoveryErrors, fmt.Errorf("reload splicing reservation %d: %w", id, err))
+			continue
+		}
+		replacement, ok := loaded.(*SplicingReservation)
+		if !ok || replacement == nil || replacement.Id != id || replacement.ChannelId != original.ChannelId ||
+			replacement.WalletId != original.WalletId || replacement.Status != original.Status {
+			recoveryErrors = append(recoveryErrors, fmt.Errorf("splicing reservation %d persisted identity or phase mismatch", id))
+			continue
+		}
+		channel, err := p.loadPendingSplicingChannel(replacement)
+		if err != nil {
+			recoveryErrors = append(recoveryErrors, fmt.Errorf("restore splicing reservation %d: %w", id, err))
+			continue
+		}
+
+		p.mutex.Lock()
+		if p.splicingChannelMap[id] != original || original.Channel != nil ||
+			original.Status != replacement.Status || p.channelMap[channel.ChannelId] != nil {
+			p.mutex.Unlock()
+			continue
+		}
+		conflict := false
+		for otherID, other := range p.resvMap {
+			if otherID != id && other != nil &&
+				reservationMatchesChannelContext(other, channel.ChannelId, other.GetWalletId()) {
+				conflict = true
+				break
+			}
+		}
+		if conflict {
+			p.mutex.Unlock()
+			recoveryErrors = append(recoveryErrors, fmt.Errorf("channel %s has another unfinished operation", channel.ChannelId))
+			continue
+		}
+		replacement.Channel = channel
+		p.addResvLocked(replacement)
+		p.installChannelLocked(channel)
+		p.mutex.Unlock()
+		if tower := p.GetWatchTower(); tower != nil {
+			tower.CleanCurrentRemoteCommitTx(channel)
+		}
+	}
+	return errors.Join(recoveryErrors...)
+}
+
+func (p *Manager) loadPendingSplicingChannel(resv *SplicingReservation) (*Channel, error) {
+	wallet := resv.LocalWallet()
+	if resv.ChannelId == "" || resv.Id <= 0 || resv.WalletId.Id == 0 || wallet == nil ||
+		wallet.GetWalletId() != resv.WalletId {
+		return nil, fmt.Errorf("invalid splicing channel or local wallet identity")
+	}
+	p.mutex.RLock()
+	info := p.walletInfoMap[resv.WalletId.Id]
+	accountExists := info != nil && uint64(resv.WalletId.SubAccountId) < uint64(info.Accounts)
+	p.mutex.RUnlock()
+	if !accountExists {
+		return nil, fmt.Errorf("splicing wallet account is unavailable")
+	}
+	stored, err := p.LoadChannelInDB(resv.ChannelId)
+	if err != nil {
+		return nil, err
+	}
+	if stored.ChannelId != resv.ChannelId || stored.Status != CS_READY || stored.UpdateTime != resv.Id {
+		return nil, fmt.Errorf("channel %s identity, READY state or splicing generation mismatch", resv.ChannelId)
+	}
+	if stored.LocalWalletId != resv.WalletId.Id || stored.LocalChanCfg.WalletId != resv.WalletId.SubAccountId {
+		return nil, fmt.Errorf("channel %s wallet/account does not match splicing reservation", resv.ChannelId)
+	}
+	if stored.LocalChanCfg.PaymentKey == nil || stored.RemoteChanCfg.PaymentKey == nil ||
+		wallet.GetPaymentPubKey() == nil || !stored.LocalChanCfg.PaymentKey.IsEqual(wallet.GetPaymentPubKey()) {
+		return nil, fmt.Errorf("channel %s local payment key mismatch", resv.ChannelId)
+	}
+	expectedID, err := GetP2WSHaddress(stored.LocalChanCfg.PaymentKey.SerializeCompressed(),
+		stored.RemoteChanCfg.PaymentKey.SerializeCompressed())
+	if err != nil || expectedID != resv.ChannelId {
+		return nil, fmt.Errorf("channel %s payment keys do not match channel id", resv.ChannelId)
+	}
+	in := resv.Status >= RS_SPLICINGIN_STARTED && resv.Status <= RS_SPLICINGIN_ANCHOR_BROADCASTED
+	if (!in || resv.NeedSendSplicingTx) && resv.SplicingTx == nil {
+		return nil, fmt.Errorf("splicing transaction is missing")
+	}
+	if resv.RecoverAscended {
+		if !in || resv.NeedSendSplicingTx || resv.RecoveredAnchorTxId == "" ||
+			resv.RecoveredAnchorOutpoint != resv.RecoveredAnchorTxId+":0" {
+			return nil, fmt.Errorf("invalid recovered Anchor identity")
+		}
+	} else if resv.AnchorTx == nil {
+		return nil, fmt.Errorf("splicing Anchor transaction is missing")
+	}
+	for _, tx := range resv.PreTxs {
+		if tx == nil {
+			return nil, fmt.Errorf("splicing prerequisite transaction is missing")
+		}
+	}
+	return &Channel{ChannelInDB: *stored, manager: p, localWallet: wallet,
+		PeerRPC: p.GetPeerNodeClient(stored)}, nil
+}
+
 func (p *Manager) rehydratePendingClosingRuntime() {
 	p.mutex.RLock()
 	reservations := make(map[int64]*ClosingReservation, len(p.closingChannelMap))

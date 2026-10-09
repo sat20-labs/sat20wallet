@@ -223,7 +223,13 @@ func (p *Manager) resumeRGB11Send(ctx context.Context, transferID string) (*wire
 					if err := manager.recoverRGB11ChannelWitness(batch); err != nil {
 						return result, err
 					}
-					if err := result.tx.Deserialize(bytes.NewReader(first.SignedTx)); err != nil {
+					// loadRGB11AddressBatch returns separately loaded records; witness
+					// recovery updates those records rather than the original first.
+					recovered, err := manager.projectionStore.LoadPendingTransfer(transferID)
+					if err != nil {
+						return result, err
+					}
+					if err := result.tx.Deserialize(bytes.NewReader(recovered.SignedTx)); err != nil {
 						return result, err
 					}
 				}

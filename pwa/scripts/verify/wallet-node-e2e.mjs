@@ -5,6 +5,9 @@ import { address as bitcoinAddress, networks, Transaction } from 'bitcoinjs-lib'
 export const requiredPwaNodeCases = [
   'Node PWA: Core stake signs real L1 funding and appears in real node indexing',
   'Node PWA: Miner stake signs real L1 funding and appears in real node indexing',
+  'Node PWA: Core cannot unstake while its independent Miner child is active',
+  'Node PWA: already-staked independent Miner safely unstake through signed local action',
+  'Node PWA: independent Core without child miners safely unstake through signed local action',
 ]
 
 // Run last: these UI actions genuinely add eligible candidates to the network.
@@ -24,6 +27,75 @@ export async function runPwaNodeCases(t, fixture) {
     assert.ok(!result.error, result.error)
     return result
   }
+  const readMiner = async (page, publicKey) => page.evaluate(async pubkey => {
+    const api = (await import('/apis/satnet.ts')).default
+    return api.getMinerInfo({ pubkey, network: 'testnet' })
+  }, publicKey)
+  const readLocalAction = async (page, reservationID) => page.evaluate(async id => {
+    const [error, response] = await (await import('/utils/stp.ts')).default.allReservations()
+    if (error) throw error
+    const item = response.reservations.find(entry => String(entry.reservation_id) === String(id))
+    if (!item?.json) return null
+    return { outerStatus: item.status, action: JSON.parse(item.json) }
+  }, reservationID)
+  const readOperationLog = async (page, reservationID) => page.evaluate(async id => {
+    const [error, records] = await (await import('/utils/operationLog.ts')).getOperationLogs()
+    if (error) throw error
+    return records.find(record => record.action === 'miner_unstake' &&
+      record.parameters?.action === 'unstakeminer' && String(record.reservation_id) === String(id)) || null
+  }, reservationID)
+  const totalAsset = async (page, address, asset) => {
+    const amount = await walletCall(page, 'getAssetAmount', address, asset)
+    return BigInt(amount.availableAmt) + BigInt(amount.lockedAmt)
+  }
+  const waitForUnstake = async (page, reservationID) => {
+    const deadline = Date.now() + 15 * 60 * 1000
+    let lastMineAt = 0
+    while (Date.now() < deadline) {
+      const log = await readOperationLog(page, reservationID)
+      if (log?.status === 'failed') throw new Error(`MinerUnstake failed: ${JSON.stringify(log)}`)
+      if (log?.status === 'succeeded') return log
+
+      const localAction = await readLocalAction(page, reservationID)
+      const action = localAction?.action
+      if (action?.TxId) {
+        if (action.IsL1Tx) {
+          const snapshot = await control('snapshot')
+          if (snapshot.l1.pending_txids.includes(action.TxId)) {
+            assert.deepEqual(snapshot.l1.pending_txids, [action.TxId], 'unstake must not confirm unrelated L1 transactions')
+            const confirmed = await control('confirm-l1', { wait_anchors: false })
+            assert.ok(confirmed.l1.confirmed_txids.includes(action.TxId), `unstake L1 transaction did not confirm: ${action.TxId}`)
+          }
+        } else if (Date.now() - lastMineAt >= 3000) {
+          // Advance the existing isolated SatoshiNet fixture so the local
+          // action monitor can observe its current L2 transaction.
+          await control('mine')
+          lastMineAt = Date.now()
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 750))
+    }
+    const finalLog = await readOperationLog(page, reservationID)
+    const finalAction = await readLocalAction(page, reservationID).catch(error => ({ readError: error.message }))
+    throw new Error(`MinerUnstake did not complete within 15 minutes: ${JSON.stringify({ finalLog, finalAction })}`)
+  }
+  const openStakeWallet = async actor => {
+    assert.ok(actor?.mnemonic && actor.password && actor.address)
+    const page = await device()
+    await page.evaluate(() => { location.hash = '#/import' })
+    await page.getByRole('textbox', { name: 'Recovery Phrase', exact: true }).fill(actor.mnemonic)
+    await page.getByLabel('New Wallet Password', { exact: true }).fill(actor.password)
+    await page.getByLabel('Confirm Password', { exact: true }).fill(actor.password)
+    await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
+    await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: 90000 })
+    assert.equal((await walletCall(page, 'getWalletAddress', 0)).address, actor.address)
+    return page
+  }
+  // The full wallet suite activates POS v2 in its earlier POS group. A
+  // focused Node run must reach the same real fixture boundary before staking.
+  const start = await control('snapshot')
+  const activated = start.height < fixture.activation_height ? await control('activate') : start
+  assert.ok(activated.height >= fixture.activation_height, 'Node cases require the activated POS-v2 chain')
   for (const [i, type, actor, isCore] of [
     [0, 'Core', fixture.coreStakeWallet, true],
     [1, 'Miner', fixture.minerStakeWallet, false],
@@ -37,7 +109,7 @@ export async function runPwaNodeCases(t, fixture) {
         await page.getByLabel('New Wallet Password', { exact: true }).fill(actor.password)
         await page.getByLabel('Confirm Password', { exact: true }).fill(actor.password)
         await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
-        await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible()
+        await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: 90000 })
         const publicKey = (await walletCall(page, 'getWalletPubkey', 0)).pubKey
         assert.equal((await walletCall(page, 'getWalletAddress', 0)).address, actor.address)
         const peer = fixture.config.Peers.find(value => value.startsWith(isCore ? 'b@' : 's@')).split('@')[1]
@@ -128,6 +200,10 @@ export async function runPwaNodeCases(t, fixture) {
         assert.equal(indexed.ServerNode, peer)
         assert.equal(indexed.AscendUtxo, fundingPoint)
         assert.equal(indexed.ChannelAddr, channel)
+        if (indexed.AssetName !== fixture.stake.asset || String(indexed.AssetAmt) !== fixture.stake.amount) {
+          console.log(JSON.stringify({ nodeStakeIndexMismatch: { type, indexed, expected: fixture.stake,
+            funding: { outpoint: fundingPoint, asset: stake }, anchor } }))
+        }
         assert.equal(indexed.AssetName, fixture.stake.asset)
         assert.equal(String(indexed.AssetAmt), fixture.stake.amount)
         await page.evaluate(() => { location.hash = '#/wallet/setting' })
@@ -145,5 +221,79 @@ export async function runPwaNodeCases(t, fixture) {
     }
     finally { await page.context().close() }
   }
+  if (errors.length) throw new AggregateError(errors, 'Node stake prerequisites failed; dependent unstake cases were not run')
+
+  for (const [caseIndex, actor, shouldBeCore] of [
+    [2, fixture.coreNodeWallet, true],
+    [3, fixture.minerStakeWallet, false],
+    [4, fixture.coreStakeWallet, true],
+  ]) {
+    let page
+    try {
+      await check(requiredPwaNodeCases[caseIndex], async () => {
+        page = await openStakeWallet(actor)
+        const publicKey = (await walletCall(page, 'getWalletPubkey', 0)).pubKey
+        const status = await readMiner(page, publicKey)
+        assert.equal(status.code, 0, status.msg)
+        assert.equal(status.data.isCoreNode, shouldBeCore)
+
+        if (caseIndex === 2) {
+          // The Miner stakes to the running Core process, rather than to the
+          // independent Core candidate used by the first stake case.
+          assert.ok(status.data.childCount > 0, 'Core must still have its independent staked Miner child')
+          const before = await control('snapshot')
+          assert.deepEqual(before.l1.pending_txids, [])
+          await assert.rejects(walletCall(page, 'minerUnstake', '1'), /core node still has child miners/i)
+          const after = await control('snapshot')
+          assert.deepEqual(after.l1.broadcast_count, before.l1.broadcast_count)
+          assert.deepEqual(after.l1.pending_txids, before.l1.pending_txids)
+          assert.deepEqual(after.mempool_txids.filter(txid => !before.mempool_txids.includes(txid)), [],
+            'Core unstake rejection broadcast to SatoshiNet')
+          return
+        }
+
+        if (caseIndex === 3) {
+          assert.equal(status.data.childCount, 0, 'independent Miner must not own child nodes')
+        } else {
+          assert.equal(status.data.childCount, 0, 'independent Core candidate must not own child miners')
+        }
+
+        const beforeSnapshot = await control('snapshot')
+        assert.deepEqual(beforeSnapshot.l1.pending_txids, [], 'previous node action left L1 transactions pending')
+        const beforeBalance = await totalAsset(page, actor.address, fixture.stake.asset)
+        const receipt = await walletCall(page, 'minerUnstake', '1')
+        const reservationID = Number(receipt.resvId)
+        assert.ok(Number.isSafeInteger(reservationID) && reservationID >= 0,
+          'unstake must create a tracked local action')
+        assert.match(receipt.txId, /^[0-9a-f]{64}$/)
+        const completion = await waitForUnstake(page, receipt.resvId)
+        assert.equal(completion.status, 'succeeded')
+        assert.equal(completion.action, 'miner_unstake')
+        assert.equal(completion.reservation_type, 'localaction')
+        assert.equal(String(completion.reservation_id), String(receipt.resvId))
+
+        await expect.poll(async () => {
+          const result = await readMiner(page, publicKey)
+          if (result.code === -1 && result.msg === 'not found') {
+            assert.equal(result.data, null)
+            return null
+          }
+          assert.equal(result.code, 0, result.msg)
+          assert.ok(result.data, 'successful miner lookup must contain its indexed role')
+          return result.data
+        }, { timeout: 15 * 60 * 1000, intervals: [500, 1000, 2000] }).toBeNull()
+        assert.equal(await totalAsset(page, actor.address, fixture.stake.asset),
+          beforeBalance + BigInt(fixture.stake.amount), 'unstake did not return the exact indexed stake amount')
+        const finalSnapshot = await control('snapshot')
+        assert.deepEqual(finalSnapshot.l1.pending_txids, [], 'unstake left an unconfirmed L1 transaction')
+        assert.equal((await walletCall(page, 'getWalletAddress', 0)).address, actor.address)
+      })
+    } catch (error) {
+      if (t.selectedCases) throw error
+      errors.push(new Error(`${shouldBeCore ? 'Core' : 'Miner'} unstake: ${error.message}`, { cause: error }))
+      break
+    } finally { if (page) await page.context().close().catch(() => {}) }
+  }
+
   if (errors.length) throw new AggregateError(errors, 'Node PWA acceptance failed')
 }

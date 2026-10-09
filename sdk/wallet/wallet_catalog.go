@@ -44,6 +44,9 @@ func (p *Manager) GetWalletCatalogSnapshot() (WalletCatalogSnapshot, error) {
 	var root *WalletInfo
 	var err error
 	if p.accountProfile == nil {
+		if first := p.firstWalletLocked(); first != nil && first.Type == WALLET_TYPE_PRIVKEY {
+			return result, nil
+		}
 		root, err = p.accountManagementCandidateRootLocked()
 	} else {
 		root, err = p.accountManagementRootWalletLocked()

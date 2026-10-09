@@ -308,6 +308,7 @@ func mergeBatchSignedPsbt_SatsNet(signedHex []string, network string) (string, e
 		return "", fmt.Errorf("failed to create new psbt: %v", err)
 	}
 
+	seen := make(map[wire.OutPoint]struct{})
 	for _, u := range signedHex {
 		rawBytes, err := hex.DecodeString(u)
 		if err != nil {
@@ -327,6 +328,11 @@ func mergeBatchSignedPsbt_SatsNet(signedHex []string, network string) (string, e
 		}
 
 		for i := 0; i < inputCount; i++ {
+			point := packet.UnsignedTx.TxIn[i].PreviousOutPoint
+			if _, duplicate := seen[point]; duplicate {
+				return "", fmt.Errorf("duplicate psbt input %s", point.String())
+			}
+			seen[point] = struct{}{}
 			newPacket.UnsignedTx.AddTxIn(packet.UnsignedTx.TxIn[i])
 			newPacket.UnsignedTx.AddTxOut(packet.UnsignedTx.TxOut[i])
 		}
@@ -351,8 +357,16 @@ func mergeBatchSignedPsbt_SatsNet(signedHex []string, network string) (string, e
 }
 
 func addInputsToPsbt_SatsNet(packet *psbt.Packet, utxos []*indexer.AssetsInUtxo) (string, error) {
-	for _, utxo := range utxos {
-		assets := utxo.ToTxAssets()
+	seen := make(map[wire.OutPoint]struct{}, len(packet.UnsignedTx.TxIn)+len(utxos))
+	for _, input := range packet.UnsignedTx.TxIn {
+		point := input.PreviousOutPoint
+		if _, duplicate := seen[point]; duplicate {
+			return "", fmt.Errorf("duplicate psbt input %s", point.String())
+		}
+		seen[point] = struct{}{}
+	}
+	points := make([]wire.OutPoint, len(utxos))
+	for i, utxo := range utxos {
 		txidStr, vout, err := parseUtxo(utxo.OutPoint)
 		if err != nil {
 			return "", err
@@ -363,8 +377,16 @@ func addInputsToPsbt_SatsNet(packet *psbt.Packet, utxos []*indexer.AssetsInUtxo)
 		if err != nil {
 			return "", err
 		}
-		outPoint := wire.NewOutPoint(hash, vout)
-		txIn := wire.NewTxIn(outPoint, nil, nil)
+		point := wire.OutPoint{Hash: *hash, Index: vout}
+		if _, duplicate := seen[point]; duplicate {
+			return "", fmt.Errorf("duplicate psbt input %s", point.String())
+		}
+		seen[point] = struct{}{}
+		points[i] = point
+	}
+	for i, utxo := range utxos {
+		assets := utxo.ToTxAssets()
+		txIn := wire.NewTxIn(&points[i], nil, nil)
 		packet.UnsignedTx.AddTxIn(txIn)
 		input := psbt.PInput{
 			WitnessUtxo: &wire.TxOut{

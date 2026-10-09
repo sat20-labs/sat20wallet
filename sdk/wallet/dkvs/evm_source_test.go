@@ -24,7 +24,7 @@ func (s sourceSigner) SignMessage(message []byte) ([]byte, error) {
 
 func TestEVMSourceRecordUsesExistingPublicKeySigner(t *testing.T) {
 	signer := sourceSigner{key: secp256k1.PrivKeyFromBytes([]byte{1})}
-	record, err := NewSignedRecord(signer, "/blob/evm/source/testcontract", []byte(`{"source":"example"}`), dkvsindexer.RecordOptions{Seq: 1})
+	record, err := NewSignedRecord(signer, "/contract/evm/source/testcontract", []byte(`{"source":"example"}`), dkvsindexer.RecordOptions{Seq: 1})
 	require.NoError(t, err)
 	require.Equal(t, signer.GetPubKey().SerializeCompressed(), record.PubKey)
 	require.NoError(t, dkvsindexer.VerifyRecordForClient(record, dkvsindexer.RecordVerificationOptions{ExpectedKey: record.Key}))

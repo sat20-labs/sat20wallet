@@ -353,7 +353,7 @@ func TestRGB11AddressTransferSchemeA(t *testing.T) {
 	}
 	descriptor, decodeErr := dkvsindexer.DecodeAccountServiceDescriptor(capabilityRecord.Value)
 	if decodeErr != nil || descriptor.AccountID != endpoint.AccountID ||
-		descriptor.Capabilities&dkvsindexer.AccountServiceCapabilityRGB11Direct == 0 ||
+		descriptor.Capabilities&accountServiceCapabilityRGB11Direct == 0 ||
 		len(capabilityRecord.PubKey) != 0 || capabilityRecord.Version != dkvsindexer.Version {
 		t.Fatalf("capability value=%x pubkey=%x version=%d", capabilityRecord.Value, capabilityRecord.PubKey, capabilityRecord.Version)
 	}

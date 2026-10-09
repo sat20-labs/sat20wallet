@@ -1017,6 +1017,9 @@ func (p *Manager) estimateTemplateDeployContract(req *ContractDeployRequest) (*C
 	if templateName == "" {
 		return nil, fmt.Errorf("missing template contract subtype")
 	}
+	if !contractcommon.IsKnownTemplateName(templateName) {
+		return nil, fmt.Errorf("template contract %s not found", templateName)
+	}
 	content, err := decodeContractContent(req.ContractContent, req.ContentEncoding)
 	if err != nil {
 		return nil, err
@@ -1079,6 +1082,9 @@ func (p *Manager) deployTemplateContract(req *ContractDeployRequest) (*ContractT
 	templateName := normalizeTemplateName(req.SubType)
 	if templateName == "" {
 		return nil, fmt.Errorf("missing template contract subtype")
+	}
+	if !contractcommon.IsKnownTemplateName(templateName) {
+		return nil, fmt.Errorf("template contract %s not found", templateName)
 	}
 	content, err := decodeContractContent(req.ContractContent, req.ContentEncoding)
 	if err != nil {

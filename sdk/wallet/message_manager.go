@@ -192,7 +192,7 @@ func (p *Manager) prepareAccountCoreNodeBinding(root common.Wallet, store *dkvsS
 		return nil, err
 	}
 	value, err := dkvsindexer.EncodeAccountServiceDescriptor(dkvsindexer.AccountServiceDescriptor{
-		AccountID: accountID, CoreNodeID: coreID, Capabilities: dkvsindexer.AccountServiceCapabilityRGB11Direct,
+		AccountID: accountID, CoreNodeID: coreID, Capabilities: accountServiceCapabilityRGB11Direct,
 	})
 	if err != nil {
 		return nil, err

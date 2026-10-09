@@ -901,7 +901,7 @@
     <RGB11IssueDialog v-model:open="showRGB11Issue" @completed="handleRGB11Issued" />
 
     <Dialog :open="txConfirmOpen" @update:open="handleTxConfirmOpenChange">
-      <DialogContent class="max-w-[92vw] rounded-sm border-border bg-background sm:max-w-md">
+      <DialogContent class="max-h-[85dvh] max-w-[92vw] overflow-y-auto rounded-sm border-border bg-background sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{{ t('tools.txConfirm.title') }}</DialogTitle>
           <DialogDescription>
@@ -3758,8 +3758,8 @@ const buildTemplateContractContent = (schema: ContractSchema) => {
         assetBName: String(form.assetBName || '').trim(),
         priceMode: String(form.priceMode || '').trim(),
         steps: (Array.isArray(form.steps) ? form.steps : []).map((step: any) => ({
-          threshold: String(step.threshold || '').trim(),
-          bPerA: String(step.bPerA || '').trim(),
+          threshold: String(step.threshold ?? '').trim(),
+          bPerA: String(step.bPerA ?? '').trim(),
         })),
       })
     default:

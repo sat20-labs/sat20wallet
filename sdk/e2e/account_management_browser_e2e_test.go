@@ -21,23 +21,6 @@ func TestSDKAccountPWAConnectedBrowser(t *testing.T) {
 	runAccountPWABrowser(t)
 }
 
-func TestSDKAccountPWAUsageReviewRegression(t *testing.T) {
-	runAccountPWABrowser(t,
-		"usage: account page refreshes background backup failure and success without navigation",
-		"usage: shared IndexedDB tabs invalidate pending writes when another tab locks",
-		"usage: shared IndexedDB password change cannot authorize an old-password tab")
-}
-
-func TestSDKAccountPWABatchReviewRegression(t *testing.T) {
-	runAccountPWABrowser(t,
-		"usage: committed creation and import pages recover from a catalog read failure without replay",
-		"usage: maintenance rehearsal obeys the one minute inactivity lock and discards its session")
-}
-
-func TestSDKAccountPWACommittedPageReview(t *testing.T) {
-	runAccountPWABrowser(t, "usage: committed creation and import pages recover from a catalog read failure without replay")
-}
-
 func runAccountPWABrowser(t *testing.T, cases ...string) {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
@@ -45,9 +28,10 @@ func runAccountPWABrowser(t *testing.T, cases ...string) {
 	pwa := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "pwa"))
 	// This gate includes native WASM storage checks, node preparation and all
 	// account usage scenarios; individual browser operation timeouts still apply.
-	// Includes two fresh-device Guardian recoveries using only page-copied
-	// material, plus the real 30-second background status refresh boundary.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	// The 66-case gate includes fresh-device Guardian recoveries using only
+	// page-copied material and the real 30-second background refresh boundary.
+	// This is the whole-run resource budget, not a browser assertion timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 	// The full browser gate first exercises the actual Go WASM KVDB against native
 	// IndexedDB; no mocked database and no separate test runner are needed.

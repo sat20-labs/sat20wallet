@@ -7,18 +7,22 @@ import { chromium, expect } from '@playwright/test'
 import { createServer } from 'vite'
 import { runPwaUsageCases, runRgbPwaCases, runAutopayPwaReviewCases } from './account-management-usage-e2e.mjs'
 import { requiredPwaBiometricCases, runPwaBiometricCases } from './wallet-biometric-e2e.mjs'
-import { requiredPwaPosCases, runPwaPosCases } from './pos-pwa-e2e.mjs'
+import { requiredPwaPosCases, optionalPwaEscapeCases, runPwaPosCases } from './pos-pwa-e2e.mjs'
+import { requiredPwaL1ProtocolCases, runPwaL1ProtocolCases } from './wallet-l1-assets-e2e.mjs'
 import { requiredPwaWalletBasicCases, runPwaWalletBasicCases } from './wallet-basic-e2e.mjs'
 import { createPwaIntegrationDapp, requiredPwaIntegrationCases, runPwaIntegrationCases } from './wallet-integrations-e2e.mjs'
 import { requiredPwaMiningCases, runPwaMiningCases } from './wallet-mining-e2e.mjs'
 import { requiredPwaNodeCases, runPwaNodeCases } from './wallet-node-e2e.mjs'
 import { requiredPwaToolsCases, runPwaToolsCases } from './wallet-tools-e2e.mjs'
 import { requiredPwaMintCases, runPwaMintCases } from './wallet-mint-e2e.mjs'
+import { requiredSDKWASMCases, runSDKWASMCases } from './sdk-wasm-e2e.mjs'
 
 // Launched by sdk/e2e against its real temporary CoreNode. Inject only endpoint
 // configuration; wallet, account, crypto, storage and RPC implementations are real.
 const rgbFixture = process.argv[2] === '--rgb-fixture' ? JSON.parse(readFileSync(process.argv[3], 'utf8')) : null
 const posFixture = process.argv[2] === '--pos-fixture' ? JSON.parse(readFileSync(process.argv[3], 'utf8')) : null
+const sdkWASM = process.argv.includes('--sdk-wasm')
+assert.ok(!sdkWASM || posFixture, 'SDK WASM gate requires the existing real-node fixture')
 const config = posFixture?.config ?? rgbFixture?.config ?? JSON.parse(process.env.SAT20_ACCOUNT_E2E_CONFIG || 'null')
 const storageWasm = process.argv[2] === '--storage-wasm' ? process.argv[3] : null
 if (!storageWasm) {
@@ -146,8 +150,8 @@ const walletCaseFlag = process.argv.indexOf('--wallet-cases')
 const focusedWalletCases = walletCaseFlag >= 0 ? process.argv.slice(walletCaseFlag + 1) : null
 if (focusedWalletCases) {
   assert.ok(posFixture && focusedWalletCases.length, 'wallet rerun requires the existing wallet fixture and exact cases')
-  const known = [...requiredPwaPosCases, ...requiredPwaWalletBasicCases, ...requiredPwaMintCases,
-    ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredPwaIntegrationCases]
+  const known = sdkWASM ? requiredSDKWASMCases : [...requiredPwaPosCases, ...optionalPwaEscapeCases, ...requiredPwaL1ProtocolCases, ...requiredPwaWalletBasicCases, ...requiredPwaMintCases,
+    ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases]
   assert.ok(focusedWalletCases.every(name => known.includes(name)), 'unknown wallet case')
   assert.equal(new Set(focusedWalletCases).size, focusedWalletCases.length)
 }
@@ -188,10 +192,16 @@ async function check(name, action) {
     for (const context of browser.contexts()) {
       for (const page of context.pages()) {
         if (page.isClosed()) continue
-        const state = await page.evaluate(() => ({
-          headings: [...document.querySelectorAll('h1,h2')].map(el => el.textContent),
-          alerts: [...document.querySelectorAll('[role="alert"]')].map(el => el.textContent),
-        })).catch(() => null)
+        // A blocked WASM callback can also block page evaluation. Keep the
+        // original failure and let the remaining cases and cleanup proceed.
+        let diagnosticTimer
+        const state = await Promise.race([
+          page.evaluate(() => ({
+            headings: [...document.querySelectorAll('h1,h2')].map(el => el.textContent),
+            alerts: [...document.querySelectorAll('[role="alert"]')].map(el => el.textContent),
+          })).catch(() => null),
+          new Promise(resolve => { diagnosticTimer = setTimeout(() => resolve(null), 2000) }),
+        ]).finally(() => clearTimeout(diagnosticTimer))
         console.error(JSON.stringify({ url: page.url(), state }))
       }
     }
@@ -883,11 +893,14 @@ try {
   await server.listen()
   browser = await chromium.launch({ headless: true, ...(executable ? { executablePath: executable } : {}) })
   if (storageWasm) await runIndexedDBStorageGate()
+  else if (sdkWASM) {
+    await runSDKWASMCases({ check, device, pageErrors }, posFixture)
+  }
   else if (posFixture) {
     const helpers = { check, device, ready, unlock, catalog, walletCall, accountCall, nodeAPIOrigins, integrationDapp, selectedCases: focusedWalletCases }
     // Independent feature groups use fresh browser stores and continue after
     // another group fails; the required-case ledger still fails the whole gate.
-    for (const [run, names] of [[runPwaPosCases, requiredPwaPosCases], [runPwaWalletBasicCases, requiredPwaWalletBasicCases],
+    for (const [run, names] of [[runPwaPosCases, [...requiredPwaPosCases, ...optionalPwaEscapeCases]], [runPwaL1ProtocolCases, requiredPwaL1ProtocolCases], [runPwaWalletBasicCases, requiredPwaWalletBasicCases],
       [runPwaIntegrationCases, requiredPwaIntegrationCases], [runPwaToolsCases, requiredPwaToolsCases],
       [runPwaMintCases, requiredPwaMintCases], [runPwaMiningCases, requiredPwaMiningCases],
       [runPwaNodeCases, requiredPwaNodeCases]]) {
@@ -919,7 +932,7 @@ try {
   }
   else await runAccountGate()
 } finally {
-  const required = storageWasm ? [] : posFixture ? focusedWalletCases ?? [...requiredPwaPosCases, ...requiredPwaWalletBasicCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases, ...requiredPwaMintCases, ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredWalletRuntimeCases] : rgbFixture ? requiredRGBCases : focusedUsageCases ?? requiredAccountCases
+  const required = storageWasm ? [] : sdkWASM ? focusedWalletCases ?? requiredSDKWASMCases : posFixture ? focusedWalletCases ?? [...requiredPwaPosCases, ...requiredPwaL1ProtocolCases, ...requiredPwaWalletBasicCases, ...requiredPwaIntegrationCases, ...requiredPwaToolsCases, ...requiredPwaMintCases, ...requiredPwaMiningCases, ...requiredPwaNodeCases, ...requiredWalletRuntimeCases] : rgbFixture ? requiredRGBCases : focusedUsageCases ?? requiredAccountCases
   for (const name of required) {
     if (!completedCases.has(name)) console.log(JSON.stringify({ case: name, status: 'not-run' }))
   }

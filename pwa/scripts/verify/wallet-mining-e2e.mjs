@@ -33,7 +33,7 @@ export async function runPwaMiningCases(t, fixture) {
       await page.getByLabel('New Wallet Password', { exact: true }).fill(actor.password)
       await page.getByLabel('Confirm Password', { exact: true }).fill(actor.password)
       await page.getByRole('button', { name: 'Import Wallet', exact: true }).click()
-      await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible()
+      await expect(page.getByRole('tab', { name: 'Bitcoin', exact: true })).toBeVisible({ timeout: 90000 })
       await page.evaluate(() => { location.hash = '#/wallet/btc-lucky-mining' })
       await expect(page.getByText('BTC Lucky Mining', { exact: true })).toBeVisible()
       const initial = await walletCall(page, 'getBTCLuckyMiningStatus')

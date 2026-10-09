@@ -76,6 +76,12 @@ func (p *Manager) inscribe(req *InscriptionRequest) (*InscribeResv, error) {
 }
 
 func (p *Manager) DeployTicker_ordx(ticker string, max, lim int64, n int, feeRate int64) (*InscribeResv, error) {
+	if max < 0 {
+		return nil, fmt.Errorf("invalid max %d", max)
+	}
+	if lim < 0 {
+		return nil, fmt.Errorf("invalid lim %d", lim)
+	}
 	if n <= 0 || n > 65535 {
 		return nil, fmt.Errorf("n too big (>65535)")
 	}
@@ -449,6 +455,10 @@ func (p *Manager) InscribeMultiKeyValueInName(name string, kv map[string]string,
 }
 
 func (p *Manager) InscribeName(name string, feeRate int64) (*InscribeResv, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !indexer.IsValidSNSName(name) {
+		return nil, fmt.Errorf("invalid SNS name %q", name)
+	}
 	wallet := p.wallet
 	address := wallet.GetAddress()
 
@@ -460,8 +470,6 @@ func (p *Manager) InscribeName(name string, feeRate int64) (*InscribeResv, error
 		return utxos[i].Value > utxos[j].Value
 	})
 
-	name = strings.ToLower(name)
-	name = strings.TrimSpace(name)
 	body := name
 	lenBody := len(body)
 	p.utxoLockerL1.Reload(address)

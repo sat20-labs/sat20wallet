@@ -42,7 +42,7 @@ func (p *SatsNetDKVSClient) acceptCoreBinding(root common.Wallet,
 			return nil, dkvsindexer.ErrInvalidRecord
 		}
 		descriptor.CoreNodeID = coreID
-		descriptor.Capabilities |= dkvsindexer.AccountServiceCapabilityRGB11Direct
+		descriptor.Capabilities |= accountServiceCapabilityRGB11Direct
 		value, err = dkvsindexer.EncodeAccountServiceDescriptor(*descriptor)
 		if err != nil {
 			return nil, err

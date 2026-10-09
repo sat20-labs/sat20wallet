@@ -63,6 +63,7 @@ import { useToast } from '@/components/ui/toast-new'
 import { useWalletStore } from '@/store'
 import { assertWalletIdentityReady } from '@/lib/identity-boundary'
 import TxDetailSection from './TxDetailSection.vue' // Import the new component
+import { bitcoin } from '@/lib/bitcoinjs'
 // Define stricter types if possible for Input/Output/Asset structures
 interface AssetName {
   Protocol: string;
@@ -161,7 +162,8 @@ watch(() => [props.data?.psbtHex, props.data.options?.chain, network.value, prop
   try {
     assertWalletIdentityReady(identityGeneration)
     let result
-    if (['sat20', 'satnet', 'satsnet'].includes(props.data.options?.chain ?? '')) {
+    const satsNet = ['sat20', 'satnet', 'satsnet'].includes(props.data.options?.chain ?? '')
+    if (satsNet) {
       result = await walletManager.getTxAssetInfoFromPsbt_SatsNet(props.data.psbtHex, network.value)
     } else {
       console.log('getTxAssetInfoFromPsbt', props.data.psbtHex, network.value);
@@ -204,6 +206,14 @@ watch(() => [props.data?.psbtHex, props.data.options?.chain, network.value, prop
       try {
         if (res.outputs) {
            parsedOutputs.value = parseTxDetailItems(res.outputs);
+           if (!satsNet) {
+             const outputs = bitcoin.Transaction.fromHex(res.txHex).outs
+             if (outputs.length !== parsedOutputs.value.length) throw new Error('Transaction output count mismatch')
+             parsedOutputs.value = parsedOutputs.value.map((item, index) => {
+               if (item.Value !== outputs[index].value) throw new Error('Transaction output value mismatch')
+               return { ...item, PkScript: outputs[index].script.toString('base64') }
+             })
+           }
            console.log("Parsed Outputs:", parsedOutputs.value);
         } else {
            console.warn("Outputs data is missing, not a string, or not an array:", res.outputs)

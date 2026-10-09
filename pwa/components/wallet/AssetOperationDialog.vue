@@ -401,7 +401,7 @@ const confirmOperation = async () => {
   if (needsAddress.value) {
     review.value = Object.freeze({
       fingerprint: reviewFingerprint(), amount: props.amount,
-      unit: nativeSats.value ? 'sats' : (props.assetTicker || props.assetKey || ''),
+      unit: nativeSats.value ? 'sats' : getAssetDisplayName(),
       address: props.address,
       chain: isSatoshiNetSend.value ? 'SatoshiNet' : 'Bitcoin',
       network: String(network.value),

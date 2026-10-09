@@ -14,7 +14,7 @@ import (
 
 const (
 	rgb11StoreMagic        = "R11R"
-	rgb11StoreCodecVersion = uint8(1)
+	rgb11StoreCodecVersion = uint8(2)
 	rgb11StoreMaxText      = 64 * 1024
 	rgb11StoreMaxBytes     = 4 * 1024 * 1024
 	rgb11StoreMaxRecords   = 16 * 1024
@@ -947,6 +947,7 @@ func encodeTransferState(e *strict.Encoder, state *TransferState) error {
 		func() error { return encodeText(e, state.Direction) },
 		func() error { return encodeOptionalAssetInfo(e, &state.Asset) },
 		func() error { return encodeText(e, state.RecipientID) },
+		func() error { return encodeText(e, state.ReceiveRequestID) },
 		func() error { return encodeText(e, state.Invoice) },
 		func() error { return encodeStringList(e, state.InputOutPoints) },
 		func() error { return encodeStringList(e, state.OutputOutPoints) },
@@ -1019,7 +1020,7 @@ func decodeTransferState(d *strict.Decoder, state *TransferState) error {
 	if state.Asset, err = decodeOptionalAssetInfo(d); err != nil {
 		return err
 	}
-	for _, target := range []*string{&state.RecipientID, &state.Invoice} {
+	for _, target := range []*string{&state.RecipientID, &state.ReceiveRequestID, &state.Invoice} {
 		if *target, err = decodeText(d); err != nil {
 			return err
 		}
