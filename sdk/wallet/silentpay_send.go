@@ -91,9 +91,9 @@ func (p *Manager) BuildSilentPayment(address string, amount, feeRate int64) (*wi
 		return nil, nil, ErrSilentPayUnsupported
 	}
 	index := wallet.GetSubAccount()
-	if _, err := wallet.DeriveSilentPayKeys(index); err != nil {
-		return nil, nil, err
-	}
+	// Sending to a BIP352 address only requires the recipient's public
+	// Scan/Spend keys and the sender's eligible P2TR funding keys. A sender
+	// does not need a receiving Scan Key or SP account activation.
 	if amount < 330 {
 		return nil, nil, fmt.Errorf("silentpay: BTC amount too small")
 	}
@@ -126,6 +126,7 @@ func (p *Manager) BuildSilentPayment(address string, amount, feeRate int64) (*wi
 	// The wallet signs ordinary BIP86 outputs through TapTweak. For SP input
 	// aggregation BIP352 needs the resulting output key, normalized even-Y.
 	taprootKey := txscript.TweakTaprootPrivKey(*basePrivate, nil)
+	defer taprootKey.Zero()
 	taprootPublic := taprootKey.PubKey()
 	expectedScript := append([]byte{txscript.OP_1, 0x20}, schnorr.SerializePubKey(taprootPublic)...)
 	inputs := make([]SilentPaySenderInput, 0, len(tx.TxIn))
