@@ -153,7 +153,8 @@ func (p *Manager) SyncSilentPayLive(ctx context.Context) ([]SPAccountBalance, er
 		account.result.Anchor = snapshot.Anchor
 		account.result.Outputs = []SPReceivedOutput{}
 	}
-	txCache := make(map[string]*wire.MsgTx)
+	// Do not retain every hit's raw Bitcoin transaction for the entire
+	// wallet recovery; a page-local cache is enough to deduplicate lookups.
 	next := ""
 	seenCursors := make(map[string]bool)
 	for pages := 0; ; pages++ {
@@ -169,6 +170,7 @@ func (p *Manager) SyncSilentPayLive(ctx context.Context) ([]SPAccountBalance, er
 		if page.SnapshotID != snapshot.SnapshotID || page.Anchor != snapshot.Anchor {
 			return nil, fmt.Errorf("silentpay: scanner view drifted")
 		}
+		txCache := make(map[string]*wire.MsgTx)
 		for _, block := range page.Blocks {
 			if block.Height < status.CoverageStartHeight || block.Height > snapshot.Anchor.Height {
 				return nil, fmt.Errorf("silentpay: invalid candidate block height")
