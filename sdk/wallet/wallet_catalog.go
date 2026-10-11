@@ -18,6 +18,7 @@ type WalletCatalogAccount struct {
 	Address   string `json:"address,omitempty"`
 	PubKey    string `json:"pub_key,omitempty"`
 	AccountID string `json:"account_id,omitempty"`
+	SPEnabled bool `json:"sp_enabled"`
 }
 
 type WalletCatalogEntry struct {
@@ -185,6 +186,7 @@ func (p *Manager) walletCatalogLocked() []WalletCatalogEntry {
 				Index: index,
 				Name:  strings.TrimSpace(info.AccountNames[index]),
 				DID:   strings.TrimSpace(info.AccountDIDs[index]),
+				SPEnabled: info.SPEnabled[index],
 			}
 			if account.Name == "" {
 				account.Name = defaultAccountName(index)
