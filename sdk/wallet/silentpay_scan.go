@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/btcsuite/btcd/wire"
+	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 )
 
 // Each SP-enabled account has a distinct signing identity and local records.
@@ -103,7 +104,11 @@ func spParseFoundTransaction(raw string, txid string) (*wire.MsgTx, error) {
 	return tx, nil
 }
 
-func (p *Manager) spScanRPC() (SPIndexerRPC, IndexerRPCClient, error) {
+type spBitcoinRawTxLookup interface {
+	GetBitcoinRawTx(string) (*indexerwire.BitcoinRawTx, error)
+}
+
+func (p *Manager) spScanRPC() (SPIndexerRPC, spBitcoinRawTxLookup, error) {
 	if p == nil || p.l1IndexerClient == nil {
 		return nil, nil, fmt.Errorf("silentpay: L1 Indexer unavailable")
 	}
@@ -111,7 +116,9 @@ func (p *Manager) spScanRPC() (SPIndexerRPC, IndexerRPCClient, error) {
 	if client == nil { return nil, nil, fmt.Errorf("silentpay: no active L1 Indexer") }
 	sp, ok := client.(SPIndexerRPC)
 	if !ok { return nil, nil, fmt.Errorf("silentpay: L1 Indexer lacks BIP352 endpoints") }
-	return sp, client, nil
+	bitcoinReader, ok := client.(spBitcoinRawTxLookup)
+	if !ok { return nil, nil, fmt.Errorf("silentpay: Indexer lacks raw transaction lookup") }
+	return sp, bitcoinReader, nil
 }
 
 // SyncSilentPayLive obtains one consistent Live snapshot for all enabled
