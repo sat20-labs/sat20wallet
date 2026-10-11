@@ -23,7 +23,7 @@ type SilentPaySenderInput struct {
 // SilentPayDestinationScript must only be called AFTER input selection.
 // An RBF or fee adjustment that changes inputs requires re-running it.
 func SilentPayDestinationScript(destination SilentPayAddress, inputs []SilentPaySenderInput, k uint32) ([]byte, error) {
-	if destination.Scan == nil || destination.Spend == nil || len(inputs) == 0 || k >= silentPayMaxK {
+	if destination.Scan == nil || destination.Spend == nil || len(inputs) == 0 {
 		return nil, fmt.Errorf("silentpay: invalid sender inputs or destination")
 	}
 	var aggregate btcec.ModNScalar
