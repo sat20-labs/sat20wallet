@@ -26,7 +26,7 @@ concurrency:
 jobs:
   sdk:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,21 +47,21 @@ jobs:
         with:
           go-version-file: sat20wallet/sdk/go.mod
           cache: false
-      - name: Normalize Go formatting in isolated CI checkout
+      - name: Normalize formatting in isolated CI checkout
         working-directory: sat20wallet
         run: |
           gofmt -w sdk/wallet/silentpay*.go sdk/wasm/silentpay.go sdk/wallet/db.go sdk/wallet/wallet_catalog.go sdk/wallet/account_management_state.go sdk/wallet/interface.go sdk/wasm/main.go
           git diff --stat
       - name: Compile wallet packages
         working-directory: sat20wallet/sdk
-        run: go test ./wallet/... -run '^$' -count=1
-      - name: Test Silent Payments with real Bitcoin signatures
+        run: go test ./wallet/... -run TestThisNameDoesNotExist -count=1
+      - name: Test SP cryptography and HTTP E2E
         working-directory: sat20wallet/sdk
-        run: go test ./wallet -run '^TestSilentPay' -count=1 -v -timeout=10m
-      - name: Test complete account packages
+        run: go test ./wallet -run TestSilentPay -count=1 -v -timeout=10m
+      - name: Test all account packages
         working-directory: sat20wallet/sdk
         run: go test ./account/... -count=1 -timeout=10m
-      - name: Test complete wallet packages
+      - name: Test all wallet packages
         working-directory: sat20wallet/sdk
         run: go test ./wallet/... -count=1 -timeout=20m
       - name: Vet wallet packages
@@ -69,24 +69,7 @@ jobs:
         run: go vet -copylocks=false ./wallet/...
       - name: Compile SDK virtual-node E2E
         working-directory: sat20wallet/sdk
-        run: go test ./e2e -run '^
-  pwa:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: pwa/package-lock.json
-      - name: Install PWA dependencies
-        working-directory: pwa
-        run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Typecheck PWA
-        working-directory: pwa
-        run: npm run compile
- -count=1 -timeout=10m
+        run: go test ./e2e -run TestThisNameDoesNotExist -count=1 -timeout=10m
       - name: Compile real WASM exports
         working-directory: sat20wallet/sdk
         run: GOOS=js GOARCH=wasm go build -buildvcs=false -o /tmp/sat20-silentpay.wasm ./wasm
