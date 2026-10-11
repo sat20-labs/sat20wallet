@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
+	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
@@ -49,7 +49,7 @@ func TestSilentPayManagerBuildAndSignBitcoinTransactionE2E(t *testing.T) {
 	}
 	op := chainhash.Hash{18, 19, 20}
 	client := &spPlainBTCIndexer{plain: []*indexerwire.TxOutputInfo{{
-		OutPoint: op.String()+":2", Value: 200_000,
+		OutPoint: op.String() + ":2", Value: 200_000,
 		PkScript: sourcePkScript, UtxoId: 1001,
 	}}}
 	mgr.l1IndexerClient.SetMaster(client)
@@ -61,12 +61,12 @@ func TestSilentPayManagerBuildAndSignBitcoinTransactionE2E(t *testing.T) {
 		t.Fatalf("manager failed to build SP output: %v", err)
 	}
 	if len(tx.TxIn) != 1 || len(tx.TxOut) == 0 || tx.TxOut[0].Value != 100_000 {
-		t.Fatalf("unexpected selected transaction: inputs=%d outputs=%d",len(tx.TxIn),len(tx.TxOut))
+		t.Fatalf("unexpected selected transaction: inputs=%d outputs=%d", len(tx.TxIn), len(tx.TxOut))
 	}
 	beforeHash := tx.TxHash()
 	signed, err := mgr.SignTx(tx, fetcher)
 	if err != nil {
-		t.Fatalf("existing signer cannot sign SP sender transaction: %v",err)
+		t.Fatalf("existing signer cannot sign SP sender transaction: %v", err)
 	}
 	if signed.TxHash() != beforeHash {
 		t.Fatal("BIP352 transaction identity changed during signing")
@@ -75,33 +75,43 @@ func TestSilentPayManagerBuildAndSignBitcoinTransactionE2E(t *testing.T) {
 	preout := fetcher.FetchPrevOutput(signed.TxIn[0].PreviousOutPoint)
 	engine, err := txscript.NewEngine(preout.PkScript, signed, 0, txscript.StandardVerifyFlags,
 		nil, sighashes, preout.Value, fetcher)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := engine.Execute(); err != nil {
-		t.Fatalf("ordinary input failed Bitcoin script verification: %v",err)
+		t.Fatalf("ordinary input failed Bitcoin script verification: %v", err)
 	}
 
 	// Independently derive T from the finalized P2TR input output key.
 	base := sender.getPaymentPrivKeyWithIndex(0)
-	tap := txscript.TweakTaprootPrivKey(*base,nil)
+	tap := txscript.TweakTaprootPrivKey(*base, nil)
 	normalized := tap.Key
-	if tap.PubKey().SerializeCompressed()[0] == 0x03 { normalized.Negate() }
-	var smallest [36]byte
-	copy(smallest[:32],signed.TxIn[0].PreviousOutPoint.Hash[:])
-	binary.LittleEndian.PutUint32(smallest[32:],signed.TxIn[0].PreviousOutPoint.Index)
-	a := btcec.PrivKeyFromScalar(&normalized).PubKey()
-	inputHash, err := silentPayCheckedScalar(silentPayTaggedHash("BIP0352/Inputs",smallest[:],a.SerializeCompressed()))
-	if err != nil { t.Fatal(err) }
-	T, err := silentPaySharedSecretPoint(&inputHash,a)
-	if err != nil { t.Fatal(err) }
-	receiverKeys,err := receiver.DeriveSilentPayKeys(0)
-	if err!=nil { t.Fatal(err) }
-	candidate := SilentPayCandidate{Vout:0,OutputKey:append([]byte(nil),signed.TxOut[0].PkScript[2:]...)}
-	matches,err := MatchSilentPayOutputs(receiverKeys,T.SerializeCompressed(),[]SilentPayCandidate{candidate})
-	if err!=nil || len(matches)!=1 || matches[0].Vout!=0 {
-		t.Fatalf("recipient cannot discover the exact signed payment: %v %+v",err,matches)
+	if tap.PubKey().SerializeCompressed()[0] == 0x03 {
+		normalized.Negate()
 	}
-	priv, err := SilentPayOutputSpendKey(receiverKeys,matches[0])
-	if err!=nil || !bytes.Equal(schnorr.SerializePubKey(priv.PubKey()),candidate.OutputKey) {
-		t.Fatalf("recipient cannot derive spendable private key: %v",err)
+	var smallest [36]byte
+	copy(smallest[:32], signed.TxIn[0].PreviousOutPoint.Hash[:])
+	binary.LittleEndian.PutUint32(smallest[32:], signed.TxIn[0].PreviousOutPoint.Index)
+	a := btcec.PrivKeyFromScalar(&normalized).PubKey()
+	inputHash, err := silentPayCheckedScalar(silentPayTaggedHash("BIP0352/Inputs", smallest[:], a.SerializeCompressed()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	T, err := silentPaySharedSecretPoint(&inputHash, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiverKeys, err := receiver.DeriveSilentPayKeys(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := SilentPayCandidate{Vout: 0, OutputKey: append([]byte(nil), signed.TxOut[0].PkScript[2:]...)}
+	matches, err := MatchSilentPayOutputs(receiverKeys, T.SerializeCompressed(), []SilentPayCandidate{candidate})
+	if err != nil || len(matches) != 1 || matches[0].Vout != 0 {
+		t.Fatalf("recipient cannot discover the exact signed payment: %v %+v", err, matches)
+	}
+	priv, err := SilentPayOutputSpendKey(receiverKeys, matches[0])
+	if err != nil || !bytes.Equal(schnorr.SerializePubKey(priv.PubKey()), candidate.OutputKey) {
+		t.Fatalf("recipient cannot derive spendable private key: %v", err)
 	}
 }
