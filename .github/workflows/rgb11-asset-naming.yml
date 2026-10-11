@@ -184,5 +184,6 @@ jobs:
       - name: Real Core and BaseIndexer SP E2E
         env:
           SAT20_E2E_REQUIRE_BITCOIND: '1'
+          GOFLAGS: '-mod=mod'
         working-directory: sat20wallet/sdk
         run: go test ./e2e -run '^TestSPBitcoinCoreRegtestIndexerE2E$' -v -count=1 -timeout=15m
