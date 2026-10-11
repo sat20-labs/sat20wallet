@@ -17,6 +17,7 @@ import (
 // BIP352 uses the standard account-specific hardened branch. It must never
 // reuse the ordinary BIP86 payment key or another subaccount's scan key.
 const silentPayPurpose = uint32(352)
+
 // The number of P2TR outputs itself bounds the maximum number of k values.
 // No unrelated hardcoded k limit is necessary.
 
