@@ -5530,6 +5530,10 @@ func main() {
 	// input: none; return: list of wallet id and account number
 	obj.Set("getAllWallets", js.FuncOf(getAllWallets))
 	obj.Set("getWalletCatalog", js.FuncOf(getWalletCatalog))
+	obj.Set("enableSilentPay", js.FuncOf(enableSilentPay))
+	obj.Set("getSilentPayAccount", js.FuncOf(getSilentPayAccount))
+	obj.Set("syncSilentPayLive", js.FuncOf(syncSilentPayLive))
+	obj.Set("getSilentPayBalance", js.FuncOf(getSilentPayBalance))
 	obj.Set("deleteWallet", js.FuncOf(deleteWallet))
 	obj.Set("updateWalletName", js.FuncOf(updateWalletName))
 	obj.Set("ensureAccount", js.FuncOf(ensureAccount))
@@ -5614,6 +5618,7 @@ func main() {
 	obj.Set("addOutputsToPsbt_SatsNet", js.FuncOf(addOutputsToPsbt_SatsNet))
 
 	obj.Set("sendAssets", js.FuncOf(sendAssets))
+	obj.Set("sendSilentPayment", js.FuncOf(sendSilentPayBitcoin))
 	obj.Set("sendGarbage", js.FuncOf(sendGarbage))
 	obj.Set("sendAssets_SatsNet", js.FuncOf(sendAssets_SatsNet))
 	obj.Set("batchSendAssets_SatsNet", js.FuncOf(batchSendAssets_SatsNet))
