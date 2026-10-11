@@ -191,9 +191,12 @@ func EncodeSilentPayAddress(addr SilentPayAddress, params *chaincfg.Params) (str
 }
 
 func DecodeSilentPayAddress(text string, params *chaincfg.Params) (SilentPayAddress, error) {
-	if params == nil || len(text) < 116 || len(text) > 1023 || text != strings.ToLower(text) {
+	if params == nil || len(text) < 116 || len(text) > 1023 ||
+		(text != strings.ToLower(text) && text != strings.ToUpper(text)) {
 		return SilentPayAddress{}, fmt.Errorf("silentpay: invalid address")
 	}
+	// BIP350 accepts lowercase or uppercase addresses, but not mixed-case.
+	text = strings.ToLower(text)
 	sep := strings.LastIndexByte(text, '1')
 	if sep < 1 || sep+7 > len(text) || text[:sep] != silentPayHRP(params) {
 		return SilentPayAddress{}, fmt.Errorf("silentpay: wrong network or HRP")
