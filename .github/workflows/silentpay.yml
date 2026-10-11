@@ -70,6 +70,62 @@ jobs:
       - name: Compile SDK virtual-node E2E
         working-directory: sat20wallet/sdk
         run: go test ./e2e -run TestThisNameDoesNotExist -count=1 -timeout=10m
+      - name: Install Bitcoin Core 29.2 for real regtest E2E
+        working-directory: sat20wallet
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl --fail --location --retry 3 --silent --show-error https://bitcoincore.org/bin/bitcoin-core-29.2/SHA256SUMS --output SHA256SUMS
+          curl --fail --location --retry 3 --silent --show-error https://bitcoincore.org/bin/bitcoin-core-29.2/bitcoin-29.2-x86_64-linux-gnu.tar.gz --output bitcoin-29.2-x86_64-linux-gnu.tar.gz
+          grep ' bitcoin-29.2-x86_64-linux-gnu.tar.gz      - name: Compile real WASM exports
+        working-directory: sat20wallet/sdk
+        run: GOOS=js GOARCH=wasm go build -buildvcs=false -o /tmp/sat20-silentpay.wasm ./wasm
+
+  pwa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pwa/package-lock.json
+      - name: Install PWA dependencies
+        working-directory: pwa
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck PWA
+        working-directory: pwa
+        run: npm run compile
+ SHA256SUMS | sha256sum --check
+          tar -xzf bitcoin-29.2-x86_64-linux-gnu.tar.gz
+          echo "${RUNNER_TEMP}/bitcoin-29.2/bin" >> "${GITHUB_PATH}"
+      - name: Real Bitcoin Core regtest and BaseIndexer SP E2E
+        working-directory: sat20wallet/sdk
+        env:
+          SAT20_E2E_REQUIRE_BITCOIND: '1'
+        run: go test ./e2e -run '^TestSPBitcoinCoreRegtestIndexerE2E      - name: Compile real WASM exports
+        working-directory: sat20wallet/sdk
+        run: GOOS=js GOARCH=wasm go build -buildvcs=false -o /tmp/sat20-silentpay.wasm ./wasm
+
+  pwa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pwa/package-lock.json
+      - name: Install PWA dependencies
+        working-directory: pwa
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck PWA
+        working-directory: pwa
+        run: npm run compile
+ -v -count=1 -timeout=15m
       - name: Compile real WASM exports
         working-directory: sat20wallet/sdk
         run: GOOS=js GOARCH=wasm go build -buildvcs=false -o /tmp/sat20-silentpay.wasm ./wasm
