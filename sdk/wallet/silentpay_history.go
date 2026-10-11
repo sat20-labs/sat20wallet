@@ -5,8 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
+
 
 	indexercommon "github.com/sat20-labs/indexer/common"
 )
@@ -36,6 +36,7 @@ type spHistoryDisk struct {
 	Network string
 	Anchor SPBaseAnchor
 	Payments []SPHistoryPayment
+	Complete bool
 }
 
 func spHistoryKey(network, fingerprint string,index uint32) []byte {
@@ -154,7 +155,6 @@ func (p *Manager) SyncSilentPayArchive(ctx context.Context) ([]SPAccountHistory,
 		if page.Anchor!=status.BaseAnchor || page.SnapshotID!="" {
 			return nil,fmt.Errorf("silentpay: Archive anchor changed during scan")
 		}
-		rawCache:=make(map[string]*SPHistoryPayment)
 		for _,block:=range page.Blocks {
 			if block.Height<minFrom || block.Height>status.BaseAnchor.Height ||
 				(currentHeight>=0 && block.Height<currentHeight) {
@@ -197,22 +197,12 @@ func (p *Manager) SyncSilentPayArchive(ctx context.Context) ([]SPAccountHistory,
 				located,e:=sp.SPLookup(ctx,[]SPIndexerPosition{position})
 				if e!=nil||len(located)!=1{return nil,fmt.Errorf("silentpay: failed archived tx position: %v",e)}
 				txid:=located[0].TxID
-				var rawTx *wire.MsgTx
-				if _,ok:=rawCache[txid];!ok{
-					raw,e:=bitcoinReader.GetBitcoinRawTx(txid)
-					if e!=nil||raw==nil||raw.Error!=""{return nil,fmt.Errorf("silentpay: archived raw Bitcoin tx unavailable: %v",e)}
-					rawTx,e=spParseFoundTransaction(raw.RawTx,txid)
-					if e!=nil{return nil,e}
-					rawCache[txid]=&SPHistoryPayment{TxID:txid}
+				raw,err:=bitcoinReader.GetBitcoinRawTx(txid)
+				if err!=nil||raw==nil||raw.Error!="" {
+					return nil,fmt.Errorf("silentpay: archived raw Bitcoin transaction unavailable: %v",err)
 				}
-				// A matched tx may be requested by multiple accounts, but it
-				// must always be checked against the original Bitcoin output.
-				if rawTx==nil{
-					raw,e:=bitcoinReader.GetBitcoinRawTx(txid)
-					if e!=nil||raw==nil||raw.Error!=""{return nil,fmt.Errorf("silentpay: unavailable archived tx: %v",e)}
-					rawTx,e=spParseFoundTransaction(raw.RawTx,txid)
-					if e!=nil{return nil,e}
-				}
+				rawTx,err:=spParseFoundTransaction(raw.RawTx,txid)
+				if err!=nil{return nil,err}
 				for i,ms:=range matched{
 					for _,m:=range ms{
 						if uint64(m.Vout)>=uint64(len(rawTx.TxOut)) ||
@@ -237,6 +227,7 @@ func (p *Manager) SyncSilentPayArchive(ctx context.Context) ([]SPAccountHistory,
 				// Empty trailing blocks must also be present in Archive.
 				return nil,fmt.Errorf("silentpay: incomplete archived height coverage")
 			}
+			for i:=range histories{histories[i].Complete=true}
 			if e:=persist();e!=nil{return nil,e}
 			return toResults(),nil
 		}
@@ -263,8 +254,6 @@ func (p *Manager) LastSyncedSilentPayHistory(walletID int64,index uint32) (SPAcc
 	if err!=nil{return SPAccountHistory{},err}
 	if record.Anchor.Height<0{return SPAccountHistory{},fmt.Errorf("silentpay: no completed historical scan")}
 	return SPAccountHistory{WalletID:walletID,AccountIndex:index,Anchor:record.Anchor,
-		Payments:record.Payments,Complete:true},nil
+		Payments:record.Payments,Complete:record.Complete},nil
 }
 
-// Stable ordering of account-specific histories does not depend on map order.
-var _ = sort.Slice
