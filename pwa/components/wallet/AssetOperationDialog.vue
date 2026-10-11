@@ -351,6 +351,11 @@ const handleAddressUpdate = (value: string | number) => {
 // 域名解析函数
 const resolveAddress = async (input: string) => {
   if (!input.trim() || !network.value) return null
+  if (/^(sp1|tsp1)/i.test(input.trim()) && isBitcoinChain.value && isBTCAsset.value) {
+    // SP is validated against BIP352 checksum + network in the SDK,
+    // never passed through btcutil.DecodeAddress or a name resolver.
+    return { isDomain: false, resolvedAddress: input.trim(), originalInput: input, domainName: null }
+  }
   console.log('input', input);
 
   isResolving.value = true
