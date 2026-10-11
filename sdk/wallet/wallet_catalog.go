@@ -469,6 +469,14 @@ func (p *Manager) DeleteWallet(id int64) error {
 	if info == nil {
 		return fmt.Errorf("can't find wallet %d", id)
 	}
+	// An SP address stays valid after publication. Deleting its mnemonic
+	// wallet would discard the scan key and future payment recovery metadata.
+	// Do not allow a regular catalog deletion to strand SP BTC.
+	for _, enabled := range info.SPEnabled {
+		if enabled {
+			return fmt.Errorf("wallet with active Silent Payments cannot be deleted")
+		}
+	}
 	if p.isAccountManagementRootLocked(info) {
 		return fmt.Errorf("the account management wallet cannot be deleted")
 	}
