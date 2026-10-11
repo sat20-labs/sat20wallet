@@ -1,3 +1,5 @@
+github.com/OLProtocol/go-bitcoind v0.0.0-20250426075321-9b4dd47b435f h1:/n88Ai8/q1tnlbpnUZae7IxkUvRhqtksr6TjwcjpJ0A=
+github.com/OLProtocol/go-bitcoind v0.0.0-20250426075321-9b4dd47b435f/go.mod h1:3mPt/w3ZEBjqljKWzXOv2pVvHv+sxnhzeJE+Nac7Sp4=
 github.com/DataDog/zstd v1.4.5 h1:EndNeuB0l9syBZhut0wns3gV1hL8zX8LIu6ZiVHWLIQ=
 github.com/DataDog/zstd v1.4.5/go.mod h1:1jcaCB/ufaK+sKp1NBhlGmpz41jOoPQ35bpF36t7BBo=
 github.com/aead/siphash v1.0.1/go.mod h1:Nywa3cDsYNNK3gaciGTWPwHt0wlpNV15vwmswBAUSII=
