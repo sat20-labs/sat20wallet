@@ -38,3 +38,15 @@ SP 是 L1 BTC 功能，不需要聪网区块为其背书。现有聪网 E2E 中�
 ## 尚未完成的 SP 上线验收
 
 PR #11 仍是 Draft：已匹配 SP UTXO 接入通用 BTC 余额、选币、实际生产花费；匹配元数据本地加密；Archive/增量恢复；PWA Browser 完整验收尚未全部解决。即使真实 Core+Base E2E 通过，也不能替代这些功能。
+
+## 实际执行结果（2026-10-11）
+
+真实 Bitcoin Core + BaseIndexer + SDK 回路 **PASS**，并在修复 SDK Go module graph 后重复复验通过：
+
+- 证据 1：[GitHub Actions run 38146136749](https://github.com/sat20-labs/sat20wallet/actions/runs/38146136749)，sp-bitcoin-core job 成功。日志包含 Bitcoin Core 29.2 SHA256 校验 OK、BaseIndexer.UpdateDB、BaseIndexer.CheckSelf 和 PASS: TestSPBitcoinCoreRegtestIndexerE2E (1.02s)。
+- 证据 2：[GitHub Actions run 38146721490](https://github.com/sat20-labs/sat20wallet/actions/runs/38146721490)，修复 SP 源码 gofmt 后，该 job 再次成功，现有 RGB11 asset naming 格式检查也已通过该步骤。
+- 比特币 regtest 测试数据与临时 DB 均在 GitHub Runner 上生成，结束后清理，不依赖本地 Mac 或主网服务。
+
+为了确保 Pull Request 新增 workflow 尚未在主分支激活时能够获得实际证据，曾临时在 rgb11-asset-naming.yml 添加仅本 PR 运行的 SP job；验证完成后已删除这一临时 job，恢复原 workflow。长期 CI 入口为新建的 .github/workflows/silentpay.yml（包含真实 regtest 命令）。
+
+本次实际通过的是 **真实 Core RPC + 原生 BaseIndexer + 真实 SP REST handler + SDK 的单项 E2E**；没有启动完整 IndexerMgr 守护进程、SatoshiNet 三节点与浏览器 PWA 的统一编排。不要用单项 PASS 代替第二阶段验收。
