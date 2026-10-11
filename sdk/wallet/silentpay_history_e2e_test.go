@@ -38,18 +38,23 @@ func (s *spArchiveFakeIndexer) SPScan(_ context.Context,req SPScanRequest) (SPIn
 		req.AnchorHash!=s.anchor.BlockHash {
 		return SPIndexerPage{},fmt.Errorf("incorrect Archive query: %+v",req)
 	}
-	pk0,pk1:=s.tx.TxOut[0].PkScript[2:],s.tx.TxOut[1].PkScript[2:]
 	if req.Cursor=="" {
+		blocks:=make([]SPIndexerBlock,0,11)
+		for h:=0;h<10;h++{
+			blocks=append(blocks,SPIndexerBlock{Height:h,BlockHash:(chainhash.Hash{byte(h)}).String()})
+		}
+		blocks=append(blocks,SPIndexerBlock{Height:10,BlockHash:s.blockHash,
+			Transactions:[]SPIndexerTransaction{{
+				TxIndex:1,Tweak:s.T,P2TROutputs:[]SPIndexerOutput{
+					{Vout:0,OutputKey:s.tx.TxOut[0].PkScript[2:]},
+					{Vout:1,OutputKey:s.tx.TxOut[1].PkScript[2:]},
+				},
+			}},
+		})
 		return SPIndexerPage{Anchor:s.anchor,NextCursor:"next-page",Done:false,
-			Blocks:[]SPIndexerBlock{{Height:10,BlockHash:s.blockHash,
-				Transactions:[]SPIndexerTransaction{{
-					TxIndex:1,Tweak:s.T,P2TROutputs:[]SPIndexerOutput{
-						{Vout:0,OutputKey:pk0},{Vout:1,OutputKey:pk1},
-					},
-				}},
-			}}},nil
+			Blocks:blocks},nil
 	}
-	if req.Cursor!="next-page" {return SPIndexerPage{},fmt.Errorf("unexpected Archive cursor")}
+		if req.Cursor!="next-page" {return SPIndexerPage{},fmt.Errorf("unexpected Archive cursor")}
 	if s.failNext {return SPIndexerPage{},fmt.Errorf("injected Archive transport failure")}
 	return SPIndexerPage{Anchor:s.anchor,Done:true,Blocks:[]SPIndexerBlock{
 		{Height:10,BlockHash:s.blockHash},
