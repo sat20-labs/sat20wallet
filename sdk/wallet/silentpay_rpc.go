@@ -206,33 +206,32 @@ func (p *IndexerClient) SPLookup(ctx context.Context, positions []SPIndexerPosit
 // endpoints but not the much larger IndexerRPCClient interface.
 var _ SPIndexerRPC = (*IndexerClient)(nil)
 
-
 func (p *IndexerClient) SPOutpoints(ctx context.Context, snapshotID string,
 	positions []SPIndexerPosition) (SPBaseAnchor, []SPIndexerPositionResult, error) {
 	if snapshotID == "" || len(positions) == 0 || len(positions) > 500 {
 		return SPBaseAnchor{}, nil, fmt.Errorf("silentpay: invalid outpoint request")
 	}
 	var resp struct {
-		Code int `json:"code"`
-		Msg string `json:"msg"`
-		Anchor SPBaseAnchor `json:"anchor"`
-		Data []SPIndexerPositionResult `json:"data"`
+		Code   int                       `json:"code"`
+		Msg    string                    `json:"msg"`
+		Anchor SPBaseAnchor              `json:"anchor"`
+		Data   []SPIndexerPositionResult `json:"data"`
 	}
 	if err := p.spPost(ctx, "/v1/sp/outpoints/query", map[string]any{
-		"snapshot_id":snapshotID,"positions":positions,
+		"snapshot_id": snapshotID, "positions": positions,
 	}, &resp); err != nil {
-		return SPBaseAnchor{},nil,err
+		return SPBaseAnchor{}, nil, err
 	}
-	if resp.Code!=0 || len(resp.Data)!=len(positions) {
-		return SPBaseAnchor{},nil,fmt.Errorf("silentpay: invalid output-state response: %s",resp.Msg)
+	if resp.Code != 0 || len(resp.Data) != len(positions) {
+		return SPBaseAnchor{}, nil, fmt.Errorf("silentpay: invalid output-state response: %s", resp.Msg)
 	}
-	for i,p := range positions {
+	for i, p := range positions {
 		out := resp.Data[i]
-		if out.Height!=p.Height || out.TxIndex!=p.TxIndex || out.Vout!=p.Vout ||
-			out.BlockHash!=p.BlockHash || out.ExpectedTxID!=p.ExpectedTxID ||
-			out.Error!="" || out.TxID=="" || (out.State!="spent" && out.State!="unspent") {
-			return SPBaseAnchor{},nil,fmt.Errorf("silentpay: inconsistent outpoint %d: %s",i,out.Error)
+		if out.Height != p.Height || out.TxIndex != p.TxIndex || out.Vout != p.Vout ||
+			out.BlockHash != p.BlockHash || out.ExpectedTxID != p.ExpectedTxID ||
+			out.Error != "" || out.TxID == "" || (out.State != "spent" && out.State != "unspent") {
+			return SPBaseAnchor{}, nil, fmt.Errorf("silentpay: inconsistent outpoint %d: %s", i, out.Error)
 		}
 	}
-	return resp.Anchor,resp.Data,nil
+	return resp.Anchor, resp.Data, nil
 }
