@@ -385,7 +385,18 @@ const handleError = (message: string) => {
 const l1Send = async ({ toAddress, asset_name, amt }: any) => {
   loading.value = true
 
-  const [err] = await walletManager.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
+  // BIP352 is BTC-only. Do not let a generic asset transfer or ordinary
+  // Bitcoin-address parser interpret a silent payment address.
+  let err: Error | undefined
+  if (/^(sp1|tsp1)/i.test(String(toAddress).trim())) {
+    if (asset_name !== '::') {
+      err = new Error('Silent Payments are available only for BTC')
+    } else {
+      [err] = await walletManager.sendSilentPayment(toAddress, amt, btcFeeRate.value)
+    }
+  } else {
+    [err] = await walletManager.sendAssets(toAddress, asset_name, amt, btcFeeRate.value)
+  }
   if (err) {
     toast({
       title: 'Error',
