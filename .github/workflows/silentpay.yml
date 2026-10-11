@@ -24,6 +24,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  format:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feat/bip352-per-account-sp-wallet-20261011'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+      - name: Apply gofmt to branch-local SP changes
+        run: |
+          gofmt -w sdk/wallet/silentpay*.go sdk/wasm/silentpay.go sdk/wallet/db.go sdk/wallet/wallet_catalog.go sdk/wallet/account_management_state.go sdk/wallet/interface.go sdk/wasm/main.go
+          git add sdk/wallet/silentpay*.go sdk/wasm/silentpay.go sdk/wallet/db.go sdk/wallet/wallet_catalog.go sdk/wallet/account_management_state.go sdk/wallet/interface.go sdk/wasm/main.go
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'style(sp): apply gofmt to SP implementation'
+            git push origin HEAD:${{ github.head_ref }}
+          fi
+
   sdk:
     runs-on: ubuntu-latest
     timeout-minutes: 30
