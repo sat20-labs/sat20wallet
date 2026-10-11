@@ -339,13 +339,16 @@ func (p *Manager) SyncSilentPayLive(ctx context.Context) ([]SPAccountBalance, er
 // never been a complete snapshot. The PWA can show an explicit 'not scanned'
 // state rather than assuming 0 BTC.
 func (p *Manager) LastSyncedSilentPay(walletID int64, index uint32) (SPAccountBalance, error) {
-	keys, err := p.silentPayKeysForAccount(walletID, index)
-	if err != nil {
-		return SPAccountBalance{}, err
+	if p == nil || p.db == nil {
+		return SPAccountBalance{}, ErrSilentPayUnsupported
 	}
-	_ = keys
 	p.mutex.RLock()
 	info := p.walletInfoMap[walletID]
+	if info == nil || int(index) >= info.Accounts || !info.SPEnabled[index] ||
+		info.Type != WALLET_TYPE_MNEMONIC || info.Wallet == nil {
+		p.mutex.RUnlock()
+		return SPAccountBalance{}, ErrSilentPayUnsupported
+	}
 	fingerprint := walletFingerprint(info.Wallet)
 	p.mutex.RUnlock()
 	raw, err := p.db.Read(spAccountDataKey(spIndexerExpectedNetwork(), fingerprint, index))
