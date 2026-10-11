@@ -1,0 +1,78 @@
+name: Silent Payments SDK and PWA
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sdk/wallet/silentpay*.go'
+      - 'sdk/wallet/db.go'
+      - 'sdk/wallet/wallet_catalog.go'
+      - 'sdk/wallet/account_management_state.go'
+      - 'sdk/wallet/interface.go'
+      - 'sdk/wasm/silentpay.go'
+      - 'sdk/wasm/main.go'
+      - 'pwa/**'
+      - 'docs/bip352-silent-payments-v1.md'
+      - '.github/workflows/silentpay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: silentpay-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: sat20wallet
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/indexer
+          path: indexer
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/rgb11
+          path: rgb11
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/satoshinet
+          path: satoshinet
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sat20wallet/sdk/go.mod
+          cache: false
+      - name: Report Go formatting
+        working-directory: sat20wallet
+        run: gofmt -l sdk/wallet/silentpay*.go sdk/wasm/silentpay.go
+      - name: Compile wallet packages
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet/... -run '^$' -count=1
+      - name: Test Silent Payments with real Bitcoin signatures
+        working-directory: sat20wallet/sdk
+        run: go test ./wallet -run '^TestSilentPay' -count=1 -v -timeout=10m
+      - name: Compile real WASM exports
+        working-directory: sat20wallet/sdk
+        run: GOOS=js GOARCH=wasm go build -buildvcs=false -o /tmp/sat20-silentpay.wasm ./wasm
+
+  pwa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pwa/package-lock.json
+      - name: Install PWA dependencies
+        working-directory: pwa
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck PWA
+        working-directory: pwa
+        run: npm run compile
