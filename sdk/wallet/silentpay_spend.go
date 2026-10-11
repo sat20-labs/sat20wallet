@@ -29,6 +29,8 @@ func (p *Manager) BuildSilentPaySweep(ctx context.Context, walletID int64, index
 	}
 	keys,err := p.silentPayKeysForAccount(walletID,index)
 	if err!=nil { return nil,err }
+	defer keys.Scan.Zero()
+	defer keys.Spend.Zero()
 	last,err := p.LastSyncedSilentPay(walletID,index)
 	if err!=nil || !last.Complete { return nil,fmt.Errorf("silentpay: no complete confirmed snapshot") }
 
@@ -104,6 +106,7 @@ func (p *Manager) BuildSilentPaySweep(ctx context.Context, walletID int64, index
 	tweak.OutputKey=compressedSpendOutput
 	signKey,err:=SilentPayOutputSpendKey(keys,tweak)
 	if err!=nil{return nil,err}
+	defer signKey.Zero()
 	expectedScript:=append([]byte{txscript.OP_1,0x20},compressedSpendOutput...)
 	if !bytes.Equal(source.PkScript,expectedScript) {
 		return nil,fmt.Errorf("silentpay: scanned output script does not match its spend key")
