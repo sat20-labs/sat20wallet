@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,6 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/gin-gonic/gin"
@@ -68,7 +68,7 @@ func (c *spRealCoreRPC) call(method string, params []any, out any) error {
 	if err != nil { return err }
 	defer res.Body.Close()
 	var reply spRealRPCReply
-	if err := json.NewDecoder(http.MaxBytesReader(nil, res.Body, 2<<20)).Decode(&reply); err != nil {
+	if err := json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(&reply); err != nil {
 		return fmt.Errorf("bitcoind %s status %d: %w", method, res.StatusCode, err)
 	}
 	if reply.Error != nil {
@@ -315,9 +315,7 @@ func TestSPBitcoinCoreRegtestIndexerE2E(t *testing.T) {
 				if err != nil { t.Fatal(err) }
 				for _, m := range recognized {
 					if matchedOK { t.Fatal("ambiguous SP match") }
-					matched,machedHeight := m,block.Height
-					_ = matched
-					height,blockHash,txIndex = machedHeight,block.BlockHash,row.TxIndex
+					height,blockHash,txIndex = block.Height,block.BlockHash,row.TxIndex
 					matched = m
 					matchedOK=true
 				}
