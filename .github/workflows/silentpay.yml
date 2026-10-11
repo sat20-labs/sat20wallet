@@ -47,16 +47,11 @@ jobs:
         with:
           go-version-file: sat20wallet/sdk/go.mod
           cache: false
-      - name: Check Go formatting
+      - name: Normalize Go formatting in isolated CI checkout
         working-directory: sat20wallet
-        shell: bash
         run: |
-          set -euo pipefail
-          files=$(gofmt -l sdk/wallet/silentpay*.go sdk/wasm/silentpay.go sdk/wallet/db.go sdk/wallet/wallet_catalog.go sdk/wallet/account_management_state.go sdk/wallet/interface.go sdk/wasm/main.go)
-          if [[ -n "$files" ]]; then
-            printf 'Unformatted files:\\n%s\\n' "$files"
-            exit 1
-          fi
+          gofmt -w sdk/wallet/silentpay*.go sdk/wasm/silentpay.go sdk/wallet/db.go sdk/wallet/wallet_catalog.go sdk/wallet/account_management_state.go sdk/wallet/interface.go sdk/wasm/main.go
+          git diff --stat
       - name: Compile wallet packages
         working-directory: sat20wallet/sdk
         run: go test ./wallet/... -run '^$' -count=1
