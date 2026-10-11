@@ -11,6 +11,7 @@ on:
       - 'sdk/wallet/interface.go'
       - 'sdk/wasm/silentpay.go'
       - 'sdk/wasm/main.go'
+      - 'sdk/e2e/silentpay_bitcoind_e2e_test.go'
       - 'pwa/**'
       - 'docs/bip352-silent-payments-v1.md'
       - '.github/workflows/silentpay.yml'
@@ -50,7 +51,7 @@ jobs:
       - name: Normalize formatting in isolated CI checkout
         working-directory: sat20wallet
         run: |
-          gofmt -w sdk/wallet/silentpay*.go sdk/wasm/silentpay.go sdk/wallet/db.go sdk/wallet/wallet_catalog.go sdk/wallet/account_management_state.go sdk/wallet/interface.go sdk/wasm/main.go
+          gofmt -w sdk/e2e/silentpay_bitcoind_e2e_test.go sdk/wallet/silentpay*.go sdk/wasm/silentpay.go sdk/wallet/db.go sdk/wallet/wallet_catalog.go sdk/wallet/account_management_state.go sdk/wallet/interface.go sdk/wasm/main.go
           git diff --stat
       - name: Compile wallet packages
         working-directory: sat20wallet/sdk
