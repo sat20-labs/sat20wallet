@@ -688,7 +688,7 @@ func TestAmmContract(t *testing.T) {
 		if !ok {
 			t.Fatal()
 		}
-		if swapRuntime.IsActive() {
+		if swapRuntime.IsActive_SatsNet() {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -940,7 +940,7 @@ func TestAmmContract_Runes(t *testing.T) {
 		if !ok {
 			t.Fatal()
 		}
-		if swapRuntime.IsActive() {
+		if swapRuntime.IsActive_SatsNet() {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)

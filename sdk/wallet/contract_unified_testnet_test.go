@@ -270,7 +270,7 @@ func TestLegacyFaucetDeployFund_testnet(t *testing.T) {
 		status, statusErr := manager.GetContractStatusInServer(url)
 		if statusErr == nil {
 			runtime := NewFaucetContractRuntime(manager)
-			if jsonErr := json.Unmarshal([]byte(status), runtime); jsonErr == nil && runtime.IsActive() {
+			if jsonErr := json.Unmarshal([]byte(status), runtime); jsonErr == nil && runtime.GetRuntimeBase().IsActive_SatsNet() {
 				break
 			}
 		}

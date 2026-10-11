@@ -47,6 +47,7 @@ for (const stage of ['none', 'before_dispatch', 'native_pending', 'finish_log'])
       radash: { tryit }, '@/lib/walletSession': session, '@/utils/pwaOperationLog': logs,
       '@/utils/pwaVersionPolicy': { beginVersionDispatch: () => () => {} },
       '@/utils/walletAwaitTrace': { beginWalletAwaitTrace: () => () => {} },
+      '@/utils/wasmRuntimeDiagnostics': { noteWasmOperation: () => {} },
     }, { sat20wallet_wasm: { createRGB11Invoice: async () => {
       calls++
       // Only the external WASM boundary is mocked. The actual SDK persists

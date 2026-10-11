@@ -366,7 +366,7 @@ func TestChannelHeartbeatSkipsMonitorWallet(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	if _, err := manager.CreateMonitorWallet("tb1qmonitor"); err != nil {
+	if _, err := manager.CreateMonitorWallet(manager.wallet.GetAddress()); err != nil {
 		manager.stopChannelHeartbeat()
 		t.Fatal(err)
 	}

@@ -4784,7 +4784,7 @@ func (p *SwapContractRuntime) withdraw() error {
 			if len(dealInfo.SendInfo) != 0 {
 				// 发送费用已经从所有参与者扣除，但如果该交易的聪资产太少，就暂时不发送，等下次
 				//if dealInfo.TotalValue >= _valueLimit || len(dealInfo.SendInfo) >= _addressLimit {
-				txId, fee, stubFee, err := p.sendTx(dealInfo, INVOKE_RESULT_WITHDRAW, true, true)
+				txId, fee, stubFee, err := p.sendTx(dealInfo, INVOKE_RESULT_WITHDRAW, true, true, 0)
 				if err != nil {
 					if stubFee != 0 {
 						p.mutex.Lock()

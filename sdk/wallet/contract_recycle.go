@@ -490,11 +490,6 @@ func (p *RecycleContractRunTime) IsIdle() bool {
 	return len(p.recycleMap) == 0 && len(p.rewardMap) == 0
 }
 
-func (p *RecycleContractRunTime) IsActive() bool {
-	return p.ContractRuntimeBase.IsActive() &&
-		p.CurrBlockL1 >= p.EnableBlockL1
-}
-
 // 只计算在 calcAssetMerkleRoot 之前已经确定的数据，其他在广播TX之后才修改的数据暂时不要管，不然容易导致数据不一致
 func CalcRecycleContractRunningDataMerkleRoot(r *RecycleContractRunningData) []byte {
 	var buf []byte
@@ -828,7 +823,7 @@ func (p *RecycleContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock
 		return err
 	}
 
-	if p.IsActive() {
+	if p.IsActive_SatsNet() {
 		p.mutex.Lock()
 		p.PreprocessInvokeData_SatsNet(data)
 		p.process(data.Height, data.BlockHash, false)
@@ -1836,7 +1831,10 @@ func (p *RecycleContractRunTime) reward() error {
 		dealInfo := p.genRewardInfo(heightL1)
 		// 发送
 		if len(dealInfo.SendInfo) != 0 {
-			txId, fee, stubFee, err := p.sendTx(dealInfo, INVOKE_RESULT_REWARD, false, false)
+			if dealInfo.Height > heightL1 {
+				return fmt.Errorf("reward height %d exceeds processed L1 height %d", dealInfo.Height, heightL1)
+			}
+			txId, fee, stubFee, err := p.sendTx(dealInfo, INVOKE_RESULT_REWARD, false, false, heightL1)
 			if err != nil {
 				if stubFee != 0 {
 					p.mutex.Lock()

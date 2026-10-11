@@ -4062,6 +4062,11 @@ func (p *rgb11Manager) RefreshRGB11State(ctx context.Context) (result *RGB11Refr
 		return nil, err
 	}
 	defer unlock()
+	return p.refreshRGB11State(ctx)
+}
+
+// refreshRGB11State runs while the caller owns the shared chain-refresh lock.
+func (p *rgb11Manager) refreshRGB11State(ctx context.Context) (result *RGB11RefreshResult, err error) {
 	beforeRecoveryHash, beforeRecoveryErr := p.rgb11RecoveryStateHash()
 	defer func() {
 		if beforeRecoveryErr != nil {

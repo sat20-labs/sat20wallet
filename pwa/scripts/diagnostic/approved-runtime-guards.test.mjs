@@ -18,7 +18,7 @@ test('closed current channels clear balances without clearing closing channels o
     ref: (value) => ({ value }),
     computed: (fn) => ({ get value() { return fn() } }),
     watch: () => {},
-    satsnetStp: { getCurrentChannel: () => new Promise((resolve) => requests.push(resolve)) },
+    satsnetStp: { allReservations: async () => [undefined, { reservations: [] }], getCurrentChannel: () => new Promise((resolve) => requests.push(resolve)) },
     console: { log() {}, warn() {} },
   })
   const seed = () => {
@@ -217,11 +217,14 @@ test('root account identity is a stable public key and local wallet IDs remain t
   assert.match(storage, /rootAccountId: string/)
   assert.match(storage, /rootAccountId: ''/)
   assert.doesNotMatch(storage, /rootWalletId/)
-  assert.match(store, /const createsRootWallet = wallets\.value\.length === 0 && !rootAccountId\.value[\s\S]*await setRootAccountId\(createdRootAccountId\)/)
+  assert.match(store, /const readWalletCatalogState = async[\s\S]*walletManager\.getWalletCatalog\(\)[\s\S]*rootAccountId: result\.root_account_id/)
+  assert.match(store, /const syncWalletCatalog = async[\s\S]*rootAccountId: snapshot\.rootAccountId/)
   assert.match(store, /const managedRoot = status\.active && status\.account_id[\s\S]*Managed root account is missing from the local wallet catalog/)
   assert.match(store, /account\.accountId === rootAccountId\.value[\s\S]*Root wallet cannot be deleted/)
   assert.doesNotMatch(store, /setRootAccountId\(walletId\)/)
-  assert.match(restore, /const rootAccountId = String\(result\.account_id \|\| ''\)[\s\S]*rootAccountId,[\s\S]*walletId: rootWalletId/)
+  assert.match(restore, /await accountSDK\.commitRecovery\(sessionId\.value, password\.value\)[\s\S]*step\.value = 6[\s\S]*step\.value = 5[\s\S]*setTimeout\(reloadWallet, 500\)/)
+  assert.match(restore, /window\.location\.hash = '#\/unlock'[\s\S]*window\.location\.reload\(\)/)
+  assert.doesNotMatch(restore, /walletStorage\.batchUpdate|setRootAccountId\(/)
 })
 
 test('network identity uses mainnet and migrates legacy livenet storage', () => {

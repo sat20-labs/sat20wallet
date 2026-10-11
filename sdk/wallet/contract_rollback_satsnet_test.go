@@ -2,15 +2,18 @@ package wallet
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/btcsuite/btcd/chaincfg"
+	btcwire "github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/satoshinet/btcjson"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -589,5 +592,314 @@ func TestAmmRollbackDropsReorgOrphanBeforeCanonicalReplay(t *testing.T) {
 	}
 	if runtime.InvokeCount != 21 || runtime.SatsValueInPool != 70 || runtime.AssetAmtInPool.Cmp(indexer.NewDecimal(1600, 0)) >= 0 {
 		t.Fatalf("canonical replay did not rebuild AMM state: pool=%s/%d", runtime.AssetAmtInPool, runtime.SatsValueInPool)
+	}
+}
+
+// TestRecycleActivationOrdering verifies that either chain can accept inputs
+// after its own activation height, without waiting for the other chain.
+func TestRecycleActivationOrdering(t *testing.T) {
+	t.Run("L1 input before L2 enable", func(t *testing.T) {
+		runtime, manager := newRecycleActivationOrderingFixture(t)
+		defer manager.GetDB().Close()
+
+		runtime.SetEnableBlock(3, 2)
+		deposit := newRecycleOrderingDeposit(runtime, 2)
+		err := runtime.InvokeWithBlock(&InvokeDataInBlock{
+			Height: 2, BlockHash: recycleOrderingBlockHash("independent-l1-h2"),
+			InvokeTxVect: []*InvokeTx{deposit},
+		})
+		if err != nil {
+			t.Fatalf("L1 deposit at its enable height failed before L2 activation: %v", err)
+		}
+		if runtime.CurrBlockL1 != 2 || runtime.CurrBlock != 1 {
+			t.Fatalf("unexpected independent cursors: L1=%d L2=%d", runtime.CurrBlockL1, runtime.CurrBlock)
+		}
+		if runtime.InvokeCount != 1 || !runtime.IsActive() || runtime.IsActive_SatsNet() {
+			t.Fatalf("wrong activation after L1 input: invokes=%d L1=%t L2=%t", runtime.InvokeCount, runtime.IsActive(), runtime.IsActive_SatsNet())
+		}
+		history := LoadContractInvokeHistory(manager.GetDB(), runtime.URL(), false, false)
+		if len(history) != 1 {
+			t.Fatalf("L1 deposit history count=%d, want 1", len(history))
+		}
+		var stored InvokeHistoryItem
+		for _, item := range history {
+			stored = item
+		}
+		item, ok := stored.(*SwapHistoryItem)
+		if !ok || !item.FromL1 {
+			t.Fatalf("expected persisted L1 deposit history, got %#v", stored)
+		}
+
+		replay := *deposit
+		replay.Handled = false
+		if err := runtime.InvokeWithBlock(&InvokeDataInBlock{
+			Height: 2, BlockHash: recycleOrderingBlockHash("independent-l1-h2-replay"),
+			InvokeTxVect: []*InvokeTx{&replay},
+		}); err == nil {
+			t.Fatal("same-height L1 replay was accepted")
+		}
+		if runtime.InvokeCount != 1 || len(LoadContractInvokeHistory(manager.GetDB(), runtime.URL(), false, false)) != 1 {
+			t.Fatalf("same-height L1 replay changed accepted history: invokes=%d", runtime.InvokeCount)
+		}
+	})
+
+	t.Run("L2 input before L1 enable", func(t *testing.T) {
+		runtime, manager := newRecycleActivationOrderingFixture(t)
+		defer manager.GetDB().Close()
+
+		runtime.SetEnableBlock(2, 3)
+		deposit := newRecycleOrderingDeposit_SatsNet(runtime, 2)
+		err := runtime.InvokeWithBlock_SatsNet(&InvokeDataInBlock_SatsNet{
+			Height: 2, BlockHash: recycleOrderingBlockHash("independent-l2-h2"),
+			InvokeTxVect: []*InvokeTx_SatsNet{deposit},
+		})
+		if err != nil {
+			t.Fatalf("L2 deposit at its enable height failed before L1 activation: %v", err)
+		}
+		if runtime.CurrBlockL1 != 2 || runtime.CurrBlock != 2 {
+			t.Fatalf("unexpected independent cursors: L1=%d L2=%d", runtime.CurrBlockL1, runtime.CurrBlock)
+		}
+		if runtime.InvokeCount != 1 || runtime.IsActive() || !runtime.IsActive_SatsNet() {
+			t.Fatalf("wrong activation after L2 input: invokes=%d L1=%t L2=%t", runtime.InvokeCount, runtime.IsActive(), runtime.IsActive_SatsNet())
+		}
+		history := LoadContractInvokeHistory(manager.GetDB(), runtime.URL(), false, false)
+		if len(history) != 1 {
+			t.Fatalf("L2 deposit history count=%d, want 1", len(history))
+		}
+		var stored InvokeHistoryItem
+		for _, item := range history {
+			stored = item
+		}
+		item, ok := stored.(*SwapHistoryItem)
+		if !ok || item.FromL1 {
+			t.Fatalf("expected persisted L2 deposit history, got %#v", stored)
+		}
+
+		replay := *deposit
+		replay.Handled = false
+		if err := runtime.InvokeWithBlock_SatsNet(&InvokeDataInBlock_SatsNet{
+			Height: 2, BlockHash: recycleOrderingBlockHash("independent-l2-h2-replay"),
+			InvokeTxVect: []*InvokeTx_SatsNet{&replay},
+		}); err == nil {
+			t.Fatal("same-height L2 replay was accepted")
+		}
+		if runtime.InvokeCount != 1 || len(LoadContractInvokeHistory(manager.GetDB(), runtime.URL(), false, false)) != 1 {
+			t.Fatalf("same-height L2 replay changed accepted history: invokes=%d", runtime.InvokeCount)
+		}
+
+		duplicate := *deposit
+		duplicate.Handled = false
+		if err := runtime.InvokeWithBlock_SatsNet(&InvokeDataInBlock_SatsNet{
+			Height: 3, BlockHash: recycleOrderingBlockHash("independent-l2-h3"),
+			InvokeTxVect: []*InvokeTx_SatsNet{&duplicate},
+		}); err != nil {
+			t.Fatalf("next L2 block failed while checking duplicate: %v", err)
+		}
+		if runtime.InvokeCount != 1 || len(LoadContractInvokeHistory(manager.GetDB(), runtime.URL(), false, false)) != 1 {
+			t.Fatalf("duplicate L2 input changed accepted history: invokes=%d", runtime.InvokeCount)
+		}
+	})
+}
+
+func TestContractActivationGatesAreChainSpecific(t *testing.T) {
+	runtime, manager := newRecycleActivationOrderingFixture(t)
+	defer manager.GetDB().Close()
+
+	runtime.Status = CONTRACT_STATUS_READY
+	runtime.EnableBlockL1 = 3
+	runtime.CurrBlockL1 = 2
+	runtime.EnableBlock = 4
+	runtime.CurrBlock = 3
+	if err := runtime.AllowInvoke(); err == nil {
+		t.Fatal("L1 invoke was allowed before its enable height")
+	}
+	if err := runtime.AllowInvoke_SatsNet(); err == nil {
+		t.Fatal("L2 invoke was allowed before its enable height")
+	}
+
+	runtime.CurrBlockL1 = 3
+	runtime.StartBlock = 5
+	runtime.EndBlock = 6
+	if err := runtime.AllowInvoke(); err != nil {
+		t.Fatalf("L1 invoke at its enable height must ignore the L2 business window: %v", err)
+	}
+	if err := runtime.AllowInvoke_SatsNet(); err == nil {
+		t.Fatal("L2 invoke was allowed before its enable height")
+	}
+
+	runtime.CurrBlock = 4
+	if err := runtime.AllowInvoke_SatsNet(); err == nil {
+		t.Fatal("L2 invoke was allowed before StartBlock")
+	}
+	runtime.CurrBlock = 5
+	if err := runtime.AllowInvoke_SatsNet(); err != nil {
+		t.Fatalf("L2 invoke at StartBlock was rejected: %v", err)
+	}
+	runtime.CurrBlock = 6
+	if err := runtime.AllowInvoke_SatsNet(); err != nil {
+		t.Fatalf("L2 invoke at EndBlock was rejected: %v", err)
+	}
+	runtime.CurrBlock = 7
+	if err := runtime.AllowInvoke_SatsNet(); err == nil {
+		t.Fatal("L2 invoke after EndBlock was allowed")
+	}
+	if err := runtime.AllowInvoke(); err != nil {
+		t.Fatalf("L1 invoke was incorrectly constrained by the L2 business window: %v", err)
+	}
+
+	runtime.StartBlock = 0
+	runtime.EndBlock = 0
+	runtime.Status = CONTRACT_STATUS_CLOSING
+	if err := runtime.AllowInvoke(); err != nil {
+		t.Fatalf("L1 AllowInvoke must not add a CLOSING gate: %v", err)
+	}
+	if err := runtime.AllowInvoke_SatsNet(); err != nil {
+		t.Fatalf("L2 AllowInvoke must not add a CLOSING gate: %v", err)
+	}
+	if runtime.IsActive() || runtime.IsActive_SatsNet() {
+		t.Fatal("closing contract reported active on one of its chains")
+	}
+}
+
+func newRecycleActivationOrderingFixture(t *testing.T) (*RecycleContractRunTime, *rollbackContractManager) {
+	t.Helper()
+	database := NewKVDB(t.TempDir())
+	localWallet := NewInternalWalletWithMnemonic(accountRootWrapperTestMnemonic, "recycle-ordering-local", GetChainParam())
+	remoteWallet := NewInternalWalletWithMnemonic(channelHeartbeatTestMnemonic, "recycle-ordering-remote", GetChainParam())
+	manager := &rollbackContractManager{Manager: &Manager{
+		db: database, wallet: localWallet, cfg: &common.Config{Mode: "test"},
+	}}
+	runtime := NewRecycleContractRunTime(manager)
+	runtime.LocalPubKey = localWallet.GetPubKey().SerializeCompressed()
+	runtime.RemotePubKey = remoteWallet.GetPubKey().SerializeCompressed()
+	runtime.CoreNodePubKey = runtime.LocalPubKey
+	runtime.ChannelAddr = localWallet.GetAddress()
+	runtime.AssetName = indexer.ASSET_PLAIN_SAT
+	runtime.NumberOfLastDigits = 1
+	runtime.FirstPrizeMatchCount = 1
+	runtime.FirstPrize = "1000"
+	reservation := &rollbackContractReservation{
+		contract: runtime, status: RS_DEPLOY_CONTRACT_RUNNING, initiator: false,
+		channel: runtime.ChannelAddr, localKey: runtime.LocalPubKey,
+		remoteKey: runtime.RemotePubKey, coreKey: runtime.CoreNodePubKey,
+	}
+	if err := runtime.InitFromDB(manager, reservation); err != nil {
+		t.Fatalf("initialize responder runtime: %v", err)
+	}
+	runtime.Status = CONTRACT_STATUS_READY
+	runtime.EnableBlock = INIT_ENABLE_BLOCK
+	runtime.EnableBlockL1 = INIT_ENABLE_BLOCK
+	runtime.CurrBlock = 1
+	runtime.CurrBlockL1 = 1
+	return runtime, manager
+}
+
+func recycleOrderingBlockHash(label string) string {
+	h := sha256.Sum256([]byte(label))
+	return hex.EncodeToString(h[:])
+}
+
+func newRecycleOrderingDeposit(runtime *RecycleContractRunTime, height int) *InvokeTx {
+	tx := btcwire.NewMsgTx(2)
+	tx.AddTxIn(btcwire.NewTxIn(&btcwire.OutPoint{}, nil, nil))
+	tx.AddTxOut(btcwire.NewTxOut(100000, []byte{0x51}))
+	output := indexer.NewTxOutput(100000)
+	output.OutValue.PkScript = []byte{0x51}
+	output.UtxoId = indexer.ToUtxoId(height, 0, 0)
+	output.OutPointStr = fmt.Sprintf("%s:0", tx.TxHash())
+	return &InvokeTx{
+		Tx: tx, TxIndex: 0, InvokeVout: 0, TxOutput: output,
+		Address: runtime.ChannelAddr, Invoker: "recycle-ordering-test-invoker",
+	}
+}
+
+func newRecycleOrderingDeposit_SatsNet(runtime *RecycleContractRunTime, height int) *InvokeTx_SatsNet {
+	tx := swire.NewMsgTx(swire.TxVersion)
+	tx.AddTxIn(swire.NewTxIn(&swire.OutPoint{}, nil, nil))
+	tx.AddTxOut(swire.NewTxOut(100000, nil, []byte{0x51}))
+	output := sindexer.NewTxOutput(100000)
+	output.OutValue.PkScript = []byte{0x51}
+	output.UtxoId = indexer.ToUtxoId(height, 0, 0)
+	output.OutPointStr = fmt.Sprintf("%s:0", tx.TxID())
+	return &InvokeTx_SatsNet{
+		Tx: tx, TxIndex: 0, InvokeVout: 0, TxOutput: output,
+		Address: runtime.ChannelAddr, Invoker: "recycle-ordering-test-invoker",
+	}
+}
+
+// Exercise the base's existing resync callback when the next L1 block arrives,
+// rather than manually replaying the deferred block from the test.
+type recycleOrderingResyncReservation struct {
+	*rollbackContractReservation
+	resync func(int, int)
+}
+
+func (r *recycleOrderingResyncReservation) ResyncBlock(start, end int) { r.resync(start, end) }
+
+func TestRecycleActivationNextBlockReplaysDeferredDeposit(t *testing.T) {
+	for _, initiallyUnknown := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unknown_enable_%t", initiallyUnknown), func(t *testing.T) {
+			runtime, manager := newRecycleActivationOrderingFixture(t)
+			defer manager.GetDB().Close()
+			deferred := &InvokeDataInBlock{
+				Height: 2, BlockHash: recycleOrderingBlockHash("next-block-l1-h2"),
+				InvokeTxVect: []*InvokeTx{newRecycleOrderingDeposit(runtime, 2)},
+			}
+			if !initiallyUnknown {
+				runtime.SetEnableBlock(3, 2)
+				if err := runtime.InvokeWithBlock(deferred); err != nil {
+					t.Fatalf("L1 deposit should run without L2 activation: %v", err)
+				}
+				if runtime.InvokeCount != 1 || runtime.CurrBlock != 1 {
+					t.Fatalf("known L1 activation was incorrectly blocked by L2: invokes=%d L2=%d", runtime.InvokeCount, runtime.CurrBlock)
+				}
+				return
+			}
+
+			if err := runtime.InvokeWithBlock(deferred); err == nil {
+				t.Fatal("L1 block was accepted before its enable height was known")
+			}
+			if runtime.InvokeCount != 0 {
+				t.Fatal("deposit was accepted before L1 enable height was known")
+			}
+			runtime.SetEnableBlock(3, 2)
+			calls := 0
+			runtime.resv = &recycleOrderingResyncReservation{
+				rollbackContractReservation: runtime.resv.(*rollbackContractReservation),
+				resync: func(start, end int) {
+					calls++
+					if start != 2 || end != 2 {
+						t.Fatalf("wrong replay range %d..%d", start, end)
+					}
+					if err := runtime.InvokeWithBlock(deferred); err != nil {
+						t.Fatalf("deferred L1 replay: %v", err)
+					}
+				},
+			}
+			if err := runtime.InvokeWithBlock(&InvokeDataInBlock{
+				Height: 3, BlockHash: recycleOrderingBlockHash("next-block-l1-h3"),
+			}); err != nil {
+				t.Fatalf("next L1 block: %v", err)
+			}
+			if calls != 1 || runtime.InvokeCount != 1 || runtime.CurrBlockL1 != 3 || runtime.CurrBlock != 1 {
+				t.Fatalf("L1 resync did not independently recover deposit: callbacks=%d invokes=%d L1=%d L2=%d",
+					calls, runtime.InvokeCount, runtime.CurrBlockL1, runtime.CurrBlock)
+			}
+			if got := len(LoadContractInvokeHistory(manager.GetDB(), runtime.URL(), false, false)); got != 1 {
+				t.Fatalf("expected one persistent deposit, got %d", got)
+			}
+
+			duplicate := *deferred.InvokeTxVect[0]
+			duplicate.Handled = false
+			if err := runtime.InvokeWithBlock(&InvokeDataInBlock{
+				Height: 4, BlockHash: recycleOrderingBlockHash("next-block-l1-h4"),
+				InvokeTxVect: []*InvokeTx{&duplicate},
+			}); err != nil {
+				t.Fatalf("next L1 block with duplicate input: %v", err)
+			}
+			if runtime.InvokeCount != 1 || len(LoadContractInvokeHistory(manager.GetDB(), runtime.URL(), false, false)) != 1 {
+				t.Fatalf("duplicate L1 input changed accepted history: invokes=%d", runtime.InvokeCount)
+			}
+		})
 	}
 }

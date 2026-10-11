@@ -34,7 +34,12 @@ export function openExternalWindow(
 	}
 
 	try {
-		if (openWindow(safeURL, target, features)) return
+		const opened = openWindow(safeURL, target, features)
+		// A successful noopener window.open returns null; keep the wallet page.
+		const protectedPopup = features.split(',').some(feature =>
+			/^(noopener|noreferrer)(?:=(?:1|yes|true))?$/i.test(feature.trim()),
+		)
+		if (opened || protectedPopup) return
 	} catch (error) {
 		console.warn('Opening an external window failed:', error)
 	}

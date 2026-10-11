@@ -90,7 +90,7 @@ function walletSessionFixture() {
     if (name === 'unlockWallet' && args[0] !== 'correct-password') {
       return { code: -1, msg: 'password is incorrect' }
     }
-    const data = name === 'getWalletCatalog' ? { wallets: [{
+    const data = name === 'getWalletCatalog' ? { current_wallet_id: '1', current_account_index: 0, root_account_id: 'root-account', wallets: [{
       id: '1', name: 'Wallet 1', fingerprint: 'wallet-fingerprint', accounts: [{
         index: 0, name: 'Account 1', did: '', address: 'address', pub_key: 'pubkey', account_id: 'root-account',
       }],
@@ -106,6 +106,8 @@ function walletSessionFixture() {
   const dependencies = {
     radash: { tryit }, '@/lib/walletSession': session, '@/utils/pwaOperationLog': logs,
     '@/utils/pwaVersionPolicy': { beginVersionDispatch: () => () => {} },
+    '@/utils/walletAwaitTrace': { beginWalletAwaitTrace: () => () => {} },
+    '@/utils/wasmRuntimeDiagnostics': { noteWasmOperation: () => {} },
   }
   const walletManager = loadModule('../../utils/sat20.ts', dependencies, { sat20wallet_wasm: wasm })
   const stp = loadModule('../../utils/stp.ts', dependencies, { sat20wallet_wasm: wasm })
@@ -172,7 +174,8 @@ test('100 UI lock/unlock cycles only re-authenticate the existing runtime', asyn
     assert.ok(h.identity.assertWalletIdentityReady() > oldGeneration)
     assert.throws(() => h.identity.assertWalletIdentityReady(oldGeneration), /generation changed/)
   }
-  assert.deepEqual(h.calls.map(([name]) => name), Array(100).fill('unlockWallet'))
+  assert.equal(h.calls.filter(([name]) => name === 'getWalletCatalog').length, 100)
+  assert.deepEqual(h.calls.map(([name]) => name).filter(name => name !== 'getWalletCatalog'), Array(100).fill('unlockWallet'))
 })
 
 test('locked PWA facades refuse signing, export and channel mutation but allow explicit release', async () => {
@@ -227,14 +230,20 @@ test('lock invalidates in-flight signatures and unlock responses even after re-u
   }
 })
 
-test('cold unlock still initializes the account and already-unlocked errors are not authorization', async () => {
+test('cold unlock reconciles SDK identity and already-unlocked errors are not authorization', async () => {
   const h = walletSessionFixture()
   await h.store.lockWallet()
   h.session.setWalletRuntimeUnlocked(false)
   assert.equal((await h.store.unlockWallet('correct-password'))[0], undefined)
   assert.equal(h.state.locked, false)
   h.identity.assertWalletIdentityReady()
-  assert.ok(h.calls.some(([name]) => name === 'switchAccount'))
+  for (const method of ['getWalletAddress', 'getWalletPubkey', 'getWalletCatalog']) {
+    assert.ok(h.calls.some(([name]) => name === method), method)
+  }
+  assert.equal(h.state.walletId, '1')
+  assert.equal(h.state.accountIndex, 0)
+  assert.equal(h.state.rootAccountId, 'root-account')
+  assert.equal(h.calls.some(([name]) => ['switchAccount', 'switchWallet', 'init', 'release'].includes(name)), false)
   for (const handler of [
     () => ({ code: -1, msg: 'wallet has been unlocked' }),
     () => { throw new Error('wallet has been unlocked') },

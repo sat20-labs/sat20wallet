@@ -1,3 +1,4 @@
+import * as bitcoin from 'bitcoinjs-lib'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
@@ -64,7 +65,10 @@ test('transaction integer conversion rejects unsafe or out-of-range values', () 
 const psbtComponent = fs.readFileSync(new URL('../../components/approve/SignPsbt.vue', import.meta.url), 'utf8')
 const psbtScript = psbtComponent.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
 const psbtCode = transformSync(psbtScript, { loader: 'ts', target: 'es2022' }).code
-const txDetails = { inputs: [{ Outpoint: 'input:0', Value: 1000 }], outputs: [{ Value: 900 }] }
+const fixtureTx = new bitcoin.Transaction()
+fixtureTx.addInput(Buffer.alloc(32, 1), 0)
+fixtureTx.addOutput(Buffer.from([0x51]), 900)
+const txDetails = { txHex: fixtureTx.toHex(), inputs: [{ Outpoint: 'input:0', Value: 1000 }], outputs: [{ Value: 900 }] }
 
 function psbtApproval(chain = 'btc', overrides = {}) {
   const calls = [], events = [], notices = []
@@ -86,7 +90,7 @@ function psbtApproval(chain = 'btc', overrides = {}) {
     useWalletStore: () => ({ network: { value: 'testnet' } }),
     storeToRefs: (store) => store,
     useToast: () => ({ toast: (notice) => notices.push(notice) }),
-    walletManager,
+    walletManager, bitcoin,
     assertWalletIdentityReady,
     console: { log() {}, warn() {}, error() {} },
   })
@@ -131,6 +135,9 @@ test('PSBT approval refuses loading, missing, and malformed transaction details'
     [undefined, { ...txDetails, inputs: '{}' }],
     [undefined, { ...txDetails, inputs: [] }],
     [undefined, { inputs: txDetails.inputs }],
+    [undefined, { ...txDetails, txHex: '00' }],
+    [undefined, { ...txDetails, outputs: [{ Value: 901 }] }],
+    [undefined, { ...txDetails, outputs: [{ Value: 900 }, { Value: 0 }] }],
   ]) {
     const approval = psbtApproval('btc', { getTxAssetInfoFromPsbt: () => response })
     await approval.load()

@@ -250,3 +250,103 @@ func TestIndexedDBTransactionBoundaries(t *testing.T) {
 		}
 	})
 }
+
+// This review regression checks that a prefix scan visits only matching
+// IndexedDB cursor rows as unrelated keys are added. It is intentionally
+// timing-independent and records only a row count.
+func TestIndexedDBPrefixScanBoundsCursorRows(t *testing.T) {
+	database := storageReviewDB(t)
+	batch := database.NewWriteBatch()
+	defer batch.Close()
+	for i := 0; i < 256; i++ {
+		group := "a-unrelated-"
+		if i >= 128 {
+			group = "z-unrelated-"
+		}
+		key := []byte(group)
+		key = append(key, byte('0'+i/100), byte('0'+(i/10)%10), byte('0'+i%10))
+		if err := batch.Put(key, []byte("unrelated-value")); err != nil {
+			t.Fatal("queue unrelated key")
+		}
+	}
+	prefix := []byte("m-target/")
+	for _, entry := range []struct{ key, value string }{
+		{"m-target/a", "target-value-a"},
+		{"m-target/b", "target-value-b"},
+	} {
+		if err := batch.Put([]byte(entry.key), []byte(entry.value)); err != nil {
+			t.Fatal("queue target key")
+		}
+	}
+	if err := batch.Flush(); err != nil {
+		t.Fatal("write synthetic scan fixture")
+	}
+
+	storageReviewFault(t, `const proto=IDBObjectStore.prototype;const open=proto.openCursor;globalThis.storageReviewCursorRows=0;proto.openCursor=function(...args){const request=open.apply(this,args);request.addEventListener('success',event=>{if(event.target.result!=null)globalThis.storageReviewCursorRows++});return request};globalThis.restoreStorageFault=()=>{proto.openCursor=open;delete globalThis.storageReviewCursorRows}`)
+	var keys, values []string
+	if err := database.BatchRead(prefix, false, func(key, value []byte) error {
+		keys = append(keys, string(key))
+		values = append(values, string(value))
+		return nil
+	}); err != nil {
+		t.Fatal("read target prefix")
+	}
+	wantKeys := []string{"m-target/a", "m-target/b"}
+	wantValues := []string{"target-value-a", "target-value-b"}
+	if !reflect.DeepEqual(keys, wantKeys) || !reflect.DeepEqual(values, wantValues) {
+		t.Fatalf("prefix contents/order mismatch: keys=%v values=%v", keys, values)
+	}
+	cursorRows := js.Global().Get("storageReviewCursorRows").Int()
+	t.Logf("prefix_cursor_rows=%d", cursorRows)
+	if cursorRows > len(wantKeys)+1 {
+		t.Fatalf("prefix scan visited %d non-empty cursor rows for %d matches (limit %d)", cursorRows, len(wantKeys), len(wantKeys)+1)
+	}
+}
+
+func TestIndexedDBPrefixScanUTF8Boundaries(t *testing.T) {
+	database := storageReviewDB(t)
+	batch := database.NewWriteBatch()
+	defer batch.Close()
+	fixtureKeys := []string{
+		"a/other",
+		"λ/a",
+		"λ/\uFFFF",
+		"λ0/outside",
+		"μ/a",
+		"𐀀/a",
+		"𐀀/\uFFFF",
+		"𐀁/other",
+	}
+	for _, key := range fixtureKeys {
+		if err := batch.Put([]byte(key), []byte("value:"+key)); err != nil {
+			t.Fatal("queue Unicode scan fixture")
+		}
+	}
+	if err := batch.Flush(); err != nil {
+		t.Fatal("write Unicode scan fixture")
+	}
+
+	readKeys := func(prefix []byte) ([]string, error) {
+		var keys []string
+		err := database.BatchRead(prefix, false, func(key, _ []byte) error {
+			keys = append(keys, string(key))
+			return nil
+		})
+		return keys, err
+	}
+	check := func(name string, prefix []byte, want []string) {
+		t.Helper()
+		got, err := readKeys(prefix)
+		if err != nil {
+			t.Fatalf("%s scan: %v", name, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s keys=%q, want %q", name, got, want)
+		}
+	}
+
+	check("empty prefix reads all", nil, fixtureKeys)
+	check("valid BMP prefix includes U+FFFF suffix and stops at sibling", []byte("λ/"), []string{"λ/a", "λ/\uFFFF"})
+	check("valid astral prefix includes U+FFFF suffix and stops at sibling", []byte("𐀀/"), []string{"𐀀/a", "𐀀/\uFFFF"})
+	check("partial UTF-8 prefix retains byte-prefix matches", []byte{0xCE}, []string{"λ/a", "λ/\uFFFF", "λ0/outside", "μ/a"})
+}

@@ -1402,7 +1402,7 @@ func (p *LaunchPoolContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBl
 
 	p.mutex.Lock()
 
-	err = p.AllowInvoke()
+	err = p.AllowInvoke_SatsNet()
 	if err == nil {
 
 		bUpdate := false

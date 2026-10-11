@@ -111,6 +111,14 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	runOperation := func(manager *rgb11Manager) (T, error) {
+		unlock, err := manager.lockRGB11ChainRefresh(ctx)
+		if err != nil {
+			return zero, err
+		}
+		defer unlock()
+		return operation(manager)
+	}
 	var result T
 	var stableConfirmed bool
 	err := p.runAccountOperation(ctx, func() error {
@@ -132,7 +140,7 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 			return err
 		}
 		if !p.accountManagedRecoveryConfigured() {
-			result, err = operation(manager)
+			result, err = runOperation(manager)
 			return err
 		}
 		if manager == nil || manager.wallet == nil {
@@ -181,10 +189,26 @@ func runRGB11ManagedOperationWithManager[T any](p *Manager, ctx context.Context,
 			}
 		}
 
-		p.beginRGB11ManagedOperationState()
+		unlock, err := manager.lockRGB11ChainRefresh(ctx)
+		if err != nil {
+			return err
+		}
 		var operationErr error
 		var dirty bool
 		func() {
+			defer unlock()
+			if mode == rgb11ManagedOperationNew {
+				active, activeErr := p.hasAccountManagedRGB11Transition()
+				if activeErr != nil {
+					operationErr = activeErr
+					return
+				}
+				if active {
+					operationErr = ErrRGB11ManagedOperationActive
+					return
+				}
+			}
+			p.beginRGB11ManagedOperationState()
 			defer func() { dirty = p.endRGB11ManagedOperationState() }()
 			result, operationErr = operation(manager)
 		}()

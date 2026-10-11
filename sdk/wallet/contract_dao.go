@@ -857,11 +857,6 @@ func (p *DaoContractRunTime) IsIdle() bool {
 	return len(p.donateMap) == 0 && len(p.airdropMap) == 0
 }
 
-func (p *DaoContractRunTime) IsActive() bool {
-	return p.ContractRuntimeBase.IsActive() &&
-		p.CurrBlockL1 >= p.EnableBlockL1
-}
-
 // 只计算在 calcAssetMerkleRoot 之前已经确定的数据，其他在广播TX之后才修改的数据暂时不要管，不然容易导致数据不一致
 func CalcDaoContractRunningDataMerkleRoot(r *DaoContractRunningData) []byte {
 	var buf []byte
@@ -1624,7 +1619,7 @@ func (p *DaoContractRunTime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sat
 		return err
 	}
 
-	if p.IsActive() {
+	if p.IsActive_SatsNet() {
 		p.mutex.Lock()
 		p.PreprocessInvokeData_SatsNet(data)
 		p.process(data.Height, data.BlockHash)

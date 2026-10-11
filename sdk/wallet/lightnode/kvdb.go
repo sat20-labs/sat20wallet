@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"syscall/js"
+	"unicode/utf8"
 
 	"github.com/sat20-labs/indexer/common"
 )
@@ -222,18 +223,31 @@ func (p *jsDB) DropPrefix(prefix []byte) error {
 
 func (p *jsDB) snapshot(prefix []byte) (entries []scanEntry, err error) {
 	err = p.transaction("readonly", func(store js.Value, observe func(js.Value, func(js.Value) error)) error {
-		observe(store.Call("openCursor"), func(cursor js.Value) error {
+		boundedPrefix := len(prefix) > 0 && utf8.Valid(prefix)
+		var request js.Value
+		if boundedPrefix {
+			keyRange := js.Global().Get("IDBKeyRange").Call("lowerBound", string(prefix))
+			request = store.Call("openCursor", keyRange)
+		} else {
+			request = store.Call("openCursor")
+		}
+		observe(request, func(cursor js.Value) error {
 			if cursor.IsNull() {
 				return nil
 			}
 			key := []byte(cursor.Get("key").String())
-			if bytes.HasPrefix(key, prefix) {
-				value, err := base64.StdEncoding.DecodeString(cursor.Get("value").String())
-				if err != nil {
-					return err
+			if !bytes.HasPrefix(key, prefix) {
+				if boundedPrefix {
+					return nil
 				}
-				entries = append(entries, scanEntry{key: key, value: value})
+				cursor.Call("continue")
+				return nil
 			}
+			value, err := base64.StdEncoding.DecodeString(cursor.Get("value").String())
+			if err != nil {
+				return err
+			}
+			entries = append(entries, scanEntry{key: key, value: value})
 			cursor.Call("continue")
 			return nil
 		})

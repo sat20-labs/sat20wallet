@@ -297,7 +297,7 @@ func (p *Manager) InvokeContract_Satsnet(contractURL string, jsonInvokeParam str
 	if err != nil {
 		return "", err
 	}
-	if !runtime.IsActive() {
+	if !runtime.GetRuntimeBase().IsActive_SatsNet() {
 		return "", fmt.Errorf("contract is not active")
 	}
 
@@ -369,7 +369,7 @@ func (p *Manager) InvokeContractV2_Satsnet(contractURL string, jsonInvokeParam s
 	if err != nil {
 		return "", err
 	}
-	if !runtime.IsActive() {
+	if !runtime.GetRuntimeBase().IsActive_SatsNet() {
 		return "", fmt.Errorf("contract is not active")
 	}
 
@@ -450,7 +450,7 @@ func (p *Manager) InvokeContractV2(contractURL string, jsonInvokeParam string,
 	if err != nil {
 		return "", err
 	}
-	if !runtime.IsActive() {
+	if !runtime.GetRuntimeBase().IsActive() {
 		return "", fmt.Errorf("contract is not active")
 	}
 
@@ -618,7 +618,7 @@ func (p *Manager) DepositWithContract(destAddr string, assetName string, amt str
 			return "", fmt.Errorf("can't find a correct contract")
 		}
 	}
-	if !r.IsActive() {
+	if !r.GetRuntimeBase().IsActive() {
 		return "", fmt.Errorf("contract not active")
 	}
 
@@ -721,7 +721,7 @@ func (p *Manager) withdrawWithContract(destAddr string, assetName string, amt st
 	if r == nil {
 		return "", fmt.Errorf("can't find a correct contract")
 	}
-	if !r.IsActive() {
+	if !r.GetRuntimeBase().IsActive_SatsNet() {
 		return "", fmt.Errorf("contract not active")
 	}
 	withdrawPara := WithdrawInvokeParam{

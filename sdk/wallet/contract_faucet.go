@@ -161,7 +161,7 @@ func (p *FaucetContractRuntime) InitFromDB(stp ContractManager, resv ContractDep
 	if err != nil {
 		return err
 	}
-	p.runtime = p	// 关键是设置这个
+	p.runtime = p // 关键是设置这个
 
 	err = p.setOriginalValue()
 	if err != nil {
@@ -170,7 +170,6 @@ func (p *FaucetContractRuntime) InitFromDB(stp ContractManager, resv ContractDep
 
 	return nil
 }
-
 
 func (p *FaucetContractRuntime) setOriginalValue() error {
 	contractBase, ok := p.Contract.(*FaucetContract)
@@ -185,7 +184,6 @@ func (p *FaucetContractRuntime) setOriginalValue() error {
 	}
 	return nil
 }
-
 
 func (p *FaucetContractRuntime) AllowDeploy() error {
 
@@ -253,7 +251,7 @@ func (p *FaucetContractRuntime) checkSelf() error {
 	return nil
 }
 
-func CalcExpectedFaucetAmt(amt int64, height int, price *Decimal) (*Decimal) {
+func CalcExpectedFaucetAmt(amt int64, height int, price *Decimal) *Decimal {
 	// 目前先简单按照固定值，后续可以根据实际情况调整
 	return indexer.NewDecimal(amt, 0).Div(price)
 }
@@ -270,7 +268,7 @@ func (p *FaucetContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invo
 		if err != nil {
 			return nil, err
 		}
-	} else { 
+	} else {
 		if output.GetAsset(p.GetAssetName()).Sign() == 0 {
 			if output.GetPlainSat() == 0 {
 				return nil, fmt.Errorf("invalid invoke without asset and value")
@@ -314,7 +312,7 @@ func (p *FaucetContractRuntime) VerifyAndAcceptInvokeItem_SatsNet(invokeTx *Invo
 			UnitPrice: p.price.String(),
 		}
 		p.updateContract_swap(address, output, &param, false, true)
-		
+
 		return nil, nil
 	default:
 		Log.Errorf("contract %s does not support action %s", url, param.Action)
@@ -374,14 +372,13 @@ func (p *FaucetContractRuntime) VerifyAndAcceptInvokeItem(invokeTx *InvokeTx, he
 	}
 }
 
-
 func (p *FaucetContractRuntime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_SatsNet) error {
 	err := p.ContractRuntimeBase.InvokeWithBlock_SatsNet(data)
 	if err != nil {
 		return err
 	}
 
-	if p.IsActive() {
+	if p.IsActive_SatsNet() {
 		p.mutex.Lock()
 		//Log.Infof("%s InvokeWithBlock_SatsNet %d", stp.GetMode(), data.Height)
 
@@ -442,7 +439,7 @@ func (p *FaucetContractRuntime) addLiquidity() error {
 			totalAddedAmt = totalAddedAmt.Add(item.RemainingAmt)
 			totalAddedValue += item.RemainingValue
 			item.Done = ITEM_STATUS_DEALT
-			delete(p.history, item.InUtxo) 
+			delete(p.history, item.InUtxo)
 			SaveContractInvokeHistoryItem(p.stp.GetDB(), url, item)
 		}
 	}

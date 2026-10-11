@@ -393,8 +393,8 @@ type ContractRuntime interface {
 	SetDeployActionResult([]byte)           // 一个动作如何只能由一端发起，那执行完的结果要通知对方
 	IsReadyToRun(*swire.MsgTx) error
 	SetReady()      // 仅调用一次
-	IsActive() bool // >=ready && enabled
-	IsReady() bool  // ready && enabled
+	IsActive() bool // >=ready && L1 enabled
+	IsReady() bool  // ready && L2 enabled
 
 	// 合约调用的支持接口
 	CheckInvokeParam(string) (int64, error) // 调用合约的参数检查(json)，调用合约前调用
@@ -1401,6 +1401,7 @@ func (p *ContractRuntimeBase) GetEnableBlockL1() int {
 }
 
 func (p *ContractRuntimeBase) SetEnableBlock(height, heightL1 int) {
+	firstL1Enable := p.EnableBlockL1 == INIT_ENABLE_BLOCK
 	p.EnableBlock = height
 	p.EnableBlockL1 = heightL1
 	if p.CurrBlock == 0 {
@@ -1409,8 +1410,8 @@ func (p *ContractRuntimeBase) SetEnableBlock(height, heightL1 int) {
 			p.CurrBlock = 0
 		}
 	}
-	if p.CurrBlockL1 == 0 {
-		p.CurrBlockL1 = heightL1
+	if p.CurrBlockL1 == 0 || firstL1Enable {
+		p.CurrBlockL1 = heightL1 - 1
 		if p.CurrBlockL1 < 0 {
 			p.CurrBlockL1 = 0
 		}
@@ -1431,6 +1432,7 @@ func (p *ContractRuntimeBase) SetEnableBlock(height, heightL1 int) {
 
 }
 
+// IsExpired remains defined by the existing L2 block lifecycle.
 func (p *ContractRuntimeBase) IsExpired() bool {
 	if p.runtime.GetEndBlock() <= 0 {
 		return false
@@ -1589,11 +1591,20 @@ func (p *ContractRuntimeBase) SetReady() {
 }
 
 func (p *ContractRuntimeBase) IsReady() bool {
+	// Deployment readiness remains tied to the SatoshiNet runtime height.
 	return p.Status == CONTRACT_STATUS_READY &&
 		p.CurrBlock >= p.EnableBlock
 }
 
+// IsActive reports whether the contract is active on Bitcoin L1.
 func (p *ContractRuntimeBase) IsActive() bool {
+	return p.Status >= CONTRACT_STATUS_READY &&
+		p.Status < CONTRACT_STATUS_CLOSING &&
+		p.CurrBlockL1 >= p.EnableBlockL1
+}
+
+// IsActive_SatsNet reports whether the contract is active on SatoshiNet L2.
+func (p *ContractRuntimeBase) IsActive_SatsNet() bool {
 	return p.Status >= CONTRACT_STATUS_READY &&
 		p.Status < CONTRACT_STATUS_CLOSING &&
 		p.CurrBlock >= p.EnableBlock
@@ -1603,12 +1614,25 @@ func (p *ContractRuntimeBase) CheckInvokeParam(string) (int64, error) {
 	return 0, nil
 }
 
+// AllowInvoke validates an invocation against the L1 activation height.
 func (p *ContractRuntimeBase) AllowInvoke() error {
+	if p.Status < CONTRACT_STATUS_READY {
+		return fmt.Errorf("contract not ready")
+	}
 
-	// resv, ok := r.(ContractDeployResvBase)
-	// if !ok {
-	// 	return fmt.Errorf("not ContractDeployReservation")
-	// }
+	if p.EnableBlockL1 == INIT_ENABLE_BLOCK {
+		return fmt.Errorf("contract enable block not set yet")
+	}
+
+	if p.CurrBlockL1 < p.EnableBlockL1 {
+		return fmt.Errorf("contract not enabled")
+	}
+
+	return nil
+}
+
+// AllowInvoke_SatsNet validates an invocation against the L2 activation and business window.
+func (p *ContractRuntimeBase) AllowInvoke_SatsNet() error {
 	if p.Status < CONTRACT_STATUS_READY {
 		return fmt.Errorf("contract not ready")
 	}
@@ -2255,7 +2279,7 @@ func (p *ContractRuntimeBase) PreprocessInvokeData(data *InvokeDataInBlock) erro
 func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 	p.mutex.Lock()
 	if p.EnableBlockL1 == INIT_ENABLE_BLOCK || data.Height < p.EnableBlockL1 {
-		if p.CurrBlockL1 < data.Height {
+		if p.EnableBlockL1 != INIT_ENABLE_BLOCK && p.CurrBlockL1 < data.Height {
 			// 需要考虑索引器重建数据的可能性，这种情况下，不要更新 p.CurrBlock
 			p.CurrBlockL1 = data.Height
 		}
@@ -2278,7 +2302,7 @@ func (p *ContractRuntimeBase) InvokeWithBlock(data *InvokeDataInBlock) error {
 			// Log.Panicf("%s missing some L2 block, current %d, but new block %d", p.URL(), p.CurrBlockL1, data.Height)
 			// 丢失中间的区块
 			if p.CurrBlockL1 < p.EnableBlockL1 {
-				p.CurrBlockL1 = p.EnableBlockL1
+				p.CurrBlockL1 = p.EnableBlockL1 - 1
 			}
 
 			// 同步缺少的区块，确保合约运行正常
@@ -2319,7 +2343,7 @@ func (p *ContractRuntimeBase) resyncBlock_SatsNet(start, end int) {
 
 func (p *ContractRuntimeBase) PreprocessInvokeData_SatsNet(data *InvokeDataInBlock_SatsNet) error {
 
-	err := p.runtime.AllowInvoke()
+	err := p.AllowInvoke_SatsNet()
 	if err == nil {
 
 		bUpdate := false
@@ -3062,7 +3086,7 @@ func (p *ContractRuntimeBase) sendTx_SatsNet(dealInfo *DealInfo, reason string) 
 }
 
 func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
-	reason string, sendDeAnchorTx bool, excludeRecentBlock bool) (string, int64, int64, error) {
+	reason string, sendDeAnchorTx bool, excludeRecentBlock bool, maxConfirmedInputHeight int) (string, int64, int64, error) {
 	//
 	sendInfoMap := dealInfo.SendInfo
 	height := dealInfo.Height
@@ -3123,10 +3147,10 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 	nullDataScript, _ := sindexer.NullDataScript(sindexer.CONTENT_TYPE_INVOKERESULT, invoice)
 	if len(sendInfoVect) > 0 {
 		for i := 0; i < 3; i++ {
-			if reason == INVOKE_RESULT_REWARD && dealInfo.Height > 0 {
+			if maxConfirmedInputHeight > 0 {
 				txId, fee, err = p.stp.CoBatchSendV3_Height(p.localWallet, sendInfoVect, dealInfo.AssetName.String(), dealInfo.FeeRate,
 					"contract", url, dealInfo.InvokeCount, nullDataScript,
-					dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock, false, dealInfo.Height)
+					dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock, false, maxConfirmedInputHeight)
 			} else {
 				txId, fee, err = p.stp.CoBatchSendV3(p.localWallet, sendInfoVect, dealInfo.AssetName.String(), dealInfo.FeeRate,
 					"contract", url, dealInfo.InvokeCount, nullDataScript,
@@ -3161,11 +3185,11 @@ func (p *ContractRuntimeBase) sendTx(dealInfo *DealInfo,
 			}
 			sendInfo := sendInfoVectWithStub[0]
 			for i := 0; i < 3; i++ {
-				if reason == INVOKE_RESULT_REWARD && dealInfo.Height > 0 {
+				if maxConfirmedInputHeight > 0 {
 					txId, fee, err = p.stp.CoSendOrdxWithStub_Height(p.localWallet, sendInfo.Address,
 						sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(), dealInfo.FeeRate,
 						stubs[0], "contract", url, dealInfo.InvokeCount, nullDataScript,
-						dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock, dealInfo.Height)
+						dealInfo.StaticMerkleRoot, dealInfo.RuntimeMerkleRoot, sendDeAnchorTx, excludeRecentBlock, maxConfirmedInputHeight)
 				} else {
 					txId, fee, err = p.stp.CoSendOrdxWithStub(p.localWallet, sendInfo.Address,
 						sendInfo.AssetName.String(), sendInfo.AssetAmt.Int64(), dealInfo.FeeRate,

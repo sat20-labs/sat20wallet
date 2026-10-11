@@ -354,7 +354,7 @@ func (p *Manager) RefreshRGB11AddressACK(record *swire.DKVSRecord,
 func (p *Manager) RefreshRGB11State(ctx context.Context) (*RGB11RefreshResult, error) {
 	return runRGB11ManagedOperation(p, ctx, rgb11ManagedOperationContinue,
 		func(manager *rgb11Manager) (*RGB11RefreshResult, error) {
-			result, err := manager.RefreshRGB11State(ctx)
+			result, err := manager.refreshRGB11State(ctx)
 			manager.wakeRGB11ChainReconciliation()
 			return result, err
 		})

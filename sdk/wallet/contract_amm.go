@@ -940,7 +940,7 @@ func (p *AmmContractRuntime) InvokeWithBlock_SatsNet(data *InvokeDataInBlock_Sat
 		return err
 	}
 
-	if p.IsActive() {
+	if p.IsActive_SatsNet() {
 		p.mutex.Lock()
 		// 先保存池子中资产数量，因为processInvoke_SatsNet会更新池子数据，但这个更新不是我们所期望的
 
