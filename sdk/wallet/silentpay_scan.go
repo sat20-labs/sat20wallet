@@ -18,6 +18,7 @@ import (
 type SPReceivedOutput struct {
 	TxID      string   `json:"txid"`
 	Vout      uint32   `json:"vout"`
+	TxIndex   uint32   `json:"tx_index"`
 	Height    int      `json:"height"`
 	BlockHash string   `json:"block_hash"`
 	Value     int64    `json:"value"`
@@ -277,7 +278,7 @@ func (p *Manager) SyncSilentPayLive(ctx context.Context) ([]SPAccountBalance, er
 						return nil, fmt.Errorf("silentpay: negative Bitcoin output amount")
 					}
 					entry.account.result.Outputs = append(entry.account.result.Outputs, SPReceivedOutput{
-						TxID: txid, Vout: entry.match.Vout, Height: block.Height,
+						TxID: txid, Vout: entry.match.Vout, TxIndex: item.TxIndex, Height: block.Height,
 						BlockHash: block.BlockHash, Value: value, K: entry.match.K,
 						Tweak: entry.match.Tweak, Unspent: true,
 					})
