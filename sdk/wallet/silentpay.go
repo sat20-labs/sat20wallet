@@ -22,23 +22,23 @@ const silentPayMaxK = uint32(2323)
 var ErrSilentPayUnsupported = errors.New("silent payments require an unlocked mnemonic wallet")
 
 type SilentPayKeys struct {
-	Scan *btcec.PrivateKey
+	Scan  *btcec.PrivateKey
 	Spend *btcec.PrivateKey
 }
 
 type SilentPayAddress struct {
-	Scan *btcec.PublicKey
+	Scan  *btcec.PublicKey
 	Spend *btcec.PublicKey
 }
 
 type SilentPayCandidate struct {
-	Vout uint32
+	Vout      uint32
 	OutputKey []byte
 }
 
 type SilentPayMatch struct {
-	Vout uint32
-	K uint32
+	Vout      uint32
+	K         uint32
 	OutputKey []byte
 	// Tweak is the checked BIP0352/SharedSecret scalar. Only local wallet
 	// storage may retain it; it must never be sent back to the Indexer.
@@ -142,7 +142,7 @@ func silentPayPolymod(values []byte) uint32 {
 	generators := [5]uint32{0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3}
 	for _, v := range values {
 		top := check >> 25
-		check = (check & 0x1ffffff) << 5 ^ uint32(v)
+		check = (check&0x1ffffff)<<5 ^ uint32(v)
 		for j := uint32(0); j < 5; j++ {
 			if top>>j&1 != 0 {
 				check ^= generators[j]

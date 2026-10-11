@@ -23,16 +23,24 @@ func TestSilentPaySubaccountsDeriveIndependentlyAndRestore(t *testing.T) {
 		t.Fatal("mnemonic wallet unavailable")
 	}
 	one, err := root.GetSilentPayAddress(0)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	two, err := root.GetSilentPayAddress(1)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if one == two || len(one) != 116 {
 		t.Fatalf("subaccount separation failed: %s %s", one, two)
 	}
 	first, err := DecodeSilentPayAddress(one, &chaincfg.MainNetParams)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	second, err := DecodeSilentPayAddress(two, &chaincfg.MainNetParams)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if bytes.Equal(first.Scan.SerializeCompressed(), second.Scan.SerializeCompressed()) ||
 		bytes.Equal(first.Spend.SerializeCompressed(), second.Spend.SerializeCompressed()) {
 		t.Fatal("different accounts share a BIP352 scan/spend key")
@@ -47,7 +55,9 @@ func TestSilentPaySubaccountsDeriveIndependentlyAndRestore(t *testing.T) {
 	}
 	other := NewInternalWalletWithMnemonic(silentPayOtherMnemonic, "", &chaincfg.MainNetParams)
 	addressOther, err := other.GetSilentPayAddress(0)
-	if err != nil || addressOther == one { t.Fatal("mnemonic separation failed", err) }
+	if err != nil || addressOther == one {
+		t.Fatal("mnemonic separation failed", err)
+	}
 	testWallet := NewInternalWalletWithMnemonic(silentPayE2EMnemonic, "", &chaincfg.TestNet4Params)
 	testAddress, err := testWallet.GetSilentPayAddress(0)
 	if err != nil || len(testAddress) != 117 || testAddress[:4] != "tsp1" {
@@ -68,11 +78,17 @@ func TestSilentPaySubaccountsDeriveIndependentlyAndRestore(t *testing.T) {
 func TestSilentPaySignedBitcoinSendReceiveAndSpendE2E(t *testing.T) {
 	receiver := NewInternalWalletWithMnemonic(silentPayE2EMnemonic, "", &chaincfg.RegressionNetParams)
 	keys, err := receiver.DeriveSilentPayKeys(1)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	address, err := receiver.GetSilentPayAddress(1)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	target, err := DecodeSilentPayAddress(address, &chaincfg.RegressionNetParams)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	payerRaw := make([]byte, 32)
 	payerRaw[31] = 19
@@ -86,7 +102,9 @@ func TestSilentPaySignedBitcoinSendReceiveAndSpendE2E(t *testing.T) {
 	outpoint := wire.OutPoint{Hash: chainhash.Hash{1, 2, 3}, Index: 7}
 	inputs := []SilentPaySenderInput{{Outpoint: outpoint, Key: payer}}
 	script, err := SilentPayDestinationScript(target, inputs, 0)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(script) != 34 || script[0] != txscript.OP_1 || script[1] != 0x20 {
 		t.Fatalf("invalid P2TR script %x", script)
 	}
@@ -97,25 +115,37 @@ func TestSilentPaySignedBitcoinSendReceiveAndSpendE2E(t *testing.T) {
 	copy(serialized[:32], outpoint.Hash[:])
 	binary.LittleEndian.PutUint32(serialized[32:], outpoint.Index)
 	hash, err := silentPayCheckedScalar(silentPayTaggedHash("BIP0352/Inputs", serialized[:], payer.PubKey().SerializeCompressed()))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	T, err := silentPaySharedSecretPoint(&hash, payer.PubKey())
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	outputs := []SilentPayCandidate{
 		{Vout: 2, OutputKey: append([]byte(nil), script[2:]...)},
 		{Vout: 3, OutputKey: make([]byte, 32)},
 	}
 	matches, err := MatchSilentPayOutputs(keys, T.SerializeCompressed(), outputs)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(matches) != 1 || matches[0].Vout != 2 || matches[0].K != 0 {
 		t.Fatalf("receiver missed expected BTC output: %+v", matches)
 	}
 	wrongKeys, err := receiver.DeriveSilentPayKeys(0)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	wrong, err := MatchSilentPayOutputs(wrongKeys, T.SerializeCompressed(), outputs)
-	if err != nil || len(wrong) != 0 { t.Fatal("wrong subaccount recognized payment", err) }
+	if err != nil || len(wrong) != 0 {
+		t.Fatal("wrong subaccount recognized payment", err)
+	}
 
 	spendKey, err := SilentPayOutputSpendKey(keys, matches[0])
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Equal(schnorr.SerializePubKey(spendKey.PubKey()), script[2:]) {
 		t.Fatal("BIP352 spend key does not correspond to received UTXO")
 	}
@@ -127,13 +157,21 @@ func TestSilentPaySignedBitcoinSendReceiveAndSpendE2E(t *testing.T) {
 	fetcher := txscript.NewCannedPrevOutputFetcher(prev.PkScript, prev.Value)
 	sigHashes := txscript.NewTxSigHashes(tx, fetcher)
 	digest, err := txscript.CalcTaprootSignatureHash(sigHashes, txscript.SigHashDefault, tx, 0, fetcher)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	sig, err := schnorr.Sign(spendKey, digest)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	tx.TxIn[0].Witness = wire.TxWitness{sig.Serialize()}
 	engine, err := txscript.NewEngine(prev.PkScript, tx, 0, txscript.StandardVerifyFlags, nil, sigHashes, prev.Value, fetcher)
-	if err != nil { t.Fatal(err) }
-	if err := engine.Execute(); err != nil { t.Fatalf("SP UTXO failed real Bitcoin spend: %v", err) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Execute(); err != nil {
+		t.Fatalf("SP UTXO failed real Bitcoin spend: %v", err)
+	}
 
 	changedInputs := []SilentPaySenderInput{{Outpoint: wire.OutPoint{Hash: chainhash.Hash{3, 4, 5}, Index: 9}, Key: payer}}
 	changed, err := SilentPayDestinationScript(target, changedInputs, 0)
@@ -141,7 +179,9 @@ func TestSilentPaySignedBitcoinSendReceiveAndSpendE2E(t *testing.T) {
 		t.Fatal("RBF-style changed inputs reused original SP output", err)
 	}
 	other, err := SilentPayDestinationScript(target, inputs, 1)
-	if err != nil || bytes.Equal(script, other) { t.Fatal("k increment did not alter output", err) }
+	if err != nil || bytes.Equal(script, other) {
+		t.Fatal("k increment did not alter output", err)
+	}
 	badT := append([]byte(nil), T.SerializeCompressed()...)
 	badT[0] = 0x07
 	if _, err := MatchSilentPayOutputs(keys, badT, outputs); err == nil {
@@ -153,7 +193,9 @@ func TestSilentPayNonMnemonicWalletRejected(t *testing.T) {
 	key := make([]byte, 32)
 	key[31] = 11
 	wallet, _, err := NewInternalWalletWithPrivKey(key, &chaincfg.MainNetParams)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := wallet.GetSilentPayAddress(0); !errors.Is(err, ErrSilentPayUnsupported) {
 		t.Fatalf("private key wallet unexpectedly derived BIP352 keys: %v", err)
 	}

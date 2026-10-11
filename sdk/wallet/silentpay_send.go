@@ -17,7 +17,7 @@ import (
 // even-Y normalized Taproot OUTPUT key for P2TR, not its BIP86 internal key).
 type SilentPaySenderInput struct {
 	Outpoint wire.OutPoint
-	Key *btcec.PrivateKey
+	Key      *btcec.PrivateKey
 }
 
 // SilentPayDestinationScript must only be called AFTER input selection.
@@ -136,7 +136,7 @@ func (p *Manager) BuildSilentPayment(address string, amount, feeRate int64) (*wi
 		}
 		inputs = append(inputs, SilentPaySenderInput{
 			Outpoint: in.PreviousOutPoint,
-			Key: taprootKey,
+			Key:      taprootKey,
 		})
 	}
 	script, err := SilentPayDestinationScript(dest, inputs, 0)
