@@ -18,6 +18,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+	db "github.com/sat20-labs/indexer/common"
 )
 
 func spE2EAccountManager(t *testing.T) (*Manager, *InternalWallet) {
@@ -199,5 +200,46 @@ func TestSilentPayManagedDataRestoresMonotonicAccountFlag(t *testing.T) {
 	}
 	if _,_,err:=other.SilentPayAccount(otherWallet.GetId(),1);errors.Is(err,ErrSilentPayUnsupported) {
 		t.Fatal("restored account unexpectedly locked")
+	}
+}
+
+type spFailCommitDB struct { db.KVDB }
+
+func (d *spFailCommitDB) NewWriteBatch() db.WriteBatch {
+	return &spFailCommitBatch{WriteBatch:d.KVDB.NewWriteBatch()}
+}
+
+type spFailCommitBatch struct { db.WriteBatch }
+
+func (b *spFailCommitBatch) Flush() error {
+	return errors.New("silentpay: injected wallet persistence failure")
+}
+
+func TestSilentPayActivationFailsAtomicallyOnStorageError(t *testing.T) {
+	oldChain := _chain
+	_chain = "testnet"
+	defer func() {_chain = oldChain}()
+	manager, w := spE2EAccountManager(t)
+	original := manager.db
+	manager.db = &spFailCommitDB{KVDB:original}
+	if address, err := manager.EnableSilentPay(w.GetId(),1);err==nil || address!="" {
+		t.Fatalf("failed transaction published SP address: %s %v",address,err)
+	}
+	if manager.GetWalletCatalog()[0].Accounts[1].SPEnabled {
+		t.Fatal("failed SP activation changed the live account catalog")
+	}
+	raw, err := original.Read([]byte(getWalletDBKey(w.GetId())))
+	if err == nil {
+		var persisted WalletInDB
+		if err:=DecodeFromBytes(raw,&persisted); err!=nil {t.Fatal(err)}
+		if persisted.SPEnabled[1] {t.Fatal("failed SP activation wrote the account flag")}
+	}
+	manager.db = original
+	if _,err:=manager.EnableSilentPay(w.GetId(),1);err!=nil {t.Fatal(err)}
+	raw,err = original.Read([]byte(getWalletDBKey(w.GetId())))
+	if err!=nil {t.Fatal(err)}
+	var persisted WalletInDB
+	if err:=DecodeFromBytes(raw,&persisted);err!=nil || !persisted.SPEnabled[1] {
+		t.Fatalf("successful SP activation is not durable: %v",err)
 	}
 }
