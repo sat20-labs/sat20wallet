@@ -293,3 +293,25 @@ func TestSilentPayActivationFailsAtomicallyOnStorageError(t *testing.T) {
 		t.Fatalf("successful SP activation is not durable: %v", err)
 	}
 }
+
+func TestSilentPayEnabledWalletCannotBeDeleted(t *testing.T) {
+	oldChain:=_chain
+	_chain="testnet"
+	defer func(){_chain=oldChain}()
+	mgr,first:=spE2EAccountManager(t)
+	second:=NewInternalWalletWithMnemonic(silentPayOtherMnemonic,"",&chaincfg.TestNet4Params)
+	if second==nil{t.Fatal("second mnemonic unavailable")}
+	mgr.walletInfoMap[second.GetId()]=&WalletInfo{WalletInDB:WalletInDB{
+		Id:second.GetId(),Accounts:1,Type:WALLET_TYPE_MNEMONIC,Name:"Secondary",
+		AccountNames:map[uint32]string{0:"Income"},AccountDIDs:map[uint32]string{},
+	},Wallet:second}
+	mgr.status.CurrentWallet=first.GetId()
+	mgr.status.TotalWallet=2
+	if _,err:=mgr.EnableSilentPay(second.GetId(),0);err!=nil{t.Fatal(err)}
+	if err:=mgr.DeleteWallet(second.GetId());err==nil {
+		t.Fatal("published SP address may be forgotten by deleting its mnemonic wallet")
+	}
+	if _,ok:=mgr.walletInfoMap[second.GetId()];!ok {
+		t.Fatal("rejected deletion changed the wallet catalog")
+	}
+}
