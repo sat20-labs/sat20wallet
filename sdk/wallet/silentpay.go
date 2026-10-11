@@ -17,7 +17,8 @@ import (
 // BIP352 uses the standard account-specific hardened branch. It must never
 // reuse the ordinary BIP86 payment key or another subaccount's scan key.
 const silentPayPurpose = uint32(352)
-const silentPayMaxK = uint32(2323)
+// The number of P2TR outputs itself bounds the maximum number of k values.
+// No unrelated hardcoded k limit is necessary.
 
 var ErrSilentPayUnsupported = errors.New("silent payments require an unlocked mnemonic wallet")
 
@@ -309,7 +310,7 @@ func MatchSilentPayOutputs(keys SilentPayKeys, compressedT []byte, outputs []Sil
 		return nil, err
 	}
 	var matches []SilentPayMatch
-	for k := uint32(0); k < silentPayMaxK; k++ {
+	for k := uint32(0); k < uint32(len(outputs)); k++ {
 		scalar, err := silentPayOutputScalar(secret, k)
 		if err != nil {
 			return nil, err
