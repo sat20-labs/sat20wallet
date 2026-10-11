@@ -158,7 +158,9 @@ func (p *Manager) SyncSilentPayArchive(ctx context.Context) ([]SPAccountHistory,
 		}
 		for _,block:=range page.Blocks {
 			if block.Height<minFrom || block.Height>status.BaseAnchor.Height ||
-				(currentHeight>=0 && block.Height<currentHeight) {
+				(currentHeight<0 && block.Height!=minFrom) ||
+				(currentHeight>=0 && block.Height!=currentHeight &&
+					block.Height!=currentHeight+1) {
 				return nil,fmt.Errorf("silentpay: archive block order is invalid")
 			}
 			if currentHeight!=block.Height {
