@@ -146,3 +146,43 @@ jobs:
       - name: Type-check PWA
         working-directory: pwa
         run: npm run compile
+
+  sp-bitcoin-core:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feat/bip352-per-account-sp-wallet-20261011'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: sat20wallet
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/indexer
+          path: indexer
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/rgb11
+          path: rgb11
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/satoshinet
+          path: satoshinet
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sat20wallet/sdk/go.mod
+          cache: false
+      - name: Install pinned Bitcoin Core 29.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -fsSL --retry 3 https://bitcoincore.org/bin/bitcoin-core-29.2/SHA256SUMS -o SHA256SUMS
+          curl -fsSL --retry 3 https://bitcoincore.org/bin/bitcoin-core-29.2/bitcoin-29.2-x86_64-linux-gnu.tar.gz -o bitcoin-29.2-x86_64-linux-gnu.tar.gz
+          grep ' bitcoin-29.2-x86_64-linux-gnu.tar.gz$' SHA256SUMS | sha256sum -c
+          tar -xzf bitcoin-29.2-x86_64-linux-gnu.tar.gz
+          echo "${RUNNER_TEMP}/bitcoin-29.2/bin" >> "${GITHUB_PATH}"
+      - name: Real Core and BaseIndexer SP E2E
+        env:
+          SAT20_E2E_REQUIRE_BITCOIND: '1'
+        working-directory: sat20wallet/sdk
+        run: go test ./e2e -run '^TestSPBitcoinCoreRegtestIndexerE2E$' -v -count=1 -timeout=15m
