@@ -157,8 +157,12 @@ func (p *Manager) SyncSilentPayLive(ctx context.Context) ([]SPAccountBalance, er
 	}
 	defer func() {
 		for _, acct := range accounts {
-			if acct.keys.Scan != nil { acct.keys.Scan.Zero() }
-			if acct.keys.Spend != nil { acct.keys.Spend.Zero() }
+			if acct.keys.Scan != nil {
+				acct.keys.Scan.Zero()
+			}
+			if acct.keys.Spend != nil {
+				acct.keys.Spend.Zero()
+			}
 		}
 	}()
 	if len(accounts) == 0 {
