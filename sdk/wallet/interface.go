@@ -132,6 +132,10 @@ func NewManager(cfg *common.Config, db db.KVDB) *Manager {
 		return nil
 	}
 	mgr.rgbManager = rgbManager
+	if err := mgr.RegisterAccountManagedDataProvider(&silentPayAccountManagedDataProvider{owner: mgr}); err != nil {
+		Log.Errorf("register SilentPay account-managed data provider failed: %v", err)
+		return nil
+	}
 	if err := mgr.RegisterAccountManagedDataProvider(&rgb11AccountManagedDataProvider{owner: mgr}); err != nil {
 		Log.Errorf("register RGB11 account-managed data provider failed: %v", err)
 		return nil
