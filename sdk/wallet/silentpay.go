@@ -94,6 +94,8 @@ func (p *InternalWallet) GetSilentPayAddress(index uint32) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer keys.Scan.Zero()
+	defer keys.Spend.Zero()
 	return EncodeSilentPayAddress(SilentPayAddress{
 		Scan: keys.Scan.PubKey(), Spend: keys.Spend.PubKey(),
 	}, p.netParamsL1)
