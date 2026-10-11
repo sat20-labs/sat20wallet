@@ -106,6 +106,7 @@ jobs:
         working-directory: sat20wallet/sdk
         env:
           SAT20_E2E_REQUIRE_BITCOIND: '1'
+          GOFLAGS: '-mod=mod'
         run: go test ./e2e -run '^TestSPBitcoinCoreRegtestIndexerE2E      - name: Compile real WASM exports
         working-directory: sat20wallet/sdk
         run: GOOS=js GOARCH=wasm go build -buildvcs=false -o /tmp/sat20-silentpay.wasm ./wasm
