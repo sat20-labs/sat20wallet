@@ -97,6 +97,7 @@ func (p *Manager) SyncSilentPayArchive(ctx context.Context) ([]SPAccountHistory,
 		} else {
 			record.Anchor.Height=status.CoverageStartHeight-1
 		}
+		if record.Anchor.Height < status.BaseAnchor.Height { record.Complete=false }
 		histories[i]=record
 		if from:=record.Anchor.Height+1;from<minFrom{minFrom=from}
 	}
