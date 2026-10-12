@@ -146,3 +146,56 @@ jobs:
       - name: Type-check PWA
         working-directory: pwa
         run: npm run compile
+
+  sp-bitcoin-core-31:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feat/bip352-per-account-sp-wallet-20261011'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: sat20wallet
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/indexer
+          path: indexer
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/rgb11
+          path: rgb11
+      - uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/satoshinet
+          path: satoshinet
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sat20wallet/sdk/go.mod
+          cache: false
+      - name: Check new SP PWA cases formatting
+        working-directory: sat20wallet
+        run: |
+          gofmt -d sdk/wallet/silentpay_pwa_scenarios_e2e_test.go
+          gofmt -w sdk/wallet/silentpay_pwa_scenarios_e2e_test.go
+      - name: Test PWA SDK SP acceptance scenarios
+        working-directory: sat20wallet/sdk
+        env:
+          GOFLAGS: '-mod=mod'
+        run: go test ./wallet -run '^TestSilentPayPWA' -count=1 -v -timeout=10m
+      - name: Install verified Bitcoin Core 31.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -fsSL --retry 3 https://bitcoincore.org/bin/bitcoin-core-31.0/SHA256SUMS -o SHA256SUMS
+          curl -fsSL --retry 3 https://bitcoincore.org/bin/bitcoin-core-31.0/bitcoin-31.0-x86_64-linux-gnu.tar.gz -o bitcoin-31.0-x86_64-linux-gnu.tar.gz
+          grep ' bitcoin-31.0-x86_64-linux-gnu.tar.gz$' SHA256SUMS | sha256sum -c
+          tar -xzf bitcoin-31.0-x86_64-linux-gnu.tar.gz
+          echo "${RUNNER_TEMP}/bitcoin-31.0/bin" >> "${GITHUB_PATH}"
+      - name: Check bitcoind 31.0 binary
+        run: bitcoind -version | head -n 1 | grep -F '31.0'
+      - name: Real Bitcoin Core 31.0 plus BaseIndexer plus SDK E2E
+        env:
+          SAT20_E2E_REQUIRE_BITCOIND: '1'
+          GOFLAGS: '-mod=mod'
+        working-directory: sat20wallet/sdk
+        run: go test ./e2e -run '^TestSPBitcoinCoreRegtest' -v -count=1 -timeout=15m
