@@ -435,7 +435,7 @@ func TestSPBitcoinCoreRegtestIndexerE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	spending := wire.NewMsgTx(2)
-	spOutpoint := wire.OutPoint{Hash: payment.TxHash(), Index: matched.Vout}
+	spOutpoint := wire.OutPoint{Hash: payment.TxHash(), Index: matched[0].Vout}
 	spending.AddTxIn(wire.NewTxIn(&spOutpoint, nil, nil))
 	spending.AddTxOut(wire.NewTxOut(99_000, payerScript))
 	spFetcher := txscript.NewCannedPrevOutputFetcher(script, 100_000)
