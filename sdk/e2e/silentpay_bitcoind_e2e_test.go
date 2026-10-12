@@ -454,29 +454,127 @@ func TestSPBitcoinCoreRegtestIndexerE2E(t *testing.T) {
 	}
 	mine()
 	if h := base.SyncToChainTip(make(chan struct{})); h != 0 {
-		t.Fatalf("BaseIndexer SP spend sync failed: %d", h)
+		t.Fatalf("BaseIndexer first SP spend sync failed: %d", h)
+	}
+	base.UpdateDB()
+
+	// After k=0 is spent, Live must retain the entire original output
+	// list. A returning PWA can derive k=1 at vout 2; removing k=0
+	// from the public candidate would incorrectly terminate BIP352 scan.
+	partiallySpent, err := indexerClient.SPSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := indexerClient.SPScan(ctx, walletsdk.SPScanRequest{
+		Mode: "live", SnapshotID: partiallySpent.SnapshotID,
+		FromHeight: status.CoverageStartHeight, ToHeight: partiallySpent.Anchor.Height, Limit: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenSecond := false
+	for _, block := range page.Blocks {
+		for _, candidate := range block.Transactions {
+			if block.Height != height || candidate.TxIndex != txIndex {
+				continue
+			}
+			if len(candidate.P2TROutputs) != 2 || !bytes.Equal(candidate.UnspentBitmap, []byte{2}) {
+				t.Fatalf("k=0 spend hid k=1 or corrupted Live bitmap: %+v", candidate)
+			}
+			outputs := make([]walletsdk.SilentPayCandidate, 0, 2)
+			for _, output := range candidate.P2TROutputs {
+				outputs = append(outputs, walletsdk.SilentPayCandidate{
+					Vout: output.Vout, OutputKey: output.OutputKey,
+				})
+			}
+			recovered, err := walletsdk.MatchSilentPayOutputs(keys, candidate.Tweak, outputs)
+			if err != nil || len(recovered) != 2 || recovered[0].K != 0 ||
+				recovered[1].K != 1 || recovered[1].Vout != 2 {
+				t.Fatalf("PWA recovery after k=0 spend failed: %+v %v", recovered, err)
+			}
+			otherKeys, err := recipient.DeriveSilentPayKeys(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherMatches, err := walletsdk.MatchSilentPayOutputs(otherKeys, candidate.Tweak, outputs)
+			if err != nil || len(otherMatches) != 0 {
+				t.Fatalf("unrelated subaccount recognized SP BTC: %+v %v", otherMatches, err)
+			}
+			seenSecond = true
+		}
+	}
+	if !seenSecond {
+		t.Fatal("real BaseIndexer dropped candidate while k=1 is still unspent")
+	}
+	query := []walletsdk.SPIndexerPosition{
+		{Height: height, BlockHash: blockHash, TxIndex: txIndex, Vout: 0, ExpectedTxID: paymentTxid},
+		{Height: height, BlockHash: blockHash, TxIndex: txIndex, Vout: 2, ExpectedTxID: paymentTxid},
+	}
+	queryAnchor, states, err := indexerClient.SPOutpoints(ctx, partiallySpent.SnapshotID, query)
+	if err != nil || queryAnchor != partiallySpent.Anchor || len(states) != 2 ||
+		states[0].State != "spent" || states[1].State != "unspent" {
+		t.Fatalf("real snapshot could not distinguish spent k=0 and unspent k=1: %+v %+v %v",
+			queryAnchor, states, err)
+	}
+
+	private1, err := walletsdk.SilentPayOutputSpendKey(keys, matched[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	spending1 := wire.NewMsgTx(2)
+	outpoint1 := wire.OutPoint{Hash: payment.TxHash(), Index: 2}
+	spending1.AddTxIn(wire.NewTxIn(&outpoint1, nil, nil))
+	spending1.AddTxOut(wire.NewTxOut(149_000, payerScript))
+	fetcher1 := txscript.NewCannedPrevOutputFetcher(script1, 150_000)
+	hashes1 := txscript.NewTxSigHashes(spending1, fetcher1)
+	digest1, err := txscript.CalcTaprootSignatureHash(
+		hashes1, txscript.SigHashDefault, spending1, 0, fetcher1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature1, err := schnorr.Sign(private1, digest1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spending1.TxIn[0].Witness = wire.TxWitness{signature1.Serialize()}
+	if err := core.call("sendrawtransaction", []any{spRealTxHex(t, spending1)}, nil); err != nil {
+		t.Fatalf("Bitcoin Core 31.0 refused recovered k=1 Taproot spend: %v", err)
+	}
+	mine()
+	if h := base.SyncToChainTip(make(chan struct{})); h != 0 {
+		t.Fatalf("BaseIndexer second SP spend sync failed: %d", h)
 	}
 	base.UpdateDB()
 	fresh, err := indexerClient.SPSnapshot(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := indexerClient.SPScan(ctx, walletsdk.SPScanRequest{
+	fullySpent, err := indexerClient.SPScan(ctx, walletsdk.SPScanRequest{
 		Mode: "live", SnapshotID: fresh.SnapshotID,
 		FromHeight: status.CoverageStartHeight, ToHeight: fresh.Anchor.Height, Limit: 100,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, block := range page.Blocks {
+	for _, block := range fullySpent.Blocks {
 		for _, tx := range block.Transactions {
 			if block.Height == height && tx.TxIndex == txIndex {
-				t.Fatal("fully spent SP output remains Live after real Bitcoin Core confirmation")
+				t.Fatal("fully spent SP candidate still appears in Live")
 			}
 		}
+	}
+	archive, err := indexerClient.SPScan(ctx, walletsdk.SPScanRequest{
+		Mode: "archive", FromHeight: height, ToHeight: height, Limit: 100,
+	})
+	if err != nil || !archive.Done || len(archive.Blocks) != 1 ||
+		len(archive.Blocks[0].Transactions) != 1 ||
+		len(archive.Blocks[0].Transactions[0].P2TROutputs) != 2 {
+		t.Fatalf("Archive lost spent SP payment history: %+v %v", archive, err)
 	}
 	if !base.CheckSelf() {
 		t.Fatal("real L1 BaseIndexer CheckSelf rejected Bitcoin Core chain")
 	}
-	t.Logf("real Core + BaseIndexer SP E2E passed: payment=%s spend=%s height=%d", paymentTxid, spending.TxHash(), fresh.Anchor.Height)
+	t.Logf("real Core + BaseIndexer SP E2E passed: payment=%s k0=%s k1=%s height=%d",
+		paymentTxid, spending.TxHash(), spending1.TxHash(), fresh.Anchor.Height)
 }
