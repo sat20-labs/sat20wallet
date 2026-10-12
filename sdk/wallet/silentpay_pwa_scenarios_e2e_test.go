@@ -21,10 +21,10 @@ import (
 // The existing HTTP E2E and genuine Bitcoin Core regtest test cover the
 // transport and consensus boundary; here the fake returns only public L1 data.
 type spPWATestPayment struct {
-	tx *wire.MsgTx
+	tx    *wire.MsgTx
 	index uint32
 	block SPIndexerBlock
-	item SPIndexerTransaction
+	item  SPIndexerTransaction
 }
 
 func spPWAMakePayment(t *testing.T, receiver *InternalWallet, account uint32,
@@ -85,16 +85,16 @@ func spPWAMakePayment(t *testing.T, receiver *InternalWallet, account uint32,
 
 type spPWAScenarioIndexer struct {
 	IndexerRPCClient
-	status SPIndexerStatus
-	snapshot SPIndexerSnapshot
-	pages []SPIndexerPage
-	txByIndex map[uint32]*wire.MsgTx
-	txByID map[string]*wire.MsgTx
+	status     SPIndexerStatus
+	snapshot   SPIndexerSnapshot
+	pages      []SPIndexerPage
+	txByIndex  map[uint32]*wire.MsgTx
+	txByID     map[string]*wire.MsgTx
 	failCursor string
-	badRawTx bool
-	badLookup bool
-	scans int
-	lookups int
+	badRawTx   bool
+	badLookup  bool
+	scans      int
+	lookups    int
 }
 
 func spPWANewIndexer(payments ...spPWATestPayment) *spPWAScenarioIndexer {
@@ -119,7 +119,7 @@ func spPWANewIndexer(payments ...spPWATestPayment) *spPWAScenarioIndexer {
 			CoverageStartHeight: 0, BaseAnchor: anchor, DataReady: true},
 		snapshot: SPIndexerSnapshot{SnapshotID: "pwa-view", Anchor: anchor,
 			CoverageStartHeight: 0, SchemaVersion: 1},
-		pages: []SPIndexerPage{page},
+		pages:     []SPIndexerPage{page},
 		txByIndex: byIndex, txByID: byID,
 	}
 }
@@ -227,7 +227,7 @@ func TestSilentPayPWAMultiWalletIsolationRepeatRefreshAndLateActivationE2E(t *te
 	}
 	for _, item := range []struct {
 		wallet *InternalWallet
-		index uint32
+		index  uint32
 	}{
 		{first, 0}, {first, 1}, {second, 0},
 	} {
@@ -235,8 +235,7 @@ func TestSilentPayPWAMultiWalletIsolationRepeatRefreshAndLateActivationE2E(t *te
 			t.Fatal(err)
 		}
 	}
-	if enabled, address, err := manager.SilentPayAccount(second.GetId(), 1);
-		err != nil || enabled || address != "" {
+	if enabled, address, err := manager.SilentPayAccount(second.GetId(), 1); err != nil || enabled || address != "" {
 		t.Fatalf("unpublished account was enabled: %t %q %v", enabled, address, err)
 	}
 	// No account borrows another account's checkpoint, even in the same Root.
@@ -323,8 +322,7 @@ func TestSilentPayPWACloseReopenRestoresScanAndEnablementE2E(t *testing.T) {
 			recoveredWallet.GetId(): {WalletInDB: stored, Wallet: recoveredWallet},
 		},
 	}
-	if enabled, regenerated, err := restored.SilentPayAccount(wallet.GetId(), 1);
-		err != nil || !enabled || regenerated != address {
+	if enabled, regenerated, err := restored.SilentPayAccount(wallet.GetId(), 1); err != nil || !enabled || regenerated != address {
 		t.Fatalf("PWA reopen lost SP address: %q %q %v", address, regenerated, err)
 	}
 	balance, err := restored.LastSyncedSilentPay(wallet.GetId(), 1)
@@ -410,7 +408,7 @@ func TestSilentPayPWAUntrustedIndexerDoesNotEraseBalanceE2E(t *testing.T) {
 	baselineStatus, baselineSnapshot := reader.status, reader.snapshot
 	baselinePages := reader.pages
 	cases := []struct {
-		name string
+		name   string
 		mutate func()
 	}{
 		{"wrong_network", func() { reader.status.Network = "mainnet" }},
