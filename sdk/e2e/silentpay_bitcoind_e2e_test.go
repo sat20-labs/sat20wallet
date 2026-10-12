@@ -291,11 +291,21 @@ func TestSPBitcoinCoreRegtestIndexerE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Two payments share one Scan Key; k=1 appears at vout=2 because an
+	// ordinary change output separates the two silent outputs.
+	script1, err := walletsdk.SilentPayDestinationScript(decoded, []walletsdk.SilentPaySenderInput{
+		{Outpoint: fundingOut, Key: payer},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	payment := wire.NewMsgTx(2)
 	payment.AddTxIn(wire.NewTxIn(&fundingOut, nil, nil))
 	payment.AddTxOut(wire.NewTxOut(100_000, script))
-	payment.AddTxOut(wire.NewTxOut(originalValue-101_000, payerScript))
+	payment.AddTxOut(wire.NewTxOut(20_000, payerScript))
+	payment.AddTxOut(wire.NewTxOut(150_000, script1))
+	payment.AddTxOut(wire.NewTxOut(originalValue-271_000, payerScript))
 	fetcher := txscript.NewCannedPrevOutputFetcher(payerScript, originalValue)
 	hashes := txscript.NewTxSigHashes(payment, fetcher)
 	payment.TxIn[0].Witness, err = txscript.WitnessSignature(payment, hashes, 0,
@@ -357,8 +367,7 @@ func TestSPBitcoinCoreRegtestIndexerE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var matched walletsdk.SilentPayMatch
-	matchedOK := false
+	matched := make(map[uint32]walletsdk.SilentPayMatch)
 	var height int
 	var blockHash string
 	var txIndex uint32
@@ -386,12 +395,11 @@ func TestSPBitcoinCoreRegtestIndexerE2E(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, m := range recognized {
-					if matchedOK {
-						t.Fatal("ambiguous SP match")
+					if _, duplicated := matched[m.Vout]; duplicated {
+						t.Fatal("duplicate SP output from Indexer")
 					}
 					height, blockHash, txIndex = block.Height, block.BlockHash, row.TxIndex
-					matched = m
-					matchedOK = true
+					matched[m.Vout] = m
 				}
 			}
 		}
@@ -403,10 +411,10 @@ func TestSPBitcoinCoreRegtestIndexerE2E(t *testing.T) {
 		}
 		cursor = page.NextCursor
 	}
-	if !matchedOK || matched.Vout != 0 || matched.K != 0 {
-		t.Fatalf("SDK did not discover real Bitcoin Core SP payment: %+v", matched)
+	if len(matched) != 2 || matched[0].K != 0 || matched[2].K != 1 {
+		t.Fatalf("SDK did not recover both k=0 and k=1 from real Bitcoin Core: %+v", matched)
 	}
-	positions := []walletsdk.SPIndexerPosition{{Height: height, BlockHash: blockHash, TxIndex: txIndex, Vout: matched.Vout}}
+	positions := []walletsdk.SPIndexerPosition{{Height: height, BlockHash: blockHash, TxIndex: txIndex, Vout: 0}}
 	located, err := indexerClient.SPLookup(ctx, positions)
 	if err != nil || len(located) != 1 || located[0].TxID != paymentTxid {
 		t.Fatalf("real Indexer source lookup failed: %+v %v", located, err)
@@ -422,7 +430,7 @@ func TestSPBitcoinCoreRegtestIndexerE2E(t *testing.T) {
 		t.Fatal("Indexer rawtx/batch returned wrong txid")
 	}
 
-	private, err := walletsdk.SilentPayOutputSpendKey(keys, matched)
+	private, err := walletsdk.SilentPayOutputSpendKey(keys, matched[0])
 	if err != nil {
 		t.Fatal(err)
 	}
