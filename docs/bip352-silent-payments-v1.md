@@ -99,7 +99,7 @@ BTC 收款页展示两个可选收款方式：普通地址、隐私收款地址�
 | Archive 历史交易补齐 | **未实现**：只完成 Live 余额恢复；不能宣称交易历史已同步 |
 | SP UTXO 实际花费 | SDK 已实现**显式单 UTXO 整笔 Sweep**：重新检查最新 SP 快照的 unspent、原 Bitcoin rawtx、公钥/金额、资产-aware Indexer 输出和本地锁定，直接按派生最终 P2TR 私钥签名并由 Bitcoin Script Engine 验证。拒绝不明/带资产 UTXO，支持送至普通 BTC 或 SP 地址；新增 SP→SP 及已花费/带资产拒绝 E2E。**尚未接入 PWA 普通发送/账户统一余额，也不支持部分金额与找零** |
 | 自动后台续扫 | **未实现**：当前 PWA 需要手动刷新；页面关闭、锁屏后自动恢复任务、断点增量扫描和 Live/Archive 两阶段进度待开发 |
-| 完整节点与主网部署 | 未完成。Indexer SP 生产实现当前仍在另一个工作区，GitHub main 的 Indexer 版本不提供这些 API；SDK E2E 使用模拟公共 L1 Indexer 响应，真实多节点和 Bitcoin Core regtest 待验收 |
+| 完整节点与主网部署 | GitHub Indexer main 现已包含 SP Base/HTTP 实现；真实 Bitcoin Core regtest → BaseIndexer → SDK 的 E2E 已建立，CI 从 2026-10-12 使用 31.0。完整独立 IndexerMgr、SatoshiNet 三节点和 PWA 浏览器联合验收仍未完成 |
 
 **安全门禁：**未通过真实 Indexer+SDK 端到端对接、SP UTXO 实际花费回归、PWA WASM 二进制更新及账户统一余额/花费流程验收之前，不可合并 PR，也不可在正式 PWA 中推广接收 SP 资金。SDK 的受限 Sweep 不是完整钱包花费能力；全量 SP 扫描和资金可花费的用户体验不得据此宣称已经上线。
 
@@ -115,3 +115,17 @@ PR #11 为 Draft。当前专用 CI 验证了基础 BIP352 密钥/地址、模拟
 5. **Indexer 发布依赖**：相关 SP RPC 仍在单独的 `indexer_dev` 未提交工作区；钱包 PR 暂不能独立在现有主网 Indexer 上完成 SP 收款。
 
 因此本 PR 不得在上述项完成以前改为 Ready 或合并。
+
+
+### PWA SDK 业务场景回归（2026-10-12）
+
+新增 `sdk/wallet/silentpay_pwa_scenarios_e2e_test.go`（正常 `go test`，无 SP 特殊 tag）：
+
+- 已启用的多钱包多子账户共享一次公共数据读取，但 Scan Key、收款余额、历史记录和检查点完全隔离；重复同步不重复计入付款，新启用账户必须先扫描才可显示已核实零余额。
+- PWA 关闭并重新创建 Manager 时，已落盘的 `SPEnabled` 与收款结果可恢复；不同 Bitcoin 网络之间不复用余额记录。
+- 扫描分页中断、请求取消或本地落盘失败，不能把旧的正确余额覆盖成半成品；真实确认后 Live 不再包含输出，完整扫描结束才能变更余额。
+- 恶意或损坏 Indexer 响应（network/schema/anchor/bitmap/txid/rawtx/cursor）拒绝并保留原检查点。
+- Archive 分叉恢复不得复用旧链历史或重复记录；中途失败不发布部分恢复结果。
+- 真实 Bitcoin Core 31.0 的 regtest E2E 扩展为 k=0/k=1 同交易、花费 k=0 后恢复 k=1、两者全部花费与 Archive 保留审计。
+
+以上属于 SDK 和 Core/Base 环境验证，尚不替代浏览器中的 WASM、钱包锁定/解锁自动调度和 PWA 完整验收。
