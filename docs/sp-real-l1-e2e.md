@@ -1,0 +1,71 @@
+# 真实 Bitcoin L1 / SP E2E 联调方案
+
+日期：2026-10-11；本方案沿用 sat20wallet/sdk/e2e 的现有测试入口，不另建一套虚拟网络。
+
+## 现有环境调查
+
+- sdk/e2e/harness_test.go 启动真正的 SatoshiNet bootstrap、core、miner 三个进程，实际使用 RPC、P2P 和 STP 插件；这三者的 L1 Indexer 地址指向 fakeL1Indexer。
+- sdk/e2e/pos_pwa_l1_test.go 会真实地验证交易签名与资产变迁，但由内存夹具模拟 Bitcoin block、mempool、UTXO。
+- sat20-labs/indexer 主分支已有 BaseIndexer 内建 SP Archive/Live 与生产 Gin RPC；indexer/base/silentpay_e2e_test.go 虽使用生产 Base/DB/HTTP，但 Bitcoin RPC 数据来源是模拟小链。
+- 完整 indexer.NewIndexerMgr 的网络参数目前只明确支持 mainnet、testnet、testnet4。将完整 Indexer 直接配置成 regtest 会在其默认分支错误地落到 MainNetParams，所以不能仅改一份 YAML 就进行独立 Indexer 主进程的 regtest 验收。
+
+## 第一阶段：真实 Bitcoin Core + 生产 L1 BaseIndexer + SDK
+
+新增 sdk/e2e/silentpay_bitcoind_e2e_test.go，全部为普通 Go 测试，不加特殊 build tag。
+
+1. 测试启动独立 bitcoind regtest 进程，使用 t.TempDir、随机空闲 localhost 端口、txindex=1 与全新 Bitcoin Core Wallet。先挖满成熟区块。
+2. Core 真正通过 sendtoaddress 给 SDK 持有私钥的 P2WPKH 地址转 BTC；SDK 从最终选中的 UTXO 派生 BIP352 收款脚本，签名并 sendrawtransaction，之后 Core 真正挖矿确认。
+3. 测试通过生产 bitcoin_rpc.InitBitconRpc、BaseIndexer.NewBaseIndexer(...RegressionNetParams)、SyncToChainTip、UpdateDB，构建实际 L1 Base 和 SP 数据库；不是把想要的 SP 记录直接写进 KVDB。
+4. SDK 从生产 rpcserver/base.Service 和 rpcserver/bitcoind.Service 的 HTTP 接口读取公共 T、Taproot 输出、固定 Live 快照、真实 txid 与 rawtx；使用本地 Scan/Spend Key 找出属于账户的输出并派生花费私钥。
+5. 用此私钥构造真实 Taproot 花费交易，再由 Bitcoin Core 的 sendrawtransaction 验证、挖矿。BaseIndexer 同步下一块后确保已全部花费的 Live 记录消失，并运行真实 CheckSelf。
+
+执行入口：
+
+    SAT20_E2E_REQUIRE_BITCOIND=1 go test ./e2e -run '^TestSPBitcoinCoreRegtestIndexerE2E$' -v -count=1 -timeout=15m
+
+默认 go test ./e2e 会包含测试；本地缺少 bitcoind 时明确 Skip，CI 则以环境变量强制必须有真实 Core，不能静默跳过。CI 固定下载发行版 Bitcoin Core 31.0 Linux x86_64 包并核对官方 SHA256SUMS，另验证 bitcoind --version 显示 31.0。没有主网接入或主网广播；所有数据只存在测试临时目录。全局 Bitcoin RPC singleton 在测试结束后恢复，此用例不并行。
+
+当前构建使用的是生产 BaseIndexer 在 E2E 测试进程内运行，**不是完整 IndexerMgr 的独立服务进程**。这避免为了一个 SP 用例改动所有协议的 regtest 高度/参数处理。
+
+## 第二阶段：纳入现有聪网虚拟节点和 PWA
+
+SP 是 L1 BTC 功能，不需要聪网区块为其背书。现有聪网 E2E 中许多自定义 STP/资产初始化依赖 fakeL1Indexer，直接全部替换会让这些尚未真正部署到 Bitcoin regtest 的模拟资产失效。
+
+建议第二阶段优先在 SDK 或测试专用 HTTP router 处拆清流量：真实 BTC/SP、原始交易、广播和 UTXO 查询统一使用 Bitcoin Core + BaseIndexer；仅保留原有 STP 资产初始化所需的模拟接口。不能让 mock 生成 SP Archive 或“已收到 BTC”的结果。这样可以让 PWA 的 WASM 执行真实 SP 收发验证，同时保留三节点聪网测试。
+
+之后如需将完整 IndexerMgr 以独立进程运行在 regtest，先单独评估、批准添加 regtest 参数及其多资产协议高度；此项不在当前测试 PR 擅自修改。
+
+## 尚未完成的 SP 上线验收
+
+PR #11 仍是 Draft：已匹配 SP UTXO 接入通用 BTC 余额、选币、实际生产花费；匹配元数据本地加密；Archive/增量恢复；PWA Browser 完整验收尚未全部解决。即使真实 Core+Base E2E 通过，也不能替代这些功能。
+
+## 实际执行结果（2026-10-11）
+
+真实 Bitcoin Core + BaseIndexer + SDK 回路 **PASS**，并在修复 SDK Go module graph 后重复复验通过：
+
+- 证据 1：[GitHub Actions run 38146136749](https://github.com/sat20-labs/sat20wallet/actions/runs/38146136749)，sp-bitcoin-core job 成功。日志包含 Bitcoin Core 29.2 SHA256 校验 OK、BaseIndexer.UpdateDB、BaseIndexer.CheckSelf 和 PASS: TestSPBitcoinCoreRegtestIndexerE2E (1.02s)。
+- 证据 2：[GitHub Actions run 38146721490](https://github.com/sat20-labs/sat20wallet/actions/runs/38146721490)，修复 SP 源码 gofmt 后，该 job 再次成功，现有 RGB11 asset naming 格式检查也已通过该步骤。
+- 比特币 regtest 测试数据与临时 DB 均在 GitHub Runner 上生成，结束后清理，不依赖本地 Mac 或主网服务。
+
+为了确保 Pull Request 新增 workflow 尚未在主分支激活时能够获得实际证据，曾临时在 rgb11-asset-naming.yml 添加仅本 PR 运行的 SP job；验证完成后已删除这一临时 job，恢复原 workflow。长期 CI 入口为新建的 .github/workflows/silentpay.yml（包含真实 regtest 命令）。
+
+本次实际通过的是 **真实 Core RPC + 原生 BaseIndexer + 真实 SP REST handler + SDK 的单项 E2E**；没有启动完整 IndexerMgr 守护进程、SatoshiNet 三节点与浏览器 PWA 的统一编排。不要用单项 PASS 代替第二阶段验收。
+
+## 2026-10-12：生产一致版本与 PWA 用例
+
+- CI 已固定为 **Bitcoin Core 31.0**，不再沿用前期 29.2；官方 release 的 x86_64-linux-gnu 发布包由 SHA256SUMS 验证。历史 29.2 成功日志仅作为旧版本回归记录，不作为 31.0 的证明。
+- `sdk/wallet/silentpay_pwa_scenarios_e2e_test.go` 追加默认运行的 SDK E2E，覆盖：多助记词钱包/子账户独立地址和余额、账户切换及重复刷新无重复记账、后启用账户不得继承扫描结果、持久化后重新创建 Manager 恢复 SP 状态与余额、未确认扫描和失败分页不能覆盖已有资金、确认花费才更新为零、跨网络检查点隔离。
+- 同一组 SDK E2E 用例覆盖错误网络/schema、尚未就绪、快照高度/哈希漂移、Live 位图损坏、错误 txid、原始交易损坏、游标重复和分页过程中断；发现异常后必须保留最近一次成功的账户扫描状态。模拟本地批量持久化错误不得将新状态报告为已完成。
+- Archive 断点恢复补充链分叉：重组时重新读取有效链、旧历史不能跨分叉直接继续、失败不提交半成品，恢复后不允许同一输出重复记账。
+- `sdk/e2e/silentpay_bitcoind_e2e_test.go` 的真实 Core+BaseIndexer 场景扩展为一笔交易内 k=0 与 k=1 两个 SP 输出，中间夹一个普通 change 输出，使 k 序号与 vout 不相等；先花费 k=0 后，必须仍可发现未花费 k=1，固定快照返回准确 spent/unspent；最后花费 k=1 后 Live 移除来源记录，Archive 仍保留全部历史并通过 CheckSelf。
+
+上述 wallet 包用例在已隔离的模拟公共 Indexer 边界检查 SDK 生命周期，真实 Core 测试则使用实际 Bitcoin 网络共识和生产 Base/HTTP。两者互补，但仍**没有**证明完整浏览器 PWA/聪网三节点共同启动、后台自动续扫、受保护的本地 tweak 持久化及 BTC 余额统一。PR 在这些验收完成前保留 Draft。
+
+### 31.0 的 CI 实测证据
+
+- [SP PWA SDK 接口测试及 Bitcoin Core 31.0 首轮通过：Actions run 38210880756](https://github.com/sat20-labs/sat20wallet/actions/runs/38210880756)：新增的 5 个顶层用例、10 个异常子场景均 PASS；下载包 SHA256 OK；真实 regtest 基础收款/花费 PASS。
+- [增强版 Bitcoin Core 31.0 regtest PASS：Actions run 38211690365](https://github.com/sat20-labs/sat20wallet/actions/runs/38211690365)：包含真实 k=0/k=1 分步花费和分散 vout、固定快照 spent/unspent、最终 Archive 留存与 BaseIndexer CheckSelf；实际日志 TestSPBitcoinCoreRegtestIndexerE2E (1.85s) PASS。
+- 以上验证实际使用 Linux x86_64 Bitcoin Core 31.0，版本通过 CLI 检查；每次测试使用新生成的 regtest 数据和本地临时数据库。
+- 用于获取首轮 E2E 实际执行证据的临时 RGB11 workflow job 已删除，文件已恢复与 main 完全一致；长期专用 SP 测试在 .github/workflows/silentpay.yml。
+
+结果范围依旧只覆盖 SDK 业务接口及真实 Bitcoin Core/BaseIndexer/HTTP 闭环；完整 PWA 浏览器多设备/锁屏恢复、聪网三节点共存、SP UTXO 普通余额/选币统一尚待实现与验收。

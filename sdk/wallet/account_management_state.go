@@ -1813,6 +1813,12 @@ func cloneWalletInfoForAccountSync(info *WalletInfo) *WalletInfo {
 	for key, value := range info.AccountDIDs {
 		clone.AccountDIDs[key] = value
 	}
+	clone.SPEnabled = make(map[uint32]bool, len(info.SPEnabled))
+	for key, enabled := range info.SPEnabled {
+		if enabled {
+			clone.SPEnabled[key] = true
+		}
+	}
 	return &clone
 }
 

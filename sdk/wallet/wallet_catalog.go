@@ -18,6 +18,7 @@ type WalletCatalogAccount struct {
 	Address   string `json:"address,omitempty"`
 	PubKey    string `json:"pub_key,omitempty"`
 	AccountID string `json:"account_id,omitempty"`
+	SPEnabled bool   `json:"sp_enabled"`
 }
 
 type WalletCatalogEntry struct {
@@ -182,9 +183,10 @@ func (p *Manager) walletCatalogLocked() []WalletCatalogEntry {
 		}
 		for index := uint32(0); index < uint32(info.Accounts); index++ {
 			account := WalletCatalogAccount{
-				Index: index,
-				Name:  strings.TrimSpace(info.AccountNames[index]),
-				DID:   strings.TrimSpace(info.AccountDIDs[index]),
+				Index:     index,
+				Name:      strings.TrimSpace(info.AccountNames[index]),
+				DID:       strings.TrimSpace(info.AccountDIDs[index]),
+				SPEnabled: info.SPEnabled[index],
 			}
 			if account.Name == "" {
 				account.Name = defaultAccountName(index)
@@ -466,6 +468,14 @@ func (p *Manager) DeleteWallet(id int64) error {
 	info := p.walletInfoMap[id]
 	if info == nil {
 		return fmt.Errorf("can't find wallet %d", id)
+	}
+	// An SP address stays valid after publication. Deleting its mnemonic
+	// wallet would discard the scan key and future payment recovery metadata.
+	// Do not allow a regular catalog deletion to strand SP BTC.
+	for _, enabled := range info.SPEnabled {
+		if enabled {
+			return fmt.Errorf("wallet with active Silent Payments cannot be deleted")
+		}
 	}
 	if p.isAccountManagementRootLocked(info) {
 		return fmt.Errorf("the account management wallet cannot be deleted")
