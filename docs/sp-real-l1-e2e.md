@@ -23,7 +23,7 @@
 
     SAT20_E2E_REQUIRE_BITCOIND=1 go test ./e2e -run '^TestSPBitcoinCoreRegtestIndexerE2E$' -v -count=1 -timeout=15m
 
-默认 go test ./e2e 会包含测试；本地缺少 bitcoind 时明确 Skip，CI 则以环境变量强制必须有真实 Core，不能静默跳过。CI 下载发行版 Bitcoin Core 29.2 Linux x86_64 包并核对官方 SHA256SUMS。没有主网接入或主网广播；所有数据只存在测试临时目录。全局 Bitcoin RPC singleton 在测试结束后恢复，此用例不并行。
+默认 go test ./e2e 会包含测试；本地缺少 bitcoind 时明确 Skip，CI 则以环境变量强制必须有真实 Core，不能静默跳过。CI 固定下载发行版 Bitcoin Core 31.0 Linux x86_64 包并核对官方 SHA256SUMS，另验证 bitcoind --version 显示 31.0。没有主网接入或主网广播；所有数据只存在测试临时目录。全局 Bitcoin RPC singleton 在测试结束后恢复，此用例不并行。
 
 当前构建使用的是生产 BaseIndexer 在 E2E 测试进程内运行，**不是完整 IndexerMgr 的独立服务进程**。这避免为了一个 SP 用例改动所有协议的 regtest 高度/参数处理。
 
@@ -50,3 +50,13 @@ PR #11 仍是 Draft：已匹配 SP UTXO 接入通用 BTC 余额、选币、实�
 为了确保 Pull Request 新增 workflow 尚未在主分支激活时能够获得实际证据，曾临时在 rgb11-asset-naming.yml 添加仅本 PR 运行的 SP job；验证完成后已删除这一临时 job，恢复原 workflow。长期 CI 入口为新建的 .github/workflows/silentpay.yml（包含真实 regtest 命令）。
 
 本次实际通过的是 **真实 Core RPC + 原生 BaseIndexer + 真实 SP REST handler + SDK 的单项 E2E**；没有启动完整 IndexerMgr 守护进程、SatoshiNet 三节点与浏览器 PWA 的统一编排。不要用单项 PASS 代替第二阶段验收。
+
+## 2026-10-12：生产一致版本与 PWA 用例
+
+- CI 已固定为 **Bitcoin Core 31.0**，不再沿用前期 29.2；官方 release 的 x86_64-linux-gnu 发布包由 SHA256SUMS 验证。历史 29.2 成功日志仅作为旧版本回归记录，不作为 31.0 的证明。
+- `sdk/wallet/silentpay_pwa_scenarios_e2e_test.go` 追加默认运行的 SDK E2E，覆盖：多助记词钱包/子账户独立地址和余额、账户切换及重复刷新无重复记账、后启用账户不得继承扫描结果、持久化后重新创建 Manager 恢复 SP 状态与余额、未确认扫描和失败分页不能覆盖已有资金、确认花费才更新为零、跨网络检查点隔离。
+- 同一组 SDK E2E 用例覆盖错误网络/schema、尚未就绪、快照高度/哈希漂移、Live 位图损坏、错误 txid、原始交易损坏、游标重复和分页过程中断；发现异常后必须保留最近一次成功的账户扫描状态。模拟本地批量持久化错误不得将新状态报告为已完成。
+- Archive 断点恢复补充链分叉：重组时重新读取有效链、旧历史不能跨分叉直接继续、失败不提交半成品，恢复后不允许同一输出重复记账。
+- `sdk/e2e/silentpay_bitcoind_e2e_test.go` 的真实 Core+BaseIndexer 场景扩展为一笔交易内 k=0 与 k=1 两个 SP 输出，中间夹一个普通 change 输出，使 k 序号与 vout 不相等；先花费 k=0 后，必须仍可发现未花费 k=1，固定快照返回准确 spent/unspent；最后花费 k=1 后 Live 移除来源记录，Archive 仍保留全部历史并通过 CheckSelf。
+
+上述 wallet 包用例在已隔离的模拟公共 Indexer 边界检查 SDK 生命周期，真实 Core 测试则使用实际 Bitcoin 网络共识和生产 Base/HTTP。两者互补，但仍**没有**证明完整浏览器 PWA/聪网三节点共同启动、后台自动续扫、受保护的本地 tweak 持久化及 BTC 余额统一。PR 在这些验收完成前保留 Draft。
