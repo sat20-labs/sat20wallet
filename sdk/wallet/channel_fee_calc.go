@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"github.com/btcsuite/btcd/txscript"
-	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 )
 
@@ -30,16 +29,11 @@ func CalcFee_SplicingOut(inputLen, feeLen int, assetName *AssetName,
 	weightEstimate.AddP2WSHOutput()
 	weightEstimate.AddP2TROutput()
 
-	requiredFee := weightEstimate.Fee(feeRate)
-	switch assetName.Protocol {
-	case indexer.PROTOCOL_NAME_BRC20:
-		requiredFee += STUB_VALUE_BRC20
-	case indexer.PROTOCOL_NAME_RUNES:
-		var payload [txscript.MaxDataCarrierSize]byte
-		weightEstimate.AddOutput(payload[:])
-		requiredFee = weightEstimate.Fee(feeRate)
-		requiredFee += 330
+	policy := STPPolicyFor(assetName)
+	if policy.SplicePayloadSize > 0 {
+		weightEstimate.AddOutput(make([]byte, policy.SplicePayloadSize))
 	}
+	requiredFee := weightEstimate.Fee(feeRate) + policy.SpliceFeeReserve
 
 	requiredFee += CalcSplicingOutServiceFee(amt, fromInitiator, feeCfg)
 	return requiredFee

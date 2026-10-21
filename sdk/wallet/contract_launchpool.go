@@ -408,8 +408,8 @@ func CalcFee_SplicingIn(utxoLen, feeLen int, assetName *indexer.AssetName, feeRa
 			weightEstimate.AddP2WSHOutput() // stub
 			moreSats += stubValue
 		}
-		if assetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
-			// 符文的输入聪数量，在需要余额时可能不够
+		if STPPolicyFor(&AssetName{AssetName: *assetName}).PartialTransfer {
+			// 可拆分非绑定资产的输入聪数量，在需要余额时可能不够
 			moreSats += stubValue
 		}
 	}

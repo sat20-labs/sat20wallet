@@ -31,31 +31,36 @@ func (p *Manager) GetCommitTxAssetInfo(channelId string) (*TxAssetInfo, error) {
 		OutputAssets: make([]*indexer.AssetsInUtxo, 0),
 	}
 
-	brc20Inputs := make([]*indexer.AssetInfo, 0)
-	brc20Outputs := channel.GetFundingOutputWithProtocol(indexer.PROTOCOL_NAME_BRC20)
-	for _, assetToOutput := range brc20Outputs {
-		name := *assetToOutput.AssetName
-
-		local := channel.LocalCommitment.LocalBalance[name].Clone()
-		remote := channel.LocalCommitment.RemoteBalance[name].Clone()
-
-		if local.Sign() != 0 {
-			brc20Inputs = append(brc20Inputs, &indexer.AssetInfo{
-				Name:       assetToOutput.AssetName.AssetName,
-				Amount:     *local,
-				BindingSat: 0,
-			})
+	materializedInputs := make([]*indexer.AssetInfo, 0)
+	for _, protocol := range stpAssetProtocols.ordered {
+		if !protocol.Policy(nil).AccountBased {
+			continue
 		}
-		if remote.Sign() != 0 {
-			brc20Inputs = append(brc20Inputs, &indexer.AssetInfo{
-				Name:       assetToOutput.AssetName.AssetName,
-				Amount:     *remote,
-				BindingSat: 0,
-			})
+		for _, assetToOutput := range channel.GetFundingOutputWithProtocol(protocol.Protocol()) {
+			name := *assetToOutput.AssetName
+
+			local := channel.LocalCommitment.LocalBalance[name].Clone()
+			remote := channel.LocalCommitment.RemoteBalance[name].Clone()
+
+			if local.Sign() != 0 {
+				materializedInputs = append(materializedInputs, &indexer.AssetInfo{
+					Name:       assetToOutput.AssetName.AssetName,
+					Amount:     *local,
+					BindingSat: 0,
+				})
+			}
+			if remote.Sign() != 0 {
+				materializedInputs = append(materializedInputs, &indexer.AssetInfo{
+					Name:       assetToOutput.AssetName.AssetName,
+					Amount:     *remote,
+					BindingSat: 0,
+				})
+			}
 		}
 	}
-	sort.Slice(brc20Inputs, func(i, j int) bool {
-		return brc20Inputs[i].Name.String() < brc20Inputs[j].Name.String()
+
+	sort.Slice(materializedInputs, func(i, j int) bool {
+		return materializedInputs[i].Name.String() < materializedInputs[j].Name.String()
 	})
 
 	prevFetcher := make(map[string]*TxOutput)
@@ -88,11 +93,11 @@ func (p *Manager) GetCommitTxAssetInfo(channelId string) (*TxAssetInfo, error) {
 
 			if fundingOutput.OutValue.Value == 330 &&
 				bytes.Equal(fundingOutput.OutValue.PkScript, channel.GetChannelPkScript()) {
-				if len(brc20Inputs) == 0 {
-					return nil, fmt.Errorf("no brc20 asset for previous output %s", utxo)
+				if len(materializedInputs) == 0 {
+					return nil, fmt.Errorf("no materialized asset for previous output %s", utxo)
 				}
-				in := brc20Inputs[0]
-				brc20Inputs = utils.RemoveIndex(brc20Inputs, 0)
+				in := materializedInputs[0]
+				materializedInputs = utils.RemoveIndex(materializedInputs, 0)
 
 				fundingOutput.Assets = indexer.TxAssets{*in}
 				fundingOutput.Offsets = map[indexer.AssetName]indexer.AssetOffsets{

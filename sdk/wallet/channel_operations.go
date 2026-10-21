@@ -138,7 +138,7 @@ func (p *Manager) BatchUnlockFromChannelV2(channelId string, destAddr []string, 
 	if asset == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
-	if err := rejectRGB11STPAsset(asset); err != nil {
+	if err := ValidateSTPAsset(asset, STPOpUnlock); err != nil {
 		return "", 0, err
 	}
 	tickerInfo := p.getTickerInfo(asset)
@@ -244,7 +244,7 @@ func (p *Manager) LockToChannel(channelId string, assetName string, amt string,
 	if asset == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
-	if err := rejectRGB11STPAsset(asset); err != nil {
+	if err := ValidateSTPAsset(asset, STPOpLock); err != nil {
 		return "", 0, err
 	}
 	tickerInfo := p.getTickerInfo(asset)
@@ -281,7 +281,7 @@ func (p *Manager) LockToChannel(channelId string, assetName string, amt string,
 	}
 
 	var revealPrivKey []byte
-	if channel.HasProtocolAsset(indexer.PROTOCOL_NAME_BRC20) {
+	if channel.NeedsSTPRevealKey() {
 		priv, err := btcec.NewPrivateKey()
 		if err != nil {
 			return "", -1, err
@@ -319,7 +319,7 @@ func (p *Manager) LockToChannelWithExpand(channelId string, assetName string, am
 	if asset == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
-	if err := rejectRGB11STPAsset(asset); err != nil {
+	if err := ValidateSTPAsset(asset, STPOpLock); err != nil {
 		return "", 0, err
 	}
 	tickerInfo := p.getTickerInfo(asset)
@@ -380,7 +380,7 @@ func (p *Manager) SplicingOut(channelId string, destAddr string,
 	if asset == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
-	if err := rejectRGB11STPAsset(asset); err != nil {
+	if err := ValidateSTPAsset(asset, STPOpSpliceOut); err != nil {
 		return "", 0, err
 	}
 	tickerInfo := p.getTickerInfo(asset)
@@ -406,23 +406,20 @@ func (p *Manager) SplicingOut(channelId string, destAddr string,
 		address = channel.GetLocalAddress()
 	}
 
-	var utxos []*TxOutput
-	var inscribe *InscribeResv
 	excludedUtxoMap := make(map[string]bool)
 	fundingUtxoMgr := NewUtxoMgr(address, p.l1IndexerClient)
-	if asset.Protocol == indexer.PROTOCOL_NAME_BRC20 {
-		var output *TxOutput
-		output, inscribe, err = p.getUtxosForBRC20(address, channel.Address, fundingUtxoMgr, excludedUtxoMap, asset, dAmt,
-			preTxInputs, revealKey, feeRate, true)
-		if err != nil {
-			return "", 0, err
-		}
-		defer func() {
-			if inscribe != nil && inscribe.Status != RS_CLOSED {
-				p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)
-			}
-		}()
-		utxos = []*TxOutput{output}
+	prepared, err := p.PrepareSTPAssetInputs(STPAssetInputRequest{
+		Asset: asset, Amount: dAmt, FundingAddress: address, AssetAddress: channel.Address,
+		FundingUtxos: fundingUtxoMgr, ExcludedUtxos: excludedUtxoMap,
+		PreviousInputs: preTxInputs, RevealKey: revealKey, FeeRate: feeRate,
+		LockInputs: true, Operation: STPOpSpliceOut,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	utxos, inscribe := prepared.Inputs, prepared.Inscribe
+	if inscribe != nil {
+		defer p.unlockOpenInscribes([]*InscribeResv{inscribe})
 	}
 
 	var feeInputs []*TxOutput
@@ -479,7 +476,7 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 	if asset == nil {
 		return "", 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
-	if err := rejectRGB11STPAsset(asset); err != nil {
+	if err := ValidateSTPAsset(asset, STPOpSpliceIn); err != nil {
 		return "", 0, err
 	}
 	tickerInfo := p.getTickerInfo(asset)
@@ -532,21 +529,20 @@ func (p *Manager) SplicingIn(channelId string, assetName string, amt string,
 		}
 	} else {
 		if len(utxos) == 0 {
-			if asset.Protocol == indexer.PROTOCOL_NAME_BRC20 {
-				var output *TxOutput
-				output, inscribe, err = p.getUtxosForBRC20(fundingAddress, fundingAddress, fundingUtxoMgr,
-					excludedUtxoMap, asset, dAmt, preTxInputs, revealKey, feeRate, true)
-				if err == nil {
-					assetInputs = []*TxOutput{output}
-					defer func() {
-						if inscribe != nil && inscribe.Status != RS_CLOSED {
-							p.utxoLockerL1.UnlockUtxosWithTx(inscribe.CommitTx)
-						}
-					}()
+			prepared, prepareErr := p.PrepareSTPAssetInputs(STPAssetInputRequest{
+				Asset: asset, Amount: dAmt, FundingAddress: fundingAddress, AssetAddress: fundingAddress,
+				FundingUtxos: fundingUtxoMgr, ExcludedUtxos: excludedUtxoMap,
+				PreviousInputs: preTxInputs, RevealKey: revealKey, FeeRate: feeRate,
+				LockInputs: true, Operation: STPOpSpliceIn,
+			})
+			err = prepareErr
+			if err == nil {
+				assetInputs, inscribe = prepared.Inputs, prepared.Inscribe
+				if inscribe != nil {
+					defer p.unlockOpenInscribes([]*InscribeResv{inscribe})
 				}
-			} else {
-				assetInputs, err = p.getUtxosWithAssetV3(fundingAddress, dAmt, asset, nil)
 			}
+
 			if err != nil {
 				return "", -1, err
 			}
@@ -619,7 +615,7 @@ func (p *Manager) ExpandChannel(channelId string, assetName string, utxo string,
 	if asset == nil {
 		return "", "", 0, fmt.Errorf("invalid asset name %s", assetName)
 	}
-	if err := rejectRGB11STPAsset(asset); err != nil {
+	if err := ValidateSTPAsset(asset, STPOpExpand); err != nil {
 		return "", "", 0, err
 	}
 
@@ -765,7 +761,7 @@ func (p *Manager) ExpandAsset(channelId string, assetName string) ([]string, str
 				if u.Name.String() == indexer.GetStakeAssetName(p.GetSyncHeightL1()) {
 					continue
 				}
-				if u.Name.Protocol != indexer.PROTOCOL_NAME_BRC20 {
+				if !STPPolicyFor(&AssetName{AssetName: u.Name}).AccountBased {
 					unhandled = append(unhandled, u)
 					continue
 				}
@@ -794,7 +790,7 @@ func (p *Manager) ExpandAsset(channelId string, assetName string) ([]string, str
 		if asset == nil {
 			return nil, "", fmt.Errorf("invalid asset name %s", assetName)
 		}
-		if err := rejectRGB11STPAsset(asset); err != nil {
+		if err := ValidateSTPAsset(asset, STPOpExpand); err != nil {
 			return nil, "", err
 		}
 		anchorIds, value, err = p.ExpandAssetInChannel(channel, asset)

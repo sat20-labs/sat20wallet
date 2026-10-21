@@ -175,11 +175,9 @@ func CreatePunishmentTx(remoteCommit *ChannelCommitment, revocationPrivKey *btce
 		return nil, nil, fmt.Errorf("GetP2TRpkScript failed: %v", err)
 	}
 
-	brc20OutputCount := 0
-	for k, v := range remoteBalance {
-		if k.Protocol == indexer.PROTOCOL_NAME_BRC20 && v.Sign() != 0 {
-			brc20OutputCount++
-		}
+	recovery, err := stpRecoveryInputs(remoteCommit, remoteBalance, STPOpPunish)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	var plainSats []*TxOutput
@@ -188,7 +186,7 @@ func CreatePunishmentTx(remoteCommit *ChannelCommitment, revocationPrivKey *btce
 	for i, index := range outputIndex {
 		txOut := oldCommitTx.TxOut[index]
 		outPoint := wire.NewOutPoint(&hash, uint32(index))
-		if i+1 <= brc20OutputCount {
+		if i+1 <= recovery.LeadingPlainOutputs {
 			// BRC20 对应的 commitment output 本身仍是白聪，不能直接作为资产
 			// 输出转走；真正的 transfer reveal 输出在 NextTxs 中处理。
 			plainSats = append(plainSats, &indexer.TxOutput{OutPointStr: fmt.Sprintf("%s:%d", txId, index), OutValue: *txOut})
@@ -209,26 +207,14 @@ func CreatePunishmentTx(remoteCommit *ChannelCommitment, revocationPrivKey *btce
 		}
 	}
 
-	if brc20OutputCount != 0 {
-		// 当前实现要求构造 commitment 时已经准备好 BRC20 transfer inscription。
-		// punish 时先广播/花费 reveal tx 的输出，而不是在惩罚阶段临时 mint。
-		if len(remoteCommit.NextTxs) == 0 {
-			return nil, nil, fmt.Errorf("should construct brc20 transfer inscription before")
-		}
-		for i, tx := range remoteCommit.NextTxs {
-			if i%2 == 0 {
-				continue
-			}
-			hash := tx.TxHash()
-			outPoint := wire.NewOutPoint(&hash, 0)
-			txOut := tx.TxOut[0]
-			txIn := wire.NewTxIn(outPoint, nil, nil)
-			punishTx.AddTxIn(txIn)
+	if recovery.LeadingPlainOutputs != 0 {
+		for _, output := range recovery.Transfers {
+			outPoint := output.OutPoint()
+			txOut := output.TxOut()
+			punishTx.AddTxIn(wire.NewTxIn(outPoint, nil, nil))
 			weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
 			prevFetcher.AddPrevOut(*outPoint, txOut)
-
-			out := wire.NewTxOut(txOut.Value, recvPkScript)
-			punishTx.AddTxOut(out)
+			punishTx.AddTxOut(wire.NewTxOut(txOut.Value, recvPkScript))
 			weightEstimate.AddP2TROutput()
 		}
 
@@ -331,11 +317,9 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 		return nil, nil, 0, err
 	}
 
-	brc20OutputCount := 0
-	for k, v := range localBalance {
-		if k.Protocol == indexer.PROTOCOL_NAME_BRC20 && v.Sign() != 0 {
-			brc20OutputCount++
-		}
+	recovery, err := stpRecoveryInputs(commit, localBalance, STPOpForceClose)
+	if err != nil {
+		return nil, nil, 0, err
 	}
 
 	sweepTx.LockTime = currHeight
@@ -348,7 +332,7 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 		}
 		txOut := commitTx.TxOut[index]
 		outPoint := wire.NewOutPoint(&hash, uint32(index))
-		if i+1 <= brc20OutputCount {
+		if i+1 <= recovery.LeadingPlainOutputs {
 			// BRC20 的 commitment output 先按白聪保留，真正的资产转移输出来自
 			// 已经预构造的 reveal tx。
 			plainSats = append(plainSats, &indexer.TxOutput{
@@ -373,31 +357,18 @@ func (p *Manager) CreateSweepTx(commit *ChannelCommitment, outputIndex []int,
 		}
 	}
 
-	if brc20OutputCount != 0 {
-		// 与 punish 一样，BRC20 transfer inscription 必须在 commitment 构造时
-		// 已经准备好；sweep 阶段只消费 reveal tx 输出。
-		if len(commit.NextTxs) == 0 {
-			return nil, nil, 0, fmt.Errorf("should construct brc20 transfer inscription before")
-		}
-		for i, tx := range commit.NextTxs {
-			if i%2 == 0 {
-				continue
-			}
-			if tx == nil || len(tx.TxOut) == 0 {
-				return nil, nil, 0, fmt.Errorf("invalid brc20 sweep predecessor")
-			}
-			hash := tx.TxHash()
-			outPoint := wire.NewOutPoint(&hash, 0)
-			txOut := tx.TxOut[0]
-			txIn := &wire.TxIn{PreviousOutPoint: *outPoint, Sequence: csvDelay}
-			sweepTx.AddTxIn(txIn)
+	if recovery.LeadingPlainOutputs != 0 {
+		for _, output := range recovery.Transfers {
+			outPoint := output.OutPoint()
+			txOut := output.TxOut()
+			sweepTx.AddTxIn(&wire.TxIn{PreviousOutPoint: *outPoint, Sequence: csvDelay})
 			weightEstimate.AddNestedP2WSHInput(int64(len(commitmentScript)))
 			prevFetcher.AddPrevOut(*outPoint, txOut)
-
 			out := wire.NewTxOut(txOut.Value, recvPkScript)
 			sweepTx.AddTxOut(out)
 			weightEstimate.AddTxOutput(out)
 		}
+
 		if len(plainSats) == 0 {
 			return nil, nil, 0, fmt.Errorf("no enough plain sats to pay network fee")
 		}

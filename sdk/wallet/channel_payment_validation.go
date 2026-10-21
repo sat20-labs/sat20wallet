@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"fmt"
 
-	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 func (p *Manager) GetCurrRevocationPrivKey(channel *Channel) (*secp256k1.PrivateKey, error) {
@@ -57,6 +57,12 @@ func (p *Manager) CheckUtxosSatsNet(utxos []string) error {
 }
 
 func (p *Manager) AllowUnlock(resv *PaymentReservation, feeutxos []string) error {
+	if resv == nil || resv.AssetName == nil {
+		return fmt.Errorf("missing STP payment asset")
+	}
+	if err := ValidateSTPAsset(&resv.AssetName.AssetName, STPOpUnlock); err != nil {
+		return err
+	}
 	var requiredAmt *Decimal
 	for _, amt := range resv.DestAmt {
 		if requiredAmt == nil {
@@ -116,6 +122,12 @@ func (p *Manager) AllowUnlock(resv *PaymentReservation, feeutxos []string) error
 }
 
 func (p *Manager) AllowLock(resv *PaymentReservation, utxos, fees []string, feeValue int64) error {
+	if resv == nil || resv.AssetName == nil {
+		return fmt.Errorf("missing STP payment asset")
+	}
+	if err := ValidateSTPAsset(&resv.AssetName.AssetName, STPOpLock); err != nil {
+		return err
+	}
 	err := p.CheckUtxosSatsNet(append(utxos, fees...))
 	if err != nil {
 		return err

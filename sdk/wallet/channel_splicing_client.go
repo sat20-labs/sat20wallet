@@ -38,6 +38,9 @@ func (p *Manager) getTxOutputFromIndexerOrInscribe(utxo string, inscribe *Inscri
 func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire.AssetName,
 	amt *Decimal, feeRate int64, utxos, fees []*TxOutput, inscribe *InscribeResv,
 	revealPrivKey []byte, reason string) (string, int64, error) {
+	if err := ValidateSTPAsset(assetName, STPOpSpliceIn); err != nil {
+		return "", 0, err
+	}
 
 	oldChannel, err := p.loadChannel(channel.ChannelId)
 	if err != nil {
@@ -260,6 +263,9 @@ func (p *Manager) FunderInitSplicingInProcess(channel *Channel, assetName *swire
 func (p *Manager) FunderInitSplicingOutProcess(channel *Channel, destAddr string,
 	assetName *AssetName, feeRate int64, amt *Decimal, utxos, fees []*TxOutput,
 	inscribe *InscribeResv, revealPrivKey []byte, reason string, moreData []byte) (string, int64, error) {
+	if err := ValidateSTPAsset(&assetName.AssetName, STPOpSpliceOut); err != nil {
+		return "", 0, err
+	}
 
 	oldChannel, err := p.loadChannel(channel.ChannelId)
 	if err != nil {
@@ -484,6 +490,11 @@ func (p *Manager) AllowSplicingIn(resv *SplicingReservation, utxos, fees []strin
 
 func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*TxOutput, needStub int, stubValue int64) error {
 	assetName := resv.AssetName
+	protocol, err := STPAssetProtocolFor(&assetName.AssetName, STPOpSpliceIn)
+	if err != nil {
+		return err
+	}
+	policy := protocol.Policy(assetName)
 	amt := resv.Amt.Clone()
 	if amt.Sign() <= 0 {
 		return fmt.Errorf("amt should be larger than 0")
@@ -535,6 +546,9 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 			}
 		}
 
+		if err := protocol.VerifyInput(assetName, info); err != nil {
+			return err
+		}
 		if err := AlignAsset(info, &assetName.AssetName); err != nil {
 			return err
 		}
@@ -549,11 +563,11 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 	}
 	if totalAssetAmount.Cmp(amt) > 0 {
 		weightEstimate.AddP2TROutput()
-		if IsRunes(assetName.Protocol) {
-			payload, err := GetRunesEstimatePayload(assetName, 1)
-			if err != nil {
-				return err
-			}
+		payload, err := protocol.EstimateSplicePayload(assetName, 1)
+		if err != nil {
+			return err
+		}
+		if len(payload) > 0 {
 			weightEstimate.AddOutput(payload)
 		}
 	}
@@ -616,17 +630,6 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 		}
 	}
 
-	switch assetName.Protocol {
-	case indexer.PROTOCOL_NAME_RUNES:
-		if totalAssetAmount.Cmp(amt) != 0 && totalValue < 660 {
-			feeValue -= 330
-		}
-	case indexer.PROTOCOL_NAME_ORDX:
-		satsNum1 := indexer.GetBindingSatNum(amt, uint32(assetName.N))
-		if satsNum1 < 330 {
-			feeValue -= 330
-		}
-	}
 	if len(fees) != 0 {
 		for i := 0; i < len(fees); i++ {
 			info := fees[i]
@@ -646,17 +649,6 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 			feeValue += info.OutValue.Value
 			feeUtxosInfo = append(feeUtxosInfo, info)
 			weightEstimate.AddTaprootKeySpendInput(txscript.SigHashDefault)
-		}
-	}
-	switch assetName.Protocol {
-	case indexer.PROTOCOL_NAME_RUNES:
-		if totalAssetAmount.Cmp(amt) != 0 && totalValue < 660 {
-			feeValue += 330
-		}
-	case indexer.PROTOCOL_NAME_ORDX:
-		satsNum1 := indexer.GetBindingSatNum(amt, uint32(assetName.N))
-		if satsNum1 < 330 {
-			feeValue += 330
 		}
 	}
 
@@ -693,7 +685,7 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 			if IsBindingSat(assetName) {
 				return fmt.Errorf("need some plain utxo to pay fee")
 			}
-			if totalAssetAmount.Cmp(amt) > 0 && !IsRunes(assetName.Protocol) {
+			if totalAssetAmount.Cmp(amt) > 0 && !policy.PartialTransfer {
 				return fmt.Errorf("all assets should be transferred together. require %d, but %d", amt, totalAssetAmount)
 			}
 
@@ -792,7 +784,7 @@ func (p *Manager) AllowSplicingInV2(resv *SplicingReservation, utxos, fees []*Tx
 			}
 		} else {
 			if totalAssetAmount.Cmp(amt) > 0 {
-				if !IsRunes(assetName.Protocol) {
+				if !policy.PartialTransfer {
 					return fmt.Errorf("all assets should be transferred together. require %d, but %d", amt, totalAssetAmount)
 				}
 				splicingChange = 330
@@ -869,6 +861,11 @@ func (p *Manager) AllowSplicingOut(resv *SplicingReservation, fees []string) err
 }
 
 func (p *Manager) AllowSplicingOutV2(resv *SplicingReservation, fees []*TxOutput) error {
+	protocol, err := STPAssetProtocolFor(&resv.AssetName.AssetName, STPOpSpliceOut)
+	if err != nil {
+		return err
+	}
+	policy := protocol.Policy(resv.AssetName)
 	channel := resv.Channel
 	amt := resv.Amt.Clone()
 	fromInitiator := resv.IsInitiator == channel.IsInitiator
@@ -903,12 +900,11 @@ func (p *Manager) AllowSplicingOutV2(resv *SplicingReservation, fees []*TxOutput
 	weightEstimate.AddP2TROutput()
 	weightEstimate.AddP2TROutput()
 
-	switch resv.AssetName.Protocol {
-	case indexer.PROTOCOL_NAME_RUNES:
-		payload, err := GetRunesEstimatePayload(resv.AssetName, 1)
-		if err != nil {
-			return err
-		}
+	payload, err := protocol.EstimateSplicePayload(resv.AssetName, 1)
+	if err != nil {
+		return err
+	}
+	if len(payload) > 0 {
 		weightEstimate.AddOutput(payload)
 	}
 
@@ -953,7 +949,7 @@ func (p *Manager) AllowSplicingOutV2(resv *SplicingReservation, fees []*TxOutput
 	splicingValue := int64(0)
 	splicingChange := int64(0)
 	bonus := int64(0)
-	if resv.AssetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+	if policy.AccountBased {
 		if len(resv.SplicingInputs) != 1 {
 			return fmt.Errorf("should only one input for splicing out brc20 asset")
 		}

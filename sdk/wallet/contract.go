@@ -20,7 +20,6 @@ import (
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 
 	indexer "github.com/sat20-labs/indexer/common"
-	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 	"github.com/sat20-labs/sat20wallet/sdk/common"
 	"github.com/sat20-labs/sat20wallet/sdk/wallet/utils"
 	wwire "github.com/sat20-labs/sat20wallet/sdk/wire"
@@ -879,43 +878,11 @@ func (p *ContractBase) IsExclusive() bool {
 }
 
 func (p *ContractBase) CheckContent() error {
-	if indexer.IsPlainAsset(&p.AssetName) {
-		return nil
+	protocol, err := STPAssetProtocolFor(&p.AssetName, STPOpContract)
+	if err != nil {
+		return err
 	}
-	if p.AssetName.Protocol != indexer.PROTOCOL_NAME_ORDX &&
-		p.AssetName.Protocol != indexer.PROTOCOL_NAME_RUNES &&
-		p.AssetName.Protocol != indexer.PROTOCOL_NAME_BRC20 {
-		return fmt.Errorf("invalid protocol %s", p.AssetName.Protocol)
-	}
-	if p.AssetName.Ticker == "" {
-		return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
-	}
-	if p.AssetName.Type != indexer.ASSET_TYPE_FT {
-		return fmt.Errorf("invalid asset type %s", p.AssetName.Type)
-	}
-
-	if p.AssetName.Protocol == indexer.PROTOCOL_NAME_ORDX {
-		if !indexer.IsValidSat20Name(p.AssetName.Ticker) {
-			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
-		}
-		p.AssetName.Ticker = strings.ToLower(p.AssetName.Ticker)
-	} else if p.AssetName.Protocol == indexer.PROTOCOL_NAME_RUNES {
-		// 为了简化处理，我们简单拒绝“.”
-		if strings.Contains(p.AssetName.Ticker, ".") {
-			return fmt.Errorf("\".\" not allowed, use • instead")
-		}
-		_, err := runestone.SpacedRuneFromString(p.AssetName.Ticker)
-		if err != nil {
-			return fmt.Errorf("invalid asset name %s", p.AssetName.Ticker)
-		}
-	} else if p.AssetName.Protocol == indexer.PROTOCOL_NAME_BRC20 {
-		if len(p.AssetName.Ticker) != 4 && len(p.AssetName.Ticker) != 5 {
-			return fmt.Errorf("invalid ticker length %d", len(p.AssetName.Ticker))
-		}
-		p.AssetName.Ticker = strings.ToLower(p.AssetName.Ticker)
-	}
-
-	return nil
+	return protocol.NormalizeContract(&p.AssetName)
 }
 
 func (p *ContractBase) GetContractBase() *ContractBase {

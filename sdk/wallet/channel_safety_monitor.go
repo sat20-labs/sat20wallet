@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/btcsuite/btcd/wire"
-	indexer "github.com/sat20-labs/indexer/common"
 )
 
 // HandleChannelSafetyStatus is the SDK-owned client watchtower tick. It must
@@ -29,7 +28,7 @@ func (p *Manager) HandleChannelSafetyStatus() {
 			for name, outputs := range channel.FundingUtxos {
 				// BRC20 funding outputs may be consumed by transfer inscription
 				// construction and are not reliable channel-close sentinels.
-				if name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+				if STPPolicyFor(&name).AccountBased {
 					continue
 				}
 				for _, output := range outputs {

@@ -7,7 +7,6 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
-	"github.com/sat20-labs/indexer/indexer/runes/runestone"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	stxscript "github.com/sat20-labs/satoshinet/txscript"
@@ -279,29 +278,13 @@ func (p *Manager) CreateSplicingInTx(resv *SplicingReservation) (*wire.MsgTx, tx
 	if resv.SplicingChangeOutput != nil {
 		change := resv.SplicingChangeOutput.GetAsset(&resv.AssetName.AssetName)
 		hasSplicingChangeAsset = change.Sign() != 0
-		switch resv.AssetName.Protocol {
-		case indexer.PROTOCOL_NAME_BRC20:
-			if change.Sign() != 0 {
-				return nil, nil, fmt.Errorf("brc20 asset change is unexpected")
-			}
-		case indexer.PROTOCOL_NAME_RUNES:
-			if change.Sign() > 0 {
-				id, err := p.getRuneIdFromName(&resv.AssetName.AssetName)
-				if err != nil {
-					return nil, nil, err
-				}
-				transferEdicts := []runestone.Edict{{
-					ID:     *id,
-					Output: uint32(1),
-					Amount: change.ToUint128(),
-				}}
-				nullDataScript, err := EncipherRunePayload(transferEdicts)
-				if err != nil {
-					return nil, nil, err
-				}
-				splicingTx.AddTxOut(&wire.TxOut{PkScript: nullDataScript, Value: 0})
-			}
-		}
+	}
+	protocol, err := STPAssetProtocolFor(&resv.AssetName.AssetName, STPOpSpliceIn)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := protocol.BindSplice(p, STPAssetSpliceRequest{Operation: STPOpSpliceIn, Reservation: resv, Tx: splicingTx}); err != nil {
+		return nil, nil, err
 	}
 
 	resv.SplicingOutput.OutPointStr = fmt.Sprintf("%s:%d", splicingTx.TxID(), 0)
@@ -412,31 +395,12 @@ func (p *Manager) CreateSplicingOutTx(resv *SplicingReservation) (*wire.MsgTx, t
 		splicingTx.AddTxOut(wire.NewTxOut(resv.FeeChange, changePkScript))
 	}
 
-	if resv.SplicingChangeOutput != nil {
-		switch resv.AssetName.Protocol {
-		case indexer.PROTOCOL_NAME_BRC20:
-		case indexer.PROTOCOL_NAME_RUNES:
-			id, err := p.getRuneIdFromName(&resv.AssetName.AssetName)
-			if err != nil {
-				return nil, nil, err
-			}
-			var transferEdicts []runestone.Edict
-			if resv.SplicingChange >= 330 {
-				change := resv.SplicingChangeOutput.GetAsset(&resv.AssetName.AssetName)
-				if change.Sign() > 0 {
-					transferEdicts = append(transferEdicts, runestone.Edict{
-						ID:     *id,
-						Output: uint32(1),
-						Amount: change.ToUint128(),
-					})
-				}
-			}
-			nullDataScript, err := EncipherRunePayload(transferEdicts)
-			if err != nil {
-				return nil, nil, err
-			}
-			splicingTx.AddTxOut(&wire.TxOut{PkScript: nullDataScript, Value: 0})
-		}
+	protocol, err := STPAssetProtocolFor(&resv.AssetName.AssetName, STPOpSpliceOut)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := protocol.BindSplice(p, STPAssetSpliceRequest{Operation: STPOpSpliceOut, Reservation: resv, Tx: splicingTx}); err != nil {
+		return nil, nil, err
 	}
 
 	resv.SplicingOutput.OutPointStr = fmt.Sprintf("%s:%d", splicingTx.TxID(), 0)

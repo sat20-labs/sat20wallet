@@ -308,7 +308,10 @@ func (p *ChannelInDB) GetManagedAssetAmount(name *AssetName) *Decimal {
 func (p *ChannelInDB) AddFundingOutput(output *TxOutput, name *AssetName) error {
 	// 为了效率，要先确保output中没有其他无关资产
 	n := output.Clone()
-	if name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+	if STPPolicyFor(name).AccountBased {
+		if n.Invalids == nil {
+			n.Invalids = make(map[indexer.AssetName]bool)
+		}
 		n.Invalids[name.AssetName] = true
 	}
 	uv := p.FundingUtxos[*name]
@@ -327,7 +330,7 @@ func (p *ChannelInDB) RemoveFundingOutput(outputs []*TxOutput, name *AssetName) 
 	uv := p.FundingUtxos[*name]
 
 	// brc20先更新保存的output资产；如果该资产已经被完全移出，也要清理旧funding记录。
-	if name.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+	if STPPolicyFor(name).AccountBased {
 		for _, removed := range outputs {
 			amt := removed.GetAsset(&name.AssetName)
 			for _, existing := range uv {
@@ -790,7 +793,7 @@ func (p *ChannelInDB) NeedStubUtxo(name *AssetName) (int, int64) {
 }
 
 func (p *ChannelInDB) GetStubUtxoForAsset(name *AssetName) []*TxOutput {
-	if name.Protocol == indexer.PROTOCOL_NAME_RUNES {
+	if STPPolicyFor(name).SharedStubs {
 		// 符文的stub不区分资产名称
 		n := *name
 		n.Ticker = ""
@@ -811,11 +814,11 @@ func (p *ChannelInDB) GetStubUtxos(protocol string) map[AssetName][]*TxOutput {
 	return result
 }
 
-// 排除brc20的stub
+// Exclude stubs consumed by account-based asset preparation.
 func (p *ChannelInDB) GetStubUtxoList() []*TxOutput {
 	result := make([]*TxOutput, 0)
 	for k, v := range p.StubUtxos {
-		if k.Protocol == indexer.PROTOCOL_NAME_BRC20 {
+		if STPPolicyFor(&k).AccountBased {
 			continue
 		}
 		result = append(result, v...)
@@ -827,7 +830,7 @@ func (p *ChannelInDB) GetStubUtxoList() []*TxOutput {
 }
 
 func (p *ChannelInDB) SetStubUtxoForAsset(output []*TxOutput, name *AssetName) {
-	if name.Protocol == indexer.PROTOCOL_NAME_RUNES {
+	if STPPolicyFor(name).SharedStubs {
 		n := *name
 		n.Ticker = ""
 		p.StubUtxos[n] = output
@@ -1141,4 +1144,15 @@ func (p *ChannelInDB) checkData() (bool, bool) {
 		p.ChannelId, p.LocalCommitment.CommitTx.TxID(), p.RemoteCommitment.CommitTx.TxID())
 
 	return true, updated
+}
+
+// NeedsSTPRevealKey reports whether any funded asset prepares transfer
+// transactions as part of the next commitment.
+func (p *ChannelInDB) NeedsSTPRevealKey() bool {
+	for name := range p.FundingUtxos {
+		if STPPolicyFor(&name).NeedsRevealKey {
+			return true
+		}
+	}
+	return false
 }

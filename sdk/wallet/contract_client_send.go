@@ -186,29 +186,24 @@ func (p *Manager) coBatchSendV3WithMaxConfirmedInputHeight(localWallet common.Wa
 		return p.sendRGB11FromChannelAtHeight(localWallet, dest, assetNameStr, feeRate, channelID, reason, md, payFeeByCurrentAddress, excludeRecentBlock, maxConfirmedInputHeight)
 	}
 
-	var (
-		tx          *wire.MsgTx
-		prevFetcher *txscript.MultiPrevOutFetcher
-		fee         int64
-		inscribes   []*InscribeResv
-		err         error
-	)
-	switch asset.Protocol {
-	case "":
-		tx, prevFetcher, fee, err = p.buildBatchSendTxWithAddressHeight_btc(channelID, dest, feeRate, memo, true, excludeRecentBlock, maxConfirmedInputHeight)
-	case indexer.PROTOCOL_NAME_ORDX:
-		tx, prevFetcher, fee, err = p.buildBatchSendTxWithAddressHeight_ordx(localWallet, channelID, dest, assetName, feeRate, memo, true, excludeRecentBlock, payFeeByCurrentAddress, maxConfirmedInputHeight)
-	case indexer.PROTOCOL_NAME_RUNES:
-		tx, prevFetcher, fee, err = p.buildBatchSendTxWithAddressHeight_runes(localWallet, channelID, dest, assetName, feeRate, true, excludeRecentBlock, payFeeByCurrentAddress, maxConfirmedInputHeight)
-	case indexer.PROTOCOL_NAME_BRC20:
-		tx, prevFetcher, fee, inscribes, err = p.buildBatchSendTxWithAddressHeight_brc20(localWallet, channelID, dest, assetName, feeRate, memo, true, excludeRecentBlock, payFeeByCurrentAddress, maxConfirmedInputHeight)
-	default:
-		return "", 0, fmt.Errorf("CoBatchSendV3 unsupport protocol %s", asset.Protocol)
-	}
+	protocol, err := STPAssetProtocolFor(asset, STPOpTransfer)
 	if err != nil {
 		return "", 0, err
 	}
+	plan, err := protocol.BuildTransfer(p, STPAssetTransferRequest{
+		Wallet: localWallet, Address: channelID, Destinations: dest, Asset: assetName,
+		FeeRate: feeRate, Memo: memo, ExcludeRecentBlock: excludeRecentBlock,
+		PayFeeByCurrentAddress: payFeeByCurrentAddress, MaxConfirmedInputHeight: maxConfirmedInputHeight,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	tx, prevFetcher, fee, inscribes := plan.Tx, plan.PrevFetcher, plan.Fee, plan.PrevTxs
 	defer p.unlockOpenInscribes(inscribes)
+	snapshotSTPAssetLayout(tx, nil, nil, true, plan)
+	if err := protocol.Verify(STPAssetVerification{Operation: STPOpTransfer, Tx: tx, Plan: plan}); err != nil {
+		return "", 0, err
+	}
 
 	witness, peerPubKey, err := p.ChannelWitness(localWallet, channelID)
 	if err != nil {
@@ -250,6 +245,9 @@ func (p *Manager) coBatchSendV3WithMaxConfirmedInputHeight(localWallet common.Wa
 		return "", 0, err
 	}
 
+	if err := protocol.Verify(STPAssetVerification{Operation: STPOpTransfer, Tx: tx, Plan: plan}); err != nil {
+		return "", 0, err
+	}
 	tx, totalFee, err := p.ReqRemoteSignAndBroadcast(localWallet, witness, peerPubKey, reason, channelID, signData, txsSignInfo, txs, txs2, md)
 	if err != nil {
 		return "", 0, err
